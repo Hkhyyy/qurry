@@ -122,9 +122,58 @@ impl Tree {
     }
 }
 
+/// Redis 키를 ":" 로 끊어 폴더로 묶는다 (Medis 처럼). 폴더 먼저 (이름순), 그다음 키.
+/// 폴더 아래 노드는 children 에 넣는다. 키 줄은 전체 이름 그대로
+pub fn key_folders(children: &mut HashMap<String, Vec<Node>>, parent: &str, keys: Vec<Node>) -> Vec<Node> {
+    fn level(children: &mut HashMap<String, Vec<Node>>, parent: &str, keys: Vec<Node>, depth: usize) -> Vec<Node> {
+        let mut folders: std::collections::BTreeMap<String, Vec<Node>> = Default::default();
+        let mut leaves = vec![];
+        for n in keys {
+            let parts: Vec<&str> = n.label.split(':').collect();
+            if parts.len() > depth + 1 {
+                folders.entry(parts[depth].to_string()).or_default().push(n);
+            } else {
+                leaves.push(n);
+            }
+        }
+        let mut out = vec![];
+        for (seg, kids) in folders {
+            let key = format!("{parent}|f:{seg}");
+            let first = &kids[0];
+            let folder = Node { key: key.clone(), label: seg, hint: kids.len().to_string(), kind: NodeKind::Group, conn: first.conn.clone(), db: first.db.clone(), schema: first.schema.clone(), name: None, expandable: true };
+            let sub = level(children, &key, kids, depth + 1);
+            children.insert(key, sub);
+            out.push(folder);
+        }
+        out.extend(leaves);
+        out
+    }
+    level(children, parent, keys, 0)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::contains_ci;
+    use super::*;
+
+    fn key(name: &str) -> Node {
+        Node { key: format!("g|o:{name}"), label: name.into(), hint: "zset".into(), kind: NodeKind::Object("key".into()), conn: "c".into(), db: Some("0".into()), schema: Some("0".into()), name: Some(name.into()), expandable: false }
+    }
+
+    /// dev:sessions:{1} → dev / sessions / dev:sessions:{1}. 폴더 옆에는 그 아래 키 개수
+    #[test]
+    fn redis_keys_are_grouped_by_colon() {
+        let mut ch = HashMap::new();
+        let keys = ["token", "dev:sessions:{2}", "prod:x", "dev:admin:{1}", "dev:sessions:{1}"].map(key).to_vec();
+        let top = key_folders(&mut ch, "g", keys);
+        let show = |v: &[Node]| v.iter().map(|n| format!("{}{} {}", if n.kind == NodeKind::Group { "/" } else { "" }, n.label, n.hint)).collect::<Vec<_>>();
+        assert_eq!(show(&top), ["/dev 3", "/prod 1", "token zset"]);
+        assert!(top[0].expandable && !top[2].expandable);
+        let dev = &ch[&top[0].key];
+        assert_eq!(show(dev), ["/admin 1", "/sessions 2"]);
+        assert_eq!(show(&ch[&dev[1].key]), ["dev:sessions:{2} zset", "dev:sessions:{1} zset"]);
+        // 키를 열 때 쓰는 정보는 그대로
+        assert_eq!(ch[&dev[1].key][0].name.as_deref(), Some("dev:sessions:{2}"));
+    }
 
     #[test]
     fn contains_ignoring_case() {

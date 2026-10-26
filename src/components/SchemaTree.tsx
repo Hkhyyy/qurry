@@ -4,6 +4,7 @@ import { ConnectionView, redisDb, dbVisible, meta, RelationInfo, RoutineInfo, Sc
 import { ScopePopup } from "./ScopePopup";
 import { invalidateCompletion } from "../lib/completion";
 import { TYPE_COLOR } from "./RedisBrowser";
+import { keyTree, type KeyNode } from "../lib/keyTree";
 import { Chevron, ColumnIcon, DatabaseIcon, FkIcon, FolderIcon, IndexIcon, KeyIcon, MySqlIcon, PgIcon, RedisIcon, RoutineIcon, SchemaIcon, SequenceIcon, TableIcon, ViewIcon } from "./icons";
 
 /** 트리 노드가 가리키는 대상. 우클릭 메뉴와 단축키(F4, ⌘b, ⌘⇧L)가 이걸 기준으로 동작한다. */
@@ -384,6 +385,55 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
             const sk = `s:${s.name}`;
             const sOpen = flat || open.has(sk);
             const objs = objects[s.name];
+            const item = (r: RelationInfo, depth: number) => {
+              const tk = `${sk}/t:${r.name}`;
+              const tOpen = open.has(tk);
+              const det = details[`${s.name}.${r.name}`];
+              const isRel = r.kind !== "sequence" && r.kind !== "key";
+              const info: NodeInfo = {
+                kind: r.kind,
+                conn,
+                db,
+                schema: s.name,
+                name: r.name,
+                refresh: () => (isRel ? loadDetail(s.name, r.name, true) : loadObjects(s.name, true)),
+              };
+              return (
+                <div key={tk}>
+                  <Row
+                    depth={depth}
+                    open={tOpen}
+                    leaf={!isRel}
+                    icon={r.kind === "key" ? <span className="rd-dot" style={{ background: TYPE_COLOR[r.comment ?? ""] ?? "#777" }} title={r.comment ?? ""}>{({ string: "T", hash: "H", list: "L", set: "S", zset: "Z", stream: "X" } as Record<string, string>)[r.comment ?? ""] ?? "?"}</span> : r.kind === "sequence" ? <SequenceIcon /> : r.kind === "view" || r.kind === "matview" ? <ViewIcon /> : <TableIcon />}
+                    label={r.name}
+                    title={r.kind === "key" ? `${r.name} (${r.comment})` : r.comment ? `${r.name} — ${r.comment}` : r.name}
+                    onToggle={isRel ? () => toggle(tk, () => loadDetail(s.name, r.name)) : undefined}
+                    onDoubleClick={() => onActivate(info)}
+                    info={info}
+                    onMenu={onMenu}
+                  />
+                  {tOpen && isRel && (
+                    <>
+                      <Status depth={depth + 1} load={det} />
+                      {det?.state === "ok" && <TableChildren depth={depth + 1} base={tk} d={det.data} open={open} toggle={toggle} />}
+                    </>
+                  )}
+                </div>
+              );
+            };
+            // Redis 키: ":" 로 묶은 폴더 (Medis 처럼)
+            const keyRows = (nodes: KeyNode<RelationInfo>[], depth: number, base: string): React.ReactNode =>
+              nodes.map((n) => {
+                if (n.kind === "key") return item(n.item, depth);
+                const fk = `${base}/f:${n.path}`;
+                const fOpen = open.has(fk) || !!f;
+                return (
+                  <div key={fk}>
+                    <Row depth={depth} open={fOpen} icon={<FolderIcon />} label={n.name} sub={String(n.count)} title={`${n.path}:*`} onToggle={() => toggle(fk)} />
+                    {fOpen && keyRows(n.children, depth + 1, base)}
+                  </div>
+                );
+              });
             return (
               <div key={sk}>
                 {!flat && <Row
@@ -408,43 +458,7 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
                           return (
                             <div key={gk}>
                               <Row depth={3 + dd} open={gOpen} icon={<FolderIcon />} label={g.label} sub={String(g.items.length)} onToggle={() => toggle(gk)} />
-                              {gOpen &&
-                                g.items.map((r) => {
-                                  const tk = `${sk}/t:${r.name}`;
-                                  const tOpen = open.has(tk);
-                                  const det = details[`${s.name}.${r.name}`];
-                                  const isRel = r.kind !== "sequence" && r.kind !== "key";
-                                  const info: NodeInfo = {
-                                    kind: r.kind,
-                                    conn,
-                                    db,
-                                    schema: s.name,
-                                    name: r.name,
-                                    refresh: () => (isRel ? loadDetail(s.name, r.name, true) : loadObjects(s.name, true)),
-                                  };
-                                  return (
-                                    <div key={tk}>
-                                      <Row
-                                        depth={4 + dd}
-                                        open={tOpen}
-                                        leaf={!isRel}
-                                        icon={r.kind === "key" ? <span className="rd-dot" style={{ background: TYPE_COLOR[r.comment ?? ""] ?? "#777" }} title={r.comment ?? ""}>{({ string: "T", hash: "H", list: "L", set: "S", zset: "Z", stream: "X" } as Record<string, string>)[r.comment ?? ""] ?? "?"}</span> : r.kind === "sequence" ? <SequenceIcon /> : r.kind === "view" || r.kind === "matview" ? <ViewIcon /> : <TableIcon />}
-                                        label={r.name}
-                                        title={r.kind === "key" ? `${r.name} (${r.comment})` : r.comment ? `${r.name} — ${r.comment}` : r.name}
-                                        onToggle={isRel ? () => toggle(tk, () => loadDetail(s.name, r.name)) : undefined}
-                                        onDoubleClick={() => onActivate(info)}
-                                        info={info}
-                                        onMenu={onMenu}
-                                      />
-                                      {tOpen && isRel && (
-                                        <>
-                                          <Status depth={5 + dd} load={det} />
-                                          {det?.state === "ok" && <TableChildren depth={5 + dd} base={tk} d={det.data} open={open} toggle={toggle} />}
-                                        </>
-                                      )}
-                                    </div>
-                                  );
-                                })}
+                              {gOpen && (g.label === "keys" ? keyRows(keyTree(g.items, (r) => r.name), 4 + dd, gk) : g.items.map((r) => item(r, 4 + dd)))}
                             </div>
                           );
                         })}
