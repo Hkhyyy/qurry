@@ -419,7 +419,7 @@ export function ResultGrid(p: Props) {
       case "Where Clause":
         return vals.map((v) => "(" + names.map((n, j) => (v[j] === null ? `${quoteIdent(n)} IS NULL` : `${quoteIdent(n)} = ${lit(v[j])}`)).join(" AND ") + ")").join(" OR\n");
       case "SQL IN List":
-        return inList(vals.map((v) => v.map((x) => (x === DEFAULT_TOKEN ? null : x))));
+        return inList(vals.map((v) => v.map((x) => (x === DEFAULT_TOKEN ? null : x))), cs.map((c) => cols[c].typeName));
       case "JSON":
         return JSON.stringify(vals.map((v) => Object.fromEntries(names.map((n, j) => [n, v[j] === DEFAULT_TOKEN ? null : v[j]]))), null, 2);
       case "Markdown":
