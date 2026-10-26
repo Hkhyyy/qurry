@@ -57,6 +57,7 @@ jobs:
           USER: postgres
           QURRY_TEST_PG: localhost:5432:postgres:postgres
           QURRY_TEST_PG_USER: postgres
+          QURRY_TEST_MY: localhost:13306:root:dbtool:shop
         run: cargo test --locked -p qurry-core -- --ignored --skip ssl --skip tls --skip sentinel --skip cluster --skip ssh_tunnel
 
   web:

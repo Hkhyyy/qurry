@@ -12,6 +12,7 @@ mod workspace;
 mod testkit;
 mod scope;
 mod selfupdate;
+mod transfer;
 mod tree;
 mod ui;
 

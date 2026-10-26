@@ -668,3 +668,24 @@ html, body, #root, * { overscroll-behavior: none; }
 .keymap-chip.rec { color: var(--text); border-color: var(--accent); padding-right: 6px; }
 .keymap-editor-foot { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .keymap-editor-foot .hint { margin: 0; }
+
+/* 내보내기·가져오기 */
+.modal.transfer { width: 560px; max-width: calc(100vw - 32px); }
+.modal.transfer.wide { width: 760px; }
+.transfer-label { color: var(--muted); font-size: 12px; margin: 12px 0 4px; }
+.transfer-choice { display: flex; gap: 8px; align-items: center; padding: 3px 0; cursor: pointer; }
+.transfer-choice b { font-weight: 500; min-width: 84px; }
+.transfer-file { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
+.transfer-map { max-height: 46vh; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
+.transfer-map table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.transfer-map th { position: sticky; top: 0; background: var(--panel); text-align: left; color: var(--muted); font-weight: 500; padding: 5px 8px; border-bottom: 1px solid var(--border); }
+.transfer-map td { padding: 3px 8px; border-bottom: 1px solid var(--border); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.transfer-map select, .transfer-map input { width: 100%; }
+.sb-transfer { display: flex; gap: 8px; align-items: center; }
+.sb-transfer-label { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.sb-bar { position: relative; width: 120px; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; }
+.sb-bar > span { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 3px; transition: width .2s; }
+.sb-bar.busy > span { width: 30%; animation: sb-busy 1.2s ease-in-out infinite; }
+@keyframes sb-busy { from { left: -30%; } to { left: 100%; } }
+.sb-cancel { background: none; border: none; color: var(--muted); padding: 0 2px; cursor: pointer; }
+.sb-cancel:hover { color: var(--danger); }

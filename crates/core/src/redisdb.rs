@@ -730,15 +730,13 @@ pub async fn key_ddl(m: &RedisConn, key: &str) -> AppResult<String> {
     Ok(lines.join("\n"))
 }
 
-pub async fn export_csv(m: &RedisConn, line: &str, path: &std::path::Path) -> AppResult<u64> {
+pub async fn export(m: &RedisConn, line: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {
     let r = run(m, line, 1_000_000).await?;
-    let mut out = crate::db::CsvOut::create(path).await?;
-    out.row(&r.columns.iter().map(|c| crate::db::csv_field(&c.name)).collect::<Vec<_>>()).await?;
+    out.header(&r.columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>()).await?;
     for row in &r.rows {
-        out.row(&row.iter().map(|v| crate::db::csv_field(&crate::db::cell_text(v))).collect::<Vec<_>>()).await?;
+        out.row(row).await?;
     }
-    out.finish().await?;
-    Ok(r.rows.len() as u64)
+    Ok(())
 }
 
 // ───────── Medis 식 키 브라우저 API ─────────

@@ -155,13 +155,20 @@ impl Pool {
         }
     }
 
-    /// 쿼리를 다시 실행해 전체 결과를 CSV로 저장한다. 엑셀 한글 호환을 위해 UTF-8 BOM을 붙인다.
-    pub async fn export_csv(&self, sql: &str, path: &std::path::Path) -> AppResult<u64> {
+    /// 쿼리를 다시 실행해 전체 결과를 내보낸다 (형식·대상은 out 이 정한다)
+    pub async fn export(&self, sql: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {
         match self {
-            Pool::Pg(p) => export_pg_csv(p, sql, path).await,
-            Pool::My(p) => crate::mysql::export_csv(p, sql, path).await,
-            Pool::Redis(m, _) => crate::redisdb::export_csv(m, sql, path).await,
+            Pool::Pg(p) => export_pg(p, sql, out).await,
+            Pool::My(p) => crate::mysql::export(p, sql, out).await,
+            Pool::Redis(m, _) => crate::redisdb::export(m, sql, out).await,
         }
+    }
+
+    /// CSV 파일로 (BOM 포함). 행 수
+    pub async fn export_csv(&self, sql: &str, path: &std::path::Path) -> AppResult<u64> {
+        let mut out = crate::transfer::Exporter::csv_file(path).await?;
+        self.export(sql, &mut out).await?;
+        Ok(out.finish().await?.rows)
     }
 
     /// 쿼리 하나를 실행해 최대 `limit` 행까지 돌려준다.
@@ -268,58 +275,30 @@ pub async fn run_on(conn: &mut sqlx::PgConnection, sql: &str, limit: usize) -> A
     Ok(QueryResult { columns, rows, rows_affected: 0, truncated, elapsed_ms: start.elapsed().as_millis() as u64, has_result_set: true, in_transaction: false })
 }
 
-/// CSV 파일 쓰기 (비동기 IO: 큰 내보내기가 tokio 작업 스레드를 막지 않게). 첫 줄 앞에 BOM (Excel 용)
-pub(crate) struct CsvOut(tokio::io::BufWriter<tokio::fs::File>);
-
-impl CsvOut {
-    pub(crate) async fn create(path: &std::path::Path) -> AppResult<Self> {
-        let mut out = CsvOut(tokio::io::BufWriter::new(tokio::fs::File::create(path).await?));
-        tokio::io::AsyncWriteExt::write_all(&mut out.0, "\u{FEFF}".as_bytes()).await?;
-        Ok(out)
-    }
-    /// 이미 csv_field 로 감싼 칸들을 한 줄로
-    pub(crate) async fn row(&mut self, fields: &[String]) -> AppResult<()> {
-        let mut line = fields.join(",");
-        line.push('\n');
-        tokio::io::AsyncWriteExt::write_all(&mut self.0, line.as_bytes()).await?;
-        Ok(())
-    }
-    pub(crate) async fn finish(mut self) -> AppResult<()> {
-        tokio::io::AsyncWriteExt::flush(&mut self.0).await?;
-        Ok(())
-    }
-}
-
-async fn export_pg_csv(pool: &PgPool, sql: &str, path: &std::path::Path) -> AppResult<u64> {
+async fn export_pg(pool: &PgPool, sql: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {
     let mut conn = pool.acquire().await?;
-    export_pg_on(&mut conn, sql, path).await
+    export_pg_on(&mut conn, sql, out).await
 }
 
-/// 이미 잡은 연결(읽기 전용 트랜잭션일 수도)에서 CSV 로
-pub async fn export_pg_on(conn: &mut sqlx::PgConnection, sql: &str, path: &std::path::Path) -> AppResult<u64> {
-    let mut out = CsvOut::create(path).await?;
-    let mut count = 0u64;
-    let mut header_written = false;
+/// 이미 잡은 연결(읽기 전용 트랜잭션일 수도)에서 내보낸다
+pub async fn export_pg_on(conn: &mut sqlx::PgConnection, sql: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {
     let mut stream = sqlx::query(sql).persistent(false).fetch(&mut *conn);
     while let Some(row) = stream.try_next().await? {
-        if !header_written {
-            let names: Vec<String> = row.columns().iter().map(|c| csv_field(c.name())).collect();
-            out.row(&names).await?;
-            header_written = true;
+        if !out.has_header() {
+            let names: Vec<String> = row.columns().iter().map(|c| c.name().to_string()).collect();
+            out.header(&names).await?;
         }
-        let fields: Vec<String> = (0..row.len()).map(|i| csv_field(&cell_text(&pg_value(&row, i)))).collect();
-        out.row(&fields).await?;
-        count += 1;
+        let vals: Vec<Value> = (0..row.len()).map(|i| pg_value(&row, i)).collect();
+        out.row(&vals).await?;
     }
     drop(stream);
-    if !header_written {
+    if !out.has_header() {
         if let Ok(desc) = (&mut *conn).describe(sql).await {
-            let names: Vec<String> = desc.columns().iter().map(|c| csv_field(c.name())).collect();
-            out.row(&names).await?;
+            let names: Vec<String> = desc.columns().iter().map(|c| c.name().to_string()).collect();
+            out.header(&names).await?;
         }
     }
-    out.finish().await?;
-    Ok(count)
+    Ok(())
 }
 
 pub(crate) fn cell_text(v: &Value) -> String {
@@ -327,14 +306,6 @@ pub(crate) fn cell_text(v: &Value) -> String {
         Value::Null => String::new(),
         Value::String(s) => s.clone(),
         other => other.to_string(),
-    }
-}
-
-pub(crate) fn csv_field(s: &str) -> String {
-    if s.contains([',', '"', '\n', '\r']) {
-        format!("\"{}\"", s.replace('"', "\"\""))
-    } else {
-        s.to_string()
     }
 }
 
