@@ -280,19 +280,29 @@ fn draw_group(f: &mut Frame, app: &mut App, g: Option<usize>, area: Rect, focuse
     let [bar, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(3)]).areas(area);
     let idx: Vec<usize> = (0..app.tabs.len()).filter(|&i| g.is_none_or(|g| app.tabs[i].group == g)).collect();
     let shown = if focused { app.active } else { g.and_then(|g| app.group_tab(g)).unwrap_or(app.active) };
-    // 탭 위치: Tabs 위젯은 " 제목 " + "│" 순서로 그린다
+    // 탭 너비: Tabs 위젯은 " 제목 " + "│" 순서로 그린다. " " + 아이콘(2) + 제목 + " *"? + " "
+    let widths: Vec<u16> = idx
+        .iter()
+        .map(|&i| {
+            let t = &app.tabs[i];
+            let dirty = matches!(&t.kind, TabKind::Table(tt) if tt.grid.as_ref().map(|g| g.dirty()).unwrap_or(false));
+            1 + 2 + t.title.width() as u16 + if dirty { 2 } else { 0 } + 1
+        })
+        .collect();
+    let sel = idx.iter().position(|&i| i == shown).unwrap_or(0);
+    // 탭 바에 다 안 들어가면 보이는 탭이 들어오도록 앞쪽 탭을 뺀다
+    let mut start = 0;
+    while start < sel && widths[start..=sel].iter().map(|w| w + 1).sum::<u16>() > bar.width {
+        start += 1;
+    }
     let mut x = bar.x;
-    for &i in &idx {
-        let t = &app.tabs[i];
-        let dirty = matches!(&t.kind, TabKind::Table(tt) if tt.grid.as_ref().map(|g| g.dirty()).unwrap_or(false));
-        // " " + 아이콘(2) + 제목 + " *"? + " "
-        let w = 1 + 2 + t.title.width() as u16 + if dirty { 2 } else { 0 } + 1;
-        app.hits.tabs.push((t.id, x, (x + w).min(bar.right()), bar.y));
+    for (&i, &w) in idx.iter().zip(&widths).skip(start) {
+        app.hits.tabs.push((app.tabs[i].id, x, (x + w).min(bar.right()), bar.y));
         x += w + 1;
     }
     app.hits.groups.push((g.unwrap_or(0), bar, body));
     // Data Source 색은 탭 배경으로 (GUI 와 같이). 보이는 탭은 굵게 + 밝게 (포커스 없는 칸은 덜 밝게)
-    let titles: Vec<Line> = idx
+    let titles: Vec<Line> = idx[start..]
         .iter()
         .map(|&i| {
             let t = &app.tabs[i];
@@ -316,8 +326,7 @@ fn draw_group(f: &mut Frame, app: &mut App, g: Option<usize>, area: Rect, focuse
             l.style(st)
         })
         .collect();
-    let sel = idx.iter().position(|&i| i == shown).unwrap_or(0);
-    f.render_widget(Tabs::new(titles).select(sel).highlight_style(Style::default()).divider("│"), bar);
+    f.render_widget(Tabs::new(titles).select(sel - start).highlight_style(Style::default()).divider("│"), bar);
     draw_pane(f, app, shown, body, focused);
 }
 

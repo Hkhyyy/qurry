@@ -1361,6 +1361,28 @@ mod tests {
         assert!(between.contains('┃'), "{bar}");
     }
 
+    /// 탭이 탭 바보다 많으면 지금 탭이 보이도록 민다 (뒤쪽 탭이 잘려 안 보이지 않게). 클릭도 밀린 자리에 맞는다
+    #[tokio::test]
+    async fn tab_bar_scrolls_to_the_active_tab() {
+        let mut h = Harness::new().await;
+        for i in 0..8 {
+            h.table_tab(&format!("long_table_name_{i}"), &["id"], &[&["1"]], &["id"]);
+        }
+        let s = h.screen(80, 20);
+        let bar = s.lines().find(|l| l.contains("long_table_name_7")).unwrap_or_else(|| panic!("{s}"));
+        assert!(!bar.contains("long_table_name_0"), "{bar}");
+        // 첫 탭으로 가면 다시 앞쪽이 보인다
+        h.key("Alt+Right");
+        let s = h.screen(80, 20);
+        let (y, bar) = s.lines().enumerate().find(|(_, l)| l.contains("long_table_name_0")).unwrap_or_else(|| panic!("{s}"));
+        assert!(!bar.contains("long_table_name_7"), "{bar}");
+        // 보이는 탭을 누르면 그 탭으로
+        let x = bar[..bar.find("long_table_name_1").unwrap()].chars().count() as u16;
+        h.mouse("down", x, y as u16);
+        h.mouse("up", x, y as u16);
+        assert_eq!(h.app.tabs[h.app.active].title, "long_table_name_1");
+    }
+
     /// 콘솔 마우스: 누른 곳으로 커서, 끌면 선택 (선택한 것만 실행), 다시 누르면 선택이 풀린다
     #[tokio::test]
     async fn console_mouse_click_and_drag_select() {
