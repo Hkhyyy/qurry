@@ -1383,6 +1383,23 @@ mod tests {
         assert_eq!(h.app.tabs[h.app.active].title, "long_table_name_1");
     }
 
+    /// 나눈 화면에서 탭을 닫으면 같은 칸의 옆 탭으로 (되살린 탭처럼 아직 안 본 탭만 남아도 첫 칸으로 튀지 않게)
+    #[tokio::test]
+    async fn closing_a_tab_stays_in_its_pane() {
+        let mut h = Harness::new().await;
+        h.table_tab("left", &["id"], &[&["1"]], &["id"]);
+        let right_a = h.table_tab("right_a", &["id"], &[&["1"]], &["id"]);
+        h.app.run_action(crate::app::Action::SplitRight);
+        h.table_tab("right_b", &["id"], &[&["1"]], &["id"]);
+        h.table_tab("right_c", &["id"], &[&["1"]], &["id"]);
+        // 되살린 탭은 최근 목록에 없다
+        h.app.mru.retain(|x| *x != right_a);
+        h.key("Ctrl+w");
+        assert_eq!(h.app.tabs[h.app.active].title, "right_b");
+        h.key("Ctrl+w");
+        assert_eq!(h.app.tabs[h.app.active].title, "right_a");
+    }
+
     /// 콘솔 마우스: 누른 곳으로 커서, 끌면 선택 (선택한 것만 실행), 다시 누르면 선택이 풀린다
     #[tokio::test]
     async fn console_mouse_click_and_drag_select() {
