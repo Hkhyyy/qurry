@@ -55,8 +55,9 @@ pub const HELP: &[(&str, &[(&str, &str)])] = &[
         ("Esc", "Back to the explorer"),
     ]),
     ("Redis browser (Medis style)", &[
-        ("↑ ↓", "Select key"),
-        ("Enter / → / Tab", "Go to the value"),
+        ("↑ ↓", "Select key or folder (keys are grouped by \":\")"),
+        ("→ / Enter · ←", "Folder: expand · collapse (← on a key: go to its folder)"),
+        ("Enter / → / Tab", "Key: go to the value"),
         ("/", "Key pattern (SCAN MATCH)"),
         ("m", "Scan more"),
         ("r", "Rescan"),

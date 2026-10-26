@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { keyTree, type KeyNode } from "./keyTree";
+import { keyTree, parentPaths, visibleRows, type KeyNode } from "./keyTree";
 
 const show = (ns: KeyNode<string>[]): string[] => ns.map((n) => (n.kind === "folder" ? `/${n.name} ${n.count}` : n.item));
 
@@ -12,5 +12,19 @@ describe("keyTree", () => {
     const sessions = dev[1].kind === "folder" ? dev[1].children : [];
     expect(show(sessions)).toEqual(["dev:sessions:{2}", "dev:sessions:{1}"]);
     expect(dev[1].kind === "folder" && dev[1].path).toBe("dev:sessions");
+  });
+});
+
+describe("visibleRows", () => {
+  it("펼친 폴더만 안을 보이고, 깊이를 단다", () => {
+    const tree = keyTree(["dev:sessions:{1}", "dev:sessions:{2}", "prod:x", "token"], (k) => k);
+    const show = (open: string[]) =>
+      visibleRows(tree, new Set(open)).map((r) => "  ".repeat(r.depth) + (r.kind === "folder" ? `/${r.name} ${r.count}` : r.item));
+    expect(show([])).toEqual(["/dev 2", "/prod 1", "token"]);
+    expect(show(["dev", "dev:sessions"])).toEqual(["/dev 2", "  /sessions 2", "    dev:sessions:{1}", "    dev:sessions:{2}", "/prod 1", "token"]);
+  });
+  it("키의 위 폴더 경로", () => {
+    expect(parentPaths("dev:sessions:{1}")).toEqual(["dev", "dev:sessions"]);
+    expect(parentPaths("token")).toEqual([]);
   });
 });

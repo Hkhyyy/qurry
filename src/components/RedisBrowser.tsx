@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { api, QueryResult, redis, RedisKeyDetail, RedisKeyRow, RedisReply } from "../lib/api";
+import { keyTree, parentPaths, visibleRows } from "../lib/keyTree";
+import { Chevron, FolderIcon } from "./icons";
 
 const isMacOS = navigator.platform.toLowerCase().includes("mac");
 
@@ -81,8 +83,28 @@ export function RedisBrowser(p: Props) {
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // 키는 ":" 로 묶은 폴더로 보인다 (Medis). open = 펼친 폴더, cur = 고른 폴더 (키를 고르면 null)
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const [cur, setCur] = useState<string | null>(null);
+  const rows = useMemo(() => visibleRows(keyTree(keys, (k) => k.key), open), [keys, open]);
+  const toggle = (path: string) =>
+    setOpen((o) => {
+      const n = new Set(o);
+      if (n.has(path)) n.delete(path);
+      else n.add(path);
+      return n;
+    });
+  // 고른 키(처음 연 키, 새로 만든 키)가 보이도록 위 폴더를 펼친다
+  useEffect(() => {
+    if (!sel) return;
+    setOpen((o) => {
+      const add = parentPaths(sel).filter((x) => !o.has(x));
+      return add.length ? new Set([...o, ...add]) : o;
+    });
+  }, [sel]);
+
   const listRef = useRef<HTMLDivElement>(null);
-  const keyVirt = useVirtualizer({ count: keys.length, getScrollElement: () => listRef.current, estimateSize: () => KEY_ROW_H, overscan: 20 });
+  const keyVirt = useVirtualizer({ count: rows.length, getScrollElement: () => listRef.current, estimateSize: () => KEY_ROW_H, overscan: 20 });
 
   const scan = async (reset: boolean) => {
     setScanning(true);
@@ -175,17 +197,45 @@ export function RedisBrowser(p: Props) {
               <span>TTL</span>
             </div>
             <div className="rd-keys-list" ref={listRef} tabIndex={0} onKeyDown={(e) => {
-              const i = keys.findIndex((k) => k.key === sel);
-              const go = (j: number) => { e.preventDefault(); setSel(keys[j].key); keyVirt.scrollToIndex(j); };
-              if (e.key === "ArrowDown" && i < keys.length - 1) go(i + 1);
+              const i = rows.findIndex((r) => (cur ? r.kind === "folder" && r.path === cur : r.kind === "key" && r.item.key === sel));
+              const r = rows[i];
+              const go = (j: number) => {
+                e.preventDefault();
+                const t = rows[j];
+                if (t.kind === "folder") setCur(t.path);
+                else {
+                  setCur(null);
+                  setSel(t.item.key);
+                }
+                keyVirt.scrollToIndex(j);
+              };
+              if (e.key === "ArrowDown" && i < rows.length - 1) go(i + 1);
               if (e.key === "ArrowUp" && i > 0) go(i - 1);
+              // 폴더: → 펼치기 · ← 접기 · Enter 펼치고 접기. 그 밖의 ← 는 부모 폴더로
+              if (r?.kind === "folder" && (e.key === "Enter" || (e.key === "ArrowRight" && !open.has(r.path)) || (e.key === "ArrowLeft" && open.has(r.path)))) {
+                e.preventDefault();
+                toggle(r.path);
+              } else if (r && e.key === "ArrowLeft" && r.depth > 0) {
+                for (let j = i - 1; j >= 0; j--) if (rows[j].kind === "folder" && rows[j].depth === r.depth - 1) return go(j);
+              }
             }}>
               {/* 보이는 줄만 그린다 (키가 수만 개여도 가볍게) */}
               <div style={{ height: keyVirt.getTotalSize(), position: "relative" }}>
                 {keyVirt.getVirtualItems().map((vi) => {
-                  const k = keys[vi.index];
+                  const r = rows[vi.index];
+                  const style = { position: "absolute" as const, top: 0, left: 0, right: 0, transform: `translateY(${vi.start}px)`, paddingLeft: 10 + r.depth * 14 };
+                  if (r.kind === "folder")
+                    return (
+                      <div key={"f:" + r.path} className={"rd-key rd-folder" + (cur === r.path ? " sel" : "")} style={style} onClick={() => (setCur(r.path), toggle(r.path))} title={`${r.path}:*`}>
+                        <Chevron open={open.has(r.path)} />
+                        <FolderIcon />
+                        <span className="rd-key-name">{r.name}</span>
+                        <span className="rd-ttl">{r.count.toLocaleString()}</span>
+                      </div>
+                    );
+                  const k = r.item;
                   return (
-                    <div key={k.key} className={"rd-key" + (k.key === sel ? " sel" : "")} style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${vi.start}px)` }} onClick={() => { setSel(k.key); setTab("content"); }} title={k.key}>
+                    <div key={k.key} className={"rd-key" + (!cur && k.key === sel ? " sel" : "")} style={style} onClick={() => { setCur(null); setSel(k.key); setTab("content"); }} title={k.key}>
                       <TypeBadge type={k.type} />
                       <span className="rd-key-name">{k.key}</span>
                       <span className="rd-ttl">{fmtTtl(k.ttl)}</span>

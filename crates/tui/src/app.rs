@@ -115,8 +115,11 @@ pub struct RedisTab {
     pub pattern: String,
     pub keys: Vec<KeyRow>,
     pub cursor: String,
+    /// 보이는 줄(폴더·키, rows()) 에서 고른 것
     pub sel: usize,
     pub off: usize,
+    /// 펼친 폴더 ("dev:sessions")
+    pub open: HashSet<String>,
     pub detail: Option<(String, KeyDetail)>,
     /// 문자열 값을 보기 좋게 정리한 것 (JSON 은 들여쓰기). 그릴 때마다 다시 파싱하지 않게 불러올 때 만든다
     pub text: Option<String>,
@@ -125,6 +128,63 @@ pub struct RedisTab {
     pub scanning: bool,
     /// 열 때 지정한 키 (스캔이 끝나면 선택)
     pub want: Option<String>,
+}
+
+/// 키 브라우저의 한 줄: ":" 로 묶은 폴더, 또는 키 (keys 의 번호)
+#[derive(Debug, Clone, PartialEq)]
+pub enum KRow {
+    Folder { path: String, name: String, depth: usize, count: usize },
+    Key { idx: usize, depth: usize },
+}
+
+impl RedisTab {
+    /// 보이는 줄: 폴더 먼저(이름순), 그다음 키. 펼친 폴더만 안을 보인다 (탐색기 tree::key_folders 와 같은 규칙)
+    pub fn rows(&self) -> Vec<KRow> {
+        fn level(r: &RedisTab, idx: Vec<usize>, depth: usize, prefix: &str, out: &mut Vec<KRow>) {
+            let mut folders: std::collections::BTreeMap<&str, Vec<usize>> = Default::default();
+            let mut keys = vec![];
+            for i in idx {
+                match r.keys[i].key.split(':').nth(depth) {
+                    Some(seg) if r.keys[i].key.split(':').count() > depth + 1 => folders.entry(seg).or_default().push(i),
+                    _ => keys.push(i),
+                }
+            }
+            for (seg, kids) in folders {
+                let path = if prefix.is_empty() { seg.to_string() } else { format!("{prefix}:{seg}") };
+                out.push(KRow::Folder { path: path.clone(), name: seg.to_string(), depth, count: kids.len() });
+                if r.open.contains(&path) {
+                    level(r, kids, depth + 1, &path, out);
+                }
+            }
+            out.extend(keys.into_iter().map(|idx| KRow::Key { idx, depth }));
+        }
+        let mut out = vec![];
+        level(self, (0..self.keys.len()).collect(), 0, "", &mut out);
+        out
+    }
+
+    /// 고른 줄이 키면 그 키
+    pub fn sel_key(&self) -> Option<String> {
+        match self.rows().get(self.sel) {
+            Some(KRow::Key { idx, .. }) => Some(self.keys[*idx].key.clone()),
+            _ => None,
+        }
+    }
+
+    /// 키가 보이도록 위 폴더를 펼치고 고른다
+    pub fn reveal(&mut self, key: &str) -> bool {
+        let parts: Vec<&str> = key.split(':').collect();
+        for n in 1..parts.len() {
+            self.open.insert(parts[..n].join(":"));
+        }
+        match self.rows().iter().position(|r| matches!(r, KRow::Key { idx, .. } if self.keys[*idx].key == key)) {
+            Some(i) => {
+                self.sel = i;
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 pub enum TabKind {
@@ -933,7 +993,7 @@ impl App {
     }
 
     pub fn restore_redis(&mut self, conn: &str, db: String, title: String, pattern: &str) -> Option<u64> {
-        let r = RedisTab { pattern: pattern.into(), keys: vec![], cursor: "0".into(), sel: 0, off: 0, detail: None, text: None, value: None, focus_value: false, scanning: false, want: None };
+        let r = RedisTab { pattern: pattern.into(), keys: vec![], cursor: "0".into(), sel: 0, off: 0, open: HashSet::new(), detail: None, text: None, value: None, focus_value: false, scanning: false, want: None };
         self.restored_tab(conn, db, title, TabKind::Redis(r))
     }
 
@@ -1245,7 +1305,7 @@ impl App {
             }
             None => {
                 let name = self.conn(conn).map(|c| c.config.name.clone()).unwrap_or_default();
-                let id = self.push_tab(conn, db.clone(), format!("{name} [{db}]"), TabKind::Redis(RedisTab { pattern: "*".into(), keys: vec![], cursor: "0".into(), sel: 0, off: 0, detail: None, text: None, value: None, focus_value: false, scanning: false, want: key.clone() }));
+                let id = self.push_tab(conn, db.clone(), format!("{name} [{db}]"), TabKind::Redis(RedisTab { pattern: "*".into(), keys: vec![], cursor: "0".into(), sel: 0, off: 0, open: HashSet::new(), detail: None, text: None, value: None, focus_value: false, scanning: false, want: key.clone() }));
                 self.redis_scan(id, true);
                 id
             }
@@ -1253,9 +1313,8 @@ impl App {
         if let Some(k) = key {
             if let Some(t) = self.tab_mut(id) {
                 if let TabKind::Redis(r) = &mut t.kind {
-                    match r.keys.iter().position(|x| x.key == k) {
-                        Some(i) => r.sel = i,
-                        None => r.want = Some(k.clone()),
+                    if !r.reveal(&k) {
+                        r.want = Some(k.clone());
                     }
                 }
             }
@@ -1288,17 +1347,17 @@ impl App {
                         }
                     }
                     r.keys.sort_by(|a, b| a.key.cmp(&b.key));
+                    r.sel = r.sel.min(r.rows().len().saturating_sub(1));
                     r.cursor = page.cursor;
                     let n = r.keys.len();
                     let more = r.cursor != "0";
                     let first = match r.want.take() {
                         Some(w) => {
-                            if let Some(i) = r.keys.iter().position(|k| k.key == w) {
-                                r.sel = i;
-                            }
+                            r.reveal(&w);
                             None
                         }
-                        None if reset && r.detail.is_none() => r.keys.first().map(|k| k.key.clone()),
+                        // 첫 줄이 키면 바로 보여 준다 (폴더면 펼쳐서 고르게)
+                        None if reset && r.detail.is_none() => r.sel_key(),
                         None => None,
                     };
                     a.status = format!("{n}{} keys", if more { "+ (m: scan more)" } else { "" });
