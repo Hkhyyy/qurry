@@ -448,16 +448,28 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             } else if h > 0 && r.sel >= r.off + h {
                 r.off = r.sel + 1 - h;
             }
-            let items: Vec<ListItem> = r
-                .keys
+            let rows = r.rows();
+            let items: Vec<ListItem> = rows
                 .iter()
                 .enumerate()
                 .skip(r.off)
                 .take(h)
-                .map(|(i, k)| {
-                    let badge = format!(" {:<6} ", k.ty.to_uppercase());
-                    let ttl = if k.ttl >= 0 { format!(" {}s", k.ttl / 1000) } else { String::new() };
-                    let mut l = Line::from(vec![Span::styled(badge, Style::default().fg(Color::Black).bg(type_color(&k.ty))), Span::raw(" "), Span::raw(k.key.clone()), Span::styled(ttl, Style::default().fg(DIM))]);
+                .map(|(i, row)| {
+                    let mut l = match row {
+                        crate::app::KRow::Folder { path, name, depth, count } => Line::from(vec![
+                            Span::raw("  ".repeat(*depth)),
+                            Span::styled(if r.open.contains(path) { "▾ " } else { "▸ " }, Style::default().fg(DIM)),
+                            Span::styled("▤ ", Style::default().fg(Color::Rgb(84, 138, 247))),
+                            Span::raw(name.clone()),
+                            Span::styled(format!(" {count}"), Style::default().fg(DIM)),
+                        ]),
+                        crate::app::KRow::Key { idx, depth } => {
+                            let k = &r.keys[*idx];
+                            let badge = format!(" {:<6} ", k.ty.to_uppercase());
+                            let ttl = if k.ttl >= 0 { format!(" {}s", k.ttl / 1000) } else { String::new() };
+                            Line::from(vec![Span::raw("  ".repeat(*depth)), Span::styled(badge, Style::default().fg(Color::Black).bg(type_color(&k.ty))), Span::raw(" "), Span::raw(k.key.clone()), Span::styled(ttl, Style::default().fg(DIM))])
+                        }
+                    };
                     if i == r.sel {
                         l = l.style(Style::default().bg(if kf { Color::Rgb(46, 67, 110) } else { Color::Rgb(50, 52, 56) }));
                     }

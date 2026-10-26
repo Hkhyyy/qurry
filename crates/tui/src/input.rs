@@ -23,7 +23,7 @@ fn scroll_at(app: &mut App, x: u16, y: u16, d: isize) {
     } else if inside(app.hits.redis_keys, x, y) {
         if let Some(TabKind::Redis(r)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind) {
             r.focus_value = false;
-            let n = r.keys.len();
+            let n = r.rows().len();
             r.sel = (r.sel as isize + d).clamp(0, n.saturating_sub(1) as isize) as usize;
         }
         return;
@@ -269,9 +269,20 @@ fn click(app: &mut App, x: u16, y: u16) {
             app.focus = Focus::Grid;
             r.focus_value = false;
             let i = r.off + (y - app.hits.redis_keys.y) as usize;
-            if let Some(k) = r.keys.get(i).map(|k| k.key.clone()) {
-                r.sel = i;
-                app.redis_load_key(id, k);
+            match r.rows().get(i).cloned() {
+                Some(crate::app::KRow::Key { idx, .. }) => {
+                    r.sel = i;
+                    let k = r.keys[idx].key.clone();
+                    app.redis_load_key(id, k);
+                }
+                // 폴더를 누르면 펼치고 접는다
+                Some(crate::app::KRow::Folder { path, .. }) => {
+                    r.sel = i;
+                    if !r.open.remove(&path) {
+                        r.open.insert(path);
+                    }
+                }
+                None => {}
             }
         }
         return;
@@ -830,20 +841,51 @@ fn redis_key(app: &mut App, id: u64, k: KeyEvent) {
         }
         return;
     }
-    let n = r.keys.len();
+    let rows = r.rows();
+    let n = rows.len();
     match k.code {
         KeyCode::Down | KeyCode::Char('j') => {
             r.sel = (r.sel + 1).min(n.saturating_sub(1));
-            if let Some(k) = r.keys.get(r.sel).map(|x| x.key.clone()) {
+            if let Some(k) = r.sel_key() {
                 app.redis_load_key(id, k)
             }
         }
         KeyCode::Up | KeyCode::Char('k') => {
             r.sel = r.sel.saturating_sub(1);
-            if let Some(k) = r.keys.get(r.sel).map(|x| x.key.clone()) {
+            if let Some(k) = r.sel_key() {
                 app.redis_load_key(id, k)
             }
         }
+        // 폴더: → / Enter 펼치기·접기. 키: 값으로
+        KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') if matches!(rows.get(r.sel), Some(crate::app::KRow::Folder { .. })) => {
+            if let Some(crate::app::KRow::Folder { path, .. }) = rows.get(r.sel) {
+                let open = r.open.contains(path);
+                if open && k.code == KeyCode::Right {
+                    r.sel += 1;
+                } else if open {
+                    r.open.remove(path);
+                } else {
+                    r.open.insert(path.clone());
+                }
+            }
+        }
+        // ←: 열린 폴더는 접고, 아니면 부모 폴더로
+        KeyCode::Left | KeyCode::Char('h') => match rows.get(r.sel) {
+            Some(crate::app::KRow::Folder { path, .. }) if r.open.contains(path) => {
+                r.open.remove(path);
+            }
+            Some(row) => {
+                let depth = match row {
+                    crate::app::KRow::Folder { depth, .. } | crate::app::KRow::Key { depth, .. } => *depth,
+                };
+                if depth > 0 {
+                    if let Some(p) = rows[..r.sel].iter().rposition(|x| matches!(x, crate::app::KRow::Folder { depth: d, .. } if *d == depth - 1)) {
+                        r.sel = p;
+                    }
+                }
+            }
+            None => {}
+        },
         KeyCode::Enter | KeyCode::Right | KeyCode::Tab => r.focus_value = true,
         KeyCode::Char('/') => {
             let p = r.pattern.clone();
@@ -1439,6 +1481,43 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
+    /// Redis 키 브라우저도 ":" 폴더 (Medis): → 펼치기, ← 접기 / 부모 폴더로, ↓↑ 는 보이는 줄
+    #[tokio::test]
+    async fn redis_browser_groups_keys_into_folders() {
+        let mut h = Harness::new().await;
+        h.redis_tab(&["dev:sessions:{1}", "dev:sessions:{2}", "prod:x", "token"]);
+        let rows = |h: &Harness| match &h.app.tabs[h.app.active].kind {
+            TabKind::Redis(r) => r
+                .rows()
+                .iter()
+                .map(|x| match x {
+                    crate::app::KRow::Folder { name, depth, count, path } => format!("{}{} {name} {count}", "  ".repeat(*depth), if r.open.contains(path) { "▾" } else { "▸" }),
+                    crate::app::KRow::Key { idx, depth } => format!("{}{}", "  ".repeat(*depth), r.keys[*idx].key),
+                })
+                .collect::<Vec<_>>(),
+            _ => panic!("not redis"),
+        };
+        let sel = |h: &Harness| match &h.app.tabs[h.app.active].kind {
+            TabKind::Redis(r) => r.sel,
+            _ => panic!(),
+        };
+        assert_eq!(rows(&h), ["▸ dev 2", "▸ prod 1", "token"]);
+        h.key("Right");
+        assert_eq!(rows(&h), ["▾ dev 2", "  ▸ sessions 2", "▸ prod 1", "token"]);
+        h.key("Down");
+        h.key("Right");
+        h.key("Down");
+        assert_eq!(rows(&h)[sel(&h)], "    dev:sessions:{1}");
+        // ← : 키에서는 부모 폴더로, 열린 폴더는 접는다
+        h.key("Left");
+        assert_eq!(sel(&h), 1);
+        h.key("Left");
+        assert_eq!(rows(&h), ["▾ dev 2", "  ▸ sessions 2", "▸ prod 1", "token"]);
+        // 화면에도 폴더와 개수
+        let s = h.screen(120, 20);
+        assert!(s.contains("▸ ▤ sessions 2") && s.contains("token"), "{s}");
+    }
+
     /// 콘솔 마우스: 누른 곳으로 커서, 끌면 선택 (선택한 것만 실행), 다시 누르면 선택이 풀린다
     #[tokio::test]
     async fn console_mouse_click_and_drag_select() {
@@ -1596,7 +1675,7 @@ mod tests {
     async fn redis_status_bar_follows_side() {
         use crate::app::{RedisTab, TabKind};
         let mut h = Harness::new().await;
-        let r = RedisTab { pattern: "*".into(), keys: vec![], cursor: "0".into(), sel: 0, off: 0, detail: None, text: None, value: None, focus_value: false, scanning: false, want: None };
+        let r = RedisTab { pattern: "*".into(), keys: vec![], cursor: "0".into(), sel: 0, off: 0, open: Default::default(), detail: None, text: None, value: None, focus_value: false, scanning: false, want: None };
         h.app.push_tab("test", "db0".into(), "redis".into(), TabKind::Redis(r));
         h.app.focus = crate::app::Focus::Grid;
         let last = |h: &mut Harness| h.screen(220, 20).lines().last().unwrap().to_string();

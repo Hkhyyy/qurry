@@ -108,6 +108,25 @@ impl Harness {
         self.app.push_tab("test", "postgres".into(), table.into(), TabKind::Table(tt))
     }
 
+    /// DB 없이 키 목록이 채워진 Redis 키 브라우저 탭을 연다
+    pub fn redis_tab(&mut self, keys: &[&str]) -> u64 {
+        let r = crate::app::RedisTab {
+            pattern: "*".into(),
+            keys: keys.iter().map(|k| qurry_core::redisdb::KeyRow { key: k.to_string(), ty: "string".into(), ttl: -1 }).collect(),
+            cursor: "0".into(),
+            sel: 0,
+            off: 0,
+            open: Default::default(),
+            detail: None,
+            text: None,
+            value: None,
+            focus_value: false,
+            scanning: false,
+            want: None,
+        };
+        self.app.push_tab("test", "db0".into(), "redis".into(), TabKind::Redis(r))
+    }
+
     /// 빈 쿼리 콘솔을 열고 편집기에 포커스
     pub fn console_tab(&mut self) -> u64 {
         self.console_with("", 0, 0)
