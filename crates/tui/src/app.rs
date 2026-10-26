@@ -765,6 +765,8 @@ impl App {
                 .iter()
                 .map(|r| mk_obj(&gkey, &r.name, if r.kind == "key" { "key" } else { &r.kind }, if r.kind == "key" { r.comment.clone().unwrap_or_default() } else { r.comment.clone().unwrap_or_default() }))
                 .collect();
+            // Redis 키는 ":" 로 폴더를 만든다
+            let kids = if label == "keys" { crate::tree::key_folders(&mut self.tree.children, &gkey, kids) } else { kids };
             self.tree.children.insert(gkey.clone(), kids);
             out.push(Node { key: gkey, label: label.into(), hint: items.len().to_string(), kind: NodeKind::Group, conn: conn.into(), db: Some(db.into()), schema: Some(schema.into()), name: None, expandable: true });
         }
