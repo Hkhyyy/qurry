@@ -353,6 +353,7 @@ Ctrl+Enter is only distinguishable in terminals that support the kitty keyboard 
 | `r` | Reload (table data) |
 | `x` | Export data (CSV, TSV, JSON, SQL INSERT, Markdown → file or clipboard). Import: ⌃K › Import Data from File… |
 | `y  ⌘c` | Copy cell value |
+| `Y` | Copy the whole column as an IN list: `('a', 'b', …)` — paste after `WHERE x IN` |
 | `⌘v` | Paste into cells from the selected one (tabs / lines fill several; extra lines add rows; table data) |
 | `Esc` | Back (query results: to the editor) |
 

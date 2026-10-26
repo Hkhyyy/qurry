@@ -151,6 +151,24 @@ impl Grid {
         self.result.rows.get(r).and_then(|row| row.get(c)).and_then(raw_text)
     }
 
+    /// 열 전체를 IN 목록 글과 값 개수로
+    pub fn column_in_list(&self, c: usize) -> (String, usize) {
+        let mut seen = std::collections::HashSet::new();
+        let items: Vec<String> = (0..self.result.rows.len())
+            .filter_map(|r| match self.edits.get(&(r, c)) {
+                Some(v) => v.as_ref().map(|s| format!("'{}'", s.replace('\'', "''"))),
+                None => match self.result.rows[r].get(c)? {
+                    Value::Null => None,
+                    v @ (Value::Number(_) | Value::Bool(_)) => Some(v.to_string()),
+                    v => raw_text(v).map(|s| format!("'{}'", s.replace('\'', "''"))),
+                },
+            })
+            .filter(|x| seen.insert(x.clone()))
+            .collect();
+        let n = items.len();
+        (format!("({})", if n == 0 { "NULL".into() } else { items.join(", ") }), n)
+    }
+
     pub fn dirty(&self) -> bool {
         !self.edits.is_empty() || !self.deleted.is_empty() || self.added > 0
     }
@@ -458,5 +476,14 @@ mod tests {
         g.toggle_local_sort();
         assert_eq!(g.sort, None);
         assert_eq!(vals(&g), ["10", "<null>", "9", "100", "50"]);
+    }
+    /// 열 전체를 IN 목록으로: ('a', 'b'). 숫자는 그대로, 중복·NULL 은 뺀다 (GUI lib/inList.ts 와 같다)
+    #[test]
+    fn column_as_in_list() {
+        let col = |n: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: String::new() };
+        let rows = vec![vec![json!("1.2.3.4"), json!(1)], vec![json!("it's"), json!(2)], vec![Value::Null, json!(2)], vec![json!("1.2.3.4"), Value::Null]];
+        let g = Grid::new(QueryResult { columns: vec![col("ip"), col("n")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false });
+        assert_eq!(g.column_in_list(0), ("('1.2.3.4', 'it''s')".to_string(), 2));
+        assert_eq!(g.column_in_list(1), ("(1, 2)".to_string(), 2));
     }
 }

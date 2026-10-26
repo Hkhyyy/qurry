@@ -309,6 +309,7 @@ pub enum Action {
     DeleteRow,
     SetNull,
     ExportCsv,
+    CopyInList,
     ImportData,
     CancelTransfer,
     ToggleExplorer,
@@ -360,6 +361,7 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::DeleteRow, "Delete Row", "Delete / d"),
     (Action::SetNull, "Set NULL", "n (grid)"),
     (Action::ExportCsv, "Export Data… (CSV, TSV, JSON, SQL INSERT, Markdown)", "x (grid)"),
+    (Action::CopyInList, "Copy Column as IN List  ('a', 'b', …)", "Y (grid)"),
     (Action::ImportData, "Import Data from File… (CSV, TSV, JSON)", ""),
     (Action::CancelTransfer, "Cancel Export/Import", ""),
     (Action::NewDataSource, "New Data Source…", "n (explorer)"),
@@ -2279,6 +2281,16 @@ impl App {
             }
             Action::ExportCsv => self.export_start(),
             Action::ImportData => self.import_start(),
+            Action::CopyInList => {
+                let Some(g) = self.grid_mut() else {
+                    self.status = "Open a result or table to copy a column".into();
+                    return;
+                };
+                let (text, n) = g.column_in_list(g.col);
+                crate::input::copy(self, &text);
+                let short: String = text.chars().take(80).collect();
+                self.status = format!("Copied {n} values as an IN list: {short}{}", if text.chars().count() > 80 { "…" } else { "" });
+            }
             Action::CancelTransfer => {
                 for (id, ..) in &self.jobs {
                     self.state.cancel_job(id);

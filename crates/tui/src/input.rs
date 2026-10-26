@@ -735,6 +735,7 @@ fn nav(app: &mut App, k: KeyEvent) {
             copy(app, &v);
             return;
         }
+        KeyCode::Char('Y') => return app.run_action(Action::CopyInList),
         KeyCode::Char('x') => return app.run_action(Action::ExportCsv),
         KeyCode::Char('s') => {
             g.toggle_local_sort();
@@ -1516,6 +1517,17 @@ mod tests {
         // 화면에도 폴더와 개수
         let s = h.screen(120, 20);
         assert!(s.contains("▸ ▤ sessions 2") && s.contains("token"), "{s}");
+    }
+
+    /// Y: 지금 열 전체를 IN 목록으로 복사 (결과의 IP 들을 다음 쿼리 WHERE ip IN 에 바로)
+    #[tokio::test]
+    async fn copy_column_as_in_list() {
+        let mut h = Harness::new().await;
+        h.table_tab("logs", &["ip", "n"], &[&["1.2.3.4", "1"], &["5.6.7.8", "2"], &["1.2.3.4", "3"]], &[]);
+        h.key("Y");
+        assert_eq!(h.app.status, "Copied 2 values as an IN list: ('1.2.3.4', '5.6.7.8')");
+        // ⌃K 에서도
+        assert!(crate::app::ACTIONS.iter().any(|a| a.0 == Action::CopyInList));
     }
 
     /// 콘솔 마우스: 누른 곳으로 커서, 끌면 선택 (선택한 것만 실행), 다시 누르면 선택이 풀린다
