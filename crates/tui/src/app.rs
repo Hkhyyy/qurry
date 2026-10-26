@@ -982,12 +982,14 @@ impl App {
         }
         // 칸이 비면 그 칸을 없앤다
         let emptied = !self.tabs.iter().any(|x| x.group == t.group);
-        // 같은 칸에서 최근에 쓴 탭으로
+        // 같은 칸에서 최근에 쓴 탭으로. 없으면 (되살린 탭은 최근 목록에 없다) 같은 칸의 옆 탭
+        let same = |j: &usize| self.tabs[*j].group == t.group;
         let next = self
             .mru
             .iter()
             .filter_map(|id| self.tab_index(*id))
-            .find(|&j| self.tabs[j].group == t.group)
+            .find(same)
+            .or_else(|| (i..self.tabs.len()).find(same).or_else(|| (0..i).rev().find(same)))
             .or_else(|| self.mru.first().and_then(|id| self.tab_index(*id)))
             .unwrap_or(0);
         self.activate(next);

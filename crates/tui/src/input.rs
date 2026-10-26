@@ -1361,6 +1361,45 @@ mod tests {
         assert!(between.contains('┃'), "{bar}");
     }
 
+    /// 탭이 탭 바보다 많으면 지금 탭이 보이도록 민다 (뒤쪽 탭이 잘려 안 보이지 않게). 클릭도 밀린 자리에 맞는다
+    #[tokio::test]
+    async fn tab_bar_scrolls_to_the_active_tab() {
+        let mut h = Harness::new().await;
+        for i in 0..8 {
+            h.table_tab(&format!("long_table_name_{i}"), &["id"], &[&["1"]], &["id"]);
+        }
+        let s = h.screen(80, 20);
+        let bar = s.lines().find(|l| l.contains("long_table_name_7")).unwrap_or_else(|| panic!("{s}"));
+        assert!(!bar.contains("long_table_name_0"), "{bar}");
+        // 첫 탭으로 가면 다시 앞쪽이 보인다
+        h.key("Alt+Right");
+        let s = h.screen(80, 20);
+        let (y, bar) = s.lines().enumerate().find(|(_, l)| l.contains("long_table_name_0")).unwrap_or_else(|| panic!("{s}"));
+        assert!(!bar.contains("long_table_name_7"), "{bar}");
+        // 보이는 탭을 누르면 그 탭으로
+        let x = bar[..bar.find("long_table_name_1").unwrap()].chars().count() as u16;
+        h.mouse("down", x, y as u16);
+        h.mouse("up", x, y as u16);
+        assert_eq!(h.app.tabs[h.app.active].title, "long_table_name_1");
+    }
+
+    /// 나눈 화면에서 탭을 닫으면 같은 칸의 옆 탭으로 (되살린 탭처럼 아직 안 본 탭만 남아도 첫 칸으로 튀지 않게)
+    #[tokio::test]
+    async fn closing_a_tab_stays_in_its_pane() {
+        let mut h = Harness::new().await;
+        h.table_tab("left", &["id"], &[&["1"]], &["id"]);
+        let right_a = h.table_tab("right_a", &["id"], &[&["1"]], &["id"]);
+        h.app.run_action(crate::app::Action::SplitRight);
+        h.table_tab("right_b", &["id"], &[&["1"]], &["id"]);
+        h.table_tab("right_c", &["id"], &[&["1"]], &["id"]);
+        // 되살린 탭은 최근 목록에 없다
+        h.app.mru.retain(|x| *x != right_a);
+        h.key("Ctrl+w");
+        assert_eq!(h.app.tabs[h.app.active].title, "right_b");
+        h.key("Ctrl+w");
+        assert_eq!(h.app.tabs[h.app.active].title, "right_a");
+    }
+
     /// 콘솔 마우스: 누른 곳으로 커서, 끌면 선택 (선택한 것만 실행), 다시 누르면 선택이 풀린다
     #[tokio::test]
     async fn console_mouse_click_and_drag_select() {
