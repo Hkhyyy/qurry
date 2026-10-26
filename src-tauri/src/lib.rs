@@ -63,6 +63,7 @@ pub fn run() {
             let secret_file = secrets::SecretFile::open(&dir)?;
             app.manage(app::AppState::new(store::Store::new(dir), secret_file));
             app.manage(commands::PendingImport::default());
+            app.manage(commands::PendingData::default());
             // keep-alive / auto-disconnect
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -88,7 +89,10 @@ pub fn run() {
             commands::disconnect,
             commands::run_query,
             commands::export_connections,
-            commands::export_csv,
+            commands::export_data,
+            commands::cancel_job,
+            commands::pick_data_file,
+            commands::import_data,
             commands::save_text_file,
             commands::pick_import_file,
             commands::import_picked,

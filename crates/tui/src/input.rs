@@ -1400,6 +1400,45 @@ mod tests {
         assert_eq!(h.app.tabs[h.app.active].title, "right_a");
     }
 
+    /// 내보내기 (x): 형식 → 파일/클립보드 → 경로 (확장자는 형식대로)
+    #[tokio::test]
+    async fn export_asks_format_then_destination() {
+        let mut h = Harness::new().await;
+        h.table_tab("users", &["id"], &[&["1"]], &["id"]);
+        h.key("x");
+        let labels = |h: &Harness| match &h.app.popup {
+            Some(crate::app::Popup::Palette(p)) => p.items.iter().map(|i| i.label.clone()).collect::<Vec<_>>(),
+            _ => panic!("no chooser"),
+        };
+        assert_eq!(labels(&h), ["CSV", "TSV", "JSON", "SQL INSERT", "Markdown"]);
+        h.key("Down");
+        h.key("Down");
+        h.key("Enter");
+        assert_eq!(labels(&h), ["File…", "Clipboard"]);
+        h.key("Enter");
+        let Some(crate::app::Popup::Input { title, input, .. }) = &h.app.popup else { panic!("no path input") };
+        assert_eq!(title, "Export JSON to file");
+        assert!(input.lines()[0].ends_with("/Downloads/users.json"), "{:?}", input.lines());
+    }
+
+    /// 가져오기: 파일을 읽어 같은 이름 컬럼에 짝짓고, 무엇이 들어가는지 보여 주고 묻는다
+    #[tokio::test]
+    async fn import_maps_file_columns_by_name() {
+        let mut h = Harness::new().await;
+        let path = std::env::temp_dir().join(format!("qurry-tui-import-{}.csv", uuid::Uuid::new_v4()));
+        std::fs::write(&path, "ID,Name,extra\n1,a,x\n").unwrap();
+        h.table_tab("users", &["id", "name"], &[&["1", "a"]], &["id"]);
+        h.app.run_action(crate::app::Action::ImportData);
+        let Some(crate::app::Popup::Input { input, .. }) = &mut h.app.popup else { panic!("no path input") };
+        *input = tui_textarea::TextArea::from([path.display().to_string()]);
+        h.key("Enter");
+        h.settle().await;
+        let Some(crate::app::Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm") };
+        assert!(text.contains("into public.users"), "{text}");
+        assert!(text.contains("ID → id") && text.contains("Name → name") && text.contains("extra → (skip)"), "{text}");
+        std::fs::remove_file(path).unwrap();
+    }
+
     /// 콘솔 마우스: 누른 곳으로 커서, 끌면 선택 (선택한 것만 실행), 다시 누르면 선택이 풀린다
     #[tokio::test]
     async fn console_mouse_click_and_drag_select() {

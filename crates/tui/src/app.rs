@@ -152,6 +152,10 @@ pub struct Tab {
 #[derive(Clone)]
 pub enum PAction {
     Act(Action),
+    /// 내보내기: 형식을 골랐다 → 대상 고르기
+    ExportFormat(qurry_core::transfer::Format),
+    /// 내보내기: (형식, 클립보드)
+    ExportTo(qurry_core::transfer::Format, bool),
     Object { conn: String, db: String, e: IndexEntryLite },
     Tab(u64),
     /// 실행 선택 팝업에서 고른 문장들
@@ -245,6 +249,8 @@ pub enum Action {
     DeleteRow,
     SetNull,
     ExportCsv,
+    ImportData,
+    CancelTransfer,
     ToggleExplorer,
     ToggleOutput,
     SplitRight,
@@ -293,7 +299,9 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::AddRow, "Add Row", "Insert / a"),
     (Action::DeleteRow, "Delete Row", "Delete / d"),
     (Action::SetNull, "Set NULL", "n (grid)"),
-    (Action::ExportCsv, "Export Data to CSV…", "x (grid)"),
+    (Action::ExportCsv, "Export Data… (CSV, TSV, JSON, SQL INSERT, Markdown)", "x (grid)"),
+    (Action::ImportData, "Import Data from File… (CSV, TSV, JSON)", ""),
+    (Action::CancelTransfer, "Cancel Export/Import", ""),
     (Action::NewDataSource, "New Data Source…", "n (explorer)"),
     (Action::EditDataSource, "Data Source Properties…", "e (explorer)"),
     (Action::DeleteDataSource, "Remove Data Source", "D (explorer)"),
@@ -391,6 +399,8 @@ pub struct App {
     pub tabs: Vec<Tab>,
     pub active: usize,
     pub mru: Vec<u64>,
+    /// 도는 내보내기·가져오기 (작업 id, 이름, 진행). 상태줄에 진행 막대
+    pub jobs: Vec<(String, String, Arc<qurry_core::transfer::Job>)>,
     pub focus: Focus,
     pub explorer: bool,
     pub popup: Option<Popup>,
@@ -480,6 +490,7 @@ impl App {
             tabs: vec![],
             active: 0,
             mru: vec![],
+            jobs: vec![],
             focus: Focus::Tree,
             explorer: true,
             popup: None,
@@ -765,6 +776,8 @@ impl App {
                 .iter()
                 .map(|r| mk_obj(&gkey, &r.name, if r.kind == "key" { "key" } else { &r.kind }, if r.kind == "key" { r.comment.clone().unwrap_or_default() } else { r.comment.clone().unwrap_or_default() }))
                 .collect();
+            // Redis 키는 ":" 로 폴더를 만든다
+            let kids = if label == "keys" { crate::tree::key_folders(&mut self.tree.children, &gkey, kids) } else { kids };
             self.tree.children.insert(gkey.clone(), kids);
             out.push(Node { key: gkey, label: label.into(), hint: items.len().to_string(), kind: NodeKind::Group, conn: conn.into(), db: Some(db.into()), schema: Some(schema.into()), name: None, expandable: true });
         }
@@ -1710,32 +1723,6 @@ impl App {
         });
     }
 
-    pub fn export_csv(&mut self, path: String) {
-        let Some(t) = self.tabs.get(self.active) else { return };
-        let kind = self.kind_of(&t.conn);
-        let target = t.target.clone();
-        let sqlq = match &t.kind {
-            TabKind::Table(tt) => format!("SELECT * FROM {}.{}{}", sql::quote_ident(kind, &tt.schema), sql::quote_ident(kind, &tt.table), if tt.where_.trim().is_empty() { String::new() } else { format!(" WHERE {}", tt.where_) }),
-            TabKind::Console(c) => {
-                let text = c.editor.lines().join("\n");
-                let (row, col) = c.editor.cursor();
-                match sql::statement_at(&text, byte_offset(c.editor.lines(), row, col), kind) {
-                    Some(s) => s,
-                    None => return,
-                }
-            }
-            _ => return,
-        };
-        let st = self.state.clone();
-        let p2 = path.clone();
-        self.spawn(async move { st.export_csv(target, sqlq, p2).await.map_err(err) }, move |a, r| {
-            a.status = match r {
-                Ok(n) => format!("Exported {n} rows to {path}"),
-                Err(e) => format!("Export failed: {e}"),
-            }
-        });
-    }
-
     // ───────── 연결 ─────────
 
     pub fn connect(&mut self, conn: &str) {
@@ -2037,6 +2024,8 @@ impl App {
                 }
             }
             PAction::Run { stmts, explain } => self.run_stmts(stmts, explain, false),
+            PAction::ExportFormat(f) => self.export_dest(f),
+            PAction::ExportTo(f, clipboard) => self.export_to(f, clipboard),
             PAction::Exec(e) => {
                 self.exec = e;
                 self.palette_exec();
@@ -2229,10 +2218,12 @@ impl App {
                     }
                 }
             }
-            Action::ExportCsv => {
-                let name = self.tabs.get(self.active).map(|t| t.title.clone()).unwrap_or_default();
-                let home = std::env::var("HOME").unwrap_or_default();
-                self.input("Export to CSV file", &format!("{home}/Downloads/{}.csv", name.split_whitespace().next().unwrap_or("result")), |a, p| a.export_csv(p));
+            Action::ExportCsv => self.export_start(),
+            Action::ImportData => self.import_start(),
+            Action::CancelTransfer => {
+                for (id, ..) in &self.jobs {
+                    self.state.cancel_job(id);
+                }
             }
             Action::ToggleExplorer => {
                 if self.focus == Focus::Tree && self.explorer && !self.tabs.is_empty() {

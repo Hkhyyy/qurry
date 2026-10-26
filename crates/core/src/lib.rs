@@ -23,6 +23,7 @@ pub mod secrets;
 pub mod session;
 pub mod sql;
 pub mod store;
+pub mod transfer;
 pub mod tunnel;
 pub mod update;
 

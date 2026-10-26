@@ -6,7 +6,7 @@ A free DataGrip alternative for PostgreSQL, MySQL/MariaDB and Redis — query + 
 
 ![qurry-tui](docs/screenshots/tui.png)
 
-- **Free and open source.** DataGrip-style explorer, query console, data editor, explain plan, DDL and full-text search, with DataGrip key bindings.
+- **Free and open source.** DataGrip-style explorer, query console, data editor, explain plan, DDL, full-text search and data export (CSV, TSV, JSON, SQL INSERT, Markdown) and import (CSV, TSV, JSON), with DataGrip key bindings.
 - **GUI, terminal and AI from one engine.** The desktop app, the terminal UI (great over SSH) and the MCP server share the same data sources and passwords.
 - **Safe for AI.** The MCP server is read-only by default, and the engine enforces that: one reading statement, in a READ ONLY transaction that is rolled back.
 - **Small and fast.** Rust + Tauri, no JVM. SSH tunnels, SSL/TLS, Redis Sentinel and Cluster built in.
@@ -351,7 +351,7 @@ Ctrl+Enter is only distinguishable in terminals that support the kitty keyboard 
 | `s` | Sort by the selected column: ▲ → ▼ → off (table data: ORDER BY · results: loaded rows) |
 | `w or / · o` | Edit WHERE · ORDER BY (table data) |
 | `r` | Reload (table data) |
-| `x` | Export to CSV |
+| `x` | Export data (CSV, TSV, JSON, SQL INSERT, Markdown → file or clipboard). Import: ⌃K › Import Data from File… |
 | `y  ⌘c` | Copy cell value |
 | `⌘v` | Paste into cells from the selected one (tabs / lines fill several; extra lines add rows; table data) |
 | `Esc` | Back (query results: to the editor) |

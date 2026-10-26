@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { DataFormat } from "./transfer";
 
 export type DbKind = "postgres" | "mysql" | "redis";
 
@@ -146,7 +147,13 @@ export const api = {
   pickImportFile: () => invoke<string[] | null>("pick_import_file"),
   importPicked: () => invoke<{ added: number; updated: number }>("import_picked"),
   saveTextFile: (defaultName: string, text: string) => invoke<string | null>("save_text_file", { defaultName, text }),
-  exportCsv: (id: string, sql: string, defaultName: string) => invoke<[number, string] | null>("export_csv", { id, sql, defaultName }),
+  /** 데이터 내보내기: 파일(저장 창) 또는 클립보드 글. 저장 창을 닫으면 null. 진행은 "transfer-progress" 이벤트 */
+  exportData: (id: string, sql: string, format: DataFormat, clipboard: boolean, defaultName: string, table: [string, string] | null, job: string) =>
+    invoke<{ rows: number; path: string | null; text: string | null } | null>("export_data", { id, sql, format, clipboard, defaultName, table, job }),
+  cancelJob: (job: string) => invoke<void>("cancel_job", { job }),
+  /** 가져올 파일 고르기 → (경로, 미리보기). 고른 파일은 백엔드가 기억한다 */
+  pickDataFile: () => invoke<[string, DataPreview] | null>("pick_data_file"),
+  importData: (id: string, spec: ImportSpec, job: string) => invoke<number>("import_data", { id, spec, job }),
   txState: (tabId: string) => invoke<boolean>("tx_state", { tabId }),
   trustSshHost: (host: string, port: number) => invoke<string>("trust_ssh_host", { host, port }),
   /** 실행 전 확인할 위험 문장이면 이유 (WHERE 없는 UPDATE/DELETE, DROP, TRUNCATE, Redis FLUSH*·DEL) */
@@ -162,6 +169,10 @@ export interface IndexMeta { name: string; definition: string; isUnique: boolean
 export interface ConstraintMeta { name: string; kind: "p" | "f" | "u" | "c"; definition: string }
 export interface TableDetail { columns: ColumnMeta[]; indexes: IndexMeta[]; constraints: ConstraintMeta[] }
 export interface CompletionTable { schema: string; name: string; columns: [string, string][] }
+
+export interface DataPreview { format: DataFormat; columns: string[]; rows: (string | null)[][]; bytes: number }
+/** columns: [파일 열 번호, 테이블 컬럼]. create = 새 테이블 (컬럼은 모두 text) */
+export interface ImportSpec { path: string; schema: string; table: string; create: boolean; columns: [number, string][] }
 
 export const meta = {
   databases: (id: string) => invoke<string[]>("list_databases", { id }),

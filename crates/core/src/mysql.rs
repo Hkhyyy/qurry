@@ -192,30 +192,23 @@ async fn run_on_with(conn: &mut sqlx::MySqlConnection, sql: &str, limit: usize, 
     Ok(query_result(columns, rows, affected, truncated, start, has_rs))
 }
 
-pub async fn export_csv(p: &MySqlPool, sql: &str, path: &std::path::Path) -> AppResult<u64> {
+pub async fn export(p: &MySqlPool, sql: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {
     let mut conn = p.acquire().await?;
-    export_on(&mut conn, sql, path, false).await
+    export_on(&mut conn, sql, out, false).await
 }
 
-/// 이미 잡은 연결에서 CSV 로. prepared = 한 문장만 실행되는 prepared 프로토콜 (읽기 전용 경로)
-pub async fn export_on(conn: &mut sqlx::MySqlConnection, sql: &str, path: &std::path::Path, prepared: bool) -> AppResult<u64> {
-    let mut out = crate::db::CsvOut::create(path).await?;
-    let mut count = 0u64;
-    let mut header = false;
+/// 이미 잡은 연결에서 내보낸다. prepared = 한 문장만 실행되는 prepared 프로토콜 (읽기 전용 경로)
+pub async fn export_on(conn: &mut sqlx::MySqlConnection, sql: &str, out: &mut crate::transfer::Exporter, prepared: bool) -> AppResult<()> {
     let mut stream = if prepared { conn.fetch(sqlx::query(sql)) } else { conn.fetch(sqlx::raw_sql(sql)) };
     while let Some(row) = stream.try_next().await? {
-        if !header {
-            let names: Vec<String> = row.columns().iter().map(|c| crate::db::csv_field(c.name())).collect();
-            out.row(&names).await?;
-            header = true;
+        if !out.has_header() {
+            let names: Vec<String> = row.columns().iter().map(|c| c.name().to_string()).collect();
+            out.header(&names).await?;
         }
-        let fields: Vec<String> = (0..row.len()).map(|i| crate::db::csv_field(&crate::db::cell_text(&value(&row, i)))).collect();
-        out.row(&fields).await?;
-        count += 1;
+        let vals: Vec<serde_json::Value> = (0..row.len()).map(|i| value(&row, i)).collect();
+        out.row(&vals).await?;
     }
-    drop(stream);
-    out.finish().await?;
-    Ok(count)
+    Ok(())
 }
 
 pub async fn execute_batch(p: &MySqlPool, statements: &[String], exact_one: bool) -> AppResult<u64> {

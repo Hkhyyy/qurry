@@ -30,6 +30,8 @@ pub struct AppState {
     pub last_ping: std::sync::Mutex<HashMap<String, std::time::Instant>>,
     /// 탭 id → Manual 모드 (다시 접속해 세션을 새로 열 때도 같은 모드로)
     pub tab_manual: std::sync::Mutex<HashMap<String, bool>>,
+    /// 내보내기·가져오기 작업 id → 진행·취소
+    pub jobs: std::sync::Mutex<HashMap<String, std::sync::Arc<crate::transfer::Job>>>,
 }
 
 impl AppState {
@@ -53,7 +55,7 @@ impl AppState {
 
 impl AppState {
     pub fn new(store: Store, secret_file: crate::secrets::SecretFile) -> Self {
-        Self { store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), secrets: Default::default(), secret_file, last_used: Default::default(), last_ping: Default::default(), tab_manual: Default::default() }
+        Self { store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), secrets: Default::default(), secret_file, last_used: Default::default(), last_ping: Default::default(), tab_manual: Default::default(), jobs: Default::default() }
     }
 }
 
@@ -349,23 +351,26 @@ impl AppState {
         if let Some(why) = crate::guard::read_only_violation(&sql, kind, true) {
             return Err(AppError::Msg(why));
         }
-        match ensure_pool(self, &id).await? {
+        let pool = ensure_pool(self, &id).await?;
+        let mut out = crate::transfer::Exporter::csv_file(&path).await?;
+        match pool {
             Pool::Pg(p) => {
                 let mut tx = p.begin().await?;
                 tx.execute("SET TRANSACTION READ ONLY").await?;
-                let r = db::export_pg_on(&mut tx, &sql, &path).await;
+                let r = db::export_pg_on(&mut tx, &sql, &mut out).await;
                 let _ = tx.rollback().await;
-                r
+                r?
             }
             Pool::My(p) => {
                 let mut conn = p.acquire().await?;
                 conn.execute("START TRANSACTION READ ONLY").await?;
-                let r = crate::mysql::export_on(&mut conn, &sql, &path, true).await;
+                let r = crate::mysql::export_on(&mut conn, &sql, &mut out, true).await;
                 let _ = conn.execute("ROLLBACK").await;
-                r
+                r?
             }
-            Pool::Redis(..) => Err(AppError::Msg("CSV export of Redis commands is not available in read-only mode".into())),
+            Pool::Redis(..) => return Err(AppError::Msg("CSV export of Redis commands is not available in read-only mode".into())),
         }
+        Ok(out.finish().await?.rows)
     }
 
     pub fn kind_of(&self, id: &str) -> AppResult<crate::store::DbKind> {
@@ -564,12 +569,12 @@ impl AppState {
     }
 
     /// Data Source 설정 (읽기 전용 여부 등)
-    fn source(&self, id: &str) -> AppResult<ConnectionConfig> {
+    pub(crate) fn source(&self, id: &str) -> AppResult<ConnectionConfig> {
         self.store.get(split_target(id).0)?.ok_or_else(|| AppError::Msg("Data source not found".into()))
     }
 
     /// Read-only Data Source 면 데이터를 바꾸는 문장을 막는다 (UI 와 상관없이 여기서 지킨다)
-    fn check_read_only(&self, id: &str, sql: &str) -> AppResult<()> {
+    pub(crate) fn check_read_only(&self, id: &str, sql: &str) -> AppResult<()> {
         let cfg = self.source(id)?;
         if !cfg.read_only {
             return Ok(());

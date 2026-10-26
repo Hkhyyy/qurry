@@ -24,6 +24,8 @@ import type { FtsRequest } from "./lib/api";
 import { isRelation, NodeInfo, revealInTree } from "./components/SchemaTree";
 import { leaf, leaves, MAX_PANES, Pane, prunePanes, splitPane } from "./lib/panes";
 import { connBg, getThemePref, setThemePref, THEME_LABEL, ThemePref, useTheme } from "./lib/theme";
+import { ExportDialog, ImportDialog, TransferBar, type TransferJob } from "./components/Transfer";
+import type { DataFormat } from "./lib/transfer";
 import "./App.css";
 
 /** 칸 id (0~3). 칸 배치는 Pane 트리 */
@@ -535,16 +537,56 @@ export default function App() {
     }
   };
 
-  const exportTable = async (info: NodeInfo) => {
-    if (!info.schema || !info.name) return;
-    const target = targetId(info.conn.id, info.db && info.db !== (info.conn.database || "postgres") ? info.db : undefined);
+  // ───────── 데이터 내보내기·가져오기 (형식 고르기 → 하단 진행 막대) ─────────
+  const [exportReq, setExportReq] = useState<{ target: string; sql: string; name: string; table: [string, string] | null } | null>(null);
+  const [importReq, setImportReq] = useState<{ target: string; schema: string; table?: string; refresh?: () => void } | null>(null);
+  const [jobs, setJobs] = useState<TransferJob[]>([]);
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    listen<[string, number, number, number]>("transfer-progress", ({ payload: [id, rows, done, total] }) =>
+      setJobs((js) => js.map((j) => (j.id === id ? { ...j, rows, done, total } : j))),
+    )
+      .then((u) => (off = u))
+      .catch(() => {});
+    return () => off?.();
+  }, []);
+  /** 작업을 진행 막대에 올리고 돌린다. 끝나면 내린다 (취소면 조용히) */
+  const runJob = async <T,>(label: string, run: (job: string) => Promise<T>): Promise<T | undefined> => {
+    const id = crypto.randomUUID();
+    setJobs((js) => [...js, { id, label, rows: 0, done: 0, total: 0 }]);
     try {
-      const { q } = dialectOf(info.conn.kind);
-      const r = await api.exportCsv(target, `SELECT * FROM ${q(info.schema)}.${q(info.name)}`, `${info.name}.csv`);
-      if (r) setStatus(`Exported ${r[0]} rows to ${r[1]}`);
+      return await run(id);
     } catch (e) {
-      setStatus(String(e));
+      setStatus(String(e) === "Cancelled" ? `${label}: cancelled` : `${label}: ${String(e)}`);
+    } finally {
+      setJobs((js) => js.filter((j) => j.id !== id));
     }
+  };
+  const startExport = async (format: DataFormat, clipboard: boolean) => {
+    const r0 = exportReq;
+    setExportReq(null);
+    if (!r0) return;
+    const label = `Export ${r0.name}`;
+    const r = await runJob(label, (job) => api.exportData(r0.target, r0.sql, format, clipboard, r0.name, r0.table, job));
+    if (!r) return;
+    if (r.text !== null) {
+      await navigator.clipboard.writeText(r.text);
+      setStatus(`Copied ${r.rows} rows to the clipboard`);
+    } else setStatus(`Exported ${r.rows} rows to ${r.path}`);
+  };
+  const startImport = async (table: string, create: boolean, columns: [number, string][], label: string) => {
+    const r0 = importReq;
+    setImportReq(null);
+    if (!r0) return;
+    const n = await runJob(`Import ${label}`, (job) => api.importData(r0.target, { path: "", schema: r0.schema, table, create, columns }, job));
+    if (n === undefined) return;
+    setStatus(`Imported ${n} rows into ${r0.schema}.${table}`);
+    if (create) r0.refresh?.();
+  };
+  const exportTable = (info: NodeInfo) => {
+    if (!info.schema || !info.name) return;
+    const { q } = dialectOf(info.conn.kind);
+    setExportReq({ target: nodeTarget(info), sql: `SELECT * FROM ${q(info.schema)}.${q(info.name)}`, name: info.name, table: [info.schema, info.name] });
   };
 
   const dangerous = async (info: NodeInfo, verb: "TRUNCATE" | "DROP") => {
@@ -716,7 +758,18 @@ export default function App() {
           { label: "Drop…", shortcut: K.drop, danger: true, action: () => dangerous(info, "DROP") },
         ],
       });
-    if (rel) items.push({ label: "Import/Export", submenu: [{ label: "Export Data to File…", action: () => exportTable(info) }] });
+    if (rel)
+      items.push({
+        label: "Import/Export",
+        submenu: [
+          { label: "Export Data…", action: () => exportTable(info) },
+          ...(info.kind === "table" || info.kind === "partitioned"
+            ? ([{ label: "Import Data from File…", action: () => setImportReq({ target: nodeTarget(info), schema: info.schema!, table: info.name }) }] as MenuItem[])
+            : []),
+        ],
+      });
+    if (info.kind === "schema" && info.schema && c.kind !== "redis")
+      items.push({ label: "Import/Export", submenu: [{ label: "Import Data into New Table…", action: () => setImportReq({ target: nodeTarget(info), schema: info.schema!, refresh: info.refresh }) }] });
     items.push({ label: "Tools", submenu: [{ label: "Manage Shown Schemas…", action: () => document.querySelector<HTMLElement>(".tree-node.conn.selected .scope-badge, .tree-node.selected .scope-badge")?.click() }] });
     if (info.kind === "conn") {
       items.push({ label: "Diagnostics", submenu: [{ label: "Force Refresh", shortcut: K.force, action: () => (invalidateSearchIndex(c.id), invalidateCompletion(c.id), info.refresh?.()) }] });
@@ -1505,14 +1558,9 @@ export default function App() {
     }
   };
 
-  const exportCsv = async (tab: Tab | null) => {
+  const exportCsv = (tab: Tab | null) => {
     if (!tab?.lastSql) return;
-    try {
-      const r = await api.exportCsv(tab.target, tab.lastSql, `${tab.kind === "table" ? tab.title : "result"}.csv`);
-      if (r) setStatus(`Exported ${r[0]} rows to ${r[1]}`);
-    } catch (e) {
-      setStatus(String(e));
-    }
+    setExportReq({ target: tab.target, sql: tab.lastSql, name: tab.kind === "table" ? tab.title : "result", table: tab.edit ? [tab.edit.schema, tab.edit.table] : null });
   };
 
   const removeConn = async (c: ConnectionView) => {
@@ -1925,6 +1973,8 @@ export default function App() {
           }}
         />
       )}
+      {exportReq && <ExportDialog what={exportReq.name} onExport={startExport} onClose={() => setExportReq(null)} />}
+      {importReq && <ImportDialog target={importReq.target} schema={importReq.schema} table={importReq.table} onImport={startImport} onClose={() => setImportReq(null)} />}
       {updateOpen && update?.latest && <UpdateDialog info={update} onClose={() => setUpdateOpen(false)} beforeInstall={readyToQuit} />}
       {keymapOpen && <KeymapDialog onClose={() => setKeymapOpen(false)} onEdit={() => (setKeymapOpen(false), setSettingsOpen("keymap"))} />}
       {se && (
@@ -1972,7 +2022,7 @@ export default function App() {
           }}
         />
       )}
-      <StatusBar status={status} readOnly={!!activeConn?.readOnly} update={update?.latest?.version} onUpdate={() => setUpdateOpen(true)} />
+      <StatusBar status={status} readOnly={!!activeConn?.readOnly} update={update?.latest?.version} onUpdate={() => setUpdateOpen(true)} jobs={jobs} />
 
       {tabMenu && <ContextMenu menu={tabMenu} onClose={() => setTabMenu(null)} />}
 
@@ -2101,12 +2151,13 @@ function SettingsDialog({ onClose, onUpdate, initialPage = "appearance" }: { onC
   );
 }
 
-function StatusBar({ status, readOnly, update, onUpdate }: { status: string; readOnly: boolean; update?: string; onUpdate: () => void }) {
+function StatusBar({ status, readOnly, update, onUpdate, jobs }: { status: string; readOnly: boolean; update?: string; onUpdate: () => void; jobs: TransferJob[] }) {
   const w = useStatusWidgets();
   return (
     <div className="statusbar">
       <span className="sb-text">{status}</span>
       <span className="grow" />
+      <TransferBar jobs={jobs} />
       {update && (
         <button className="sb-widget sb-update" title="A new version is available" onClick={onUpdate}>
           ⬆ v{update} available

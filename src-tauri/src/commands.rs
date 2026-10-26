@@ -3,6 +3,7 @@ use crate::app::{AppState, ConnectionView, ImportResult};
 use crate::db::QueryResult;
 use crate::error::AppResult;
 use crate::store::ConnectionConfig;
+use qurry_core::transfer::{Dest, Format, ImportSpec, Preview};
 use tauri::State;
 use tauri_plugin_dialog::DialogExt;
 
@@ -169,10 +170,89 @@ pub async fn save_text_file(app: tauri::AppHandle, default_name: String, text: S
     Ok(Some(path))
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportDone {
+    rows: u64,
+    /// 파일로 썼으면 경로
+    path: Option<String>,
+    /// 클립보드면 글 (프론트엔드가 클립보드에 넣는다)
+    text: Option<String>,
+}
+
+/// 작업을 등록하고, 도는 동안 진행을 알린다 ("transfer-progress": job, 행, done, total). 끝나면 abort
+fn report_progress(app: &tauri::AppHandle, state: &AppState, job: &str) -> tokio::task::JoinHandle<()> {
+    use tauri::Emitter;
+    let (app, job, j) = (app.clone(), job.to_string(), state.start_job(job));
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let (rows, done, total) = j.progress();
+            let _ = app.emit("transfer-progress", (&job, rows, done, total));
+        }
+    })
+}
+
+/// 데이터 내보내기: 형식을 골라 파일(저장 창) 또는 클립보드로. 저장 창을 닫으면 None
 #[tauri::command]
-pub async fn export_csv(app: tauri::AppHandle, state: State<'_, AppState>, id: String, sql: String, default_name: String) -> AppResult<Option<(u64, String)>> {
-    let Some(path) = save_dialog(&app, &default_name, "CSV (Excel)", &["csv"]) else { return Ok(None) };
-    Ok(Some((state.export_csv(id, sql, path.clone()).await?, path)))
+#[allow(clippy::too_many_arguments)]
+pub async fn export_data(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    sql: String,
+    format: Format,
+    clipboard: bool,
+    default_name: String,
+    table: Option<(String, String)>,
+    job: String,
+) -> AppResult<Option<ExportDone>> {
+    let dest = if clipboard {
+        Dest::Clipboard
+    } else {
+        let name = format!("{default_name}.{}", format.ext());
+        let Some(path) = save_dialog(&app, &name, format.label(), &[format.ext()]) else { return Ok(None) };
+        Dest::File(path.into())
+    };
+    let path = match &dest {
+        Dest::File(p) => Some(p.display().to_string()),
+        Dest::Clipboard => None,
+    };
+    let ticker = report_progress(&app, &state, &job);
+    let r = state.export(id, sql, format, dest, table, job).await;
+    ticker.abort();
+    let r = r?;
+    Ok(Some(ExportDone { rows: r.rows, path, text: r.text }))
+}
+
+#[tauri::command]
+pub fn cancel_job(state: State<'_, AppState>, job: String) {
+    state.cancel_job(&job)
+}
+
+/// 가져올 데이터 파일 (고른 경로는 여기에만 둔다: 프론트엔드가 다른 파일을 읽게 하지 않도록)
+#[derive(Default)]
+pub struct PendingData(pub std::sync::Mutex<Option<std::path::PathBuf>>);
+
+/// 가져올 파일 고르기 → 미리보기 (첫 20행)
+#[tauri::command]
+pub async fn pick_data_file(app: tauri::AppHandle, pending: State<'_, PendingData>) -> AppResult<Option<(String, Preview)>> {
+    let picked = app.dialog().file().add_filter("CSV, TSV, JSON", &["csv", "tsv", "json"]).blocking_pick_file();
+    let Some(path) = picked.and_then(|p| p.into_path().ok()) else { return Ok(None) };
+    let pv = qurry_core::transfer::preview(&path, 20)?;
+    *pending.0.lock().unwrap() = Some(path.clone());
+    Ok(Some((path.display().to_string(), pv)))
+}
+
+/// 고른 파일을 테이블에 넣는다. 넣은 행 수
+#[tauri::command]
+pub async fn import_data(app: tauri::AppHandle, state: State<'_, AppState>, pending: State<'_, PendingData>, id: String, mut spec: ImportSpec, job: String) -> AppResult<u64> {
+    let path = pending.0.lock().unwrap().clone().ok_or_else(|| crate::error::AppError::Msg("Pick a file first".into()))?;
+    spec.path = path.display().to_string();
+    let ticker = report_progress(&app, &state, &job);
+    let r = state.import(id, spec, job).await;
+    ticker.abort();
+    r
 }
 
 /// 탭 세션에 커밋 안 한 변경이 있는지 (오류 뒤 Commit/Roll back 표시)

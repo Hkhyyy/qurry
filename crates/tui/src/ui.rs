@@ -606,16 +606,32 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let bw = badge.as_ref().map(|b| b.chars().count() as u16).unwrap_or(0);
     // 폭이 모자라면 오른쪽 안내를 줄인다 (업데이트 알림·상태 글이 잘리지 않게)
     let (ctx, glob) = status_hints(app);
+    // 내보내기·가져오기가 돌면 상태 글 대신 진행 막대 (⌃K › Cancel Export/Import 로 멈춘다)
+    let status = if app.jobs.is_empty() { disp(&app.status) } else { app.jobs.iter().map(|(_, label, j)| job_line(label, j.progress())).collect::<Vec<_>>().join("  ·  ") };
     // 상태 글은 화면 폭의 절반까지는 먼저 자리를 잡는다 (오류·결과 문구가 잘리지 않게)
-    let sw = (disp(&app.status).chars().count() as u16 + 2).clamp(12, area.width / 2);
+    let sw = (status.chars().count() as u16 + 2).clamp(12, area.width / 2);
     let hints = hint_line(ctx, glob, area.width.saturating_sub(bw + sw) as usize);
     let hw = (hints.width() as u16).min(area.width.saturating_sub(bw + 12));
     let [u, l, r] = Layout::horizontal([Constraint::Length(bw), Constraint::Min(10), Constraint::Length(hw)]).areas(area);
     if let Some(b) = badge {
         f.render_widget(Paragraph::new(b).style(Style::default().fg(Color::Black).bg(Color::Rgb(201, 162, 109))), u);
     }
-    f.render_widget(Paragraph::new(format!(" {}", disp(&app.status))).style(Style::default().fg(Color::Gray).bg(Color::Rgb(43, 45, 48))), l);
+    f.render_widget(Paragraph::new(format!(" {status}")).style(Style::default().fg(Color::Gray).bg(Color::Rgb(43, 45, 48))), l);
     f.render_widget(Paragraph::new(hints).style(Style::default().bg(Color::Rgb(43, 45, 48))), r);
+}
+
+/// "Export users ▕████░░░░░░▏ 1,234 rows · 42%". 전체를 모르면 막대가 왔다 갔다 한다
+fn job_line(label: &str, (rows, done, total): (u64, u64, u64)) -> String {
+    const W: usize = 10;
+    let n = crate::transfer::thousands(rows);
+    let (bar, pct) = if total > 0 {
+        let pct = (done * 100 / total).min(99) as usize;
+        ("█".repeat(pct * W / 100) + &"░".repeat(W - pct * W / 100), format!(" · {pct}%"))
+    } else {
+        let t = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0) / 250) as usize % (W - 2);
+        ("░".repeat(t) + "███" + &"░".repeat(W - 3 - t), String::new())
+    };
+    format!("{label} ▕{bar}▏ {n} rows{pct}")
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
