@@ -322,6 +322,7 @@ Ctrl+Enter is only distinguishable in terminals that support the kitty keyboard 
 | `Shift+Tab` | Go to the result grid (Esc / Tab returns) |
 | `Esc` | Go to the explorer |
 | `Ctrl+u / Ctrl+r` | Undo / redo (editor) |
+| `Ctrl+f` | Find / replace in the editor: `Alt+x` regex · `Alt+c` match case · `Alt+w` words · `Enter` next · `Tab` to Replace: `Enter` one, `Alt+a` all (`$1` groups) |
 | `⌘a  ⌫` | Select all, then delete (or Ctrl+k › Clear Console) |
 | `click / drag  ⌘c` | Move the cursor / select text (runs only the selection) · copy the selection |
 | `mouse drag` | Drag the editor/result border to resize |

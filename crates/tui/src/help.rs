@@ -21,6 +21,7 @@ pub const HELP: &[(&str, &[(&str, &str)])] = &[
         ("Shift+Tab", "Go to the result grid (Esc / Tab returns)"),
         ("Esc", "Go to the explorer"),
         ("Ctrl+U / Ctrl+R", "Undo / redo (editor)"),
+        ("Ctrl+F", "Find / replace bar: Alt+X regex · Alt+C match case · Alt+W words · Enter next (↑ previous) · Tab to Replace: Enter one, Alt+A all ($1 groups) · Esc close"),
         ("⌘A  ⌫", "Select all, then delete (or Ctrl+K › Clear Console)"),
         ("click / drag  ⌘C", "Move the cursor / select text (runs only the selection) · copy the selection"),
         ("mouse drag", "Drag the editor/result border to resize"),

@@ -67,6 +67,7 @@ export const SHORTCUTS: Shortcut[] = [
   { id: "editor.allOcc", title: "Select All Occurrences", scope: "editor", keys: ["Mod+Ctrl+G"] },
   { id: "editor.toggleCase", title: "Toggle Case", scope: "editor", keys: ["Mod+Shift+U"] },
   { id: "editor.gotoLine", title: "Go to Line", scope: "editor", keys: ["Mod+L"] },
+  { id: "editor.replace", title: "Replace (regex .*, match case, words)", scope: "editor", keys: ["Mod+R"] },
 ];
 
 export const SCOPE_LABEL: Record<Scope, string> = { global: "Global", tree: "Database Explorer", editor: "Query Console" };

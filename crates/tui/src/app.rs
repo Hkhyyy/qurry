@@ -276,6 +276,8 @@ pub enum Popup {
     ConnForm(ConnForm),
     /// Manage Shown Schemas (트리에 보일 DB·스키마)
     Scope(crate::scope::ScopeEditor),
+    /// 편집기 찾기/바꾸기 바 (⌃F)
+    Find(crate::find::FindBar),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -310,6 +312,7 @@ pub enum Action {
     SetNull,
     ExportCsv,
     CopyInList,
+    Find,
     ImportData,
     CancelTransfer,
     ToggleExplorer,
@@ -362,6 +365,7 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::SetNull, "Set NULL", "n (grid)"),
     (Action::ExportCsv, "Export Data… (CSV, TSV, JSON, SQL INSERT, Markdown)", "x (grid)"),
     (Action::CopyInList, "Copy Column as IN List  ('a', 'b', …)", "Y (grid)"),
+    (Action::Find, "Find / Replace in Editor (regex)", ""),
     (Action::ImportData, "Import Data from File… (CSV, TSV, JSON)", ""),
     (Action::CancelTransfer, "Cancel Export/Import", ""),
     (Action::NewDataSource, "New Data Source…", "n (explorer)"),
@@ -438,6 +442,8 @@ pub struct Hits {
     pub explorer_divider: ratatui::layout::Rect,
     pub main: ratatui::layout::Rect,
     pub editor: ratatui::layout::Rect,
+    /// 찾기 바 자리 (편집기 위, 바가 열려 있을 때만)
+    pub find: ratatui::layout::Rect,
     pub results: ratatui::layout::Rect,
     pub redis_keys: ratatui::layout::Rect,
     pub redis_value: ratatui::layout::Rect,
@@ -2281,6 +2287,7 @@ impl App {
             }
             Action::ExportCsv => self.export_start(),
             Action::ImportData => self.import_start(),
+            Action::Find => self.find_open(),
             Action::CopyInList => {
                 let Some(g) = self.grid_mut() else {
                     self.status = "Open a result or table to copy a column".into();
