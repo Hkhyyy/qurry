@@ -78,6 +78,10 @@ impl Driver for Ms {
     fn call(&mut self, method: &str, p: Value) -> Result<Value, String> {
         match method {
             "hello" => ok(json!({ "name": "mssql", "version": env!("CARGO_PKG_VERSION"), "protocol": qurry_driver::PROTOCOL, "sql": true })),
+            "version" => {
+                let v = self.rows("SELECT @@VERSION")?;
+                ok(v.first().and_then(|r| r[0].as_str()).and_then(|s| s.lines().next()).unwrap_or("").trim().to_string())
+            }
             "connect" => {
                 let c: ConnectParams = params(p)?;
                 let mut cfg = Config::new();
@@ -171,9 +175,10 @@ impl Driver for Ms {
                     constraints.push(json!({ "name": name, "kind": "f", "definition": format!("FOREIGN KEY ({}) REFERENCES {to_t} ({})", from.iter().map(|c| q(c)).collect::<Vec<_>>().join(", "), to.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ")) }));
                 }
                 let idx = self.rows(&format!(
-                    "SELECT i.name, i.is_unique, i.is_primary_key, STRING_AGG(c.name, ', ') WITHIN GROUP (ORDER BY ic.key_ordinal) FROM sys.indexes i
-                     JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
-                     WHERE i.object_id = OBJECT_ID({obj}) AND i.name IS NOT NULL GROUP BY i.name, i.is_unique, i.is_primary_key"
+                    // STRING_AGG 는 2017 부터: 예전 서버도 되게 FOR XML PATH
+                    "SELECT i.name, i.is_unique, i.is_primary_key, STUFF((SELECT ', ' + c.name FROM sys.index_columns ic JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                       WHERE ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.is_included_column = 0 ORDER BY ic.key_ordinal FOR XML PATH('')), 1, 2, '')
+                     FROM sys.indexes i WHERE i.object_id = OBJECT_ID({obj}) AND i.name IS NOT NULL"
                 ))?;
                 let indexes: Vec<Value> = idx
                     .iter()

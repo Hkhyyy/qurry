@@ -179,6 +179,10 @@ impl Driver for Mongo {
     fn call(&mut self, method: &str, p: Value) -> Result<Value, String> {
         match method {
             "hello" => ok(json!({ "name": "mongodb", "version": env!("CARGO_PKG_VERSION"), "protocol": qurry_driver::PROTOCOL, "sql": false })),
+            "version" => {
+                let r = self.client.as_ref().ok_or("not connected")?.database("admin").run_command(doc! { "buildInfo": 1 }).run().map_err(|e| e.to_string())?;
+                ok(format!("MongoDB {}", r.get_str("version").unwrap_or("")))
+            }
             "connect" => {
                 let c: ConnectParams = params(p)?;
                 // host 에 mongodb:// 나 mongodb+srv:// URI 를 넣어도 된다

@@ -77,6 +77,7 @@ impl Driver for Duck {
     fn call(&mut self, method: &str, p: Value) -> Result<Value, String> {
         match method {
             "hello" => ok(json!({ "name": "duckdb", "version": env!("CARGO_PKG_VERSION"), "protocol": qurry_driver::PROTOCOL, "sql": true })),
+            "version" => ok(format!("DuckDB {}", self.col("SELECT version()")?.first().and_then(|r| r[0].as_str()).unwrap_or(""))),
             "connect" => {
                 let c: ConnectParams = params(p)?;
                 let path = if c.database.trim().is_empty() { ":memory:" } else { c.database.trim() };

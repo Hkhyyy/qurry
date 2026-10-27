@@ -231,6 +231,8 @@ mod tests {
     /// 드라이버 공통 시험: 테이블 만들기 → 넣기 → 조회 (limit) → 목록·상세 (PK·FK) → DDL
     pub(crate) async fn conformance(cfg: ConnectionConfig, password: Option<&str>, schema: &str, setup: &[&str], parent: &str, child: &str, fk: bool) {
         let c = connect(&cfg, password, None).await.unwrap_or_else(|e| panic!("{:?}: {e}", cfg.kind));
+        let v: String = c.call("version", Value::Null).await.unwrap();
+        assert!(v.chars().any(|ch| ch.is_ascii_digit()), "version: {v}");
         for q in setup {
             c.query(q, 10).await.unwrap_or_else(|e| panic!("{q}: {e}"));
         }

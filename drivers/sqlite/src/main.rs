@@ -58,6 +58,7 @@ impl Driver for Sqlite {
     fn call(&mut self, method: &str, p: Value) -> Result<Value, String> {
         match method {
             "hello" => ok(json!({ "name": "sqlite", "version": env!("CARGO_PKG_VERSION"), "protocol": qurry_driver::PROTOCOL, "sql": true })),
+            "version" => ok(format!("SQLite {}", rusqlite::version())),
             "connect" => {
                 let c: ConnectParams = params(p)?;
                 let read_only = c.options.get("readOnly").and_then(Value::as_bool).unwrap_or(false);

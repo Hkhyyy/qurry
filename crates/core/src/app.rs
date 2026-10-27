@@ -476,7 +476,10 @@ impl AppState {
         pool.close().await;
         drop(tunnel);
         let via = config.active_ssh().map(|s| format!("  (via SSH {}@{})", s.user, s.host)).unwrap_or_default();
-        version.map(|v| format!("{v}{via}"))
+        version.map(|v| match db::version_note(config.kind, &v) {
+            Some(n) => format!("{v}{via}\n{n}"),
+            None => format!("{v}{via}"),
+        })
     }
 
     /// SSH/SSL 탭의 Test Connection: SSH 로그인만 확인한다.

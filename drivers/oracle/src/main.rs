@@ -88,6 +88,10 @@ impl Driver for Ora {
     fn call(&mut self, method: &str, p: Value) -> Result<Value, String> {
         match method {
             "hello" => ok(json!({ "name": "oracle", "version": env!("CARGO_PKG_VERSION"), "protocol": qurry_driver::PROTOCOL, "sql": true })),
+            "version" => {
+                let v = self.rows("SELECT banner FROM v$version WHERE ROWNUM = 1").or_else(|_| self.rows("SELECT 'Oracle Database ' || version FROM product_component_version WHERE ROWNUM = 1"))?;
+                ok(v.first().and_then(|r| r[0].as_str()).unwrap_or("Oracle").to_string())
+            }
             "connect" => {
                 let c: ConnectParams = params(p)?;
                 init_client(c.options.get("oracleClient").and_then(Value::as_str))?;
@@ -107,8 +111,10 @@ impl Driver for Ora {
             // Oracle 은 접속한 서비스 하나
             "databases" => ok(vec![self.service.clone()]),
             "schemas" => {
-                let rows = self.rows("SELECT username, oracle_maintained FROM all_users ORDER BY username")?;
-                ok(rows.into_iter().map(|r| json!({ "name": r[0], "isSystem": r[1] == "Y" })).collect::<Vec<_>>())
+                // oracle_maintained 는 12c 부터: 없으면 이름으로 시스템 사용자를 고른다
+                let rows = self.rows("SELECT username, oracle_maintained FROM all_users ORDER BY username").or_else(|_| self.rows("SELECT username, 'N' FROM all_users ORDER BY username"))?;
+                const SYSTEM: &[&str] = &["SYS", "SYSTEM", "OUTLN", "DBSNMP", "XDB", "MDSYS", "CTXSYS", "ORDSYS", "ORDDATA", "ORDPLUGINS", "SI_INFORMTN_SCHEMA", "WMSYS", "EXFSYS", "OLAPSYS", "APPQOSSYS", "ANONYMOUS", "XS$NULL", "DIP", "ORACLE_OCM", "MDDATA", "SPATIAL_CSW_ADMIN_USR", "SPATIAL_WFS_ADMIN_USR", "APEX_PUBLIC_USER", "FLOWS_FILES", "MGMT_VIEW", "SYSMAN", "OWBSYS", "OWBSYS_AUDIT", "AUDSYS", "GSMADMIN_INTERNAL", "LBACSYS", "DVSYS", "DVF", "OJVMSYS", "REMOTE_SCHEDULER_AGENT", "SYSBACKUP", "SYSDG", "SYSKM", "SYSRAC", "GGSYS", "DBSFWUSER"];
+                ok(rows.into_iter().map(|r| { let n = r[0].as_str().unwrap_or(""); json!({ "isSystem": r[1] == "Y" || SYSTEM.contains(&n) || n.starts_with("APEX_"), "name": n }) }).collect::<Vec<_>>())
             }
             "objects" => {
                 let owner = lit(p.get("schema").and_then(Value::as_str).unwrap_or(""));

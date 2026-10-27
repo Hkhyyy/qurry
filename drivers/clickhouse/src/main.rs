@@ -65,6 +65,7 @@ impl Driver for Ch {
     fn call(&mut self, method: &str, p: Value) -> Result<Value, String> {
         match method {
             "hello" => ok(json!({ "name": "clickhouse", "version": env!("CARGO_PKG_VERSION"), "protocol": qurry_driver::PROTOCOL, "sql": true })),
+            "version" => ok(format!("ClickHouse {}", self.rows("SELECT version()")?.first().and_then(|r| r[0].as_str()).unwrap_or(""))),
             "connect" => {
                 let c: ConnectParams = params(p)?;
                 let tls = c.options.get("ssl").is_some_and(|s| !s.is_null());

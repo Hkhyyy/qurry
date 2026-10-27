@@ -141,13 +141,56 @@ pub async fn connect_via(cfg: &ConnectionConfig, password: Option<&str>, tunnel_
     }
 }
 
+/// 시험한 버전보다 오래된 서버면 알림 (대부분은 되지만 확인하지 않았다)
+pub fn version_note(kind: DbKind, version: &str) -> Option<String> {
+    // 버전 글에서 첫 숫자들 (2017 같은 해도)
+    let nums: Vec<u32> = version.split(|c: char| !c.is_ascii_digit()).filter(|s| !s.is_empty()).filter_map(|s| s.parse().ok()).collect();
+    let first = *nums.first()?;
+    let lower = version.to_lowercase();
+    let (min, label): (u32, &str) = match kind {
+        DbKind::Postgres => (12, "PostgreSQL 12"),
+        DbKind::Mysql if lower.contains("mariadb") => (10, "MariaDB 10.5"),
+        DbKind::Mysql => (5, "MySQL 5.7"),
+        // "Microsoft SQL Server 2017 (RTM-CU…" → 해
+        DbKind::Mssql => (2017, "SQL Server 2017"),
+        DbKind::Mongodb => (5, "MongoDB 5"),
+        DbKind::Clickhouse => (22, "ClickHouse 22"),
+        // "Oracle Database 19c …" · "… 23ai"
+        DbKind::Oracle => (19, "Oracle 19c"),
+        _ => return None,
+    };
+    let v = if kind == DbKind::Mssql { nums.iter().copied().find(|n| *n >= 2000).unwrap_or(first) } else { first };
+    let old = v < min || (kind == DbKind::Mysql && !lower.contains("mariadb") && v == 5 && nums.get(1).is_some_and(|m| *m < 7)) || (kind == DbKind::Mysql && lower.contains("mariadb") && v == 10 && nums.get(1).is_some_and(|m| *m < 5));
+    old.then(|| format!("⚠ This server is older than the versions Qurry is tested with ({label} and newer). Most things should work; some explorer details may not."))
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+    #[test]
+    fn notes_old_servers_only() {
+        assert!(version_note(DbKind::Postgres, "PostgreSQL 11.9 on x86_64").is_some());
+        assert!(version_note(DbKind::Postgres, "PostgreSQL 16.4").is_none());
+        assert!(version_note(DbKind::Mysql, "MySQL 5.6.51").is_some());
+        assert!(version_note(DbKind::Mysql, "MySQL 5.7.44").is_none());
+        assert!(version_note(DbKind::Mysql, "MariaDB 10.4.1").is_some());
+        assert!(version_note(DbKind::Mysql, "MariaDB 11.4.2").is_none());
+        assert!(version_note(DbKind::Mssql, "Microsoft SQL Server 2016 (SP3) - 13.0.6300.2").is_some());
+        assert!(version_note(DbKind::Mssql, "Microsoft SQL Server 2022 (RTM-CU14) - 16.0.4135.4").is_none());
+        assert!(version_note(DbKind::Oracle, "Oracle Database 11g Enterprise Edition Release 11.2.0.4.0").is_some());
+        assert!(version_note(DbKind::Oracle, "Oracle Database 23ai Free Release 23.0.0.0.0").is_none());
+        assert!(version_note(DbKind::Mongodb, "MongoDB 4.4.29").is_some());
+        assert!(version_note(DbKind::Sqlite, "SQLite 3.46.0").is_none());
+    }
+}
+
 impl Pool {
     pub async fn server_version(&self) -> AppResult<String> {
         match self {
             Pool::Pg(p) => Ok(sqlx::query_scalar::<_, String>("select version()").fetch_one(p).await?),
             Pool::My(p) => crate::mysql::server_version(p).await,
             Pool::Redis(m, _) => crate::redisdb::server_version(m).await,
-            Pool::Plugin(c) => Ok(c.query("SELECT 1", 1).await.map(|_| format!("{} (driver)", c.driver)).unwrap_or_else(|_| format!("{} (driver)", c.driver))),
+            Pool::Plugin(c) => c.call("version", Value::Null).await,
         }
     }
 

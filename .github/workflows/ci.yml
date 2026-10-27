@@ -80,6 +80,72 @@ jobs:
           QURRY_TEST_MONGO: localhost:17017:qurry:pw:qurrytest
         run: cargo test --locked -p qurry-core -- --ignored --skip ssl --skip tls --skip sentinel --skip cluster --skip ssh_tunnel
 
+  # 예전 서버 버전: 기능 대부분이 도는지 (최신 버전은 위 rust 잡)
+  compat:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:12-alpine
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U postgres" --health-interval 2s --health-retries 30
+      mysql:
+        image: mysql:5.7
+        env:
+          MYSQL_ROOT_PASSWORD: dbtool
+          MYSQL_DATABASE: shop
+        ports: ["13306:3306"]
+        options: --health-cmd "mysqladmin ping -h 127.0.0.1 -pdbtool" --health-interval 2s --health-retries 60
+      clickhouse:
+        image: clickhouse/clickhouse-server:22.8
+        env:
+          CLICKHOUSE_USER: qurry
+          CLICKHOUSE_PASSWORD: pw
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+        ports: ["18123:8123"]
+        options: --health-cmd "wget -qO- http://127.0.0.1:8123/ping" --health-interval 2s --health-retries 60
+      mongo:
+        image: mongo:5
+        env:
+          MONGO_INITDB_ROOT_USERNAME: qurry
+          MONGO_INITDB_ROOT_PASSWORD: pw
+        ports: ["17017:27017"]
+        options: --health-cmd "mongo --quiet --eval 'db.runCommand({ping:1})'" --health-interval 2s --health-retries 60
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2017-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: Qurry_pw1!
+        ports: ["11433:1433"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: compat
+
+      - name: Build drivers
+        run: cargo build --locked -p qurry-driver-clickhouse -p qurry-driver-mongodb -p qurry-driver-mssql
+
+      - name: Wait for SQL Server
+        run: for i in $(seq 1 60); do (echo > /dev/tcp/127.0.0.1/11433) 2>/dev/null && break; sleep 2; done; sleep 10
+
+      - name: Integration tests on older servers
+        env:
+          USER: postgres
+          QURRY_TEST_PG: localhost:5432:postgres:postgres
+          QURRY_TEST_PG_USER: postgres
+          QURRY_TEST_MY: localhost:13306:root:dbtool:shop
+          QURRY_TEST_CH: localhost:18123:qurry:pw:default
+          QURRY_TEST_MONGO: localhost:17017:qurry:pw:qurrytest
+          QURRY_TEST_MSSQL: "127.0.0.1:11433:sa:Qurry_pw1!:master"
+        run: cargo test --locked -p qurry-core -- --ignored --skip ssl --skip tls --skip sentinel --skip cluster --skip ssh_tunnel --skip redis
+
   web:
     runs-on: ubuntu-latest
     steps:
