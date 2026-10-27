@@ -32,6 +32,7 @@ pub fn to_json(app: &App) -> Value {
                 TabKind::Console(c) => json!({ "console": c.editor.lines().join("\n") }),
                 TabKind::Table(tt) => json!({ "table": { "schema": tt.schema, "name": tt.table, "kind": tt.kind, "where": tt.where_, "order": tt.order } }),
                 TabKind::Text(x) => json!({ "text": x.text }),
+                TabKind::Dba(d) => json!({ "dba": d.report }),
                 TabKind::Redis(r) => json!({ "redis": r.pattern }),
             };
             json!({ "title": t.title, "conn": t.conn, "db": t.db, "group": t.group, "kind": kind })
@@ -74,6 +75,8 @@ pub fn restore(app: &mut App, v: &Value) {
             app.restore_table(&conn, s("db"), g("schema"), g("name"), g("kind"), g("where"), g("order"))
         } else if let Some(text) = k.get("text").and_then(Value::as_str) {
             app.restore_text(&conn, s("db"), s("title"), text)
+        } else if let Some(r) = k.get("dba").and_then(Value::as_str) {
+            app.restore_dba(&conn, s("db"), s("title"), r)
         } else if let Some(p) = k.get("redis").and_then(Value::as_str) {
             app.restore_redis(&conn, s("db"), s("title"), p)
         } else {

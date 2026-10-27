@@ -56,6 +56,12 @@ pub const HELP: &[(&str, &[(&str, &str)])] = &[
         ("y  ⌘C", "Copy the text"),
         ("Esc", "Back to the explorer"),
     ]),
+    ("Database Admin tab (Ctrl+K › Database Admin…)", &[
+        ("r · a", "Refresh · auto-refresh on/off (sessions and locks refresh every 3 s)"),
+        ("c · K", "Cancel the query · terminate the session of the selected row (asks first)"),
+        ("Enter · g", "Open the row's query in a console · generate SQL from the row (DROP INDEX, VACUUM, REVOKE…)"),
+        ("p", "Pick another report"),
+    ]),
     ("Redis browser (Medis style)", &[
         ("↑ ↓", "Select key or folder (keys are grouped by \":\")"),
         ("→ / Enter · ←", "Folder: expand · collapse (← on a key: go to its folder)"),

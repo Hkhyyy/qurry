@@ -170,6 +170,15 @@ export interface ConstraintMeta { name: string; kind: "p" | "f" | "u" | "c"; def
 export interface TableDetail { columns: ColumnMeta[]; indexes: IndexMeta[]; constraints: ConstraintMeta[] }
 export interface CompletionTable { schema: string; name: string; columns: [string, string][] }
 
+export type DbaAction = { kind: "kill"; label: string; terminate: boolean } | { kind: "sql"; label: string; template: string };
+export interface DbaReportInfo { id: string; title: string; group: string; help: string; actions: DbaAction[] }
+export const dba = {
+  reports: (id: string) => invoke<DbaReportInfo[]>("dba_reports", { id }),
+  run: (id: string, report: string) => invoke<QueryResult>("dba_report", { id, report }),
+  kill: (id: string, pid: number, terminate: boolean) => invoke<boolean>("kill_session", { id, pid, terminate }),
+  actionSql: (id: string, template: string, row: Record<string, string>) => invoke<string>("dba_action_sql", { id, template, row }),
+};
+
 export interface DataPreview { format: DataFormat; columns: string[]; rows: (string | null)[][]; bytes: number }
 /** columns: [파일 열 번호, 테이블 컬럼]. create = 새 테이블 (컬럼은 모두 text) */
 export interface ImportSpec { path: string; schema: string; table: string; create: boolean; columns: [number, string][] }

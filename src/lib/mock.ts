@@ -115,6 +115,27 @@ const handlers: Record<string, (a: any) => unknown> = {
   trust_ssh_host: () => "Trusted",
   export_data: (a: any) => new Promise((ok) => setTimeout(() => ok({ rows: 500, path: a.clipboard ? null : `~/Downloads/${a.defaultName}.${a.format}`, text: a.clipboard ? "id\tname\n1\ta\n" : null }), 4000)),
   cancel_job: () => null,
+  dba_reports: () => [
+    { id: "sessions", title: "Sessions", group: "Activity", help: "Connections and what they run. blocking = how many sessions wait for this one.", actions: [{ kind: "kill", label: "Cancel Query", terminate: false }, { kind: "kill", label: "Terminate Session", terminate: true }, { kind: "sql", label: "Open Query in Console", template: "{=query}" }] },
+    { id: "locks", title: "Lock Waits", group: "Activity", help: "Who waits for whom.", actions: [] },
+    { id: "slow_queries", title: "Slow Queries (Top 100)", group: "Performance", help: "By total time.", actions: [] },
+    { id: "table_sizes", title: "Table Sizes", group: "Storage", help: "Biggest first.", actions: [] },
+  ],
+  dba_report: (a: any) =>
+    a.report === "slow_queries"
+      ? Promise.reject("pg_stat_statements is not enabled. Add it to shared_preload_libraries (restart), then run: CREATE EXTENSION pg_stat_statements;")
+      : {
+          columns: ["pid", "user", "db", "state", "blocking", "blocked_by", "query_sec", "query"].map((name) => ({ name, typeName: name === "pid" || name === "blocking" ? "INT4" : "TEXT" })),
+          rows: [
+            [4123, "app", "shop_app", "idle in transaction", 2, "", "184.2", "UPDATE orders SET status = 'paid' WHERE id = 42"],
+            [4188, "app", "shop_app", "active", 0, "4123", "61.0", "UPDATE orders SET status = 'shipped' WHERE id = 42"],
+            [4190, "batch", "shop_app", "active", 0, "4123", "12.4", "DELETE FROM orders WHERE id = 42"],
+            [4201, "dev", "shop_app", "idle", 0, "", null, "SELECT 1"],
+          ],
+          rowsAffected: 0, truncated: false, elapsedMs: 3, hasResultSet: true,
+        },
+  kill_session: () => true,
+  dba_action_sql: (a: any) => a.template.replace(/\{=?(\w+)\}/g, (_: string, k: string) => a.row[k] ?? ""),
   pick_data_file: () => ["~/Downloads/new_users.csv", { format: "csv", columns: ["ID", "Name", "Email", "signup date"], rows: [["1", "Kim", "kim@example.com", "2026-01-02"], ["2", "Lee", null, "2026-01-03"]], bytes: 12_400_000 }],
   import_data: () => new Promise((ok) => setTimeout(() => ok(1234), 4000)),
   save_text_file: () => null,

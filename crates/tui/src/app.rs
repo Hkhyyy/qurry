@@ -112,6 +112,18 @@ pub struct TextTab {
     pub scroll: u16,
 }
 
+/// DBA 리포트 (세션·락, 느린 쿼리, 용량·인덱스, 유지보수, 서버, 권한). 세션·락은 3초마다 다시 불러온다
+pub struct DbaTab {
+    pub report: String,
+    pub info: Option<qurry_core::dba::ReportInfo>,
+    pub grid: Option<Grid>,
+    pub error: Option<String>,
+    pub running: bool,
+    pub auto: bool,
+    /// 고른 세션이 다시 불러온 뒤 사라졌다 (그 pid). 이때 c / K 는 아무것도 끊지 않는다
+    pub gone: Option<String>,
+}
+
 /// Medis 식 Redis 브라우저: 왼쪽 키 목록, 오른쪽 값
 pub struct RedisTab {
     pub pattern: String,
@@ -194,6 +206,7 @@ pub enum TabKind {
     Table(TableTab),
     Text(TextTab),
     Redis(RedisTab),
+    Dba(DbaTab),
 }
 
 pub struct Tab {
@@ -214,6 +227,10 @@ pub struct Tab {
 #[derive(Clone)]
 pub enum PAction {
     Act(Action),
+    /// DBA 리포트 열기 (id)
+    Dba(String),
+    /// DBA 리포트 행 동작 (템플릿 SQL → 콘솔)
+    DbaSql(String),
     /// 내보내기: 형식을 골랐다 → 대상 고르기
     ExportFormat(qurry_core::transfer::Format),
     /// 내보내기: (형식, 클립보드)
@@ -315,6 +332,7 @@ pub enum Action {
     ExportCsv,
     CopyInList,
     Find,
+    DbaReports,
     ImportData,
     CancelTransfer,
     ToggleExplorer,
@@ -368,6 +386,7 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::ExportCsv, "Export Data… (CSV, TSV, JSON, SQL INSERT, Markdown)", "x (grid)"),
     (Action::CopyInList, "Copy Column as IN List  ('a', 'b', …)", "Y (grid)"),
     (Action::Find, "Find / Replace in Editor (regex)", ""),
+    (Action::DbaReports, "Database Admin… (sessions & locks, slow queries, sizes, indexes, vacuum, server, privileges)", ""),
     (Action::ImportData, "Import Data from File… (CSV, TSV, JSON)", ""),
     (Action::CancelTransfer, "Cancel Export/Import", ""),
     (Action::NewDataSource, "New Data Source…", "n (explorer)"),
@@ -955,6 +974,10 @@ impl App {
                 }
             }
             TabKind::Text(_) => {}
+            TabKind::Dba(_) => {
+                self.dba_reload(id);
+                self.dba_ticker(id);
+            }
         }
     }
 
@@ -1000,6 +1023,11 @@ impl App {
 
     pub fn restore_text(&mut self, conn: &str, db: String, title: String, text: &str) -> Option<u64> {
         self.restored_tab(conn, db, title, TabKind::Text(TextTab { text: text.into(), scroll: 0 }))
+    }
+
+    pub fn restore_dba(&mut self, conn: &str, db: String, title: String, report: &str) -> Option<u64> {
+        let d = DbaTab { report: report.into(), info: None, grid: None, error: None, running: false, auto: true, gone: None };
+        self.restored_tab(conn, db, title, TabKind::Dba(d))
     }
 
     pub fn restore_redis(&mut self, conn: &str, db: String, title: String, pattern: &str) -> Option<u64> {
@@ -2094,6 +2122,8 @@ impl App {
             }
             PAction::Run { stmts, explain } => self.run_stmts(stmts, explain, false),
             PAction::ExportFormat(f) => self.export_dest(f),
+            PAction::Dba(r) => self.dba_open(r),
+            PAction::DbaSql(t) => self.dba_sql(t),
             PAction::ExportTo(f, clipboard) => self.export_to(f, clipboard),
             PAction::Exec(e) => {
                 self.exec = e;
@@ -2290,6 +2320,7 @@ impl App {
             Action::ExportCsv => self.export_start(),
             Action::ImportData => self.import_start(),
             Action::Find => self.find_open(),
+            Action::DbaReports => self.dba_palette(),
             Action::CopyInList => {
                 let Some(g) = self.grid_mut() else {
                     self.status = "Open a result or table to copy a column".into();
@@ -2680,6 +2711,7 @@ impl App {
             TabKind::Console(c) => c.grid.as_mut(),
             TabKind::Table(t) => t.grid.as_mut(),
             TabKind::Redis(r) => r.value.as_mut(),
+            TabKind::Dba(d) => d.grid.as_mut(),
             TabKind::Text(_) => None,
         }
     }

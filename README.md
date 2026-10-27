@@ -68,6 +68,21 @@ Connection options:
 
 > Redis Sentinel and Cluster nodes advertise their own addresses, so they can't be combined with an SSH tunnel.
 
+## Database admin (PostgreSQL, MySQL)
+
+GUI: right-click a data source › **Tools** › Sessions & Locks, Slow Queries, … — TUI: `Ctrl+k` › **Database Admin…**
+
+| Group | Reports |
+|---|---|
+| Activity | **Sessions** (who blocks whom, query / transaction age; refreshes every 3 s) · **Lock Waits** — right-click / `c` cancel the query, `K` terminate the session |
+| Performance | **Slow Queries** — top 100 by total time (`pg_stat_statements` / `performance_schema`), open or EXPLAIN in a console |
+| Storage | **Table Sizes** · **Unused Indexes** · **Duplicate Indexes** · **Foreign Keys Without an Index** — generate DROP / CREATE INDEX |
+| Maintenance | **Vacuum & Dead Rows** · **Transaction ID Age** (wraparound) — generate VACUUM ANALYZE (PostgreSQL) |
+| Server | **Server Overview** (uptime, connections, cache hit ratio) · **Replication** lag · **Settings** |
+| Security | **Users & Roles** · **Table Privileges** — generate GRANT / REVOKE |
+
+Generated SQL opens in a new console; nothing changes until you run it. Stopping sessions asks first and is blocked on read-only data sources.
+
 ## Build & run
 
 ```bash

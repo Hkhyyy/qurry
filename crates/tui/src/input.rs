@@ -658,6 +658,21 @@ fn grid_key(app: &mut App, k: KeyEvent) {
     };
     let id = t.id;
     match &mut t.kind {
+        TabKind::Dba(d) => match k.code {
+            KeyCode::Char('r') => app.dba_reload(id),
+            KeyCode::Char('a') => app.dba_toggle_auto(),
+            KeyCode::Char('c') => app.dba_kill(false),
+            KeyCode::Char('K') => app.dba_kill(true),
+            KeyCode::Enter => app.dba_actions(true),
+            KeyCode::Char('g') => app.dba_actions(false),
+            KeyCode::Char('p') => app.dba_palette(),
+            KeyCode::Esc => app.focus = Focus::Tree,
+            _ => {
+                // 움직이면 (사라진 세션 대신) 새로 고른 행
+                d.gone = None;
+                nav(app, k)
+            }
+        },
         TabKind::Text(tt) => match k.code {
             KeyCode::Down | KeyCode::Char('j') => tt.scroll = tt.scroll.saturating_add(1),
             KeyCode::Up | KeyCode::Char('k') => tt.scroll = tt.scroll.saturating_sub(1),
@@ -1640,6 +1655,65 @@ mod tests {
         h.mouse("up", x, y0 as u16 + 2);
         h.key("Y");
         assert_eq!(h.app.status, "Copied 3 values as an IN list: ('1.2.3.4', '5.6.7.8', '9.9.9.9')");
+    }
+
+    /// ⌃K › Database Admin…: 리포트를 고르면 DBA 탭 (같은 접속 대상이면 그 탭에서 바꾼다)
+    #[tokio::test]
+    async fn dba_report_tab_opens_and_switches() {
+        let mut h = Harness::new().await;
+        h.table_tab("t", &["id"], &[&["1"]], &[]);
+        h.app.run_action(Action::DbaReports);
+        let labels = |h: &Harness| match &h.app.popup {
+            Some(crate::app::Popup::Palette(p)) => p.items.iter().map(|i| i.label.clone()).collect::<Vec<_>>(),
+            _ => panic!("no chooser"),
+        };
+        let l = labels(&h);
+        assert!(l.contains(&"Activity › Sessions".to_string()) && l.contains(&"Storage › Table Sizes".to_string()), "{l:?}");
+        h.key("Enter");
+        let n = h.app.tabs.len();
+        let report = |h: &Harness| match &h.app.tabs[h.app.active].kind {
+            TabKind::Dba(d) => d.report.clone(),
+            _ => panic!("not a dba tab"),
+        };
+        assert_eq!(report(&h), "sessions");
+        h.settle().await;
+        // 접속이 없으니 오류가 보인다
+        assert!(matches!(&h.app.tabs[h.app.active].kind, TabKind::Dba(d) if d.error.is_some()));
+        h.app.run_action(Action::DbaReports);
+        h.type_str("Table Sizes");
+        h.key("Enter");
+        assert_eq!(report(&h), "table_sizes");
+        assert_eq!(h.app.tabs.len(), n);
+    }
+
+    /// 자동 새로고침으로 행 순서가 바뀌어도 고른 세션(pid)을 따라간다 (다른 세션을 끊지 않게)
+    #[tokio::test]
+    async fn dba_selection_follows_pid_across_reloads() {
+        use qurry_core::db::{ColumnInfo, QueryResult};
+        let mut h = Harness::new().await;
+        let res = |pids: &[i64]| QueryResult {
+            columns: vec![ColumnInfo { name: "pid".into(), type_name: "INT4".into() }],
+            rows: pids.iter().map(|p| vec![serde_json::json!(p)]).collect(),
+            rows_affected: 0,
+            truncated: false,
+            elapsed_ms: 0,
+            has_result_set: true,
+            in_transaction: false,
+        };
+        let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
+        let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res(&[10, 20, 30]))), error: None, running: false, auto: true };
+        let id = h.app.push_tab("test", "postgres".into(), "Sessions".into(), TabKind::Dba(d));
+        h.key("Down");
+        h.app.dba_apply(id, Ok(res(&[30, 20, 10])));
+        let TabKind::Dba(d) = &h.app.tabs[h.app.active].kind else { panic!() };
+        let g = d.grid.as_ref().unwrap();
+        assert_eq!(g.value(g.row, 0).as_deref(), Some("20"));
+        // 고른 세션이 사라지면 고르지 않는다 (엉뚱한 세션을 끊지 않게)
+        h.app.dba_apply(id, Ok(res(&[30, 10])));
+        let TabKind::Dba(d) = &h.app.tabs[h.app.active].kind else { panic!() };
+        assert!(d.grid.as_ref().unwrap().result.rows.len() == 2);
+        h.key("K");
+        assert!(h.app.popup.is_none(), "must not offer to kill a session that is gone");
     }
 
     /// 콘솔 마우스: 누른 곳으로 커서, 끌면 선택 (선택한 것만 실행), 다시 누르면 선택이 풀린다

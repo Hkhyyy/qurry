@@ -310,6 +310,7 @@ fn draw_group(f: &mut Frame, app: &mut App, g: Option<usize>, area: Rect, focuse
                 TabKind::Console(_) => "⌘ ",
                 TabKind::Table(_) => "▦ ",
                 TabKind::Text(_) => "ƒ ",
+                TabKind::Dba(_) => "◉ ",
                 TabKind::Redis(_) => "◆ ",
             };
             let dirty = matches!(&t.kind, TabKind::Table(tt) if tt.grid.as_ref().map(|g| g.dirty()).unwrap_or(false));
@@ -443,6 +444,23 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
         TabKind::Text(t) => {
             let p = Paragraph::new(t.text.as_str()).scroll((t.scroll, 0)).block(block(" DDL ", focus != Focus::Tree));
             f.render_widget(p, body);
+        }
+        TabKind::Dba(d) => {
+            // 위 한 줄: 무엇을 보는지 · 아래: 표 (또는 무엇을 켜야 하는지)
+            let [help, grid] = Layout::vertical([Constraint::Length(1), Constraint::Min(3)]).areas(body);
+            let live = ["sessions", "locks"].contains(&d.report.as_str());
+            let state = if d.running { " · loading…" } else if live && d.auto { " · auto 3s" } else { "" };
+            let text = d.info.as_ref().map(|i| i.help).unwrap_or("");
+            f.render_widget(Paragraph::new(Line::from(vec![Span::styled(format!(" {}{state} ", d.info.as_ref().map(|i| i.title).unwrap_or("")), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)), Span::styled(text, Style::default().fg(DIM))])), help);
+            let title = format!(" {db} — {} rows ", d.grid.as_ref().map(|g| g.rows()).unwrap_or(0));
+            match (&mut d.grid, &d.error) {
+                (_, Some(e)) => f.render_widget(Paragraph::new(e.as_str()).style(Style::default().fg(Color::Red)).wrap(Wrap { trim: false }).block(block(" Error ", focus == Focus::Grid)), grid),
+                (Some(g), None) => g.render(f, grid, title, focus == Focus::Grid),
+                (None, None) => f.render_widget(Paragraph::new("Loading…").block(block(title, focus == Focus::Grid)), grid),
+            }
+            if focused {
+                app.hits.results = grid;
+            }
         }
         TabKind::Redis(r) => {
             let [left, right] = Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)]).areas(body);
@@ -586,6 +604,15 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
                 Some(TabKind::Redis(r)) if r.focus_value => vec![fixed("e", "edit"), fixed("a", "add"), fixed("x", "delete"), fixed("Esc", "keys")],
                 Some(TabKind::Redis(_)) => vec![fixed("Enter", "value"), fixed("/", "pattern"), fixed("a", "add"), fixed("D", "del key"), fixed("t", "TTL"), fixed("R", "rename"), fixed(":", "command")],
                 Some(TabKind::Text(_)) => vec![fixed("y", "copy"), fixed("Esc", "explorer")],
+                Some(TabKind::Dba(d)) => {
+                    let kill = d.info.as_ref().is_some_and(|i| i.actions.iter().any(|a| matches!(a, qurry_core::dba::Action::Kill { .. })));
+                    let mut v = vec![fixed("r", "refresh"), fixed("p", "reports")];
+                    if kill {
+                        v.extend([fixed("c", "cancel query"), fixed("K", "terminate"), fixed("a", "auto")]);
+                    }
+                    v.extend([fixed("Enter", "query→console"), fixed("g", "SQL"), fixed("y", "copy")]);
+                    v
+                }
                 _ => vec![fixed("s", "sort"), fixed("y", "copy"), fixed("x", "export"), fixed("Esc", "editor")],
             },
             vec![cmd(A::NewConsole, "console"), cmd(A::RecentTabs, "tabs"), cmd(A::SearchEverywhere, "search"), cmd(A::Palette, "actions")],

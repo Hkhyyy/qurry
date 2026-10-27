@@ -689,3 +689,13 @@ html, body, #root, * { overscroll-behavior: none; }
 @keyframes sb-busy { from { left: -30%; } to { left: 100%; } }
 .sb-cancel { background: none; border: none; color: var(--muted); padding: 0 2px; cursor: pointer; }
 .sb-cancel:hover { color: var(--danger); }
+
+/* DBA 리포트 */
+.dba { display: flex; flex-direction: column; height: 100%; }
+.dba-bar { display: flex; gap: 10px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.dba-bar select { min-width: 220px; }
+.dba-auto { display: flex; gap: 4px; align-items: center; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.dba-help { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dba-hint { font-size: 11px; padding: 2px 10px; }
+.dba-err { margin: 12px; white-space: pre-wrap; }
+.dba-grid { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }

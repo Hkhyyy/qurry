@@ -52,6 +52,8 @@ interface Props {
   onCopyQueryToConsole?: (sql: string) => void;
   /** 테이블 데이터: 툴바 아래 WHERE / ORDER BY 바 */
   filterBar?: React.ReactNode;
+  /** 행 동작 (DBA 리포트: 세션 종료, SQL 만들기) — 우클릭 메뉴 맨 위. row = 열 이름 → 값 */
+  rowActions?: { label: string; danger?: boolean; run: (row: Record<string, Cell>) => void }[];
 }
 
 type SortKey = { col: number; dir: "asc" | "desc" };
@@ -531,7 +533,10 @@ export function ResultGrid(p: Props) {
       ? { vedit: "⇧↩", nul: "⌥⌘n", def: "⌥⌘d", copy: "⌘c", paste: "⌘v", del: "⌘⌫", clone: "⌘d", revert: "⌥⌘z", rec: "⇧⌘↩" }
       : { vedit: "Shift+Enter", nul: "Ctrl+Alt+n", def: "Ctrl+Alt+d", copy: "Ctrl+c", paste: "Ctrl+v", del: "Ctrl+Backspace", clone: "Ctrl+d", revert: "Ctrl+Alt+z", rec: "Ctrl+Shift+Enter" };
     const name = quoteIdent(cols[c].name);
+    // 메뉴를 연 순간의 행 값 (자동 새로고침으로 행 순서가 바뀌어도 고른 행 그대로 — 다른 세션을 끊지 않게)
+    const rowObj = Object.fromEntries(cols.map((col, i) => [col.name, valueAt(r, i)]));
     const items: MenuItem[] = [
+      ...(p.rowActions?.length ? ([...p.rowActions.map((a) => ({ label: a.label, danger: a.danger, action: () => a.run(rowObj) })), { separator: true }] as MenuItem[]) : []),
       ...(canEdit ? ([{ label: "Edit", shortcut: "↩", action: () => startEdit(r, c) }] as MenuItem[]) : []),
       { label: "Open in Value Editor", shortcut: k.vedit, action: () => setValueEditor({ r, c, text: raw(v) }) },
       ...(canEdit

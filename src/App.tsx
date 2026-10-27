@@ -25,6 +25,7 @@ import { isRelation, NodeInfo, revealInTree } from "./components/SchemaTree";
 import { leaf, leaves, MAX_PANES, Pane, prunePanes, splitPane } from "./lib/panes";
 import { connBg, getThemePref, setThemePref, THEME_LABEL, ThemePref, useTheme } from "./lib/theme";
 import { ExportDialog, ImportDialog, TransferBar, type TransferJob } from "./components/Transfer";
+import { DbaReport } from "./components/DbaReport";
 import type { DataFormat } from "./lib/transfer";
 import "./App.css";
 
@@ -34,7 +35,7 @@ type Group = number;
 interface Tab {
   id: string;
   /** console: SQL 콘솔 / table: 테이블 데이터 에디터 / ddl: 읽기 전용 DDL */
-  kind: "console" | "table" | "ddl" | "redis";
+  kind: "console" | "table" | "ddl" | "redis" | "dba";
   group: Group;
   connId: string;
   /** 접속한 DB (없으면 Data Source 기본 DB) */
@@ -66,6 +67,8 @@ interface Tab {
   pinned?: boolean;
   /** Redis 브라우저: 처음 선택할 키 */
   redisKey?: string;
+  /** dba: 보고 있는 리포트 (sessions, slow_queries, …) */
+  dbaReport?: string;
   /** 다시 켤 때 되살린 탭: 아직 불러오지 않았다 (처음 보일 때 불러온다) */
   stale?: boolean;
 }
@@ -360,6 +363,7 @@ export default function App() {
         edit: t.edit ? { schema: t.edit.schema, table: t.edit.table } : undefined,
         pinned: t.pinned,
         redisKey: t.redisKey,
+        dbaReport: t.dbaReport,
       })),
       panes: panesRef.current,
       activeIds: activeIdsRef.current.map((id) => ts.findIndex((t) => t.id === id)),
@@ -424,7 +428,7 @@ export default function App() {
         tableSql = `SELECT * FROM ${q(x.edit.schema)}.${q(x.edit.table)}${x.where ? ` WHERE ${x.where}` : ""}${x.orderBy ? ` ORDER BY ${x.orderBy}` : ""};`;
       }
       const t = buildTab(c, x.kind, { sql: x.kind === "table" ? tableSql : x.sql, database: x.database, tableSql, edit: x.edit ? { ...x.edit, pk: [] } : undefined, where: x.where, orderBy: x.orderBy }, group, x.title);
-      return { ...t, pinned: x.pinned, redisKey: x.redisKey, stale: x.kind !== "ddl" };
+      return { ...t, pinned: x.pinned, redisKey: x.redisKey, dbaReport: x.dbaReport, stale: x.kind !== "ddl" };
     });
     const ts = built.filter((t): t is Tab => !!t);
     if (!ts.length) return;
@@ -618,6 +622,19 @@ export default function App() {
     patch(tab.id, { target, redisKey: key });
   };
 
+  /** DBA 리포트 탭 (같은 접속 대상이면 그 탭에서 리포트만 바꾼다) */
+  const openDba = (c: ConnectionView, db?: string, report = "sessions", title = "Sessions") => {
+    const database = db && db !== (c.database || "postgres") ? db : undefined;
+    const target = targetId(c.id, database);
+    const existing = tabsRef.current.find((t) => t.kind === "dba" && t.target === target);
+    if (existing) {
+      patch(existing.id, { dbaReport: report, title: `${title} — ${c.name}` });
+      return activate(existing);
+    }
+    const tab = addTab(c, "dba", { title: `${title} — ${c.name}`, database: db });
+    patch(tab.id, { dbaReport: report });
+  };
+
   /** 트리 노드 더블클릭 / F4 */
   const activateNode = (info: NodeInfo) => {
     if (info.conn.kind === "redis") {
@@ -770,7 +787,22 @@ export default function App() {
       });
     if (info.kind === "schema" && info.schema && c.kind !== "redis")
       items.push({ label: "Import/Export", submenu: [{ label: "Import Data into New Table…", action: () => setImportReq({ target: nodeTarget(info), schema: info.schema!, refresh: info.refresh }) }] });
-    items.push({ label: "Tools", submenu: [{ label: "Manage Shown Schemas…", action: () => document.querySelector<HTMLElement>(".tree-node.conn.selected .scope-badge, .tree-node.selected .scope-badge")?.click() }] });
+    items.push({
+      label: "Tools",
+      submenu: [
+        { label: "Manage Shown Schemas…", action: () => document.querySelector<HTMLElement>(".tree-node.conn.selected .scope-badge, .tree-node.selected .scope-badge")?.click() },
+        ...(c.kind !== "redis" && (info.kind === "conn" || info.kind === "db")
+          ? ([
+              { separator: true },
+              { label: "Sessions & Locks", action: () => openDba(c, info.db, "sessions", "Sessions") },
+              { label: "Slow Queries", action: () => openDba(c, info.db, "slow_queries", "Slow Queries (Top 100)") },
+              { label: "Table Sizes & Indexes", action: () => openDba(c, info.db, "table_sizes", "Table Sizes") },
+              { label: "Server Overview", action: () => openDba(c, info.db, "server", "Server Overview") },
+              { label: "Users & Privileges", action: () => openDba(c, info.db, "roles", "Users & Roles") },
+            ] as MenuItem[])
+          : []),
+      ],
+    });
     if (info.kind === "conn") {
       items.push({ label: "Diagnostics", submenu: [{ label: "Force Refresh", shortcut: K.force, action: () => (invalidateSearchIndex(c.id), invalidateCompletion(c.id), info.refresh?.()) }] });
       items.push({ separator: true });
@@ -1643,7 +1675,7 @@ export default function App() {
                 onDoubleClick={() => setMaximized((m) => !m)}
                 title={t.kind === "table" ? `${t.edit?.schema}.${t.edit?.table}` : t.title}
               >
-                <span className={"tab-icon " + t.kind}>{t.kind === "table" ? "▦" : t.kind === "ddl" ? "ƒ" : t.kind === "redis" ? "◆" : "⌘"}</span>
+                <span className={"tab-icon " + t.kind}>{t.kind === "table" ? "▦" : t.kind === "ddl" ? "ƒ" : t.kind === "redis" ? "◆" : t.kind === "dba" ? "◉" : "⌘"}</span>
                 <span>{t.title}</span>
                 {t.pinned ? (
                   <span
@@ -1761,6 +1793,27 @@ export default function App() {
                     schemaSwitchDisabled={conns.find((x) => x.id === t.connId)?.options?.switchSchema === "disable"}
                     registerApi={(id, a) => editorApis.current.set(id, a)}
                     onClearOutput={() => patch(t.id, { output: [] })}
+                  />
+                </div>
+              );
+            })}
+          {/* DBA 리포트 */}
+          {gTabs
+            .filter((t) => t.kind === "dba")
+            .map((t) => {
+              const c = conns.find((x) => x.id === t.connId);
+              return (
+                <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
+                  <DbaReport
+                    target={t.target}
+                    connName={c?.name ?? ""}
+                    report={t.dbaReport ?? "sessions"}
+                    readOnly={!!c?.readOnly}
+                    dialect={dialectOf(c?.kind ?? "postgres")}
+                    visible={t.id === ga?.id}
+                    onReport={(id, title) => c && patch(t.id, { dbaReport: id, title: `${title} — ${c.name}` })}
+                    onOpenConsole={(sql) => c && openConsole(c, t.database, sql)}
+                    onStatus={setStatus}
                   />
                 </div>
               );

@@ -225,6 +225,28 @@ pub async fn export_data(
     Ok(Some(ExportDone { rows: r.rows, path, text: r.text }))
 }
 
+/// DBA 리포트 목록 (이 Data Source 의 DB 종류에 맞는 것)
+#[tauri::command]
+pub fn dba_reports(state: State<'_, AppState>, id: String) -> AppResult<Vec<qurry_core::dba::ReportInfo>> {
+    Ok(qurry_core::dba::reports(state.kind_of(&id)?))
+}
+
+#[tauri::command]
+pub async fn dba_report(state: State<'_, AppState>, id: String, report: String) -> AppResult<QueryResult> {
+    state.dba_report(id, report).await
+}
+
+#[tauri::command]
+pub async fn kill_session(state: State<'_, AppState>, id: String, pid: i64, terminate: bool) -> AppResult<bool> {
+    state.kill_session(id, pid, terminate).await
+}
+
+/// 리포트 행 동작의 SQL (템플릿에 행 값)
+#[tauri::command]
+pub fn dba_action_sql(state: State<'_, AppState>, id: String, template: String, row: std::collections::HashMap<String, String>) -> AppResult<String> {
+    Ok(qurry_core::dba::action_sql(state.kind_of(&id)?, &template, &row))
+}
+
 #[tauri::command]
 pub fn cancel_job(state: State<'_, AppState>, job: String) {
     state.cancel_job(&job)
