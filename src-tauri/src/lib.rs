@@ -93,6 +93,8 @@ pub fn run() {
             commands::export_data,
             commands::cancel_job,
             commands::dba_reports,
+            commands::backup_db,
+            commands::restore_db,
             commands::compare_schemas,
             commands::compare_data,
             commands::pick_folder,

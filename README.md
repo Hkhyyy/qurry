@@ -86,6 +86,13 @@ Generated SQL opens in a new console; nothing changes until you run it. Stopping
 
 **Diagram (ERD)**: GUI — right-click a schema or database › Diagrams › Show Diagram: tables with keys and foreign keys, auto-laid out (parents above children); drag tables, zoom, double-click to open a table, **Copy as Mermaid**, **Save SVG**. TUI — `Ctrl+k` › Show Diagram: each table's foreign keys in and out as text, plus the Mermaid source (`y` copies).
 
+**Compare & migrate**: GUI — right-click a data source › Tools › Compare & Migrate; TUI — `Ctrl+k` › Compare Schemas… / Compare Table Data… / Run Migrations…
+- *Schema compare*: the DDL that makes the target schema look like the source (tables, columns, keys, indexes, foreign keys, views); drops come last and are left unchecked. Open it in a console or save it as the next migration file.
+- *Data compare*: rows matched by the primary key → INSERT / UPDATE / DELETE to sync the target.
+- *Migrations*: a folder of `V1__create.sql`, `V2__add_index.sql` … applied in version order, each in a transaction; applied ones are recorded in `qurry_schema_history`, and a file changed after it was applied is refused.
+
+**Back up / restore**: right-click a database › Tools › Back Up Database… / Restore Database… (TUI: `Ctrl+k`). Runs `pg_dump` / `pg_restore` / `psql` or `mysqldump` / `mysql` from this computer (Homebrew `libpq`, `mysql-client`, Postgres.app and the usual Linux paths are found too; for PostgreSQL the client closest to the server version is used). Passwords go through the environment, SSH tunnels are used, progress shows in the status bar and can be cancelled.
+
 **Query history & snippets** are kept in the config folder and shared by the GUI and the TUI (passwords in `PASSWORD '…'` / `IDENTIFIED BY '…'` are masked). GUI: `⌥⌘e` (History / Snippets tabs, Save as Snippet) · TUI: `Ctrl+k` › Query History…, Snippets…, Save Query as Snippet….
 
 **Explain plan** (PostgreSQL): each node shows its own share of the time (Explain Analyze) or cost, and flags what is worth a look — a Seq Scan over a big table, row estimates off by 10× or more, filters that throw away most rows, sorts and hashes spilled to disk. TUI: `Alt+e` (or `Ctrl+k` › Explain Analyze).

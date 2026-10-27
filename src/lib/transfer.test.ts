@@ -13,5 +13,8 @@ describe("transfer", () => {
     expect(progressText({ rows: 1234, done: 1234, total: 0 })).toEqual({ pct: null, text: "1,234 rows" });
     // 추정치를 넘으면 99% 에서 멈춘다
     expect(progressText({ rows: 9000, done: 9000, total: 5000 }).pct).toBe(99);
+    // 백업·복원: 행이 아니라 바이트
+    expect(progressText({ rows: 0, done: 5 * 1048576, total: 0 })).toEqual({ pct: null, text: "5.0 MB" });
+    expect(progressText({ rows: 0, done: 1048576, total: 4 * 1048576 })).toEqual({ pct: 25, text: "1.0 MB · 25%" });
   });
 });

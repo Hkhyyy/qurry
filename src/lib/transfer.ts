@@ -19,7 +19,8 @@ export function autoMap(file: string[], table: string[] | null): string[] {
 
 /** 진행 막대: 전체를 알면 % (추정치라 넘어도 99% 까지), 모르면 행 수만 */
 export function progressText(p: { rows: number; done: number; total: number }): { pct: number | null; text: string } {
-  const rows = `${p.rows.toLocaleString("en-US")} rows`;
+  // 백업·복원은 행 대신 바이트로 나아간다
+  const rows = p.rows === 0 && p.done > 0 ? `${(p.done / 1048576).toFixed(1)} MB` : `${p.rows.toLocaleString("en-US")} rows`;
   if (!p.total) return { pct: null, text: rows };
   const pct = Math.min(99, Math.floor((p.done / p.total) * 100));
   return { pct, text: `${rows} · ${pct}%` };

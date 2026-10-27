@@ -263,6 +263,31 @@ pub fn snippet_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
     state.history.delete_snippet(&id)
 }
 
+// ───────── 백업·복원 (pg_dump / mysqldump) ─────────
+
+/// 백업: 저장 창 → 덤프 (진행은 "transfer-progress", 쓴 바이트). 창을 닫으면 None
+#[tauri::command]
+pub async fn backup_db(app: tauri::AppHandle, state: State<'_, AppState>, id: String, opts: qurry_core::backup::BackupOptions, default_name: String, job: String) -> AppResult<Option<(u64, String)>> {
+    let (filter, ext) = if opts.format == "custom" { ("PostgreSQL dump", "dump") } else { ("SQL", "sql") };
+    let Some(path) = save_dialog(&app, &format!("{default_name}.{ext}"), filter, &[ext]) else { return Ok(None) };
+    let ticker = report_progress(&app, &state, &job);
+    let r = state.backup(id, path.clone(), opts, job).await;
+    ticker.abort();
+    Ok(Some((r?, path)))
+}
+
+/// 복원: 파일 고르기 → 되살리기. 고르지 않으면 None
+#[tauri::command]
+pub async fn restore_db(app: tauri::AppHandle, state: State<'_, AppState>, id: String, opts: qurry_core::backup::RestoreOptions, job: String) -> AppResult<Option<String>> {
+    let picked = app.dialog().file().add_filter("Backup (dump, sql)", &["dump", "sql", "backup"]).blocking_pick_file();
+    let Some(path) = picked.and_then(|p| p.into_path().ok()).map(|p| p.display().to_string()) else { return Ok(None) };
+    let ticker = report_progress(&app, &state, &job);
+    let r = state.restore(id, path.clone(), opts, job).await;
+    ticker.abort();
+    r?;
+    Ok(Some(path))
+}
+
 // ───────── 스키마·데이터 비교, 마이그레이션 ─────────
 
 #[tauri::command]

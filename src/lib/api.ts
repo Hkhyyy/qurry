@@ -197,6 +197,12 @@ export interface ErdRelation { name: string; fromSchema: string; fromTable: stri
 export const erd = (id: string, schemas: string[]) => invoke<[{ tables: ErdTable[]; relations: ErdRelation[] }, string]>("erd", { id, schemas });
 /** 글을 파일로 저장 (저장 창). 취소하면 null */
 export const saveFile = (defaultName: string, text: string, filter: string, ext: string) => invoke<string | null>("save_file", { defaultName, text, filter, ext });
+export interface BackupOptions { format: "custom" | "plain"; schemaOnly: boolean; dataOnly: boolean; schemas: string[] }
+/** 백업·복원 (pg_dump / mysqldump). 진행은 "transfer-progress" */
+export const backup = {
+  run: (id: string, opts: BackupOptions, defaultName: string, job: string) => invoke<[number, string] | null>("backup_db", { id, opts, defaultName, job }),
+  restore: (id: string, clean: boolean, job: string) => invoke<string | null>("restore_db", { id, opts: { clean }, job }),
+};
 export interface SchemaChange { kind: string; object: string; sql: string; destructive: boolean }
 export interface DataDiff { same: number; onlySource: number; onlyTarget: number; different: number; sql: string; truncated: boolean }
 export interface Migration { version: string; description: string; file: string; checksum: string; status: "pending" | "applied" | "changed" | "missing"; appliedAt: string | null }

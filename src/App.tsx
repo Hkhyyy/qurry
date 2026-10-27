@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { analyzePlan, api, ConnectionView, previewImpact, dialectOf, meta, QueryResult, redisDb, setUpdateCheckEnabled, targetId, UpdateInfo, updateCheckEnabled } from "./lib/api";
+import { analyzePlan, api, backup, ConnectionView, previewImpact, dialectOf, meta, QueryResult, redisDb, setUpdateCheckEnabled, targetId, UpdateInfo, updateCheckEnabled } from "./lib/api";
 import { RedisBrowser } from "./components/RedisBrowser";
 import { KeymapDialog } from "./components/KeymapDialog";
 import { KeymapEditor } from "./components/KeymapEditor";
@@ -24,7 +24,7 @@ import type { FtsRequest } from "./lib/api";
 import { isRelation, NodeInfo, revealInTree } from "./components/SchemaTree";
 import { leaf, leaves, MAX_PANES, Pane, prunePanes, splitPane } from "./lib/panes";
 import { connBg, getThemePref, setThemePref, THEME_LABEL, ThemePref, useTheme } from "./lib/theme";
-import { ExportDialog, ImportDialog, TransferBar, type TransferJob } from "./components/Transfer";
+import { BackupDialog, ExportDialog, ImportDialog, TransferBar, type TransferJob } from "./components/Transfer";
 import { DbaReport } from "./components/DbaReport";
 import { ErdView } from "./components/ErdView";
 import { MigrateView } from "./components/MigrateView";
@@ -678,6 +678,24 @@ export default function App() {
   // ───────── Database Explorer 동작 (DataGrip 키맵) ─────────
   const K = { edit: sk("tree.editData"), props: sk("tree.properties"), refresh: sk("tree.refresh"), deact: sk("tree.disconnect"), jump: sk("tree.jumpConsole"), ddl: sk("tree.ddl"), gen: sk("tree.sqlGen"), ddlClip: sk("tree.ddlCopy"), ddlCons: sk("tree.ddlConsole"), ref: sk("tree.copyRef"), doc: sk("tree.quickDoc"), drop: sk("tree.remove"), dup: sk("tree.duplicate"), console: sk("console.new"), force: bindings("tree.refresh")[1] ? formatSpec(bindings("tree.refresh")[1]) : undefined, newK: sk("tree.newDs") };
   const [quickDoc, setQuickDoc] = useState<{ title: string; text: string } | null>(null);
+  // ───────── 백업·복원 ─────────
+  const [backupReq, setBackupReq] = useState<{ c: ConnectionView; db?: string } | null>(null);
+  const dbTarget = (c: ConnectionView, db?: string) => targetId(c.id, db && db !== (c.database || "postgres") ? db : undefined);
+  const startBackup = async (o: { format: "custom" | "plain"; schemaOnly: boolean; dataOnly: boolean }) => {
+    const r0 = backupReq;
+    setBackupReq(null);
+    if (!r0) return;
+    const name = `${r0.db ?? r0.c.database ?? r0.c.name}-${new Date().toISOString().slice(0, 10)}`;
+    const r = await runJob(`Back up ${name}`, (job) => backup.run(dbTarget(r0.c, r0.db), { ...o, schemas: [] }, name, job));
+    if (r) setStatus(`Backed up ${(r[0] / 1048576).toFixed(1)} MB to ${r[1]}`);
+  };
+  const startRestore = async (c: ConnectionView, db?: string) => {
+    const where = `${c.name}${db ? ` / ${db}` : ""}`;
+    if (!confirm(`Restore a backup into ${where}?\n\nIt runs the backup's statements on this database (in one transaction for PostgreSQL). ${c.options?.confirmChanges ? "\n\n⚠ This is a Production data source." : ""}`)) return;
+    const clean = confirm("Drop the objects the backup contains before restoring them (--clean)?\n\nOK = drop and recreate · Cancel = keep and add");
+    const r = await runJob(`Restore into ${where}`, (job) => backup.restore(dbTarget(c, db), clean, job));
+    if (r) setStatus(`Restored ${r} into ${where}`);
+  };
   const nodeTarget = (info: NodeInfo) => targetId(info.conn.id, info.db && info.db !== (info.conn.database || "postgres") ? info.db : undefined);
   const fqn = (info: NodeInfo) => [info.db, info.schema, info.name].filter(Boolean).join(".") || info.conn.name;
   const ddlText = (info: NodeInfo) => meta.ddl(nodeTarget(info), info.schema!, info.name!, info.kind);
@@ -833,6 +851,9 @@ export default function App() {
               { label: "Users & Privileges", action: () => openDba(c, info.db, "roles", "Users & Roles") },
               { separator: true },
               { label: "Compare & Migrate (schemas, data, migration files)…", action: () => openMigrate(c, info.db) },
+              { separator: true },
+              { label: "Back Up Database…", action: () => setBackupReq({ c, db: info.db }) },
+              { label: "Restore Database…", action: () => startRestore(c, info.db) },
             ] as MenuItem[])
           : []),
       ],
@@ -2114,6 +2135,7 @@ export default function App() {
           }}
         />
       )}
+      {backupReq && <BackupDialog what={backupReq.db ?? backupReq.c.name} pg={backupReq.c.kind === "postgres"} onRun={startBackup} onClose={() => setBackupReq(null)} />}
       {exportReq && <ExportDialog what={exportReq.name} onExport={startExport} onClose={() => setExportReq(null)} />}
       {importReq && <ImportDialog target={importReq.target} schema={importReq.schema} table={importReq.table} onImport={startImport} onClose={() => setImportReq(null)} />}
       {updateOpen && update?.latest && <UpdateDialog info={update} onClose={() => setUpdateOpen(false)} beforeInstall={readyToQuit} />}

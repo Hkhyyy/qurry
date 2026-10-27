@@ -12,6 +12,7 @@ macro_rules! log {
 }
 
 pub mod app;
+pub mod backup;
 pub mod db;
 pub mod dba;
 pub mod erd;

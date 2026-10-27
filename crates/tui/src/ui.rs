@@ -672,7 +672,8 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
 /// "Export users ▕████░░░░░░▏ 1,234 rows · 42%". 전체를 모르면 막대가 왔다 갔다 한다
 fn job_line(label: &str, (rows, done, total): (u64, u64, u64)) -> String {
     const W: usize = 10;
-    let n = crate::transfer::thousands(rows);
+    // 백업·복원은 행 대신 바이트로 나아간다
+    let n = if rows == 0 && done > 0 { format!("{:.1} MB", done as f64 / 1048576.0) } else { format!("{} rows", crate::transfer::thousands(rows)) };
     let (bar, pct) = if total > 0 {
         let pct = (done * 100 / total).min(99) as usize;
         ("█".repeat(pct * W / 100) + &"░".repeat(W - pct * W / 100), format!(" · {pct}%"))
@@ -680,7 +681,7 @@ fn job_line(label: &str, (rows, done, total): (u64, u64, u64)) -> String {
         let t = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0) / 250) as usize % (W - 2);
         ("░".repeat(t) + "███" + &"░".repeat(W - 3 - t), String::new())
     };
-    format!("{label} ▕{bar}▏ {n} rows{pct}")
+    format!("{label} ▕{bar}▏ {n}{pct}")
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
