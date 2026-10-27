@@ -23,7 +23,8 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        # pgvector 가 든 PG 16 (비슷한 행 찾기 시험)
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_HOST_AUTH_METHOD: trust
         ports: ["5432:5432"]
@@ -54,6 +55,13 @@ jobs:
         image: redis:7-alpine
         ports: ["16379:6379"]
         options: --health-cmd "redis-cli ping" --health-interval 2s --health-retries 30
+      # 벡터 DB (REST). 이미지에 curl 이 없어 health 는 생략 — 드라이버를 빌드하는 동안 뜬다
+      qdrant:
+        image: qdrant/qdrant:v1.12.4
+        ports: ["16333:6333"]
+      chroma:
+        image: chromadb/chroma:1.0.15
+        ports: ["18000:8000"]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -63,8 +71,15 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
+      # Milvus standalone 은 실행 명령이 필요해서 서비스 대신 직접 띄운다 (빌드하는 동안 뜬다)
+      - name: Start Milvus
+        run: docker run -d --name milvus -p 19530:19530 -e ETCD_USE_EMBED=true -e ETCD_DATA_DIR=/var/lib/milvus/etcd -e COMMON_STORAGETYPE=local -e DEPLOY_MODE=STANDALONE milvusdb/milvus:v2.5.4 milvus run standalone
+
       - name: Build drivers (plugin tests run against them)
-        run: cargo build --locked -p qurry-driver-sqlite -p qurry-driver-duckdb -p qurry-driver-clickhouse -p qurry-driver-mongodb
+        run: cargo build --locked -p qurry-driver-sqlite -p qurry-driver-duckdb -p qurry-driver-clickhouse -p qurry-driver-mongodb -p qurry-driver-qdrant -p qurry-driver-chroma -p qurry-driver-milvus
+
+      - name: Wait for Milvus
+        run: for i in $(seq 1 90); do curl -sf -XPOST localhost:19530/v2/vectordb/collections/list -d '{}' | grep -q '"code":0' && break; sleep 2; done
 
       - name: Unit tests
         run: cargo test --locked -p qurry-core -p qurry-tui -p qurry-mcp
@@ -78,6 +93,9 @@ jobs:
           QURRY_TEST_MY: localhost:13306:root:dbtool:shop
           QURRY_TEST_CH: localhost:18123:qurry:pw:default
           QURRY_TEST_MONGO: localhost:17017:qurry:pw:qurrytest
+          QURRY_TEST_QDRANT: "localhost:16333:::qdrant"
+          QURRY_TEST_CHROMA: "localhost:18000:::default_database"
+          QURRY_TEST_MILVUS: "localhost:19530:::default"
         run: cargo test --locked -p qurry-core -- --ignored --skip ssl --skip tls --skip sentinel --skip cluster --skip ssh_tunnel
 
   # 예전 서버 버전: 기능 대부분이 도는지 (최신 버전은 위 rust 잡)

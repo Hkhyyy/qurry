@@ -326,7 +326,7 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
   const target = targetId(conn.id, db);
   // MySQL: database == schema → 스키마 줄 없이 바로 객체 폴더를 보인다 (DataGrip 과 같음)
   // DB 가 곧 스키마인 것: 스키마 단계 없이 테이블
-  const flat = ["mysql", "redis", "sqlite", "clickhouse", "mongodb"].includes(conn.kind);
+  const flat = ["mysql", "redis", "sqlite", "clickhouse", "mongodb", "qdrant", "chroma", "milvus"].includes(conn.kind);
   const dd = flat ? -1 : 0;
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [schemas, setSchemas] = useState<Load<SchemaInfo[]>>();

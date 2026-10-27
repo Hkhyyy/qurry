@@ -54,7 +54,12 @@ interface Props {
   filterBar?: React.ReactNode;
   /** 행 동작 (DBA 리포트: 세션 종료, SQL 만들기) — 우클릭 메뉴 맨 위. row = 열 이름 → 값 */
   rowActions?: { label: string; danger?: boolean; run: (row: Record<string, Cell>) => void }[];
+  /** 테이블 데이터 (pgvector): 이 행과 가까운 행 찾기. row = 열 이름 → 값 */
+  onFindSimilar?: (column: string, row: Record<string, Cell>) => void;
 }
+
+/** pgvector 열 (vector · halfvec · sparsevec) */
+const isVectorType = (t: string) => /^(vector|halfvec|sparsevec)$/i.test(t);
 
 type SortKey = { col: number; dir: "asc" | "desc" };
 type Pos = { r: number; c: number }; // r = 화면(표시) 순서
@@ -560,6 +565,11 @@ export function ResultGrid(p: Props) {
             { label: "Delete Row", shortcut: k.del, action: deleteRows },
             { label: "Clone Row", shortcut: k.clone, action: cloneRow },
           ] as MenuItem[])
+        : []),
+      ...(p.onFindSimilar && p.edit?.pk.length
+        ? cols
+            .filter((col) => isVectorType(col.typeName))
+            .map((col): MenuItem => ({ label: `Find Similar Rows by ${col.name}`, action: () => p.onFindSimilar!(col.name, rowObj) }))
         : []),
       ...(p.onFilterBy
         ? ([

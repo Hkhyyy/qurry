@@ -153,8 +153,8 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
                   <input className="port" value={cfg.port} onChange={(e) => set("port", Number(e.target.value) || 0)} />
                 </div>
                 <label>User</label>
-                <input value={cfg.user} placeholder={cfg.kind === "redis" ? "(optional, ACL user)" : ""} onChange={(e) => set("user", e.target.value)} />
-                <label>Password</label>
+                <input value={cfg.user} placeholder={cfg.kind === "redis" ? "(optional, ACL user)" : cfg.kind === "milvus" ? "(optional — empty: the password is an API key)" : ""} onChange={(e) => set("user", e.target.value)} />
+                <label>{cfg.kind === "qdrant" || cfg.kind === "chroma" ? "API key" : "Password"}</label>
                 <input
                   type="password"
                   value={password ?? ""}
@@ -196,7 +196,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
                 </button>
               </div>
             ) : (
-              <input value={cfg.database} placeholder={cfg.kind === "postgres" ? "postgres" : cfg.kind === "redis" ? "0 (database index)" : cfg.kind === "oracle" ? "FREEPDB1, ORCLPDB1 …" : cfg.kind === "mssql" ? "master" : cfg.kind === "clickhouse" ? "default" : ""} onChange={(e) => set("database", e.target.value)} />
+              <input value={cfg.database} placeholder={cfg.kind === "postgres" ? "postgres" : cfg.kind === "redis" ? "0 (database index)" : cfg.kind === "oracle" ? "FREEPDB1, ORCLPDB1 …" : cfg.kind === "mssql" ? "master" : cfg.kind === "clickhouse" ? "default" : cfg.kind === "chroma" ? "default_database" : cfg.kind === "milvus" ? "default" : ""} onChange={(e) => set("database", e.target.value)} />
             )}
             {cfg.kind === "oracle" && (
               <>

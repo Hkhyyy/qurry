@@ -1221,13 +1221,11 @@ fn popup_key(app: &mut App, k: KeyEvent) {
                             f.value = opts[j].to_string();
                             // DB 종류를 바꾸면 기본 포트도
                             if f.label == "Type" {
-                                let port = match f.value.as_str() {
-                                    "mysql" => "3306",
-                                    "redis" => "6379",
-                                    _ => "5432",
-                                };
+                                const PORTS: &[(&str, &str)] = &[("postgres", "5432"), ("mysql", "3306"), ("redis", "6379"), ("sqlite", "0"), ("duckdb", "0"), ("mssql", "1433"), ("clickhouse", "8123"), ("mongodb", "27017"), ("oracle", "1521"), ("qdrant", "6333"), ("chroma", "8000"), ("milvus", "19530")];
+                                let port = PORTS.iter().find(|x| x.0 == f.value).map(|x| x.1).unwrap_or("5432");
                                 if let Some(p) = form.fields.iter_mut().find(|x| x.label == "Port") {
-                                    if ["5432", "3306", "6379", ""].contains(&p.value.as_str()) {
+                                    // 손으로 바꾼 포트는 두고, 다른 종류의 기본 포트였으면 바꾼다
+                                    if p.value.is_empty() || PORTS.iter().any(|x| x.1 == p.value) {
                                         p.value = port.into();
                                     }
                                 }

@@ -1,9 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { DataFormat } from "./transfer";
 
-export type DbKind = "postgres" | "mysql" | "redis" | "sqlite" | "duckdb" | "mssql" | "clickhouse" | "mongodb" | "oracle";
+export type DbKind = "postgres" | "mysql" | "redis" | "sqlite" | "duckdb" | "mssql" | "clickhouse" | "mongodb" | "oracle" | "qdrant" | "chroma" | "milvus";
 /** 따로 받는 드라이버 플러그인으로 붙는 DB */
-export const PLUGIN_KINDS: DbKind[] = ["sqlite", "duckdb", "mssql", "clickhouse", "mongodb", "oracle"];
+export const PLUGIN_KINDS: DbKind[] = ["sqlite", "duckdb", "mssql", "clickhouse", "mongodb", "oracle", "qdrant", "chroma", "milvus"];
+/** 벡터 DB: 콘솔이 REST (METHOD /path + JSON 본문) */
+export const VECTOR_KINDS: DbKind[] = ["qdrant", "chroma", "milvus"];
 /** 파일 하나가 DB (호스트·포트 대신 파일 경로) */
 export const isFileKind = (k: DbKind) => k === "sqlite" || k === "duckdb";
 /** 드라이버가 없을 때 백엔드 오류의 앞부분 */
@@ -243,6 +245,8 @@ export const meta = {
   schemas: (id: string) => invoke<SchemaInfo[]>("list_schemas", { id }),
   objects: (id: string, schema: string) => invoke<SchemaObjects>("list_objects", { id, schema }),
   table: (id: string, schema: string, table: string) => invoke<TableDetail>("table_detail", { id, schema, table }),
+  /** pgvector: 이 행과 가까운 행을 찾는 SQL (pk = [열, 값]) */
+  similarRowsSql: (id: string, schema: string, table: string, column: string, pk: [string, string | null][]) => invoke<string>("similar_rows_sql", { id, schema, table, column, pk }),
   completion: (id: string) => invoke<CompletionTable[]>("completion_meta", { id }),
   ddl: (id: string, schema: string, name: string, kind: string) => invoke<string>("object_ddl", { id, schema, name, kind }),
   objectIndex: (id: string) => invoke<IndexEntry[]>("object_index", { id }),
@@ -300,7 +304,7 @@ export const COLOR_PRESETS: { name: string; value: string | null }[] = [
   { name: "Gray", value: "#45474d" },
 ];
 
-export const DEFAULT_PORT: Record<DbKind, number> = { postgres: 5432, mysql: 3306, redis: 6379, sqlite: 0, duckdb: 0, mssql: 1433, clickhouse: 8123, mongodb: 27017, oracle: 1521 };
+export const DEFAULT_PORT: Record<DbKind, number> = { postgres: 5432, mysql: 3306, redis: 6379, sqlite: 0, duckdb: 0, mssql: 1433, clickhouse: 8123, mongodb: 27017, oracle: 1521, qdrant: 6333, chroma: 8000, milvus: 19530 };
 export const KIND_LABEL: Record<DbKind, string> = {
   postgres: "PostgreSQL",
   mysql: "MySQL / MariaDB",
@@ -311,6 +315,9 @@ export const KIND_LABEL: Record<DbKind, string> = {
   clickhouse: "ClickHouse",
   mongodb: "MongoDB",
   oracle: "Oracle",
+  qdrant: "Qdrant",
+  chroma: "Chroma",
+  milvus: "Milvus",
 };
 
 /** 데이터 편집 SQL에 쓰는 리터럴. PG가 컬럼 타입으로 캐스팅한다. */
@@ -353,7 +360,32 @@ const RD: Dialect = {
 /** 드라이버 DB: 표준 SQL 따옴표, 글 변환은 CAST (PG 의 ::text 는 쓰지 않는다) */
 const GEN: Dialect = { ...PG, text: (e) => `CAST(${e} AS VARCHAR(4000))`, monaco: "sql" };
 const MONGO: Dialect = { q: (s) => s, lit: sqlLiteral, text: (e) => e, monaco: "javascript", split: RD.split };
-export const dialectOf = (kind?: DbKind) => (kind === "mysql" ? MY : kind === "redis" ? RD : kind === "mongodb" ? MONGO : kind && PLUGIN_KINDS.includes(kind) ? GEN : PG);
+/** REST 요청 하나 = 메서드 줄부터 다음 메서드 줄 전까지 (본문 JSON 포함). core 의 sql::split_rest 와 같은 규칙 */
+const REST: Dialect = {
+  q: (s) => s,
+  lit: sqlLiteral,
+  text: (e) => e,
+  monaco: "javascript",
+  split: (text) => {
+    const out: { start: number; end: number }[] = [];
+    let pos = 0;
+    let cur: { start: number; end: number } | null = null;
+    for (const line of text.split("\n")) {
+      const t = line.trim();
+      if (/^(GET|POST|PUT|PATCH|DELETE|SELECT)\s/i.test(t + " ")) {
+        if (cur) out.push(cur);
+        cur = { start: pos, end: pos + line.length };
+      } else if (t && !t.startsWith("#") && !t.startsWith("//")) {
+        if (cur) cur.end = pos + line.length;
+        else cur = { start: pos, end: pos + line.length };
+      }
+      pos += line.length + 1;
+    }
+    if (cur) out.push(cur);
+    return out;
+  },
+};
+export const dialectOf = (kind?: DbKind) => (kind === "mysql" ? MY : kind === "redis" ? RD : kind === "mongodb" ? MONGO : kind && VECTOR_KINDS.includes(kind) ? REST : kind && PLUGIN_KINDS.includes(kind) ? GEN : PG);
 
 /** 백엔드 접속 대상: Data Source id + DB 이름 */
 export const targetId = (connId: string, database?: string | null) => (database ? `${connId}::${database}` : connId);

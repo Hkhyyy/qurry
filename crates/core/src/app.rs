@@ -785,6 +785,16 @@ impl AppState {
         crate::meta::table_detail(&ensure_pool(self, &id).await?, &schema, &table).await
     }
 
+    /// pgvector: 이 행과 가까운 행을 찾는 SQL (벡터 인덱스의 거리 연산자로). pk = (열, 값)
+    pub async fn similar_rows_sql(&self, id: String, schema: String, table: String, column: String, pk: Vec<(String, Option<String>)>) -> AppResult<String> {
+        if pk.is_empty() {
+            return Err(AppError::Msg(format!("{schema}.{table} has no primary key — can't pick the row to compare")));
+        }
+        let d = self.table_detail(id, schema.clone(), table.clone()).await?;
+        let defs: Vec<&str> = d.indexes.iter().map(|i| i.definition.as_str()).collect();
+        Ok(crate::sql::similar_rows_sql(&schema, &table, &column, &pk, crate::sql::vector_operator(&column, &defs), 20))
+    }
+
     pub async fn object_ddl(&self, id: String, schema: String, name: String, kind: String) -> AppResult<String> {
         crate::meta::object_ddl(&ensure_pool(self, &id).await?, &schema, &name, &kind).await
     }

@@ -91,6 +91,30 @@ async fn pg_major(st: &AppState, id: &str) -> Option<u64> {
     crate::db::cell_text(r.rows.first()?.first()?).parse::<u64>().ok().map(|n| n / 10000)
 }
 
+/// 새 pg_dump 가 백업 머리에 넣는데 예전 서버는 모르는 설정 (이름, 생긴 버전)
+const NEWER_SETTINGS: &[(&str, u64)] = &[("SET transaction_timeout", 17)];
+
+/// 예전 서버가 모르는 SET 줄을 뺀 SQL 사본 (뺄 것이 없는 서버면 None)
+fn strip_newer_settings(src: &Path, server: Option<u64>) -> AppResult<Option<PathBuf>> {
+    use std::io::{BufRead, Write};
+    let drop: Vec<&str> = NEWER_SETTINGS.iter().filter(|(_, v)| server.is_some_and(|s| s < *v)).map(|(n, _)| *n).collect();
+    if drop.is_empty() {
+        return Ok(None);
+    }
+    let out = std::env::temp_dir().join(format!("qurry-restore-{}.sql", uuid::Uuid::new_v4()));
+    let mut r = std::io::BufReader::new(std::fs::File::open(src)?);
+    let mut w = std::io::BufWriter::new(std::fs::File::create(&out)?);
+    let mut line = Vec::new();
+    while r.read_until(b'\n', &mut line)? > 0 {
+        if !(line.starts_with(b"SET ") && drop.iter().any(|d| line.starts_with(d.as_bytes()))) {
+            w.write_all(&line)?;
+        }
+        line.clear();
+    }
+    w.flush()?;
+    Ok(Some(out))
+}
+
 fn missing(tool: &str) -> AppError {
     let hint = if tool.starts_with("pg_") || tool == "psql" {
         "Install the PostgreSQL client tools (macOS: brew install libpq · Ubuntu: sudo apt install postgresql-client) — the version must be at least the server's."
@@ -280,25 +304,46 @@ impl AppState {
                 DbKind::Postgres => {
                     let mut head = [0u8; 5];
                     let custom = std::io::Read::read_exact(&mut std::fs::File::open(&file)?, &mut head).is_ok() && &head == b"PGDMP";
+                    let server = pg_major(self, &id).await;
+                    let mut sql_file = None;
                     if custom {
-                        let tool = find_tool_for("pg_restore", pg_major(self, &id).await).ok_or_else(|| missing("pg_restore"))?;
+                        let tool = find_tool_for("pg_restore", server).ok_or_else(|| missing("pg_restore"))?;
                         let mut cmd = tokio::process::Command::new(tool);
-                        cmd.arg("-h").arg(&host).arg("-p").arg(port.to_string()).arg("-U").arg(&user).arg("-d").arg(&db).arg("--no-password");
-                        cmd.args(["--no-owner", "--exit-on-error", "--single-transaction"]);
+                        cmd.args(["--no-owner"]);
                         if opts.clean {
                             cmd.args(["--clean", "--if-exists"]);
                         }
-                        cmd.arg(&file);
-                        pg_env(&mut cmd, password.as_deref(), &cfg);
-                        run_tool(cmd, "pg_restore", None, None, None, &job).await?;
+                        if NEWER_SETTINGS.iter().any(|(_, v)| server.is_some_and(|s| s < *v)) {
+                            // 예전 서버: SQL 로 풀어서 모르는 설정을 빼고 psql 로 (pg_restore 는 그 SET 에서 멈춘다)
+                            let tmp = std::env::temp_dir().join(format!("qurry-restore-{}.sql", uuid::Uuid::new_v4()));
+                            cmd.arg("-f").arg(&tmp).arg(&file);
+                            let r = run_tool(cmd, "pg_restore", None, None, None, &job).await;
+                            let stripped = r.and_then(|_| strip_newer_settings(&tmp, server));
+                            std::fs::remove_file(&tmp).ok();
+                            sql_file = stripped?;
+                        } else {
+                            cmd.arg("-h").arg(&host).arg("-p").arg(port.to_string()).arg("-U").arg(&user).arg("-d").arg(&db).arg("--no-password");
+                            cmd.args(["--exit-on-error", "--single-transaction"]);
+                            cmd.arg(&file);
+                            pg_env(&mut cmd, password.as_deref(), &cfg);
+                            run_tool(cmd, "pg_restore", None, None, None, &job).await?;
+                        }
                     } else {
-                        let tool = find_tool_for("psql", pg_major(self, &id).await).ok_or_else(|| missing("psql"))?;
+                        sql_file = strip_newer_settings(&file, server)?;
+                    }
+                    if !custom || sql_file.is_some() {
+                        let src = sql_file.clone().unwrap_or_else(|| file.clone());
+                        let tool = find_tool_for("psql", server).ok_or_else(|| missing("psql"))?;
                         let mut cmd = tokio::process::Command::new(tool);
                         cmd.arg("-h").arg(&host).arg("-p").arg(port.to_string()).arg("-U").arg(&user).arg("-d").arg(&db).arg("--no-password");
                         cmd.args(["-X", "-q", "-v", "ON_ERROR_STOP=1", "--single-transaction", "-f", "-"]);
                         pg_env(&mut cmd, password.as_deref(), &cfg);
-                        job.total.store(size, Ordering::Relaxed);
-                        run_tool(cmd, "psql", Some(&file), None, None, &job).await?;
+                        job.total.store(std::fs::metadata(&src).map(|m| m.len()).unwrap_or(size), Ordering::Relaxed);
+                        let r = run_tool(cmd, "psql", Some(&src), None, None, &job).await;
+                        if let Some(t) = sql_file {
+                            std::fs::remove_file(t).ok();
+                        }
+                        r?;
                     }
                 }
                 DbKind::Mysql => {
@@ -325,6 +370,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn strips_settings_old_servers_do_not_know() {
+        let src = std::env::temp_dir().join(format!("qurry-strip-{}.sql", uuid::Uuid::new_v4()));
+        std::fs::write(&src, "SET statement_timeout = 0;\nSET transaction_timeout = 0;\nCREATE TABLE t (x int);\n").unwrap();
+        assert!(strip_newer_settings(&src, Some(17)).unwrap().is_none());
+        let out = strip_newer_settings(&src, Some(12)).unwrap().unwrap();
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "SET statement_timeout = 0;\nCREATE TABLE t (x int);\n");
+        std::fs::remove_file(src).ok();
+        std::fs::remove_file(out).ok();
+    }
+
+    #[test]
     fn finds_tools_or_explains() {
         // 이 PC 에 없으면 None (설치 안내는 backup 이 한다)
         if let Some(p) = find_tool("pg_dump") {
@@ -341,6 +397,34 @@ mod tests {
         let cfg: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "b", "name": "b", "kind": "postgres", "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": p[2], "database": p[3] })).unwrap();
         st.store.save(&cfg).unwrap();
         Some(st)
+    }
+
+    /// pgvector (확장이 있는 서버에서만): 가까운 행 SQL 이 인덱스 연산자를 쓰고 거리 순으로 나온다. 벡터 값은 글로 보인다
+    #[tokio::test]
+    #[ignore]
+    async fn pgvector_similar_rows() {
+        let Some(st) = state().await else { return };
+        let q = |s: &str| st.run_query("b".into(), s.into(), None, None);
+        if q("create extension if not exists vector").await.is_err() {
+            return;
+        }
+        q("drop table if exists qurry_vec").await.ok();
+        q("create table qurry_vec (id int primary key, name text, embedding vector(3))").await.unwrap();
+        q("insert into qurry_vec values (1, 'apple', '[1,0,0]'), (2, 'apricot', '[0.9,0.1,0]'), (3, 'pear', '[0,1,0]')").await.unwrap();
+        q("create index on qurry_vec using hnsw (embedding vector_cosine_ops)").await.unwrap();
+        let d = st.table_detail("b".into(), "public".into(), "qurry_vec".into()).await.unwrap();
+        assert!(d.columns.iter().any(|c| c.name == "embedding" && crate::sql::is_vector_type(&c.data_type)), "{:?}", d.columns.iter().map(|c| &c.data_type).collect::<Vec<_>>());
+        let sql = st.similar_rows_sql("b".into(), "public".into(), "qurry_vec".into(), "embedding".into(), vec![("id".into(), Some("1".into()))]).await.unwrap();
+        assert!(sql.contains("<=>"), "{sql}");
+        let r = q(&sql).await.unwrap();
+        let name = r.columns.iter().position(|c| c.name == "name").unwrap();
+        assert_eq!(r.rows.iter().map(|x| x[name].clone()).collect::<Vec<_>>(), vec![serde_json::json!("apricot"), serde_json::json!("pear")]);
+        let emb = r.columns.iter().position(|c| c.name == "embedding").unwrap();
+        assert_eq!(r.rows[0][emb], serde_json::json!("[0.9,0.1,0]"));
+        // halfvec · sparsevec 도 PG 가 보여 주는 글 그대로
+        let h = q("select '[1,0.5,-2]'::halfvec h, '{1:0.5,3:1}/5'::sparsevec s, '[0.25,1e-3]'::vector v").await.unwrap();
+        assert_eq!(h.rows[0], vec![serde_json::json!("[1,0.5,-2]"), serde_json::json!("{1:0.5,3:1}/5"), serde_json::json!("[0.25,0.001]")]);
+        q("drop table qurry_vec").await.ok();
     }
 
     /// MySQL: mysqldump → 지우기 → mysql 로 되살리기 (도구가 있을 때만)

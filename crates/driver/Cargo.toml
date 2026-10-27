@@ -7,3 +7,9 @@ description = "Qurry driver plugin protocol: one JSON request / response per lin
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+json5 = { version = "1", optional = true }
+ureq = { version = "3", default-features = false, features = ["rustls", "gzip", "json"], optional = true }
+
+[features]
+rest = ["dep:json5", "dep:ureq"]

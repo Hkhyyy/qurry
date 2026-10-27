@@ -468,6 +468,12 @@ pub async fn table_detail(state: State<'_, AppState>, id: String, schema: String
     state.table_detail(id, schema, table).await
 }
 
+/// pgvector: 이 행과 가까운 행을 찾는 SQL
+#[tauri::command]
+pub async fn similar_rows_sql(state: State<'_, AppState>, id: String, schema: String, table: String, column: String, pk: Vec<(String, Option<String>)>) -> AppResult<String> {
+    state.similar_rows_sql(id, schema, table, column, pk).await
+}
+
 #[tauri::command]
 pub async fn object_ddl(state: State<'_, AppState>, id: String, schema: String, name: String, kind: String) -> AppResult<String> {
     state.object_ddl(id, schema, name, kind).await

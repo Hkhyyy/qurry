@@ -66,7 +66,9 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
         init.push(format!("SET time_zone = {}", lit(tz)));
     }
     let script = cfg.options.startup_script.trim().to_string();
-    let pool = MySqlPoolOptions::new()
+    let pool_opts = || {
+        let (init, script) = (init.clone(), script.clone());
+        MySqlPoolOptions::new()
         // 콘솔·테이블 탭마다 연결을 하나씩 전용으로 쓴다. 연결은 필요할 때만 열리므로 상한만 넉넉히
         .max_connections(crate::db::POOL_MAX)
         .acquire_timeout(Duration::from_secs(10))
@@ -83,9 +85,23 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
                 Ok(())
             })
         })
-        .connect_with(opts)
-        .await?;
+    };
+    let explicit_ssl = cfg.active_ssl().is_some();
+    let pool = match pool_opts().connect_with(opts.clone()).await {
+        // SSL 을 정하지 않으면 TLS 를 먼저 해 본다 (Preferred). 예전 서버(MySQL 5.7 등)는 TLS 1.2 를 못 맞춰 핸드셰이크에서 끊긴다 → 평문으로 다시
+        Err(e) if !explicit_ssl && is_tls_failure(&e) => pool_opts().connect_with(opts.ssl_mode(sqlx::mysql::MySqlSslMode::Disabled)).await?,
+        r => r?,
+    };
     Ok(pool)
+}
+
+/// TLS 를 맞추지 못한 접속 실패 (인증 실패 등은 아니다)
+fn is_tls_failure(e: &sqlx::Error) -> bool {
+    match e {
+        sqlx::Error::Tls(_) => true,
+        sqlx::Error::Io(io) => io.to_string().to_lowercase().contains("handshake") || io.to_string().contains("AlertReceived"),
+        _ => false,
+    }
 }
 
 pub async fn server_version(p: &MySqlPool) -> AppResult<String> {
@@ -575,7 +591,7 @@ mod tests {
         for s in [
             "drop table if exists order_item",
             "drop table if exists orders",
-            "create table orders(id bigint unsigned primary key auto_increment, customer varchar(50) not null comment '고객', amount decimal(12,2), paid bit(1) default b'0', created datetime(3) default current_timestamp(3), memo text, img blob, unique key uq_customer(customer)) comment '주문'",
+            "create table orders(id bigint unsigned primary key auto_increment, customer varchar(50) not null comment '고객', amount decimal(12,2), paid bit(1) default b'0', created datetime(3) default current_timestamp(3), memo text, img blob, unique key uq_customer(customer)) default charset=utf8mb4 comment '주문'",
             "create table order_item(id int primary key, order_id bigint unsigned, qty smallint, constraint fk_order foreign key (order_id) references orders(id))",
             "insert into orders(customer, amount, paid, memo, img) values ('alice', 12345.67, b'1', 'Hello_World 50%', x'DEADBEEF'), ('bob', null, b'0', null, null), ('carol', 1, b'0', '한글 메모', null)",
             "drop procedure if exists add_qty",

@@ -336,6 +336,7 @@ pub enum Action {
     SetNull,
     ExportCsv,
     CopyInList,
+    FindSimilar,
     Find,
     DbaReports,
     BackupDb,
@@ -400,6 +401,7 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::SetNull, "Set NULL", "n (grid)"),
     (Action::ExportCsv, "Export Data… (CSV, TSV, JSON, SQL INSERT, Markdown)", "x (grid)"),
     (Action::CopyInList, "Copy Column as IN List  ('a', 'b', …)", "Y (grid)"),
+    (Action::FindSimilar, "Find Similar Rows (pgvector, by the vector column)", ""),
     (Action::Find, "Find / Replace in Editor (regex)", ""),
     (Action::QueryHistory, "Query History… (shared with the GUI)", ""),
     (Action::Snippets, "Snippets…", ""),
@@ -1206,6 +1208,37 @@ impl App {
         if !self.tabs.iter().any(|x| x.group == from) {
             self.panes.remove(from);
         }
+    }
+
+    /// 테이블 탭의 지금 행과 가까운 행 (pgvector): 커서 열이 벡터면 그 열, 아니면 첫 벡터 열. SQL 을 새 콘솔에
+    fn find_similar(&mut self) {
+        let Some(Tab { kind: TabKind::Table(tt), conn, db, target, .. }) = self.tabs.get(self.active) else {
+            self.status = "Open a table with a vector column first".into();
+            return;
+        };
+        if self.kind_of(conn) != DbKind::Postgres {
+            self.status = "Find Similar Rows is for PostgreSQL tables with a pgvector column".into();
+            return;
+        }
+        let Some(g) = &tt.grid else { return };
+        let cols = &g.result.columns;
+        let Some(vc) = cols.get(g.col).filter(|c| sql::is_vector_type(&c.type_name)).or_else(|| cols.iter().find(|c| sql::is_vector_type(&c.type_name))).map(|c| c.name.clone()) else {
+            self.status = format!("{}.{} has no vector column", tt.schema, tt.table);
+            return;
+        };
+        let Some(row) = g.result.rows.get(g.row) else { return };
+        let pk: Vec<(String, Option<String>)> = tt.pk.iter().map(|k| (k.clone(), cols.iter().position(|c| &c.name == k).and_then(|i| row.get(i)).filter(|v| !v.is_null()).map(crate::grid::cell_text))).collect();
+        let (st, conn, db, target, schema, table) = (self.state.clone(), conn.clone(), db.clone(), target.clone(), tt.schema.clone(), tt.table.clone());
+        self.spawn(async move { st.similar_rows_sql(target, schema, table, vc, pk).await.map_err(|e| e.to_string()) }, move |a, r| match r {
+            Ok(sql) => {
+                a.open_console(&conn, Some(db));
+                if let Some(Tab { kind: TabKind::Console(c), .. }) = a.tabs.get_mut(a.active) {
+                    c.editor.insert_str(sql);
+                }
+                a.status = "Similar-rows query is in a new console — F5 to run".into();
+            }
+            Err(e) => a.status = e,
+        });
     }
 
     pub fn open_console(&mut self, conn: &str, db: Option<String>) {
@@ -2037,7 +2070,7 @@ impl App {
             fields: vec![
                 f("Name", c.name.clone(), FieldKind::Text),
                 f("Color", color.into(), FieldKind::Choice(colors)),
-                f("Type", kind, FieldKind::Choice(vec!["postgres", "mysql", "redis", "sqlite", "duckdb", "mssql", "clickhouse", "mongodb", "oracle"])),
+                f("Type", kind, FieldKind::Choice(vec!["postgres", "mysql", "redis", "sqlite", "duckdb", "mssql", "clickhouse", "mongodb", "oracle", "qdrant", "chroma", "milvus"])),
                 f("Host", c.host.clone(), FieldKind::Text),
                 f("Port", c.port.to_string(), FieldKind::Text),
                 f("User", c.user.clone(), FieldKind::Text),
@@ -2475,6 +2508,7 @@ impl App {
                 let short: String = text.chars().take(80).collect();
                 self.status = format!("Copied {n} values as an IN list: {short}{}", if text.chars().count() > 80 { "…" } else { "" });
             }
+            Action::FindSimilar => self.find_similar(),
             Action::CancelTransfer => {
                 for (id, ..) in &self.jobs {
                     self.state.cancel_job(id);

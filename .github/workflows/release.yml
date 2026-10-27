@@ -73,7 +73,7 @@ jobs:
       V: ${{ needs.version.outputs.version }}
       T: ${{ matrix.target }}
       A: ${{ matrix.arch }}
-      DRIVERS: sqlite duckdb clickhouse mssql mongodb oracle
+      DRIVERS: sqlite duckdb clickhouse mssql mongodb oracle qdrant chroma milvus
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

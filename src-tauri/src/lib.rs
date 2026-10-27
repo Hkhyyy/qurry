@@ -129,6 +129,7 @@ pub fn run() {
             commands::list_schemas,
             commands::list_objects,
             commands::table_detail,
+            commands::similar_rows_sql,
             commands::completion_meta,
             commands::object_ddl,
             commands::fetch_more,

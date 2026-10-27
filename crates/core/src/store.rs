@@ -21,6 +21,10 @@ pub enum DbKind {
     Duckdb,
     Mongodb,
     Oracle,
+    // 벡터 DB (REST)
+    Qdrant,
+    Chroma,
+    Milvus,
 }
 
 impl DbKind {
@@ -34,17 +38,25 @@ impl DbKind {
             DbKind::Duckdb => Some("duckdb"),
             DbKind::Mongodb => Some("mongodb"),
             DbKind::Oracle => Some("oracle"),
+            DbKind::Qdrant => Some("qdrant"),
+            DbKind::Chroma => Some("chroma"),
+            DbKind::Milvus => Some("milvus"),
         }
     }
 
     /// DB 가 곧 스키마 (트리에 스키마 단계가 없다)
     pub fn flat(self) -> bool {
-        matches!(self, DbKind::Mysql | DbKind::Redis | DbKind::Sqlite | DbKind::Clickhouse | DbKind::Mongodb)
+        matches!(self, DbKind::Mysql | DbKind::Redis | DbKind::Sqlite | DbKind::Clickhouse | DbKind::Mongodb | DbKind::Qdrant | DbKind::Chroma | DbKind::Milvus)
     }
 
     /// 파일 하나가 DB 인 것 (호스트·포트 대신 파일 경로)
     pub fn is_file(self) -> bool {
         matches!(self, DbKind::Sqlite | DbKind::Duckdb)
+    }
+
+    /// 벡터 DB: 콘솔이 SQL 이 아니라 REST (METHOD /path + JSON)
+    pub fn is_vector(self) -> bool {
+        matches!(self, DbKind::Qdrant | DbKind::Chroma | DbKind::Milvus)
     }
 }
 

@@ -12,6 +12,9 @@
 //! | objects | `{schema}` | `{relations: [{name, kind, comment, rowEstimate}], routines: []}` |
 //! | tableDetail | `{schema, table}` | `{columns: [{name, dataType, nullable, defaultValue, comment, isPk}], indexes: [{name, definition, isUnique, isPrimary}], constraints: [{name, kind, definition}]}` |
 //! | ddl | `{schema, name, kind}` | `"CREATE …"` |
+#[cfg(feature = "rest")]
+pub mod rest;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{BufRead, Write};

@@ -1975,6 +1975,21 @@ export default function App() {
                     if (c && t.edit) openDdl({ kind: "table", conn: c, db: t.database, schema: t.edit.schema, name: t.edit.table });
                   }}
                   onCopyQueryToConsole={(sql) => { const c = conns.find((x) => x.id === t.connId); if (c) openConsole(c, t.database, sql); }}
+                  onFindSimilar={
+                    conns.find((x) => x.id === t.connId)?.kind === "postgres"
+                      ? async (column, row) => {
+                          const c = conns.find((x) => x.id === t.connId);
+                          if (!c || !t.edit) return;
+                          try {
+                            const sql = await meta.similarRowsSql(t.target, t.edit.schema, t.edit.table, column, t.edit.pk.map((k) => [k, row[k] === null ? null : String(row[k])]));
+                            openConsole(c, t.database, sql);
+                            setStatus("Similar-rows query opened in a new console");
+                          } catch (e) {
+                            setStatus(String(e));
+                          }
+                        }
+                      : undefined
+                  }
                 />
               </div>
             ))}

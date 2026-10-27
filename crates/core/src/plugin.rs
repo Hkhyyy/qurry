@@ -371,6 +371,103 @@ mod tests {
         ], "q_parent", "q_child", true).await;
     }
 
+    /// Qdrant: REST 콘솔 (컬렉션 만들기 → upsert → search), 탐색기 (목록 · scroll · 벡터/payload 컬럼)
+    #[tokio::test]
+    #[ignore]
+    async fn qdrant_driver_rest_console() {
+        let Some((cfg, pw)) = server_cfg("qdrant", "QURRY_TEST_QDRANT") else { return };
+        if driver_path("qdrant").is_none() {
+            return;
+        }
+        let c = connect(&cfg, Some(&pw), None).await.unwrap();
+        assert!(c.call::<String>("version", Value::Null).await.unwrap().starts_with("Qdrant 1."));
+        c.query("DELETE /collections/q_items", 1).await.ok();
+        c.query("PUT /collections/q_items\n{vectors: {size: 3, distance: 'Cosine'}}", 1).await.unwrap();
+        c.query(r#"PUT /collections/q_items/points?wait=true
+{points: [
+  {id: 1, vector: [1, 0, 0], payload: {name: 'apple', shop: {city: 'Seoul'}}},
+  {id: 2, vector: [0, 1, 0], payload: {name: 'pear', price: 3}},
+  {id: 3, vector: [0.9, 0.1, 0], payload: {name: 'apricot'}},
+]}"#, 1).await.unwrap();
+        let r = c.query("POST /collections/q_items/points/search\n{vector: [1, 0, 0], limit: 2, with_payload: true}", 500).await.unwrap();
+        let name = r.columns.iter().position(|c| c.name == "payload.name").unwrap();
+        assert_eq!(r.rows.iter().map(|x| x[name].clone()).collect::<Vec<_>>(), vec![json!("apple"), json!("apricot")]);
+        assert!(r.columns.iter().any(|c| c.name == "score"));
+        let objs: crate::meta::SchemaObjects = c.call("objects", json!({ "schema": "qdrant" })).await.unwrap();
+        assert!(objs.relations.iter().any(|r| r.name == "q_items"));
+        let all = c.query("SELECT * FROM qdrant.q_items", 2).await.unwrap();
+        assert_eq!((all.rows.len(), all.truncated), (2, true));
+        assert!(all.columns.iter().any(|c| c.name == "payload.shop"), "{:?}", all.columns.iter().map(|c| &c.name).collect::<Vec<_>>());
+        let d: crate::meta::TableDetail = c.call("tableDetail", json!({ "table": "q_items" })).await.unwrap();
+        assert!(d.columns.iter().any(|c| c.name == "id" && c.is_pk));
+        assert!(d.columns.iter().any(|c| c.name == "vector" && c.data_type == "vector(3, Cosine)"));
+        assert!(d.columns.iter().any(|c| c.name == "payload.price"));
+        assert!(c.call::<String>("ddl", json!({ "name": "q_items" })).await.unwrap().starts_with("PUT /collections/q_items"));
+        assert!(c.query("GET /collections/no_such_qurry", 1).await.unwrap_err().to_string().contains("doesn't exist"));
+        c.query("DELETE /collections/q_items", 1).await.unwrap();
+    }
+
+    /// Chroma: 이름으로 쓴 컬렉션 경로, get/query 의 열 배열 → 행
+    #[tokio::test]
+    #[ignore]
+    async fn chroma_driver_rest_console() {
+        let Some((cfg, pw)) = server_cfg("chroma", "QURRY_TEST_CHROMA") else { return };
+        if driver_path("chroma").is_none() {
+            return;
+        }
+        let c = connect(&cfg, Some(&pw), None).await.unwrap();
+        assert!(c.call::<String>("version", Value::Null).await.unwrap().starts_with("Chroma 1."));
+        c.query("DELETE /collections/q_docs", 1).await.ok();
+        c.query("POST /collections\n{name: 'q_docs', configuration: {hnsw: {space: 'cosine'}}}", 1).await.unwrap();
+        c.query(r#"POST /collections/q_docs/add
+{ids: ['a', 'b', 'c'], embeddings: [[1, 0], [0, 1], [0.9, 0.1]], documents: ['apple', 'pear', 'apricot'], metadatas: [{lang: 'en'}, {lang: 'ko', n: 2}, {lang: 'en'}]}"#, 1).await.unwrap();
+        let r = c.query("POST /collections/q_docs/query\n{query_embeddings: [[1, 0]], n_results: 2, include: ['documents', 'distances', 'metadatas']}", 500).await.unwrap();
+        let doc = r.columns.iter().position(|c| c.name == "document").unwrap();
+        assert_eq!(r.rows.iter().map(|x| x[doc].clone()).collect::<Vec<_>>(), vec![json!("apple"), json!("apricot")]);
+        assert!(r.columns.iter().any(|c| c.name == "distance") && r.columns.iter().any(|c| c.name == "metadata.lang"));
+        let dbs: Vec<String> = c.call("databases", Value::Null).await.unwrap();
+        assert!(dbs.contains(&"default_database".to_string()));
+        let objs: crate::meta::SchemaObjects = c.call("objects", json!({ "schema": "default_database" })).await.unwrap();
+        assert!(objs.relations.iter().any(|r| r.name == "q_docs"));
+        let all = c.query("SELECT * FROM default_database.q_docs", 2).await.unwrap();
+        assert_eq!((all.rows.len(), all.truncated), (2, true));
+        let d: crate::meta::TableDetail = c.call("tableDetail", json!({ "table": "q_docs" })).await.unwrap();
+        assert!(d.columns.iter().any(|c| c.name == "id" && c.is_pk));
+        assert!(d.columns.iter().any(|c| c.name == "embedding" && c.data_type == "vector(2, cosine)"), "{:?}", d.columns.iter().map(|c| &c.data_type).collect::<Vec<_>>());
+        assert!(d.columns.iter().any(|c| c.name == "metadata.n"));
+        assert!(c.query("GET /collections/no_such_qurry", 1).await.is_err());
+        c.query("DELETE /collections/q_docs", 1).await.unwrap();
+    }
+
+    /// Milvus: POST 경로에 dbName 채우기, 몇 건 넣었는지, search, 탐색기
+    #[tokio::test]
+    #[ignore]
+    async fn milvus_driver_rest_console() {
+        let Some((cfg, pw)) = server_cfg("milvus", "QURRY_TEST_MILVUS") else { return };
+        if driver_path("milvus").is_none() {
+            return;
+        }
+        let c = connect(&cfg, Some(&pw), None).await.unwrap();
+        c.query("POST /collections/drop\n{collectionName: 'q_items'}", 1).await.ok();
+        c.query("POST /collections/create\n{collectionName: 'q_items', dimension: 3, metricType: 'COSINE'}", 1).await.unwrap();
+        let ins = c.query(r#"POST /entities/insert
+{collectionName: 'q_items', data: [{id: 1, vector: [1, 0, 0], name: 'apple'}, {id: 2, vector: [0, 1, 0], name: 'pear'}, {id: 3, vector: [0.9, 0.1, 0], name: 'apricot'}]}"#, 1).await.unwrap();
+        assert_eq!(ins.rows_affected, 3);
+        let r = c.query("POST /entities/search\n{collectionName: 'q_items', data: [[1, 0, 0]], limit: 2, outputFields: ['name']}", 500).await.unwrap();
+        let name = r.columns.iter().position(|c| c.name == "name").unwrap();
+        assert_eq!(r.rows.iter().map(|x| x[name].clone()).collect::<Vec<_>>(), vec![json!("apple"), json!("apricot")]);
+        let objs: crate::meta::SchemaObjects = c.call("objects", json!({ "schema": "default" })).await.unwrap();
+        assert!(objs.relations.iter().any(|r| r.name == "q_items"));
+        let all = c.query("SELECT * FROM default.q_items", 2).await.unwrap();
+        assert_eq!((all.rows.len(), all.truncated), (2, true));
+        let d: crate::meta::TableDetail = c.call("tableDetail", json!({ "table": "q_items" })).await.unwrap();
+        assert!(d.columns.iter().any(|c| c.name == "id" && c.is_pk));
+        assert!(d.columns.iter().any(|c| c.name == "vector" && c.data_type == "FloatVector(3, COSINE)"), "{:?}", d.columns.iter().map(|c| &c.data_type).collect::<Vec<_>>());
+        assert!(c.call::<String>("ddl", json!({ "name": "q_items" })).await.unwrap().contains("\"dim\": \"3\""));
+        assert!(c.query("POST /entities/query\n{collectionName: 'no_such_qurry', filter: ''}", 1).await.unwrap_err().to_string().contains("not found"));
+        c.query("POST /collections/drop\n{collectionName: 'q_items'}", 1).await.unwrap();
+    }
+
     #[test]
     fn driver_asset_names() {
         assert_eq!(asset_name("sqlite", "0.2.0", "aarch64-apple-darwin"), "qurry-driver-sqlite_0.2.0_aarch64-apple-darwin.tar.gz");

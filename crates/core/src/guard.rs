@@ -212,6 +212,17 @@ pub fn read_only_violation(sql: &str, kind: DbKind, strict: bool) -> Option<Stri
     if kind == DbKind::Redis {
         return None;
     }
+    let head = sql.trim_start().split(|c: char| c.is_whitespace() || c == '(').next().unwrap_or("").to_lowercase();
+    // 탐색기가 보내는 SELECT * FROM … 은 아래 SQL 규칙으로
+    if kind.is_vector() && head != "select" {
+        if crate::sql::split_statements(sql, kind).len() != 1 {
+            return Some("Read-only mode runs exactly one request".into());
+        }
+        return rest_read_violation(sql);
+    }
+    if kind == DbKind::Mongodb && head != "select" {
+        return mongo_read_violation(sql);
+    }
     if crate::sql::split_statements(sql, kind).len() != 1 {
         return Some("Read-only mode runs exactly one statement".into());
     }
@@ -245,6 +256,33 @@ pub fn read_only_violation(sql: &str, kind: DbKind, strict: bool) -> Option<Stri
         }
     }
     None
+}
+
+/// 벡터 DB REST: GET 과 읽기 POST (search · query · scroll · get · count · describe · list …) 만
+fn rest_read_violation(sql: &str) -> Option<String> {
+    let first = sql.trim().lines().next().unwrap_or("");
+    let mut parts = first.split_whitespace();
+    let method = parts.next().unwrap_or("").to_uppercase();
+    let path = parts.next().unwrap_or("").split('?').next().unwrap_or("").trim_end_matches('/').to_lowercase();
+    let last = path.rsplit('/').next().unwrap_or("");
+    const READS: &[&str] = &["search", "query", "scroll", "get", "count", "recommend", "discover", "facet", "groups", "describe", "list", "has", "get_stats", "get_load_state", "points"];
+    let ok = method == "GET" || (method == "POST" && (READS.contains(&last) || (last == "batch" && (path.contains("/search/") || path.contains("/query/") || path.contains("/recommend/")))));
+    (!ok).then(|| format!("Read-only mode: {method} {path} may change data (only GET and search/query requests run)"))
+}
+
+/// MongoDB 셸: 한 줄짜리 읽기 (find · aggregate (\$out/\$merge 없이) · count …) 만
+fn mongo_read_violation(sql: &str) -> Option<String> {
+    let t = sql.trim().trim_end_matches(';');
+    const READS: &[&str] = &["find", "findone", "aggregate", "countdocuments", "estimateddocumentcount", "count", "distinct", "getindexes", "stats"];
+    // db.<coll>.<method>( …  — 컬렉션 이름에 점이 있을 수 있어 마지막 '(' 앞 낱말을 본다
+    let call = t.strip_prefix("db.").and_then(|r| r.split_once('(')).map(|(head, _)| head.rsplit('.').next().unwrap_or("").to_lowercase());
+    let writes_stage = t.contains("$out") || t.contains("$merge");
+    // 이어진 호출 (.sort().limit()) 은 되지만 문장이 여럿이면 안 된다
+    let one = !t.contains(';');
+    match call {
+        Some(m) if READS.contains(&m.as_str()) && !writes_stage && one => None,
+        _ => Some("Read-only mode: only find / aggregate / count / distinct queries run".into()),
+    }
 }
 
 /// 쓰기 동사 (INSERT/UPDATE/DELETE/MERGE) 의 위치. 따옴표 이름과 쓰기가 아닌 쓰임
@@ -340,7 +378,30 @@ mod tests {
         assert_eq!(my("UPDATE a, b SET a.x = b.x WHERE a.id = b.id"), None);
     }
     use super::*;
-    use DbKind::{Mysql, Postgres};
+    use DbKind::{Chroma, Milvus, Mongodb, Mysql, Postgres, Qdrant};
+
+    #[test]
+    fn read_only_rest_and_mongo() {
+        let ok = |s: &str, k| read_only_violation(s, k, false).is_none();
+        assert!(ok("GET /collections", Qdrant));
+        assert!(ok("POST /collections/x/points/search\n{vector: [1]}", Qdrant));
+        assert!(ok("POST /collections/x/points/search/batch\n{}", Qdrant));
+        assert!(ok("POST /entities/query\n{collectionName: 'x'}", Milvus));
+        assert!(ok("SELECT * FROM qdrant.x", Qdrant));
+        assert!(!ok("PUT /collections/x/points\n{points: []}", Qdrant));
+        assert!(!ok("POST /collections/x/points/delete\n{}", Qdrant));
+        assert!(!ok("DELETE /collections/x", Chroma));
+        assert!(!ok("POST /collections/x/add\n{}", Chroma));
+        assert!(!ok("POST /entities/insert\n{}", Milvus));
+        assert!(!ok("GET /collections\nDELETE /collections/x", Qdrant));
+        assert!(ok("db.users.find({age: {$gt: 1}}).sort({age: -1}).limit(5)", Mongodb));
+        assert!(ok("db.users.aggregate([{$group: {_id: null}}])", Mongodb));
+        assert!(ok("SELECT * FROM shop.users", Mongodb));
+        assert!(!ok("db.users.aggregate([{$out: 'x'}])", Mongodb));
+        assert!(!ok("db.users.deleteMany({})", Mongodb));
+        assert!(!ok("db.users.find({}); db.users.drop()", Mongodb));
+        assert!(!ok("{\"dropDatabase\": 1}", Mongodb));
+    }
 
     #[test]
     fn read_only_blocks_known_bypasses() {
