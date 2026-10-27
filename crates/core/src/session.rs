@@ -272,6 +272,8 @@ pub enum Session {
     Pg(PgSession),
     My(crate::mysql::MySession),
     Redis(crate::redisdb::RedisConn),
+    /// 드라이버 플러그인: 서버 커서·수동 트랜잭션 없이 한 번에 (limit 까지)
+    Plugin(std::sync::Arc<crate::plugin::PluginConn>),
 }
 
 impl Session {
@@ -280,6 +282,7 @@ impl Session {
             crate::db::Pool::Pg(p) => Session::Pg(PgSession::open(p).await?),
             crate::db::Pool::My(p) => Session::My(crate::mysql::MySession::open(p).await?),
             crate::db::Pool::Redis(m, _) => Session::Redis(m.clone()),
+            crate::db::Pool::Plugin(c) => Session::Plugin(c.clone()),
         })
     }
     /// 취소용 백엔드 id (PG pid / MySQL connection id)
@@ -287,7 +290,7 @@ impl Session {
         match self {
             Session::Pg(s) => s.pid as i64,
             Session::My(s) => s.id,
-            Session::Redis(_) => 0,
+            Session::Redis(_) | Session::Plugin(_) => 0,
         }
     }
     pub async fn run(&mut self, sql: &str, limit: usize) -> AppResult<QueryResult> {
@@ -295,13 +298,14 @@ impl Session {
             Session::Pg(s) => s.run(sql, limit).await,
             Session::My(s) => s.run(sql, limit).await,
             Session::Redis(m) => crate::redisdb::run(m, sql, limit).await,
+            Session::Plugin(c) => c.query(sql, limit).await,
         }
     }
     pub async fn fetch(&mut self, limit: usize) -> AppResult<QueryResult> {
         match self {
             Session::Pg(s) => s.fetch(limit).await,
             Session::My(s) => s.fetch(limit).await,
-            Session::Redis(_) => Err(AppError::Msg("No more rows".into())),
+            Session::Redis(_) | Session::Plugin(_) => Err(AppError::Msg("No more rows".into())),
         }
     }
     pub async fn set_manual(&mut self, manual: bool) -> AppResult<()> {
@@ -309,27 +313,28 @@ impl Session {
             Session::Pg(s) => s.set_manual(manual).await,
             Session::My(s) => s.set_manual(manual).await,
             Session::Redis(_) => Err(AppError::Msg("Manual transactions are not supported for Redis (use MULTI / EXEC)".into())),
+            Session::Plugin(c) => Err(AppError::Msg(format!("Manual transactions are not supported by the {} driver yet (use BEGIN / COMMIT in the console)", c.driver))),
         }
     }
     pub async fn commit(&mut self) -> AppResult<()> {
         match self {
             Session::Pg(s) => s.commit().await,
             Session::My(s) => s.commit().await,
-            Session::Redis(_) => Ok(()),
+            Session::Redis(_) | Session::Plugin(_) => Ok(()),
         }
     }
     pub async fn rollback_tx(&mut self) -> AppResult<()> {
         match self {
             Session::Pg(s) => s.rollback_tx().await,
             Session::My(s) => s.rollback_tx().await,
-            Session::Redis(_) => Ok(()),
+            Session::Redis(_) | Session::Plugin(_) => Ok(()),
         }
     }
     pub async fn close_cursor(&mut self) {
         match self {
             Session::Pg(s) => s.close_cursor().await,
             Session::My(s) => s.close_cursor(),
-            Session::Redis(_) => {}
+            Session::Redis(_) | Session::Plugin(_) => {}
         }
     }
     /// 커밋 안 한 변경이 있는지
@@ -337,7 +342,7 @@ impl Session {
         match self {
             Session::Pg(s) => s.in_tx(),
             Session::My(s) => s.in_tx,
-            Session::Redis(_) => false,
+            Session::Redis(_) | Session::Plugin(_) => false,
         }
     }
     /// 탭을 닫을 때: 열린 트랜잭션을 되돌리고 세션 설정을 풀어서 풀에 돌려준다
@@ -345,7 +350,7 @@ impl Session {
         match self {
             Session::Pg(s) => s.discard().await,
             Session::My(s) => s.discard().await,
-            Session::Redis(_) => {}
+            Session::Redis(_) | Session::Plugin(_) => {}
         }
     }
     pub async fn close_idle_cursor(&mut self, idle: std::time::Duration) -> bool {
@@ -359,6 +364,7 @@ impl Session {
             Session::Pg(s) => s.ping().await,
             Session::My(s) => s.ping().await,
             Session::Redis(m) => crate::redisdb::ping(m).await,
+            Session::Plugin(_) => {}
         }
     }
 }

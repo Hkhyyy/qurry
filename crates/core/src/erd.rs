@@ -218,6 +218,7 @@ impl AppState {
             Pool::Pg(p) => pg(&p, &schemas).await?,
             Pool::My(p) => my(&p, &schemas).await?,
             Pool::Redis(..) => return Err(crate::error::AppError::Msg("Redis has no tables".into())),
+            Pool::Plugin(c) => return Err(crate::error::AppError::Msg(format!("Diagrams are not available for the {} driver yet", c.driver))),
         };
         // 고른 스키마 순서대로
         e.tables.sort_by_key(|t| (schemas.iter().position(|s| *s == t.schema).unwrap_or(usize::MAX), t.schema.clone(), t.name.clone()));

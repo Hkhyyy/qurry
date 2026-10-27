@@ -253,6 +253,7 @@ impl AppState {
                     run_tool(cmd, "mysqldump", None, Some(&file), Some(&file), &job).await?;
                 }
                 DbKind::Redis => return Err(AppError::Msg("Back up Redis with BGSAVE / its RDB file".into())),
+                k => return Err(AppError::Msg(format!("Back up is not available for {k:?} data sources yet"))),
             }
             Ok(std::fs::metadata(&file)?.len())
         }
@@ -309,6 +310,7 @@ impl AppState {
                     run_tool(cmd, "mysql", Some(&file), None, None, &job).await?;
                 }
                 DbKind::Redis => return Err(AppError::Msg("Restore Redis from its RDB file".into())),
+                k => return Err(AppError::Msg(format!("Restore is not available for {k:?} data sources yet"))),
             }
             Ok(())
         }

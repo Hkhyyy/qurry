@@ -1657,6 +1657,9 @@ impl App {
                             (DbKind::Mysql, false) => format!("EXPLAIN {bare}"),
                             (DbKind::Mysql, true) => format!("EXPLAIN ANALYZE {bare}"),
                             (DbKind::Redis, _) => s.clone(),
+                            // 드라이버: 대부분 EXPLAIN 을 받는다 (SQL Server 는 SHOWPLAN 이라 그대로 실행된다)
+                            (_, true) => format!("EXPLAIN ANALYZE {bare}"),
+                            (_, false) => format!("EXPLAIN {bare}"),
                         }
                     } else {
                         s.clone()
@@ -2001,11 +2004,7 @@ impl App {
             options: Default::default(), ssl: None, redis: None,
         });
         let ssh = c.ssh.clone().unwrap_or(SshConfig { enabled: false, host: String::new(), port: 22, user: String::new(), auth: SshAuth::Key, key_path: "~/.ssh/id_ed25519".into() });
-        let kind = match c.kind {
-            DbKind::Postgres => "postgres",
-            DbKind::Mysql => "mysql",
-            DbKind::Redis => "redis",
-        };
+        let kind = serde_json::to_value(c.kind).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_else(|| "postgres".into());
         let f = |label, value: String, kind| Field { label, value, kind };
         let saved = |b: bool| if b { "<saved>".to_string() } else { String::new() };
         let color = crate::ui::color_name(c.color.as_deref());
@@ -2017,7 +2016,7 @@ impl App {
             fields: vec![
                 f("Name", c.name.clone(), FieldKind::Text),
                 f("Color", color.into(), FieldKind::Choice(colors)),
-                f("Type", kind.into(), FieldKind::Choice(vec!["postgres", "mysql", "redis"])),
+                f("Type", kind, FieldKind::Choice(vec!["postgres", "mysql", "redis", "sqlite", "duckdb", "mssql", "clickhouse", "mongodb", "oracle"])),
                 f("Host", c.host.clone(), FieldKind::Text),
                 f("Port", c.port.to_string(), FieldKind::Text),
                 f("User", c.user.clone(), FieldKind::Text),
@@ -2066,11 +2065,7 @@ impl App {
             read_only: false,
             options: Default::default(), ssl: None, redis: None,
         });
-        c.kind = match v("Type").as_str() {
-            "mysql" => DbKind::Mysql,
-            "redis" => DbKind::Redis,
-            _ => DbKind::Postgres,
-        };
+        c.kind = serde_json::from_value(serde_json::Value::String(v("Type"))).unwrap_or(DbKind::Postgres);
         c.host = v("Host").trim().into();
         c.port = v("Port").trim().parse().map_err(|_| "Port must be a number".to_string())?;
         c.user = v("User").trim().into();

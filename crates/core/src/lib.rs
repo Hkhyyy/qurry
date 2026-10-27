@@ -20,6 +20,7 @@ pub mod error;
 pub mod guard;
 pub mod history;
 pub mod meta;
+pub mod plugin;
 pub mod migrate;
 pub mod mysql;
 pub mod plan;

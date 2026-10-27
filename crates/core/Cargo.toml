@@ -21,3 +21,4 @@ redis = { version = "1.7.1", features = ["tokio-comp", "connection-manager", "to
 dirs = "6"
 csv = "1"
 regex = "1"
+qurry-driver = { workspace = true }

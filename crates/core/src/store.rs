@@ -14,6 +14,33 @@ pub enum DbKind {
     Postgres,
     Mysql,
     Redis,
+    // 아래는 드라이버 플러그인 (필요할 때 받는다): crate::plugin
+    Sqlite,
+    Mssql,
+    Clickhouse,
+    Duckdb,
+    Mongodb,
+    Oracle,
+}
+
+impl DbKind {
+    /// 드라이버 플러그인 이름 (기본으로 들어 있는 PG·MySQL·Redis 는 None)
+    pub fn driver(self) -> Option<&'static str> {
+        match self {
+            DbKind::Postgres | DbKind::Mysql | DbKind::Redis => None,
+            DbKind::Sqlite => Some("sqlite"),
+            DbKind::Mssql => Some("mssql"),
+            DbKind::Clickhouse => Some("clickhouse"),
+            DbKind::Duckdb => Some("duckdb"),
+            DbKind::Mongodb => Some("mongodb"),
+            DbKind::Oracle => Some("oracle"),
+        }
+    }
+
+    /// 파일 하나가 DB 인 것 (호스트·포트 대신 파일 경로)
+    pub fn is_file(self) -> bool {
+        matches!(self, DbKind::Sqlite | DbKind::Duckdb)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

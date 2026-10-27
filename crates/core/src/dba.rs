@@ -222,7 +222,7 @@ fn sqls(d: &Def, kind: DbKind) -> &'static [&'static str] {
     match kind {
         DbKind::Postgres => d.pg,
         DbKind::Mysql => d.my,
-        DbKind::Redis => &[],
+        _ => &[],
     }
 }
 
@@ -321,7 +321,7 @@ impl AppState {
             (DbKind::Postgres, true) => format!("SELECT pg_terminate_backend({pid})"),
             (DbKind::Mysql, false) => format!("KILL QUERY {pid}"),
             (DbKind::Mysql, true) => format!("KILL {pid}"),
-            (DbKind::Redis, _) => return Err(AppError::Msg("Not available for Redis".into())),
+            (k, _) => return Err(AppError::Msg(format!("Not available for {k:?}"))),
         };
         let r = ensure_pool(self, &id).await?.run_query(&q, 1).await?;
         Ok(match r.rows.first().and_then(|x| x.first()) {

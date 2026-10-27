@@ -1,0 +1,175 @@
+//! 드라이버 플러그인 호스트: qurry-driver-<이름> 실행 파일을 띄워 stdio 로 JSON 한 줄씩 주고받는다 (프로토콜: crates/driver).
+//! 실행 파일 위치: QURRY_DRIVERS_DIR → 설정 폴더/drivers → 이 실행 파일 옆 (개발 빌드)
+use crate::error::{AppError, AppResult};
+use crate::store::{ConnectionConfig, DbKind};
+use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+/// 드라이버가 깔려 있지 않다 (UI 는 이 글로 시작하면 받을지 묻는다)
+pub const MISSING: &str = "Driver not installed:";
+
+pub fn exe_name(driver: &str) -> String {
+    format!("qurry-driver-{driver}{}", std::env::consts::EXE_SUFFIX)
+}
+
+/// 받은 드라이버를 두는 폴더
+pub fn drivers_dir() -> PathBuf {
+    crate::config_dir().join("drivers")
+}
+
+/// 드라이버 실행 파일 (없으면 None)
+pub fn driver_path(driver: &str) -> Option<PathBuf> {
+    let name = exe_name(driver);
+    let mut dirs: Vec<PathBuf> = vec![];
+    if let Some(d) = std::env::var_os("QURRY_DRIVERS_DIR") {
+        dirs.push(d.into());
+    }
+    dirs.push(drivers_dir());
+    // 개발 빌드: target/debug 에 같이 있다. 앱 번들: 실행 파일 옆
+    if let Some(d) = std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf())) {
+        dirs.push(d.clone());
+        if let Some(up) = d.parent() {
+            dirs.push(up.to_path_buf());
+        }
+    }
+    dirs.into_iter().map(|d| d.join(&name)).find(|p| p.is_file())
+}
+
+struct Io {
+    stdin: tokio::process::ChildStdin,
+    stdout: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+}
+
+/// 띄운 드라이버 하나 (접속 하나)
+pub struct PluginConn {
+    pub driver: String,
+    io: tokio::sync::Mutex<Io>,
+    child: std::sync::Mutex<tokio::process::Child>,
+    next: AtomicU64,
+}
+
+impl std::fmt::Debug for PluginConn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PluginConn({})", self.driver)
+    }
+}
+
+impl Drop for PluginConn {
+    fn drop(&mut self) {
+        if let Ok(mut c) = self.child.lock() {
+            let _ = c.start_kill();
+        }
+    }
+}
+
+impl PluginConn {
+    /// 드라이버를 띄우고 프로토콜을 맞춘다
+    pub async fn start(driver: &str) -> AppResult<std::sync::Arc<Self>> {
+        let path = driver_path(driver).ok_or_else(|| AppError::Msg(format!("{MISSING} {driver}")))?;
+        let mut child = tokio::process::Command::new(&path)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            // 드라이버의 stderr 가 TUI 화면을 깨뜨리지 않게
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| AppError::Msg(format!("Could not start the {driver} driver ({}): {e}", path.display())))?;
+        let io = Io { stdin: child.stdin.take().unwrap(), stdout: BufReader::new(child.stdout.take().unwrap()).lines() };
+        let c = std::sync::Arc::new(PluginConn { driver: driver.into(), io: tokio::sync::Mutex::new(io), child: std::sync::Mutex::new(child), next: AtomicU64::new(1) });
+        let hello: Value = c.call("hello", Value::Null).await?;
+        let proto = hello.get("protocol").and_then(Value::as_u64).unwrap_or(0);
+        if proto != qurry_driver::PROTOCOL as u64 {
+            return Err(AppError::Msg(format!("The {driver} driver speaks protocol {proto}, this Qurry needs {} — update the driver", qurry_driver::PROTOCOL)));
+        }
+        Ok(c)
+    }
+
+    /// 요청 하나 → 결과 (한 번에 하나씩)
+    pub async fn call<T: DeserializeOwned>(&self, method: &str, params: Value) -> AppResult<T> {
+        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        let mut io = self.io.lock().await;
+        let line = json!({ "id": id, "method": method, "params": params }).to_string() + "\n";
+        let gone = |e: std::io::Error| AppError::Msg(format!("The {} driver stopped: {e}", self.driver));
+        io.stdin.write_all(line.as_bytes()).await.map_err(gone)?;
+        io.stdin.flush().await.map_err(gone)?;
+        loop {
+            let Some(l) = io.stdout.next_line().await.map_err(gone)? else {
+                return Err(AppError::Msg(format!("The {} driver stopped", self.driver)));
+            };
+            let Ok(v) = serde_json::from_str::<Value>(&l) else { continue };
+            if v.get("id").and_then(Value::as_u64) != Some(id) {
+                continue;
+            }
+            if let Some(e) = v.get("error").and_then(Value::as_str) {
+                return Err(AppError::Msg(e.to_string()));
+            }
+            return serde_json::from_value(v.get("result").cloned().unwrap_or(Value::Null)).map_err(|e| AppError::Msg(format!("The {} driver sent an unexpected reply: {e}", self.driver)));
+        }
+    }
+
+    pub async fn query(&self, sql: &str, limit: usize) -> AppResult<crate::db::QueryResult> {
+        let start = std::time::Instant::now();
+        let o: qurry_driver::QueryOut = self.call("query", json!({ "sql": sql, "limit": limit })).await?;
+        Ok(crate::db::QueryResult {
+            columns: o.columns.into_iter().map(|c| crate::db::ColumnInfo { name: c.name, type_name: c.type_name }).collect(),
+            rows: o.rows,
+            rows_affected: o.rows_affected,
+            truncated: o.truncated,
+            elapsed_ms: start.elapsed().as_millis() as u64,
+            has_result_set: o.has_result_set,
+            in_transaction: false,
+        })
+    }
+}
+
+/// 드라이버로 접속한다
+pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, port: Option<u16>) -> AppResult<std::sync::Arc<PluginConn>> {
+    let driver = cfg.kind.driver().ok_or_else(|| AppError::Msg(format!("{:?} has no driver plugin", cfg.kind)))?;
+    let c = PluginConn::start(driver).await?;
+    let params = qurry_driver::ConnectParams {
+        host: if port.is_some() { "127.0.0.1".into() } else { cfg.host.clone() },
+        port: port.unwrap_or(cfg.port),
+        user: cfg.user.clone(),
+        password: password.map(String::from),
+        database: cfg.database.clone(),
+        options: json!({ "readOnly": cfg.read_only, "ssl": cfg.active_ssl().map(|s| s.mode().to_string()) }),
+    };
+    let _: Value = c.call("connect", serde_json::to_value(params)?).await?;
+    Ok(c)
+}
+
+/// 드라이버가 없는 DB 종류인지
+pub fn is_plugin(kind: DbKind) -> bool {
+    kind.driver().is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 개발 빌드의 SQLite 드라이버로 접속·조회·메타 (cargo build -p qurry-driver-sqlite 가 먼저 있어야 한다)
+    #[tokio::test]
+    async fn sqlite_driver_roundtrip() {
+        if driver_path("sqlite").is_none() {
+            eprintln!("skip: build qurry-driver-sqlite first");
+            return;
+        }
+        let file = std::env::temp_dir().join(format!("qurry-{}.db", uuid::Uuid::new_v4()));
+        let cfg: ConnectionConfig = serde_json::from_value(json!({ "id": "s", "name": "s", "kind": "sqlite", "host": "", "port": 0, "user": "", "database": file.to_string_lossy() })).unwrap();
+        let c = connect(&cfg, None, None).await.unwrap();
+        c.query("create table t (id integer primary key, name text not null)", 10).await.unwrap();
+        assert_eq!(c.query("insert into t values (1, 'a'), (2, 'b')", 10).await.unwrap().rows_affected, 2);
+        let r = c.query("select * from t order by id", 1).await.unwrap();
+        assert_eq!((r.rows.len(), r.truncated, r.columns[1].name.as_str()), (1, true, "name"));
+        assert!(c.query("select * from nope", 10).await.unwrap_err().to_string().contains("no such table"));
+        drop(c);
+        std::fs::remove_file(file).ok();
+        // 없는 드라이버는 정해진 글로 (UI 가 받을지 묻는다)
+        let e = PluginConn::start("nope").await.unwrap_err().to_string();
+        assert!(e.starts_with(MISSING), "{e}");
+    }
+}
+

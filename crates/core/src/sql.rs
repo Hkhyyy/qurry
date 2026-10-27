@@ -15,6 +15,9 @@ pub fn default_db(cfg: &ConnectionConfig) -> String {
         DbKind::Postgres => if cfg.database.trim().is_empty() { "postgres".into() } else { cfg.database.trim().into() },
         DbKind::Mysql => cfg.database.trim().into(),
         DbKind::Redis => format!("db{}", crate::redisdb::db_index(&cfg.database)),
+        // 파일 DB 는 main, 나머지 드라이버는 정한 DB 이름 그대로
+        k if k.is_file() => "main".into(),
+        _ => cfg.database.trim().into(),
     }
 }
 
@@ -42,6 +45,9 @@ pub fn quote_ident(kind: DbKind, s: &str) -> String {
         DbKind::Mysql => if simple(false) { s.into() } else { format!("`{}`", s.replace('`', "``")) },
         DbKind::Redis => s.into(),
         DbKind::Postgres => if simple(true) { s.into() } else { format!("\"{}\"", s.replace('"', "\"\"")) },
+        // 드라이버: 표준 따옴표 (SQL Server·Oracle·ClickHouse·SQLite·DuckDB 모두 "…" 를 받는다). 대소문자를 바꾸지 않게 소문자만 그대로
+        DbKind::Mongodb => s.into(),
+        _ => if simple(true) { s.into() } else { format!("\"{}\"", s.replace('"', "\"\"")) },
     }
 }
 

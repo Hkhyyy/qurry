@@ -77,6 +77,10 @@ pub fn visible_dbs(cfg: &ConnectionConfig, dbs: Vec<String>, def: &str) -> Vec<S
         store::DbKind::Postgres => &["template0", "template1", "rdsadmin"],
         store::DbKind::Mysql => &crate::mysql::SYSTEM_DBS,
         store::DbKind::Redis => &[],
+        store::DbKind::Mssql => &["master", "tempdb", "model", "msdb"],
+        store::DbKind::Mongodb => &["admin", "config", "local"],
+        store::DbKind::Clickhouse => &["system", "information_schema", "INFORMATION_SCHEMA"],
+        _ => &[],
     };
     let scoped = cfg.scope.databases.as_ref().map(|d| !d.is_empty()).unwrap_or(false);
     dbs.into_iter()
@@ -231,6 +235,11 @@ pub async fn housekeeping(state: &AppState) -> Vec<String> {
     dropped
 }
 
+/// 드라이버 풀의 내보내기 (전체를 한 번에 받아 쓴다)
+async fn pool_export(pool: &Pool, sql: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {
+    pool.export(sql, out).await
+}
+
 pub async fn ensure_pool(state: &AppState, id: &str) -> AppResult<Pool> {
     touch(state, id);
     if let Some(p) = state.pools.read().await.get(id) {
@@ -241,7 +250,8 @@ pub async fn ensure_pool(state: &AppState, id: &str) -> AppResult<Pool> {
         .store
         .get(base)?
         .ok_or_else(|| AppError::Msg("Data source not found".into()))?;
-    if let Some(db) = db {
+    // 파일 DB (SQLite·DuckDB) 는 database 가 파일 경로다: DB 이름(main)으로 덮지 않는다
+    if let Some(db) = db.filter(|_| !cfg.kind.is_file()) {
         cfg.database = db.to_string();
     }
     let password = state.secret(base)?;
@@ -344,6 +354,8 @@ impl AppState {
                 }
                 crate::redisdb::run(&m, &sql, limit).await
             }
+            // 드라이버: 서버 쪽 READ ONLY 트랜잭션이 없다 — guard 검사(한 문장·읽기 명령)를 통과한 것만
+            Pool::Plugin(c) => c.query(&sql, limit).await,
         }
     }
 
@@ -372,6 +384,7 @@ impl AppState {
                 r?
             }
             Pool::Redis(..) => return Err(AppError::Msg("CSV export of Redis commands is not available in read-only mode".into())),
+            Pool::Plugin(_) => pool_export(&pool, &sql, &mut out).await?,
         }
         Ok(out.finish().await?.rows)
     }
@@ -539,7 +552,7 @@ impl AppState {
         match ensure_pool(self, &conn_id).await? {
             Pool::Pg(pg) => session::cancel(&pg, pid as i32).await,
             Pool::My(my) => crate::mysql::cancel(&my, pid).await,
-            Pool::Redis(..) => Ok(false),
+            Pool::Redis(..) | Pool::Plugin(_) => Ok(false),
         }
     }
 
@@ -634,6 +647,16 @@ impl AppState {
                     crate::redisdb::run(&m, st, 1).await?;
                 }
                 Ok(statements.len() as u64)
+            }
+            // 드라이버: 차례로 (트랜잭션은 드라이버가 모른다 — exact_one 만 지킨다)
+            Pool::Plugin(c) => {
+                let mut affected = 0;
+                for st in &statements {
+                    let n = c.query(st, 1).await?.rows_affected;
+                    session::check_exact_one(st, n, exact_one)?;
+                    affected += n;
+                }
+                Ok(affected)
             }
         };
         match r {

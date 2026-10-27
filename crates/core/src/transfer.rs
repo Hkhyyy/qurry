@@ -487,6 +487,7 @@ impl AppState {
             Pool::Pg(p) => Tx::Pg(p.begin().await?),
             Pool::My(p) => Tx::My(p.begin().await?),
             Pool::Redis(..) => return Err(AppError::Msg("Import into Redis is not supported".into())),
+            Pool::Plugin(c) => return Err(AppError::Msg(format!("Import is not available for the {} driver yet", c.driver))),
         };
         if spec.create {
             let ty = if kind == DbKind::Mysql { "TEXT" } else { "text" };

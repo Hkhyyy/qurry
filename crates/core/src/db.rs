@@ -14,6 +14,8 @@ pub enum Pool {
     My(sqlx::MySqlPool),
     /// (연결, 이 풀이 가리키는 DB 번호)
     Redis(crate::redisdb::RedisConn, i64),
+    /// 드라이버 플러그인 (따로 띄운 프로세스)
+    Plugin(std::sync::Arc<crate::plugin::PluginConn>),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -51,6 +53,7 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>) -> AppResul
 /// `tunnel_port`가 있으면 SSH 터널의 로컬 포트로 접속한다.
 pub async fn connect_via(cfg: &ConnectionConfig, password: Option<&str>, tunnel_port: Option<u16>) -> AppResult<Pool> {
     match cfg.kind {
+        DbKind::Sqlite | DbKind::Mssql | DbKind::Clickhouse | DbKind::Duckdb | DbKind::Mongodb | DbKind::Oracle => Ok(Pool::Plugin(crate::plugin::connect(cfg, password, tunnel_port).await?)),
         DbKind::Postgres => {
             let (host, port) = match tunnel_port {
                 Some(p) => ("127.0.0.1", p),
@@ -144,6 +147,7 @@ impl Pool {
             Pool::Pg(p) => Ok(sqlx::query_scalar::<_, String>("select version()").fetch_one(p).await?),
             Pool::My(p) => crate::mysql::server_version(p).await,
             Pool::Redis(m, _) => crate::redisdb::server_version(m).await,
+            Pool::Plugin(c) => Ok(c.query("SELECT 1", 1).await.map(|_| format!("{} (driver)", c.driver)).unwrap_or_else(|_| format!("{} (driver)", c.driver))),
         }
     }
 
@@ -151,7 +155,7 @@ impl Pool {
         match self {
             Pool::Pg(p) => p.close().await,
             Pool::My(p) => p.close().await,
-            Pool::Redis(..) => {}
+            Pool::Redis(..) | Pool::Plugin(_) => {}
         }
     }
 
@@ -161,6 +165,14 @@ impl Pool {
             Pool::Pg(p) => export_pg(p, sql, out).await,
             Pool::My(p) => crate::mysql::export(p, sql, out).await,
             Pool::Redis(m, _) => crate::redisdb::export(m, sql, out).await,
+            Pool::Plugin(c) => {
+                let r = c.query(sql, 10_000_000).await?;
+                out.header(&r.columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>()).await?;
+                for row in &r.rows {
+                    out.row(row).await?;
+                }
+                Ok(())
+            }
         }
     }
 
@@ -177,6 +189,7 @@ impl Pool {
             Pool::Pg(p) => run_pg(p, sql, limit).await,
             Pool::My(p) => crate::mysql::run(p, sql, limit).await,
             Pool::Redis(m, _) => crate::redisdb::run(m, sql, limit).await,
+            Pool::Plugin(c) => c.query(sql, limit).await,
         }
     }
 
@@ -195,6 +208,7 @@ impl Pool {
                 let _ = sqlx::query("select 1").execute(p).await;
             }
             Pool::Redis(m, _) => crate::redisdb::ping(m).await,
+            Pool::Plugin(_) => {}
         }
     }
 }

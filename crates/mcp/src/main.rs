@@ -269,6 +269,7 @@ impl Server {
                     DbKind::Postgres => format!("EXPLAIN ({}FORMAT TEXT) {q}", if analyze { "ANALYZE, BUFFERS, " } else { "" }),
                     DbKind::Mysql => format!("EXPLAIN {}{q}", if analyze { "ANALYZE " } else { "" }),
                     DbKind::Redis => return Err("EXPLAIN is not available for Redis".into()),
+                    _ => format!("EXPLAIN {q}"),
                 };
                 let r = st.run_read_only(t, sqlq, MAX_ROWS).await.map_err(e)?;
                 if kind == DbKind::Postgres {

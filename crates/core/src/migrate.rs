@@ -366,6 +366,7 @@ impl AppState {
                 Pool::Pg(p) => pg_model(p, &pool, &schema).await,
                 Pool::My(p) => my_model(p, &schema).await,
                 Pool::Redis(..) => Err(AppError::Msg("Redis has no schema to compare".into())),
+                Pool::Plugin(c) => Err(AppError::Msg(format!("Schema compare is not available for the {} driver yet", c.driver))),
             }
         };
         let (s, t) = (model(sp, source_schema.clone()).await?, model(tp, target_schema.clone()).await?);
@@ -591,6 +592,7 @@ impl AppState {
                     tx.commit().await.map_err(|e| fail(e.to_string()))?;
                 }
                 Pool::Redis(..) => return Err(AppError::Msg("Redis has no migrations".into())),
+                Pool::Plugin(c) => return Err(AppError::Msg(format!("Migrations are not available for the {} driver yet", c.driver))),
             }
             done.push(m.version.clone());
         }
