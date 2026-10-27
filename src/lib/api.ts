@@ -197,6 +197,19 @@ export interface ErdRelation { name: string; fromSchema: string; fromTable: stri
 export const erd = (id: string, schemas: string[]) => invoke<[{ tables: ErdTable[]; relations: ErdRelation[] }, string]>("erd", { id, schemas });
 /** 글을 파일로 저장 (저장 창). 취소하면 null */
 export const saveFile = (defaultName: string, text: string, filter: string, ext: string) => invoke<string | null>("save_file", { defaultName, text, filter, ext });
+export interface SchemaChange { kind: string; object: string; sql: string; destructive: boolean }
+export interface DataDiff { same: number; onlySource: number; onlyTarget: number; different: number; sql: string; truncated: boolean }
+export interface Migration { version: string; description: string; file: string; checksum: string; status: "pending" | "applied" | "changed" | "missing"; appliedAt: string | null }
+/** 스키마·데이터 비교, 마이그레이션 파일 (폴더는 pickFolder 로 고른 것만) */
+export const migrate = {
+  compareSchemas: (sourceId: string, sourceSchema: string, targetId: string, targetSchema: string) => invoke<SchemaChange[]>("compare_schemas", { sourceId, sourceSchema, targetId, targetSchema }),
+  compareData: (sourceId: string, sourceSchema: string, sourceTable: string, targetId: string, targetSchema: string, targetTable: string) =>
+    invoke<DataDiff>("compare_data", { sourceId, sourceSchema, sourceTable, targetId, targetSchema, targetTable }),
+  pickFolder: () => invoke<string | null>("pick_folder"),
+  status: (id: string, dir: string) => invoke<Migration[]>("migration_status", { id, dir }),
+  apply: (id: string, dir: string) => invoke<string[]>("apply_migrations", { id, dir }),
+  save: (dir: string, description: string, sql: string) => invoke<string>("save_migration", { dir, description, sql }),
+};
 export const dba = {
   reports: (id: string) => invoke<DbaReportInfo[]>("dba_reports", { id }),
   run: (id: string, report: string) => invoke<QueryResult>("dba_report", { id, report }),

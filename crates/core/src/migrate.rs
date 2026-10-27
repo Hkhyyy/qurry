@@ -578,7 +578,7 @@ impl AppState {
                 Pool::Pg(p) => {
                     let mut tx = p.begin().await?;
                     for s in stmts.iter().chain(std::iter::once(&insert)) {
-                        sqlx::raw_sql(s).execute(&mut *tx).await.map_err(|e| fail(e.to_string()))?;
+                        sqlx::Executor::execute(&mut *tx, sqlx::raw_sql(s.as_str())).await.map_err(|e| fail(e.to_string()))?;
                     }
                     tx.commit().await.map_err(|e| fail(e.to_string()))?;
                 }
@@ -586,7 +586,7 @@ impl AppState {
                     // MySQL: DDL 은 저절로 커밋된다 (데이터 문장만 함께 되돌린다)
                     let mut tx = p.begin().await?;
                     for s in stmts.iter().chain(std::iter::once(&insert)) {
-                        sqlx::raw_sql(s).execute(&mut *tx).await.map_err(|e| fail(e.to_string()))?;
+                        sqlx::Executor::execute(&mut *tx, sqlx::raw_sql(s.as_str())).await.map_err(|e| fail(e.to_string()))?;
                     }
                     tx.commit().await.map_err(|e| fail(e.to_string()))?;
                 }

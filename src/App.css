@@ -726,3 +726,25 @@ html, body, #root, * { overscroll-behavior: none; }
 .erd-table { cursor: move; }
 .erd-edge { fill: none; stroke: var(--muted); stroke-width: 1.4; opacity: .7; }
 .erd-edge.on { stroke: var(--accent); stroke-width: 2.2; opacity: 1; }
+
+/* 비교·마이그레이션 */
+.mig { display: flex; flex-direction: column; height: 100%; padding: 8px 12px; gap: 8px; box-sizing: border-box; }
+.mig-tabs { margin: 0; }
+.mig-end { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.mig-label { width: 64px; color: var(--muted); font-size: 12px; }
+.mig-end select { max-width: 220px; }
+.mig-actions { display: flex; gap: 8px; align-items: center; }
+.mig-actions .muted { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mig-body { flex: 1; min-height: 0; display: flex; gap: 8px; }
+.mig-list { width: 40%; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
+.mig-item { display: flex; gap: 8px; align-items: center; padding: 3px 8px; font-size: 12px; border-bottom: 1px solid var(--border); }
+.mig-item.danger .mig-kind { color: var(--danger); }
+.mig-kind { min-width: 110px; color: var(--accent); }
+.mig-sql { flex: 1; margin: 0; overflow: auto; border: 1px solid var(--border); border-radius: 6px; padding: 8px; font-size: 12px; white-space: pre-wrap; }
+.mig-sql.full { min-height: 0; }
+.mig-counts { font-size: 13px; }
+.mig-table { flex: 1; max-height: none; }
+.mig-st.pending { color: var(--accent); }
+.mig-st.changed, .mig-st.missing { color: var(--danger); }
+.mig-st.applied { color: var(--ok); }
+.danger { color: var(--danger); }

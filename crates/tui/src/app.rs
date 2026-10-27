@@ -231,6 +231,8 @@ pub enum PAction {
     Dba(String),
     /// 히스토리·스니펫에서 고른 쿼리를 콘솔에
     InsertSql(String),
+    /// 여러 단계 고르기 (비교·마이그레이션): 고른 값
+    Pick(String),
     /// DBA 리포트 행 동작 (템플릿 SQL → 콘솔)
     DbaSql(String),
     /// 내보내기: 형식을 골랐다 → 대상 고르기
@@ -336,6 +338,9 @@ pub enum Action {
     CopyInList,
     Find,
     DbaReports,
+    CompareSchemas,
+    CompareData,
+    RunMigrations,
     ShowDiagram,
     QueryHistory,
     Snippets,
@@ -398,6 +403,9 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::Snippets, "Snippets…", ""),
     (Action::SaveSnippet, "Save Query as Snippet…", ""),
     (Action::ShowDiagram, "Show Diagram (ERD): foreign keys of a schema, as text + Mermaid", ""),
+    (Action::CompareSchemas, "Compare Schemas… (DDL to make one schema look like another)", ""),
+    (Action::CompareData, "Compare Table Data… (sync SQL by primary key)", ""),
+    (Action::RunMigrations, "Run Migrations… (folder of V1__name.sql files)", ""),
     (Action::DbaReports, "Database Admin… (sessions & locks, slow queries, sizes, indexes, vacuum, server, privileges)", ""),
     (Action::ImportData, "Import Data from File… (CSV, TSV, JSON)", ""),
     (Action::CancelTransfer, "Cancel Export/Import", ""),
@@ -504,6 +512,8 @@ pub struct App {
     pub jobs: Vec<(String, String, Arc<qurry_core::transfer::Job>)>,
     /// 다음 Explain 은 ANALYZE (실제로 실행해서 시간·행 수)
     pub analyze_next: bool,
+    /// 여러 단계 고르기 중 (비교·마이그레이션)
+    pub flow: Option<crate::migrate::Flow>,
     pub focus: Focus,
     pub explorer: bool,
     pub popup: Option<Popup>,
@@ -595,6 +605,7 @@ impl App {
             mru: vec![],
             jobs: vec![],
             analyze_next: false,
+            flow: None,
             focus: Focus::Tree,
             explorer: true,
             popup: None,
@@ -2221,6 +2232,7 @@ impl App {
             PAction::ExportFormat(f) => self.export_dest(f),
             PAction::Dba(r) => self.dba_open(r),
             PAction::InsertSql(q) => self.insert_sql(q),
+            PAction::Pick(v) => self.flow_pick(v),
             PAction::DbaSql(t) => self.dba_sql(t),
             PAction::ExportTo(f, clipboard) => self.export_to(f, clipboard),
             PAction::Exec(e) => {
@@ -2424,6 +2436,9 @@ impl App {
             Action::ImportData => self.import_start(),
             Action::Find => self.find_open(),
             Action::DbaReports => self.dba_palette(),
+            Action::CompareSchemas => self.compare_schemas_start(),
+            Action::CompareData => self.compare_data_start(),
+            Action::RunMigrations => self.migrations_start(),
             Action::ShowDiagram => self.erd_open(),
             Action::QueryHistory => self.history_palette(),
             Action::Snippets => self.snippets_palette(),

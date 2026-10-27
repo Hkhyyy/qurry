@@ -263,6 +263,55 @@ pub fn snippet_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
     state.history.delete_snippet(&id)
 }
 
+// ───────── 스키마·데이터 비교, 마이그레이션 ─────────
+
+#[tauri::command]
+pub async fn compare_schemas(state: State<'_, AppState>, source_id: String, source_schema: String, target_id: String, target_schema: String) -> AppResult<Vec<qurry_core::migrate::Change>> {
+    state.compare_schemas(source_id, source_schema, target_id, target_schema).await
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn compare_data(state: State<'_, AppState>, source_id: String, source_schema: String, source_table: String, target_id: String, target_schema: String, target_table: String) -> AppResult<qurry_core::migrate::DataDiff> {
+    state.compare_data(source_id, source_schema, source_table, target_id, target_schema, target_table).await
+}
+
+/// 이번에 고른 폴더만 쓴다 (웹뷰가 아무 폴더의 SQL 을 돌리게 하지 않도록)
+#[derive(Default)]
+pub struct PickedDirs(pub std::sync::Mutex<std::collections::HashSet<String>>);
+
+fn picked(dirs: &PickedDirs, dir: &str) -> AppResult<()> {
+    if dirs.0.lock().unwrap().contains(dir) { Ok(()) } else { Err(crate::error::AppError::Msg("Choose the migrations folder first".into())) }
+}
+
+/// 마이그레이션 폴더 고르기
+#[tauri::command]
+pub async fn pick_folder(app: tauri::AppHandle, dirs: State<'_, PickedDirs>) -> AppResult<Option<String>> {
+    let Some(p) = app.dialog().file().blocking_pick_folder().and_then(|p| p.into_path().ok()) else { return Ok(None) };
+    let s = p.display().to_string();
+    dirs.0.lock().unwrap().insert(s.clone());
+    Ok(Some(s))
+}
+
+#[tauri::command]
+pub async fn migration_status(state: State<'_, AppState>, dirs: State<'_, PickedDirs>, id: String, dir: String) -> AppResult<Vec<qurry_core::migrate::Migration>> {
+    picked(&dirs, &dir)?;
+    state.migration_status(id, dir).await
+}
+
+#[tauri::command]
+pub async fn apply_migrations(state: State<'_, AppState>, dirs: State<'_, PickedDirs>, id: String, dir: String) -> AppResult<Vec<String>> {
+    picked(&dirs, &dir)?;
+    state.apply_migrations(id, dir).await
+}
+
+/// 비교 결과를 다음 버전 파일로 (V{n}__{설명}.sql)
+#[tauri::command]
+pub async fn save_migration(dirs: State<'_, PickedDirs>, dir: String, description: String, sql: String) -> AppResult<String> {
+    picked(&dirs, &dir)?;
+    qurry_core::migrate::save_migration(&dir, &description, &sql)
+}
+
 /// ERD: 스키마들의 테이블·관계 (+ Mermaid 글)
 #[tauri::command]
 pub async fn erd(state: State<'_, AppState>, id: String, schemas: Vec<String>) -> AppResult<(qurry_core::erd::Erd, String)> {

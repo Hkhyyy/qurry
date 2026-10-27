@@ -27,6 +27,7 @@ import { connBg, getThemePref, setThemePref, THEME_LABEL, ThemePref, useTheme } 
 import { ExportDialog, ImportDialog, TransferBar, type TransferJob } from "./components/Transfer";
 import { DbaReport } from "./components/DbaReport";
 import { ErdView } from "./components/ErdView";
+import { MigrateView } from "./components/MigrateView";
 import type { DataFormat } from "./lib/transfer";
 import "./App.css";
 
@@ -36,7 +37,7 @@ type Group = number;
 interface Tab {
   id: string;
   /** console: SQL 콘솔 / table: 테이블 데이터 에디터 / ddl: 읽기 전용 DDL */
-  kind: "console" | "table" | "ddl" | "redis" | "dba" | "erd";
+  kind: "console" | "table" | "ddl" | "redis" | "dba" | "erd" | "migrate";
   group: Group;
   connId: string;
   /** 접속한 DB (없으면 Data Source 기본 DB) */
@@ -657,6 +658,13 @@ export default function App() {
     patch(tab.id, { erdSchemas: list });
   };
 
+  /** Compare & Migrate 탭 (하나만) */
+  const openMigrate = (c: ConnectionView, db?: string) => {
+    const existing = tabsRef.current.find((t) => t.kind === "migrate");
+    if (existing) return activate(existing);
+    addTab(c, "migrate", { title: "Compare & Migrate", database: db });
+  };
+
   /** 트리 노드 더블클릭 / F4 */
   const activateNode = (info: NodeInfo) => {
     if (info.conn.kind === "redis") {
@@ -823,6 +831,8 @@ export default function App() {
               { label: "Table Sizes & Indexes", action: () => openDba(c, info.db, "table_sizes", "Table Sizes") },
               { label: "Server Overview", action: () => openDba(c, info.db, "server", "Server Overview") },
               { label: "Users & Privileges", action: () => openDba(c, info.db, "roles", "Users & Roles") },
+              { separator: true },
+              { label: "Compare & Migrate (schemas, data, migration files)…", action: () => openMigrate(c, info.db) },
             ] as MenuItem[])
           : []),
       ],
@@ -1725,7 +1735,7 @@ export default function App() {
                 onDoubleClick={() => setMaximized((m) => !m)}
                 title={t.kind === "table" ? `${t.edit?.schema}.${t.edit?.table}` : t.title}
               >
-                <span className={"tab-icon " + t.kind}>{t.kind === "table" ? "▦" : t.kind === "ddl" ? "ƒ" : t.kind === "redis" ? "◆" : t.kind === "dba" ? "◉" : t.kind === "erd" ? "⧉" : "⌘"}</span>
+                <span className={"tab-icon " + t.kind}>{t.kind === "table" ? "▦" : t.kind === "ddl" ? "ƒ" : t.kind === "redis" ? "◆" : t.kind === "dba" ? "◉" : t.kind === "erd" ? "⧉" : t.kind === "migrate" ? "⇄" : "⌘"}</span>
                 <span>{t.title}</span>
                 {t.pinned ? (
                   <span
@@ -1847,6 +1857,23 @@ export default function App() {
                 </div>
               );
             })}
+          {/* 비교·마이그레이션 */}
+          {gTabs
+            .filter((t) => t.kind === "migrate")
+            .map((t) => (
+              <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
+                <MigrateView
+                  conns={conns}
+                  initialConnId={t.connId}
+                  initialDb={t.database}
+                  onOpenConsole={(connId, db, sql) => {
+                    const c = conns.find((x) => x.id === connId);
+                    if (c) openConsole(c, db, sql);
+                  }}
+                  onStatus={setStatus}
+                />
+              </div>
+            ))}
           {/* ERD */}
           {gTabs
             .filter((t) => t.kind === "erd")

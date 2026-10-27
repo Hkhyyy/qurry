@@ -64,6 +64,7 @@ pub fn run() {
             app.manage(app::AppState::new(store::Store::new(dir), secret_file));
             app.manage(commands::PendingImport::default());
             app.manage(commands::PendingData::default());
+            app.manage(commands::PickedDirs::default());
             // keep-alive / auto-disconnect
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -92,6 +93,12 @@ pub fn run() {
             commands::export_data,
             commands::cancel_job,
             commands::dba_reports,
+            commands::compare_schemas,
+            commands::compare_data,
+            commands::pick_folder,
+            commands::migration_status,
+            commands::apply_migrations,
+            commands::save_migration,
             commands::erd,
             commands::save_file,
             commands::preview_impact,

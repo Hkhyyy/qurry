@@ -148,6 +148,23 @@ const handlers: Record<string, (a: any) => unknown> = {
     return [{ tables, relations: [r("public", "orders", ["customer_id"], "public", "customers", ["id"]), r("public", "order_items", ["order_id"], "public", "orders", ["id"]), r("public", "order_items", ["product_id"], "public", "products", ["id"]), r("billing", "invoices", ["order_id"], "public", "orders", ["id"])] }, "erDiagram\n  customers {\n  }\n"];
   },
   save_file: () => null,
+  compare_schemas: () => [
+    { kind: "create_table", object: "orders", sql: "CREATE TABLE staging.orders (\n    id bigint NOT NULL,\n    customer_id integer,\n    CONSTRAINT orders_pkey PRIMARY KEY (id)\n);", destructive: false },
+    { kind: "add_column", object: "customers.score", sql: "ALTER TABLE staging.customers ADD COLUMN score integer;", destructive: false },
+    { kind: "alter_column", object: "customers.email", sql: "ALTER TABLE staging.customers ALTER COLUMN email SET NOT NULL;", destructive: false },
+    { kind: "add_constraint", object: "orders.orders_customer_id_fkey", sql: "ALTER TABLE staging.orders ADD CONSTRAINT orders_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES staging.customers(id);", destructive: false },
+    { kind: "drop_column", object: "customers.legacy", sql: "ALTER TABLE staging.customers DROP COLUMN legacy;", destructive: true },
+    { kind: "drop_table", object: "old_stuff", sql: "DROP TABLE staging.old_stuff;", destructive: true },
+  ],
+  compare_data: () => ({ same: 1203, different: 2, onlySource: 1, onlyTarget: 1, truncated: false, sql: "-- 1 row(s) only in the source\nINSERT INTO public.users (id, name) VALUES (7, 'kim');\n\n-- 2 row(s) with different values\nUPDATE public.users SET name = 'lee' WHERE id = 3;" }),
+  pick_folder: () => "/Users/me/project/migrations",
+  migration_status: () => [
+    { version: "1", description: "create tables", file: "V1__create_tables.sql", checksum: "a", status: "applied", appliedAt: "2026-10-01 10:00:00+09" },
+    { version: "2", description: "add index", file: "V2__add_index.sql", checksum: "b", status: "applied", appliedAt: "2026-10-05 10:00:00+09" },
+    { version: "3", description: "sync staging", file: "V3__sync_staging.sql", checksum: "c", status: "pending", appliedAt: null },
+  ],
+  apply_migrations: () => ["3"],
+  save_migration: (a: any) => `${a.dir}/V4__x.sql`,
   history_add: () => null,
   history_list: () => [
     { id: "h1", connId: "dev", sql: "SELECT client_ip, count(*) FROM logs.user_activity_log GROUP BY 1 ORDER BY 2 DESC LIMIT 20", ts: Date.now() - 60000 },

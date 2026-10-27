@@ -8,6 +8,7 @@ mod grid;
 mod help;
 mod input;
 mod keys;
+mod migrate;
 mod panes;
 mod workspace;
 #[cfg(test)]
