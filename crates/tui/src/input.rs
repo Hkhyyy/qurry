@@ -1271,9 +1271,13 @@ fn save_form(app: &mut App, mut form: crate::app::ConnForm) {
     match App::form_config(&form) {
         Ok((cfg, pw, ssh)) => {
             let st = app.state.clone();
-            app.spawn(async move { st.save_connection(cfg, pw, ssh).await.map_err(|e| e.to_string()) }, |a, r| match r {
+            // 폼의 Workspace: 고친 Data Source 는 있던 곳에서 옮기고, 새 것은 고른 곳에 넣는다
+            let from = form.edit.as_ref().map(|e| app.ws_of_conn(&e.id));
+            let to = form.fields.iter().find(|f| f.label == "Workspace").and_then(|f| app.ws_from_label(&f.value)).unwrap_or(app.cur_ws);
+            app.spawn(async move { st.save_connection(cfg, pw, ssh).await.map_err(|e| e.to_string()) }, move |a, r| match r {
                 Ok(c) => {
                     a.status = format!("Saved data source {}", c.name);
+                    a.ws_place_conn(&c.id, from, to);
                     a.tree.forget(&c.id);
                     a.tree.expanded.remove(&c.id);
                     a.reload_conns();

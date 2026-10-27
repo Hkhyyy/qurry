@@ -356,6 +356,42 @@ impl App {
         }
     }
 
+    /// 폼에 보이는 워크스페이스 이름: "2 Reports" (이름이 같아도 구분되게 번호를 붙인다)
+    pub fn ws_label(&self, i: usize) -> String {
+        format!("{} {}", i + 1, self.workspaces.get(i).map(|w| w.name.as_str()).unwrap_or(""))
+    }
+
+    /// "2 Reports" → 1
+    pub fn ws_from_label(&self, label: &str) -> Option<usize> {
+        label.split_whitespace().next()?.parse::<usize>().ok().and_then(|n| n.checked_sub(1)).filter(|i| *i < self.workspaces.len())
+    }
+
+    /// 이 Data Source 가 들어 있는 워크스페이스 (여럿이면 지금 것, 아니면 첫 것. 없으면 지금 것)
+    pub fn ws_of_conn(&self, id: &str) -> usize {
+        let has = |i: usize| self.workspaces[i].conns.iter().any(|c| c == id);
+        if has(self.cur_ws) {
+            return self.cur_ws;
+        }
+        (0..self.workspaces.len()).find(|i| has(*i)).unwrap_or(self.cur_ws)
+    }
+
+    /// Data Source 폼의 Workspace: from 에서 빼고 to 에 넣는다 (from = None: 새 Data Source)
+    pub fn ws_place_conn(&mut self, id: &str, from: Option<usize>, to: usize) {
+        if Some(to) == from || to >= self.workspaces.len() {
+            return;
+        }
+        if let Some(f) = from.filter(|f| *f < self.workspaces.len()) {
+            self.workspaces[f].conns.retain(|c| c != id);
+        }
+        if !self.workspaces[to].conns.iter().any(|c| c == id) {
+            self.workspaces[to].conns.push(id.to_string());
+        }
+        self.rebuild_roots();
+        if to != self.cur_ws {
+            self.status = format!("{} — Alt+{} to see it", self.ws_label(to), to + 1);
+        }
+    }
+
     /// ⌃K › Add Data Source to Workspace…: 이 워크스페이스 탐색기에 없는 Data Source 고르기
     pub fn ws_add_conn_pick(&mut self) {
         let mine = &self.workspaces[self.cur_ws].conns;
@@ -536,5 +572,44 @@ mod tests {
         h3.app.rebuild_roots();
         assert_eq!(h3.app.workspaces[1].conns, Vec::<String>::new());
         assert_eq!(h3.app.workspaces[0].conns, ["test"]);
+    }
+
+    /// 폼의 Workspace 칸을 고른다 (◂ ▸ 로 한 칸)
+    fn pick_workspace(h: &mut Harness) {
+        let Some(crate::app::Popup::ConnForm(f)) = h.app.popup.as_mut() else { panic!("no form") };
+        f.sel = f.fields.iter().position(|x| x.label == "Workspace").unwrap();
+        h.key("Right");
+    }
+
+    #[tokio::test]
+    async fn data_source_form_moves_it_between_workspaces() {
+        let mut h = harness().await;
+        h.app.ws_new();
+        h.key("Enter");
+        h.key("Alt+1");
+        // 고치기: Default(1) → 2 로
+        let cfg = h.app.conn("test").unwrap().config.clone();
+        h.app.conn_form(Some(cfg));
+        let Some(crate::app::Popup::ConnForm(f)) = h.app.popup.as_ref() else { panic!() };
+        assert_eq!(f.fields.iter().find(|x| x.label == "Workspace").unwrap().value, "1 Default");
+        pick_workspace(&mut h);
+        h.key("Enter");
+        h.settle().await;
+        assert!(roots(&h).is_empty(), "moved out of Default");
+        assert_eq!(h.app.workspaces[1].conns, ["test"]);
+        h.key("Alt+2");
+        assert_eq!(roots(&h), ["test"]);
+        // 새로 만들기: 지금(2) 이 기본, 1 로 바꿔 만든다
+        h.app.conn_form(None);
+        let Some(crate::app::Popup::ConnForm(f)) = h.app.popup.as_mut() else { panic!() };
+        assert_eq!(f.fields.iter().find(|x| x.label == "Workspace").unwrap().value, "2 Workspace 2");
+        f.fields.iter_mut().find(|x| x.label == "Name").unwrap().value = "fresh".into();
+        f.fields.iter_mut().find(|x| x.label == "Host").unwrap().value = "127.0.0.1".into();
+        pick_workspace(&mut h);
+        h.key("Enter");
+        h.settle().await;
+        let fresh = h.app.conns.iter().find(|c| c.config.name == "fresh").unwrap().config.id.clone();
+        assert_eq!(h.app.workspaces[0].conns, [fresh.clone()]);
+        assert!(!h.app.workspaces[1].conns.contains(&fresh), "not adopted into the current workspace");
     }
 }
