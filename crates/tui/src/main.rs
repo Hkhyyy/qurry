@@ -14,6 +14,7 @@ mod workspace;
 mod testkit;
 mod scope;
 mod selfupdate;
+mod snippets;
 mod transfer;
 mod tree;
 mod ui;

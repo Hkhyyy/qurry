@@ -83,6 +83,8 @@ GUI: right-click a data source › **Tools** › Sessions & Locks, Slow Queries,
 
 Generated SQL opens in a new console; nothing changes until you run it. Stopping sessions asks first and is blocked on read-only data sources.
 
+**Query history & snippets** are kept in the config folder and shared by the GUI and the TUI (passwords in `PASSWORD '…'` / `IDENTIFIED BY '…'` are masked). GUI: `⌥⌘e` (History / Snippets tabs, Save as Snippet) · TUI: `Ctrl+k` › Query History…, Snippets…, Save Query as Snippet….
+
 **Explain plan** (PostgreSQL): each node shows its own share of the time (Explain Analyze) or cost, and flags what is worth a look — a Seq Scan over a big table, row estimates off by 10× or more, filters that throw away most rows, sorts and hashes spilled to disk. TUI: `Alt+e` (or `Ctrl+k` › Explain Analyze).
 
 ## Build & run

@@ -10,7 +10,7 @@ import { ContextMenu, Explorer, MenuItem } from "./components/Explorer";
 import { ConnectionDialog } from "./components/ConnectionDialog";
 import { ConsoleEditor, EditorApi } from "./components/ConsoleEditor";
 import { ConsolePane, OutputLine, ResultEntry } from "./components/ConsolePane";
-import { HistoryDialog, pushHistory } from "./components/HistoryDialog";
+import { HistoryDialog, migrateOldHistory, pushHistory, saveSnippet } from "./components/HistoryDialog";
 import { EditTarget } from "./components/ResultGrid";
 import { TableEditor } from "./components/TableEditor";
 import { RecentFiles, Switcher, SwitchItem } from "./components/Switcher";
@@ -160,6 +160,7 @@ export default function App() {
   const [tabMenu, setTabMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const editorApis = useRef(new Map<string, EditorApi>());
   const [historyFor, setHistoryFor] = useState<string | null>(null);
+  const [historyTab, setHistoryTab] = useState<"history" | "snippets">("history");
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
 
@@ -216,6 +217,7 @@ export default function App() {
       .catch(() => {});
     return () => off?.();
   }, []);
+  useEffect(migrateOldHistory, []);
   // Auto-disconnect 등으로 백엔드가 접속을 닫으면 트리 상태를 갱신
   useEffect(() => {
     let off: (() => void) | undefined;
@@ -1354,7 +1356,18 @@ export default function App() {
       { name: "Roll Back", group: "Transaction", run: () => t && txEnd(t, "rollback"), disabled: !t?.inTx },
       { name: "Transaction Mode: Manual", group: "Transaction", run: () => t && setTxMode(t, true), disabled: t?.kind !== "console" },
       { name: "Transaction Mode: Auto", group: "Transaction", run: () => t && setTxMode(t, false), disabled: t?.kind !== "console" },
-      { name: "Browse Query History…", shortcut: sk("editor.history"), group: "Run", run: () => t && setHistoryFor(t.id), disabled: t?.kind !== "console" },
+      { name: "Browse Query History…", shortcut: sk("editor.history"), group: "Run", run: () => t && (setHistoryTab("history"), setHistoryFor(t.id)), disabled: t?.kind !== "console" },
+      { name: "Snippets…", group: "Run", run: () => t && (setHistoryTab("snippets"), setHistoryFor(t.id)), disabled: t?.kind !== "console" },
+      {
+        name: "Save Query as Snippet…",
+        group: "Run",
+        run: async () => {
+          const c = t && conns.find((x) => x.id === t.connId);
+          const sql = t && editorApis.current.get(t.id)?.text();
+          if (c && sql && (await saveSnippet(sql, c.id, c.name))) setStatus("Snippet saved (⌘K › Snippets…)");
+        },
+        disabled: t?.kind !== "console",
+      },
       { name: "Go to Database Object…", shortcut: sk("goto.object"), group: "Navigate", run: () => setTimeout(() => setSe("database")) },
       { name: "Go to Symbol…", shortcut: sk("goto.symbol"), group: "Navigate", run: () => setTimeout(() => setSe("symbols")) },
       { name: "Go to File…", shortcut: sk("goto.file"), group: "Navigate", run: () => setTimeout(() => setSe("files")) },
@@ -1470,6 +1483,7 @@ export default function App() {
       }
       if (is("editor.history") && active?.kind === "console") {
         e.preventDefault();
+        setHistoryTab("history");
         setHistoryFor(active.id);
         return;
       }
@@ -1782,7 +1796,7 @@ export default function App() {
                     }
                     onFetchMore={(entryId) => fetchMoreEntry(t.id, entryId)}
                     onExport={(sql) => exportCsv({ ...t, lastSql: sql })}
-                    onHistory={() => setHistoryFor(t.id)}
+                    onHistory={() => (setHistoryTab("history"), setHistoryFor(t.id))}
                     onTxMode={(manual) => setTxMode(t, manual)}
                     onCommit={() => txEnd(t, "commit")}
                     onRollback={() => txEnd(t, "rollback")}
@@ -2086,6 +2100,7 @@ export default function App() {
           <HistoryDialog
             connId={c.id}
             title={`${c.name} Query History`}
+            initialTab={historyTab}
             onPick={(sql) => {
               editorApis.current.get(t.id)?.insert(sql);
               setHistoryFor(null);

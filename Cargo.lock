@@ -4203,6 +4203,7 @@ dependencies = [
  "futures",
  "rand 0.8.8",
  "redis",
+ "regex",
  "russh",
  "serde",
  "serde_json",

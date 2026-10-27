@@ -1716,6 +1716,29 @@ mod tests {
         assert!(h.app.popup.is_none(), "must not offer to kill a session that is gone");
     }
 
+    /// ⌃K › Query History / Snippets: GUI 와 같은 기록. 고르면 콘솔에 넣는다. Save Query as Snippet 은 이름을 묻는다
+    #[tokio::test]
+    async fn history_and_snippets_insert_into_console() {
+        let mut h = Harness::new().await;
+        h.app.state.history.add("test", None, "select 42").unwrap();
+        h.console_tab();
+        h.app.run_action(Action::QueryHistory);
+        let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no history") };
+        assert_eq!(p.items[0].label, "select 42");
+        h.key("Enter");
+        assert_eq!(h.console_text(), "select 42");
+        // 스니펫으로 저장 → 목록에서 넣기
+        h.app.run_action(Action::SaveSnippet);
+        let Some(crate::app::Popup::Input { input, .. }) = &mut h.app.popup else { panic!("no name input") };
+        *input = tui_textarea::TextArea::from(["answer"]);
+        h.key("Enter");
+        assert_eq!(h.app.state.history.snippets(Some("test"))[0].name, "answer");
+        h.key("Ctrl+a");
+        h.app.run_action(Action::Snippets);
+        let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no snippets") };
+        assert_eq!(p.items[0].label, "answer");
+    }
+
     /// 콘솔 마우스: 누른 곳으로 커서, 끌면 선택 (선택한 것만 실행), 다시 누르면 선택이 풀린다
     #[tokio::test]
     async fn console_mouse_click_and_drag_select() {

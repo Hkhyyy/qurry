@@ -174,6 +174,18 @@ export type DbaAction = { kind: "kill"; label: string; terminate: boolean } | { 
 export interface DbaReportInfo { id: string; title: string; group: string; help: string; actions: DbaAction[] }
 /** 실행 계획 분석 (core): 몫·경고. PlanNode 는 components/ConsolePane */
 export const analyzePlan = (json: string) => invoke<import("../components/ConsolePane").PlanNode>("analyze_plan", { json });
+export interface HistoryItem { id: string; connId: string; database?: string; sql: string; ts: number }
+export interface Snippet { id: string; name: string; sql: string; connId?: string | null }
+/** 쿼리 히스토리·스니펫 (설정 폴더, TUI 와 같이 쓴다) */
+export const history = {
+  add: (connId: string, database: string | undefined, sql: string) => invoke<void>("history_add", { connId, database: database ?? null, sql }),
+  list: (connId: string | null, filter: string, limit = 500) => invoke<HistoryItem[]>("history_list", { connId, filter, limit }),
+  remove: (id: string) => invoke<void>("history_delete", { id }),
+  import: (items: HistoryItem[]) => invoke<number>("history_import", { items }),
+  snippets: (connId: string | null) => invoke<Snippet[]>("snippets", { connId }),
+  saveSnippet: (snippet: Snippet) => invoke<Snippet>("snippet_save", { snippet }),
+  deleteSnippet: (id: string) => invoke<void>("snippet_delete", { id }),
+};
 export const dba = {
   reports: (id: string) => invoke<DbaReportInfo[]>("dba_reports", { id }),
   run: (id: string, report: string) => invoke<QueryResult>("dba_report", { id, report }),

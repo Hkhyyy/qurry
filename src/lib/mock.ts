@@ -135,6 +135,16 @@ const handlers: Record<string, (a: any) => unknown> = {
           rowsAffected: 0, truncated: false, elapsedMs: 3, hasResultSet: true,
         },
   kill_session: () => true,
+  history_add: () => null,
+  history_list: () => [
+    { id: "h1", connId: "dev", sql: "SELECT client_ip, count(*) FROM logs.user_activity_log GROUP BY 1 ORDER BY 2 DESC LIMIT 20", ts: Date.now() - 60000 },
+    { id: "h2", connId: "dev", sql: "select * from users where id = 42", ts: Date.now() - 3600000 },
+  ],
+  history_delete: () => null,
+  history_import: () => 0,
+  snippets: () => [{ id: "s1", name: "Suspicious IPs (failed logins)", sql: "SELECT client_ip, count(*) FILTER (WHERE code NOT LIKE 'S%') AS failed FROM logs.user_activity_log GROUP BY 1 HAVING count(*) >= 3", connId: null }],
+  snippet_save: (a: any) => ({ ...a.snippet, id: "s2" }),
+  snippet_delete: () => null,
   analyze_plan: () => ({
     op: "Gather Merge", detail: "", startup: 1000, total: 6200.5, rows: 12, actualTime: 45.0, actualRows: 766, loops: 1, selfTime: 19.2, pct: 42.6,
     warnings: ["Rows estimate off ×64 (estimated 12, actual 766) — run ANALYZE; stale statistics lead to bad plans"], props: [["Workers Planned", "2"], ["Workers Launched", "2"]],

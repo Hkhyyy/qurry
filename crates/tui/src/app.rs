@@ -229,6 +229,8 @@ pub enum PAction {
     Act(Action),
     /// DBA 리포트 열기 (id)
     Dba(String),
+    /// 히스토리·스니펫에서 고른 쿼리를 콘솔에
+    InsertSql(String),
     /// DBA 리포트 행 동작 (템플릿 SQL → 콘솔)
     DbaSql(String),
     /// 내보내기: 형식을 골랐다 → 대상 고르기
@@ -334,6 +336,9 @@ pub enum Action {
     CopyInList,
     Find,
     DbaReports,
+    QueryHistory,
+    Snippets,
+    SaveSnippet,
     ImportData,
     CancelTransfer,
     ToggleExplorer,
@@ -388,6 +393,9 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::ExportCsv, "Export Data… (CSV, TSV, JSON, SQL INSERT, Markdown)", "x (grid)"),
     (Action::CopyInList, "Copy Column as IN List  ('a', 'b', …)", "Y (grid)"),
     (Action::Find, "Find / Replace in Editor (regex)", ""),
+    (Action::QueryHistory, "Query History… (shared with the GUI)", ""),
+    (Action::Snippets, "Snippets…", ""),
+    (Action::SaveSnippet, "Save Query as Snippet…", ""),
     (Action::DbaReports, "Database Admin… (sessions & locks, slow queries, sizes, indexes, vacuum, server, privileges)", ""),
     (Action::ImportData, "Import Data from File… (CSV, TSV, JSON)", ""),
     (Action::CancelTransfer, "Cancel Export/Import", ""),
@@ -1536,6 +1544,8 @@ impl App {
         let id = t.id;
         let target = t.target.clone();
         let conn_name = self.conn(&t.conn).map(|c| c.config.name.clone()).unwrap_or_default();
+        // 히스토리 (GUI 와 같은 기록)
+        let (hist_conn, hist_db, hist) = (t.conn.clone(), t.db.clone(), self.state.clone());
         let t = &mut self.tabs[self.active];
         let TabKind::Console(c) = &mut t.kind else { return };
         if c.running || stmts.is_empty() {
@@ -1609,6 +1619,9 @@ impl App {
                     // 실행한 문장은 한 줄로, 너무 길면 앞부분만
                     let echo: String = s.replace('\n', " ").chars().take(300).collect();
                     c.log(false, format!("{conn_name}> {echo}{}", if s.chars().count() > 300 { "…" } else { "" }));
+                    if r.is_ok() {
+                        let _ = hist.history.add(&hist_conn, Some(&hist_db), &s);
+                    }
                     match r {
                         Ok(res) => {
                             // PG 실행 계획: 들여쓴 연산 · 몫(%) · 경고 표
@@ -2156,6 +2169,7 @@ impl App {
             PAction::Run { stmts, explain } => self.run_stmts(stmts, explain, false),
             PAction::ExportFormat(f) => self.export_dest(f),
             PAction::Dba(r) => self.dba_open(r),
+            PAction::InsertSql(q) => self.insert_sql(q),
             PAction::DbaSql(t) => self.dba_sql(t),
             PAction::ExportTo(f, clipboard) => self.export_to(f, clipboard),
             PAction::Exec(e) => {
@@ -2359,6 +2373,9 @@ impl App {
             Action::ImportData => self.import_start(),
             Action::Find => self.find_open(),
             Action::DbaReports => self.dba_palette(),
+            Action::QueryHistory => self.history_palette(),
+            Action::Snippets => self.snippets_palette(),
+            Action::SaveSnippet => self.save_snippet(),
             Action::CopyInList => {
                 let Some(g) = self.grid_mut() else {
                     self.status = "Open a result or table to copy a column".into();

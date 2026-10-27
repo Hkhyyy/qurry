@@ -225,6 +225,44 @@ pub async fn export_data(
     Ok(Some(ExportDone { rows: r.rows, path, text: r.text }))
 }
 
+// ───────── 쿼리 히스토리·스니펫 (TUI 와 같은 파일) ─────────
+
+#[tauri::command]
+pub fn history_add(state: State<'_, AppState>, conn_id: String, database: Option<String>, sql: String) -> AppResult<()> {
+    state.history.add(&conn_id, database.as_deref(), &sql)
+}
+
+#[tauri::command]
+pub fn history_list(state: State<'_, AppState>, conn_id: Option<String>, filter: String, limit: usize) -> Vec<qurry_core::history::HistoryItem> {
+    state.history.list(conn_id.as_deref(), &filter, limit)
+}
+
+#[tauri::command]
+pub fn history_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    state.history.delete(&id)
+}
+
+/// 예전 GUI 기록(localStorage) 옮기기
+#[tauri::command]
+pub fn history_import(state: State<'_, AppState>, items: Vec<qurry_core::history::HistoryItem>) -> AppResult<usize> {
+    state.history.import(items)
+}
+
+#[tauri::command]
+pub fn snippets(state: State<'_, AppState>, conn_id: Option<String>) -> Vec<qurry_core::history::Snippet> {
+    state.history.snippets(conn_id.as_deref())
+}
+
+#[tauri::command]
+pub fn snippet_save(state: State<'_, AppState>, snippet: qurry_core::history::Snippet) -> AppResult<qurry_core::history::Snippet> {
+    state.history.save_snippet(snippet)
+}
+
+#[tauri::command]
+pub fn snippet_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    state.history.delete_snippet(&id)
+}
+
 /// 실행 계획 (EXPLAIN FORMAT JSON) → 트리 + 노드마다 몫(%)·경고
 #[tauri::command]
 pub fn analyze_plan(json: String) -> AppResult<qurry_core::plan::PlanNode> {

@@ -16,6 +16,7 @@ pub mod db;
 pub mod dba;
 pub mod error;
 pub mod guard;
+pub mod history;
 pub mod meta;
 pub mod mysql;
 pub mod plan;

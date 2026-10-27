@@ -30,6 +30,8 @@ pub struct AppState {
     pub last_ping: std::sync::Mutex<HashMap<String, std::time::Instant>>,
     /// 탭 id → Manual 모드 (다시 접속해 세션을 새로 열 때도 같은 모드로)
     pub tab_manual: std::sync::Mutex<HashMap<String, bool>>,
+    /// 쿼리 히스토리·스니펫 (GUI·TUI 공용)
+    pub history: crate::history::History,
     /// 내보내기·가져오기 작업 id → 진행·취소
     pub jobs: std::sync::Mutex<HashMap<String, std::sync::Arc<crate::transfer::Job>>>,
 }
@@ -55,7 +57,8 @@ impl AppState {
 
 impl AppState {
     pub fn new(store: Store, secret_file: crate::secrets::SecretFile) -> Self {
-        Self { store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), secrets: Default::default(), secret_file, last_used: Default::default(), last_ping: Default::default(), tab_manual: Default::default(), jobs: Default::default() }
+        let history = crate::history::History::new(&store.dir());
+        Self { history, store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), secrets: Default::default(), secret_file, last_used: Default::default(), last_ping: Default::default(), tab_manual: Default::default(), jobs: Default::default() }
     }
 }
 
