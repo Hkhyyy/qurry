@@ -1,5 +1,5 @@
 [workspace]
-members = ["src-tauri", "crates/core", "crates/tui", "crates/mcp", "crates/driver", "drivers/sqlite", "drivers/duckdb"]
+members = ["src-tauri", "crates/core", "crates/tui", "crates/mcp", "crates/driver", "drivers/sqlite", "drivers/duckdb", "drivers/clickhouse"]
 resolver = "2"
 
 [workspace.dependencies]

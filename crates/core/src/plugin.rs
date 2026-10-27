@@ -151,8 +151,8 @@ mod tests {
     use super::*;
 
     /// 드라이버 공통 시험: 테이블 만들기 → 넣기 → 조회 (limit) → 목록·상세 (PK·FK) → DDL
-    pub(crate) async fn conformance(cfg: ConnectionConfig, schema: &str, setup: &[&str], parent: &str, child: &str) {
-        let c = connect(&cfg, cfg.redis.as_ref().and(None).or(std::env::var("QURRY_DRIVER_PW").ok().as_deref()), None).await.unwrap_or_else(|e| panic!("{:?}: {e}", cfg.kind));
+    pub(crate) async fn conformance(cfg: ConnectionConfig, password: Option<&str>, schema: &str, setup: &[&str], parent: &str, child: &str, fk: bool) {
+        let c = connect(&cfg, password, None).await.unwrap_or_else(|e| panic!("{:?}: {e}", cfg.kind));
         for q in setup {
             c.query(q, 10).await.unwrap_or_else(|e| panic!("{q}: {e}"));
         }
@@ -168,7 +168,7 @@ mod tests {
         let bare_child = child.rsplit('.').next().unwrap();
         let d: crate::meta::TableDetail = c.call("tableDetail", json!({ "schema": schema, "table": objs.relations.iter().find(|r| r.name.eq_ignore_ascii_case(bare_child)).unwrap().name })).await.unwrap();
         assert!(d.columns.iter().any(|c| c.is_pk && c.name.eq_ignore_ascii_case("id")), "{:?}", d.columns.iter().map(|c| (&c.name, c.is_pk)).collect::<Vec<_>>());
-        assert!(d.constraints.iter().any(|c| c.kind == "f"), "no foreign key: {:?}", d.constraints.iter().map(|c| (&c.kind, &c.definition)).collect::<Vec<_>>());
+        assert!(!fk || d.constraints.iter().any(|c| c.kind == "f"), "no foreign key: {:?}", d.constraints.iter().map(|c| (&c.kind, &c.definition)).collect::<Vec<_>>());
         let ddl: String = c.call("ddl", json!({ "schema": schema, "name": objs.relations.iter().find(|r| r.name.eq_ignore_ascii_case(bare_child)).unwrap().name, "kind": "table" })).await.unwrap();
         assert!(ddl.to_uppercase().contains("CREATE"), "{ddl}");
         assert!(c.query("SELECT * FROM no_such_table_qurry", 1).await.is_err());
@@ -185,16 +185,42 @@ mod tests {
             return;
         }
         let file = std::env::temp_dir().join(format!("qurry-{}.db", uuid::Uuid::new_v4()));
-        conformance(file_cfg("sqlite", &file), "main", &[
+        conformance(file_cfg("sqlite", &file), None, "main", &[
             "create table parent (id integer primary key, name text not null)",
             "create table child (id integer primary key, parent_id integer references parent(id), note text)",
             "insert into parent values (1, 'a'), (2, 'b')",
             "insert into child values (1, 1, 'x'), (2, 2, 'y')",
-        ], "parent", "child").await;
+        ], "parent", "child", true).await;
         std::fs::remove_file(file).ok();
         // 없는 드라이버는 정해진 글로 (UI 가 받을지 묻는다)
         let e = PluginConn::start("nope").await.unwrap_err().to_string();
         assert!(e.starts_with(MISSING), "{e}");
+    }
+
+    /// 서버 DB: QURRY_TEST_<KIND>=host:port:user:password:database 일 때만
+    fn server_cfg(kind: &str, env: &str) -> Option<(ConnectionConfig, String)> {
+        let e = std::env::var(env).ok()?;
+        let p: Vec<&str> = e.splitn(5, ':').collect();
+        let cfg = serde_json::from_value(json!({ "id": "s", "name": "s", "kind": kind, "host": p[0], "port": p[1].parse::<u16>().ok()?, "user": p[2], "database": p[4] })).ok()?;
+        Some((cfg, p[3].to_string()))
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn clickhouse_driver_conformance() {
+        let Some((cfg, pw)) = server_cfg("clickhouse", "QURRY_TEST_CH") else { return };
+        if driver_path("clickhouse").is_none() {
+            return;
+        }
+        let db = cfg.database.clone();
+        conformance(cfg, Some(&pw), &db, &[
+            "DROP TABLE IF EXISTS q_child",
+            "DROP TABLE IF EXISTS q_parent",
+            "CREATE TABLE q_parent (id UInt32, name String) ENGINE = MergeTree ORDER BY id",
+            "CREATE TABLE q_child (id UInt32, parent_id UInt32, note Nullable(String)) ENGINE = MergeTree ORDER BY id",
+            "INSERT INTO q_parent VALUES (1, 'a'), (2, 'b')",
+            "INSERT INTO q_child VALUES (1, 1, 'x'), (2, 2, NULL)",
+        ], "q_parent", "q_child", false).await;
     }
 
     #[tokio::test]
@@ -204,12 +230,12 @@ mod tests {
             return;
         }
         let file = std::env::temp_dir().join(format!("qurry-{}.duckdb", uuid::Uuid::new_v4()));
-        conformance(file_cfg("duckdb", &file), "main", &[
+        conformance(file_cfg("duckdb", &file), None, "main", &[
             "create table parent (id integer primary key, name varchar not null)",
             "create table child (id integer primary key, parent_id integer references parent(id), note varchar)",
             "insert into parent values (1, 'a'), (2, 'b')",
             "insert into child values (1, 1, 'x'), (2, 2, 'y')",
-        ], "parent", "child").await;
+        ], "parent", "child", true).await;
         std::fs::remove_file(file).ok();
     }
 }
