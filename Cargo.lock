@@ -4232,6 +4232,7 @@ dependencies = [
  "minisign-verify 0.2.5",
  "qurry-core",
  "ratatui",
+ "regex",
  "serde_json",
  "sha2 0.10.9",
  "tokio",
@@ -6610,6 +6611,7 @@ checksum = "0a5318dd619ed73c52a9417ad19046724effc1287fb75cdcc4eca1d6ac1acbae"
 dependencies = [
  "crossterm",
  "ratatui",
+ "regex",
  "unicode-width 0.2.0",
 ]
 

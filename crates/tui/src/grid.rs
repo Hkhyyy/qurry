@@ -151,6 +151,33 @@ impl Grid {
         self.result.rows.get(r).and_then(|row| row.get(c)).and_then(raw_text)
     }
 
+    /// 열 전체를 IN 목록 글과 값 개수로
+    pub fn column_in_list(&self, c: usize) -> (String, usize) {
+        // 숫자 컬럼은 값 그대로 (numeric·bigint 는 글로 온다). 숫자 모양일 때만 (NaN 등은 따옴표)
+        let ty = self.result.columns.get(c).map(|x| x.type_name.to_lowercase()).unwrap_or_default();
+        let head: String = ty.chars().take_while(|ch| ch.is_ascii_alphanumeric()).collect();
+        let numeric_col = ["int", "int2", "int4", "int8", "integer", "tinyint", "smallint", "mediumint", "bigint", "serial", "serial4", "serial8", "smallserial", "bigserial", "numeric", "decimal", "real", "float", "float4", "float8", "double", "bool", "boolean", "oid"].contains(&head.as_str());
+        let num = |s: &str| {
+            let t = s.strip_prefix('-').unwrap_or(s);
+            !t.is_empty() && t.parse::<f64>().is_ok() && t.chars().all(|ch| ch.is_ascii_digit() || ".eE+-".contains(ch))
+        };
+        let lit = |s: String| if numeric_col && num(&s) { s } else { format!("'{}'", s.replace('\'', "''")) };
+        let mut seen = std::collections::HashSet::new();
+        let items: Vec<String> = (0..self.result.rows.len())
+            .filter_map(|r| match self.edits.get(&(r, c)) {
+                Some(v) => v.clone().map(lit),
+                None => match self.result.rows[r].get(c)? {
+                    Value::Null => None,
+                    v @ (Value::Number(_) | Value::Bool(_)) => Some(v.to_string()),
+                    v => raw_text(v).map(lit),
+                },
+            })
+            .filter(|x| seen.insert(x.clone()))
+            .collect();
+        let n = items.len();
+        (format!("({})", if n == 0 { "NULL".into() } else { items.join(", ") }), n)
+    }
+
     pub fn dirty(&self) -> bool {
         !self.edits.is_empty() || !self.deleted.is_empty() || self.added > 0
     }
@@ -458,5 +485,21 @@ mod tests {
         g.toggle_local_sort();
         assert_eq!(g.sort, None);
         assert_eq!(vals(&g), ["10", "<null>", "9", "100", "50"]);
+    }
+    /// 열 전체를 IN 목록으로: ('a', 'b'). 숫자는 그대로, 중복·NULL 은 뺀다 (GUI lib/inList.ts 와 같다)
+    #[test]
+    fn column_as_in_list() {
+        let col = |n: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: String::new() };
+        let rows = vec![vec![json!("1.2.3.4"), json!(1)], vec![json!("it's"), json!(2)], vec![Value::Null, json!(2)], vec![json!("1.2.3.4"), Value::Null]];
+        let g = Grid::new(QueryResult { columns: vec![col("ip"), col("n")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false });
+        assert_eq!(g.column_in_list(0), ("('1.2.3.4', 'it''s')".to_string(), 2));
+        assert_eq!(g.column_in_list(1), ("(1, 2)".to_string(), 2));
+        // numeric·bigint 는 글로 와도 컬럼 타입을 보고 따옴표 없이. 문자 컬럼의 숫자 모양(010)은 따옴표
+        let ty = |n: &str, t: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: t.into() };
+        let rows = vec![vec![json!("1234.50"), json!("010"), json!("NaN")]];
+        let g = Grid::new(QueryResult { columns: vec![ty("a", "NUMERIC"), ty("b", "VARCHAR"), ty("c", "NUMERIC")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false });
+        assert_eq!(g.column_in_list(0).0, "(1234.50)");
+        assert_eq!(g.column_in_list(1).0, "('010')");
+        assert_eq!(g.column_in_list(2).0, "('NaN')");
     }
 }

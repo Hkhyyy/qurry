@@ -340,6 +340,9 @@ fn paste(app: &mut App, s: String) {
     let s = s.replace("\r\n", "\n").replace('\r', "\n");
     // 한 줄 입력칸에는 줄바꿈을 공백으로
     let one = || s.trim_end_matches(['\r', '\n']).replace("\r\n", " ").replace(['\r', '\n'], " ");
+    if matches!(app.popup, Some(Popup::Find(_))) {
+        return app.find_paste(&s);
+    }
     match &mut app.popup {
         Some(Popup::Input { input, .. }) => {
             input.insert_str(one());
@@ -735,6 +738,7 @@ fn nav(app: &mut App, k: KeyEvent) {
             copy(app, &v);
             return;
         }
+        KeyCode::Char('Y') => return app.run_action(Action::CopyInList),
         KeyCode::Char('x') => return app.run_action(Action::ExportCsv),
         KeyCode::Char('s') => {
             g.toggle_local_sort();
@@ -968,6 +972,9 @@ fn redis_key(app: &mut App, id: u64, k: KeyEvent) {
 }
 
 fn popup_key(app: &mut App, k: KeyEvent) {
+    if matches!(app.popup, Some(Popup::Find(_))) {
+        return crate::find::key(app, k);
+    }
     let popup = app.popup.take().unwrap();
     match popup {
         Popup::Help { mut sel, scroll, record: Some(add), .. } => {
@@ -1068,6 +1075,8 @@ fn popup_key(app: &mut App, k: KeyEvent) {
                 }
             }
         }
+        // 위에서 따로 받는다
+        Popup::Find(bar) => app.popup = Some(Popup::Find(bar)),
         Popup::Scope(mut e) => {
             match k.code {
                 KeyCode::Esc => return,
@@ -1516,6 +1525,57 @@ mod tests {
         // 화면에도 폴더와 개수
         let s = h.screen(120, 20);
         assert!(s.contains("▸ ▤ sessions 2") && s.contains("token"), "{s}");
+    }
+
+    /// Y: 지금 열 전체를 IN 목록으로 복사 (결과의 IP 들을 다음 쿼리 WHERE ip IN 에 바로)
+    #[tokio::test]
+    async fn copy_column_as_in_list() {
+        let mut h = Harness::new().await;
+        h.table_tab("logs", &["ip", "n"], &[&["1.2.3.4", "1"], &["5.6.7.8", "2"], &["1.2.3.4", "3"]], &[]);
+        h.key("Y");
+        assert_eq!(h.app.status, "Copied 2 values as an IN list: ('1.2.3.4', '5.6.7.8')");
+        // ⌃K 에서도
+        assert!(crate::app::ACTIONS.iter().any(|a| a.0 == Action::CopyInList));
+    }
+
+    /// Ctrl+F: 편집기 찾기/바꾸기 바 (DataGrip). Alt+X 정규식, Tab 바꾸기 칸, Alt+A 전부 바꾸기 ($1 그룹), Esc 닫기
+    #[tokio::test]
+    async fn console_find_replace_all_with_regex() {
+        let mut h = Harness::new().await;
+        h.console_with("1.2.3.4 ok\n5.6.7.8 fail", 0, 0);
+        h.key("Ctrl+f");
+        h.type_str(r"(\d+\.\d+\.\d+\.\d+).*");
+        h.key("Alt+x");
+        assert!(h.screen(120, 30).contains("1/2"), "{}", h.screen(120, 30));
+        h.key("Tab");
+        h.type_str("'$1',");
+        h.key("Alt+a");
+        assert_eq!(h.console_text(), "'1.2.3.4',\n'5.6.7.8',");
+        h.key("Esc");
+        assert!(h.app.popup.is_none());
+    }
+
+    /// 찾기: 칠 때마다 커서 뒤 첫 결과를 고르고, Enter 는 다음. 바꾸기 칸에서 Enter 는 지금 것만 바꾸고 다음으로
+    #[tokio::test]
+    async fn console_find_next_and_replace_one() {
+        let mut h = Harness::new().await;
+        h.console_with("id, ID, x", 0, 0);
+        h.key("Ctrl+f");
+        h.type_str("id");
+        assert_eq!(h.console_cursor().1.as_deref(), Some("id"));
+        h.key("Enter");
+        assert_eq!(h.console_cursor(), ((0, 6), Some("ID".to_string())));
+        h.key("Tab");
+        h.type_str("k");
+        h.key("Enter");
+        assert_eq!(h.console_text(), "id, k, x");
+        // 대소문자 구분(Alt+C)이면 ID 는 안 찾는다
+        h.key("Esc");
+        h.console_with("id, ID", 0, 0);
+        h.key("Ctrl+f");
+        h.type_str("ID");
+        h.key("Alt+c");
+        assert!(h.screen(120, 30).contains("1/1"));
     }
 
     /// 콘솔 마우스: 누른 곳으로 커서, 끌면 선택 (선택한 것만 실행), 다시 누르면 선택이 풀린다

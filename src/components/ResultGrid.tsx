@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Cell, Dialect, dialectOf, QueryResult } from "../lib/api";
 import { DateTimePicker, isTemporal } from "./DateTimePicker";
 import { ContextMenu, MenuItem } from "./Explorer";
+import { inList } from "../lib/inList";
 import {
   IcClock, IcExport, IcGear, IcMinus, IcPlus, IcPreview, IcReload, IcRevert, IcSearch, IcStop, IcSubmit, IcTranspose, IcView,
 } from "./icons";
@@ -20,7 +21,7 @@ export interface EditTarget {
 }
 
 /** DataGrip Data Extractors (복사 형식) */
-export const EXTRACTORS = ["CSV", "TSV", "SQL Inserts", "SQL Updates", "Where Clause", "JSON", "Markdown"] as const;
+export const EXTRACTORS = ["CSV", "TSV", "SQL Inserts", "SQL Updates", "Where Clause", "SQL IN List", "JSON", "Markdown"] as const;
 export type Extractor = (typeof EXTRACTORS)[number];
 let lastExtractor: Extractor = "CSV"; // 마지막에 고른 extractor 가 새 탭의 기본값 (DataGrip)
 
@@ -417,6 +418,8 @@ export function ResultGrid(p: Props) {
           .join("\n");
       case "Where Clause":
         return vals.map((v) => "(" + names.map((n, j) => (v[j] === null ? `${quoteIdent(n)} IS NULL` : `${quoteIdent(n)} = ${lit(v[j])}`)).join(" AND ") + ")").join(" OR\n");
+      case "SQL IN List":
+        return inList(vals.map((v) => v.map((x) => (x === DEFAULT_TOKEN ? null : x))), cs.map((c) => cols[c].typeName));
       case "JSON":
         return JSON.stringify(vals.map((v) => Object.fromEntries(names.map((n, j) => [n, v[j] === DEFAULT_TOKEN ? null : v[j]]))), null, 2);
       case "Markdown":
@@ -432,6 +435,13 @@ export function ResultGrid(p: Props) {
     const single = rect.r0 === rect.r1 && rect.c0 === rect.c1;
     const text = single && (extractor === "CSV" || extractor === "TSV") ? raw(valueAt(dataIndex(rect.r0), rect.c0)) : extract(selRows(), rect.c0, rect.c1, extractor);
     navigator.clipboard.writeText(text);
+  };
+  /** 고른 셀을 ('a', 'b') 로 (WHERE x IN 에 바로 붙인다). 한 셀만 골랐으면 그 열 전체 */
+  const copyInList = () => {
+    if (!rect) return;
+    const single = rect.r0 === rect.r1 && rect.c0 === rect.c1;
+    const rows = single ? Array.from({ length: rowCount }, (_, i) => dataIndex(i)) : selRows();
+    navigator.clipboard.writeText(extract(rows, rect.c0, rect.c1, "SQL IN List"));
   };
   /** 붙여넣기: TSV/CSV 여러 줄을 셀에 나눠 넣고, 행이 모자라면 새 행 생성 (DataGrip) */
   const paste = async () => {
@@ -535,6 +545,7 @@ export function ResultGrid(p: Props) {
         : []),
       { separator: true },
       { label: "Copy", shortcut: k.copy, action: copySelection },
+      { label: "Copy as IN List  ('a', 'b', …)", action: copyInList },
       { label: "Change Data Extractor", submenu: EXTRACTORS.map((x) => ({ label: (x === extractor ? "✓ " : "　") + x, action: () => setExtractor(x) })) },
       ...(canEdit ? ([{ label: "Paste", shortcut: k.paste, action: paste }] as MenuItem[]) : []),
       ...(canEdit

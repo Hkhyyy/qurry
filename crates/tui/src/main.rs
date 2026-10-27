@@ -2,6 +2,7 @@
 mod app;
 mod complete;
 mod exec;
+mod find;
 mod grid;
 mod help;
 mod input;

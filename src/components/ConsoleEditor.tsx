@@ -153,6 +153,8 @@ export function ConsoleEditor({ tabId, connId, initialSql, language, onChange, o
           act("dbtool.extend", "Extend Selection", "editor.extend", () => ed.trigger("k", "editor.action.smartSelect.expand", null));
           act("dbtool.shrink", "Shrink Selection", "editor.shrink", () => ed.trigger("k", "editor.action.smartSelect.shrink", null));
           act("dbtool.gotoLine", "Go to Line/Column", "editor.gotoLine", () => ed.trigger("k", "editor.action.gotoLine", null));
+          // DataGrip ⌘r: 찾기/바꾸기 바 (정규식 .* · 대소문자 · 단어 토글은 Monaco 바에 있다)
+          act("dbtool.replace", "Replace", "editor.replace", () => ed.trigger("k", "editor.action.startFindReplaceAction", null));
           act("dbtool.nextOcc", "Add Selection for Next Occurrence", "editor.nextOcc", () => ed.trigger("k", "editor.action.addSelectionToNextFindMatch", null));
           act("dbtool.allOcc", "Select All Occurrences", "editor.allOcc", () => ed.trigger("k", "editor.action.selectHighlights", null));
           act("dbtool.toggleCase", "Toggle Case", "editor.toggleCase", () => {

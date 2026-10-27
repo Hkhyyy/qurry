@@ -100,7 +100,8 @@ export const KEYMAP: KeySection[] = [
       ["⌃⌘g", "Select all occurrences", "editor.allOcc"],
       ["⇧⌘U", "Toggle case", "editor.toggleCase"],
       ["⌘l", "Go to line", "editor.gotoLine"],
-      ["⌘f", "Find in editor"],
+      ["⌘f", "Find in editor (⌥⌘r regex · ⌥⌘c match case · ⌥⌘w words)"],
+      ["⌘r", "Replace in editor ($1 groups with regex)", "editor.replace"],
     ],
   },
   {

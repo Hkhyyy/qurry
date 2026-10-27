@@ -41,6 +41,7 @@ pub const DEFAULT_KEYS: &[(Action, &[&str])] = &[
     (Action::ShrinkEditor, &["Alt+Shift+Up"]),
     (Action::GrowEditor, &["Alt+Shift+Down"]),
     (Action::Submit, &["Ctrl+S"]),
+    (Action::Find, &["Ctrl+F"]),
     (Action::Disconnect, &["Ctrl+F2"]),
 ];
 

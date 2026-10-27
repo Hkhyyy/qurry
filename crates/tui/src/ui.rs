@@ -210,7 +210,7 @@ fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
     app.hits.caret = None;
-    for r in [&mut app.hits.editor, &mut app.hits.results, &mut app.hits.redis_keys, &mut app.hits.redis_value, &mut app.hits.console, &mut app.hits.divider] {
+    for r in [&mut app.hits.editor, &mut app.hits.find, &mut app.hits.results, &mut app.hits.redis_keys, &mut app.hits.redis_value, &mut app.hits.console, &mut app.hits.divider] {
         *r = Rect::default();
     }
     app.hits.tabs.clear();
@@ -340,11 +340,19 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
     let k = |a: crate::app::Action| app.keys.keys(a).first().map(|s| disp(s)).unwrap_or_else(|| "—".into());
     use crate::app::Action as A;
     let (k_out, k_run, k_commit, k_rollback, k_cancel, k_submit) = (k(A::ToggleOutput), k(A::Execute), k(A::Commit), k(A::Rollback), k(A::Cancel), k(A::Submit));
+    let finding = focused && matches!(app.popup, Some(Popup::Find(_)));
     let tab = &mut app.tabs[idx];
     let db = tab.db.clone();
     match &mut tab.kind {
         TabKind::Console(c) => {
             let [ed, res] = Layout::vertical([Constraint::Percentage(pct), Constraint::Percentage(100 - pct)]).areas(body);
+            // 찾기 바는 편집기 위에 자리를 잡는다 (글을 가리지 않게)
+            let (find_bar, ed) = if finding {
+                let [b, e] = Layout::vertical([Constraint::Length(4), Constraint::Min(3)]).areas(ed);
+                (b, e)
+            } else {
+                (Rect::default(), ed)
+            };
             let title = format!(
                 " {db} · Tx: {}{}{}{} ",
                 if c.tx_manual { "Manual" } else { "Auto" },
@@ -368,6 +376,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             if focused {
                 app.hits.caret = drawn.map(|(x, y)| (x, y, c.editor.cursor().0, c.editor.cursor().1));
                 app.hits.editor = ed;
+                app.hits.find = find_bar;
                 app.hits.results = res;
                 app.hits.console = body;
                 app.hits.divider = Rect { x: res.x, y: res.y, width: res.width, height: 1 };
@@ -653,6 +662,9 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
 }
 
 fn draw_popup(f: &mut Frame, app: &mut App) {
+    if matches!(app.popup, Some(Popup::Find(_))) {
+        return crate::find::draw(f, app);
+    }
     let area = f.area();
     match app.popup.as_mut().unwrap() {
         Popup::Help { sel, scroll, record, message } => {
@@ -715,6 +727,8 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             f.render_widget(Clear, r);
             f.render_widget(Paragraph::new(lines).scroll((*scroll, 0)).block(block(title, true)), r);
         }
+        // 위에서 따로 그린다
+        Popup::Find(_) => {}
         Popup::Message { title, text } => {
             let r = centered(area, 90, (text.lines().count() as u16 + 4).min(30));
             f.render_widget(Clear, r);
