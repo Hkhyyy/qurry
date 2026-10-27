@@ -9,6 +9,9 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  # main 에서도 돌린다: 빌드 캐시(rust-cache)가 main 에 남아야 새 PR 브랜치가 그 캐시로 시작한다 (없으면 매번 처음부터 — 드라이버만 10분 넘게)
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
