@@ -150,26 +150,66 @@ pub fn is_plugin(kind: DbKind) -> bool {
 mod tests {
     use super::*;
 
-    /// 개발 빌드의 SQLite 드라이버로 접속·조회·메타 (cargo build -p qurry-driver-sqlite 가 먼저 있어야 한다)
+    /// 드라이버 공통 시험: 테이블 만들기 → 넣기 → 조회 (limit) → 목록·상세 (PK·FK) → DDL
+    pub(crate) async fn conformance(cfg: ConnectionConfig, schema: &str, setup: &[&str], parent: &str, child: &str) {
+        let c = connect(&cfg, cfg.redis.as_ref().and(None).or(std::env::var("QURRY_DRIVER_PW").ok().as_deref()), None).await.unwrap_or_else(|e| panic!("{:?}: {e}", cfg.kind));
+        for q in setup {
+            c.query(q, 10).await.unwrap_or_else(|e| panic!("{q}: {e}"));
+        }
+        let r = c.query(&format!("SELECT * FROM {child} ORDER BY id"), 1).await.unwrap();
+        assert_eq!((r.rows.len(), r.truncated), (1, true), "{:?}", r.rows);
+        assert!(r.columns.iter().any(|c| c.name.eq_ignore_ascii_case("parent_id")));
+        let objs: crate::meta::SchemaObjects = c.call("objects", json!({ "schema": schema })).await.unwrap();
+        let names: Vec<String> = objs.relations.iter().map(|r| r.name.to_lowercase()).collect();
+        for t in [parent, child] {
+            let bare = t.rsplit('.').next().unwrap().to_lowercase();
+            assert!(names.contains(&bare), "{bare} not in {names:?}");
+        }
+        let bare_child = child.rsplit('.').next().unwrap();
+        let d: crate::meta::TableDetail = c.call("tableDetail", json!({ "schema": schema, "table": objs.relations.iter().find(|r| r.name.eq_ignore_ascii_case(bare_child)).unwrap().name })).await.unwrap();
+        assert!(d.columns.iter().any(|c| c.is_pk && c.name.eq_ignore_ascii_case("id")), "{:?}", d.columns.iter().map(|c| (&c.name, c.is_pk)).collect::<Vec<_>>());
+        assert!(d.constraints.iter().any(|c| c.kind == "f"), "no foreign key: {:?}", d.constraints.iter().map(|c| (&c.kind, &c.definition)).collect::<Vec<_>>());
+        let ddl: String = c.call("ddl", json!({ "schema": schema, "name": objs.relations.iter().find(|r| r.name.eq_ignore_ascii_case(bare_child)).unwrap().name, "kind": "table" })).await.unwrap();
+        assert!(ddl.to_uppercase().contains("CREATE"), "{ddl}");
+        assert!(c.query("SELECT * FROM no_such_table_qurry", 1).await.is_err());
+    }
+
+    fn file_cfg(kind: &str, path: &std::path::Path) -> ConnectionConfig {
+        serde_json::from_value(json!({ "id": "f", "name": "f", "kind": kind, "host": "", "port": 0, "user": "", "database": path.to_string_lossy() })).unwrap()
+    }
+
     #[tokio::test]
-    async fn sqlite_driver_roundtrip() {
+    async fn sqlite_driver_conformance() {
         if driver_path("sqlite").is_none() {
             eprintln!("skip: build qurry-driver-sqlite first");
             return;
         }
         let file = std::env::temp_dir().join(format!("qurry-{}.db", uuid::Uuid::new_v4()));
-        let cfg: ConnectionConfig = serde_json::from_value(json!({ "id": "s", "name": "s", "kind": "sqlite", "host": "", "port": 0, "user": "", "database": file.to_string_lossy() })).unwrap();
-        let c = connect(&cfg, None, None).await.unwrap();
-        c.query("create table t (id integer primary key, name text not null)", 10).await.unwrap();
-        assert_eq!(c.query("insert into t values (1, 'a'), (2, 'b')", 10).await.unwrap().rows_affected, 2);
-        let r = c.query("select * from t order by id", 1).await.unwrap();
-        assert_eq!((r.rows.len(), r.truncated, r.columns[1].name.as_str()), (1, true, "name"));
-        assert!(c.query("select * from nope", 10).await.unwrap_err().to_string().contains("no such table"));
-        drop(c);
+        conformance(file_cfg("sqlite", &file), "main", &[
+            "create table parent (id integer primary key, name text not null)",
+            "create table child (id integer primary key, parent_id integer references parent(id), note text)",
+            "insert into parent values (1, 'a'), (2, 'b')",
+            "insert into child values (1, 1, 'x'), (2, 2, 'y')",
+        ], "parent", "child").await;
         std::fs::remove_file(file).ok();
         // 없는 드라이버는 정해진 글로 (UI 가 받을지 묻는다)
         let e = PluginConn::start("nope").await.unwrap_err().to_string();
         assert!(e.starts_with(MISSING), "{e}");
     }
-}
 
+    #[tokio::test]
+    async fn duckdb_driver_conformance() {
+        if driver_path("duckdb").is_none() {
+            eprintln!("skip: build qurry-driver-duckdb first");
+            return;
+        }
+        let file = std::env::temp_dir().join(format!("qurry-{}.duckdb", uuid::Uuid::new_v4()));
+        conformance(file_cfg("duckdb", &file), "main", &[
+            "create table parent (id integer primary key, name varchar not null)",
+            "create table child (id integer primary key, parent_id integer references parent(id), note varchar)",
+            "insert into parent values (1, 'a'), (2, 'b')",
+            "insert into child values (1, 1, 'x'), (2, 2, 'y')",
+        ], "parent", "child").await;
+        std::fs::remove_file(file).ok();
+    }
+}
