@@ -65,6 +65,7 @@ Connection options:
 - **SSH tunnel** with a key or password. Host keys are checked against `~/.ssh/known_hosts`: a changed key is refused, and an unknown server stops with its SHA256 fingerprint until you choose **Trust host key** (GUI: data source dialog; TUI: `Ctrl+y` in the form or `Ctrl+k › Trust SSH Host Key`).
 - **SSL/TLS**: Require / Verify CA / Full Verification, with optional CA and client certificate. Works for PostgreSQL, MySQL and Redis.
 - **Options tab**: read-only, transaction control and isolation level, time zone, keep-alive, auto-disconnect when idle, single database mode, startup script.
+- **Production**: before a statement that changes data runs, Qurry counts the rows it will change (the same table and WHERE as a `SELECT count(*)`, nothing is changed) and asks. Statements it can't count (`UPDATE … FROM`, `DELETE … USING`, CTEs) still ask. GUI: Options tab · TUI: the `Production` toggle in the data source form.
 
 > Redis Sentinel and Cluster nodes advertise their own addresses, so they can't be combined with an SSH tunnel.
 

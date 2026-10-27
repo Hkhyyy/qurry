@@ -302,6 +302,14 @@ impl AppState {
         Err(explain(&report, kind, last.unwrap()))
     }
 
+    /// PROD 안전장치: 이 문장이 바꿀 행 수 (같은 테이블·조건으로 SELECT count(*)). 셀 수 없는 문장이면 None
+    pub async fn preview_impact(&self, id: String, sql: String) -> AppResult<Option<i64>> {
+        let kind = self.kind_of(&id)?;
+        let Some(q) = crate::guard::impact_count_sql(&sql, kind) else { return Ok(None) };
+        let r = ensure_pool(self, &id).await?.run_query(&q, 1).await?;
+        Ok(r.rows.first().and_then(|x| x.first()).and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))))
+    }
+
     /// 세션의 지금 쿼리를 취소하거나 (terminate) 연결을 끊는다. Read-only Data Source 는 막는다
     pub async fn kill_session(&self, id: String, pid: i64, terminate: bool) -> AppResult<bool> {
         let cfg = self.source(&id)?;
@@ -394,6 +402,21 @@ mod tests {
     #[ignore]
     async fn mysql_reports_run() {
         all_reports_run(DbKind::Mysql, "QURRY_TEST_MY").await;
+    }
+
+    /// PROD 안전장치: 바꿀 행 수를 미리 센다 (실제로 바꾸지 않는다)
+    #[tokio::test]
+    #[ignore]
+    async fn pg_preview_impact_counts_rows() {
+        let Some(st) = state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
+        let q = |s: &str| st.run_query("d".into(), s.into(), None, None);
+        q("drop table if exists qurry_impact").await.ok();
+        q("create table qurry_impact as select g as id from generate_series(1, 100) g").await.unwrap();
+        assert_eq!(st.preview_impact("d".into(), "delete from qurry_impact where id <= 30".into()).await.unwrap(), Some(30));
+        assert_eq!(st.preview_impact("d".into(), "update qurry_impact set id = id".into()).await.unwrap(), Some(100));
+        assert_eq!(st.preview_impact("d".into(), "select 1".into()).await.unwrap(), None);
+        assert_eq!(q("select count(*) from qurry_impact").await.unwrap().rows[0][0], serde_json::json!(100));
+        q("drop table qurry_impact").await.ok();
     }
 
     /// 락을 잡은 세션과 기다리는 세션이 보이고, 잡은 쪽을 끊으면 기다리던 쪽이 끝난다

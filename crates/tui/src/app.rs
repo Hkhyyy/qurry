@@ -1538,6 +1538,11 @@ impl App {
 
     /// confirmed = 위험 문장(WHERE 없는 UPDATE/DELETE, DROP, TRUNCATE) 확인을 받았는지
     pub fn run_stmts(&mut self, stmts: Vec<String>, explain: bool, confirmed: bool) {
+        self.run_stmts_checked(stmts, explain, confirmed, confirmed)
+    }
+
+    /// unsafe_ok = 위험 문장 확인을 받았다, prod_ok = Production 확인(바뀔 행 수)을 받았다
+    fn run_stmts_checked(&mut self, stmts: Vec<String>, explain: bool, confirmed: bool, prod_ok: bool) {
         let analyze = explain && self.analyze_next;
         let Some(t) = self.tabs.get(self.active) else { return };
         let kind = self.kind_of(&t.conn);
@@ -1546,6 +1551,7 @@ impl App {
         let conn_name = self.conn(&t.conn).map(|c| c.config.name.clone()).unwrap_or_default();
         // 히스토리 (GUI 와 같은 기록)
         let (hist_conn, hist_db, hist) = (t.conn.clone(), t.db.clone(), self.state.clone());
+        let prod = self.tabs.get(self.active).and_then(|t| self.conn(&t.conn)).filter(|c| c.config.options.confirm_changes).map(|c| (c.config.name.clone(), self.tabs[self.active].target.clone()));
         let t = &mut self.tabs[self.active];
         let TabKind::Console(c) = &mut t.kind else { return };
         if c.running || stmts.is_empty() {
@@ -1556,8 +1562,49 @@ impl App {
             && let Some((why, s)) = stmts.iter().find_map(|s| qurry_core::guard::unsafe_statement(s, kind).map(|w| (w, s.clone())))
         {
             let preview: String = s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect();
-            self.popup = Some(Popup::Confirm { text: format!("{why}:\n  {preview}\nRun it anyway?"), on_yes: Box::new(move |a| a.run_stmts(stmts, explain, true)) });
+            self.popup = Some(Popup::Confirm { text: format!("{why}:\n  {preview}\nRun it anyway?"), on_yes: Box::new(move |a| a.run_stmts_checked(stmts, explain, true, prod_ok)) });
             return;
+        }
+        // Production Data Source: 바꿀 행 수를 세어 보여 주고 묻는다 (세는 것은 SELECT count(*) — 아무것도 바꾸지 않는다)
+        if let Some((name, target)) = prod
+            && !prod_ok
+            && !explain
+        {
+            let writes: Vec<String> = stmts.iter().filter(|s| !qurry_core::guard::is_read(s, kind)).cloned().collect();
+            if !writes.is_empty() {
+                let st = self.state.clone();
+                self.status = "Counting the rows this will change…".into();
+                self.spawn(
+                    async move {
+                        let mut out = vec![];
+                        for w in writes {
+                            let n = st.preview_impact(target.clone(), w.clone()).await;
+                            out.push((w, n));
+                        }
+                        out
+                    },
+                    move |a, counts| {
+                        let lines: Vec<String> = counts
+                            .iter()
+                            .map(|(s, n)| {
+                                let head: String = s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(70).collect();
+                                let n = match n {
+                                    Ok(Some(n)) => format!("{} row{}", crate::transfer::thousands(*n as u64), if *n == 1 { "" } else { "s" }),
+                                    Ok(None) => "can't count this statement".into(),
+                                    Err(e) => format!("can't count: {}", e.to_string().lines().next().unwrap_or("")),
+                                };
+                                format!("  {head}\n    → {n}")
+                            })
+                            .collect();
+                        a.status.clear();
+                        a.popup = Some(Popup::Confirm {
+                            text: format!("Production data source \"{name}\" — this changes data:\n\n{}\n\nRun it?", lines.join("\n")),
+                            on_yes: Box::new(move |a| a.run_stmts_checked(stmts, explain, true, true)),
+                        });
+                    },
+                );
+                return;
+            }
         }
         // EXPLAIN ANALYZE 는 문장을 실제로 실행한다: 데이터를 바꾸는 문장이면 묻는다
         if analyze
@@ -1960,6 +2007,7 @@ impl App {
                 f("Password", saved(c.password_saved), FieldKind::Secret),
                 f("Database", c.database.clone(), FieldKind::Text),
                 f("Read-only", if c.read_only { "on" } else { "off" }.into(), FieldKind::Toggle),
+                f("Production", if c.options.confirm_changes { "on" } else { "off" }.into(), FieldKind::Toggle),
                 f("SSH tunnel", if ssh.enabled { "on" } else { "off" }.into(), FieldKind::Toggle),
                 f("SSH host", ssh.host.clone(), FieldKind::Text),
                 f("SSH port", ssh.port.to_string(), FieldKind::Text),
@@ -2012,6 +2060,7 @@ impl App {
         c.database = v("Database").trim().into();
         c.name = if v("Name").trim().is_empty() { format!("{}@{}", c.user, c.host) } else { v("Name").trim().into() };
         c.read_only = v("Read-only") == "on";
+        c.options.confirm_changes = v("Production") == "on";
         // custom = GUI 에서 고른 프리셋 밖의 색: 그대로 둔다
         match v("Color").as_str() {
             "custom" => {}

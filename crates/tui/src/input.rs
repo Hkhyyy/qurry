@@ -1739,6 +1739,35 @@ mod tests {
         assert_eq!(p.items[0].label, "answer");
     }
 
+    /// Production Data Source: 데이터를 바꾸는 문장은 바뀔 행 수를 세어 보여 주고 묻는다 (읽기는 그냥 돈다)
+    #[tokio::test]
+    async fn production_asks_before_changes() {
+        let mut h = Harness::new().await;
+        let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+            "id": "p", "name": "PROD", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "d"
+        })).unwrap();
+        cfg.options.confirm_changes = true;
+        h.app.state.store.save(&cfg).unwrap();
+        h.app.reload_conns();
+        h.settle().await;
+        let id = h.app.restore_console("p", "d".into(), "console".into(), "delete from t using s where t.id = s.id").unwrap();
+        let i = h.app.tab_index(id).unwrap();
+        h.app.activate(i);
+        h.key("F5");
+        // 세는 동안 (접속 실패까지) 기다린다
+        for _ in 0..100 {
+            h.settle().await;
+            if h.app.popup.is_some() {
+                break;
+            }
+        }
+        let Some(crate::app::Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
+        assert!(text.contains("Production data source \"PROD\"") && text.contains("delete from t using s") && text.contains("can't count this statement"), "{text}");
+        // 아니라고 하면 실행하지 않는다
+        h.key("Esc");
+        assert!(matches!(&h.app.tabs[h.app.active].kind, TabKind::Console(c) if !c.running && c.output.is_empty()));
+    }
+
     /// 콘솔 마우스: 누른 곳으로 커서, 끌면 선택 (선택한 것만 실행), 다시 누르면 선택이 풀린다
     #[tokio::test]
     async fn console_mouse_click_and_drag_select() {

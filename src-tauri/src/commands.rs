@@ -263,6 +263,12 @@ pub fn snippet_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
     state.history.delete_snippet(&id)
 }
 
+/// Production 확인: 이 문장이 바꿀 행 수
+#[tauri::command]
+pub async fn preview_impact(state: State<'_, AppState>, id: String, sql: String) -> AppResult<Option<i64>> {
+    state.preview_impact(id, sql).await
+}
+
 /// 실행 계획 (EXPLAIN FORMAT JSON) → 트리 + 노드마다 몫(%)·경고
 #[tauri::command]
 pub fn analyze_plan(json: String) -> AppResult<qurry_core::plan::PlanNode> {

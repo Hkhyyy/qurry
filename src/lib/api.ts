@@ -48,6 +48,8 @@ export interface ConnOptions {
   keepAliveSecs?: number | null;
   autoDisconnectSecs?: number | null;
   singleDb?: boolean;
+  /** Production: 바꾸는 문장은 바뀔 행 수를 보여 주고 확인 */
+  confirmChanges?: boolean;
   startupScript?: string;
 }
 
@@ -186,6 +188,8 @@ export const history = {
   saveSnippet: (snippet: Snippet) => invoke<Snippet>("snippet_save", { snippet }),
   deleteSnippet: (id: string) => invoke<void>("snippet_delete", { id }),
 };
+/** Production 확인: 이 문장이 바꿀 행 수 (셀 수 없으면 null) */
+export const previewImpact = (id: string, sql: string) => invoke<number | null>("preview_impact", { id, sql });
 export const dba = {
   reports: (id: string) => invoke<DbaReportInfo[]>("dba_reports", { id }),
   run: (id: string, report: string) => invoke<QueryResult>("dba_report", { id, report }),

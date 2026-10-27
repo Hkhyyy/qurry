@@ -271,6 +271,11 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
               <input type="checkbox" checked={!!opt.singleDb} onChange={(e) => setOpt("singleDb", e.target.checked)} />
               Single database mode
             </label>
+            <span />
+            <label className="check" title="Before UPDATE / DELETE / INSERT … run, show how many rows will change and ask">
+              <input type="checkbox" checked={!!opt.confirmChanges} onChange={(e) => setOpt("confirmChanges", e.target.checked)} />
+              Production: show affected rows and confirm changes
+            </label>
             <label className="top">Startup script</label>
             <textarea
               className="startup-script"

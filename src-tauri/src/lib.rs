@@ -92,6 +92,7 @@ pub fn run() {
             commands::export_data,
             commands::cancel_job,
             commands::dba_reports,
+            commands::preview_impact,
             commands::history_add,
             commands::history_list,
             commands::history_delete,

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { analyzePlan, api, ConnectionView, dialectOf, meta, QueryResult, redisDb, setUpdateCheckEnabled, targetId, UpdateInfo, updateCheckEnabled } from "./lib/api";
+import { analyzePlan, api, ConnectionView, previewImpact, dialectOf, meta, QueryResult, redisDb, setUpdateCheckEnabled, targetId, UpdateInfo, updateCheckEnabled } from "./lib/api";
 import { RedisBrowser } from "./components/RedisBrowser";
 import { KeymapDialog } from "./components/KeymapDialog";
 import { KeymapEditor } from "./components/KeymapEditor";
@@ -900,6 +900,20 @@ export default function App() {
         if (why && !confirm(`${why}:\n\n${s.slice(0, 300)}\n\nRun it anyway?`)) return;
       }
     }
+    // Production: 데이터를 바꾸는 문장은 바뀔 행 수를 세어 보여 주고 묻는다 (세는 것은 SELECT count(*))
+    if (c?.options?.confirmChanges && !explain) {
+      const writes = stmts.filter((s) => !isReadStmt(s));
+      if (writes.length) {
+        setStatus("Counting the rows this will change…");
+        const lines: string[] = [];
+        for (const w of writes) {
+          const n = await previewImpact(tab.target, w).catch((e) => `can't count: ${String(e).split("\n")[0]}`);
+          lines.push(`${w.replace(/\s+/g, " ").slice(0, 120)}\n   → ${typeof n === "number" ? `${n.toLocaleString("en-US")} row${n === 1 ? "" : "s"}` : n === null ? "can't count this statement" : n}`);
+        }
+        setStatus("Ready");
+        if (!confirm(`Production data source "${c.name}" — this changes data:\n\n${lines.join("\n\n")}\n\nRun it?`)) return;
+      }
+    }
     // 고정(pin)되지 않은 결과 탭은 새 결과로 바꾼다
     updTab(tabId, (t) => ({ ...t, running: true, results: t.results.filter((r) => r.pinned), cursorEntry: undefined }));
     setStatus("Executing…");
@@ -1364,7 +1378,7 @@ export default function App() {
         run: async () => {
           const c = t && conns.find((x) => x.id === t.connId);
           const sql = t && editorApis.current.get(t.id)?.text();
-          if (c && sql && (await saveSnippet(sql, c.id, c.name))) setStatus("Snippet saved (⌘K › Snippets…)");
+          if (c && sql && (await saveSnippet(sql, c.id, c.name))) setStatus("Snippet saved (⌘k › Snippets…)");
         },
         disabled: t?.kind !== "console",
       },

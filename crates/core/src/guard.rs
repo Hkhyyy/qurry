@@ -11,6 +11,9 @@ struct Tok {
     depth: i32,
     /// "…" / `…` 로 감싼 이름 (키워드가 아니다)
     quoted: bool,
+    /// 원래 글에서의 위치 (바이트)
+    start: usize,
+    end: usize,
 }
 
 struct Scan {
@@ -85,7 +88,8 @@ fn scan(sql: &str, kind: DbKind) -> Scan {
                 j += 1;
             }
             let inner = &sql[i + 1..j.min(n)];
-            toks.push(if c == b'\'' { Tok { text: "'".into(), word: false, depth, quoted: false } } else { Tok { text: inner.to_lowercase(), word: true, depth, quoted: true } });
+            let (start, end) = (i, (j + 1).min(n));
+            toks.push(if c == b'\'' { Tok { text: "'".into(), word: false, depth, quoted: false, start, end } } else { Tok { text: inner.to_lowercase(), word: true, depth, quoted: true, start, end } });
             i = (j + 1).min(n);
             continue;
         }
@@ -94,8 +98,9 @@ fn scan(sql: &str, kind: DbKind) -> Scan {
             if let Some(te) = rest[1..].find('$').map(|j| j + 2) {
                 let tag = &rest[..te];
                 if tag[1..te - 1].chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') && !tag[1..].starts_with(|ch: char| ch.is_ascii_digit()) {
+                    let start = i;
                     i = sql[i + te..].find(tag).map(|j| i + te + j + te).unwrap_or(n);
-                    toks.push(Tok { text: "'".into(), word: false, depth, quoted: false });
+                    toks.push(Tok { text: "'".into(), word: false, depth, quoted: false, start, end: i });
                     continue;
                 }
             }
@@ -105,19 +110,81 @@ fn scan(sql: &str, kind: DbKind) -> Scan {
             while i < n && (b[i].is_ascii_alphanumeric() || b[i] == b'_' || b[i] == b'$' || b[i] >= 0x80) {
                 i += 1;
             }
-            toks.push(Tok { text: sql[start..i].to_lowercase(), word: true, depth, quoted: false });
+            toks.push(Tok { text: sql[start..i].to_lowercase(), word: true, depth, quoted: false, start, end: i });
             continue;
         }
         if c == b'(' {
             depth += 1;
         }
-        toks.push(Tok { text: (c as char).to_string(), word: false, depth, quoted: false });
+        toks.push(Tok { text: (c as char).to_string(), word: false, depth, quoted: false, start: i, end: i + 1 });
         if c == b')' {
             depth -= 1;
         }
         i += 1;
     }
     Scan { toks, exec_comment }
+}
+
+/// PROD 안전장치: UPDATE / DELETE 가 바꿀 행 수를 세는 SELECT count(*). 같은 테이블·조건으로만 바꿀 수 있는 단순한 문장만
+/// (CTE, UPDATE … FROM, DELETE … USING, 여러 테이블, ORDER BY / LIMIT 이 있으면 None: 셀 수 없다)
+pub fn impact_count_sql(sql: &str, kind: DbKind) -> Option<String> {
+    if kind == DbKind::Redis {
+        return None;
+    }
+    let sc = scan(sql, kind);
+    if sc.exec_comment {
+        return None;
+    }
+    // 첫 문장만 (최상위 ; 까지)
+    let end = sc.toks.iter().position(|x| x.text == ";" && x.depth == 0).unwrap_or(sc.toks.len());
+    let t = &sc.toks[..end];
+    let first = t.iter().position(|x| x.word)?;
+    let is = |i: usize, w: &str| t[i].word && !t[i].quoted && t[i].depth == 0 && t[i].text == w;
+    let find = |w: &str, from: usize| (from..t.len()).find(|&i| is(i, w));
+    let verb = t[first].text.clone();
+    let has = |w: &str| find(w, first + 1).is_some();
+    // 셀 수 없는 모양: 다른 테이블과 묶거나 일부만 바꾸는 것
+    if has("using") || has("join") || has("order") || has("limit") {
+        return None;
+    }
+    let where_i = find("where", first + 1);
+    let (a, b) = match verb.as_str() {
+        "delete" => {
+            let from = find("from", first + 1)?;
+            if from != first + 1 {
+                return None;
+            }
+            (from + 1, where_i.or(find("returning", from)).unwrap_or(t.len()))
+        }
+        "update" => {
+            let set = find("set", first + 1)?;
+            // UPDATE … FROM (PG) · 여러 테이블 (MySQL a, b)
+            if find("from", set).is_some_and(|f| where_i.is_none_or(|w| f < w)) || (first + 1..set).any(|i| t[i].text == "," && t[i].depth == 0) {
+                return None;
+            }
+            (first + 1, set)
+        }
+        _ => return None,
+    };
+    if a >= b {
+        return None;
+    }
+    let table = &sql[t[a].start..t[b - 1].end];
+    // 조건: WHERE 다음부터 RETURNING 앞까지 (뒤 주석은 빼고)
+    let cond = match where_i {
+        Some(w) => {
+            let stop = find("returning", w).unwrap_or(t.len());
+            if w + 1 >= stop {
+                return None;
+            }
+            Some(&sql[t[w + 1].start..t[stop - 1].end])
+        }
+        None => None,
+    };
+    Some(match cond {
+        Some(c) => format!("SELECT count(*) FROM {table} WHERE {c}"),
+        None => format!("SELECT count(*) FROM {table}"),
+    })
 }
 
 /// 읽기 전용에서 허용하는 첫 단어
@@ -248,6 +315,30 @@ pub fn is_read(sql: &str, kind: DbKind) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    /// PROD 안전장치: 바꿀 행 수를 세는 쿼리. 단순한 UPDATE / DELETE 만 (나머지는 None)
+    #[test]
+    fn impact_count_queries() {
+        let pg = |q: &str| impact_count_sql(q, DbKind::Postgres);
+        assert_eq!(pg("UPDATE orders SET status = 'paid' WHERE id = 42;").as_deref(), Some("SELECT count(*) FROM orders WHERE id = 42"));
+        assert_eq!(pg("update public.\"Order Items\" o set qty = qty + 1 where o.qty < 0 returning *").as_deref(), Some("SELECT count(*) FROM public.\"Order Items\" o WHERE o.qty < 0"));
+        assert_eq!(pg("DELETE FROM logs.user_activity_log WHERE ts < now() - interval '30 days'").as_deref(), Some("SELECT count(*) FROM logs.user_activity_log WHERE ts < now() - interval '30 days'"));
+        assert_eq!(pg("delete from t").as_deref(), Some("SELECT count(*) FROM t"));
+        assert_eq!(pg("delete from t returning id").as_deref(), Some("SELECT count(*) FROM t"));
+        // 조건 안의 괄호·문자열 속 키워드는 그대로
+        assert_eq!(pg("update t set a = 'where' where b in (select x from y where z) -- c").as_deref(), Some("SELECT count(*) FROM t WHERE b in (select x from y where z)"));
+        // 셀 수 없는 것
+        assert_eq!(pg("UPDATE t SET a = s.a FROM s WHERE t.id = s.id"), None);
+        assert_eq!(pg("DELETE FROM t USING s WHERE t.id = s.id"), None);
+        assert_eq!(pg("WITH x AS (SELECT 1) DELETE FROM t"), None);
+        assert_eq!(pg("select 1"), None);
+        assert_eq!(pg("insert into t values (1)"), None);
+        let my = |q: &str| impact_count_sql(q, DbKind::Mysql);
+        assert_eq!(my("UPDATE `order` SET a = 1 WHERE b = 2").as_deref(), Some("SELECT count(*) FROM `order` WHERE b = 2"));
+        assert_eq!(my("DELETE FROM t WHERE a = 1 ORDER BY id LIMIT 10"), None);
+        assert_eq!(my("UPDATE a JOIN b ON a.id = b.id SET a.x = 1"), None);
+        assert_eq!(my("UPDATE a, b SET a.x = b.x WHERE a.id = b.id"), None);
+    }
     use super::*;
     use DbKind::{Mysql, Postgres};
 

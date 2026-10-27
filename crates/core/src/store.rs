@@ -119,6 +119,9 @@ pub struct ConnOptions {
     /// Startup script: 연결마다 접속 직후 실행
     #[serde(default)]
     pub startup_script: String,
+    /// Production: 데이터를 바꾸는 문장은 바뀔 행 수를 보여 주고 확인을 받는다
+    #[serde(default)]
+    pub confirm_changes: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]

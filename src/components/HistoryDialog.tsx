@@ -95,7 +95,7 @@ export function HistoryDialog({ connId, title, initialTab = "history", onPick, o
         <input autoFocus className="hist-filter" placeholder="Type to filter" value={q} onChange={(e) => { setQ(e.target.value); setIdx(0); }} />
         <div className="hist-body">
           <div className="hist-list">
-            {list.length === 0 && <div className="muted pad">{tab === "history" ? "No queries yet." : "No snippets yet. Save one from the history, or ⌘K › Save Query as Snippet."}</div>}
+            {list.length === 0 && <div className="muted pad">{tab === "history" ? "No queries yet." : "No snippets yet. Save one from the history, or ⌘k › Save Query as Snippet."}</div>}
             {list.map((r, i) => (
               <div key={r.id} className={"hist-item" + (r === cur ? " on" : "")} onClick={() => setIdx(i)} onDoubleClick={() => onPick(r.sql)}>
                 <span className="hist-sql">{r.title}</span>
