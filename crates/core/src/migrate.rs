@@ -373,6 +373,244 @@ impl AppState {
     }
 }
 
+/// 데이터 비교 결과: 같은 기본 키끼리 맞춰 본 행 수와, 대상을 원본과 같게 만드는 SQL
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataDiff {
+    pub same: u64,
+    pub only_source: u64,
+    pub only_target: u64,
+    pub different: u64,
+    /// INSERT (원본에만) · UPDATE (다른 값) · DELETE (대상에만, 맨 끝)
+    pub sql: String,
+    /// 행이 너무 많아 앞부분만 비교했다
+    pub truncated: bool,
+}
+
+/// 비교할 최대 행 수 (양쪽 각각)
+pub const MAX_COMPARE_ROWS: usize = 200_000;
+
+impl AppState {
+    /// 두 테이블의 데이터를 기본 키로 맞춰 비교한다 (공통 컬럼만)
+    pub async fn compare_data(&self, source_id: String, source_schema: String, source_table: String, target_id: String, target_schema: String, target_table: String) -> AppResult<DataDiff> {
+        let (kind, tk) = (self.kind_of(&source_id)?, self.kind_of(&target_id)?);
+        if kind != tk || kind == DbKind::Redis {
+            return Err(AppError::Msg("Compare tables of the same kind of database (PostgreSQL or MySQL)".into()));
+        }
+        let (sp, tp) = (ensure_pool(self, &source_id).await?, ensure_pool(self, &target_id).await?);
+        let sd = crate::meta::table_detail(&sp, &source_schema, &source_table).await?;
+        let td = crate::meta::table_detail(&tp, &target_schema, &target_table).await?;
+        let pk: Vec<String> = sd.columns.iter().filter(|c| c.is_pk).map(|c| c.name.clone()).collect();
+        if pk.is_empty() {
+            return Err(AppError::Msg(format!("{source_table} has no primary key — data compare matches rows by the primary key")));
+        }
+        let tpk: Vec<String> = td.columns.iter().filter(|c| c.is_pk).map(|c| c.name.clone()).collect();
+        if tpk != pk {
+            return Err(AppError::Msg(format!("The primary keys differ ({} vs {})", pk.join(", "), tpk.join(", "))));
+        }
+        // 양쪽에 다 있는 컬럼만
+        let cols: Vec<String> = sd.columns.iter().map(|c| c.name.clone()).filter(|n| td.columns.iter().any(|t| t.name == *n)).collect();
+        let q = |s: &str| crate::sql::quote_ident(kind, s);
+        let list = cols.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ");
+        let fetch = |pool: Pool, schema: String, table: String| {
+            let sql = format!("SELECT {list} FROM {}.{}", q(&schema), q(&table));
+            async move { pool.run_query(&sql, MAX_COMPARE_ROWS).await }
+        };
+        let (a, b) = (fetch(sp, source_schema, source_table).await?, fetch(tp, target_schema.clone(), target_table.clone()).await?);
+        let pk_idx: Vec<usize> = pk.iter().map(|p| cols.iter().position(|c| c == p).unwrap()).collect();
+        let key = |r: &Vec<serde_json::Value>| pk_idx.iter().map(|&i| r[i].to_string()).collect::<Vec<_>>().join("\u{1}");
+        let target_rows: std::collections::HashMap<String, &Vec<serde_json::Value>> = b.rows.iter().map(|r| (key(r), r)).collect();
+        let lit = |v: &serde_json::Value| crate::transfer::sql_literal(kind, v);
+        let tbl = format!("{}.{}", q(&target_schema), q(&target_table));
+        let where_of = |r: &Vec<serde_json::Value>| pk_idx.iter().map(|&i| format!("{} = {}", q(&cols[i]), lit(&r[i]))).collect::<Vec<_>>().join(" AND ");
+        let mut d = DataDiff { truncated: a.truncated || b.truncated, ..Default::default() };
+        let (mut ins, mut upd, mut del) = (vec![], vec![], vec![]);
+        let mut seen = std::collections::HashSet::new();
+        for r in &a.rows {
+            let k = key(r);
+            seen.insert(k.clone());
+            match target_rows.get(&k) {
+                None => {
+                    d.only_source += 1;
+                    ins.push(format!("INSERT INTO {tbl} ({list}) VALUES ({});", r.iter().map(lit).collect::<Vec<_>>().join(", ")));
+                }
+                Some(t) if *t != r => {
+                    d.different += 1;
+                    let sets: Vec<String> = (0..cols.len()).filter(|&i| t[i] != r[i]).map(|i| format!("{} = {}", q(&cols[i]), lit(&r[i]))).collect();
+                    upd.push(format!("UPDATE {tbl} SET {} WHERE {};", sets.join(", "), where_of(r)));
+                }
+                _ => d.same += 1,
+            }
+        }
+        for r in b.rows.iter().filter(|r| !seen.contains(&key(r))) {
+            d.only_target += 1;
+            del.push(format!("DELETE FROM {tbl} WHERE {};", where_of(r)));
+        }
+        let mut sql = vec![];
+        if !ins.is_empty() {
+            sql.push(format!("-- {} row(s) only in the source\n{}", ins.len(), ins.join("\n")));
+        }
+        if !upd.is_empty() {
+            sql.push(format!("-- {} row(s) with different values\n{}", upd.len(), upd.join("\n")));
+        }
+        if !del.is_empty() {
+            sql.push(format!("-- {} row(s) only in the target (deletes them)\n{}", del.len(), del.join("\n")));
+        }
+        d.sql = sql.join("\n\n");
+        Ok(d)
+    }
+}
+
+// ───────── 마이그레이션 파일 (Flyway 식: V1__init.sql, V2__add_index.sql …) ─────────
+
+/// 적용 기록 테이블 (접속한 DB 의 기본 스키마)
+pub const HISTORY_TABLE: &str = "qurry_schema_history";
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Migration {
+    pub version: String,
+    pub description: String,
+    pub file: String,
+    pub checksum: String,
+    /// pending · applied · changed (적용한 뒤 파일이 바뀜) · missing (기록은 있는데 파일이 없음)
+    pub status: String,
+    pub applied_at: Option<String>,
+}
+
+/// V1__init.sql → ("1", "init"). V1_2__x / V1.2__x → "1.2"
+fn parse_name(name: &str) -> Option<(String, String)> {
+    let rest = name.strip_prefix('V').or_else(|| name.strip_prefix('v'))?;
+    let (ver, desc) = rest.split_once("__")?;
+    let desc = desc.strip_suffix(".sql").or_else(|| desc.strip_suffix(".SQL"))?;
+    let ver = ver.replace('_', ".");
+    (!ver.is_empty() && ver.split('.').all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))).then(|| (ver, desc.replace('_', " ")))
+}
+
+fn version_key(v: &str) -> Vec<u64> {
+    v.split('.').map(|p| p.parse().unwrap_or(0)).collect()
+}
+
+/// 내용이 바뀌었는지 보는 값 (FNV-1a, 줄바꿈 CRLF 는 LF 로)
+fn checksum(text: &str) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in text.replace("\r\n", "\n").bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{h:016x}")
+}
+
+/// 폴더의 마이그레이션 파일 (버전 순서): (버전, 설명, 파일 이름, 내용)
+fn scan_dir(dir: &str) -> AppResult<Vec<(String, String, String, String)>> {
+    let mut out = vec![];
+    for e in std::fs::read_dir(dir)? {
+        let e = e?;
+        let name = e.file_name().to_string_lossy().into_owned();
+        if let Some((v, d)) = parse_name(&name) {
+            out.push((v, d, name, std::fs::read_to_string(e.path())?));
+        }
+    }
+    out.sort_by_key(|x| version_key(&x.0));
+    Ok(out)
+}
+
+impl AppState {
+    /// 적용 기록: 버전 → (checksum, 적용 시각). 기록 테이블이 없으면 비어 있다
+    async fn history_of(&self, pool: &Pool) -> std::collections::HashMap<String, (String, String)> {
+        let q = format!("SELECT version, checksum, CAST(applied_at AS CHAR(40)) FROM {HISTORY_TABLE}");
+        let q = if matches!(pool, Pool::Pg(_)) { q.replace("CHAR(40)", "text") } else { q };
+        match pool.run_query(&q, 100_000).await {
+            Ok(r) => r.rows.into_iter().map(|r| (crate::db::cell_text(&r[0]), (crate::db::cell_text(&r[1]), crate::db::cell_text(&r[2])))).collect(),
+            Err(_) => Default::default(),
+        }
+    }
+
+    /// 폴더의 마이그레이션과 적용 상태
+    pub async fn migration_status(&self, id: String, dir: String) -> AppResult<Vec<Migration>> {
+        let pool = ensure_pool(self, &id).await?;
+        let mut applied = self.history_of(&pool).await;
+        let mut out: Vec<Migration> = scan_dir(&dir)?
+            .into_iter()
+            .map(|(version, description, file, text)| {
+                let checksum = checksum(&text);
+                let (status, applied_at) = match applied.remove(&version) {
+                    Some((c, at)) if c == checksum => ("applied", Some(at)),
+                    Some((_, at)) => ("changed", Some(at)),
+                    None => ("pending", None),
+                };
+                Migration { version, description, file, checksum, status: status.into(), applied_at }
+            })
+            .collect();
+        // 기록은 있는데 파일이 없는 것
+        for (version, (checksum, at)) in applied {
+            out.push(Migration { version, description: String::new(), file: String::new(), checksum, status: "missing".into(), applied_at: Some(at) });
+        }
+        out.sort_by_key(|m| version_key(&m.version));
+        Ok(out)
+    }
+
+    /// 아직 적용하지 않은 것을 버전 순서로 (파일마다 트랜잭션, 실패하면 거기서 멈춘다). 적용한 버전들
+    pub async fn apply_migrations(&self, id: String, dir: String) -> AppResult<Vec<String>> {
+        let cfg = self.source(&id)?;
+        if cfg.read_only {
+            return Err(AppError::Msg(format!("Data source \"{}\" is read-only", cfg.name)));
+        }
+        let kind = cfg.kind;
+        let status = self.migration_status(id.clone(), dir.clone()).await?;
+        if let Some(m) = status.iter().find(|m| m.status == "changed") {
+            return Err(AppError::Msg(format!("V{} ({}) was changed after it was applied — put the file back, or add the change as a new version", m.version, m.file)));
+        }
+        let pool = ensure_pool(self, &id).await?;
+        let create = match kind {
+            DbKind::Mysql => format!("CREATE TABLE IF NOT EXISTS {HISTORY_TABLE} (version VARCHAR(50) PRIMARY KEY, description VARCHAR(200) NOT NULL, checksum VARCHAR(32) NOT NULL, applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"),
+            _ => format!("CREATE TABLE IF NOT EXISTS {HISTORY_TABLE} (version TEXT PRIMARY KEY, description TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())"),
+        };
+        pool.run_query(&create, 1).await?;
+        let files = scan_dir(&dir)?;
+        let mut done = vec![];
+        for m in status.iter().filter(|m| m.status == "pending") {
+            let text = &files.iter().find(|f| f.0 == m.version).unwrap().3;
+            let stmts: Vec<String> = crate::sql::split_statements(text, kind).into_iter().map(|(a, b)| text[a..b].to_string()).collect();
+            let fail = |e: String| AppError::Msg(format!("V{} ({}) failed and was rolled back: {e}", m.version, m.file));
+            let insert = format!("INSERT INTO {HISTORY_TABLE} (version, description, checksum) VALUES ({}, {}, {})", crate::sql::literal(kind, Some(&m.version)), crate::sql::literal(kind, Some(&m.description)), crate::sql::literal(kind, Some(&m.checksum)));
+            match &pool {
+                Pool::Pg(p) => {
+                    let mut tx = p.begin().await?;
+                    for s in stmts.iter().chain(std::iter::once(&insert)) {
+                        sqlx::raw_sql(s).execute(&mut *tx).await.map_err(|e| fail(e.to_string()))?;
+                    }
+                    tx.commit().await.map_err(|e| fail(e.to_string()))?;
+                }
+                Pool::My(p) => {
+                    // MySQL: DDL 은 저절로 커밋된다 (데이터 문장만 함께 되돌린다)
+                    let mut tx = p.begin().await?;
+                    for s in stmts.iter().chain(std::iter::once(&insert)) {
+                        sqlx::raw_sql(s).execute(&mut *tx).await.map_err(|e| fail(e.to_string()))?;
+                    }
+                    tx.commit().await.map_err(|e| fail(e.to_string()))?;
+                }
+                Pool::Redis(..) => return Err(AppError::Msg("Redis has no migrations".into())),
+            }
+            done.push(m.version.clone());
+        }
+        Ok(done)
+    }
+}
+
+/// 다음 버전으로 저장: V{n}__{설명}.sql. 저장한 경로
+pub fn save_migration(dir: &str, description: &str, sql: &str) -> AppResult<String> {
+    let next = scan_dir(dir)?.iter().filter_map(|f| version_key(&f.0).first().copied()).max().unwrap_or(0) + 1;
+    let mut desc: String = description.trim().chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
+    while desc.contains("__") {
+        desc = desc.replace("__", "_");
+    }
+    let desc = desc.trim_matches('_');
+    let path = std::path::Path::new(dir).join(format!("V{next}__{}.sql", if desc.is_empty() { "change" } else { desc }));
+    std::fs::write(&path, sql)?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,6 +652,69 @@ mod tests {
         }
         let again = st.compare_schemas("x".into(), src.into(), "x".into(), dst.into()).await.unwrap();
         assert!(again.is_empty(), "{again:#?}");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn pg_migrations_apply_in_order_and_detect_changes() {
+        let Some((st, _)) = state(DbKind::Postgres).await else { return };
+        let q = |s: &str| st.run_query("x".into(), s.into(), None, None);
+        q("drop table if exists qurry_schema_history, qurry_mig_a").await.ok();
+        let dir = std::env::temp_dir().join(format!("qurry-migs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = dir.to_string_lossy().to_string();
+        std::fs::write(dir.join("V1__create.sql"), "create table qurry_mig_a (id int primary key);").unwrap();
+        std::fs::write(dir.join("V2__add.sql"), "alter table qurry_mig_a add column name text;\ninsert into qurry_mig_a values (1, 'x');").unwrap();
+        std::fs::write(dir.join("V10__later.sql"), "insert into qurry_mig_a values (10, 'y');").unwrap();
+        std::fs::write(dir.join("notes.txt"), "not a migration").unwrap();
+        let st0 = st.migration_status("x".into(), d.clone()).await.unwrap();
+        assert_eq!(st0.iter().map(|m| (m.version.as_str(), m.status.as_str())).collect::<Vec<_>>(), [("1", "pending"), ("2", "pending"), ("10", "pending")]);
+        assert_eq!(st.apply_migrations("x".into(), d.clone()).await.unwrap(), ["1", "2", "10"]);
+        assert!(st.migration_status("x".into(), d.clone()).await.unwrap().iter().all(|m| m.status == "applied"));
+        assert_eq!(q("select count(*) from qurry_mig_a").await.unwrap().rows[0][0], serde_json::json!(2));
+        // 실패하면 그 파일은 롤백되고 기록하지 않는다
+        std::fs::write(dir.join("V11__bad.sql"), "insert into qurry_mig_a values (11, 'z');\nselect * from no_such_table;").unwrap();
+        let e = st.apply_migrations("x".into(), d.clone()).await.unwrap_err().to_string();
+        assert!(e.contains("V11") && e.contains("no_such_table"), "{e}");
+        assert_eq!(q("select count(*) from qurry_mig_a").await.unwrap().rows[0][0], serde_json::json!(2));
+        std::fs::remove_file(dir.join("V11__bad.sql")).unwrap();
+        // 적용한 파일이 바뀌면 알리고 적용하지 않는다
+        std::fs::write(dir.join("V1__create.sql"), "create table qurry_mig_a (id bigint primary key);").unwrap();
+        std::fs::write(dir.join("V12__more.sql"), "select 1;").unwrap();
+        assert_eq!(st.migration_status("x".into(), d.clone()).await.unwrap()[0].status, "changed");
+        assert!(st.apply_migrations("x".into(), d.clone()).await.unwrap_err().to_string().contains("V1"));
+        // 다음 버전으로 저장
+        let p = save_migration(&d, "add index!", "create index on qurry_mig_a (name);").unwrap();
+        assert!(p.ends_with("V13__add_index.sql"), "{p}");
+        q("drop table if exists qurry_schema_history, qurry_mig_a").await.ok();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// 데이터 비교 → 만든 SQL 을 대상에 → 다시 비교하면 모두 같다
+    #[tokio::test]
+    #[ignore]
+    async fn pg_data_compare_and_sync() {
+        let Some((st, _)) = state(DbKind::Postgres).await else { return };
+        let q = |s: &str| st.run_query("x".into(), s.into(), None, None);
+        for s in [
+            "drop table if exists qurry_dsrc, qurry_ddst",
+            "create table qurry_dsrc (id int, k text, name text, amount numeric(10,2), primary key (id, k))",
+            "create table qurry_ddst (id int, k text, name text, amount numeric(10,2), extra int, primary key (id, k))",
+            "insert into qurry_dsrc values (1, 'a', 'same', 1.5), (2, 'a', 'it''s new', 2), (3, 'a', 'changed', 3), (4, 'a', null, 4)",
+            "insert into qurry_ddst values (1, 'a', 'same', 1.5, 9), (3, 'a', 'old', 3, 9), (4, 'a', 'was set', 4, 9), (5, 'a', 'gone', 5, 9)",
+        ] {
+            q(s).await.unwrap();
+        }
+        let d = st.compare_data("x".into(), "public".into(), "qurry_dsrc".into(), "x".into(), "public".into(), "qurry_ddst".into()).await.unwrap();
+        assert_eq!((d.same, d.only_source, d.only_target, d.different), (1, 1, 1, 2), "{}", d.sql);
+        assert!(d.sql.find("INSERT").unwrap() < d.sql.find("DELETE").unwrap(), "{}", d.sql);
+        for (a, b) in crate::sql::split_statements(&d.sql, DbKind::Postgres) {
+            q(&d.sql[a..b]).await.unwrap_or_else(|e| panic!("{}: {e}", &d.sql[a..b]));
+        }
+        let again = st.compare_data("x".into(), "public".into(), "qurry_dsrc".into(), "x".into(), "public".into(), "qurry_ddst".into()).await.unwrap();
+        assert_eq!((again.same, again.only_source, again.only_target, again.different), (4, 0, 0, 0), "{}", again.sql);
+        assert!(again.sql.trim().is_empty() || again.sql.starts_with("--"), "{}", again.sql);
+        q("drop table qurry_dsrc, qurry_ddst").await.ok();
     }
 
     #[tokio::test]

@@ -160,7 +160,7 @@ impl Encoder {
 }
 
 /// SQL 값: NULL·숫자·TRUE/FALSE 는 그대로, 나머지는 따옴표 (MySQL 은 백슬래시도)
-fn sql_literal(kind: DbKind, v: &Value) -> String {
+pub(crate) fn sql_literal(kind: DbKind, v: &Value) -> String {
     match v {
         Value::Null => "NULL".into(),
         Value::Bool(b) => if *b { "TRUE" } else { "FALSE" }.into(),
