@@ -240,6 +240,36 @@ mod tests {
         ], "q_parent", "q_child", true).await;
     }
 
+    /// MongoDB: 셸 문법 (insertMany · find · sort/limit · aggregate · countDocuments), 탐색기 SELECT * FROM, 필드 짐작
+    #[tokio::test]
+    #[ignore]
+    async fn mongodb_driver_shell_queries() {
+        let Some((cfg, pw)) = server_cfg("mongodb", "QURRY_TEST_MONGO") else { return };
+        if driver_path("mongodb").is_none() {
+            return;
+        }
+        let c = connect(&cfg, Some(&pw), None).await.unwrap();
+        c.query("db.q_users.drop()", 1).await.ok();
+        assert_eq!(c.query("db.q_users.insertMany([{name: 'Ada', age: 36, city: 'London'}, {name: 'Linus', age: 54, city: 'Portland', tags: ['kernel']}, {name: 'Grace', age: 85, city: 'Arlington'}])", 1).await.unwrap().rows_affected, 3);
+        let r = c.query("db.q_users.find({age: {$gt: 40}}, {_id: 0}).sort({age: -1})", 1).await.unwrap();
+        assert_eq!((r.rows.len(), r.truncated), (1, true));
+        assert_eq!(r.rows[0][r.columns.iter().position(|c| c.name == "name").unwrap()], json!("Grace"));
+        assert_eq!(c.query("db.q_users.countDocuments({city: 'London'})", 10).await.unwrap().rows[0][0], json!(1));
+        let a = c.query("db.q_users.aggregate([{$group: {_id: null, total: {$sum: '$age'}}}])", 10).await.unwrap();
+        assert_eq!(a.rows[0][a.columns.iter().position(|c| c.name == "total").unwrap()], json!(175));
+        assert_eq!(c.query("db.q_users.updateMany({age: {$gt: 50}}, {$set: {senior: true}})", 1).await.unwrap().rows_affected, 2);
+        assert_eq!(c.query("db.q_users.deleteOne({name: 'Ada'})", 1).await.unwrap().rows_affected, 1);
+        // 탐색기: 컬렉션 목록, SELECT * FROM db.coll, 필드 짐작
+        let objs: crate::meta::SchemaObjects = c.call("objects", json!({ "schema": cfg.database })).await.unwrap();
+        assert!(objs.relations.iter().any(|r| r.name == "q_users"));
+        let all = c.query(&format!("SELECT * FROM {}.q_users", cfg.database), 500).await.unwrap();
+        assert_eq!(all.rows.len(), 2);
+        let d: crate::meta::TableDetail = c.call("tableDetail", json!({ "table": "q_users" })).await.unwrap();
+        assert!(d.columns.iter().any(|c| c.name == "_id" && c.is_pk) && d.columns.iter().any(|c| c.name == "tags"));
+        assert!(c.query("select count(*) from q_users where age > 1", 1).await.unwrap_err().to_string().contains("isn't SQL"));
+        c.query("db.q_users.drop()", 1).await.ok();
+    }
+
     #[tokio::test]
     async fn duckdb_driver_conformance() {
         if driver_path("duckdb").is_none() {

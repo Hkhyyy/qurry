@@ -1,0 +1,13 @@
+[package]
+name = "qurry-driver-mongodb"
+version = "0.2.0"
+edition = "2024"
+description = "Qurry driver plugin: MongoDB (shell-style queries)"
+
+[dependencies]
+qurry-driver = { workspace = true }
+serde_json = { workspace = true }
+mongodb = { version = "3", default-features = false, features = ["sync", "rustls-tls", "compat-3-0-0"] }
+json5 = "1"
+tokio = { workspace = true }
+regex = "1"
