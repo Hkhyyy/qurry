@@ -4173,7 +4173,7 @@ dependencies = [
 
 [[package]]
 name = "qurry"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flate2",
  "libc",
@@ -4193,7 +4193,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aes-gcm 0.10.3",
  "base64 0.22.1",
@@ -4214,7 +4214,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-mcp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "qurry-core",
  "serde",
@@ -4224,7 +4224,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-tui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "crossterm",
