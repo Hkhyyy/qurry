@@ -224,6 +224,23 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
+    async fn mssql_driver_conformance() {
+        let Some((cfg, pw)) = server_cfg("mssql", "QURRY_TEST_MSSQL") else { return };
+        if driver_path("mssql").is_none() {
+            return;
+        }
+        conformance(cfg, Some(&pw), "dbo", &[
+            "IF OBJECT_ID('dbo.q_child') IS NOT NULL DROP TABLE dbo.q_child",
+            "IF OBJECT_ID('dbo.q_parent') IS NOT NULL DROP TABLE dbo.q_parent",
+            "CREATE TABLE dbo.q_parent (id int PRIMARY KEY, name nvarchar(50) NOT NULL)",
+            "CREATE TABLE dbo.q_child (id int PRIMARY KEY, parent_id int REFERENCES dbo.q_parent(id), note nvarchar(max))",
+            "INSERT INTO dbo.q_parent VALUES (1, N'a'), (2, N'b')",
+            "INSERT INTO dbo.q_child VALUES (1, 1, N'x'), (2, 2, NULL)",
+        ], "q_parent", "q_child", true).await;
+    }
+
+    #[tokio::test]
     async fn duckdb_driver_conformance() {
         if driver_path("duckdb").is_none() {
             eprintln!("skip: build qurry-driver-duckdb first");
