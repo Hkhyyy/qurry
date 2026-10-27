@@ -343,7 +343,7 @@ Ctrl+Enter is only distinguishable in terminals that support the kitty keyboard 
 | `arrows  (h j k l)` | Move |
 | `PgUp / PgDn · g / G` | Page · first / last row (more rows load automatically) |
 | `Home / End` | First / last column |
-| `Shift+← / Shift+→` | Scroll columns sideways (mouse: wheel over the header row, ⌥+wheel, or click / drag the bar on the bottom border) |
+| `Shift+↑↓←→ / drag` | Select a range of cells (Esc clears) · scroll sideways: wheel over the header row, ⌥+wheel, or drag the bar on the bottom border |
 | `Enter / F2` | Edit cell (table data) |
 | `n` | Set NULL (table data) |
 | `a / Insert` | Add row (table data) |
@@ -353,8 +353,8 @@ Ctrl+Enter is only distinguishable in terminals that support the kitty keyboard 
 | `w or / · o` | Edit WHERE · ORDER BY (table data) |
 | `r` | Reload (table data) |
 | `x` | Export data (CSV, TSV, JSON, SQL INSERT, Markdown → file or clipboard). Import: ⌃K › Import Data from File… |
-| `y  ⌘c` | Copy cell value |
-| `Y` | Copy the whole column as an IN list: `('a', 'b', …)` — paste after `WHERE x IN` |
+| `y  ⌘c` | Copy cell value (a selected range: as TSV) |
+| `Y` | Copy as an IN list: `('a', 'b', …)` — the selected range, or the whole column. Paste after `WHERE x IN` |
 | `⌘v` | Paste into cells from the selected one (tabs / lines fill several; extra lines add rows; table data) |
 | `Esc` | Back (query results: to the editor) |
 

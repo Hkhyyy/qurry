@@ -156,6 +156,18 @@ fn mouse_drag(app: &mut App, x: u16, y: u16) {
                 g.hscroll_to(x);
             }
         }
+        Some(Drag::Grid) => {
+            if let Some(g) = app.grid_mut() {
+                if let Some((r, c)) = g.hit(x, y) {
+                    let anchor = g.anchor.unwrap_or((g.row, g.col));
+                    g.row = r;
+                    if let Some(c) = c {
+                        g.col = c;
+                    }
+                    g.anchor = (anchor != (g.row, g.col)).then_some(anchor).or(g.anchor);
+                }
+            }
+        }
         Some(Drag::Editor { anchor, selecting }) => {
             let Some(pos) = editor_pos(app, x, y) else { return };
             if let Some(TabKind::Console(c)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind) {
@@ -294,16 +306,24 @@ fn click(app: &mut App, x: u16, y: u16) {
             r.focus_value = true;
         }
         let is_table = matches!(app.tabs.get(app.active).map(|t| &t.kind), Some(TabKind::Table(_)));
+        let mut start = false;
         if let Some(g) = app.grid_mut() {
             if let Some((r, c)) = g.hit(x, y) {
                 g.row = r;
                 if let Some(c) = c {
                     g.col = c;
                 }
+                g.anchor = None;
+                start = true;
                 if dbl && is_table {
                     grid_key(app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                    start = false;
                 }
             }
+        }
+        // 끌면 범위 선택
+        if start {
+            app.drag = Some(Drag::Grid);
         }
         app.fetch_more();
     }
@@ -624,6 +644,13 @@ fn editor_key(app: &mut App, k: KeyEvent) {
 }
 
 fn grid_key(app: &mut App, k: KeyEvent) {
+    // Esc: 고른 범위가 있으면 먼저 그것만 푼다
+    if k.code == KeyCode::Esc {
+        if let Some(g) = app.grid_mut().filter(|g| g.anchor.is_some()) {
+            g.anchor = None;
+            return;
+        }
+    }
     let Some(k) = plain(k) else { return };
     let Some(t) = app.tabs.get_mut(app.active) else {
         app.focus = Focus::Tree;
@@ -720,9 +747,13 @@ fn grid_key(app: &mut App, k: KeyEvent) {
 fn nav(app: &mut App, k: KeyEvent) {
     let Some(g) = app.grid_mut() else { return };
     let page = g.page as isize;
+    let shift = k.modifiers.contains(KeyModifiers::SHIFT);
     match k.code {
-        KeyCode::Right if k.modifiers.contains(KeyModifiers::SHIFT) => g.hscroll(1),
-        KeyCode::Left if k.modifiers.contains(KeyModifiers::SHIFT) => g.hscroll(-1),
+        // Shift+화살표 = 범위 선택 (DataGrip). 가로 스크롤은 트랙패드·Shift+휠·스크롤바
+        KeyCode::Down if shift => g.extend(1, 0),
+        KeyCode::Up if shift => g.extend(-1, 0),
+        KeyCode::Right if shift => g.extend(0, 1),
+        KeyCode::Left if shift => g.extend(0, -1),
         KeyCode::Down | KeyCode::Char('j') => g.move_by(1, 0),
         KeyCode::Up | KeyCode::Char('k') => g.move_by(-1, 0),
         KeyCode::Right | KeyCode::Char('l') => g.move_by(0, 1),
@@ -734,8 +765,15 @@ fn nav(app: &mut App, k: KeyEvent) {
         KeyCode::Char('g') => g.row = 0,
         KeyCode::Char('G') => g.row = g.rows().saturating_sub(1),
         KeyCode::Char('y') => {
-            let v = g.value(g.row, g.col).unwrap_or_else(|| "NULL".into());
-            copy(app, &v);
+            // 범위를 골랐으면 TSV (시트에 칸으로 붙는다), 아니면 지금 칸
+            let Some((r0, c0, r1, c1)) = g.sel_rect() else {
+                let v = g.value(g.row, g.col).unwrap_or_else(|| "NULL".into());
+                return copy(app, &v);
+            };
+            let text = g.selection_tsv();
+            copy(app, &text);
+            let (nr, nc) = (r1 - r0 + 1, c1 - c0 + 1);
+            app.status = format!("Copied {nr} row{} × {nc} column{}", if nr == 1 { "" } else { "s" }, if nc == 1 { "" } else { "s" });
             return;
         }
         KeyCode::Char('Y') => return app.run_action(Action::CopyInList),
@@ -1576,6 +1614,32 @@ mod tests {
         h.type_str("ID");
         h.key("Alt+c");
         assert!(h.screen(120, 30).contains("1/1"));
+    }
+
+    /// 그리드 범위 선택: Shift+↑↓←→ (또는 끌기), y = TSV, Y = 고른 칸만 IN 목록, Esc = 선택 풀기
+    #[tokio::test]
+    async fn grid_range_select_and_copy() {
+        let mut h = Harness::new().await;
+        h.table_tab("logs", &["ip", "n"], &[&["1.2.3.4", "1"], &["5.6.7.8", "2"], &["9.9.9.9", "3"]], &[]);
+        h.key("Shift+Down");
+        h.key("y");
+        assert_eq!(h.app.status, "Copied 2 rows × 1 column");
+        h.key("Y");
+        assert_eq!(h.app.status, "Copied 2 values as an IN list: ('1.2.3.4', '5.6.7.8')");
+        // Esc 는 먼저 선택만 푼다
+        h.key("Esc");
+        assert_eq!(h.app.focus, crate::app::Focus::Grid);
+        h.key("Y");
+        assert!(h.app.status.starts_with("Copied 3 values"), "{}", h.app.status);
+        // 마우스로 끌어도 고른다
+        let s = h.screen(120, 20);
+        let (y0, line) = s.lines().enumerate().find(|(_, l)| l.contains("1.2.3.4")).unwrap();
+        let x = line[..line.find("1.2.3.4").unwrap()].chars().count() as u16;
+        h.mouse("down", x, y0 as u16);
+        h.mouse("drag", x, y0 as u16 + 2);
+        h.mouse("up", x, y0 as u16 + 2);
+        h.key("Y");
+        assert_eq!(h.app.status, "Copied 3 values as an IN list: ('1.2.3.4', '5.6.7.8', '9.9.9.9')");
     }
 
     /// 콘솔 마우스: 누른 곳으로 커서, 끌면 선택 (선택한 것만 실행), 다시 누르면 선택이 풀린다
