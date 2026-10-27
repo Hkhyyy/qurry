@@ -127,7 +127,7 @@ impl App {
     }
 
     /// 상태줄에 올리고 진행이 바뀌는 동안 화면을 다시 그리게 한다
-    fn start_job(&mut self, label: &str) -> String {
+    pub(crate) fn start_job(&mut self, label: &str) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         let job = self.state.start_job(&id);
         self.jobs.push((id.clone(), label.to_string(), job));
@@ -143,7 +143,7 @@ impl App {
         id
     }
 
-    fn end_job(&mut self, id: &str) {
+    pub(crate) fn end_job(&mut self, id: &str) {
         self.jobs.retain(|j| j.0 != id);
     }
 

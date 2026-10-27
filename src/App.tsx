@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { analyzePlan, api, backup, ConnectionView, previewImpact, dialectOf, meta, QueryResult, redisDb, setUpdateCheckEnabled, targetId, UpdateInfo, updateCheckEnabled } from "./lib/api";
+import { analyzePlan, api, backup, ConnectionView, previewImpact, dialectOf, meta, VECTOR_KINDS, QueryResult, redisDb, setUpdateCheckEnabled, targetId, UpdateInfo, updateCheckEnabled } from "./lib/api";
 import { RedisBrowser } from "./components/RedisBrowser";
 import { KeymapDialog } from "./components/KeymapDialog";
 import { KeymapEditor } from "./components/KeymapEditor";
@@ -13,6 +13,7 @@ import { ConsolePane, OutputLine, ResultEntry } from "./components/ConsolePane";
 import { HistoryDialog, migrateOldHistory, pushHistory, saveSnippet } from "./components/HistoryDialog";
 import { EditTarget } from "./components/ResultGrid";
 import { TableEditor } from "./components/TableEditor";
+import { RagView } from "./components/RagView";
 import { RecentFiles, Switcher, SwitchItem } from "./components/Switcher";
 import { ActionItem, DbObject, invalidateSearchIndex, SearchEverywhere, SeTab } from "./components/SearchEverywhere";
 import { FindPanel, FindRun, FtsScope, FullTextSearchDialog } from "./components/FullTextSearch";
@@ -37,7 +38,7 @@ type Group = number;
 interface Tab {
   id: string;
   /** console: SQL 콘솔 / table: 테이블 데이터 에디터 / ddl: 읽기 전용 DDL */
-  kind: "console" | "table" | "ddl" | "redis" | "dba" | "erd" | "migrate";
+  kind: "console" | "table" | "ddl" | "redis" | "dba" | "erd" | "migrate" | "rag";
   group: Group;
   connId: string;
   /** 접속한 DB (없으면 Data Source 기본 DB) */
@@ -665,6 +666,16 @@ export default function App() {
     addTab(c, "migrate", { title: "Compare & Migrate", database: db });
   };
 
+  /** AI Search (RAG) 탭 (하나만). 테이블에서 열면 그 테이블로 새 인덱스 */
+  const [ragInit, setRagInit] = useState<{ n: number; connId: string; db?: string; schema?: string; table?: string } | undefined>();
+  const openRag = (c: ConnectionView, db?: string, schema?: string, table?: string) => {
+    // n 이 바뀌면 탭을 다시 그려 그 테이블로 새 인덱스 양식을 연다
+    setRagInit((x) => ({ n: (x?.n ?? 0) + 1, connId: c.id, db, schema, table }));
+    const existing = tabsRef.current.find((t) => t.kind === "rag");
+    if (existing) return activate(existing);
+    addTab(c, "rag", { title: "AI Search (RAG)", database: db });
+  };
+
   /** 트리 노드 더블클릭 / F4 */
   const activateNode = (info: NodeInfo) => {
     if (info.conn.kind === "redis") {
@@ -793,6 +804,7 @@ export default function App() {
         { label: "Jump to Query Console…", shortcut: K.jump, action: () => jumpToConsole(info) },
       ],
     });
+    if (info.kind === "table" && c.kind !== "redis" && c.kind !== "mongodb" && !VECTOR_KINDS.includes(c.kind)) items.push({ label: "AI Search (RAG) — Index This Table…", action: () => openRag(c, info.db, info.schema, info.name) });
     if (isObj)
       items.push({
         label: "SQL Scripts",
@@ -851,6 +863,7 @@ export default function App() {
               { label: "Users & Privileges", action: () => openDba(c, info.db, "roles", "Users & Roles") },
               { separator: true },
               { label: "Compare & Migrate (schemas, data, migration files)…", action: () => openMigrate(c, info.db) },
+              { label: "AI Search (RAG)…", action: () => openRag(c, info.db) },
               { separator: true },
               { label: "Back Up Database…", action: () => setBackupReq({ c, db: info.db }) },
               { label: "Restore Database…", action: () => startRestore(c, info.db) },
@@ -1756,7 +1769,7 @@ export default function App() {
                 onDoubleClick={() => setMaximized((m) => !m)}
                 title={t.kind === "table" ? `${t.edit?.schema}.${t.edit?.table}` : t.title}
               >
-                <span className={"tab-icon " + t.kind}>{t.kind === "table" ? "▦" : t.kind === "ddl" ? "ƒ" : t.kind === "redis" ? "◆" : t.kind === "dba" ? "◉" : t.kind === "erd" ? "⧉" : t.kind === "migrate" ? "⇄" : "⌘"}</span>
+                <span className={"tab-icon " + t.kind}>{t.kind === "table" ? "▦" : t.kind === "ddl" ? "ƒ" : t.kind === "redis" ? "◆" : t.kind === "dba" ? "◉" : t.kind === "erd" ? "⧉" : t.kind === "migrate" ? "⇄" : t.kind === "rag" ? "✦" : "⌘"}</span>
                 <span>{t.title}</span>
                 {t.pinned ? (
                   <span
@@ -1878,6 +1891,14 @@ export default function App() {
                 </div>
               );
             })}
+          {/* AI Search (RAG) */}
+          {gTabs
+            .filter((t) => t.kind === "rag")
+            .map((t) => (
+              <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
+                <RagView key={ragInit?.n} conns={conns} initial={ragInit} runJob={runJob} onStatus={setStatus} />
+              </div>
+            ))}
           {/* 비교·마이그레이션 */}
           {gTabs
             .filter((t) => t.kind === "migrate")

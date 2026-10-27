@@ -229,6 +229,35 @@ export const migrate = {
   apply: (id: string, dir: string) => invoke<string[]>("apply_migrations", { id, dir }),
   save: (dir: string, description: string, sql: string) => invoke<string>("save_migration", { dir, description, sql }),
 };
+/** RAG 인덱스: 원본 테이블의 글 열 → 임베딩 → 저장소(pgvector 테이블 · 벡터 DB 컬렉션) */
+export interface RagIndex {
+  id: string;
+  name: string;
+  source: string;
+  schema: string;
+  table: string;
+  idColumn: string;
+  textColumns: string[];
+  provider: "openai" | "ollama";
+  model: string;
+  baseUrl: string;
+  dest: string;
+  collection: string;
+  dim?: number | null;
+  rows?: number;
+  builtAt?: string | null;
+}
+export const RAG_DEFAULT_MODEL = { openai: "text-embedding-3-small", ollama: "nomic-embed-text" } as const;
+export const rag = {
+  list: () => invoke<RagIndex[]>("rag_indexes"),
+  save: (index: RagIndex) => invoke<RagIndex>("rag_save", { index }),
+  remove: (id: string) => invoke<void>("rag_delete", { id }),
+  hasKey: () => invoke<boolean>("rag_has_key"),
+  setKey: (key: string | null) => invoke<void>("rag_set_key", { key }),
+  /** 진행은 "transfer-progress" */
+  build: (id: string, job: string) => invoke<number>("rag_build", { id, job }),
+  search: (id: string, query: string, limit = 20) => invoke<QueryResult>("rag_search", { id, query, limit }),
+};
 export const dba = {
   reports: (id: string) => invoke<DbaReportInfo[]>("dba_reports", { id }),
   run: (id: string, report: string) => invoke<QueryResult>("dba_report", { id, report }),

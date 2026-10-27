@@ -24,6 +24,7 @@ pub mod plugin;
 pub mod migrate;
 pub mod mysql;
 pub mod plan;
+pub mod rag;
 pub mod redisdb;
 pub mod search_cache;
 pub mod secrets;

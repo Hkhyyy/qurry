@@ -748,3 +748,17 @@ html, body, #root, * { overscroll-behavior: none; }
 .mig-st.changed, .mig-st.missing { color: var(--danger); }
 .mig-st.applied { color: var(--ok); }
 .danger { color: var(--danger); }
+
+/* AI Search (RAG) */
+.rag-body { flex: 1; min-height: 0; display: flex; gap: 10px; }
+.rag-list { width: 240px; flex: none; display: flex; flex-direction: column; }
+.rag-item { flex-direction: column; align-items: flex-start; gap: 2px; cursor: pointer; padding: 6px 8px; }
+.rag-item.on { background: var(--sel); }
+.rag-new { margin: 8px; }
+.rag-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; overflow: auto; }
+.rag-form { display: grid; grid-template-columns: 110px 1fr; gap: 8px 10px; align-items: center; max-width: 900px; }
+.rag-form > label { color: var(--muted); font-size: 12px; }
+.rag-cols { display: flex; flex-wrap: wrap; gap: 4px 14px; max-height: 140px; overflow: auto; font-size: 12px; }
+.rag-col { display: flex; gap: 4px; align-items: center; }
+.rag-note { font-size: 12px; }
+.rag-q { font-size: 13px; padding: 6px 8px; }

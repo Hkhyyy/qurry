@@ -14,6 +14,11 @@ pub enum Flow {
     SchemaTarget(String, String, String),
     /// 같은 이름 테이블이 있을 대상 스키마 고르기 (원본: conn, db, schema, table)
     DataTarget(String, String, String, String),
+    /// RAG: 검색할 · 만들 인덱스 고르기, 새 인덱스의 저장할 곳 · 임베딩 제공자 고르기 (crate::rag)
+    RagSearch,
+    RagBuild,
+    RagDest(Box<qurry_core::rag::RagIndex>),
+    RagProvider(Box<qurry_core::rag::RagIndex>),
 }
 
 /// 고를 수 있는 곳 하나: "conn\u{1}db\u{1}schema"
@@ -94,6 +99,7 @@ impl App {
     pub fn flow_pick(&mut self, value: String) {
         let (conn, db, schema) = unpack(&value);
         match self.flow.take() {
+            Some(f @ (Flow::RagSearch | Flow::RagBuild | Flow::RagDest(_) | Flow::RagProvider(_))) => self.rag_flow(f, value),
             Some(Flow::SchemaSource) => self.pick_schema(&format!("Compare Schemas — target (made to look like {schema})"), Flow::SchemaTarget(conn, db, schema)),
             Some(Flow::SchemaTarget(sc, sd, ss)) => {
                 let st = self.state.clone();

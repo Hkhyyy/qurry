@@ -337,6 +337,10 @@ pub enum Action {
     ExportCsv,
     CopyInList,
     FindSimilar,
+    RagSearch,
+    RagBuild,
+    RagNew,
+    RagKey,
     Find,
     DbaReports,
     BackupDb,
@@ -402,6 +406,10 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::ExportCsv, "Export Data… (CSV, TSV, JSON, SQL INSERT, Markdown)", "x (grid)"),
     (Action::CopyInList, "Copy Column as IN List  ('a', 'b', …)", "Y (grid)"),
     (Action::FindSimilar, "Find Similar Rows (pgvector, by the vector column)", ""),
+    (Action::RagSearch, "AI Search (RAG)… — ask a table in plain words", ""),
+    (Action::RagBuild, "Build RAG Index… (embed the rows)", ""),
+    (Action::RagNew, "New RAG Index from the Selected Table…", ""),
+    (Action::RagKey, "Set OpenAI API Key (RAG)…", ""),
     (Action::Find, "Find / Replace in Editor (regex)", ""),
     (Action::QueryHistory, "Query History… (shared with the GUI)", ""),
     (Action::Snippets, "Snippets…", ""),
@@ -2509,6 +2517,10 @@ impl App {
                 self.status = format!("Copied {n} values as an IN list: {short}{}", if text.chars().count() > 80 { "…" } else { "" });
             }
             Action::FindSimilar => self.find_similar(),
+            Action::RagSearch => self.rag_search_start(),
+            Action::RagBuild => self.rag_build_start(),
+            Action::RagNew => self.rag_new_start(),
+            Action::RagKey => self.rag_key_start(),
             Action::CancelTransfer => {
                 for (id, ..) in &self.jobs {
                     self.state.cancel_job(id);

@@ -288,6 +288,48 @@ pub async fn restore_db(app: tauri::AppHandle, state: State<'_, AppState>, id: S
     Ok(Some(path))
 }
 
+// ───────── RAG (임베딩 → 벡터 저장소 → 의미 검색) ─────────
+
+#[tauri::command]
+pub fn rag_indexes(state: State<'_, AppState>) -> AppResult<Vec<qurry_core::rag::RagIndex>> {
+    state.rag_indexes()
+}
+
+#[tauri::command]
+pub fn rag_save(state: State<'_, AppState>, index: qurry_core::rag::RagIndex) -> AppResult<qurry_core::rag::RagIndex> {
+    state.rag_save(index)
+}
+
+#[tauri::command]
+pub fn rag_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    state.rag_delete(&id)
+}
+
+/// OpenAI API 키가 저장되어 있는지 (키 자체는 웹뷰로 돌려주지 않는다)
+#[tauri::command]
+pub fn rag_has_key(state: State<'_, AppState>) -> bool {
+    state.rag_has_key()
+}
+
+#[tauri::command]
+pub fn rag_set_key(state: State<'_, AppState>, key: Option<String>) -> AppResult<()> {
+    state.rag_set_key(key)
+}
+
+/// 임베딩해서 넣기 (진행은 "transfer-progress", 행)
+#[tauri::command]
+pub async fn rag_build(app: tauri::AppHandle, state: State<'_, AppState>, id: String, job: String) -> AppResult<u64> {
+    let ticker = report_progress(&app, &state, &job);
+    let r = state.rag_build(id, job).await;
+    ticker.abort();
+    r
+}
+
+#[tauri::command]
+pub async fn rag_search(state: State<'_, AppState>, id: String, query: String, limit: usize) -> AppResult<QueryResult> {
+    state.rag_search(id, query, limit).await
+}
+
 // ───────── 스키마·데이터 비교, 마이그레이션 ─────────
 
 #[tauri::command]

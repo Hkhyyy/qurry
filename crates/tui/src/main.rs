@@ -10,6 +10,7 @@ mod input;
 mod keys;
 mod migrate;
 mod panes;
+mod rag;
 mod workspace;
 #[cfg(test)]
 mod testkit;
