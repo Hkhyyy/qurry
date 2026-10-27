@@ -15,6 +15,7 @@ import { EditTarget } from "./components/ResultGrid";
 import { TableEditor } from "./components/TableEditor";
 import { RagView } from "./components/RagView";
 import { WorkspaceBar, WorkspaceInfo } from "./components/WorkspaceBar";
+import { forgetConsoleModel } from "./lib/monaco";
 import { RecentFiles, Switcher, SwitchItem } from "./components/Switcher";
 import { ActionItem, DbObject, invalidateSearchIndex, SearchEverywhere, SeTab } from "./components/SearchEverywhere";
 import { FindPanel, FindRun, FtsScope, FullTextSearchDialog } from "./components/FullTextSearch";
@@ -550,6 +551,7 @@ export default function App() {
     if (id === curWsRef.current) switchWs(list.find((x) => x.id !== id)!.id, true);
     stash.current.delete(id);
     for (const t of ts) {
+      forgetConsoleModel(t.id);
       editorApis.current.delete(t.id);
       liveSql.current.delete(t.id);
       api.closeSession(t.id).catch(() => {});
@@ -1246,6 +1248,7 @@ export default function App() {
     for (const t of tabsRef.current.filter((x) => ids.includes(x.id))) closedStack.current = [snapshot(t), ...closedStack.current].slice(0, 30);
     mru.current = mru.current.filter((x) => !ids.includes(x));
     for (const id of ids) {
+      forgetConsoleModel(id);
       editorApis.current.delete(id);
       liveSql.current.delete(id);
       api.closeSession(id).catch(() => {});
