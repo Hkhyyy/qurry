@@ -463,7 +463,19 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .ol.sql { color: var(--c-a9b7c6); }
 .ol.info { color: var(--c-5fb865); }
 .ol.error { color: var(--danger); }
-.plan-view { position: absolute; inset: 0; overflow: auto; }
+.plan-view { position: absolute; inset: 0; display: flex; }
+.plan-view .plan-table { flex: 1; overflow: auto; min-width: 0; }
+.plan-summary { padding: 6px 10px; font-size: 12px; color: var(--c-e5c07b, #e5c07b); border-bottom: 1px solid var(--border); }
+.plan-table tr.warn td:first-child { color: var(--c-e5c07b, #e5c07b); }
+.plan-warn { color: var(--c-e5c07b, #e5c07b); }
+.plan-bar { display: inline-block; width: 70px; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; vertical-align: middle; margin-right: 6px; }
+.plan-bar > span { display: block; height: 100%; }
+.plan-pct { font-size: 11px; color: var(--muted); }
+.plan-detail { width: 340px; border-left: 1px solid var(--border); overflow: auto; padding: 8px 10px; font-size: 12px; }
+.plan-detail-title { font-weight: 600; margin-bottom: 6px; }
+.plan-detail-warn { color: var(--c-e5c07b, #e5c07b); margin-bottom: 6px; }
+.plan-detail table { border-collapse: collapse; width: 100%; }
+.plan-detail td { padding: 2px 4px; vertical-align: top; word-break: break-all; }
 .plan-table table { border-collapse: collapse; width: 100%; font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; }
 .plan-table th { position: sticky; top: 0; background: var(--panel); text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); font-family: -apple-system, sans-serif; font-weight: 600; white-space: nowrap; }
 .plan-table td { padding: 3px 8px; border-bottom: 1px solid var(--c-26282b); white-space: nowrap; }

@@ -135,6 +135,13 @@ const handlers: Record<string, (a: any) => unknown> = {
           rowsAffected: 0, truncated: false, elapsedMs: 3, hasResultSet: true,
         },
   kill_session: () => true,
+  analyze_plan: () => ({
+    op: "Gather Merge", detail: "", startup: 1000, total: 6200.5, rows: 12, actualTime: 45.0, actualRows: 766, loops: 1, selfTime: 19.2, pct: 42.6,
+    warnings: ["Rows estimate off ×64 (estimated 12, actual 766) — run ANALYZE; stale statistics lead to bad plans"], props: [["Workers Planned", "2"], ["Workers Launched", "2"]],
+    children: [{ op: "Sort", detail: "key: at", startup: 990, total: 990.03, rows: 12, actualTime: 25.8, actualRows: 383, loops: 2, selfTime: 0.6, pct: 1.3, warnings: [], props: [["Sort Method", "quicksort"]],
+      children: [{ op: "Seq Scan", detail: "on big_t  filter: (h ~~ 'ab%'::text)", startup: 0, total: 989.9, rows: 12, actualTime: 25.2, actualRows: 383, loops: 2, selfTime: 25.2, pct: 56.0,
+        warnings: ["Seq Scan reads the whole table (~200,000 rows) — an index on the filter columns may help", "Filter removed 99% of rows (199,234 rows)"], props: [["Relation Name", "big_t"], ["Rows Removed by Filter", "99617"]], children: [] }] }],
+  }),
   dba_action_sql: (a: any) => a.template.replace(/\{=?(\w+)\}/g, (_: string, k: string) => a.row[k] ?? ""),
   pick_data_file: () => ["~/Downloads/new_users.csv", { format: "csv", columns: ["ID", "Name", "Email", "signup date"], rows: [["1", "Kim", "kim@example.com", "2026-01-02"], ["2", "Lee", null, "2026-01-03"]], bytes: 12_400_000 }],
   import_data: () => new Promise((ok) => setTimeout(() => ok(1234), 4000)),

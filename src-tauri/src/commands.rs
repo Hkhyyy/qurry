@@ -225,6 +225,12 @@ pub async fn export_data(
     Ok(Some(ExportDone { rows: r.rows, path, text: r.text }))
 }
 
+/// 실행 계획 (EXPLAIN FORMAT JSON) → 트리 + 노드마다 몫(%)·경고
+#[tauri::command]
+pub fn analyze_plan(json: String) -> AppResult<qurry_core::plan::PlanNode> {
+    qurry_core::plan::parse_pg(&json)
+}
+
 /// DBA 리포트 목록 (이 Data Source 의 DB 종류에 맞는 것)
 #[tauri::command]
 pub fn dba_reports(state: State<'_, AppState>, id: String) -> AppResult<Vec<qurry_core::dba::ReportInfo>> {

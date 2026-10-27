@@ -92,6 +92,7 @@ pub fn run() {
             commands::export_data,
             commands::cancel_job,
             commands::dba_reports,
+            commands::analyze_plan,
             commands::dba_report,
             commands::kill_session,
             commands::dba_action_sql,

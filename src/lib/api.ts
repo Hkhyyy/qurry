@@ -172,6 +172,8 @@ export interface CompletionTable { schema: string; name: string; columns: [strin
 
 export type DbaAction = { kind: "kill"; label: string; terminate: boolean } | { kind: "sql"; label: string; template: string };
 export interface DbaReportInfo { id: string; title: string; group: string; help: string; actions: DbaAction[] }
+/** 실행 계획 분석 (core): 몫·경고. PlanNode 는 components/ConsolePane */
+export const analyzePlan = (json: string) => invoke<import("../components/ConsolePane").PlanNode>("analyze_plan", { json });
 export const dba = {
   reports: (id: string) => invoke<DbaReportInfo[]>("dba_reports", { id }),
   run: (id: string, report: string) => invoke<QueryResult>("dba_report", { id, report }),

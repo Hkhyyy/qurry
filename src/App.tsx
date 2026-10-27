@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { api, ConnectionView, dialectOf, meta, QueryResult, redisDb, setUpdateCheckEnabled, targetId, UpdateInfo, updateCheckEnabled } from "./lib/api";
+import { analyzePlan, api, ConnectionView, dialectOf, meta, QueryResult, redisDb, setUpdateCheckEnabled, targetId, UpdateInfo, updateCheckEnabled } from "./lib/api";
 import { RedisBrowser } from "./components/RedisBrowser";
 import { KeymapDialog } from "./components/KeymapDialog";
 import { KeymapEditor } from "./components/KeymapEditor";
@@ -9,7 +9,7 @@ import { UpdateDialog } from "./components/UpdateDialog";
 import { ContextMenu, Explorer, MenuItem } from "./components/Explorer";
 import { ConnectionDialog } from "./components/ConnectionDialog";
 import { ConsoleEditor, EditorApi } from "./components/ConsoleEditor";
-import { ConsolePane, OutputLine, parsePgPlan, ResultEntry } from "./components/ConsolePane";
+import { ConsolePane, OutputLine, ResultEntry } from "./components/ConsolePane";
 import { HistoryDialog, pushHistory } from "./components/HistoryDialog";
 import { EditTarget } from "./components/ResultGrid";
 import { TableEditor } from "./components/TableEditor";
@@ -916,7 +916,7 @@ export default function App() {
         updTab(tabId, (t) => ({ ...t, inTx: !!r.inTransaction }));
         if (!r.inTransaction && !isReadStmt(sql0)) committed++;
         if (explain && !isMy) {
-          const plan = parsePgPlan(String(r.rows[0]?.[0] ?? ""));
+          const plan = await analyzePlan(String(r.rows[0]?.[0] ?? "")).catch(() => null);
           const entry: ResultEntry = { id: crypto.randomUUID(), title: resultTitle(sql0, ++n), sql: sql0, kind: "plan", result: null, plan: plan ?? undefined, pinned: false };
           updTab(tabId, (t) => ({ ...t, results: [...t.results, entry] }));
           lastActive = entry.id;

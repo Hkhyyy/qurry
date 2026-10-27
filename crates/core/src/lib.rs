@@ -18,6 +18,7 @@ pub mod error;
 pub mod guard;
 pub mod meta;
 pub mod mysql;
+pub mod plan;
 pub mod redisdb;
 pub mod search_cache;
 pub mod secrets;

@@ -310,6 +310,7 @@ pub enum Action {
     Refresh,
     Execute,
     Explain,
+    ExplainAnalyze,
     Cancel,
     TxToggle,
     Commit,
@@ -367,6 +368,7 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::NewConsole, "New Query Console", ""),
     (Action::Execute, "Execute (asks what to run — see Query Execution Settings)", ""),
     (Action::Explain, "Explain Plan", ""),
+    (Action::ExplainAnalyze, "Explain Analyze (runs the statement: real times and row counts)", ""),
     (Action::Cancel, "Cancel Running Statement", ""),
     (Action::TxToggle, "Toggle Transaction Mode (Auto/Manual)", ""),
     (Action::Commit, "Commit", ""),
@@ -490,6 +492,8 @@ pub struct App {
     pub mru: Vec<u64>,
     /// 도는 내보내기·가져오기 (작업 id, 이름, 진행). 상태줄에 진행 막대
     pub jobs: Vec<(String, String, Arc<qurry_core::transfer::Job>)>,
+    /// 다음 Explain 은 ANALYZE (실제로 실행해서 시간·행 수)
+    pub analyze_next: bool,
     pub focus: Focus,
     pub explorer: bool,
     pub popup: Option<Popup>,
@@ -580,6 +584,7 @@ impl App {
             active: 0,
             mru: vec![],
             jobs: vec![],
+            analyze_next: false,
             focus: Focus::Tree,
             explorer: true,
             popup: None,
@@ -1525,6 +1530,7 @@ impl App {
 
     /// confirmed = 위험 문장(WHERE 없는 UPDATE/DELETE, DROP, TRUNCATE) 확인을 받았는지
     pub fn run_stmts(&mut self, stmts: Vec<String>, explain: bool, confirmed: bool) {
+        let analyze = explain && self.analyze_next;
         let Some(t) = self.tabs.get(self.active) else { return };
         let kind = self.kind_of(&t.conn);
         let id = t.id;
@@ -1543,6 +1549,22 @@ impl App {
             self.popup = Some(Popup::Confirm { text: format!("{why}:\n  {preview}\nRun it anyway?"), on_yes: Box::new(move |a| a.run_stmts(stmts, explain, true)) });
             return;
         }
+        // EXPLAIN ANALYZE 는 문장을 실제로 실행한다: 데이터를 바꾸는 문장이면 묻는다
+        if analyze
+            && !confirmed
+            && let Some(s) = stmts.iter().find(|s| !qurry_core::guard::is_read(s, kind))
+        {
+            let preview: String = s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect();
+            self.popup = Some(Popup::Confirm {
+                text: format!("Explain Analyze really runs the statement (it changes data):\n  {preview}\nRun it anyway?"),
+                on_yes: Box::new(move |a| {
+                    a.analyze_next = true;
+                    a.run_stmts(stmts, explain, true);
+                    a.analyze_next = false;
+                }),
+            });
+            return;
+        }
         c.running = true;
         let session = c.session.clone();
         let st = self.state.clone();
@@ -1554,10 +1576,13 @@ impl App {
                 for s in stmts2 {
                     let q = if explain {
                         let bare = s.trim_end_matches(';');
-                        match kind {
-                            DbKind::Postgres => format!("EXPLAIN {bare}"),
-                            DbKind::Mysql => format!("EXPLAIN {bare}"),
-                            DbKind::Redis => s.clone(),
+                        match (kind, analyze) {
+                            // PG: JSON 으로 받아 트리 표 (% · 경고) 로 바꾼다
+                            (DbKind::Postgres, false) => format!("EXPLAIN (FORMAT JSON) {bare}"),
+                            (DbKind::Postgres, true) => format!("EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) {bare}"),
+                            (DbKind::Mysql, false) => format!("EXPLAIN {bare}"),
+                            (DbKind::Mysql, true) => format!("EXPLAIN ANALYZE {bare}"),
+                            (DbKind::Redis, _) => s.clone(),
                         }
                     } else {
                         s.clone()
@@ -1586,6 +1611,14 @@ impl App {
                     c.log(false, format!("{conn_name}> {echo}{}", if s.chars().count() > 300 { "…" } else { "" }));
                     match r {
                         Ok(res) => {
+                            // PG 실행 계획: 들여쓴 연산 · 몫(%) · 경고 표
+                            let res = match (explain && kind == DbKind::Postgres, res.rows.first().and_then(|r| r.first())) {
+                                (true, Some(v)) => match qurry_core::plan::parse_pg(&crate::grid::raw_text(v).unwrap_or_default()) {
+                                    Ok(p) => qurry_core::db::QueryResult { elapsed_ms: res.elapsed_ms, in_transaction: res.in_transaction, ..qurry_core::plan::to_result(&p) },
+                                    Err(_) => res,
+                                },
+                                _ => res,
+                            };
                             c.in_tx = res.in_transaction;
                             if !res.in_transaction && !qurry_core::guard::is_read(&s, kind) {
                                 committed += 1;
@@ -2242,6 +2275,11 @@ impl App {
             },
             Action::Execute => self.execute(false),
             Action::Explain => self.execute(true),
+            Action::ExplainAnalyze => {
+                self.analyze_next = true;
+                self.execute(true);
+                self.analyze_next = false;
+            }
             Action::Cancel => self.cancel(),
             Action::TxToggle | Action::Commit | Action::Rollback => self.tx(a),
             Action::CloseTab => self.close_tab(self.active),
