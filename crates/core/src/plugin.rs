@@ -270,6 +270,27 @@ mod tests {
         c.query("db.q_users.drop()", 1).await.ok();
     }
 
+    /// Oracle: Instant Client 가 있어야 한다 (ORACLE_CLIENT_LIB_DIR). 스키마 = 사용자 (대문자)
+    #[tokio::test]
+    #[ignore]
+    async fn oracle_driver_conformance() {
+        let Some((cfg, pw)) = server_cfg("oracle", "QURRY_TEST_ORACLE") else { return };
+        if driver_path("oracle").is_none() {
+            return;
+        }
+        let user = cfg.user.to_uppercase();
+        conformance(cfg, Some(&pw), &user, &[
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE q_child'; EXCEPTION WHEN OTHERS THEN NULL; END;",
+            "BEGIN EXECUTE IMMEDIATE 'DROP TABLE q_parent'; EXCEPTION WHEN OTHERS THEN NULL; END;",
+            "CREATE TABLE q_parent (id NUMBER(10) PRIMARY KEY, name VARCHAR2(50) NOT NULL)",
+            "CREATE TABLE q_child (id NUMBER(10) PRIMARY KEY, parent_id NUMBER(10) REFERENCES q_parent(id), note VARCHAR2(100))",
+            "INSERT INTO q_parent VALUES (1, 'a')",
+            "INSERT INTO q_parent VALUES (2, 'b')",
+            "INSERT INTO q_child VALUES (1, 1, 'x')",
+            "INSERT INTO q_child VALUES (2, 2, NULL)",
+        ], "q_parent", "q_child", true).await;
+    }
+
     #[tokio::test]
     async fn duckdb_driver_conformance() {
         if driver_path("duckdb").is_none() {
