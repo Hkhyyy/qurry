@@ -95,6 +95,15 @@ fn block(title: impl Into<Line<'static>>, focused: bool) -> Block<'static> {
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let [main, status] = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(f.area());
+    // 워크스페이스가 둘 이상이면 맨 위 한 줄: 1 Default │ 2 Reports (Alt+n · 클릭)
+    app.hits.workspaces.clear();
+    let main = if app.workspaces.len() > 1 {
+        let [bar, rest] = Layout::vertical([Constraint::Length(1), Constraint::Min(2)]).areas(main);
+        draw_workspaces(f, app, bar);
+        rest
+    } else {
+        main
+    };
     app.hits.main = main;
     app.hits.explorer_divider = Rect::default();
     let right = if app.explorer {
@@ -112,6 +121,22 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.popup.is_some() {
         draw_popup(f, app);
     }
+}
+
+fn draw_workspaces(f: &mut Frame, app: &mut App, area: Rect) {
+    let mut spans = vec![Span::styled(" ◧ ", Style::default().fg(Color::DarkGray))];
+    let mut x = area.x + 3;
+    for (i, w) in app.workspaces.iter().enumerate() {
+        let label = format!(" {} {} ", i + 1, w.name);
+        let width = label.chars().count() as u16;
+        let style = if i == app.cur_ws { Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::Gray) };
+        app.hits.workspaces.push((i, Rect { x, y: area.y, width, height: 1 }));
+        spans.push(Span::styled(label, style));
+        spans.push(Span::raw(" "));
+        x += width + 1;
+    }
+    spans.push(Span::styled(" Alt+1…9 · ⌃K Switch Workspace", Style::default().fg(Color::DarkGray)));
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {

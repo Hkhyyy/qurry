@@ -14,6 +14,7 @@ import { HistoryDialog, migrateOldHistory, pushHistory, saveSnippet } from "./co
 import { EditTarget } from "./components/ResultGrid";
 import { TableEditor } from "./components/TableEditor";
 import { RagView } from "./components/RagView";
+import { WorkspaceBar, WorkspaceInfo } from "./components/WorkspaceBar";
 import { RecentFiles, Switcher, SwitchItem } from "./components/Switcher";
 import { ActionItem, DbObject, invalidateSearchIndex, SearchEverywhere, SeTab } from "./components/SearchEverywhere";
 import { FindPanel, FindRun, FtsScope, FullTextSearchDialog } from "./components/FullTextSearch";
@@ -34,6 +35,16 @@ import "./App.css";
 
 /** 칸 id (0~3). 칸 배치는 Pane 트리 */
 type Group = number;
+
+/** 워크스페이스 하나의 탭·분할 화면 (지금 것이 아닐 때 보관한다) */
+interface WsLayout {
+  tabs: Tab[];
+  panes: Pane;
+  activeIds: (string | null)[];
+  focused: Group;
+  mru: string[];
+}
+const emptyLayout = (): WsLayout => ({ tabs: [], panes: leaf(0), activeIds: [null, null, null, null], focused: 0, mru: [] });
 
 interface Tab {
   id: string;
@@ -159,6 +170,14 @@ export default function App() {
   const [focused, setFocused] = useState<Group>(0);
   const focusedRef = useRef(focused);
   focusedRef.current = focused;
+  // ───────── 워크스페이스 (Orca 처럼): 각자 탭·분할 화면. 지금 것은 위 상태, 나머지는 stash (탭 객체·콘솔 세션·트랜잭션 그대로) ─────────
+  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([{ id: "ws1", name: "Default" }]);
+  const workspacesRef = useRef(workspaces);
+  workspacesRef.current = workspaces;
+  const [curWs, setCurWs] = useState("ws1");
+  const curWsRef = useRef(curWs);
+  curWsRef.current = curWs;
+  const stash = useRef(new Map<string, WsLayout>());
   const [dialog, setDialog] = useState<{ edit?: ConnectionView } | null>(null);
   const [status, setStatus] = useState("Ready");
   const [treeSel, setTreeSel] = useState<NodeInfo | null>(null);
@@ -253,7 +272,21 @@ export default function App() {
   const groupActive = (g: Group) => tabs.find((t) => t.id === activeIds[g] && t.group === g) ?? null;
   const active = groupActive(focused) ?? leaves(panes).map(groupActive).find(Boolean) ?? null;
   const activeConn = conns.find((c) => c.id === active?.connId);
-  const patch = (id: string, p: Partial<Tab>) => setTabs((ts) => ts.map((t) => (t.id === id ? { ...t, ...p } : t)));
+  /** 다른 워크스페이스에 있는 탭이면 거기서 바꾼다 (그 사이 끝난 쿼리 결과가 사라지지 않게) */
+  const updStashed = (id: string, fn: (t: Tab) => Tab) => {
+    for (const w of stash.current.values()) {
+      if (w.tabs.some((t) => t.id === id)) {
+        w.tabs = w.tabs.map((t) => (t.id === id ? fn(t) : t));
+        return true;
+      }
+    }
+    return false;
+  };
+  /** 모든 워크스페이스의 탭 */
+  const allTabs = () => [...tabsRef.current, ...[...stash.current.values()].flatMap((w) => w.tabs)];
+  const patch = (id: string, p: Partial<Tab>) => {
+    if (!updStashed(id, (t) => ({ ...t, ...p }))) setTabs((ts) => ts.map((t) => (t.id === id ? { ...t, ...p } : t)));
+  };
   const mru = useRef<string[]>([]);
   const recent = useRef<TabSnapshot[]>([]);
   const closedStack = useRef<TabSnapshot[]>([]);
@@ -355,10 +388,8 @@ export default function App() {
   const savedWs = useRef("");
   /** 저장할 내용: 탭(콘솔 SQL·테이블 WHERE/ORDER BY·DDL·Redis)과 분할·칸마다 보이는 탭·포커스 */
   const wsJson = () => {
-    const ts = tabsRef.current;
-    return JSON.stringify({
-      version: 1,
-      tabs: ts.map((t) => ({
+    const ser = (l: WsLayout) => ({
+      tabs: l.tabs.map((t) => ({
         kind: t.kind,
         title: t.title,
         connId: t.connId,
@@ -373,14 +404,20 @@ export default function App() {
         dbaReport: t.dbaReport,
         erdSchemas: t.erdSchemas,
       })),
-      panes: panesRef.current,
-      activeIds: activeIdsRef.current.map((id) => ts.findIndex((t) => t.id === id)),
-      focused: focusedRef.current,
+      panes: l.panes,
+      activeIds: l.activeIds.map((id) => l.tabs.findIndex((t) => t.id === id)),
+      focused: l.focused,
+    });
+    const live: WsLayout = { tabs: tabsRef.current, panes: panesRef.current, activeIds: activeIdsRef.current, focused: focusedRef.current, mru: [] };
+    return JSON.stringify({
+      version: 2,
+      current: curWsRef.current,
+      workspaces: workspacesRef.current.map((w) => ({ id: w.id, name: w.name, ...ser(w.id === curWsRef.current ? live : stash.current.get(w.id) ?? emptyLayout()) })),
     });
   };
   /** 앱을 닫거나 업데이트로 다시 켜기 전: 커밋 안 한 변경이 있으면 묻고, 열어 둔 탭을 저장한다 */
   const readyToQuit = () => {
-    const n = tabsRef.current.filter((t) => t.inTx).length;
+    const n = allTabs().filter((t) => t.inTx).length;
     if (n && !confirm(`${n} console(s) have uncommitted changes. Quit and roll them back?`)) return false;
     saveWs();
     return true;
@@ -421,8 +458,9 @@ export default function App() {
       if (t.kind === "table" && back.includes(t.connId) && t.error && !t.running && !t.stale) loadTable(t);
     }
   }, [conns]);
-  const restoreWs = (ws: any) => {
-    if (!ws || !Array.isArray(ws.tabs)) return;
+  /** 저장된 워크스페이스 하나 → 탭·분할 화면 (탭은 고를 때 불러온다) */
+  const buildLayout = (ws: any): WsLayout => {
+    if (!ws || !Array.isArray(ws.tabs)) return emptyLayout();
     const okPane = (p: any): boolean => p && (p.t === "leaf" ? Number.isInteger(p.g) && p.g >= 0 && p.g < MAX_PANES : p.t === "split" && okPane(p.a) && okPane(p.b));
     const pane0: Pane = okPane(ws.panes) ? ws.panes : leaf(0);
     const ls0 = leaves(pane0);
@@ -439,7 +477,7 @@ export default function App() {
       return { ...t, pinned: x.pinned, redisKey: x.redisKey, dbaReport: x.dbaReport, erdSchemas: x.erdSchemas, stale: x.kind !== "ddl" };
     });
     const ts = built.filter((t): t is Tab => !!t);
-    if (!ts.length) return;
+    if (!ts.length) return emptyLayout();
     const pane = prunePanes(pane0, new Set(ts.map((t) => t.group)));
     const ls = leaves(pane);
     const act = [0, 1, 2, 3].map((g) => {
@@ -447,16 +485,90 @@ export default function App() {
       const want = built[ws.activeIds?.[g]];
       return want && want.group === g ? want.id : ts.find((t) => t.group === g)?.id ?? null;
     });
-    setTabs(ts);
-    setPanes(pane);
-    setActiveIds(act);
-    setFocused(ls.includes(ws.focused) ? ws.focused : ls[0]);
-    mru.current = act.filter((x): x is string => !!x);
-    // 칸마다 보이는 탭만 불러온다 (나머지는 고를 때)
-    for (const id of act) {
-      const t = ts.find((x) => x.id === id);
+    return { tabs: ts, panes: pane, activeIds: act, focused: ls.includes(ws.focused) ? ws.focused : ls[0], mru: act.filter((x): x is string => !!x) };
+  };
+  /** 이 탭·분할 화면을 보인다. 칸마다 보이는 탭만 불러온다 (나머지는 고를 때) */
+  const showLayout = (l: WsLayout) => {
+    setTabs(l.tabs);
+    setPanes(l.panes);
+    setActiveIds(l.activeIds);
+    setFocused(l.focused);
+    mru.current = l.mru;
+    for (const id of l.activeIds) {
+      const t = l.tabs.find((x) => x.id === id);
       if (t?.stale) loadStale(t);
     }
+  };
+  const restoreWs = (data: any) => {
+    // version 1 (워크스페이스 전) = 워크스페이스 하나
+    const list: any[] | null = Array.isArray(data?.workspaces) ? data.workspaces : Array.isArray(data?.tabs) ? [{ id: "ws1", name: "Default", ...data }] : null;
+    if (!list?.length) return;
+    const infos: WorkspaceInfo[] = list.map((w, i) => ({ id: typeof w.id === "string" && w.id ? w.id : `ws${i + 1}`, name: typeof w.name === "string" && w.name.trim() ? w.name : `Workspace ${i + 1}` }));
+    const cur = infos.find((w) => w.id === data.current)?.id ?? infos[0].id;
+    stash.current.clear();
+    list.forEach((w, i) => {
+      const l = buildLayout(w);
+      if (infos[i].id === cur) showLayout(l);
+      else stash.current.set(infos[i].id, l);
+    });
+    setWorkspaces(infos);
+    setCurWs(cur);
+  };
+  /** 다른 워크스페이스로: 지금 것은 그대로 보관 (콘솔 세션·트랜잭션도). discard = 지금 것을 보관하지 않는다 (지울 때) */
+  const switchWs = (id: string, discard = false) => {
+    const from = curWsRef.current;
+    if (id === from || !workspacesRef.current.some((w) => w.id === id)) return;
+    const target = stash.current.get(id) ?? emptyLayout();
+    stash.current.delete(id);
+    if (!discard) stash.current.set(from, { tabs: tabsRef.current, panes: panesRef.current, activeIds: activeIdsRef.current, focused: focusedRef.current, mru: mru.current });
+    tabsRef.current = target.tabs;
+    curWsRef.current = id;
+    showLayout(target);
+    setCurWs(id);
+  };
+  const newWs = () => {
+    const name = prompt("Workspace name", `Workspace ${workspacesRef.current.length + 1}`);
+    if (!name?.trim()) return;
+    const w = { id: crypto.randomUUID(), name: name.trim() };
+    setWorkspaces((l) => [...l, w]);
+    workspacesRef.current = [...workspacesRef.current, w];
+    switchWs(w.id);
+  };
+  const renameWs = (id: string) => {
+    const w = workspacesRef.current.find((x) => x.id === id);
+    const name = w && prompt("Rename workspace", w.name);
+    if (name?.trim()) setWorkspaces((l) => l.map((x) => (x.id === id ? { ...x, name: name.trim() } : x)));
+  };
+  /** 워크스페이스와 그 탭을 닫는다 (커밋 안 한 변경은 롤백된다) */
+  const deleteWs = (id: string) => {
+    const list = workspacesRef.current;
+    const w = list.find((x) => x.id === id);
+    if (!w || list.length < 2) return;
+    const ts = id === curWsRef.current ? tabsRef.current : stash.current.get(id)?.tabs ?? [];
+    const dirty = ts.filter((t) => t.inTx).length;
+    if (!confirm(`Delete the workspace "${w.name}"${ts.length ? ` and close its ${ts.length} tab(s)` : ""}?${dirty ? `\n\n${dirty} console(s) have uncommitted changes — they are rolled back.` : ""}`)) return;
+    if (id === curWsRef.current) switchWs(list.find((x) => x.id !== id)!.id, true);
+    stash.current.delete(id);
+    for (const t of ts) {
+      editorApis.current.delete(t.id);
+      liveSql.current.delete(t.id);
+      api.closeSession(t.id).catch(() => {});
+    }
+    setWorkspaces((l) => l.filter((x) => x.id !== id));
+    workspacesRef.current = workspacesRef.current.filter((x) => x.id !== id);
+  };
+  /** 탭을 다른 워크스페이스로 (세션 그대로). 그 워크스페이스의 첫 칸 맨 뒤에 */
+  const moveToWs = (t: Tab, id: string) => {
+    const target = stash.current.get(id) ?? emptyLayout();
+    const g = leaves(target.panes)[0];
+    stash.current.set(id, { ...target, tabs: [...target.tabs, { ...t, group: g }], activeIds: target.activeIds.map((x, i) => (i === g ? t.id : x)), mru: [t.id, ...target.mru] });
+    mru.current = mru.current.filter((x) => x !== t.id);
+    setTabs((ts) => {
+      const rest = ts.filter((x) => x.id !== t.id);
+      settle(rest, panesRef.current);
+      return rest;
+    });
+    setStatus(`Moved "${t.title}" to ${workspacesRef.current.find((w) => w.id === id)?.name}`);
   };
   useEffect(() => {
     if (restored.current || !conns.length) return;
@@ -470,7 +582,7 @@ export default function App() {
   useEffect(() => {
     const h = setTimeout(saveWs, 800);
     return () => clearTimeout(h);
-  }, [tabs, panes, activeIds, focused]);
+  }, [tabs, panes, activeIds, focused, workspaces, curWs]);
   useEffect(() => {
     const h = setInterval(saveWs, 5000);
     return () => clearInterval(h);
@@ -760,7 +872,7 @@ export default function App() {
     });
   };
   const deactivate = async (c: ConnectionView) => {
-    const pending = tabsRef.current.filter((t) => t.connId === c.id && t.inTx);
+    const pending = allTabs().filter((t) => t.connId === c.id && t.inTx);
     if (pending.length && !confirm(`${pending.length} console(s) on ${c.name} have uncommitted changes. Disconnecting rolls them back. Continue?`)) return;
     await api.disconnect(c.id);
     for (const t of pending) updTab(t.id, (x) => ({ ...x, inTx: false }));
@@ -939,7 +1051,9 @@ export default function App() {
     const p2 = (n: number) => String(n).padStart(2, "0");
     return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
   };
-  const updTab = (id: string, fn: (t: Tab) => Tab) => setTabs((ts) => ts.map((t) => (t.id === id ? fn(t) : t)));
+  const updTab = (id: string, fn: (t: Tab) => Tab) => {
+    if (!updStashed(id, fn)) setTabs((ts) => ts.map((t) => (t.id === id ? fn(t) : t)));
+  };
   const log = (id: string, level: OutputLine["level"], text: string) => updTab(id, (t) => ({ ...t, output: [...t.output.slice(-999), { ts: nowTs(), text, level }] }));
   /** 결과 탭 제목: 쿼리 앞 주석 → 테이블 이름 → Result N (DataGrip) */
   const resultTitle = (sql: string, n: number) => {
@@ -1291,6 +1405,25 @@ export default function App() {
             { label: "Unsplit All", action: unsplit },
           ] as MenuItem[])
         : []),
+      { separator: true },
+      {
+        label: "Move to Workspace",
+        submenu: [
+          ...workspaces.filter((w) => w.id !== curWs).map((w) => ({ label: w.name, action: () => moveToWs(t, w.id) })),
+          ...(workspaces.length > 1 ? ([{ separator: true }] as MenuItem[]) : []),
+          {
+            label: "New Workspace…",
+            action: () => {
+              const name = prompt("Workspace name", `Workspace ${workspacesRef.current.length + 1}`);
+              if (!name?.trim()) return;
+              const w = { id: crypto.randomUUID(), name: name.trim() };
+              setWorkspaces((l) => [...l, w]);
+              workspacesRef.current = [...workspacesRef.current, w];
+              moveToWs(t, w.id);
+            },
+          },
+        ],
+      },
     ];
     if (t.kind === "console" && c)
       items.push(
@@ -1417,6 +1550,8 @@ export default function App() {
     return [
       { name: "New Query Console", shortcut: sk("console.new"), group: "File", run: () => c && openConsole(c, treeSel?.db ?? t?.database), disabled: !c },
       { name: "New Data Source…", group: "File", run: () => setDialog({}) },
+      { name: "New Workspace…", group: "Window", run: () => newWs() },
+      ...workspaces.map((w, i) => ({ name: `Workspace: ${w.name}`, shortcut: i < 9 ? sk(`ws.${i + 1}`) : undefined, group: "Window", run: () => switchWs(w.id), disabled: w.id === curWs })),
       { name: "Data Source Properties", shortcut: sk("tree.properties"), group: "File", run: () => c && setDialog({ edit: c }), disabled: !c },
       { name: "Export Data Sources…", group: "File", run: () => exportConns() },
       { name: "Import Data Sources…", group: "File", run: () => importConns() },
@@ -1471,8 +1606,8 @@ export default function App() {
   };
 
   // 키 핸들러는 한 번만 등록되므로 최신 함수는 ref 로 넘긴다
-  const latest = useRef({ toggleExplorer, openFts, bumpFont, setSe, setFindOpen, findOpen });
-  latest.current = { toggleExplorer, openFts, bumpFont, setSe, setFindOpen, findOpen };
+  const latest = useRef({ toggleExplorer, openFts, bumpFont, setSe, setFindOpen, findOpen, switchWs });
+  latest.current = { toggleExplorer, openFts, bumpFont, setSe, setFindOpen, findOpen, switchWs };
   const lastShift = useRef(0);
 
   // ───────── 단축키 (DataGrip 키맵) ─────────
@@ -1505,6 +1640,8 @@ export default function App() {
       if (is("find.action")) return e.preventDefault(), L.setSe("actions");
       if (is("fts")) return e.preventDefault(), void L.openFts();
       if (is("explorer")) return e.preventDefault(), L.toggleExplorer();
+      // ⌥1~9: 워크스페이스
+      for (let n = 1; n <= 9; n++) if (is(`ws.${n}`)) return e.preventDefault(), void (workspacesRef.current[n - 1] && L.switchWs(workspacesRef.current[n - 1].id));
       if (is("find.window")) return e.preventDefault(), L.setFindOpen((o) => !o);
       // ⇧⎋ Hide Active Tool Window
       if (e.shiftKey && e.key === "Escape") {
@@ -2085,6 +2222,19 @@ export default function App() {
         </span>
       </div>
 
+      <div className="ws-row">
+      {!maximized && (
+        <WorkspaceBar
+          list={workspaces}
+          current={curWs}
+          counts={Object.fromEntries(workspaces.map((w) => [w.id, w.id === curWs ? tabs.length : stash.current.get(w.id)?.tabs.length ?? 0]))}
+          shortcut={(n) => (isMac ? `⌥${n}` : `Alt+${n}`)}
+          onSwitch={switchWs}
+          onNew={newWs}
+          onRename={renameWs}
+          onDelete={deleteWs}
+        />
+      )}
       <PanelGroup direction="vertical" className="main" autoSaveId="dbtool-v">
       <Panel id="top" order={1} minSize={20}>
       <PanelGroup direction="horizontal" autoSaveId="dbtool-h">
@@ -2130,6 +2280,7 @@ export default function App() {
         </>
       )}
       </PanelGroup>
+      </div>
 
       {switcher && (
         <Switcher

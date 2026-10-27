@@ -762,3 +762,15 @@ html, body, #root, * { overscroll-behavior: none; }
 .rag-col { display: flex; gap: 4px; align-items: center; }
 .rag-note { font-size: 12px; }
 .rag-q { font-size: 13px; padding: 6px 8px; }
+
+/* 워크스페이스 (맨 왼쪽) */
+.ws-row { flex: 1; min-height: 0; display: flex; }
+.ws-row > .main { flex: 1; min-width: 0; }
+.ws-bar { width: 52px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 0; border-right: 1px solid var(--border); background: var(--panel-2); overflow-y: auto; }
+.ws-item { display: flex; flex-direction: column; align-items: center; gap: 2px; width: 46px; padding: 4px 0; border: none; background: none; color: var(--muted); cursor: pointer; border-radius: 6px; }
+.ws-item:hover { background: var(--hover-tint); }
+.ws-badge { width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; border: 1px solid var(--border); color: var(--text); }
+.ws-item.on .ws-badge { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ws-item.on .ws-name { color: var(--text); }
+.ws-name { font-size: 9px; max-width: 46px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-add { width: 30px; height: 30px; border-radius: 8px; border: 1px dashed var(--border); background: none; color: var(--muted); cursor: pointer; font-size: 16px; }

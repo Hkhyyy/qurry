@@ -36,6 +36,7 @@ export const SHORTCUTS: Shortcut[] = [
   { id: "tab.next", title: "Next Tab", scope: "global", keys: ["Mod+Shift+]"] },
   { id: "tab.prev", title: "Previous Tab", scope: "global", keys: ["Mod+Shift+["] },
   { id: "split.other", title: "Go to the Next Split (⇧: previous)", scope: "global", keys: ["Alt+Tab", "Alt+Shift+Tab"] },
+  ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n): Shortcut => ({ id: `ws.${n}`, title: `Workspace ${n}`, scope: "global", keys: [`Alt+${n}`] })),
 
   { id: "tree.editData", title: "Edit Data / Open Console", scope: "tree", keys: ["Mod+Down", "F4"] },
   { id: "tree.jumpConsole", title: "Jump to Query Console", scope: "tree", keys: ["Mod+Shift+F10"] },

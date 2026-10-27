@@ -19,6 +19,9 @@ pub enum Flow {
     RagBuild,
     RagDest(Box<qurry_core::rag::RagIndex>),
     RagProvider(Box<qurry_core::rag::RagIndex>),
+    /// 워크스페이스 고르기 (crate::workspace): 바꾸기, 탭 옮기기 (탭 id)
+    WsSwitch,
+    WsMove(u64),
 }
 
 /// 고를 수 있는 곳 하나: "conn\u{1}db\u{1}schema"
@@ -100,6 +103,7 @@ impl App {
         let (conn, db, schema) = unpack(&value);
         match self.flow.take() {
             Some(f @ (Flow::RagSearch | Flow::RagBuild | Flow::RagDest(_) | Flow::RagProvider(_))) => self.rag_flow(f, value),
+            Some(f @ (Flow::WsSwitch | Flow::WsMove(_))) => self.ws_flow(f, value),
             Some(Flow::SchemaSource) => self.pick_schema(&format!("Compare Schemas — target (made to look like {schema})"), Flow::SchemaTarget(conn, db, schema)),
             Some(Flow::SchemaTarget(sc, sd, ss)) => {
                 let st = self.state.clone();

@@ -440,16 +440,18 @@ mod tests {
         let st = crate::open_state(Some(dir.clone())).unwrap();
         let cfg: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "m", "name": "m", "kind": "mysql", "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": p[2], "database": p[4] })).unwrap();
         st.save_connection(cfg, Some(p[3].into()), None).await.unwrap();
-        let q = |s: &str| st.run_query("m".into(), s.into(), None, None);
+        // 전용 DB: 다른 테스트가 같은 DB 에서 테이블을 만들고 지우는 동안 덤프하면 깨진다
+        st.run_query("m".into(), "create database if not exists qurry_bak".into(), None, None).await.unwrap();
+        let q = |s: &str| st.run_query("m::qurry_bak".into(), s.into(), None, None);
         q("drop table if exists bak_t").await.ok();
         q("create table bak_t (id int primary key, h varchar(40))").await.unwrap();
         q("insert into bak_t values (1, 'a'), (2, 'it''s'), (3, null)").await.unwrap();
         let file = dir.join("m.sql").to_string_lossy().to_string();
-        assert!(st.backup("m".into(), file.clone(), BackupOptions::default(), "j".into()).await.unwrap() > 100);
+        assert!(st.backup("m::qurry_bak".into(), file.clone(), BackupOptions::default(), "j".into()).await.unwrap() > 100);
         q("drop table bak_t").await.unwrap();
-        st.restore("m".into(), file, RestoreOptions::default(), "r".into()).await.unwrap();
+        st.restore("m::qurry_bak".into(), file, RestoreOptions::default(), "r".into()).await.unwrap();
         assert_eq!(q("select count(*) from bak_t").await.unwrap().rows[0][0], serde_json::json!(3));
-        q("drop table bak_t").await.ok();
+        st.run_query("m".into(), "drop database qurry_bak".into(), None, None).await.ok();
     }
 
     /// 백업 → 지우기 → 되살리기 → 데이터가 그대로 (custom 과 SQL 둘 다)

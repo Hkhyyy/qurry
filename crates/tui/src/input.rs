@@ -86,6 +86,9 @@ pub fn drop_target(app: &App, id: u64, x: u16, y: u16) -> Option<DropTarget> {
 
 fn mouse_down(app: &mut App, x: u16, y: u16) {
     if app.popup.is_none() {
+        if let Some(&(i, _)) = app.hits.workspaces.iter().find(|w| inside(w.1, x, y)) {
+            return app.ws_switch(i);
+        }
         if inside(app.hits.divider, x, y) {
             app.drag = Some(Drag::Console);
             return;
@@ -415,6 +418,12 @@ fn scroll(app: &mut App, d: isize) {
 pub fn on_key(app: &mut App, k: KeyEvent) {
     if app.popup.is_some() {
         return popup_key(app, k);
+    }
+    // Alt+1~9: 워크스페이스
+    if let KeyCode::Char(c @ '1'..='9') = k.code
+        && k.modifiers == KeyModifiers::ALT
+    {
+        return app.ws_switch(c as usize - '1' as usize);
     }
     // ── 전역 명령 (키맵: keys.rs, 바꾸기: F1) ──
     if let Some(a) = app.keys.lookup(&k) {

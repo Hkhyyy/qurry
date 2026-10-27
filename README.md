@@ -168,7 +168,17 @@ src-tauri     GUI backend: Tauri commands call AppState methods directly
 src           GUI frontend (React + Monaco)
 crates/tui    TUI (ratatui)
 crates/mcp    MCP server (stdio JSON-RPC)
+crates/driver qurry-driver: the driver protocol (one JSON request / response per line over stdio) + REST helpers
+drivers/*     driver programs (SQLite, DuckDB, SQL Server, ClickHouse, MongoDB, Oracle, Qdrant, Chroma, Milvus)
 ```
+
+## Workspaces
+
+Keep separate sets of tabs and split panes — one for a production incident, one for a report you are writing — and switch between them without losing anything: consoles keep their session, open transactions and results while you are elsewhere.
+
+- **GUI**: the thin bar at the far left lists the workspaces (`+` makes one; right-click to rename or delete). `⌥1`…`⌥9` (Windows/Linux `Alt+1`…`Alt+9`) switches; right-click a tab › **Move to Workspace**.
+- **TUI**: `Alt+1`…`Alt+9`, or `Ctrl+k` › Switch / New / Rename / Delete Workspace…, Move Tab to Workspace…. With more than one workspace a strip at the top shows them (click to switch).
+- The Database Explorer is shared. Workspaces are saved with the open tabs and come back the next time you start.
 
 ## GUI keyboard shortcuts
 
@@ -273,7 +283,8 @@ Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…
 | `⌃⌘g` | Select all occurrences |
 | `⇧⌘U` | Toggle case |
 | `⌘l` | Go to line |
-| `⌘f` | Find in editor |
+| `⌘f` | Find in editor (⌥⌘r regex · ⌥⌘c match case · ⌥⌘w words) |
+| `⌘r` | Replace in editor ($1 groups with regex) |
 
 #### Data grid (results & table editor)
 
@@ -367,6 +378,7 @@ Ctrl+Enter is only distinguishable in terminals that support the kitty keyboard 
 | `Alt+Shift+Up` | Shrink Editor (console) |
 | `Alt+Shift+Down` | Grow Editor (console) |
 | `Ctrl+s` | Submit Changes |
+| `Ctrl+f` | Find / Replace in Editor (regex) |
 | `Ctrl+F2` | Disconnect |
 
 #### Database Explorer
@@ -395,7 +407,7 @@ Ctrl+Enter is only distinguishable in terminals that support the kitty keyboard 
 | `Shift+Tab` | Go to the result grid (Esc / Tab returns) |
 | `Esc` | Go to the explorer |
 | `Ctrl+u / Ctrl+r` | Undo / redo (editor) |
-| `Ctrl+f` | Find / replace in the editor: `Alt+x` regex · `Alt+c` match case · `Alt+w` words · `Enter` next · `Tab` to Replace: `Enter` one, `Alt+a` all (`$1` groups) |
+| `Ctrl+f` | Find / replace bar: Alt+x regex · Alt+c match case · Alt+w words · Enter next (↑ previous) · Tab to Replace: Enter one, Alt+a all ($1 groups) · Esc close |
 | `⌘a  ⌫` | Select all, then delete (or Ctrl+k › Clear Console) |
 | `click / drag  ⌘c` | Move the cursor / select text (runs only the selection) · copy the selection |
 | `mouse drag` | Drag the editor/result border to resize |
@@ -425,9 +437,9 @@ Ctrl+Enter is only distinguishable in terminals that support the kitty keyboard 
 | `s` | Sort by the selected column: ▲ → ▼ → off (table data: ORDER BY · results: loaded rows) |
 | `w or / · o` | Edit WHERE · ORDER BY (table data) |
 | `r` | Reload (table data) |
-| `x` | Export data (CSV, TSV, JSON, SQL INSERT, Markdown → file or clipboard). Import: ⌃K › Import Data from File… |
-| `y  ⌘c` | Copy cell value (a selected range: as TSV) |
-| `Y` | Copy as an IN list: `('a', 'b', …)` — the selected range, or the whole column. Paste after `WHERE x IN` |
+| `x` | Export data (CSV, TSV, JSON, SQL INSERT, Markdown → file or clipboard) |
+| `y  ⌘c` | Copy cell value (a selected range: as TSV, pastes into spreadsheets as cells) |
+| `Y` | Copy as an IN list: ('a', 'b', …) — the selected range, or the whole column |
 | `⌘v` | Paste into cells from the selected one (tabs / lines fill several; extra lines add rows; table data) |
 | `Esc` | Back (query results: to the editor) |
 
@@ -439,12 +451,21 @@ Ctrl+Enter is only distinguishable in terminals that support the kitty keyboard 
 | `y  ⌘c` | Copy the text |
 | `Esc` | Back to the explorer |
 
+#### Database Admin tab (Ctrl+K › Database Admin…)
+
+| Key | Action |
+|---|---|
+| `r · a` | Refresh · auto-refresh on/off (sessions and locks refresh every 3 s) |
+| `c · K` | Cancel the query · terminate the session of the selected row (asks first) |
+| `Enter · g` | Open the row's query in a console · generate SQL from the row (DROP INDEX, VACUUM, REVOKE…) |
+| `p` | Pick another report |
+
 #### Redis browser (Medis style)
 
 | Key | Action |
 |---|---|
-| `↑ ↓` | Select key |
-| `Enter / → / Tab` | Go to the value |
+| `→ / Enter · ←` | Folder: expand · collapse (← on a key: go to its folder) |
+| `Enter / → / Tab` | Key: go to the value |
 | `/` | Key pattern (SCAN MATCH) |
 | `m` | Scan more |
 | `r` | Rescan |

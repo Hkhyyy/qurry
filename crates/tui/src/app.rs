@@ -341,6 +341,11 @@ pub enum Action {
     RagBuild,
     RagNew,
     RagKey,
+    WsSwitch,
+    WsNew,
+    WsRename,
+    WsDelete,
+    WsMoveTab,
     Find,
     DbaReports,
     BackupDb,
@@ -410,6 +415,11 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::RagBuild, "Build RAG Index… (embed the rows)", ""),
     (Action::RagNew, "New RAG Index from the Selected Table…", ""),
     (Action::RagKey, "Set OpenAI API Key (RAG)…", ""),
+    (Action::WsSwitch, "Switch Workspace…", "Alt+1…9"),
+    (Action::WsNew, "New Workspace…", ""),
+    (Action::WsRename, "Rename Workspace…", ""),
+    (Action::WsDelete, "Delete Workspace…", ""),
+    (Action::WsMoveTab, "Move Tab to Workspace…", ""),
     (Action::Find, "Find / Replace in Editor (regex)", ""),
     (Action::QueryHistory, "Query History… (shared with the GUI)", ""),
     (Action::Snippets, "Snippets…", ""),
@@ -511,6 +521,29 @@ pub struct Hits {
     pub last_click: Option<(std::time::Instant, u16, u16)>,
     /// 콘솔 커서를 그린 화면 칸과 그때 커서 (줄, 칸) — 마우스 위치를 글자 위치로 바꿀 때 (tui-textarea 는 스크롤 위치를 공개하지 않는다)
     pub caret: Option<(u16, u16, usize, usize)>,
+    /// 워크스페이스 띠: (번호, 영역)
+    pub workspaces: Vec<(usize, ratatui::layout::Rect)>,
+}
+
+/// 지금 것이 아닌 워크스페이스의 탭·화면 분할 (탭 객체 그대로: 콘솔 세션·트랜잭션·결과가 남는다)
+pub struct WsSaved {
+    pub tabs: Vec<Tab>,
+    pub active: usize,
+    pub mru: Vec<u64>,
+    pub panes: crate::panes::Pane,
+    pub group_active: [Option<u64>; crate::panes::MAX],
+}
+
+impl Default for WsSaved {
+    fn default() -> Self {
+        WsSaved { tabs: vec![], active: 0, mru: vec![], panes: crate::panes::Pane::Leaf(0), group_active: [None; crate::panes::MAX] }
+    }
+}
+
+/// 워크스페이스 (crate::workspace): 이름 + 지금 것이 아니면 보관한 탭들
+pub struct Workspace {
+    pub name: String,
+    pub saved: Option<WsSaved>,
 }
 
 pub struct App {
@@ -556,6 +589,9 @@ pub struct App {
     next_id: u64,
     /// ⌃Enter 로 무엇을 실행할지 (Query Execution Settings, workspace 에 저장)
     pub exec: crate::exec::ExecSettings,
+    /// 워크스페이스들과 지금 것 (지금 것의 탭은 위 tabs · panes …)
+    pub workspaces: Vec<Workspace>,
+    pub cur_ws: usize,
     /// 지난번 탭을 되살렸는지 (Data Source 목록을 처음 읽은 뒤 한 번), 마지막으로 저장한 내용
     restored: bool,
     saved_ws: String,
@@ -640,6 +676,8 @@ impl App {
             saved_ws: String::new(),
             next_id: 1,
             exec: Default::default(),
+            workspaces: vec![Workspace { name: "Default".into(), saved: None }],
+            cur_ws: 0,
         };
         if let Some(e) = keys_err {
             a.status = e;
@@ -1099,13 +1137,18 @@ impl App {
     pub fn tab_index(&self, id: u64) -> Option<usize> {
         self.tabs.iter().position(|t| t.id == id)
     }
+    /// 다른 워크스페이스에 보관한 탭도 찾는다 (그 사이 끝난 쿼리 결과가 사라지지 않게)
     pub fn tab_mut(&mut self, id: u64) -> Option<&mut Tab> {
-        self.tabs.iter_mut().find(|t| t.id == id)
+        if let Some(i) = self.tab_index(id) {
+            return self.tabs.get_mut(i);
+        }
+        self.workspaces.iter_mut().filter_map(|w| w.saved.as_mut()).flat_map(|s| s.tabs.iter_mut()).find(|t| t.id == id)
     }
 
     /// 커밋 안 한 변경이 있는 콘솔 탭들
     fn pending_tabs(&self, conn: Option<&str>) -> Vec<u64> {
-        self.tabs.iter().filter(|t| conn.is_none_or(|c| t.conn == c) && matches!(&t.kind, TabKind::Console(c) if c.in_tx)).map(|t| t.id).collect()
+        let saved = self.workspaces.iter().filter_map(|w| w.saved.as_ref()).flat_map(|s| s.tabs.iter());
+        self.tabs.iter().chain(saved).filter(|t| conn.is_none_or(|c| t.conn == c) && matches!(&t.kind, TabKind::Console(c) if c.in_tx)).map(|t| t.id).collect()
     }
 
     /// 탭 닫기. 커밋 안 한 변경이 있으면 먼저 묻는다 (닫으면 롤백된다)
@@ -1126,21 +1169,34 @@ impl App {
     }
 
     pub fn close_tab_now(&mut self, i: usize) {
+        if let Some(t) = self.detach_tab(i) {
+            self.close_sessions(&[t]);
+        }
+    }
+
+    /// 탭의 DB 세션을 닫는다 (커밋 안 한 변경은 롤백된다)
+    pub fn close_sessions(&self, tabs: &[Tab]) {
+        for t in tabs {
+            let session = match &t.kind {
+                TabKind::Console(c) => Some(c.session.clone()),
+                TabKind::Table(tt) => Some(tt.session.clone()),
+                _ => None,
+            };
+            if let Some(s) = session {
+                let st = self.state.clone();
+                tokio::spawn(async move {
+                    let _ = st.close_session(s).await;
+                });
+            }
+        }
+    }
+
+    /// 탭을 화면에서 뗀다 (세션은 그대로 — 다른 워크스페이스로 옮길 때도 쓴다). 남은 탭 중 하나를 보인다
+    pub fn detach_tab(&mut self, i: usize) -> Option<Tab> {
         if i >= self.tabs.len() {
-            return;
+            return None;
         }
         let t = self.tabs.remove(i);
-        let session = match &t.kind {
-            TabKind::Console(c) => Some(c.session.clone()),
-            TabKind::Table(tt) => Some(tt.session.clone()),
-            _ => None,
-        };
-        if let Some(s) = session {
-            let st = self.state.clone();
-            tokio::spawn(async move {
-                let _ = st.close_session(s).await;
-            });
-        }
         self.mru.retain(|x| *x != t.id);
         if self.group_active[t.group] == Some(t.id) {
             self.group_active[t.group] = None;
@@ -1150,7 +1206,7 @@ impl App {
             self.focus = Focus::Tree;
             self.panes = crate::panes::Pane::Leaf(0);
             self.group_active = [None; crate::panes::MAX];
-            return;
+            return Some(t);
         }
         // 칸이 비면 그 칸을 없앤다
         let emptied = !self.tabs.iter().any(|x| x.group == t.group);
@@ -1168,6 +1224,7 @@ impl App {
         if emptied {
             self.panes.remove(t.group);
         }
+        Some(t)
     }
 
     /// 분할 해제: 모든 탭을 한 칸으로
@@ -2521,6 +2578,11 @@ impl App {
             Action::RagBuild => self.rag_build_start(),
             Action::RagNew => self.rag_new_start(),
             Action::RagKey => self.rag_key_start(),
+            Action::WsSwitch => self.ws_pick(false),
+            Action::WsNew => self.ws_new(),
+            Action::WsRename => self.ws_rename(),
+            Action::WsDelete => self.ws_delete(),
+            Action::WsMoveTab => self.ws_pick(true),
             Action::CancelTransfer => {
                 for (id, ..) in &self.jobs {
                     self.state.cancel_job(id);
