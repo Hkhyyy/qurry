@@ -344,6 +344,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
     let finding = focused && matches!(app.popup, Some(Popup::Find(_)));
     let tab = &mut app.tabs[idx];
     let db = tab.db.clone();
+    let title = tab.title.clone();
     match &mut tab.kind {
         TabKind::Console(c) => {
             let [ed, res] = Layout::vertical([Constraint::Percentage(pct), Constraint::Percentage(100 - pct)]).areas(body);
@@ -442,7 +443,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             }
         }
         TabKind::Text(t) => {
-            let p = Paragraph::new(t.text.as_str()).scroll((t.scroll, 0)).block(block(" DDL ", focus != Focus::Tree));
+            let p = Paragraph::new(t.text.as_str()).scroll((t.scroll, 0)).block(block(format!(" {title} "), focus != Focus::Tree));
             f.render_widget(p, body);
         }
         TabKind::Dba(d) => {

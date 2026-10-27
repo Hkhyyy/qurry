@@ -219,6 +219,40 @@ impl App {
         }
     }
 
+    /// ⌃K › Show Diagram (ERD): 트리에서 고른 스키마(또는 DB 의 사용자 스키마 전부)의 관계를 글로 + Mermaid (y 로 복사)
+    pub fn erd_open(&mut self) {
+        let Some((conn, db)) = self.dba_target() else {
+            self.status = "Select a schema or a database first".into();
+            return;
+        };
+        let kind = self.kind_of(&conn);
+        let picked = self.tree.selected().filter(|n| n.kind == NodeKind::Schema && self.focus == Focus::Tree).and_then(|n| n.schema);
+        let target = sql::target_id(&conn, Some(&db));
+        let st = self.state.clone();
+        self.status = "Reading tables and foreign keys…".into();
+        let db2 = db.clone();
+        self.spawn(
+            async move {
+                let schemas = match (picked, kind) {
+                    (Some(s), _) => vec![s],
+                    (None, qurry_core::store::DbKind::Mysql) => vec![db2],
+                    (None, _) => st.list_schemas(target.clone()).await.map_err(|e| e.to_string())?.into_iter().filter(|s| !s.is_system).map(|s| s.name).collect(),
+                };
+                let e = st.erd(target, schemas.clone()).await.map_err(|e| e.to_string())?;
+                Ok::<_, String>((schemas, e))
+            },
+            move |a, r| match r {
+                Ok((schemas, e)) => {
+                    a.status = format!("{} tables, {} foreign keys", e.tables.len(), e.relations.len());
+                    let text = format!("{}\n── Mermaid (y copies the whole text; paste into docs, issues, mermaid.live) ──\n\n{}", e.text(), e.mermaid());
+                    let title = format!("Diagram: {}", if schemas.len() == 1 { schemas[0].clone() } else { format!("{} schemas", schemas.len()) });
+                    a.push_tab(&conn, db, title, TabKind::Text(crate::app::TextTab { text, scroll: 0 }));
+                }
+                Err(e) => a.status = format!("Diagram: {e}"),
+            },
+        );
+    }
+
     /// a: 자동 다시 불러오기 켜고 끄기
     pub fn dba_toggle_auto(&mut self) {
         if let Some(Tab { kind: TabKind::Dba(d), .. }) = self.tabs.get_mut(self.active) {

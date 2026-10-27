@@ -711,3 +711,18 @@ html, body, #root, * { overscroll-behavior: none; }
 .dba-hint { font-size: 11px; padding: 2px 10px; }
 .dba-err { margin: 12px; white-space: pre-wrap; }
 .dba-grid { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
+
+/* ERD */
+.erd { display: flex; flex-direction: column; height: 100%; }
+.erd-bar button { white-space: nowrap; }
+.erd-canvas { flex: 1; min-height: 0; width: 100%; cursor: grab; background: var(--bg); user-select: none; }
+.erd-canvas:active { cursor: grabbing; }
+.erd-box { fill: var(--panel); stroke: var(--border); }
+.erd-head { fill: var(--c-2e436e, #2e436e); stroke: var(--border); }
+.erd-title { font: 600 13px -apple-system, sans-serif; fill: var(--text); }
+.erd-col { font: 12px "JetBrains Mono", Menlo, monospace; fill: var(--text); }
+.erd-col.pk { font-weight: 700; }
+.erd-type { font: 11px "JetBrains Mono", Menlo, monospace; fill: var(--muted); }
+.erd-table { cursor: move; }
+.erd-edge { fill: none; stroke: var(--muted); stroke-width: 1.4; opacity: .7; }
+.erd-edge.on { stroke: var(--accent); stroke-width: 2.2; opacity: 1; }

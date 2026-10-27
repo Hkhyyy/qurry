@@ -190,6 +190,13 @@ export const history = {
 };
 /** Production 확인: 이 문장이 바꿀 행 수 (셀 수 없으면 null) */
 export const previewImpact = (id: string, sql: string) => invoke<number | null>("preview_impact", { id, sql });
+export interface ErdColumn { name: string; dataType: string; pk: boolean; nullable: boolean }
+export interface ErdTable { schema: string; name: string; columns: ErdColumn[] }
+export interface ErdRelation { name: string; fromSchema: string; fromTable: string; fromColumns: string[]; toSchema: string; toTable: string; toColumns: string[] }
+/** ERD (테이블·외래 키) + Mermaid 글 */
+export const erd = (id: string, schemas: string[]) => invoke<[{ tables: ErdTable[]; relations: ErdRelation[] }, string]>("erd", { id, schemas });
+/** 글을 파일로 저장 (저장 창). 취소하면 null */
+export const saveFile = (defaultName: string, text: string, filter: string, ext: string) => invoke<string | null>("save_file", { defaultName, text, filter, ext });
 export const dba = {
   reports: (id: string) => invoke<DbaReportInfo[]>("dba_reports", { id }),
   run: (id: string, report: string) => invoke<QueryResult>("dba_report", { id, report }),

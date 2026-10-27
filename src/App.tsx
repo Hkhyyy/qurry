@@ -26,6 +26,7 @@ import { leaf, leaves, MAX_PANES, Pane, prunePanes, splitPane } from "./lib/pane
 import { connBg, getThemePref, setThemePref, THEME_LABEL, ThemePref, useTheme } from "./lib/theme";
 import { ExportDialog, ImportDialog, TransferBar, type TransferJob } from "./components/Transfer";
 import { DbaReport } from "./components/DbaReport";
+import { ErdView } from "./components/ErdView";
 import type { DataFormat } from "./lib/transfer";
 import "./App.css";
 
@@ -35,7 +36,7 @@ type Group = number;
 interface Tab {
   id: string;
   /** console: SQL 콘솔 / table: 테이블 데이터 에디터 / ddl: 읽기 전용 DDL */
-  kind: "console" | "table" | "ddl" | "redis" | "dba";
+  kind: "console" | "table" | "ddl" | "redis" | "dba" | "erd";
   group: Group;
   connId: string;
   /** 접속한 DB (없으면 Data Source 기본 DB) */
@@ -69,6 +70,8 @@ interface Tab {
   redisKey?: string;
   /** dba: 보고 있는 리포트 (sessions, slow_queries, …) */
   dbaReport?: string;
+  /** erd: 그릴 스키마들 */
+  erdSchemas?: string[];
   /** 다시 켤 때 되살린 탭: 아직 불러오지 않았다 (처음 보일 때 불러온다) */
   stale?: boolean;
 }
@@ -366,6 +369,7 @@ export default function App() {
         pinned: t.pinned,
         redisKey: t.redisKey,
         dbaReport: t.dbaReport,
+        erdSchemas: t.erdSchemas,
       })),
       panes: panesRef.current,
       activeIds: activeIdsRef.current.map((id) => ts.findIndex((t) => t.id === id)),
@@ -430,7 +434,7 @@ export default function App() {
         tableSql = `SELECT * FROM ${q(x.edit.schema)}.${q(x.edit.table)}${x.where ? ` WHERE ${x.where}` : ""}${x.orderBy ? ` ORDER BY ${x.orderBy}` : ""};`;
       }
       const t = buildTab(c, x.kind, { sql: x.kind === "table" ? tableSql : x.sql, database: x.database, tableSql, edit: x.edit ? { ...x.edit, pk: [] } : undefined, where: x.where, orderBy: x.orderBy }, group, x.title);
-      return { ...t, pinned: x.pinned, redisKey: x.redisKey, dbaReport: x.dbaReport, stale: x.kind !== "ddl" };
+      return { ...t, pinned: x.pinned, redisKey: x.redisKey, dbaReport: x.dbaReport, erdSchemas: x.erdSchemas, stale: x.kind !== "ddl" };
     });
     const ts = built.filter((t): t is Tab => !!t);
     if (!ts.length) return;
@@ -637,6 +641,22 @@ export default function App() {
     patch(tab.id, { dbaReport: report });
   };
 
+  /** ERD 탭: 스키마들의 테이블·외래 키 그림 (없으면 이 DB 의 사용자 스키마 전부) */
+  const openErd = async (c: ConnectionView, db: string | undefined, schemas?: string[]) => {
+    const database = db && db !== (c.database || "postgres") ? db : undefined;
+    const target = targetId(c.id, database);
+    let list = schemas;
+    if (!list) {
+      const all = await meta.schemas(target).catch(() => []);
+      list = all.filter((x) => !x.isSystem).map((x) => x.name);
+    }
+    const title = `Diagram: ${list.length === 1 ? list[0] : `${list.length} schemas`} — ${c.name}`;
+    const existing = tabsRef.current.find((t) => t.kind === "erd" && t.target === target && (t.erdSchemas ?? []).join(",") === list!.join(","));
+    if (existing) return activate(existing);
+    const tab = addTab(c, "erd", { title, database: db });
+    patch(tab.id, { erdSchemas: list });
+  };
+
   /** 트리 노드 더블클릭 / F4 */
   const activateNode = (info: NodeInfo) => {
     if (info.conn.kind === "redis") {
@@ -787,6 +807,8 @@ export default function App() {
             : []),
         ],
       });
+    if (c.kind !== "redis" && (info.kind === "schema" || info.kind === "db" || (info.kind === "conn" && c.kind === "mysql")))
+      items.push({ label: "Diagrams", submenu: [{ label: "Show Diagram (ERD)", action: () => openErd(c, info.db, info.kind === "schema" && info.schema ? [info.schema] : c.kind === "mysql" ? [info.db ?? c.database] : undefined) }] });
     if (info.kind === "schema" && info.schema && c.kind !== "redis")
       items.push({ label: "Import/Export", submenu: [{ label: "Import Data into New Table…", action: () => setImportReq({ target: nodeTarget(info), schema: info.schema!, refresh: info.refresh }) }] });
     items.push({
@@ -1703,7 +1725,7 @@ export default function App() {
                 onDoubleClick={() => setMaximized((m) => !m)}
                 title={t.kind === "table" ? `${t.edit?.schema}.${t.edit?.table}` : t.title}
               >
-                <span className={"tab-icon " + t.kind}>{t.kind === "table" ? "▦" : t.kind === "ddl" ? "ƒ" : t.kind === "redis" ? "◆" : t.kind === "dba" ? "◉" : "⌘"}</span>
+                <span className={"tab-icon " + t.kind}>{t.kind === "table" ? "▦" : t.kind === "ddl" ? "ƒ" : t.kind === "redis" ? "◆" : t.kind === "dba" ? "◉" : t.kind === "erd" ? "⧉" : "⌘"}</span>
                 <span>{t.title}</span>
                 {t.pinned ? (
                   <span
@@ -1822,6 +1844,17 @@ export default function App() {
                     registerApi={(id, a) => editorApis.current.set(id, a)}
                     onClearOutput={() => patch(t.id, { output: [] })}
                   />
+                </div>
+              );
+            })}
+          {/* ERD */}
+          {gTabs
+            .filter((t) => t.kind === "erd")
+            .map((t) => {
+              const c = conns.find((x) => x.id === t.connId);
+              return (
+                <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
+                  <ErdView target={t.target} schemas={t.erdSchemas ?? []} visible={t.id === ga?.id} onOpenTable={(sc, tb) => c && openTable(c, sc, tb, t.database)} onStatus={setStatus} />
                 </div>
               );
             })}

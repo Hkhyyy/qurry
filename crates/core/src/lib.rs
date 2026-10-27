@@ -14,6 +14,7 @@ macro_rules! log {
 pub mod app;
 pub mod db;
 pub mod dba;
+pub mod erd;
 pub mod error;
 pub mod guard;
 pub mod history;

@@ -263,6 +263,22 @@ pub fn snippet_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
     state.history.delete_snippet(&id)
 }
 
+/// ERD: 스키마들의 테이블·관계 (+ Mermaid 글)
+#[tauri::command]
+pub async fn erd(state: State<'_, AppState>, id: String, schemas: Vec<String>) -> AppResult<(qurry_core::erd::Erd, String)> {
+    let e = state.erd(id, schemas).await?;
+    let m = e.mermaid();
+    Ok((e, m))
+}
+
+/// 글을 파일로 (저장 창: 이름·형식). 취소하면 None
+#[tauri::command]
+pub async fn save_file(app: tauri::AppHandle, default_name: String, text: String, filter: String, ext: String) -> AppResult<Option<String>> {
+    let Some(path) = save_dialog(&app, &default_name, &filter, &[ext.as_str()]) else { return Ok(None) };
+    std::fs::write(&path, text)?;
+    Ok(Some(path))
+}
+
 /// Production 확인: 이 문장이 바꿀 행 수
 #[tauri::command]
 pub async fn preview_impact(state: State<'_, AppState>, id: String, sql: String) -> AppResult<Option<i64>> {

@@ -135,6 +135,19 @@ const handlers: Record<string, (a: any) => unknown> = {
           rowsAffected: 0, truncated: false, elapsedMs: 3, hasResultSet: true,
         },
   kill_session: () => true,
+  erd: () => {
+    const c = (name: string, dataType: string, pk = false, nullable = true) => ({ name, dataType, pk, nullable: pk ? false : nullable });
+    const tables = [
+      { schema: "public", name: "customers", columns: [c("id", "bigint", true), c("name", "text", false, false), c("email", "text"), c("country", "char(2)")] },
+      { schema: "public", name: "orders", columns: [c("id", "bigint", true), c("customer_id", "bigint", false, false), c("status", "text"), c("total", "numeric(12,2)"), c("created_at", "timestamptz")] },
+      { schema: "public", name: "products", columns: [c("id", "bigint", true), c("name", "text"), c("price", "numeric(12,2)")] },
+      { schema: "public", name: "order_items", columns: [c("order_id", "bigint", true), c("product_id", "bigint", true), c("qty", "integer")] },
+      { schema: "billing", name: "invoices", columns: [c("id", "bigint", true), c("order_id", "bigint"), c("issued_at", "date")] },
+    ];
+    const r = (fs: string, ft: string, fc: string[], ts: string, tt: string, tc: string[]) => ({ name: `${ft}_${fc[0]}_fkey`, fromSchema: fs, fromTable: ft, fromColumns: fc, toSchema: ts, toTable: tt, toColumns: tc });
+    return [{ tables, relations: [r("public", "orders", ["customer_id"], "public", "customers", ["id"]), r("public", "order_items", ["order_id"], "public", "orders", ["id"]), r("public", "order_items", ["product_id"], "public", "products", ["id"]), r("billing", "invoices", ["order_id"], "public", "orders", ["id"])] }, "erDiagram\n  customers {\n  }\n"];
+  },
+  save_file: () => null,
   history_add: () => null,
   history_list: () => [
     { id: "h1", connId: "dev", sql: "SELECT client_ip, count(*) FROM logs.user_activity_log GROUP BY 1 ORDER BY 2 DESC LIMIT 20", ts: Date.now() - 60000 },
