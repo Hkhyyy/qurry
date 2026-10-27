@@ -15,6 +15,8 @@ export interface NodeInfo {
   schema?: string;
   name?: string;
   refresh?: () => void;
+  /** 객체 노드: 부모(스키마의 객체 목록)를 다시 읽는다 (DROP 뒤) */
+  refreshParent?: () => void;
 }
 
 /** Select In Database Explorer (⌥F1, Search Everywhere 결과): 트리를 펼치고 노드를 선택한다 */
@@ -421,6 +423,7 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
                 schema: s.name,
                 name: r.name,
                 refresh: () => (isRel ? loadDetail(s.name, r.name, true) : loadObjects(s.name, true)),
+                refreshParent: () => loadObjects(s.name, true),
               };
               return (
                 <div key={tk}>

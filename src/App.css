@@ -773,4 +773,9 @@ html, body, #root, * { overscroll-behavior: none; }
 .ws-item.on .ws-badge { background: var(--accent); border-color: var(--accent); color: #fff; }
 .ws-item.on .ws-name { color: var(--text); }
 .ws-name { font-size: 9px; max-width: 46px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ws-add { width: 30px; height: 30px; border-radius: 8px; border: 1px dashed var(--border); background: none; color: var(--muted); cursor: pointer; font-size: 16px; }
+.ws-add { width: 30px; height: 30px; flex: none; padding: 0; border-radius: 8px; border: 1px dashed var(--border); background: none; color: var(--muted); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.ws-add svg { display: block; }
+.text-dialog { width: 420px; }
+.text-dialog input { width: 100%; box-sizing: border-box; margin: 10px 0 14px; }
+.ws-explorer { height: 100%; }
+.ctx-item.muted-label { color: var(--muted); cursor: default; font-size: 11px; }

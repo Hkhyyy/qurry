@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ask } from "../lib/dialogs";
 import { Cell, dba, DbaReportInfo, Dialect, QueryResult } from "../lib/api";
 import { ResultGrid } from "./ResultGrid";
 
@@ -78,7 +79,7 @@ export function DbaReport(p: {
         const pid = Number(row.pid);
         if (!pid) return p.onStatus("No pid in this row");
         if (p.readOnly) return p.onStatus("Read-only data source");
-        if (!confirm(`[${p.connName}] ${a.label} ${pid}?\n\n${str(row.query ?? row.blocking_query ?? "").slice(0, 300)}`)) return;
+        if (!(await ask(`[${p.connName}] ${a.label} ${pid}?\n\n${str(row.query ?? row.blocking_query ?? "").slice(0, 300)}`))) return;
         try {
           const ok = await dba.kill(p.target, pid, a.terminate);
           p.onStatus(ok ? `${a.label}: ${pid}` : `${a.label}: ${pid} was not found (already gone?)`);

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { ask } from "../lib/dialogs";
 import { ConnectionView, dialectOf, KIND_LABEL, meta, QueryResult, rag, RAG_DEFAULT_MODEL, RagIndex, targetId, VECTOR_KINDS } from "../lib/api";
 import { ResultGrid } from "./ResultGrid";
 
@@ -273,7 +274,7 @@ export function RagView(p: {
                 <button onClick={() => setEditing({ ...cur, _db: cur.source.split("::")[1] })}>Edit…</button>
                 <button
                   onClick={async () => {
-                    if (!confirm(`Delete the index "${cur.name}"? The stored vectors in ${cur.collection} are kept.`)) return;
+                    if (!(await ask(`Delete the index "${cur.name}"? The stored vectors in ${cur.collection} are kept.`))) return;
                     await rag.remove(cur.id);
                     setSel(null);
                     reload();

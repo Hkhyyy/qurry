@@ -11,6 +11,9 @@ export type MenuItem =
 interface Props {
   connections: ConnectionView[];
   onAdd: () => void;
+  /** 워크스페이스: 이 탐색기에 없는 Data Source (＋ 메뉴에서 넣는다) */
+  others?: ConnectionView[];
+  onAddExisting?: (id: string) => void;
   onRefresh: () => void;
   onExport: () => void;
   onImport: () => void;
@@ -127,6 +130,7 @@ export function ContextMenu({ menu, onClose, onSetColor }: { menu: Menu; onClose
 export function Explorer(p: Props) {
   const [menu, setMenu] = useState<Menu | null>(null);
   const [more, setMore] = useState(false);
+  const [addMenu, setAddMenu] = useState(false);
   const [filter, setFilter] = useState("");
   const [showSystem, setShowSystem] = useState(false);
   const [sel, setSelId] = useState<string | null>(null);
@@ -135,6 +139,7 @@ export function Explorer(p: Props) {
     const close = () => {
       setMenu(null);
       setMore(false);
+      setAddMenu(false);
     };
     window.addEventListener("mousedown", close);
     window.addEventListener("blur", close);
@@ -216,7 +221,26 @@ export function Explorer(p: Props) {
       <div className="panel-header">
         <span className="explorer-title">Database Explorer</span>
         <span className="grow" />
-        <button className="icon" title="New Data Source" onClick={p.onAdd}>＋</button>
+        <span className="menu-anchor">
+          <button
+            className="icon"
+            title="Add Data Source"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={() => (p.others?.length ? setAddMenu((m) => !m) : p.onAdd())}
+          >
+            ＋
+          </button>
+          {addMenu && (
+            <div className="ctx-menu dropdown" onMouseDown={(e) => e.stopPropagation()}>
+              <div className="ctx-item" onClick={() => { p.onAdd(); setAddMenu(false); }}><span>New Data Source…</span></div>
+              <div className="ctx-sep" />
+              <div className="ctx-item muted-label"><span>Add to this workspace:</span></div>
+              {p.others?.map((c) => (
+                <div key={c.id} className="ctx-item" onClick={() => { p.onAddExisting?.(c.id); setAddMenu(false); }}><span>{c.name}</span></div>
+              ))}
+            </div>
+          )}
+        </span>
         <button className="icon" title="Refresh (⌥⌘y)" onClick={p.onRefresh}>⟳</button>
         <span className="menu-anchor">
           <button
@@ -249,7 +273,19 @@ export function Explorer(p: Props) {
             <div className="empty">
               No data sources.
               <br />
-              <a onClick={p.onAdd}>＋ Add data source</a>
+              <a onClick={p.onAdd}>＋ New data source</a>
+              {!!p.others?.length && (
+                <>
+                  <br />
+                  <br />
+                  Or add one to this workspace:
+                  {p.others.map((c) => (
+                    <div key={c.id}>
+                      <a onClick={() => p.onAddExisting?.(c.id)}>＋ {c.name}</a>
+                    </div>
+                  ))}
+                </>
+              )}
             </div>
           )}
           {p.connections.map((c) => (

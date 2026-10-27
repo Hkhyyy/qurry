@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ask, askText } from "../lib/dialogs";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { api, QueryResult, redis, RedisKeyDetail, RedisKeyRow, RedisReply } from "../lib/api";
@@ -448,7 +449,7 @@ function KeyContent({ target, keyName, readOnly, exec, onStatus, onDeleted, onRe
   };
   const editScore = async (i: number) => {
     const r = rows[i];
-    const s = prompt(`Score of ${r.cols[0]}`, r.cols[1]);
+    const s = (await askText(`Score of ${r.cols[0]}`, r.cols[1]));
     if (s != null && s.trim() && !Number.isNaN(Number(s))) await run(["ZADD", keyName, s.trim(), r.cols[0]], "Score updated");
   };
   const addItem = async () => {
@@ -521,7 +522,7 @@ function KeyContent({ target, keyName, readOnly, exec, onStatus, onDeleted, onRe
           title="Delete key"
           disabled={readOnly}
           onClick={async () => {
-            if (!confirm(`Delete key "${keyName}"?`)) return;
+            if (!(await ask(`Delete key "${keyName}"?`))) return;
             try {
               await exec(["DEL", keyName]);
               onStatus(`Deleted ${keyName}`);
@@ -688,7 +689,7 @@ function Terminal({ target, prompt, onChanged }: { target: string; prompt: strin
     if (line.toLowerCase() === "clear") return setLines([]);
     // FLUSHALL·FLUSHDB·DEL 같은 지우는 명령은 한 번 더 묻는다
     const why = await api.unsafeReason("redis", line).catch(() => null);
-    if (why && !confirm(`${why}:\n\n${line}\n\nRun it anyway?`)) return;
+    if (why && !(await ask(`${why}:\n\n${line}\n\nRun it anyway?`))) return;
     // 출력은 최근 TERM_MAX 줄만 남긴다
     const push = (x: { kind: "in" | "out" | "err"; text: string }) => setLines((l) => [...l, x].slice(-TERM_MAX));
     push({ kind: "in", text: `${prompt} ${line}` });
