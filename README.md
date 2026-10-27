@@ -1,6 +1,6 @@
 # Qurry
 
-A free DataGrip alternative for PostgreSQL, MySQL/MariaDB and Redis — query + ferry. Formerly **dbtool**.
+A free DataGrip alternative for PostgreSQL, MySQL/MariaDB and Redis — plus SQL Server, Oracle, SQLite, DuckDB, ClickHouse, MongoDB and vector databases (pgvector, Qdrant, Chroma, Milvus) through drivers added when you need them. query + ferry. Formerly **dbtool**.
 
 ![Qurry GUI](docs/screenshots/gui.png)
 
@@ -65,8 +65,81 @@ Connection options:
 - **SSH tunnel** with a key or password. Host keys are checked against `~/.ssh/known_hosts`: a changed key is refused, and an unknown server stops with its SHA256 fingerprint until you choose **Trust host key** (GUI: data source dialog; TUI: `Ctrl+y` in the form or `Ctrl+k › Trust SSH Host Key`).
 - **SSL/TLS**: Require / Verify CA / Full Verification, with optional CA and client certificate. Works for PostgreSQL, MySQL and Redis.
 - **Options tab**: read-only, transaction control and isolation level, time zone, keep-alive, auto-disconnect when idle, single database mode, startup script.
+- **Production**: before a statement that changes data runs, Qurry counts the rows it will change (the same table and WHERE as a `SELECT count(*)`, nothing is changed) and asks. Statements it can't count (`UPDATE … FROM`, `DELETE … USING`, CTEs) still ask. GUI: Options tab · TUI: the `Production` toggle in the data source form.
 
 > Redis Sentinel and Cluster nodes advertise their own addresses, so they can't be combined with an SSH tunnel.
+
+### Drivers (added when you need them)
+
+Nothing extra is installed up front. Pick one of these types for a data source and Qurry offers to **Install** its driver: a small program downloaded from the GitHub release of your Qurry version, checked against the signed `SHA256SUMS` (same key as app updates) and kept in the config folder under `drivers/`.
+
+| Database | Notes |
+|---|---|
+| SQL Server | SQL Server 2017+ (older versions work, with a warning); `dbo` and other schemas |
+| Oracle | Needs the free [Oracle Instant Client](https://www.oracle.com/database/technologies/instant-client.html) — set its folder in the data source (or `ORACLE_CLIENT_LIB_DIR`). Oracle 19c+ (11g works, with a warning); the service name goes in Database |
+| SQLite · DuckDB | A file instead of host and port (DuckDB: empty = in memory) |
+| ClickHouse | Over HTTP (port 8123) |
+| MongoDB | Shell syntax in the console: `db.users.find({age: {$gt: 30}}).sort({age: -1}).limit(10)`, `aggregate`, `countDocuments`, `insertMany`, `updateMany` …, or a command as JSON. Fields are guessed from 50 documents |
+| Qdrant · Chroma · Milvus | Collections are tables. The console takes REST requests — see below |
+
+The data source test shows the server version and warns when it is older than the versions Qurry is tested with (PostgreSQL 12, MySQL 5.7, MariaDB 10.5, SQL Server 2017, MongoDB 5, ClickHouse 22, Oracle 19c — CI runs against these). Read-only data sources are enforced for drivers too: MongoDB runs only `find` / `aggregate` (without `$out` / `$merge`) / `count` / `distinct`, vector databases only `GET` and search requests.
+
+## Vector databases and AI search (RAG)
+
+**Qdrant, Chroma, Milvus** — the explorer lists collections with their vector size and distance and the payload / metadata fields (guessed from 50 points); opening one shows its points as rows (long vectors are shortened). The console sends REST requests: a `METHOD /path` line and an optional JSON body on the next lines (unquoted keys and trailing commas are fine). Run the request under the cursor as usual.
+
+```
+POST /collections/docs/points/search          # Qdrant
+{vector: [0.12, 0.5, 0.33], limit: 5, with_payload: true}
+
+POST /collections/docs/query                  # Chroma (paths are relative to the database; names work instead of ids)
+{query_embeddings: [[0.12, 0.5, 0.33]], n_results: 5}
+
+POST /entities/search                         # Milvus (after /v2/vectordb; dbName is filled in)
+{collectionName: 'docs', data: [[0.12, 0.5, 0.33]], limit: 5, outputFields: ['*']}
+```
+
+The API key goes in the password field (Milvus: user + password, or the password alone as a token).
+
+**pgvector** — `vector`, `halfvec` and `sparsevec` values show as PostgreSQL prints them. In a table with a vector column, right-click a row › **Find Similar Rows by …** (TUI: `Ctrl+k` › Find Similar Rows) writes the nearest-neighbour query for that row, using the operator of the column's HNSW / IVFFlat index so the index is used.
+
+**AI search (RAG)** — search a table by meaning instead of by words.
+1. GUI: right-click a table › **AI Search (RAG) — Index This Table…** (or a data source › Tools › AI Search). TUI: select the table, `Ctrl+k` › New RAG Index….
+2. Choose the column that identifies a row, the text columns to embed, the embedding model and where to keep the vectors: a table in PostgreSQL with pgvector (created for you, with an HNSW index), or a Qdrant / Chroma / Milvus collection.
+   - **Ollama** (default) runs on your computer — nothing leaves it. `ollama pull nomic-embed-text` first; another address via the Base URL field or `OLLAMA_HOST`.
+   - **OpenAI** sends each row's text to OpenAI. The API key is stored encrypted like passwords (or set `OPENAI_API_KEY`); any OpenAI-compatible server works through Base URL / `OPENAI_BASE_URL`.
+3. **Build** embeds the rows in batches (progress in the status bar, cancel any time). Building again updates rows in place.
+4. Ask in plain words — "customers unhappy about late delivery" — and get the closest rows first with a score (1 = same meaning). From Claude, the MCP server's `semantic_search` tool does the same.
+
+Index definitions are kept in `rag.json` in the config folder (shared by the GUI, TUI and MCP server). Writing vectors goes through the data source like any other statement, so a read-only data source can't be used as the store.
+
+## Database admin (PostgreSQL, MySQL)
+
+GUI: right-click a data source › **Tools** › Sessions & Locks, Slow Queries, … — TUI: `Ctrl+k` › **Database Admin…**
+
+| Group | Reports |
+|---|---|
+| Activity | **Sessions** (who blocks whom, query / transaction age; refreshes every 3 s) · **Lock Waits** — right-click / `c` cancel the query, `K` terminate the session |
+| Performance | **Slow Queries** — top 100 by total time (`pg_stat_statements` / `performance_schema`), open or EXPLAIN in a console |
+| Storage | **Table Sizes** · **Unused Indexes** · **Duplicate Indexes** · **Foreign Keys Without an Index** — generate DROP / CREATE INDEX |
+| Maintenance | **Vacuum & Dead Rows** · **Transaction ID Age** (wraparound) — generate VACUUM ANALYZE (PostgreSQL) |
+| Server | **Server Overview** (uptime, connections, cache hit ratio) · **Replication** lag · **Settings** |
+| Security | **Users & Roles** · **Table Privileges** — generate GRANT / REVOKE |
+
+Generated SQL opens in a new console; nothing changes until you run it. Stopping sessions asks first and is blocked on read-only data sources.
+
+**Diagram (ERD)**: GUI — right-click a schema or database › Diagrams › Show Diagram: tables with keys and foreign keys, auto-laid out (parents above children); drag tables, zoom, double-click to open a table, **Copy as Mermaid**, **Save SVG**. TUI — `Ctrl+k` › Show Diagram: each table's foreign keys in and out as text, plus the Mermaid source (`y` copies).
+
+**Compare & migrate**: GUI — right-click a data source › Tools › Compare & Migrate; TUI — `Ctrl+k` › Compare Schemas… / Compare Table Data… / Run Migrations…
+- *Schema compare*: the DDL that makes the target schema look like the source (tables, columns, keys, indexes, foreign keys, views); drops come last and are left unchecked. Open it in a console or save it as the next migration file.
+- *Data compare*: rows matched by the primary key → INSERT / UPDATE / DELETE to sync the target.
+- *Migrations*: a folder of `V1__create.sql`, `V2__add_index.sql` … applied in version order, each in a transaction; applied ones are recorded in `qurry_schema_history`, and a file changed after it was applied is refused.
+
+**Back up / restore**: right-click a database › Tools › Back Up Database… / Restore Database… (TUI: `Ctrl+k`). Runs `pg_dump` / `pg_restore` / `psql` or `mysqldump` / `mysql` from this computer (Homebrew `libpq`, `mysql-client`, Postgres.app and the usual Linux paths are found too; for PostgreSQL the client closest to the server version is used). Passwords go through the environment, SSH tunnels are used, progress shows in the status bar and can be cancelled.
+
+**Query history & snippets** are kept in the config folder and shared by the GUI and the TUI (passwords in `PASSWORD '…'` / `IDENTIFIED BY '…'` are masked). GUI: `⌥⌘e` (History / Snippets tabs, Save as Snippet) · TUI: `Ctrl+k` › Query History…, Snippets…, Save Query as Snippet….
+
+**Explain plan** (PostgreSQL): each node shows its own share of the time (Explain Analyze) or cost, and flags what is worth a look — a Seq Scan over a big table, row estimates off by 10× or more, filters that throw away most rows, sorts and hashes spilled to disk. TUI: `Alt+e` (or `Ctrl+k` › Explain Analyze).
 
 ## Build & run
 
@@ -95,7 +168,17 @@ src-tauri     GUI backend: Tauri commands call AppState methods directly
 src           GUI frontend (React + Monaco)
 crates/tui    TUI (ratatui)
 crates/mcp    MCP server (stdio JSON-RPC)
+crates/driver qurry-driver: the driver protocol (one JSON request / response per line over stdio) + REST helpers
+drivers/*     driver programs (SQLite, DuckDB, SQL Server, ClickHouse, MongoDB, Oracle, Qdrant, Chroma, Milvus)
 ```
+
+## Workspaces
+
+Keep separate sets of tabs and split panes — one for a production incident, one for a report you are writing — and switch between them without losing anything: consoles keep their session, open transactions and results while you are elsewhere.
+
+- **GUI**: the thin bar at the far left lists the workspaces (`+` makes one; right-click to rename or delete). `⌥1`…`⌥9` (Windows/Linux `Alt+1`…`Alt+9`) switches; right-click a tab › **Move to Workspace**.
+- **TUI**: `Alt+1`…`Alt+9`, or `Ctrl+k` › Switch / New / Rename / Delete Workspace…, Move Tab to Workspace…. With more than one workspace a strip at the top shows them (click to switch).
+- The Database Explorer is shared. Workspaces are saved with the open tabs and come back the next time you start.
 
 ## GUI keyboard shortcuts
 
@@ -200,7 +283,8 @@ Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…
 | `⌃⌘g` | Select all occurrences |
 | `⇧⌘U` | Toggle case |
 | `⌘l` | Go to line |
-| `⌘f` | Find in editor |
+| `⌘f` | Find in editor (⌥⌘r regex · ⌥⌘c match case · ⌥⌘w words) |
+| `⌘r` | Replace in editor ($1 groups with regex) |
 
 #### Data grid (results & table editor)
 
@@ -294,6 +378,7 @@ Ctrl+Enter is only distinguishable in terminals that support the kitty keyboard 
 | `Alt+Shift+Up` | Shrink Editor (console) |
 | `Alt+Shift+Down` | Grow Editor (console) |
 | `Ctrl+s` | Submit Changes |
+| `Ctrl+f` | Find / Replace in Editor (regex) |
 | `Ctrl+F2` | Disconnect |
 
 #### Database Explorer
@@ -322,7 +407,7 @@ Ctrl+Enter is only distinguishable in terminals that support the kitty keyboard 
 | `Shift+Tab` | Go to the result grid (Esc / Tab returns) |
 | `Esc` | Go to the explorer |
 | `Ctrl+u / Ctrl+r` | Undo / redo (editor) |
-| `Ctrl+f` | Find / replace in the editor: `Alt+x` regex · `Alt+c` match case · `Alt+w` words · `Enter` next · `Tab` to Replace: `Enter` one, `Alt+a` all (`$1` groups) |
+| `Ctrl+f` | Find / replace bar: Alt+x regex · Alt+c match case · Alt+w words · Enter next (↑ previous) · Tab to Replace: Enter one, Alt+a all ($1 groups) · Esc close |
 | `⌘a  ⌫` | Select all, then delete (or Ctrl+k › Clear Console) |
 | `click / drag  ⌘c` | Move the cursor / select text (runs only the selection) · copy the selection |
 | `mouse drag` | Drag the editor/result border to resize |
@@ -352,9 +437,9 @@ Ctrl+Enter is only distinguishable in terminals that support the kitty keyboard 
 | `s` | Sort by the selected column: ▲ → ▼ → off (table data: ORDER BY · results: loaded rows) |
 | `w or / · o` | Edit WHERE · ORDER BY (table data) |
 | `r` | Reload (table data) |
-| `x` | Export data (CSV, TSV, JSON, SQL INSERT, Markdown → file or clipboard). Import: ⌃K › Import Data from File… |
-| `y  ⌘c` | Copy cell value (a selected range: as TSV) |
-| `Y` | Copy as an IN list: `('a', 'b', …)` — the selected range, or the whole column. Paste after `WHERE x IN` |
+| `x` | Export data (CSV, TSV, JSON, SQL INSERT, Markdown → file or clipboard) |
+| `y  ⌘c` | Copy cell value (a selected range: as TSV, pastes into spreadsheets as cells) |
+| `Y` | Copy as an IN list: ('a', 'b', …) — the selected range, or the whole column |
 | `⌘v` | Paste into cells from the selected one (tabs / lines fill several; extra lines add rows; table data) |
 | `Esc` | Back (query results: to the editor) |
 
@@ -366,12 +451,21 @@ Ctrl+Enter is only distinguishable in terminals that support the kitty keyboard 
 | `y  ⌘c` | Copy the text |
 | `Esc` | Back to the explorer |
 
+#### Database Admin tab (Ctrl+K › Database Admin…)
+
+| Key | Action |
+|---|---|
+| `r · a` | Refresh · auto-refresh on/off (sessions and locks refresh every 3 s) |
+| `c · K` | Cancel the query · terminate the session of the selected row (asks first) |
+| `Enter · g` | Open the row's query in a console · generate SQL from the row (DROP INDEX, VACUUM, REVOKE…) |
+| `p` | Pick another report |
+
 #### Redis browser (Medis style)
 
 | Key | Action |
 |---|---|
-| `↑ ↓` | Select key |
-| `Enter / → / Tab` | Go to the value |
+| `→ / Enter · ←` | Folder: expand · collapse (← on a key: go to its folder) |
+| `Enter / → / Tab` | Key: go to the value |
 | `/` | Key pattern (SCAN MATCH) |
 | `m` | Scan more |
 | `r` | Rescan |
@@ -429,6 +523,7 @@ claude mcp add qurry-rw -- qurry-mcp --allow-write  # adds the execute tool
 | `full_text_search` | Find a value in every table |
 | `redis_scan` / `redis_get` | Redis key list / key details |
 | `export_csv` | Save a read-only query result as CSV in `~/Downloads/qurry-exports` (file name only, never overwrites) |
+| `list_rag_indexes` / `semantic_search` | RAG indexes made in the app / the rows closest in meaning to a question, with a score |
 | `execute` | Only with `--allow-write`. Runs statements in one transaction; refused for read-only data sources |
 
 **How read-only is enforced**
@@ -451,7 +546,7 @@ Options: `--config-dir DIR` (use another config folder), `--verbose` (engine log
 
 ## Tests
 
-Write the failing test first: a bug fix starts with a test that reproduces it, a feature with a test for the new behavior (screens and terminal keys that can't be tested are checked by hand). Every pull request runs the CI workflow: Rust unit tests, integration tests against PostgreSQL / MySQL / Redis containers, vitest and the web build.
+Write the failing test first: a bug fix starts with a test that reproduces it, a feature with a test for the new behavior (screens and terminal keys that can't be tested are checked by hand). Every pull request runs the CI workflow: Rust unit tests, integration tests against PostgreSQL (with pgvector) / MySQL / Redis / ClickHouse / MongoDB / Qdrant / Chroma / Milvus containers, the same tests against older servers (PostgreSQL 12, MySQL 5.7, ClickHouse 22.8, MongoDB 5, SQL Server 2017), vitest and the web build.
 
 ```bash
 cargo test -p qurry-core -p qurry-tui -p qurry-mcp   # unit tests (no database)
@@ -468,6 +563,8 @@ docker run -d --name dbtool-redis-test -p 16379:6379 redis:7-alpine
 # TLS (16391), Sentinel (26392 → 16392) and Cluster (17001-17003) servers: see the test comments in crates/core/src/redisdb.rs
 # (TLS certificate folder: QURRY_TEST_TLS_DIR, default /tmp/dbtool-tls)
 ```
+
+Driver and vector database tests run when their server is given as `host:port:user:password:database` (and the driver is built — `cargo build -p qurry-driver-<name>`): `QURRY_TEST_CH`, `QURRY_TEST_MSSQL`, `QURRY_TEST_MONGO`, `QURRY_TEST_ORACLE`, `QURRY_TEST_QDRANT`, `QURRY_TEST_CHROMA`, `QURRY_TEST_MILVUS` (e.g. `QURRY_TEST_QDRANT=127.0.0.1:6333:::qdrant`). The pgvector and RAG tests use `QURRY_TEST_PG` when the server has the `vector` extension (`pgvector/pgvector:pg16`); RAG tests use a fake embedding server, so no model is needed.
 
 TUI tests can drive the app without a database: `crates/tui/src/testkit.rs` opens table tabs with fixed rows, sends keys (`h.key("Ctrl+A")`, `h.type_str("ban")`) and renders the screen to text (`h.screen(120, 30)`). See the tests at the end of `crates/tui/src/input.rs`.
 

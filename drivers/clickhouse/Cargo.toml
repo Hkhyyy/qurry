@@ -1,0 +1,10 @@
+[package]
+name = "qurry-driver-clickhouse"
+version = "0.2.0"
+edition = "2024"
+description = "Qurry driver plugin: ClickHouse (HTTP interface)"
+
+[dependencies]
+qurry-driver = { workspace = true }
+serde_json = { workspace = true }
+ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] }

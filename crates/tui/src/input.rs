@@ -86,6 +86,9 @@ pub fn drop_target(app: &App, id: u64, x: u16, y: u16) -> Option<DropTarget> {
 
 fn mouse_down(app: &mut App, x: u16, y: u16) {
     if app.popup.is_none() {
+        if let Some(&(i, _)) = app.hits.workspaces.iter().find(|w| inside(w.1, x, y)) {
+            return app.ws_switch(i);
+        }
         if inside(app.hits.divider, x, y) {
             app.drag = Some(Drag::Console);
             return;
@@ -416,6 +419,12 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
     if app.popup.is_some() {
         return popup_key(app, k);
     }
+    // Alt+1~9: 워크스페이스
+    if let KeyCode::Char(c @ '1'..='9') = k.code
+        && k.modifiers == KeyModifiers::ALT
+    {
+        return app.ws_switch(c as usize - '1' as usize);
+    }
     // ── 전역 명령 (키맵: keys.rs, 바꾸기: F1) ──
     if let Some(a) = app.keys.lookup(&k) {
         // 탐색기에서 실행 키 = 새로 고침
@@ -658,6 +667,21 @@ fn grid_key(app: &mut App, k: KeyEvent) {
     };
     let id = t.id;
     match &mut t.kind {
+        TabKind::Dba(d) => match k.code {
+            KeyCode::Char('r') => app.dba_reload(id),
+            KeyCode::Char('a') => app.dba_toggle_auto(),
+            KeyCode::Char('c') => app.dba_kill(false),
+            KeyCode::Char('K') => app.dba_kill(true),
+            KeyCode::Enter => app.dba_actions(true),
+            KeyCode::Char('g') => app.dba_actions(false),
+            KeyCode::Char('p') => app.dba_palette(),
+            KeyCode::Esc => app.focus = Focus::Tree,
+            _ => {
+                // 움직이면 (사라진 세션 대신) 새로 고른 행
+                d.gone = None;
+                nav(app, k)
+            }
+        },
         TabKind::Text(tt) => match k.code {
             KeyCode::Down | KeyCode::Char('j') => tt.scroll = tt.scroll.saturating_add(1),
             KeyCode::Up | KeyCode::Char('k') => tt.scroll = tt.scroll.saturating_sub(1),
@@ -1206,13 +1230,11 @@ fn popup_key(app: &mut App, k: KeyEvent) {
                             f.value = opts[j].to_string();
                             // DB 종류를 바꾸면 기본 포트도
                             if f.label == "Type" {
-                                let port = match f.value.as_str() {
-                                    "mysql" => "3306",
-                                    "redis" => "6379",
-                                    _ => "5432",
-                                };
+                                const PORTS: &[(&str, &str)] = &[("postgres", "5432"), ("mysql", "3306"), ("redis", "6379"), ("sqlite", "0"), ("duckdb", "0"), ("mssql", "1433"), ("clickhouse", "8123"), ("mongodb", "27017"), ("oracle", "1521"), ("qdrant", "6333"), ("chroma", "8000"), ("milvus", "19530")];
+                                let port = PORTS.iter().find(|x| x.0 == f.value).map(|x| x.1).unwrap_or("5432");
                                 if let Some(p) = form.fields.iter_mut().find(|x| x.label == "Port") {
-                                    if ["5432", "3306", "6379", ""].contains(&p.value.as_str()) {
+                                    // 손으로 바꾼 포트는 두고, 다른 종류의 기본 포트였으면 바꾼다
+                                    if p.value.is_empty() || PORTS.iter().any(|x| x.1 == p.value) {
                                         p.value = port.into();
                                     }
                                 }
@@ -1640,6 +1662,117 @@ mod tests {
         h.mouse("up", x, y0 as u16 + 2);
         h.key("Y");
         assert_eq!(h.app.status, "Copied 3 values as an IN list: ('1.2.3.4', '5.6.7.8', '9.9.9.9')");
+    }
+
+    /// ⌃K › Database Admin…: 리포트를 고르면 DBA 탭 (같은 접속 대상이면 그 탭에서 바꾼다)
+    #[tokio::test]
+    async fn dba_report_tab_opens_and_switches() {
+        let mut h = Harness::new().await;
+        h.table_tab("t", &["id"], &[&["1"]], &[]);
+        h.app.run_action(Action::DbaReports);
+        let labels = |h: &Harness| match &h.app.popup {
+            Some(crate::app::Popup::Palette(p)) => p.items.iter().map(|i| i.label.clone()).collect::<Vec<_>>(),
+            _ => panic!("no chooser"),
+        };
+        let l = labels(&h);
+        assert!(l.contains(&"Activity › Sessions".to_string()) && l.contains(&"Storage › Table Sizes".to_string()), "{l:?}");
+        h.key("Enter");
+        let n = h.app.tabs.len();
+        let report = |h: &Harness| match &h.app.tabs[h.app.active].kind {
+            TabKind::Dba(d) => d.report.clone(),
+            _ => panic!("not a dba tab"),
+        };
+        assert_eq!(report(&h), "sessions");
+        h.settle().await;
+        // 접속이 없으니 오류가 보인다
+        assert!(matches!(&h.app.tabs[h.app.active].kind, TabKind::Dba(d) if d.error.is_some()));
+        h.app.run_action(Action::DbaReports);
+        h.type_str("Table Sizes");
+        h.key("Enter");
+        assert_eq!(report(&h), "table_sizes");
+        assert_eq!(h.app.tabs.len(), n);
+    }
+
+    /// 자동 새로고침으로 행 순서가 바뀌어도 고른 세션(pid)을 따라간다 (다른 세션을 끊지 않게)
+    #[tokio::test]
+    async fn dba_selection_follows_pid_across_reloads() {
+        use qurry_core::db::{ColumnInfo, QueryResult};
+        let mut h = Harness::new().await;
+        let res = |pids: &[i64]| QueryResult {
+            columns: vec![ColumnInfo { name: "pid".into(), type_name: "INT4".into() }],
+            rows: pids.iter().map(|p| vec![serde_json::json!(p)]).collect(),
+            rows_affected: 0,
+            truncated: false,
+            elapsed_ms: 0,
+            has_result_set: true,
+            in_transaction: false,
+        };
+        let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
+        let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res(&[10, 20, 30]))), error: None, running: false, auto: true };
+        let id = h.app.push_tab("test", "postgres".into(), "Sessions".into(), TabKind::Dba(d));
+        h.key("Down");
+        h.app.dba_apply(id, Ok(res(&[30, 20, 10])));
+        let TabKind::Dba(d) = &h.app.tabs[h.app.active].kind else { panic!() };
+        let g = d.grid.as_ref().unwrap();
+        assert_eq!(g.value(g.row, 0).as_deref(), Some("20"));
+        // 고른 세션이 사라지면 고르지 않는다 (엉뚱한 세션을 끊지 않게)
+        h.app.dba_apply(id, Ok(res(&[30, 10])));
+        let TabKind::Dba(d) = &h.app.tabs[h.app.active].kind else { panic!() };
+        assert!(d.grid.as_ref().unwrap().result.rows.len() == 2);
+        h.key("K");
+        assert!(h.app.popup.is_none(), "must not offer to kill a session that is gone");
+    }
+
+    /// ⌃K › Query History / Snippets: GUI 와 같은 기록. 고르면 콘솔에 넣는다. Save Query as Snippet 은 이름을 묻는다
+    #[tokio::test]
+    async fn history_and_snippets_insert_into_console() {
+        let mut h = Harness::new().await;
+        h.app.state.history.add("test", None, "select 42").unwrap();
+        h.console_tab();
+        h.app.run_action(Action::QueryHistory);
+        let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no history") };
+        assert_eq!(p.items[0].label, "select 42");
+        h.key("Enter");
+        assert_eq!(h.console_text(), "select 42");
+        // 스니펫으로 저장 → 목록에서 넣기
+        h.app.run_action(Action::SaveSnippet);
+        let Some(crate::app::Popup::Input { input, .. }) = &mut h.app.popup else { panic!("no name input") };
+        *input = tui_textarea::TextArea::from(["answer"]);
+        h.key("Enter");
+        assert_eq!(h.app.state.history.snippets(Some("test"))[0].name, "answer");
+        h.key("Ctrl+a");
+        h.app.run_action(Action::Snippets);
+        let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no snippets") };
+        assert_eq!(p.items[0].label, "answer");
+    }
+
+    /// Production Data Source: 데이터를 바꾸는 문장은 바뀔 행 수를 세어 보여 주고 묻는다 (읽기는 그냥 돈다)
+    #[tokio::test]
+    async fn production_asks_before_changes() {
+        let mut h = Harness::new().await;
+        let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+            "id": "p", "name": "PROD", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "d"
+        })).unwrap();
+        cfg.options.confirm_changes = true;
+        h.app.state.store.save(&cfg).unwrap();
+        h.app.reload_conns();
+        h.settle().await;
+        let id = h.app.restore_console("p", "d".into(), "console".into(), "delete from t using s where t.id = s.id").unwrap();
+        let i = h.app.tab_index(id).unwrap();
+        h.app.activate(i);
+        h.key("F5");
+        // 세는 동안 (접속 실패까지) 기다린다
+        for _ in 0..100 {
+            h.settle().await;
+            if h.app.popup.is_some() {
+                break;
+            }
+        }
+        let Some(crate::app::Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
+        assert!(text.contains("Production data source \"PROD\"") && text.contains("delete from t using s") && text.contains("can't count this statement"), "{text}");
+        // 아니라고 하면 실행하지 않는다
+        h.key("Esc");
+        assert!(matches!(&h.app.tabs[h.app.active].kind, TabKind::Console(c) if !c.running && c.output.is_empty()));
     }
 
     /// 콘솔 마우스: 누른 곳으로 커서, 끌면 선택 (선택한 것만 실행), 다시 누르면 선택이 풀린다

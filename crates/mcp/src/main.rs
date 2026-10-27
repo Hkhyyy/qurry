@@ -45,7 +45,7 @@ fn ds_props(extra: Value) -> Value {
 impl Server {
     fn tools(&self) -> Vec<Value> {
         let mut t = vec![
-            tool("list_data_sources", "List configured data sources (PostgreSQL, MySQL, Redis) shared with the Qurry app.", json!({}), &[], true),
+            tool("list_data_sources", "List configured data sources (PostgreSQL, MySQL, Redis and installed drivers: SQL Server, Oracle, SQLite, DuckDB, ClickHouse, MongoDB, Qdrant, Chroma, Milvus) shared with the Qurry app.", json!({}), &[], true),
             tool("list_databases", "List databases of a data source.", ds_props(json!({})), &["data_source"], true),
             tool("list_schemas", "List schemas in a database (MySQL/Redis: the database itself).", ds_props(json!({})), &["data_source"], true),
             tool(
@@ -129,6 +129,24 @@ impl Server {
                 ds_props(json!({ "sql": { "type": "string" }, "file_name": { "type": "string", "description": "Plain file name such as orders.csv (no folders)" } })),
                 &["data_source", "sql", "file_name"],
                 false,
+            ),
+            tool(
+                "list_rag_indexes",
+                "List RAG indexes made in the Qurry app: a table whose text columns were embedded into pgvector or a vector DB, searchable with semantic_search.",
+                json!({}),
+                &[],
+                true,
+            ),
+            tool(
+                "semantic_search",
+                "Find the table rows closest in meaning to a question (RAG). Returns score (1 = same meaning) and the source rows, best first. The question is embedded with the index's provider (Ollama locally, or OpenAI).",
+                json!({
+                    "index": { "type": "string", "description": "Index name or id (see list_rag_indexes)" },
+                    "query": { "type": "string", "description": "The question in plain words" },
+                    "limit": { "type": "integer", "description": "default 10, max 50" }
+                }),
+                &["index", "query"],
+                true,
             ),
         ];
         if self.allow_write {
@@ -269,6 +287,7 @@ impl Server {
                     DbKind::Postgres => format!("EXPLAIN ({}FORMAT TEXT) {q}", if analyze { "ANALYZE, BUFFERS, " } else { "" }),
                     DbKind::Mysql => format!("EXPLAIN {}{q}", if analyze { "ANALYZE " } else { "" }),
                     DbKind::Redis => return Err("EXPLAIN is not available for Redis".into()),
+                    _ => format!("EXPLAIN {q}"),
                 };
                 let r = st.run_read_only(t, sqlq, MAX_ROWS).await.map_err(e)?;
                 if kind == DbKind::Postgres {
@@ -334,6 +353,24 @@ impl Server {
                 let n = st.execute_batch(t, stmts.clone(), false).await.map_err(e)?;
                 Ok(json!({ "statements": stmts.len(), "rows_affected": n }))
             }
+            "list_rag_indexes" => {
+                let names: std::collections::HashMap<String, String> = st.list_connections().await.map_err(e)?.into_iter().map(|c| (c.config.id, c.config.name)).collect();
+                let name_of = |t: &str| {
+                    let (id, db) = qurry_core::app::split_target(t);
+                    let n = names.get(id).cloned().unwrap_or_else(|| id.to_string());
+                    db.map(|d| format!("{n} / {d}")).unwrap_or(n)
+                };
+                Ok(json!(st.rag_indexes().map_err(e)?.iter().map(|x| json!({
+                    "name": x.name, "id": x.id, "source": name_of(&x.source), "table": format!("{}.{}", x.schema, x.table),
+                    "text_columns": x.text_columns, "store": name_of(&x.dest), "collection": x.collection,
+                    "embeddings": format!("{} {}", x.provider, x.model), "rows": x.rows, "built_at": x.built_at
+                })).collect::<Vec<_>>()))
+            }
+            "semantic_search" => {
+                let index = s("index").ok_or("index is required")?;
+                let query = s("query").ok_or("query is required")?;
+                Ok(result_json(&st.rag_search(index, query, n("limit", 10).min(50)).await.map_err(e)?))
+            }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
@@ -395,8 +432,9 @@ async fn handle(server: Arc<Server>, msg: Value) -> Option<Value> {
                 "capabilities": { "tools": { "listChanged": false } },
                 "serverInfo": { "name": SERVER_NAME, "version": env!("CARGO_PKG_VERSION") },
                 "instructions": format!(
-                    "Qurry: database tools for the data sources configured in the Qurry app (PostgreSQL, MySQL, Redis; SSH tunnels supported). \
-                     Start with list_data_sources, then list_objects / describe_table / search_objects, and query for data. {}",
+                    "Qurry: database tools for the data sources configured in the Qurry app (PostgreSQL, MySQL, Redis and driver databases; SSH tunnels supported). \
+                     Start with list_data_sources, then list_objects / describe_table / search_objects, and query for data. \
+                     To find rows by meaning, use list_rag_indexes and semantic_search. {}",
                     if server.allow_write { "Write access is enabled via the execute tool." } else { "The server is read-only: query runs one statement in a READ ONLY transaction." }
                 )
             }))

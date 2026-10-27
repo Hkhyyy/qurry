@@ -127,7 +127,7 @@ impl App {
     }
 
     /// 상태줄에 올리고 진행이 바뀌는 동안 화면을 다시 그리게 한다
-    fn start_job(&mut self, label: &str) -> String {
+    pub(crate) fn start_job(&mut self, label: &str) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         let job = self.state.start_job(&id);
         self.jobs.push((id.clone(), label.to_string(), job));
@@ -143,7 +143,7 @@ impl App {
         id
     }
 
-    fn end_job(&mut self, id: &str) {
+    pub(crate) fn end_job(&mut self, id: &str) {
         self.jobs.retain(|j| j.0 != id);
     }
 
@@ -252,4 +252,86 @@ impl App {
             }
         });
     }
+
+    /// 백업·복원 대상: 트리에서 고른 Data Source·DB, 아니면 지금 탭
+    fn backup_target(&self) -> Option<(String, String)> {
+        if self.focus == Focus::Tree
+            && let Some(n) = self.tree.selected()
+        {
+            return Some((n.conn.clone(), n.db.clone().unwrap_or_else(|| self.conn(&n.conn).map(|c| sql::default_db(&c.config)).unwrap_or_default())));
+        }
+        self.tabs.get(self.active).map(|t| (t.conn.clone(), t.db.clone()))
+    }
+
+    /// ⌃K › Back Up Database…: 파일 경로 (.dump = PG custom, 나머지는 SQL) → pg_dump / mysqldump, 상태줄 진행
+    pub fn backup_start(&mut self) {
+        let Some((conn, db)) = self.backup_target() else {
+            self.status = "Select a data source or database first".into();
+            return;
+        };
+        let pg = self.kind_of(&conn) == qurry_core::store::DbKind::Postgres;
+        let date = chrono_date();
+        let def = format!("{}/Downloads/{db}-{date}.{}", home(), if pg { "dump" } else { "sql" });
+        self.input("Back up to (.dump = PostgreSQL custom format, .sql = SQL)", &def, move |a, p| {
+            let path = expand(&p);
+            let format = if path.ends_with(".dump") || path.ends_with(".backup") { "custom" } else { "plain" };
+            let opts = qurry_core::backup::BackupOptions { format: format.into(), ..Default::default() };
+            let label = format!("Back up {db}");
+            let job = a.start_job(&label);
+            let st = a.state.clone();
+            let (target, j2, p2) = (sql::target_id(&conn, Some(&db)), job.clone(), path.clone());
+            a.spawn(async move { st.backup(target, p2, opts, j2).await }, move |a, r| {
+                a.end_job(&job);
+                a.status = match r {
+                    Ok(n) => format!("Backed up {:.1} MB to {path}", n as f64 / 1048576.0),
+                    Err(e) => format!("{label}: {e}"),
+                };
+            });
+        });
+    }
+
+    /// ⌃K › Restore Database…: 백업 파일 → 묻고 → pg_restore / psql / mysql
+    pub fn restore_start(&mut self) {
+        let Some((conn, db)) = self.backup_target() else {
+            self.status = "Select a data source or database first".into();
+            return;
+        };
+        let name = self.conn(&conn).map(|c| c.config.name.clone()).unwrap_or_default();
+        let prod = self.conn(&conn).is_some_and(|c| c.config.options.confirm_changes);
+        self.input("Restore from backup file (.dump or .sql)", &format!("{}/Downloads/", home()), move |a, p| {
+            let path = expand(&p);
+            a.popup = Some(Popup::Confirm {
+                text: format!("Restore {path}\ninto {name} / {db}?\n\nObjects in the backup are dropped and recreated (pg_restore --clean); the rest of the database is left alone. One transaction for PostgreSQL.{}", if prod { "\n\n⚠ This is a Production data source." } else { "" }),
+                on_yes: Box::new(move |a| {
+                    let label = format!("Restore into {db}");
+                    let job = a.start_job(&label);
+                    let st = a.state.clone();
+                    let (target, j2, p2) = (sql::target_id(&conn, Some(&db)), job.clone(), path.clone());
+                    a.spawn(async move { st.restore(target, p2, qurry_core::backup::RestoreOptions { clean: true }, j2).await }, move |a, r| {
+                        a.end_job(&job);
+                        a.status = match r {
+                            Ok(()) => format!("Restored {path} into {db}"),
+                            Err(e) => format!("{label}: {e}"),
+                        };
+                    });
+                }),
+            });
+        });
+    }
+}
+
+/// 오늘 날짜 (YYYY-MM-DD, 파일 이름용)
+fn chrono_date() -> String {
+    let days = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() / 86400).unwrap_or(0) as i64;
+    // 1970-01-01 부터 날 수 → 연·월·일 (Howard Hinnant 알고리즘)
+    let z = days + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+    format!("{y:04}-{m:02}-{d:02}")
 }

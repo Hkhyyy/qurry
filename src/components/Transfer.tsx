@@ -187,3 +187,44 @@ export function TransferBar({ jobs }: { jobs: TransferJob[] }) {
     </>
   );
 }
+
+/** 백업 (pg_dump / mysqldump): 형식·범위를 고른다 */
+export function BackupDialog({ what, pg, onRun, onClose }: { what: string; pg: boolean; onRun: (o: { format: "custom" | "plain"; schemaOnly: boolean; dataOnly: boolean }) => void; onClose: () => void }) {
+  const [format, setFormat] = useState<"custom" | "plain">(pg ? "custom" : "plain");
+  const [part, setPart] = useState<"all" | "schema" | "data">("all");
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="modal transfer" onMouseDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.key === "Escape" && onClose()}>
+        <div className="modal-title">Back Up {what}</div>
+        {pg && (
+          <>
+            <div className="transfer-label">Format</div>
+            <label className="transfer-choice">
+              <input type="radio" checked={format === "custom"} onChange={() => setFormat("custom")} />
+              <b>Custom (.dump)</b> <span className="muted">compressed, restore with Restore… (pg_restore)</span>
+            </label>
+            <label className="transfer-choice">
+              <input type="radio" checked={format === "plain"} onChange={() => setFormat("plain")} />
+              <b>SQL (.sql)</b> <span className="muted">plain text, readable, runs in any console</span>
+            </label>
+          </>
+        )}
+        <div className="transfer-label">What</div>
+        {(["all", "schema", "data"] as const).map((x) => (
+          <label key={x} className="transfer-choice">
+            <input type="radio" checked={part === x} onChange={() => setPart(x)} />
+            <b>{x === "all" ? "Schema and data" : x === "schema" ? "Schema only" : "Data only"}</b>
+          </label>
+        ))}
+        <div className="hint" style={{ marginLeft: 0 }}>Runs {pg ? "pg_dump" : "mysqldump"} on this computer (install the client tools if it's missing). The password is passed through the environment, not the command line.</div>
+        <div className="modal-actions">
+          <span className="grow" />
+          <button onClick={onClose}>Cancel</button>
+          <button className="primary" autoFocus onClick={() => onRun({ format, schemaOnly: part === "schema", dataOnly: part === "data" })}>
+            Choose File & Back Up
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

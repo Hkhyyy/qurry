@@ -225,6 +225,223 @@ pub async fn export_data(
     Ok(Some(ExportDone { rows: r.rows, path, text: r.text }))
 }
 
+// ───────── 쿼리 히스토리·스니펫 (TUI 와 같은 파일) ─────────
+
+#[tauri::command]
+pub fn history_add(state: State<'_, AppState>, conn_id: String, database: Option<String>, sql: String) -> AppResult<()> {
+    state.history.add(&conn_id, database.as_deref(), &sql)
+}
+
+#[tauri::command]
+pub fn history_list(state: State<'_, AppState>, conn_id: Option<String>, filter: String, limit: usize) -> Vec<qurry_core::history::HistoryItem> {
+    state.history.list(conn_id.as_deref(), &filter, limit)
+}
+
+#[tauri::command]
+pub fn history_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    state.history.delete(&id)
+}
+
+/// 예전 GUI 기록(localStorage) 옮기기
+#[tauri::command]
+pub fn history_import(state: State<'_, AppState>, items: Vec<qurry_core::history::HistoryItem>) -> AppResult<usize> {
+    state.history.import(items)
+}
+
+#[tauri::command]
+pub fn snippets(state: State<'_, AppState>, conn_id: Option<String>) -> Vec<qurry_core::history::Snippet> {
+    state.history.snippets(conn_id.as_deref())
+}
+
+#[tauri::command]
+pub fn snippet_save(state: State<'_, AppState>, snippet: qurry_core::history::Snippet) -> AppResult<qurry_core::history::Snippet> {
+    state.history.save_snippet(snippet)
+}
+
+#[tauri::command]
+pub fn snippet_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    state.history.delete_snippet(&id)
+}
+
+// ───────── 백업·복원 (pg_dump / mysqldump) ─────────
+
+/// 백업: 저장 창 → 덤프 (진행은 "transfer-progress", 쓴 바이트). 창을 닫으면 None
+#[tauri::command]
+pub async fn backup_db(app: tauri::AppHandle, state: State<'_, AppState>, id: String, opts: qurry_core::backup::BackupOptions, default_name: String, job: String) -> AppResult<Option<(u64, String)>> {
+    let (filter, ext) = if opts.format == "custom" { ("PostgreSQL dump", "dump") } else { ("SQL", "sql") };
+    let Some(path) = save_dialog(&app, &format!("{default_name}.{ext}"), filter, &[ext]) else { return Ok(None) };
+    let ticker = report_progress(&app, &state, &job);
+    let r = state.backup(id, path.clone(), opts, job).await;
+    ticker.abort();
+    Ok(Some((r?, path)))
+}
+
+/// 복원: 파일 고르기 → 되살리기. 고르지 않으면 None
+#[tauri::command]
+pub async fn restore_db(app: tauri::AppHandle, state: State<'_, AppState>, id: String, opts: qurry_core::backup::RestoreOptions, job: String) -> AppResult<Option<String>> {
+    let picked = app.dialog().file().add_filter("Backup (dump, sql)", &["dump", "sql", "backup"]).blocking_pick_file();
+    let Some(path) = picked.and_then(|p| p.into_path().ok()).map(|p| p.display().to_string()) else { return Ok(None) };
+    let ticker = report_progress(&app, &state, &job);
+    let r = state.restore(id, path.clone(), opts, job).await;
+    ticker.abort();
+    r?;
+    Ok(Some(path))
+}
+
+// ───────── RAG (임베딩 → 벡터 저장소 → 의미 검색) ─────────
+
+#[tauri::command]
+pub fn rag_indexes(state: State<'_, AppState>) -> AppResult<Vec<qurry_core::rag::RagIndex>> {
+    state.rag_indexes()
+}
+
+#[tauri::command]
+pub fn rag_save(state: State<'_, AppState>, index: qurry_core::rag::RagIndex) -> AppResult<qurry_core::rag::RagIndex> {
+    state.rag_save(index)
+}
+
+#[tauri::command]
+pub fn rag_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    state.rag_delete(&id)
+}
+
+/// OpenAI API 키가 저장되어 있는지 (키 자체는 웹뷰로 돌려주지 않는다)
+#[tauri::command]
+pub fn rag_has_key(state: State<'_, AppState>) -> bool {
+    state.rag_has_key()
+}
+
+#[tauri::command]
+pub fn rag_set_key(state: State<'_, AppState>, key: Option<String>) -> AppResult<()> {
+    state.rag_set_key(key)
+}
+
+/// 임베딩해서 넣기 (진행은 "transfer-progress", 행)
+#[tauri::command]
+pub async fn rag_build(app: tauri::AppHandle, state: State<'_, AppState>, id: String, job: String) -> AppResult<u64> {
+    let ticker = report_progress(&app, &state, &job);
+    let r = state.rag_build(id, job).await;
+    ticker.abort();
+    r
+}
+
+#[tauri::command]
+pub async fn rag_search(state: State<'_, AppState>, id: String, query: String, limit: usize) -> AppResult<QueryResult> {
+    state.rag_search(id, query, limit).await
+}
+
+// ───────── 스키마·데이터 비교, 마이그레이션 ─────────
+
+#[tauri::command]
+pub async fn compare_schemas(state: State<'_, AppState>, source_id: String, source_schema: String, target_id: String, target_schema: String) -> AppResult<Vec<qurry_core::migrate::Change>> {
+    state.compare_schemas(source_id, source_schema, target_id, target_schema).await
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn compare_data(state: State<'_, AppState>, source_id: String, source_schema: String, source_table: String, target_id: String, target_schema: String, target_table: String) -> AppResult<qurry_core::migrate::DataDiff> {
+    state.compare_data(source_id, source_schema, source_table, target_id, target_schema, target_table).await
+}
+
+/// 이번에 고른 폴더만 쓴다 (웹뷰가 아무 폴더의 SQL 을 돌리게 하지 않도록)
+#[derive(Default)]
+pub struct PickedDirs(pub std::sync::Mutex<std::collections::HashSet<String>>);
+
+fn picked(dirs: &PickedDirs, dir: &str) -> AppResult<()> {
+    if dirs.0.lock().unwrap().contains(dir) { Ok(()) } else { Err(crate::error::AppError::Msg("Choose the migrations folder first".into())) }
+}
+
+/// 마이그레이션 폴더 고르기
+#[tauri::command]
+pub async fn pick_folder(app: tauri::AppHandle, dirs: State<'_, PickedDirs>) -> AppResult<Option<String>> {
+    let Some(p) = app.dialog().file().blocking_pick_folder().and_then(|p| p.into_path().ok()) else { return Ok(None) };
+    let s = p.display().to_string();
+    dirs.0.lock().unwrap().insert(s.clone());
+    Ok(Some(s))
+}
+
+#[tauri::command]
+pub async fn migration_status(state: State<'_, AppState>, dirs: State<'_, PickedDirs>, id: String, dir: String) -> AppResult<Vec<qurry_core::migrate::Migration>> {
+    picked(&dirs, &dir)?;
+    state.migration_status(id, dir).await
+}
+
+#[tauri::command]
+pub async fn apply_migrations(state: State<'_, AppState>, dirs: State<'_, PickedDirs>, id: String, dir: String) -> AppResult<Vec<String>> {
+    picked(&dirs, &dir)?;
+    state.apply_migrations(id, dir).await
+}
+
+/// 비교 결과를 다음 버전 파일로 (V{n}__{설명}.sql)
+#[tauri::command]
+pub async fn save_migration(dirs: State<'_, PickedDirs>, dir: String, description: String, sql: String) -> AppResult<String> {
+    picked(&dirs, &dir)?;
+    qurry_core::migrate::save_migration(&dir, &description, &sql)
+}
+
+/// ERD: 스키마들의 테이블·관계 (+ Mermaid 글)
+#[tauri::command]
+pub async fn erd(state: State<'_, AppState>, id: String, schemas: Vec<String>) -> AppResult<(qurry_core::erd::Erd, String)> {
+    let e = state.erd(id, schemas).await?;
+    let m = e.mermaid();
+    Ok((e, m))
+}
+
+/// 글을 파일로 (저장 창: 이름·형식). 취소하면 None
+#[tauri::command]
+pub async fn save_file(app: tauri::AppHandle, default_name: String, text: String, filter: String, ext: String) -> AppResult<Option<String>> {
+    let Some(path) = save_dialog(&app, &default_name, &filter, &[ext.as_str()]) else { return Ok(None) };
+    std::fs::write(&path, text)?;
+    Ok(Some(path))
+}
+
+/// Production 확인: 이 문장이 바꿀 행 수
+#[tauri::command]
+pub async fn preview_impact(state: State<'_, AppState>, id: String, sql: String) -> AppResult<Option<i64>> {
+    state.preview_impact(id, sql).await
+}
+
+/// 드라이버 플러그인: 깔려 있는지 (기본으로 들어 있는 DB 면 None)
+#[tauri::command]
+pub fn driver_status(kind: crate::store::DbKind) -> Option<bool> {
+    kind.driver().map(|d| qurry_core::plugin::driver_path(d).is_some())
+}
+
+/// 드라이버를 받아 깐다 (이 버전 릴리스에서, 서명 확인)
+#[tauri::command]
+pub async fn install_driver(kind: crate::store::DbKind) -> AppResult<String> {
+    let d = kind.driver().ok_or_else(|| crate::error::AppError::Msg("This database needs no driver".into()))?;
+    Ok(qurry_core::plugin::install(d).await?.display().to_string())
+}
+
+/// 실행 계획 (EXPLAIN FORMAT JSON) → 트리 + 노드마다 몫(%)·경고
+#[tauri::command]
+pub fn analyze_plan(json: String) -> AppResult<qurry_core::plan::PlanNode> {
+    qurry_core::plan::parse_pg(&json)
+}
+
+/// DBA 리포트 목록 (이 Data Source 의 DB 종류에 맞는 것)
+#[tauri::command]
+pub fn dba_reports(state: State<'_, AppState>, id: String) -> AppResult<Vec<qurry_core::dba::ReportInfo>> {
+    Ok(qurry_core::dba::reports(state.kind_of(&id)?))
+}
+
+#[tauri::command]
+pub async fn dba_report(state: State<'_, AppState>, id: String, report: String) -> AppResult<QueryResult> {
+    state.dba_report(id, report).await
+}
+
+#[tauri::command]
+pub async fn kill_session(state: State<'_, AppState>, id: String, pid: i64, terminate: bool) -> AppResult<bool> {
+    state.kill_session(id, pid, terminate).await
+}
+
+/// 리포트 행 동작의 SQL (템플릿에 행 값)
+#[tauri::command]
+pub fn dba_action_sql(state: State<'_, AppState>, id: String, template: String, row: std::collections::HashMap<String, String>) -> AppResult<String> {
+    Ok(qurry_core::dba::action_sql(state.kind_of(&id)?, &template, &row))
+}
+
 #[tauri::command]
 pub fn cancel_job(state: State<'_, AppState>, job: String) {
     state.cancel_job(&job)
@@ -291,6 +508,12 @@ pub async fn list_objects(state: State<'_, AppState>, id: String, schema: String
 #[tauri::command]
 pub async fn table_detail(state: State<'_, AppState>, id: String, schema: String, table: String) -> AppResult<crate::meta::TableDetail> {
     state.table_detail(id, schema, table).await
+}
+
+/// pgvector: 이 행과 가까운 행을 찾는 SQL
+#[tauri::command]
+pub async fn similar_rows_sql(state: State<'_, AppState>, id: String, schema: String, table: String, column: String, pk: Vec<(String, Option<String>)>) -> AppResult<String> {
+    state.similar_rows_sql(id, schema, table, column, pk).await
 }
 
 #[tauri::command]

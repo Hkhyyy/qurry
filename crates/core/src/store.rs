@@ -14,6 +14,50 @@ pub enum DbKind {
     Postgres,
     Mysql,
     Redis,
+    // 아래는 드라이버 플러그인 (필요할 때 받는다): crate::plugin
+    Sqlite,
+    Mssql,
+    Clickhouse,
+    Duckdb,
+    Mongodb,
+    Oracle,
+    // 벡터 DB (REST)
+    Qdrant,
+    Chroma,
+    Milvus,
+}
+
+impl DbKind {
+    /// 드라이버 플러그인 이름 (기본으로 들어 있는 PG·MySQL·Redis 는 None)
+    pub fn driver(self) -> Option<&'static str> {
+        match self {
+            DbKind::Postgres | DbKind::Mysql | DbKind::Redis => None,
+            DbKind::Sqlite => Some("sqlite"),
+            DbKind::Mssql => Some("mssql"),
+            DbKind::Clickhouse => Some("clickhouse"),
+            DbKind::Duckdb => Some("duckdb"),
+            DbKind::Mongodb => Some("mongodb"),
+            DbKind::Oracle => Some("oracle"),
+            DbKind::Qdrant => Some("qdrant"),
+            DbKind::Chroma => Some("chroma"),
+            DbKind::Milvus => Some("milvus"),
+        }
+    }
+
+    /// DB 가 곧 스키마 (트리에 스키마 단계가 없다)
+    pub fn flat(self) -> bool {
+        matches!(self, DbKind::Mysql | DbKind::Redis | DbKind::Sqlite | DbKind::Clickhouse | DbKind::Mongodb | DbKind::Qdrant | DbKind::Chroma | DbKind::Milvus)
+    }
+
+    /// 파일 하나가 DB 인 것 (호스트·포트 대신 파일 경로)
+    pub fn is_file(self) -> bool {
+        matches!(self, DbKind::Sqlite | DbKind::Duckdb)
+    }
+
+    /// 벡터 DB: 콘솔이 SQL 이 아니라 REST (METHOD /path + JSON)
+    pub fn is_vector(self) -> bool {
+        matches!(self, DbKind::Qdrant | DbKind::Chroma | DbKind::Milvus)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -119,6 +163,12 @@ pub struct ConnOptions {
     /// Startup script: 연결마다 접속 직후 실행
     #[serde(default)]
     pub startup_script: String,
+    /// Production: 데이터를 바꾸는 문장은 바뀔 행 수를 보여 주고 확인을 받는다
+    #[serde(default)]
+    pub confirm_changes: bool,
+    /// Oracle: Instant Client 폴더 (비면 ORACLE_CLIENT_LIB_DIR · 시스템 기본)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oracle_client: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]

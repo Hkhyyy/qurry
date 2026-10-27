@@ -1,18 +1,22 @@
 //! Qurry TUI — DataGrip 식 터미널 클라이언트. GUI 와 같은 엔진(qurry-core)·같은 Data Source 를 쓴다.
 mod app;
 mod complete;
+mod dba;
 mod exec;
 mod find;
 mod grid;
 mod help;
 mod input;
 mod keys;
+mod migrate;
 mod panes;
+mod rag;
 mod workspace;
 #[cfg(test)]
 mod testkit;
 mod scope;
 mod selfupdate;
+mod snippets;
 mod transfer;
 mod tree;
 mod ui;

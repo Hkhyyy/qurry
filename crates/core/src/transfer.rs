@@ -160,7 +160,7 @@ impl Encoder {
 }
 
 /// SQL 값: NULL·숫자·TRUE/FALSE 는 그대로, 나머지는 따옴표 (MySQL 은 백슬래시도)
-fn sql_literal(kind: DbKind, v: &Value) -> String {
+pub(crate) fn sql_literal(kind: DbKind, v: &Value) -> String {
     match v {
         Value::Null => "NULL".into(),
         Value::Bool(b) => if *b { "TRUE" } else { "FALSE" }.into(),
@@ -487,6 +487,7 @@ impl AppState {
             Pool::Pg(p) => Tx::Pg(p.begin().await?),
             Pool::My(p) => Tx::My(p.begin().await?),
             Pool::Redis(..) => return Err(AppError::Msg("Import into Redis is not supported".into())),
+            Pool::Plugin(c) => return Err(AppError::Msg(format!("Import is not available for the {} driver yet", c.driver))),
         };
         if spec.create {
             let ty = if kind == DbKind::Mysql { "TEXT" } else { "text" };

@@ -3,14 +3,14 @@ use crate::db::Pool;
 use crate::error::AppResult;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SchemaInfo {
     pub name: String,
     pub is_system: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RelationInfo {
     pub name: String,
@@ -20,7 +20,7 @@ pub struct RelationInfo {
     pub row_estimate: Option<i64>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoutineInfo {
     pub name: String,
@@ -30,14 +30,14 @@ pub struct RoutineInfo {
     pub kind: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SchemaObjects {
     pub relations: Vec<RelationInfo>,
     pub routines: Vec<RoutineInfo>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ColumnMeta {
     pub name: String,
@@ -48,7 +48,7 @@ pub struct ColumnMeta {
     pub is_pk: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexMeta {
     pub name: String,
@@ -57,7 +57,7 @@ pub struct IndexMeta {
     pub is_primary: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConstraintMeta {
     pub name: String,
@@ -66,7 +66,7 @@ pub struct ConstraintMeta {
     pub definition: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableDetail {
     pub columns: Vec<ColumnMeta>,
@@ -87,6 +87,7 @@ pub async fn list_databases(pool: &Pool) -> AppResult<Vec<String>> {
         Pool::Pg(p) => p,
         Pool::My(m) => return crate::mysql::list_databases(m).await,
         Pool::Redis(r, cur) => return crate::redisdb::list_databases(r, *cur).await,
+        Pool::Plugin(c) => return c.call("databases", serde_json::Value::Null).await,
     };
     let rows: Vec<(String,)> = sqlx::query_as(
         "select datname::text from pg_database where datallowconn and not datistemplate order by datname",
@@ -101,6 +102,7 @@ pub async fn list_schemas(pool: &Pool) -> AppResult<Vec<SchemaInfo>> {
         Pool::Pg(p) => p,
         Pool::My(m) => return crate::mysql::list_schemas(m).await,
         Pool::Redis(_, cur) => return Ok(crate::redisdb::list_schemas(&format!("db{cur}"))),
+        Pool::Plugin(c) => return c.call("schemas", serde_json::json!({})).await,
     };
     let rows: Vec<(String,)> = sqlx::query_as(
         "select nspname::text from pg_namespace \
@@ -120,6 +122,7 @@ pub async fn list_objects(pool: &Pool, schema: &str) -> AppResult<SchemaObjects>
         Pool::Pg(p) => p,
         Pool::My(m) => return crate::mysql::list_objects(m, schema).await,
         Pool::Redis(r, _) => return crate::redisdb::list_objects(r).await,
+        Pool::Plugin(c) => return c.call("objects", serde_json::json!({ "schema": schema })).await,
     };
     let rels: Vec<(String, String, Option<String>, Option<f32>)> = sqlx::query_as(
         "select c.relname::text, c.relkind::text, obj_description(c.oid, 'pg_class'), c.reltuples \
@@ -181,6 +184,7 @@ pub async fn table_detail(pool: &Pool, schema: &str, table: &str) -> AppResult<T
         Pool::Pg(p) => p,
         Pool::My(m) => return crate::mysql::table_detail(m, schema, table).await,
         Pool::Redis(..) => return Ok(TableDetail { columns: vec![], indexes: vec![], constraints: vec![] }),
+        Pool::Plugin(c) => return c.call("tableDetail", serde_json::json!({ "schema": schema, "table": table })).await,
     };
     let cols: Vec<(String, String, bool, Option<String>, Option<String>, bool)> = sqlx::query_as(&format!(
         "select a.attname::text, format_type(a.atttypid, a.atttypmod), not a.attnotnull, \
@@ -249,6 +253,7 @@ pub async fn object_ddl(pool: &Pool, schema: &str, name: &str, kind: &str) -> Ap
         Pool::Pg(p) => p,
         Pool::My(m) => return crate::mysql::object_ddl(m, schema, name, kind).await,
         Pool::Redis(r, _) => return crate::redisdb::key_ddl(r, name).await,
+        Pool::Plugin(c) => return c.call("ddl", serde_json::json!({ "schema": schema, "name": name, "kind": kind })).await,
     };
     let full = format!("{}.{}", qi(schema), qi(name));
     match kind {
@@ -326,12 +331,28 @@ pub async fn object_ddl(pool: &Pool, schema: &str, name: &str, kind: &str) -> Ap
     }
 }
 
+/// 드라이버: 스키마 → 테이블 → 컬럼 (테이블 300개까지)
+async fn plugin_completion(pool: &Pool) -> AppResult<Vec<CompletionTable>> {
+    let mut out = vec![];
+    for s in list_schemas(pool).await? {
+        for r in list_objects(pool, &s.name).await?.relations {
+            if out.len() >= 300 {
+                return Ok(out);
+            }
+            let cols = table_detail(pool, &s.name, &r.name).await.map(|d| d.columns.into_iter().map(|c| (c.name, c.data_type)).collect()).unwrap_or_default();
+            out.push(CompletionTable { schema: s.name.clone(), name: r.name, columns: cols });
+        }
+    }
+    Ok(out)
+}
+
 /// 자동완성용: 사용자 스키마의 테이블/뷰와 컬럼 (최대 30,000 컬럼)
 pub async fn completion_meta(pool: &Pool) -> AppResult<Vec<CompletionTable>> {
     let p = match pool {
         Pool::Pg(p) => p,
         Pool::My(m) => return crate::mysql::completion_meta(m).await,
         Pool::Redis(..) => return Ok(vec![]),
+        Pool::Plugin(_) => return plugin_completion(pool).await,
     };
     let rows: Vec<(String, String, String, String)> = sqlx::query_as(
         "select n.nspname::text, c.relname::text, a.attname::text, format_type(a.atttypid, a.atttypmod) \
@@ -367,6 +388,16 @@ pub async fn object_index(pool: &Pool) -> AppResult<Vec<IndexEntry>> {
         Pool::Pg(p) => p,
         Pool::My(m) => return crate::mysql::object_index(m).await,
         Pool::Redis(r, cur) => return crate::redisdb::object_index(r, &format!("db{cur}")).await,
+        Pool::Plugin(_) => {
+            let mut out = vec![];
+            for s in list_schemas(pool).await? {
+                out.push(IndexEntry { schema: s.name.clone(), name: s.name.clone(), kind: "schema".into() });
+                for r in list_objects(pool, &s.name).await?.relations {
+                    out.push(IndexEntry { schema: s.name.clone(), name: r.name, kind: r.kind });
+                }
+            }
+            return Ok(out);
+        }
     };
     const USER_NS: &str = "n.nspname not in ('pg_catalog','information_schema') and n.nspname not like 'pg_toast%' and n.nspname not like 'pg_temp%'";
     let sql = format!(
@@ -440,6 +471,7 @@ pub async fn full_text_search(pool: &Pool, r: &FtsRequest) -> AppResult<Vec<FtsH
         Pool::Pg(p) => p,
         Pool::My(m) => return crate::mysql::full_text_search(m, r).await,
         Pool::Redis(..) => return Err(crate::error::AppError::Msg("Full-text search is not available for Redis; use SCAN MATCH in the console".into())),
+        Pool::Plugin(c) => return Err(crate::error::AppError::Msg(format!("Full-text search is not available for the {} driver yet", c.driver))),
     };
     // 대상 테이블·컬럼과 타입 분류 (S=문자열, N=숫자)
     let rows: Vec<(String, String, String, String)> = sqlx::query_as(

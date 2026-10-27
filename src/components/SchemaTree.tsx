@@ -1,6 +1,6 @@
 import { connBg, useTheme } from "../lib/theme";
 import { createContext, useContext, useEffect, useId, useRef, useState } from "react";
-import { ConnectionView, redisDb, dbVisible, meta, RelationInfo, RoutineInfo, SchemaInfo, schemaVisible, Scope, TableDetail, targetId } from "../lib/api";
+import { api, ConnectionView, DbKind, DRIVER_MISSING, KIND_LABEL, redisDb, dbVisible, meta, RelationInfo, RoutineInfo, SchemaInfo, schemaVisible, Scope, TableDetail, targetId } from "../lib/api";
 import { ScopePopup } from "./ScopePopup";
 import { invalidateCompletion } from "../lib/completion";
 import { TYPE_COLOR } from "./RedisBrowser";
@@ -124,11 +124,34 @@ function Row({ depth, open, onToggle, icon, iconClass, label, sub, title, onDoub
   );
 }
 
-function Status({ depth, load }: { depth: number; load: Load<unknown> | undefined }) {
+function Status({ depth, load, kind, onRetry }: { depth: number; load: Load<unknown> | undefined; kind?: DbKind; onRetry?: () => void }) {
+  const [installing, setInstalling] = useState(false);
   if (!load || load.state === "ok") return null;
+  // 드라이버가 없으면 바로 받을 수 있게
+  const missing = load.state === "error" && load.msg.includes(DRIVER_MISSING) && kind;
   return (
     <div className={"tree-status" + (load.state === "error" ? " err" : "")} style={{ paddingLeft: 24 + depth * 19 }}>
       {load.state === "loading" ? "Loading…" : load.msg}
+      {missing && (
+        <button
+          className="small"
+          style={{ marginLeft: 8 }}
+          disabled={installing}
+          onClick={async () => {
+            setInstalling(true);
+            try {
+              await api.installDriver(kind);
+              onRetry?.();
+            } catch (e) {
+              alert(String(e));
+            } finally {
+              setInstalling(false);
+            }
+          }}
+        >
+          {installing ? "Installing…" : `Install the ${KIND_LABEL[kind]} driver`}
+        </button>
+      )}
     </div>
   );
 }
@@ -141,7 +164,7 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
   const [openDbs, setOpenDbs] = useState<Set<string>>(new Set());
   const [gen, setGen] = useState(0); // 새로고침 시 하위 노드를 다시 마운트
   const theme = useTheme();
-  const defaultDb = conn.kind === "redis" ? redisDb(conn.database) : conn.database || (conn.kind === "postgres" ? "postgres" : "");
+  const defaultDb = conn.kind === "redis" ? redisDb(conn.database) : conn.kind === "sqlite" || conn.kind === "duckdb" ? "main" : conn.database || (conn.kind === "postgres" ? "postgres" : "");
 
   // Single database mode: 기본 DB 하나만
   const MY_SYS = ["information_schema", "performance_schema", "mysql", "sys"];
@@ -223,7 +246,7 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
       />
       {opened && (
         <div key={gen}>
-          <Status depth={1} load={dbs} />
+          <Status depth={1} load={dbs} kind={conn.kind} onRetry={() => loadDbs(true)} />
           {dbs?.state === "ok" &&
             dbs.data.filter((db) => dbShown(db)).map((db) => {
               const dOpen = openDbs.has(db);
@@ -302,7 +325,8 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
 }) {
   const target = targetId(conn.id, db);
   // MySQL: database == schema → 스키마 줄 없이 바로 객체 폴더를 보인다 (DataGrip 과 같음)
-  const flat = conn.kind === "mysql" || conn.kind === "redis";
+  // DB 가 곧 스키마인 것: 스키마 단계 없이 테이블
+  const flat = ["mysql", "redis", "sqlite", "clickhouse", "mongodb", "qdrant", "chroma", "milvus"].includes(conn.kind);
   const dd = flat ? -1 : 0;
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [schemas, setSchemas] = useState<Load<SchemaInfo[]>>();

@@ -1,0 +1,10 @@
+[package]
+name = "qurry-driver-oracle"
+version = "0.2.0"
+edition = "2024"
+description = "Qurry driver plugin: Oracle (needs Oracle Instant Client at run time)"
+
+[dependencies]
+qurry-driver = { workspace = true }
+serde_json = { workspace = true }
+oracle = "0.6"

@@ -1,0 +1,10 @@
+[package]
+name = "qurry-driver-duckdb"
+version = "0.2.0"
+edition = "2024"
+description = "Qurry driver plugin: DuckDB (bundled)"
+
+[dependencies]
+qurry-driver = { workspace = true }
+serde_json = { workspace = true }
+duckdb = { version = "1", features = ["bundled"] }

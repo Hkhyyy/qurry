@@ -61,3 +61,17 @@ monaco.editor.defineTheme("dbtool-hc", {
   ],
   colors: { "editor.background": "#000000" },
 });
+
+/**
+ * 콘솔 탭을 닫을 때: 그 콘솔의 되돌리기(undo) 기록을 버린다.
+ * Monaco 는 닫힌 모델의 undo 를 같은 주소로 다시 열 때를 위해 (최대 20MB) 들고 있는데, 콘솔 주소(console-<탭 id>.sql)는 다시 쓰지 않는다.
+ * 화면에 없는 탭(다른 워크스페이스)이면 같은 주소로 내용이 다른 모델을 잠깐 만들어 남은 기록을 버리게 한다
+ */
+export function forgetConsoleModel(tabId: string) {
+  const uri = monaco.Uri.parse(`console-${tabId}.sql`);
+  const open = monaco.editor.getModel(uri);
+  if (open) return open.setValue("");
+  const tmp = monaco.editor.createModel("\u0000forget", undefined, uri);
+  tmp.setValue("");
+  tmp.dispose();
+}

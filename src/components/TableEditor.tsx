@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Dialect, QueryResult } from "../lib/api";
+import { Cell, Dialect, QueryResult } from "../lib/api";
 import { EditTarget, ResultGrid } from "./ResultGrid";
 import { IcFilter, IcOrder } from "./icons";
 
@@ -23,6 +23,7 @@ interface Props {
   onExportCsv: () => void;
   onDdl: () => void;
   onCopyQueryToConsole: (sql: string) => void;
+  onFindSimilar?: (column: string, row: Record<string, Cell>) => void;
 }
 
 export function TableEditor(p: Props) {
@@ -98,6 +99,7 @@ export function TableEditor(p: Props) {
           }}
           onDdl={p.onDdl}
           onCopyQueryToConsole={p.onCopyQueryToConsole}
+          onFindSimilar={p.onFindSimilar}
           filterBar={filterBar}
         />
         {p.running && !p.result && <div className="grid-overlay muted">Loading {p.title}…</div>}

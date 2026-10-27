@@ -23,6 +23,8 @@ export interface EditorApi {
   run: (explain?: "plan" | "analyze") => void;
   insert: (text: string) => void;
   focus: () => void;
+  /** 골라 둔 글, 없으면 콘솔 전체 */
+  text: () => string;
 }
 
 interface Props {
@@ -184,6 +186,12 @@ export function ConsoleEditor({ tabId, connId, initialSql, language, onChange, o
             ed.focus();
           },
           focus: () => ed.focus(),
+          text: () => {
+            const m = ed.getModel();
+            const sel = ed.getSelection();
+            if (!m) return "";
+            return sel && !sel.isEmpty() ? m.getValueInRange(sel) : m.getValue();
+          },
         });
         ed.focus();
       }}

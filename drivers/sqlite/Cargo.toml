@@ -1,0 +1,10 @@
+[package]
+name = "qurry-driver-sqlite"
+version = "0.2.0"
+edition = "2024"
+description = "Qurry driver plugin: SQLite (bundled)"
+
+[dependencies]
+qurry-driver = { workspace = true }
+serde_json = { workspace = true }
+rusqlite = { version = "0.32", features = ["bundled", "column_decltype"] }

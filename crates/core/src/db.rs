@@ -14,6 +14,8 @@ pub enum Pool {
     My(sqlx::MySqlPool),
     /// (연결, 이 풀이 가리키는 DB 번호)
     Redis(crate::redisdb::RedisConn, i64),
+    /// 드라이버 플러그인 (따로 띄운 프로세스)
+    Plugin(std::sync::Arc<crate::plugin::PluginConn>),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -51,6 +53,7 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>) -> AppResul
 /// `tunnel_port`가 있으면 SSH 터널의 로컬 포트로 접속한다.
 pub async fn connect_via(cfg: &ConnectionConfig, password: Option<&str>, tunnel_port: Option<u16>) -> AppResult<Pool> {
     match cfg.kind {
+        DbKind::Sqlite | DbKind::Mssql | DbKind::Clickhouse | DbKind::Duckdb | DbKind::Mongodb | DbKind::Oracle | DbKind::Qdrant | DbKind::Chroma | DbKind::Milvus => Ok(Pool::Plugin(crate::plugin::connect(cfg, password, tunnel_port).await?)),
         DbKind::Postgres => {
             let (host, port) = match tunnel_port {
                 Some(p) => ("127.0.0.1", p),
@@ -138,12 +141,56 @@ pub async fn connect_via(cfg: &ConnectionConfig, password: Option<&str>, tunnel_
     }
 }
 
+/// 시험한 버전보다 오래된 서버면 알림 (대부분은 되지만 확인하지 않았다)
+pub fn version_note(kind: DbKind, version: &str) -> Option<String> {
+    // 버전 글에서 첫 숫자들 (2017 같은 해도)
+    let nums: Vec<u32> = version.split(|c: char| !c.is_ascii_digit()).filter(|s| !s.is_empty()).filter_map(|s| s.parse().ok()).collect();
+    let first = *nums.first()?;
+    let lower = version.to_lowercase();
+    let (min, label): (u32, &str) = match kind {
+        DbKind::Postgres => (12, "PostgreSQL 12"),
+        DbKind::Mysql if lower.contains("mariadb") => (10, "MariaDB 10.5"),
+        DbKind::Mysql => (5, "MySQL 5.7"),
+        // "Microsoft SQL Server 2017 (RTM-CU…" → 해
+        DbKind::Mssql => (2017, "SQL Server 2017"),
+        DbKind::Mongodb => (5, "MongoDB 5"),
+        DbKind::Clickhouse => (22, "ClickHouse 22"),
+        // "Oracle Database 19c …" · "… 23ai"
+        DbKind::Oracle => (19, "Oracle 19c"),
+        _ => return None,
+    };
+    let v = if kind == DbKind::Mssql { nums.iter().copied().find(|n| *n >= 2000).unwrap_or(first) } else { first };
+    let old = v < min || (kind == DbKind::Mysql && !lower.contains("mariadb") && v == 5 && nums.get(1).is_some_and(|m| *m < 7)) || (kind == DbKind::Mysql && lower.contains("mariadb") && v == 10 && nums.get(1).is_some_and(|m| *m < 5));
+    old.then(|| format!("⚠ This server is older than the versions Qurry is tested with ({label} and newer). Most things should work; some explorer details may not."))
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+    #[test]
+    fn notes_old_servers_only() {
+        assert!(version_note(DbKind::Postgres, "PostgreSQL 11.9 on x86_64").is_some());
+        assert!(version_note(DbKind::Postgres, "PostgreSQL 16.4").is_none());
+        assert!(version_note(DbKind::Mysql, "MySQL 5.6.51").is_some());
+        assert!(version_note(DbKind::Mysql, "MySQL 5.7.44").is_none());
+        assert!(version_note(DbKind::Mysql, "MariaDB 10.4.1").is_some());
+        assert!(version_note(DbKind::Mysql, "MariaDB 11.4.2").is_none());
+        assert!(version_note(DbKind::Mssql, "Microsoft SQL Server 2016 (SP3) - 13.0.6300.2").is_some());
+        assert!(version_note(DbKind::Mssql, "Microsoft SQL Server 2022 (RTM-CU14) - 16.0.4135.4").is_none());
+        assert!(version_note(DbKind::Oracle, "Oracle Database 11g Enterprise Edition Release 11.2.0.4.0").is_some());
+        assert!(version_note(DbKind::Oracle, "Oracle Database 23ai Free Release 23.0.0.0.0").is_none());
+        assert!(version_note(DbKind::Mongodb, "MongoDB 4.4.29").is_some());
+        assert!(version_note(DbKind::Sqlite, "SQLite 3.46.0").is_none());
+    }
+}
+
 impl Pool {
     pub async fn server_version(&self) -> AppResult<String> {
         match self {
             Pool::Pg(p) => Ok(sqlx::query_scalar::<_, String>("select version()").fetch_one(p).await?),
             Pool::My(p) => crate::mysql::server_version(p).await,
             Pool::Redis(m, _) => crate::redisdb::server_version(m).await,
+            Pool::Plugin(c) => c.call("version", Value::Null).await,
         }
     }
 
@@ -151,7 +198,7 @@ impl Pool {
         match self {
             Pool::Pg(p) => p.close().await,
             Pool::My(p) => p.close().await,
-            Pool::Redis(..) => {}
+            Pool::Redis(..) | Pool::Plugin(_) => {}
         }
     }
 
@@ -161,6 +208,14 @@ impl Pool {
             Pool::Pg(p) => export_pg(p, sql, out).await,
             Pool::My(p) => crate::mysql::export(p, sql, out).await,
             Pool::Redis(m, _) => crate::redisdb::export(m, sql, out).await,
+            Pool::Plugin(c) => {
+                let r = c.query(sql, 10_000_000).await?;
+                out.header(&r.columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>()).await?;
+                for row in &r.rows {
+                    out.row(row).await?;
+                }
+                Ok(())
+            }
         }
     }
 
@@ -177,6 +232,7 @@ impl Pool {
             Pool::Pg(p) => run_pg(p, sql, limit).await,
             Pool::My(p) => crate::mysql::run(p, sql, limit).await,
             Pool::Redis(m, _) => crate::redisdb::run(m, sql, limit).await,
+            Pool::Plugin(c) => c.query(sql, limit).await,
         }
     }
 
@@ -195,6 +251,7 @@ impl Pool {
                 let _ = sqlx::query("select 1").execute(p).await;
             }
             Pool::Redis(m, _) => crate::redisdb::ping(m).await,
+            Pool::Plugin(_) => {}
         }
     }
 }
@@ -382,7 +439,50 @@ pub(crate) fn pg_value(row: &PgRow, i: usize) -> Value {
         }
         _ => None,
     };
-    v.unwrap_or_else(|| fallback(raw.as_bytes().ok(), &ty))
+    v.unwrap_or_else(|| {
+        let bytes = raw.as_bytes().ok();
+        bytes.and_then(|b| decode_pgvector(&ty, b)).map(Value::from).unwrap_or_else(|| fallback(bytes, &ty))
+    })
+}
+
+/// pgvector 바이너리 → PG 텍스트 출력과 같은 글: vector/halfvec "[1,0.5]", sparsevec "{1:0.5,3:1}/5"
+/// vector: dim(u16) unused(u16) f32[dim] · halfvec: 같은 머리 + f16[dim] · sparsevec: dim(i32) nnz(i32) unused(i32) idx(i32)[nnz] f32[nnz]
+fn decode_pgvector(ty: &str, b: &[u8]) -> Option<String> {
+    let u16_at = |i: usize| -> Option<u16> { Some(u16::from_be_bytes([*b.get(i)?, *b.get(i + 1)?])) };
+    let u32_at = |i: usize| -> Option<u32> { Some(u32::from_be_bytes(b.get(i..i + 4)?.try_into().ok()?)) };
+    let f = |x: f32| x.to_string();
+    match ty.to_lowercase().as_str() {
+        "vector" => {
+            let dim = u16_at(0)? as usize;
+            let v: Option<Vec<String>> = (0..dim).map(|k| u32_at(4 + k * 4).map(|x| f(f32::from_bits(x)))).collect();
+            Some(format!("[{}]", v?.join(",")))
+        }
+        "halfvec" => {
+            let dim = u16_at(0)? as usize;
+            let v: Option<Vec<String>> = (0..dim).map(|k| u16_at(4 + k * 2).map(|h| f(f16_to_f32(h)))).collect();
+            Some(format!("[{}]", v?.join(",")))
+        }
+        "sparsevec" => {
+            let (dim, nnz) = (u32_at(0)?, u32_at(4)? as usize);
+            let idx: Option<Vec<u32>> = (0..nnz).map(|k| u32_at(12 + k * 4)).collect();
+            let vals: Option<Vec<f32>> = (0..nnz).map(|k| u32_at(12 + nnz * 4 + k * 4).map(f32::from_bits)).collect();
+            let parts: Vec<String> = idx?.iter().zip(vals?).map(|(i, v)| format!("{}:{}", i + 1, f(v))).collect();
+            Some(format!("{{{}}}/{dim}", parts.join(",")))
+        }
+        _ => None,
+    }
+}
+
+/// IEEE 754 반정밀도 → f32
+fn f16_to_f32(h: u16) -> f32 {
+    let sign = if h & 0x8000 != 0 { -1.0 } else { 1.0 };
+    let exp = ((h >> 10) & 0x1f) as i32;
+    let frac = (h & 0x3ff) as f32;
+    match exp {
+        0 => sign * frac * 2f32.powi(-24),
+        31 => if frac == 0.0 { sign * f32::INFINITY } else { f32::NAN },
+        e => sign * (1.0 + frac / 1024.0) * 2f32.powi(e - 15),
+    }
 }
 
 /// simple query 프로토콜(텍스트 포맷)로 받은 값
@@ -527,7 +627,7 @@ mod tests {
         let r = pool
             .run_query(
                 "select 1 as a, 'x'::text b, now() c, null::int d, 12345678901234567::int8 e, \
-                 12345678901234567890.12345::numeric f, '{\"k\":1}'::jsonb g, gen_random_uuid() h, \
+                 12345678901234567890.12345::numeric f, '{\"k\":1}'::jsonb g, md5('x')::uuid h, \
                  '\\xdeadbeef'::bytea i, array[1,2] j",
                 500,
             )

@@ -2,6 +2,9 @@
 //! 소스에서 빌드한 실행 파일(…/target/release 등)은 건드리지 않고 다시 빌드하라고 안내한다.
 //! 받는 파일은 이 레포의 릴리스 주소인지 확인하고, HTTPS 로만 받고, 릴리스의 SHA256SUMS 와 대조한 뒤에야 바꿔 넣는다
 use qurry_core::update;
+use qurry_core::update::{expected_sha, sha256_of, verify_sums};
+#[cfg(test)]
+use qurry_core::update::UPDATE_PUBKEY;
 use std::path::{Path, PathBuf};
 
 /// 이 플랫폼이 받을 릴리스 파일 이름의 끝 (릴리스는 Apple Silicon · Intel macOS, x86_64 Linux 를 빌드한다)
@@ -41,20 +44,7 @@ fn download(url: &str, to: &Path, quiet: bool) -> std::io::Result<()> {
     if quiet { run_quiet(&mut cmd) } else { run(&mut cmd) }
 }
 
-/// SHA256SUMS 에서 파일 이름의 해시
-fn expected_sha(sums: &str, name: &str) -> Option<String> {
-    sums.lines().find_map(|l| {
-        let (hash, file) = l.split_once(char::is_whitespace)?;
-        (file.trim().trim_start_matches('*') == name).then(|| hash.trim().to_lowercase())
-    })
-}
 
-fn sha256_of(path: &Path) -> std::io::Result<String> {
-    use sha2::Digest;
-    let mut h = sha2::Sha256::new();
-    std::io::copy(&mut std::fs::File::open(path)?, &mut h)?;
-    Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
-}
 
 fn run(cmd: &mut std::process::Command) -> std::io::Result<()> {
     let st = cmd.status()?;
@@ -116,20 +106,7 @@ pub async fn install(quiet: bool) -> std::io::Result<Outcome> {
     Ok(Outcome::Installed { version: rel.version, paths })
 }
 
-/// 업데이트 서명 공개키 (GUI tauri.conf.json 의 plugins.updater.pubkey 와 같다 — 테스트가 확인)
-pub const UPDATE_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDA0MjA1NDlDN0EyODFEM0YKUldRL0hTaDZuRlFnQklTVks5ZFNkdVBNamNqK0JJWEY0akRmR3p3azVGQ2ZiTXUwM2xiL3VtUWwK";
 
-/// SHA256SUMS 의 서명(릴리스의 SHA256SUMS.sig, tauri signer 형식 = minisign 서명 글의 base64) 확인
-fn verify_sums(sums: &[u8], sig_b64: &str) -> Result<(), String> {
-    use base64::Engine;
-    let b64 = |s: &str| -> Result<String, String> {
-        let raw = base64::engine::general_purpose::STANDARD.decode(s.trim()).map_err(|e| format!("bad base64: {e}"))?;
-        String::from_utf8(raw).map_err(|e| e.to_string())
-    };
-    let pk = minisign_verify::PublicKey::decode(&b64(UPDATE_PUBKEY)?).map_err(|e| format!("bad public key: {e}"))?;
-    let sig = minisign_verify::Signature::decode(&b64(sig_b64)?).map_err(|e| format!("bad signature: {e}"))?;
-    pk.verify(sums, &sig, false).map_err(|e| format!("signature check failed: {e}"))
-}
 
 /// 설치할 이름: 새 이름은 늘, 예전 이름(dbtool-*)은 이미 있을 때만
 fn install_names(exists: impl Fn(&str) -> bool) -> Vec<&'static str> {

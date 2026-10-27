@@ -29,6 +29,13 @@ export interface PlanNode {
   actualTime?: number;
   actualRows?: number;
   loops?: number;
+  /** 자식 몫을 뺀 이 노드만의 시간(ms) / 비용 */
+  selfTime?: number;
+  selfCost?: number;
+  /** 전체에서 이 노드 몫 (%): ANALYZE 면 시간, 아니면 비용 */
+  pct: number;
+  warnings: string[];
+  props: [string, string][];
   children: PlanNode[];
 }
 
@@ -326,7 +333,7 @@ export function ConsolePane(p: Props) {
   );
 }
 
-/** Query Plan: Operations Tree (DataGrip Explain Plan 결과 뷰) */
+/** Query Plan: Operations Tree (DataGrip Explain Plan) + 노드마다 몫(%) 막대, 경고(⚠), 고른 노드의 상세 */
 function PlanView({ plan }: { plan: PlanNode }) {
   const [sel, setSel] = useState<PlanNode | null>(plan);
   const rows: { n: PlanNode; depth: number }[] = [];
@@ -335,32 +342,44 @@ function PlanView({ plan }: { plan: PlanNode }) {
     n.children.forEach((c) => walk(c, depth + 1));
   };
   walk(plan, 0);
-  const fmt = (v?: number) => (v === undefined ? "" : Number.isInteger(v) ? String(v) : v.toFixed(2));
+  const fmt = (v?: number) => (v === undefined || v === null ? "" : Number.isInteger(v) ? v.toLocaleString("en-US") : v.toFixed(2));
+  const analyzed = plan.actualTime !== undefined && plan.actualTime !== null;
+  const warned = rows.filter((r) => r.n.warnings.length).length;
   return (
     <div className="plan-view">
       <div className="plan-table">
+        {warned > 0 && <div className="plan-summary">⚠ {warned} node{warned > 1 ? "s" : ""} worth a look — click one for details</div>}
         <table>
           <thead>
             <tr>
               <th>Operation</th>
+              <th>{analyzed ? "Time share" : "Cost share"}</th>
+              <th>{analyzed ? "Self time" : "Self cost"}</th>
               <th>Params</th>
               <th>Cost (startup..total)</th>
               <th>Rows</th>
-              <th>Width</th>
-              <th>Actual time</th>
               <th>Actual rows</th>
               <th>Loops</th>
             </tr>
           </thead>
           <tbody>
             {rows.map(({ n, depth }, i) => (
-              <tr key={i} className={sel === n ? "on" : ""} onClick={() => setSel(n)}>
-                <td style={{ paddingLeft: 8 + depth * 16 }}>{depth > 0 ? "└ " : ""}{n.op}</td>
+              <tr key={i} className={(sel === n ? "on " : "") + (n.warnings.length ? "warn" : "")} onClick={() => setSel(n)} title={n.warnings.join("\n")}>
+                <td style={{ paddingLeft: 8 + depth * 16 }}>
+                  {depth > 0 ? "└ " : ""}
+                  {n.warnings.length ? <span className="plan-warn">⚠ </span> : null}
+                  {n.op}
+                </td>
+                <td>
+                  <span className="plan-bar">
+                    <span style={{ width: `${Math.min(100, n.pct)}%`, background: n.pct >= 50 ? "var(--danger)" : n.pct >= 20 ? "var(--c-e5c07b, #e5c07b)" : "var(--accent)" }} />
+                  </span>
+                  <span className="plan-pct">{n.pct.toFixed(0)}%</span>
+                </td>
+                <td className="num">{analyzed ? (n.selfTime !== undefined ? `${fmt(n.selfTime)} ms` : "") : fmt(n.selfCost)}</td>
                 <td className="muted">{n.detail}</td>
-                <td className="num">{n.total !== undefined ? `${fmt(n.startup)}..${fmt(n.total)}` : ""}</td>
+                <td className="num">{n.total !== undefined && n.total !== null ? `${fmt(n.startup)}..${fmt(n.total)}` : ""}</td>
                 <td className="num">{fmt(n.rows)}</td>
-                <td className="num">{fmt(n.width)}</td>
-                <td className="num">{fmt(n.actualTime)}</td>
                 <td className="num">{fmt(n.actualRows)}</td>
                 <td className="num">{fmt(n.loops)}</td>
               </tr>
@@ -368,42 +387,26 @@ function PlanView({ plan }: { plan: PlanNode }) {
           </tbody>
         </table>
       </div>
+      {sel && (
+        <div className="plan-detail">
+          <div className="plan-detail-title">{sel.op}</div>
+          {sel.warnings.map((w, i) => (
+            <div key={i} className="plan-detail-warn">
+              ⚠ {w}
+            </div>
+          ))}
+          <table>
+            <tbody>
+              {sel.props.map(([k, v]) => (
+                <tr key={k}>
+                  <td className="muted">{k}</td>
+                  <td>{v}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
-}
-
-/** PostgreSQL EXPLAIN (FORMAT JSON) → PlanNode */
-export function parsePgPlan(json: string): PlanNode | null {
-  try {
-    const arr = JSON.parse(json);
-    const root = Array.isArray(arr) ? arr[0]?.Plan : arr?.Plan;
-    const conv = (n: Record<string, unknown>): PlanNode => {
-      const detail = [
-        n["Relation Name"] ? `on ${n["Schema"] ? n["Schema"] + "." : ""}${n["Relation Name"]}${n["Alias"] && n["Alias"] !== n["Relation Name"] ? " " + n["Alias"] : ""}` : "",
-        n["Index Name"] ? `using ${n["Index Name"]}` : "",
-        n["Join Type"] ? `${n["Join Type"]} join` : "",
-        n["Filter"] ? `filter: ${n["Filter"]}` : "",
-        n["Index Cond"] ? `cond: ${n["Index Cond"]}` : "",
-        n["Hash Cond"] ? `cond: ${n["Hash Cond"]}` : "",
-        n["Sort Key"] ? `key: ${(n["Sort Key"] as string[]).join(", ")}` : "",
-      ]
-        .filter(Boolean)
-        .join("  ");
-      return {
-        op: String(n["Node Type"] ?? "?"),
-        detail,
-        startup: n["Startup Cost"] as number | undefined,
-        total: n["Total Cost"] as number | undefined,
-        rows: n["Plan Rows"] as number | undefined,
-        width: n["Plan Width"] as number | undefined,
-        actualTime: n["Actual Total Time"] as number | undefined,
-        actualRows: n["Actual Rows"] as number | undefined,
-        loops: n["Actual Loops"] as number | undefined,
-        children: ((n["Plans"] as Record<string, unknown>[]) ?? []).map(conv),
-      };
-    };
-    return root ? conv(root) : null;
-  } catch {
-    return null;
-  }
 }

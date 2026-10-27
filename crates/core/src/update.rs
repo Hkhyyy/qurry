@@ -170,6 +170,38 @@ pub async fn check(dir: &Path, current: &str, force: bool) -> AppResult<Option<R
     Ok(latest.filter(|r| is_newer(current, &r.version)))
 }
 
+/// 업데이트 서명 공개키 (GUI tauri.conf.json 의 plugins.updater.pubkey 와 같다 — 테스트가 확인)
+pub const UPDATE_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDA0MjA1NDlDN0EyODFEM0YKUldRL0hTaDZuRlFnQklTVks5ZFNkdVBNamNqK0JJWEY0akRmR3p3azVGQ2ZiTXUwM2xiL3VtUWwK";
+
+
+/// SHA256SUMS 의 서명(릴리스의 SHA256SUMS.sig, tauri signer 형식 = minisign 서명 글의 base64) 확인
+pub fn verify_sums(sums: &[u8], sig_b64: &str) -> Result<(), String> {
+    use base64::Engine;
+    let b64 = |s: &str| -> Result<String, String> {
+        let raw = base64::engine::general_purpose::STANDARD.decode(s.trim()).map_err(|e| format!("bad base64: {e}"))?;
+        String::from_utf8(raw).map_err(|e| e.to_string())
+    };
+    let pk = minisign_verify::PublicKey::decode(&b64(UPDATE_PUBKEY)?).map_err(|e| format!("bad public key: {e}"))?;
+    let sig = minisign_verify::Signature::decode(&b64(sig_b64)?).map_err(|e| format!("bad signature: {e}"))?;
+    pk.verify(sums, &sig, false).map_err(|e| format!("signature check failed: {e}"))
+}
+
+/// SHA256SUMS 에서 파일 이름의 해시
+pub fn expected_sha(sums: &str, name: &str) -> Option<String> {
+    sums.lines().find_map(|l| {
+        let (hash, file) = l.split_once(char::is_whitespace)?;
+        (file.trim().trim_start_matches('*') == name).then(|| hash.trim().to_lowercase())
+    })
+}
+
+/// 파일의 SHA-256 (16진)
+pub fn sha256_of(path: &Path) -> std::io::Result<String> {
+    use sha2::Digest;
+    let mut h = sha2::Sha256::new();
+    std::io::copy(&mut std::fs::File::open(path)?, &mut h)?;
+    Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,3 +280,4 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+

@@ -112,6 +112,18 @@ pub struct TextTab {
     pub scroll: u16,
 }
 
+/// DBA 리포트 (세션·락, 느린 쿼리, 용량·인덱스, 유지보수, 서버, 권한). 세션·락은 3초마다 다시 불러온다
+pub struct DbaTab {
+    pub report: String,
+    pub info: Option<qurry_core::dba::ReportInfo>,
+    pub grid: Option<Grid>,
+    pub error: Option<String>,
+    pub running: bool,
+    pub auto: bool,
+    /// 고른 세션이 다시 불러온 뒤 사라졌다 (그 pid). 이때 c / K 는 아무것도 끊지 않는다
+    pub gone: Option<String>,
+}
+
 /// Medis 식 Redis 브라우저: 왼쪽 키 목록, 오른쪽 값
 pub struct RedisTab {
     pub pattern: String,
@@ -194,6 +206,7 @@ pub enum TabKind {
     Table(TableTab),
     Text(TextTab),
     Redis(RedisTab),
+    Dba(DbaTab),
 }
 
 pub struct Tab {
@@ -214,6 +227,14 @@ pub struct Tab {
 #[derive(Clone)]
 pub enum PAction {
     Act(Action),
+    /// DBA 리포트 열기 (id)
+    Dba(String),
+    /// 히스토리·스니펫에서 고른 쿼리를 콘솔에
+    InsertSql(String),
+    /// 여러 단계 고르기 (비교·마이그레이션): 고른 값
+    Pick(String),
+    /// DBA 리포트 행 동작 (템플릿 SQL → 콘솔)
+    DbaSql(String),
     /// 내보내기: 형식을 골랐다 → 대상 고르기
     ExportFormat(qurry_core::transfer::Format),
     /// 내보내기: (형식, 클립보드)
@@ -293,6 +314,7 @@ pub enum Action {
     Refresh,
     Execute,
     Explain,
+    ExplainAnalyze,
     Cancel,
     TxToggle,
     Commit,
@@ -314,7 +336,27 @@ pub enum Action {
     SetNull,
     ExportCsv,
     CopyInList,
+    FindSimilar,
+    RagSearch,
+    RagBuild,
+    RagNew,
+    RagKey,
+    WsSwitch,
+    WsNew,
+    WsRename,
+    WsDelete,
+    WsMoveTab,
     Find,
+    DbaReports,
+    BackupDb,
+    RestoreDb,
+    CompareSchemas,
+    CompareData,
+    RunMigrations,
+    ShowDiagram,
+    QueryHistory,
+    Snippets,
+    SaveSnippet,
     ImportData,
     CancelTransfer,
     ToggleExplorer,
@@ -349,6 +391,7 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::NewConsole, "New Query Console", ""),
     (Action::Execute, "Execute (asks what to run — see Query Execution Settings)", ""),
     (Action::Explain, "Explain Plan", ""),
+    (Action::ExplainAnalyze, "Explain Analyze (runs the statement: real times and row counts)", ""),
     (Action::Cancel, "Cancel Running Statement", ""),
     (Action::TxToggle, "Toggle Transaction Mode (Auto/Manual)", ""),
     (Action::Commit, "Commit", ""),
@@ -367,7 +410,27 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::SetNull, "Set NULL", "n (grid)"),
     (Action::ExportCsv, "Export Data… (CSV, TSV, JSON, SQL INSERT, Markdown)", "x (grid)"),
     (Action::CopyInList, "Copy Column as IN List  ('a', 'b', …)", "Y (grid)"),
+    (Action::FindSimilar, "Find Similar Rows (pgvector, by the vector column)", ""),
+    (Action::RagSearch, "AI Search (RAG)… — ask a table in plain words", ""),
+    (Action::RagBuild, "Build RAG Index… (embed the rows)", ""),
+    (Action::RagNew, "New RAG Index from the Selected Table…", ""),
+    (Action::RagKey, "Set OpenAI API Key (RAG)…", ""),
+    (Action::WsSwitch, "Switch Workspace…", "Alt+1…9"),
+    (Action::WsNew, "New Workspace…", ""),
+    (Action::WsRename, "Rename Workspace…", ""),
+    (Action::WsDelete, "Delete Workspace…", ""),
+    (Action::WsMoveTab, "Move Tab to Workspace…", ""),
     (Action::Find, "Find / Replace in Editor (regex)", ""),
+    (Action::QueryHistory, "Query History… (shared with the GUI)", ""),
+    (Action::Snippets, "Snippets…", ""),
+    (Action::SaveSnippet, "Save Query as Snippet…", ""),
+    (Action::ShowDiagram, "Show Diagram (ERD): foreign keys of a schema, as text + Mermaid", ""),
+    (Action::CompareSchemas, "Compare Schemas… (DDL to make one schema look like another)", ""),
+    (Action::CompareData, "Compare Table Data… (sync SQL by primary key)", ""),
+    (Action::RunMigrations, "Run Migrations… (folder of V1__name.sql files)", ""),
+    (Action::BackupDb, "Back Up Database… (pg_dump / mysqldump)", ""),
+    (Action::RestoreDb, "Restore Database… (from a .dump / .sql backup)", ""),
+    (Action::DbaReports, "Database Admin… (sessions & locks, slow queries, sizes, indexes, vacuum, server, privileges)", ""),
     (Action::ImportData, "Import Data from File… (CSV, TSV, JSON)", ""),
     (Action::CancelTransfer, "Cancel Export/Import", ""),
     (Action::NewDataSource, "New Data Source…", "n (explorer)"),
@@ -458,6 +521,29 @@ pub struct Hits {
     pub last_click: Option<(std::time::Instant, u16, u16)>,
     /// 콘솔 커서를 그린 화면 칸과 그때 커서 (줄, 칸) — 마우스 위치를 글자 위치로 바꿀 때 (tui-textarea 는 스크롤 위치를 공개하지 않는다)
     pub caret: Option<(u16, u16, usize, usize)>,
+    /// 워크스페이스 띠: (번호, 영역)
+    pub workspaces: Vec<(usize, ratatui::layout::Rect)>,
+}
+
+/// 지금 것이 아닌 워크스페이스의 탭·화면 분할 (탭 객체 그대로: 콘솔 세션·트랜잭션·결과가 남는다)
+pub struct WsSaved {
+    pub tabs: Vec<Tab>,
+    pub active: usize,
+    pub mru: Vec<u64>,
+    pub panes: crate::panes::Pane,
+    pub group_active: [Option<u64>; crate::panes::MAX],
+}
+
+impl Default for WsSaved {
+    fn default() -> Self {
+        WsSaved { tabs: vec![], active: 0, mru: vec![], panes: crate::panes::Pane::Leaf(0), group_active: [None; crate::panes::MAX] }
+    }
+}
+
+/// 워크스페이스 (crate::workspace): 이름 + 지금 것이 아니면 보관한 탭들
+pub struct Workspace {
+    pub name: String,
+    pub saved: Option<WsSaved>,
 }
 
 pub struct App {
@@ -471,6 +557,10 @@ pub struct App {
     pub mru: Vec<u64>,
     /// 도는 내보내기·가져오기 (작업 id, 이름, 진행). 상태줄에 진행 막대
     pub jobs: Vec<(String, String, Arc<qurry_core::transfer::Job>)>,
+    /// 다음 Explain 은 ANALYZE (실제로 실행해서 시간·행 수)
+    pub analyze_next: bool,
+    /// 여러 단계 고르기 중 (비교·마이그레이션)
+    pub flow: Option<crate::migrate::Flow>,
     pub focus: Focus,
     pub explorer: bool,
     pub popup: Option<Popup>,
@@ -499,6 +589,9 @@ pub struct App {
     next_id: u64,
     /// ⌃Enter 로 무엇을 실행할지 (Query Execution Settings, workspace 에 저장)
     pub exec: crate::exec::ExecSettings,
+    /// 워크스페이스들과 지금 것 (지금 것의 탭은 위 tabs · panes …)
+    pub workspaces: Vec<Workspace>,
+    pub cur_ws: usize,
     /// 지난번 탭을 되살렸는지 (Data Source 목록을 처음 읽은 뒤 한 번), 마지막으로 저장한 내용
     restored: bool,
     saved_ws: String,
@@ -561,6 +654,8 @@ impl App {
             active: 0,
             mru: vec![],
             jobs: vec![],
+            analyze_next: false,
+            flow: None,
             focus: Focus::Tree,
             explorer: true,
             popup: None,
@@ -581,6 +676,8 @@ impl App {
             saved_ws: String::new(),
             next_id: 1,
             exec: Default::default(),
+            workspaces: vec![Workspace { name: "Default".into(), saved: None }],
+            cur_ws: 0,
         };
         if let Some(e) = keys_err {
             a.status = e;
@@ -683,6 +780,27 @@ impl App {
                 }
                 Err(e) => {
                     a.tree.children.insert(key.clone(), vec![Node::info(&key, "", format!("⚠ {e}"))]);
+                    // 드라이버가 없으면 받을지 묻는다 (받은 뒤 다시 펼친다)
+                    if e.contains(qurry_core::plugin::MISSING) && let Some(d) = kind.driver() {
+                        let k2 = key.clone();
+                        a.popup = Some(Popup::Confirm {
+                            text: format!("The {d} driver isn't installed.\n\nDownload it from this Qurry version's GitHub release (its signature is checked) and connect?"),
+                            on_yes: Box::new(move |a| {
+                                a.status = format!("Installing the {d} driver…");
+                                a.spawn(async move { qurry_core::plugin::install(d).await.map_err(|e| e.to_string()) }, move |a, r| match r {
+                                    Ok(_) => {
+                                        a.status = format!("{d} driver installed");
+                                        a.tree.children.remove(&k2);
+                                        a.tree.expanded.remove(&k2);
+                                        if let Some(n) = a.tree.roots.iter().find(|n| n.key == k2).cloned() {
+                                            a.toggle_node(&n);
+                                        }
+                                    }
+                                    Err(e) => a.status = e,
+                                });
+                            }),
+                        });
+                    }
                     a.status = if e.contains(qurry_core::tunnel::UNKNOWN_HOST) { format!("{e} — Ctrl+K › Trust SSH Host Key") } else { e };
                 }
             }
@@ -731,7 +849,7 @@ impl App {
             NodeKind::Db => {
                 let db = n.db.clone().unwrap();
                 let target = sql::target_id(&conn, Some(&db));
-                let flat = kind != DbKind::Postgres;
+                let flat = kind.flat();
                 self.spawn(
                     async move {
                         let schemas = st.list_schemas(target.clone()).await.map_err(err)?;
@@ -955,6 +1073,10 @@ impl App {
                 }
             }
             TabKind::Text(_) => {}
+            TabKind::Dba(_) => {
+                self.dba_reload(id);
+                self.dba_ticker(id);
+            }
         }
     }
 
@@ -1002,6 +1124,11 @@ impl App {
         self.restored_tab(conn, db, title, TabKind::Text(TextTab { text: text.into(), scroll: 0 }))
     }
 
+    pub fn restore_dba(&mut self, conn: &str, db: String, title: String, report: &str) -> Option<u64> {
+        let d = DbaTab { report: report.into(), info: None, grid: None, error: None, running: false, auto: true, gone: None };
+        self.restored_tab(conn, db, title, TabKind::Dba(d))
+    }
+
     pub fn restore_redis(&mut self, conn: &str, db: String, title: String, pattern: &str) -> Option<u64> {
         let r = RedisTab { pattern: pattern.into(), keys: vec![], cursor: "0".into(), sel: 0, off: 0, open: HashSet::new(), detail: None, text: None, value: None, focus_value: false, scanning: false, want: None };
         self.restored_tab(conn, db, title, TabKind::Redis(r))
@@ -1010,13 +1137,18 @@ impl App {
     pub fn tab_index(&self, id: u64) -> Option<usize> {
         self.tabs.iter().position(|t| t.id == id)
     }
+    /// 다른 워크스페이스에 보관한 탭도 찾는다 (그 사이 끝난 쿼리 결과가 사라지지 않게)
     pub fn tab_mut(&mut self, id: u64) -> Option<&mut Tab> {
-        self.tabs.iter_mut().find(|t| t.id == id)
+        if let Some(i) = self.tab_index(id) {
+            return self.tabs.get_mut(i);
+        }
+        self.workspaces.iter_mut().filter_map(|w| w.saved.as_mut()).flat_map(|s| s.tabs.iter_mut()).find(|t| t.id == id)
     }
 
     /// 커밋 안 한 변경이 있는 콘솔 탭들
     fn pending_tabs(&self, conn: Option<&str>) -> Vec<u64> {
-        self.tabs.iter().filter(|t| conn.is_none_or(|c| t.conn == c) && matches!(&t.kind, TabKind::Console(c) if c.in_tx)).map(|t| t.id).collect()
+        let saved = self.workspaces.iter().filter_map(|w| w.saved.as_ref()).flat_map(|s| s.tabs.iter());
+        self.tabs.iter().chain(saved).filter(|t| conn.is_none_or(|c| t.conn == c) && matches!(&t.kind, TabKind::Console(c) if c.in_tx)).map(|t| t.id).collect()
     }
 
     /// 탭 닫기. 커밋 안 한 변경이 있으면 먼저 묻는다 (닫으면 롤백된다)
@@ -1037,21 +1169,34 @@ impl App {
     }
 
     pub fn close_tab_now(&mut self, i: usize) {
+        if let Some(t) = self.detach_tab(i) {
+            self.close_sessions(&[t]);
+        }
+    }
+
+    /// 탭의 DB 세션을 닫는다 (커밋 안 한 변경은 롤백된다)
+    pub fn close_sessions(&self, tabs: &[Tab]) {
+        for t in tabs {
+            let session = match &t.kind {
+                TabKind::Console(c) => Some(c.session.clone()),
+                TabKind::Table(tt) => Some(tt.session.clone()),
+                _ => None,
+            };
+            if let Some(s) = session {
+                let st = self.state.clone();
+                tokio::spawn(async move {
+                    let _ = st.close_session(s).await;
+                });
+            }
+        }
+    }
+
+    /// 탭을 화면에서 뗀다 (세션은 그대로 — 다른 워크스페이스로 옮길 때도 쓴다). 남은 탭 중 하나를 보인다
+    pub fn detach_tab(&mut self, i: usize) -> Option<Tab> {
         if i >= self.tabs.len() {
-            return;
+            return None;
         }
         let t = self.tabs.remove(i);
-        let session = match &t.kind {
-            TabKind::Console(c) => Some(c.session.clone()),
-            TabKind::Table(tt) => Some(tt.session.clone()),
-            _ => None,
-        };
-        if let Some(s) = session {
-            let st = self.state.clone();
-            tokio::spawn(async move {
-                let _ = st.close_session(s).await;
-            });
-        }
         self.mru.retain(|x| *x != t.id);
         if self.group_active[t.group] == Some(t.id) {
             self.group_active[t.group] = None;
@@ -1061,7 +1206,7 @@ impl App {
             self.focus = Focus::Tree;
             self.panes = crate::panes::Pane::Leaf(0);
             self.group_active = [None; crate::panes::MAX];
-            return;
+            return Some(t);
         }
         // 칸이 비면 그 칸을 없앤다
         let emptied = !self.tabs.iter().any(|x| x.group == t.group);
@@ -1079,6 +1224,7 @@ impl App {
         if emptied {
             self.panes.remove(t.group);
         }
+        Some(t)
     }
 
     /// 분할 해제: 모든 탭을 한 칸으로
@@ -1127,6 +1273,37 @@ impl App {
         if !self.tabs.iter().any(|x| x.group == from) {
             self.panes.remove(from);
         }
+    }
+
+    /// 테이블 탭의 지금 행과 가까운 행 (pgvector): 커서 열이 벡터면 그 열, 아니면 첫 벡터 열. SQL 을 새 콘솔에
+    fn find_similar(&mut self) {
+        let Some(Tab { kind: TabKind::Table(tt), conn, db, target, .. }) = self.tabs.get(self.active) else {
+            self.status = "Open a table with a vector column first".into();
+            return;
+        };
+        if self.kind_of(conn) != DbKind::Postgres {
+            self.status = "Find Similar Rows is for PostgreSQL tables with a pgvector column".into();
+            return;
+        }
+        let Some(g) = &tt.grid else { return };
+        let cols = &g.result.columns;
+        let Some(vc) = cols.get(g.col).filter(|c| sql::is_vector_type(&c.type_name)).or_else(|| cols.iter().find(|c| sql::is_vector_type(&c.type_name))).map(|c| c.name.clone()) else {
+            self.status = format!("{}.{} has no vector column", tt.schema, tt.table);
+            return;
+        };
+        let Some(row) = g.result.rows.get(g.row) else { return };
+        let pk: Vec<(String, Option<String>)> = tt.pk.iter().map(|k| (k.clone(), cols.iter().position(|c| &c.name == k).and_then(|i| row.get(i)).filter(|v| !v.is_null()).map(crate::grid::cell_text))).collect();
+        let (st, conn, db, target, schema, table) = (self.state.clone(), conn.clone(), db.clone(), target.clone(), tt.schema.clone(), tt.table.clone());
+        self.spawn(async move { st.similar_rows_sql(target, schema, table, vc, pk).await.map_err(|e| e.to_string()) }, move |a, r| match r {
+            Ok(sql) => {
+                a.open_console(&conn, Some(db));
+                if let Some(Tab { kind: TabKind::Console(c), .. }) = a.tabs.get_mut(a.active) {
+                    c.editor.insert_str(sql);
+                }
+                a.status = "Similar-rows query is in a new console — F5 to run".into();
+            }
+            Err(e) => a.status = e,
+        });
     }
 
     pub fn open_console(&mut self, conn: &str, db: Option<String>) {
@@ -1497,11 +1674,20 @@ impl App {
 
     /// confirmed = 위험 문장(WHERE 없는 UPDATE/DELETE, DROP, TRUNCATE) 확인을 받았는지
     pub fn run_stmts(&mut self, stmts: Vec<String>, explain: bool, confirmed: bool) {
+        self.run_stmts_checked(stmts, explain, confirmed, confirmed)
+    }
+
+    /// unsafe_ok = 위험 문장 확인을 받았다, prod_ok = Production 확인(바뀔 행 수)을 받았다
+    fn run_stmts_checked(&mut self, stmts: Vec<String>, explain: bool, confirmed: bool, prod_ok: bool) {
+        let analyze = explain && self.analyze_next;
         let Some(t) = self.tabs.get(self.active) else { return };
         let kind = self.kind_of(&t.conn);
         let id = t.id;
         let target = t.target.clone();
         let conn_name = self.conn(&t.conn).map(|c| c.config.name.clone()).unwrap_or_default();
+        // 히스토리 (GUI 와 같은 기록)
+        let (hist_conn, hist_db, hist) = (t.conn.clone(), t.db.clone(), self.state.clone());
+        let prod = self.tabs.get(self.active).and_then(|t| self.conn(&t.conn)).filter(|c| c.config.options.confirm_changes).map(|c| (c.config.name.clone(), self.tabs[self.active].target.clone()));
         let t = &mut self.tabs[self.active];
         let TabKind::Console(c) = &mut t.kind else { return };
         if c.running || stmts.is_empty() {
@@ -1512,7 +1698,64 @@ impl App {
             && let Some((why, s)) = stmts.iter().find_map(|s| qurry_core::guard::unsafe_statement(s, kind).map(|w| (w, s.clone())))
         {
             let preview: String = s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect();
-            self.popup = Some(Popup::Confirm { text: format!("{why}:\n  {preview}\nRun it anyway?"), on_yes: Box::new(move |a| a.run_stmts(stmts, explain, true)) });
+            self.popup = Some(Popup::Confirm { text: format!("{why}:\n  {preview}\nRun it anyway?"), on_yes: Box::new(move |a| a.run_stmts_checked(stmts, explain, true, prod_ok)) });
+            return;
+        }
+        // Production Data Source: 바꿀 행 수를 세어 보여 주고 묻는다 (세는 것은 SELECT count(*) — 아무것도 바꾸지 않는다)
+        if let Some((name, target)) = prod
+            && !prod_ok
+            && !explain
+        {
+            let writes: Vec<String> = stmts.iter().filter(|s| !qurry_core::guard::is_read(s, kind)).cloned().collect();
+            if !writes.is_empty() {
+                let st = self.state.clone();
+                self.status = "Counting the rows this will change…".into();
+                self.spawn(
+                    async move {
+                        let mut out = vec![];
+                        for w in writes {
+                            let n = st.preview_impact(target.clone(), w.clone()).await;
+                            out.push((w, n));
+                        }
+                        out
+                    },
+                    move |a, counts| {
+                        let lines: Vec<String> = counts
+                            .iter()
+                            .map(|(s, n)| {
+                                let head: String = s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(70).collect();
+                                let n = match n {
+                                    Ok(Some(n)) => format!("{} row{}", crate::transfer::thousands(*n as u64), if *n == 1 { "" } else { "s" }),
+                                    Ok(None) => "can't count this statement".into(),
+                                    Err(e) => format!("can't count: {}", e.to_string().lines().next().unwrap_or("")),
+                                };
+                                format!("  {head}\n    → {n}")
+                            })
+                            .collect();
+                        a.status.clear();
+                        a.popup = Some(Popup::Confirm {
+                            text: format!("Production data source \"{name}\" — this changes data:\n\n{}\n\nRun it?", lines.join("\n")),
+                            on_yes: Box::new(move |a| a.run_stmts_checked(stmts, explain, true, true)),
+                        });
+                    },
+                );
+                return;
+            }
+        }
+        // EXPLAIN ANALYZE 는 문장을 실제로 실행한다: 데이터를 바꾸는 문장이면 묻는다
+        if analyze
+            && !confirmed
+            && let Some(s) = stmts.iter().find(|s| !qurry_core::guard::is_read(s, kind))
+        {
+            let preview: String = s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect();
+            self.popup = Some(Popup::Confirm {
+                text: format!("Explain Analyze really runs the statement (it changes data):\n  {preview}\nRun it anyway?"),
+                on_yes: Box::new(move |a| {
+                    a.analyze_next = true;
+                    a.run_stmts(stmts, explain, true);
+                    a.analyze_next = false;
+                }),
+            });
             return;
         }
         c.running = true;
@@ -1526,10 +1769,16 @@ impl App {
                 for s in stmts2 {
                     let q = if explain {
                         let bare = s.trim_end_matches(';');
-                        match kind {
-                            DbKind::Postgres => format!("EXPLAIN {bare}"),
-                            DbKind::Mysql => format!("EXPLAIN {bare}"),
-                            DbKind::Redis => s.clone(),
+                        match (kind, analyze) {
+                            // PG: JSON 으로 받아 트리 표 (% · 경고) 로 바꾼다
+                            (DbKind::Postgres, false) => format!("EXPLAIN (FORMAT JSON) {bare}"),
+                            (DbKind::Postgres, true) => format!("EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) {bare}"),
+                            (DbKind::Mysql, false) => format!("EXPLAIN {bare}"),
+                            (DbKind::Mysql, true) => format!("EXPLAIN ANALYZE {bare}"),
+                            (DbKind::Redis, _) => s.clone(),
+                            // 드라이버: 대부분 EXPLAIN 을 받는다 (SQL Server 는 SHOWPLAN 이라 그대로 실행된다)
+                            (_, true) => format!("EXPLAIN ANALYZE {bare}"),
+                            (_, false) => format!("EXPLAIN {bare}"),
                         }
                     } else {
                         s.clone()
@@ -1556,8 +1805,19 @@ impl App {
                     // 실행한 문장은 한 줄로, 너무 길면 앞부분만
                     let echo: String = s.replace('\n', " ").chars().take(300).collect();
                     c.log(false, format!("{conn_name}> {echo}{}", if s.chars().count() > 300 { "…" } else { "" }));
+                    if r.is_ok() {
+                        let _ = hist.history.add(&hist_conn, Some(&hist_db), &s);
+                    }
                     match r {
                         Ok(res) => {
+                            // PG 실행 계획: 들여쓴 연산 · 몫(%) · 경고 표
+                            let res = match (explain && kind == DbKind::Postgres, res.rows.first().and_then(|r| r.first())) {
+                                (true, Some(v)) => match qurry_core::plan::parse_pg(&crate::grid::raw_text(v).unwrap_or_default()) {
+                                    Ok(p) => qurry_core::db::QueryResult { elapsed_ms: res.elapsed_ms, in_transaction: res.in_transaction, ..qurry_core::plan::to_result(&p) },
+                                    Err(_) => res,
+                                },
+                                _ => res,
+                            };
                             c.in_tx = res.in_transaction;
                             if !res.in_transaction && !qurry_core::guard::is_read(&s, kind) {
                                 committed += 1;
@@ -1863,11 +2123,7 @@ impl App {
             options: Default::default(), ssl: None, redis: None,
         });
         let ssh = c.ssh.clone().unwrap_or(SshConfig { enabled: false, host: String::new(), port: 22, user: String::new(), auth: SshAuth::Key, key_path: "~/.ssh/id_ed25519".into() });
-        let kind = match c.kind {
-            DbKind::Postgres => "postgres",
-            DbKind::Mysql => "mysql",
-            DbKind::Redis => "redis",
-        };
+        let kind = serde_json::to_value(c.kind).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_else(|| "postgres".into());
         let f = |label, value: String, kind| Field { label, value, kind };
         let saved = |b: bool| if b { "<saved>".to_string() } else { String::new() };
         let color = crate::ui::color_name(c.color.as_deref());
@@ -1879,13 +2135,14 @@ impl App {
             fields: vec![
                 f("Name", c.name.clone(), FieldKind::Text),
                 f("Color", color.into(), FieldKind::Choice(colors)),
-                f("Type", kind.into(), FieldKind::Choice(vec!["postgres", "mysql", "redis"])),
+                f("Type", kind, FieldKind::Choice(vec!["postgres", "mysql", "redis", "sqlite", "duckdb", "mssql", "clickhouse", "mongodb", "oracle", "qdrant", "chroma", "milvus"])),
                 f("Host", c.host.clone(), FieldKind::Text),
                 f("Port", c.port.to_string(), FieldKind::Text),
                 f("User", c.user.clone(), FieldKind::Text),
                 f("Password", saved(c.password_saved), FieldKind::Secret),
                 f("Database", c.database.clone(), FieldKind::Text),
                 f("Read-only", if c.read_only { "on" } else { "off" }.into(), FieldKind::Toggle),
+                f("Production", if c.options.confirm_changes { "on" } else { "off" }.into(), FieldKind::Toggle),
                 f("SSH tunnel", if ssh.enabled { "on" } else { "off" }.into(), FieldKind::Toggle),
                 f("SSH host", ssh.host.clone(), FieldKind::Text),
                 f("SSH port", ssh.port.to_string(), FieldKind::Text),
@@ -1927,17 +2184,14 @@ impl App {
             read_only: false,
             options: Default::default(), ssl: None, redis: None,
         });
-        c.kind = match v("Type").as_str() {
-            "mysql" => DbKind::Mysql,
-            "redis" => DbKind::Redis,
-            _ => DbKind::Postgres,
-        };
+        c.kind = serde_json::from_value(serde_json::Value::String(v("Type"))).unwrap_or(DbKind::Postgres);
         c.host = v("Host").trim().into();
         c.port = v("Port").trim().parse().map_err(|_| "Port must be a number".to_string())?;
         c.user = v("User").trim().into();
         c.database = v("Database").trim().into();
         c.name = if v("Name").trim().is_empty() { format!("{}@{}", c.user, c.host) } else { v("Name").trim().into() };
         c.read_only = v("Read-only") == "on";
+        c.options.confirm_changes = v("Production") == "on";
         // custom = GUI 에서 고른 프리셋 밖의 색: 그대로 둔다
         match v("Color").as_str() {
             "custom" => {}
@@ -2094,6 +2348,10 @@ impl App {
             }
             PAction::Run { stmts, explain } => self.run_stmts(stmts, explain, false),
             PAction::ExportFormat(f) => self.export_dest(f),
+            PAction::Dba(r) => self.dba_open(r),
+            PAction::InsertSql(q) => self.insert_sql(q),
+            PAction::Pick(v) => self.flow_pick(v),
+            PAction::DbaSql(t) => self.dba_sql(t),
             PAction::ExportTo(f, clipboard) => self.export_to(f, clipboard),
             PAction::Exec(e) => {
                 self.exec = e;
@@ -2212,6 +2470,11 @@ impl App {
             },
             Action::Execute => self.execute(false),
             Action::Explain => self.execute(true),
+            Action::ExplainAnalyze => {
+                self.analyze_next = true;
+                self.execute(true);
+                self.analyze_next = false;
+            }
             Action::Cancel => self.cancel(),
             Action::TxToggle | Action::Commit | Action::Rollback => self.tx(a),
             Action::CloseTab => self.close_tab(self.active),
@@ -2290,6 +2553,16 @@ impl App {
             Action::ExportCsv => self.export_start(),
             Action::ImportData => self.import_start(),
             Action::Find => self.find_open(),
+            Action::DbaReports => self.dba_palette(),
+            Action::BackupDb => self.backup_start(),
+            Action::RestoreDb => self.restore_start(),
+            Action::CompareSchemas => self.compare_schemas_start(),
+            Action::CompareData => self.compare_data_start(),
+            Action::RunMigrations => self.migrations_start(),
+            Action::ShowDiagram => self.erd_open(),
+            Action::QueryHistory => self.history_palette(),
+            Action::Snippets => self.snippets_palette(),
+            Action::SaveSnippet => self.save_snippet(),
             Action::CopyInList => {
                 let Some(g) = self.grid_mut() else {
                     self.status = "Open a result or table to copy a column".into();
@@ -2300,6 +2573,16 @@ impl App {
                 let short: String = text.chars().take(80).collect();
                 self.status = format!("Copied {n} values as an IN list: {short}{}", if text.chars().count() > 80 { "…" } else { "" });
             }
+            Action::FindSimilar => self.find_similar(),
+            Action::RagSearch => self.rag_search_start(),
+            Action::RagBuild => self.rag_build_start(),
+            Action::RagNew => self.rag_new_start(),
+            Action::RagKey => self.rag_key_start(),
+            Action::WsSwitch => self.ws_pick(false),
+            Action::WsNew => self.ws_new(),
+            Action::WsRename => self.ws_rename(),
+            Action::WsDelete => self.ws_delete(),
+            Action::WsMoveTab => self.ws_pick(true),
             Action::CancelTransfer => {
                 for (id, ..) in &self.jobs {
                     self.state.cancel_job(id);
@@ -2680,6 +2963,7 @@ impl App {
             TabKind::Console(c) => c.grid.as_mut(),
             TabKind::Table(t) => t.grid.as_mut(),
             TabKind::Redis(r) => r.value.as_mut(),
+            TabKind::Dba(d) => d.grid.as_mut(),
             TabKind::Text(_) => None,
         }
     }

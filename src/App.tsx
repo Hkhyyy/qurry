@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { api, ConnectionView, dialectOf, meta, QueryResult, redisDb, setUpdateCheckEnabled, targetId, UpdateInfo, updateCheckEnabled } from "./lib/api";
+import { analyzePlan, api, backup, ConnectionView, previewImpact, dialectOf, meta, VECTOR_KINDS, QueryResult, redisDb, setUpdateCheckEnabled, targetId, UpdateInfo, updateCheckEnabled } from "./lib/api";
 import { RedisBrowser } from "./components/RedisBrowser";
 import { KeymapDialog } from "./components/KeymapDialog";
 import { KeymapEditor } from "./components/KeymapEditor";
@@ -9,10 +9,13 @@ import { UpdateDialog } from "./components/UpdateDialog";
 import { ContextMenu, Explorer, MenuItem } from "./components/Explorer";
 import { ConnectionDialog } from "./components/ConnectionDialog";
 import { ConsoleEditor, EditorApi } from "./components/ConsoleEditor";
-import { ConsolePane, OutputLine, parsePgPlan, ResultEntry } from "./components/ConsolePane";
-import { HistoryDialog, pushHistory } from "./components/HistoryDialog";
+import { ConsolePane, OutputLine, ResultEntry } from "./components/ConsolePane";
+import { HistoryDialog, migrateOldHistory, pushHistory, saveSnippet } from "./components/HistoryDialog";
 import { EditTarget } from "./components/ResultGrid";
 import { TableEditor } from "./components/TableEditor";
+import { RagView } from "./components/RagView";
+import { WorkspaceBar, WorkspaceInfo } from "./components/WorkspaceBar";
+import { forgetConsoleModel } from "./lib/monaco";
 import { RecentFiles, Switcher, SwitchItem } from "./components/Switcher";
 import { ActionItem, DbObject, invalidateSearchIndex, SearchEverywhere, SeTab } from "./components/SearchEverywhere";
 import { FindPanel, FindRun, FtsScope, FullTextSearchDialog } from "./components/FullTextSearch";
@@ -24,17 +27,30 @@ import type { FtsRequest } from "./lib/api";
 import { isRelation, NodeInfo, revealInTree } from "./components/SchemaTree";
 import { leaf, leaves, MAX_PANES, Pane, prunePanes, splitPane } from "./lib/panes";
 import { connBg, getThemePref, setThemePref, THEME_LABEL, ThemePref, useTheme } from "./lib/theme";
-import { ExportDialog, ImportDialog, TransferBar, type TransferJob } from "./components/Transfer";
+import { BackupDialog, ExportDialog, ImportDialog, TransferBar, type TransferJob } from "./components/Transfer";
+import { DbaReport } from "./components/DbaReport";
+import { ErdView } from "./components/ErdView";
+import { MigrateView } from "./components/MigrateView";
 import type { DataFormat } from "./lib/transfer";
 import "./App.css";
 
 /** 칸 id (0~3). 칸 배치는 Pane 트리 */
 type Group = number;
 
+/** 워크스페이스 하나의 탭·분할 화면 (지금 것이 아닐 때 보관한다) */
+interface WsLayout {
+  tabs: Tab[];
+  panes: Pane;
+  activeIds: (string | null)[];
+  focused: Group;
+  mru: string[];
+}
+const emptyLayout = (): WsLayout => ({ tabs: [], panes: leaf(0), activeIds: [null, null, null, null], focused: 0, mru: [] });
+
 interface Tab {
   id: string;
   /** console: SQL 콘솔 / table: 테이블 데이터 에디터 / ddl: 읽기 전용 DDL */
-  kind: "console" | "table" | "ddl" | "redis";
+  kind: "console" | "table" | "ddl" | "redis" | "dba" | "erd" | "migrate" | "rag";
   group: Group;
   connId: string;
   /** 접속한 DB (없으면 Data Source 기본 DB) */
@@ -66,6 +82,10 @@ interface Tab {
   pinned?: boolean;
   /** Redis 브라우저: 처음 선택할 키 */
   redisKey?: string;
+  /** dba: 보고 있는 리포트 (sessions, slow_queries, …) */
+  dbaReport?: string;
+  /** erd: 그릴 스키마들 */
+  erdSchemas?: string[];
   /** 다시 켤 때 되살린 탭: 아직 불러오지 않았다 (처음 보일 때 불러온다) */
   stale?: boolean;
 }
@@ -151,12 +171,21 @@ export default function App() {
   const [focused, setFocused] = useState<Group>(0);
   const focusedRef = useRef(focused);
   focusedRef.current = focused;
+  // ───────── 워크스페이스 (Orca 처럼): 각자 탭·분할 화면. 지금 것은 위 상태, 나머지는 stash (탭 객체·콘솔 세션·트랜잭션 그대로) ─────────
+  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([{ id: "ws1", name: "Default" }]);
+  const workspacesRef = useRef(workspaces);
+  workspacesRef.current = workspaces;
+  const [curWs, setCurWs] = useState("ws1");
+  const curWsRef = useRef(curWs);
+  curWsRef.current = curWs;
+  const stash = useRef(new Map<string, WsLayout>());
   const [dialog, setDialog] = useState<{ edit?: ConnectionView } | null>(null);
   const [status, setStatus] = useState("Ready");
   const [treeSel, setTreeSel] = useState<NodeInfo | null>(null);
   const [tabMenu, setTabMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const editorApis = useRef(new Map<string, EditorApi>());
   const [historyFor, setHistoryFor] = useState<string | null>(null);
+  const [historyTab, setHistoryTab] = useState<"history" | "snippets">("history");
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
 
@@ -213,6 +242,7 @@ export default function App() {
       .catch(() => {});
     return () => off?.();
   }, []);
+  useEffect(migrateOldHistory, []);
   // Auto-disconnect 등으로 백엔드가 접속을 닫으면 트리 상태를 갱신
   useEffect(() => {
     let off: (() => void) | undefined;
@@ -243,7 +273,21 @@ export default function App() {
   const groupActive = (g: Group) => tabs.find((t) => t.id === activeIds[g] && t.group === g) ?? null;
   const active = groupActive(focused) ?? leaves(panes).map(groupActive).find(Boolean) ?? null;
   const activeConn = conns.find((c) => c.id === active?.connId);
-  const patch = (id: string, p: Partial<Tab>) => setTabs((ts) => ts.map((t) => (t.id === id ? { ...t, ...p } : t)));
+  /** 다른 워크스페이스에 있는 탭이면 거기서 바꾼다 (그 사이 끝난 쿼리 결과가 사라지지 않게) */
+  const updStashed = (id: string, fn: (t: Tab) => Tab) => {
+    for (const w of stash.current.values()) {
+      if (w.tabs.some((t) => t.id === id)) {
+        w.tabs = w.tabs.map((t) => (t.id === id ? fn(t) : t));
+        return true;
+      }
+    }
+    return false;
+  };
+  /** 모든 워크스페이스의 탭 */
+  const allTabs = () => [...tabsRef.current, ...[...stash.current.values()].flatMap((w) => w.tabs)];
+  const patch = (id: string, p: Partial<Tab>) => {
+    if (!updStashed(id, (t) => ({ ...t, ...p }))) setTabs((ts) => ts.map((t) => (t.id === id ? { ...t, ...p } : t)));
+  };
   const mru = useRef<string[]>([]);
   const recent = useRef<TabSnapshot[]>([]);
   const closedStack = useRef<TabSnapshot[]>([]);
@@ -345,10 +389,8 @@ export default function App() {
   const savedWs = useRef("");
   /** 저장할 내용: 탭(콘솔 SQL·테이블 WHERE/ORDER BY·DDL·Redis)과 분할·칸마다 보이는 탭·포커스 */
   const wsJson = () => {
-    const ts = tabsRef.current;
-    return JSON.stringify({
-      version: 1,
-      tabs: ts.map((t) => ({
+    const ser = (l: WsLayout) => ({
+      tabs: l.tabs.map((t) => ({
         kind: t.kind,
         title: t.title,
         connId: t.connId,
@@ -360,15 +402,23 @@ export default function App() {
         edit: t.edit ? { schema: t.edit.schema, table: t.edit.table } : undefined,
         pinned: t.pinned,
         redisKey: t.redisKey,
+        dbaReport: t.dbaReport,
+        erdSchemas: t.erdSchemas,
       })),
-      panes: panesRef.current,
-      activeIds: activeIdsRef.current.map((id) => ts.findIndex((t) => t.id === id)),
-      focused: focusedRef.current,
+      panes: l.panes,
+      activeIds: l.activeIds.map((id) => l.tabs.findIndex((t) => t.id === id)),
+      focused: l.focused,
+    });
+    const live: WsLayout = { tabs: tabsRef.current, panes: panesRef.current, activeIds: activeIdsRef.current, focused: focusedRef.current, mru: [] };
+    return JSON.stringify({
+      version: 2,
+      current: curWsRef.current,
+      workspaces: workspacesRef.current.map((w) => ({ id: w.id, name: w.name, ...ser(w.id === curWsRef.current ? live : stash.current.get(w.id) ?? emptyLayout()) })),
     });
   };
   /** 앱을 닫거나 업데이트로 다시 켜기 전: 커밋 안 한 변경이 있으면 묻고, 열어 둔 탭을 저장한다 */
   const readyToQuit = () => {
-    const n = tabsRef.current.filter((t) => t.inTx).length;
+    const n = allTabs().filter((t) => t.inTx).length;
     if (n && !confirm(`${n} console(s) have uncommitted changes. Quit and roll them back?`)) return false;
     saveWs();
     return true;
@@ -409,8 +459,9 @@ export default function App() {
       if (t.kind === "table" && back.includes(t.connId) && t.error && !t.running && !t.stale) loadTable(t);
     }
   }, [conns]);
-  const restoreWs = (ws: any) => {
-    if (!ws || !Array.isArray(ws.tabs)) return;
+  /** 저장된 워크스페이스 하나 → 탭·분할 화면 (탭은 고를 때 불러온다) */
+  const buildLayout = (ws: any): WsLayout => {
+    if (!ws || !Array.isArray(ws.tabs)) return emptyLayout();
     const okPane = (p: any): boolean => p && (p.t === "leaf" ? Number.isInteger(p.g) && p.g >= 0 && p.g < MAX_PANES : p.t === "split" && okPane(p.a) && okPane(p.b));
     const pane0: Pane = okPane(ws.panes) ? ws.panes : leaf(0);
     const ls0 = leaves(pane0);
@@ -424,10 +475,10 @@ export default function App() {
         tableSql = `SELECT * FROM ${q(x.edit.schema)}.${q(x.edit.table)}${x.where ? ` WHERE ${x.where}` : ""}${x.orderBy ? ` ORDER BY ${x.orderBy}` : ""};`;
       }
       const t = buildTab(c, x.kind, { sql: x.kind === "table" ? tableSql : x.sql, database: x.database, tableSql, edit: x.edit ? { ...x.edit, pk: [] } : undefined, where: x.where, orderBy: x.orderBy }, group, x.title);
-      return { ...t, pinned: x.pinned, redisKey: x.redisKey, stale: x.kind !== "ddl" };
+      return { ...t, pinned: x.pinned, redisKey: x.redisKey, dbaReport: x.dbaReport, erdSchemas: x.erdSchemas, stale: x.kind !== "ddl" };
     });
     const ts = built.filter((t): t is Tab => !!t);
-    if (!ts.length) return;
+    if (!ts.length) return emptyLayout();
     const pane = prunePanes(pane0, new Set(ts.map((t) => t.group)));
     const ls = leaves(pane);
     const act = [0, 1, 2, 3].map((g) => {
@@ -435,16 +486,91 @@ export default function App() {
       const want = built[ws.activeIds?.[g]];
       return want && want.group === g ? want.id : ts.find((t) => t.group === g)?.id ?? null;
     });
-    setTabs(ts);
-    setPanes(pane);
-    setActiveIds(act);
-    setFocused(ls.includes(ws.focused) ? ws.focused : ls[0]);
-    mru.current = act.filter((x): x is string => !!x);
-    // 칸마다 보이는 탭만 불러온다 (나머지는 고를 때)
-    for (const id of act) {
-      const t = ts.find((x) => x.id === id);
+    return { tabs: ts, panes: pane, activeIds: act, focused: ls.includes(ws.focused) ? ws.focused : ls[0], mru: act.filter((x): x is string => !!x) };
+  };
+  /** 이 탭·분할 화면을 보인다. 칸마다 보이는 탭만 불러온다 (나머지는 고를 때) */
+  const showLayout = (l: WsLayout) => {
+    setTabs(l.tabs);
+    setPanes(l.panes);
+    setActiveIds(l.activeIds);
+    setFocused(l.focused);
+    mru.current = l.mru;
+    for (const id of l.activeIds) {
+      const t = l.tabs.find((x) => x.id === id);
       if (t?.stale) loadStale(t);
     }
+  };
+  const restoreWs = (data: any) => {
+    // version 1 (워크스페이스 전) = 워크스페이스 하나
+    const list: any[] | null = Array.isArray(data?.workspaces) ? data.workspaces : Array.isArray(data?.tabs) ? [{ id: "ws1", name: "Default", ...data }] : null;
+    if (!list?.length) return;
+    const infos: WorkspaceInfo[] = list.map((w, i) => ({ id: typeof w.id === "string" && w.id ? w.id : `ws${i + 1}`, name: typeof w.name === "string" && w.name.trim() ? w.name : `Workspace ${i + 1}` }));
+    const cur = infos.find((w) => w.id === data.current)?.id ?? infos[0].id;
+    stash.current.clear();
+    list.forEach((w, i) => {
+      const l = buildLayout(w);
+      if (infos[i].id === cur) showLayout(l);
+      else stash.current.set(infos[i].id, l);
+    });
+    setWorkspaces(infos);
+    setCurWs(cur);
+  };
+  /** 다른 워크스페이스로: 지금 것은 그대로 보관 (콘솔 세션·트랜잭션도). discard = 지금 것을 보관하지 않는다 (지울 때) */
+  const switchWs = (id: string, discard = false) => {
+    const from = curWsRef.current;
+    if (id === from || !workspacesRef.current.some((w) => w.id === id)) return;
+    const target = stash.current.get(id) ?? emptyLayout();
+    stash.current.delete(id);
+    if (!discard) stash.current.set(from, { tabs: tabsRef.current, panes: panesRef.current, activeIds: activeIdsRef.current, focused: focusedRef.current, mru: mru.current });
+    tabsRef.current = target.tabs;
+    curWsRef.current = id;
+    showLayout(target);
+    setCurWs(id);
+  };
+  const newWs = () => {
+    const name = prompt("Workspace name", `Workspace ${workspacesRef.current.length + 1}`);
+    if (!name?.trim()) return;
+    const w = { id: crypto.randomUUID(), name: name.trim() };
+    setWorkspaces((l) => [...l, w]);
+    workspacesRef.current = [...workspacesRef.current, w];
+    switchWs(w.id);
+  };
+  const renameWs = (id: string) => {
+    const w = workspacesRef.current.find((x) => x.id === id);
+    const name = w && prompt("Rename workspace", w.name);
+    if (name?.trim()) setWorkspaces((l) => l.map((x) => (x.id === id ? { ...x, name: name.trim() } : x)));
+  };
+  /** 워크스페이스와 그 탭을 닫는다 (커밋 안 한 변경은 롤백된다) */
+  const deleteWs = (id: string) => {
+    const list = workspacesRef.current;
+    const w = list.find((x) => x.id === id);
+    if (!w || list.length < 2) return;
+    const ts = id === curWsRef.current ? tabsRef.current : stash.current.get(id)?.tabs ?? [];
+    const dirty = ts.filter((t) => t.inTx).length;
+    if (!confirm(`Delete the workspace "${w.name}"${ts.length ? ` and close its ${ts.length} tab(s)` : ""}?${dirty ? `\n\n${dirty} console(s) have uncommitted changes — they are rolled back.` : ""}`)) return;
+    if (id === curWsRef.current) switchWs(list.find((x) => x.id !== id)!.id, true);
+    stash.current.delete(id);
+    for (const t of ts) {
+      forgetConsoleModel(t.id);
+      editorApis.current.delete(t.id);
+      liveSql.current.delete(t.id);
+      api.closeSession(t.id).catch(() => {});
+    }
+    setWorkspaces((l) => l.filter((x) => x.id !== id));
+    workspacesRef.current = workspacesRef.current.filter((x) => x.id !== id);
+  };
+  /** 탭을 다른 워크스페이스로 (세션 그대로). 그 워크스페이스의 첫 칸 맨 뒤에 */
+  const moveToWs = (t: Tab, id: string) => {
+    const target = stash.current.get(id) ?? emptyLayout();
+    const g = leaves(target.panes)[0];
+    stash.current.set(id, { ...target, tabs: [...target.tabs, { ...t, group: g }], activeIds: target.activeIds.map((x, i) => (i === g ? t.id : x)), mru: [t.id, ...target.mru] });
+    mru.current = mru.current.filter((x) => x !== t.id);
+    setTabs((ts) => {
+      const rest = ts.filter((x) => x.id !== t.id);
+      settle(rest, panesRef.current);
+      return rest;
+    });
+    setStatus(`Moved "${t.title}" to ${workspacesRef.current.find((w) => w.id === id)?.name}`);
   };
   useEffect(() => {
     if (restored.current || !conns.length) return;
@@ -458,7 +584,7 @@ export default function App() {
   useEffect(() => {
     const h = setTimeout(saveWs, 800);
     return () => clearTimeout(h);
-  }, [tabs, panes, activeIds, focused]);
+  }, [tabs, panes, activeIds, focused, workspaces, curWs]);
   useEffect(() => {
     const h = setInterval(saveWs, 5000);
     return () => clearInterval(h);
@@ -618,6 +744,52 @@ export default function App() {
     patch(tab.id, { target, redisKey: key });
   };
 
+  /** DBA 리포트 탭 (같은 접속 대상이면 그 탭에서 리포트만 바꾼다) */
+  const openDba = (c: ConnectionView, db?: string, report = "sessions", title = "Sessions") => {
+    const database = db && db !== (c.database || "postgres") ? db : undefined;
+    const target = targetId(c.id, database);
+    const existing = tabsRef.current.find((t) => t.kind === "dba" && t.target === target);
+    if (existing) {
+      patch(existing.id, { dbaReport: report, title: `${title} — ${c.name}` });
+      return activate(existing);
+    }
+    const tab = addTab(c, "dba", { title: `${title} — ${c.name}`, database: db });
+    patch(tab.id, { dbaReport: report });
+  };
+
+  /** ERD 탭: 스키마들의 테이블·외래 키 그림 (없으면 이 DB 의 사용자 스키마 전부) */
+  const openErd = async (c: ConnectionView, db: string | undefined, schemas?: string[]) => {
+    const database = db && db !== (c.database || "postgres") ? db : undefined;
+    const target = targetId(c.id, database);
+    let list = schemas;
+    if (!list) {
+      const all = await meta.schemas(target).catch(() => []);
+      list = all.filter((x) => !x.isSystem).map((x) => x.name);
+    }
+    const title = `Diagram: ${list.length === 1 ? list[0] : `${list.length} schemas`} — ${c.name}`;
+    const existing = tabsRef.current.find((t) => t.kind === "erd" && t.target === target && (t.erdSchemas ?? []).join(",") === list!.join(","));
+    if (existing) return activate(existing);
+    const tab = addTab(c, "erd", { title, database: db });
+    patch(tab.id, { erdSchemas: list });
+  };
+
+  /** Compare & Migrate 탭 (하나만) */
+  const openMigrate = (c: ConnectionView, db?: string) => {
+    const existing = tabsRef.current.find((t) => t.kind === "migrate");
+    if (existing) return activate(existing);
+    addTab(c, "migrate", { title: "Compare & Migrate", database: db });
+  };
+
+  /** AI Search (RAG) 탭 (하나만). 테이블에서 열면 그 테이블로 새 인덱스 */
+  const [ragInit, setRagInit] = useState<{ n: number; connId: string; db?: string; schema?: string; table?: string } | undefined>();
+  const openRag = (c: ConnectionView, db?: string, schema?: string, table?: string) => {
+    // n 이 바뀌면 탭을 다시 그려 그 테이블로 새 인덱스 양식을 연다
+    setRagInit((x) => ({ n: (x?.n ?? 0) + 1, connId: c.id, db, schema, table }));
+    const existing = tabsRef.current.find((t) => t.kind === "rag");
+    if (existing) return activate(existing);
+    addTab(c, "rag", { title: "AI Search (RAG)", database: db });
+  };
+
   /** 트리 노드 더블클릭 / F4 */
   const activateNode = (info: NodeInfo) => {
     if (info.conn.kind === "redis") {
@@ -631,6 +803,24 @@ export default function App() {
   // ───────── Database Explorer 동작 (DataGrip 키맵) ─────────
   const K = { edit: sk("tree.editData"), props: sk("tree.properties"), refresh: sk("tree.refresh"), deact: sk("tree.disconnect"), jump: sk("tree.jumpConsole"), ddl: sk("tree.ddl"), gen: sk("tree.sqlGen"), ddlClip: sk("tree.ddlCopy"), ddlCons: sk("tree.ddlConsole"), ref: sk("tree.copyRef"), doc: sk("tree.quickDoc"), drop: sk("tree.remove"), dup: sk("tree.duplicate"), console: sk("console.new"), force: bindings("tree.refresh")[1] ? formatSpec(bindings("tree.refresh")[1]) : undefined, newK: sk("tree.newDs") };
   const [quickDoc, setQuickDoc] = useState<{ title: string; text: string } | null>(null);
+  // ───────── 백업·복원 ─────────
+  const [backupReq, setBackupReq] = useState<{ c: ConnectionView; db?: string } | null>(null);
+  const dbTarget = (c: ConnectionView, db?: string) => targetId(c.id, db && db !== (c.database || "postgres") ? db : undefined);
+  const startBackup = async (o: { format: "custom" | "plain"; schemaOnly: boolean; dataOnly: boolean }) => {
+    const r0 = backupReq;
+    setBackupReq(null);
+    if (!r0) return;
+    const name = `${r0.db ?? r0.c.database ?? r0.c.name}-${new Date().toISOString().slice(0, 10)}`;
+    const r = await runJob(`Back up ${name}`, (job) => backup.run(dbTarget(r0.c, r0.db), { ...o, schemas: [] }, name, job));
+    if (r) setStatus(`Backed up ${(r[0] / 1048576).toFixed(1)} MB to ${r[1]}`);
+  };
+  const startRestore = async (c: ConnectionView, db?: string) => {
+    const where = `${c.name}${db ? ` / ${db}` : ""}`;
+    if (!confirm(`Restore a backup into ${where}?\n\nIt runs the backup's statements on this database (in one transaction for PostgreSQL). ${c.options?.confirmChanges ? "\n\n⚠ This is a Production data source." : ""}`)) return;
+    const clean = confirm("Drop the objects the backup contains before restoring them (--clean)?\n\nOK = drop and recreate · Cancel = keep and add");
+    const r = await runJob(`Restore into ${where}`, (job) => backup.restore(dbTarget(c, db), clean, job));
+    if (r) setStatus(`Restored ${r} into ${where}`);
+  };
   const nodeTarget = (info: NodeInfo) => targetId(info.conn.id, info.db && info.db !== (info.conn.database || "postgres") ? info.db : undefined);
   const fqn = (info: NodeInfo) => [info.db, info.schema, info.name].filter(Boolean).join(".") || info.conn.name;
   const ddlText = (info: NodeInfo) => meta.ddl(nodeTarget(info), info.schema!, info.name!, info.kind);
@@ -684,7 +874,7 @@ export default function App() {
     });
   };
   const deactivate = async (c: ConnectionView) => {
-    const pending = tabsRef.current.filter((t) => t.connId === c.id && t.inTx);
+    const pending = allTabs().filter((t) => t.connId === c.id && t.inTx);
     if (pending.length && !confirm(`${pending.length} console(s) on ${c.name} have uncommitted changes. Disconnecting rolls them back. Continue?`)) return;
     await api.disconnect(c.id);
     for (const t of pending) updTab(t.id, (x) => ({ ...x, inTx: false }));
@@ -728,6 +918,7 @@ export default function App() {
         { label: "Jump to Query Console…", shortcut: K.jump, action: () => jumpToConsole(info) },
       ],
     });
+    if (info.kind === "table" && c.kind !== "redis" && c.kind !== "mongodb" && !VECTOR_KINDS.includes(c.kind)) items.push({ label: "AI Search (RAG) — Index This Table…", action: () => openRag(c, info.db, info.schema, info.name) });
     if (isObj)
       items.push({
         label: "SQL Scripts",
@@ -768,9 +959,32 @@ export default function App() {
             : []),
         ],
       });
+    if (c.kind !== "redis" && (info.kind === "schema" || info.kind === "db" || (info.kind === "conn" && c.kind === "mysql")))
+      items.push({ label: "Diagrams", submenu: [{ label: "Show Diagram (ERD)", action: () => openErd(c, info.db, info.kind === "schema" && info.schema ? [info.schema] : c.kind === "mysql" ? [info.db ?? c.database] : undefined) }] });
     if (info.kind === "schema" && info.schema && c.kind !== "redis")
       items.push({ label: "Import/Export", submenu: [{ label: "Import Data into New Table…", action: () => setImportReq({ target: nodeTarget(info), schema: info.schema!, refresh: info.refresh }) }] });
-    items.push({ label: "Tools", submenu: [{ label: "Manage Shown Schemas…", action: () => document.querySelector<HTMLElement>(".tree-node.conn.selected .scope-badge, .tree-node.selected .scope-badge")?.click() }] });
+    items.push({
+      label: "Tools",
+      submenu: [
+        { label: "Manage Shown Schemas…", action: () => document.querySelector<HTMLElement>(".tree-node.conn.selected .scope-badge, .tree-node.selected .scope-badge")?.click() },
+        ...(c.kind !== "redis" && (info.kind === "conn" || info.kind === "db")
+          ? ([
+              { separator: true },
+              { label: "Sessions & Locks", action: () => openDba(c, info.db, "sessions", "Sessions") },
+              { label: "Slow Queries", action: () => openDba(c, info.db, "slow_queries", "Slow Queries (Top 100)") },
+              { label: "Table Sizes & Indexes", action: () => openDba(c, info.db, "table_sizes", "Table Sizes") },
+              { label: "Server Overview", action: () => openDba(c, info.db, "server", "Server Overview") },
+              { label: "Users & Privileges", action: () => openDba(c, info.db, "roles", "Users & Roles") },
+              { separator: true },
+              { label: "Compare & Migrate (schemas, data, migration files)…", action: () => openMigrate(c, info.db) },
+              { label: "AI Search (RAG)…", action: () => openRag(c, info.db) },
+              { separator: true },
+              { label: "Back Up Database…", action: () => setBackupReq({ c, db: info.db }) },
+              { label: "Restore Database…", action: () => startRestore(c, info.db) },
+            ] as MenuItem[])
+          : []),
+      ],
+    });
     if (info.kind === "conn") {
       items.push({ label: "Diagnostics", submenu: [{ label: "Force Refresh", shortcut: K.force, action: () => (invalidateSearchIndex(c.id), invalidateCompletion(c.id), info.refresh?.()) }] });
       items.push({ separator: true });
@@ -839,7 +1053,9 @@ export default function App() {
     const p2 = (n: number) => String(n).padStart(2, "0");
     return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
   };
-  const updTab = (id: string, fn: (t: Tab) => Tab) => setTabs((ts) => ts.map((t) => (t.id === id ? fn(t) : t)));
+  const updTab = (id: string, fn: (t: Tab) => Tab) => {
+    if (!updStashed(id, fn)) setTabs((ts) => ts.map((t) => (t.id === id ? fn(t) : t)));
+  };
   const log = (id: string, level: OutputLine["level"], text: string) => updTab(id, (t) => ({ ...t, output: [...t.output.slice(-999), { ts: nowTs(), text, level }] }));
   /** 결과 탭 제목: 쿼리 앞 주석 → 테이블 이름 → Result N (DataGrip) */
   const resultTitle = (sql: string, n: number) => {
@@ -866,6 +1082,20 @@ export default function App() {
         if (why && !confirm(`${why}:\n\n${s.slice(0, 300)}\n\nRun it anyway?`)) return;
       }
     }
+    // Production: 데이터를 바꾸는 문장은 바뀔 행 수를 세어 보여 주고 묻는다 (세는 것은 SELECT count(*))
+    if (c?.options?.confirmChanges && !explain) {
+      const writes = stmts.filter((s) => !isReadStmt(s));
+      if (writes.length) {
+        setStatus("Counting the rows this will change…");
+        const lines: string[] = [];
+        for (const w of writes) {
+          const n = await previewImpact(tab.target, w).catch((e) => `can't count: ${String(e).split("\n")[0]}`);
+          lines.push(`${w.replace(/\s+/g, " ").slice(0, 120)}\n   → ${typeof n === "number" ? `${n.toLocaleString("en-US")} row${n === 1 ? "" : "s"}` : n === null ? "can't count this statement" : n}`);
+        }
+        setStatus("Ready");
+        if (!confirm(`Production data source "${c.name}" — this changes data:\n\n${lines.join("\n\n")}\n\nRun it?`)) return;
+      }
+    }
     // 고정(pin)되지 않은 결과 탭은 새 결과로 바꾼다
     updTab(tabId, (t) => ({ ...t, running: true, results: t.results.filter((r) => r.pinned), cursorEntry: undefined }));
     setStatus("Executing…");
@@ -884,7 +1114,7 @@ export default function App() {
         updTab(tabId, (t) => ({ ...t, inTx: !!r.inTransaction }));
         if (!r.inTransaction && !isReadStmt(sql0)) committed++;
         if (explain && !isMy) {
-          const plan = parsePgPlan(String(r.rows[0]?.[0] ?? ""));
+          const plan = await analyzePlan(String(r.rows[0]?.[0] ?? "")).catch(() => null);
           const entry: ResultEntry = { id: crypto.randomUUID(), title: resultTitle(sql0, ++n), sql: sql0, kind: "plan", result: null, plan: plan ?? undefined, pinned: false };
           updTab(tabId, (t) => ({ ...t, results: [...t.results, entry] }));
           lastActive = entry.id;
@@ -1018,6 +1248,7 @@ export default function App() {
     for (const t of tabsRef.current.filter((x) => ids.includes(x.id))) closedStack.current = [snapshot(t), ...closedStack.current].slice(0, 30);
     mru.current = mru.current.filter((x) => !ids.includes(x));
     for (const id of ids) {
+      forgetConsoleModel(id);
       editorApis.current.delete(id);
       liveSql.current.delete(id);
       api.closeSession(id).catch(() => {});
@@ -1177,6 +1408,25 @@ export default function App() {
             { label: "Unsplit All", action: unsplit },
           ] as MenuItem[])
         : []),
+      { separator: true },
+      {
+        label: "Move to Workspace",
+        submenu: [
+          ...workspaces.filter((w) => w.id !== curWs).map((w) => ({ label: w.name, action: () => moveToWs(t, w.id) })),
+          ...(workspaces.length > 1 ? ([{ separator: true }] as MenuItem[]) : []),
+          {
+            label: "New Workspace…",
+            action: () => {
+              const name = prompt("Workspace name", `Workspace ${workspacesRef.current.length + 1}`);
+              if (!name?.trim()) return;
+              const w = { id: crypto.randomUUID(), name: name.trim() };
+              setWorkspaces((l) => [...l, w]);
+              workspacesRef.current = [...workspacesRef.current, w];
+              moveToWs(t, w.id);
+            },
+          },
+        ],
+      },
     ];
     if (t.kind === "console" && c)
       items.push(
@@ -1303,6 +1553,8 @@ export default function App() {
     return [
       { name: "New Query Console", shortcut: sk("console.new"), group: "File", run: () => c && openConsole(c, treeSel?.db ?? t?.database), disabled: !c },
       { name: "New Data Source…", group: "File", run: () => setDialog({}) },
+      { name: "New Workspace…", group: "Window", run: () => newWs() },
+      ...workspaces.map((w, i) => ({ name: `Workspace: ${w.name}`, shortcut: i < 9 ? sk(`ws.${i + 1}`) : undefined, group: "Window", run: () => switchWs(w.id), disabled: w.id === curWs })),
       { name: "Data Source Properties", shortcut: sk("tree.properties"), group: "File", run: () => c && setDialog({ edit: c }), disabled: !c },
       { name: "Export Data Sources…", group: "File", run: () => exportConns() },
       { name: "Import Data Sources…", group: "File", run: () => importConns() },
@@ -1322,7 +1574,18 @@ export default function App() {
       { name: "Roll Back", group: "Transaction", run: () => t && txEnd(t, "rollback"), disabled: !t?.inTx },
       { name: "Transaction Mode: Manual", group: "Transaction", run: () => t && setTxMode(t, true), disabled: t?.kind !== "console" },
       { name: "Transaction Mode: Auto", group: "Transaction", run: () => t && setTxMode(t, false), disabled: t?.kind !== "console" },
-      { name: "Browse Query History…", shortcut: sk("editor.history"), group: "Run", run: () => t && setHistoryFor(t.id), disabled: t?.kind !== "console" },
+      { name: "Browse Query History…", shortcut: sk("editor.history"), group: "Run", run: () => t && (setHistoryTab("history"), setHistoryFor(t.id)), disabled: t?.kind !== "console" },
+      { name: "Snippets…", group: "Run", run: () => t && (setHistoryTab("snippets"), setHistoryFor(t.id)), disabled: t?.kind !== "console" },
+      {
+        name: "Save Query as Snippet…",
+        group: "Run",
+        run: async () => {
+          const c = t && conns.find((x) => x.id === t.connId);
+          const sql = t && editorApis.current.get(t.id)?.text();
+          if (c && sql && (await saveSnippet(sql, c.id, c.name))) setStatus("Snippet saved (⌘k › Snippets…)");
+        },
+        disabled: t?.kind !== "console",
+      },
       { name: "Go to Database Object…", shortcut: sk("goto.object"), group: "Navigate", run: () => setTimeout(() => setSe("database")) },
       { name: "Go to Symbol…", shortcut: sk("goto.symbol"), group: "Navigate", run: () => setTimeout(() => setSe("symbols")) },
       { name: "Go to File…", shortcut: sk("goto.file"), group: "Navigate", run: () => setTimeout(() => setSe("files")) },
@@ -1346,8 +1609,8 @@ export default function App() {
   };
 
   // 키 핸들러는 한 번만 등록되므로 최신 함수는 ref 로 넘긴다
-  const latest = useRef({ toggleExplorer, openFts, bumpFont, setSe, setFindOpen, findOpen });
-  latest.current = { toggleExplorer, openFts, bumpFont, setSe, setFindOpen, findOpen };
+  const latest = useRef({ toggleExplorer, openFts, bumpFont, setSe, setFindOpen, findOpen, switchWs });
+  latest.current = { toggleExplorer, openFts, bumpFont, setSe, setFindOpen, findOpen, switchWs };
   const lastShift = useRef(0);
 
   // ───────── 단축키 (DataGrip 키맵) ─────────
@@ -1380,6 +1643,8 @@ export default function App() {
       if (is("find.action")) return e.preventDefault(), L.setSe("actions");
       if (is("fts")) return e.preventDefault(), void L.openFts();
       if (is("explorer")) return e.preventDefault(), L.toggleExplorer();
+      // ⌥1~9: 워크스페이스
+      for (let n = 1; n <= 9; n++) if (is(`ws.${n}`)) return e.preventDefault(), void (workspacesRef.current[n - 1] && L.switchWs(workspacesRef.current[n - 1].id));
       if (is("find.window")) return e.preventDefault(), L.setFindOpen((o) => !o);
       // ⇧⎋ Hide Active Tool Window
       if (e.shiftKey && e.key === "Escape") {
@@ -1438,6 +1703,7 @@ export default function App() {
       }
       if (is("editor.history") && active?.kind === "console") {
         e.preventDefault();
+        setHistoryTab("history");
         setHistoryFor(active.id);
         return;
       }
@@ -1643,7 +1909,7 @@ export default function App() {
                 onDoubleClick={() => setMaximized((m) => !m)}
                 title={t.kind === "table" ? `${t.edit?.schema}.${t.edit?.table}` : t.title}
               >
-                <span className={"tab-icon " + t.kind}>{t.kind === "table" ? "▦" : t.kind === "ddl" ? "ƒ" : t.kind === "redis" ? "◆" : "⌘"}</span>
+                <span className={"tab-icon " + t.kind}>{t.kind === "table" ? "▦" : t.kind === "ddl" ? "ƒ" : t.kind === "redis" ? "◆" : t.kind === "dba" ? "◉" : t.kind === "erd" ? "⧉" : t.kind === "migrate" ? "⇄" : t.kind === "rag" ? "✦" : "⌘"}</span>
                 <span>{t.title}</span>
                 {t.pinned ? (
                   <span
@@ -1750,7 +2016,7 @@ export default function App() {
                     }
                     onFetchMore={(entryId) => fetchMoreEntry(t.id, entryId)}
                     onExport={(sql) => exportCsv({ ...t, lastSql: sql })}
-                    onHistory={() => setHistoryFor(t.id)}
+                    onHistory={() => (setHistoryTab("history"), setHistoryFor(t.id))}
                     onTxMode={(manual) => setTxMode(t, manual)}
                     onCommit={() => txEnd(t, "commit")}
                     onRollback={() => txEnd(t, "rollback")}
@@ -1761,6 +2027,63 @@ export default function App() {
                     schemaSwitchDisabled={conns.find((x) => x.id === t.connId)?.options?.switchSchema === "disable"}
                     registerApi={(id, a) => editorApis.current.set(id, a)}
                     onClearOutput={() => patch(t.id, { output: [] })}
+                  />
+                </div>
+              );
+            })}
+          {/* AI Search (RAG) */}
+          {gTabs
+            .filter((t) => t.kind === "rag")
+            .map((t) => (
+              <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
+                <RagView key={ragInit?.n} conns={conns} initial={ragInit} runJob={runJob} onStatus={setStatus} />
+              </div>
+            ))}
+          {/* 비교·마이그레이션 */}
+          {gTabs
+            .filter((t) => t.kind === "migrate")
+            .map((t) => (
+              <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
+                <MigrateView
+                  conns={conns}
+                  initialConnId={t.connId}
+                  initialDb={t.database}
+                  onOpenConsole={(connId, db, sql) => {
+                    const c = conns.find((x) => x.id === connId);
+                    if (c) openConsole(c, db, sql);
+                  }}
+                  onStatus={setStatus}
+                />
+              </div>
+            ))}
+          {/* ERD */}
+          {gTabs
+            .filter((t) => t.kind === "erd")
+            .map((t) => {
+              const c = conns.find((x) => x.id === t.connId);
+              return (
+                <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
+                  <ErdView target={t.target} schemas={t.erdSchemas ?? []} visible={t.id === ga?.id} onOpenTable={(sc, tb) => c && openTable(c, sc, tb, t.database)} onStatus={setStatus} />
+                </div>
+              );
+            })}
+          {/* DBA 리포트 */}
+          {gTabs
+            .filter((t) => t.kind === "dba")
+            .map((t) => {
+              const c = conns.find((x) => x.id === t.connId);
+              return (
+                <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
+                  <DbaReport
+                    target={t.target}
+                    connName={c?.name ?? ""}
+                    report={t.dbaReport ?? "sessions"}
+                    readOnly={!!c?.readOnly}
+                    dialect={dialectOf(c?.kind ?? "postgres")}
+                    visible={t.id === ga?.id}
+                    onReport={(id, title) => c && patch(t.id, { dbaReport: id, title: `${title} — ${c.name}` })}
+                    onOpenConsole={(sql) => c && openConsole(c, t.database, sql)}
+                    onStatus={setStatus}
                   />
                 </div>
               );
@@ -1813,6 +2136,21 @@ export default function App() {
                     if (c && t.edit) openDdl({ kind: "table", conn: c, db: t.database, schema: t.edit.schema, name: t.edit.table });
                   }}
                   onCopyQueryToConsole={(sql) => { const c = conns.find((x) => x.id === t.connId); if (c) openConsole(c, t.database, sql); }}
+                  onFindSimilar={
+                    conns.find((x) => x.id === t.connId)?.kind === "postgres"
+                      ? async (column, row) => {
+                          const c = conns.find((x) => x.id === t.connId);
+                          if (!c || !t.edit) return;
+                          try {
+                            const sql = await meta.similarRowsSql(t.target, t.edit.schema, t.edit.table, column, t.edit.pk.map((k) => [k, row[k] === null ? null : String(row[k])]));
+                            openConsole(c, t.database, sql);
+                            setStatus("Similar-rows query opened in a new console");
+                          } catch (e) {
+                            setStatus(String(e));
+                          }
+                        }
+                      : undefined
+                  }
                 />
               </div>
             ))}
@@ -1887,6 +2225,19 @@ export default function App() {
         </span>
       </div>
 
+      <div className="ws-row">
+      {!maximized && (
+        <WorkspaceBar
+          list={workspaces}
+          current={curWs}
+          counts={Object.fromEntries(workspaces.map((w) => [w.id, w.id === curWs ? tabs.length : stash.current.get(w.id)?.tabs.length ?? 0]))}
+          shortcut={(n) => (isMac ? `⌥${n}` : `Alt+${n}`)}
+          onSwitch={switchWs}
+          onNew={newWs}
+          onRename={renameWs}
+          onDelete={deleteWs}
+        />
+      )}
       <PanelGroup direction="vertical" className="main" autoSaveId="dbtool-v">
       <Panel id="top" order={1} minSize={20}>
       <PanelGroup direction="horizontal" autoSaveId="dbtool-h">
@@ -1932,6 +2283,7 @@ export default function App() {
         </>
       )}
       </PanelGroup>
+      </div>
 
       {switcher && (
         <Switcher
@@ -1973,6 +2325,7 @@ export default function App() {
           }}
         />
       )}
+      {backupReq && <BackupDialog what={backupReq.db ?? backupReq.c.name} pg={backupReq.c.kind === "postgres"} onRun={startBackup} onClose={() => setBackupReq(null)} />}
       {exportReq && <ExportDialog what={exportReq.name} onExport={startExport} onClose={() => setExportReq(null)} />}
       {importReq && <ImportDialog target={importReq.target} schema={importReq.schema} table={importReq.table} onImport={startImport} onClose={() => setImportReq(null)} />}
       {updateOpen && update?.latest && <UpdateDialog info={update} onClose={() => setUpdateOpen(false)} beforeInstall={readyToQuit} />}
@@ -2033,6 +2386,7 @@ export default function App() {
           <HistoryDialog
             connId={c.id}
             title={`${c.name} Query History`}
+            initialTab={historyTab}
             onPick={(sql) => {
               editorApis.current.get(t.id)?.insert(sql);
               setHistoryFor(null);

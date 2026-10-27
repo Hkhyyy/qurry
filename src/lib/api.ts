@@ -1,7 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { DataFormat } from "./transfer";
 
-export type DbKind = "postgres" | "mysql" | "redis";
+export type DbKind = "postgres" | "mysql" | "redis" | "sqlite" | "duckdb" | "mssql" | "clickhouse" | "mongodb" | "oracle" | "qdrant" | "chroma" | "milvus";
+/** 따로 받는 드라이버 플러그인으로 붙는 DB */
+export const PLUGIN_KINDS: DbKind[] = ["sqlite", "duckdb", "mssql", "clickhouse", "mongodb", "oracle", "qdrant", "chroma", "milvus"];
+/** 벡터 DB: 콘솔이 REST (METHOD /path + JSON 본문) */
+export const VECTOR_KINDS: DbKind[] = ["qdrant", "chroma", "milvus"];
+/** 파일 하나가 DB (호스트·포트 대신 파일 경로) */
+export const isFileKind = (k: DbKind) => k === "sqlite" || k === "duckdb";
+/** 드라이버가 없을 때 백엔드 오류의 앞부분 */
+export const DRIVER_MISSING = "Driver not installed:";
 
 export interface ConnectionConfig {
   id: string;
@@ -48,7 +56,11 @@ export interface ConnOptions {
   keepAliveSecs?: number | null;
   autoDisconnectSecs?: number | null;
   singleDb?: boolean;
+  /** Production: 바꾸는 문장은 바뀔 행 수를 보여 주고 확인 */
+  confirmChanges?: boolean;
   startupScript?: string;
+  /** Oracle Instant Client 폴더 */
+  oracleClient?: string | null;
 }
 
 export interface SshConfig {
@@ -157,6 +169,9 @@ export const api = {
   txState: (tabId: string) => invoke<boolean>("tx_state", { tabId }),
   trustSshHost: (host: string, port: number) => invoke<string>("trust_ssh_host", { host, port }),
   /** 실행 전 확인할 위험 문장이면 이유 (WHERE 없는 UPDATE/DELETE, DROP, TRUNCATE, Redis FLUSH*·DEL) */
+  /** 드라이버 플러그인이 깔려 있는지 (기본 DB 는 null) · 받아 깔기 */
+  driverStatus: (kind: DbKind) => invoke<boolean | null>("driver_status", { kind }),
+  installDriver: (kind: DbKind) => invoke<string>("install_driver", { kind }),
   unsafeReason: (kind: DbKind, sql: string) => invoke<string | null>("unsafe_reason", { kind, sql }),
 };
 
@@ -170,6 +185,86 @@ export interface ConstraintMeta { name: string; kind: "p" | "f" | "u" | "c"; def
 export interface TableDetail { columns: ColumnMeta[]; indexes: IndexMeta[]; constraints: ConstraintMeta[] }
 export interface CompletionTable { schema: string; name: string; columns: [string, string][] }
 
+export type DbaAction = { kind: "kill"; label: string; terminate: boolean } | { kind: "sql"; label: string; template: string };
+export interface DbaReportInfo { id: string; title: string; group: string; help: string; actions: DbaAction[] }
+/** 실행 계획 분석 (core): 몫·경고. PlanNode 는 components/ConsolePane */
+export const analyzePlan = (json: string) => invoke<import("../components/ConsolePane").PlanNode>("analyze_plan", { json });
+export interface HistoryItem { id: string; connId: string; database?: string; sql: string; ts: number }
+export interface Snippet { id: string; name: string; sql: string; connId?: string | null }
+/** 쿼리 히스토리·스니펫 (설정 폴더, TUI 와 같이 쓴다) */
+export const history = {
+  add: (connId: string, database: string | undefined, sql: string) => invoke<void>("history_add", { connId, database: database ?? null, sql }),
+  list: (connId: string | null, filter: string, limit = 500) => invoke<HistoryItem[]>("history_list", { connId, filter, limit }),
+  remove: (id: string) => invoke<void>("history_delete", { id }),
+  import: (items: HistoryItem[]) => invoke<number>("history_import", { items }),
+  snippets: (connId: string | null) => invoke<Snippet[]>("snippets", { connId }),
+  saveSnippet: (snippet: Snippet) => invoke<Snippet>("snippet_save", { snippet }),
+  deleteSnippet: (id: string) => invoke<void>("snippet_delete", { id }),
+};
+/** Production 확인: 이 문장이 바꿀 행 수 (셀 수 없으면 null) */
+export const previewImpact = (id: string, sql: string) => invoke<number | null>("preview_impact", { id, sql });
+export interface ErdColumn { name: string; dataType: string; pk: boolean; nullable: boolean }
+export interface ErdTable { schema: string; name: string; columns: ErdColumn[] }
+export interface ErdRelation { name: string; fromSchema: string; fromTable: string; fromColumns: string[]; toSchema: string; toTable: string; toColumns: string[] }
+/** ERD (테이블·외래 키) + Mermaid 글 */
+export const erd = (id: string, schemas: string[]) => invoke<[{ tables: ErdTable[]; relations: ErdRelation[] }, string]>("erd", { id, schemas });
+/** 글을 파일로 저장 (저장 창). 취소하면 null */
+export const saveFile = (defaultName: string, text: string, filter: string, ext: string) => invoke<string | null>("save_file", { defaultName, text, filter, ext });
+export interface BackupOptions { format: "custom" | "plain"; schemaOnly: boolean; dataOnly: boolean; schemas: string[] }
+/** 백업·복원 (pg_dump / mysqldump). 진행은 "transfer-progress" */
+export const backup = {
+  run: (id: string, opts: BackupOptions, defaultName: string, job: string) => invoke<[number, string] | null>("backup_db", { id, opts, defaultName, job }),
+  restore: (id: string, clean: boolean, job: string) => invoke<string | null>("restore_db", { id, opts: { clean }, job }),
+};
+export interface SchemaChange { kind: string; object: string; sql: string; destructive: boolean }
+export interface DataDiff { same: number; onlySource: number; onlyTarget: number; different: number; sql: string; truncated: boolean }
+export interface Migration { version: string; description: string; file: string; checksum: string; status: "pending" | "applied" | "changed" | "missing"; appliedAt: string | null }
+/** 스키마·데이터 비교, 마이그레이션 파일 (폴더는 pickFolder 로 고른 것만) */
+export const migrate = {
+  compareSchemas: (sourceId: string, sourceSchema: string, targetId: string, targetSchema: string) => invoke<SchemaChange[]>("compare_schemas", { sourceId, sourceSchema, targetId, targetSchema }),
+  compareData: (sourceId: string, sourceSchema: string, sourceTable: string, targetId: string, targetSchema: string, targetTable: string) =>
+    invoke<DataDiff>("compare_data", { sourceId, sourceSchema, sourceTable, targetId, targetSchema, targetTable }),
+  pickFolder: () => invoke<string | null>("pick_folder"),
+  status: (id: string, dir: string) => invoke<Migration[]>("migration_status", { id, dir }),
+  apply: (id: string, dir: string) => invoke<string[]>("apply_migrations", { id, dir }),
+  save: (dir: string, description: string, sql: string) => invoke<string>("save_migration", { dir, description, sql }),
+};
+/** RAG 인덱스: 원본 테이블의 글 열 → 임베딩 → 저장소(pgvector 테이블 · 벡터 DB 컬렉션) */
+export interface RagIndex {
+  id: string;
+  name: string;
+  source: string;
+  schema: string;
+  table: string;
+  idColumn: string;
+  textColumns: string[];
+  provider: "openai" | "ollama";
+  model: string;
+  baseUrl: string;
+  dest: string;
+  collection: string;
+  dim?: number | null;
+  rows?: number;
+  builtAt?: string | null;
+}
+export const RAG_DEFAULT_MODEL = { openai: "text-embedding-3-small", ollama: "nomic-embed-text" } as const;
+export const rag = {
+  list: () => invoke<RagIndex[]>("rag_indexes"),
+  save: (index: RagIndex) => invoke<RagIndex>("rag_save", { index }),
+  remove: (id: string) => invoke<void>("rag_delete", { id }),
+  hasKey: () => invoke<boolean>("rag_has_key"),
+  setKey: (key: string | null) => invoke<void>("rag_set_key", { key }),
+  /** 진행은 "transfer-progress" */
+  build: (id: string, job: string) => invoke<number>("rag_build", { id, job }),
+  search: (id: string, query: string, limit = 20) => invoke<QueryResult>("rag_search", { id, query, limit }),
+};
+export const dba = {
+  reports: (id: string) => invoke<DbaReportInfo[]>("dba_reports", { id }),
+  run: (id: string, report: string) => invoke<QueryResult>("dba_report", { id, report }),
+  kill: (id: string, pid: number, terminate: boolean) => invoke<boolean>("kill_session", { id, pid, terminate }),
+  actionSql: (id: string, template: string, row: Record<string, string>) => invoke<string>("dba_action_sql", { id, template, row }),
+};
+
 export interface DataPreview { format: DataFormat; columns: string[]; rows: (string | null)[][]; bytes: number }
 /** columns: [파일 열 번호, 테이블 컬럼]. create = 새 테이블 (컬럼은 모두 text) */
 export interface ImportSpec { path: string; schema: string; table: string; create: boolean; columns: [number, string][] }
@@ -179,6 +274,8 @@ export const meta = {
   schemas: (id: string) => invoke<SchemaInfo[]>("list_schemas", { id }),
   objects: (id: string, schema: string) => invoke<SchemaObjects>("list_objects", { id, schema }),
   table: (id: string, schema: string, table: string) => invoke<TableDetail>("table_detail", { id, schema, table }),
+  /** pgvector: 이 행과 가까운 행을 찾는 SQL (pk = [열, 값]) */
+  similarRowsSql: (id: string, schema: string, table: string, column: string, pk: [string, string | null][]) => invoke<string>("similar_rows_sql", { id, schema, table, column, pk }),
   completion: (id: string) => invoke<CompletionTable[]>("completion_meta", { id }),
   ddl: (id: string, schema: string, name: string, kind: string) => invoke<string>("object_ddl", { id, schema, name, kind }),
   objectIndex: (id: string) => invoke<IndexEntry[]>("object_index", { id }),
@@ -236,8 +333,21 @@ export const COLOR_PRESETS: { name: string; value: string | null }[] = [
   { name: "Gray", value: "#45474d" },
 ];
 
-export const DEFAULT_PORT: Record<DbKind, number> = { postgres: 5432, mysql: 3306, redis: 6379 };
-export const KIND_LABEL: Record<DbKind, string> = { postgres: "PostgreSQL", mysql: "MySQL", redis: "Redis" };
+export const DEFAULT_PORT: Record<DbKind, number> = { postgres: 5432, mysql: 3306, redis: 6379, sqlite: 0, duckdb: 0, mssql: 1433, clickhouse: 8123, mongodb: 27017, oracle: 1521, qdrant: 6333, chroma: 8000, milvus: 19530 };
+export const KIND_LABEL: Record<DbKind, string> = {
+  postgres: "PostgreSQL",
+  mysql: "MySQL / MariaDB",
+  redis: "Redis",
+  sqlite: "SQLite",
+  duckdb: "DuckDB",
+  mssql: "SQL Server",
+  clickhouse: "ClickHouse",
+  mongodb: "MongoDB",
+  oracle: "Oracle",
+  qdrant: "Qdrant",
+  chroma: "Chroma",
+  milvus: "Milvus",
+};
 
 /** 데이터 편집 SQL에 쓰는 리터럴. PG가 컬럼 타입으로 캐스팅한다. */
 export const sqlLiteral = (v: Cell) => (v === null ? "NULL" : `'${String(v).replace(/'/g, "''")}'`);
@@ -276,7 +386,35 @@ const RD: Dialect = {
     return out;
   },
 };
-export const dialectOf = (kind?: DbKind) => (kind === "mysql" ? MY : kind === "redis" ? RD : PG);
+/** 드라이버 DB: 표준 SQL 따옴표, 글 변환은 CAST (PG 의 ::text 는 쓰지 않는다) */
+const GEN: Dialect = { ...PG, text: (e) => `CAST(${e} AS VARCHAR(4000))`, monaco: "sql" };
+const MONGO: Dialect = { q: (s) => s, lit: sqlLiteral, text: (e) => e, monaco: "javascript", split: RD.split };
+/** REST 요청 하나 = 메서드 줄부터 다음 메서드 줄 전까지 (본문 JSON 포함). core 의 sql::split_rest 와 같은 규칙 */
+const REST: Dialect = {
+  q: (s) => s,
+  lit: sqlLiteral,
+  text: (e) => e,
+  monaco: "javascript",
+  split: (text) => {
+    const out: { start: number; end: number }[] = [];
+    let pos = 0;
+    let cur: { start: number; end: number } | null = null;
+    for (const line of text.split("\n")) {
+      const t = line.trim();
+      if (/^(GET|POST|PUT|PATCH|DELETE|SELECT)\s/i.test(t + " ")) {
+        if (cur) out.push(cur);
+        cur = { start: pos, end: pos + line.length };
+      } else if (t && !t.startsWith("#") && !t.startsWith("//")) {
+        if (cur) cur.end = pos + line.length;
+        else cur = { start: pos, end: pos + line.length };
+      }
+      pos += line.length + 1;
+    }
+    if (cur) out.push(cur);
+    return out;
+  },
+};
+export const dialectOf = (kind?: DbKind) => (kind === "mysql" ? MY : kind === "redis" ? RD : kind === "mongodb" ? MONGO : kind && VECTOR_KINDS.includes(kind) ? REST : kind && PLUGIN_KINDS.includes(kind) ? GEN : PG);
 
 /** 백엔드 접속 대상: Data Source id + DB 이름 */
 export const targetId = (connId: string, database?: string | null) => (database ? `${connId}::${database}` : connId);

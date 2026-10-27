@@ -12,11 +12,19 @@ macro_rules! log {
 }
 
 pub mod app;
+pub mod backup;
 pub mod db;
+pub mod dba;
+pub mod erd;
 pub mod error;
 pub mod guard;
+pub mod history;
 pub mod meta;
+pub mod plugin;
+pub mod migrate;
 pub mod mysql;
+pub mod plan;
+pub mod rag;
 pub mod redisdb;
 pub mod search_cache;
 pub mod secrets;

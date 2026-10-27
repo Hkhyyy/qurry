@@ -1,0 +1,9 @@
+[package]
+name = "qurry-driver-qdrant"
+version = "0.2.0"
+edition = "2024"
+description = "Qurry driver plugin: Qdrant (REST)"
+
+[dependencies]
+qurry-driver = { workspace = true, features = ["rest"] }
+serde_json = { workspace = true }

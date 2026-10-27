@@ -15,6 +15,13 @@ pub fn default_db(cfg: &ConnectionConfig) -> String {
         DbKind::Postgres => if cfg.database.trim().is_empty() { "postgres".into() } else { cfg.database.trim().into() },
         DbKind::Mysql => cfg.database.trim().into(),
         DbKind::Redis => format!("db{}", crate::redisdb::db_index(&cfg.database)),
+        // 파일 DB 는 main, 나머지 드라이버는 정한 DB 이름 그대로
+        k if k.is_file() => "main".into(),
+        // 벡터 DB: 비면 서버의 기본 이름
+        DbKind::Qdrant if cfg.database.trim().is_empty() => "qdrant".into(),
+        DbKind::Chroma if cfg.database.trim().is_empty() => "default_database".into(),
+        DbKind::Milvus if cfg.database.trim().is_empty() => "default".into(),
+        _ => cfg.database.trim().into(),
     }
 }
 
@@ -42,7 +49,42 @@ pub fn quote_ident(kind: DbKind, s: &str) -> String {
         DbKind::Mysql => if simple(false) { s.into() } else { format!("`{}`", s.replace('`', "``")) },
         DbKind::Redis => s.into(),
         DbKind::Postgres => if simple(true) { s.into() } else { format!("\"{}\"", s.replace('"', "\"\"")) },
+        // 드라이버: 표준 따옴표 (SQL Server·Oracle·ClickHouse·SQLite·DuckDB 모두 "…" 를 받는다). 대소문자를 바꾸지 않게 소문자만 그대로
+        DbKind::Mongodb | DbKind::Qdrant | DbKind::Chroma | DbKind::Milvus => s.into(),
+        _ => if simple(true) { s.into() } else { format!("\"{}\"", s.replace('"', "\"\"")) },
     }
+}
+
+/// pgvector 열인지 (vector(3) · halfvec · sparsevec)
+pub fn is_vector_type(t: &str) -> bool {
+    let t = t.trim().to_lowercase();
+    ["vector", "halfvec", "sparsevec"].iter().any(|v| t == *v || t.starts_with(&format!("{v}(")) || t.ends_with(&format!(".{v}")))
+}
+
+/// 이 열의 벡터 인덱스가 쓰는 거리 연산자 (인덱스를 타게). 없으면 L2 (<->)
+pub fn vector_operator(column: &str, index_defs: &[&str]) -> &'static str {
+    let col = column.to_lowercase();
+    for d in index_defs {
+        let d = d.to_lowercase();
+        if !(d.contains("using hnsw") || d.contains("using ivfflat")) || !(d.contains(&format!("({col} ")) || d.contains(&format!("(\"{col}\" "))) {
+            continue;
+        }
+        for (ops, op) in [("_cosine_ops", "<=>"), ("_ip_ops", "<#>"), ("_l1_ops", "<+>"), ("_l2_ops", "<->")] {
+            if d.contains(ops) {
+                return op;
+            }
+        }
+    }
+    "<->"
+}
+
+/// pgvector: 이 행과 가까운 행 (자신은 빼고 거리 순). pk = (열, 값)
+pub fn similar_rows_sql(schema: &str, table: &str, column: &str, pk: &[(String, Option<String>)], op: &str, limit: usize) -> String {
+    let q = |s: &str| quote_ident(DbKind::Postgres, s);
+    let t = format!("{}.{}", q(schema), q(table));
+    let key = pk.iter().map(|(c, v)| format!("{} = {}", q(c), literal(DbKind::Postgres, v.as_deref()))).collect::<Vec<_>>().join(" AND ");
+    let col = q(column);
+    format!("SELECT {col} {op} (SELECT {col} FROM {t} WHERE {key}) AS distance, *\nFROM {t}\nWHERE NOT ({key})\nORDER BY distance\nLIMIT {limit}")
 }
 
 pub fn literal(kind: DbKind, v: Option<&str>) -> String {
@@ -68,6 +110,9 @@ pub fn split_statements(text: &str, kind: DbKind) -> Vec<(usize, usize)> {
             pos += line.len() + 1;
         }
         return out;
+    }
+    if kind.is_vector() {
+        return split_rest(text);
     }
     let b = text.as_bytes();
     let n = b.len();
@@ -154,12 +199,37 @@ pub fn split_statements(text: &str, kind: DbKind) -> Vec<(usize, usize)> {
     out.into_iter().filter(|(s, e)| !text[*s..*e].trim().is_empty()).collect()
 }
 
+/// REST 요청: "GET /x" 처럼 메서드로 시작하는 줄부터 다음 요청 전까지 (본문 JSON 포함). # · // 줄은 주석
+fn split_rest(text: &str) -> Vec<(usize, usize)> {
+    let is_head = |l: &str| {
+        let w = l.trim_start().split_whitespace().next().unwrap_or("").to_uppercase();
+        ["GET", "POST", "PUT", "PATCH", "DELETE", "SELECT"].contains(&w.as_str())
+    };
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    let (mut pos, mut cur): (usize, Option<(usize, usize)>) = (0, None);
+    for line in text.split('\n') {
+        let t = line.trim();
+        if is_head(line) {
+            out.extend(cur.take());
+            cur = Some((pos, pos + line.len()));
+        } else if !t.is_empty() && !t.starts_with('#') && !t.starts_with("//") {
+            match &mut cur {
+                Some(c) => c.1 = pos + line.len(),
+                None => cur = Some((pos, pos + line.len())),
+            }
+        }
+        pos += line.len() + 1;
+    }
+    out.extend(cur);
+    out
+}
+
 /// 편집기용 문장 나누기: 세미콜론으로 나눈 뒤, `;` 없이 이어 쓴 문장도 줄 머리의 문장 키워드로 나눈다 (DataGrip 처럼).
 /// `select … where x = 3` 다음 줄 `select * from users` → 두 문장. UNION·INSERT … SELECT·WITH … SELECT·GRANT SELECT 등은 한 문장.
 /// 실행할 문장을 고를 때만 쓴다 (읽기 전용 검사는 서버와 같은 split_statements 로)
 pub fn split_script(text: &str, kind: DbKind) -> Vec<(usize, usize)> {
     let segs = split_statements(text, kind);
-    if kind == DbKind::Redis {
+    if kind == DbKind::Redis || kind.is_vector() {
         return segs;
     }
     let mut out = Vec::new();
@@ -347,6 +417,24 @@ mod tests {
     }
 
     /// `;` 없이 줄을 바꿔 쓴 문장 (DataGrip 처럼 나눈다)
+    #[test]
+    fn pgvector_similar_rows() {
+        assert!(is_vector_type("vector(1536)") && is_vector_type("halfvec") && is_vector_type("public.vector") && !is_vector_type("text") && !is_vector_type("vectors"));
+        let defs = ["CREATE UNIQUE INDEX items_pkey ON public.items USING btree (id)", "CREATE INDEX items_embedding_idx ON public.items USING hnsw (embedding vector_cosine_ops)"];
+        assert_eq!(vector_operator("embedding", &defs), "<=>");
+        assert_eq!(vector_operator("other", &defs), "<->");
+        let sql = similar_rows_sql("public", "items", "embedding", &[("id".into(), Some("1".into()))], "<=>", 10);
+        assert_eq!(sql, "SELECT embedding <=> (SELECT embedding FROM public.items WHERE id = '1') AS distance, *\nFROM public.items\nWHERE NOT (id = '1')\nORDER BY distance\nLIMIT 10");
+    }
+
+    #[test]
+    fn split_rest_requests() {
+        let t = "# list\nGET /collections\n\nPOST /collections/x/points/search\n{\n  vector: [1, 2],\n\n  limit: 3\n}\nDELETE /collections/y";
+        let s: Vec<_> = split_statements(t, DbKind::Qdrant).into_iter().map(|(a, b)| &t[a..b]).collect();
+        assert_eq!(s, ["GET /collections", "POST /collections/x/points/search\n{\n  vector: [1, 2],\n\n  limit: 3\n}", "DELETE /collections/y"]);
+        assert_eq!(statement_at(t, t.find("limit").unwrap(), DbKind::Qdrant).unwrap(), s[1]);
+    }
+
     #[test]
     fn split_script_without_semicolons() {
         let parts = |t: &str| split_script(t, DbKind::Postgres).into_iter().map(|(a, b)| t[a..b].trim().to_string()).collect::<Vec<_>>();
