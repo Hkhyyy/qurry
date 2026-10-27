@@ -73,7 +73,6 @@ jobs:
       V: ${{ needs.version.outputs.version }}
       T: ${{ matrix.target }}
       A: ${{ matrix.arch }}
-      DRIVERS: sqlite duckdb clickhouse mssql mongodb oracle qdrant chroma milvus
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -124,13 +123,6 @@ jobs:
       - name: Build TUI and MCP
         run: cargo build --release --locked --target "$T" -p qurry-tui -p qurry-mcp
 
-      - name: Build drivers
-        # DB 드라이버 플러그인: 앱에는 넣지 않고, 연결을 만들 때 이 릴리스에서 받는다 (SHA256SUMS 서명으로 확인)
-        run: |
-          args=""
-          for d in $DRIVERS; do args="$args -p qurry-driver-$d"; done
-          cargo build --release --locked --target "$T" $args
-
       - name: Package
         run: |
           # out/ (dist/ 는 프론트엔드 빌드 결과)
@@ -156,9 +148,6 @@ jobs:
           else
             tar -czf "out/qurry-cli_${V}_${T}.tar.gz" -C cli qurry-tui qurry-mcp
           fi
-          for d in $DRIVERS; do
-            tar -czf "out/qurry-driver-${d}_${V}_${T}.tar.gz" -C "target/$T/release" "qurry-driver-$d"
-          done
           ls -la out
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -168,8 +157,65 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  # DB 드라이버 플러그인: 앱 빌드와 동시에 (따로 빌드하면 macOS 에서 몇 분 빨라진다).
+  # 앱에는 넣지 않고, 연결을 만들 때 이 릴리스에서 받는다 (SHA256SUMS 서명으로 확인)
+  drivers:
+    needs: version
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: macos-14, target: aarch64-apple-darwin }
+          - { os: macos-14, target: x86_64-apple-darwin }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+    runs-on: ${{ matrix.os }}
+    env:
+      V: ${{ needs.version.outputs.version }}
+      T: ${{ matrix.target }}
+      DRIVERS: sqlite duckdb clickhouse mssql mongodb oracle qdrant chroma milvus
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: drivers-${{ matrix.target }}
+
+      - name: Set version in manifests
+        run: |
+          for f in crates/core/Cargo.toml crates/tui/Cargo.toml crates/mcp/Cargo.toml crates/driver/Cargo.toml src-tauri/Cargo.toml drivers/*/Cargo.toml; do
+            perl -0pi -e 's/^version = "[^"]*"/version = "$ENV{V}"/m' "$f"
+          done
+          cargo update --workspace
+
+      - name: Build drivers
+        run: |
+          args=""
+          for d in $DRIVERS; do args="$args -p qurry-driver-$d"; done
+          cargo build --release --locked --target "$T" $args
+
+      - name: Package
+        run: |
+          mkdir out
+          for d in $DRIVERS; do
+            tar -czf "out/qurry-driver-${d}_${V}_${T}.tar.gz" -C "target/$T/release" "qurry-driver-$d"
+          done
+          ls -la out
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-drivers-${{ matrix.target }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 3
+
   publish:
-    needs: [version, build]
+    needs: [version, build, drivers]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:

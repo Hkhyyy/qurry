@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { ask, askText } from "../lib/dialogs";
 import { history, HistoryItem, Snippet } from "../lib/api";
 
 /**
@@ -28,9 +29,9 @@ export function pushHistory(h: { connId: string; database?: string; sql: string 
 export async function saveSnippet(sql: string, connId: string, connName: string): Promise<string | null> {
   const text = sql.trim();
   if (!text) return null;
-  const name = prompt("Snippet name", text.replace(/\s+/g, " ").slice(0, 40));
+  const name = (await askText("Snippet name", text.replace(/\s+/g, " ").slice(0, 40)));
   if (!name) return null;
-  const onlyHere = confirm(`Show this snippet only for "${connName}"?\n\nOK = only this data source · Cancel = everywhere`);
+  const onlyHere = (await ask(`Show this snippet only for "${connName}"?\n\nOK = only this data source · Cancel = everywhere`));
   await history.saveSnippet({ id: "", name, sql: text, connId: onlyHere ? connId : null });
   return name;
 }
@@ -58,7 +59,7 @@ export function HistoryDialog({ connId, title, initialTab = "history", onPick, o
   const cur = list[Math.min(idx, list.length - 1)];
   const del = async (r: Row) => {
     if (tab === "history") await history.remove(r.id);
-    else if (confirm(`Delete snippet "${r.title}"?`)) await history.deleteSnippet(r.id);
+    else if ((await ask(`Delete snippet "${r.title}"?`))) await history.deleteSnippet(r.id);
     reload();
   };
   const toSnippet = async (r: Row) => {

@@ -25,7 +25,7 @@ fn pane_from(v: &Value) -> Option<Pane> {
 }
 
 /// 워크스페이스 하나의 탭·분할 (지금 것은 app 에서, 나머지는 보관한 것에서)
-fn ws_json(name: &str, tabs: &[Tab], panes: &Pane, active: usize, group_active: &[Option<u64>]) -> Value {
+fn ws_json(name: &str, conns: &[String], tabs: &[Tab], panes: &Pane, active: usize, group_active: &[Option<u64>]) -> Value {
     let tabs_v: Vec<Value> = tabs
         .iter()
         .map(|t| {
@@ -42,6 +42,7 @@ fn ws_json(name: &str, tabs: &[Tab], panes: &Pane, active: usize, group_active: 
     let index = |id: Option<u64>| id.and_then(|id| tabs.iter().position(|t| t.id == id));
     json!({
         "name": name,
+        "conns": conns,
         "tabs": tabs_v,
         "panes": pane_json(panes),
         "active": tabs.get(active).map(|_| active),
@@ -57,10 +58,10 @@ pub fn to_json(app: &App) -> Value {
         .enumerate()
         .map(|(i, w)| {
             if i == app.cur_ws {
-                ws_json(&w.name, &app.tabs, &app.panes, app.active, &app.group_active)
+                ws_json(&w.name, &w.conns, &app.tabs, &app.panes, app.active, &app.group_active)
             } else {
                 let s = w.saved.as_ref().unwrap_or(&empty);
-                ws_json(&w.name, &s.tabs, &s.panes, s.active, &s.group_active)
+                ws_json(&w.name, &w.conns, &s.tabs, &s.panes, s.active, &s.group_active)
             }
         })
         .collect();
@@ -77,10 +78,23 @@ pub fn restore(app: &mut App, v: &Value) {
         _ => vec![v.clone()],
     };
     let cur = v.get("current").and_then(Value::as_u64).map(|x| x as usize).filter(|i| *i < list.len()).unwrap_or(0);
+    // 탐색기 목록이 없던 저장 파일 (0.2.0 이전·0.2.0): 첫 워크스페이스가 모든 Data Source 를 가진다
+    let has_lists = list.iter().any(|w| w.get("conns").is_some_and(Value::is_array));
+    let all: Vec<String> = app.conns.iter().map(|c| c.config.id.clone()).collect();
     app.workspaces = list
         .iter()
         .enumerate()
-        .map(|(i, w)| Workspace { name: w.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty()).map(String::from).unwrap_or_else(|| if i == 0 { "Default".into() } else { format!("Workspace {}", i + 1) }), saved: None })
+        .map(|(i, w)| Workspace {
+            name: w.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty()).map(String::from).unwrap_or_else(|| if i == 0 { "Default".into() } else { format!("Workspace {}", i + 1) }),
+            conns: if has_lists {
+                w.get("conns").and_then(Value::as_array).into_iter().flatten().filter_map(|x| x.as_str().map(String::from)).collect()
+            } else if i == 0 {
+                all.clone()
+            } else {
+                vec![]
+            },
+            saved: None,
+        })
         .collect();
     // 지금 것이 아닌 워크스페이스: 되살려서 보관 (보일 때 불러온다)
     for (i, w) in list.iter().enumerate() {
@@ -180,6 +194,7 @@ impl App {
     /// 지금 화면의 탭·분할을 떼어 낸다 (보관용). 화면은 빈다
     pub fn take_live(&mut self) -> WsSaved {
         let s = WsSaved {
+            tree: std::mem::take(&mut self.tree),
             tabs: std::mem::take(&mut self.tabs),
             active: self.active,
             mru: std::mem::take(&mut self.mru),
@@ -191,6 +206,7 @@ impl App {
     }
 
     fn put_live(&mut self, s: WsSaved) {
+        self.tree = s.tree;
         self.tabs = s.tabs;
         self.active = s.active;
         self.mru = s.mru;
@@ -208,6 +224,7 @@ impl App {
         let s = self.workspaces[i].saved.take().unwrap_or_default();
         self.cur_ws = i;
         self.put_live(s);
+        self.rebuild_roots();
         self.show_visible();
         self.status = format!("Workspace {} · {} ({} tab(s))", i + 1, self.workspaces[i].name, self.tabs.len());
     }
@@ -220,7 +237,7 @@ impl App {
             if name.is_empty() {
                 return;
             }
-            a.workspaces.push(Workspace { name: name.into(), saved: Some(WsSaved::default()) });
+            a.workspaces.push(Workspace { name: name.into(), conns: vec![], saved: Some(WsSaved::default()) });
             a.ws_switch(a.workspaces.len() - 1);
         });
     }
@@ -260,6 +277,7 @@ impl App {
                 let s = a.workspaces[to].saved.take().unwrap_or_default();
                 a.cur_ws = to;
                 a.put_live(s);
+                a.rebuild_roots();
                 a.show_visible();
                 a.status = format!("Workspace {} · {}", to + 1, a.workspaces[to].name);
             }),
@@ -318,9 +336,16 @@ impl App {
                     if name.trim().is_empty() {
                         return;
                     }
-                    a.workspaces.push(Workspace { name: name.trim().into(), saved: Some(WsSaved::default()) });
+                    a.workspaces.push(Workspace { name: name.trim().into(), conns: vec![], saved: Some(WsSaved::default()) });
                     a.ws_move(id, a.workspaces.len() - 1);
                 });
+            }
+            (Flow::WsAddConn, id) => {
+                let i = self.cur_ws;
+                if !self.workspaces[i].conns.iter().any(|c| c == id) {
+                    self.workspaces[i].conns.push(id.to_string());
+                }
+                self.rebuild_roots();
             }
             (Flow::WsMove(id), v) => {
                 if let Ok(i) = v.parse() {
@@ -329,6 +354,35 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// ⌃K › Add Data Source to Workspace…: 이 워크스페이스 탐색기에 없는 Data Source 고르기
+    pub fn ws_add_conn_pick(&mut self) {
+        let mine = &self.workspaces[self.cur_ws].conns;
+        let items: Vec<PItem> = self
+            .conns
+            .iter()
+            .filter(|c| !mine.contains(&c.config.id))
+            .map(|c| PItem { label: c.config.name.clone(), hint: format!("{:?}", c.config.kind).to_lowercase(), action: PAction::Pick(c.config.id.clone()) })
+            .collect();
+        if items.is_empty() {
+            self.status = "Every data source is already in this workspace — n in the explorer makes a new one".into();
+            return;
+        }
+        self.flow = Some(crate::migrate::Flow::WsAddConn);
+        self.popup = Some(Popup::Palette(Palette { title: "Add to this workspace's explorer".into(), input: tui_textarea::TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
+    }
+
+    /// ⌃K › Remove Data Source from Workspace: 탐색기에서 고른 Data Source 를 이 워크스페이스에서 뺀다 (Data Source 는 그대로)
+    pub fn ws_remove_conn(&mut self) {
+        let Some(conn) = self.tree.selected().map(|n| n.conn.clone()) else {
+            self.status = "Select a data source in the explorer first".into();
+            return;
+        };
+        let i = self.cur_ws;
+        self.workspaces[i].conns.retain(|c| *c != conn);
+        self.rebuild_roots();
+        self.status = format!("Removed from {} (the data source itself is kept)", self.workspaces[i].name);
     }
 
     /// 탭을 다른 워크스페이스로 (세션 그대로). 그 워크스페이스의 첫 칸 맨 뒤에, 보이는 탭으로
@@ -430,5 +484,57 @@ mod tests {
         assert_eq!(h2.app.workspaces.len(), 1);
         assert_eq!(titles(&h2), ["items"]);
         assert!(!h2.screen(100, 20).contains("1 Reports"), "one workspace: no strip");
+    }
+
+    fn roots(h: &Harness) -> Vec<String> {
+        h.app.tree.roots.iter().map(|n| n.conn.clone()).collect()
+    }
+
+    #[tokio::test]
+    async fn each_workspace_has_its_own_explorer() {
+        let mut h = harness().await;
+        assert_eq!(roots(&h), ["test"], "existing data sources start in Default");
+        h.app.ws_new();
+        h.key("Enter");
+        assert!(roots(&h).is_empty(), "a new workspace starts with an empty explorer");
+        // 있던 Data Source 를 넣는다
+        h.app.ws_add_conn_pick();
+        h.key("Enter");
+        assert_eq!(roots(&h), ["test"]);
+        // 이 워크스페이스에서만 뺀다
+        h.app.ws_remove_conn();
+        assert!(roots(&h).is_empty());
+        h.key("Alt+1");
+        assert_eq!(roots(&h), ["test"], "Default keeps it");
+        // 새 Data Source 는 지금 워크스페이스로 (Alt+2 에서 만들면 거기)
+        h.key("Alt+2");
+        let cfg = serde_json::from_value(serde_json::json!({ "id": "new", "name": "new", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "postgres" })).unwrap();
+        h.app.state.save_connection(cfg, None, None).await.unwrap();
+        h.app.reload_conns();
+        h.settle().await;
+        assert_eq!(roots(&h), ["new"]);
+        h.key("Alt+1");
+        assert_eq!(roots(&h), ["test"]);
+        // 저장 → 되살리기: 워크스페이스마다 목록
+        let v = super::to_json(&h.app);
+        let mut h2 = harness().await;
+        h2.app.state.save_connection(serde_json::from_value(serde_json::json!({ "id": "new", "name": "new", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "postgres" })).unwrap(), None, None).await.unwrap();
+        h2.app.reload_conns();
+        h2.settle().await;
+        super::restore(&mut h2.app, &v);
+        h2.app.rebuild_roots();
+        assert_eq!(roots(&h2), ["test"]);
+        h2.key("Alt+2");
+        assert_eq!(roots(&h2), ["new"]);
+        // 예전 저장 파일 (목록 없음): 첫 워크스페이스가 전부
+        let mut old = v.clone();
+        for w in old["workspaces"].as_array_mut().unwrap() {
+            w.as_object_mut().unwrap().remove("conns");
+        }
+        let mut h3 = harness().await;
+        super::restore(&mut h3.app, &old);
+        h3.app.rebuild_roots();
+        assert_eq!(h3.app.workspaces[1].conns, Vec::<String>::new());
+        assert_eq!(h3.app.workspaces[0].conns, ["test"]);
     }
 }

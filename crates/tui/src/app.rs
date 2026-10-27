@@ -346,6 +346,8 @@ pub enum Action {
     WsRename,
     WsDelete,
     WsMoveTab,
+    WsAddConn,
+    WsRemoveConn,
     Find,
     DbaReports,
     BackupDb,
@@ -420,6 +422,8 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::WsRename, "Rename Workspace…", ""),
     (Action::WsDelete, "Delete Workspace…", ""),
     (Action::WsMoveTab, "Move Tab to Workspace…", ""),
+    (Action::WsAddConn, "Add Data Source to This Workspace…", ""),
+    (Action::WsRemoveConn, "Remove Data Source from This Workspace", ""),
     (Action::Find, "Find / Replace in Editor (regex)", ""),
     (Action::QueryHistory, "Query History… (shared with the GUI)", ""),
     (Action::Snippets, "Snippets…", ""),
@@ -527,6 +531,8 @@ pub struct Hits {
 
 /// 지금 것이 아닌 워크스페이스의 탭·화면 분할 (탭 객체 그대로: 콘솔 세션·트랜잭션·결과가 남는다)
 pub struct WsSaved {
+    /// 이 워크스페이스의 탐색기 (펼친 상태·선택)
+    pub tree: Tree,
     pub tabs: Vec<Tab>,
     pub active: usize,
     pub mru: Vec<u64>,
@@ -536,13 +542,15 @@ pub struct WsSaved {
 
 impl Default for WsSaved {
     fn default() -> Self {
-        WsSaved { tabs: vec![], active: 0, mru: vec![], panes: crate::panes::Pane::Leaf(0), group_active: [None; crate::panes::MAX] }
+        WsSaved { tree: Tree::default(), tabs: vec![], active: 0, mru: vec![], panes: crate::panes::Pane::Leaf(0), group_active: [None; crate::panes::MAX] }
     }
 }
 
 /// 워크스페이스 (crate::workspace): 이름 + 지금 것이 아니면 보관한 탭들
 pub struct Workspace {
     pub name: String,
+    /// 이 워크스페이스의 탐색기에 보일 Data Source id
+    pub conns: Vec<String>,
     pub saved: Option<WsSaved>,
 }
 
@@ -676,7 +684,7 @@ impl App {
             saved_ws: String::new(),
             next_id: 1,
             exec: Default::default(),
-            workspaces: vec![Workspace { name: "Default".into(), saved: None }],
+            workspaces: vec![Workspace { name: "Default".into(), conns: vec![], saved: None }],
             cur_ws: 0,
         };
         if let Some(e) = keys_err {
@@ -710,37 +718,56 @@ impl App {
         let st = self.state.clone();
         self.spawn(async move { st.list_connections().await.map_err(err) }, |a, r| match r {
             Ok(cs) => {
-                a.tree.roots = cs
-                    .iter()
-                    .map(|c| Node {
-                        key: c.config.id.clone(),
-                        label: c.config.name.clone(),
-                        hint: format!("{:?}", c.config.kind).to_lowercase() + if c.config.active_ssh().is_some() { " · ssh" } else { "" },
-                        kind: NodeKind::Conn,
-                        conn: c.config.id.clone(),
-                        db: None,
-                        schema: None,
-                        name: None,
-                        expandable: true,
-                    })
-                    .collect();
                 // 방금 접속된 Data Source: 접속 실패로 비어 있던 테이블 탭을 다시 불러온다
                 let back: Vec<String> = cs.iter().filter(|c| c.connected && a.conn(&c.config.id).is_some_and(|o| !o.connected)).map(|c| c.config.id.clone()).collect();
                 a.conns = cs;
-                a.tree.clamp();
-                for c in back {
-                    a.retry_failed_tables(&c);
-                }
-                if !a.restored {
+                let first = !a.restored;
+                if first {
                     a.restored = true;
                     if let Some(v) = a.state.store.workspace("tui") {
                         crate::workspace::restore(a, &v);
                     }
+                }
+                a.ws_adopt_orphans();
+                a.rebuild_roots();
+                if first {
                     a.saved_ws = crate::workspace::to_json(a).to_string();
+                }
+                for c in back {
+                    a.retry_failed_tables(&c);
                 }
             }
             Err(e) => a.status = format!("Failed to load data sources: {e}"),
         });
+    }
+
+    /// 탐색기 맨 위: 지금 워크스페이스의 Data Source 만 (워크스페이스에 넣은 순서)
+    pub fn rebuild_roots(&mut self) {
+        let mine = &self.workspaces[self.cur_ws].conns;
+        self.tree.roots = mine
+            .iter()
+            .filter_map(|id| self.conns.iter().find(|c| &c.config.id == id))
+            .map(|c| Node {
+                key: c.config.id.clone(),
+                label: c.config.name.clone(),
+                hint: format!("{:?}", c.config.kind).to_lowercase() + if c.config.active_ssh().is_some() { " · ssh" } else { "" },
+                kind: NodeKind::Conn,
+                conn: c.config.id.clone(),
+                db: None,
+                schema: None,
+                name: None,
+                expandable: true,
+            })
+            .collect();
+        self.tree.clamp();
+    }
+
+    /// 어느 워크스페이스에도 없는 Data Source (방금 만든 것, GUI 에서 만든 것) → 지금 워크스페이스로
+    pub fn ws_adopt_orphans(&mut self) {
+        let known: HashSet<String> = self.workspaces.iter().flat_map(|w| w.conns.iter().cloned()).collect();
+        let orphans: Vec<String> = self.conns.iter().map(|c| c.config.id.clone()).filter(|id| !known.contains(id)).collect();
+        let cur = self.cur_ws;
+        self.workspaces[cur].conns.extend(orphans);
     }
 
     fn default_db(&self, conn: &str) -> String {
@@ -2583,6 +2610,8 @@ impl App {
             Action::WsRename => self.ws_rename(),
             Action::WsDelete => self.ws_delete(),
             Action::WsMoveTab => self.ws_pick(true),
+            Action::WsAddConn => self.ws_add_conn_pick(),
+            Action::WsRemoveConn => self.ws_remove_conn(),
             Action::CancelTransfer => {
                 for (id, ..) in &self.jobs {
                     self.state.cancel_job(id);

@@ -5,6 +5,8 @@ import { ContextMenu, MenuItem } from "./Explorer";
 export interface WorkspaceInfo {
   id: string;
   name: string;
+  /** 이 워크스페이스의 탐색기에 보일 Data Source */
+  connIds: string[];
 }
 
 /** 맨 왼쪽 얇은 워크스페이스 목록 (Orca 처럼): 고르면 그 워크스페이스의 탭·분할 화면으로. 우클릭 = 이름 바꾸기·지우기 */
@@ -46,7 +48,10 @@ export function WorkspaceBar(p: {
         </button>
       ))}
       <button className="ws-add" title="New Workspace" onClick={p.onNew}>
-        +
+        {/* 글자 '+' 는 글꼴 기준선 때문에 가운데에 오지 않는다 */}
+        <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M6 1v10M1 6h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
       </button>
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
     </div>

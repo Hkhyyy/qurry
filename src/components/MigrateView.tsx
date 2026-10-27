@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { ask, askText } from "../lib/dialogs";
 import { ConnectionView, DataDiff, meta, migrate, Migration, SchemaChange, targetId } from "../lib/api";
 
 /** 비교·마이그레이션 대상: Data Source · DB · 스키마 (· 테이블) */
@@ -149,7 +150,7 @@ export function MigrateView(p: { conns: ConnectionView[]; initialConnId: string;
               onClick={async () => {
                 const d = dir ?? (await chooseDir());
                 if (!d) return;
-                const name = prompt("Migration name", `sync ${schemaOf(sc, src)} to ${schemaOf(dc, dst)}`);
+                const name = (await askText("Migration name", `sync ${schemaOf(sc, src)} to ${schemaOf(dc, dst)}`));
                 if (name) p.onStatus(`Saved ${await migrate.save(d, name, pickedSql + "\n")}`);
               }}
             >
@@ -210,9 +211,9 @@ export function MigrateView(p: { conns: ConnectionView[]; initialConnId: string;
             <button
               className="primary"
               disabled={!dir || busy || !migs?.some((m) => m.status === "pending")}
-              onClick={() => {
+              onClick={async () => {
                 const pending = migs!.filter((m) => m.status === "pending");
-                if (!dc || !confirm(`Apply ${pending.length} migration(s) to "${dc.name}"?\n\n${pending.map((m) => `V${m.version} ${m.description}`).join("\n")}`)) return;
+                if (!dc || !(await ask(`Apply ${pending.length} migration(s) to "${dc.name}"?\n\n${pending.map((m) => `V${m.version} ${m.description}`).join("\n")}`))) return;
                 run(async () => {
                   const done = await migrate.apply(tid(dc, dst), dir!);
                   p.onStatus(`Applied ${done.length} migration(s)`);
