@@ -37,6 +37,11 @@ impl DbKind {
         }
     }
 
+    /// DB 가 곧 스키마 (트리에 스키마 단계가 없다)
+    pub fn flat(self) -> bool {
+        matches!(self, DbKind::Mysql | DbKind::Redis | DbKind::Sqlite | DbKind::Clickhouse | DbKind::Mongodb)
+    }
+
     /// 파일 하나가 DB 인 것 (호스트·포트 대신 파일 경로)
     pub fn is_file(self) -> bool {
         matches!(self, DbKind::Sqlite | DbKind::Duckdb)
@@ -149,6 +154,9 @@ pub struct ConnOptions {
     /// Production: 데이터를 바꾸는 문장은 바뀔 행 수를 보여 주고 확인을 받는다
     #[serde(default)]
     pub confirm_changes: bool,
+    /// Oracle: Instant Client 폴더 (비면 ORACLE_CLIENT_LIB_DIR · 시스템 기본)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oracle_client: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]

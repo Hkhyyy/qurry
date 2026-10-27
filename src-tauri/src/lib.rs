@@ -93,6 +93,8 @@ pub fn run() {
             commands::export_data,
             commands::cancel_job,
             commands::dba_reports,
+            commands::driver_status,
+            commands::install_driver,
             commands::backup_db,
             commands::restore_db,
             commands::compare_schemas,

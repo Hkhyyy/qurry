@@ -1,7 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { DataFormat } from "./transfer";
 
-export type DbKind = "postgres" | "mysql" | "redis";
+export type DbKind = "postgres" | "mysql" | "redis" | "sqlite" | "duckdb" | "mssql" | "clickhouse" | "mongodb" | "oracle";
+/** 따로 받는 드라이버 플러그인으로 붙는 DB */
+export const PLUGIN_KINDS: DbKind[] = ["sqlite", "duckdb", "mssql", "clickhouse", "mongodb", "oracle"];
+/** 파일 하나가 DB (호스트·포트 대신 파일 경로) */
+export const isFileKind = (k: DbKind) => k === "sqlite" || k === "duckdb";
+/** 드라이버가 없을 때 백엔드 오류의 앞부분 */
+export const DRIVER_MISSING = "Driver not installed:";
 
 export interface ConnectionConfig {
   id: string;
@@ -51,6 +57,8 @@ export interface ConnOptions {
   /** Production: 바꾸는 문장은 바뀔 행 수를 보여 주고 확인 */
   confirmChanges?: boolean;
   startupScript?: string;
+  /** Oracle Instant Client 폴더 */
+  oracleClient?: string | null;
 }
 
 export interface SshConfig {
@@ -159,6 +167,9 @@ export const api = {
   txState: (tabId: string) => invoke<boolean>("tx_state", { tabId }),
   trustSshHost: (host: string, port: number) => invoke<string>("trust_ssh_host", { host, port }),
   /** 실행 전 확인할 위험 문장이면 이유 (WHERE 없는 UPDATE/DELETE, DROP, TRUNCATE, Redis FLUSH*·DEL) */
+  /** 드라이버 플러그인이 깔려 있는지 (기본 DB 는 null) · 받아 깔기 */
+  driverStatus: (kind: DbKind) => invoke<boolean | null>("driver_status", { kind }),
+  installDriver: (kind: DbKind) => invoke<string>("install_driver", { kind }),
   unsafeReason: (kind: DbKind, sql: string) => invoke<string | null>("unsafe_reason", { kind, sql }),
 };
 
@@ -289,8 +300,18 @@ export const COLOR_PRESETS: { name: string; value: string | null }[] = [
   { name: "Gray", value: "#45474d" },
 ];
 
-export const DEFAULT_PORT: Record<DbKind, number> = { postgres: 5432, mysql: 3306, redis: 6379 };
-export const KIND_LABEL: Record<DbKind, string> = { postgres: "PostgreSQL", mysql: "MySQL", redis: "Redis" };
+export const DEFAULT_PORT: Record<DbKind, number> = { postgres: 5432, mysql: 3306, redis: 6379, sqlite: 0, duckdb: 0, mssql: 1433, clickhouse: 8123, mongodb: 27017, oracle: 1521 };
+export const KIND_LABEL: Record<DbKind, string> = {
+  postgres: "PostgreSQL",
+  mysql: "MySQL / MariaDB",
+  redis: "Redis",
+  sqlite: "SQLite",
+  duckdb: "DuckDB",
+  mssql: "SQL Server",
+  clickhouse: "ClickHouse",
+  mongodb: "MongoDB",
+  oracle: "Oracle",
+};
 
 /** 데이터 편집 SQL에 쓰는 리터럴. PG가 컬럼 타입으로 캐스팅한다. */
 export const sqlLiteral = (v: Cell) => (v === null ? "NULL" : `'${String(v).replace(/'/g, "''")}'`);
@@ -329,7 +350,10 @@ const RD: Dialect = {
     return out;
   },
 };
-export const dialectOf = (kind?: DbKind) => (kind === "mysql" ? MY : kind === "redis" ? RD : PG);
+/** 드라이버 DB: 표준 SQL 따옴표, 글 변환은 CAST (PG 의 ::text 는 쓰지 않는다) */
+const GEN: Dialect = { ...PG, text: (e) => `CAST(${e} AS VARCHAR(4000))`, monaco: "sql" };
+const MONGO: Dialect = { q: (s) => s, lit: sqlLiteral, text: (e) => e, monaco: "javascript", split: RD.split };
+export const dialectOf = (kind?: DbKind) => (kind === "mysql" ? MY : kind === "redis" ? RD : kind === "mongodb" ? MONGO : kind && PLUGIN_KINDS.includes(kind) ? GEN : PG);
 
 /** 백엔드 접속 대상: Data Source id + DB 이름 */
 export const targetId = (connId: string, database?: string | null) => (database ? `${connId}::${database}` : connId);

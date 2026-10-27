@@ -125,6 +125,84 @@ impl PluginConn {
     }
 }
 
+/// 이 플랫폼의 릴리스 이름 끝 (드라이버 파일: qurry-driver-<이름>_<버전>_<타깃>.tar.gz)
+pub fn target() -> Option<&'static str> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => Some("aarch64-apple-darwin"),
+        ("macos", "x86_64") => Some("x86_64-apple-darwin"),
+        ("linux", "x86_64") => Some("x86_64-unknown-linux-gnu"),
+        _ => None,
+    }
+}
+
+/// 릴리스의 드라이버 파일 이름
+pub fn asset_name(driver: &str, version: &str, target: &str) -> String {
+    format!("qurry-driver-{driver}_{version}_{target}.tar.gz")
+}
+
+/// 드라이버를 받아 깐다: 이 버전 릴리스에서 HTTPS 로 받고, SHA256SUMS 서명(업데이트와 같은 키)과 해시를 확인한 뒤 drivers 폴더로. 깐 경로
+pub async fn install(driver: &str) -> AppResult<PathBuf> {
+    let driver = driver.to_string();
+    tokio::task::spawn_blocking(move || install_blocking(&driver, env!("CARGO_PKG_VERSION"))).await.map_err(|e| AppError::Msg(e.to_string()))?
+}
+
+fn install_blocking(driver: &str, version: &str) -> AppResult<PathBuf> {
+    if !driver.chars().all(|c| c.is_ascii_lowercase()) {
+        return Err(AppError::Msg(format!("bad driver name: {driver}")));
+    }
+    let target = target().ok_or_else(|| AppError::Msg("Drivers are built for macOS (Apple Silicon, Intel) and x86_64 Linux".into()))?;
+    let base = format!("https://github.com/{}/releases/download/v{version}/", crate::update::REPO);
+    let tmp = std::env::temp_dir().join(format!("qurry-driver-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&tmp)?;
+    let get = |name: &str| -> AppResult<PathBuf> {
+        let to = tmp.join(name);
+        let out = std::process::Command::new("curl")
+            .args(["-fsSL", "--proto", "=https", "--proto-redir", "=https", "--tlsv1.2", "--max-time", "600", "-o"])
+            .arg(&to)
+            .arg(format!("{base}{name}"))
+            .output()
+            .map_err(|e| AppError::Msg(format!("curl: {e}")))?;
+        if !out.status.success() {
+            return Err(AppError::Msg(format!("Could not download {name}: {}", String::from_utf8_lossy(&out.stderr).trim())));
+        }
+        Ok(to)
+    };
+    let r = (|| {
+        let asset = asset_name(driver, version, target);
+        let sums = std::fs::read(get("SHA256SUMS")?)?;
+        let sig = std::fs::read_to_string(get("SHA256SUMS.sig")?)?;
+        crate::update::verify_sums(&sums, &sig).map_err(|e| AppError::Msg(format!("SHA256SUMS {e} — the driver was not installed")))?;
+        let tgz = get(&asset)?;
+        let want = crate::update::expected_sha(&String::from_utf8_lossy(&sums), &asset).ok_or_else(|| AppError::Msg(format!("{asset} is not in this release")))?;
+        if crate::update::sha256_of(&tgz)? != want {
+            return Err(AppError::Msg(format!("{asset} doesn't match its checksum — not installed")));
+        }
+        let st = std::process::Command::new("tar").arg("-xzf").arg(&tgz).arg("-C").arg(&tmp).status()?;
+        if !st.success() {
+            return Err(AppError::Msg(format!("Could not unpack {asset}")));
+        }
+        let exe = tmp.join(exe_name(driver));
+        if !exe.is_file() {
+            return Err(AppError::Msg(format!("{asset} has no {}", exe_name(driver))));
+        }
+        let dir = drivers_dir();
+        std::fs::create_dir_all(&dir)?;
+        let dest = dir.join(exe_name(driver));
+        // 바꿔 넣기: 임시 이름으로 옮긴 뒤 rename (쓰는 중인 드라이버가 깨지지 않게)
+        let part = dir.join(format!("{}.part", exe_name(driver)));
+        std::fs::copy(&exe, &part)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&part, std::fs::Permissions::from_mode(0o755))?;
+        }
+        std::fs::rename(&part, &dest)?;
+        Ok(dest)
+    })();
+    let _ = std::fs::remove_dir_all(&tmp);
+    r
+}
+
 /// 드라이버로 접속한다
 pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, port: Option<u16>) -> AppResult<std::sync::Arc<PluginConn>> {
     let driver = cfg.kind.driver().ok_or_else(|| AppError::Msg(format!("{:?} has no driver plugin", cfg.kind)))?;
@@ -135,7 +213,7 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, port: Optio
         user: cfg.user.clone(),
         password: password.map(String::from),
         database: cfg.database.clone(),
-        options: json!({ "readOnly": cfg.read_only, "ssl": cfg.active_ssl().map(|s| s.mode().to_string()) }),
+        options: json!({ "readOnly": cfg.read_only, "ssl": cfg.active_ssl().map(|s| s.mode().to_string()), "oracleClient": cfg.options.oracle_client }),
     };
     let _: Value = c.call("connect", serde_json::to_value(params)?).await?;
     Ok(c)
@@ -289,6 +367,20 @@ mod tests {
             "INSERT INTO q_child VALUES (1, 1, 'x')",
             "INSERT INTO q_child VALUES (2, 2, NULL)",
         ], "q_parent", "q_child", true).await;
+    }
+
+    #[test]
+    fn driver_asset_names() {
+        assert_eq!(asset_name("sqlite", "0.2.0", "aarch64-apple-darwin"), "qurry-driver-sqlite_0.2.0_aarch64-apple-darwin.tar.gz");
+        assert!(install_blocking("../evil", "0.2.0").unwrap_err().to_string().contains("bad driver name"));
+    }
+
+    /// 없는 버전의 릴리스에서는 받지 못한다 (네트워크가 있을 때만 의미가 있다)
+    #[test]
+    #[ignore]
+    fn install_fails_cleanly_for_a_missing_release() {
+        let e = install_blocking("sqlite", "0.0.0-nope").unwrap_err().to_string();
+        assert!(e.contains("Could not download"), "{e}");
     }
 
     #[tokio::test]

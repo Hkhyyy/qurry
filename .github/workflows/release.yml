@@ -73,6 +73,7 @@ jobs:
       V: ${{ needs.version.outputs.version }}
       T: ${{ matrix.target }}
       A: ${{ matrix.arch }}
+      DRIVERS: sqlite duckdb clickhouse mssql mongodb oracle
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -103,7 +104,7 @@ jobs:
 
       - name: Set version in manifests
         run: |
-          for f in crates/core/Cargo.toml crates/tui/Cargo.toml crates/mcp/Cargo.toml src-tauri/Cargo.toml; do
+          for f in crates/core/Cargo.toml crates/tui/Cargo.toml crates/mcp/Cargo.toml crates/driver/Cargo.toml src-tauri/Cargo.toml drivers/*/Cargo.toml; do
             perl -0pi -e 's/^version = "[^"]*"/version = "$ENV{V}"/m' "$f"
           done
           for f in package.json src-tauri/tauri.conf.json; do
@@ -122,6 +123,13 @@ jobs:
 
       - name: Build TUI and MCP
         run: cargo build --release --locked --target "$T" -p qurry-tui -p qurry-mcp
+
+      - name: Build drivers
+        # DB 드라이버 플러그인: 앱에는 넣지 않고, 연결을 만들 때 이 릴리스에서 받는다 (SHA256SUMS 서명으로 확인)
+        run: |
+          args=""
+          for d in $DRIVERS; do args="$args -p qurry-driver-$d"; done
+          cargo build --release --locked --target "$T" $args
 
       - name: Package
         run: |
@@ -148,6 +156,9 @@ jobs:
           else
             tar -czf "out/qurry-cli_${V}_${T}.tar.gz" -C cli qurry-tui qurry-mcp
           fi
+          for d in $DRIVERS; do
+            tar -czf "out/qurry-driver-${d}_${V}_${T}.tar.gz" -C "target/$T/release" "qurry-driver-$d"
+          done
           ls -la out
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

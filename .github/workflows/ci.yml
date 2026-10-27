@@ -35,6 +35,21 @@ jobs:
           MYSQL_DATABASE: shop
         ports: ["13306:3306"]
         options: --health-cmd "mysqladmin ping -h 127.0.0.1 -pdbtool" --health-interval 2s --health-retries 60
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.8
+        env:
+          CLICKHOUSE_USER: qurry
+          CLICKHOUSE_PASSWORD: pw
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+        ports: ["18123:8123"]
+        options: --health-cmd "wget -qO- http://127.0.0.1:8123/ping" --health-interval 2s --health-retries 60
+      mongo:
+        image: mongo:7
+        env:
+          MONGO_INITDB_ROOT_USERNAME: qurry
+          MONGO_INITDB_ROOT_PASSWORD: pw
+        ports: ["17017:27017"]
+        options: --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1})'" --health-interval 2s --health-retries 60
       redis:
         image: redis:7-alpine
         ports: ["16379:6379"]
@@ -48,6 +63,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
+      - name: Build drivers (plugin tests run against them)
+        run: cargo build --locked -p qurry-driver-sqlite -p qurry-driver-duckdb -p qurry-driver-clickhouse -p qurry-driver-mongodb
+
       - name: Unit tests
         run: cargo test --locked -p qurry-core -p qurry-tui -p qurry-mcp
 
@@ -58,6 +76,8 @@ jobs:
           QURRY_TEST_PG: localhost:5432:postgres:postgres
           QURRY_TEST_PG_USER: postgres
           QURRY_TEST_MY: localhost:13306:root:dbtool:shop
+          QURRY_TEST_CH: localhost:18123:qurry:pw:default
+          QURRY_TEST_MONGO: localhost:17017:qurry:pw:qurrytest
         run: cargo test --locked -p qurry-core -- --ignored --skip ssl --skip tls --skip sentinel --skip cluster --skip ssh_tunnel
 
   web:

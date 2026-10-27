@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { api, COLOR_PRESETS, ConnOptions, RedisMode, SslConfig, ConnectionConfig, ConnectionView, DbKind, DEFAULT_PORT, KIND_LABEL, meta, SchemaInfo, SshConfig, targetId } from "../lib/api";
+import { api, COLOR_PRESETS, ConnOptions, RedisMode, SslConfig, ConnectionConfig, ConnectionView, DbKind, DEFAULT_PORT, DRIVER_MISSING, isFileKind, KIND_LABEL, meta, SchemaInfo, SshConfig, targetId } from "../lib/api";
 
 interface Props {
   edit?: ConnectionView;
@@ -8,7 +8,6 @@ interface Props {
   onSaved: (saved: ConnectionConfig) => void;
 }
 
-const SUPPORTED: DbKind[] = ["postgres", "mysql", "redis"];
 const EMPTY_SSH: SshConfig = { enabled: false, host: "", port: 22, user: "", auth: "key", keyPath: "~/.ssh/id_ed25519" };
 
 export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
@@ -26,6 +25,30 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   const [sshSecret, setSshSecret] = useState<string | undefined>(undefined);
   const [test, setTest] = useState<{ ok: boolean; msg: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  // 드라이버 플러그인: 깔려 있는지 (null = 기본으로 들어 있는 DB)
+  const [driver, setDriver] = useState<boolean | null>(null);
+  const [installing, setInstalling] = useState(false);
+  useEffect(() => {
+    api.driverStatus(cfg.kind).then(setDriver, () => setDriver(null));
+  }, [cfg.kind]);
+  const installDriver = async () => {
+    setInstalling(true);
+    setTest(null);
+    try {
+      await api.installDriver(cfg.kind);
+      setDriver(true);
+      setTest({ ok: true, msg: `${KIND_LABEL[cfg.kind]} driver installed` });
+    } catch (e) {
+      setTest({ ok: false, msg: String(e) });
+    } finally {
+      setInstalling(false);
+    }
+  };
+  const fileDb = isFileKind(cfg.kind);
+  const pickDbFile = async () => {
+    const p = await open({ multiple: false });
+    if (typeof p === "string") setCfg((c) => ({ ...c, database: p, name: c.name || p.split(/[\\/]/).pop() || "" }));
+  };
 
   const ssh = cfg.ssh ?? EMPTY_SSH;
   const opt: ConnOptions = cfg.options ?? {};
@@ -99,27 +122,47 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
               }}
             >
               {(Object.keys(KIND_LABEL) as DbKind[]).map((k) => (
-                <option key={k} value={k} disabled={!SUPPORTED.includes(k)}>
+                <option key={k} value={k}>
                   {KIND_LABEL[k]}
-                  {SUPPORTED.includes(k) ? "" : " (coming soon)"}
                 </option>
               ))}
             </select>
-            <label>Host</label>
-            <div className="row">
-              <input className="grow" value={cfg.host} onChange={(e) => set("host", e.target.value)} />
-              <span className="lbl">Port</span>
-              <input className="port" value={cfg.port} onChange={(e) => set("port", Number(e.target.value) || 0)} />
-            </div>
-            <label>User</label>
-            <input value={cfg.user} placeholder={cfg.kind === "redis" ? "(optional, ACL user)" : ""} onChange={(e) => set("user", e.target.value)} />
-            <label>Password</label>
-            <input
-              type="password"
-              value={password ?? ""}
-              placeholder={edit?.hasPassword ? "<saved — leave empty to keep>" : ""}
-              onChange={(e) => setPassword(e.target.value)}
-            />
+            {driver !== null && (
+              <>
+                <label>Plugin</label>
+                <div className="row">
+                  {driver ? (
+                    <span className="lbl">✓ {KIND_LABEL[cfg.kind]} driver installed</span>
+                  ) : (
+                    <>
+                      <span className="lbl">Not installed — downloaded from this version's GitHub release (signature checked)</span>
+                      <button className="small" disabled={installing} onClick={installDriver}>
+                        {installing ? "Installing…" : "Install"}
+                      </button>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
+            {!fileDb && (
+              <>
+                <label>Host</label>
+                <div className="row">
+                  <input className="grow" value={cfg.host} placeholder={cfg.kind === "mongodb" ? "host, or a mongodb:// / mongodb+srv:// URI" : ""} onChange={(e) => set("host", e.target.value)} />
+                  <span className="lbl">Port</span>
+                  <input className="port" value={cfg.port} onChange={(e) => set("port", Number(e.target.value) || 0)} />
+                </div>
+                <label>User</label>
+                <input value={cfg.user} placeholder={cfg.kind === "redis" ? "(optional, ACL user)" : ""} onChange={(e) => set("user", e.target.value)} />
+                <label>Password</label>
+                <input
+                  type="password"
+                  value={password ?? ""}
+                  placeholder={edit?.hasPassword ? "<saved — leave empty to keep>" : ""}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+              </>
+            )}
             {cfg.kind === "redis" && (
               <>
                 <label>Connection</label>
@@ -144,8 +187,28 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
                 )}
               </>
             )}
-            <label>Database</label>
-            <input value={cfg.database} placeholder={cfg.kind === "postgres" ? "postgres" : cfg.kind === "redis" ? "0 (database index)" : ""} onChange={(e) => set("database", e.target.value)} />
+            <label>{fileDb ? "File" : cfg.kind === "oracle" ? "Service name" : "Database"}</label>
+            {fileDb ? (
+              <div className="row">
+                <input className="grow" value={cfg.database} placeholder={cfg.kind === "duckdb" ? "/path/to/data.duckdb (empty = in memory)" : "/path/to/app.db (created if missing)"} onChange={(e) => set("database", e.target.value)} />
+                <button className="small" onClick={pickDbFile}>
+                  Browse…
+                </button>
+              </div>
+            ) : (
+              <input value={cfg.database} placeholder={cfg.kind === "postgres" ? "postgres" : cfg.kind === "redis" ? "0 (database index)" : cfg.kind === "oracle" ? "FREEPDB1, ORCLPDB1 …" : cfg.kind === "mssql" ? "master" : cfg.kind === "clickhouse" ? "default" : ""} onChange={(e) => set("database", e.target.value)} />
+            )}
+            {cfg.kind === "oracle" && (
+              <>
+                <label>Oracle client</label>
+                <div className="row">
+                  <input className="grow" value={opt.oracleClient ?? ""} placeholder="Instant Client folder (empty = ORACLE_CLIENT_LIB_DIR / system default)" onChange={(e) => setOpt("oracleClient", e.target.value || null)} />
+                  <button className="small" onClick={async () => { const p = await open({ directory: true }); if (typeof p === "string") setOpt("oracleClient", p); }}>
+                    Browse…
+                  </button>
+                </div>
+              </>
+            )}
             <label>Color</label>
             <ColorSwatches value={cfg.color ?? null} onChange={(v) => set("color", v)} />
           </div>
@@ -298,6 +361,13 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
             : "Passwords are stored encrypted in the app data folder (no Keychain prompts)."}
         </div>
         {test && <div className={test.ok ? "test-ok" : "test-err"}>{test.ok ? "✓ " : "✕ "}{test.msg}</div>}
+        {test && !test.ok && test.msg.includes(DRIVER_MISSING) && (
+          <div className="modal-actions" style={{ marginTop: 6 }}>
+            <button className="primary" disabled={installing} onClick={installDriver}>
+              {installing ? "Installing…" : `Install the ${KIND_LABEL[cfg.kind]} driver`}
+            </button>
+          </div>
+        )}
         {/* 처음 보는 SSH 서버: 지문을 확인한 뒤 신뢰 → 다시 시험 */}
         {test && !test.ok && test.msg.includes("Unknown SSH host key") && cfg.ssh && (
           <div className="row" style={{ marginTop: 6 }}>

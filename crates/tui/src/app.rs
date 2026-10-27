@@ -732,6 +732,27 @@ impl App {
                 }
                 Err(e) => {
                     a.tree.children.insert(key.clone(), vec![Node::info(&key, "", format!("⚠ {e}"))]);
+                    // 드라이버가 없으면 받을지 묻는다 (받은 뒤 다시 펼친다)
+                    if e.contains(qurry_core::plugin::MISSING) && let Some(d) = kind.driver() {
+                        let k2 = key.clone();
+                        a.popup = Some(Popup::Confirm {
+                            text: format!("The {d} driver isn't installed.\n\nDownload it from this Qurry version's GitHub release (its signature is checked) and connect?"),
+                            on_yes: Box::new(move |a| {
+                                a.status = format!("Installing the {d} driver…");
+                                a.spawn(async move { qurry_core::plugin::install(d).await.map_err(|e| e.to_string()) }, move |a, r| match r {
+                                    Ok(_) => {
+                                        a.status = format!("{d} driver installed");
+                                        a.tree.children.remove(&k2);
+                                        a.tree.expanded.remove(&k2);
+                                        if let Some(n) = a.tree.roots.iter().find(|n| n.key == k2).cloned() {
+                                            a.toggle_node(&n);
+                                        }
+                                    }
+                                    Err(e) => a.status = e,
+                                });
+                            }),
+                        });
+                    }
                     a.status = if e.contains(qurry_core::tunnel::UNKNOWN_HOST) { format!("{e} — Ctrl+K › Trust SSH Host Key") } else { e };
                 }
             }
@@ -780,7 +801,7 @@ impl App {
             NodeKind::Db => {
                 let db = n.db.clone().unwrap();
                 let target = sql::target_id(&conn, Some(&db));
-                let flat = kind != DbKind::Postgres;
+                let flat = kind.flat();
                 self.spawn(
                     async move {
                         let schemas = st.list_schemas(target.clone()).await.map_err(err)?;

@@ -359,6 +359,19 @@ pub async fn preview_impact(state: State<'_, AppState>, id: String, sql: String)
     state.preview_impact(id, sql).await
 }
 
+/// 드라이버 플러그인: 깔려 있는지 (기본으로 들어 있는 DB 면 None)
+#[tauri::command]
+pub fn driver_status(kind: crate::store::DbKind) -> Option<bool> {
+    kind.driver().map(|d| qurry_core::plugin::driver_path(d).is_some())
+}
+
+/// 드라이버를 받아 깐다 (이 버전 릴리스에서, 서명 확인)
+#[tauri::command]
+pub async fn install_driver(kind: crate::store::DbKind) -> AppResult<String> {
+    let d = kind.driver().ok_or_else(|| crate::error::AppError::Msg("This database needs no driver".into()))?;
+    Ok(qurry_core::plugin::install(d).await?.display().to_string())
+}
+
 /// 실행 계획 (EXPLAIN FORMAT JSON) → 트리 + 노드마다 몫(%)·경고
 #[tauri::command]
 pub fn analyze_plan(json: String) -> AppResult<qurry_core::plan::PlanNode> {
