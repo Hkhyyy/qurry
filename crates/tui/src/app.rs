@@ -74,6 +74,8 @@ pub enum Drag {
     Split(usize),
     /// 그리드 가로 스크롤바
     HBar,
+    /// 그리드 범위 선택 (누른 칸부터)
+    Grid,
     /// Database Explorer 오른쪽 경계선
     Explorer,
     /// 탭 (moved = 실제로 끌었는지. 그냥 클릭이면 false)
@@ -2293,7 +2295,7 @@ impl App {
                     self.status = "Open a result or table to copy a column".into();
                     return;
                 };
-                let (text, n) = g.column_in_list(g.col);
+                let (text, n) = g.in_list();
                 crate::input::copy(self, &text);
                 let short: String = text.chars().take(80).collect();
                 self.status = format!("Copied {n} values as an IN list: {short}{}", if text.chars().count() > 80 { "…" } else { "" });

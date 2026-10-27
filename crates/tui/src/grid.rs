@@ -34,6 +34,8 @@ pub struct Grid {
     pub max_off: usize,
     /// 정렬 표시: (열, 내림차순)
     pub sort: Option<(usize, bool)>,
+    /// 범위 선택의 시작 칸 (행, 열). 끝은 지금 칸
+    pub anchor: Option<(usize, usize)>,
     /// 화면 정렬 중이면 각 행의 원래 위치 (정렬 해제 때 되돌린다)
     orig: Vec<usize>,
 }
@@ -75,7 +77,7 @@ fn cmp_cell(a: Option<&Value>, b: Option<&Value>, desc: bool) -> std::cmp::Order
 
 impl Grid {
     pub fn new(result: QueryResult) -> Self {
-        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, orig: vec![] };
+        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, orig: vec![] };
         g.compute_widths();
         g
     }
@@ -151,9 +153,8 @@ impl Grid {
         self.result.rows.get(r).and_then(|row| row.get(c)).and_then(raw_text)
     }
 
-    /// 열 전체를 IN 목록 글과 값 개수로
-    pub fn column_in_list(&self, c: usize) -> (String, usize) {
-        // 숫자 컬럼은 값 그대로 (numeric·bigint 는 글로 온다). 숫자 모양일 때만 (NaN 등은 따옴표)
+    /// 한 칸을 SQL 값으로 (NULL 은 None). 숫자 컬럼은 값 그대로 (numeric·bigint 는 글로 온다), 숫자 모양일 때만 (NaN 등은 따옴표)
+    fn sql_value(&self, r: usize, c: usize) -> Option<String> {
         let ty = self.result.columns.get(c).map(|x| x.type_name.to_lowercase()).unwrap_or_default();
         let head: String = ty.chars().take_while(|ch| ch.is_ascii_alphanumeric()).collect();
         let numeric_col = ["int", "int2", "int4", "int8", "integer", "tinyint", "smallint", "mediumint", "bigint", "serial", "serial4", "serial8", "smallserial", "bigserial", "numeric", "decimal", "real", "float", "float4", "float8", "double", "bool", "boolean", "oid"].contains(&head.as_str());
@@ -162,20 +163,64 @@ impl Grid {
             !t.is_empty() && t.parse::<f64>().is_ok() && t.chars().all(|ch| ch.is_ascii_digit() || ".eE+-".contains(ch))
         };
         let lit = |s: String| if numeric_col && num(&s) { s } else { format!("'{}'", s.replace('\'', "''")) };
+        match self.edits.get(&(r, c)) {
+            Some(v) => v.clone().map(lit),
+            None => match self.result.rows.get(r)?.get(c)? {
+                Value::Null => None,
+                v @ (Value::Number(_) | Value::Bool(_)) => Some(v.to_string()),
+                v => raw_text(v).map(lit),
+            },
+        }
+    }
+
+    /// 범위를 IN 목록 글과 값 개수로. 한 열이면 ('a', 'b'), 여러 열이면 행 묶음 (('a', 1), …). 중복·NULL 은 뺀다
+    fn in_list_of(&self, (r0, c0, r1, c1): (usize, usize, usize, usize)) -> (String, usize) {
         let mut seen = std::collections::HashSet::new();
-        let items: Vec<String> = (0..self.result.rows.len())
-            .filter_map(|r| match self.edits.get(&(r, c)) {
-                Some(v) => v.clone().map(lit),
-                None => match self.result.rows[r].get(c)? {
-                    Value::Null => None,
-                    v @ (Value::Number(_) | Value::Bool(_)) => Some(v.to_string()),
-                    v => raw_text(v).map(lit),
-                },
+        let items: Vec<String> = (r0..=r1.min(self.rows().saturating_sub(1)))
+            .filter_map(|r| {
+                let vals: Vec<Option<String>> = (c0..=c1).map(|c| self.sql_value(r, c)).collect();
+                if vals.iter().all(|v| v.is_none()) {
+                    return None;
+                }
+                let vals: Vec<String> = vals.into_iter().map(|v| v.unwrap_or_else(|| "NULL".into())).collect();
+                Some(if c0 == c1 { vals[0].clone() } else { format!("({})", vals.join(", ")) })
             })
             .filter(|x| seen.insert(x.clone()))
             .collect();
         let n = items.len();
         (format!("({})", if n == 0 { "NULL".into() } else { items.join(", ") }), n)
+    }
+
+    /// 열 전체를 IN 목록으로
+    pub fn column_in_list(&self, c: usize) -> (String, usize) {
+        self.in_list_of((0, c, self.rows().saturating_sub(1), c))
+    }
+
+    /// 고른 범위, 없으면 지금 열 전체를 IN 목록으로
+    pub fn in_list(&self) -> (String, usize) {
+        match self.sel_rect() {
+            Some(r) => self.in_list_of(r),
+            None => self.column_in_list(self.col),
+        }
+    }
+
+    /// 고른 범위 (첫 행, 첫 열, 끝 행, 끝 열). Shift+화살표·끌기로 고른다
+    pub fn sel_rect(&self) -> Option<(usize, usize, usize, usize)> {
+        let (ar, ac) = self.anchor?;
+        Some((ar.min(self.row), ac.min(self.col), ar.max(self.row), ac.max(self.col)))
+    }
+
+    /// 범위를 넓힌다 (처음이면 지금 칸에서 시작)
+    pub fn extend(&mut self, dr: isize, dc: isize) {
+        let anchor = self.anchor.unwrap_or((self.row, self.col));
+        self.move_by(dr, dc);
+        self.anchor = Some(anchor);
+    }
+
+    /// 고른 범위를 TSV 로 (값만, NULL 은 빈 칸): 시트에 칸으로 붙는다
+    pub fn selection_tsv(&self) -> String {
+        let Some((r0, c0, r1, c1)) = self.sel_rect() else { return self.value(self.row, self.col).unwrap_or_default() };
+        (r0..=r1).map(|r| (c0..=c1).map(|c| self.value(r, c).unwrap_or_default()).collect::<Vec<_>>().join("\t")).collect::<Vec<_>>().join("\n")
     }
 
     pub fn dirty(&self) -> bool {
@@ -246,6 +291,7 @@ impl Grid {
     }
 
     pub fn move_by(&mut self, dr: isize, dc: isize) {
+        self.anchor = None;
         let rows = self.rows() as isize;
         let cols = self.cols() as isize;
         if rows > 0 {
@@ -389,6 +435,7 @@ impl Grid {
                 ["INT", "NUMERIC", "DECIMAL", "FLOAT", "DOUBLE", "REAL", "SERIAL", "OID"].iter().any(|k| t.contains(k))
             })
             .collect();
+        let sel = self.sel_rect();
         let end = (self.row_off + body_h).min(self.rows());
         let rows: Vec<Row> = (self.row_off..end)
             .map(|r| {
@@ -415,8 +462,11 @@ impl Grid {
                     if added {
                         st = st.fg(Color::Green);
                     }
+                    let in_sel = sel.is_some_and(|(r0, c0, r1, c1)| r >= r0 && r <= r1 && c >= c0 && c <= c1);
                     if r == self.row && c == self.col {
                         st = st.bg(if focused { Color::Rgb(46, 67, 110) } else { Color::Rgb(50, 52, 56) });
+                    } else if in_sel {
+                        st = st.bg(Color::Rgb(36, 52, 84));
                     } else if r == self.row {
                         st = st.bg(Color::Rgb(38, 40, 46));
                     }
@@ -501,5 +551,23 @@ mod tests {
         assert_eq!(g.column_in_list(0).0, "(1234.50)");
         assert_eq!(g.column_in_list(1).0, "('010')");
         assert_eq!(g.column_in_list(2).0, "('NaN')");
+    }
+    /// Shift+화살표 범위: 직사각형, 복사는 TSV (값만), IN 목록은 고른 칸만 (여러 열이면 행 묶음). 그냥 움직이면 풀린다
+    #[test]
+    fn range_selection_copies_tsv_and_in_list() {
+        let ty = |n: &str, t: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: t.into() };
+        let rows = vec![vec![json!("1.2.3.4"), json!(1)], vec![json!("5.6.7.8"), json!(2)], vec![json!("9.9.9.9"), json!(3)]];
+        let mut g = Grid::new(QueryResult { columns: vec![ty("ip", "TEXT"), ty("n", "INT4")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false });
+        assert_eq!(g.sel_rect(), None);
+        g.extend(1, 0);
+        assert_eq!(g.sel_rect(), Some((0, 0, 1, 0)));
+        assert_eq!(g.in_list(), ("('1.2.3.4', '5.6.7.8')".to_string(), 2));
+        g.extend(0, 1);
+        assert_eq!(g.selection_tsv(), "1.2.3.4\t1\n5.6.7.8\t2");
+        assert_eq!(g.in_list(), ("(('1.2.3.4', 1), ('5.6.7.8', 2))".to_string(), 2));
+        // 그냥 움직이면 풀리고, IN 목록은 지금 열 전체
+        g.move_by(1, 0);
+        assert_eq!(g.sel_rect(), None);
+        assert_eq!(g.in_list(), ("(1, 2, 3)".to_string(), 3));
     }
 }
