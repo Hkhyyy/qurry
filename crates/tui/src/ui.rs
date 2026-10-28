@@ -163,7 +163,7 @@ fn draw_workspaces(f: &mut Frame, app: &mut App, area: Rect) {
         spans.push(Span::raw(" "));
         x += width + 1;
     }
-    spans.push(Span::styled(" Alt+1…9 · ⌃K Switch Workspace", Style::default().fg(Color::DarkGray)));
+    spans.push(Span::styled(disp(" Alt+1…9 · Ctrl+K Switch Workspace"), Style::default().fg(Color::DarkGray)));
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
