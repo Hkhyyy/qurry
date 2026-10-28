@@ -5,9 +5,11 @@ import { registerTextDialog, TextRequest } from "../lib/dialogs";
 export function TextDialog() {
   const [req, setReq] = useState<TextRequest | null>(null);
   const [value, setValue] = useState("");
+  const [choice, setChoice] = useState(0);
   useEffect(() => {
     registerTextDialog((r) => {
       setValue(r.value);
+      setChoice(r.choice ?? 0);
       setReq(r);
     });
     return () => registerTextDialog(null);
@@ -15,7 +17,7 @@ export function TextDialog() {
   if (!req) return null;
   const done = (v: string | null) => {
     setReq(null);
-    req.resolve(v);
+    req.resolve(v, choice);
   };
   return (
     <div className="modal-backdrop text-dialog-backdrop" onMouseDown={() => done(null)}>
@@ -32,6 +34,15 @@ export function TextDialog() {
             if (e.key === "Escape") done(null);
           }}
         />
+        {req.choices && (
+          <div className="text-dialog-choices">
+            {req.choices.map((c, i) => (
+              <label key={c}>
+                <input type="radio" checked={choice === i} onChange={() => setChoice(i)} /> {c}
+              </label>
+            ))}
+          </div>
+        )}
         <div className="modal-actions">
           <button onClick={() => done(null)}>Cancel</button>
           <button className="primary" onClick={() => done(value)}>

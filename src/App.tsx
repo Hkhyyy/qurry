@@ -26,7 +26,7 @@ import { bindings, eventSpec, formatSpec, hit, loadKeymap, onKeymapChange } from
 import { invalidateCompletion } from "./lib/completion";
 import { useStatusWidgets } from "./lib/statusbar";
 import type { FtsRequest } from "./lib/api";
-import { isRelation, NodeInfo, revealInTree } from "./components/SchemaTree";
+import { isRelation, NodeInfo, revealInTree, schemaChanged } from "./components/SchemaTree";
 import { leaf, leaves, MAX_PANES, Pane, prunePanes, splitPane } from "./lib/panes";
 import { connBg, getThemePref, setThemePref, THEME_LABEL, ThemePref, useTheme } from "./lib/theme";
 import { BackupDialog, ExportDialog, ImportDialog, TransferBar, type TransferJob } from "./components/Transfer";
@@ -389,7 +389,7 @@ export default function App() {
   // ───────── 다시 켤 때 되살리기 (workspace-gui.json) ─────────
   const restored = useRef(false);
   const savedWs = useRef("");
-  /** 저장할 내용: 탭(콘솔 SQL·테이블 WHERE/ORDER BY·DDL·Redis)과 분할·칸마다 보이는 탭·포커스 */
+  /** 저장할 내용: 탭(콘솔 SQL·테이블 WHERE/ORDER BY·DDL·Redis·DBA 리포트·다이어그램 스키마)과 분할·칸마다 보이는 탭·포커스 */
   const wsJson = () => {
     const ser = (l: WsLayout) => ({
       tabs: l.tabs.map((t) => ({
@@ -469,7 +469,8 @@ export default function App() {
     const ls0 = leaves(pane0);
     const built: (Tab | null)[] = ws.tabs.map((x: any) => {
       const c = conns.find((cc) => cc.id === x.connId);
-      if (!c || !["console", "table", "ddl", "redis"].includes(x.kind)) return null;
+      // DBA 리포트·다이어그램·비교·RAG 탭도 되살린다 (처음 보일 때 스스로 불러온다)
+      if (!c || !["console", "table", "ddl", "redis", "dba", "erd", "migrate", "rag"].includes(x.kind)) return null;
       const group = ls0.includes(x.group) ? x.group : ls0[0];
       let tableSql: string | undefined;
       if (x.kind === "table" && x.edit) {
@@ -1176,6 +1177,8 @@ export default function App() {
         if (committed > 0) log(tabId, "error", `Note: ${committed} earlier statement${committed > 1 ? "s" : ""} of this run ${committed > 1 ? "were" : "was"} already committed (Auto mode) and ${committed > 1 ? "were" : "was"} not rolled back`);
         // 오류가 나도 트랜잭션이 열려 있을 수 있다 (Manual 첫 문장 실패 등) → Commit/Roll back 버튼을 맞춘다
         api.txState(tabId).then((inTx) => updTab(tabId, (t) => ({ ...t, inTx })), () => {});
+        // 앞 문장 중 DDL 이 이미 반영됐을 수 있다
+        if (!explain && stmts.some((s) => DDL_RE.test(s))) schemaChanged(tab.connId, tab.database ?? (c?.database || (c?.kind === "postgres" ? "postgres" : "")));
         lastActive = "output";
         updTab(tabId, (t) => ({ ...t, running: false, activeResult: "output" }));
         setStatus("Query failed");
@@ -1185,6 +1188,8 @@ export default function App() {
     }
     updTab(tabId, (t) => ({ ...t, running: false, activeResult: lastActive, lastSql: stmts[stmts.length - 1] }));
     setStatus(`${stmts.length} statement${stmts.length > 1 ? "s" : ""} executed`);
+    // 테이블·컬럼을 만들거나 바꾸거나 지웠으면 탐색기에 바로 보이게
+    if (!explain && stmts.some((s) => DDL_RE.test(s))) schemaChanged(tab.connId, tab.database ?? (c?.database || (c?.kind === "postgres" ? "postgres" : "")));
     refresh();
   };
 

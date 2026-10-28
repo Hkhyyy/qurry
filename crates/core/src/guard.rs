@@ -351,8 +351,32 @@ pub fn is_read(sql: &str, kind: DbKind) -> bool {
     READ_WORDS.contains(&first) && !sc.toks.iter().any(|t| t.word && ["insert", "update", "delete", "merge"].contains(&t.text.as_str()))
 }
 
+/// 구조를 바꾸는 문장인지 (실행한 뒤 탐색기 트리를 다시 읽는다). 앞 주석은 건너뛴다
+pub fn is_ddl(sql: &str, kind: DbKind) -> bool {
+    if kind == DbKind::Redis {
+        return false;
+    }
+    let sc = scan(sql, kind);
+    let first = sc.toks.iter().find(|t| t.word).map(|t| t.text.as_str()).unwrap_or("");
+    ["create", "alter", "drop", "truncate", "comment", "rename", "grant", "revoke"].contains(&first)
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn ddl_statements() {
+        let pg = |q: &str| is_ddl(q, DbKind::Postgres);
+        assert!(pg("ALTER TABLE users ADD COLUMN email text"));
+        assert!(pg("-- add_column: users.email\nALTER TABLE users ADD COLUMN email text"));
+        assert!(pg("/* x */ create index i on t(a)"));
+        assert!(pg("drop table t"));
+        assert!(!pg("select 1"));
+        assert!(!pg("update t set a = 1 where id = 2"));
+        assert!(!pg("with x as (select 1) select * from x"));
+        assert!(is_ddl("RENAME TABLE a TO b", DbKind::Mysql));
+        assert!(!is_ddl("DEL key", DbKind::Redis));
+    }
 
     /// PROD 안전장치: 바꿀 행 수를 세는 쿼리. 단순한 UPDATE / DELETE 만 (나머지는 None)
     #[test]

@@ -174,7 +174,7 @@ a { color: var(--c-548af7); cursor: pointer; }
 .empty.pad { padding: 12px 16px; }
 
 .tree { flex: 1; overflow: auto; padding: 4px 0; }
-.tree-node { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; cursor: default; user-select: none; white-space: nowrap; }
+.tree-node { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; cursor: default; -webkit-user-select: none; user-select: none; white-space: nowrap; }
 .tree-node:hover { background: var(--c-33353a); }
 .tree-node.selected { background: var(--sel); }
 .kind-badge { font-size: 9px; font-weight: 700; border-radius: 3px; padding: 1px 3px; color: var(--c-fff); }
@@ -411,7 +411,7 @@ input:disabled, select:disabled { opacity: .45; }
 .cell.head.col-sel { background: var(--c-33405a); }
 .cell.rownum { cursor: default; }
 .cell.rownum.row-sel { background: var(--c-33405a); color: var(--text); }
-.grid-scroll { user-select: none; }
+.grid-scroll { -webkit-user-select: none; user-select: none; }
 .grid-overlay { position: absolute; left: 0; right: 0; top: 64px; text-align: center; padding: 16px; }
 pre.grid-overlay { text-align: left; background: var(--bg); }
 .grid-scroll.transposed { overflow: auto; }
@@ -715,7 +715,7 @@ html, body, #root, * { overscroll-behavior: none; }
 /* ERD */
 .erd { display: flex; flex-direction: column; height: 100%; }
 .erd-bar button { white-space: nowrap; }
-.erd-canvas { flex: 1; min-height: 0; width: 100%; cursor: grab; background: var(--bg); user-select: none; }
+.erd-canvas { flex: 1; min-height: 0; width: 100%; cursor: grab; background: var(--bg); -webkit-user-select: none; user-select: none; }
 .erd-canvas:active { cursor: grabbing; }
 .erd-box { fill: var(--panel); stroke: var(--border); }
 .erd-head { fill: var(--c-2e436e, #2e436e); stroke: var(--border); }
@@ -779,5 +779,8 @@ html, body, #root, * { overscroll-behavior: none; }
 .text-dialog-backdrop { z-index: 400; }
 .text-dialog { width: 420px; }
 .text-dialog input { width: 100%; box-sizing: border-box; margin: 10px 0 14px; }
+.text-dialog-choices { display: flex; flex-direction: column; gap: 6px; margin: -4px 0 14px; }
+.text-dialog-choices label { display: flex; align-items: center; gap: 6px; }
+.text-dialog-choices input { width: auto; margin: 0; }
 .ws-explorer { height: 100%; }
 .ctx-item.muted-label { color: var(--muted); cursor: default; font-size: 11px; }

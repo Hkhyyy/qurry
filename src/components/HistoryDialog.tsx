@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ask, askText } from "../lib/dialogs";
+import { ask, askTextChoice } from "../lib/dialogs";
 import { history, HistoryItem, Snippet } from "../lib/api";
 
 /**
@@ -29,11 +29,10 @@ export function pushHistory(h: { connId: string; database?: string; sql: string 
 export async function saveSnippet(sql: string, connId: string, connName: string): Promise<string | null> {
   const text = sql.trim();
   if (!text) return null;
-  const name = (await askText("Snippet name", text.replace(/\s+/g, " ").slice(0, 40)));
-  if (!name) return null;
-  const onlyHere = (await ask(`Show this snippet only for "${connName}"?\n\nOK = only this data source · Cancel = everywhere`));
-  await history.saveSnippet({ id: "", name, sql: text, connId: onlyHere ? connId : null });
-  return name;
+  const r = await askTextChoice("Snippet name", text.replace(/\s+/g, " ").slice(0, 40), [`Only for "${connName}"`, "For all data sources"]);
+  if (!r?.text) return null;
+  await history.saveSnippet({ id: "", name: r.text, sql: text, connId: r.choice === 0 ? connId : null });
+  return r.text;
 }
 
 type Row = { id: string; title: string; sql: string; sub: string };

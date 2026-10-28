@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ask, askText, registerTextDialog } from "./dialogs";
+import { ask, askText, askTextChoice, registerTextDialog } from "./dialogs";
 
 describe("dialogs", () => {
   afterEach(() => {
@@ -19,5 +19,15 @@ describe("dialogs", () => {
     expect(await askText("Name", "a")).toBe("a!");
     registerTextDialog((r) => r.resolve(null));
     expect(await askText("Name")).toBeNull();
+  });
+  it("이름과 함께 고르기 (스니펫: 이 Data Source 만 / 전체) — OK·Cancel 로 고르지 않는다", async () => {
+    registerTextDialog((r) => {
+      expect(r.choices).toEqual(["Only this data source", "All data sources"]);
+      expect(r.choice).toBe(0);
+      r.resolve("users", 1);
+    });
+    expect(await askTextChoice("Snippet name", "sel", ["Only this data source", "All data sources"])).toEqual({ text: "users", choice: 1 });
+    registerTextDialog((r) => r.resolve(null));
+    expect(await askTextChoice("Snippet name", "sel", ["a", "b"])).toBeNull();
   });
 });

@@ -22,6 +22,10 @@ export interface NodeInfo {
 /** Select In Database Explorer (⌥F1, Search Everywhere 결과): 트리를 펼치고 노드를 선택한다 */
 export interface RevealTarget { connId: string; db?: string; schema?: string; name?: string; kind?: string }
 let pendingReveal: RevealTarget | null = null;
+/** 콘솔에서 구조를 바꾸는 문장(DDL)을 실행한 뒤: 그 데이터베이스의 트리 중 이미 읽은 부분을 다시 읽는다 */
+export function schemaChanged(connId: string, db: string) {
+  window.dispatchEvent(new CustomEvent("dbtool-schema-changed", { detail: { connId, db } }));
+}
 const nodeKey = (connId: string, db?: string, schema?: string, name?: string) => [connId, db ?? "", schema ?? "", name ?? ""].join("|");
 export function revealInTree(t: RevealTarget) {
   pendingReveal = t;
@@ -382,6 +386,30 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
   useEffect(() => {
     loadSchemas();
   }, []);
+  // DDL 뒤: 펼친 모양은 그대로 두고 읽어 둔 스키마 목록 · 객체 · 테이블 상세만 조용히 다시 읽는다
+  const latest = useRef({ objects, details });
+  latest.current = { objects, details };
+  useEffect(() => {
+    const h = (e: Event) => {
+      const d = (e as CustomEvent<{ connId: string; db: string }>).detail;
+      if (d.connId !== conn.id || d.db !== db) return;
+      invalidateCompletion(conn.id);
+      meta.schemas(target).then((data) => setSchemas({ state: "ok", data }), () => {});
+      for (const [schema, l] of Object.entries(latest.current.objects))
+        if (l.state === "ok") meta.objects(target, schema).then((data) => setObjects((o) => ({ ...o, [schema]: { state: "ok", data } })), () => {});
+      for (const [key, l] of Object.entries(latest.current.details)) {
+        if (l.state !== "ok") continue;
+        const i = key.indexOf(".");
+        meta.table(target, key.slice(0, i), key.slice(i + 1)).then(
+          (data) => setDetails((x) => ({ ...x, [key]: { state: "ok", data } })),
+          // 테이블이 없어졌으면 상세를 지운다 (목록에서도 빠진다)
+          () => setDetails((x) => { const n = { ...x }; delete n[key]; return n; }),
+        );
+      }
+    };
+    window.addEventListener("dbtool-schema-changed", h);
+    return () => window.removeEventListener("dbtool-schema-changed", h);
+  }, [target]);
   useReveal((t) => {
     if (t.connId !== conn.id || t.db !== db || !t.schema) return;
     const sk = `s:${t.schema}`;
