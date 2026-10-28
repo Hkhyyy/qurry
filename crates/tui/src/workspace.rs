@@ -340,6 +340,23 @@ impl App {
                     a.ws_move(id, a.workspaces.len() - 1);
                 });
             }
+            (Flow::WsMoveConn(conn), "new") => {
+                let def = format!("Workspace {}", self.workspaces.len() + 1);
+                self.input("New workspace name", &def, move |a, name| {
+                    if name.trim().is_empty() {
+                        return;
+                    }
+                    a.workspaces.push(Workspace { name: name.trim().into(), conns: vec![], saved: Some(WsSaved::default()) });
+                    let (from, to) = (a.cur_ws, a.workspaces.len() - 1);
+                    a.ws_place_conn(&conn, Some(from), to);
+                });
+            }
+            (Flow::WsMoveConn(conn), v) => {
+                if let Ok(i) = v.parse() {
+                    let from = self.cur_ws;
+                    self.ws_place_conn(&conn, Some(from), i);
+                }
+            }
             (Flow::WsAddConn, id) => {
                 let i = self.cur_ws;
                 if !self.workspaces[i].conns.iter().any(|c| c == id) {
@@ -388,7 +405,7 @@ impl App {
         }
         self.rebuild_roots();
         if to != self.cur_ws {
-            self.status = format!("{} — Alt+{} to see it", self.ws_label(to), to + 1);
+            self.status = format!("Moved to {} — Alt+{} to see it", self.ws_label(to), to + 1);
         }
     }
 
@@ -407,6 +424,22 @@ impl App {
         }
         self.flow = Some(crate::migrate::Flow::WsAddConn);
         self.popup = Some(Popup::Palette(Palette { title: "Add to this workspace's explorer".into(), input: tui_textarea::TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
+    }
+
+    /// 탐색기 w: 고른 Data Source 를 다른 워크스페이스로 (고르기 창)
+    pub fn ws_move_conn_pick(&mut self) {
+        let Some(conn) = self.tree.selected().map(|n| n.conn.clone()) else {
+            self.status = "Select a data source in the explorer first".into();
+            return;
+        };
+        let name = self.conn(&conn).map(|c| c.config.name.clone()).unwrap_or_default();
+        let mut items: Vec<PItem> = (0..self.workspaces.len())
+            .filter(|i| *i != self.cur_ws)
+            .map(|i| PItem { label: self.ws_label(i), hint: if self.workspaces[i].conns.contains(&conn) { "already there".into() } else { String::new() }, action: PAction::Pick(i.to_string()) })
+            .collect();
+        items.push(PItem { label: "New Workspace…".into(), hint: String::new(), action: PAction::Pick("new".into()) });
+        self.flow = Some(crate::migrate::Flow::WsMoveConn(conn));
+        self.popup = Some(Popup::Palette(Palette { title: format!("Move {name} to workspace"), input: tui_textarea::TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
     }
 
     /// ⌃K › Remove Data Source from Workspace: 탐색기에서 고른 Data Source 를 이 워크스페이스에서 뺀다 (Data Source 는 그대로)
@@ -611,5 +644,37 @@ mod tests {
         let fresh = h.app.conns.iter().find(|c| c.config.name == "fresh").unwrap().config.id.clone();
         assert_eq!(h.app.workspaces[0].conns, [fresh.clone()]);
         assert!(!h.app.workspaces[1].conns.contains(&fresh), "not adopted into the current workspace");
+    }
+
+    #[tokio::test]
+    async fn workspace_keys_and_explorer_toggle() {
+        let mut h = harness().await;
+        // Alt+0 = 탐색기 (Alt+1 은 워크스페이스)
+        h.table_tab("t", &["id"], &[&["1"]], &["id"]);
+        h.app.focus = crate::app::Focus::Tree;
+        h.key("Alt+0");
+        assert!(!h.app.explorer, "Alt+0 hides the explorer");
+        h.key("Alt+0");
+        assert!(h.app.explorer);
+        h.app.close_tab_now(0);
+        // Alt+N: 새 워크스페이스 (이름 그대로 Enter) · Alt+Shift+N: 이름 바꾸기
+        h.key("Alt+n");
+        h.key("Enter");
+        assert_eq!((h.app.workspaces.len(), h.app.cur_ws), (2, 1));
+        h.key("Alt+Shift+N");
+        for _ in 0..20 {
+            h.key("Backspace");
+        }
+        h.type_str("Ops");
+        h.key("Enter");
+        assert_eq!(h.app.workspaces[1].name, "Ops");
+        // 탐색기 w: Default 의 test 를 Ops 로
+        h.key("Alt+1");
+        h.app.focus = crate::app::Focus::Tree;
+        h.app.tree.sel = 0;
+        h.key("w");
+        h.key("Enter");
+        assert!(roots(&h).is_empty());
+        assert_eq!(h.app.workspaces[1].conns, ["test"]);
     }
 }

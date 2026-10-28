@@ -347,6 +347,7 @@ pub enum Action {
     WsDelete,
     WsMoveTab,
     WsAddConn,
+    WsMoveConn,
     WsRemoveConn,
     Find,
     DbaReports,
@@ -423,6 +424,7 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::WsDelete, "Delete Workspace…", ""),
     (Action::WsMoveTab, "Move Tab to Workspace…", ""),
     (Action::WsAddConn, "Add Data Source to This Workspace…", ""),
+    (Action::WsMoveConn, "Move Data Source to Another Workspace…", "w (explorer)"),
     (Action::WsRemoveConn, "Remove Data Source from This Workspace", ""),
     (Action::Find, "Find / Replace in Editor (regex)", ""),
     (Action::QueryHistory, "Query History… (shared with the GUI)", ""),
@@ -2614,6 +2616,7 @@ impl App {
             Action::WsDelete => self.ws_delete(),
             Action::WsMoveTab => self.ws_pick(true),
             Action::WsAddConn => self.ws_add_conn_pick(),
+            Action::WsMoveConn => self.ws_move_conn_pick(),
             Action::WsRemoveConn => self.ws_remove_conn(),
             Action::CancelTransfer => {
                 for (id, ..) in &self.jobs {

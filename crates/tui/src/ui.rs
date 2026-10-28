@@ -615,7 +615,7 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
     let cmd = |a: A, l: &'static str| key(a).map(|k| (k, l));
     let (ctx, glob) = match app.focus {
         Focus::Tree => (
-            vec![fixed("Enter", "open"), fixed("F4", "console"), fixed("s", "schemas"), fixed("/", "filter"), fixed("n", "new"), fixed("e", "edit"), fixed("r", "refresh"), cmd(A::Ddl, "DDL")],
+            vec![fixed("Enter", "open"), fixed("F4", "console"), fixed("s", "schemas"), fixed("/", "filter"), fixed("n", "new"), fixed("e", "edit"), fixed("w", "workspace"), fixed("r", "refresh"), cmd(A::Ddl, "DDL")],
             vec![cmd(A::SearchEverywhere, "search"), cmd(A::Palette, "actions"), cmd(A::Help, "keys")],
         ),
         Focus::Editor => (

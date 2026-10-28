@@ -8,6 +8,7 @@ pub const HELP: &[(&str, &[(&str, &str)])] = &[
         ("F4 / Ctrl+↓", "Open a query console for the data source / database (Redis: the key browser)"),
         ("/", "Filter loaded nodes (/ again edits it · empty or Esc clears)"),
         ("n / e / D", "New / edit / remove data source"),
+        ("w", "Move the data source to another workspace (Alt+1…9 switches · Alt+N new · Alt+Shift+N rename)"),
         ("c / X", "Connect / disconnect"),
         ("r / F5", "Refresh"),
         ("s", "Manage shown databases and schemas (Space check · Enter apply · shared with the GUI)"),

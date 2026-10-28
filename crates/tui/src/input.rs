@@ -419,12 +419,6 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
     if app.popup.is_some() {
         return popup_key(app, k);
     }
-    // Alt+1~9: 워크스페이스
-    if let KeyCode::Char(c @ '1'..='9') = k.code
-        && k.modifiers == KeyModifiers::ALT
-    {
-        return app.ws_switch(c as usize - '1' as usize);
-    }
     // ── 전역 명령 (키맵: keys.rs, 바꾸기: F1) ──
     if let Some(a) = app.keys.lookup(&k) {
         // 탐색기에서 실행 키 = 새로 고침
@@ -432,6 +426,12 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
             return app.run_action(Action::Refresh);
         }
         return app.run_action(a);
+    }
+    // Alt+1~9: 워크스페이스 (키맵에서 그 키를 다른 명령에 쓰면 그 명령이 먼저)
+    if let KeyCode::Char(c @ '1'..='9') = k.code
+        && k.modifiers == KeyModifiers::ALT
+    {
+        return app.ws_switch(c as usize - '1' as usize);
     }
     match app.focus {
         Focus::Tree => tree_key(app, k),
@@ -553,6 +553,8 @@ fn tree_key(app: &mut App, k: KeyEvent) {
         }
         KeyCode::Char('n') => app.run_action(Action::NewDataSource),
         KeyCode::Char('e') => app.run_action(Action::EditDataSource),
+        // 고른 Data Source 를 다른 워크스페이스로
+        KeyCode::Char('w') => app.ws_move_conn_pick(),
         KeyCode::Char('D') => app.run_action(Action::DeleteDataSource),
         KeyCode::Char('c') => app.run_action(Action::Connect),
         KeyCode::Char('X') => app.run_action(Action::Disconnect),

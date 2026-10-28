@@ -16,7 +16,10 @@ pub const DEFAULT_KEYS: &[(Action, &[&str])] = &[
     (Action::CloseTab, &["Ctrl+W"]),
     (Action::NextTab, &["Alt+Right", "Ctrl+PgDn"]),
     (Action::PrevTab, &["Alt+Left", "Ctrl+PgUp"]),
-    (Action::ToggleExplorer, &["Alt+1"]),
+    // Alt+1~9 는 워크스페이스 (input.rs, 키맵에 없는 Alt+숫자일 때)
+    (Action::ToggleExplorer, &["Alt+0"]),
+    (Action::WsNew, &["Alt+N"]),
+    (Action::WsRename, &["Alt+Shift+N"]),
     (Action::CycleFocus, &["F6"]),
     (Action::SplitRight, &["Alt+\\"]),
     (Action::SplitDown, &["Alt+-"]),
