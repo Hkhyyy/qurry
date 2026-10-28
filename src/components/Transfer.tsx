@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, DataPreview, meta } from "../lib/api";
 import { autoMap, DataFormat, FORMATS, progressText } from "../lib/transfer";
-import { Button, Hint, Modal, Notice, Select, TextInput } from "../ui";
+import { Button, Hint, IconButton, Modal, Notice, ProgressBar, RadioGroup, SectionTitle, Select, StatusItem, Table, Td, Text, TextInput, Th } from "../ui";
 
 const LAST = "qurry.export";
 function lastChoice(): { format: DataFormat; clipboard: boolean } {
@@ -39,22 +39,17 @@ export function ExportDialog({ what, onExport, onClose }: { what: string; onExpo
         </>
       }
     >
-      <div className="transfer-label">Format</div>
-      {FORMATS.map((f) => (
-        <label key={f.id} className="transfer-choice">
-          <input type="radio" name="fmt" checked={c.format === f.id} onChange={() => setC({ ...c, format: f.id })} />
-          <b>{f.label}</b> <span className="muted">{f.hint}</span>
-        </label>
-      ))}
-      <div className="transfer-label">To</div>
-      <label className="transfer-choice">
-        <input type="radio" name="dest" checked={!c.clipboard} onChange={() => setC({ ...c, clipboard: false })} />
-        <b>File…</b> <span className="muted">all rows, choose where to save</span>
-      </label>
-      <label className="transfer-choice">
-        <input type="radio" name="dest" checked={c.clipboard} onChange={() => setC({ ...c, clipboard: true })} />
-        <b>Clipboard</b> <span className="muted">all rows, paste anywhere (up to 64 MB)</span>
-      </label>
+      <SectionTitle>Format</SectionTitle>
+      <RadioGroup value={c.format} onChange={(format) => setC({ ...c, format })} options={FORMATS.map((f) => ({ value: f.id, label: <b>{f.label}</b>, hint: f.hint }))} />
+      <SectionTitle>To</SectionTitle>
+      <RadioGroup
+        value={c.clipboard ? "clip" : "file"}
+        onChange={(v) => setC({ ...c, clipboard: v === "clip" })}
+        options={[
+          { value: "file", label: <b>File…</b>, hint: "all rows, choose where to save" },
+          { value: "clip", label: <b>Clipboard</b>, hint: "all rows, paste anywhere (up to 64 MB)" },
+        ]}
+      />
     </Modal>
   );
 }
@@ -118,31 +113,31 @@ export function ImportDialog({ target, schema, table, onImport, onClose }: {
         <Button size="sm" onClick={pick} autoFocus={!file}>
           {file ? "Change File…" : "Choose File…"}
         </Button>
-        <span className="muted">{file ? `${fileName} · ${file.pv.format.toUpperCase()} · ${(file.pv.bytes / 1048576).toFixed(1)} MB` : "CSV, TSV or JSON (array of objects)"}</span>
+        <Text tone="muted">{file ? `${fileName} · ${file.pv.format.toUpperCase()} · ${(file.pv.bytes / 1048576).toFixed(1)} MB` : "CSV, TSV or JSON (array of objects)"}</Text>
       </div>
       {create && (
         <div className="transfer-file">
-          <span className="transfer-label" style={{ margin: 0 }}>Table name</span>
+          <Text tone="muted">Table name</Text>
           <TextInput value={name} onChange={(e) => setName(e.target.value)} placeholder="new_table" />
-          <span className="muted">columns are created as text</span>
+          <Text tone="muted">columns are created as text</Text>
         </div>
       )}
       {file && (
         <div className="transfer-map">
-          <table>
+          <Table>
             <thead>
               <tr>
-                <th>File column</th>
-                <th>Sample</th>
-                <th>{create ? "New column (empty = skip)" : "Table column"}</th>
+                <Th>File column</Th>
+                <Th>Sample</Th>
+                <Th>{create ? "New column (empty = skip)" : "Table column"}</Th>
               </tr>
             </thead>
             <tbody>
               {file.pv.columns.map((fc, i) => (
                 <tr key={i}>
-                  <td>{fc}</td>
-                  <td className="muted">{file.pv.rows.slice(0, 3).map((r) => r[i] ?? "NULL").join(", ")}</td>
-                  <td>
+                  <Td>{fc}</Td>
+                  <Td muted>{file.pv.rows.slice(0, 3).map((r) => r[i] ?? "NULL").join(", ")}</Td>
+                  <Td>
                     {create ? (
                       <TextInput value={map[i] ?? ""} onChange={(e) => setMap(map.map((m, j) => (j === i ? e.target.value : m)))} />
                     ) : (
@@ -155,11 +150,11 @@ export function ImportDialog({ target, schema, table, onImport, onClose }: {
                         ))}
                       </Select>
                     )}
-                  </td>
+                  </Td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </Table>
         </div>
       )}
       {file && <Hint>Empty cells are imported as NULL. Everything goes in one transaction — if a row fails, nothing is imported.</Hint>}
@@ -177,16 +172,16 @@ export function TransferBar({ jobs }: { jobs: TransferJob[] }) {
       {jobs.map((j) => {
         const p = progressText(j);
         return (
-          <span key={j.id} className="sb-widget sb-transfer" title={j.label}>
-            <span className="sb-transfer-label">{j.label}</span>
-            <span className={"sb-bar" + (p.pct === null ? " busy" : "")}>
-              <span style={p.pct === null ? undefined : { width: `${p.pct}%` }} />
-            </span>
+          <StatusItem key={j.id} title={j.label}>
+            <Text truncate style={{ maxWidth: 260 }}>
+              {j.label}
+            </Text>
+            <ProgressBar pct={p.pct} />
             <span>{p.text}</span>
-            <button className="sb-cancel" title="Cancel" onClick={() => api.cancelJob(j.id)}>
+            <IconButton size="sm" tone="danger" title="Cancel" onClick={() => api.cancelJob(j.id)}>
               ✕
-            </button>
-          </span>
+            </IconButton>
+          </StatusItem>
         );
       })}
     </>
@@ -212,24 +207,27 @@ export function BackupDialog({ what, pg, onRun, onClose }: { what: string; pg: b
     >
       {pg && (
         <>
-          <div className="transfer-label">Format</div>
-          <label className="transfer-choice">
-            <input type="radio" checked={format === "custom"} onChange={() => setFormat("custom")} />
-            <b>Custom (.dump)</b> <span className="muted">compressed, restore with Restore… (pg_restore)</span>
-          </label>
-          <label className="transfer-choice">
-            <input type="radio" checked={format === "plain"} onChange={() => setFormat("plain")} />
-            <b>SQL (.sql)</b> <span className="muted">plain text, readable, runs in any console</span>
-          </label>
+          <SectionTitle>Format</SectionTitle>
+          <RadioGroup
+            value={format}
+            onChange={setFormat}
+            options={[
+              { value: "custom", label: <b>Custom (.dump)</b>, hint: "compressed, restore with Restore… (pg_restore)" },
+              { value: "plain", label: <b>SQL (.sql)</b>, hint: "plain text, readable, runs in any console" },
+            ]}
+          />
         </>
       )}
-      <div className="transfer-label">What</div>
-      {(["all", "schema", "data"] as const).map((x) => (
-        <label key={x} className="transfer-choice">
-          <input type="radio" checked={part === x} onChange={() => setPart(x)} />
-          <b>{x === "all" ? "Schema and data" : x === "schema" ? "Schema only" : "Data only"}</b>
-        </label>
-      ))}
+      <SectionTitle>What</SectionTitle>
+      <RadioGroup
+        value={part}
+        onChange={setPart}
+        options={[
+          { value: "all", label: <b>Schema and data</b> },
+          { value: "schema", label: <b>Schema only</b> },
+          { value: "data", label: <b>Data only</b> },
+        ]}
+      />
       <Hint>Runs {pg ? "pg_dump" : "mysqldump"} on this computer (install the client tools if it's missing). The password is passed through the environment, not the command line.</Hint>
     </Modal>
   );

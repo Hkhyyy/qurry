@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { initials } from "../lib/workspace";
 import { ContextMenu, MenuItem } from "./Explorer";
+import { IconButton, RailItem } from "../ui";
 
 export interface WorkspaceInfo {
   id: string;
@@ -25,9 +26,11 @@ export function WorkspaceBar(p: {
   return (
     <div className="ws-bar">
       {p.list.map((w, i) => (
-        <button
+        <RailItem
           key={w.id}
-          className={"ws-item" + (w.id === p.current ? " on" : "")}
+          initials={initials(w.name)}
+          label={w.name}
+          active={w.id === p.current}
           title={`${w.name} — ${p.counts[w.id] ?? 0} tab(s)${i < 9 ? ` (${p.shortcut(i + 1)})` : ""}`}
           onClick={() => p.onSwitch(w.id)}
           onDoubleClick={() => p.onRename(w.id)}
@@ -42,17 +45,14 @@ export function WorkspaceBar(p: {
               ],
             });
           }}
-        >
-          <span className="ws-badge">{initials(w.name)}</span>
-          <span className="ws-name">{w.name}</span>
-        </button>
+        />
       ))}
-      <button className="ws-add" title="New Workspace" onClick={p.onNew}>
+      <IconButton className="ws-add" title="New Workspace" onClick={p.onNew}>
         {/* 글자 '+' 는 글꼴 기준선 때문에 가운데에 오지 않는다 */}
         <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
           <path d="M6 1v10M1 6h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
         </svg>
-      </button>
+      </IconButton>
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
     </div>
   );

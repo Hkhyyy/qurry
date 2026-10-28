@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ask, askTextChoice } from "../lib/dialogs";
-import { Button, EmptyState, Modal, Tabs, TextInput } from "../ui";
+import { Button, CodeBlock, List, ListItem, Modal, SearchField, Tabs } from "../ui";
 import { history, HistoryItem, Snippet } from "../lib/api";
 
 /**
@@ -106,20 +106,14 @@ export function HistoryDialog({ connId, title, initialTab = "history", onPick, o
         value={tab}
         onChange={(t) => (setTab(t), setIdx(0))}
       />
-      <TextInput full autoFocus className="hist-filter" placeholder="Type to filter" value={q} onChange={(e) => (setQ(e.target.value), setIdx(0))} />
+      <SearchField autoFocus className="hist-filter" placeholder="Type to filter" value={q} onChange={(e) => (setQ(e.target.value), setIdx(0))} />
       <div className="hist-body">
-        <div className="hist-list">
-          {list.length === 0 && <EmptyState>{tab === "history" ? "No queries yet." : "No snippets yet. Save one from the history, or ⌘k › Save Query as Snippet."}</EmptyState>}
+        <List boxed className="hist-list" empty={tab === "history" ? "No queries yet." : "No snippets yet. Save one from the history, or ⌘k › Save Query as Snippet."}>
           {list.map((r, i) => (
-            <div key={r.id} className={"hist-item" + (r === cur ? " on" : "")} onClick={() => setIdx(i)} onDoubleClick={() => onPick(r.sql)}>
-              <span className="hist-sql" title={r.title}>
-                {r.title}
-              </span>
-              <span className="hist-ts">{r.sub}</span>
-            </div>
+            <ListItem key={r.id} mono title={r.title} trailing={r.sub} selected={r === cur} onClick={() => setIdx(i)} onDoubleClick={() => onPick(r.sql)} />
           ))}
-        </div>
-        <pre className="hist-preview">{cur?.sql ?? ""}</pre>
+        </List>
+        <CodeBlock className="hist-preview">{cur?.sql ?? ""}</CodeBlock>
       </div>
     </Modal>
   );

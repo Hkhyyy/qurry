@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, isReleaseUrl, UpdateInfo } from "../lib/api";
-import { Button, Hint, Modal, Notice, Spacer } from "../ui";
+import { Button, Hint, Modal, Notice, Spacer, Text } from "../ui";
 
 /** 새 버전 안내: 릴리스 노트 + Update & Restart (앱 안에서 받아 바꿔 넣고 다시 켠다). 안 되면 릴리스 페이지에서 받는다 */
 /** beforeInstall: 다시 켜기 전에 할 일 (작업 공간 저장, 커밋 안 한 변경 묻기). false 면 취소 */
@@ -56,7 +56,7 @@ export function UpdateDialog({ info, onClose, beforeInstall }: { info: UpdateInf
         </>
       }
     >
-      <div className="ui-muted">You have {info.current}. Update &amp; Restart downloads it, replaces this app and opens it again (open tabs are kept).</div>
+      <Text as="div" tone="muted">You have {info.current}. Update &amp; Restart downloads it, replaces this app and opens it again (open tabs are kept).</Text>
       {/* 바뀐 것만, 버전마다 (설치 안내는 Release Page 에) */}
       <div className="update-notes">
         {info.changes?.length ? (
@@ -69,7 +69,7 @@ export function UpdateDialog({ info, onClose, beforeInstall }: { info: UpdateInf
             </div>
           ))
         ) : (
-          <div className="muted">See the release page for what changed.</div>
+          <Text as="div" tone="muted">See the release page for what changed.</Text>
         )}
       </div>
       {progress && <Hint>{progress}</Hint>}

@@ -133,46 +133,41 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
     for (i, (depth, n)) in vis.iter().enumerate().skip(app.tree.offset).take(h) {
         let open = app.tree.expanded.contains(&n.key);
         let loading = app.tree.loading.contains(&n.key);
-        let chev = if n.expandable { if open { "▾ " } else { "▸ " } } else { "  " };
         let conn_color = app.conn_color(&n.conn).and_then(|c| hex(&c));
         let connected = app.conn(&n.conn).map(|c| c.connected).unwrap_or(false);
-        let (icon, icolor) = match &n.kind {
-            NodeKind::Conn => (if connected { "◉ " } else { "○ " }, conn_color.unwrap_or(C_DB)),
-            NodeKind::Db => ("⛁ ", C_DB),
-            NodeKind::Schema => ("◇ ", Color::Gray),
-            NodeKind::Group => ("▤ ", ACCENT),
+        let (glyph, icolor) = match &n.kind {
+            NodeKind::Conn => (if connected { "◉" } else { "○" }, conn_color.unwrap_or(C_DB)),
+            NodeKind::Db => ("⛁", C_DB),
+            NodeKind::Schema => ("◇", Color::Gray),
+            NodeKind::Group => ("▤", ACCENT),
             NodeKind::Object(k) => match k.as_str() {
-                "table" | "partitioned" | "foreign" => ("▦ ", Color::Gray),
-                "view" | "matview" => ("◫ ", C_VIEW),
-                "sequence" => ("# ", C_SEQUENCE),
-                "key" => ("● ", type_color(&n.hint)),
-                _ => ("ƒ ", C_ROUTINE),
+                "table" | "partitioned" | "foreign" => ("▦", Color::Gray),
+                "view" | "matview" => ("◫", C_VIEW),
+                "sequence" => ("#", C_SEQUENCE),
+                "key" => ("●", type_color(&n.hint)),
+                _ => ("ƒ", C_ROUTINE),
             },
-            NodeKind::Column { pk, .. } => (if *pk { "⚿ " } else { "· " }, if *pk { Color::Yellow } else { DIM }),
+            NodeKind::Column { pk, .. } => (if *pk { "⚿" } else { "·" }, if *pk { Color::Yellow } else { DIM }),
             NodeKind::Info => ("", DANGER),
         };
-        let mut spans = vec![Span::raw("  ".repeat(*depth)), Span::styled(chev, Style::default().fg(DIM)), Span::styled(icon, Style::default().fg(icolor))];
-        let mut name_style = Style::default();
-        if matches!(n.kind, NodeKind::Conn) {
-            name_style = name_style.add_modifier(Modifier::BOLD);
+        let mut row = Row::new(n.label.clone())
+            .indent(*depth)
+            .chevron(n.expandable.then_some(open))
+            .hint(if loading { "loading…".to_string() } else { n.hint.clone() })
+            // GUI 처럼 Data Source 아래 전체를 그 색으로 (고른 줄이 이긴다)
+            .bg(conn_color)
+            .selected(i == app.tree.sel, focused);
+        if !glyph.is_empty() {
+            row = row.lead(icon(glyph, icolor));
         }
-        spans.push(Span::styled(n.label.clone(), name_style));
-        let hint = if loading { "loading…".to_string() } else { n.hint.clone() };
-        if !hint.is_empty() {
-            spans.push(Span::styled(format!(" {hint}"), Style::default().fg(DIM)));
+        if matches!(n.kind, NodeKind::Conn) {
+            row = row.bold();
         }
         // 정확히 탐색기 폭으로 (가로 스크롤 반영). 배경색이 줄 끝까지 가고, 끝에 걸린 한글이 색을 끊지 않게
-        let mut line = Line::from(fit_spans(spans, app.tree.hoff, inner.width as usize));
-        if i == app.tree.sel {
-            line = line.style(Style::default().bg(if focused { SEL } else { SEL_BLUR }));
-        } else if let Some(c) = conn_color {
-            // GUI 처럼 Data Source 아래 전체를 그 색으로
-            line = line.style(Style::default().bg(c));
-        }
-        lines.push(line);
+        lines.push(row.fit(app.tree.hoff, inner.width as usize));
     }
     if vis.is_empty() {
-        lines.push(Line::styled("No data sources. Press n to add one.", Style::default().fg(DIM)));
+        lines.push(Line::from(muted("No data sources. Press n to add one.")));
     }
     // 가로 스크롤 (Shift+←/→, 트랙패드 좌우) 은 fit_spans 가 이미 했다
     f.render_widget(Paragraph::new(lines), inner);
@@ -486,25 +481,16 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 .skip(r.off)
                 .take(h)
                 .map(|(i, row)| {
-                    let mut l = match row {
-                        crate::app::KRow::Folder { path, name, depth, count } => Line::from(vec![
-                            Span::raw("  ".repeat(*depth)),
-                            Span::styled(if r.open.contains(path) { "▾ " } else { "▸ " }, Style::default().fg(DIM)),
-                            Span::styled("▤ ", Style::default().fg(ACCENT)),
-                            Span::raw(name.clone()),
-                            Span::styled(format!(" {count}"), Style::default().fg(DIM)),
-                        ]),
+                    let w = inner.width as usize;
+                    let line = match row {
+                        crate::app::KRow::Folder { path, name, depth, count } => Row::new(name.clone()).indent(*depth).chevron(Some(r.open.contains(path))).lead(icon("▤", ACCENT)).trailing(count.to_string()),
                         crate::app::KRow::Key { idx, depth } => {
                             let k = &r.keys[*idx];
-                            let badge = format!(" {:<6} ", k.ty.to_uppercase());
-                            let ttl = if k.ttl >= 0 { format!(" {}s", k.ttl / 1000) } else { String::new() };
-                            Line::from(vec![Span::raw("  ".repeat(*depth)), Span::styled(badge, Style::default().fg(Color::Black).bg(type_color(&k.ty))), Span::raw(" "), Span::raw(k.key.clone()), Span::styled(ttl, Style::default().fg(DIM))])
+                            let ttl = if k.ttl >= 0 { format!("{}s", k.ttl / 1000) } else { String::new() };
+                            Row::new(k.key.clone()).indent(*depth).chevron(None).lead(badge(&format!("{:<6}", k.ty.to_uppercase()), type_color(&k.ty))).lead(Span::raw(" ")).trailing(ttl)
                         }
                     };
-                    if i == r.sel {
-                        l = l.style(Style::default().bg(if kf { SEL } else { SEL_BLUR }));
-                    }
-                    ListItem::new(l)
+                    ListItem::new(line.selected(i == r.sel, kf).fit(0, w))
                 })
                 .collect();
             f.render_widget(List::new(items), inner);
@@ -567,17 +553,13 @@ fn draw_completion(f: &mut Frame, cmp: &crate::app::Completion, x: u16, y: u16) 
         .skip(off)
         .take(shown)
         .map(|(i, it)| {
-            let (icon, color) = match it.kind {
-                ItemKind::Column => ("· ", C_SEQUENCE),
-                ItemKind::Table => ("▦ ", C_DB),
-                ItemKind::Schema => ("◇ ", Color::Gray),
-                ItemKind::Keyword => ("k ", C_KEYWORD),
+            let (glyph, color) = match it.kind {
+                ItemKind::Column => ("·", C_SEQUENCE),
+                ItemKind::Table => ("▦", C_DB),
+                ItemKind::Schema => ("◇", Color::Gray),
+                ItemKind::Keyword => ("k", C_KEYWORD),
             };
-            let mut l = Line::from(vec![Span::styled(icon, Style::default().fg(color)), Span::raw(format!("{:<lw$}  ", it.label)), Span::styled(it.detail.clone(), Style::default().fg(DIM))]);
-            if i == cmp.sel {
-                l = l.style(Style::default().bg(SEL));
-            }
-            ListItem::new(l)
+            ListItem::new(Row::new(format!("{:<lw$} ", it.label)).lead(icon(glyph, color)).hint(it.detail.clone()).selected(i == cmp.sel, true).line())
         })
         .collect();
     clear(f, r);
@@ -636,10 +618,10 @@ fn hint_line(mut ctx: Vec<(String, &'static str)>, glob: Vec<(String, &'static s
     let push = |v: Vec<(String, &'static str)>, spans: &mut Vec<Span<'static>>| {
         for (i, (k, l)) in v.into_iter().enumerate() {
             if i > 0 {
-                spans.push(Span::styled(" · ", Style::default().fg(DIM)));
+                spans.push(muted(" · "));
             }
-            spans.push(Span::styled(k, Style::default().fg(ACCENT)));
-            spans.push(Span::styled(format!(" {l}"), Style::default().fg(DIM)));
+            spans.push(key(&k));
+            spans.push(muted(format!(" {l}")));
         }
     };
     let has_ctx = !ctx.is_empty();
@@ -709,40 +691,29 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
     match app.popup.as_mut().unwrap() {
         Popup::Help { sel, scroll, record, message } => {
             // Start here (고르지 않는 줄) → Commands → 고정 키
-            let bold = Style::default().fg(Color::White).add_modifier(Modifier::BOLD);
-            let mut lines = vec![Line::styled("Start here", bold)];
+            let mut lines = vec![section("Start here")];
             for (k, d) in crate::help::start_here(&app.keys) {
-                lines.push(Line::from(vec![Span::styled(format!("  {k:<30}"), Style::default().fg(ACCENT)), Span::raw(d)]));
+                lines.push(key_row(&k, d, 30, false, false));
             }
             lines.push(Line::raw(""));
-            lines.push(Line::styled("Commands — ↑↓ select · Enter change · a add key · Del reset to default", bold));
+            lines.push(section("Commands — ↑↓ select · Enter change · a add key · Del reset to default"));
             let top = lines.len();
             for (i, (a, _)) in crate::keys::DEFAULT_KEYS.iter().enumerate() {
                 let custom = app.keys.is_custom(*a);
                 let keys = if i == *sel && record.is_some() { "press a key… (Esc cancels)".to_string() } else { app.keys.label(*a) };
-                let mut l = Line::from(vec![
-                    Span::styled(format!("  {keys:<30}"), Style::default().fg(if custom { Color::Yellow } else { ACCENT })),
-                    Span::raw(crate::input::name_of(*a).to_string()),
-                    Span::styled(if custom { "  (custom)" } else { "" }, Style::default().fg(DIM)),
-                ]);
-                if i == *sel {
-                    l = l.style(Style::default().bg(SEL));
-                }
-                lines.push(l);
+                lines.push(key_row(&keys, crate::input::name_of(*a), 30, custom, i == *sel));
             }
             lines.push(Line::raw(""));
             // 고정 키 목록: Commands 다음 번호부터 이어서 고를 수 있다 (바꾸지는 못한다)
             let mut i = crate::keys::DEFAULT_KEYS.len();
             let mut sel_line = top + *sel;
             for (title, rows) in crate::help::HELP {
-                lines.push(Line::styled(disp(title), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
+                lines.push(section(disp(title)));
                 for (k, d) in *rows {
-                    let mut l = Line::from(vec![Span::styled(format!("  {:<30}", disp(k)), Style::default().fg(ACCENT)), Span::raw(disp(d))]);
                     if i == *sel {
-                        l = l.style(Style::default().bg(SEL));
                         sel_line = lines.len();
                     }
-                    lines.push(l);
+                    lines.push(key_row(&disp(k), disp(d), 30, false, i == *sel));
                     i += 1;
                 }
                 lines.push(Line::raw(""));
@@ -775,82 +746,60 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             f.render_widget(Paragraph::new(text.clone()).wrap(Wrap { trim: false }), inner);
         }
         Popup::Scope(e) => {
+            use crate::kit::Row as KRow;
             use crate::scope::{Check, Row};
             let name = app.conns.iter().find(|c| c.config.id == e.conn).map(|c| c.config.name.clone()).unwrap_or_default();
             let rows = e.rows();
             let r = centered(area, 70, (rows.len() as u16 + 4).min(area.height.saturating_sub(4)).max(8));
             let inner_h = r.height.saturating_sub(3) as usize;
             let top = e.sel.saturating_sub(inner_h.saturating_sub(1));
-            let hint = |s: String| Span::styled(s, Style::default().fg(DIM));
             let mut lines: Vec<Line> = rows
                 .iter()
                 .enumerate()
                 .skip(top)
                 .take(inner_h)
                 .map(|(i, row)| {
-                    let box_ = match e.check(row) {
+                    let box_ = muted(match e.check(row) {
                         Check::On => "[x] ",
                         Check::Implicit => "[~] ",
                         Check::Off => "[ ] ",
-                    };
-                    let mut l = match row {
-                        Row::AllDbs => Line::from(vec![Span::raw("   "), Span::raw(box_), Span::raw("All databases")]),
-                        Row::DefaultDb => Line::from(vec![Span::raw("   "), Span::raw(box_), Span::raw("Default database "), hint(format!("({})", e.default_db))]),
+                    });
+                    let r = match row {
+                        Row::AllDbs => KRow::new("All databases").chevron(None).lead(box_),
+                        Row::DefaultDb => KRow::new("Default database").chevron(None).lead(box_).hint(format!("({})", e.default_db)),
                         Row::Db(db) => {
                             let open = rows.get(i + 1).is_some_and(|n| !matches!(n, Row::Db(_)));
                             let on = e.check(row) != Check::Off;
-                            Line::from(vec![
-                                Span::raw(if open { " ⌄ " } else { " › " }),
-                                Span::raw(box_),
-                                Span::styled(db.clone(), if on { Style::default().add_modifier(Modifier::BOLD) } else { Style::default() }),
-                                hint(if *db == e.default_db { "  (Default database)".into() } else { String::new() }),
-                            ])
+                            let r = KRow::new(db.clone()).chevron(Some(open)).lead(box_).hint(if *db == e.default_db { "(Default database)".to_string() } else { String::new() });
+                            if on {
+                                r.bold()
+                            } else {
+                                r
+                            }
                         }
-                        Row::AllSchemas(_) => Line::from(vec![Span::raw("     "), Span::raw(box_), Span::raw("All schemas")]),
-                        Row::DefaultSchema(_) => Line::from(vec![Span::raw("     "), Span::raw(box_), Span::raw("Default schema "), hint("(public)".into())]),
-                        Row::Schema { name, system, .. } => Line::from(vec![
-                            Span::raw("     "),
-                            Span::raw(box_),
-                            Span::raw(name.clone()),
-                            Span::styled(if *system { " ⚡" } else { "" }, Style::default().fg(Color::Yellow)),
-                            hint(if name == "public" { "  (Default schema)".into() } else { String::new() }),
-                        ]),
-                        Row::Note(_, t) => Line::from(vec![Span::raw("       "), hint(t.clone())]),
+                        Row::AllSchemas(_) => KRow::new("All schemas").indent(1).chevron(None).lead(box_),
+                        Row::DefaultSchema(_) => KRow::new("Default schema").indent(1).chevron(None).lead(box_).hint("(public)"),
+                        Row::Schema { name, system, .. } => {
+                            let r = KRow::new(name.clone()).indent(1).chevron(None).lead(box_);
+                            let r = if *system { r.label_style(Style::default().fg(Color::Yellow)).trailing("⚡ system") } else { r };
+                            r.hint(if name == "public" { "(Default schema)".to_string() } else { String::new() })
+                        }
+                        Row::Note(_, t) => KRow::new(String::new()).indent(2).hint(t.clone()),
                     };
-                    if i == e.sel {
-                        l = l.style(Style::default().bg(SEL));
-                    }
-                    l
+                    r.selected(i == e.sel, true).line()
                 })
                 .collect();
-            lines.push(Line::styled("Space check · → expand · ← collapse · Enter apply · Esc cancel", Style::default().fg(DIM)));
+            lines.push(key_hints(&[("Space", "check"), ("→", "expand"), ("←", "collapse"), ("Enter", "apply"), ("Esc", "cancel")]));
             let inner = popup(f, r, format!(" Manage Shown Schemas — {name} "));
             f.render_widget(Paragraph::new(lines), inner);
         }
         Popup::Confirm { text, .. } => {
             // 여러 줄 (이유 · 문장 · 질문). 운영 DB · 위험 문장이면 빨간 테두리, "→ N rows" 는 많을수록 눈에 띄게
             let danger = text.starts_with("Production") || text.ends_with("Run it anyway?");
-            let mut lines: Vec<Line> = text
-                .lines()
-                .map(|l| match l.trim_start().strip_prefix("→ ") {
-                    Some(v) => {
-                        let n: Option<u64> = v.split_whitespace().next().and_then(|x| x.replace(',', "").parse().ok());
-                        let c = match n {
-                            Some(0) => DIM,
-                            Some(n) if n < 100 => WARN,
-                            _ => DANGER,
-                        };
-                        Line::from(vec![Span::raw(l[..l.len() - v.len()].to_string()), Span::styled(v.to_string(), Style::default().fg(c).add_modifier(Modifier::BOLD))])
-                    }
-                    None => Line::raw(l.to_string()),
-                })
-                .collect();
-            lines.push(Line::raw(""));
-            let mut keys = key_hint("y / Enter", "yes");
-            keys.push(Span::styled(" · ", Style::default().fg(DIM)));
-            keys.extend(key_hint("n / Esc", "no"));
-            lines.push(Line::from(keys));
-            let r = centered(area, 90, lines.len() as u16 + 2);
+            let lines = confirm_lines(text);
+            // 긴 문장은 접힌다 → 접힌 줄까지 세어 높이를 잡는다 (아래 y/n 안내가 잘리지 않게)
+            let w = 90u16.min(area.width.saturating_sub(4));
+            let r = centered(area, 90, wrapped_height(&lines, w.saturating_sub(2)) + 2);
             let inner = if danger { popup_danger(f, r, " Confirm ") } else { popup(f, r, " Confirm ") };
             f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
         }
@@ -895,11 +844,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                 .take(h)
                 .map(|(i, it)| {
                     // 이름·힌트 안의 키 표기도 화면 규칙으로 ("Ctrl+Z (grid)" → ⌃z)
-                    let mut l = Line::from(vec![Span::raw(disp(&it.label)), Span::styled(format!("  {}", disp(&it.hint)), Style::default().fg(DIM))]);
-                    if i == sel {
-                        l = l.style(Style::default().bg(SEL));
-                    }
-                    ListItem::new(l)
+                    ListItem::new(Row::new(disp(&it.label)).hint(format!(" {}", disp(&it.hint))).selected(i == sel, true).line())
                 })
                 .collect();
             p.sel = sel;
@@ -923,15 +868,12 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                         _ => fl.value.clone(),
                     };
                     let sel = i == form.sel;
-                    let mut spans = vec![
-                        Span::styled(format!("{:>15} ", fl.label), Style::default().fg(if sel { ACCENT } else { DIM })),
-                        Span::styled(shown + if sel && matches!(fl.kind, FieldKind::Text | FieldKind::Secret) { "▏" } else { "" }, if sel { Style::default().bg(SEL) } else { Style::default() }),
-                    ];
+                    let mut spans = field_row(&fl.label, 15, shown + if sel && matches!(fl.kind, FieldKind::Text | FieldKind::Secret) { "▏" } else { "" }, sel);
                     if fl.label == "Color" {
                         let c = COLOR_PRESETS.iter().find(|p| p.0 == fl.value).and_then(|p| hex(p.1)).or_else(|| form.edit.as_ref().and_then(|e| e.color.as_deref()).filter(|_| fl.value == "custom").and_then(hex));
                         if let Some(c) = c {
                             spans.push(Span::raw(" "));
-                            spans.push(Span::styled("      ", Style::default().bg(c)));
+                            spans.push(swatch(c));
                         }
                     }
                     Line::from(spans)

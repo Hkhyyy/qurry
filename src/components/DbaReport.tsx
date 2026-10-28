@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ask } from "../lib/dialogs";
 import { Cell, dba, DbaReportInfo, Dialect, QueryResult } from "../lib/api";
 import { ResultGrid } from "./ResultGrid";
-import { Button, Notice, Select } from "../ui";
+import { Button, Notice, Select, Text, Toolbar } from "../ui";
 
 const empty: QueryResult = { columns: [], rows: [], rowsAffected: 0, truncated: false, elapsedMs: 0, hasResultSet: true };
 /** 저절로 다시 불러오는 리포트 (지금 상태를 보는 것) */
@@ -97,7 +97,7 @@ export function DbaReport(p: {
 
   return (
     <div className="dba">
-      <div className="dba-bar">
+      <Toolbar className="dba-bar">
         <Select value={p.report} onChange={(e) => p.onReport(e.target.value, list.find((r) => r.id === e.target.value)?.title ?? e.target.value)}>
           {groups.map(([g, rs]) => (
             <optgroup key={g} label={g}>
@@ -117,8 +117,8 @@ export function DbaReport(p: {
             <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> Auto-refresh (3s)
           </label>
         )}
-        <span className="muted dba-help">{info?.help}</span>
-      </div>
+        <Text tone="muted" className="dba-help">{info?.help}</Text>
+      </Toolbar>
       {info?.actions.length ? <div className="dba-hint muted">Right-click a row: {info.actions.map((a) => a.label).join(" · ")}</div> : null}
       {error ? (
         <Notice tone="danger">{error}</Notice>

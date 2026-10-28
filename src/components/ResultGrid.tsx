@@ -5,10 +5,10 @@ import { Cell, Dialect, dialectOf, QueryResult } from "../lib/api";
 import { DateTimePicker, isTemporal } from "./DateTimePicker";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { inList } from "../lib/inList";
-import { Button, IconButton, Modal, Notice, Spacer, ToolButton, Toolbar, ToolbarSep } from "../ui";
+import { Button, CellEditor, CodeBlock, GridCell, GridHeaderCell, GridHeaderRow, GridRow, IconButton, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, TextArea, ToolButton, Toolbar, ToolbarSep } from "../ui";
 import {
   IcClock, IcExport, IcGear, IcMinus, IcPlus, IcPreview, IcReload, IcRevert, IcSearch, IcStop, IcSubmit, IcTranspose, IcView,
-} from "./icons";
+} from "../ui/icons";
 
 const ROW_H = 24;
 const HEADER_H = 26;
@@ -655,7 +655,7 @@ export function ResultGrid(p: Props) {
           <IcSearch />
         </IconButton>
         <span className="tb-info">{rowsLabel}{pendingCount ? ` · ${pendingCount} pending` : ""}</span>
-        <span className="grow" />
+        <Spacer />
         <ToolButton title="Data Extractor (copy format)" onClick={(e) => dropdown(e, EXTRACTORS.map((x) => ({ label: (x === extractor ? "✓ " : "　") + x, action: () => setExtractor(x) })))}>
           {extractor} ▾
         </ToolButton>
@@ -691,8 +691,7 @@ export function ResultGrid(p: Props) {
       {p.filterBar && showFilter && p.filterBar}
       {findOpen && (
         <div className="grid-find">
-          <IcSearch />
-          <input
+          <SearchField
             value={findText}
             placeholder="Find on current page"
             onChange={(e) => setFindText(e.target.value)}
@@ -705,7 +704,7 @@ export function ResultGrid(p: Props) {
               e.stopPropagation();
             }}
           />
-          <span className="muted">{findText ? `${matches.length}${matches.length >= 5000 ? "+" : ""} results` : ""}</span>
+          <Text tone="muted">{findText ? `${matches.length}${matches.length >= 5000 ? "+" : ""} results` : ""}</Text>
           <IconButton title="Previous Occurrence (⇧↩)" onClick={() => gotoMatch(-1)}>↑</IconButton>
           <IconButton title="Next Occurrence (↩)" onClick={() => gotoMatch(1)}>↓</IconButton>
           <IconButton title="Close (⎋)" onClick={() => setFindOpen(false)}>×</IconButton>
@@ -724,10 +723,9 @@ export function ResultGrid(p: Props) {
           onMouseLeave={() => (dragging.current = false)}
         >
           <div style={{ width: total, height: virt.getTotalSize() + HEADER_H, position: "relative" }}>
-            <div className="grid-header" style={{ width: total, height: HEADER_H }}>
-              <div
-                className="cell rownum"
-                style={{ width: ROWNUM_W }}
+            <GridHeaderRow width={total} height={HEADER_H}>
+              <RowNumberCell
+                width={ROWNUM_W}
                 title="Select all (⌘a)"
                 onMouseDown={() => {
                   setSelA({ r: 0, c: 0 });
@@ -735,43 +733,33 @@ export function ResultGrid(p: Props) {
                 }}
               />
               {spacer(padL)}
-              {colItems.map(({ index: i }) => { const c = cols[i]; return (
-                <div
-                  key={i}
-                  className={"cell head" + (sorts.some((s) => s.col === i) ? " sorted" : "") + (rect && rect.c0 <= i && i <= rect.c1 ? " col-sel" : "")}
-                  style={{ width: widths[i] }}
-                  title={`${c.name} : ${c.typeName}`}
-                  onMouseDown={(e) => {
-                    // 헤더 클릭 = 컬럼 전체 선택 (DataGrip)
-                    if (e.shiftKey && selA) setSelB({ r: rowCount - 1, c: i });
-                    else {
-                      setSelA({ r: 0, c: i });
-                      setSelB({ r: rowCount - 1, c: i });
-                    }
-                  }}
-                >
-                  {edit?.pk.includes(c.name) && <span className="pk-mark">🔑</span>}
-                  <span className="col-name">{c.name}</span>
-                  <span className="col-type">{c.typeName.toLowerCase()}</span>
-                  {(() => {
-                    const idx = sorts.findIndex((x) => x.col === i);
-                    const key = sorts[idx];
-                    return (
-                      <span
-                        className={"sort-btn" + (key ? " on" : "")}
-                        title="Sort (⌥+click: add to sorting)"
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onClick={(e) => clickSort(i, e.altKey)}
-                      >
-                        {key ? (key.dir === "asc" ? "↑" : "↓") : "⇅"}
-                        {key && sorts.length > 1 && <sub>{idx + 1}</sub>}
-                      </span>
-                    );
-                  })()}
-                </div>
-              ); })}
+              {colItems.map(({ index: i }) => {
+                const c = cols[i];
+                const idx = sorts.findIndex((x) => x.col === i);
+                const key = sorts[idx];
+                return (
+                  <GridHeaderCell
+                    key={i}
+                    name={c.name}
+                    type={c.typeName}
+                    pk={edit?.pk.includes(c.name)}
+                    width={widths[i]}
+                    colSelected={!!rect && rect.c0 <= i && i <= rect.c1}
+                    sort={key ? { dir: key.dir, order: sorts.length > 1 ? idx + 1 : undefined } : undefined}
+                    onMouseDown={(e) => {
+                      // 헤더 클릭 = 컬럼 전체 선택 (DataGrip)
+                      if (e.shiftKey && selA) setSelB({ r: rowCount - 1, c: i });
+                      else {
+                        setSelA({ r: 0, c: i });
+                        setSelB({ r: rowCount - 1, c: i });
+                      }
+                    }}
+                    onSortClick={(e) => clickSort(i, e.altKey)}
+                  />
+                );
+              })}
               {spacer(padR)}
-            </div>
+            </GridHeaderRow>
             {items.map((vi) => {
               const d = vi.index;
               const r = dataIndex(d);
@@ -780,14 +768,10 @@ export function ResultGrid(p: Props) {
               const isNew = r >= baseCount;
               const isDel = deleted.has(r);
               return (
-                <div
-                  key={vi.key}
-                  className={"grid-row" + (d % 2 ? " odd" : "") + (isNew ? " added" : "") + (isDel ? " deleted" : "")}
-                  style={{ top: HEADER_H + vi.start, height: ROW_H, width: total }}
-                >
-                  <div
-                    className={"cell rownum" + (rect && rect.r0 <= d && d <= rect.r1 ? " row-sel" : "")}
-                    style={{ width: ROWNUM_W }}
+                <GridRow key={vi.key} top={HEADER_H + vi.start} height={ROW_H} width={total} odd={d % 2 === 1} added={isNew} deleted={isDel}>
+                  <RowNumberCell
+                    width={ROWNUM_W}
+                    selected={!!rect && rect.r0 <= d && d <= rect.r1}
                     onMouseDown={(e) => {
                       // 거터 번호 클릭 = 행 선택
                       if (e.shiftKey && selA) setSelB({ r: d, c: cols.length - 1 });
@@ -798,7 +782,7 @@ export function ResultGrid(p: Props) {
                     }}
                   >
                     {isNew ? "+" : d + 1}
-                  </div>
+                  </RowNumberCell>
                   {spacer(padL)}
                   {colItems.map(({ index: ci }) => {
                     const val = valueAt(r, ci);
@@ -806,56 +790,40 @@ export function ResultGrid(p: Props) {
                     if (editing && editing.r === r && editing.c === ci) {
                       const temporal = isTemporal(cols[ci].typeName);
                       return (
-                        <span
+                        <CellEditor
                           key={ci}
-                          className="cell-edit"
-                          style={{ width: widths[ci] }}
-                          onBlur={(e) => {
-                            if (!e.currentTarget.contains(e.relatedTarget as Node)) commitEdit();
+                          width={widths[ci]}
+                          value={editing.value}
+                          onChange={(v) => setEditing({ ...editing, value: v })}
+                          onBlurOut={commitEdit}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === "Tab") {
+                              e.preventDefault();
+                              commitEdit();
+                              if (e.key === "Tab") selectCell({ r: d, c: Math.min(ci + 1, cols.length - 1) }, false);
+                            } else if (e.key === "Escape") {
+                              setEditing(null);
+                              scrollRef.current?.focus();
+                            }
+                            e.stopPropagation();
                           }}
+                          more={temporal ? { title: "Choose date/time", onClick: () => setEditing({ ...editing, picker: !editing.picker }) } : undefined}
                         >
-                          <input
-                            autoFocus
-                            className="cell-input"
-                            value={editing.value}
-                            onChange={(e) => setEditing({ ...editing, value: e.target.value })}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" || e.key === "Tab") {
-                                e.preventDefault();
-                                commitEdit();
-                                if (e.key === "Tab") selectCell({ r: d, c: Math.min(ci + 1, cols.length - 1) }, false);
-                              } else if (e.key === "Escape") {
-                                setEditing(null);
-                                scrollRef.current?.focus();
-                              }
-                              e.stopPropagation();
-                            }}
-                          />
-                          {temporal && (
-                            <button className="cell-more" title="Choose date/time" onMouseDown={(e) => e.preventDefault()} onClick={() => setEditing({ ...editing, picker: !editing.picker })}>
-                              …
-                            </button>
-                          )}
                           {temporal && editing.picker && (
                             <DateTimePicker value={editing.value} typeName={cols[ci].typeName} onChange={(v) => setEditing((ed) => (ed ? { ...ed, value: v } : ed))} />
                           )}
-                        </span>
+                        </CellEditor>
                       );
                     }
-                    const selected = inSel(d, ci);
-                    const isActive = selB?.r === d && selB?.c === ci;
-                    const cls =
-                      "cell" +
-                      (val === null || val === DEFAULT_TOKEN ? " null" : typeof val === "number" ? " num" : "") +
-                      (selected ? " sel" : "") +
-                      (isActive ? " active" : "") +
-                      (changed ? " changed" : "") +
-                      (isMatch(d, ci) ? " match" : "");
                     return (
-                      <div
+                      <GridCell
                         key={ci}
-                        className={cls}
-                        style={{ width: widths[ci] }}
+                        width={widths[ci]}
+                        kind={val === null || val === DEFAULT_TOKEN ? "null" : typeof val === "number" ? "num" : undefined}
+                        selected={inSel(d, ci)}
+                        active={selB?.r === d && selB?.c === ci}
+                        changed={!!changed}
+                        match={isMatch(d, ci)}
                         onMouseDown={(e) => {
                           if (e.button !== 0) return;
                           dragging.current = true;
@@ -868,11 +836,11 @@ export function ResultGrid(p: Props) {
                         onContextMenu={(e) => openCellMenu(e, d, ci)}
                       >
                         {display(val)}
-                      </div>
+                      </GridCell>
                     );
                   })}
                   {spacer(padR)}
-                </div>
+                </GridRow>
               );
             })}
           </div>
@@ -914,7 +882,7 @@ export function ResultGrid(p: Props) {
             </>
           }
         >
-          <pre className="sql-preview">{p.query}</pre>
+          <CodeBlock className="sql-preview">{p.query}</CodeBlock>
         </Modal>
       )}
 
@@ -934,7 +902,7 @@ export function ResultGrid(p: Props) {
             </>
           }
         >
-          <pre className="sql-preview">{preview.sql.join("\n")}</pre>
+          <CodeBlock className="sql-preview">{preview.sql.join("\n")}</CodeBlock>
           {submitErr && <Notice tone="danger">{submitErr}</Notice>}
         </Modal>
       )}
@@ -982,12 +950,12 @@ function ValueEditor({ title, text, readOnly, onApply, onClose }: { title: strin
     <div className="value-editor">
       <div className="ve-head">
         <span className="ve-title">{title}</span>
-        <span className="grow" />
+        <Spacer />
         <ToolButton active={wrap} title="Toggle Soft-Wrap" onClick={() => setWrap((w) => !w)}>Wrap</ToolButton>
         <ToolButton title="Toggle Formatting (JSON)" onClick={format}>{"{ }"}</ToolButton>
         <IconButton title="Close (⎋)" onClick={onClose}>×</IconButton>
       </div>
-      <textarea
+      <TextArea
         autoFocus
         readOnly={readOnly}
         className={"ve-text" + (wrap ? "" : " nowrap")}

@@ -61,7 +61,7 @@ TUI 테스트는 DB 없이 앱을 움직일 수 있습니다: `crates/tui/src/te
 
 ## UI 컴포넌트와 Storybook
 
-GUI 는 `src/ui` 의 공통 컴포넌트 (버튼, 도구 막대, 대화상자, 확인 창, 폼 칸, 탭, 안내) 와 디자인 토큰 (간격, 글자 크기, 테마별 색) 으로 만든다. 규칙은 [src/ui/README.md](../../src/ui/README.md). TUI 는 `crates/tui/src/kit.rs` 에서 같은 이름 · 같은 색을 쓴다.
+GUI 는 `src/ui` 의 공통 컴포넌트 (버튼, 도구 막대, 대화상자, 확인 창, 폼 칸, 탭, 안내) 와 디자인 토큰 (간격, 글자 크기, 테마별 색) 으로 만든다. 규칙은 [src/ui/README.md](../../src/ui/README.md). TUI 는 `crates/tui/src/kit` 에서 같은 이름 · 같은 색을 쓴다. 둘 다 원자 · 분자 · 유기체로 나눈다.
 
 ```bash
 pnpm storybook        # http://localhost:6006 — GUI 컴포넌트를 테마별로, TUI 화면까지

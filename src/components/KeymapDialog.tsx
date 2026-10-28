@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { KEYMAP, KeyRow, toOther } from "../lib/keymap";
 import { isCustom, shortcutLabel } from "../lib/shortcuts";
-import { Button, EmptyState, Modal, TextInput } from "../ui";
+import { Button, EmptyState, Kbd, Modal, SearchField, SectionTitle } from "../ui";
 
 const isMac = navigator.platform.toLowerCase().includes("mac");
 
@@ -33,14 +33,14 @@ export function KeymapDialog({ onClose, onEdit }: { onClose: () => void; onEdit:
         </>
       }
     >
-      <TextInput full className="keymap-search" autoFocus placeholder="Search actions or shortcuts" value={q} onChange={(e) => setQ(e.target.value)} />
+      <SearchField className="keymap-search" autoFocus placeholder="Search actions or shortcuts" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="keymap-body">
         {sections.map((s) => (
           <div key={s.title} className="keymap-section">
-            <div className="keymap-title">{s.title}</div>
+            <SectionTitle className="keymap-title">{s.title}</SectionTitle>
             {s.rows.map((r) => (
               <div key={s.title + r[0] + r[1]} className={"keymap-row" + (r[2] && isCustom(r[2]) ? " custom" : "")}>
-                <span className="keymap-keys">{keysOf(r)}</span>
+                <Kbd className="keymap-keys">{keysOf(r)}</Kbd>
                 <span className="keymap-desc">{r[1]}</span>
               </div>
             ))}

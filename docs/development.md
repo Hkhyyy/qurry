@@ -61,7 +61,7 @@ TUI tests can drive the app without a database: `crates/tui/src/testkit.rs` open
 
 ## UI components and Storybook
 
-The GUI is built from the shared components in `src/ui` (buttons, toolbars, dialogs, confirm, form fields, tabs, notices) on design tokens (spacing, type sizes, colors per theme); the rules are in [src/ui/README.md](../src/ui/README.md). The TUI uses the same names and colors from `crates/tui/src/kit.rs`.
+The GUI is built from the shared components in `src/ui` (buttons, toolbars, dialogs, confirm, form fields, tabs, notices) on design tokens (spacing, type sizes, colors per theme); the rules are in [src/ui/README.md](../src/ui/README.md). The TUI uses the same names and colors from `crates/tui/src/kit`. Both are split into atoms, molecules and organisms.
 
 ```bash
 pnpm storybook        # http://localhost:6006 — every GUI component in each theme, and the TUI screens

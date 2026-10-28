@@ -18,7 +18,7 @@ import { RagView } from "./components/RagView";
 import { WorkspaceBar, WorkspaceInfo } from "./components/WorkspaceBar";
 import { forgetConsoleModel } from "./lib/monaco";
 import { TextDialog } from "./components/TextDialog";
-import { Button, Checkbox, ConfirmHost, Field, IconButton, Modal, Overlay, Select, ToolButton, Toolbar } from "./ui";
+import { Button, Checkbox, CodeBlock, ConfirmHost, Field, IconButton, List, ListItem, Modal, Overlay, Select, Spacer, StatusItem, TabItem, Text, ToolButton, Toolbar, ToolbarSep } from "./ui";
 import { RecentFiles, Switcher, SwitchItem } from "./components/Switcher";
 import { ActionItem, DbObject, invalidateSearchIndex, SearchEverywhere, SeTab } from "./components/SearchEverywhere";
 import { FindPanel, FindRun, FtsScope, FullTextSearchDialog } from "./components/FullTextSearch";
@@ -1925,14 +1925,21 @@ export default function App() {
           {gTabs.map((t) => {
             const color = conns.find((c) => c.id === t.connId)?.color;
             return (
-              <div
+              <TabItem
                 key={t.id}
-                className={
-                  "tab" +
-                  (t.id === ga?.id ? " active" : "") +
-                  (t.id === dragId ? " dragging" : "") +
-                  (dropHint?.zone === "tabs" && dropHint.g === g && dropHint.beforeId === t.id ? " drop-before" : "")
-                }
+                label={t.title}
+                icon={t.kind === "table" ? "▦" : t.kind === "ddl" ? "ƒ" : t.kind === "redis" ? "◆" : t.kind === "dba" ? "◉" : t.kind === "erd" ? "⧉" : t.kind === "migrate" ? "⇄" : t.kind === "rag" ? "✦" : "⌘"}
+                iconClass={t.kind}
+                active={t.id === ga?.id}
+                pinned={t.pinned}
+                onPin={() => togglePin(t)}
+                closeTitle="Close. Alt-Click to Close Others"
+                onClose={(e) => {
+                  // ⌥+클릭: 이 탭만 남기고 닫기
+                  if (e.altKey) closeTabs(gTabs.filter((x) => x.id !== t.id && !x.pinned).map((x) => x.id));
+                  else closeTabs([t.id]);
+                }}
+                className={(t.id === dragId ? "dragging" : "") + (dropHint?.zone === "tabs" && dropHint.g === g && dropHint.beforeId === t.id ? " drop-before" : "")}
                 style={color ? { background: connBg(color, theme), boxShadow: `inset 0 2px 0 ${connStripe(color, theme)}` } : undefined}
                 draggable
                 onDragStart={(e) => {
@@ -1963,37 +1970,7 @@ export default function App() {
                 onContextMenu={(e) => openTabMenu(e, t)}
                 onDoubleClick={() => setMaximized((m) => !m)}
                 title={t.kind === "table" ? `${t.edit?.schema}.${t.edit?.table}` : t.title}
-              >
-                <span className={"tab-icon " + t.kind}>{t.kind === "table" ? "▦" : t.kind === "ddl" ? "ƒ" : t.kind === "redis" ? "◆" : t.kind === "dba" ? "◉" : t.kind === "erd" ? "⧉" : t.kind === "migrate" ? "⇄" : t.kind === "rag" ? "✦" : "⌘"}</span>
-                <span>{t.title}</span>
-                {t.pinned ? (
-                  <span
-                    className="tab-pin"
-                    title="Unpin Tab"
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      togglePin(t);
-                    }}
-                  >
-                    📌
-                  </span>
-                ) : (
-                  <span
-                    className="tab-close"
-                    title={`Close. Alt-Click to Close Others`}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      // ⌥+클릭: 이 탭만 남기고 닫기
-                      if (e.altKey) closeTabs(gTabs.filter((x) => x.id !== t.id && !x.pinned).map((x) => x.id));
-                      else closeTabs([t.id]);
-                    }}
-                  >
-                    ×
-                  </span>
-                )}
-              </div>
+              />
             );
           })}
         </div>
@@ -2033,9 +2010,9 @@ export default function App() {
             <div className="empty center">
               Right-click a data source → <b>New Query Console</b> ({isMac ? "⇧⌘L" : "Ctrl+Shift+L"}).
               <br />
-              <span className="muted">Double-click a table ({isMac ? "⌘↓" : "F4"}) to edit data, {isMac ? "⌘b" : "Ctrl+b"} for DDL, {isMac ? "⌘↩" : "Ctrl+Enter"} to execute.</span>
+              <Text tone="muted">Double-click a table ({isMac ? "⌘↓" : "F4"}) to edit data, {isMac ? "⌘b" : "Ctrl+b"} for DDL, {isMac ? "⌘↩" : "Ctrl+Enter"} to execute.</Text>
               <br />
-              <span className="muted">All shortcuts: <b>Keymap Reference</b> ({sk("keymap")}) · Search Everywhere ({isMac ? "⇧⇧" : "Shift Shift"})</span>
+              <Text tone="muted">All shortcuts: <b>Keymap Reference</b> ({sk("keymap")}) · Search Everywhere ({isMac ? "⇧⇧" : "Shift Shift"})</Text>
             </div>
           )}
           {gTabs
@@ -2216,7 +2193,7 @@ export default function App() {
               <div key={t.id} className="work-layer ddl-layer" style={{ display: t.id === ga?.id ? "flex" : "none" }}>
                 <Toolbar>
                   <span className="tb-info" style={{ marginLeft: 0 }}>{t.title.startsWith("SQL Generator") ? "SQL Generator" : "DDL"} · read-only</span>
-                  <span className="grow" />
+                  <Spacer />
                   <ToolButton title="Copy to Clipboard" onClick={() => { navigator.clipboard.writeText(t.sql); setStatus("Copied to clipboard"); }}>Copy</ToolButton>
                   <ToolButton
                     title="Save to File"
@@ -2258,26 +2235,19 @@ export default function App() {
 
   return (
     <div className="app">
-      <div className="toolbar" style={activeConn?.color ? { boxShadow: `inset 4px 0 0 ${activeConn.color}` } : undefined}>
-        <span className="brand">Qurry</span>
-        <span className="sep" />
-        <button
-          className="run"
-          disabled={!active || active.kind !== "console" || active.running}
-          onClick={() => active && editorApis.current.get(active.id)?.run()}
-          title={`Execute (${isMac ? "⌘↩" : "Ctrl+Enter"})`}
-        >
+      <Toolbar className="app-toolbar" style={activeConn?.color ? { boxShadow: `inset 4px 0 0 ${activeConn.color}` } : undefined}>
+        <Text strong>Qurry</Text>
+        <ToolbarSep />
+        <IconButton tone="ok" disabled={!active || active.kind !== "console" || active.running} onClick={() => active && editorApis.current.get(active.id)?.run()} title={`Execute (${isMac ? "⌘↩" : "Ctrl+Enter"})`}>
           ▶
-        </button>
-        <button className="stop" disabled={!active?.running} onClick={() => active && cancel(active)} title="Cancel Running Statements">
+        </IconButton>
+        <IconButton tone="danger" disabled={!active?.running} onClick={() => active && cancel(active)} title="Cancel Running Statements">
           ■
-        </button>
+        </IconButton>
         <IconButton className="tb-settings" title={`Settings (${sk("settings")})`} onClick={() => setSettingsOpen("appearance")}>⚙</IconButton>
         <IconButton className="tb-settings" title={`Keymap Reference (${isMac ? "⇧⌘/" : "Ctrl+Shift+/"})`} onClick={() => setKeymapOpen(true)}>⌨</IconButton>
-        <span className="tb-conn">
-          {activeConn ? `${activeConn.name} · ${activeConn.user}@${activeConn.host} · ${active?.database || activeConn.database || "postgres"}` : "No console"}
-        </span>
-      </div>
+        <Text tone="muted" truncate>{activeConn ? `${activeConn.name} · ${activeConn.user}@${activeConn.host} · ${active?.database || activeConn.database || "postgres"}` : "No console"}</Text>
+      </Toolbar>
 
       <div className="ws-row">
       {!maximized && (
@@ -2285,7 +2255,7 @@ export default function App() {
           list={workspaces}
           current={curWs}
           counts={Object.fromEntries(workspaces.map((w) => [w.id, w.id === curWs ? tabs.length : stash.current.get(w.id)?.tabs.length ?? 0]))}
-          shortcut={(n) => (isMac ? `⌥${n}` : `Alt+${n}`)}
+          shortcut={(n) => (isMac ? `⌘${n}` : `Ctrl+${n}`)}
           onSwitch={switchWs}
           onNew={newWs}
           onRename={renameWs}
@@ -2467,7 +2437,7 @@ export default function App() {
         <Overlay variant="light" onClose={() => setQuickDoc(null)} onKeyDown={(e) => e.key === "Escape" && setQuickDoc(null)}>
           <div className="quick-doc" onMouseDown={(e) => e.stopPropagation()} tabIndex={-1} ref={(el) => el?.focus()} onKeyDown={(e) => e.key === "Escape" && setQuickDoc(null)}>
             <div className="qd-title">{quickDoc.title}</div>
-            <pre className="qd-body">{quickDoc.text}</pre>
+            <CodeBlock className="qd-body">{quickDoc.text}</CodeBlock>
           </div>
         </Overlay>
       )}
@@ -2532,14 +2502,10 @@ function SettingsDialog({ onClose, onUpdate, initialPage = "appearance" }: { onC
       }
     >
       <div className="settings-body">
-        <div className="settings-nav">
-          <div className={page === "appearance" ? "on" : ""} onClick={() => setPage("appearance")}>
-            Appearance
-          </div>
-          <div className={page === "keymap" ? "on" : ""} onClick={() => setPage("keymap")}>
-            Keymap
-          </div>
-        </div>
+        <List className="settings-nav">
+          <ListItem title="Appearance" selected={page === "appearance"} onClick={() => setPage("appearance")} />
+          <ListItem title="Keymap" selected={page === "keymap"} onClick={() => setPage("keymap")} />
+        </List>
         {page === "keymap" && <KeymapEditor />}
         {page === "appearance" && (
           <div className="settings-form">
@@ -2582,18 +2548,20 @@ function StatusBar({ status, readOnly, update, onUpdate, jobs }: { status: strin
   const w = useStatusWidgets();
   return (
     <div className="statusbar">
-      <span className="sb-text">{status}</span>
-      <span className="grow" />
+      <Text truncate className="sb-text">
+        {status}
+      </Text>
+      <Spacer />
       <TransferBar jobs={jobs} />
       {update && (
-        <button className="sb-widget sb-update" title="A new version is available" onClick={onUpdate}>
+        <StatusItem accent title="A new version is available" onClick={onUpdate}>
           ⬆ v{update} available
-        </button>
+        </StatusItem>
       )}
-      {w.aggregate && <span className="sb-widget" title="Aggregate of selected cells">{w.aggregate}</span>}
-      {readOnly && <span className="sb-widget" title="Data source is read-only">🔒 Read-only</span>}
-      {w.caret && <span className="sb-widget" title="Line:Column">{w.caret}</span>}
-      <span className="sb-widget">UTF-8</span>
+      {w.aggregate && <StatusItem title="Aggregate of selected cells">{w.aggregate}</StatusItem>}
+      {readOnly && <StatusItem title="Data source is read-only">🔒 Read-only</StatusItem>}
+      {w.caret && <StatusItem title="Line:Column">{w.caret}</StatusItem>}
+      <StatusItem>UTF-8</StatusItem>
     </div>
   );
 }

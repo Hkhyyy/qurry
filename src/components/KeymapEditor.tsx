@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { bind, bindable, bindings, eventSpec, formatSpec, isCustom, onKeymapChange, removeKey, resetAllShortcuts, resetShortcut, Scope, SCOPE_LABEL, SHORTCUTS } from "../lib/shortcuts";
+import { Button, IconButton, SearchField, Spacer, Text } from "../ui";
 
 /** Settings › Keymap: 명령 단축키 바꾸기. 키를 누르면 녹화, 같은 범위에서 겹치는 명령에서는 그 키를 뺀다 */
 export function KeymapEditor() {
@@ -32,7 +33,7 @@ export function KeymapEditor() {
   const scopes: Scope[] = ["global", "tree", "editor"];
   return (
     <div className={"keymap-editor" + (rec ? " keymap-recording" : "")}>
-      <input className="keymap-search" placeholder="Search commands or shortcuts" value={q} onChange={(e) => setQ(e.target.value)} />
+      <SearchField className="keymap-search" placeholder="Search commands or shortcuts" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="keymap-editor-list">
         {scopes.map((scope) => {
           const rows = SHORTCUTS.filter((s) => s.scope === scope && (!f || s.title.toLowerCase().includes(f) || bindings(s.id).some((k) => formatSpec(k).toLowerCase().includes(f) || k.toLowerCase().includes(f))));
@@ -52,16 +53,16 @@ export function KeymapEditor() {
                         bindings(s.id).map((k) => (
                           <span key={k} className="keymap-chip">
                             {formatSpec(k)}
-                            <button title="Remove this shortcut" onClick={() => removeKey(s.id, k)}>×</button>
+                            <IconButton size="sm" tone="danger" title="Remove this shortcut" onClick={() => removeKey(s.id, k)}>×</IconButton>
                           </span>
                         ))
                       ) : (
-                        <span className="muted">none</span>
+                        <Text tone="muted">none</Text>
                       )}
                     </span>
-                    <button onClick={() => setRec({ id: s.id, add: false })} disabled={!!rec}>Change</button>
-                    <button title="Add another shortcut" onClick={() => setRec({ id: s.id, add: true })} disabled={!!rec}>+</button>
-                    <button title="Reset to default" onClick={() => resetShortcut(s.id)} disabled={!!rec || !isCustom(s.id)}>Reset</button>
+                    <Button size="sm" onClick={() => setRec({ id: s.id, add: false })} disabled={!!rec}>Change</Button>
+                    <Button size="sm" title="Add another shortcut" onClick={() => setRec({ id: s.id, add: true })} disabled={!!rec}>+</Button>
+                    <Button size="sm" title="Reset to default" onClick={() => resetShortcut(s.id)} disabled={!!rec || !isCustom(s.id)}>Reset</Button>
                   </div>
                 );
               })}
@@ -71,8 +72,8 @@ export function KeymapEditor() {
       </div>
       <div className="keymap-editor-foot">
         <span className="hint">{note ?? "Saved to keymap.json in the config folder. Arrow keys, grid and tree navigation keys are fixed."}</span>
-        <span className="grow" />
-        <button onClick={() => (resetAllShortcuts(), setNote("All shortcuts reset to defaults"))} disabled={!!rec}>Reset All</button>
+        <Spacer />
+        <Button size="sm" onClick={() => (resetAllShortcuts(), setNote("All shortcuts reset to defaults"))} disabled={!!rec}>Reset All</Button>
       </div>
     </div>
   );

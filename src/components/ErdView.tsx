@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { erd, ErdRelation, ErdTable, saveFile } from "../lib/api";
 import { layout } from "../lib/erdLayout";
-import { Button, Notice } from "../ui";
+import { Button, EmptyState, Notice, Spacer, Text, Toolbar } from "../ui";
 
 const ROW = 18;
 const HEAD = 26;
@@ -134,20 +134,20 @@ export function ErdView(p: { target: string; schemas: string[]; visible: boolean
   };
 
   if (error) return <Notice tone="danger">{error}</Notice>;
-  if (!data) return <div className="muted pad">Loading the diagram…</div>;
+  if (!data) return <EmptyState>Loading the diagram…</EmptyState>;
   const hi = (r: ErdRelation) => hover !== null && (hover === key(r.fromSchema, r.fromTable) || hover === key(r.toSchema, r.toTable));
   return (
     <div className="erd">
-      <div className="dba-bar erd-bar">
-        <span className="muted dba-help">
+      <Toolbar className="dba-bar erd-bar">
+        <Text tone="muted" className="dba-help">
           {p.schemas.join(", ")} — {data.tables.length} tables, {data.relations.length} foreign keys · drag tables, wheel to zoom, drag the background to pan, double-click a table to open it
-        </span>
-        <span className="grow" />
+        </Text>
+        <Spacer />
         <Button onClick={fit}>Fit</Button>
         <Button onClick={() => setMoved({})}>Re-layout</Button>
         <Button onClick={() => navigator.clipboard.writeText(data.mermaid).then(() => p.onStatus("Mermaid diagram copied"))}>Copy as Mermaid</Button>
         <Button onClick={() => saveFile(`${p.schemas.join("_")}.svg`, svgText(), "SVG image", "svg").then((f) => f && p.onStatus(`Saved ${f}`))}>Save SVG…</Button>
-      </div>
+      </Toolbar>
       <svg ref={svg} className="erd-canvas" onMouseDown={(e) => onDown(e)} onMouseMove={onMove} onMouseUp={() => (drag.current = null)} onMouseLeave={() => (drag.current = null)} onWheel={onWheel}>
         <defs>
           <marker id="erd-one" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse">

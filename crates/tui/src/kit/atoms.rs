@@ -1,7 +1,6 @@
-//! TUI 규격: 색 토큰과 공통 조각 (패널 · 팝업 · 선택 줄 · 배지 · 안내 줄). 화면 코드는 숫자 색 대신 이 이름을 쓴다.
-//! GUI 의 src/ui (tokens.css) 와 같은 이름 · 같은 색. 미리 보기: Storybook 의 "TUI" (pnpm tui-snapshots 로 다시 그림)
+//! 원자: 색 토큰과 글자 조각 (Span) — 배지 · 키 · 흐린 글자 · 아이콘. 그리고 줄 맞추기 (fit_spans) · 자리 비우기 (clear)
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, BorderType, Borders, Clear};
+use ratatui::widgets::Clear;
 
 // ── 색 (GUI tokens.css 와 같은 값) ──
 /// 강조: 포커스된 테두리, 키 이름, 링크
@@ -41,48 +40,27 @@ pub fn selected(focused: bool) -> Color {
     }
 }
 
-/// 패널 테두리 (포커스면 굵게 · 강조색)
-pub fn panel(title: impl Into<Line<'static>>, focused: bool) -> Block<'static> {
-    Block::default()
-        .borders(Borders::ALL)
-        .border_type(if focused { BorderType::Thick } else { BorderType::Plain })
-        .title(title)
-        .border_style(Style::default().fg(if focused { ACCENT } else { DIM }))
+/// 키 표기 (⌃k · F5): 강조색
+pub fn key(k: &str) -> Span<'static> {
+    Span::styled(k.to_string(), Style::default().fg(ACCENT))
+}
+/// 흐린 글자 (설명 · 개수 · 위치)
+pub fn muted(s: impl Into<String>) -> Span<'static> {
+    Span::styled(s.into(), Style::default().fg(DIM))
+}
+/// 아이콘 (글자 하나 + 빈칸) 과 그 색
+pub fn icon(glyph: &str, color: Color) -> Span<'static> {
+    Span::styled(format!("{glyph} "), Style::default().fg(color))
 }
 
-/// 화면 가운데 (위쪽 1/3) 에 w × h
-pub fn centered(area: Rect, w: u16, h: u16) -> Rect {
-    let w = w.min(area.width.saturating_sub(4));
-    let h = h.min(area.height.saturating_sub(2));
-    Rect { x: area.x + (area.width - w) / 2, y: area.y + (area.height.saturating_sub(h)) / 3, width: w, height: h }
-}
-
-/// 팝업 자리: 뒤를 비우고 강조 테두리를 그린 뒤 안쪽 칸을 돌려준다
-pub fn popup(f: &mut Frame, r: Rect, title: impl Into<Line<'static>>) -> Rect {
-    clear(f, r);
-    let b = panel(title, true);
-    let inner = b.inner(r);
-    f.render_widget(b.style(Style::default().bg(POPUP_BG)), r);
-    inner
-}
-
-/// 위험한 확인 팝업: 테두리가 빨갛다 (운영 DB · DROP · WHERE 없는 DELETE)
-pub fn popup_danger(f: &mut Frame, r: Rect, title: impl Into<Line<'static>>) -> Rect {
-    clear(f, r);
-    let b = panel(title, true).border_style(Style::default().fg(DANGER));
-    let inner = b.inner(r);
-    f.render_widget(b.style(Style::default().bg(POPUP_BG)), r);
-    inner
+/// 색 견본 (Data Source 색): 여섯 칸 색 바탕
+pub fn swatch(c: Color) -> Span<'static> {
+    Span::styled("      ", Style::default().bg(c))
 }
 
 /// 배지: [ PROD ] 처럼 색 바탕 글자
 pub fn badge(text: &str, bg: Color) -> Span<'static> {
     Span::styled(format!(" {text} "), Style::default().fg(on(bg)).bg(bg).add_modifier(Modifier::BOLD))
-}
-
-/// 안내 줄 조각: "키 설명" — 키는 강조색
-pub fn key_hint(key: &str, label: &str) -> Vec<Span<'static>> {
-    vec![Span::styled(key.to_string(), Style::default().fg(ACCENT)), Span::styled(format!(" {label}"), Style::default().fg(Color::Gray))]
 }
 
 pub fn lighten(c: Color) -> Color {

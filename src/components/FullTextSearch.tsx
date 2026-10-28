@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { FtsHit, FtsRequest } from "../lib/api";
-import { Button, Checkbox, FormGrid, IconButton, Modal, Select, TextInput } from "../ui";
+import { Button, Checkbox, EmptyState, FormGrid, IconButton, Modal, Notice, Select, Spacer, Table, Td, Text, TextInput, Th } from "../ui";
 
 export interface FtsScope {
   connId: string;
@@ -75,7 +75,7 @@ export function FullTextSearchDialog({ scope, onClose, onSearch }: { scope: FtsS
         <label>Show first</label>
         <div className="ui-row">
           <TextInput className="w-port" type="number" min={1} max={1000} value={limit} onChange={(e) => setLimit(Math.max(1, Number(e.target.value) || 1))} />
-          <span className="ui-muted">matches per table/view</span>
+          <Text tone="muted">matches per table/view</Text>
         </div>
         <label>Scope</label>
         <span className="fts-scope" title={where}>
@@ -124,7 +124,7 @@ export function FindPanel({ runs, active, onActive, onClose, onCloseRun, onPin, 
             </span>
           </span>
         ))}
-        <span className="grow" />
+        <Spacer />
         {run && (
           <IconButton title={run.pinned ? "Unpin Tab" : "Pin Tab"} onClick={() => onPin(run.id)}>
             📌
@@ -135,9 +135,9 @@ export function FindPanel({ runs, active, onActive, onClose, onCloseRun, onPin, 
         </IconButton>
       </div>
       <div className="find-body">
-        {!run && <div className="popup-empty">No search results. Use Full-text Search (⌥⇧⌘F).</div>}
-        {run?.running && <div className="popup-empty">Searching {run.scope.connName} · {run.scope.db}…</div>}
-        {run?.error && <pre className="error-box">{run.error}</pre>}
+        {!run && <EmptyState>No search results. Use Full-text Search (⌥⇧⌘F).</EmptyState>}
+        {run?.running && <EmptyState>Searching {run.scope.connName} · {run.scope.db}…</EmptyState>}
+        {run?.error && <Notice tone="danger">{run.error}</Notice>}
         {run && !run.running && !run.error && (
           <>
             <div className="find-summary">
@@ -154,15 +154,15 @@ export function FindPanel({ runs, active, onActive, onClose, onCloseRun, onPin, 
                     onDoubleClick={() => onOpen(run, h)}
                     title="Double-click to open the table filtered by the matches"
                   >
-                    <span className="chev">{open ? "▾" : "▸"}</span> {key} <span className="muted">{h.result.rows.length}{h.result.truncated ? "+" : ""}</span>
+                    <span className="chev">{open ? "▾" : "▸"}</span> {key} <Text tone="muted">{h.result.rows.length}{h.result.truncated ? "+" : ""}</Text>
                   </div>
                   {open && (
                     <div className="find-rows">
-                      <table>
+                      <Table>
                         <thead>
                           <tr>
                             {h.result.columns.map((c) => (
-                              <th key={c.name}>{c.name}</th>
+                              <Th key={c.name}>{c.name}</Th>
                             ))}
                           </tr>
                         </thead>
@@ -170,14 +170,14 @@ export function FindPanel({ runs, active, onActive, onClose, onCloseRun, onPin, 
                           {h.result.rows.map((r, i) => (
                             <tr key={i} onDoubleClick={() => onOpen(run, h)}>
                               {r.map((v, j) => (
-                                <td key={j} className={v === null ? "null" : (run.matchCase ? String(v).includes(run.text) : String(v).toLowerCase().includes(run.text.toLowerCase())) ? "hit" : ""}>
+                                <Td key={j} className={v === null ? "null" : (run.matchCase ? String(v).includes(run.text) : String(v).toLowerCase().includes(run.text.toLowerCase())) ? "hit" : ""}>
                                   {v === null ? "<null>" : String(v).length > 80 ? String(v).slice(0, 80) + "…" : String(v)}
-                                </td>
+                                </Td>
                               ))}
                             </tr>
                           ))}
                         </tbody>
-                      </table>
+                      </Table>
                     </div>
                   )}
                 </div>

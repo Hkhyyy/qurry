@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Button, Checkbox, EmptyState, FormGrid, FormSection, Hint, Modal, Notice, Select, Spacer, Tabs, TextInput } from "../ui";
+import { Button, Checkbox, ColorPicker, EmptyState, FormGrid, FormSection, Hint, Modal, Notice, Select, Spacer, Tabs, Text, TextArea, TextInput } from "../ui";
 import { api, COLOR_PRESETS, ConnOptions, RedisMode, SslConfig, ConnectionConfig, ConnectionView, DbKind, DEFAULT_PORT, DRIVER_MISSING, isFileKind, KIND_LABEL, meta, SchemaInfo, SshConfig, targetId } from "../lib/api";
 
 interface Props {
@@ -158,12 +158,12 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
               <label>Plugin</label>
               <div className="ui-row">
                 {driver ? (
-                  <span className="ui-muted">✓ {KIND_LABEL[cfg.kind]} driver installed</span>
+                  <Text tone="muted">✓ {KIND_LABEL[cfg.kind]} driver installed</Text>
                 ) : (
                   <>
-                    <span className="ui-muted ui-ellipsis" title="Downloaded from this version's GitHub release (signature checked)">
+                    <Text tone="muted" truncate title="Downloaded from this version's GitHub release (signature checked)">
                       Not installed — downloaded from this version's GitHub release (signature checked)
-                    </span>
+                    </Text>
                     <Button size="sm" variant="primary" disabled={installing} onClick={installDriver}>
                       {installing ? "Installing…" : "Install"}
                     </Button>
@@ -176,8 +176,8 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
             <>
               <label>Host</label>
               <div className="ui-row">
-                <TextInput className="grow" value={cfg.host} placeholder={cfg.kind === "mongodb" ? "host, or a mongodb:// / mongodb+srv:// URI" : ""} onChange={(e) => set("host", e.target.value)} />
-                <span className="ui-muted">Port</span>
+                <TextInput grow value={cfg.host} placeholder={cfg.kind === "mongodb" ? "host, or a mongodb:// / mongodb+srv:// URI" : ""} onChange={(e) => set("host", e.target.value)} />
+                <Text tone="muted">Port</Text>
                 {port(cfg.port, (n) => set("port", n), 0)}
               </div>
               <label>User</label>
@@ -213,7 +213,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
           <label>{fileDb ? "File" : cfg.kind === "oracle" ? "Service name" : "Database"}</label>
           {fileDb ? (
             <div className="ui-row">
-              <TextInput className="grow" value={cfg.database} placeholder={cfg.kind === "duckdb" ? "/path/to/data.duckdb (empty = in memory)" : "/path/to/app.db (created if missing)"} onChange={(e) => set("database", e.target.value)} />
+              <TextInput grow value={cfg.database} placeholder={cfg.kind === "duckdb" ? "/path/to/data.duckdb (empty = in memory)" : "/path/to/app.db (created if missing)"} onChange={(e) => set("database", e.target.value)} />
               <Button size="sm" onClick={pickDbFile}>
                 Browse…
               </Button>
@@ -229,7 +229,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
             <>
               <label>Oracle client</label>
               <div className="ui-row">
-                <TextInput className="grow" value={opt.oracleClient ?? ""} placeholder="Instant Client folder (empty = ORACLE_CLIENT_LIB_DIR / system default)" onChange={(e) => setOpt("oracleClient", e.target.value || null)} />
+                <TextInput grow value={opt.oracleClient ?? ""} placeholder="Instant Client folder (empty = ORACLE_CLIENT_LIB_DIR / system default)" onChange={(e) => setOpt("oracleClient", e.target.value || null)} />
                 <Button
                   size="sm"
                   onClick={async () => {
@@ -256,8 +256,8 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
           </Checkbox>
           <label>Host</label>
           <div className="ui-row">
-            <TextInput className="grow" disabled={!ssh.enabled} value={ssh.host} placeholder="bastion.example.com" onChange={(e) => setSsh("host", e.target.value)} />
-            <span className="ui-muted">Port</span>
+            <TextInput grow disabled={!ssh.enabled} value={ssh.host} placeholder="bastion.example.com" onChange={(e) => setSsh("host", e.target.value)} />
+            <Text tone="muted">Port</Text>
             {port(ssh.port, (n) => setSsh("port", n), 22, !ssh.enabled)}
           </div>
           <label>User</label>
@@ -271,7 +271,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
             <>
               <label>Private key</label>
               <div className="ui-row">
-                <TextInput className="grow" disabled={!ssh.enabled} value={ssh.keyPath} onChange={(e) => setSsh("keyPath", e.target.value)} />
+                <TextInput grow disabled={!ssh.enabled} value={ssh.keyPath} onChange={(e) => setSsh("keyPath", e.target.value)} />
                 <Button size="sm" disabled={!ssh.enabled} onClick={browseKey}>
                   Browse…
                 </Button>
@@ -295,7 +295,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
             <span key={k} style={{ display: "contents" }}>
               <label>{k === "caFile" ? "CA file" : k === "certFile" ? "Client cert" : "Client key"}</label>
               <div className="ui-row">
-                <TextInput className="grow" disabled={!ssl.enabled} value={ssl[k]} placeholder={k === "caFile" ? "(system trust store)" : "(none)"} onChange={(e) => setSsl(k, e.target.value)} />
+                <TextInput grow disabled={!ssl.enabled} value={ssl[k]} placeholder={k === "caFile" ? "(system trust store)" : "(none)"} onChange={(e) => setSsl(k, e.target.value)} />
                 <Button size="sm" disabled={!ssl.enabled} onClick={() => pickFile(k)}>
                   Browse…
                 </Button>
@@ -346,7 +346,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
               Run keep-alive query each
             </Checkbox>
             <TextInput className="w-port" type="number" min={1} disabled={!opt.keepAliveSecs} value={opt.keepAliveSecs ?? 60} onChange={(e) => setOpt("keepAliveSecs", Math.max(1, Number(e.target.value) || 1))} />
-            <span className="ui-muted">sec.</span>
+            <Text tone="muted">sec.</Text>
           </div>
           <span />
           <div className="ui-row">
@@ -354,14 +354,14 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
               Auto-disconnect after
             </Checkbox>
             <TextInput className="w-port" type="number" min={1} disabled={!opt.autoDisconnectSecs} value={opt.autoDisconnectSecs ?? 300} onChange={(e) => setOpt("autoDisconnectSecs", Math.max(1, Number(e.target.value) || 1))} />
-            <span className="ui-muted">sec.</span>
+            <Text tone="muted">sec.</Text>
           </div>
           <span />
           <Checkbox checked={!!opt.singleDb} onChange={(v) => setOpt("singleDb", v)}>
             Single database mode
           </Checkbox>
           <label className="top">Startup script</label>
-          <textarea
+          <TextArea
             className="ui-textarea"
             spellCheck={false}
             rows={4}
@@ -403,19 +403,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
 }
 
 export function ColorSwatches({ value, onChange }: { value: string | null; onChange: (v: string | null) => void }) {
-  return (
-    <div className="swatches">
-      {COLOR_PRESETS.map((c) => (
-        <span
-          key={c.name}
-          title={c.name}
-          className={"swatch" + (c.value === value ? " on" : "") + (c.value ? "" : " none")}
-          style={c.value ? { background: c.value } : undefined}
-          onClick={() => onChange(c.value)}
-        />
-      ))}
-    </div>
-  );
+  return <ColorPicker value={value} options={COLOR_PRESETS} onChange={onChange} />;
 }
 
 type Scope = NonNullable<ConnectionConfig["scope"]>;
@@ -475,11 +463,11 @@ function SchemasTab({ connId, scope, onChange }: { connId?: string; scope: Scope
               <label>
                 <input type="checkbox" checked={selDbs.includes(db)} onChange={() => toggleDb(db)} /> {db}
               </label>
-              <span className="muted">{selSch.length ? `${selSch.length} schemas` : "all schemas"}</span>
+              <Text tone="muted">{selSch.length ? `${selSch.length} schemas` : "all schemas"}</Text>
             </div>
             {openDb === db && (
               <div className="scope-children">
-                {sch === "loading" && <div className="muted">Loading…</div>}
+                {sch === "loading" && <Text as="div" tone="muted">Loading…</Text>}
                 {Array.isArray(sch) &&
                   sch.map((x) => (
                     <label key={x.name} className="scope-row">

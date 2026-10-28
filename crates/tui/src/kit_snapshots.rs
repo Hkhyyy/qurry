@@ -82,31 +82,66 @@ fn app_scene(h: &mut Harness, name: &str, desc: &str, w: u16, ht: u16) -> Value 
     v
 }
 
-/// 공통 조각 (kit.rs) 을 한 화면에
-fn components() -> Value {
-    scene("Components", "kit.rs 의 공통 조각: 패널(포커스 · 아님), 팝업, 고른 줄, 배지, 안내 줄, 색 토큰", 132, 24, |f| {
-        let [top, mid, bot] = Layout::vertical([Constraint::Length(7), Constraint::Length(9), Constraint::Min(6)]).areas(f.area());
-        let [a, b] = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(top);
-        f.render_widget(Paragraph::new(vec![Line::raw("panel(title, true)"), Line::styled("포커스: 굵은 강조 테두리", Style::default().fg(DIM))]).block(panel(" Focused ", true)), a);
-        f.render_widget(Paragraph::new(vec![Line::raw("panel(title, false)"), Line::styled("흐린 얇은 테두리", Style::default().fg(DIM))]).block(panel(" Not focused ", false)), b);
-        let [l, r] = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(mid);
-        let rows = vec![
-            Line::raw(" ▦ users").style(Style::default().bg(selected(true))),
-            Line::raw(" ▦ orders"),
-            Line::raw(" ▦ payments").style(Style::default().bg(selected(false))),
-            Line::styled(" selected(true) · 보통 · selected(false)", Style::default().fg(DIM)),
+/// 원자: 색 토큰 · 글자 조각 (배지 · 키 · 흐린 글자 · 아이콘 · 색 견본)
+fn atoms() -> Value {
+    scene("Atoms", "kit/atoms.rs: 색 토큰과 글자 조각 — badge · key · muted · icon · swatch", 110, 12, |f| {
+        let toks = [("ACCENT", ACCENT), ("SEL", SEL), ("SEL_BLUR", SEL_BLUR), ("SURFACE", SURFACE), ("POPUP_BG", POPUP_BG), ("OK", OK), ("WARN", WARN), ("DANGER", DANGER), ("NUMBER", NUMBER), ("C_DB", C_DB), ("C_VIEW", C_VIEW), ("C_SEQUENCE", C_SEQUENCE), ("C_ROUTINE", C_ROUTINE), ("C_KEYWORD", C_KEYWORD)];
+        let mut lines = vec![Line::from(muted("color tokens (GUI tokens.css 와 같은 값)"))];
+        for chunk in toks.chunks(5) {
+            lines.push(Line::from(chunk.iter().flat_map(|(n, c)| [swatch(*c), Span::raw(" "), muted(format!("{n:<12}"))]).collect::<Vec<_>>()));
+        }
+        lines.push(Line::raw(""));
+        lines.push(Line::from(vec![muted("badge   "), badge("PROD", DANGER), Span::raw(" "), badge("READ-ONLY", SEL), Span::raw(" "), badge("STRING", Color::Rgb(95, 158, 160)), Span::raw(" "), badge("v0.2.5 available", WARN)]));
+        lines.push(Line::from(vec![muted("key     "), key("⌃k"), Span::raw(" "), key("F5"), Span::raw(" "), key("⌥⇧N")]));
+        lines.push(Line::from(vec![muted("icon    "), icon("◉", C_DB), icon("⛁", C_DB), icon("◇", Color::Gray), icon("▤", ACCENT), icon("▦", Color::Gray), icon("◫", C_VIEW), icon("#", C_SEQUENCE), icon("ƒ", C_ROUTINE)]));
+        lines.push(Line::from(vec![muted("muted   "), muted("설명 · 개수 · 위치")]));
+        f.render_widget(Paragraph::new(lines), f.area());
+    })
+}
+
+/// 분자: 한 줄 — Row (트리 · 팔레트 · 스키마 고르기 · Redis 키), key_row, field_row, key_hints, section
+fn molecules() -> Value {
+    scene("Molecules", "kit/molecules.rs: 한 줄 조각 — Row (들여쓰기 · ▸ · 아이콘 · 설명 · 오른쪽 · 색 · 선택), key_row, field_row, key_hints, section", 110, 22, |f| {
+        let w = 60;
+        let prod = Some(Color::Rgb(0x6e, 0x2a, 0x2a));
+        let lines = vec![
+            Line::from(muted("Row — 트리 (정확히 60칸, 줄 색 끝까지 · 끝에 걸린 한글은 빈칸)")),
+            Row::new("[PROD] rentalpay").chevron(Some(true)).lead(icon("◉", C_DB)).bold().hint("postgres").bg(prod).fit(0, w),
+            Row::new("tables").indent(2).chevron(Some(true)).lead(icon("▤", ACCENT)).hint("66").bg(prod).fit(0, w),
+            Row::new("adjust").indent(3).chevron(Some(false)).lead(icon("▦", Color::Gray)).hint("정산 테이블 (주문 단위 정산) 매우 긴 설명").bg(prod).fit(0, w),
+            Row::new("payment").indent(3).chevron(Some(false)).lead(icon("▦", Color::Gray)).hint("결제 카드 정보").bg(prod).selected(true, true).fit(0, w),
+            Row::new("orders").indent(3).chevron(Some(false)).lead(icon("▦", Color::Gray)).selected(true, false).fit(0, w),
+            Line::raw(""),
+            Line::from(muted("Row — 팔레트 · 스키마 고르기 · Redis 키 (오른쪽 맞춤)")),
+            Row::new("Database Admin…").hint(" sessions & locks, slow queries").selected(true, true).fit(0, w),
+            Row::new("public").indent(1).chevron(None).lead(muted("[x] ")).bold().hint("(Default schema)").fit(0, w),
+            Row::new("session:abc").chevron(None).lead(badge("STRING", Color::Rgb(95, 158, 160))).lead(Span::raw(" ")).trailing("3540s").fit(0, w),
+            Line::raw(""),
+            section("section(\"Commands\")"),
+            key_row("⌃k", "Actions Palette", 20, false, false),
+            key_row("⌥n", "New Workspace…", 20, true, true),
+            Line::from(field_row("Host", 15, "db.example.com", false)),
+            Line::from(field_row("Workspace", 15, "◂ 1 Default ▸", true)),
+            Line::raw(""),
+            key_hints(&[("y / Enter", "yes"), ("n / Esc", "no"), ("Tab", "next")]),
         ];
-        f.render_widget(Paragraph::new(rows).block(panel(" Rows ", false)), l);
-        let inner = popup(f, Rect { x: r.x + 1, y: r.y, width: r.width - 2, height: r.height }, " Confirm ");
-        let mut keys = key_hint("y / Enter", "yes");
-        keys.push(Span::styled(" · ", Style::default().fg(DIM)));
-        keys.extend(key_hint("n / Esc", "no"));
-        f.render_widget(Paragraph::new(vec![Line::raw("Delete snippet \"user orders\"?"), Line::raw(""), Line::from(keys)]), inner);
-        let mut sw = vec![Line::from(vec![badge("PROD", DANGER), Span::raw(" "), badge("READ-ONLY", SEL), Span::raw(" "), badge("v0.2.5 available", WARN)])];
-        sw.push(Line::raw(""));
-        let toks = [("ACCENT", ACCENT), ("SEL", SEL), ("SURFACE", SURFACE), ("POPUP_BG", POPUP_BG), ("OK", OK), ("WARN", WARN), ("DANGER", DANGER), ("NUMBER", NUMBER), ("C_DB", C_DB), ("C_VIEW", C_VIEW), ("C_ROUTINE", C_ROUTINE)];
-        sw.push(Line::from(toks.iter().flat_map(|(n, c)| [Span::styled("  ", Style::default().bg(*c)), Span::styled(format!(" {n}  "), Style::default().fg(DIM))]).collect::<Vec<_>>()));
-        f.render_widget(Paragraph::new(sw).block(panel(" Badges · color tokens ", false)), bot);
+        f.render_widget(Paragraph::new(lines), f.area());
+    })
+}
+
+/// 유기체: 패널 (포커스 · 아님) · 팝업 · 위험 팝업 (확인 창)
+fn organisms() -> Value {
+    scene("Organisms", "kit/organisms.rs: panel(포커스 · 아님) · popup · popup_danger + confirm_lines (행 수 색)", 120, 16, |f| {
+        let [a, b, c] = Layout::horizontal([Constraint::Percentage(28), Constraint::Percentage(30), Constraint::Percentage(42)]).areas(f.area());
+        f.render_widget(Paragraph::new(vec![Line::raw("panel(title, true)"), Line::from(muted("굵은 강조 테두리"))]).block(panel(" Focused ", true)), Rect { height: 6, ..a });
+        f.render_widget(Paragraph::new(vec![Line::raw("panel(title, false)"), Line::from(muted("흐린 얇은 테두리"))]).block(panel(" Not focused ", false)), Rect { y: a.y + 7, height: 6, ..a });
+        let inner = popup(f, Rect { x: b.x + 1, width: b.width - 2, height: 7, ..b }, " Confirm ");
+        f.render_widget(Paragraph::new(confirm_lines("Delete snippet \"user orders\"?")), inner);
+        let text = "Production data source \"[PROD] kr\" — this changes data:\n\n  update payment set amount = 0 where id = 4\n     → 1 row\n  delete from payment where created_at < now() - interval '1 year'\n     → 12,408 rows\n\nRun it?";
+        let lines = confirm_lines(text);
+        let h = wrapped_height(&lines, c.width - 4) + 2;
+        let inner = popup_danger(f, Rect { x: c.x + 1, width: c.width - 2, height: h, ..c }, " Confirm ");
+        f.render_widget(Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false }), inner);
     })
 }
 
@@ -150,7 +185,7 @@ async fn explorer(h: &mut Harness) {
 #[tokio::test]
 #[ignore = "Storybook 용 TUI 화면을 다시 만들 때만 (pnpm tui-snapshots)"]
 async fn kit_snapshots() {
-    let mut scenes = vec![components()];
+    let mut scenes = vec![atoms(), molecules(), organisms()];
     let mut h = Harness::new().await;
     explorer(&mut h).await;
     scenes.push(app_scene(&mut h, "Explorer & table", "탐색기 (운영 색 · 왼쪽 끝까지 이어지는 줄 색 · 한글 설명), 표 탭, 상태 줄의 PROD 배지", 120, 22));
