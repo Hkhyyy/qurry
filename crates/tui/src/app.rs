@@ -273,7 +273,7 @@ pub enum FieldKind {
     Text,
     Secret,
     Toggle,
-    Choice(Vec<&'static str>),
+    Choice(Vec<String>),
 }
 pub struct Field {
     pub label: &'static str,
@@ -347,6 +347,7 @@ pub enum Action {
     WsDelete,
     WsMoveTab,
     WsAddConn,
+    WsMoveConn,
     WsRemoveConn,
     Find,
     DbaReports,
@@ -423,6 +424,7 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::WsDelete, "Delete Workspace…", ""),
     (Action::WsMoveTab, "Move Tab to Workspace…", ""),
     (Action::WsAddConn, "Add Data Source to This Workspace…", ""),
+    (Action::WsMoveConn, "Move Data Source to Another Workspace…", "w (explorer)"),
     (Action::WsRemoveConn, "Remove Data Source from This Workspace", ""),
     (Action::Find, "Find / Replace in Editor (regex)", ""),
     (Action::QueryHistory, "Query History… (shared with the GUI)", ""),
@@ -525,6 +527,8 @@ pub struct Hits {
     pub last_click: Option<(std::time::Instant, u16, u16)>,
     /// 콘솔 커서를 그린 화면 칸과 그때 커서 (줄, 칸) — 마우스 위치를 글자 위치로 바꿀 때 (tui-textarea 는 스크롤 위치를 공개하지 않는다)
     pub caret: Option<(u16, u16, usize, usize)>,
+    /// 글 탭 (DDL·다이어그램) 본문 — 휠로 스크롤
+    pub text: ratatui::layout::Rect,
     /// 워크스페이스 띠: (번호, 영역)
     pub workspaces: Vec<(usize, ratatui::layout::Rect)>,
 }
@@ -2152,6 +2156,7 @@ impl App {
         let ssh = c.ssh.clone().unwrap_or(SshConfig { enabled: false, host: String::new(), port: 22, user: String::new(), auth: SshAuth::Key, key_path: "~/.ssh/id_ed25519".into() });
         let kind = serde_json::to_value(c.kind).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_else(|| "postgres".into());
         let f = |label, value: String, kind| Field { label, value, kind };
+        let ch = |xs: &[&str]| FieldKind::Choice(xs.iter().map(|x| x.to_string()).collect());
         let saved = |b: bool| if b { "<saved>".to_string() } else { String::new() };
         let color = crate::ui::color_name(c.color.as_deref());
         let mut colors: Vec<&'static str> = std::iter::once("none").chain(crate::ui::COLOR_PRESETS.iter().map(|p| p.0)).collect();
@@ -2161,8 +2166,10 @@ impl App {
         self.popup = Some(Popup::ConnForm(ConnForm {
             fields: vec![
                 f("Name", c.name.clone(), FieldKind::Text),
-                f("Color", color.into(), FieldKind::Choice(colors)),
-                f("Type", kind, FieldKind::Choice(vec!["postgres", "mysql", "redis", "sqlite", "duckdb", "mssql", "clickhouse", "mongodb", "oracle", "qdrant", "chroma", "milvus"])),
+                f("Color", color.into(), ch(&colors)),
+                // 이 Data Source 가 보일 워크스페이스 (바꾸면 저장할 때 옮긴다)
+                f("Workspace", self.ws_label(edit.as_ref().map(|e| self.ws_of_conn(&e.id)).unwrap_or(self.cur_ws)), FieldKind::Choice((0..self.workspaces.len()).map(|i| self.ws_label(i)).collect())),
+                f("Type", kind, ch(&["postgres", "mysql", "redis", "sqlite", "duckdb", "mssql", "clickhouse", "mongodb", "oracle", "qdrant", "chroma", "milvus"])),
                 f("Host", c.host.clone(), FieldKind::Text),
                 f("Port", c.port.to_string(), FieldKind::Text),
                 f("User", c.user.clone(), FieldKind::Text),
@@ -2174,15 +2181,15 @@ impl App {
                 f("SSH host", ssh.host.clone(), FieldKind::Text),
                 f("SSH port", ssh.port.to_string(), FieldKind::Text),
                 f("SSH user", ssh.user.clone(), FieldKind::Text),
-                f("SSH auth", if ssh.auth == SshAuth::Key { "key" } else { "password" }.into(), FieldKind::Choice(vec!["key", "password"])),
+                f("SSH auth", if ssh.auth == SshAuth::Key { "key" } else { "password" }.into(), ch(&["key", "password"])),
                 f("SSH key file", ssh.key_path.clone(), FieldKind::Text),
                 f("SSH secret", saved(c.ssh_secret_saved), FieldKind::Secret),
                 f("SSL", if c.active_ssl().is_some() { "on" } else { "off" }.into(), FieldKind::Toggle),
-                f("SSL mode", c.ssl.as_ref().map(|x| x.mode().to_string()).unwrap_or_else(|| "require".into()), FieldKind::Choice(vec!["require", "verify-ca", "verify-full"])),
+                f("SSL mode", c.ssl.as_ref().map(|x| x.mode().to_string()).unwrap_or_else(|| "require".into()), ch(&["require", "verify-ca", "verify-full"])),
                 f("CA file", c.ssl.as_ref().map(|x| x.ca_file.clone()).unwrap_or_default(), FieldKind::Text),
                 f("Client cert", c.ssl.as_ref().map(|x| x.cert_file.clone()).unwrap_or_default(), FieldKind::Text),
                 f("Client key", c.ssl.as_ref().map(|x| x.key_file.clone()).unwrap_or_default(), FieldKind::Text),
-                f("Redis mode", c.redis_mode().into(), FieldKind::Choice(vec!["standalone", "sentinel", "cluster"])),
+                f("Redis mode", c.redis_mode().into(), ch(&["standalone", "sentinel", "cluster"])),
                 f("Sentinel master", c.redis.as_ref().map(|x| x.sentinel_master.clone()).unwrap_or_default(), FieldKind::Text),
                 f("Redis nodes", c.redis.as_ref().map(|x| x.nodes.clone()).unwrap_or_default(), FieldKind::Text),
             ],
@@ -2611,6 +2618,7 @@ impl App {
             Action::WsDelete => self.ws_delete(),
             Action::WsMoveTab => self.ws_pick(true),
             Action::WsAddConn => self.ws_add_conn_pick(),
+            Action::WsMoveConn => self.ws_move_conn_pick(),
             Action::WsRemoveConn => self.ws_remove_conn(),
             Action::CancelTransfer => {
                 for (id, ..) in &self.jobs {

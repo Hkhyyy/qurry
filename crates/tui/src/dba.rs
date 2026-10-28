@@ -225,8 +225,30 @@ impl App {
             self.status = "Select a schema or a database first".into();
             return;
         };
-        let kind = self.kind_of(&conn);
+        // Data Source 행에서: 기본 DB(대개 postgres — 비어 있다)를 그리지 말고 어느 DB 인지 고른다
+        if self.focus == Focus::Tree && self.tree.selected().is_some_and(|n| n.kind == NodeKind::Conn) {
+            let st = self.state.clone();
+            let c2 = conn.clone();
+            self.status = "Reading databases…".into();
+            self.spawn(async move { st.list_databases(c2).await.map_err(|e| e.to_string()) }, move |a, r| match r {
+                Ok(dbs) if dbs.len() > 1 => {
+                    let items = dbs.into_iter().map(|d| crate::app::PItem { label: d.clone(), hint: String::new(), action: crate::app::PAction::Pick(d) }).collect();
+                    a.status.clear();
+                    a.flow = Some(crate::migrate::Flow::ErdDb(conn));
+                    a.popup = Some(crate::app::Popup::Palette(crate::app::Palette { title: "Diagram of which database?".into(), input: tui_textarea::TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
+                }
+                Ok(dbs) => a.erd_run(conn, dbs.into_iter().next().unwrap_or(db), None),
+                Err(e) => a.status = format!("Diagram: {e}"),
+            });
+            return;
+        }
         let picked = self.tree.selected().filter(|n| n.kind == NodeKind::Schema && self.focus == Focus::Tree).and_then(|n| n.schema);
+        self.erd_run(conn, db, picked);
+    }
+
+    /// 이 DB 의 다이어그램 (picked = 그 스키마만, 없으면 시스템이 아닌 스키마 전부)
+    pub fn erd_run(&mut self, conn: String, db: String, picked: Option<String>) {
+        let kind = self.kind_of(&conn);
         let target = sql::target_id(&conn, Some(&db));
         let st = self.state.clone();
         self.status = "Reading tables and foreign keys…".into();
@@ -242,6 +264,9 @@ impl App {
                 Ok::<_, String>((schemas, e))
             },
             move |a, r| match r {
+                Ok((schemas, e)) if e.tables.is_empty() => {
+                    a.status = format!("No tables in {db} / {} — pick the database (or schema) that has them in the explorer", schemas.join(", "));
+                }
                 Ok((schemas, e)) => {
                     a.status = format!("{} tables, {} foreign keys", e.tables.len(), e.relations.len());
                     let text = format!("{}\n── Mermaid (y copies the whole text; paste into docs, issues, mermaid.live) ──\n\n{}", e.text(), e.mermaid());
