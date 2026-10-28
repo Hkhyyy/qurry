@@ -1,0 +1,34 @@
+/* 결과 표 칸 (ui/grid.tsx). 값은 토큰 · 테마 색 */
+.grid-header { position: sticky; top: 0; z-index: 2; display: flex; background: var(--panel); border-bottom: 1px solid var(--border); }
+.grid-row { position: absolute; left: 0; display: flex; }
+.grid-row.odd { background: var(--c-222326); }
+.cell { flex: none; padding: 0 8px; line-height: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-right: 1px solid var(--c-2c2e33); }
+.cell.head { display: flex; align-items: center; gap: 6px; line-height: 26px; font-family: -apple-system, sans-serif; }
+.col-name { font-weight: 600; flex: none; }
+.col-type { overflow: hidden; text-overflow: ellipsis; }
+.col-type { color: var(--muted); font-size: 11px; }
+.cell.rownum { color: var(--muted); text-align: right; background: var(--panel-2); position: sticky; left: 0; z-index: 1; }
+.cell.null { color: var(--c-6f737a); font-style: italic; }
+.cell.num { color: var(--c-2aacb8); text-align: right; }
+.cell.sel { outline: 1px solid var(--accent); outline-offset: -1px; background: var(--sel); }
+.grid-row.added .cell:not(.rownum) { background: rgba(95,184,101,.12); }
+.grid-row.deleted .cell:not(.rownum) { text-decoration: line-through; color: var(--danger); background: rgba(247,84,100,.08); }
+.cell.changed { background: rgba(53,116,240,.22); }
+.cell-input { flex: none; height: 24px; border-radius: 0; border: 1px solid var(--accent); padding: 0 7px; font: inherit; font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; background: var(--c-1b2840); }
+.pk-mark { font-size: 10px; }
+.sort-btn { margin-left: auto; flex: none; color: transparent; cursor: pointer; padding: 0 2px; font-size: 12px; border-radius: 3px; }
+.cell.head:hover .sort-btn { color: var(--muted); }
+.sort-btn:hover { background: var(--c-43454a); color: var(--text) !important; }
+.sort-btn.on { color: var(--c-548af7) !important; font-weight: 700; }
+.sort-btn sub { font-size: 9px; }
+.cell.head.sorted .col-name { color: var(--c-9fbfff); }
+.cell-edit { flex: none; position: relative; display: flex; height: 24px; }
+.cell-edit .cell-input { flex: 1; min-width: 0; width: auto; }
+.cell-more { flex: none; height: 24px; padding: 0 6px; border-radius: 0 3px 3px 0; border: 1px solid var(--accent); border-left: none; background: var(--c-393b40); font-size: 12px; line-height: 1; }
+.cell.sel { background: var(--c-2e436e); outline: none; }
+.cell.active { outline: 1px solid var(--c-548af7); outline-offset: -1px; }
+.cell.match { background: rgba(229,192,123,.28); }
+.cell.sel.match { background: var(--c-4a5a3a); }
+.cell.head.col-sel { background: var(--c-33405a); }
+.cell.rownum { cursor: default; }
+.cell.rownum.row-sel { background: var(--c-33405a); color: var(--text); }

@@ -6,7 +6,8 @@ import { DEFAULT_EXEC, ExecSettings, planExecution } from "../lib/execPlan";
 import { ConsoleEditor, EditorApi, RunRequest } from "./ConsoleEditor";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { ResultGrid } from "./ResultGrid";
-import { IcClock, IcGear, IcReload, IcStop } from "./icons";
+import { IcClock, IcGear, IcReload, IcStop } from "../ui/icons";
+import { EmptyState, IconButton, Select, Spacer, TabItem, Table, Td, Th, ToolButton, Toolbar, ToolbarSep } from "../ui";
 
 const isMac = navigator.platform.toLowerCase().includes("mac");
 
@@ -154,10 +155,9 @@ export function ConsolePane(p: Props) {
   return (
     <div className="console-pane">
       {/* ── 콘솔 툴바 (DataGrip) ── */}
-      <div className="dg-toolbar console-toolbar" onMouseDown={(e) => e.stopPropagation()}>
-        <button className="tb run" title={`Execute (${isMac ? "⌘↩" : "Ctrl+Enter"})`} onClick={() => api?.run()} disabled={p.running}>▶</button>
-        <button
-          className="tb text"
+      <Toolbar className="console-toolbar" onMouseDown={(e) => e.stopPropagation()}>
+        <IconButton tone="ok" title={`Execute (${isMac ? "⌘↩" : "Ctrl+Enter"})`} onClick={() => api?.run()} disabled={p.running}>▶</IconButton>
+        <ToolButton
           title="Explain Plan"
           onClick={(e) =>
             dropdown(e, [
@@ -167,10 +167,9 @@ export function ConsolePane(p: Props) {
           }
         >
           Explain ▾
-        </button>
-        <button className="tb" title={`Browse Query History (${isMac ? "⌥⌘e" : "Ctrl+Alt+e"})`} onClick={p.onHistory}><IcClock /></button>
-        <button
-          className="tb"
+        </ToolButton>
+        <IconButton title={`Browse Query History (${isMac ? "⌥⌘e" : "Ctrl+Alt+e"})`} onClick={p.onHistory}><IcClock /></IconButton>
+        <IconButton
           title="Query Execution Settings"
           onClick={(e) =>
             dropdown(e, [
@@ -193,10 +192,9 @@ export function ConsolePane(p: Props) {
           }
         >
           <IcGear />
-        </button>
-        <span className="tb-sep" />
-        <button
-          className={"tb text" + (p.txManual ? " on" : "")}
+        </IconButton>
+        <ToolbarSep />
+        <ToolButton active={p.txManual}
           title="Transaction Mode"
           onClick={(e) =>
             dropdown(e, [
@@ -206,27 +204,27 @@ export function ConsolePane(p: Props) {
           }
         >
           Tx: {p.txManual ? "Manual" : "Auto"} ▾
-        </button>
+        </ToolButton>
         {p.txManual && (
           <>
-            <button className={"tb text" + (p.inTx ? " accent" : "")} title="Commit" onClick={p.onCommit} disabled={!p.inTx}>✓ Commit</button>
-            <button className="tb text" title="Roll back" onClick={p.onRollback} disabled={!p.inTx}>↶ Roll back</button>
+            <ToolButton accent={p.inTx} title="Commit" onClick={p.onCommit} disabled={!p.inTx}>✓ Commit</ToolButton>
+            <ToolButton title="Roll back" onClick={p.onRollback} disabled={!p.inTx}>↶ Roll back</ToolButton>
           </>
         )}
-        <button className="tb stop" title={`Cancel Running Statements (${isMac ? "⌘F2" : "Ctrl+F2"})`} onClick={p.onCancel} disabled={!p.running}><IcStop /></button>
-        <span className="grow" />
+        <IconButton tone="danger" title={`Cancel Running Statements (${isMac ? "⌘F2" : "Ctrl+F2"})`} onClick={p.onCancel} disabled={!p.running}><IcStop /></IconButton>
+        <Spacer />
         <span className="cb-ds">{p.connName}</span>
-        <select className="cb-sel" value={p.database} onFocus={p.onLoadDbs} onMouseDown={p.onLoadDbs} onChange={(e) => p.onSwitchDb(e.target.value)} title="Database">
+        <Select className="cb-sel" value={p.database} onFocus={p.onLoadDbs} onMouseDown={p.onLoadDbs} onChange={(e) => p.onSwitchDb(e.target.value)} title="Database">
           {[...new Set([p.database, ...p.dbList])].map((d) => (
             <option key={d} value={d}>{d}</option>
           ))}
-        </select>
-        <select className="cb-sel" value={p.schema} onFocus={p.onLoadSchemas} onMouseDown={p.onLoadSchemas} onChange={(e) => p.onSwitchSchema(e.target.value)} disabled={p.schemaSwitchDisabled} title={p.schemaSwitchDisabled ? "Schema switching is disabled for this data source" : "Switch current schema"}>
+        </Select>
+        <Select className="cb-sel" value={p.schema} onFocus={p.onLoadSchemas} onMouseDown={p.onLoadSchemas} onChange={(e) => p.onSwitchSchema(e.target.value)} disabled={p.schemaSwitchDisabled} title={p.schemaSwitchDisabled ? "Schema switching is disabled for this data source" : "Switch current schema"}>
           {[...new Set([p.schema, ...p.schemaList])].map((x) => (
             <option key={x} value={x}>{x}</option>
           ))}
-        </select>
-      </div>
+        </Select>
+      </Toolbar>
 
       <PanelGroup direction="vertical" autoSaveId="dbtool-console">
         <Panel defaultSize={58} minSize={15}>
@@ -267,11 +265,16 @@ export function ConsolePane(p: Props) {
           <div className="panel results-panel">
             {/* 결과 탭: Output + 결과 셋들 (Services 결과 영역) */}
             <div className="result-tabs">
-              <div className={"rtab" + (p.activeResult === "output" ? " active" : "")} onClick={() => p.onSetActiveResult("output")}>Output</div>
+              <TabItem variant="result" label="Output" active={p.activeResult === "output"} onClick={() => p.onSetActiveResult("output")} />
               {p.results.map((r) => (
-                <div
+                <TabItem
                   key={r.id}
-                  className={"rtab" + (p.activeResult === r.id ? " active" : "")}
+                  variant="result"
+                  label={(r.kind === "plan" ? "Plan: " : "") + r.title}
+                  active={p.activeResult === r.id}
+                  pinned={r.pinned}
+                  onPin={() => p.onPin(r.id, false)}
+                  onClose={() => p.onCloseResult(r.id)}
                   onClick={() => p.onSetActiveResult(r.id)}
                   onContextMenu={(e) => {
                     e.preventDefault();
@@ -286,22 +289,17 @@ export function ConsolePane(p: Props) {
                     });
                   }}
                   title={r.sql}
-                >
-                  {r.pinned && <span className="pin">📌</span>}
-                  {r.kind === "plan" ? "Plan: " : ""}
-                  {r.title}
-                  <span className="rclose" onClick={(e) => { e.stopPropagation(); p.onCloseResult(r.id); }}>×</span>
-                </div>
+                />
               ))}
-              <span className="grow" />
+              <Spacer />
               {p.activeResult === "output" && (
-                <button className="tb" title="Clear All" onClick={p.onClearOutput}><IcReload /></button>
+                <IconButton title="Clear All" onClick={p.onClearOutput}><IcReload /></IconButton>
               )}
             </div>
             <div className="result-area">
               {p.activeResult === "output" && (
                 <div className="output-log">
-                  {p.output.length === 0 && <div className="muted pad">Execute a statement ({isMac ? "⌘↩" : "Ctrl+Enter"}) to see the output.</div>}
+                  {p.output.length === 0 && <EmptyState>Execute a statement ({isMac ? "⌘↩" : "Ctrl+Enter"}) to see the output.</EmptyState>}
                   {p.output.map((l, i) => (
                     <div key={i} className={"ol " + l.level}>
                       <span className="ts">[{l.ts}]</span> {l.text}
@@ -349,43 +347,43 @@ function PlanView({ plan }: { plan: PlanNode }) {
     <div className="plan-view">
       <div className="plan-table">
         {warned > 0 && <div className="plan-summary">⚠ {warned} node{warned > 1 ? "s" : ""} worth a look — click one for details</div>}
-        <table>
+        <Table>
           <thead>
             <tr>
-              <th>Operation</th>
-              <th>{analyzed ? "Time share" : "Cost share"}</th>
-              <th>{analyzed ? "Self time" : "Self cost"}</th>
-              <th>Params</th>
-              <th>Cost (startup..total)</th>
-              <th>Rows</th>
-              <th>Actual rows</th>
-              <th>Loops</th>
+              <Th>Operation</Th>
+              <Th>{analyzed ? "Time share" : "Cost share"}</Th>
+              <Th>{analyzed ? "Self time" : "Self cost"}</Th>
+              <Th>Params</Th>
+              <Th>Cost (startup..total)</Th>
+              <Th>Rows</Th>
+              <Th>Actual rows</Th>
+              <Th>Loops</Th>
             </tr>
           </thead>
           <tbody>
             {rows.map(({ n, depth }, i) => (
               <tr key={i} className={(sel === n ? "on " : "") + (n.warnings.length ? "warn" : "")} onClick={() => setSel(n)} title={n.warnings.join("\n")}>
-                <td style={{ paddingLeft: 8 + depth * 16 }}>
+                <Td style={{ paddingLeft: 8 + depth * 16 }}>
                   {depth > 0 ? "└ " : ""}
                   {n.warnings.length ? <span className="plan-warn">⚠ </span> : null}
                   {n.op}
-                </td>
-                <td>
+                </Td>
+                <Td>
                   <span className="plan-bar">
                     <span style={{ width: `${Math.min(100, n.pct)}%`, background: n.pct >= 50 ? "var(--danger)" : n.pct >= 20 ? "var(--c-e5c07b, #e5c07b)" : "var(--accent)" }} />
                   </span>
                   <span className="plan-pct">{n.pct.toFixed(0)}%</span>
-                </td>
-                <td className="num">{analyzed ? (n.selfTime !== undefined ? `${fmt(n.selfTime)} ms` : "") : fmt(n.selfCost)}</td>
-                <td className="muted">{n.detail}</td>
-                <td className="num">{n.total !== undefined && n.total !== null ? `${fmt(n.startup)}..${fmt(n.total)}` : ""}</td>
-                <td className="num">{fmt(n.rows)}</td>
-                <td className="num">{fmt(n.actualRows)}</td>
-                <td className="num">{fmt(n.loops)}</td>
+                </Td>
+                <Td num>{analyzed ? (n.selfTime !== undefined ? `${fmt(n.selfTime)} ms` : "") : fmt(n.selfCost)}</Td>
+                <Td muted>{n.detail}</Td>
+                <Td num>{n.total !== undefined && n.total !== null ? `${fmt(n.startup)}..${fmt(n.total)}` : ""}</Td>
+                <Td num>{fmt(n.rows)}</Td>
+                <Td num>{fmt(n.actualRows)}</Td>
+                <Td num>{fmt(n.loops)}</Td>
               </tr>
             ))}
           </tbody>
-        </table>
+        </Table>
       </div>
       {sel && (
         <div className="plan-detail">
@@ -395,16 +393,16 @@ function PlanView({ plan }: { plan: PlanNode }) {
               ⚠ {w}
             </div>
           ))}
-          <table>
+          <Table>
             <tbody>
               {sel.props.map(([k, v]) => (
                 <tr key={k}>
-                  <td className="muted">{k}</td>
-                  <td>{v}</td>
+                  <Td muted>{k}</Td>
+                  <Td>{v}</Td>
                 </tr>
               ))}
             </tbody>
-          </table>
+          </Table>
         </div>
       )}
     </div>

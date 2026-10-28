@@ -425,7 +425,7 @@ impl Grid {
                 Cell::from(format!("{}{mark}", col.name)).style(st)
             })),
         )
-        .style(Style::default().bg(Color::Rgb(43, 45, 48)));
+        .style(Style::default().bg(crate::kit::SURFACE));
         let numeric: Vec<bool> = self
             .result
             .columns
@@ -441,7 +441,7 @@ impl Grid {
             .map(|r| {
                 let deleted = self.deleted.contains(&r);
                 let added = self.is_added(r);
-                let num = Cell::from(format!("{:>w$}", r + 1, w = num_w as usize - 1)).style(Style::default().fg(if added { Color::Green } else if deleted { Color::Red } else { Color::DarkGray }));
+                let num = Cell::from(format!("{:>w$}", r + 1, w = num_w as usize - 1)).style(Style::default().fg(if added { crate::kit::OK } else if deleted { crate::kit::DANGER } else { Color::DarkGray }));
                 Row::new(std::iter::once(num).chain(cols.iter().map(|&c| {
                     let edited = self.edits.contains_key(&(r, c));
                     let v = self.shown(r, c, self.widths[c] as usize + 1);
@@ -452,23 +452,23 @@ impl Grid {
                     };
                     let w = self.widths[c] as usize;
                     let text = if numeric[c] && v.is_some() { format!("{text:>w$}") } else { text };
-                    let mut st = if v.is_none() { Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC) } else if numeric[c] { Style::default().fg(Color::Rgb(42, 172, 184)) } else { Style::default() };
+                    let mut st = if v.is_none() { Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC) } else if numeric[c] { Style::default().fg(crate::kit::NUMBER) } else { Style::default() };
                     if edited {
                         st = st.fg(Color::Yellow);
                     }
                     if deleted {
-                        st = st.fg(Color::Red).add_modifier(Modifier::CROSSED_OUT);
+                        st = st.fg(crate::kit::DANGER).add_modifier(Modifier::CROSSED_OUT);
                     }
                     if added {
-                        st = st.fg(Color::Green);
+                        st = st.fg(crate::kit::OK);
                     }
                     let in_sel = sel.is_some_and(|(r0, c0, r1, c1)| r >= r0 && r <= r1 && c >= c0 && c <= c1);
                     if r == self.row && c == self.col {
-                        st = st.bg(if focused { Color::Rgb(46, 67, 110) } else { Color::Rgb(50, 52, 56) });
+                        st = st.bg(crate::kit::selected(focused));
                     } else if in_sel {
-                        st = st.bg(Color::Rgb(36, 52, 84));
+                        st = st.bg(crate::kit::CELL_EDITED);
                     } else if r == self.row {
-                        st = st.bg(Color::Rgb(38, 40, 46));
+                        st = st.bg(crate::kit::CELL_RANGE);
                     }
                     Cell::from(text).style(st)
                 })))
@@ -479,7 +479,7 @@ impl Grid {
         f.render_widget(Table::new(rows, widths).header(header).column_spacing(1), inner);
         // 구분선: 열 사이는 세로줄(열 사이 한 칸 간격 자리), 헤더·행 사이는 흐린 밑줄.
         // 가로줄을 줄로 따로 그리면 보이는 행이 절반이 되고, 일부 터미널(Orca 등)에서는 ─ 가 안 보인다
-        let line_c = Color::Rgb(96, 99, 106);
+        let line_c = crate::kit::GRID_LINE;
         // 세로줄 칸에는 밑줄을 긋지 않는다 (│ 와 밑줄이 겹치면 터미널에 따라 교차점에 돌기가 생기고 높이도 어긋난다)
         let line = Style::default().fg(line_c).remove_modifier(Modifier::UNDERLINED);
         let under = Style::default().add_modifier(Modifier::UNDERLINED).underline_color(line_c);

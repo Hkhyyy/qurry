@@ -59,6 +59,15 @@ docker run -d --name dbtool-redis-test -p 16379:6379 redis:7-alpine
 
 TUI 테스트는 DB 없이 앱을 움직일 수 있습니다: `crates/tui/src/testkit.rs` 가 정해진 행으로 테이블 탭을 열고, 키를 보내고 (`h.key("Ctrl+A")`, `h.type_str("ban")`), 화면을 글로 그립니다 (`h.screen(120, 30)`). `crates/tui/src/input.rs` 끝의 테스트를 보세요.
 
+## UI 컴포넌트와 Storybook
+
+GUI 는 `src/ui` 의 공통 컴포넌트 (버튼, 도구 막대, 대화상자, 확인 창, 폼 칸, 탭, 안내) 와 디자인 토큰 (간격, 글자 크기, 테마별 색) 으로 만든다. 규칙은 [src/ui/README.md](../../src/ui/README.md). TUI 는 `crates/tui/src/kit` 에서 같은 이름 · 같은 색을 쓴다. 둘 다 원자 · 분자 · 유기체로 나눈다.
+
+```bash
+pnpm storybook        # http://localhost:6006 — GUI 컴포넌트를 테마별로, TUI 화면까지
+pnpm tui-snapshots    # TUI 를 바꾼 뒤 Storybook 의 TUI 화면을 다시 그린다
+```
+
 ## 문서
 
 사용설명서는 영어 (`docs/`) 와 한국어 (`docs/ko/`) 가 장마다 짝입니다. 기능이 바뀌면 둘 다 고칩니다. 단축키를 바꾼 뒤에는 `python3 scripts/gen-keymap-docs.py` 로 두 언어의 [shortcuts-gui.md](shortcuts-gui.md) · [shortcuts-tui.md](shortcuts-tui.md) 표를 다시 만듭니다.

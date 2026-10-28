@@ -1,11 +1,12 @@
-import { connBg, useTheme } from "../lib/theme";
+import { connBg, connStripe, useTheme } from "../lib/theme";
 import { createContext, useContext, useEffect, useId, useRef, useState } from "react";
 import { api, ConnectionView, DbKind, DRIVER_MISSING, KIND_LABEL, redisDb, dbVisible, meta, RelationInfo, RoutineInfo, SchemaInfo, schemaVisible, Scope, TableDetail, targetId } from "../lib/api";
 import { ScopePopup } from "./ScopePopup";
+import { Button, Notice, TreeRow } from "../ui";
 import { invalidateCompletion } from "../lib/completion";
 import { TYPE_COLOR } from "./RedisBrowser";
 import { keyTree, type KeyNode } from "../lib/keyTree";
-import { Chevron, ColumnIcon, DatabaseIcon, FkIcon, FolderIcon, IndexIcon, KeyIcon, MySqlIcon, PgIcon, RedisIcon, RoutineIcon, SchemaIcon, SequenceIcon, TableIcon, ViewIcon } from "./icons";
+import { ColumnIcon, DatabaseIcon, FkIcon, FolderIcon, IndexIcon, KeyIcon, MySqlIcon, PgIcon, RedisIcon, RoutineIcon, SchemaIcon, SequenceIcon, TableIcon, ViewIcon } from "../ui/icons";
 
 /** 트리 노드가 가리키는 대상. 우클릭 메뉴와 단축키(F4, ⌘b, ⌘⇧L)가 이걸 기준으로 동작한다. */
 export interface NodeInfo {
@@ -97,41 +98,35 @@ function Row({ depth, open, onToggle, icon, iconClass, label, sub, title, onDoub
 }) {
   const { selected, select } = useSelectable(info);
   return (
-    <div
-      className={"tree-node" + (selected ? " selected" : "") + (className ? " " + className : "")}
-      style={{ paddingLeft: 4 + depth * 19, ...style }}
-      data-node={info ? nodeKey(info.conn.id, info.kind === "conn" ? undefined : info.db, info.schema, info.name) : undefined}
+    <TreeRow
+      depth={depth}
+      open={open}
+      leaf={leaf}
+      icon={icon}
+      iconClass={iconClass}
+      label={label}
+      sub={sub}
+      badge={badge}
+      selected={selected}
       title={title}
-      onMouseDown={select}
-      onDoubleClick={onDoubleClick ?? onToggle}
+      className={className}
+      style={style}
+      dataNode={info ? nodeKey(info.conn.id, info.kind === "conn" ? undefined : info.db, info.schema, info.name) : undefined}
+      onSelect={select}
+      onToggle={onToggle}
+      onDoubleClick={onDoubleClick}
       onContextMenu={(e) => {
         e.preventDefault();
         select();
         if (info && onMenu) onMenu(e, info);
       }}
-    >
-      <span
-        className="twisty"
-        data-open={leaf ? "" : open ? "1" : "0"}
-        onMouseDown={(e) => e.stopPropagation()}
-        onClick={(e) => {
-          e.stopPropagation();
-          select();
-          onToggle?.();
-        }}
-      >
-        {leaf ? null : <Chevron open={!!open} />}
-      </span>
-      <span className={"node-icon " + (iconClass ?? "")}>{icon}</span>
-      <span className="node-name">{label}</span>
-      {badge}
-      {sub && <span className="node-sub">{sub}</span>}
-    </div>
+    />
   );
 }
 
 function Status({ depth, load, kind, onRetry }: { depth: number; load: Load<unknown> | undefined; kind?: DbKind; onRetry?: () => void }) {
   const [installing, setInstalling] = useState(false);
+  const [installErr, setInstallErr] = useState<string | null>(null);
   if (!load || load.state === "ok") return null;
   // 드라이버가 없으면 바로 받을 수 있게
   const missing = load.state === "error" && load.msg.includes(DRIVER_MISSING) && kind;
@@ -139,8 +134,8 @@ function Status({ depth, load, kind, onRetry }: { depth: number; load: Load<unkn
     <div className={"tree-status" + (load.state === "error" ? " err" : "")} style={{ paddingLeft: 24 + depth * 19 }}>
       {load.state === "loading" ? "Loading…" : load.msg}
       {missing && (
-        <button
-          className="small"
+        <Button
+          size="sm"
           style={{ marginLeft: 8 }}
           disabled={installing}
           onClick={async () => {
@@ -149,15 +144,17 @@ function Status({ depth, load, kind, onRetry }: { depth: number; load: Load<unkn
               await api.installDriver(kind);
               onRetry?.();
             } catch (e) {
-              alert(String(e));
+              // Tauri 웹뷰에는 alert 가 없다 → 줄 안에
+              setInstallErr(String(e));
             } finally {
               setInstalling(false);
             }
           }}
         >
           {installing ? "Installing…" : `Install the ${KIND_LABEL[kind]} driver`}
-        </button>
+        </Button>
       )}
+      {installErr && <Notice tone="danger">{installErr}</Notice>}
     </div>
   );
 }
@@ -219,7 +216,7 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
   }, [conn.connected]);
 
   return (
-    <div className="conn-tree" style={conn.color ? { background: connBg(conn.color, theme) } : undefined}>
+    <div className="conn-tree" style={conn.color ? { background: connBg(conn.color, theme), boxShadow: `inset 3px 0 0 ${connStripe(conn.color, theme)}` } : undefined}>
       <Row
         depth={0}
         open={opened}

@@ -18,6 +18,7 @@ import { RagView } from "./components/RagView";
 import { WorkspaceBar, WorkspaceInfo } from "./components/WorkspaceBar";
 import { forgetConsoleModel } from "./lib/monaco";
 import { TextDialog } from "./components/TextDialog";
+import { Button, Checkbox, CodeBlock, ConfirmHost, Field, IconButton, List, ListItem, Modal, Overlay, Select, Spacer, StatusItem, TabItem, Text, ToolButton, Toolbar, ToolbarSep } from "./ui";
 import { RecentFiles, Switcher, SwitchItem } from "./components/Switcher";
 import { ActionItem, DbObject, invalidateSearchIndex, SearchEverywhere, SeTab } from "./components/SearchEverywhere";
 import { FindPanel, FindRun, FtsScope, FullTextSearchDialog } from "./components/FullTextSearch";
@@ -28,7 +29,7 @@ import { useStatusWidgets } from "./lib/statusbar";
 import type { FtsRequest } from "./lib/api";
 import { isRelation, NodeInfo, revealInTree, schemaChanged } from "./components/SchemaTree";
 import { leaf, leaves, MAX_PANES, Pane, prunePanes, splitPane } from "./lib/panes";
-import { connBg, getThemePref, setThemePref, THEME_LABEL, ThemePref, useTheme } from "./lib/theme";
+import { connBg, connStripe, getThemePref, setThemePref, THEME_LABEL, ThemePref, useTheme } from "./lib/theme";
 import { BackupDialog, ExportDialog, ImportDialog, TransferBar, type TransferJob } from "./components/Transfer";
 import { DbaReport } from "./components/DbaReport";
 import { ErdView } from "./components/ErdView";
@@ -331,7 +332,9 @@ export default function App() {
     const n = tabsRef.current.filter((t) => t.kind === "console" && t.connId === c.id && t.database === database).length;
     const ls = leaves(panesRef.current);
     const group: Group = opts.group ?? (ls.includes(focused) ? focused : ls[0]);
-    const tab = buildTab(c, kind, opts, group, opts.title ?? (n === 0 ? `console [${base}]` : `console_${n + 1} [${base}]`));
+    // 이름이 이미 [DEV] 처럼 괄호로 시작하면 한 번 더 감싸지 않는다 ("console [[DEV] shop]" → "console [DEV] shop")
+    const where = base.startsWith("[") ? base : `[${base}]`;
+    const tab = buildTab(c, kind, opts, group, opts.title ?? (n === 0 ? `console ${where}` : `console_${n + 1} ${where}`));
     // Transaction control: Manual 이 기본이면 세션도 Manual 로 연다
     if (tab.txManual) api.setTxMode(tab.target, tab.id, true).catch((e) => setStatus(String(e)));
     setTabs((ts) => [...ts, tab]);
@@ -421,7 +424,7 @@ export default function App() {
   /** 앱을 닫거나 업데이트로 다시 켜기 전: 커밋 안 한 변경이 있으면 묻고, 열어 둔 탭을 저장한다 */
   const readyToQuit = async () => {
     const n = allTabs().filter((t) => t.inTx).length;
-    if (n && !(await ask(`${n} console(s) have uncommitted changes. Quit and roll them back?`))) return false;
+    if (n && !(await ask(`${n} console(s) have uncommitted changes. Quit and roll them back?`, { okLabel: "Quit and Roll Back", danger: true }))) return false;
     saveWs();
     return true;
   };
@@ -556,7 +559,7 @@ export default function App() {
     if (!w || list.length < 2) return;
     const ts = id === curWsRef.current ? tabsRef.current : stash.current.get(id)?.tabs ?? [];
     const dirty = ts.filter((t) => t.inTx).length;
-    if (!(await ask(`Delete the workspace "${w.name}"${ts.length ? ` and close its ${ts.length} tab(s)` : ""}?${dirty ? `\n\n${dirty} console(s) have uncommitted changes — they are rolled back.` : ""}`))) return;
+    if (!(await ask(`Delete the workspace "${w.name}"${ts.length ? ` and close its ${ts.length} tab(s)` : ""}?${dirty ? `\n\n${dirty} console(s) have uncommitted changes — they are rolled back.` : ""}`, { okLabel: "Delete", danger: true }))) return;
     if (id === curWsRef.current) switchWs(list.find((x) => x.id !== id)!.id, true);
     stash.current.delete(id);
     for (const t of ts) {
@@ -745,7 +748,7 @@ export default function App() {
     const kw = verb === "DROP" ? (info.kind === "view" ? "VIEW" : info.kind === "matview" ? "MATERIALIZED VIEW" : info.kind === "sequence" ? "SEQUENCE" : "TABLE") : "TABLE";
     const { q } = dialectOf(info.conn.kind);
     const sql = `${verb} ${verb === "DROP" ? kw + " " : ""}${q(info.schema)}.${q(info.name)};`;
-    if (!(await ask(`[${info.conn.name}] Execute?\n\n${sql}`))) return;
+    if (!(await ask("Execute this statement?", { title: info.conn.name, detail: [{ text: sql }], okLabel: "Execute" }))) return;
     try {
       await api.executeBatch(target, [sql]);
       setStatus(`Executed: ${sql}`);
@@ -841,7 +844,7 @@ export default function App() {
   const startRestore = async (c: ConnectionView, db?: string) => {
     const where = `${c.name}${db ? ` / ${db}` : ""}`;
     if (!(await ask(`Restore a backup into ${where}?\n\nIt runs the backup's statements on this database (in one transaction for PostgreSQL). ${c.options?.confirmChanges ? "\n\n⚠ This is a Production data source." : ""}`))) return;
-    const clean = (await ask("Drop the objects the backup contains before restoring them (--clean)?\n\nOK = drop and recreate · Cancel = keep and add"));
+    const clean = await ask("Drop the objects the backup contains before restoring them (--clean)?", { title: "Restore", okLabel: "Drop and Recreate", cancelLabel: "Keep and Add" });
     const r = await runJob(`Restore into ${where}`, (job) => backup.restore(dbTarget(c, db), clean, job));
     if (r) setStatus(`Restored ${r} into ${where}`);
   };
@@ -899,7 +902,7 @@ export default function App() {
   };
   const deactivate = async (c: ConnectionView) => {
     const pending = allTabs().filter((t) => t.connId === c.id && t.inTx);
-    if (pending.length && !(await ask(`${pending.length} console(s) on ${c.name} have uncommitted changes. Disconnecting rolls them back. Continue?`))) return;
+    if (pending.length && !(await ask(`${pending.length} console(s) on ${c.name} have uncommitted changes. Disconnecting rolls them back. Continue?`, { okLabel: "Disconnect and Roll Back", danger: true }))) return;
     await api.disconnect(c.id);
     for (const t of pending) updTab(t.id, (x) => ({ ...x, inTx: false }));
     invalidateCompletion(c.id);
@@ -1034,7 +1037,7 @@ export default function App() {
   const switchDatabase = async (tab: Tab, db: string) => {
     const c = conns.find((x) => x.id === tab.connId);
     if (!c) return;
-    if (tab.inTx && !(await ask("This console has uncommitted changes. Switching the database rolls them back. Continue?"))) return;
+    if (tab.inTx && !(await ask("This console has uncommitted changes. Switching the database rolls them back. Continue?", { okLabel: "Switch and Roll Back", danger: true }))) return;
     const database = db !== (c.database || "postgres") ? db : undefined;
     api.closeSession(tab.id).catch(() => {}); // 다음 실행 때 새 DB로 세션을 연다
     patch(tab.id, { database, target: targetId(c.id, database), schema: undefined, inTx: false });
@@ -1108,7 +1111,7 @@ export default function App() {
     if (explain !== "plan") {
       for (const s of stmts) {
         const why = await api.unsafeReason(c?.kind ?? "postgres", s).catch(() => null);
-        if (why && !(await ask(`${why}:\n\n${s.slice(0, 300)}\n\nRun it anyway?`))) return;
+        if (why && !(await ask(`${why}. Run it anyway?`, { title: c ? `${c.name}: dangerous statement` : "Dangerous statement", detail: [{ text: s.slice(0, 300), tone: "danger" }], okLabel: "Run Anyway", danger: true }))) return;
       }
     }
     // Production: 데이터를 바꾸는 문장은 바뀔 행 수를 세어 보여 주고 묻는다 (세는 것은 SELECT count(*))
@@ -1116,13 +1119,16 @@ export default function App() {
       const writes = stmts.filter((s) => !isReadStmt(s));
       if (writes.length) {
         setStatus("Counting the rows this will change…");
-        const lines: string[] = [];
+        const detail: { text: string; value: string; tone?: "danger" | "warn" }[] = [];
         for (const w of writes) {
           const n = await previewImpact(tab.target, w).catch((e) => `can't count: ${String(e).split("\n")[0]}`);
-          lines.push(`${w.replace(/\s+/g, " ").slice(0, 120)}\n   → ${typeof n === "number" ? `${n.toLocaleString("en-US")} row${n === 1 ? "" : "s"}` : n === null ? (DDL_RE.test(w) ? "schema change" : "can't count this statement") : n}`);
+          const value = typeof n === "number" ? `${n.toLocaleString("en-US")} row${n === 1 ? "" : "s"}` : n === null ? (DDL_RE.test(w) ? "schema change" : "can't count") : n;
+          // 많이 바뀔수록 눈에 띄게: 0 행은 보통, 1~99 주의, 100 이상 · 셀 수 없음 · DDL 은 위험
+          const tone = typeof n === "number" ? (n >= 100 ? "danger" : n > 0 ? "warn" : undefined) : "danger";
+          detail.push({ text: w.replace(/\s+/g, " ").slice(0, 300), value, tone });
         }
         setStatus("Ready");
-        if (!(await ask(`Production data source "${c.name}" — this changes data:\n\n${lines.join("\n\n")}\n\nRun it?`))) return;
+        if (!(await ask("These statements change data. Run them?", { title: `Production: ${c.name}`, detail, okLabel: "Run", danger: true }))) return;
       }
     }
     // 고정(pin)되지 않은 결과 탭은 새 결과로 바꾼다
@@ -1221,7 +1227,7 @@ export default function App() {
     try {
       // 커밋 안 한 변경이 있으면 먼저 묻는다 (예전엔 말없이 커밋했다)
       if (!manual && tab.inTx) {
-        if (!(await ask("This console has uncommitted changes.\n\nOK = commit them and switch to Auto\nCancel = stay in Manual"))) return;
+        if (!(await ask("This console has uncommitted changes.", { title: "Switch to Auto", okLabel: "Commit and Switch", cancelLabel: "Stay in Manual" }))) return;
         await api.commitTx(tab.id);
         log(tab.id, "info", "Transaction committed");
       }
@@ -1293,7 +1299,7 @@ export default function App() {
     if (!ids.length) return;
     // 닫으면 롤백된다 → 커밋 안 한 변경이 있으면 묻는다
     const pending = tabsRef.current.filter((t) => ids.includes(t.id) && t.inTx);
-    if (pending.length && !(await ask(`${pending.length === 1 ? `"${pending[0].title}" has` : `${pending.length} consoles have`} uncommitted changes. Roll them back and close?`))) return;
+    if (pending.length && !(await ask(`${pending.length === 1 ? `"${pending[0].title}" has` : `${pending.length} consoles have`} uncommitted changes. Roll them back and close?`, { okLabel: "Roll Back and Close", danger: true }))) return;
     for (const t of tabsRef.current.filter((x) => ids.includes(x.id))) closedStack.current = [snapshot(t), ...closedStack.current].slice(0, 30);
     mru.current = mru.current.filter((x) => !ids.includes(x));
     for (const id of ids) {
@@ -1524,7 +1530,7 @@ export default function App() {
   // ───────── Search Everywhere (⇧⇧) / Go to Database Object (⌘o) / Find Action (⇧⌘A) ─────────
   const [se, setSe] = useState<SeTab | null>(null);
 
-  // ── Tool windows: Database Explorer (⌘1), Find (⌘3) ──
+  // ── Tool windows: Database Explorer (⌘0), Find (⇧⌘F) ──
   const [explorerHidden, setExplorerHidden] = useState(false);
   const toggleExplorer = () => {
     const tree = document.querySelector<HTMLElement>(".ws-explorer.on [data-tree]");
@@ -1692,7 +1698,7 @@ export default function App() {
       if (is("find.action")) return e.preventDefault(), L.setSe("actions");
       if (is("fts")) return e.preventDefault(), void L.openFts();
       if (is("explorer")) return e.preventDefault(), L.toggleExplorer();
-      // ⌥1~9: 워크스페이스
+      // ⌘1~9: 워크스페이스 (탐색기는 ⌘0)
       for (let n = 1; n <= 9; n++) if (is(`ws.${n}`)) return e.preventDefault(), void (workspacesRef.current[n - 1] && L.switchWs(workspacesRef.current[n - 1].id));
       if (is("find.window")) return e.preventDefault(), L.setFindOpen((o) => !o);
       // ⇧⎋ Hide Active Tool Window
@@ -1879,7 +1885,7 @@ export default function App() {
   };
 
   const removeConn = async (c: ConnectionView) => {
-    if (!(await ask(`Delete data source '${c.name}'?`))) return;
+    if (!(await ask(`Delete data source "${c.name}"?`, { okLabel: "Delete", danger: true }))) return;
     await api.deleteConnection(c.id);
     closeTabs(tabsRef.current.filter((t) => t.connId === c.id).map((t) => t.id));
     refresh();
@@ -1919,15 +1925,22 @@ export default function App() {
           {gTabs.map((t) => {
             const color = conns.find((c) => c.id === t.connId)?.color;
             return (
-              <div
+              <TabItem
                 key={t.id}
-                className={
-                  "tab" +
-                  (t.id === ga?.id ? " active" : "") +
-                  (t.id === dragId ? " dragging" : "") +
-                  (dropHint?.zone === "tabs" && dropHint.g === g && dropHint.beforeId === t.id ? " drop-before" : "")
-                }
-                style={color ? { background: connBg(color, theme) } : undefined}
+                label={t.title}
+                icon={t.kind === "table" ? "▦" : t.kind === "ddl" ? "ƒ" : t.kind === "redis" ? "◆" : t.kind === "dba" ? "◉" : t.kind === "erd" ? "⧉" : t.kind === "migrate" ? "⇄" : t.kind === "rag" ? "✦" : "⌘"}
+                iconClass={t.kind}
+                active={t.id === ga?.id}
+                pinned={t.pinned}
+                onPin={() => togglePin(t)}
+                closeTitle="Close. Alt-Click to Close Others"
+                onClose={(e) => {
+                  // ⌥+클릭: 이 탭만 남기고 닫기
+                  if (e.altKey) closeTabs(gTabs.filter((x) => x.id !== t.id && !x.pinned).map((x) => x.id));
+                  else closeTabs([t.id]);
+                }}
+                className={(t.id === dragId ? "dragging" : "") + (dropHint?.zone === "tabs" && dropHint.g === g && dropHint.beforeId === t.id ? " drop-before" : "")}
+                style={color ? { background: connBg(color, theme), boxShadow: `inset 0 2px 0 ${connStripe(color, theme)}` } : undefined}
                 draggable
                 onDragStart={(e) => {
                   e.dataTransfer.setData("text/plain", t.id);
@@ -1957,37 +1970,7 @@ export default function App() {
                 onContextMenu={(e) => openTabMenu(e, t)}
                 onDoubleClick={() => setMaximized((m) => !m)}
                 title={t.kind === "table" ? `${t.edit?.schema}.${t.edit?.table}` : t.title}
-              >
-                <span className={"tab-icon " + t.kind}>{t.kind === "table" ? "▦" : t.kind === "ddl" ? "ƒ" : t.kind === "redis" ? "◆" : t.kind === "dba" ? "◉" : t.kind === "erd" ? "⧉" : t.kind === "migrate" ? "⇄" : t.kind === "rag" ? "✦" : "⌘"}</span>
-                <span>{t.title}</span>
-                {t.pinned ? (
-                  <span
-                    className="tab-pin"
-                    title="Unpin Tab"
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      togglePin(t);
-                    }}
-                  >
-                    📌
-                  </span>
-                ) : (
-                  <span
-                    className="tab-close"
-                    title={`Close. Alt-Click to Close Others`}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      // ⌥+클릭: 이 탭만 남기고 닫기
-                      if (e.altKey) closeTabs(gTabs.filter((x) => x.id !== t.id && !x.pinned).map((x) => x.id));
-                      else closeTabs([t.id]);
-                    }}
-                  >
-                    ×
-                  </span>
-                )}
-              </div>
+              />
             );
           })}
         </div>
@@ -2027,9 +2010,9 @@ export default function App() {
             <div className="empty center">
               Right-click a data source → <b>New Query Console</b> ({isMac ? "⇧⌘L" : "Ctrl+Shift+L"}).
               <br />
-              <span className="muted">Double-click a table ({isMac ? "⌘↓" : "F4"}) to edit data, {isMac ? "⌘b" : "Ctrl+b"} for DDL, {isMac ? "⌘↩" : "Ctrl+Enter"} to execute.</span>
+              <Text tone="muted">Double-click a table ({isMac ? "⌘↓" : "F4"}) to edit data, {isMac ? "⌘b" : "Ctrl+b"} for DDL, {isMac ? "⌘↩" : "Ctrl+Enter"} to execute.</Text>
               <br />
-              <span className="muted">All shortcuts: <b>Keymap Reference</b> ({sk("keymap")}) · Search Everywhere ({isMac ? "⇧⇧" : "Shift Shift"})</span>
+              <Text tone="muted">All shortcuts: <b>Keymap Reference</b> ({sk("keymap")}) · Search Everywhere ({isMac ? "⇧⇧" : "Shift Shift"})</Text>
             </div>
           )}
           {gTabs
@@ -2208,12 +2191,11 @@ export default function App() {
             .filter((t) => t.kind === "ddl")
             .map((t) => (
               <div key={t.id} className="work-layer ddl-layer" style={{ display: t.id === ga?.id ? "flex" : "none" }}>
-                <div className="dg-toolbar">
+                <Toolbar>
                   <span className="tb-info" style={{ marginLeft: 0 }}>{t.title.startsWith("SQL Generator") ? "SQL Generator" : "DDL"} · read-only</span>
-                  <span className="grow" />
-                  <button className="tb text" title="Copy to Clipboard" onClick={() => { navigator.clipboard.writeText(t.sql); setStatus("Copied to clipboard"); }}>Copy</button>
-                  <button
-                    className="tb text"
+                  <Spacer />
+                  <ToolButton title="Copy to Clipboard" onClick={() => { navigator.clipboard.writeText(t.sql); setStatus("Copied to clipboard"); }}>Copy</ToolButton>
+                  <ToolButton
                     title="Save to File"
                     onClick={async () => {
                       try {
@@ -2225,9 +2207,9 @@ export default function App() {
                     }}
                   >
                     Save to File
-                  </button>
-                  <button className="tb text" title="Run in a console" onClick={() => { const c = conns.find((x) => x.id === t.connId); if (c) openConsole(c, t.database, t.sql); }}>Run in Console</button>
-                </div>
+                  </ToolButton>
+                  <ToolButton title="Run in a console" onClick={() => { const c = conns.find((x) => x.id === t.connId); if (c) openConsole(c, t.database, t.sql); }}>Run in Console</ToolButton>
+                </Toolbar>
                 <div className="ddl-editor">
                 <ConsoleEditor
                   tabId={t.id}
@@ -2253,26 +2235,19 @@ export default function App() {
 
   return (
     <div className="app">
-      <div className="toolbar" style={activeConn?.color ? { boxShadow: `inset 4px 0 0 ${activeConn.color}` } : undefined}>
-        <span className="brand">Qurry</span>
-        <span className="sep" />
-        <button
-          className="run"
-          disabled={!active || active.kind !== "console" || active.running}
-          onClick={() => active && editorApis.current.get(active.id)?.run()}
-          title={`Execute (${isMac ? "⌘↩" : "Ctrl+Enter"})`}
-        >
+      <Toolbar className="app-toolbar" style={activeConn?.color ? { boxShadow: `inset 4px 0 0 ${activeConn.color}` } : undefined}>
+        <Text strong>Qurry</Text>
+        <ToolbarSep />
+        <IconButton tone="ok" disabled={!active || active.kind !== "console" || active.running} onClick={() => active && editorApis.current.get(active.id)?.run()} title={`Execute (${isMac ? "⌘↩" : "Ctrl+Enter"})`}>
           ▶
-        </button>
-        <button className="stop" disabled={!active?.running} onClick={() => active && cancel(active)} title="Cancel Running Statements">
+        </IconButton>
+        <IconButton tone="danger" disabled={!active?.running} onClick={() => active && cancel(active)} title="Cancel Running Statements">
           ■
-        </button>
-        <button className="icon tb-settings" title={`Settings (${sk("settings")})`} onClick={() => setSettingsOpen("appearance")}>⚙</button>
-        <button className="icon tb-settings" title={`Keymap Reference (${isMac ? "⇧⌘/" : "Ctrl+Shift+/"})`} onClick={() => setKeymapOpen(true)}>⌨</button>
-        <span className="tb-conn">
-          {activeConn ? `${activeConn.name} · ${activeConn.user}@${activeConn.host} · ${active?.database || activeConn.database || "postgres"}` : "No console"}
-        </span>
-      </div>
+        </IconButton>
+        <IconButton className="tb-settings" title={`Settings (${sk("settings")})`} onClick={() => setSettingsOpen("appearance")}>⚙</IconButton>
+        <IconButton className="tb-settings" title={`Keymap Reference (${isMac ? "⇧⌘/" : "Ctrl+Shift+/"})`} onClick={() => setKeymapOpen(true)}>⌨</IconButton>
+        <Text tone="muted" truncate>{activeConn ? `${activeConn.name} · ${activeConn.user}@${activeConn.host} · ${active?.database || activeConn.database || "postgres"}` : "No console"}</Text>
+      </Toolbar>
 
       <div className="ws-row">
       {!maximized && (
@@ -2280,7 +2255,7 @@ export default function App() {
           list={workspaces}
           current={curWs}
           counts={Object.fromEntries(workspaces.map((w) => [w.id, w.id === curWs ? tabs.length : stash.current.get(w.id)?.tabs.length ?? 0]))}
-          shortcut={(n) => (isMac ? `⌥${n}` : `Alt+${n}`)}
+          shortcut={(n) => (isMac ? `⌘${n}` : `Ctrl+${n}`)}
           onSwitch={switchWs}
           onNew={newWs}
           onRename={renameWs}
@@ -2389,6 +2364,7 @@ export default function App() {
       {exportReq && <ExportDialog what={exportReq.name} onExport={startExport} onClose={() => setExportReq(null)} />}
       {importReq && <ImportDialog target={importReq.target} schema={importReq.schema} table={importReq.table} onImport={startImport} onClose={() => setImportReq(null)} />}
       <TextDialog />
+      <ConfirmHost />
       {updateOpen && update?.latest && <UpdateDialog info={update} onClose={() => setUpdateOpen(false)} beforeInstall={readyToQuit} />}
       {keymapOpen && <KeymapDialog onClose={() => setKeymapOpen(false)} onEdit={() => (setKeymapOpen(false), setSettingsOpen("keymap"))} />}
       {se && (
@@ -2458,12 +2434,12 @@ export default function App() {
       })()}
 
       {quickDoc && (
-        <div className="modal-backdrop light" onMouseDown={() => setQuickDoc(null)} onKeyDown={(e) => e.key === "Escape" && setQuickDoc(null)}>
+        <Overlay variant="light" onClose={() => setQuickDoc(null)} onKeyDown={(e) => e.key === "Escape" && setQuickDoc(null)}>
           <div className="quick-doc" onMouseDown={(e) => e.stopPropagation()} tabIndex={-1} ref={(el) => el?.focus()} onKeyDown={(e) => e.key === "Escape" && setQuickDoc(null)}>
             <div className="qd-title">{quickDoc.title}</div>
-            <pre className="qd-body">{quickDoc.text}</pre>
+            <CodeBlock className="qd-body">{quickDoc.text}</CodeBlock>
           </div>
-        </div>
+        </Overlay>
       )}
 
       {dialog && (
@@ -2511,58 +2487,60 @@ function SettingsDialog({ onClose, onUpdate, initialPage = "appearance" }: { onC
   };
   const sync = pref === "system";
   return (
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className={"modal settings" + (page === "keymap" ? " wide" : "")} onMouseDown={(e) => e.stopPropagation()}>
-        <div className="modal-title">Settings</div>
-        <div className="settings-body">
-          <div className="settings-nav">
-            <div className={page === "appearance" ? "on" : ""} onClick={() => setPage("appearance")}>Appearance</div>
-            <div className={page === "keymap" ? "on" : ""} onClick={() => setPage("keymap")}>Keymap</div>
-          </div>
-          {page === "keymap" && <KeymapEditor />}
-          {page === "appearance" && <div className="form settings-form">
-            <label>Theme</label>
-            <div className="row">
-              <select value={sync ? theme : pref} disabled={sync} onChange={(e) => pick(e.target.value as ThemePref)}>
-                <option value="dark">Dark</option>
-                <option value="light">Light</option>
-                <option value="hc">High contrast</option>
-              </select>
-              <label className="check">
-                <input type="checkbox" checked={sync} onChange={(e) => pick(e.target.checked ? "system" : theme)} />
-                Sync with OS
-              </label>
-            </div>
-            <label>Updates</label>
-            <div className="row">
-              <label className="check">
-                <input
-                  type="checkbox"
+    <Modal
+      title="Settings"
+      size={page === "keymap" ? "xl" : "md"}
+      className="settings"
+      onClose={onClose}
+      footer={
+        <>
+          {page === "appearance" && <span className="ui-modal-foot-hint">Quick switch theme: {sk("theme")}</span>}
+          <Button variant="primary" onClick={onClose}>
+            OK
+          </Button>
+        </>
+      }
+    >
+      <div className="settings-body">
+        <List className="settings-nav">
+          <ListItem title="Appearance" selected={page === "appearance"} onClick={() => setPage("appearance")} />
+          <ListItem title="Keymap" selected={page === "keymap"} onClick={() => setPage("keymap")} />
+        </List>
+        {page === "keymap" && <KeymapEditor />}
+        {page === "appearance" && (
+          <div className="settings-form">
+            <Field label="Theme">
+              <div className="ui-row">
+                <Select value={sync ? theme : pref} disabled={sync} onChange={(e) => pick(e.target.value as ThemePref)}>
+                  <option value="dark">Dark</option>
+                  <option value="light">Light</option>
+                  <option value="hc">High contrast</option>
+                </Select>
+                <Checkbox checked={sync} onChange={(v) => pick(v ? "system" : theme)}>
+                  Sync with OS
+                </Checkbox>
+              </div>
+            </Field>
+            <Field label="Updates" hint={updMsg ?? undefined}>
+              <div className="ui-row">
+                <Checkbox
                   checked={checkOnStart}
-                  onChange={(e) => {
-                    setCheckOnStart(e.target.checked);
-                    setUpdateCheckEnabled(e.target.checked);
+                  onChange={(v) => {
+                    setCheckOnStart(v);
+                    setUpdateCheckEnabled(v);
                   }}
-                />
-                Check for updates automatically
-              </label>
-              <button onClick={checkNow}>Check Now</button>
-            </div>
-            {updMsg && (
-              <>
-                <span />
-                <span className="hint" style={{ margin: 0 }}>{updMsg}</span>
-              </>
-            )}
-          </div>}
-        </div>
-        {page === "appearance" && <div className="hint">Quick switch: {sk("theme")}</div>}
-        <div className="modal-actions">
-          <span className="grow" />
-          <button className="primary" onClick={onClose}>OK</button>
-        </div>
+                >
+                  Check for updates automatically
+                </Checkbox>
+                <Button size="sm" onClick={checkNow}>
+                  Check Now
+                </Button>
+              </div>
+            </Field>
+          </div>
+        )}
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -2570,18 +2548,20 @@ function StatusBar({ status, readOnly, update, onUpdate, jobs }: { status: strin
   const w = useStatusWidgets();
   return (
     <div className="statusbar">
-      <span className="sb-text">{status}</span>
-      <span className="grow" />
+      <Text truncate className="sb-text">
+        {status}
+      </Text>
+      <Spacer />
       <TransferBar jobs={jobs} />
       {update && (
-        <button className="sb-widget sb-update" title="A new version is available" onClick={onUpdate}>
+        <StatusItem accent title="A new version is available" onClick={onUpdate}>
           ⬆ v{update} available
-        </button>
+        </StatusItem>
       )}
-      {w.aggregate && <span className="sb-widget" title="Aggregate of selected cells">{w.aggregate}</span>}
-      {readOnly && <span className="sb-widget" title="Data source is read-only">🔒 Read-only</span>}
-      {w.caret && <span className="sb-widget" title="Line:Column">{w.caret}</span>}
-      <span className="sb-widget">UTF-8</span>
+      {w.aggregate && <StatusItem title="Aggregate of selected cells">{w.aggregate}</StatusItem>}
+      {readOnly && <StatusItem title="Data source is read-only">🔒 Read-only</StatusItem>}
+      {w.caret && <StatusItem title="Line:Column">{w.caret}</StatusItem>}
+      <StatusItem>UTF-8</StatusItem>
     </div>
   );
 }

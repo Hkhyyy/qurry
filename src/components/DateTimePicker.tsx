@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Select, TextInput } from "../ui";
 
 /** DataGrip의 날짜·시간 셀 편집 팝업: 일 / 월 / 연도, 시 : 분 : 초 */
 const RE = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}):(\d{2})(\.\d+)?)?(.*)$/;
@@ -53,26 +54,26 @@ export function DateTimePicker({ value, typeName, onChange }: { value: string; t
     <div className="dt-picker" onMouseDown={(e) => e.stopPropagation()}>
       {showDate && (
         <div className="dt-row">
-          <select value={p.d} onChange={(e) => update({ d: +e.target.value })} autoFocus>
+          <Select value={p.d} onChange={(e) => update({ d: +e.target.value })} autoFocus>
             {Array.from({ length: daysIn(p.y, p.mo) }, (_, i) => i + 1).map((d) => (
               <option key={d} value={d}>{d}</option>
             ))}
-          </select>
-          <select value={p.mo} onChange={(e) => update({ mo: +e.target.value })}>
+          </Select>
+          <Select value={p.mo} onChange={(e) => update({ mo: +e.target.value })}>
             {months.map((m, i) => (
               <option key={i} value={i + 1}>{m}</option>
             ))}
-          </select>
-          <input type="number" className="dt-year" value={p.y} min={1} max={9999} onChange={(e) => update({ y: num(e.target.value, 1, 9999) })} />
+          </Select>
+          <TextInput type="number" className="dt-year" value={p.y} min={1} max={9999} onChange={(e) => update({ y: num(e.target.value, 1, 9999) })} />
         </div>
       )}
       {showTime && (
         <div className="dt-row">
-          <input type="number" value={p.h} min={0} max={23} onChange={(e) => update({ h: num(e.target.value, 0, 23) })} />
+          <TextInput type="number" value={p.h} min={0} max={23} onChange={(e) => update({ h: num(e.target.value, 0, 23) })} />
           <span>:</span>
-          <input type="number" value={p.mi} min={0} max={59} onChange={(e) => update({ mi: num(e.target.value, 0, 59) })} />
+          <TextInput type="number" value={p.mi} min={0} max={59} onChange={(e) => update({ mi: num(e.target.value, 0, 59) })} />
           <span>:</span>
-          <input type="number" value={p.s} min={0} max={59} onChange={(e) => update({ s: num(e.target.value, 0, 59) })} />
+          <TextInput type="number" value={p.s} min={0} max={59} onChange={(e) => update({ s: num(e.target.value, 0, 59) })} />
         </div>
       )}
     </div>

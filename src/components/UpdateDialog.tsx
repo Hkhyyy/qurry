@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api, isReleaseUrl, UpdateInfo } from "../lib/api";
+import { Button, Hint, Modal, Notice, Spacer, Text } from "../ui";
 
 /** 새 버전 안내: 릴리스 노트 + Update & Restart (앱 안에서 받아 바꿔 넣고 다시 켠다). 안 되면 릴리스 페이지에서 받는다 */
 /** beforeInstall: 다시 켜기 전에 할 일 (작업 공간 저장, 커밋 안 한 변경 묻기). false 면 취소 */
@@ -40,38 +41,39 @@ export function UpdateDialog({ info, onClose, beforeInstall }: { info: UpdateInf
   };
   const close = () => !busy && onClose();
   return (
-    <div className="modal-backdrop" onMouseDown={close}>
-      <div className="modal update" onMouseDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.key === "Escape" && close()}>
-        <div className="modal-title">Qurry {r.version} is available</div>
-        <div className="hint" style={{ marginTop: 0 }}>
-          You have {info.current}. Update &amp; Restart downloads it, replaces this app and opens it again (open tabs are kept).
-        </div>
-        {/* 바뀐 것만, 버전마다 (설치 안내는 Release Page 에) */}
-        <div className="update-notes">
-          {info.changes?.length ? (
-            info.changes.map((v) => (
-              <div key={v.version} className="update-version">
-                <div className="update-version-title">{v.version}</div>
-                <ul>
-                  {v.changes.length ? v.changes.map((c, i) => <li key={i}>{c}</li>) : <li className="muted">No notes</li>}
-                </ul>
-              </div>
-            ))
-          ) : (
-            <div className="muted">See the release page for what changed.</div>
-          )}
-        </div>
-        {progress && <div className="hint">{progress}</div>}
-        {error && <div className="hint" style={{ color: "var(--danger)" }}>{error}</div>}
-        <div className="modal-actions">
-          <button onClick={() => open(r.url)}>Release Page</button>
-          <span className="grow" />
-          <button disabled={busy} onClick={onClose}>Later</button>
-          <button className="primary" autoFocus disabled={busy} onClick={install}>
+    <Modal
+      title={<>Qurry {r.version} is available</>}
+      size="lg"
+      onClose={close}
+      footer={
+        <>
+          <Button onClick={() => open(r.url)}>Release Page</Button>
+          <Spacer />
+          <Button disabled={busy} onClick={onClose}>Later</Button>
+          <Button variant="primary" autoFocus disabled={busy} onClick={install}>
             {busy ? "Updating…" : "Update & Restart"}
-          </button>
-        </div>
+          </Button>
+        </>
+      }
+    >
+      <Text as="div" tone="muted">You have {info.current}. Update &amp; Restart downloads it, replaces this app and opens it again (open tabs are kept).</Text>
+      {/* 바뀐 것만, 버전마다 (설치 안내는 Release Page 에) */}
+      <div className="update-notes">
+        {info.changes?.length ? (
+          info.changes.map((v) => (
+            <div key={v.version} className="update-version">
+              <div className="update-version-title">{v.version}</div>
+              <ul>
+                {v.changes.length ? v.changes.map((c, i) => <li key={i}>{c}</li>) : <li className="muted">No notes</li>}
+              </ul>
+            </div>
+          ))
+        ) : (
+          <Text as="div" tone="muted">See the release page for what changed.</Text>
+        )}
       </div>
-    </div>
+      {progress && <Hint>{progress}</Hint>}
+      {error && <Notice tone="danger">{error}</Notice>}
+    </Modal>
   );
 }

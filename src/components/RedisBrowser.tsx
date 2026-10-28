@@ -4,7 +4,8 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { api, QueryResult, redis, RedisKeyDetail, RedisKeyRow, RedisReply } from "../lib/api";
 import { keyTree, parentPaths, visibleRows } from "../lib/keyTree";
-import { Chevron, FolderIcon } from "./icons";
+import { FolderIcon } from "../ui/icons";
+import { Badge, Button, EmptyState, FormGrid, IconButton, Modal, Notice, Select, Spacer, Table, Tabs, Td, Text, TextArea, TextInput, Th, ToolButton, Toolbar, TreeRow } from "../ui";
 
 const isMacOS = navigator.platform.toLowerCase().includes("mac");
 
@@ -37,9 +38,9 @@ export const TYPE_COLOR: Record<string, string> = {
 
 export function TypeBadge({ type }: { type: string }) {
   return (
-    <span className="rd-badge" style={{ background: TYPE_COLOR[type] ?? "#777" }}>
+    <Badge color={TYPE_COLOR[type] ?? "#777"} className="rd-badge">
       {type === "zset" ? "ZSET" : type.toUpperCase()}
-    </span>
+    </Badge>
   );
 }
 
@@ -154,16 +155,16 @@ export function RedisBrowser(p: Props) {
         }
       }}
     >
-      <div className="rd-toolbar">
-        <span className="rd-conn">{p.connName}</span>
-        <select value={p.database} onMouseDown={p.onLoadDbs} onFocus={p.onLoadDbs} onChange={(e) => p.onSwitchDb(e.target.value)} title="Database">
+      <Toolbar className="rd-toolbar">
+        <Text strong>{p.connName}</Text>
+        <Select value={p.database} onMouseDown={p.onLoadDbs} onFocus={p.onLoadDbs} onChange={(e) => p.onSwitchDb(e.target.value)} title="Database">
           {[...new Set([p.database, ...p.dbList])].map((d) => (
             <option key={d} value={d}>
               {d}
             </option>
           ))}
-        </select>
-        <input
+        </Select>
+        <TextInput
           className="rd-pattern"
           value={pattern}
           spellCheck={false}
@@ -174,27 +175,27 @@ export function RedisBrowser(p: Props) {
             if (e.key === "Enter") scan(true);
           }}
         />
-        <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} title="Filter by type">
+        <Select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} title="Filter by type">
           <option value="">All types</option>
           {TYPES.map((t) => (
             <option key={t} value={t}>
               {t}
             </option>
           ))}
-        </select>
-        <button className="tb" title="Scan again (⌘r)" onClick={() => scan(true)}>
+        </Select>
+        <IconButton title="Scan again (⌘r)" onClick={() => scan(true)}>
           ⟳
-        </button>
-        <button className="tb text" title="Add a new key" onClick={() => setAdding(true)} disabled={p.readOnly}>
+        </IconButton>
+        <ToolButton title="Add a new key" onClick={() => setAdding(true)} disabled={p.readOnly}>
           + Key
-        </button>
-      </div>
+        </ToolButton>
+      </Toolbar>
       <PanelGroup direction="horizontal" autoSaveId="dbtool-redis">
         <Panel defaultSize={34} minSize={18}>
           <div className="rd-keys">
             <div className="rd-keys-head">
               <span>Key</span>
-              <span className="grow" />
+              <Spacer />
               <span>TTL</span>
             </div>
             <div className="rd-keys-list" ref={listRef} tabIndex={0} onKeyDown={(e) => {
@@ -224,48 +225,68 @@ export function RedisBrowser(p: Props) {
               <div style={{ height: keyVirt.getTotalSize(), position: "relative" }}>
                 {keyVirt.getVirtualItems().map((vi) => {
                   const r = rows[vi.index];
-                  const style = { position: "absolute" as const, top: 0, left: 0, right: 0, transform: `translateY(${vi.start}px)`, paddingLeft: 10 + r.depth * 14 };
+                  const style = { position: "absolute" as const, top: 0, left: 0, right: 0, transform: `translateY(${vi.start}px)` };
                   if (r.kind === "folder")
                     return (
-                      <div key={"f:" + r.path} className={"rd-key rd-folder" + (cur === r.path ? " sel" : "")} style={style} onClick={() => (setCur(r.path), toggle(r.path))} title={`${r.path}:*`}>
-                        <Chevron open={open.has(r.path)} />
-                        <FolderIcon />
-                        <span className="rd-key-name">{r.name}</span>
-                        <span className="rd-ttl">{r.count.toLocaleString()}</span>
-                      </div>
+                      <TreeRow
+                        key={"f:" + r.path}
+                        depth={r.depth}
+                        open={open.has(r.path)}
+                        icon={<FolderIcon />}
+                        label={r.name}
+                        trailing={r.count.toLocaleString()}
+                        selected={cur === r.path}
+                        style={style}
+                        title={`${r.path}:*`}
+                        onSelect={() => setCur(r.path)}
+                        onToggle={() => toggle(r.path)}
+                        onClick={() => toggle(r.path)}
+                        onDoubleClick={() => {}}
+                      />
                     );
                   const k = r.item;
                   return (
-                    <div key={k.key} className={"rd-key" + (!cur && k.key === sel ? " sel" : "")} style={style} onClick={() => { setCur(null); setSel(k.key); setTab("content"); }} title={k.key}>
-                      <TypeBadge type={k.type} />
-                      <span className="rd-key-name">{k.key}</span>
-                      <span className="rd-ttl">{fmtTtl(k.ttl)}</span>
-                    </div>
+                    <TreeRow
+                      key={k.key}
+                      depth={r.depth}
+                      leaf
+                      icon={<TypeBadge type={k.type} />}
+                      iconClass="rd-type"
+                      label={k.key}
+                      trailing={fmtTtl(k.ttl)}
+                      selected={!cur && k.key === sel}
+                      style={style}
+                      title={k.key}
+                      onClick={() => {
+                        setCur(null);
+                        setSel(k.key);
+                        setTab("content");
+                      }}
+                    />
                   );
                 })}
               </div>
-              {!keys.length && !scanning && <div className="popup-empty">{error ?? "No keys match"}</div>}
+              {!keys.length && !scanning && <EmptyState>{error ?? "No keys match"}</EmptyState>}
             </div>
             <div className="rd-keys-foot">
               <span>
                 {keys.length.toLocaleString()} key{keys.length === 1 ? "" : "s"}
                 {cursor !== "0" ? "+" : ""}
               </span>
-              <span className="grow" />
-              {scanning ? <span className="muted">Scanning…</span> : cursor !== "0" && <button className="link" onClick={() => scan(false)}>Scan more</button>}
+              <Spacer />
+              {scanning ? <Text tone="muted">Scanning…</Text> : cursor !== "0" && <Button variant="link" onClick={() => scan(false)}>Scan more</Button>}
             </div>
           </div>
         </Panel>
         <PanelResizeHandle className="resize-h" />
         <Panel minSize={30}>
           <div className="rd-right">
-            <div className="rd-tabs">
-              {(["content", "terminal", "info", "config"] as const).map((t) => (
-                <span key={t} className={tab === t ? "on" : ""} onClick={() => setTab(t)}>
-                  {t[0].toUpperCase() + t.slice(1)}
-                </span>
-              ))}
-            </div>
+            <Tabs
+              size="sm"
+              items={(["content", "terminal", "info", "config"] as const).map((t) => ({ id: t, label: t[0].toUpperCase() + t.slice(1) }))}
+              value={tab}
+              onChange={setTab}
+            />
             <div className="rd-tab-body">
               {tab === "content" &&
                 (sel ? (
@@ -287,7 +308,7 @@ export function RedisBrowser(p: Props) {
                     onTtl={(ttl) => setKeys((ks) => ks.map((x) => (x.key === sel ? { ...x, ttl } : x)))}
                   />
                 ) : (
-                  <div className="popup-empty">Select a key on the left.</div>
+                  <EmptyState>Select a key on the left.</EmptyState>
                 ))}
               {tab === "terminal" && <Terminal target={p.target} prompt={`${p.connName}[${p.database.replace(/^db/, "")}]>`} onChanged={() => scan(true)} />}
               {tab === "info" && <ServerTable target={p.target} command="INFO" />}
@@ -465,14 +486,14 @@ function KeyContent({ target, keyName, readOnly, exec, onStatus, onDeleted, onRe
     if (ok) setNewItem(null);
   };
 
-  if (err && !d) return <pre className="error-box">{err}</pre>;
-  if (!d) return <div className="popup-empty">Loading {keyName}…</div>;
+  if (err && !d) return <Notice tone="danger">{err}</Notice>;
+  if (!d) return <EmptyState>Loading {keyName}…</EmptyState>;
 
   return (
     <div className="rd-content">
       <div className="rd-keybar">
         <TypeBadge type={d.type} />
-        <input
+        <TextInput
           className="rd-keyname"
           value={name}
           disabled={readOnly}
@@ -495,7 +516,7 @@ function KeyContent({ target, keyName, readOnly, exec, onStatus, onDeleted, onRe
         />
         <label className="rd-ttl-edit" title="TTL in seconds. Empty = no expiry. Enter to apply">
           TTL
-          <input
+          <TextInput
             value={ttl}
             placeholder="∞"
             disabled={readOnly}
@@ -508,21 +529,20 @@ function KeyContent({ target, keyName, readOnly, exec, onStatus, onDeleted, onRe
             }}
           />
         </label>
-        <span className="grow" />
-        <span className="muted rd-meta">
+        <Spacer />
+        <Text tone="muted" className="rd-meta">
           {d.type === "string" ? `${d.length.toLocaleString()} bytes` : `${d.length.toLocaleString()} items`}
           {d.encoding ? ` · ${d.encoding}` : ""}
           {d.memory != null ? ` · ${fmtBytes(d.memory)}` : ""}
-        </span>
-        <button className="tb" title="Reload" onClick={() => load()}>
+        </Text>
+        <IconButton title="Reload" onClick={() => load()}>
           ⟳
-        </button>
-        <button
-          className="tb danger"
+        </IconButton>
+        <IconButton tone="danger"
           title="Delete key"
           disabled={readOnly}
           onClick={async () => {
-            if (!(await ask(`Delete key "${keyName}"?`))) return;
+            if (!(await ask(`Delete key "${keyName}"?`, { okLabel: "Delete", danger: true }))) return;
             try {
               await exec(["DEL", keyName]);
               onStatus(`Deleted ${keyName}`);
@@ -533,66 +553,66 @@ function KeyContent({ target, keyName, readOnly, exec, onStatus, onDeleted, onRe
           }}
         >
           🗑
-        </button>
+        </IconButton>
       </div>
-      {err && <div className="test-err">{err}</div>}
+      {err && <Notice tone="danger">{err}</Notice>}
       {d.type === "string" ? (
         <ValueEditor text={text} fmt={fmt} setFmt={setFmt} pretty={pretty} readOnly={readOnly} onSave={saveText} big />
       ) : (
         <PanelGroup direction="vertical" autoSaveId="dbtool-redis-content">
           <Panel defaultSize={62} minSize={20}>
             <div className="rd-table-wrap">
-              <table className="rd-table">
+              <Table className="rd-table">
                 <thead>
                   <tr>
                     {heads[d.type]?.map((h) => (
-                      <th key={h}>{h}</th>
+                      <Th key={h}>{h}</Th>
                     ))}
-                    <th className="act" />
+                    <Th className="act" />
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((r, i) => (
                     <tr key={r.id} className={selRow === i ? "sel" : ""} onClick={() => setSelRow(i)} onDoubleClick={() => d.type === "zset" && !readOnly && editScore(i)}>
                       {r.cols.map((c, j) => (
-                        <td key={j}>{c.length > 200 ? c.slice(0, 200) + "…" : c}</td>
+                        <Td key={j}>{c.length > 200 ? c.slice(0, 200) + "…" : c}</Td>
                       ))}
-                      <td className="act">
+                      <Td className="act">
                         {!readOnly && (
                           <span className="rd-del" title="Delete" onClick={(e) => (e.stopPropagation(), deleteRow(i))}>
                             ×
                           </span>
                         )}
-                      </td>
+                      </Td>
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </Table>
               {d.truncated && (
                 <div className="rd-more">
                   Showing {rows.length.toLocaleString()} of {d.length.toLocaleString()}{" "}
-                  <button className="link" onClick={() => { setLimit(limit * 5); load(limit * 5); }}>Load more</button>
+                  <Button variant="link" onClick={() => { setLimit(limit * 5); load(limit * 5); }}>Load more</Button>
                 </div>
               )}
               {!readOnly &&
                 (newItem ? (
                   <div className="rd-add">
-                    <input autoFocus placeholder={d.type === "hash" ? "field" : d.type === "stream" ? "field" : d.type === "zset" ? "member" : "value"} value={newItem.a} onChange={(e) => setNewItem({ ...newItem, a: e.target.value })} onKeyDown={(e) => (e.stopPropagation(), e.key === "Enter" && addItem())} />
+                    <TextInput autoFocus placeholder={d.type === "hash" ? "field" : d.type === "stream" ? "field" : d.type === "zset" ? "member" : "value"} value={newItem.a} onChange={(e) => setNewItem({ ...newItem, a: e.target.value })} onKeyDown={(e) => (e.stopPropagation(), e.key === "Enter" && addItem())} />
                     {d.type === "list" ? (
-                      <select value={newItem.b || "tail"} onChange={(e) => setNewItem({ ...newItem, b: e.target.value })}>
+                      <Select value={newItem.b || "tail"} onChange={(e) => setNewItem({ ...newItem, b: e.target.value })}>
                         <option value="tail">Append (RPUSH)</option>
                         <option value="head">Prepend (LPUSH)</option>
-                      </select>
+                      </Select>
                     ) : d.type !== "set" ? (
-                      <input placeholder={d.type === "zset" ? "score" : "value"} value={newItem.b} onChange={(e) => setNewItem({ ...newItem, b: e.target.value })} onKeyDown={(e) => (e.stopPropagation(), e.key === "Enter" && addItem())} />
+                      <TextInput placeholder={d.type === "zset" ? "score" : "value"} value={newItem.b} onChange={(e) => setNewItem({ ...newItem, b: e.target.value })} onKeyDown={(e) => (e.stopPropagation(), e.key === "Enter" && addItem())} />
                     ) : null}
-                    <button className="primary" onClick={addItem}>Add</button>
-                    <button onClick={() => setNewItem(null)}>Cancel</button>
+                    <Button variant="primary" onClick={addItem}>Add</Button>
+                    <Button onClick={() => setNewItem(null)}>Cancel</Button>
                   </div>
                 ) : (
-                  <button className="link rd-add-btn" onClick={() => setNewItem({ a: "", b: "" })}>
+                  <Button variant="link" className="rd-add-btn" onClick={() => setNewItem({ a: "", b: "" })}>
                     + Add {d.type === "hash" ? "field" : d.type === "stream" ? "entry" : d.type === "list" ? "element" : "member"}
-                  </button>
+                  </Button>
                 ))}
             </div>
           </Panel>
@@ -609,7 +629,7 @@ function KeyContent({ target, keyName, readOnly, exec, onStatus, onDeleted, onRe
                 label={d.type === "hash" ? `Field: ${rows[selRow].cols[0]}` : d.type === "list" ? `Index ${rows[selRow].cols[0]}` : d.type === "zset" ? `Score ${rows[selRow].cols[1]}` : d.type === "stream" ? rows[selRow].cols[0] : "Member"}
               />
             ) : (
-              <div className="popup-empty">Select an element to view or edit its value.</div>
+              <EmptyState>Select an element to view or edit its value.</EmptyState>
             )}
           </Panel>
         </PanelGroup>
@@ -639,20 +659,20 @@ function ValueEditor({ text, fmt, setFmt, pretty, readOnly, onSave, label, big }
   }, [text]);
   return (
     <div className={"rd-editor" + (big ? " big" : "")}>
-      <div className="rd-editor-bar">
-        {label && <span className="muted">{label}</span>}
-        <span className="grow" />
-        <select value={fmt} onChange={(e) => setFmt(e.target.value as "raw" | "json")} title="View as">
+      <Toolbar className="rd-editor-bar">
+        {label && <Text tone="muted">{label}</Text>}
+        <Spacer />
+        <Select value={fmt} onChange={(e) => setFmt(e.target.value as "raw" | "json")} title="View as">
           <option value="raw">Plain Text</option>
           <option value="json">JSON{isJson ? "" : " (invalid)"}</option>
-        </select>
+        </Select>
         {!readOnly && (
-          <button className="primary" onClick={() => onSave(buf)} disabled={buf === shown.current} title="Save (⌘s)">
+          <Button variant="primary" onClick={() => onSave(buf)} disabled={buf === shown.current} title="Save (⌘s)">
             Save
-          </button>
+          </Button>
         )}
-      </div>
-      <textarea
+      </Toolbar>
+      <TextArea
         value={buf}
         readOnly={readOnly}
         spellCheck={false}
@@ -689,7 +709,7 @@ function Terminal({ target, prompt, onChanged }: { target: string; prompt: strin
     if (line.toLowerCase() === "clear") return setLines([]);
     // FLUSHALL·FLUSHDB·DEL 같은 지우는 명령은 한 번 더 묻는다
     const why = await api.unsafeReason("redis", line).catch(() => null);
-    if (why && !(await ask(`${why}:\n\n${line}\n\nRun it anyway?`))) return;
+    if (why && !(await ask(`${why}. Run it anyway?`, { detail: [{ text: line, tone: "danger" }], okLabel: "Run Anyway", danger: true }))) return;
     // 출력은 최근 TERM_MAX 줄만 남긴다
     const push = (x: { kind: "in" | "out" | "err"; text: string }) => setLines((l) => [...l, x].slice(-TERM_MAX));
     push({ kind: "in", text: `${prompt} ${line}` });
@@ -712,8 +732,8 @@ function Terminal({ target, prompt, onChanged }: { target: string; prompt: strin
         <div ref={end} />
       </div>
       <div className="rd-term-in">
-        <span className="muted">{prompt}</span>
-        <input
+        <Text tone="muted">{prompt}</Text>
+        <TextInput
           autoFocus
           value={input}
           spellCheck={false}
@@ -749,25 +769,25 @@ function ServerTable({ target, command }: { target: string; command: string }) {
   useEffect(() => {
     load();
   }, [target, command]);
-  if (err) return <pre className="error-box">{err}</pre>;
-  if (!r) return <div className="popup-empty">Loading…</div>;
+  if (err) return <Notice tone="danger">{err}</Notice>;
+  if (!r) return <EmptyState>Loading…</EmptyState>;
   const rows = q ? r.rows.filter((row) => row.some((c) => String(c ?? "").toLowerCase().includes(q.toLowerCase()))) : r.rows;
   return (
     <div className="rd-server">
-      <div className="rd-editor-bar">
-        <input placeholder="Filter" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
-        <span className="grow" />
-        <span className="muted">{rows.length} entries</span>
-        <button className="tb" onClick={load} title="Reload">
+      <Toolbar className="rd-editor-bar">
+        <TextInput placeholder="Filter" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
+        <Spacer />
+        <Text tone="muted">{rows.length} entries</Text>
+        <IconButton onClick={load} title="Reload">
           ⟳
-        </button>
-      </div>
+        </IconButton>
+      </Toolbar>
       <div className="rd-table-wrap">
-        <table className="rd-table">
+        <Table className="rd-table">
           <thead>
             <tr>
               {r.columns.map((c) => (
-                <th key={c.name}>{c.name}</th>
+                <Th key={c.name}>{c.name}</Th>
               ))}
             </tr>
           </thead>
@@ -775,12 +795,12 @@ function ServerTable({ target, command }: { target: string; command: string }) {
             {rows.map((row, i) => (
               <tr key={i}>
                 {row.map((c, j) => (
-                  <td key={j}>{String(c ?? "")}</td>
+                  <Td key={j}>{String(c ?? "")}</Td>
                 ))}
               </tr>
             ))}
           </tbody>
-        </table>
+        </Table>
       </div>
     </div>
   );
@@ -810,38 +830,39 @@ function NewKeyDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (n
     }
   };
   return (
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="modal" onMouseDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
-        <div className="modal-title">Add Key</div>
-        <div className="form">
-          <label>Key</label>
-          <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. user:42" />
-          <label>Type</label>
-          <select value={type} onChange={(e) => setType(e.target.value)}>
-            {TYPES.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
-          <label>{la}</label>
-          {type === "string" ? <textarea rows={4} value={a} onChange={(e) => setA(e.target.value)} /> : <input value={a} onChange={(e) => setA(e.target.value)} />}
-          {lb && (
-            <>
-              <label>{lb}</label>
-              <input value={b} onChange={(e) => setB(e.target.value)} placeholder={type === "zset" ? "0" : ""} />
-            </>
-          )}
-        </div>
-        {err && <div className="test-err">{err}</div>}
-        <div className="modal-actions">
-          <span className="grow" />
-          <button onClick={onClose}>Cancel</button>
-          <button className="primary" onClick={go}>
+    <Modal
+      title="Add Key"
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" onClick={go}>
             Add
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </>
+      }
+    >
+      <FormGrid labelWidth={90}>
+        <label>Key</label>
+        <TextInput autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. user:42" />
+        <label>Type</label>
+        <Select value={type} onChange={(e) => setType(e.target.value)}>
+          {TYPES.map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+        </Select>
+        <label>{la}</label>
+        {type === "string" ? <TextArea rows={4} value={a} onChange={(e) => setA(e.target.value)} /> : <TextInput value={a} onChange={(e) => setA(e.target.value)} />}
+        {lb && (
+          <>
+            <label>{lb}</label>
+            <TextInput value={b} onChange={(e) => setB(e.target.value)} placeholder={type === "zset" ? "0" : ""} />
+          </>
+        )}
+      </FormGrid>
+      {err && <Notice tone="danger">{err}</Notice>}
+    </Modal>
   );
 }

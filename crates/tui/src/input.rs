@@ -1622,9 +1622,10 @@ mod tests {
         assert_eq!(sel(&h), 1);
         h.key("Left");
         assert_eq!(rows(&h), ["▾ dev 2", "  ▸ sessions 2", "▸ prod 1", "token"]);
-        // 화면에도 폴더와 개수
+        // 화면에도 폴더와 개수 (개수는 GUI 처럼 오른쪽 끝)
         let s = h.screen(120, 20);
-        assert!(s.contains("▸ ▤ sessions 2") && s.contains("token"), "{s}");
+        let line = s.lines().find(|l| l.contains("▸ ▤ sessions")).unwrap_or_else(|| panic!("{s}"));
+        assert!(line.trim_end_matches(['┃', '│', ' ']).ends_with('2') && s.contains("token"), "{s}");
     }
 
     /// Y: 지금 열 전체를 IN 목록으로 복사 (결과의 IP 들을 다음 쿼리 WHERE ip IN 에 바로)

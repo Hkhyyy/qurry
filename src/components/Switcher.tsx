@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { List, ListItem, Overlay, Popover, TextInput } from "../ui";
 
 export interface SwitchItem {
   key: string;
@@ -42,22 +43,15 @@ export function Switcher({ items, start, onPick, onClose }: { items: SwitchItem[
     };
   }, [items]);
   return (
-    <div className="modal-backdrop clear" onMouseDown={onClose}>
-      <div className="popup switcher" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="popup-title">Switcher</div>
-        <div className="popup-list">
+    <Overlay variant="clear" onClose={onClose}>
+      <Popover title="Switcher" foot={items[i]?.hint}>
+        <List>
           {items.map((it, k) => (
-            <div key={it.key} className={"popup-item" + (k === i ? " sel" : "")} onMouseEnter={() => setI(k)} onClick={() => onPick(it.key)}>
-              {it.color && <span className="pi-color" style={{ background: it.color }} />}
-              <span className="pi-icon">{it.icon}</span>
-              <span className="pi-title">{it.title}</span>
-              <span className="pi-hint">{it.hint}</span>
-            </div>
+            <ListItem key={it.key} icon={it.icon} color={it.color ?? null} title={it.title} hint={it.hint} selected={k === i} onMouseEnter={() => setI(k)} onClick={() => onPick(it.key)} />
           ))}
-        </div>
-        <div className="popup-foot">{items[i]?.hint}</div>
-      </div>
-    </div>
+        </List>
+      </Popover>
+    </Overlay>
   );
 }
 
@@ -68,41 +62,38 @@ export function RecentFiles({ items, onPick, onClose, title = "Recent Files", st
   const shown = q ? items.filter((it) => (it.title + " " + it.hint).toLowerCase().includes(q.toLowerCase())) : items;
   const sel = Math.min(i, Math.max(shown.length - 1, 0));
   return (
-    <div className="modal-backdrop clear" onMouseDown={onClose}>
-      <div className="popup switcher" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="popup-title">{title}</div>
-        <input
-          className="popup-search"
-          autoFocus
-          value={q}
-          placeholder="Type to search"
-          spellCheck={false}
-          onChange={(e) => {
-            setQ(e.target.value);
-            setI(0);
-          }}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.key === "ArrowDown") setI((x) => Math.min(x + 1, shown.length - 1));
-            else if (e.key === "ArrowUp") setI((x) => Math.max(x - 1, 0));
-            else if (e.key === "Enter" && shown[sel]) onPick(shown[sel].key);
-            else if (e.key === "Escape") onClose();
-            else return;
-            e.preventDefault();
-          }}
-        />
-        <div className="popup-list">
+    <Overlay variant="clear" onClose={onClose}>
+      <Popover
+        title={title}
+        head={
+          <TextInput
+            className="popover-search"
+            autoFocus
+            value={q}
+            placeholder="Type to search"
+            spellCheck={false}
+            onChange={(e) => {
+              setQ(e.target.value);
+              setI(0);
+            }}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "ArrowDown") setI((x) => Math.min(x + 1, shown.length - 1));
+              else if (e.key === "ArrowUp") setI((x) => Math.max(x - 1, 0));
+              else if (e.key === "Enter" && shown[sel]) onPick(shown[sel].key);
+              else if (e.key === "Escape") onClose();
+              else return;
+              e.preventDefault();
+            }}
+          />
+        }
+      >
+        <List empty="Nothing found">
           {shown.map((it, k) => (
-            <div key={it.key} className={"popup-item" + (k === sel ? " sel" : "") + (it.open ? "" : " closed")} onMouseEnter={() => setI(k)} onClick={() => onPick(it.key)}>
-              {it.color && <span className="pi-color" style={{ background: it.color }} />}
-              <span className="pi-icon">{it.icon}</span>
-              <span className="pi-title">{it.title}</span>
-              <span className="pi-hint">{it.hint}</span>
-            </div>
+            <ListItem key={it.key} icon={it.icon} color={it.color ?? null} title={it.title} hint={it.hint} selected={k === sel} dim={!it.open} onMouseEnter={() => setI(k)} onClick={() => onPick(it.key)} />
           ))}
-          {!shown.length && <div className="popup-empty">Nothing found</div>}
-        </div>
-      </div>
-    </div>
+        </List>
+      </Popover>
+    </Overlay>
   );
 }

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ConnectionView, dbVisible, meta, targetId } from "../lib/api";
 import { fuzzyScore } from "../lib/fuzzy";
-import { ColumnIcon, RoutineIcon, SchemaIcon, SequenceIcon, TableIcon, ViewIcon } from "./icons";
+import { ColumnIcon, RoutineIcon, SchemaIcon, SequenceIcon, TableIcon, ViewIcon } from "../ui/icons";
+import { Kbd, KeyHints, List, ListGroup, ListItem, Notice, Overlay, Popover, Row, SearchField, Select, Spacer, Tabs } from "../ui";
 
 export type SeTab = "all" | "database" | "files" | "symbols" | "actions";
 const TABS: { id: SeTab; label: string }[] = [
@@ -269,102 +270,83 @@ export function SearchEverywhere(p: Props) {
     if (e.key === "F1") return go(() => run(cur, "doc"));
   };
 
-  const label = (r: Row) => {
-    if (r.t === "action")
-      return (
-        <>
-          <span className="se-icon">⚡</span>
-          <span className={"se-name" + (r.a.disabled ? " dim" : "")}>{r.a.name}</span>
-          {r.a.group && <span className="se-loc">{r.a.group}</span>}
-          <span className="grow" />
-          {r.a.shortcut && <span className="se-kbd">{r.a.shortcut}</span>}
-        </>
-      );
-    if (r.t === "file")
-      return (
-        <>
-          <span className="se-icon">{r.f.icon}</span>
-          <span className={"se-name" + (r.f.open ? "" : " dim")}>{r.f.title}</span>
-          <span className="grow" />
-          <span className="se-loc">{r.f.hint}</span>
-        </>
-      );
+  /** 결과 한 줄: 아이콘 · 이름 · 설명 ……… 오른쪽 (단축키 · 위치) */
+  const item = (r: Row, selected: boolean, onEnter: () => void, onClick: () => void) => {
+    const common = { selected, onMouseEnter: onEnter, onClick };
+    if (r.t === "action") return <ListItem {...common} icon="⚡" title={r.a.name} dim={r.a.disabled} hint={r.a.group} trailing={r.a.shortcut && <Kbd>{r.a.shortcut}</Kbd>} />;
+    if (r.t === "file") return <ListItem {...common} icon={r.f.icon} title={r.f.title} dim={!r.f.open} trailing={r.f.hint} />;
     const o = r.o;
+    const where = o.kind === "schema" ? "" : o.kind === "column" ? `${o.schema}.${o.table}` : o.schema;
     return (
-      <>
-        <span className="se-icon">{KIND_ICON[o.kind] ?? "•"}</span>
-        <span className="se-name">{o.name}</span>
-        {o.kind === "column" && <span className="se-type">{o.type}</span>}
-        <span className="se-loc">
-          {o.kind === "schema" ? "" : o.kind === "column" ? `${o.schema}.${o.table}` : o.schema}
-        </span>
-        <span className="grow" />
-        <span className="se-loc" title={o.cached ? "Not connected — from the last time it was loaded. Opening it connects." : undefined}>
-          {connName(o.connId)} · {o.db}
-          {o.cached && " (cached)"}
-        </span>
-      </>
+      <ListItem
+        {...common}
+        icon={KIND_ICON[o.kind] ?? "•"}
+        title={o.name}
+        hint={o.kind === "column" ? `${o.type} · ${where}` : where}
+        trailing={
+          <span title={o.cached ? "Not connected — from the last time it was loaded. Opening it connects." : undefined}>
+            {connName(o.connId)} · {o.db}
+            {o.cached && " (cached)"}
+          </span>
+        }
+      />
     );
   };
 
   const groupOf = (r: Row) => (r.t === "action" ? "Actions" : r.t === "file" ? "Files" : r.o.kind === "column" ? "Symbols" : "Database");
 
   return (
-    <div className="modal-backdrop clear" onMouseDown={p.onClose}>
-      <div className="popup search-everywhere" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="se-head">
-          <div className="se-tabs">
-            {TABS.map((t) => (
-              <span key={t.id} className={tab === t.id ? "on" : ""} onClick={() => setTab(t.id)}>
-                {t.label}
-              </span>
-            ))}
-          </div>
-          <span className="grow" />
-          {(tab === "database" || tab === "symbols" || tab === "all") && (
-            <select className="se-scope" value={onlyContext ? "ctx" : "all"} onChange={(e) => setOnlyContext(e.target.value === "ctx")} title="Search scope">
-              <option value="all">All Places</option>
-              <option value="ctx" disabled={!p.contextConnId}>
-                Context Data Sources
-              </option>
-            </select>
-          )}
-        </div>
-        <div className="se-input">
-          <span className="se-glass">⌕</span>
-          <input autoFocus value={q} spellCheck={false} onChange={(e) => setQ(e.target.value)} onKeyDown={onKey} placeholder={tab === "actions" ? "Type action name" : "Type / to see commands"} />
-          {loading > 0 && <span className="se-spin" title="Loading database objects…">◌</span>}
-        </div>
-        <div className="se-list" ref={listRef}>
+    <Overlay variant="clear" onClose={p.onClose}>
+      <Popover
+        className="search-everywhere"
+        head={
+          <>
+            <Row gap={2} className="se-head">
+              <Tabs size="sm" items={TABS.map((t) => ({ id: t.id, label: t.label }))} value={tab} onChange={setTab} />
+              <Spacer />
+              {(tab === "database" || tab === "symbols" || tab === "all") && (
+                <Select value={onlyContext ? "ctx" : "all"} onChange={(e) => setOnlyContext(e.target.value === "ctx")} title="Search scope">
+                  <option value="all">All Places</option>
+                  <option value="ctx" disabled={!p.contextConnId}>
+                    Context Data Sources
+                  </option>
+                </Select>
+              )}
+            </Row>
+            <SearchField bare autoFocus busy={loading > 0} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKey} placeholder={tab === "actions" ? "Type action name" : "Type / to see commands"} />
+          </>
+        }
+        foot={
+          <KeyHints
+            items={
+              cur?.t === "db"
+                ? [["↩", "Select in Database Explorer"], ["⌘↓", "Edit Data"], ["⌘b", "Go to DDL"], ["F1", "Quick Documentation"], ["⇥", "Next tab"]]
+                : [["↩", "Open"], ["⇥", "Next tab"], ["⇧⇧", "Search Everywhere"]]
+            }
+          />
+        }
+      >
+        <List
+          listRef={listRef}
+          empty={loading > 0 ? "Loading…" : !scopeConns.length && !objects.length && tab !== "files" && tab !== "actions" ? "No connected data sources. Connect one to search database objects." : "Nothing found"}
+        >
           {rows.map((r, i) => {
             const g = groupOf(r);
             const showGroup = tab === "all" && (i === 0 || groupOf(rows[i - 1]) !== g);
             return (
               <div key={i}>
-                {showGroup && <div className="se-group">{g}</div>}
-                <div className={"se-row" + (i === sel ? " sel" : "")} onMouseEnter={() => setSel(i)} onClick={() => run(r)}>
-                  {label(r)}
-                </div>
+                {showGroup && <ListGroup>{g}</ListGroup>}
+                {item(r, i === sel, () => setSel(i), () => run(r))}
               </div>
             );
           })}
-          {!rows.length && (
-            <div className="popup-empty">
-              {loading > 0 ? "Loading…" : !scopeConns.length && !objects.length && tab !== "files" && tab !== "actions" ? "No connected data sources. Connect one to search database objects." : "Nothing found"}
-            </div>
-          )}
           {errors.map((er) => (
-            <div key={er} className="se-err">
+            <Notice key={er} tone="danger">
               {er}
-            </div>
+            </Notice>
           ))}
-        </div>
-        <div className="popup-foot">
-          {cur?.t === "db"
-            ? "↩ Select in Database Explorer   ⌘↓ Edit Data   ⌘b Go to DDL   F1 Quick Documentation   ⇥ Next tab"
-            : "↩ Open   ⇥ Next tab   ⇧⇧ Search Everywhere"}
-        </div>
-      </div>
-    </div>
+        </List>
+      </Popover>
+    </Overlay>
   );
 }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ConnectionView, meta, Scope, SCOPE_ALL, SCOPE_DEFAULT, SchemaInfo, targetId } from "../lib/api";
+import { Badge, Checkbox, Hint, IconButton, Notice, Spacer, Text, Toolbar, TreeRow } from "../ui";
 
 /**
  * DataGrip의 스키마 선택 팝업 (Data Source / DB 노드의 "N of M" 배지를 누르면 열림).
@@ -117,25 +118,16 @@ export function ScopePopup({ conn, dbs, defaultDb, focusDb, x, y, onApply, onClo
 
   return (
     <div className="scope-popup" ref={ref} style={{ left, top, maxHeight: window.innerHeight - top - 12 }}>
-      <div className="sp-toolbar">
-        <span className="grow" />
-        <button className="icon" title="Refresh" onClick={() => [...open].forEach((db) => load(db, true))}>⟳</button>
-        <button className="icon" title="Expand All" onClick={() => { setOpen(new Set(dbs)); dbs.forEach((db) => load(db)); }}>⌄</button>
-        <button className="icon" title="Collapse All" onClick={() => setOpen(new Set())}>⌃</button>
-        <button className="icon" title="Close (Esc)" onClick={onClose}>—</button>
-      </div>
-      <div className="sp-list">
-        <div className="sp-row">
-          <span className="sp-tw" />
-          <input type="checkbox" checked={allDbs} onChange={() => toggleDbFlag(SCOPE_ALL)} />
-          <span>All databases</span>
-        </div>
-        <div className="sp-row">
-          <span className="sp-tw" />
-          <input type="checkbox" checked={defDb} onChange={() => toggleDbFlag(SCOPE_DEFAULT)} />
-          <span>Default database</span>
-          <span className="sp-hint">({defaultDb})</span>
-        </div>
+      <Toolbar className="sp-toolbar">
+        <Spacer />
+        <IconButton title="Refresh" onClick={() => [...open].forEach((db) => load(db, true))}>⟳</IconButton>
+        <IconButton title="Expand All" onClick={() => { setOpen(new Set(dbs)); dbs.forEach((db) => load(db)); }}>⌄</IconButton>
+        <IconButton title="Collapse All" onClick={() => setOpen(new Set())}>⌃</IconButton>
+        <IconButton title="Close (Esc)" onClick={onClose}>—</IconButton>
+      </Toolbar>
+      <div className="sp-list" role="tree">
+        <TreeRow depth={0} leaf leading={<Checkbox checked={allDbs} onChange={() => toggleDbFlag(SCOPE_ALL)} />} label="All databases" />
+        <TreeRow depth={0} leaf leading={<Checkbox checked={defDb} onChange={() => toggleDbFlag(SCOPE_DEFAULT)} />} label="Default database" sub={`(${defaultDb})`} />
         {dbs.map((db) => {
           const sch = schemas[db];
           const isOpen = open.has(db);
@@ -143,53 +135,45 @@ export function ScopePopup({ conn, dbs, defaultDb, focusDb, x, y, onApply, onClo
           const cur = schList(db);
           return (
             <div key={db}>
-              <div className={"sp-row" + (focusDb === db ? " focus" : "")}>
-                <span className="sp-tw" onClick={() => toggleOpen(db)}>{isOpen ? "⌄" : "›"}</span>
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  ref={(el) => {
-                    if (el) el.indeterminate = dbImplicit(db);
-                  }}
-                  onChange={() => toggleDb(db)}
-                />
-                <span className={checked ? "sp-strong" : ""} onDoubleClick={() => toggleOpen(db)}>{db}</span>
-                {db === defaultDb && <span className="sp-hint">(Default database)</span>}
-              </div>
+              <TreeRow
+                depth={0}
+                open={isOpen}
+                selected={focusDb === db}
+                leading={<Checkbox checked={checked} indeterminate={dbImplicit(db)} onChange={() => toggleDb(db)} />}
+                label={checked ? <b>{db}</b> : db}
+                sub={db === defaultDb ? "(Default database)" : undefined}
+                onToggle={() => toggleOpen(db)}
+              />
               {isOpen && (
-                <div className="sp-children">
-                  {sch === "loading" && <div className="sp-row muted">Loading…</div>}
-                  {typeof sch === "string" && sch !== "loading" && <div className="sp-row err">{sch}</div>}
+                <>
+                  {sch === "loading" && <TreeRow depth={1} leaf label={<Text tone="muted">Loading…</Text>} />}
+                  {typeof sch === "string" && sch !== "loading" && <Notice tone="danger">{sch}</Notice>}
                   {Array.isArray(sch) && (
                     <>
-                      <div className="sp-row">
-                        <input type="checkbox" checked={cur.includes(SCOPE_ALL)} onChange={() => toggleSch(db, SCOPE_ALL)} />
-                        <span>All schemas</span>
-                      </div>
-                      <div className="sp-row">
-                        <input type="checkbox" checked={cur.includes(SCOPE_DEFAULT)} onChange={() => toggleSch(db, SCOPE_DEFAULT)} />
-                        <span>Default schema</span>
-                        <span className="sp-hint">(public)</span>
-                      </div>
+                      <TreeRow depth={1} leaf leading={<Checkbox checked={cur.includes(SCOPE_ALL)} onChange={() => toggleSch(db, SCOPE_ALL)} />} label="All schemas" />
+                      <TreeRow depth={1} leaf leading={<Checkbox checked={cur.includes(SCOPE_DEFAULT)} onChange={() => toggleSch(db, SCOPE_DEFAULT)} />} label="Default schema" sub="(public)" />
                       {[...sch]
                         .sort((a, b) => Number(!SYSTEM.includes(a.name)) - Number(!SYSTEM.includes(b.name)) || a.name.localeCompare(b.name))
                         .map((s) => (
-                          <div key={s.name} className="sp-row">
-                            <input type="checkbox" checked={schChecked(db, s.name)} onChange={() => toggleSch(db, s.name)} />
-                            <span>{s.name}</span>
-                            {s.isSystem && <span className="sp-bolt" title="System schema">⚡</span>}
-                            {s.name === "public" && <span className="sp-hint">(Default schema)</span>}
-                          </div>
+                          <TreeRow
+                            key={s.name}
+                            depth={1}
+                            leaf
+                            leading={<Checkbox checked={schChecked(db, s.name)} onChange={() => toggleSch(db, s.name)} />}
+                            label={s.name}
+                            badge={s.isSystem ? <Badge tone="warn" title="System schema">⚡</Badge> : undefined}
+                            sub={s.name === "public" ? "(Default schema)" : undefined}
+                          />
                         ))}
                     </>
                   )}
-                </div>
+                </>
               )}
             </div>
           );
         })}
       </div>
-      <div className="sp-footer">Press Enter or click outside the list to apply</div>
+      <Hint className="sp-footer">Press Enter or click outside the list to apply</Hint>
     </div>
   );
 }

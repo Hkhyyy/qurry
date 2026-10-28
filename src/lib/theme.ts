@@ -47,6 +47,8 @@ export function useTheme(): Theme {
 }
 export const monacoTheme = (t: Theme) => (t === "light" ? "dbtool-light" : t === "hc" ? "dbtool-hc" : "dbtool-dark");
 
-/** 접속 색: 밝은 테마에서는 흰색과 섞어 연하게 (DataGrip 과 같은 느낌) */
+/** 접속 색 (트리 · 탭 바탕): 바탕과 섞어 옅게 — 글자가 읽히고, 진한 색은 왼쪽 띠 (connStripe) 로 */
 export const connBg = (color: string | null | undefined, t: Theme) =>
-  !color ? undefined : t === "light" ? `color-mix(in srgb, ${color} 30%, #ffffff)` : color;
+  !color ? undefined : t === "light" ? `color-mix(in srgb, ${color} 22%, #ffffff)` : t === "hc" ? color : `color-mix(in srgb, ${color} 35%, var(--panel))`;
+/** 접속 색 띠 (트리 왼쪽 · 탭 위) — 운영 DB 를 한눈에 */
+export const connStripe = (color: string | null | undefined, t: Theme) => (!color ? undefined : t === "light" ? `color-mix(in srgb, ${color} 75%, #ffffff)` : `color-mix(in srgb, ${color} 75%, #ffffff 25%)`);

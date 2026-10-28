@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ask, askText } from "../lib/dialogs";
 import { ConnectionView, DataDiff, meta, migrate, Migration, SchemaChange, targetId } from "../lib/api";
+import { Button, Checkbox, CodeBlock, List, ListItem, Notice, Row, Select, Spacer, Table, Tabs, Td, Text, Th } from "../ui";
 
 /** 비교·마이그레이션 대상: Data Source · DB · 스키마 (· 테이블) */
 interface End {
@@ -34,39 +35,39 @@ function EndPicker({ label, conns, value, onChange, table, noSchema }: { label: 
     meta.objects(tid(c, value), sc).then((o) => setTables(o.relations.filter((r) => r.kind === "table" || r.kind === "partitioned").map((r) => r.name)), () => setTables([]));
   }, [value.connId, value.db, value.schema, table]);
   return (
-    <div className="mig-end">
+    <Row gap={3} className="mig-end">
       <span className="mig-label">{label}</span>
-      <select value={value.connId} onChange={(e) => onChange({ connId: e.target.value, db: "", schema: "", table: "" })}>
+      <Select value={value.connId} onChange={(e) => onChange({ connId: e.target.value, db: "", schema: "", table: "" })}>
         <option value="">— data source —</option>
         {conns.filter(isSql).map((x) => (
           <option key={x.id} value={x.id}>
             {x.name}
           </option>
         ))}
-      </select>
-      <select value={value.db} onChange={(e) => onChange({ ...value, db: e.target.value, schema: c?.kind === "mysql" ? e.target.value : "", table: "" })}>
+      </Select>
+      <Select value={value.db} onChange={(e) => onChange({ ...value, db: e.target.value, schema: c?.kind === "mysql" ? e.target.value : "", table: "" })}>
         <option value="">— database —</option>
         {dbs.map((d) => (
           <option key={d}>{d}</option>
         ))}
-      </select>
+      </Select>
       {c?.kind === "postgres" && !noSchema && (
-        <select value={value.schema} onChange={(e) => onChange({ ...value, schema: e.target.value, table: "" })}>
+        <Select value={value.schema} onChange={(e) => onChange({ ...value, schema: e.target.value, table: "" })}>
           <option value="">— schema —</option>
           {schemas.map((d) => (
             <option key={d}>{d}</option>
           ))}
-        </select>
+        </Select>
       )}
       {table && (
-        <select value={value.table} onChange={(e) => onChange({ ...value, table: e.target.value })}>
+        <Select value={value.table} onChange={(e) => onChange({ ...value, table: e.target.value })}>
           <option value="">— table —</option>
           {tables.map((d) => (
             <option key={d}>{d}</option>
           ))}
-        </select>
+        </Select>
       )}
-    </div>
+    </Row>
   );
 }
 
@@ -119,33 +120,31 @@ export function MigrateView(p: { conns: ConnectionView[]; initialConnId: string;
 
   return (
     <div className="mig">
-      <div className="dlg-tabs mig-tabs">
-        <span className={tab === "schema" ? "on" : ""} onClick={() => setTab("schema")}>
-          Schema Compare
-        </span>
-        <span className={tab === "data" ? "on" : ""} onClick={() => setTab("data")}>
-          Data Compare
-        </span>
-        <span className={tab === "files" ? "on" : ""} onClick={() => setTab("files")}>
-          Migrations
-        </span>
-      </div>
+      <Tabs
+        items={[
+          { id: "schema", label: "Schema Compare" },
+          { id: "data", label: "Data Compare" },
+          { id: "files", label: "Migrations" },
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
       {tab !== "files" && <EndPicker label="Source" conns={p.conns} value={src} onChange={setSrc} table={tab === "data"} />}
       <EndPicker label={tab === "files" ? "Database" : "Target"} conns={p.conns} value={dst} onChange={setDst} table={tab === "data"} noSchema={tab === "files"} />
-      {err && <div className="test-err dba-err">{err}</div>}
+      {err && <Notice tone="danger">{err}</Notice>}
 
       {tab === "schema" && (
         <>
-          <div className="mig-actions">
-            <button className="primary" disabled={busy || !ready(sc, src) || !ready(dc, dst)} onClick={compare}>
+          <Row className="mig-actions">
+            <Button variant="primary" disabled={busy || !ready(sc, src) || !ready(dc, dst)} onClick={compare}>
               {busy ? "Comparing…" : "Compare"}
-            </button>
-            <span className="muted">Makes the target look like the source. Drops are left unchecked.</span>
-            <span className="grow" />
-            <button disabled={!checked.size} onClick={() => dc && p.onOpenConsole(dc.id, dc.kind === "postgres" ? dst.db : undefined, pickedSql)}>
+            </Button>
+            <Text tone="muted">Makes the target look like the source. Drops are left unchecked.</Text>
+            <Spacer />
+            <Button disabled={!checked.size} onClick={() => dc && p.onOpenConsole(dc.id, dc.kind === "postgres" ? dst.db : undefined, pickedSql)}>
               Open in Console
-            </button>
-            <button
+            </Button>
+            <Button
               disabled={!checked.size}
               onClick={async () => {
                 const d = dir ?? (await chooseDir());
@@ -155,21 +154,25 @@ export function MigrateView(p: { conns: ConnectionView[]; initialConnId: string;
               }}
             >
               Save as Migration…
-            </button>
-          </div>
+            </Button>
+          </Row>
           {changes && (
             <div className="mig-body">
-              <div className="mig-list">
-                {changes.length === 0 && <div className="muted pad">No differences — the schemas match.</div>}
+              <List boxed className="mig-list" empty="No differences — the schemas match.">
                 {changes.map((c, i) => (
-                  <label key={i} className={"mig-item" + (c.destructive ? " danger" : "")}>
-                    <input type="checkbox" checked={checked.has(i)} onChange={(e) => setChecked((s) => { const n = new Set(s); if (e.target.checked) n.add(i); else n.delete(i); return n; })} />
-                    <span className="mig-kind">{c.kind.replace(/_/g, " ")}</span>
-                    <span>{c.object}</span>
-                  </label>
+                  <ListItem
+                    key={i}
+                    leading={<Checkbox checked={checked.has(i)} onChange={(v) => setChecked((s) => { const n = new Set(s); if (v) n.add(i); else n.delete(i); return n; })} />}
+                    title={
+                      <>
+                        <Text tone={c.destructive ? "danger" : "accent"}>{c.kind.replace(/_/g, " ")}</Text> {c.object}
+                      </>
+                    }
+                    title2={`${c.kind.replace(/_/g, " ")} ${c.object}`}
+                  />
                 ))}
-              </div>
-              <pre className="mig-sql">{pickedSql || "-- check changes to see their SQL"}</pre>
+              </List>
+              <CodeBlock className="mig-sql">{pickedSql || "-- check changes to see their SQL"}</CodeBlock>
             </div>
           )}
         </>
@@ -177,23 +180,23 @@ export function MigrateView(p: { conns: ConnectionView[]; initialConnId: string;
 
       {tab === "data" && (
         <>
-          <div className="mig-actions">
-            <button className="primary" disabled={busy || !ready(sc, src, true) || !ready(dc, dst, true)} onClick={() => run(async () => setData(await migrate.compareData(tid(sc, src), schemaOf(sc, src), src.table, tid(dc, dst), schemaOf(dc, dst), dst.table)))}>
+          <Row className="mig-actions">
+            <Button variant="primary" disabled={busy || !ready(sc, src, true) || !ready(dc, dst, true)} onClick={() => run(async () => setData(await migrate.compareData(tid(sc, src), schemaOf(sc, src), src.table, tid(dc, dst), schemaOf(dc, dst), dst.table)))}>
               {busy ? "Comparing…" : "Compare Rows"}
-            </button>
-            <span className="muted">Rows are matched by the primary key; only columns both tables have are compared.</span>
-            <span className="grow" />
-            <button disabled={!data?.sql} onClick={() => dc && data && p.onOpenConsole(dc.id, dc.kind === "postgres" ? dst.db : undefined, data.sql)}>
+            </Button>
+            <Text tone="muted">Rows are matched by the primary key; only columns both tables have are compared.</Text>
+            <Spacer />
+            <Button disabled={!data?.sql} onClick={() => dc && data && p.onOpenConsole(dc.id, dc.kind === "postgres" ? dst.db : undefined, data.sql)}>
               Open Sync SQL in Console
-            </button>
-          </div>
+            </Button>
+          </Row>
           {data && (
             <>
               <div className="mig-counts">
                 <b>{data.same.toLocaleString()}</b> same · <b>{data.different.toLocaleString()}</b> different · <b>{data.onlySource.toLocaleString()}</b> only in source · <b>{data.onlyTarget.toLocaleString()}</b> only in target
                 {data.truncated && <span className="danger"> · compared the first 200,000 rows only</span>}
               </div>
-              <pre className="mig-sql full">{data.sql || "-- the tables hold the same data"}</pre>
+              <CodeBlock className="mig-sql full">{data.sql || "-- the tables hold the same data"}</CodeBlock>
             </>
           )}
         </>
@@ -201,19 +204,19 @@ export function MigrateView(p: { conns: ConnectionView[]; initialConnId: string;
 
       {tab === "files" && (
         <>
-          <div className="mig-actions">
-            <button onClick={chooseDir}>{dir ? "Change Folder…" : "Choose Folder…"}</button>
-            <span className="muted">{dir ?? "Files named V1__create_tables.sql, V2__add_index.sql … applied in order; applied ones are recorded in qurry_schema_history."}</span>
-            <span className="grow" />
-            <button disabled={!dir || busy} onClick={() => loadMigs()}>
+          <Row className="mig-actions">
+            <Button onClick={chooseDir}>{dir ? "Change Folder…" : "Choose Folder…"}</Button>
+            <Text tone="muted">{dir ?? "Files named V1__create_tables.sql, V2__add_index.sql … applied in order; applied ones are recorded in qurry_schema_history."}</Text>
+            <Spacer />
+            <Button disabled={!dir || busy} onClick={() => loadMigs()}>
               Refresh
-            </button>
-            <button
+            </Button>
+            <Button
               className="primary"
               disabled={!dir || busy || !migs?.some((m) => m.status === "pending")}
               onClick={async () => {
                 const pending = migs!.filter((m) => m.status === "pending");
-                if (!dc || !(await ask(`Apply ${pending.length} migration(s) to "${dc.name}"?\n\n${pending.map((m) => `V${m.version} ${m.description}`).join("\n")}`))) return;
+                if (!dc || !(await ask(`Apply ${pending.length} migration(s) to "${dc.name}"?`, { detail: pending.map((m) => ({ text: m.description, value: `V${m.version}` })), okLabel: "Apply" }))) return;
                 run(async () => {
                   const done = await migrate.apply(tid(dc, dst), dir!);
                   p.onStatus(`Applied ${done.length} migration(s)`);
@@ -222,37 +225,37 @@ export function MigrateView(p: { conns: ConnectionView[]; initialConnId: string;
               }}
             >
               Apply Pending
-            </button>
-          </div>
+            </Button>
+          </Row>
           {migs && (
             <div className="transfer-map mig-table">
-              <table>
+              <Table>
                 <thead>
                   <tr>
-                    <th>Version</th>
-                    <th>Description</th>
-                    <th>Status</th>
-                    <th>Applied</th>
-                    <th>File</th>
+                    <Th>Version</Th>
+                    <Th>Description</Th>
+                    <Th>Status</Th>
+                    <Th>Applied</Th>
+                    <Th>File</Th>
                   </tr>
                 </thead>
                 <tbody>
                   {migs.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="muted">No V*__*.sql files in this folder</td>
+                      <Td colSpan={5} muted>No V*__*.sql files in this folder</Td>
                     </tr>
                   )}
                   {migs.map((m) => (
                     <tr key={m.version + m.file}>
-                      <td>V{m.version}</td>
-                      <td>{m.description}</td>
-                      <td className={"mig-st " + m.status}>{m.status}</td>
-                      <td className="muted">{m.appliedAt ?? ""}</td>
-                      <td className="muted">{m.file}</td>
+                      <Td>V{m.version}</Td>
+                      <Td>{m.description}</Td>
+                      <Td className={"mig-st " + m.status}>{m.status}</Td>
+                      <Td muted>{m.appliedAt ?? ""}</Td>
+                      <Td muted>{m.file}</Td>
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </Table>
             </div>
           )}
         </>

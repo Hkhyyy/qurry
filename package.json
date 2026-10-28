@@ -8,7 +8,10 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test": "vitest run"
+    "test": "vitest run",
+    "storybook": "storybook dev -p 6006 --no-open",
+    "build-storybook": "storybook build -o storybook-static",
+    "tui-snapshots": "cargo test -p qurry-tui kit_snapshots -- --ignored"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
@@ -23,10 +26,12 @@
     "sql-formatter": "^15.9.0"
   },
   "devDependencies": {
+    "@storybook/react-vite": "10.6.2",
     "@tauri-apps/cli": "^2",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^6.0.2",
+    "storybook": "10.6.2",
     "typescript": "~6.0.3",
     "vite": "^8.0.16",
     "vitest": "5.0.3"

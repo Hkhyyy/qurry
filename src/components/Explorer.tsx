@@ -2,11 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { ConnectionView, Scope } from "../lib/api";
 import { ColorSwatches } from "./ConnectionDialog";
 import { NodeInfo, SchemaTree, TreeSelection } from "./SchemaTree";
+import { IconButton, Menu as UiMenu, MenuEntry, SearchField, Text } from "../ui";
 
-export type MenuItem =
-  | { label: string; action: () => void; shortcut?: string; danger?: boolean; disabled?: boolean }
-  | { separator: true }
-  | { label: string; submenu: MenuItem[] };
+export type MenuItem = MenuEntry;
 
 interface Props {
   connections: ConnectionView[];
@@ -26,93 +24,19 @@ interface Props {
 
 type Menu = { x: number; y: number; items: MenuItem[]; conn?: ConnectionView };
 
+/** 우클릭 메뉴 (ui/Menu). Data Source 메뉴면 아래에 색 고르기 */
 export function ContextMenu({ menu, onClose, onSetColor }: { menu: Menu; onClose: () => void; onSetColor?: (c: ConnectionView, v: string | null) => void }) {
-  const [sub, setSub] = useState<number | null>(null);
-  const ref = useRef<HTMLDivElement>(null);
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
-  // 어디서 열었든: 메뉴(하위 메뉴 포함) 바깥 클릭, ⎋, 창 포커스 이탈 시 닫는다
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) closeRef.current();
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        closeRef.current();
-      }
-    };
-    const onBlur = () => closeRef.current();
-    // 메뉴를 연 클릭이 곧바로 "바깥 클릭"으로 처리되지 않도록 다음 틱에 등록
-    const t = setTimeout(() => {
-      window.addEventListener("mousedown", onDown, true);
-      window.addEventListener("keydown", onKey, true);
-      window.addEventListener("blur", onBlur);
-    });
-    return () => {
-      clearTimeout(t);
-      window.removeEventListener("mousedown", onDown, true);
-      window.removeEventListener("keydown", onKey, true);
-      window.removeEventListener("blur", onBlur);
-    };
-  }, []);
-  // 화면 밖으로 나가지 않게 위치 보정
-  const x = Math.min(menu.x, window.innerWidth - 260);
-  const y = Math.min(menu.y, window.innerHeight - 24 * menu.items.length - 40);
   return (
-    <div className="ctx-menu" ref={ref} style={{ left: x, top: Math.max(4, y) }} onMouseDown={(e) => e.stopPropagation()}>
-      {menu.items.map((it, i) => {
-        if ("separator" in it) return <div key={i} className="ctx-sep" />;
-        if ("submenu" in it)
-          return (
-            <div key={i} className="ctx-item has-sub" onMouseEnter={() => setSub(i)}>
-              <span>{it.label}</span>
-              <span className="ctx-arrow">▸</span>
-              {sub === i && (
-                <div className="ctx-menu sub">
-                  {it.submenu.map((s, j) =>
-                    "separator" in s ? (
-                      <div key={j} className="ctx-sep" />
-                    ) : "action" in s ? (
-                      <div
-                        key={j}
-                        className={"ctx-item" + (s.danger ? " danger" : "")}
-                        onClick={() => {
-                          s.action();
-                          onClose();
-                        }}
-                      >
-                        <span>{s.label}</span>
-                        {s.shortcut && <span className="ctx-key">{s.shortcut}</span>}
-                      </div>
-                    ) : null,
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        return (
-          <div
-            key={i}
-            className={"ctx-item" + (it.danger ? " danger" : "") + (it.disabled ? " disabled" : "")}
-            onMouseEnter={() => setSub(null)}
-            onClick={() => {
-              if (it.disabled) return;
-              it.action();
-              onClose();
-            }}
-          >
-            <span>{it.label}</span>
-            {it.shortcut && <span className="ctx-key">{it.shortcut}</span>}
-          </div>
-        );
-      })}
-      {menu.conn && onSetColor && (
-        <>
-          <div className="ctx-sep" />
-          <div className="menu-colors">
-            <span className="muted">Color</span>
+    <UiMenu
+      items={menu.items}
+      at={{ x: menu.x, y: menu.y }}
+      onClose={onClose}
+      footer={
+        menu.conn && onSetColor ? (
+          <>
+            <Text tone="muted" size="sm">
+              Color
+            </Text>
             <ColorSwatches
               value={menu.conn.color ?? null}
               onChange={(v) => {
@@ -120,10 +44,10 @@ export function ContextMenu({ menu, onClose, onSetColor }: { menu: Menu; onClose
                 onClose();
               }}
             />
-          </div>
-        </>
-      )}
-    </div>
+          </>
+        ) : undefined
+      }
+    />
   );
 }
 
@@ -219,52 +143,53 @@ export function Explorer(p: Props) {
   return (
     <div className="panel">
       <div className="panel-header">
-        <span className="explorer-title">Database Explorer</span>
-        <span className="grow" />
+        <span className="explorer-title" title="Database Explorer">
+          Database Explorer
+        </span>
         <span className="menu-anchor">
-          <button
-            className="icon"
+          <IconButton
             title="Add Data Source"
             onMouseDown={(e) => e.stopPropagation()}
             onClick={() => (p.others?.length ? setAddMenu((m) => !m) : p.onAdd())}
           >
             ＋
-          </button>
+          </IconButton>
           {addMenu && (
-            <div className="ctx-menu dropdown" onMouseDown={(e) => e.stopPropagation()}>
-              <div className="ctx-item" onClick={() => { p.onAdd(); setAddMenu(false); }}><span>New Data Source…</span></div>
-              <div className="ctx-sep" />
-              <div className="ctx-item muted-label"><span>Add to this workspace:</span></div>
-              {p.others?.map((c) => (
-                <div key={c.id} className="ctx-item" onClick={() => { p.onAddExisting?.(c.id); setAddMenu(false); }}><span>{c.name}</span></div>
-              ))}
-            </div>
+            <UiMenu
+              onClose={() => setAddMenu(false)}
+              items={[
+                { label: "New Data Source…", action: p.onAdd },
+                { separator: true },
+                { heading: "Add to this workspace:" },
+                ...(p.others ?? []).map((c) => ({ label: c.name, action: () => p.onAddExisting?.(c.id) })),
+              ]}
+            />
           )}
         </span>
-        <button className="icon" title="Refresh (⌥⌘y)" onClick={p.onRefresh}>⟳</button>
+        <IconButton title="Refresh (⌥⌘y)" onClick={p.onRefresh}>⟳</IconButton>
         <span className="menu-anchor">
-          <button
-            className="icon"
+          <IconButton
             title="More"
             onMouseDown={(e) => e.stopPropagation()}
             onClick={() => setMore((m) => !m)}
           >
             ⋯
-          </button>
+          </IconButton>
           {more && (
-            <div className="ctx-menu dropdown" onMouseDown={(e) => e.stopPropagation()}>
-              <div className="ctx-item" onClick={() => { setShowSystem((v) => !v); setMore(false); }}>
-                <span>{showSystem ? "✓ " : "　"}Show System Schemas</span>
-              </div>
-              <div className="ctx-sep" />
-              <div className="ctx-item" onClick={() => { p.onExport(); setMore(false); }}><span>Export Data Sources…</span></div>
-              <div className="ctx-item" onClick={() => { p.onImport(); setMore(false); }}><span>Import Data Sources…</span></div>
-            </div>
+            <UiMenu
+              onClose={() => setMore(false)}
+              items={[
+                { label: `${showSystem ? "✓ " : "　"}Show System Schemas`, action: () => setShowSystem((v) => !v) },
+                { separator: true },
+                { label: "Export Data Sources…", action: p.onExport },
+                { label: "Import Data Sources…", action: p.onImport },
+              ]}
+            />
           )}
         </span>
       </div>
       <div className="tree-filter">
-        <input placeholder="Filter tables, views, routines (expanded schemas)" value={filter} onChange={(e) => setFilter(e.target.value)} />
+        <SearchField placeholder="Filter tables, views, routines (expanded schemas)" value={filter} onChange={(e) => setFilter(e.target.value)} />
       </div>
       <TreeSelection.Provider value={{ sel, setSel }}>
         <div className="tree" tabIndex={0} data-tree="1" ref={treeRef} onKeyDown={onTreeKey} onBlur={() => setSpeed("")}>

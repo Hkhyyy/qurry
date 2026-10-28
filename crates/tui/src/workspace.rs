@@ -668,6 +668,12 @@ mod tests {
         h.type_str("Ops");
         h.key("Enter");
         assert_eq!(h.app.workspaces[1].name, "Ops");
+        // macOS 화면에는 Alt+ / Ctrl+ 대신 ⌥ / ⌃ (워크스페이스 띠 안내가 그대로 찍히던 것)
+        if cfg!(target_os = "macos") {
+            let scr = h.screen(140, 30);
+            assert!(scr.contains("⌥1…9"), "{scr}");
+            assert!(!scr.contains("Alt+") && !scr.contains("Ctrl+"), "{scr}");
+        }
         // 탐색기 w: Default 의 test 를 Ops 로
         h.key("Alt+1");
         h.app.focus = crate::app::Focus::Tree;

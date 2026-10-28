@@ -8,9 +8,9 @@ const S = (p: { children: React.ReactNode; title?: string }) => (
 export const Chevron = ({ open }: { open: boolean }) => (
   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
     {open ? (
-      <path d="M4.5 6.5 8 10l3.5-3.5" stroke="#9da0a8" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4.5 6.5 8 10l3.5-3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
     ) : (
-      <path d="M6.5 4.5 10 8l-3.5 3.5" stroke="#9da0a8" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M6.5 4.5 10 8l-3.5 3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
     )}
   </svg>
 );

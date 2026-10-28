@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Cell, Dialect, QueryResult } from "../lib/api";
 import { EditTarget, ResultGrid } from "./ResultGrid";
-import { IcFilter, IcOrder } from "./icons";
+import { IcFilter, IcOrder } from "../ui/icons";
+import { IconButton, Notice, TextInput } from "../ui";
 
 /** DataGrip 테이블 데이터 에디터: 그리드 툴바 + WHERE / ORDER BY 바 + 그리드 */
 interface Props {
@@ -37,7 +38,7 @@ export function TableEditor(p: Props) {
     <label className="dg-filter-field">
       {icon}
       <span className="kw">{kw}</span>
-      <input
+      <TextInput
         value={value}
         spellCheck={false}
         onChange={(e) => set(e.target.value)}
@@ -51,9 +52,9 @@ export function TableEditor(p: Props) {
         }}
       />
       {value && (
-        <button className="clear" title="Clear" onClick={onClear}>
+        <IconButton size="sm" className="clear" title="Clear" onClick={onClear}>
           ×
-        </button>
+        </IconButton>
       )}
     </label>
   );
@@ -103,7 +104,7 @@ export function TableEditor(p: Props) {
           filterBar={filterBar}
         />
         {p.running && !p.result && <div className="grid-overlay muted">Loading {p.title}…</div>}
-        {p.error && <pre className="error-box grid-overlay">{p.error}</pre>}
+        {p.error && <Notice tone="danger" className="grid-overlay">{p.error}</Notice>}
       </div>
     </div>
   );
