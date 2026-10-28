@@ -11,7 +11,10 @@ export async function ask(message: string): Promise<boolean> {
 export interface TextRequest {
   title: string;
   value: string;
-  resolve: (v: string | null) => void;
+  /** 입력칸 아래에 고를 것 (라디오). choice 는 처음 고른 것 */
+  choices?: string[];
+  choice?: number;
+  resolve: (v: string | null, choice?: number) => void;
 }
 let show: ((r: TextRequest) => void) | null = null;
 
@@ -23,4 +26,13 @@ export function registerTextDialog(fn: ((r: TextRequest) => void) | null) {
 /** 한 줄 입력. 취소하면 null */
 export function askText(title: string, value = ""): Promise<string | null> {
   return new Promise((resolve) => (show ? show({ title, value, resolve }) : resolve(window.prompt(title, value))));
+}
+
+/** 한 줄 입력 + 하나 고르기 (예: 스니펫 이름과 보일 범위). 취소하면 null */
+export function askTextChoice(title: string, value: string, choices: string[], initial = 0): Promise<{ text: string; choice: number } | null> {
+  return new Promise((resolve) => {
+    const done = (v: string | null, choice?: number) => resolve(v === null ? null : { text: v, choice: choice ?? initial });
+    if (show) show({ title, value, choices, choice: initial, resolve: done });
+    else done(window.prompt(title, value));
+  });
 }

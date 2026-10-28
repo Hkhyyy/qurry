@@ -1854,6 +1854,7 @@ impl App {
                 // Auto 모드에서 이미 확정된 변경 문장 수 (중간에 실패하면 알린다: 앞의 것들은 롤백되지 않는다)
                 let mut committed = 0;
                 let mut failed = false;
+                let ddl = out.iter().any(|(s, r, dry)| r.is_ok() && !dry && !explain && qurry_core::guard::is_ddl(s, kind));
                 for (i, (s, r, dry)) in out.into_iter().enumerate() {
                     // 실행한 문장은 한 줄로, 너무 길면 앞부분만
                     let echo: String = s.replace('\n', " ").chars().take(300).collect();
@@ -1907,6 +1908,10 @@ impl App {
                     }
                 }
                 a.status = status;
+                // 테이블·컬럼을 만들거나 바꾸거나 지웠으면 탐색기에 바로 보이게
+                if ddl {
+                    a.schema_changed(&hist_conn, &hist_db);
+                }
                 // 오류가 나도 세션에는 트랜잭션이 열려 있을 수 있다 (Manual 첫 문장 실패 등) → Commit/Roll back 표시를 맞춘다
                 if failed {
                     let st = a.state.clone();
@@ -2147,6 +2152,25 @@ impl App {
                 a.reload_conns();
             }
         });
+    }
+
+    /// 콘솔에서 구조를 바꾼 뒤: 그 데이터베이스 아래 펼쳐 둔 노드를 다시 읽는다 (펼친 모양은 그대로)
+    pub fn schema_changed(&mut self, conn: &str, db: &str) {
+        self.forget_completion(conn);
+        let Some(dbn) = self.tree.children.values().flatten().find(|n| matches!(n.kind, NodeKind::Db) && n.conn == conn && n.db.as_deref() == Some(db)).cloned() else { return };
+        let under = |k: &str| k == dbn.key || k.starts_with(&format!("{}|", dbn.key));
+        let reload: Vec<Node> = std::iter::once(&dbn)
+            .chain(self.tree.children.values().flatten())
+            .filter(|n| under(&n.key) && self.tree.expanded.contains(&n.key))
+            .cloned()
+            .collect();
+        self.tree.forget(&dbn.key);
+        let mut seen = std::collections::HashSet::new();
+        for n in reload {
+            if seen.insert(n.key.clone()) {
+                self.load_children(n);
+            }
+        }
     }
 
     pub fn refresh_node(&mut self, n: &Node) {
