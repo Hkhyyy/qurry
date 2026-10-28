@@ -787,7 +787,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             let mut i = crate::keys::DEFAULT_KEYS.len();
             let mut sel_line = top + *sel;
             for (title, rows) in crate::help::HELP {
-                lines.push(Line::styled(title.to_string(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
+                lines.push(Line::styled(disp(title), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
                 for (k, d) in *rows {
                     let mut l = Line::from(vec![Span::styled(format!("  {:<30}", disp(k)), Style::default().fg(ACCENT)), Span::raw(disp(d))]);
                     if i == *sel {
@@ -973,7 +973,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                 .collect();
             lines.push(Line::raw(""));
             if let Some((ok, m)) = &form.message {
-                lines.push(Line::styled(m.clone(), Style::default().fg(if *ok { Color::Green } else { Color::Red })));
+                lines.push(Line::styled(disp(m), Style::default().fg(if *ok { Color::Green } else { Color::Red })));
             }
             lines.push(Line::styled(disp("↑↓/Tab move · type to edit · Space/←→ toggle · Ctrl+T test · Ctrl+S / Enter save · Esc cancel"), Style::default().fg(DIM)));
             let t = if form.edit.is_some() { " Data Source Properties " } else { " New Data Source " };

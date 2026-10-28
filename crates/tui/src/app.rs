@@ -1773,8 +1773,11 @@ impl App {
                 return;
             }
         }
-        // EXPLAIN ANALYZE 는 문장을 실제로 실행한다: 데이터를 바꾸는 문장이면 묻는다
+        // EXPLAIN ANALYZE 는 문장을 실제로 실행한다. PostgreSQL·MySQL 은 바꾸는 문장을 트랜잭션 안에서 돌리고 되돌린다 (아래).
+        // 드라이버는 트랜잭션을 못 쓸 수 있어 묻는다
+        let wraps = matches!(kind, DbKind::Postgres | DbKind::Mysql);
         if analyze
+            && !wraps
             && !confirmed
             && let Some(s) = stmts.iter().find(|s| !qurry_core::guard::is_read(s, kind))
         {
@@ -1791,6 +1794,7 @@ impl App {
         }
         c.running = true;
         let session = c.session.clone();
+        let in_tx0 = c.in_tx;
         let st = self.state.clone();
         let stmts2 = stmts.clone();
         self.status = "Executing…".into();
@@ -1814,9 +1818,27 @@ impl App {
                     } else {
                         s.clone()
                     };
+                    // 바꾸는 문장의 Explain Analyze: 트랜잭션(이미 열려 있으면 세이브포인트) 안에서 돌리고 항상 되돌린다
+                    let dry = analyze && wraps && !qurry_core::guard::is_read(&s, kind);
+                    if dry {
+                        let begin = if in_tx0 { "SAVEPOINT qurry_explain" } else { "BEGIN" };
+                        if let Err(e) = st.run_query(target.clone(), begin.into(), None, Some(session.clone())).await {
+                            out.push((s, Err(err(e)), false));
+                            break;
+                        }
+                    }
                     let r = st.run_query(target.clone(), q, Some(500), Some(session.clone())).await.map_err(err);
+                    let r = if dry {
+                        let back = if in_tx0 { "ROLLBACK TO SAVEPOINT qurry_explain" } else { "ROLLBACK" };
+                        match st.run_query(target.clone(), back.into(), None, Some(session.clone())).await {
+                            Ok(_) => r.map(|res| qurry_core::db::QueryResult { in_transaction: in_tx0, ..res }),
+                            Err(e) => Err(format!("Roll back after Explain Analyze failed: {}", err(e))),
+                        }
+                    } else {
+                        r
+                    };
                     let stop = r.is_err();
-                    out.push((s, r));
+                    out.push((s, r, dry));
                     if stop {
                         break;
                     }
@@ -1832,7 +1854,7 @@ impl App {
                 // Auto 모드에서 이미 확정된 변경 문장 수 (중간에 실패하면 알린다: 앞의 것들은 롤백되지 않는다)
                 let mut committed = 0;
                 let mut failed = false;
-                for (i, (s, r)) in out.into_iter().enumerate() {
+                for (i, (s, r, dry)) in out.into_iter().enumerate() {
                     // 실행한 문장은 한 줄로, 너무 길면 앞부분만
                     let echo: String = s.replace('\n', " ").chars().take(300).collect();
                     c.log(false, format!("{conn_name}> {echo}{}", if s.chars().count() > 300 { "…" } else { "" }));
@@ -1850,7 +1872,9 @@ impl App {
                                 _ => res,
                             };
                             c.in_tx = res.in_transaction;
-                            if !res.in_transaction && !qurry_core::guard::is_read(&s, kind) {
+                            if dry {
+                                c.log(false, "Explain Analyze ran the statement in a transaction and rolled it back — nothing was changed".into());
+                            } else if !res.in_transaction && !qurry_core::guard::is_read(&s, kind) {
                                 committed += 1;
                             }
                             if res.has_result_set {
