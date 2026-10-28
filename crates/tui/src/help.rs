@@ -1,4 +1,4 @@
-//! TUI 키맵 (F1 도움말, `qurry-tui --help`, README 의 기준).
+//! TUI 키맵 (F1 도움말, `qurry-tui --help`, docs/shortcuts-tui.md 의 기준).
 //! 바꿀 수 있는 명령 단축키는 keys.rs 의 DEFAULT_KEYS 에 있고, 여기는 화면별로 고정된 키만 둔다
 pub const HELP: &[(&str, &[(&str, &str)])] = &[
     ("Database Explorer", &[

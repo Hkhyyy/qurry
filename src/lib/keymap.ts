@@ -1,4 +1,4 @@
-/** GUI 단축키 목록 (Help › Keymap Reference 와 README 의 기준). [macOS 기본 키, 설명, 명령 id?]. 다른 OS 표기는 toOther 로 바꾼다.
+/** GUI 단축키 목록 (Help › Keymap Reference 와 docs/shortcuts-gui.md 의 기준). [macOS 기본 키, 설명, 명령 id?]. 다른 OS 표기는 toOther 로 바꾼다.
  *  명령 id 가 있는 줄은 바꿀 수 있는 단축키(lib/shortcuts.ts)이고, 화면에는 현재 키가 보인다 */
 export type KeyRow = [mac: string, desc: string, id?: string];
 export interface KeySection {

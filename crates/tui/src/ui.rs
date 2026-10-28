@@ -37,6 +37,33 @@ fn lighten(c: Color) -> Color {
     }
 }
 
+/// 팝업 자리를 비운다. 뒤 화면의 한글 같은 두 칸 글자가 팝업 가장자리에 걸치면 터미널이 그 글자를
+/// 팝업 위에 그려 테두리가 잘리므로, 걸친 글자는 빈칸으로 바꾼다.
+fn clear(f: &mut Frame, r: Rect) {
+    use unicode_width::UnicodeWidthStr;
+    let buf = f.buffer_mut();
+    let area = buf.area;
+    for y in r.top()..r.bottom().min(area.bottom()) {
+        if r.x > area.x && buf[(r.x - 1, y)].symbol().width() > 1 {
+            buf[(r.x - 1, y)].set_symbol(" ");
+        }
+        let last = r.right().saturating_sub(1);
+        if r.right() < area.right() && last >= r.x && buf[(last, y)].symbol().width() > 1 {
+            let st = buf[(last, y)].style();
+            buf[(r.right(), y)].set_symbol(" ").set_style(st);
+        }
+    }
+    f.render_widget(Clear, r);
+}
+
+/// 배경 위 글자색: 밝은 배경엔 검정, 어두운 배경엔 흰색
+fn on(bg: Color) -> Color {
+    match bg {
+        Color::Rgb(r, g, b) if 299 * r as u32 + 587 * g as u32 + 114 * b as u32 > 128_000 => Color::Black,
+        _ => Color::White,
+    }
+}
+
 pub fn hex(c: &str) -> Option<Color> {
     let c = c.trim_start_matches('#');
     if c.len() != 6 {
@@ -348,7 +375,11 @@ fn draw_group(f: &mut Frame, app: &mut App, g: Option<usize>, area: Rect, focuse
             }
             if i == shown {
                 st = st.add_modifier(Modifier::BOLD);
-                st = if focused { st.fg(Color::White).bg(c.map(lighten).unwrap_or(Color::Rgb(46, 67, 110))) } else { st.bg(c.unwrap_or(Color::Rgb(50, 52, 56))).add_modifier(Modifier::UNDERLINED) };
+                let bg = if focused { c.map(lighten).unwrap_or(Color::Rgb(46, 67, 110)) } else { c.unwrap_or(Color::Rgb(50, 52, 56)) };
+                st = st.fg(on(bg)).bg(bg);
+                if !focused {
+                    st = st.add_modifier(Modifier::UNDERLINED);
+                }
             }
             l.style(st)
         })
@@ -609,7 +640,7 @@ fn draw_completion(f: &mut Frame, cmp: &crate::app::Completion, x: u16, y: u16) 
             ListItem::new(l)
         })
         .collect();
-    f.render_widget(Clear, r);
+    clear(f, r);
     let title = format!(" {}/{} ", cmp.sel + 1, cmp.items.len());
     f.render_widget(List::new(items).block(block(title, true)).style(Style::default().bg(Color::Rgb(30, 31, 34))), r);
 }
@@ -756,7 +787,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             let mut i = crate::keys::DEFAULT_KEYS.len();
             let mut sel_line = top + *sel;
             for (title, rows) in crate::help::HELP {
-                lines.push(Line::styled(title.to_string(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
+                lines.push(Line::styled(disp(title), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
                 for (k, d) in *rows {
                     let mut l = Line::from(vec![Span::styled(format!("  {:<30}", disp(k)), Style::default().fg(ACCENT)), Span::raw(disp(d))]);
                     if i == *sel {
@@ -785,14 +816,14 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                 Some(m) => format!(" {m} "),
                 None => " Keymap — saved to keymap.json · PgUp PgDn · Esc close ".into(),
             };
-            f.render_widget(Clear, r);
+            clear(f, r);
             f.render_widget(Paragraph::new(lines).scroll((*scroll, 0)).block(block(title, true)), r);
         }
         // 위에서 따로 그린다
         Popup::Find(_) => {}
         Popup::Message { title, text } => {
             let r = centered(area, 90, (text.lines().count() as u16 + 4).min(30));
-            f.render_widget(Clear, r);
+            clear(f, r);
             f.render_widget(Paragraph::new(text.clone()).wrap(Wrap { trim: false }).block(block(format!(" {title} (Esc) "), true)), r);
         }
         Popup::Scope(e) => {
@@ -845,7 +876,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                 })
                 .collect();
             lines.push(Line::styled("Space check · → expand · ← collapse · Enter apply · Esc cancel", Style::default().fg(DIM)));
-            f.render_widget(Clear, r);
+            clear(f, r);
             f.render_widget(Paragraph::new(lines).block(block(format!(" Manage Shown Schemas — {name} "), true)), r);
         }
         Popup::Confirm { text, .. } => {
@@ -854,12 +885,12 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             lines.push(Line::raw(""));
             lines.push(Line::styled("y / Enter = yes · n / Esc = no", Style::default().fg(DIM)));
             let r = centered(area, 90, lines.len() as u16 + 2);
-            f.render_widget(Clear, r);
+            clear(f, r);
             f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block(" Confirm ", true)), r);
         }
         Popup::Input { title, input, complete, words, .. } => {
             let r = centered(area, 90, 3);
-            f.render_widget(Clear, r);
+            clear(f, r);
             let hint = if words.is_empty() { "Enter / Esc" } else { "Enter / Esc · Tab complete" };
             input.set_block(block(format!(" {title} ({hint}) "), true));
             f.render_widget(&*input, r);
@@ -873,13 +904,13 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                     .enumerate()
                     .map(|(i, s)| ListItem::new(format!(" {s}")).style(if i == *sel { Style::default().bg(Color::Rgb(46, 67, 110)) } else { Style::default() }))
                     .collect();
-                f.render_widget(Clear, lr);
+                clear(f, lr);
                 f.render_widget(List::new(rows).block(block("", true)).style(Style::default().bg(Color::Rgb(30, 31, 34))), lr);
             }
         }
         Popup::Palette(p) => {
             let r = centered(area, 100, 24);
-            f.render_widget(Clear, r);
+            clear(f, r);
             let [inp, list] = Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).areas(r);
             app.hits.palette = Block::default().borders(Borders::ALL).inner(list);
             let t = format!(" {}{} ", p.title, if p.loading > 0 { " — loading…" } else { "" });
@@ -908,12 +939,12 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             p.sel = sel;
             let ddl = app.keys.keys(crate::app::Action::Ddl).first().map(|k| disp(k)).unwrap_or_else(|| "—".into());
             let hint = if p.title.starts_with("Go to") || p.title == "Search Everywhere" { format!(" Enter open · {ddl} DDL · Esc ") } else { " Enter · Esc ".into() };
-            f.render_widget(List::new(items).block(block(hint, false)), list);
+            f.render_widget(List::new(items).block(block(hint, true)), list);
         }
         Popup::ConnForm(form) => {
             let h = form.fields.len() as u16 + 6;
             let r = centered(area, 72, h);
-            f.render_widget(Clear, r);
+            clear(f, r);
             let mut lines: Vec<Line> = form
                 .fields
                 .iter()
@@ -942,11 +973,33 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                 .collect();
             lines.push(Line::raw(""));
             if let Some((ok, m)) = &form.message {
-                lines.push(Line::styled(m.clone(), Style::default().fg(if *ok { Color::Green } else { Color::Red })));
+                lines.push(Line::styled(disp(m), Style::default().fg(if *ok { Color::Green } else { Color::Red })));
             }
             lines.push(Line::styled(disp("↑↓/Tab move · type to edit · Space/←→ toggle · Ctrl+T test · Ctrl+S / Enter save · Esc cancel"), Style::default().fg(DIM)));
             let t = if form.edit.is_some() { " Data Source Properties " } else { " New Data Source " };
             f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block(t, true)), r);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn popup_clears_wide_chars_straddling_its_edges() {
+        let mut term = Terminal::new(ratatui::backend::TestBackend::new(20, 1)).unwrap();
+        term.draw(|f| {
+            // "가" 가 3·4 칸, "나" 가 9·10 칸 → 팝업 4..10 의 양쪽 가장자리에 걸친다
+            f.buffer_mut().set_string(0, 0, "abc가defg나", Style::default().bg(Color::Yellow));
+            clear(f, Rect::new(4, 0, 6, 1));
+            f.render_widget(Paragraph::new("│popup").style(Style::default()), Rect::new(4, 0, 6, 1));
+        })
+        .unwrap();
+        let buf = term.backend().buffer();
+        assert_eq!(buf[(3, 0)].symbol(), " ", "left half of 가 would hide the popup's left edge");
+        assert_eq!(buf[(4, 0)].symbol(), "│");
+        assert_eq!(buf[(10, 0)].symbol(), " ");
+        assert_eq!(buf[(10, 0)].bg, Color::Yellow, "the cell after the popup keeps the row's colour");
     }
 }

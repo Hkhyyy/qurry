@@ -71,6 +71,7 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
         MySqlPoolOptions::new()
         // 콘솔·테이블 탭마다 연결을 하나씩 전용으로 쓴다. 연결은 필요할 때만 열리므로 상한만 넉넉히
         .max_connections(crate::db::POOL_MAX)
+        .idle_timeout(crate::db::POOL_IDLE)
         .acquire_timeout(Duration::from_secs(10))
         .after_connect(move |conn, _| {
             let init = init.clone();
