@@ -101,7 +101,7 @@ export interface FindRun {
   matchCase: boolean;
 }
 
-/** Find 도구 창 (⌘3): 검색 결과를 테이블별로 묶어 보여 준다 */
+/** Find 도구 창 (⇧⌘F): 검색 결과를 테이블별로 묶어 보여 준다 */
 export function FindPanel({ runs, active, onActive, onClose, onCloseRun, onPin, onOpen }: {
   runs: FindRun[];
   active: string | null;

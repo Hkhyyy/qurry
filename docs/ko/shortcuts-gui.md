@@ -37,8 +37,9 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 
 | macOS | Action |
 |---|---|
-| `⌘1` | Database Explorer (focus / hide) |
-| `⌘3` | Find tool window (Full-text Search results) |
+| `⌘1…⌘9` | Switch to workspace 1…9 |
+| `⌘0` | Database Explorer (focus / hide) |
+| `⇧⌘F` | Find tool window (Full-text Search results) |
 | `⇧⎋` | Hide active tool window |
 | `⇧⌘F12` | Maximize editor (also: double-click a tab) |
 | `⌘,` | Settings (theme) |

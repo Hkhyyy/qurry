@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { keyLabel } from "./shortcuts";
+import { keyLabel, SHORTCUTS } from "./shortcuts";
 
 describe("keyLabel", () => {
   it("Shift 없는 ⌘/⌃/⌥+글자는 소문자 (대문자 = Shift 가 필요한 키)", () => {
@@ -21,5 +21,22 @@ describe("keyLabel", () => {
       });
     }
     expect(bad).toEqual([]);
+  });
+});
+
+describe("global shortcuts", () => {
+  it("워크스페이스는 ⌘1~9 (터미널이 아니니 ⌥ 가 아니다), 탐색기는 ⌘0, 겹치는 기본 키 없음", () => {
+    const keys = (id: string) => SHORTCUTS.find((s) => s.id === id)?.keys;
+    expect(keys("ws.1")).toEqual(["Mod+1"]);
+    expect(keys("ws.9")).toEqual(["Mod+9"]);
+    expect(keys("explorer")).toEqual(["Mod+0"]);
+    const seen = new Map<string, string>();
+    const dup: string[] = [];
+    for (const s of SHORTCUTS.filter((x) => x.scope === "global"))
+      for (const k of s.keys) {
+        if (seen.has(k)) dup.push(`${k}: ${seen.get(k)} / ${s.id}`);
+        seen.set(k, s.id);
+      }
+    expect(dup).toEqual([]);
   });
 });

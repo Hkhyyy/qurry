@@ -34,8 +34,9 @@ export const KEYMAP: KeySection[] = [
   {
     title: "Tool windows & appearance",
     rows: [
-      ["⌘1", "Database Explorer (focus / hide)", "explorer"],
-      ["⌘3", "Find tool window (Full-text Search results)", "find.window"],
+      ["⌘1…⌘9", "Switch to workspace 1…9"],
+      ["⌘0", "Database Explorer (focus / hide)", "explorer"],
+      ["⇧⌘F", "Find tool window (Full-text Search results)", "find.window"],
       ["⇧⎋", "Hide active tool window"],
       ["⇧⌘F12", "Maximize editor (also: double-click a tab)", "maximize"],
       ["⌘,", "Settings (theme)", "settings"],

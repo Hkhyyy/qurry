@@ -1524,7 +1524,7 @@ export default function App() {
   // ───────── Search Everywhere (⇧⇧) / Go to Database Object (⌘o) / Find Action (⇧⌘A) ─────────
   const [se, setSe] = useState<SeTab | null>(null);
 
-  // ── Tool windows: Database Explorer (⌘1), Find (⌘3) ──
+  // ── Tool windows: Database Explorer (⌘0), Find (⇧⌘F) ──
   const [explorerHidden, setExplorerHidden] = useState(false);
   const toggleExplorer = () => {
     const tree = document.querySelector<HTMLElement>(".ws-explorer.on [data-tree]");
@@ -1692,7 +1692,7 @@ export default function App() {
       if (is("find.action")) return e.preventDefault(), L.setSe("actions");
       if (is("fts")) return e.preventDefault(), void L.openFts();
       if (is("explorer")) return e.preventDefault(), L.toggleExplorer();
-      // ⌥1~9: 워크스페이스
+      // ⌘1~9: 워크스페이스 (탐색기는 ⌘0)
       for (let n = 1; n <= 9; n++) if (is(`ws.${n}`)) return e.preventDefault(), void (workspacesRef.current[n - 1] && L.switchWs(workspacesRef.current[n - 1].id));
       if (is("find.window")) return e.preventDefault(), L.setFindOpen((o) => !o);
       // ⇧⎋ Hide Active Tool Window
