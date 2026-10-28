@@ -177,7 +177,8 @@ a { color: var(--c-548af7); cursor: pointer; }
 .kind-badge.postgres { background: var(--c-336791); }
 .kind-badge.mysql { background: var(--c-c47f17); }
 .kind-badge.redis { background: var(--c-c6302b); }
-.node-name { flex: none; max-width: 70%; overflow: hidden; text-overflow: ellipsis; }
+.node-name { flex: none; }
+.tree-content { width: max-content; min-width: 100%; }
 .node-sub { flex: 1 1 auto; min-width: 0; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
 .dot-on { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-left: auto; flex: none; }
 

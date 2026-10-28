@@ -213,17 +213,20 @@ export function Explorer(p: Props) {
               )}
             </div>
           )}
-          {p.connections.map((c) => (
-            <SchemaTree
-              key={c.id}
-              conn={c}
-              filter={filter}
-              showSystem={showSystem}
-              onActivate={p.onActivate}
-              onScopeChange={p.onScopeChange}
-              onMenu={(e, info) => setMenu({ x: e.clientX, y: e.clientY, items: p.buildMenu(info), conn: info.kind === "conn" ? info.conn : undefined })}
-            />
-          ))}
+          {/* 가장 긴 줄 폭에 맞춘 한 덩어리: 이름은 자르지 않고 가로로 스크롤 (줄 바탕 · 색 띠도 끝까지) */}
+          <div className="tree-content">
+            {p.connections.map((c) => (
+              <SchemaTree
+                key={c.id}
+                conn={c}
+                filter={filter}
+                showSystem={showSystem}
+                onActivate={p.onActivate}
+                onScopeChange={p.onScopeChange}
+                onMenu={(e, info) => setMenu({ x: e.clientX, y: e.clientY, items: p.buildMenu(info), conn: info.kind === "conn" ? info.conn : undefined })}
+              />
+            ))}
+          </div>
         </div>
       </TreeSelection.Provider>
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} onSetColor={p.onSetColor} />}
