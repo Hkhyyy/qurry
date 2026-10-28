@@ -18,7 +18,7 @@ import { RagView } from "./components/RagView";
 import { WorkspaceBar, WorkspaceInfo } from "./components/WorkspaceBar";
 import { forgetConsoleModel } from "./lib/monaco";
 import { TextDialog } from "./components/TextDialog";
-import { Button, Checkbox, CodeBlock, ConfirmHost, Field, IconButton, List, ListItem, Modal, Overlay, Select, Spacer, StatusItem, TabItem, Text, ToolButton, Toolbar, ToolbarSep } from "./ui";
+import { Button, Checkbox, CodeBlock, ConfirmHost, Field, IconButton, List, ListItem, Modal, Overlay, Select, Spacer, StatusItem, TabItem, TabStrip, Text, ToolButton, Toolbar, ToolbarSep } from "./ui";
 import { RecentFiles, Switcher, SwitchItem } from "./components/Switcher";
 import { ActionItem, DbObject, invalidateSearchIndex, SearchEverywhere, SeTab } from "./components/SearchEverywhere";
 import { FindPanel, FindRun, FtsScope, FullTextSearchDialog } from "./components/FullTextSearch";
@@ -1909,7 +1909,9 @@ export default function App() {
     const gConn = conns.find((c) => c.id === ga?.connId);
     return (
       <div className={"panel editor-group" + (split && focused === g ? " focused" : "")} onMouseDownCapture={() => setFocused(g)}>
-        <div
+        <TabStrip
+          activeKey={ga?.id}
+          overflow={gTabs.map((t) => ({ key: t.id, label: t.title, active: t.id === ga?.id, onSelect: () => activate(t) }))}
           className={"tabs" + (dropHint?.zone === "tabs" && dropHint.g === g && dropHint.beforeId === null ? " drop-end" : "")}
           onDragOver={(e) => {
             if (!dragId) return;
@@ -1973,7 +1975,7 @@ export default function App() {
               />
             );
           })}
-        </div>
+        </TabStrip>
         <div className="work-area" style={gConn?.color ? { boxShadow: `inset 0 2px 0 ${gConn.color}` } : undefined}>
           {/* 탭을 끌고 있을 때: 가운데 = 이 그룹으로, 오른쪽/아래 가장자리 = 분할 */}
           {dragId && (
