@@ -64,6 +64,42 @@ fn on(bg: Color) -> Color {
     }
 }
 
+/// 한 줄을 정확히 width 칸으로: 앞 skip 칸은 건너뛰고 (가로 스크롤), 모자라면 빈칸, 넘치면 자른다.
+/// 두 칸 글자(한글)가 끝이나 처음에 걸리면 그 자리를 같은 스타일의 빈칸으로 바꾼다 —
+/// 그냥 두면 터미널이 그 칸을 바탕색 없이 비워 줄 색이 끊겨 보인다.
+fn fit_spans(spans: Vec<Span<'static>>, skip: usize, width: usize) -> Vec<Span<'static>> {
+    use unicode_width::UnicodeWidthChar;
+    let mut out: Vec<Span<'static>> = vec![];
+    let (mut col, mut used) = (0usize, 0usize);
+    for sp in spans {
+        let mut buf = String::new();
+        for ch in sp.content.chars() {
+            let w = ch.width().unwrap_or(0);
+            let (start, end) = (col, col + w);
+            col = end;
+            if end <= skip || used >= width {
+                continue;
+            }
+            if start < skip || used + w > width {
+                // 앞이나 끝에 걸친 두 칸 글자 → 보이는 칸만큼 빈칸
+                let vis = (end.min(skip + width) - start.max(skip)).min(width - used);
+                buf.push_str(&" ".repeat(vis));
+                used += vis;
+            } else {
+                buf.push(ch);
+                used += w;
+            }
+        }
+        if !buf.is_empty() {
+            out.push(Span::styled(buf, sp.style));
+        }
+    }
+    if used < width {
+        out.push(Span::raw(" ".repeat(width - used)));
+    }
+    out
+}
+
 pub fn hex(c: &str) -> Option<Color> {
     let c = c.trim_start_matches('#');
     if c.len() != 6 {
@@ -213,16 +249,8 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
         if !hint.is_empty() {
             spans.push(Span::styled(format!(" {hint}"), Style::default().fg(DIM)));
         }
-        // 배경색이 줄 끝까지 가도록 채운다
-        {
-            use unicode_width::UnicodeWidthStr;
-            let used: usize = spans.iter().map(|s| s.content.width()).sum();
-            let want = inner.width as usize + app.tree.hoff;
-            if used < want {
-                spans.push(Span::raw(" ".repeat(want - used)));
-            }
-        }
-        let mut line = Line::from(spans);
+        // 정확히 탐색기 폭으로 (가로 스크롤 반영). 배경색이 줄 끝까지 가고, 끝에 걸린 한글이 색을 끊지 않게
+        let mut line = Line::from(fit_spans(spans, app.tree.hoff, inner.width as usize));
         if i == app.tree.sel {
             line = line.style(Style::default().bg(if focused { Color::Rgb(46, 67, 110) } else { Color::Rgb(50, 52, 56) }));
         } else if let Some(c) = conn_color {
@@ -234,8 +262,8 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
     if vis.is_empty() {
         lines.push(Line::styled("No data sources. Press n to add one.", Style::default().fg(DIM)));
     }
-    // 가로 스크롤 (Shift+←/→, 트랙패드 좌우)
-    f.render_widget(Paragraph::new(lines).scroll((0, app.tree.hoff as u16)), inner);
+    // 가로 스크롤 (Shift+←/→, 트랙패드 좌우) 은 fit_spans 가 이미 했다
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
@@ -985,6 +1013,22 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tree_row_fills_exactly_the_width_even_when_a_wide_char_straddles_the_edge() {
+        // "ab" + "가나" (두 칸씩) = 6칸. 5칸에 맞추면 "나" 가 끝에 걸린다 → 빈칸(같은 스타일)으로 채워 5칸
+        let st = Style::default().bg(Color::Green);
+        let out = fit_spans(vec![Span::styled("ab", st), Span::styled("가나", st)], 0, 5);
+        let text: String = out.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "ab가 ");
+        assert!(out.iter().all(|s| s.style.bg == Some(Color::Green)), "{out:?}");
+        // 짧으면 빈칸으로 채운다
+        let out = fit_spans(vec![Span::raw("ab")], 0, 4);
+        assert_eq!(out.iter().map(|s| s.content.as_ref()).collect::<String>(), "ab  ");
+        // 가로 스크롤 (앞 3칸 건너뜀): "가" 의 오른쪽 반에서 시작 → 빈칸
+        let out = fit_spans(vec![Span::raw("ab가나다")], 3, 4);
+        assert_eq!(out.iter().map(|s| s.content.as_ref()).collect::<String>(), " 나 ");
+    }
 
     #[test]
     fn popup_clears_wide_chars_straddling_its_edges() {
