@@ -18,7 +18,7 @@ export function TextDialog() {
     req.resolve(v);
   };
   return (
-    <div className="modal-backdrop" onMouseDown={() => done(null)}>
+    <div className="modal-backdrop text-dialog-backdrop" onMouseDown={() => done(null)}>
       <div className="modal text-dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="modal-title">{req.title}</div>
         <input

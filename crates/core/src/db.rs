@@ -45,6 +45,8 @@ pub(crate) fn query_result(columns: Vec<ColumnInfo>, rows: Vec<Vec<Value>>, rows
 
 /// DB 하나당 최대 연결 수 (탭 수 + 트리·자동완성 같은 메타 조회)
 pub const POOL_MAX: u32 = 32;
+/// 쉬는 연결은 1분 뒤 닫는다 (트리·검색 색인을 읽을 때 한꺼번에 연 연결이 운영 서버에 오래 남지 않게). 탭이 쥔 연결은 쉬는 것이 아니라 그대로
+pub const POOL_IDLE: Duration = Duration::from_secs(60);
 
 pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>) -> AppResult<Pool> {
     connect_via(cfg, password, None).await
@@ -104,6 +106,7 @@ pub async fn connect_via(cfg: &ConnectionConfig, password: Option<&str>, tunnel_
             let pool = PgPoolOptions::new()
                 // 콘솔·테이블 탭마다 연결을 하나씩 전용으로 쓴다. 연결은 필요할 때만 열리므로 상한만 넉넉히
                 .max_connections(crate::db::POOL_MAX)
+                .idle_timeout(crate::db::POOL_IDLE)
                 .acquire_timeout(Duration::from_secs(10))
                 .after_connect(move |conn, _meta| {
                     let script = script.clone();

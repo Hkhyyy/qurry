@@ -835,7 +835,7 @@ export default function App() {
     if (!r0) return;
     const name = `${r0.db ?? r0.c.database ?? r0.c.name}-${new Date().toISOString().slice(0, 10)}`;
     const r = await runJob(`Back up ${name}`, (job) => backup.run(dbTarget(r0.c, r0.db), { ...o, schemas: [] }, name, job));
-    if (r) setStatus(`Backed up ${(r[0] / 1048576).toFixed(1)} MB to ${r[1]}`);
+    if (r) setStatus(`Backed up ${r[0] < 1048576 ? `${Math.max(1, Math.round(r[0] / 1024))} KB` : `${(r[0] / 1048576).toFixed(1)} MB`} to ${r[1]}`);
   };
   const startRestore = async (c: ConnectionView, db?: string) => {
     const where = `${c.name}${db ? ` / ${db}` : ""}`;
@@ -1096,6 +1096,8 @@ export default function App() {
     return /^(select|with|show|explain|values|table|describe|desc)\b/.test(s2) && !/\b(insert|update|delete|merge)\b/.test(s2);
   };
 
+  // 앞 주석을 건너뛴 첫 낱말이 구조를 바꾸는 문장인지 (Production 확인 창에서 "schema change" 로 보인다)
+  const DDL_RE = /^(?:\s*(?:--[^\n]*\n|\/\*[\s\S]*?\*\/))*\s*(create|alter|drop|truncate|comment|grant|revoke|rename)\b/i;
   const executeConsole = async (tabId: string, stmts: string[], explain?: "plan" | "analyze") => {
     const tab = tabsRef.current.find((t) => t.id === tabId);
     if (!tab || !stmts.length) return;
@@ -1116,7 +1118,7 @@ export default function App() {
         const lines: string[] = [];
         for (const w of writes) {
           const n = await previewImpact(tab.target, w).catch((e) => `can't count: ${String(e).split("\n")[0]}`);
-          lines.push(`${w.replace(/\s+/g, " ").slice(0, 120)}\n   → ${typeof n === "number" ? `${n.toLocaleString("en-US")} row${n === 1 ? "" : "s"}` : n === null ? "can't count this statement" : n}`);
+          lines.push(`${w.replace(/\s+/g, " ").slice(0, 120)}\n   → ${typeof n === "number" ? `${n.toLocaleString("en-US")} row${n === 1 ? "" : "s"}` : n === null ? (DDL_RE.test(w) ? "schema change" : "can't count this statement") : n}`);
         }
         setStatus("Ready");
         if (!(await ask(`Production data source "${c.name}" — this changes data:\n\n${lines.join("\n\n")}\n\nRun it?`))) return;
@@ -1134,11 +1136,27 @@ export default function App() {
       const bare = sql0.replace(/;\s*$/, "");
       const sql = !explain ? sql0 : isMy ? `EXPLAIN ${explain === "analyze" ? "ANALYZE " : ""}${bare}` : `EXPLAIN (FORMAT JSON${explain === "analyze" ? ", ANALYZE, BUFFERS" : ""}) ${bare}`;
       log(tabId, "sql", `${c?.name ?? ""}> ${sql0}`);
+      // Explain Analyse 는 문장을 실제로 실행한다 → 바꾸는 문장은 트랜잭션 안에서 돌리고 항상 되돌린다
+      // (이미 트랜잭션 중이면 세이브포인트로 그 부분만)
+      const dry = explain === "analyze" && !isReadStmt(sql0);
+      const inTx0 = !!tabsRef.current.find((t) => t.id === tabId)?.inTx;
       try {
-        const r = await api.runQuery(tab.target, sql, tabId);
+        let r: QueryResult;
+        if (dry) {
+          await api.runQuery(tab.target, inTx0 ? "SAVEPOINT qurry_explain" : "BEGIN", tabId);
+          try {
+            r = await api.runQuery(tab.target, sql, tabId);
+          } finally {
+            await api.runQuery(tab.target, inTx0 ? "ROLLBACK TO SAVEPOINT qurry_explain" : "ROLLBACK", tabId).catch((e) => log(tabId, "error", `Roll back after Explain Analyse failed: ${String(e)}`));
+          }
+          r = { ...r, inTransaction: inTx0 };
+          log(tabId, "info", "Explain Analyse ran the statement in a transaction and rolled it back — nothing was changed");
+        } else {
+          r = await api.runQuery(tab.target, sql, tabId);
+        }
         pushHistory({ connId: tab.connId, database: tab.database, sql: sql0 });
         updTab(tabId, (t) => ({ ...t, inTx: !!r.inTransaction }));
-        if (!r.inTransaction && !isReadStmt(sql0)) committed++;
+        if (!r.inTransaction && !isReadStmt(sql0) && !dry) committed++;
         if (explain && !isMy) {
           const plan = await analyzePlan(String(r.rows[0]?.[0] ?? "")).catch(() => null);
           const entry: ResultEntry = { id: crypto.randomUUID(), title: resultTitle(sql0, ++n), sql: sql0, kind: "plan", result: null, plan: plan ?? undefined, pinned: false };

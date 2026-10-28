@@ -775,6 +775,8 @@ html, body, #root, * { overscroll-behavior: none; }
 .ws-name { font-size: 9px; max-width: 46px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ws-add { width: 30px; height: 30px; flex: none; padding: 0; border-radius: 8px; border: 1px dashed var(--border); background: none; color: var(--muted); cursor: pointer; display: flex; align-items: center; justify-content: center; }
 .ws-add svg { display: block; }
+/* 다른 모달(히스토리·마이그레이션 등) 안에서 이름을 물을 때도 그 위에 */
+.text-dialog-backdrop { z-index: 400; }
 .text-dialog { width: 420px; }
 .text-dialog input { width: 100%; box-sizing: border-box; margin: 10px 0 14px; }
 .ws-explorer { height: 100%; }
