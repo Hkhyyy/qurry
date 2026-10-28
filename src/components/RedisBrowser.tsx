@@ -5,6 +5,7 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { api, QueryResult, redis, RedisKeyDetail, RedisKeyRow, RedisReply } from "../lib/api";
 import { keyTree, parentPaths, visibleRows } from "../lib/keyTree";
 import { Chevron, FolderIcon } from "./icons";
+import { Button, FormGrid, IconButton, Modal, Notice, Select, TextInput, ToolButton } from "../ui";
 
 const isMacOS = navigator.platform.toLowerCase().includes("mac");
 
@@ -182,12 +183,12 @@ export function RedisBrowser(p: Props) {
             </option>
           ))}
         </select>
-        <button className="tb" title="Scan again (⌘r)" onClick={() => scan(true)}>
+        <IconButton title="Scan again (⌘r)" onClick={() => scan(true)}>
           ⟳
-        </button>
-        <button className="tb text" title="Add a new key" onClick={() => setAdding(true)} disabled={p.readOnly}>
+        </IconButton>
+        <ToolButton title="Add a new key" onClick={() => setAdding(true)} disabled={p.readOnly}>
           + Key
-        </button>
+        </ToolButton>
       </div>
       <PanelGroup direction="horizontal" autoSaveId="dbtool-redis">
         <Panel defaultSize={34} minSize={18}>
@@ -514,15 +515,14 @@ function KeyContent({ target, keyName, readOnly, exec, onStatus, onDeleted, onRe
           {d.encoding ? ` · ${d.encoding}` : ""}
           {d.memory != null ? ` · ${fmtBytes(d.memory)}` : ""}
         </span>
-        <button className="tb" title="Reload" onClick={() => load()}>
+        <IconButton title="Reload" onClick={() => load()}>
           ⟳
-        </button>
-        <button
-          className="tb danger"
+        </IconButton>
+        <IconButton tone="danger"
           title="Delete key"
           disabled={readOnly}
           onClick={async () => {
-            if (!(await ask(`Delete key "${keyName}"?`))) return;
+            if (!(await ask(`Delete key "${keyName}"?`, { okLabel: "Delete", danger: true }))) return;
             try {
               await exec(["DEL", keyName]);
               onStatus(`Deleted ${keyName}`);
@@ -533,7 +533,7 @@ function KeyContent({ target, keyName, readOnly, exec, onStatus, onDeleted, onRe
           }}
         >
           🗑
-        </button>
+        </IconButton>
       </div>
       {err && <div className="test-err">{err}</div>}
       {d.type === "string" ? (
@@ -689,7 +689,7 @@ function Terminal({ target, prompt, onChanged }: { target: string; prompt: strin
     if (line.toLowerCase() === "clear") return setLines([]);
     // FLUSHALL·FLUSHDB·DEL 같은 지우는 명령은 한 번 더 묻는다
     const why = await api.unsafeReason("redis", line).catch(() => null);
-    if (why && !(await ask(`${why}:\n\n${line}\n\nRun it anyway?`))) return;
+    if (why && !(await ask(`${why}. Run it anyway?`, { detail: [{ text: line, tone: "danger" }], okLabel: "Run Anyway", danger: true }))) return;
     // 출력은 최근 TERM_MAX 줄만 남긴다
     const push = (x: { kind: "in" | "out" | "err"; text: string }) => setLines((l) => [...l, x].slice(-TERM_MAX));
     push({ kind: "in", text: `${prompt} ${line}` });
@@ -758,9 +758,9 @@ function ServerTable({ target, command }: { target: string; command: string }) {
         <input placeholder="Filter" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
         <span className="grow" />
         <span className="muted">{rows.length} entries</span>
-        <button className="tb" onClick={load} title="Reload">
+        <IconButton onClick={load} title="Reload">
           ⟳
-        </button>
+        </IconButton>
       </div>
       <div className="rd-table-wrap">
         <table className="rd-table">
@@ -810,38 +810,39 @@ function NewKeyDialog({ onClose, onCreate }: { onClose: () => void; onCreate: (n
     }
   };
   return (
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="modal" onMouseDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
-        <div className="modal-title">Add Key</div>
-        <div className="form">
-          <label>Key</label>
-          <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. user:42" />
-          <label>Type</label>
-          <select value={type} onChange={(e) => setType(e.target.value)}>
-            {TYPES.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
-          <label>{la}</label>
-          {type === "string" ? <textarea rows={4} value={a} onChange={(e) => setA(e.target.value)} /> : <input value={a} onChange={(e) => setA(e.target.value)} />}
-          {lb && (
-            <>
-              <label>{lb}</label>
-              <input value={b} onChange={(e) => setB(e.target.value)} placeholder={type === "zset" ? "0" : ""} />
-            </>
-          )}
-        </div>
-        {err && <div className="test-err">{err}</div>}
-        <div className="modal-actions">
-          <span className="grow" />
-          <button onClick={onClose}>Cancel</button>
-          <button className="primary" onClick={go}>
+    <Modal
+      title="Add Key"
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" onClick={go}>
             Add
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </>
+      }
+    >
+      <FormGrid labelWidth={90}>
+        <label>Key</label>
+        <TextInput autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. user:42" />
+        <label>Type</label>
+        <Select value={type} onChange={(e) => setType(e.target.value)}>
+          {TYPES.map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+        </Select>
+        <label>{la}</label>
+        {type === "string" ? <textarea rows={4} value={a} onChange={(e) => setA(e.target.value)} /> : <TextInput value={a} onChange={(e) => setA(e.target.value)} />}
+        {lb && (
+          <>
+            <label>{lb}</label>
+            <TextInput value={b} onChange={(e) => setB(e.target.value)} placeholder={type === "zset" ? "0" : ""} />
+          </>
+        )}
+      </FormGrid>
+      {err && <Notice tone="danger">{err}</Notice>}
+    </Modal>
   );
 }

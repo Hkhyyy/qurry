@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { Button, Checkbox, EmptyState, FormGrid, FormSection, Hint, Modal, Notice, Select, Spacer, Tabs, TextInput } from "../ui";
 import { api, COLOR_PRESETS, ConnOptions, RedisMode, SslConfig, ConnectionConfig, ConnectionView, DbKind, DEFAULT_PORT, DRIVER_MISSING, isFileKind, KIND_LABEL, meta, SchemaInfo, SshConfig, targetId } from "../lib/api";
 
 interface Props {
@@ -94,305 +95,310 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
     if (typeof p === "string") setSsh("keyPath", p);
   };
 
+  const tabHint =
+    tab === "options"
+      ? "Changes apply on the next connection (the data source is reconnected on OK)."
+      : tab === "schemas"
+      ? "Only checked databases and schemas are shown in the Database Explorer. Nothing checked = show all."
+      : tab === "ssh"
+      ? "The database host/port on the General tab are resolved from the SSH server. Host keys are checked against ~/.ssh/known_hosts."
+      : "Passwords are stored encrypted in the app data folder (no Keychain prompts).";
+  const port = (v: number, on: (n: number) => void, fallback: number, disabled?: boolean) => <TextInput className="w-port" disabled={disabled} value={v} onChange={(e) => on(Number(e.target.value) || fallback)} />;
+
   return (
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="modal-title">{edit ? "Data Source Properties" : "New Data Source"}</div>
-        <div className="dlg-tabs">
-          <span className={tab === "general" ? "on" : ""} onClick={() => { setTab("general"); setTest(null); }}>General</span>
-          <span className={tab === "ssh" ? "on" : ""} onClick={() => { setTab("ssh"); setTest(null); }}>
-            SSH/SSL{ssh.enabled || ssl.enabled ? " ●" : ""}
-          </span>
-          <span className={tab === "schemas" ? "on" : ""} onClick={() => { setTab("schemas"); setTest(null); }}>
-            Schemas{cfg.scope?.databases?.length ? " ●" : ""}
-          </span>
-          <span className={tab === "options" ? "on" : ""} onClick={() => { setTab("options"); setTest(null); }}>Options</span>
-        </div>
+    <Modal
+      title={edit ? "Data Source Properties" : "New Data Source"}
+      size="lg"
+      stickyBackdrop
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={runTest} disabled={busy}>
+            {busy ? "Testing…" : tab === "ssh" ? "Test SSH Connection" : "Test Connection"}
+          </Button>
+          <Spacer />
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" onClick={save}>
+            OK
+          </Button>
+        </>
+      }
+    >
+      <Tabs
+        items={[
+          { id: "general", label: "General" },
+          { id: "ssh", label: `SSH/SSL${ssh.enabled || ssl.enabled ? " ●" : ""}` },
+          { id: "schemas", label: `Schemas${cfg.scope?.databases?.length ? " ●" : ""}` },
+          { id: "options", label: "Options" },
+        ]}
+        value={tab}
+        onChange={(t) => (setTab(t), setTest(null))}
+      />
 
-        {tab === "general" && (
-          <div className="form">
-            <label>Name</label>
-            <input value={cfg.name} placeholder={`${cfg.user || "user"}@${cfg.host}`} onChange={(e) => set("name", e.target.value)} />
-            <label>Driver</label>
-            <select
-              value={cfg.kind}
-              onChange={(e) => {
-                const k = e.target.value as DbKind;
-                setCfg((c) => ({ ...c, kind: k, port: DEFAULT_PORT[k] }));
-              }}
-            >
-              {(Object.keys(KIND_LABEL) as DbKind[]).map((k) => (
-                <option key={k} value={k}>
-                  {KIND_LABEL[k]}
-                </option>
-              ))}
-            </select>
-            {driver !== null && (
-              <>
-                <label>Plugin</label>
-                <div className="row">
-                  {driver ? (
-                    <span className="lbl">✓ {KIND_LABEL[cfg.kind]} driver installed</span>
-                  ) : (
-                    <>
-                      <span className="lbl">Not installed — downloaded from this version's GitHub release (signature checked)</span>
-                      <button className="small" disabled={installing} onClick={installDriver}>
-                        {installing ? "Installing…" : "Install"}
-                      </button>
-                    </>
-                  )}
-                </div>
-              </>
-            )}
-            {!fileDb && (
-              <>
-                <label>Host</label>
-                <div className="row">
-                  <input className="grow" value={cfg.host} placeholder={cfg.kind === "mongodb" ? "host, or a mongodb:// / mongodb+srv:// URI" : ""} onChange={(e) => set("host", e.target.value)} />
-                  <span className="lbl">Port</span>
-                  <input className="port" value={cfg.port} onChange={(e) => set("port", Number(e.target.value) || 0)} />
-                </div>
-                <label>User</label>
-                <input value={cfg.user} placeholder={cfg.kind === "redis" ? "(optional, ACL user)" : cfg.kind === "milvus" ? "(optional — empty: the password is an API key)" : ""} onChange={(e) => set("user", e.target.value)} />
-                <label>{cfg.kind === "qdrant" || cfg.kind === "chroma" ? "API key" : "Password"}</label>
-                <input
-                  type="password"
-                  value={password ?? ""}
-                  placeholder={edit?.hasPassword ? "<saved — leave empty to keep>" : ""}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-              </>
-            )}
-            {cfg.kind === "redis" && (
-              <>
-                <label>Connection</label>
-                <select value={rmode.mode} onChange={(e) => setRedis("mode", e.target.value as RedisMode["mode"])}>
-                  <option value="standalone">Standalone</option>
-                  <option value="sentinel">Sentinel</option>
-                  <option value="cluster">Cluster</option>
-                </select>
-                {rmode.mode === "sentinel" && (
-                  <>
-                    <label>Master name</label>
-                    <input value={rmode.sentinelMaster} placeholder="mymaster" onChange={(e) => setRedis("sentinelMaster", e.target.value)} />
-                    <label>Sentinels</label>
-                    <input value={rmode.nodes} placeholder="host1:26379, host2:26379 (empty = Host/Port above)" onChange={(e) => setRedis("nodes", e.target.value)} />
-                  </>
-                )}
-                {rmode.mode === "cluster" && (
-                  <>
-                    <label>Seed nodes</label>
-                    <input value={rmode.nodes} placeholder="extra nodes: host2:6379, host3:6379 (optional)" onChange={(e) => setRedis("nodes", e.target.value)} />
-                  </>
-                )}
-              </>
-            )}
-            <label>{fileDb ? "File" : cfg.kind === "oracle" ? "Service name" : "Database"}</label>
-            {fileDb ? (
-              <div className="row">
-                <input className="grow" value={cfg.database} placeholder={cfg.kind === "duckdb" ? "/path/to/data.duckdb (empty = in memory)" : "/path/to/app.db (created if missing)"} onChange={(e) => set("database", e.target.value)} />
-                <button className="small" onClick={pickDbFile}>
-                  Browse…
-                </button>
-              </div>
-            ) : (
-              <input value={cfg.database} placeholder={cfg.kind === "postgres" ? "postgres" : cfg.kind === "redis" ? "0 (database index)" : cfg.kind === "oracle" ? "FREEPDB1, ORCLPDB1 …" : cfg.kind === "mssql" ? "master" : cfg.kind === "clickhouse" ? "default" : cfg.kind === "chroma" ? "default_database" : cfg.kind === "milvus" ? "default" : ""} onChange={(e) => set("database", e.target.value)} />
-            )}
-            {cfg.kind === "oracle" && (
-              <>
-                <label>Oracle client</label>
-                <div className="row">
-                  <input className="grow" value={opt.oracleClient ?? ""} placeholder="Instant Client folder (empty = ORACLE_CLIENT_LIB_DIR / system default)" onChange={(e) => setOpt("oracleClient", e.target.value || null)} />
-                  <button className="small" onClick={async () => { const p = await open({ directory: true }); if (typeof p === "string") setOpt("oracleClient", p); }}>
-                    Browse…
-                  </button>
-                </div>
-              </>
-            )}
-            <label>Color</label>
-            <ColorSwatches value={cfg.color ?? null} onChange={(v) => set("color", v)} />
-          </div>
-        )}
-
-        {tab === "ssh" && (
-          <div className="form">
-            <label />
-            <label className="check">
-              <input type="checkbox" checked={ssh.enabled} onChange={(e) => setSsh("enabled", e.target.checked)} /> Use SSH tunnel
-            </label>
-            <label>Host</label>
-            <div className="row">
-              <input className="grow" disabled={!ssh.enabled} value={ssh.host} placeholder="bastion.example.com" onChange={(e) => setSsh("host", e.target.value)} />
-              <span className="lbl">Port</span>
-              <input className="port" disabled={!ssh.enabled} value={ssh.port} onChange={(e) => setSsh("port", Number(e.target.value) || 22)} />
-            </div>
-            <label>User</label>
-            <input disabled={!ssh.enabled} value={ssh.user} onChange={(e) => setSsh("user", e.target.value)} />
-            <label>Auth type</label>
-            <select disabled={!ssh.enabled} value={ssh.auth} onChange={(e) => setSsh("auth", e.target.value as SshConfig["auth"])}>
-              <option value="key">Key pair</option>
-              <option value="password">Password</option>
-            </select>
-            {ssh.auth === "key" && (
-              <>
-                <label>Private key</label>
-                <div className="row">
-                  <input className="grow" disabled={!ssh.enabled} value={ssh.keyPath} onChange={(e) => setSsh("keyPath", e.target.value)} />
-                  <button disabled={!ssh.enabled} onClick={browseKey}>…</button>
-                </div>
-              </>
-            )}
-            <label>{ssh.auth === "key" ? "Passphrase" : "Password"}</label>
-            <input
-              type="password"
-              disabled={!ssh.enabled}
-              value={sshSecret ?? ""}
-              placeholder={edit?.ssh?.enabled ? "<saved — leave empty to keep>" : ssh.auth === "key" ? "(none)" : ""}
-              onChange={(e) => setSshSecret(e.target.value)}
-            />
-            <span className="form-section">SSL / TLS</span>
-            <label />
-            <label className="check">
-              <input type="checkbox" checked={ssl.enabled} onChange={(e) => setSsl("enabled", e.target.checked)} /> Use SSL{cfg.kind === "redis" ? " (rediss://)" : ""}
-            </label>
-            <label>Mode</label>
-            <select disabled={!ssl.enabled} value={ssl.mode || "require"} onChange={(e) => setSsl("mode", e.target.value)}>
-              <option value="require">Require (encrypt, don't verify)</option>
-              <option value="verify-ca">Verify CA</option>
-              <option value="verify-full">Full Verification (CA + host name)</option>
-            </select>
-            {(["caFile", "certFile", "keyFile"] as const).map((k) => (
-              <span key={k} style={{ display: "contents" }}>
-                <label>{k === "caFile" ? "CA file" : k === "certFile" ? "Client cert" : "Client key"}</label>
-                <div className="row">
-                  <input className="grow" disabled={!ssl.enabled} value={ssl[k]} placeholder={k === "caFile" ? "(system trust store)" : "(none)"} onChange={(e) => setSsl(k, e.target.value)} />
-                  <button disabled={!ssl.enabled} onClick={() => pickFile(k)}>…</button>
-                </div>
-              </span>
+      {tab === "general" && (
+        <FormGrid>
+          <label>Name</label>
+          <TextInput value={cfg.name} placeholder={`${cfg.user || "user"}@${cfg.host}`} onChange={(e) => set("name", e.target.value)} />
+          <label>Driver</label>
+          <Select
+            value={cfg.kind}
+            onChange={(e) => {
+              const k = e.target.value as DbKind;
+              setCfg((c) => ({ ...c, kind: k, port: DEFAULT_PORT[k] }));
+            }}
+          >
+            {(Object.keys(KIND_LABEL) as DbKind[]).map((k) => (
+              <option key={k} value={k}>
+                {KIND_LABEL[k]}
+              </option>
             ))}
-          </div>
-        )}
-
-        {tab === "schemas" && (
-          <SchemasTab
-            connId={edit?.id}
-            scope={cfg.scope ?? {}}
-            onChange={(scope) => setCfg((c) => ({ ...c, scope }))}
-          />
-        )}
-
-        {tab === "options" && (
-          <div className="form options-form">
-            <span className="form-section">Connection</span>
-            <span />
-            <label className="check">
-              <input type="checkbox" checked={!!cfg.readOnly} onChange={(e) => set("readOnly", e.target.checked)} />
-              Read-only
-            </label>
-            <label>Transaction control</label>
-            <div className="row">
-              <select value={opt.txManual ? "manual" : "auto"} onChange={(e) => setOpt("txManual", e.target.value === "manual")}>
-                <option value="auto">Auto</option>
-                <option value="manual">Manual</option>
-              </select>
-              <select value={opt.isolation ?? ""} onChange={(e) => setOpt("isolation", e.target.value || null)} title="Isolation level">
-                <option value="">Database Default</option>
-                <option value="read uncommitted">Read Uncommitted</option>
-                <option value="read committed">Read Committed</option>
-                <option value="repeatable read">Repeatable Read</option>
-                <option value="serializable">Serializable</option>
-              </select>
+          </Select>
+          {driver !== null && (
+            <>
+              <label>Plugin</label>
+              <div className="ui-row">
+                {driver ? (
+                  <span className="ui-muted">✓ {KIND_LABEL[cfg.kind]} driver installed</span>
+                ) : (
+                  <>
+                    <span className="ui-muted ui-ellipsis" title="Downloaded from this version's GitHub release (signature checked)">
+                      Not installed — downloaded from this version's GitHub release (signature checked)
+                    </span>
+                    <Button size="sm" variant="primary" disabled={installing} onClick={installDriver}>
+                      {installing ? "Installing…" : "Install"}
+                    </Button>
+                  </>
+                )}
+              </div>
+            </>
+          )}
+          {!fileDb && (
+            <>
+              <label>Host</label>
+              <div className="ui-row">
+                <TextInput className="grow" value={cfg.host} placeholder={cfg.kind === "mongodb" ? "host, or a mongodb:// / mongodb+srv:// URI" : ""} onChange={(e) => set("host", e.target.value)} />
+                <span className="ui-muted">Port</span>
+                {port(cfg.port, (n) => set("port", n), 0)}
+              </div>
+              <label>User</label>
+              <TextInput value={cfg.user} placeholder={cfg.kind === "redis" ? "(optional, ACL user)" : cfg.kind === "milvus" ? "(optional — empty: the password is an API key)" : ""} onChange={(e) => set("user", e.target.value)} />
+              <label>{cfg.kind === "qdrant" || cfg.kind === "chroma" ? "API key" : "Password"}</label>
+              <TextInput type="password" value={password ?? ""} placeholder={edit?.hasPassword ? "<saved — leave empty to keep>" : ""} onChange={(e) => setPassword(e.target.value)} />
+            </>
+          )}
+          {cfg.kind === "redis" && (
+            <>
+              <label>Connection</label>
+              <Select value={rmode.mode} onChange={(e) => setRedis("mode", e.target.value as RedisMode["mode"])}>
+                <option value="standalone">Standalone</option>
+                <option value="sentinel">Sentinel</option>
+                <option value="cluster">Cluster</option>
+              </Select>
+              {rmode.mode === "sentinel" && (
+                <>
+                  <label>Master name</label>
+                  <TextInput value={rmode.sentinelMaster} placeholder="mymaster" onChange={(e) => setRedis("sentinelMaster", e.target.value)} />
+                  <label>Sentinels</label>
+                  <TextInput value={rmode.nodes} placeholder="host1:26379, host2:26379 (empty = Host/Port above)" onChange={(e) => setRedis("nodes", e.target.value)} />
+                </>
+              )}
+              {rmode.mode === "cluster" && (
+                <>
+                  <label>Seed nodes</label>
+                  <TextInput value={rmode.nodes} placeholder="extra nodes: host2:6379, host3:6379 (optional)" onChange={(e) => setRedis("nodes", e.target.value)} />
+                </>
+              )}
+            </>
+          )}
+          <label>{fileDb ? "File" : cfg.kind === "oracle" ? "Service name" : "Database"}</label>
+          {fileDb ? (
+            <div className="ui-row">
+              <TextInput className="grow" value={cfg.database} placeholder={cfg.kind === "duckdb" ? "/path/to/data.duckdb (empty = in memory)" : "/path/to/app.db (created if missing)"} onChange={(e) => set("database", e.target.value)} />
+              <Button size="sm" onClick={pickDbFile}>
+                Browse…
+              </Button>
             </div>
-            <label>Switch schema</label>
-            <select value={opt.switchSchema ?? "auto"} onChange={(e) => setOpt("switchSchema", e.target.value as ConnOptions["switchSchema"])}>
-              <option value="auto">Automatic</option>
-              <option value="manual">Manual</option>
-              <option value="disable">Disable</option>
-            </select>
-            <label>Time zone</label>
-            <input value={opt.timeZone ?? ""} placeholder="Database default (e.g. Asia/Seoul, UTC)" onChange={(e) => setOpt("timeZone", e.target.value || null)} />
-            <span />
-            <div className="row">
-              <label className="check">
-                <input type="checkbox" checked={!!opt.keepAliveSecs} onChange={(e) => setOpt("keepAliveSecs", e.target.checked ? 60 : null)} />
-                Run keep-alive query each
-              </label>
-              <input className="port" type="number" min={1} disabled={!opt.keepAliveSecs} value={opt.keepAliveSecs ?? 60} onChange={(e) => setOpt("keepAliveSecs", Math.max(1, Number(e.target.value) || 1))} />
-              <span className="lbl">sec.</span>
-            </div>
-            <span />
-            <div className="row">
-              <label className="check">
-                <input type="checkbox" checked={!!opt.autoDisconnectSecs} onChange={(e) => setOpt("autoDisconnectSecs", e.target.checked ? 300 : null)} />
-                Auto-disconnect after
-              </label>
-              <input className="port" type="number" min={1} disabled={!opt.autoDisconnectSecs} value={opt.autoDisconnectSecs ?? 300} onChange={(e) => setOpt("autoDisconnectSecs", Math.max(1, Number(e.target.value) || 1))} />
-              <span className="lbl">sec.</span>
-            </div>
-            <span />
-            <label className="check">
-              <input type="checkbox" checked={!!opt.singleDb} onChange={(e) => setOpt("singleDb", e.target.checked)} />
-              Single database mode
-            </label>
-            <span />
-            <label className="check" title="Before UPDATE / DELETE / INSERT … run, show how many rows will change and ask">
-              <input type="checkbox" checked={!!opt.confirmChanges} onChange={(e) => setOpt("confirmChanges", e.target.checked)} />
-              Production: show affected rows and confirm changes
-            </label>
-            <label className="top">Startup script</label>
-            <textarea
-              className="startup-script"
-              spellCheck={false}
-              rows={4}
-              placeholder="SQL executed on every new connection, e.g. SET search_path TO app, public;"
-              value={opt.startupScript ?? ""}
-              onChange={(e) => setOpt("startupScript", e.target.value)}
+          ) : (
+            <TextInput
+              value={cfg.database}
+              placeholder={cfg.kind === "postgres" ? "postgres" : cfg.kind === "redis" ? "0 (database index)" : cfg.kind === "oracle" ? "FREEPDB1, ORCLPDB1 …" : cfg.kind === "mssql" ? "master" : cfg.kind === "clickhouse" ? "default" : cfg.kind === "chroma" ? "default_database" : cfg.kind === "milvus" ? "default" : ""}
+              onChange={(e) => set("database", e.target.value)}
             />
-          </div>
-        )}
+          )}
+          {cfg.kind === "oracle" && (
+            <>
+              <label>Oracle client</label>
+              <div className="ui-row">
+                <TextInput className="grow" value={opt.oracleClient ?? ""} placeholder="Instant Client folder (empty = ORACLE_CLIENT_LIB_DIR / system default)" onChange={(e) => setOpt("oracleClient", e.target.value || null)} />
+                <Button
+                  size="sm"
+                  onClick={async () => {
+                    const p = await open({ directory: true });
+                    if (typeof p === "string") setOpt("oracleClient", p);
+                  }}
+                >
+                  Browse…
+                </Button>
+              </div>
+            </>
+          )}
+          <label>Color</label>
+          <ColorSwatches value={cfg.color ?? null} onChange={(v) => set("color", v)} />
+        </FormGrid>
+      )}
 
-        <div className="hint">
-          {tab === "options"
-            ? "Changes apply on the next connection (the data source is reconnected on OK)."
-            : tab === "schemas"
-            ? "Only checked databases and schemas are shown in the Database Explorer. Nothing checked = show all."
-            : tab === "ssh"
-            ? "The database host/port on the General tab are resolved from the SSH server. Host keys are checked against ~/.ssh/known_hosts."
-            : "Passwords are stored encrypted in the app data folder (no Keychain prompts)."}
-        </div>
-        {test && <div className={test.ok ? "test-ok" : "test-err"}>{test.ok ? "✓ " : "✕ "}{test.msg}</div>}
-        {test && !test.ok && test.msg.includes(DRIVER_MISSING) && (
-          <div className="modal-actions" style={{ marginTop: 6 }}>
-            <button className="primary" disabled={installing} onClick={installDriver}>
-              {installing ? "Installing…" : `Install the ${KIND_LABEL[cfg.kind]} driver`}
-            </button>
+      {tab === "ssh" && (
+        <FormGrid>
+          <FormSection>SSH tunnel</FormSection>
+          <span />
+          <Checkbox checked={ssh.enabled} onChange={(v) => setSsh("enabled", v)}>
+            Use SSH tunnel
+          </Checkbox>
+          <label>Host</label>
+          <div className="ui-row">
+            <TextInput className="grow" disabled={!ssh.enabled} value={ssh.host} placeholder="bastion.example.com" onChange={(e) => setSsh("host", e.target.value)} />
+            <span className="ui-muted">Port</span>
+            {port(ssh.port, (n) => setSsh("port", n), 22, !ssh.enabled)}
           </div>
-        )}
-        {/* 처음 보는 SSH 서버: 지문을 확인한 뒤 신뢰 → 다시 시험 */}
-        {test && !test.ok && test.msg.includes("Unknown SSH host key") && cfg.ssh && (
-          <div className="row" style={{ marginTop: 6 }}>
-            <button
-              onClick={async () => {
-                try {
-                  await api.trustSshHost(cfg.ssh!.host, cfg.ssh!.port);
-                  await runTest();
-                } catch (e) {
-                  setTest({ ok: false, msg: String(e) });
-                }
-              }}
-            >
-              Trust Host Key and Test Again
-            </button>
+          <label>User</label>
+          <TextInput disabled={!ssh.enabled} value={ssh.user} onChange={(e) => setSsh("user", e.target.value)} />
+          <label>Auth type</label>
+          <Select disabled={!ssh.enabled} value={ssh.auth} onChange={(e) => setSsh("auth", e.target.value as SshConfig["auth"])}>
+            <option value="key">Key pair</option>
+            <option value="password">Password</option>
+          </Select>
+          {ssh.auth === "key" && (
+            <>
+              <label>Private key</label>
+              <div className="ui-row">
+                <TextInput className="grow" disabled={!ssh.enabled} value={ssh.keyPath} onChange={(e) => setSsh("keyPath", e.target.value)} />
+                <Button size="sm" disabled={!ssh.enabled} onClick={browseKey}>
+                  Browse…
+                </Button>
+              </div>
+            </>
+          )}
+          <label>{ssh.auth === "key" ? "Passphrase" : "Password"}</label>
+          <TextInput type="password" disabled={!ssh.enabled} value={sshSecret ?? ""} placeholder={edit?.ssh?.enabled ? "<saved — leave empty to keep>" : ssh.auth === "key" ? "(none)" : ""} onChange={(e) => setSshSecret(e.target.value)} />
+          <FormSection>SSL / TLS</FormSection>
+          <span />
+          <Checkbox checked={ssl.enabled} onChange={(v) => setSsl("enabled", v)}>
+            Use SSL{cfg.kind === "redis" ? " (rediss://)" : ""}
+          </Checkbox>
+          <label>Mode</label>
+          <Select disabled={!ssl.enabled} value={ssl.mode || "require"} onChange={(e) => setSsl("mode", e.target.value)}>
+            <option value="require">Require (encrypt, don't verify)</option>
+            <option value="verify-ca">Verify CA</option>
+            <option value="verify-full">Full Verification (CA + host name)</option>
+          </Select>
+          {(["caFile", "certFile", "keyFile"] as const).map((k) => (
+            <span key={k} style={{ display: "contents" }}>
+              <label>{k === "caFile" ? "CA file" : k === "certFile" ? "Client cert" : "Client key"}</label>
+              <div className="ui-row">
+                <TextInput className="grow" disabled={!ssl.enabled} value={ssl[k]} placeholder={k === "caFile" ? "(system trust store)" : "(none)"} onChange={(e) => setSsl(k, e.target.value)} />
+                <Button size="sm" disabled={!ssl.enabled} onClick={() => pickFile(k)}>
+                  Browse…
+                </Button>
+              </div>
+            </span>
+          ))}
+        </FormGrid>
+      )}
+
+      {tab === "schemas" && <SchemasTab connId={edit?.id} scope={cfg.scope ?? {}} onChange={(scope) => setCfg((c) => ({ ...c, scope }))} />}
+
+      {tab === "options" && (
+        <FormGrid labelWidth={140}>
+          <FormSection>Connection</FormSection>
+          <span />
+          <Checkbox checked={!!cfg.readOnly} onChange={(v) => set("readOnly", v)}>
+            Read-only
+          </Checkbox>
+          <span />
+          <Checkbox checked={!!opt.confirmChanges} onChange={(v) => setOpt("confirmChanges", v)} title="Before UPDATE / DELETE / INSERT … run, show how many rows will change and ask">
+            Production: show affected rows and confirm changes
+          </Checkbox>
+          <label>Transaction control</label>
+          <div className="ui-row">
+            <Select value={opt.txManual ? "manual" : "auto"} onChange={(e) => setOpt("txManual", e.target.value === "manual")}>
+              <option value="auto">Auto</option>
+              <option value="manual">Manual</option>
+            </Select>
+            <Select value={opt.isolation ?? ""} onChange={(e) => setOpt("isolation", e.target.value || null)} title="Isolation level">
+              <option value="">Database Default</option>
+              <option value="read uncommitted">Read Uncommitted</option>
+              <option value="read committed">Read Committed</option>
+              <option value="repeatable read">Repeatable Read</option>
+              <option value="serializable">Serializable</option>
+            </Select>
           </div>
-        )}
-        <div className="modal-actions">
-          <button onClick={runTest} disabled={busy}>{busy ? "Testing…" : tab === "ssh" ? "Test SSH Connection" : "Test Connection"}</button>
-          <span className="grow" />
-          <button onClick={onClose}>Cancel</button>
-          <button className="primary" onClick={save}>OK</button>
+          <label>Switch schema</label>
+          <Select className="w-auto" value={opt.switchSchema ?? "auto"} onChange={(e) => setOpt("switchSchema", e.target.value as ConnOptions["switchSchema"])}>
+            <option value="auto">Automatic</option>
+            <option value="manual">Manual</option>
+            <option value="disable">Disable</option>
+          </Select>
+          <label>Time zone</label>
+          <TextInput value={opt.timeZone ?? ""} placeholder="Database default (e.g. Asia/Seoul, UTC)" onChange={(e) => setOpt("timeZone", e.target.value || null)} />
+          <span />
+          <div className="ui-row">
+            <Checkbox checked={!!opt.keepAliveSecs} onChange={(v) => setOpt("keepAliveSecs", v ? 60 : null)}>
+              Run keep-alive query each
+            </Checkbox>
+            <TextInput className="w-port" type="number" min={1} disabled={!opt.keepAliveSecs} value={opt.keepAliveSecs ?? 60} onChange={(e) => setOpt("keepAliveSecs", Math.max(1, Number(e.target.value) || 1))} />
+            <span className="ui-muted">sec.</span>
+          </div>
+          <span />
+          <div className="ui-row">
+            <Checkbox checked={!!opt.autoDisconnectSecs} onChange={(v) => setOpt("autoDisconnectSecs", v ? 300 : null)}>
+              Auto-disconnect after
+            </Checkbox>
+            <TextInput className="w-port" type="number" min={1} disabled={!opt.autoDisconnectSecs} value={opt.autoDisconnectSecs ?? 300} onChange={(e) => setOpt("autoDisconnectSecs", Math.max(1, Number(e.target.value) || 1))} />
+            <span className="ui-muted">sec.</span>
+          </div>
+          <span />
+          <Checkbox checked={!!opt.singleDb} onChange={(v) => setOpt("singleDb", v)}>
+            Single database mode
+          </Checkbox>
+          <label className="top">Startup script</label>
+          <textarea
+            className="ui-textarea"
+            spellCheck={false}
+            rows={4}
+            placeholder="SQL executed on every new connection, e.g. SET search_path TO app, public;"
+            value={opt.startupScript ?? ""}
+            onChange={(e) => setOpt("startupScript", e.target.value)}
+          />
+        </FormGrid>
+      )}
+
+      <Hint>{tabHint}</Hint>
+      {test && <Notice tone={test.ok ? "ok" : "danger"}>{(test.ok ? "✓ " : "✕ ") + test.msg}</Notice>}
+      {test && !test.ok && test.msg.includes(DRIVER_MISSING) && (
+        <div className="ui-row conn-test-actions">
+          <Button variant="primary" disabled={installing} onClick={installDriver}>
+            {installing ? "Installing…" : `Install the ${KIND_LABEL[cfg.kind]} driver`}
+          </Button>
         </div>
-      </div>
-    </div>
+      )}
+      {/* 처음 보는 SSH 서버: 지문을 확인한 뒤 신뢰 → 다시 시험 */}
+      {test && !test.ok && test.msg.includes("Unknown SSH host key") && cfg.ssh && (
+        <div className="ui-row conn-test-actions">
+          <Button
+            onClick={async () => {
+              try {
+                await api.trustSshHost(cfg.ssh!.host, cfg.ssh!.port);
+                await runTest();
+              } catch (e) {
+                setTest({ ok: false, msg: String(e) });
+              }
+            }}
+          >
+            Trust Host Key and Test Again
+          </Button>
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -426,9 +432,9 @@ function SchemasTab({ connId, scope, onChange }: { connId?: string; scope: Scope
     meta.databases(connId).then(setDbs, (e) => setErr(String(e)));
   }, [connId]);
 
-  if (!connId) return <div className="empty">Save the data source first, then choose the databases and schemas to show.</div>;
-  if (err) return <div className="test-err">{err}</div>;
-  if (!dbs) return <div className="empty">Loading databases…</div>;
+  if (!connId) return <EmptyState>Save the data source first, then choose the databases and schemas to show.</EmptyState>;
+  if (err) return <Notice tone="danger">{err}</Notice>;
+  if (!dbs) return <EmptyState>Loading databases…</EmptyState>;
 
   const selDbs = scope.databases ?? [];
   const allDbs = selDbs.length === 0;

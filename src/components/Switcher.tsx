@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Overlay } from "../ui";
 
 export interface SwitchItem {
   key: string;
@@ -42,7 +43,7 @@ export function Switcher({ items, start, onPick, onClose }: { items: SwitchItem[
     };
   }, [items]);
   return (
-    <div className="modal-backdrop clear" onMouseDown={onClose}>
+    <Overlay variant="clear" onClose={onClose}>
       <div className="popup switcher" onMouseDown={(e) => e.stopPropagation()}>
         <div className="popup-title">Switcher</div>
         <div className="popup-list">
@@ -57,7 +58,7 @@ export function Switcher({ items, start, onPick, onClose }: { items: SwitchItem[
         </div>
         <div className="popup-foot">{items[i]?.hint}</div>
       </div>
-    </div>
+    </Overlay>
   );
 }
 
@@ -68,7 +69,7 @@ export function RecentFiles({ items, onPick, onClose, title = "Recent Files", st
   const shown = q ? items.filter((it) => (it.title + " " + it.hint).toLowerCase().includes(q.toLowerCase())) : items;
   const sel = Math.min(i, Math.max(shown.length - 1, 0));
   return (
-    <div className="modal-backdrop clear" onMouseDown={onClose}>
+    <Overlay variant="clear" onClose={onClose}>
       <div className="popup switcher" onMouseDown={(e) => e.stopPropagation()}>
         <div className="popup-title">{title}</div>
         <input
@@ -103,6 +104,6 @@ export function RecentFiles({ items, onPick, onClose, title = "Recent Files", st
           {!shown.length && <div className="popup-empty">Nothing found</div>}
         </div>
       </div>
-    </div>
+    </Overlay>
   );
 }

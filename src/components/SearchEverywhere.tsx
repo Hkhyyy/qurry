@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ConnectionView, dbVisible, meta, targetId } from "../lib/api";
 import { fuzzyScore } from "../lib/fuzzy";
 import { ColumnIcon, RoutineIcon, SchemaIcon, SequenceIcon, TableIcon, ViewIcon } from "./icons";
+import { Overlay } from "../ui";
 
 export type SeTab = "all" | "database" | "files" | "symbols" | "actions";
 const TABS: { id: SeTab; label: string }[] = [
@@ -310,7 +311,7 @@ export function SearchEverywhere(p: Props) {
   const groupOf = (r: Row) => (r.t === "action" ? "Actions" : r.t === "file" ? "Files" : r.o.kind === "column" ? "Symbols" : "Database");
 
   return (
-    <div className="modal-backdrop clear" onMouseDown={p.onClose}>
+    <Overlay variant="clear" onClose={p.onClose}>
       <div className="popup search-everywhere" onMouseDown={(e) => e.stopPropagation()}>
         <div className="se-head">
           <div className="se-tabs">
@@ -365,6 +366,6 @@ export function SearchEverywhere(p: Props) {
             : "↩ Open   ⇥ Next tab   ⇧⇧ Search Everywhere"}
         </div>
       </div>
-    </div>
+    </Overlay>
   );
 }

@@ -7,6 +7,7 @@ import { ConsoleEditor, EditorApi, RunRequest } from "./ConsoleEditor";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { ResultGrid } from "./ResultGrid";
 import { IcClock, IcGear, IcReload, IcStop } from "./icons";
+import { IconButton, ToolButton, Toolbar, ToolbarSep } from "../ui";
 
 const isMac = navigator.platform.toLowerCase().includes("mac");
 
@@ -154,10 +155,9 @@ export function ConsolePane(p: Props) {
   return (
     <div className="console-pane">
       {/* ── 콘솔 툴바 (DataGrip) ── */}
-      <div className="dg-toolbar console-toolbar" onMouseDown={(e) => e.stopPropagation()}>
-        <button className="tb run" title={`Execute (${isMac ? "⌘↩" : "Ctrl+Enter"})`} onClick={() => api?.run()} disabled={p.running}>▶</button>
-        <button
-          className="tb text"
+      <Toolbar className="console-toolbar" onMouseDown={(e) => e.stopPropagation()}>
+        <IconButton tone="ok" title={`Execute (${isMac ? "⌘↩" : "Ctrl+Enter"})`} onClick={() => api?.run()} disabled={p.running}>▶</IconButton>
+        <ToolButton
           title="Explain Plan"
           onClick={(e) =>
             dropdown(e, [
@@ -167,10 +167,9 @@ export function ConsolePane(p: Props) {
           }
         >
           Explain ▾
-        </button>
-        <button className="tb" title={`Browse Query History (${isMac ? "⌥⌘e" : "Ctrl+Alt+e"})`} onClick={p.onHistory}><IcClock /></button>
-        <button
-          className="tb"
+        </ToolButton>
+        <IconButton title={`Browse Query History (${isMac ? "⌥⌘e" : "Ctrl+Alt+e"})`} onClick={p.onHistory}><IcClock /></IconButton>
+        <IconButton
           title="Query Execution Settings"
           onClick={(e) =>
             dropdown(e, [
@@ -193,10 +192,9 @@ export function ConsolePane(p: Props) {
           }
         >
           <IcGear />
-        </button>
-        <span className="tb-sep" />
-        <button
-          className={"tb text" + (p.txManual ? " on" : "")}
+        </IconButton>
+        <ToolbarSep />
+        <ToolButton active={p.txManual}
           title="Transaction Mode"
           onClick={(e) =>
             dropdown(e, [
@@ -206,14 +204,14 @@ export function ConsolePane(p: Props) {
           }
         >
           Tx: {p.txManual ? "Manual" : "Auto"} ▾
-        </button>
+        </ToolButton>
         {p.txManual && (
           <>
-            <button className={"tb text" + (p.inTx ? " accent" : "")} title="Commit" onClick={p.onCommit} disabled={!p.inTx}>✓ Commit</button>
-            <button className="tb text" title="Roll back" onClick={p.onRollback} disabled={!p.inTx}>↶ Roll back</button>
+            <ToolButton accent={p.inTx} title="Commit" onClick={p.onCommit} disabled={!p.inTx}>✓ Commit</ToolButton>
+            <ToolButton title="Roll back" onClick={p.onRollback} disabled={!p.inTx}>↶ Roll back</ToolButton>
           </>
         )}
-        <button className="tb stop" title={`Cancel Running Statements (${isMac ? "⌘F2" : "Ctrl+F2"})`} onClick={p.onCancel} disabled={!p.running}><IcStop /></button>
+        <IconButton tone="danger" title={`Cancel Running Statements (${isMac ? "⌘F2" : "Ctrl+F2"})`} onClick={p.onCancel} disabled={!p.running}><IcStop /></IconButton>
         <span className="grow" />
         <span className="cb-ds">{p.connName}</span>
         <select className="cb-sel" value={p.database} onFocus={p.onLoadDbs} onMouseDown={p.onLoadDbs} onChange={(e) => p.onSwitchDb(e.target.value)} title="Database">
@@ -226,7 +224,7 @@ export function ConsolePane(p: Props) {
             <option key={x} value={x}>{x}</option>
           ))}
         </select>
-      </div>
+      </Toolbar>
 
       <PanelGroup direction="vertical" autoSaveId="dbtool-console">
         <Panel defaultSize={58} minSize={15}>
@@ -295,7 +293,7 @@ export function ConsolePane(p: Props) {
               ))}
               <span className="grow" />
               {p.activeResult === "output" && (
-                <button className="tb" title="Clear All" onClick={p.onClearOutput}><IcReload /></button>
+                <IconButton title="Clear All" onClick={p.onClearOutput}><IcReload /></IconButton>
               )}
             </div>
             <div className="result-area">

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ask } from "../lib/dialogs";
 import { ConnectionView, dialectOf, KIND_LABEL, meta, QueryResult, rag, RAG_DEFAULT_MODEL, RagIndex, targetId, VECTOR_KINDS } from "../lib/api";
 import { ResultGrid } from "./ResultGrid";
+import { Button, Notice, Select, TextInput } from "../ui";
 
 /** 원본이 될 수 있는 SQL Data Source */
 const isSqlSource = (c: ConnectionView) => c.kind !== "redis" && c.kind !== "mongodb" && !VECTOR_KINDS.includes(c.kind);
@@ -80,40 +81,40 @@ function IndexForm({ conns, init, hasKey, onKeySaved, onSaved, onCancel }: { con
   return (
     <div className="rag-form">
       <label>Name</label>
-      <input value={d.name} placeholder="e.g. support tickets" onChange={(e) => set("name", e.target.value)} />
+      <TextInput value={d.name} placeholder="e.g. support tickets" onChange={(e) => set("name", e.target.value)} />
       <label>Source</label>
       <div className="mig-end">
-        <select value={srcConnId} onChange={(e) => setD((x) => ({ ...x, source: e.target.value, _db: "", schema: "", table: "", idColumn: "", textColumns: [] }))}>
+        <Select value={srcConnId} onChange={(e) => setD((x) => ({ ...x, source: e.target.value, _db: "", schema: "", table: "", idColumn: "", textColumns: [] }))}>
           <option value="">— data source —</option>
           {conns.filter(isSqlSource).map((c) => (
             <option key={c.id} value={c.id}>
               {c.name}
             </option>
           ))}
-        </select>
-        <select value={db} onChange={(e) => setD((x) => ({ ...x, _db: e.target.value, schema: "", table: "", idColumn: "", textColumns: [] }))}>
+        </Select>
+        <Select value={db} onChange={(e) => setD((x) => ({ ...x, _db: e.target.value, schema: "", table: "", idColumn: "", textColumns: [] }))}>
           <option value="">— database —</option>
           {dbs.map((x) => (
             <option key={x}>{x}</option>
           ))}
-        </select>
+        </Select>
         {!flat && (
-          <select value={d.schema} onChange={(e) => setD((x) => ({ ...x, schema: e.target.value, table: "", idColumn: "", textColumns: [] }))}>
+          <Select value={d.schema} onChange={(e) => setD((x) => ({ ...x, schema: e.target.value, table: "", idColumn: "", textColumns: [] }))}>
             <option value="">— schema —</option>
             {schemas.map((x) => (
               <option key={x}>{x}</option>
             ))}
-          </select>
+          </Select>
         )}
-        <select value={d.table} onChange={(e) => setD((x) => ({ ...x, table: e.target.value, idColumn: "", textColumns: [], collection: x.collection || `${e.target.value}_embeddings`, name: x.name || `${e.target.value} search` }))}>
+        <Select value={d.table} onChange={(e) => setD((x) => ({ ...x, table: e.target.value, idColumn: "", textColumns: [], collection: x.collection || `${e.target.value}_embeddings`, name: x.name || `${e.target.value} search` }))}>
           <option value="">— table —</option>
           {tables.map((x) => (
             <option key={x}>{x}</option>
           ))}
-        </select>
+        </Select>
       </div>
       <label>Row ID</label>
-      <select value={d.idColumn} onChange={(e) => set("idColumn", e.target.value)}>
+      <Select value={d.idColumn} onChange={(e) => set("idColumn", e.target.value)}>
         <option value="">— column that identifies a row —</option>
         {cols.map((c) => (
           <option key={c.name} value={c.name}>
@@ -121,7 +122,7 @@ function IndexForm({ conns, init, hasKey, onKeySaved, onSaved, onCancel }: { con
             {c.isPk ? " (PK)" : ""}
           </option>
         ))}
-      </select>
+      </Select>
       <label>Text to embed</label>
       <div className="rag-cols">
         {cols.length === 0 && <span className="muted">Pick a table</span>}
@@ -134,19 +135,19 @@ function IndexForm({ conns, init, hasKey, onKeySaved, onSaved, onCancel }: { con
       </div>
       <label>Embeddings</label>
       <div className="mig-end">
-        <select value={d.provider} onChange={(e) => set("provider", e.target.value as RagIndex["provider"])}>
+        <Select value={d.provider} onChange={(e) => set("provider", e.target.value as RagIndex["provider"])}>
           <option value="ollama">Ollama (runs on your computer)</option>
           <option value="openai">OpenAI</option>
-        </select>
-        <input className="grow" value={d.model} placeholder={RAG_DEFAULT_MODEL[d.provider]} onChange={(e) => set("model", e.target.value)} />
-        <input className="grow" value={d.baseUrl} placeholder={d.provider === "ollama" ? "http://localhost:11434" : "https://api.openai.com/v1"} onChange={(e) => set("baseUrl", e.target.value)} />
+        </Select>
+        <TextInput className="grow" value={d.model} placeholder={RAG_DEFAULT_MODEL[d.provider]} onChange={(e) => set("model", e.target.value)} />
+        <TextInput className="grow" value={d.baseUrl} placeholder={d.provider === "ollama" ? "http://localhost:11434" : "https://api.openai.com/v1"} onChange={(e) => set("baseUrl", e.target.value)} />
       </div>
       {d.provider === "openai" && (
         <>
           <label>API key</label>
           <div className="mig-end">
-            <input type="password" className="grow" value={key} placeholder={hasKey ? "<saved — type to replace>" : "sk-…"} onChange={(e) => setKey(e.target.value)} />
-            <button
+            <TextInput type="password" className="grow" value={key} placeholder={hasKey ? "<saved — type to replace>" : "sk-…"} onChange={(e) => setKey(e.target.value)} />
+            <Button
               disabled={!key}
               onClick={async () => {
                 await rag.setKey(key);
@@ -155,7 +156,7 @@ function IndexForm({ conns, init, hasKey, onKeySaved, onSaved, onCancel }: { con
               }}
             >
               Save Key
-            </button>
+            </Button>
           </div>
           <span />
           <span className="muted rag-note">The text of every row is sent to OpenAI to make its embedding. Use Ollama to keep it on this computer.</span>
@@ -163,28 +164,28 @@ function IndexForm({ conns, init, hasKey, onKeySaved, onSaved, onCancel }: { con
       )}
       <label>Store in</label>
       <div className="mig-end">
-        <select value={d.dest.split("::")[0]} onChange={(e) => set("dest", e.target.value)}>
+        <Select value={d.dest.split("::")[0]} onChange={(e) => set("dest", e.target.value)}>
           <option value="">— where to keep the vectors —</option>
           {conns.filter(isStore).map((c) => (
             <option key={c.id} value={c.id}>
               {c.name} · {KIND_LABEL[c.kind]}
             </option>
           ))}
-        </select>
-        <input className="grow" value={d.collection} placeholder={dc?.kind === "postgres" ? "table, e.g. public.docs_embeddings" : "collection"} onChange={(e) => set("collection", e.target.value)} />
+        </Select>
+        <TextInput className="grow" value={d.collection} placeholder={dc?.kind === "postgres" ? "table, e.g. public.docs_embeddings" : "collection"} onChange={(e) => set("collection", e.target.value)} />
       </div>
       {err && (
         <>
           <span />
-          <div className="test-err">{err}</div>
+          <Notice tone="danger">{err}</Notice>
         </>
       )}
       <span />
       <div className="mig-actions">
-        <button className="primary" disabled={!d.name || !d.table || !d.idColumn || !d.textColumns.length || !d.dest || !d.collection} onClick={save}>
+        <Button variant="primary" disabled={!d.name || !d.table || !d.idColumn || !d.textColumns.length || !d.dest || !d.collection} onClick={save}>
           Save
-        </button>
-        <button onClick={onCancel}>Cancel</button>
+        </Button>
+        <Button onClick={onCancel}>Cancel</Button>
         <span className="muted">Saving doesn't embed anything yet — press Build.</span>
       </div>
     </div>
@@ -247,9 +248,9 @@ export function RagView(p: {
               <span className="muted">{x.rows ? `${x.rows.toLocaleString()} rows · ${x.builtAt}` : "not built yet"}</span>
             </div>
           ))}
-          <button className="rag-new" onClick={() => setEditing(blank(p.initial?.connId ?? "", p.initial?.db, p.initial?.schema))}>
+          <Button className="rag-new" onClick={() => setEditing(blank(p.initial?.connId ?? "", p.initial?.db, p.initial?.schema))}>
             + New Index…
-          </button>
+          </Button>
         </div>
         <div className="rag-main">
           {editing ? (
@@ -270,21 +271,21 @@ export function RagView(p: {
                   {cur.dim ? ` · ${cur.dim} dims` : ""}
                 </span>
                 <span className="grow" />
-                <button className="primary" onClick={build}>{cur.rows ? "Rebuild" : "Build"}</button>
-                <button onClick={() => setEditing({ ...cur, _db: cur.source.split("::")[1] })}>Edit…</button>
-                <button
+                <Button variant="primary" onClick={build}>{cur.rows ? "Rebuild" : "Build"}</Button>
+                <Button onClick={() => setEditing({ ...cur, _db: cur.source.split("::")[1] })}>Edit…</Button>
+                <Button
                   onClick={async () => {
-                    if (!(await ask(`Delete the index "${cur.name}"? The stored vectors in ${cur.collection} are kept.`))) return;
+                    if (!(await ask(`Delete the index "${cur.name}"? The stored vectors in ${cur.collection} are kept.`, { okLabel: "Delete", danger: true }))) return;
                     await rag.remove(cur.id);
                     setSel(null);
                     reload();
                   }}
                 >
                   Delete
-                </button>
+                </Button>
               </div>
               <div className="mig-actions">
-                <input
+                <TextInput
                   className="grow rag-q"
                   value={query}
                   placeholder={cur.rows ? "Ask in plain words, e.g. customers unhappy about late delivery" : "Build the index first"}
@@ -292,11 +293,11 @@ export function RagView(p: {
                   onChange={(e) => setQuery(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") search(); e.stopPropagation(); }}
                 />
-                <button className="primary" disabled={busy || !query.trim() || !cur.rows} onClick={search}>
+                <Button variant="primary" disabled={busy || !query.trim() || !cur.rows} onClick={search}>
                   {busy ? "Searching…" : "Search"}
-                </button>
+                </Button>
               </div>
-              {err && <div className="test-err dba-err">{err}</div>}
+              {err && <Notice tone="danger">{err}</Notice>}
               <div className="dba-grid">
                 <ResultGrid result={result ?? empty} readOnly dialect={dialect} running={busy && !result} loadingMore={false} query={null} onFetchMore={() => {}} onSubmit={async () => {}} onReload={search} onCancel={() => {}} onExport={() => {}} />
               </div>

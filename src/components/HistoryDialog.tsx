@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ask, askTextChoice } from "../lib/dialogs";
+import { Button, EmptyState, Modal, Tabs, TextInput } from "../ui";
 import { history, HistoryItem, Snippet } from "../lib/api";
 
 /**
@@ -58,7 +59,7 @@ export function HistoryDialog({ connId, title, initialTab = "history", onPick, o
   const cur = list[Math.min(idx, list.length - 1)];
   const del = async (r: Row) => {
     if (tab === "history") await history.remove(r.id);
-    else if ((await ask(`Delete snippet "${r.title}"?`))) await history.deleteSnippet(r.id);
+    else if (await ask(`Delete snippet "${r.title}"?`, { okLabel: "Delete", danger: true })) await history.deleteSnippet(r.id);
     reload();
   };
   const toSnippet = async (r: Row) => {
@@ -69,56 +70,57 @@ export function HistoryDialog({ connId, title, initialTab = "history", onPick, o
   };
 
   return (
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <div
-        className="modal history"
-        onMouseDown={(e) => e.stopPropagation()}
-        onKeyDown={(e) => {
-          if (e.key === "ArrowDown") setIdx((i) => Math.min(i + 1, list.length - 1));
-          else if (e.key === "ArrowUp") setIdx((i) => Math.max(i - 1, 0));
-          else if (e.key === "Enter" && cur) onPick(cur.sql);
-          else if (e.key === "Escape") onClose();
-          else if ((e.key === "Delete" || (e.metaKey && e.key === "Backspace")) && cur) del(cur);
-          else return;
-          e.preventDefault();
-        }}
-      >
-        <div className="modal-title">{title}</div>
-        <div className="dlg-tabs">
-          <span className={tab === "history" ? "on" : ""} onClick={() => (setTab("history"), setIdx(0))}>
-            History
-          </span>
-          <span className={tab === "snippets" ? "on" : ""} onClick={() => (setTab("snippets"), setIdx(0))}>
-            Snippets ({snips.length})
-          </span>
-        </div>
-        <input autoFocus className="hist-filter" placeholder="Type to filter" value={q} onChange={(e) => { setQ(e.target.value); setIdx(0); }} />
-        <div className="hist-body">
-          <div className="hist-list">
-            {list.length === 0 && <div className="muted pad">{tab === "history" ? "No queries yet." : "No snippets yet. Save one from the history, or ⌘k › Save Query as Snippet."}</div>}
-            {list.map((r, i) => (
-              <div key={r.id} className={"hist-item" + (r === cur ? " on" : "")} onClick={() => setIdx(i)} onDoubleClick={() => onPick(r.sql)}>
-                <span className="hist-sql">{r.title}</span>
-                <span className="hist-ts">{r.sub}</span>
-              </div>
-            ))}
-          </div>
-          <pre className="hist-preview">{cur?.sql ?? ""}</pre>
-        </div>
-        <div className="modal-actions">
-          <span className="muted">Double-click or ↩ to paste into the console · ⌦ to delete</span>
-          <span className="grow" />
+    <Modal
+      title={title}
+      size="xl"
+      className="history"
+      onClose={onClose}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowDown") setIdx((i) => Math.min(i + 1, list.length - 1));
+        else if (e.key === "ArrowUp") setIdx((i) => Math.max(i - 1, 0));
+        else if (e.key === "Enter" && cur && !(e.target as HTMLElement).closest("button")) onPick(cur.sql);
+        else if ((e.key === "Delete" || (e.metaKey && e.key === "Backspace")) && cur && (e.target as HTMLElement).tagName !== "INPUT") del(cur);
+        else return;
+        e.preventDefault();
+      }}
+      footer={
+        <>
+          <span className="ui-modal-foot-hint">Double-click or ↩ to paste into the console · ⌦ to delete</span>
           {tab === "history" && (
-            <button disabled={!cur} onClick={() => cur && toSnippet(cur)}>
+            <Button disabled={!cur} onClick={() => cur && toSnippet(cur)}>
               Save as Snippet…
-            </button>
+            </Button>
           )}
-          <button onClick={onClose}>Close</button>
-          <button className="primary" disabled={!cur} onClick={() => cur && onPick(cur.sql)}>
+          <Button onClick={onClose}>Close</Button>
+          <Button variant="primary" disabled={!cur} onClick={() => cur && onPick(cur.sql)}>
             Paste to Console
-          </button>
+          </Button>
+        </>
+      }
+    >
+      <Tabs
+        items={[
+          { id: "history", label: "History" },
+          { id: "snippets", label: `Snippets (${snips.length})` },
+        ]}
+        value={tab}
+        onChange={(t) => (setTab(t), setIdx(0))}
+      />
+      <TextInput full autoFocus className="hist-filter" placeholder="Type to filter" value={q} onChange={(e) => (setQ(e.target.value), setIdx(0))} />
+      <div className="hist-body">
+        <div className="hist-list">
+          {list.length === 0 && <EmptyState>{tab === "history" ? "No queries yet." : "No snippets yet. Save one from the history, or ⌘k › Save Query as Snippet."}</EmptyState>}
+          {list.map((r, i) => (
+            <div key={r.id} className={"hist-item" + (r === cur ? " on" : "")} onClick={() => setIdx(i)} onDoubleClick={() => onPick(r.sql)}>
+              <span className="hist-sql" title={r.title}>
+                {r.title}
+              </span>
+              <span className="hist-ts">{r.sub}</span>
+            </div>
+          ))}
         </div>
+        <pre className="hist-preview">{cur?.sql ?? ""}</pre>
       </div>
-    </div>
+    </Modal>
   );
 }

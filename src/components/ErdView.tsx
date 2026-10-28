@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { erd, ErdRelation, ErdTable, saveFile } from "../lib/api";
 import { layout } from "../lib/erdLayout";
+import { Button, Notice } from "../ui";
 
 const ROW = 18;
 const HEAD = 26;
@@ -132,7 +133,7 @@ export function ErdView(p: { target: string; schemas: string[]; visible: boolean
     return el.outerHTML;
   };
 
-  if (error) return <div className="test-err dba-err">{error}</div>;
+  if (error) return <Notice tone="danger">{error}</Notice>;
   if (!data) return <div className="muted pad">Loading the diagram…</div>;
   const hi = (r: ErdRelation) => hover !== null && (hover === key(r.fromSchema, r.fromTable) || hover === key(r.toSchema, r.toTable));
   return (
@@ -142,10 +143,10 @@ export function ErdView(p: { target: string; schemas: string[]; visible: boolean
           {p.schemas.join(", ")} — {data.tables.length} tables, {data.relations.length} foreign keys · drag tables, wheel to zoom, drag the background to pan, double-click a table to open it
         </span>
         <span className="grow" />
-        <button onClick={fit}>Fit</button>
-        <button onClick={() => setMoved({})}>Re-layout</button>
-        <button onClick={() => navigator.clipboard.writeText(data.mermaid).then(() => p.onStatus("Mermaid diagram copied"))}>Copy as Mermaid</button>
-        <button onClick={() => saveFile(`${p.schemas.join("_")}.svg`, svgText(), "SVG image", "svg").then((f) => f && p.onStatus(`Saved ${f}`))}>Save SVG…</button>
+        <Button onClick={fit}>Fit</Button>
+        <Button onClick={() => setMoved({})}>Re-layout</Button>
+        <Button onClick={() => navigator.clipboard.writeText(data.mermaid).then(() => p.onStatus("Mermaid diagram copied"))}>Copy as Mermaid</Button>
+        <Button onClick={() => saveFile(`${p.schemas.join("_")}.svg`, svgText(), "SVG image", "svg").then((f) => f && p.onStatus(`Saved ${f}`))}>Save SVG…</Button>
       </div>
       <svg ref={svg} className="erd-canvas" onMouseDown={(e) => onDown(e)} onMouseMove={onMove} onMouseUp={() => (drag.current = null)} onMouseLeave={() => (drag.current = null)} onWheel={onWheel}>
         <defs>

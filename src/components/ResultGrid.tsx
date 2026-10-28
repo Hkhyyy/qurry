@@ -5,6 +5,7 @@ import { Cell, Dialect, dialectOf, QueryResult } from "../lib/api";
 import { DateTimePicker, isTemporal } from "./DateTimePicker";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { inList } from "../lib/inList";
+import { Button, IconButton, Modal, Notice, Spacer, ToolButton, Toolbar, ToolbarSep } from "../ui";
 import {
   IcClock, IcExport, IcGear, IcMinus, IcPlus, IcPreview, IcReload, IcRevert, IcSearch, IcStop, IcSubmit, IcTranspose, IcView,
 } from "./icons";
@@ -612,10 +613,9 @@ export function ResultGrid(p: Props) {
   return (
     <div className="grid-wrap">
       {/* ── DataGrip 그리드 툴바 ── */}
-      <div className="dg-toolbar" onMouseDown={(e) => e.stopPropagation()}>
-        <button className="tb" title={`Reload Page (${k.reload})`} onClick={p.onReload} disabled={p.running}><IcReload /></button>
-        <button
-          className={"tb" + (interval ? " on" : "")}
+      <Toolbar onMouseDown={(e) => e.stopPropagation()}>
+        <IconButton title={`Reload Page (${k.reload})`} onClick={p.onReload} disabled={p.running}><IcReload /></IconButton>
+        <IconButton active={!!interval}
           title="Update Interval"
           onClick={(e) =>
             dropdown(e, [
@@ -624,17 +624,16 @@ export function ResultGrid(p: Props) {
           }
         >
           <IcClock />
-        </button>
-        <button className="tb stop" title={`Cancel Running Statements (${k.cancel})`} onClick={p.onCancel} disabled={!p.running}><IcStop /></button>
-        <span className="tb-sep" />
-        <button className="tb" title={`Add Row (${k.add})`} onClick={addRow} disabled={!canEdit}><IcPlus /></button>
-        <button className="tb" title={`Delete Row (${k.del})`} onClick={deleteRows} disabled={!canEdit || !rect}><IcMinus /></button>
-        <button className="tb" title={`Revert Selected (${k.revert})`} onClick={revertSelected} disabled={!pendingCount}><IcRevert /></button>
-        <button className="tb" title="Preview Pending Changes" onClick={() => setPreview({ sql: buildStatements(), readOnly: true })} disabled={!pendingCount}><IcPreview /></button>
-        <button className={"tb" + (pendingCount ? " accent" : "")} title={`Submit (${k.submit})`} onClick={submit} disabled={!pendingCount}><IcSubmit /></button>
-        <span className="tb-sep" />
-        <button
-          className="tb text"
+        </IconButton>
+        <IconButton tone="danger" title={`Cancel Running Statements (${k.cancel})`} onClick={p.onCancel} disabled={!p.running}><IcStop /></IconButton>
+        <ToolbarSep />
+        <IconButton title={`Add Row (${k.add})`} onClick={addRow} disabled={!canEdit}><IcPlus /></IconButton>
+        <IconButton title={`Delete Row (${k.del})`} onClick={deleteRows} disabled={!canEdit || !rect}><IcMinus /></IconButton>
+        <IconButton title={`Revert Selected (${k.revert})`} onClick={revertSelected} disabled={!pendingCount}><IcRevert /></IconButton>
+        <IconButton title="Preview Pending Changes" onClick={() => setPreview({ sql: buildStatements(), readOnly: true })} disabled={!pendingCount}><IcPreview /></IconButton>
+        <IconButton active={false} className={pendingCount ? "accent" : undefined} title={`Submit (${k.submit})`} onClick={submit} disabled={!pendingCount}><IcSubmit /></IconButton>
+        <ToolbarSep />
+        <ToolButton
           title="Transaction mode"
           onClick={(e) =>
             dropdown(e, [
@@ -644,10 +643,9 @@ export function ResultGrid(p: Props) {
           }
         >
           Tx: Auto ▾
-        </button>
-        {p.onDdl && <button className="tb text" title="Go to DDL" onClick={p.onDdl}>DDL</button>}
-        <button
-          className={"tb" + (findOpen ? " on" : "")}
+        </ToolButton>
+        {p.onDdl && <ToolButton title="Go to DDL" onClick={p.onDdl}>DDL</ToolButton>}
+        <IconButton active={findOpen}
           title={`Find on Current Page (${k.find})`}
           onClick={() => {
             setFindOpen((f) => !f);
@@ -655,15 +653,14 @@ export function ResultGrid(p: Props) {
           }}
         >
           <IcSearch />
-        </button>
+        </IconButton>
         <span className="tb-info">{rowsLabel}{pendingCount ? ` · ${pendingCount} pending` : ""}</span>
         <span className="grow" />
-        <button className="tb text" title="Data Extractor (copy format)" onClick={(e) => dropdown(e, EXTRACTORS.map((x) => ({ label: (x === extractor ? "✓ " : "　") + x, action: () => setExtractor(x) })))}>
+        <ToolButton title="Data Extractor (copy format)" onClick={(e) => dropdown(e, EXTRACTORS.map((x) => ({ label: (x === extractor ? "✓ " : "　") + x, action: () => setExtractor(x) })))}>
           {extractor} ▾
-        </button>
-        <button className="tb" title="Export Data…" onClick={p.onExport}><IcExport /></button>
-        <button
-          className={"tb" + (transposed ? " on" : "")}
+        </ToolButton>
+        <IconButton title="Export Data…" onClick={p.onExport}><IcExport /></IconButton>
+        <IconButton active={transposed}
           title="View as"
           onClick={(e) =>
             dropdown(e, [
@@ -673,9 +670,8 @@ export function ResultGrid(p: Props) {
           }
         >
           {transposed ? <IcTranspose /> : <IcView />}
-        </button>
-        <button
-          className="tb"
+        </IconButton>
+        <IconButton
           title="Show Options Menu"
           onClick={(e) =>
             dropdown(e, [
@@ -690,8 +686,8 @@ export function ResultGrid(p: Props) {
           }
         >
           <IcGear />
-        </button>
-      </div>
+        </IconButton>
+      </Toolbar>
       {p.filterBar && showFilter && p.filterBar}
       {findOpen && (
         <div className="grid-find">
@@ -710,9 +706,9 @@ export function ResultGrid(p: Props) {
             }}
           />
           <span className="muted">{findText ? `${matches.length}${matches.length >= 5000 ? "+" : ""} results` : ""}</span>
-          <button className="tb" title="Previous Occurrence (⇧↩)" onClick={() => gotoMatch(-1)}>↑</button>
-          <button className="tb" title="Next Occurrence (↩)" onClick={() => gotoMatch(1)}>↓</button>
-          <button className="tb" title="Close (⎋)" onClick={() => setFindOpen(false)}>×</button>
+          <IconButton title="Previous Occurrence (⇧↩)" onClick={() => gotoMatch(-1)}>↑</IconButton>
+          <IconButton title="Next Occurrence (↩)" onClick={() => gotoMatch(1)}>↓</IconButton>
+          <IconButton title="Close (⎋)" onClick={() => setFindOpen(false)}>×</IconButton>
         </div>
       )}
 
@@ -904,33 +900,43 @@ export function ResultGrid(p: Props) {
       )}
 
       {showQuery && p.query && (
-        <div className="modal-backdrop" onMouseDown={() => setShowQuery(false)}>
-          <div className="modal wide" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="modal-title">Query</div>
-            <pre className="sql-preview">{p.query}</pre>
-            <div className="modal-actions">
-              <button onClick={() => navigator.clipboard.writeText(p.query!)}>Copy Query to Clipboard</button>
-              <span className="grow" />
-              <button className="primary" onClick={() => setShowQuery(false)}>Close</button>
-            </div>
-          </div>
-        </div>
+        <Modal
+          title="Query"
+          size="lg"
+          onClose={() => setShowQuery(false)}
+          footer={
+            <>
+              <Button onClick={() => navigator.clipboard.writeText(p.query!)}>Copy Query to Clipboard</Button>
+              <Spacer />
+              <Button variant="primary" onClick={() => setShowQuery(false)}>
+                Close
+              </Button>
+            </>
+          }
+        >
+          <pre className="sql-preview">{p.query}</pre>
+        </Modal>
       )}
 
       {preview && (
-        <div className="modal-backdrop" onMouseDown={() => setPreview(null)}>
-          <div className="modal wide" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="modal-title">{preview.readOnly ? "Pending Changes" : "Submit Changes"} — {preview.sql.length} statement{preview.sql.length > 1 ? "s" : ""}</div>
-            <pre className="sql-preview">{preview.sql.join("\n")}</pre>
-            {submitErr && <div className="test-err">{submitErr}</div>}
-            <div className="modal-actions">
-              <button onClick={() => navigator.clipboard.writeText(preview.sql.join("\n"))}>Copy SQL</button>
-              <span className="grow" />
-              <button onClick={() => setPreview(null)}>Close</button>
-              <button className="primary" onClick={doSubmitPreview}>Submit</button>
-            </div>
-          </div>
-        </div>
+        <Modal
+          title={`${preview.readOnly ? "Pending Changes" : "Submit Changes"} — ${preview.sql.length} statement${preview.sql.length > 1 ? "s" : ""}`}
+          size="lg"
+          onClose={() => setPreview(null)}
+          footer={
+            <>
+              <Button onClick={() => navigator.clipboard.writeText(preview.sql.join("\n"))}>Copy SQL</Button>
+              <Spacer />
+              <Button onClick={() => setPreview(null)}>Close</Button>
+              <Button variant="primary" onClick={doSubmitPreview}>
+                Submit
+              </Button>
+            </>
+          }
+        >
+          <pre className="sql-preview">{preview.sql.join("\n")}</pre>
+          {submitErr && <Notice tone="danger">{submitErr}</Notice>}
+        </Modal>
       )}
     </div>
   );
@@ -977,9 +983,9 @@ function ValueEditor({ title, text, readOnly, onApply, onClose }: { title: strin
       <div className="ve-head">
         <span className="ve-title">{title}</span>
         <span className="grow" />
-        <button className={"tb text" + (wrap ? " on" : "")} title="Toggle Soft-Wrap" onClick={() => setWrap((w) => !w)}>Wrap</button>
-        <button className="tb text" title="Toggle Formatting (JSON)" onClick={format}>{"{ }"}</button>
-        <button className="tb" title="Close (⎋)" onClick={onClose}>×</button>
+        <ToolButton active={wrap} title="Toggle Soft-Wrap" onClick={() => setWrap((w) => !w)}>Wrap</ToolButton>
+        <ToolButton title="Toggle Formatting (JSON)" onClick={format}>{"{ }"}</ToolButton>
+        <IconButton title="Close (⎋)" onClick={onClose}>×</IconButton>
       </div>
       <textarea
         autoFocus

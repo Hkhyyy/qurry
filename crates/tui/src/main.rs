@@ -8,12 +8,15 @@ mod grid;
 mod help;
 mod input;
 mod keys;
+mod kit;
 mod migrate;
 mod panes;
 mod rag;
 mod workspace;
 #[cfg(test)]
 mod testkit;
+#[cfg(test)]
+mod kit_snapshots;
 mod scope;
 mod selfupdate;
 mod snippets;

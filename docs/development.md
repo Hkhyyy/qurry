@@ -59,6 +59,15 @@ Driver and vector database tests run when their server is given as `host:port:us
 
 TUI tests can drive the app without a database: `crates/tui/src/testkit.rs` opens table tabs with fixed rows, sends keys (`h.key("Ctrl+A")`, `h.type_str("ban")`) and renders the screen to text (`h.screen(120, 30)`). See the tests at the end of `crates/tui/src/input.rs`.
 
+## UI components and Storybook
+
+The GUI is built from the shared components in `src/ui` (buttons, toolbars, dialogs, confirm, form fields, tabs, notices) on design tokens (spacing, type sizes, colors per theme); the rules are in [src/ui/README.md](../src/ui/README.md). The TUI uses the same names and colors from `crates/tui/src/kit.rs`.
+
+```bash
+pnpm storybook        # http://localhost:6006 — every GUI component in each theme, and the TUI screens
+pnpm tui-snapshots    # redraw the TUI screens for Storybook after changing the TUI
+```
+
 ## Docs
 
 The user guide is in English (`docs/`) and Korean (`docs/ko/`), chapter for chapter. A change to a feature updates both. After changing a shortcut, regenerate the tables in both languages' [shortcuts-gui.md](shortcuts-gui.md) and [shortcuts-tui.md](shortcuts-tui.md) with `python3 scripts/gen-keymap-docs.py`.

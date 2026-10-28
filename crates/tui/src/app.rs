@@ -1757,6 +1757,7 @@ impl App {
                                 let head: String = s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(70).collect();
                                 let n = match n {
                                     Ok(Some(n)) => format!("{} row{}", crate::transfer::thousands(*n as u64), if *n == 1 { "" } else { "s" }),
+                                    Ok(None) if qurry_core::guard::is_ddl(s, kind) => "schema change".into(),
                                     Ok(None) => "can't count this statement".into(),
                                     Err(e) => format!("can't count: {}", e.to_string().lines().next().unwrap_or("")),
                                 };

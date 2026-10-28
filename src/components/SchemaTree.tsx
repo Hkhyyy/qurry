@@ -1,4 +1,4 @@
-import { connBg, useTheme } from "../lib/theme";
+import { connBg, connStripe, useTheme } from "../lib/theme";
 import { createContext, useContext, useEffect, useId, useRef, useState } from "react";
 import { api, ConnectionView, DbKind, DRIVER_MISSING, KIND_LABEL, redisDb, dbVisible, meta, RelationInfo, RoutineInfo, SchemaInfo, schemaVisible, Scope, TableDetail, targetId } from "../lib/api";
 import { ScopePopup } from "./ScopePopup";
@@ -219,7 +219,7 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
   }, [conn.connected]);
 
   return (
-    <div className="conn-tree" style={conn.color ? { background: connBg(conn.color, theme) } : undefined}>
+    <div className="conn-tree" style={conn.color ? { background: connBg(conn.color, theme), boxShadow: `inset 3px 0 0 ${connStripe(conn.color, theme)}` } : undefined}>
       <Row
         depth={0}
         open={opened}

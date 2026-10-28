@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ConnectionView, meta, Scope, SCOPE_ALL, SCOPE_DEFAULT, SchemaInfo, targetId } from "../lib/api";
+import { IconButton } from "../ui";
 
 /**
  * DataGrip의 스키마 선택 팝업 (Data Source / DB 노드의 "N of M" 배지를 누르면 열림).
@@ -119,10 +120,10 @@ export function ScopePopup({ conn, dbs, defaultDb, focusDb, x, y, onApply, onClo
     <div className="scope-popup" ref={ref} style={{ left, top, maxHeight: window.innerHeight - top - 12 }}>
       <div className="sp-toolbar">
         <span className="grow" />
-        <button className="icon" title="Refresh" onClick={() => [...open].forEach((db) => load(db, true))}>⟳</button>
-        <button className="icon" title="Expand All" onClick={() => { setOpen(new Set(dbs)); dbs.forEach((db) => load(db)); }}>⌄</button>
-        <button className="icon" title="Collapse All" onClick={() => setOpen(new Set())}>⌃</button>
-        <button className="icon" title="Close (Esc)" onClick={onClose}>—</button>
+        <IconButton title="Refresh" onClick={() => [...open].forEach((db) => load(db, true))}>⟳</IconButton>
+        <IconButton title="Expand All" onClick={() => { setOpen(new Set(dbs)); dbs.forEach((db) => load(db)); }}>⌄</IconButton>
+        <IconButton title="Collapse All" onClick={() => setOpen(new Set())}>⌃</IconButton>
+        <IconButton title="Close (Esc)" onClick={onClose}>—</IconButton>
       </div>
       <div className="sp-list">
         <div className="sp-row">

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ask } from "../lib/dialogs";
 import { Cell, dba, DbaReportInfo, Dialect, QueryResult } from "../lib/api";
 import { ResultGrid } from "./ResultGrid";
+import { Button, Notice, Select } from "../ui";
 
 const empty: QueryResult = { columns: [], rows: [], rowsAffected: 0, truncated: false, elapsedMs: 0, hasResultSet: true };
 /** 저절로 다시 불러오는 리포트 (지금 상태를 보는 것) */
@@ -79,7 +80,7 @@ export function DbaReport(p: {
         const pid = Number(row.pid);
         if (!pid) return p.onStatus("No pid in this row");
         if (p.readOnly) return p.onStatus("Read-only data source");
-        if (!(await ask(`[${p.connName}] ${a.label} ${pid}?\n\n${str(row.query ?? row.blocking_query ?? "").slice(0, 300)}`))) return;
+        if (!(await ask(`${a.label} ${pid}?`, { title: p.connName, detail: [{ text: str(row.query ?? row.blocking_query ?? "").slice(0, 300) || "(no query)", value: `pid ${pid}` }], okLabel: a.label, danger: true }))) return;
         try {
           const ok = await dba.kill(p.target, pid, a.terminate);
           p.onStatus(ok ? `${a.label}: ${pid}` : `${a.label}: ${pid} was not found (already gone?)`);
@@ -97,7 +98,7 @@ export function DbaReport(p: {
   return (
     <div className="dba">
       <div className="dba-bar">
-        <select value={p.report} onChange={(e) => p.onReport(e.target.value, list.find((r) => r.id === e.target.value)?.title ?? e.target.value)}>
+        <Select value={p.report} onChange={(e) => p.onReport(e.target.value, list.find((r) => r.id === e.target.value)?.title ?? e.target.value)}>
           {groups.map(([g, rs]) => (
             <optgroup key={g} label={g}>
               {rs.map((r) => (
@@ -107,10 +108,10 @@ export function DbaReport(p: {
               ))}
             </optgroup>
           ))}
-        </select>
-        <button onClick={load} disabled={running}>
+        </Select>
+        <Button onClick={load} disabled={running}>
           {running ? "Loading…" : "Refresh"}
-        </button>
+        </Button>
         {LIVE.has(p.report) && (
           <label className="dba-auto">
             <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> Auto-refresh (3s)
@@ -120,7 +121,7 @@ export function DbaReport(p: {
       </div>
       {info?.actions.length ? <div className="dba-hint muted">Right-click a row: {info.actions.map((a) => a.label).join(" · ")}</div> : null}
       {error ? (
-        <div className="test-err dba-err">{error}</div>
+        <Notice tone="danger">{error}</Notice>
       ) : (
         <div className="dba-grid">
           <ResultGrid

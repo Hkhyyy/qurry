@@ -3,11 +3,10 @@ use crate::keys::disp;
 use crate::app::{App, Drag, DropTarget, FieldKind, Focus, Popup, SplitDir, TabKind};
 use crate::tree::NodeKind;
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Tabs, Wrap};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Tabs, Wrap};
 use serde_json::Value;
 
-pub const ACCENT: Color = Color::Rgb(84, 138, 247);
-const DIM: Color = Color::DarkGray;
+pub use crate::kit::*;
 
 /// GUI(src/lib/api.ts COLOR_PRESETS) 와 같은 Data Source 색
 pub const COLOR_PRESETS: &[(&str, &str)] = &[
@@ -30,85 +29,6 @@ pub fn color_name(c: Option<&str>) -> &'static str {
 }
 
 /// 활성 탭처럼 강조할 때 쓰는 밝은 색
-fn lighten(c: Color) -> Color {
-    match c {
-        Color::Rgb(r, g, b) => Color::Rgb(r.saturating_add(r / 2 + 16), g.saturating_add(g / 2 + 16), b.saturating_add(b / 2 + 16)),
-        c => c,
-    }
-}
-
-/// 팝업 자리를 비운다. 뒤 화면의 한글 같은 두 칸 글자가 팝업 가장자리에 걸치면 터미널이 그 글자를
-/// 팝업 위에 그려 테두리가 잘리므로, 걸친 글자는 빈칸으로 바꾼다.
-fn clear(f: &mut Frame, r: Rect) {
-    use unicode_width::UnicodeWidthStr;
-    let buf = f.buffer_mut();
-    let area = buf.area;
-    for y in r.top()..r.bottom().min(area.bottom()) {
-        if r.x > area.x && buf[(r.x - 1, y)].symbol().width() > 1 {
-            buf[(r.x - 1, y)].set_symbol(" ");
-        }
-        let last = r.right().saturating_sub(1);
-        if r.right() < area.right() && last >= r.x && buf[(last, y)].symbol().width() > 1 {
-            let st = buf[(last, y)].style();
-            buf[(r.right(), y)].set_symbol(" ").set_style(st);
-        }
-    }
-    f.render_widget(Clear, r);
-}
-
-/// 배경 위 글자색: 밝은 배경엔 검정, 어두운 배경엔 흰색
-fn on(bg: Color) -> Color {
-    match bg {
-        Color::Rgb(r, g, b) if 299 * r as u32 + 587 * g as u32 + 114 * b as u32 > 128_000 => Color::Black,
-        _ => Color::White,
-    }
-}
-
-/// 한 줄을 정확히 width 칸으로: 앞 skip 칸은 건너뛰고 (가로 스크롤), 모자라면 빈칸, 넘치면 자른다.
-/// 두 칸 글자(한글)가 끝이나 처음에 걸리면 그 자리를 같은 스타일의 빈칸으로 바꾼다 —
-/// 그냥 두면 터미널이 그 칸을 바탕색 없이 비워 줄 색이 끊겨 보인다.
-fn fit_spans(spans: Vec<Span<'static>>, skip: usize, width: usize) -> Vec<Span<'static>> {
-    use unicode_width::UnicodeWidthChar;
-    let mut out: Vec<Span<'static>> = vec![];
-    let (mut col, mut used) = (0usize, 0usize);
-    for sp in spans {
-        let mut buf = String::new();
-        for ch in sp.content.chars() {
-            let w = ch.width().unwrap_or(0);
-            let (start, end) = (col, col + w);
-            col = end;
-            if end <= skip || used >= width {
-                continue;
-            }
-            if start < skip || used + w > width {
-                // 앞이나 끝에 걸친 두 칸 글자 → 보이는 칸만큼 빈칸
-                let vis = (end.min(skip + width) - start.max(skip)).min(width - used);
-                buf.push_str(&" ".repeat(vis));
-                used += vis;
-            } else {
-                buf.push(ch);
-                used += w;
-            }
-        }
-        if !buf.is_empty() {
-            out.push(Span::styled(buf, sp.style));
-        }
-    }
-    if used < width {
-        out.push(Span::raw(" ".repeat(width - used)));
-    }
-    out
-}
-
-pub fn hex(c: &str) -> Option<Color> {
-    let c = c.trim_start_matches('#');
-    if c.len() != 6 {
-        return None;
-    }
-    let v = u32::from_str_radix(c, 16).ok()?;
-    Some(Color::Rgb((v >> 16) as u8, (v >> 8) as u8, v as u8))
-}
-
 pub fn type_color(t: &str) -> Color {
     match t {
         "string" => Color::Rgb(95, 158, 160),
@@ -146,14 +66,6 @@ pub fn format_reply(v: &Value) -> String {
         }
     }
     go(v, 0)
-}
-
-fn block(title: impl Into<Line<'static>>, focused: bool) -> Block<'static> {
-    Block::default()
-        .borders(Borders::ALL)
-        .border_type(if focused { BorderType::Thick } else { BorderType::Plain })
-        .title(title)
-        .border_style(Style::default().fg(if focused { ACCENT } else { DIM }))
 }
 
 pub fn draw(f: &mut Frame, app: &mut App) {
@@ -206,7 +118,7 @@ fn draw_workspaces(f: &mut Frame, app: &mut App, area: Rect) {
 fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Tree;
     let title = if app.tree.filter.is_empty() { " Database Explorer ".to_string() } else { format!(" Database Explorer — /{} (Esc clears) ", app.tree.filter) };
-    let b = block(title, focused);
+    let b = panel(title, focused);
     let inner = b.inner(area);
     f.render_widget(b, area);
     app.hits.tree = inner;
@@ -225,19 +137,19 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
         let conn_color = app.conn_color(&n.conn).and_then(|c| hex(&c));
         let connected = app.conn(&n.conn).map(|c| c.connected).unwrap_or(false);
         let (icon, icolor) = match &n.kind {
-            NodeKind::Conn => (if connected { "◉ " } else { "○ " }, conn_color.unwrap_or(Color::Rgb(111, 179, 210))),
-            NodeKind::Db => ("⛁ ", Color::Rgb(111, 179, 210)),
+            NodeKind::Conn => (if connected { "◉ " } else { "○ " }, conn_color.unwrap_or(C_DB)),
+            NodeKind::Db => ("⛁ ", C_DB),
             NodeKind::Schema => ("◇ ", Color::Gray),
-            NodeKind::Group => ("▤ ", Color::Rgb(84, 138, 247)),
+            NodeKind::Group => ("▤ ", ACCENT),
             NodeKind::Object(k) => match k.as_str() {
                 "table" | "partitioned" | "foreign" => ("▦ ", Color::Gray),
-                "view" | "matview" => ("◫ ", Color::Rgb(127, 176, 110)),
-                "sequence" => ("# ", Color::Rgb(201, 162, 109)),
+                "view" | "matview" => ("◫ ", C_VIEW),
+                "sequence" => ("# ", C_SEQUENCE),
                 "key" => ("● ", type_color(&n.hint)),
-                _ => ("ƒ ", Color::Rgb(86, 168, 245)),
+                _ => ("ƒ ", C_ROUTINE),
             },
             NodeKind::Column { pk, .. } => (if *pk { "⚿ " } else { "· " }, if *pk { Color::Yellow } else { DIM }),
-            NodeKind::Info => ("", Color::Red),
+            NodeKind::Info => ("", DANGER),
         };
         let mut spans = vec![Span::raw("  ".repeat(*depth)), Span::styled(chev, Style::default().fg(DIM)), Span::styled(icon, Style::default().fg(icolor))];
         let mut name_style = Style::default();
@@ -252,7 +164,7 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
         // 정확히 탐색기 폭으로 (가로 스크롤 반영). 배경색이 줄 끝까지 가고, 끝에 걸린 한글이 색을 끊지 않게
         let mut line = Line::from(fit_spans(spans, app.tree.hoff, inner.width as usize));
         if i == app.tree.sel {
-            line = line.style(Style::default().bg(if focused { Color::Rgb(46, 67, 110) } else { Color::Rgb(50, 52, 56) }));
+            line = line.style(Style::default().bg(if focused { SEL } else { SEL_BLUR }));
         } else if let Some(c) = conn_color {
             // GUI 처럼 Data Source 아래 전체를 그 색으로
             line = line.style(Style::default().bg(c));
@@ -286,7 +198,7 @@ fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
             ),
         ])
         .alignment(Alignment::Center)
-        .block(block("", false));
+        .block(panel("", false));
         f.render_widget(p, area);
         return;
     }
@@ -317,7 +229,7 @@ fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
             }
         });
         if let Some(r) = r {
-            f.buffer_mut().set_style(r, Style::default().bg(Color::Rgb(40, 70, 120)));
+            f.buffer_mut().set_style(r, Style::default().bg(DROP));
         }
     }
 }
@@ -403,7 +315,7 @@ fn draw_group(f: &mut Frame, app: &mut App, g: Option<usize>, area: Rect, focuse
             }
             if i == shown {
                 st = st.add_modifier(Modifier::BOLD);
-                let bg = if focused { c.map(lighten).unwrap_or(Color::Rgb(46, 67, 110)) } else { c.unwrap_or(Color::Rgb(50, 52, 56)) };
+                let bg = if focused { c.map(lighten).unwrap_or(SEL) } else { c.unwrap_or(SEL_BLUR) };
                 st = st.fg(on(bg)).bg(bg);
                 if !focused {
                     st = st.add_modifier(Modifier::UNDERLINED);
@@ -451,7 +363,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             if !editing {
                 c.complete = None;
             }
-            c.editor.set_block(block(title, editing));
+            c.editor.set_block(panel(title, editing));
             c.editor.set_line_number_style(Style::default().fg(DIM));
             // 커서 칸에는 보이지 않는 표시(밑줄 색)를 단다: 그린 뒤 찾아서 자동완성 위치·마우스 위치 계산에 쓴다
             let mark = Style::default().underline_color(CARET_MARK);
@@ -475,11 +387,11 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                     .rev()
                     .take(res.height as usize)
                     .rev()
-                    .map(|(e, s)| Line::styled(s.clone(), Style::default().fg(if *e { Color::Red } else if s.contains("> ") { ACCENT } else { Color::Gray })))
+                    .map(|(e, s)| Line::styled(s.clone(), Style::default().fg(if *e { DANGER } else if s.contains("> ") { ACCENT } else { Color::Gray })))
                     .collect();
                 let p = Paragraph::new(if lines.is_empty() { vec![Line::styled(format!("Execute a statement ({k_run}) to see the output."), Style::default().fg(DIM))] } else { lines })
                     .wrap(Wrap { trim: false })
-                    .block(block(format!(" Output ({k_out}: result) "), focus == Focus::Grid));
+                    .block(panel(format!(" Output ({k_out}: result) "), focus == Focus::Grid));
                 f.render_widget(p, res);
             } else if let Some(g) = &mut c.grid {
                 let t = format!(" {} — {}{} rows ({k_out}: output) ", c.result_title, g.rows(), if g.result.truncated { "+" } else { "" });
@@ -512,7 +424,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                     hint.push(Span::styled(format!("   · {n} pending change(s) not saved yet ({k_submit} submit · {} revert)", disp("Ctrl+Z")), Style::default().fg(Color::Yellow)));
                 }
                 let first = e.lines().next().unwrap_or_default().to_string();
-                f.render_widget(Paragraph::new(vec![Line::styled(format!(" ✗ {first}"), Style::default().fg(Color::Red)), Line::from(hint)]), msg);
+                f.render_widget(Paragraph::new(vec![Line::styled(format!(" ✗ {first}"), Style::default().fg(DANGER)), Line::from(hint)]), msg);
                 rest
             } else {
                 grid
@@ -524,14 +436,14 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 g.render(f, grid, t, focus == Focus::Grid);
             } else {
                 let msg = if tt.error.is_some() { "" } else { "Loading…" };
-                f.render_widget(Paragraph::new(msg).block(block(format!(" {}.{} ", tt.schema, tt.table), focused)), grid);
+                f.render_widget(Paragraph::new(msg).block(panel(format!(" {}.{} ", tt.schema, tt.table), focused)), grid);
             }
         }
         TabKind::Text(t) => {
             // 끝을 넘어 내리지 않는다 (마지막 줄이 맨 아래에 오도록)
             let lines = t.text.lines().count() as u16;
             t.scroll = t.scroll.min(lines.saturating_sub(body.height.saturating_sub(2)));
-            let p = Paragraph::new(t.text.as_str()).scroll((t.scroll, 0)).block(block(format!(" {title} — {lines} lines · ↑↓ PgUp/PgDn wheel scroll · y copies all "), focus != Focus::Tree));
+            let p = Paragraph::new(t.text.as_str()).scroll((t.scroll, 0)).block(panel(format!(" {title} — {lines} lines · ↑↓ PgUp/PgDn wheel scroll · y copies all "), focus != Focus::Tree));
             f.render_widget(p, body);
             if focused {
                 app.hits.text = body;
@@ -546,9 +458,9 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             f.render_widget(Paragraph::new(Line::from(vec![Span::styled(format!(" {}{state} ", d.info.as_ref().map(|i| i.title).unwrap_or("")), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)), Span::styled(text, Style::default().fg(DIM))])), help);
             let title = format!(" {db} — {} rows ", d.grid.as_ref().map(|g| g.rows()).unwrap_or(0));
             match (&mut d.grid, &d.error) {
-                (_, Some(e)) => f.render_widget(Paragraph::new(e.as_str()).style(Style::default().fg(Color::Red)).wrap(Wrap { trim: false }).block(block(" Error ", focus == Focus::Grid)), grid),
+                (_, Some(e)) => f.render_widget(Paragraph::new(e.as_str()).style(Style::default().fg(DANGER)).wrap(Wrap { trim: false }).block(panel(" Error ", focus == Focus::Grid)), grid),
                 (Some(g), None) => g.render(f, grid, title, focus == Focus::Grid),
-                (None, None) => f.render_widget(Paragraph::new("Loading…").block(block(title, focus == Focus::Grid)), grid),
+                (None, None) => f.render_widget(Paragraph::new("Loading…").block(panel(title, focus == Focus::Grid)), grid),
             }
             if focused {
                 app.hits.results = grid;
@@ -558,7 +470,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             let [left, right] = Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)]).areas(body);
             let kf = focus == Focus::Grid && !r.focus_value;
             let title = format!(" Keys {} — {}{} {} ", r.pattern, r.keys.len(), if r.cursor != "0" { "+" } else { "" }, if r.scanning { "scanning…" } else { "" });
-            let b = block(title, kf);
+            let b = panel(title, kf);
             let inner = b.inner(left);
             f.render_widget(b, left);
             let h = inner.height as usize;
@@ -578,7 +490,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                         crate::app::KRow::Folder { path, name, depth, count } => Line::from(vec![
                             Span::raw("  ".repeat(*depth)),
                             Span::styled(if r.open.contains(path) { "▾ " } else { "▸ " }, Style::default().fg(DIM)),
-                            Span::styled("▤ ", Style::default().fg(Color::Rgb(84, 138, 247))),
+                            Span::styled("▤ ", Style::default().fg(ACCENT)),
                             Span::raw(name.clone()),
                             Span::styled(format!(" {count}"), Style::default().fg(DIM)),
                         ]),
@@ -590,7 +502,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                         }
                     };
                     if i == r.sel {
-                        l = l.style(Style::default().bg(if kf { Color::Rgb(46, 67, 110) } else { Color::Rgb(50, 52, 56) }));
+                        l = l.style(Style::default().bg(if kf { SEL } else { SEL_BLUR }));
                     }
                     ListItem::new(l)
                 })
@@ -602,14 +514,14 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             }
             let vf = focus == Focus::Grid && r.focus_value;
             match &mut r.detail {
-                None => f.render_widget(Paragraph::new("Select a key").block(block(" Value ", vf)), right),
+                None => f.render_widget(Paragraph::new("Select a key").block(panel(" Value ", vf)), right),
                 Some((key, d)) => {
                     let ttl = if d.ttl >= 0 { format!("TTL {}s", d.ttl / 1000) } else { "no TTL".into() };
                     let title = format!(" {} {key} · {} · {} {} ", d.ty.to_uppercase(), ttl, d.length, if d.ty == "string" { "bytes" } else { "items" });
                     match &mut r.value {
                         Some(g) => g.render(f, right, title, vf),
                         None => {
-                            f.render_widget(Paragraph::new(r.text.as_deref().unwrap_or_default()).wrap(Wrap { trim: false }).block(block(title, vf)), right);
+                            f.render_widget(Paragraph::new(r.text.as_deref().unwrap_or_default()).wrap(Wrap { trim: false }).block(panel(title, vf)), right);
                         }
                     }
                 }
@@ -656,21 +568,21 @@ fn draw_completion(f: &mut Frame, cmp: &crate::app::Completion, x: u16, y: u16) 
         .take(shown)
         .map(|(i, it)| {
             let (icon, color) = match it.kind {
-                ItemKind::Column => ("· ", Color::Rgb(201, 162, 109)),
-                ItemKind::Table => ("▦ ", Color::Rgb(111, 179, 210)),
+                ItemKind::Column => ("· ", C_SEQUENCE),
+                ItemKind::Table => ("▦ ", C_DB),
                 ItemKind::Schema => ("◇ ", Color::Gray),
-                ItemKind::Keyword => ("k ", Color::Rgb(204, 120, 50)),
+                ItemKind::Keyword => ("k ", C_KEYWORD),
             };
             let mut l = Line::from(vec![Span::styled(icon, Style::default().fg(color)), Span::raw(format!("{:<lw$}  ", it.label)), Span::styled(it.detail.clone(), Style::default().fg(DIM))]);
             if i == cmp.sel {
-                l = l.style(Style::default().bg(Color::Rgb(46, 67, 110)));
+                l = l.style(Style::default().bg(SEL));
             }
             ListItem::new(l)
         })
         .collect();
     clear(f, r);
     let title = format!(" {}/{} ", cmp.sel + 1, cmp.items.len());
-    f.render_widget(List::new(items).block(block(title, true)).style(Style::default().bg(Color::Rgb(30, 31, 34))), r);
+    f.render_widget(List::new(items).block(panel(title, true)).style(Style::default().bg(POPUP_BG)), r);
 }
 
 /// 하단 안내: (이 화면에서 쓰는 키, 자주 쓰는 전역 키). 바꿀 수 있는 명령은 지금 키맵의 첫 키로
@@ -754,10 +666,24 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let hw = (hints.width() as u16).min(area.width.saturating_sub(bw + 12));
     let [u, l, r] = Layout::horizontal([Constraint::Length(bw), Constraint::Min(10), Constraint::Length(hw)]).areas(area);
     if let Some(b) = badge {
-        f.render_widget(Paragraph::new(b).style(Style::default().fg(Color::Black).bg(Color::Rgb(201, 162, 109))), u);
+        f.render_widget(Paragraph::new(b).style(Style::default().fg(Color::Black).bg(WARN)), u);
     }
-    f.render_widget(Paragraph::new(format!(" {status}")).style(Style::default().fg(Color::Gray).bg(Color::Rgb(43, 45, 48))), l);
-    f.render_widget(Paragraph::new(hints).style(Style::default().bg(Color::Rgb(43, 45, 48))), r);
+    // 지금 탭의 Data Source 가 운영 · 읽기 전용이면 상태 글 앞에 배지
+    let conn = app.tabs.get(app.active).and_then(|t| app.conn(&t.conn));
+    let mut line = vec![Span::raw(" ")];
+    if let Some(c) = conn {
+        if c.config.options.confirm_changes {
+            line.push(crate::kit::badge("PROD", DANGER));
+            line.push(Span::raw(" "));
+        }
+        if c.config.read_only {
+            line.push(crate::kit::badge("READ-ONLY", SEL));
+            line.push(Span::raw(" "));
+        }
+    }
+    line.push(Span::raw(status));
+    f.render_widget(Paragraph::new(Line::from(line)).style(Style::default().fg(Color::Gray).bg(SURFACE)), l);
+    f.render_widget(Paragraph::new(hints).style(Style::default().bg(SURFACE)), r);
 }
 
 /// "Export users ▕████░░░░░░▏ 1,234 rows · 42%". 전체를 모르면 막대가 왔다 갔다 한다
@@ -773,12 +699,6 @@ fn job_line(label: &str, (rows, done, total): (u64, u64, u64)) -> String {
         ("░".repeat(t) + "███" + &"░".repeat(W - 3 - t), String::new())
     };
     format!("{label} ▕{bar}▏ {n}{pct}")
-}
-
-fn centered(area: Rect, w: u16, h: u16) -> Rect {
-    let w = w.min(area.width.saturating_sub(4));
-    let h = h.min(area.height.saturating_sub(2));
-    Rect { x: area.x + (area.width - w) / 2, y: area.y + (area.height.saturating_sub(h)) / 3, width: w, height: h }
 }
 
 fn draw_popup(f: &mut Frame, app: &mut App) {
@@ -806,7 +726,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                     Span::styled(if custom { "  (custom)" } else { "" }, Style::default().fg(DIM)),
                 ]);
                 if i == *sel {
-                    l = l.style(Style::default().bg(Color::Rgb(46, 67, 110)));
+                    l = l.style(Style::default().bg(SEL));
                 }
                 lines.push(l);
             }
@@ -819,7 +739,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                 for (k, d) in *rows {
                     let mut l = Line::from(vec![Span::styled(format!("  {:<30}", disp(k)), Style::default().fg(ACCENT)), Span::raw(disp(d))]);
                     if i == *sel {
-                        l = l.style(Style::default().bg(Color::Rgb(46, 67, 110)));
+                        l = l.style(Style::default().bg(SEL));
                         sel_line = lines.len();
                     }
                     lines.push(l);
@@ -844,15 +764,15 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                 Some(m) => format!(" {m} "),
                 None => " Keymap — saved to keymap.json · PgUp PgDn · Esc close ".into(),
             };
-            clear(f, r);
-            f.render_widget(Paragraph::new(lines).scroll((*scroll, 0)).block(block(title, true)), r);
+            let inner = popup(f, r, title);
+            f.render_widget(Paragraph::new(lines).scroll((*scroll, 0)), inner);
         }
         // 위에서 따로 그린다
         Popup::Find(_) => {}
         Popup::Message { title, text } => {
             let r = centered(area, 90, (text.lines().count() as u16 + 4).min(30));
-            clear(f, r);
-            f.render_widget(Paragraph::new(text.clone()).wrap(Wrap { trim: false }).block(block(format!(" {title} (Esc) "), true)), r);
+            let inner = popup(f, r, format!(" {title} (Esc) "));
+            f.render_widget(Paragraph::new(text.clone()).wrap(Wrap { trim: false }), inner);
         }
         Popup::Scope(e) => {
             use crate::scope::{Check, Row};
@@ -898,29 +818,47 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                         Row::Note(_, t) => Line::from(vec![Span::raw("       "), hint(t.clone())]),
                     };
                     if i == e.sel {
-                        l = l.style(Style::default().bg(Color::Rgb(46, 67, 110)));
+                        l = l.style(Style::default().bg(SEL));
                     }
                     l
                 })
                 .collect();
             lines.push(Line::styled("Space check · → expand · ← collapse · Enter apply · Esc cancel", Style::default().fg(DIM)));
-            clear(f, r);
-            f.render_widget(Paragraph::new(lines).block(block(format!(" Manage Shown Schemas — {name} "), true)), r);
+            let inner = popup(f, r, format!(" Manage Shown Schemas — {name} "));
+            f.render_widget(Paragraph::new(lines), inner);
         }
         Popup::Confirm { text, .. } => {
-            // 여러 줄 (이유 · 문장 · 질문)
-            let mut lines: Vec<Line> = text.lines().map(|l| Line::raw(l.to_string())).collect();
+            // 여러 줄 (이유 · 문장 · 질문). 운영 DB · 위험 문장이면 빨간 테두리, "→ N rows" 는 많을수록 눈에 띄게
+            let danger = text.starts_with("Production") || text.ends_with("Run it anyway?");
+            let mut lines: Vec<Line> = text
+                .lines()
+                .map(|l| match l.trim_start().strip_prefix("→ ") {
+                    Some(v) => {
+                        let n: Option<u64> = v.split_whitespace().next().and_then(|x| x.replace(',', "").parse().ok());
+                        let c = match n {
+                            Some(0) => DIM,
+                            Some(n) if n < 100 => WARN,
+                            _ => DANGER,
+                        };
+                        Line::from(vec![Span::raw(l[..l.len() - v.len()].to_string()), Span::styled(v.to_string(), Style::default().fg(c).add_modifier(Modifier::BOLD))])
+                    }
+                    None => Line::raw(l.to_string()),
+                })
+                .collect();
             lines.push(Line::raw(""));
-            lines.push(Line::styled("y / Enter = yes · n / Esc = no", Style::default().fg(DIM)));
+            let mut keys = key_hint("y / Enter", "yes");
+            keys.push(Span::styled(" · ", Style::default().fg(DIM)));
+            keys.extend(key_hint("n / Esc", "no"));
+            lines.push(Line::from(keys));
             let r = centered(area, 90, lines.len() as u16 + 2);
-            clear(f, r);
-            f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block(" Confirm ", true)), r);
+            let inner = if danger { popup_danger(f, r, " Confirm ") } else { popup(f, r, " Confirm ") };
+            f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
         }
         Popup::Input { title, input, complete, words, .. } => {
             let r = centered(area, 90, 3);
             clear(f, r);
             let hint = if words.is_empty() { "Enter / Esc" } else { "Enter / Esc · Tab complete" };
-            input.set_block(block(format!(" {title} ({hint}) "), true));
+            input.set_block(panel(format!(" {title} ({hint}) "), true));
             f.render_widget(&*input, r);
             // 자동완성 목록: 입력칸 바로 아래, 커서 근처
             if let Some((items, sel, _)) = complete {
@@ -930,10 +868,10 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                 let rows: Vec<ListItem> = items
                     .iter()
                     .enumerate()
-                    .map(|(i, s)| ListItem::new(format!(" {s}")).style(if i == *sel { Style::default().bg(Color::Rgb(46, 67, 110)) } else { Style::default() }))
+                    .map(|(i, s)| ListItem::new(format!(" {s}")).style(if i == *sel { Style::default().bg(SEL) } else { Style::default() }))
                     .collect();
                 clear(f, lr);
-                f.render_widget(List::new(rows).block(block("", true)).style(Style::default().bg(Color::Rgb(30, 31, 34))), lr);
+                f.render_widget(List::new(rows).block(panel("", true)).style(Style::default().bg(POPUP_BG)), lr);
             }
         }
         Popup::Palette(p) => {
@@ -942,7 +880,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             let [inp, list] = Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).areas(r);
             app.hits.palette = Block::default().borders(Borders::ALL).inner(list);
             let t = format!(" {}{} ", p.title, if p.loading > 0 { " — loading…" } else { "" });
-            p.input.set_block(block(t, true));
+            p.input.set_block(panel(t, true));
             p.input.set_cursor_line_style(Style::default());
             f.render_widget(&p.input, inp);
             let matches = App::palette_matches(p);
@@ -959,7 +897,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                     // 이름·힌트 안의 키 표기도 화면 규칙으로 ("Ctrl+Z (grid)" → ⌃z)
                     let mut l = Line::from(vec![Span::raw(disp(&it.label)), Span::styled(format!("  {}", disp(&it.hint)), Style::default().fg(DIM))]);
                     if i == sel {
-                        l = l.style(Style::default().bg(Color::Rgb(46, 67, 110)));
+                        l = l.style(Style::default().bg(SEL));
                     }
                     ListItem::new(l)
                 })
@@ -967,7 +905,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             p.sel = sel;
             let ddl = app.keys.keys(crate::app::Action::Ddl).first().map(|k| disp(k)).unwrap_or_else(|| "—".into());
             let hint = if p.title.starts_with("Go to") || p.title == "Search Everywhere" { format!(" Enter open · {ddl} DDL · Esc ") } else { " Enter · Esc ".into() };
-            f.render_widget(List::new(items).block(block(hint, true)), list);
+            f.render_widget(List::new(items).block(panel(hint, true)), list);
         }
         Popup::ConnForm(form) => {
             let h = form.fields.len() as u16 + 6;
@@ -986,8 +924,8 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                     };
                     let sel = i == form.sel;
                     let mut spans = vec![
-                        Span::styled(format!("{:>14} ", fl.label), Style::default().fg(if sel { ACCENT } else { DIM })),
-                        Span::styled(shown + if sel && matches!(fl.kind, FieldKind::Text | FieldKind::Secret) { "▏" } else { "" }, if sel { Style::default().bg(Color::Rgb(46, 67, 110)) } else { Style::default() }),
+                        Span::styled(format!("{:>15} ", fl.label), Style::default().fg(if sel { ACCENT } else { DIM })),
+                        Span::styled(shown + if sel && matches!(fl.kind, FieldKind::Text | FieldKind::Secret) { "▏" } else { "" }, if sel { Style::default().bg(SEL) } else { Style::default() }),
                     ];
                     if fl.label == "Color" {
                         let c = COLOR_PRESETS.iter().find(|p| p.0 == fl.value).and_then(|p| hex(p.1)).or_else(|| form.edit.as_ref().and_then(|e| e.color.as_deref()).filter(|_| fl.value == "custom").and_then(hex));
@@ -1001,11 +939,11 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                 .collect();
             lines.push(Line::raw(""));
             if let Some((ok, m)) = &form.message {
-                lines.push(Line::styled(disp(m), Style::default().fg(if *ok { Color::Green } else { Color::Red })));
+                lines.push(Line::styled(disp(m), Style::default().fg(if *ok { OK } else { DANGER })));
             }
             lines.push(Line::styled(disp("↑↓/Tab move · type to edit · Space/←→ toggle · Ctrl+T test · Ctrl+S / Enter save · Esc cancel"), Style::default().fg(DIM)));
             let t = if form.edit.is_some() { " Data Source Properties " } else { " New Data Source " };
-            f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block(t, true)), r);
+            f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(panel(t, true)), r);
         }
     }
 }

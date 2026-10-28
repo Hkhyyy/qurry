@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { FtsHit, FtsRequest } from "../lib/api";
+import { Button, Checkbox, FormGrid, IconButton, Modal, Select, TextInput } from "../ui";
 
 export interface FtsScope {
   connId: string;
@@ -31,60 +32,57 @@ export function FullTextSearchDialog({ scope, onClose, onSearch }: { scope: FtsS
     : `${scope.connName} · ${scope.db} · ${scope.schemas.length > 3 ? `${scope.schemas.length} schemas` : scope.schemas.join(", ")}`;
   const go = () => text.trim() && onSearch({ text, mode, matchCase, columns, schemas: scope.schemas, tables: scope.tables, limit });
   return (
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="modal fts" onMouseDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
-        <div className="modal-title">Full-text Search</div>
-        <div className="form">
-          <label>Search for</label>
-          <input
-            autoFocus
-            value={text}
-            spellCheck={false}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") go();
-              if (e.key === "Escape") onClose();
-            }}
-          />
-          <span />
-          <div className="row">
-            <label className="check">
-              <input type="checkbox" checked={matchCase} onChange={(e) => setMatchCase(e.target.checked)} />
-              Match case
-            </label>
-            <select value={mode} onChange={(e) => setMode(e.target.value as FtsRequest["mode"])}>
-              {MODES.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <label>Search in</label>
-          <select value={columns} onChange={(e) => setColumns(e.target.value as FtsRequest["columns"])}>
-            <option value="text">Text columns</option>
-            <option value="numeric">Numeric columns</option>
-            <option value="all">All columns</option>
-          </select>
-          <label>Show first</label>
-          <div className="row">
-            <input className="port" type="number" min={1} max={1000} value={limit} onChange={(e) => setLimit(Math.max(1, Number(e.target.value) || 1))} />
-            <span className="lbl">matches per table/view</span>
-          </div>
-          <label>Scope</label>
-          <span className="fts-scope" title={where}>
-            {where}
-          </span>
-        </div>
-        <div className="modal-actions">
-          <span className="grow" />
-          <button onClick={onClose}>Cancel</button>
-          <button className="primary" onClick={go} disabled={!text.trim()}>
+    <Modal
+      title="Full-text Search"
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" onClick={go} disabled={!text.trim()}>
             Search
-          </button>
+          </Button>
+        </>
+      }
+    >
+      <FormGrid labelWidth={90}>
+        <label>Search for</label>
+        <TextInput
+          autoFocus
+          value={text}
+          spellCheck={false}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") go();
+          }}
+        />
+        <span />
+        <div className="ui-row">
+          <Checkbox checked={matchCase} onChange={(v) => setMatchCase(v)}>Match case</Checkbox>
+          <Select value={mode} onChange={(e) => setMode(e.target.value as FtsRequest["mode"])}>
+            {MODES.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </Select>
         </div>
-      </div>
-    </div>
+        <label>Search in</label>
+        <Select value={columns} onChange={(e) => setColumns(e.target.value as FtsRequest["columns"])}>
+          <option value="text">Text columns</option>
+          <option value="numeric">Numeric columns</option>
+          <option value="all">All columns</option>
+        </Select>
+        <label>Show first</label>
+        <div className="ui-row">
+          <TextInput className="w-port" type="number" min={1} max={1000} value={limit} onChange={(e) => setLimit(Math.max(1, Number(e.target.value) || 1))} />
+          <span className="ui-muted">matches per table/view</span>
+        </div>
+        <label>Scope</label>
+        <span className="fts-scope" title={where}>
+          {where}
+        </span>
+      </FormGrid>
+    </Modal>
   );
 }
 
@@ -128,13 +126,13 @@ export function FindPanel({ runs, active, onActive, onClose, onCloseRun, onPin, 
         ))}
         <span className="grow" />
         {run && (
-          <button className="icon" title={run.pinned ? "Unpin Tab" : "Pin Tab"} onClick={() => onPin(run.id)}>
+          <IconButton title={run.pinned ? "Unpin Tab" : "Pin Tab"} onClick={() => onPin(run.id)}>
             📌
-          </button>
+          </IconButton>
         )}
-        <button className="icon" title="Hide (⇧⎋)" onClick={onClose}>
+        <IconButton title="Hide (⇧⎋)" onClick={onClose}>
           —
-        </button>
+        </IconButton>
       </div>
       <div className="find-body">
         {!run && <div className="popup-empty">No search results. Use Full-text Search (⌥⇧⌘F).</div>}

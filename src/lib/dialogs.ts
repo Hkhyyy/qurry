@@ -1,11 +1,13 @@
+import { confirm, type ConfirmOptions } from "../ui";
+
 /**
  * 확인·글 입력 창. 실제 앱(Tauri)에서는 dialog 플러그인이 window.confirm 을 async 함수로 바꿔 넣는다 (Promise 를 돌려준다):
  * `if (!confirm(…)) return` 은 Promise 가 늘 참이라 대답을 기다리지 않고 지나간다. 그래서 늘 `await ask(…)`.
  * window.prompt 는 Tauri 웹뷰에 없다 (null) → 앱 안의 입력 창 (TextDialog, App 이 등록)
  */
-export async function ask(message: string): Promise<boolean> {
-  const r = window.confirm(message) as unknown as boolean | Promise<boolean>;
-  return (await r) === true;
+export async function ask(message: string, opts: Omit<ConfirmOptions, "message"> = {}): Promise<boolean> {
+  // 앱 안의 확인 창 (ui/ConfirmHost). 없으면 (테스트) 브라우저 confirm
+  return (await confirm({ message, ...opts })) === true;
 }
 
 export interface TextRequest {

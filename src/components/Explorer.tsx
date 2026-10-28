@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ConnectionView, Scope } from "../lib/api";
 import { ColorSwatches } from "./ConnectionDialog";
 import { NodeInfo, SchemaTree, TreeSelection } from "./SchemaTree";
+import { IconButton } from "../ui";
 
 export type MenuItem =
   | { label: string; action: () => void; shortcut?: string; danger?: boolean; disabled?: boolean }
@@ -219,17 +220,17 @@ export function Explorer(p: Props) {
   return (
     <div className="panel">
       <div className="panel-header">
-        <span className="explorer-title">Database Explorer</span>
-        <span className="grow" />
+        <span className="explorer-title" title="Database Explorer">
+          Database Explorer
+        </span>
         <span className="menu-anchor">
-          <button
-            className="icon"
+          <IconButton
             title="Add Data Source"
             onMouseDown={(e) => e.stopPropagation()}
             onClick={() => (p.others?.length ? setAddMenu((m) => !m) : p.onAdd())}
           >
             ＋
-          </button>
+          </IconButton>
           {addMenu && (
             <div className="ctx-menu dropdown" onMouseDown={(e) => e.stopPropagation()}>
               <div className="ctx-item" onClick={() => { p.onAdd(); setAddMenu(false); }}><span>New Data Source…</span></div>
@@ -241,16 +242,15 @@ export function Explorer(p: Props) {
             </div>
           )}
         </span>
-        <button className="icon" title="Refresh (⌥⌘y)" onClick={p.onRefresh}>⟳</button>
+        <IconButton title="Refresh (⌥⌘y)" onClick={p.onRefresh}>⟳</IconButton>
         <span className="menu-anchor">
-          <button
-            className="icon"
+          <IconButton
             title="More"
             onMouseDown={(e) => e.stopPropagation()}
             onClick={() => setMore((m) => !m)}
           >
             ⋯
-          </button>
+          </IconButton>
           {more && (
             <div className="ctx-menu dropdown" onMouseDown={(e) => e.stopPropagation()}>
               <div className="ctx-item" onClick={() => { setShowSystem((v) => !v); setMore(false); }}>

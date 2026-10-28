@@ -1,0 +1,50 @@
+/* UI 토큰 — 규격은 README.md. 색은 테마 (App.css 의 :root / [data-theme]) 값을 이름만 바꿔 쓴다 */
+:root {
+  --ui-bg: var(--bg);
+  --ui-surface: var(--panel);
+  --ui-surface-2: var(--panel-2);
+  --ui-hover: var(--c-33353a);
+  --ui-selected: var(--sel);
+  --ui-border: var(--border);
+  --ui-border-strong: var(--c-4e5157);
+  --ui-text: var(--text);
+  --ui-text-muted: var(--muted);
+  --ui-text-on-accent: #ffffff;
+  --ui-accent: var(--accent);
+  --ui-danger: var(--danger);
+  --ui-warn: var(--c-e5a64b);
+  --ui-ok: var(--ok);
+
+  --ui-sp-1: 2px;
+  --ui-sp-2: 4px;
+  --ui-sp-3: 8px;
+  --ui-sp-4: 12px;
+  --ui-sp-5: 16px;
+  --ui-sp-6: 24px;
+
+  --ui-radius-sm: 4px;
+  --ui-radius-md: 6px;
+  --ui-radius-lg: 10px;
+
+  --ui-fs-xs: 11px;
+  --ui-fs-sm: 12px;
+  --ui-fs-md: 13px;
+  --ui-fs-lg: 14px;
+  --ui-font-mono: "JetBrains Mono", Menlo, monospace;
+
+  --ui-h-sm: 22px;
+  --ui-h-md: 26px;
+  --ui-h-lg: 30px;
+
+  --ui-shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --ui-shadow-modal: 0 12px 40px rgba(0, 0, 0, 0.5);
+
+  --ui-z-modal: 100;
+  --ui-z-menu: 200;
+  --ui-z-popover: 300;
+  --ui-z-dialog: 400;
+}
+:root[data-theme="light"] {
+  --ui-shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --ui-shadow-modal: 0 12px 40px rgba(0, 0, 0, 0.18);
+}

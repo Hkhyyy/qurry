@@ -328,7 +328,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let rect = if app.hits.find.width > 0 { app.hits.find } else { Rect { height: 4.min(f.area().height), ..f.area() } };
     let Some(Popup::Find(bar)) = &mut app.popup else { return };
     f.render_widget(Clear, rect);
-    let accent = Color::Rgb(84, 138, 247);
+    let accent = crate::kit::ACCENT;
     let block = Block::default().borders(Borders::ALL).border_type(BorderType::Thick).border_style(Style::default().fg(accent)).title(" Find / Replace · Tab switch · Esc close ");
     let inner = block.inner(rect);
     f.render_widget(block, rect);
@@ -336,8 +336,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let on = |b: bool| if b { Style::default().fg(Color::Black).bg(accent) } else { Style::default().fg(Color::DarkGray) };
     let o = bar.opts;
     let info0 = match (&bar.error, bar.count) {
-        (Some(e), _) => Line::styled(e.chars().take(18).collect::<String>(), Style::default().fg(Color::Red)),
-        (None, 0) if !bar.find.lines()[0].is_empty() => Line::styled("0 results", Style::default().fg(Color::Red)),
+        (Some(e), _) => Line::styled(e.chars().take(18).collect::<String>(), Style::default().fg(crate::kit::DANGER)),
+        (None, 0) if !bar.find.lines()[0].is_empty() => Line::styled("0 results", Style::default().fg(crate::kit::DANGER)),
         (None, 0) => Line::raw(""),
         (None, n) => Line::raw(format!("{}/{n}", bar.cur)),
     };
