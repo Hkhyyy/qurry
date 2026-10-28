@@ -9,6 +9,29 @@ export interface Scene {
 }
 
 const FG = "#abb2bf";
+
+/**
+ * 터미널은 글자마다 칸이 정해져 있지만, 웹 글꼴에서 기호 (⛁ ◧ ▦ ▾ ⌥ …) 는 다른 글꼴로 그려져 폭이 다르다 → 줄이 밀린다.
+ * 영문 · 숫자 · 흔한 기호가 아닌 글자는 하나씩 정확히 1ch 상자에 넣는다 (두 칸 글자는 묶음째 2ch — 아래)
+ */
+function cells(t: string) {
+  const out: React.ReactNode[] = [];
+  let ascii = "";
+  for (const ch of t) {
+    if (ch.charCodeAt(0) < 0x80) {
+      ascii += ch;
+      continue;
+    }
+    if (ascii) out.push(ascii), (ascii = "");
+    out.push(
+      <span key={out.length} style={{ display: "inline-block", width: "1ch", overflow: "hidden", textAlign: "center", verticalAlign: "top" }}>
+        {ch}
+      </span>,
+    );
+  }
+  if (ascii) out.push(ascii);
+  return out;
+}
 const BG = "#1e1f22";
 
 export function TuiScreen({ scene }: { scene: Scene }) {
@@ -44,7 +67,7 @@ export function TuiScreen({ scene }: { scene: Scene }) {
                   ...(wide ? { display: "inline-block", width: "2ch", textAlign: "center", overflow: "hidden", verticalAlign: "top" } : {}),
                 }}
               >
-                {t}
+                {wide ? t : cells(t)}
               </span>
             ))}
           </div>
