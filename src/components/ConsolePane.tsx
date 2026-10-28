@@ -7,7 +7,7 @@ import { ConsoleEditor, EditorApi, RunRequest } from "./ConsoleEditor";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { ResultGrid } from "./ResultGrid";
 import { IcClock, IcGear, IcReload, IcStop } from "../ui/icons";
-import { EmptyState, IconButton, Select, Spacer, TabItem, Table, Td, Th, ToolButton, Toolbar, ToolbarSep } from "../ui";
+import { EmptyState, IconButton, Select, Spacer, TabItem, TabStrip, Table, Td, Th, ToolButton, Toolbar, ToolbarSep } from "../ui";
 
 const isMac = navigator.platform.toLowerCase().includes("mac");
 
@@ -265,6 +265,11 @@ export function ConsolePane(p: Props) {
           <div className="panel results-panel">
             {/* 결과 탭: Output + 결과 셋들 (Services 결과 영역) */}
             <div className="result-tabs">
+              <TabStrip
+                activeKey={p.activeResult}
+                overflow={[{ key: "output", label: "Output", active: p.activeResult === "output", onSelect: () => p.onSetActiveResult("output") }, ...p.results.map((r) => ({ key: r.id, label: (r.kind === "plan" ? "Plan: " : "") + r.title, active: p.activeResult === r.id, onSelect: () => p.onSetActiveResult(r.id) }))]}
+                style={{ flex: 1, minWidth: 0 }}
+              >
               <TabItem variant="result" label="Output" active={p.activeResult === "output"} onClick={() => p.onSetActiveResult("output")} />
               {p.results.map((r) => (
                 <TabItem
@@ -291,7 +296,7 @@ export function ConsolePane(p: Props) {
                   title={r.sql}
                 />
               ))}
-              <Spacer />
+              </TabStrip>
               {p.activeResult === "output" && (
                 <IconButton title="Clear All" onClick={p.onClearOutput}><IcReload /></IconButton>
               )}

@@ -182,7 +182,7 @@ a { color: var(--c-548af7); cursor: pointer; }
 .node-sub { flex: 1 1 auto; min-width: 0; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
 .dot-on { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-left: auto; flex: none; }
 
-.tabs { height: 32px; flex: none; display: flex; align-items: stretch; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.tabs { height: 32px; flex: none; border-bottom: 1px solid var(--border); }
 .tab { display: flex; align-items: center; gap: 8px; padding: 0 10px 0 14px; color: var(--muted); cursor: default; white-space: nowrap; border-bottom: 2px solid transparent; }
 .tab:hover { color: var(--text); }
 .tab.active { color: var(--text); border-bottom-color: var(--accent); }
@@ -356,7 +356,8 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .sc-item { padding: 4px 10px; border-radius: 4px; font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
 .sc-item.on { background: var(--accent); color: var(--c-fff); }
 .results-panel { background: var(--panel); }
-.result-tabs { flex: none; height: 30px; display: flex; align-items: stretch; border-bottom: 1px solid var(--border); overflow-x: auto; padding-right: 6px; }
+.result-tabs { flex: none; height: 30px; display: flex; align-items: stretch; border-bottom: 1px solid var(--border); padding-right: 6px; }
+.result-tabs > .ui-icon-btn { align-self: center; }
 .rtab { display: flex; align-items: center; gap: 6px; padding: 0 12px; color: var(--muted); white-space: nowrap; cursor: default; border-bottom: 2px solid transparent; font-size: 12px; }
 .rtab:hover { color: var(--text); }
 .rtab.active { color: var(--text); border-bottom-color: var(--accent); }

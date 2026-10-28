@@ -2,8 +2,8 @@
  * 유기체 (organisms): 분자를 모은 덩어리 — 도구 막대, 대화상자, 확인 창, 메뉴, 팝오버, 목록, 표, 폼 그리드.
  * 규격은 README.md
  */
-import { CSSProperties, HTMLAttributes, KeyboardEvent, ReactNode, Ref, TdHTMLAttributes, useEffect, useRef, useState } from "react";
-import { Button, Spacer } from "./atoms";
+import { CSSProperties, HTMLAttributes, KeyboardEvent, ReactNode, Ref, TdHTMLAttributes, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Button, IconButton, Spacer } from "./atoms";
 import { cx } from "./cx";
 import { DetailRow, EmptyState, MenuItem, MenuLabel, MenuSeparator, SectionTitle } from "./molecules";
 
@@ -287,5 +287,53 @@ export function ConfirmHost() {
       <div className="ui-confirm-message">{req.message}</div>
       {req.detail && req.detail.length > 0 && <DetailList items={req.detail} />}
     </Modal>
+  );
+}
+
+// ───────── 탭 줄 ─────────
+/**
+ * 탭 줄 (편집기 · 결과): 스크롤바 없이 넘친다. 휠 (세로) 로도 옆으로 넘기고, 활성 탭이 바뀌면 보이게 스크롤한다.
+ * 넘치면 오른쪽 끝 ▾ — 모든 탭 목록 (DataGrip 의 Show Hidden Tabs). 끌어 놓기 이벤트는 그대로 넘긴다
+ */
+export function TabStrip({ children, activeKey, overflow, className, ...rest }: HTMLAttributes<HTMLDivElement> & { activeKey?: string | null; overflow?: { key: string; label: string; active?: boolean; onSelect: () => void }[] }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [over, setOver] = useState(false);
+  const [menu, setMenu] = useState(false);
+  // 넘치는지 (▾ 를 보일지)
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const check = () => setOver(el.scrollWidth > el.clientWidth + 1);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
+  // 활성 탭이 보이게
+  useEffect(() => {
+    ref.current?.querySelector<HTMLElement>(".active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [activeKey]);
+  return (
+    <div className={cx("ui-tab-strip", className)} {...rest}>
+      <div
+        className="ui-tab-strip-scroll"
+        ref={ref}
+        role="tablist"
+        onWheel={(e) => {
+          // 트랙패드 가로 이동은 그대로, 마우스 휠 (세로) 은 옆으로
+          if (ref.current && Math.abs(e.deltaY) > Math.abs(e.deltaX)) ref.current.scrollLeft += e.deltaY;
+        }}
+      >
+        {children}
+      </div>
+      {over && overflow && (
+        <span className="ui-tab-strip-more">
+          <IconButton size="sm" title="Show All Tabs" onMouseDown={(e) => e.stopPropagation()} onClick={() => setMenu((m) => !m)}>
+            ▾
+          </IconButton>
+          {menu && <Menu onClose={() => setMenu(false)} items={overflow.map((t) => ({ label: (t.active ? "● " : "　") + t.label, action: t.onSelect }))} />}
+        </span>
+      )}
+    </div>
   );
 }

@@ -271,3 +271,10 @@ div.ui-text.ui-ellipsis, span.ui-text.ui-ellipsis { display: block; }
 .ui-rail-item.active .ui-rail-label { color: var(--ui-text); }
 .ui-rail-label { max-width: 46px; font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-node .node-trailing { margin-left: auto; padding-left: var(--ui-sp-3); flex: none; font-size: var(--ui-fs-xs); color: var(--ui-text-muted); }
+
+/* ── 탭 줄 ── */
+.ui-tab-strip { display: flex; align-items: stretch; min-width: 0; }
+.ui-tab-strip-scroll { flex: 1; min-width: 0; display: flex; align-items: stretch; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.ui-tab-strip-scroll::-webkit-scrollbar { display: none; }
+.ui-tab-strip-more { position: relative; flex: none; display: flex; align-items: center; padding: 0 var(--ui-sp-1); border-left: 1px solid var(--ui-border); }
+.ui-tab-strip-more .ui-menu.dropdown { max-height: 60vh; overflow-y: auto; }
