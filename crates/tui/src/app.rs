@@ -527,6 +527,8 @@ pub struct Hits {
     pub last_click: Option<(std::time::Instant, u16, u16)>,
     /// 콘솔 커서를 그린 화면 칸과 그때 커서 (줄, 칸) — 마우스 위치를 글자 위치로 바꿀 때 (tui-textarea 는 스크롤 위치를 공개하지 않는다)
     pub caret: Option<(u16, u16, usize, usize)>,
+    /// 글 탭 (DDL·다이어그램) 본문 — 휠로 스크롤
+    pub text: ratatui::layout::Rect,
     /// 워크스페이스 띠: (번호, 영역)
     pub workspaces: Vec<(usize, ratatui::layout::Rect)>,
 }

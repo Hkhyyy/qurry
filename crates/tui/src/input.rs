@@ -20,6 +20,13 @@ fn scroll_at(app: &mut App, x: u16, y: u16, d: isize) {
         if let Some(TabKind::Redis(r)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind) {
             r.focus_value = true;
         }
+    } else if inside(app.hits.text, x, y) {
+        // 글 탭 (DDL·다이어그램): 그 글을 스크롤
+        app.focus = Focus::Grid;
+        if let Some(TabKind::Text(t)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind) {
+            t.scroll = (t.scroll as isize + d).max(0) as u16;
+        }
+        return;
     } else if inside(app.hits.redis_keys, x, y) {
         if let Some(TabKind::Redis(r)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind) {
             r.focus_value = false;
@@ -583,10 +590,34 @@ fn tree_key(app: &mut App, k: KeyEvent) {
 /// OSC 52 로 클립보드 복사 (대부분의 최신 터미널 지원)
 pub fn copy(app: &mut App, text: &str) {
     use std::io::Write;
-    let b64 = base64_encode(text.as_bytes());
-    let _ = write!(std::io::stdout(), "\x1b]52;c;{b64}\x07");
-    let _ = std::io::stdout().flush();
-    app.status = format!("Copied: {}", text.chars().take(60).collect::<String>());
+    // 이 컴퓨터에서 돌면 시스템 클립보드에 바로 (OSC 52 를 막거나 크기를 자르는 터미널이 많다). SSH 로 붙었으면 OSC 52 만 (원격 클립보드는 의미가 없다)
+    let native = std::env::var_os("SSH_CONNECTION").is_none() && std::env::var_os("SSH_TTY").is_none() && native_copy(text);
+    if !native {
+        let b64 = base64_encode(text.as_bytes());
+        let _ = write!(std::io::stdout(), "\x1b]52;c;{b64}\x07");
+        let _ = std::io::stdout().flush();
+    }
+    let lines = text.lines().count();
+    app.status = if lines > 1 { format!("Copied {lines} lines") } else { format!("Copied: {}", text.chars().take(60).collect::<String>()) };
+}
+
+/// pbcopy (macOS) · wl-copy / xclip (Linux). 성공하면 true
+fn native_copy(text: &str) -> bool {
+    use std::io::Write;
+    // 테스트가 쓰는 사람의 클립보드를 덮어쓰지 않게
+    if cfg!(test) {
+        return false;
+    }
+    use std::process::{Command, Stdio};
+    let tools: &[(&str, &[&str])] = if cfg!(target_os = "macos") { &[("pbcopy", &[])] } else { &[("wl-copy", &[]), ("xclip", &["-selection", "clipboard"])] };
+    for (cmd, args) in tools {
+        let Ok(mut child) = Command::new(cmd).args(*args).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() else { continue };
+        let wrote = child.stdin.take().is_some_and(|mut w| w.write_all(text.as_bytes()).is_ok());
+        if wrote && child.wait().is_ok_and(|s| s.success()) {
+            return true;
+        }
+    }
+    false
 }
 fn base64_encode(b: &[u8]) -> String {
     const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -689,6 +720,9 @@ fn grid_key(app: &mut App, k: KeyEvent) {
             KeyCode::Up | KeyCode::Char('k') => tt.scroll = tt.scroll.saturating_sub(1),
             KeyCode::PageDown => tt.scroll = tt.scroll.saturating_add(20),
             KeyCode::PageUp => tt.scroll = tt.scroll.saturating_sub(20),
+            KeyCode::Home | KeyCode::Char('g') => tt.scroll = 0,
+            // 화면에 맞춰 마지막 줄까지 (그릴 때 줄인다)
+            KeyCode::End | KeyCode::Char('G') => tt.scroll = u16::MAX,
             KeyCode::Char('y') => {
                 let s = tt.text.clone();
                 copy(app, &s)
@@ -2014,5 +2048,27 @@ mod tests {
         h.paste("PERCENT");
         assert!(!h.table(id).grid.as_ref().unwrap().edits.contains_key(&(0, 1)));
     }
-}
 
+    /// 글 탭 (다이어그램·DDL): 휠로 스크롤, 끝을 넘지 않고, g/G 로 처음·끝
+    #[tokio::test]
+    async fn text_tab_scrolls_with_the_wheel() {
+        let mut h = Harness::new().await;
+        let text = (1..=200).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        h.app.push_tab("test", "postgres".into(), "Diagram: public".into(), TabKind::Text(crate::app::TextTab { text, scroll: 0 }));
+        h.app.focus = Focus::Tree;
+        let screen = h.screen(100, 30);
+        assert!(screen.contains("y copies all"), "{screen}");
+        let r = h.app.hits.text;
+        crate::input::on_event(&mut h.app, Event::Mouse(crossterm::event::MouseEvent { kind: MouseEventKind::ScrollDown, column: r.x + 5, row: r.y + 5, modifiers: KeyModifiers::NONE }));
+        let scroll = |h: &Harness| match &h.app.tabs[h.app.active].kind {
+            TabKind::Text(t) => t.scroll,
+            _ => panic!(),
+        };
+        assert_eq!((scroll(&h), h.app.focus), (3, Focus::Grid), "the wheel scrolls the text, not the explorer");
+        h.key("G");
+        h.screen(100, 30);
+        assert_eq!(scroll(&h), 200 - (r.height - 2), "End stops at the last line");
+        h.key("g");
+        assert_eq!(scroll(&h), 0);
+    }
+}

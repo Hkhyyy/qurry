@@ -97,6 +97,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let [main, status] = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(f.area());
     // 워크스페이스가 둘 이상이면 맨 위 한 줄: 1 Default │ 2 Reports (Alt+n · 클릭)
     app.hits.workspaces.clear();
+    app.hits.text = Rect::default();
     let main = if app.workspaces.len() > 1 {
         let [bar, rest] = Layout::vertical([Constraint::Length(1), Constraint::Min(2)]).areas(main);
         draw_workspaces(f, app, bar);
@@ -468,8 +469,14 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             }
         }
         TabKind::Text(t) => {
-            let p = Paragraph::new(t.text.as_str()).scroll((t.scroll, 0)).block(block(format!(" {title} "), focus != Focus::Tree));
+            // 끝을 넘어 내리지 않는다 (마지막 줄이 맨 아래에 오도록)
+            let lines = t.text.lines().count() as u16;
+            t.scroll = t.scroll.min(lines.saturating_sub(body.height.saturating_sub(2)));
+            let p = Paragraph::new(t.text.as_str()).scroll((t.scroll, 0)).block(block(format!(" {title} — {lines} lines · ↑↓ PgUp/PgDn wheel scroll · y copies all "), focus != Focus::Tree));
             f.render_widget(p, body);
+            if focused {
+                app.hits.text = body;
+            }
         }
         TabKind::Dba(d) => {
             // 위 한 줄: 무엇을 보는지 · 아래: 표 (또는 무엇을 켜야 하는지)
