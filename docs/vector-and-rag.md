@@ -1,5 +1,7 @@
 # Vector databases and AI search (RAG)
 
+English | [한국어](ko/vector-and-rag.md)
+
 **Qdrant, Chroma, Milvus** — the explorer lists collections with their vector size and distance and the payload / metadata fields (guessed from 50 points); opening one shows its points as rows (long vectors are shortened). The console sends REST requests: a `METHOD /path` line and an optional JSON body on the next lines (unquoted keys and trailing commas are fine). Run the request under the cursor as usual.
 
 ```

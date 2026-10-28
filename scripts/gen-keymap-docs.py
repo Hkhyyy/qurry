@@ -1,5 +1,5 @@
 """사용설명서의 단축키 표를 GUI(src/lib/keymap.ts)·TUI(crates/tui/src/help.rs) 에서 다시 만든다.
-사용: python3 scripts/gen-keymap-docs.py  (docs/shortcuts-gui.md · shortcuts-tui.md 의 <!-- keymap:…:start/end --> 사이를 교체)"""
+사용: python3 scripts/gen-keymap-docs.py  (docs/ 와 docs/ko/ 의 shortcuts-gui.md · shortcuts-tui.md 에서 <!-- keymap:…:start/end --> 사이를 교체)"""
 import re, pathlib
 root = pathlib.Path(__file__).resolve().parent.parent
 
@@ -45,7 +45,8 @@ def tui():
     return "\n".join(out)
 
 for name, body in (("gui", gui()), ("tui", tui())):
-    doc = root / "docs" / f"shortcuts-{name}.md"
-    text = re.sub(rf"(<!-- keymap:{name}:start -->).*?(<!-- keymap:{name}:end -->)", lambda m: m.group(1) + "\n" + body + "\n\n" + m.group(2), doc.read_text(), flags=re.S)
-    doc.write_text(text)
+    # 영어판과 한국어판 (표는 같고, 설명은 앱 화면 문구 그대로)
+    for doc in (root / "docs" / f"shortcuts-{name}.md", root / "docs" / "ko" / f"shortcuts-{name}.md"):
+        text = re.sub(rf"(<!-- keymap:{name}:start -->).*?(<!-- keymap:{name}:end -->)", lambda m: m.group(1) + "\n" + body + "\n\n" + m.group(2), doc.read_text(), flags=re.S)
+        doc.write_text(text)
 print("docs keymap updated")

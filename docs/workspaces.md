@@ -1,5 +1,7 @@
 # Workspaces
 
+English | [한국어](ko/workspaces.md)
+
 Keep separate sets of tabs and split panes — one for a production incident, one for a report you are writing — and switch between them without losing anything: consoles keep their session, open transactions and results while you are elsewhere.
 
 - **GUI**: the thin bar at the far left lists the workspaces (`+` makes one; right-click to rename or delete). `⌥1`…`⌥9` switches; right-click a tab › **Move to Workspace**.

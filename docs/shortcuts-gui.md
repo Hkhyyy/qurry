@@ -1,5 +1,7 @@
 # GUI keyboard shortcuts
 
+English | [한국어](ko/shortcuts-gui.md)
+
 Inside the app the same list is searchable via **Help › Keymap Reference**, the ⌨ toolbar button, or `⇧⌘/`. **Find Action** (`⇧⌘A`) lists every command together with its shortcut.
 On Windows/Linux read `⌘` as `Ctrl` and `⌥` as `Alt`.
 

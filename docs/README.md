@@ -1,5 +1,7 @@
 # Qurry user guide
 
+English | [한국어](ko/README.md)
+
 Everything Qurry does, chapter by chapter. Start with **Getting started** if you are new; the shortcut chapters are references to come back to.
 
 | Chapter | What's in it |

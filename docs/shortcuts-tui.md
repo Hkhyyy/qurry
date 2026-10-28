@@ -1,5 +1,7 @@
 # TUI keyboard shortcuts
 
+English | [한국어](ko/shortcuts-tui.md)
+
 Keys are written as macOS shows them: `⌃` Control, `⌥` Option, `⇧` Shift. On Linux read `⌃` as `Ctrl` and `⌥` as `Alt` (the TUI shows them that way there).
 
 Press **F1** inside `qurry-tui`, or run `qurry-tui --help`, to see the same list. In the F1 window the **Commands** at the top can be changed: select one, press Enter and then the new key (`a` adds a second key, `Del` resets it). The mouse works too: click to select, double-click to open or edit, scroll with the wheel.

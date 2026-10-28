@@ -1,5 +1,7 @@
 # MCP server (AI tools)
 
+English | [한국어](ko/mcp.md)
+
 ```bash
 claude mcp add qurry -- qurry-mcp                   # read-only (default)
 claude mcp add qurry-rw -- qurry-mcp --allow-write  # adds the execute tool

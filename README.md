@@ -29,6 +29,8 @@ The desktop app (macOS `.dmg`, Linux `.AppImage` / `.deb`) and the TUI archives 
 
 ## User guide
 
+Also in Korean: [한국어 사용설명서](docs/ko/README.md)
+
 - [Getting started](docs/getting-started.md) — install, first data source, first query
 - [Data sources](docs/data-sources.md) — supported databases, SSH / SSL, Production mode, drivers
 - [Workspaces](docs/workspaces.md)

@@ -1,5 +1,7 @@
 # Development
 
+English | [한국어](ko/development.md)
+
 Building from source, how the code is laid out, and the tests.
 
 ## Build & run
@@ -57,7 +59,9 @@ Driver and vector database tests run when their server is given as `host:port:us
 
 TUI tests can drive the app without a database: `crates/tui/src/testkit.rs` opens table tabs with fixed rows, sends keys (`h.key("Ctrl+A")`, `h.type_str("ban")`) and renders the screen to text (`h.screen(120, 30)`). See the tests at the end of `crates/tui/src/input.rs`.
 
-After changing a shortcut, regenerate the tables in [shortcuts-gui.md](shortcuts-gui.md) and [shortcuts-tui.md](shortcuts-tui.md) with `python3 scripts/gen-keymap-docs.py`.
+## Docs
+
+The user guide is in English (`docs/`) and Korean (`docs/ko/`), chapter for chapter. A change to a feature updates both. After changing a shortcut, regenerate the tables in both languages' [shortcuts-gui.md](shortcuts-gui.md) and [shortcuts-tui.md](shortcuts-tui.md) with `python3 scripts/gen-keymap-docs.py`.
 
 ---
 

@@ -1,5 +1,7 @@
 # Getting started
 
+English | [한국어](ko/getting-started.md)
+
 How to install Qurry, keep it up to date and get from an empty window to your first query.
 
 ## Install
