@@ -182,7 +182,7 @@ FROM (
         LEFT JOIN pg_attribute a2 ON ic.indkey[ic.attpos] = 0 AND a2.attrelid = ic.idxoid AND a2.attnum = ic.attpos
       ) i
       JOIN pg_namespace n ON n.oid = i.relnamespace
-      JOIN pg_stats s ON s.schemaname = n.nspname AND s.tablename = i.attrelname AND s.attname = i.attname
+      JOIN pg_stats s ON s.schemaname = n.nspname AND s.tablename = i.attrelname AND s.attname = i.attname AND NOT s.inherited
       WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_toast'
       GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
     ) d
