@@ -15,7 +15,10 @@ use std::path::{Path, PathBuf};
 
 pub struct SecretFile {
     path: PathBuf,
-    cipher: Aes256Gcm,
+    dir: PathBuf,
+    /// 키체인 모드는 처음 비밀번호가 필요할 때 연다 (앱 시작은 키체인과 상관없이. 못 열면 그 이유)
+    cipher: std::sync::OnceLock<Result<Aes256Gcm, String>>,
+    vault: std::sync::Arc<dyn KeyVault + Send + Sync>,
 }
 
 /// 마스터 키를 둔 곳
@@ -39,29 +42,41 @@ pub struct OsKeychain;
 const KEYCHAIN_SERVICE: &str = "Qurry";
 const KEYCHAIN_MARKER: &str = "secret.key.keychain";
 
+/// 키체인 호출은 따로 스레드에서 (리눅스 Secret Service 는 안에서 런타임을 돌려서, tokio 스레드에서 부르면 멈춘다)
+fn off_runtime<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+    std::thread::scope(|s| s.spawn(f).join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
+}
+
 impl KeyVault for OsKeychain {
     fn get(&self, account: &str) -> AppResult<Option<Vec<u8>>> {
-        let e = keyring::Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| AppError::Msg(format!("System keychain: {e}")))?;
-        match e.get_secret() {
-            Ok(k) => Ok(Some(k)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(AppError::Msg(format!("System keychain: {e}"))),
-        }
+        off_runtime(|| {
+            let e = keyring::Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| AppError::Msg(format!("System keychain: {e}")))?;
+            match e.get_secret() {
+                Ok(k) => Ok(Some(k)),
+                Err(keyring::Error::NoEntry) => Ok(None),
+                Err(e) => Err(AppError::Msg(format!("System keychain: {e}"))),
+            }
+        })
     }
     fn set(&self, account: &str, key: &[u8]) -> AppResult<()> {
-        keyring::Entry::new(KEYCHAIN_SERVICE, account).and_then(|e| e.set_secret(key)).map_err(|e| AppError::Msg(format!("System keychain: {e}")))
+        off_runtime(|| keyring::Entry::new(KEYCHAIN_SERVICE, account).and_then(|e| e.set_secret(key)).map_err(|e| AppError::Msg(format!("System keychain: {e}"))))
     }
     fn delete(&self, account: &str) -> AppResult<()> {
-        match keyring::Entry::new(KEYCHAIN_SERVICE, account).and_then(|e| e.delete_credential()) {
+        off_runtime(|| match keyring::Entry::new(KEYCHAIN_SERVICE, account).and_then(|e| e.delete_credential()) {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(AppError::Msg(format!("System keychain: {e}"))),
-        }
+        })
     }
 }
 
-/// 키체인 항목 이름: 설정 폴더마다 따로 (--config-dir 로 띄운 MCP · 테스트가 섞이지 않게)
-fn keychain_account(dir: &Path) -> String {
+/// 새 키체인 항목 이름: 설정 폴더마다 따로 (--config-dir 로 띄운 MCP · 테스트가 섞이지 않게)
+fn new_keychain_account(dir: &Path) -> String {
     format!("password key — {}", fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf()).display())
+}
+
+/// 지금 쓰는 키체인 항목 이름: 옮길 때 표시 파일에 적어 둔 것 (폴더를 옮기거나 다른 경로로 열어도 같은 항목)
+fn keychain_account(dir: &Path) -> String {
+    fs::read_to_string(dir.join(KEYCHAIN_MARKER)).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| new_keychain_account(dir))
 }
 
 pub fn key_location(dir: &Path) -> KeyLocation {
@@ -71,9 +86,9 @@ pub fn key_location(dir: &Path) -> KeyLocation {
 /// 마스터 키를 옮긴다 (비밀번호는 다시 암호화하지 않는다: 같은 키). 키체인에 넣으면 읽어 확인한 뒤 secret.key 를 지운다
 pub fn move_key(dir: &Path, to: KeyLocation, vault: &dyn KeyVault) -> AppResult<()> {
     let (key_path, marker) = (dir.join("secret.key"), dir.join(KEYCHAIN_MARKER));
-    let account = keychain_account(dir);
     match (key_location(dir), to) {
         (KeyLocation::File, KeyLocation::Keychain) => {
+            let account = new_keychain_account(dir);
             let key = fs::read(&key_path)?;
             vault.set(&account, &key)?;
             if vault.get(&account)?.as_deref() != Some(key.as_slice()) {
@@ -81,9 +96,15 @@ pub fn move_key(dir: &Path, to: KeyLocation, vault: &dyn KeyVault) -> AppResult<
                 return Err(AppError::Msg("The system keychain didn't keep the key — it stays in the file".into()));
             }
             write_private(&marker, account.as_bytes())?;
-            fs::remove_file(&key_path)?;
+            // 파일을 못 지우면 되돌린다 (표시 파일만 남으면 키를 두 곳에서 찾게 된다)
+            if let Err(e) = fs::remove_file(&key_path) {
+                let _ = fs::remove_file(&marker);
+                let _ = vault.delete(&account);
+                return Err(e.into());
+            }
         }
         (KeyLocation::Keychain, KeyLocation::File) => {
+            let account = keychain_account(dir);
             let key = vault.get(&account)?.ok_or_else(|| AppError::Msg("The key is not in the system keychain".into()))?;
             write_private(&key_path, &key)?;
             fs::remove_file(&marker)?;
@@ -129,17 +150,15 @@ pub(crate) fn private_dir(dir: &Path) -> AppResult<()> {
 
 impl SecretFile {
     pub fn open(dir: &Path) -> AppResult<Self> {
-        Self::open_with(dir, &OsKeychain)
+        Self::open_with(dir, std::sync::Arc::new(OsKeychain))
     }
 
-    pub fn open_with(dir: &Path, vault: &dyn KeyVault) -> AppResult<Self> {
+    pub fn open_with(dir: &Path, vault: std::sync::Arc<dyn KeyVault + Send + Sync>) -> AppResult<Self> {
         private_dir(dir)?;
+        let me = |cipher: std::sync::OnceLock<Result<Aes256Gcm, String>>| Self { path: dir.join("secrets.json"), dir: dir.to_path_buf(), cipher, vault: vault.clone() };
+        // 키체인 모드: 지금은 열지 않는다 (잠겨 있거나 SSH · 헤드리스여도 앱은 뜬다)
         if key_location(dir) == KeyLocation::Keychain {
-            // 키체인에 두기로 했으면 파일로 돌아가지 않는다 (새 키를 만들면 저장된 비밀번호를 못 푼다)
-            let key = vault.get(&keychain_account(dir))?.filter(|k| k.len() == 32).ok_or_else(|| {
-                AppError::Msg(format!("The password key is not in the system keychain (see {}) — allow Qurry in the keychain, or restore the key", dir.join(KEYCHAIN_MARKER).display()))
-            })?;
-            return Ok(Self { path: dir.join("secrets.json"), cipher: Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key)) });
+            return Ok(me(std::sync::OnceLock::new()));
         }
         let key_path = dir.join("secret.key");
         let secrets_path = dir.join("secrets.json");
@@ -159,7 +178,24 @@ impl SecretFile {
                 k
             }
         };
-        Ok(Self { path: dir.join("secrets.json"), cipher: Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key)) })
+        Ok(me(std::sync::OnceLock::from(Ok(Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key))))))
+    }
+
+    /// 키를 지금 읽어 둔다 (키를 옮기기 전: 옮긴 뒤에도 이 저장소가 같은 키를 쓰게)
+    pub fn ensure_key(&self) -> AppResult<()> {
+        self.cipher().map(|_| ())
+    }
+
+    /// 암호 키: 키체인 모드면 처음 부를 때 키체인에서 (못 읽으면 이유, 새 키는 만들지 않는다 — 저장된 비밀번호를 못 풀게 된다)
+    fn cipher(&self) -> AppResult<&Aes256Gcm> {
+        self.cipher
+            .get_or_init(|| match self.vault.get(&keychain_account(&self.dir)) {
+                Ok(Some(k)) if k.len() == 32 => Ok(Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&k))),
+                Ok(_) => Err(format!("The password key is not in the system keychain (see {}) — restore it, or delete that file and secrets.json to start over", self.dir.join(KEYCHAIN_MARKER).display())),
+                Err(e) => Err(format!("{e} — allow Qurry to use the keychain (saved passwords can't be read until then)")),
+            })
+            .as_ref()
+            .map_err(|e| AppError::Msg(e.clone()))
     }
 
     /// 없으면 빈 목록. 읽을 수 없거나 깨졌으면 오류 (빈 목록으로 보고 저장하면 나머지 비밀번호가 다 사라진다)
@@ -187,7 +223,7 @@ impl SecretFile {
         let mut nonce = [0u8; 12];
         rand::thread_rng().fill_bytes(&mut nonce);
         let ct = self
-            .cipher
+            .cipher()?
             .encrypt(Nonce::from_slice(&nonce), Payload { msg: v.as_bytes(), aad: name.as_bytes() })
             .map_err(|_| AppError::Msg("encryption failed".into()))?;
         let mut raw = nonce.to_vec();
@@ -196,26 +232,27 @@ impl SecretFile {
     }
 
     /// (값, 예전 형식이었는지)
-    fn open_entry(&self, name: &str, enc: &str) -> Option<(String, bool)> {
+    fn open_entry(&self, cipher: &Aes256Gcm, name: &str, enc: &str) -> Option<(String, bool)> {
         let raw = base64::engine::general_purpose::STANDARD.decode(enc).ok()?;
         if raw.len() < 12 {
             return None;
         }
         let (nonce, ct) = raw.split_at(12);
         // 이름을 AAD 로 묶어 둔다 (다른 항목의 암호문을 옮겨 붙이면 풀리지 않게)
-        if let Ok(pt) = self.cipher.decrypt(Nonce::from_slice(nonce), Payload { msg: ct, aad: name.as_bytes() }) {
+        if let Ok(pt) = cipher.decrypt(Nonce::from_slice(nonce), Payload { msg: ct, aad: name.as_bytes() }) {
             return String::from_utf8(pt).ok().map(|s| (s, false));
         }
         // 예전 형식 (AAD 없음): 읽으면 바로 새 형식으로 다시 저장한다
-        String::from_utf8(self.cipher.decrypt(Nonce::from_slice(nonce), ct).ok()?).ok().map(|s| (s, true))
+        String::from_utf8(cipher.decrypt(Nonce::from_slice(nonce), ct).ok()?).ok().map(|s| (s, true))
     }
 
     pub fn get(&self, name: &str) -> AppResult<Option<String>> {
         if !self.load()?.contains_key(name) {
             return Ok(None);
         }
+        let cipher = self.cipher()?;
         self.locked(|all| {
-            let Some((v, legacy)) = all.get(name).and_then(|enc| self.open_entry(name, enc)) else { return Ok((None, false)) };
+            let Some((v, legacy)) = all.get(name).and_then(|enc| self.open_entry(cipher, name, enc)) else { return Ok((None, false)) };
             if legacy {
                 all.insert(name.to_string(), self.seal(name, &v)?);
             }
@@ -332,18 +369,21 @@ mod tests {
     #[test]
     fn master_key_moves_between_file_and_keychain() {
         let dir = std::env::temp_dir().join(format!("dbtool-secrets-{}", uuid::Uuid::new_v4()));
-        let vault = MemVault::default();
-        SecretFile::open_with(&dir, &vault).unwrap().set("a", Some("pw")).unwrap();
-        move_key(&dir, KeyLocation::Keychain, &vault).unwrap();
+        let vault = std::sync::Arc::new(MemVault::default());
+        SecretFile::open_with(&dir, vault.clone()).unwrap().set("a", Some("pw")).unwrap();
+        move_key(&dir, KeyLocation::Keychain, &*vault).unwrap();
         assert_eq!(key_location(&dir), KeyLocation::Keychain);
         assert!(!dir.join("secret.key").exists());
-        assert_eq!(SecretFile::open_with(&dir, &vault).unwrap().get("a").unwrap().as_deref(), Some("pw"));
-        assert!(SecretFile::open_with(&dir, &MemVault::default()).is_err(), "no key in the keychain: don't start over");
+        assert_eq!(SecretFile::open_with(&dir, vault.clone()).unwrap().get("a").unwrap().as_deref(), Some("pw"));
+        // 키체인에 키가 없어도 연다 (앱은 뜬다), 비밀번호를 쓸 때 이유를 알린다. 새 키는 만들지 않는다
+        let empty = SecretFile::open_with(&dir, std::sync::Arc::new(MemVault::default())).unwrap();
+        assert!(empty.get("a").is_err() && empty.set("b", Some("x")).is_err());
+        assert!(empty.contains("a"));
         assert!(!dir.join("secret.key").exists());
-        move_key(&dir, KeyLocation::File, &vault).unwrap();
+        move_key(&dir, KeyLocation::File, &*vault).unwrap();
         assert_eq!(key_location(&dir), KeyLocation::File);
         assert!(vault.0.lock().unwrap().is_empty());
-        assert_eq!(SecretFile::open_with(&dir, &vault).unwrap().get("a").unwrap().as_deref(), Some("pw"));
+        assert_eq!(SecretFile::open_with(&dir, vault.clone()).unwrap().get("a").unwrap().as_deref(), Some("pw"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -354,7 +394,7 @@ mod tests {
         let s = SecretFile::open(&dir).unwrap();
         let mut nonce = [0u8; 12];
         rand::thread_rng().fill_bytes(&mut nonce);
-        let ct = s.cipher.encrypt(Nonce::from_slice(&nonce), b"old".as_ref()).unwrap();
+        let ct = s.cipher().unwrap().encrypt(Nonce::from_slice(&nonce), b"old".as_ref()).unwrap();
         let enc = base64::engine::general_purpose::STANDARD.encode([nonce.to_vec(), ct].concat());
         std::fs::write(dir.join("secrets.json"), serde_json::json!({ "a": enc }).to_string()).unwrap();
         assert_eq!(s.get("a").unwrap().as_deref(), Some("old"));
