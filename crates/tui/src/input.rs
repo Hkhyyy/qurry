@@ -1790,6 +1790,19 @@ mod tests {
         assert!(h.app.popup.is_none(), "must not offer to kill a session that is gone");
     }
 
+    /// DB 값 · 이름 · 오류 · 상태줄의 제어 문자 (ESC, C1, 방향 바꾸기) 는 터미널로 나가지 않는다
+    #[tokio::test]
+    async fn control_characters_never_reach_the_terminal() {
+        let mut h = Harness::new().await;
+        let evil = "a\u{1b}]52;c;cm0gLXJmIH4=\u{7}b\u{1b}[2Jc\u{9b}31md\u{202e}gpj.exe";
+        h.table_tab(evil, &[evil, "id"], &[&[evil, "1"]], &[]);
+        h.app.status = format!("Copied: {evil}");
+        let s = h.screen(160, 20);
+        let bad: Vec<char> = s.chars().filter(|c| (c.is_control() && *c != '\n') || ('\u{202a}'..='\u{202e}').contains(c) || ('\u{2066}'..='\u{2069}').contains(c)).collect();
+        assert!(bad.is_empty(), "{bad:?}");
+        assert!(s.contains("]52;c;"), "the rest of the text is still shown");
+    }
+
     /// 새 Data Source 는 MCP 에 보이지 않게 시작한다. 예전 소스는 MCP 칸을 고치지 않으면 정하지 않은 채로 둔다
     #[tokio::test]
     async fn conn_form_mcp_default() {
