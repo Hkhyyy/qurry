@@ -596,8 +596,10 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn mysql_plaintext_is_reported() {
-        let Pool::My(tls) = crate::db::connect(&cfg(), Some("dbtool")).await.expect("connect") else { unreachable!() };
-        assert_eq!(plaintext_note(&tls, &cfg()).await, None, "the test server speaks TLS");
+        // 기본 접속: TLS 가 되면 말하지 않고, 안 돼서 평문으로 붙었으면 (TLS 1.2 를 못 하는 MySQL 5.7) 알린다
+        let Pool::My(auto) = crate::db::connect(&cfg(), Some("dbtool")).await.expect("connect") else { unreachable!() };
+        let (_, cipher): (String, String) = sqlx::query_as("SHOW SESSION STATUS LIKE 'Ssl_cipher'").fetch_one(&auto).await.unwrap();
+        assert_eq!(plaintext_note(&auto, &cfg()).await.is_some(), cipher.is_empty());
         let opts = sqlx::mysql::MySqlConnectOptions::new().host("127.0.0.1").port(13306).username("root").password("dbtool").ssl_mode(sqlx::mysql::MySqlSslMode::Disabled);
         let plain = sqlx::mysql::MySqlPoolOptions::new().max_connections(1).connect_with(opts).await.unwrap();
         assert!(plaintext_note(&plain, &cfg()).await.is_some_and(|n| n.contains("Not encrypted")));
