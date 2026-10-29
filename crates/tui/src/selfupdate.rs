@@ -99,7 +99,7 @@ pub async fn install(quiet: bool) -> std::io::Result<Outcome> {
         return Err(err(format!("refusing to download from an unexpected address: {}", asset.url)));
     }
     if !quiet {
-        print!("{}", update::changes_text(&rel.changes_since(cur)));
+        print!("{}", update::changes_text(&rel.changes_since(cur)).chars().filter(|c| *c == '\n' || !crate::ui::is_unsafe_char(*c)).collect::<String>());
         println!("Updating qurry-tui {cur} → {} …", rel.version);
     }
     let paths = tokio::task::spawn_blocking(move || replace(&exe, &asset, &sums, &sums_sig, quiet)).await.map_err(err)??;

@@ -101,6 +101,22 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.popup.is_some() {
         draw_popup(f, app);
     }
+    sanitize(f.buffer_mut());
+}
+
+/// 터미널을 조종할 수 있는 글자인지: C0 · DEL · C1 (ESC 시퀀스, OSC 52 클립보드, 화면 지우기 …) 와 글 방향 바꾸기
+pub fn is_unsafe_char(c: char) -> bool {
+    c.is_control() || matches!(c, '\u{200e}' | '\u{200f}' | '\u{061c}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+}
+
+/// 그린 화면에서 그런 글자를 뺀다. DB 값 · 이름 · 오류 · 상태줄 어디에서 왔든 마지막에 한 번 (ratatui 의 Span 은 거르지 않는다)
+fn sanitize(buf: &mut ratatui::buffer::Buffer) {
+    for cell in buf.content.iter_mut() {
+        if cell.symbol().chars().any(is_unsafe_char) {
+            let clean: String = cell.symbol().chars().filter(|c| !is_unsafe_char(*c)).collect();
+            cell.set_symbol(if clean.is_empty() { " " } else { &clean });
+        }
+    }
 }
 
 fn draw_workspaces(f: &mut Frame, app: &mut App, area: Rect) {
