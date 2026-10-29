@@ -418,6 +418,7 @@ fn pg_env(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str, 
     cmd.env("PGCONNECT_TIMEOUT", "10");
     match cfg.active_ssl() {
         Some(s) => {
+            crate::db::check_ssl_mode(s.mode())?;
             cmd.env("PGSSLMODE", s.mode());
             for (k, v) in [("PGSSLROOTCERT", &s.ca_file), ("PGSSLCERT", &s.cert_file), ("PGSSLKEY", &s.key_file)] {
                 if !v.is_empty() {
@@ -425,8 +426,9 @@ fn pg_env(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str, 
                 }
             }
         }
+        // Same rule as the app: a remote server must set up TLS unless plain text is allowed
         None => {
-            cmd.env("PGSSLMODE", "prefer");
+            cmd.env("PGSSLMODE", if crate::db::plaintext_allowed(cfg, host) { "prefer" } else { "require" });
         }
     }
     Ok(pass)
@@ -444,7 +446,11 @@ fn my_args(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str,
     };
     cmd.env_remove("MYSQL_PWD");
     cmd.arg("-h").arg(host).arg("-P").arg(port.to_string()).arg("-u").arg(user).arg("--protocol=TCP");
+    if cfg.active_ssl().is_none() && !crate::db::plaintext_allowed(cfg, host) {
+        cmd.arg("--ssl-mode=REQUIRED");
+    }
     if let Some(s) = cfg.active_ssl() {
+        crate::db::check_ssl_mode(s.mode())?;
         cmd.arg(format!("--ssl-mode={}", match s.mode() { "verify-full" => "VERIFY_IDENTITY", "verify-ca" => "VERIFY_CA", _ => "REQUIRED" }));
         for (k, v) in [("--ssl-ca", &s.ca_file), ("--ssl-cert", &s.cert_file), ("--ssl-key", &s.key_file)] {
             if !v.is_empty() {
