@@ -82,13 +82,23 @@ pub fn find_tool(name: &str) -> Option<PathBuf> {
 /// Tool matching the server major version: the closest one at or above the server (pg_dump can't be used if older than the server, and if too new it emits SETs an old server doesn't know).
 /// If none is at or above the server, the highest one (the tool reports the version mismatch)
 pub fn find_tool_for(name: &str, server_major: Option<u64>) -> Option<PathBuf> {
+    find_tool_where(name, server_major, |_| true)
+}
+
+/// find_tool_for among only the builds whose version passes `ok` (so an older build that passes isn't skipped for a closer one that doesn't)
+fn find_tool_where(name: &str, server_major: Option<u64>, ok: impl Fn(&[u64]) -> bool) -> Option<PathBuf> {
     let mut found: Vec<PathBuf> = tool_dirs().into_iter().map(|d| d.join(name)).filter(|p| p.is_file()).collect();
     found.dedup();
     // MariaDB's 10.x / 11.x version numbers aren't comparable with MySQL's, so a MySQL build wins when both exist
     if name.starts_with("mysql") && found.iter().any(|p| !is_mariadb(p)) {
         found.retain(|p| !is_mariadb(p));
     }
-    let mut with_v: Vec<(Vec<u64>, PathBuf)> = found.into_iter().map(|p| (version_of(&p), p)).collect();
+    closest(found.into_iter().map(|p| (version_of(&p), p)).collect(), server_major, ok)
+}
+
+/// The pick of find_tool_where from (version, path) pairs
+fn closest(mut with_v: Vec<(Vec<u64>, PathBuf)>, server_major: Option<u64>, ok: impl Fn(&[u64]) -> bool) -> Option<PathBuf> {
+    with_v.retain(|(v, _)| ok(v));
     with_v.sort();
     if let Some(m) = server_major
         && let Some((_, p)) = with_v.iter().find(|(v, _)| v.first().is_some_and(|&x| x >= m))
@@ -205,6 +215,29 @@ fn psql_restricts(v: &[u64]) -> bool {
         16 => minor >= 10,
         17 => minor >= 6,
         _ => true,
+    }
+}
+
+/// psql for plain SQL: its commands (\! · \o · \copy … program · \connect …) are switched off with \restrict, so only a psql that knows it is used —
+/// the closest such one to the server. An older psql can't switch its commands off: plain SQL isn't restored with it
+fn restricting_psql(server: Option<u64>) -> AppResult<PathBuf> {
+    if let Some(p) = find_tool_where("psql", server, psql_restricts) {
+        return Ok(p);
+    }
+    let found = find_tool_for("psql", server).ok_or_else(|| missing("psql"))?;
+    Err(AppError::Msg(format!(
+        "Restoring a .sql file needs psql 17.6 / 16.10 / 15.14 / 14.19 / 13.22 or newer (it can switch psql commands off; found {}). Update the PostgreSQL client tools (macOS: brew upgrade libpq · Ubuntu: the postgresql-client package)",
+        version_label(&found)
+    )))
+}
+
+/// "16.9 (/usr/bin/psql)", or "/usr/bin/psql, version unknown" when --version can't be read
+fn version_label(tool: &Path) -> String {
+    let v = version_of(tool);
+    if v.is_empty() {
+        format!("{}, version unknown", tool.display())
+    } else {
+        format!("{} ({})", v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join("."), tool.display())
     }
 }
 
@@ -510,16 +543,7 @@ impl AppState {
                     let _expanded = sql_file.clone().map(SecretTemp);
                     if !custom || sql_file.is_some() {
                         let src0 = sql_file.clone().unwrap_or_else(|| file.clone());
-                        let tool = find_tool_for("psql", server).ok_or_else(|| missing("psql"))?;
-                        // psql commands (\! · \o · \copy … program · \connect …) are disabled with \restrict. For older psql that doesn't know it, read the lines
-                        // An older psql can't switch its commands off: don't restore plain SQL with it
-                        let v = version_of(&tool);
-                        if !psql_restricts(&v) {
-                            return Err(AppError::Msg(format!(
-                                "Restoring a .sql file needs psql 17.6 / 16.10 / 15.14 / 14.19 / 13.22 or newer (it can switch psql commands off; found {}). Update the PostgreSQL client tools (macOS: brew upgrade libpq · Ubuntu: the postgresql-client package)",
-                                v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(".")
-                            )));
-                        }
+                        let tool = restricting_psql(server)?;
                         let src = prepare_psql_input(&src0, server, Some(uuid::Uuid::new_v4().simple().to_string()))?;
                         // Removed however the restore ends (also when it's cancelled): it holds the whole dump and the key
                         let _input = SecretTemp(src.clone());
@@ -575,6 +599,20 @@ mod tests {
         assert_eq!(my_tls_args("verify-full", false), ["--ssl-mode=VERIFY_IDENTITY"]);
         assert_eq!(my_tls_args("require", true), ["--ssl"]);
         assert_eq!(my_tls_args("verify-ca", true), ["--ssl", "--ssl-verify-server-cert"]);
+    }
+
+    /// A psql without \restrict isn't picked over a newer one that has it, even when it is closer to the server
+    #[test]
+    fn picks_the_closest_psql_that_restricts() {
+        let c = |v: &[u64], p: &str| (v.to_vec(), PathBuf::from(p));
+        let all = vec![c(&[16, 9], "/a/psql16.9"), c(&[18, 0], "/b/psql18"), c(&[17, 6], "/c/psql17.6"), c(&[12, 22], "/d/psql12")];
+        assert_eq!(closest(all.clone(), Some(16), |_| true), Some("/a/psql16.9".into()));
+        assert_eq!(closest(all.clone(), Some(16), psql_restricts), Some("/c/psql17.6".into()));
+        assert_eq!(closest(all.clone(), Some(18), psql_restricts), Some("/b/psql18".into()));
+        // None at or above the server: the highest that qualifies
+        assert_eq!(closest(vec![c(&[16, 10], "/a"), c(&[16, 9], "/b")], Some(18), psql_restricts), Some("/a".into()));
+        assert_eq!(closest(vec![c(&[16, 9], "/a"), c(&[], "/b")], Some(16), psql_restricts), None);
+        assert_eq!(version_label(Path::new("/surely/not/psql")), "/surely/not/psql, version unknown");
     }
 
     #[test]
