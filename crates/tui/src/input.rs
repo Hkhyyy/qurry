@@ -1947,7 +1947,7 @@ mod tests {
         // 콘솔 편집기
         h.console_tab();
         let s = last(&h.screen(220, 20));
-        for want in [&disp("F5 run"), &disp("Ctrl+Space complete"), "⇧Tab result", &disp("Ctrl+E tabs"), &disp("Ctrl+P search")] {
+        for want in [&disp("F5 run"), &disp("Ctrl+Space complete"), &disp("⇧Tab result"), &disp("Ctrl+E tabs"), &disp("Ctrl+P search")] {
             assert!(s.contains(want), "editor: {want:?} in {s}");
         }
     }
