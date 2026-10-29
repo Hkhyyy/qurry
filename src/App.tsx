@@ -29,6 +29,7 @@ import { DEFAULT_FONT, editorFontSize, setEditorFontSize } from "./lib/prefs";
 import { bindings, eventSpec, formatSpec, hit, loadKeymap, onKeymapChange } from "./lib/shortcuts";
 import { invalidateCompletion } from "./lib/completion";
 import { useStatusWidgets } from "./lib/statusbar";
+import { tableTabLabels } from "./lib/tabLabels";
 import type { FtsRequest } from "./lib/api";
 import { isRelation, NodeInfo, revealInTree, schemaChanged } from "./components/SchemaTree";
 import { leaf, leaves, MAX_PANES, Pane, prunePanes, splitPane } from "./lib/panes";
@@ -281,6 +282,15 @@ export default function App() {
   const groupActive = (g: Group) => tabs.find((t) => t.id === activeIds[g] && t.group === g) ?? null;
   const active = groupActive(focused) ?? leaves(panes).map(groupActive).find(Boolean) ?? null;
   const activeConn = conns.find((c) => c.id === active?.connId);
+  // 같은 이름의 테이블 탭이 여럿이면 schema.table (스키마도 같으면 db.schema.table)
+  const tabLabels = useMemo(
+    () =>
+      tableTabLabels(
+        tabs.flatMap((t) => (t.kind === "table" && t.edit ? [{ id: t.id, db: t.database || conns.find((c) => c.id === t.connId)?.database || "", schema: t.edit.schema, table: t.edit.table }] : [])),
+      ),
+    [tabs, conns],
+  );
+  const labelOf = (t: Tab) => tabLabels.get(t.id) ?? t.title;
   /** 다른 워크스페이스에 있는 탭이면 거기서 바꾼다 (그 사이 끝난 쿼리 결과가 사라지지 않게) */
   const updStashed = (id: string, fn: (t: Tab) => Tab) => {
     for (const w of stash.current.values()) {
@@ -1578,7 +1588,7 @@ export default function App() {
     const ts = tabsRef.current;
     const ordered = [...mru.current.map((id) => ts.find((t) => t.id === id)).filter((t): t is Tab => !!t), ...ts.filter((t) => !mru.current.includes(t.id))];
     if (!ordered.length) return;
-    const items = ordered.map((t) => ({ key: t.id, icon: kindIcon(t.kind), title: t.title, hint: hintOf(t.connId, t.database), color: conns.find((c) => c.id === t.connId)?.color }));
+    const items = ordered.map((t) => ({ key: t.id, icon: kindIcon(t.kind), title: labelOf(t), hint: hintOf(t.connId, t.database), color: conns.find((c) => c.id === t.connId)?.color }));
     setSwitcher({ items, start: back ? items.length - 1 : 1 });
   };
   const recentItems = (): SwitchItem[] => {
@@ -1975,7 +1985,7 @@ export default function App() {
       <div className={"panel editor-group" + (split && focused === g ? " focused" : "")} onMouseDownCapture={() => setFocused(g)}>
         <TabStrip
           activeKey={ga?.id}
-          overflow={gTabs.map((t) => ({ key: t.id, label: t.title, active: t.id === ga?.id, onSelect: () => activate(t) }))}
+          overflow={gTabs.map((t) => ({ key: t.id, label: labelOf(t), active: t.id === ga?.id, onSelect: () => activate(t) }))}
           className={"tabs" + (dropHint?.zone === "tabs" && dropHint.g === g && dropHint.beforeId === null ? " drop-end" : "")}
           onDragOver={(e) => {
             if (!dragId) return;
@@ -1993,7 +2003,7 @@ export default function App() {
             return (
               <TabItem
                 key={t.id}
-                label={t.title}
+                label={labelOf(t)}
                 icon={t.kind === "table" ? "▦" : t.kind === "ddl" ? "ƒ" : t.kind === "redis" ? "◆" : t.kind === "dba" ? "◉" : t.kind === "erd" ? "⧉" : t.kind === "migrate" ? "⇄" : t.kind === "rag" ? "✦" : "⌘"}
                 iconClass={t.kind}
                 active={t.id === ga?.id}

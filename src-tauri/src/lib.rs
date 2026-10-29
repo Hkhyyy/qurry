@@ -148,6 +148,7 @@ pub fn run() {
             commands::rag_build,
             commands::rag_search,
             commands::completion_meta,
+            commands::column_hints,
             commands::object_ddl,
             commands::fetch_more,
             commands::cancel_query,

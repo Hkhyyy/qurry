@@ -34,6 +34,8 @@ pub enum ItemKind {
     Table,
     Schema,
     Keyword,
+    /// 컬럼 값 · json 키 (DB 에서 읽은 것)
+    Value,
 }
 
 #[derive(Clone, Debug)]
@@ -197,6 +199,131 @@ pub fn suggest(m: &Meta, text: &str, before: &str, db: &str) -> (usize, Vec<Item
     (n, items)
 }
 
+// ───────── 값 · json 키 추천 (GUI src/lib/valueHint.ts 와 같은 규칙) ─────────
+
+/// 값 추천 자리: `status = '` · `in ('a', '` · `like '` → 그 컬럼의 값, `data->>'` · `data->'a'->>'` (MySQL `->>'$.a.`) → json 키
+#[derive(Debug, Clone, PartialEq)]
+pub struct HintAt {
+    pub schema: String,
+    pub table: String,
+    pub column: String,
+    pub type_name: String,
+    pub path: Vec<String>,
+    pub keys: bool,
+    /// 따옴표 안에서 치는 중
+    pub quoted: bool,
+    /// 이미 친 글자
+    pub typed: String,
+}
+
+struct Ctx {
+    r#ref: Option<String>,
+    column: String,
+    path: Vec<String>,
+    keys: bool,
+    quoted: bool,
+    typed: String,
+}
+
+static RES: std::sync::LazyLock<[regex::Regex; 4]> = std::sync::LazyLock::new(|| {
+    let id = r#"(?:"[^"]+"|\w+)"#;
+    let expr = format!(r"(?:({id})\.)?({id})((?:\s*->>?\s*(?:'[^']*'|\d+))*)");
+    let op = r"\s*(?:=|<>|!=|(?:not\s+)?i?like|(?:not\s+)?in\s*\((?:\s*(?:'[^']*'|[\w.-]+)\s*,)*)\s*";
+    let my_val = format!(r#"(?:({id})\.)?({id})\s*->>?\s*'\$((?:\.(?:"[^"]*"|\w+))*)'"#);
+    [
+        regex::Regex::new(&format!(r#"(?:({id})\.)?({id})\s*->>?\s*'\$((?:\.(?:"[^"]*"|\w+))*)\.(\w*)$"#)).unwrap(),
+        regex::Regex::new(&format!(r"(?i){my_val}{op}(?:'([^']*)|([\w.-]*))$")).unwrap(),
+        regex::Regex::new(&format!(r"{expr}\s*->>?\s*'([^']*)$")).unwrap(),
+        regex::Regex::new(&format!(r"(?i){expr}{op}(?:'([^']*)|([\w.-]*))$")).unwrap(),
+    ]
+});
+
+fn unq(s: &str) -> String {
+    s.trim_matches('"').to_string()
+}
+
+fn path_of(seg: &str) -> Vec<String> {
+    static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"->>?\s*(?:'([^']*)'|(\d+))").unwrap());
+    RE.captures_iter(seg).map(|c| c.get(1).or(c.get(2)).map(|m| m.as_str().to_string()).unwrap_or_default()).collect()
+}
+
+fn my_path(p: &str) -> Vec<String> {
+    static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r#"\.(?:"([^"]*)"|(\w+))"#).unwrap());
+    RE.captures_iter(p).map(|c| c.get(1).or(c.get(2)).map(|m| m.as_str().to_string()).unwrap_or_default()).collect()
+}
+
+fn context(before: &str, mysql: bool) -> Option<Ctx> {
+    let g = |c: &regex::Captures, i: usize| c.get(i).map(|m| m.as_str().to_string());
+    let [my_keys, my_vals, keys, vals] = &*RES;
+    if mysql {
+        if let Some(c) = my_keys.captures(before) {
+            return Some(Ctx { r#ref: g(&c, 1).map(|s| unq(&s)), column: unq(&c[2]), path: my_path(&c[3]), keys: true, quoted: true, typed: c[4].to_string() });
+        }
+        if let Some(c) = my_vals.captures(before) {
+            return Some(Ctx { r#ref: g(&c, 1).map(|s| unq(&s)), column: unq(&c[2]), path: my_path(&c[3]), keys: false, quoted: c.get(4).is_some(), typed: g(&c, 4).or(g(&c, 5)).unwrap_or_default() });
+        }
+    }
+    if let Some(c) = keys.captures(before) {
+        if c[4].starts_with('$') {
+            return None;
+        }
+        return Some(Ctx { r#ref: g(&c, 1).map(|s| unq(&s)), column: unq(&c[2]), path: path_of(&c[3]), keys: true, quoted: true, typed: c[4].to_string() });
+    }
+    let c = vals.captures(before)?;
+    if ["where", "and", "or", "not", "set", "on", "select", "by"].iter().any(|k| c[2].eq_ignore_ascii_case(k)) {
+        return None;
+    }
+    Some(Ctx { r#ref: g(&c, 1).map(|s| unq(&s)), column: unq(&c[2]), path: path_of(&c[3]), keys: false, quoted: c.get(4).is_some(), typed: g(&c, 4).or(g(&c, 5)).unwrap_or_default() })
+}
+
+/// 커서가 값 · json 키 자리면 그 테이블 · 컬럼 (추천할 만한 컬럼일 때만)
+pub fn hint_at(m: &Meta, text: &str, before: &str, db: &str, mysql: bool) -> Option<HintAt> {
+    let ctx = context(before, mysql)?;
+    let refs = tables_in_statement(text);
+    let named: Vec<&(String, Option<String>)> = match &ctx.r#ref {
+        Some(q) => {
+            let q = q.to_lowercase();
+            refs.iter()
+                .find(|(_, a)| a.as_ref().is_some_and(|a| a.to_lowercase() == q))
+                .or_else(|| refs.iter().find(|(r, _)| r.rsplit('.').next().unwrap_or(r).to_lowercase() == q))
+                .into_iter()
+                .collect()
+        }
+        None => refs.iter().collect(),
+    };
+    let lc = ctx.column.to_lowercase();
+    let (t, (col, ty)) = named.iter().filter_map(|(r, _)| find_table(m, r, db)).find_map(|t| t.columns.iter().find(|(c, _)| c.to_lowercase() == lc).map(|c| (t, c)))?;
+    let ty_l = ty.to_lowercase();
+    let json = ty_l.contains("json");
+    let ok = if ctx.keys {
+        json
+    } else {
+        !["bytea", "blob", "binary", "geometry", "geography", "tsvector", "[]"].iter().any(|k| ty_l.contains(k)) && !ty_l.starts_with('_') && (!json || !ctx.path.is_empty())
+    };
+    ok.then(|| HintAt { schema: t.schema.clone(), table: t.name.clone(), column: col.clone(), type_name: ty.clone(), path: ctx.path, keys: ctx.keys, quoted: ctx.quoted, typed: ctx.typed })
+}
+
+/// 읽어 온 값 → 후보 (친 글자로 거른다). close = 따옴표를 닫아 줄지 (커서 뒤에 ' 가 없을 때)
+pub fn hint_items(h: &HintAt, hints: &[qurry_core::hints::Hint], close: bool) -> Vec<Item> {
+    let p = h.typed.to_lowercase();
+    let bare = !h.keys && h.path.is_empty() && ["int", "numeric", "decimal", "float", "double", "real", "serial", "bool", "bit", "money"].iter().any(|k| h.type_name.to_lowercase().contains(k));
+    hints
+        .iter()
+        .filter(|x| p.is_empty() || (x.value.to_lowercase().starts_with(&p) && x.value.to_lowercase() != p))
+        .map(|x| {
+            let esc = x.value.replace('\'', "''");
+            let insert = if h.quoted {
+                if close { format!("{esc}'") } else { esc }
+            } else if bare {
+                x.value.clone()
+            } else {
+                format!("'{esc}'")
+            };
+            Item { label: x.value.clone(), detail: format!("{} row{}{}", x.count, if x.count == 1 { "" } else { "s" }, if h.keys { " · key" } else { "" }), insert, kind: ItemKind::Value }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,6 +371,47 @@ mod tests {
         assert!(v.is_empty(), "{:?}", labels(&v));
         let (_, v) = suggest(&meta(), "sel", "sel", "app");
         assert_eq!(labels(&v), ["select"]);
+    }
+
+    fn hmeta() -> Meta {
+        let t = |s: &str, n: &str, cols: &[(&str, &str)]| CompletionTable { schema: s.into(), name: n.into(), columns: cols.iter().map(|(c, ty)| (c.to_string(), ty.to_string())).collect() };
+        Meta::new(vec![t("public", "orders", &[("id", "int8"), ("status", "varchar"), ("data", "jsonb"), ("raw", "bytea")]), t("public", "users", &[("id", "int8"), ("name", "text")])])
+    }
+
+    #[test]
+    fn hint_places() {
+        let m = hmeta();
+        let at = |before: &str| hint_at(&m, before, before, "app", false);
+        let h = at("select * from orders o where o.status = 'pa").unwrap();
+        assert_eq!((h.table.as_str(), h.column.as_str(), h.keys, h.quoted, h.typed.as_str()), ("orders", "status", false, true, "pa"));
+        let h = at("select * from orders where status in ('paid', '").unwrap();
+        assert_eq!((h.column.as_str(), h.quoted), ("status", true));
+        let h = at("select * from orders where data -> 'meta' ->> 'sr").unwrap();
+        assert_eq!((h.path.clone(), h.keys, h.typed.as_str()), (vec!["meta".to_string()], true, "sr"));
+        let h = at("select * from orders where data->>'kind' = '").unwrap();
+        assert_eq!((h.path.clone(), h.keys), (vec!["kind".to_string()], false));
+        assert!(!at("select * from orders where id = ").unwrap().quoted);
+        assert!(at("select * from orders where raw = '").is_none(), "bytea");
+        assert!(at("select * from orders where data = '").is_none(), "whole json");
+        assert!(at("select * from orders where ").is_none());
+        assert!(at("select * from orders where status = 'paid' and ").is_none());
+        assert!(at("select * from users where status = '").is_none(), "not a column of users");
+        let h = hint_at(&m, "select * from orders where data->>'$.meta.", "select * from orders where data->>'$.meta.", "app", true).unwrap();
+        assert_eq!((h.path.clone(), h.keys), (vec!["meta".to_string()], true));
+    }
+
+    #[test]
+    fn hint_inserts() {
+        let m = hmeta();
+        let hs = |v: &[&str]| v.iter().map(|x| qurry_core::hints::Hint { value: x.to_string(), count: 2 }).collect::<Vec<_>>();
+        let h = hint_at(&m, "select * from orders where status = 'p", "select * from orders where status = 'p", "app", false).unwrap();
+        let v = hint_items(&h, &hs(&["paid", "pa'y", "ready"]), true);
+        assert_eq!(v.iter().map(|i| i.insert.as_str()).collect::<Vec<_>>(), ["paid'", "pa''y'"]);
+        assert_eq!(hint_items(&h, &hs(&["paid"]), false)[0].insert, "paid", "closing quote already there");
+        let h = hint_at(&m, "select * from orders where status = ", "select * from orders where status = ", "app", false).unwrap();
+        assert_eq!(hint_items(&h, &hs(&["paid"]), false)[0].insert, "'paid'");
+        let h = hint_at(&m, "select * from orders where id = ", "select * from orders where id = ", "app", false).unwrap();
+        assert_eq!(hint_items(&h, &hs(&["7"]), false)[0].insert, "7");
     }
 
     #[test]

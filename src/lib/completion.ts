@@ -1,5 +1,6 @@
 import { monaco } from "./monaco";
 import { CompletionTable, meta } from "./api";
+import { hintable, hintContext, hintInsert } from "./valueHint";
 
 /** 콘솔(모델 URI) → 접속 id, 접속 id → 메타 캐시 */
 const modelConn = new Map<string, string>();
@@ -52,11 +53,38 @@ function findTable(all: CompletionTable[], ref: string) {
 
 for (const lang of ["pgsql", "mysql"]) {
   monaco.languages.registerCompletionItemProvider(lang, {
-    triggerCharacters: ["."],
+    // ' = 값 · json 키 추천 (따옴표를 치면 바로)
+    triggerCharacters: [".", "'"],
     async provideCompletionItems(model, position) {
       const connId = modelConn.get(model.uri.toString());
       const all = connId ? await (cache.get(connId) ?? load(connId)) : [];
       const K = monaco.languages.CompletionItemKind;
+
+      // 값 · json 키: where status = '… / data->>'…
+      const ctx = hintContext(model.getLineContent(position.lineNumber).slice(0, position.column - 1), lang === "mysql");
+      if (ctx && connId) {
+        const refs = tablesInStatement(model.getValue());
+        const named = ctx.ref ? refs.find((r) => r.alias?.toLowerCase() === ctx.ref!.toLowerCase()) ?? refs.find((r) => r.ref.split(".").pop()!.toLowerCase() === ctx.ref!.toLowerCase()) : undefined;
+        const cands = (named ? [named] : ctx.ref ? [] : refs).map((r) => findTable(all, r.ref)).filter((t): t is CompletionTable => !!t);
+        const t = cands.find((x) => x.columns.some(([c]) => c.toLowerCase() === ctx.column.toLowerCase()));
+        const col = t?.columns.find(([c]) => c.toLowerCase() === ctx.column.toLowerCase());
+        if (t && col && hintable(ctx, col[1])) {
+          const hints = await meta.hints(connId, { schema: t.schema, table: t.name, column: col[0], path: ctx.path, keys: ctx.keys }).catch(() => []);
+          const range = new monaco.Range(position.lineNumber, position.column - ctx.typed.length, position.lineNumber, position.column);
+          return {
+            suggestions: hints.map((h, i) => ({
+              label: { label: h.value, description: `${h.count.toLocaleString("en-US")} row${h.count === 1 ? "" : "s"}${ctx.keys ? " · key" : ""}` },
+              kind: ctx.keys ? K.Property : K.Value,
+              insertText: ctx.keys ? h.value.replace(/'/g, "''") : hintInsert(h.value, ctx, col[1]),
+              filterText: h.value,
+              sortText: String(i).padStart(4, "0"),
+              range,
+            })),
+          };
+        }
+        // 따옴표 안: 키워드 · 테이블은 맞지 않는다
+        if (ctx.quoted) return { suggestions: [] };
+      }
       const word = model.getWordUntilPosition(position);
       const range = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn);
       const line = model.getLineContent(position.lineNumber).slice(0, word.startColumn - 1);

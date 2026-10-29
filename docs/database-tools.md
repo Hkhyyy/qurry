@@ -70,6 +70,10 @@ The tables must already exist in the target ([Compare & migrate](#compare--migra
 
 GUI: in a result, View as (the eye icon) › **Chart**: bar, line or pie. Pick X and one or more Y columns; rows with the same X are summed, and **count** counts rows instead. Uses the rows already loaded. TUI: `⌃k` › Chart Result draws horizontal bars — the sum of the first number column by the first text column (or the row count).
 
+## Value suggestions in the console (PostgreSQL, MySQL)
+
+Completion also suggests what is actually in the table: after `status = '`, `status in ('paid', '` or `name like '` it lists the column's values, and after `data->>'` / `data->'meta'->>'` (MySQL `data->>'$.meta.`) the keys inside the json, most common first with their row counts. Typing the quote opens the list (`⌃Space` without a quote — numbers go in bare, text gets quoted). Only the first 5,000 rows (2,000 for json keys) are read, in a read-only transaction with a 3-second limit, and the answer is reused for 2 minutes. Binary columns and whole json values are not suggested.
+
 ## Query history & snippets
 
 Query history and snippets are kept in the config folder and shared by the GUI and the TUI (passwords in `PASSWORD '…'` / `IDENTIFIED BY '…'` are masked). GUI: `⌥⌘e` (History / Snippets tabs, Save as Snippet) · TUI: `⌃k` › Query History…, Snippets…, Save Query as Snippet….

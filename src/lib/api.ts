@@ -310,6 +310,8 @@ export const meta = {
   /** pgvector: 이 행과 가까운 행을 찾는 SQL (pk = [열, 값]) */
   similarRowsSql: (id: string, schema: string, table: string, column: string, pk: [string, string | null][]) => invoke<string>("similar_rows_sql", { id, schema, table, column, pk }),
   completion: (id: string) => invoke<CompletionTable[]>("completion_meta", { id }),
+  /** 자동완성 값 추천: 컬럼 값 · json 키 (앞쪽 일부 행, 많이 나온 순) */
+  hints: (id: string, req: { schema: string; table: string; column: string; path: string[]; keys: boolean }) => invoke<{ value: string; count: number }[]>("column_hints", { id, req }),
   ddl: (id: string, schema: string, name: string, kind: string) => invoke<string>("object_ddl", { id, schema, name, kind }),
   objectIndex: (id: string) => invoke<IndexEntry[]>("object_index", { id }),
   /** 접속하지 않은 Data Source 의 지난 객체·컬럼 목록 (접속해서 읽을 때마다 저장된다) */

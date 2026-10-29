@@ -86,7 +86,16 @@ const handlers: Record<string, (a: any) => unknown> = {
       { name: "users_contract_fk", kind: "f", definition: "FOREIGN KEY (contract_id) REFERENCES contracts(id)" },
     ],
   }),
-  completion_meta: () => [{ schema: "public", name: "users", columns: [["id", "bigint"], ["user_name", "varchar"]] }],
+  completion_meta: () => [
+    { schema: "public", name: "users", columns: [["id", "bigint"], ["user_name", "varchar"]] },
+    { schema: "public", name: "orders", columns: [["id", "bigint"], ["status", "varchar"], ["amount", "numeric"], ["data", "jsonb"]] },
+  ],
+  column_hints: (a: { req: { column: string; path: string[]; keys: boolean } }) =>
+    a.req.keys
+      ? a.req.path.length ? [{ value: "src", count: 30 }, { value: "ip", count: 12 }] : [{ value: "kind", count: 30 }, { value: "meta", count: 30 }, { value: "coupon", count: 4 }]
+      : a.req.column === "status" ? [{ value: "ready", count: 20 }, { value: "paid", count: 10 }, { value: "it's late", count: 1 }]
+      : a.req.column === "amount" ? [{ value: "1000", count: 7 }, { value: "2500", count: 3 }]
+      : [{ value: "k0", count: 15 }, { value: "k1", count: 15 }],
   run_query: (a: any) =>
     /^EXPLAIN/i.test(a.sql)
       ? { ...result, columns: [{ name: "QUERY PLAN", typeName: "JSON" }], rows: [[JSON.stringify([{ Plan: { "Node Type": "Hash Join", "Join Type": "Inner", "Startup Cost": 1.5, "Total Cost": 45.2, "Plan Rows": 120, "Plan Width": 64, "Hash Cond": "(u.contract_id = c.id)", Plans: [{ "Node Type": "Seq Scan", "Relation Name": "users", Schema: "public", Alias: "u", "Startup Cost": 0, "Total Cost": 22.1, "Plan Rows": 1200, "Plan Width": 40 }, { "Node Type": "Hash", "Startup Cost": 1.2, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24, Plans: [{ "Node Type": "Index Scan", "Relation Name": "contracts", "Index Name": "contracts_pkey", "Startup Cost": 0.1, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24 }] }] } }])]], truncated: false }

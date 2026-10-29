@@ -70,6 +70,10 @@ DataGrip 처럼: 우클릭 › **New ▸** Table… / View… / Materialized Vie
 
 GUI: 결과에서 View as (눈 아이콘) › **Chart**: 막대 · 선 · 파이. X 와 Y (여러 개) 를 고르면 같은 X 의 행은 더하고, **count** 는 행 수를 셉니다. 이미 불러온 행을 씁니다. TUI: `⌃k` › Chart Result 가 가로 막대로 그립니다 — 첫 텍스트 컬럼별 첫 수 컬럼의 합 (없으면 행 수).
 
+## 콘솔 값 추천 (PostgreSQL, MySQL)
+
+자동완성이 테이블에 실제로 있는 값도 추천합니다: `status = '` · `status in ('paid', '` · `name like '` 뒤에는 그 컬럼의 값을, `data->>'` · `data->'meta'->>'` (MySQL `data->>'$.meta.`) 뒤에는 json 안의 키를 많이 나온 순으로 행 수와 함께 보여 줍니다. 따옴표를 치면 열립니다 (따옴표 없이는 `⌃Space` — 숫자는 그대로, 글자는 따옴표를 붙여 넣습니다). 앞쪽 5,000 행 (json 키는 2,000 행) 만 3초 제한의 읽기 전용 트랜잭션으로 읽고, 2분 동안은 다시 읽지 않습니다. 바이너리 컬럼과 json 전체 값은 추천하지 않습니다.
+
 ## 쿼리 히스토리 · 스니펫
 
 쿼리 히스토리와 스니펫은 설정 폴더에 저장되고 GUI · TUI 가 함께 씁니다 (`PASSWORD '…'` / `IDENTIFIED BY '…'` 의 비밀번호는 가립니다). GUI: `⌥⌘e` (History / Snippets 탭, Save as Snippet) · TUI: `⌃k` › Query History…, Snippets…, Save Query as Snippet….

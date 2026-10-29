@@ -277,7 +277,7 @@ fn draw_group(f: &mut Frame, app: &mut App, g: Option<usize>, area: Rect, focuse
         .map(|&i| {
             let t = &app.tabs[i];
             let dirty = matches!(&t.kind, TabKind::Table(tt) if tt.grid.as_ref().map(|g| g.dirty()).unwrap_or(false));
-            1 + 2 + t.title.width() as u16 + if dirty { 2 } else { 0 } + 1
+            1 + 2 + app.tab_label(t).width() as u16 + if dirty { 2 } else { 0 } + 1
         })
         .collect();
     let sel = idx.iter().position(|&i| i == shown).unwrap_or(0);
@@ -306,7 +306,7 @@ fn draw_group(f: &mut Frame, app: &mut App, g: Option<usize>, area: Rect, focuse
             };
             let dirty = matches!(&t.kind, TabKind::Table(tt) if tt.grid.as_ref().map(|g| g.dirty()).unwrap_or(false));
             let c = app.conn_color(&t.conn).and_then(|c| hex(&c));
-            let l = Line::from(vec![Span::raw(icon), Span::raw(t.title.clone()), Span::raw(if dirty { " *" } else { "" })]);
+            let l = Line::from(vec![Span::raw(icon), Span::raw(app.tab_label(t)), Span::raw(if dirty { " *" } else { "" })]);
             let mut st = Style::default();
             if let Some(c) = c {
                 st = st.bg(c);
@@ -561,6 +561,7 @@ fn draw_completion(f: &mut Frame, cmp: &crate::app::Completion, x: u16, y: u16) 
                 ItemKind::Table => ("▦", C_DB),
                 ItemKind::Schema => ("◇", Color::Gray),
                 ItemKind::Keyword => ("k", C_KEYWORD),
+                ItemKind::Value => ("=", crate::kit::NUMBER),
             };
             ListItem::new(Row::new(format!("{:<lw$} ", it.label)).lead(icon(glyph, color)).hint(it.detail.clone()).selected(i == cmp.sel, true).line())
         })

@@ -21,6 +21,7 @@ pub mod erd;
 pub mod error;
 pub mod fake;
 pub mod guard;
+pub mod hints;
 pub mod history;
 pub mod meta;
 pub mod plugin;

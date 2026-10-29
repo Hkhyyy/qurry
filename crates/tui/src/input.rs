@@ -680,7 +680,7 @@ fn editor_key(app: &mut App, k: KeyEvent) {
     // 단어나 '.' 을 치면 열고(GUI 처럼), 열린 채로 지우면 다시 거른다. 그 밖의 키는 닫는다
     // (macOS 는 Ctrl+Space 가 입력 소스 전환이라 타이핑으로 여는 게 기본)
     let plain = !k.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
-    let typed = plain && matches!(k.code, KeyCode::Char(ch) if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.');
+    let typed = plain && matches!(k.code, KeyCode::Char(ch) if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' || ch == '\'');
     if typed || (open && k.code == KeyCode::Backspace) {
         app.update_completion(false);
     } else if let Some(TabKind::Console(c)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind) {
@@ -1354,6 +1354,26 @@ mod tests {
 
     // ───────── 키를 넣어 확인 (testkit) ─────────
     use crate::testkit::Harness;
+
+    /// 같은 이름의 테이블 탭: 스키마가 다르면 schema.table, 스키마도 같으면 db.schema.table
+    #[tokio::test]
+    async fn same_table_tabs_show_schema() {
+        let mut h = Harness::new().await;
+        let a = h.table_tab("orders", &["id"], &[], &[]);
+        let label = |h: &Harness, id: u64| {
+            let t = h.app.tabs.iter().find(|t| t.id == id).unwrap();
+            h.app.tab_label(t)
+        };
+        assert_eq!(label(&h, a), "orders");
+        let b = h.table_tab("orders", &["id"], &[], &[]);
+        if let Some(TabKind::Table(tt)) = h.app.tabs.iter_mut().find(|t| t.id == b).map(|t| &mut t.kind) {
+            tt.schema = "billing".into();
+        }
+        assert_eq!((label(&h, a), label(&h, b)), ("public.orders".into(), "billing.orders".into()));
+        let c = h.table_tab("orders", &["id"], &[], &[]);
+        h.app.tabs.iter_mut().find(|t| t.id == c).unwrap().db = "app_test".into();
+        assert_eq!((label(&h, a), label(&h, c), label(&h, b)), ("postgres.public.orders".into(), "app_test.public.orders".into(), "billing.orders".into()));
+    }
 
     /// ⌘← 가 ⌃A 로 와도 행을 추가하지 않는다 (a 는 행 추가)
     #[tokio::test]
