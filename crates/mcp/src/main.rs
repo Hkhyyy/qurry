@@ -204,7 +204,7 @@ impl Server {
                         .map(|c| {
                             json!({
                                 "id": c.config.id, "name": c.config.name, "kind": c.config.kind,
-                                "host": without_userinfo(&c.config.host), "port": c.config.port, "user": c.config.user,
+                                "host": qurry_core::store::without_userinfo(&c.config.host), "port": c.config.port, "user": c.config.user,
                                 "default_database": sql::default_db(&c.config),
                                 "read_only": c.config.read_only, "production": c.config.options.confirm_changes,
                                 "mcp_access": if c.config.mcp_access(self.allow_write) == McpAccess::Write { "write" } else { "read" },
@@ -410,18 +410,6 @@ impl Server {
     }
 }
 
-/// Strip user:pass@ from URIs like mongodb://user:pass@host (so passwords don't end up in the AI conversation)
-fn without_userinfo(host: &str) -> String {
-    match host.split_once("://") {
-        // The password may contain raw / ? #, so treat everything up to the last @ as user info
-        Some((scheme, rest)) => match rest.rfind('@') {
-            Some(at) => format!("{scheme}://{}", &rest[at + 1..]),
-            None => host.to_string(),
-        },
-        None => host.rsplit_once('@').map(|(_, h)| h.to_string()).unwrap_or_else(|| host.to_string()),
-    }
-}
-
 fn result_json(r: &QueryResult) -> Value {
     if !r.has_result_set {
         return json!({ "rows_affected": r.rows_affected });
@@ -579,11 +567,11 @@ mod tests {
 
     #[test]
     fn uri_passwords_are_hidden() {
-        assert_eq!(without_userinfo("mongodb+srv://app:s3cret@cluster0.x.net/?retryWrites=true"), "mongodb+srv://cluster0.x.net/?retryWrites=true");
-        assert_eq!(without_userinfo("mongodb://a:b@h1:27017,h2:27017/db"), "mongodb://h1:27017,h2:27017/db");
-        assert_eq!(without_userinfo("https://qdrant.example.com"), "https://qdrant.example.com");
-        assert_eq!(without_userinfo("db.internal"), "db.internal");
-        assert_eq!(without_userinfo("u:p@db.internal"), "db.internal");
-        assert_eq!(without_userinfo("mongodb://app:p/a?s#s@h1:27017/db"), "mongodb://h1:27017/db");
+        assert_eq!(qurry_core::store::without_userinfo("mongodb+srv://app:s3cret@cluster0.x.net/?retryWrites=true"), "mongodb+srv://cluster0.x.net/?retryWrites=true");
+        assert_eq!(qurry_core::store::without_userinfo("mongodb://a:b@h1:27017,h2:27017/db"), "mongodb://h1:27017,h2:27017/db");
+        assert_eq!(qurry_core::store::without_userinfo("https://qdrant.example.com"), "https://qdrant.example.com");
+        assert_eq!(qurry_core::store::without_userinfo("db.internal"), "db.internal");
+        assert_eq!(qurry_core::store::without_userinfo("u:p@db.internal"), "db.internal");
+        assert_eq!(qurry_core::store::without_userinfo("mongodb://app:p/a?s#s@h1:27017/db"), "mongodb://h1:27017/db");
     }
 }

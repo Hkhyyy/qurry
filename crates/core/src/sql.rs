@@ -92,6 +92,8 @@ pub fn literal(kind: DbKind, v: Option<&str>) -> String {
         None => "NULL".into(),
         // MySQL and ClickHouse read \ as an escape inside strings
         Some(v) if backslash_escapes(kind) => format!("'{}'", v.replace('\\', "\\\\").replace('\'', "''")),
+        // PostgreSQL: E'' reads \ the same way whatever standard_conforming_strings is set to on the server
+        Some(v) if kind == DbKind::Postgres && v.contains('\\') => format!("E'{}'", v.replace('\\', "\\\\").replace('\'', "''")),
         Some(v) => format!("'{}'", v.replace('\'', "''")),
     }
 }
@@ -479,6 +481,8 @@ mod tests {
         assert_eq!(quote_ident(DbKind::Postgres, "users"), "users");
         assert_eq!(literal(DbKind::Mysql, Some("a\\'b")), "'a\\\\''b'");
         assert_eq!(literal(DbKind::Postgres, None), "NULL");
+        assert_eq!(literal(DbKind::Postgres, Some("a\\' OR 1=1")), "E'a\\\\'' OR 1=1'");
+        assert_eq!(literal(DbKind::Postgres, Some("it's")), "'it''s'");
     }
 
     /// Statements on new lines without `;` (split like DataGrip)

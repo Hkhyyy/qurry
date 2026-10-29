@@ -1825,6 +1825,11 @@ mod tests {
         let Some(crate::app::Popup::ConnForm(f)) = &mut h.app.popup else { panic!() };
         f.fields.iter_mut().find(|x| x.label == "MCP").unwrap().value = "read".into();
         assert_eq!(cfg_of(&h).options.mcp.as_deref(), Some("read"));
+        // A value core reads as off ("On", a typo) is shown and saved as off, never as write
+        old.options.confirm_changes = false;
+        old.options.mcp = Some("On".into());
+        h.app.conn_form(Some(old));
+        assert_eq!(cfg_of(&h).options.mcp.as_deref(), Some("off"));
     }
 
     /// Vacuum Progress only cancels: K (kill connection) doesn't even ask, and isn't in the hint line

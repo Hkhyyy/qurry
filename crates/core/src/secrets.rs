@@ -196,6 +196,17 @@ impl SecretFile {
         if let Some(k) = c.as_ref() {
             return Ok(k.clone());
         }
+        // Where the key is now: another app may have moved it back to the file since this one started
+        if key_location(&self.dir) == KeyLocation::File {
+            let key_path = self.dir.join("secret.key");
+            let k = fs::read(&key_path).map_err(|e| AppError::Msg(format!("Cannot read {}: {e}", key_path.display())))?;
+            if k.len() != 32 {
+                return Err(AppError::Msg(format!("{} is corrupted — restore it from a backup, or delete it and secrets.json to start over", key_path.display())));
+            }
+            let k = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&k));
+            *c = Some(k.clone());
+            return Ok(k);
+        }
         let k = match self.vault.get(&keychain_account(&self.dir)) {
             Ok(Some(k)) if k.len() == 32 => Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&k)),
             Ok(_) => return Err(AppError::Msg(format!("The password key is not in the system keychain (see {}) — restore it, or delete that file and secrets.json to start over", self.dir.join(KEYCHAIN_MARKER).display()))),
@@ -268,10 +279,12 @@ impl SecretFile {
     }
 
     pub fn set(&self, name: &str, value: Option<&str>) -> AppResult<()> {
+        // Encrypt before taking the file lock: reading the key may show a keychain prompt, and other apps would wait on the lock meanwhile
+        let sealed = value.map(|v| self.seal(name, v)).transpose()?;
         self.locked(|all| {
-            match value {
+            match sealed {
                 Some(v) => {
-                    all.insert(name.to_string(), self.seal(name, v)?);
+                    all.insert(name.to_string(), v);
                 }
                 None => {
                     all.remove(name);
@@ -391,6 +404,8 @@ mod tests {
         move_key(&dir, KeyLocation::File, &*vault).unwrap();
         assert_eq!(key_location(&dir), KeyLocation::File);
         assert!(vault.0.lock().unwrap().is_empty());
+        // A store opened in keychain mode follows the key back to the file without a restart
+        assert_eq!(empty.get("a").unwrap().as_deref(), Some("pw"));
         assert_eq!(SecretFile::open_with(&dir, vault.clone()).unwrap().get("a").unwrap().as_deref(), Some("pw"));
         let _ = std::fs::remove_dir_all(dir);
     }

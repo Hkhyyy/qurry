@@ -56,6 +56,8 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   const opt: ConnOptions = cfg.options ?? {};
   // MCP for older sources that never set it: behavior at the time the dialog opened (hidden if Production). Editing doesn't change this value
   const [legacyMcp] = useState<"off" | "write">(() => (edit?.options?.confirmChanges ? "off" : edit ? "write" : "off"));
+  // A value core doesn't know ("On", a typo) means off there, so show and save it as off
+  const mcpValue: "off" | "read" | "write" = opt.mcp == null ? legacyMcp : ["off", "read", "write"].includes(opt.mcp) ? opt.mcp : "off";
   // Newly enabled SSL verifies the certificate and host name (require only encrypts)
   const ssl: SslConfig = cfg.ssl ?? { enabled: false, mode: "verify-full", caFile: "", certFile: "", keyFile: "" };
   const setSsl = <K extends keyof SslConfig>(k: K, v: SslConfig[K]) => setCfg((c) => ({ ...c, ssl: { ...ssl, ...(c.ssl ?? {}), [k]: v } }));
@@ -87,7 +89,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
     const name = cfg.name.trim() || `${cfg.user}@${cfg.host}`;
     try {
       // Save the shown MCP value as is (if left unset, it would turn on by itself after Production is turned off)
-      const saved = await api.saveConnection({ ...cfg, name, options: { ...opt, mcp: opt.mcp ?? legacyMcp } }, password, sshSecret);
+      const saved = await api.saveConnection({ ...cfg, name, options: { ...opt, mcp: mcpValue } }, password, sshSecret);
       onSaved(saved);
     } catch (e) {
       setTest({ ok: false, msg: `Save failed: ${String(e)}` });
@@ -334,7 +336,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
           )}
           <label>MCP (AI tools)</label>
           <div className="ui-row">
-            <Select value={opt.mcp ?? legacyMcp} onChange={(e) => setOpt("mcp", e.target.value as ConnOptions["mcp"])} title="What qurry-mcp (Claude Code and other AI tools) may do with this data source. For Read, connect with a read-only database user.">
+            <Select value={mcpValue} onChange={(e) => setOpt("mcp", e.target.value as ConnOptions["mcp"])} title="What qurry-mcp (Claude Code and other AI tools) may do with this data source. For Read, connect with a read-only database user.">
               <option value="off">Off — not listed, no connection</option>
               <option value="read">Read</option>
               <option value="write" disabled={!!cfg.readOnly}>Read &amp; write (when qurry-mcp runs with --allow-write)</option>
