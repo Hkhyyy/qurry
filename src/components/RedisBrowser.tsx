@@ -765,10 +765,20 @@ function ServerTable({ target, command }: { target: string; command: string }) {
   const [r, setR] = useState<QueryResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [q, setQ] = useState("");
-  const load = () => api.runQuery(target, command).then(setR, (e) => setErr(String(e)));
+  const load = () => {
+    setErr(null);
+    api.runQuery(target, command).then(setR, (e) => setErr(String(e)));
+  };
   useEffect(() => {
     load();
   }, [target, command]);
+  // 관리형 Redis (AWS ElastiCache · MemoryDB, Azure, GCP Memorystore, Upstash …) 는 CONFIG 를 이름을 바꾸거나 막아 둔다
+  if (err && /^CONFIG/i.test(command) && /unknown command|NOPERM|disabled|not allowed/i.test(err))
+    return (
+      <Notice>
+        This server doesn't allow <code>CONFIG</code> — managed Redis services (AWS ElastiCache / MemoryDB, Azure Cache, GCP Memorystore, Upstash …) disable or rename it. Its settings are in the provider's console (e.g. the ElastiCache parameter group). Server details are still in Info.
+      </Notice>
+    );
   if (err) return <Notice tone="danger">{err}</Notice>;
   if (!r) return <EmptyState>Loading…</EmptyState>;
   const rows = q ? r.rows.filter((row) => row.some((c) => String(c ?? "").toLowerCase().includes(q.toLowerCase()))) : r.rows;
