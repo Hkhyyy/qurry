@@ -14,6 +14,7 @@ use serde_json::Value;
 use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlRow};
 use sqlx::pool::PoolConnection;
 use sqlx::{Column, Either, Executor, MySql, Row, TypeInfo, ValueRef};
+use std::io::ErrorKind;
 use std::time::{Duration, Instant};
 
 pub const SYSTEM_DBS: [&str; 4] = ["information_schema", "performance_schema", "mysql", "sys"];
@@ -95,7 +96,10 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
         opts = opts.ssl_mode(sqlx::mysql::MySqlSslMode::Required);
     }
     let pool = match pool_opts().connect_with(opts.clone()).await {
-        Err(e) if !explicit_ssl && is_tls_failure(&e) && plain_ok => pool_opts().connect_with(opts.ssl_mode(sqlx::mysql::MySqlSslMode::Disabled)).await?,
+        // Plain text is allowed: also when the server just drops the connection during the handshake (some old servers do)
+        Err(e) if !explicit_ssl && plain_ok && (is_tls_failure(&e) || matches!(&e, sqlx::Error::Io(io) if matches!(io.kind(), ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted))) => {
+            pool_opts().connect_with(opts.ssl_mode(sqlx::mysql::MySqlSslMode::Disabled)).await?
+        }
         Err(e) if !explicit_ssl && is_tls_failure(&e) => return Err(AppError::Msg(format!("{NEEDS_TLS}\n({e})"))),
         r => r?,
     };
@@ -103,7 +107,7 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
 }
 
 /// When not falling back to plaintext on a server without TLS
-pub const NEEDS_TLS: &str = "This server didn't set up an encrypted (TLS) connection, so Qurry didn't send the password. If it's an old server without TLS 1.2 and the network is trusted, tick \"Allow unencrypted connection\" in the data source's Options.";
+pub const NEEDS_TLS: &str = "This server didn't set up an encrypted (TLS) connection, so Qurry didn't send the password. If it's an old server without TLS 1.2 and the network is trusted, turn on \"Allow unencrypted connection\" for this data source (GUI: Options tab · TUI: data source form, \"Allow unencrypted\").";
 
 /// Message when a source without SSL set connected in plaintext (reconnected in plaintext because TLS failed — also what happens when someone deliberately strips TLS)
 pub async fn plaintext_note(p: &MySqlPool, cfg: &ConnectionConfig) -> Option<String> {
@@ -118,9 +122,17 @@ pub async fn plaintext_note(p: &MySqlPool, cfg: &ConnectionConfig) -> Option<Str
 fn is_tls_failure(e: &sqlx::Error) -> bool {
     match e {
         sqlx::Error::Tls(_) => true,
-        sqlx::Error::Io(io) => io.to_string().to_lowercase().contains("handshake") || io.to_string().contains("AlertReceived"),
+        sqlx::Error::Io(io) => is_rustls_error(io),
         _ => false,
     }
+}
+
+/// sqlx hands rustls handshake errors over as InvalidData I/O errors; matched by rustls' Display texts (rustls::Error), e.g.
+/// MySQL 5.7 limited to TLS 1.0/1.1: "received fatal alert: HandshakeFailure", MySQL 5.5: "received corrupt message of type UnknownProtocolVersion"
+fn is_rustls_error(io: &std::io::Error) -> bool {
+    const TEXTS: [&str; 6] = ["received fatal alert", "received corrupt message", "received unexpected message", "peer is incompatible", "peer misbehaved", "handshake"];
+    let m = io.to_string().to_lowercase();
+    io.kind() == ErrorKind::InvalidData && TEXTS.iter().any(|t| m.contains(t))
 }
 
 pub async fn server_version(p: &MySqlPool) -> AppResult<String> {
@@ -738,6 +750,21 @@ mod tests {
         assert_eq!(tz.rows[0][0], "+09:00");
         let e = rp.run_query("update orders set memo = 'z' where id = 1", 1).await;
         assert!(e.is_err() && format!("{}", e.unwrap_err()).to_lowercase().contains("read only"));
+    }
+
+    /// Real errors from old servers (sqlx + rustls) count as TLS failures; auth and network errors don't
+    #[test]
+    fn rustls_handshake_errors_are_tls_failures() {
+        use std::io::{Error, ErrorKind};
+        for m in ["received fatal alert: HandshakeFailure", "received fatal alert: ProtocolVersion", "received corrupt message of type UnknownProtocolVersion",
+            "received corrupt message of type InvalidContentType", "peer is incompatible: ServerTlsVersionIsDisabledByOurConfig", "peer misbehaved: IllegalTlsInnerPlaintext", "handshake not complete"]
+        {
+            assert!(super::is_tls_failure(&sqlx::Error::Io(Error::new(ErrorKind::InvalidData, m))), "{m}");
+        }
+        assert!(super::is_tls_failure(&sqlx::Error::Tls("server does not support TLS".into())));
+        assert!(!super::is_tls_failure(&sqlx::Error::Io(Error::new(ErrorKind::ConnectionRefused, "Connection refused (os error 61)"))));
+        assert!(!super::is_tls_failure(&sqlx::Error::Io(Error::new(ErrorKind::InvalidData, "invalid packet sequence"))));
+        assert!(!super::is_tls_failure(&sqlx::Error::Protocol("Access denied for user 'u'".into())));
     }
 
     #[tokio::test]

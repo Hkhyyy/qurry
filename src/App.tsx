@@ -2064,7 +2064,12 @@ export default function App() {
 
   const removeConn = async (c: ConnectionView) => {
     if (!(await ask(`Delete data source "${c.name}"?`, { okLabel: "Delete", danger: true }))) return;
-    await api.deleteConnection(c.id);
+    try {
+      await api.deleteConnection(c.id);
+    } catch (e) {
+      // Removed even if its saved password couldn't be (damaged secrets file): the message says so
+      setStatus(String(e));
+    }
     closeTabs(tabsRef.current.filter((t) => t.connId === c.id).map((t) => t.id));
     refresh();
   };

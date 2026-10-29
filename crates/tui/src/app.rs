@@ -2322,7 +2322,7 @@ impl App {
                 f("Read-only", if c.read_only { "on" } else { "off" }.into(), FieldKind::Toggle),
                 f("Production", if c.options.confirm_changes { "on" } else { "off" }.into(), FieldKind::Toggle),
                 // MySQL: whether plaintext is allowed for old remote servers that can't do TLS
-                f("Unencrypted OK", if c.options.allow_plaintext { "on" } else { "off" }.into(), FieldKind::Toggle),
+                f("Allow unencrypted", if c.options.allow_plaintext { "on" } else { "off" }.into(), FieldKind::Toggle),
                 // Whether it's visible to qurry-mcp (AI tools). New sources start off
                 f("MCP", if edit.is_some() { mcp_label(&c) } else { "off" }.into(), ch(&["off", "read", "write"])),
                 f("SSH tunnel", if ssh.enabled { "on" } else { "off" }.into(), FieldKind::Toggle),
@@ -2333,8 +2333,8 @@ impl App {
                 f("SSH key file", ssh.key_path.clone(), FieldKind::Text),
                 f("SSH secret", saved(c.ssh_secret_saved), FieldKind::Secret),
                 f("SSL", if c.active_ssl().is_some() { "on" } else { "off" }.into(), FieldKind::Toggle),
-                // Newly enabled SSL is verify-full (require only encrypts and doesn't verify the certificate)
-                f("SSL mode", c.ssl.as_ref().map(|x| x.mode().to_string()).unwrap_or_else(|| "verify-full".into()), ch(&["require", "verify-ca", "verify-full"])),
+                // Newly enabled SSL is require: verifying needs a CA the built-in list knows, or a CA file (AWS RDS, a company CA, SSH tunnels)
+                f("SSL mode", c.ssl.as_ref().map(|x| x.mode().to_string()).unwrap_or_else(|| "require".into()), ch(&["require", "verify-ca", "verify-full"])),
                 f("CA file", c.ssl.as_ref().map(|x| x.ca_file.clone()).unwrap_or_default(), FieldKind::Text),
                 f("Client cert", c.ssl.as_ref().map(|x| x.cert_file.clone()).unwrap_or_default(), FieldKind::Text),
                 f("Client key", c.ssl.as_ref().map(|x| x.key_file.clone()).unwrap_or_default(), FieldKind::Text),
@@ -2375,7 +2375,7 @@ impl App {
         c.name = if v("Name").trim().is_empty() { format!("{}@{}", c.user, c.host) } else { v("Name").trim().into() };
         c.read_only = v("Read-only") == "on";
         c.options.confirm_changes = v("Production") == "on";
-        c.options.allow_plaintext = v("Unencrypted OK") == "on";
+        c.options.allow_plaintext = v("Allow unencrypted") == "on";
         // Save the shown value as is (leaving it unset would reopen it automatically after turning Production off)
         c.options.mcp = Some(v("MCP"));
         // custom = a color outside the presets picked in the GUI: leave it

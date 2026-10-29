@@ -66,6 +66,11 @@ impl AppState {
         Ok(self.secret_key_location())
     }
 
+    /// The secret only for a source that has one (flag, or an entry in the file): sources without a password still connect when secrets.json is damaged
+    fn saved_secret(&self, key: &str, saved: bool) -> AppResult<Option<String>> {
+        if saved || self.secret_file.contains(key) { self.secret(key) } else { Ok(None) }
+    }
+
     pub fn set_secret(&self, key: &str, value: Option<&str>) -> AppResult<()> {
         self.secret_file.set(key, value)?;
         Ok(())
@@ -274,8 +279,8 @@ pub async fn ensure_pool(state: &AppState, id: &str) -> AppResult<Pool> {
     if let Some(db) = db.filter(|_| !cfg.kind.is_file()) {
         cfg.database = db.to_string();
     }
-    let password = state.secret(base)?;
-    let ssh_secret = if cfg.active_ssh().is_some() { state.secret(&store::ssh_secret_key(base))? } else { None };
+    let password = state.saved_secret(base, cfg.password_saved)?;
+    let ssh_secret = if cfg.active_ssh().is_some() { state.saved_secret(&store::ssh_secret_key(base), cfg.ssh_secret_saved)? } else { None };
     let (pool, tunnel) = connect_config(&cfg, password.as_deref(), ssh_secret.as_deref()).await.map_err(|e| match e {
         // sqlx only says "pool timed out while waiting for an open connection"
         AppError::Db(sqlx::Error::PoolTimedOut) => AppError::Msg(format!(
@@ -326,7 +331,7 @@ pub async fn redis_pool(state: &AppState, id: &str) -> AppResult<crate::redisdb:
 }
 
 /// Time limit for read-only (MCP) queries (so queries sent by others do not hold the server for long)
-const SERVER_CHANGED: &str = "The server, user or SSH tunnel changed (or SSL was turned off) — enter the password again. The saved one is only sent to the server it was saved for.";
+const SERVER_CHANGED: &str = "The server, port, user, type, SSH tunnel or Redis nodes changed, or SSL was turned off, its verification lowered or its CA file changed — enter the password again. The saved one is only sent to the server it was saved for.";
 const SSH_CHANGED: &str = "The SSH server changed — enter the SSH password / passphrase again. The saved one is only sent to the server it was saved for.";
 /// MCP reads: 60 seconds, string parsing matches guard (even if the server or role sets standard_conforming_strings = off)
 const READ_ONLY_TIMEOUT_PG: &str = "SET LOCAL statement_timeout = '60s'";
@@ -554,17 +559,18 @@ impl AppState {
 
     pub async fn delete_connection(&self, id: String) -> AppResult<()> {
         drop_pool(self, &id).await;
-        self.set_secret(&id, None)?;
-        self.set_secret(&store::ssh_secret_key(&id), None)?;
+        // A damaged secrets.json (left untouched) doesn't keep the data source: it is removed, and the error says the password stayed
+        let forgot = self.set_secret(&id, None).and_then(|_| self.set_secret(&store::ssh_secret_key(&id), None));
         crate::search_cache::remove_conn(&self.store.dir(), &id);
-        self.store.delete(&id)
+        self.store.delete(&id)?;
+        forgot.map_err(|e| AppError::Msg(format!("The data source was removed, but its saved password couldn't be: {e}")))
     }
 
     /// The saved password, if it may be sent to config (only when it is the same server as the saved settings)
     fn saved_password_for(&self, config: &ConnectionConfig) -> AppResult<Option<String>> {
         match self.store.get(&config.id)? {
             Some(p) if self.secret_file.contains(&p.id) && !p.same_server(config) => Err(AppError::Msg(SERVER_CHANGED.into())),
-            Some(_) => self.secret(&config.id),
+            Some(p) => self.saved_secret(&config.id, p.password_saved),
             None => Ok(None),
         }
     }
@@ -572,7 +578,7 @@ impl AppState {
     fn saved_ssh_secret_for(&self, config: &ConnectionConfig) -> AppResult<Option<String>> {
         match self.store.get(&config.id)? {
             Some(p) if self.secret_file.contains(&store::ssh_secret_key(&p.id)) && !p.same_ssh(config) => Err(AppError::Msg(SSH_CHANGED.into())),
-            Some(_) => self.secret(&store::ssh_secret_key(&config.id)),
+            Some(p) => self.saved_secret(&store::ssh_secret_key(&config.id), p.ssh_secret_saved),
             None => Ok(None),
         }
     }
@@ -1092,6 +1098,34 @@ mod tests {
         cfg.options.mcp = Some("read".into());
         st.store.save(&cfg).unwrap();
         assert_eq!(st.secret("prod").unwrap().as_deref(), Some("pw"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A damaged secrets.json only blocks sources that have a saved password; deleting still removes the source (the file is left as is)
+    #[tokio::test]
+    async fn damaged_secrets_only_block_sources_with_a_password() {
+        let dir = std::env::temp_dir().join(format!("qurry-dmg-{}", uuid::Uuid::new_v4()));
+        let st = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+        let mk = |id: &str| ConnectionConfig {
+            id: id.into(), name: id.into(), kind: crate::store::DbKind::Postgres, host: "db".into(), port: 5432,
+            user: "u".into(), database: "d".into(), color: None, password_saved: false,
+            ssh: Some(crate::store::SshConfig { enabled: true, host: "127.0.0.1".into(), port: 1, user: "me".into(), auth: Default::default(), key_path: String::new() }),
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+        };
+        st.save_connection(mk("pw"), Some("secret".into()), None).await.unwrap();
+        st.save_connection(mk("trust"), None, None).await.unwrap();
+        std::fs::write(dir.join("secrets.json"), "{ \"pw\": \"tru").unwrap();
+        let e = st.connect("pw".into()).await.unwrap_err().to_string();
+        assert!(e.contains("damaged"), "{e}");
+        // No saved password or SSH secret: tries the SSH server (nothing listens on port 1), not the secrets file
+        let e = st.connect("trust".into()).await.unwrap_err().to_string();
+        assert!(!e.contains("damaged"), "{e}");
+        let e = st.test_connection(mk("trust"), None, None).await.unwrap_err().to_string();
+        assert!(!e.contains("damaged"), "{e}");
+        let e = st.delete_connection("pw".into()).await.unwrap_err().to_string();
+        assert!(e.contains("was removed") && e.contains("damaged"), "{e}");
+        assert!(st.store.get("pw").unwrap().is_none());
+        assert_eq!(std::fs::read_to_string(dir.join("secrets.json")).unwrap(), "{ \"pw\": \"tru");
         let _ = std::fs::remove_dir_all(dir);
     }
 
