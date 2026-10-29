@@ -32,7 +32,7 @@ GUI — Data Source 우클릭 › Tools › Compare & Migrate · TUI — `⌃k` 
 
 ## 백업 · 복원
 
-데이터베이스 우클릭 › Tools › Back Up Database… / Restore Database… (TUI: `⌃k`). 이 컴퓨터의 `pg_dump` / `pg_restore` / `psql` 또는 `mysqldump` / `mysql` 을 실행합니다 (Homebrew `libpq`, `mysql-client`, Postgres.app, 리눅스의 흔한 위치도 찾습니다. PostgreSQL 은 서버 버전에 가장 가까운 클라이언트를 씁니다). 비밀번호는 환경 변수로 넘기고, SSH 터널을 쓰고, 진행 상황은 상태 표시줄에 나오며 취소할 수 있습니다.
+데이터베이스 우클릭 › Tools › Back Up Database… / Restore Database… (TUI: `⌃k`). 이 컴퓨터의 `pg_dump` / `pg_restore` / `psql` 또는 `mysqldump` / `mysql` 을 실행합니다 (Homebrew `libpq`, `mysql-client`, Postgres.app, 리눅스의 흔한 위치도 찾습니다. PostgreSQL 은 서버 버전에 가장 가까운 클라이언트를 씁니다). 비밀번호는 환경 변수로 넘기고, SSH 터널을 쓰고, 진행 상황은 상태 표시줄에 나오며 취소할 수 있습니다. 백업 파일과 임시 덤프는 본인만 읽을 수 있습니다. 이 컴퓨터에서 명령을 실행하는 줄 (psql `\!`, `\o |…`, `\copy … program`, `\i`, mysql `system`, `tee`, `pager`, `source`) 이 있는 `.sql` 파일은 복원하지 않습니다 — pg_dump 와 mysqldump 는 그런 줄을 쓰지 않습니다.
 
 ## 객체 만들기 · 고치기 (PostgreSQL, MySQL)
 
