@@ -90,7 +90,8 @@ pub fn similar_rows_sql(schema: &str, table: &str, column: &str, pk: &[(String, 
 pub fn literal(kind: DbKind, v: Option<&str>) -> String {
     match v {
         None => "NULL".into(),
-        Some(v) if kind == DbKind::Mysql => format!("'{}'", v.replace('\\', "\\\\").replace('\'', "''")),
+        // MySQL and ClickHouse read \ as an escape inside strings
+        Some(v) if backslash_escapes(kind) => format!("'{}'", v.replace('\\', "\\\\").replace('\'', "''")),
         Some(v) => format!("'{}'", v.replace('\'', "''")),
     }
 }

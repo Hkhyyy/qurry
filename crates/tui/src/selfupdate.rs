@@ -99,7 +99,8 @@ pub async fn install(quiet: bool) -> std::io::Result<Outcome> {
         return Ok(Outcome::Skipped(format!("Qurry {} has no signed SHA256SUMS, so it can't be verified. Download it yourself from {}", rel.version, rel.url)));
     };
     if !trusted_url(&asset.url) || !trusted_url(&sums.url) || !trusted_url(&sums_sig.url) {
-        return Err(err(format!("refusing to download from an unexpected address: {}", asset.url)));
+        let url: String = asset.url.chars().filter(|c| !crate::ui::is_unsafe_char(*c)).collect();
+        return Err(err(format!("refusing to download from an unexpected address: {url}")));
     }
     if !quiet {
         print!("{}", update::changes_text(&rel.changes_since(cur)).chars().filter(|c| *c == '\n' || !crate::ui::is_unsafe_char(*c)).collect::<String>());
