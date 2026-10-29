@@ -82,7 +82,8 @@ impl Driver for Ch {
                 self.user = if c.user.is_empty() { "default".into() } else { c.user };
                 self.password = c.password.unwrap_or_default();
                 self.database = if c.database.trim().is_empty() { "default".into() } else { c.database.trim().into() };
-                self.agent = Some(ureq::Agent::config_builder().timeout_connect(Some(std::time::Duration::from_secs(10))).build().into());
+                // 리다이렉트는 따라가지 않는다 (X-ClickHouse-Key 가 다른 서버로 가지 않게)
+                self.agent = Some(ureq::Agent::config_builder().timeout_connect(Some(std::time::Duration::from_secs(10))).max_redirects(0).build().into());
                 self.read_only = c.options.get("readOnly").and_then(Value::as_bool).unwrap_or(false);
                 self.ro = self.read_only;
                 self.query("SELECT 1", 1)?;
