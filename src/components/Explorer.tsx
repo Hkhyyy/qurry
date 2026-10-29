@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { ConnectionView, Scope } from "../lib/api";
 import { ColorSwatches } from "./ConnectionDialog";
-import { NodeInfo, SchemaTree, TreeSelection } from "./SchemaTree";
+import { collapseTree, NodeInfo, SchemaTree, TreeSelection } from "./SchemaTree";
+import { IcCollapseAll, IcMoreV, IcPlus, IcReload } from "../ui/icons";
 import { IconButton, Menu as UiMenu, MenuEntry, SearchField, Text } from "../ui";
 
 export type MenuItem = MenuEntry;
@@ -147,12 +148,12 @@ export function Explorer(p: Props) {
           Database Explorer
         </span>
         <span className="menu-anchor">
-          <IconButton
+          <IconButton size="sm"
             title="Add Data Source"
             onMouseDown={(e) => e.stopPropagation()}
             onClick={() => (p.others?.length ? setAddMenu((m) => !m) : p.onAdd())}
           >
-            ＋
+            <IcPlus />
           </IconButton>
           {addMenu && (
             <UiMenu
@@ -166,14 +167,19 @@ export function Explorer(p: Props) {
             />
           )}
         </span>
-        <IconButton title="Refresh (⌥⌘y)" onClick={p.onRefresh}>⟳</IconButton>
+        <IconButton size="sm" title="Refresh (⌥⌘y)" onClick={p.onRefresh}>
+          <IcReload />
+        </IconButton>
+        <IconButton size="sm" title="Collapse All" onClick={collapseTree}>
+          <IcCollapseAll />
+        </IconButton>
         <span className="menu-anchor">
-          <IconButton
+          <IconButton size="sm"
             title="More"
             onMouseDown={(e) => e.stopPropagation()}
             onClick={() => setMore((m) => !m)}
           >
-            ⋯
+            <IcMoreV />
           </IconButton>
           {more && (
             <UiMenu

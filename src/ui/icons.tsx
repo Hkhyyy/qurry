@@ -41,32 +41,36 @@ export const RedisIcon = () => (
   </S>
 );
 
+/** 데이터베이스: 원통 (DataGrip New UI) */
 export const DatabaseIcon = () => (
   <S>
-    <rect x="3" y="2.5" width="10" height="11" rx="2" fill="#3574f0" />
-    <rect x="5" y="4.5" width="6" height="7" rx=".8" stroke="#dce6ff" strokeWidth="1.1" />
+    <ellipse cx="8" cy="4" rx="5" ry="1.9" stroke="var(--ui-icon-db)" strokeWidth="1.1" />
+    <path d="M3 4v8c0 1.05 2.24 1.9 5 1.9s5-.85 5-1.9V4" stroke="var(--ui-icon-db)" strokeWidth="1.1" />
+    <path d="M3 8c0 1.05 2.24 1.9 5 1.9s5-.85 5-1.9" stroke="var(--ui-icon-db)" strokeWidth="1.1" />
   </S>
 );
 
+/** 스키마: 겹친 층 */
 export const SchemaIcon = () => (
   <S>
-    <rect x="2" y="2" width="5" height="5" rx="1" stroke="#a7aab2" strokeWidth="1.1" />
-    <rect x="9" y="9" width="5" height="5" rx="1" stroke="#a7aab2" strokeWidth="1.1" />
-    <rect x="2" y="9" width="5" height="5" rx="1" stroke="#a7aab2" strokeWidth="1.1" />
-    <path d="M7 4.5h3.5V9" stroke="#a7aab2" strokeWidth="1.1" />
+    <path d="M8 2.5 13.5 5.3 8 8.1 2.5 5.3 8 2.5Z" stroke="var(--ui-icon)" strokeWidth="1.1" strokeLinejoin="round" />
+    <path d="M2.5 8.1 8 10.9l5.5-2.8M2.5 10.9 8 13.7l5.5-2.8" stroke="var(--ui-icon)" strokeWidth="1.1" strokeLinejoin="round" />
   </S>
 );
 
+/** 묶음 폴더 (tables · views …): 선만 */
 export const FolderIcon = () => (
   <S>
-    <path d="M1.8 4.2c0-.7.5-1.2 1.2-1.2h3.3l1.4 1.5h5.3c.7 0 1.2.5 1.2 1.2v6.1c0 .7-.5 1.2-1.2 1.2H3c-.7 0-1.2-.5-1.2-1.2V4.2Z" fill="#3574f0" />
+    <path d="M2 4.3c0-.6.5-1.1 1.1-1.1h3.1l1.4 1.5h5.3c.6 0 1.1.5 1.1 1.1v6c0 .6-.5 1.1-1.1 1.1H3.1c-.6 0-1.1-.5-1.1-1.1V4.3Z" stroke="var(--ui-icon)" strokeWidth="1.1" strokeLinejoin="round" />
   </S>
 );
 
+/** 테이블: 칸 + 파란 머리 줄 */
 export const TableIcon = () => (
   <S>
-    <rect x="2" y="2.5" width="12" height="11" rx="1.2" stroke="#b4b8bf" strokeWidth="1.1" />
-    <path d="M2 6.2h12M2 9.8h12M6 2.5v11M10 2.5v11" stroke="#b4b8bf" strokeWidth="1" />
+    <rect x="2.5" y="3" width="11" height="10" rx="1.2" stroke="var(--ui-icon)" strokeWidth="1.1" />
+    <path d="M3 3.6h10V6.3H3Z" fill="var(--ui-icon-db)" opacity=".55" />
+    <path d="M2.5 6.5h11M2.5 9.7h11M6.2 6.5V13M9.8 6.5V13" stroke="var(--ui-icon)" strokeWidth=".9" />
   </S>
 );
 
@@ -175,5 +179,15 @@ export const IcGear = () => (
 );
 export const IcFilter = () => <L d="M2.5 3.5h11L9.5 8.5V13l-3-1.5v-3l-4-5Z" />;
 export const IcOrder = () => <L d="M3 4h10M3 8h7M3 12h4" />;
+/** 모두 접기 (DataGrip Collapse All) */
+export const IcCollapseAll = () => <L d="M4.5 3 8 6.5 11.5 3M4.5 13 8 9.5l3.5 3.5" />;
+/** 더 보기 (세로 점 셋) */
+export const IcMoreV = () => (
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+    <circle cx="8" cy="3.5" r="1.2" />
+    <circle cx="8" cy="8" r="1.2" />
+    <circle cx="8" cy="12.5" r="1.2" />
+  </svg>
+);
 export const IcChart = () => <L d="M2.5 13.5h11M4 11V8M7 11V4.5M10 11V6.5M13 11V9" />;
 export const IcTranspose = () => <L d="M3 3h4v4H3zM9 9h4v4H9zM9 4.5h2.5V7M7 11.5H4.5V9" />;
