@@ -2362,11 +2362,8 @@ impl App {
         c.name = if v("Name").trim().is_empty() { format!("{}@{}", c.user, c.host) } else { v("Name").trim().into() };
         c.read_only = v("Read-only") == "on";
         c.options.confirm_changes = v("Production") == "on";
-        // 고치지 않은 예전 소스는 그대로 둔다 (정하지 않은 채로: store::ConnectionConfig::mcp_access)
-        let mcp = v("MCP");
-        if c.options.mcp.is_some() || form.edit.as_ref().is_none_or(|e| mcp != mcp_label(e)) {
-            c.options.mcp = Some(mcp);
-        }
+        // 보이는 값을 그대로 저장한다 (정하지 않은 채로 두면 Production 을 끈 뒤 저절로 열린다)
+        c.options.mcp = Some(v("MCP"));
         // custom = GUI 에서 고른 프리셋 밖의 색: 그대로 둔다
         match v("Color").as_str() {
             "custom" => {}

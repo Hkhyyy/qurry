@@ -54,6 +54,8 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
 
   const ssh = cfg.ssh ?? EMPTY_SSH;
   const opt: ConnOptions = cfg.options ?? {};
+  // 정하지 않은 예전 소스의 MCP: 창을 연 때의 동작 (Production 이면 숨김). 고쳐도 이 값은 바뀌지 않는다
+  const [legacyMcp] = useState<"off" | "write">(() => (edit?.options?.confirmChanges ? "off" : edit ? "write" : "off"));
   // 새로 켜는 SSL 은 인증서와 호스트 이름까지 확인한다 (require 는 암호화만)
   const ssl: SslConfig = cfg.ssl ?? { enabled: false, mode: "verify-full", caFile: "", certFile: "", keyFile: "" };
   const setSsl = <K extends keyof SslConfig>(k: K, v: SslConfig[K]) => setCfg((c) => ({ ...c, ssl: { ...ssl, ...(c.ssl ?? {}), [k]: v } }));
@@ -84,7 +86,8 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   const save = async () => {
     const name = cfg.name.trim() || `${cfg.user}@${cfg.host}`;
     try {
-      const saved = await api.saveConnection({ ...cfg, name }, password, sshSecret);
+      // 보이는 MCP 값을 그대로 저장한다 (정하지 않은 채로 두면 Production 을 끈 뒤 저절로 열린다)
+      const saved = await api.saveConnection({ ...cfg, name, options: { ...opt, mcp: opt.mcp ?? legacyMcp } }, password, sshSecret);
       onSaved(saved);
     } catch (e) {
       setTest({ ok: false, msg: `Save failed: ${String(e)}` });
@@ -323,7 +326,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
           </Checkbox>
           <label>MCP (AI tools)</label>
           <div className="ui-row">
-            <Select value={opt.mcp ?? (opt.confirmChanges ? "off" : "write")} onChange={(e) => setOpt("mcp", e.target.value as ConnOptions["mcp"])} title="What qurry-mcp (Claude Code and other AI tools) may do with this data source. For Read, connect with a read-only database user.">
+            <Select value={opt.mcp ?? legacyMcp} onChange={(e) => setOpt("mcp", e.target.value as ConnOptions["mcp"])} title="What qurry-mcp (Claude Code and other AI tools) may do with this data source. For Read, connect with a read-only database user.">
               <option value="off">Off — not listed, no connection</option>
               <option value="read">Read</option>
               <option value="write" disabled={!!cfg.readOnly}>Read &amp; write (when qurry-mcp runs with --allow-write)</option>

@@ -363,8 +363,21 @@ impl Store {
             match all.iter().find(|e| !c.id.is_empty() && e.id == c.id) {
                 None => {
                     let mut line = format!("+ add \"{}\" ({}@{}:{})", c.name, c.user, c.host, c.port);
+                    let mut notes = vec![];
                     if !script(&c).is_empty() {
-                        line += " — runs a startup script on connect";
+                        notes.push("runs a startup script on connect".to_string());
+                    }
+                    if matches!(c.options.mcp.as_deref(), Some("read") | Some("write")) {
+                        notes.push(format!("shared with MCP ({})", c.options.mcp.as_deref().unwrap_or("")));
+                    }
+                    if c.active_ssl().is_some_and(|s| s.mode() == "require") {
+                        notes.push("SSL without certificate checks".into());
+                    }
+                    if c.options.oracle_client.as_deref().is_some_and(|p| !p.trim().is_empty()) {
+                        notes.push("loads Oracle client libraries from a folder".into());
+                    }
+                    if !notes.is_empty() {
+                        line += &format!(" — {}", notes.join(", "));
                     }
                     out.push(line);
                 }
@@ -385,6 +398,16 @@ impl Store {
                         && a.mode() != b.mode()
                     {
                         ch.push(format!("SSL {} → {}", a.mode(), b.mode()));
+                    }
+                    let files = |x: &ConnectionConfig| x.ssl.as_ref().map(|s| (s.ca_file.clone(), s.cert_file.clone(), s.key_file.clone()));
+                    if files(e) != files(&c) {
+                        ch.push("changes the SSL certificate files".into());
+                    }
+                    if e.redis.as_ref().map(|r| (&r.mode, &r.nodes, &r.sentinel_master)) != c.redis.as_ref().map(|r| (&r.mode, &r.nodes, &r.sentinel_master)) {
+                        ch.push("changes the Redis nodes".into());
+                    }
+                    if e.options.oracle_client != c.options.oracle_client {
+                        ch.push("changes the Oracle client library folder".into());
                     }
                     if e.options.confirm_changes && !c.options.confirm_changes {
                         ch.push("turns Production OFF".into());
@@ -429,9 +452,12 @@ impl Store {
                     updated += 1;
                 }
                 None => {
-                    // 새 소스에는 저장된 비밀번호가 없다
+                    // 새 소스에는 저장된 비밀번호가 없고, MCP 는 정해 오지 않았으면 Off
                     c.password_saved = false;
                     c.ssh_secret_saved = false;
+                    if c.options.mcp.is_none() {
+                        c.options.mcp = Some("off".into());
+                    }
                     all.push(c);
                     added += 1;
                 }
@@ -589,6 +615,8 @@ mod tests {
         let b = Store::new(base.join("b"));
         b.save(&conn("2", "old name")).unwrap();
         assert_eq!(b.import_from(&file).unwrap(), (1, 1, vec![]));
+        // 새로 들어온 소스는 MCP Off (파일에 정해 오지 않았으면)
+        assert_eq!(b.get("1").unwrap().unwrap().options.mcp.as_deref(), Some("off"));
         let names: Vec<_> = b.list().unwrap().into_iter().map(|c| c.name).collect();
         assert_eq!(names, vec!["PROD", "DEV"]);
         assert_eq!(b.get("1").unwrap().unwrap().color.as_deref(), Some("#5c2b2b"));

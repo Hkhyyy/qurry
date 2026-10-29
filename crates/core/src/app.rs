@@ -261,6 +261,12 @@ pub async fn housekeeping(state: &AppState) -> Vec<String> {
 
 /// 드라이버 풀의 내보내기 (전체를 한 번에 받아 쓴다)
 pub async fn ensure_pool(state: &AppState, id: &str) -> AppResult<Pool> {
+    // MCP 서버: 숨긴 Data Source 에는 접속하지 않는다 (비밀번호가 없는 소스 · 이미 열린 풀도)
+    if state.mcp
+        && let Some(c) = state.store.get(split_target(id).0)?.filter(|c| c.mcp_access(false) == store::McpAccess::Off)
+    {
+        return Err(AppError::Msg(format!("Data source \"{}\" is not shared with MCP", c.name)));
+    }
     touch(state, id);
     if let Some(p) = state.pools.read().await.get(id) {
         return Ok(p.clone());
@@ -486,6 +492,10 @@ impl AppState {
         crate::log!("[qurry] save_connection host={} user={} db={}", config.host, config.user, config.database);
         if config.id.is_empty() {
             config.id = uuid::Uuid::new_v4().to_string();
+            // 새로 만드는 소스 (복제 포함) 는 MCP 를 정하지 않았으면 Off
+            if config.options.mcp.is_none() {
+                config.options.mcp = Some("off".into());
+            }
         }
         // 저장 여부 플래그는 서버가 관리한다 (None = 기존 값 유지)
         let prev = self.store.get(&config.id)?;
@@ -1008,6 +1018,24 @@ mod tests {
         renamed.name = "b".into();
         st.save_connection(renamed, None, None).await.unwrap();
         assert_eq!(st.secret("a").unwrap().as_deref(), Some("pw2"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 새로 만들거나 복제한 소스는 MCP Off. MCP 서버는 숨긴 소스에 (비밀번호가 없어도) 접속하지 않는다
+    #[tokio::test]
+    async fn new_sources_start_hidden_from_mcp() {
+        let dir = std::env::temp_dir().join(format!("qurry-mcpnew-{}", uuid::Uuid::new_v4()));
+        let mut st = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+        let cfg = ConnectionConfig {
+            id: String::new(), name: "trust".into(), kind: crate::store::DbKind::Postgres, host: "127.0.0.1".into(), port: 1,
+            user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+        };
+        let saved = st.save_connection(cfg, None, None).await.unwrap();
+        assert_eq!(saved.options.mcp.as_deref(), Some("off"));
+        st.mcp = true;
+        let e = st.connect(saved.id.clone()).await.unwrap_err().to_string();
+        assert!(e.contains("not shared with MCP"), "{e}");
         let _ = std::fs::remove_dir_all(dir);
     }
 
