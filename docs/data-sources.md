@@ -17,6 +17,7 @@ Connection options:
 - **SSL/TLS**: Require / Verify CA / Full Verification, with optional CA and client certificate. Works for PostgreSQL, MySQL and Redis.
 - **Options tab**: read-only, transaction control and isolation level, time zone, keep-alive, auto-disconnect when idle, single database mode, startup script.
 - **Production**: before a statement that changes data runs, Qurry counts the rows it will change (the same table and WHERE as a `SELECT count(*)`, nothing is changed) and asks. Statements it can't count (`UPDATE … FROM`, `DELETE … USING`, CTEs) still ask; statements that change the structure (DDL) show as "schema change". GUI: Options tab · TUI: the `Production` toggle in the data source form.
+- **MCP**: what AI tools may do through `qurry-mcp` — Off (new data sources; not listed, never connected), Read, or Read & write (with `--allow-write`). See [MCP server](mcp.md). GUI: Options tab · TUI: the `MCP` field.
 
 > Redis Sentinel and Cluster nodes advertise their own addresses, so they can't be combined with an SSH tunnel.
 

@@ -36,11 +36,20 @@ pub struct AppState {
     pub audit: crate::audit::Audit,
     /// 내보내기·가져오기 작업 id → 진행·취소
     pub jobs: std::sync::Mutex<HashMap<String, std::sync::Arc<crate::transfer::Job>>>,
+    /// MCP 서버: MCP 에 보이지 않게 한 Data Source 는 비밀번호를 꺼내지 않는다 (crate::store::McpAccess)
+    pub mcp: bool,
 }
 
 impl AppState {
     /// 키체인 조회는 처음 한 번만. 이후에는 메모리 캐시.
     pub fn secret(&self, key: &str) -> AppResult<Option<String>> {
+        // MCP 서버: MCP 에 보이지 않게 한 Data Source 의 비밀번호는 꺼내지 않는다 (접속도 못 한다)
+        if self.mcp {
+            let id = key.strip_suffix("#ssh").unwrap_or(key);
+            if let Some(c) = self.store.get(id)?.filter(|c| c.mcp_access(false) == store::McpAccess::Off) {
+                return Err(AppError::Msg(format!("Data source \"{}\" is not shared with MCP (turn it on in the data source's Options)", c.name)));
+            }
+        }
         if let Some(v) = self.secrets.lock().unwrap().get(key) {
             return Ok(v.clone());
         }
@@ -61,7 +70,7 @@ impl AppState {
     pub fn new(store: Store, secret_file: crate::secrets::SecretFile) -> Self {
         let history = crate::history::History::new(&store.dir());
         let audit = crate::audit::Audit::new(&store.dir());
-        Self { history, audit, store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), secrets: Default::default(), secret_file, last_used: Default::default(), last_ping: Default::default(), tab_manual: Default::default(), jobs: Default::default() }
+        Self { history, audit, store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), secrets: Default::default(), secret_file, last_used: Default::default(), last_ping: Default::default(), tab_manual: Default::default(), jobs: Default::default(), mcp: false }
     }
 }
 
@@ -307,6 +316,9 @@ pub async fn redis_pool(state: &AppState, id: &str) -> AppResult<crate::redisdb:
 /// 읽기 전용(MCP) 쿼리 시간 제한 (남이 보낸 쿼리로 서버를 오래 붙잡지 않게)
 const READ_ONLY_TIMEOUT_PG: &str = "SET LOCAL statement_timeout = '60s'";
 const READ_ONLY_TIMEOUT_MY: &str = "SET SESSION max_execution_time = 60000";
+/// MCP CSV 내보내기 상한
+const EXPORT_MAX_BYTES: u64 = 512 << 20;
+const EXPORT_MAX_PLUGIN_ROWS: usize = 1_000_000;
 
 #[derive(Serialize)]
 pub struct ImportResult {
@@ -348,7 +360,8 @@ impl AppState {
                 if !crate::redisdb::is_read_command(&cmd, &sub) {
                     return Err(AppError::Msg(format!("{cmd} is not a read-only command")));
                 }
-                if let Some(why) = crate::guard::redis_strict_violation(&cmd) {
+                let rest: Vec<String> = args.iter().skip(1).map(|a| String::from_utf8_lossy(a).into_owned()).collect();
+                if let Some(why) = crate::guard::redis_strict_violation(&cmd, &rest) {
                     return Err(AppError::Msg(why));
                 }
                 crate::redisdb::run(&m, &sql, limit).await
@@ -360,38 +373,55 @@ impl AppState {
 
     /// 읽기 전용 쿼리 결과를 CSV 로 (MCP). 검사·실행 모두 run_read_only 와 같은 규칙 (전체 결과도 READ ONLY 트랜잭션 안에서)
     pub async fn export_csv_read_only(&self, id: String, sql: String, path: std::path::PathBuf) -> AppResult<u64> {
-        use sqlx::Executor;
         let kind = self.kind_of(&id)?;
         if let Some(why) = crate::guard::read_only_violation(&sql, kind, true) {
             return Err(AppError::Msg(why));
         }
         let pool = ensure_pool(self, &id).await?;
-        let mut out = crate::transfer::Exporter::csv_file(&path).await?;
+        // run_read_only 와 같은 시간 제한, 파일 크기 제한 (디스크를 채우지 않게). 실패하면 쓰던 파일은 지운다
+        let mut out = crate::transfer::Exporter::csv_file(&path).await?.max_bytes(EXPORT_MAX_BYTES);
+        let r = match Self::export_read_only_into(pool, &sql, &mut out).await {
+            Ok(()) => out.finish().await.map(|e| e.rows),
+            Err(e) => Err(e),
+        };
+        if r.is_err() {
+            let _ = std::fs::remove_file(&path);
+        }
+        r
+    }
+
+    async fn export_read_only_into(pool: Pool, sql: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {
+        use sqlx::Executor;
         match pool {
             Pool::Pg(p) => {
                 let mut tx = p.begin().await?;
                 tx.execute("SET TRANSACTION READ ONLY").await?;
-                let r = db::export_pg_on(&mut tx, &sql, &mut out).await;
+                tx.execute(READ_ONLY_TIMEOUT_PG).await?;
+                let r = db::export_pg_on(&mut tx, sql, out).await;
                 let _ = tx.rollback().await;
                 r?
             }
             Pool::My(p) => {
                 let mut conn = p.acquire().await?;
+                conn.execute(READ_ONLY_TIMEOUT_MY).await?;
                 conn.execute("START TRANSACTION READ ONLY").await?;
-                let r = crate::mysql::export_on(&mut conn, &sql, &mut out, true).await;
+                let r = crate::mysql::export_on(&mut conn, sql, out, true).await;
                 let _ = conn.execute("ROLLBACK").await;
+                let _ = conn.execute("SET SESSION max_execution_time = 0").await;
                 r?
             }
             Pool::Redis(..) => return Err(AppError::Msg("CSV export of Redis commands is not available in read-only mode".into())),
             Pool::Plugin(c) => {
-                let r = c.query_opts(&sql, 10_000_000, true).await?;
+                let r = tokio::time::timeout(std::time::Duration::from_secs(60), c.query_opts(sql, EXPORT_MAX_PLUGIN_ROWS, true))
+                    .await
+                    .map_err(|_| AppError::Msg("The export took over 60 s — narrow the query".into()))??;
                 out.header(&r.columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>()).await?;
                 for row in &r.rows {
                     out.row(row).await?;
                 }
             }
         }
-        Ok(out.finish().await?.rows)
+        Ok(())
     }
 
     pub fn kind_of(&self, id: &str) -> AppResult<crate::store::DbKind> {
@@ -872,6 +902,29 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// MCP 서버는 MCP 에 보이지 않는 Data Source 의 비밀번호를 꺼내지 않는다. 앱은 그대로
+    #[test]
+    fn mcp_hidden_source_secrets_stay_locked() {
+        let dir = std::env::temp_dir().join(format!("qurry-mcp-{}", uuid::Uuid::new_v4()));
+        let mut st = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+        let mut cfg = ConnectionConfig {
+            id: "prod".into(), name: "prod".into(), kind: crate::store::DbKind::Postgres, host: "db".into(), port: 5432,
+            user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: true,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+        };
+        cfg.options.confirm_changes = true;
+        st.store.save(&cfg).unwrap();
+        st.set_secret("prod", Some("pw")).unwrap();
+        st.set_secret("prod#ssh", Some("sshpw")).unwrap();
+        assert_eq!(st.secret("prod").unwrap().as_deref(), Some("pw"));
+        st.mcp = true;
+        assert!(st.secret("prod").is_err() && st.secret("prod#ssh").is_err());
+        cfg.options.mcp = Some("read".into());
+        st.store.save(&cfg).unwrap();
+        assert_eq!(st.secret("prod").unwrap().as_deref(), Some("pw"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     /// Auto-disconnect: 유휴 시간이 지나면 풀·세션을 닫는다. keep-alive 는 세션을 살려 둔다.
     #[tokio::test]
