@@ -604,7 +604,7 @@ fn mongo_unsafe(sql: &str) -> Option<String> {
         let m = c[3].to_lowercase();
         if ["deletemany", "updatemany", "remove", "replaceone", "deleteone", "updateone"].contains(&m.as_str()) {
             let filter = mongo_args(&c[4]).and_then(|a| a.into_iter().next());
-            if !filter.as_ref().is_some_and(|f| f.as_object().is_some_and(|o| !o.is_empty())) {
+            if !filter.as_ref().is_some_and(mongo_filter_doc) {
                 return Some(format!("{} with an empty filter changes every document", &c[3]));
             }
         }
@@ -715,7 +715,7 @@ fn mongo_mcp_write_violation(sql: &str) -> Option<String> {
     if ["$out", "$merge", "$function", "$accumulator", "$where"].iter().any(|k| json_has_key(&serde_json::Value::Array(args.clone()), k)) {
         return refuse("$out, $merge, $function, $accumulator and $where are not allowed");
     }
-    let filter_ok = || args.first().is_some_and(|f| f.as_object().is_some_and(|o| !o.is_empty()));
+    let filter_ok = || args.first().is_some_and(mongo_filter_doc);
     match method {
         "insertOne" | "insertMany" => None,
         "updateOne" | "updateMany" | "replaceOne" | "deleteOne" | "deleteMany" if filter_ok() => None,
@@ -733,6 +733,16 @@ fn mongo_args(s: &str) -> Option<Vec<serde_json::Value>> {
     let s = re_date.replace_all(&s, r#"{"$$date": "$1"}"#);
     let s = re_long.replace_all(&s, "$1");
     json5::from_str::<serde_json::Value>(&format!("[{s}]")).ok()?.as_array().cloned()
+}
+
+/// A filter the driver keeps as a non-empty document. Extended JSON such as {"$oid": …} or {"$numberLong": …}
+/// becomes a scalar in the driver, which then refuses it; it must never count as a real filter here.
+fn mongo_filter_doc(v: &serde_json::Value) -> bool {
+    const SCALAR_KEYS: &[&str] = &[
+        "$oid", "$date", "$numberlong", "$numberint", "$numberdouble", "$numberdecimal", "$binary", "$uuid", "$regularexpression",
+        "$regex", "$timestamp", "$minkey", "$maxkey", "$undefined", "$symbol", "$code", "$dbpointer",
+    ];
+    v.as_object().is_some_and(|o| !o.is_empty() && !o.keys().any(|k| SCALAR_KEYS.contains(&k.to_lowercase().as_str())))
 }
 
 fn json_has_key(v: &serde_json::Value, key: &str) -> bool {
@@ -1103,6 +1113,12 @@ mod tests {
         assert!(u("db.users.updateMany({}, {$set: {a: 1}})", Mongodb) && u("{\"drop\": \"users\"}", Mongodb));
         assert!(!u("db.users.deleteMany({age: {$lt: 0}})", Mongodb) && !u("db.users.find({})", Mongodb));
         assert!(u("db.users.deleteMany(null)", Mongodb) && u("db.users.deleteMany({/*x*/})", Mongodb) && u("db.users.aggregate([{$out: 'x'}])", Mongodb));
+        // Extended JSON scalars become "match everything" if a driver drops them, so they never count as a filter
+        for s in ["db.c.deleteMany(ObjectId(\"507f1f77bcf86cd799439011\"))", "db.c.deleteMany({$numberLong: \"1\"})", "db.c.updateMany({$date: \"2020-01-01\"}, {$set: {a: 1}})"] {
+            assert!(u(s, Mongodb), "{s}");
+            assert!(mcp_execute_violation(s, Mongodb).is_some(), "{s}");
+        }
+        assert!(!u("db.c.deleteMany({_id: ObjectId(\"507f1f77bcf86cd799439011\")})", Mongodb));
         assert!(u("POST /collections/%64rop\n{}", Milvus) && u("POST /collections/x/../drop\n{}", Milvus));
         assert!(u("POST /collections/drop\n{\"collectionName\": \"x\"}", Milvus) && u("DELETE /collections/x", Qdrant));
         assert!(u("POST /collections/x/points/delete\n{\"filter\": {}}", Qdrant) && u("POST /collections/x/points/delete", Qdrant));
