@@ -223,14 +223,15 @@ mod tests {
         p.execute("drop table public.hint_t").await.unwrap();
     }
 
-    /// 실제 DB: QURRY_TEST_MY=mysql://root:pw@127.0.0.1:port/db cargo test -p qurry-core hints -- --ignored
+    /// 실제 DB: QURRY_TEST_MY=host:port:user:password:db cargo test -p qurry-core hints -- --ignored
     #[tokio::test]
     #[ignore]
     async fn mysql_values_and_keys() {
         use sqlx::Executor;
-        let url = std::env::var("QURRY_TEST_MY").unwrap();
-        let db = url.rsplit('/').next().unwrap().to_string();
-        let p = sqlx::MySqlPool::connect(&url).await.unwrap();
+        let env = std::env::var("QURRY_TEST_MY").unwrap();
+        let s: Vec<&str> = env.split(':').collect();
+        let db = s[4].to_string();
+        let p = sqlx::MySqlPool::connect(&format!("mysql://{}:{}@{}:{}/{db}?ssl-mode=disabled", s[2], s[3], s[0], s[1])).await.unwrap();
         p.execute("drop table if exists hint_t").await.unwrap();
         p.execute("create table hint_t (id int, status varchar(20), data json)").await.unwrap();
         for g in 1..=30 {
