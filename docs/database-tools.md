@@ -12,8 +12,8 @@ GUI: right-click a data source › **Tools** › Sessions & Locks, Slow Queries,
 |---|---|
 | Activity | **Sessions** (who blocks whom, query / transaction age; refreshes every 3 s) · **Lock Waits** — right-click / `c` cancel the query, `K` terminate the session |
 | Performance | **Slow Queries** — top 100 by total time (`pg_stat_statements` / `performance_schema`), open or EXPLAIN in a console |
-| Storage | **Table Sizes** · **Unused Indexes** · **Duplicate Indexes** · **Foreign Keys Without an Index** — generate DROP / CREATE INDEX |
-| Maintenance | **Vacuum & Dead Rows** · **Transaction ID Age** (wraparound) — generate VACUUM ANALYZE (PostgreSQL) |
+| Storage | **Table Sizes** · **Table Bloat** · **Index Bloat** (space held by deleted rows, estimated from statistics — PostgreSQL) · **Table Fragmentation** (MySQL) · **Unused Indexes** · **Duplicate Indexes** · **Foreign Keys Without an Index** — generate DROP / CREATE INDEX, VACUUM FULL, REINDEX, OPTIMIZE TABLE |
+| Maintenance | **Vacuum & Dead Rows** · **Vacuum Progress** (VACUUM / autovacuum running now: phase, % scanned — cancel it) · **Transaction ID Age** (wraparound) — generate VACUUM ANALYZE (PostgreSQL) |
 | Server | **Server Overview** (uptime, connections, cache hit ratio) · **Replication** lag · **Settings** |
 | Security | **Users & Roles** · **Table Privileges** — generate GRANT / REVOKE |
 

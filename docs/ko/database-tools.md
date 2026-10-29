@@ -12,8 +12,8 @@ GUI: Data Source 우클릭 › **Tools** › Sessions & Locks, Slow Queries, …
 |---|---|
 | 활동 | **Sessions** (누가 누구를 막는지, 쿼리 · 트랜잭션이 얼마나 됐는지, 3초마다 새로 고침) · **Lock Waits** — 우클릭 / `c` 쿼리 취소, `K` 세션 종료 |
 | 성능 | **Slow Queries** — 총 시간 기준 상위 100개 (`pg_stat_statements` / `performance_schema`), 콘솔에서 열거나 EXPLAIN |
-| 용량 | **Table Sizes** · **Unused Indexes** · **Duplicate Indexes** · **Foreign Keys Without an Index** — DROP / CREATE INDEX 생성 |
-| 유지보수 | **Vacuum & Dead Rows** · **Transaction ID Age** (wraparound) — VACUUM ANALYZE 생성 (PostgreSQL) |
+| 용량 | **Table Sizes** · **Table Bloat** · **Index Bloat** (지운 행이 차지한 공간, 통계로 어림 — PostgreSQL) · **Table Fragmentation** (MySQL) · **Unused Indexes** · **Duplicate Indexes** · **Foreign Keys Without an Index** — DROP / CREATE INDEX, VACUUM FULL, REINDEX, OPTIMIZE TABLE 생성 |
+| 유지보수 | **Vacuum & Dead Rows** · **Vacuum Progress** (지금 도는 VACUUM / autovacuum: 단계, 스캔한 비율 — 취소 가능) · **Transaction ID Age** (wraparound) — VACUUM ANALYZE 생성 (PostgreSQL) |
 | 서버 | **Server Overview** (가동 시간, 연결 수, 캐시 적중률) · **Replication** 지연 · **Settings** |
 | 보안 | **Users & Roles** · **Table Privileges** — GRANT / REVOKE 생성 |
 

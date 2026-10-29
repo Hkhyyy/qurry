@@ -1790,6 +1790,31 @@ mod tests {
         assert!(h.app.popup.is_none(), "must not offer to kill a session that is gone");
     }
 
+    /// Vacuum Progress 는 취소만: K (연결 끊기) 는 묻지도 않고, 안내 줄에도 없다
+    #[tokio::test]
+    async fn dba_vacuum_progress_only_cancels() {
+        use qurry_core::db::{ColumnInfo, QueryResult};
+        let mut h = Harness::new().await;
+        let res = QueryResult {
+            columns: vec![ColumnInfo { name: "pid".into(), type_name: "INT4".into() }, ColumnInfo { name: "query".into(), type_name: "TEXT".into() }],
+            rows: vec![vec![serde_json::json!(77), serde_json::json!("autovacuum: VACUUM public.big")]],
+            rows_affected: 0,
+            truncated: false,
+            elapsed_ms: 0,
+            has_result_set: true,
+            in_transaction: false,
+        };
+        let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "vacuum_progress");
+        let d = crate::app::DbaTab { report: "vacuum_progress".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res)), error: None, running: false, auto: true };
+        h.app.push_tab("test", "postgres".into(), "Vacuum Progress".into(), TabKind::Dba(d));
+        h.key("K");
+        assert!(h.app.popup.is_none(), "must not offer to terminate a vacuum");
+        let s = h.screen(160, 20);
+        assert!(s.contains("cancel query") && !s.contains("terminate"), "{s}");
+        h.key("c");
+        assert!(matches!(&h.app.popup, Some(crate::app::Popup::Confirm { text, .. }) if text.contains("Cancel the query of session 77")));
+    }
+
     /// ⌃K › Query History / Snippets: GUI 와 같은 기록. 고르면 콘솔에 넣는다. Save Query as Snippet 은 이름을 묻는다
     #[tokio::test]
     async fn history_and_snippets_insert_into_console() {

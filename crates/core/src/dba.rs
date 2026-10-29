@@ -1,4 +1,4 @@
-//! DBA 리포트: 세션·락, 느린 쿼리, 용량·인덱스, 유지보수, 복제·서버, 권한. 쿼리 결과를 표로 보이고 몇 가지 동작(세션 종료, SQL 만들기)을 붙인다.
+//! DBA 리포트: 세션·락, 느린 쿼리, 용량·인덱스·bloat, 유지보수·VACUUM 진행, 복제·서버, 권한. 쿼리 결과를 표로 보이고 몇 가지 동작(세션 종료, SQL 만들기)을 붙인다.
 //! GUI·TUI 는 같은 리포트 목록을 그대로 보여 준다
 use crate::app::{AppState, ensure_pool};
 use crate::db::QueryResult;
@@ -108,6 +108,100 @@ ORDER BY total_bytes DESC LIMIT 300"#],
 FROM information_schema.TABLES WHERE TABLE_TYPE = 'BASE TABLE' AND TABLE_SCHEMA NOT IN ('mysql', 'sys', 'performance_schema', 'information_schema')
 ORDER BY DATA_LENGTH + INDEX_LENGTH DESC LIMIT 300"#],
     },
+    // bloat: pg_stats 의 평균 행 크기로 있어야 할 페이지 수를 어림해 지금 페이지 수와 비교한다 (pgstattuple 없이). 통계가 없는 테이블은 뺀다
+    Def {
+        info: || info("table_bloat", "Table Bloat", "Storage", "Space held by dead or deleted rows (estimated from statistics, most accurate right after ANALYZE). Plain VACUUM makes it reusable; VACUUM FULL gives it back to the disk but locks the table while it rewrites it (pg_repack does it online).", vec![
+            Action::Sql { label: "Generate VACUUM FULL", template: "VACUUM (FULL, ANALYZE) {schema}.{table};" },
+        ]),
+        pg: &[r#"SELECT schemaname AS schema, tblname AS "table", pg_size_pretty((bs * tblpages)::bigint) AS size,
+       pg_size_pretty(greatest((tblpages - est_pages_ff) * bs, 0)::bigint) AS wasted,
+       CASE WHEN tblpages > 0 AND tblpages > est_pages_ff THEN round(100 * (tblpages - est_pages_ff) / tblpages, 1) ELSE 0 END AS bloat_pct,
+       fillfactor, greatest((tblpages - est_pages_ff) * bs, 0)::bigint AS wasted_bytes
+FROM (
+  SELECT ceil(reltuples / ((bs - page_hdr) * fillfactor / (tpl_size * 100))) + ceil(toasttuples / 4) AS est_pages_ff, tblpages, fillfactor, bs, schemaname, tblname
+  FROM (
+    SELECT (4 + tpl_hdr_size + tpl_data_size + (2 * ma)
+            - CASE WHEN tpl_hdr_size % ma = 0 THEN ma ELSE tpl_hdr_size % ma END
+            - CASE WHEN ceil(tpl_data_size)::int % ma = 0 THEN ma ELSE ceil(tpl_data_size)::int % ma END)::numeric AS tpl_size,
+           (heappages + toastpages)::numeric AS tblpages, greatest(reltuples, 0)::numeric AS reltuples, toasttuples::numeric AS toasttuples, bs, page_hdr, schemaname, tblname, fillfactor, is_na
+    FROM (
+      SELECT ns.nspname AS schemaname, tbl.relname AS tblname, tbl.reltuples, tbl.relpages AS heappages, coalesce(toast.relpages, 0) AS toastpages, coalesce(toast.reltuples, 0) AS toasttuples,
+             coalesce(substring(array_to_string(tbl.reloptions, ' ') FROM 'fillfactor=([0-9]+)')::int, 100) AS fillfactor,
+             current_setting('block_size')::numeric AS bs, 8 AS ma, 24 AS page_hdr,
+             23 + CASE WHEN max(coalesce(s.null_frac, 0)) > 0 THEN (7 + count(s.attname)::int) / 8 ELSE 0 END AS tpl_hdr_size,
+             sum((1 - coalesce(s.null_frac, 0)) * coalesce(s.avg_width, 0)) AS tpl_data_size,
+             bool_or(att.atttypid = 'pg_catalog.name'::regtype) OR sum(CASE WHEN att.attnum > 0 THEN 1 ELSE 0 END) <> count(s.attname) AS is_na
+      FROM pg_attribute att
+      JOIN pg_class tbl ON tbl.oid = att.attrelid
+      JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+      LEFT JOIN pg_stats s ON s.schemaname = ns.nspname AND s.tablename = tbl.relname AND s.attname = att.attname AND NOT s.inherited
+      LEFT JOIN pg_class toast ON toast.oid = tbl.reltoastrelid
+      WHERE NOT att.attisdropped AND att.attnum > 0 AND tbl.relkind IN ('r', 'm')
+        AND ns.nspname NOT IN ('pg_catalog', 'information_schema') AND ns.nspname !~ '^pg_toast'
+      GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+    ) s
+  ) s2
+  WHERE NOT is_na
+) s3
+ORDER BY wasted_bytes DESC LIMIT 300"#],
+        my: &[],
+    },
+    Def {
+        info: || info("index_bloat", "Index Bloat", "Storage", "B-tree indexes bigger than their rows need (estimated from statistics). REINDEX CONCURRENTLY rebuilds one without blocking writes.", vec![
+            Action::Sql { label: "Generate REINDEX", template: "REINDEX INDEX CONCURRENTLY {schema}.{index};" },
+        ]),
+        pg: &[r#"SELECT nspname AS schema, tblname AS "table", idxname AS "index", pg_size_pretty((bs * relpages)::bigint) AS size,
+       pg_size_pretty(greatest((relpages - est_pages_ff) * bs, 0)::bigint) AS wasted,
+       CASE WHEN relpages > est_pages_ff THEN round(100 * (relpages - est_pages_ff) / relpages, 1) ELSE 0 END AS bloat_pct,
+       fillfactor, greatest((relpages - est_pages_ff) * bs, 0)::bigint AS wasted_bytes
+FROM (
+  SELECT coalesce(1 + ceil(reltuples / nullif(floor((bs - pageopqdata - pagehdr) * fillfactor / (100 * (4 + nulldatahdrwidth))), 0)), 0) AS est_pages_ff,
+         bs, nspname, tblname, idxname, relpages::numeric AS relpages, fillfactor, is_na
+  FROM (
+    SELECT bs, nspname, tblname, idxname, greatest(reltuples, 0)::numeric AS reltuples, relpages, fillfactor, pagehdr, pageopqdata, is_na,
+           (index_tuple_hdr_bm + maxalign - CASE WHEN index_tuple_hdr_bm % maxalign = 0 THEN maxalign ELSE index_tuple_hdr_bm % maxalign END
+            + nulldatawidth + maxalign - CASE WHEN nulldatawidth = 0 THEN 0 WHEN nulldatawidth::int % maxalign = 0 THEN maxalign ELSE nulldatawidth::int % maxalign END)::numeric AS nulldatahdrwidth
+    FROM (
+      SELECT n.nspname, i.tblname, i.idxname, i.reltuples, i.relpages, i.idxoid, i.fillfactor, current_setting('block_size')::numeric AS bs, 8 AS maxalign, 24 AS pagehdr, 16 AS pageopqdata,
+             CASE WHEN max(coalesce(s.null_frac, 0)) = 0 THEN 8 ELSE 8 + ((32 + 8 - 1) / 8) END AS index_tuple_hdr_bm,
+             sum((1 - coalesce(s.null_frac, 0)) * coalesce(s.avg_width, 1024)) AS nulldatawidth,
+             max(CASE WHEN i.atttypid = 'pg_catalog.name'::regtype THEN 1 ELSE 0 END) > 0 AS is_na
+      FROM (
+        SELECT ct.relname AS tblname, ct.relnamespace, ic.idxname, ic.reltuples, ic.relpages, ic.idxoid, ic.fillfactor,
+               coalesce(a1.attname, a2.attname) AS attname, coalesce(a1.atttypid, a2.atttypid) AS atttypid,
+               CASE WHEN a1.attnum IS NULL THEN ic.idxname ELSE ct.relname END AS attrelname
+        FROM (
+          SELECT ci.relname AS idxname, ci.reltuples, ci.relpages, i.indrelid AS tbloid, i.indexrelid AS idxoid,
+                 coalesce(substring(array_to_string(ci.reloptions, ' ') FROM 'fillfactor=([0-9]+)')::int, 90) AS fillfactor,
+                 string_to_array(i.indkey::text, ' ')::int[] AS indkey, generate_series(1, i.indnatts) AS attpos
+          FROM pg_index i JOIN pg_class ci ON ci.oid = i.indexrelid
+          WHERE ci.relam = (SELECT oid FROM pg_am WHERE amname = 'btree') AND ci.relpages > 0
+        ) ic
+        JOIN pg_class ct ON ct.oid = ic.tbloid
+        LEFT JOIN pg_attribute a1 ON ic.indkey[ic.attpos] <> 0 AND a1.attrelid = ic.tbloid AND a1.attnum = ic.indkey[ic.attpos]
+        LEFT JOIN pg_attribute a2 ON ic.indkey[ic.attpos] = 0 AND a2.attrelid = ic.idxoid AND a2.attnum = ic.attpos
+      ) i
+      JOIN pg_namespace n ON n.oid = i.relnamespace
+      JOIN pg_stats s ON s.schemaname = n.nspname AND s.tablename = i.attrelname AND s.attname = i.attname
+      WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_toast'
+      GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
+    ) d
+  ) h
+  WHERE NOT is_na
+) r
+ORDER BY wasted_bytes DESC LIMIT 300"#],
+        my: &[],
+    },
+    Def {
+        info: || info("fragmentation", "Table Fragmentation", "Storage", "Free space inside each table's file (DATA_FREE), left behind by deletes and updates. OPTIMIZE TABLE rebuilds the table to give it back. Tables in the shared system tablespace all show that tablespace's free space.", vec![
+            Action::Sql { label: "Generate OPTIMIZE TABLE", template: "OPTIMIZE TABLE {schema}.{table};" },
+        ]),
+        pg: &[],
+        my: &[r#"SELECT TABLE_SCHEMA AS `schema`, TABLE_NAME AS `table`, ROUND((DATA_LENGTH + INDEX_LENGTH) / 1048576, 1) AS total_mb, ROUND(DATA_FREE / 1048576, 1) AS free_mb,
+       ROUND(100 * DATA_FREE / NULLIF(DATA_LENGTH + INDEX_LENGTH + DATA_FREE, 0), 1) AS free_pct, ENGINE AS engine
+FROM information_schema.TABLES WHERE TABLE_TYPE = 'BASE TABLE' AND DATA_FREE > 0 AND TABLE_SCHEMA NOT IN ('mysql', 'sys', 'performance_schema', 'information_schema')
+ORDER BY DATA_FREE DESC LIMIT 300"#],
+    },
     Def {
         info: || info("unused_indexes", "Unused Indexes", "Storage", "Indexes never used since statistics were reset (unique and primary keys are left out). They cost disk and slow down writes. Check replicas too before dropping.", vec![
             Action::Sql { label: "Generate DROP INDEX", template: "DROP INDEX CONCURRENTLY {schema}.{index};" },
@@ -151,6 +245,23 @@ ORDER BY pg_relation_size(c.oid) DESC"#],
         pg: &[r#"SELECT schemaname AS schema, relname AS "table", n_live_tup AS live_rows, n_dead_tup AS dead_rows, round(100 * n_dead_tup::numeric / nullif(n_live_tup + n_dead_tup, 0), 1) AS dead_pct,
        last_vacuum, last_autovacuum, last_analyze, last_autoanalyze, vacuum_count, autovacuum_count
 FROM pg_stat_user_tables ORDER BY n_dead_tup DESC LIMIT 300"#],
+        my: &[],
+    },
+    Def {
+        info: || info("vacuum_progress", "Vacuum Progress", "Maintenance", "VACUUM running right now (autovacuum workers and manual VACUUM, all databases). phase and scanned_pct show how far it got. Cancelling autovacuum is safe but it starts again later; one marked to prevent wraparound restarts right away.", vec![
+            Action::Kill { label: "Cancel Vacuum", terminate: false },
+        ]),
+        pg: &[r#"SELECT p.pid, p.datname AS db, coalesce(n.nspname || '.' || c.relname, p.relid::text) AS "table", p.phase,
+       a.backend_type = 'autovacuum worker' AS auto, a.query LIKE '%(to prevent wraparound)%' AS wraparound,
+       round(100 * p.heap_blks_scanned::numeric / nullif(p.heap_blks_total, 0), 1) AS scanned_pct,
+       round(100 * p.heap_blks_vacuumed::numeric / nullif(p.heap_blks_total, 0), 1) AS vacuumed_pct,
+       p.index_vacuum_count AS index_passes, pg_size_pretty(p.heap_blks_total * current_setting('block_size')::bigint) AS table_size,
+       round(extract(epoch FROM now() - a.xact_start)::numeric, 1) AS running_sec, left(a.query, 2000) AS query
+FROM pg_stat_progress_vacuum p
+LEFT JOIN pg_stat_activity a ON a.pid = p.pid
+LEFT JOIN pg_class c ON c.oid = p.relid AND p.datname = current_database()
+LEFT JOIN pg_namespace n ON n.oid = c.relnamespace
+ORDER BY running_sec DESC NULLS LAST"#],
         my: &[],
     },
     Def {
@@ -351,9 +462,10 @@ mod tests {
             }
         }
         let pg: Vec<_> = reports(DbKind::Postgres).iter().map(|r| r.id).collect();
-        for want in ["duplicate_indexes", "fk_without_index", "vacuum", "wraparound", "replication"] {
+        for want in ["duplicate_indexes", "fk_without_index", "table_bloat", "index_bloat", "vacuum", "vacuum_progress", "wraparound", "replication"] {
             assert!(pg.contains(&want), "pg lacks {want}");
         }
+        assert!(reports(DbKind::Mysql).iter().any(|r| r.id == "fragmentation"));
         assert!(reports(DbKind::Redis).is_empty());
     }
 
@@ -417,6 +529,29 @@ mod tests {
         assert_eq!(st.preview_impact("d".into(), "select 1".into()).await.unwrap(), None);
         assert_eq!(q("select count(*) from qurry_impact").await.unwrap().rows[0][0], serde_json::json!(100));
         q("drop table qurry_impact").await.ok();
+    }
+
+    /// 지운 행이 VACUUM 전까지 자리를 차지하면 테이블·인덱스 bloat 로 보인다
+    #[tokio::test]
+    #[ignore]
+    async fn pg_bloat_shows_deleted_space() {
+        let Some(st) = state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
+        let q = |s: &str| st.run_query("d".into(), s.into(), None, None);
+        q("drop table if exists qurry_bloat").await.ok();
+        q("create table qurry_bloat (id int primary key, pad text) with (autovacuum_enabled = false)").await.unwrap();
+        q("insert into qurry_bloat select g, repeat('x', 200) from generate_series(1, 20000) g").await.unwrap();
+        q("delete from qurry_bloat where id % 10 <> 0").await.unwrap();
+        q("analyze qurry_bloat").await.unwrap();
+        let pct = |r: &QueryResult, key: &str, name: &str| {
+            let col = |n: &str| r.columns.iter().position(|c| c.name == n).unwrap();
+            let row = r.rows.iter().find(|x| crate::db::cell_text(&x[col(key)]) == name).unwrap_or_else(|| panic!("{name} not in report"));
+            crate::db::cell_text(&row[col("bloat_pct")]).parse::<f64>().unwrap()
+        };
+        let t = st.dba_report("d".into(), "table_bloat".into()).await.unwrap();
+        assert!(pct(&t, "table", "qurry_bloat") > 50.0);
+        let i = st.dba_report("d".into(), "index_bloat".into()).await.unwrap();
+        assert!(pct(&i, "index", "qurry_bloat_pkey") > 50.0);
+        q("drop table qurry_bloat").await.ok();
     }
 
     /// 락을 잡은 세션과 기다리는 세션이 보이고, 잡은 쪽을 끊으면 기다리던 쪽이 끝난다

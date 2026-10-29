@@ -6,7 +6,7 @@ import { Button, Notice, Select, Text, Toolbar } from "../ui";
 
 const empty: QueryResult = { columns: [], rows: [], rowsAffected: 0, truncated: false, elapsedMs: 0, hasResultSet: true };
 /** 저절로 다시 불러오는 리포트 (지금 상태를 보는 것) */
-const LIVE = new Set(["sessions", "locks"]);
+const LIVE = new Set(["sessions", "locks", "vacuum_progress"]);
 
 /** DBA 리포트 탭: 세션·락, 느린 쿼리, 용량·인덱스, 유지보수, 서버, 권한. 행 우클릭 = 세션 종료 / SQL 만들기 */
 export function DbaReport(p: {
