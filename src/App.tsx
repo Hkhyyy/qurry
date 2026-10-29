@@ -21,7 +21,7 @@ import { RagView } from "./components/RagView";
 import { WorkspaceBar, WorkspaceInfo } from "./components/WorkspaceBar";
 import { forgetConsoleModel } from "./lib/monaco";
 import { TextDialog } from "./components/TextDialog";
-import { Button, Checkbox, CodeBlock, ConfirmHost, Field, IconButton, List, ListItem, Modal, Overlay, Select, Spacer, StatusItem, TabItem, TabStrip, Text, ToolButton, Toolbar, ToolbarSep } from "./ui";
+import { Badge, Button, Checkbox, CodeBlock, ConfirmHost, Field, IconButton, List, ListItem, Modal, Overlay, Select, Spacer, StatusItem, TabItem, TabStrip, Text, ToolButton, Toolbar, ToolbarSep } from "./ui";
 import { RecentFiles, Switcher, SwitchItem } from "./components/Switcher";
 import { ActionItem, DbObject, invalidateSearchIndex, SearchEverywhere, SeTab } from "./components/SearchEverywhere";
 import { FindPanel, FindRun, FtsScope, FullTextSearchDialog } from "./components/FullTextSearch";
@@ -2304,15 +2304,15 @@ export default function App() {
       <Toolbar className="app-toolbar" style={activeConn?.color ? { boxShadow: `inset 4px 0 0 ${activeConn.color}` } : undefined}>
         <Text strong>Qurry</Text>
         <ToolbarSep />
-        <IconButton tone="ok" disabled={!active || active.kind !== "console" || active.running} onClick={() => active && editorApis.current.get(active.id)?.run()} title={`Execute (${isMac ? "⌘↩" : "Ctrl+Enter"})`}>
-          ▶
-        </IconButton>
-        <IconButton tone="danger" disabled={!active?.running} onClick={() => active && cancel(active)} title="Cancel Running Statements">
-          ■
-        </IconButton>
-        <IconButton className="tb-settings" title={`Settings (${sk("settings")})`} onClick={() => setSettingsOpen("appearance")}>⚙</IconButton>
-        <IconButton className="tb-settings" title={`Keymap Reference (${isMac ? "⇧⌘/" : "Ctrl+Shift+/"})`} onClick={() => setKeymapOpen(true)}>⌨</IconButton>
-        <Text tone="muted" truncate>{activeConn ? `${activeConn.name} · ${activeConn.user}@${activeConn.host} · ${active?.database || activeConn.database || "postgres"}` : "No console"}</Text>
+        {/* 접속 정보 (user@host) 는 화면 공유 때 드러나지 않게 안 보인다 */}
+        {activeConn ? (
+          <>
+            <Badge color={activeConn.color ?? undefined} className="tb-conn">{activeConn.name}</Badge>
+            <Badge className="tb-db">{active?.database || activeConn.database || "postgres"}</Badge>
+          </>
+        ) : (
+          <Text tone="muted">No console</Text>
+        )}
       </Toolbar>
 
       <div className="ws-row">
@@ -2523,7 +2523,12 @@ export default function App() {
           }}
         />
       )}
-      <StatusBar status={status} readOnly={!!activeConn?.readOnly} update={update?.latest?.version} onUpdate={() => setUpdateOpen(true)} jobs={jobs} />
+      <StatusBar
+        run={{ canRun: !!active && active.kind === "console" && !active.running, running: !!active?.running, onRun: () => active && editorApis.current.get(active.id)?.run(), onCancel: () => active && cancel(active) }}
+        onSettings={() => setSettingsOpen("appearance")}
+        settingsKey={sk("settings")}
+        onKeymap={() => setKeymapOpen(true)}
+        status={status} readOnly={!!activeConn?.readOnly} update={update?.latest?.version} onUpdate={() => setUpdateOpen(true)} jobs={jobs} />
 
       {tabMenu && <ContextMenu menu={tabMenu} onClose={() => setTabMenu(null)} />}
 
@@ -2670,10 +2675,16 @@ function SettingsDialog({ onClose, onUpdate, initialPage = "appearance" }: { onC
   );
 }
 
-function StatusBar({ status, readOnly, update, onUpdate, jobs }: { status: string; readOnly: boolean; update?: string; onUpdate: () => void; jobs: TransferJob[] }) {
+function StatusBar({ run, onSettings, settingsKey, onKeymap, status, readOnly, update, onUpdate, jobs }: { run: { canRun: boolean; running: boolean; onRun: () => void; onCancel: () => void }; onSettings: () => void; settingsKey?: string; onKeymap: () => void; status: string; readOnly: boolean; update?: string; onUpdate: () => void; jobs: TransferJob[] }) {
   const w = useStatusWidgets();
   return (
     <div className="statusbar">
+      <IconButton size="sm" tone="ok" disabled={!run.canRun} onClick={run.onRun} title={`Execute (${isMac ? "⌘↩" : "Ctrl+Enter"})`}>
+        ▶
+      </IconButton>
+      <IconButton size="sm" tone="danger" disabled={!run.running} onClick={run.onCancel} title="Cancel Running Statements">
+        ■
+      </IconButton>
       <Text truncate className="sb-text">
         {status}
       </Text>
@@ -2688,6 +2699,12 @@ function StatusBar({ status, readOnly, update, onUpdate, jobs }: { status: strin
       {readOnly && <StatusItem title="Data source is read-only">🔒 Read-only</StatusItem>}
       {w.caret && <StatusItem title="Line:Column">{w.caret}</StatusItem>}
       <StatusItem>UTF-8</StatusItem>
+      <IconButton size="sm" title={settingsKey ? `Settings (${settingsKey})` : "Settings"} onClick={onSettings}>
+        ⚙
+      </IconButton>
+      <IconButton size="sm" title={`Keymap Reference (${isMac ? "⇧⌘/" : "Ctrl+Shift+/"})`} onClick={onKeymap}>
+        ⌨
+      </IconButton>
     </div>
   );
 }

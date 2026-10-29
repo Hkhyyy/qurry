@@ -155,8 +155,9 @@ a { color: var(--c-548af7); cursor: pointer; }
 
 .app { display: flex; flex-direction: column; height: 100%; }
 .app-toolbar.ui-toolbar { height: 38px; padding: 0 var(--ui-sp-4); gap: var(--ui-sp-2); }
+.app-toolbar .ui-badge { height: 20px; font-size: 12px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; line-height: 20px; flex: 0 1 auto; min-width: 0; }
 .main { flex: 1; min-height: 0; }
-.statusbar { height: 24px; display: flex; align-items: center; padding: 0 12px; background: var(--panel); border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
+.statusbar { height: 24px; display: flex; align-items: center; gap: 2px; padding: 0 12px 0 4px; background: var(--panel); border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; }
 .resize-h { width: 1px; background: var(--border); }
 .resize-v { height: 1px; background: var(--border); }
 .resize-h:hover, .resize-h[data-resize-handle-active] { background: var(--accent); width: 2px; }
@@ -311,6 +312,7 @@ input:disabled, select:disabled { opacity: .45; }
 /* ── DataGrip 그리드 툴바 ── */
 .dg-filter { flex: none; height: 30px; display: flex; align-items: stretch; background: var(--bg); border-bottom: 1px solid var(--border); }
 .dg-filter-field { flex: 1; display: flex; align-items: center; gap: 6px; padding: 0 8px; color: var(--c-868a91); min-width: 0; }
+.dg-filter-field:first-child { flex: 2; }
 .dg-filter-field + .dg-filter-field { border-left: 1px solid var(--border); }
 .dg-filter-field .kw { font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; letter-spacing: .3px; }
 .dg-filter-field input { flex: 1; min-width: 0; border: none; background: none; padding: 0; font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; color: var(--text); }
@@ -429,7 +431,7 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .find-rows td.hit { background: rgba(229,192,123,.28); }
 .find-rows tr:hover td { background: var(--hover-tint); }
 .statusbar .grow { flex: 1; }
-.sb-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sb-text { margin-left: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .update-notes { max-height: 50vh; overflow: auto; font-size: 13px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin: 10px 0; }
 .update-notes ul { margin: 4px 0 10px; padding-left: 18px; }
 .update-notes li { margin: 2px 0; }

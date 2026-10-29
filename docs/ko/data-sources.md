@@ -35,6 +35,8 @@ Qurry 가 다루는 데이터베이스, 연결 방법 (SSH, SSL, 옵션), 덜 �
 
 연결 시험은 서버 버전을 보여 주고, Qurry 가 시험하는 버전 (PostgreSQL 12, MySQL 5.7, MariaDB 10.5, SQL Server 2017, MongoDB 5, ClickHouse 22, Oracle 19c — CI 가 이 버전들로 돕니다) 보다 낮으면 경고합니다. 읽기 전용 Data Source 는 드라이버에서도 지켜집니다: MongoDB 는 `find` / `aggregate` (`$out` / `$merge` 없이) / `count` / `distinct` 만, 벡터 DB 는 `GET` 과 검색 요청만 실행합니다.
 
+Data Source 마다 색을 정하면 트리 배경과 탭에 표시됩니다 (운영 DB 를 구분하기 좋습니다). 정해진 색 말고도 무지개 칸을 누르면 시스템 색 고르개가 열립니다 — macOS 는 스포이드로 화면의 아무 픽셀이나 찍을 수 있어서 DataGrip 에서 쓰던 색을 그대로 가져올 수 있습니다. 옆 칸에 hex 를 직접 쳐도 됩니다. TUI 는 정해진 색을 돌려 고르고, 직접 고른 색은 그대로 둡니다.
+
 ---
 
 [← 사용설명서](README.md)
