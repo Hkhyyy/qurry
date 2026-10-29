@@ -582,7 +582,7 @@ pub fn unsafe_statement(sql: &str, kind: DbKind) -> Option<String> {
 
 /// Arguments of a Redis command line (same rules as running: redisdb::parse_command). Empty list if unreadable
 fn redis_args(line: &str) -> Vec<String> {
-    crate::redisdb::parse_command(line).map(|a| a.iter().map(|x| String::from_utf8_lossy(x).into_owned()).collect()).unwrap_or_default()
+    crate::redisdb::parse_command(line.trim().trim_end_matches(';')).map(|a| a.iter().map(|x| String::from_utf8_lossy(x).into_owned()).collect()).unwrap_or_default()
 }
 
 /// MongoDB: dropping collections · DBs, deleting or updating all documents with an empty filter
@@ -630,15 +630,155 @@ fn rest_unsafe(sql: &str) -> Option<String> {
     None
 }
 
+/// MCP execute is an allow-list: everything else is refused with "run it in Qurry".
+/// SQL: one INSERT, or UPDATE / DELETE with a WHERE (no DDL, no MERGE, no functions with side effects or external reads).
+/// MongoDB: insertOne / insertMany, and updateOne / updateMany / replaceOne / deleteOne / deleteMany with a non-empty filter.
+/// Vector DBs: adding / upserting points, and deleting points by id. Redis: redis_mcp_write_violation
+pub fn mcp_execute_violation(sql: &str, kind: DbKind) -> Option<String> {
+    let refuse = |why: &str| Some(format!("{why} — over MCP only INSERT, and UPDATE / DELETE with a WHERE, are allowed; ask the user to run it in Qurry"));
+    match kind {
+        DbKind::Redis => return redis_mcp_write_violation(sql),
+        DbKind::Mongodb => return mongo_mcp_write_violation(sql),
+        k if k.is_vector() => return rest_mcp_write_violation(sql, k),
+        _ => {}
+    }
+    if crate::sql::split_statements(sql, kind).len() != 1 {
+        return refuse("one statement per item");
+    }
+    let sc = scan(sql, kind);
+    if sc.exec_comment {
+        return refuse("MySQL executable comments");
+    }
+    let fi = sc.toks.iter().position(|t| t.word)?;
+    let first = sc.toks[fi].text.as_str();
+    if sc.toks[fi].quoted || !["insert", "update", "delete"].contains(&first) {
+        return refuse(&format!("'{first}' statements are not allowed"));
+    }
+    if let Some(why) = unsafe_statement(sql, kind) {
+        return refuse(&why);
+    }
+    let bare = |t: &Tok| t.word && !t.quoted;
+    // SQL Server runs a whole batch: no second statement after the first one (SET belongs to UPDATE)
+    if kind == DbKind::Mssql {
+        let mut case_depth = 0i32;
+        for t in sc.toks.iter().skip(fi + 1).filter(|t| bare(t)) {
+            match t.text.as_str() {
+                "case" => case_depth += 1,
+                "end" if case_depth > 0 => case_depth -= 1,
+                "set" if first == "update" => {}
+                w if MSSQL_STATEMENT_WORDS.contains(&w) || ["merge", "insert", "update", "delete", "select"].contains(&w) && t.depth == 0 && w != first && !(w == "select" && first == "insert") => {
+                    return refuse(&format!("'{w}' starts another statement"));
+                }
+                _ => {}
+            }
+        }
+    }
+    if sc.toks.iter().any(|t| bare(t) && t.text == "merge") {
+        return refuse("MERGE is not allowed");
+    }
+    for (i, t) in sc.toks.iter().enumerate() {
+        let call = t.word && sc.toks.get(i + 1).is_some_and(|n| n.text == "(");
+        let name = t.text.as_str();
+        let external = match kind {
+            DbKind::Mssql => MSSQL_EXTERNAL_FUNCS.contains(&name),
+            DbKind::Clickhouse => CLICKHOUSE_EXTERNAL_FUNCS.contains(&name),
+            DbKind::Duckdb => DUCKDB_EXTERNAL_FUNCS.contains(&name),
+            _ => false,
+        };
+        if call && (SIDE_EFFECT_FUNCS.contains(&name) || name == "set_config" || external) {
+            return refuse(&format!("{name}() is not allowed"));
+        }
+    }
+    None
+}
+
+/// MongoDB writes over MCP: single-collection insert / update / delete with a real filter (no drop, aggregate, commands or empty filters)
+fn mongo_mcp_write_violation(sql: &str) -> Option<String> {
+    let refuse = |why: &str| Some(format!("{why} — over MCP only insert, and update / delete with a filter, are allowed; ask the user to run it in Qurry"));
+    let t = sql.trim().trim_end_matches(';').trim();
+    let re = regex::Regex::new(r#"(?s)^db\.(?:getCollection\(\s*["']([^"']+)["']\s*\)|([A-Za-z_][\w.-]*?))\.(\w+)\((.*)\)$"#).unwrap();
+    let Some(c) = re.captures(t) else { return refuse("only db.collection.method(…)") };
+    let method = &c[3];
+    let args = mongo_args(&c[4]);
+    let Some(args) = args else { return refuse("can't read the arguments") };
+    if ["$out", "$merge", "$function", "$accumulator", "$where"].iter().any(|k| json_has_key(&serde_json::Value::Array(args.clone()), k)) {
+        return refuse("$out, $merge, $function, $accumulator and $where are not allowed");
+    }
+    let filter_ok = || args.first().is_some_and(|f| f.as_object().is_some_and(|o| !o.is_empty()));
+    match method {
+        "insertOne" | "insertMany" => None,
+        "updateOne" | "updateMany" | "replaceOne" | "deleteOne" | "deleteMany" if filter_ok() => None,
+        "updateOne" | "updateMany" | "replaceOne" | "deleteOne" | "deleteMany" => refuse(&format!("{method} needs a non-empty filter")),
+        m => refuse(&format!("{m} is not allowed")),
+    }
+}
+
+/// The arguments of a MongoDB shell call, read like the driver (shell helpers → extended JSON, then JSON5)
+fn mongo_args(s: &str) -> Option<Vec<serde_json::Value>> {
+    let re_oid = regex::Regex::new(r#"ObjectId\(\s*["']([0-9a-fA-F]{24})["']\s*\)"#).unwrap();
+    let re_date = regex::Regex::new(r#"(?:ISODate|new Date)\(\s*["']([^"']+)["']\s*\)"#).unwrap();
+    let re_long = regex::Regex::new(r#"Number(?:Long|Int)\(\s*["']?(-?\d+)["']?\s*\)"#).unwrap();
+    let s = re_oid.replace_all(s, r#"{"$$oid": "$1"}"#);
+    let s = re_date.replace_all(&s, r#"{"$$date": "$1"}"#);
+    let s = re_long.replace_all(&s, "$1");
+    json5::from_str::<serde_json::Value>(&format!("[{s}]")).ok()?.as_array().cloned()
+}
+
+fn json_has_key(v: &serde_json::Value, key: &str) -> bool {
+    match v {
+        serde_json::Value::Object(o) => o.iter().any(|(k, v)| k == key || json_has_key(v, key)),
+        serde_json::Value::Array(a) => a.iter().any(|v| json_has_key(v, key)),
+        _ => false,
+    }
+}
+
+/// Vector DB writes over MCP: add / upsert points, delete points by id (no collection changes, filters that may match everything, snapshots …)
+fn rest_mcp_write_violation(sql: &str, kind: DbKind) -> Option<String> {
+    let refuse = |why: &str| Some(format!("{why} — over MCP only adding points and deleting points by id are allowed; ask the user to run it in Qurry"));
+    let (first, rest) = sql.trim().split_once('\n').unwrap_or((sql.trim(), ""));
+    let mut parts = first.split_whitespace();
+    let method = parts.next().unwrap_or("").to_uppercase();
+    let raw = parts.next().unwrap_or("");
+    let inline: String = parts.collect::<Vec<_>>().join(" ");
+    if raw.contains(['#', '%', '\\', '?']) || raw.split('/').any(|s| s == "." || s == "..") {
+        return refuse("not a plain request path");
+    }
+    let path = raw.trim_end_matches('/').to_lowercase();
+    let seg: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let body: serde_json::Value = json5::from_str(format!("{inline}\n{rest}").trim()).unwrap_or(serde_json::Value::Null);
+    let ids = |k: &str| body.get(k).and_then(|v| v.as_array()).is_some_and(|a| !a.is_empty());
+    let ok = match kind {
+        // PUT /collections/c/points (upsert), POST /collections/c/points/delete {points: [ids]}
+        DbKind::Qdrant => matches!((method.as_str(), seg.as_slice()), ("PUT", ["collections", _, "points"])) || (method == "POST" && matches!(seg.as_slice(), ["collections", _, "points", "delete"]) && ids("points") && body.get("filter").is_none()),
+        // POST …/collections/c/add | upsert | update, …/delete {ids: [...]} (no where)
+        DbKind::Chroma => {
+            method == "POST"
+                && match seg.last() {
+                    Some(&("add" | "upsert" | "update")) => true,
+                    Some(&"delete") => ids("ids") && body.get("where").is_none() && body.get("where_document").is_none(),
+                    _ => false,
+                }
+        }
+        // POST /entities/insert | upsert, /entities/delete {filter: "id in [..]"}
+        DbKind::Milvus => match seg.as_slice() {
+            [.., "entities", "insert" | "upsert"] => true,
+            [.., "entities", "delete"] => body.get("filter").and_then(|f| f.as_str()).is_some_and(|f| regex::Regex::new(r"^\s*\w+\s+in\s*\[[^\]]+\]\s*$").unwrap().is_match(f)),
+            _ => false,
+        },
+        _ => false,
+    };
+    if ok { None } else { refuse(&format!("{method} {path}")) }
+}
+
 /// What MCP execute can do on Redis: reads and writes that change one or a few keys only (not scripts · config · replication · deletes · renames · range deletes)
 pub fn redis_mcp_write_violation(line: &str) -> Option<String> {
     let args = redis_args(line);
     let cmd = args.first().map(|c| c.to_uppercase()).unwrap_or_default();
     let sub = args.get(1).map(|c| c.to_uppercase()).unwrap_or_default();
     const WRITES: &[&str] = &[
-        "SET", "SETEX", "PSETEX", "SETNX", "MSET", "MSETNX", "APPEND", "SETRANGE", "SETBIT", "INCR", "INCRBY", "INCRBYFLOAT", "DECR", "DECRBY", "GETSET",
+        "SET", "SETNX", "MSET", "MSETNX", "APPEND", "SETRANGE", "SETBIT", "INCR", "INCRBY", "INCRBYFLOAT", "DECR", "DECRBY", "GETSET",
         "HSET", "HSETNX", "HMSET", "HDEL", "HINCRBY", "HINCRBYFLOAT", "LPUSH", "RPUSH", "LPUSHX", "RPUSHX", "LSET", "LINSERT", "LPOP", "RPOP", "LREM",
-        "SADD", "SREM", "SMOVE", "ZADD", "ZREM", "ZINCRBY", "XADD", "XDEL", "XACK", "PFADD", "GEOADD", "PERSIST", "EXPIRE", "PEXPIRE", "EXPIREAT", "PEXPIREAT",
+        "SADD", "SREM", "SMOVE", "ZADD", "ZREM", "ZINCRBY", "XADD", "XDEL", "XACK", "PFADD", "GEOADD", "PERSIST",
         "JSON.SET", "JSON.NUMINCRBY", "JSON.ARRAPPEND", "JSON.ARRINSERT", "JSON.STRAPPEND", "JSON.TOGGLE",
     ];
     if crate::redisdb::is_read_command(&cmd, &sub) {
@@ -647,16 +787,10 @@ pub fn redis_mcp_write_violation(line: &str) -> Option<String> {
     if !WRITES.contains(&cmd.as_str()) {
         return Some(format!("{cmd} is not allowed over MCP — ask the user to run it in Qurry"));
     }
-    // EXPIRE k 0 · a past time deletes the key
-    let t = args.get(2).and_then(|v| v.parse::<i64>().ok());
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
-    let deletes = match cmd.as_str() {
-        "EXPIRE" | "PEXPIRE" => t.is_none_or(|t| t <= 0),
-        "EXPIREAT" => t.is_none_or(|t| t <= now),
-        "PEXPIREAT" => t.is_none_or(|t| t <= now * 1000),
-        _ => false,
-    };
-    deletes.then(|| format!("{cmd} with that time deletes the key — refused over MCP"))
+    // An expiry (even 1 ms) or popping many elements amounts to deleting data
+    let expiry = cmd == "SET" && args.iter().skip(3).any(|a| ["EX", "PX", "EXAT", "PXAT"].contains(&a.to_uppercase().as_str()));
+    let many = matches!(cmd.as_str(), "LPOP" | "RPOP") && args.get(2).is_some_and(|n| n.parse::<i64>().map_or(true, |n| n != 1));
+    (expiry || many).then(|| format!("{cmd} with that option can delete data — refused over MCP"))
 }
 
 /// Whether the statement doesn't change data (for counting "already committed changes" in script failure notes)
@@ -965,13 +1099,44 @@ mod tests {
     #[test]
     fn redis_mcp_writes() {
         let v = |s: &str| redis_mcp_write_violation(s);
-        for ok in ["SET a 1", "HSET h f v", "\"SET\" a 1", "EXPIRE k 60", "GET a", "ZADD z 1 m"] {
+        for ok in ["SET a 1", "HSET h f v", "\"SET\" a 1", "PERSIST k", "GET a", "ZADD z 1 m", "LPOP l"] {
             assert!(v(ok).is_none(), "{ok}");
         }
         for bad in ["\"FLUSHALL\"", "EVAL \"redis.call('FLUSHALL')\" 0", "FUNCTION FLUSH", "CONFIG SET dir /tmp", "SAVE", "REPLICAOF h 1", "SWAPDB 0 1", "MIGRATE h 1 k 0 1",
-            "RENAME a b", "ZREMRANGEBYRANK z 0 -1", "LTRIM l 0 0", "EXPIRE k 0", "EXPIREAT k 1", "DEBUG SLEEP 1", "MODULE LOAD x", "DEL a", "HGETALL big"] {
+            "RENAME a b", "ZREMRANGEBYRANK z 0 -1", "LTRIM l 0 0", "EXPIRE k 0", "EXPIRE k 1", "EXPIREAT k 1", "SET k v PX 1", "SETEX k 1 v", "LPOP k 1000000",
+            "DEBUG SLEEP 1", "MODULE LOAD x", "DEL a", "HGETALL big", "FLUSHALL;"] {
             assert!(v(bad).is_some(), "{bad}");
         }
+    }
+
+    /// MCP execute allow-list
+    #[test]
+    fn mcp_execute_allow_list() {
+        use DbKind::{Mssql, Sqlite};
+        let ok = |s: &str, k| mcp_execute_violation(s, k).is_none();
+        for s in ["insert into t (a) values (1)", "update t set a = 1 where id = 1", "delete from t where id = 1 returning id", "insert into t select * from s where x = 1"] {
+            assert!(ok(s, Postgres), "{s}");
+        }
+        for s in ["create table t (a int)", "alter table t add b int", "drop table t", "truncate t", "delete from t", "update t set a = 1", "merge into t using s on true when matched then delete",
+            "select 1", "update t set a = 1 where id = 1; drop table t", "insert into t select pg_terminate_backend(1)", "with d as (delete from t where id = 1) select 1"] {
+            assert!(!ok(s, Postgres), "{s}");
+        }
+        assert!(!ok("UPDATE t SET a=1 WHERE id=1 DROP TABLE t", Mssql) && !ok("SELECT 1 TRUNCATE TABLE t", Mssql) && !ok("DELETE FROM t WHERE id = 1 EXEC xp_cmdshell 'x'", Mssql));
+        assert!(ok("UPDATE t SET a = CASE WHEN b = 1 THEN 2 END WHERE id = 1", Mssql) && ok("INSERT INTO t (a) SELECT a FROM s WHERE b = 1", Mssql));
+        assert!(ok("INSERT INTO t VALUES (1)", Sqlite) && !ok("ATTACH 'x' AS y", Sqlite));
+        // MongoDB
+        assert!(ok("db.users.insertOne({name: 'a'})", Mongodb) && ok("db.users.deleteMany({age: {$lt: 0}})", Mongodb) && ok("db.users.updateOne({_id: ObjectId('0123456789abcdef01234567')}, {$set: {a: 1}})", Mongodb));
+        for s in ["db.users.deleteMany(null)", "db.users.deleteMany({/*x*/})", "db.users.deleteMany({})", "db.users.drop()", "db.users.aggregate([{$out: 'x'}])", "db.runCommand({convertToCapped: 'x'})",
+            "{\"drop\": \"users\"}", "db.users.updateMany({a: 1}, [{$set: {b: {$function: {body: 'x', args: [], lang: 'js'}}}}])"] {
+            assert!(!ok(s, Mongodb), "{s}");
+        }
+        // Vector DBs
+        assert!(ok("PUT /collections/c/points\n{points: [{id: 1, vector: [0.1]}]}", Qdrant) && ok("POST /collections/c/points/delete\n{points: [1, 2]}", Qdrant));
+        for s in ["POST /collections/c/points/delete\n{filter: {must: []}}", "POST /collections/c/points/batch\n{}", "POST /collections/c/snapshots/recover\n{location: 'http://x'}", "DELETE /collections/c", "POST /collections/%64rop\n{}"] {
+            assert!(!ok(s, Qdrant), "{s}");
+        }
+        assert!(ok("POST /entities/delete\n{collectionName: 'c', filter: 'id in [1, 2]'}", Milvus) && !ok("POST /entities/delete\n{collectionName: 'c', filter: 'id > 0'}", Milvus) && !ok("POST /collections/drop\n{}", Milvus));
+        assert!(ok("POST /api/v1/collections/x/delete\n{ids: ['a']}", Chroma) && !ok("POST /api/v1/collections/x/delete\n{where: {}}", Chroma));
     }
 
     #[test]

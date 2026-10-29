@@ -247,10 +247,16 @@ pub async fn export_on(conn: &mut sqlx::MySqlConnection, sql: &str, out: &mut cr
 }
 
 pub async fn execute_batch(p: &MySqlPool, statements: &[String], exact_one: bool) -> AppResult<u64> {
+    execute_batch_with(p, statements, exact_one, false).await
+}
+
+/// prepared = each statement over the prepared-statement protocol, which takes exactly one statement (MCP)
+pub async fn execute_batch_with(p: &MySqlPool, statements: &[String], exact_one: bool, prepared: bool) -> AppResult<u64> {
     let mut tx = p.begin().await?;
     let mut affected = 0;
     for st in statements {
-        let n = tx.execute(sqlx::raw_sql(st)).await.map_err(|e| AppError::Msg(format!("{e}\n→ {st}")))?.rows_affected();
+        let r = if prepared { sqlx::query(st).execute(&mut *tx).await } else { tx.execute(sqlx::raw_sql(st)).await };
+        let n = r.map_err(|e| AppError::Msg(format!("{e}\n→ {st}")))?.rows_affected();
         crate::session::check_exact_one(st, n, exact_one)?;
         affected += n;
     }
@@ -615,6 +621,17 @@ mod tests {
         let plain = sqlx::mysql::MySqlPoolOptions::new().max_connections(1).connect_with(opts).await.unwrap();
         assert!(plaintext_note(&plain, &remote).await.is_some_and(|n| n.contains("Not encrypted")));
         assert_eq!(plaintext_note(&plain, &cfg()).await, None, "this computer: nothing to intercept");
+    }
+
+    /// MCP execute path: the prepared-statement protocol takes exactly one statement
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_prepared_batch_refuses_multiple_statements() {
+        let Pool::My(p) = crate::db::connect(&cfg(), Some("dbtool")).await.expect("connect") else { unreachable!() };
+        sqlx::raw_sql("drop table if exists qurry_prep; create table qurry_prep (a int)").execute(&p).await.unwrap();
+        assert!(execute_batch_with(&p, &["insert into qurry_prep values (1); drop table qurry_prep".into()], false, true).await.is_err());
+        assert_eq!(execute_batch_with(&p, &["insert into qurry_prep values (1)".into()], false, true).await.unwrap(), 1);
+        sqlx::raw_sql("drop table qurry_prep").execute(&p).await.unwrap();
     }
 
     #[tokio::test]

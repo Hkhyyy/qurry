@@ -22,6 +22,8 @@ dirs = "6"
 csv = "1"
 calamine = { version = "=0.36.1", features = ["dates"] }
 regex = "1"
+# reads MongoDB shell arguments the way the driver does (MCP execute checks)
+json5 = "1"
 minisign-verify = "0.2"
 # For keeping the password file's master key in the OS keychain (enabled in settings). Linux uses a pure-Rust Secret Service (no libdbus)
 keyring = { version = "3", features = ["apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust"] }
