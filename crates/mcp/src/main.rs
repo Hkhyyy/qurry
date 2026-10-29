@@ -3,7 +3,7 @@
 //! Read-only by default: PG/MySQL run a single statement inside a READ ONLY transaction, Redis allows read commands only.
 //! `--allow-write` adds the `execute` tool (a Data Source's Read-only setting is still honored).
 //! MCP exposure is set per Data Source (Options › MCP: Off / Read / Read & write — store::McpAccess). Hidden sources are not listed and cannot be connected to.
-use qurry_core::app::AppState;
+use qurry_core::app::{AppState, ConnectionView};
 use qurry_core::db::QueryResult;
 use qurry_core::sql;
 use qurry_core::store::{DbKind, McpAccess};
@@ -153,7 +153,7 @@ impl Server {
         if self.allow_write {
             t.push(tool(
                 "execute",
-                "Execute statements that modify data or schema (INSERT/UPDATE/DELETE/DDL; Redis write commands). PostgreSQL/MySQL: one transaction (all or nothing); other kinds run the statements one by one with no rollback. Only for data sources whose MCP access is 'Read & write' (see list_data_sources). DROP, TRUNCATE and UPDATE/DELETE without WHERE are refused — ask the user to run those in Qurry.",
+                "Change data, one statement per item, from an allow-list. SQL: one INSERT, or UPDATE / DELETE with a WHERE. MongoDB: insertOne / insertMany, and updateOne / updateMany / replaceOne / deleteOne / deleteMany with a non-empty filter. Vector DBs: adding points, and deleting points by id. Redis: reads, and writes to single keys without expiry options. PostgreSQL/MySQL: all items in one transaction (all or nothing); other kinds run them one by one with no rollback. Only for data sources whose MCP access is 'Read & write' (see list_data_sources). Anything else (DDL such as CREATE / ALTER / DROP, TRUNCATE, MERGE, scripts, deletes of whole keys or collections) is refused — ask the user to run it in Qurry.",
                 ds_props(json!({ "statements": { "type": "array", "items": { "type": "string" } } })),
                 &["data_source", "statements"],
                 false,
@@ -171,16 +171,8 @@ impl Server {
     /// Name or id → (id, kind, default DB, MCP access)
     async fn resolve(&self, a: &Value) -> Result<(String, DbKind, String, McpAccess), String> {
         let want = a.get("data_source").and_then(|v| v.as_str()).ok_or("data_source is required")?;
-        let list = self.sources().await?;
-        let c = list
-            .iter()
-            .find(|c| c.config.id == want)
-            .or_else(|| list.iter().find(|c| c.config.name.eq_ignore_ascii_case(want)))
-            .or_else(|| {
-                let m: Vec<_> = list.iter().filter(|c| c.config.name.to_lowercase().contains(&want.to_lowercase())).collect();
-                if m.len() == 1 { Some(m[0]) } else { None }
-            })
-            .ok_or_else(|| format!("Data source not found: {want}. Available: {}", list.iter().map(|c| c.config.name.as_str()).collect::<Vec<_>>().join(", ")))?;
+        let all = self.state.list_connections().await.map_err(|e| e.to_string())?;
+        let c = find_source(&all, want, self.allow_write)?;
         Ok((c.config.id.clone(), c.config.kind, sql::default_db(&c.config), c.config.mcp_access(self.allow_write)))
     }
 
@@ -410,6 +402,28 @@ impl Server {
     }
 }
 
+/// The Data Source an MCP client asked for: id, name (any case) or a unique part of the name, among the ones shared with MCP.
+/// A hidden source that matches by id or name gets its own error (the user turned it off — it isn't missing), and nothing else about it is shown
+fn find_source<'a>(all: &'a [ConnectionView], want: &str, allow_write: bool) -> Result<&'a ConnectionView, String> {
+    let shown = |c: &ConnectionView| c.config.mcp_access(allow_write) != McpAccess::Off;
+    let list: Vec<&ConnectionView> = all.iter().filter(|c| shown(c)).collect();
+    let found = list
+        .iter()
+        .find(|c| c.config.id == want)
+        .or_else(|| list.iter().find(|c| c.config.name.eq_ignore_ascii_case(want)))
+        .or_else(|| {
+            let m: Vec<_> = list.iter().filter(|c| c.config.name.to_lowercase().contains(&want.to_lowercase())).collect();
+            if m.len() == 1 { Some(m[0]) } else { None }
+        });
+    if let Some(c) = found {
+        return Ok(c);
+    }
+    if all.iter().any(|c| !shown(c) && (c.config.id == want || c.config.name.eq_ignore_ascii_case(want))) {
+        return Err(format!("Data source \"{want}\" is not shared with MCP — turn it on in Qurry: data source › Options › MCP (TUI: data source form)"));
+    }
+    Err(format!("Data source not found: {want}. Available: {}", list.iter().map(|c| c.config.name.as_str()).collect::<Vec<_>>().join(", ")))
+}
+
 fn result_json(r: &QueryResult) -> Value {
     if !r.has_result_set {
         return json!({ "rows_affected": r.rows_affected });
@@ -564,6 +578,31 @@ async fn main() -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn source(id: &str, name: &str, mcp: Option<&str>, production: bool) -> ConnectionView {
+        let mut config: qurry_core::store::ConnectionConfig =
+            serde_json::from_value(json!({ "id": id, "name": name, "kind": "postgres", "host": "db.internal", "port": 5432, "user": "admin" })).unwrap();
+        config.options.mcp = mcp.map(String::from);
+        config.options.confirm_changes = production;
+        ConnectionView { config, has_password: true, connected: false }
+    }
+
+    #[test]
+    fn hidden_sources_say_they_are_not_shared() {
+        let all = [source("1", "Dev", Some("read"), false), source("2", "Prod", None, true), source("3", "Analytics", Some("off"), false)];
+        let find = |w: &str| find_source(&all, w, false).map(|c| c.config.id.clone());
+        assert_eq!(find("dev").unwrap(), "1");
+        assert_eq!(find("1").unwrap(), "1");
+        // An old Production source (no MCP setting) and a source set to Off: by name (any case) or id
+        for w in ["Prod", "prod", "2", "Analytics", "3"] {
+            let e = find(w).unwrap_err();
+            assert!(e.contains("is not shared with MCP") && e.contains("Options › MCP"), "{w}: {e}");
+            assert!(!e.contains("db.internal") && !e.contains("admin"), "{e}");
+        }
+        // A part of a hidden name doesn't match it, and hidden sources aren't listed as available
+        let e = find("Analy").unwrap_err();
+        assert!(e.starts_with("Data source not found") && !e.contains("Analytics") && !e.contains("Prod"), "{e}");
+    }
 
     #[test]
     fn uri_passwords_are_hidden() {
