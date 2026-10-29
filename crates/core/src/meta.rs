@@ -1,4 +1,4 @@
-//! 스키마 트리와 자동완성에 쓰는 메타데이터 조회 (PostgreSQL pg_catalog 기준).
+//! Metadata queries for the schema tree and autocomplete (based on PostgreSQL pg_catalog).
 use crate::db::Pool;
 use crate::error::AppResult;
 use serde::{Deserialize, Serialize};
@@ -247,7 +247,7 @@ fn lit(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
-/// DataGrip의 "Go to DDL"처럼 객체 DDL을 만든다. kind: table|partitioned|foreign|view|matview|sequence|routine
+/// Builds object DDL like DataGrip's "Go to DDL". kind: table|partitioned|foreign|view|matview|sequence|routine
 pub async fn object_ddl(pool: &Pool, schema: &str, name: &str, kind: &str) -> AppResult<String> {
     let p = match pool {
         Pool::Pg(p) => p,
@@ -310,7 +310,7 @@ pub async fn object_ddl(pool: &Pool, schema: &str, name: &str, kind: &str) -> Ap
                 lines.push(format!("    CONSTRAINT {} {}", qi(&c.name), c.definition));
             }
             let mut out = format!("CREATE TABLE {full}\n(\n{}\n);\n", lines.join(",\n"));
-            // 제약조건이 만든 인덱스는 제외하고 나머지 인덱스
+            // Remaining indexes, excluding ones created by constraints
             let constraint_names: Vec<&str> = d.constraints.iter().map(|c| c.name.as_str()).collect();
             for i in d.indexes.iter().filter(|i| !constraint_names.contains(&i.name.as_str())) {
                 out += &format!("\n{};\n", i.definition);
@@ -331,7 +331,7 @@ pub async fn object_ddl(pool: &Pool, schema: &str, name: &str, kind: &str) -> Ap
     }
 }
 
-/// 드라이버: 스키마 → 테이블 → 컬럼 (테이블 300개까지)
+/// Driver: schema → table → column (up to 300 tables)
 async fn plugin_completion(pool: &Pool) -> AppResult<Vec<CompletionTable>> {
     let mut out = vec![];
     for s in list_schemas(pool).await? {
@@ -346,7 +346,7 @@ async fn plugin_completion(pool: &Pool) -> AppResult<Vec<CompletionTable>> {
     Ok(out)
 }
 
-/// 자동완성용: 사용자 스키마의 테이블/뷰와 컬럼 (최대 30,000 컬럼)
+/// For autocomplete: tables/views and columns in user schemas (up to 30,000 columns)
 pub async fn completion_meta(pool: &Pool) -> AppResult<Vec<CompletionTable>> {
     let p = match pool {
         Pool::Pg(p) => p,
@@ -373,7 +373,7 @@ pub async fn completion_meta(pool: &Pool) -> AppResult<Vec<CompletionTable>> {
     Ok(out)
 }
 
-/// Go to Database Object / Search Everywhere 용 객체 목록
+/// Object list for Go to Database Object / Search Everywhere
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexEntry {
@@ -424,10 +424,10 @@ pub struct FtsRequest {
     pub match_case: bool,
     /// text | numeric | all
     pub columns: String,
-    /// 검색할 스키마들 (tables 가 비어 있을 때)
+    /// Schemas to search (when tables is empty)
     #[serde(default)]
     pub schemas: Vec<String>,
-    /// "schema.table" 로 특정 테이블만
+    /// Only specific tables as "schema.table"
     #[serde(default)]
     pub tables: Vec<(String, String)>,
     pub limit: usize,
@@ -438,7 +438,7 @@ pub struct FtsRequest {
 pub struct FtsHit {
     pub schema: String,
     pub table: String,
-    /// 테이블 에디터에 그대로 넣을 수 있는 WHERE 절
+    /// WHERE clause that can go straight into the table editor
     pub where_clause: String,
     pub result: crate::db::QueryResult,
 }
@@ -447,7 +447,7 @@ fn ident(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\"\""))
 }
 
-/// 컬럼 하나에 대한 조건
+/// Condition for one column
 fn fts_cond(col: &str, numeric: bool, r: &FtsRequest) -> String {
     let c = ident(col);
     let esc = |t: &str| t.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
@@ -473,7 +473,7 @@ pub async fn full_text_search(pool: &Pool, r: &FtsRequest) -> AppResult<Vec<FtsH
         Pool::Redis(..) => return Err(crate::error::AppError::Msg("Full-text search is not available for Redis; use SCAN MATCH in the console".into())),
         Pool::Plugin(c) => return Err(crate::error::AppError::Msg(format!("Full-text search is not available for the {} driver yet", c.driver))),
     };
-    // 대상 테이블·컬럼과 타입 분류 (S=문자열, N=숫자)
+    // Target tables · columns and type class (S=string, N=number)
     let rows: Vec<(String, String, String, String)> = sqlx::query_as(
         "select n.nspname::text, c.relname::text, a.attname::text, t.typcategory::text \
          from pg_attribute a join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace \
@@ -505,7 +505,7 @@ pub async fn full_text_search(pool: &Pool, r: &FtsRequest) -> AppResult<Vec<FtsH
     for (schema, table, conds) in tables.into_iter().filter(|t| !t.2.is_empty()) {
         let where_clause = conds.join(" OR ");
         let sql = format!("select * from {}.{} where {where_clause} limit {}", ident(&schema), ident(&table), r.limit.max(1));
-        // 테이블 하나가 오래 걸려도 전체가 멈추지 않도록 문장별 타임아웃
+        // Per-statement timeout so one slow table doesn't stall everything
         let mut tx = p.begin().await?;
         sqlx::query("set local statement_timeout = '15s'").execute(&mut *tx).await?;
         let res = crate::db::run_on(&mut *tx, &sql, r.limit.max(1)).await;
@@ -548,7 +548,7 @@ mod tests {
         sqlx::query("create table if not exists dbtool_meta_test.child(id int primary key, parent_id bigint references dbtool_meta_test.parent(id), note varchar(20))").execute(p).await.unwrap();
         sqlx::query("comment on table dbtool_meta_test.parent is '부모'").execute(p).await.unwrap();
 
-        // Go to Database Object 인덱스
+        // Go to Database Object index
         let idx = object_index(&pool).await.unwrap();
         assert!(idx.iter().any(|e| e.schema == "dbtool_meta_test" && e.name == "parent" && e.kind == "table"));
         assert!(idx.iter().any(|e| e.name == "dbtool_meta_test" && e.kind == "schema"));

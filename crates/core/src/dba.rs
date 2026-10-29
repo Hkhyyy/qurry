@@ -1,18 +1,18 @@
-//! DBA 리포트: 세션·락, 느린 쿼리, 용량·인덱스·bloat, 유지보수·VACUUM 진행, 복제·서버, 권한. 쿼리 결과를 표로 보이고 몇 가지 동작(세션 종료, SQL 만들기)을 붙인다.
-//! GUI·TUI 는 같은 리포트 목록을 그대로 보여 준다
+//! DBA reports: sessions/locks, slow queries, size/indexes/bloat, maintenance/VACUUM progress, replication/server, privileges. Shows query results as tables with a few actions (end session, generate SQL).
+//! GUI and TUI show the same report list as is
 use crate::app::{AppState, ensure_pool};
 use crate::db::QueryResult;
 use crate::error::{AppError, AppResult};
 use crate::store::DbKind;
 use std::collections::HashMap;
 
-/// 리포트 행에 붙는 동작
+/// Action attached to a report row
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum Action {
-    /// 세션 종료 (terminate = 연결을 끊는다, 아니면 지금 쿼리만 취소). pid 열을 쓴다
+    /// End a session (terminate = drop the connection, otherwise cancel only the current query). Uses the pid column
     Kill { label: &'static str, terminate: bool },
-    /// 콘솔에 SQL 을 넣는다. {col} = 그 열 값을 식별자로 (따옴표), {=col} = 그대로
+    /// Put SQL in the console. {col} = that column's value as an identifier (quoted), {=col} = as is
     Sql { label: &'static str, template: &'static str },
 }
 
@@ -22,12 +22,12 @@ pub struct ReportInfo {
     pub id: &'static str,
     pub title: &'static str,
     pub group: &'static str,
-    /// 무엇을 보는지, 어떻게 읽는지
+    /// What it shows and how to read it
     pub help: &'static str,
     pub actions: Vec<Action>,
 }
 
-/// 리포트 하나의 SQL. 앞에서부터 해 보고 되는 것을 쓴다 (버전·권한에 따라 뷰가 다르다)
+/// One report's SQL. Tried in order, the first that works is used (views differ by version and privileges)
 struct Def {
     info: fn() -> ReportInfo,
     pg: &'static [&'static str],
@@ -108,7 +108,7 @@ ORDER BY total_bytes DESC LIMIT 300"#],
 FROM information_schema.TABLES WHERE TABLE_TYPE = 'BASE TABLE' AND TABLE_SCHEMA NOT IN ('mysql', 'sys', 'performance_schema', 'information_schema')
 ORDER BY DATA_LENGTH + INDEX_LENGTH DESC LIMIT 300"#],
     },
-    // bloat: pg_stats 의 평균 행 크기로 있어야 할 페이지 수를 어림해 지금 페이지 수와 비교한다 (pgstattuple 없이). 통계가 없는 테이블은 뺀다
+    // bloat: estimate the expected page count from the average row size in pg_stats and compare with the current page count (without pgstattuple). Tables without stats are excluded
     Def {
         info: || info("table_bloat", "Table Bloat", "Storage", "Space held by dead or deleted rows (estimated from statistics, most accurate right after ANALYZE). Plain VACUUM makes it reusable; VACUUM FULL gives it back to the disk but locks the table while it rewrites it (pg_repack does it online).", vec![
             Action::Sql { label: "Generate VACUUM FULL", template: "VACUUM (FULL, ANALYZE) {schema}.{table};" },
@@ -337,12 +337,12 @@ fn sqls(d: &Def, kind: DbKind) -> &'static [&'static str] {
     }
 }
 
-/// 이 DB 에서 볼 수 있는 리포트
+/// Reports available for this DB
 pub fn reports(kind: DbKind) -> Vec<ReportInfo> {
     DEFS.iter().filter(|d| !sqls(d, kind).is_empty()).map(|d| (d.info)()).collect()
 }
 
-/// 동작의 SQL: 템플릿에 행 값을 넣는다. {col} = 식별자 (필요하면 따옴표), {=col} = 그대로
+/// Action SQL: fill the template with row values. {col} = identifier (quoted if needed), {=col} = as is
 pub fn action_sql(kind: DbKind, template: &str, row: &HashMap<String, String>) -> String {
     let mut out = String::new();
     let mut rest = template;
@@ -362,7 +362,7 @@ pub fn action_sql(kind: DbKind, template: &str, row: &HashMap<String, String>) -
     out
 }
 
-/// 꺼진 기능이면 무엇을 켜야 하는지
+/// If the feature is off, what needs to be enabled
 fn explain(report: &str, kind: DbKind, e: AppError) -> AppError {
     let m = e.to_string();
     let lower = m.to_lowercase();
@@ -382,7 +382,7 @@ fn explain(report: &str, kind: DbKind, e: AppError) -> AppError {
 }
 
 impl AppState {
-    /// 리포트를 돌린다 (읽기만 한다). 뷰가 버전·권한마다 다르면 되는 쿼리를 차례로 해 본다
+    /// Run a report (read-only). If views differ by version/privileges, try the queries in order
     pub async fn dba_report(&self, id: String, report: String) -> AppResult<QueryResult> {
         let kind = self.kind_of(&id)?;
         let d = DEFS.iter().find(|d| (d.info)().id == report).ok_or_else(|| AppError::Msg(format!("Unknown report: {report}")))?;
@@ -394,7 +394,7 @@ impl AppState {
         let mut last = None;
         for q in list {
             match pool.run_query(q, 2000).await {
-                // SHOW … 가 빈 결과면 열도 없다 (복제가 없는 서버 등)
+                // An empty SHOW … result has no columns either (servers without replication, etc.)
                 Ok(r) if !r.has_result_set || r.columns.is_empty() => {
                     return Ok(QueryResult {
                         columns: vec![crate::db::ColumnInfo { name: "info".into(), type_name: "TEXT".into() }],
@@ -413,7 +413,7 @@ impl AppState {
         Err(explain(&report, kind, last.unwrap()))
     }
 
-    /// PROD 안전장치: 이 문장이 바꿀 행 수 (같은 테이블·조건으로 SELECT count(*)). 셀 수 없는 문장이면 None
+    /// PROD safeguard: number of rows this statement would change (SELECT count(*) with the same table and condition). None if it cannot be counted
     pub async fn preview_impact(&self, id: String, sql: String) -> AppResult<Option<i64>> {
         let kind = self.kind_of(&id)?;
         let Some(q) = crate::guard::impact_count_sql(&sql, kind) else { return Ok(None) };
@@ -421,7 +421,7 @@ impl AppState {
         Ok(r.rows.first().and_then(|x| x.first()).and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))))
     }
 
-    /// 세션의 지금 쿼리를 취소하거나 (terminate) 연결을 끊는다. Read-only Data Source 는 막는다
+    /// Cancel the session's current query, or (terminate) drop the connection. Blocked for Read-only Data Sources
     pub async fn kill_session(&self, id: String, pid: i64, terminate: bool) -> AppResult<bool> {
         let cfg = self.source(&id)?;
         if cfg.read_only {
@@ -490,7 +490,7 @@ mod tests {
         Some(st)
     }
 
-    /// 모든 리포트가 돌거나, 꺼진 기능이면 무엇을 켜야 하는지 알려 준다 (pg_stat_statements 등)
+    /// Every report runs, or tells what to enable if the feature is off (pg_stat_statements, etc.)
     async fn all_reports_run(kind: DbKind, env: &str) {
         let Some(st) = state(kind, env).await else { return };
         for r in reports(kind) {
@@ -516,7 +516,7 @@ mod tests {
         all_reports_run(DbKind::Mysql, "QURRY_TEST_MY").await;
     }
 
-    /// PROD 안전장치: 바꿀 행 수를 미리 센다 (실제로 바꾸지 않는다)
+    /// PROD safeguard: count the rows to change in advance (without changing them)
     #[tokio::test]
     #[ignore]
     async fn pg_preview_impact_counts_rows() {
@@ -531,7 +531,7 @@ mod tests {
         q("drop table qurry_impact").await.ok();
     }
 
-    /// 지운 행이 VACUUM 전까지 자리를 차지하면 테이블·인덱스 bloat 로 보인다
+    /// Deleted rows taking up space until VACUUM show up as table/index bloat
     #[tokio::test]
     #[ignore]
     async fn pg_bloat_shows_deleted_space() {
@@ -554,7 +554,7 @@ mod tests {
         q("drop table qurry_bloat").await.ok();
     }
 
-    /// 락을 잡은 세션과 기다리는 세션이 보이고, 잡은 쪽을 끊으면 기다리던 쪽이 끝난다
+    /// The lock-holding session and the waiting session both show, and killing the holder lets the waiter finish
     #[tokio::test]
     #[ignore]
     async fn pg_blocking_session_is_shown_and_killed() {

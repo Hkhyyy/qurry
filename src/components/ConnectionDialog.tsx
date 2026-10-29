@@ -19,7 +19,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
           database: edit.database, color: edit.color ?? null, ssh: edit.ssh ?? null,
           scope: edit.scope, readOnly: edit.readOnly ?? false, options: edit.options ?? {}, ssl: edit.ssl ?? null, redis: edit.redis ?? null,
         }
-      : // 새 소스는 MCP 에 보이지 않게 시작한다 (Options › MCP 에서 켠다)
+      : // New sources start hidden from MCP (turn it on in Options › MCP)
         { id: "", name: "", kind: "postgres", host: "localhost", port: 5432, user: "", database: "", color: null, ssh: null, options: { mcp: "off" } },
   );
   const [tab, setTab] = useState<"general" | "ssh" | "schemas" | "options">("general");
@@ -27,7 +27,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   const [sshSecret, setSshSecret] = useState<string | undefined>(undefined);
   const [test, setTest] = useState<{ ok: boolean; msg: string } | null>(null);
   const [busy, setBusy] = useState(false);
-  // 드라이버 플러그인: 깔려 있는지 (null = 기본으로 들어 있는 DB)
+  // Driver plugin: whether it is installed (null = built-in DB)
   const [driver, setDriver] = useState<boolean | null>(null);
   const [installing, setInstalling] = useState(false);
   useEffect(() => {
@@ -54,9 +54,9 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
 
   const ssh = cfg.ssh ?? EMPTY_SSH;
   const opt: ConnOptions = cfg.options ?? {};
-  // 정하지 않은 예전 소스의 MCP: 창을 연 때의 동작 (Production 이면 숨김). 고쳐도 이 값은 바뀌지 않는다
+  // MCP for older sources that never set it: behavior at the time the dialog opened (hidden if Production). Editing doesn't change this value
   const [legacyMcp] = useState<"off" | "write">(() => (edit?.options?.confirmChanges ? "off" : edit ? "write" : "off"));
-  // 새로 켜는 SSL 은 인증서와 호스트 이름까지 확인한다 (require 는 암호화만)
+  // Newly enabled SSL verifies the certificate and host name (require only encrypts)
   const ssl: SslConfig = cfg.ssl ?? { enabled: false, mode: "verify-full", caFile: "", certFile: "", keyFile: "" };
   const setSsl = <K extends keyof SslConfig>(k: K, v: SslConfig[K]) => setCfg((c) => ({ ...c, ssl: { ...ssl, ...(c.ssl ?? {}), [k]: v } }));
   const rmode: RedisMode = cfg.redis ?? { mode: "standalone", sentinelMaster: "", nodes: "" };
@@ -73,7 +73,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
     setBusy(true);
     setTest(null);
     try {
-      // SSH 탭에서는 SSH 로그인만, General 탭에서는 (SSH 경유) DB 접속까지 확인
+      // On the SSH tab, test only the SSH login; on the General tab, test the DB connection too (via SSH)
       const v = tab === "ssh" ? await api.testSsh(cfg, sshSecret) : await api.testConnection(cfg, password, sshSecret);
       setTest({ ok: true, msg: v });
     } catch (e) {
@@ -86,7 +86,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   const save = async () => {
     const name = cfg.name.trim() || `${cfg.user}@${cfg.host}`;
     try {
-      // 보이는 MCP 값을 그대로 저장한다 (정하지 않은 채로 두면 Production 을 끈 뒤 저절로 열린다)
+      // Save the shown MCP value as is (if left unset, it would turn on by itself after Production is turned off)
       const saved = await api.saveConnection({ ...cfg, name, options: { ...opt, mcp: opt.mcp ?? legacyMcp } }, password, sshSecret);
       onSaved(saved);
     } catch (e) {
@@ -403,7 +403,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
           </Button>
         </div>
       )}
-      {/* 처음 보는 SSH 서버: 지문을 확인한 뒤 신뢰 → 다시 시험 */}
+      {/* Unknown SSH server: trust after checking the fingerprint → test again */}
       {test && !test.ok && test.msg.includes("Unknown SSH host key") && cfg.ssh && (
         <div className="ui-row conn-test-actions">
           <Button
@@ -430,7 +430,7 @@ export function ColorSwatches({ value, onChange, custom }: { value: string | nul
 
 type Scope = NonNullable<ConnectionConfig["scope"]>;
 
-/** DataGrip Data Source 속성의 Schemas 탭: 트리에 보일 DB·스키마를 고른다 */
+/** Schemas tab of DataGrip Data Source properties: choose which DBs and schemas show in the tree */
 function SchemasTab({ connId, scope, onChange }: { connId?: string; scope: Scope; onChange: (s: Scope) => void }) {
   const [dbs, setDbs] = useState<string[] | null>(null);
   const [err, setErr] = useState<string | null>(null);

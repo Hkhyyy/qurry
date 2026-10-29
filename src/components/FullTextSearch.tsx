@@ -6,9 +6,9 @@ export interface FtsScope {
   connId: string;
   connName: string;
   db: string;
-  /** 스키마 단위 검색 */
+  /** Search by schema */
   schemas: string[];
-  /** 특정 테이블만 (트리에서 테이블을 골랐을 때) */
+  /** Only a specific table (when a table is selected in the tree) */
   tables: [string, string][];
 }
 
@@ -94,12 +94,12 @@ export interface FindRun {
   error?: string;
   hits: FtsHit[];
   pinned?: boolean;
-  /** 검색어 (일치하는 셀 강조) */
+  /** Search term (matching cells are highlighted) */
   text: string;
   matchCase: boolean;
 }
 
-/** Find 도구 창 (⇧⌘F): 검색 결과를 테이블별로 묶어 보여 준다 */
+/** Find tool window (⇧⌘F): shows search results grouped by table */
 export function FindPanel({ runs, active, onActive, onClose, onCloseRun, onPin, onOpen }: {
   runs: FindRun[];
   active: string | null;

@@ -1,6 +1,6 @@
-//! Qurry 드라이버 플러그인 프로토콜. 드라이버는 따로 받는 실행 파일 (qurry-driver-<이름>) 이고, Qurry 가 띄워서 stdio 로 한 줄에 하나씩 JSON 을 주고받는다.
+//! Qurry driver plugin protocol. A driver is a separately downloaded executable (qurry-driver-<name>) that Qurry launches, exchanging one JSON per line over stdio.
 //!
-//! 요청: `{"id": 1, "method": "query", "params": {...}}` → 응답: `{"id": 1, "result": ...}` 또는 `{"id": 1, "error": "..."}`
+//! Request: `{"id": 1, "method": "query", "params": {...}}` → response: `{"id": 1, "result": ...}` or `{"id": 1, "error": "..."}`
 //!
 //! | method | params | result |
 //! |---|---|---|
@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{BufRead, Write};
 
-/// 프로토콜 버전 (Qurry 와 다르면 연결하지 않는다)
+/// Protocol version (no connection if it differs from Qurry's)
 pub const PROTOCOL: u32 = 1;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -41,7 +41,7 @@ pub struct ConnectParams {
     pub user: String,
     #[serde(default)]
     pub password: Option<String>,
-    /// SQLite·DuckDB: 파일 경로
+    /// SQLite, DuckDB: file path
     #[serde(default)]
     pub database: String,
     #[serde(default)]
@@ -65,12 +65,12 @@ pub struct QueryOut {
     pub has_result_set: bool,
 }
 
-/// 드라이버: 메서드 하나씩 받아 결과(JSON) 나 오류 글
+/// Driver: takes one method at a time and returns a result (JSON) or an error message
 pub trait Driver {
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String>;
 }
 
-/// stdin 에서 요청을 읽고 stdout 으로 응답한다 (stdin 이 닫히면 끝)
+/// Read requests from stdin and respond on stdout (ends when stdin closes)
 pub fn serve(mut d: impl Driver) {
     let stdin = std::io::stdin();
     let mut out = std::io::stdout().lock();
@@ -92,12 +92,12 @@ pub fn serve(mut d: impl Driver) {
     }
 }
 
-/// params 를 꺼낸다 (모자라면 오류 글)
+/// Extract params (error message if missing)
 pub fn params<T: for<'de> Deserialize<'de>>(v: Value) -> Result<T, String> {
     serde_json::from_value(v).map_err(|e| format!("bad params: {e}"))
 }
 
-/// 결과를 JSON 으로
+/// Result as JSON
 pub fn ok<T: Serialize>(v: T) -> Result<Value, String> {
     serde_json::to_value(v).map_err(|e| e.to_string())
 }

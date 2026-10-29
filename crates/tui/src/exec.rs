@@ -1,8 +1,8 @@
-//! ⌃Enter 로 무엇을 실행할지 (DataGrip Settings › Database › Query Execution, GUI 의 src/lib/execPlan.ts 와 같은 규칙)
+//! What ⌃Enter runs (DataGrip Settings › Database › Query Execution, same rules as the GUI's src/lib/execPlan.ts)
 use qurry_core::sql;
 use qurry_core::store::DbKind;
 
-/// 커서가 문장 안일 때
+/// When the cursor is inside a statement
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Inside {
     Ask,
@@ -10,14 +10,14 @@ pub enum Inside {
     Whole,
     FromCaret,
 }
-/// 커서가 문장 밖(빈 줄 등)일 때
+/// When the cursor is outside a statement (blank line etc.)
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Outside {
     Nothing,
     Whole,
     Below,
 }
-/// 선택 영역을 실행할 때
+/// When running a selection
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Selection {
     Single,
@@ -31,7 +31,7 @@ pub struct ExecSettings {
     pub selection: Selection,
 }
 
-/// DataGrip 처럼 커서가 문장 안이면 무엇을 실행할지 묻는다
+/// Like DataGrip, asks what to run when the cursor is inside a statement
 impl Default for ExecSettings {
     fn default() -> Self {
         ExecSettings { inside: Inside::Ask, outside: Outside::Nothing, selection: Selection::Separate }
@@ -39,7 +39,7 @@ impl Default for ExecSettings {
 }
 
 impl ExecSettings {
-    /// workspace-tui.json 에 쓰는 값 (GUI 의 ExecSettings 와 같은 이름)
+    /// Value written to workspace-tui.json (same names as the GUI's ExecSettings)
     pub fn to_json(self) -> serde_json::Value {
         let inside = match self.inside {
             Inside::Ask => "ask",
@@ -59,7 +59,7 @@ impl ExecSettings {
         serde_json::json!({ "inside": inside, "outside": outside, "selection": selection })
     }
 
-    /// 모르는 값은 기본값
+    /// Unknown values fall back to the default
     pub fn from_json(v: &serde_json::Value) -> Self {
         let d = Self::default();
         let g = |k: &str| v.get(k).and_then(serde_json::Value::as_str).unwrap_or_default();
@@ -89,12 +89,12 @@ impl ExecSettings {
 #[derive(PartialEq, Debug)]
 pub enum Plan {
     Run(Vec<String>),
-    /// (보기 이름, 실행할 문장들)
+    /// (display name, statements to run)
     Ask(Vec<(String, Vec<String>)>),
     Nothing,
 }
 
-/// 문장을 시작할 수 있는 키워드 (이 줄 앞의 SQL 이 아닌 줄은 제목·메모로 보고 뺀다)
+/// Keywords that can start a statement (non-SQL lines before such a line are treated as titles·notes and dropped)
 const SQL_START: &[&str] = &[
     "select", "with", "insert", "update", "delete", "merge", "upsert", "begin", "start", "commit", "rollback", "end", "abort", "savepoint", "release", "grant", "revoke", "create", "alter", "drop",
     "truncate", "comment", "set", "reset", "show", "explain", "analyze", "vacuum", "values", "table", "copy", "call", "do", "lock", "declare", "fetch", "close", "prepare", "execute",
@@ -110,7 +110,7 @@ fn starts_sql(line: &str) -> bool {
     line.trim_start().starts_with('(') || SQL_START.contains(&first_word(line).as_str())
 }
 
-/// 앞의 SQL 이 아닌 줄(번호 제목 등)을 뺀 시작 위치. 키워드로 시작하는 줄이 없으면 그대로
+/// Start position after dropping leading non-SQL lines (numbered titles etc.). Unchanged if no line starts with a keyword
 fn skip_notes(text: &str, start: usize, end: usize) -> usize {
     let mut pos = start;
     let mut cut = start;
@@ -137,7 +137,7 @@ fn is_tx_end(s: &str) -> bool {
     matches!(first_word(s).as_str(), "commit" | "rollback" | "end" | "abort")
 }
 
-/// 커서 문장(idx)을 감싼 가장 가까운 BEGIN … COMMIT/ROLLBACK (문장 번호 범위)
+/// The nearest BEGIN … COMMIT/ROLLBACK enclosing the cursor statement (idx) (statement index range)
 fn tx_around(all: &[String], idx: usize) -> Option<(usize, usize)> {
     let mut b = idx as isize;
     while b >= 0 && !is_tx_begin(&all[b as usize]) {
@@ -157,9 +157,9 @@ fn tx_around(all: &[String], idx: usize) -> Option<(usize, usize)> {
     (e < all.len()).then_some((b, e))
 }
 
-/// 선택 영역이 없을 때 커서 위치(offset, 바이트)로 실행할 문장을 정한다
+/// Without a selection, pick the statement to run from the cursor position (offset, bytes)
 pub fn plan(text: &str, offset: usize, kind: DbKind, s: ExecSettings) -> Plan {
-    // (커서 판정용 시작 — 제목 줄 포함, 끝, 실행할 문장 — 제목 줄 뺌)
+    // (start for cursor matching — including title lines, end, statement to run — without title lines)
     let segs: Vec<(usize, usize, String)> = sql::split_script(text, kind)
         .into_iter()
         .map(|(a, b)| {
@@ -178,7 +178,7 @@ pub fn plan(text: &str, offset: usize, kind: DbKind, s: ExecSettings) -> Plan {
         return match s.outside {
             Outside::Whole => Plan::Run(all),
             Outside::Below => Plan::Run(segs.iter().filter(|x| x.0 >= offset).map(|x| x.2.clone()).collect()),
-            // 바로 앞 문장이 같은 줄 끝이면 그 문장 (세미콜론 직후 커서)
+            // If the previous statement ends on the same line, that statement (cursor right after the semicolon)
             Outside::Nothing => match segs.iter().rev().find(|x| x.1 <= offset && !text[x.1..offset].contains('\n')) {
                 Some(x) => Plan::Run(vec![x.2.clone()]),
                 None => Plan::Nothing,
@@ -207,7 +207,7 @@ pub fn plan(text: &str, offset: usize, kind: DbKind, s: ExecSettings) -> Plan {
     }
 }
 
-/// 선택 영역을 실행할 때
+/// When running a selection
 pub fn plan_selection(sel: &str, kind: DbKind, s: ExecSettings) -> Plan {
     let v: Vec<String> = match s.selection {
         Selection::Single => vec![sel.trim().to_string()],
@@ -240,14 +240,14 @@ mod tests {
         assert_eq!(labels, ["GRANT b TO x", "All statements (4)", "From caret to end"]);
         assert_eq!(opts[1].1, ALL);
         assert_eq!(opts[2].1, ["GRANT b TO x", "COMMIT"]);
-        // 첫 문장: '커서부터 끝까지' 는 전체와 같아서 뺀다
+        // First statement: 'from cursor to end' equals the whole, so drop it
         let Plan::Ask(opts) = p(at("BEGIN"), ExecSettings::default()) else { panic!("should ask") };
         assert_eq!(opts.len(), 2);
-        // 문장이 하나면 묻지 않는다
+        // Don't ask if there's only one statement
         assert_eq!(plan("select 1", 3, DbKind::Postgres, ExecSettings::default()), run(&["select 1"]));
     }
 
-    /// `;` 없이 줄마다 쓴 문장: 캐럿 줄의 문장만 (앞 줄과 붙여 보내지 않는다)
+    /// Statements on separate lines without `;`: only the caret line's statement (not joined with the previous line)
     #[test]
     fn statements_without_semicolons() {
         let t = "select * from logs.user_activity_log where user_idx = 1\nselect * from logs.user_activity_log where user_idx = 3\nselect * from public.users";
@@ -264,7 +264,7 @@ mod tests {
         assert_eq!(p(at("GRANT b"), s(Inside::Smallest)), run(&["GRANT b TO x"]));
         assert_eq!(p(at("GRANT b"), s(Inside::Whole)), run(&ALL));
         assert_eq!(p(at("GRANT b"), s(Inside::FromCaret)), run(&["GRANT b TO x", "COMMIT"]));
-        // 세미콜론 바로 뒤 커서는 그 문장
+        // A cursor right after a semicolon belongs to that statement
         let end = SQL.find("GRANT a TO x;").unwrap() + "GRANT a TO x;".len();
         assert_eq!(p(end, s(Inside::Smallest)), run(&["GRANT a TO x"]));
     }

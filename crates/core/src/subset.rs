@@ -1,10 +1,10 @@
-//! 운영 데이터 일부 복사: 시작 테이블의 행 (WHERE) 과 FK 로 이어진 행을 모아 다른 Data Source (같은 종류) 로 넣는다.
-//! - 부모 (이 행이 가리키는 행) 는 끝까지 따라간다 — 넣었을 때 FK 가 깨지지 않게
-//! - 자식 (이 행을 가리키는 행) 은 depth 단계까지 (그 자식의 부모도 같이)
-//! - 개인정보로 보이는 컬럼 (이메일 · 전화 · 사람 이름 · 주소 · 주민번호 · 카드 · 비밀번호 · 생일 · IP) 은 읽을 때 SQL 로 가린다.
-//!   md5 로 가려서 같은 값은 늘 같은 값이 된다. PK · FK 에 쓰는 컬럼은 가리지 않는다 (관계가 끊긴다)
-//! - 대상에는 한 트랜잭션으로, 이미 있는 행은 건너뛴다 (PG: ON CONFLICT DO NOTHING · MySQL: ON DUPLICATE KEY UPDATE).
-//!   값을 잃지 않게 PG 는 행을 JSON 으로 옮기고 (jsonb_populate_recordset), MySQL 은 글자 / HEX 로 옮긴다
+//! Copy a subset of production data: rows of the start table (WHERE) plus FK-linked rows go into another Data Source (same kind).
+//! - Parents (rows this row points to) are followed all the way — so FKs don't break on insert
+//! - Children (rows pointing to this row) up to depth levels (with those children's parents too)
+//! - Columns that look like personal data (email · phone · person name · address · national ID · card · password · birthday · IP) are masked in SQL when read.
+//!   Masked with md5 so the same value always maps to the same value. Columns used in PK · FK are not masked (relations would break)
+//! - Inserted into the target in one transaction, skipping existing rows (PG: ON CONFLICT DO NOTHING · MySQL: ON DUPLICATE KEY UPDATE).
+//!   To avoid losing values, PG moves rows as JSON (jsonb_populate_recordset), MySQL as text / HEX
 use crate::app::{AppState, ensure_pool};
 use crate::db::Pool;
 use crate::erd::{Erd, ErdColumn};
@@ -13,11 +13,11 @@ use crate::store::DbKind;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
-/// 모든 테이블을 합쳐 이만큼까지 (넘으면 WHERE 를 좁히라고)
+/// Up to this many across all tables (if exceeded, ask to narrow the WHERE)
 pub const MAX_ROWS: usize = 50_000;
-/// IN (…) 한 번에 넣는 키 수
+/// Keys per IN (…)
 const KEYS_PER_QUERY: usize = 500;
-/// INSERT 한 문장에 넣는 행 수
+/// Rows per INSERT statement
 const ROWS_PER_INSERT: usize = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -39,7 +39,7 @@ pub struct MaskedColumn {
     pub mask: Mask,
 }
 
-/// 테이블 하나: 몇 행 · 가린 컬럼
+/// One table: row count · masked columns
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubsetTable {
@@ -47,14 +47,14 @@ pub struct SubsetTable {
     pub table: String,
     pub rows: usize,
     pub masked: Vec<MaskedColumn>,
-    /// 어떻게 들어왔는지: start · parent of x · child of x
+    /// How it came in: start · parent of x · child of x
     pub reason: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubsetPlan {
-    /// 넣는 순서 (부모 먼저)
+    /// Insert order (parents first)
     pub tables: Vec<SubsetTable>,
     pub total: usize,
 }
@@ -64,13 +64,13 @@ pub struct SubsetPlan {
 pub struct SubsetSpec {
     pub schema: String,
     pub table: String,
-    /// 시작 행 조건 (WHERE 뒤에 오는 글). 비면 전부
+    /// Start row condition (text after WHERE). Empty means all
     #[serde(default)]
     pub filter: String,
-    /// 자식을 몇 단계까지 (0 = 부모만)
+    /// How many levels of children (0 = parents only)
     #[serde(default)]
     pub depth: u32,
-    /// 개인정보 가리기
+    /// Mask personal data
     #[serde(default = "yes")]
     pub mask: bool,
 }
@@ -81,7 +81,7 @@ fn yes() -> bool {
 
 type Key = (String, String);
 
-/// 읽은 행: PG 는 JSON 글 (넣을 때 그대로), MySQL 은 컬럼 순서대로 글 / NULL (바이너리는 HEX)
+/// Rows read: PG as JSON text (inserted as is), MySQL as text / NULL in column order (binary as HEX)
 #[derive(Debug, Clone)]
 struct Row {
     pg_json: Option<String>,
@@ -91,12 +91,12 @@ struct Row {
 struct Table {
     cols: Vec<ErdColumn>,
     masks: Vec<(usize, Mask)>,
-    /// PK (없으면 행 전체) → 행
+    /// PK (whole row if none) → row
     rows: BTreeMap<String, Row>,
     reason: String,
 }
 
-// ───────── 가리기 ─────────
+// ───────── Masking ─────────
 
 fn seg(name: &str, words: &[&str]) -> bool {
     name.split('_').any(|x| words.contains(&x))
@@ -112,7 +112,7 @@ fn datey(t: &str) -> bool {
     t.starts_with("date") || t.starts_with("timestamp")
 }
 
-/// 이름 · 타입으로 개인정보인지 (사람 이름 "name" 은 사람 테이블에서만)
+/// Whether it's personal data by name · type ("name" as a person name only in person tables)
 pub fn mask_for(table: &str, col: &str, data_type: &str) -> Option<Mask> {
     let (t, n) = (table.to_lowercase(), col.to_lowercase());
     if datey(data_type) {
@@ -148,7 +148,7 @@ pub fn mask_for(table: &str, col: &str, data_type: &str) -> Option<Mask> {
     })
 }
 
-/// 가린 값을 만드는 SQL (v = 컬럼). NULL 은 NULL 그대로
+/// SQL producing the masked value (v = column). NULL stays NULL
 fn mask_sql(kind: DbKind, m: Mask, v: &str) -> String {
     let e = match kind {
         DbKind::Mysql => {
@@ -180,7 +180,7 @@ fn mask_sql(kind: DbKind, m: Mask, v: &str) -> String {
     format!("CASE WHEN {v} IS NULL THEN NULL ELSE {e} END")
 }
 
-// ───────── 읽기 ─────────
+// ───────── Reading ─────────
 
 fn qualified(kind: DbKind, k: &Key) -> String {
     crate::fake::qualified(kind, &k.0, &k.1)
@@ -191,7 +191,7 @@ fn binary(t: &str) -> bool {
     t.contains("blob") || t.contains("binary") || t.starts_with("bit") || ["geometry", "point", "linestring", "polygon", "multipoint", "multilinestring", "multipolygon", "geometrycollection"].iter().any(|g| t.starts_with(g))
 }
 
-/// 행을 읽는 SELECT (가리기 포함)
+/// SELECT that reads rows (with masking)
 fn select_sql(kind: DbKind, key: &Key, t: &Table, cond: &str, limit: usize) -> String {
     let q = |s: &str| crate::sql::quote_ident(kind, s);
     match kind {
@@ -219,7 +219,7 @@ fn select_sql(kind: DbKind, key: &Key, t: &Table, cond: &str, limit: usize) -> S
     }
 }
 
-/// 컬럼 값 (키 비교용)
+/// Column value (for key comparison)
 fn cell(kind: DbKind, t: &Table, r: &Row, col: &str) -> Value {
     match kind {
         DbKind::Postgres => r.pg_json.as_deref().and_then(|j| serde_json::from_str::<serde_json::Map<String, Value>>(j).ok()).and_then(|m| m.get(col).cloned()).unwrap_or(Value::Null),
@@ -227,7 +227,7 @@ fn cell(kind: DbKind, t: &Table, r: &Row, col: &str) -> Value {
     }
 }
 
-/// 비교에 쓸 SQL 값 (PG JSON 의 객체 · 배열은 글로)
+/// SQL value for comparison (PG JSON objects · arrays as text)
 fn lit(kind: DbKind, v: &Value) -> String {
     match v {
         Value::Object(_) | Value::Array(_) => crate::transfer::sql_literal(kind, &Value::String(v.to_string())),
@@ -235,7 +235,7 @@ fn lit(kind: DbKind, v: &Value) -> String {
     }
 }
 
-/// (a, b) IN ((1, 2), …) — 한 컬럼이면 a IN (1, …)
+/// (a, b) IN ((1, 2), …) — a IN (1, …) for a single column
 fn in_cond(kind: DbKind, cols: &[String], tuples: &[Vec<Value>]) -> String {
     let q = |s: &str| crate::sql::quote_ident(kind, s);
     if cols.len() == 1 {
@@ -255,7 +255,7 @@ struct Walk<'a> {
     erd: Erd,
     mask: bool,
     tables: HashMap<Key, Table>,
-    /// 처음 들어온 순서
+    /// Order of first arrival
     order: Vec<Key>,
     total: usize,
 }
@@ -266,7 +266,7 @@ impl Walk<'_> {
             return Ok(());
         }
         let et = self.erd.tables.iter().find(|t| t.schema == key.0 && t.name == key.1).ok_or_else(|| AppError::Msg(format!("Couldn't read table {}.{}", key.0, key.1)))?;
-        // PK · FK 컬럼은 가리지 않는다
+        // PK · FK columns are not masked
         let keys: HashSet<&str> = self
             .erd
             .relations
@@ -285,7 +285,7 @@ impl Walk<'_> {
         Ok(())
     }
 
-    /// cond 에 맞는 행을 읽어 새 것만 남긴다 (새로 들어온 행의 키)
+    /// Reads rows matching cond and keeps only new ones (keys of newly added rows)
     async fn fetch(&mut self, key: &Key, cond: &str, reason: &str) -> AppResult<Vec<String>> {
         self.ensure_table(key, reason)?;
         let left = MAX_ROWS.saturating_sub(self.total);
@@ -314,7 +314,7 @@ impl Walk<'_> {
         Ok(new)
     }
 
-    /// cols 가 tuples 중 하나인 행 (여러 번 나눠 읽는다)
+    /// Rows whose cols are one of tuples (read in several chunks)
     async fn fetch_in(&mut self, key: &Key, cols: &[String], tuples: Vec<Vec<Value>>, reason: &str) -> AppResult<Vec<String>> {
         let mut new = vec![];
         for ch in tuples.chunks(KEYS_PER_QUERY) {
@@ -324,7 +324,7 @@ impl Walk<'_> {
         Ok(new)
     }
 
-    /// 새 행들의 cols 값 (NULL 이 낀 것 · 겹치는 것은 빼고)
+    /// cols values of the new rows (excluding ones with NULL · duplicates)
     fn tuples(&self, key: &Key, ids: &[String], cols: &[String]) -> Vec<Vec<Value>> {
         let t = &self.tables[key];
         let mut seen = HashSet::new();
@@ -347,7 +347,7 @@ impl Walk<'_> {
         let mut queue: VecDeque<(Key, Vec<String>, u32)> = VecDeque::from([(root, first, spec.depth)]);
         while let Some((key, ids, depth)) = queue.pop_front() {
             let rels = self.erd.relations.clone();
-            // 부모: 이 행이 가리키는 행 (끝까지)
+            // Parents: rows this row points to (all the way)
             for r in rels.iter().filter(|r| r.from_schema == key.0 && r.from_table == key.1) {
                 let parent: Key = (r.to_schema.clone(), r.to_table.clone());
                 let tuples = self.tuples(&key, &ids, &r.from_columns);
@@ -359,7 +359,7 @@ impl Walk<'_> {
                     queue.push_back((parent, new, 0));
                 }
             }
-            // 자식: 이 행을 가리키는 행 (depth 단계까지)
+            // Children: rows pointing to this row (up to depth levels)
             if depth > 0 {
                 for r in rels.iter().filter(|r| r.to_schema == key.0 && r.to_table == key.1) {
                     let child: Key = (r.from_schema.clone(), r.from_table.clone());
@@ -377,7 +377,7 @@ impl Walk<'_> {
         Ok(())
     }
 
-    /// 넣는 순서: 부모 먼저 (자기 자신을 가리키는 관계는 빼고. 순환이면 남은 것은 들어온 순서대로)
+    /// Insert order: parents first (self-referencing relations excluded; on cycles, the rest in arrival order)
     fn insert_order(&self) -> Vec<Key> {
         let mut left: Vec<Key> = self.order.clone();
         let mut out = vec![];
@@ -409,7 +409,7 @@ impl AppState {
         if !matches!(kind, DbKind::Postgres | DbKind::Mysql) {
             return Err(AppError::Msg("Copying related rows works for PostgreSQL and MySQL".into()));
         }
-        // 관계는 시작 스키마 기준 (다른 스키마를 가리키면 그 테이블도 들어온다)
+        // Relations are relative to the start schema (if they point to another schema, that table comes in too)
         let erd = self.erd(source.into(), vec![spec.schema.clone()]).await?;
         let pool = ensure_pool(self, source).await?;
         let mut w = Walk { st: self, id: source.to_string(), pool, kind, erd, mask: spec.mask, tables: HashMap::new(), order: vec![], total: 0 };
@@ -417,12 +417,12 @@ impl AppState {
         Ok(w)
     }
 
-    /// 무엇이 몇 행 복사될지 (읽기만 한다)
+    /// What will be copied and how many rows (read only)
     pub async fn subset_preview(&self, source: String, spec: SubsetSpec) -> AppResult<SubsetPlan> {
         Ok(self.subset_walk(&source, &spec).await?.plan())
     }
 
-    /// 모은 행을 target 에 한 트랜잭션으로 넣는다 (이미 있는 행은 건너뛴다). 넣으려고 보낸 행 수와 계획
+    /// Inserts the collected rows into target in one transaction (skipping existing rows). Returns rows sent for insert and the plan
     pub async fn subset_copy(&self, source: String, spec: SubsetSpec, target: String) -> AppResult<SubsetPlan> {
         let (sk, tk) = (self.kind_of(&source)?, self.kind_of(&target)?);
         if sk != tk {
@@ -439,7 +439,7 @@ impl AppState {
             if t.rows.is_empty() {
                 continue;
             }
-            // MySQL: 대상 DB 의 같은 이름 테이블 (원본 DB 이름을 붙이면 원본에 들어간다)
+            // MySQL: the same-named table in the target DB (qualifying with the source DB name would insert into the source)
             let rel = if tk == DbKind::Mysql { crate::sql::quote_ident(tk, &key.1) } else { qualified(tk, &key) };
             let tcols = crate::audit::table_columns(&tpool, &rel, tk).await?;
             if tcols.is_empty() {
@@ -460,7 +460,7 @@ impl AppState {
                     }
                 }
                 _ => {
-                    // 원본 · 대상 둘 다 있는 컬럼만 (계산 컬럼은 빼고)
+                    // Only columns present in both source · target (excluding computed columns)
                     let pick: Vec<(usize, &crate::audit::Col)> = tcols.iter().filter(|c| !c.generated).filter_map(|c| t.cols.iter().position(|s| s.name.eq_ignore_ascii_case(&c.name)).map(|i| (i, c))).collect();
                     let names: Vec<String> = pick.iter().map(|(_, c)| q(&c.name)).collect();
                     for ch in rows.chunks(ROWS_PER_INSERT) {
@@ -479,7 +479,7 @@ impl AppState {
                                 format!("({})", cells.join(", "))
                             })
                             .collect();
-                        // 이미 있는 행만 건너뛴다 (INSERT IGNORE 는 FK 오류까지 삼킨다)
+                        // Skip only existing rows (INSERT IGNORE also swallows FK errors)
                         let first = names.first().cloned().unwrap_or_default();
                         stmts.push(format!("INSERT INTO {rel} ({}) VALUES\n{}\nON DUPLICATE KEY UPDATE {first} = {first}", names.join(", "), vals.join(",\n")));
                     }
@@ -501,7 +501,7 @@ mod tests {
         assert_eq!(mask_for("orders", "email", "text"), Some(Mask::Email));
         assert_eq!(mask_for("users", "mobile_phone", "varchar(20)"), Some(Mask::Phone));
         assert_eq!(mask_for("users", "name", "text"), Some(Mask::Name));
-        // 사람 테이블이 아닌 name 은 그대로
+        // name outside person tables stays as is
         assert_eq!(mask_for("products", "name", "text"), None);
         assert_eq!(mask_for("orders", "recipient_name", "text"), Some(Mask::Name));
         assert_eq!(mask_for("users", "password_hash", "character varying(100)"), Some(Mask::Secret));
@@ -511,7 +511,7 @@ mod tests {
         assert_eq!(mask_for("logs", "client_ip", "inet"), Some(Mask::Ip));
         assert_eq!(mask_for("logs", "description", "text"), None);
         assert_eq!(mask_for("hotels", "hotel_name", "text"), None);
-        // 글이 아니면 (숫자 id 등) 그대로
+        // Non-text (numeric ids etc.) stays as is
         assert_eq!(mask_for("users", "phone_id", "integer"), None);
     }
 
@@ -523,7 +523,7 @@ mod tests {
         assert_eq!(two, "(a, `Order`) IN ((1, 2))");
     }
 
-    // ───────── 실제 서버 ─────────
+    // ───────── Real server ─────────
 
     async fn two_dbs(kind: DbKind, env: &str) -> Option<AppState> {
         let e = std::env::var(env).ok()?;
@@ -538,7 +538,7 @@ mod tests {
         Some(st)
     }
 
-    /// 고객 한 명 → 주문 (자식) → 주문 품목 (자식의 자식) · 상품 (품목의 부모) · 추천인 (자기 참조 부모). 개인정보는 가리고, FK 는 다 맞는다
+    /// One customer → orders (children) → order items (grandchildren) · products (items' parents) · referrer (self-referencing parent). Personal data masked, all FKs match
     async fn copies_related_rows(kind: DbKind, env: &str, target_db: &str) {
         let Some(st) = two_dbs(kind, env).await else { return };
         let q = |id: &str, s: &str| st.run_query(id.into(), s.into(), None, None);
@@ -552,7 +552,7 @@ mod tests {
             q("s", &format!("create database {target_db}")).await.unwrap();
         }
         let tgt = crate::sql::target_id("s", Some(target_db));
-        // (MySQL 은 컬럼 옆 REFERENCES 를 무시한다 → 테이블 단위 FOREIGN KEY)
+        // (MySQL ignores REFERENCES next to a column → table-level FOREIGN KEY)
         let ddl = [
             "drop table if exists qs_items, qs_orders, qs_products, qs_customers",
             "create table qs_customers (id int primary key, email varchar(60) not null unique, name varchar(40), phone varchar(20), referrer_id int, foreign key (referrer_id) references qs_customers(id))",
@@ -572,13 +572,13 @@ mod tests {
         let plan = st.subset_preview("s".into(), spec.clone()).await.unwrap();
         let count = |t: &str| plan.tables.iter().find(|x| x.table == t).map(|x| x.rows).unwrap_or(0);
         assert_eq!((count("qs_customers"), count("qs_orders"), count("qs_items"), count("qs_products")), (2, 2, 3, 2), "{plan:?}");
-        // 부모가 먼저
+        // Parents first
         let pos = |t: &str| plan.tables.iter().position(|x| x.table == t).unwrap();
         assert!(pos("qs_customers") < pos("qs_orders") && pos("qs_orders") < pos("qs_items") && pos("qs_products") < pos("qs_items"), "{plan:?}");
         let masked: Vec<&str> = plan.tables[pos("qs_customers")].masked.iter().map(|m| m.column.as_str()).collect();
         assert_eq!(masked, vec!["email", "name", "phone"]);
         st.subset_copy("s".into(), spec.clone(), tgt.clone()).await.unwrap();
-        // 두 번 해도 (이미 있는 행은 건너뛴다)
+        // Running it twice works (existing rows are skipped)
         st.subset_copy("s".into(), spec, tgt.clone()).await.unwrap();
         let rows = |s: &str| q(&tgt, s);
         assert_eq!(rows("select count(*) from qs_items").await.unwrap().rows[0][0].to_string().trim_matches('"'), "3");
@@ -591,7 +591,7 @@ mod tests {
         assert_eq!(c[1][4].to_string().trim_matches('"'), "1");
         assert_eq!(rows("select note from qs_orders where id = 101").await.unwrap().rows[0][0], serde_json::json!("second"));
         assert_eq!(rows("select price from qs_products where id = 11").await.unwrap().rows[0][0].to_string().trim_matches('"'), "12.00");
-        // 같은 곳으로는 안 된다
+        // Not into the same place
         assert!(st.subset_copy("s".into(), SubsetSpec { schema: src_db.into(), table: "qs_customers".into(), filter: String::new(), depth: 0, mask: true }, "s".into()).await.is_err());
         for d in ["drop table qs_items", "drop table qs_orders", "drop table qs_products", "drop table qs_customers"] {
             q("s", d).await.unwrap();

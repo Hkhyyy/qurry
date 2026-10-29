@@ -1,2 +1,2 @@
-/** className 합치기 (거짓 값은 뺀다) */
+/** Join classNames (falsy values are dropped) */
 export const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(" ");

@@ -5,7 +5,7 @@ import "./lib/completion";
 import App from "./App";
 
 async function boot() {
-  // 개발용: 브라우저에서 ?mock 으로 열면 가짜 백엔드 사용 (화면 확인용)
+  // Dev only: opening in the browser with ?mock uses a fake backend (for checking the UI)
   if (import.meta.env.DEV && location.search.includes("mock")) await import("./lib/mock");
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>

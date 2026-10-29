@@ -41,10 +41,10 @@ import { MigrateView } from "./components/MigrateView";
 import type { DataFormat } from "./lib/transfer";
 import "./App.css";
 
-/** 칸 id (0~3). 칸 배치는 Pane 트리 */
+/** Pane id (0~3). The pane layout is a Pane tree */
 type Group = number;
 
-/** 워크스페이스 하나의 탭·분할 화면 (지금 것이 아닐 때 보관한다) */
+/** One workspace's tabs and split view (kept while it is not the current one) */
 interface WsLayout {
   tabs: Tab[];
   panes: Pane;
@@ -56,13 +56,13 @@ const emptyLayout = (): WsLayout => ({ tabs: [], panes: leaf(0), activeIds: [nul
 
 interface Tab {
   id: string;
-  /** console: SQL 콘솔 / table: 테이블 데이터 에디터 / ddl: 읽기 전용 DDL */
+  /** console: SQL console / table: table data editor / ddl: read-only DDL */
   kind: "console" | "table" | "ddl" | "redis" | "dba" | "erd" | "migrate" | "rag";
   group: Group;
   connId: string;
-  /** 접속한 DB (없으면 Data Source 기본 DB) */
+  /** Connected DB (if none, the Data Source's default DB) */
   database?: string;
-  /** 백엔드 접속 대상 id (connId 또는 connId::database) */
+  /** Backend connection target id (connId or connId::database) */
   target: string;
   title: string;
   sql: string;
@@ -73,31 +73,31 @@ interface Tab {
   loadingMore: boolean;
   where: string;
   orderBy: string;
-  /** 콘솔의 현재 스키마 (search_path) */
+  /** Console's current schema (search_path) */
   schema?: string;
   tableSql?: string;
   edit?: EditTarget;
-  /** 콘솔: 결과 탭들, Output 로그, 트랜잭션 */
+  /** Console: result tabs, Output log, transaction */
   results: ResultEntry[];
   activeResult: string;
   output: OutputLine[];
   txManual: boolean;
   inTx: boolean;
-  /** 서버 커서가 열린 결과 탭 (더 불러오기 대상) */
+  /** Result tab with an open server cursor (target for loading more) */
   cursorEntry?: string;
   /** Pin Tab */
   pinned?: boolean;
-  /** Redis 브라우저: 처음 선택할 키 */
+  /** Redis browser: key to select first */
   redisKey?: string;
-  /** dba: 보고 있는 리포트 (sessions, slow_queries, …) */
+  /** dba: report being viewed (sessions, slow_queries, …) */
   dbaReport?: string;
-  /** erd: 그릴 스키마들 */
+  /** erd: schemas to draw */
   erdSchemas?: string[];
-  /** 다시 켤 때 되살린 탭: 아직 불러오지 않았다 (처음 보일 때 불러온다) */
+  /** Tab restored on relaunch: not loaded yet (loads when first shown) */
   stale?: boolean;
 }
 
-/** 닫은 탭 / 최근 파일 (Reopen Closed Tab, ⌘e Recent Files) */
+/** Closed tabs / recent files (Reopen Closed Tab, ⌘e Recent Files) */
 interface TabSnapshot {
   key: string;
   kind: Tab["kind"];
@@ -109,15 +109,15 @@ interface TabSnapshot {
   where: string;
   orderBy: string;
 }
-const TAB_LIMIT = 10; // DataGrip 기본 Tab limit
+const TAB_LIMIT = 10; // DataGrip default Tab limit
 const snapKey = (t: { kind: string; connId: string; database?: string; title: string; edit?: EditTarget }) =>
   `${t.kind}|${t.connId}|${t.database ?? ""}|${t.edit ? t.edit.schema + "." + t.edit.table : t.title}`;
 
 const isMac = navigator.platform.toLowerCase().includes("mac");
-/** 결과 그리드에 쌓아 두는 최대 행 수 (TUI 와 같다). 그 이상은 CSV 로 내보낸다 */
+/** Max rows kept in the result grid (same as the TUI). Beyond that, export to CSV */
 const MAX_ROWS = 100_000;
 const capMsg = (n: number) => `Showing the first ${n.toLocaleString()} rows — export to CSV for all of them`;
-/** 메뉴·Find Action 에 보일 단축키 (첫 번째 키) */
+/** Shortcut shown in menus and Find Action (the first key) */
 const sk = (id: string) => {
   const b = bindings(id);
   return b.length ? formatSpec(b[0]) : undefined;
@@ -126,7 +126,7 @@ const last = <T,>(a: T[]): T | undefined => a[a.length - 1];
 
 export default function App() {
   const theme = useTheme();
-  // 키맵이 바뀌면 메뉴의 단축키 표시를 다시 그린다
+  // Redraw the menu shortcut labels when the keymap changes
   const [, setKeymapVer] = useState(0);
   useEffect(() => {
     const off = onKeymapChange(() => setKeymapVer((n) => n + 1));
@@ -136,7 +136,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState<false | "appearance" | "keymap">(false);
   const [schemeOpen, setSchemeOpen] = useState(false);
   const [keymapOpen, setKeymapOpen] = useState(false);
-  // 창을 닫을 때 커밋 안 한 변경이 있으면 묻는다 (닫으면 롤백된다)
+  // On window close, ask if there are uncommitted changes (closing rolls them back)
   useEffect(() => {
     let off: (() => void) | undefined;
     import("@tauri-apps/api/window")
@@ -149,7 +149,7 @@ export default function App() {
       .catch(() => {});
     return () => off?.();
   }, []);
-  // 새 버전 (시작할 때 + 1시간마다 확인. 실패는 조용히 넘긴다)
+  // New version (checked at startup + every hour; failures are ignored silently)
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [updateOpen, setUpdateOpen] = useState(false);
   useEffect(() => {
@@ -166,11 +166,11 @@ export default function App() {
   }, []);
   const [conns, setConns] = useState<ConnectionView[]>([]);
   const [tabs, setTabs] = useState<Tab[]>([]);
-  /** 칸마다 보이는 탭 */
+  /** Tab shown in each pane */
   const [activeIds, setActiveIds] = useState<(string | null)[]>([null, null, null, null]);
   const activeIdsRef = useRef(activeIds);
   activeIdsRef.current = activeIds;
-  // 화면 분할 (최대 4칸)
+  // Split view (up to 4 panes)
   const [panes, setPanes] = useState<Pane>(leaf(0));
   const panesRef = useRef(panes);
   panesRef.current = panes;
@@ -178,7 +178,7 @@ export default function App() {
   const [focused, setFocused] = useState<Group>(0);
   const focusedRef = useRef(focused);
   focusedRef.current = focused;
-  // ───────── 워크스페이스 (Orca 처럼): 각자 탭·분할 화면. 지금 것은 위 상태, 나머지는 stash (탭 객체·콘솔 세션·트랜잭션 그대로) ─────────
+  // ───────── Workspaces (like Orca): each has its own tabs and split view. The current one is the state above, the rest are in stash (tab objects, console sessions, transactions as is) ─────────
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([{ id: "ws1", name: "Default", connIds: [] }]);
   const workspacesRef = useRef(workspaces);
   workspacesRef.current = workspaces;
@@ -193,12 +193,12 @@ export default function App() {
   const editorApis = useRef(new Map<string, EditorApi>());
   const [historyFor, setHistoryFor] = useState<string | null>(null);
   const [historyTab, setHistoryTab] = useState<"history" | "snippets">("history");
-  /** 운영 작업 기록 창 (connId null = 모든 Data Source) */
+  /** Production operation log window (connId null = all Data Sources) */
   const [prodLog, setProdLog] = useState<{ connId: string | null } | null>(null);
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
 
-  // 쿼리를 실행할 때마다 불리므로, 실제로 바뀐 게 있을 때만 상태를 바꾼다 (트리 전체 다시 그리기·단축키 핸들러 재등록 방지)
+  // Called on every query run, so only update state when something actually changed (avoids redrawing the whole tree and re-registering shortcut handlers)
   const connsJson = useRef("");
   const refresh = useCallback(async () => {
     try {
@@ -235,7 +235,7 @@ export default function App() {
       .catch(() => {});
     return () => off?.();
   }, []);
-  // Help 메뉴 › Keymap Reference
+  // Help menu › Keymap Reference
   useEffect(() => {
     let off: (() => void) | undefined;
     listen("open-keymap", () => setKeymapOpen(true))
@@ -252,7 +252,7 @@ export default function App() {
     return () => off?.();
   }, []);
   useEffect(migrateOldHistory, []);
-  // Auto-disconnect 등으로 백엔드가 접속을 닫으면 트리 상태를 갱신
+  // Update the tree state when the backend closes a connection (e.g. Auto-disconnect)
   useEffect(() => {
     let off: (() => void) | undefined;
     listen<string>("conn-disconnected", (e) => {
@@ -282,7 +282,7 @@ export default function App() {
   const groupActive = (g: Group) => tabs.find((t) => t.id === activeIds[g] && t.group === g) ?? null;
   const active = groupActive(focused) ?? leaves(panes).map(groupActive).find(Boolean) ?? null;
   const activeConn = conns.find((c) => c.id === active?.connId);
-  // 같은 이름의 테이블 탭이 여럿이면 schema.table (스키마도 같으면 db.schema.table)
+  // Several table tabs with the same name → schema.table (db.schema.table if the schema is also the same)
   const tabLabels = useMemo(
     () =>
       tableTabLabels(
@@ -291,7 +291,7 @@ export default function App() {
     [tabs, conns],
   );
   const labelOf = (t: Tab) => tabLabels.get(t.id) ?? t.title;
-  /** 다른 워크스페이스에 있는 탭이면 거기서 바꾼다 (그 사이 끝난 쿼리 결과가 사라지지 않게) */
+  /** If the tab is in another workspace, change it there (so query results that finished meanwhile are not lost) */
   const updStashed = (id: string, fn: (t: Tab) => Tab) => {
     for (const w of stash.current.values()) {
       if (w.tabs.some((t) => t.id === id)) {
@@ -301,7 +301,7 @@ export default function App() {
     }
     return false;
   };
-  /** 모든 워크스페이스의 탭 */
+  /** Tabs of all workspaces */
   const allTabs = () => [...tabsRef.current, ...[...stash.current.values()].flatMap((w) => w.tabs)];
   const patch = (id: string, p: Partial<Tab>) => {
     if (!updStashed(id, (t) => ({ ...t, ...p }))) setTabs((ts) => ts.map((t) => (t.id === id ? { ...t, ...p } : t)));
@@ -309,7 +309,7 @@ export default function App() {
   const mru = useRef<string[]>([]);
   const recent = useRef<TabSnapshot[]>([]);
   const closedStack = useRef<TabSnapshot[]>([]);
-  // 콘솔에서 치는 SQL 은 상태(setTabs)에 넣지 않고 여기 둔다 → 키 입력마다 앱 전체를 다시 그리지 않는다
+  // SQL typed in the console is kept here, not in state (setTabs) → the whole app does not redraw on every keystroke
   const liveSql = useRef(new Map<string, string>());
   const sqlOf = (t: Tab) => liveSql.current.get(t.id) ?? t.sql;
   const snapshot = (t: Tab): TabSnapshot => ({
@@ -336,7 +336,7 @@ export default function App() {
     remember(t);
   };
 
-  // ───────── 탭 열기 ─────────
+  // ───────── Opening tabs ─────────
   const addTab = (
     c: ConnectionView,
     kind: Tab["kind"],
@@ -347,14 +347,14 @@ export default function App() {
     const n = tabsRef.current.filter((t) => t.kind === "console" && t.connId === c.id && t.database === database).length;
     const ls = leaves(panesRef.current);
     const group: Group = opts.group ?? (ls.includes(focused) ? focused : ls[0]);
-    // 이름이 이미 [DEV] 처럼 괄호로 시작하면 한 번 더 감싸지 않는다 ("console [[DEV] shop]" → "console [DEV] shop")
+    // If the name already starts with brackets like [DEV], don't wrap it again ("console [[DEV] shop]" → "console [DEV] shop")
     const where = base.startsWith("[") ? base : `[${base}]`;
     const tab = buildTab(c, kind, opts, group, opts.title ?? (n === 0 ? `console ${where}` : `console_${n + 1} ${where}`));
-    // Transaction control: Manual 이 기본이면 세션도 Manual 로 연다
+    // Transaction control: if Manual is the default, open the session as Manual too
     if (tab.txManual) api.setTxMode(tab.target, tab.id, true).catch((e) => setStatus(String(e)));
     setTabs((ts) => [...ts, tab]);
     activate(tab);
-    // Tab limit: 고정되지 않은 탭이 10개를 넘으면 가장 오래 안 쓴 탭부터 닫는다 (DataGrip)
+    // Tab limit: when unpinned tabs exceed 10, close the least recently used first (DataGrip)
     setTimeout(() => {
       const inGroup = tabsRef.current.filter((t) => t.group === group && !t.pinned && t.id !== tab.id);
       const over = inGroup.length + 1 - TAB_LIMIT;
@@ -369,7 +369,7 @@ export default function App() {
     return tab;
   };
 
-  /** 탭 하나 (상태만. 열기·실행은 하지 않는다) */
+  /** One tab (state only; does not open or run anything) */
   const buildTab = (
     c: ConnectionView,
     kind: Tab["kind"],
@@ -404,10 +404,10 @@ export default function App() {
     };
   };
 
-  // ───────── 다시 켤 때 되살리기 (workspace-gui.json) ─────────
+  // ───────── Restoring on relaunch (workspace-gui.json) ─────────
   const restored = useRef(false);
   const savedWs = useRef("");
-  /** 저장할 내용: 탭(콘솔 SQL·테이블 WHERE/ORDER BY·DDL·Redis·DBA 리포트·다이어그램 스키마)과 분할·칸마다 보이는 탭·포커스 */
+  /** What to save: tabs (console SQL, table WHERE/ORDER BY, DDL, Redis, DBA report, diagram schemas), splits, the tab shown in each pane, and focus */
   const wsJson = () => {
     const ser = (l: WsLayout) => ({
       tabs: l.tabs.map((t) => ({
@@ -432,13 +432,13 @@ export default function App() {
     const live: WsLayout = { tabs: tabsRef.current, panes: panesRef.current, activeIds: activeIdsRef.current, focused: focusedRef.current, mru: [] };
     return JSON.stringify({
       version: 2,
-      // 워크스페이스 목록을 TUI 와 같이 쓰는 파일과 맞춘 적이 있다 (없는 것은 다른 쪽에서 지운 것)
+      // The workspace list has been synced with the file shared with the TUI (missing ones were deleted on the other side)
       shared: true,
       current: curWsRef.current,
       workspaces: workspacesRef.current.map((w) => ({ id: w.id, name: w.name, connIds: w.connIds, ...ser(w.id === curWsRef.current ? live : stash.current.get(w.id) ?? emptyLayout()) })),
     });
   };
-  /** 앱을 닫거나 업데이트로 다시 켜기 전: 커밋 안 한 변경이 있으면 묻고, 열어 둔 탭을 저장한다 */
+  /** Before closing the app or relaunching for an update: ask about uncommitted changes and save the open tabs */
   const readyToQuit = async () => {
     const n = allTabs().filter((t) => t.inTx).length;
     if (n && !(await ask(`${n} console(s) have uncommitted changes. Quit and roll them back?`, { okLabel: "Quit and Roll Back", danger: true }))) return false;
@@ -452,13 +452,13 @@ export default function App() {
     savedWs.current = j;
     api.saveWorkspace(JSON.parse(j)).catch(() => {});
   };
-  /** 되살린 탭을 처음 볼 때: 테이블은 데이터를 불러오고, 콘솔은 트랜잭션 모드를 맞춘다 (Redis 는 화면이 스스로 불러온다) */
+  /** When a restored tab is first shown: tables load their data, consoles set their transaction mode (Redis views load themselves) */
   const loadStale = async (t: Tab) => {
     patch(t.id, { stale: false });
     if (t.kind === "console" && t.txManual) api.setTxMode(t.target, t.id, true).catch((e) => setStatus(String(e)));
     if (t.kind === "table") loadTable(t);
   };
-  /** 테이블 탭의 PK 와 데이터를 같이 불러온다 (접속이 안 되면 둘 다 기다리느라 두 배로 걸린다) */
+  /** Load a table tab's PK and data together (if the connection fails, waiting for both would take twice as long) */
   const loadTable = (t: Tab) => {
     const { edit, tableSql } = t;
     if (!edit || !tableSql) return;
@@ -466,11 +466,11 @@ export default function App() {
       .table(t.target, edit.schema, edit.table)
       .then((d) => updTab(t.id, (x) => (x.edit ? { ...x, edit: { ...x.edit, pk: d.columns.filter((c) => c.isPk).map((c) => c.name) } } : x)))
       .catch(() => {
-        /* 메타 조회 실패 시 읽기 전용 */
+        /* Read-only if the metadata lookup fails */
       });
     run(t, tableSql);
   };
-  // 방금 접속된 Data Source: 접속 실패로 비어 있던 테이블 탭을 다시 불러온다
+  // Data Source just connected: reload table tabs left empty by a failed connection
   const wasConnected = useRef(new Set<string>());
   useEffect(() => {
     const now = new Set(conns.filter((c) => c.connected).map((c) => c.id));
@@ -481,7 +481,7 @@ export default function App() {
       if (t.kind === "table" && back.includes(t.connId) && t.error && !t.running && !t.stale) loadTable(t);
     }
   }, [conns]);
-  /** 저장된 워크스페이스 하나 → 탭·분할 화면 (탭은 고를 때 불러온다) */
+  /** One saved workspace → tabs and split view (tabs load when selected) */
   const buildLayout = (ws: any): WsLayout => {
     if (!ws || !Array.isArray(ws.tabs)) return emptyLayout();
     const okPane = (p: any): boolean => p && (p.t === "leaf" ? Number.isInteger(p.g) && p.g >= 0 && p.g < MAX_PANES : p.t === "split" && okPane(p.a) && okPane(p.b));
@@ -489,7 +489,7 @@ export default function App() {
     const ls0 = leaves(pane0);
     const built: (Tab | null)[] = ws.tabs.map((x: any) => {
       const c = conns.find((cc) => cc.id === x.connId);
-      // DBA 리포트·다이어그램·비교·RAG 탭도 되살린다 (처음 보일 때 스스로 불러온다)
+      // Also restore DBA report, diagram, compare and RAG tabs (they load themselves when first shown)
       if (!c || !["console", "table", "ddl", "redis", "dba", "erd", "migrate", "rag"].includes(x.kind)) return null;
       const group = ls0.includes(x.group) ? x.group : ls0[0];
       let tableSql: string | undefined;
@@ -511,7 +511,7 @@ export default function App() {
     });
     return { tabs: ts, panes: pane, activeIds: act, focused: ls.includes(ws.focused) ? ws.focused : ls[0], mru: act.filter((x): x is string => !!x) };
   };
-  /** 이 탭·분할 화면을 보인다. 칸마다 보이는 탭만 불러온다 (나머지는 고를 때) */
+  /** Show this tab and split view. Only the tab shown in each pane is loaded (the rest when selected) */
   const showLayout = (l: WsLayout) => {
     setTabs(l.tabs);
     setPanes(l.panes);
@@ -523,12 +523,12 @@ export default function App() {
       if (t?.stale) loadStale(t);
     }
   };
-  /** 저장한 탭 · 워크스페이스를 되살린다. 돌려주는 값 = 공유 워크스페이스 목록과 맞춘 적이 있는지 */
+  /** Restore saved tabs and workspaces. Returns whether the list has been synced with the shared workspace list */
   const restoreWs = (data: any): boolean => {
-    // version 1 (워크스페이스 전) = 워크스페이스 하나
+    // version 1 (before workspaces) = a single workspace
     const list: any[] | null = Array.isArray(data?.workspaces) ? data.workspaces : Array.isArray(data?.tabs) ? [{ id: "ws1", name: "Default", ...data }] : null;
     if (!list?.length) return false;
-    // 탐색기 목록이 없던 저장 파일 (0.2.0 이전·0.2.0): 첫 워크스페이스가 모든 Data Source 를 가진다
+    // Saved file without explorer lists (before 0.2.0 and 0.2.0): the first workspace gets all Data Sources
     const hasLists = list.some((w) => Array.isArray(w.connIds));
     const infos: WorkspaceInfo[] = list.map((w, i) => ({
       id: typeof w.id === "string" && w.id ? w.id : `ws${i + 1}`,
@@ -549,12 +549,12 @@ export default function App() {
     return data?.shared === true;
   };
 
-  // ── 워크스페이스 목록 (이름 · Data Source) 을 TUI 와 같이 쓴다: 바꾼 것만 보내고, 다른 쪽에서 바꾼 것은 받아 온다 ──
-  /** 마지막으로 공유 파일과 맞춘 목록 (null = 아직) */
+  // ── The workspace list (name · Data Sources) is shared with the TUI: send only what changed, and pull in what the other side changed ──
+  /** List last synced with the shared file (null = not yet) */
   const sharedPrev = useRef<WorkspaceInfo[] | null>(null);
   const sameWs = (a: WorkspaceInfo[], b: WorkspaceInfo[]) => JSON.stringify(a.map((w) => [w.id, w.name, w.connIds])) === JSON.stringify(b.map((w) => [w.id, w.name, w.connIds]));
   const wsTabs = (id: string) => (id === curWsRef.current ? tabsRef.current : stash.current.get(id)?.tabs ?? []);
-  /** 공유 목록을 화면에 반영. 다른 쪽에서 지운 워크스페이스는 탭을 닫는다 (커밋 안 한 콘솔이 있으면 남긴다 — 다음 동기화 때 되살아난다) */
+  /** Apply the shared list to the UI. Close the tabs of workspaces deleted on the other side (keep them if a console has uncommitted changes — they come back on the next sync) */
   const applyShared = (list: WorkspaceInfo[]) => {
     const cur = workspacesRef.current;
     const gone = cur.filter((w) => !list.some((x) => x.id === w.id));
@@ -576,7 +576,7 @@ export default function App() {
     }
     if (keep.length) setStatus(`Kept workspace ${keep.map((w) => `"${w.name}"`).join(", ")} — it was deleted elsewhere but has uncommitted changes`);
   };
-  /** 처음 켤 때: 이 앱의 목록을 공유 목록에 맞춘다 (처음이면 이름이 같은 것끼리 묶는다) */
+  /** At first launch: match this app's list to the shared list (the first time, pair up ones with the same name) */
   const adoptShared = async (synced: boolean) => {
     const a = await api.adoptWorkspaces(workspacesRef.current, synced);
     for (const [from, to] of a.renamed) {
@@ -594,7 +594,7 @@ export default function App() {
     applyShared(a.list);
     sharedPrev.current = a.list;
   };
-  // 이 앱에서 바꾸면 바뀐 것만 공유 파일에
+  // When changed in this app, write only the changes to the shared file
   useEffect(() => {
     const prev = sharedPrev.current;
     if (!prev || sameWs(prev, workspaces)) return;
@@ -603,14 +603,14 @@ export default function App() {
     api
       .syncWorkspaces(prev, sent)
       .then((list) => {
-        // 그새 또 바꿨으면 다음 동기화에 맡긴다
+        // If it changed again meanwhile, leave it to the next sync
         if (workspacesRef.current !== sent) return;
         sharedPrev.current = list;
         if (!sameWs(list, sent)) applyShared(list);
       })
       .catch((e) => setStatus(`Workspaces: ${String(e)}`));
   }, [workspaces]);
-  // 다른 쪽 (TUI) 에서 바꾼 것: 창에 돌아올 때 · 몇 초마다
+  // Changes from the other side (TUI): when the window regains focus · every few seconds
   useEffect(() => {
     const pull = () => {
       const prev = sharedPrev.current;
@@ -631,7 +631,7 @@ export default function App() {
       window.removeEventListener("focus", pull);
     };
   }, []);
-  /** 다른 워크스페이스로: 지금 것은 그대로 보관 (콘솔 세션·트랜잭션도). discard = 지금 것을 보관하지 않는다 (지울 때) */
+  /** Switch to another workspace: keep the current one as is (console sessions and transactions too). discard = don't keep the current one (when deleting) */
   const switchWs = (id: string, discard = false) => {
     const from = curWsRef.current;
     if (id === from || !workspacesRef.current.some((w) => w.id === id)) return;
@@ -656,7 +656,7 @@ export default function App() {
     const name = w && (await askText("Rename workspace", w.name));
     if (name?.trim()) setWorkspaces((l) => l.map((x) => (x.id === id ? { ...x, name: name.trim() } : x)));
   };
-  /** 워크스페이스와 그 탭을 닫는다 (커밋 안 한 변경은 롤백된다) */
+  /** Close a workspace and its tabs (uncommitted changes are rolled back) */
   const deleteWs = async (id: string) => {
     const list = workspacesRef.current;
     const w = list.find((x) => x.id === id);
@@ -675,7 +675,7 @@ export default function App() {
     setWorkspaces((l) => l.filter((x) => x.id !== id));
     workspacesRef.current = workspacesRef.current.filter((x) => x.id !== id);
   };
-  /** 탭을 다른 워크스페이스로 (세션 그대로). 그 워크스페이스의 첫 칸 맨 뒤에 */
+  /** Move a tab to another workspace (session kept). Goes at the end of that workspace's first pane */
   const moveToWs = (t: Tab, id: string) => {
     const target = stash.current.get(id) ?? emptyLayout();
     const g = leaves(target.panes)[0];
@@ -699,7 +699,7 @@ export default function App() {
       .catch((e) => setStatus(`Workspaces: ${String(e)}`))
       .finally(() => setWsReady(true));
   }, [conns]);
-  // 어느 워크스페이스에도 없는 Data Source (방금 만든 것, TUI 에서 만든 것) → 지금 워크스페이스로
+  // Data Sources in no workspace (just created, or created in the TUI) → into the current workspace
   const [wsReady, setWsReady] = useState(false);
   useEffect(() => {
     if (!wsReady) return;
@@ -707,13 +707,13 @@ export default function App() {
     const orphans = conns.map((c) => c.id).filter((id) => !known.has(id));
     if (orphans.length) setWorkspaces((l) => l.map((w) => (w.id === curWsRef.current ? { ...w, connIds: [...w.connIds, ...orphans] } : w)));
   }, [conns, wsReady]);
-  /** Data Source 를 워크스페이스 탐색기에 넣고 뺀다 (Data Source 자체는 그대로) */
+  /** Add or remove a Data Source in the workspace explorer (the Data Source itself is untouched) */
   const setInWs = (wsId: string, connId: string, on: boolean) =>
     setWorkspaces((l) => l.map((w) => (w.id !== wsId ? w : { ...w, connIds: on ? [...w.connIds.filter((x) => x !== connId), connId] : w.connIds.filter((x) => x !== connId) })));
-  /** 탐색기를 띄운 워크스페이스 (펼친 상태를 지키려고 한 번 띄우면 숨겨 둔다) */
+  /** Workspaces whose explorer has been shown (once shown, hide instead of unmounting to keep the expanded state) */
   const [shownWs, setShownWs] = useState<string[]>([]);
   useEffect(() => setShownWs((l) => (l.includes(curWs) ? l : [...l, curWs])), [curWs]);
-  // 바뀌면 저장 (콘솔에 친 SQL 은 상태가 아니라 주기적으로도 본다)
+  // Save on change (console SQL is not state, so it is also checked periodically)
   useEffect(() => {
     const h = setTimeout(saveWs, 800);
     return () => clearTimeout(h);
@@ -732,7 +732,7 @@ export default function App() {
     return openTableTab(c, schema, table, db);
   };
 
-  /** 테이블 데이터 탭을 새로 연다 (split 복제 시에는 필터·정렬이 독립적인 별도 탭) */
+  /** Open a new table data tab (when duplicated by split, a separate tab with independent filter and sort) */
   const openTableTab = async (c: ConnectionView, schema: string, table: string, db?: string, group?: Group, where = "", orderBy = "") => {
     const target = targetId(c.id, db && db !== (c.database || "postgres") ? db : undefined);
     const { q } = dialectOf(c.kind);
@@ -745,7 +745,7 @@ export default function App() {
       const d = await meta.table(target, schema, table);
       edit = { schema, table, pk: d.columns.filter((x) => x.isPk).map((x) => x.name) };
     } catch {
-      /* 메타 조회 실패 시 읽기 전용 */
+      /* Read-only if the metadata lookup fails */
     }
     const tab = addTab(c, "table", { title: table, sql, database: db, tableSql: sql, edit, group, where, orderBy });
     run(tab, sql);
@@ -767,7 +767,7 @@ export default function App() {
     }
   };
 
-  /** SQL Generator: 선택한 테이블로 문장을 만들어 새 콘솔에 넣는다 */
+  /** SQL Generator: build a statement for the selected table and put it in a new console */
   const generate = async (info: NodeInfo, what: "select" | "insert" | "update" | "delete" | "ddl") => {
     if (!info.schema || !info.name) return;
     const target = targetId(info.conn.id, info.db && info.db !== (info.conn.database || "postgres") ? info.db : undefined);
@@ -796,14 +796,14 @@ export default function App() {
     }
   };
 
-  // ───────── 데이터 내보내기·가져오기 (형식 고르기 → 하단 진행 막대) ─────────
+  // ───────── Data export / import (choose format → progress bar at the bottom) ─────────
   const [exportReq, setExportReq] = useState<{ target: string; sql: string; name: string; table: [string, string] | null } | null>(null);
   const [importReq, setImportReq] = useState<{ target: string; schema: string; table?: string; refresh?: () => void } | null>(null);
-  /** 테스트 데이터 만들기 창 */
+  /** Generate test data window */
   const [genReq, setGenReq] = useState<{ target: string; schema: string; table: string; conn: ConnectionView } | null>(null);
-  /** 객체 만들기 · 고치기 (New ▸ · Modify Table…) */
+  /** Create / modify objects (New ▸ · Modify Table…) */
   const [objEdit, setObjEdit] = useState<{ target: string; conn: ConnectionView; db?: string; schema: string; table?: string; newKind?: NewKind; refresh?: () => void } | null>(null);
-  /** 운영 데이터 일부 복사 창 */
+  /** Copy a subset of production data window */
   const [copyReq, setCopyReq] = useState<{ target: string; schema: string; table: string; conn: ConnectionView } | null>(null);
   const [jobs, setJobs] = useState<TransferJob[]>([]);
   useEffect(() => {
@@ -815,7 +815,7 @@ export default function App() {
       .catch(() => {});
     return () => off?.();
   }, []);
-  /** 작업을 진행 막대에 올리고 돌린다. 끝나면 내린다 (취소면 조용히) */
+  /** Put a task on the progress bar and run it. Remove it when done (silently if cancelled) */
   const runJob = async <T,>(label: string, run: (job: string) => Promise<T>): Promise<T | undefined> => {
     const id = crypto.randomUUID();
     setJobs((js) => [...js, { id, label, rows: 0, done: 0, total: 0 }]);
@@ -870,7 +870,7 @@ export default function App() {
     }
   };
 
-  /** Redis 브라우저 탭 (Medis 식) */
+  /** Redis browser tab (Medis style) */
   const openRedis = (c: ConnectionView, db?: string, key?: string) => {
     const database = redisDb(db ?? c.database);
     const target = targetId(c.id, database);
@@ -883,7 +883,7 @@ export default function App() {
     patch(tab.id, { target, redisKey: key });
   };
 
-  /** DBA 리포트 탭 (같은 접속 대상이면 그 탭에서 리포트만 바꾼다) */
+  /** DBA report tab (for the same connection target, only switch the report in that tab) */
   const openDba = (c: ConnectionView, db?: string, report = "sessions", title = "Sessions") => {
     const database = db && db !== (c.database || "postgres") ? db : undefined;
     const target = targetId(c.id, database);
@@ -896,7 +896,7 @@ export default function App() {
     patch(tab.id, { dbaReport: report });
   };
 
-  /** ERD 탭: 스키마들의 테이블·외래 키 그림 (없으면 이 DB 의 사용자 스키마 전부) */
+  /** ERD tab: diagram of the schemas' tables and foreign keys (if none, all user schemas of this DB) */
   const openErd = async (c: ConnectionView, db: string | undefined, schemas?: string[]) => {
     const database = db && db !== (c.database || "postgres") ? db : undefined;
     const target = targetId(c.id, database);
@@ -912,24 +912,24 @@ export default function App() {
     patch(tab.id, { erdSchemas: list });
   };
 
-  /** Compare & Migrate 탭 (하나만) */
+  /** Compare & Migrate tab (only one) */
   const openMigrate = (c: ConnectionView, db?: string) => {
     const existing = tabsRef.current.find((t) => t.kind === "migrate");
     if (existing) return activate(existing);
     addTab(c, "migrate", { title: "Compare & Migrate", database: db });
   };
 
-  /** AI Search (RAG) 탭 (하나만). 테이블에서 열면 그 테이블로 새 인덱스 */
+  /** AI Search (RAG) tab (only one). Opened from a table, it starts a new index for that table */
   const [ragInit, setRagInit] = useState<{ n: number; connId: string; db?: string; schema?: string; table?: string } | undefined>();
   const openRag = (c: ConnectionView, db?: string, schema?: string, table?: string) => {
-    // n 이 바뀌면 탭을 다시 그려 그 테이블로 새 인덱스 양식을 연다
+    // When n changes, redraw the tab to open the new index form for that table
     setRagInit((x) => ({ n: (x?.n ?? 0) + 1, connId: c.id, db, schema, table }));
     const existing = tabsRef.current.find((t) => t.kind === "rag");
     if (existing) return activate(existing);
     addTab(c, "rag", { title: "AI Search (RAG)", database: db });
   };
 
-  /** 트리 노드 더블클릭 / F4 */
+  /** Tree node double-click / F4 */
   const activateNode = (info: NodeInfo) => {
     if (info.conn.kind === "redis") {
       if (info.kind === "key") return openRedis(info.conn, info.db, info.name);
@@ -939,10 +939,10 @@ export default function App() {
     else if (info.kind === "routine" || info.kind === "sequence") openDdl(info);
   };
 
-  // ───────── Database Explorer 동작 (DataGrip 키맵) ─────────
+  // ───────── Database Explorer actions (DataGrip keymap) ─────────
   const K = { modify: sk("tree.modify"), rename: sk("tree.rename"), edit: sk("tree.editData"), props: sk("tree.properties"), refresh: sk("tree.refresh"), deact: sk("tree.disconnect"), jump: sk("tree.jumpConsole"), ddl: sk("tree.ddl"), gen: sk("tree.sqlGen"), ddlClip: sk("tree.ddlCopy"), ddlCons: sk("tree.ddlConsole"), ref: sk("tree.copyRef"), doc: sk("tree.quickDoc"), drop: sk("tree.remove"), dup: sk("tree.duplicate"), console: sk("console.new"), force: bindings("tree.refresh")[1] ? formatSpec(bindings("tree.refresh")[1]) : undefined, newK: sk("tree.newDs") };
   const [quickDoc, setQuickDoc] = useState<{ title: string; text: string } | null>(null);
-  // ───────── 백업·복원 ─────────
+  // ───────── Backup / restore ─────────
   const [backupReq, setBackupReq] = useState<{ c: ConnectionView; db?: string } | null>(null);
   const dbTarget = (c: ConnectionView, db?: string) => targetId(c.id, db && db !== (c.database || "postgres") ? db : undefined);
   const startBackup = async (o: { format: "custom" | "plain"; schemaOnly: boolean; dataOnly: boolean }) => {
@@ -979,7 +979,7 @@ export default function App() {
       setStatus(String(e));
     }
   };
-  /** SQL Generator 도구 창: DDL + Copy / Save to File / Run in Console */
+  /** SQL Generator tool window: DDL + Copy / Save to File / Run in Console */
   const sqlGenerator = async (info: NodeInfo) => {
     if (!info.schema || !info.name) return;
     try {
@@ -998,7 +998,7 @@ export default function App() {
       setQuickDoc({ title: fqn(info), text: String(e) });
     }
   };
-  /** Jump to Query Console…: 이 데이터 소스의 콘솔 목록 + New Query Console */
+  /** Jump to Query Console…: this data source's consoles + New Query Console */
   const jumpToConsole = (info: NodeInfo, x?: number, y?: number) => {
     const consoles = tabsRef.current.filter((t) => t.kind === "console" && t.connId === info.conn.id);
     const el = document.querySelector(".ws-explorer.on .tree-node.selected")?.getBoundingClientRect();
@@ -1028,13 +1028,13 @@ export default function App() {
     setDialog({ edit: { ...c, ...saved, hasPassword: false, connected: false } });
   };
 
-  /** 노드의 스키마 (MySQL 은 DB 가 곧 스키마, PG 는 public) */
+  /** The node's schema (in MySQL the DB is the schema, in PG it is public) */
   const schemaOf = (info: NodeInfo) => info.schema ?? (info.conn.kind === "mysql" ? info.db ?? info.conn.database : "public");
   const canDdl = (c: ConnectionView) => c.kind === "postgres" || c.kind === "mysql";
   const newObject = (info: NodeInfo, newKind: NewKind | "table") =>
     setObjEdit({ target: newKind === "database" ? info.conn.id : nodeTarget(info), conn: info.conn, db: info.db, schema: schemaOf(info), newKind: newKind === "table" ? undefined : newKind, refresh: info.kind === "conn" || info.kind === "db" ? info.refresh : undefined });
   const modifyTable = (info: NodeInfo) => setObjEdit({ target: nodeTarget(info), conn: info.conn, db: info.db, schema: schemaOf(info), table: info.name });
-  /** Rename… (⇧F6): 이름을 묻고 DDL 을 보여 주고 실행 */
+  /** Rename… (⇧F6): ask for the name, show the DDL, and run it */
   const renameNode = async (info: NodeInfo) => {
     const what = info.kind;
     const old = info.name ?? (what === "schema" ? info.schema : what === "db" ? info.db : undefined);
@@ -1055,7 +1055,7 @@ export default function App() {
     }
   };
 
-  /** DataGrip 트리 우클릭 메뉴 (문서 1.11 구조) */
+  /** DataGrip tree context menu (structure from docs 1.11) */
   const buildMenu = (info: NodeInfo): MenuItem[] => {
     const c = info.conn;
     const isObj = !!info.name;
@@ -1180,7 +1180,7 @@ export default function App() {
     return items;
   };
 
-  // ───────── 콘솔 DB / 스키마 선택 (DataGrip 콘솔 오른쪽 위) ─────────
+  // ───────── Console DB / schema selection (top right of the DataGrip console) ─────────
   const [dbCache, setDbCache] = useState<Record<string, string[]>>({});
   const [schemaCache, setSchemaCache] = useState<Record<string, string[]>>({});
   const loadDbList = (connId: string) => {
@@ -1196,7 +1196,7 @@ export default function App() {
     if (!c) return;
     if (tab.inTx && !(await ask("This console has uncommitted changes. Switching the database rolls them back. Continue?", { okLabel: "Switch and Roll Back", danger: true }))) return;
     const database = db !== (c.database || "postgres") ? db : undefined;
-    api.closeSession(tab.id).catch(() => {}); // 다음 실행 때 새 DB로 세션을 연다
+    api.closeSession(tab.id).catch(() => {}); // The next run opens a session on the new DB
     patch(tab.id, { database, target: targetId(c.id, database), schema: undefined, inTx: false });
     setStatus(`Console switched to database ${db}`);
   };
@@ -1204,7 +1204,7 @@ export default function App() {
     try {
       const c = conns.find((x) => x.id === tab.connId);
       if (c?.kind === "mysql") {
-        // MySQL 은 스키마 = 데이터베이스
+        // In MySQL, schema = database
         await api.runQuery(tab.target, `USE ${dialectOf("mysql").q(schema)}`, tab.id);
         patch(tab.id, { schema });
         setStatus(`USE ${schema}`);
@@ -1218,7 +1218,7 @@ export default function App() {
     }
   };
 
-  // ───────── 실행 ─────────
+  // ───────── Running ─────────
   const run = async (tab: Tab, sql: string) => {
     if (!sql.trim()) return;
     patch(tab.id, { running: true, error: null, lastSql: sql });
@@ -1234,7 +1234,7 @@ export default function App() {
     }
   };
 
-  // ───────── 콘솔 실행 (문장 여러 개 → 결과 탭 여러 개, Output 로그) ─────────
+  // ───────── Console run (multiple statements → multiple result tabs, Output log) ─────────
   const nowTs = () => {
     const d = new Date();
     const p2 = (n: number) => String(n).padStart(2, "0");
@@ -1244,34 +1244,34 @@ export default function App() {
     if (!updStashed(id, fn)) setTabs((ts) => ts.map((t) => (t.id === id ? fn(t) : t)));
   };
   const log = (id: string, level: OutputLine["level"], text: string) => updTab(id, (t) => ({ ...t, output: [...t.output.slice(-999), { ts: nowTs(), text, level }] }));
-  /** 결과 탭 제목: 쿼리 앞 주석 → 테이블 이름 → Result N (DataGrip) */
+  /** Result tab title: leading comment of the query → table name → Result N (DataGrip) */
   const resultTitle = (sql: string, n: number) => {
     const c = /^\s*(?:--\s*(.+)|\/\*\s*([\s\S]*?)\*\/)/.exec(sql);
     if (c) return (c[1] ?? c[2]).trim().split("\n")[0].slice(0, 40);
     const f = /\bfrom\s+((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))?)/i.exec(sql);
     return f ? f[1].replace(/"/g, "") : `Result ${n}`;
   };
-  /** 데이터를 바꾸지 않는 문장 (스크립트 중간 실패 안내에서 "이미 커밋된 변경" 을 셀 때) */
+  /** Statements that don't change data (used to count "already committed changes" in the mid-script failure notice) */
   const isReadStmt = (sql: string) => {
     const s2 = sql.replace(/--.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "").trim().toLowerCase();
     return /^(select|with|show|explain|values|table|describe|desc)\b/.test(s2) && !/\b(insert|update|delete|merge)\b/.test(s2);
   };
 
-  // 앞 주석을 건너뛴 첫 낱말이 구조를 바꾸는 문장인지 (Production 확인 창에서 "schema change" 로 보인다)
+  // Whether the first word after leading comments is a schema-changing statement (shown as "schema change" in the Production confirmation)
   const DDL_RE = /^(?:\s*(?:--[^\n]*\n|\/\*[\s\S]*?\*\/))*\s*(create|alter|drop|truncate|comment|grant|revoke|rename)\b/i;
   const executeConsole = async (tabId: string, stmts: string[], explain?: "plan" | "analyze") => {
     const tab = tabsRef.current.find((t) => t.id === tabId);
     if (!tab || !stmts.length) return;
     const c = conns.find((x) => x.id === tab.connId);
-    // 위험 문장 확인 (WHERE 없는 UPDATE/DELETE, DROP, TRUNCATE — 판정은 core guard 와 같다).
-    // Explain Analyze 는 실제로 실행하므로 확인한다 (그냥 Explain 만 건너뛴다)
+    // Confirm dangerous statements (UPDATE/DELETE without WHERE, DROP, TRUNCATE — same rules as the core guard).
+    // Explain Analyze actually runs the statement, so confirm it (only plain Explain is skipped)
     if (explain !== "plan") {
       for (const s of stmts) {
         const why = await api.unsafeReason(c?.kind ?? "postgres", s).catch(() => null);
         if (why && !(await ask(`${why}. Run it anyway?`, { title: c ? `${c.name}: dangerous statement` : "Dangerous statement", detail: [{ text: s.slice(0, 300), tone: "danger" }], okLabel: "Run Anyway", danger: true }))) return;
       }
     }
-    // Production: 데이터를 바꾸는 문장은 바뀔 행 수를 세어 보여 주고 묻는다 (세는 것은 SELECT count(*))
+    // Production: for data-changing statements, count the rows that will change, show it and ask (counted with SELECT count(*))
     if (c?.options?.confirmChanges && !explain) {
       const writes = stmts.filter((s) => !isReadStmt(s));
       if (writes.length) {
@@ -1280,7 +1280,7 @@ export default function App() {
         for (const w of writes) {
           const n = await previewImpact(tab.target, w).catch((e) => `can't count: ${String(e).split("\n")[0]}`);
           const value = typeof n === "number" ? `${n.toLocaleString("en-US")} row${n === 1 ? "" : "s"}` : n === null ? (DDL_RE.test(w) ? "schema change" : "can't count") : n;
-          // 많이 바뀔수록 눈에 띄게: 0 행은 보통, 1~99 주의, 100 이상 · 셀 수 없음 · DDL 은 위험
+          // More rows changed = more prominent: 0 rows normal, 1~99 warning, 100+ · uncountable · DDL danger
           const tone = typeof n === "number" ? (n >= 100 ? "danger" : n > 0 ? "warn" : undefined) : "danger";
           detail.push({ text: w.replace(/\s+/g, " ").slice(0, 300), value, tone });
         }
@@ -1288,8 +1288,8 @@ export default function App() {
         if (!(await ask("These statements change data. Run them?", { title: `Production: ${c.name}`, detail, okLabel: "Run", danger: true }))) return;
       }
     }
-    // 고정(pin)되지 않은 결과 탭은 새 결과로 바꾼다
-    // 보던 결과 탭이 없어지면 Output 으로 (실행 중에 빈 칸이 아니라 실행한 SQL 이 보이게)
+    // Replace unpinned result tabs with the new results
+    // If the result tab being viewed goes away, switch to Output (so the running SQL shows instead of an empty pane)
     updTab(tabId, (t) => {
       const results = t.results.filter((r) => r.pinned);
       return { ...t, running: true, results, cursorEntry: undefined, activeResult: results.some((r) => r.id === t.activeResult) ? t.activeResult : "output" };
@@ -1297,15 +1297,15 @@ export default function App() {
     setStatus("Executing…");
     let n = tab.results.filter((r) => r.pinned).length;
     let lastActive = "output";
-    // Auto 모드에서 이미 확정된 변경 문장 수 (중간에 실패하면 알린다)
+    // Number of changing statements already committed in Auto mode (reported if a later one fails)
     let committed = 0;
     for (const sql0 of stmts) {
       const isMy = c?.kind === "mysql";
       const bare = sql0.replace(/;\s*$/, "");
       const sql = !explain ? sql0 : isMy ? `EXPLAIN ${explain === "analyze" ? "ANALYZE " : ""}${bare}` : `EXPLAIN (FORMAT JSON${explain === "analyze" ? ", ANALYZE, BUFFERS" : ""}) ${bare}`;
       log(tabId, "sql", `${c?.name ?? ""}> ${sql0}`);
-      // Explain Analyse 는 문장을 실제로 실행한다 → 바꾸는 문장은 트랜잭션 안에서 돌리고 항상 되돌린다
-      // (이미 트랜잭션 중이면 세이브포인트로 그 부분만)
+      // Explain Analyse actually runs the statement → run changing statements in a transaction and always roll back
+      // (if already in a transaction, only that part via a savepoint)
       const dry = explain === "analyze" && !isReadStmt(sql0);
       const inTx0 = !!tabsRef.current.find((t) => t.id === tabId)?.inTx;
       try {
@@ -1346,7 +1346,7 @@ export default function App() {
           log(tabId, "info", `${r.rows.length}${r.truncated ? "+" : ""} row${r.rows.length === 1 ? "" : "s"} retrieved starting from 1 in ${r.elapsedMs} ms`);
         } else {
           log(tabId, "info", `${r.rowsAffected} row${r.rowsAffected === 1 ? "" : "s"} affected in ${r.elapsedMs} ms`);
-          // Production: 되돌리기 SQL 을 남겼으면 알린다 (운영 작업 기록)
+          // Production: notify if an undo SQL was recorded (production operation log)
           if (c?.options?.confirmChanges && r.rowsAffected > 0 && !dry) {
             const last = (await auditLog(tab.connId, "", 1).catch(() => []))[0];
             if (last?.undo) log(tabId, "info", "Undo saved — ⇧⌘A › Production Log…");
@@ -1355,9 +1355,9 @@ export default function App() {
       } catch (e) {
         log(tabId, "error", String(e));
         if (committed > 0) log(tabId, "error", `Note: ${committed} earlier statement${committed > 1 ? "s" : ""} of this run ${committed > 1 ? "were" : "was"} already committed (Auto mode) and ${committed > 1 ? "were" : "was"} not rolled back`);
-        // 오류가 나도 트랜잭션이 열려 있을 수 있다 (Manual 첫 문장 실패 등) → Commit/Roll back 버튼을 맞춘다
+        // Even on error a transaction may be open (e.g. first statement fails in Manual) → sync the Commit/Roll back buttons
         api.txState(tabId).then((inTx) => updTab(tabId, (t) => ({ ...t, inTx })), () => {});
-        // 앞 문장 중 DDL 이 이미 반영됐을 수 있다
+        // DDL among the earlier statements may already be applied
         if (!explain && stmts.some((s) => DDL_RE.test(s))) schemaChanged(tab.connId, tab.database ?? (c?.database || (c?.kind === "postgres" ? "postgres" : "")));
         lastActive = "output";
         updTab(tabId, (t) => ({ ...t, running: false, activeResult: "output" }));
@@ -1368,7 +1368,7 @@ export default function App() {
     }
     updTab(tabId, (t) => ({ ...t, running: false, activeResult: lastActive, lastSql: stmts[stmts.length - 1] }));
     setStatus(`${stmts.length} statement${stmts.length > 1 ? "s" : ""} executed`);
-    // 테이블·컬럼을 만들거나 바꾸거나 지웠으면 탐색기에 바로 보이게
+    // If tables or columns were created, altered, or dropped, show it in the explorer right away
     if (!explain && stmts.some((s) => DDL_RE.test(s))) schemaChanged(tab.connId, tab.database ?? (c?.database || (c?.kind === "postgres" ? "postgres" : "")));
     refresh();
   };
@@ -1376,7 +1376,7 @@ export default function App() {
   const fetchMoreEntry = async (tabId: string, entryId: string) => {
     const tab = tabsRef.current.find((t) => t.id === tabId);
     if (!tab || tab.cursorEntry !== entryId) {
-      // 서버 커서는 마지막 결과에만 열려 있다
+      // The server cursor is open only on the last result
       updTab(tabId, (t) => ({ ...t, results: t.results.map((r) => (r.id === entryId && r.result ? { ...r, result: { ...r.result, truncated: false } } : r)) }));
       return;
     }
@@ -1399,7 +1399,7 @@ export default function App() {
 
   const setTxMode = async (tab: Tab, manual: boolean) => {
     try {
-      // 커밋 안 한 변경이 있으면 먼저 묻는다 (예전엔 말없이 커밋했다)
+      // Ask first if there are uncommitted changes (it used to commit silently)
       if (!manual && tab.inTx) {
         if (!(await ask("This console has uncommitted changes.", { title: "Switch to Auto", okLabel: "Commit and Switch", cancelLabel: "Stay in Manual" }))) return;
         await api.commitTx(tab.id);
@@ -1431,7 +1431,7 @@ export default function App() {
     if (orderBy) sql += ` ORDER BY ${orderBy}`;
     sql += ";";
     patch(tab.id, { where, orderBy, tableSql: sql });
-    // PK 를 못 받은 탭(접속 실패로 열린 탭)은 같이 다시 받는다
+    // Also reload the PK for tabs that didn't get one (tabs opened during a failed connection)
     if (tab.edit.pk.length) run({ ...tab, tableSql: sql }, sql);
     else loadTable({ ...tab, tableSql: sql });
   };
@@ -1462,16 +1462,16 @@ export default function App() {
   };
 
   const submitEdits = async (tab: Tab, statements: string[]) => {
-    // 각 UPDATE/DELETE 가 정확히 1행에 적용돼야 저장 (아니면 전부 롤백)
+    // Save only if each UPDATE/DELETE affects exactly 1 row (otherwise roll back everything)
     const n = await api.executeBatch(tab.target, statements, true);
     setStatus(`Submitted ${statements.length} statements, ${n} rows affected`);
     if (tab.lastSql) run(tab, tab.lastSql);
   };
 
-  // ───────── 탭 닫기 / 분할 ─────────
+  // ───────── Closing tabs / splits ─────────
   const closeTabs = async (ids: string[]) => {
     if (!ids.length) return;
-    // 닫으면 롤백된다 → 커밋 안 한 변경이 있으면 묻는다
+    // Closing rolls back → ask if there are uncommitted changes
     const pending = tabsRef.current.filter((t) => ids.includes(t.id) && t.inTx);
     if (pending.length && !(await ask(`${pending.length === 1 ? `"${pending[0].title}" has` : `${pending.length} consoles have`} uncommitted changes. Roll them back and close?`, { okLabel: "Roll Back and Close", danger: true }))) return;
     for (const t of tabsRef.current.filter((x) => ids.includes(x.id))) closedStack.current = [snapshot(t), ...closedStack.current].slice(0, 30);
@@ -1489,7 +1489,7 @@ export default function App() {
     });
   };
 
-  /** 탭이 바뀐 뒤: 빈 칸을 없애고 (옆 칸이 채운다) 칸마다 보이는 탭과 포커스를 맞춘다. show = 그 칸에 그 탭을 보인다 */
+  /** After tabs change: remove empty panes (a neighbor fills in) and sync each pane's shown tab and focus. show = show that tab in that pane */
   const settle = (next: Tab[], pane: Pane, show?: { g: Group; id: string }) => {
     const p = prunePanes(pane, new Set(next.map((t) => t.group)));
     const ls = leaves(p);
@@ -1505,7 +1505,7 @@ export default function App() {
     setFocused((f) => (show && ls.includes(show.g) ? show.g : ls.includes(f) ? f : ls[0]));
   };
 
-  /** 탭을 다른 칸으로 */
+  /** Move a tab to another pane */
   const moveTo = (id: string, g: Group) =>
     setTabs((ts) => {
       const next = ts.map((t) => (t.id === id ? { ...t, group: g } : t));
@@ -1513,7 +1513,7 @@ export default function App() {
       return next;
     });
 
-  /** 탭이 있는 칸을 나누고 탭을 새 칸으로 (Split and Move Right / Down) */
+  /** Split the pane holding the tab and move the tab to the new pane (Split and Move Right / Down) */
   const splitAndMove = (t: Tab, dir: "right" | "down") => {
     const r = splitPane(panesRef.current, t.group, dir);
     if (!r) return setStatus(`Up to ${MAX_PANES} panes`);
@@ -1524,12 +1524,12 @@ export default function App() {
     });
   };
 
-  // ───────── 탭 드래그 앤 드롭 (DataGrip: 순서 변경 / 다른 그룹으로 이동 / 가장자리로 끌어 분할) ─────────
+  // ───────── Tab drag and drop (DataGrip: reorder / move to another group / drag to an edge to split) ─────────
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropHint, setDropHint] = useState<{ g: Group; zone: "tabs" | "center" | "right" | "down"; beforeId: string | null } | null>(null);
 
   const dropTab = (id: string, g: Group, beforeId: string | null, dir?: "right" | "down") => {
-    // 가장자리에 놓으면 그 칸을 나눠 새 칸으로
+    // Dropped on an edge: split that pane into a new one
     let pane = panesRef.current;
     if (dir) {
       const r = splitPane(pane, g, dir);
@@ -1564,7 +1564,7 @@ export default function App() {
     setActiveIds((a) => [a[focused] ?? a.find(Boolean) ?? null, null, null, null]);
   };
 
-  /** Reopen Closed Tab / Recent Files 에서 다시 열기 */
+  /** Reopen from Reopen Closed Tab / Recent Files */
   const reopen = (snap: TabSnapshot) => {
     const c = conns.find((x) => x.id === snap.connId);
     if (!c) return;
@@ -1579,7 +1579,7 @@ export default function App() {
     if (snap) reopen(snap);
   };
 
-  /** Split Right / Down: 같은 대상을 독립된 탭으로 복제해서 그 탭의 칸을 나눈 오른쪽(아래) 칸에 연다 (최대 4칸) */
+  /** Split Right / Down: duplicate the same target as an independent tab and open it in the right (lower) pane split from that tab's pane (up to 4 panes) */
   const splitClone = (t: Tab, dir: "right" | "down") => {
     const c = conns.find((x) => x.id === t.connId);
     if (!c) return;
@@ -1593,7 +1593,7 @@ export default function App() {
   const togglePin = (t: Tab) => {
     setTabs((ts) => {
       const flipped = ts.map((x) => (x.id === t.id ? { ...x, pinned: !x.pinned } : x));
-      // 고정 탭은 그룹 안에서 왼쪽으로 (Keep pinned tabs on the left)
+      // Pinned tabs go to the left within the group (Keep pinned tabs on the left)
       return [...flipped.filter((x) => x.pinned), ...flipped.filter((x) => !x.pinned)];
     });
   };
@@ -1666,7 +1666,7 @@ export default function App() {
     setTabMenu({ x: e.clientX, y: e.clientY, items });
   };
 
-  /** Refresh (⌥⌘y, Find Action): Data Source 목록 + 검색·자동완성 캐시 */
+  /** Refresh (⌥⌘y, Find Action): Data Source list + search and autocomplete caches */
   const refreshAll = () => {
     invalidateSearchIndex();
     for (const c of conns) invalidateCompletion(c.id);
@@ -1838,17 +1838,17 @@ export default function App() {
     ];
   };
 
-  // 키 핸들러는 한 번만 등록되므로 최신 함수는 ref 로 넘긴다
+  // The key handler is registered only once, so pass the latest functions via a ref
   const latest = useRef({ toggleExplorer, openFts, bumpFont, setSe, setFindOpen, findOpen, switchWs });
   latest.current = { toggleExplorer, openFts, bumpFont, setSe, setFindOpen, findOpen, switchWs };
   const lastShift = useRef(0);
 
-  // ───────── 단축키 (DataGrip 키맵) ─────────
+  // ───────── Shortcuts (DataGrip keymap) ─────────
   const keyState = useRef({ treeSel, active, focused, tabs, split });
   keyState.current = { treeSel, active, focused, tabs, split };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      // Switcher / Recent Files 팝업이 떠 있으면 팝업이 키를 처리한다
+      // If the Switcher / Recent Files popup is open, the popup handles keys
       if (document.querySelector(".switcher, .search-everywhere, .modal.fts, .modal.keymap, .keymap-recording")) return;
       const { treeSel, active, tabs } = keyState.current;
       const L = latest.current;
@@ -1864,7 +1864,7 @@ export default function App() {
         return;
       }
       lastShift.current = 0;
-      // 명령 단축키는 lib/shortcuts.ts (Settings › Keymap 에서 바꾼다)
+      // Command shortcuts are in lib/shortcuts.ts (changed in Settings › Keymap)
       const spec = eventSpec(e);
       const is = (id: string) => hit(spec, id);
       if (is("goto.object")) return e.preventDefault(), L.setSe("database");
@@ -1873,7 +1873,7 @@ export default function App() {
       if (is("find.action")) return e.preventDefault(), L.setSe("actions");
       if (is("fts")) return e.preventDefault(), void L.openFts();
       if (is("explorer")) return e.preventDefault(), L.toggleExplorer();
-      // ⌘1~9: 워크스페이스 (탐색기는 ⌘0)
+      // ⌘1~9: workspaces (explorer is ⌘0)
       for (let n = 1; n <= 9; n++) if (is(`ws.${n}`)) return e.preventDefault(), void (workspacesRef.current[n - 1] && L.switchWs(workspacesRef.current[n - 1].id));
       if (is("find.window")) return e.preventDefault(), L.setFindOpen((o) => !o);
       // ⇧⎋ Hide Active Tool Window
@@ -1898,7 +1898,7 @@ export default function App() {
           e.stopPropagation();
           fn();
         };
-        // Edit Data (데이터 소스에서는 기본 콘솔)
+        // Edit Data (default console for a data source)
         if (is("tree.editData"))
           return act(() => ((treeSel.kind === "conn" || treeSel.kind === "db") && treeSel.conn.kind !== "redis" ? jumpToConsole(treeSel) : activateNode(treeSel)));
         if (is("tree.properties") && treeSel.kind === "conn") return act(() => setDialog({ edit: treeSel.conn }));
@@ -1944,7 +1944,7 @@ export default function App() {
         cancel(active);
         return;
       }
-      // ⇧F6 = 콘솔 이름 바꾸기 (탭 메뉴 Rename File… 과 같다)
+      // ⇧F6 = rename console (same as Rename File… in the tab menu)
       if (e.key === "F6" && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && active?.kind === "console") {
         e.preventDefault();
         renameConsole(active);
@@ -1955,7 +1955,7 @@ export default function App() {
         closeTabs([active.id]);
         return;
       }
-      // ⌃⇥ / ⌃⇧⇥: Switcher (최근 사용 순)
+      // ⌃⇥ / ⌃⇧⇥: Switcher (most recently used order)
       if (e.ctrlKey && !e.metaKey && e.key === "Tab") {
         e.preventDefault();
         e.stopPropagation();
@@ -2001,10 +2001,10 @@ export default function App() {
         setMaximized((m) => !m);
         return;
       }
-      // 분할된 에디터 그룹 사이 이동 (Goto Next Splitter)
+      // Move between split editor groups (Goto Next Splitter)
       if (is("split.other") && keyState.current.split) {
         e.preventDefault();
-        // 다음 칸으로 (⇧ 이면 이전 칸)
+        // Next pane (previous with ⇧)
         const ls = leaves(panesRef.current);
         const g: Group = ls[(ls.indexOf(keyState.current.focused) + (e.shiftKey ? -1 : 1) + ls.length) % ls.length];
         const id = activeIdsRef.current[g];
@@ -2012,14 +2012,14 @@ export default function App() {
         if (t) activate(t);
         return;
       }
-      // F4 / Enter 를 입력칸에서 누른 건 무시
+      // Ignore F4 / Enter pressed in an input field
       if (inInput) return;
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [conns]);
 
-  // ───────── 기타 ─────────
+  // ───────── Misc ─────────
   const setColor = async (c: ConnectionView, color: string | null) => {
     const { hasPassword: _h, connected: _c, ...config } = c;
     await api.saveConnection({ ...config, color });
@@ -2043,7 +2043,7 @@ export default function App() {
 
   const importConns = async () => {
     try {
-      // 남이 준 파일은 Read-only 를 끄거나 접속 시 실행할 SQL 을 넣을 수 있다 → 바뀌는 내용을 보여 주고 확인
+      // A file from someone else can turn off Read-only or add SQL to run on connect → show what changes and confirm
       const preview = await api.pickImportFile();
       if (!preview) return;
       if (!preview.length) return setStatus("Nothing to import");
@@ -2068,8 +2068,8 @@ export default function App() {
     refresh();
   };
 
-  // ───────── 에디터 그룹 렌더링 ─────────
-  /** 분할 트리: 가지는 나란히(좌우/상하), 잎은 칸. 맨 바깥 비율만 저장한다 */
+  // ───────── Editor group rendering ─────────
+  /** Split tree: branches lay out side by side (horizontal/vertical), leaves are panes. Only the outermost ratio is saved */
   const renderPanes = (p: Pane, path: string): React.ReactNode =>
     p.t === "leaf" ? (
       renderGroup(p.g)
@@ -2114,7 +2114,7 @@ export default function App() {
                 onPin={() => togglePin(t)}
                 closeTitle="Close. Alt-Click to Close Others"
                 onClose={(e) => {
-                  // ⌥+클릭: 이 탭만 남기고 닫기
+                  // ⌥+click: close all other tabs
                   if (e.altKey) closeTabs(gTabs.filter((x) => x.id !== t.id && !x.pinned).map((x) => x.id));
                   else closeTabs([t.id]);
                 }}
@@ -2154,7 +2154,7 @@ export default function App() {
           })}
         </TabStrip>
         <div className="work-area" style={gConn?.color ? { boxShadow: `inset 0 2px 0 ${gConn.color}` } : undefined}>
-          {/* 탭을 끌고 있을 때: 가운데 = 이 그룹으로, 오른쪽/아래 가장자리 = 분할 */}
+          {/* While dragging a tab: center = into this group, right/bottom edge = split */}
           {dragId && (
             <div
               className="drop-overlay"
@@ -2163,7 +2163,7 @@ export default function App() {
                 const r = e.currentTarget.getBoundingClientRect();
                 const fx = (e.clientX - r.left) / r.width;
                 const fy = (e.clientY - r.top) / r.height;
-                // 칸의 오른쪽 / 아래 가장자리 = 그 칸을 나눈다 (최대 4칸)
+                // A pane's right / bottom edge = split that pane (up to 4 panes)
                 const canSplit = leaves(panes).length < MAX_PANES;
                 const zone = canSplit && fx > 0.7 ? "right" : canSplit && fy > 0.7 ? "down" : "center";
                 setDropHint({ g, zone, beforeId: null });
@@ -2174,7 +2174,7 @@ export default function App() {
                 const h = dropHint;
                 if (h && h.g === g) {
                   if (h.zone === "right" || h.zone === "down") {
-                    // 제 칸에 하나뿐인 탭은 나눠도 그대로라 무시
+                    // Ignore a pane's only tab, since splitting would leave it unchanged
                     if (!(gTabs.length === 1 && gTabs[0].id === dragId)) dropTab(dragId, g, null, h.zone);
                   } else dropTab(dragId, g, null);
                 }
@@ -2184,7 +2184,7 @@ export default function App() {
               {dropHint?.g === g && dropHint.zone !== "tabs" && <div className={"drop-zone " + dropHint.zone} />}
             </div>
           )}
-          {/* SQL 콘솔 (DataGrip: 콘솔 툴바 + 에디터 + 결과 탭/Output) */}
+          {/* SQL console (DataGrip: console toolbar + editor + result tabs/Output) */}
           {!gTabs.length && (
             <div className="empty center">
               Right-click a data source → <b>New Query Console</b> ({isMac ? "⇧⌘L" : "Ctrl+Shift+L"}).
@@ -2250,7 +2250,7 @@ export default function App() {
                 <RagView key={ragInit?.n} conns={conns} initial={ragInit} runJob={runJob} onStatus={setStatus} />
               </div>
             ))}
-          {/* 비교·마이그레이션 */}
+          {/* Compare & migrate */}
           {gTabs
             .filter((t) => t.kind === "migrate")
             .map((t) => (
@@ -2278,7 +2278,7 @@ export default function App() {
                 </div>
               );
             })}
-          {/* DBA 리포트 */}
+          {/* DBA reports */}
           {gTabs
             .filter((t) => t.kind === "dba")
             .map((t) => {
@@ -2299,7 +2299,7 @@ export default function App() {
                 </div>
               );
             })}
-          {/* Redis 브라우저 */}
+          {/* Redis browser */}
           {gTabs
             .filter((t) => t.kind === "redis")
             .map((t) => {
@@ -2320,7 +2320,7 @@ export default function App() {
                 </div>
               );
             })}
-          {/* 테이블 데이터 에디터 */}
+          {/* Table data editor */}
           {gTabs
             .filter((t) => t.kind === "table")
             .map((t) => (
@@ -2365,7 +2365,7 @@ export default function App() {
                 />
               </div>
             ))}
-          {/* DDL (읽기 전용) */}
+          {/* DDL (read-only) */}
           {gTabs
             .filter((t) => t.kind === "ddl")
             .map((t) => (
@@ -2408,7 +2408,7 @@ export default function App() {
     );
   };
 
-  // Search Everywhere 의 파일·액션 목록은 열 때 한 번 만든다 (열려 있는 동안 App 이 다시 그려질 때마다 새로 만들면 안쪽 memo 가 매번 깨진다)
+  // Search Everywhere's file and action lists are built once when opened (rebuilding them every time App redraws while open would break the inner memo each time)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const seLists = useMemo(() => (se ? { files: seFiles(), actions: seActions() } : null), [se]);
 
@@ -2417,7 +2417,7 @@ export default function App() {
       <Toolbar className="app-toolbar" style={activeConn?.color ? { boxShadow: `inset 4px 0 0 ${activeConn.color}` } : undefined}>
         <Text strong>Qurry</Text>
         <ToolbarSep />
-        {/* 접속 정보 (user@host) 는 화면 공유 때 드러나지 않게 안 보인다 */}
+        {/* Connection info (user@host) is hidden so it doesn't show during screen sharing */}
         {activeConn ? (
           <>
             <Badge color={activeConn.color ?? undefined} className="tb-conn">{activeConn.name}</Badge>
@@ -2708,7 +2708,7 @@ export default function App() {
 }
 
 /** Settings › Appearance */
-/** 설정 › Passwords: 비밀번호 파일의 마스터 키를 파일에 둘지 OS 키체인에 둘지 */
+/** Settings › Passwords: whether to keep the password file's master key in a file or the OS keychain */
 function PasswordSettings() {
   const [loc, setLoc] = useState<"file" | "keychain" | null>(null);
   const [msg, setMsg] = useState<string | null>(null);

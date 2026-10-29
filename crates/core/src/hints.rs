@@ -1,5 +1,5 @@
-//! 콘솔 자동완성의 값 추천: `where status = '` → 그 컬럼에 실제로 있는 값, `data->>'` → jsonb 안의 키
-//! 테이블 앞쪽 일부 행만 (SAMPLE) 읽어 많이 나온 순으로. READ ONLY 트랜잭션 + 짧은 시간 제한, 결과는 잠깐 캐시
+//! Value suggestions for console autocomplete: `where status = '` → values actually in that column, `data->>'` → keys inside the jsonb
+//! Reads only the first rows of the table (SAMPLE), most frequent first. READ ONLY transaction + short time limit; results are cached briefly
 use crate::app::{AppState, ensure_pool};
 use crate::db::{self, Pool};
 use crate::error::AppResult;
@@ -11,12 +11,12 @@ use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-/// 값을 세는 행 수 (테이블 앞쪽)
+/// Rows scanned to count values (from the start of the table)
 const SAMPLE: usize = 5000;
-/// jsonb 키를 세는 행 수
+/// Rows scanned to count jsonb keys
 const KEY_SAMPLE: usize = 2000;
 const MAX_HINTS: usize = 100;
-/// 값 하나의 최대 글자 수 (긴 text · json 은 추천하지 않는다)
+/// Max length of a single value (long text · json is not suggested)
 const MAX_LEN: usize = 200;
 const CACHE_FOR: Duration = Duration::from_secs(120);
 
@@ -26,13 +26,13 @@ pub struct HintReq {
     pub schema: String,
     pub table: String,
     pub column: String,
-    /// json 안의 경로 (`data->'a'->>'b'` 면 ["a", "b"])
+    /// Path inside the json (`data->'a'->>'b'` → ["a", "b"])
     #[serde(default)]
     pub path: Vec<String>,
-    /// true = 그 경로의 json 객체 키, false = 값
+    /// true = json object keys at that path, false = values
     #[serde(default)]
     pub keys: bool,
-    /// true = 그 경로의 json 에서 많이 나온 `키: 값` 을 @> 조건으로 (`[{"code": "x"}]` · `{"code": "x"}`, PostgreSQL)
+    /// true = frequent `key: value` pairs in the json at that path as @> conditions (`[{"code": "x"}]` · `{"code": "x"}`, PostgreSQL)
     #[serde(default)]
     pub pairs: bool,
 }
@@ -46,13 +46,13 @@ pub struct Hint {
 type Cache = HashMap<String, (Instant, Vec<Hint>)>;
 static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(Default::default);
 
-/// PG 문자열 리터럴
+/// PG string literal
 fn lit(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
 fn pg_path(path: &[String]) -> String {
-    // text[] 리터럴: {"a","b"}
+    // text[] literal: {"a","b"}
     let inner: Vec<String> = path.iter().map(|p| format!("\"{}\"", p.replace('\\', "\\\\").replace('"', "\\\""))).collect();
     lit(&format!("{{{}}}", inner.join(",")))
 }
@@ -65,7 +65,7 @@ fn my_path(path: &[String]) -> String {
     format!("'{}'", s.replace('\\', "\\\\").replace('\'', "''"))
 }
 
-/// 값 추천 SQL (첫 컬럼 = 값, 둘째 = 개수)
+/// Value suggestion SQL (first column = value, second = count)
 pub fn values_sql(kind: DbKind, r: &HintReq) -> String {
     let t = format!("{}.{}", quote_ident(kind, &r.schema), quote_ident(kind, &r.table));
     let c = quote_ident(kind, &r.column);
@@ -87,7 +87,7 @@ pub fn values_sql(kind: DbKind, r: &HintReq) -> String {
     }
 }
 
-/// json 키 추천 SQL. PG 는 키 · 개수, MySQL 은 행마다 JSON_KEYS 배열 (세기는 여기서)
+/// json key suggestion SQL. PG returns key · count, MySQL a JSON_KEYS array per row (counted here)
 pub fn keys_sql(kind: DbKind, r: &HintReq) -> String {
     let t = format!("{}.{}", quote_ident(kind, &r.schema), quote_ident(kind, &r.table));
     let c = quote_ident(kind, &r.column);
@@ -103,8 +103,8 @@ pub fn keys_sql(kind: DbKind, r: &HintReq) -> String {
     }
 }
 
-/// @> 조건 추천 SQL (PostgreSQL): 배열이면 원소 객체의, 객체면 그 객체의 `키: 값` (값이 글 · 수 · 참거짓) 을 많이 나온 순으로.
-/// 개수 = 그 조건에 맞는 행 수
+/// @> condition suggestion SQL (PostgreSQL): `key: value` pairs (value is text · number · boolean) of element objects for arrays, or of the object itself, most frequent first.
+/// Count = rows matching that condition
 pub fn pairs_sql(r: &HintReq) -> String {
     let kind = DbKind::Postgres;
     let t = format!("{}.{}", quote_ident(kind, &r.schema), quote_ident(kind, &r.table));
@@ -135,7 +135,7 @@ fn pairs(rows: &[Vec<Value>]) -> Vec<Hint> {
         .collect()
 }
 
-/// MySQL JSON_KEYS 결과 (행마다 `["a", "b"]`) 를 센다
+/// Count MySQL JSON_KEYS results (`["a", "b"]` per row)
 fn count_keys(rows: &[Vec<Value>]) -> Vec<Hint> {
     let mut n: HashMap<String, i64> = HashMap::new();
     for r in rows {
@@ -153,7 +153,7 @@ fn count_keys(rows: &[Vec<Value>]) -> Vec<Hint> {
 }
 
 impl AppState {
-    /// 컬럼 값 · json 키 추천 (PostgreSQL · MySQL. 그 밖은 빈 목록)
+    /// Column value · json key suggestions (PostgreSQL · MySQL; empty list otherwise)
     pub async fn column_hints(&self, id: String, req: HintReq) -> AppResult<Vec<Hint>> {
         use sqlx::Executor;
         let key = format!("{id}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}{}", req.schema, req.table, req.column, req.path.join("\u{2}"), req.keys, req.pairs);
@@ -178,7 +178,7 @@ impl AppState {
                 let _ = tx.rollback().await;
                 pairs(&r?.rows)
             }
-            // MySQL 은 JSON_CONTAINS 이 따로라 @> 조건은 없다
+            // MySQL has JSON_CONTAINS separately, so there are no @> conditions
             Pool::My(_) if req.pairs => vec![],
             Pool::My(p) => {
                 let mut conn = p.acquire().await?;
@@ -227,7 +227,7 @@ mod tests {
         assert_eq!(count_keys(&rows), vec![Hint { value: "b".into(), count: 2 }, Hint { value: "a".into(), count: 1 }]);
     }
 
-    /// 실제 DB: QURRY_TEST_PG=host:port:user:db cargo test -p qurry-core hints -- --ignored
+    /// Real DB: QURRY_TEST_PG=host:port:user:db cargo test -p qurry-core hints -- --ignored
     #[tokio::test]
     #[ignore]
     async fn pg_values_and_keys() {
@@ -249,7 +249,7 @@ mod tests {
         assert_eq!(run(keys_sql(DbKind::Postgres, &rq("data", &["meta"], true))).await, vec![Hint { value: "src".into(), count: 30 }]);
         assert_eq!(run(values_sql(DbKind::Postgres, &rq("data", &["kind"], false))).await.len(), 2);
         assert_eq!(run(values_sql(DbKind::Postgres, &rq("id", &[], false))).await.len(), 30);
-        // 객체의 배열: 키는 없고, @> 조건은 원소의 키: 값
+        // Array of objects: no keys, and @> conditions are the elements' key: value
         p.execute("alter table public.hint_t add column reasons jsonb; \
                    update public.hint_t set reasons = case when id % 2 = 0 then '[{\"code\": \"self_transfer\", \"n\": 1}, {\"code\": \"overpay\"}]'::jsonb else '[{\"code\": \"overpay\", \"detail\": [1]}]'::jsonb end")
             .await
@@ -265,17 +265,17 @@ mod tests {
                 Hint { value: r#"[{"n": 1}]"#.into(), count: 15 },
             ]
         );
-        // 객체면 {키: 값}
+        // Object → {key: value}
         let mut po = rq("data", &[], false);
         po.pairs = true;
         assert_eq!(run(pairs_sql(&po)).await.iter().map(|h| h.value.as_str()).collect::<Vec<_>>(), [r#"{"kind": "k0"}"#, r#"{"kind": "k1"}"#]);
-        // 고른 조건이 실제로 맞는 행 수
+        // Number of rows the chosen condition actually matches
         let n: i64 = sqlx::query_scalar(r#"select count(*) from public.hint_t where reasons @> '[{"code": "self_transfer"}]'"#).fetch_one(&p).await.unwrap();
         assert_eq!(n, 15);
         p.execute("drop table public.hint_t").await.unwrap();
     }
 
-    /// 실제 DB: QURRY_TEST_MY=host:port:user:password:db cargo test -p qurry-core hints -- --ignored
+    /// Real DB: QURRY_TEST_MY=host:port:user:password:db cargo test -p qurry-core hints -- --ignored
     #[tokio::test]
     #[ignore]
     async fn mysql_values_and_keys() {

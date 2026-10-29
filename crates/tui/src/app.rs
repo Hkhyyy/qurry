@@ -1,4 +1,4 @@
-//! TUI 상태와 동작. 실제 DB 작업은 전부 qurry_core::app::AppState (GUI 와 같은 엔진).
+//! TUI state and actions. All real DB work goes through qurry_core::app::AppState (same engine as the GUI).
 use crate::complete::{self, Item};
 use crate::grid::{raw_text, Grid};
 use crate::tree::{Node, NodeKind, Tree};
@@ -34,15 +34,15 @@ pub struct Console {
     pub running: bool,
     pub tx_manual: bool,
     pub in_tx: bool,
-    /// 열린 자동완성 목록
+    /// Open autocomplete list
     pub complete: Option<Completion>,
 }
 
-/// 콘솔 Output 로그에 남기는 최대 줄 수 (GUI 와 같다)
+/// Max lines kept in the console Output log (same as the GUI)
 const OUTPUT_MAX: usize = 1000;
 
 impl Console {
-    /// Output 로그에 한 줄 (오래된 줄은 버린다)
+    /// One line in the Output log (old lines are dropped)
     pub fn log(&mut self, err: bool, s: String) {
         self.output.push((err, s));
         if self.output.len() > OUTPUT_MAX {
@@ -54,49 +54,49 @@ impl Console {
 pub struct Completion {
     pub items: Vec<Item>,
     pub sel: usize,
-    /// 바꿀 접두어(커서 앞 단어)의 글자 수
+    /// Length of the prefix to replace (the word before the cursor)
     pub prefix: usize,
 }
 
-/// 에디터 화면 분할 (GUI 의 Split Right / Split Down). 칸(그룹)마다 탭 바가 따로 있다
+/// Editor split (the GUI's Split Right / Split Down). Each pane (group) has its own tab bar
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SplitDir {
     Right,
     Down,
 }
 
-/// 마우스로 끄는 것
+/// What is being dragged with the mouse
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Drag {
-    /// 콘솔 에디터/결과 경계선
+    /// Console editor/result divider
     Console,
-    /// 칸 사이 경계선 (Hits.splits 의 순번)
+    /// Divider between panes (index into Hits.splits)
     Split(usize),
-    /// 그리드 가로 스크롤바
+    /// Grid horizontal scrollbar
     HBar,
-    /// 그리드 범위 선택 (누른 칸부터)
+    /// Grid range selection (from the pressed cell)
     Grid,
-    /// Database Explorer 오른쪽 경계선
+    /// Database Explorer right divider
     Explorer,
-    /// 탭 (moved = 실제로 끌었는지. 그냥 클릭이면 false)
+    /// Tab (moved = whether it was actually dragged; false for a plain click)
     Tab { id: u64, moved: bool },
-    /// 콘솔에서 글 선택 (anchor = 누른 곳, selecting = 끌기 시작했는지)
+    /// Text selection in the console (anchor = pressed position, selecting = whether dragging started)
     Editor { anchor: (usize, usize), selecting: bool },
 }
 
-/// 탭을 놓을 곳
+/// Where to drop a tab
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum DropTarget {
-    /// 그 칸으로 옮긴다 (before = 그 탭 앞에 끼운다)
+    /// Move into that pane (before = insert before that tab)
     Group(usize, Option<u64>),
-    /// 그 칸을 나누고 새 칸으로
+    /// Split that pane and move into the new one
     NewSplit(usize, SplitDir),
 }
 
 pub struct TableTab {
     pub schema: String,
     pub table: String,
-    /// table / view / matview / foreign (Ctrl+B DDL 용)
+    /// table / view / matview / foreign (for Ctrl+B DDL)
     pub kind: String,
     pub where_: String,
     pub order: String,
@@ -112,7 +112,7 @@ pub struct TextTab {
     pub scroll: u16,
 }
 
-/// DBA 리포트 (세션·락, 느린 쿼리, 용량·인덱스, 유지보수, 서버, 권한). 세션·락은 3초마다 다시 불러온다
+/// DBA reports (sessions·locks, slow queries, size·indexes, maintenance, server, privileges). Sessions·locks reload every 3 seconds
 pub struct DbaTab {
     pub report: String,
     pub info: Option<qurry_core::dba::ReportInfo>,
@@ -120,31 +120,31 @@ pub struct DbaTab {
     pub error: Option<String>,
     pub running: bool,
     pub auto: bool,
-    /// 고른 세션이 다시 불러온 뒤 사라졌다 (그 pid). 이때 c / K 는 아무것도 끊지 않는다
+    /// The selected session disappeared after a reload (its pid). c / K then terminate nothing
     pub gone: Option<String>,
 }
 
-/// Medis 식 Redis 브라우저: 왼쪽 키 목록, 오른쪽 값
+/// Medis-style Redis browser: key list on the left, value on the right
 pub struct RedisTab {
     pub pattern: String,
     pub keys: Vec<KeyRow>,
     pub cursor: String,
-    /// 보이는 줄(폴더·키, rows()) 에서 고른 것
+    /// Selection among the visible rows (folders·keys, rows())
     pub sel: usize,
     pub off: usize,
-    /// 펼친 폴더 ("dev:sessions")
+    /// Expanded folders ("dev:sessions")
     pub open: HashSet<String>,
     pub detail: Option<(String, KeyDetail)>,
-    /// 문자열 값을 보기 좋게 정리한 것 (JSON 은 들여쓰기). 그릴 때마다 다시 파싱하지 않게 불러올 때 만든다
+    /// String value prettified (JSON indented). Built on load so it isn't reparsed on every draw
     pub text: Option<String>,
     pub value: Option<Grid>,
     pub focus_value: bool,
     pub scanning: bool,
-    /// 열 때 지정한 키 (스캔이 끝나면 선택)
+    /// Key given on open (selected once the scan finishes)
     pub want: Option<String>,
 }
 
-/// 키 브라우저의 한 줄: ":" 로 묶은 폴더, 또는 키 (keys 의 번호)
+/// A row in the key browser: a folder grouped by ":", or a key (index into keys)
 #[derive(Debug, Clone, PartialEq)]
 pub enum KRow {
     Folder { path: String, name: String, depth: usize, count: usize },
@@ -152,7 +152,7 @@ pub enum KRow {
 }
 
 impl RedisTab {
-    /// 보이는 줄: 폴더 먼저(이름순), 그다음 키. 펼친 폴더만 안을 보인다 (탐색기 tree::key_folders 와 같은 규칙)
+    /// Visible rows: folders first (by name), then keys. Only expanded folders show contents (same rules as the explorer's tree::key_folders)
     pub fn rows(&self) -> Vec<KRow> {
         fn level(r: &RedisTab, idx: Vec<usize>, depth: usize, prefix: &str, out: &mut Vec<KRow>) {
             let mut folders: std::collections::BTreeMap<&str, Vec<usize>> = Default::default();
@@ -177,7 +177,7 @@ impl RedisTab {
         out
     }
 
-    /// 고른 줄이 키면 그 키
+    /// The key, if the selected row is a key
     pub fn sel_key(&self) -> Option<String> {
         match self.rows().get(self.sel) {
             Some(KRow::Key { idx, .. }) => Some(self.keys[*idx].key.clone()),
@@ -185,7 +185,7 @@ impl RedisTab {
         }
     }
 
-    /// 키가 보이도록 위 폴더를 펼치고 고른다
+    /// Expand the parent folders so the key is visible, and select it
     pub fn reveal(&mut self, key: &str) -> bool {
         let parts: Vec<&str> = key.split(':').collect();
         for n in 1..parts.len() {
@@ -216,36 +216,36 @@ pub struct Tab {
     pub db: String,
     pub target: String,
     pub kind: TabKind,
-    /// 분할된 화면에서 속한 칸 (panes 의 잎)
+    /// Pane it belongs to in the split view (a leaf of panes)
     pub group: usize,
-    /// 되살린 탭: 아직 불러오지 않았다 (처음 보일 때 불러온다)
+    /// Restored tab: not loaded yet (loads when first shown)
     pub stale: bool,
 }
 
-// ───────── 팝업 ─────────
+// ───────── Popups ─────────
 
 #[derive(Clone)]
 pub enum PAction {
     Act(Action),
-    /// DBA 리포트 열기 (id)
+    /// Open a DBA report (id)
     Dba(String),
-    /// 히스토리·스니펫에서 고른 쿼리를 콘솔에
+    /// Query picked from history·snippets into the console
     InsertSql(String),
-    /// 운영 작업 기록에서 고른 것: 되돌리기 SQL 을 그 Data Source 의 새 콘솔에 (없으면 이유)
+    /// Picked from the production audit log: undo SQL into a new console for that Data Source (or the reason if none)
     OpenUndo { conn: String, db: Option<String>, undo: Option<String>, note: String },
-    /// 여러 단계 고르기 (비교·마이그레이션): 고른 값
+    /// Multi-step pick (compare·migration): the picked value
     Pick(String),
-    /// DBA 리포트 행 동작 (템플릿 SQL → 콘솔)
+    /// DBA report row action (template SQL → console)
     DbaSql(String),
-    /// 내보내기: 형식을 골랐다 → 대상 고르기
+    /// Export: format picked → pick target
     ExportFormat(qurry_core::transfer::Format),
-    /// 내보내기: (형식, 클립보드)
+    /// Export: (format, clipboard)
     ExportTo(qurry_core::transfer::Format, bool),
     Object { conn: String, db: String, e: IndexEntryLite },
     Tab(u64),
-    /// 실행 선택 팝업에서 고른 문장들
+    /// Statements picked in the execution picker popup
     Run { stmts: Vec<String>, explain: bool },
-    /// 실행 설정 바꾸기
+    /// Change execution settings
     Exec(crate::exec::ExecSettings),
 }
 #[derive(Clone)]
@@ -266,7 +266,7 @@ pub struct Palette {
     pub items: Vec<PItem>,
     pub sel: usize,
     pub loading: usize,
-    /// 거른 결과 캐시: (검색어, 항목 수) 가 같으면 다시 거르고 정렬하지 않는다 (그릴 때마다·키마다 불린다)
+    /// Filtered result cache: same (query, item count) skips re-filtering and sorting (called on every draw·key)
     pub cache: std::cell::RefCell<Option<(String, usize, Vec<usize>)>>,
 }
 
@@ -290,18 +290,18 @@ pub struct ConnForm {
 }
 
 pub enum Popup {
-    /// F1 키맵. 위쪽 Commands 는 고를 수 있다 (sel). record = 새 키를 기다리는 중 (true = 기존 키에 더하기)
-    /// sel 은 위쪽 Commands 와 아래 고정 키 목록을 이어서 센다 (Commands 만 바꿀 수 있다)
+    /// F1 keymap. The Commands section at the top is selectable (sel). record = waiting for a new key (true = add to existing keys)
+    /// sel counts the top Commands and the fixed key list below as one sequence (only Commands can be changed)
     Help { sel: usize, scroll: u16, record: Option<bool>, message: Option<String> },
     Message { title: String, text: String },
-    /// 한 줄 입력. words = 자동완성 후보 (테이블의 WHERE/ORDER BY 는 컬럼·키워드), complete = 열린 목록 (후보, 고른 것, 바꿀 접두어 글자 수)
+    /// Single-line input. words = autocomplete candidates (columns·keywords for table WHERE/ORDER BY), complete = open list (candidates, selection, prefix length to replace)
     Input { title: String, input: TextArea<'static>, on_ok: Box<dyn FnOnce(&mut App, String)>, words: Vec<String>, complete: Option<(Vec<String>, usize, usize)> },
     Confirm { text: String, on_yes: Box<dyn FnOnce(&mut App)> },
     Palette(Palette),
     ConnForm(ConnForm),
-    /// Manage Shown Schemas (트리에 보일 DB·스키마)
+    /// Manage Shown Schemas (DBs·schemas shown in the tree)
     Scope(crate::scope::ScopeEditor),
-    /// 편집기 찾기/바꾸기 바 (⌃F)
+    /// Editor find/replace bar (⌃F)
     Find(crate::find::FindBar),
 }
 
@@ -403,7 +403,7 @@ pub enum Action {
     Quit,
 }
 
-/// 액션 팔레트 목록: (액션, 이름, 힌트). 바꿀 수 있는 명령(keys::DEFAULT_KEYS)의 힌트는 현재 키맵에서 가져온다
+/// Action palette list: (action, name, hint). Hints for rebindable commands (keys::DEFAULT_KEYS) come from the current keymap
 pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::NewConsole, "New Query Console", ""),
     (Action::Execute, "Execute (asks what to run — see Query Execution Settings)", ""),
@@ -511,7 +511,7 @@ fn object_items(conn: &str, name: &str, db: &str, es: Vec<IndexEntry>, tag: &str
         .collect()
 }
 
-/// 컬럼 → 고르면 그 테이블을 연다 (Ctrl+B 는 그 테이블 DDL)
+/// Column → picking it opens its table (Ctrl+B opens that table's DDL)
 fn column_items(conn: &str, name: &str, db: &str, ts: Vec<qurry_core::meta::CompletionTable>, tag: &str) -> Vec<PItem> {
     ts.into_iter()
         .flat_map(|t| {
@@ -525,45 +525,45 @@ fn column_items(conn: &str, name: &str, db: &str, ts: Vec<qurry_core::meta::Comp
 }
 
 
-/// 마지막으로 그린 화면 영역 (마우스 클릭 판정)
+/// Screen areas from the last draw (for mouse hit testing)
 #[derive(Default)]
 pub struct Hits {
     pub tree: ratatui::layout::Rect,
-    /// (탭 id, x 시작, x 끝, y)
+    /// (tab id, x start, x end, y)
     pub tabs: Vec<(u64, u16, u16, u16)>,
-    /// 칸마다: (칸, 탭 바, 본문)
+    /// Per pane: (pane, tab bar, body)
     pub groups: Vec<(usize, ratatui::layout::Rect, ratatui::layout::Rect)>,
-    /// 나눈 곳마다: (가지 위치, 나눈 영역, 경계선, 방향). 위아래로 나눈 곳은 아래 첫 칸 탭 바의 빈 곳도 경계선으로 잡는다 (grab)
+    /// Per split: (branch position, split area, divider, direction). For vertical splits, the empty part of the lower first pane's tab bar also counts as the divider (grab)
     pub splits: Vec<(crate::panes::Path, ratatui::layout::Rect, ratatui::layout::Rect, ratatui::layout::Rect, SplitDir)>,
-    /// Database Explorer 오른쪽 경계선과 화면 본문 (끌어서 폭 조절)
+    /// Database Explorer right divider and the screen body (drag to resize width)
     pub explorer_divider: ratatui::layout::Rect,
     pub main: ratatui::layout::Rect,
     pub editor: ratatui::layout::Rect,
-    /// 찾기 바 자리 (편집기 위, 바가 열려 있을 때만)
+    /// Find bar position (above the editor, only while the bar is open)
     pub find: ratatui::layout::Rect,
     pub results: ratatui::layout::Rect,
     pub redis_keys: ratatui::layout::Rect,
     pub redis_value: ratatui::layout::Rect,
     pub palette: ratatui::layout::Rect,
     pub palette_off: usize,
-    /// 콘솔 본문(에디터+결과)과 그 경계선 (드래그로 비율 조절)
+    /// Console body (editor+results) and its divider (drag to adjust the ratio)
     pub console: ratatui::layout::Rect,
     pub divider: ratatui::layout::Rect,
-    /// 더블클릭 판정: (시각, x, y)
+    /// Double-click detection: (time, x, y)
     pub last_click: Option<(std::time::Instant, u16, u16)>,
-    /// 콘솔 커서를 그린 화면 칸과 그때 커서 (줄, 칸) — 마우스 위치를 글자 위치로 바꿀 때 (tui-textarea 는 스크롤 위치를 공개하지 않는다)
+    /// Screen cell where the console cursor was drawn and the cursor then (row, col) — for mapping mouse position to text position (tui-textarea doesn't expose scroll position)
     pub caret: Option<(u16, u16, usize, usize)>,
-    /// 실행 중 콘솔 제목줄의 [■ Cancel] (눌러서 취소)
+    /// [■ Cancel] in the running console's title bar (click to cancel)
     pub cancel: ratatui::layout::Rect,
-    /// 글 탭 (DDL·다이어그램) 본문 — 휠로 스크롤
+    /// Text tab (DDL·diagram) body — scroll with the wheel
     pub text: ratatui::layout::Rect,
-    /// 워크스페이스 띠: (번호, 영역)
+    /// Workspace strip: (number, area)
     pub workspaces: Vec<(usize, ratatui::layout::Rect)>,
 }
 
-/// 지금 것이 아닌 워크스페이스의 탭·화면 분할 (탭 객체 그대로: 콘솔 세션·트랜잭션·결과가 남는다)
+/// Tabs·split of a workspace other than the current one (tab objects kept as is: console sessions·transactions·results survive)
 pub struct WsSaved {
-    /// 이 워크스페이스의 탐색기 (펼친 상태·선택)
+    /// This workspace's explorer (expansion state·selection)
     pub tree: Tree,
     pub tabs: Vec<Tab>,
     pub active: usize,
@@ -578,12 +578,12 @@ impl Default for WsSaved {
     }
 }
 
-/// 워크스페이스 (crate::workspace): 이름 + 지금 것이 아니면 보관한 탭들
+/// Workspace (crate::workspace): name + stashed tabs when not current
 pub struct Workspace {
-    /// GUI 와 같이 쓰는 목록 (workspaces.json) 의 id
+    /// id in the list shared with the GUI (workspaces.json)
     pub id: String,
     pub name: String,
-    /// 이 워크스페이스의 탐색기에 보일 Data Source id
+    /// Data Source ids shown in this workspace's explorer
     pub conns: Vec<String>,
     pub saved: Option<WsSaved>,
 }
@@ -597,56 +597,56 @@ pub struct App {
     pub tabs: Vec<Tab>,
     pub active: usize,
     pub mru: Vec<u64>,
-    /// 도는 내보내기·가져오기 (작업 id, 이름, 진행). 상태줄에 진행 막대
+    /// Running exports·imports (job id, name, progress). Progress bar in the status bar
     pub jobs: Vec<(String, String, Arc<qurry_core::transfer::Job>)>,
-    /// 다음 Explain 은 ANALYZE (실제로 실행해서 시간·행 수)
+    /// The next Explain is ANALYZE (actually runs it for time·row counts)
     pub analyze_next: bool,
-    /// 여러 단계 고르기 중 (비교·마이그레이션)
+    /// Multi-step pick in progress (compare·migration)
     pub flow: Option<crate::migrate::Flow>,
-    /// 테이블 만들기 · 고치기 창 (crate::designer). 입력 · 확인 팝업이 그 위에 뜬다
+    /// Table create · modify window (crate::designer). Input · confirm popups open over it
     pub designer: Option<crate::designer::Designer>,
     pub focus: Focus,
     pub explorer: bool,
     pub popup: Option<Popup>,
     pub status: String,
     pub quit: bool,
-    /// 끝낸 뒤 다시 켠다 (앱 안 업데이트를 마친 뒤)
+    /// Relaunch after quitting (after an in-app update)
     pub restart: bool,
-    /// 화면 분할 (최대 4칸)
+    /// Screen split (up to 4 panes)
     pub panes: crate::panes::Pane,
-    /// 칸마다 보이는 탭
+    /// Tab shown in each pane
     pub group_active: [Option<u64>; crate::panes::MAX],
-    /// 콘솔에서 에디터가 차지하는 비율(%)
+    /// Share of the console taken by the editor (%)
     pub console_pct: u16,
-    /// Database Explorer 폭 (None = 화면 폭에 맞춰 자동)
+    /// Database Explorer width (None = auto, fit to screen width)
     pub explorer_w: Option<u16>,
-    /// 마우스로 끄는 중인 것과 지금 위치
+    /// What is being dragged and the current position
     pub drag: Option<Drag>,
     pub drag_pos: (u16, u16),
-    /// 자동완성 메타 (target → 테이블·컬럼)
+    /// Autocomplete metadata (target → tables·columns)
     pub completion: HashMap<String, Arc<complete::Meta>>,
     completion_loading: HashSet<String>,
-    /// 값 · json 키 추천 (자리별, 잠깐 둔다) · 불러오는 중인 자리
+    /// Value · json key suggestions (per spot, kept briefly) · spot currently loading
     hints: HashMap<String, (std::time::Instant, Vec<qurry_core::hints::Hint>)>,
     hints_loading: HashSet<String>,
-    /// 실행 중인 탭이 언제 시작했는지 (그릴 때 맞춘다)
+    /// When the running tab started (synced at draw time)
     run_since: HashMap<u64, std::time::Instant>,
-    /// 명령 단축키 (keymap.json 의 "tui")
+    /// Command shortcuts ("tui" in keymap.json)
     pub keys: crate::keys::Keymap,
-    /// 새 버전이 있으면 그 버전 (상태줄에 알린다)
+    /// The new version, if one is available (announced in the status bar)
     pub update: Option<String>,
     next_id: u64,
-    /// ⌃Enter 로 무엇을 실행할지 (Query Execution Settings, workspace 에 저장)
+    /// What ⌃Enter runs (Query Execution Settings, saved in the workspace)
     pub exec: crate::exec::ExecSettings,
-    /// 워크스페이스들과 지금 것 (지금 것의 탭은 위 tabs · panes …)
+    /// Workspaces and the current one (the current one's tabs are the tabs · panes … above)
     pub workspaces: Vec<Workspace>,
     pub cur_ws: usize,
-    /// 지난번 탭을 되살렸는지 (Data Source 목록을 처음 읽은 뒤 한 번), 마지막으로 저장한 내용
+    /// Whether last session's tabs were restored (once, after the first Data Source list load), and the last saved content
     restored: bool,
     saved_ws: String,
-    /// 마지막으로 공유 워크스페이스 목록과 맞춘 것 (None = 아직)
+    /// Last sync with the shared workspace list (None = not yet)
     pub ws_shared: Option<Vec<qurry_core::workspaces::WsInfo>>,
-    /// 저장 파일이 전에 공유 목록과 맞춘 적이 있다 (없는 워크스페이스는 다른 쪽에서 지운 것)
+    /// The save file has synced with the shared list before (missing workspaces were deleted elsewhere)
     pub ws_synced: bool,
 }
 
@@ -769,7 +769,7 @@ impl App {
         let st = self.state.clone();
         self.spawn(async move { st.list_connections().await.map_err(err) }, |a, r| match r {
             Ok(cs) => {
-                // 방금 접속된 Data Source: 접속 실패로 비어 있던 테이블 탭을 다시 불러온다
+                // Data Source just connected: reload table tabs left empty by the failed connection
                 let back: Vec<String> = cs.iter().filter(|c| c.connected && a.conn(&c.config.id).is_some_and(|o| !o.connected)).map(|c| c.config.id.clone()).collect();
                 a.conns = cs;
                 let first = !a.restored;
@@ -794,7 +794,7 @@ impl App {
         });
     }
 
-    /// 탐색기 맨 위: 지금 워크스페이스의 Data Source 만 (워크스페이스에 넣은 순서)
+    /// Top of the explorer: only the current workspace's Data Sources (in the order added to the workspace)
     pub fn rebuild_roots(&mut self) {
         let mine = &self.workspaces[self.cur_ws].conns;
         self.tree.roots = mine
@@ -815,7 +815,7 @@ impl App {
         self.tree.clamp();
     }
 
-    /// 어느 워크스페이스에도 없는 Data Source (방금 만든 것, GUI 에서 만든 것) → 지금 워크스페이스로
+    /// Data Sources in no workspace (just created, or created in the GUI) → the current workspace
     pub fn ws_adopt_orphans(&mut self) {
         let known: HashSet<String> = self.workspaces.iter().flat_map(|w| w.conns.iter().cloned()).collect();
         let orphans: Vec<String> = self.conns.iter().map(|c| c.config.id.clone()).filter(|id| !known.contains(id)).collect();
@@ -827,7 +827,7 @@ impl App {
         self.conn(conn).map(|c| sql::default_db(&c.config)).unwrap_or_default()
     }
 
-    // ───────── 트리 ─────────
+    // ───────── Tree ─────────
 
     pub fn toggle_node(&mut self, n: &Node) {
         if !n.expandable {
@@ -838,7 +838,7 @@ impl App {
         } else {
             self.tree.expanded.insert(n.key.clone());
             self.load_children(n.clone());
-            // 접속할 때 평문으로 붙었으면 상태줄에 알린다 (GUI 와 같은 말)
+            // If the connection fell back to plaintext, say so in the status bar (same wording as the GUI)
             if matches!(n.kind, NodeKind::Conn) && matches!(self.kind_of(&n.conn), DbKind::Postgres | DbKind::Mysql) {
                 let (st, id) = (self.state.clone(), n.conn.clone());
                 self.spawn(async move { st.connect(id).await.map_err(|e| e.to_string()) }, |a, r| {
@@ -871,7 +871,7 @@ impl App {
                 }
                 Err(e) => {
                     a.tree.children.insert(key.clone(), vec![Node::info(&key, "", format!("⚠ {e}"))]);
-                    // 드라이버가 없으면 받을지 묻는다 (받은 뒤 다시 펼친다)
+                    // If the driver is missing, ask whether to download it (expand again afterwards)
                     if e.contains(qurry_core::plugin::MISSING) && let Some(d) = kind.driver() {
                         let k2 = key.clone();
                         a.popup = Some(Popup::Confirm {
@@ -904,7 +904,7 @@ impl App {
                 self.spawn(
                     async move {
                         let dbs = st.list_databases(conn.clone()).await.map_err(err)?;
-                        // 접속됨: 다음에 접속하지 않고도 찾도록 검색 캐시를 백그라운드로 채운다
+                        // Connected: fill the search cache in the background so lookups work next time without connecting
                         let st2 = st.clone();
                         tokio::spawn(async move { st2.warm_search_cache(conn).await });
                         Ok::<_, String>((dbs, def))
@@ -926,7 +926,7 @@ impl App {
                                 })
                                 .collect::<Vec<_>>()
                         });
-                        // 자동으로 펼칠 DB: 보이는 DB 가 하나면 그것, 아니면 기본 DB (보일 때만)
+                        // DB to auto-expand: the only visible DB if there's one, otherwise the default DB (only if visible)
                         let auto = r.as_ref().ok().and_then(|ns| if ns.len() == 1 { ns.first().cloned() } else { ns.iter().find(|n| n.hint == "default").cloned() });
                         done(a, key, r);
                         a.reload_conns();
@@ -1024,7 +1024,7 @@ impl App {
         }
     }
 
-    /// 스키마 객체 → 폴더(tables/views/…/keys) + 그 아래 노드. 첫 폴더는 펼친다
+    /// Schema objects → folders (tables/views/…/keys) + nodes under them. The first folder is expanded
     fn groups(&mut self, parent: &str, conn: &str, db: &str, schema: &str, objs: SchemaObjects) -> Vec<Node> {
         let defs: [(&str, &[&str]); 5] = [
             ("tables", &["table", "partitioned", "foreign"]),
@@ -1055,7 +1055,7 @@ impl App {
                 .iter()
                 .map(|r| mk_obj(&gkey, &r.name, if r.kind == "key" { "key" } else { &r.kind }, if r.kind == "key" { r.comment.clone().unwrap_or_default() } else { r.comment.clone().unwrap_or_default() }))
                 .collect();
-            // Redis 키는 ":" 로 폴더를 만든다
+            // Redis keys are grouped into folders by ":"
             let kids = if label == "keys" { crate::tree::key_folders(&mut self.tree.children, &gkey, kids) } else { kids };
             self.tree.children.insert(gkey.clone(), kids);
             out.push(Node { key: gkey, label: label.into(), hint: items.len().to_string(), kind: NodeKind::Group, conn: conn.into(), db: Some(db.into()), schema: Some(schema.into()), name: None, expandable: true });
@@ -1080,10 +1080,10 @@ impl App {
         out
     }
 
-    /// Enter / F4 / 더블클릭
+    /// Enter / F4 / double-click
     pub fn activate_node(&mut self, n: &Node, f4: bool) {
         let kind = self.kind_of(&n.conn);
-        // 연결·DB·스키마·폴더는 Enter/더블클릭 = 펼치기 (DB 종류와 상관없이). F4 / Ctrl+↓ = 콘솔, Redis 는 키 브라우저
+        // Connection·DB·schema·folder: Enter/double-click = expand (regardless of DB kind). F4 / Ctrl+↓ = console, key browser for Redis
         match &n.kind {
             NodeKind::Conn | NodeKind::Db if f4 && kind == DbKind::Redis => {
                 let db = n.db.clone().unwrap_or_else(|| self.default_db(&n.conn));
@@ -1101,25 +1101,25 @@ impl App {
         }
     }
 
-    // ───────── 탭 ─────────
+    // ───────── Tabs ─────────
 
     pub(crate) fn push_tab(&mut self, conn: &str, db: String, title: String, kind: TabKind) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
         let target = sql::target_id(conn, Some(&db));
-        // 새 탭은 포커스가 있는 칸에 연다
+        // New tabs open in the focused pane
         let group = self.focused_group();
         self.tabs.push(Tab { id, title, conn: conn.into(), db, target, kind, group, stale: false });
         self.activate(self.tabs.len() - 1);
         id
     }
 
-    /// 포커스가 있는 칸
+    /// The focused pane
     pub fn focused_group(&self) -> usize {
         self.tabs.get(self.active).map(|t| t.group).unwrap_or_else(|| self.panes.leaves()[0])
     }
 
-    /// 칸에 보이는 탭 (index)
+    /// Tab shown in the pane (index)
     pub fn group_tab(&self, g: usize) -> Option<usize> {
         self.group_active[g]
             .and_then(|id| self.tab_index(id))
@@ -1145,7 +1145,7 @@ impl App {
         }
     }
 
-    /// 되살린 탭을 처음 볼 때: 테이블은 데이터, Redis 는 키 목록, 콘솔은 자동완성·트랜잭션 모드
+    /// When a restored tab is first viewed: data for tables, key list for Redis, autocomplete·transaction mode for consoles
     fn load_restored(&mut self, i: usize) {
         let (id, target) = (self.tabs[i].id, self.tabs[i].target.clone());
         match &self.tabs[i].kind {
@@ -1171,9 +1171,9 @@ impl App {
         }
     }
 
-    // ───────── 다시 켤 때 되살리기 (workspace.rs) ─────────
+    // ───────── Restoring on relaunch (workspace.rs) ─────────
 
-    /// 바뀌었으면 저장 (주기적으로·끝낼 때)
+    /// Save if changed (periodically·on quit)
     pub fn save_workspace(&mut self) {
         if !self.restored {
             return;
@@ -1228,7 +1228,7 @@ impl App {
     pub fn tab_index(&self, id: u64) -> Option<usize> {
         self.tabs.iter().position(|t| t.id == id)
     }
-    /// 다른 워크스페이스에 보관한 탭도 찾는다 (그 사이 끝난 쿼리 결과가 사라지지 않게)
+    /// Also search tabs stashed in other workspaces (so query results finished meanwhile aren't lost)
     pub fn tab_mut(&mut self, id: u64) -> Option<&mut Tab> {
         if let Some(i) = self.tab_index(id) {
             return self.tabs.get_mut(i);
@@ -1236,13 +1236,13 @@ impl App {
         self.workspaces.iter_mut().filter_map(|w| w.saved.as_mut()).flat_map(|s| s.tabs.iter_mut()).find(|t| t.id == id)
     }
 
-    /// 커밋 안 한 변경이 있는 콘솔 탭들
+    /// Console tabs with uncommitted changes
     fn pending_tabs(&self, conn: Option<&str>) -> Vec<u64> {
         let saved = self.workspaces.iter().filter_map(|w| w.saved.as_ref()).flat_map(|s| s.tabs.iter());
         self.tabs.iter().chain(saved).filter(|t| conn.is_none_or(|c| t.conn == c) && matches!(&t.kind, TabKind::Console(c) if c.in_tx)).map(|t| t.id).collect()
     }
 
-    /// 탭 닫기. 커밋 안 한 변경이 있으면 먼저 묻는다 (닫으면 롤백된다)
+    /// Close a tab. Ask first if there are uncommitted changes (closing rolls them back)
     pub fn close_tab(&mut self, i: usize) {
         let Some(id) = self.tabs.get(i).map(|t| t.id) else { return };
         if self.pending_tabs(None).contains(&id) {
@@ -1265,7 +1265,7 @@ impl App {
         }
     }
 
-    /// 탭의 DB 세션을 닫는다 (커밋 안 한 변경은 롤백된다)
+    /// Close the tab's DB session (uncommitted changes are rolled back)
     pub fn close_sessions(&self, tabs: &[Tab]) {
         for t in tabs {
             let session = match &t.kind {
@@ -1282,7 +1282,7 @@ impl App {
         }
     }
 
-    /// 탭을 화면에서 뗀다 (세션은 그대로 — 다른 워크스페이스로 옮길 때도 쓴다). 남은 탭 중 하나를 보인다
+    /// Detach a tab from the screen (session kept — also used when moving to another workspace). Shows one of the remaining tabs
     pub fn detach_tab(&mut self, i: usize) -> Option<Tab> {
         if i >= self.tabs.len() {
             return None;
@@ -1299,9 +1299,9 @@ impl App {
             self.group_active = [None; crate::panes::MAX];
             return Some(t);
         }
-        // 칸이 비면 그 칸을 없앤다
+        // Remove the pane if it becomes empty
         let emptied = !self.tabs.iter().any(|x| x.group == t.group);
-        // 같은 칸에서 최근에 쓴 탭으로. 없으면 (되살린 탭은 최근 목록에 없다) 같은 칸의 옆 탭
+        // Go to the most recently used tab in the same pane. If none (restored tabs aren't in the recent list), the neighboring tab in the same pane
         let same = |j: &usize| self.tabs[*j].group == t.group;
         let next = self
             .mru
@@ -1318,7 +1318,7 @@ impl App {
         Some(t)
     }
 
-    /// 분할 해제: 모든 탭을 한 칸으로
+    /// Unsplit: all tabs into one pane
     pub fn unsplit(&mut self) {
         for t in &mut self.tabs {
             t.group = 0;
@@ -1328,14 +1328,14 @@ impl App {
         self.group_active[0] = self.tabs.get(self.active).map(|t| t.id);
     }
 
-    /// 탭을 다른 칸으로 옮기거나 (before 앞으로) 순서를 바꾸고, 새로 나눠 그 칸으로 보낸다
+    /// Move a tab to another pane (before the given tab) or reorder, or split anew and send it to that pane
     pub fn drop_tab(&mut self, id: u64, target: DropTarget) {
         let Some(i) = self.tab_index(id) else { return };
         let from = self.tabs[i].group;
         let (g, before) = match target {
             DropTarget::NewSplit(g, dir) => {
                 if self.tabs.len() < 2 {
-                    // 탭이 하나면 새 콘솔을 만들어 나눈다
+                    // With only one tab, create a new console and split
                     self.activate(i);
                     return self.split_focused(dir);
                 }
@@ -1357,7 +1357,7 @@ impl App {
         let at = before.and_then(|b| self.tab_index(b)).unwrap_or(self.tabs.len());
         self.tabs.insert(at, t);
         if from != g && self.group_active[from] == Some(id) {
-            // 떠난 칸에는 그 칸에서 최근에 쓴 탭을 보인다
+            // The pane left behind shows its most recently used tab
             self.group_active[from] = self.mru.iter().copied().find(|x| *x != id && self.tab_index(*x).is_some_and(|j| self.tabs[j].group == from));
         }
         self.activate(at);
@@ -1366,7 +1366,7 @@ impl App {
         }
     }
 
-    /// 테이블 탭의 지금 행과 가까운 행 (pgvector): 커서 열이 벡터면 그 열, 아니면 첫 벡터 열. SQL 을 새 콘솔에
+    /// Rows near the table tab's current row (pgvector): the cursor column if it's a vector, otherwise the first vector column. SQL into a new console
     fn find_similar(&mut self) {
         let Some(Tab { kind: TabKind::Table(tt), conn, db, target, .. }) = self.tabs.get(self.active) else {
             self.status = "Open a table with a vector column first".into();
@@ -1420,7 +1420,7 @@ impl App {
         }
     }
 
-    /// 탭 이름: 같은 이름의 테이블 탭이 여럿 열렸으면 schema.table, 스키마도 같으면 db.schema.table (DataGrip)
+    /// Tab title: schema.table if several table tabs share the name, db.schema.table if the schema matches too (DataGrip)
     pub fn tab_label(&self, t: &Tab) -> String {
         let TabKind::Table(me) = &t.kind else { return t.title.clone() };
         let same: Vec<&TableTab> = self
@@ -1449,7 +1449,7 @@ impl App {
         self.reload_table(id);
     }
 
-    /// 다시 불러오기 전에: 저장 안 한 편집이 있으면 버릴지 묻는다 (그냥 불러오면 말없이 사라진다)
+    /// Before reloading: if there are unsaved edits, ask whether to discard them (a plain reload would silently drop them)
     pub fn reload_table_checked(&mut self, id: u64) {
         let n = match self.tab_mut(id).map(|t| &t.kind) {
             Some(TabKind::Table(tt)) => tt.grid.as_ref().filter(|g| g.dirty()).map(|g| g.edits.len() + g.deleted.len() + g.added).unwrap_or(0),
@@ -1488,7 +1488,7 @@ impl App {
         let st = self.state.clone();
         self.spawn(
             async move {
-                // 같이 보낸다 (접속이 안 되면 둘 다 기다리느라 두 배로 걸린다)
+                // Send both together (if the connection fails, waiting on each would take twice as long)
                 let (cols, r) = tokio::join!(st.table_detail(target.clone(), schema, table), st.run_query(target, sqls, Some(500), Some(session)));
                 let cols = cols.map(|d| d.columns).unwrap_or_default();
                 let pk = cols.iter().filter(|c| c.is_pk).map(|c| c.name.clone()).collect::<Vec<_>>();
@@ -1497,7 +1497,7 @@ impl App {
                 (pk, cols, r)
             },
             move |a, (pk, cols, r)| {
-                // 검색 캐시에서 연 테이블이면 지금 막 접속한 것: 탐색기 표시를 맞춘다
+                // A table opened from the search cache was just connected: sync the explorer display
                 let conn = a.tab_mut(id).map(|t| t.conn.clone()).unwrap_or_default();
                 let fresh = r.is_ok() && a.conn(&conn).is_some_and(|c| !c.connected);
                 if fresh {
@@ -1516,7 +1516,7 @@ impl App {
                         g.more_session = Some(tt.session.clone());
                         g.row = row.min(n.saturating_sub(1));
                         g.col = col.min(g.cols().saturating_sub(1));
-                        // ORDER BY 가 한 열 ASC/DESC 면 헤더에 표시
+                        // Show in the header if ORDER BY is a single column ASC/DESC
                         g.sort = g.result.columns.iter().enumerate().find_map(|(i, c)| {
                             let q = sql::quote_ident(kind, &c.name);
                             if order == format!("{q} ASC") { Some((i, false)) } else if order == format!("{q} DESC") { Some((i, true)) } else { None }
@@ -1525,7 +1525,7 @@ impl App {
                         a.status = format!("{n}{} rows", if more { "+" } else { "" });
                     }
                     Err(e) => {
-                        // 결과가 없으니 빈 표를 보인다 (컬럼은 그대로). 저장 안 한 편집이 있으면 그 표를 그대로 둔다
+                        // No results, so show an empty table (columns kept). If there are unsaved edits, leave that table as is
                         if !tt.grid.as_ref().is_some_and(|g| g.dirty()) {
                             let columns = match &tt.grid {
                                 Some(g) => g.result.columns.clone(),
@@ -1542,7 +1542,7 @@ impl App {
         );
     }
 
-    /// 쿼리가 실패한 채로 있는 테이블 탭(저장 안 한 편집 없음)을 다시 불러온다
+    /// Reload table tabs still sitting on a failed query (with no unsaved edits)
     fn retry_failed_tables(&mut self, conn: &str) {
         let ids: Vec<u64> = self
             .tabs
@@ -1555,7 +1555,7 @@ impl App {
         }
     }
 
-    /// 테이블 탭 헤더 정렬: 선택 열로 ORDER BY ↑ → ↓ → 해제 (GUI 의 Sort via ORDER BY)
+    /// Table tab header sort: ORDER BY on the selected column ↑ → ↓ → off (the GUI's Sort via ORDER BY)
     pub fn sort_table(&mut self, id: u64) {
         let Some(conn) = self.tab_mut(id).map(|t| t.conn.clone()) else { return };
         let kind = self.kind_of(&conn);
@@ -1655,7 +1655,7 @@ impl App {
                             r.reveal(&w);
                             None
                         }
-                        // 첫 줄이 키면 바로 보여 준다 (폴더면 펼쳐서 고르게)
+                        // If the first row is a key, show it right away (if a folder, expand it to pick)
                         None if reset && r.detail.is_none() => r.sel_key(),
                         None => None,
                     };
@@ -1695,7 +1695,7 @@ impl App {
         });
     }
 
-    /// Redis 명령 실행 후 키 다시 읽기
+    /// Re-read keys after running a Redis command
     pub fn redis_cmd(&mut self, id: u64, args: Vec<String>, rescan: bool) {
         if self.tab_mut(id).is_none() {
             return;
@@ -1726,13 +1726,13 @@ impl App {
         });
     }
 
-    // ───────── 실행 ─────────
+    // ───────── Execution ─────────
 
     pub fn execute(&mut self, explain: bool) {
         self.execute_checked(explain, false)
     }
 
-    /// 무엇을 실행할지는 실행 설정(self.exec)을 따른다. 물어봐야 하면 고르는 창을 띄운다 (DataGrip)
+    /// What to run follows the execution settings (self.exec). If it needs asking, open the picker (DataGrip)
     fn execute_checked(&mut self, explain: bool, confirmed: bool) {
         let Some(t) = self.tabs.get(self.active) else { return };
         let kind = self.kind_of(&t.conn);
@@ -1766,7 +1766,7 @@ impl App {
         }
     }
 
-    /// 실행 설정 (DataGrip Settings › Database › Query Execution). 고르면 바로 바뀌고 창은 그대로
+    /// Execution settings (DataGrip Settings › Database › Query Execution). Picking applies immediately and the window stays open
     pub fn palette_exec(&mut self) {
         use crate::exec::{ExecSettings, Inside, Outside, Selection};
         let e = self.exec;
@@ -1784,12 +1784,12 @@ impl App {
         self.popup = Some(Popup::Palette(Palette { title: "Query Execution Settings".into(), input: TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
     }
 
-    /// confirmed = 위험 문장(WHERE 없는 UPDATE/DELETE, DROP, TRUNCATE) 확인을 받았는지
+    /// confirmed = whether a dangerous statement (UPDATE/DELETE without WHERE, DROP, TRUNCATE) was confirmed
     pub fn run_stmts(&mut self, stmts: Vec<String>, explain: bool, confirmed: bool) {
         self.run_stmts_checked(stmts, explain, confirmed, confirmed)
     }
 
-    /// unsafe_ok = 위험 문장 확인을 받았다, prod_ok = Production 확인(바뀔 행 수)을 받았다
+    /// unsafe_ok = dangerous statement confirmed, prod_ok = Production confirmation (rows to change) given
     fn run_stmts_checked(&mut self, stmts: Vec<String>, explain: bool, confirmed: bool, prod_ok: bool) {
         let analyze = explain && self.analyze_next;
         let Some(t) = self.tabs.get(self.active) else { return };
@@ -1797,7 +1797,7 @@ impl App {
         let id = t.id;
         let target = t.target.clone();
         let conn_name = self.conn(&t.conn).map(|c| c.config.name.clone()).unwrap_or_default();
-        // 히스토리 (GUI 와 같은 기록)
+        // History (same log as the GUI)
         let (hist_conn, hist_db, hist) = (t.conn.clone(), t.db.clone(), self.state.clone());
         let prod = self.tabs.get(self.active).and_then(|t| self.conn(&t.conn)).filter(|c| c.config.options.confirm_changes).map(|c| (c.config.name.clone(), self.tabs[self.active].target.clone()));
         let watch = prod.is_some();
@@ -1814,7 +1814,7 @@ impl App {
             self.popup = Some(Popup::Confirm { text: format!("{why}:\n  {preview}\nRun it anyway?"), on_yes: Box::new(move |a| a.run_stmts_checked(stmts, explain, true, prod_ok)) });
             return;
         }
-        // Production Data Source: 바꿀 행 수를 세어 보여 주고 묻는다 (세는 것은 SELECT count(*) — 아무것도 바꾸지 않는다)
+        // Production Data Source: count the rows to change, show it, and ask (counting is SELECT count(*) — changes nothing)
         if let Some((name, target)) = prod
             && !prod_ok
             && !explain
@@ -1856,8 +1856,8 @@ impl App {
                 return;
             }
         }
-        // EXPLAIN ANALYZE 는 문장을 실제로 실행한다. PostgreSQL·MySQL 은 바꾸는 문장을 트랜잭션 안에서 돌리고 되돌린다 (아래).
-        // 드라이버는 트랜잭션을 못 쓸 수 있어 묻는다
+        // EXPLAIN ANALYZE actually runs the statement. PostgreSQL·MySQL run changing statements inside a transaction and roll back (below).
+        // Drivers may not support transactions, so ask
         let wraps = matches!(kind, DbKind::Postgres | DbKind::Mysql);
         if analyze
             && !wraps
@@ -1876,7 +1876,7 @@ impl App {
             return;
         }
         c.running = true;
-        // 실행 중에는 Output 을 보인다 (지난 결과 대신 지금 실행하는 SQL)
+        // While running, show Output (the SQL being run instead of the previous results)
         c.show_output = true;
         let session = c.session.clone();
         let in_tx0 = c.in_tx;
@@ -1889,7 +1889,7 @@ impl App {
             async move {
                 let mut out = vec![];
                 for s in stmts2 {
-                    // 실행하는 문장을 바로 Output 에 (한 줄로, 너무 길면 앞부분만)
+                    // Put the running statement in Output right away (on one line, truncated if too long)
                     let echo: String = s.replace('\n', " ").chars().take(300).collect();
                     let line = format!("{echo_name}> {echo}{}", if s.chars().count() > 300 { "…" } else { "" });
                     let _ = tx.send(Box::new(move |a: &mut App| {
@@ -1900,20 +1900,20 @@ impl App {
                     let q = if explain {
                         let bare = s.trim_end_matches(';');
                         match (kind, analyze) {
-                            // PG: JSON 으로 받아 트리 표 (% · 경고) 로 바꾼다
+                            // PG: fetch as JSON and turn it into a tree table (% · warnings)
                             (DbKind::Postgres, false) => format!("EXPLAIN (FORMAT JSON) {bare}"),
                             (DbKind::Postgres, true) => format!("EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) {bare}"),
                             (DbKind::Mysql, false) => format!("EXPLAIN {bare}"),
                             (DbKind::Mysql, true) => format!("EXPLAIN ANALYZE {bare}"),
                             (DbKind::Redis, _) => s.clone(),
-                            // 드라이버: 대부분 EXPLAIN 을 받는다 (SQL Server 는 SHOWPLAN 이라 그대로 실행된다)
+                            // Drivers: most accept EXPLAIN (SQL Server uses SHOWPLAN, so it runs as is)
                             (_, true) => format!("EXPLAIN ANALYZE {bare}"),
                             (_, false) => format!("EXPLAIN {bare}"),
                         }
                     } else {
                         s.clone()
                     };
-                    // 바꾸는 문장의 Explain Analyze: 트랜잭션(이미 열려 있으면 세이브포인트) 안에서 돌리고 항상 되돌린다
+                    // Explain Analyze of a changing statement: run inside a transaction (a savepoint if one is already open) and always roll back
                     let dry = analyze && wraps && !qurry_core::guard::is_read(&s, kind);
                     if dry {
                         let begin = if in_tx0 { "SAVEPOINT qurry_explain" } else { "BEGIN" };
@@ -1946,7 +1946,7 @@ impl App {
                 c.running = false;
                 let mut status = String::new();
                 let n = out.len();
-                // Auto 모드에서 이미 확정된 변경 문장 수 (중간에 실패하면 알린다: 앞의 것들은 롤백되지 않는다)
+                // Changing statements already committed in Auto mode (reported on failure midway: earlier ones are not rolled back)
                 let mut committed = 0;
                 let mut failed = false;
                 let ddl = out.iter().any(|(s, r, dry)| r.is_ok() && !dry && !explain && qurry_core::guard::is_ddl(s, kind));
@@ -1956,7 +1956,7 @@ impl App {
                     }
                     match r {
                         Ok(res) => {
-                            // PG 실행 계획: 들여쓴 연산 · 몫(%) · 경고 표
+                            // PG execution plan: indented operations · share (%) · warnings table
                             let res = match (explain && kind == DbKind::Postgres, res.rows.first().and_then(|r| r.first())) {
                                 (true, Some(v)) => match qurry_core::plan::parse_pg(&crate::grid::raw_text(v).unwrap_or_default()) {
                                     Ok(p) => qurry_core::db::QueryResult { elapsed_ms: res.elapsed_ms, in_transaction: res.in_transaction, ..qurry_core::plan::to_result(&p) },
@@ -1982,7 +1982,7 @@ impl App {
                             } else {
                                 let msg = format!("{} row(s) affected in {} ms", res.rows_affected, res.elapsed_ms);
                                 c.log(false, msg.clone());
-                                // Production: 되돌리기 SQL 을 남겼으면 알린다 (운영 작업 기록)
+                                // Production: announce if undo SQL was recorded (production audit log)
                                 if watch && !dry && res.rows_affected > 0 && hist.audit.list(Some(&hist_conn), "", 1).first().is_some_and(|e| e.undo.is_some()) {
                                     c.log(false, "Undo saved — ⌃k › Production Log…".into());
                                 }
@@ -2004,11 +2004,11 @@ impl App {
                     }
                 }
                 a.status = status;
-                // 테이블·컬럼을 만들거나 바꾸거나 지웠으면 탐색기에 바로 보이게
+                // If tables·columns were created, changed, or dropped, show it in the explorer right away
                 if ddl {
                     a.schema_changed(&hist_conn, &hist_db);
                 }
-                // 오류가 나도 세션에는 트랜잭션이 열려 있을 수 있다 (Manual 첫 문장 실패 등) → Commit/Roll back 표시를 맞춘다
+                // Even on error the session may have an open transaction (e.g. first Manual statement failed) → sync the Commit/Roll back display
                 if failed {
                     let st = a.state.clone();
                     let session = a.tab_mut(id).and_then(|t| if let TabKind::Console(c) = &t.kind { Some(c.session.clone()) } else { None });
@@ -2125,7 +2125,7 @@ impl App {
         }
     }
 
-    // ───────── 테이블 편집 ─────────
+    // ───────── Table editing ─────────
 
     pub fn submit(&mut self) {
         let Some(t) = self.tabs.get(self.active) else { return };
@@ -2208,7 +2208,7 @@ impl App {
         });
     }
 
-    // ───────── 연결 ─────────
+    // ───────── Connections ─────────
 
     pub fn connect(&mut self, conn: &str) {
         if let Some(n) = self.tree.roots.iter().find(|n| n.conn == conn).cloned() {
@@ -2250,7 +2250,7 @@ impl App {
         });
     }
 
-    /// 콘솔에서 구조를 바꾼 뒤: 그 데이터베이스 아래 펼쳐 둔 노드를 다시 읽는다 (펼친 모양은 그대로)
+    /// After a structure change in the console: re-read the expanded nodes under that database (expansion kept)
     pub fn schema_changed(&mut self, conn: &str, db: &str) {
         self.forget_completion(conn);
         let Some(dbn) = self.tree.children.values().flatten().find(|n| matches!(n.kind, NodeKind::Db) && n.conn == conn && n.db.as_deref() == Some(db)).cloned() else { return };
@@ -2271,7 +2271,7 @@ impl App {
 
     pub fn refresh_node(&mut self, n: &Node) {
         let key = n.key.clone();
-        // 스키마가 바뀌었을 수 있으니 자동완성 메타도 다시 읽게 한다
+        // The schema may have changed, so re-read autocomplete metadata too
         self.forget_completion(&n.conn.clone());
         self.tree.forget(&key);
         if self.tree.expanded.contains(&key) {
@@ -2311,7 +2311,7 @@ impl App {
             fields: vec![
                 f("Name", c.name.clone(), FieldKind::Text),
                 f("Color", color.into(), ch(&colors)),
-                // 이 Data Source 가 보일 워크스페이스 (바꾸면 저장할 때 옮긴다)
+                // Workspaces where this Data Source is shown (moved on save if changed)
                 f("Workspace", self.ws_label(edit.as_ref().map(|e| self.ws_of_conn(&e.id)).unwrap_or(self.cur_ws)), FieldKind::Choice((0..self.workspaces.len()).map(|i| self.ws_label(i)).collect())),
                 f("Type", kind, ch(&["postgres", "mysql", "redis", "sqlite", "duckdb", "mssql", "clickhouse", "mongodb", "oracle", "qdrant", "chroma", "milvus"])),
                 f("Host", c.host.clone(), FieldKind::Text),
@@ -2321,9 +2321,9 @@ impl App {
                 f("Database", c.database.clone(), FieldKind::Text),
                 f("Read-only", if c.read_only { "on" } else { "off" }.into(), FieldKind::Toggle),
                 f("Production", if c.options.confirm_changes { "on" } else { "off" }.into(), FieldKind::Toggle),
-                // MySQL: TLS 를 못 하는 예전 원격 서버에 평문으로 붙어도 되는지
+                // MySQL: whether plaintext is allowed for old remote servers that can't do TLS
                 f("Unencrypted OK", if c.options.allow_plaintext { "on" } else { "off" }.into(), FieldKind::Toggle),
-                // qurry-mcp (AI 도구) 에 보이는지. 새 소스는 off 로 시작한다
+                // Whether it's visible to qurry-mcp (AI tools). New sources start off
                 f("MCP", if edit.is_some() { mcp_label(&c) } else { "off" }.into(), ch(&["off", "read", "write"])),
                 f("SSH tunnel", if ssh.enabled { "on" } else { "off" }.into(), FieldKind::Toggle),
                 f("SSH host", ssh.host.clone(), FieldKind::Text),
@@ -2333,7 +2333,7 @@ impl App {
                 f("SSH key file", ssh.key_path.clone(), FieldKind::Text),
                 f("SSH secret", saved(c.ssh_secret_saved), FieldKind::Secret),
                 f("SSL", if c.active_ssl().is_some() { "on" } else { "off" }.into(), FieldKind::Toggle),
-                // 새로 켜는 SSL 은 verify-full (require 는 암호화만, 인증서는 확인하지 않는다)
+                // Newly enabled SSL is verify-full (require only encrypts and doesn't verify the certificate)
                 f("SSL mode", c.ssl.as_ref().map(|x| x.mode().to_string()).unwrap_or_else(|| "verify-full".into()), ch(&["require", "verify-ca", "verify-full"])),
                 f("CA file", c.ssl.as_ref().map(|x| x.ca_file.clone()).unwrap_or_default(), FieldKind::Text),
                 f("Client cert", c.ssl.as_ref().map(|x| x.cert_file.clone()).unwrap_or_default(), FieldKind::Text),
@@ -2348,7 +2348,7 @@ impl App {
         }));
     }
 
-    /// 폼 → (설정, 비밀번호, SSH 비밀)
+    /// Form → (config, password, SSH secret)
     pub fn form_config(form: &ConnForm) -> Result<(ConnectionConfig, Option<String>, Option<String>), String> {
         let v = |l: &str| form.fields.iter().find(|f| f.label == l).map(|f| f.value.clone()).unwrap_or_default();
         let mut c = form.edit.clone().unwrap_or(ConnectionConfig {
@@ -2376,9 +2376,9 @@ impl App {
         c.read_only = v("Read-only") == "on";
         c.options.confirm_changes = v("Production") == "on";
         c.options.allow_plaintext = v("Unencrypted OK") == "on";
-        // 보이는 값을 그대로 저장한다 (정하지 않은 채로 두면 Production 을 끈 뒤 저절로 열린다)
+        // Save the shown value as is (leaving it unset would reopen it automatically after turning Production off)
         c.options.mcp = Some(v("MCP"));
-        // custom = GUI 에서 고른 프리셋 밖의 색: 그대로 둔다
+        // custom = a color outside the presets picked in the GUI: leave it
         match v("Color").as_str() {
             "custom" => {}
             name => c.color = crate::ui::COLOR_PRESETS.iter().find(|p| p.0 == name).map(|p| p.1.to_string()),
@@ -2397,7 +2397,7 @@ impl App {
         Ok((c, secret(v("Password")), secret(v("SSH secret"))))
     }
 
-    // ───────── 팝업: 팔레트 ─────────
+    // ───────── Popup: palette ─────────
 
     pub fn palette_actions(&mut self) {
         let items = ACTIONS
@@ -2409,14 +2409,14 @@ impl App {
     }
 
     pub fn palette_tabs(&mut self) {
-        // 최근에 본 탭 → 아직 안 본 탭(되살린 뒤 고르지 않은 탭) 순
+        // Recently viewed tabs → then not-yet-viewed tabs (restored but never selected)
         let seen = self.mru.iter().filter_map(|id| self.tabs.iter().find(|t| t.id == *id));
         let rest = self.tabs.iter().filter(|t| !self.mru.contains(&t.id));
         let items = seen.chain(rest).map(|t| PItem { label: self.tab_label(t), hint: t.db.clone(), action: PAction::Tab(t.id) }).collect();
         self.popup = Some(Popup::Palette(Palette { title: "Recent Tabs".into(), input: TextArea::default(), items, sel: 1, loading: 0, cache: Default::default() }));
     }
 
-    /// Search Everywhere (GUI 의 ⇧⇧): 최근 탭 + 액션 + DB 객체를 한 목록에서
+    /// Search Everywhere (the GUI's ⇧⇧): recent tabs + actions + DB objects in one list
     pub fn palette_everywhere(&mut self) {
         let mut items: Vec<PItem> = self.mru.iter().filter_map(|id| self.tabs.iter().find(|t| t.id == *id)).map(|t| PItem { label: self.tab_label(t), hint: format!("tab · {}", t.db), action: PAction::Tab(t.id) }).collect();
         items.extend(ACTIONS.iter().filter(|(a, ..)| *a != Action::SearchEverywhere).map(|(a, n, k)| {
@@ -2426,12 +2426,12 @@ impl App {
         self.palette_objects("Search Everywhere", items);
     }
 
-    /// Go to Database Object: 연결된 Data Source 의 기본 DB + 펼친 DB
-    /// Go to Database Object / Search Everywhere: GUI 처럼 연결된 Data Source 마다 보이는 DB (최대 8개) 의 객체.
-    /// Redis 와 single DB 는 기본 DB 만
+    /// Go to Database Object: default DB of connected Data Sources + expanded DBs
+    /// Go to Database Object / Search Everywhere: like the GUI, objects of the visible DBs (at most 8) of each connected Data Source.
+    /// Redis and single DB: default DB only
     pub fn palette_objects(&mut self, title: &str, items: Vec<PItem>) {
         let conns: Vec<ConnectionConfig> = self.conns.iter().filter(|c| c.connected).map(|c| c.config.clone()).collect();
-        // 접속하지 않은 Data Source 는 지난번에 읽어 둔 목록에서 (고르면 그때 접속한다)
+        // Unconnected Data Sources use the list read last time (connects when picked)
         let mut items = items;
         let columns = title == "Search Everywhere";
         for c in self.state.cached_index().unwrap_or_default() {
@@ -2458,7 +2458,7 @@ impl App {
             let id = cfg.id.clone();
             self.spawn(async move { st.list_databases(id).await.map_err(err) }, move |a, r: Result<Vec<String>, String>| {
                 let mut dbs = r.map(|dbs| qurry_core::app::visible_dbs(&cfg, dbs, &def)).unwrap_or_default();
-                // 기본 DB 먼저 (DB 목록을 못 읽어도 기본 DB 는 찾는다)
+                // Default DB first (it's searched even if the DB list can't be read)
                 dbs.retain(|d| d != &def);
                 dbs.insert(0, def);
                 dbs.truncate(8);
@@ -2467,9 +2467,9 @@ impl App {
         }
     }
 
-    /// 열린 팔레트에 DB 들의 객체를 더한다 (Data Source 하나 몫의 loading 을 DB 수로 바꾼다)
+    /// Add DB objects to the open palette (turns one Data Source's loading count into the number of DBs)
     fn index_into_palette(&mut self, cfg: &ConnectionConfig, dbs: Vec<String>) {
-        // Search Everywhere 는 컬럼도 찾는다 (GUI 의 All / Symbols)
+        // Search Everywhere also finds columns (the GUI's All / Symbols)
         let columns = match &mut self.popup {
             Some(Popup::Palette(p)) => {
                 p.loading = (p.loading + dbs.len()).saturating_sub(1);
@@ -2498,7 +2498,7 @@ impl App {
         }
     }
 
-    /// 컬럼 → 고르면 그 테이블을 연다 (Ctrl+B 는 그 테이블 DDL)
+    /// Column → picking it opens its table (Ctrl+B opens that table's DDL)
     fn columns_into_palette(&mut self, cfg: &ConnectionConfig, db: String) {
         let st = self.state.clone();
         let target = sql::target_id(&cfg.id, Some(&db));
@@ -2513,7 +2513,7 @@ impl App {
         let q = p.input.lines().join("");
         let mut cache = p.cache.borrow_mut();
         if !cache.as_ref().is_some_and(|(cq, n, _)| *cq == q && *n == p.items.len()) {
-            // 컬럼은 같은 이름의 테이블·액션보다 뒤로 (GUI 의 All 과 같게)
+            // Columns go after tables·actions with the same name (same as the GUI's All)
             let mut v: Vec<(i64, usize)> = p.items.iter().enumerate().filter_map(|(i, it)| fuzzy(&q, &it.label).map(|s| (s - if it.hint.starts_with("column ") { 50 } else { 0 }, i))).collect();
             if !q.is_empty() {
                 v.sort_by(|a, b| b.0.cmp(&a.0));
@@ -2543,7 +2543,7 @@ impl App {
             PAction::Exec(e) => {
                 self.exec = e;
                 self.palette_exec();
-                // 고른 줄에 그대로 둔다
+                // Stay on the selected row
                 if let Some(Popup::Palette(p)) = &mut self.popup {
                     p.sel = p.items.iter().position(|i| i.hint == item.hint && i.label.chars().skip(2).eq(item.label.chars().skip(2))).unwrap_or(0);
                 }
@@ -2575,7 +2575,7 @@ impl App {
         self.input_words(title, init, vec![], on_ok);
     }
 
-    /// 자동완성이 되는 한 줄 입력 (치는 단어로 words 를 거른다, ⌃Space / Tab 으로 바로 열기)
+    /// Single-line input with autocomplete (typed word filters words, ⌃Space / Tab opens it right away)
     pub fn input_words(&mut self, title: impl Into<String>, init: &str, words: Vec<String>, on_ok: impl FnOnce(&mut App, String) + 'static) {
         let mut t = TextArea::new(vec![init.to_string()]);
         t.move_cursor(tui_textarea::CursorMove::End);
@@ -2583,7 +2583,7 @@ impl App {
         self.popup = Some(Popup::Input { title: title.into(), input: t, on_ok: Box::new(on_ok), words, complete: None });
     }
 
-    /// 테이블 탭의 WHERE / ORDER BY 자동완성 후보: 컬럼 + 자주 쓰는 키워드
+    /// Autocomplete candidates for the table tab's WHERE / ORDER BY: columns + common keywords
     pub fn table_words(&self, id: u64, order: bool) -> Vec<String> {
         let Some(t) = self.tabs.iter().find(|t| t.id == id) else { return vec![] };
         let kind = self.kind_of(&t.conn);
@@ -2680,7 +2680,7 @@ impl App {
                 }
             }
             Action::Ddl => {
-                // 테이블 데이터 탭에서는 그 테이블의 DDL
+                // In a table data tab, that table's DDL
                 if self.focus != Focus::Tree {
                     if let Some(Tab { kind: TabKind::Table(tt), conn, db, .. }) = self.tabs.get(self.active) {
                         return self.open_ddl(&conn.clone(), db.clone(), tt.schema.clone(), tt.table.clone(), tt.kind.clone());
@@ -2807,7 +2807,7 @@ impl App {
             Action::SplitDown => self.split_focused(SplitDir::Down),
             Action::Unsplit => self.unsplit(),
             Action::OtherSplit => {
-                // 다음 칸으로 (왼쪽/위부터 차례로 돈다)
+                // To the next pane (cycles from left/top in order)
                 let ls = self.panes.leaves();
                 if ls.len() > 1 {
                     let p = ls.iter().position(|&g| g == self.focused_group()).unwrap_or(0);
@@ -2821,7 +2821,7 @@ impl App {
                 self.set_explorer_width(w);
             }
             Action::SplitShrink | Action::SplitGrow => {
-                // 포커스 있는 칸 옆의 좌우 경계선을 옮긴다 (가장 가까운 것이 위아래 경계선이어도). 좌우가 없으면 위아래
+                // Move the left/right divider next to the focused pane (even if the nearest one is a top/bottom divider). Top/bottom if there's no left/right
                 let g = self.focused_group();
                 let path = self.panes.ancestor_with_dir(g, SplitDir::Right).or_else(|| self.panes.ancestor_with_dir(g, SplitDir::Down));
                 if let Some(pct) = path.and_then(|p| self.panes.pct_mut(&p)) {
@@ -2887,7 +2887,7 @@ impl App {
         }
     }
 
-    /// 다음/이전 탭 (포커스가 있는 칸 안에서)
+    /// Next/previous tab (within the focused pane)
     fn cycle_tab(&mut self, d: isize) {
         let g = self.focused_group();
         let idx: Vec<usize> = (0..self.tabs.len()).filter(|&i| self.tabs[i].group == g).collect();
@@ -2896,7 +2896,7 @@ impl App {
         self.activate(idx[(p as isize + d).rem_euclid(n) as usize]);
     }
 
-    /// 포커스 있는 칸을 나눈다 (최대 4칸): 지금 탭을 새 칸(오른쪽/아래)으로 옮긴다
+    /// Split the focused pane (up to 4 panes): move the current tab into the new pane (right/below)
     fn split_focused(&mut self, dir: SplitDir) {
         let Some(cur) = self.tabs.get(self.active).map(|t| t.id) else {
             self.status = "Open a tab to split".into();
@@ -2910,7 +2910,7 @@ impl App {
         if self.tabs.iter().filter(|t| t.group == g).count() >= 2 {
             return self.drop_tab(cur, DropTarget::NewSplit(g, dir));
         }
-        // 칸에 탭이 하나뿐이면 같은 DB 의 새 콘솔을 오른쪽/아래 칸에 연다
+        // If the pane has only one tab, open a new console on the same DB in the right/lower pane
         let (conn, db) = (self.tabs[self.active].conn.clone(), self.tabs[self.active].db.clone());
         if self.kind_of(&conn) == DbKind::Redis {
             self.status = "Open another tab to split".into();
@@ -2921,7 +2921,7 @@ impl App {
         self.drop_tab(id, DropTarget::NewSplit(g, dir));
     }
 
-    /// Database Explorer 폭: 정한 값이 없으면 화면 폭의 1/4 (26~48)
+    /// Database Explorer width: 1/4 of the screen width if unset (26~48)
     pub fn explorer_width(&self, total: u16) -> u16 {
         let auto = (total / 4).clamp(26, 48);
         self.explorer_w.unwrap_or(auto).clamp(12, total.saturating_sub(20).max(12))
@@ -2932,12 +2932,12 @@ impl App {
         self.explorer_w = Some(w.clamp(12, max) as u16);
     }
 
-    /// 콘솔 에디터/결과 비율 조절
-    /// 옆 칸으로: axis = Down 이면 위(back)/아래, Right 면 왼쪽(back)/오른쪽.
-    /// 마지막으로 그린 칸 위치 기준으로, 그 방향에 있고 겹치는 칸 중 가장 가까운 것
+    /// Adjust the console editor/result ratio
+    /// To the adjacent pane: axis = Down means up(back)/down, Right means left(back)/right.
+    /// Based on the last drawn pane positions, the nearest overlapping pane in that direction
     fn focus_pane(&mut self, axis: SplitDir, back: bool) {
         let cur = self.focused_group();
-        // (칸, 왼, 오른, 위, 아래)
+        // (pane, left, right, top, bottom)
         let rect = |&(g, bar, body): &(usize, ratatui::layout::Rect, ratatui::layout::Rect)| (g, bar.x, bar.x + bar.width, bar.y, body.y + body.height);
         let Some((_, x0, x1, top, bottom)) = self.hits.groups.iter().map(rect).find(|r| r.0 == cur) else { return };
         let next = self
@@ -2946,7 +2946,7 @@ impl App {
             .iter()
             .map(rect)
             .filter_map(|(g, a0, a1, t, b)| {
-                // 경계선(테두리) 한 칸 정도는 겹쳐 그려질 수 있어 1 칸 여유
+                // Dividers (borders) may overlap by about one cell, so allow 1 cell of slack
                 let gap = match (axis, back) {
                     (SplitDir::Down, true) if a0 < x1 && x0 < a1 && b <= top + 1 => top.saturating_sub(b),
                     (SplitDir::Down, false) if a0 < x1 && x0 < a1 && t + 1 >= bottom => t.saturating_sub(bottom),
@@ -2974,9 +2974,9 @@ impl App {
         self.console_pct = (self.console_pct as i16 + d).clamp(10, 90) as u16;
     }
 
-    // ───────── 자동완성 ─────────
+    // ───────── Autocomplete ─────────
 
-    /// Data Source 의 자동완성 메타를 버린다 (끊기·새로 고침)
+    /// Drop a Data Source's autocomplete metadata (disconnect·refresh)
     pub fn forget_completion(&mut self, conn: &str) {
         self.completion.retain(|t, _| qurry_core::app::split_target(t).0 != conn);
     }
@@ -2998,8 +2998,8 @@ impl App {
         });
     }
 
-    /// 커서 위치로 후보를 다시 계산한다. explicit = Ctrl+Space (아니면 '.' 입력·목록이 열린 채 타이핑)
-    /// Manage Shown Schemas: DB 목록을 읽어 창을 연다 (db = DB 줄에서 열었으면 그 DB 를 펼친다)
+    /// Recompute candidates at the cursor position. explicit = Ctrl+Space (otherwise '.' typed·typing with the list open)
+    /// Manage Shown Schemas: read the DB list and open the window (db = expand that DB if opened from a DB row)
     fn manage_schemas(&mut self, conn: &str, db: Option<String>) {
         self.status = "Loading databases…".into();
         let st = self.state.clone();
@@ -3025,7 +3025,7 @@ impl App {
         }
     }
 
-    /// 창에서 펼친 DB 의 스키마를 읽는다
+    /// Read schemas of the DB expanded in the window
     pub fn load_scope_schemas(&mut self, db: String) {
         let Some(Popup::Scope(e)) = &self.popup else { return };
         let conn = e.conn.clone();
@@ -3040,10 +3040,10 @@ impl App {
         });
     }
 
-    /// 고른 범위를 Data Source 에 저장하고 트리를 다시 그린다.
-    /// 접속 설정은 그대로라 store 에 바로 쓴다 (save_connection 은 풀을 닫아 열린 트랜잭션이 끊긴다)
+    /// Save the chosen scope to the Data Source and redraw the tree.
+    /// Connection settings are unchanged, so write to the store directly (save_connection closes the pool and drops open transactions)
     pub fn apply_scope(&mut self, e: crate::scope::ScopeEditor) {
-        // 저장된 설정을 다시 읽어 범위만 바꾼다 (그 사이 GUI·MCP 에서 바꾼 읽기 전용·호스트 등을 되돌리지 않게)
+        // Re-read the saved config and change only the scope (so read-only·host etc. changed meanwhile in the GUI·MCP aren't reverted)
         let cfg = match self.state.store.get(&e.conn) {
             Ok(Some(mut cfg)) => {
                 cfg.scope = e.scope();
@@ -3068,8 +3068,8 @@ impl App {
         }
     }
 
-    /// 지금 바로 새 버전을 확인한다 (⌃K › Check for Updates)
-    /// 비밀번호 파일의 마스터 키: 설정 폴더 ↔ OS 키체인 (묻고 옮긴다. 키체인 팝업이 뜰 수 있어 따로 돈다)
+    /// Check for a new version right now (⌃K › Check for Updates)
+    /// Master key for the password file: config folder ↔ OS keychain (asks, then moves. Runs separately since a keychain popup may appear)
     fn password_key(&mut self) {
         use qurry_core::secrets::KeyLocation;
         let to_keychain = self.state.secret_key_location() == KeyLocation::File;
@@ -3108,19 +3108,19 @@ impl App {
         });
     }
 
-    /// 새 버전 창: 지금 버전 이후 바뀐 것 (버전마다) + 업데이트 방법
+    /// New version window: changes since the current version (per version) + how to update
     pub fn show_update(&mut self, r: qurry_core::update::Release) {
         let cur = env!("CARGO_PKG_VERSION");
         let how = format!("{} › Update Qurry & Restart", self.keys.label(Action::Palette));
         let changes = qurry_core::update::changes_text(&r.changes_since(cur));
-        // 업데이트 방법은 맨 위에 (버전이 많으면 창 아래가 잘린다)
+        // How to update goes at the top (with many versions the bottom of the window gets cut off)
         let text = format!("You have {cur} — {how}\n\n{}", if changes.is_empty() { "See the release page for what changed.\n".into() } else { changes });
         self.status = format!("Qurry {} is available — {how}", r.version);
         self.popup = Some(Popup::Message { title: format!("Qurry {} is available", r.version), text });
         self.update = Some(r.version);
     }
 
-    /// 최신 릴리스를 받아 바꿔 넣고, 끝나면 다시 켠다 (열어 둔 탭은 끝낼 때 저장된다)
+    /// Download the latest release, swap it in, and relaunch when done (open tabs are saved on quit)
     fn install_update(&mut self) {
         self.status = "Updating Qurry… (downloading)".into();
         let tx = self.tx.clone();
@@ -3154,13 +3154,13 @@ impl App {
         let (row, col) = c.editor.cursor();
         let lines = c.editor.lines();
         let before: String = lines.get(row).map(|l| l.chars().take(col).collect()).unwrap_or_default();
-        // 키마다 불리므로 커서 주변 줄만 본다 (긴 스크립트 전체를 매번 나누지 않게)
+        // Called on every key, so look only at lines around the cursor (don't split a long script every time)
         let (from, to) = (row.saturating_sub(200), (row + 50).min(lines.len()));
         let window = &lines[from..to];
         let text = window.join("\n");
         let stmt = sql::statement_at(&text, byte_offset(window, row - from, col), kind).unwrap_or_default();
         let empty = complete::Meta::new(vec![]);
-        // 값 · json 키 자리: 읽어 둔 값이 있으면 그것, 없으면 읽어 와서 다시 연다
+        // Value · json key spot: use already-read values if any, otherwise fetch and reopen
         if let Some(h) = meta.as_deref().and_then(|m| complete::hint_at(m, &stmt, &before, &db, kind == DbKind::Mysql)) {
             use complete::HintMode;
             let after = lines.get(row).and_then(|l| l.chars().nth(col));
@@ -3168,7 +3168,7 @@ impl App {
             let hints_cache = &self.hints;
             let fresh = |k: &str| hints_cache.get(k).filter(|(at, _)| at.elapsed() < std::time::Duration::from_secs(120)).map(|(_, v)| v.clone());
             let mut want = (h.mode, fresh(&key(h.mode)));
-            // 키가 없는 json (객체의 배열 등): 키 대신 많이 나온 키: 값을 @> 조건으로 (연산자째 바꾼다)
+            // JSON without keys (array of objects etc.): instead of keys, frequent key: value pairs as @> conditions (replacing including the operator)
             if h.mode == HintMode::Keys && want.1.as_ref().is_some_and(|v| v.is_empty()) && kind != DbKind::Mysql {
                 want = (HintMode::Pairs, fresh(&key(HintMode::Pairs)));
             }
@@ -3201,7 +3201,7 @@ impl App {
             return;
         }
         let (prefix, items) = complete::suggest(meta.as_deref().unwrap_or(&empty), &stmt, &before, &db);
-        // 자동으로 열 때는 '.' 뒤이거나 단어를 치는 중일 때만
+        // Auto-open only after '.' or while typing a word
         let keep = explicit || prefix > 0 || before.ends_with('.');
         c.complete = if items.is_empty() || !keep { None } else { Some(Completion { items, sel: 0, prefix }) };
         if explicit && c.complete.is_none() {
@@ -3209,7 +3209,7 @@ impl App {
         }
     }
 
-    /// 고른 후보로 커서 앞 단어를 바꾼다
+    /// Replace the word before the cursor with the picked candidate
     pub fn accept_completion(&mut self) {
         let Some(TabKind::Console(c)) = self.tabs.get_mut(self.active).map(|t| &mut t.kind) else { return };
         let Some(cmp) = c.complete.take() else { return };
@@ -3220,7 +3220,7 @@ impl App {
         c.editor.insert_str(&item.insert);
     }
 
-    /// 키맵을 keymap.json 에 저장
+    /// Save the keymap to keymap.json
     pub fn save_keys(&mut self) -> Result<(), String> {
         self.state.store.save_keymap("tui", &self.keys.overrides()).map_err(err)
     }
@@ -3236,7 +3236,7 @@ impl App {
     }
 }
 
-/// 12.3 s · 1 m 05 s (GUI 의 RunningBar 와 같게)
+/// 12.3 s · 1 m 05 s (same as the GUI's RunningBar)
 pub fn elapsed_text(ms: u64) -> String {
     if ms < 60_000 {
         format!("{:.1} s", ms as f64 / 1000.0)
@@ -3247,7 +3247,7 @@ pub fn elapsed_text(ms: u64) -> String {
 }
 
 impl App {
-    /// 이 탭이 실행 · 불러오는 중이면 지난 시간 (처음 본 때부터)
+    /// Elapsed time if this tab is running · loading (since first seen)
     pub fn run_elapsed(&mut self, idx: usize) -> Option<std::time::Duration> {
         let t = self.tabs.get(idx)?;
         let running = match &t.kind {
@@ -3262,7 +3262,7 @@ impl App {
         Some(self.run_since.entry(t.id).or_insert_with(std::time::Instant::now).elapsed())
     }
 
-    /// 실행 중인 탭이 있으면 지난 시간을 다시 그려야 한다
+    /// If a tab is running, the elapsed time needs redrawing
     pub fn any_running(&self) -> bool {
         self.tabs.iter().any(|t| matches!(&t.kind, TabKind::Console(c) if c.running) || matches!(&t.kind, TabKind::Table(tt) if tt.running))
     }
@@ -3284,7 +3284,7 @@ pub fn selected_text(lines: &[String], r0: usize, c0: usize, r1: usize, c1: usiz
     full[a.min(b)..a.max(b)].to_string()
 }
 
-/// Redis 값 → 그리드 (string 은 None: 텍스트로 보여 준다)
+/// Redis value → grid (None for string: shown as text)
 pub fn redis_grid(d: &KeyDetail) -> Option<Grid> {
     let arr = d.value.as_array()?;
     let (names, rows): (Vec<&str>, Vec<Vec<Value>>) = match d.ty.as_str() {
@@ -3307,7 +3307,7 @@ pub fn redis_grid(d: &KeyDetail) -> Option<Grid> {
     Some(Grid::new(result))
 }
 
-/// 폼에 보일 MCP 노출 (정하지 않은 예전 소스는 지금 동작대로)
+/// MCP exposure shown in the form (old sources without a setting keep current behavior)
 fn mcp_label(c: &ConnectionConfig) -> &'static str {
     match c.options.mcp.as_deref() {
         Some("off") => "off",

@@ -1,9 +1,9 @@
-//! 비밀번호 저장소: 앱 설정 폴더의 암호화 파일 (키체인 팝업을 피하기 위해).
+//! Password store: an encrypted file in the app config folder (to avoid keychain popups).
 //! - secrets.json: { key: base64(nonce(12) || AES-256-GCM ciphertext) }
-//! - secret.key  : 32바이트 랜덤 키
-//! 두 파일 모두 권한 0600. 같은 사용자 권한으로 파일을 읽으면 복호화할 수 있다 (DBeaver 수준).
-//! 설정에서 마스터 키를 OS 키체인 (macOS Keychain · Secret Service · Windows Credential Manager) 으로 옮길 수 있다:
-//! 그러면 secret.key 대신 secret.key.keychain 표시 파일이 남고, 키 하나만 키체인에 있다 (비밀번호는 그대로 secrets.json).
+//! - secret.key  : 32-byte random key
+//! Both files have permission 0600. Anyone reading the files as the same user can decrypt them (DBeaver level).
+//! In settings, the master key can be moved to the OS keychain (macOS Keychain · Secret Service · Windows Credential Manager):
+//! then a secret.key.keychain marker file remains instead of secret.key, and only the key is in the keychain (passwords stay in secrets.json).
 use crate::error::{AppError, AppResult};
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
@@ -16,12 +16,12 @@ use std::path::{Path, PathBuf};
 pub struct SecretFile {
     path: PathBuf,
     dir: PathBuf,
-    /// 키체인 모드는 처음 비밀번호가 필요할 때 연다 (앱 시작은 키체인과 상관없이. 못 열면 그 이유)
+    /// Keychain mode opens it when a password is first needed (the app starts regardless of the keychain; if it can't open, the reason)
     cipher: std::sync::OnceLock<Result<Aes256Gcm, String>>,
     vault: std::sync::Arc<dyn KeyVault + Send + Sync>,
 }
 
-/// 마스터 키를 둔 곳
+/// Where the master key is kept
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum KeyLocation {
@@ -29,20 +29,20 @@ pub enum KeyLocation {
     Keychain,
 }
 
-/// 마스터 키 하나를 넣어 두는 OS 저장소 (테스트는 메모리)
+/// OS store holding the single master key (memory in tests)
 pub trait KeyVault {
     fn get(&self, account: &str) -> AppResult<Option<Vec<u8>>>;
     fn set(&self, account: &str, key: &[u8]) -> AppResult<()>;
     fn delete(&self, account: &str) -> AppResult<()>;
 }
 
-/// OS 키체인
+/// OS keychain
 pub struct OsKeychain;
 
 const KEYCHAIN_SERVICE: &str = "Qurry";
 const KEYCHAIN_MARKER: &str = "secret.key.keychain";
 
-/// 키체인 호출은 따로 스레드에서 (리눅스 Secret Service 는 안에서 런타임을 돌려서, tokio 스레드에서 부르면 멈춘다)
+/// Keychain calls run on a separate thread (Linux Secret Service runs its own runtime inside, so calling it from a tokio thread hangs)
 fn off_runtime<T: Send>(f: impl FnOnce() -> T + Send) -> T {
     std::thread::scope(|s| s.spawn(f).join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
 }
@@ -69,12 +69,12 @@ impl KeyVault for OsKeychain {
     }
 }
 
-/// 새 키체인 항목 이름: 설정 폴더마다 따로 (--config-dir 로 띄운 MCP · 테스트가 섞이지 않게)
+/// New keychain entry name: separate per config folder (so MCP launched with --config-dir and tests don't mix)
 fn new_keychain_account(dir: &Path) -> String {
     format!("password key — {}", fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf()).display())
 }
 
-/// 지금 쓰는 키체인 항목 이름: 옮길 때 표시 파일에 적어 둔 것 (폴더를 옮기거나 다른 경로로 열어도 같은 항목)
+/// Keychain entry name in use: the one written to the marker file when moved (same entry even if the folder moves or is opened via another path)
 fn keychain_account(dir: &Path) -> String {
     fs::read_to_string(dir.join(KEYCHAIN_MARKER)).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| new_keychain_account(dir))
 }
@@ -83,7 +83,7 @@ pub fn key_location(dir: &Path) -> KeyLocation {
     if dir.join(KEYCHAIN_MARKER).exists() { KeyLocation::Keychain } else { KeyLocation::File }
 }
 
-/// 마스터 키를 옮긴다 (비밀번호는 다시 암호화하지 않는다: 같은 키). 키체인에 넣으면 읽어 확인한 뒤 secret.key 를 지운다
+/// Move the master key (passwords are not re-encrypted: same key). When moving into the keychain, read it back to verify, then delete secret.key
 pub fn move_key(dir: &Path, to: KeyLocation, vault: &dyn KeyVault) -> AppResult<()> {
     let (key_path, marker) = (dir.join("secret.key"), dir.join(KEYCHAIN_MARKER));
     match (key_location(dir), to) {
@@ -96,7 +96,7 @@ pub fn move_key(dir: &Path, to: KeyLocation, vault: &dyn KeyVault) -> AppResult<
                 return Err(AppError::Msg("The system keychain didn't keep the key — it stays in the file".into()));
             }
             write_private(&marker, account.as_bytes())?;
-            // 파일을 못 지우면 되돌린다 (표시 파일만 남으면 키를 두 곳에서 찾게 된다)
+            // If the file can't be deleted, revert (with only the marker file left, the key would be looked up in two places)
             if let Err(e) = fs::remove_file(&key_path) {
                 let _ = fs::remove_file(&marker);
                 let _ = vault.delete(&account);
@@ -115,7 +115,7 @@ pub fn move_key(dir: &Path, to: KeyLocation, vault: &dyn KeyVault) -> AppResult<
     Ok(())
 }
 
-/// 본인만 읽는 파일로 쓴다: 처음부터 0600 으로 만든 임시 파일에 쓰고 rename (잠깐이라도 0644 로 열려 있지 않게, 도중에 깨지지 않게)
+/// Write an owner-only file: write to a temp file created as 0600 from the start, then rename (never open as 0644 even briefly, and no partial writes)
 pub(crate) fn write_private(path: &Path, data: &[u8]) -> AppResult<()> {
     use std::io::Write;
     if let Some(dir) = path.parent() {
@@ -137,7 +137,7 @@ pub(crate) fn write_private(path: &Path, data: &[u8]) -> AppResult<()> {
     Ok(())
 }
 
-/// 설정 폴더: 본인만 들어갈 수 있게 0700
+/// Config folder: 0700 so only the owner can enter
 pub(crate) fn private_dir(dir: &Path) -> AppResult<()> {
     fs::create_dir_all(dir)?;
     #[cfg(unix)]
@@ -156,7 +156,7 @@ impl SecretFile {
     pub fn open_with(dir: &Path, vault: std::sync::Arc<dyn KeyVault + Send + Sync>) -> AppResult<Self> {
         private_dir(dir)?;
         let me = |cipher: std::sync::OnceLock<Result<Aes256Gcm, String>>| Self { path: dir.join("secrets.json"), dir: dir.to_path_buf(), cipher, vault: vault.clone() };
-        // 키체인 모드: 지금은 열지 않는다 (잠겨 있거나 SSH · 헤드리스여도 앱은 뜬다)
+        // Keychain mode: don't open it now (the app starts even if locked, over SSH, or headless)
         if key_location(dir) == KeyLocation::Keychain {
             return Ok(me(std::sync::OnceLock::new()));
         }
@@ -164,11 +164,11 @@ impl SecretFile {
         let secrets_path = dir.join("secrets.json");
         let key: Vec<u8> = match fs::read(&key_path) {
             Ok(k) if k.len() == 32 => k,
-            // 있는데 못 읽거나 길이가 틀리면 새로 만들지 않는다 (덮어쓰면 저장된 비밀번호를 영영 못 푼다)
+            // If it exists but can't be read or has the wrong length, don't create a new one (overwriting would make stored passwords undecryptable forever)
             Ok(_) => return Err(AppError::Msg(format!("{} is corrupted — restore it from a backup, or delete it and secrets.json to start over", key_path.display()))),
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(AppError::Msg(format!("Cannot read {}: {e}", key_path.display()))),
             Err(_) => {
-                // 키 없이 비밀번호 파일만 남아 있으면 지우지 말고 옆으로 치워 둔다
+                // If only the password file is left without a key, move it aside instead of deleting it
                 if secrets_path.exists() {
                     let _ = fs::rename(&secrets_path, dir.join(format!("secrets.json.orphaned-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0))));
                 }
@@ -181,12 +181,12 @@ impl SecretFile {
         Ok(me(std::sync::OnceLock::from(Ok(Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key))))))
     }
 
-    /// 키를 지금 읽어 둔다 (키를 옮기기 전: 옮긴 뒤에도 이 저장소가 같은 키를 쓰게)
+    /// Read the key now (before moving the key: so this store keeps using the same key after the move)
     pub fn ensure_key(&self) -> AppResult<()> {
         self.cipher().map(|_| ())
     }
 
-    /// 암호 키: 키체인 모드면 처음 부를 때 키체인에서 (못 읽으면 이유, 새 키는 만들지 않는다 — 저장된 비밀번호를 못 풀게 된다)
+    /// Encryption key: in keychain mode, read from the keychain on first call (if it can't be read, the reason; no new key is created — stored passwords would become undecryptable)
     fn cipher(&self) -> AppResult<&Aes256Gcm> {
         self.cipher
             .get_or_init(|| match self.vault.get(&keychain_account(&self.dir)) {
@@ -198,7 +198,7 @@ impl SecretFile {
             .map_err(|e| AppError::Msg(e.clone()))
     }
 
-    /// 없으면 빈 목록. 읽을 수 없거나 깨졌으면 오류 (빈 목록으로 보고 저장하면 나머지 비밀번호가 다 사라진다)
+    /// Empty list if missing. Error if unreadable or corrupt (treating it as empty and saving would wipe all other passwords)
     fn load(&self) -> AppResult<HashMap<String, String>> {
         match fs::read_to_string(&self.path) {
             Ok(s) => serde_json::from_str(&s).map_err(|e| AppError::Msg(format!("{} is damaged ({e}) — saved passwords can't be read. Restore it from a backup, or move it away to start over", self.path.display()))),
@@ -207,7 +207,7 @@ impl SecretFile {
         }
     }
 
-    /// GUI · TUI · MCP 가 함께 쓰는 파일: 읽고 고쳐 쓰는 동안 잠근다 (동시에 저장해도 한쪽이 사라지지 않게)
+    /// File shared by GUI · TUI · MCP: locked while reading and rewriting (so concurrent saves don't lose one side)
     fn locked<T>(&self, f: impl FnOnce(&mut HashMap<String, String>) -> AppResult<(T, bool)>) -> AppResult<T> {
         let lock = fs::OpenOptions::new().create(true).truncate(false).write(true).open(self.path.with_extension("json.lock"))?;
         lock.lock()?;
@@ -231,18 +231,18 @@ impl SecretFile {
         Ok(base64::engine::general_purpose::STANDARD.encode(raw))
     }
 
-    /// (값, 예전 형식이었는지)
+    /// (value, whether it was the old format)
     fn open_entry(&self, cipher: &Aes256Gcm, name: &str, enc: &str) -> Option<(String, bool)> {
         let raw = base64::engine::general_purpose::STANDARD.decode(enc).ok()?;
         if raw.len() < 12 {
             return None;
         }
         let (nonce, ct) = raw.split_at(12);
-        // 이름을 AAD 로 묶어 둔다 (다른 항목의 암호문을 옮겨 붙이면 풀리지 않게)
+        // Bind the name as AAD (so ciphertext moved from another entry doesn't decrypt)
         if let Ok(pt) = cipher.decrypt(Nonce::from_slice(nonce), Payload { msg: ct, aad: name.as_bytes() }) {
             return String::from_utf8(pt).ok().map(|s| (s, false));
         }
-        // 예전 형식 (AAD 없음): 읽으면 바로 새 형식으로 다시 저장한다. 0.4 에서 이 폴백을 뺀다 (그때까지 쓴 항목은 다 바뀌어 있다)
+        // Old format (no AAD): re-saved in the new format as soon as it is read. This fallback is removed in 0.4 (by then all used entries will have been converted)
         String::from_utf8(cipher.decrypt(Nonce::from_slice(nonce), ct).ok()?).ok().map(|s| (s, true))
     }
 
@@ -290,7 +290,7 @@ mod tests {
         assert_eq!(s.get("a").unwrap(), None);
         s.set("a", Some("p@ss 한글")).unwrap();
         s.set("b#ssh", Some("x")).unwrap();
-        // 다시 열어도(키 파일 재사용) 복호화돼야 함
+        // Must still decrypt after reopening (key file reused)
         let s2 = SecretFile::open(&dir).unwrap();
         assert_eq!(s2.get("a").unwrap().as_deref(), Some("p@ss 한글"));
         assert!(!std::fs::read_to_string(dir.join("secrets.json")).unwrap().contains("p@ss"));
@@ -307,7 +307,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// 깨진 파일은 덮어쓰지 않는다 (저장된 비밀번호가 다 사라지지 않게)
+    /// A corrupt file is not overwritten (so stored passwords aren't all lost)
     #[test]
     fn damaged_file_is_kept() {
         let dir = std::env::temp_dir().join(format!("dbtool-secrets-{}", uuid::Uuid::new_v4()));
@@ -320,7 +320,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// GUI · TUI · MCP 가 동시에 저장해도 다 남는다
+    /// Concurrent saves from GUI · TUI · MCP all survive
     #[test]
     fn concurrent_sets_keep_every_entry() {
         let dir = std::env::temp_dir().join(format!("dbtool-secrets-{}", uuid::Uuid::new_v4()));
@@ -348,7 +348,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// 메모리 키체인 (테스트)
+    /// In-memory keychain (tests)
     #[derive(Default)]
     struct MemVault(std::sync::Mutex<HashMap<String, Vec<u8>>>);
     impl KeyVault for MemVault {
@@ -365,7 +365,7 @@ mod tests {
         }
     }
 
-    /// 마스터 키를 키체인으로 옮겨도 · 되돌려도 저장된 비밀번호가 그대로 풀린다. 키체인에 없으면 새 키를 만들지 않는다
+    /// Stored passwords still decrypt after moving the master key to the keychain · and back. If missing from the keychain, no new key is created
     #[test]
     fn master_key_moves_between_file_and_keychain() {
         let dir = std::env::temp_dir().join(format!("dbtool-secrets-{}", uuid::Uuid::new_v4()));
@@ -375,7 +375,7 @@ mod tests {
         assert_eq!(key_location(&dir), KeyLocation::Keychain);
         assert!(!dir.join("secret.key").exists());
         assert_eq!(SecretFile::open_with(&dir, vault.clone()).unwrap().get("a").unwrap().as_deref(), Some("pw"));
-        // 키체인에 키가 없어도 연다 (앱은 뜬다), 비밀번호를 쓸 때 이유를 알린다. 새 키는 만들지 않는다
+        // Opens even without a key in the keychain (the app starts); the reason is reported when a password is used. No new key is created
         let empty = SecretFile::open_with(&dir, std::sync::Arc::new(MemVault::default())).unwrap();
         assert!(empty.get("a").is_err() && empty.set("b", Some("x")).is_err());
         assert!(empty.contains("a"));
@@ -387,7 +387,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// 예전 형식 (AAD 없음) 은 한 번 읽으면 새 형식으로 바뀐다 (옮겨 붙인 암호문은 다시 풀리지 않는다)
+    /// The old format (no AAD) is converted to the new format once read (moved ciphertext no longer decrypts)
     #[test]
     fn legacy_entries_are_upgraded() {
         let dir = std::env::temp_dir().join(format!("dbtool-secrets-{}", uuid::Uuid::new_v4()));
@@ -400,7 +400,7 @@ mod tests {
         assert_eq!(s.get("a").unwrap().as_deref(), Some("old"));
         let now: HashMap<String, String> = serde_json::from_str(&std::fs::read_to_string(dir.join("secrets.json")).unwrap()).unwrap();
         assert_ne!(now["a"], enc);
-        // 다른 이름으로 옮겨 붙이면 풀리지 않는다
+        // Moved under a different name, it doesn't decrypt
         std::fs::write(dir.join("secrets.json"), serde_json::json!({ "b": now["a"] }).to_string()).unwrap();
         assert_eq!(s.get("b").unwrap(), None);
         let _ = std::fs::remove_dir_all(dir);

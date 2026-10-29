@@ -1,10 +1,10 @@
-//! 접속 설정 저장소 (JSON 파일). 비밀번호는 secrets.rs 의 암호화 파일에 둔다.
+//! Connection settings store (JSON file). Passwords go in the encrypted file in secrets.rs.
 use crate::error::AppResult;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::{fs, path::PathBuf};
 
-/// 단축키 사용자 설정: 액션 id → 키 목록 (기본값과 다른 것만)
+/// User keyboard shortcut settings: action id → key list (only those differing from the defaults)
 pub type Keymap = BTreeMap<String, Vec<String>>;
 
 
@@ -14,21 +14,21 @@ pub enum DbKind {
     Postgres,
     Mysql,
     Redis,
-    // 아래는 드라이버 플러그인 (필요할 때 받는다): crate::plugin
+    // Below are driver plugins (downloaded when needed): crate::plugin
     Sqlite,
     Mssql,
     Clickhouse,
     Duckdb,
     Mongodb,
     Oracle,
-    // 벡터 DB (REST)
+    // Vector DBs (REST)
     Qdrant,
     Chroma,
     Milvus,
 }
 
 impl DbKind {
-    /// 드라이버 플러그인 이름 (기본으로 들어 있는 PG·MySQL·Redis 는 None)
+    /// Driver plugin name (None for the built-in PG·MySQL·Redis)
     pub fn driver(self) -> Option<&'static str> {
         match self {
             DbKind::Postgres | DbKind::Mysql | DbKind::Redis => None,
@@ -44,17 +44,17 @@ impl DbKind {
         }
     }
 
-    /// DB 가 곧 스키마 (트리에 스키마 단계가 없다)
+    /// The DB is the schema (no schema level in the tree)
     pub fn flat(self) -> bool {
         matches!(self, DbKind::Mysql | DbKind::Redis | DbKind::Sqlite | DbKind::Clickhouse | DbKind::Mongodb | DbKind::Qdrant | DbKind::Chroma | DbKind::Milvus)
     }
 
-    /// 파일 하나가 DB 인 것 (호스트·포트 대신 파일 경로)
+    /// A single file is the DB (file path instead of host·port)
     pub fn is_file(self) -> bool {
         matches!(self, DbKind::Sqlite | DbKind::Duckdb)
     }
 
-    /// 벡터 DB: 콘솔이 SQL 이 아니라 REST (METHOD /path + JSON)
+    /// Vector DB: the console is REST (METHOD /path + JSON), not SQL
     pub fn is_vector(self) -> bool {
         matches!(self, DbKind::Qdrant | DbKind::Chroma | DbKind::Milvus)
     }
@@ -72,30 +72,30 @@ pub struct ConnectionConfig {
     pub user: String,
     #[serde(default)]
     pub database: String,
-    /// 트리에 보일 DB·스키마 (DataGrip Data Source 속성의 Schemas 탭). 비어 있으면 전부.
+    /// DBs·schemas shown in the tree (Schemas tab of the DataGrip Data Source properties). Empty means all.
     #[serde(default)]
     pub scope: Scope,
-    /// 키체인에 비밀번호를 저장했는지 (목록 표시용 — 키체인을 읽지 않기 위해)
+    /// Whether the password was saved in the keychain (for list display — to avoid reading the keychain)
     #[serde(default)]
     pub password_saved: bool,
     #[serde(default)]
     pub ssh_secret_saved: bool,
-    /// SSH 터널 (DataGrip의 SSH/SSL 탭)
+    /// SSH tunnel (DataGrip's SSH/SSL tab)
     #[serde(default)]
     pub ssh: Option<SshConfig>,
-    /// DataGrip처럼 접속을 색으로 구분 (예: "#5c2b2b"). 없으면 기본색.
+    /// Color-code the connection like DataGrip (e.g. "#5c2b2b"). Default color if absent.
     #[serde(default)]
     pub color: Option<String>,
-    /// DataGrip Options 탭의 Read-only: 세션을 읽기 전용 트랜잭션으로 연다 (서버가 쓰기를 거부)
+    /// Read-only from DataGrip's Options tab: open the session as a read-only transaction (the server rejects writes)
     #[serde(default)]
     pub read_only: bool,
-    /// DataGrip Options 탭의 나머지 Connection 설정
+    /// The remaining Connection settings from DataGrip's Options tab
     #[serde(default)]
     pub options: ConnOptions,
-    /// SSH/SSL 탭의 SSL (PostgreSQL·MySQL·Redis 공통)
+    /// SSL from the SSH/SSL tab (shared by PostgreSQL·MySQL·Redis)
     #[serde(default)]
     pub ssl: Option<SslConfig>,
-    /// Redis 연결 방식 (Standalone / Sentinel / Cluster)
+    /// Redis connection mode (Standalone / Sentinel / Cluster)
     #[serde(default)]
     pub redis: Option<RedisMode>,
 }
@@ -105,7 +105,7 @@ pub struct ConnectionConfig {
 pub struct SslConfig {
     #[serde(default)]
     pub enabled: bool,
-    /// require (암호화만, 인증서 검증 안 함) | verify-ca | verify-full (호스트 이름까지)
+    /// require (encryption only, no certificate check) | verify-ca | verify-full (host name too)
     #[serde(default)]
     pub mode: String,
     #[serde(default)]
@@ -128,10 +128,10 @@ pub struct RedisMode {
     /// standalone | sentinel | cluster
     #[serde(default)]
     pub mode: String,
-    /// Sentinel 이 감시하는 마스터 이름
+    /// Master name watched by Sentinel
     #[serde(default)]
     pub sentinel_master: String,
-    /// sentinel: Sentinel 노드들 / cluster: 추가 시드 노드들 ("host:port", 쉼표·공백 구분)
+    /// sentinel: Sentinel nodes / cluster: extra seed nodes ("host:port", separated by commas·spaces)
     #[serde(default)]
     pub nodes: String,
 }
@@ -139,40 +139,40 @@ pub struct RedisMode {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnOptions {
-    /// 새 콘솔의 기본 Tx 모드 (Transaction control: Manual)
+    /// Default Tx mode for new consoles (Transaction control: Manual)
     #[serde(default)]
     pub tx_manual: bool,
-    /// 기본 격리 수준: "read uncommitted" | "read committed" | "repeatable read" | "serializable" (None = 서버 기본)
+    /// Default isolation level: "read uncommitted" | "read committed" | "repeatable read" | "serializable" (None = server default)
     #[serde(default)]
     pub isolation: Option<String>,
-    /// Switch schema: "auto" | "manual" | "disable" (프론트에서 사용)
+    /// Switch schema: "auto" | "manual" | "disable" (used by the frontend)
     #[serde(default)]
     pub switch_schema: Option<String>,
-    /// 세션 TimeZone (None = 서버 기본)
+    /// Session TimeZone (None = server default)
     #[serde(default)]
     pub time_zone: Option<String>,
     /// Run keep-alive query each N seconds
     #[serde(default)]
     pub keep_alive_secs: Option<u32>,
-    /// Auto-disconnect after N seconds (유휴)
+    /// Auto-disconnect after N seconds (idle)
     #[serde(default)]
     pub auto_disconnect_secs: Option<u32>,
-    /// Single database mode: 기본 DB만 보이고 쓴다
+    /// Single database mode: only the default DB is shown and used
     #[serde(default)]
     pub single_db: bool,
-    /// Startup script: 연결마다 접속 직후 실행
+    /// Startup script: run right after each connection is made
     #[serde(default)]
     pub startup_script: String,
-    /// Production: 데이터를 바꾸는 문장은 바뀔 행 수를 보여 주고 확인을 받는다
+    /// Production: statements that change data show the affected row count and ask for confirmation
     #[serde(default)]
     pub confirm_changes: bool,
-    /// SSL 을 정하지 않은 원격 MySQL 이 TLS 를 못 하면 평문으로 붙어도 된다 (예전 서버 · 믿는 네트워크)
+    /// A remote MySQL with no SSL setting may connect in plain text if it can't do TLS (old servers · trusted networks)
     #[serde(default)]
     pub allow_plaintext: bool,
-    /// MCP 서버에 보이는지: "off" | "read" | "write" (None = 정하기 전에 만든 소스, ConnectionConfig::mcp_access)
+    /// Whether it's visible to the MCP server: "off" | "read" | "write" (None = source created before this was set, ConnectionConfig::mcp_access)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp: Option<String>,
-    /// Oracle: Instant Client 폴더 (비면 ORACLE_CLIENT_LIB_DIR · 시스템 기본)
+    /// Oracle: Instant Client folder (if empty, ORACLE_CLIENT_LIB_DIR · system default)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oracle_client: Option<String>,
 }
@@ -180,10 +180,10 @@ pub struct ConnOptions {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Scope {
-    /// None = 모든 DB
+    /// None = all DBs
     #[serde(default)]
     pub databases: Option<Vec<String>>,
-    /// DB 이름 → 보일 스키마 (없으면 전부)
+    /// DB name → schemas to show (all if absent)
     #[serde(default)]
     pub schemas: std::collections::HashMap<String, Vec<String>>,
 }
@@ -191,7 +191,7 @@ pub struct Scope {
 pub const SCOPE_ALL: &str = "*";
 pub const SCOPE_DEFAULT: &str = "@default";
 
-/// 트리에 보일 DB·스키마 규칙 (GUI src/lib/api.ts 의 dbVisible / schemaVisible 와 같다)
+/// Rules for which DBs·schemas show in the tree (same as dbVisible / schemaVisible in GUI src/lib/api.ts)
 impl Scope {
     pub fn db_visible(&self, db: &str, default_db: &str) -> bool {
         match self.databases.as_deref() {
@@ -252,15 +252,15 @@ impl ConnectionConfig {
         self.ssh.as_ref().filter(|s| s.enabled && !s.host.is_empty())
     }
 
-    /// 저장된 SSH 비밀을 보내도 되는 같은 SSH 서버인지
+    /// Whether this is the same SSH server, so the saved SSH secret may be sent
     pub fn same_ssh(&self, other: &ConnectionConfig) -> bool {
         let t = |c: &ConnectionConfig| c.ssh.as_ref().map(|s| (s.host.trim().to_lowercase(), s.port, s.user.clone()));
         t(self) == t(other)
     }
 
-    /// self(저장된 설정) 의 비밀번호를 other 로 보내도 되는지: 같은 종류 · 서버 · 사용자 · SSH 터널이고, TLS 를 끄지 않았다.
-    /// 호스트만 바꿔 Test 를 누르거나 같은 id 로 다른 서버를 가져와도 예전 비밀번호가 새 서버로 가지 않게
-    /// Redis Sentinel · Cluster 노드도 서버다. SSL 은 끄거나 검증을 낮추거나 CA 를 바꾸면 다른 서버로 본다
+    /// Whether self's (saved settings) password may be sent to other: same kind · server · user · SSH tunnel, and TLS not turned off.
+    /// So an old password doesn't go to a new server when only the host is changed before Test, or a different server is imported with the same id
+    /// Redis Sentinel · Cluster nodes are servers too. Turning SSL off, lowering verification, or changing the CA counts as a different server
     pub fn same_server(&self, other: &ConnectionConfig) -> bool {
         let t = |c: &ConnectionConfig| {
             let redis = c.redis.as_ref().map(|r| (r.mode.clone(), r.sentinel_master.clone(), r.nodes.split([',', ' ']).filter(|n| !n.is_empty()).map(|n| n.to_lowercase()).collect::<Vec<_>>()));
@@ -277,20 +277,20 @@ impl ConnectionConfig {
     }
 }
 
-/// SSH 비밀번호/키 passphrase 의 저장 키
-/// MCP 서버가 이 Data Source 로 할 수 있는 것
+/// Storage key for the SSH password/key passphrase
+/// What the MCP server may do with this Data Source
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum McpAccess {
-    /// 목록에도 없고 접속·비밀번호도 쓰지 않는다
+    /// Not listed, and its connection·password are not used
     Off,
     Read,
-    /// --allow-write 로 띄웠을 때 execute 도
+    /// Also execute, when started with --allow-write
     Write,
 }
 
 impl ConnectionConfig {
-    /// MCP 노출. 정하지 않은 예전 소스는 Production 이면 숨기고, 아니면 예전처럼 (읽기, --allow-write 면 쓰기).
-    /// Read-only Data Source 는 쓰기가 없다
+    /// MCP exposure. Old sources without a setting are hidden if Production, otherwise as before (read, write with --allow-write).
+    /// Read-only Data Sources have no write
     pub fn mcp_access(&self, allow_write: bool) -> McpAccess {
         let a = match self.options.mcp.as_deref() {
             Some("off") => McpAccess::Off,
@@ -307,7 +307,7 @@ pub fn ssh_secret_key(id: &str) -> String {
     format!("{id}#ssh")
 }
 
-/// Export 파일 형식. 비밀번호는 포함하지 않는다.
+/// Export file format. Passwords are not included.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExportFile {
     pub app: String,
@@ -359,7 +359,7 @@ impl Store {
         Ok(n)
     }
 
-    /// 같은 id는 덮어쓰고 새 id는 추가한다. 반환값: (추가, 갱신)
+    /// Overwrite the same id, add new ids. Returns: (added, updated)
     fn read_import(path: &std::path::Path) -> AppResult<Vec<ConnectionConfig>> {
         let text = fs::read_to_string(path)?;
         Ok(match serde_json::from_str::<ExportFile>(&text) {
@@ -368,7 +368,7 @@ impl Store {
         })
     }
 
-    /// 가져오기 전에 무엇이 바뀌는지 (남이 준 파일이 Read-only 를 끄거나 접속 시 실행할 SQL 을 넣을 수 있다)
+    /// What changes before importing (a file from someone else can turn off Read-only or add SQL to run on connect)
     pub fn import_preview(&self, path: &std::path::Path) -> AppResult<Vec<String>> {
         let all = self.list()?;
         let mut out = vec![];
@@ -445,7 +445,7 @@ impl Store {
         Ok(out)
     }
 
-    /// (추가, 변경, 비밀번호를 지울 소스: (id, DB 비밀번호, SSH 비밀)). 저장 여부 플래그는 파일이 아니라 지금 값을 따른다
+    /// (added, changed, sources whose passwords to delete: (id, DB password, SSH secret)). The saved flags follow the current values, not the file
     pub fn import_from(&self, path: &std::path::Path) -> AppResult<(usize, usize, Vec<(String, bool, bool)>)> {
         let incoming = Self::read_import(path)?;
         let mut all = self.list()?;
@@ -456,7 +456,7 @@ impl Store {
             }
             match all.iter_mut().find(|e| e.id == c.id) {
                 Some(e) => {
-                    // 플래그와 상관없이 (예전 가져오기로 플래그만 꺼진 항목도) 다른 서버면 지울 목록에
+                    // Regardless of the flags (including entries whose flag alone was cleared by an old import), a different server goes on the delete list
                     let (pw, ssh) = (!e.same_server(&c), !e.same_ssh(&c));
                     c.password_saved = e.password_saved && !pw;
                     c.ssh_secret_saved = e.ssh_secret_saved && !ssh;
@@ -467,7 +467,7 @@ impl Store {
                     updated += 1;
                 }
                 None => {
-                    // 새 소스에는 저장된 비밀번호가 없고, MCP 는 정해 오지 않았으면 Off
+                    // New sources have no saved password, and MCP is Off unless the file sets it
                     c.password_saved = false;
                     c.ssh_secret_saved = false;
                     if c.options.mcp.is_none() {
@@ -482,7 +482,7 @@ impl Store {
         Ok((added, updated, forget))
     }
 
-    /// 설정 폴더 (connections.json 이 있는 곳)
+    /// Config folder (where connections.json lives)
     pub fn dir(&self) -> PathBuf {
         self.path.parent().map(|p| p.to_path_buf()).unwrap_or_default()
     }
@@ -491,7 +491,7 @@ impl Store {
         self.path.with_file_name("keymap.json")
     }
 
-    /// keymap.json 의 한 구역 ("gui" / "tui"). 파일이 없으면 빈 설정
+    /// One section of keymap.json ("gui" / "tui"). Empty settings if the file doesn't exist
     pub fn keymap(&self, section: &str) -> AppResult<Keymap> {
         let path = self.keymap_path();
         if !path.exists() {
@@ -501,7 +501,7 @@ impl Store {
         Ok(all.remove(section).unwrap_or_default())
     }
 
-    /// 한 구역만 바꾸고 다른 구역(GUI ↔ TUI)은 그대로 둔다
+    /// Change only one section and leave the other (GUI ↔ TUI) as is
     pub fn save_keymap(&self, section: &str, map: &Keymap) -> AppResult<()> {
         let path = self.keymap_path();
         let mut all: BTreeMap<String, Keymap> = if path.exists() { serde_json::from_str(&fs::read_to_string(&path)?)? } else { BTreeMap::new() };
@@ -513,9 +513,9 @@ impl Store {
         Ok(())
     }
 
-    /// 열어 둔 탭·화면 분할 (DataGrip 처럼 다시 켜면 그대로). client = "gui" / "tui", 파일을 따로 둔다 (동시에 써도 서로 덮지 않게).
-    /// 콘솔 SQL 이 들어가므로 0600. 내용은 클라이언트가 정한다
-    /// 설정 폴더 안의 파일
+    /// Open tabs·split layout (restored on restart, like DataGrip). client = "gui" / "tui", in separate files (so concurrent writes don't overwrite each other).
+    /// 0600 since it contains console SQL. The content is up to the client
+    /// A file in the config folder
     pub(crate) fn file(&self, name: &str) -> PathBuf {
         self.path.with_file_name(name)
     }
@@ -533,7 +533,7 @@ impl Store {
         if let Some(dir) = self.path.parent() {
             fs::create_dir_all(dir)?;
         }
-        // 호스트·사용자·SSH 키 경로가 들어 있다 → 본인만 읽게
+        // Contains host·user·SSH key paths → owner-only read
         crate::secrets::write_private(&self.path, serde_json::to_string_pretty(all)?.as_bytes())?;
         Ok(())
     }
@@ -569,10 +569,10 @@ mod tests {
     #[test]
     fn mcp_access_defaults() {
         let mut c: ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "a", "kind": "postgres", "host": "h", "port": 1, "user": "u" })).unwrap();
-        // 예전 소스: 그대로 (읽기, --allow-write 면 쓰기)
+        // Old source: as before (read, write with --allow-write)
         assert_eq!(c.mcp_access(false), McpAccess::Read);
         assert_eq!(c.mcp_access(true), McpAccess::Write);
-        // Production 은 정해 주기 전에는 숨긴다
+        // Production stays hidden until set
         c.options.confirm_changes = true;
         assert_eq!(c.mcp_access(true), McpAccess::Off);
         c.options.mcp = Some("write".into());
@@ -631,7 +631,7 @@ mod tests {
         let b = Store::new(base.join("b"));
         b.save(&conn("2", "old name")).unwrap();
         assert_eq!(b.import_from(&file).unwrap(), (1, 1, vec![]));
-        // 새로 들어온 소스는 MCP Off (파일에 정해 오지 않았으면)
+        // Newly imported sources get MCP Off (unless the file sets it)
         assert_eq!(b.get("1").unwrap().unwrap().options.mcp.as_deref(), Some("off"));
         let names: Vec<_> = b.list().unwrap().into_iter().map(|c| c.name).collect();
         assert_eq!(names, vec!["PROD", "DEV"]);
@@ -639,7 +639,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// 같은 id 로 다른 서버를 가져오면 저장된 비밀번호를 쓰지 않는다 (지울 목록 · 미리보기 경고)
+    /// Importing a different server with the same id doesn't use the saved password (delete list · preview warning)
     #[test]
     fn import_to_another_server_forgets_the_password() {
         let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));

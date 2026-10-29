@@ -1,10 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 
 /**
- * 바꿀 수 있는 GUI 명령 단축키. 기본값은 여기, 사용자 설정은 설정 폴더 keymap.json 의 "gui" (기본값과 다른 것만).
- * 키 표기: "Mod+Shift+L" — Mod = macOS ⌘ / 그 밖 Ctrl, Ctrl = macOS ⌃. 수식키 순서: Mod, Ctrl, Alt, Shift.
- * 키 이름은 물리 키(e.code) 기준이라 한글 입력 상태에서도 같다.
- * scope: global = 어디서나, tree = Database Explorer, editor = 쿼리 콘솔. 같은 범위(또는 global 과 다른 범위)끼리 겹치면 충돌
+ * Rebindable GUI command shortcuts. Defaults live here; user settings go in "gui" of keymap.json in the config folder (only those differing from defaults).
+ * Key notation: "Mod+Shift+L" — Mod = ⌘ on macOS / Ctrl elsewhere, Ctrl = ⌃ on macOS. Modifier order: Mod, Ctrl, Alt, Shift.
+ * Key names follow the physical key (e.code), so they're the same with Korean input active.
+ * scope: global = anywhere, tree = Database Explorer, editor = query console. Overlaps within the same scope (or between global and another scope) are conflicts
  */
 export type Scope = "global" | "tree" | "editor";
 export interface Shortcut {
@@ -78,7 +78,7 @@ export const SCOPE_LABEL: Record<Scope, string> = { global: "Global", tree: "Dat
 const isMac = navigator.platform.toLowerCase().includes("mac");
 const byId = new Map(SHORTCUTS.map((s) => [s.id, s]));
 
-// ───────── 키 표기 ─────────
+// ───────── Key notation ─────────
 
 const CODE_NAMES: Record<string, string> = {
   Slash: "/", Backslash: "\\", Semicolon: ";", Quote: "'", Comma: ",", Period: ".", BracketLeft: "[", BracketRight: "]", Backquote: "`", Minus: "-", Equal: "=",
@@ -93,7 +93,7 @@ function keyName(code: string): string | null {
   return CODE_NAMES[code] ?? null;
 }
 
-/** 키 입력 → 표기. 수식키만 누른 경우는 null */
+/** Key event → notation. null when only modifiers are pressed */
 export function eventSpec(e: { code: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }): string | null {
   const k = keyName(e.code);
   if (!k) return null;
@@ -107,14 +107,14 @@ export function eventSpec(e: { code: string; metaKey: boolean; ctrlKey: boolean;
 
 const MAC_KEYS: Record<string, string> = { Enter: "↩", Backspace: "⌫", Delete: "⌦", Esc: "⎋", Tab: "⇥", Up: "↑", Down: "↓", Left: "←", Right: "→", Space: "Space", PageUp: "⇞", PageDown: "⇟" };
 
-/** 키 표기의 글자: Shift 없는 ⌘/⌃/⌥(Ctrl+/Alt+) + 글자 하나는 소문자 ("⌘k"). 대문자는 Shift 를 눌러야 하는 키 ("⇧⌘A") */
+/** Character in key notation: ⌘/⌃/⌥ (Ctrl+/Alt+) without Shift + a single letter is lowercase ("⌘k"). Uppercase means a key that needs Shift ("⇧⌘A") */
 export function keyLabel(s: string): string {
   return s
     .replace(/([⌃⌥⇧⌘]+)([A-Z])(?![A-Za-z0-9])/g, (m, mods: string, k: string) => (mods.includes("⇧") ? m : mods + k.toLowerCase()))
     .replace(/\b((?:(?:Ctrl|Alt|Shift|Win|Cmd)\+)+)([A-Z])(?![A-Za-z0-9])/g, (m, mods: string, k: string) => (mods.includes("Shift+") ? m : mods + k.toLowerCase()));
 }
 
-/** 화면 표시: macOS 는 ⌃⌥⇧⌘ 기호, 그 밖은 Ctrl+Alt+Shift+ (글자는 keyLabel 규칙) */
+/** Display: ⌃⌥⇧⌘ symbols on macOS, Ctrl+Alt+Shift+ elsewhere (letters follow keyLabel rules) */
 export function formatSpec(spec: string): string {
   return keyLabel(formatSpecRaw(spec));
 }
@@ -130,12 +130,12 @@ function formatSpecRaw(spec: string): string {
   return [...mods, key].join("+");
 }
 
-/** 새로 지정할 수 있는 키: 수식키 조합이나 F 키 (그 밖은 글자 입력·이동과 겹친다. tree 의 Delete 기본값은 Reset 으로 되돌린다) */
+/** Keys that can be newly bound: modifier combos or F keys (others clash with typing·navigation. tree's default Delete is restored with Reset) */
 export function bindable(spec: string): boolean {
   return /^(Mod|Ctrl|Alt)\+/.test(spec) || /(^|\+)F\d{1,2}$/.test(spec);
 }
 
-// ───────── 사용자 설정 ─────────
+// ───────── User settings ─────────
 
 let user: Record<string, string[]> = {};
 const listeners = new Set<() => void>();
@@ -144,7 +144,7 @@ export function bindings(id: string): string[] {
   return user[id] ?? byId.get(id)?.keys ?? [];
 }
 
-/** 현재 키 표시 ("⇧⌘L"). 키가 없으면 "" */
+/** Current key label ("⇧⌘L"). "" if no key */
 export function shortcutLabel(id: string): string {
   return bindings(id).map(formatSpec).join(" / ");
 }
@@ -153,7 +153,7 @@ export function isCustom(id: string): boolean {
   return id in user;
 }
 
-/** 이 키 입력이 명령의 단축키인지 */
+/** Whether this key event is the command's shortcut */
 export function hit(spec: string | null, id: string): boolean {
   return spec !== null && bindings(id).includes(spec);
 }
@@ -180,7 +180,7 @@ export async function loadKeymap() {
 
 const overlaps = (a: Scope, b: Scope) => a === b || a === "global" || b === "global";
 
-/** 같은 키를 쓰는(범위가 겹치는) 다른 명령 */
+/** Other commands using the same key (with overlapping scope) */
 export function conflicts(id: string, spec: string): Shortcut[] {
   const me = byId.get(id);
   if (!me) return [];
@@ -193,7 +193,7 @@ function setKeys(id: string, keys: string[]) {
   else user[id] = keys;
 }
 
-/** 키를 지정한다 (add = 기존 키에 더하기). 겹치는 다른 명령에서는 그 키를 뺀다. 반환: 키를 뺀 명령 */
+/** Bind a key (add = add to existing keys). The key is removed from other overlapping commands. Returns: commands the key was removed from */
 export function bind(id: string, spec: string, add: boolean): Shortcut[] {
   const taken = conflicts(id, spec);
   for (const s of taken) setKeys(s.id, bindings(s.id).filter((k) => k !== spec));

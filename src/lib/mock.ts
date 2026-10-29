@@ -1,4 +1,4 @@
-/** 개발용: 브라우저에서 ?mock 으로 열면 Tauri 백엔드 대신 가짜 데이터를 쓴다 (화면 확인용). */
+/** For development: opening in a browser with ?mock uses fake data instead of the Tauri backend (for checking screens). */
 const conns = [
   { id: "dev", name: "[DEV] shop_app", kind: "postgres", host: "dev-db.example.com", port: 5432, user: "app", database: "shop_app", color: "#5f5b24", hasPassword: true, connected: true },
   { id: "prod", name: "[PROD] shop_app", kind: "postgres", host: "prod-db", port: 5432, user: "app", database: "shop_app", color: "#6e2a2a", hasPassword: true, connected: false,
@@ -90,7 +90,7 @@ const handlers: Record<string, (a: any) => unknown> = {
     { schema: "public", name: "users", columns: [["id", "bigint"], ["user_name", "varchar"]] },
     { schema: "public", name: "orders", columns: [["id", "bigint"], ["status", "varchar"], ["amount", "numeric"], ["data", "jsonb"], ["reasons", "jsonb"]] },
   ],
-  // 공유 워크스페이스 목록 (TUI 와 같이 쓰는 파일 흉내). 시험에서 window.__sharedWs 로 바꾼다
+  // Shared workspace list (mimics the file shared with the TUI). Tests replace it via window.__sharedWs
   shared_workspaces: () => (window as any).__sharedWs ?? null,
   adopt_workspaces: (a: any) => {
     const w = window as any;
@@ -307,7 +307,7 @@ const handlers: Record<string, (a: any) => unknown> = {
   invoke: async (cmd: string, args: unknown) => {
     const h = handlers[cmd];
     if (!h) throw `mock: ${cmd} not implemented`;
-    // 오래 걸리는 쿼리 흉내: pg_sleep(n)
+    // Mimics a long-running query: pg_sleep(n)
     const sleep = cmd === "run_query" && /pg_sleep\((\d+(?:\.\d+)?)\)/.exec((args as any)?.sql ?? "");
     if (sleep) await new Promise((r) => setTimeout(r, Number(sleep[1]) * 1000));
     return h(args);

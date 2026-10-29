@@ -3,7 +3,7 @@ import { ask, askText } from "../lib/dialogs";
 import { ConnectionView, DataDiff, meta, migrate, Migration, SchemaChange, targetId } from "../lib/api";
 import { Button, Checkbox, CodeBlock, List, ListItem, Notice, Row, Select, Spacer, Table, Tabs, Td, Text, Th } from "../ui";
 
-/** 비교·마이그레이션 대상: Data Source · DB · 스키마 (· 테이블) */
+/** Compare·migration target: Data Source · DB · schema (· table) */
 interface End {
   connId: string;
   db: string;
@@ -12,7 +12,7 @@ interface End {
 }
 
 const isSql = (c: ConnectionView) => c.kind === "postgres" || c.kind === "mysql";
-/** 접속 대상 id: PG 는 conn::db, MySQL 은 DB 가 곧 스키마 */
+/** Connection target id: conn::db for PG; in MySQL the DB is the schema */
 const tid = (c: ConnectionView | undefined, e: End) => (c ? targetId(c.id, c.kind === "postgres" && e.db && e.db !== (c.database || "postgres") ? e.db : undefined) : "");
 const schemaOf = (c: ConnectionView | undefined, e: End) => (c?.kind === "mysql" ? e.db : e.schema);
 
@@ -74,7 +74,7 @@ function EndPicker({ label, conns, value, onChange, table, noSchema }: { label: 
 const empty: End = { connId: "", db: "", schema: "", table: "" };
 const ready = (c: ConnectionView | undefined, e: End, table = false) => !!c && !!schemaOf(c, e) && (!table || !!e.table);
 
-/** Compare & Migrate 탭: 스키마 비교 (DDL) · 데이터 비교 (동기화 SQL) · 마이그레이션 파일 적용 */
+/** Compare & Migrate tab: schema compare (DDL) · data compare (sync SQL) · apply migration files */
 export function MigrateView(p: { conns: ConnectionView[]; initialConnId: string; initialDb?: string; onOpenConsole: (connId: string, db: string | undefined, sql: string) => void; onStatus: (s: string) => void }) {
   const [tab, setTab] = useState<"schema" | "data" | "files">("schema");
   const start: End = { ...empty, connId: p.initialConnId, db: p.initialDb ?? "" };
@@ -104,7 +104,7 @@ export function MigrateView(p: { conns: ConnectionView[]; initialConnId: string;
     run(async () => {
       const r = await migrate.compareSchemas(tid(sc, src), schemaOf(sc, src), tid(dc, dst), schemaOf(dc, dst));
       setChanges(r);
-      // 지우는 것은 기본으로 고르지 않는다
+      // Drops are not selected by default
       setChecked(new Set(r.map((c, i) => (c.destructive ? -1 : i)).filter((i) => i >= 0)));
     });
   const pickedSql = useMemo(() => (changes ?? []).filter((_, i) => checked.has(i)).map((c) => `-- ${c.kind}: ${c.object}\n${c.sql}`).join("\n\n"), [changes, checked]);

@@ -1,4 +1,4 @@
-/* 결과 표 칸 (ui/grid.tsx). 값은 토큰 · 테마 색 */
+/* Result grid cells (ui/grid.tsx). Values are tokens · theme colors */
 .grid-header { position: sticky; top: 0; z-index: 2; display: flex; background: var(--panel); border-bottom: 1px solid var(--border); }
 .grid-row { position: absolute; left: 0; display: flex; }
 .grid-row.odd { background: var(--c-222326); }

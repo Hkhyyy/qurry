@@ -1,6 +1,6 @@
-//! 테스트 데이터 만들기: 테이블 구조(타입·길이·NOT NULL·PK·UNIQUE·FK·enum·CHECK IN)와 컬럼 이름을 보고 그럴듯한 행을 채운다.
-//! FK 는 가리키는 테이블에 이미 있는 값에서 고른다. 자동 번호 · 계산 컬럼은 비워 둔다 (서버가 채운다).
-//! 넣기는 한 트랜잭션 (execute_batch): 하나라도 실패하면 아무것도 안 들어간다
+//! Test data generation: fill plausible rows from the table structure (type·length·NOT NULL·PK·UNIQUE·FK·enum·CHECK IN) and column names.
+//! FKs pick from values already in the referenced table. Auto-increment · computed columns are left empty (the server fills them).
+//! Inserts run in one transaction (execute_batch): if anything fails, nothing goes in
 use crate::app::{AppState, ensure_pool};
 use crate::db::Pool;
 use crate::error::{AppError, AppResult};
@@ -9,40 +9,40 @@ use rand::Rng;
 use serde_json::Value;
 use std::collections::HashSet;
 
-/// 한 번에 만들 수 있는 행 수
+/// Max rows per run
 pub const MAX_ROWS: usize = 100_000;
-/// INSERT 한 문장에 넣는 행 수
+/// Rows per INSERT statement
 const BATCH: usize = 200;
-/// FK 로 고를 부모 행 (무작위로 이만큼)
+/// Parent rows to pick FKs from (this many, at random)
 const FK_SAMPLE: usize = 1000;
 
-/// 컬럼 구조 (DB 에서 읽은 것)
+/// Column structure (read from the DB)
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Col {
     pub name: String,
-    /// 보이는 타입 (varchar(20), numeric(10,2) …)
+    /// Displayed type (varchar(20), numeric(10,2) …)
     pub data_type: String,
-    /// 기본 타입 이름 (소문자: int4, varchar, numeric, timestamptz / MySQL: int, varchar, decimal …)
+    /// Base type name (lowercase: int4, varchar, numeric, timestamptz / MySQL: int, varchar, decimal …)
     pub base: String,
-    /// 글자 수 · 정밀도
+    /// Length · precision
     pub len: Option<u32>,
     pub scale: Option<u32>,
     pub nullable: bool,
-    /// 자동 번호 · identity · 계산 컬럼 (넣지 않는다)
+    /// Auto-increment · identity · computed column (not inserted)
     pub auto: bool,
     pub pk: bool,
-    /// 혼자서 UNIQUE
+    /// UNIQUE on its own
     pub unique: bool,
-    /// enum · CHECK (col IN (…)) 의 값
+    /// Values of an enum · CHECK (col IN (…))
     pub choices: Vec<String>,
     pub unsigned: bool,
 }
 
-/// 외래 키: 이 컬럼들이 ref_table 의 ref_cols 를 가리킨다
+/// Foreign key: these columns reference ref_cols of ref_table
 #[derive(Debug, Clone, PartialEq)]
 pub struct Fk {
     pub cols: Vec<String>,
-    /// SQL 에 쓸 이름 (따옴표 포함)
+    /// Name for use in SQL (quoted)
     pub ref_table: String,
     pub ref_cols: Vec<String>,
 }
@@ -53,16 +53,16 @@ pub struct TableShape {
     pub fks: Vec<Fk>,
 }
 
-/// 칸 하나 (SQL 로 쓸 때 · 미리보기로 보일 때)
+/// One cell (as written to SQL · as shown in the preview)
 #[derive(Debug, Clone, PartialEq)]
 enum Cell {
     Null,
     Text(String),
     Num(String),
     Bool(bool),
-    /// 이미 SQL 글 (바이너리 등)
+    /// Already SQL text (binary etc.)
     Raw(String, String),
-    /// FK 로 고른 값 (DB 에서 읽은 그대로)
+    /// Value picked for an FK (as read from the DB)
     Val(Value),
 }
 
@@ -89,7 +89,7 @@ impl Cell {
     }
 }
 
-/// 컬럼을 어떻게 채우는지 (화면에 보인다)
+/// How a column is filled (shown on screen)
 #[derive(Debug, Clone, serde::Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ColPlan {
@@ -98,7 +98,7 @@ pub struct ColPlan {
     pub how: String,
 }
 
-/// 미리보기: 컬럼별 채우는 법 + 몇 행 + 경고
+/// Preview: how each column is filled + a few rows + warnings
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FakePreview {
@@ -107,7 +107,7 @@ pub struct FakePreview {
     pub warnings: Vec<String>,
 }
 
-// ───────── 값 만들기 ─────────
+// ───────── Generating values ─────────
 
 const FIRST: &[&str] = &["Minjun", "Seoyeon", "Jiho", "Hayoon", "Doyun", "Jiwoo", "Emma", "Liam", "Olivia", "Noah", "Ava", "Lucas", "Mia", "Leo", "Sofia", "Ethan"];
 const LAST: &[&str] = &["Kim", "Lee", "Park", "Choi", "Jung", "Kang", "Cho", "Yoon", "Smith", "Brown", "Garcia", "Miller", "Davis", "Wilson", "Tanaka", "Silva"];
@@ -119,12 +119,12 @@ const WORDS: &[&str] = &[
 ];
 const STATUS: &[&str] = &["active", "inactive", "pending"];
 
-/// 이름으로 뜻을 짐작 (소문자 컬럼 이름에 들어 있는 것)
+/// Guess the meaning from the name (substrings of the lowercase column name)
 fn has(name: &str, parts: &[&str]) -> bool {
     parts.iter().any(|p| name.contains(p))
 }
 
-/// 짧은 낱말은 _ 로 나눈 조각이 같을 때만 (description 의 ip, hotel 의 tel 을 피한다)
+/// Short words only when a _-separated piece matches (avoids ip in description, tel in hotel)
 fn seg(name: &str, words: &[&str]) -> bool {
     name.split('_').any(|x| words.contains(&x))
 }
@@ -137,7 +137,7 @@ fn pick<'a, R: Rng>(r: &mut R, xs: &'a [&'a str]) -> &'a str {
     xs[r.gen_range(0..xs.len())]
 }
 
-/// 길이에 맞춰 자른다 (글자 단위)
+/// Truncate to the length (by characters)
 fn fit(s: String, len: Option<u32>) -> String {
     match len {
         Some(n) if s.chars().count() > n as usize => s.chars().take(n as usize).collect(),
@@ -172,7 +172,7 @@ fn is_text(b: &str) -> bool {
     matches!(b, "varchar" | "bpchar" | "char" | "text" | "citext" | "name" | "tinytext" | "mediumtext" | "longtext" | "character varying" | "character")
 }
 
-/// 수의 범위 (타입 크기 · 이름)
+/// Numeric range (type size · name)
 fn int_range(c: &Col, n: &str) -> (i64, i64) {
     let max = match c.base.as_str() {
         "int2" | "smallint" => 30_000,
@@ -195,13 +195,13 @@ fn int_range(c: &Col, n: &str) -> (i64, i64) {
     }
 }
 
-/// 날짜·시각: 최근 1년 안
+/// Dates·times: within the last year
 fn when<R: Rng>(r: &mut R) -> chrono::NaiveDateTime {
     let now = chrono::Local::now().naive_local();
     now - chrono::Duration::seconds(r.gen_range(0..365 * 86_400))
 }
 
-/// unique: 이 번호를 넣어 겹치지 않게 (n = 몇 번째 행 + 시작 번호)
+/// unique: include this number so values don't collide (n = row index + start number)
 fn value<R: Rng>(r: &mut R, c: &Col, n: u64, kind: DbKind) -> Cell {
     let name = c.name.to_lowercase();
     let b = c.base.as_str();
@@ -209,7 +209,7 @@ fn value<R: Rng>(r: &mut R, c: &Col, n: u64, kind: DbKind) -> Cell {
     if !c.choices.is_empty() {
         return Cell::Text(c.choices[r.gen_range(0..c.choices.len())].clone());
     }
-    // 참/거짓 (MySQL tinyint(1) 포함)
+    // Booleans (including MySQL tinyint(1))
     if b == "bool" || b == "boolean" || (b == "tinyint" && c.len == Some(1)) || (b == "bit" && c.len.unwrap_or(1) == 1) {
         return Cell::Bool(r.gen_bool(if has(&name, &["deleted", "removed", "banned"]) { 0.1 } else { 0.7 }));
     }
@@ -245,10 +245,10 @@ fn value<R: Rng>(r: &mut R, c: &Col, n: u64, kind: DbKind) -> Cell {
         _ => {}
     }
     if !is_text(b) && !matches!(b, "enum" | "set") {
-        // 모르는 타입 (배열 · 공간 · 벡터 …)
+        // Unknown types (arrays · spatial · vectors …)
         return Cell::Null;
     }
-    // 글: 이름으로 짐작
+    // Text: guess from the name
     let s = if has(&name, &["email", "mail"]) {
         format!("{}.{}{}@example.com", pick(r, FIRST).to_lowercase(), pick(r, LAST).to_lowercase(), n)
     } else if has(&name, &["phone", "mobile"]) || seg(&name, &["tel", "fax"]) {
@@ -293,14 +293,14 @@ fn value<R: Rng>(r: &mut R, c: &Col, n: u64, kind: DbKind) -> Cell {
     } else {
         s
     };
-    // 짧은 칸 (char(2) 등) 에 unique 면 끝을 남긴다
+    // Unique on a short column (char(2) etc.): keep the end
     match c.len {
         Some(l) if uniq && s.chars().count() > l as usize => Cell::Text(fit(base36(n), c.len)),
         _ => Cell::Text(fit(s, c.len)),
     }
 }
 
-/// 컬럼을 어떻게 채우는지 (미리보기 표의 설명)
+/// How a column is filled (description in the preview table)
 fn how(c: &Col, fk: Option<&Fk>, kind: DbKind) -> String {
     if c.auto {
         return "left to the database (auto / generated)".into();
@@ -326,8 +326,8 @@ fn how(c: &Col, fk: Option<&Fk>, kind: DbKind) -> String {
     s
 }
 
-/// 행들을 만든다. fk_rows[i] = fks[i] 가 가리킬 수 있는 값들 (부모 테이블에서 읽은 것). start = unique 번호의 시작.
-/// 같은 PK · UNIQUE 가 나오면 다시 만든다 (100 번 해도 안 되면 그만큼만)
+/// Generate rows. fk_rows[i] = values fks[i] may reference (read from the parent table). start = start of the unique numbers.
+/// Regenerate on a duplicate PK · UNIQUE (if 100 tries fail, stop at what we have)
 fn make_rows<R: Rng>(r: &mut R, shape: &TableShape, fk_rows: &[Vec<Vec<Value>>], n: usize, start: u64, kind: DbKind) -> Vec<Vec<Cell>> {
     let cols: Vec<&Col> = shape.cols.iter().filter(|c| !c.auto).collect();
     let fk_of = |name: &str| shape.fks.iter().enumerate().find_map(|(i, f)| f.cols.iter().position(|c| c == name).map(|j| (i, j)));
@@ -345,7 +345,7 @@ fn make_rows<R: Rng>(r: &mut R, shape: &TableShape, fk_rows: &[Vec<Vec<Value>>],
     'rows: for _ in 0..n {
         for _try in 0..100 {
             serial += 1;
-            // FK 는 한 묶음씩 같은 부모 행에서
+            // Each FK group comes from the same parent row
             let picks: Vec<Option<&Vec<Value>>> = fk_rows.iter().map(|rows| if rows.is_empty() { None } else { Some(&rows[r.gen_range(0..rows.len())]) }).collect();
             let row: Vec<Cell> = cols
                 .iter()
@@ -359,7 +359,7 @@ fn make_rows<R: Rng>(r: &mut R, shape: &TableShape, fk_rows: &[Vec<Vec<Value>>],
                 })
                 .collect();
             let keys: Vec<String> = key_sets.iter().map(|ks| ks.iter().map(|&i| format!("{:?}", row[i].show())).collect::<Vec<_>>().join("|")).collect();
-            // NULL 이 낀 UNIQUE 는 겹쳐도 된다
+            // A UNIQUE containing a NULL may repeat
             let clash = key_sets.iter().zip(&keys).zip(&seen).any(|((ks, k), s)| ks.iter().all(|&i| row[i] != Cell::Null) && s.contains(k));
             if clash {
                 continue;
@@ -377,7 +377,7 @@ fn make_rows<R: Rng>(r: &mut R, shape: &TableShape, fk_rows: &[Vec<Vec<Value>>],
     out
 }
 
-/// 여러 행 INSERT 문장들 (BATCH 행씩)
+/// Multi-row INSERT statements (BATCH rows each)
 fn insert_sql(table: &str, shape: &TableShape, rows: &[Vec<Cell>], kind: DbKind) -> Vec<String> {
     let names: Vec<String> = shape.cols.iter().filter(|c| !c.auto).map(|c| crate::sql::quote_ident(kind, &c.name)).collect();
     rows.chunks(BATCH)
@@ -388,9 +388,9 @@ fn insert_sql(table: &str, shape: &TableShape, rows: &[Vec<Cell>], kind: DbKind)
         .collect()
 }
 
-// ───────── 구조 읽기 ─────────
+// ───────── Reading the structure ─────────
 
-/// '…' 안의 글들 (CHECK (status IN ('a','b')) · enum('a','b'))
+/// Texts inside '…' (CHECK (status IN ('a','b')) · enum('a','b'))
 fn quoted_literals(s: &str) -> Vec<String> {
     let re = regex::Regex::new(r"'((?:[^']|'')*)'").unwrap();
     re.captures_iter(s).map(|c| c[1].replace("''", "'")).collect()
@@ -519,18 +519,18 @@ async fn shape(pool: &Pool, kind: DbKind, schema: &str, table: &str) -> AppResul
     }
 }
 
-/// FK 가 가리킬 값들 (부모 테이블에서 무작위로). 자기 자신을 가리키면 이미 있는 행에서
+/// Values for an FK to reference (random from the parent table). If self-referencing, from existing rows
 async fn fk_values(pool: &Pool, kind: DbKind, f: &Fk) -> AppResult<Vec<Vec<Value>>> {
     let q = |s: &str| crate::sql::quote_ident(kind, s);
     let cols: Vec<String> = f.ref_cols.iter().map(|c| q(c)).collect();
     let rand = if kind == DbKind::Mysql { "RAND()" } else { "random()" };
     let not_null: Vec<String> = cols.iter().map(|c| format!("{c} IS NOT NULL")).collect();
-    // DISTINCT 와 ORDER BY random() 은 PG 에서 같이 못 쓴다 → 감싼다
+    // PG can't combine DISTINCT with ORDER BY random() → wrap it
     let sql = format!("SELECT * FROM (SELECT DISTINCT {} FROM {} WHERE {}) qurry_fk ORDER BY {rand} LIMIT {FK_SAMPLE}", cols.join(", "), f.ref_table, not_null.join(" AND "));
     Ok(pool.run_query(&sql, FK_SAMPLE).await?.rows)
 }
 
-/// 정수 PK · UNIQUE 의 시작 번호: 지금 가장 큰 값 다음 (없으면 0)
+/// Start number for an integer PK · UNIQUE: next after the current max (0 if none)
 async fn start_number(pool: &Pool, kind: DbKind, rel: &str, shape: &TableShape) -> u64 {
     let ints: Vec<String> = shape.cols.iter().filter(|c| !c.auto && (c.pk || c.unique) && is_int(&c.base)).map(|c| format!("coalesce(max({}), 0)", crate::sql::quote_ident(kind, &c.name))).collect();
     if ints.is_empty() {
@@ -595,7 +595,7 @@ impl AppState {
         Ok(Prepared { kind, rel, shape, fk_rows, start, warnings })
     }
 
-    /// 미리보기: 컬럼마다 채우는 법과 예시 몇 행 (아무것도 넣지 않는다)
+    /// Preview: how each column is filled and a few sample rows (inserts nothing)
     pub async fn fake_preview(&self, id: String, schema: String, table: String, rows: usize) -> AppResult<FakePreview> {
         let p = self.fake_prepare(&id, &schema, &table).await?;
         let fk_of = |c: &Col| p.shape.fks.iter().find(|f| f.cols.contains(&c.name));
@@ -614,7 +614,7 @@ impl AppState {
         Ok(FakePreview { plan, result, warnings: p.warnings })
     }
 
-    /// rows 행을 만들어 한 트랜잭션으로 넣는다. 넣은 행 수 (PK · UNIQUE 가 겹치지 않게 만들 수 없으면 그보다 적다)
+    /// Generate rows rows and insert them in one transaction. Returns rows inserted (fewer if PK · UNIQUE can't be kept unique)
     pub async fn fake_fill(&self, id: String, schema: String, table: String, rows: usize) -> AppResult<u64> {
         if rows == 0 || rows > MAX_ROWS {
             return Err(AppError::Msg(format!("Choose 1 to {MAX_ROWS} rows")));
@@ -655,7 +655,7 @@ mod tests {
         assert!(["paid", "refunded"].contains(&text(&status, &mut r).as_str()));
         assert!(text(&col("created_at", "timestamptz"), &mut r).len() == 19);
         assert!(uuid::Uuid::parse_str(&text(&col("ext_id", "uuid"), &mut r)).is_ok());
-        // 수: 정밀도 · 소수 자리
+        // Numbers: precision · scale
         let mut price = col("price", "numeric");
         (price.len, price.scale) = (Some(5), Some(2));
         for _ in 0..50 {
@@ -674,7 +674,7 @@ mod tests {
         assert_eq!(Cell::Text("it's".into()).sql(DbKind::Postgres), "'it''s'");
     }
 
-    /// PK · UNIQUE 는 겹치지 않고, FK 는 부모 값에서, NOT NULL 은 비지 않는다
+    /// PK · UNIQUE don't collide, FKs come from parent values, NOT NULL isn't empty
     #[test]
     fn rows_respect_keys() {
         let mut r = rand::rngs::StdRng::seed_from_u64(1);
@@ -695,7 +695,7 @@ mod tests {
         };
         let users: Vec<Vec<Value>> = (1..=5).map(|i| vec![Value::from(i)]).collect();
         let roles: Vec<Vec<Value>> = (1..=3).map(|i| vec![Value::from(i)]).collect();
-        // (user, role) 조합은 15 개뿐 → 20 행을 바라도 15 행
+        // Only 15 (user, role) combinations → asking for 20 rows gives 15
         let rows = make_rows(&mut r, &shape, &[users, roles], 20, 0, DbKind::Postgres);
         assert_eq!(rows.len(), 15);
         let pairs: HashSet<String> = rows.iter().map(|x| format!("{:?}{:?}", x[1], x[2])).collect();
@@ -716,7 +716,7 @@ mod tests {
         assert_eq!(quoted_literals("enum('a','b')"), vec!["a", "b"]);
     }
 
-    // ───────── 실제 서버 ─────────
+    // ───────── Real server ─────────
 
     async fn state(kind: DbKind, env: &str) -> Option<AppState> {
         let e = std::env::var(env).ok()?;
@@ -731,7 +731,7 @@ mod tests {
         Some(st)
     }
 
-    /// 실제 테이블에 넣으면 서버의 제약 (NOT NULL · 길이 · UNIQUE · FK · CHECK · enum) 을 다 지난다
+    /// Inserting into a real table passes all the server's constraints (NOT NULL · length · UNIQUE · FK · CHECK · enum)
     async fn fills_real_tables(kind: DbKind, env: &str, ddl: &[&str], schema: &str) {
         let Some(st) = state(kind, env).await else { return };
         let q = |s: &str| st.run_query("d".into(), s.into(), None, None);
@@ -740,7 +740,7 @@ mod tests {
         for d in ddl {
             q(d).await.unwrap();
         }
-        // 부모가 비어 있으면 NOT NULL FK 는 못 채운다
+        // With an empty parent, a NOT NULL FK can't be filled
         let e = st.fake_fill("d".into(), schema.into(), "qf_items".into(), 10).await.unwrap_err().to_string();
         assert!(e.contains("fill it first"), "{e}");
         assert_eq!(st.fake_fill("d".into(), schema.into(), "qf_users".into(), 300).await.unwrap(), 300);

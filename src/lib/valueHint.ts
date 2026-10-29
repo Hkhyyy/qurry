@@ -1,25 +1,25 @@
 /**
- * 값 추천 자리 찾기 (콘솔 자동완성): 커서 앞 글이
- * - `status = '` · `status in ('a', '` · `status like '` · `o.status <> ` → 그 컬럼의 값 (values)
- * - `data->>'` · `data ->> ` · `data->'meta'->>'` (MySQL `data->>'$.meta.`) → 그 json 경로의 키 (keys)
- * - `reasons @> '` → 많이 나온 `키: 값` 의 @> 조건 (pairs, PostgreSQL). 키가 없는 json (객체의 배열) 은 keys 자리에서도 이것으로
+ * Find value-suggestion spots (console autocomplete): when the text before the cursor is
+ * - `status = '` · `status in ('a', '` · `status like '` · `o.status <> ` → values of that column (values)
+ * - `data->>'` · `data ->> ` · `data->'meta'->>'` (MySQL `data->>'$.meta.`) → keys at that json path (keys)
+ * - `reasons @> '` → @> conditions of frequent `key: value` (pairs, PostgreSQL). Keyless json (arrays of objects) uses this in keys spots too
  */
 export interface HintContext {
-  /** alias 또는 테이블 (없으면 문장의 테이블에서 컬럼으로 찾는다) */
+  /** alias or table (if absent, find the column among the statement's tables) */
   ref?: string;
   column: string;
   path: string[];
   mode: "values" | "keys" | "pairs";
-  /** 따옴표 안에서 치는 중 (넣을 때 따옴표를 붙이지 않는다) */
+  /** Typing inside quotes (don't add quotes when inserting) */
   quoted: boolean;
-  /** 이미 친 글자 (바꿀 범위) */
+  /** Already typed text (range to replace) */
   typed: string;
-  /** keys: 연산자부터 커서까지 (`->> '` + typed) — @> 조건으로 바꿔 넣을 때 */
+  /** keys: from the operator to the cursor (`->> '` + typed) — for replacing with an @> condition */
   op?: string;
 }
 
 const ID = String.raw`(?:"[^"]+"|\w+)`;
-/** 컬럼 + json 경로 (->'a' / ->>'a' / -> 0) */
+/** Column + json path (->'a' / ->>'a' / -> 0) */
 const EXPR = String.raw`(?:(${ID})\.)?(${ID})((?:\s*->>?\s*(?:'[^']*'|\d+))*)`;
 const unq = (s: string) => s.replace(/^"|"$/g, "");
 
@@ -31,12 +31,12 @@ function pathOf(seg: string): string[] {
   return out;
 }
 
-/** MySQL json 경로 `$.a."b c".d` → ["a", "b c", "d"] */
+/** MySQL json path `$.a."b c".d` → ["a", "b c", "d"] */
 function myPath(p: string): string[] {
   return [...p.matchAll(/\.(?:"([^"]*)"|(\w+))/g)].map((m) => m[1] ?? m[2]);
 }
 
-/** 키 자리: `->>'ab` (quoted) · `->> ab` (따옴표 전) */
+/** Key spot: `->>'ab` (quoted) · `->> ab` (before the quote) */
 const KEYS_RE = new RegExp(String.raw`${EXPR}(\s*->>?\s*(?:'([^']*)|(\w*)))$`);
 const MY_KEYS_RE = new RegExp(String.raw`(?:(${ID})\.)?(${ID})\s*->>?\s*'\$((?:\.(?:"[^"]*"|\w+))*)\.(\w*)$`);
 const MY_VALUE_EXPR = String.raw`(?:(${ID})\.)?(${ID})\s*->>?\s*'\$((?:\.(?:"[^"]*"|\w+))*)'`;
@@ -51,12 +51,12 @@ export function hintContext(before: string, mysql = false): HintContext | null {
   if (mysql && (m = MY_VALUE_RE.exec(before)))
     return m[4] === "@>" ? null : { ref: m[1] && unq(m[1]), column: unq(m[2]), path: myPath(m[3]), mode: "values", quoted: m[5] !== undefined, typed: m[5] ?? m[6] ?? "" };
   if ((m = KEYS_RE.exec(before))) {
-    // MySQL 의 '$.…' 는 위에서. 여기 오는 '$…' 는 다 친 경로가 아니다
+    // MySQL '$.…' is handled above. A '$…' reaching here is not a complete path
     if (m[5]?.startsWith("$") || NOT_COLUMN.test(m[2])) return null;
     return { ref: m[1] && unq(m[1]), column: unq(m[2]), path: pathOf(m[3]), mode: "keys", quoted: m[5] !== undefined, typed: m[5] ?? m[6] ?? "", op: m[4] };
   }
   if ((m = VALUE_RE.exec(before))) {
-    // 키워드 뒤 (where = …) 같은 건 컬럼이 아니다
+    // Things after keywords (where = …) aren't columns
     if (NOT_COLUMN.test(m[2])) return null;
     const mode = m[4] === "@>" ? "pairs" : "values";
     if (mysql && mode === "pairs") return null;
@@ -65,7 +65,7 @@ export function hintContext(before: string, mysql = false): HintContext | null {
   return null;
 }
 
-/** 넣을 글: 따옴표 안이면 ' 만 두 번, 밖이면 숫자 · 불리언 컬럼 값은 그대로, 나머지는 '…' */
+/** Text to insert: inside quotes, only double '; outside, numeric · boolean column values as is, the rest '…' */
 export function hintInsert(value: string, ctx: HintContext, typeName: string): string {
   const esc = value.replace(/'/g, "''");
   if (ctx.quoted) return esc;
@@ -73,13 +73,13 @@ export function hintInsert(value: string, ctx: HintContext, typeName: string): s
   return bare ? value : `'${esc}'`;
 }
 
-/** keys 자리에서 키가 없을 때 (객체의 배열): 연산자째 `@> '[{…}]'` 로 바꿔 넣는 글 */
+/** For keys spots with no keys (arrays of objects): text replacing it, operator included, with `@> '[{…}]'` */
 export function pairsForKeys(value: string, ctx: HintContext): string {
   const lead = /^\s/.test(ctx.op ?? "") ? " " : "";
   return `${lead}@> '${value.replace(/'/g, "''")}'`;
 }
 
-/** 추천할 만한 컬럼: 바이너리 · 공간 · 배열은 빼고, json 은 경로가 있을 때 (값) 나 키 · 조건을 볼 때만 */
+/** Columns worth suggesting: excluding binary · spatial · arrays; json only with a path (values) or when looking at keys · conditions */
 export function hintable(ctx: HintContext, typeName: string): boolean {
   const t = typeName.toLowerCase();
   const json = /json/.test(t);

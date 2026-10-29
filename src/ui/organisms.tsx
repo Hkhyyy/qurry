@@ -1,13 +1,13 @@
 /**
- * 유기체 (organisms): 분자를 모은 덩어리 — 도구 막대, 대화상자, 확인 창, 메뉴, 팝오버, 목록, 표, 폼 그리드.
- * 규격은 README.md
+ * Organisms: chunks assembled from molecules — toolbars, dialogs, confirm boxes, menus, popovers, lists, tables, form grids.
+ * Spec in README.md
  */
 import { CSSProperties, HTMLAttributes, KeyboardEvent, ReactNode, Ref, TdHTMLAttributes, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button, IconButton, Spacer } from "./atoms";
 import { cx } from "./cx";
 import { DetailRow, EmptyState, MenuItem, MenuLabel, MenuSeparator, SectionTitle } from "./molecules";
 
-// ───────── 도구 막대 ─────────
+// ───────── Toolbar ─────────
 export function Toolbar({ children, className, ...rest }: HTMLAttributes<HTMLDivElement>) {
   return (
     <div className={cx("ui-toolbar", className)} role="toolbar" {...rest}>
@@ -16,11 +16,11 @@ export function Toolbar({ children, className, ...rest }: HTMLAttributes<HTMLDiv
   );
 }
 
-// ───────── 대화상자 ─────────
+// ───────── Dialog ─────────
 export type ModalSize = "sm" | "md" | "lg" | "xl";
 /**
- * 대화상자. Esc · 바깥 클릭으로 닫힌다. footer 는 오른쪽 정렬 (취소 → 주 버튼).
- * layer="dialog" 는 다른 모달 위에 뜨는 확인 · 입력 창
+ * Dialog. Closes on Esc · outside click. The footer is right-aligned (Cancel → primary button).
+ * layer="dialog" is a confirm · input box shown above other modals
  */
 export function Modal(p: {
   title: ReactNode;
@@ -31,15 +31,15 @@ export function Modal(p: {
   className?: string;
   layer?: "modal" | "dialog";
   tone?: "danger";
-  /** 바깥 클릭으로 닫지 않는다 (입력 중인 폼) */
+  /** Don't close on outside click (forms being filled in) */
   stickyBackdrop?: boolean;
-  /** 크기 고정: 탭을 바꾸거나 내용이 로딩돼도 창 크기가 그대로 (넘치면 안에서 스크롤) */
+  /** Fixed size: the window keeps its size when switching tabs or loading content (scrolls inside if it overflows) */
   fixed?: boolean;
   headExtra?: ReactNode;
   onKeyDown?: (e: KeyboardEvent<HTMLDivElement>) => void;
   bodyClassName?: string;
 }) {
-  // 열리면 포커스를 가져온다 (안의 autoFocus 가 먼저면 그대로) — Esc · Enter 가 늘 이 창으로
+  // Take focus when opened (unless an autoFocus inside got it first) — so Esc · Enter always go to this window
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (box.current && !box.current.contains(document.activeElement)) box.current.focus();
@@ -54,7 +54,7 @@ export function Modal(p: {
         className={cx("ui-modal", p.size && p.size !== "md" && `size-${p.size}`, p.fixed && "fixed", p.tone && `tone-${p.tone}`, p.className)}
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
-          // 앱 전역 단축키로 새지 않게
+          // Don't leak to app-wide shortcuts
           e.stopPropagation();
           p.onKeyDown?.(e);
           if (e.key === "Escape" && !e.defaultPrevented) p.onClose();
@@ -74,7 +74,7 @@ export function Modal(p: {
   );
 }
 
-/** 팝업 뒤 바탕 (검색 · 전환기 · 빠른 문서). 바깥을 누르면 닫힌다. clear = 어둡게 하지 않음 */
+/** Backdrop behind popups (search · switcher · quick docs). Clicking outside closes. clear = no dimming */
 export function Overlay({ onClose, variant, children, onKeyDown }: { onClose: () => void; variant?: "clear" | "light"; children: ReactNode; onKeyDown?: (e: KeyboardEvent<HTMLDivElement>) => void }) {
   return (
     <div className={cx("ui-backdrop", variant && `overlay-${variant}`)} onMouseDown={onClose} onKeyDown={onKeyDown}>
@@ -83,7 +83,7 @@ export function Overlay({ onClose, variant, children, onKeyDown }: { onClose: ()
   );
 }
 
-/** 떠 있는 판 (Search Everywhere · 전환기 · Go to …): 제목 / 머리 · 본문 (목록) · 아래 안내 */
+/** Floating panel (Search Everywhere · switcher · Go to …): title / header · body (list) · hint at the bottom */
 export function Popover({ title, head, foot, children, className, width }: { title?: ReactNode; head?: ReactNode; foot?: ReactNode; children: ReactNode; className?: string; width?: number }) {
   return (
     <div className={cx("ui-popover", className)} style={width ? { width } : undefined} onMouseDown={(e) => e.stopPropagation()}>
@@ -95,8 +95,8 @@ export function Popover({ title, head, foot, children, className, width }: { tit
   );
 }
 
-// ───────── 목록 ─────────
-/** 여러 줄 목록 (ListItem 을 담는다). 비면 empty. scroll 영역 · 테두리 있는 상자 (boxed) */
+// ───────── List ─────────
+/** Multi-row list (holds ListItems). empty when empty. scroll area · bordered box (boxed) */
 export function List({ children, empty, boxed, className, listRef, style }: { children?: ReactNode; empty?: ReactNode; boxed?: boolean; className?: string; listRef?: Ref<HTMLDivElement>; style?: CSSProperties }) {
   const isEmpty = !children || (Array.isArray(children) && children.flat().filter(Boolean).length === 0);
   return (
@@ -105,10 +105,10 @@ export function List({ children, empty, boxed, className, listRef, style }: { ch
     </div>
   );
 }
-/** 목록 안의 묶음 제목 (Actions · Files · Database) */
+/** Group heading inside a list (Actions · Files · Database) */
 export const ListGroup = SectionTitle;
 
-/** 상세 목록 (확인 창의 문장 · 행 수, 세션의 쿼리 · pid …) */
+/** Detail list (statement · row count in confirm boxes, query · pid in sessions …) */
 export function DetailList({ items }: { items: { text: ReactNode; value?: ReactNode; tone?: "danger" | "warn" }[] }) {
   return (
     <div className="ui-detail-list">
@@ -121,8 +121,8 @@ export function DetailList({ items }: { items: { text: ReactNode; value?: ReactN
   );
 }
 
-// ───────── 표 (작은 표: 미리 보기 · 매핑 · 값 목록) ─────────
-/** 데이터가 적은 표. 큰 결과는 ResultGrid (ui/grid 의 칸 조각) */
+// ───────── Table (small tables: previews · mappings · value lists) ─────────
+/** Table for small data. Large results use ResultGrid (cell pieces in ui/grid) */
 export function Table({ children, className }: { children: ReactNode; className?: string }) {
   return <table className={cx("ui-table", className)}>{children}</table>;
 }
@@ -137,17 +137,17 @@ export const Td = ({ children, num, mono, muted, className, ...rest }: TdHTMLAtt
   </td>
 );
 
-// ───────── 메뉴 ─────────
+// ───────── Menu ─────────
 export type MenuEntry =
   | { label: string; action: () => void; shortcut?: string; danger?: boolean; disabled?: boolean }
   | { separator: true }
-  /** 누를 수 없는 설명 줄 */
+  /** Non-clickable description line */
   | { heading: string }
   | { label: string; submenu: MenuEntry[] };
 
 /**
- * 메뉴 (우클릭 · ▾ 드롭다운). 바깥 클릭 · ⎋ · 창 포커스 이탈로 닫힌다. 하위 메뉴는 올리면 열린다.
- * at = 화면 좌표 (우클릭) — 없으면 부모 기준 드롭다운. footer = 맨 아래 덧붙임 (색 고르기 등)
+ * Menu (right-click · ▾ dropdown). Closes on outside click · ⎋ · window blur. Submenus open on hover.
+ * at = screen coordinates (right-click) — otherwise a dropdown relative to the parent. footer = appended at the bottom (color picker etc.)
  */
 export function Menu({ items, onClose, at, footer }: { items: MenuEntry[]; onClose: () => void; at?: { x: number; y: number }; footer?: ReactNode }) {
   const [sub, setSub] = useState<number | null>(null);
@@ -166,7 +166,7 @@ export function Menu({ items, onClose, at, footer }: { items: MenuEntry[]; onClo
       }
     };
     const onBlur = () => closeRef.current();
-    // 메뉴를 연 클릭이 곧바로 "바깥 클릭"으로 처리되지 않도록 다음 틱에 등록
+    // Register on the next tick so the click that opened the menu isn't treated as an "outside click" right away
     const t = setTimeout(() => {
       window.addEventListener("mousedown", onDown, true);
       window.addEventListener("keydown", onKey, true);
@@ -179,7 +179,7 @@ export function Menu({ items, onClose, at, footer }: { items: MenuEntry[]; onClo
       window.removeEventListener("blur", onBlur);
     };
   }, []);
-  // 화면 밖으로 나가지 않게
+  // Keep it on screen
   const style = at ? { left: Math.min(at.x, window.innerWidth - 260), top: Math.max(4, Math.min(at.y, window.innerHeight - 24 * items.length - 40)) } : undefined;
   const run = (fn: () => void) => {
     fn();
@@ -214,10 +214,10 @@ export function Menu({ items, onClose, at, footer }: { items: MenuEntry[]; onClo
   );
 }
 
-// ───────── 폼 그리드 ─────────
+// ───────── Form grid ─────────
 /**
- * 라벨 · 칸이 번갈아 오는 폼 (긴 설정 창). 자식은 <label>라벨</label><칸/> 순서로, 줄 전체는 <FormSection>.
- * 라벨 없는 줄은 빈 <span /> 를 먼저
+ * Form alternating label · field (long settings windows). Children in <label>Label</label><field/> order; full-width rows use <FormSection>.
+ * For a row without a label, put an empty <span /> first
  */
 export function FormGrid({ children, labelWidth = 120, className }: { children: ReactNode; labelWidth?: number; className?: string }) {
   return (
@@ -227,11 +227,11 @@ export function FormGrid({ children, labelWidth = 120, className }: { children: 
   );
 }
 
-// ───────── confirm() — 앱 안의 확인 창 ─────────
+// ───────── confirm() — in-app confirm box ─────────
 export interface ConfirmOptions {
   title?: string;
   message: ReactNode;
-  /** 문장 · 대상과 그 옆 값 (예: 바뀔 행 수) */
+  /** Statement · target and the value next to it (e.g. rows to change) */
   detail?: { text: string; value?: string; tone?: "danger" | "warn" }[];
   okLabel?: string;
   cancelLabel?: string;
@@ -240,7 +240,7 @@ export interface ConfirmOptions {
 type ConfirmReq = ConfirmOptions & { resolve: (ok: boolean) => void };
 let showConfirm: ((r: ConfirmReq) => void) | null = null;
 
-/** 확인 창을 띄우고 답을 기다린다. ConfirmHost 가 없으면 (테스트) 브라우저 confirm */
+/** Show a confirm box and wait for the answer. Without a ConfirmHost (tests), the browser confirm */
 export function confirm(o: ConfirmOptions): Promise<boolean> {
   return new Promise((resolve) => {
     if (showConfirm) showConfirm({ ...o, resolve });
@@ -248,7 +248,7 @@ export function confirm(o: ConfirmOptions): Promise<boolean> {
   });
 }
 
-/** App 에 하나 둔다 */
+/** Place one in App */
 export function ConfirmHost() {
   const [queue, setQueue] = useState<ConfirmReq[]>([]);
   const okRef = useRef<HTMLButtonElement>(null);
@@ -260,7 +260,7 @@ export function ConfirmHost() {
   }, []);
   const req = queue[0];
   useEffect(() => {
-    // 위험한 확인은 Cancel 에, 나머지는 OK 에 포커스 (Enter 가 무엇을 누르는지 분명하게)
+    // Focus Cancel for dangerous confirms, OK otherwise (so it's clear what Enter presses)
     if (req && !req.danger) okRef.current?.focus();
   }, [req]);
   if (!req) return null;
@@ -292,16 +292,16 @@ export function ConfirmHost() {
   );
 }
 
-// ───────── 탭 줄 ─────────
+// ───────── Tab strip ─────────
 /**
- * 탭 줄 (편집기 · 결과): 스크롤바 없이 넘친다. 휠 (세로) 로도 옆으로 넘기고, 활성 탭이 바뀌면 보이게 스크롤한다.
- * 넘치면 오른쪽 끝 ▾ — 모든 탭 목록 (DataGrip 의 Show Hidden Tabs). 끌어 놓기 이벤트는 그대로 넘긴다
+ * Tab strip (editor · results): overflows without a scrollbar. The (vertical) wheel also scrolls sideways, and it scrolls to show the active tab when it changes.
+ * On overflow, ▾ at the right end — a list of all tabs (DataGrip's Show Hidden Tabs). Drag-and-drop events are passed through as is
  */
 export function TabStrip({ children, activeKey, overflow, className, ...rest }: HTMLAttributes<HTMLDivElement> & { activeKey?: string | null; overflow?: { key: string; label: string; active?: boolean; onSelect: () => void }[] }) {
   const ref = useRef<HTMLDivElement>(null);
   const [over, setOver] = useState(false);
   const [menu, setMenu] = useState(false);
-  // 넘치는지 (▾ 를 보일지)
+  // Whether it overflows (whether to show ▾)
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -311,7 +311,7 @@ export function TabStrip({ children, activeKey, overflow, className, ...rest }: 
     ro.observe(el);
     return () => ro.disconnect();
   });
-  // 활성 탭이 보이게
+  // Keep the active tab visible
   useEffect(() => {
     ref.current?.querySelector<HTMLElement>(".active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [activeKey]);
@@ -322,7 +322,7 @@ export function TabStrip({ children, activeKey, overflow, className, ...rest }: 
         ref={ref}
         role="tablist"
         onWheel={(e) => {
-          // 트랙패드 가로 이동은 그대로, 마우스 휠 (세로) 은 옆으로
+          // Trackpad horizontal scrolling as is; the (vertical) mouse wheel scrolls sideways
           if (ref.current && Math.abs(e.deltaY) > Math.abs(e.deltaX)) ref.current.scrollLeft += e.deltaY;
         }}
       >

@@ -1,4 +1,4 @@
-# Homebrew formula 틀 (Hkhyyy/homebrew-qurry 의 Formula/qurry.rb). 릴리스 때 release.yml 이 {{…}} 를 채워 tap 에 올린다
+# Homebrew formula template (Formula/qurry.rb in Hkhyyy/homebrew-qurry). At release, release.yml fills in {{…}} and pushes it to the tap
 class Qurry < Formula
   desc "Free DataGrip alternative: terminal UI and MCP server for PostgreSQL, MySQL and Redis"
   homepage "https://github.com/Hkhyyy/qurry"

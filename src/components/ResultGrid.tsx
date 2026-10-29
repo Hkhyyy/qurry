@@ -23,21 +23,21 @@ export interface EditTarget {
   pk: string[];
 }
 
-/** DataGrip Data Extractors (복사 형식) */
+/** DataGrip Data Extractors (copy formats) */
 export const EXTRACTORS = ["CSV", "TSV", "SQL Inserts", "SQL Updates", "Where Clause", "SQL IN List", "JSON", "Markdown"] as const;
 export type Extractor = (typeof EXTRACTORS)[number];
-let lastExtractor: Extractor = "CSV"; // 마지막에 고른 extractor 가 새 탭의 기본값 (DataGrip)
+let lastExtractor: Extractor = "CSV"; // The last chosen extractor is the default for new tabs (DataGrip)
 
-/** Set DEFAULT 로 넣는 표시값 */
+/** Display value inserted by Set DEFAULT */
 export const DEFAULT_TOKEN = "\u0000DEFAULT";
 
 interface Props {
   result: QueryResult;
-  /** 테이블 데이터 에디터일 때: 편집 대상 */
+  /** For the table data editor: the edit target */
   edit?: EditTarget;
-  /** 읽기 전용 데이터 소스: 편집 불가 */
+  /** Read-only data source: editing disabled */
   readOnly?: boolean;
-  /** SQL 방언 (식별자 따옴표·리터럴) */
+  /** SQL dialect (identifier quoting, literals) */
   dialect?: Dialect;
   running: boolean;
   loadingMore: boolean;
@@ -47,25 +47,25 @@ interface Props {
   onReload: () => void;
   onCancel: () => void;
   onExport: () => void;
-  /** 테이블 데이터: 서버 정렬(ORDER BY) */
+  /** Table data: server-side sort (ORDER BY) */
   onServerSort?: (orderBy: string) => void;
-  /** 테이블 데이터: Filter by ▸ */
+  /** Table data: Filter by ▸ */
   onFilterBy?: (where: string) => void;
   onDdl?: () => void;
   onCopyQueryToConsole?: (sql: string) => void;
-  /** 테이블 데이터: 툴바 아래 WHERE / ORDER BY 바 */
+  /** Table data: WHERE / ORDER BY bar below the toolbar */
   filterBar?: React.ReactNode;
-  /** 행 동작 (DBA 리포트: 세션 종료, SQL 만들기) — 우클릭 메뉴 맨 위. row = 열 이름 → 값 */
+  /** Row actions (DBA reports: end session, generate SQL) — top of the context menu. row = column name → value */
   rowActions?: { label: string; danger?: boolean; run: (row: Record<string, Cell>) => void }[];
-  /** 테이블 데이터 (pgvector): 이 행과 가까운 행 찾기. row = 열 이름 → 값 */
+  /** Table data (pgvector): find rows close to this row. row = column name → value */
   onFindSimilar?: (column: string, row: Record<string, Cell>) => void;
 }
 
-/** pgvector 열 (vector · halfvec · sparsevec) */
+/** pgvector columns (vector · halfvec · sparsevec) */
 const isVectorType = (t: string) => /^(vector|halfvec|sparsevec)$/i.test(t);
 
 type SortKey = { col: number; dir: "asc" | "desc" };
-type Pos = { r: number; c: number }; // r = 화면(표시) 순서
+type Pos = { r: number; c: number }; // r = on-screen (display) order
 
 function display(c: Cell): string {
   if (c === null) return "<null>";
@@ -74,7 +74,7 @@ function display(c: Cell): string {
 }
 const raw = (c: Cell) => (c === null ? "" : c === DEFAULT_TOKEN ? "DEFAULT" : String(c));
 
-/** 화면에 원래 값이 그대로 표현되지 않는 셀(배열, bytea 등)은 편집하지 않는다. */
+/** Cells whose original value is not shown as is (arrays, bytea, etc.) are not editable. */
 const editableValue = (v: Cell, typeName: string) => typeName !== "BYTEA" && !(typeof v === "string" && /^<[A-Z0-9_ \[\]]+>$/.test(v));
 
 function csvField(s: string, sep: string) {
@@ -123,11 +123,11 @@ export function ResultGrid(p: Props) {
   const rowCount = baseCount + added.length;
   const serverSort = !!p.onServerSort && sortViaOrderBy;
 
-  // 컬럼 구성이 바뀌면 정렬 초기화
+  // Reset sorting when the column set changes
   const colKey = cols.map((c) => c.name).join("\u0001");
   useEffect(() => setSorts([]), [colKey]);
 
-  /** 헤더 정렬: 클릭 = ↑ → ↓ → 해제, ⌥+클릭 = 정렬 키 추가 (DataGrip) */
+  /** Header sort: click = ↑ → ↓ → off, ⌥+click = add a sort key (DataGrip) */
   const clickSort = (col: number, additive: boolean) => {
     setSorts((cur) => {
       const ex = cur.find((k) => k.col === col);
@@ -140,7 +140,7 @@ export function ResultGrid(p: Props) {
     });
   };
 
-  // 화면 정렬 (서버 정렬이 아닐 때)
+  // Client-side sort (when not sorting on the server)
   const order = useMemo(() => {
     if (serverSort || sorts.length === 0) return null;
     const idx = result.rows.map((_, i) => i);
@@ -167,7 +167,7 @@ export function ResultGrid(p: Props) {
   const rowAt = (r: number) => (r < baseCount ? result.rows[r] : added[r - baseCount]);
   const valueAt = (r: number, c: number): Cell => (r < baseCount && changes[r] && c in changes[r] ? changes[r][c] : rowAt(r)?.[c] ?? null);
 
-  // 결과가 바뀌면 편집 상태 초기화 (더 불러오기로 행만 늘어난 경우는 유지)
+  // Reset edit state when the result changes (kept when load more only added rows)
   const firstRow = result.rows[0];
   useEffect(() => {
     setSelA(null);
@@ -178,12 +178,12 @@ export function ResultGrid(p: Props) {
     setAdded([]);
   }, [cols, firstRow]);
 
-  // 자동 새로고침 (Update Interval)
+  // Auto refresh (Update Interval)
   const pendingCount = Object.keys(changes).length + deleted.size + added.length;
   useEffect(() => {
     if (!interval) return;
     const t = setInterval(() => {
-      // 다른 탭에 가려졌거나(display:none) 창이 숨겨져 있으면 쉬었다가, 다시 보일 때 이어서 새로 고친다
+      // Pause while hidden behind another tab (display:none) or the window is hidden, and resume refreshing once visible again
       const visible = !document.hidden && scrollRef.current?.offsetParent != null;
       if (visible && !p.running && pendingCount === 0) p.onReload();
     }, interval * 1000);
@@ -201,12 +201,12 @@ export function ResultGrid(p: Props) {
     [cols, firstRow, edit],
   );
   const total = ROWNUM_W + widths.reduce((a, b) => a + b, 0);
-  // 시간 컬럼: 소수 초 자릿수를 컬럼 안에서 맞춰 보인다 (값은 그대로)
+  // Time columns: align fractional-second digits within the column (values unchanged)
   const fracW = useMemo(() => cols.map((c, ci) => (isTimeType(c.typeName) ? fracWidth(result.rows.map((r) => r[ci])) : 0)), [cols, result.rows]);
   const shown = (v: Cell, ci: number) => (fracW[ci] && typeof v === "string" ? padFrac(v, fracW[ci]) : display(v));
 
   const virt = useVirtualizer({ count: rowCount, getScrollElement: () => scrollRef.current, estimateSize: () => ROW_H, overscan: 20 });
-  // 가로도 보이는 열만 그린다 (열이 많은 테이블). 양옆은 빈 칸으로 폭을 채운다
+  // Horizontally, render only visible columns too (tables with many columns). Blank cells fill the width on both sides
   const colVirt = useVirtualizer({ horizontal: true, count: cols.length, getScrollElement: () => scrollRef.current, estimateSize: (i) => widths[i] ?? 64, paddingStart: ROWNUM_W, overscan: 4 });
   useEffect(() => colVirt.measure(), [widths]);
   const colItems = colVirt.getVirtualItems();
@@ -219,17 +219,17 @@ export function ResultGrid(p: Props) {
     if (lastItem && result.truncated && !loadingMore && lastItem.index >= baseCount - 30) p.onFetchMore();
   }, [lastItem?.index, result.truncated, loadingMore, baseCount]);
 
-  // ─── 선택 ───
+  // ─── Selection ───
   const rect = selA && selB ? { r0: Math.min(selA.r, selB.r), r1: Math.max(selA.r, selB.r), c0: Math.min(selA.c, selB.c), c1: Math.max(selA.c, selB.c) } : null;
   const inSel = (d: number, c: number) => !!rect && d >= rect.r0 && d <= rect.r1 && c >= rect.c0 && c <= rect.c1;
-  const active = selB ? { r: dataIndex(selB.r), c: selB.c } : null; // 데이터 좌표
+  const active = selB ? { r: dataIndex(selB.r), c: selB.c } : null; // data coordinates
   const selRows = (): number[] => (rect ? Array.from({ length: rect.r1 - rect.r0 + 1 }, (_, i) => dataIndex(rect.r0 + i)) : []);
   const selectCell = (pos: Pos, extend: boolean) => {
     if (!extend || !selA) setSelA(pos);
     setSelB(pos);
   };
 
-  // ─── 찾기 (Find on Current Page) ───
+  // ─── Find (Find on Current Page) ───
   const findLower = findText.toLowerCase();
   const matches = useMemo(() => {
     if (!findOpen || !findLower) return [] as Pos[];
@@ -250,7 +250,7 @@ export function ResultGrid(p: Props) {
     colVirt.scrollToIndex(m.c);
   };
 
-  // ─── 편집 ───
+  // ─── Editing ───
   const commitEdit = () => {
     if (!editing) return;
     const { r, c, value } = editing;
@@ -284,7 +284,7 @@ export function ResultGrid(p: Props) {
     if (r < baseCount && !editableValue(v, cols[c].typeName)) return;
     setEditing({ r, c, value: v === null || v === DEFAULT_TOKEN ? "" : String(v) });
   };
-  // 상태 표시줄 Aggregator: 선택 범위가 2칸 이상이면 Count / Sum / Avg / Min / Max
+  // Status bar Aggregator: Count / Sum / Avg / Min / Max when 2+ cells are selected
   useEffect(() => {
     if (!rect || (rect.r0 === rect.r1 && rect.c0 === rect.c1)) return setStatusWidget("aggregate", undefined);
     let count = 0, nums = 0, sum = 0, min = Infinity, max = -Infinity;
@@ -339,7 +339,7 @@ export function ResultGrid(p: Props) {
       return n;
     });
   };
-  /** Revert Selected: 선택 범위만 되돌림, 선택이 없으면 전체 */
+  /** Revert Selected: revert only the selection, or everything if nothing is selected */
   const revertSelected = () => {
     if (!rect) {
       setChanges({});
@@ -412,8 +412,8 @@ export function ResultGrid(p: Props) {
     }
   };
 
-  // ─── 복사 (Data Extractor) ───
-  /** header = CSV · TSV 맨 위에 컬럼 이름 줄 (복사는 값만 — DataGrip, Copy with Headers 는 같이) */
+  // ─── Copy (Data Extractor) ───
+  /** header = a column-name line at the top of CSV · TSV (Copy is values only — DataGrip; Copy with Headers includes it) */
   const extract = (rows: number[], c0: number, c1: number, fmt: Extractor, header = true): string => {
     const cs = Array.from({ length: c1 - c0 + 1 }, (_, i) => c0 + i);
     const names = cs.map((c) => cols[c].name);
@@ -452,14 +452,14 @@ export function ResultGrid(p: Props) {
     const text = single && !header && (extractor === "CSV" || extractor === "TSV") ? raw(valueAt(dataIndex(rect.r0), rect.c0)) : extract(selRows(), rect.c0, rect.c1, extractor, header);
     navigator.clipboard.writeText(text);
   };
-  /** 고른 셀을 ('a', 'b') 로 (WHERE x IN 에 바로 붙인다). 한 셀만 골랐으면 그 열 전체 */
+  /** Selected cells as ('a', 'b') (paste straight into WHERE x IN). If only one cell is selected, its whole column */
   const copyInList = () => {
     if (!rect) return;
     const single = rect.r0 === rect.r1 && rect.c0 === rect.c1;
     const rows = single ? Array.from({ length: rowCount }, (_, i) => dataIndex(i)) : selRows();
     navigator.clipboard.writeText(extract(rows, rect.c0, rect.c1, "SQL IN List"));
   };
-  /** 붙여넣기: TSV/CSV 여러 줄을 셀에 나눠 넣고, 행이 모자라면 새 행 생성 (DataGrip) */
+  /** Paste: split multi-line TSV/CSV into cells, adding new rows if there are not enough (DataGrip) */
   const paste = async () => {
     if (!canEdit || !selB) return;
     const text = await navigator.clipboard.readText();
@@ -478,7 +478,7 @@ export function ResultGrid(p: Props) {
     });
   };
 
-  // ─── 키보드 (DataGrip 그리드 키맵) ───
+  // ─── Keyboard (DataGrip grid keymap) ───
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (editing || valueEditor) return;
     const mod = isMac ? e.metaKey : e.ctrlKey;
@@ -500,7 +500,7 @@ export function ResultGrid(p: Props) {
       return stop();
     }
     if (mod && k === "r") return p.onReload(), stop();
-    // 실행 중이면 전역 단축키(editor.cancel)가 먼저 취소했다 (두 번 부르지 않게)
+    // While running, the global shortcut (editor.cancel) already cancelled (so it is not called twice)
     if (mod && e.key === "F2") return e.defaultPrevented || p.onCancel(), stop();
     if (mod && e.altKey && e.code === "KeyN") return setNull(), stop();
     if (mod && e.altKey && e.code === "KeyD") return setDefault(), stop();
@@ -529,7 +529,7 @@ export function ResultGrid(p: Props) {
       colVirt.scrollToIndex(c);
       return stop();
     }
-    // 셀에서 바로 타이핑하면 편집 시작 (DataGrip)
+    // Typing directly in a cell starts editing (DataGrip)
     if (canEdit && active && e.key.length === 1 && !mod && !e.altKey) {
       startEdit(active.r, active.c);
       setEditing((ed) => (ed ? { ...ed, value: e.key } : ed));
@@ -537,7 +537,7 @@ export function ResultGrid(p: Props) {
     }
   };
 
-  // ─── 셀 컨텍스트 메뉴 ───
+  // ─── Cell context menu ───
   const openCellMenu = (e: React.MouseEvent, d: number, c: number) => {
     e.preventDefault();
     if (!inSel(d, c)) selectCell({ r: d, c }, false);
@@ -547,7 +547,7 @@ export function ResultGrid(p: Props) {
       ? { vedit: "⇧↩", nul: "⌥⌘n", def: "⌥⌘d", copy: "⌘c", paste: "⌘v", del: "⌘⌫", clone: "⌘d", revert: "⌥⌘z", rec: "⇧⌘↩" }
       : { vedit: "Shift+Enter", nul: "Ctrl+Alt+n", def: "Ctrl+Alt+d", copy: "Ctrl+c", paste: "Ctrl+v", del: "Ctrl+Backspace", clone: "Ctrl+d", revert: "Ctrl+Alt+z", rec: "Ctrl+Shift+Enter" };
     const name = quoteIdent(cols[c].name);
-    // 메뉴를 연 순간의 행 값 (자동 새로고침으로 행 순서가 바뀌어도 고른 행 그대로 — 다른 세션을 끊지 않게)
+    // Row values at the moment the menu opened (the chosen row stays even if auto refresh reorders rows — so the wrong session is not killed)
     const rowObj = Object.fromEntries(cols.map((col, i) => [col.name, valueAt(r, i)]));
     const items: MenuItem[] = [
       ...(p.rowActions?.length ? ([...p.rowActions.map((a) => ({ label: a.label, danger: a.danger, action: () => a.run(rowObj) })), { separator: true }] as MenuItem[]) : []),
@@ -609,7 +609,7 @@ export function ResultGrid(p: Props) {
     setMenu({ x: e.clientX, y: e.clientY, items });
   };
 
-  // ─── 툴바 드롭다운 ───
+  // ─── Toolbar dropdowns ───
   const dropdown = (e: React.MouseEvent, items: MenuItem[]) => {
     e.stopPropagation();
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -621,7 +621,7 @@ export function ResultGrid(p: Props) {
 
   return (
     <div className="grid-wrap">
-      {/* ── DataGrip 그리드 툴바 ── */}
+      {/* ── DataGrip grid toolbar ── */}
       <Toolbar onMouseDown={(e) => e.stopPropagation()}>
         <IconButton title={`Reload Page (${k.reload})`} onClick={p.onReload} disabled={p.running}><IcReload /></IconButton>
         <IconButton active={!!interval}
@@ -759,7 +759,7 @@ export function ResultGrid(p: Props) {
                     colSelected={!!rect && rect.c0 <= i && i <= rect.c1}
                     sort={key ? { dir: key.dir, order: sorts.length > 1 ? idx + 1 : undefined } : undefined}
                     onMouseDown={(e) => {
-                      // 헤더 클릭 = 컬럼 전체 선택 (DataGrip)
+                      // Header click = select the whole column (DataGrip)
                       if (e.shiftKey && selA) setSelB({ r: rowCount - 1, c: i });
                       else {
                         setSelA({ r: 0, c: i });
@@ -785,7 +785,7 @@ export function ResultGrid(p: Props) {
                     width={ROWNUM_W}
                     selected={!!rect && rect.r0 <= d && d <= rect.r1}
                     onMouseDown={(e) => {
-                      // 거터 번호 클릭 = 행 선택
+                      // Gutter number click = select the row
                       if (e.shiftKey && selA) setSelB({ r: d, c: cols.length - 1 });
                       else {
                         setSelA({ r: d, c: 0 });
@@ -922,7 +922,7 @@ export function ResultGrid(p: Props) {
   );
 }
 
-/** View as | Transpose: 행과 열을 맞바꿔 보여준다 */
+/** View as | Transpose: swap rows and columns */
 function TransposedView({ cols, rows }: { cols: QueryResult["columns"]; rows: Cell[][] }) {
   const fracW = cols.map((c, ci) => (isTimeType(c.typeName) ? fracWidth(rows.map((r) => r[ci])) : 0));
   return (
@@ -947,7 +947,7 @@ function TransposedView({ cols, rows }: { cols: QueryResult["columns"]; rows: Ce
   );
 }
 
-/** Value editor (⇧↩): ⌘↩ 확정, ⎋ 취소, Toggle Soft-Wrap, Toggle Formatting(JSON) */
+/** Value editor (⇧↩): ⌘↩ confirm, ⎋ cancel, Toggle Soft-Wrap, Toggle Formatting(JSON) */
 function ValueEditor({ title, text, readOnly, onApply, onClose }: { title: string; text: string; readOnly: boolean; onApply: (t: string) => void; onClose: () => void }) {
   const [value, setValue] = useState(text);
   const [wrap, setWrap] = useState(true);
@@ -956,7 +956,7 @@ function ValueEditor({ title, text, readOnly, onApply, onClose }: { title: strin
       const j = JSON.parse(value);
       setValue(value.includes("\n") ? JSON.stringify(j) : JSON.stringify(j, null, 2));
     } catch {
-      /* JSON 이 아니면 그대로 */
+      /* Not JSON: leave as is */
     }
   };
   return (

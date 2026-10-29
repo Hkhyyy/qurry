@@ -1,5 +1,5 @@
-//! 실행 계획 (PostgreSQL EXPLAIN FORMAT JSON) → 트리 + 노드마다 자기 몫(시간·비용 %)과 경고 (Seq Scan, 추정 오차, 디스크로 넘친 정렬 …).
-//! GUI 는 트리로, TUI 는 표로 그린다
+//! Execution plan (PostgreSQL EXPLAIN FORMAT JSON) → tree + each node's own share (time·cost %) and warnings (Seq Scan, estimate errors, sorts spilled to disk …).
+//! The GUI draws it as a tree, the TUI as a table
 use crate::db::{ColumnInfo, QueryResult};
 use crate::error::{AppError, AppResult};
 use serde_json::Value;
@@ -16,14 +16,14 @@ pub struct PlanNode {
     pub actual_time: Option<f64>,
     pub actual_rows: Option<f64>,
     pub loops: Option<f64>,
-    /// 이 노드만의 시간 (ms, 자식 몫 빼고 loops 곱해서). ANALYZE 일 때만
+    /// Time of this node alone (ms, minus children, multiplied by loops). ANALYZE only
     pub self_time: Option<f64>,
-    /// 이 노드만의 비용 (자식 몫 빼고)
+    /// Cost of this node alone (minus children)
     pub self_cost: Option<f64>,
-    /// 전체에서 이 노드 몫 (%) — ANALYZE 면 시간, 아니면 비용
+    /// This node's share of the total (%) — time with ANALYZE, otherwise cost
     pub pct: f64,
     pub warnings: Vec<String>,
-    /// 나머지 속성 (상세 보기)
+    /// Remaining properties (detail view)
     pub props: Vec<(String, String)>,
     pub children: Vec<PlanNode>,
 }
@@ -48,7 +48,7 @@ fn grouped(n: f64) -> String {
     format!("{sign}{}", g.join(","))
 }
 
-/// parallel = Gather 아래 (워커마다 같은 시간이 동시에 흐른다: loops 를 곱하지 않는다)
+/// parallel = under Gather (the same time passes concurrently per worker: don't multiply by loops)
 fn node(n: &serde_json::Map<String, Value>, parallel: bool) -> PlanNode {
     let s = |k: &str| n.get(k).map(text).unwrap_or_default();
     let rel = if n.contains_key("Relation Name") {
@@ -84,7 +84,7 @@ fn node(n: &serde_json::Map<String, Value>, parallel: bool) -> PlanNode {
     let (rows, actual_rows) = (num(n, "Plan Rows"), num(n, "Actual Rows"));
     let op = s("Node Type");
 
-    // 경고: 고칠 만한 곳
+    // Warnings: spots worth fixing
     let mut warnings = vec![];
     let removed = num(n, "Rows Removed by Filter").unwrap_or(0.0) * loops.unwrap_or(1.0);
     let out_rows = actual_rows.map(|r| r * loops.unwrap_or(1.0));
@@ -118,7 +118,7 @@ fn node(n: &serde_json::Map<String, Value>, parallel: bool) -> PlanNode {
     PlanNode { op, detail, startup: num(n, "Startup Cost"), total, rows, width: num(n, "Plan Width"), actual_time, actual_rows, loops, self_time, self_cost, pct: 0.0, warnings, props, children }
 }
 
-/// 전체 대비 몫 (%) 을 단다: ANALYZE 면 시간, 아니면 비용
+/// Attach share of the total (%): time with ANALYZE, otherwise cost
 fn shares(n: &mut PlanNode, whole: f64, by_time: bool) {
     let own = if by_time { n.self_time } else { n.self_cost };
     n.pct = if whole > 0.0 { (own.unwrap_or(0.0) / whole * 100.0).min(100.0) } else { 0.0 };
@@ -127,7 +127,7 @@ fn shares(n: &mut PlanNode, whole: f64, by_time: bool) {
     }
 }
 
-/// EXPLAIN (FORMAT JSON) 결과 글 → 트리
+/// EXPLAIN (FORMAT JSON) result text → tree
 pub fn parse_pg(json: &str) -> AppResult<PlanNode> {
     let v: Value = serde_json::from_str(json.trim()).map_err(|e| AppError::Msg(format!("Not an EXPLAIN (FORMAT JSON) result: {e}")))?;
     let root = v.get(0).unwrap_or(&v).get("Plan").and_then(Value::as_object).ok_or_else(|| AppError::Msg("No \"Plan\" in the EXPLAIN result".into()))?;
@@ -138,7 +138,7 @@ pub fn parse_pg(json: &str) -> AppResult<PlanNode> {
     Ok(p)
 }
 
-/// TUI 표: 들여쓴 연산 · % · 자기 시간/비용 · 추정/실제 행 · 경고 · 상세
+/// TUI table: indented operation · % · own time/cost · estimated/actual rows · warnings · details
 pub fn to_result(plan: &PlanNode) -> QueryResult {
     let col = |n: &str, t: &str| ColumnInfo { name: n.into(), type_name: t.into() };
     let columns = vec![col("operation", "TEXT"), col("%", "TEXT"), col("self", "TEXT"), col("est rows", "INT8"), col("actual rows", "INT8"), col("loops", "INT8"), col("warnings", "TEXT"), col("detail", "TEXT")];
@@ -188,7 +188,7 @@ mod tests {
         assert!(p.props.iter().any(|(k, v)| k == "Sort Space Used" && v == "2048"));
     }
 
-    /// 병렬: Gather 아래 노드는 워커들이 동시에 돈다 → 시간을 워커 수만큼 곱하지 않는다 (100% 를 넘지 않게)
+    /// Parallel: nodes under Gather run concurrently in workers → don't multiply time by worker count (so it doesn't exceed 100%)
     #[test]
     fn parallel_workers_are_not_counted_twice() {
         let p = parse_pg(r#"[{"Plan": {"Node Type": "Gather Merge", "Total Cost": 100, "Actual Total Time": 45.0, "Actual Loops": 1, "Plan Rows": 12, "Actual Rows": 766,

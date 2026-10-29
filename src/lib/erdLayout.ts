@@ -1,4 +1,4 @@
-/** ERD 배치: 가리켜지는 테이블(부모)이 위, 가리키는 테이블(자식)이 아래인 층. 같은 층은 부모 위치 평균으로 줄 세운다 */
+/** ERD layout: layers with referenced tables (parents) above and referencing tables (children) below. Each layer is ordered by the average position of parents */
 export interface Box {
   key: string;
   width: number;
@@ -7,7 +7,7 @@ export interface Box {
 
 const GAP_X = 48;
 const GAP_Y = 64;
-/** 한 층에 이보다 많으면 줄을 나눈다 (가로로 끝없이 길어지지 않게) */
+/** Wrap a layer into rows above this many (so it does not grow endlessly wide) */
 const MAX_PER_ROW = 6;
 
 export function layout(boxes: Box[], edges: { from: string; to: string }[]): Map<string, { x: number; y: number }> {
@@ -15,7 +15,7 @@ export function layout(boxes: Box[], edges: { from: string; to: string }[]): Map
   const parents = new Map<string, string[]>();
   for (const e of edges) if (e.from !== e.to && keys.has(e.from) && keys.has(e.to)) parents.set(e.from, [...(parents.get(e.from) ?? []), e.to]);
 
-  // 층: 부모 층 + 1 (순환은 지나는 중인 것을 0 으로 끊는다)
+  // Layer: parent layer + 1 (cycles are broken by treating the in-progress node as 0)
   const rank = new Map<string, number>();
   const visiting = new Set<string>();
   const rankOf = (k: string): number => {
@@ -29,14 +29,14 @@ export function layout(boxes: Box[], edges: { from: string; to: string }[]): Map
   };
   boxes.forEach((b) => rankOf(b.key));
 
-  // 층마다 줄로 (너무 많으면 여러 줄)
+  // Rows per layer (several rows if too many)
   const byRank = new Map<number, Box[]>();
   for (const b of boxes) byRank.set(rank.get(b.key)!, [...(byRank.get(rank.get(b.key)!) ?? []), b]);
   const order = new Map<string, number>();
   const pos = new Map<string, { x: number; y: number }>();
   let y = 0;
   for (const r of [...byRank.keys()].sort((a, b) => a - b)) {
-    // 부모의 순서 평균으로 줄 세운다 (선이 덜 꼬이게)
+    // Order by the average order of parents (fewer crossing lines)
     const row = byRank.get(r)!.map((b, i) => {
       const ps = (parents.get(b.key) ?? []).filter((p) => order.has(p)).map((p) => order.get(p)!);
       return { b, score: ps.length ? ps.reduce((s, x) => s + x, 0) / ps.length : 1e6 + i };

@@ -5,10 +5,10 @@ import { Button, EmptyState, Kbd, Modal, SearchField, SectionTitle } from "../ui
 
 const isMac = navigator.platform.toLowerCase().includes("mac");
 
-/** 줄에 보일 키: 바꿀 수 있는 명령은 현재 키, 나머지는 고정 표기 */
+/** Key shown on the row: current key for rebindable commands, fixed label for the rest */
 const keysOf = ([k, , id]: KeyRow) => (id ? shortcutLabel(id) || "—" : isMac ? k : toOther(k));
 
-/** Help › Keymap Reference: 검색되는 단축키 목록 */
+/** Help › Keymap Reference: searchable shortcut list */
 export function KeymapDialog({ onClose, onEdit }: { onClose: () => void; onEdit: () => void }) {
   const [q, setQ] = useState("");
   const f = q.trim().toLowerCase();

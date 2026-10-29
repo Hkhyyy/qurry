@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { leaf, leaves, MAX_PANES, prunePanes, splitPane } from "./panes";
 
 describe("panes", () => {
-  it("최대 4칸까지 나누고, 지운 칸 id 를 다시 쓴다", () => {
+  it("splits up to 4 panes and reuses ids of removed panes", () => {
     let p = leaf(0);
     const r1 = splitPane(p, 0, "right")!;
     const r2 = splitPane(r1.pane, 0, "down")!;
@@ -17,11 +17,11 @@ describe("panes", () => {
     expect(splitPane(p, 0, "down")!.g).toBe(2);
   });
 
-  it("없는 칸은 나누지 않는다", () => {
+  it("doesn't split a pane that doesn't exist", () => {
     expect(splitPane(leaf(0), 5, "right")).toBeNull();
   });
 
-  it("전부 비면 칸 하나만 남긴다", () => {
+  it("leaves a single pane when everything is empty", () => {
     const p = splitPane(leaf(0), 0, "right")!.pane;
     expect(prunePanes(p, new Set())).toEqual(leaf(0));
   });

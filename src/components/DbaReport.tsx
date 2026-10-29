@@ -5,10 +5,10 @@ import { ResultGrid } from "./ResultGrid";
 import { Button, Notice, Select, Text, Toolbar } from "../ui";
 
 const empty: QueryResult = { columns: [], rows: [], rowsAffected: 0, truncated: false, elapsedMs: 0, hasResultSet: true };
-/** 저절로 다시 불러오는 리포트 (지금 상태를 보는 것) */
+/** Reports that reload on their own (views of current state) */
 const LIVE = new Set(["sessions", "locks", "vacuum_progress"]);
 
-/** DBA 리포트 탭: 세션·락, 느린 쿼리, 용량·인덱스, 유지보수, 서버, 권한. 행 우클릭 = 세션 종료 / SQL 만들기 */
+/** DBA report tab: sessions · locks, slow queries, size · indexes, maintenance, server, privileges. Row right-click = kill session / generate SQL */
 export function DbaReport(p: {
   target: string;
   connName: string;
@@ -26,7 +26,7 @@ export function DbaReport(p: {
   const [running, setRunning] = useState(false);
   const [auto, setAuto] = useState(true);
   const seq = useRef(0);
-  // 되살린 탭은 처음 보일 때 불러온다 (켜자마자 모든 DB 에 붙지 않게)
+  // Restored tabs load when first shown (so they don't connect to every DB at startup)
   const [seen, setSeen] = useState(p.visible);
   useEffect(() => {
     if (p.visible) setSeen(true);
@@ -58,7 +58,7 @@ export function DbaReport(p: {
     setResult(null);
     load();
   }, [p.target, p.report, seen]);
-  // 세션·락: 보이는 동안 3초마다
+  // Sessions · locks: every 3 seconds while visible
   useEffect(() => {
     if (!auto || !p.visible || !LIVE.has(p.report)) return;
     const t = setInterval(load, 3000);

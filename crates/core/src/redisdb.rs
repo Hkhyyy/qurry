@@ -1,5 +1,5 @@
-//! Redis 드라이버. 콘솔은 한 줄 = 명령 하나, 결과는 SQL 결과와 같은 표(QueryResult)로 돌려준다.
-//! 트리: data source → db0..dbN → keys (타입별 아이콘). 키를 열면 타입에 맞는 명령으로 값을 표로 보여 준다.
+//! Redis driver. In the console one line = one command; results come back as the same table (QueryResult) as SQL results.
+//! Tree: data source → db0..dbN → keys (icon per type). Opening a key shows its value as a table using the command for its type.
 use crate::db::{int_value, query_result, ColumnInfo, QueryResult};
 use crate::error::{AppError, AppResult};
 use crate::meta::{IndexEntry, RelationInfo, SchemaInfo, SchemaObjects};
@@ -9,9 +9,9 @@ use redis::Value as RV;
 use serde_json::Value;
 use std::time::Instant;
 
-/// 키 하나를 열 때 프론트엔드가 보내는 가짜 명령
+/// Fake command the frontend sends when opening a single key
 pub const VIEW_CMD: &str = "DBTOOL.VIEW";
-/// 트리·검색에서 한 번에 가져오는 최대 키 수
+/// Max number of keys fetched at once for the tree·search
 const MAX_KEYS: usize = 5000;
 
 fn pct(s: &str) -> String {
@@ -28,7 +28,7 @@ pub fn db_index(name: &str) -> i64 {
     name.trim().trim_start_matches("db").parse().unwrap_or(0)
 }
 
-/// Standalone·Sentinel 은 ConnectionManager 하나, Cluster 는 클러스터 연결 + 마스터별 연결(SCAN 용)
+/// Standalone·Sentinel use one ConnectionManager; Cluster uses the cluster connection + a connection per master (for SCAN)
 #[derive(Clone)]
 pub enum RedisConn {
     Single(ConnectionManager),
@@ -60,7 +60,7 @@ impl RedisConn {
     pub fn is_cluster(&self) -> bool {
         matches!(self, RedisConn::Cluster { .. })
     }
-    /// SCAN 을 돌릴 노드들 (클러스터는 마스터 전부)
+    /// Nodes to run SCAN on (all masters for a cluster)
     fn scan_nodes(&self) -> Vec<ConnectionManager> {
         match self {
             RedisConn::Single(m) => vec![m.clone()],
@@ -84,7 +84,7 @@ fn read_pem(path: &str, what: &str) -> AppResult<Option<Vec<u8>>> {
     std::fs::read(expand_home(p)).map(Some).map_err(|e| AppError::Msg(format!("{what} {p}: {e}")))
 }
 
-/// "host:port" 목록 (쉼표·공백·줄바꿈 구분)
+/// List of "host:port" (separated by commas·spaces·newlines)
 pub fn parse_nodes(s: &str, default_port: u16) -> Vec<(String, u16)> {
     s.split(|c: char| c == ',' || c.is_whitespace())
         .map(str::trim)
@@ -140,7 +140,7 @@ fn endpoint(cfg: &ConnectionConfig, user: &str, password: Option<&str>) -> AppRe
         (None, None) => None,
         _ => return Err(AppError::Msg("Both client certificate and client key are required".into())),
     };
-    // require = 암호화만 (인증서 검증 안 함). verify-ca / verify-full = 검증
+    // require = encryption only (no certificate check). verify-ca / verify-full = verified
     let insecure = match ssl.mode() {
         "require" => true,
         "verify-ca" | "verify-full" => false,
@@ -150,7 +150,7 @@ fn endpoint(cfg: &ConnectionConfig, user: &str, password: Option<&str>) -> AppRe
     Ok(Endpoint { scheme: "rediss", auth, insecure, certs })
 }
 
-/// Sentinel 에 물어 현재 마스터 주소를 얻는다
+/// Ask Sentinel for the current master address
 async fn sentinel_master(cfg: &ConnectionConfig, ep: &Endpoint, host: &str, port: u16) -> AppResult<(String, u16)> {
     let r = cfg.redis.clone().unwrap_or_default();
     let master = r.sentinel_master.trim();
@@ -161,7 +161,7 @@ async fn sentinel_master(cfg: &ConnectionConfig, ep: &Endpoint, host: &str, port
     if nodes.is_empty() {
         nodes.push((host.to_string(), port));
     }
-    // Sentinel 은 보통 비밀번호가 없다: 먼저 인증 없이, 안 되면 같은 비밀번호로
+    // Sentinel usually has no password: try without auth first, then with the same password
     let no_auth = Endpoint { scheme: ep.scheme, auth: String::new(), insecure: ep.insecure, certs: ep.certs.clone() };
     let mut errors = vec![];
     for (h, p) in nodes {
@@ -208,7 +208,7 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
                 }
             }
             let mut conn = b.build().map_err(err)?.get_async_connection().await.map_err(|e| AppError::Msg(format!("Redis cluster: {e}")))?;
-            // 마스터 목록 (SCAN 은 노드마다 따로)
+            // Master list (SCAN runs per node)
             let nodes: String = redis::cmd("CLUSTER").arg("NODES").query_async(&mut conn).await.map_err(err)?;
             let mut masters = vec![];
             for line in nodes.lines() {
@@ -235,7 +235,7 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
         _ => RedisConn::Single(ep.manager(host, port, db).await?),
     };
     let mut c = conn.clone();
-    // Startup script (한 줄 = 명령)
+    // Startup script (one line = one command)
     for line in cfg.options.startup_script.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
         let args = parse_command(line)?;
         let name = String::from_utf8_lossy(&args[0]).to_string();
@@ -264,7 +264,7 @@ pub async fn ping(m: &RedisConn) {
     let _: Result<String, _> = redis::cmd("PING").query_async(&mut m).await;
 }
 
-/// redis-cli 식 인자 분리: 공백, "큰따옴표"(\n \t \" \\ \xHH), '작은따옴표'
+/// redis-cli style argument splitting: spaces, "double quotes"(\n \t \" \\ \xHH), 'single quotes'
 pub fn parse_command(line: &str) -> AppResult<Vec<Vec<u8>>> {
     let mut out: Vec<Vec<u8>> = Vec::new();
     let b = line.as_bytes();
@@ -350,7 +350,7 @@ pub fn parse_command(line: &str) -> AppResult<Vec<Vec<u8>>> {
     Ok(out)
 }
 
-/// 명령줄 표시용 따옴표 (Go to DDL)
+/// Quoting for command-line display (Go to DDL)
 pub fn quote_arg(s: &str) -> String {
     if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || ":_-./@".contains(c)) {
         s.to_string()
@@ -381,7 +381,7 @@ fn bytes_text(b: &[u8]) -> Value {
     }
 }
 
-/// Redis 값 → 셀
+/// Redis value → cell
 fn cell(v: &RV) -> Value {
     match v {
         RV::Nil => Value::Null,
@@ -421,7 +421,7 @@ fn pairs(xs: &[RV]) -> Vec<Vec<Value>> {
     xs.chunks(2).map(|c| vec![cell(&c[0]), c.get(1).map(cell).unwrap_or(Value::Null)]).collect()
 }
 
-/// 명령 결과를 표로
+/// Command result as a table
 fn shape(cmd: &str, args: &[Vec<u8>], v: RV, limit: usize, start: Instant) -> QueryResult {
     let has = |w: &str| args.iter().any(|a| a.eq_ignore_ascii_case(w.as_bytes()));
     match (cmd, v) {
@@ -487,7 +487,7 @@ fn shape(cmd: &str, args: &[Vec<u8>], v: RV, limit: usize, start: Instant) -> Qu
     }
 }
 
-/// 값을 바꾸지 않는 명령인지 (MCP 읽기 전용 모드)
+/// Whether the command doesn't change values (MCP read-only mode)
 pub fn is_read_command(cmd: &str, sub: &str) -> bool {
     const READ: &[&str] = &[
         "GET", "MGET", "GETRANGE", "STRLEN", "EXISTS", "TYPE", "TTL", "PTTL", "EXPIRETIME", "PEXPIRETIME", "DBSIZE", "KEYS", "SCAN", "RANDOMKEY",
@@ -511,7 +511,7 @@ pub fn is_read_command(cmd: &str, sub: &str) -> bool {
     }
 }
 
-/// 콘솔 명령 하나 실행
+/// Run one console command
 pub async fn run(m: &RedisConn, line: &str, limit: usize) -> AppResult<QueryResult> {
     let start = Instant::now();
     let line = line.trim().trim_end_matches(';').trim();
@@ -521,7 +521,7 @@ pub async fn run(m: &RedisConn, line: &str, limit: usize) -> AppResult<QueryResu
         let key = args.get(1).ok_or_else(|| AppError::Msg("key required".into()))?;
         return view_key(m, key, limit).await;
     }
-    // 연결을 같이 쓰므로 DB 전환은 콘솔의 database 선택으로 한다
+    // The connection is shared, so DB switching goes through the console's database selection
     if cmd == "SELECT" {
         return Err(AppError::Msg("Use the database selector in the console toolbar to switch Redis databases".into()));
     }
@@ -541,7 +541,7 @@ async fn key_type(m: &mut RedisConn, key: &[u8]) -> AppResult<String> {
     redis::cmd("TYPE").arg(key).query_async(m).await.map_err(err)
 }
 
-/// 키 열기: 타입에 맞는 명령으로 값을 표로 (DataGrip 의 Redis 값 뷰어)
+/// Open a key: show its value as a table using the command for its type (DataGrip's Redis value viewer)
 pub async fn view_key(m: &RedisConn, key: &[u8], limit: usize) -> AppResult<QueryResult> {
     let start = Instant::now();
     let mut mgr = m.clone();
@@ -598,14 +598,14 @@ pub async fn view_key(m: &RedisConn, key: &[u8], limit: usize) -> AppResult<Quer
     Ok(r)
 }
 
-// ───────── 메타데이터 ─────────
+// ───────── Metadata ─────────
 
 pub async fn list_databases(m: &RedisConn, current: i64) -> AppResult<Vec<String>> {
     if m.is_cluster() {
         return Ok(vec!["db0".into()]);
     }
     let mut mgr = m.clone();
-    // 키가 있는 DB + db0 + 설정된 DB (DataGrip 처럼 빈 DB 는 숨긴다)
+    // DBs with keys + db0 + configured DBs (empty DBs are hidden, like DataGrip)
     let info: String = redis::cmd("INFO").arg("keyspace").query_async(&mut mgr).await.map_err(err)?;
     let mut dbs: Vec<i64> = info.lines().filter_map(|l| l.strip_prefix("db")?.split(':').next()?.parse().ok()).collect();
     dbs.push(0);
@@ -615,7 +615,7 @@ pub async fn list_databases(m: &RedisConn, current: i64) -> AppResult<Vec<String
     Ok(dbs.into_iter().map(|d| format!("db{d}")).collect())
 }
 
-/// 트리의 스키마 줄 (MySQL 처럼 숨겨진다)
+/// Schema row in the tree (hidden, like MySQL)
 pub fn list_schemas(db: &str) -> Vec<SchemaInfo> {
     vec![SchemaInfo { name: db.to_string(), is_system: false }]
 }
@@ -642,7 +642,7 @@ async fn scan_keys(m: &RedisConn, pattern: &str, max: usize) -> AppResult<Vec<Ve
     Ok(out)
 }
 
-/// 키마다 같은 명령 (클러스터는 슬롯이 달라 파이프라인 대신 하나씩 동시에)
+/// Same command per key (cluster: slots differ, so run them one by one concurrently instead of a pipeline)
 async fn per_key(m: &RedisConn, keys: &[Vec<u8>], cmds: &[&str]) -> AppResult<Vec<RV>> {
     if keys.is_empty() {
         return Ok(vec![]);
@@ -690,7 +690,7 @@ pub async fn object_index(m: &RedisConn, db: &str) -> AppResult<Vec<IndexEntry>>
         .collect())
 }
 
-/// Go to DDL: 키를 다시 만드는 명령들
+/// Go to DDL: commands that recreate the key
 pub async fn key_ddl(m: &RedisConn, key: &str) -> AppResult<String> {
     let mut mgr = m.clone();
     let k = key.as_bytes();
@@ -739,7 +739,7 @@ pub async fn export(m: &RedisConn, line: &str, out: &mut crate::transfer::Export
     Ok(())
 }
 
-// ───────── Medis 식 키 브라우저 API ─────────
+// ───────── Medis-style key browser API ─────────
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -747,7 +747,7 @@ pub struct KeyRow {
     pub key: String,
     #[serde(rename = "type")]
     pub ty: String,
-    /// 밀리초, -1 = 만료 없음
+    /// Milliseconds, -1 = no expiry
     pub ttl: i64,
 }
 
@@ -758,17 +758,17 @@ pub struct ScanPage {
     pub keys: Vec<KeyRow>,
 }
 
-/// SCAN 한 번(+ 필요하면 몇 번 더) 해서 `count` 개 정도를 타입·TTL 과 함께
+/// One SCAN (+ a few more if needed) to get about `count` keys with type·TTL
 pub async fn scan_page(m: &RedisConn, cursor: &str, pattern: &str, count: usize, type_filter: Option<&str>) -> AppResult<ScanPage> {
     let nodes = m.scan_nodes();
-    // 커서: 단일 노드 "123", 클러스터 "노드번호:커서"
+    // Cursor: single node "123", cluster "node index:cursor"
     let (mut node, mut cur): (usize, u64) = match cursor.split_once(':') {
         Some((n, c)) => (n.parse().unwrap_or(0), c.parse().unwrap_or(0)),
         None => (0, cursor.parse().unwrap_or(0)),
     };
     let mut keys: Vec<Vec<u8>> = Vec::new();
     let pattern = if pattern.trim().is_empty() { "*".to_string() } else { pattern.trim().to_string() };
-    // 패턴이 드문 키만 고르면 한 번의 SCAN 이 비어 있을 수 있으므로 몇 번 반복
+    // If the pattern matches only rare keys a single SCAN can come back empty, so repeat a few times
     for _ in 0..200 {
         let Some(n) = nodes.get(node) else { break };
         let mut mgr = n.clone();
@@ -810,13 +810,13 @@ pub struct KeyDetail {
     #[serde(rename = "type")]
     pub ty: String,
     pub ttl: i64,
-    /// 요소 수 (string 은 바이트 길이)
+    /// Element count (byte length for string)
     pub length: i64,
     pub memory: Option<i64>,
     pub encoding: Option<String>,
-    /// string: 문자열 / hash: [[field, value]] / list·set: [value] / zset: [[member, score]] / stream: [[id, {field: value}]]
+    /// string: string / hash: [[field, value]] / list·set: [value] / zset: [[member, score]] / stream: [[id, {field: value}]]
     pub value: Value,
-    /// 값이 `limit` 보다 많아 일부만 가져왔는지
+    /// Whether only part was fetched because the value has more than `limit`
     pub truncated: bool,
 }
 
@@ -830,10 +830,10 @@ fn raw_text(v: &RV) -> Value {
     }
 }
 
-/// 키 상세에서 보이는 문자열 값의 최대 바이트 (넘으면 앞부분만, truncated)
+/// Max bytes of a string value shown in key details (only the beginning if over, truncated)
 pub const STRING_PREVIEW_MAX: i64 = 1 << 20;
 
-/// 키가 차지하는 메모리 (바이트, 없으면 0). 값을 읽기 전에 크기를 볼 때
+/// Memory used by the key (bytes, 0 if missing). For checking size before reading the value
 pub async fn memory_usage(m: &RedisConn, key: &[u8]) -> AppResult<i64> {
     let mut mgr = m.clone();
     let v: Option<i64> = redis::cmd("MEMORY").arg("USAGE").arg(key).query_async(&mut mgr).await.map_err(err)?;
@@ -862,7 +862,7 @@ pub async fn key_detail(m: &RedisConn, key: &str, limit: usize) -> AppResult<Key
     let length: i64 = if len_cmd.is_empty() { 0 } else { redis::cmd(len_cmd).arg(k).query_async(&mut mgr).await.map_err(err)? };
     let lim = limit as i64;
     let value = match ty.as_str() {
-        // 큰 문자열은 앞부분만 (통째로 읽으면 MCP · 앱 메모리를 다 쓴다)
+        // Only the beginning of large strings (reading it whole would use up MCP · app memory)
         "string" if length > STRING_PREVIEW_MAX => {
             let v: RV = redis::cmd("GETRANGE").arg(k).arg(0).arg(STRING_PREVIEW_MAX - 1).query_async(&mut mgr).await.map_err(err)?;
             raw_text(&v)
@@ -939,7 +939,7 @@ fn ty_is_collection(v: &Value) -> bool {
     v.is_array()
 }
 
-/// 인자 배열 그대로 실행 (값 편집·터미널). 결과는 중첩 JSON 으로
+/// Run an argument array as is (value editing·terminal). Result as nested JSON
 pub async fn exec_args(m: &RedisConn, args: &[String]) -> AppResult<Value> {
     let first = args.first().ok_or_else(|| AppError::Msg("Empty command".into()))?;
     let cmd = first.to_uppercase();
@@ -991,7 +991,7 @@ mod tests {
         assert_eq!(quote_arg("user:1"), "user:1");
     }
 
-    /// MCP 읽기: 큰 값은 읽기 전에 거부하고, 키 상세는 큰 문자열의 앞부분만 읽는다
+    /// MCP read: large values are rejected before reading, and key details read only the beginning of large strings
     #[tokio::test]
     #[ignore]
     async fn redis_big_values_are_not_read_whole() {
@@ -1047,12 +1047,12 @@ mod tests {
         assert_eq!(ok.rows[0][0], "OK");
         let b = run("GET bin").await.unwrap();
         assert_eq!(b.rows[0][0], "0xFF00");
-        // 키 보기 (DBTOOL.VIEW)
+        // View a key (DBTOOL.VIEW)
         let v = run("DBTOOL.VIEW queue").await.unwrap();
         assert_eq!(v.rows.len(), 3);
         let v = run("DBTOOL.VIEW events").await.unwrap();
         assert_eq!(v.columns[0].name, "id");
-        // 트리 메타
+        // Tree metadata
         let dbs = crate::meta::list_databases(&pool).await.unwrap();
         assert!(dbs.contains(&"db0".into()) && dbs.contains(&"db3".into()), "{dbs:?}");
         let objs = crate::meta::list_objects(&pool, "db3").await.unwrap();
@@ -1081,7 +1081,7 @@ mod tests {
         assert_eq!(r["status"], "OK");
         let r = exec_args(m, &["LRANGE".into(), "queue".into(), "0".into(), "-1".into()]).await.unwrap();
         assert_eq!(r, serde_json::json!(["a", "b", "c"]));
-        // 다른 DB 풀은 서로 섞이지 않는다
+        // Pools for different DBs don't mix
         let p0 = crate::db::connect(&cfg("db0"), None).await.unwrap();
         let Pool::Redis(m0, 0) = &p0 else { panic!() };
         assert!(crate::redisdb::run(m0, "EXISTS rank", 1).await.unwrap().rows[0][0] == 0);
@@ -1098,30 +1098,30 @@ mod tests {
         let d = tls_dir();
         let mut c = cfg("0");
         c.port = 16391;
-        // 1) require: 인증서 검증 없이 암호화만
+        // 1) require: encryption only, no certificate check
         c.ssl = Some(crate::store::SslConfig { enabled: true, mode: "require".into(), ..Default::default() });
         let p = crate::db::connect(&c, Some("tlspass")).await.expect("tls require");
         assert!(p.server_version().await.unwrap().starts_with("Redis"));
-        // 2) verify-full + CA + 클라이언트 인증서 (mTLS)
+        // 2) verify-full + CA + client certificate (mTLS)
         c.ssl = Some(crate::store::SslConfig { enabled: true, mode: "verify-full".into(), ca_file: format!("{d}/ca.pem"), cert_file: format!("{d}/client.pem"), key_file: format!("{d}/client-key.pem") });
         let p = crate::db::connect(&c, Some("tlspass")).await.expect("tls verify-full + mtls");
         let Pool::Redis(m, _) = &p else { panic!() };
         crate::redisdb::run(m, "SET tls:k ok", 1).await.unwrap();
         assert_eq!(crate::redisdb::run(m, "GET tls:k", 1).await.unwrap().rows[0][0], "ok");
-        // 3) verify-full 인데 CA 가 없으면 (자체 서명) 거부되어야 한다
+        // 3) verify-full without the CA (self-signed) must be rejected
         c.ssl = Some(crate::store::SslConfig { enabled: true, mode: "verify-full".into(), ..Default::default() });
         assert!(crate::db::connect(&c, Some("tlspass")).await.is_err(), "self-signed must fail without CA");
-        // 4) 평문으로는 접속 불가
+        // 4) Plain text connection must fail
         c.ssl = None;
         assert!(crate::db::connect(&c, Some("tlspass")).await.is_err());
     }
 
-    /// docker: dbtool-redis-sentinel (마스터 16392 requirepass spass, sentinel 26392 master mymaster)
+    /// docker: dbtool-redis-sentinel (master 16392 requirepass spass, sentinel 26392 master mymaster)
     #[tokio::test]
     #[ignore]
     async fn redis_sentinel() {
         let mut c = cfg("2");
-        c.port = 1; // 쓰지 않음: sentinel 노드 목록 사용
+        c.port = 1; // unused: the sentinel node list is used
         c.redis = Some(crate::store::RedisMode { mode: "sentinel".into(), sentinel_master: "mymaster".into(), nodes: "127.0.0.1:1, 127.0.0.1:26392".into() });
         let p = crate::db::connect(&c, Some("spass")).await.expect("sentinel");
         let Pool::Redis(m, 2) = &p else { panic!() };
@@ -1135,7 +1135,7 @@ mod tests {
         assert!(e.contains("does not know master"), "{e}");
     }
 
-    /// docker: dbtool-redis-cluster (127.0.0.1:17001..17003, 마스터 3개)
+    /// docker: dbtool-redis-cluster (127.0.0.1:17001..17003, 3 masters)
     #[tokio::test]
     #[ignore]
     async fn redis_cluster() {
@@ -1145,13 +1145,13 @@ mod tests {
         let p = crate::db::connect(&c, None).await.expect("cluster");
         let Pool::Redis(m, _) = &p else { panic!() };
         assert!(m.is_cluster());
-        // 슬롯이 다른 키 여러 개
+        // Several keys in different slots
         for i in 0..60 {
             crate::redisdb::run(m, &format!("SET ck:{i} v{i}"), 1).await.unwrap();
         }
         crate::redisdb::run(m, "HSET ch:1 a 1 b 2", 1).await.unwrap();
         assert_eq!(crate::redisdb::run(m, "GET ck:42", 1).await.unwrap().rows[0][0], "v42");
-        // 모든 마스터에 걸쳐 SCAN (작은 페이지로 노드:커서 이어가기)
+        // SCAN across all masters (small pages, continuing node:cursor)
         let mut seen = std::collections::HashSet::new();
         let mut cur = "0".to_string();
         let mut pages = 0;

@@ -1,4 +1,4 @@
-//! AI Search (RAG) (⌃K): 인덱스 고르기 → 질문 → 결과는 새 콘솔의 결과 칸. Build (진행은 아래 줄), 트리의 테이블로 새 인덱스, OpenAI 키
+//! AI Search (RAG) (⌃K): pick an index → question → results in a new console's result pane. Build (progress on the bottom line), new index from a tree table, OpenAI key
 use crate::app::{App, Focus, PAction, PItem, Palette, Popup, Tab, TabKind};
 use crate::grid::Grid;
 use crate::migrate::Flow;
@@ -13,7 +13,7 @@ fn palette(title: &str, items: Vec<PItem>) -> Popup {
 }
 
 impl App {
-    /// 저장된 인덱스를 골라 flow 로
+    /// Pick a saved index and go to flow
     fn rag_pick(&mut self, title: &str, flow: Flow) {
         let list = match self.state.rag_indexes() {
             Ok(l) if !l.is_empty() => l,
@@ -44,7 +44,7 @@ impl App {
         self.rag_pick("Build (embed rows of) — pick an index", Flow::RagBuild);
     }
 
-    /// 고르기 창에서 고른 것 (RAG 단계)
+    /// What was picked in the picker window (RAG step)
     pub fn rag_flow(&mut self, flow: Flow, value: String) {
         match flow {
             Flow::RagSearch => {
@@ -123,7 +123,7 @@ impl App {
         }
     }
 
-    /// ⌃K › New RAG Index…: 트리에서 고른 테이블 → 글 열 → 저장할 곳 → 컬렉션 → 임베딩 (제공자·모델)
+    /// ⌃K › New RAG Index…: table picked in the tree → text column → where to store → collection → embedding (provider·model)
     pub fn rag_new_start(&mut self) {
         let Some(n) = self.tree.selected().filter(|n| matches!(&n.kind, NodeKind::Object(k) if k == "table" || k == "partitioned")) else {
             self.status = "Select a table in the explorer first".into();
@@ -174,7 +174,7 @@ impl App {
         });
     }
 
-    /// ⌃K › Set OpenAI API Key…: 가려서 받는다. 비우면 지운다
+    /// ⌃K › Set OpenAI API Key…: input is masked. Empty clears it
     pub fn rag_key_start(&mut self) {
         let mut t = TextArea::default();
         t.set_mask_char('•');

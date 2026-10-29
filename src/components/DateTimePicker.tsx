@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Select, TextInput } from "../ui";
 
-/** DataGrip의 날짜·시간 셀 편집 팝업: 일 / 월 / 연도, 시 : 분 : 초 */
+/** DataGrip-style date · time cell editor popup: day / month / year, hour : minute : second */
 const RE = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}):(\d{2})(\.\d+)?)?(.*)$/;
 const RE_TIME = /^(\d{2}):(\d{2}):(\d{2})(\.\d+)?(.*)$/;
 const pad = (n: number, w = 2) => String(n).padStart(w, "0");

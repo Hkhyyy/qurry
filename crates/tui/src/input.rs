@@ -1,4 +1,4 @@
-//! 키 입력 → 동작 (DataGrip 키맵을 터미널에 맞게)
+//! Key input → actions (DataGrip keymap adapted for the terminal)
 use crate::app::{Action, App, Drag, DropTarget, FieldKind, Focus, Popup, SplitDir, TabKind};
 use crate::tree::NodeKind;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
@@ -8,7 +8,7 @@ fn inside(r: Rect, x: u16, y: u16) -> bool {
     r.width > 0 && x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height
 }
 
-/// 마우스 휠: 포인터 아래 영역을 스크롤
+/// Mouse wheel: scroll the area under the pointer
 fn scroll_at(app: &mut App, x: u16, y: u16, d: isize) {
     if app.popup.is_some() {
         return;
@@ -21,7 +21,7 @@ fn scroll_at(app: &mut App, x: u16, y: u16, d: isize) {
             r.focus_value = true;
         }
     } else if inside(app.hits.text, x, y) {
-        // 글 탭 (DDL·다이어그램): 그 글을 스크롤
+        // Text tabs (DDL·diagram): scroll the text
         app.focus = Focus::Grid;
         if let Some(TabKind::Text(t)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind) {
             t.scroll = (t.scroll as isize + d).max(0) as u16;
@@ -47,7 +47,7 @@ fn scroll_at(app: &mut App, x: u16, y: u16, d: isize) {
     scroll(app, d);
 }
 
-/// 가로 스크롤 (트랙패드 좌우·Shift+휠): 트리는 옆으로 밀고, 그리드는 열을 옮긴다
+/// Horizontal scroll (trackpad left/right·Shift+wheel): shifts the tree sideways, moves the grid by columns
 fn hscroll_at(app: &mut App, x: u16, y: u16, d: isize) {
     if app.popup.is_some() {
         return;
@@ -61,12 +61,12 @@ fn hscroll_at(app: &mut App, x: u16, y: u16, d: isize) {
     }
 }
 
-/// 포인터가 그리드 헤더나 가로 스크롤바 위인지
+/// Whether the pointer is over the grid header or the horizontal scrollbar
 fn over_hbar(app: &mut App, x: u16, y: u16) -> bool {
     app.popup.is_none() && app.grid_mut().is_some_and(|g| inside(g.header, x, y) || inside(g.hbar, x, y))
 }
 
-/// 끌고 있는 탭을 (x, y) 에 놓으면 어디로 가는지
+/// Where a dragged tab lands if dropped at (x, y)
 pub fn drop_target(app: &App, id: u64, x: u16, y: u16) -> Option<DropTarget> {
     let from = app.tab_index(id).map(|i| app.tabs[i].group)?;
     for &(g, bar, body) in &app.hits.groups {
@@ -75,7 +75,7 @@ pub fn drop_target(app: &App, id: u64, x: u16, y: u16) -> Option<DropTarget> {
             return Some(DropTarget::Group(g, before));
         }
         if inside(body, x, y) {
-            // 칸의 오른쪽 / 아래쪽 가장자리에 놓으면 그 칸을 나눈다 (최대 4칸. 제 칸에 하나뿐인 탭은 나눠도 그대로라 빼고)
+            // Dropping on a pane's right / bottom edge splits that pane (up to 4 panes; skipped for the only tab in its own pane, since splitting changes nothing)
             let alone = g == from && app.tabs.iter().filter(|t| t.group == g).count() < 2;
             if app.panes.leaves().len() < crate::panes::MAX && !alone {
                 if x >= body.x + body.width * 2 / 3 {
@@ -116,7 +116,7 @@ fn mouse_down(app: &mut App, x: u16, y: u16) {
             app.drag = Some(Drag::HBar);
             return;
         }
-        // 탭: 누르면 고르고, 끌면 옮긴다
+        // Tabs: click to select, drag to move
         if let Some(&(id, ..)) = app.hits.tabs.iter().find(|(_, x0, x1, ty)| *ty == y && x >= *x0 && x < *x1) {
             if let Some(i) = app.tab_index(id) {
                 app.activate(i);
@@ -125,12 +125,12 @@ fn mouse_down(app: &mut App, x: u16, y: u16) {
             app.drag_pos = (x, y);
             return;
         }
-        // 상하 분할: 아래 칸 탭 바의 빈 곳도 경계선처럼 잡을 수 있다 (테두리 한 줄만으로는 맞히기 어렵다)
+        // Top/bottom split: the empty part of the lower pane's tab bar can also be grabbed like the divider (a one-line border is hard to hit)
         if let Some(i) = app.hits.splits.iter().position(|s| inside(s.3, x, y)) {
             app.drag = Some(Drag::Split(i));
             return;
         }
-        // 포커스 없는 칸을 누르면 그 칸으로
+        // Clicking an unfocused pane focuses it
         let focused = app.focused_group();
         if let Some(&(g, ..)) = app.hits.groups.iter().find(|(g, bar, body)| *g != focused && (inside(*bar, x, y) || inside(*body, x, y))) {
             if let Some(i) = app.group_tab(g) {
@@ -203,7 +203,7 @@ fn mouse_drag(app: &mut App, x: u16, y: u16) {
     }
 }
 
-/// 화면 칸 → 콘솔 글자 위치 (줄, 칸). 마지막으로 그린 커서 칸을 기준으로 (편집기 밖이면 가장 가까운 줄·칸)
+/// Screen cell → console text position (line, column). Based on the last drawn cursor cell (outside the editor, the nearest line·column)
 fn editor_pos(app: &App, x: u16, y: u16) -> Option<(usize, usize)> {
     use unicode_width::UnicodeWidthChar;
     let (cx, cy, row, col) = app.hits.caret?;
@@ -211,7 +211,7 @@ fn editor_pos(app: &App, x: u16, y: u16) -> Option<(usize, usize)> {
     let lines = c.editor.lines();
     let w = |ch: char| ch.width().unwrap_or(0) as i32;
     let r = (row as i32 + y as i32 - cy as i32).clamp(0, lines.len().saturating_sub(1) as i32) as usize;
-    // 0번 칸이 그려졌을 화면 x (커서 줄 기준. 가로로 밀려 있어도 맞다)
+    // Screen x where column 0 was drawn (relative to the cursor line; correct even when scrolled horizontally)
     let x0 = cx as i32 - lines.get(row)?.chars().take(col).map(w).sum::<i32>();
     let (mut acc, mut n) = (0, 0);
     for ch in lines[r].chars() {
@@ -234,7 +234,7 @@ fn mouse_up(app: &mut App, x: u16, y: u16) {
     app.drag = None;
 }
 
-/// 같은 곳을 0.4초 안에 두 번 누르면 더블클릭
+/// Two clicks on the same spot within 0.4s = double-click
 fn double(app: &mut App, x: u16, y: u16) -> bool {
     let now = std::time::Instant::now();
     let dbl = matches!(app.hits.last_click, Some((t, px, py)) if now.duration_since(t).as_millis() < 400 && px == x && py == y);
@@ -244,7 +244,7 @@ fn double(app: &mut App, x: u16, y: u16) -> bool {
 
 fn click(app: &mut App, x: u16, y: u16) {
     let dbl = double(app, x, y);
-    // 팝업: 팔레트 항목만 클릭으로 고른다 (그 밖은 닫기)
+    // Popups: only palette items are clickable (clicking elsewhere closes)
     if let Some(p) = &mut app.popup {
         if let Popup::Palette(pal) = p {
             if inside(app.hits.palette, x, y) {
@@ -258,14 +258,14 @@ fn click(app: &mut App, x: u16, y: u16) {
         }
         return;
     }
-    // 트리
+    // Tree
     if inside(app.hits.tree, x, y) {
         app.focus = Focus::Tree;
         let i = app.tree.offset + (y - app.hits.tree.y) as usize;
-        // 누른 줄 하나만 복사한다
+        // Copy only the clicked line
         let Some((depth, node)) = app.tree.visible().get(i).map(|(d, n)| (*d, (*n).clone())) else { return };
         app.tree.sel = i;
-        // ▸ 위를 누르면 펼치기/접기
+        // Clicking ▸ expands/collapses
         let chev = app.hits.tree.x + (depth * 2) as u16;
         if node.expandable && (x == chev || x == chev + 1) {
             app.toggle_node(&node);
@@ -274,7 +274,7 @@ fn click(app: &mut App, x: u16, y: u16) {
         }
         return;
     }
-    // 에디터: 누른 곳으로 커서, 끌면 선택
+    // Editor: click moves the cursor, drag selects
     if inside(app.hits.editor, x, y) {
         app.focus = Focus::Editor;
         if let Some(pos) = editor_pos(app, x, y) {
@@ -287,7 +287,7 @@ fn click(app: &mut App, x: u16, y: u16) {
         }
         return;
     }
-    // Redis 키 목록
+    // Redis key list
     if inside(app.hits.redis_keys, x, y) {
         let id = app.tabs[app.active].id;
         if let Some(TabKind::Redis(r)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind) {
@@ -300,7 +300,7 @@ fn click(app: &mut App, x: u16, y: u16) {
                     let k = r.keys[idx].key.clone();
                     app.redis_load_key(id, k);
                 }
-                // 폴더를 누르면 펼치고 접는다
+                // Clicking a folder expands/collapses it
                 Some(crate::app::KRow::Folder { path, .. }) => {
                     r.sel = i;
                     if !r.open.remove(&path) {
@@ -312,7 +312,7 @@ fn click(app: &mut App, x: u16, y: u16) {
         }
         return;
     }
-    // 그리드 (결과 / 테이블 / Redis 값)
+    // Grid (results / table / Redis value)
     if inside(app.hits.results, x, y) || inside(app.hits.redis_value, x, y) {
         app.focus = Focus::Grid;
         if let Some(TabKind::Redis(r)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind) {
@@ -334,7 +334,7 @@ fn click(app: &mut App, x: u16, y: u16) {
                 }
             }
         }
-        // 끌면 범위 선택
+        // Drag to select a range
         if start {
             app.drag = Some(Drag::Grid);
         }
@@ -347,10 +347,10 @@ pub fn on_event(app: &mut App, ev: Event) {
         Event::Key(k) if k.kind != KeyEventKind::Release => on_key(app, k),
         Event::Paste(s) => paste(app, s),
         Event::Mouse(m) => match m.kind {
-            // Shift+휠 = 가로 스크롤
+            // Shift+wheel = horizontal scroll
             MouseEventKind::ScrollDown if m.modifiers.contains(KeyModifiers::SHIFT) => hscroll_at(app, m.column, m.row, 3),
             MouseEventKind::ScrollUp if m.modifiers.contains(KeyModifiers::SHIFT) => hscroll_at(app, m.column, m.row, -3),
-            // ⌥+휠, 또는 그리드 헤더·스크롤바 위에서 휠 = 가로 스크롤 (가로 휠을 안 넘기는 터미널용)
+            // ⌥+wheel, or wheel over the grid header·scrollbar = horizontal scroll (for terminals that don't pass the horizontal wheel)
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp if m.modifiers.contains(KeyModifiers::ALT) || over_hbar(app, m.column, m.row) => {
                 hscroll_at(app, m.column, m.row, if m.kind == MouseEventKind::ScrollDown { 1 } else { -1 })
             }
@@ -367,11 +367,11 @@ pub fn on_event(app: &mut App, ev: Event) {
     }
 }
 
-/// ⌘V / 터미널 붙여넣기: 열린 입력칸(한 줄 입력·팔레트·Data Source 폼)이 있으면 거기로, 아니면 콘솔 에디터로
+/// ⌘V / terminal paste: into the open input (single-line input·palette·Data Source form) if any, otherwise the console editor
 fn paste(app: &mut App, s: String) {
-    // 터미널(xterm.js, tmux 등)은 줄바꿈을 \r 로 보내기도 한다. \r 이 편집기에 남으면 화면이 깨진다
+    // Terminals (xterm.js, tmux, etc.) may send newlines as \r. A \r left in the editor breaks the display
     let s = s.replace("\r\n", "\n").replace('\r', "\n");
-    // 한 줄 입력칸에는 줄바꿈을 공백으로
+    // Newlines become spaces in single-line inputs
     let one = || s.trim_end_matches(['\r', '\n']).replace("\r\n", " ").replace(['\r', '\n'], " ");
     if matches!(app.popup, Some(Popup::Find(_))) {
         return app.find_paste(&s);
@@ -399,7 +399,7 @@ fn paste(app: &mut App, s: String) {
             Some(TabKind::Console(c)) if app.focus == Focus::Editor => {
                 c.editor.insert_str(s);
             }
-            // 테이블 데이터: 현재 칸부터 채운다 (⌘V)
+            // Table data: fill from the current cell (⌘V)
             Some(TabKind::Table(tt)) if app.focus == Focus::Grid => {
                 if let Some(g) = tt.grid.as_mut().filter(|g| g.cols() > 0) {
                     g.paste(&s);
@@ -432,15 +432,15 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
     if app.designer.is_some() {
         return crate::designer::key(app, k);
     }
-    // ── 전역 명령 (키맵: keys.rs, 바꾸기: F1) ──
+    // ── Global commands (keymap: keys.rs, rebind: F1) ──
     if let Some(a) = app.keys.lookup(&k) {
-        // 탐색기에서 실행 키 = 새로 고침
+        // Run key in the explorer = refresh
         if a == Action::Execute && app.focus == Focus::Tree {
             return app.run_action(Action::Refresh);
         }
         return app.run_action(a);
     }
-    // Alt+1~9: 워크스페이스 (키맵에서 그 키를 다른 명령에 쓰면 그 명령이 먼저)
+    // Alt+1~9: workspaces (if the keymap binds that key to another command, that command wins)
     if let KeyCode::Char(c @ '1'..='9') = k.code
         && k.modifiers == KeyModifiers::ALT
     {
@@ -453,7 +453,7 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
     }
 }
 
-/// 커서 앞 단어로 후보를 거른다 (대소문자·따옴표 무시, 이미 다 친 것은 빼고, 8개까지)
+/// Filter candidates by the word before the cursor (ignoring case·quotes, skipping ones already fully typed, up to 8)
 fn input_complete(input: &tui_textarea::TextArea, words: &[String], force: bool) -> Option<(Vec<String>, usize, usize)> {
     if words.is_empty() {
         return None;
@@ -477,8 +477,8 @@ fn input_complete(input: &tui_textarea::TextArea, words: &[String], force: bool)
     (!items.is_empty()).then_some((items, 0, n))
 }
 
-/// 한 글자 명령(a 행 추가, d 삭제 …)을 쓰는 화면용: ⌘←/→ 는 Home/End (터미널이 ⌃A/⌃E 로 보내기도 한다), ⌘C 는 y(복사),
-/// 그 밖에 ⌃/⌥/⌘ 이 같이 눌린 글자는 명령으로 받지 않는다 (⌘← 가 ⌃A 로 와서 행이 추가되던 문제)
+/// For screens with single-letter commands (a add row, d delete …): ⌘←/→ are Home/End (terminals may send them as ⌃A/⌃E), ⌘C is y (copy),
+/// other letters pressed with ⌃/⌥/⌘ are not taken as commands (fixes ⌘← arriving as ⌃A and adding a row)
 fn plain(k: KeyEvent) -> Option<KeyEvent> {
     let m = k.modifiers;
     let to = |code| Some(KeyEvent::new(code, KeyModifiers::NONE));
@@ -487,9 +487,9 @@ fn plain(k: KeyEvent) -> Option<KeyEvent> {
         KeyCode::Char('e') if m == KeyModifiers::CONTROL => to(KeyCode::End),
         KeyCode::Left if m.contains(KeyModifiers::SUPER) => to(KeyCode::Home),
         KeyCode::Right if m.contains(KeyModifiers::SUPER) => to(KeyCode::End),
-        // ⌘C = y (복사)
+        // ⌘C = y (copy)
         KeyCode::Char('c') if m == KeyModifiers::SUPER => to(KeyCode::Char('y')),
-        // ⌃Z = 편집 되돌리기
+        // ⌃Z = undo edit
         KeyCode::Char('z') if m == KeyModifiers::CONTROL => Some(k),
         KeyCode::Char(_) if m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) => None,
         _ => Some(k),
@@ -499,10 +499,10 @@ fn plain(k: KeyEvent) -> Option<KeyEvent> {
 fn tree_key(app: &mut App, k: KeyEvent) {
     let Some(k) = plain(k) else { return };
     let n = app.tree.visible().len();
-    // 스피드 서치 입력 중
+    // Typing a speed search
     if !app.tree.filter.is_empty() || k.code == KeyCode::Char('/') {
         match k.code {
-            // 필터가 걸려 있으면 지금 필터를 채워서 연다 (비우고 Enter = 해제)
+            // If a filter is set, open with the current filter filled in (clear it and Enter = remove)
             KeyCode::Char('/') => {
                 let cur = app.tree.filter.clone();
                 app.input("Speed search (filters loaded nodes · empty = clear)", &cur, |a, s| {
@@ -566,7 +566,7 @@ fn tree_key(app: &mut App, k: KeyEvent) {
         }
         KeyCode::Char('n') => app.run_action(Action::NewDataSource),
         KeyCode::Char('e') => app.run_action(Action::EditDataSource),
-        // 고른 Data Source 를 다른 워크스페이스로
+        // Move the selected Data Source to another workspace
         KeyCode::Char('w') => app.ws_move_conn_pick(),
         KeyCode::Char('D') => app.run_action(Action::DeleteDataSource),
         KeyCode::Char('c') => app.run_action(Action::Connect),
@@ -593,10 +593,10 @@ fn tree_key(app: &mut App, k: KeyEvent) {
     }
 }
 
-/// OSC 52 로 클립보드 복사 (대부분의 최신 터미널 지원)
+/// Copy to the clipboard via OSC 52 (supported by most modern terminals)
 pub fn copy(app: &mut App, text: &str) {
     use std::io::Write;
-    // 이 컴퓨터에서 돌면 시스템 클립보드에 바로 (OSC 52 를 막거나 크기를 자르는 터미널이 많다). SSH 로 붙었으면 OSC 52 만 (원격 클립보드는 의미가 없다)
+    // When running on this machine, write straight to the system clipboard (many terminals block OSC 52 or truncate it). Over SSH, OSC 52 only (the remote clipboard is meaningless)
     let native = std::env::var_os("SSH_CONNECTION").is_none() && std::env::var_os("SSH_TTY").is_none() && native_copy(text);
     if !native {
         let b64 = base64_encode(text.as_bytes());
@@ -607,10 +607,10 @@ pub fn copy(app: &mut App, text: &str) {
     app.status = if lines > 1 { format!("Copied {lines} lines") } else { format!("Copied: {}", text.chars().take(60).collect::<String>()) };
 }
 
-/// pbcopy (macOS) · wl-copy / xclip (Linux). 성공하면 true
+/// pbcopy (macOS) · wl-copy / xclip (Linux). true on success
 fn native_copy(text: &str) -> bool {
     use std::io::Write;
-    // 테스트가 쓰는 사람의 클립보드를 덮어쓰지 않게
+    // Don't overwrite the clipboard of the person running the tests
     if cfg!(test) {
         return false;
     }
@@ -646,7 +646,7 @@ fn editor_key(app: &mut App, k: KeyEvent) {
         app.focus = Focus::Grid;
         return grid_key(app, k);
     };
-    // 자동완성 목록이 열려 있을 때
+    // While the autocomplete list is open
     if let Some(cmp) = &mut c.complete {
         let n = cmp.items.len();
         match k.code {
@@ -661,13 +661,13 @@ fn editor_key(app: &mut App, k: KeyEvent) {
     }
     let open = c.complete.is_some();
     match k.code {
-        // Esc: 탐색기로, Tab(빈 곳 아님)은 들여쓰기이므로 결과로 가는 건 Shift+Tab/F6
+        // Esc: to the explorer; Tab (when not at an empty spot) indents, so Shift+Tab/F6 goes to results
         KeyCode::Esc => {
             app.explorer = true;
             app.focus = Focus::Tree;
         }
         KeyCode::BackTab => app.focus = Focus::Grid,
-        // ⌘A = 전부 고르기 (⌫ 로 지운다), ⌘C = 고른 글 복사. 그 밖의 ⌘+글자는 글자로 넣지 않는다
+        // ⌘A = select all (delete with ⌫), ⌘C = copy selected text. Other ⌘+letter combos don't insert text
         KeyCode::Char('a') if k.modifiers == KeyModifiers::SUPER => c.editor.select_all(),
         KeyCode::Char('c') if k.modifiers == KeyModifiers::SUPER => {
             if let Some(((r0, c0), (r1, c1))) = c.editor.selection_range() {
@@ -680,8 +680,8 @@ fn editor_key(app: &mut App, k: KeyEvent) {
             c.editor.input(k);
         }
     }
-    // 단어나 '.' 을 치면 열고(GUI 처럼), 열린 채로 지우면 다시 거른다. 그 밖의 키는 닫는다
-    // (macOS 는 Ctrl+Space 가 입력 소스 전환이라 타이핑으로 여는 게 기본)
+    // Typing a word or '.' opens it (like the GUI), deleting while open re-filters. Any other key closes it
+    // (On macOS Ctrl+Space switches input sources, so opening by typing is the default)
     let plain = !k.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
     let typed = plain && matches!(k.code, KeyCode::Char(ch) if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' || ch == '\'' || ch == ' ' || ch == '>');
     if typed || (open && k.code == KeyCode::Backspace) {
@@ -692,7 +692,7 @@ fn editor_key(app: &mut App, k: KeyEvent) {
 }
 
 fn grid_key(app: &mut App, k: KeyEvent) {
-    // Esc: 고른 범위가 있으면 먼저 그것만 푼다
+    // Esc: if there's a selection, clear just that first
     if k.code == KeyCode::Esc {
         if let Some(g) = app.grid_mut().filter(|g| g.anchor.is_some()) {
             g.anchor = None;
@@ -716,7 +716,7 @@ fn grid_key(app: &mut App, k: KeyEvent) {
             KeyCode::Char('p') => app.dba_palette(),
             KeyCode::Esc => app.focus = Focus::Tree,
             _ => {
-                // 움직이면 (사라진 세션 대신) 새로 고른 행
+                // Moving selects a new row (instead of the vanished session)
                 d.gone = None;
                 nav(app, k)
             }
@@ -727,7 +727,7 @@ fn grid_key(app: &mut App, k: KeyEvent) {
             KeyCode::PageDown => tt.scroll = tt.scroll.saturating_add(20),
             KeyCode::PageUp => tt.scroll = tt.scroll.saturating_sub(20),
             KeyCode::Home | KeyCode::Char('g') => tt.scroll = 0,
-            // 화면에 맞춰 마지막 줄까지 (그릴 때 줄인다)
+            // Up to the last line that fits the screen (trimmed when drawing)
             KeyCode::End | KeyCode::Char('G') => tt.scroll = u16::MAX,
             KeyCode::Char('y') => {
                 let s = tt.text.clone();
@@ -809,13 +809,13 @@ fn grid_key(app: &mut App, k: KeyEvent) {
     }
 }
 
-/// 그리드 이동
+/// Grid navigation
 fn nav(app: &mut App, k: KeyEvent) {
     let Some(g) = app.grid_mut() else { return };
     let page = g.page as isize;
     let shift = k.modifiers.contains(KeyModifiers::SHIFT);
     match k.code {
-        // Shift+화살표 = 범위 선택 (DataGrip). 가로 스크롤은 트랙패드·Shift+휠·스크롤바
+        // Shift+arrows = range selection (DataGrip). Horizontal scroll is trackpad·Shift+wheel·scrollbar
         KeyCode::Down if shift => g.extend(1, 0),
         KeyCode::Up if shift => g.extend(-1, 0),
         KeyCode::Right if shift => g.extend(0, 1),
@@ -831,7 +831,7 @@ fn nav(app: &mut App, k: KeyEvent) {
         KeyCode::Char('g') => g.row = 0,
         KeyCode::Char('G') => g.row = g.rows().saturating_sub(1),
         KeyCode::Char('y') => {
-            // 범위를 골랐으면 TSV (시트에 칸으로 붙는다), 아니면 지금 칸
+            // TSV if a range is selected (pastes into cells in a sheet), otherwise the current cell
             let Some((r0, c0, r1, c1)) = g.sel_rect() else {
                 let v = g.value(g.row, g.col).unwrap_or_else(|| "NULL".into());
                 return copy(app, &v);
@@ -867,7 +867,7 @@ fn redis_key(app: &mut App, id: u64, k: KeyEvent) {
             }
             KeyCode::Enter | KeyCode::Char('e') => {
                 let Some(key) = cur_key else { return };
-                // 선택 요소 편집
+                // Edit the selected element
                 let (field, val) = match (&r.value, &r.detail) {
                     (Some(g), _) => (g.value(g.row, 0).unwrap_or_default(), g.value(g.row, g.cols().saturating_sub(1)).unwrap_or_default()),
                     (None, Some((_, d))) => (String::new(), d.value.as_str().unwrap_or("").to_string()),
@@ -906,7 +906,7 @@ fn redis_key(app: &mut App, id: u64, k: KeyEvent) {
                     "zset" => vec!["ZREM".into(), key, item],
                     "stream" => vec!["XDEL".into(), key, item],
                     "list" => {
-                        // 인덱스 위치를 표식으로 바꾼 뒤 LREM
+                        // Replace the element at the index with a marker, then LREM
                         let mark = format!("__dbtool_del_{}", uuid::Uuid::new_v4());
                         app.redis_cmd(id, vec!["LSET".into(), key.clone(), item, mark.clone()], false);
                         vec!["LREM".into(), key, "1".into(), mark]
@@ -964,7 +964,7 @@ fn redis_key(app: &mut App, id: u64, k: KeyEvent) {
                 app.redis_load_key(id, k)
             }
         }
-        // 폴더: → / Enter 펼치기·접기. 키: 값으로
+        // Folders: → / Enter expand·collapse. Keys: go to the value
         KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') if matches!(rows.get(r.sel), Some(crate::app::KRow::Folder { .. })) => {
             if let Some(crate::app::KRow::Folder { path, .. }) = rows.get(r.sel) {
                 let open = r.open.contains(path);
@@ -977,7 +977,7 @@ fn redis_key(app: &mut App, id: u64, k: KeyEvent) {
                 }
             }
         }
-        // ←: 열린 폴더는 접고, 아니면 부모 폴더로
+        // ←: collapse an open folder, otherwise go to the parent folder
         KeyCode::Left | KeyCode::Char('h') => match rows.get(r.sel) {
             Some(crate::app::KRow::Folder { path, .. }) if r.open.contains(path) => {
                 r.open.remove(path);
@@ -1063,7 +1063,7 @@ fn redis_key(app: &mut App, id: u64, k: KeyEvent) {
                         Err(e) => a.popup = Some(Popup::Message { title: shown, text: format!("(error) {e}") }),
                     });
                 };
-                // FLUSHALL·FLUSHDB·DEL 같은 지우는 명령은 한 번 더 묻는다
+                // Destructive commands like FLUSHALL·FLUSHDB·DEL ask once more
                 match qurry_core::guard::unsafe_statement(&line, qurry_core::store::DbKind::Redis) {
                     Some(why) => a.popup = Some(Popup::Confirm { text: format!("{why}:\n  {line}\nRun it anyway?"), on_yes: Box::new(move |a| run(a, line)) }),
                     None => run(a, line),
@@ -1082,7 +1082,7 @@ fn popup_key(app: &mut App, k: KeyEvent) {
     let popup = app.popup.take().unwrap();
     match popup {
         Popup::Help { mut sel, scroll, record: Some(add), .. } => {
-            // 새 키 녹화 중: Esc = 취소
+            // Recording a new key: Esc = cancel
             let message = if k.code == KeyCode::Esc {
                 None
             } else {
@@ -1145,7 +1145,7 @@ fn popup_key(app: &mut App, k: KeyEvent) {
             _ => app.popup = Some(Popup::Confirm { text, on_yes }),
         },
         Popup::Input { title, mut input, on_ok, words, mut complete } => {
-            // 자동완성 목록이 열려 있으면: ↑↓ 고르기 · Tab/Enter 넣기 · Esc 닫기
+            // If the autocomplete list is open: ↑↓ select · Tab/Enter insert · Esc close
             if let Some((items, sel, prefix)) = &mut complete {
                 match k.code {
                     KeyCode::Up => *sel = sel.saturating_sub(1),
@@ -1169,7 +1169,7 @@ fn popup_key(app: &mut App, k: KeyEvent) {
                 KeyCode::Esc => {}
                 KeyCode::Enter => on_ok(app, input.lines().join("")),
                 _ => {
-                    // Tab·⌃Space = 지금 단어로 목록 열기 (한 줄 입력이라 Tab 글자는 넣지 않는다)
+                    // Tab·⌃Space = open the list for the current word (single-line input, so no Tab character is inserted)
                     let force = k.code == KeyCode::Tab || (k.code == KeyCode::Char(' ') && k.modifiers.contains(KeyModifiers::CONTROL)) || k.code == KeyCode::Null;
                     if !force {
                         input.input(k);
@@ -1179,7 +1179,7 @@ fn popup_key(app: &mut App, k: KeyEvent) {
                 }
             }
         }
-        // 위에서 따로 받는다
+        // Handled separately above
         Popup::Find(bar) => app.popup = Some(Popup::Find(bar)),
         Popup::Scope(mut e) => {
             match k.code {
@@ -1233,7 +1233,7 @@ fn popup_key(app: &mut App, k: KeyEvent) {
                 KeyCode::Esc => return,
                 KeyCode::Down | KeyCode::Tab => form.sel = (form.sel + 1) % n,
                 KeyCode::Up | KeyCode::BackTab => form.sel = (form.sel + n - 1) % n,
-                // SSH 처음 보는 서버: 지문을 확인한 뒤 신뢰
+                // SSH unknown server: trust after confirming the fingerprint
                 KeyCode::Char('y') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                     let v = |l: &str| form.fields.iter().find(|f| f.label == l).map(|f| f.value.trim().to_string()).unwrap_or_default();
                     let port = v("SSH port").parse().unwrap_or(22);
@@ -1270,12 +1270,12 @@ fn popup_key(app: &mut App, k: KeyEvent) {
                             let i = opts.iter().position(|o| *o == f.value).unwrap_or(0);
                             let j = if k.code == KeyCode::Left { (i + opts.len() - 1) % opts.len() } else { (i + 1) % opts.len() };
                             f.value = opts[j].to_string();
-                            // DB 종류를 바꾸면 기본 포트도
+                            // Changing the DB type also changes the default port
                             if f.label == "Type" {
                                 const PORTS: &[(&str, &str)] = &[("postgres", "5432"), ("mysql", "3306"), ("redis", "6379"), ("sqlite", "0"), ("duckdb", "0"), ("mssql", "1433"), ("clickhouse", "8123"), ("mongodb", "27017"), ("oracle", "1521"), ("qdrant", "6333"), ("chroma", "8000"), ("milvus", "19530")];
                                 let port = PORTS.iter().find(|x| x.0 == f.value).map(|x| x.1).unwrap_or("5432");
                                 if let Some(p) = form.fields.iter_mut().find(|x| x.label == "Port") {
-                                    // 손으로 바꾼 포트는 두고, 다른 종류의 기본 포트였으면 바꾼다
+                                    // Keep a manually changed port; replace it if it was another type's default port
                                     if p.value.is_empty() || PORTS.iter().any(|x| x.1 == p.value) {
                                         p.value = port.into();
                                     }
@@ -1313,7 +1313,7 @@ fn save_form(app: &mut App, mut form: crate::app::ConnForm) {
     match App::form_config(&form) {
         Ok((cfg, pw, ssh)) => {
             let st = app.state.clone();
-            // 폼의 Workspace: 고친 Data Source 는 있던 곳에서 옮기고, 새 것은 고른 곳에 넣는다
+            // Form's Workspace: an edited Data Source moves out of where it was, a new one goes into the selected one
             let from = form.edit.as_ref().map(|e| app.ws_of_conn(&e.id));
             let to = form.fields.iter().find(|f| f.label == "Workspace").and_then(|f| app.ws_from_label(&f.value)).unwrap_or(app.cur_ws);
             app.spawn(async move { st.save_connection(cfg, pw, ssh).await.map_err(|e| e.to_string()) }, move |a, r| match r {
@@ -1334,7 +1334,7 @@ fn save_form(app: &mut App, mut form: crate::app::ConnForm) {
     }
 }
 
-/// 팔레트·키맵에 보이는 명령 이름
+/// Command names shown in the palette·keymap
 pub fn name_of(a: Action) -> &'static str {
     crate::app::ACTIONS.iter().find(|x| x.0 == a).map(|x| x.1).unwrap_or("?")
 }
@@ -1346,7 +1346,7 @@ mod tests {
     #[test]
     fn modifier_letters_are_not_commands() {
         let k = |c, m| KeyEvent::new(c, m);
-        // ⌘← 가 ⌃A 로 와도 행 추가가 아니라 첫 열로
+        // ⌘← arriving as ⌃A goes to the first column instead of adding a row
         assert_eq!(plain(k(KeyCode::Char('a'), KeyModifiers::CONTROL)).map(|x| x.code), Some(KeyCode::Home));
         assert_eq!(plain(k(KeyCode::Right, KeyModifiers::SUPER)).map(|x| x.code), Some(KeyCode::End));
         assert!(plain(k(KeyCode::Char('d'), KeyModifiers::ALT)).is_none());
@@ -1355,10 +1355,10 @@ mod tests {
         assert_eq!(plain(k(KeyCode::Char('z'), KeyModifiers::CONTROL)).map(|x| x.code), Some(KeyCode::Char('z')));
     }
 
-    // ───────── 키를 넣어 확인 (testkit) ─────────
+    // ───────── Check by feeding keys (testkit) ─────────
     use crate::testkit::Harness;
 
-    /// 같은 이름의 테이블 탭: 스키마가 다르면 schema.table, 스키마도 같으면 db.schema.table
+    /// Table tabs with the same name: schema.table if schemas differ, db.schema.table if the schemas are the same too
     #[tokio::test]
     async fn same_table_tabs_show_schema() {
         let mut h = Harness::new().await;
@@ -1378,7 +1378,7 @@ mod tests {
         assert_eq!((label(&h, a), label(&h, c), label(&h, b)), ("postgres.public.orders".into(), "app_test.public.orders".into(), "billing.orders".into()));
     }
 
-    /// ⌘← 가 ⌃A 로 와도 행을 추가하지 않는다 (a 는 행 추가)
+    /// ⌘← arriving as ⌃A doesn't add a row (a adds a row)
     #[tokio::test]
     async fn ctrl_a_in_table_moves_to_first_column() {
         let mut h = Harness::new().await;
@@ -1391,7 +1391,7 @@ mod tests {
         assert_eq!(h.table(id).grid.as_ref().unwrap().added, 1);
     }
 
-    /// WHERE 입력에서 컬럼·키워드 자동완성
+    /// Column·keyword autocomplete in the WHERE input
     #[tokio::test]
     async fn where_input_completes_columns_and_keywords() {
         let mut h = Harness::new().await;
@@ -1407,7 +1407,7 @@ mod tests {
         assert_eq!(h.table(id).where_, "bank_code = '002' AND");
     }
 
-    /// ⌘C 는 y 처럼 셀 값을 복사한다 (터미널이 ⌘C 를 넘겨줄 때)
+    /// ⌘C copies the cell value like y (when the terminal passes ⌘C through)
     #[tokio::test]
     async fn cmd_c_copies_cell() {
         let mut h = Harness::new().await;
@@ -1417,7 +1417,7 @@ mod tests {
         assert_eq!(h.app.status, "Copied: PERCENT");
     }
 
-    /// Recent Tabs 에는 열린 탭이 다 나온다 (되살린 뒤 아직 안 본 탭도). 최근에 본 탭이 먼저
+    /// Recent Tabs lists all open tabs (including restored tabs not yet viewed). Most recently viewed first
     #[tokio::test]
     async fn recent_tabs_lists_every_open_tab() {
         let mut h = Harness::new().await;
@@ -1432,7 +1432,7 @@ mod tests {
         assert!(matches!(p.items[0].action, crate::app::PAction::Tab(id) if id == a));
     }
 
-    /// 터미널은 붙여넣기 줄바꿈을 \r 로 보내기도 한다 (xterm.js, tmux): 줄은 그대로, \r 은 남지 않는다
+    /// Terminals may send pasted newlines as \r (xterm.js, tmux): lines are kept, no \r remains
     #[tokio::test]
     async fn paste_into_console_keeps_lines() {
         let mut h = Harness::new().await;
@@ -1441,7 +1441,7 @@ mod tests {
         assert_eq!(h.console_text(), "BEGIN;\n\n-- 1. 스키마\nGRANT USAGE\n  ON x;\nCOMMIT;\n");
     }
 
-    /// ⌃Enter: 문장이 여럿이면 무엇을 실행할지 묻는다 (DataGrip). 고른 것부터 실행한다
+    /// ⌃Enter: with multiple statements, asks what to run (DataGrip). Runs from the chosen one
     #[tokio::test]
     async fn execute_asks_what_to_run() {
         let mut h = Harness::new().await;
@@ -1454,13 +1454,13 @@ mod tests {
         h.key("Down");
         h.key("Enter");
         h.settle().await;
-        // 접속이 없어 첫 문장에서 멈춘다: 고른 범위의 첫 문장이 GRANT b
+        // Stops at the first statement for lack of a connection: the first statement of the chosen range is GRANT b
         let out = h.console_output();
         assert!(out.iter().any(|l| l.ends_with("> GRANT b TO x")), "{out:?}");
         assert!(!out.iter().any(|l| l.contains("BEGIN")), "{out:?}");
     }
 
-    /// 실행 설정을 Smallest 로 바꾸면 묻지 않고 커서 문장만
+    /// With the execution setting set to Smallest, runs only the cursor statement without asking
     #[tokio::test]
     async fn execute_smallest_runs_caret_statement() {
         let mut h = Harness::new().await;
@@ -1472,7 +1472,7 @@ mod tests {
         assert!(h.console_output().iter().any(|l| l.ends_with("> GRANT a TO x")));
     }
 
-    /// Manage Shown Schemas: Space 로 고르고 Enter 로 저장 (Data Source 의 scope, GUI 와 공유). Esc 는 저장하지 않는다
+    /// Manage Shown Schemas: Space to toggle, Enter to save (the Data Source's scope, shared with the GUI). Esc doesn't save
     #[tokio::test]
     async fn manage_shown_schemas_saves_scope() {
         use qurry_core::store::{ConnectionConfig, DbKind};
@@ -1488,8 +1488,8 @@ mod tests {
 
         h.app.open_scope("c1", dbs(), None);
         assert!(h.screen(120, 30).contains("Manage Shown Schemas"));
-        // 줄: All databases · Default database · app · postgres · shop
-        h.key("Space"); // All databases 끄기
+        // Lines: All databases · Default database · app · postgres · shop
+        h.key("Space"); // turn off All databases
         for _ in 0..4 {
             h.key("Down");
         }
@@ -1507,17 +1507,17 @@ mod tests {
         h.key("Enter");
         assert!(h.app.popup.is_none());
         assert_eq!(h.app.state.store.get("c1").unwrap().unwrap().scope.databases, Some(vec!["shop".to_string()]));
-        // 트리도 바로 새 범위를 쓴다
+        // The tree uses the new scope right away too
         assert_eq!(h.app.conn("c1").unwrap().config.scope.databases, Some(vec!["shop".to_string()]));
 
-        // 그 사이 다른 곳(GUI·MCP)에서 바꾼 설정을 예전 값으로 되돌리지 않는다 (읽기 전용을 켜 둔 것 등)
+        // Don't revert settings changed elsewhere meanwhile (GUI·MCP) to old values (e.g. read-only turned on)
         let mut changed = h.app.state.store.get("c1").unwrap().unwrap();
         changed.read_only = true;
         changed.host = "db.internal".into();
         h.app.state.store.save(&changed).unwrap();
         h.app.open_scope("c1", dbs(), None);
         h.key("Down");
-        h.key("Space"); // Default database 켜기
+        h.key("Space"); // turn on Default database
         h.key("Enter");
         let saved = h.app.state.store.get("c1").unwrap().unwrap();
         assert!(saved.read_only, "read_only reverted");
@@ -1525,7 +1525,7 @@ mod tests {
         assert_eq!(saved.scope.databases, Some(vec!["shop".to_string(), "@default".to_string()]));
     }
 
-    /// 좌우로 나눈 화면: 두 칸의 탭 바 사이에 구분선이 있다 (이어진 한 줄로 보이지 않게)
+    /// Left/right split: there's a separator between the two panes' tab bars (so they don't look like one continuous line)
     #[tokio::test]
     async fn split_tab_bars_are_separated() {
         let mut h = Harness::new().await;
@@ -1538,7 +1538,7 @@ mod tests {
         assert!(between.contains('┃'), "{bar}");
     }
 
-    /// 탭이 탭 바보다 많으면 지금 탭이 보이도록 민다 (뒤쪽 탭이 잘려 안 보이지 않게). 클릭도 밀린 자리에 맞는다
+    /// When tabs overflow the tab bar, scroll so the current tab is visible (so later tabs aren't cut off). Clicks match the scrolled positions too
     #[tokio::test]
     async fn tab_bar_scrolls_to_the_active_tab() {
         let mut h = Harness::new().await;
@@ -1548,19 +1548,19 @@ mod tests {
         let s = h.screen(80, 20);
         let bar = s.lines().find(|l| l.contains("long_table_name_7")).unwrap_or_else(|| panic!("{s}"));
         assert!(!bar.contains("long_table_name_0"), "{bar}");
-        // 첫 탭으로 가면 다시 앞쪽이 보인다
+        // Going to the first tab shows the front again
         h.key("Alt+Right");
         let s = h.screen(80, 20);
         let (y, bar) = s.lines().enumerate().find(|(_, l)| l.contains("long_table_name_0")).unwrap_or_else(|| panic!("{s}"));
         assert!(!bar.contains("long_table_name_7"), "{bar}");
-        // 보이는 탭을 누르면 그 탭으로
+        // Clicking a visible tab switches to it
         let x = bar[..bar.find("long_table_name_1").unwrap()].chars().count() as u16;
         h.mouse("down", x, y as u16);
         h.mouse("up", x, y as u16);
         assert_eq!(h.app.tabs[h.app.active].title, "long_table_name_1");
     }
 
-    /// 나눈 화면에서 탭을 닫으면 같은 칸의 옆 탭으로 (되살린 탭처럼 아직 안 본 탭만 남아도 첫 칸으로 튀지 않게)
+    /// Closing a tab in a split view goes to the neighboring tab in the same pane (no jump to the first pane even if only unviewed tabs, like restored ones, remain)
     #[tokio::test]
     async fn closing_a_tab_stays_in_its_pane() {
         let mut h = Harness::new().await;
@@ -1569,7 +1569,7 @@ mod tests {
         h.app.run_action(crate::app::Action::SplitRight);
         h.table_tab("right_b", &["id"], &[&["1"]], &["id"]);
         h.table_tab("right_c", &["id"], &[&["1"]], &["id"]);
-        // 되살린 탭은 최근 목록에 없다
+        // Restored tabs aren't in the recent list
         h.app.mru.retain(|x| *x != right_a);
         h.key("Ctrl+w");
         assert_eq!(h.app.tabs[h.app.active].title, "right_b");
@@ -1577,7 +1577,7 @@ mod tests {
         assert_eq!(h.app.tabs[h.app.active].title, "right_a");
     }
 
-    /// 내보내기 (x): 형식 → 파일/클립보드 → 경로 (확장자는 형식대로)
+    /// Export (x): format → file/clipboard → path (extension follows the format)
     #[tokio::test]
     async fn export_asks_format_then_destination() {
         let mut h = Harness::new().await;
@@ -1598,7 +1598,7 @@ mod tests {
         assert!(input.lines()[0].ends_with("/Downloads/users.json"), "{:?}", input.lines());
     }
 
-    /// 가져오기: 파일을 읽어 같은 이름 컬럼에 짝짓고, 무엇이 들어가는지 보여 주고 묻는다
+    /// Import: read the file, match columns by name, show what goes in, and ask
     #[tokio::test]
     async fn import_maps_file_columns_by_name() {
         let mut h = Harness::new().await;
@@ -1616,7 +1616,7 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
-    /// Redis 키 브라우저도 ":" 폴더 (Medis): → 펼치기, ← 접기 / 부모 폴더로, ↓↑ 는 보이는 줄
+    /// The Redis key browser also has ":" folders (Medis): → expand, ← collapse / to parent folder, ↓↑ over visible lines
     #[tokio::test]
     async fn redis_browser_groups_keys_into_folders() {
         let mut h = Harness::new().await;
@@ -1643,29 +1643,29 @@ mod tests {
         h.key("Right");
         h.key("Down");
         assert_eq!(rows(&h)[sel(&h)], "    dev:sessions:{1}");
-        // ← : 키에서는 부모 폴더로, 열린 폴더는 접는다
+        // ← : on a key goes to the parent folder, on an open folder collapses it
         h.key("Left");
         assert_eq!(sel(&h), 1);
         h.key("Left");
         assert_eq!(rows(&h), ["▾ dev 2", "  ▸ sessions 2", "▸ prod 1", "token"]);
-        // 화면에도 폴더와 개수 (개수는 GUI 처럼 오른쪽 끝)
+        // Folders and counts on screen too (counts at the right edge, like the GUI)
         let s = h.screen(120, 20);
         let line = s.lines().find(|l| l.contains("▸ ▤ sessions")).unwrap_or_else(|| panic!("{s}"));
         assert!(line.trim_end_matches(['┃', '│', ' ']).ends_with('2') && s.contains("token"), "{s}");
     }
 
-    /// Y: 지금 열 전체를 IN 목록으로 복사 (결과의 IP 들을 다음 쿼리 WHERE ip IN 에 바로)
+    /// Y: copy the whole current column as an IN list (IPs from results straight into the next query's WHERE ip IN)
     #[tokio::test]
     async fn copy_column_as_in_list() {
         let mut h = Harness::new().await;
         h.table_tab("logs", &["ip", "n"], &[&["1.2.3.4", "1"], &["5.6.7.8", "2"], &["1.2.3.4", "3"]], &[]);
         h.key("Y");
         assert_eq!(h.app.status, "Copied 2 values as an IN list: ('1.2.3.4', '5.6.7.8')");
-        // ⌃K 에서도
+        // From ⌃K too
         assert!(crate::app::ACTIONS.iter().any(|a| a.0 == Action::CopyInList));
     }
 
-    /// Ctrl+F: 편집기 찾기/바꾸기 바 (DataGrip). Alt+X 정규식, Tab 바꾸기 칸, Alt+A 전부 바꾸기 ($1 그룹), Esc 닫기
+    /// Ctrl+F: editor find/replace bar (DataGrip). Alt+X regex, Tab replace field, Alt+A replace all ($1 groups), Esc close
     #[tokio::test]
     async fn console_find_replace_all_with_regex() {
         let mut h = Harness::new().await;
@@ -1682,7 +1682,7 @@ mod tests {
         assert!(h.app.popup.is_none());
     }
 
-    /// 찾기: 칠 때마다 커서 뒤 첫 결과를 고르고, Enter 는 다음. 바꾸기 칸에서 Enter 는 지금 것만 바꾸고 다음으로
+    /// Find: each keystroke selects the first match after the cursor, Enter goes to the next. In the replace field, Enter replaces only the current one and moves on
     #[tokio::test]
     async fn console_find_next_and_replace_one() {
         let mut h = Harness::new().await;
@@ -1696,7 +1696,7 @@ mod tests {
         h.type_str("k");
         h.key("Enter");
         assert_eq!(h.console_text(), "id, k, x");
-        // 대소문자 구분(Alt+C)이면 ID 는 안 찾는다
+        // Case-sensitive (Alt+C) doesn't match ID
         h.key("Esc");
         h.console_with("id, ID", 0, 0);
         h.key("Ctrl+f");
@@ -1705,7 +1705,7 @@ mod tests {
         assert!(h.screen(120, 30).contains("1/1"));
     }
 
-    /// 그리드 범위 선택: Shift+↑↓←→ (또는 끌기), y = TSV, Y = 고른 칸만 IN 목록, Esc = 선택 풀기
+    /// Grid range selection: Shift+↑↓←→ (or drag), y = TSV, Y = IN list of selected cells only, Esc = clear selection
     #[tokio::test]
     async fn grid_range_select_and_copy() {
         let mut h = Harness::new().await;
@@ -1715,12 +1715,12 @@ mod tests {
         assert_eq!(h.app.status, "Copied 2 rows × 1 column");
         h.key("Y");
         assert_eq!(h.app.status, "Copied 2 values as an IN list: ('1.2.3.4', '5.6.7.8')");
-        // Esc 는 먼저 선택만 푼다
+        // Esc clears only the selection first
         h.key("Esc");
         assert_eq!(h.app.focus, crate::app::Focus::Grid);
         h.key("Y");
         assert!(h.app.status.starts_with("Copied 3 values"), "{}", h.app.status);
-        // 마우스로 끌어도 고른다
+        // Dragging with the mouse selects too
         let s = h.screen(120, 20);
         let (y0, line) = s.lines().enumerate().find(|(_, l)| l.contains("1.2.3.4")).unwrap();
         let x = line[..line.find("1.2.3.4").unwrap()].chars().count() as u16;
@@ -1731,7 +1731,7 @@ mod tests {
         assert_eq!(h.app.status, "Copied 3 values as an IN list: ('1.2.3.4', '5.6.7.8', '9.9.9.9')");
     }
 
-    /// ⌃K › Database Admin…: 리포트를 고르면 DBA 탭 (같은 접속 대상이면 그 탭에서 바꾼다)
+    /// ⌃K › Database Admin…: picking a report opens a DBA tab (reuses that tab for the same connection target)
     #[tokio::test]
     async fn dba_report_tab_opens_and_switches() {
         let mut h = Harness::new().await;
@@ -1751,7 +1751,7 @@ mod tests {
         };
         assert_eq!(report(&h), "sessions");
         h.settle().await;
-        // 접속이 없으니 오류가 보인다
+        // No connection, so an error is shown
         assert!(matches!(&h.app.tabs[h.app.active].kind, TabKind::Dba(d) if d.error.is_some()));
         h.app.run_action(Action::DbaReports);
         h.type_str("Table Sizes");
@@ -1760,7 +1760,7 @@ mod tests {
         assert_eq!(h.app.tabs.len(), n);
     }
 
-    /// 자동 새로고침으로 행 순서가 바뀌어도 고른 세션(pid)을 따라간다 (다른 세션을 끊지 않게)
+    /// Follows the selected session (pid) even when auto-refresh reorders rows (so another session isn't killed)
     #[tokio::test]
     async fn dba_selection_follows_pid_across_reloads() {
         use qurry_core::db::{ColumnInfo, QueryResult};
@@ -1782,7 +1782,7 @@ mod tests {
         let TabKind::Dba(d) = &h.app.tabs[h.app.active].kind else { panic!() };
         let g = d.grid.as_ref().unwrap();
         assert_eq!(g.value(g.row, 0).as_deref(), Some("20"));
-        // 고른 세션이 사라지면 고르지 않는다 (엉뚱한 세션을 끊지 않게)
+        // If the selected session disappears, nothing is selected (so the wrong session isn't killed)
         h.app.dba_apply(id, Ok(res(&[30, 10])));
         let TabKind::Dba(d) = &h.app.tabs[h.app.active].kind else { panic!() };
         assert!(d.grid.as_ref().unwrap().result.rows.len() == 2);
@@ -1790,7 +1790,7 @@ mod tests {
         assert!(h.app.popup.is_none(), "must not offer to kill a session that is gone");
     }
 
-    /// DB 값 · 이름 · 오류 · 상태줄의 제어 문자 (ESC, C1, 방향 바꾸기) 는 터미널로 나가지 않는다
+    /// Control characters (ESC, C1, direction overrides) in DB values · names · errors · the status line don't reach the terminal
     #[tokio::test]
     async fn control_characters_never_reach_the_terminal() {
         let mut h = Harness::new().await;
@@ -1803,7 +1803,7 @@ mod tests {
         assert!(s.contains("]52;c;"), "the rest of the text is still shown");
     }
 
-    /// 새 Data Source 는 MCP 에 보이지 않게 시작한다. 폼에 보이는 MCP 값을 그대로 저장한다
+    /// A new Data Source starts hidden from MCP. Saves the MCP value shown in the form as is
     #[tokio::test]
     async fn conn_form_mcp_default() {
         let mut h = Harness::new().await;
@@ -1818,7 +1818,7 @@ mod tests {
         old.options.confirm_changes = true;
         h.app.conn_form(Some(old.clone()));
         assert_eq!(cfg_of(&h).options.mcp.as_deref(), Some("off"), "what the form shows is saved");
-        // Production 을 꺼도 보이던 off 그대로 (저절로 열리지 않는다)
+        // Turning off Production keeps the off that was shown (doesn't open up by itself)
         let Some(crate::app::Popup::ConnForm(f)) = &mut h.app.popup else { panic!() };
         f.fields.iter_mut().find(|x| x.label == "Production").unwrap().value = "off".into();
         assert_eq!(cfg_of(&h).options.mcp.as_deref(), Some("off"));
@@ -1827,7 +1827,7 @@ mod tests {
         assert_eq!(cfg_of(&h).options.mcp.as_deref(), Some("read"));
     }
 
-    /// Vacuum Progress 는 취소만: K (연결 끊기) 는 묻지도 않고, 안내 줄에도 없다
+    /// Vacuum Progress only cancels: K (kill connection) doesn't even ask, and isn't in the hint line
     #[tokio::test]
     async fn dba_vacuum_progress_only_cancels() {
         use qurry_core::db::{ColumnInfo, QueryResult};
@@ -1852,7 +1852,7 @@ mod tests {
         assert!(matches!(&h.app.popup, Some(crate::app::Popup::Confirm { text, .. }) if text.contains("Cancel the query of session 77")));
     }
 
-    /// ⌃K › Query History / Snippets: GUI 와 같은 기록. 고르면 콘솔에 넣는다. Save Query as Snippet 은 이름을 묻는다
+    /// ⌃K › Query History / Snippets: same history as the GUI. Picking one inserts it into the console. Save Query as Snippet asks for a name
     #[tokio::test]
     async fn history_and_snippets_insert_into_console() {
         let mut h = Harness::new().await;
@@ -1863,7 +1863,7 @@ mod tests {
         assert_eq!(p.items[0].label, "select 42");
         h.key("Enter");
         assert_eq!(h.console_text(), "select 42");
-        // 스니펫으로 저장 → 목록에서 넣기
+        // Save as a snippet → insert from the list
         h.app.run_action(Action::SaveSnippet);
         let Some(crate::app::Popup::Input { input, .. }) = &mut h.app.popup else { panic!("no name input") };
         *input = tui_textarea::TextArea::from(["answer"]);
@@ -1875,7 +1875,7 @@ mod tests {
         assert_eq!(p.items[0].label, "answer");
     }
 
-    /// ⌃K › Production Log: 운영 작업 기록. 되돌리기 SQL 이 있으면 새 콘솔에 열고 (실행은 직접), 없으면 이유만
+    /// ⌃K › Production Log: log of production operations. If there's undo SQL, open it in a new console (you run it yourself), otherwise just the reason
     #[tokio::test]
     async fn production_log_opens_undo_in_new_console() {
         let mut h = Harness::new().await;
@@ -1907,7 +1907,7 @@ mod tests {
         assert!(h.app.status.contains("no undo kept"), "{}", h.app.status);
     }
 
-    /// ⌃K › Copy Related Rows: 조건 → 자식 단계 → 넣을 곳 (같은 종류의 다른 Data Source 만). Generate Test Data 는 행 수를 묻는다
+    /// ⌃K › Copy Related Rows: condition → child steps → destination (only other Data Sources of the same type). Generate Test Data asks for the row count
     #[tokio::test]
     async fn copy_rows_and_test_data_flows() {
         let mut h = Harness::new().await;
@@ -1931,7 +1931,7 @@ mod tests {
         let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no depth") };
         assert_eq!(p.items.len(), 4);
         h.key("Enter");
-        // 개인정보: 기본은 가린다, 아래가 그대로
+        // Personal data: masked by default, below is as is
         let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no mask choice") };
         assert_eq!(p.items.len(), 2);
         h.key("Enter");
@@ -1941,7 +1941,7 @@ mod tests {
         assert_eq!((b.2.filter.as_str(), b.2.depth, b.2.mask), ("id = 1", 1, true));
     }
 
-    /// ⌃K › Chart Result: 결과 표를 가로 막대로 (팝업)
+    /// ⌃K › Chart Result: result table as horizontal bars (popup)
     #[tokio::test]
     async fn chart_result_popup() {
         let mut h = Harness::new().await;
@@ -1951,7 +1951,7 @@ mod tests {
         assert!(screen.contains("Seoul │") && screen.contains("█ 150") && screen.contains("Busan │"), "{screen}");
     }
 
-    /// ⌃k › New Table: 이름 → 디자이너 (a 컬럼 · p PK · d 지우기), 아래에 CREATE TABLE 이 바로 보인다
+    /// ⌃k › New Table: name → designer (a column · p PK · d delete), with CREATE TABLE shown right below
     #[tokio::test]
     async fn new_table_designer() {
         let mut h = Harness::new().await;
@@ -1974,7 +1974,7 @@ mod tests {
         let sql = d.sql.as_ref().unwrap().join("\n");
         assert!(sql.contains("CREATE TABLE public.orders") && sql.contains("total numeric(10,2) NOT NULL DEFAULT 0") && sql.contains("PRIMARY KEY (id)"), "{sql}");
         assert!(h.screen(140, 40).contains("New Table"));
-        // id 컬럼의 PK 를 끄고 지우기
+        // Turn off the PK on the id column and delete it
         h.key("Up");
         h.key("p");
         h.key("d");
@@ -1984,7 +1984,7 @@ mod tests {
         assert!(h.app.designer.is_none());
     }
 
-    /// Production Data Source: 데이터를 바꾸는 문장은 바뀔 행 수를 세어 보여 주고 묻는다 (읽기는 그냥 돈다)
+    /// Production Data Source: statements that change data count the affected rows, show them, and ask (reads just run)
     #[tokio::test]
     async fn production_asks_before_changes() {
         let mut h = Harness::new().await;
@@ -1999,7 +1999,7 @@ mod tests {
         let i = h.app.tab_index(id).unwrap();
         h.app.activate(i);
         h.key("F5");
-        // 세는 동안 (접속 실패까지) 기다린다
+        // Wait while counting (until the connection fails)
         for _ in 0..100 {
             h.settle().await;
             if h.app.popup.is_some() {
@@ -2008,12 +2008,12 @@ mod tests {
         }
         let Some(crate::app::Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
         assert!(text.contains("Production data source \"PROD\"") && text.contains("delete from t using s") && text.contains("can't count this statement"), "{text}");
-        // 아니라고 하면 실행하지 않는다
+        // Saying no doesn't run it
         h.key("Esc");
         assert!(matches!(&h.app.tabs[h.app.active].kind, TabKind::Console(c) if !c.running && c.output.is_empty()));
     }
 
-    /// 콘솔 마우스: 누른 곳으로 커서, 끌면 선택 (선택한 것만 실행), 다시 누르면 선택이 풀린다
+    /// Console mouse: click moves the cursor, drag selects (only the selection runs), clicking again clears the selection
     #[tokio::test]
     async fn console_mouse_click_and_drag_select() {
         let mut h = Harness::new().await;
@@ -2028,32 +2028,32 @@ mod tests {
         h.mouse("drag", x + 6, y);
         h.mouse("up", x + 6, y);
         assert_eq!(h.console_cursor(), ((1, 20), Some("public".to_string())));
-        // ⌘C 는 고른 글을 클립보드로 (터미널의 끌어서 복사는 앱이 마우스를 잡아서 안 된다)
+        // ⌘C copies the selected text to the clipboard (the terminal's drag-to-copy doesn't work because the app captures the mouse)
         h.key("Cmd+c");
         assert_eq!(h.app.status, "Copied: public");
-        // 윗줄 "1" 을 누르면 커서가 거기로, 선택은 풀린다
+        // Clicking "1" on the line above moves the cursor there and clears the selection
         h.screen(120, 30);
         h.mouse("down", x - 7, y - 1);
         h.mouse("up", x - 7, y - 1);
         assert_eq!(h.console_cursor(), ((0, 7), None));
-        // 줄 끝 너머를 누르면 그 줄 끝
+        // Clicking past the end of a line goes to that line's end
         h.mouse("down", x + 40, y);
         h.mouse("up", x + 40, y);
         assert_eq!(h.console_cursor(), ((1, 26), None));
     }
 
-    /// 하단 안내: 포커스마다 그 화면 키 + 자주 쓰는 전역 키. 좁으면 화면 키를 줄이고 전역 키는 남긴다
+    /// Bottom hints: each focus's screen keys + common global keys. When narrow, screen keys are trimmed and global keys stay
     #[tokio::test]
     async fn status_bar_guides_by_focus() {
         use crate::keys::disp;
         let mut h = Harness::new().await;
         let last = |s: &str| s.lines().last().unwrap().to_string();
-        // 탐색기
+        // Explorer
         let s = last(&h.screen(220, 20));
         for want in ["Enter open", "F4 console", "s schemas", "/ filter", &disp("Ctrl+P search"), &disp("Ctrl+K actions")] {
             assert!(s.contains(want), "tree: {want:?} in {s}");
         }
-        // 표 데이터
+        // Table data
         let id = h.table_tab("t", &["id"], &[&["1"]], &["id"]);
         let i = h.app.tab_index(id).unwrap();
         h.app.activate(i);
@@ -2062,10 +2062,10 @@ mod tests {
         for want in ["Enter edit", "a add", "d delete", &disp("Ctrl+S submit"), "w where", &disp("Ctrl+L console"), &disp("Ctrl+E tabs"), &disp("Ctrl+K actions")] {
             assert!(s.contains(want), "table: {want:?} in {s}");
         }
-        // 좁은 화면: 전역 키는 남는다
+        // Narrow screen: global keys remain
         let s = last(&h.screen(90, 20));
         assert!(s.contains(&disp("Ctrl+K actions")), "narrow: {s}");
-        // 콘솔 편집기
+        // Console editor
         h.console_tab();
         let s = last(&h.screen(220, 20));
         for want in [&disp("F5 run"), &disp("Ctrl+Space complete"), &disp("⇧Tab result"), &disp("Ctrl+E tabs"), &disp("Ctrl+P search")] {
@@ -2073,7 +2073,7 @@ mod tests {
         }
     }
 
-    /// 처음 화면과 F1: 모르겠으면 ⌃P 부터
+    /// First screen and F1: if unsure, start with ⌃P
     #[tokio::test]
     async fn start_here_points_to_search() {
         use crate::keys::disp;
@@ -2086,7 +2086,7 @@ mod tests {
         assert!(s.contains("Search everything"));
     }
 
-    /// Check for Updates 로 새 버전을 찾으면: 지금 버전 이후 바뀐 것을 버전마다 보여 주고 업데이트 방법을 알린다
+    /// When Check for Updates finds a new version: show the changes since the current version, per version, and how to update
     #[tokio::test]
     async fn update_found_shows_changes() {
         use qurry_core::update::{Release, VersionNotes};
@@ -2108,7 +2108,7 @@ mod tests {
         assert!(!s.contains("old"), "{s}");
     }
 
-    /// 키를 바꾸면 화면 안내도 바뀐 키로 (콘솔 Output/결과 제목, 표 저장 안내, 팔레트 힌트)
+    /// Rebinding a key updates on-screen hints too (console Output/result titles, table save hint, palette hints)
     #[tokio::test]
     async fn labels_follow_remapped_keys() {
         use crate::app::Action;
@@ -2132,14 +2132,14 @@ mod tests {
         let s = h.screen(160, 30);
         assert!(s.contains(&disp("Ctrl+G submit")), "{s}");
         assert!(!s.contains(&disp("Ctrl+S")), "{s}");
-        // 팔레트 이름·힌트도 같은 표기 (Ctrl+Z → ⌃z)
+        // Palette names·hints use the same notation (Ctrl+Z → ⌃z)
         h.key("Ctrl+K");
         h.type_str("Revert Changes");
         let s = h.screen(160, 30);
         assert!(s.contains(&disp("Ctrl+Z (grid)")), "{s}");
     }
 
-    /// 위아래로만 나눴을 때도 Move Split Divider 가 경계선을 옮긴다 (이름이 "Left / Up")
+    /// Move Split Divider moves the divider even with only a top/bottom split (named "Left / Up")
     #[tokio::test]
     async fn split_divider_moves_in_top_bottom_split() {
         use crate::app::Action;
@@ -2155,7 +2155,7 @@ mod tests {
         assert_eq!(pct(&mut h), Some(before));
     }
 
-    /// 표 데이터에서 Explain 은 다시 읽기가 아니라 안내만 (Explain 은 쿼리 콘솔에서)
+    /// In table data, Explain only shows a hint instead of reloading (Explain is for the query console)
     #[tokio::test]
     async fn explain_on_table_tab_does_not_reload() {
         let mut h = Harness::new().await;
@@ -2165,7 +2165,7 @@ mod tests {
         assert!(h.app.status.contains("query console"), "{}", h.app.status);
     }
 
-    /// Redis: 키 목록과 값 쪽 상태줄 안내가 다르다 (값 쪽에선 D·t·R·: 가 안 된다)
+    /// Redis: the key list and value side have different status-line hints (D·t·R·: don't work on the value side)
     #[tokio::test]
     async fn redis_status_bar_follows_side() {
         use crate::app::{RedisTab, TabKind};
@@ -2184,7 +2184,7 @@ mod tests {
         assert!(!s.contains("D del key"), "{s}");
     }
 
-    /// 새 버전 알림은 TUI 안에서 바로 업데이트하는 길을 알려준다
+    /// The new-version notice shows how to update right inside the TUI
     #[tokio::test]
     async fn update_badge_points_to_in_app_update() {
         let mut h = Harness::new().await;
@@ -2194,7 +2194,7 @@ mod tests {
         assert!(s.contains(&want), "{s}");
     }
 
-    /// 소스에서 빌드한 qurry-tui(cargo test 도 그렇다)는 바꿔 넣지 않고 다시 빌드하라고 한다
+    /// qurry-tui built from source (cargo test too) isn't replaced; it says to rebuild
     #[tokio::test]
     async fn in_app_update_skips_source_builds() {
         let mut h = Harness::new().await;
@@ -2204,7 +2204,7 @@ mod tests {
         assert!(!h.app.quit && !h.app.restart);
     }
 
-    /// 콘솔 전체 지우기: ⌘A 로 전부 고르고 ⌫, 또는 ⌃K › Clear Console
+    /// Clear the whole console: select all with ⌘A then ⌫, or ⌃K › Clear Console
     #[tokio::test]
     async fn console_select_all_and_clear() {
         let mut h = Harness::new().await;
@@ -2215,12 +2215,12 @@ mod tests {
         h.paste("select 3;");
         h.app.run_action(crate::app::Action::ClearConsole);
         assert_eq!(h.console_text(), "");
-        // 모르는 ⌘ 조합은 글자를 넣지 않는다
+        // Unknown ⌘ combos don't insert text
         h.key("Cmd+x");
         assert_eq!(h.console_text(), "");
     }
 
-    /// 표에 ⌘V (터미널 붙여넣기): 현재 칸부터 채운다. 탭·줄로 여러 칸, 모자라는 줄은 새 행
+    /// ⌘V into a table (terminal paste): fills from the current cell. Tabs·lines span multiple cells, missing rows become new rows
     #[tokio::test]
     async fn paste_into_table_cells() {
         let mut h = Harness::new().await;
@@ -2229,11 +2229,11 @@ mod tests {
         h.paste("FIXED");
         let g = h.table(id).grid.as_ref().unwrap();
         assert_eq!(g.value(0, 1).as_deref(), Some("FIXED"));
-        // 한 줄에 쉼표가 있어도 한 칸 값
+        // A comma within a line is still one cell value
         h.key("Right");
         h.paste("a, b");
         assert_eq!(h.table(id).grid.as_ref().unwrap().value(0, 2).as_deref(), Some("a, b"));
-        // 여러 칸·여러 줄 (스프레드시트에서 복사): 넘치는 열은 버리고 모자라는 줄은 새 행
+        // Multiple cells·lines (copied from a spreadsheet): extra columns are dropped, missing rows become new rows
         h.key("Left");
         h.key("Down");
         h.paste("RATE\tx\tdropped\r\nPERCENT\ty\r\n");
@@ -2241,14 +2241,14 @@ mod tests {
         assert_eq!((g.value(1, 1).as_deref(), g.value(1, 2).as_deref()), (Some("RATE"), Some("x")));
         assert_eq!(g.added, 1);
         assert_eq!((g.value(2, 1).as_deref(), g.value(2, 2).as_deref()), (Some("PERCENT"), Some("y")));
-        // 원래 값과 같으면 편집이 아니다
+        // Same as the original value is not an edit
         h.key("Up");
         h.paste("PERCENT");
         assert!(!h.table(id).grid.as_ref().unwrap().edits.contains_key(&(0, 1)));
     }
 
-    /// 글 탭 (다이어그램·DDL): 휠로 스크롤, 끝을 넘지 않고, g/G 로 처음·끝
-    /// 실행 중 콘솔 제목줄: 지난 시간 · [■ Cancel ⌃c], 누르면 취소를 보낸다
+    /// Text tabs (diagram·DDL): wheel scrolls, not past the end, g/G for start·end
+    /// Console title bar while running: elapsed time · [■ Cancel ⌃c], clicking sends a cancel
     #[tokio::test]
     async fn running_console_shows_time_and_a_cancel_button() {
         let mut h = Harness::new().await;
@@ -2265,7 +2265,7 @@ mod tests {
         crate::input::on_event(&mut h.app, Event::Mouse(crossterm::event::MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: r.x + 2, row: r.y, modifiers: KeyModifiers::NONE }));
         h.settle().await;
         assert!(!h.app.status.is_empty() && h.app.status != "Executing…", "cancel was sent: {}", h.app.status);
-        // 끝나면 버튼도 없어진다
+        // The button goes away when finished
         if let Some(TabKind::Console(c)) = h.app.tab_mut(id).map(|t| &mut t.kind) {
             c.running = false;
         }

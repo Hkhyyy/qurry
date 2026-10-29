@@ -1,4 +1,4 @@
-/* UI 토큰 — 규격은 README.md. 색은 테마 (App.css 의 :root / [data-theme]) 값을 이름만 바꿔 쓴다 */
+/* UI tokens — spec in README.md. Colors reuse theme values (App.css :root / [data-theme]) under new names */
 :root {
   --ui-bg: var(--bg);
   --ui-surface: var(--panel);
@@ -44,7 +44,7 @@
   --ui-z-popover: 300;
   --ui-z-dialog: 400;
 
-  /* 트리 아이콘 선 (DataGrip New UI 처럼 회색 선, DB 는 파랑) */
+  /* Tree icon strokes (gray strokes like DataGrip New UI, blue for DBs) */
   --ui-icon: #ced0d6;
   --ui-icon-db: #548af7;
 }

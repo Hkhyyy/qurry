@@ -1,18 +1,18 @@
-# main 에 머지될 때마다 GUI 와 TUI/MCP 를 빌드해서 GitHub Release 로 올린다.
-#   macOS Apple Silicon · macOS Intel: Qurry_<v>_<aarch64|x64>.dmg, 앱 안 업데이트 묶음 Qurry_<v>_<arch>.app.tar.gz
-#   Linux x86_64: Qurry_<v>_amd64.AppImage, Qurry_<v>_amd64.deb (앱 안 업데이트도 설치한 형식 그대로 — deb 는 linux-x86_64-deb 항목)
+# On every merge to main, builds the GUI and TUI/MCP and uploads them to a GitHub Release.
+#   macOS Apple Silicon · macOS Intel: Qurry_<v>_<aarch64|x64>.dmg, in-app update bundle Qurry_<v>_<arch>.app.tar.gz
+#   Linux x86_64: Qurry_<v>_amd64.AppImage, Qurry_<v>_amd64.deb (in-app updates keep the installed format — deb is the linux-x86_64-deb entry)
 #   CLI: qurry-cli_<v>_<target>.tar.gz (qurry-tui + qurry-mcp)
-# 버전: 마지막 태그(vX.Y.Z)의 patch +1. 소스(Cargo.toml) 버전이 그보다 높으면(PR 에서 minor/major 를 올린 경우) 그 버전.
-# 버전은 빌드할 때만 매니페스트에 넣고 main 에 커밋하지 않는다 (main 은 PR 로만 바뀐다). 기준은 태그.
-# 공급망: 액션은 커밋 SHA 로 고정 (태그는 옮겨질 수 있다), Cargo.lock 그대로(--locked), SHA256SUMS 와 빌드 출처 증명(attestation) 을 함께 올린다.
-# qurry-tui --update 는 SHA256SUMS(+ 서명) 로 받은 파일을 검증한다.
-# GUI 앱 안 업데이트(Tauri updater): 플랫폼별 업데이트 묶음과 서명을 latest.json 에 넣어 올린다.
-# 이름 변경(dbtool → Qurry) 이전 설치도 업데이트되게: Apple Silicon CLI 묶음을 dbtool-cli_… 이름으로도 올리고, 묶음 안에 dbtool-tui / dbtool-mcp 도 넣는다
-#   (0.1.x 의 dbtool-tui --update 는 dbtool-cli_ 묶음에서 dbtool-tui · dbtool-mcp 를 찾는다).
-#   서명 키는 레포 Secrets(TAURI_SIGNING_PRIVATE_KEY / _PASSWORD), 공개키는 src-tauri/tauri.conf.json.
-#   키는 publish 의 Sign 단계에만 넘긴다: 빌드(빌드 스크립트·플러그인이 모두 도는 단계)에는 넘기지 않는다.
-#   SHA256SUMS 도 같은 키로 서명한다 (SHA256SUMS.sig — qurry-tui --update 가 확인).
-# 이 파일을 바꾸는 PR 에서는 빌드까지만 돈다 (서명·릴리스는 main 에서만 — 다른 브랜치에서 latest 로 내보내지 못하게).
+# Version: patch +1 of the last tag (vX.Y.Z). If the source (Cargo.toml) version is higher (minor/major bumped in a PR), that version.
+# The version goes into the manifests only at build time and is not committed to main (main changes only via PRs). Tags are the source of truth.
+# Supply chain: actions pinned to commit SHAs (tags can move), Cargo.lock as is (--locked), SHA256SUMS and build provenance attestations uploaded too.
+# qurry-tui --update verifies downloaded files with SHA256SUMS (+ signature).
+# GUI in-app updates (Tauri updater): per-platform update bundles and signatures go into latest.json.
+# So installs from before the rename (dbtool → Qurry) still update: the Apple Silicon CLI bundle is also uploaded as dbtool-cli_…, with dbtool-tui / dbtool-mcp inside
+#   (0.1.x's dbtool-tui --update looks for dbtool-tui · dbtool-mcp in the dbtool-cli_ bundle).
+#   Signing key in repo Secrets (TAURI_SIGNING_PRIVATE_KEY / _PASSWORD), public key in src-tauri/tauri.conf.json.
+#   The key is passed only to the Sign step of publish: not to the build (where build scripts · plugins all run).
+#   SHA256SUMS is signed with the same key too (SHA256SUMS.sig — checked by qurry-tui --update).
+# PRs that change this file only run the build (signing · release only on main — so other branches can't publish as latest).
 name: Release
 
 on:
@@ -26,7 +26,7 @@ on:
 permissions:
   contents: read
 
-# 머지가 연달아 와도 한 번에 하나씩 (같은 버전 태그를 두 번 만들지 않게)
+# One at a time even if merges come in a row (so the same version tag isn't created twice)
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -64,7 +64,7 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          # arch: Tauri 가 붙이는 파일 이름의 아키텍처 (업데이트 묶음 이름에도 쓴다)
+          # arch: architecture in the file names Tauri produces (also used in update bundle names)
           - { os: macos-14, target: aarch64-apple-darwin, arch: aarch64, bundles: "app,dmg" }
           - { os: macos-14, target: x86_64-apple-darwin, arch: x64, bundles: "app,dmg" }
           - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, arch: amd64, bundles: "appimage,deb" }
@@ -109,7 +109,7 @@ jobs:
           for f in package.json src-tauri/tauri.conf.json; do
             perl -0pi -e 's/"version": "[^"]*"/"version": "$ENV{V}"/' "$f"
           done
-          # Cargo.lock 의 워크스페이스 버전만 맞춘다 (외부 의존성은 lock 그대로 → 아래 --locked 빌드)
+          # Sync only the workspace versions in Cargo.lock (external deps stay as locked → --locked build below)
           cargo update --workspace
           git diff --stat
 
@@ -117,7 +117,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build GUI (unsigned)
-        # 업데이트 묶음은 아래에서 직접 만들고 publish 의 Sign 단계에서 서명한다 (여기엔 서명 키가 없다)
+        # Update bundles are built below and signed in the Sign step of publish (no signing key here)
         run: pnpm tauri build --target "$T" --bundles ${{ matrix.bundles }} --config '{"bundle":{"createUpdaterArtifacts":false}}' -- --locked
 
       - name: Build TUI and MCP
@@ -125,22 +125,22 @@ jobs:
 
       - name: Package
         run: |
-          # out/ (dist/ 는 프론트엔드 빌드 결과)
+          # out/ (dist/ is the frontend build output)
           mkdir out
           b="target/$T/release/bundle"
           if [ "$RUNNER_OS" = macOS ]; then
             cp "$b"/dmg/*.dmg "out/Qurry_${V}_${A}.dmg"
-            # 앱 안 업데이트 묶음 (Tauri 와 같은 형식: 맨 위가 Qurry.app/)
+            # In-app update bundle (same format as Tauri: Qurry.app/ at the top)
             COPYFILE_DISABLE=1 tar --no-mac-metadata -czf "out/Qurry_${V}_${A}.app.tar.gz" -C "$b/macos" Qurry.app
           else
-            # AppImage 는 그대로 앱 안 업데이트 묶음이다
+            # The AppImage is itself the in-app update bundle
             cp "$b"/appimage/*.AppImage "out/Qurry_${V}_${A}.AppImage"
             cp "$b"/deb/*.deb "out/Qurry_${V}_${A}.deb"
           fi
           mkdir cli
           cp "target/$T/release/qurry-tui" "target/$T/release/qurry-mcp" cli/
           if [ "$T" = aarch64-apple-darwin ]; then
-            # 예전 이름 dbtool-tui · dbtool-mcp (같은 바이너리) + dbtool-cli_ 묶음: 0.1.x 설치가 업데이트할 수 있게
+            # Old names dbtool-tui · dbtool-mcp (same binaries) + dbtool-cli_ bundle: so 0.1.x installs can update
             cp cli/qurry-tui cli/dbtool-tui
             cp cli/qurry-mcp cli/dbtool-mcp
             tar -czf "out/qurry-cli_${V}_${T}.tar.gz" -C cli qurry-tui qurry-mcp dbtool-tui dbtool-mcp
@@ -157,8 +157,8 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  # DB 드라이버 플러그인: 앱 빌드와 동시에 (따로 빌드하면 macOS 에서 몇 분 빨라진다).
-  # 앱에는 넣지 않고, 연결을 만들 때 이 릴리스에서 받는다 (SHA256SUMS 서명으로 확인)
+  # DB driver plugins: built alongside the app (building them separately is a few minutes faster on macOS).
+  # Not bundled in the app; downloaded from this release when a connection is created (verified via the SHA256SUMS signature)
   drivers:
     needs: version
     strategy:
@@ -239,7 +239,7 @@ jobs:
           cache: pnpm
 
       - name: Install frontend dependencies
-        # tauri signer 를 쓰려고
+        # For tauri signer
         run: pnpm install --frozen-lockfile
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -249,12 +249,12 @@ jobs:
           merge-multiple: true
 
       - name: Sign (updater bundles, SHA256SUMS)
-        # 서명 키는 이 단계에만. 실행하는 것은 tauri signer 뿐이다
+        # Signing key only in this step. The only thing run is tauri signer
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          # latest.json: 앱은 releases/latest/download/latest.json 을 보고 자기 플랫폼 항목을 받는다
+          # latest.json: the app reads releases/latest/download/latest.json and fetches its platform entry
           echo '{}' > platforms.json
           for p in "darwin-aarch64 Qurry_${V}_aarch64.app.tar.gz" "darwin-x86_64 Qurry_${V}_x64.app.tar.gz" "linux-x86_64 Qurry_${V}_amd64.AppImage" "linux-x86_64-deb Qurry_${V}_amd64.deb"; do
             set -- $p
@@ -268,7 +268,7 @@ jobs:
           jq -n --arg v "$V" --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --slurpfile p platforms.json \
             '{version: $v, pub_date: $date, platforms: $p[0]}' > dist-release/latest.json
           cat dist-release/latest.json
-          # 체크섬 + 그 서명 (qurry-tui --update 가 둘 다 확인한다)
+          # Checksums + their signature (qurry-tui --update checks both)
           (cd dist-release && sha256sum * > SHA256SUMS && cat SHA256SUMS)
           pnpm tauri signer sign dist-release/SHA256SUMS > /dev/null
           ls -la dist-release
@@ -290,12 +290,12 @@ jobs:
             --generate-notes
 
       - name: Update Homebrew tap
-        # brew install hkhyyy/qurry/qurry — Formula/qurry.rb 를 이 릴리스 버전·체크섬으로.
-        # 키는 Hkhyyy/homebrew-qurry 에만 쓰기 권한이 있는 deploy key, 이 단계에만 넘긴다
+        # brew install hkhyyy/qurry/qurry — Formula/qurry.rb with this release's version · checksums.
+        # The key is a deploy key with write access only to Hkhyyy/homebrew-qurry, passed only to this step
         env:
           TAP_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: |
-          grep -v '^# Homebrew formula 틀' .github/homebrew/qurry.rb | sed "s/{{VERSION}}/${V}/g" > qurry.rb
+          grep -v '^# Homebrew formula template' .github/homebrew/qurry.rb | sed "s/{{VERSION}}/${V}/g" > qurry.rb
           for t in aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-gnu; do
             sha=$(awk -v n="qurry-cli_${V}_${t}.tar.gz" '$2 == n { print $1 }' dist-release/SHA256SUMS)
             [ -n "$sha" ] || { echo "no checksum for $t"; exit 1; }
@@ -306,7 +306,7 @@ jobs:
           mkdir -p ~/.ssh
           install -m 600 /dev/null ~/.ssh/tap_key
           printf '%s\n' "$TAP_KEY" > ~/.ssh/tap_key
-          # GitHub 의 SSH 호스트 키 (HTTPS 로 받은 공식 목록)
+          # GitHub's SSH host keys (official list fetched over HTTPS)
           curl -fsSL https://api.github.com/meta | jq -r '.ssh_keys[] | "github.com " + .' > ~/.ssh/known_hosts
           export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/tap_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
           git clone -q git@github.com:Hkhyyy/homebrew-qurry.git tap

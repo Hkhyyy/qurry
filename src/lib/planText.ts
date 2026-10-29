@@ -2,7 +2,7 @@ import type { PlanNode } from "../components/ConsolePane";
 
 const n2 = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(2));
 
-/** 계획을 들여 쓴 글로 (붙여 넣어 공유할 때): EXPLAIN 글 모양 + 몫 · 경고 */
+/** Plan as indented text (for pasting to share): EXPLAIN text shape + shares · warnings */
 export function planText(root: PlanNode): string {
   const out: string[] = [];
   const walk = (n: PlanNode, depth: number) => {

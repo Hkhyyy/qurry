@@ -1,5 +1,5 @@
-//! TUI 키맵 (F1 도움말, `qurry-tui --help`, docs/shortcuts-tui.md 의 기준).
-//! 바꿀 수 있는 명령 단축키는 keys.rs 의 DEFAULT_KEYS 에 있고, 여기는 화면별로 고정된 키만 둔다
+//! TUI keymap (source for F1 help, `qurry-tui --help`, docs/shortcuts-tui.md).
+//! Rebindable command shortcuts are in DEFAULT_KEYS in keys.rs; only fixed per-screen keys live here
 pub const HELP: &[(&str, &[(&str, &str)])] = &[
     ("Database Explorer", &[
         ("↑ ↓  (j k)", "Move"),
@@ -99,8 +99,8 @@ pub const HELP: &[(&str, &[(&str, &str)])] = &[
     ]),
 ];
 
-/// `--help` 출력 (명령 단축키는 기본값)
-/// F1 맨 위 "Start here": 처음 쓸 때 알아야 할 키 (명령은 지금 키맵으로)
+/// `--help` output (command shortcuts at their defaults)
+/// "Start here" at the top of F1: keys to know when starting out (commands with the current keymap)
 pub fn start_here(keys: &crate::keys::Keymap) -> Vec<(String, &'static str)> {
     use crate::app::Action as A;
     let k = |a: A| keys.label(a);

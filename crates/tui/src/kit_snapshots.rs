@@ -1,5 +1,5 @@
-//! Storybook 의 "TUI" 화면: 실제 TUI 코드로 가상 터미널에 그린 장면을 글자 · 색 그대로 JSON 으로 남긴다.
-//! 다시 만들기: `pnpm tui-snapshots` (= cargo test -p qurry-tui kit_snapshots -- --ignored)
+//! Storybook "TUI" screens: scenes drawn by the real TUI code on a virtual terminal, saved as JSON with characters and colors intact.
+//! Regenerate: `pnpm tui-snapshots` (= cargo test -p qurry-tui kit_snapshots -- --ignored)
 //! → src/ui/stories/tui-snapshots.json
 use crate::app::Popup;
 use crate::kit::*;
@@ -12,7 +12,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 use serde_json::{json, Value};
 
-/// 터미널 색 → CSS (흔한 다크 터미널 팔레트)
+/// Terminal color → CSS (a common dark terminal palette)
 fn css(c: Color) -> Value {
     let s = match c {
         Color::Reset => return Value::Null,
@@ -38,8 +38,8 @@ fn css(c: Color) -> Value {
     json!(s)
 }
 
-/// 버퍼 → 줄마다 [글자, fg, bg, 굵게, 밑줄, 기울임, 취소선, 두칸] 묶음 (같은 스타일은 합친다).
-/// 두 칸 글자 (한글) 는 따로 한 묶음 (두칸 = true) — 웹에서 정확히 두 칸 폭으로 그리게. 그 뒤 칸은 건너뛴다
+/// Buffer → per line, runs of [text, fg, bg, bold, underline, italic, strikethrough, wide] (same styles are merged).
+/// Wide (two-cell) characters (Korean) get their own run (wide = true) — so the web draws them exactly two cells wide. The following cell is skipped
 fn dump(buf: &Buffer) -> Value {
     use unicode_width::UnicodeWidthStr;
     let a = buf.area;
@@ -82,7 +82,7 @@ fn app_scene(h: &mut Harness, name: &str, desc: &str, w: u16, ht: u16) -> Value 
     v
 }
 
-/// 원자: 색 토큰 · 글자 조각 (배지 · 키 · 흐린 글자 · 아이콘 · 색 견본)
+/// Atoms: color tokens · text pieces (badge · key · muted text · icon · color swatch)
 fn atoms() -> Value {
     scene("Atoms", "kit/atoms.rs: 색 토큰과 글자 조각 — badge · key · muted · icon · swatch", 110, 12, |f| {
         let toks = [("ACCENT", ACCENT), ("SEL", SEL), ("SEL_BLUR", SEL_BLUR), ("SURFACE", SURFACE), ("POPUP_BG", POPUP_BG), ("OK", OK), ("WARN", WARN), ("DANGER", DANGER), ("NUMBER", NUMBER), ("C_DB", C_DB), ("C_VIEW", C_VIEW), ("C_SEQUENCE", C_SEQUENCE), ("C_ROUTINE", C_ROUTINE), ("C_KEYWORD", C_KEYWORD)];
@@ -99,7 +99,7 @@ fn atoms() -> Value {
     })
 }
 
-/// 분자: 한 줄 — Row (트리 · 팔레트 · 스키마 고르기 · Redis 키), key_row, field_row, key_hints, section
+/// Molecules: one line — Row (tree · palette · schema picker · Redis key), key_row, field_row, key_hints, section
 fn molecules() -> Value {
     scene("Molecules", "kit/molecules.rs: 한 줄 조각 — Row (들여쓰기 · ▸ · 아이콘 · 설명 · 오른쪽 · 색 · 선택), key_row, field_row, key_hints, section", 110, 22, |f| {
         let w = 60;
@@ -129,7 +129,7 @@ fn molecules() -> Value {
     })
 }
 
-/// 유기체: 패널 (포커스 · 아님) · 팝업 · 위험 팝업 (확인 창)
+/// Organisms: panel (focused · not) · popup · danger popup (confirmation)
 fn organisms() -> Value {
     scene("Organisms", "kit/organisms.rs: panel(포커스 · 아님) · popup · popup_danger + confirm_lines (행 수 색)", 120, 16, |f| {
         let [a, b, c] = Layout::horizontal([Constraint::Percentage(28), Constraint::Percentage(30), Constraint::Percentage(42)]).areas(f.area());
@@ -157,7 +157,7 @@ fn node(key: &str, label: &str, hint: &str, kind: NodeKind, conn: &str) -> Node 
     Node { key: key.into(), label: label.into(), hint: hint.into(), kind, conn: conn.into(), db: Some("rentalpay".into()), schema: Some("public".into()), name: None, expandable: true }
 }
 
-/// 탐색기 (운영 · 개발 색, 한글 설명) + 표 탭 + 상태 줄 (PROD 배지)
+/// Explorer (production · development colors, Korean descriptions) + table tab + status line (PROD badge)
 async fn explorer(h: &mut Harness) {
     for c in [conn("prod", "[PROD] rentalpay", "#6e2a2a", true), conn("dev", "[DEV] rentalpay", "#2f5634", false)] {
         h.app.state.save_connection(c, None, None).await.unwrap();
@@ -182,10 +182,10 @@ async fn explorer(h: &mut Harness) {
     h.app.status = "4 rows retrieved in 12 ms".into();
 }
 
-/// 화면들: 콘솔 · 결과, 차트, 운영 작업 기록, 테이블 디자이너, 테스트 데이터 · 관련 행 복사 확인, Redis
+/// Screens: console · results, chart, production log, table designer, test data · copy related rows confirmation, Redis
 fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     use qurry_core::ddl::{ColumnDef, ForeignKeyDef, IndexDef, TableDef};
-    // 콘솔 + 결과
+    // Console + results
     let id = h.console_with("select card_brand, count(*) as payments, sum(amount) as total\nfrom payment\ngroup by 1\norder by 3 desc;", 3, 16);
     let res = qurry_core::db::QueryResult {
         columns: [("card_brand", "TEXT"), ("payments", "INT8"), ("total", "NUMERIC")].iter().map(|(n, t)| qurry_core::db::ColumnInfo { name: n.to_string(), type_name: t.to_string() }).collect(),
@@ -204,11 +204,11 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.app.focus = crate::app::Focus::Editor;
     h.app.status = "4 row(s) retrieved in 18 ms".into();
     scenes.push(app_scene(h, "Console & result", "콘솔 (위) · 결과 표 (아래) · F5 실행", 120, 26));
-    // 차트
+    // Chart
     h.app.chart_result();
     scenes.push(app_scene(h, "Chart", "⌃k › Chart Result: 첫 글 컬럼별 수 컬럼의 합 (가로 막대)", 120, 26));
     h.app.popup = None;
-    // 운영 작업 기록
+    // Production log
     let entry = |id: &str, ago: i64, sql: &str, rows: Option<u64>, undo: bool, in_tx: bool| qurry_core::audit::AuditEntry {
         id: id.into(),
         ts: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64 - ago * 60_000,
@@ -232,7 +232,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.app.production_log();
     scenes.push(app_scene(h, "Production log", "⌃k › Production Log: 운영에서 실행한 변경 (↶ undo 가 있으면 ↩ 로 새 콘솔에)", 120, 22));
     h.app.popup = None;
-    // 테이블 디자이너 (고치기)
+    // Table designer (modify)
     let col = |n: &str, t: &str, null: bool| ColumnDef { name: n.into(), orig: Some(n.into()), data_type: t.into(), nullable: null, ..Default::default() };
     let before = TableDef {
         schema: "public".into(),
@@ -252,7 +252,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.app.designer = Some(d);
     scenes.push(app_scene(h, "Table designer", "⌃F6 Modify Table: 컬럼 · 인덱스 · FK 를 한 줄씩 고치면 아래에 ALTER 가 바로 보인다", 120, 34));
     h.app.designer = None;
-    // 테스트 데이터 · 관련 행 복사 확인
+    // Test data · copy related rows confirmation
     h.app.popup = Some(Popup::Confirm {
         text: "Insert 1,000 generated rows into public.payment?\n\n  id          left to the database (auto / generated)\n  user_id     picked from public.users (id)\n  amount      random values\n  card_brand  one of: VISA, MASTER, AMEX\n  created_at  random values\n\n⚠ Production data source \"[PROD] rentalpay\"\n\nAll rows go in one transaction — if one fails, nothing is inserted.".into(),
         on_yes: Box::new(|_| {}),
@@ -271,7 +271,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
 }
 
 #[tokio::test]
-#[ignore = "Storybook 용 TUI 화면을 다시 만들 때만 (pnpm tui-snapshots)"]
+#[ignore = "only when regenerating the TUI screens for Storybook (pnpm tui-snapshots)"]
 async fn kit_snapshots() {
     let mut scenes = vec![atoms(), molecules(), organisms()];
     let mut h = Harness::new().await;

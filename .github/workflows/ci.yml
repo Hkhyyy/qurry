@@ -1,15 +1,15 @@
-# PR 마다 테스트를 돌린다. 실패하면 머지하지 않는다.
-# Rust: 단위 테스트 + 실제 DB(PostgreSQL / MySQL / Redis 서비스 컨테이너)에 붙는 통합 테스트(#[ignore]).
-#   SSL·TLS·Sentinel·Cluster·SSH 터널 테스트는 따로 띄울 서버가 필요해서 뺀다.
-#   GUI(src-tauri)는 Linux 에서 webkit 이 필요해서 Release(macOS) 빌드로 확인한다.
-# Web: vitest + tsc/vite 빌드.
-# 액션은 release.yml 과 같은 커밋 SHA 로 고정.
+# Run tests on every PR. Don't merge if they fail.
+# Rust: unit tests + integration tests (#[ignore]) against real DBs (PostgreSQL / MySQL / Redis service containers).
+#   SSL·TLS·Sentinel·Cluster·SSH tunnel tests are left out since they need separate servers.
+#   The GUI (src-tauri) needs webkit on Linux, so it's checked by the Release (macOS) build.
+# Web: vitest + tsc/vite build.
+# Actions pinned to the same commit SHAs as release.yml.
 name: CI
 
 on:
   pull_request:
     branches: [main]
-  # main 에서도 돌린다: 빌드 캐시(rust-cache)가 main 에 남아야 새 PR 브랜치가 그 캐시로 시작한다 (없으면 매번 처음부터 — 드라이버만 10분 넘게)
+  # Also run on main: the build cache (rust-cache) must exist on main for new PR branches to start from it (otherwise from scratch every time — over 10 minutes for the drivers alone)
   push:
     branches: [main]
   workflow_dispatch:
@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        # pgvector 가 든 PG 16 (비슷한 행 찾기 시험)
+        # PG 16 with pgvector (similar-row search tests)
         image: pgvector/pgvector:pg16
         env:
           POSTGRES_HOST_AUTH_METHOD: trust
@@ -58,7 +58,7 @@ jobs:
         image: redis:7-alpine
         ports: ["16379:6379"]
         options: --health-cmd "redis-cli ping" --health-interval 2s --health-retries 30
-      # 벡터 DB (REST). 이미지에 curl 이 없어 health 는 생략 — 드라이버를 빌드하는 동안 뜬다
+      # Vector DBs (REST). No curl in the images, so health checks are skipped — they come up while the drivers build
       qdrant:
         image: qdrant/qdrant:v1.12.4
         ports: ["16333:6333"]
@@ -74,7 +74,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
-      # Milvus standalone 은 실행 명령이 필요해서 서비스 대신 직접 띄운다 (빌드하는 동안 뜬다)
+      # Milvus standalone needs a run command, so start it directly instead of as a service (comes up while building)
       - name: Start Milvus
         run: docker run -d --name milvus -p 19530:19530 -e ETCD_USE_EMBED=true -e ETCD_DATA_DIR=/var/lib/milvus/etcd -e COMMON_STORAGETYPE=local -e DEPLOY_MODE=STANDALONE milvusdb/milvus:v2.5.4 milvus run standalone
 
@@ -89,7 +89,7 @@ jobs:
 
       - name: Integration tests (PostgreSQL / MySQL / Redis)
         env:
-          # 테스트는 USER 를 PG 사용자로 쓴다
+          # Tests use USER as the PG user
           USER: postgres
           QURRY_TEST_PG: localhost:5432:postgres:postgres
           QURRY_TEST_PG_USER: postgres
@@ -101,7 +101,7 @@ jobs:
           QURRY_TEST_MILVUS: "localhost:19530:::default"
         run: cargo test --locked -p qurry-core -- --ignored --skip ssl --skip tls --skip sentinel --skip cluster --skip ssh_tunnel
 
-  # 예전 서버 버전: 기능 대부분이 도는지 (최신 버전은 위 rust 잡)
+  # Older server versions: whether most features work (latest versions are in the rust job above)
   compat:
     runs-on: ubuntu-latest
     services:

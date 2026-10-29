@@ -1,4 +1,4 @@
-/** JetBrains 식 매칭: 부분 문자열 > 단어 시작(_, ., 대문자) > 순서대로 흩어진 글자. 점수가 높을수록 앞에 */
+/** JetBrains-style matching: substring > word start (_, ., uppercase) > scattered letters in order. Higher score comes first */
 export function fuzzyScore(query: string, text: string): number | null {
   if (!query) return 0;
   const q = query.toLowerCase();
@@ -10,14 +10,14 @@ export function fuzzyScore(query: string, text: string): number | null {
     const wordStart = at === 0 || /[_.\s-]/.test(t[at - 1]) || text[at] !== t[at];
     return (wordStart ? 600 : 400) - at - t.length * 0.1;
   }
-  // 흩어진 글자 (예: "uph" → user_payment_history)
+  // Scattered letters (e.g. "uph" → user_payment_history)
   let score = 200;
   let ti = 0;
   let prev = -2;
   for (const ch of q) {
     if (ch === " ") continue;
     let found = -1;
-    // 단어 시작 위치를 먼저 찾는다
+    // Find word start positions first
     for (let k = ti; k < t.length; k++) {
       if (t[k] === ch && (k === 0 || /[_.\s-]/.test(t[k - 1]) || text[k] !== t[k])) {
         found = k;

@@ -1,7 +1,7 @@
-/** Redis 키를 ":" 로 끊은 폴더 (Medis 처럼). path = "dev:sessions", count = 그 아래 키 개수 */
+/** Folders from Redis keys split on ":" (like Medis). path = "dev:sessions", count = keys under it */
 export type KeyNode<T> = { kind: "folder"; name: string; path: string; count: number; children: KeyNode<T>[] } | { kind: "key"; item: T };
 
-/** 폴더 먼저 (이름순), 그다음 키 (받은 순서). 키는 전체 이름 그대로 둔다 */
+/** Folders first (by name), then keys (in received order). Keys keep their full names */
 export function keyTree<T>(items: T[], name: (t: T) => string): KeyNode<T>[] {
   const level = (items: T[], depth: number, prefix: string): KeyNode<T>[] => {
     const folders = new Map<string, T[]>();
@@ -24,10 +24,10 @@ export function keyTree<T>(items: T[], name: (t: T) => string): KeyNode<T>[] {
   return level(items, 0, "");
 }
 
-/** 화면의 한 줄 (키 브라우저: 보이는 줄만 그린다) */
+/** One row on screen (key browser: only visible rows are drawn) */
 export type KeyRowView<T> = { kind: "folder"; name: string; path: string; count: number; depth: number } | { kind: "key"; item: T; depth: number };
 
-/** 펼친 폴더(open: path)만 안을 보인다 */
+/** Only expanded folders (open: path) show their contents */
 export function visibleRows<T>(nodes: KeyNode<T>[], open: Set<string>, depth = 0, out: KeyRowView<T>[] = []): KeyRowView<T>[] {
   for (const n of nodes) {
     if (n.kind === "key") out.push({ kind: "key", item: n.item, depth });
@@ -39,7 +39,7 @@ export function visibleRows<T>(nodes: KeyNode<T>[], open: Set<string>, depth = 0
   return out;
 }
 
-/** 키가 들어 있는 폴더들 ("dev:sessions:{1}" → dev, dev:sessions) */
+/** Folders containing the key ("dev:sessions:{1}" → dev, dev:sessions) */
 export function parentPaths(key: string): string[] {
   const parts = key.split(":");
   return parts.slice(1).map((_, i) => parts.slice(0, i + 1).join(":"));

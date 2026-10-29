@@ -8,7 +8,7 @@ export function elapsedText(ms: number): string {
   return `${Math.floor(s / 60)} m ${String(s % 60).padStart(2, "0")} s`;
 }
 
-/** 실행 중 띠 (결과 영역 위): 진행 막대 (끝을 모르니 왔다 갔다) · 지난 시간 · Cancel */
+/** Running bar (above the result area): progress bar (end unknown, so it bounces) · elapsed time · Cancel */
 export function RunningBar({ running, label = "Executing", onCancel }: { running: boolean; label?: string; onCancel?: () => void }) {
   const [start, setStart] = useState<number | null>(null);
   const [now, setNow] = useState(0);

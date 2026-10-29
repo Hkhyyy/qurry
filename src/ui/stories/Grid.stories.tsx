@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { CellEditor, GridCell, GridHeaderCell, GridHeaderRow, GridRow, RowNumberCell } from "..";
 
-/** 결과 표 칸 (ResultGrid 가 쓰는 조각): 머리 줄 · 머리 칸 · 행 · 행 번호 · 데이터 칸 · 편집 칸 */
+/** Result grid cells (pieces used by ResultGrid): header row · header cell · row · row number · data cell · edit cell */
 const meta: Meta = { title: "GUI/4 Grid" };
 export default meta;
 

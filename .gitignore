@@ -1,4 +1,4 @@
-# ── Rust (workspace: target/ 은 루트 하나) ──
+# ── Rust (workspace: a single target/ at the root) ──
 /target/
 **/*.rs.bk
 *.pdb
@@ -15,7 +15,7 @@ dist-ssr/
 src-tauri/target/
 src-tauri/gen/schemas/
 
-# ── 로그 ──
+# ── Logs ──
 logs/
 *.log
 npm-debug.log*
@@ -23,7 +23,7 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# ── 비밀·로컬 설정 (연결 정보·비밀번호는 앱 설정 폴더에 있고 저장소에 두지 않는다) ──
+# ── Secrets·local settings (connection info·passwords live in the app config folder, not in the repo) ──
 .env
 .env.*
 !.env.example
@@ -32,7 +32,7 @@ pnpm-debug.log*
 connections.json
 secrets.json
 
-# ── 에디터 / OS ──
+# ── Editor / OS ──
 .vscode/*
 !.vscode/extensions.json
 .idea/
@@ -43,7 +43,7 @@ secrets.json
 *.sln
 *.sw?
 
-# ── Claude / AI 에이전트 로컬 파일 ──
+# ── Claude / AI agent local files ──
 .claude/
 CLAUDE.md
 CLAUDE.local.md

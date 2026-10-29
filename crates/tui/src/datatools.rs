@@ -1,5 +1,5 @@
-//! 데이터 도구: 테스트 데이터 만들기 (⌃K › Generate Test Data…) · 운영 데이터 일부 복사 (⌃K › Copy Related Rows…) ·
-//! 결과 막대 차트 (⌃K › Chart Result)
+//! Data tools: generate test data (⌃K › Generate Test Data…) · partial copy of production data (⌃K › Copy Related Rows…) ·
+//! result bar chart (⌃K › Chart Result)
 use crate::app::{App, Focus, PAction, PItem, Palette, Popup, Tab, TabKind};
 use crate::migrate::Flow;
 use crate::transfer::thousands;
@@ -7,7 +7,7 @@ use crate::tree::NodeKind;
 use qurry_core::sql;
 
 impl App {
-    /// 탐색기에서 고른 테이블, 아니면 열린 표 탭: (대상, Data Source id, 스키마, 테이블)
+    /// The table picked in the explorer, otherwise the open table tab: (target, Data Source id, schema, table)
     pub(crate) fn chosen_table(&self) -> Option<(String, String, String, String)> {
         if self.focus == Focus::Tree
             && let Some(n) = self.tree.selected()
@@ -22,12 +22,12 @@ impl App {
         }
     }
 
-    /// Production Data Source 면 그 이름
+    /// Its name, if a Production Data Source
     pub(crate) fn production_name(&self, conn: &str) -> Option<String> {
         self.conn(conn).filter(|c| c.config.options.confirm_changes).map(|c| c.config.name.clone())
     }
 
-    /// 몇 행 만들지 묻고 → 컬럼마다 채우는 법을 보여 주고 확인 → 한 트랜잭션으로 넣는다
+    /// Ask how many rows → show how each column is filled and confirm → insert in one transaction
     pub fn generate_data_start(&mut self) {
         let Some((target, conn, schema, table)) = self.chosen_table() else {
             self.status = "Select a table in the explorer (or open a table tab) to fill with test data".into();
@@ -81,7 +81,7 @@ impl App {
         });
     }
 
-    /// ⌃K › Copy Related Rows…: 시작 행 조건 → 자식 단계 → 넣을 곳 → 미리보기 확인 → 복사 (개인정보는 가린다)
+    /// ⌃K › Copy Related Rows…: start-row condition → child depth → destination → confirm preview → copy (personal data masked)
     pub fn copy_rows_start(&mut self) {
         let Some((target, conn, schema, table)) = self.chosen_table() else {
             self.status = "Select a table in the explorer (or open a table tab) to copy rows from".into();
@@ -103,7 +103,7 @@ impl App {
         });
     }
 
-    /// 개인정보를 가릴지 (기본: 가린다)
+    /// Whether to mask personal data (default: mask)
     pub(crate) fn copy_rows_mask(&mut self, (source, conn, mut spec): (String, String, qurry_core::subset::SubsetSpec), depth: String) {
         spec.depth = depth.parse().unwrap_or(1);
         let items = [("mask", "Mask personal data (email, phone, people's names, address, ID / card numbers, passwords, birth dates, IP)"), ("raw", "Copy as is — no masking")]
@@ -117,7 +117,7 @@ impl App {
     pub(crate) fn copy_rows_target(&mut self, (source, conn, mut spec): (String, String, qurry_core::subset::SubsetSpec), mask: String) {
         spec.mask = mask != "raw";
         let kind = self.kind_of(&conn);
-        // 운영이 아닌 곳을 먼저 (실수로 운영에 넣지 않게)
+        // Non-production targets first (so nothing goes into production by mistake)
         let mut cands: Vec<_> = self.conns.iter().filter(|c| c.config.kind == kind && c.config.id != conn).collect();
         cands.sort_by_key(|c| c.config.options.confirm_changes);
         let items: Vec<PItem> = cands
@@ -172,7 +172,7 @@ impl App {
         });
     }
 
-    /// ⌃K › Chart Result: 지금 결과 표를 가로 막대로 (X = 수가 아닌 첫 컬럼, 값 = id 가 아닌 첫 수 컬럼의 합, 없으면 행 수)
+    /// ⌃K › Chart Result: the current result table as horizontal bars (X = first non-numeric column, value = sum of the first numeric non-id column, else row count)
     pub fn chart_result(&mut self) {
         let Some(g) = self.grid_mut() else {
             self.status = "Run a query (or open a table) to chart its result".into();
@@ -195,7 +195,7 @@ fn num(v: &serde_json::Value) -> Option<f64> {
     }
 }
 
-/// 결과 → (제목, 가로 막대 글). 같은 X 는 합친다. 날짜 · 수 X 는 순서대로, 나머지는 큰 것부터. rows 줄까지
+/// Result → (title, horizontal bar text). Same X values are merged. Date · numeric X in order, others largest first. Up to rows lines
 pub(crate) fn bar_chart(r: &qurry_core::db::QueryResult, width: usize, rows: usize) -> Option<(String, String)> {
     if r.rows.is_empty() || r.columns.is_empty() {
         return None;

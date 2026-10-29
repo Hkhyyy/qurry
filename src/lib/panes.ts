@@ -1,13 +1,13 @@
-/** 에디터 화면 분할 트리 (TUI 의 panes.rs 와 같은 규칙). 칸(그룹)은 잎, 나눈 곳은 가지. 칸은 최대 MAX_PANES 개 */
+/** Editor split tree (same rules as the TUI's panes.rs). Panes (groups) are leaves, splits are branches. At most MAX_PANES panes */
 export type Pane = { t: "leaf"; g: number } | { t: "split"; dir: "right" | "down"; a: Pane; b: Pane };
 
 export const MAX_PANES = 4;
 export const leaf = (g: number): Pane => ({ t: "leaf", g });
 
-/** 칸 id 들 (왼쪽/위부터) */
+/** Pane ids (from left/top) */
 export const leaves = (p: Pane): number[] => (p.t === "leaf" ? [p.g] : [...leaves(p.a), ...leaves(p.b)]);
 
-/** 칸 g 를 dir 방향으로 나눈다. 새 칸 id 와 새 트리 (이미 MAX_PANES 개면 null) */
+/** Split pane g in direction dir. The new pane id and the new tree (null if there are already MAX_PANES) */
 export function splitPane(p: Pane, g: number, dir: "right" | "down"): { pane: Pane; g: number } | null {
   const ls = leaves(p);
   if (ls.length >= MAX_PANES || !ls.includes(g)) return null;
@@ -16,7 +16,7 @@ export function splitPane(p: Pane, g: number, dir: "right" | "down"): { pane: Pa
   return { pane: walk(p), g: n };
 }
 
-/** 탭이 없는 칸을 없애고 옆 칸이 그 자리를 채운다 (전부 비면 칸 하나) */
+/** Remove panes with no tabs and let the neighbor fill the space (one pane if all are empty) */
 export function prunePanes(p: Pane, used: Set<number>): Pane {
   const walk = (x: Pane): Pane | null => {
     if (x.t === "leaf") return used.has(x.g) ? x : null;
