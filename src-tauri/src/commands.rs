@@ -311,6 +311,17 @@ pub fn rag_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
     state.rag_delete(&id)
 }
 
+/// 비밀번호 파일의 마스터 키가 있는 곳: "file" | "keychain"
+#[tauri::command]
+pub fn secret_key_location(state: State<'_, AppState>) -> qurry_core::secrets::KeyLocation {
+    state.secret_key_location()
+}
+
+#[tauri::command]
+pub fn set_secret_key_location(state: State<'_, AppState>, keychain: bool) -> AppResult<qurry_core::secrets::KeyLocation> {
+    state.set_secret_key_location(keychain)
+}
+
 /// OpenAI API 키가 저장되어 있는지 (키 자체는 웹뷰로 돌려주지 않는다)
 #[tauri::command]
 pub fn rag_has_key(state: State<'_, AppState>) -> bool {

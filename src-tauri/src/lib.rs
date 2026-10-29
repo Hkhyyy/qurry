@@ -144,6 +144,8 @@ pub fn run() {
             commands::rag_save,
             commands::rag_delete,
             commands::rag_has_key,
+            commands::secret_key_location,
+            commands::set_secret_key_location,
             commands::rag_set_key,
             commands::rag_build,
             commands::rag_search,

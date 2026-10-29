@@ -288,6 +288,11 @@ export interface RagIndex {
   rows?: number;
   builtAt?: string | null;
 }
+/** 비밀번호 파일의 마스터 키가 있는 곳 */
+export const secretKey = {
+  location: () => invoke<"file" | "keychain">("secret_key_location"),
+  move: (keychain: boolean) => invoke<"file" | "keychain">("set_secret_key_location", { keychain }),
+};
 export const RAG_DEFAULT_MODEL = { openai: "text-embedding-3-small", ollama: "nomic-embed-text" } as const;
 export const rag = {
   list: () => invoke<RagIndex[]>("rag_indexes"),

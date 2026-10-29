@@ -396,6 +396,7 @@ pub enum Action {
     ExplorerNarrower,
     ExplorerWider,
     ManageSchemas,
+    PasswordKey,
     CheckUpdate,
     InstallUpdate,
     Help,
@@ -493,6 +494,7 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::CycleFocus, "Cycle Focus (explorer → editor → results)", ""),
     (Action::Palette, "Actions Palette", ""),
     (Action::TrustSshHost, "Trust SSH Host Key (after checking its fingerprint)", ""),
+    (Action::PasswordKey, "Password Key… (keep it in the config folder or the system keychain)", ""),
     (Action::CheckUpdate, "Check for Updates", ""),
     (Action::InstallUpdate, "Update Qurry & Restart (download the latest release)", ""),
     (Action::Help, "Keymap", ""),
@@ -2846,6 +2848,7 @@ impl App {
                 _ => self.status = "Select a PostgreSQL / MySQL data source in the explorer".into(),
             },
             Action::CheckUpdate => self.check_update(),
+            Action::PasswordKey => self.password_key(),
             Action::InstallUpdate => {
                 let n = self.pending_tabs(None).len();
                 if n > 0 {
@@ -3054,6 +3057,31 @@ impl App {
     }
 
     /// 지금 바로 새 버전을 확인한다 (⌃K › Check for Updates)
+    /// 비밀번호 파일의 마스터 키: 설정 폴더 ↔ OS 키체인 (묻고 옮긴다. 키체인 팝업이 뜰 수 있어 따로 돈다)
+    fn password_key(&mut self) {
+        use qurry_core::secrets::KeyLocation;
+        let to_keychain = self.state.secret_key_location() == KeyLocation::File;
+        let text = if to_keychain {
+            "The password key is in the config folder (secret.key).\n\nMove it into the system keychain? The GUI and the MCP server use the same key, so each asks for keychain access once (on macOS, again after updates while Qurry isn't code-signed)."
+        } else {
+            "The password key is in the system keychain.\n\nMove it back to the config folder (no keychain prompts)?"
+        };
+        let st = self.state.clone();
+        self.popup = Some(Popup::Confirm {
+            text: text.into(),
+            on_yes: Box::new(move |a| {
+                a.status = "Waiting for the system keychain…".into();
+                a.spawn(async move { tokio::task::spawn_blocking(move || st.set_secret_key_location(to_keychain)).await.map_err(|e| e.to_string())?.map_err(|e| e.to_string()) }, |a, r| {
+                    a.status = match r {
+                        Ok(KeyLocation::Keychain) => "The password key is now in the system keychain".into(),
+                        Ok(KeyLocation::File) => "The password key is now in the config folder".into(),
+                        Err(e) => e,
+                    };
+                });
+            }),
+        });
+    }
+
     fn check_update(&mut self) {
         self.status = "Checking for updates…".into();
         let dir = self.state.store.dir();

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ask, askText } from "./lib/dialogs";
 import { listen } from "@tauri-apps/api/event";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { analyzePlan, api, auditLog, backup, ConnectionView, ddl, previewImpact, dialectOf, meta, VECTOR_KINDS, QueryResult, redisDb, setUpdateCheckEnabled, targetId, UpdateInfo, updateCheckEnabled } from "./lib/api";
+import { analyzePlan, api, auditLog, backup, ConnectionView, ddl, previewImpact, dialectOf, meta, VECTOR_KINDS, QueryResult, redisDb, secretKey, setUpdateCheckEnabled, targetId, UpdateInfo, updateCheckEnabled } from "./lib/api";
 import { RedisBrowser } from "./components/RedisBrowser";
 import { KeymapDialog } from "./components/KeymapDialog";
 import { KeymapEditor } from "./components/KeymapEditor";
@@ -2708,8 +2708,39 @@ export default function App() {
 }
 
 /** Settings › Appearance */
+/** 설정 › Passwords: 비밀번호 파일의 마스터 키를 파일에 둘지 OS 키체인에 둘지 */
+function PasswordSettings() {
+  const [loc, setLoc] = useState<"file" | "keychain" | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  useEffect(() => {
+    secretKey.location().then(setLoc, (e) => setMsg(String(e)));
+  }, []);
+  const move = async (keychain: boolean) => {
+    setMsg(keychain ? "Waiting for the system keychain…" : "Moving the key back to the file…");
+    try {
+      setLoc(await secretKey.move(keychain));
+      setMsg(null);
+    } catch (e) {
+      setMsg(String(e));
+    }
+  };
+  return (
+    <div className="settings-form">
+      <Field label="Password key" hint={msg ?? "Saved passwords are encrypted in secrets.json. Its key is in the config folder (secret.key) or in the system keychain. The terminal UI and the MCP server use the same key, so they ask for keychain access too."}>
+        <div className="ui-row">
+          <Select value={loc ?? ""} disabled={!loc} onChange={(e) => move(e.target.value === "keychain")}>
+            <option value="file">In the config folder (no prompts)</option>
+            <option value="keychain">In the system keychain</option>
+          </Select>
+        </div>
+      </Field>
+      {isMac && <Text tone="muted">macOS asks once per app (Qurry, qurry-tui, qurry-mcp) to allow keychain access, and again after each update while Qurry isn't code-signed.</Text>}
+    </div>
+  );
+}
+
 function SettingsDialog({ onClose, onUpdate, initialPage = "appearance" }: { onClose: () => void; onUpdate: (u: UpdateInfo) => void; initialPage?: "appearance" | "keymap" }) {
-  const [page, setPage] = useState(initialPage);
+  const [page, setPage] = useState<"appearance" | "keymap" | "passwords">(initialPage);
   const [checkOnStart, setCheckOnStart] = useState(updateCheckEnabled());
   const [updMsg, setUpdMsg] = useState<string | null>(null);
   const checkNow = async () => {
@@ -2749,8 +2780,10 @@ function SettingsDialog({ onClose, onUpdate, initialPage = "appearance" }: { onC
         <List className="settings-nav">
           <ListItem title="Appearance" selected={page === "appearance"} onClick={() => setPage("appearance")} />
           <ListItem title="Keymap" selected={page === "keymap"} onClick={() => setPage("keymap")} />
+          <ListItem title="Passwords" selected={page === "passwords"} onClick={() => setPage("passwords")} />
         </List>
         {page === "keymap" && <KeymapEditor />}
+        {page === "passwords" && <PasswordSettings />}
         {page === "appearance" && (
           <div className="settings-form">
             <Field label="Theme">
