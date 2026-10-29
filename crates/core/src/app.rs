@@ -326,7 +326,7 @@ pub async fn redis_pool(state: &AppState, id: &str) -> AppResult<crate::redisdb:
 }
 
 /// Time limit for read-only (MCP) queries (so queries sent by others do not hold the server for long)
-const SERVER_CHANGED: &str = "The server, user or SSH tunnel changed (or SSL was turned off) — enter the password again. The saved one is only sent to the server it was saved for.";
+const SERVER_CHANGED: &str = "The server, port, user, type, SSH tunnel or Redis nodes changed, or SSL was turned off, its verification lowered or its CA file changed — enter the password again. The saved one is only sent to the server it was saved for.";
 const SSH_CHANGED: &str = "The SSH server changed — enter the SSH password / passphrase again. The saved one is only sent to the server it was saved for.";
 /// MCP reads: 60 seconds, string parsing matches guard (even if the server or role sets standard_conforming_strings = off)
 const READ_ONLY_TIMEOUT_PG: &str = "SET LOCAL statement_timeout = '60s'";

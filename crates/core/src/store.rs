@@ -255,7 +255,7 @@ impl ConnectionConfig {
 
     /// Whether this is the same SSH server, so the saved SSH secret may be sent
     pub fn same_ssh(&self, other: &ConnectionConfig) -> bool {
-        let t = |c: &ConnectionConfig| c.ssh.as_ref().map(|s| (s.host.trim().to_lowercase(), s.port, s.user.clone()));
+        let t = |c: &ConnectionConfig| c.ssh.as_ref().map(|s| (s.host.trim().to_lowercase(), s.port, s.user.trim().to_string()));
         t(self) == t(other)
     }
 
@@ -269,7 +269,7 @@ impl ConnectionConfig {
                 let r = c.redis.clone().unwrap_or_default();
                 (c.redis_mode().to_string(), r.sentinel_master.trim().to_string(), r.nodes.split([',', ' ']).filter(|n| !n.is_empty()).map(|n| n.to_lowercase()).collect::<Vec<_>>())
             });
-            (c.kind, c.host.trim().to_lowercase(), c.port, c.user.clone(), c.active_ssh().map(|s| (s.host.trim().to_lowercase(), s.port)), redis)
+            (c.kind, c.host.trim().to_lowercase(), c.port, c.user.trim().to_string(), c.active_ssh().map(|s| (s.host.trim().to_lowercase(), s.port)), redis)
         };
         let rank = |c: &ConnectionConfig| match c.active_ssl().map(|s| s.mode()) {
             None => 0,
@@ -278,8 +278,8 @@ impl ConnectionConfig {
             Some(_) => 1,
         };
         let ca = |c: &ConnectionConfig| c.active_ssl().map(|s| s.ca_file.trim().to_string()).unwrap_or_default();
-        // Allowing plain text where it wasn't allowed is a weaker connection too
-        t(self) == t(other) && rank(other) >= rank(self) && (rank(self) < 2 || ca(self) == ca(other)) && (self.options.allow_plaintext || !other.options.allow_plaintext)
+        // "Allow unencrypted connection" isn't checked: the destination stays the same (and it's what the TLS error tells the user to turn on)
+        t(self) == t(other) && rank(other) >= rank(self) && (rank(self) < 2 || ca(self) == ca(other))
     }
 }
 
@@ -647,14 +647,20 @@ mod tests {
         assert!(a.same_server(&b) && a.same_ssh(&b));
         b.host = "DB.internal ".into();
         assert!(a.same_server(&b));
-        let changes: [fn(&mut ConnectionConfig); 9] = [|c| c.host = "attacker.example".into(), |c| c.port = 5433, |c| c.user = "root".into(), |c| c.kind = DbKind::Mysql,
+        let changes: [fn(&mut ConnectionConfig); 8] = [|c| c.host = "attacker.example".into(), |c| c.port = 5433, |c| c.user = "root".into(), |c| c.kind = DbKind::Mysql,
             |c| c.ssl.as_mut().unwrap().enabled = false, |c| c.ssh.as_mut().unwrap().host = "evil".into(), |c| c.ssl.as_mut().unwrap().mode = "require".into(),
-            |c| c.ssl.as_mut().unwrap().ca_file = "/tmp/evil-ca.pem".into(), |c| c.options.allow_plaintext = true];
+            |c| c.ssl.as_mut().unwrap().ca_file = "/tmp/evil-ca.pem".into()];
         for f in changes {
             let mut c = a.clone();
             f(&mut c);
             assert!(!a.same_server(&c), "{c:?}");
         }
+        // Same destination: allowing plain text (what the TLS error suggests) and stray spaces around the user keep the password
+        let mut c = a.clone();
+        c.options.allow_plaintext = true;
+        c.user = " app ".into();
+        c.ssh.as_mut().unwrap().user = "me ".into();
+        assert!(a.same_server(&c) && a.same_ssh(&c));
         let mut c = a.clone();
         c.ssh.as_mut().unwrap().user = "other".into();
         assert!(!a.same_ssh(&c));
