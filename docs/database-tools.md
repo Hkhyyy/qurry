@@ -54,7 +54,7 @@ It shows how each column will be filled and a sample first, then inserts up to 1
 To debug with real data without copying the whole production database: right-click a table › Import/Export › Copy Related Rows To…; TUI: `⌃k` › Copy Related Rows To….
 1. Pick the starting rows with a WHERE condition (e.g. `id = 42`).
 2. Rows they point to (parents) always come along, so foreign keys hold. Child rows (rows pointing at them, e.g. a customer's orders, then the order items) come along up to the levels you choose.
-3. Personal data is masked as it is read: emails, phone numbers, people's names, addresses, ID and card numbers, passwords and tokens, birth dates and IP addresses (by column name). The mask is md5-based, so the same value always masks the same way. Primary and foreign key columns are never masked.
+3. Personal data is masked as it is read (on by default; untick it in the dialog, or pick "Copy as is" in the TUI): emails, phone numbers, people's names, addresses, ID and card numbers, passwords and tokens, birth dates and IP addresses (by column name). The mask is md5-based, so the same value always masks the same way. Primary and foreign key columns are never masked.
 4. Preview shows each table, how many rows and which columns are masked. Copy inserts them parents-first into the target data source (same kind) in one transaction; rows already there are skipped.
 
 The tables must already exist in the target ([Compare & migrate](#compare--migrate) makes the DDL). Up to 50,000 rows per copy.

@@ -405,7 +405,7 @@ impl App {
         }
         self.rebuild_roots();
         if to != self.cur_ws {
-            self.status = format!("Moved to {} — Alt+{} to see it", self.ws_label(to), to + 1);
+            self.status = format!("Moved to {} — ⌥{} to see it", self.ws_label(to), to + 1);
         }
     }
 
@@ -468,7 +468,7 @@ impl App {
         s.mru.insert(0, t.id);
         s.tabs.push(t);
         s.active = s.tabs.len() - 1;
-        self.status = format!("Moved the tab to {} (Alt+{})", self.workspaces[to].name, to + 1);
+        self.status = format!("Moved the tab to {} (⌥{})", self.workspaces[to].name, to + 1);
     }
 }
 

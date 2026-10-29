@@ -405,7 +405,7 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::TxToggle, "Toggle Transaction Mode (Auto/Manual)", ""),
     (Action::Commit, "Commit", ""),
     (Action::Rollback, "Roll Back", ""),
-    (Action::ExecSettings, "Query Execution Settings (what Ctrl+Enter runs)", ""),
+    (Action::ExecSettings, "Query Execution Settings (what ⌃Enter runs)", ""),
     (Action::ClearConsole, "Clear Console (delete all text)", "⌘A ⌫ (console)"),
     (Action::SearchEverywhere, "Search Everywhere (objects · columns · tabs · actions)", ""),
     (Action::GoToObject, "Go to Database Object", ""),
@@ -413,7 +413,7 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::EditData, "Edit Data (open table)", "F4 / Enter"),
     (Action::Ddl, "Go to DDL", ""),
     (Action::Submit, "Submit Changes", ""),
-    (Action::Revert, "Revert Changes", "Ctrl+Z (grid)"),
+    (Action::Revert, "Revert Changes", "⌃z (grid)"),
     (Action::AddRow, "Add Row", "Insert / a"),
     (Action::DeleteRow, "Delete Row", "Delete / d"),
     (Action::SetNull, "Set NULL", "n (grid)"),
@@ -424,7 +424,7 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::RagBuild, "Build RAG Index… (embed the rows)", ""),
     (Action::RagNew, "New RAG Index from the Selected Table…", ""),
     (Action::RagKey, "Set OpenAI API Key (RAG)…", ""),
-    (Action::WsSwitch, "Switch Workspace…", "Alt+1…9"),
+    (Action::WsSwitch, "Switch Workspace…", "⌥1…9"),
     (Action::WsNew, "New Workspace…", ""),
     (Action::WsRename, "Rename Workspace…", ""),
     (Action::WsDelete, "Delete Workspace…", ""),
@@ -681,7 +681,7 @@ impl App {
             focus: Focus::Tree,
             explorer: true,
             popup: None,
-            status: "Ready — not sure? Ctrl+P searches everything · F1 keymap".into(),
+            status: "Ready — not sure? ⌃p searches everything · F1 keymap".into(),
             quit: false,
             panes: crate::panes::Pane::Leaf(0),
             group_active: [None; crate::panes::MAX],
@@ -842,7 +842,7 @@ impl App {
                             }),
                         });
                     }
-                    a.status = if e.contains(qurry_core::tunnel::UNKNOWN_HOST) { format!("{e} — Ctrl+K › Trust SSH Host Key") } else { e };
+                    a.status = if e.contains(qurry_core::tunnel::UNKNOWN_HOST) { format!("{e} — ⌃k › Trust SSH Host Key") } else { e };
                 }
             }
             a.tree.clamp();
@@ -1494,7 +1494,7 @@ impl App {
             return;
         }
         if g.dirty() {
-            self.status = "Save (Ctrl+S) or revert (Ctrl+Z) pending changes before sorting".into();
+            self.status = "Save (⌃s) or revert (⌃z) pending changes before sorting".into();
             return;
         }
         let q = sql::quote_ident(kind, &g.result.columns[g.col].name);

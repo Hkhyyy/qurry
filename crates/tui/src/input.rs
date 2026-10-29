@@ -1232,7 +1232,7 @@ fn popup_key(app: &mut App, k: KeyEvent) {
                     let v = |l: &str| form.fields.iter().find(|f| f.label == l).map(|f| f.value.trim().to_string()).unwrap_or_default();
                     let port = v("SSH port").parse().unwrap_or(22);
                     form.message = Some(match app.state.trust_ssh_host(v("SSH host"), port) {
-                        Ok(m) => (true, format!("✓ {m} — press Ctrl+T to test again")),
+                        Ok(m) => (true, format!("✓ {m} — press ⌃t to test again")),
                         Err(e) => (false, format!("✕ {e}")),
                     });
                 }
@@ -1245,7 +1245,7 @@ fn popup_key(app: &mut App, k: KeyEvent) {
                                 if let Some(Popup::ConnForm(f)) = &mut a.popup {
                                     f.message = Some(match r {
                                         Ok(v) => (true, format!("✓ {v}")),
-                                        Err(e) if e.contains(qurry_core::tunnel::UNKNOWN_HOST) => (false, format!("✕ {e} Press Ctrl+Y to trust it.")),
+                                        Err(e) if e.contains(qurry_core::tunnel::UNKNOWN_HOST) => (false, format!("✕ {e} Press ⌃y to trust it.")),
                                         Err(e) => (false, format!("✕ {e}")),
                                     });
                                 }
@@ -1842,6 +1842,10 @@ mod tests {
         h.key("Enter");
         let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no depth") };
         assert_eq!(p.items.len(), 4);
+        h.key("Enter");
+        // 개인정보: 기본은 가린다, 아래가 그대로
+        let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no mask choice") };
+        assert_eq!(p.items.len(), 2);
         h.key("Enter");
         let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no target") };
         assert_eq!(p.items.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(), vec!["DEV"]);

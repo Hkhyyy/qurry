@@ -103,8 +103,19 @@ impl App {
         });
     }
 
-    pub(crate) fn copy_rows_target(&mut self, (source, conn, mut spec): (String, String, qurry_core::subset::SubsetSpec), depth: String) {
+    /// 개인정보를 가릴지 (기본: 가린다)
+    pub(crate) fn copy_rows_mask(&mut self, (source, conn, mut spec): (String, String, qurry_core::subset::SubsetSpec), depth: String) {
         spec.depth = depth.parse().unwrap_or(1);
+        let items = [("mask", "Mask personal data (email, phone, people's names, address, ID / card numbers, passwords, birth dates, IP)"), ("raw", "Copy as is — no masking")]
+            .into_iter()
+            .map(|(v, l)| PItem { label: l.into(), hint: String::new(), action: PAction::Pick(v.into()) })
+            .collect();
+        self.flow = Some(Flow::CopyMask(Box::new((source, conn, spec))));
+        self.popup = Some(Popup::Palette(Palette { title: "Copy Related Rows — personal data".into(), input: tui_textarea::TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
+    }
+
+    pub(crate) fn copy_rows_target(&mut self, (source, conn, mut spec): (String, String, qurry_core::subset::SubsetSpec), mask: String) {
+        spec.mask = mask != "raw";
         let kind = self.kind_of(&conn);
         // 운영이 아닌 곳을 먼저 (실수로 운영에 넣지 않게)
         let mut cands: Vec<_> = self.conns.iter().filter(|c| c.config.kind == kind && c.config.id != conn).collect();
@@ -140,6 +151,9 @@ impl App {
             }
             if let Some(p) = a.production_name(&into) {
                 text.push_str(&format!("\n⚠ Production data source \"{p}\"\n"));
+            }
+            if !spec.mask {
+                text.push_str("\n⚠ Personal data is copied as is (not masked)\n");
             }
             text.push_str("\nOne transaction; rows already there are skipped. The tables must exist in the target.");
             a.popup = Some(Popup::Confirm {

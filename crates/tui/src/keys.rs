@@ -113,14 +113,19 @@ pub fn spec(k: &KeyEvent) -> Option<String> {
     Some(s + &key)
 }
 
-/// 화면 표기: macOS 는 ⌃⌥⇧ 기호 (GUI 와 같게. 터미널의 Alt = Option). 저장 형식("Alt+X")은 그대로
+/// 화면 표기: macOS 는 ⌃⌥⇧ 기호 (GUI 와 같게. 터미널의 Alt = Option), 그 밖에는 Ctrl+ / Alt+ / Shift+.
+/// 화면 글은 기호로 쓰고 ("⌃k"), 저장 형식 ("Alt+X") 도 받는다
 pub fn disp(s: &str) -> String {
-    let s = lower_unshifted(s);
     if cfg!(target_os = "macos") {
-        s.replace("Ctrl+", "⌃").replace("Alt+", "⌥").replace("Shift+", "⇧")
+        lower_unshifted(s).replace("Ctrl+", "⌃").replace("Alt+", "⌥").replace("Shift+", "⇧")
     } else {
-        s
+        lower_unshifted(&glyph_words(s))
     }
+}
+
+/// ⌃⌥⇧ 기호 → Ctrl+ / Alt+ / Shift+ (macOS 가 아닌 터미널 화면)
+fn glyph_words(s: &str) -> String {
+    s.replace("⌃+", "Ctrl+").replace("⌥+", "Alt+").replace("⇧+", "Shift+").replace('⌃', "Ctrl+").replace('⌥', "Alt+").replace('⇧', "Shift+")
 }
 
 /// "Ctrl+K" → "Ctrl+k": Shift 없는 ⌃/⌥+글자 하나는 소문자로 보인다 (대문자는 Shift 를 눌러야 하는 키로 읽힌다)
@@ -335,5 +340,11 @@ mod tests {
                 assert_eq!(normalize(k), *k);
             }
         }
+    }
+
+    /// 화면 글은 기호로 쓴다 → macOS 가 아니면 낱말로 (⌥+wheel 의 + 는 한 번만)
+    #[test]
+    fn glyphs_become_words_off_macos() {
+        assert_eq!(lower_unshifted(&glyph_words("⌃k · ⌥⇧N · ⌥+wheel · ⇧Tab")), "Ctrl+k · Alt+Shift+N · Alt+wheel · Shift+Tab");
     }
 }
