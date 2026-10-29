@@ -1803,7 +1803,7 @@ mod tests {
         assert!(s.contains("]52;c;"), "the rest of the text is still shown");
     }
 
-    /// 새 Data Source 는 MCP 에 보이지 않게 시작한다. 예전 소스는 MCP 칸을 고치지 않으면 정하지 않은 채로 둔다
+    /// 새 Data Source 는 MCP 에 보이지 않게 시작한다. 폼에 보이는 MCP 값을 그대로 저장한다
     #[tokio::test]
     async fn conn_form_mcp_default() {
         let mut h = Harness::new().await;
@@ -1817,7 +1817,11 @@ mod tests {
         old.options.mcp = None;
         old.options.confirm_changes = true;
         h.app.conn_form(Some(old.clone()));
-        assert_eq!(cfg_of(&h).options.mcp, None, "unchanged legacy source keeps the default");
+        assert_eq!(cfg_of(&h).options.mcp.as_deref(), Some("off"), "what the form shows is saved");
+        // Production 을 꺼도 보이던 off 그대로 (저절로 열리지 않는다)
+        let Some(crate::app::Popup::ConnForm(f)) = &mut h.app.popup else { panic!() };
+        f.fields.iter_mut().find(|x| x.label == "Production").unwrap().value = "off".into();
+        assert_eq!(cfg_of(&h).options.mcp.as_deref(), Some("off"));
         let Some(crate::app::Popup::ConnForm(f)) = &mut h.app.popup else { panic!() };
         f.fields.iter_mut().find(|x| x.label == "MCP").unwrap().value = "read".into();
         assert_eq!(cfg_of(&h).options.mcp.as_deref(), Some("read"));

@@ -403,6 +403,14 @@ impl Server {
             "semantic_search" => {
                 let index = s("index").ok_or("index is required")?;
                 let query = s("query").ok_or("query is required")?;
+                // 원본 테이블과 저장소가 둘 다 MCP 에 보여야 한다 (저장소에는 원본 행의 글이 들어 있다)
+                let ids: std::collections::HashSet<String> = self.sources().await?.into_iter().map(|c| c.config.id).collect();
+                let shown = |t: &str| ids.contains(qurry_core::app::split_target(t).0);
+                if let Some(x) = st.rag_indexes().map_err(e)?.into_iter().find(|x| x.id == index || x.name.eq_ignore_ascii_case(&index))
+                    && !(shown(&x.source) && shown(&x.dest))
+                {
+                    return Err(format!("RAG index not found: {index}"));
+                }
                 Ok(result_json(&st.rag_search(index, query, n("limit", 10).min(50)).await.map_err(e)?))
             }
             other => Err(format!("Unknown tool: {other}")),
