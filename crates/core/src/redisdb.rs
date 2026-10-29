@@ -840,6 +840,12 @@ pub async fn memory_usage(m: &RedisConn, key: &[u8]) -> AppResult<i64> {
     Ok(v.unwrap_or(0))
 }
 
+/// Number of elements with a length command (HLEN, SCARD, LLEN, ZCARD, XLEN; 0 if missing)
+pub async fn element_count(m: &RedisConn, len_cmd: &str, key: &[u8]) -> AppResult<i64> {
+    let mut mgr = m.clone();
+    redis::cmd(len_cmd).arg(key).query_async(&mut mgr).await.map_err(err)
+}
+
 /// Length of one hash field's value (bytes, 0 if missing)
 pub async fn field_len(m: &RedisConn, key: &[u8], field: &[u8]) -> AppResult<i64> {
     let mut mgr = m.clone();
@@ -1014,6 +1020,10 @@ mod tests {
         assert!(e.contains("too big"), "{e}");
         assert!(st.run_read_only("rd::db4".into(), "MGET qurry:small qurry:big".into(), 10).await.is_err());
         assert!(st.run_read_only("rd::db4".into(), "GET qurry:small".into(), 10).await.is_ok());
+        // Reads sent to MCP execute get the same checks
+        let e = st.execute_batch_prepared("rd::db4".into(), vec!["GET qurry:big".into()]).await.unwrap_err().to_string();
+        assert!(e.contains("too big"), "{e}");
+        assert!(st.execute_batch_prepared("rd::db4".into(), vec!["GET qurry:small".into()]).await.is_ok());
         assert!(st.run_read_only("rd::db4".into(), "GETRANGE qurry:big 0 -1".into(), 10).await.is_err());
         assert!(st.run_read_only("rd::db4".into(), "GETRANGE qurry:big 0 99".into(), 10).await.is_ok());
         let _: () = redis::cmd("HSET").arg("qurry:h").arg("f").arg(&big).query_async(&mut c).await.unwrap();
@@ -1022,6 +1032,42 @@ mod tests {
         let d = key_detail(m, "qurry:big", 10).await.unwrap();
         assert!(d.truncated && d.value.as_str().unwrap().len() as i64 == STRING_PREVIEW_MAX);
         let _: () = redis::cmd("DEL").arg("qurry:big").arg("qurry:small").query_async(&mut c).await.unwrap();
+    }
+
+    /// MCP read: whole keys (HGETALL, SMEMBERS, set ops, LRANGE 0 -1, XRANGE without COUNT) are read when small, refused when over 1,000 elements
+    #[tokio::test]
+    #[ignore]
+    async fn redis_whole_key_reads_need_a_small_key() {
+        let dir = std::env::temp_dir().join(format!("qurry-rwhole-{}", uuid::Uuid::new_v4()));
+        let st = crate::open_state(Some(dir)).unwrap();
+        st.save_connection(cfg("db5"), None, None).await.unwrap();
+        let pool = crate::db::connect(&cfg("db5"), None).await.expect("connect");
+        let Pool::Redis(m, _) = &pool else { panic!() };
+        let mut c = m.clone();
+        let _: () = redis::cmd("FLUSHDB").query_async(&mut c).await.unwrap();
+        let many: Vec<String> = (0..1500).map(|i| i.to_string()).collect();
+        let _: () = redis::cmd("HSET").arg("hs").arg("a").arg(1).arg("b").arg(2).query_async(&mut c).await.unwrap();
+        let _: () = redis::cmd("SADD").arg("s1").arg("a").arg("b").query_async(&mut c).await.unwrap();
+        let _: () = redis::cmd("SADD").arg("s2").arg("b").arg("c").query_async(&mut c).await.unwrap();
+        let _: () = redis::cmd("SADD").arg("sbig").arg(&many).query_async(&mut c).await.unwrap();
+        let _: () = redis::cmd("RPUSH").arg("l").arg("a").arg("b").arg("c").query_async(&mut c).await.unwrap();
+        let _: () = redis::cmd("RPUSH").arg("lbig").arg(&many).query_async(&mut c).await.unwrap();
+        let _: () = redis::cmd("ZADD").arg("z").arg(1).arg("a").arg(2).arg("b").query_async(&mut c).await.unwrap();
+        let _: String = redis::cmd("XADD").arg("x").arg("*").arg("f").arg("v").query_async(&mut c).await.unwrap();
+        let read = |s: &str| st.run_read_only("rd::db5".into(), s.into(), 1000);
+        for ok in ["HGETALL hs", "SMEMBERS s1", "SUNION s1 s2", "SINTER s1 s2", "LRANGE l 0 -1", "ZRANGE z 0 -1", "ZRANGEBYSCORE z -inf +inf", "XRANGE x - +", "LRANGE lbig -10 -1", "HGETALL missing"] {
+            assert!(read(ok).await.is_ok(), "{ok}");
+        }
+        assert_eq!(read("LRANGE lbig -10 -1").await.unwrap().rows.len(), 10);
+        for (bad, hint) in [("LRANGE lbig 0 -1", "1500 elements"), ("SMEMBERS sbig", "SSCAN"), ("SUNION s1 sbig", "1502 elements"), ("LRANGE lbig -1001 -1", "at most 1000")] {
+            let e = read(bad).await.unwrap_err().to_string();
+            assert!(e.contains(hint), "{bad}: {e}");
+        }
+        // The same checks for reads sent to MCP execute
+        assert!(st.execute_batch_prepared("rd::db5".into(), vec!["HGETALL hs".into()]).await.is_ok());
+        let e = st.execute_batch_prepared("rd::db5".into(), vec!["LRANGE lbig 0 -1".into()]).await.unwrap_err().to_string();
+        assert!(e.contains("1500 elements"), "{e}");
+        let _: () = redis::cmd("FLUSHDB").query_async(&mut c).await.unwrap();
     }
 
     #[tokio::test]

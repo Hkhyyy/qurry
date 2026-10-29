@@ -153,8 +153,10 @@ impl AppState {
         Ok(())
     }
 
-    fn rag_get(&self, id: &str) -> AppResult<RagIndex> {
-        self.rag_indexes()?.into_iter().find(|x| x.id == id || x.name == id).ok_or_else(|| AppError::Msg(format!("RAG index '{id}' not found")))
+    /// The index with this id, otherwise the first one with exactly this name. MCP resolves with this too, so it checks the index that runs
+    pub fn rag_get(&self, id: &str) -> AppResult<RagIndex> {
+        let list = self.rag_indexes()?;
+        list.iter().find(|x| x.id == id).or_else(|| list.iter().find(|x| x.name == id)).cloned().ok_or_else(|| AppError::Msg(format!("RAG index '{id}' not found")))
     }
 
     /// Create or update (new if id is empty). Changing the source·model·destination requires a rebuild (rows set to 0)

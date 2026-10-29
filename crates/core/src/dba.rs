@@ -193,7 +193,7 @@ ORDER BY wasted_bytes DESC LIMIT 300"#],
         my: &[],
     },
     Def {
-        info: || info("fragmentation", "Table Fragmentation", "Storage", "Free space inside each table's file (DATA_FREE), left behind by deletes and updates. OPTIMIZE TABLE rebuilds the table to give it back. Tables in the shared system tablespace all show that tablespace's free space.", vec![
+        info: || info("fragmentation", "Table Fragmentation", "Storage", "Free space inside each table's file (DATA_FREE), left behind by deletes and updates. OPTIMIZE TABLE rebuilds the table to give it back. MySQL 8.0+ caches these numbers (information_schema_stats_expiry, 24 h by default), so run ANALYZE TABLE first for current ones. DATA_FREE counts whole free extents: small tables often show a few MB free that OPTIMIZE can't give back. Tables in the shared system tablespace all show that tablespace's free space.", vec![
             Action::Sql { label: "Generate OPTIMIZE TABLE", template: "OPTIMIZE TABLE {schema}.{table};" },
         ]),
         pg: &[],
@@ -248,10 +248,23 @@ FROM pg_stat_user_tables ORDER BY n_dead_tup DESC LIMIT 300"#],
         my: &[],
     },
     Def {
-        info: || info("vacuum_progress", "Vacuum Progress", "Maintenance", "VACUUM running right now (autovacuum workers and manual VACUUM, all databases). phase and scanned_pct show how far it got. Cancelling autovacuum is safe but it starts again later; one marked to prevent wraparound restarts right away.", vec![
+        info: || info("vacuum_progress", "Vacuum Progress", "Maintenance", "VACUUM running right now (autovacuum workers and manual VACUUM, all databases). phase and scanned_pct show how far it got; VACUUM FULL shows as phase 'VACUUM FULL: …' (PostgreSQL 12+), with no vacuumed_pct as it rewrites the table. Cancelling autovacuum is safe but it starts again later; one marked to prevent wraparound restarts right away.", vec![
             Action::Kill { label: "Cancel Vacuum", terminate: false },
         ]),
+        // VACUUM FULL reports in pg_stat_progress_cluster (12+), not pg_stat_progress_vacuum. Older servers: the second query
         pg: &[r#"SELECT p.pid, p.datname AS db, coalesce(n.nspname || '.' || c.relname, p.relid::text) AS "table", p.phase,
+       a.backend_type = 'autovacuum worker' AS auto, a.query LIKE '%(to prevent wraparound)%' AS wraparound,
+       round(100 * p.heap_blks_scanned::numeric / nullif(p.heap_blks_total, 0), 1) AS scanned_pct,
+       round(100 * p.heap_blks_vacuumed::numeric / nullif(p.heap_blks_total, 0), 1) AS vacuumed_pct,
+       p.index_vacuum_count AS index_passes, pg_size_pretty(p.heap_blks_total * current_setting('block_size')::bigint) AS table_size,
+       round(extract(epoch FROM now() - a.xact_start)::numeric, 1) AS running_sec, left(a.query, 2000) AS query
+FROM (SELECT pid, datname, relid, phase, heap_blks_total, heap_blks_scanned, heap_blks_vacuumed, index_vacuum_count FROM pg_stat_progress_vacuum
+      UNION ALL
+      SELECT pid, datname, relid, 'VACUUM FULL: ' || phase, heap_blks_total, heap_blks_scanned, NULL, NULL FROM pg_stat_progress_cluster WHERE command = 'VACUUM FULL') p
+LEFT JOIN pg_stat_activity a ON a.pid = p.pid
+LEFT JOIN pg_class c ON c.oid = p.relid AND p.datname = current_database()
+LEFT JOIN pg_namespace n ON n.oid = c.relnamespace
+ORDER BY running_sec DESC NULLS LAST"#, r#"SELECT p.pid, p.datname AS db, coalesce(n.nspname || '.' || c.relname, p.relid::text) AS "table", p.phase,
        a.backend_type = 'autovacuum worker' AS auto, a.query LIKE '%(to prevent wraparound)%' AS wraparound,
        round(100 * p.heap_blks_scanned::numeric / nullif(p.heap_blks_total, 0), 1) AS scanned_pct,
        round(100 * p.heap_blks_vacuumed::numeric / nullif(p.heap_blks_total, 0), 1) AS vacuumed_pct,
@@ -552,6 +565,30 @@ mod tests {
         let i = st.dba_report("d".into(), "index_bloat".into()).await.unwrap();
         assert!(pct(&i, "index", "qurry_bloat_pkey") > 50.0);
         q("drop table qurry_bloat").await.ok();
+    }
+
+    /// VACUUM FULL (pg_stat_progress_cluster) shows in Vacuum Progress too
+    #[tokio::test]
+    #[ignore]
+    async fn pg_vacuum_full_shows_in_progress() {
+        let Some(st) = state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
+        let (c, _) = cfg(DbKind::Postgres, "QURRY_TEST_PG").unwrap();
+        let other = sqlx::postgres::PgPoolOptions::new().max_connections(1).connect(&format!("postgres://{}@{}:{}/{}", c.user, c.host, c.port, c.database)).await.unwrap();
+        sqlx::raw_sql("drop table if exists qurry_vfull; create table qurry_vfull as select g as id, repeat('x', 100) as pad from generate_series(1, 3000000) g").execute(&other).await.unwrap();
+        let full = tokio::spawn(async move { sqlx::raw_sql("vacuum full qurry_vfull").execute(&other).await.map(|_| other) });
+        let mut seen = None;
+        for _ in 0..200 {
+            let r = st.dba_report("d".into(), "vacuum_progress".into()).await.unwrap();
+            let col = |n: &str| r.columns.iter().position(|c| c.name == n).unwrap();
+            if let Some(row) = r.rows.iter().find(|x| crate::db::cell_text(&x[col("table")]) == "public.qurry_vfull") {
+                seen = Some(crate::db::cell_text(&row[col("phase")]));
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let other = full.await.unwrap().unwrap();
+        sqlx::raw_sql("drop table qurry_vfull").execute(&other).await.ok();
+        assert!(seen.as_deref().is_some_and(|p| p.starts_with("VACUUM FULL: ")), "{seen:?}");
     }
 
     /// The lock-holding session and the waiting session both show, and killing the holder lets the waiter finish
