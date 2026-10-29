@@ -576,6 +576,8 @@ impl Default for WsSaved {
 
 /// 워크스페이스 (crate::workspace): 이름 + 지금 것이 아니면 보관한 탭들
 pub struct Workspace {
+    /// GUI 와 같이 쓰는 목록 (workspaces.json) 의 id
+    pub id: String,
     pub name: String,
     /// 이 워크스페이스의 탐색기에 보일 Data Source id
     pub conns: Vec<String>,
@@ -636,6 +638,10 @@ pub struct App {
     /// 지난번 탭을 되살렸는지 (Data Source 목록을 처음 읽은 뒤 한 번), 마지막으로 저장한 내용
     restored: bool,
     saved_ws: String,
+    /// 마지막으로 공유 워크스페이스 목록과 맞춘 것 (None = 아직)
+    pub ws_shared: Option<Vec<qurry_core::workspaces::WsInfo>>,
+    /// 저장 파일이 전에 공유 목록과 맞춘 적이 있다 (없는 워크스페이스는 다른 쪽에서 지운 것)
+    pub ws_synced: bool,
 }
 
 pub fn fuzzy(q: &str, text: &str) -> Option<i64> {
@@ -718,9 +724,11 @@ impl App {
             restart: false,
             restored: false,
             saved_ws: String::new(),
+            ws_shared: None,
+            ws_synced: false,
             next_id: 1,
             exec: Default::default(),
-            workspaces: vec![Workspace { name: "Default".into(), conns: vec![], saved: None }],
+            workspaces: vec![Workspace { id: uuid::Uuid::new_v4().to_string(), name: "Default".into(), conns: vec![], saved: None }],
             cur_ws: 0,
         };
         if let Some(e) = keys_err {
@@ -763,8 +771,10 @@ impl App {
                     if let Some(v) = a.state.store.workspace("tui") {
                         crate::workspace::restore(a, &v);
                     }
+                    a.ws_adopt_shared();
                 }
                 a.ws_adopt_orphans();
+                a.ws_push();
                 a.rebuild_roots();
                 if first {
                     a.saved_ws = crate::workspace::to_json(a).to_string();

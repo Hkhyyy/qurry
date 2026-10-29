@@ -404,6 +404,11 @@ impl Store {
 
     /// 열어 둔 탭·화면 분할 (DataGrip 처럼 다시 켜면 그대로). client = "gui" / "tui", 파일을 따로 둔다 (동시에 써도 서로 덮지 않게).
     /// 콘솔 SQL 이 들어가므로 0600. 내용은 클라이언트가 정한다
+    /// 설정 폴더 안의 파일
+    pub(crate) fn file(&self, name: &str) -> PathBuf {
+        self.path.with_file_name(name)
+    }
+
     pub fn workspace(&self, client: &str) -> Option<serde_json::Value> {
         let s = fs::read_to_string(self.path.with_file_name(format!("workspace-{client}.json"))).ok()?;
         serde_json::from_str(&s).ok()

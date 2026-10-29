@@ -25,7 +25,7 @@ fn pane_from(v: &Value) -> Option<Pane> {
 }
 
 /// 워크스페이스 하나의 탭·분할 (지금 것은 app 에서, 나머지는 보관한 것에서)
-fn ws_json(name: &str, conns: &[String], tabs: &[Tab], panes: &Pane, active: usize, group_active: &[Option<u64>]) -> Value {
+fn ws_json(id: &str, name: &str, conns: &[String], tabs: &[Tab], panes: &Pane, active: usize, group_active: &[Option<u64>]) -> Value {
     let tabs_v: Vec<Value> = tabs
         .iter()
         .map(|t| {
@@ -41,6 +41,7 @@ fn ws_json(name: &str, conns: &[String], tabs: &[Tab], panes: &Pane, active: usi
         .collect();
     let index = |id: Option<u64>| id.and_then(|id| tabs.iter().position(|t| t.id == id));
     json!({
+        "id": id,
         "name": name,
         "conns": conns,
         "tabs": tabs_v,
@@ -58,14 +59,15 @@ pub fn to_json(app: &App) -> Value {
         .enumerate()
         .map(|(i, w)| {
             if i == app.cur_ws {
-                ws_json(&w.name, &w.conns, &app.tabs, &app.panes, app.active, &app.group_active)
+                ws_json(&w.id, &w.name, &w.conns, &app.tabs, &app.panes, app.active, &app.group_active)
             } else {
                 let s = w.saved.as_ref().unwrap_or(&empty);
-                ws_json(&w.name, &w.conns, &s.tabs, &s.panes, s.active, &s.group_active)
+                ws_json(&w.id, &w.name, &w.conns, &s.tabs, &s.panes, s.active, &s.group_active)
             }
         })
         .collect();
-    json!({ "version": 2, "current": app.cur_ws, "workspaces": list, "exec": app.exec.to_json() })
+    // shared: 워크스페이스 목록을 GUI 와 같이 쓰는 파일 (workspaces.json) 과 맞춘 적이 있다
+    json!({ "version": 2, "shared": true, "current": app.cur_ws, "workspaces": list, "exec": app.exec.to_json() })
 }
 
 /// 저장해 둔 워크스페이스·탭을 되살린다 (version 1 = 워크스페이스 하나). 없어진 Data Source 의 탭은 버린다
@@ -85,6 +87,7 @@ pub fn restore(app: &mut App, v: &Value) {
         .iter()
         .enumerate()
         .map(|(i, w)| Workspace {
+            id: w.get("id").and_then(Value::as_str).filter(|s| !s.is_empty()).map(String::from).unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
             name: w.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty()).map(String::from).unwrap_or_else(|| if i == 0 { "Default".into() } else { format!("Workspace {}", i + 1) }),
             conns: if has_lists {
                 w.get("conns").and_then(Value::as_array).into_iter().flatten().filter_map(|x| x.as_str().map(String::from)).collect()
@@ -104,6 +107,7 @@ pub fn restore(app: &mut App, v: &Value) {
         }
     }
     app.cur_ws = cur;
+    app.ws_synced = v.get("shared").and_then(Value::as_bool).unwrap_or(false);
     restore_one(app, &list[cur], true);
 }
 
@@ -237,7 +241,7 @@ impl App {
             if name.is_empty() {
                 return;
             }
-            a.workspaces.push(Workspace { name: name.into(), conns: vec![], saved: Some(WsSaved::default()) });
+            a.workspaces.push(Workspace { id: uuid::Uuid::new_v4().to_string(), name: name.into(), conns: vec![], saved: Some(WsSaved::default()) });
             a.ws_switch(a.workspaces.len() - 1);
         });
     }
@@ -336,7 +340,7 @@ impl App {
                     if name.trim().is_empty() {
                         return;
                     }
-                    a.workspaces.push(Workspace { name: name.trim().into(), conns: vec![], saved: Some(WsSaved::default()) });
+                    a.workspaces.push(Workspace { id: uuid::Uuid::new_v4().to_string(), name: name.trim().into(), conns: vec![], saved: Some(WsSaved::default()) });
                     a.ws_move(id, a.workspaces.len() - 1);
                 });
             }
@@ -346,7 +350,7 @@ impl App {
                     if name.trim().is_empty() {
                         return;
                     }
-                    a.workspaces.push(Workspace { name: name.trim().into(), conns: vec![], saved: Some(WsSaved::default()) });
+                    a.workspaces.push(Workspace { id: uuid::Uuid::new_v4().to_string(), name: name.trim().into(), conns: vec![], saved: Some(WsSaved::default()) });
                     let (from, to) = (a.cur_ws, a.workspaces.len() - 1);
                     a.ws_place_conn(&conn, Some(from), to);
                 });
@@ -472,6 +476,113 @@ impl App {
     }
 }
 
+// ───────── 워크스페이스 목록을 GUI 와 같이 쓴다 (qurry_core::workspaces) ─────────
+
+impl App {
+    fn ws_infos(&self) -> Vec<qurry_core::workspaces::WsInfo> {
+        self.workspaces.iter().map(|w| qurry_core::workspaces::WsInfo { id: w.id.clone(), name: w.name.clone(), conn_ids: w.conns.clone() }).collect()
+    }
+
+    /// 처음 켤 때: 이 앱의 목록을 공유 목록에 맞춘다 (처음이면 이름이 같은 것끼리 묶는다)
+    pub fn ws_adopt_shared(&mut self) {
+        let local = self.ws_infos();
+        match self.state.store.adopt_workspaces(&local, self.ws_synced) {
+            Ok(a) => {
+                for (from, to) in &a.renamed {
+                    if let Some(w) = self.workspaces.iter_mut().find(|w| &w.id == from) {
+                        w.id = to.clone();
+                    }
+                }
+                self.ws_apply_shared(&a.list);
+                self.ws_shared = Some(a.list);
+            }
+            Err(e) => self.status = format!("Workspaces: {e}"),
+        }
+    }
+
+    /// 이 앱에서 바꾼 것만 공유 파일에 (키 · 일을 처리할 때마다 부른다 — 안 바뀌었으면 아무것도 안 한다)
+    pub fn ws_push(&mut self) {
+        let Some(prev) = &self.ws_shared else { return };
+        let next = self.ws_infos();
+        if *prev == next {
+            return;
+        }
+        match self.state.store.sync_workspaces(prev, &next) {
+            Ok(list) => {
+                if list != next {
+                    self.ws_apply_shared(&list);
+                }
+                self.ws_shared = Some(list);
+            }
+            Err(e) => {
+                self.status = format!("Workspaces: {e}");
+                self.ws_shared = Some(next);
+            }
+        }
+    }
+
+    /// 다른 쪽 (GUI) 에서 바꾼 것을 받아 온다 (몇 초마다)
+    pub fn ws_pull(&mut self) {
+        self.ws_push();
+        let Some(prev) = &self.ws_shared else { return };
+        let Some(list) = self.state.store.shared_workspaces() else { return };
+        if *prev != list {
+            self.ws_apply_shared(&list);
+            self.ws_shared = Some(list);
+        }
+    }
+
+    /// 공유 목록을 반영: 순서 · 이름 · Data Source. 다른 쪽에서 지운 워크스페이스는 탭을 닫는다
+    /// (커밋 안 한 콘솔이 있으면 남긴다 — 다음 동기화 때 되살아난다)
+    fn ws_apply_shared(&mut self, list: &[qurry_core::workspaces::WsInfo]) {
+        if list.is_empty() {
+            return;
+        }
+        let cur_id = self.workspaces[self.cur_ws].id.clone();
+        let dirty = |a: &App, i: usize| {
+            let tabs: &[Tab] = if i == a.cur_ws { &a.tabs } else { a.workspaces[i].saved.as_ref().map(|s| s.tabs.as_slice()).unwrap_or(&[]) };
+            tabs.iter().any(|t| matches!(&t.kind, TabKind::Console(c) if c.in_tx))
+        };
+        // 지금 워크스페이스가 지워졌으면 화면을 떼어 둔다
+        let cur_gone = !list.iter().any(|w| w.id == cur_id) && !dirty(self, self.cur_ws);
+        if cur_gone {
+            let live = self.take_live();
+            self.close_sessions(&live.tabs);
+        } else {
+            let live = self.take_live();
+            self.workspaces[self.cur_ws].saved = Some(live);
+        }
+        let mut old: Vec<Workspace> = std::mem::take(&mut self.workspaces);
+        let mut next: Vec<Workspace> = vec![];
+        for w in list {
+            let saved = old.iter().position(|o| o.id == w.id).and_then(|i| old[i].saved.take());
+            next.push(Workspace { id: w.id.clone(), name: w.name.clone(), conns: w.conn_ids.clone(), saved });
+        }
+        let mut kept = vec![];
+        for o in old.into_iter().filter(|o| !list.iter().any(|w| w.id == o.id)) {
+            let has_tx = o.saved.as_ref().is_some_and(|s| s.tabs.iter().any(|t| matches!(&t.kind, TabKind::Console(c) if c.in_tx)));
+            if has_tx {
+                kept.push(o.name.clone());
+                next.push(o);
+            } else if let Some(s) = &o.saved {
+                self.close_sessions(&s.tabs);
+            }
+        }
+        self.workspaces = next;
+        self.cur_ws = self.workspaces.iter().position(|w| w.id == cur_id).unwrap_or(0);
+        let s = self.workspaces[self.cur_ws].saved.take().unwrap_or_default();
+        self.put_live(s);
+        self.rebuild_roots();
+        if cur_gone {
+            self.show_visible();
+            self.status = format!("This workspace was deleted in the GUI — now in {}", self.workspaces[self.cur_ws].name);
+        }
+        if !kept.is_empty() {
+            self.status = format!("Kept workspace {} — it was deleted elsewhere but has uncommitted changes", kept.join(", "));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::testkit::Harness;
@@ -484,6 +595,44 @@ mod tests {
         h.app.reload_conns();
         h.settle().await;
         h
+    }
+
+    /// GUI 와 같이 쓰는 목록: GUI 가 만들고 · 이름을 바꾸고 · 지운 것이 들어오고, TUI 에서 바꾼 것은 GUI 쪽 변경을 지우지 않는다
+    #[tokio::test]
+    async fn workspace_list_is_shared_with_the_gui() {
+        use qurry_core::workspaces::WsInfo;
+        let mut h = harness().await;
+        let st = h.app.state.clone();
+        let store = &st.store;
+        let shared = store.shared_workspaces().expect("adopted on start");
+        assert_eq!(shared.iter().map(|w| (w.name.as_str(), w.conn_ids.clone())).collect::<Vec<_>>(), [("Default", vec!["test".to_string()])]);
+        let names = |h: &Harness| h.app.workspaces.iter().map(|w| w.name.clone()).collect::<Vec<_>>();
+        // GUI 가 Reports 를 만들었다
+        let mut gui = shared.clone();
+        gui.push(WsInfo { id: "g2".into(), name: "Reports".into(), conn_ids: vec!["test".into()] });
+        store.sync_workspaces(&shared, &gui).unwrap();
+        h.app.ws_pull();
+        assert_eq!(names(&h), ["Default", "Reports"]);
+        // TUI 에서 이름을 바꾸고 탭을 연 채로, GUI 는 Reports 에서 Data Source 를 뺐다
+        h.table_tab("orders", &["id"], &[&["1"]], &["id"]);
+        h.app.workspaces[0].name = "Main".into();
+        let gui_prev = store.shared_workspaces().unwrap();
+        let mut gui = gui_prev.clone();
+        gui[1].conn_ids.clear();
+        store.sync_workspaces(&gui_prev, &gui).unwrap();
+        h.app.ws_push();
+        let now = store.shared_workspaces().unwrap();
+        assert_eq!(now.iter().map(|w| (w.name.as_str(), w.conn_ids.len())).collect::<Vec<_>>(), [("Main", 1), ("Reports", 0)]);
+        assert_eq!(h.app.workspaces[1].conns.len(), 0, "the GUI change came back");
+        assert_eq!(titles(&h), ["orders"], "tabs stay");
+        // GUI 가 지금 워크스페이스 (Main) 를 지웠다 → Reports 로
+        let gui: Vec<WsInfo> = now.iter().filter(|w| w.name != "Main").cloned().collect();
+        store.sync_workspaces(&now, &gui).unwrap();
+        h.app.ws_pull();
+        assert_eq!((names(&h), h.app.cur_ws, h.app.tabs.len()), (vec!["Reports".to_string()], 0, 0));
+        // 저장 파일에 id 와 shared 가 남는다 (다음에 켤 때 짝짓기)
+        let v = super::to_json(&h.app);
+        assert_eq!((v["shared"].as_bool(), v["workspaces"][0]["id"].as_str()), (Some(true), Some("g2")));
     }
 
     fn titles(h: &Harness) -> Vec<String> {

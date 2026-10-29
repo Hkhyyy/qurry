@@ -603,6 +603,22 @@ pub fn save_workspace(state: State<'_, AppState>, ws: serde_json::Value) -> AppR
     state.store.save_workspace("gui", &ws)
 }
 
+/// 워크스페이스 목록 (이름 · Data Source) 은 TUI 와 같이 쓴다 (workspaces.json)
+#[tauri::command]
+pub fn shared_workspaces(state: State<'_, AppState>) -> Option<Vec<qurry_core::workspaces::WsInfo>> {
+    state.store.shared_workspaces()
+}
+
+#[tauri::command]
+pub fn adopt_workspaces(state: State<'_, AppState>, local: Vec<qurry_core::workspaces::WsInfo>, synced: bool) -> AppResult<qurry_core::workspaces::Adopted> {
+    state.store.adopt_workspaces(&local, synced)
+}
+
+#[tauri::command]
+pub fn sync_workspaces(state: State<'_, AppState>, prev: Vec<qurry_core::workspaces::WsInfo>, next: Vec<qurry_core::workspaces::WsInfo>) -> AppResult<Vec<qurry_core::workspaces::WsInfo>> {
+    state.store.sync_workspaces(&prev, &next)
+}
+
 /// 단축키 사용자 설정 (keymap.json 의 "gui" 구역)
 #[tauri::command]
 pub fn load_keymap(state: State<'_, AppState>) -> AppResult<crate::store::Keymap> {

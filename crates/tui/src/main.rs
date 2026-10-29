@@ -117,7 +117,11 @@ async fn run(term: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: Arc<
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 // 열어 둔 탭·분할을 저장 (바뀌었을 때만. 터미널을 그냥 닫아도 거의 남는다)
-                if tx.send(Box::new(|a: &mut app::App| a.save_workspace())).is_err() {
+                // 워크스페이스 목록: GUI 에서 바꾼 것을 받아 온다
+                if tx.send(Box::new(|a: &mut app::App| {
+                    a.ws_pull();
+                    a.save_workspace();
+                })).is_err() {
                     break;
                 }
                 let dropped = qurry_core::app::housekeeping(&st).await;
@@ -151,10 +155,13 @@ async fn run(term: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: Arc<
                 }
             }
         }
+        // 워크스페이스를 만들고 · 지우고 · 이름 · Data Source 를 바꿨으면 GUI 와 같이 쓰는 목록에
+        app.ws_push();
         if app.quit {
             break;
         }
     }
+    app.ws_push();
     app.save_workspace();
     Ok(app.restart)
 }

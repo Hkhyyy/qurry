@@ -432,6 +432,8 @@ export default function App() {
     const live: WsLayout = { tabs: tabsRef.current, panes: panesRef.current, activeIds: activeIdsRef.current, focused: focusedRef.current, mru: [] };
     return JSON.stringify({
       version: 2,
+      // 워크스페이스 목록을 TUI 와 같이 쓰는 파일과 맞춘 적이 있다 (없는 것은 다른 쪽에서 지운 것)
+      shared: true,
       current: curWsRef.current,
       workspaces: workspacesRef.current.map((w) => ({ id: w.id, name: w.name, connIds: w.connIds, ...ser(w.id === curWsRef.current ? live : stash.current.get(w.id) ?? emptyLayout()) })),
     });
@@ -521,10 +523,11 @@ export default function App() {
       if (t?.stale) loadStale(t);
     }
   };
-  const restoreWs = (data: any) => {
+  /** 저장한 탭 · 워크스페이스를 되살린다. 돌려주는 값 = 공유 워크스페이스 목록과 맞춘 적이 있는지 */
+  const restoreWs = (data: any): boolean => {
     // version 1 (워크스페이스 전) = 워크스페이스 하나
     const list: any[] | null = Array.isArray(data?.workspaces) ? data.workspaces : Array.isArray(data?.tabs) ? [{ id: "ws1", name: "Default", ...data }] : null;
-    if (!list?.length) return;
+    if (!list?.length) return false;
     // 탐색기 목록이 없던 저장 파일 (0.2.0 이전·0.2.0): 첫 워크스페이스가 모든 Data Source 를 가진다
     const hasLists = list.some((w) => Array.isArray(w.connIds));
     const infos: WorkspaceInfo[] = list.map((w, i) => ({
@@ -540,8 +543,94 @@ export default function App() {
       else stash.current.set(infos[i].id, l);
     });
     setWorkspaces(infos);
+    workspacesRef.current = infos;
     setCurWs(cur);
+    curWsRef.current = cur;
+    return data?.shared === true;
   };
+
+  // ── 워크스페이스 목록 (이름 · Data Source) 을 TUI 와 같이 쓴다: 바꾼 것만 보내고, 다른 쪽에서 바꾼 것은 받아 온다 ──
+  /** 마지막으로 공유 파일과 맞춘 목록 (null = 아직) */
+  const sharedPrev = useRef<WorkspaceInfo[] | null>(null);
+  const sameWs = (a: WorkspaceInfo[], b: WorkspaceInfo[]) => JSON.stringify(a.map((w) => [w.id, w.name, w.connIds])) === JSON.stringify(b.map((w) => [w.id, w.name, w.connIds]));
+  const wsTabs = (id: string) => (id === curWsRef.current ? tabsRef.current : stash.current.get(id)?.tabs ?? []);
+  /** 공유 목록을 화면에 반영. 다른 쪽에서 지운 워크스페이스는 탭을 닫는다 (커밋 안 한 콘솔이 있으면 남긴다 — 다음 동기화 때 되살아난다) */
+  const applyShared = (list: WorkspaceInfo[]) => {
+    const cur = workspacesRef.current;
+    const gone = cur.filter((w) => !list.some((x) => x.id === w.id));
+    const keep = gone.filter((w) => wsTabs(w.id).some((t) => t.inTx));
+    const next = [...list.map((w) => ({ id: w.id, name: w.name, connIds: w.connIds })), ...keep];
+    if (!next.length) return;
+    const closing = new Map(gone.filter((x) => !keep.includes(x)).map((w) => [w.id, wsTabs(w.id)]));
+    workspacesRef.current = next;
+    setWorkspaces(next);
+    if (!next.some((w) => w.id === curWsRef.current)) switchWs(next[0].id, true);
+    for (const [id, ts] of closing) {
+      stash.current.delete(id);
+      for (const t of ts) {
+        forgetConsoleModel(t.id);
+        editorApis.current.delete(t.id);
+        liveSql.current.delete(t.id);
+        api.closeSession(t.id).catch(() => {});
+      }
+    }
+    if (keep.length) setStatus(`Kept workspace ${keep.map((w) => `"${w.name}"`).join(", ")} — it was deleted elsewhere but has uncommitted changes`);
+  };
+  /** 처음 켤 때: 이 앱의 목록을 공유 목록에 맞춘다 (처음이면 이름이 같은 것끼리 묶는다) */
+  const adoptShared = async (synced: boolean) => {
+    const a = await api.adoptWorkspaces(workspacesRef.current, synced);
+    for (const [from, to] of a.renamed) {
+      const l = stash.current.get(from);
+      if (l) {
+        stash.current.delete(from);
+        stash.current.set(to, l);
+      }
+      if (curWsRef.current === from) {
+        curWsRef.current = to;
+        setCurWs(to);
+      }
+      workspacesRef.current = workspacesRef.current.map((w) => (w.id === from ? { ...w, id: to } : w));
+    }
+    applyShared(a.list);
+    sharedPrev.current = a.list;
+  };
+  // 이 앱에서 바꾸면 바뀐 것만 공유 파일에
+  useEffect(() => {
+    const prev = sharedPrev.current;
+    if (!prev || sameWs(prev, workspaces)) return;
+    const sent = workspaces;
+    sharedPrev.current = sent;
+    api
+      .syncWorkspaces(prev, sent)
+      .then((list) => {
+        // 그새 또 바꿨으면 다음 동기화에 맡긴다
+        if (workspacesRef.current !== sent) return;
+        sharedPrev.current = list;
+        if (!sameWs(list, sent)) applyShared(list);
+      })
+      .catch((e) => setStatus(`Workspaces: ${String(e)}`));
+  }, [workspaces]);
+  // 다른 쪽 (TUI) 에서 바꾼 것: 창에 돌아올 때 · 몇 초마다
+  useEffect(() => {
+    const pull = () => {
+      const prev = sharedPrev.current;
+      if (!prev || !sameWs(workspacesRef.current, prev)) return;
+      api
+        .sharedWorkspaces()
+        .then((list) => {
+          if (!list?.length || sharedPrev.current !== prev || sameWs(list, prev)) return;
+          sharedPrev.current = list;
+          applyShared(list);
+        })
+        .catch(() => {});
+    };
+    const h = setInterval(pull, 3000);
+    window.addEventListener("focus", pull);
+    return () => {
+      clearInterval(h);
+      window.removeEventListener("focus", pull);
+    };
+  }, []);
   /** 다른 워크스페이스로: 지금 것은 그대로 보관 (콘솔 세션·트랜잭션도). discard = 지금 것을 보관하지 않는다 (지울 때) */
   const switchWs = (id: string, discard = false) => {
     const from = curWsRef.current;
@@ -605,7 +694,9 @@ export default function App() {
     api
       .loadWorkspace()
       .then(restoreWs)
-      .catch(() => {})
+      .catch(() => false)
+      .then((synced) => adoptShared(synced))
+      .catch((e) => setStatus(`Workspaces: ${String(e)}`))
       .finally(() => setWsReady(true));
   }, [conns]);
   // 어느 워크스페이스에도 없는 Data Source (방금 만든 것, TUI 에서 만든 것) → 지금 워크스페이스로
