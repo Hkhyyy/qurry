@@ -1387,6 +1387,27 @@ impl App {
         }
     }
 
+    /// 탭 이름: 같은 이름의 테이블 탭이 여럿 열렸으면 schema.table, 스키마도 같으면 db.schema.table (DataGrip)
+    pub fn tab_label(&self, t: &Tab) -> String {
+        let TabKind::Table(me) = &t.kind else { return t.title.clone() };
+        let same: Vec<&TableTab> = self
+            .tabs
+            .iter()
+            .filter(|x| x.id != t.id)
+            .filter_map(|x| match &x.kind {
+                TabKind::Table(o) if o.table == me.table => Some(o),
+                _ => None,
+            })
+            .collect();
+        if same.is_empty() {
+            t.title.clone()
+        } else if same.iter().any(|o| o.schema == me.schema) {
+            format!("{}.{}.{}", t.db, me.schema, me.table)
+        } else {
+            format!("{}.{}", me.schema, me.table)
+        }
+    }
+
     pub fn open_table(&mut self, conn: &str, db: String, schema: String, table: String, kind: String) {
         if let Some(i) = self.tabs.iter().position(|t| t.conn == conn && t.db == db && matches!(&t.kind, TabKind::Table(tt) if tt.schema == schema && tt.table == table)) {
             return self.activate(i);
@@ -2341,13 +2362,13 @@ impl App {
         // 최근에 본 탭 → 아직 안 본 탭(되살린 뒤 고르지 않은 탭) 순
         let seen = self.mru.iter().filter_map(|id| self.tabs.iter().find(|t| t.id == *id));
         let rest = self.tabs.iter().filter(|t| !self.mru.contains(&t.id));
-        let items = seen.chain(rest).map(|t| PItem { label: t.title.clone(), hint: t.db.clone(), action: PAction::Tab(t.id) }).collect();
+        let items = seen.chain(rest).map(|t| PItem { label: self.tab_label(t), hint: t.db.clone(), action: PAction::Tab(t.id) }).collect();
         self.popup = Some(Popup::Palette(Palette { title: "Recent Tabs".into(), input: TextArea::default(), items, sel: 1, loading: 0, cache: Default::default() }));
     }
 
     /// Search Everywhere (GUI 의 ⇧⇧): 최근 탭 + 액션 + DB 객체를 한 목록에서
     pub fn palette_everywhere(&mut self) {
-        let mut items: Vec<PItem> = self.mru.iter().filter_map(|id| self.tabs.iter().find(|t| t.id == *id)).map(|t| PItem { label: t.title.clone(), hint: format!("tab · {}", t.db), action: PAction::Tab(t.id) }).collect();
+        let mut items: Vec<PItem> = self.mru.iter().filter_map(|id| self.tabs.iter().find(|t| t.id == *id)).map(|t| PItem { label: self.tab_label(t), hint: format!("tab · {}", t.db), action: PAction::Tab(t.id) }).collect();
         items.extend(ACTIONS.iter().filter(|(a, ..)| *a != Action::SearchEverywhere).map(|(a, n, k)| {
             let key = if k.is_empty() { self.keys.label(*a) } else { k.to_string() };
             PItem { label: n.to_string(), hint: format!("action · {key}"), action: PAction::Act(*a) }

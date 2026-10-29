@@ -277,7 +277,7 @@ fn draw_group(f: &mut Frame, app: &mut App, g: Option<usize>, area: Rect, focuse
         .map(|&i| {
             let t = &app.tabs[i];
             let dirty = matches!(&t.kind, TabKind::Table(tt) if tt.grid.as_ref().map(|g| g.dirty()).unwrap_or(false));
-            1 + 2 + t.title.width() as u16 + if dirty { 2 } else { 0 } + 1
+            1 + 2 + app.tab_label(t).width() as u16 + if dirty { 2 } else { 0 } + 1
         })
         .collect();
     let sel = idx.iter().position(|&i| i == shown).unwrap_or(0);
@@ -306,7 +306,7 @@ fn draw_group(f: &mut Frame, app: &mut App, g: Option<usize>, area: Rect, focuse
             };
             let dirty = matches!(&t.kind, TabKind::Table(tt) if tt.grid.as_ref().map(|g| g.dirty()).unwrap_or(false));
             let c = app.conn_color(&t.conn).and_then(|c| hex(&c));
-            let l = Line::from(vec![Span::raw(icon), Span::raw(t.title.clone()), Span::raw(if dirty { " *" } else { "" })]);
+            let l = Line::from(vec![Span::raw(icon), Span::raw(app.tab_label(t)), Span::raw(if dirty { " *" } else { "" })]);
             let mut st = Style::default();
             if let Some(c) = c {
                 st = st.bg(c);

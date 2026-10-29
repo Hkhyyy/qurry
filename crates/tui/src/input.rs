@@ -1355,6 +1355,26 @@ mod tests {
     // ───────── 키를 넣어 확인 (testkit) ─────────
     use crate::testkit::Harness;
 
+    /// 같은 이름의 테이블 탭: 스키마가 다르면 schema.table, 스키마도 같으면 db.schema.table
+    #[tokio::test]
+    async fn same_table_tabs_show_schema() {
+        let mut h = Harness::new().await;
+        let a = h.table_tab("orders", &["id"], &[], &[]);
+        let label = |h: &Harness, id: u64| {
+            let t = h.app.tabs.iter().find(|t| t.id == id).unwrap();
+            h.app.tab_label(t)
+        };
+        assert_eq!(label(&h, a), "orders");
+        let b = h.table_tab("orders", &["id"], &[], &[]);
+        if let Some(TabKind::Table(tt)) = h.app.tabs.iter_mut().find(|t| t.id == b).map(|t| &mut t.kind) {
+            tt.schema = "billing".into();
+        }
+        assert_eq!((label(&h, a), label(&h, b)), ("public.orders".into(), "billing.orders".into()));
+        let c = h.table_tab("orders", &["id"], &[], &[]);
+        h.app.tabs.iter_mut().find(|t| t.id == c).unwrap().db = "app_test".into();
+        assert_eq!((label(&h, a), label(&h, c), label(&h, b)), ("postgres.public.orders".into(), "app_test.public.orders".into(), "billing.orders".into()));
+    }
+
     /// ⌘← 가 ⌃A 로 와도 행을 추가하지 않는다 (a 는 행 추가)
     #[tokio::test]
     async fn ctrl_a_in_table_moves_to_first_column() {
