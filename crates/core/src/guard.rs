@@ -595,11 +595,17 @@ fn mongo_unsafe(sql: &str) -> Option<String> {
     if plain.contains(".drop(") || plain.contains(".dropdatabase(") || plain.contains(".dropindexes(") || plain.contains(".renamecollection(") {
         return Some("drop removes the collection and its documents".into());
     }
-    for m in ["deletemany", "updatemany", "remove", "replaceone", "deleteone", "updateone"] {
-        if let Some(i) = plain.find(&format!(".{m}(")) {
-            let arg = &plain[i + m.len() + 2..];
-            if arg.starts_with(')') || arg.starts_with("{}") {
-                return Some(format!("{m} with an empty filter changes every document"));
+    if plain.contains("$out") || plain.contains("$merge") {
+        return Some("$out / $merge overwrite a collection".into());
+    }
+    // Read the filter like the driver does: missing, null, {} or {/* comment */} all match every document
+    let re = regex::Regex::new(r#"(?s)^db\.(?:getCollection\(\s*["']([^"']+)["']\s*\)|([A-Za-z_][\w.-]*?))\.(\w+)\((.*)\)$"#).unwrap();
+    if let Some(c) = re.captures(sql.trim().trim_end_matches(';').trim()) {
+        let m = c[3].to_lowercase();
+        if ["deletemany", "updatemany", "remove", "replaceone", "deleteone", "updateone"].contains(&m.as_str()) {
+            let filter = mongo_args(&c[4]).and_then(|a| a.into_iter().next());
+            if !filter.as_ref().is_some_and(|f| f.as_object().is_some_and(|o| !o.is_empty())) {
+                return Some(format!("{} with an empty filter changes every document", &c[3]));
             }
         }
     }
@@ -611,7 +617,12 @@ fn rest_unsafe(sql: &str) -> Option<String> {
     let (first, body) = sql.trim().split_once('\n').unwrap_or((sql.trim(), ""));
     let mut parts = first.split_whitespace();
     let method = parts.next().unwrap_or("").to_uppercase();
-    let path = parts.next().unwrap_or("").split('?').next().unwrap_or("").trim_end_matches('/').to_lowercase();
+    let raw = parts.next().unwrap_or("");
+    // An encoded or relative path (%64rop, ../) could be anything once the server decodes it
+    if raw.contains(['%', '#', '\\']) || raw.split('/').any(|s| s == "." || s == "..") {
+        return Some(format!("{raw} is not a plain path — check what it does"));
+    }
+    let path = raw.split('?').next().unwrap_or("").trim_end_matches('/').to_lowercase();
     let inline: String = parts.collect::<Vec<_>>().join(" ");
     if method == "DELETE" {
         return Some(format!("DELETE {path} removes it and everything in it"));
@@ -1091,6 +1102,8 @@ mod tests {
         assert!(u("db.users.deleteMany({})", Mongodb) && u("db.users.deleteMany( { } )", Mongodb) && u("db.users.drop()", Mongodb) && u("db.dropDatabase()", Mongodb));
         assert!(u("db.users.updateMany({}, {$set: {a: 1}})", Mongodb) && u("{\"drop\": \"users\"}", Mongodb));
         assert!(!u("db.users.deleteMany({age: {$lt: 0}})", Mongodb) && !u("db.users.find({})", Mongodb));
+        assert!(u("db.users.deleteMany(null)", Mongodb) && u("db.users.deleteMany({/*x*/})", Mongodb) && u("db.users.aggregate([{$out: 'x'}])", Mongodb));
+        assert!(u("POST /collections/%64rop\n{}", Milvus) && u("POST /collections/x/../drop\n{}", Milvus));
         assert!(u("POST /collections/drop\n{\"collectionName\": \"x\"}", Milvus) && u("DELETE /collections/x", Qdrant));
         assert!(u("POST /collections/x/points/delete\n{\"filter\": {}}", Qdrant) && u("POST /collections/x/points/delete", Qdrant));
         assert!(!u("POST /collections/x/points/delete\n{\"points\": [1, 2]}", Qdrant) && !u("POST /entities/delete {\"filter\": \"id in [1]\"}", Milvus));
