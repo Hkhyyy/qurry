@@ -3307,13 +3307,7 @@ pub fn redis_grid(d: &KeyDetail) -> Option<Grid> {
     Some(Grid::new(result))
 }
 
-/// MCP exposure shown in the form (old sources without a setting keep current behavior)
+/// MCP exposure shown in the form: the access core actually grants (an unknown value is off), since the form saves what it shows
 fn mcp_label(c: &ConnectionConfig) -> &'static str {
-    match c.options.mcp.as_deref() {
-        Some("off") => "off",
-        Some("read") => "read",
-        Some(_) => "write",
-        None if c.options.confirm_changes => "off",
-        None => "write",
-    }
+    c.mcp_access(true).as_str()
 }

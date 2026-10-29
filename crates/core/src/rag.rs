@@ -81,7 +81,8 @@ fn embed_blocking(provider: &str, model: &str, base: &str, key: Option<&str>, te
     if let Some(k) = key.filter(|k| !k.is_empty()) {
         req = req.header("Authorization", &format!("Bearer {k}"));
     }
-    let mut res = req.send_json(body).map_err(|e| AppError::Msg(format!("{provider}: can't reach {url}: {e}")))?;
+    let shown = crate::store::without_userinfo(&url);
+    let mut res = req.send_json(body).map_err(|e| AppError::Msg(format!("{provider}: can't reach {shown}: {e}").replace(&url, &shown)))?;
     let status = res.status().as_u16();
     let v: Value = serde_json::from_str(&res.body_mut().read_to_string().unwrap_or_default()).unwrap_or(Value::Null);
     if !(200..300).contains(&status) {

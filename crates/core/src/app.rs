@@ -39,7 +39,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Query the keychain only the first time. After that, use the in-memory cache.
+    /// Saved password or SSH secret for a key, read from the secrets file each time (nothing is cached in memory).
     pub fn secret(&self, key: &str) -> AppResult<Option<String>> {
         // MCP server: never reads passwords of Data Sources hidden from MCP (so it cannot connect either)
         if self.mcp {

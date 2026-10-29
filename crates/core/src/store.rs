@@ -282,7 +282,6 @@ impl ConnectionConfig {
     }
 }
 
-/// Storage key for the SSH password/key passphrase
 /// What the MCP server may do with this Data Source
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum McpAccess {
@@ -291,6 +290,17 @@ pub enum McpAccess {
     Read,
     /// Also execute, when started with --allow-write
     Write,
+}
+
+impl McpAccess {
+    /// The options.mcp value that stores this access
+    pub fn as_str(self) -> &'static str {
+        match self {
+            McpAccess::Off => "off",
+            McpAccess::Read => "read",
+            McpAccess::Write => "write",
+        }
+    }
 }
 
 impl ConnectionConfig {
@@ -310,6 +320,19 @@ impl ConnectionConfig {
     }
 }
 
+/// Strip user:pass@ from URIs like mongodb://user:pass@host (so passwords don't end up in the AI conversation or an error message)
+pub fn without_userinfo(host: &str) -> String {
+    match host.split_once("://") {
+        // The password may contain raw / ? #, so treat everything up to the last @ as user info
+        Some((scheme, rest)) => match rest.rfind('@') {
+            Some(at) => format!("{scheme}://{}", &rest[at + 1..]),
+            None => host.to_string(),
+        },
+        None => host.rsplit_once('@').map(|(_, h)| h.to_string()).unwrap_or_else(|| host.to_string()),
+    }
+}
+
+/// Storage key for the SSH password/key passphrase
 pub fn ssh_secret_key(id: &str) -> String {
     format!("{id}#ssh")
 }
@@ -399,6 +422,9 @@ impl Store {
                     if c.active_ssl().is_some_and(|s| s.mode() == "require") {
                         notes.push("SSL without certificate checks".into());
                     }
+                    if c.options.allow_plaintext {
+                        notes.push("allows unencrypted connections".into());
+                    }
                     if c.options.oracle_client.as_deref().is_some_and(|p| !p.trim().is_empty()) {
                         notes.push("loads Oracle client libraries from a folder".into());
                     }
@@ -432,13 +458,18 @@ impl Store {
                     if e.redis.as_ref().map(|r| (&r.mode, &r.nodes, &r.sentinel_master)) != c.redis.as_ref().map(|r| (&r.mode, &r.nodes, &r.sentinel_master)) {
                         ch.push("changes the Redis nodes".into());
                     }
+                    if !e.options.allow_plaintext && c.options.allow_plaintext {
+                        ch.push("allows unencrypted connections (the password may travel in plain text)".into());
+                    }
                     if e.options.oracle_client != c.options.oracle_client {
                         ch.push("changes the Oracle client library folder".into());
                     }
                     if e.options.confirm_changes && !c.options.confirm_changes {
                         ch.push("turns Production OFF".into());
                     }
-                    if e.mcp_access(true) < c.mcp_access(true) {
+                    let mut as_saved = c.clone();
+                    as_saved.options.mcp.get_or_insert_with(|| e.mcp_access(true).as_str().into());
+                    if e.mcp_access(true) < as_saved.mcp_access(true) {
                         ch.push("shares more with MCP (AI tools)".into());
                     }
                     if !e.same_server(&c) && e.password_saved {
@@ -468,6 +499,10 @@ impl Store {
             }
             match all.iter_mut().find(|e| e.id == c.id) {
                 Some(e) => {
+                    // A file without an MCP setting keeps what the source has now (not the legacy default for unset)
+                    if c.options.mcp.is_none() {
+                        c.options.mcp = Some(e.mcp_access(true).as_str().into());
+                    }
                     // Regardless of the flags (including entries whose flag alone was cleared by an old import), a different server goes on the delete list
                     let (pw, ssh) = (!e.same_server(&c), !e.same_ssh(&c));
                     c.password_saved = e.password_saved && !pw;
@@ -681,6 +716,26 @@ mod tests {
         assert!(p.contains("attacker.example") && p.contains("SSL OFF") && p.contains("password will be removed"), "{p}");
         assert_eq!(b.import_from(&file).unwrap(), (0, 1, vec![("2".to_string(), true, false)]));
         assert!(!b.get("2").unwrap().unwrap().password_saved);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// An update without an MCP setting keeps the current access; turning on plain text shows in the preview
+    #[test]
+    fn import_update_keeps_mcp_and_shows_plaintext() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        let b = Store::new(base.join("b"));
+        let mut mine = conn("3", "db");
+        mine.options.mcp = Some("off".into());
+        b.save(&mine).unwrap();
+        let mut theirs = mine.clone();
+        theirs.options.mcp = None;
+        theirs.options.allow_plaintext = true;
+        let file = base.join("in.json");
+        std::fs::write(&file, serde_json::to_string(&vec![theirs]).unwrap()).unwrap();
+        let p = b.import_preview(&file).unwrap().join("\n");
+        assert!(p.contains("unencrypted") && !p.contains("MCP"), "{p}");
+        b.import_from(&file).unwrap();
+        assert_eq!(b.get("3").unwrap().unwrap().mcp_access(true), McpAccess::Off);
         let _ = std::fs::remove_dir_all(&base);
     }
 
