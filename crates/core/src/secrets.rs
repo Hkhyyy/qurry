@@ -42,7 +42,7 @@ pub struct OsKeychain;
 const KEYCHAIN_SERVICE: &str = "Qurry";
 const KEYCHAIN_MARKER: &str = "secret.key.keychain";
 /// What secret.key holds once the key is in the keychain (any length other than 32, so older versions don't take it as a key)
-const KEY_MOVED_NOTE: &str = "The password key was moved to the system keychain (see secret.key.keychain). Update every Qurry app (GUI, qurry-tui, qurry-mcp) to 0.3 or newer.\n";
+const KEY_MOVED_NOTE: &str = "The password key was moved to the system keychain (see secret.key.keychain). Update every Qurry app (GUI, qurry-tui, qurry-mcp) to the latest version.\n";
 
 /// Keychain calls run on a separate thread (Linux Secret Service runs its own runtime inside, so calling it from a tokio thread hangs)
 fn off_runtime<T: Send>(f: impl FnOnce() -> T + Send) -> T {
