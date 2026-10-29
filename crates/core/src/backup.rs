@@ -60,9 +60,18 @@ fn tool_dirs() -> Vec<PathBuf> {
 
 /// "pg_dump (PostgreSQL) 16.4" → [16, 4]
 fn version_of(p: &Path) -> Vec<u64> {
-    let out = std::process::Command::new(p).arg("--version").output().ok();
-    let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    let text = version_text(p);
     text.split(|c: char| !c.is_ascii_digit() && c != '.').find(|w| w.contains('.') || w.parse::<u64>().is_ok()).map(|w| w.split('.').filter_map(|x| x.parse().ok()).collect()).unwrap_or_default()
+}
+
+fn version_text(p: &Path) -> String {
+    let out = std::process::Command::new(p).arg("--version").output().ok();
+    out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
+}
+
+/// MariaDB builds of mysql / mysqldump take other TLS options (--ssl, --ssl-verify-server-cert instead of --ssl-mode)
+fn is_mariadb(p: &Path) -> bool {
+    version_text(p).contains("MariaDB")
 }
 
 /// Tool location: PATH, Homebrew, Postgres.app, Linux default locations. If several, the highest version
@@ -75,6 +84,10 @@ pub fn find_tool(name: &str) -> Option<PathBuf> {
 pub fn find_tool_for(name: &str, server_major: Option<u64>) -> Option<PathBuf> {
     let mut found: Vec<PathBuf> = tool_dirs().into_iter().map(|d| d.join(name)).filter(|p| p.is_file()).collect();
     found.dedup();
+    // MariaDB's 10.x / 11.x version numbers aren't comparable with MySQL's, so a MySQL build wins when both exist
+    if name.starts_with("mysql") && found.iter().any(|p| !is_mariadb(p)) {
+        found.retain(|p| !is_mariadb(p));
+    }
     let mut with_v: Vec<(Vec<u64>, PathBuf)> = found.into_iter().map(|p| (version_of(&p), p)).collect();
     with_v.sort();
     if let Some(m) = server_major
@@ -327,7 +340,10 @@ fn pg_env(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str, 
         }
         None => None,
     };
-    cmd.env_remove("PGPASSWORD");
+    // Settings from the user's environment would override the host, port or TLS rules given here
+    for k in ["PGPASSWORD", "PGHOSTADDR", "PGSERVICE", "PGSERVICEFILE", "PGSSLNEGOTIATION", "PGREQUIRESSL", "PGGSSENCMODE"] {
+        cmd.env_remove(k);
+    }
     cmd.env("PGCONNECT_TIMEOUT", "10");
     match cfg.active_ssl() {
         Some(s) => {
@@ -335,7 +351,7 @@ fn pg_env(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str, 
             cmd.env("PGSSLMODE", s.mode());
             for (k, v) in [("PGSSLROOTCERT", &s.ca_file), ("PGSSLCERT", &s.cert_file), ("PGSSLKEY", &s.key_file)] {
                 if !v.is_empty() {
-                    cmd.env(k, v);
+                    cmd.env(k, crate::tunnel::expand_home(v));
                 }
             }
         }
@@ -361,19 +377,37 @@ fn my_args(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str,
     };
     cmd.env_remove("MYSQL_PWD");
     cmd.arg("-h").arg(host).arg("-P").arg(port.to_string()).arg("-u").arg(user).arg("--protocol=TCP");
-    if cfg.active_ssl().is_none() && !crate::db::plaintext_allowed(cfg, host) {
-        cmd.arg("--ssl-mode=REQUIRED");
+    let mariadb = is_mariadb(Path::new(cmd.as_std().get_program()));
+    let mode = match cfg.active_ssl() {
+        Some(s) => {
+            crate::db::check_ssl_mode(s.mode())?;
+            Some(s.mode())
+        }
+        None if !crate::db::plaintext_allowed(cfg, host) => Some("require"),
+        None => None,
+    };
+    for a in mode.map(|m| my_tls_args(m, mariadb)).unwrap_or_default() {
+        cmd.arg(a);
     }
     if let Some(s) = cfg.active_ssl() {
-        crate::db::check_ssl_mode(s.mode())?;
-        cmd.arg(format!("--ssl-mode={}", match s.mode() { "verify-full" => "VERIFY_IDENTITY", "verify-ca" => "VERIFY_CA", _ => "REQUIRED" }));
         for (k, v) in [("--ssl-ca", &s.ca_file), ("--ssl-cert", &s.cert_file), ("--ssl-key", &s.key_file)] {
             if !v.is_empty() {
-                cmd.arg(format!("{k}={v}"));
+                cmd.arg(format!("{k}={}", crate::tunnel::expand_home(v)));
             }
         }
     }
     Ok(pass)
+}
+
+/// TLS options for the MySQL client. MariaDB has no --ssl-mode; its --ssl-verify-server-cert checks the CA and the host name
+fn my_tls_args(mode: &str, mariadb: bool) -> Vec<&'static str> {
+    match (mariadb, mode) {
+        (true, "verify-ca" | "verify-full") => vec!["--ssl", "--ssl-verify-server-cert"],
+        (true, _) => vec!["--ssl"],
+        (false, "verify-full") => vec!["--ssl-mode=VERIFY_IDENTITY"],
+        (false, "verify-ca") => vec!["--ssl-mode=VERIFY_CA"],
+        (false, _) => vec!["--ssl-mode=REQUIRED"],
+    }
 }
 
 impl AppState {
@@ -472,6 +506,8 @@ impl AppState {
                             run_tool(cmd, "pg_restore", None, None, None, &job).await?;
                         }
                     }
+                    // The expanded dump is removed however the restore ends, including the checks below refusing it
+                    let _expanded = sql_file.clone().map(SecretTemp);
                     if !custom || sql_file.is_some() {
                         let src0 = sql_file.clone().unwrap_or_else(|| file.clone());
                         let tool = find_tool_for("psql", server).ok_or_else(|| missing("psql"))?;
@@ -532,6 +568,14 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mariadb_clients_get_their_own_tls_options() {
+        assert_eq!(my_tls_args("require", false), ["--ssl-mode=REQUIRED"]);
+        assert_eq!(my_tls_args("verify-full", false), ["--ssl-mode=VERIFY_IDENTITY"]);
+        assert_eq!(my_tls_args("require", true), ["--ssl"]);
+        assert_eq!(my_tls_args("verify-ca", true), ["--ssl", "--ssl-verify-server-cert"]);
+    }
 
     #[test]
     fn pg_dbname_is_one_literal_name() {

@@ -54,7 +54,8 @@ pub fn is_local(cfg: &ConnectionConfig) -> bool {
 pub fn is_loopback(host: &str) -> bool {
     let h = host.trim().trim_start_matches('[').trim_end_matches(']').to_lowercase();
     // A real loopback address (127.0.0.0/8, ::1) — not a name that merely starts with 127.
-    h == "localhost" || h.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+    // A host starting with / is a Unix socket directory (PostgreSQL), which never leaves the machine
+    h == "localhost" || h.starts_with('/') || h.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 /// The SSL modes Qurry knows; anything else is refused instead of being passed on to a driver or tool
@@ -621,7 +622,7 @@ mod tests {
         c.options.allow_plaintext = true;
         assert!(plaintext_allowed(&c, "db.example"));
         c.options.allow_plaintext = false;
-        for h in ["localhost", "127.0.0.1", "::1", "[::1]"] {
+        for h in ["localhost", "127.0.0.1", "::1", "[::1]", "/var/run/postgresql", "/tmp"] {
             c.host = h.into();
             assert!(is_local(&c), "{h}");
         }
