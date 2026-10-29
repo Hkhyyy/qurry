@@ -385,12 +385,14 @@ pub fn read_only_violation(sql: &str, kind: DbKind, strict: bool) -> Option<Stri
         return Some("Read-only mode: SELECT … INTO creates a table".into());
     }
     if kind == DbKind::Postgres {
-        // U&"…" names can hide characters with \XXXX (U&"default_transaction_read\005fonly")
-        if sc.toks.windows(2).any(|w| w[0].word && !w[0].quoted && w[0].text == "u" && w[1].text == "&" && w[1].start == w[0].end) {
+        // U&"…" names can hide characters with \XXXX (U&"default_transaction_read\005fonly"). Only U& right before a quote (u&4 is a bitwise AND)
+        let quote_after = |t: &Tok| matches!(sql.as_bytes().get(t.end), Some(b'\'' | b'"'));
+        if sc.toks.windows(2).any(|w| w[0].word && !w[0].quoted && w[0].text == "u" && w[1].text == "&" && w[1].start == w[0].end && quote_after(&w[1])) {
             return Some("Read-only mode: U&\"…\" / U&'…' escapes are not allowed".into());
         }
         // Changing how \ is interpreted in strings makes the check and the server see string ends differently
-        if words.iter().any(|w| w.contains("standard_conforming_strings") || w.contains("backslash_quote")) {
+        // (SHOW only reads them)
+        if first != "show" && words.iter().any(|w| w.contains("standard_conforming_strings") || w.contains("backslash_quote")) {
             return Some("Read-only mode: changing how strings are read is not allowed".into());
         }
     }
@@ -1072,6 +1074,11 @@ mod tests {
         // PostgreSQL: U& names · changing string interpretation · SELECT INTO
         assert!(ds("SET U&\"default_transaction_read\\005fonly\" = off", Postgres));
         assert!(ds("set standard_conforming_strings = off", Postgres));
+        assert!(bad("select u&'\\0041', 1", Postgres) && bad("SELECT U&\"x\" FROM t", Postgres) && bad("select 1 from t where U&'a' = 'a'", Postgres));
+        for s in ["SELECT u&4 FROM t", "select u & 4, u&b from t", "show standard_conforming_strings", "SHOW backslash_quote", "select '--U&''x'''"] {
+            assert!(!bad(s, Postgres) && !ds(s, Postgres), "{s}");
+        }
+        assert!(ds("reset standard_conforming_strings", Postgres) && ds("set session backslash_quote = on", Postgres));
         assert!(ds("select * into t2 from t", Postgres));
         assert!(!ds("select 'into', \"into\" from t", Postgres));
         // DuckDB · ClickHouse (MCP): reading files · other servers
