@@ -41,6 +41,7 @@ export function GenerateDataDialog({ target, schema, table, production, onDone, 
     <Modal
       title={`Generate Test Data: ${where}`}
       size="xl"
+      fixed
       onClose={onClose}
       footer={
         <>
@@ -167,6 +168,7 @@ export function CopyRowsDialog({ source, schema, table, conn, conns, onDone, onC
     <Modal
       title={`Copy Related Rows: ${where}`}
       size="xl"
+      fixed
       onClose={onClose}
       footer={
         <>

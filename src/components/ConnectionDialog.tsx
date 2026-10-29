@@ -109,6 +109,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
     <Modal
       title={edit ? "Data Source Properties" : "New Data Source"}
       size="lg"
+      fixed
       stickyBackdrop
       onClose={onClose}
       footer={

@@ -21,6 +21,7 @@ export function KeymapDialog({ onClose, onEdit }: { onClose: () => void; onEdit:
       title="Keymap Reference"
       size="lg"
       className="keymap"
+      fixed
       bodyClassName="fill"
       onClose={onClose}
       footer={

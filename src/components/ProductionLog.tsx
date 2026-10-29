@@ -35,6 +35,7 @@ export function ProductionLog({ connId, onOpenUndo, onClose }: { connId: string 
       title="Production Log"
       size="xl"
       className="history"
+      fixed
       onClose={onClose}
       onKeyDown={(e) => {
         if (e.key === "ArrowDown") setIdx((i) => Math.min(i + 1, list.length - 1));
