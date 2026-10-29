@@ -248,6 +248,19 @@ impl ConnectionConfig {
     pub fn active_ssh(&self) -> Option<&SshConfig> {
         self.ssh.as_ref().filter(|s| s.enabled && !s.host.is_empty())
     }
+
+    /// 저장된 SSH 비밀을 보내도 되는 같은 SSH 서버인지
+    pub fn same_ssh(&self, other: &ConnectionConfig) -> bool {
+        let t = |c: &ConnectionConfig| c.ssh.as_ref().map(|s| (s.host.trim().to_lowercase(), s.port, s.user.clone()));
+        t(self) == t(other)
+    }
+
+    /// self(저장된 설정) 의 비밀번호를 other 로 보내도 되는지: 같은 종류 · 서버 · 사용자 · SSH 터널이고, TLS 를 끄지 않았다.
+    /// 호스트만 바꿔 Test 를 누르거나 같은 id 로 다른 서버를 가져와도 예전 비밀번호가 새 서버로 가지 않게
+    pub fn same_server(&self, other: &ConnectionConfig) -> bool {
+        let t = |c: &ConnectionConfig| (c.kind, c.host.trim().to_lowercase(), c.port, c.user.clone(), c.active_ssh().map(|s| (s.host.trim().to_lowercase(), s.port)));
+        t(self) == t(other) && !(self.active_ssl().is_some() && other.active_ssl().is_none())
+    }
 }
 
 /// SSH 비밀번호/키 passphrase 의 저장 키
@@ -360,8 +373,27 @@ impl Store {
                     if (e.host.as_str(), e.port, e.user.as_str()) != (c.host.as_str(), c.port, c.user.as_str()) {
                         ch.push(format!("server {}@{}:{} → {}@{}:{}", e.user, e.host, e.port, c.user, c.host, c.port));
                     }
+                    if e.kind != c.kind {
+                        ch.push(format!("changes the type {:?} → {:?}", e.kind, c.kind));
+                    }
                     if e.read_only && !c.read_only {
                         ch.push("turns Read-only OFF".into());
+                    }
+                    if e.active_ssl().is_some() && c.active_ssl().is_none() {
+                        ch.push("turns SSL OFF (the password would be sent unencrypted)".into());
+                    } else if let (Some(a), Some(b)) = (e.active_ssl(), c.active_ssl())
+                        && a.mode() != b.mode()
+                    {
+                        ch.push(format!("SSL {} → {}", a.mode(), b.mode()));
+                    }
+                    if e.options.confirm_changes && !c.options.confirm_changes {
+                        ch.push("turns Production OFF".into());
+                    }
+                    if e.mcp_access(true) < c.mcp_access(true) {
+                        ch.push("shares more with MCP (AI tools)".into());
+                    }
+                    if !e.same_server(&c) && e.password_saved {
+                        ch.push("the saved password will be removed".into());
                     }
                     if e.active_ssh().map(|s| (&s.host, s.port)) != c.active_ssh().map(|s| (&s.host, s.port)) {
                         ch.push("changes the SSH tunnel".into());
@@ -376,27 +408,37 @@ impl Store {
         Ok(out)
     }
 
-    pub fn import_from(&self, path: &std::path::Path) -> AppResult<(usize, usize)> {
+    /// (추가, 변경, 비밀번호를 지울 소스: (id, DB 비밀번호, SSH 비밀)). 저장 여부 플래그는 파일이 아니라 지금 값을 따른다
+    pub fn import_from(&self, path: &std::path::Path) -> AppResult<(usize, usize, Vec<(String, bool, bool)>)> {
         let incoming = Self::read_import(path)?;
         let mut all = self.list()?;
-        let (mut added, mut updated) = (0, 0);
+        let (mut added, mut updated, mut forget) = (0, 0, vec![]);
         for mut c in incoming {
             if c.id.is_empty() {
                 c.id = uuid::Uuid::new_v4().to_string();
             }
             match all.iter_mut().find(|e| e.id == c.id) {
                 Some(e) => {
+                    let (pw, ssh) = (e.password_saved && !e.same_server(&c), e.ssh_secret_saved && !e.same_ssh(&c));
+                    c.password_saved = e.password_saved && !pw;
+                    c.ssh_secret_saved = e.ssh_secret_saved && !ssh;
+                    if pw || ssh {
+                        forget.push((c.id.clone(), pw, ssh));
+                    }
                     *e = c;
                     updated += 1;
                 }
                 None => {
+                    // 새 소스에는 저장된 비밀번호가 없다
+                    c.password_saved = false;
+                    c.ssh_secret_saved = false;
                     all.push(c);
                     added += 1;
                 }
             }
         }
         self.write(&all)?;
-        Ok((added, updated))
+        Ok((added, updated, forget))
     }
 
     /// 설정 폴더 (connections.json 이 있는 곳)
@@ -459,6 +501,28 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_secrets_follow_the_server() {
+        let a: ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "x", "name": "a", "kind": "postgres", "host": "db.internal", "port": 5432, "user": "app",
+            "ssl": { "enabled": true, "mode": "verify-full" }, "ssh": { "enabled": true, "host": "bastion", "port": 22, "user": "me" } })).unwrap();
+        let mut b = a.clone();
+        b.name = "renamed".into();
+        b.color = Some("#f00".into());
+        assert!(a.same_server(&b) && a.same_ssh(&b));
+        b.host = "DB.internal ".into();
+        assert!(a.same_server(&b));
+        let changes: [fn(&mut ConnectionConfig); 6] = [|c| c.host = "attacker.example".into(), |c| c.port = 5433, |c| c.user = "root".into(), |c| c.kind = DbKind::Mysql,
+            |c| c.ssl.as_mut().unwrap().enabled = false, |c| c.ssh.as_mut().unwrap().host = "evil".into()];
+        for f in changes {
+            let mut c = a.clone();
+            f(&mut c);
+            assert!(!a.same_server(&c), "{c:?}");
+        }
+        let mut c = a.clone();
+        c.ssh.as_mut().unwrap().user = "other".into();
+        assert!(!a.same_ssh(&c));
+    }
 
     #[test]
     fn mcp_access_defaults() {
@@ -524,10 +588,31 @@ mod tests {
 
         let b = Store::new(base.join("b"));
         b.save(&conn("2", "old name")).unwrap();
-        assert_eq!(b.import_from(&file).unwrap(), (1, 1));
+        assert_eq!(b.import_from(&file).unwrap(), (1, 1, vec![]));
         let names: Vec<_> = b.list().unwrap().into_iter().map(|c| c.name).collect();
         assert_eq!(names, vec!["PROD", "DEV"]);
         assert_eq!(b.get("1").unwrap().unwrap().color.as_deref(), Some("#5c2b2b"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 같은 id 로 다른 서버를 가져오면 저장된 비밀번호를 쓰지 않는다 (지울 목록 · 미리보기 경고)
+    #[test]
+    fn import_to_another_server_forgets_the_password() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        let b = Store::new(base.join("b"));
+        let mut mine = conn("2", "PROD");
+        mine.password_saved = true;
+        mine.ssl = Some(SslConfig { enabled: true, mode: "verify-full".into(), ..Default::default() });
+        b.save(&mine).unwrap();
+        let mut theirs = mine.clone();
+        theirs.host = "attacker.example".into();
+        theirs.ssl = None;
+        let file = base.join("in.json");
+        std::fs::write(&file, serde_json::to_string(&vec![theirs]).unwrap()).unwrap();
+        let p = b.import_preview(&file).unwrap().join("\n");
+        assert!(p.contains("attacker.example") && p.contains("SSL OFF") && p.contains("password will be removed"), "{p}");
+        assert_eq!(b.import_from(&file).unwrap(), (0, 1, vec![("2".to_string(), true, false)]));
+        assert!(!b.get("2").unwrap().unwrap().password_saved);
         let _ = std::fs::remove_dir_all(&base);
     }
 

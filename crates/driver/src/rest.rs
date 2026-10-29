@@ -32,7 +32,8 @@ impl Http {
     pub fn new(p: &crate::ConnectParams, default_port: u16) -> Http {
         let tls = p.options.get("ssl").is_some_and(|s| !s.is_null() && s != false);
         let base = if p.host.starts_with("http://") || p.host.starts_with("https://") { p.host.trim_end_matches('/').to_string() } else { format!("{}://{}:{}", if tls { "https" } else { "http" }, p.host, if p.port == 0 { default_port } else { p.port }) };
-        let agent = ureq::Agent::config_builder().timeout_connect(Some(std::time::Duration::from_secs(10))).timeout_global(Some(std::time::Duration::from_secs(300))).http_status_as_error(false).build().into();
+        // 리다이렉트는 따라가지 않는다: api-key 같은 인증 헤더가 다른 서버 (또는 http) 로 따라가지 않게
+        let agent = ureq::Agent::config_builder().timeout_connect(Some(std::time::Duration::from_secs(10))).timeout_global(Some(std::time::Duration::from_secs(300))).http_status_as_error(false).max_redirects(0).build().into();
         Http { base, headers: vec![], agent }
     }
 

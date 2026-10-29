@@ -11,7 +11,8 @@ English | [한국어](ko/safety.md)
 - **Explain Analyze** of a statement that changes data runs inside a transaction that is rolled back (PostgreSQL, MySQL), so it changes nothing.
 - **Scripts in Auto mode** run statement by statement: if one fails, the output says how many earlier statements were already committed.
 - **Table editor** saves all edits in one transaction, and each `UPDATE`/`DELETE` must change exactly one row, otherwise nothing is saved.
-- **Import** of data source files shows what changes first (e.g. "turns Read-only OFF", new startup script).
+- **Import** of data source files shows what changes first (e.g. "turns Read-only OFF", "turns SSL OFF", a new server, new startup script).
+- **Saved passwords** are only sent to the server they were saved for: after changing the type, host, port, user or SSH tunnel, or turning SSL off, Test and Save ask for the password again, and importing another server under the same data source removes the saved password. Driver and embedding requests don't follow redirects, and your OpenAI key is only sent to OpenAI (or the server in `OPENAI_BASE_URL`), never to an index's own "OpenAI-compatible" server.
 - **Query history** (GUI) hides passwords in `CREATE/ALTER USER … PASSWORD '…'`, `IDENTIFIED BY '…'` and Redis `AUTH`.
 - **Releases** are built only from `main` by GitHub Actions pinned to commit SHAs, with `SHA256SUMS` and build provenance attestations. The update signing key is used only in a separate signing step (never during the build). The GUI checks the update bundle's signature, and `qurry-tui --update` checks the signature of `SHA256SUMS` (same key) and then the checksum before installing.
 

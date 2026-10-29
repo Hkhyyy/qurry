@@ -11,7 +11,8 @@
 - **Explain Analyze** 를 데이터를 바꾸는 문장에 쓰면 트랜잭션 안에서 실행하고 되돌리므로 (PostgreSQL, MySQL) 아무것도 바뀌지 않습니다.
 - **Auto 모드의 스크립트** 는 문장 하나씩 실행합니다. 중간에 실패하면 앞에서 이미 커밋된 문장이 몇 개인지 출력에 알려 줍니다.
 - **테이블 편집기** 는 모든 편집을 트랜잭션 하나로 저장하고, `UPDATE`/`DELETE` 하나가 정확히 한 행만 바꿔야 합니다. 아니면 아무것도 저장하지 않습니다.
-- **Data Source 파일 가져오기** 는 무엇이 바뀌는지 먼저 보여 줍니다 (예: "turns Read-only OFF", 새 시작 스크립트).
+- **Data Source 파일 가져오기** 는 무엇이 바뀌는지 먼저 보여 줍니다 (예: "turns Read-only OFF", "turns SSL OFF", 다른 서버, 새 시작 스크립트).
+- **저장된 비밀번호** 는 저장할 때의 서버로만 보냅니다: 종류 · 호스트 · 포트 · 사용자 · SSH 터널을 바꾸거나 SSL 을 끄면 Test 와 Save 가 비밀번호를 다시 묻고, 같은 Data Source 로 다른 서버를 가져오면 저장된 비밀번호를 지웁니다. 드라이버와 임베딩 요청은 리다이렉트를 따라가지 않고, OpenAI 키는 OpenAI (또는 `OPENAI_BASE_URL` 의 서버) 로만 보내며 인덱스마다 적은 "OpenAI 호환" 서버로는 보내지 않습니다.
 - **쿼리 히스토리** (GUI) 는 `CREATE/ALTER USER … PASSWORD '…'`, `IDENTIFIED BY '…'`, Redis `AUTH` 의 비밀번호를 가립니다.
 - **릴리스** 는 `main` 에서만, 커밋 SHA 로 고정한 GitHub Actions 로 빌드하고 `SHA256SUMS` 와 빌드 출처 증명 (provenance attestation) 을 붙입니다. 업데이트 서명 키는 빌드와 분리된 서명 단계에서만 씁니다. GUI 는 업데이트 묶음의 서명을, `qurry-tui --update` 는 `SHA256SUMS` 의 서명 (같은 키) 과 체크섬을 확인한 뒤 설치합니다.
 

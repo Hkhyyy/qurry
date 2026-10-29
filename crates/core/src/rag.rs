@@ -58,9 +58,20 @@ fn base_url(provider: &str, base: &str) -> String {
     b.trim_end_matches('/').to_string()
 }
 
+/// 저장한 OpenAI 키 (또는 OPENAI_API_KEY) 를 이 서버로 보내도 되는지: OpenAI 이거나 OPENAI_BASE_URL 로 정한 서버, 그리고 https (이 컴퓨터의 http 는 괜찮다).
+/// 인덱스마다 적은 "OpenAI 호환" 서버로는 보내지 않는다 (로컬 · LAN 서버에 진짜 키가 평문으로 가지 않게)
+fn openai_key_allowed(base: &str) -> bool {
+    let url = base_url("openai", base);
+    let trusted = std::iter::once("https://api.openai.com/v1".to_string()).chain(std::env::var("OPENAI_BASE_URL").ok().map(|b| base_url("openai", &b)));
+    let host = url.split("://").nth(1).unwrap_or("").split(['/', '?']).next().unwrap_or("");
+    let host = host.rsplit_once(':').filter(|(_, p)| p.chars().all(|c| c.is_ascii_digit())).map(|(h, _)| h).unwrap_or(host);
+    let local = ["localhost", "127.0.0.1", "[::1]"].contains(&host);
+    trusted.into_iter().any(|t| t == url) && (url.starts_with("https://") || local)
+}
+
 /// 글 묶음 → 벡터 (블로킹 HTTP. spawn_blocking 안에서 부른다)
 fn embed_blocking(provider: &str, model: &str, base: &str, key: Option<&str>, texts: &[String]) -> AppResult<Vec<Vec<f32>>> {
-    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(std::time::Duration::from_secs(300))).http_status_as_error(false).build().into();
+    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(std::time::Duration::from_secs(300))).http_status_as_error(false).max_redirects(0).build().into();
     let (url, body) = match provider {
         "openai" => (format!("{}/embeddings", base_url(provider, base)), json!({ "model": model, "input": texts })),
         "ollama" => (format!("{}/api/embed", base_url(provider, base)), json!({ "model": model, "input": texts })),
@@ -189,11 +200,16 @@ impl AppState {
     async fn embed(&self, idx: &RagIndex, texts: Vec<String>) -> AppResult<Vec<Vec<f32>>> {
         let key = if idx.provider == "openai" {
             // 저장한 키, 없으면 OPENAI_API_KEY (OpenAI 호환 로컬 서버는 키 없이도)
-            let k = self.secret(OPENAI_KEY)?.filter(|k| !k.is_empty()).or_else(|| std::env::var("OPENAI_API_KEY").ok().filter(|k| !k.is_empty()));
-            if k.is_none() && idx.base_url.trim().is_empty() && std::env::var("OPENAI_BASE_URL").is_err() {
-                return Err(AppError::Msg("Set your OpenAI API key first".into()));
+            if !openai_key_allowed(&idx.base_url) {
+                // 다른 OpenAI 호환 서버: 키 없이 (보통 로컬 서버는 키가 없다)
+                None
+            } else {
+                let k = self.secret(OPENAI_KEY)?.filter(|k| !k.is_empty()).or_else(|| std::env::var("OPENAI_API_KEY").ok().filter(|k| !k.is_empty()));
+                if k.is_none() && idx.base_url.trim().is_empty() && std::env::var("OPENAI_BASE_URL").is_err() {
+                    return Err(AppError::Msg("Set your OpenAI API key first".into()));
+                }
+                k
             }
-            k
         } else {
             None
         };
@@ -389,6 +405,19 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn openai_key_only_goes_to_openai() {
+        if std::env::var("OPENAI_BASE_URL").is_ok() {
+            return;
+        }
+        assert!(openai_key_allowed(""));
+        assert!(openai_key_allowed("https://api.openai.com/v1/"));
+        assert!(!openai_key_allowed("http://192.168.0.5:8000/v1"));
+        assert!(!openai_key_allowed("192.168.0.5:8000/v1"));
+        assert!(!openai_key_allowed("https://api.openai.com.evil.example/v1"));
+        assert!(!openai_key_allowed("http://localhost:1234/v1"), "a local OpenAI-compatible server gets no key unless OPENAI_BASE_URL says so");
+    }
 
     #[test]
     fn row_text_and_ids() {

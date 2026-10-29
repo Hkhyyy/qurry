@@ -314,6 +314,8 @@ pub async fn redis_pool(state: &AppState, id: &str) -> AppResult<crate::redisdb:
 }
 
 /// 읽기 전용(MCP) 쿼리 시간 제한 (남이 보낸 쿼리로 서버를 오래 붙잡지 않게)
+const SERVER_CHANGED: &str = "The server, user or SSH tunnel changed (or SSL was turned off) — enter the password again. The saved one is only sent to the server it was saved for.";
+const SSH_CHANGED: &str = "The SSH server changed — enter the SSH password / passphrase again. The saved one is only sent to the server it was saved for.";
 const READ_ONLY_TIMEOUT_PG: &str = "SET LOCAL statement_timeout = '60s'";
 const READ_ONLY_TIMEOUT_MY: &str = "SET SESSION max_execution_time = 60000";
 /// MCP CSV 내보내기 상한
@@ -456,6 +458,15 @@ impl AppState {
         }
         // 저장 여부 플래그는 서버가 관리한다 (None = 기존 값 유지)
         let prev = self.store.get(&config.id)?;
+        // 서버를 바꾸면 저장된 비밀번호를 새 서버에 쓰지 않는다: 다시 입력하게 한다
+        if let Some(p) = &prev {
+            if password.is_none() && p.password_saved && !p.same_server(&config) {
+                return Err(AppError::Msg(SERVER_CHANGED.into()));
+            }
+            if ssh_secret.is_none() && p.ssh_secret_saved && config.active_ssh().is_some() && !p.same_ssh(&config) {
+                return Err(AppError::Msg(SSH_CHANGED.into()));
+            }
+        }
         config.password_saved = prev.as_ref().is_some_and(|p| p.password_saved);
         config.ssh_secret_saved = prev.as_ref().is_some_and(|p| p.ssh_secret_saved);
         match password.as_deref() {
@@ -494,16 +505,33 @@ impl AppState {
         self.store.delete(&id)
     }
 
-    /// 저장하지 않고 접속만 시험한다. `password`가 None이면 저장된 비밀번호를 쓴다.
+    /// 저장된 비밀번호를 config 로 보내도 되면 그 값 (저장된 설정과 같은 서버일 때만)
+    fn saved_password_for(&self, config: &ConnectionConfig) -> AppResult<Option<String>> {
+        match self.store.get(&config.id)? {
+            Some(p) if p.password_saved && !p.same_server(config) => Err(AppError::Msg(SERVER_CHANGED.into())),
+            Some(_) => self.secret(&config.id),
+            None => Ok(None),
+        }
+    }
+
+    fn saved_ssh_secret_for(&self, config: &ConnectionConfig) -> AppResult<Option<String>> {
+        match self.store.get(&config.id)? {
+            Some(p) if p.ssh_secret_saved && !p.same_ssh(config) => Err(AppError::Msg(SSH_CHANGED.into())),
+            Some(_) => self.secret(&store::ssh_secret_key(&config.id)),
+            None => Ok(None),
+        }
+    }
+
+    /// 저장하지 않고 접속만 시험한다. `password`가 None이면 저장된 비밀번호를 쓴다 (저장된 설정과 같은 서버일 때만).
     pub async fn test_connection(&self, config: ConnectionConfig, password: Option<String>, ssh_secret: Option<String>) -> AppResult<String> {
         let password = match password {
             Some(p) => Some(p),
-            None if !config.id.is_empty() => self.secret(&config.id)?,
+            None if !config.id.is_empty() => self.saved_password_for(&config)?,
             None => None,
         };
         let ssh_secret = match ssh_secret {
             Some(p) => Some(p),
-            None if !config.id.is_empty() && config.active_ssh().is_some() => self.secret(&store::ssh_secret_key(&config.id))?,
+            None if !config.id.is_empty() && config.active_ssh().is_some() => self.saved_ssh_secret_for(&config)?,
             None => None,
         };
         let (pool, tunnel) = connect_config(&config, password.as_deref(), ssh_secret.as_deref()).await?;
@@ -522,7 +550,7 @@ impl AppState {
         let ssh = config.ssh.as_ref().filter(|s| !s.host.is_empty()).ok_or_else(|| AppError::Msg("Enter the SSH host".into()))?;
         let secret = match ssh_secret {
             Some(p) => Some(p),
-            None if !config.id.is_empty() => self.secret(&store::ssh_secret_key(&config.id))?,
+            None if !config.id.is_empty() => self.saved_ssh_secret_for(&config)?,
             None => None,
         };
         crate::tunnel::test_login(ssh, secret.as_deref()).await
@@ -838,7 +866,17 @@ impl AppState {
     }
 
     pub async fn import_connections(&self, path: String) -> AppResult<ImportResult> {
-        let (added, updated) = self.store.import_from(std::path::Path::new(&path))?;
+        let (added, updated, forget) = self.store.import_from(std::path::Path::new(&path))?;
+        // 같은 id 로 다른 서버를 가져오면 예전 비밀번호를 지운다 (새 서버로 보내지 않게)
+        for (id, password, ssh) in forget {
+            if password {
+                self.set_secret(&id, None)?;
+            }
+            if ssh {
+                self.set_secret(&store::ssh_secret_key(&id), None)?;
+            }
+            drop_pool(self, &id).await;
+        }
         Ok(ImportResult { added, updated })
     }
 
@@ -902,6 +940,32 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 호스트만 바꿔 Test / Save 하면 저장된 비밀번호를 새 서버로 보내지 않고 다시 입력하라고 한다 (접속하기 전에)
+    #[tokio::test]
+    async fn saved_password_is_not_sent_to_a_changed_server() {
+        let dir = std::env::temp_dir().join(format!("qurry-pw-{}", uuid::Uuid::new_v4()));
+        let st = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+        let cfg = ConnectionConfig {
+            id: "a".into(), name: "a".into(), kind: crate::store::DbKind::Postgres, host: "127.0.0.1".into(), port: 1,
+            user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+        };
+        let saved = st.save_connection(cfg, Some("pw".into()), None).await.unwrap();
+        let mut moved = saved.clone();
+        moved.host = "attacker.example".into();
+        let e = st.test_connection(moved.clone(), None, None).await.unwrap_err().to_string();
+        assert!(e.contains("enter the password again"), "{e}");
+        let e = st.save_connection(moved.clone(), None, None).await.unwrap_err().to_string();
+        assert!(e.contains("enter the password again"), "{e}");
+        // 새 비밀번호를 주면 저장된다 · 이름만 바꾸는 것은 그대로
+        st.save_connection(moved, Some("pw2".into()), None).await.unwrap();
+        let mut renamed = st.store.get("a").unwrap().unwrap();
+        renamed.name = "b".into();
+        st.save_connection(renamed, None, None).await.unwrap();
+        assert_eq!(st.secret("a").unwrap().as_deref(), Some("pw2"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     /// MCP 서버는 MCP 에 보이지 않는 Data Source 의 비밀번호를 꺼내지 않는다. 앱은 그대로
     #[test]
