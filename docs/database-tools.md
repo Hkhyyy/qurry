@@ -32,7 +32,7 @@ GUI — right-click a data source › Tools › Compare & Migrate; TUI — `⌃k
 
 ## Back up / restore
 
-Right-click a database › Tools › Back Up Database… / Restore Database… (TUI: `⌃k`). Runs `pg_dump` / `pg_restore` / `psql` or `mysqldump` / `mysql` from this computer (Homebrew `libpq`, `mysql-client`, Postgres.app and the usual Linux paths are found too; for PostgreSQL the client closest to the server version is used). Passwords go through the environment, SSH tunnels are used, progress shows in the status bar and can be cancelled. Backup files and temporary dumps are readable only by you. A `.sql` file that would run commands on your computer (psql `\!`, `\o |…`, `\copy … program`, `\i`; mysql `system`, `tee`, `pager`, `source`) is not restored — pg_dump and mysqldump never write those lines.
+Right-click a database › Tools › Back Up Database… / Restore Database… (TUI: `⌃k`). Runs `pg_dump` / `pg_restore` / `psql` or `mysqldump` / `mysql` from this computer (Homebrew `libpq`, `mysql-client`, Postgres.app and the usual Linux paths are found too; for PostgreSQL the client closest to the server version is used). SSH tunnels are used, progress shows in the status bar and can be cancelled. Backup files and temporary dumps are readable only by you, and passwords go to the tools in a private file for that one server. Restoring a `.sql` file runs only SQL: psql and mysql client commands in the file (running programs, writing files, connecting elsewhere) are switched off — this needs psql 17.6 / 16.10 / 15.14 / 14.19 / 13.22 or newer; with an older psql a file containing such commands is not restored.
 
 ## Create and modify objects (PostgreSQL, MySQL)
 
