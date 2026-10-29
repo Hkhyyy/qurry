@@ -338,6 +338,66 @@ const REDIS_READ_MAX_BYTES: i64 = 16 << 20;
 const EXPORT_MAX_BYTES: u64 = 512 << 20;
 const EXPORT_MAX_PLUGIN_ROWS: usize = 1_000_000;
 
+/// MCP Redis reads (query, and reads sent to execute): the guard's limits, then what only the server knows — whole-key reads
+/// (HGETALL, LRANGE 0 -1, XRANGE without COUNT …) up to REDIS_STRICT_MAX elements, and values up to REDIS_READ_MAX_BYTES.
+/// Commands that aren't reads are left to the caller
+async fn check_redis_read(m: &crate::redisdb::RedisConn, line: &str) -> AppResult<()> {
+    use crate::guard::REDIS_STRICT_MAX;
+    let args = crate::redisdb::parse_command(line.trim().trim_end_matches(';').trim())?;
+    let cmd = String::from_utf8_lossy(&args[0]).to_uppercase();
+    let sub = args.get(1).map(|a| String::from_utf8_lossy(a).to_uppercase()).unwrap_or_default();
+    if !crate::redisdb::is_read_command(&cmd, &sub) {
+        return Ok(());
+    }
+    let rest: Vec<String> = args.iter().skip(1).map(|a| String::from_utf8_lossy(a).into_owned()).collect();
+    if let Some(why) = crate::guard::redis_strict_violation(&cmd, &rest) {
+        return Err(AppError::Msg(why));
+    }
+    // Whole keys: count the elements (and then the bytes) before reading
+    if let Some(c) = crate::guard::redis_size_check(&cmd, &rest) {
+        let mut n = 0i64;
+        for k in &c.keys {
+            n = n.saturating_add(crate::redisdb::element_count(m, c.count, k.as_bytes()).await?);
+        }
+        if n > REDIS_STRICT_MAX {
+            return Err(AppError::Msg(format!("{cmd} would read {n} elements — at most {REDIS_STRICT_MAX} in read-only mode; use {} (or redis_get for a preview)", c.instead)));
+        }
+        let mut bytes = 0i64;
+        for k in &c.keys {
+            bytes = bytes.saturating_add(crate::redisdb::memory_usage(m, k.as_bytes()).await?);
+        }
+        if bytes > REDIS_READ_MAX_BYTES {
+            return Err(AppError::Msg(format!("{cmd} would read {} MB — too big to read here; use {}", bytes >> 20, c.instead)));
+        }
+    }
+    // Commands that return a whole value: check the size before reading
+    // GETRANGE with a bounded range reads at most that much
+    let range_small = cmd == "GETRANGE" && matches!((rest.get(1).and_then(|a| a.parse::<i64>().ok()), rest.get(2).and_then(|a| a.parse::<i64>().ok())), (Some(a), Some(b)) if a >= 0 && b >= a && b - a < REDIS_READ_MAX_BYTES);
+    let keys: &[String] = match cmd.as_str() {
+        "GET" | "JSON.GET" => rest.get(..1).unwrap_or(&[]),
+        "GETRANGE" if !range_small => rest.get(..1).unwrap_or(&[]),
+        "MGET" => &rest,
+        "JSON.MGET" => rest.split_last().map(|(_, k)| k).unwrap_or(&[]),
+        _ => &[],
+    };
+    for k in keys {
+        let n = crate::redisdb::memory_usage(m, k.as_bytes()).await?;
+        if n > REDIS_READ_MAX_BYTES {
+            return Err(AppError::Msg(format!("{k} is {} MB — too big to read here (use GETRANGE, or redis_get for a preview)", n >> 20)));
+        }
+    }
+    // HGET / HMGET: one hash field can be big too
+    if matches!(cmd.as_str(), "HGET" | "HMGET") && rest.len() > 1 {
+        for f in &rest[1..] {
+            let n = crate::redisdb::field_len(m, rest[0].as_bytes(), f.as_bytes()).await?;
+            if n > REDIS_READ_MAX_BYTES {
+                return Err(AppError::Msg(format!("{}.{f} is {} MB — too big to read here", rest[0], n >> 20)));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Serialize)]
 pub struct ImportResult {
     pub added: usize,
@@ -383,35 +443,7 @@ impl AppState {
                 if !crate::redisdb::is_read_command(&cmd, &sub) {
                     return Err(AppError::Msg(format!("{cmd} is not a read-only command")));
                 }
-                let rest: Vec<String> = args.iter().skip(1).map(|a| String::from_utf8_lossy(a).into_owned()).collect();
-                if let Some(why) = crate::guard::redis_strict_violation(&cmd, &rest) {
-                    return Err(AppError::Msg(why));
-                }
-                // Commands that return a whole value: check the size before reading
-                // GETRANGE with a bounded range reads at most that much
-                let range_small = cmd == "GETRANGE" && matches!((rest.get(1).and_then(|a| a.parse::<i64>().ok()), rest.get(2).and_then(|a| a.parse::<i64>().ok())), (Some(a), Some(b)) if a >= 0 && b >= a && b - a < REDIS_READ_MAX_BYTES);
-                let keys: &[String] = match cmd.as_str() {
-                    "GET" | "JSON.GET" => rest.get(..1).unwrap_or(&[]),
-                    "GETRANGE" if !range_small => rest.get(..1).unwrap_or(&[]),
-                    "MGET" => &rest,
-                    "JSON.MGET" => rest.split_last().map(|(_, k)| k).unwrap_or(&[]),
-                    _ => &[],
-                };
-                for k in keys {
-                    let n = crate::redisdb::memory_usage(&m, k.as_bytes()).await?;
-                    if n > REDIS_READ_MAX_BYTES {
-                        return Err(AppError::Msg(format!("{k} is {} MB — too big to read here (use GETRANGE, or redis_get for a preview)", n >> 20)));
-                    }
-                }
-                // HGET / HMGET: one hash field can be big too
-                if matches!(cmd.as_str(), "HGET" | "HMGET") && rest.len() > 1 {
-                    for f in &rest[1..] {
-                        let n = crate::redisdb::field_len(&m, rest[0].as_bytes(), f.as_bytes()).await?;
-                        if n > REDIS_READ_MAX_BYTES {
-                            return Err(AppError::Msg(format!("{}.{f} is {} MB — too big to read here", rest[0], n >> 20)));
-                        }
-                    }
-                }
+                check_redis_read(&m, &sql).await?;
                 crate::redisdb::run(&m, &sql, limit).await
             }
             // Drivers: no server-side READ ONLY transaction — only what passes the guard check (one statement, read commands)
@@ -819,7 +851,14 @@ impl AppState {
     }
 
     /// MCP execute: like execute_batch, but PostgreSQL / MySQL run each statement as a prepared statement (one statement per item, enforced by the server)
+    /// Redis reads among the items get the same size checks as run_read_only
     pub async fn execute_batch_prepared(&self, id: String, statements: Vec<String>) -> AppResult<u64> {
+        if self.kind_of(&id)? == store::DbKind::Redis {
+            let m = redis_pool(self, &id).await?;
+            for st in &statements {
+                check_redis_read(&m, st).await?;
+            }
+        }
         self.execute_batch_with(id, statements, false, true).await
     }
 

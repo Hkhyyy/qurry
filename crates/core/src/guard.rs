@@ -502,11 +502,9 @@ fn dml_words(toks: &[Tok]) -> impl Iterator<Item = usize> + '_ {
 /// Number of elements a single Redis command may return in MCP
 pub const REDIS_STRICT_MAX: i64 = 1000;
 
-/// Read commands additionally blocked in Redis read-only (MCP): ones that expose config · passwords (CONFIG GET) or can stall the server (KEYS),
-/// and ones that read a whole key (with millions of elements the server stalls and MCP runs out of memory). args = arguments after the command (not uppercased)
-pub fn redis_strict_violation(cmd: &str, args: &[String]) -> Option<String> {
-    let num = |i: usize| args.get(i).and_then(|a| a.parse::<i64>().ok());
-    // Look for options only after leading arguments like key · range (so a key named LIMIT · COUNT doesn't fool it)
+/// Position of an option (LIMIT, COUNT, BYSCORE …) in a Redis command's arguments. Looks only after leading arguments like key · range
+/// (so a key named LIMIT · COUNT doesn't fool it)
+fn redis_opt(cmd: &str, args: &[String], name: &str) -> Option<usize> {
     let fixed = match cmd {
         "SCAN" => 1,
         "HSCAN" | "SSCAN" | "ZSCAN" | "LPOS" => 2,
@@ -514,29 +512,68 @@ pub fn redis_strict_violation(cmd: &str, args: &[String]) -> Option<String> {
         "GEOSEARCH" => 1,
         _ => 3,
     };
-    let opt = |name: &str| args.iter().enumerate().skip(fixed).find(|(_, a)| a.eq_ignore_ascii_case(name)).map(|(i, _)| i);
+    args.iter().enumerate().skip(fixed).find(|(_, a)| a.eq_ignore_ascii_case(name)).map(|(i, _)| i)
+}
+
+/// Elements LRANGE / ZRANGE start stop returns, from the indexes alone (both from the start, or both from the end).
+/// None when one counts from the start and the other from the end: that depends on the length
+fn redis_range_len(start: i64, stop: i64) -> Option<i64> {
+    ((start >= 0) == (stop >= 0)).then(|| stop.saturating_sub(start).saturating_add(1).max(0))
+}
+
+/// A read of a whole key (or of whole sets) that MCP runs only when it is small: count the elements with `count` on each key first
+/// (at most REDIS_STRICT_MAX in all), otherwise suggest `instead`
+#[derive(Debug, PartialEq)]
+pub struct RedisSizeCheck {
+    pub count: &'static str,
+    pub keys: Vec<String>,
+    pub instead: &'static str,
+}
+
+/// Whether a Redis read command needs a size check before it runs in MCP (redis_strict_violation lets these through). args as in redis_strict_violation
+pub fn redis_size_check(cmd: &str, args: &[String]) -> Option<RedisSizeCheck> {
+    let num = |i: usize| args.get(i).and_then(|a| a.parse::<i64>().ok());
+    let opt = |name: &str| redis_opt(cmd, args, name);
+    let unbounded = matches!((num(1), num(2)), (Some(a), Some(b)) if redis_range_len(a, b).is_none());
+    let by = opt("BYSCORE").or(opt("BYLEX")).is_some();
+    let check = |count, instead| Some(RedisSizeCheck { count, keys: args.first().cloned().into_iter().collect(), instead });
+    match cmd {
+        "HGETALL" | "HKEYS" | "HVALS" => check("HLEN", "HSCAN"),
+        "SMEMBERS" => check("SCARD", "SSCAN"),
+        "SINTER" | "SUNION" | "SDIFF" => Some(RedisSizeCheck { count: "SCARD", keys: args.to_vec(), instead: "SSCAN on each set" }),
+        "LRANGE" if unbounded => check("LLEN", "a bounded range such as LRANGE key 0 99"),
+        "ZREVRANGE" if unbounded => check("ZCARD", "ZSCAN or a bounded range"),
+        "ZRANGE" if !by && unbounded => check("ZCARD", "ZSCAN or a bounded range"),
+        "ZRANGE" if by && opt("LIMIT").is_none() => check("ZCARD", "LIMIT offset count"),
+        "ZRANGEBYSCORE" | "ZRANGEBYLEX" | "ZREVRANGEBYSCORE" | "ZREVRANGEBYLEX" if opt("LIMIT").is_none() => check("ZCARD", "LIMIT offset count"),
+        "XRANGE" | "XREVRANGE" if opt("COUNT").is_none() => check("XLEN", "COUNT"),
+        _ => None,
+    }
+}
+
+/// Read commands additionally blocked in Redis read-only (MCP): ones that expose config · passwords (CONFIG GET) or can stall the server (KEYS),
+/// and reads of more than REDIS_STRICT_MAX elements (with millions of elements the server stalls and MCP runs out of memory).
+/// Whole-key reads (HGETALL, LRANGE 0 -1, XRANGE without COUNT …) pass here: they also need redis_size_check at run time. args = arguments after the command (not uppercased)
+pub fn redis_strict_violation(cmd: &str, args: &[String]) -> Option<String> {
+    let num = |i: usize| args.get(i).and_then(|a| a.parse::<i64>().ok());
+    let opt = |name: &str| redis_opt(cmd, args, name);
     // LIMIT · COUNT must be 1 or more (some commands treat 0 · negative as "all")
     let too_many = |n: Option<i64>| n.is_none_or(|n| n <= 0 || n > REDIS_STRICT_MAX);
-    let whole = || Some(format!("{cmd} reads the whole key in read-only mode — use redis_get (it reads at most the given limit) or {}", match cmd {
-        "HGETALL" | "HKEYS" | "HVALS" => "HSCAN",
-        "SMEMBERS" => "SSCAN",
-        _ => "SCARD / SSCAN",
-    }));
+    // Unbounded ranges (0 -1) are left to the size check
     let range = |start: Option<i64>, stop: Option<i64>| match (start, stop) {
-        (Some(a), Some(b)) if a >= 0 && b >= a => b - a >= REDIS_STRICT_MAX,
+        (Some(a), Some(b)) => redis_range_len(a, b).is_some_and(|n| n > REDIS_STRICT_MAX),
         _ => true,
     };
     let need_limit = |what: &str| Some(format!("{cmd} needs {what} of at most {REDIS_STRICT_MAX} in read-only mode"));
     match cmd {
         "CONFIG" => Some("CONFIG is not allowed in read-only mode (it can reveal passwords)".into()),
         "KEYS" => Some("KEYS is not allowed in read-only mode (it blocks the server on large databases) — use redis_scan".into()),
-        "HGETALL" | "HKEYS" | "HVALS" | "SMEMBERS" | "SINTER" | "SUNION" | "SDIFF" => whole(),
         "LRANGE" | "ZREVRANGE" if range(num(1), num(2)) => need_limit("a start..stop range"),
         // ZRANGE key start stop [BYSCORE | BYLEX] [REV] [LIMIT offset count]
-        "ZRANGE" if opt("BYSCORE").or(opt("BYLEX")).is_some() && opt("LIMIT").is_none_or(|i| too_many(num(i + 2))) => need_limit("LIMIT offset count"),
+        "ZRANGE" if opt("BYSCORE").or(opt("BYLEX")).is_some() && opt("LIMIT").is_some_and(|i| too_many(num(i + 2))) => need_limit("LIMIT offset count"),
         "ZRANGE" if opt("BYSCORE").or(opt("BYLEX")).is_none() && range(num(1), num(2)) => need_limit("a start..stop range"),
-        "ZRANGEBYSCORE" | "ZRANGEBYLEX" | "ZREVRANGEBYSCORE" | "ZREVRANGEBYLEX" if opt("LIMIT").is_none_or(|i| too_many(num(i + 2))) => need_limit("LIMIT offset count"),
-        "XRANGE" | "XREVRANGE" if opt("COUNT").is_none_or(|i| too_many(num(i + 1))) => need_limit("COUNT"),
+        "ZRANGEBYSCORE" | "ZRANGEBYLEX" | "ZREVRANGEBYSCORE" | "ZREVRANGEBYLEX" if opt("LIMIT").is_some_and(|i| too_many(num(i + 2))) => need_limit("LIMIT offset count"),
+        "XRANGE" | "XREVRANGE" if opt("COUNT").is_some_and(|i| too_many(num(i + 1))) => need_limit("COUNT"),
         // A negative count returns that many (with repeats)
         "SRANDMEMBER" | "HRANDFIELD" | "ZRANDMEMBER" if args.len() > 1 && num(1).is_none_or(|n| n.abs() > REDIS_STRICT_MAX) => need_limit("a count"),
         "SCAN" | "HSCAN" | "SSCAN" | "ZSCAN" if opt("COUNT").is_some_and(|i| too_many(num(i + 1))) => need_limit("COUNT"),
@@ -1168,13 +1205,34 @@ mod tests {
             let cmd = w.next().unwrap().to_uppercase();
             redis_strict_violation(&cmd, &w.map(String::from).collect::<Vec<_>>())
         };
-        for bad in ["HGETALL big", "SMEMBERS s", "SUNION a b", "LRANGE l 0 -1", "LRANGE l 0 5000", "ZRANGE z 0 -1", "ZRANGE z -inf +inf BYSCORE", "ZRANGEBYSCORE z -inf +inf",
-            "ZRANGEBYSCORE z -inf +inf LIMIT 0 100000", "XRANGE s - +", "SRANDMEMBER s -100000", "SCAN 0 COUNT 1000000", "KEYS *", "CONFIG GET *"] {
+        let size = |line: &str| {
+            let mut w = line.split_whitespace();
+            let cmd = w.next().unwrap().to_uppercase();
+            redis_size_check(&cmd, &w.map(String::from).collect::<Vec<_>>())
+        };
+        for bad in ["LRANGE l 0 5000", "LRANGE l -5000 -1", "ZREVRANGE z -1001 -1", "LRANGE l x 5", "ZRANGEBYSCORE z -inf +inf LIMIT 0 100000", "SRANDMEMBER s -100000",
+            "SCAN 0 COUNT 1000000", "KEYS *", "CONFIG GET *", "XRANGE s - + COUNT 100000"] {
             assert!(v(bad).is_some(), "{bad}");
         }
         for bad in ["ZRANGEBYSCORE z -inf +inf LIMIT 0 -1", "ZRANGE z 0 +inf BYSCORE LIMIT 0 0", "LPOS l x COUNT 0", "GEOSEARCH g FROMLONLAT 0 0 BYRADIUS 9 km", "XINFO STREAM s FULL COUNT 0",
-            "XRANGE s - + COUNT -1", "ZRANGEBYSCORE LIMIT 0 5", "XRANGE COUNT 5 +"] {
+            "XRANGE s - + COUNT -1"] {
             assert!(v(bad).is_some(), "{bad}");
+        }
+        // Bounded by the indexes alone: the last 10, or an empty range
+        for ok in ["LRANGE l -10 -1", "ZRANGE z -1000 -1", "ZREVRANGE z -3 -2", "LRANGE l 5 2", "LRANGE l -1 -5", "LRANGE l 0 999"] {
+            assert!(v(ok).is_none() && size(ok).is_none(), "{ok}");
+        }
+        // Whole keys pass here and are counted at run time (app::check_redis_read)
+        for (line, count, keys) in [("HGETALL big", "HLEN", vec!["big"]), ("HVALS h", "HLEN", vec!["h"]), ("SMEMBERS s", "SCARD", vec!["s"]), ("SUNION a b", "SCARD", vec!["a", "b"]),
+            ("LRANGE l 0 -1", "LLEN", vec!["l"]), ("LRANGE l -10 5", "LLEN", vec!["l"]), ("ZRANGE z 0 -1", "ZCARD", vec!["z"]), ("ZREVRANGE z 0 -1", "ZCARD", vec!["z"]),
+            ("ZRANGE z -inf +inf BYSCORE", "ZCARD", vec!["z"]), ("ZRANGEBYSCORE z -inf +inf", "ZCARD", vec!["z"]), ("XRANGE s - +", "XLEN", vec!["s"]),
+            ("ZRANGEBYSCORE LIMIT 0 5", "ZCARD", vec!["LIMIT"]), ("XRANGE COUNT 5 +", "XLEN", vec!["COUNT"])] {
+            assert!(v(line).is_none(), "{line}");
+            let c = size(line).unwrap_or_else(|| panic!("{line}"));
+            assert_eq!((c.count, c.keys.iter().map(String::as_str).collect::<Vec<_>>()), (count, keys), "{line}");
+        }
+        for ok in ["GET a", "HGET h f", "LRANGE l 0 99", "ZRANGEBYSCORE z 0 1 LIMIT 0 10", "XRANGE s - + COUNT 10", "ZRANGE z 0 +inf BYSCORE LIMIT 0 10"] {
+            assert!(size(ok).is_none(), "{ok}");
         }
         for ok in ["LPOS l x", "LPOS l x COUNT 5", "GEOSEARCH g FROMLONLAT 0 0 BYRADIUS 9 km COUNT 10", "XINFO STREAM s", "XINFO STREAM s FULL COUNT 10", "SRANDMEMBER s -5"] {
             assert!(v(ok).is_none(), "{ok}");
@@ -1224,7 +1282,7 @@ mod tests {
         }
         for bad in ["\"FLUSHALL\"", "EVAL \"redis.call('FLUSHALL')\" 0", "FUNCTION FLUSH", "CONFIG SET dir /tmp", "SAVE", "REPLICAOF h 1", "SWAPDB 0 1", "MIGRATE h 1 k 0 1",
             "RENAME a b", "ZREMRANGEBYRANK z 0 -1", "LTRIM l 0 0", "EXPIRE k 0", "EXPIRE k 1", "EXPIREAT k 1", "SET k v PX 1", "SETEX k 1 v", "LPOP k 1000000",
-            "DEBUG SLEEP 1", "MODULE LOAD x", "DEL a", "HGETALL big", "FLUSHALL;"] {
+            "DEBUG SLEEP 1", "MODULE LOAD x", "DEL a", "LRANGE l 0 5000", "KEYS *", "FLUSHALL;"] {
             assert!(v(bad).is_some(), "{bad}");
         }
     }
