@@ -26,8 +26,10 @@ pub struct PgSession {
     pub in_tx: bool,
     /// 커서를 마지막으로 쓴 시각 (오래 안 쓰면 닫는다)
     cursor_used: Instant,
-    /// 오래 안 써서 커서를 닫았는지 (더 불러오기 안내용)
+    /// 오래 안 써서 커서를 닫았는지 (더 불러오기 때 이어서 다시 연다)
     idle_closed: bool,
+    /// 지금 결과에서 커서로 읽은 행 수 (다시 열 때 OFFSET)
+    fetched: usize,
 }
 
 /// Auto 모드에서 결과를 끝까지 안 읽은 커서를 이만큼 안 쓰면 닫는다.
@@ -60,7 +62,7 @@ impl PgSession {
     pub async fn open(pool: &PgPool) -> AppResult<Self> {
         let mut conn = pool.acquire().await?;
         let pid: i32 = sqlx::query_scalar("select pg_backend_pid()").fetch_one(&mut *conn).await?;
-        Ok(Self { conn, pid, cursor_open: false, cursor_sql: String::new(), columns: Vec::new(), manual: false, in_tx: false, cursor_used: Instant::now(), idle_closed: false })
+        Ok(Self { conn, pid, cursor_open: false, cursor_sql: String::new(), columns: Vec::new(), manual: false, in_tx: false, cursor_used: Instant::now(), idle_closed: false, fetched: 0 })
     }
 
     /// keep-alive: 유휴 세션 연결이 끊기지 않도록
@@ -164,25 +166,18 @@ impl PgSession {
 
     async fn run_inner(&mut self, sql: &str, limit: usize) -> AppResult<QueryResult> {
         self.close_cursor().await;
+        self.idle_closed = false;
         let start = Instant::now();
         if self.manual && !self.in_tx && !strip_comments_lead(sql).starts_with("begin") {
             self.conn.execute("BEGIN").await?;
             self.in_tx = true;
         }
         if is_select_like(sql) {
-            // 커서용 짧은 트랜잭션. 사용자 트랜잭션(Manual, 또는 Auto 에서 직접 BEGIN) 안이면 savepoint 로 보호.
-            let declare: String = if self.user_tx() {
-                format!("SAVEPOINT dbtool_sp; DECLARE {CURSOR} NO SCROLL CURSOR FOR {}", strip_trailing_semicolon(sql))
-            } else {
-                format!("BEGIN; DECLARE {CURSOR} NO SCROLL CURSOR FOR {}", strip_trailing_semicolon(sql))
-            };
-            match self.conn.execute(declare.as_str()).await {
+            match self.declare(strip_trailing_semicolon(sql)).await {
                 Ok(_) => {
-                    self.cursor_open = true;
-                    self.cursor_used = Instant::now();
-                    self.idle_closed = false;
                     self.cursor_sql = sql.to_string();
                     self.columns.clear();
+                    self.fetched = 0;
                     let mut r = self.fetch(limit).await?;
                     r.elapsed_ms = start.elapsed().as_millis() as u64;
                     return Ok(r);
@@ -196,6 +191,20 @@ impl PgSession {
         let r = self.run_direct(sql, limit, start).await;
         self.track_tx_keywords(sql);
         r
+    }
+
+    /// 커서용 짧은 트랜잭션. 사용자 트랜잭션(Manual, 또는 Auto 에서 직접 BEGIN) 안이면 savepoint 로 보호.
+    async fn declare(&mut self, query: &str) -> Result<(), sqlx::Error> {
+        let declare = if self.user_tx() {
+            format!("SAVEPOINT dbtool_sp; DECLARE {CURSOR} NO SCROLL CURSOR FOR {query}")
+        } else {
+            format!("BEGIN; DECLARE {CURSOR} NO SCROLL CURSOR FOR {query}")
+        };
+        self.conn.execute(declare.as_str()).await?;
+        self.cursor_open = true;
+        self.cursor_used = Instant::now();
+        self.idle_closed = false;
+        Ok(())
     }
 
     async fn run_direct(&mut self, sql: &str, limit: usize, start: Instant) -> AppResult<QueryResult> {
@@ -228,13 +237,18 @@ impl PgSession {
     }
 
     /// 열린 커서에서 다음 `limit`행을 가져온다.
+    /// 오래 안 써서 닫은 커서면 같은 문장을 읽은 행 다음부터 (OFFSET) 다시 연다 (ORDER BY 가 없으면 순서는 DB 가 정한다)
     pub async fn fetch(&mut self, limit: usize) -> AppResult<QueryResult> {
+        if !self.cursor_open && self.idle_closed {
+            let q = format!("SELECT * FROM (\n{}\n) AS qurry_page OFFSET {}", strip_trailing_semicolon(&self.cursor_sql), self.fetched);
+            if let Err(e) = self.declare(&q).await {
+                self.rollback().await;
+                self.idle_closed = false;
+                return Err(AppError::Msg(format!("The result was closed after {} s without use, and reopening it failed ({e}). Run the query again to load more rows.", CURSOR_IDLE.as_secs())));
+            }
+        }
         if !self.cursor_open {
-            return Err(AppError::Msg(if self.idle_closed {
-                format!("The result was closed after {} s without use (it kept a transaction open). Run the query again to load more rows.", CURSOR_IDLE.as_secs())
-            } else {
-                "No more rows".into()
-            }));
+            return Err(AppError::Msg("No more rows".into()));
         }
         self.cursor_used = Instant::now();
         let start = Instant::now();
@@ -259,6 +273,7 @@ impl PgSession {
             };
         }
         let done = rows.len() < limit;
+        self.fetched += rows.len();
         let data: Vec<Vec<Value>> = rows.iter().map(|r| (0..r.len()).map(|i| pg_value(r, i)).collect()).collect();
         if done {
             self.close_cursor().await;
@@ -462,6 +477,33 @@ mod tests {
         assert!(is_select_like("  -- c\n /* x */ SELECT 1"));
         assert!(is_select_like("with a as (select 1) select * from a"));
         assert!(!is_select_like("update t set x = 1"));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn fetch_after_idle_close() {
+        let p = pool().await;
+        let mut s = PgSession::open(&p).await.unwrap();
+        let r1 = s.run("select g from generate_series(1,1200) g order by g -- tail comment", 500).await.unwrap();
+        assert_eq!((r1.rows.len(), r1.truncated), (500, true));
+        // 오래 안 써서 닫힌 뒤 (트랜잭션도 끝난다)
+        assert!(s.close_idle_cursor(std::time::Duration::ZERO).await);
+        let state: String = sqlx::query_scalar("select state from pg_stat_activity where pid = $1").bind(s.pid).fetch_one(&p).await.unwrap();
+        assert_eq!(state, "idle");
+        // 더 불러오면 읽은 다음 행부터 이어진다
+        let r2 = s.fetch(500).await.unwrap();
+        assert_eq!((r2.rows.len(), r2.truncated, r2.columns.len()), (500, true, 1));
+        assert_eq!(r2.rows[0][0], Value::from(501));
+        assert!(s.close_idle_cursor(std::time::Duration::ZERO).await);
+        let r3 = s.fetch(500).await.unwrap();
+        assert_eq!((r3.rows.len(), r3.truncated), (200, false));
+        assert_eq!(r3.rows[0][0], Value::from(1001));
+        assert!(s.fetch(500).await.is_err(), "no more rows");
+        // 그 사이 다른 문장을 실행했으면 예전 결과를 다시 열지 않는다
+        s.run("select g from generate_series(1,1200) g", 500).await.unwrap();
+        assert!(s.close_idle_cursor(std::time::Duration::ZERO).await);
+        s.run("set application_name = 'x'", 500).await.unwrap();
+        assert!(s.fetch(500).await.is_err());
     }
 
     #[tokio::test]
