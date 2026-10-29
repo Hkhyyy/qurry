@@ -145,24 +145,35 @@ fn pg_dbname(db: &str) -> String {
     format!("dbname='{}'", db.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
-/// A mysql client command in an SQL file that does something on this computer (the line). A second check: mysql runs with --binary-mode,
-/// which switches these off. Looks for system / tee / pager / source / connect … at the start of a line, and \! \T \P \. \r \e.
+/// Whether this line of an SQL file is a mysql client command that does something on this computer. A second check: mysql runs with --binary-mode,
+/// which switches these off. Looks for system / tee / pager / source / connect … and \! \T \P \. \r \e at the start of a line, where the mysql client
+/// reads them (not inside the data: mysqldump writes a\!b in a string as 'a\\!b').
 /// (psql needs no line check: it runs with \restrict, and an older psql isn't used for plain SQL)
-pub fn local_command(sql: impl std::io::BufRead, kind: DbKind) -> Option<String> {
-    if kind != DbKind::Mysql {
-        return None;
-    }
-    for line in sql.split(b'\n') {
-        let line = String::from_utf8_lossy(&line.ok()?).into_owned();
-        let t = line.trim_start();
-        let word = t.split_whitespace().next().unwrap_or("").to_lowercase();
-        let bad_word = ["system", "tee", "notee", "pager", "nopager", "source", "connect", "edit"].contains(&word.as_str());
-        let bad_slash = t.strip_prefix('\\').is_some_and(|c| c.starts_with(['!', 'T', 'P', '.', 'r', 'e']));
-        if bad_word || bad_slash || t.contains("\\!") {
-            return Some(line);
+fn is_local_command(line: &[u8]) -> bool {
+    let line = String::from_utf8_lossy(line);
+    let t = line.trim_start();
+    let word = t.split_whitespace().next().unwrap_or("").to_lowercase();
+    let bad_word = ["system", "tee", "notee", "pager", "nopager", "source", "connect", "edit"].contains(&word.as_str());
+    let bad_slash = t.strip_prefix('\\').is_some_and(|c| c.starts_with(['!', 'T', 'P', '.', 'r', 'e']));
+    bad_word || bad_slash
+}
+
+/// The first line of the SQL that is_local_command. Read line by line without blocking; stops on cancel
+async fn local_command(mut sql: impl tokio::io::AsyncBufRead + Unpin, job: &Job) -> AppResult<Option<String>> {
+    use tokio::io::AsyncBufReadExt;
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if sql.read_until(b'\n', &mut line).await? == 0 {
+            return Ok(None);
+        }
+        if job.cancelled() {
+            return Err(AppError::Msg(crate::transfer::CANCELLED.into()));
+        }
+        if is_local_command(&line) {
+            return Ok(Some(String::from_utf8_lossy(&line).trim_end().to_string()));
         }
     }
-    None
 }
 
 fn missing(tool: &str) -> AppError {
@@ -303,8 +314,8 @@ async fn feed_psql(mut r: impl tokio::io::AsyncBufRead + Unpin, w: &mut (impl to
 }
 
 /// Stop if the SQL to restore has lines that run commands on this computer (pg_dump · mysqldump don't write such lines)
-fn refuse_local_commands(file: &Path, kind: DbKind) -> AppResult<()> {
-    match local_command(std::io::BufReader::new(std::fs::File::open(file)?), kind) {
+async fn refuse_local_commands(file: &Path, job: &Job) -> AppResult<()> {
+    match local_command(tokio::io::BufReader::with_capacity(256 * 1024, tokio::fs::File::open(file).await?), job).await? {
         Some(line) => Err(AppError::Msg(format!("This file runs commands on your computer, so it was not restored (pg_dump / mysqldump never write these):\n{}", line.chars().take(200).collect::<String>()))),
         None => Ok(()),
     }
@@ -612,7 +623,7 @@ impl AppState {
                     }
                 }
                 DbKind::Mysql => {
-                    refuse_local_commands(&file, DbKind::Mysql)?;
+                    refuse_local_commands(&file, &job).await?;
                     let tool = find_tool("mysql").ok_or_else(|| missing("mysql"))?;
                     let system_off = mysql_has_system_command_option(&tool);
                     let mut cmd = tokio::process::Command::new(tool);
@@ -670,13 +681,21 @@ mod tests {
         assert_eq!(pg_dbname("it's\\"), "dbname='it\\'s\\\\'");
     }
 
-    #[test]
-    fn restore_scripts_with_local_commands_are_refused() {
-        use DbKind::Mysql;
-        assert!(local_command("-- MySQL dump\nCREATE TABLE t (a int);\nINSERT INTO t VALUES (1);\n".as_bytes(), Mysql).is_none());
-        for bad in ["system rm -rf ~", "system\tid", "\\! id", "tee /Users/x/.zshrc", "\\T /tmp/x", "pager sh", "source /etc/passwd", "connect db evil.host"] {
-            assert!(local_command(format!("select 1;\n{bad}\n").as_bytes(), Mysql).is_some(), "{bad}");
+    #[tokio::test]
+    async fn restore_scripts_with_local_commands_are_refused() {
+        let job = Job::new();
+        let found = |sql: String| {
+            let job = job.clone();
+            async move { local_command(sql.as_bytes(), &job).await.unwrap() }
+        };
+        assert!(found("-- MySQL dump\nCREATE TABLE t (a int);\nINSERT INTO t VALUES (1);\n".into()).await.is_none());
+        // mysqldump writes a\!b in a string as 'a\\!b': that is data, not a command
+        assert!(found("INSERT INTO `t` VALUES (1,'a\\\\!b'),(2,'\\\\! ls');\n".into()).await.is_none());
+        for bad in ["system rm -rf ~", "system\tid", "\\! id", "\\! ls", "  \\! ls", "tee /Users/x/.zshrc", "\\T /tmp/x", "pager sh", "source /etc/passwd", "connect db evil.host"] {
+            assert_eq!(found(format!("select 1;\n{bad}\n")).await, Some(bad.to_string()), "{bad}");
         }
+        job.cancel();
+        assert!(local_command("select 1;\n".as_bytes(), &job).await.is_err());
     }
 
     /// Custom archives go straight to the server with pg_restore unless that pg_restore would send settings the server doesn't know
