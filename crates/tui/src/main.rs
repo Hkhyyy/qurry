@@ -2,6 +2,7 @@
 mod app;
 mod complete;
 mod datatools;
+mod designer;
 mod dba;
 mod exec;
 mod find;

@@ -204,6 +204,23 @@ export const subset = {
   preview: (source: string, spec: SubsetSpec) => invoke<SubsetPlan>("subset_preview", { source, spec }),
   copy: (source: string, spec: SubsetSpec, target: string) => invoke<SubsetPlan>("subset_copy", { source, spec, target }),
 };
+/** 객체 만들기 · 고치기 (New ▸ · Modify Table… · Rename…) */
+export interface ColumnDef { name: string; orig?: string | null; dataType: string; nullable: boolean; default?: string | null; autoIncrement: boolean; comment?: string | null }
+export interface IndexDef { name: string; orig?: string | null; columns: string[]; unique: boolean; constraint?: boolean; definition?: string | null }
+export interface ForeignKeyDef { name: string; orig?: string | null; columns: string[]; refSchema: string; refTable: string; refColumns: string[]; onDelete: string; onUpdate: string }
+export interface TableDef { schema: string; name: string; columns: ColumnDef[]; primaryKey: string[]; primaryKeyName?: string | null; indexes: IndexDef[]; foreignKeys: ForeignKeyDef[]; comment?: string | null }
+export type NewObject =
+  | { kind: "database"; name: string; charset: string }
+  | { kind: "schema"; name: string }
+  | { kind: "view"; schema: string; name: string; query: string; materialized: boolean }
+  | { kind: "sequence"; schema: string; name: string; start: number | null; increment: number | null };
+export const ddl = {
+  tableDef: (id: string, schema: string, table: string) => invoke<TableDef>("table_def", { id, schema, table }),
+  table: (id: string, before: TableDef | null, after: TableDef) => invoke<string[]>("table_ddl", { id, before, after }),
+  newObject: (id: string, object: NewObject) => invoke<string[]>("new_object_ddl", { id, object }),
+  rename: (id: string, what: string, schema: string, old: string, newName: string) => invoke<string>("rename_ddl", { id, what, schema, old, new: newName }),
+  run: (id: string, statements: string[]) => invoke<void>("run_ddl", { id, statements }),
+};
 /** 운영 작업 기록: Production Data Source 에서 실행한 변경 (TUI 와 같이 쓴다) */
 export interface AuditEntry { id: string; ts: number; connId: string; connName: string; database?: string; sql: string; rows?: number; error?: string; inTx: boolean; undo?: string; note?: string }
 export const auditLog = (connId: string | null, filter: string, limit = 500) => invoke<AuditEntry[]>("audit_log", { connId, filter, limit });

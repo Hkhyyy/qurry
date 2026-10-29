@@ -34,6 +34,13 @@ GUI — right-click a data source › Tools › Compare & Migrate; TUI — `⌃k
 
 Right-click a database › Tools › Back Up Database… / Restore Database… (TUI: `⌃k`). Runs `pg_dump` / `pg_restore` / `psql` or `mysqldump` / `mysql` from this computer (Homebrew `libpq`, `mysql-client`, Postgres.app and the usual Linux paths are found too; for PostgreSQL the client closest to the server version is used). Passwords go through the environment, SSH tunnels are used, progress shows in the status bar and can be cancelled.
 
+## Create and modify objects (PostgreSQL, MySQL)
+
+Like DataGrip: right-click › **New ▸** Table… / View… / Materialized View… / Sequence… / Schema… / Database…, a table › **Modify Table…** (`⌘F6`), and **Rename…** (`⇧F6`). TUI: `⌃k` › New Table… / Modify Table… (`⌃F6`) / New View… / New Schema… / New Database… / New Sequence… / Rename… (`⇧F6`).
+- The table designer edits columns (name, type, NOT NULL, default, auto-increment / identity, primary key, comment), indexes and foreign keys (ON DELETE / ON UPDATE). The SQL it will run is shown as you edit: `CREATE TABLE` for a new table, the `ALTER` statements for a change. A renamed column keeps its keys, indexes and foreign keys.
+- In the TUI each line is written like SQL: column `email varchar(100) not null default 'x' auto pk comment 'login'`, index `users_email_idx (email) unique`, foreign key `orders_user_fk (user_id) -> users (id) on delete cascade`. Keys: `a` column · `i` index · `f` foreign key · `↩` edit · `d` remove · `p` primary key · `n` name · `c` comment · `F5` run · `o` open in a console.
+- PostgreSQL runs it in one transaction (if a statement fails, nothing changes); MySQL applies each statement right away. Production data sources ask first, and the change is recorded in the production log. **Open in Console** puts the SQL in a console instead.
+
 ## Import data (CSV, TSV, JSON, Excel)
 
 Right-click a table › Import/Export › Import Data from File… (or a schema › Import Data into New Table…); TUI: `⌃k` › Import Data from File…. Reads `.csv`, `.tsv`, `.json` (an array of objects) and Excel `.xlsx` / `.xls` / `.ods` (the first sheet; its first row is the column names). Match file columns to table columns, then everything goes in one transaction — if a row fails, nothing is imported. Excel dates come in as `YYYY-MM-DD [HH:MM:SS]`, whole numbers without `.0`, and empty cells as NULL.

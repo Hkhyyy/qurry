@@ -46,6 +46,8 @@ export const SHORTCUTS: Shortcut[] = [
   { id: "tree.ddlConsole", title: "Open DDL in Console", scope: "tree", keys: ["Mod+Alt+Shift+B"] },
   { id: "tree.copyRef", title: "Copy Reference", scope: "tree", keys: ["Mod+Alt+Shift+C"] },
   { id: "tree.quickDoc", title: "Quick Documentation", scope: "tree", keys: ["F1"] },
+  { id: "tree.modify", title: "Modify Table", scope: "tree", keys: ["Mod+F6"] },
+  { id: "tree.rename", title: "Rename", scope: "tree", keys: ["Shift+F6"] },
   { id: "tree.properties", title: "Data Source Properties", scope: "tree", keys: ["Mod+;"] },
   { id: "tree.newDs", title: "New Data Source", scope: "tree", keys: ["Mod+N"] },
   { id: "tree.duplicate", title: "Duplicate Data Source", scope: "tree", keys: ["Mod+D"] },

@@ -43,6 +43,8 @@ Press **F1** inside `qurry-tui`, or run `qurry-tui --help`, to see the same list
 | `⌥n` | New Workspace… |
 | `⌥⇧N` | Rename Workspace… |
 | `F6` | Cycle Focus (explorer → editor → results) |
+| `⌃F6` | Modify Table… (selected table) |
+| `⇧F6` | Rename… (selected table, view, sequence, schema or database) |
 | `⌥\` | Split Right (focused pane, up to 4) |
 | `⌥-` | Split Down (focused pane, up to 4) |
 | `⌥Tab` | Go to the Next Split |

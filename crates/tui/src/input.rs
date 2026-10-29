@@ -426,6 +426,9 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
     if app.popup.is_some() {
         return popup_key(app, k);
     }
+    if app.designer.is_some() {
+        return crate::designer::key(app, k);
+    }
     // ── 전역 명령 (키맵: keys.rs, 바꾸기: F1) ──
     if let Some(a) = app.keys.lookup(&k) {
         // 탐색기에서 실행 키 = 새로 고침
@@ -1861,6 +1864,39 @@ mod tests {
         h.app.run_action(Action::ChartResult);
         let screen = h.screen(100, 24);
         assert!(screen.contains("Seoul │") && screen.contains("█ 150") && screen.contains("Busan │"), "{screen}");
+    }
+
+    /// ⌃k › New Table: 이름 → 디자이너 (a 컬럼 · p PK · d 지우기), 아래에 CREATE TABLE 이 바로 보인다
+    #[tokio::test]
+    async fn new_table_designer() {
+        let mut h = Harness::new().await;
+        let cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+            "id": "p", "name": "PG", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "d"
+        })).unwrap();
+        h.app.state.store.save(&cfg).unwrap();
+        h.app.reload_conns();
+        h.settle().await;
+        h.app.focus = crate::app::Focus::Tree;
+        h.app.run_action(Action::NewTable);
+        let Some(crate::app::Popup::Input { input, .. }) = &mut h.app.popup else { panic!("no name input") };
+        *input = tui_textarea::TextArea::from(["orders"]);
+        h.key("Enter");
+        h.key("a");
+        let Some(crate::app::Popup::Input { input, .. }) = &mut h.app.popup else { panic!("no column input") };
+        *input = tui_textarea::TextArea::from(["total numeric(10,2) not null default 0"]);
+        h.key("Enter");
+        let d = h.app.designer.as_ref().unwrap();
+        let sql = d.sql.as_ref().unwrap().join("\n");
+        assert!(sql.contains("CREATE TABLE public.orders") && sql.contains("total numeric(10,2) NOT NULL DEFAULT 0") && sql.contains("PRIMARY KEY (id)"), "{sql}");
+        assert!(h.screen(140, 40).contains("New Table"));
+        // id 컬럼의 PK 를 끄고 지우기
+        h.key("Up");
+        h.key("p");
+        h.key("d");
+        let sql = h.app.designer.as_ref().unwrap().sql.as_ref().unwrap().join("\n");
+        assert!(!sql.contains("PRIMARY KEY") && !sql.contains(" id "), "{sql}");
+        h.key("Esc");
+        assert!(h.app.designer.is_none());
     }
 
     /// Production Data Source: 데이터를 바꾸는 문장은 바뀔 행 수를 세어 보여 주고 묻는다 (읽기는 그냥 돈다)

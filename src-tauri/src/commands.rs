@@ -425,6 +425,36 @@ pub async fn subset_copy(state: State<'_, AppState>, source: String, spec: qurry
     state.subset_copy(source, spec, target).await
 }
 
+/// Modify Table…: 지금 구조
+#[tauri::command]
+pub async fn table_def(state: State<'_, AppState>, id: String, schema: String, table: String) -> AppResult<qurry_core::ddl::TableDef> {
+    state.table_def(id, schema, table).await
+}
+
+/// 테이블 DDL 미리보기 (before 가 있으면 ALTER)
+#[tauri::command]
+pub fn table_ddl(state: State<'_, AppState>, id: String, before: Option<qurry_core::ddl::TableDef>, after: qurry_core::ddl::TableDef) -> AppResult<Vec<String>> {
+    state.table_ddl(id, before, after)
+}
+
+/// New ▸ Database · Schema · View · Sequence 의 DDL
+#[tauri::command]
+pub fn new_object_ddl(state: State<'_, AppState>, id: String, object: qurry_core::ddl::NewObject) -> AppResult<Vec<String>> {
+    state.new_object_ddl(id, object)
+}
+
+/// Rename… 의 DDL
+#[tauri::command]
+pub fn rename_ddl(state: State<'_, AppState>, id: String, what: String, schema: String, old: String, new: String) -> AppResult<String> {
+    state.rename_ddl(id, what, schema, old, new)
+}
+
+/// 만든 DDL 실행 (PG: 한 트랜잭션)
+#[tauri::command]
+pub async fn run_ddl(state: State<'_, AppState>, id: String, statements: Vec<String>) -> AppResult<()> {
+    state.run_ddl(id, statements).await
+}
+
 /// Production 확인: 이 문장이 바꿀 행 수
 #[tauri::command]
 pub async fn preview_impact(state: State<'_, AppState>, id: String, sql: String) -> AppResult<Option<i64>> {

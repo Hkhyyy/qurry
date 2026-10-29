@@ -73,6 +73,8 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `⌥⇧⌘G` | Copy DDL to clipboard |
 | `⌥⇧⌘B` | Open DDL in console |
 | `⌥⇧⌘C` | Copy reference |
+| `⌘F6` | Modify table (columns, keys, indexes, foreign keys) |
+| `⇧F6` | Rename table / view / sequence / schema / database |
 | `F1` | Quick documentation |
 | `⌘;` | Data source properties |
 | `⌘n` | New data source |

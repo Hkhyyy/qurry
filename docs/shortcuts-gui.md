@@ -73,6 +73,8 @@ Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…
 | `⌥⇧⌘G` | Copy DDL to clipboard |
 | `⌥⇧⌘B` | Open DDL in console |
 | `⌥⇧⌘C` | Copy reference |
+| `⌘F6` | Modify table (columns, keys, indexes, foreign keys) |
+| `⇧F6` | Rename table / view / sequence / schema / database |
 | `F1` | Quick documentation |
 | `⌘;` | Data source properties |
 | `⌘n` | New data source |

@@ -196,6 +196,35 @@ const handlers: Record<string, (a: any) => unknown> = {
     },
     warnings: ["tags (text[]) will be NULL — this type isn't generated"],
   }),
+  table_def: (a: any) => ({
+    schema: a.schema, name: a.table, primaryKey: ["id"], primaryKeyName: `${a.table}_pkey`, comment: "Customers",
+    columns: [
+      { name: "id", orig: "id", dataType: "bigint", nullable: false, default: null, autoIncrement: true, comment: null },
+      { name: "email", orig: "email", dataType: "character varying(100)", nullable: false, default: null, autoIncrement: false, comment: "login" },
+      { name: "status", orig: "status", dataType: "text", nullable: true, default: "'active'::text", autoIncrement: false, comment: null },
+      { name: "org_id", orig: "org_id", dataType: "integer", nullable: true, default: null, autoIncrement: false, comment: null },
+    ],
+    indexes: [{ name: `${a.table}_email_key`, orig: `${a.table}_email_key`, columns: ["email"], unique: true, constraint: true, definition: null }, { name: `${a.table}_lower_idx`, orig: `${a.table}_lower_idx`, columns: [], unique: false, definition: `CREATE INDEX ${a.table}_lower_idx ON public.${a.table} USING btree (lower(email))` }],
+    foreignKeys: [{ name: `${a.table}_org_id_fkey`, orig: `${a.table}_org_id_fkey`, columns: ["org_id"], refSchema: "public", refTable: "orgs", refColumns: ["id"], onDelete: "CASCADE", onUpdate: "NO ACTION" }],
+  }),
+  table_ddl: (a: any) => {
+    const t = a.after;
+    if (!t.name) throw "Give the table a name";
+    if (!t.columns.length) throw "Add at least one column";
+    if (!a.before) return [`CREATE TABLE ${t.schema}.${t.name} (\n${t.columns.map((c: any) => `    ${c.name} ${c.dataType}${c.nullable ? "" : " NOT NULL"}`).join(",\n")}${t.primaryKey.length ? `,\n    PRIMARY KEY (${t.primaryKey.join(", ")})` : ""}\n)`];
+    const out: string[] = [];
+    if (a.before.name !== t.name) out.push(`ALTER TABLE ${t.schema}.${a.before.name} RENAME TO ${t.name}`);
+    for (const c of t.columns) if (!c.orig) out.push(`ALTER TABLE ${t.schema}.${t.name} ADD COLUMN ${c.name} ${c.dataType}${c.nullable ? "" : " NOT NULL"}`);
+    for (const c of a.before.columns) if (!t.columns.some((x: any) => x.orig === c.name)) out.push(`ALTER TABLE ${t.schema}.${t.name} DROP COLUMN ${c.name}`);
+    return out;
+  },
+  new_object_ddl: (a: any) => {
+    const o = a.object;
+    if (!o.name) throw `Give the ${o.kind} a name`;
+    return [o.kind === "database" ? `CREATE DATABASE ${o.name}` : o.kind === "schema" ? `CREATE SCHEMA ${o.name}` : o.kind === "view" ? `CREATE ${o.materialized ? "MATERIALIZED " : ""}VIEW ${o.schema}.${o.name} AS\n${o.query}` : `CREATE SEQUENCE ${o.schema}.${o.name}`];
+  },
+  rename_ddl: (a: any) => `ALTER TABLE ${a.schema}.${a.old} RENAME TO ${a.new}`,
+  run_ddl: () => new Promise((ok) => setTimeout(() => ok(null), 300)),
   subset_preview: () => ({
     total: 9,
     tables: [

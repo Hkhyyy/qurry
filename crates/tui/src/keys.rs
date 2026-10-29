@@ -21,6 +21,8 @@ pub const DEFAULT_KEYS: &[(Action, &[&str])] = &[
     (Action::WsNew, &["Alt+N"]),
     (Action::WsRename, &["Alt+Shift+N"]),
     (Action::CycleFocus, &["F6"]),
+    (Action::ModifyTable, &["Ctrl+F6"]),
+    (Action::RenameObject, &["Shift+F6"]),
     (Action::SplitRight, &["Alt+\\"]),
     (Action::SplitDown, &["Alt+-"]),
     (Action::OtherSplit, &["Alt+Tab"]),

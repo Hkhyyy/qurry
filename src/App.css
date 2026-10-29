@@ -617,3 +617,12 @@ html, body, #root, * { overscroll-behavior: none; }
 .chart-tip b { display: block; margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chart-dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
 .chart-empty { padding: var(--ui-sp-6); color: var(--ui-text-muted); text-align: center; }
+
+/* 테이블 만들기 · 고치기 */
+.ui-modal.designer { width: min(1100px, 94vw); }
+.designer-head { display: grid; grid-template-columns: 260px 1fr; gap: var(--ui-sp-4); }
+.designer-body { max-height: 38vh; overflow: auto; border: 1px solid var(--ui-border); border-radius: 6px; margin: var(--ui-sp-2) 0; }
+.designer-body td { padding: 2px 4px; }
+.designer-body .ui-input { width: 100%; min-width: 70px; }
+.designer-add { padding: var(--ui-sp-2); }
+.designer-sql { max-height: 22vh; overflow: auto; }

@@ -34,6 +34,13 @@ GUI — Data Source 우클릭 › Tools › Compare & Migrate · TUI — `⌃k` 
 
 데이터베이스 우클릭 › Tools › Back Up Database… / Restore Database… (TUI: `⌃k`). 이 컴퓨터의 `pg_dump` / `pg_restore` / `psql` 또는 `mysqldump` / `mysql` 을 실행합니다 (Homebrew `libpq`, `mysql-client`, Postgres.app, 리눅스의 흔한 위치도 찾습니다. PostgreSQL 은 서버 버전에 가장 가까운 클라이언트를 씁니다). 비밀번호는 환경 변수로 넘기고, SSH 터널을 쓰고, 진행 상황은 상태 표시줄에 나오며 취소할 수 있습니다.
 
+## 객체 만들기 · 고치기 (PostgreSQL, MySQL)
+
+DataGrip 처럼: 우클릭 › **New ▸** Table… / View… / Materialized View… / Sequence… / Schema… / Database…, 테이블 › **Modify Table…** (`⌘F6`), **Rename…** (`⇧F6`). TUI: `⌃k` › New Table… / Modify Table… (`⌃F6`) / New View… / New Schema… / New Database… / New Sequence… / Rename… (`⇧F6`).
+- 테이블 디자이너는 컬럼 (이름, 타입, NOT NULL, 기본값, 자동 번호 / identity, PK, 설명), 인덱스, 외래 키 (ON DELETE / ON UPDATE) 를 고칩니다. 고치는 동안 실행될 SQL 이 바로 보입니다: 새 테이블은 `CREATE TABLE`, 바꾸면 `ALTER` 문장들. 이름을 바꾼 컬럼은 키 · 인덱스 · 외래 키가 그대로 따라갑니다.
+- TUI 에서는 한 줄을 SQL 처럼 씁니다: 컬럼 `email varchar(100) not null default 'x' auto pk comment 'login'`, 인덱스 `users_email_idx (email) unique`, 외래 키 `orders_user_fk (user_id) -> users (id) on delete cascade`. 키: `a` 컬럼 · `i` 인덱스 · `f` 외래 키 · `↩` 고치기 · `d` 지우기 · `p` PK · `n` 이름 · `c` 설명 · `F5` 실행 · `o` 콘솔로 열기.
+- PostgreSQL 은 한 트랜잭션으로 실행하고 (한 문장이라도 실패하면 아무것도 안 바뀜), MySQL 은 문장마다 바로 반영됩니다. Production Data Source 는 먼저 묻고, 운영 작업 기록에 남습니다. **Open in Console** 은 실행하는 대신 SQL 을 콘솔에 넣습니다.
+
 ## 데이터 가져오기 (CSV, TSV, JSON, Excel)
 
 테이블 우클릭 › Import/Export › Import Data from File… (또는 스키마 › Import Data into New Table…) · TUI: `⌃k` › Import Data from File…. `.csv`, `.tsv`, `.json` (객체 배열), Excel `.xlsx` / `.xls` / `.ods` (첫 시트, 첫 줄이 컬럼 이름) 를 읽습니다. 파일 컬럼을 테이블 컬럼에 짝지으면 전부 트랜잭션 하나로 넣습니다 — 한 행이라도 실패하면 아무것도 들어가지 않습니다. Excel 날짜는 `YYYY-MM-DD [HH:MM:SS]`, 정수는 `.0` 없이, 빈 칸은 NULL 로 들어갑니다.

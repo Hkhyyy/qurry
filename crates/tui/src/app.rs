@@ -367,6 +367,13 @@ pub enum Action {
     GenerateTestData,
     CopyRelatedRows,
     ChartResult,
+    NewTable,
+    ModifyTable,
+    NewView,
+    NewSchema,
+    NewDatabase,
+    NewSequence,
+    RenameObject,
     CancelTransfer,
     ToggleExplorer,
     ToggleOutput,
@@ -446,6 +453,13 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::DbaReports, "Database Admin… (sessions & locks, slow queries, sizes, indexes, vacuum, server, privileges)", ""),
     (Action::ImportData, "Import Data from File… (CSV, TSV, JSON, Excel)", ""),
     (Action::GenerateTestData, "Generate Test Data… (fill the selected table with realistic rows)", ""),
+    (Action::NewTable, "New Table… (columns, keys, indexes, foreign keys — SQL shown before it runs)", ""),
+    (Action::ModifyTable, "Modify Table… (change columns, keys, indexes, foreign keys → ALTER)", ""),
+    (Action::NewView, "New View…", ""),
+    (Action::NewSchema, "New Schema… (PostgreSQL)", ""),
+    (Action::NewDatabase, "New Database…", ""),
+    (Action::NewSequence, "New Sequence… (PostgreSQL)", ""),
+    (Action::RenameObject, "Rename… (table, view, sequence, schema, database)", ""),
     (Action::ChartResult, "Chart Result (bars: sum of a number column by the first text column)", ""),
     (Action::CopyRelatedRows, "Copy Related Rows To… (rows + foreign-key related rows into another data source, personal data masked)", ""),
     (Action::CancelTransfer, "Cancel Export/Import", ""),
@@ -583,6 +597,8 @@ pub struct App {
     pub analyze_next: bool,
     /// 여러 단계 고르기 중 (비교·마이그레이션)
     pub flow: Option<crate::migrate::Flow>,
+    /// 테이블 만들기 · 고치기 창 (crate::designer). 입력 · 확인 팝업이 그 위에 뜬다
+    pub designer: Option<crate::designer::Designer>,
     pub focus: Focus,
     pub explorer: bool,
     pub popup: Option<Popup>,
@@ -678,6 +694,7 @@ impl App {
             jobs: vec![],
             analyze_next: false,
             flow: None,
+            designer: None,
             focus: Focus::Tree,
             explorer: true,
             popup: None,
@@ -784,7 +801,7 @@ impl App {
         self.workspaces[cur].conns.extend(orphans);
     }
 
-    fn default_db(&self, conn: &str) -> String {
+    pub(crate) fn default_db(&self, conn: &str) -> String {
         self.conn(conn).map(|c| sql::default_db(&c.config)).unwrap_or_default()
     }
 
@@ -2664,6 +2681,13 @@ impl App {
             Action::GenerateTestData => self.generate_data_start(),
             Action::CopyRelatedRows => self.copy_rows_start(),
             Action::ChartResult => self.chart_result(),
+            Action::NewTable => self.new_table(),
+            Action::ModifyTable => self.modify_table(),
+            Action::NewView => self.new_object("view"),
+            Action::NewSchema => self.new_object("schema"),
+            Action::NewDatabase => self.new_object("database"),
+            Action::NewSequence => self.new_object("sequence"),
+            Action::RenameObject => self.rename_object(),
             Action::Snippets => self.snippets_palette(),
             Action::SaveSnippet => self.save_snippet(),
             Action::CopyInList => {

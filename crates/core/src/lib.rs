@@ -16,6 +16,7 @@ pub mod audit;
 pub mod backup;
 pub mod db;
 pub mod dba;
+pub mod ddl;
 pub mod erd;
 pub mod error;
 pub mod fake;

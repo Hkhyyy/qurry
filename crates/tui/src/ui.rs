@@ -94,6 +94,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     };
     draw_tabs(f, app, right);
     draw_status(f, app, status);
+    if app.designer.is_some() {
+        crate::designer::draw(f, app, f.area());
+    }
     if app.popup.is_some() {
         draw_popup(f, app);
     }
