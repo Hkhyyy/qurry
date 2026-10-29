@@ -6,6 +6,7 @@ import { DEFAULT_EXEC, ExecSettings, planExecution } from "../lib/execPlan";
 import { ConsoleEditor, EditorApi, RunRequest } from "./ConsoleEditor";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { ResultGrid } from "./ResultGrid";
+import { RunningBar } from "./RunningBar";
 import { IcClock, IcGear, IcReload, IcStop } from "../ui/icons";
 import { EmptyState, IconButton, Select, Spacer, TabItem, TabStrip, Table, Td, Th, ToolButton, Toolbar, ToolbarSep } from "../ui";
 
@@ -302,6 +303,7 @@ export function ConsolePane(p: Props) {
               )}
             </div>
             <div className="result-area">
+              <RunningBar running={p.running} onCancel={p.onCancel} />
               {p.activeResult === "output" && (
                 <div className="output-log">
                   {p.output.length === 0 && <EmptyState>Execute a statement ({isMac ? "⌘↩" : "Ctrl+Enter"}) to see the output.</EmptyState>}

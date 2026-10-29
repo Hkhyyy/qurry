@@ -196,6 +196,8 @@ a { color: var(--c-548af7); cursor: pointer; }
 .exec-highlight { background: rgba(53,116,240,.25); }
 
 .result-area { flex: 1; min-height: 0; position: relative; background: var(--bg); }
+.running-bar { position: absolute; z-index: 5; top: 8px; right: 12px; display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); white-space: nowrap; }
+.running-time { font-variant-numeric: tabular-nums; }
 .grid-scroll { position: absolute; inset: 0; overflow: auto; outline: none; font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; }
 
 .hint { color: var(--muted); font-size: 12px; margin: 10px 0 0 102px; }

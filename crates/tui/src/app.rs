@@ -625,6 +625,8 @@ pub struct App {
     /// 값 · json 키 추천 (자리별, 잠깐 둔다) · 불러오는 중인 자리
     hints: HashMap<String, (std::time::Instant, Vec<qurry_core::hints::Hint>)>,
     hints_loading: HashSet<String>,
+    /// 실행 중인 탭이 언제 시작했는지 (그릴 때 맞춘다)
+    run_since: HashMap<u64, std::time::Instant>,
     /// 명령 단축키 (keymap.json 의 "tui")
     pub keys: crate::keys::Keymap,
     /// 새 버전이 있으면 그 버전 (상태줄에 알린다)
@@ -719,6 +721,7 @@ impl App {
             completion_loading: HashSet::new(),
             hints: HashMap::new(),
             hints_loading: HashSet::new(),
+            run_since: HashMap::new(),
             keys: crate::keys::Keymap::new(&user_keys),
             update: None,
             restart: false,
@@ -3172,6 +3175,38 @@ impl App {
             TabKind::Dba(d) => d.grid.as_mut(),
             TabKind::Text(_) => None,
         }
+    }
+}
+
+/// 12.3 s · 1 m 05 s (GUI 의 RunningBar 와 같게)
+pub fn elapsed_text(ms: u64) -> String {
+    if ms < 60_000 {
+        format!("{:.1} s", ms as f64 / 1000.0)
+    } else {
+        let s = ms / 1000;
+        format!("{} m {:02} s", s / 60, s % 60)
+    }
+}
+
+impl App {
+    /// 이 탭이 실행 · 불러오는 중이면 지난 시간 (처음 본 때부터)
+    pub fn run_elapsed(&mut self, idx: usize) -> Option<std::time::Duration> {
+        let t = self.tabs.get(idx)?;
+        let running = match &t.kind {
+            TabKind::Console(c) => c.running,
+            TabKind::Table(tt) => tt.running,
+            _ => false,
+        };
+        if !running {
+            self.run_since.remove(&t.id);
+            return None;
+        }
+        Some(self.run_since.entry(t.id).or_insert_with(std::time::Instant::now).elapsed())
+    }
+
+    /// 실행 중인 탭이 있으면 지난 시간을 다시 그려야 한다
+    pub fn any_running(&self) -> bool {
+        self.tabs.iter().any(|t| matches!(&t.kind, TabKind::Console(c) if c.running) || matches!(&t.kind, TabKind::Table(tt) if tt.running))
     }
 }
 

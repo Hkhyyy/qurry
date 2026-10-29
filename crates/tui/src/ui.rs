@@ -337,6 +337,8 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
     use crate::app::Action as A;
     let (k_out, k_run, k_commit, k_rollback, k_cancel, k_submit) = (k(A::ToggleOutput), k(A::Execute), k(A::Commit), k(A::Rollback), k(A::Cancel), k(A::Submit));
     let finding = focused && matches!(app.popup, Some(Popup::Find(_)));
+    // 실행 · 불러오기가 얼마나 걸리고 있는지 (0.5초마다 다시 그린다)
+    let took = app.run_elapsed(idx).map(|d| crate::app::elapsed_text(d.as_millis() as u64));
     let tab = &mut app.tabs[idx];
     let db = tab.db.clone();
     let title = tab.title.clone();
@@ -354,7 +356,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 " {db} · Tx: {}{}{}{} ",
                 if c.tx_manual { "Manual" } else { "Auto" },
                 if c.in_tx { format!(" (pending — {k_commit} commit / {k_rollback} rollback)") } else { String::new() },
-                if c.running { format!(" · running… {k_cancel} cancel") } else { String::new() },
+                if c.running { format!(" · running {} · {k_cancel} cancel", took.as_deref().unwrap_or("")) } else { String::new() },
                 if ro { " · read-only" } else { "" }
             );
             let editing = focus == Focus::Editor;
@@ -433,7 +435,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 let t = format!(" {}.{} — {rows}{}{}{} ", tt.schema, tt.table, if tt.pk.is_empty() { " · no PK (read-only)" } else { "" }, if ro { " · read-only" } else { "" }, pend);
                 g.render(f, grid, t, focus == Focus::Grid);
             } else {
-                let msg = if tt.error.is_some() { "" } else { "Loading…" };
+                let msg = if tt.error.is_some() { String::new() } else { format!("Loading… {}", took.as_deref().unwrap_or("")) };
                 f.render_widget(Paragraph::new(msg).block(panel(format!(" {}.{} ", tt.schema, tt.table), focused)), grid);
             }
         }

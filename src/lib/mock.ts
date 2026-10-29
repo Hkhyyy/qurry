@@ -307,6 +307,9 @@ const handlers: Record<string, (a: any) => unknown> = {
   invoke: async (cmd: string, args: unknown) => {
     const h = handlers[cmd];
     if (!h) throw `mock: ${cmd} not implemented`;
+    // 오래 걸리는 쿼리 흉내: pg_sleep(n)
+    const sleep = cmd === "run_query" && /pg_sleep\((\d+(?:\.\d+)?)\)/.exec((args as any)?.sql ?? "");
+    if (sleep) await new Promise((r) => setTimeout(r, Number(sleep[1]) * 1000));
     return h(args);
   },
   transformCallback: () => 0,

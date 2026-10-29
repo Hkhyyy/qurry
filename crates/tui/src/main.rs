@@ -154,6 +154,8 @@ async fn run(term: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: Arc<
                     a(&mut app);
                 }
             }
+            // 실행 중이면 지난 시간을 다시 그린다
+            _ = tokio::time::sleep(std::time::Duration::from_millis(500)), if app.any_running() => {}
         }
         // 워크스페이스를 만들고 · 지우고 · 이름 · Data Source 를 바꿨으면 GUI 와 같이 쓰는 목록에
         app.ws_push();
