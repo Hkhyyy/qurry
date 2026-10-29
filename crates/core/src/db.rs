@@ -73,7 +73,8 @@ pub async fn connect_via(cfg: &ConnectionConfig, password: Option<&str>, tunnel_
                 opts = opts.password(p);
             }
             if cfg.read_only {
-                opts = opts.options([("default_transaction_read_only", "on")]);
+                // 문자열 안의 \ 해석을 서버 설정에 맡기지 않는다 (guard 가 읽는 규칙과 같게)
+                opts = opts.options([("default_transaction_read_only", "on"), ("standard_conforming_strings", "on")]);
             }
             // SSH/SSL 탭의 SSL
             if let Some(ssl) = cfg.active_ssl() {

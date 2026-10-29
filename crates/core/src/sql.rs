@@ -98,6 +98,27 @@ pub fn literal(kind: DbKind, v: Option<&str>) -> String {
 /// 세미콜론으로 문장을 나눈다 (문자열·주석·PG 달러 인용 건너뜀). Redis 는 한 줄 = 명령. (start, end) 바이트 범위.
 /// 서버와 같은 규칙으로 읽어야 한다 (읽기 전용 검사가 이걸로 문장 수를 센다):
 /// MySQL 은 `--` 뒤에 공백이 있어야 주석이고 `/*! … */` 는 실행되는 코드, PG 는 주석이 중첩되고 E'…' 안에서 \ 가 이스케이프
+/// 문자열 안의 \ 가 이스케이프인 DB (MySQL · ClickHouse). guard::scan 도 같은 규칙
+pub(crate) fn backslash_escapes(kind: DbKind) -> bool {
+    matches!(kind, DbKind::Mysql | DbKind::Clickhouse)
+}
+
+/// # 로 시작하는 줄 주석인지: MySQL 은 늘, ClickHouse 는 "# " · "#!" (next = # 다음 바이트, 끝이면 0)
+pub(crate) fn hash_comment(kind: DbKind, next: u8) -> bool {
+    kind == DbKind::Mysql || (kind == DbKind::Clickhouse && matches!(next, b' ' | b'!' | b'\n' | b'\t' | 0))
+}
+
+/// PostgreSQL 달러 인용 태그 ($$ · $tag$): 태그는 이름 글자 (비ASCII 포함), 숫자로 시작하지 않는다
+pub(crate) fn is_dollar_tag(tag: &str) -> bool {
+    let inner = &tag[1..tag.len() - 1];
+    inner.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || !ch.is_ascii()) && !inner.starts_with(|ch: char| ch.is_ascii_digit())
+}
+
+/// PG E'…' 인지: ' 바로 앞이 e/E 이고 그 앞은 이름 글자가 아니다 (name' 은 아니다)
+pub(crate) fn is_e_string(b: &[u8], i: usize) -> bool {
+    i > 0 && (b[i - 1] == b'e' || b[i - 1] == b'E') && (i < 2 || !(b[i - 2].is_ascii_alphanumeric() || b[i - 2] == b'_' || b[i - 2] >= 0x80))
+}
+
 pub fn split_statements(text: &str, kind: DbKind) -> Vec<(usize, usize)> {
     if kind == DbKind::Redis {
         let mut out = Vec::new();
@@ -116,7 +137,7 @@ pub fn split_statements(text: &str, kind: DbKind) -> Vec<(usize, usize)> {
     }
     let b = text.as_bytes();
     let n = b.len();
-    let backslash = kind == DbKind::Mysql;
+    let backslash = backslash_escapes(kind);
     let (mut out, mut start, mut i) = (Vec::new(), 0usize, 0usize);
     while i < n {
         let c = b[i];
@@ -125,7 +146,7 @@ pub fn split_statements(text: &str, kind: DbKind) -> Vec<(usize, usize)> {
             i = text[i..].find('\n').map(|j| i + j + 1).unwrap_or(n);
             continue;
         }
-        if c == b'#' && kind == DbKind::Mysql {
+        if c == b'#' && hash_comment(kind, d) {
             i = text[i..].find('\n').map(|j| i + j + 1).unwrap_or(n);
             continue;
         }
@@ -158,7 +179,7 @@ pub fn split_statements(text: &str, kind: DbKind) -> Vec<(usize, usize)> {
         }
         if c == b'\'' || c == b'"' || c == b'`' {
             // PG E'…' 문자열은 \ 가 이스케이프
-            let e_string = kind == DbKind::Postgres && c == b'\'' && i > 0 && (b[i - 1] == b'e' || b[i - 1] == b'E') && (i < 2 || !(b[i - 2].is_ascii_alphanumeric() || b[i - 2] == b'_' || b[i - 2] >= 0x80));
+            let e_string = kind == DbKind::Postgres && c == b'\'' && is_e_string(b, i);
             let mut j = i + 1;
             while j < n {
                 // MySQL 백틱 이름 안의 \ 는 이스케이프가 아니다
@@ -183,7 +204,7 @@ pub fn split_statements(text: &str, kind: DbKind) -> Vec<(usize, usize)> {
             let tag_end = rest[1..].find('$').map(|j| j + 2);
             if let Some(te) = tag_end {
                 let tag = &rest[..te];
-                if tag[1..te - 1].chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') && !tag[1..].starts_with(|ch: char| ch.is_ascii_digit()) {
+                if is_dollar_tag(tag) {
                     i = text[i + te..].find(tag).map(|j| i + te + j + te).unwrap_or(n);
                     continue;
                 }
@@ -279,7 +300,7 @@ fn script_cuts(text: &str, s: usize, e: usize, kind: DbKind) -> Vec<usize> {
             continue;
         }
         // 주석 (줄 끝 / 블록) — split_statements 와 같은 규칙
-        if (c == b'-' && d == b'-' && (kind != DbKind::Mysql || i + 2 >= e || b[i + 2].is_ascii_whitespace())) || (c == b'#' && kind == DbKind::Mysql) {
+        if (c == b'-' && d == b'-' && (kind != DbKind::Mysql || i + 2 >= e || b[i + 2].is_ascii_whitespace())) || (c == b'#' && hash_comment(kind, d)) {
             i = text[i..e].find('\n').map(|j| i + j).unwrap_or(e);
             continue;
         }
@@ -307,10 +328,10 @@ fn script_cuts(text: &str, s: usize, e: usize, kind: DbKind) -> Vec<usize> {
         line_has_code = true;
         // 문자열 · 따옴표 이름 · 달러 인용 = 값 하나
         if c == b'\'' || c == b'"' || c == b'`' {
-            let e_string = kind == DbKind::Postgres && c == b'\'' && i > 0 && (b[i - 1] == b'e' || b[i - 1] == b'E');
+            let e_string = kind == DbKind::Postgres && c == b'\'' && is_e_string(b, i);
             let mut j = i + 1;
             while j < e {
-                if ((kind == DbKind::Mysql && c != b'`') || e_string) && b[j] == b'\\' {
+                if ((backslash_escapes(kind) && c != b'`') || e_string) && b[j] == b'\\' {
                     j += 2;
                     continue;
                 }
@@ -332,7 +353,7 @@ fn script_cuts(text: &str, s: usize, e: usize, kind: DbKind) -> Vec<usize> {
             let rest = &text[i..e];
             if let Some(te) = rest[1..].find('$').map(|j| j + 2) {
                 let tag = &rest[..te];
-                if tag[1..te - 1].chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') && !tag[1..].starts_with(|ch: char| ch.is_ascii_digit()) {
+                if is_dollar_tag(tag) {
                     i = text[i + te..e].find(tag).map(|j| i + te + j + te).unwrap_or(e);
                     prev = "$$".into();
                     prev_punct = false;

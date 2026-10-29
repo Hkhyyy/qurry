@@ -830,6 +830,16 @@ fn raw_text(v: &RV) -> Value {
     }
 }
 
+/// 키 상세에서 보이는 문자열 값의 최대 바이트 (넘으면 앞부분만, truncated)
+pub const STRING_PREVIEW_MAX: i64 = 1 << 20;
+
+/// 키가 차지하는 메모리 (바이트, 없으면 0). 값을 읽기 전에 크기를 볼 때
+pub async fn memory_usage(m: &RedisConn, key: &[u8]) -> AppResult<i64> {
+    let mut mgr = m.clone();
+    let v: Option<i64> = redis::cmd("MEMORY").arg("USAGE").arg(key).query_async(&mut mgr).await.map_err(err)?;
+    Ok(v.unwrap_or(0))
+}
+
 pub async fn key_detail(m: &RedisConn, key: &str, limit: usize) -> AppResult<KeyDetail> {
     let mut mgr = m.clone();
     let k = key.as_bytes();
@@ -852,6 +862,11 @@ pub async fn key_detail(m: &RedisConn, key: &str, limit: usize) -> AppResult<Key
     let length: i64 = if len_cmd.is_empty() { 0 } else { redis::cmd(len_cmd).arg(k).query_async(&mut mgr).await.map_err(err)? };
     let lim = limit as i64;
     let value = match ty.as_str() {
+        // 큰 문자열은 앞부분만 (통째로 읽으면 MCP · 앱 메모리를 다 쓴다)
+        "string" if length > STRING_PREVIEW_MAX => {
+            let v: RV = redis::cmd("GETRANGE").arg(k).arg(0).arg(STRING_PREVIEW_MAX - 1).query_async(&mut mgr).await.map_err(err)?;
+            raw_text(&v)
+        }
         "string" => {
             let v: RV = redis::cmd("GET").arg(k).query_async(&mut mgr).await.map_err(err)?;
             raw_text(&v)
@@ -917,7 +932,7 @@ pub async fn key_detail(m: &RedisConn, key: &str, limit: usize) -> AppResult<Key
         Value::Array(a) => a.len() as i64,
         _ => length,
     };
-    let truncated = ty_is_collection(&value) && shown < length;
+    let truncated = (ty_is_collection(&value) && shown < length) || (ty == "string" && length > STRING_PREVIEW_MAX);
     Ok(KeyDetail { ty, ttl, length, memory, encoding, value, truncated })
 }
 fn ty_is_collection(v: &Value) -> bool {
@@ -974,6 +989,28 @@ mod tests {
         assert!(parse_command("GET \"x").is_err());
         assert_eq!(quote_arg("a b"), "\"a b\"");
         assert_eq!(quote_arg("user:1"), "user:1");
+    }
+
+    /// MCP 읽기: 큰 값은 읽기 전에 거부하고, 키 상세는 큰 문자열의 앞부분만 읽는다
+    #[tokio::test]
+    #[ignore]
+    async fn redis_big_values_are_not_read_whole() {
+        let dir = std::env::temp_dir().join(format!("qurry-rbig-{}", uuid::Uuid::new_v4()));
+        let st = crate::open_state(Some(dir)).unwrap();
+        st.save_connection(cfg("db4"), None, None).await.unwrap();
+        let pool = crate::db::connect(&cfg("db4"), None).await.expect("connect");
+        let Pool::Redis(m, _) = &pool else { panic!() };
+        let mut c = m.clone();
+        let big = "x".repeat(17 << 20);
+        let _: () = redis::cmd("SET").arg("qurry:big").arg(&big).query_async(&mut c).await.unwrap();
+        let _: () = redis::cmd("SET").arg("qurry:small").arg("hi").query_async(&mut c).await.unwrap();
+        let e = st.run_read_only("rd::db4".into(), "GET qurry:big".into(), 10).await.unwrap_err().to_string();
+        assert!(e.contains("too big"), "{e}");
+        assert!(st.run_read_only("rd::db4".into(), "MGET qurry:small qurry:big".into(), 10).await.is_err());
+        assert!(st.run_read_only("rd::db4".into(), "GET qurry:small".into(), 10).await.is_ok());
+        let d = key_detail(m, "qurry:big", 10).await.unwrap();
+        assert!(d.truncated && d.value.as_str().unwrap().len() as i64 == STRING_PREVIEW_MAX);
+        let _: () = redis::cmd("DEL").arg("qurry:big").arg("qurry:small").query_async(&mut c).await.unwrap();
     }
 
     #[tokio::test]

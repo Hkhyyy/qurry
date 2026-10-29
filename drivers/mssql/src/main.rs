@@ -8,6 +8,8 @@ use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 struct Ms {
     rt: tokio::runtime::Runtime,
     client: Option<Client<Compat<TcpStream>>>,
+    /// Read-only Data Source
+    read_only: bool,
 }
 
 fn lit(s: &str) -> String {
@@ -69,6 +71,11 @@ impl Ms {
         })
     }
 
+    fn exec(&mut self, sql: &str) -> Result<(), String> {
+        let client = self.client.as_mut().ok_or("not connected")?;
+        self.rt.block_on(async { client.simple_query(sql).await.map_err(|e| e.to_string())?.into_results().await.map(|_| ()).map_err(|e| e.to_string()) })
+    }
+
     fn rows(&mut self, sql: &str) -> Result<Vec<Vec<Value>>, String> {
         Ok(self.query(sql, 1_000_000)?.rows)
     }
@@ -107,11 +114,19 @@ impl Driver for Ms {
                     Client::connect(cfg, tcp.compat_write()).await.map_err(|e| e.to_string())
                 })?;
                 self.client = Some(client);
+                self.read_only = c.options.get("readOnly").and_then(Value::as_bool).unwrap_or(false);
                 ok(Value::Null)
             }
             "query" => {
                 let sql = p.get("sql").and_then(Value::as_str).unwrap_or("").to_string();
                 let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(500) as usize;
+                // 읽기만 (Read-only Data Source · MCP): 트랜잭션 안에서 돌리고 늘 되돌린다 (guard 가 놓친 쓰기 · DDL 도 남지 않게)
+                if self.read_only || p.get("readOnly").and_then(Value::as_bool).unwrap_or(false) {
+                    self.exec("SET XACT_ABORT ON; BEGIN TRANSACTION")?;
+                    let r = self.query(&sql, limit);
+                    let back = self.exec("IF @@TRANCOUNT > 0 ROLLBACK");
+                    return ok(r.and_then(|o| back.map(|_| o))?);
+                }
                 ok(self.query(&sql, limit)?)
             }
             "databases" => ok(self.rows("SELECT name FROM sys.databases WHERE state = 0 ORDER BY name")?.into_iter().map(|r| r[0].clone()).collect::<Vec<_>>()),
@@ -208,5 +223,5 @@ impl Driver for Ms {
 
 fn main() {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio");
-    serve(Ms { rt, client: None });
+    serve(Ms { rt, client: None, read_only: false });
 }
