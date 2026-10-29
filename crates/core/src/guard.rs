@@ -509,8 +509,19 @@ pub fn redis_strict_violation(cmd: &str, args: &[String]) -> Option<String> {
 /// EXPLAIN ANALYZE 는 실제로 실행하므로 그 뒤 문장을 본다 (그냥 EXPLAIN 은 실행하지 않는다)
 pub fn unsafe_statement(sql: &str, kind: DbKind) -> Option<String> {
     if kind == DbKind::Redis {
-        let cmd = sql.split_whitespace().next().unwrap_or("").to_uppercase();
-        return ["FLUSHALL", "FLUSHDB", "DEL", "UNLINK", "SHUTDOWN"].contains(&cmd.as_str()).then(|| format!("{cmd} deletes data"));
+        // 실행할 때와 같이 읽는다 ("FLUSHALL" 처럼 따옴표로 감싸도 같은 명령)
+        let cmd = redis_args(sql).into_iter().next().unwrap_or_default().to_uppercase();
+        return match cmd.as_str() {
+            "FLUSHALL" | "FLUSHDB" | "DEL" | "UNLINK" | "SHUTDOWN" | "SWAPDB" | "REPLICAOF" | "SLAVEOF" => Some(format!("{cmd} deletes or replaces data")),
+            "EVAL" | "EVALSHA" | "EVAL_RO" | "EVALSHA_RO" | "FCALL" | "FUNCTION" | "SCRIPT" => Some(format!("{cmd} runs a script that can change anything")),
+            _ => None,
+        };
+    }
+    if kind == DbKind::Mongodb {
+        return mongo_unsafe(sql);
+    }
+    if kind.is_vector() && !sql.trim_start().to_lowercase().starts_with("select") {
+        return rest_unsafe(sql);
     }
     let sc = scan(sql, kind);
     let mut toks: &[Tok] = &sc.toks;
@@ -543,6 +554,85 @@ pub fn unsafe_statement(sql: &str, kind: DbKind) -> Option<String> {
         }
     }
     None
+}
+
+/// Redis 명령 줄의 인자 (실행할 때와 같은 규칙: redisdb::parse_command). 못 읽으면 빈 목록
+fn redis_args(line: &str) -> Vec<String> {
+    crate::redisdb::parse_command(line).map(|a| a.iter().map(|x| String::from_utf8_lossy(x).into_owned()).collect()).unwrap_or_default()
+}
+
+/// MongoDB: 컬렉션 · DB 를 지우는 것, 빈 조건으로 모든 문서를 지우거나 바꾸는 것
+fn mongo_unsafe(sql: &str) -> Option<String> {
+    let plain: String = json5_unescape(sql).chars().filter(|c| !c.is_whitespace()).collect::<String>().to_lowercase();
+    if plain.starts_with('{') {
+        let first = plain.trim_start_matches('{').trim_start_matches(['"', '\'']).split(['"', '\'', ':']).next().unwrap_or("").to_string();
+        return ["drop", "dropdatabase", "dropindexes", "delete", "renamecollection", "update"].contains(&first.as_str()).then(|| format!("the {first} command can remove or change every document"));
+    }
+    if plain.contains(".drop(") || plain.contains(".dropdatabase(") || plain.contains(".dropindexes(") || plain.contains(".renamecollection(") {
+        return Some("drop removes the collection and its documents".into());
+    }
+    for m in ["deletemany", "updatemany", "remove", "replaceone", "deleteone", "updateone"] {
+        if let Some(i) = plain.find(&format!(".{m}(")) {
+            let arg = &plain[i + m.len() + 2..];
+            if arg.starts_with(')') || arg.starts_with("{}") {
+                return Some(format!("{m} with an empty filter changes every document"));
+            }
+        }
+    }
+    None
+}
+
+/// 벡터 DB REST: 컬렉션 · 인덱스 지우기 (DELETE, …/drop), 조건 없는 points 지우기
+fn rest_unsafe(sql: &str) -> Option<String> {
+    let (first, body) = sql.trim().split_once('\n').unwrap_or((sql.trim(), ""));
+    let mut parts = first.split_whitespace();
+    let method = parts.next().unwrap_or("").to_uppercase();
+    let path = parts.next().unwrap_or("").split('?').next().unwrap_or("").trim_end_matches('/').to_lowercase();
+    let inline: String = parts.collect::<Vec<_>>().join(" ");
+    if method == "DELETE" {
+        return Some(format!("DELETE {path} removes it and everything in it"));
+    }
+    let last = path.rsplit('/').next().unwrap_or("");
+    if last == "drop" || last == "drop_index" || last == "release" {
+        return Some(format!("{path} removes it and everything in it"));
+    }
+    if last == "delete" {
+        let b: String = format!("{inline}{body}").chars().filter(|c| !c.is_whitespace()).collect::<String>().to_lowercase();
+        let empty = b.is_empty() || b == "{}" || ["\"filter\":{}", "filter:{}", "\"filter\":\"\"", "\"points\":[]", "\"ids\":[]"].iter().any(|e| b.contains(e));
+        if empty {
+            return Some(format!("{path} without a filter or ids deletes every point"));
+        }
+    }
+    None
+}
+
+/// MCP execute 에서 Redis 로 할 수 있는 것: 읽기와 키 하나 · 몇 개를 바꾸는 쓰기만 (스크립트 · 설정 · 복제 · 지우기 · 이름 바꾸기 · 범위 지우기는 아니다)
+pub fn redis_mcp_write_violation(line: &str) -> Option<String> {
+    let args = redis_args(line);
+    let cmd = args.first().map(|c| c.to_uppercase()).unwrap_or_default();
+    let sub = args.get(1).map(|c| c.to_uppercase()).unwrap_or_default();
+    const WRITES: &[&str] = &[
+        "SET", "SETEX", "PSETEX", "SETNX", "MSET", "MSETNX", "APPEND", "SETRANGE", "SETBIT", "INCR", "INCRBY", "INCRBYFLOAT", "DECR", "DECRBY", "GETSET",
+        "HSET", "HSETNX", "HMSET", "HDEL", "HINCRBY", "HINCRBYFLOAT", "LPUSH", "RPUSH", "LPUSHX", "RPUSHX", "LSET", "LINSERT", "LPOP", "RPOP", "LREM",
+        "SADD", "SREM", "SMOVE", "ZADD", "ZREM", "ZINCRBY", "XADD", "XDEL", "XACK", "PFADD", "GEOADD", "PERSIST", "EXPIRE", "PEXPIRE", "EXPIREAT", "PEXPIREAT",
+        "JSON.SET", "JSON.NUMINCRBY", "JSON.ARRAPPEND", "JSON.ARRINSERT", "JSON.STRAPPEND", "JSON.TOGGLE",
+    ];
+    if crate::redisdb::is_read_command(&cmd, &sub) {
+        return redis_strict_violation(&cmd, &args[1.min(args.len())..]);
+    }
+    if !WRITES.contains(&cmd.as_str()) {
+        return Some(format!("{cmd} is not allowed over MCP — ask the user to run it in Qurry"));
+    }
+    // EXPIRE k 0 · 지난 시각은 키를 지운다
+    let t = args.get(2).and_then(|v| v.parse::<i64>().ok());
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let deletes = match cmd.as_str() {
+        "EXPIRE" | "PEXPIRE" => t.is_none_or(|t| t <= 0),
+        "EXPIREAT" => t.is_none_or(|t| t <= now),
+        "PEXPIREAT" => t.is_none_or(|t| t <= now * 1000),
+        _ => false,
+    };
+    deletes.then(|| format!("{cmd} with that time deletes the key — refused over MCP"))
 }
 
 /// 데이터를 바꾸지 않는 문장인지 (스크립트 실패 안내에서 "이미 커밋된 변경" 을 셀 때)
@@ -804,6 +894,32 @@ mod tests {
         for ok in ["GET a", "HGET h f", "HSCAN h 0 COUNT 100", "LRANGE l 0 99", "ZRANGE z 0 9", "ZRANGE z 0 +inf BYSCORE LIMIT 0 10", "ZRANGEBYSCORE z 0 1 LIMIT 0 10",
             "XRANGE s - + COUNT 10", "SRANDMEMBER s 5", "SRANDMEMBER s", "SCAN 0 MATCH a:* COUNT 100", "HLEN h"] {
             assert!(v(ok).is_none(), "{ok}");
+        }
+    }
+
+    #[test]
+    fn unsafe_non_sql() {
+        use DbKind::Redis;
+        let u = |s: &str, k| unsafe_statement(s, k).is_some();
+        assert!(u("\"FLUSHALL\"", Redis) && u("eval \"return 1\" 0", Redis) && u("FUNCTION FLUSH", Redis) && u("REPLICAOF evil 6379", Redis));
+        assert!(!u("SET a 1", Redis));
+        assert!(u("db.users.deleteMany({})", Mongodb) && u("db.users.deleteMany( { } )", Mongodb) && u("db.users.drop()", Mongodb) && u("db.dropDatabase()", Mongodb));
+        assert!(u("db.users.updateMany({}, {$set: {a: 1}})", Mongodb) && u("{\"drop\": \"users\"}", Mongodb));
+        assert!(!u("db.users.deleteMany({age: {$lt: 0}})", Mongodb) && !u("db.users.find({})", Mongodb));
+        assert!(u("POST /collections/drop\n{\"collectionName\": \"x\"}", Milvus) && u("DELETE /collections/x", Qdrant));
+        assert!(u("POST /collections/x/points/delete\n{\"filter\": {}}", Qdrant) && u("POST /collections/x/points/delete", Qdrant));
+        assert!(!u("POST /collections/x/points/delete\n{\"points\": [1, 2]}", Qdrant) && !u("POST /entities/delete {\"filter\": \"id in [1]\"}", Milvus));
+    }
+
+    #[test]
+    fn redis_mcp_writes() {
+        let v = |s: &str| redis_mcp_write_violation(s);
+        for ok in ["SET a 1", "HSET h f v", "\"SET\" a 1", "EXPIRE k 60", "GET a", "ZADD z 1 m"] {
+            assert!(v(ok).is_none(), "{ok}");
+        }
+        for bad in ["\"FLUSHALL\"", "EVAL \"redis.call('FLUSHALL')\" 0", "FUNCTION FLUSH", "CONFIG SET dir /tmp", "SAVE", "REPLICAOF h 1", "SWAPDB 0 1", "MIGRATE h 1 k 0 1",
+            "RENAME a b", "ZREMRANGEBYRANK z 0 -1", "LTRIM l 0 0", "EXPIRE k 0", "EXPIREAT k 1", "DEBUG SLEEP 1", "MODULE LOAD x", "DEL a", "HGETALL big"] {
+            assert!(v(bad).is_some(), "{bad}");
         }
     }
 
