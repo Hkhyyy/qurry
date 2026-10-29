@@ -27,11 +27,19 @@ fn parse_args(s: &str) -> Result<Vec<Bson>, String> {
     v.as_array().unwrap().iter().map(|x| Bson::try_from(x.clone()).map_err(|e| e.to_string())).collect()
 }
 
-fn as_doc(b: Option<&Bson>) -> Document {
+/// A missing argument is an empty document; anything else must be a document.
+/// A scalar such as ObjectId("…") or {$numberLong: "1"} is refused rather than read as "match everything".
+fn as_doc(b: Option<&Bson>) -> Result<Document, String> {
     match b {
-        Some(Bson::Document(d)) => d.clone(),
-        _ => Document::new(),
+        None => Ok(Document::new()),
+        Some(Bson::Document(d)) => Ok(d.clone()),
+        Some(other) => Err(format!("expected a document, got {:?}", other.element_type())),
     }
+}
+
+/// Every element must be a document (pipeline stages, documents to insert).
+fn docs(a: &[Bson]) -> Result<Vec<Document>, String> {
+    a.iter().map(|b| as_doc(Some(b))).collect()
 }
 
 /// bson → display value (ObjectId and dates as text, nested values as JSON)
@@ -135,11 +143,11 @@ impl Mongo {
         let err = |e: mongodb::error::Error| e.to_string();
         let changed = |n: u64| Ok(QueryOut { rows_affected: n, ..Default::default() });
         match method.as_str() {
-            "find" => self.find(&coll, as_doc(args.first()), args.get(1).and_then(|b| b.as_document().cloned()), sort, skip, lim.unwrap_or(limit).min(limit)),
-            "findOne" => self.find(&coll, as_doc(args.first()), args.get(1).and_then(|b| b.as_document().cloned()), None, 0, 1),
+            "find" => self.find(&coll, as_doc(args.first())?, args.get(1).and_then(|b| b.as_document().cloned()), sort, skip, lim.unwrap_or(limit).min(limit)),
+            "findOne" => self.find(&coll, as_doc(args.first())?, args.get(1).and_then(|b| b.as_document().cloned()), None, 0, 1),
             "aggregate" => {
                 let pipeline: Vec<Document> = match args.first() {
-                    Some(Bson::Array(a)) => a.iter().filter_map(|b| b.as_document().cloned()).collect(),
+                    Some(Bson::Array(a)) => docs(a)?,
                     _ => return Err("aggregate expects an array of stages".into()),
                 };
                 let mut docs: Vec<Document> = c.aggregate(pipeline).run().map_err(err)?.take(limit + 1).collect::<Result<_, _>>().map_err(err)?;
@@ -147,29 +155,29 @@ impl Mongo {
                 docs.truncate(limit);
                 Ok(table(docs, truncated))
             }
-            "countDocuments" | "count" => Ok(table(vec![doc! { "count": c.count_documents(as_doc(args.first())).run().map_err(err)? as i64 }], false)),
+            "countDocuments" | "count" => Ok(table(vec![doc! { "count": c.count_documents(as_doc(args.first())?).run().map_err(err)? as i64 }], false)),
             "distinct" => {
                 let field = args.first().and_then(|b| b.as_str()).ok_or("distinct expects a field name")?;
-                Ok(table(c.distinct(field, as_doc(args.get(1))).run().map_err(err)?.into_iter().map(|v| doc! { field: v }).collect(), false))
+                Ok(table(c.distinct(field, as_doc(args.get(1))?).run().map_err(err)?.into_iter().map(|v| doc! { field: v }).collect(), false))
             }
             "insertOne" => {
-                c.insert_one(as_doc(args.first())).run().map_err(err)?;
+                c.insert_one(as_doc(args.first())?).run().map_err(err)?;
                 changed(1)
             }
             "insertMany" => match args.first() {
-                Some(Bson::Array(a)) => changed(c.insert_many(a.iter().filter_map(|b| b.as_document().cloned()).collect::<Vec<_>>()).run().map_err(err)?.inserted_ids.len() as u64),
+                Some(Bson::Array(a)) => changed(c.insert_many(docs(a)?).run().map_err(err)?.inserted_ids.len() as u64),
                 _ => Err("insertMany expects an array of documents".into()),
             },
-            "updateOne" => changed(c.update_one(as_doc(args.first()), as_doc(args.get(1))).run().map_err(err)?.modified_count),
-            "updateMany" => changed(c.update_many(as_doc(args.first()), as_doc(args.get(1))).run().map_err(err)?.modified_count),
-            "replaceOne" => changed(c.replace_one(as_doc(args.first()), as_doc(args.get(1))).run().map_err(err)?.modified_count),
-            "deleteOne" => changed(c.delete_one(as_doc(args.first())).run().map_err(err)?.deleted_count),
-            "deleteMany" => changed(c.delete_many(as_doc(args.first())).run().map_err(err)?.deleted_count),
+            "updateOne" => changed(c.update_one(as_doc(args.first())?, as_doc(args.get(1))?).run().map_err(err)?.modified_count),
+            "updateMany" => changed(c.update_many(as_doc(args.first())?, as_doc(args.get(1))?).run().map_err(err)?.modified_count),
+            "replaceOne" => changed(c.replace_one(as_doc(args.first())?, as_doc(args.get(1))?).run().map_err(err)?.modified_count),
+            "deleteOne" => changed(c.delete_one(as_doc(args.first())?).run().map_err(err)?.deleted_count),
+            "deleteMany" => changed(c.delete_many(as_doc(args.first())?).run().map_err(err)?.deleted_count),
             "drop" => {
                 c.drop().run().map_err(err)?;
                 changed(0)
             }
-            "createIndex" => Ok(table(vec![doc! { "name": c.create_index(mongodb::IndexModel::builder().keys(as_doc(args.first())).build()).run().map_err(err)?.index_name }], false)),
+            "createIndex" => Ok(table(vec![doc! { "name": c.create_index(mongodb::IndexModel::builder().keys(as_doc(args.first())?).build()).run().map_err(err)?.index_name }], false)),
             m => Err(format!("{m} isn't supported here — run it as a command: {{\"{m}\": \"{coll}\", …}}")),
         }
     }
@@ -256,4 +264,21 @@ fn enc(s: &str) -> String {
 
 fn main() {
     serve(Mongo::default());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scalar_filters_are_refused() {
+        for a in [r#"ObjectId("507f1f77bcf86cd799439011")"#, r#"{$numberLong: "1"}"#, r#"{$date: "2020-01-01T00:00:00Z"}, {$set: {a: 1}}"#, "1", r#""x""#] {
+            let args = parse_args(a).unwrap();
+            assert!(as_doc(args.first()).is_err(), "{a}");
+        }
+        let args = parse_args(r#"{_id: ObjectId("507f1f77bcf86cd799439011")}"#).unwrap();
+        assert_eq!(as_doc(args.first()).unwrap().len(), 1);
+        assert!(as_doc(None).unwrap().is_empty());
+        assert!(docs(&parse_args(r#"{a: 1}, ObjectId("507f1f77bcf86cd799439011")"#).unwrap()).is_err());
+    }
 }
