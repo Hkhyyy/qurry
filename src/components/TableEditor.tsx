@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Cell, Dialect, QueryResult } from "../lib/api";
 import { EditTarget, ResultGrid } from "./ResultGrid";
+import { RunningBar } from "./RunningBar";
 import { IcFilter, IcOrder } from "../ui/icons";
 import { IconButton, Notice, TextInput } from "../ui";
 
@@ -103,7 +104,7 @@ export function TableEditor(p: Props) {
           onFindSimilar={p.onFindSimilar}
           filterBar={filterBar}
         />
-        {p.running && !p.result && <div className="grid-overlay muted">Loading {p.title}…</div>}
+        <RunningBar running={p.running} label={`Loading ${p.title}`} onCancel={p.onCancel} />
         {p.error && <Notice tone="danger" className="grid-overlay">{p.error}</Notice>}
       </div>
     </div>

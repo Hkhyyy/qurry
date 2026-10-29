@@ -96,6 +96,9 @@ fn mouse_down(app: &mut App, x: u16, y: u16) {
         if let Some(&(i, _)) = app.hits.workspaces.iter().find(|w| inside(w.1, x, y)) {
             return app.ws_switch(i);
         }
+        if inside(app.hits.cancel, x, y) {
+            return app.cancel();
+        }
         if inside(app.hits.divider, x, y) {
             app.drag = Some(Drag::Console);
             return;
@@ -2183,6 +2186,31 @@ mod tests {
     }
 
     /// 글 탭 (다이어그램·DDL): 휠로 스크롤, 끝을 넘지 않고, g/G 로 처음·끝
+    /// 실행 중 콘솔 제목줄: 지난 시간 · [■ Cancel ⌃c], 누르면 취소를 보낸다
+    #[tokio::test]
+    async fn running_console_shows_time_and_a_cancel_button() {
+        let mut h = Harness::new().await;
+        let id = h.console_tab();
+        if let Some(TabKind::Console(c)) = h.app.tab_mut(id).map(|t| &mut t.kind) {
+            c.running = true;
+        }
+        let screen = h.screen(140, 30);
+        assert!(screen.contains("running 0.0 s · [■ Cancel"), "{screen}");
+        let r = h.app.hits.cancel;
+        assert!(r.width > 8, "{r:?}");
+        let row = screen.lines().nth(r.y as usize).unwrap();
+        assert!(row.chars().skip(r.x as usize).collect::<String>().starts_with("[■ Cancel"), "{row}");
+        crate::input::on_event(&mut h.app, Event::Mouse(crossterm::event::MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: r.x + 2, row: r.y, modifiers: KeyModifiers::NONE }));
+        h.settle().await;
+        assert!(!h.app.status.is_empty() && h.app.status != "Executing…", "cancel was sent: {}", h.app.status);
+        // 끝나면 버튼도 없어진다
+        if let Some(TabKind::Console(c)) = h.app.tab_mut(id).map(|t| &mut t.kind) {
+            c.running = false;
+        }
+        h.screen(140, 30);
+        assert_eq!(h.app.hits.cancel, ratatui::layout::Rect::default());
+    }
+
     #[tokio::test]
     async fn text_tab_scrolls_with_the_wheel() {
         let mut h = Harness::new().await;

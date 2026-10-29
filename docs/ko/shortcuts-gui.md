@@ -122,7 +122,7 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `⌘⌫` | Delete rows |
 | `⌥⌘z` | Revert selected changes |
 | `⌘↩` | Submit changes |
-| `⌘c / ⌘v` | Copy (with chosen extractor) / paste |
+| `⌘c / ⌘v` | 복사 (고른 extractor 로. CSV · TSV 는 값만 — 우클릭 › Copy with Headers 는 컬럼 이름까지) / 붙여넣기 |
 | `⌘a` | Select all |
 | `⌘f` | Find in grid |
 | `⌘r` | Reload |

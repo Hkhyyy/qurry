@@ -551,6 +551,8 @@ pub struct Hits {
     pub last_click: Option<(std::time::Instant, u16, u16)>,
     /// 콘솔 커서를 그린 화면 칸과 그때 커서 (줄, 칸) — 마우스 위치를 글자 위치로 바꿀 때 (tui-textarea 는 스크롤 위치를 공개하지 않는다)
     pub caret: Option<(u16, u16, usize, usize)>,
+    /// 실행 중 콘솔 제목줄의 [■ Cancel] (눌러서 취소)
+    pub cancel: ratatui::layout::Rect,
     /// 글 탭 (DDL·다이어그램) 본문 — 휠로 스크롤
     pub text: ratatui::layout::Rect,
     /// 워크스페이스 띠: (번호, 영역)
@@ -625,6 +627,8 @@ pub struct App {
     /// 값 · json 키 추천 (자리별, 잠깐 둔다) · 불러오는 중인 자리
     hints: HashMap<String, (std::time::Instant, Vec<qurry_core::hints::Hint>)>,
     hints_loading: HashSet<String>,
+    /// 실행 중인 탭이 언제 시작했는지 (그릴 때 맞춘다)
+    run_since: HashMap<u64, std::time::Instant>,
     /// 명령 단축키 (keymap.json 의 "tui")
     pub keys: crate::keys::Keymap,
     /// 새 버전이 있으면 그 버전 (상태줄에 알린다)
@@ -719,6 +723,7 @@ impl App {
             completion_loading: HashSet::new(),
             hints: HashMap::new(),
             hints_loading: HashSet::new(),
+            run_since: HashMap::new(),
             keys: crate::keys::Keymap::new(&user_keys),
             update: None,
             restart: false,
@@ -1858,15 +1863,27 @@ impl App {
             return;
         }
         c.running = true;
+        // 실행 중에는 Output 을 보인다 (지난 결과 대신 지금 실행하는 SQL)
+        c.show_output = true;
         let session = c.session.clone();
         let in_tx0 = c.in_tx;
         let st = self.state.clone();
         let stmts2 = stmts.clone();
+        let tx = self.tx.clone();
+        let echo_name = conn_name.clone();
         self.status = "Executing…".into();
         self.spawn(
             async move {
                 let mut out = vec![];
                 for s in stmts2 {
+                    // 실행하는 문장을 바로 Output 에 (한 줄로, 너무 길면 앞부분만)
+                    let echo: String = s.replace('\n', " ").chars().take(300).collect();
+                    let line = format!("{echo_name}> {echo}{}", if s.chars().count() > 300 { "…" } else { "" });
+                    let _ = tx.send(Box::new(move |a: &mut App| {
+                        if let Some(TabKind::Console(c)) = a.tab_mut(id).map(|t| &mut t.kind) {
+                            c.log(false, line);
+                        }
+                    }));
                     let q = if explain {
                         let bare = s.trim_end_matches(';');
                         match (kind, analyze) {
@@ -1921,9 +1938,6 @@ impl App {
                 let mut failed = false;
                 let ddl = out.iter().any(|(s, r, dry)| r.is_ok() && !dry && !explain && qurry_core::guard::is_ddl(s, kind));
                 for (i, (s, r, dry)) in out.into_iter().enumerate() {
-                    // 실행한 문장은 한 줄로, 너무 길면 앞부분만
-                    let echo: String = s.replace('\n', " ").chars().take(300).collect();
-                    c.log(false, format!("{conn_name}> {echo}{}", if s.chars().count() > 300 { "…" } else { "" }));
                     if r.is_ok() {
                         let _ = hist.history.add(&hist_conn, Some(&hist_db), &s);
                     }
@@ -3172,6 +3186,38 @@ impl App {
             TabKind::Dba(d) => d.grid.as_mut(),
             TabKind::Text(_) => None,
         }
+    }
+}
+
+/// 12.3 s · 1 m 05 s (GUI 의 RunningBar 와 같게)
+pub fn elapsed_text(ms: u64) -> String {
+    if ms < 60_000 {
+        format!("{:.1} s", ms as f64 / 1000.0)
+    } else {
+        let s = ms / 1000;
+        format!("{} m {:02} s", s / 60, s % 60)
+    }
+}
+
+impl App {
+    /// 이 탭이 실행 · 불러오는 중이면 지난 시간 (처음 본 때부터)
+    pub fn run_elapsed(&mut self, idx: usize) -> Option<std::time::Duration> {
+        let t = self.tabs.get(idx)?;
+        let running = match &t.kind {
+            TabKind::Console(c) => c.running,
+            TabKind::Table(tt) => tt.running,
+            _ => false,
+        };
+        if !running {
+            self.run_since.remove(&t.id);
+            return None;
+        }
+        Some(self.run_since.entry(t.id).or_insert_with(std::time::Instant::now).elapsed())
+    }
+
+    /// 실행 중인 탭이 있으면 지난 시간을 다시 그려야 한다
+    pub fn any_running(&self) -> bool {
+        self.tabs.iter().any(|t| matches!(&t.kind, TabKind::Console(c) if c.running) || matches!(&t.kind, TabKind::Table(tt) if tt.running))
     }
 }
 

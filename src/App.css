@@ -196,6 +196,10 @@ a { color: var(--c-548af7); cursor: pointer; }
 .exec-highlight { background: rgba(53,116,240,.25); }
 
 .result-area { flex: 1; min-height: 0; position: relative; background: var(--bg); }
+.running-bar { position: absolute; z-index: 5; top: 8px; right: 12px; display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); white-space: nowrap; }
+.plan-table { user-select: text; }
+.plan-tools.ui-toolbar { height: 30px; border-bottom: 1px solid var(--border); }
+.running-time { font-variant-numeric: tabular-nums; }
 .grid-scroll { position: absolute; inset: 0; overflow: auto; outline: none; font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; }
 
 .hint { color: var(--muted); font-size: 12px; margin: 10px 0 0 102px; }
@@ -632,3 +636,16 @@ html, body, #root, * { overscroll-behavior: none; }
 .designer-body .ui-input { width: 100%; min-width: 70px; }
 .designer-add { padding: var(--ui-sp-2); }
 .designer-sql { max-height: 22vh; overflow: auto; }
+
+/* Monaco 에디터 우클릭 메뉴: 그림자 DOM 안이라 에디터의 --vscode-* 색이 닿지 않아 배경이 투명했다 → 앱 메뉴와 같은 색 (그림자 DOM 으로 상속된다) */
+.shadow-root-host {
+  --vscode-menu-background: var(--ui-surface);
+  --vscode-menu-foreground: var(--ui-text);
+  --vscode-menu-border: var(--ui-border-strong);
+  --vscode-menu-separatorBackground: var(--ui-border);
+  --vscode-menu-selectionBorder: transparent;
+  --vscode-list-hoverBackground: var(--ui-accent);
+  --vscode-list-hoverForeground: #ffffff;
+  --vscode-widget-shadow: rgba(0, 0, 0, 0.35);
+  --vscode-editorWidget-border: var(--ui-border-strong);
+}

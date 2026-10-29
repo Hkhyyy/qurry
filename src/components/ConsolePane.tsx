@@ -6,6 +6,8 @@ import { DEFAULT_EXEC, ExecSettings, planExecution } from "../lib/execPlan";
 import { ConsoleEditor, EditorApi, RunRequest } from "./ConsoleEditor";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { ResultGrid } from "./ResultGrid";
+import { RunningBar } from "./RunningBar";
+import { planText } from "../lib/planText";
 import { IcClock, IcGear, IcReload, IcStop } from "../ui/icons";
 import { EmptyState, IconButton, Select, Spacer, TabItem, TabStrip, Table, Td, Th, ToolButton, Toolbar, ToolbarSep } from "../ui";
 
@@ -47,6 +49,8 @@ export interface ResultEntry {
   kind: "result" | "plan";
   result: QueryResult | null;
   plan?: PlanNode;
+  /** DB 가 준 계획 원본 (JSON) — Copy JSON */
+  planJson?: string;
   pinned: boolean;
 }
 
@@ -151,6 +155,8 @@ export function ConsolePane(p: Props) {
   const radio = <T extends string>(cur: T, val: T, label: string, set: (v: T) => void): MenuItem => ({ label: (cur === val ? "● " : "　") + label, action: () => set(val) });
 
   const active = p.results.find((r) => r.id === p.activeResult);
+  // 고른 결과 탭이 없으면 (다시 실행해 지워짐) Output 을 보인다 — 빈 칸 대신
+  const shown = active ? p.activeResult : "output";
 
   return (
     <div className="console-pane">
@@ -266,17 +272,17 @@ export function ConsolePane(p: Props) {
             {/* 결과 탭: Output + 결과 셋들 (Services 결과 영역) */}
             <div className="result-tabs">
               <TabStrip
-                activeKey={p.activeResult}
-                overflow={[{ key: "output", label: "Output", active: p.activeResult === "output", onSelect: () => p.onSetActiveResult("output") }, ...p.results.map((r) => ({ key: r.id, label: (r.kind === "plan" ? "Plan: " : "") + r.title, active: p.activeResult === r.id, onSelect: () => p.onSetActiveResult(r.id) }))]}
+                activeKey={shown}
+                overflow={[{ key: "output", label: "Output", active: shown === "output", onSelect: () => p.onSetActiveResult("output") }, ...p.results.map((r) => ({ key: r.id, label: (r.kind === "plan" ? "Plan: " : "") + r.title, active: shown === r.id, onSelect: () => p.onSetActiveResult(r.id) }))]}
                 style={{ flex: 1, minWidth: 0 }}
               >
-              <TabItem variant="result" label="Output" active={p.activeResult === "output"} onClick={() => p.onSetActiveResult("output")} />
+              <TabItem variant="result" label="Output" active={shown === "output"} onClick={() => p.onSetActiveResult("output")} />
               {p.results.map((r) => (
                 <TabItem
                   key={r.id}
                   variant="result"
                   label={(r.kind === "plan" ? "Plan: " : "") + r.title}
-                  active={p.activeResult === r.id}
+                  active={shown === r.id}
                   pinned={r.pinned}
                   onPin={() => p.onPin(r.id, false)}
                   onClose={() => p.onCloseResult(r.id)}
@@ -297,12 +303,13 @@ export function ConsolePane(p: Props) {
                 />
               ))}
               </TabStrip>
-              {p.activeResult === "output" && (
+              {shown === "output" && (
                 <IconButton title="Clear All" onClick={p.onClearOutput}><IcReload /></IconButton>
               )}
             </div>
             <div className="result-area">
-              {p.activeResult === "output" && (
+              <RunningBar running={p.running} onCancel={p.onCancel} />
+              {shown === "output" && (
                 <div className="output-log">
                   {p.output.length === 0 && <EmptyState>Execute a statement ({isMac ? "⌘↩" : "Ctrl+Enter"}) to see the output.</EmptyState>}
                   {p.output.map((l, i) => (
@@ -326,7 +333,7 @@ export function ConsolePane(p: Props) {
                   dialect={p.dialect}
                 />
               )}
-              {active?.kind === "plan" && active.plan && <PlanView plan={active.plan} />}
+              {active?.kind === "plan" && active.plan && <PlanView plan={active.plan} json={active.planJson} />}
             </div>
           </div>
         </Panel>
@@ -337,8 +344,15 @@ export function ConsolePane(p: Props) {
 }
 
 /** Query Plan: Operations Tree (DataGrip Explain Plan) + 노드마다 몫(%) 막대, 경고(⚠), 고른 노드의 상세 */
-function PlanView({ plan }: { plan: PlanNode }) {
+function PlanView({ plan, json }: { plan: PlanNode; json?: string }) {
   const [sel, setSel] = useState<PlanNode | null>(plan);
+  const [copied, setCopied] = useState("");
+  const copy = (what: string, text: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(what);
+      setTimeout(() => setCopied(""), 1500);
+    });
+  };
   const rows: { n: PlanNode; depth: number }[] = [];
   const walk = (n: PlanNode, depth: number) => {
     rows.push({ n, depth });
@@ -351,6 +365,16 @@ function PlanView({ plan }: { plan: PlanNode }) {
   return (
     <div className="plan-view">
       <div className="plan-table">
+        <Toolbar className="plan-tools">
+          <ToolButton title="The plan as indented text (EXPLAIN style, with shares and warnings)" onClick={() => copy("text", planText(plan))}>
+            {copied === "text" ? "Copied ✓" : "Copy as Text"}
+          </ToolButton>
+          {json && (
+            <ToolButton title="The plan exactly as the database returned it (EXPLAIN FORMAT JSON)" onClick={() => copy("json", json)}>
+              {copied === "json" ? "Copied ✓" : "Copy JSON"}
+            </ToolButton>
+          )}
+        </Toolbar>
         {warned > 0 && <div className="plan-summary">⚠ {warned} node{warned > 1 ? "s" : ""} worth a look — click one for details</div>}
         <Table>
           <thead>

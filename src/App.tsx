@@ -1289,7 +1289,11 @@ export default function App() {
       }
     }
     // 고정(pin)되지 않은 결과 탭은 새 결과로 바꾼다
-    updTab(tabId, (t) => ({ ...t, running: true, results: t.results.filter((r) => r.pinned), cursorEntry: undefined }));
+    // 보던 결과 탭이 없어지면 Output 으로 (실행 중에 빈 칸이 아니라 실행한 SQL 이 보이게)
+    updTab(tabId, (t) => {
+      const results = t.results.filter((r) => r.pinned);
+      return { ...t, running: true, results, cursorEntry: undefined, activeResult: results.some((r) => r.id === t.activeResult) ? t.activeResult : "output" };
+    });
     setStatus("Executing…");
     let n = tab.results.filter((r) => r.pinned).length;
     let lastActive = "output";
@@ -1322,8 +1326,16 @@ export default function App() {
         updTab(tabId, (t) => ({ ...t, inTx: !!r.inTransaction }));
         if (!r.inTransaction && !isReadStmt(sql0) && !dry) committed++;
         if (explain && !isMy) {
-          const plan = await analyzePlan(String(r.rows[0]?.[0] ?? "")).catch(() => null);
-          const entry: ResultEntry = { id: crypto.randomUUID(), title: resultTitle(sql0, ++n), sql: sql0, kind: "plan", result: null, plan: plan ?? undefined, pinned: false };
+          const raw = String(r.rows[0]?.[0] ?? "");
+          const plan = await analyzePlan(raw).catch(() => null);
+          const pretty = (() => {
+            try {
+              return JSON.stringify(JSON.parse(raw), null, 2);
+            } catch {
+              return raw;
+            }
+          })();
+          const entry: ResultEntry = { id: crypto.randomUUID(), title: resultTitle(sql0, ++n), sql: sql0, kind: "plan", result: null, plan: plan ?? undefined, planJson: pretty, pinned: false };
           updTab(tabId, (t) => ({ ...t, results: [...t.results, entry] }));
           lastActive = entry.id;
           log(tabId, "info", `Plan retrieved in ${r.elapsedMs} ms`);
