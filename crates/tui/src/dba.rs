@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use tui_textarea::TextArea;
 
 /// 저절로 다시 불러오는 리포트 (지금 상태를 보는 것)
-const LIVE: [&str; 2] = ["sessions", "locks"];
+const LIVE: [&str; 3] = ["sessions", "locks", "vacuum_progress"];
 
 impl App {
     /// 리포트를 볼 접속 대상: 트리에서 고른 Data Source·DB, 아니면 지금 탭의 대상
@@ -156,6 +156,11 @@ impl App {
         let TabKind::Dba(d) = &t.kind else { return };
         if !d.info.as_ref().is_some_and(|i| i.actions.iter().any(|a| matches!(a, DAction::Kill { .. }))) {
             self.status = "This report has no sessions to stop".into();
+            return;
+        }
+        // Vacuum Progress 는 취소만 (연결을 끊는 동작이 없는 리포트에서 K 는 하지 않는다)
+        if terminate && !d.info.as_ref().is_some_and(|i| i.actions.iter().any(|a| matches!(a, DAction::Kill { terminate: true, .. }))) {
+            self.status = "This report can only cancel (c)".into();
             return;
         }
         if let Some(p) = &d.gone {

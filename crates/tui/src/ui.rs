@@ -608,10 +608,14 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
                 Some(TabKind::Redis(_)) => vec![fixed("Enter", "value"), fixed("/", "pattern"), fixed("a", "add"), fixed("D", "del key"), fixed("t", "TTL"), fixed("R", "rename"), fixed(":", "command")],
                 Some(TabKind::Text(_)) => vec![fixed("y", "copy"), fixed("Esc", "explorer")],
                 Some(TabKind::Dba(d)) => {
-                    let kill = d.info.as_ref().is_some_and(|i| i.actions.iter().any(|a| matches!(a, qurry_core::dba::Action::Kill { .. })));
+                    let has = |t: Option<bool>| d.info.as_ref().is_some_and(|i| i.actions.iter().any(|a| matches!(a, qurry_core::dba::Action::Kill { terminate, .. } if t.is_none_or(|t| *terminate == t))));
                     let mut v = vec![fixed("r", "refresh"), fixed("p", "reports")];
-                    if kill {
-                        v.extend([fixed("c", "cancel query"), fixed("K", "terminate"), fixed("a", "auto")]);
+                    if has(None) {
+                        v.push(fixed("c", "cancel query"));
+                        if has(Some(true)) {
+                            v.push(fixed("K", "terminate"));
+                        }
+                        v.push(fixed("a", "auto"));
                     }
                     v.extend([fixed("Enter", "query→console"), fixed("g", "SQL"), fixed("y", "copy")]);
                     v
