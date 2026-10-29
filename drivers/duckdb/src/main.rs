@@ -82,7 +82,11 @@ impl Driver for Duck {
                 let c: ConnectParams = params(p)?;
                 let path = if c.database.trim().is_empty() { ":memory:" } else { c.database.trim() };
                 let read_only = c.options.get("readOnly").and_then(Value::as_bool).unwrap_or(false);
-                let cfg = duckdb::Config::default().access_mode(if read_only { duckdb::AccessMode::ReadOnly } else { duckdb::AccessMode::ReadWrite }).map_err(|e| e.to_string())?;
+                let mut cfg = duckdb::Config::default().access_mode(if read_only { duckdb::AccessMode::ReadOnly } else { duckdb::AccessMode::ReadWrite }).map_err(|e| e.to_string())?;
+                // MCP: 로컬 파일 · URL 읽기, 확장 설치 · 불러오기를 끄고, 다시 켜지 못하게 잠근다
+                if c.options.get("sandbox").and_then(Value::as_bool).unwrap_or(false) {
+                    cfg = cfg.enable_external_access(false).and_then(|c| c.enable_autoload_extension(false)).and_then(|c| c.with("lock_configuration", "true")).map_err(|e| e.to_string())?;
+                }
                 self.conn = Some(Connection::open_with_flags(path, cfg).map_err(|e| format!("{path}: {e}"))?);
                 ok(Value::Null)
             }

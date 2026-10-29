@@ -475,6 +475,7 @@ async fn main() -> std::io::Result<()> {
     let dir = args.iter().position(|a| a == "--config-dir").and_then(|i| args.get(i + 1)).map(std::path::PathBuf::from);
     // stdout 은 프로토콜 전용. 엔진 로그(stderr)는 --verbose 일 때만
     qurry_core::QUIET.store(!args.iter().any(|a| a == "--verbose"), std::sync::atomic::Ordering::Relaxed);
+    qurry_core::SANDBOX.store(true, std::sync::atomic::Ordering::Relaxed);
     let state = Arc::new(qurry_core::open_state(dir).map_err(|e| std::io::Error::other(e.to_string()))?);
     let server = Arc::new(Server { state: state.clone(), allow_write: args.iter().any(|a| a == "--allow-write") });
     // keep-alive / auto-disconnect

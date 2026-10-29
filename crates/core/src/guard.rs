@@ -70,7 +70,8 @@ fn scan(sql: &str, kind: DbKind) -> Scan {
         }
         // 문자열 / 인용 식별자: 통째로 한 토큰 (식별자는 이름으로 쓰일 수 있어 단어로 남긴다)
         if c == b'\'' || c == b'"' || c == b'`' {
-            let e_string = kind == DbKind::Postgres && c == b'\'' && i > 0 && (b[i - 1] == b'e' || b[i - 1] == b'E');
+            // PG E'…' 는 \ 가 이스케이프. name' 처럼 낱말 끝의 e 는 아니다 (sql::split_statements 와 같은 규칙)
+            let e_string = kind == DbKind::Postgres && c == b'\'' && i > 0 && (b[i - 1] == b'e' || b[i - 1] == b'E') && (i < 2 || !(b[i - 2].is_ascii_alphanumeric() || b[i - 2] == b'_' || b[i - 2] >= 0x80));
             let mut j = i + 1;
             while j < n {
                 // MySQL 백틱 이름 안의 \ 는 이스케이프가 아니다
@@ -90,6 +91,16 @@ fn scan(sql: &str, kind: DbKind) -> Scan {
             let inner = &sql[i + 1..j.min(n)];
             let (start, end) = (i, (j + 1).min(n));
             toks.push(if c == b'\'' { Tok { text: "'".into(), word: false, depth, quoted: false, start, end } } else { Tok { text: inner.to_lowercase(), word: true, depth, quoted: true, start, end } });
+            i = (j + 1).min(n);
+            continue;
+        }
+        // SQL Server [이름] (]] 는 ] 하나)
+        if c == b'[' && kind == DbKind::Mssql {
+            let mut j = i + 1;
+            while j < n && !(b[j] == b']' && !(j + 1 < n && b[j + 1] == b']')) {
+                j += if b[j] == b']' { 2 } else { 1 };
+            }
+            toks.push(Tok { text: sql[i + 1..j.min(n)].to_lowercase(), word: true, depth, quoted: true, start: i, end: (j + 1).min(n) });
             i = (j + 1).min(n);
             continue;
         }
@@ -266,6 +277,26 @@ const SIDE_EFFECT_FUNCS: &[&str] = &[
     "load_file", "sleep", "benchmark", "get_lock", "release_lock", "release_all_locks",
 ];
 
+/// SQL Server 는 ; 없이 문장을 이어 쓸 수 있다 (SELECT 1 DROP TABLE t 는 배치 하나). 읽기 문장 뒤에 이 낱말이 나오면 다른 문장이다
+const MSSQL_STATEMENT_WORDS: &[&str] = &[
+    "drop", "alter", "create", "exec", "execute", "truncate", "grant", "revoke", "deny", "declare", "waitfor", "backup", "restore", "kill", "use",
+    "dbcc", "shutdown", "reconfigure", "bulk", "set", "begin", "commit", "rollback", "save", "checkpoint", "if", "while", "goto", "print", "raiserror", "throw",
+];
+/// SQL Server: 다른 서버·파일을 읽는 함수
+const MSSQL_EXTERNAL_FUNCS: &[&str] = &["openrowset", "opendatasource", "openquery"];
+/// ClickHouse 테이블 함수: 서버 밖 (다른 서버·파일·URL) 을 읽는다 (MCP)
+const CLICKHOUSE_EXTERNAL_FUNCS: &[&str] = &[
+    "url", "urlcluster", "file", "filecluster", "s3", "s3cluster", "gcs", "azureblobstorage", "azureblobstoragecluster", "hdfs", "hdfscluster", "remote",
+    "remotesecure", "cluster", "clusterallreplicas", "mysql", "postgresql", "mongodb", "redis", "sqlite", "jdbc", "odbc", "executable", "iceberg", "icebergs3",
+    "deltalake", "hudi", "input",
+];
+/// DuckDB: 파일·URL 을 읽는 함수 (MCP. 드라이버도 외부 접근을 끄고 연다 — crate::SANDBOX)
+const DUCKDB_EXTERNAL_FUNCS: &[&str] = &[
+    "read_text", "read_blob", "read_csv", "read_csv_auto", "read_json", "read_json_auto", "read_json_objects", "read_json_objects_auto", "read_ndjson",
+    "read_ndjson_auto", "read_ndjson_objects", "read_parquet", "parquet_scan", "parquet_metadata", "parquet_schema", "parquet_file_metadata", "parquet_kv_metadata",
+    "read_xlsx", "sniff_csv", "glob", "iceberg_scan", "delta_scan", "getenv", "query_table",
+];
+
 /// 읽기 전용으로 실행해도 되는지. strict = MCP (부작용 함수까지 막는다). 막으면 이유
 pub fn read_only_violation(sql: &str, kind: DbKind, strict: bool) -> Option<String> {
     if kind == DbKind::Redis {
@@ -277,7 +308,7 @@ pub fn read_only_violation(sql: &str, kind: DbKind, strict: bool) -> Option<Stri
         if crate::sql::split_statements(sql, kind).len() != 1 {
             return Some("Read-only mode runs exactly one request".into());
         }
-        return rest_read_violation(sql);
+        return rest_read_violation(sql, kind);
     }
     if kind == DbKind::Mongodb && head != "select" {
         return mongo_read_violation(sql);
@@ -295,6 +326,26 @@ pub fn read_only_violation(sql: &str, kind: DbKind, strict: bool) -> Option<Stri
         return Some(format!("Read-only mode: '{first}' statements are not allowed"));
     }
     let words: Vec<&str> = sc.toks.iter().map(|t| t.text.as_str()).collect();
+    let bare = |t: &Tok| t.word && !t.quoted;
+    if kind == DbKind::Mssql
+        && let Some(t) = sc.toks.iter().filter(|t| bare(t)).skip(1).find(|t| MSSQL_STATEMENT_WORDS.contains(&t.text.as_str()))
+    {
+        return Some(format!("Read-only mode: '{}' starts another statement (SQL Server runs the whole batch)", t.text));
+    }
+    // SELECT … INTO 새 테이블 (PostgreSQL · SQL Server)
+    if matches!(kind, DbKind::Postgres | DbKind::Mssql) && sc.toks.iter().any(|t| bare(t) && t.text == "into") {
+        return Some("Read-only mode: SELECT … INTO creates a table".into());
+    }
+    if kind == DbKind::Postgres {
+        // U&"…" 이름은 \XXXX 로 글자를 숨길 수 있다 (U&"default_transaction_read\005fonly")
+        if sc.toks.windows(2).any(|w| w[0].word && !w[0].quoted && w[0].text == "u" && w[1].text == "&" && w[1].start == w[0].end) {
+            return Some("Read-only mode: U&\"…\" / U&'…' escapes are not allowed".into());
+        }
+        // 문자열 안의 \ 해석을 바꾸면 검사와 서버가 문자열 끝을 다르게 본다
+        if words.iter().any(|w| w.contains("standard_conforming_strings") || w.contains("backslash_quote")) {
+            return Some("Read-only mode: changing how strings are read is not allowed".into());
+        }
+    }
     // 세션 설정으로 읽기 전용을 끄는 것 (SET default_transaction_read_only = off, SET SESSION TRANSACTION READ WRITE, START TRANSACTION READ WRITE)
     if words.iter().any(|w| w.contains("read_only")) || words.windows(2).any(|w| w == ["read", "write"]) {
         return Some("Read-only mode: changing the read-only setting is not allowed".into());
@@ -313,20 +364,61 @@ pub fn read_only_violation(sql: &str, kind: DbKind, strict: bool) -> Option<Stri
         if call && (t.text == "set_config" || (strict && SIDE_EFFECT_FUNCS.contains(&t.text.as_str()))) {
             return Some(format!("Read-only mode: {}() is not allowed (it has side effects outside the transaction)", t.text));
         }
+        let external = match kind {
+            DbKind::Mssql => MSSQL_EXTERNAL_FUNCS.contains(&t.text.as_str()),
+            DbKind::Clickhouse => strict && CLICKHOUSE_EXTERNAL_FUNCS.contains(&t.text.as_str()),
+            DbKind::Duckdb => strict && DUCKDB_EXTERNAL_FUNCS.contains(&t.text.as_str()),
+            _ => false,
+        };
+        if call && external {
+            return Some(format!("Read-only mode: {}() reads files or other servers", t.text));
+        }
     }
     None
 }
 
 /// 벡터 DB REST: GET 과 읽기 POST (search · query · scroll · get · count · describe · list …) 만
-fn rest_read_violation(sql: &str) -> Option<String> {
+/// Milvus 드라이버는 메서드와 상관없이 POST 로 보내므로 경로만 본다
+fn rest_read_violation(sql: &str, kind: DbKind) -> Option<String> {
     let first = sql.trim().lines().next().unwrap_or("");
     let mut parts = first.split_whitespace();
     let method = parts.next().unwrap_or("").to_uppercase();
-    let path = parts.next().unwrap_or("").split('?').next().unwrap_or("").trim_end_matches('/').to_lowercase();
+    let raw = parts.next().unwrap_or("");
+    let raw_path = raw.split('?').next().unwrap_or("");
+    // 검사한 경로와 서버가 받는 경로가 달라질 수 있는 글자 (# 뒤는 보내지 않는다, %2F · .. 는 서버가 풀어 읽는다)
+    if raw_path.contains(['#', '%', '\\']) || raw_path.split('/').any(|s| s == "." || s == "..") || raw.chars().any(|c| c.is_control()) {
+        return Some(format!("Read-only mode: {raw} is not a plain request path"));
+    }
+    let path = raw_path.trim_end_matches('/').to_lowercase();
     let last = path.rsplit('/').next().unwrap_or("");
-    const READS: &[&str] = &["search", "query", "scroll", "get", "count", "recommend", "discover", "facet", "groups", "describe", "list", "has", "get_stats", "get_load_state", "points"];
-    let ok = method == "GET" || (method == "POST" && (READS.contains(&last) || (last == "batch" && (path.contains("/search/") || path.contains("/query/") || path.contains("/recommend/")))));
+    const READS: &[&str] = &["search", "query", "scroll", "get", "count", "recommend", "discover", "facet", "groups", "describe", "list", "has", "get_stats", "get_load_state", "points", "hybrid_search"];
+    let read_path = READS.contains(&last) || (last == "batch" && (path.contains("/search/") || path.contains("/query/") || path.contains("/recommend/")));
+    let ok = if kind == DbKind::Milvus { read_path && last != "points" } else { method == "GET" || (method == "POST" && read_path) };
     (!ok).then(|| format!("Read-only mode: {method} {path} may change data (only GET and search/query requests run)"))
+}
+
+/// JSON5 이스케이프 (\uXXXX · \xXX · \n …, 줄 이어 쓰기) 를 푼 글. 따옴표 밖의 이름에 쓴 \uXXXX 도 푼다
+fn json5_unescape(t: &str) -> String {
+    let mut out = String::with_capacity(t.len());
+    let mut it = t.chars().peekable();
+    let hex = |it: &mut std::iter::Peekable<std::str::Chars>, n: usize| -> Option<char> {
+        let h: String = (0..n).filter_map(|_| it.next()).collect();
+        u32::from_str_radix(&h, 16).ok().and_then(char::from_u32)
+    };
+    while let Some(c) = it.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match it.next() {
+            Some('u') => out.extend(hex(&mut it, 4)),
+            Some('x') => out.extend(hex(&mut it, 2)),
+            Some('\n' | '\r' | '\u{2028}' | '\u{2029}') => {}
+            Some(o) => out.push(o),
+            None => {}
+        }
+    }
+    out
 }
 
 /// MongoDB 셸: 한 줄짜리 읽기 (find · aggregate (\$out/\$merge 없이) · count …) 만
@@ -335,7 +427,9 @@ fn mongo_read_violation(sql: &str) -> Option<String> {
     const READS: &[&str] = &["find", "findone", "aggregate", "countdocuments", "estimateddocumentcount", "count", "distinct", "getindexes", "stats"];
     // db.<coll>.<method>( …  — 컬렉션 이름에 점이 있을 수 있어 마지막 '(' 앞 낱말을 본다
     let call = t.strip_prefix("db.").and_then(|r| r.split_once('(')).map(|(head, _)| head.rsplit('.').next().unwrap_or("").to_lowercase());
-    let writes_stage = t.contains("$out") || t.contains("$merge");
+    // 드라이버는 JSON5 로 읽는다: "\u0024out" · '\x24merge' 도 $out · $merge 다. 이스케이프를 풀어 본다
+    let plain = json5_unescape(t);
+    let writes_stage = ["$out", "$merge", "$function", "$accumulator"].iter().any(|k| plain.contains(k));
     // 이어진 호출 (.sort().limit()) 은 되지만 문장이 여럿이면 안 된다
     let one = !t.contains(';');
     match call {
@@ -551,6 +645,57 @@ mod tests {
         assert!(!ds("select * from t for no key update"));
         assert!(!ds("select \"delete\" from t"));
         assert!(!bad("select `update` from t", Mysql));
+    }
+
+    /// 드라이버 DB 와 렉서 경계 (2026-10 점검 2차)
+    #[test]
+    fn read_only_plugin_and_lexer_edges() {
+        use DbKind::{Clickhouse, Duckdb, Mssql};
+        let bad = |s: &str, k| read_only_violation(s, k, true).is_some();
+        let ds = |s: &str, k| read_only_violation(s, k, false).is_some();
+        // SQL Server: ; 없이 이어 쓴 문장 · SELECT INTO · 외부 읽기
+        assert!(bad("SELECT 1 DROP TABLE dbo.orders", Mssql));
+        assert!(ds("SELECT 1 EXEC xp_cmdshell 'whoami'", Mssql));
+        assert!(ds("select 1\nexec('drop table t')", Mssql));
+        assert!(ds("SELECT * INTO dbo.x FROM dbo.y", Mssql));
+        assert!(ds("SELECT * FROM OPENROWSET('SQLNCLI', 'Server=x;', 'select 1')", Mssql));
+        assert!(!ds("SELECT name, create_date FROM sys.tables WHERE name <> 'drop'", Mssql));
+        assert!(!ds("SELECT [drop], [use] FROM dbo.t", Mssql));
+        assert!(!ds("SELECT TOP 10 * FROM dbo.t ORDER BY id", Mssql));
+        // REST: Milvus 는 메서드와 상관없이 POST, 경로에 # · % · ..
+        assert!(bad("GET /collections/drop\n{\"collectionName\": \"prod\"}", Milvus));
+        assert!(bad("GET /entities/delete\n{}", Milvus));
+        assert!(!bad("POST /collections/list\n{}", Milvus));
+        assert!(!bad("POST /entities/search\n{}", Milvus));
+        assert!(bad("POST /collections/prod/points/delete#/search\n{}", Qdrant));
+        assert!(bad("POST /api/v1/collections/x/delete#/query\n{}", Chroma));
+        assert!(bad("POST /collections/x/points/delete%2F..%2Fsearch\n{}", Qdrant));
+        assert!(bad("POST /collections/x/points/delete/../search\n{}", Qdrant));
+        assert!(!bad("POST /collections/x/points/search?timeout=5 {\"limit\": 3}", Qdrant));
+        // MongoDB: JSON5 이스케이프로 숨긴 $out / $merge
+        assert!(bad("db.users.aggregate([{\"\\u0024out\": \"users\"}])", Mongodb));
+        assert!(bad("db.users.aggregate([{'\\x24merge': {into: 'x'}}])", Mongodb));
+        assert!(bad("db.users.aggregate([{$o\\u0075t: 'users'}])", Mongodb));
+        assert!(bad("db.users.aggregate([{$facet: {a: [{$merge: 'x'}]}}])", Mongodb));
+        assert!(bad("db.users.find({$expr: {$function: {body: 'x', args: [], lang: 'js'}}})", Mongodb));
+        assert!(!bad("db.users.find({name: {$regex: '\\\\d+'}})", Mongodb));
+        // PostgreSQL: 낱말 끝의 e' 는 E-string 이 아니다 (뒤 토큰이 숨지 않게)
+        assert!(bad("select name'\\', pg_terminate_backend(pid) from pg_stat_activity --'", Postgres));
+        assert!(ds("select name'\\', set_config('default_transaction_read_only','off',false) --'", Postgres));
+        assert!(bad("select é'\\'; delete from t; --'", Postgres));
+        assert!(!bad("select E'it\\'s', 1", Postgres));
+        // PostgreSQL: U& 이름 · 문자열 해석 바꾸기 · SELECT INTO
+        assert!(ds("SET U&\"default_transaction_read\\005fonly\" = off", Postgres));
+        assert!(ds("set standard_conforming_strings = off", Postgres));
+        assert!(ds("select * into t2 from t", Postgres));
+        assert!(!ds("select 'into', \"into\" from t", Postgres));
+        // DuckDB · ClickHouse (MCP): 파일 · 다른 서버 읽기
+        assert!(bad("SELECT * FROM read_text('/Users/x/.ssh/id_rsa')", Duckdb));
+        assert!(bad("select getenv('HOME')", Duckdb));
+        assert!(bad("SELECT * FROM url('http://169.254.169.254/', 'RawBLOB', 'x String')", Clickhouse));
+        assert!(bad("select * from file('/etc/passwd', 'LineAsString')", Clickhouse));
+        assert!(!bad("SELECT count() FROM system.tables", Clickhouse));
+        assert!(!ds("SELECT * FROM read_csv('local.csv')", Duckdb), "the user's own read-only data source may read local files");
     }
 
     #[test]

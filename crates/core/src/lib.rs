@@ -1,6 +1,8 @@
 //! Qurry 엔진. GUI(Tauri) · TUI · MCP 서버가 모두 이 crate 의 `app::AppState` 를 쓴다.
 /// 진단 로그 끄기 (TUI 는 화면을 쓰므로 stderr 로그를 막는다)
 pub static QUIET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// MCP 서버: 드라이버를 서버 밖(로컬 파일·URL·확장 설치)에 손대지 못하게 연다 (DuckDB enable_external_access = false)
+pub static SANDBOX: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[macro_export]
 macro_rules! log {

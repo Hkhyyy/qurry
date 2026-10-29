@@ -158,7 +158,7 @@ pub fn split_statements(text: &str, kind: DbKind) -> Vec<(usize, usize)> {
         }
         if c == b'\'' || c == b'"' || c == b'`' {
             // PG E'…' 문자열은 \ 가 이스케이프
-            let e_string = kind == DbKind::Postgres && c == b'\'' && i > 0 && (b[i - 1] == b'e' || b[i - 1] == b'E') && (i < 2 || !(b[i - 2].is_ascii_alphanumeric() || b[i - 2] == b'_'));
+            let e_string = kind == DbKind::Postgres && c == b'\'' && i > 0 && (b[i - 1] == b'e' || b[i - 1] == b'E') && (i < 2 || !(b[i - 2].is_ascii_alphanumeric() || b[i - 2] == b'_' || b[i - 2] >= 0x80));
             let mut j = i + 1;
             while j < n {
                 // MySQL 백틱 이름 안의 \ 는 이스케이프가 아니다
