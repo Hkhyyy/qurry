@@ -17,7 +17,7 @@ pub struct SecretFile {
     path: PathBuf,
     dir: PathBuf,
     /// Keychain mode opens it when a password is first needed (the app starts regardless of the keychain; if it can't open, the reason)
-    cipher: std::sync::OnceLock<Result<Aes256Gcm, String>>,
+    cipher: std::sync::Mutex<Option<Aes256Gcm>>,
     vault: std::sync::Arc<dyn KeyVault + Send + Sync>,
 }
 
@@ -41,6 +41,8 @@ pub struct OsKeychain;
 
 const KEYCHAIN_SERVICE: &str = "Qurry";
 const KEYCHAIN_MARKER: &str = "secret.key.keychain";
+/// What secret.key holds once the key is in the keychain (any length other than 32, so older versions don't take it as a key)
+const KEY_MOVED_NOTE: &str = "The password key was moved to the system keychain (see secret.key.keychain). Update every Qurry app (GUI, qurry-tui, qurry-mcp) to 0.3 or newer.\n";
 
 /// Keychain calls run on a separate thread (Linux Secret Service runs its own runtime inside, so calling it from a tokio thread hangs)
 fn off_runtime<T: Send>(f: impl FnOnce() -> T + Send) -> T {
@@ -96,8 +98,9 @@ pub fn move_key(dir: &Path, to: KeyLocation, vault: &dyn KeyVault) -> AppResult<
                 return Err(AppError::Msg("The system keychain didn't keep the key — it stays in the file".into()));
             }
             write_private(&marker, account.as_bytes())?;
-            // If the file can't be deleted, revert (with only the marker file left, the key would be looked up in two places)
-            if let Err(e) = fs::remove_file(&key_path) {
+            // secret.key keeps a short note instead of the key. Older Qurry versions (e.g. a Homebrew qurry-tui / qurry-mcp) then refuse to start
+            // ("secret.key is corrupted") instead of setting secrets.json aside and making a new key. If it can't be written, revert
+            if let Err(e) = write_private(&key_path, KEY_MOVED_NOTE.as_bytes()) {
                 let _ = fs::remove_file(&marker);
                 let _ = vault.delete(&account);
                 return Err(e.into());
@@ -155,10 +158,10 @@ impl SecretFile {
 
     pub fn open_with(dir: &Path, vault: std::sync::Arc<dyn KeyVault + Send + Sync>) -> AppResult<Self> {
         private_dir(dir)?;
-        let me = |cipher: std::sync::OnceLock<Result<Aes256Gcm, String>>| Self { path: dir.join("secrets.json"), dir: dir.to_path_buf(), cipher, vault: vault.clone() };
+        let me = |cipher: Option<Aes256Gcm>| Self { path: dir.join("secrets.json"), dir: dir.to_path_buf(), cipher: std::sync::Mutex::new(cipher), vault: vault.clone() };
         // Keychain mode: don't open it now (the app starts even if locked, over SSH, or headless)
         if key_location(dir) == KeyLocation::Keychain {
-            return Ok(me(std::sync::OnceLock::new()));
+            return Ok(me(None));
         }
         let key_path = dir.join("secret.key");
         let secrets_path = dir.join("secrets.json");
@@ -178,7 +181,7 @@ impl SecretFile {
                 k
             }
         };
-        Ok(me(std::sync::OnceLock::from(Ok(Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key))))))
+        Ok(me(Some(Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key)))))
     }
 
     /// Read the key now (before moving the key: so this store keeps using the same key after the move)
@@ -187,15 +190,19 @@ impl SecretFile {
     }
 
     /// Encryption key: in keychain mode, read from the keychain on first call (if it can't be read, the reason; no new key is created — stored passwords would become undecryptable)
-    fn cipher(&self) -> AppResult<&Aes256Gcm> {
-        self.cipher
-            .get_or_init(|| match self.vault.get(&keychain_account(&self.dir)) {
-                Ok(Some(k)) if k.len() == 32 => Ok(Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&k))),
-                Ok(_) => Err(format!("The password key is not in the system keychain (see {}) — restore it, or delete that file and secrets.json to start over", self.dir.join(KEYCHAIN_MARKER).display())),
-                Err(e) => Err(format!("{e} — allow Qurry to use the keychain (saved passwords can't be read until then)")),
-            })
-            .as_ref()
-            .map_err(|e| AppError::Msg(e.clone()))
+    /// A failure isn't remembered: the next password lookup asks the keychain again (e.g. after the user allows access)
+    fn cipher(&self) -> AppResult<Aes256Gcm> {
+        let mut c = self.cipher.lock().unwrap();
+        if let Some(k) = c.as_ref() {
+            return Ok(k.clone());
+        }
+        let k = match self.vault.get(&keychain_account(&self.dir)) {
+            Ok(Some(k)) if k.len() == 32 => Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&k)),
+            Ok(_) => return Err(AppError::Msg(format!("The password key is not in the system keychain (see {}) — restore it, or delete that file and secrets.json to start over", self.dir.join(KEYCHAIN_MARKER).display()))),
+            Err(e) => return Err(AppError::Msg(format!("{e} — allow Qurry to use the keychain (saved passwords can't be read until then)"))),
+        };
+        *c = Some(k.clone());
+        Ok(k)
     }
 
     /// Empty list if missing. Error if unreadable or corrupt (treating it as empty and saving would wipe all other passwords)
@@ -252,7 +259,7 @@ impl SecretFile {
         }
         let cipher = self.cipher()?;
         self.locked(|all| {
-            let Some((v, legacy)) = all.get(name).and_then(|enc| self.open_entry(cipher, name, enc)) else { return Ok((None, false)) };
+            let Some((v, legacy)) = all.get(name).and_then(|enc| self.open_entry(&cipher, name, enc)) else { return Ok((None, false)) };
             if legacy {
                 all.insert(name.to_string(), self.seal(name, &v)?);
             }
@@ -373,13 +380,14 @@ mod tests {
         SecretFile::open_with(&dir, vault.clone()).unwrap().set("a", Some("pw")).unwrap();
         move_key(&dir, KeyLocation::Keychain, &*vault).unwrap();
         assert_eq!(key_location(&dir), KeyLocation::Keychain);
-        assert!(!dir.join("secret.key").exists());
+        // secret.key keeps a note that older versions can't take as a key (they stop instead of starting over)
+        assert_ne!(std::fs::read(dir.join("secret.key")).unwrap().len(), 32);
         assert_eq!(SecretFile::open_with(&dir, vault.clone()).unwrap().get("a").unwrap().as_deref(), Some("pw"));
         // Opens even without a key in the keychain (the app starts); the reason is reported when a password is used. No new key is created
         let empty = SecretFile::open_with(&dir, std::sync::Arc::new(MemVault::default())).unwrap();
         assert!(empty.get("a").is_err() && empty.set("b", Some("x")).is_err());
         assert!(empty.contains("a"));
-        assert!(!dir.join("secret.key").exists());
+        assert_ne!(std::fs::read(dir.join("secret.key")).unwrap().len(), 32);
         move_key(&dir, KeyLocation::File, &*vault).unwrap();
         assert_eq!(key_location(&dir), KeyLocation::File);
         assert!(vault.0.lock().unwrap().is_empty());

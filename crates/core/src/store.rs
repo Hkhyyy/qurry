@@ -263,7 +263,11 @@ impl ConnectionConfig {
     /// Redis Sentinel · Cluster nodes are servers too. Turning SSL off, lowering verification, or changing the CA counts as a different server
     pub fn same_server(&self, other: &ConnectionConfig) -> bool {
         let t = |c: &ConnectionConfig| {
-            let redis = c.redis.as_ref().map(|r| (r.mode.clone(), r.sentinel_master.clone(), r.nodes.split([',', ' ']).filter(|n| !n.is_empty()).map(|n| n.to_lowercase()).collect::<Vec<_>>()));
+            // Only Redis has nodes; no Redis settings = standalone (the TUI form always fills them in)
+            let redis = (c.kind == DbKind::Redis).then(|| {
+                let r = c.redis.clone().unwrap_or_default();
+                (c.redis_mode().to_string(), r.sentinel_master.trim().to_string(), r.nodes.split([',', ' ']).filter(|n| !n.is_empty()).map(|n| n.to_lowercase()).collect::<Vec<_>>())
+            });
             (c.kind, c.host.trim().to_lowercase(), c.port, c.user.clone(), c.active_ssh().map(|s| (s.host.trim().to_lowercase(), s.port)), redis)
         };
         let rank = |c: &ConnectionConfig| match c.active_ssl().map(|s| s.mode()) {
@@ -297,8 +301,10 @@ impl ConnectionConfig {
             Some("off") => McpAccess::Off,
             Some("read") => McpAccess::Read,
             Some("write") => McpAccess::Write,
-            _ if self.options.confirm_changes => McpAccess::Off,
-            _ => McpAccess::Write,
+            // Any other value (a typo, "On", "") is Off — never more than the user picked
+            Some(_) => McpAccess::Off,
+            None if self.options.confirm_changes => McpAccess::Off,
+            None => McpAccess::Write,
         };
         if a == McpAccess::Write && (!allow_write || self.read_only) { McpAccess::Read } else { a }
     }
@@ -382,8 +388,13 @@ impl Store {
                     if !script(&c).is_empty() {
                         notes.push("runs a startup script on connect".to_string());
                     }
-                    if matches!(c.options.mcp.as_deref(), Some("read") | Some("write")) {
-                        notes.push(format!("shared with MCP ({})", c.options.mcp.as_deref().unwrap_or("")));
+                    // What the import will really allow (unset becomes Off, see import_from)
+                    let mut as_saved = c.clone();
+                    as_saved.options.mcp.get_or_insert_with(|| "off".into());
+                    match as_saved.mcp_access(true) {
+                        McpAccess::Off => {}
+                        McpAccess::Read => notes.push("shared with MCP (read)".into()),
+                        McpAccess::Write => notes.push("shared with MCP (read & write)".into()),
                     }
                     if c.active_ssl().is_some_and(|s| s.mode() == "require") {
                         notes.push("SSL without certificate checks".into());
@@ -556,7 +567,7 @@ mod tests {
         assert!(a.same_server(&b));
         let changes: [fn(&mut ConnectionConfig); 9] = [|c| c.host = "attacker.example".into(), |c| c.port = 5433, |c| c.user = "root".into(), |c| c.kind = DbKind::Mysql,
             |c| c.ssl.as_mut().unwrap().enabled = false, |c| c.ssh.as_mut().unwrap().host = "evil".into(), |c| c.ssl.as_mut().unwrap().mode = "require".into(),
-            |c| c.ssl.as_mut().unwrap().ca_file = "/tmp/evil-ca.pem".into(), |c| c.redis = Some(RedisMode { mode: "sentinel".into(), sentinel_master: "m".into(), nodes: "evil:26379".into() })];
+            |c| c.ssl.as_mut().unwrap().ca_file = "/tmp/evil-ca.pem".into(), |c| c.options.allow_plaintext = true];
         for f in changes {
             let mut c = a.clone();
             f(&mut c);
@@ -565,6 +576,14 @@ mod tests {
         let mut c = a.clone();
         c.ssh.as_mut().unwrap().user = "other".into();
         assert!(!a.same_ssh(&c));
+        // Redis: Sentinel / Cluster nodes are servers too; no settings = standalone
+        let r: ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "r", "name": "r", "kind": "redis", "host": "cache", "port": 6379, "user": "" })).unwrap();
+        let mut same = r.clone();
+        same.redis = Some(RedisMode { mode: "standalone".into(), sentinel_master: String::new(), nodes: String::new() });
+        assert!(r.same_server(&same), "the TUI form's filled-in standalone settings are the same server");
+        let mut moved = r.clone();
+        moved.redis = Some(RedisMode { mode: "sentinel".into(), sentinel_master: "m".into(), nodes: "evil:26379".into() });
+        assert!(!r.same_server(&moved));
     }
 
     #[test]
@@ -583,6 +602,10 @@ mod tests {
         assert_eq!(c.mcp_access(true), McpAccess::Read);
         c.options.mcp = Some("off".into());
         assert_eq!(c.mcp_access(true), McpAccess::Off);
+        for odd in ["On", "", "WRITE", "yes"] {
+            c.options.mcp = Some(odd.into());
+            assert_eq!(c.mcp_access(true), McpAccess::Off, "{odd}");
+        }
     }
 
     #[test]

@@ -3074,7 +3074,7 @@ impl App {
         use qurry_core::secrets::KeyLocation;
         let to_keychain = self.state.secret_key_location() == KeyLocation::File;
         let text = if to_keychain {
-            "The password key is in the config folder (secret.key).\n\nMove it into the system keychain? The GUI and the MCP server use the same key, so each asks for keychain access once (on macOS, again after updates while Qurry isn't code-signed)."
+            "The password key is in the config folder (secret.key).\n\nMove it into the system keychain? The GUI and the MCP server use the same key, so each asks for keychain access once (on macOS, again after updates while Qurry isn't code-signed).\n\nUpdate every Qurry app first (GUI, qurry-tui, qurry-mcp): older versions can't read the key there."
         } else {
             "The password key is in the system keychain.\n\nMove it back to the config folder (no keychain prompts)?"
         };
