@@ -1,6 +1,6 @@
 import { monaco } from "./monaco";
 import { CompletionTable, meta } from "./api";
-import { hintable, hintContext, hintInsert } from "./valueHint";
+import { hintable, hintContext, hintInsert, pairsForKeys } from "./valueHint";
 
 /** 콘솔(모델 URI) → 접속 id, 접속 id → 메타 캐시 */
 const modelConn = new Map<string, string>();
@@ -53,15 +53,17 @@ function findTable(all: CompletionTable[], ref: string) {
 
 for (const lang of ["pgsql", "mysql"]) {
   monaco.languages.registerCompletionItemProvider(lang, {
-    // ' = 값 · json 키 추천 (따옴표를 치면 바로)
-    triggerCharacters: [".", "'"],
-    async provideCompletionItems(model, position) {
+    // 값 · json 키 추천: 따옴표 · '->>' 뒤 · '=' 뒤 빈칸에서 바로 (그 밖의 빈칸 · '>' 에서는 열지 않는다)
+    triggerCharacters: [".", "'", " ", ">"],
+    async provideCompletionItems(model, position, context) {
       const connId = modelConn.get(model.uri.toString());
       const all = connId ? await (cache.get(connId) ?? load(connId)) : [];
       const K = monaco.languages.CompletionItemKind;
+      const quiet = context.triggerKind === monaco.languages.CompletionTriggerKind.TriggerCharacter && (context.triggerCharacter === " " || context.triggerCharacter === ">");
 
-      // 값 · json 키: where status = '… / data->>'…
-      const ctx = hintContext(model.getLineContent(position.lineNumber).slice(0, position.column - 1), lang === "mysql");
+      // 값 · json 키: where status = '… / data->>'… / reasons @> '…
+      const lineText = model.getLineContent(position.lineNumber);
+      const ctx = hintContext(lineText.slice(0, position.column - 1), lang === "mysql");
       if (ctx && connId) {
         const refs = tablesInStatement(model.getValue());
         const named = ctx.ref ? refs.find((r) => r.alias?.toLowerCase() === ctx.ref!.toLowerCase()) ?? refs.find((r) => r.ref.split(".").pop()!.toLowerCase() === ctx.ref!.toLowerCase()) : undefined;
@@ -69,22 +71,31 @@ for (const lang of ["pgsql", "mysql"]) {
         const t = cands.find((x) => x.columns.some(([c]) => c.toLowerCase() === ctx.column.toLowerCase()));
         const col = t?.columns.find(([c]) => c.toLowerCase() === ctx.column.toLowerCase());
         if (t && col && hintable(ctx, col[1])) {
-          const hints = await meta.hints(connId, { schema: t.schema, table: t.name, column: col[0], path: ctx.path, keys: ctx.keys }).catch(() => []);
+          const ask = (mode: "values" | "keys" | "pairs") => meta.hints(connId, { schema: t.schema, table: t.name, column: col[0], path: ctx.path, keys: mode === "keys", pairs: mode === "pairs" }).catch(() => []);
+          let hints = await ask(ctx.mode);
+          // 키가 없는 json (객체의 배열 등): 키 대신 많이 나온 키: 값을 @> 조건으로 (연산자째 바꾼다)
+          const asPairs = ctx.mode === "keys" && !hints.length && lang !== "mysql";
+          if (asPairs) hints = await ask("pairs");
+          const rows = (n: number) => `${n.toLocaleString("en-US")} row${n === 1 ? "" : "s"}`;
           const range = new monaco.Range(position.lineNumber, position.column - ctx.typed.length, position.lineNumber, position.column);
+          // 따옴표가 저절로 닫혀 있으면 그것까지 바꾼다
+          const closing = lineText[position.column - 1] === "'" ? 1 : 0;
+          const opRange = new monaco.Range(position.lineNumber, position.column - (ctx.op?.length ?? 0), position.lineNumber, position.column + closing);
           return {
             suggestions: hints.map((h, i) => ({
-              label: { label: h.value, description: `${h.count.toLocaleString("en-US")} row${h.count === 1 ? "" : "s"}${ctx.keys ? " · key" : ""}` },
-              kind: ctx.keys ? K.Property : K.Value,
-              insertText: ctx.keys ? h.value.replace(/'/g, "''") : hintInsert(h.value, ctx, col[1]),
-              filterText: h.value,
+              label: { label: asPairs ? `@> '${h.value}'` : h.value, description: `${rows(h.count)}${ctx.mode === "keys" && !asPairs ? " · key" : ""}` },
+              kind: ctx.mode === "keys" && !asPairs ? K.Property : K.Value,
+              insertText: asPairs ? pairsForKeys(h.value, ctx) : hintInsert(h.value, ctx, col[1]),
+              filterText: asPairs ? (ctx.op ?? "") + h.value : h.value,
               sortText: String(i).padStart(4, "0"),
-              range,
+              range: asPairs ? opRange : range,
             })),
           };
         }
         // 따옴표 안: 키워드 · 테이블은 맞지 않는다
         if (ctx.quoted) return { suggestions: [] };
       }
+      if (quiet) return { suggestions: [] };
       const word = model.getWordUntilPosition(position);
       const range = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn);
       const line = model.getLineContent(position.lineNumber).slice(0, word.startColumn - 1);

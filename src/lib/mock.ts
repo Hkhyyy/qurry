@@ -88,10 +88,17 @@ const handlers: Record<string, (a: any) => unknown> = {
   }),
   completion_meta: () => [
     { schema: "public", name: "users", columns: [["id", "bigint"], ["user_name", "varchar"]] },
-    { schema: "public", name: "orders", columns: [["id", "bigint"], ["status", "varchar"], ["amount", "numeric"], ["data", "jsonb"]] },
+    { schema: "public", name: "orders", columns: [["id", "bigint"], ["status", "varchar"], ["amount", "numeric"], ["data", "jsonb"], ["reasons", "jsonb"]] },
   ],
-  column_hints: (a: { req: { column: string; path: string[]; keys: boolean } }) =>
-    a.req.keys
+  shared_workspaces: () => null,
+  adopt_workspaces: (a: any) => ({ list: a.local, renamed: [] }),
+  sync_workspaces: (a: any) => a.next,
+  column_hints: (a: { req: { column: string; path: string[]; keys: boolean; pairs?: boolean } }) =>
+    a.req.pairs
+      ? [{ value: '[{"code": "out_of_scope_payment_type"}]', count: 120 }, { value: '[{"code": "self_transfer"}]', count: 31 }]
+      : a.req.keys && a.req.column === "reasons"
+      ? []
+      : a.req.keys
       ? a.req.path.length ? [{ value: "src", count: 30 }, { value: "ip", count: 12 }] : [{ value: "kind", count: 30 }, { value: "meta", count: 30 }, { value: "coupon", count: 4 }]
       : a.req.column === "status" ? [{ value: "ready", count: 20 }, { value: "paid", count: 10 }, { value: "it's late", count: 1 }]
       : a.req.column === "amount" ? [{ value: "1000", count: 7 }, { value: "2500", count: 3 }]
