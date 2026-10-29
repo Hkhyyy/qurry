@@ -2,7 +2,7 @@
 
 [English](../database-tools.md) | 한국어
 
-관리 리포트, 다이어그램, 스키마 · 데이터 비교, 마이그레이션, 백업, 쿼리 히스토리, 실행 계획입니다.
+관리 리포트, 다이어그램, 스키마 · 데이터 비교, 마이그레이션, 백업, 파일 가져오기, 테스트 데이터, 관련 행 복사, 차트, 쿼리 히스토리, 실행 계획입니다.
 
 ## 데이터베이스 관리 (PostgreSQL, MySQL)
 
@@ -33,6 +33,42 @@ GUI — Data Source 우클릭 › Tools › Compare & Migrate · TUI — `⌃k` 
 ## 백업 · 복원
 
 데이터베이스 우클릭 › Tools › Back Up Database… / Restore Database… (TUI: `⌃k`). 이 컴퓨터의 `pg_dump` / `pg_restore` / `psql` 또는 `mysqldump` / `mysql` 을 실행합니다 (Homebrew `libpq`, `mysql-client`, Postgres.app, 리눅스의 흔한 위치도 찾습니다. PostgreSQL 은 서버 버전에 가장 가까운 클라이언트를 씁니다). 비밀번호는 환경 변수로 넘기고, SSH 터널을 쓰고, 진행 상황은 상태 표시줄에 나오며 취소할 수 있습니다.
+
+## 객체 만들기 · 고치기 (PostgreSQL, MySQL)
+
+DataGrip 처럼: 우클릭 › **New ▸** Table… / View… / Materialized View… / Sequence… / Schema… / Database…, 테이블 › **Modify Table…** (`⌘F6`), **Rename…** (`⇧F6`). TUI: `⌃k` › New Table… / Modify Table… (`⌃F6`) / New View… / New Schema… / New Database… / New Sequence… / Rename… (`⇧F6`).
+- 테이블 디자이너는 컬럼 (이름, 타입, NOT NULL, 기본값, 자동 번호 / identity, PK, 설명), 인덱스, 외래 키 (ON DELETE / ON UPDATE) 를 고칩니다. 고치는 동안 실행될 SQL 이 바로 보입니다: 새 테이블은 `CREATE TABLE`, 바꾸면 `ALTER` 문장들. 이름을 바꾼 컬럼은 키 · 인덱스 · 외래 키가 그대로 따라갑니다.
+- TUI 에서는 한 줄을 SQL 처럼 씁니다: 컬럼 `email varchar(100) not null default 'x' auto pk comment 'login'`, 인덱스 `users_email_idx (email) unique`, 외래 키 `orders_user_fk (user_id) -> users (id) on delete cascade`. 키: `a` 컬럼 · `i` 인덱스 · `f` 외래 키 · `↩` 고치기 · `d` 지우기 · `p` PK · `n` 이름 · `c` 설명 · `F5` 실행 · `o` 콘솔로 열기.
+- PostgreSQL 은 한 트랜잭션으로 실행하고 (한 문장이라도 실패하면 아무것도 안 바뀜), MySQL 은 문장마다 바로 반영됩니다. Production Data Source 는 먼저 묻고, 운영 작업 기록에 남습니다. **Open in Console** 은 실행하는 대신 SQL 을 콘솔에 넣습니다.
+
+## 데이터 가져오기 (CSV, TSV, JSON, Excel)
+
+테이블 우클릭 › Import/Export › Import Data from File… (또는 스키마 › Import Data into New Table…) · TUI: `⌃k` › Import Data from File…. `.csv`, `.tsv`, `.json` (객체 배열), Excel `.xlsx` / `.xls` / `.ods` (첫 시트, 첫 줄이 컬럼 이름) 를 읽습니다. 파일 컬럼을 테이블 컬럼에 짝지으면 전부 트랜잭션 하나로 넣습니다 — 한 행이라도 실패하면 아무것도 들어가지 않습니다. Excel 날짜는 `YYYY-MM-DD [HH:MM:SS]`, 정수는 `.0` 없이, 빈 칸은 NULL 로 들어갑니다.
+
+## 테스트 데이터 만들기 (PostgreSQL, MySQL)
+
+테이블 우클릭 › Import/Export › Generate Test Data… · TUI: 테이블을 고르고 `⌃k` › Generate Test Data…. 테이블 제약을 지나는 그럴듯한 행을 채웁니다:
+- 타입 · 길이 · 정밀도, `NOT NULL`, 이미 있는 행과 겹치지 않는 UNIQUE · PK 값
+- enum 값과 `CHECK (col IN (…))` 목록
+- 외래 키는 가리키는 테이블에 이미 있는 행에서 고릅니다 (부모를 먼저 채우세요)
+- 컬럼 이름으로 내용을 짐작합니다 — `email`, `phone`, `name`, `address`, `city`, `url`, `status`, `price`, `created_at` …
+- 자동 번호 · identity · 계산 컬럼은 DB 에 맡깁니다
+
+컬럼마다 어떻게 채울지와 예시를 먼저 보여 주고, 최대 100,000 행을 트랜잭션 하나로 넣습니다.
+
+## 관련 행을 다른 Data Source 로 복사 (PostgreSQL, MySQL)
+
+운영 DB 전체를 복사하지 않고 실제 데이터로 디버깅할 때: 테이블 우클릭 › Import/Export › Copy Related Rows To… · TUI: `⌃k` › Copy Related Rows To….
+1. WHERE 조건으로 시작 행을 고릅니다 (예: `id = 42`).
+2. 그 행이 가리키는 행 (부모) 은 늘 같이 와서 외래 키가 깨지지 않습니다. 그 행을 가리키는 행 (자식 — 예: 고객의 주문, 그 주문의 품목) 은 고른 단계까지 같이 옵니다.
+3. 개인정보는 읽을 때 가립니다 (기본으로 켜져 있고, 창에서 체크를 끄거나 TUI 에서 "Copy as is" 를 고르면 그대로 복사): 이메일, 전화번호, 사람 이름, 주소, 주민 · 카드 번호, 비밀번호 · 토큰, 생일, IP 주소 (컬럼 이름으로 판단). md5 로 가려서 같은 값은 늘 같은 값으로 가려집니다. PK · FK 컬럼은 가리지 않습니다.
+4. Preview 는 테이블마다 몇 행인지, 어느 컬럼을 가리는지 보여 줍니다. Copy 는 부모부터 대상 Data Source (같은 종류) 에 트랜잭션 하나로 넣고, 이미 있는 행은 건너뜁니다.
+
+대상에 테이블이 미리 있어야 합니다 ([비교와 마이그레이션](#비교와-마이그레이션) 이 DDL 을 만듭니다). 한 번에 최대 50,000 행.
+
+## 차트
+
+GUI: 결과에서 View as (눈 아이콘) › **Chart**: 막대 · 선 · 파이. X 와 Y (여러 개) 를 고르면 같은 X 의 행은 더하고, **count** 는 행 수를 셉니다. 이미 불러온 행을 씁니다. TUI: `⌃k` › Chart Result 가 가로 막대로 그립니다 — 첫 텍스트 컬럼별 첫 수 컬럼의 합 (없으면 행 수).
 
 ## 쿼리 히스토리 · 스니펫
 

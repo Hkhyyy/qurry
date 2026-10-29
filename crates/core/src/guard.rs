@@ -125,9 +125,22 @@ fn scan(sql: &str, kind: DbKind) -> Scan {
     Scan { toks, exec_comment }
 }
 
-/// PROD 안전장치: UPDATE / DELETE 가 바꿀 행 수를 세는 SELECT count(*). 같은 테이블·조건으로만 바꿀 수 있는 단순한 문장만
-/// (CTE, UPDATE … FROM, DELETE … USING, 여러 테이블, ORDER BY / LIMIT 이 있으면 None: 셀 수 없다)
-pub fn impact_count_sql(sql: &str, kind: DbKind) -> Option<String> {
+/// 단순한 UPDATE / DELETE 한 문장의 모양 (PROD 안전장치: 바뀔 행 수 세기 · 되돌리기 SQL).
+/// 같은 테이블·조건으로만 바꾸는 문장만 (CTE, UPDATE … FROM, DELETE … USING, 여러 테이블, ORDER BY / LIMIT 이 있으면 None)
+#[derive(Debug, Clone, PartialEq)]
+pub struct SimpleDml {
+    pub delete: bool,
+    /// 테이블 이름 (쓴 그대로, 별칭 빼고): public."Order Items"
+    pub table: String,
+    /// FROM 에 쓸 글 (별칭 포함): public."Order Items" o
+    pub from: String,
+    /// WHERE 조건 (없으면 모든 행)
+    pub cond: Option<String>,
+    /// UPDATE 가 바꾸는 컬럼 (따옴표는 벗기고, 안 감싼 PostgreSQL 이름은 소문자)
+    pub set_cols: Vec<String>,
+}
+
+pub fn simple_dml(sql: &str, kind: DbKind) -> Option<SimpleDml> {
     if kind == DbKind::Redis {
         return None;
     }
@@ -148,13 +161,13 @@ pub fn impact_count_sql(sql: &str, kind: DbKind) -> Option<String> {
         return None;
     }
     let where_i = find("where", first + 1);
-    let (a, b) = match verb.as_str() {
+    let (a, b, set) = match verb.as_str() {
         "delete" => {
             let from = find("from", first + 1)?;
             if from != first + 1 {
                 return None;
             }
-            (from + 1, where_i.or(find("returning", from)).unwrap_or(t.len()))
+            (from + 1, where_i.or(find("returning", from)).unwrap_or(t.len()), None)
         }
         "update" => {
             let set = find("set", first + 1)?;
@@ -162,14 +175,20 @@ pub fn impact_count_sql(sql: &str, kind: DbKind) -> Option<String> {
             if find("from", set).is_some_and(|f| where_i.is_none_or(|w| f < w)) || (first + 1..set).any(|i| t[i].text == "," && t[i].depth == 0) {
                 return None;
             }
-            (first + 1, set)
+            (first + 1, set, Some(set))
         }
         _ => return None,
     };
-    if a >= b {
+    if a >= b || !t[a].word {
         return None;
     }
-    let table = &sql[t[a].start..t[b - 1].end];
+    // 이름: a.b.c (별칭 앞까지)
+    let mut name_end = a;
+    while name_end + 2 < b && t[name_end + 1].text == "." && t[name_end + 2].word {
+        name_end += 2;
+    }
+    let table = sql[t[a].start..t[name_end].end].to_string();
+    let from = sql[t[a].start..t[b - 1].end].to_string();
     // 조건: WHERE 다음부터 RETURNING 앞까지 (뒤 주석은 빼고)
     let cond = match where_i {
         Some(w) => {
@@ -177,13 +196,53 @@ pub fn impact_count_sql(sql: &str, kind: DbKind) -> Option<String> {
             if w + 1 >= stop {
                 return None;
             }
-            Some(&sql[t[w + 1].start..t[stop - 1].end])
+            Some(sql[t[w + 1].start..t[stop - 1].end].to_string())
         }
         None => None,
     };
-    Some(match cond {
-        Some(c) => format!("SELECT count(*) FROM {table} WHERE {c}"),
-        None => format!("SELECT count(*) FROM {table}"),
+    // SET a = 1, o.b = 2, (c, d) = (…): = 앞의 이름들 (점이 있으면 마지막)
+    let mut set_cols = Vec::new();
+    if let Some(set) = set {
+        let stop = where_i.or(find("returning", set)).unwrap_or(t.len());
+        let name = |x: &Tok| {
+            let raw = &sql[x.start..x.end];
+            match raw.chars().next() {
+                Some(q @ ('"' | '`')) => raw[1..raw.len() - 1].replace(&format!("{q}{q}"), &q.to_string()),
+                _ if kind == DbKind::Postgres => raw.to_lowercase(),
+                _ => raw.to_string(),
+            }
+        };
+        let mut i = set + 1;
+        let mut left = true;
+        let mut last: Option<&Tok> = None;
+        while i < stop {
+            let x = &t[i];
+            if x.depth == 0 && x.text == "," {
+                left = true;
+            } else if left && x.depth == 0 && x.text == "=" {
+                if let Some(l) = last.take() {
+                    set_cols.push(name(l));
+                }
+                left = false;
+            } else if left && x.word {
+                last = Some(x);
+            } else if left && x.text == "," && x.depth == 1 {
+                if let Some(l) = last.take() {
+                    set_cols.push(name(l));
+                }
+            }
+            i += 1;
+        }
+    }
+    Some(SimpleDml { delete: verb == "delete", table, from, cond, set_cols })
+}
+
+/// PROD 안전장치: UPDATE / DELETE 가 바꿀 행 수를 세는 SELECT count(*). 셀 수 없는 문장이면 None
+pub fn impact_count_sql(sql: &str, kind: DbKind) -> Option<String> {
+    let d = simple_dml(sql, kind)?;
+    Some(match d.cond {
+        Some(c) => format!("SELECT count(*) FROM {} WHERE {c}", d.from),
+        None => format!("SELECT count(*) FROM {}", d.from),
     })
 }
 
@@ -400,6 +459,21 @@ mod tests {
         assert_eq!(my("DELETE FROM t WHERE a = 1 ORDER BY id LIMIT 10"), None);
         assert_eq!(my("UPDATE a JOIN b ON a.id = b.id SET a.x = 1"), None);
         assert_eq!(my("UPDATE a, b SET a.x = b.x WHERE a.id = b.id"), None);
+    }
+
+    /// 되돌리기 SQL 에 쓰는 모양: 테이블 이름 (별칭 빼고) · 바꾸는 컬럼
+    #[test]
+    fn simple_dml_shape() {
+        let d = simple_dml("update public.\"Order Items\" o set qty = qty + 1, o.\"Note\" = 'x', (a, B) = (1, 2) where o.qty < 0", DbKind::Postgres).unwrap();
+        assert_eq!(d.table, "public.\"Order Items\"");
+        assert_eq!(d.from, "public.\"Order Items\" o");
+        assert_eq!(d.cond.as_deref(), Some("o.qty < 0"));
+        assert_eq!(d.set_cols, vec!["qty", "Note", "a", "b"]);
+        assert!(!d.delete);
+        let d = simple_dml("DELETE FROM `Shop`.`Order` WHERE id = 1", DbKind::Mysql).unwrap();
+        assert!(d.delete && d.set_cols.is_empty());
+        assert_eq!(d.table, "`Shop`.`Order`");
+        assert_eq!(simple_dml("update t set a = (select max(x) from y where z = 1), b = 2", DbKind::Postgres).unwrap().set_cols, vec!["a", "b"]);
     }
     use super::*;
     use DbKind::{Chroma, Milvus, Mongodb, Mysql, Postgres, Qdrant};

@@ -71,6 +71,8 @@ export const KEYMAP: KeySection[] = [
       ["⌥⇧⌘B", "Open DDL in console", "tree.ddlConsole"],
       ["⌥⇧⌘C", "Copy reference", "tree.copyRef"],
       ["F1", "Quick documentation", "tree.quickDoc"],
+      ["⌘F6", "Modify table (columns, keys, indexes, foreign keys)", "tree.modify"],
+      ["⇧F6", "Rename table / view / sequence / schema / database", "tree.rename"],
       ["⌘;", "Data source properties", "tree.properties"],
       ["⌘n", "New data source", "tree.newDs"],
       ["⌘d", "Duplicate data source", "tree.duplicate"],

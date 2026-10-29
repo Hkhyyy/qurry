@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ask, askText } from "./lib/dialogs";
 import { listen } from "@tauri-apps/api/event";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { analyzePlan, api, backup, ConnectionView, previewImpact, dialectOf, meta, VECTOR_KINDS, QueryResult, redisDb, setUpdateCheckEnabled, targetId, UpdateInfo, updateCheckEnabled } from "./lib/api";
+import { analyzePlan, api, auditLog, backup, ConnectionView, ddl, previewImpact, dialectOf, meta, VECTOR_KINDS, QueryResult, redisDb, setUpdateCheckEnabled, targetId, UpdateInfo, updateCheckEnabled } from "./lib/api";
 import { RedisBrowser } from "./components/RedisBrowser";
 import { KeymapDialog } from "./components/KeymapDialog";
 import { KeymapEditor } from "./components/KeymapEditor";
@@ -12,6 +12,9 @@ import { ConnectionDialog } from "./components/ConnectionDialog";
 import { ConsoleEditor, EditorApi } from "./components/ConsoleEditor";
 import { ConsolePane, OutputLine, ResultEntry } from "./components/ConsolePane";
 import { HistoryDialog, migrateOldHistory, pushHistory, saveSnippet } from "./components/HistoryDialog";
+import { ProductionLog } from "./components/ProductionLog";
+import { CopyRowsDialog, GenerateDataDialog } from "./components/DataTools";
+import { NewKind, NewObjectDialog, TableDesigner } from "./components/ObjectEditors";
 import { EditTarget } from "./components/ResultGrid";
 import { TableEditor } from "./components/TableEditor";
 import { RagView } from "./components/RagView";
@@ -189,6 +192,8 @@ export default function App() {
   const editorApis = useRef(new Map<string, EditorApi>());
   const [historyFor, setHistoryFor] = useState<string | null>(null);
   const [historyTab, setHistoryTab] = useState<"history" | "snippets">("history");
+  /** 운영 작업 기록 창 (connId null = 모든 Data Source) */
+  const [prodLog, setProdLog] = useState<{ connId: string | null } | null>(null);
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
 
@@ -693,6 +698,12 @@ export default function App() {
   // ───────── 데이터 내보내기·가져오기 (형식 고르기 → 하단 진행 막대) ─────────
   const [exportReq, setExportReq] = useState<{ target: string; sql: string; name: string; table: [string, string] | null } | null>(null);
   const [importReq, setImportReq] = useState<{ target: string; schema: string; table?: string; refresh?: () => void } | null>(null);
+  /** 테스트 데이터 만들기 창 */
+  const [genReq, setGenReq] = useState<{ target: string; schema: string; table: string; conn: ConnectionView } | null>(null);
+  /** 객체 만들기 · 고치기 (New ▸ · Modify Table…) */
+  const [objEdit, setObjEdit] = useState<{ target: string; conn: ConnectionView; db?: string; schema: string; table?: string; newKind?: NewKind; refresh?: () => void } | null>(null);
+  /** 운영 데이터 일부 복사 창 */
+  const [copyReq, setCopyReq] = useState<{ target: string; schema: string; table: string; conn: ConnectionView } | null>(null);
   const [jobs, setJobs] = useState<TransferJob[]>([]);
   useEffect(() => {
     let off: (() => void) | undefined;
@@ -828,7 +839,7 @@ export default function App() {
   };
 
   // ───────── Database Explorer 동작 (DataGrip 키맵) ─────────
-  const K = { edit: sk("tree.editData"), props: sk("tree.properties"), refresh: sk("tree.refresh"), deact: sk("tree.disconnect"), jump: sk("tree.jumpConsole"), ddl: sk("tree.ddl"), gen: sk("tree.sqlGen"), ddlClip: sk("tree.ddlCopy"), ddlCons: sk("tree.ddlConsole"), ref: sk("tree.copyRef"), doc: sk("tree.quickDoc"), drop: sk("tree.remove"), dup: sk("tree.duplicate"), console: sk("console.new"), force: bindings("tree.refresh")[1] ? formatSpec(bindings("tree.refresh")[1]) : undefined, newK: sk("tree.newDs") };
+  const K = { modify: sk("tree.modify"), rename: sk("tree.rename"), edit: sk("tree.editData"), props: sk("tree.properties"), refresh: sk("tree.refresh"), deact: sk("tree.disconnect"), jump: sk("tree.jumpConsole"), ddl: sk("tree.ddl"), gen: sk("tree.sqlGen"), ddlClip: sk("tree.ddlCopy"), ddlCons: sk("tree.ddlConsole"), ref: sk("tree.copyRef"), doc: sk("tree.quickDoc"), drop: sk("tree.remove"), dup: sk("tree.duplicate"), console: sk("console.new"), force: bindings("tree.refresh")[1] ? formatSpec(bindings("tree.refresh")[1]) : undefined, newK: sk("tree.newDs") };
   const [quickDoc, setQuickDoc] = useState<{ title: string; text: string } | null>(null);
   // ───────── 백업·복원 ─────────
   const [backupReq, setBackupReq] = useState<{ c: ConnectionView; db?: string } | null>(null);
@@ -916,14 +927,55 @@ export default function App() {
     setDialog({ edit: { ...c, ...saved, hasPassword: false, connected: false } });
   };
 
+  /** 노드의 스키마 (MySQL 은 DB 가 곧 스키마, PG 는 public) */
+  const schemaOf = (info: NodeInfo) => info.schema ?? (info.conn.kind === "mysql" ? info.db ?? info.conn.database : "public");
+  const canDdl = (c: ConnectionView) => c.kind === "postgres" || c.kind === "mysql";
+  const newObject = (info: NodeInfo, newKind: NewKind | "table") =>
+    setObjEdit({ target: newKind === "database" ? info.conn.id : nodeTarget(info), conn: info.conn, db: info.db, schema: schemaOf(info), newKind: newKind === "table" ? undefined : newKind, refresh: info.kind === "conn" || info.kind === "db" ? info.refresh : undefined });
+  const modifyTable = (info: NodeInfo) => setObjEdit({ target: nodeTarget(info), conn: info.conn, db: info.db, schema: schemaOf(info), table: info.name });
+  /** Rename… (⇧F6): 이름을 묻고 DDL 을 보여 주고 실행 */
+  const renameNode = async (info: NodeInfo) => {
+    const what = info.kind;
+    const old = info.name ?? (what === "schema" ? info.schema : what === "db" ? info.db : undefined);
+    if (!old || !canDdl(info.conn)) return;
+    const name = await askText(`Rename ${what === "db" ? "database" : what} "${old}"`, old);
+    if (!name || name === old) return;
+    try {
+      const sql = await ddl.rename(what === "db" ? info.conn.id : nodeTarget(info), what, schemaOf(info), old, name);
+      const c = info.conn;
+      if (!(await ask(c.options?.confirmChanges ? "This changes the schema of a Production data source." : `Rename "${old}" to "${name}"?`, { title: c.options?.confirmChanges ? `Production: ${c.name}` : "Rename", detail: [{ text: sql, value: "schema change", tone: "danger" }], okLabel: "Rename", danger: !!c.options?.confirmChanges }))) return;
+      await ddl.run(what === "db" ? c.id : nodeTarget(info), [sql]);
+      setStatus(`Renamed ${old} to ${name}`);
+      if (what === "schema" || what === "db") info.refresh?.();
+      else info.refreshParent?.();
+      schemaChanged(c.id, info.db ?? (c.database || (c.kind === "postgres" ? "postgres" : "")));
+    } catch (e) {
+      setStatus(String(e));
+    }
+  };
+
   /** DataGrip 트리 우클릭 메뉴 (문서 1.11 구조) */
   const buildMenu = (info: NodeInfo): MenuItem[] => {
     const c = info.conn;
     const isObj = !!info.name;
     const rel = isRelation(info.kind);
+    const pg = c.kind === "postgres";
+    const objects: MenuItem[] = canDdl(c)
+      ? [
+          { separator: true },
+          { label: "Table…", action: () => newObject(info, "table") },
+          { label: "View…", action: () => newObject(info, "view") },
+          ...(pg ? ([{ label: "Materialized View…", action: () => newObject(info, "matview") }, { label: "Sequence…", action: () => newObject(info, "sequence") }] as MenuItem[]) : []),
+          ...(pg && info.kind !== "schema" && !info.name ? ([{ label: "Schema…", action: () => newObject(info, "schema") }] as MenuItem[]) : []),
+          ...(info.kind === "conn" || info.kind === "db" ? ([{ label: "Database…", action: () => newObject(info, "database") }] as MenuItem[]) : []),
+        ]
+      : [];
     const items: MenuItem[] = [
-      { label: "New", submenu: [{ label: "Query Console", shortcut: K.console, action: () => openConsole(c, info.db) }, { separator: true }, { label: "Data Source…", action: () => setDialog({}) }] },
+      { label: "New", submenu: [{ label: "Query Console", shortcut: K.console, action: () => openConsole(c, info.db) }, ...objects, { separator: true }, { label: "Data Source…", action: () => setDialog({}) }] },
     ];
+    if (canDdl(c) && (info.kind === "table" || info.kind === "partitioned")) items.push({ label: "Modify Table…", shortcut: K.modify, action: () => modifyTable(info) });
+    if (canDdl(c) && (["table", "partitioned", "view", "matview", "sequence"].includes(info.kind) || (pg && (info.kind === "schema" || info.kind === "db"))))
+      items.push({ label: "Rename…", shortcut: K.rename, action: () => renameNode(info) });
     if (rel) items.push({ label: "Edit Data", shortcut: K.edit, action: () => activateNode(info) });
     if (info.kind === "conn") items.push({ label: "Properties", shortcut: K.props, action: () => setDialog({ edit: c }) });
     items.push({ separator: true });
@@ -982,7 +1034,11 @@ export default function App() {
         submenu: [
           { label: "Export Data…", action: () => exportTable(info) },
           ...(info.kind === "table" || info.kind === "partitioned"
-            ? ([{ label: "Import Data from File…", action: () => setImportReq({ target: nodeTarget(info), schema: info.schema!, table: info.name }) }] as MenuItem[])
+            ? ([
+                { label: "Import Data from File…", action: () => setImportReq({ target: nodeTarget(info), schema: info.schema!, table: info.name }) },
+                { label: "Generate Test Data…", action: () => setGenReq({ target: nodeTarget(info), schema: info.schema ?? "", table: info.name!, conn: c }) },
+                ...(c.kind === "postgres" || c.kind === "mysql" ? ([{ label: "Copy Related Rows To…", action: () => setCopyReq({ target: nodeTarget(info), schema: info.schema ?? "", table: info.name!, conn: c }) }] as MenuItem[]) : []),
+              ] as MenuItem[])
             : []),
         ],
       });
@@ -1177,6 +1233,11 @@ export default function App() {
           log(tabId, "info", `${r.rows.length}${r.truncated ? "+" : ""} row${r.rows.length === 1 ? "" : "s"} retrieved starting from 1 in ${r.elapsedMs} ms`);
         } else {
           log(tabId, "info", `${r.rowsAffected} row${r.rowsAffected === 1 ? "" : "s"} affected in ${r.elapsedMs} ms`);
+          // Production: 되돌리기 SQL 을 남겼으면 알린다 (운영 작업 기록)
+          if (c?.options?.confirmChanges && r.rowsAffected > 0 && !dry) {
+            const last = (await auditLog(tab.connId, "", 1).catch(() => []))[0];
+            if (last?.undo) log(tabId, "info", "Undo saved — ⇧⌘A › Production Log…");
+          }
         }
       } catch (e) {
         log(tabId, "error", String(e));
@@ -1631,6 +1692,7 @@ export default function App() {
       { name: "Transaction Mode: Auto", group: "Transaction", run: () => t && setTxMode(t, false), disabled: t?.kind !== "console" },
       { name: "Browse Query History…", shortcut: sk("editor.history"), group: "Run", run: () => t && (setHistoryTab("history"), setHistoryFor(t.id)), disabled: t?.kind !== "console" },
       { name: "Snippets…", group: "Run", run: () => t && (setHistoryTab("snippets"), setHistoryFor(t.id)), disabled: t?.kind !== "console" },
+      { name: "Production Log…", group: "Run", run: () => setProdLog({ connId: null }) },
       {
         name: "Save Query as Snippet…",
         group: "Run",
@@ -1734,6 +1796,8 @@ export default function App() {
         if (is("tree.ddlCopy") && treeSel.name) return act(() => ddlToClipboard(treeSel));
         if (is("tree.ddlConsole") && treeSel.name) return act(() => ddlToConsole(treeSel));
         if (is("tree.quickDoc")) return act(() => showQuickDoc(treeSel));
+        if (is("tree.modify") && (treeSel.kind === "table" || treeSel.kind === "partitioned") && canDdl(treeSel.conn)) return act(() => modifyTable(treeSel));
+        if (is("tree.rename")) return act(() => renameNode(treeSel));
         if (is("tree.newDs")) return act(() => setDialog({}));
         if (is("tree.duplicate") && treeSel.kind === "conn") return act(() => duplicateConn(treeSel.conn));
         if (is("tree.remove"))
@@ -2364,6 +2428,51 @@ export default function App() {
       )}
       {backupReq && <BackupDialog what={backupReq.db ?? backupReq.c.name} pg={backupReq.c.kind === "postgres"} onRun={startBackup} onClose={() => setBackupReq(null)} />}
       {exportReq && <ExportDialog what={exportReq.name} onExport={startExport} onClose={() => setExportReq(null)} />}
+      {objEdit &&
+        (() => {
+          const done = (msg: string) => {
+            setStatus(msg);
+            setObjEdit(null);
+            objEdit.refresh?.();
+            schemaChanged(objEdit.conn.id, objEdit.db ?? (objEdit.conn.database || (objEdit.conn.kind === "postgres" ? "postgres" : "")));
+          };
+          const toConsole = (sql: string) => {
+            openConsole(objEdit.conn, objEdit.db, sql);
+            setObjEdit(null);
+          };
+          return objEdit.newKind ? (
+            <NewObjectDialog kind={objEdit.newKind} target={objEdit.target} conn={objEdit.conn} schema={objEdit.schema} onDone={done} onOpenConsole={toConsole} onClose={() => setObjEdit(null)} />
+          ) : (
+            <TableDesigner target={objEdit.target} conn={objEdit.conn} schema={objEdit.schema} table={objEdit.table} onDone={done} onOpenConsole={toConsole} onClose={() => setObjEdit(null)} />
+          );
+        })()}
+      {copyReq && (
+        <CopyRowsDialog
+          source={copyReq.target}
+          schema={copyReq.schema}
+          table={copyReq.table}
+          conn={copyReq.conn}
+          conns={conns}
+          onDone={(msg) => {
+            setStatus(msg);
+            setCopyReq(null);
+          }}
+          onClose={() => setCopyReq(null)}
+        />
+      )}
+      {genReq && (
+        <GenerateDataDialog
+          target={genReq.target}
+          schema={genReq.schema}
+          table={genReq.table}
+          production={genReq.conn.options?.confirmChanges ? genReq.conn.name : undefined}
+          onDone={(n) => {
+            setStatus(`${n.toLocaleString("en-US")} test row${n === 1 ? "" : "s"} inserted into ${genReq.schema ? `${genReq.schema}.` : ""}${genReq.table}`);
+            setGenReq(null);
+          }}
+          onClose={() => setGenReq(null)}
+        />
+      )}
       {importReq && <ImportDialog target={importReq.target} schema={importReq.schema} table={importReq.table} onImport={startImport} onClose={() => setImportReq(null)} />}
       <TextDialog />
       <ConfirmHost />
@@ -2434,6 +2543,20 @@ export default function App() {
           />
         ) : null;
       })()}
+
+      {prodLog && (
+        <ProductionLog
+          connId={prodLog.connId}
+          onOpenUndo={(e) => {
+            const [base, db] = e.connId.split("::");
+            const c = conns.find((x) => x.id === base);
+            if (!c) return setStatus(`Data source "${e.connName}" no longer exists`);
+            openConsole(c, db || undefined, e.undo);
+            setProdLog(null);
+          }}
+          onClose={() => setProdLog(null)}
+        />
+      )}
 
       {quickDoc && (
         <Overlay variant="light" onClose={() => setQuickDoc(null)} onKeyDown={(e) => e.key === "Escape" && setQuickDoc(null)}>

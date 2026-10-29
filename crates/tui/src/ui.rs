@@ -94,6 +94,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     };
     draw_tabs(f, app, right);
     draw_status(f, app, status);
+    if app.designer.is_some() {
+        crate::designer::draw(f, app, f.area());
+    }
     if app.popup.is_some() {
         draw_popup(f, app);
     }
@@ -111,7 +114,7 @@ fn draw_workspaces(f: &mut Frame, app: &mut App, area: Rect) {
         spans.push(Span::raw(" "));
         x += width + 1;
     }
-    spans.push(Span::styled(disp(" Alt+1…9 · Ctrl+K Switch Workspace"), Style::default().fg(Color::DarkGray)));
+    spans.push(Span::styled(disp(" ⌥1…9 · ⌃k Switch Workspace"), Style::default().fg(Color::DarkGray)));
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -416,7 +419,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 let [msg, rest] = Layout::vertical([Constraint::Length(2), Constraint::Min(3)]).areas(grid);
                 let mut hint = vec![Span::styled(" w ", Style::default().fg(ACCENT)), Span::raw("fix WHERE · "), Span::styled("o ", Style::default().fg(ACCENT)), Span::raw("fix ORDER BY · "), Span::styled("r ", Style::default().fg(ACCENT)), Span::raw("run again")];
                 if let Some(n) = tt.grid.as_ref().filter(|g| g.dirty()).map(|g| g.edits.len() + g.deleted.len() + g.added) {
-                    hint.push(Span::styled(format!("   · {n} pending change(s) not saved yet ({k_submit} submit · {} revert)", disp("Ctrl+Z")), Style::default().fg(Color::Yellow)));
+                    hint.push(Span::styled(format!("   · {n} pending change(s) not saved yet ({k_submit} submit · {} revert)", disp("⌃z")), Style::default().fg(Color::Yellow)));
                 }
                 let first = e.lines().next().unwrap_or_default().to_string();
                 f.render_widget(Paragraph::new(vec![Line::styled(format!(" ✗ {first}"), Style::default().fg(DANGER)), Line::from(hint)]), msg);
@@ -425,7 +428,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 grid
             };
             if let Some(g) = &mut tt.grid {
-                let pend = if g.dirty() { format!(" · {} pending ({k_submit} submit, {} revert)", g.edits.len() + g.deleted.len() + g.added, disp("Ctrl+Z")) } else { String::new() };
+                let pend = if g.dirty() { format!(" · {} pending ({k_submit} submit, {} revert)", g.edits.len() + g.deleted.len() + g.added, disp("⌃z")) } else { String::new() };
                 let rows = if tt.error.is_some() && !g.dirty() { "query failed — no rows".to_string() } else { format!("{}{} rows", g.rows(), if g.result.truncated { "+" } else { "" }) };
                 let t = format!(" {}.{} — {rows}{}{}{} ", tt.schema, tt.table, if tt.pk.is_empty() { " · no PK (read-only)" } else { "" }, if ro { " · read-only" } else { "" }, pend);
                 g.render(f, grid, t, focus == Focus::Grid);
@@ -585,7 +588,7 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
         Focus::Grid => (
             match app.tabs.get(app.active).map(|t| &t.kind) {
                 Some(TabKind::Table(_)) => vec![
-                    fixed("Enter", "edit"), fixed("a", "add"), fixed("d", "delete"), fixed("n", "NULL"), cmd(A::Submit, "submit"), fixed("Ctrl+Z", "revert"), fixed("w", "where"), fixed("o", "order"), fixed("s", "sort"), fixed("x", "export"),
+                    fixed("Enter", "edit"), fixed("a", "add"), fixed("d", "delete"), fixed("n", "NULL"), cmd(A::Submit, "submit"), fixed("⌃z", "revert"), fixed("w", "where"), fixed("o", "order"), fixed("s", "sort"), fixed("x", "export"),
                 ],
                 Some(TabKind::Redis(r)) if r.focus_value => vec![fixed("e", "edit"), fixed("a", "add"), fixed("x", "delete"), fixed("Esc", "keys")],
                 Some(TabKind::Redis(_)) => vec![fixed("Enter", "value"), fixed("/", "pattern"), fixed("a", "add"), fixed("D", "del key"), fixed("t", "TTL"), fixed("R", "rename"), fixed(":", "command")],
@@ -742,7 +745,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
         Popup::Find(_) => {}
         Popup::Message { title, text } => {
             let r = centered(area, 90, (text.lines().count() as u16 + 4).min(30));
-            let inner = popup(f, r, format!(" {title} (Esc) "));
+            let inner = popup(f, r, format!(" {} (Esc) ", disp(title)));
             f.render_widget(Paragraph::new(text.clone()).wrap(Wrap { trim: false }), inner);
         }
         Popup::Scope(e) => {
@@ -807,7 +810,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             let r = centered(area, 90, 3);
             clear(f, r);
             let hint = if words.is_empty() { "Enter / Esc" } else { "Enter / Esc · Tab complete" };
-            input.set_block(panel(format!(" {title} ({hint}) "), true));
+            input.set_block(panel(format!(" {} ({hint}) ", disp(title)), true));
             f.render_widget(&*input, r);
             // 자동완성 목록: 입력칸 바로 아래, 커서 근처
             if let Some((items, sel, _)) = complete {
@@ -883,7 +886,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             if let Some((ok, m)) = &form.message {
                 lines.push(Line::styled(disp(m), Style::default().fg(if *ok { OK } else { DANGER })));
             }
-            lines.push(Line::styled(disp("↑↓/Tab move · type to edit · Space/←→ toggle · Ctrl+T test · Ctrl+S / Enter save · Esc cancel"), Style::default().fg(DIM)));
+            lines.push(Line::styled(disp("↑↓/Tab move · type to edit · Space/←→ toggle · ⌃t test · ⌃s / Enter save · Esc cancel"), Style::default().fg(DIM)));
             let t = if form.edit.is_some() { " Data Source Properties " } else { " New Data Source " };
             f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(panel(t, true)), r);
         }

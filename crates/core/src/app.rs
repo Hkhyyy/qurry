@@ -32,6 +32,8 @@ pub struct AppState {
     pub tab_manual: std::sync::Mutex<HashMap<String, bool>>,
     /// 쿼리 히스토리·스니펫 (GUI·TUI 공용)
     pub history: crate::history::History,
+    /// 운영 작업 기록 (Production Data Source 의 변경 · 되돌리기 SQL)
+    pub audit: crate::audit::Audit,
     /// 내보내기·가져오기 작업 id → 진행·취소
     pub jobs: std::sync::Mutex<HashMap<String, std::sync::Arc<crate::transfer::Job>>>,
 }
@@ -58,7 +60,8 @@ impl AppState {
 impl AppState {
     pub fn new(store: Store, secret_file: crate::secrets::SecretFile) -> Self {
         let history = crate::history::History::new(&store.dir());
-        Self { history, store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), secrets: Default::default(), secret_file, last_used: Default::default(), last_ping: Default::default(), tab_manual: Default::default(), jobs: Default::default() }
+        let audit = crate::audit::Audit::new(&store.dir());
+        Self { history, audit, store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), secrets: Default::default(), secret_file, last_used: Default::default(), last_ping: Default::default(), tab_manual: Default::default(), jobs: Default::default() }
     }
 }
 
@@ -504,29 +507,67 @@ impl AppState {
     }
 
     /// `tab_id`가 있으면 그 콘솔의 세션에서 실행한다 (커서·취소 지원).
+    /// Production Data Source 면 바꾸는 문장을 운영 작업 기록에 남기고, 단순한 UPDATE / DELETE 는 되돌리기 SQL 도 (crate::audit)
     pub async fn run_query(&self, id: String, sql: String, limit: Option<usize>, tab_id: Option<String>) -> AppResult<QueryResult> {
         let limit = limit.unwrap_or(500);
         self.check_read_only(&id, &sql)?;
-        match tab_id {
+        let cfg = self.source(&id)?;
+        let watch = cfg.options.confirm_changes;
+        let change = watch && crate::audit::is_change(&sql, cfg.kind);
+        let r = match tab_id.as_deref() {
             Some(tab) => {
-                let sess = match ensure_session(self, &id, &tab).await {
+                let sess = match ensure_session(self, &id, tab).await {
                     Ok(s) => s,
-                    Err(e) => return Err(recover(self, &id, Some(&tab), false, e).await),
+                    Err(e) => return Err(recover(self, &id, Some(tab), false, e).await),
                 };
-                let (r, in_tx) = {
+                let (r, in_tx, undo) = {
                     let mut s = sess.lock().await;
+                    let undo = match change {
+                        true => Some(crate::audit::prepare(&ensure_pool(self, &id).await?, Some(&mut s), &sql, cfg.kind).await),
+                        false => None,
+                    };
                     let in_tx = s.in_tx();
-                    (s.run(&sql, limit).await, in_tx)
+                    (s.run(&sql, limit).await, in_tx, undo)
                 };
+                if watch {
+                    self.audit.after(&id, &cfg.name, cfg.kind, Some(tab), &sql, &r, undo);
+                }
                 match r {
-                    Err(e) => Err(recover(self, &id, Some(&tab), in_tx, e).await),
+                    Err(e) => Err(recover(self, &id, Some(tab), in_tx, e).await),
                     ok => ok,
                 }
             }
-            None => match ensure_pool(self, &id).await?.run_query(&sql, limit).await {
-                Err(e) => Err(recover(self, &id, None, false, e).await),
-                ok => ok,
-            },
+            None => {
+                let pool = ensure_pool(self, &id).await?;
+                let undo = match change {
+                    true => Some(crate::audit::prepare(&pool, None, &sql, cfg.kind).await),
+                    false => None,
+                };
+                let r = pool.run_query(&sql, limit).await;
+                if watch {
+                    self.audit.after(&id, &cfg.name, cfg.kind, None, &sql, &r, undo);
+                }
+                match r {
+                    Err(e) => Err(recover(self, &id, None, false, e).await),
+                    ok => ok,
+                }
+            }
+        };
+        r
+    }
+
+    /// 운영 작업 기록 (최근 것부터)
+    pub fn audit_log(&self, conn: Option<String>, filter: String, limit: usize) -> Vec<crate::audit::AuditEntry> {
+        self.audit.list(conn.as_deref(), &filter, limit)
+    }
+
+    /// 콘솔의 Commit / Roll back 을 운영 작업 기록에 (기록한 변경이 커밋 전이었을 때만)
+    async fn audit_tx_end(&self, tab_id: &str, word: &str) {
+        let conn = self.sessions.read().await.get(tab_id).map(|e| e.conn_id.clone());
+        if let Some(c) = conn
+            && let Ok(cfg) = self.source(&c)
+        {
+            self.audit.tx_closed(&c, &cfg.name, tab_id, word);
         }
     }
 
@@ -613,14 +654,16 @@ impl AppState {
 
     pub async fn commit_tx(&self, tab_id: String) -> AppResult<()> {
         let sess = self.sessions.read().await.get(&tab_id).map(|e| e.session.clone()).ok_or_else(|| AppError::Msg("Session closed".into()))?;
-        let mut s = sess.lock().await;
-        s.commit().await
+        sess.lock().await.commit().await?;
+        self.audit_tx_end(&tab_id, "COMMIT").await;
+        Ok(())
     }
 
     pub async fn rollback_tx(&self, tab_id: String) -> AppResult<()> {
         let sess = self.sessions.read().await.get(&tab_id).map(|e| e.session.clone()).ok_or_else(|| AppError::Msg("Session closed".into()))?;
-        let mut s = sess.lock().await;
-        s.rollback_tx().await
+        sess.lock().await.rollback_tx().await?;
+        self.audit_tx_end(&tab_id, "ROLLBACK").await;
+        Ok(())
     }
 
     pub async fn close_session(&self, tab_id: String) -> AppResult<()> {
@@ -630,6 +673,7 @@ impl AppState {
         if busy {
             let _ = self.cancel_query(tab_id.clone()).await;
         }
+        self.audit_tx_end(&tab_id, "ROLLBACK (console closed)").await;
         let removed = self.sessions.write().await.remove(&tab_id);
         if let Some(e) = removed {
             e.session.lock().await.discard().await;
@@ -641,6 +685,17 @@ impl AppState {
     pub async fn execute_batch(&self, id: String, statements: Vec<String>, exact_one: bool) -> AppResult<u64> {
         for st in &statements {
             self.check_read_only(&id, st)?;
+        }
+        let cfg = self.source(&id)?;
+        let mut undos = Vec::new();
+        if cfg.options.confirm_changes {
+            let pool = ensure_pool(self, &id).await?;
+            for st in &statements {
+                undos.push(match crate::audit::is_change(st, cfg.kind) {
+                    true => Some(crate::audit::prepare(&pool, None, st, cfg.kind).await),
+                    false => None,
+                });
+            }
         }
         let r = match ensure_pool(self, &id).await? {
             Pool::Pg(pg) => session::execute_batch(&pg, &statements, exact_one).await,
@@ -662,6 +717,9 @@ impl AppState {
                 Ok(affected)
             }
         };
+        if cfg.options.confirm_changes {
+            self.audit.after_batch(&id, &cfg.name, cfg.kind, &statements, r.as_ref().err().map(|e| e.to_string()), exact_one, undos);
+        }
         match r {
             Err(e) => Err(recover(self, &id, None, false, e).await),
             ok => ok,

@@ -27,6 +27,19 @@ let pendingReveal: RevealTarget | null = null;
 export function schemaChanged(connId: string, db: string) {
   window.dispatchEvent(new CustomEvent("dbtool-schema-changed", { detail: { connId, db } }));
 }
+/** 탐색기 Collapse All: 모든 Data Source · DB · 스키마 · 폴더를 접는다 (연결은 그대로) */
+export function collapseTree() {
+  window.dispatchEvent(new CustomEvent("dbtool-collapse"));
+}
+function useCollapse(fn: () => void) {
+  const ref = useRef(fn);
+  ref.current = fn;
+  useEffect(() => {
+    const h = () => ref.current();
+    window.addEventListener("dbtool-collapse", h);
+    return () => window.removeEventListener("dbtool-collapse", h);
+  }, []);
+}
 const nodeKey = (connId: string, db?: string, schema?: string, name?: string) => [connId, db ?? "", schema ?? "", name ?? ""].join("|");
 export function revealInTree(t: RevealTarget) {
   pendingReveal = t;
@@ -188,6 +201,10 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
       (e) => setDbs({ state: "error", msg: String(e) }),
     );
   };
+  useCollapse(() => {
+    setOpened(false);
+    setOpenDbs(new Set());
+  });
   useReveal((t) => {
     if (t.connId !== conn.id) return;
     if (!opened) {
@@ -332,6 +349,7 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
   const flat = ["mysql", "redis", "sqlite", "clickhouse", "mongodb", "qdrant", "chroma", "milvus"].includes(conn.kind);
   const dd = flat ? -1 : 0;
   const [open, setOpen] = useState<Set<string>>(new Set());
+  useCollapse(() => setOpen(new Set()));
   const [schemas, setSchemas] = useState<Load<SchemaInfo[]>>();
   const [objects, setObjects] = useState<Record<string, Load<{ relations: RelationInfo[]; routines: RoutineInfo[] }>>>({});
   const [details, setDetails] = useState<Record<string, Load<TableDetail>>>({});

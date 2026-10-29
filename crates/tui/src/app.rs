@@ -231,6 +231,8 @@ pub enum PAction {
     Dba(String),
     /// 히스토리·스니펫에서 고른 쿼리를 콘솔에
     InsertSql(String),
+    /// 운영 작업 기록에서 고른 것: 되돌리기 SQL 을 그 Data Source 의 새 콘솔에 (없으면 이유)
+    OpenUndo { conn: String, db: Option<String>, undo: Option<String>, note: String },
     /// 여러 단계 고르기 (비교·마이그레이션): 고른 값
     Pick(String),
     /// DBA 리포트 행 동작 (템플릿 SQL → 콘솔)
@@ -358,9 +360,20 @@ pub enum Action {
     RunMigrations,
     ShowDiagram,
     QueryHistory,
+    ProductionLog,
     Snippets,
     SaveSnippet,
     ImportData,
+    GenerateTestData,
+    CopyRelatedRows,
+    ChartResult,
+    NewTable,
+    ModifyTable,
+    NewView,
+    NewSchema,
+    NewDatabase,
+    NewSequence,
+    RenameObject,
     CancelTransfer,
     ToggleExplorer,
     ToggleOutput,
@@ -399,7 +412,7 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::TxToggle, "Toggle Transaction Mode (Auto/Manual)", ""),
     (Action::Commit, "Commit", ""),
     (Action::Rollback, "Roll Back", ""),
-    (Action::ExecSettings, "Query Execution Settings (what Ctrl+Enter runs)", ""),
+    (Action::ExecSettings, "Query Execution Settings (what ⌃Enter runs)", ""),
     (Action::ClearConsole, "Clear Console (delete all text)", "⌘A ⌫ (console)"),
     (Action::SearchEverywhere, "Search Everywhere (objects · columns · tabs · actions)", ""),
     (Action::GoToObject, "Go to Database Object", ""),
@@ -407,7 +420,7 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::EditData, "Edit Data (open table)", "F4 / Enter"),
     (Action::Ddl, "Go to DDL", ""),
     (Action::Submit, "Submit Changes", ""),
-    (Action::Revert, "Revert Changes", "Ctrl+Z (grid)"),
+    (Action::Revert, "Revert Changes", "⌃z (grid)"),
     (Action::AddRow, "Add Row", "Insert / a"),
     (Action::DeleteRow, "Delete Row", "Delete / d"),
     (Action::SetNull, "Set NULL", "n (grid)"),
@@ -418,7 +431,7 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::RagBuild, "Build RAG Index… (embed the rows)", ""),
     (Action::RagNew, "New RAG Index from the Selected Table…", ""),
     (Action::RagKey, "Set OpenAI API Key (RAG)…", ""),
-    (Action::WsSwitch, "Switch Workspace…", "Alt+1…9"),
+    (Action::WsSwitch, "Switch Workspace…", "⌥1…9"),
     (Action::WsNew, "New Workspace…", ""),
     (Action::WsRename, "Rename Workspace…", ""),
     (Action::WsDelete, "Delete Workspace…", ""),
@@ -428,6 +441,7 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::WsRemoveConn, "Remove Data Source from This Workspace", ""),
     (Action::Find, "Find / Replace in Editor (regex)", ""),
     (Action::QueryHistory, "Query History… (shared with the GUI)", ""),
+    (Action::ProductionLog, "Production Log… (changes run on Production data sources, undo SQL)", ""),
     (Action::Snippets, "Snippets…", ""),
     (Action::SaveSnippet, "Save Query as Snippet…", ""),
     (Action::ShowDiagram, "Show Diagram (ERD): foreign keys of a schema, as text + Mermaid", ""),
@@ -437,7 +451,17 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::BackupDb, "Back Up Database… (pg_dump / mysqldump)", ""),
     (Action::RestoreDb, "Restore Database… (from a .dump / .sql backup)", ""),
     (Action::DbaReports, "Database Admin… (sessions & locks, slow queries, sizes, indexes, vacuum, server, privileges)", ""),
-    (Action::ImportData, "Import Data from File… (CSV, TSV, JSON)", ""),
+    (Action::ImportData, "Import Data from File… (CSV, TSV, JSON, Excel)", ""),
+    (Action::GenerateTestData, "Generate Test Data… (fill the selected table with realistic rows)", ""),
+    (Action::NewTable, "New Table… (columns, keys, indexes, foreign keys — SQL shown before it runs)", ""),
+    (Action::ModifyTable, "Modify Table… (change columns, keys, indexes, foreign keys → ALTER)", ""),
+    (Action::NewView, "New View…", ""),
+    (Action::NewSchema, "New Schema… (PostgreSQL)", ""),
+    (Action::NewDatabase, "New Database…", ""),
+    (Action::NewSequence, "New Sequence… (PostgreSQL)", ""),
+    (Action::RenameObject, "Rename… (table, view, sequence, schema, database)", ""),
+    (Action::ChartResult, "Chart Result (bars: sum of a number column by the first text column)", ""),
+    (Action::CopyRelatedRows, "Copy Related Rows To… (rows + foreign-key related rows into another data source, personal data masked)", ""),
     (Action::CancelTransfer, "Cancel Export/Import", ""),
     (Action::NewDataSource, "New Data Source…", "n (explorer)"),
     (Action::EditDataSource, "Data Source Properties…", "e (explorer)"),
@@ -573,6 +597,8 @@ pub struct App {
     pub analyze_next: bool,
     /// 여러 단계 고르기 중 (비교·마이그레이션)
     pub flow: Option<crate::migrate::Flow>,
+    /// 테이블 만들기 · 고치기 창 (crate::designer). 입력 · 확인 팝업이 그 위에 뜬다
+    pub designer: Option<crate::designer::Designer>,
     pub focus: Focus,
     pub explorer: bool,
     pub popup: Option<Popup>,
@@ -668,10 +694,11 @@ impl App {
             jobs: vec![],
             analyze_next: false,
             flow: None,
+            designer: None,
             focus: Focus::Tree,
             explorer: true,
             popup: None,
-            status: "Ready — not sure? Ctrl+P searches everything · F1 keymap".into(),
+            status: "Ready — not sure? ⌃p searches everything · F1 keymap".into(),
             quit: false,
             panes: crate::panes::Pane::Leaf(0),
             group_active: [None; crate::panes::MAX],
@@ -774,7 +801,7 @@ impl App {
         self.workspaces[cur].conns.extend(orphans);
     }
 
-    fn default_db(&self, conn: &str) -> String {
+    pub(crate) fn default_db(&self, conn: &str) -> String {
         self.conn(conn).map(|c| sql::default_db(&c.config)).unwrap_or_default()
     }
 
@@ -832,7 +859,7 @@ impl App {
                             }),
                         });
                     }
-                    a.status = if e.contains(qurry_core::tunnel::UNKNOWN_HOST) { format!("{e} — Ctrl+K › Trust SSH Host Key") } else { e };
+                    a.status = if e.contains(qurry_core::tunnel::UNKNOWN_HOST) { format!("{e} — ⌃k › Trust SSH Host Key") } else { e };
                 }
             }
             a.tree.clamp();
@@ -1484,7 +1511,7 @@ impl App {
             return;
         }
         if g.dirty() {
-            self.status = "Save (Ctrl+S) or revert (Ctrl+Z) pending changes before sorting".into();
+            self.status = "Save (⌃s) or revert (⌃z) pending changes before sorting".into();
             return;
         }
         let q = sql::quote_ident(kind, &g.result.columns[g.col].name);
@@ -1719,6 +1746,7 @@ impl App {
         // 히스토리 (GUI 와 같은 기록)
         let (hist_conn, hist_db, hist) = (t.conn.clone(), t.db.clone(), self.state.clone());
         let prod = self.tabs.get(self.active).and_then(|t| self.conn(&t.conn)).filter(|c| c.config.options.confirm_changes).map(|c| (c.config.name.clone(), self.tabs[self.active].target.clone()));
+        let watch = prod.is_some();
         let t = &mut self.tabs[self.active];
         let TabKind::Console(c) = &mut t.kind else { return };
         if c.running || stmts.is_empty() {
@@ -1891,6 +1919,10 @@ impl App {
                             } else {
                                 let msg = format!("{} row(s) affected in {} ms", res.rows_affected, res.elapsed_ms);
                                 c.log(false, msg.clone());
+                                // Production: 되돌리기 SQL 을 남겼으면 알린다 (운영 작업 기록)
+                                if watch && !dry && res.rows_affected > 0 && hist.audit.list(Some(&hist_conn), "", 1).first().is_some_and(|e| e.undo.is_some()) {
+                                    c.log(false, "Undo saved — ⌃k › Production Log…".into());
+                                }
                                 status = msg;
                                 if i + 1 == n && c.grid.is_none() {
                                     c.show_output = true;
@@ -2433,6 +2465,7 @@ impl App {
             PAction::ExportFormat(f) => self.export_dest(f),
             PAction::Dba(r) => self.dba_open(r),
             PAction::InsertSql(q) => self.insert_sql(q),
+            PAction::OpenUndo { conn, db, undo, note } => self.open_undo(conn, db, undo, note),
             PAction::Pick(v) => self.flow_pick(v),
             PAction::DbaSql(t) => self.dba_sql(t),
             PAction::ExportTo(f, clipboard) => self.export_to(f, clipboard),
@@ -2644,6 +2677,17 @@ impl App {
             Action::RunMigrations => self.migrations_start(),
             Action::ShowDiagram => self.erd_open(),
             Action::QueryHistory => self.history_palette(),
+            Action::ProductionLog => self.production_log(),
+            Action::GenerateTestData => self.generate_data_start(),
+            Action::CopyRelatedRows => self.copy_rows_start(),
+            Action::ChartResult => self.chart_result(),
+            Action::NewTable => self.new_table(),
+            Action::ModifyTable => self.modify_table(),
+            Action::NewView => self.new_object("view"),
+            Action::NewSchema => self.new_object("schema"),
+            Action::NewDatabase => self.new_object("database"),
+            Action::NewSequence => self.new_object("sequence"),
+            Action::RenameObject => self.rename_object(),
             Action::Snippets => self.snippets_palette(),
             Action::SaveSnippet => self.save_snippet(),
             Action::CopyInList => {

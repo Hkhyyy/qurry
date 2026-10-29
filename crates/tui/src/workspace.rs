@@ -308,7 +308,7 @@ impl App {
             .filter(|(i, _)| !move_tab || *i != self.cur_ws)
             .map(|(i, w)| {
                 let n = if i == self.cur_ws { self.tabs.len() } else { w.saved.as_ref().map(|s| s.tabs.len()).unwrap_or(0) };
-                PItem { label: format!("{}{}", w.name, if i == self.cur_ws { "  (current)" } else { "" }), hint: format!("{n} tab(s){}", if i < 9 { format!(" · Alt+{}", i + 1) } else { String::new() }), action: PAction::Pick(i.to_string()) }
+                PItem { label: format!("{}{}", w.name, if i == self.cur_ws { "  (current)" } else { "" }), hint: format!("{n} tab(s){}", if i < 9 { format!(" · ⌥{}", i + 1) } else { String::new() }), action: PAction::Pick(i.to_string()) }
             })
             .collect();
         items.push(PItem { label: "New Workspace…".into(), hint: String::new(), action: PAction::Pick("new".into()) });
@@ -405,7 +405,7 @@ impl App {
         }
         self.rebuild_roots();
         if to != self.cur_ws {
-            self.status = format!("Moved to {} — Alt+{} to see it", self.ws_label(to), to + 1);
+            self.status = format!("Moved to {} — ⌥{} to see it", self.ws_label(to), to + 1);
         }
     }
 
@@ -468,7 +468,7 @@ impl App {
         s.mru.insert(0, t.id);
         s.tabs.push(t);
         s.active = s.tabs.len() - 1;
-        self.status = format!("Moved the tab to {} (Alt+{})", self.workspaces[to].name, to + 1);
+        self.status = format!("Moved the tab to {} (⌥{})", self.workspaces[to].name, to + 1);
     }
 }
 

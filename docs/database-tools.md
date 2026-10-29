@@ -2,7 +2,7 @@
 
 English | [한국어](ko/database-tools.md)
 
-Admin reports, diagrams, schema and data comparison, migrations, backups, query history and explain plans.
+Admin reports, diagrams, schema and data comparison, migrations, backups, importing files, test data, copying related rows, charts, query history and explain plans.
 
 ## Database admin (PostgreSQL, MySQL)
 
@@ -33,6 +33,42 @@ GUI — right-click a data source › Tools › Compare & Migrate; TUI — `⌃k
 ## Back up / restore
 
 Right-click a database › Tools › Back Up Database… / Restore Database… (TUI: `⌃k`). Runs `pg_dump` / `pg_restore` / `psql` or `mysqldump` / `mysql` from this computer (Homebrew `libpq`, `mysql-client`, Postgres.app and the usual Linux paths are found too; for PostgreSQL the client closest to the server version is used). Passwords go through the environment, SSH tunnels are used, progress shows in the status bar and can be cancelled.
+
+## Create and modify objects (PostgreSQL, MySQL)
+
+Like DataGrip: right-click › **New ▸** Table… / View… / Materialized View… / Sequence… / Schema… / Database…, a table › **Modify Table…** (`⌘F6`), and **Rename…** (`⇧F6`). TUI: `⌃k` › New Table… / Modify Table… (`⌃F6`) / New View… / New Schema… / New Database… / New Sequence… / Rename… (`⇧F6`).
+- The table designer edits columns (name, type, NOT NULL, default, auto-increment / identity, primary key, comment), indexes and foreign keys (ON DELETE / ON UPDATE). The SQL it will run is shown as you edit: `CREATE TABLE` for a new table, the `ALTER` statements for a change. A renamed column keeps its keys, indexes and foreign keys.
+- In the TUI each line is written like SQL: column `email varchar(100) not null default 'x' auto pk comment 'login'`, index `users_email_idx (email) unique`, foreign key `orders_user_fk (user_id) -> users (id) on delete cascade`. Keys: `a` column · `i` index · `f` foreign key · `↩` edit · `d` remove · `p` primary key · `n` name · `c` comment · `F5` run · `o` open in a console.
+- PostgreSQL runs it in one transaction (if a statement fails, nothing changes); MySQL applies each statement right away. Production data sources ask first, and the change is recorded in the production log. **Open in Console** puts the SQL in a console instead.
+
+## Import data (CSV, TSV, JSON, Excel)
+
+Right-click a table › Import/Export › Import Data from File… (or a schema › Import Data into New Table…); TUI: `⌃k` › Import Data from File…. Reads `.csv`, `.tsv`, `.json` (an array of objects) and Excel `.xlsx` / `.xls` / `.ods` (the first sheet; its first row is the column names). Match file columns to table columns, then everything goes in one transaction — if a row fails, nothing is imported. Excel dates come in as `YYYY-MM-DD [HH:MM:SS]`, whole numbers without `.0`, and empty cells as NULL.
+
+## Generate test data (PostgreSQL, MySQL)
+
+Right-click a table › Import/Export › Generate Test Data…; TUI: select the table, `⌃k` › Generate Test Data…. Fills the table with realistic rows that pass its constraints:
+- types, lengths and precision; `NOT NULL`; unique and primary key values that don't clash with rows already there;
+- enum values and `CHECK (col IN (…))` lists;
+- foreign keys pick rows that already exist in the referenced table (fill the parent first);
+- column names hint at the content — `email`, `phone`, `name`, `address`, `city`, `url`, `status`, `price`, `created_at` …;
+- auto-numbered, identity and generated columns are left to the database.
+
+It shows how each column will be filled and a sample first, then inserts up to 100,000 rows in one transaction.
+
+## Copy related rows into another data source (PostgreSQL, MySQL)
+
+To debug with real data without copying the whole production database: right-click a table › Import/Export › Copy Related Rows To…; TUI: `⌃k` › Copy Related Rows To….
+1. Pick the starting rows with a WHERE condition (e.g. `id = 42`).
+2. Rows they point to (parents) always come along, so foreign keys hold. Child rows (rows pointing at them, e.g. a customer's orders, then the order items) come along up to the levels you choose.
+3. Personal data is masked as it is read (on by default; untick it in the dialog, or pick "Copy as is" in the TUI): emails, phone numbers, people's names, addresses, ID and card numbers, passwords and tokens, birth dates and IP addresses (by column name). The mask is md5-based, so the same value always masks the same way. Primary and foreign key columns are never masked.
+4. Preview shows each table, how many rows and which columns are masked. Copy inserts them parents-first into the target data source (same kind) in one transaction; rows already there are skipped.
+
+The tables must already exist in the target ([Compare & migrate](#compare--migrate) makes the DDL). Up to 50,000 rows per copy.
+
+## Charts
+
+GUI: in a result, View as (the eye icon) › **Chart**: bar, line or pie. Pick X and one or more Y columns; rows with the same X are summed, and **count** counts rows instead. Uses the rows already loaded. TUI: `⌃k` › Chart Result draws horizontal bars — the sum of the first number column by the first text column (or the row count).
 
 ## Query history & snippets
 

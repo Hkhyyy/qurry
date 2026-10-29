@@ -242,6 +242,12 @@ pub fn history_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
     state.history.delete(&id)
 }
 
+/// 운영 작업 기록 (Production Data Source 의 변경 · 되돌리기 SQL). 최근 것부터
+#[tauri::command]
+pub fn audit_log(state: State<'_, AppState>, conn_id: Option<String>, filter: String, limit: usize) -> Vec<qurry_core::audit::AuditEntry> {
+    state.audit_log(conn_id, filter, limit)
+}
+
 /// 예전 GUI 기록(localStorage) 옮기기
 #[tauri::command]
 pub fn history_import(state: State<'_, AppState>, items: Vec<qurry_core::history::HistoryItem>) -> AppResult<usize> {
@@ -395,6 +401,60 @@ pub async fn save_file(app: tauri::AppHandle, default_name: String, text: String
     Ok(Some(path))
 }
 
+/// 테스트 데이터: 컬럼마다 채우는 법 + 예시 행 (아무것도 넣지 않는다)
+#[tauri::command]
+pub async fn fake_preview(state: State<'_, AppState>, id: String, schema: String, table: String, rows: usize) -> AppResult<qurry_core::fake::FakePreview> {
+    state.fake_preview(id, schema, table, rows).await
+}
+
+/// 테스트 데이터를 한 트랜잭션으로 넣는다. 넣은 행 수
+#[tauri::command]
+pub async fn fake_fill(state: State<'_, AppState>, id: String, schema: String, table: String, rows: usize) -> AppResult<u64> {
+    state.fake_fill(id, schema, table, rows).await
+}
+
+/// 운영 데이터 일부 복사: 무엇이 몇 행 복사될지 (읽기만)
+#[tauri::command]
+pub async fn subset_preview(state: State<'_, AppState>, source: String, spec: qurry_core::subset::SubsetSpec) -> AppResult<qurry_core::subset::SubsetPlan> {
+    state.subset_preview(source, spec).await
+}
+
+/// 운영 데이터 일부 복사: target 에 한 트랜잭션으로 넣는다
+#[tauri::command]
+pub async fn subset_copy(state: State<'_, AppState>, source: String, spec: qurry_core::subset::SubsetSpec, target: String) -> AppResult<qurry_core::subset::SubsetPlan> {
+    state.subset_copy(source, spec, target).await
+}
+
+/// Modify Table…: 지금 구조
+#[tauri::command]
+pub async fn table_def(state: State<'_, AppState>, id: String, schema: String, table: String) -> AppResult<qurry_core::ddl::TableDef> {
+    state.table_def(id, schema, table).await
+}
+
+/// 테이블 DDL 미리보기 (before 가 있으면 ALTER)
+#[tauri::command]
+pub fn table_ddl(state: State<'_, AppState>, id: String, before: Option<qurry_core::ddl::TableDef>, after: qurry_core::ddl::TableDef) -> AppResult<Vec<String>> {
+    state.table_ddl(id, before, after)
+}
+
+/// New ▸ Database · Schema · View · Sequence 의 DDL
+#[tauri::command]
+pub fn new_object_ddl(state: State<'_, AppState>, id: String, object: qurry_core::ddl::NewObject) -> AppResult<Vec<String>> {
+    state.new_object_ddl(id, object)
+}
+
+/// Rename… 의 DDL
+#[tauri::command]
+pub fn rename_ddl(state: State<'_, AppState>, id: String, what: String, schema: String, old: String, new: String) -> AppResult<String> {
+    state.rename_ddl(id, what, schema, old, new)
+}
+
+/// 만든 DDL 실행 (PG: 한 트랜잭션)
+#[tauri::command]
+pub async fn run_ddl(state: State<'_, AppState>, id: String, statements: Vec<String>) -> AppResult<()> {
+    state.run_ddl(id, statements).await
+}
+
 /// Production 확인: 이 문장이 바꿀 행 수
 #[tauri::command]
 pub async fn preview_impact(state: State<'_, AppState>, id: String, sql: String) -> AppResult<Option<i64>> {
@@ -454,7 +514,7 @@ pub struct PendingData(pub std::sync::Mutex<Option<std::path::PathBuf>>);
 /// 가져올 파일 고르기 → 미리보기 (첫 20행)
 #[tauri::command]
 pub async fn pick_data_file(app: tauri::AppHandle, pending: State<'_, PendingData>) -> AppResult<Option<(String, Preview)>> {
-    let picked = app.dialog().file().add_filter("CSV, TSV, JSON", &["csv", "tsv", "json"]).blocking_pick_file();
+    let picked = app.dialog().file().add_filter("CSV, TSV, JSON, Excel", &["csv", "tsv", "json", "xlsx", "xlsm", "xls", "ods"]).blocking_pick_file();
     let Some(path) = picked.and_then(|p| p.into_path().ok()) else { return Ok(None) };
     let pv = qurry_core::transfer::preview(&path, 20)?;
     *pending.0.lock().unwrap() = Some(path.clone());

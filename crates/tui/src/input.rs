@@ -426,6 +426,9 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
     if app.popup.is_some() {
         return popup_key(app, k);
     }
+    if app.designer.is_some() {
+        return crate::designer::key(app, k);
+    }
     // ── 전역 명령 (키맵: keys.rs, 바꾸기: F1) ──
     if let Some(a) = app.keys.lookup(&k) {
         // 탐색기에서 실행 키 = 새로 고침
@@ -1232,7 +1235,7 @@ fn popup_key(app: &mut App, k: KeyEvent) {
                     let v = |l: &str| form.fields.iter().find(|f| f.label == l).map(|f| f.value.trim().to_string()).unwrap_or_default();
                     let port = v("SSH port").parse().unwrap_or(22);
                     form.message = Some(match app.state.trust_ssh_host(v("SSH host"), port) {
-                        Ok(m) => (true, format!("✓ {m} — press Ctrl+T to test again")),
+                        Ok(m) => (true, format!("✓ {m} — press ⌃t to test again")),
                         Err(e) => (false, format!("✕ {e}")),
                     });
                 }
@@ -1245,7 +1248,7 @@ fn popup_key(app: &mut App, k: KeyEvent) {
                                 if let Some(Popup::ConnForm(f)) = &mut a.popup {
                                     f.message = Some(match r {
                                         Ok(v) => (true, format!("✓ {v}")),
-                                        Err(e) if e.contains(qurry_core::tunnel::UNKNOWN_HOST) => (false, format!("✕ {e} Press Ctrl+Y to trust it.")),
+                                        Err(e) if e.contains(qurry_core::tunnel::UNKNOWN_HOST) => (false, format!("✕ {e} Press ⌃y to trust it.")),
                                         Err(e) => (false, format!("✕ {e}")),
                                     });
                                 }
@@ -1787,6 +1790,115 @@ mod tests {
         assert_eq!(p.items[0].label, "answer");
     }
 
+    /// ⌃K › Production Log: 운영 작업 기록. 되돌리기 SQL 이 있으면 새 콘솔에 열고 (실행은 직접), 없으면 이유만
+    #[tokio::test]
+    async fn production_log_opens_undo_in_new_console() {
+        let mut h = Harness::new().await;
+        let cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+            "id": "p", "name": "PROD", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "d"
+        })).unwrap();
+        h.app.state.store.save(&cfg).unwrap();
+        h.app.reload_conns();
+        h.settle().await;
+        let entry = |id: &str, sql: &str, undo: Option<&str>| qurry_core::audit::AuditEntry {
+            id: id.into(), ts: 1, conn_id: "p".into(), conn_name: "PROD".into(), database: None, sql: sql.into(), rows: Some(2), error: None, in_tx: false,
+            undo: undo.map(String::from), note: undo.is_none().then(|| "More than 1000 rows change: no undo kept".into()),
+        };
+        h.app.state.audit.add(entry("a", "delete from big", None)).unwrap();
+        h.app.state.audit.add(entry("b", "update t set a = 1 where id = 2", Some("UPDATE t SET a = 0 WHERE id = 2;"))).unwrap();
+        h.console_tab();
+        let tabs = h.app.tabs.len();
+        h.app.run_action(Action::ProductionLog);
+        let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no log") };
+        assert_eq!(p.items[0].label, "update t set a = 1 where id = 2");
+        assert!(p.items[0].hint.starts_with("↶ undo · 2 row(s)") && p.items[0].hint.ends_with("PROD"), "{}", p.items[0].hint);
+        h.key("Enter");
+        assert_eq!(h.app.tabs.len(), tabs + 1);
+        assert_eq!(h.console_text(), "UPDATE t SET a = 0 WHERE id = 2;");
+        h.app.run_action(Action::ProductionLog);
+        h.key("Down");
+        h.key("Enter");
+        assert_eq!(h.app.tabs.len(), tabs + 1);
+        assert!(h.app.status.contains("no undo kept"), "{}", h.app.status);
+    }
+
+    /// ⌃K › Copy Related Rows: 조건 → 자식 단계 → 넣을 곳 (같은 종류의 다른 Data Source 만). Generate Test Data 는 행 수를 묻는다
+    #[tokio::test]
+    async fn copy_rows_and_test_data_flows() {
+        let mut h = Harness::new().await;
+        for (id, name, kind) in [("test", "PROD", "postgres"), ("dev", "DEV", "postgres"), ("my", "MY", "mysql")] {
+            let cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+                "id": id, "name": name, "kind": kind, "host": "127.0.0.1", "port": 1, "user": "u", "database": "d"
+            })).unwrap();
+            h.app.state.store.save(&cfg).unwrap();
+        }
+        h.app.reload_conns();
+        h.settle().await;
+        h.table_tab("users", &["id"], &[&["1"]], &["id"]);
+        h.app.run_action(Action::GenerateTestData);
+        let Some(crate::app::Popup::Input { title, .. }) = &h.app.popup else { panic!("no rows input") };
+        assert!(title.contains("public.users"), "{title}");
+        h.key("Esc");
+        h.app.run_action(Action::CopyRelatedRows);
+        let Some(crate::app::Popup::Input { input, .. }) = &mut h.app.popup else { panic!("no where input") };
+        *input = tui_textarea::TextArea::from(["id = 1"]);
+        h.key("Enter");
+        let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no depth") };
+        assert_eq!(p.items.len(), 4);
+        h.key("Enter");
+        // 개인정보: 기본은 가린다, 아래가 그대로
+        let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no mask choice") };
+        assert_eq!(p.items.len(), 2);
+        h.key("Enter");
+        let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no target") };
+        assert_eq!(p.items.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(), vec!["DEV"]);
+        let Some(crate::migrate::Flow::CopyTarget(b)) = &h.app.flow else { panic!("no flow") };
+        assert_eq!((b.2.filter.as_str(), b.2.depth, b.2.mask), ("id = 1", 1, true));
+    }
+
+    /// ⌃K › Chart Result: 결과 표를 가로 막대로 (팝업)
+    #[tokio::test]
+    async fn chart_result_popup() {
+        let mut h = Harness::new().await;
+        h.table_tab("sales", &["region", "amount"], &[&["Seoul", "120"], &["Busan", "40"], &["Seoul", "30"]], &[]);
+        h.app.run_action(Action::ChartResult);
+        let screen = h.screen(100, 24);
+        assert!(screen.contains("Seoul │") && screen.contains("█ 150") && screen.contains("Busan │"), "{screen}");
+    }
+
+    /// ⌃k › New Table: 이름 → 디자이너 (a 컬럼 · p PK · d 지우기), 아래에 CREATE TABLE 이 바로 보인다
+    #[tokio::test]
+    async fn new_table_designer() {
+        let mut h = Harness::new().await;
+        let cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+            "id": "p", "name": "PG", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "d"
+        })).unwrap();
+        h.app.state.store.save(&cfg).unwrap();
+        h.app.reload_conns();
+        h.settle().await;
+        h.app.focus = crate::app::Focus::Tree;
+        h.app.run_action(Action::NewTable);
+        let Some(crate::app::Popup::Input { input, .. }) = &mut h.app.popup else { panic!("no name input") };
+        *input = tui_textarea::TextArea::from(["orders"]);
+        h.key("Enter");
+        h.key("a");
+        let Some(crate::app::Popup::Input { input, .. }) = &mut h.app.popup else { panic!("no column input") };
+        *input = tui_textarea::TextArea::from(["total numeric(10,2) not null default 0"]);
+        h.key("Enter");
+        let d = h.app.designer.as_ref().unwrap();
+        let sql = d.sql.as_ref().unwrap().join("\n");
+        assert!(sql.contains("CREATE TABLE public.orders") && sql.contains("total numeric(10,2) NOT NULL DEFAULT 0") && sql.contains("PRIMARY KEY (id)"), "{sql}");
+        assert!(h.screen(140, 40).contains("New Table"));
+        // id 컬럼의 PK 를 끄고 지우기
+        h.key("Up");
+        h.key("p");
+        h.key("d");
+        let sql = h.app.designer.as_ref().unwrap().sql.as_ref().unwrap().join("\n");
+        assert!(!sql.contains("PRIMARY KEY") && !sql.contains(" id "), "{sql}");
+        h.key("Esc");
+        assert!(h.app.designer.is_none());
+    }
+
     /// Production Data Source: 데이터를 바꾸는 문장은 바뀔 행 수를 세어 보여 주고 묻는다 (읽기는 그냥 돈다)
     #[tokio::test]
     async fn production_asks_before_changes() {
@@ -1871,7 +1983,7 @@ mod tests {
         // 콘솔 편집기
         h.console_tab();
         let s = last(&h.screen(220, 20));
-        for want in [&disp("F5 run"), &disp("Ctrl+Space complete"), "⇧Tab result", &disp("Ctrl+E tabs"), &disp("Ctrl+P search")] {
+        for want in [&disp("F5 run"), &disp("Ctrl+Space complete"), &disp("⇧Tab result"), &disp("Ctrl+E tabs"), &disp("Ctrl+P search")] {
             assert!(s.contains(want), "editor: {want:?} in {s}");
         }
     }

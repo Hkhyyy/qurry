@@ -1,4 +1,4 @@
-//! 데이터 내보내기 (CSV·TSV·JSON·SQL INSERT·Markdown, 파일/클립보드) 와 가져오기 (CSV·TSV·JSON → 테이블).
+//! 데이터 내보내기 (CSV·TSV·JSON·SQL INSERT·Markdown, 파일/클립보드) 와 가져오기 (CSV·TSV·JSON·Excel → 테이블).
 //! 오래 걸리는 작업은 Job 으로 진행 상황을 알리고 취소할 수 있다
 use crate::app::{AppState, ensure_pool};
 use crate::db::Pool;
@@ -16,6 +16,8 @@ pub enum Format {
     Json,
     Sql,
     Markdown,
+    /// 가져오기만: Excel (.xlsx · .xlsm · .xls) · OpenDocument (.ods) 의 첫 시트
+    Xlsx,
 }
 
 impl Format {
@@ -28,6 +30,7 @@ impl Format {
             Format::Json => "json",
             Format::Sql => "sql",
             Format::Markdown => "md",
+            Format::Xlsx => "xlsx",
         }
     }
 
@@ -38,6 +41,7 @@ impl Format {
             Format::Json => "JSON",
             Format::Sql => "SQL INSERT",
             Format::Markdown => "Markdown",
+            Format::Xlsx => "Excel",
         }
     }
 
@@ -47,6 +51,7 @@ impl Format {
             "csv" => Some(Format::Csv),
             "tsv" | "tab" => Some(Format::Tsv),
             "json" => Some(Format::Json),
+            "xlsx" | "xlsm" | "xls" | "ods" => Some(Format::Xlsx),
             _ => None,
         }
     }
@@ -103,7 +108,8 @@ impl Encoder {
     pub fn header(&mut self, cols: &[String]) -> String {
         self.cols = cols.to_vec();
         match self.format {
-            Format::Csv | Format::Tsv => self.delimited(cols.iter().map(|c| c.as_str())),
+            // Excel 은 가져오기만 (export 가 막는다)
+            Format::Csv | Format::Tsv | Format::Xlsx => self.delimited(cols.iter().map(|c| c.as_str())),
             Format::Json => "[".into(),
             Format::Sql => String::new(),
             Format::Markdown => {
@@ -116,7 +122,7 @@ impl Encoder {
     pub fn row(&mut self, vals: &[Value]) -> String {
         self.rows += 1;
         match self.format {
-            Format::Csv | Format::Tsv => {
+            Format::Csv | Format::Tsv | Format::Xlsx => {
                 let cells: Vec<String> = vals.iter().map(crate::db::cell_text).collect();
                 self.delimited(cells.iter().map(|c| c.as_str()))
             }
@@ -298,8 +304,31 @@ type Records = Box<dyn Iterator<Item = Record> + Send>;
 
 /// 파일을 열어 (열 이름, 행들). CSV·TSV 는 흘려 읽고, JSON 은 객체 배열 하나를 통째로 읽는다
 pub fn read_file(path: &std::path::Path) -> AppResult<(Format, Vec<String>, Records)> {
-    let format = Format::of_path(path).ok_or_else(|| AppError::Msg("Import reads .csv, .tsv or .json files".into()))?;
+    let format = Format::of_path(path).ok_or_else(|| AppError::Msg("Import reads .csv, .tsv, .json, .xlsx, .xls or .ods files".into()))?;
     match format {
+        Format::Xlsx => {
+            use calamine::Reader;
+            let mut wb = calamine::open_workbook_auto(path).map_err(|e| AppError::Msg(format!("Could not read the file: {e}")))?;
+            let range = wb
+                .worksheet_range_at(0)
+                .ok_or_else(|| AppError::Msg("The workbook has no sheets".into()))?
+                .map_err(|e| AppError::Msg(format!("Could not read the first sheet: {e}")))?;
+            let mut rows = range.rows();
+            let cols: Vec<String> = rows.next().map(|r| r.iter().enumerate().map(|(i, c)| excel_cell(c).unwrap_or_else(|| format!("column{}", i + 1))).collect()).unwrap_or_default();
+            let n = cols.len();
+            // 시트는 한 번에 읽힌다 → 행을 모아 두고 흘려 보낸다 (진행은 행 수 비율)
+            let data: Vec<Vec<Option<String>>> = rows
+                .map(|r| {
+                    let mut cells: Vec<Option<String>> = r.iter().take(n).map(excel_cell).collect();
+                    cells.resize(n, None);
+                    cells
+                })
+                .filter(|c| c.iter().any(Option::is_some))
+                .collect();
+            let (total, size) = (data.len().max(1) as u64, std::fs::metadata(path)?.len());
+            let it = data.into_iter().enumerate().map(move |(i, c)| Ok((c, size * (i as u64 + 1) / total)));
+            Ok((format, cols, Box::new(it)))
+        }
         Format::Json => {
             let v: Value = serde_json::from_reader(std::io::BufReader::new(std::fs::File::open(path)?))?;
             let Value::Array(items) = v else { return Err(AppError::Msg("JSON import expects an array of objects".into())) };
@@ -335,6 +364,30 @@ pub fn read_file(path: &std::path::Path) -> AppResult<(Format, Vec<String>, Reco
                 Ok((cells, rec.position().map(|p| p.byte()).unwrap_or(0)))
             });
             Ok((format, cols, Box::new(rows)))
+        }
+    }
+}
+
+/// Excel 칸 → 글 (빈 칸 · 오류는 NULL). 정수인 수는 소수점 없이, 날짜는 YYYY-MM-DD[ HH:MM:SS]
+fn excel_cell(c: &calamine::Data) -> Option<String> {
+    use calamine::Data;
+    match c {
+        Data::Empty | Data::Error(_) => None,
+        Data::String(s) => Some(s.clone()),
+        Data::Int(i) => Some(i.to_string()),
+        Data::Float(f) if f.fract() == 0.0 && f.abs() < 1e15 => Some(format!("{}", *f as i64)),
+        Data::Float(f) => Some(f.to_string()),
+        Data::Bool(b) => Some(b.to_string()),
+        Data::DateTimeIso(s) | Data::DurationIso(s) => Some(s.clone()),
+        Data::DateTime(d) => {
+            let t = d.as_datetime()?;
+            Some(if d.is_duration() || d.as_f64() < 1.0 {
+                t.format("%H:%M:%S").to_string()
+            } else if t.time() == chrono::NaiveTime::MIN {
+                t.format("%Y-%m-%d").to_string()
+            } else {
+                t.format("%Y-%m-%d %H:%M:%S").to_string()
+            })
         }
     }
 }
@@ -432,6 +485,9 @@ impl AppState {
     pub async fn export(&self, id: String, sql: String, format: Format, dest: Dest, table: Option<(String, String)>, job_id: String) -> AppResult<Exported> {
         let job = self.job(&job_id).unwrap_or_else(|| self.start_job(&job_id));
         let r = async {
+            if format == Format::Xlsx {
+                return Err(AppError::Msg("Excel is for import only — export as CSV to open it in Excel".into()));
+            }
             self.check_read_only(&id, &sql)?;
             let kind = self.kind_of(&id)?;
             let pool = ensure_pool(self, &id).await?;
@@ -586,6 +642,25 @@ mod tests {
         assert_eq!(encode(Format::Tsv, DbKind::Postgres, &rows()), "id\tname\tnote\n1\t\"a, \"\"b\"\"\"\t\n2\t\"it's\tx|y\nz\"\ttrue\n");
     }
 
+    /// Excel: 첫 시트, 첫 줄이 열 이름. 정수는 소수점 없이 · 날짜 · 참/거짓 · 빈 칸은 NULL · 빈 줄은 건너뛴다
+    #[test]
+    fn reads_excel_first_sheet() {
+        let dir = std::env::temp_dir().join(format!("qurry-xlsx-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("users.xlsx");
+        std::fs::write(&path, include_bytes!("testdata/sample.xlsx")).unwrap();
+        let p = preview(&path, 10).unwrap();
+        assert_eq!(p.format, Format::Xlsx);
+        assert_eq!(p.columns, vec!["id", "name", "price", "joined", "active", "seen"]);
+        let s = |v: &str| Some(v.to_string());
+        assert_eq!(p.rows[0], vec![s("1"), s("김철수"), s("1.5"), s("2026-10-29"), s("true"), s("2026-10-29 12:00:00")]);
+        assert_eq!(p.rows[1], vec![s("2"), None, s("20"), None, s("false"), None]);
+        assert_eq!(p.rows[2], vec![s("3"), s("lee"), None, None, None, None]);
+        assert_eq!(p.rows.len(), 3);
+        assert_eq!(Format::of_path(std::path::Path::new("a.XLS")), Some(Format::Xlsx));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
     #[test]
     fn json_keeps_types() {
         let s = encode(Format::Json, DbKind::Postgres, &rows());
@@ -689,6 +764,17 @@ mod tests {
         let spec = ImportSpec { path: csv.to_string_lossy().into(), schema: "public".into(), table: "qurry_tr_new".into(), create: true, columns: vec![(0, "key".into()), (1, "label".into())] };
         assert_eq!(st.import("t".into(), spec, "j4".into()).await.unwrap(), 2500);
         assert_eq!(sql("select label from qurry_tr_new where key = '7'").await.unwrap().rows[0][0], serde_json::json!("n7"));
+
+        // Excel: 타입 있는 테이블로 (정수 · 소수 · 날짜 · 참/거짓 · 빈 칸은 NULL)
+        let xlsx = dir.join("users.xlsx");
+        std::fs::write(&xlsx, include_bytes!("testdata/sample.xlsx")).unwrap();
+        let _ = sql("drop table if exists qurry_tr_xl").await;
+        sql("create table qurry_tr_xl (id int, name text, price numeric(6,2), joined date, active boolean, seen timestamp)").await.unwrap();
+        let spec = ImportSpec { path: xlsx.to_string_lossy().into(), schema: "public".into(), table: "qurry_tr_xl".into(), create: false, columns: ["id", "name", "price", "joined", "active", "seen"].into_iter().map(String::from).enumerate().collect() };
+        assert_eq!(st.import("t".into(), spec, "j7".into()).await.unwrap(), 3);
+        let r = sql("select id, name, price::text, joined::text, active, seen::text from qurry_tr_xl order by id").await.unwrap();
+        assert_eq!(serde_json::to_string(&r.rows).unwrap(), r#"[[1,"김철수","1.50","2026-10-29",true,"2026-10-29 12:00:00"],[2,null,"20.00",null,false,null],[3,"lee",null,null,null,null]]"#);
+        let _ = sql("drop table qurry_tr_xl").await;
 
         // 중간에 실패하면 하나도 안 들어간다 (기본키 중복)
         sql("truncate qurry_tr_dst").await.unwrap();

@@ -5,9 +5,10 @@ import { Cell, Dialect, dialectOf, QueryResult } from "../lib/api";
 import { DateTimePicker, isTemporal } from "./DateTimePicker";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { inList } from "../lib/inList";
+import { ResultChart } from "./ResultChart";
 import { Button, CellEditor, CodeBlock, GridCell, GridHeaderCell, GridHeaderRow, GridRow, IconButton, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, TextArea, ToolButton, Toolbar, ToolbarSep } from "../ui";
 import {
-  IcClock, IcExport, IcGear, IcMinus, IcPlus, IcPreview, IcReload, IcRevert, IcSearch, IcStop, IcSubmit, IcTranspose, IcView,
+  IcChart, IcClock, IcExport, IcGear, IcMinus, IcPlus, IcPreview, IcReload, IcRevert, IcSearch, IcStop, IcSubmit, IcTranspose, IcView,
 } from "../ui/icons";
 
 const ROW_H = 24;
@@ -103,6 +104,8 @@ export function ResultGrid(p: Props) {
   const [showFilter, setShowFilter] = useState(true);
   const [sortViaOrderBy, setSortViaOrderBy] = useState(true);
   const [transposed, setTransposed] = useState(false);
+  /** View as › Chart */
+  const [chart, setChart] = useState(false);
   const [interval, setIntervalSec] = useState(0);
   const [valueEditor, setValueEditor] = useState<{ r: number; c: number; text: string } | null>(null);
   const [showQuery, setShowQuery] = useState(false);
@@ -660,16 +663,17 @@ export function ResultGrid(p: Props) {
           {extractor} ▾
         </ToolButton>
         <IconButton title="Export Data…" onClick={p.onExport}><IcExport /></IconButton>
-        <IconButton active={transposed}
+        <IconButton active={transposed || chart}
           title="View as"
           onClick={(e) =>
             dropdown(e, [
-              { label: (!transposed ? "✓ " : "　") + "Table", action: () => setTransposed(false) },
-              { label: (transposed ? "✓ " : "　") + "Transpose", action: () => setTransposed(true) },
+              { label: (!transposed && !chart ? "✓ " : "　") + "Table", action: () => (setTransposed(false), setChart(false)) },
+              { label: (transposed ? "✓ " : "　") + "Transpose", action: () => (setTransposed(true), setChart(false)) },
+              { label: (chart ? "✓ " : "　") + "Chart", action: () => (setChart(true), setTransposed(false)) },
             ])
           }
         >
-          {transposed ? <IcTranspose /> : <IcView />}
+          {chart ? <IcChart /> : transposed ? <IcTranspose /> : <IcView />}
         </IconButton>
         <IconButton
           title="Show Options Menu"
@@ -677,7 +681,7 @@ export function ResultGrid(p: Props) {
             dropdown(e, [
               ...(p.filterBar ? ([{ label: (showFilter ? "✓ " : "　") + "Show Filter", action: () => setShowFilter((v) => !v) }] as MenuItem[]) : []),
               ...(p.onServerSort ? ([{ label: (sortViaOrderBy ? "✓ " : "　") + "Sort via ORDER BY", action: () => { setSorts([]); setSortViaOrderBy((v) => !v); } }] as MenuItem[]) : []),
-              { label: "Reset View", action: () => { setSorts([]); setTransposed(false); if (serverSort) p.onServerSort!(""); } },
+              { label: "Reset View", action: () => { setSorts([]); setTransposed(false); setChart(false); if (serverSort) p.onServerSort!(""); } },
               { separator: true },
               { label: "View Query", action: () => setShowQuery(true), disabled: !p.query },
               ...(p.onCopyQueryToConsole ? ([{ label: "Copy Query to Console", action: () => p.query && p.onCopyQueryToConsole!(p.query), disabled: !p.query }] as MenuItem[]) : []),
@@ -711,7 +715,9 @@ export function ResultGrid(p: Props) {
         </div>
       )}
 
-      {transposed ? (
+      {chart ? (
+        <ResultChart result={result} />
+      ) : transposed ? (
         <TransposedView cols={cols} rows={Array.from({ length: Math.min(rowCount, 300) }, (_, d) => cols.map((_, c) => valueAt(dataIndex(d), c)))} />
       ) : (
         <div

@@ -182,6 +182,94 @@ async fn explorer(h: &mut Harness) {
     h.app.status = "4 rows retrieved in 12 ms".into();
 }
 
+/// 화면들: 콘솔 · 결과, 차트, 운영 작업 기록, 테이블 디자이너, 테스트 데이터 · 관련 행 복사 확인, Redis
+fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
+    use qurry_core::ddl::{ColumnDef, ForeignKeyDef, IndexDef, TableDef};
+    // 콘솔 + 결과
+    let id = h.console_with("select card_brand, count(*) as payments, sum(amount) as total\nfrom payment\ngroup by 1\norder by 3 desc;", 3, 16);
+    let res = qurry_core::db::QueryResult {
+        columns: [("card_brand", "TEXT"), ("payments", "INT8"), ("total", "NUMERIC")].iter().map(|(n, t)| qurry_core::db::ColumnInfo { name: n.to_string(), type_name: t.to_string() }).collect(),
+        rows: [("VISA", 1240, "182400000"), ("MASTER", 860, "120900000"), ("AMEX", 210, "61500000"), ("JCB", 95, "9800000")].iter().map(|(b, n, t)| vec![json!(b), json!(n), json!(t)]).collect(),
+        rows_affected: 0,
+        truncated: false,
+        elapsed_ms: 18,
+        has_result_set: true,
+        in_transaction: false,
+    };
+    if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
+        c.result_title = "Result 1: select card_brand, count(*) as payments,".into();
+        c.grid = Some(crate::grid::Grid::new(res));
+        c.show_output = false;
+    }
+    h.app.focus = crate::app::Focus::Editor;
+    h.app.status = "4 row(s) retrieved in 18 ms".into();
+    scenes.push(app_scene(h, "Console & result", "콘솔 (위) · 결과 표 (아래) · F5 실행", 120, 26));
+    // 차트
+    h.app.chart_result();
+    scenes.push(app_scene(h, "Chart", "⌃k › Chart Result: 첫 글 컬럼별 수 컬럼의 합 (가로 막대)", 120, 26));
+    h.app.popup = None;
+    // 운영 작업 기록
+    let entry = |id: &str, ago: i64, sql: &str, rows: Option<u64>, undo: bool, in_tx: bool| qurry_core::audit::AuditEntry {
+        id: id.into(),
+        ts: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64 - ago * 60_000,
+        conn_id: "prod".into(),
+        conn_name: "[PROD] rentalpay".into(),
+        database: None,
+        sql: sql.into(),
+        rows,
+        error: None,
+        in_tx,
+        undo: undo.then(|| "UPDATE …".into()),
+        note: None,
+    };
+    for e in [
+        entry("1", 90, "delete from payment where created_at < now() - interval '1 year'", Some(12408), false, false),
+        entry("2", 12, "update payment set amount = 0 where id = 4", Some(1), true, true),
+        entry("3", 10, "COMMIT", None, false, false),
+    ] {
+        h.app.state.audit.add(e).unwrap();
+    }
+    h.app.production_log();
+    scenes.push(app_scene(h, "Production log", "⌃k › Production Log: 운영에서 실행한 변경 (↶ undo 가 있으면 ↩ 로 새 콘솔에)", 120, 22));
+    h.app.popup = None;
+    // 테이블 디자이너 (고치기)
+    let col = |n: &str, t: &str, null: bool| ColumnDef { name: n.into(), orig: Some(n.into()), data_type: t.into(), nullable: null, ..Default::default() };
+    let before = TableDef {
+        schema: "public".into(),
+        name: "payment".into(),
+        columns: vec![ColumnDef { auto_increment: true, ..col("id", "bigint", false) }, col("user_id", "bigint", false), col("amount", "numeric(12,0)", false), col("card_brand", "varchar(20)", true)],
+        primary_key: vec!["id".into()],
+        primary_key_name: Some("payment_pkey".into()),
+        indexes: vec![IndexDef { name: "payment_user_idx".into(), orig: Some("payment_user_idx".into()), columns: vec!["user_id".into()], ..Default::default() }],
+        foreign_keys: vec![ForeignKeyDef { name: "payment_user_fk".into(), orig: Some("payment_user_fk".into()), columns: vec!["user_id".into()], ref_schema: "public".into(), ref_table: "users".into(), ref_columns: vec!["id".into()], on_delete: "CASCADE".into(), on_update: "NO ACTION".into() }],
+        comment: Some("결제".into()),
+    };
+    let mut def = before.clone();
+    def.columns[3].name = "brand".into();
+    def.columns.push(ColumnDef { name: "paid_at".into(), data_type: "timestamptz".into(), nullable: false, default: Some("now()".into()), ..Default::default() });
+    let mut d = crate::designer::Designer { target: "prod".into(), conn: "prod".into(), kind: qurry_core::store::DbKind::Postgres, before: Some(before), def, sel: 4, sql: Ok(vec![]), message: None };
+    d.refresh();
+    h.app.designer = Some(d);
+    scenes.push(app_scene(h, "Table designer", "⌃F6 Modify Table: 컬럼 · 인덱스 · FK 를 한 줄씩 고치면 아래에 ALTER 가 바로 보인다", 120, 34));
+    h.app.designer = None;
+    // 테스트 데이터 · 관련 행 복사 확인
+    h.app.popup = Some(Popup::Confirm {
+        text: "Insert 1,000 generated rows into public.payment?\n\n  id          left to the database (auto / generated)\n  user_id     picked from public.users (id)\n  amount      random values\n  card_brand  one of: VISA, MASTER, AMEX\n  created_at  random values\n\n⚠ Production data source \"[PROD] rentalpay\"\n\nAll rows go in one transaction — if one fails, nothing is inserted.".into(),
+        on_yes: Box::new(|_| {}),
+    });
+    scenes.push(app_scene(h, "Generate test data", "⌃k › Generate Test Data: 컬럼마다 채우는 법을 보여 주고 확인", 120, 24));
+    h.app.popup = Some(Popup::Confirm {
+        text: "Copy 29 rows into \"[DEV] rentalpay\"? (in insert order)\n\n  users         1  start · masked: email, name, phone\n  contract      3  child of users\n  payment      25  child of contract\n\nOne transaction; rows already there are skipped. The tables must exist in the target.".into(),
+        on_yes: Box::new(|_| {}),
+    });
+    scenes.push(app_scene(h, "Copy related rows", "⌃k › Copy Related Rows To: FK 로 이어진 행 · 가린 개인정보 컬럼을 보여 주고 확인", 120, 22));
+    h.app.popup = None;
+    // Redis
+    h.redis_tab(&["session:9f2c", "session:a771", "user:41", "user:41:cart", "queue:mail", "rank:daily"]);
+    scenes.push(app_scene(h, "Redis", "Redis 키 브라우저: 키 · 타입 · TTL", 120, 22));
+    h.app.focus = crate::app::Focus::Tree;
+}
+
 #[tokio::test]
 #[ignore = "Storybook 용 TUI 화면을 다시 만들 때만 (pnpm tui-snapshots)"]
 async fn kit_snapshots() {
@@ -205,6 +293,7 @@ async fn kit_snapshots() {
     h.app.popup = Some(Popup::Help { sel: 0, scroll: 0, record: None, message: None });
     scenes.push(app_scene(&mut h, "Keymap (F1)", "F1: 처음 쓸 키 → 바꿀 수 있는 명령 → 고정 키", 120, 30));
     h.app.popup = None;
+    screens(&mut h, &mut scenes);
     h.key("Alt+n");
     h.key("Enter");
     h.key("Alt+1");

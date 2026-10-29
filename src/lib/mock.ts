@@ -179,6 +179,70 @@ const handlers: Record<string, (a: any) => unknown> = {
     { id: "h2", connId: "dev", sql: "select * from users where id = 42", ts: Date.now() - 3600000 },
   ],
   history_delete: () => null,
+  fake_preview: () => ({
+    plan: [
+      { name: "id", dataType: "bigint", how: "left to the database (auto / generated)" },
+      { name: "user_id", dataType: "integer", how: "picked from users (id)" },
+      { name: "status", dataType: "order_status", how: "one of: new, paid, shipped" },
+      { name: "price", dataType: "numeric(8,2)", how: "random values" },
+      { name: "email", dataType: "character varying(60)", how: "unique values" },
+      { name: "created_at", dataType: "timestamp with time zone", how: "random values" },
+      { name: "note", dataType: "text", how: "random values · some NULL" },
+    ],
+    result: {
+      columns: [{ name: "user_id", typeName: "integer" }, { name: "status", typeName: "order_status" }, { name: "price", typeName: "numeric(8,2)" }, { name: "email", typeName: "varchar(60)" }, { name: "created_at", typeName: "timestamptz" }, { name: "note", typeName: "text" }],
+      rows: Array.from({ length: 8 }, (_, i) => [i + 3, ["new", "paid", "shipped"][i % 3], (i * 123.45 + 9).toFixed(2), `minjun.kim${i + 1}@example.com`, `2026-0${(i % 9) + 1}-1${i} 10:2${i}:00`, i % 4 ? "Quick sample data report." : null]),
+      rowsAffected: 0, truncated: false, elapsedMs: 0, hasResultSet: true,
+    },
+    warnings: ["tags (text[]) will be NULL — this type isn't generated"],
+  }),
+  table_def: (a: any) => ({
+    schema: a.schema, name: a.table, primaryKey: ["id"], primaryKeyName: `${a.table}_pkey`, comment: "Customers",
+    columns: [
+      { name: "id", orig: "id", dataType: "bigint", nullable: false, default: null, autoIncrement: true, comment: null },
+      { name: "email", orig: "email", dataType: "character varying(100)", nullable: false, default: null, autoIncrement: false, comment: "login" },
+      { name: "status", orig: "status", dataType: "text", nullable: true, default: "'active'::text", autoIncrement: false, comment: null },
+      { name: "org_id", orig: "org_id", dataType: "integer", nullable: true, default: null, autoIncrement: false, comment: null },
+    ],
+    indexes: [{ name: `${a.table}_email_key`, orig: `${a.table}_email_key`, columns: ["email"], unique: true, constraint: true, definition: null }, { name: `${a.table}_lower_idx`, orig: `${a.table}_lower_idx`, columns: [], unique: false, definition: `CREATE INDEX ${a.table}_lower_idx ON public.${a.table} USING btree (lower(email))` }],
+    foreignKeys: [{ name: `${a.table}_org_id_fkey`, orig: `${a.table}_org_id_fkey`, columns: ["org_id"], refSchema: "public", refTable: "orgs", refColumns: ["id"], onDelete: "CASCADE", onUpdate: "NO ACTION" }],
+  }),
+  table_ddl: (a: any) => {
+    const t = a.after;
+    if (!t.name) throw "Give the table a name";
+    if (!t.columns.length) throw "Add at least one column";
+    if (!a.before) return [`CREATE TABLE ${t.schema}.${t.name} (\n${t.columns.map((c: any) => `    ${c.name} ${c.dataType}${c.nullable ? "" : " NOT NULL"}`).join(",\n")}${t.primaryKey.length ? `,\n    PRIMARY KEY (${t.primaryKey.join(", ")})` : ""}\n)`];
+    const out: string[] = [];
+    if (a.before.name !== t.name) out.push(`ALTER TABLE ${t.schema}.${a.before.name} RENAME TO ${t.name}`);
+    for (const c of t.columns) if (!c.orig) out.push(`ALTER TABLE ${t.schema}.${t.name} ADD COLUMN ${c.name} ${c.dataType}${c.nullable ? "" : " NOT NULL"}`);
+    for (const c of a.before.columns) if (!t.columns.some((x: any) => x.orig === c.name)) out.push(`ALTER TABLE ${t.schema}.${t.name} DROP COLUMN ${c.name}`);
+    return out;
+  },
+  new_object_ddl: (a: any) => {
+    const o = a.object;
+    if (!o.name) throw `Give the ${o.kind} a name`;
+    return [o.kind === "database" ? `CREATE DATABASE ${o.name}` : o.kind === "schema" ? `CREATE SCHEMA ${o.name}` : o.kind === "view" ? `CREATE ${o.materialized ? "MATERIALIZED " : ""}VIEW ${o.schema}.${o.name} AS\n${o.query}` : `CREATE SEQUENCE ${o.schema}.${o.name}`];
+  },
+  rename_ddl: (a: any) => `ALTER TABLE ${a.schema}.${a.old} RENAME TO ${a.new}`,
+  run_ddl: () => new Promise((ok) => setTimeout(() => ok(null), 300)),
+  subset_preview: () => ({
+    total: 9,
+    tables: [
+      { schema: "public", table: "users", rows: 2, masked: [{ column: "email", mask: "email" }, { column: "user_name", mask: "name" }, { column: "phone", mask: "phone" }], reason: "start" },
+      { schema: "public", table: "products", rows: 2, masked: [], reason: "parent of order_items" },
+      { schema: "public", table: "orders", rows: 2, masked: [{ column: "recipient_name", mask: "name" }, { column: "address", mask: "address" }], reason: "child of users" },
+      { schema: "public", table: "order_items", rows: 3, masked: [], reason: "child of orders" },
+    ],
+  }),
+  subset_copy: () => new Promise((ok) => setTimeout(() => ok({ total: 9, tables: [] }), 800)),
+  fake_fill: (a: any) => new Promise((ok) => setTimeout(() => ok(a.rows), 600)),
+  audit_log: () => [
+    { id: "a3", ts: Date.now() - 30000, connId: "prod", connName: "[PROD] shop_app", sql: "COMMIT", inTx: false },
+    { id: "a2", ts: Date.now() - 60000, connId: "prod", connName: "[PROD] shop_app", sql: "update users set user_name = 'kim' where id <= 3", rows: 3, inTx: true,
+      undo: "-- Undo for: update users set user_name = 'kim' where id <= 3\n-- Saved just before it ran. Rows changed again since then are overwritten.\nUPDATE users AS qurry_t SET user_name = qurry_old.user_name\nFROM jsonb_populate_recordset(NULL::users, $qurry$[{\"id\":1,\"user_name\":\"user_1\"}]$qurry$) AS qurry_old\nWHERE qurry_t.id = qurry_old.id;\n" },
+    { id: "a1", ts: Date.now() - 3600000, connId: "prod", connName: "[PROD] shop_app", sql: "delete from logs.user_activity_log where ts < now() - interval '1 year'", rows: 12408, inTx: false, note: "More than 1000 rows change: no undo kept" },
+    { id: "a0", ts: Date.now() - 7200000, connId: "prod", connName: "[PROD] shop_app", sql: "alter table users add column email text", inTx: false, error: "ERROR: column \"email\" already exists" },
+  ],
   history_import: () => 0,
   snippets: () => [{ id: "s1", name: "Suspicious IPs (failed logins)", sql: "SELECT client_ip, count(*) FILTER (WHERE code NOT LIKE 'S%') AS failed FROM logs.user_activity_log GROUP BY 1 HAVING count(*) >= 3", connId: null }],
   snippet_save: (a: any) => ({ ...a.snippet, id: "s2" }),

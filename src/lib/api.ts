@@ -191,6 +191,39 @@ export interface DbaReportInfo { id: string; title: string; group: string; help:
 export const analyzePlan = (json: string) => invoke<import("../components/ConsolePane").PlanNode>("analyze_plan", { json });
 export interface HistoryItem { id: string; connId: string; database?: string; sql: string; ts: number }
 export interface Snippet { id: string; name: string; sql: string; connId?: string | null }
+/** 테스트 데이터 만들기: 컬럼마다 채우는 법 · 예시 행 · 경고 */
+export interface FakePreview { plan: { name: string; dataType: string; how: string }[]; result: QueryResult; warnings: string[] }
+export const fake = {
+  preview: (id: string, schema: string, table: string, rows = 8) => invoke<FakePreview>("fake_preview", { id, schema, table, rows }),
+  fill: (id: string, schema: string, table: string, rows: number) => invoke<number>("fake_fill", { id, schema, table, rows }),
+};
+/** 운영 데이터 일부 복사: 시작 행 + FK 로 이어진 행 → 다른 Data Source (개인정보는 가린다) */
+export interface SubsetSpec { schema: string; table: string; filter: string; depth: number; mask: boolean }
+export interface SubsetPlan { tables: { schema: string; table: string; rows: number; masked: { column: string; mask: string }[]; reason: string }[]; total: number }
+export const subset = {
+  preview: (source: string, spec: SubsetSpec) => invoke<SubsetPlan>("subset_preview", { source, spec }),
+  copy: (source: string, spec: SubsetSpec, target: string) => invoke<SubsetPlan>("subset_copy", { source, spec, target }),
+};
+/** 객체 만들기 · 고치기 (New ▸ · Modify Table… · Rename…) */
+export interface ColumnDef { name: string; orig?: string | null; dataType: string; nullable: boolean; default?: string | null; autoIncrement: boolean; comment?: string | null }
+export interface IndexDef { name: string; orig?: string | null; columns: string[]; unique: boolean; constraint?: boolean; definition?: string | null }
+export interface ForeignKeyDef { name: string; orig?: string | null; columns: string[]; refSchema: string; refTable: string; refColumns: string[]; onDelete: string; onUpdate: string }
+export interface TableDef { schema: string; name: string; columns: ColumnDef[]; primaryKey: string[]; primaryKeyName?: string | null; indexes: IndexDef[]; foreignKeys: ForeignKeyDef[]; comment?: string | null }
+export type NewObject =
+  | { kind: "database"; name: string; charset: string }
+  | { kind: "schema"; name: string }
+  | { kind: "view"; schema: string; name: string; query: string; materialized: boolean }
+  | { kind: "sequence"; schema: string; name: string; start: number | null; increment: number | null };
+export const ddl = {
+  tableDef: (id: string, schema: string, table: string) => invoke<TableDef>("table_def", { id, schema, table }),
+  table: (id: string, before: TableDef | null, after: TableDef) => invoke<string[]>("table_ddl", { id, before, after }),
+  newObject: (id: string, object: NewObject) => invoke<string[]>("new_object_ddl", { id, object }),
+  rename: (id: string, what: string, schema: string, old: string, newName: string) => invoke<string>("rename_ddl", { id, what, schema, old, new: newName }),
+  run: (id: string, statements: string[]) => invoke<void>("run_ddl", { id, statements }),
+};
+/** 운영 작업 기록: Production Data Source 에서 실행한 변경 (TUI 와 같이 쓴다) */
+export interface AuditEntry { id: string; ts: number; connId: string; connName: string; database?: string; sql: string; rows?: number; error?: string; inTx: boolean; undo?: string; note?: string }
+export const auditLog = (connId: string | null, filter: string, limit = 500) => invoke<AuditEntry[]>("audit_log", { connId, filter, limit });
 /** 쿼리 히스토리·스니펫 (설정 폴더, TUI 와 같이 쓴다) */
 export const history = {
   add: (connId: string, database: string | undefined, sql: string) => invoke<void>("history_add", { connId, database: database ?? null, sql }),

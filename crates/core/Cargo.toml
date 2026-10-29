@@ -20,6 +20,7 @@ rand = "0.8"
 redis = { version = "1.7.1", features = ["tokio-comp", "connection-manager", "tokio-rustls-comp", "tls-rustls", "tls-rustls-insecure", "cluster-async"] }
 dirs = "6"
 csv = "1"
+calamine = { version = "=0.36.1", features = ["dates"] }
 regex = "1"
 minisign-verify = "0.2"
 sha2 = "0.10"

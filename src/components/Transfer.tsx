@@ -113,7 +113,7 @@ export function ImportDialog({ target, schema, table, onImport, onClose }: {
         <Button size="sm" onClick={pick} autoFocus={!file}>
           {file ? "Change File…" : "Choose File…"}
         </Button>
-        <Text tone="muted">{file ? `${fileName} · ${file.pv.format.toUpperCase()} · ${(file.pv.bytes / 1048576).toFixed(1)} MB` : "CSV, TSV or JSON (array of objects)"}</Text>
+        <Text tone="muted">{file ? `${fileName} · ${file.pv.format.toUpperCase()} · ${(file.pv.bytes / 1048576).toFixed(1)} MB` : "CSV, TSV, JSON (array of objects) or Excel (first sheet)"}</Text>
       </div>
       {create && (
         <div className="transfer-file">

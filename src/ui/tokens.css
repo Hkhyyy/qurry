@@ -43,8 +43,14 @@
   --ui-z-menu: 200;
   --ui-z-popover: 300;
   --ui-z-dialog: 400;
+
+  /* 트리 아이콘 선 (DataGrip New UI 처럼 회색 선, DB 는 파랑) */
+  --ui-icon: #ced0d6;
+  --ui-icon-db: #548af7;
 }
 :root[data-theme="light"] {
+  --ui-icon: #6c707e;
+  --ui-icon-db: #3574f0;
   --ui-shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.12);
   --ui-shadow-modal: 0 12px 40px rgba(0, 0, 0, 0.18);
 }

@@ -1,4 +1,5 @@
 //! 쿼리 히스토리·스니펫 (GUI 와 같은 파일): ⌃K › Query History… · Snippets… · Save Query as Snippet…
+//! 운영 작업 기록 (⌃K › Production Log…): Production Data Source 에서 실행한 변경과 되돌리기 SQL
 use crate::app::{App, PAction, PItem, Palette, Popup, Tab, TabKind, byte_offset, selected_text};
 use qurry_core::history::Snippet;
 use tui_textarea::TextArea;
@@ -44,7 +45,7 @@ impl App {
     pub fn snippets_palette(&mut self) {
         let conn = self.snip_conn();
         let items = self.state.history.snippets(conn.as_deref()).into_iter().map(|s| PItem { label: s.name, hint: one_line(&s.sql, 80), action: PAction::InsertSql(s.sql) }).collect();
-        self.chooser_sql("Snippets (type to filter)", items, "No snippets yet — Ctrl+K › Save Query as Snippet");
+        self.chooser_sql("Snippets (type to filter)", items, "No snippets yet — ⌃k › Save Query as Snippet");
     }
 
     /// 골라 둔 글, 아니면 커서의 문장을 이름 붙여 저장 (이 Data Source 에서만 보인다)
@@ -71,10 +72,59 @@ impl App {
                 return;
             }
             a.status = match a.state.history.save_snippet(Snippet { id: String::new(), name: name.trim().into(), sql: sql.trim().into(), conn_id: Some(conn) }) {
-                Ok(s) => format!("Snippet \"{}\" saved (Ctrl+K › Snippets…)", s.name),
+                Ok(s) => format!("Snippet \"{}\" saved (⌃k › Snippets…)", s.name),
                 Err(e) => e.to_string(),
             };
         });
+    }
+
+    /// 운영 작업 기록 (모든 Data Source, 최근 것부터). 고르면 되돌리기 SQL 을 새 콘솔에
+    pub fn production_log(&mut self) {
+        let items = self
+            .state
+            .audit_log(None, String::new(), 1000)
+            .into_iter()
+            .map(|e| {
+                let status = if e.error.is_some() {
+                    "failed".to_string()
+                } else if let Some(n) = e.rows {
+                    format!("{n} row(s){}", if e.in_tx { ", not committed yet" } else { "" })
+                } else {
+                    String::new()
+                };
+                let place = match &e.database {
+                    Some(db) => format!("{} · {db}", e.conn_name),
+                    None => e.conn_name.clone(),
+                };
+                let undo = if e.undo.is_some() { "↶ undo".to_string() } else { String::new() };
+                let (conn, db) = qurry_core::app::split_target(&e.conn_id);
+                PItem {
+                    label: one_line(&e.sql, 120),
+                    // 좁으면 뒤가 잘린다 → 중요한 것 (되돌리기 · 행 수) 먼저
+                    hint: [undo, status, ago(e.ts), place].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join(" · "),
+                    action: PAction::OpenUndo { conn: conn.into(), db: db.map(String::from), note: e.error.clone().or(e.note.clone()).unwrap_or_else(|| "No undo for this statement".into()), undo: e.undo },
+                }
+            })
+            .collect();
+        self.chooser_sql("Production Log (type to filter · ↩ opens the undo SQL in a new console)", items, "Nothing yet — changes you run on a Production data source show up here");
+    }
+
+    /// 되돌리기 SQL 을 그 Data Source 의 새 콘솔에 (실행은 직접 — Production 확인을 거친다)
+    pub fn open_undo(&mut self, conn: String, db: Option<String>, undo: Option<String>, note: String) {
+        let Some(undo) = undo else {
+            self.status = note;
+            return;
+        };
+        if self.conn(&conn).is_none() {
+            self.status = "That data source no longer exists".into();
+            return;
+        }
+        self.open_console(&conn, db);
+        if let Some(Tab { kind: TabKind::Console(c), .. }) = self.tabs.get_mut(self.active) {
+            c.editor.insert_str(undo);
+            self.focus = crate::app::Focus::Editor;
+        }
+        self.status = "Undo SQL opened — check it, then run it".into();
     }
 
     /// 고른 쿼리를 콘솔에 넣는다 (지금 탭이 콘솔이 아니면 새 콘솔)
