@@ -239,10 +239,6 @@ pub async fn housekeeping(state: &AppState) -> Vec<String> {
 }
 
 /// 드라이버 풀의 내보내기 (전체를 한 번에 받아 쓴다)
-async fn pool_export(pool: &Pool, sql: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {
-    pool.export(sql, out).await
-}
-
 pub async fn ensure_pool(state: &AppState, id: &str) -> AppResult<Pool> {
     touch(state, id);
     if let Some(p) = state.pools.read().await.get(id) {
@@ -358,7 +354,7 @@ impl AppState {
                 crate::redisdb::run(&m, &sql, limit).await
             }
             // 드라이버: 서버 쪽 READ ONLY 트랜잭션이 없다 — guard 검사(한 문장·읽기 명령)를 통과한 것만
-            Pool::Plugin(c) => c.query(&sql, limit).await,
+            Pool::Plugin(c) => c.query_opts(&sql, limit, true).await,
         }
     }
 
@@ -387,7 +383,13 @@ impl AppState {
                 r?
             }
             Pool::Redis(..) => return Err(AppError::Msg("CSV export of Redis commands is not available in read-only mode".into())),
-            Pool::Plugin(_) => pool_export(&pool, &sql, &mut out).await?,
+            Pool::Plugin(c) => {
+                let r = c.query_opts(&sql, 10_000_000, true).await?;
+                out.header(&r.columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>()).await?;
+                for row in &r.rows {
+                    out.row(row).await?;
+                }
+            }
         }
         Ok(out.finish().await?.rows)
     }

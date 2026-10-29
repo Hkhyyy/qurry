@@ -111,8 +111,13 @@ impl PluginConn {
     }
 
     pub async fn query(&self, sql: &str, limit: usize) -> AppResult<crate::db::QueryResult> {
+        self.query_opts(sql, limit, false).await
+    }
+
+    /// read_only = guard 를 통과한 읽기 (MCP). 드라이버가 서버 쪽에서도 읽기만 하게 한다 (ClickHouse readonly)
+    pub async fn query_opts(&self, sql: &str, limit: usize, read_only: bool) -> AppResult<crate::db::QueryResult> {
         let start = std::time::Instant::now();
-        let o: qurry_driver::QueryOut = self.call("query", json!({ "sql": sql, "limit": limit })).await?;
+        let o: qurry_driver::QueryOut = self.call("query", json!({ "sql": sql, "limit": limit, "readOnly": read_only })).await?;
         Ok(crate::db::QueryResult {
             columns: o.columns.into_iter().map(|c| crate::db::ColumnInfo { name: c.name, type_name: c.type_name }).collect(),
             rows: o.rows,
@@ -213,7 +218,7 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, port: Optio
         user: cfg.user.clone(),
         password: password.map(String::from),
         database: cfg.database.clone(),
-        options: json!({ "readOnly": cfg.read_only, "ssl": cfg.active_ssl().map(|s| s.mode().to_string()), "oracleClient": cfg.options.oracle_client }),
+        options: json!({ "readOnly": cfg.read_only, "sandbox": crate::SANDBOX.load(std::sync::atomic::Ordering::Relaxed), "ssl": cfg.active_ssl().map(|s| s.mode().to_string()), "oracleClient": cfg.options.oracle_client }),
     };
     let _: Value = c.call("connect", serde_json::to_value(params)?).await?;
     Ok(c)

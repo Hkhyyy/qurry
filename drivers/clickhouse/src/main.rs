@@ -9,6 +9,10 @@ struct Ch {
     password: String,
     database: String,
     agent: Option<ureq::Agent>,
+    /// Read-only Data Source
+    read_only: bool,
+    /// 지금 쿼리는 읽기만 (Read-only Data Source 또는 MCP 읽기): 서버도 readonly=2 로 막는다
+    ro: bool,
 }
 
 fn lit(s: &str) -> String {
@@ -28,6 +32,10 @@ impl Ch {
         let mut req = agent.post(&self.url).header("X-ClickHouse-User", &self.user).header("X-ClickHouse-Key", &self.password).query("database", &self.database);
         for (k, v) in settings {
             req = req.query(*k, v);
+        }
+        // readonly=2: 읽기만, 이 요청의 설정 (max_result_rows …) 은 바꿀 수 있다
+        if self.ro {
+            req = req.query("readonly", "2");
         }
         let mut res = req.config().http_status_as_error(false).build().send(sql).map_err(|e| e.to_string())?;
         let summary = res.headers().get("X-ClickHouse-Summary").and_then(|v| v.to_str().ok()).map(String::from);
@@ -75,13 +83,18 @@ impl Driver for Ch {
                 self.password = c.password.unwrap_or_default();
                 self.database = if c.database.trim().is_empty() { "default".into() } else { c.database.trim().into() };
                 self.agent = Some(ureq::Agent::config_builder().timeout_connect(Some(std::time::Duration::from_secs(10))).build().into());
+                self.read_only = c.options.get("readOnly").and_then(Value::as_bool).unwrap_or(false);
+                self.ro = self.read_only;
                 self.query("SELECT 1", 1)?;
                 ok(Value::Null)
             }
             "query" => {
                 let sql = p.get("sql").and_then(Value::as_str).unwrap_or("");
                 let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(500) as usize;
-                ok(self.query(sql, limit)?)
+                self.ro = self.read_only || p.get("readOnly").and_then(Value::as_bool).unwrap_or(false);
+                let r = self.query(sql, limit);
+                self.ro = self.read_only;
+                ok(r?)
             }
             "databases" => ok(self.rows("SELECT name FROM system.databases ORDER BY name")?.into_iter().map(|r| r[0].clone()).collect::<Vec<_>>()),
             // DB 가 곧 스키마
