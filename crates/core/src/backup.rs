@@ -33,6 +33,11 @@ pub struct RestoreOptions {
 
 /// Folders where tools are likely to be (after PATH)
 fn tool_dirs() -> Vec<PathBuf> {
+    // Tests against real servers can pin the client version (e.g. only /opt/homebrew/opt/libpq/bin)
+    #[cfg(test)]
+    if let Some(d) = std::env::var_os("QURRY_TEST_TOOL_DIRS") {
+        return std::env::split_paths(&d).collect();
+    }
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
     for d in ["/opt/homebrew/bin", "/usr/local/bin", "/opt/homebrew/opt/libpq/bin", "/usr/local/opt/libpq/bin", "/opt/homebrew/opt/mysql-client/bin", "/usr/local/opt/mysql-client/bin", "/opt/homebrew/opt/mysql/bin", "/usr/local/mysql/bin", "/usr/bin"] {
         dirs.push(d.into());
@@ -200,13 +205,13 @@ fn psql_restricts(v: &[u64]) -> bool {
 
 /// psql for plain SQL: its commands (\! · \o · \copy … program · \connect …) are switched off with \restrict, so only a psql that knows it is used —
 /// the closest such one to the server. An older psql can't switch its commands off: plain SQL isn't restored with it
-fn restricting_psql(server: Option<u64>) -> AppResult<PathBuf> {
+fn restricting_psql(server: Option<u64>, what: &str) -> AppResult<PathBuf> {
     if let Some(p) = find_tool_where("psql", server, psql_restricts) {
         return Ok(p);
     }
     let found = find_tool_for("psql", server).ok_or_else(|| missing("psql"))?;
     Err(AppError::Msg(format!(
-        "Restoring a .sql file needs psql 17.6 / 16.10 / 15.14 / 14.19 / 13.22 or newer (it can switch psql commands off; found {}). Update the PostgreSQL client tools (macOS: brew upgrade libpq · Ubuntu: the postgresql-client package)",
+        "Restoring {what} needs psql 17.6 / 16.10 / 15.14 / 14.19 / 13.22 or newer (it can switch psql commands off; found {}). Update the PostgreSQL client tools (macOS: brew upgrade libpq · Ubuntu: the postgresql-client package)",
         version_label(&found)
     )))
 }
@@ -224,6 +229,12 @@ fn version_label(tool: &Path) -> String {
 /// Whether mysql knows --system-command (from 8.0.40 · 8.4.3 · 9.1)
 fn mysql_has_system_command_option(tool: &Path) -> bool {
     std::process::Command::new(tool).arg("--help").output().map(|o| String::from_utf8_lossy(&o.stdout).contains("--system-command")).unwrap_or(false)
+}
+
+/// Whether pg_restore of this major version, restoring straight into the server, would SET settings the server doesn't know
+/// (pg_restore 17+ sends SET transaction_timeout whatever the server). Unknown versions: no (pg_restore then reports what went wrong)
+fn sends_unknown_settings(pg_restore: Option<u64>, server: Option<u64>) -> bool {
+    NEWER_SETTINGS.iter().any(|(_, v)| server.is_some_and(|s| s < *v) && pg_restore.is_some_and(|t| t >= *v))
 }
 
 /// What psql reads instead of the .sql file as is (streamed to its stdin, no copy): `\restrict <key>` first, so psql commands in the file are switched off;
@@ -554,15 +565,19 @@ impl AppState {
                     let server = pg_major(self, &id).await;
                     // The SQL that pg_restore expanded the archive to: removed however the restore ends (it holds all the data)
                     let mut expanded = None;
+                    let mut psql = None;
                     if custom {
                         let tool = find_tool_for("pg_restore", server).ok_or_else(|| missing("pg_restore"))?;
+                        let sends_unknown = sends_unknown_settings(version_of(&tool).first().copied(), server);
                         let mut cmd = tokio::process::Command::new(tool);
                         cmd.args(["--no-owner"]);
                         if opts.clean {
                             cmd.args(["--clean", "--if-exists"]);
                         }
-                        if NEWER_SETTINGS.iter().any(|(_, v)| server.is_some_and(|s| s < *v)) {
-                            // Older server: expand to SQL and replay it through psql without the unknown settings (pg_restore stops at those SETs)
+                        if sends_unknown {
+                            // This pg_restore is newer than the server and would SET settings it doesn't know (and stop there): expand to SQL and replay it
+                            // through psql without them. psql is checked first, so an archive isn't expanded only to be refused
+                            psql = Some(restricting_psql(server, "this backup into an older server (it goes through psql, so the newer pg_restore's settings can be left out)")?);
                             let tmp = SecretTemp(std::env::temp_dir().join(format!("qurry-restore-{}.sql", uuid::Uuid::new_v4())));
                             // Create it as an owner-only file before pg_restore writes (the dump contains all the data)
                             drop(private_file(&tmp.0)?);
@@ -579,7 +594,10 @@ impl AppState {
                     }
                     if !custom || expanded.is_some() {
                         let src = expanded.as_ref().map_or(file.clone(), |t| t.0.clone());
-                        let tool = restricting_psql(server)?;
+                        let tool = match psql {
+                            Some(t) => t,
+                            None => restricting_psql(server, "a .sql file")?,
+                        };
                         let mut cmd = tokio::process::Command::new(tool);
                         cmd.arg("-h").arg(&host).arg("-p").arg(port.to_string()).arg("-U").arg(&user).arg("-d").arg(pg_dbname(&db)).arg("--no-password");
                         cmd.args(["-X", "-q", "-v", "ON_ERROR_STOP=1", "--single-transaction", "-f", "-"]);
@@ -659,6 +677,17 @@ mod tests {
         for bad in ["system rm -rf ~", "system\tid", "\\! id", "tee /Users/x/.zshrc", "\\T /tmp/x", "pager sh", "source /etc/passwd", "connect db evil.host"] {
             assert!(local_command(format!("select 1;\n{bad}\n").as_bytes(), Mysql).is_some(), "{bad}");
         }
+    }
+
+    /// Custom archives go straight to the server with pg_restore unless that pg_restore would send settings the server doesn't know
+    #[test]
+    fn custom_restores_use_psql_only_when_pg_restore_is_too_new() {
+        assert!(!sends_unknown_settings(Some(16), Some(16)));
+        assert!(!sends_unknown_settings(Some(16), Some(12)));
+        assert!(!sends_unknown_settings(Some(18), Some(17)));
+        assert!(sends_unknown_settings(Some(18), Some(16)));
+        assert!(sends_unknown_settings(Some(17), Some(12)));
+        assert!(!sends_unknown_settings(None, Some(16)) && !sends_unknown_settings(Some(18), None));
     }
 
     /// What psql is fed: \restrict key at the top, \restrict · \unrestrict in the file and settings the server doesn't know left out
@@ -816,7 +845,7 @@ mod tests {
             let n = st.backup("b".into(), file.clone(), opts, format!("j-{format}")).await.unwrap();
             assert!(n > 1000, "{format}: {n} bytes");
             q("drop schema qurry_bak cascade").await.unwrap();
-            st.restore("b".into(), file, RestoreOptions::default(), format!("r-{format}")).await.unwrap();
+            st.restore("b".into(), file, RestoreOptions::default(), format!("r-{format}")).await.unwrap_or_else(|e| panic!("{format}: {e}"));
             assert_eq!(q("select count(*) from qurry_bak.t").await.unwrap().rows[0][0], serde_json::json!(5000), "{format}");
         }
         // Things like passwords don't go on the command line: even on failure, the tool output is in the message
