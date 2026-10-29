@@ -413,15 +413,16 @@ export function ResultGrid(p: Props) {
   };
 
   // ─── 복사 (Data Extractor) ───
-  const extract = (rows: number[], c0: number, c1: number, fmt: Extractor): string => {
+  /** header = CSV · TSV 맨 위에 컬럼 이름 줄 (복사는 값만 — DataGrip, Copy with Headers 는 같이) */
+  const extract = (rows: number[], c0: number, c1: number, fmt: Extractor, header = true): string => {
     const cs = Array.from({ length: c1 - c0 + 1 }, (_, i) => c0 + i);
     const names = cs.map((c) => cols[c].name);
     const vals = rows.map((r) => cs.map((c) => valueAt(r, c)));
     switch (fmt) {
       case "TSV":
-        return [names.join("\t"), ...vals.map((v) => v.map(raw).join("\t"))].join("\n");
+        return [...(header ? [names.join("\t")] : []), ...vals.map((v) => v.map(raw).join("\t"))].join("\n");
       case "CSV":
-        return [names.map((n) => csvField(n, ",")).join(","), ...vals.map((v) => v.map((x) => csvField(raw(x), ",")).join(","))].join("\n");
+        return [...(header ? [names.map((n) => csvField(n, ",")).join(",")] : []), ...vals.map((v) => v.map((x) => csvField(raw(x), ",")).join(","))].join("\n");
       case "SQL Inserts":
         return vals.map((v) => `INSERT INTO ${tableRef} (${names.map(quoteIdent).join(", ")}) VALUES (${v.map(lit).join(", ")});`).join("\n");
       case "SQL Updates":
@@ -445,10 +446,10 @@ export function ResultGrid(p: Props) {
         ].join("\n");
     }
   };
-  const copySelection = () => {
+  const copySelection = (header = false) => {
     if (!rect) return;
     const single = rect.r0 === rect.r1 && rect.c0 === rect.c1;
-    const text = single && (extractor === "CSV" || extractor === "TSV") ? raw(valueAt(dataIndex(rect.r0), rect.c0)) : extract(selRows(), rect.c0, rect.c1, extractor);
+    const text = single && !header && (extractor === "CSV" || extractor === "TSV") ? raw(valueAt(dataIndex(rect.r0), rect.c0)) : extract(selRows(), rect.c0, rect.c1, extractor, header);
     navigator.clipboard.writeText(text);
   };
   /** 고른 셀을 ('a', 'b') 로 (WHERE x IN 에 바로 붙인다). 한 셀만 골랐으면 그 열 전체 */
@@ -491,7 +492,7 @@ export function ResultGrid(p: Props) {
       setSelB({ r: rowCount - 1, c: cols.length - 1 });
       return stop();
     }
-    if (mod && k === "c" && !e.shiftKey) return copySelection(), stop();
+    if (mod && k === "c" && !e.shiftKey) return copySelection(false), stop();
     if (mod && k === "v") return paste(), stop();
     if (mod && k === "f") {
       setFindOpen(true);
@@ -562,7 +563,8 @@ export function ResultGrid(p: Props) {
           ] as MenuItem[])
         : []),
       { separator: true },
-      { label: "Copy", shortcut: k.copy, action: copySelection },
+      { label: "Copy", shortcut: k.copy, action: () => copySelection(false) },
+      { label: "Copy with Headers", action: () => copySelection(true), disabled: extractor !== "CSV" && extractor !== "TSV" },
       { label: "Copy as IN List  ('a', 'b', …)", action: copyInList },
       { label: "Change Data Extractor", submenu: EXTRACTORS.map((x) => ({ label: (x === extractor ? "✓ " : "　") + x, action: () => setExtractor(x) })) },
       ...(canEdit ? ([{ label: "Paste", shortcut: k.paste, action: paste }] as MenuItem[]) : []),

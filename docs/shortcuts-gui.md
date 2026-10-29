@@ -122,7 +122,7 @@ Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…
 | `⌘⌫` | Delete rows |
 | `⌥⌘z` | Revert selected changes |
 | `⌘↩` | Submit changes |
-| `⌘c / ⌘v` | Copy (with chosen extractor) / paste |
+| `⌘c / ⌘v` | Copy (with chosen extractor; CSV / TSV copy values only — right-click › Copy with Headers adds the column names) / paste |
 | `⌘a` | Select all |
 | `⌘f` | Find in grid |
 | `⌘r` | Reload |
