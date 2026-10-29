@@ -423,21 +423,39 @@ fn secret_temp(prefix: &str, content: &str) -> AppResult<SecretTemp> {
     Ok(t)
 }
 
-/// Password goes via a PGPASSFILE matching only this server · user, not an environment variable (so a \connect in the dump to another server doesn't carry it along)
-fn pg_env(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str, password: Option<&str>, cfg: &crate::store::ConnectionConfig) -> AppResult<Option<SecretTemp>> {
+/// Password file lines for this server · user (None if the password has a line break, which the file can't hold).
+/// For a Unix socket directory libpq matches the host field against "localhost" when it is its default socket directory (and the path otherwise),
+/// so a socket directory gets both lines
+fn pgpass(host: &str, port: u16, user: &str, password: &str) -> Option<String> {
+    if password.contains(['\n', '\r']) {
+        return None;
+    }
     let esc = |s: &str| s.replace('\\', "\\\\").replace(':', "\\:");
-    let pass = match password {
-        Some(p) => {
-            let t = secret_temp("qurry-pgpass", &format!("{}:{port}:*:{}:{}\n", esc(host), esc(user), esc(p)))?;
-            cmd.env("PGPASSFILE", &t.0);
-            Some(t)
-        }
-        None => None,
-    };
+    let line = |h: &str| format!("{}:{port}:*:{}:{}\n", esc(h), esc(user), esc(password));
+    let socket = host.starts_with('/') || host.starts_with('@');
+    Some(if socket { line(host) + &line("localhost") } else { line(host) })
+}
+
+/// Password goes via a PGPASSFILE matching only this server · user, not an environment variable (so a \connect in the dump to another server doesn't carry it along).
+/// Only a password with a line break goes in PGPASSWORD (psql's \connect is switched off by \restrict anyway)
+fn pg_env(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str, password: Option<&str>, cfg: &crate::store::ConnectionConfig) -> AppResult<Option<SecretTemp>> {
     // Settings from the user's environment would override the host, port or TLS rules given here
     for k in ["PGPASSWORD", "PGHOSTADDR", "PGSERVICE", "PGSERVICEFILE", "PGSSLNEGOTIATION", "PGREQUIRESSL", "PGGSSENCMODE"] {
         cmd.env_remove(k);
     }
+    let pass = match password.map(|p| (p, pgpass(host, port, user, p))) {
+        Some((_, Some(lines))) => {
+            let t = secret_temp("qurry-pgpass", &lines)?;
+            cmd.env("PGPASSFILE", &t.0);
+            Some(t)
+        }
+        // A line break can't be written in a password file: this one process gets it in its environment
+        Some((p, None)) => {
+            cmd.env("PGPASSWORD", p);
+            None
+        }
+        None => None,
+    };
     cmd.env("PGCONNECT_TIMEOUT", "10");
     match cfg.active_ssl() {
         Some(s) => {
@@ -672,6 +690,14 @@ mod tests {
         assert_eq!(closest(vec![c(&[16, 10], "/a"), c(&[16, 9], "/b")], Some(18), psql_restricts), Some("/a".into()));
         assert_eq!(closest(vec![c(&[16, 9], "/a"), c(&[], "/b")], Some(16), psql_restricts), None);
         assert_eq!(version_label(Path::new("/surely/not/psql")), "/surely/not/psql, version unknown");
+    }
+
+    #[test]
+    fn pgpass_lines() {
+        assert_eq!(pgpass("db.example", 5432, "u", "p:w\\"), Some("db.example:5432:*:u:p\\:w\\\\\n".into()));
+        assert_eq!(pgpass("/tmp", 5433, "u", "pw"), Some("/tmp:5433:*:u:pw\nlocalhost:5433:*:u:pw\n".into()));
+        assert_eq!(pgpass("/var/run/postgresql", 5432, "u", "a\nb"), None);
+        assert_eq!(pgpass("h", 5432, "u", "a\r"), None);
     }
 
     #[test]
