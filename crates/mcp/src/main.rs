@@ -421,13 +421,11 @@ impl Server {
 /// mongodb://user:pass@host 같은 URI 의 user:pass@ 를 뺀다 (비밀번호가 AI 대화에 남지 않게)
 fn without_userinfo(host: &str) -> String {
     match host.split_once("://") {
-        Some((scheme, rest)) => {
-            let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-            match rest[..end].rfind('@') {
-                Some(at) => format!("{scheme}://{}", &rest[at + 1..]),
-                None => host.to_string(),
-            }
-        }
+        // 비밀번호에 / ? # 가 그대로 들어 있을 수 있어 마지막 @ 까지를 사용자 정보로 본다
+        Some((scheme, rest)) => match rest.rfind('@') {
+            Some(at) => format!("{scheme}://{}", &rest[at + 1..]),
+            None => host.to_string(),
+        },
         None => host.rsplit_once('@').map(|(_, h)| h.to_string()).unwrap_or_else(|| host.to_string()),
     }
 }
@@ -594,5 +592,6 @@ mod tests {
         assert_eq!(without_userinfo("https://qdrant.example.com"), "https://qdrant.example.com");
         assert_eq!(without_userinfo("db.internal"), "db.internal");
         assert_eq!(without_userinfo("u:p@db.internal"), "db.internal");
+        assert_eq!(without_userinfo("mongodb://app:p/a?s#s@h1:27017/db"), "mongodb://h1:27017/db");
     }
 }
