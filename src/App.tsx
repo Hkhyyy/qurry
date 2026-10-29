@@ -1023,7 +1023,8 @@ export default function App() {
   };
   const duplicateConn = async (c: ConnectionView) => {
     const { hasPassword: _h, connected: _c, id: _id, ...config } = c;
-    const saved = await api.saveConnection({ ...config, id: "", name: `${c.name} (copy)` });
+    // A copy is a new data source: it starts hidden from MCP like any other new one
+    const saved = await api.saveConnection({ ...config, id: "", name: `${c.name} (copy)`, options: { ...(config.options ?? {}), mcp: "off" } });
     await refresh();
     setDialog({ edit: { ...c, ...saved, hasPassword: false, connected: false } });
   };
@@ -2734,6 +2735,7 @@ function PasswordSettings() {
           </Select>
         </div>
       </Field>
+      <Text tone="muted">Before moving it to the keychain, update every Qurry app you use (Qurry, qurry-tui, qurry-mcp — e.g. brew upgrade qurry): older versions can't read the key there and stop with "secret.key is corrupted".</Text>
       {isMac && <Text tone="muted">macOS asks once per app (Qurry, qurry-tui, qurry-mcp) to allow keychain access, and again after each update while Qurry isn't code-signed.</Text>}
     </div>
   );

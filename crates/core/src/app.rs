@@ -20,8 +20,6 @@ pub struct AppState {
     pub sessions: RwLock<HashMap<String, SessionEntry>>,
     /// Connection id → SSH tunnel (lives as long as the pool)
     pub tunnels: RwLock<HashMap<String, crate::tunnel::Tunnel>>,
-    /// Secrets already unlocked once (so the file is not read again while the app is running)
-    pub secrets: std::sync::Mutex<HashMap<String, Option<String>>>,
     /// Password store (encrypted file). Avoids keychain popups.
     pub secret_file: crate::secrets::SecretFile,
     /// Data Source id → last used time (Auto-disconnect)
@@ -50,13 +48,9 @@ impl AppState {
                 return Err(AppError::Msg(format!("Data source \"{}\" is not shared with MCP (turn it on in the data source's Options)", c.name)));
             }
         }
-        if let Some(v) = self.secrets.lock().unwrap().get(key) {
-            return Ok(v.clone());
-        }
+        // No in-memory cache: another app (the GUI) may have changed the server and its password since; the file is cheap to read
         // Passwords live only in the encrypted file (the keychain holds at most the master key: crate::secrets)
-        let v = self.secret_file.get(key)?;
-        self.secrets.lock().unwrap().insert(key.to_string(), v.clone());
-        Ok(v)
+        self.secret_file.get(key)
     }
 
     /// Where the password file's master key is kept (shown in Settings)
@@ -74,7 +68,6 @@ impl AppState {
 
     pub fn set_secret(&self, key: &str, value: Option<&str>) -> AppResult<()> {
         self.secret_file.set(key, value)?;
-        self.secrets.lock().unwrap().insert(key.to_string(), value.map(str::to_string));
         Ok(())
     }
 }
@@ -83,7 +76,7 @@ impl AppState {
     pub fn new(store: Store, secret_file: crate::secrets::SecretFile) -> Self {
         let history = crate::history::History::new(&store.dir());
         let audit = crate::audit::Audit::new(&store.dir());
-        Self { history, audit, store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), secrets: Default::default(), secret_file, last_used: Default::default(), last_ping: Default::default(), tab_manual: Default::default(), jobs: Default::default(), mcp: false }
+        Self { history, audit, store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), secret_file, last_used: Default::default(), last_ping: Default::default(), tab_manual: Default::default(), jobs: Default::default(), mcp: false }
     }
 }
 
