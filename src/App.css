@@ -393,6 +393,9 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .hist-body { display: flex; gap: var(--ui-sp-3); height: 380px; }
 .hist-body .hist-list { flex: 1.2; min-width: 0; }
 .hist-body .hist-preview { flex: 1; min-width: 0; }
+.audit-detail { display: flex; flex-direction: column; gap: var(--ui-sp-2); overflow: auto; }
+.audit-detail .ui-code-block { flex: none; max-height: 120px; overflow: auto; }
+.audit-detail .ui-code-block.audit-undo { flex: 1; max-height: none; }
 
 /* Switcher (⌃⇥) / Recent Files (⌘E) */
 .tab-pin { font-size: 10px; margin-left: 2px; opacity: .85; cursor: pointer; }
@@ -530,6 +533,9 @@ html, body, #root, * { overscroll-behavior: none; }
 .transfer-map th { position: sticky; top: 0; background: var(--panel); text-align: left; color: var(--muted); font-weight: 500; padding: 5px 8px; border-bottom: 1px solid var(--border); }
 .transfer-map td { padding: 3px 8px; border-bottom: 1px solid var(--border); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .transfer-map select, .transfer-map input { width: 100%; }
+.gen-plan, .gen-sample { max-height: 24vh; overflow: auto; border: 1px solid var(--ui-border); border-radius: 6px; margin-bottom: var(--ui-sp-2); }
+.gen-badges { display: inline-flex; flex-wrap: wrap; gap: var(--ui-sp-2); }
+.gen-sample td, .gen-plan td { white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 
 /* DBA 리포트 */
 .dba { display: flex; flex-direction: column; height: 100%; }
@@ -594,3 +600,20 @@ html, body, #root, * { overscroll-behavior: none; }
 .ws-explorer { height: 100%; }
 
 .tree-node .node-icon.rd-type { width: auto; }
+
+/* 결과 차트 (View as › Chart) */
+.chart-wrap { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.chart-wrap .ui-toolbar { flex-wrap: wrap; row-gap: var(--ui-sp-1); height: auto; min-height: var(--ui-h-lg); }
+.chart-area { position: relative; flex: 1; min-height: 120px; overflow: hidden; }
+.chart-svg { display: block; }
+.chart-grid { stroke: var(--ui-border); stroke-width: 1; }
+.chart-zero { stroke: var(--ui-border-strong); stroke-width: 1; }
+.chart-tick, .chart-legend { fill: var(--ui-text-muted); font-size: var(--ui-fs-xs); }
+.chart-legend { fill: var(--ui-text); }
+.chart-hover { fill: var(--ui-hover); opacity: .5; }
+.chart-slice { stroke: var(--ui-bg); stroke-width: 1; }
+.chart-slice.on { opacity: .8; }
+.chart-tip { position: absolute; pointer-events: none; background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); box-shadow: var(--ui-shadow-pop); padding: var(--ui-sp-2) var(--ui-sp-3); font-size: var(--ui-fs-sm); max-width: 260px; z-index: 1; }
+.chart-tip b { display: block; margin-bottom: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chart-dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
+.chart-empty { padding: var(--ui-sp-6); color: var(--ui-text-muted); text-align: center; }

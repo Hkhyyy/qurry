@@ -12,11 +12,13 @@ macro_rules! log {
 }
 
 pub mod app;
+pub mod audit;
 pub mod backup;
 pub mod db;
 pub mod dba;
 pub mod erd;
 pub mod error;
+pub mod fake;
 pub mod guard;
 pub mod history;
 pub mod meta;
@@ -31,6 +33,7 @@ pub mod secrets;
 pub mod session;
 pub mod sql;
 pub mod store;
+pub mod subset;
 pub mod transfer;
 pub mod tunnel;
 pub mod update;

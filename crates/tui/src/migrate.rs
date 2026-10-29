@@ -26,6 +26,9 @@ pub enum Flow {
     WsMoveConn(String),
     /// 다이어그램을 그릴 DB 고르기 (Data Source)
     ErdDb(String),
+    /// 운영 데이터 일부 복사 (crate::datatools): 자식 단계 고르기 · 넣을 Data Source 고르기 (원본 대상 id, 원본 Data Source, 조건)
+    CopyDepth(Box<(String, String, qurry_core::subset::SubsetSpec)>),
+    CopyTarget(Box<(String, String, qurry_core::subset::SubsetSpec)>),
 }
 
 /// 고를 수 있는 곳 하나: "conn\u{1}db\u{1}schema"
@@ -108,6 +111,8 @@ impl App {
         match self.flow.take() {
             Some(f @ (Flow::RagSearch | Flow::RagBuild | Flow::RagDest(_) | Flow::RagProvider(_))) => self.rag_flow(f, value),
             Some(Flow::ErdDb(conn)) => self.erd_run(conn, value, None),
+            Some(Flow::CopyDepth(b)) => self.copy_rows_target(*b, value),
+            Some(Flow::CopyTarget(b)) => self.copy_rows_preview(*b, value),
             Some(f @ (Flow::WsSwitch | Flow::WsMove(_) | Flow::WsAddConn | Flow::WsMoveConn(_))) => self.ws_flow(f, value),
             Some(Flow::SchemaSource) => self.pick_schema(&format!("Compare Schemas — target (made to look like {schema})"), Flow::SchemaTarget(conn, db, schema)),
             Some(Flow::SchemaTarget(sc, sd, ss)) => {

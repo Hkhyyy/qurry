@@ -175,4 +175,5 @@ export const IcGear = () => (
 );
 export const IcFilter = () => <L d="M2.5 3.5h11L9.5 8.5V13l-3-1.5v-3l-4-5Z" />;
 export const IcOrder = () => <L d="M3 4h10M3 8h7M3 12h4" />;
+export const IcChart = () => <L d="M2.5 13.5h11M4 11V8M7 11V4.5M10 11V6.5M13 11V9" />;
 export const IcTranspose = () => <L d="M3 3h4v4H3zM9 9h4v4H9zM9 4.5h2.5V7M7 11.5H4.5V9" />;

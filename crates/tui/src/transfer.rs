@@ -76,6 +76,7 @@ impl App {
             Format::Json => "array of objects",
             Format::Sql => "one INSERT statement per row",
             Format::Markdown => "table for docs, issues, PRs",
+            Format::Xlsx => "import only",
         };
         let items = Format::ALL.iter().map(|&f| PItem { label: f.label().into(), hint: hint(f).into(), action: PAction::ExportFormat(f) }).collect();
         self.chooser("Export Data — format", items);
@@ -172,7 +173,7 @@ impl App {
             self.status = "Select a table (or a schema for a new table), or open a table tab to import into".into();
             return;
         };
-        self.input("Import CSV / TSV / JSON file", &format!("{}/Downloads/", home()), move |a, p| a.import_file(target, schema, table, cols, expand(&p)));
+        self.input("Import CSV / TSV / JSON / Excel file", &format!("{}/Downloads/", home()), move |a, p| a.import_file(target, schema, table, cols, expand(&p)));
     }
 
     fn import_file(&mut self, target: String, schema: String, table: Option<String>, cols: Option<Vec<String>>, path: String) {

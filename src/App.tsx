@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ask, askText } from "./lib/dialogs";
 import { listen } from "@tauri-apps/api/event";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { analyzePlan, api, backup, ConnectionView, previewImpact, dialectOf, meta, VECTOR_KINDS, QueryResult, redisDb, setUpdateCheckEnabled, targetId, UpdateInfo, updateCheckEnabled } from "./lib/api";
+import { analyzePlan, api, auditLog, backup, ConnectionView, previewImpact, dialectOf, meta, VECTOR_KINDS, QueryResult, redisDb, setUpdateCheckEnabled, targetId, UpdateInfo, updateCheckEnabled } from "./lib/api";
 import { RedisBrowser } from "./components/RedisBrowser";
 import { KeymapDialog } from "./components/KeymapDialog";
 import { KeymapEditor } from "./components/KeymapEditor";
@@ -12,6 +12,8 @@ import { ConnectionDialog } from "./components/ConnectionDialog";
 import { ConsoleEditor, EditorApi } from "./components/ConsoleEditor";
 import { ConsolePane, OutputLine, ResultEntry } from "./components/ConsolePane";
 import { HistoryDialog, migrateOldHistory, pushHistory, saveSnippet } from "./components/HistoryDialog";
+import { ProductionLog } from "./components/ProductionLog";
+import { CopyRowsDialog, GenerateDataDialog } from "./components/DataTools";
 import { EditTarget } from "./components/ResultGrid";
 import { TableEditor } from "./components/TableEditor";
 import { RagView } from "./components/RagView";
@@ -189,6 +191,8 @@ export default function App() {
   const editorApis = useRef(new Map<string, EditorApi>());
   const [historyFor, setHistoryFor] = useState<string | null>(null);
   const [historyTab, setHistoryTab] = useState<"history" | "snippets">("history");
+  /** 운영 작업 기록 창 (connId null = 모든 Data Source) */
+  const [prodLog, setProdLog] = useState<{ connId: string | null } | null>(null);
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
 
@@ -693,6 +697,10 @@ export default function App() {
   // ───────── 데이터 내보내기·가져오기 (형식 고르기 → 하단 진행 막대) ─────────
   const [exportReq, setExportReq] = useState<{ target: string; sql: string; name: string; table: [string, string] | null } | null>(null);
   const [importReq, setImportReq] = useState<{ target: string; schema: string; table?: string; refresh?: () => void } | null>(null);
+  /** 테스트 데이터 만들기 창 */
+  const [genReq, setGenReq] = useState<{ target: string; schema: string; table: string; conn: ConnectionView } | null>(null);
+  /** 운영 데이터 일부 복사 창 */
+  const [copyReq, setCopyReq] = useState<{ target: string; schema: string; table: string; conn: ConnectionView } | null>(null);
   const [jobs, setJobs] = useState<TransferJob[]>([]);
   useEffect(() => {
     let off: (() => void) | undefined;
@@ -982,7 +990,11 @@ export default function App() {
         submenu: [
           { label: "Export Data…", action: () => exportTable(info) },
           ...(info.kind === "table" || info.kind === "partitioned"
-            ? ([{ label: "Import Data from File…", action: () => setImportReq({ target: nodeTarget(info), schema: info.schema!, table: info.name }) }] as MenuItem[])
+            ? ([
+                { label: "Import Data from File…", action: () => setImportReq({ target: nodeTarget(info), schema: info.schema!, table: info.name }) },
+                { label: "Generate Test Data…", action: () => setGenReq({ target: nodeTarget(info), schema: info.schema ?? "", table: info.name!, conn: c }) },
+                ...(c.kind === "postgres" || c.kind === "mysql" ? ([{ label: "Copy Related Rows To…", action: () => setCopyReq({ target: nodeTarget(info), schema: info.schema ?? "", table: info.name!, conn: c }) }] as MenuItem[]) : []),
+              ] as MenuItem[])
             : []),
         ],
       });
@@ -1177,6 +1189,11 @@ export default function App() {
           log(tabId, "info", `${r.rows.length}${r.truncated ? "+" : ""} row${r.rows.length === 1 ? "" : "s"} retrieved starting from 1 in ${r.elapsedMs} ms`);
         } else {
           log(tabId, "info", `${r.rowsAffected} row${r.rowsAffected === 1 ? "" : "s"} affected in ${r.elapsedMs} ms`);
+          // Production: 되돌리기 SQL 을 남겼으면 알린다 (운영 작업 기록)
+          if (c?.options?.confirmChanges && r.rowsAffected > 0 && !dry) {
+            const last = (await auditLog(tab.connId, "", 1).catch(() => []))[0];
+            if (last?.undo) log(tabId, "info", "Undo saved — ⇧⌘A › Production Log…");
+          }
         }
       } catch (e) {
         log(tabId, "error", String(e));
@@ -1631,6 +1648,7 @@ export default function App() {
       { name: "Transaction Mode: Auto", group: "Transaction", run: () => t && setTxMode(t, false), disabled: t?.kind !== "console" },
       { name: "Browse Query History…", shortcut: sk("editor.history"), group: "Run", run: () => t && (setHistoryTab("history"), setHistoryFor(t.id)), disabled: t?.kind !== "console" },
       { name: "Snippets…", group: "Run", run: () => t && (setHistoryTab("snippets"), setHistoryFor(t.id)), disabled: t?.kind !== "console" },
+      { name: "Production Log…", group: "Run", run: () => setProdLog({ connId: null }) },
       {
         name: "Save Query as Snippet…",
         group: "Run",
@@ -2364,6 +2382,33 @@ export default function App() {
       )}
       {backupReq && <BackupDialog what={backupReq.db ?? backupReq.c.name} pg={backupReq.c.kind === "postgres"} onRun={startBackup} onClose={() => setBackupReq(null)} />}
       {exportReq && <ExportDialog what={exportReq.name} onExport={startExport} onClose={() => setExportReq(null)} />}
+      {copyReq && (
+        <CopyRowsDialog
+          source={copyReq.target}
+          schema={copyReq.schema}
+          table={copyReq.table}
+          conn={copyReq.conn}
+          conns={conns}
+          onDone={(msg) => {
+            setStatus(msg);
+            setCopyReq(null);
+          }}
+          onClose={() => setCopyReq(null)}
+        />
+      )}
+      {genReq && (
+        <GenerateDataDialog
+          target={genReq.target}
+          schema={genReq.schema}
+          table={genReq.table}
+          production={genReq.conn.options?.confirmChanges ? genReq.conn.name : undefined}
+          onDone={(n) => {
+            setStatus(`${n.toLocaleString("en-US")} test row${n === 1 ? "" : "s"} inserted into ${genReq.schema ? `${genReq.schema}.` : ""}${genReq.table}`);
+            setGenReq(null);
+          }}
+          onClose={() => setGenReq(null)}
+        />
+      )}
       {importReq && <ImportDialog target={importReq.target} schema={importReq.schema} table={importReq.table} onImport={startImport} onClose={() => setImportReq(null)} />}
       <TextDialog />
       <ConfirmHost />
@@ -2434,6 +2479,20 @@ export default function App() {
           />
         ) : null;
       })()}
+
+      {prodLog && (
+        <ProductionLog
+          connId={prodLog.connId}
+          onOpenUndo={(e) => {
+            const [base, db] = e.connId.split("::");
+            const c = conns.find((x) => x.id === base);
+            if (!c) return setStatus(`Data source "${e.connName}" no longer exists`);
+            openConsole(c, db || undefined, e.undo);
+            setProdLog(null);
+          }}
+          onClose={() => setProdLog(null)}
+        />
+      )}
 
       {quickDoc && (
         <Overlay variant="light" onClose={() => setQuickDoc(null)} onKeyDown={(e) => e.key === "Escape" && setQuickDoc(null)}>

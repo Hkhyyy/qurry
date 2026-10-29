@@ -308,7 +308,7 @@ impl App {
             .filter(|(i, _)| !move_tab || *i != self.cur_ws)
             .map(|(i, w)| {
                 let n = if i == self.cur_ws { self.tabs.len() } else { w.saved.as_ref().map(|s| s.tabs.len()).unwrap_or(0) };
-                PItem { label: format!("{}{}", w.name, if i == self.cur_ws { "  (current)" } else { "" }), hint: format!("{n} tab(s){}", if i < 9 { format!(" · Alt+{}", i + 1) } else { String::new() }), action: PAction::Pick(i.to_string()) }
+                PItem { label: format!("{}{}", w.name, if i == self.cur_ws { "  (current)" } else { "" }), hint: format!("{n} tab(s){}", if i < 9 { format!(" · ⌥{}", i + 1) } else { String::new() }), action: PAction::Pick(i.to_string()) }
             })
             .collect();
         items.push(PItem { label: "New Workspace…".into(), hint: String::new(), action: PAction::Pick("new".into()) });

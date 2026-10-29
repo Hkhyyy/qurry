@@ -231,6 +231,8 @@ pub enum PAction {
     Dba(String),
     /// 히스토리·스니펫에서 고른 쿼리를 콘솔에
     InsertSql(String),
+    /// 운영 작업 기록에서 고른 것: 되돌리기 SQL 을 그 Data Source 의 새 콘솔에 (없으면 이유)
+    OpenUndo { conn: String, db: Option<String>, undo: Option<String>, note: String },
     /// 여러 단계 고르기 (비교·마이그레이션): 고른 값
     Pick(String),
     /// DBA 리포트 행 동작 (템플릿 SQL → 콘솔)
@@ -358,9 +360,13 @@ pub enum Action {
     RunMigrations,
     ShowDiagram,
     QueryHistory,
+    ProductionLog,
     Snippets,
     SaveSnippet,
     ImportData,
+    GenerateTestData,
+    CopyRelatedRows,
+    ChartResult,
     CancelTransfer,
     ToggleExplorer,
     ToggleOutput,
@@ -428,6 +434,7 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::WsRemoveConn, "Remove Data Source from This Workspace", ""),
     (Action::Find, "Find / Replace in Editor (regex)", ""),
     (Action::QueryHistory, "Query History… (shared with the GUI)", ""),
+    (Action::ProductionLog, "Production Log… (changes run on Production data sources, undo SQL)", ""),
     (Action::Snippets, "Snippets…", ""),
     (Action::SaveSnippet, "Save Query as Snippet…", ""),
     (Action::ShowDiagram, "Show Diagram (ERD): foreign keys of a schema, as text + Mermaid", ""),
@@ -437,7 +444,10 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
     (Action::BackupDb, "Back Up Database… (pg_dump / mysqldump)", ""),
     (Action::RestoreDb, "Restore Database… (from a .dump / .sql backup)", ""),
     (Action::DbaReports, "Database Admin… (sessions & locks, slow queries, sizes, indexes, vacuum, server, privileges)", ""),
-    (Action::ImportData, "Import Data from File… (CSV, TSV, JSON)", ""),
+    (Action::ImportData, "Import Data from File… (CSV, TSV, JSON, Excel)", ""),
+    (Action::GenerateTestData, "Generate Test Data… (fill the selected table with realistic rows)", ""),
+    (Action::ChartResult, "Chart Result (bars: sum of a number column by the first text column)", ""),
+    (Action::CopyRelatedRows, "Copy Related Rows To… (rows + foreign-key related rows into another data source, personal data masked)", ""),
     (Action::CancelTransfer, "Cancel Export/Import", ""),
     (Action::NewDataSource, "New Data Source…", "n (explorer)"),
     (Action::EditDataSource, "Data Source Properties…", "e (explorer)"),
@@ -1719,6 +1729,7 @@ impl App {
         // 히스토리 (GUI 와 같은 기록)
         let (hist_conn, hist_db, hist) = (t.conn.clone(), t.db.clone(), self.state.clone());
         let prod = self.tabs.get(self.active).and_then(|t| self.conn(&t.conn)).filter(|c| c.config.options.confirm_changes).map(|c| (c.config.name.clone(), self.tabs[self.active].target.clone()));
+        let watch = prod.is_some();
         let t = &mut self.tabs[self.active];
         let TabKind::Console(c) = &mut t.kind else { return };
         if c.running || stmts.is_empty() {
@@ -1891,6 +1902,10 @@ impl App {
                             } else {
                                 let msg = format!("{} row(s) affected in {} ms", res.rows_affected, res.elapsed_ms);
                                 c.log(false, msg.clone());
+                                // Production: 되돌리기 SQL 을 남겼으면 알린다 (운영 작업 기록)
+                                if watch && !dry && res.rows_affected > 0 && hist.audit.list(Some(&hist_conn), "", 1).first().is_some_and(|e| e.undo.is_some()) {
+                                    c.log(false, "Undo saved — ⌃k › Production Log…".into());
+                                }
                                 status = msg;
                                 if i + 1 == n && c.grid.is_none() {
                                     c.show_output = true;
@@ -2433,6 +2448,7 @@ impl App {
             PAction::ExportFormat(f) => self.export_dest(f),
             PAction::Dba(r) => self.dba_open(r),
             PAction::InsertSql(q) => self.insert_sql(q),
+            PAction::OpenUndo { conn, db, undo, note } => self.open_undo(conn, db, undo, note),
             PAction::Pick(v) => self.flow_pick(v),
             PAction::DbaSql(t) => self.dba_sql(t),
             PAction::ExportTo(f, clipboard) => self.export_to(f, clipboard),
@@ -2644,6 +2660,10 @@ impl App {
             Action::RunMigrations => self.migrations_start(),
             Action::ShowDiagram => self.erd_open(),
             Action::QueryHistory => self.history_palette(),
+            Action::ProductionLog => self.production_log(),
+            Action::GenerateTestData => self.generate_data_start(),
+            Action::CopyRelatedRows => self.copy_rows_start(),
+            Action::ChartResult => self.chart_result(),
             Action::Snippets => self.snippets_palette(),
             Action::SaveSnippet => self.save_snippet(),
             Action::CopyInList => {
