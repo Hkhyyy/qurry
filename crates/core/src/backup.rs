@@ -896,6 +896,13 @@ mod tests {
         // Things like passwords don't go on the command line: even on failure, the tool output is in the message
         let e = st.restore("b".into(), dir.join("missing.sql").to_string_lossy().into(), RestoreOptions::default(), "r-x".into()).await.unwrap_err().to_string();
         assert!(!e.is_empty());
+        // psql commands in a .sql file are switched off (and the file's own \unrestrict doesn't switch them back on); nothing is committed
+        let (bad, marker) = (dir.join("bad.sql"), dir.join("ran"));
+        std::fs::write(&bad, format!("\\restrict theirs\ncreate table qurry_bak.t2 (a int);\n\\unrestrict theirs\n\\! touch '{}'\n", marker.display())).unwrap();
+        let e = st.restore("b".into(), bad.to_string_lossy().into(), RestoreOptions::default(), "r-bad".into()).await.unwrap_err().to_string();
+        assert!(e.contains("backslash commands are restricted"), "{e}");
+        assert!(!marker.exists());
+        assert_eq!(q("select count(*) from pg_tables where schemaname = 'qurry_bak' and tablename = 't2'").await.unwrap().rows[0][0], serde_json::json!(0));
         q("drop schema qurry_bak cascade").await.ok();
         std::fs::remove_dir_all(dir).ok();
     }
