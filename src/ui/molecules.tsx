@@ -2,7 +2,7 @@
  * 분자 (molecules): 원자 몇 개를 묶은 한 줄 · 한 칸 — 목록 한 줄, 상세 줄, 메뉴 항목, 폼 칸, 탭, 안내, 구역 제목.
  * 규격은 README.md
  */
-import { HTMLAttributes, InputHTMLAttributes, MouseEvent, ReactNode } from "react";
+import { HTMLAttributes, InputHTMLAttributes, MouseEvent, ReactNode, useEffect, useState } from "react";
 import { Avatar, Kbd, Radio, Swatch, Text, TextInput } from "./atoms";
 import { cx } from "./cx";
 import { Chevron } from "./icons";
@@ -39,13 +39,51 @@ export const FormSection = ({ children }: { children: ReactNode }) => <div class
 /** 칸 아래 · 창 아래의 작은 회색 설명 */
 export const Hint = ({ children, className }: { children: ReactNode; className?: string }) => <div className={cx("ui-hint", className)}>{children}</div>;
 /** 색 고르기 (Data Source 색). value = null 은 색 없음 */
-export function ColorPicker({ value, options, onChange }: { value: string | null; options: { name: string; value: string | null }[]; onChange: (v: string | null) => void }) {
+export function ColorPicker({ value, options, onChange, custom }: { value: string | null; options: { name: string; value: string | null }[]; onChange: (v: string | null) => void; custom?: boolean }) {
+  const isPreset = options.some((c) => c.value?.toLowerCase() === value?.toLowerCase());
   return (
     <div className="ui-color-picker">
       {options.map((c) => (
-        <Swatch key={c.name} color={c.value} title={c.name} selected={c.value === value} onClick={() => onChange(c.value)} />
+        <Swatch key={c.name} color={c.value} title={c.name} selected={c.value?.toLowerCase() === value?.toLowerCase()} onClick={() => onChange(c.value)} />
       ))}
+      {custom && <CustomColor value={value && !isPreset ? value : null} onChange={onChange} />}
     </div>
+  );
+}
+
+const HEX = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i;
+/** #abc · abc → #aabbcc (아니면 null) */
+export function normalizeHex(s: string): string | null {
+  const m = HEX.exec(s.trim());
+  if (!m) return null;
+  const h = m[1].length === 3 ? [...m[1]].map((x) => x + x).join("") : m[1];
+  return `#${h.toLowerCase()}`;
+}
+
+/** 직접 고르기: 시스템 색 고르개 (macOS 는 화면 픽셀을 찍는 스포이드 포함) + hex 입력 */
+function CustomColor({ value, onChange }: { value: string | null; onChange: (v: string) => void }) {
+  const [text, setText] = useState(value ?? "");
+  useEffect(() => setText((t) => (normalizeHex(t) === value ? t : value ?? "")), [value]);
+  // 맞는 hex 면 치는 대로 바로 적용 (OK 를 바로 눌러도 들어가게), 틀린 채로 나가면 되돌린다
+  const type = (t: string) => {
+    setText(t);
+    const h = normalizeHex(t);
+    if (h && h !== value) onChange(h);
+  };
+  return (
+    <>
+      <label className={cx("ui-swatch clickable ui-swatch-custom", value && "on")} title="Custom color… (system color picker — on macOS its eyedropper picks any pixel on screen)" style={value ? { background: value } : undefined}>
+        <input type="color" value={value ?? "#3a3d44"} onChange={(e) => onChange(e.target.value)} />
+      </label>
+      <TextInput
+        className="ui-color-hex"
+        value={text}
+        placeholder="#hex"
+        spellCheck={false}
+        onChange={(e) => type(e.target.value)}
+        onBlur={() => !normalizeHex(text) && setText(value ?? "")}
+      />
+    </>
   );
 }
 

@@ -244,7 +244,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
             </>
           )}
           <label>Color</label>
-          <ColorSwatches value={cfg.color ?? null} onChange={(v) => set("color", v)} />
+          <ColorSwatches custom value={cfg.color ?? null} onChange={(v) => set("color", v)} />
         </FormGrid>
       )}
 
@@ -403,8 +403,8 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   );
 }
 
-export function ColorSwatches({ value, onChange }: { value: string | null; onChange: (v: string | null) => void }) {
-  return <ColorPicker value={value} options={COLOR_PRESETS} onChange={onChange} />;
+export function ColorSwatches({ value, onChange, custom }: { value: string | null; onChange: (v: string | null) => void; custom?: boolean }) {
+  return <ColorPicker value={value} options={COLOR_PRESETS} onChange={onChange} custom={custom} />;
 }
 
 type Scope = NonNullable<ConnectionConfig["scope"]>;
