@@ -1,4 +1,5 @@
 import { setStatusWidget } from "../lib/statusbar";
+import { fracWidth, isTimeType, padFrac } from "../lib/timeFrac";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Cell, Dialect, dialectOf, QueryResult } from "../lib/api";
@@ -200,6 +201,9 @@ export function ResultGrid(p: Props) {
     [cols, firstRow, edit],
   );
   const total = ROWNUM_W + widths.reduce((a, b) => a + b, 0);
+  // 시간 컬럼: 소수 초 자릿수를 컬럼 안에서 맞춰 보인다 (값은 그대로)
+  const fracW = useMemo(() => cols.map((c, ci) => (isTimeType(c.typeName) ? fracWidth(result.rows.map((r) => r[ci])) : 0)), [cols, result.rows]);
+  const shown = (v: Cell, ci: number) => (fracW[ci] && typeof v === "string" ? padFrac(v, fracW[ci]) : display(v));
 
   const virt = useVirtualizer({ count: rowCount, getScrollElement: () => scrollRef.current, estimateSize: () => ROW_H, overscan: 20 });
   // 가로도 보이는 열만 그린다 (열이 많은 테이블). 양옆은 빈 칸으로 폭을 채운다
@@ -841,7 +845,7 @@ export function ResultGrid(p: Props) {
                         onDoubleClick={() => startEdit(r, ci)}
                         onContextMenu={(e) => openCellMenu(e, d, ci)}
                       >
-                        {display(val)}
+                        {shown(val, ci)}
                       </GridCell>
                     );
                   })}
@@ -918,6 +922,7 @@ export function ResultGrid(p: Props) {
 
 /** View as | Transpose: 행과 열을 맞바꿔 보여준다 */
 function TransposedView({ cols, rows }: { cols: QueryResult["columns"]; rows: Cell[][] }) {
+  const fracW = cols.map((c, ci) => (isTimeType(c.typeName) ? fracWidth(rows.map((r) => r[ci])) : 0));
   return (
     <div className="grid-scroll transposed">
       <table>
@@ -929,7 +934,7 @@ function TransposedView({ cols, rows }: { cols: QueryResult["columns"]; rows: Ce
               </th>
               {rows.map((r, ri) => (
                 <td key={ri} className={r[ci] === null ? "null" : typeof r[ci] === "number" ? "num" : ""}>
-                  {display(r[ci])}
+                  {fracW[ci] && typeof r[ci] === "string" ? padFrac(r[ci] as string, fracW[ci]) : display(r[ci])}
                 </td>
               ))}
             </tr>

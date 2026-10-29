@@ -21,6 +21,8 @@ pub struct Grid {
     /// 새로 추가한 행 수 (result.rows 끝에 붙어 있다)
     pub added: usize,
     pub widths: Vec<u16>,
+    /// 시간 컬럼의 소수 초 자릿수 (컬럼 안에서 맞춰 보인다, 0 = 맞추지 않음)
+    frac: Vec<usize>,
     /// 마지막 렌더 높이 (PgUp/PgDn)
     pub page: usize,
     /// 마지막 렌더 위치 (마우스 클릭): 본문 영역, 보이는 열의 (열 번호, x 시작, x 끝)
@@ -50,6 +52,35 @@ pub fn cell_text(v: &Value) -> String {
         other => other.to_string(),
     }
 }
+/// 시간 값의 "hh:mm:ss" 끝 위치와 소수 초 자릿수 ([날짜 ]hh:mm:ss[.ffffff]…)
+fn time_frac(s: &str) -> Option<(usize, usize)> {
+    let b = s.as_bytes();
+    let start = match b.iter().position(|&c| c == b' ' || c == b'T') {
+        Some(i) if i >= 10 && b[i - 3] == b'-' => i + 1,
+        _ => 0,
+    };
+    let t = b.get(start..start + 8)?;
+    let ok = t.iter().enumerate().all(|(i, &c)| if i == 2 || i == 5 { c == b':' } else { c.is_ascii_digit() });
+    if !ok {
+        return None;
+    }
+    let end = start + 8;
+    let digits = if b.get(end) == Some(&b'.') { b[end + 1..].iter().take_while(|c| c.is_ascii_digit()).count() } else { 0 };
+    Some((end, digits))
+}
+
+/// 03:19:15 → 03:19:15.000000 (width 자리까지 0 을 채운다)
+pub fn pad_frac(s: &str, width: usize) -> String {
+    match time_frac(s) {
+        Some((end, d)) if d < width => {
+            let rest = &s[end + if d > 0 { 1 + d } else { 0 }..];
+            let frac = if d > 0 { &s[end + 1..end + 1 + d] } else { "" };
+            format!("{}.{:0<width$}{rest}", &s[..end], frac)
+        }
+        _ => s.to_string(),
+    }
+}
+
 pub fn raw_text(v: &Value) -> Option<String> {
     match v {
         Value::Null => None,
@@ -77,7 +108,7 @@ fn cmp_cell(a: Option<&Value>, b: Option<&Value>, desc: bool) -> std::cmp::Order
 
 impl Grid {
     pub fn new(result: QueryResult) -> Self {
-        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, orig: vec![] };
+        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, orig: vec![] };
         g.compute_widths();
         g
     }
@@ -94,12 +125,31 @@ impl Grid {
                 ((c.name.width() + 2).max(body).clamp(4, 40) + 1) as u16
             })
             .collect();
+        self.compute_frac();
+    }
+
+    /// 시간 컬럼: 불러온 값 중 가장 긴 소수 초 자릿수
+    fn compute_frac(&mut self) {
+        let r = &self.result;
+        self.frac = r
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let t = c.type_name.to_uppercase();
+                if !t.contains("TIME") || t.contains("INTERVAL") {
+                    return 0;
+                }
+                r.rows.iter().filter_map(|row| row.get(i)?.as_str().and_then(time_frac)).map(|x| x.1).max().unwrap_or(0)
+            })
+            .collect();
     }
 
     pub fn append(&mut self, more: QueryResult) {
         let n = self.result.rows.len();
         self.result.rows.extend(more.rows);
         self.result.truncated = more.truncated;
+        self.compute_frac();
         if !self.orig.is_empty() {
             self.orig.extend(n..self.result.rows.len());
             self.apply_local_sort();
@@ -335,6 +385,7 @@ impl Grid {
         }
         match self.result.rows.get(r)?.get(c)? {
             Value::Null => None,
+            Value::String(s) if self.frac.get(c).is_some_and(|&w| w > 0) => Some(clip(&pad_frac(s, self.frac[c]))),
             Value::String(s) => Some(clip(s)),
             other => Some(clip(&other.to_string())),
         }
@@ -518,6 +569,24 @@ impl Grid {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// 시간 컬럼은 소수 초 자릿수를 컬럼 안에서 맞춰 보인다 (값은 그대로)
+    #[test]
+    fn time_fraction_is_padded_per_column() {
+        assert_eq!(pad_frac("2026-06-06 03:19:15 +09:00", 6), "2026-06-06 03:19:15.000000 +09:00");
+        assert_eq!(pad_frac("2026-06-08 10:52:05.27 +09:00", 6), "2026-06-08 10:52:05.270000 +09:00");
+        assert_eq!(pad_frac("12:00:01", 3), "12:00:01.000");
+        assert_eq!(pad_frac("2026-06-08T10:52:05.123456", 6), "2026-06-08T10:52:05.123456");
+        assert_eq!(pad_frac("hello", 6), "hello");
+        let col = |n: &str, t: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: t.into() };
+        let rows = vec![vec![json!("2026-06-06 03:19:15 +09:00"), json!("03:19:15")], vec![json!("2026-06-08 09:38:06.521101 +09:00"), json!("09:38:06.5")], vec![Value::Null, Value::Null]];
+        let g = Grid::new(QueryResult { columns: vec![col("at", "TIMESTAMPTZ"), col("note", "TEXT")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false });
+        assert_eq!(g.shown(0, 0, 100).unwrap(), "2026-06-06 03:19:15.000000 +09:00");
+        assert_eq!(g.shown(1, 0, 100).unwrap(), "2026-06-08 09:38:06.521101 +09:00");
+        assert_eq!(g.shown(2, 0, 100), None);
+        assert_eq!(g.shown(0, 1, 100).unwrap(), "03:19:15", "not a time column");
+        assert_eq!(g.result.rows[0][0], json!("2026-06-06 03:19:15 +09:00"), "value unchanged");
+    }
 
     #[test]
     fn local_sort_cycles_and_restores() {
