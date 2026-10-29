@@ -274,7 +274,8 @@ const SIDE_EFFECT_FUNCS: &[&str] = &[
     "pg_sleep_for", "pg_sleep_until", "pg_stat_reset", "pg_stat_reset_shared", "pg_stat_reset_single_table_counters",
     "pg_stat_reset_single_function_counters", "pg_stat_reset_slru", "pg_stat_reset_replication_slot", "pg_stat_reset_subscription_stats",
     "pg_drop_replication_slot", "pg_create_logical_replication_slot", "pg_create_physical_replication_slot", "pg_logical_emit_message",
-    "pg_replication_origin_create", "pg_replication_origin_drop", "pg_log_backend_memory_contexts",
+    "pg_replication_origin_create", "pg_replication_origin_drop", "pg_log_backend_memory_contexts", "pg_replication_slot_advance",
+    "dblink_connect_u", "setval",
     // run SQL given as a string (the name checks can't see inside it)
     "query_to_xml", "query_to_xmlschema", "query_to_xml_and_xmlschema", "cursor_to_xml", "cursor_to_xmlschema", "ts_stat",
     // MySQL: reading server files · delays · locks
@@ -294,8 +295,19 @@ const CLICKHOUSE_EXTERNAL_FUNCS: &[&str] = &[
     "url", "urlcluster", "file", "filecluster", "s3", "s3cluster", "gcs", "azureblobstorage", "azureblobstoragecluster", "hdfs", "hdfscluster", "remote",
     "remotesecure", "cluster", "clusterallreplicas", "mysql", "postgresql", "mongodb", "redis", "sqlite", "jdbc", "odbc", "executable", "iceberg", "icebergs3",
     "deltalake", "hudi", "input", "icebergaz", "icebergazure", "iceberghdfs", "iceberglocal", "icebergcluster", "icebergs3cluster", "deltalakecluster",
-    "hudicluster", "hive", "arrowflight", "azureblob",
+    "hudicluster", "hive", "arrowflight", "azureblob", "cosn", "oss", "ytsaurus",
 ];
+/// ClickHouse table function families that keep growing new members (deltaLakeS3, icebergAzureCluster, paimonS3 …)
+const CLICKHOUSE_EXTERNAL_PREFIXES: &[&str] = &["deltalake", "iceberg", "hudi", "paimon", "azureblob"];
+
+fn clickhouse_external(name: &str) -> bool {
+    CLICKHOUSE_EXTERNAL_FUNCS.contains(&name) || CLICKHOUSE_EXTERNAL_PREFIXES.iter().any(|p| name.starts_with(p))
+}
+
+/// SQL Server words that can start another statement but aren't reserved, so a read can't be judged by them (the driver rolls reads back).
+/// MCP execute runs without that transaction, so it refuses them too
+const MSSQL_UNRESERVED_STATEMENT_WORDS: &[&str] = &["disable", "enable", "receive", "send", "move", "get"];
+
 /// DuckDB: functions that read files · URLs (MCP. The driver also opens with external access disabled — crate::SANDBOX)
 const DUCKDB_EXTERNAL_FUNCS: &[&str] = &[
     "read_text", "read_blob", "read_csv", "read_csv_auto", "read_json", "read_json_auto", "read_json_objects", "read_json_objects_auto", "read_ndjson",
@@ -330,6 +342,10 @@ pub fn read_only_violation(sql: &str, kind: DbKind, strict: bool) -> Option<Stri
     let allowed = READ_WORDS.contains(&first) || (!strict && SESSION_WORDS.contains(&first));
     if !allowed {
         return Some(format!("Read-only mode: '{first}' statements are not allowed"));
+    }
+    // SQL Server reads run inside a transaction the driver rolls back. COMMIT would end it and let the rest of the batch autocommit
+    if kind == DbKind::Mssql && SESSION_WORDS.contains(&first) && !["set", "use"].contains(&first) {
+        return Some(format!("Read-only mode: '{first}' is not allowed on SQL Server (reads run in a transaction Qurry rolls back)"));
     }
     let words: Vec<&str> = sc.toks.iter().map(|t| t.text.as_str()).collect();
     let bare = |t: &Tok| t.word && !t.quoted;
@@ -399,7 +415,7 @@ pub fn read_only_violation(sql: &str, kind: DbKind, strict: bool) -> Option<Stri
         }
         let external = match kind {
             DbKind::Mssql => MSSQL_EXTERNAL_FUNCS.contains(&t.text.as_str()),
-            DbKind::Clickhouse => strict && CLICKHOUSE_EXTERNAL_FUNCS.contains(&t.text.as_str()),
+            DbKind::Clickhouse => strict && clickhouse_external(&t.text),
             DbKind::Duckdb => strict && DUCKDB_EXTERNAL_FUNCS.contains(&t.text.as_str()),
             _ => false,
         };
@@ -590,13 +606,21 @@ fn mongo_unsafe(sql: &str) -> Option<String> {
     let plain: String = json5_unescape(sql).chars().filter(|c| !c.is_whitespace()).collect::<String>().to_lowercase();
     if plain.starts_with('{') {
         let first = plain.trim_start_matches('{').trim_start_matches(['"', '\'']).split(['"', '\'', ':']).next().unwrap_or("").to_string();
-        return ["drop", "dropdatabase", "dropindexes", "delete", "renamecollection", "update"].contains(&first.as_str()).then(|| format!("the {first} command can remove or change every document"));
+        return ["drop", "dropdatabase", "dropindexes", "delete", "renamecollection", "update", "converttocapped", "applyops", "emptycapped", "dropallusersfromdatabase", "dropallrolesfromdatabase"]
+            .contains(&first.as_str()).then(|| format!("the {first} command can remove or change every document"));
     }
     if plain.contains(".drop(") || plain.contains(".dropdatabase(") || plain.contains(".dropindexes(") || plain.contains(".renamecollection(") {
         return Some("drop removes the collection and its documents".into());
     }
     if plain.contains("$out") || plain.contains("$merge") {
         return Some("$out / $merge overwrite a collection".into());
+    }
+    // Commands that rewrite or drop data whichever way they are sent (runCommand, adminCommand, a command document)
+    for c in ["converttocapped", "applyops", "emptycapped", "dropallusersfromdatabase", "dropallrolesfromdatabase"] {
+        let c = c.to_lowercase();
+        if plain.contains(&format!("{c}\"")) || plain.contains(&format!("{c}'")) || plain.contains(&format!("{c}:")) || plain.contains(&format!(".{c}(")) {
+            return Some(format!("{c} can rewrite or remove data"));
+        }
     }
     // Read the filter like the driver does: missing, null, {} or {/* comment */} all match every document
     let re = regex::Regex::new(r#"(?s)^db\.(?:getCollection\(\s*["']([^"']+)["']\s*\)|([A-Za-z_][\w.-]*?))\.(\w+)\((.*)\)$"#).unwrap();
@@ -631,11 +655,22 @@ fn rest_unsafe(sql: &str) -> Option<String> {
     if last == "drop" || last == "drop_index" || last == "release" {
         return Some(format!("{path} removes it and everything in it"));
     }
+    // Snapshot recovery replaces the collection (and fetches a URL the server chooses to trust)
+    if path.split('/').any(|s| s == "snapshots") && method != "GET" {
+        return Some(format!("{path} can replace the collection"));
+    }
+    if last == "batch" {
+        return Some(format!("{path} can delete points or whole payloads"));
+    }
     if last == "delete" {
-        let b: String = format!("{inline}{body}").chars().filter(|c| !c.is_whitespace()).collect::<String>().to_lowercase();
-        let empty = b.is_empty() || b == "{}" || ["\"filter\":{}", "filter:{}", "\"filter\":\"\"", "\"points\":[]", "\"ids\":[]"].iter().any(|e| b.contains(e));
-        if empty {
-            return Some(format!("{path} without a filter or ids deletes every point"));
+        // Only deleting listed ids is clearly bounded. A filter (even {"must": []}) may match every point
+        let v = json5::from_str::<serde_json::Value>(&format!("{inline}{body}")).ok();
+        let listed = |k: &str| v.as_ref().and_then(|v| v.get(k)).and_then(|x| x.as_array()).is_some_and(|a| !a.is_empty());
+        let filtered = v.as_ref().is_some_and(|v| v.get("filter").is_some_and(|f| !f.is_string()) || v.get("where").is_some() || v.get("where_document").is_some());
+        // Milvus deletes only by a filter expression ("id in [1, 2]"); an empty one matches everything
+        let expr = v.as_ref().and_then(|v| v.get("filter")).and_then(|f| f.as_str()).is_some_and(|f| !f.trim().is_empty());
+        if !(listed("points") || listed("ids") || expr) || filtered {
+            return Some(format!("{path} with a filter or without ids may delete every point — check the filter"));
         }
     }
     None
@@ -669,19 +704,39 @@ pub fn mcp_execute_violation(sql: &str, kind: DbKind) -> Option<String> {
         return refuse(&why);
     }
     let bare = |t: &Tok| t.word && !t.quoted;
-    // SQL Server runs a whole batch: no second statement after the first one (SET belongs to UPDATE)
+    // SQL Server runs a whole batch: no second statement after the first one. UPDATE gets one SET, INSERT one INTO and one SELECT
+    // (plus UNION branches); any other INTO (SELECT … INTO, OUTPUT … INTO) writes another table
     if kind == DbKind::Mssql {
         let mut case_depth = 0i32;
-        for t in sc.toks.iter().skip(fi + 1).filter(|t| bare(t)) {
-            match t.text.as_str() {
-                "case" => case_depth += 1,
-                "end" if case_depth > 0 => case_depth -= 1,
-                "set" if first == "update" => {}
-                w if MSSQL_STATEMENT_WORDS.contains(&w) || ["merge", "insert", "update", "delete", "select"].contains(&w) && t.depth == 0 && w != first && !(w == "select" && first == "insert") => {
-                    return refuse(&format!("'{w}' starts another statement"));
+        let (mut sets, mut selects, mut prev) = (0, 0, "");
+        for (n, t) in sc.toks.iter().skip(fi + 1).filter(|t| bare(t)).enumerate() {
+            let w = t.text.as_str();
+            let bad = match w {
+                "case" => {
+                    case_depth += 1;
+                    false
                 }
-                _ => {}
+                "end" if case_depth > 0 => {
+                    case_depth -= 1;
+                    false
+                }
+                "set" if first == "update" && t.depth == 0 => {
+                    sets += 1;
+                    sets > 1
+                }
+                "into" => !(first == "insert" && n == 0),
+                "select" if t.depth == 0 => {
+                    selects += 1;
+                    first != "insert" || (selects > 1 && !matches!(prev, "union" | "all" | "except" | "intersect"))
+                }
+                "select" => false,
+                "merge" | "insert" | "update" | "delete" => true,
+                _ => MSSQL_STATEMENT_WORDS.contains(&w) || MSSQL_UNRESERVED_STATEMENT_WORDS.contains(&w),
+            };
+            if bad {
+                return refuse(&format!("'{w}' starts another statement or writes another table"));
             }
+            prev = w;
         }
     }
     if sc.toks.iter().any(|t| bare(t) && t.text == "merge") {
@@ -692,7 +747,7 @@ pub fn mcp_execute_violation(sql: &str, kind: DbKind) -> Option<String> {
         let name = t.text.as_str();
         let external = match kind {
             DbKind::Mssql => MSSQL_EXTERNAL_FUNCS.contains(&name),
-            DbKind::Clickhouse => CLICKHOUSE_EXTERNAL_FUNCS.contains(&name),
+            DbKind::Clickhouse => clickhouse_external(name),
             DbKind::Duckdb => DUCKDB_EXTERNAL_FUNCS.contains(&name),
             _ => false,
         };
@@ -792,6 +847,9 @@ fn rest_mcp_write_violation(sql: &str, kind: DbKind) -> Option<String> {
 }
 
 /// What MCP execute can do on Redis: reads and writes that change one or a few keys only (not scripts · config · replication · deletes · renames · range deletes)
+/// Largest SETRANGE byte offset (SETBIT: bits) an MCP client may write at
+const REDIS_MCP_MAX_OFFSET: u64 = 1 << 20;
+
 pub fn redis_mcp_write_violation(line: &str) -> Option<String> {
     let args = redis_args(line);
     let cmd = args.first().map(|c| c.to_uppercase()).unwrap_or_default();
@@ -811,7 +869,17 @@ pub fn redis_mcp_write_violation(line: &str) -> Option<String> {
     // An expiry (even 1 ms) or popping many elements amounts to deleting data
     let expiry = cmd == "SET" && args.iter().skip(3).any(|a| ["EX", "PX", "EXAT", "PXAT"].contains(&a.to_uppercase().as_str()));
     let many = matches!(cmd.as_str(), "LPOP" | "RPOP") && args.get(2).is_some_and(|n| n.parse::<i64>().map_or(true, |n| n != 1));
-    (expiry || many).then(|| format!("{cmd} with that option can delete data — refused over MCP"))
+    if expiry || many {
+        return Some(format!("{cmd} with that option can delete data — refused over MCP"));
+    }
+    // A far offset makes Redis allocate the whole value up to it (up to 512 MB per key)
+    let limit = match cmd.as_str() {
+        "SETRANGE" => Some(REDIS_MCP_MAX_OFFSET),
+        "SETBIT" => Some(REDIS_MCP_MAX_OFFSET * 8),
+        _ => None,
+    };
+    let far = limit.is_some_and(|max| args.get(2).is_none_or(|o| o.parse::<u64>().map_or(true, |o| o >= max)));
+    far.then(|| format!("{cmd} offset must be below {} bytes over MCP", REDIS_MCP_MAX_OFFSET))
 }
 
 /// Whether the statement doesn't change data (for counting "already committed changes" in script failure notes)
@@ -1054,6 +1122,13 @@ mod tests {
         assert!(ds("SELECT 1 END", Mssql), "END without CASE starts another statement");
         assert!(ds("SELECT CASE WHEN 1 = 1 THEN 1 END END", Mssql));
         assert!(ds("SELECT 1 FETCH NEXT FROM c", Mssql));
+        // COMMIT would end the transaction the driver rolls back
+        for s in ["COMMIT DISABLE TRIGGER ALL ON DATABASE", "COMMIT RECEIVE TOP(100000) * FROM q", "ROLLBACK", "BEGIN TRAN", "SAVE TRAN x"] {
+            assert!(ds(s, Mssql), "{s}");
+        }
+        assert!(!ds("SET NOCOUNT ON", Mssql) && !ds("COMMIT", Postgres));
+        assert!(bad("SELECT * FROM deltaLakeAzure('x')", Clickhouse) && bad("SELECT * FROM icebergAzureCluster('c', 'x')", Clickhouse) && bad("SELECT * FROM ytsaurus('x')", Clickhouse));
+        assert!(!bad("SELECT encodeURLComponent(x), fileSize(y) FROM t", Clickhouse));
         // PostgreSQL: $ inside an identifier doesn't open a dollar quote
         assert_eq!(crate::sql::split_statements("SELECT 1 AS x$q$; DROP TABLE t; SELECT 1 AS y$q$", Postgres).len(), 3);
         assert!(bad("select query_to_xml('select pg_terminate_backend(1)', true, false, '')", Postgres));
@@ -1123,6 +1198,15 @@ mod tests {
         assert!(u("POST /collections/drop\n{\"collectionName\": \"x\"}", Milvus) && u("DELETE /collections/x", Qdrant));
         assert!(u("POST /collections/x/points/delete\n{\"filter\": {}}", Qdrant) && u("POST /collections/x/points/delete", Qdrant));
         assert!(!u("POST /collections/x/points/delete\n{\"points\": [1, 2]}", Qdrant) && !u("POST /entities/delete {\"filter\": \"id in [1]\"}", Milvus));
+        // Confirmation for whatever may rewrite or delete everything
+        for s in ["db.runCommand({convertToCapped: 'c', size: 1})", "db.adminCommand({applyOps: []})", "{\"convertToCapped\": \"c\", \"size\": 1}"] {
+            assert!(u(s, Mongodb), "{s}");
+        }
+        for s in ["POST /collections/x/points/delete\n{\"filter\":{\"must\":[]}}", "POST /collections/x/points/batch\n{\"operations\": []}",
+            "POST /collections/x/snapshots/recover\n{\"location\": \"http://x\"}", "PUT /collections/x/snapshots/upload"] {
+            assert!(u(s, Qdrant), "{s}");
+        }
+        assert!(u("POST /entities/delete {\"filter\": \"\"}", Milvus) && u("POST /api/v1/collections/x/delete\n{where: {a: 1}}", Chroma));
     }
 
     #[test]
@@ -1152,6 +1236,14 @@ mod tests {
         }
         assert!(!ok("UPDATE t SET a=1 WHERE id=1 DROP TABLE t", Mssql) && !ok("SELECT 1 TRUNCATE TABLE t", Mssql) && !ok("DELETE FROM t WHERE id = 1 EXEC xp_cmdshell 'x'", Mssql));
         assert!(ok("UPDATE t SET a = CASE WHEN b = 1 THEN 2 END WHERE id = 1", Mssql) && ok("INSERT INTO t (a) SELECT a FROM s WHERE b = 1", Mssql));
+        for s in ["DELETE FROM t WHERE id=1 DELETE FROM u WHERE 1=1", "DELETE FROM t WHERE id=1 DISABLE TRIGGER ALL ON t", "INSERT INTO t VALUES (1) RECEIVE * FROM q",
+            "UPDATE t SET a = 1 WHERE id=1 SET IMPLICIT_TRANSACTIONS ON", "INSERT INTO t SELECT * INTO t_copy FROM big", "INSERT INTO t SELECT 1 SELECT 2",
+            "UPDATE t SET a = 1 WHERE id = 1 UPDATE u SET b = 2 WHERE id = 1", "DELETE FROM t OUTPUT deleted.a INTO audit WHERE id = 1"] {
+            assert!(!ok(s, Mssql), "{s}");
+        }
+        assert!(ok("INSERT INTO t (a) SELECT a FROM s WHERE b = 1 UNION ALL SELECT a FROM u WHERE b = 2", Mssql) && ok("UPDATE t SET a = (SELECT max(b) FROM s) WHERE id = 1", Mssql));
+        assert!(!ok("INSERT INTO FUNCTION deltaLakeS3('http://x') VALUES (1)", DbKind::Clickhouse) && !ok("INSERT INTO t SELECT * FROM paimonS3('x')", DbKind::Clickhouse));
+        assert!(!ok("INSERT INTO t SELECT setval('s', 1)", Postgres));
         assert!(ok("INSERT INTO t VALUES (1)", Sqlite) && !ok("ATTACH 'x' AS y", Sqlite));
         // MongoDB
         assert!(ok("db.users.insertOne({name: 'a'})", Mongodb) && ok("db.users.deleteMany({age: {$lt: 0}})", Mongodb) && ok("db.users.updateOne({_id: ObjectId('0123456789abcdef01234567')}, {$set: {a: 1}})", Mongodb));
@@ -1166,6 +1258,8 @@ mod tests {
         }
         assert!(ok("POST /entities/delete\n{collectionName: 'c', filter: 'id in [1, 2]'}", Milvus) && !ok("POST /entities/delete\n{collectionName: 'c', filter: 'id > 0'}", Milvus) && !ok("POST /collections/drop\n{}", Milvus));
         assert!(ok("POST /api/v1/collections/x/delete\n{ids: ['a']}", Chroma) && !ok("POST /api/v1/collections/x/delete\n{where: {}}", Chroma));
+        // Redis offsets that make the server allocate the value up to them
+        assert!(ok("SETRANGE k 10 x", DbKind::Redis) && !ok("SETRANGE k 536870000 x", DbKind::Redis) && !ok("SETBIT k 4294967295 1", DbKind::Redis) && ok("SETBIT k 7 1", DbKind::Redis));
     }
 
     #[test]
