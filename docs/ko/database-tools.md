@@ -32,7 +32,7 @@ GUI — Data Source 우클릭 › Tools › Compare & Migrate · TUI — `⌃k` 
 
 ## 백업 · 복원
 
-데이터베이스 우클릭 › Tools › Back Up Database… / Restore Database… (TUI: `⌃k`). 이 컴퓨터의 `pg_dump` / `pg_restore` / `psql` 또는 `mysqldump` / `mysql` 을 실행합니다 (Homebrew `libpq`, `mysql-client`, Postgres.app, 리눅스의 흔한 위치도 찾습니다. PostgreSQL 은 서버 버전에 가장 가까운 클라이언트를 씁니다). SSH 터널을 쓰고, 진행 상황은 상태 표시줄에 나오며 취소할 수 있습니다. 백업 파일과 임시 덤프는 본인만 읽을 수 있고, 비밀번호는 그 서버에만 맞는 개인 파일로 도구에 넘깁니다. `.sql` 파일을 복원할 때는 SQL 만 실행합니다: 파일 안의 psql · mysql 클라이언트 명령 (프로그램 실행, 파일 쓰기, 다른 곳에 접속) 은 꺼 둡니다 — psql 17.6 / 16.10 / 15.14 / 14.19 / 13.22 이상이 필요해서, 그보다 예전 psql 로는 `.sql` 파일을 복원하지 않습니다 (커스텀 형식 백업은 `pg_restore` 로 복원하므로 상관없습니다). `\connect` 로 데이터베이스를 바꾸는 덤프 (`pg_dump -C`, `pg_dumpall`) 는 안내와 함께 멈추니, psql 로 직접 복원하세요.
+데이터베이스 우클릭 › Tools › Back Up Database… / Restore Database… (TUI: `⌃k`). 이 컴퓨터의 `pg_dump` / `pg_restore` / `psql` 또는 `mysqldump` / `mysql` 을 실행합니다 (Homebrew `libpq`, `mysql-client`, Postgres.app, 리눅스의 흔한 위치도 찾습니다. PostgreSQL 은 서버 버전에 가장 가까운 클라이언트를 씁니다). SSH 터널을 쓰고, 진행 상황은 상태 표시줄에 나오며 취소할 수 있습니다. 백업 파일과 임시 덤프는 본인만 읽을 수 있고, 비밀번호는 그 서버에만 맞는 개인 파일로 도구에 넘깁니다. `.sql` 파일을 복원할 때는 SQL 만 실행합니다: 파일 안의 psql · mysql 클라이언트 명령 (프로그램 실행, 파일 쓰기, 다른 곳에 접속) 은 꺼 둡니다 — psql 17.6 / 16.10 / 15.14 / 14.19 / 13.22 이상이 필요해서, 그보다 예전 psql 로는 `.sql` 파일을 복원하지 않습니다 (커스텀 형식 백업은 `pg_restore` 로 복원하므로 상관없습니다 — 다만 가장 가까운 `pg_restore` 가 17 이상이고 서버가 그보다 예전이면, 서버가 모르는 설정을 보내므로 psql 로 대신 복원합니다). `\connect` 로 데이터베이스를 바꾸는 덤프 (`pg_dump -C`, `pg_dumpall`) 는 안내와 함께 멈추니, psql 로 직접 복원하세요.
 
 ## 객체 만들기 · 고치기 (PostgreSQL, MySQL)
 
