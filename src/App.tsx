@@ -2726,7 +2726,7 @@ function PasswordSettings() {
   };
   return (
     <div className="settings-form">
-      <Field label="Password key" hint={msg ?? "Saved passwords are encrypted in secrets.json. Its key is in the config folder (secret.key) or in the system keychain. The terminal UI and the MCP server use the same key, so they ask for keychain access too."}>
+      <Field label="Key" hint={msg ?? "Saved passwords are encrypted in secrets.json. Its key is in the config folder (secret.key) or in the system keychain. The terminal UI and the MCP server use the same key, so they ask for keychain access too."}>
         <div className="ui-row">
           <Select value={loc ?? ""} disabled={!loc} onChange={(e) => move(e.target.value === "keychain")}>
             <option value="file">In the config folder (no prompts)</option>
