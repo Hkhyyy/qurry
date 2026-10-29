@@ -83,9 +83,11 @@
 .ui-backdrop.overlay-clear { background: transparent; }
 .ui-backdrop.overlay-light { background: rgba(0, 0, 0, 0.15); }
 .ui-backdrop.layer-dialog { z-index: var(--ui-z-dialog); }
+/* 대화상자는 위쪽에 고정: 내용 높이가 바뀌어도 제목 · 탭 자리가 움직이지 않는다 */
+.ui-backdrop.for-modal { align-items: flex-start; padding-top: 8vh; }
 .ui-modal {
   display: flex; flex-direction: column;
-  width: 520px; max-width: calc(100vw - 32px); max-height: calc(100vh - 48px);
+  width: 520px; max-width: calc(100vw - 32px); max-height: calc(92vh - 24px);
   background: var(--ui-surface); color: var(--ui-text);
   border: 1px solid var(--ui-border-strong); border-radius: var(--ui-radius-lg); box-shadow: var(--ui-shadow-modal);
 }
@@ -93,6 +95,9 @@
 .ui-modal.size-sm { width: 420px; }
 .ui-modal.size-lg { width: 760px; }
 .ui-modal.size-xl { width: 900px; }
+/* fixed: 내용이 바뀌는 창 (탭 · 미리보기 · 로딩) 은 크기를 고정한다 */
+.ui-modal.fixed { height: min(640px, calc(92vh - 24px)); }
+.ui-modal.fixed.size-xl { height: min(740px, calc(92vh - 24px)); }
 .ui-modal-head { flex: none; display: flex; align-items: center; gap: var(--ui-sp-3); padding: var(--ui-sp-5) var(--ui-sp-5) 0; }
 .ui-modal-title { font-size: var(--ui-fs-lg); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ui-modal-body { flex: 1; min-height: 0; overflow: auto; padding: var(--ui-sp-4) var(--ui-sp-5); }

@@ -2614,7 +2614,8 @@ function SettingsDialog({ onClose, onUpdate, initialPage = "appearance" }: { onC
   return (
     <Modal
       title="Settings"
-      size={page === "keymap" ? "xl" : "md"}
+      size="xl"
+      fixed
       className="settings"
       onClose={onClose}
       footer={

@@ -33,6 +33,8 @@ export function Modal(p: {
   tone?: "danger";
   /** 바깥 클릭으로 닫지 않는다 (입력 중인 폼) */
   stickyBackdrop?: boolean;
+  /** 크기 고정: 탭을 바꾸거나 내용이 로딩돼도 창 크기가 그대로 (넘치면 안에서 스크롤) */
+  fixed?: boolean;
   headExtra?: ReactNode;
   onKeyDown?: (e: KeyboardEvent<HTMLDivElement>) => void;
   bodyClassName?: string;
@@ -43,13 +45,13 @@ export function Modal(p: {
     if (box.current && !box.current.contains(document.activeElement)) box.current.focus();
   }, []);
   return (
-    <div className={cx("ui-backdrop", p.layer === "dialog" && "layer-dialog")} onMouseDown={p.stickyBackdrop ? undefined : p.onClose}>
+    <div className={cx("ui-backdrop", "for-modal", p.layer === "dialog" && "layer-dialog")} onMouseDown={p.stickyBackdrop ? undefined : p.onClose}>
       <div
         ref={box}
         tabIndex={-1}
         role="dialog"
         aria-modal="true"
-        className={cx("ui-modal", p.size && p.size !== "md" && `size-${p.size}`, p.tone && `tone-${p.tone}`, p.className)}
+        className={cx("ui-modal", p.size && p.size !== "md" && `size-${p.size}`, p.fixed && "fixed", p.tone && `tone-${p.tone}`, p.className)}
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           // 앱 전역 단축키로 새지 않게

@@ -99,6 +99,7 @@ export function ImportDialog({ target, schema, table, onImport, onClose }: {
     <Modal
       title={create ? `Import Data into a New Table in ${schema}` : `Import Data into ${schema}.${table}`}
       size="lg"
+      fixed
       onClose={onClose}
       footer={
         <>

@@ -56,7 +56,7 @@ export function TableDesigner({ target, conn, schema, table, onDone, onOpenConso
   const preview = usePreview(def, (d) => (d ? ddl.table(target, before, d) : Promise.resolve([])));
   const types = TYPES[conn.kind] ?? TYPES.postgres;
 
-  if (!def) return <Modal title={`Modify Table: ${schema}.${table}`} onClose={onClose}>{err ? <Notice tone="danger">{err}</Notice> : <Text tone="muted">Reading the table…</Text>}</Modal>;
+  if (!def) return <Modal title={`Modify Table: ${schema}.${table}`} size="xl" className="designer" fixed onClose={onClose}>{err ? <Notice tone="danger">{err}</Notice> : <Text tone="muted">Reading the table…</Text>}</Modal>;
   const set = (patch: Partial<TableDef>) => setDef({ ...def, ...patch });
   const setCol = (i: number, patch: Partial<ColumnDef>) => {
     const old = def.columns[i];
@@ -84,6 +84,7 @@ export function TableDesigner({ target, conn, schema, table, onDone, onOpenConso
       title={table ? `Modify Table: ${schema ? `${schema}.` : ""}${table}` : `New Table in ${schema || conn.name}`}
       size="xl"
       className="designer"
+      fixed
       onClose={onClose}
       footer={
         <>
@@ -311,6 +312,7 @@ export function NewObjectDialog({ kind, target, conn, schema, onDone, onOpenCons
     <Modal
       title={`New ${label}${kind === "database" || kind === "schema" ? ` on ${conn.name}` : ` in ${schema}`}`}
       size={kind === "view" || kind === "matview" ? "lg" : undefined}
+      fixed={kind === "view" || kind === "matview"}
       onClose={onClose}
       footer={
         <>
