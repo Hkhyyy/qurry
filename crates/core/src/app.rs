@@ -67,6 +67,7 @@ impl AppState {
     /// 마스터 키를 OS 키체인으로 / 파일로 옮긴다. 키는 같으니 지금 열린 저장소는 그대로 쓴다
     pub fn set_secret_key_location(&self, keychain: bool) -> AppResult<crate::secrets::KeyLocation> {
         let to = if keychain { crate::secrets::KeyLocation::Keychain } else { crate::secrets::KeyLocation::File };
+        self.secret_file.ensure_key()?;
         crate::secrets::move_key(&self.store.dir(), to, &crate::secrets::OsKeychain)?;
         Ok(self.secret_key_location())
     }
