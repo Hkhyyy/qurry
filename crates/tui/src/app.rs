@@ -2308,6 +2308,8 @@ impl App {
                 f("Database", c.database.clone(), FieldKind::Text),
                 f("Read-only", if c.read_only { "on" } else { "off" }.into(), FieldKind::Toggle),
                 f("Production", if c.options.confirm_changes { "on" } else { "off" }.into(), FieldKind::Toggle),
+                // qurry-mcp (AI 도구) 에 보이는지. 새 소스는 off 로 시작한다
+                f("MCP", if edit.is_some() { mcp_label(&c) } else { "off" }.into(), ch(&["off", "read", "write"])),
                 f("SSH tunnel", if ssh.enabled { "on" } else { "off" }.into(), FieldKind::Toggle),
                 f("SSH host", ssh.host.clone(), FieldKind::Text),
                 f("SSH port", ssh.port.to_string(), FieldKind::Text),
@@ -2357,6 +2359,11 @@ impl App {
         c.name = if v("Name").trim().is_empty() { format!("{}@{}", c.user, c.host) } else { v("Name").trim().into() };
         c.read_only = v("Read-only") == "on";
         c.options.confirm_changes = v("Production") == "on";
+        // 고치지 않은 예전 소스는 그대로 둔다 (정하지 않은 채로: store::ConnectionConfig::mcp_access)
+        let mcp = v("MCP");
+        if c.options.mcp.is_some() || form.edit.as_ref().is_none_or(|e| mcp != mcp_label(e)) {
+            c.options.mcp = Some(mcp);
+        }
         // custom = GUI 에서 고른 프리셋 밖의 색: 그대로 둔다
         match v("Color").as_str() {
             "custom" => {}
@@ -3258,4 +3265,15 @@ pub fn redis_grid(d: &KeyDetail) -> Option<Grid> {
         in_transaction: false,
     };
     Some(Grid::new(result))
+}
+
+/// 폼에 보일 MCP 노출 (정하지 않은 예전 소스는 지금 동작대로)
+fn mcp_label(c: &ConnectionConfig) -> &'static str {
+    match c.options.mcp.as_deref() {
+        Some("off") => "off",
+        Some("read") => "read",
+        Some(_) => "write",
+        None if c.options.confirm_changes => "off",
+        None => "write",
+    }
 }

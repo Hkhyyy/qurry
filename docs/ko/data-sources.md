@@ -17,6 +17,7 @@ Qurry 가 다루는 데이터베이스, 연결 방법 (SSH, SSL, 옵션), 덜 �
 - **SSL/TLS**: Require / Verify CA / Full Verification, CA 와 클라이언트 인증서는 선택. PostgreSQL · MySQL · Redis 에서 됩니다.
 - **Options 탭**: 읽기 전용, 트랜잭션 방식과 격리 수준, 시간대, keep-alive, 오래 안 쓰면 자동 연결 끊기, 단일 데이터베이스 모드, 시작 스크립트.
 - **Production**: 데이터를 바꾸는 문장을 실행하기 전에 바뀔 행 수를 세어 (같은 테이블 · WHERE 로 `SELECT count(*)`, 아무것도 바꾸지 않음) 보여 주고 묻습니다. 셀 수 없는 문장 (`UPDATE … FROM`, `DELETE … USING`, CTE) 도 묻습니다. 구조를 바꾸는 문장 (DDL) 은 "schema change" 로 보입니다. GUI: Options 탭 · TUI: Data Source 폼의 `Production` 토글.
+- **MCP**: AI 도구가 `qurry-mcp` 로 할 수 있는 것 — Off (새 Data Source. 목록에 없고 접속하지 않음), Read, Read & write (`--allow-write` 일 때). [MCP 서버](mcp.md) 참고. GUI: Options 탭 · TUI: `MCP` 칸.
 
 > Redis Sentinel · Cluster 노드는 자기 주소를 알려 주는 방식이라 SSH 터널과 같이 쓸 수 없습니다.
 

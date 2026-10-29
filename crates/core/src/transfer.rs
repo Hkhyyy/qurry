@@ -210,6 +210,9 @@ pub struct Exporter {
     out: Out,
     job: Arc<Job>,
     header: bool,
+    /// 파일에 쓸 수 있는 바이트 (MCP 내보내기). None = 제한 없음
+    max_bytes: Option<u64>,
+    written: u64,
 }
 
 /// 끝난 내보내기: 행 수와 (클립보드면) 글
@@ -231,7 +234,7 @@ impl Exporter {
             }
             Dest::Clipboard => Out::Mem(vec![]),
         };
-        Ok(Exporter { enc, out, job, header: false })
+        Ok(Exporter { enc, out, job, header: false, max_bytes: None, written: 0 })
     }
 
     /// CSV 로 파일에 (MCP·예전 API)
@@ -239,7 +242,17 @@ impl Exporter {
         Self::create(Encoder::new(Format::Csv, DbKind::Postgres, ""), &Dest::File(path.into()), Job::new()).await
     }
 
+    /// 쓸 수 있는 크기를 정한다 (넘으면 멈추고 오류)
+    pub fn max_bytes(mut self, n: u64) -> Self {
+        self.max_bytes = Some(n);
+        self
+    }
+
     async fn write(&mut self, s: String) -> AppResult<()> {
+        self.written += s.len() as u64;
+        if let Some(m) = self.max_bytes.filter(|m| self.written > *m) {
+            return Err(AppError::Msg(format!("The export is over {} MB — narrow the query", m >> 20)));
+        }
         match &mut self.out {
             Out::File(f) => tokio::io::AsyncWriteExt::write_all(f, s.as_bytes()).await?,
             Out::Mem(v) => {

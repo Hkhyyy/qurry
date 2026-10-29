@@ -19,7 +19,8 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
           database: edit.database, color: edit.color ?? null, ssh: edit.ssh ?? null,
           scope: edit.scope, readOnly: edit.readOnly ?? false, options: edit.options ?? {}, ssl: edit.ssl ?? null, redis: edit.redis ?? null,
         }
-      : { id: "", name: "", kind: "postgres", host: "localhost", port: 5432, user: "", database: "", color: null, ssh: null },
+      : // 새 소스는 MCP 에 보이지 않게 시작한다 (Options › MCP 에서 켠다)
+        { id: "", name: "", kind: "postgres", host: "localhost", port: 5432, user: "", database: "", color: null, ssh: null, options: { mcp: "off" } },
   );
   const [tab, setTab] = useState<"general" | "ssh" | "schemas" | "options">("general");
   const [password, setPassword] = useState<string | undefined>(undefined);
@@ -319,6 +320,14 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
           <Checkbox checked={!!opt.confirmChanges} onChange={(v) => setOpt("confirmChanges", v)} title="Before UPDATE / DELETE / INSERT … run, show how many rows will change and ask">
             Production: show affected rows and confirm changes
           </Checkbox>
+          <label>MCP (AI tools)</label>
+          <div className="ui-row">
+            <Select value={opt.mcp ?? (opt.confirmChanges ? "off" : "write")} onChange={(e) => setOpt("mcp", e.target.value as ConnOptions["mcp"])} title="What qurry-mcp (Claude Code and other AI tools) may do with this data source">
+              <option value="off">Off — not listed, no connection</option>
+              <option value="read">Read</option>
+              <option value="write" disabled={!!cfg.readOnly}>Read &amp; write (when qurry-mcp runs with --allow-write)</option>
+            </Select>
+          </div>
           <label>Transaction control</label>
           <div className="ui-row">
             <Select value={opt.txManual ? "manual" : "auto"} onChange={(e) => setOpt("txManual", e.target.value === "manual")}>

@@ -166,6 +166,9 @@ pub struct ConnOptions {
     /// Production: 데이터를 바꾸는 문장은 바뀔 행 수를 보여 주고 확인을 받는다
     #[serde(default)]
     pub confirm_changes: bool,
+    /// MCP 서버에 보이는지: "off" | "read" | "write" (None = 정하기 전에 만든 소스, ConnectionConfig::mcp_access)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<String>,
     /// Oracle: Instant Client 폴더 (비면 ORACLE_CLIENT_LIB_DIR · 시스템 기본)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oracle_client: Option<String>,
@@ -248,6 +251,31 @@ impl ConnectionConfig {
 }
 
 /// SSH 비밀번호/키 passphrase 의 저장 키
+/// MCP 서버가 이 Data Source 로 할 수 있는 것
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum McpAccess {
+    /// 목록에도 없고 접속·비밀번호도 쓰지 않는다
+    Off,
+    Read,
+    /// --allow-write 로 띄웠을 때 execute 도
+    Write,
+}
+
+impl ConnectionConfig {
+    /// MCP 노출. 정하지 않은 예전 소스는 Production 이면 숨기고, 아니면 예전처럼 (읽기, --allow-write 면 쓰기).
+    /// Read-only Data Source 는 쓰기가 없다
+    pub fn mcp_access(&self, allow_write: bool) -> McpAccess {
+        let a = match self.options.mcp.as_deref() {
+            Some("off") => McpAccess::Off,
+            Some("read") => McpAccess::Read,
+            Some("write") => McpAccess::Write,
+            _ if self.options.confirm_changes => McpAccess::Off,
+            _ => McpAccess::Write,
+        };
+        if a == McpAccess::Write && (!allow_write || self.read_only) { McpAccess::Read } else { a }
+    }
+}
+
 pub fn ssh_secret_key(id: &str) -> String {
     format!("{id}#ssh")
 }
@@ -431,6 +459,24 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_access_defaults() {
+        let mut c: ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "a", "kind": "postgres", "host": "h", "port": 1, "user": "u" })).unwrap();
+        // 예전 소스: 그대로 (읽기, --allow-write 면 쓰기)
+        assert_eq!(c.mcp_access(false), McpAccess::Read);
+        assert_eq!(c.mcp_access(true), McpAccess::Write);
+        // Production 은 정해 주기 전에는 숨긴다
+        c.options.confirm_changes = true;
+        assert_eq!(c.mcp_access(true), McpAccess::Off);
+        c.options.mcp = Some("write".into());
+        assert_eq!(c.mcp_access(true), McpAccess::Write);
+        assert_eq!(c.mcp_access(false), McpAccess::Read);
+        c.read_only = true;
+        assert_eq!(c.mcp_access(true), McpAccess::Read);
+        c.options.mcp = Some("off".into());
+        assert_eq!(c.mcp_access(true), McpAccess::Off);
+    }
 
     #[test]
     fn scope_rules_match_gui() {

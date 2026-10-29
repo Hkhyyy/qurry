@@ -2,10 +2,11 @@
 //!
 //! 기본은 읽기 전용: PG/MySQL 은 READ ONLY 트랜잭션 안에서 한 문장만, Redis 는 읽기 명령만.
 //! `--allow-write` 로 켜면 `execute` 도구가 생긴다 (Data Source 의 Read-only 설정은 그래도 지킨다).
+//! Data Source 마다 MCP 노출을 정한다 (Options › MCP: Off / Read / Read & write — store::McpAccess). 숨긴 소스는 목록에도 없고 접속도 못 한다.
 use qurry_core::app::AppState;
 use qurry_core::db::QueryResult;
 use qurry_core::sql;
-use qurry_core::store::DbKind;
+use qurry_core::store::{DbKind, McpAccess};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -152,7 +153,7 @@ impl Server {
         if self.allow_write {
             t.push(tool(
                 "execute",
-                "Execute statements that modify data or schema (INSERT/UPDATE/DELETE/DDL; Redis write commands). Statements run in one transaction (all or nothing). Rejected for read-only data sources.",
+                "Execute statements that modify data or schema (INSERT/UPDATE/DELETE/DDL; Redis write commands). PostgreSQL/MySQL: one transaction (all or nothing); other kinds run the statements one by one with no rollback. Only for data sources whose MCP access is 'Read & write' (see list_data_sources). DROP, TRUNCATE and UPDATE/DELETE without WHERE are refused — ask the user to run those in Qurry.",
                 ds_props(json!({ "statements": { "type": "array", "items": { "type": "string" } } })),
                 &["data_source", "statements"],
                 false,
@@ -161,10 +162,16 @@ impl Server {
         t
     }
 
-    /// 이름 또는 id → (id, 종류, 기본 DB, read-only)
-    async fn resolve(&self, a: &Value) -> Result<(String, DbKind, String, bool), String> {
-        let want = a.get("data_source").and_then(|v| v.as_str()).ok_or("data_source is required")?;
+    /// MCP 에 보이는 Data Source 만
+    async fn sources(&self) -> Result<Vec<qurry_core::app::ConnectionView>, String> {
         let list = self.state.list_connections().await.map_err(|e| e.to_string())?;
+        Ok(list.into_iter().filter(|c| c.config.mcp_access(self.allow_write) != McpAccess::Off).collect())
+    }
+
+    /// 이름 또는 id → (id, 종류, 기본 DB, MCP 권한)
+    async fn resolve(&self, a: &Value) -> Result<(String, DbKind, String, McpAccess), String> {
+        let want = a.get("data_source").and_then(|v| v.as_str()).ok_or("data_source is required")?;
+        let list = self.sources().await?;
         let c = list
             .iter()
             .find(|c| c.config.id == want)
@@ -174,10 +181,10 @@ impl Server {
                 if m.len() == 1 { Some(m[0]) } else { None }
             })
             .ok_or_else(|| format!("Data source not found: {want}. Available: {}", list.iter().map(|c| c.config.name.as_str()).collect::<Vec<_>>().join(", ")))?;
-        Ok((c.config.id.clone(), c.config.kind, sql::default_db(&c.config), c.config.read_only))
+        Ok((c.config.id.clone(), c.config.kind, sql::default_db(&c.config), c.config.mcp_access(self.allow_write)))
     }
 
-    async fn target(&self, a: &Value) -> Result<(String, DbKind, String, bool), String> {
+    async fn target(&self, a: &Value) -> Result<(String, DbKind, String, McpAccess), String> {
         let (id, kind, def, ro) = self.resolve(a).await?;
         let db = a.get("database").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(String::from).unwrap_or(def);
         Ok((sql::target_id(&id, Some(&db)), kind, db, ro))
@@ -191,15 +198,17 @@ impl Server {
         let schema_or = |kind: DbKind, db: &str| s("schema").unwrap_or_else(|| if kind == DbKind::Postgres { "public".into() } else { db.to_string() });
         match name {
             "list_data_sources" => {
-                let list = st.list_connections().await.map_err(e)?;
+                let list = self.sources().await?;
                 Ok(Value::Array(
                     list.iter()
                         .map(|c| {
                             json!({
                                 "id": c.config.id, "name": c.config.name, "kind": c.config.kind,
-                                "host": c.config.host, "port": c.config.port, "user": c.config.user,
+                                "host": without_userinfo(&c.config.host), "port": c.config.port, "user": c.config.user,
                                 "default_database": sql::default_db(&c.config),
-                                "read_only": c.config.read_only, "ssh_tunnel": c.config.active_ssh().map(|s| format!("{}@{}", s.user, s.host)),
+                                "read_only": c.config.read_only, "production": c.config.options.confirm_changes,
+                                "mcp_access": if c.config.mcp_access(self.allow_write) == McpAccess::Write { "write" } else { "read" },
+                                "ssh_tunnel": c.config.active_ssh().map(|s| format!("{}@{}", s.user, s.host)),
                                 "connected": c.connected
                             })
                         })
@@ -228,12 +237,20 @@ impl Server {
             "get_ddl" => {
                 let (t, kind, db, _) = self.target(a).await?;
                 let k = s("kind").unwrap_or_else(|| if kind == DbKind::Redis { "key".into() } else { "table".into() });
+                // Redis 키의 DDL 은 값을 통째로 읽는다: 큰 키는 redis_get (한도까지만) 으로
+                if kind == DbKind::Redis {
+                    let key = s("name").ok_or("name is required")?;
+                    let d = st.redis_key(t.clone(), key, Some(1)).await.map_err(e)?;
+                    if d.length > qurry_core::guard::REDIS_STRICT_MAX {
+                        return Err(format!("The key has {} elements — use redis_get with a limit", d.length));
+                    }
+                }
                 Ok(Value::String(st.object_ddl(t, schema_or(kind, &db), s("name").ok_or("name is required")?, k).await.map_err(e)?))
             }
             "search_objects" => {
                 let q = s("query").ok_or("query is required")?;
                 let limit = n("limit", 30);
-                let list = st.list_connections().await.map_err(e)?;
+                let list = self.sources().await?;
                 let only = if a.get("data_source").is_some() { Some(self.resolve(a).await?.0) } else { None };
                 let mut hits: Vec<(i64, Value)> = vec![];
                 let mut errors = vec![];
@@ -342,25 +359,32 @@ impl Server {
                 Ok(json!({ "rows": rows, "path": path.display().to_string() }))
             }
             "execute" if self.allow_write => {
-                let (t, _, _, ro) = self.target(a).await?;
-                if ro {
-                    return Err("This data source is marked read-only in Qurry".into());
+                let (t, kind, _, access) = self.target(a).await?;
+                if access != McpAccess::Write {
+                    return Err("This data source is read-only for MCP (Qurry: data source › Options › MCP: Read & write)".into());
                 }
                 let stmts: Vec<String> = a.get("statements").and_then(|v| v.as_array()).ok_or("statements is required")?.iter().filter_map(|x| x.as_str().map(String::from)).collect();
                 if stmts.is_empty() {
                     return Err("statements is empty".into());
                 }
+                // 앱이라면 확인을 받는 문장: MCP 에는 물어볼 사람이 없다
+                for s in &stmts {
+                    if let Some(why) = qurry_core::guard::unsafe_statement(s, kind) {
+                        return Err(format!("{why} — refused over MCP. Ask the user to run it in Qurry: {s}"));
+                    }
+                }
                 let n = st.execute_batch(t, stmts.clone(), false).await.map_err(e)?;
                 Ok(json!({ "statements": stmts.len(), "rows_affected": n }))
             }
             "list_rag_indexes" => {
-                let names: std::collections::HashMap<String, String> = st.list_connections().await.map_err(e)?.into_iter().map(|c| (c.config.id, c.config.name)).collect();
+                let names: std::collections::HashMap<String, String> = self.sources().await?.into_iter().map(|c| (c.config.id, c.config.name)).collect();
+                let shown = |t: &str| names.contains_key(qurry_core::app::split_target(t).0);
                 let name_of = |t: &str| {
                     let (id, db) = qurry_core::app::split_target(t);
                     let n = names.get(id).cloned().unwrap_or_else(|| id.to_string());
                     db.map(|d| format!("{n} / {d}")).unwrap_or(n)
                 };
-                Ok(json!(st.rag_indexes().map_err(e)?.iter().map(|x| json!({
+                Ok(json!(st.rag_indexes().map_err(e)?.iter().filter(|x| shown(&x.source) && shown(&x.dest)).map(|x| json!({
                     "name": x.name, "id": x.id, "source": name_of(&x.source), "table": format!("{}.{}", x.schema, x.table),
                     "text_columns": x.text_columns, "store": name_of(&x.dest), "collection": x.collection,
                     "embeddings": format!("{} {}", x.provider, x.model), "rows": x.rows, "built_at": x.built_at
@@ -373,6 +397,20 @@ impl Server {
             }
             other => Err(format!("Unknown tool: {other}")),
         }
+    }
+}
+
+/// mongodb://user:pass@host 같은 URI 의 user:pass@ 를 뺀다 (비밀번호가 AI 대화에 남지 않게)
+fn without_userinfo(host: &str) -> String {
+    match host.split_once("://") {
+        Some((scheme, rest)) => {
+            let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+            match rest[..end].rfind('@') {
+                Some(at) => format!("{scheme}://{}", &rest[at + 1..]),
+                None => host.to_string(),
+            }
+        }
+        None => host.rsplit_once('@').map(|(_, h)| h.to_string()).unwrap_or_else(|| host.to_string()),
     }
 }
 
@@ -476,7 +514,9 @@ async fn main() -> std::io::Result<()> {
     // stdout 은 프로토콜 전용. 엔진 로그(stderr)는 --verbose 일 때만
     qurry_core::QUIET.store(!args.iter().any(|a| a == "--verbose"), std::sync::atomic::Ordering::Relaxed);
     qurry_core::SANDBOX.store(true, std::sync::atomic::Ordering::Relaxed);
-    let state = Arc::new(qurry_core::open_state(dir).map_err(|e| std::io::Error::other(e.to_string()))?);
+    let mut state = qurry_core::open_state(dir).map_err(|e| std::io::Error::other(e.to_string()))?;
+    state.mcp = true;
+    let state = Arc::new(state);
     let server = Arc::new(Server { state: state.clone(), allow_write: args.iter().any(|a| a == "--allow-write") });
     // keep-alive / auto-disconnect
     {
@@ -523,4 +563,18 @@ async fn main() -> std::io::Result<()> {
     // stdin 이 닫혀도 진행 중인 응답은 마저 보낸다
     while tasks.join_next().await.is_some() {}
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uri_passwords_are_hidden() {
+        assert_eq!(without_userinfo("mongodb+srv://app:s3cret@cluster0.x.net/?retryWrites=true"), "mongodb+srv://cluster0.x.net/?retryWrites=true");
+        assert_eq!(without_userinfo("mongodb://a:b@h1:27017,h2:27017/db"), "mongodb://h1:27017,h2:27017/db");
+        assert_eq!(without_userinfo("https://qdrant.example.com"), "https://qdrant.example.com");
+        assert_eq!(without_userinfo("db.internal"), "db.internal");
+        assert_eq!(without_userinfo("u:p@db.internal"), "db.internal");
+    }
 }

@@ -448,11 +448,37 @@ fn dml_words(toks: &[Tok]) -> impl Iterator<Item = usize> + '_ {
     })
 }
 
-/// Redis 읽기 전용(MCP) 에서 더 막는 읽기 명령: 설정·비밀번호가 보이거나(CONFIG GET) 서버를 멈출 수 있는 것(KEYS)
-pub fn redis_strict_violation(cmd: &str) -> Option<String> {
+/// MCP 에서 Redis 명령 하나가 돌려줄 수 있는 요소 수
+pub const REDIS_STRICT_MAX: i64 = 1000;
+
+/// Redis 읽기 전용(MCP) 에서 더 막는 읽기 명령: 설정·비밀번호가 보이거나(CONFIG GET) 서버를 멈출 수 있는 것(KEYS),
+/// 키 하나를 통째로 읽는 것 (요소가 수백만 개면 서버가 멈추고 MCP 가 메모리를 다 쓴다). args = 명령 뒤의 인자 (대문자 아님)
+pub fn redis_strict_violation(cmd: &str, args: &[String]) -> Option<String> {
+    let num = |i: usize| args.get(i).and_then(|a| a.parse::<i64>().ok());
+    let opt = |name: &str| args.iter().position(|a| a.eq_ignore_ascii_case(name));
+    let too_many = |n: Option<i64>| n.is_none_or(|n| n.abs() > REDIS_STRICT_MAX);
+    let whole = || Some(format!("{cmd} reads the whole key in read-only mode — use redis_get (it reads at most the given limit) or {}", match cmd {
+        "HGETALL" | "HKEYS" | "HVALS" => "HSCAN",
+        "SMEMBERS" => "SSCAN",
+        _ => "SCARD / SSCAN",
+    }));
+    let range = |start: Option<i64>, stop: Option<i64>| match (start, stop) {
+        (Some(a), Some(b)) if a >= 0 && b >= a => b - a >= REDIS_STRICT_MAX,
+        _ => true,
+    };
+    let need_limit = |what: &str| Some(format!("{cmd} needs {what} of at most {REDIS_STRICT_MAX} in read-only mode"));
     match cmd {
         "CONFIG" => Some("CONFIG is not allowed in read-only mode (it can reveal passwords)".into()),
         "KEYS" => Some("KEYS is not allowed in read-only mode (it blocks the server on large databases) — use redis_scan".into()),
+        "HGETALL" | "HKEYS" | "HVALS" | "SMEMBERS" | "SINTER" | "SUNION" | "SDIFF" => whole(),
+        "LRANGE" | "ZREVRANGE" if range(num(1), num(2)) => need_limit("a start..stop range"),
+        // ZRANGE key start stop [BYSCORE | BYLEX] [REV] [LIMIT offset count]
+        "ZRANGE" if opt("BYSCORE").or(opt("BYLEX")).is_some() && opt("LIMIT").is_none_or(|i| too_many(num(i + 2))) => need_limit("LIMIT offset count"),
+        "ZRANGE" if opt("BYSCORE").or(opt("BYLEX")).is_none() && range(num(1), num(2)) => need_limit("a start..stop range"),
+        "ZRANGEBYSCORE" | "ZRANGEBYLEX" | "ZREVRANGEBYSCORE" | "ZREVRANGEBYLEX" if opt("LIMIT").is_none_or(|i| too_many(num(i + 2))) => need_limit("LIMIT offset count"),
+        "XRANGE" | "XREVRANGE" if opt("COUNT").is_none_or(|i| too_many(num(i + 1))) => need_limit("COUNT"),
+        "SRANDMEMBER" | "HRANDFIELD" | "ZRANDMEMBER" if args.len() > 1 && too_many(num(1)) => need_limit("a count"),
+        "SCAN" | "HSCAN" | "SSCAN" | "ZSCAN" if opt("COUNT").is_some_and(|i| too_many(num(i + 1))) => need_limit("COUNT"),
         _ => None,
     }
 }
@@ -707,6 +733,23 @@ mod tests {
         assert!(!ok("update t set a = 1"));
         // 데이터 소스 읽기 전용은 pg_sleep 같은 건 막지 않는다 (MCP 만)
         assert!(ok("select pg_sleep(0)"));
+    }
+
+    #[test]
+    fn redis_strict_limits() {
+        let v = |line: &str| {
+            let mut w = line.split_whitespace();
+            let cmd = w.next().unwrap().to_uppercase();
+            redis_strict_violation(&cmd, &w.map(String::from).collect::<Vec<_>>())
+        };
+        for bad in ["HGETALL big", "SMEMBERS s", "SUNION a b", "LRANGE l 0 -1", "LRANGE l 0 5000", "ZRANGE z 0 -1", "ZRANGE z -inf +inf BYSCORE", "ZRANGEBYSCORE z -inf +inf",
+            "ZRANGEBYSCORE z -inf +inf LIMIT 0 100000", "XRANGE s - +", "SRANDMEMBER s -100000", "SCAN 0 COUNT 1000000", "KEYS *", "CONFIG GET *"] {
+            assert!(v(bad).is_some(), "{bad}");
+        }
+        for ok in ["GET a", "HGET h f", "HSCAN h 0 COUNT 100", "LRANGE l 0 99", "ZRANGE z 0 9", "ZRANGE z 0 +inf BYSCORE LIMIT 0 10", "ZRANGEBYSCORE z 0 1 LIMIT 0 10",
+            "XRANGE s - + COUNT 10", "SRANDMEMBER s 5", "SRANDMEMBER s", "SCAN 0 MATCH a:* COUNT 100", "HLEN h"] {
+            assert!(v(ok).is_none(), "{ok}");
+        }
     }
 
     #[test]

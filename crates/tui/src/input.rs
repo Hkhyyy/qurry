@@ -1790,6 +1790,26 @@ mod tests {
         assert!(h.app.popup.is_none(), "must not offer to kill a session that is gone");
     }
 
+    /// 새 Data Source 는 MCP 에 보이지 않게 시작한다. 예전 소스는 MCP 칸을 고치지 않으면 정하지 않은 채로 둔다
+    #[tokio::test]
+    async fn conn_form_mcp_default() {
+        let mut h = Harness::new().await;
+        let cfg_of = |h: &Harness| match &h.app.popup {
+            Some(crate::app::Popup::ConnForm(f)) => App::form_config(f).unwrap().0,
+            _ => panic!("no form"),
+        };
+        h.app.conn_form(None);
+        assert_eq!(cfg_of(&h).options.mcp.as_deref(), Some("off"));
+        let mut old = cfg_of(&h);
+        old.options.mcp = None;
+        old.options.confirm_changes = true;
+        h.app.conn_form(Some(old.clone()));
+        assert_eq!(cfg_of(&h).options.mcp, None, "unchanged legacy source keeps the default");
+        let Some(crate::app::Popup::ConnForm(f)) = &mut h.app.popup else { panic!() };
+        f.fields.iter_mut().find(|x| x.label == "MCP").unwrap().value = "read".into();
+        assert_eq!(cfg_of(&h).options.mcp.as_deref(), Some("read"));
+    }
+
     /// Vacuum Progress 는 취소만: K (연결 끊기) 는 묻지도 않고, 안내 줄에도 없다
     #[tokio::test]
     async fn dba_vacuum_progress_only_cancels() {
