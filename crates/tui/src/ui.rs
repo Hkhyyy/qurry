@@ -73,6 +73,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // 워크스페이스가 둘 이상이면 맨 위 한 줄: 1 Default │ 2 Reports (Alt+n · 클릭)
     app.hits.workspaces.clear();
     app.hits.text = Rect::default();
+    app.hits.cancel = Rect::default();
     let main = if app.workspaces.len() > 1 {
         let [bar, rest] = Layout::vertical([Constraint::Length(1), Constraint::Min(2)]).areas(main);
         draw_workspaces(f, app, bar);
@@ -356,13 +357,23 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 " {db} · Tx: {}{}{}{} ",
                 if c.tx_manual { "Manual" } else { "Auto" },
                 if c.in_tx { format!(" (pending — {k_commit} commit / {k_rollback} rollback)") } else { String::new() },
-                if c.running { format!(" · running {} · {k_cancel} cancel", took.as_deref().unwrap_or("")) } else { String::new() },
+                if c.running { format!(" · running {} · [■ Cancel {k_cancel}]", took.as_deref().unwrap_or("")) } else { String::new() },
                 if ro { " · read-only" } else { "" }
             );
             let editing = focus == Focus::Editor;
             if !editing {
                 c.complete = None;
             }
+            // [■ Cancel] 자리 (제목은 왼쪽 위 모서리 다음 칸부터)
+            app.hits.cancel = match (c.running, title.find("[■ Cancel")) {
+                (true, Some(at)) => {
+                    use unicode_width::UnicodeWidthStr;
+                    let x = ed.x + 1 + title[..at].width() as u16;
+                    let w = title[at..].find(']').map(|e| title[at..at + e + 1].width() as u16).unwrap_or(0);
+                    Rect { x, y: ed.y, width: w.min(ed.right().saturating_sub(x)), height: 1 }
+                }
+                _ => Rect::default(),
+            };
             c.editor.set_block(panel(title, editing));
             c.editor.set_line_number_style(Style::default().fg(DIM));
             // 커서 칸에는 보이지 않는 표시(밑줄 색)를 단다: 그린 뒤 찾아서 자동완성 위치·마우스 위치 계산에 쓴다

@@ -551,6 +551,8 @@ pub struct Hits {
     pub last_click: Option<(std::time::Instant, u16, u16)>,
     /// 콘솔 커서를 그린 화면 칸과 그때 커서 (줄, 칸) — 마우스 위치를 글자 위치로 바꿀 때 (tui-textarea 는 스크롤 위치를 공개하지 않는다)
     pub caret: Option<(u16, u16, usize, usize)>,
+    /// 실행 중 콘솔 제목줄의 [■ Cancel] (눌러서 취소)
+    pub cancel: ratatui::layout::Rect,
     /// 글 탭 (DDL·다이어그램) 본문 — 휠로 스크롤
     pub text: ratatui::layout::Rect,
     /// 워크스페이스 띠: (번호, 영역)
@@ -1861,15 +1863,27 @@ impl App {
             return;
         }
         c.running = true;
+        // 실행 중에는 Output 을 보인다 (지난 결과 대신 지금 실행하는 SQL)
+        c.show_output = true;
         let session = c.session.clone();
         let in_tx0 = c.in_tx;
         let st = self.state.clone();
         let stmts2 = stmts.clone();
+        let tx = self.tx.clone();
+        let echo_name = conn_name.clone();
         self.status = "Executing…".into();
         self.spawn(
             async move {
                 let mut out = vec![];
                 for s in stmts2 {
+                    // 실행하는 문장을 바로 Output 에 (한 줄로, 너무 길면 앞부분만)
+                    let echo: String = s.replace('\n', " ").chars().take(300).collect();
+                    let line = format!("{echo_name}> {echo}{}", if s.chars().count() > 300 { "…" } else { "" });
+                    let _ = tx.send(Box::new(move |a: &mut App| {
+                        if let Some(TabKind::Console(c)) = a.tab_mut(id).map(|t| &mut t.kind) {
+                            c.log(false, line);
+                        }
+                    }));
                     let q = if explain {
                         let bare = s.trim_end_matches(';');
                         match (kind, analyze) {
@@ -1924,9 +1938,6 @@ impl App {
                 let mut failed = false;
                 let ddl = out.iter().any(|(s, r, dry)| r.is_ok() && !dry && !explain && qurry_core::guard::is_ddl(s, kind));
                 for (i, (s, r, dry)) in out.into_iter().enumerate() {
-                    // 실행한 문장은 한 줄로, 너무 길면 앞부분만
-                    let echo: String = s.replace('\n', " ").chars().take(300).collect();
-                    c.log(false, format!("{conn_name}> {echo}{}", if s.chars().count() > 300 { "…" } else { "" }));
                     if r.is_ok() {
                         let _ = hist.history.add(&hist_conn, Some(&hist_db), &s);
                     }
