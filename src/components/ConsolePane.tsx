@@ -7,6 +7,7 @@ import { ConsoleEditor, EditorApi, RunRequest } from "./ConsoleEditor";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { ResultGrid } from "./ResultGrid";
 import { RunningBar } from "./RunningBar";
+import { planText } from "../lib/planText";
 import { IcClock, IcGear, IcReload, IcStop } from "../ui/icons";
 import { EmptyState, IconButton, Select, Spacer, TabItem, TabStrip, Table, Td, Th, ToolButton, Toolbar, ToolbarSep } from "../ui";
 
@@ -48,6 +49,8 @@ export interface ResultEntry {
   kind: "result" | "plan";
   result: QueryResult | null;
   plan?: PlanNode;
+  /** DB 가 준 계획 원본 (JSON) — Copy JSON */
+  planJson?: string;
   pinned: boolean;
 }
 
@@ -328,7 +331,7 @@ export function ConsolePane(p: Props) {
                   dialect={p.dialect}
                 />
               )}
-              {active?.kind === "plan" && active.plan && <PlanView plan={active.plan} />}
+              {active?.kind === "plan" && active.plan && <PlanView plan={active.plan} json={active.planJson} />}
             </div>
           </div>
         </Panel>
@@ -339,8 +342,15 @@ export function ConsolePane(p: Props) {
 }
 
 /** Query Plan: Operations Tree (DataGrip Explain Plan) + 노드마다 몫(%) 막대, 경고(⚠), 고른 노드의 상세 */
-function PlanView({ plan }: { plan: PlanNode }) {
+function PlanView({ plan, json }: { plan: PlanNode; json?: string }) {
   const [sel, setSel] = useState<PlanNode | null>(plan);
+  const [copied, setCopied] = useState("");
+  const copy = (what: string, text: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(what);
+      setTimeout(() => setCopied(""), 1500);
+    });
+  };
   const rows: { n: PlanNode; depth: number }[] = [];
   const walk = (n: PlanNode, depth: number) => {
     rows.push({ n, depth });
@@ -353,6 +363,16 @@ function PlanView({ plan }: { plan: PlanNode }) {
   return (
     <div className="plan-view">
       <div className="plan-table">
+        <Toolbar className="plan-tools">
+          <ToolButton title="The plan as indented text (EXPLAIN style, with shares and warnings)" onClick={() => copy("text", planText(plan))}>
+            {copied === "text" ? "Copied ✓" : "Copy as Text"}
+          </ToolButton>
+          {json && (
+            <ToolButton title="The plan exactly as the database returned it (EXPLAIN FORMAT JSON)" onClick={() => copy("json", json)}>
+              {copied === "json" ? "Copied ✓" : "Copy JSON"}
+            </ToolButton>
+          )}
+        </Toolbar>
         {warned > 0 && <div className="plan-summary">⚠ {warned} node{warned > 1 ? "s" : ""} worth a look — click one for details</div>}
         <Table>
           <thead>

@@ -1322,8 +1322,16 @@ export default function App() {
         updTab(tabId, (t) => ({ ...t, inTx: !!r.inTransaction }));
         if (!r.inTransaction && !isReadStmt(sql0) && !dry) committed++;
         if (explain && !isMy) {
-          const plan = await analyzePlan(String(r.rows[0]?.[0] ?? "")).catch(() => null);
-          const entry: ResultEntry = { id: crypto.randomUUID(), title: resultTitle(sql0, ++n), sql: sql0, kind: "plan", result: null, plan: plan ?? undefined, pinned: false };
+          const raw = String(r.rows[0]?.[0] ?? "");
+          const plan = await analyzePlan(raw).catch(() => null);
+          const pretty = (() => {
+            try {
+              return JSON.stringify(JSON.parse(raw), null, 2);
+            } catch {
+              return raw;
+            }
+          })();
+          const entry: ResultEntry = { id: crypto.randomUUID(), title: resultTitle(sql0, ++n), sql: sql0, kind: "plan", result: null, plan: plan ?? undefined, planJson: pretty, pinned: false };
           updTab(tabId, (t) => ({ ...t, results: [...t.results, entry] }));
           lastActive = entry.id;
           log(tabId, "info", `Plan retrieved in ${r.elapsedMs} ms`);

@@ -197,6 +197,8 @@ a { color: var(--c-548af7); cursor: pointer; }
 
 .result-area { flex: 1; min-height: 0; position: relative; background: var(--bg); }
 .running-bar { position: absolute; z-index: 5; top: 8px; right: 12px; display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); white-space: nowrap; }
+.plan-table { user-select: text; }
+.plan-tools.ui-toolbar { height: 30px; border-bottom: 1px solid var(--border); }
 .running-time { font-variant-numeric: tabular-nums; }
 .grid-scroll { position: absolute; inset: 0; overflow: auto; outline: none; font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; }
 
