@@ -655,11 +655,13 @@ mod tests {
     }
 
     /// A remote PostgreSQL without SSL settings must set up TLS: the local test server has no TLS, reached through an address that isn't loopback by name
+    /// ("127.1" resolves to 127.0.0.1 but isn't an IP literal, so Qurry treats it as remote; ::ffff:127.0.0.1 now counts as this machine)
     #[tokio::test]
     #[ignore]
     async fn pg_remote_requires_tls() {
         let mut cfg = local_cfg();
-        cfg.host = "::ffff:127.0.0.1".into();
+        cfg.host = "127.1".into();
+        assert!(!is_loopback(&cfg.host) && is_loopback("::ffff:127.0.0.1"));
         let r = connect(&cfg, None).await;
         let Err(e) = r else { panic!("connected without TLS") };
         let e = e.to_string();
