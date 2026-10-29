@@ -53,7 +53,16 @@ pub fn is_local(cfg: &ConnectionConfig) -> bool {
 
 pub fn is_loopback(host: &str) -> bool {
     let h = host.trim().trim_start_matches('[').trim_end_matches(']').to_lowercase();
-    h == "localhost" || h == "::1" || h.starts_with("127.")
+    // A real loopback address (127.0.0.0/8, ::1) — not a name that merely starts with 127.
+    h == "localhost" || h.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
+/// The SSL modes Qurry knows; anything else is refused instead of being passed on to a driver or tool
+pub fn check_ssl_mode(mode: &str) -> crate::error::AppResult<()> {
+    match mode {
+        "require" | "verify-ca" | "verify-full" => Ok(()),
+        m => Err(crate::error::AppError::Msg(format!("Unknown SSL mode '{m}' (use require, verify-ca or verify-full)"))),
+    }
 }
 
 /// Whether a connection with no SSL setting may connect without TLS: the actual endpoint is this machine (including tunnels), or the source allows it
@@ -99,6 +108,11 @@ pub async fn connect_via(cfg: &ConnectionConfig, password: Option<&str>, tunnel_
             if cfg.read_only {
                 // Do not leave the parsing of \ in strings to server settings (match the rules guard reads with)
                 opts = opts.options([("default_transaction_read_only", "on"), ("standard_conforming_strings", "on")]);
+            }
+            // Without SSL settings a remote server must still set up TLS (certificate not checked); plain text only for this computer,
+            // an SSH tunnel, or when the data source allows it (Prefer would quietly fall back to plain text if TLS were cut)
+            if cfg.active_ssl().is_none() && !plaintext_allowed(cfg, host) {
+                opts = opts.ssl_mode(sqlx::postgres::PgSslMode::Require);
             }
             // SSL from the SSH/SSL tab
             if let Some(ssl) = cfg.active_ssl() {
@@ -148,7 +162,12 @@ pub async fn connect_via(cfg: &ConnectionConfig, password: Option<&str>, tunnel_
                     })
                 })
                 .connect_with(opts)
-                .await?;
+                .await
+                .map_err(|e| match &e {
+                    // Required TLS that the server can't set up: say what to do instead of a bare TLS error
+                    sqlx::Error::Tls(_) if cfg.active_ssl().is_none() => crate::error::AppError::Msg(format!("{}\n({e})", crate::mysql::NEEDS_TLS.replace(" without TLS 1.2", ""))),
+                    _ => e.into(),
+                })?;
             Ok(Pool::Pg(pool))
         }
         DbKind::Mysql => {
@@ -606,6 +625,10 @@ mod tests {
             c.host = h.into();
             assert!(is_local(&c), "{h}");
         }
+        for h in ["127.evil.example", "127.0.0.1.example", "db.example"] {
+            c.host = h.into();
+            assert!(!is_local(&c), "{h}");
+        }
     }
 
     /// Tests against a local PostgreSQL. Run with `cargo test -- --ignored`.
@@ -625,6 +648,20 @@ mod tests {
             ssh_secret_saved: false,
             scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
         }
+    }
+
+    /// A remote PostgreSQL without SSL settings must set up TLS: the local test server has no TLS, reached through an address that isn't loopback by name
+    #[tokio::test]
+    #[ignore]
+    async fn pg_remote_requires_tls() {
+        let mut cfg = local_cfg();
+        cfg.host = "::ffff:127.0.0.1".into();
+        let r = connect(&cfg, None).await;
+        let Err(e) = r else { panic!("connected without TLS") };
+        let e = e.to_string();
+        assert!(e.contains("didn't set up an encrypted") || e.contains("TLS") || e.contains("SSL"), "{e}");
+        cfg.options.allow_plaintext = true;
+        assert!(connect(&cfg, None).await.is_ok(), "allowed plain text connects");
     }
 
     #[tokio::test]

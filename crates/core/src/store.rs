@@ -273,7 +273,8 @@ impl ConnectionConfig {
             Some(_) => 1,
         };
         let ca = |c: &ConnectionConfig| c.active_ssl().map(|s| s.ca_file.trim().to_string()).unwrap_or_default();
-        t(self) == t(other) && rank(other) >= rank(self) && (rank(self) < 2 || ca(self) == ca(other))
+        // Allowing plain text where it wasn't allowed is a weaker connection too
+        t(self) == t(other) && rank(other) >= rank(self) && (rank(self) < 2 || ca(self) == ca(other)) && (self.options.allow_plaintext || !other.options.allow_plaintext)
     }
 }
 
