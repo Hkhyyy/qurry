@@ -155,6 +155,8 @@ export function ConsolePane(p: Props) {
   const radio = <T extends string>(cur: T, val: T, label: string, set: (v: T) => void): MenuItem => ({ label: (cur === val ? "● " : "　") + label, action: () => set(val) });
 
   const active = p.results.find((r) => r.id === p.activeResult);
+  // 고른 결과 탭이 없으면 (다시 실행해 지워짐) Output 을 보인다 — 빈 칸 대신
+  const shown = active ? p.activeResult : "output";
 
   return (
     <div className="console-pane">
@@ -270,17 +272,17 @@ export function ConsolePane(p: Props) {
             {/* 결과 탭: Output + 결과 셋들 (Services 결과 영역) */}
             <div className="result-tabs">
               <TabStrip
-                activeKey={p.activeResult}
-                overflow={[{ key: "output", label: "Output", active: p.activeResult === "output", onSelect: () => p.onSetActiveResult("output") }, ...p.results.map((r) => ({ key: r.id, label: (r.kind === "plan" ? "Plan: " : "") + r.title, active: p.activeResult === r.id, onSelect: () => p.onSetActiveResult(r.id) }))]}
+                activeKey={shown}
+                overflow={[{ key: "output", label: "Output", active: shown === "output", onSelect: () => p.onSetActiveResult("output") }, ...p.results.map((r) => ({ key: r.id, label: (r.kind === "plan" ? "Plan: " : "") + r.title, active: shown === r.id, onSelect: () => p.onSetActiveResult(r.id) }))]}
                 style={{ flex: 1, minWidth: 0 }}
               >
-              <TabItem variant="result" label="Output" active={p.activeResult === "output"} onClick={() => p.onSetActiveResult("output")} />
+              <TabItem variant="result" label="Output" active={shown === "output"} onClick={() => p.onSetActiveResult("output")} />
               {p.results.map((r) => (
                 <TabItem
                   key={r.id}
                   variant="result"
                   label={(r.kind === "plan" ? "Plan: " : "") + r.title}
-                  active={p.activeResult === r.id}
+                  active={shown === r.id}
                   pinned={r.pinned}
                   onPin={() => p.onPin(r.id, false)}
                   onClose={() => p.onCloseResult(r.id)}
@@ -301,13 +303,13 @@ export function ConsolePane(p: Props) {
                 />
               ))}
               </TabStrip>
-              {p.activeResult === "output" && (
+              {shown === "output" && (
                 <IconButton title="Clear All" onClick={p.onClearOutput}><IcReload /></IconButton>
               )}
             </div>
             <div className="result-area">
               <RunningBar running={p.running} onCancel={p.onCancel} />
-              {p.activeResult === "output" && (
+              {shown === "output" && (
                 <div className="output-log">
                   {p.output.length === 0 && <EmptyState>Execute a statement ({isMac ? "⌘↩" : "Ctrl+Enter"}) to see the output.</EmptyState>}
                   {p.output.map((l, i) => (
