@@ -257,9 +257,20 @@ impl ConnectionConfig {
 
     /// self(저장된 설정) 의 비밀번호를 other 로 보내도 되는지: 같은 종류 · 서버 · 사용자 · SSH 터널이고, TLS 를 끄지 않았다.
     /// 호스트만 바꿔 Test 를 누르거나 같은 id 로 다른 서버를 가져와도 예전 비밀번호가 새 서버로 가지 않게
+    /// Redis Sentinel · Cluster 노드도 서버다. SSL 은 끄거나 검증을 낮추거나 CA 를 바꾸면 다른 서버로 본다
     pub fn same_server(&self, other: &ConnectionConfig) -> bool {
-        let t = |c: &ConnectionConfig| (c.kind, c.host.trim().to_lowercase(), c.port, c.user.clone(), c.active_ssh().map(|s| (s.host.trim().to_lowercase(), s.port)));
-        t(self) == t(other) && !(self.active_ssl().is_some() && other.active_ssl().is_none())
+        let t = |c: &ConnectionConfig| {
+            let redis = c.redis.as_ref().map(|r| (r.mode.clone(), r.sentinel_master.clone(), r.nodes.split([',', ' ']).filter(|n| !n.is_empty()).map(|n| n.to_lowercase()).collect::<Vec<_>>()));
+            (c.kind, c.host.trim().to_lowercase(), c.port, c.user.clone(), c.active_ssh().map(|s| (s.host.trim().to_lowercase(), s.port)), redis)
+        };
+        let rank = |c: &ConnectionConfig| match c.active_ssl().map(|s| s.mode()) {
+            None => 0,
+            Some("verify-full") => 3,
+            Some("verify-ca") => 2,
+            Some(_) => 1,
+        };
+        let ca = |c: &ConnectionConfig| c.active_ssl().map(|s| s.ca_file.trim().to_string()).unwrap_or_default();
+        t(self) == t(other) && rank(other) >= rank(self) && (rank(self) < 2 || ca(self) == ca(other))
     }
 }
 
@@ -442,7 +453,8 @@ impl Store {
             }
             match all.iter_mut().find(|e| e.id == c.id) {
                 Some(e) => {
-                    let (pw, ssh) = (e.password_saved && !e.same_server(&c), e.ssh_secret_saved && !e.same_ssh(&c));
+                    // 플래그와 상관없이 (예전 가져오기로 플래그만 꺼진 항목도) 다른 서버면 지울 목록에
+                    let (pw, ssh) = (!e.same_server(&c), !e.same_ssh(&c));
                     c.password_saved = e.password_saved && !pw;
                     c.ssh_secret_saved = e.ssh_secret_saved && !ssh;
                     if pw || ssh {
@@ -538,8 +550,9 @@ mod tests {
         assert!(a.same_server(&b) && a.same_ssh(&b));
         b.host = "DB.internal ".into();
         assert!(a.same_server(&b));
-        let changes: [fn(&mut ConnectionConfig); 6] = [|c| c.host = "attacker.example".into(), |c| c.port = 5433, |c| c.user = "root".into(), |c| c.kind = DbKind::Mysql,
-            |c| c.ssl.as_mut().unwrap().enabled = false, |c| c.ssh.as_mut().unwrap().host = "evil".into()];
+        let changes: [fn(&mut ConnectionConfig); 9] = [|c| c.host = "attacker.example".into(), |c| c.port = 5433, |c| c.user = "root".into(), |c| c.kind = DbKind::Mysql,
+            |c| c.ssl.as_mut().unwrap().enabled = false, |c| c.ssh.as_mut().unwrap().host = "evil".into(), |c| c.ssl.as_mut().unwrap().mode = "require".into(),
+            |c| c.ssl.as_mut().unwrap().ca_file = "/tmp/evil-ca.pem".into(), |c| c.redis = Some(RedisMode { mode: "sentinel".into(), sentinel_master: "m".into(), nodes: "evil:26379".into() })];
         for f in changes {
             let mut c = a.clone();
             f(&mut c);

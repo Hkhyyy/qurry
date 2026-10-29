@@ -500,11 +500,12 @@ impl AppState {
         // 저장 여부 플래그는 서버가 관리한다 (None = 기존 값 유지)
         let prev = self.store.get(&config.id)?;
         // 서버를 바꾸면 저장된 비밀번호를 새 서버에 쓰지 않는다: 다시 입력하게 한다
+        // 저장 여부는 플래그가 아니라 실제로 있는지 (예전 가져오기로 플래그만 꺼진 항목이 있다)
         if let Some(p) = &prev {
-            if password.is_none() && p.password_saved && !p.same_server(&config) {
+            if password.is_none() && self.secret_file.contains(&p.id) && !p.same_server(&config) {
                 return Err(AppError::Msg(SERVER_CHANGED.into()));
             }
-            if ssh_secret.is_none() && p.ssh_secret_saved && config.active_ssh().is_some() && !p.same_ssh(&config) {
+            if ssh_secret.is_none() && self.secret_file.contains(&store::ssh_secret_key(&p.id)) && config.active_ssh().is_some() && !p.same_ssh(&config) {
                 return Err(AppError::Msg(SSH_CHANGED.into()));
             }
         }
@@ -549,7 +550,7 @@ impl AppState {
     /// 저장된 비밀번호를 config 로 보내도 되면 그 값 (저장된 설정과 같은 서버일 때만)
     fn saved_password_for(&self, config: &ConnectionConfig) -> AppResult<Option<String>> {
         match self.store.get(&config.id)? {
-            Some(p) if p.password_saved && !p.same_server(config) => Err(AppError::Msg(SERVER_CHANGED.into())),
+            Some(p) if self.secret_file.contains(&p.id) && !p.same_server(config) => Err(AppError::Msg(SERVER_CHANGED.into())),
             Some(_) => self.secret(&config.id),
             None => Ok(None),
         }
@@ -557,7 +558,7 @@ impl AppState {
 
     fn saved_ssh_secret_for(&self, config: &ConnectionConfig) -> AppResult<Option<String>> {
         match self.store.get(&config.id)? {
-            Some(p) if p.ssh_secret_saved && !p.same_ssh(config) => Err(AppError::Msg(SSH_CHANGED.into())),
+            Some(p) if self.secret_file.contains(&store::ssh_secret_key(&p.id)) && !p.same_ssh(config) => Err(AppError::Msg(SSH_CHANGED.into())),
             Some(_) => self.secret(&store::ssh_secret_key(&config.id)),
             None => Ok(None),
         }
@@ -1011,6 +1012,12 @@ mod tests {
         let e = st.test_connection(moved.clone(), None, None).await.unwrap_err().to_string();
         assert!(e.contains("enter the password again"), "{e}");
         let e = st.save_connection(moved.clone(), None, None).await.unwrap_err().to_string();
+        assert!(e.contains("enter the password again"), "{e}");
+        // 플래그만 꺼져 있어도 (예전 가져오기) 저장된 비밀번호는 지킨다
+        let mut flag_off = saved.clone();
+        flag_off.password_saved = false;
+        st.store.save(&flag_off).unwrap();
+        let e = st.test_connection(moved.clone(), None, None).await.unwrap_err().to_string();
         assert!(e.contains("enter the password again"), "{e}");
         // 새 비밀번호를 주면 저장된다 · 이름만 바꾸는 것은 그대로
         st.save_connection(moved, Some("pw2".into()), None).await.unwrap();
