@@ -680,7 +680,7 @@ fn editor_key(app: &mut App, k: KeyEvent) {
     // 단어나 '.' 을 치면 열고(GUI 처럼), 열린 채로 지우면 다시 거른다. 그 밖의 키는 닫는다
     // (macOS 는 Ctrl+Space 가 입력 소스 전환이라 타이핑으로 여는 게 기본)
     let plain = !k.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
-    let typed = plain && matches!(k.code, KeyCode::Char(ch) if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.');
+    let typed = plain && matches!(k.code, KeyCode::Char(ch) if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' || ch == '\'');
     if typed || (open && k.code == KeyCode::Backspace) {
         app.update_completion(false);
     } else if let Some(TabKind::Console(c)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind) {

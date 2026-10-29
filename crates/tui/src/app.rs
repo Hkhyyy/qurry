@@ -620,6 +620,9 @@ pub struct App {
     /// 자동완성 메타 (target → 테이블·컬럼)
     pub completion: HashMap<String, Arc<complete::Meta>>,
     completion_loading: HashSet<String>,
+    /// 값 · json 키 추천 (자리별, 잠깐 둔다) · 불러오는 중인 자리
+    hints: HashMap<String, (std::time::Instant, Vec<qurry_core::hints::Hint>)>,
+    hints_loading: HashSet<String>,
     /// 명령 단축키 (keymap.json 의 "tui")
     pub keys: crate::keys::Keymap,
     /// 새 버전이 있으면 그 버전 (상태줄에 알린다)
@@ -708,6 +711,8 @@ impl App {
             drag_pos: (0, 0),
             completion: HashMap::new(),
             completion_loading: HashSet::new(),
+            hints: HashMap::new(),
+            hints_loading: HashSet::new(),
             keys: crate::keys::Keymap::new(&user_keys),
             update: None,
             restart: false,
@@ -3072,7 +3077,7 @@ impl App {
         let (target, db) = (t.target.clone(), t.db.clone());
         let meta = self.completion.get(&target).cloned();
         if meta.is_none() {
-            self.load_completion(target);
+            self.load_completion(target.clone());
         }
         let Some(TabKind::Console(c)) = self.tabs.get_mut(self.active).map(|t| &mut t.kind) else { return };
         let (row, col) = c.editor.cursor();
@@ -3084,6 +3089,36 @@ impl App {
         let text = window.join("\n");
         let stmt = sql::statement_at(&text, byte_offset(window, row - from, col), kind).unwrap_or_default();
         let empty = complete::Meta::new(vec![]);
+        // 값 · json 키 자리: 읽어 둔 값이 있으면 그것, 없으면 읽어 와서 다시 연다
+        if let Some(h) = meta.as_deref().and_then(|m| complete::hint_at(m, &stmt, &before, &db, kind == DbKind::Mysql)) {
+            let after = lines.get(row).and_then(|l| l.chars().nth(col));
+            let key = format!("{target}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}", h.schema, h.table, h.column, h.path.join("\u{2}"), h.keys);
+            match self.hints.get(&key).filter(|(at, _)| at.elapsed() < std::time::Duration::from_secs(120)) {
+                Some((_, hints)) => {
+                    let items = complete::hint_items(&h, hints, h.quoted && after != Some('\''));
+                    let prefix = h.typed.chars().count();
+                    c.complete = if items.is_empty() || !(explicit || h.quoted) { None } else { Some(Completion { items, sel: 0, prefix }) };
+                }
+                None => {
+                    c.complete = None;
+                    if self.hints_loading.insert(key.clone()) {
+                        let st = self.state.clone();
+                        let req = qurry_core::hints::HintReq { schema: h.schema, table: h.table, column: h.column, path: h.path, keys: h.keys };
+                        self.spawn(async move { st.column_hints(target, req).await.map_err(err) }, move |a, r| {
+                            a.hints_loading.remove(&key);
+                            match r {
+                                Ok(v) => {
+                                    a.hints.insert(key, (std::time::Instant::now(), v));
+                                    a.update_completion(explicit);
+                                }
+                                Err(e) => a.status = format!("Value suggestions: {e}"),
+                            }
+                        });
+                    }
+                }
+            }
+            return;
+        }
         let (prefix, items) = complete::suggest(meta.as_deref().unwrap_or(&empty), &stmt, &before, &db);
         // 자동으로 열 때는 '.' 뒤이거나 단어를 치는 중일 때만
         let keep = explicit || prefix > 0 || before.ends_with('.');

@@ -586,6 +586,12 @@ pub async fn completion_meta(state: State<'_, AppState>, id: String) -> AppResul
     state.completion_meta(id).await
 }
 
+/// 자동완성 값 추천: 컬럼 값 · json 키 (앞쪽 일부 행, 많이 나온 순)
+#[tauri::command]
+pub async fn column_hints(state: State<'_, AppState>, id: String, req: qurry_core::hints::HintReq) -> AppResult<Vec<qurry_core::hints::Hint>> {
+    state.column_hints(id, req).await
+}
+
 /// 열어 둔 탭·화면 분할 (workspace-gui.json). 다시 켜면 그대로
 #[tauri::command]
 pub fn load_workspace(state: State<'_, AppState>) -> Option<serde_json::Value> {

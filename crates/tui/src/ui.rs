@@ -561,6 +561,7 @@ fn draw_completion(f: &mut Frame, cmp: &crate::app::Completion, x: u16, y: u16) 
                 ItemKind::Table => ("▦", C_DB),
                 ItemKind::Schema => ("◇", Color::Gray),
                 ItemKind::Keyword => ("k", C_KEYWORD),
+                ItemKind::Value => ("=", crate::kit::NUMBER),
             };
             ListItem::new(Row::new(format!("{:<lw$} ", it.label)).lead(icon(glyph, color)).hint(it.detail.clone()).selected(i == cmp.sel, true).line())
         })
