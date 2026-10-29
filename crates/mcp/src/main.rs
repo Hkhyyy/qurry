@@ -368,22 +368,14 @@ impl Server {
                 if stmts.is_empty() {
                     return Err("statements is empty".into());
                 }
+                // Allow-list (guard::mcp_execute_violation): INSERT, UPDATE / DELETE with WHERE and their MongoDB / vector DB / Redis equivalents
                 for s in &stmts {
-                    // One statement per element (if one string holds several statements, the server runs them all)
-                    if kind != DbKind::Redis && sql::split_statements(s, kind).len() > 1 {
-                        return Err(format!("Put one statement in each item of statements: {s}"));
-                    }
-                    // Statements the app would ask to confirm: MCP has nobody to ask
-                    if let Some(why) = qurry_core::guard::unsafe_statement(s, kind) {
-                        return Err(format!("{why} — refused over MCP. Ask the user to run it in Qurry: {s}"));
-                    }
-                    if kind == DbKind::Redis
-                        && let Some(why) = qurry_core::guard::redis_mcp_write_violation(s)
-                    {
-                        return Err(why);
+                    if let Some(why) = qurry_core::guard::mcp_execute_violation(s, kind) {
+                        return Err(format!("{why}: {s}"));
                     }
                 }
-                let n = st.execute_batch(t, stmts.clone(), false).await.map_err(e)?;
+                // PostgreSQL / MySQL: each item as a prepared statement, so the server itself refuses more than one statement
+                let n = st.execute_batch_prepared(t, stmts.clone()).await.map_err(e)?;
                 Ok(json!({ "statements": stmts.len(), "rows_affected": n }))
             }
             "list_rag_indexes" => {

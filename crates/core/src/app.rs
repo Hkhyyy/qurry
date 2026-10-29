@@ -395,8 +395,11 @@ impl AppState {
                     return Err(AppError::Msg(why));
                 }
                 // Commands that return a whole value: check the size before reading
+                // GETRANGE with a bounded range reads at most that much
+                let range_small = cmd == "GETRANGE" && matches!((rest.get(1).and_then(|a| a.parse::<i64>().ok()), rest.get(2).and_then(|a| a.parse::<i64>().ok())), (Some(a), Some(b)) if a >= 0 && b >= a && b - a < REDIS_READ_MAX_BYTES);
                 let keys: &[String] = match cmd.as_str() {
                     "GET" | "JSON.GET" => rest.get(..1).unwrap_or(&[]),
+                    "GETRANGE" if !range_small => rest.get(..1).unwrap_or(&[]),
                     "MGET" => &rest,
                     "JSON.MGET" => rest.split_last().map(|(_, k)| k).unwrap_or(&[]),
                     _ => &[],
@@ -405,6 +408,15 @@ impl AppState {
                     let n = crate::redisdb::memory_usage(&m, k.as_bytes()).await?;
                     if n > REDIS_READ_MAX_BYTES {
                         return Err(AppError::Msg(format!("{k} is {} MB — too big to read here (use GETRANGE, or redis_get for a preview)", n >> 20)));
+                    }
+                }
+                // HGET / HMGET: one hash field can be big too
+                if matches!(cmd.as_str(), "HGET" | "HMGET") && rest.len() > 1 {
+                    for f in &rest[1..] {
+                        let n = crate::redisdb::field_len(&m, rest[0].as_bytes(), f.as_bytes()).await?;
+                        if n > REDIS_READ_MAX_BYTES {
+                            return Err(AppError::Msg(format!("{}.{f} is {} MB — too big to read here", rest[0], n >> 20)));
+                        }
                     }
                 }
                 crate::redisdb::run(&m, &sql, limit).await
@@ -810,6 +822,15 @@ impl AppState {
 
     /// Statements in one transaction. exact_one = saving table edits (roll back everything unless each UPDATE/DELETE hits exactly 1 row)
     pub async fn execute_batch(&self, id: String, statements: Vec<String>, exact_one: bool) -> AppResult<u64> {
+        self.execute_batch_with(id, statements, exact_one, false).await
+    }
+
+    /// MCP execute: like execute_batch, but PostgreSQL / MySQL run each statement as a prepared statement (one statement per item, enforced by the server)
+    pub async fn execute_batch_prepared(&self, id: String, statements: Vec<String>) -> AppResult<u64> {
+        self.execute_batch_with(id, statements, false, true).await
+    }
+
+    async fn execute_batch_with(&self, id: String, statements: Vec<String>, exact_one: bool, prepared: bool) -> AppResult<u64> {
         for st in &statements {
             self.check_read_only(&id, st)?;
         }
@@ -825,8 +846,8 @@ impl AppState {
             }
         }
         let r = match ensure_pool(self, &id).await? {
-            Pool::Pg(pg) => session::execute_batch(&pg, &statements, exact_one).await,
-            Pool::My(my) => crate::mysql::execute_batch(&my, &statements, exact_one).await,
+            Pool::Pg(pg) => session::execute_batch_with(&pg, &statements, exact_one, prepared).await,
+            Pool::My(my) => crate::mysql::execute_batch_with(&my, &statements, exact_one, prepared).await,
             Pool::Redis(m, _) => {
                 for st in &statements {
                     crate::redisdb::run(&m, st, 1).await?;

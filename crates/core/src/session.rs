@@ -392,10 +392,16 @@ pub async fn cancel(pool: &PgPool, pid: i32) -> AppResult<bool> {
 /// Apply data edits in one transaction. If any fails, roll back everything.
 /// Statements in one transaction (roll back everything if any fails). exact_one = table edits: each UPDATE/DELETE must hit exactly 1 row
 pub async fn execute_batch(pool: &PgPool, statements: &[String], exact_one: bool) -> AppResult<u64> {
+    execute_batch_with(pool, statements, exact_one, false).await
+}
+
+/// prepared = each statement as a prepared statement (extended protocol): the server refuses more than one statement per item (MCP)
+pub async fn execute_batch_with(pool: &PgPool, statements: &[String], exact_one: bool, prepared: bool) -> AppResult<u64> {
     let mut tx = pool.begin().await?;
     let mut affected = 0;
     for st in statements {
-        let n = tx.execute(st.as_str()).await.map_err(|e| AppError::Msg(format!("{e}\n→ {st}")))?.rows_affected();
+        let r = if prepared { sqlx::query(st).execute(&mut *tx).await } else { tx.execute(st.as_str()).await };
+        let n = r.map_err(|e| AppError::Msg(format!("{e}\n→ {st}")))?.rows_affected();
         check_exact_one(st, n, exact_one)?;
         affected += n;
     }
@@ -421,6 +427,18 @@ mod tests {
     use crate::store::{ConnectionConfig, DbKind};
 
     /// Test DB: local PostgreSQL by default. Override with QURRY_TEST_PG=host:port:user:db (e.g. a container)
+    /// MCP execute path: the server refuses two statements in one prepared item (nothing runs)
+    #[tokio::test]
+    #[ignore]
+    async fn prepared_batch_refuses_multiple_statements() {
+        let p = pool().await;
+        sqlx::raw_sql("drop table if exists qurry_prep; create table qurry_prep (a int)").execute(&p).await.unwrap();
+        let e = execute_batch_with(&p, &["insert into qurry_prep values (1); drop table qurry_prep".into()], false, true).await.unwrap_err().to_string();
+        assert!(e.contains("multiple commands"), "{e}");
+        assert_eq!(execute_batch_with(&p, &["insert into qurry_prep values (1)".into()], false, true).await.unwrap(), 1);
+        sqlx::raw_sql("drop table qurry_prep").execute(&p).await.unwrap();
+    }
+
     async fn pool() -> PgPool {
         let env = std::env::var("QURRY_TEST_PG").ok();
         let part = |i: usize, d: String| env.as_ref().and_then(|e| e.split(':').nth(i).map(String::from)).unwrap_or(d);

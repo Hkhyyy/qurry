@@ -5137,6 +5137,7 @@ dependencies = [
  "csv",
  "dirs 6.0.0",
  "futures",
+ "json5",
  "keyring",
  "minisign-verify 0.2.5",
  "qurry-driver",

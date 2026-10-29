@@ -840,6 +840,12 @@ pub async fn memory_usage(m: &RedisConn, key: &[u8]) -> AppResult<i64> {
     Ok(v.unwrap_or(0))
 }
 
+/// Length of one hash field's value (bytes, 0 if missing)
+pub async fn field_len(m: &RedisConn, key: &[u8], field: &[u8]) -> AppResult<i64> {
+    let mut mgr = m.clone();
+    redis::cmd("HSTRLEN").arg(key).arg(field).query_async(&mut mgr).await.map_err(err)
+}
+
 pub async fn key_detail(m: &RedisConn, key: &str, limit: usize) -> AppResult<KeyDetail> {
     let mut mgr = m.clone();
     let k = key.as_bytes();
@@ -1008,6 +1014,11 @@ mod tests {
         assert!(e.contains("too big"), "{e}");
         assert!(st.run_read_only("rd::db4".into(), "MGET qurry:small qurry:big".into(), 10).await.is_err());
         assert!(st.run_read_only("rd::db4".into(), "GET qurry:small".into(), 10).await.is_ok());
+        assert!(st.run_read_only("rd::db4".into(), "GETRANGE qurry:big 0 -1".into(), 10).await.is_err());
+        assert!(st.run_read_only("rd::db4".into(), "GETRANGE qurry:big 0 99".into(), 10).await.is_ok());
+        let _: () = redis::cmd("HSET").arg("qurry:h").arg("f").arg(&big).query_async(&mut c).await.unwrap();
+        assert!(st.run_read_only("rd::db4".into(), "HGET qurry:h f".into(), 10).await.is_err());
+        let _: () = redis::cmd("DEL").arg("qurry:h").query_async(&mut c).await.unwrap();
         let d = key_detail(m, "qurry:big", 10).await.unwrap();
         assert!(d.truncated && d.value.as_str().unwrap().len() as i64 == STRING_PREVIEW_MAX);
         let _: () = redis::cmd("DEL").arg("qurry:big").arg("qurry:small").query_async(&mut c).await.unwrap();
