@@ -166,7 +166,8 @@ pub struct ConnOptions {
     /// Production: statements that change data show the affected row count and ask for confirmation
     #[serde(default)]
     pub confirm_changes: bool,
-    /// A remote MySQL with no SSL setting may connect in plain text if it can't do TLS (old servers · trusted networks)
+    /// A remote MySQL with no SSL setting may connect in plain text if it can't do TLS (old servers · trusted networks).
+    /// This and mcp are saved in connection-access.json, not connections.json (Store::list)
     #[serde(default)]
     pub allow_plaintext: bool,
     /// Whether it's visible to the MCP server: "off" | "read" | "write" (None = source created before this was set, ConnectionConfig::mcp_access)
@@ -349,6 +350,17 @@ pub struct Store {
     path: PathBuf,
 }
 
+/// Per-source settings that older apps (0.2.12 and before) don't know. They live in connection-access.json (by connection id),
+/// because an older app saving connections.json drops fields it doesn't know — an MCP Off source would be shared again
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct Access {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mcp: Option<String>,
+    #[serde(default)]
+    allow_plaintext: bool,
+}
+
 impl Store {
     pub fn new(dir: PathBuf) -> Self {
         Self {
@@ -360,7 +372,32 @@ impl Store {
         if !self.path.exists() {
             return Ok(Vec::new());
         }
-        Ok(serde_json::from_str(&fs::read_to_string(&self.path)?)?)
+        let mut all: Vec<ConnectionConfig> = serde_json::from_str(&fs::read_to_string(&self.path)?)?;
+        // The side file wins; without an entry, what connections.json has (written by builds before the side file)
+        let access = self.access()?;
+        for c in &mut all {
+            if let Some(a) = access.get(&c.id) {
+                c.options.allow_plaintext = a.allow_plaintext;
+                if a.mcp.is_some() {
+                    c.options.mcp = a.mcp.clone();
+                }
+            }
+        }
+        Ok(all)
+    }
+
+    fn access_path(&self) -> PathBuf {
+        self.path.with_file_name("connection-access.json")
+    }
+
+    /// Damaged: an error, not empty (empty would share Off sources with MCP again)
+    fn access(&self) -> AppResult<BTreeMap<String, Access>> {
+        let path = self.access_path();
+        match fs::read_to_string(&path) {
+            Ok(s) => serde_json::from_str(&s).map_err(|e| crate::error::AppError::Msg(format!("{} is damaged ({e}) — restore it from a backup, or move it away and set MCP access and \"Allow unencrypted connection\" again for each data source", path.display()))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
+            Err(e) => Err(e.into()),
+        }
     }
 
     pub fn get(&self, id: &str) -> AppResult<Option<ConnectionConfig>> {
@@ -580,8 +617,18 @@ impl Store {
         if let Some(dir) = self.path.parent() {
             fs::create_dir_all(dir)?;
         }
+        // The side file first: entries of deleted sources go with it
+        let access: BTreeMap<_, _> = all.iter().map(|c| (c.id.clone(), Access { mcp: c.options.mcp.clone(), allow_plaintext: c.options.allow_plaintext })).collect();
+        crate::secrets::write_private(&self.access_path(), serde_json::to_string_pretty(&access)?.as_bytes())?;
+        let mut json = serde_json::to_value(all)?;
+        for c in json.as_array_mut().into_iter().flatten() {
+            if let Some(o) = c.get_mut("options").and_then(|o| o.as_object_mut()) {
+                o.remove("mcp");
+                o.remove("allowPlaintext");
+            }
+        }
         // Contains host·user·SSH key paths → owner-only read
-        crate::secrets::write_private(&self.path, serde_json::to_string_pretty(all)?.as_bytes())?;
+        crate::secrets::write_private(&self.path, serde_json::to_string_pretty(&json)?.as_bytes())?;
         Ok(())
     }
 }
@@ -736,6 +783,46 @@ mod tests {
         assert!(p.contains("unencrypted") && !p.contains("MCP"), "{p}");
         b.import_from(&file).unwrap();
         assert_eq!(b.get("3").unwrap().unwrap().mcp_access(true), McpAccess::Off);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// An older app rewriting connections.json without the newer fields doesn't lose MCP Off or "Allow unencrypted"
+    #[test]
+    fn older_app_rewrite_keeps_access_settings() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        let s = Store::new(base.clone());
+        let mut c = conn("1", "DEV");
+        c.options.mcp = Some("off".into());
+        c.options.allow_plaintext = true;
+        s.save(&c).unwrap();
+        s.save(&conn("2", "other")).unwrap();
+        let text = std::fs::read_to_string(base.join("connections.json")).unwrap();
+        assert!(!text.contains("allowPlaintext") && !text.contains("\"mcp\""), "{text}");
+        // What an older app writes back: the fields it doesn't know are gone
+        let mut old: serde_json::Value = serde_json::from_str(&text).unwrap();
+        old[0]["name"] = "renamed by an older app".into();
+        std::fs::write(base.join("connections.json"), old.to_string()).unwrap();
+        let got = s.get("1").unwrap().unwrap();
+        assert_eq!(got.name, "renamed by an older app");
+        assert_eq!(got.mcp_access(true), McpAccess::Off);
+        assert!(got.options.allow_plaintext);
+        // Data saved by builds before the side file: connections.json is used when the side file has no entry
+        std::fs::remove_file(base.join("connection-access.json")).unwrap();
+        old[0]["options"]["mcp"] = "read".into();
+        old[0]["options"]["allowPlaintext"] = true.into();
+        std::fs::write(base.join("connections.json"), old.to_string()).unwrap();
+        let got = s.get("1").unwrap().unwrap();
+        assert_eq!((got.options.mcp.as_deref(), got.options.allow_plaintext), (Some("read"), true));
+        // Deleting a source removes its entry
+        s.save(&got).unwrap();
+        s.delete("1").unwrap();
+        let side = std::fs::read_to_string(base.join("connection-access.json")).unwrap();
+        assert!(!side.contains("\"1\"") && side.contains("\"2\""), "{side}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(base.join("connection-access.json")).unwrap().permissions().mode() & 0o777, 0o600);
+        }
         let _ = std::fs::remove_dir_all(&base);
     }
 
