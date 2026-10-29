@@ -372,9 +372,13 @@ impl AppState {
             }
             Pool::My(p) => {
                 let mut conn = p.acquire().await?;
-                conn.execute(READ_ONLY_TIMEOUT_MY).await?;
-                conn.execute("START TRANSACTION READ ONLY").await?;
-                let r = crate::mysql::run_read_only_on(&mut conn, &sql, limit).await;
+                // 시간 제한은 실패해도 풀에 남지 않게 늘 되돌린다
+                let r = async {
+                    conn.execute(READ_ONLY_TIMEOUT_MY).await?;
+                    conn.execute("START TRANSACTION READ ONLY").await?;
+                    crate::mysql::run_read_only_on(&mut conn, &sql, limit).await
+                }
+                .await;
                 let _ = conn.execute("ROLLBACK").await;
                 let _ = conn.execute("SET SESSION max_execution_time = 0").await;
                 r
@@ -443,9 +447,12 @@ impl AppState {
             }
             Pool::My(p) => {
                 let mut conn = p.acquire().await?;
-                conn.execute(READ_ONLY_TIMEOUT_MY).await?;
-                conn.execute("START TRANSACTION READ ONLY").await?;
-                let r = crate::mysql::export_on(&mut conn, sql, out, true).await;
+                let r = async {
+                    conn.execute(READ_ONLY_TIMEOUT_MY).await?;
+                    conn.execute("START TRANSACTION READ ONLY").await?;
+                    crate::mysql::export_on(&mut conn, sql, out, true).await
+                }
+                .await;
                 let _ = conn.execute("ROLLBACK").await;
                 let _ = conn.execute("SET SESSION max_execution_time = 0").await;
                 r?

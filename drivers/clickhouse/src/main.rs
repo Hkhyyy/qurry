@@ -13,6 +13,8 @@ struct Ch {
     read_only: bool,
     /// 지금 쿼리는 읽기만 (Read-only Data Source 또는 MCP 읽기): 서버도 readonly=2 로 막는다
     ro: bool,
+    /// 사용자 프로필이 이미 readonly (그러면 readonly 를 보내면 오류다: 서버가 이미 막는다)
+    server_ro: bool,
 }
 
 fn lit(s: &str) -> String {
@@ -34,7 +36,7 @@ impl Ch {
             req = req.query(*k, v);
         }
         // readonly=2: 읽기만, 이 요청의 설정 (max_result_rows …) 은 바꿀 수 있다
-        if self.ro {
+        if self.ro && !self.server_ro {
             req = req.query("readonly", "2");
         }
         let mut res = req.config().http_status_as_error(false).build().send(sql).map_err(|e| e.to_string())?;
@@ -85,8 +87,11 @@ impl Driver for Ch {
                 // 리다이렉트는 따라가지 않는다 (X-ClickHouse-Key 가 다른 서버로 가지 않게)
                 self.agent = Some(ureq::Agent::config_builder().timeout_connect(Some(std::time::Duration::from_secs(10))).max_redirects(0).build().into());
                 self.read_only = c.options.get("readOnly").and_then(Value::as_bool).unwrap_or(false);
-                self.ro = self.read_only;
+                // 최소 권한 사용자는 프로필이 이미 readonly=1 이다: 먼저 보고 (readonly 를 보내지 않은 채로) 정한다
+                self.ro = false;
                 self.query("SELECT 1", 1)?;
+                self.server_ro = self.rows("SELECT getSetting('readonly')").ok().and_then(|r| r.first().and_then(|x| x.first()).map(|v| v.as_str().map(|s| s != "0").unwrap_or_else(|| v.as_u64().is_some_and(|n| n > 0)))).unwrap_or(false);
+                self.ro = self.read_only;
                 ok(Value::Null)
             }
             "query" => {

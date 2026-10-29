@@ -242,7 +242,7 @@ impl SecretFile {
         if let Ok(pt) = cipher.decrypt(Nonce::from_slice(nonce), Payload { msg: ct, aad: name.as_bytes() }) {
             return String::from_utf8(pt).ok().map(|s| (s, false));
         }
-        // 예전 형식 (AAD 없음): 읽으면 바로 새 형식으로 다시 저장한다
+        // 예전 형식 (AAD 없음): 읽으면 바로 새 형식으로 다시 저장한다. 0.4 에서 이 폴백을 뺀다 (그때까지 쓴 항목은 다 바뀌어 있다)
         String::from_utf8(cipher.decrypt(Nonce::from_slice(nonce), ct).ok()?).ok().map(|s| (s, true))
     }
 

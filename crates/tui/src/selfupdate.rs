@@ -81,7 +81,10 @@ pub async fn install(quiet: bool) -> std::io::Result<Outcome> {
     if let Some(note) = source_build_note(&exe) {
         return Ok(Outcome::Skipped(note));
     }
-    let rel = update::latest_release().await.map_err(err)?;
+    // GitHub 응답의 글을 터미널에 찍기 전에 제어 문자를 뺀다
+    let mut rel = update::latest_release().await.map_err(err)?;
+    rel.version = rel.version.chars().filter(|c| !crate::ui::is_unsafe_char(*c)).collect();
+    rel.url = rel.url.chars().filter(|c| !crate::ui::is_unsafe_char(*c)).collect();
     if !update::is_newer(cur, &rel.version) {
         return Ok(Outcome::UpToDate);
     }
