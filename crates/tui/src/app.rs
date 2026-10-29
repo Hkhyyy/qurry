@@ -838,6 +838,17 @@ impl App {
         } else {
             self.tree.expanded.insert(n.key.clone());
             self.load_children(n.clone());
+            // 접속할 때 평문으로 붙었으면 상태줄에 알린다 (GUI 와 같은 말)
+            if matches!(n.kind, NodeKind::Conn) && matches!(self.kind_of(&n.conn), DbKind::Postgres | DbKind::Mysql) {
+                let (st, id) = (self.state.clone(), n.conn.clone());
+                self.spawn(async move { st.connect(id).await.map_err(|e| e.to_string()) }, |a, r| {
+                    if let Ok(v) = r
+                        && let Some((_, note)) = v.split_once(" — ⚠")
+                    {
+                        a.status = format!("⚠{note}");
+                    }
+                });
+            }
         }
         self.tree.clamp();
     }
@@ -2310,6 +2321,8 @@ impl App {
                 f("Database", c.database.clone(), FieldKind::Text),
                 f("Read-only", if c.read_only { "on" } else { "off" }.into(), FieldKind::Toggle),
                 f("Production", if c.options.confirm_changes { "on" } else { "off" }.into(), FieldKind::Toggle),
+                // MySQL: TLS 를 못 하는 예전 원격 서버에 평문으로 붙어도 되는지
+                f("Unencrypted OK", if c.options.allow_plaintext { "on" } else { "off" }.into(), FieldKind::Toggle),
                 // qurry-mcp (AI 도구) 에 보이는지. 새 소스는 off 로 시작한다
                 f("MCP", if edit.is_some() { mcp_label(&c) } else { "off" }.into(), ch(&["off", "read", "write"])),
                 f("SSH tunnel", if ssh.enabled { "on" } else { "off" }.into(), FieldKind::Toggle),
@@ -2362,6 +2375,7 @@ impl App {
         c.name = if v("Name").trim().is_empty() { format!("{}@{}", c.user, c.host) } else { v("Name").trim().into() };
         c.read_only = v("Read-only") == "on";
         c.options.confirm_changes = v("Production") == "on";
+        c.options.allow_plaintext = v("Unencrypted OK") == "on";
         // 보이는 값을 그대로 저장한다 (정하지 않은 채로 두면 Production 을 끈 뒤 저절로 열린다)
         c.options.mcp = Some(v("MCP"));
         // custom = GUI 에서 고른 프리셋 밖의 색: 그대로 둔다

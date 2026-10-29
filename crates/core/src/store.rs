@@ -166,6 +166,9 @@ pub struct ConnOptions {
     /// Production: 데이터를 바꾸는 문장은 바뀔 행 수를 보여 주고 확인을 받는다
     #[serde(default)]
     pub confirm_changes: bool,
+    /// SSL 을 정하지 않은 원격 MySQL 이 TLS 를 못 하면 평문으로 붙어도 된다 (예전 서버 · 믿는 네트워크)
+    #[serde(default)]
+    pub allow_plaintext: bool,
     /// MCP 서버에 보이는지: "off" | "read" | "write" (None = 정하기 전에 만든 소스, ConnectionConfig::mcp_access)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp: Option<String>,
