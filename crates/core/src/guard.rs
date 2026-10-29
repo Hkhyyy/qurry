@@ -73,11 +73,11 @@ fn scan(sql: &str, kind: DbKind) -> Scan {
         // String / quoted identifier: one whole token (identifiers can be used as names, so they stay as words)
         if c == b'\'' || c == b'"' || c == b'`' {
             // In PG E'…', \ is an escape. Not an e at the end of a word like name' (same rules as sql::split_statements)
-            let e_string = kind == DbKind::Postgres && c == b'\'' && crate::sql::is_e_string(b, i);
+            let e_string = crate::sql::e_strings(kind) && c == b'\'' && crate::sql::is_e_string(b, i);
             let mut j = i + 1;
             while j < n {
                 // \ inside a MySQL backtick name is not an escape
-                if ((backslash && c != b'`') || e_string) && b[j] == b'\\' {
+                if ((backslash && crate::sql::escapes_in(kind, c)) || e_string) && b[j] == b'\\' {
                     j += 2;
                     continue;
                 }
@@ -97,7 +97,7 @@ fn scan(sql: &str, kind: DbKind) -> Scan {
             continue;
         }
         // SQL Server [name] (]] is a single ])
-        if c == b'[' && kind == DbKind::Mssql {
+        if c == b'[' && crate::sql::bracket_names(kind) {
             let mut j = i + 1;
             while j < n && !(b[j] == b']' && !(j + 1 < n && b[j + 1] == b']')) {
                 j += if b[j] == b']' { 2 } else { 1 };
@@ -106,7 +106,7 @@ fn scan(sql: &str, kind: DbKind) -> Scan {
             i = (j + 1).min(n);
             continue;
         }
-        if c == b'$' && kind == DbKind::Postgres {
+        if c == b'$' && crate::sql::dollar_quotes(kind) && crate::sql::dollar_opens(b, i) {
             let rest = &sql[i..];
             if let Some(te) = rest[1..].find('$').map(|j| j + 2) {
                 let tag = &rest[..te];
@@ -275,6 +275,8 @@ const SIDE_EFFECT_FUNCS: &[&str] = &[
     "pg_stat_reset_single_function_counters", "pg_stat_reset_slru", "pg_stat_reset_replication_slot", "pg_stat_reset_subscription_stats",
     "pg_drop_replication_slot", "pg_create_logical_replication_slot", "pg_create_physical_replication_slot", "pg_logical_emit_message",
     "pg_replication_origin_create", "pg_replication_origin_drop", "pg_log_backend_memory_contexts",
+    // run SQL given as a string (the name checks can't see inside it)
+    "query_to_xml", "query_to_xmlschema", "query_to_xml_and_xmlschema", "cursor_to_xml", "cursor_to_xmlschema", "ts_stat",
     // MySQL: reading server files · delays · locks
     "load_file", "sleep", "benchmark", "get_lock", "release_lock", "release_all_locks",
 ];
@@ -283,7 +285,7 @@ const SIDE_EFFECT_FUNCS: &[&str] = &[
 const MSSQL_STATEMENT_WORDS: &[&str] = &[
     "drop", "alter", "create", "exec", "execute", "truncate", "grant", "revoke", "deny", "declare", "waitfor", "backup", "restore", "kill", "use",
     "dbcc", "shutdown", "reconfigure", "bulk", "set", "begin", "commit", "rollback", "save", "checkpoint", "if", "while", "goto", "print", "raiserror", "throw",
-    "end", "disable", "enable", "receive", "send", "move", "get", "setuser", "revert", "open", "close", "fetch", "deallocate", "add", "updatetext", "writetext",
+    "end", "setuser", "revert", "open", "close", "fetch", "deallocate", "add", "updatetext", "writetext",
 ];
 /// SQL Server: functions that read other servers · files
 const MSSQL_EXTERNAL_FUNCS: &[&str] = &["openrowset", "opendatasource", "openquery"];
@@ -291,7 +293,8 @@ const MSSQL_EXTERNAL_FUNCS: &[&str] = &["openrowset", "opendatasource", "openque
 const CLICKHOUSE_EXTERNAL_FUNCS: &[&str] = &[
     "url", "urlcluster", "file", "filecluster", "s3", "s3cluster", "gcs", "azureblobstorage", "azureblobstoragecluster", "hdfs", "hdfscluster", "remote",
     "remotesecure", "cluster", "clusterallreplicas", "mysql", "postgresql", "mongodb", "redis", "sqlite", "jdbc", "odbc", "executable", "iceberg", "icebergs3",
-    "deltalake", "hudi", "input",
+    "deltalake", "hudi", "input", "icebergaz", "icebergazure", "iceberghdfs", "iceberglocal", "icebergcluster", "icebergs3cluster", "deltalakecluster",
+    "hudicluster", "hive", "arrowflight", "azureblob",
 ];
 /// DuckDB: functions that read files · URLs (MCP. The driver also opens with external access disabled — crate::SANDBOX)
 const DUCKDB_EXTERNAL_FUNCS: &[&str] = &[
@@ -336,7 +339,28 @@ pub fn read_only_violation(sql: &str, kind: DbKind, strict: bool) -> Option<Stri
         if sc.toks.get(fi).is_some_and(|t| t.quoted) {
             return Some("Read-only mode: a statement can't start with a [name] (SQL Server runs it as a procedure)".into());
         }
-        if let Some(t) = sc.toks.iter().skip(fi + 1).filter(|t| bare(t)).find(|t| MSSQL_STATEMENT_WORDS.contains(&t.text.as_str())) {
+        // CASE … END and OFFSET … ROWS FETCH NEXT are part of a SELECT. (Non-reserved words like RECEIVE or DISABLE are left to the
+        // driver, which runs reads in a transaction it always rolls back)
+        let mut case_depth = 0i32;
+        let mut prev = "";
+        let starts = sc.toks.iter().skip(fi + 1).filter(|t| bare(t)).find(|t| {
+            let w = t.text.as_str();
+            let hit = match w {
+                "case" => {
+                    case_depth += 1;
+                    false
+                }
+                "end" if case_depth > 0 => {
+                    case_depth -= 1;
+                    false
+                }
+                "fetch" => !matches!(prev, "row" | "rows"),
+                _ => MSSQL_STATEMENT_WORDS.contains(&w),
+            };
+            prev = w;
+            hit
+        });
+        if let Some(t) = starts {
             return Some(format!("Read-only mode: '{}' starts another statement (SQL Server runs the whole batch; write [{}] for a column)", t.text, t.text));
         }
     }
@@ -857,9 +881,36 @@ mod tests {
         assert!(!bad("SELECT 'it\\'s' AS a", Clickhouse));
         // SQL Server: check the following statement even if the first word is [name], more statement words
         assert!(ds("[desc] DROP TABLE dbo.orders", Mssql));
-        assert!(ds("SELECT 1 DISABLE TRIGGER ALL ON dbo.t", Mssql));
-        assert!(ds("SELECT 1 RECEIVE TOP (1) * FROM dbo.q", Mssql));
+        // DISABLE TRIGGER / RECEIVE … after a read are undone by the driver, which runs reads in a transaction it rolls back
+        assert!(ds("SELECT 1 EXEC xp_cmdshell 'whoami'", Mssql));
         assert!(!ds("SELECT [open], [close] FROM dbo.prices", Mssql));
+    }
+
+    /// Second review round (2026-10)
+    #[test]
+    fn read_only_review_round_two() {
+        use DbKind::{Clickhouse, Duckdb, Mssql, Sqlite};
+        let bad = |s: &str, k| read_only_violation(s, k, true).is_some();
+        let ds = |s: &str, k| read_only_violation(s, k, false).is_some();
+        // SQL Server: ordinary reads pass (CASE … END, OFFSET … FETCH, non-reserved column names)
+        assert!(!ds("SELECT CASE WHEN a > 0 THEN 1 ELSE 0 END AS x FROM dbo.t", Mssql));
+        assert!(!ds("SELECT * FROM dbo.t ORDER BY id OFFSET 0 ROWS FETCH NEXT 10 ROWS ONLY", Mssql));
+        assert!(!ds("SELECT get, move, send FROM dbo.t", Mssql));
+        assert!(ds("SELECT 1 END", Mssql), "END without CASE starts another statement");
+        assert!(ds("SELECT CASE WHEN 1 = 1 THEN 1 END END", Mssql));
+        assert!(ds("SELECT 1 FETCH NEXT FROM c", Mssql));
+        // PostgreSQL: $ inside an identifier doesn't open a dollar quote
+        assert_eq!(crate::sql::split_statements("SELECT 1 AS x$q$; DROP TABLE t; SELECT 1 AS y$q$", Postgres).len(), 3);
+        assert!(bad("select query_to_xml('select pg_terminate_backend(1)', true, false, '')", Postgres));
+        assert!(bad("select * from ts_stat('select 1')", Postgres));
+        // SQLite [names], DuckDB E-strings and dollar quotes
+        assert!(bad("WITH a AS (SELECT 1 AS [']) DELETE FROM t --']", Sqlite));
+        assert!(bad("SELECT E'\\''; DROP TABLE t; --'", Duckdb));
+        assert!(bad("SELECT $q$'$q$; DROP TABLE t; --'", Duckdb));
+        // ClickHouse: heredocs, \ in quoted names, more external functions
+        assert!(bad("SELECT $q$'$q$, * FROM url('http://x/', 'RawBLOB', 'x String') --'", Clickhouse));
+        assert!(bad("SELECT 1 AS `\\``, * FROM url('http://x/', 'RawBLOB', 'x String') --`", Clickhouse));
+        assert!(bad("SELECT * FROM icebergLocal('/tmp/x')", Clickhouse) && bad("SELECT * FROM hive('h', 'd', 't')", Clickhouse));
     }
 
     #[test]

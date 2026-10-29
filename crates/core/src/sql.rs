@@ -116,7 +116,41 @@ pub(crate) fn is_dollar_tag(tag: &str) -> bool {
 
 /// Whether it is PG E'…': right before ' is e/E, and before that is not a name char (name' is not)
 pub(crate) fn is_e_string(b: &[u8], i: usize) -> bool {
-    i > 0 && (b[i - 1] == b'e' || b[i - 1] == b'E') && (i < 2 || !(b[i - 2].is_ascii_alphanumeric() || b[i - 2] == b'_' || b[i - 2] >= 0x80))
+    i > 0 && (b[i - 1] == b'e' || b[i - 1] == b'E') && (i < 2 || !is_name_byte(b[i - 2]))
+}
+
+/// A byte that can continue a name (letters, digits, _, $, non-ASCII)
+pub(crate) fn is_name_byte(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c >= 0x80
+}
+
+/// Databases with E'…' strings (\ escapes inside)
+pub(crate) fn e_strings(kind: DbKind) -> bool {
+    matches!(kind, DbKind::Postgres | DbKind::Duckdb)
+}
+
+/// Databases with dollar-quoted strings ($$…$$, $tag$…$tag$; ClickHouse calls them heredocs)
+pub(crate) fn dollar_quotes(kind: DbKind) -> bool {
+    matches!(kind, DbKind::Postgres | DbKind::Duckdb | DbKind::Clickhouse)
+}
+
+/// A $ at i can open a dollar quote: not in the middle of a name (x$q$ is one identifier)
+pub(crate) fn dollar_opens(b: &[u8], i: usize) -> bool {
+    i == 0 || !is_name_byte(b[i - 1])
+}
+
+/// Databases where [name] is a quoted identifier
+pub(crate) fn bracket_names(kind: DbKind) -> bool {
+    matches!(kind, DbKind::Mssql | DbKind::Sqlite)
+}
+
+/// Whether \ escapes inside this quote character (ClickHouse also escapes inside `names` and "names", MySQL only in strings)
+pub(crate) fn escapes_in(kind: DbKind, quote: u8) -> bool {
+    match kind {
+        DbKind::Clickhouse => true,
+        DbKind::Mysql => quote != b'`',
+        _ => false,
+    }
 }
 
 pub fn split_statements(text: &str, kind: DbKind) -> Vec<(usize, usize)> {
@@ -179,11 +213,11 @@ pub fn split_statements(text: &str, kind: DbKind) -> Vec<(usize, usize)> {
         }
         if c == b'\'' || c == b'"' || c == b'`' {
             // In PG E'…' strings \ is an escape
-            let e_string = kind == DbKind::Postgres && c == b'\'' && is_e_string(b, i);
+            let e_string = e_strings(kind) && c == b'\'' && is_e_string(b, i);
             let mut j = i + 1;
             while j < n {
                 // \ inside MySQL backtick names is not an escape
-                if ((backslash && c != b'`') || e_string) && b[j] == b'\\' {
+                if ((backslash && escapes_in(kind, c)) || e_string) && b[j] == b'\\' {
                     j += 2;
                     continue;
                 }
@@ -199,7 +233,16 @@ pub fn split_statements(text: &str, kind: DbKind) -> Vec<(usize, usize)> {
             i = (j + 1).min(n);
             continue;
         }
-        if c == b'$' && kind == DbKind::Postgres {
+        // [name] (]] is one ])
+        if c == b'[' && bracket_names(kind) {
+            let mut j = i + 1;
+            while j < n && !(b[j] == b']' && !(j + 1 < n && b[j + 1] == b']')) {
+                j += if b[j] == b']' { 2 } else { 1 };
+            }
+            i = (j + 1).min(n);
+            continue;
+        }
+        if c == b'$' && dollar_quotes(kind) && dollar_opens(b, i) {
             let rest = &text[i..];
             let tag_end = rest[1..].find('$').map(|j| j + 2);
             if let Some(te) = tag_end {
@@ -328,10 +371,10 @@ fn script_cuts(text: &str, s: usize, e: usize, kind: DbKind) -> Vec<usize> {
         line_has_code = true;
         // String · quoted name · dollar quote = one value
         if c == b'\'' || c == b'"' || c == b'`' {
-            let e_string = kind == DbKind::Postgres && c == b'\'' && is_e_string(b, i);
+            let e_string = e_strings(kind) && c == b'\'' && is_e_string(b, i);
             let mut j = i + 1;
             while j < e {
-                if ((backslash_escapes(kind) && c != b'`') || e_string) && b[j] == b'\\' {
+                if (escapes_in(kind, c) || e_string) && b[j] == b'\\' {
                     j += 2;
                     continue;
                 }
@@ -349,7 +392,7 @@ fn script_cuts(text: &str, s: usize, e: usize, kind: DbKind) -> Vec<usize> {
             prev_punct = false;
             continue;
         }
-        if c == b'$' && kind == DbKind::Postgres {
+        if c == b'$' && dollar_quotes(kind) && dollar_opens(b, i) {
             let rest = &text[i..e];
             if let Some(te) = rest[1..].find('$').map(|j| j + 2) {
                 let tag = &rest[..te];

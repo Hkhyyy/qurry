@@ -71,6 +71,13 @@ impl Driver for Sqlite {
             "query" => {
                 let sql = p.get("sql").and_then(Value::as_str).unwrap_or("");
                 let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(500) as usize;
+                // A read (MCP): SQLite itself refuses writes for this one query (PRAGMA query_only), whatever the checks missed
+                if p.get("readOnly").and_then(Value::as_bool).unwrap_or(false) {
+                    self.db()?.execute_batch("PRAGMA query_only = ON").map_err(|e| e.to_string())?;
+                    let r = self.query(sql, limit);
+                    self.db()?.execute_batch("PRAGMA query_only = OFF").map_err(|e| e.to_string())?;
+                    return ok(r?);
+                }
                 ok(self.query(sql, limit)?)
             }
             // SQLite: DB = schema (main and ATTACHed ones, excluding temp)

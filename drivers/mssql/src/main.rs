@@ -124,7 +124,7 @@ impl Driver for Ms {
                 if self.read_only || p.get("readOnly").and_then(Value::as_bool).unwrap_or(false) {
                     self.exec("SET XACT_ABORT ON; BEGIN TRANSACTION")?;
                     let r = self.query(&sql, limit);
-                    let back = self.exec("IF @@TRANCOUNT > 0 ROLLBACK");
+                    let back = self.exec("IF @@TRANCOUNT > 0 ROLLBACK; SET XACT_ABORT OFF");
                     return ok(r.and_then(|o| back.map(|_| o))?);
                 }
                 ok(self.query(&sql, limit)?)
