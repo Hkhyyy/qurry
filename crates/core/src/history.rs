@@ -1,6 +1,6 @@
-//! 쿼리 히스토리 (실행한 문장)와 스니펫 (이름 붙여 저장한 쿼리). GUI·TUI 가 같이 쓴다.
-//! 히스토리: config/history.jsonl — 한 줄에 하나씩 덧붙인다 (두 앱이 동시에 써도 서로 덮지 않게), 너무 길어지면 최근 것만 남긴다.
-//! 비밀번호는 남기지 않는다 (PASSWORD '…', IDENTIFIED BY '…', AUTH …)
+//! Query history (statements run) and snippets (named saved queries). Shared by GUI and TUI.
+//! History: config/history.jsonl — appended one per line (so the two apps don't overwrite each other when writing at once); when it gets too long, only recent entries are kept.
+//! Passwords are not recorded (PASSWORD '…', IDENTIFIED BY '…', AUTH …)
 use crate::error::AppResult;
 use std::path::{Path, PathBuf};
 
@@ -12,7 +12,7 @@ pub struct HistoryItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub database: Option<String>,
     pub sql: String,
-    /// 밀리초 (Unix)
+    /// Milliseconds (Unix)
     pub ts: i64,
 }
 
@@ -22,12 +22,12 @@ pub struct Snippet {
     pub id: String,
     pub name: String,
     pub sql: String,
-    /// 이 Data Source 에서만 보인다 (없으면 어디서나)
+    /// Shown only in this Data Source (none = everywhere)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conn_id: Option<String>,
 }
 
-/// 기록에 남기지 않을 비밀번호를 가린다 (GUI 예전 redactSecrets 와 같은 규칙)
+/// Mask passwords that shouldn't be recorded (same rules as the old GUI redactSecrets)
 pub fn redact(sql: &str) -> String {
     use std::sync::LazyLock;
     static RULES: LazyLock<Vec<(regex::Regex, &'static str)>> = LazyLock::new(|| {
@@ -48,14 +48,14 @@ pub fn redact(sql: &str) -> String {
     out
 }
 
-/// 남길 기록 수
+/// Number of entries to keep
 pub const MAX_ITEMS: usize = 5000;
-/// 한 문장은 이만큼까지만 (큰 스크립트를 통째로 남기지 않게)
+/// A single statement is kept only up to this length (so large scripts aren't stored whole)
 const MAX_SQL: usize = 64 * 1024;
 
 pub struct History {
     dir: PathBuf,
-    /// 파일의 줄 수 (처음 한 번 세고 덧붙일 때마다 더한다: 매번 파일을 다 읽지 않게. 다른 앱이 쓴 줄은 다음에 셀 때 들어간다)
+    /// Line count of the file (counted once, then incremented on each append: avoids reading the whole file each time. Lines written by the other app are included at the next count)
     lines: std::sync::Mutex<Option<usize>>,
 }
 
@@ -107,9 +107,9 @@ impl History {
             use std::os::unix::fs::OpenOptionsExt;
             opts.mode(0o600);
         }
-        // 한 번에 덧붙인다 (O_APPEND: 다른 앱이 동시에 써도 줄이 섞이지 않는다)
+        // Append in one write (O_APPEND: lines don't interleave even if the other app writes at the same time)
         opts.open(self.file())?.write_all(line.as_bytes())?;
-        // 길어졌으면 최근 것만 남긴다
+        // If it got long, keep only recent entries
         let mut n = self.lines.lock().unwrap();
         let count = match *n {
             Some(c) => c + items.len(),
@@ -141,7 +141,7 @@ impl History {
         self.append(&[item])
     }
 
-    /// 최근 것부터. conn = 그 Data Source 만, filter = 글이 들어 있는 것 (대소문자 무시). 같은 문장은 한 번만
+    /// Most recent first. conn = only that Data Source, filter = entries containing the text (case-insensitive). Identical statements only once
     pub fn list(&self, conn: Option<&str>, filter: &str, limit: usize) -> Vec<HistoryItem> {
         let f = filter.to_lowercase();
         let mut all = self.read();
@@ -164,7 +164,7 @@ impl History {
         Ok(())
     }
 
-    /// 예전 GUI 기록(localStorage)을 한 번 옮긴다. 이미 있는 id 는 건너뛴다
+    /// Migrate the old GUI history (localStorage) once. Existing ids are skipped
     pub fn import(&self, items: Vec<HistoryItem>) -> AppResult<usize> {
         let mut have: std::collections::HashSet<String> = self.read().into_iter().map(|i| i.id).collect();
         let new: Vec<HistoryItem> = items
@@ -182,14 +182,14 @@ impl History {
         std::fs::read_to_string(self.snippet_file()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
     }
 
-    /// 이름순. conn 이면 그 Data Source 것과 어디서나 쓰는 것
+    /// By name. With conn, that Data Source's snippets plus the ones usable everywhere
     pub fn snippets(&self, conn: Option<&str>) -> Vec<Snippet> {
         let mut v: Vec<Snippet> = self.all_snippets().into_iter().filter(|s| s.conn_id.is_none() || conn.is_none() || s.conn_id.as_deref() == conn).collect();
         v.sort_by_key(|s| s.name.to_lowercase());
         v
     }
 
-    /// 같은 id 면 바꾼다 (없으면 새 id). 저장한 스니펫
+    /// Replace if the id matches (new id if none). The saved snippet
     pub fn save_snippet(&self, mut s: Snippet) -> AppResult<Snippet> {
         if s.id.is_empty() {
             s.id = uuid::Uuid::new_v4().to_string();
@@ -242,10 +242,10 @@ mod tests {
         let id = h.list(Some("b"), "", 1)[0].id.clone();
         h.delete(&id).unwrap();
         assert!(h.list(Some("b"), "", 10).is_empty());
-        // 비밀번호는 남지 않는다
+        // Passwords are not recorded
         h.add("a", None, "create user x password 'pw'").unwrap();
         assert_eq!(h.list(Some("a"), "", 1)[0].sql, "create user x password '***'");
-        // 예전 기록 옮기기: 이미 있는 id 는 건너뛴다
+        // Migrating old history: existing ids are skipped
         let old = HistoryItem { id: "old1".into(), conn_id: "a".into(), database: None, sql: "select 0".into(), ts: 1 };
         assert_eq!(h.import(vec![old.clone(), old]).unwrap(), 1);
         assert_eq!(h.list(Some("a"), "select 0", 5).len(), 1);

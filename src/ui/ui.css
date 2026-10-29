@@ -1,4 +1,4 @@
-/* 공통 컴포넌트 모양 — 규격은 README.md. 값은 tokens.css 의 토큰만 쓴다 */
+/* Shared component styles — spec in README.md. Values use only tokens from tokens.css */
 
 /* ── Button ── */
 .ui-btn {
@@ -83,7 +83,7 @@
 .ui-backdrop.overlay-clear { background: transparent; }
 .ui-backdrop.overlay-light { background: rgba(0, 0, 0, 0.15); }
 .ui-backdrop.layer-dialog { z-index: var(--ui-z-dialog); }
-/* 대화상자는 위쪽에 고정: 내용 높이가 바뀌어도 제목 · 탭 자리가 움직이지 않는다 */
+/* Dialogs are pinned to the top: title · tab positions don't move when content height changes */
 .ui-backdrop.for-modal { align-items: flex-start; padding-top: 8vh; }
 .ui-modal {
   display: flex; flex-direction: column;
@@ -95,7 +95,7 @@
 .ui-modal.size-sm { width: 420px; }
 .ui-modal.size-lg { width: 760px; }
 .ui-modal.size-xl { width: 900px; }
-/* fixed: 내용이 바뀌는 창 (탭 · 미리보기 · 로딩) 은 크기를 고정한다 */
+/* fixed: windows whose content changes (tabs · preview · loading) keep a fixed size */
 .ui-modal.fixed { height: min(640px, calc(92vh - 24px)); }
 .ui-modal.fixed.size-xl { height: min(740px, calc(92vh - 24px)); }
 .ui-modal-head { flex: none; display: flex; align-items: center; gap: var(--ui-sp-3); padding: var(--ui-sp-5) var(--ui-sp-5) 0; }
@@ -158,15 +158,15 @@
 .ui-empty-title { color: var(--ui-text); font-weight: 600; margin-bottom: var(--ui-sp-2); }
 .ui-empty .ui-btn { margin-top: var(--ui-sp-4); }
 
-/* ── 가로로 늘어놓기 ── */
+/* ── Horizontal row ── */
 .ui-row { display: flex; align-items: center; gap: var(--ui-sp-4); min-width: 0; }
 .ui-row.gap-1 { gap: var(--ui-sp-1); } .ui-row.gap-2 { gap: var(--ui-sp-2); } .ui-row.gap-3 { gap: var(--ui-sp-3); } .ui-row.gap-5 { gap: var(--ui-sp-5); } .ui-row.gap-6 { gap: var(--ui-sp-6); }
 .ui-row.wrap { flex-wrap: wrap; }
 
-/* ── 넘치는 글: 줄임표 ── */
+/* ── Overflowing text: ellipsis ── */
 .ui-ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* ── 원자: 글자 · 코드 · 단축키 · 색 견본 ── */
+/* ── Atoms: text · code · shortcut · color swatch ── */
 .ui-text.tone-muted { color: var(--ui-text-muted); }
 .ui-text.tone-subtle { color: var(--ui-text-muted); opacity: 0.75; }
 .ui-text.tone-accent { color: var(--ui-accent); }
@@ -190,7 +190,7 @@ div.ui-text.ui-ellipsis, span.ui-text.ui-ellipsis { display: block; }
 .ui-swatch-custom input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; border: 0; padding: 0; }
 .ui-color-hex { width: 76px; font-family: var(--ui-font-mono); }
 
-/* ── 분자: 구역 제목 · 키 안내 · 목록 한 줄 · 상세 줄 · 메뉴 항목 · 상태 줄 칸 ── */
+/* ── Molecules: section title · key hint · list row · detail row · menu item · status bar cell ── */
 .ui-modal-body > .ui-section-title { padding-left: 0; }
 .ui-modal-body > .ui-section-title:first-child { padding-top: 0; }
 .ui-section-title { padding: var(--ui-sp-3) var(--ui-sp-3) var(--ui-sp-2); font-size: var(--ui-fs-xs); font-weight: 600; color: var(--ui-text-muted); text-transform: none; letter-spacing: 0.02em; }
@@ -231,7 +231,7 @@ div.ui-text.ui-ellipsis, span.ui-text.ui-ellipsis { display: block; }
 .ui-status-item.clickable:hover { color: var(--ui-text); background: var(--ui-hover); }
 .ui-status-item.accent { color: var(--ui-accent); }
 
-/* ── 유기체: 목록 · 상세 목록 · 메뉴 · 팝오버 · 작은 표 ── */
+/* ── Organisms: list · detail list · menu · popover · small table ── */
 .ui-list { overflow: auto; padding: var(--ui-sp-1); }
 .ui-list.boxed { background: var(--ui-bg); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); }
 .ui-detail-list { margin-top: var(--ui-sp-4); border: 1px solid var(--ui-border); border-radius: var(--ui-radius-md); overflow: hidden; }
@@ -253,7 +253,7 @@ div.ui-text.ui-ellipsis, span.ui-text.ui-ellipsis { display: block; }
 .ui-table .muted { color: var(--ui-text-muted); }
 .ui-table tbody tr:hover td { background: var(--ui-hover); }
 
-/* ── 찾기 칸 ── */
+/* ── Search field ── */
 .ui-search { position: relative; display: flex; align-items: center; }
 .ui-search .ui-input { flex: 1; padding-left: 26px; }
 .ui-search-glass { position: absolute; left: var(--ui-sp-3); color: var(--ui-text-muted); pointer-events: none; }
@@ -264,14 +264,14 @@ div.ui-text.ui-ellipsis, span.ui-text.ui-ellipsis { display: block; }
 .ui-tabs.size-sm { gap: var(--ui-sp-1); margin-bottom: 0; border-bottom: none; }
 .ui-tabs.size-sm .ui-tab { padding: var(--ui-sp-2) var(--ui-sp-3) var(--ui-sp-2); }
 
-/* ── 진행 막대 · 돌기 ── */
+/* ── Progress bar · spinner ── */
 .ui-progress { position: relative; flex: none; height: 6px; border-radius: 3px; background: var(--ui-border); overflow: hidden; }
 .ui-progress > span { position: absolute; inset: 0 auto 0 0; background: var(--ui-accent); border-radius: 3px; transition: width 0.2s; }
 .ui-progress.busy > span { width: 30%; animation: ui-busy 1.2s ease-in-out infinite; }
 @keyframes ui-busy { 0% { left: -30%; } 100% { left: 100%; } }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ── 이니셜 · 세로 막대 칸 ── */
+/* ── Initials · vertical bar cell ── */
 .ui-avatar { flex: none; display: flex; align-items: center; justify-content: center; font-size: var(--ui-fs-sm); font-weight: 600; color: var(--ui-text); border: 1px solid var(--ui-border); border-radius: 8px; }
 .ui-avatar.active { color: var(--ui-text-on-accent); background: var(--ui-accent); border-color: var(--ui-accent); }
 .ui-rail-item { display: flex; flex-direction: column; align-items: center; gap: var(--ui-sp-1); width: 46px; padding: var(--ui-sp-2) 0; color: var(--ui-text-muted); background: none; border: none; border-radius: var(--ui-radius-md); cursor: pointer; }
@@ -280,7 +280,7 @@ div.ui-text.ui-ellipsis, span.ui-text.ui-ellipsis { display: block; }
 .ui-rail-label { max-width: 46px; font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-node .node-trailing { margin-left: auto; padding-left: var(--ui-sp-3); flex: none; font-size: var(--ui-fs-xs); color: var(--ui-text-muted); }
 
-/* ── 탭 줄 ── */
+/* ── Tab bar ── */
 .ui-tab-strip { display: flex; align-items: stretch; min-width: 0; }
 .ui-tab-strip-scroll { flex: 1; min-width: 0; display: flex; align-items: stretch; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .ui-tab-strip-scroll::-webkit-scrollbar { display: none; }

@@ -1,5 +1,5 @@
-//! Qurry 드라이버: Oracle. 실행할 때 Oracle Instant Client 가 필요하다 (ODPI-C 가 libclntsh 를 연다).
-//! database = 서비스 이름 (FREEPDB1, ORCLPDB1 …), 스키마 = 사용자. 자동 커밋
+//! Qurry driver: Oracle. Requires Oracle Instant Client at runtime (ODPI-C opens libclntsh).
+//! database = service name (FREEPDB1, ORCLPDB1 …), schema = user. Autocommit
 use oracle::sql_type::OracleType;
 use oracle::{Connection, InitParams};
 use qurry_driver::{Column, ConnectParams, Driver, QueryOut, ok, params, serve};
@@ -20,7 +20,7 @@ fn numeric(t: &OracleType) -> bool {
     matches!(t, OracleType::Number(..) | OracleType::Float(_) | OracleType::BinaryFloat | OracleType::BinaryDouble | OracleType::Int64 | OracleType::UInt64)
 }
 
-/// Instant Client 위치: 설정 → ORACLE_CLIENT_LIB_DIR → OCI_LIB_DIR → (없으면 시스템 기본 경로)
+/// Instant Client location: settings → ORACLE_CLIENT_LIB_DIR → OCI_LIB_DIR → (otherwise the system default path)
 fn init_client(dir: Option<&str>) -> Result<(), String> {
     let dir = dir.map(String::from).or_else(|| std::env::var("ORACLE_CLIENT_LIB_DIR").ok()).or_else(|| std::env::var("OCI_LIB_DIR").ok());
     if InitParams::is_initialized() {
@@ -42,7 +42,7 @@ impl Ora {
 
     fn query(&self, sql: &str, limit: usize) -> Result<QueryOut, String> {
         let db = self.db()?;
-        // SQL 문장 끝 ; 는 Oracle 이 받지 않는다 (PL/SQL 블록은 END; 까지 그대로)
+        // Oracle doesn't accept a trailing ; on SQL statements (PL/SQL blocks keep it through END;)
         let t = sql.trim();
         let upper = t.to_uppercase();
         let plsql = upper.starts_with("BEGIN") || upper.starts_with("DECLARE") || (upper.starts_with("CREATE") && ["PROCEDURE", "FUNCTION", "PACKAGE", "TRIGGER", "TYPE BODY"].iter().any(|k| upper.contains(k)));
@@ -95,7 +95,7 @@ impl Driver for Ora {
             "connect" => {
                 let c: ConnectParams = params(p)?;
                 init_client(c.options.get("oracleClient").and_then(Value::as_str))?;
-                // host 에 이미 완성된 연결 글(TNS·EZConnect)이 있으면 그대로
+                // If host already holds a complete connect string (TNS·EZConnect), use it as is
                 let cs = if c.host.contains('/') || c.host.contains('(') { c.host.clone() } else { format!("//{}:{}/{}", c.host, if c.port == 0 { 1521 } else { c.port }, c.database.trim()) };
                 let mut conn = Connection::connect(&c.user, c.password.as_deref().unwrap_or(""), &cs).map_err(|e| e.to_string())?;
                 conn.set_autocommit(true);
@@ -108,10 +108,10 @@ impl Driver for Ora {
                 let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(500) as usize;
                 ok(self.query(sql, limit)?)
             }
-            // Oracle 은 접속한 서비스 하나
+            // Oracle has only the one service it connected to
             "databases" => ok(vec![self.service.clone()]),
             "schemas" => {
-                // oracle_maintained 는 12c 부터: 없으면 이름으로 시스템 사용자를 고른다
+                // oracle_maintained exists from 12c: without it, pick system users by name
                 let rows = self.rows("SELECT username, oracle_maintained FROM all_users ORDER BY username").or_else(|_| self.rows("SELECT username, 'N' FROM all_users ORDER BY username"))?;
                 const SYSTEM: &[&str] = &["SYS", "SYSTEM", "OUTLN", "DBSNMP", "XDB", "MDSYS", "CTXSYS", "ORDSYS", "ORDDATA", "ORDPLUGINS", "SI_INFORMTN_SCHEMA", "WMSYS", "EXFSYS", "OLAPSYS", "APPQOSSYS", "ANONYMOUS", "XS$NULL", "DIP", "ORACLE_OCM", "MDDATA", "SPATIAL_CSW_ADMIN_USR", "SPATIAL_WFS_ADMIN_USR", "APEX_PUBLIC_USER", "FLOWS_FILES", "MGMT_VIEW", "SYSMAN", "OWBSYS", "OWBSYS_AUDIT", "AUDSYS", "GSMADMIN_INTERNAL", "LBACSYS", "DVSYS", "DVF", "OJVMSYS", "REMOTE_SCHEDULER_AGENT", "SYSBACKUP", "SYSDG", "SYSKM", "SYSRAC", "GGSYS", "DBSFWUSER"];
                 ok(rows.into_iter().map(|r| { let n = r[0].as_str().unwrap_or(""); json!({ "isSystem": r[1] == "Y" || SYSTEM.contains(&n) || n.starts_with("APEX_"), "name": n }) }).collect::<Vec<_>>())

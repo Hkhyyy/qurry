@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { bind, bindable, bindings, eventSpec, formatSpec, isCustom, onKeymapChange, removeKey, resetAllShortcuts, resetShortcut, Scope, SCOPE_LABEL, SHORTCUTS } from "../lib/shortcuts";
 import { Button, IconButton, SearchField, Spacer, Text } from "../ui";
 
-/** Settings › Keymap: 명령 단축키 바꾸기. 키를 누르면 녹화, 같은 범위에서 겹치는 명령에서는 그 키를 뺀다 */
+/** Settings › Keymap: change command shortcuts. Pressing a key records it; the key is removed from overlapping commands in the same scope */
 export function KeymapEditor() {
   const [, setVer] = useState(0);
   useEffect(() => onKeymapChange(() => setVer((n) => n + 1)), []);
@@ -10,7 +10,7 @@ export function KeymapEditor() {
   const [rec, setRec] = useState<{ id: string; add: boolean } | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
-  // 녹화 중에는 창 전체의 키를 가로챈다 (App 의 단축키는 .keymap-recording 이 있으면 쉰다)
+  // While recording, intercept keys for the whole window (App's shortcuts pause while .keymap-recording is present)
   useEffect(() => {
     if (!rec) return;
     const onKey = (e: KeyboardEvent) => {
@@ -18,7 +18,7 @@ export function KeymapEditor() {
       e.stopPropagation();
       if (e.key === "Escape" && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) return setRec(null);
       const spec = eventSpec(e);
-      if (!spec) return; // 수식키만 누른 상태
+      if (!spec) return; // Only modifiers pressed
       if (!bindable(spec)) return setNote(`${formatSpec(spec)} can't be a command shortcut — add ⌘/Ctrl, ⌃ or ⌥, or use an F key`);
       const title = SHORTCUTS.find((s) => s.id === rec.id)?.title;
       const taken = bind(rec.id, spec, rec.add);

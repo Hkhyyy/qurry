@@ -1,15 +1,15 @@
-//! 콘솔 자동완성 (GUI src/lib/completion.ts 의 TUI 판)
-//! - `alias.` / `table.` → 그 테이블의 컬럼, `schema.` → 그 스키마의 테이블
-//! - 그 밖: 문장에 나온 테이블의 컬럼 → 테이블 → 스키마 → 키워드
+//! Console autocompletion (TUI version of the GUI's src/lib/completion.ts)
+//! - `alias.` / `table.` → that table's columns, `schema.` → that schema's tables
+//! - otherwise: columns of tables in the statement → tables → schemas → keywords
 use qurry_core::meta::CompletionTable;
 use std::collections::HashMap;
 
-/// 자동완성 메타: 불러올 때 한 번 소문자 이름과 이름별 색인을 만들어 둔다 (키마다 다시 만들지 않게)
+/// Autocomplete metadata: lowercase names and a per-name index are built once on load (not rebuilt on every key)
 pub struct Meta {
     pub tables: Vec<CompletionTable>,
-    /// (스키마, 테이블) 소문자
+    /// (schema, table) lowercase
     lower: Vec<(String, String)>,
-    /// 소문자 테이블 이름 → tables 위치들
+    /// Lowercase table name → positions in tables
     by_name: HashMap<String, Vec<usize>>,
 }
 
@@ -34,7 +34,7 @@ pub enum ItemKind {
     Table,
     Schema,
     Keyword,
-    /// 컬럼 값 · json 키 (DB 에서 읽은 것)
+    /// Column values · json keys (read from the DB)
     Value,
 }
 
@@ -54,7 +54,7 @@ fn is_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
-/// `from|join|update|into <ref> [as] [alias]` 를 찾는다
+/// Find `from|join|update|into <ref> [as] [alias]`
 fn tables_in_statement(text: &str) -> Vec<(String, Option<String>)> {
     let toks: Vec<String> = tokenize(text);
     let mut out = vec![];
@@ -73,7 +73,7 @@ fn tables_in_statement(text: &str) -> Vec<(String, Option<String>)> {
     out
 }
 
-/// 단어(`schema.table`, `"quoted"` 포함) 와 기호로 나눈다
+/// Split into words (including `schema.table`, `"quoted"`) and symbols
 fn tokenize(text: &str) -> Vec<String> {
     let cs: Vec<char> = text.chars().collect();
     let mut out = vec![];
@@ -94,7 +94,7 @@ fn tokenize(text: &str) -> Vec<String> {
                         i += 1;
                     }
                 }
-                // schema.table 은 한 토큰
+                // schema.table is one token
                 if i + 1 < cs.len() && cs[i] == '.' && (is_word(cs[i + 1]) || cs[i + 1] == '"') {
                     i += 1;
                     continue;
@@ -126,14 +126,14 @@ fn find_table<'a>(m: &'a Meta, r: &str, db: &str) -> Option<&'a CompletionTable>
     }
 }
 
-/// 커서 앞 텍스트로 후보를 만든다. 반환: (바꿀 접두어의 글자 수, 후보)
-/// `text` 는 현재 문장 전체, `before` 는 커서가 있는 줄의 커서 앞부분, `db` 는 탭의 DB (MySQL 은 스키마 = DB)
+/// Build candidates from the text before the cursor. Returns: (length of the prefix to replace, candidates)
+/// `text` is the whole current statement, `before` is the part of the cursor's line before the cursor, `db` is the tab's DB (in MySQL, schema = DB)
 pub fn suggest(m: &Meta, text: &str, before: &str, db: &str) -> (usize, Vec<Item>) {
     let all = &m.tables;
     let prefix: String = before.chars().rev().take_while(|c| is_word(*c)).collect::<Vec<_>>().into_iter().rev().collect();
     let head = &before[..before.len() - prefix.len()];
     let p = prefix.to_lowercase();
-    // 이미 다 친 단어와 똑같은 후보는 빼서 Enter 가 줄바꿈으로 가게 한다
+    // Drop candidates identical to the fully typed word so Enter goes to a newline
     let matches = |label: &str| p.is_empty() || (label.to_lowercase().starts_with(&p) && label.to_lowercase() != p);
     let n = prefix.chars().count();
 
@@ -143,7 +143,7 @@ pub fn suggest(m: &Meta, text: &str, before: &str, db: &str) -> (usize, Vec<Item
         if q.is_empty() {
             return (n, vec![]);
         }
-        // alias. 또는 table. → 컬럼
+        // alias. or table. → columns
         let refs = tables_in_statement(text);
         let hit = refs
             .iter()
@@ -154,7 +154,7 @@ pub fn suggest(m: &Meta, text: &str, before: &str, db: &str) -> (usize, Vec<Item
             let items = t.columns.iter().filter(|(c, _)| matches(c)).map(|(c, ty)| Item { label: c.clone(), detail: ty.clone(), insert: c.clone(), kind: ItemKind::Column }).collect();
             return (n, items);
         }
-        // schema. → 테이블
+        // schema. → tables
         let items = all
             .iter()
             .zip(&m.lower)
@@ -192,16 +192,16 @@ pub fn suggest(m: &Meta, text: &str, before: &str, db: &str) -> (usize, Vec<Item
     schemas.sort();
     schemas.dedup();
     items.extend(schemas.into_iter().map(|s| Item { label: s.into(), detail: "schema".into(), insert: s.into(), kind: ItemKind::Schema }));
-    // 키워드는 한 글자 이상 쳤을 때만 (빈 접두어에 키워드 수십 개는 방해)
+    // Keywords only after at least one character (dozens of keywords on an empty prefix get in the way)
     if !p.is_empty() {
         items.extend(keywords().filter(|k| matches(k)).map(|k| Item { label: k.into(), detail: "keyword".into(), insert: k.into(), kind: ItemKind::Keyword }));
     }
     (n, items)
 }
 
-// ───────── 값 · json 키 추천 (GUI src/lib/valueHint.ts 와 같은 규칙) ─────────
+// ───────── Value · json key suggestions (same rules as the GUI's src/lib/valueHint.ts) ─────────
 
-/// 값 추천 자리: `status = '` · `in ('a', '` · `like '` → 그 컬럼의 값, `data->>'` · `data->'a'->>'` (MySQL `->>'$.a.`) → json 키
+/// Value suggestion spots: `status = '` · `in ('a', '` · `like '` → that column's values, `data->>'` · `data->'a'->>'` (MySQL `->>'$.a.`) → json keys
 #[derive(Debug, Clone, PartialEq)]
 pub struct HintAt {
     pub schema: String,
@@ -210,15 +210,15 @@ pub struct HintAt {
     pub type_name: String,
     pub path: Vec<String>,
     pub mode: HintMode,
-    /// 따옴표 안에서 치는 중
+    /// Typing inside quotes
     pub quoted: bool,
-    /// 이미 친 글자
+    /// Characters already typed
     pub typed: String,
-    /// keys: 연산자부터 커서까지 (`->> '` + typed) — @> 조건으로 바꿔 넣을 때
+    /// keys: from the operator to the cursor (`->> '` + typed) — for replacing with an @> condition
     pub op: String,
 }
 
-/// values = 컬럼 값, keys = json 키, pairs = 많이 나온 `키: 값` 의 @> 조건 (PostgreSQL)
+/// values = column values, keys = json keys, pairs = @> conditions for frequent `key: value` pairs (PostgreSQL)
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum HintMode {
     Values,
@@ -297,7 +297,7 @@ fn context(before: &str, mysql: bool) -> Option<Ctx> {
     Some(Ctx { r#ref: g(&c, 1).map(|s| unq(&s)), column: unq(&c[2]), path: path_of(&c[3]), mode, quoted: c.get(5).is_some(), typed: g(&c, 5).or(g(&c, 6)).unwrap_or_default(), op: String::new() })
 }
 
-/// 커서가 값 · json 키 자리면 그 테이블 · 컬럼 (추천할 만한 컬럼일 때만)
+/// If the cursor is at a value · json key spot, that table · column (only for columns worth suggesting)
 pub fn hint_at(m: &Meta, text: &str, before: &str, db: &str, mysql: bool) -> Option<HintAt> {
     let ctx = context(before, mysql)?;
     let refs = tables_in_statement(text);
@@ -324,8 +324,8 @@ pub fn hint_at(m: &Meta, text: &str, before: &str, db: &str, mysql: bool) -> Opt
     ok.then(|| HintAt { schema: t.schema.clone(), table: t.name.clone(), column: col.clone(), type_name: ty.clone(), path: ctx.path, mode: ctx.mode, quoted: ctx.quoted, typed: ctx.typed, op: ctx.op })
 }
 
-/// 읽어 온 값 → 후보 (친 글자로 거른다). close = 따옴표를 닫아 줄지 (커서 뒤에 ' 가 없을 때).
-/// as_pairs = keys 자리인데 키가 없어서 (객체의 배열) @> 조건을 가져왔다 → 연산자째 바꿔 넣는다 (prefix = op 길이)
+/// Fetched values → candidates (filtered by typed text). close = whether to close the quote (when no ' follows the cursor).
+/// as_pairs = a keys spot with no keys (array of objects), so @> conditions were fetched → replace including the operator (prefix = op length)
 pub fn hint_items(h: &HintAt, hints: &[qurry_core::hints::Hint], close: bool, as_pairs: bool) -> Vec<Item> {
     let p = h.typed.to_lowercase();
     let bare = h.mode == HintMode::Values && h.path.is_empty() && ["int", "numeric", "decimal", "float", "double", "real", "serial", "bool", "bit", "money"].iter().any(|k| h.type_name.to_lowercase().contains(k));

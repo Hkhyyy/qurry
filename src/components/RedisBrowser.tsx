@@ -9,11 +9,11 @@ import { Badge, Button, EmptyState, FormGrid, IconButton, Modal, Notice, Select,
 
 const isMacOS = navigator.platform.toLowerCase().includes("mac");
 
-/** 키 목록 한 줄 높이 (App.css .rd-key 와 같다) · 터미널 출력 최대 줄 수 */
+/** Key list row height (same as App.css .rd-key) · max terminal output lines */
 const KEY_ROW_H = 22;
 const TERM_MAX = 1000;
 
-/** Medis 식 Redis 브라우저: 왼쪽 키 목록(패턴·타입 필터, SCAN 더 보기), 오른쪽 Content / Terminal / Info / Config */
+/** Medis-style Redis browser: key list on the left (pattern·type filter, SCAN load more), Content / Terminal / Info / Config on the right */
 interface Props {
   target: string;
   connName: string;
@@ -54,7 +54,7 @@ const fmtTtl = (ms: number) => {
 };
 const fmtBytes = (n: number | null) => (n == null ? "" : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 
-/** redis-cli 와 같은 출력 */
+/** Same output as redis-cli */
 export function formatReply(v: RedisReply, indent = ""): string {
   if (v === null) return "(nil)";
   if (typeof v === "number") return `(integer) ${v}`;
@@ -85,7 +85,7 @@ export function RedisBrowser(p: Props) {
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 키는 ":" 로 묶은 폴더로 보인다 (Medis). open = 펼친 폴더, cur = 고른 폴더 (키를 고르면 null)
+  // Keys appear as folders grouped by ":" (Medis). open = expanded folders, cur = selected folder (null when a key is selected)
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [cur, setCur] = useState<string | null>(null);
   const rows = useMemo(() => visibleRows(keyTree(keys, (k) => k.key), open), [keys, open]);
@@ -96,7 +96,7 @@ export function RedisBrowser(p: Props) {
       else n.add(path);
       return n;
     });
-  // 고른 키(처음 연 키, 새로 만든 키)가 보이도록 위 폴더를 펼친다
+  // Expand the parent folders so the selected key (first opened, newly created) is visible
   useEffect(() => {
     if (!sel) return;
     setOpen((o) => {
@@ -114,7 +114,7 @@ export function RedisBrowser(p: Props) {
     try {
       const page = await redis.scan(p.target, reset ? "0" : cursor, pattern, 500, typeFilter);
       setKeys((ks) => {
-        // 이미 정렬된 목록에 새 페이지(정렬)만 합친다 (매번 전체를 다시 정렬하지 않게)
+        // Merge only the new (sorted) page into the already sorted list (instead of re-sorting everything each time)
         const have = new Set(reset ? [] : ks.map((k) => k.key));
         const add = page.keys.filter((k) => (have.has(k.key) ? false : (have.add(k.key), true))).sort((a, b) => a.key.localeCompare(b.key));
         const base = reset ? [] : ks;
@@ -148,7 +148,7 @@ export function RedisBrowser(p: Props) {
     <div
       className="redis-browser"
       onKeyDown={(e) => {
-        // ⌘r = 다시 읽기 (툴바 Scan again 과 같다)
+        // ⌘r = reload (same as the toolbar's Scan again)
         if ((isMacOS ? e.metaKey : e.ctrlKey) && !e.shiftKey && !e.altKey && e.code === "KeyR") {
           e.preventDefault();
           scan(true);
@@ -213,7 +213,7 @@ export function RedisBrowser(p: Props) {
               };
               if (e.key === "ArrowDown" && i < rows.length - 1) go(i + 1);
               if (e.key === "ArrowUp" && i > 0) go(i - 1);
-              // 폴더: → 펼치기 · ← 접기 · Enter 펼치고 접기. 그 밖의 ← 는 부모 폴더로
+              // Folders: → expand · ← collapse · Enter toggle. Otherwise ← goes to the parent folder
               if (r?.kind === "folder" && (e.key === "Enter" || (e.key === "ArrowRight" && !open.has(r.path)) || (e.key === "ArrowLeft" && open.has(r.path)))) {
                 e.preventDefault();
                 toggle(r.path);
@@ -221,7 +221,7 @@ export function RedisBrowser(p: Props) {
                 for (let j = i - 1; j >= 0; j--) if (rows[j].kind === "folder" && rows[j].depth === r.depth - 1) return go(j);
               }
             }}>
-              {/* 보이는 줄만 그린다 (키가 수만 개여도 가볍게) */}
+              {/* Render only visible rows (light even with tens of thousands of keys) */}
               <div style={{ height: keyVirt.getTotalSize(), position: "relative" }}>
                 {keyVirt.getVirtualItems().map((vi) => {
                   const r = rows[vi.index];
@@ -341,7 +341,7 @@ export function RedisBrowser(p: Props) {
   );
 }
 
-// ───────── 키 내용 (타입별) ─────────
+// ───────── Key content (by type) ─────────
 
 type Row = { id: string; cols: string[]; raw: unknown };
 
@@ -411,7 +411,7 @@ function KeyContent({ target, keyName, readOnly, exec, onStatus, onDeleted, onRe
     return [];
   }, [d]);
   const heads: Record<string, string[]> = { hash: ["field", "value"], list: ["index", "value"], set: ["member"], zset: ["member", "score"], stream: ["id", "fields"] };
-  // 아래 편집기에 보이는 값 (선택한 요소)
+  // Value shown in the editor below (selected element)
   const valueCol = d?.type === "set" || d?.type === "zset" ? 0 : 1;
   useEffect(() => {
     if (d && d.type !== "string" && selRow !== null && rows[selRow]) setText(rows[selRow].cols[valueCol]);
@@ -437,7 +437,7 @@ function KeyContent({ target, keyName, readOnly, exec, onStatus, onDeleted, onRe
       }
     }
     if (d.type === "string") {
-      // TTL 유지
+      // Keep TTL
       await run(d.ttl > 0 ? ["SET", keyName, v, "KEEPTTL"] : ["SET", keyName, v], "Saved");
       return;
     }
@@ -462,7 +462,7 @@ function KeyContent({ target, keyName, readOnly, exec, onStatus, onDeleted, onRe
     else if (d.type === "zset") await run(["ZREM", keyName, r.cols[0]], "Member removed");
     else if (d.type === "stream") await run(["XDEL", keyName, r.cols[0]], "Entry deleted");
     else if (d.type === "list") {
-      // 인덱스로 지우기: 표식으로 바꾼 뒤 LREM
+      // Delete by index: replace with a marker, then LREM
       const mark = `__dbtool_deleted_${crypto.randomUUID()}`;
       (await run(["LSET", keyName, r.cols[0], mark])) && (await run(["LREM", keyName, "1", mark], `Removed index ${r.cols[0]}`));
     }
@@ -707,10 +707,10 @@ function Terminal({ target, prompt, onChanged }: { target: string; prompt: strin
     hi.current = -1;
     setInput("");
     if (line.toLowerCase() === "clear") return setLines([]);
-    // FLUSHALL·FLUSHDB·DEL 같은 지우는 명령은 한 번 더 묻는다
+    // Destructive commands like FLUSHALL·FLUSHDB·DEL ask once more
     const why = await api.unsafeReason("redis", line).catch(() => null);
     if (why && !(await ask(`${why}. Run it anyway?`, { detail: [{ text: line, tone: "danger" }], okLabel: "Run Anyway", danger: true }))) return;
-    // 출력은 최근 TERM_MAX 줄만 남긴다
+    // Keep only the last TERM_MAX lines of output
     const push = (x: { kind: "in" | "out" | "err"; text: string }) => setLines((l) => [...l, x].slice(-TERM_MAX));
     push({ kind: "in", text: `${prompt} ${line}` });
     try {
@@ -760,7 +760,7 @@ function Terminal({ target, prompt, onChanged }: { target: string; prompt: strin
   );
 }
 
-/** Info / Config: 검색되는 표 */
+/** Info / Config: searchable table */
 function ServerTable({ target, command }: { target: string; command: string }) {
   const [r, setR] = useState<QueryResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -772,7 +772,7 @@ function ServerTable({ target, command }: { target: string; command: string }) {
   useEffect(() => {
     load();
   }, [target, command]);
-  // 관리형 Redis (AWS ElastiCache · MemoryDB, Azure, GCP Memorystore, Upstash …) 는 CONFIG 를 이름을 바꾸거나 막아 둔다
+  // Managed Redis (AWS ElastiCache · MemoryDB, Azure, GCP Memorystore, Upstash …) renames or blocks CONFIG
   if (err && /^CONFIG/i.test(command) && /unknown command|NOPERM|disabled|not allowed/i.test(err))
     return (
       <Notice>

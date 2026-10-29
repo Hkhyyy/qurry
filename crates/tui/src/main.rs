@@ -1,4 +1,4 @@
-//! Qurry TUI — DataGrip 식 터미널 클라이언트. GUI 와 같은 엔진(qurry-core)·같은 Data Source 를 쓴다.
+//! Qurry TUI — DataGrip-style terminal client. Uses the same engine (qurry-core)·same Data Sources as the GUI.
 mod app;
 mod complete;
 mod datatools;
@@ -54,14 +54,14 @@ async fn main() -> std::io::Result<()> {
     let check_update = !args.iter().any(|a| a == "--no-update-check") && !qurry_core::update::disabled() && !selfupdate::current_exe().is_some_and(|e| selfupdate::from_source(&e));
     let dir = args.iter().position(|a| a == "--config-dir").and_then(|i| args.get(i + 1)).map(std::path::PathBuf::from);
     let cfg_dir = dir.clone().unwrap_or_else(qurry_core::config_dir);
-    // 엔진 로그가 화면을 깨지 않도록
+    // Keep engine logs from breaking the screen
     qurry_core::QUIET.store(true, std::sync::atomic::Ordering::Relaxed);
     let state = Arc::new(qurry_core::open_state(dir).map_err(|e| std::io::Error::other(e.to_string()))?);
 
     enable_raw_mode()?;
     let mut out = std::io::stdout();
     execute!(out, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste)?;
-    // Ctrl+Enter 등을 구분할 수 있는 터미널(kitty, WezTerm, iTerm2, Ghostty…)에서는 확장 키 보고를 켠다
+    // Turn on extended key reporting in terminals that can distinguish Ctrl+Enter etc. (kitty, WezTerm, iTerm2, Ghostty…)
     let enhanced = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
     if enhanced {
         let _ = execute!(out, PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES));
@@ -77,7 +77,7 @@ async fn main() -> std::io::Result<()> {
         let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
     }
     restore()?;
-    // 앱 안 업데이트를 마쳤으면 새 실행 파일로 같은 인자를 주고 다시 켠다
+    // After an in-app update, relaunch the new executable with the same arguments
     if res? {
         let exe = selfupdate::current_exe().ok_or_else(|| std::io::Error::other("cannot find this executable"))?;
         use std::os::unix::process::CommandExt;
@@ -92,10 +92,10 @@ fn restore() -> std::io::Result<()> {
 }
 
 async fn run(term: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: Arc<qurry_core::app::AppState>, update_dir: Option<std::path::PathBuf>) -> std::io::Result<bool> {
-    // 돌려주는 값 = 다시 켤지 (앱 안 업데이트를 마쳤다)
+    // Return value = whether to relaunch (in-app update finished)
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<app::Apply>();
     let mut app = app::App::new(state.clone(), tx.clone());
-    // 새 버전 확인 (켤 때 + 1시간마다, 백그라운드). 실패해도 조용히 넘어간다
+    // Check for a new version (at launch + hourly, in the background). Failures are silently ignored
     if let Some(dir) = update_dir {
         let tx = tx.clone();
         tokio::spawn(async move {
@@ -109,15 +109,15 @@ async fn run(term: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: Arc<
             }
         });
     }
-    // keep-alive / auto-disconnect (GUI 와 같은 규칙)
+    // keep-alive / auto-disconnect (same rules as the GUI)
     {
         let tx = tx.clone();
         let st = state.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                // 열어 둔 탭·분할을 저장 (바뀌었을 때만. 터미널을 그냥 닫아도 거의 남는다)
-                // 워크스페이스 목록: GUI 에서 바꾼 것을 받아 온다
+                // Save open tabs·splits (only when changed; mostly survives even if the terminal is just closed)
+                // Workspace list: pull in changes made in the GUI
                 if tx.send(Box::new(|a: &mut app::App| {
                     a.ws_pull();
                     a.save_workspace();
@@ -154,10 +154,10 @@ async fn run(term: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: Arc<
                     a(&mut app);
                 }
             }
-            // 실행 중이면 지난 시간을 다시 그린다
+            // While running, redraw the elapsed time
             _ = tokio::time::sleep(std::time::Duration::from_millis(500)), if app.any_running() => {}
         }
-        // 워크스페이스를 만들고 · 지우고 · 이름 · Data Source 를 바꿨으면 GUI 와 같이 쓰는 목록에
+        // If workspaces were created · deleted · renamed · had Data Sources changed, write to the list shared with the GUI
         app.ws_push();
         if app.quit {
             break;

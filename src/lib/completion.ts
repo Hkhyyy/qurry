@@ -2,11 +2,11 @@ import { monaco } from "./monaco";
 import { CompletionTable, meta } from "./api";
 import { hintable, hintContext, hintInsert, pairsForKeys } from "./valueHint";
 
-/** 콘솔(모델 URI) → 접속 id, 접속 id → 메타 캐시 */
+/** Console (model URI) → connection id, connection id → metadata cache */
 const modelConn = new Map<string, string>();
 const cache = new Map<string, Promise<CompletionTable[]>>();
 
-/** 메타를 불러온다. 실패하면 캐시하지 않는다 (다음 요청 때 다시 시도) */
+/** Load metadata. Not cached on failure (retried on the next request) */
 function load(connId: string): Promise<CompletionTable[]> {
   const p: Promise<CompletionTable[]> = meta.completion(connId).catch(() => {
     if (cache.get(connId) === p) cache.delete(connId);
@@ -20,11 +20,11 @@ export function bindModel(uri: string, connId: string) {
   modelConn.set(uri, connId);
   if (!cache.has(connId)) load(connId);
 }
-/** 에디터가 닫힐 때 */
+/** When the editor closes */
 export function unbindModel(uri: string) {
   modelConn.delete(uri);
 }
-/** Data Source(와 그 DB 들)의 메타를 버린다: 끊기·새로 고침 때 */
+/** Drop metadata of a Data Source (and its DBs): on disconnect and refresh */
 export function invalidateCompletion(connId: string) {
   for (const k of [...cache.keys()]) if (k === connId || k.startsWith(connId + "::")) cache.delete(k);
 }
@@ -53,7 +53,7 @@ function findTable(all: CompletionTable[], ref: string) {
 
 for (const lang of ["pgsql", "mysql"]) {
   monaco.languages.registerCompletionItemProvider(lang, {
-    // 값 · json 키 추천: 따옴표 · '->>' 뒤 · '=' 뒤 빈칸에서 바로 (그 밖의 빈칸 · '>' 에서는 열지 않는다)
+    // Value · json key suggestions: right away after a quote · after '->>' · in the space after '=' (not opened in other spaces or after '>')
     triggerCharacters: [".", "'", " ", ">"],
     async provideCompletionItems(model, position, context) {
       const connId = modelConn.get(model.uri.toString());
@@ -61,7 +61,7 @@ for (const lang of ["pgsql", "mysql"]) {
       const K = monaco.languages.CompletionItemKind;
       const quiet = context.triggerKind === monaco.languages.CompletionTriggerKind.TriggerCharacter && (context.triggerCharacter === " " || context.triggerCharacter === ">");
 
-      // 값 · json 키: where status = '… / data->>'… / reasons @> '…
+      // Value · json key: where status = '… / data->>'… / reasons @> '…
       const lineText = model.getLineContent(position.lineNumber);
       const ctx = hintContext(lineText.slice(0, position.column - 1), lang === "mysql");
       if (ctx && connId) {
@@ -73,12 +73,12 @@ for (const lang of ["pgsql", "mysql"]) {
         if (t && col && hintable(ctx, col[1])) {
           const ask = (mode: "values" | "keys" | "pairs") => meta.hints(connId, { schema: t.schema, table: t.name, column: col[0], path: ctx.path, keys: mode === "keys", pairs: mode === "pairs" }).catch(() => []);
           let hints = await ask(ctx.mode);
-          // 키가 없는 json (객체의 배열 등): 키 대신 많이 나온 키: 값을 @> 조건으로 (연산자째 바꾼다)
+          // json without keys (arrays of objects, etc.): instead of keys, frequent key: value pairs as @> conditions (replacing the operator too)
           const asPairs = ctx.mode === "keys" && !hints.length && lang !== "mysql";
           if (asPairs) hints = await ask("pairs");
           const rows = (n: number) => `${n.toLocaleString("en-US")} row${n === 1 ? "" : "s"}`;
           const range = new monaco.Range(position.lineNumber, position.column - ctx.typed.length, position.lineNumber, position.column);
-          // 따옴표가 저절로 닫혀 있으면 그것까지 바꾼다
+          // If the quote was auto-closed, replace it as well
           const closing = lineText[position.column - 1] === "'" ? 1 : 0;
           const opRange = new monaco.Range(position.lineNumber, position.column - (ctx.op?.length ?? 0), position.lineNumber, position.column + closing);
           return {
@@ -92,7 +92,7 @@ for (const lang of ["pgsql", "mysql"]) {
             })),
           };
         }
-        // 따옴표 안: 키워드 · 테이블은 맞지 않는다
+        // Inside quotes: keywords and tables do not fit
         if (ctx.quoted) return { suggestions: [] };
       }
       if (quiet) return { suggestions: [] };
@@ -104,14 +104,14 @@ for (const lang of ["pgsql", "mysql"]) {
 
       if (dot) {
         const q = dot[1].replace(/"/g, "");
-        // alias. 또는 table. → 컬럼
+        // alias. or table. → columns
         const refs = tablesInStatement(text);
         const hit = refs.find((r) => r.alias?.toLowerCase() === q.toLowerCase()) ?? refs.find((r) => r.ref.split(".").pop()!.toLowerCase() === q.toLowerCase());
         const t = hit ? findTable(all, hit.ref) : undefined;
         if (t) {
           return { suggestions: t.columns.map(([c, ty], i) => ({ label: { label: c, description: ty }, kind: K.Field, insertText: c, range, sortText: String(i).padStart(4, "0") })) };
         }
-        // schema. → 테이블
+        // schema. → tables
         const inSchema = all.filter((x) => x.schema.toLowerCase() === q.toLowerCase());
         return { suggestions: inSchema.map((x) => ({ label: { label: x.name, description: `${x.columns.length} cols` }, kind: K.Class, insertText: x.name, range })) };
       }

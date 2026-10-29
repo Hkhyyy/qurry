@@ -1,6 +1,6 @@
 /**
- * 공통 컴포넌트 — 규격은 README.md. 화면은 이것만 쓴다.
- * atoms (글자 · 버튼 · 입력) → molecules (한 줄 · 한 칸) → organisms (창 · 메뉴 · 목록) · grid (결과 표 칸)
+ * Shared components — spec in README.md. Screens use only these.
+ * atoms (text · button · input) → molecules (one row · one cell) → organisms (window · menu · list) · grid (result table cells)
  */
 import "./tokens.css";
 import "./ui.css";

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { initials } from "./workspace";
 
 describe("workspace bar", () => {
-  it("머리글자: 단어가 여럿이면 각 첫 글자, 하나면 앞 두 글자", () => {
+  it("initials: first letter of each word, or the first two letters of a single word", () => {
     expect(initials("Default")).toBe("DE");
     expect(initials("billing reports")).toBe("BR");
     expect(initials("prod-hotfix")).toBe("PH");

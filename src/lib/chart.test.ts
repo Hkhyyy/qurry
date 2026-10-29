@@ -24,11 +24,11 @@ describe("chart", () => {
 
   it("finds number columns by type or by values", () => {
     expect(numericColumns(sales)).toEqual([2]);
-    // 타입이 TEXT 여도 값이 수면 (CSV 로 넣은 표 등)
+    // Values are numbers even if the type is TEXT (e.g. tables imported from CSV)
     expect(numericColumns(res([["n", "TEXT"], ["s", "TEXT"]], [["1,200", "x"], ["3", "y"], [null, null]]))).toEqual([0]);
     expect(defaultAxes(sales)).toEqual({ x: 0, ys: [2] });
     expect(defaultAxes(res([["name", "TEXT"]], [["a"]]))).toEqual({ x: 0, ys: [COUNT] });
-    // id 는 Y 로 먼저 고르지 않는다
+    // id isn't picked first for Y
     expect(defaultAxes(res([["id", "INT8"], ["user_id", "INT4"], ["name", "TEXT"], ["amount", "NUMERIC"]], [[1, 2, "a", "3"]]))).toEqual({ x: 2, ys: [3] });
   });
 
@@ -40,7 +40,7 @@ describe("chart", () => {
         { name: "count", values: [2, 1, 1] },
       ],
     });
-    // 날짜 X 는 시간순
+    // Date X is in time order
     expect(buildChart(sales, 1, [2], "line").labels).toEqual(["2026-10-01", "2026-10-02", "2026-10-03"]);
   });
 

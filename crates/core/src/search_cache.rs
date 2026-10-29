@@ -1,6 +1,6 @@
-//! 검색용 객체·컬럼 목록 캐시 (DataGrip 의 introspection 캐시처럼).
-//! 접속해서 읽을 때마다 저장해 두고, 접속하지 않은 Data Source 도 Search Everywhere 에서 찾게 한다.
-//! 이름만 담지만 DB 구조라 0600 으로 쓴다. 대상마다 객체·컬럼 파일을 따로 둔다 (동시에 갱신해도 서로 덮지 않게)
+//! Object·column list cache for search (like DataGrip's introspection cache).
+//! Saved on every read while connected, so Search Everywhere can find unconnected Data Sources too.
+//! Holds only names, but it's DB structure, so it's written as 0600. Separate object·column files per target (so concurrent updates don't overwrite each other)
 use crate::meta::{CompletionTable, IndexEntry};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -18,7 +18,7 @@ fn dir(base: &Path) -> PathBuf {
     base.join("search-cache")
 }
 
-/// 파일 이름: 대상 id 를 hex 로 (DB 이름에 / 같은 글자가 있어도 안전하게)
+/// File name: target id in hex (safe even if the DB name has characters like /)
 fn file(base: &Path, target: &str, part: &str) -> PathBuf {
     let hex: String = target.bytes().map(|b| format!("{b:02x}")).collect();
     dir(base).join(format!("{hex}.{part}.json"))
@@ -45,7 +45,7 @@ pub fn save_columns(base: &Path, target: &str, v: &[CompletionTable]) {
     save(base, target, "columns", &v);
 }
 
-/// 객체 목록을 age 안에 저장했는지
+/// Whether the object list was saved within age
 pub fn is_fresh(base: &Path, target: &str, age: std::time::Duration) -> bool {
     std::fs::metadata(file(base, target, "objects")).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|e| e < age)
 }
@@ -54,7 +54,7 @@ fn read<T: for<'de> Deserialize<'de>>(p: &Path) -> Vec<T> {
     std::fs::read(p).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
 }
 
-/// 저장된 대상 전부 (keep: 아직 있는 Data Source 인지)
+/// All saved targets (keep: whether the Data Source still exists)
 pub fn load_all(base: &Path, keep: impl Fn(&str) -> bool) -> Vec<CachedIndex> {
     let Ok(rd) = std::fs::read_dir(dir(base)) else { return vec![] };
     let mut out = vec![];
@@ -71,7 +71,7 @@ pub fn load_all(base: &Path, keep: impl Fn(&str) -> bool) -> Vec<CachedIndex> {
     out
 }
 
-/// Data Source 를 지우면 그 캐시도 지운다
+/// Deleting a Data Source deletes its cache too
 pub fn remove_conn(base: &Path, conn: &str) {
     let Ok(rd) = std::fs::read_dir(dir(base)) else { return };
     for e in rd.flatten() {

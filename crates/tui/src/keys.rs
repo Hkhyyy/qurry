@@ -1,5 +1,5 @@
-//! 바꿀 수 있는 명령 단축키. 기본값은 DEFAULT_KEYS, 사용자 설정은 keymap.json 의 "tui" 구역 (기본값과 다른 것만)
-//! 키 표기: "Ctrl+L", "Alt+Shift+X", "F5", "Ctrl+Enter", "Alt+\\" … (수식키 순서: Ctrl, Alt, Shift)
+//! Rebindable command shortcuts. Defaults in DEFAULT_KEYS, user settings in the "tui" section of keymap.json (only ones differing from defaults)
+//! Key notation: "Ctrl+L", "Alt+Shift+X", "F5", "Ctrl+Enter", "Alt+\\" … (modifier order: Ctrl, Alt, Shift)
 use crate::app::Action;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::HashMap;
@@ -16,7 +16,7 @@ pub const DEFAULT_KEYS: &[(Action, &[&str])] = &[
     (Action::CloseTab, &["Ctrl+W"]),
     (Action::NextTab, &["Alt+Right", "Ctrl+PgDn"]),
     (Action::PrevTab, &["Alt+Left", "Ctrl+PgUp"]),
-    // Alt+1~9 는 워크스페이스 (input.rs, 키맵에 없는 Alt+숫자일 때)
+    // Alt+1~9 are workspaces (input.rs, when the Alt+digit isn't in the keymap)
     (Action::ToggleExplorer, &["Alt+0"]),
     (Action::WsNew, &["Alt+N"]),
     (Action::WsRename, &["Alt+Shift+N"]),
@@ -38,7 +38,7 @@ pub const DEFAULT_KEYS: &[(Action, &[&str])] = &[
     (Action::Commit, &["Alt+C"]),
     (Action::Rollback, &["Alt+R"]),
     (Action::ToggleOutput, &["Alt+O"]),
-    // 칸 사이 이동은 ⌃⌥ + 방향키 (⌥ + 방향키는 칸 안: ←/→ 탭)
+    // Moving between panes is ⌃⌥ + arrows (⌥ + arrows is within a pane: ←/→ tabs)
     (Action::PaneUp, &["Ctrl+Alt+Up"]),
     (Action::PaneDown, &["Ctrl+Alt+Down"]),
     (Action::PaneLeft, &["Ctrl+Alt+Left"]),
@@ -50,7 +50,7 @@ pub const DEFAULT_KEYS: &[(Action, &[&str])] = &[
     (Action::Disconnect, &["Ctrl+F2"]),
 ];
 
-/// keymap.json 에 쓰는 이름 (enum 이름 그대로)
+/// Name written to keymap.json (the enum name as is)
 pub fn action_id(a: Action) -> String {
     format!("{a:?}")
 }
@@ -59,7 +59,7 @@ fn defaults(a: Action) -> Vec<String> {
     DEFAULT_KEYS.iter().find(|d| d.0 == a).map(|d| d.1.iter().map(|s| s.to_string()).collect()).unwrap_or_default()
 }
 
-/// 키 입력 → 표기. 바꿀 수 있는 키가 아니면(수식키 없는 글자 등) None
+/// Key event → notation. None if not a rebindable key (e.g. a char without modifiers)
 pub fn spec(k: &KeyEvent) -> Option<String> {
     let mut ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
     let alt = k.modifiers.contains(KeyModifiers::ALT);
@@ -70,18 +70,18 @@ pub fn spec(k: &KeyEvent) -> Option<String> {
             shift |= c.is_ascii_uppercase();
             c.to_ascii_uppercase().to_string()
         }
-        // 한국어 자판은 \ 키가 ₩ 로 들어온다
+        // Korean keyboards send the \ key as ₩
         KeyCode::Char('₩') => {
             shift = false;
             "\\".to_string()
         }
         KeyCode::Char(c) => {
-            // ? ! 같은 기호는 Shift 가 글자에 이미 들어 있다
+            // Symbols like ? ! already include Shift in the char
             shift = false;
             c.to_string()
         }
         KeyCode::Null => {
-            // 일부 터미널의 Ctrl+Space
+            // Ctrl+Space on some terminals
             ctrl = true;
             "Space".to_string()
         }
@@ -115,8 +115,8 @@ pub fn spec(k: &KeyEvent) -> Option<String> {
     Some(s + &key)
 }
 
-/// 화면 표기: macOS 는 ⌃⌥⇧ 기호 (GUI 와 같게. 터미널의 Alt = Option), 그 밖에는 Ctrl+ / Alt+ / Shift+.
-/// 화면 글은 기호로 쓰고 ("⌃k"), 저장 형식 ("Alt+X") 도 받는다
+/// Display notation: ⌃⌥⇧ symbols on macOS (same as the GUI; terminal Alt = Option), Ctrl+ / Alt+ / Shift+ elsewhere.
+/// Screen text is written with symbols ("⌃k"), and the storage format ("Alt+X") is accepted too
 pub fn disp(s: &str) -> String {
     if cfg!(target_os = "macos") {
         lower_unshifted(s).replace("Ctrl+", "⌃").replace("Alt+", "⌥").replace("Shift+", "⇧")
@@ -125,7 +125,7 @@ pub fn disp(s: &str) -> String {
     }
 }
 
-/// ⌃⌥⇧ 기호 → Ctrl+ / Alt+ / Shift+ (macOS 가 아닌 터미널 화면). ⌘ 가 낀 묶음 (⇧⌘A: 맥 터미널 키) 은 그대로
+/// ⌃⌥⇧ symbols → Ctrl+ / Alt+ / Shift+ (non-macOS terminal screens). Combos containing ⌘ (⇧⌘A: Mac terminal keys) stay as is
 fn glyph_words(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
@@ -148,7 +148,7 @@ fn glyph_words(s: &str) -> String {
                 _ => "Shift+",
             });
         }
-        // ⌥+wheel 의 + 는 한 번만
+        // Only one + in ⌥+wheel
         if let Some(r) = rest.strip_prefix('+') {
             rest = r;
         }
@@ -156,14 +156,14 @@ fn glyph_words(s: &str) -> String {
     out
 }
 
-/// "Ctrl+K" → "Ctrl+k": Shift 없는 ⌃/⌥+글자 하나는 소문자로 보인다 (대문자는 Shift 를 눌러야 하는 키로 읽힌다)
+/// "Ctrl+K" → "Ctrl+k": a single letter with ⌃/⌥ and no Shift is shown lowercase (uppercase reads as a key needing Shift)
 fn lower_unshifted(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while !rest.is_empty() {
         let at_word = out.chars().last().is_none_or(|c| !c.is_alphanumeric());
         if at_word && (rest.starts_with("Ctrl+") || rest.starts_with("Alt+")) {
-            // 수식키 묶음 (Ctrl+Alt+Shift+ …)
+            // Modifier group (Ctrl+Alt+Shift+ …)
             let mut chain = 0;
             let mut shift = false;
             while let Some(m) = ["Ctrl+", "Alt+", "Shift+"].iter().find(|m| rest[chain..].starts_with(**m)) {
@@ -182,7 +182,7 @@ fn lower_unshifted(s: &str) -> String {
             rest = &rest[key_len..];
             continue;
         }
-        // 기호로 쓴 키 (⌘C, ⌥⌘Y): 수식키 기호 묶음 + 글자 하나
+        // Keys written with symbols (⌘C, ⌥⌘Y): modifier symbol group + one char
         let glyphs: String = rest.chars().take_while(|c| "⌃⌥⇧⌘".contains(*c)).collect();
         if !glyphs.is_empty() {
             let after = &rest[glyphs.len()..];
@@ -201,15 +201,15 @@ fn lower_unshifted(s: &str) -> String {
     out
 }
 
-/// 명령 단축키로 쓸 수 있는지: Ctrl/Alt 조합이나 F 키만 (그 밖은 입력·이동 키와 겹친다)
+/// Whether usable as a command shortcut: only Ctrl/Alt combos or F keys (others clash with typing·movement keys)
 pub fn bindable(s: &str) -> bool {
     s.starts_with("Ctrl+") || s.starts_with("Alt+") || s.trim_start_matches("Shift+").strip_prefix('F').is_some_and(|n| n.parse::<u8>().is_ok())
 }
 
-/// 사용자 설정 표기를 정규화 ("ctrl+l" → "Ctrl+L")
+/// Normalize user-setting notation ("ctrl+l" → "Ctrl+L")
 fn normalize(s: &str) -> String {
     let parts: Vec<&str> = s.split('+').collect();
-    // "Alt++" 처럼 키가 '+' 인 경우
+    // When the key itself is '+', like "Alt++"
     let (mods, key) = if s.ends_with("++") { (&parts[..parts.len() - 2], "+") } else { (&parts[..parts.len() - 1], parts[parts.len() - 1]) };
     let has = |m: &str| mods.iter().any(|x| x.eq_ignore_ascii_case(m));
     let mut out = String::new();
@@ -219,7 +219,7 @@ fn normalize(s: &str) -> String {
         }
     }
     let named = ["Space", "Enter", "Tab", "Esc", "Backspace", "Delete", "Insert", "Home", "End", "PgUp", "PgDn", "Up", "Down", "Left", "Right"];
-    // 글자·F 키는 대문자 ("l" → "L", "f5" → "F5")
+    // Letters·F keys uppercase ("l" → "L", "f5" → "F5")
     let key = named.iter().find(|n| n.eq_ignore_ascii_case(key)).map(|n| n.to_string()).unwrap_or_else(|| key.to_uppercase());
     out + &key
 }
@@ -229,7 +229,7 @@ pub struct Keymap {
 }
 
 impl Keymap {
-    /// 기본값 위에 사용자 설정을 덮는다. 모르는 액션 이름은 무시
+    /// Overlay user settings on the defaults. Unknown action names are ignored
     pub fn new(user: &qurry_core::store::Keymap) -> Self {
         let mut map: HashMap<Action, Vec<String>> = DEFAULT_KEYS.iter().map(|(a, _)| (*a, defaults(*a))).collect();
         for (a, _) in DEFAULT_KEYS {
@@ -249,7 +249,7 @@ impl Keymap {
         self.map.get(&a).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
-    /// 화면 표시용 ("F5 / Ctrl+Enter")
+    /// For display ("F5 / Ctrl+Enter")
     pub fn label(&self, a: Action) -> String {
         let k = self.keys(a);
         if k.is_empty() { "—".into() } else { disp(&k.join(" / ")) }
@@ -259,7 +259,7 @@ impl Keymap {
         self.keys(a) != defaults(a).as_slice()
     }
 
-    /// 키를 지정한다 (add = 기존 키에 더하기). 같은 키를 쓰던 다른 명령에서는 뺀다 → 뺀 명령
+    /// Assign a key (add = add to existing keys). Removed from any other command using the same key → the commands it was removed from
     pub fn bind(&mut self, a: Action, key: String, add: bool) -> Option<Action> {
         let mut taken = None;
         for (other, v) in self.map.iter_mut() {
@@ -282,7 +282,7 @@ impl Keymap {
         self.map.insert(a, defaults(a));
     }
 
-    /// keymap.json 에 쓸 것: 기본값과 다른 명령만
+    /// What to write to keymap.json: only commands differing from defaults
     pub fn overrides(&self) -> qurry_core::store::Keymap {
         DEFAULT_KEYS.iter().filter(|(a, _)| self.is_custom(*a)).map(|(a, _)| (action_id(*a), self.keys(*a).to_vec())).collect()
     }
@@ -296,19 +296,19 @@ mod tests {
         KeyEvent::new(code, m)
     }
 
-    /// 표시: Shift 없는 ⌃/⌥+글자는 소문자 (대문자 = Shift 를 눌러야 하는 것처럼 보이지 않게)
+    /// Display: ⌃/⌥+letter without Shift is lowercase (so it doesn't look like uppercase = needs Shift)
     #[test]
     fn labels_lowercase_letters_without_shift() {
         let mac = cfg!(target_os = "macos");
         let d = |s: &str| disp(s);
         assert_eq!(d("Ctrl+K actions"), if mac { "⌃k actions" } else { "Ctrl+k actions" });
         assert_eq!(d("Ctrl+L new · Alt+E explain · Ctrl+S"), if mac { "⌃l new · ⌥e explain · ⌃s" } else { "Ctrl+l new · Alt+e explain · Ctrl+s" });
-        // Shift 가 있으면 대문자, 글자가 아닌 키는 그대로
+        // Uppercase if Shift is present, non-letter keys as is
         assert_eq!(d("Alt+Shift+X"), if mac { "⌥⇧X" } else { "Alt+Shift+X" });
         assert_eq!(d("Ctrl+Enter / Ctrl+Alt+Up / Ctrl+PgDn / F5"), if mac { "⌃Enter / ⌃⌥Up / ⌃PgDn / F5" } else { "Ctrl+Enter / Ctrl+Alt+Up / Ctrl+PgDn / F5" });
-        // 수식키 없는 글자·문장은 그대로
+        // Letters·text without modifiers as is
         assert_eq!(d("D delete · Ctrl+Space"), if mac { "D delete · ⌃Space" } else { "D delete · Ctrl+Space" });
-        // 기호로 쓴 키도 같은 규칙 (⌘C → ⌘c, ⇧⌘A 는 그대로)
+        // Keys written with symbols follow the same rule (⌘C → ⌘c, ⇧⌘A unchanged)
         assert_eq!(d("y  ⌘C · ⌘A ⌫ · ⇧⌘A · ⌘F2"), "y  ⌘c · ⌘a ⌫ · ⇧⌘A · ⌘F2");
     }
 
@@ -331,7 +331,7 @@ mod tests {
         assert_eq!(km.lookup(&ev(KeyCode::Enter, KeyModifiers::ALT)), Some(Action::Execute));
         assert!(km.overrides().is_empty());
 
-        // 다른 명령이 쓰던 키를 가져오면 그 명령에서 빠진다
+        // Taking a key another command used removes it from that command
         assert_eq!(km.bind(Action::NewConsole, "Ctrl+K".into(), false), Some(Action::Palette));
         assert_eq!(km.lookup(&ev(KeyCode::Char('k'), KeyModifiers::CONTROL)), Some(Action::NewConsole));
         assert_eq!(km.lookup(&ev(KeyCode::Char('l'), KeyModifiers::CONTROL)), None);
@@ -340,7 +340,7 @@ mod tests {
         assert_eq!(o.get("NewConsole").unwrap(), &vec!["Ctrl+K".to_string()]);
         assert_eq!(o.get("Palette").unwrap(), &Vec::<String>::new());
 
-        // 저장한 설정을 다시 읽으면 같다 (표기는 정규화)
+        // Re-reading saved settings gives the same result (notation normalized)
         let mut user = o.clone();
         user.insert("Help".into(), vec!["shift+f1".into()]);
         let km2 = Keymap::new(&user);
@@ -370,7 +370,7 @@ mod tests {
         }
     }
 
-    /// 화면 글은 기호로 쓴다 → macOS 가 아니면 낱말로 (⌥+wheel 의 + 는 한 번만)
+    /// Screen text uses symbols → words when not on macOS (only one + in ⌥+wheel)
     #[test]
     fn glyphs_become_words_off_macos() {
         assert_eq!(lower_unshifted(&glyph_words("⌃k · ⌥⇧N · ⌥+wheel · ⇧Tab · ⇧⌘A")), "Ctrl+k · Alt+Shift+N · Alt+wheel · Shift+Tab · ⇧⌘A");

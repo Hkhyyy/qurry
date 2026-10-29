@@ -8,8 +8,8 @@ const MAX_ROWS = 100_000;
 const cell = (v: unknown) => (v === null ? "NULL" : typeof v === "object" ? JSON.stringify(v) : String(v));
 
 /**
- * 테스트 데이터 만들기: 테이블 구조(타입·길이·NOT NULL·PK·UNIQUE·FK·enum·CHECK)와 컬럼 이름으로 그럴듯한 행을 채운다.
- * 넣기 전에 컬럼마다 채우는 법과 예시를 보여 준다. 한 트랜잭션 — 하나라도 실패하면 아무것도 안 들어간다
+ * Generate test data: fill plausible rows from the table structure (type·length·NOT NULL·PK·UNIQUE·FK·enum·CHECK) and column names.
+ * Shows how each column is filled, with samples, before inserting. One transaction — if anything fails, nothing is inserted
  */
 export function GenerateDataDialog({ target, schema, table, production, onDone, onClose }: { target: string; schema: string; table: string; production?: string; onDone: (rows: number) => void; onClose: () => void }) {
   const [pv, setPv] = useState<FakePreview | null>(null);
@@ -121,14 +121,14 @@ export function GenerateDataDialog({ target, schema, table, production, onDone, 
 }
 
 /**
- * 운영 데이터 일부 복사: 시작 행 (WHERE) 과 FK 로 이어진 행 (부모는 끝까지, 자식은 고른 단계까지) 을 다른 Data Source 로.
- * 개인정보로 보이는 컬럼은 읽을 때 가린다 (md5 — 같은 값은 늘 같게). 대상에는 한 트랜잭션, 이미 있는 행은 건너뛴다
+ * Partial copy of production data: start rows (WHERE) and FK-linked rows (parents all the way, children to the chosen depth) into another Data Source.
+ * Columns that look like personal data are masked when read (md5 — the same value always maps the same). One transaction on the target; existing rows are skipped
  */
 export function CopyRowsDialog({ source, schema, table, conn, conns, onDone, onClose }: { source: string; schema: string; table: string; conn: ConnectionView; conns: ConnectionView[]; onDone: (msg: string) => void; onClose: () => void }) {
   const [filter, setFilter] = useState("");
   const [depth, setDepth] = useState(1);
   const [mask, setMask] = useState(true);
-  // 운영이 아닌 곳을 먼저 (기본값이 운영이 되지 않게)
+  // Non-production targets first (so the default isn't production)
   const targets = conns.filter((c) => c.kind === conn.kind && c.id !== conn.id).sort((a, b) => Number(!!a.options?.confirmChanges) - Number(!!b.options?.confirmChanges));
   const [target, setTarget] = useState(targets[0]?.id ?? "");
   const [plan, setPlan] = useState<SubsetPlan | null>(null);
@@ -136,7 +136,7 @@ export function CopyRowsDialog({ source, schema, table, conn, conns, onDone, onC
   const [busy, setBusy] = useState<"preview" | "copy" | null>(null);
   const where = schema ? `${schema}.${table}` : table;
   const spec: SubsetSpec = { schema, table, filter, depth, mask };
-  // 조건을 바꾸면 미리보기를 다시
+  // Re-run the preview when the condition changes
   useEffect(() => setPlan(null), [filter, depth, mask]);
 
   const preview = async () => {

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { isReleaseUrl } from "./api";
 
 describe("isReleaseUrl", () => {
-  it("업데이트 창은 이 저장소의 릴리스 주소만 연다 (설정 폴더의 캐시가 바뀌어도)", () => {
+  it("the update dialog only opens this repository's release URLs (even if the cache in the config folder changed)", () => {
     expect(isReleaseUrl("https://github.com/Hkhyyy/qurry/releases/tag/v0.1.17")).toBe(true);
     expect(isReleaseUrl("https://github.com/Hkhyyy/qurry/releases/download/v0.1.17/Qurry_0.1.17_aarch64.dmg")).toBe(true);
     expect(isReleaseUrl("https://github.com/Hkhyyy/dbtool/releases/tag/v0.1.15")).toBe(true);

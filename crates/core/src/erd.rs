@@ -1,4 +1,4 @@
-//! ERD: 스키마의 테이블·컬럼(PK·FK 표시)과 외래 키 관계. GUI 는 그림으로, TUI 는 관계 목록으로 그리고, 둘 다 Mermaid 로 복사할 수 있다
+//! ERD: a schema's tables and columns (with PK and FK marks) and foreign key relationships. The GUI draws a diagram, the TUI a relationship list, and both can copy as Mermaid
 use crate::app::{AppState, ensure_pool};
 use crate::db::Pool;
 use crate::error::AppResult;
@@ -20,7 +20,7 @@ pub struct ErdTable {
     pub columns: Vec<ErdColumn>,
 }
 
-/// from 테이블의 컬럼들이 to 테이블의 컬럼들을 가리킨다
+/// Columns of the from table reference columns of the to table
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ErdRelation {
@@ -41,7 +41,7 @@ pub struct Erd {
 }
 
 impl Erd {
-    /// 가장 많은 테이블이 있는 스키마 (이 스키마의 테이블은 이름만, 나머지는 schema 를 붙인다)
+    /// Schema with the most tables (its tables use just the name, others are prefixed with the schema)
     fn main_schema(&self) -> &str {
         let mut count: std::collections::HashMap<&str, usize> = Default::default();
         for t in &self.tables {
@@ -54,7 +54,7 @@ impl Erd {
         if schema == self.main_schema() || schema.is_empty() { name.to_string() } else { format!("{schema}{sep}{name}") }
     }
 
-    /// Mermaid erDiagram (문서·이슈에 붙인다). 다른 스키마 테이블은 schema_table 로
+    /// Mermaid erDiagram (for docs and issues). Tables in other schemas as schema_table
     pub fn mermaid(&self) -> String {
         let ident = |s: String| s.chars().map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' }).collect::<String>();
         let mut out = String::from("erDiagram\n");
@@ -62,7 +62,7 @@ impl Erd {
             let fks: std::collections::HashSet<&str> = self.relations.iter().filter(|r| r.from_schema == t.schema && r.from_table == t.name).flat_map(|r| r.from_columns.iter().map(|c| c.as_str())).collect();
             out += &format!("  {} {{\n", ident(self.label(&t.schema, &t.name, "_")));
             for c in &t.columns {
-                // Mermaid 타입은 한 단어 (괄호 안 길이·정밀도는 뺀다: numeric(12,2) → numeric)
+                // Mermaid types are one word (length/precision in parentheses dropped: numeric(12,2) → numeric)
                 let ty: String = c.data_type.split('(').next().unwrap_or("").trim().replace(' ', "_").chars().filter(|ch| ch.is_alphanumeric() || *ch == '_' || *ch == '[' || *ch == ']').collect();
                 let keys = match (c.pk, fks.contains(c.name.as_str())) {
                     (true, true) => " PK, FK",
@@ -80,7 +80,7 @@ impl Erd {
         out
     }
 
-    /// TUI: 테이블마다 가리키는 곳 (→) · 가리켜지는 곳 (←)
+    /// TUI: per table, what it references (→) · what references it (←)
     pub fn text(&self) -> String {
         let mut out = vec![];
         for t in &self.tables {
@@ -100,7 +100,7 @@ impl Erd {
     }
 }
 
-/// (schema, table) → 컬럼
+/// (schema, table) → columns
 type Columns = std::collections::HashMap<(String, String), Vec<ErdColumn>>;
 
 async fn pg(p: &sqlx::PgPool, schemas: &[String]) -> AppResult<Erd> {
@@ -125,7 +125,7 @@ async fn pg(p: &sqlx::PgPool, schemas: &[String]) -> AppResult<Erd> {
     .bind(schemas)
     .fetch_all(p)
     .await?;
-    // 다른 스키마를 가리키는 관계: 그 테이블도
+    // Relationships pointing to another schema: include that table too
     for r in &rels {
         for k in [(r.1.clone(), r.2.clone()), (r.4.clone(), r.5.clone())] {
             if !wanted.contains(&k) {
@@ -212,7 +212,7 @@ async fn my(p: &sqlx::MySqlPool, schemas: &[String]) -> AppResult<Erd> {
 }
 
 impl AppState {
-    /// schemas 의 테이블과 관계. 다른 스키마를 가리키는 관계면 그 테이블도 넣는다
+    /// Tables and relationships of schemas. If a relationship points to another schema, that table is included too
     pub async fn erd(&self, id: String, schemas: Vec<String>) -> AppResult<Erd> {
         let mut e = match ensure_pool(self, &id).await? {
             Pool::Pg(p) => pg(&p, &schemas).await?,
@@ -220,7 +220,7 @@ impl AppState {
             Pool::Redis(..) => return Err(crate::error::AppError::Msg("Redis has no tables".into())),
             Pool::Plugin(c) => return Err(crate::error::AppError::Msg(format!("Diagrams are not available for the {} driver yet", c.driver))),
         };
-        // 고른 스키마 순서대로
+        // In the order of the chosen schemas
         e.tables.sort_by_key(|t| (schemas.iter().position(|s| *s == t.schema).unwrap_or(usize::MAX), t.schema.clone(), t.name.clone()));
         Ok(e)
     }
@@ -256,7 +256,7 @@ mod tests {
         let m2 = e.mermaid();
         assert!(m2.contains("    numeric name\n") && m2.contains("    character_varying customer_id FK\n"), "{m2}");
         assert!(m.contains("  orders {\n    bigint id PK\n    bigint customer_id FK\n  }"), "{m}");
-        // public 이 아닌 스키마는 이름 앞에
+        // Prefix non-public schemas with the schema name
         assert!(m.contains("  billing_invoices {"), "{m}");
         assert!(m.contains("  customers ||--o{ orders : \"customer_id\""), "{m}");
         assert!(m.contains("  orders ||--o{ billing_invoices : \"order_id\""), "{m}");

@@ -4,12 +4,12 @@ import { Button, CodeBlock, List, ListItem, Modal, SearchField, Tabs } from "../
 import { history, HistoryItem, Snippet } from "../lib/api";
 
 /**
- * DataGrip "Browse Query History" (⌥⌘e) + 스니펫 (이름 붙여 저장한 쿼리). 기록은 설정 폴더에 있어 TUI 와 같이 쓴다.
- * 타이핑 = 필터, 더블클릭/↩ = 콘솔에 붙여넣기, ⌦ = 삭제
+ * DataGrip "Browse Query History" (⌥⌘e) + snippets (named saved queries). History lives in the config folder, shared with the TUI.
+ * Typing = filter, double-click/↩ = paste into the console, ⌦ = delete
  */
 const OLD_KEY = "dbtool.queryHistory";
 
-/** 예전 기록(localStorage)은 한 번 옮기고 지운다 (앱이 뜬 뒤에 부른다: 백엔드가 준비된 다음) */
+/** Migrate the old history (localStorage) once and delete it (called after the app is up: once the backend is ready) */
 export function migrateOldHistory() {
   try {
     const raw = localStorage.getItem(OLD_KEY);
@@ -17,16 +17,16 @@ export function migrateOldHistory() {
     const items: HistoryItem[] = JSON.parse(raw);
     history.import(items).then(() => localStorage.removeItem(OLD_KEY), () => {});
   } catch {
-    /* 옮기지 못해도 앱은 돈다 */
+    /* The app runs even if migration fails */
   }
 }
 
-/** 실행한 문장을 기록한다 (비밀번호는 백엔드가 가린다) */
+/** Record a statement that was run (the backend masks passwords) */
 export function pushHistory(h: { connId: string; database?: string; sql: string }) {
   history.add(h.connId, h.database, h.sql).catch(() => {});
 }
 
-/** 지금 콘솔의 쿼리를 스니펫으로 (이름을 묻는다). 이 Data Source 에서만 쓸지도 */
+/** Save the current console's query as a snippet (asks for a name), and whether to use it only in this Data Source */
 export async function saveSnippet(sql: string, connId: string, connName: string): Promise<string | null> {
   const text = sql.trim();
   if (!text) return null;

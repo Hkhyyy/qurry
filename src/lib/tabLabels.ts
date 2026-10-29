@@ -1,4 +1,4 @@
-/** 탭 이름: 같은 이름의 테이블 탭이 여럿 열렸으면 구분되게 (DataGrip) — 스키마가 다르면 schema.table, 스키마도 같으면 db.schema.table */
+/** Tab name: distinguish table tabs with the same name (DataGrip) — schema.table if schemas differ, db.schema.table if the schema is also the same */
 export interface TableTabKey {
   id: string;
   db: string;

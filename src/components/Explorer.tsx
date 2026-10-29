@@ -10,7 +10,7 @@ export type MenuItem = MenuEntry;
 interface Props {
   connections: ConnectionView[];
   onAdd: () => void;
-  /** 워크스페이스: 이 탐색기에 없는 Data Source (＋ 메뉴에서 넣는다) */
+  /** Workspace: Data Sources not in this explorer (added from the ＋ menu) */
   others?: ConnectionView[];
   onAddExisting?: (id: string) => void;
   onRefresh: () => void;
@@ -25,7 +25,7 @@ interface Props {
 
 type Menu = { x: number; y: number; items: MenuItem[]; conn?: ConnectionView };
 
-/** 우클릭 메뉴 (ui/Menu). Data Source 메뉴면 아래에 색 고르기 */
+/** Context menu (ui/Menu). Data Source menus get a color picker below */
 export function ContextMenu({ menu, onClose, onSetColor }: { menu: Menu; onClose: () => void; onSetColor?: (c: ConnectionView, v: string | null) => void }) {
   return (
     <UiMenu
@@ -74,7 +74,7 @@ export function Explorer(p: Props) {
     };
   }, []);
 
-  // ── 키보드 탐색 + Speed search (DataGrip: 트리에서 바로 타이핑) ──
+  // ── Keyboard navigation + Speed search (DataGrip: type directly in the tree) ──
   const treeRef = useRef<HTMLDivElement>(null);
   const [speed, setSpeed] = useState("");
   const rows = () => Array.from(treeRef.current?.querySelectorAll<HTMLElement>(".tree-node") ?? []);
@@ -90,7 +90,7 @@ export function Explorer(p: Props) {
     const el = list[cur];
     const matchesSpeed = (s: string) => list.filter((x) => (x.querySelector(".node-name")?.textContent ?? "").toLowerCase().includes(s.toLowerCase()));
     if (speed && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
-      // speed search 중에는 다음/이전 일치 항목
+      // During speed search, next/previous match
       const m = matchesSpeed(speed);
       const i = m.findIndex((x) => x === el);
       selectEl(m[(i + (e.key === "ArrowDown" ? 1 : -1) + m.length) % m.length]);
@@ -113,7 +113,7 @@ export function Explorer(p: Props) {
       const tw = el.querySelector<HTMLElement>(".twisty");
       if (tw && tw.dataset.open === "1") tw.click();
       else {
-        // 부모 노드로 이동 (들여쓰기가 더 작은 위쪽 노드)
+        // Move to the parent node (the node above with smaller indentation)
         const indent = parseFloat(el.style.paddingLeft || "0");
         for (let i = cur - 1; i >= 0; i--) if (parseFloat(list[i].style.paddingLeft || "0") < indent) return selectEl(list[i]), e.preventDefault();
       }
@@ -219,7 +219,7 @@ export function Explorer(p: Props) {
               )}
             </div>
           )}
-          {/* 가장 긴 줄 폭에 맞춘 한 덩어리: 이름은 자르지 않고 가로로 스크롤 (줄 바탕 · 색 띠도 끝까지) */}
+          {/* One block sized to the longest row: names aren't truncated and scroll horizontally (row background · color stripe run to the end) */}
           <div className="tree-content">
             {p.connections.map((c) => (
               <SchemaTree

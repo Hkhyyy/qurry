@@ -3,14 +3,14 @@ import { ConnectionView, meta, Scope, SCOPE_ALL, SCOPE_DEFAULT, SchemaInfo, targ
 import { Badge, Checkbox, Hint, IconButton, Notice, Spacer, Text, Toolbar, TreeRow } from "../ui";
 
 /**
- * DataGrip의 스키마 선택 팝업 (Data Source / DB 노드의 "N of M" 배지를 누르면 열림).
- * Enter 또는 바깥 클릭 = 적용, Esc = 취소.
+ * DataGrip's schema selection popup (opens when clicking the "N of M" badge on a Data Source / DB node).
+ * Enter or outside click = apply, Esc = cancel.
  */
 interface Props {
   conn: ConnectionView;
   dbs: string[];
   defaultDb: string;
-  /** DB 노드 배지에서 열었으면 그 DB를 펼친 상태로 시작 */
+  /** If opened from a DB node badge, start with that DB expanded */
   focusDb?: string;
   x: number;
   y: number;
@@ -42,7 +42,7 @@ export function ScopePopup({ conn, dbs, defaultDb, focusDb, x, y, onApply, onClo
 
   useEffect(() => {
     if (focusDb) load(focusDb);
-    // 저장할 때 "전부"는 필터 없음으로 정리
+    // When saving, "all" is normalized to no filter
     const apply = () => {
       const sc = scopeRef.current;
       const schemas = Object.fromEntries(Object.entries(sc.schemas ?? {}).filter(([, v]) => !(v.length === 1 && v[0] === SCOPE_ALL)));
@@ -61,7 +61,7 @@ export function ScopePopup({ conn, dbs, defaultDb, focusDb, x, y, onApply, onClo
         onClose();
       }
     };
-    // 팝업을 연 클릭이 바로 "바깥 클릭"으로 처리되지 않도록 다음 틱에 등록
+    // Register on the next tick so the click that opened the popup isn't treated as an "outside click"
     const t = setTimeout(() => {
       window.addEventListener("mousedown", onDown, true);
       window.addEventListener("keydown", onKey, true);
@@ -73,18 +73,18 @@ export function ScopePopup({ conn, dbs, defaultDb, focusDb, x, y, onApply, onClo
     };
   }, []);
 
-  // ─ DB 체크 상태 ─
+  // ─ DB check state ─
   const dbList = scope.databases ?? [];
   const allDbs = dbList.includes(SCOPE_ALL);
   const defDb = dbList.includes(SCOPE_DEFAULT);
   const dbChecked = (db: string) => allDbs || dbList.includes(db) || (defDb && db === defaultDb);
-  const dbImplicit = (db: string) => !dbList.includes(db) && dbChecked(db); // 전체/기본 규칙으로만 체크됨
+  const dbImplicit = (db: string) => !dbList.includes(db) && dbChecked(db); // Checked only by the all/default rules
   const setDbs = (next: string[]) => setScope((s) => ({ ...s, databases: next.length ? next : null }));
   const toggleDbFlag = (flag: string) => setDbs(dbList.includes(flag) ? dbList.filter((d) => d !== flag) : [...dbList, flag]);
   const toggleDb = (db: string) => setDbs(dbList.includes(db) ? dbList.filter((d) => d !== db) : [...dbList, db]);
 
-  // ─ 스키마 체크 상태 ─
-  // 스키마 필터가 없는 DB = 전부 보임 → "All schemas" 체크 상태로 표시
+  // ─ Schema check state ─
+  // A DB with no schema filter = everything shown → displayed as "All schemas" checked
   const schList = (db: string) => (scope.schemas && db in scope.schemas ? scope.schemas[db] : [SCOPE_ALL]);
   const setSch = (db: string, next: string[]) =>
     setScope((s) => {

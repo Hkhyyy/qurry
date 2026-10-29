@@ -1,10 +1,10 @@
-//! 쿼리 히스토리·스니펫 (GUI 와 같은 파일): ⌃K › Query History… · Snippets… · Save Query as Snippet…
-//! 운영 작업 기록 (⌃K › Production Log…): Production Data Source 에서 실행한 변경과 되돌리기 SQL
+//! Query history·snippets (same file as the GUI): ⌃K › Query History… · Snippets… · Save Query as Snippet…
+//! Production log (⌃K › Production Log…): changes run on Production Data Sources and their undo SQL
 use crate::app::{App, PAction, PItem, Palette, Popup, Tab, TabKind, byte_offset, selected_text};
 use qurry_core::history::Snippet;
 use tui_textarea::TextArea;
 
-/// 한 줄로, 길면 앞부분만
+/// On one line, only the beginning if long
 fn one_line(s: &str, n: usize) -> String {
     let t: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
     if t.chars().count() > n { format!("{}…", t.chars().take(n).collect::<String>()) } else { t }
@@ -22,7 +22,7 @@ fn ago(ts: i64) -> String {
 }
 
 impl App {
-    /// 지금 탭의 Data Source
+    /// Data Source of the current tab
     fn snip_conn(&self) -> Option<String> {
         self.tabs.get(self.active).map(|t| t.conn.clone())
     }
@@ -35,7 +35,7 @@ impl App {
         self.popup = Some(Popup::Palette(Palette { title: title.into(), input: TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
     }
 
-    /// 최근 실행한 쿼리 (이 Data Source). 고르면 콘솔에
+    /// Recently run queries (this Data Source). Picking one puts it in the console
     pub fn history_palette(&mut self) {
         let conn = self.snip_conn();
         let items = self.state.history.list(conn.as_deref(), "", 1000).into_iter().map(|h| PItem { label: one_line(&h.sql, 160), hint: ago(h.ts), action: PAction::InsertSql(h.sql) }).collect();
@@ -48,7 +48,7 @@ impl App {
         self.chooser_sql("Snippets (type to filter)", items, "No snippets yet — ⌃k › Save Query as Snippet");
     }
 
-    /// 골라 둔 글, 아니면 커서의 문장을 이름 붙여 저장 (이 Data Source 에서만 보인다)
+    /// Save the selected text, or the statement at the cursor, under a name (visible only in this Data Source)
     pub fn save_snippet(&mut self) {
         let Some(Tab { kind: TabKind::Console(c), conn, .. }) = self.tabs.get(self.active) else {
             self.status = "Open a query console first".into();
@@ -78,7 +78,7 @@ impl App {
         });
     }
 
-    /// 운영 작업 기록 (모든 Data Source, 최근 것부터). 고르면 되돌리기 SQL 을 새 콘솔에
+    /// Production log (all Data Sources, newest first). Picking one opens its undo SQL in a new console
     pub fn production_log(&mut self) {
         let items = self
             .state
@@ -100,7 +100,7 @@ impl App {
                 let (conn, db) = qurry_core::app::split_target(&e.conn_id);
                 PItem {
                     label: one_line(&e.sql, 120),
-                    // 좁으면 뒤가 잘린다 → 중요한 것 (되돌리기 · 행 수) 먼저
+                    // When narrow the end is cut → important things (undo · row count) first
                     hint: [undo, status, ago(e.ts), place].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join(" · "),
                     action: PAction::OpenUndo { conn: conn.into(), db: db.map(String::from), note: e.error.clone().or(e.note.clone()).unwrap_or_else(|| "No undo for this statement".into()), undo: e.undo },
                 }
@@ -109,7 +109,7 @@ impl App {
         self.chooser_sql("Production Log (type to filter · ↩ opens the undo SQL in a new console)", items, "Nothing yet — changes you run on a Production data source show up here");
     }
 
-    /// 되돌리기 SQL 을 그 Data Source 의 새 콘솔에 (실행은 직접 — Production 확인을 거친다)
+    /// Undo SQL into a new console of that Data Source (run it yourself — it goes through the Production confirmation)
     pub fn open_undo(&mut self, conn: String, db: Option<String>, undo: Option<String>, note: String) {
         let Some(undo) = undo else {
             self.status = note;
@@ -127,7 +127,7 @@ impl App {
         self.status = "Undo SQL opened — check it, then run it".into();
     }
 
-    /// 고른 쿼리를 콘솔에 넣는다 (지금 탭이 콘솔이 아니면 새 콘솔)
+    /// Put the picked query in the console (a new console if the current tab isn't a console)
     pub fn insert_sql(&mut self, sql: String) {
         if !matches!(self.tabs.get(self.active).map(|t| &t.kind), Some(TabKind::Console(_))) {
             let Some(t) = self.tabs.get(self.active) else { return };

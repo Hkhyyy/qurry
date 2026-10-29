@@ -1,5 +1,5 @@
-/** GUI 단축키 목록 (Help › Keymap Reference 와 docs/shortcuts-gui.md 의 기준). [macOS 기본 키, 설명, 명령 id?]. 다른 OS 표기는 toOther 로 바꾼다.
- *  명령 id 가 있는 줄은 바꿀 수 있는 단축키(lib/shortcuts.ts)이고, 화면에는 현재 키가 보인다 */
+/** GUI shortcut list (source for Help › Keymap Reference and docs/shortcuts-gui.md). [macOS default key, description, command id?]. Other OS notation via toOther.
+ *  Rows with a command id are rebindable shortcuts (lib/shortcuts.ts), and the screen shows the current key */
 export type KeyRow = [mac: string, desc: string, id?: string];
 export interface KeySection {
   title: string;
@@ -138,7 +138,7 @@ export const KEYMAP: KeySection[] = [
   },
 ];
 
-/** macOS 기호 → Windows/Linux 표기 (앱은 ⌘ 를 Ctrl, ⌥ 를 Alt 로 받는다) */
+/** macOS symbols → Windows/Linux notation (the app takes ⌘ as Ctrl, ⌥ as Alt) */
 export function toOther(k: string): string {
   return k
     .replace(/⌃/g, "Ctrl+")

@@ -20,10 +20,10 @@ export interface DbObject {
   name: string;
   /** schema | table | view | matview | sequence | foreign | function | procedure | column */
   kind: string;
-  /** column 일 때 소속 테이블 */
+  /** Owning table, for a column */
   table?: string;
   type?: string;
-  /** 접속하지 않은 Data Source: 저장해 둔 목록에서 */
+  /** Unconnected Data Source: from the saved list */
   cached?: boolean;
 }
 export interface FileItem {
@@ -46,7 +46,7 @@ type Row =
   | { t: "file"; f: FileItem; score: number }
   | { t: "action"; a: ActionItem; score: number };
 
-// ── 객체 인덱스 캐시 (대상 DB별). Refresh(⌥⌘y)·재접속 시 invalidate ──
+// ── Object index cache (per target DB). Invalidated on Refresh(⌥⌘y)·reconnect ──
 const objCache = new Map<string, Promise<DbObject[]>>();
 const colCache = new Map<string, Promise<DbObject[]>>();
 const dbCache = new Map<string, Promise<string[]>>();
@@ -107,7 +107,7 @@ const KIND_ICON: Record<string, React.ReactNode> = {
 interface Props {
   initialTab: SeTab;
   conns: ConnectionView[];
-  /** Context Data Sources: 지금 작업 중인 접속 */
+  /** Context Data Sources: connections currently in use */
   contextConnId?: string;
   files: FileItem[];
   actions: ActionItem[];
@@ -131,11 +131,11 @@ export function SearchEverywhere(p: Props) {
   const listRef = useRef<HTMLDivElement>(null);
 
   const scopeConns = p.conns.filter((c) => c.connected && c.kind === "postgres" && (!onlyContext || c.id === p.contextConnId));
-  // 접속하지 않은 Data Source 는 지난번에 읽어 둔 목록으로 찾는다 (고르면 그때 접속)
+  // Unconnected Data Sources are searched in the list read last time (connects when picked)
   const cachedConns = p.conns.filter((c) => !c.connected && c.kind === "postgres" && (!onlyContext || c.id === p.contextConnId));
   const scopeKey = [...scopeConns, ...cachedConns].map((c) => c.id + (c.connected ? "+" : "")).join(",");
 
-  // 대상 DB 인덱스 로드
+  // Load the target DB index
   useEffect(() => {
     let alive = true;
     const wantCols = tab === "symbols" || tab === "all";
@@ -170,7 +170,7 @@ export function SearchEverywhere(p: Props) {
           if (wantCols) jobs.push(columnsOf(c, db).then((xs) => void cols.push(xs)).catch(() => {}));
         }
       }
-      // 먼저 끝난 것부터 보여 준다
+      // Show whichever finishes first
       const flush = () => {
         if (!alive) return;
         setObjects(objs.flat());
@@ -220,7 +220,7 @@ export function SearchEverywhere(p: Props) {
           if (s !== null) out.push({ t: "action", a, score: s - (tab === "all" ? 20 : 0) });
         }
     }
-    // 같은 점수면 짧은 이름이 먼저 (안정 정렬)
+    // Same score: shorter name first (stable sort)
     return out.sort((a, b) => b.score - a.score).slice(0, 200);
   }, [q, tab, objects, columns, p.files, p.actions]);
 
@@ -270,7 +270,7 @@ export function SearchEverywhere(p: Props) {
     if (e.key === "F1") return go(() => run(cur, "doc"));
   };
 
-  /** 결과 한 줄: 아이콘 · 이름 · 설명 ……… 오른쪽 (단축키 · 위치) */
+  /** One result row: icon · name · description ……… right side (shortcut · location) */
   const item = (r: Row, selected: boolean, onEnter: () => void, onClick: () => void) => {
     const common = { selected, onMouseEnter: onEnter, onClick };
     if (r.t === "action") return <ListItem {...common} icon="⚡" title={r.a.name} dim={r.a.disabled} hint={r.a.group} trailing={r.a.shortcut && <Kbd>{r.a.shortcut}</Kbd>} />;

@@ -1,4 +1,4 @@
-//! 편집기 찾기/바꾸기 (DataGrip ⌘F 바): 정규식 · 대소문자 · 단어 단위
+//! Editor find/replace (DataGrip ⌘F bar): regex · match case · whole words
 use regex::Regex;
 
 #[derive(Clone, Copy, Default, Debug, PartialEq)]
@@ -8,7 +8,7 @@ pub struct FindOpts {
     pub word: bool,
 }
 
-/// 찾을 글 → 정규식. 정규식이 아니면 글자 그대로, 대소문자 무시는 (?i), 단어 단위는 \b…\b
+/// Search text → regex. Literal if not regex; ignore case is (?i), whole words is \b…\b
 pub fn build(pattern: &str, o: FindOpts) -> Result<Regex, String> {
     let mut p = if o.regex { pattern.to_string() } else { regex::escape(pattern) };
     if o.word {
@@ -17,18 +17,18 @@ pub fn build(pattern: &str, o: FindOpts) -> Result<Regex, String> {
     if !o.case {
         p = format!("(?i){p}");
     }
-    // 여러 줄 글: ^ $ 는 줄마다
+    // Multi-line text: ^ $ match per line
     Regex::new(&format!("(?m){p}")).map_err(|e| e.to_string().lines().last().unwrap_or("bad pattern").trim().to_string())
 }
 
-/// 바꾼 글과 바꾼 개수. 정규식이면 $1 같은 그룹을 쓸 수 있다
+/// Replaced text and replacement count. With regex, groups like $1 can be used
 pub fn replace_all(text: &str, re: &Regex, with: &str, o: FindOpts) -> (String, usize) {
     let n = re.find_iter(text).count();
     let out = if o.regex { re.replace_all(text, with) } else { re.replace_all(text, regex::NoExpand(with)) };
     (out.into_owned(), n)
 }
 
-/// 한 군데(찾은 글)를 바꿀 글. 정규식이면 그룹을 펼친다
+/// Replacement text for one match. With regex, groups are expanded
 pub fn replacement(found: &str, re: &Regex, with: &str, o: FindOpts) -> String {
     if !o.regex {
         return with.to_string();
@@ -43,7 +43,7 @@ pub fn replacement(found: &str, re: &Regex, with: &str, o: FindOpts) -> String {
     }
 }
 
-// ───────── 바 (Popup::Find) ─────────
+// ───────── Bar (Popup::Find) ─────────
 
 use crate::app::{App, Focus, Popup, TabKind, byte_offset};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -57,12 +57,12 @@ use tui_textarea::{CursorMove, TextArea};
 pub struct FindBar {
     pub find: TextArea<'static>,
     pub replace: TextArea<'static>,
-    /// 바꾸기 칸에 있는지
+    /// Whether focus is in the replace field
     pub on_replace: bool,
     pub opts: FindOpts,
-    /// 칠 때 여기서부터 찾는다 (바를 연 곳)
+    /// Search starts here while typing (where the bar was opened)
     origin: usize,
-    /// (지금 몇 번째, 전체) — 0 이면 없음
+    /// (current index, total) — 0 means none
     pub cur: usize,
     pub count: usize,
     pub error: Option<String>,
@@ -75,7 +75,7 @@ fn field(text: &str) -> TextArea<'static> {
     t
 }
 
-/// 글의 바이트 위치 → (줄, 칸)
+/// Byte offset in the text → (line, column)
 fn pos_of(text: &str, byte: usize) -> (u16, u16) {
     let before = &text[..byte];
     let row = before.matches('\n').count();
@@ -90,7 +90,7 @@ fn editor(app: &mut App) -> Option<&mut TextArea<'static>> {
     }
 }
 
-/// 고른 범위 (바이트)
+/// Selected range (bytes)
 fn selection(ed: &TextArea) -> Option<(usize, usize)> {
     let ((r0, c0), (r1, c1)) = ed.selection_range()?;
     Some((byte_offset(ed.lines(), r0, c0), byte_offset(ed.lines(), r1, c1)))
@@ -106,7 +106,7 @@ fn select(ed: &mut TextArea, text: &str, (s, e): (usize, usize)) {
 }
 
 impl App {
-    /// ⌃F: 콘솔 편집기에 찾기 바. 한 줄을 골라 두었으면 그 글로
+    /// ⌃F: find bar in the console editor. If a single line is selected, use that text
     pub fn find_open(&mut self) {
         let Some(ed) = editor(self) else {
             self.status = "Find works in a query console".into();
@@ -130,7 +130,7 @@ impl App {
         Some(r)
     }
 
-    /// 다시 찾는다. jump = 바를 연 곳부터 첫 결과를 고른다 (칠 때)
+    /// Search again. jump = select the first match from where the bar was opened (while typing)
     pub fn find_refresh(&mut self, jump: bool) {
         self.with_bar(|a, bar| {
             let pat = bar.find.lines()[0].clone();
@@ -176,7 +176,7 @@ impl App {
         });
     }
 
-    /// 다음 / 이전 결과 (끝에서 처음으로 돈다)
+    /// Next / previous match (wraps from end to start)
     fn find_step(&mut self, forward: bool) {
         self.with_bar(|a, bar| {
             let Ok(re) = build(&bar.find.lines()[0], bar.opts) else { return };
@@ -202,7 +202,7 @@ impl App {
         });
     }
 
-    /// 고른 결과만 바꾸고 다음으로
+    /// Replace only the selected match and go to the next
     fn find_replace_one(&mut self) {
         let done = self.with_bar(|a, bar| {
             let Ok(re) = build(&bar.find.lines()[0], bar.opts) else { return false };
@@ -221,7 +221,7 @@ impl App {
         });
         if done == Some(true) {
             self.find_refresh(false);
-            // 바꾼 뒤 커서 다음 결과를 고른다
+            // After replacing, select the next match after the cursor
             self.with_bar(|a, bar| {
                 let Ok(re) = build(&bar.find.lines()[0], bar.opts) else { return };
                 let Some(ed) = editor(a) else { return };
@@ -241,7 +241,7 @@ impl App {
         }
     }
 
-    /// 전부 바꾼다 (한 번에 되돌릴 수 있게 한 번의 편집으로)
+    /// Replace all (as a single edit so it can be undone at once)
     fn find_replace_all(&mut self) {
         let n = self.with_bar(|a, bar| {
             let Ok(re) = build(&bar.find.lines()[0], bar.opts) else { return 0 };
@@ -272,7 +272,7 @@ impl App {
         }
     }
 
-    /// 붙여넣기: 지금 칸에 (한 줄로)
+    /// Paste: into the current field (as one line)
     pub fn find_paste(&mut self, s: &str) {
         let on_find = self.with_bar(|_, bar| {
             let t = if bar.on_replace { &mut bar.replace } else { &mut bar.find };
@@ -285,7 +285,7 @@ impl App {
     }
 }
 
-/// 바가 열려 있을 때의 키
+/// Keys while the bar is open
 pub fn key(app: &mut App, k: KeyEvent) {
     let alt = k.modifiers.contains(KeyModifiers::ALT);
     let toggle = |app: &mut App, f: fn(&mut FindOpts)| {
@@ -322,9 +322,9 @@ pub fn key(app: &mut App, k: KeyEvent) {
     }
 }
 
-/// 편집기 위쪽 오른편에 두 줄 바: 찾기 [.* Cc W] n/m · 바꾸기 (↩ one · ⌥A all)
+/// Two-line bar at the top right of the editor: find [.* Cc W] n/m · replace (↩ one · ⌥A all)
 pub fn draw(f: &mut Frame, app: &mut App) {
-    // 편집기 위 자리 (그 칸을 그릴 때 잡아 둔다). 없으면 화면 위
+    // Area above the editor (captured when drawing that pane). If none, top of the screen
     let rect = if app.hits.find.width > 0 { app.hits.find } else { Rect { height: 4.min(f.area().height), ..f.area() } };
     let Some(Popup::Find(bar)) = &mut app.popup else { return };
     f.render_widget(Clear, rect);
@@ -374,7 +374,7 @@ mod tests {
         assert_eq!(found(t, "id", o), ["ID", "id", "Id"]);
         assert_eq!(found(t, "id", FindOpts { case: true, ..o }), ["id"]);
         assert_eq!(found(t, "id", FindOpts { word: true, ..o }), ["ID", "Id"]);
-        // 정규식이 아니면 특수 문자도 글자 그대로
+        // Without regex, special characters are literal too
         assert_eq!(found("a.b axb", "a.b", o), ["a.b"]);
     }
 
@@ -386,7 +386,7 @@ mod tests {
         let re = build(r"(\d+\.\d+\.\d+\.\d+).*", o).unwrap();
         assert_eq!(replace_all(t, &re, "'$1',", o), ("'1.2.3.4',\n'5.6.7.8',".to_string(), 2));
         assert_eq!(replacement("1.2.3.4 ok", &re, "[$1]", o), "[1.2.3.4]");
-        // 정규식이 아니면 $1 도 글자 그대로
+        // Without regex, $1 is literal too
         let p = FindOpts::default();
         let re = build("ok", p).unwrap();
         assert_eq!(replace_all("ok ok", &re, "$1", p), ("$1 $1".to_string(), 2));

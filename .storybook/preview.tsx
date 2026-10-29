@@ -4,7 +4,7 @@ import "../src/App.css";
 import "../src/ui/tokens.css";
 import "../src/ui/ui.css";
 
-// 위쪽 도구 막대에서 테마를 바꾼다 (앱의 Settings › Appearance 와 같은 data-theme)
+// Switch the theme from the top toolbar (same data-theme as the app's Settings › Appearance)
 const preview: Preview = {
   globalTypes: {
     theme: {

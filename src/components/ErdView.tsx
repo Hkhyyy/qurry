@@ -8,12 +8,12 @@ const HEAD = 26;
 const CHAR = 7.2;
 const key = (s: string, n: string) => `${s}.${n}`;
 
-/** ERD 탭 (DataGrip Diagrams › Show Diagram): 테이블·외래 키 그림. 테이블을 끌어 옮기고, 휠로 확대·축소, 빈 곳을 끌어 이동. 더블클릭 = 테이블 데이터 */
+/** ERD tab (DataGrip Diagrams › Show Diagram): diagram of tables and foreign keys. Drag tables to move them, wheel to zoom, drag empty space to pan. Double-click = table data */
 export function ErdView(p: { target: string; schemas: string[]; visible: boolean; onOpenTable: (schema: string, table: string) => void; onStatus: (s: string) => void }) {
   const [data, setData] = useState<{ tables: ErdTable[]; relations: ErdRelation[]; mermaid: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [moved, setMoved] = useState<Record<string, { x: number; y: number }>>({});
-  // 왼쪽 여백: 같은 열 테이블 사이 선이 왼쪽으로 돌아 나간다
+  // Left margin: lines between tables in the same column loop out to the left
   const [view, setView] = useState({ x: 70, y: 20, k: 1 });
   const [hover, setHover] = useState<string | null>(null);
   const drag = useRef<{ kind: "pan" | "table"; key?: string; sx: number; sy: number; ox: number; oy: number } | null>(null);
@@ -36,7 +36,7 @@ export function ErdView(p: { target: string; schemas: string[]; visible: boolean
     );
   }, [p.target, p.schemas.join(","), seen]);
 
-  // 테이블 크기와 자리
+  // Table sizes and positions
   const boxes = useMemo(() => {
     if (!data) return [];
     const main = (() => {
@@ -59,7 +59,7 @@ export function ErdView(p: { target: string; schemas: string[]; visible: boolean
     return s;
   }, [data]);
 
-  // 선: 가리키는 컬럼 줄 → 가리켜지는 테이블의 PK 줄 (가까운 옆으로)
+  // Lines: referencing column row → the referenced table's PK row (on the nearer side)
   const edge = (r: ErdRelation) => {
     const a = box(key(r.fromSchema, r.fromTable));
     const b = box(key(r.toSchema, r.toTable));
@@ -70,7 +70,7 @@ export function ErdView(p: { target: string; schemas: string[]; visible: boolean
     const ya = pa.y + rowY(a, r.fromColumns[0]);
     const yb = pb.y + rowY(b, r.toColumns[0]);
     const self = a.key === b.key;
-    // 위아래로 겹치면 (같은 열) 둘 다 왼쪽으로 돌아 나간다: 테이블을 가로지르지 않게
+    // If they overlap vertically (same column), both loop out to the left: so lines do not cross tables
     const stacked = pa.x < pb.x + b.width && pb.x < pa.x + a.width;
     if (self || stacked) {
       const left = self ? pa.x + a.width : Math.min(pa.x, pb.x);
@@ -124,7 +124,7 @@ export function ErdView(p: { target: string; schemas: string[]; visible: boolean
     const ys = boxes.map((b) => posOf(b.key).y + b.height);
     el.setAttribute("width", String(Math.max(...xs) + 90));
     el.setAttribute("height", String(Math.max(...ys) + 40));
-    // 파일만 열어도 보이게 (앱의 CSS 없이): 밝은 색으로
+    // Visible when the file is opened alone (without the app's CSS): in light colors
     const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
     style.textContent =
       "svg{background:#fff}.erd-box{fill:#fff;stroke:#9aa0a6}.erd-head{fill:#e8eefc;stroke:#9aa0a6}.erd-title{font:600 13px -apple-system,sans-serif;fill:#1f2328}" +

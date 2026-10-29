@@ -1,24 +1,24 @@
-//! 문장 검사: 읽기 전용(MCP·Read-only Data Source)과 위험 문장 확인(WHERE 없는 UPDATE/DELETE, DROP, TRUNCATE).
-//! 서버와 같은 규칙으로 문자열·주석을 건너뛰고 단어를 읽는다 (sql::split_statements 와 같은 규칙).
-//! 마지막 방어선은 서버의 READ ONLY 트랜잭션이고, 여기서는 그 밖으로 새는 것(문장 여러 개, 파일 쓰기, 관리 함수)을 막는다
+//! Statement checks: read-only (MCP · Read-only Data Source) and risky-statement confirmation (UPDATE/DELETE without WHERE, DROP, TRUNCATE).
+//! Reads words while skipping strings and comments with the same rules as the server (same rules as sql::split_statements).
+//! The last line of defense is the server's READ ONLY transaction; this blocks what leaks past it (multiple statements, file writes, admin functions)
 use crate::store::DbKind;
 
-/// 문자열·주석 밖의 단어(소문자)와 기호. depth = 괄호 깊이
+/// Words (lowercased) and symbols outside strings and comments. depth = parenthesis depth
 #[derive(Debug, Clone, PartialEq)]
 struct Tok {
     text: String,
     word: bool,
     depth: i32,
-    /// "…" / `…` 로 감싼 이름 (키워드가 아니다)
+    /// Name wrapped in "…" / `…` (not a keyword)
     quoted: bool,
-    /// 원래 글에서의 위치 (바이트)
+    /// Position in the original text (bytes)
     start: usize,
     end: usize,
 }
 
 struct Scan {
     toks: Vec<Tok>,
-    /// MySQL /*! … */ · MariaDB /*M! … */ (실행되는 주석)이 있었는지
+    /// Whether there was a MySQL /*! … */ · MariaDB /*M! … */ (executable comment)
     exec_comment: bool,
 }
 
@@ -39,13 +39,13 @@ fn scan(sql: &str, kind: DbKind) -> Scan {
             i = sql[i..].find('\n').map(|j| i + j + 1).unwrap_or(n);
             continue;
         }
-        // MySQL # 주석, ClickHouse "# " · "#!" 주석
+        // MySQL # comment, ClickHouse "# " · "#!" comment
         if c == b'#' && crate::sql::hash_comment(kind, d) {
             i = sql[i..].find('\n').map(|j| i + j + 1).unwrap_or(n);
             continue;
         }
         if c == b'/' && d == b'*' {
-            // MySQL /*! … */ · MariaDB /*M! … */ 는 서버가 실행한다
+            // The server executes MySQL /*! … */ · MariaDB /*M! … */
             let bang = if my && i + 2 < n && b[i + 2] == b'!' { 3 } else if my && i + 3 < n && b[i + 2] == b'M' && b[i + 3] == b'!' { 4 } else { 0 };
             if bang > 0 {
                 exec_comment = true;
@@ -70,13 +70,13 @@ fn scan(sql: &str, kind: DbKind) -> Scan {
             i = j;
             continue;
         }
-        // 문자열 / 인용 식별자: 통째로 한 토큰 (식별자는 이름으로 쓰일 수 있어 단어로 남긴다)
+        // String / quoted identifier: one whole token (identifiers can be used as names, so they stay as words)
         if c == b'\'' || c == b'"' || c == b'`' {
-            // PG E'…' 는 \ 가 이스케이프. name' 처럼 낱말 끝의 e 는 아니다 (sql::split_statements 와 같은 규칙)
+            // In PG E'…', \ is an escape. Not an e at the end of a word like name' (same rules as sql::split_statements)
             let e_string = kind == DbKind::Postgres && c == b'\'' && crate::sql::is_e_string(b, i);
             let mut j = i + 1;
             while j < n {
-                // MySQL 백틱 이름 안의 \ 는 이스케이프가 아니다
+                // \ inside a MySQL backtick name is not an escape
                 if ((backslash && c != b'`') || e_string) && b[j] == b'\\' {
                     j += 2;
                     continue;
@@ -96,7 +96,7 @@ fn scan(sql: &str, kind: DbKind) -> Scan {
             i = (j + 1).min(n);
             continue;
         }
-        // SQL Server [이름] (]] 는 ] 하나)
+        // SQL Server [name] (]] is a single ])
         if c == b'[' && kind == DbKind::Mssql {
             let mut j = i + 1;
             while j < n && !(b[j] == b']' && !(j + 1 < n && b[j + 1] == b']')) {
@@ -138,18 +138,18 @@ fn scan(sql: &str, kind: DbKind) -> Scan {
     Scan { toks, exec_comment }
 }
 
-/// 단순한 UPDATE / DELETE 한 문장의 모양 (PROD 안전장치: 바뀔 행 수 세기 · 되돌리기 SQL).
-/// 같은 테이블·조건으로만 바꾸는 문장만 (CTE, UPDATE … FROM, DELETE … USING, 여러 테이블, ORDER BY / LIMIT 이 있으면 None)
+/// Shape of a single simple UPDATE / DELETE statement (PROD safeguard: counting affected rows · undo SQL).
+/// Only statements that change one table by a condition (None if there is a CTE, UPDATE … FROM, DELETE … USING, multiple tables, ORDER BY / LIMIT)
 #[derive(Debug, Clone, PartialEq)]
 pub struct SimpleDml {
     pub delete: bool,
-    /// 테이블 이름 (쓴 그대로, 별칭 빼고): public."Order Items"
+    /// Table name (as written, without alias): public."Order Items"
     pub table: String,
-    /// FROM 에 쓸 글 (별칭 포함): public."Order Items" o
+    /// Text for FROM (with alias): public."Order Items" o
     pub from: String,
-    /// WHERE 조건 (없으면 모든 행)
+    /// WHERE condition (all rows if absent)
     pub cond: Option<String>,
-    /// UPDATE 가 바꾸는 컬럼 (따옴표는 벗기고, 안 감싼 PostgreSQL 이름은 소문자)
+    /// Columns the UPDATE changes (quotes stripped, unquoted PostgreSQL names lowercased)
     pub set_cols: Vec<String>,
 }
 
@@ -161,7 +161,7 @@ pub fn simple_dml(sql: &str, kind: DbKind) -> Option<SimpleDml> {
     if sc.exec_comment {
         return None;
     }
-    // 첫 문장만 (최상위 ; 까지)
+    // First statement only (up to the top-level ;)
     let end = sc.toks.iter().position(|x| x.text == ";" && x.depth == 0).unwrap_or(sc.toks.len());
     let t = &sc.toks[..end];
     let first = t.iter().position(|x| x.word)?;
@@ -169,7 +169,7 @@ pub fn simple_dml(sql: &str, kind: DbKind) -> Option<SimpleDml> {
     let find = |w: &str, from: usize| (from..t.len()).find(|&i| is(i, w));
     let verb = t[first].text.clone();
     let has = |w: &str| find(w, first + 1).is_some();
-    // 셀 수 없는 모양: 다른 테이블과 묶거나 일부만 바꾸는 것
+    // Shapes that can't be counted: joined with other tables or changing only part
     if has("using") || has("join") || has("order") || has("limit") {
         return None;
     }
@@ -184,7 +184,7 @@ pub fn simple_dml(sql: &str, kind: DbKind) -> Option<SimpleDml> {
         }
         "update" => {
             let set = find("set", first + 1)?;
-            // UPDATE … FROM (PG) · 여러 테이블 (MySQL a, b)
+            // UPDATE … FROM (PG) · multiple tables (MySQL a, b)
             if find("from", set).is_some_and(|f| where_i.is_none_or(|w| f < w)) || (first + 1..set).any(|i| t[i].text == "," && t[i].depth == 0) {
                 return None;
             }
@@ -195,14 +195,14 @@ pub fn simple_dml(sql: &str, kind: DbKind) -> Option<SimpleDml> {
     if a >= b || !t[a].word {
         return None;
     }
-    // 이름: a.b.c (별칭 앞까지)
+    // Name: a.b.c (up to the alias)
     let mut name_end = a;
     while name_end + 2 < b && t[name_end + 1].text == "." && t[name_end + 2].word {
         name_end += 2;
     }
     let table = sql[t[a].start..t[name_end].end].to_string();
     let from = sql[t[a].start..t[b - 1].end].to_string();
-    // 조건: WHERE 다음부터 RETURNING 앞까지 (뒤 주석은 빼고)
+    // Condition: from after WHERE to before RETURNING (trailing comments excluded)
     let cond = match where_i {
         Some(w) => {
             let stop = find("returning", w).unwrap_or(t.len());
@@ -213,7 +213,7 @@ pub fn simple_dml(sql: &str, kind: DbKind) -> Option<SimpleDml> {
         }
         None => None,
     };
-    // SET a = 1, o.b = 2, (c, d) = (…): = 앞의 이름들 (점이 있으면 마지막)
+    // SET a = 1, o.b = 2, (c, d) = (…): the names before = (last part if dotted)
     let mut set_cols = Vec::new();
     if let Some(set) = set {
         let stop = where_i.or(find("returning", set)).unwrap_or(t.len());
@@ -250,7 +250,7 @@ pub fn simple_dml(sql: &str, kind: DbKind) -> Option<SimpleDml> {
     Some(SimpleDml { delete: verb == "delete", table, from, cond, set_cols })
 }
 
-/// PROD 안전장치: UPDATE / DELETE 가 바꿀 행 수를 세는 SELECT count(*). 셀 수 없는 문장이면 None
+/// PROD safeguard: SELECT count(*) counting the rows an UPDATE / DELETE would change. None if the statement can't be counted
 pub fn impact_count_sql(sql: &str, kind: DbKind) -> Option<String> {
     let d = simple_dml(sql, kind)?;
     Some(match d.cond {
@@ -259,14 +259,14 @@ pub fn impact_count_sql(sql: &str, kind: DbKind) -> Option<String> {
     })
 }
 
-/// 읽기 전용에서 허용하는 첫 단어
+/// First words allowed in read-only mode
 const READ_WORDS: &[&str] = &["select", "with", "values", "table", "show", "explain", "describe", "desc"];
-/// 읽기 전용 Data Source 의 콘솔에서는 트랜잭션 제어와 세션 설정도 허용한다
+/// The console of a read-only Data Source also allows transaction control and session settings
 const SESSION_WORDS: &[&str] = &["begin", "start", "commit", "rollback", "end", "abort", "set", "use"];
 
-/// 읽기 전용에서도 서버 밖에 부작용을 내는 함수 (MCP 처럼 남이 쿼리를 쓰는 경우에 막는다)
+/// Functions with side effects outside the server even in read-only mode (blocked when someone else writes the query, as with MCP)
 const SIDE_EFFECT_FUNCS: &[&str] = &[
-    // PostgreSQL: 다른 세션 끊기·서버 파일 읽기/쓰기·설정 재적용·외부 접속·잠금
+    // PostgreSQL: killing other sessions · reading/writing server files · reloading config · external connections · locks
     "pg_terminate_backend", "pg_cancel_backend", "pg_reload_conf", "pg_rotate_logfile", "pg_read_file", "pg_read_binary_file",
     "pg_ls_dir", "pg_stat_file", "pg_ls_logdir", "pg_ls_waldir", "pg_ls_tmpdir", "pg_ls_archive_statusdir", "pg_file_write",
     "lo_import", "lo_export", "dblink", "dblink_exec", "dblink_connect", "dblink_send_query", "set_config", "pg_switch_wal",
@@ -275,38 +275,38 @@ const SIDE_EFFECT_FUNCS: &[&str] = &[
     "pg_stat_reset_single_function_counters", "pg_stat_reset_slru", "pg_stat_reset_replication_slot", "pg_stat_reset_subscription_stats",
     "pg_drop_replication_slot", "pg_create_logical_replication_slot", "pg_create_physical_replication_slot", "pg_logical_emit_message",
     "pg_replication_origin_create", "pg_replication_origin_drop", "pg_log_backend_memory_contexts",
-    // MySQL: 서버 파일 읽기·지연·잠금
+    // MySQL: reading server files · delays · locks
     "load_file", "sleep", "benchmark", "get_lock", "release_lock", "release_all_locks",
 ];
 
-/// SQL Server 는 ; 없이 문장을 이어 쓸 수 있다 (SELECT 1 DROP TABLE t 는 배치 하나). 읽기 문장 뒤에 이 낱말이 나오면 다른 문장이다
+/// SQL Server can chain statements without ; (SELECT 1 DROP TABLE t is one batch). If one of these words follows a read statement, it's another statement
 const MSSQL_STATEMENT_WORDS: &[&str] = &[
     "drop", "alter", "create", "exec", "execute", "truncate", "grant", "revoke", "deny", "declare", "waitfor", "backup", "restore", "kill", "use",
     "dbcc", "shutdown", "reconfigure", "bulk", "set", "begin", "commit", "rollback", "save", "checkpoint", "if", "while", "goto", "print", "raiserror", "throw",
     "end", "disable", "enable", "receive", "send", "move", "get", "setuser", "revert", "open", "close", "fetch", "deallocate", "add", "updatetext", "writetext",
 ];
-/// SQL Server: 다른 서버·파일을 읽는 함수
+/// SQL Server: functions that read other servers · files
 const MSSQL_EXTERNAL_FUNCS: &[&str] = &["openrowset", "opendatasource", "openquery"];
-/// ClickHouse 테이블 함수: 서버 밖 (다른 서버·파일·URL) 을 읽는다 (MCP)
+/// ClickHouse table functions: read outside the server (other servers · files · URLs) (MCP)
 const CLICKHOUSE_EXTERNAL_FUNCS: &[&str] = &[
     "url", "urlcluster", "file", "filecluster", "s3", "s3cluster", "gcs", "azureblobstorage", "azureblobstoragecluster", "hdfs", "hdfscluster", "remote",
     "remotesecure", "cluster", "clusterallreplicas", "mysql", "postgresql", "mongodb", "redis", "sqlite", "jdbc", "odbc", "executable", "iceberg", "icebergs3",
     "deltalake", "hudi", "input",
 ];
-/// DuckDB: 파일·URL 을 읽는 함수 (MCP. 드라이버도 외부 접근을 끄고 연다 — crate::SANDBOX)
+/// DuckDB: functions that read files · URLs (MCP. The driver also opens with external access disabled — crate::SANDBOX)
 const DUCKDB_EXTERNAL_FUNCS: &[&str] = &[
     "read_text", "read_blob", "read_csv", "read_csv_auto", "read_json", "read_json_auto", "read_json_objects", "read_json_objects_auto", "read_ndjson",
     "read_ndjson_auto", "read_ndjson_objects", "read_parquet", "parquet_scan", "parquet_metadata", "parquet_schema", "parquet_file_metadata", "parquet_kv_metadata",
     "read_xlsx", "sniff_csv", "glob", "iceberg_scan", "delta_scan", "getenv", "query_table",
 ];
 
-/// 읽기 전용으로 실행해도 되는지. strict = MCP (부작용 함수까지 막는다). 막으면 이유
+/// Whether it may run as read-only. strict = MCP (also blocks side-effect functions). Returns the reason when blocked
 pub fn read_only_violation(sql: &str, kind: DbKind, strict: bool) -> Option<String> {
     if kind == DbKind::Redis {
         return None;
     }
     let head = sql.trim_start().split(|c: char| c.is_whitespace() || c == '(').next().unwrap_or("").to_lowercase();
-    // 탐색기가 보내는 SELECT * FROM … 은 아래 SQL 규칙으로
+    // SELECT * FROM … sent by the explorer goes through the SQL rules below
     if kind.is_vector() && head != "select" {
         if crate::sql::split_statements(sql, kind).len() != 1 {
             return Some("Read-only mode runs exactly one request".into());
@@ -332,7 +332,7 @@ pub fn read_only_violation(sql: &str, kind: DbKind, strict: bool) -> Option<Stri
     let bare = |t: &Tok| t.word && !t.quoted;
     if kind == DbKind::Mssql {
         let fi = sc.toks.iter().position(|t| t.word).unwrap_or(0);
-        // [이름] 으로 시작하면 SQL Server 는 프로시저 호출로 본다 (EXEC 없이)
+        // Starting with [name], SQL Server treats it as a procedure call (without EXEC)
         if sc.toks.get(fi).is_some_and(|t| t.quoted) {
             return Some("Read-only mode: a statement can't start with a [name] (SQL Server runs it as a procedure)".into());
         }
@@ -340,36 +340,36 @@ pub fn read_only_violation(sql: &str, kind: DbKind, strict: bool) -> Option<Stri
             return Some(format!("Read-only mode: '{}' starts another statement (SQL Server runs the whole batch; write [{}] for a column)", t.text, t.text));
         }
     }
-    // SELECT … INTO 새 테이블 (PostgreSQL · SQL Server)
+    // SELECT … INTO a new table (PostgreSQL · SQL Server)
     if matches!(kind, DbKind::Postgres | DbKind::Mssql) && sc.toks.iter().any(|t| bare(t) && t.text == "into") {
         return Some("Read-only mode: SELECT … INTO creates a table".into());
     }
     if kind == DbKind::Postgres {
-        // U&"…" 이름은 \XXXX 로 글자를 숨길 수 있다 (U&"default_transaction_read\005fonly")
+        // U&"…" names can hide characters with \XXXX (U&"default_transaction_read\005fonly")
         if sc.toks.windows(2).any(|w| w[0].word && !w[0].quoted && w[0].text == "u" && w[1].text == "&" && w[1].start == w[0].end) {
             return Some("Read-only mode: U&\"…\" / U&'…' escapes are not allowed".into());
         }
-        // 문자열 안의 \ 해석을 바꾸면 검사와 서버가 문자열 끝을 다르게 본다
+        // Changing how \ is interpreted in strings makes the check and the server see string ends differently
         if words.iter().any(|w| w.contains("standard_conforming_strings") || w.contains("backslash_quote")) {
             return Some("Read-only mode: changing how strings are read is not allowed".into());
         }
     }
-    // 세션 설정으로 읽기 전용을 끄는 것 (SET default_transaction_read_only = off, SET SESSION TRANSACTION READ WRITE, START TRANSACTION READ WRITE)
+    // Turning off read-only via session settings (SET default_transaction_read_only = off, SET SESSION TRANSACTION READ WRITE, START TRANSACTION READ WRITE)
     if words.iter().any(|w| w.contains("read_only")) || words.windows(2).any(|w| w == ["read", "write"]) {
         return Some("Read-only mode: changing the read-only setting is not allowed".into());
     }
-    // SELECT … INTO OUTFILE / DUMPFILE (MySQL 서버에 파일 쓰기), SELECT … INTO new_table (PG)
+    // SELECT … INTO OUTFILE / DUMPFILE (writing files on the MySQL server), SELECT … INTO new_table (PG)
     if words.windows(2).any(|w| w[0] == "into" && (w[1] == "outfile" || w[1] == "dumpfile")) {
         return Some("Read-only mode: SELECT … INTO OUTFILE/DUMPFILE is not allowed".into());
     }
-    // 문장 안의 쓰기 (WITH d AS (DELETE …) SELECT …)
+    // Writes inside a statement (WITH d AS (DELETE …) SELECT …)
     if let Some(w) = dml_words(&sc.toks).next() {
         return Some(format!("Read-only mode: {} inside the statement is not allowed", sc.toks[w].text.to_uppercase()));
     }
     for (i, t) in sc.toks.iter().enumerate() {
-        // "set_config"(…) · `file`(…) 처럼 따옴표로 감싼 이름도 함수 이름이다
+        // Quoted names like "set_config"(…) · `file`(…) are function names too
         let call = t.word && sc.toks.get(i + 1).is_some_and(|n| n.text == "(");
-        // set_config 는 읽기 전용 설정을 끌 수 있어 Data Source 읽기 전용에서도 막는다. 나머지 부작용 함수는 MCP(strict)에서
+        // set_config can turn off the read-only setting, so it's blocked even for read-only Data Sources. Other side-effect functions only in MCP (strict)
         if call && (t.text == "set_config" || (strict && SIDE_EFFECT_FUNCS.contains(&t.text.as_str()))) {
             return Some(format!("Read-only mode: {}() is not allowed (it has side effects outside the transaction)", t.text));
         }
@@ -386,15 +386,15 @@ pub fn read_only_violation(sql: &str, kind: DbKind, strict: bool) -> Option<Stri
     None
 }
 
-/// 벡터 DB REST: GET 과 읽기 POST (search · query · scroll · get · count · describe · list …) 만
-/// Milvus 드라이버는 메서드와 상관없이 POST 로 보내므로 경로만 본다
+/// Vector DB REST: only GET and read POSTs (search · query · scroll · get · count · describe · list …)
+/// The Milvus driver sends POST regardless of method, so only the path is checked
 fn rest_read_violation(sql: &str, kind: DbKind) -> Option<String> {
     let first = sql.trim().lines().next().unwrap_or("");
     let mut parts = first.split_whitespace();
     let method = parts.next().unwrap_or("").to_uppercase();
     let raw = parts.next().unwrap_or("");
     let raw_path = raw.split('?').next().unwrap_or("");
-    // 검사한 경로와 서버가 받는 경로가 달라질 수 있는 글자 (# 뒤는 보내지 않는다, %2F · .. 는 서버가 풀어 읽는다)
+    // Characters that can make the checked path differ from what the server receives (nothing after # is sent, the server decodes %2F · ..)
     if raw_path.contains(['#', '%', '\\']) || raw_path.split('/').any(|s| s == "." || s == "..") || raw.chars().any(|c| c.is_control()) {
         return Some(format!("Read-only mode: {raw} is not a plain request path"));
     }
@@ -406,7 +406,7 @@ fn rest_read_violation(sql: &str, kind: DbKind) -> Option<String> {
     (!ok).then(|| format!("Read-only mode: {method} {path} may change data (only GET and search/query requests run)"))
 }
 
-/// JSON5 이스케이프 (\uXXXX · \xXX · \n …, 줄 이어 쓰기) 를 푼 글. 따옴표 밖의 이름에 쓴 \uXXXX 도 푼다
+/// Text with JSON5 escapes (\uXXXX · \xXX · \n …, line continuations) decoded. Also decodes \uXXXX in unquoted names
 fn json5_unescape(t: &str) -> String {
     let mut out = String::with_capacity(t.len());
     let mut it = t.chars().peekable();
@@ -430,16 +430,16 @@ fn json5_unescape(t: &str) -> String {
     out
 }
 
-/// MongoDB 셸: 한 줄짜리 읽기 (find · aggregate (\$out/\$merge 없이) · count …) 만
+/// MongoDB shell: only single-line reads (find · aggregate (without \$out/\$merge) · count …)
 fn mongo_read_violation(sql: &str) -> Option<String> {
     let t = sql.trim().trim_end_matches(';');
     const READS: &[&str] = &["find", "findone", "aggregate", "countdocuments", "estimateddocumentcount", "count", "distinct", "getindexes", "stats"];
-    // db.<coll>.<method>( …  — 컬렉션 이름에 점이 있을 수 있어 마지막 '(' 앞 낱말을 본다
+    // db.<coll>.<method>( …  — collection names can contain dots, so look at the word before the last '('
     let call = t.strip_prefix("db.").and_then(|r| r.split_once('(')).map(|(head, _)| head.rsplit('.').next().unwrap_or("").to_lowercase());
-    // 드라이버는 JSON5 로 읽는다: "\u0024out" · '\x24merge' 도 $out · $merge 다. 이스케이프를 풀어 본다
+    // The driver reads JSON5: "$out" · '\x24merge' are also $out · $merge. Decode escapes before checking
     let plain = json5_unescape(t);
     let writes_stage = ["$out", "$merge", "$function", "$accumulator"].iter().any(|k| plain.contains(k));
-    // 이어진 호출 (.sort().limit()) 은 되지만 문장이 여럿이면 안 된다
+    // Chained calls (.sort().limit()) are fine, but not multiple statements
     let one = !t.contains(';');
     match call {
         Some(m) if READS.contains(&m.as_str()) && !writes_stage && one => None,
@@ -447,8 +447,8 @@ fn mongo_read_violation(sql: &str) -> Option<String> {
     }
 }
 
-/// 쓰기 동사 (INSERT/UPDATE/DELETE/MERGE) 의 위치. 따옴표 이름과 쓰기가 아닌 쓰임
-/// (SELECT … FOR [NO KEY] UPDATE, ON CONFLICT DO UPDATE, ON DUPLICATE KEY UPDATE) 은 뺀다
+/// Positions of write verbs (INSERT/UPDATE/DELETE/MERGE). Excludes quoted names and non-write uses
+/// (SELECT … FOR [NO KEY] UPDATE, ON CONFLICT DO UPDATE, ON DUPLICATE KEY UPDATE)
 fn dml_words(toks: &[Tok]) -> impl Iterator<Item = usize> + '_ {
     toks.iter().enumerate().filter_map(move |(i, t)| {
         let dml = t.word && !t.quoted && ["insert", "update", "delete", "merge"].contains(&t.text.as_str());
@@ -457,14 +457,14 @@ fn dml_words(toks: &[Tok]) -> impl Iterator<Item = usize> + '_ {
     })
 }
 
-/// MCP 에서 Redis 명령 하나가 돌려줄 수 있는 요소 수
+/// Number of elements a single Redis command may return in MCP
 pub const REDIS_STRICT_MAX: i64 = 1000;
 
-/// Redis 읽기 전용(MCP) 에서 더 막는 읽기 명령: 설정·비밀번호가 보이거나(CONFIG GET) 서버를 멈출 수 있는 것(KEYS),
-/// 키 하나를 통째로 읽는 것 (요소가 수백만 개면 서버가 멈추고 MCP 가 메모리를 다 쓴다). args = 명령 뒤의 인자 (대문자 아님)
+/// Read commands additionally blocked in Redis read-only (MCP): ones that expose config · passwords (CONFIG GET) or can stall the server (KEYS),
+/// and ones that read a whole key (with millions of elements the server stalls and MCP runs out of memory). args = arguments after the command (not uppercased)
 pub fn redis_strict_violation(cmd: &str, args: &[String]) -> Option<String> {
     let num = |i: usize| args.get(i).and_then(|a| a.parse::<i64>().ok());
-    // 옵션은 키 · 범위 같은 앞 인자 뒤에서만 찾는다 (키 이름이 LIMIT · COUNT 여도 속지 않게)
+    // Look for options only after leading arguments like key · range (so a key named LIMIT · COUNT doesn't fool it)
     let fixed = match cmd {
         "SCAN" => 1,
         "HSCAN" | "SSCAN" | "ZSCAN" | "LPOS" => 2,
@@ -473,7 +473,7 @@ pub fn redis_strict_violation(cmd: &str, args: &[String]) -> Option<String> {
         _ => 3,
     };
     let opt = |name: &str| args.iter().enumerate().skip(fixed).find(|(_, a)| a.eq_ignore_ascii_case(name)).map(|(i, _)| i);
-    // LIMIT · COUNT 는 1 이상 (0 · 음수는 "전부" 인 명령이 있다)
+    // LIMIT · COUNT must be 1 or more (some commands treat 0 · negative as "all")
     let too_many = |n: Option<i64>| n.is_none_or(|n| n <= 0 || n > REDIS_STRICT_MAX);
     let whole = || Some(format!("{cmd} reads the whole key in read-only mode — use redis_get (it reads at most the given limit) or {}", match cmd {
         "HGETALL" | "HKEYS" | "HVALS" => "HSCAN",
@@ -495,7 +495,7 @@ pub fn redis_strict_violation(cmd: &str, args: &[String]) -> Option<String> {
         "ZRANGE" if opt("BYSCORE").or(opt("BYLEX")).is_none() && range(num(1), num(2)) => need_limit("a start..stop range"),
         "ZRANGEBYSCORE" | "ZRANGEBYLEX" | "ZREVRANGEBYSCORE" | "ZREVRANGEBYLEX" if opt("LIMIT").is_none_or(|i| too_many(num(i + 2))) => need_limit("LIMIT offset count"),
         "XRANGE" | "XREVRANGE" if opt("COUNT").is_none_or(|i| too_many(num(i + 1))) => need_limit("COUNT"),
-        // 음수 count 는 그 수만큼 (겹쳐서) 돌려준다
+        // A negative count returns that many (with repeats)
         "SRANDMEMBER" | "HRANDFIELD" | "ZRANDMEMBER" if args.len() > 1 && num(1).is_none_or(|n| n.abs() > REDIS_STRICT_MAX) => need_limit("a count"),
         "SCAN" | "HSCAN" | "SSCAN" | "ZSCAN" if opt("COUNT").is_some_and(|i| too_many(num(i + 1))) => need_limit("COUNT"),
         "LPOS" if opt("COUNT").is_some_and(|i| too_many(num(i + 1))) => need_limit("COUNT"),
@@ -505,11 +505,11 @@ pub fn redis_strict_violation(cmd: &str, args: &[String]) -> Option<String> {
     }
 }
 
-/// 실행 전에 확인을 받을 위험한 문장이면 이유: WHERE 없는 UPDATE/DELETE (CTE 안 포함), DROP, TRUNCATE.
-/// EXPLAIN ANALYZE 는 실제로 실행하므로 그 뒤 문장을 본다 (그냥 EXPLAIN 은 실행하지 않는다)
+/// Reason if the statement is risky and needs confirmation before running: UPDATE/DELETE without WHERE (including inside a CTE), DROP, TRUNCATE.
+/// EXPLAIN ANALYZE actually runs, so check the statement after it (plain EXPLAIN does not run)
 pub fn unsafe_statement(sql: &str, kind: DbKind) -> Option<String> {
     if kind == DbKind::Redis {
-        // 실행할 때와 같이 읽는다 ("FLUSHALL" 처럼 따옴표로 감싸도 같은 명령)
+        // Read it the same way as when running (quoting like "FLUSHALL" is the same command)
         let cmd = redis_args(sql).into_iter().next().unwrap_or_default().to_uppercase();
         return match cmd.as_str() {
             "FLUSHALL" | "FLUSHDB" | "DEL" | "UNLINK" | "SHUTDOWN" | "SWAPDB" | "REPLICAOF" | "SLAVEOF" => Some(format!("{cmd} deletes or replaces data")),
@@ -526,7 +526,7 @@ pub fn unsafe_statement(sql: &str, kind: DbKind) -> Option<String> {
     let sc = scan(sql, kind);
     let mut toks: &[Tok] = &sc.toks;
     if toks.first().is_some_and(|t| t.word && t.text == "explain") {
-        // 옵션 (ANALYZE, (ANALYZE, BUFFERS), FORMAT …) 을 지나 첫 동사까지
+        // Skip options (ANALYZE, (ANALYZE, BUFFERS), FORMAT …) up to the first verb
         let body = toks.iter().position(|t| t.word && t.depth == 0 && ["select", "with", "insert", "update", "delete", "merge", "values", "table"].contains(&t.text.as_str()))?;
         if !toks[..body].iter().any(|t| t.word && (t.text == "analyze" || t.text == "analyse")) {
             return None;
@@ -537,11 +537,11 @@ pub fn unsafe_statement(sql: &str, kind: DbKind) -> Option<String> {
     match first {
         "drop" => return Some(format!("DROP {} removes the object and its data", toks.iter().filter(|t| t.word).nth(1).map(|t| t.text.to_uppercase()).unwrap_or_default())),
         "truncate" => return Some("TRUNCATE deletes every row".into()),
-        // 트리거·권한 정의 안의 UPDATE/DELETE 는 쓰기가 아니다
+        // UPDATE/DELETE inside trigger · privilege definitions are not writes
         "create" | "alter" | "grant" | "revoke" | "comment" => return None,
         _ => {}
     }
-    // UPDATE/DELETE 마다: 같은 괄호 깊이 안에 WHERE 가 있는지 (최상위는 문장 끝까지, CTE 는 그 괄호 끝까지)
+    // For each UPDATE/DELETE: whether a WHERE exists at the same paren depth (top level up to the end of the statement, CTE up to its closing paren)
     for i in dml_words(toks) {
         let v = &toks[i];
         if v.text != "update" && v.text != "delete" {
@@ -556,12 +556,12 @@ pub fn unsafe_statement(sql: &str, kind: DbKind) -> Option<String> {
     None
 }
 
-/// Redis 명령 줄의 인자 (실행할 때와 같은 규칙: redisdb::parse_command). 못 읽으면 빈 목록
+/// Arguments of a Redis command line (same rules as running: redisdb::parse_command). Empty list if unreadable
 fn redis_args(line: &str) -> Vec<String> {
     crate::redisdb::parse_command(line).map(|a| a.iter().map(|x| String::from_utf8_lossy(x).into_owned()).collect()).unwrap_or_default()
 }
 
-/// MongoDB: 컬렉션 · DB 를 지우는 것, 빈 조건으로 모든 문서를 지우거나 바꾸는 것
+/// MongoDB: dropping collections · DBs, deleting or updating all documents with an empty filter
 fn mongo_unsafe(sql: &str) -> Option<String> {
     let plain: String = json5_unescape(sql).chars().filter(|c| !c.is_whitespace()).collect::<String>().to_lowercase();
     if plain.starts_with('{') {
@@ -582,7 +582,7 @@ fn mongo_unsafe(sql: &str) -> Option<String> {
     None
 }
 
-/// 벡터 DB REST: 컬렉션 · 인덱스 지우기 (DELETE, …/drop), 조건 없는 points 지우기
+/// Vector DB REST: dropping collections · indexes (DELETE, …/drop), deleting points without a filter
 fn rest_unsafe(sql: &str) -> Option<String> {
     let (first, body) = sql.trim().split_once('\n').unwrap_or((sql.trim(), ""));
     let mut parts = first.split_whitespace();
@@ -606,7 +606,7 @@ fn rest_unsafe(sql: &str) -> Option<String> {
     None
 }
 
-/// MCP execute 에서 Redis 로 할 수 있는 것: 읽기와 키 하나 · 몇 개를 바꾸는 쓰기만 (스크립트 · 설정 · 복제 · 지우기 · 이름 바꾸기 · 범위 지우기는 아니다)
+/// What MCP execute can do on Redis: reads and writes that change one or a few keys only (not scripts · config · replication · deletes · renames · range deletes)
 pub fn redis_mcp_write_violation(line: &str) -> Option<String> {
     let args = redis_args(line);
     let cmd = args.first().map(|c| c.to_uppercase()).unwrap_or_default();
@@ -623,7 +623,7 @@ pub fn redis_mcp_write_violation(line: &str) -> Option<String> {
     if !WRITES.contains(&cmd.as_str()) {
         return Some(format!("{cmd} is not allowed over MCP — ask the user to run it in Qurry"));
     }
-    // EXPIRE k 0 · 지난 시각은 키를 지운다
+    // EXPIRE k 0 · a past time deletes the key
     let t = args.get(2).and_then(|v| v.parse::<i64>().ok());
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
     let deletes = match cmd.as_str() {
@@ -635,14 +635,14 @@ pub fn redis_mcp_write_violation(line: &str) -> Option<String> {
     deletes.then(|| format!("{cmd} with that time deletes the key — refused over MCP"))
 }
 
-/// 데이터를 바꾸지 않는 문장인지 (스크립트 실패 안내에서 "이미 커밋된 변경" 을 셀 때)
+/// Whether the statement doesn't change data (for counting "already committed changes" in script failure notes)
 pub fn is_read(sql: &str, kind: DbKind) -> bool {
     let sc = scan(sql, kind);
     let first = sc.toks.iter().find(|t| t.word).map(|t| t.text.as_str()).unwrap_or("");
     READ_WORDS.contains(&first) && !sc.toks.iter().any(|t| t.word && ["insert", "update", "delete", "merge"].contains(&t.text.as_str()))
 }
 
-/// 구조를 바꾸는 문장인지 (실행한 뒤 탐색기 트리를 다시 읽는다). 앞 주석은 건너뛴다
+/// Whether the statement changes structure (the explorer tree is reloaded after running). Skips leading comments
 pub fn is_ddl(sql: &str, kind: DbKind) -> bool {
     if kind == DbKind::Redis {
         return false;
@@ -669,7 +669,7 @@ mod tests {
         assert!(!is_ddl("DEL key", DbKind::Redis));
     }
 
-    /// PROD 안전장치: 바꿀 행 수를 세는 쿼리. 단순한 UPDATE / DELETE 만 (나머지는 None)
+    /// PROD safeguard: query counting rows to change. Simple UPDATE / DELETE only (None otherwise)
     #[test]
     fn impact_count_queries() {
         let pg = |q: &str| impact_count_sql(q, DbKind::Postgres);
@@ -678,9 +678,9 @@ mod tests {
         assert_eq!(pg("DELETE FROM logs.user_activity_log WHERE ts < now() - interval '30 days'").as_deref(), Some("SELECT count(*) FROM logs.user_activity_log WHERE ts < now() - interval '30 days'"));
         assert_eq!(pg("delete from t").as_deref(), Some("SELECT count(*) FROM t"));
         assert_eq!(pg("delete from t returning id").as_deref(), Some("SELECT count(*) FROM t"));
-        // 조건 안의 괄호·문자열 속 키워드는 그대로
+        // Keywords inside parens · strings in the condition stay as is
         assert_eq!(pg("update t set a = 'where' where b in (select x from y where z) -- c").as_deref(), Some("SELECT count(*) FROM t WHERE b in (select x from y where z)"));
-        // 셀 수 없는 것
+        // Not countable
         assert_eq!(pg("UPDATE t SET a = s.a FROM s WHERE t.id = s.id"), None);
         assert_eq!(pg("DELETE FROM t USING s WHERE t.id = s.id"), None);
         assert_eq!(pg("WITH x AS (SELECT 1) DELETE FROM t"), None);
@@ -693,7 +693,7 @@ mod tests {
         assert_eq!(my("UPDATE a, b SET a.x = b.x WHERE a.id = b.id"), None);
     }
 
-    /// 되돌리기 SQL 에 쓰는 모양: 테이블 이름 (별칭 빼고) · 바꾸는 컬럼
+    /// Shape used for undo SQL: table name (without alias) · changed columns
     #[test]
     fn simple_dml_shape() {
         let d = simple_dml("update public.\"Order Items\" o set qty = qty + 1, o.\"Note\" = 'x', (a, B) = (1, 2) where o.qty < 0", DbKind::Postgres).unwrap();
@@ -736,7 +736,7 @@ mod tests {
     #[test]
     fn read_only_blocks_known_bypasses() {
         let bad = |s: &str, k| read_only_violation(s, k, true).is_some();
-        // 실제로 뚫렸던 MySQL 형태
+        // MySQL forms that actually got through
         assert!(bad("select 1 --1; COMMIT; DELETE FROM t WHERE id=1", Mysql));
         assert!(bad("/*! COMMIT; DELETE FROM t; */ select 1", Mysql));
         assert!(bad("select /*!50000 1 */", Mysql));
@@ -749,7 +749,7 @@ mod tests {
         assert!(bad("select pg_catalog.pg_read_file('/etc/passwd')", Postgres));
         assert!(bad("select set_config('transaction_read_only','off',true)", Postgres));
         assert!(bad("set default_transaction_read_only = off", Postgres));
-        // 문자열·주석 안의 단어는 상관없다
+        // Words inside strings · comments don't matter
         assert!(!bad("select 'pg_terminate_backend(1); delete'", Postgres));
         assert!(!bad("select $$; delete from t; $$", Postgres));
         assert!(!bad("select 1 -- x; delete", Mysql));
@@ -758,40 +758,40 @@ mod tests {
         assert!(!bad("show tables", Mysql));
     }
 
-    /// 보안 점검에서 나온 우회 (2026-10)
+    /// Bypasses found in the security review (2026-10)
     #[test]
     fn read_only_blocks_review_findings() {
         let bad = |s: &str, k| read_only_violation(s, k, true).is_some();
-        // MariaDB 실행 주석 /*M! … */ 도 /*! … */ 처럼
+        // MariaDB executable comment /*M! … */ too, like /*! … */
         assert!(bad("select 1 /*M!100000 into outfile '/tmp/x' */", Mysql));
         assert!(bad("/*M! commit; delete from t */ select 1", Mysql));
-        // MySQL 백틱 안의 \ 는 이스케이프가 아니다: 서버는 문장 둘로 본다
+        // \ inside MySQL backticks is not an escape: the server sees two statements
         assert!(bad("select 1 as `a\\`, 1 as `b`; delete from t; -- `", Mysql));
-        // CTE 안의 쓰기 (첫 단어만 보면 with)
+        // Writes inside a CTE (the first word alone is with)
         assert!(bad("with d as (delete from t returning *) select * from d", Postgres));
-        // 읽기 전용 Data Source(엄격하지 않음)도 set_config 로 읽기 전용을 끄는 것은 막는다
+        // Read-only Data Sources (non-strict) also block turning off read-only via set_config
         let ds = |s: &str| read_only_violation(s, Postgres, false).is_some();
         assert!(ds("select set_config('default_transaction_read_only','off',false)"));
         assert!(ds("select pg_catalog.set_config('transaction_read_only', 'off', true)"));
         assert!(ds("with d as (update t set a = 1 returning *) select * from d"));
-        // 읽기 전용 트랜잭션에서도 되는 관리 함수 (MCP)
+        // Admin functions that work even in a read-only transaction (MCP)
         assert!(bad("select pg_stat_reset()", Postgres));
         assert!(bad("select pg_drop_replication_slot('s')", Postgres));
         assert!(bad("select pg_logical_emit_message(true, 'p', 'x')", Postgres));
-        // 읽기는 그대로
+        // Reads pass as is
         assert!(!ds("select * from t for update"));
         assert!(!ds("select * from t for no key update"));
         assert!(!ds("select \"delete\" from t"));
         assert!(!bad("select `update` from t", Mysql));
     }
 
-    /// 드라이버 DB 와 렉서 경계 (2026-10 점검 2차)
+    /// Driver DBs and lexer edge cases (2026-10 review, round 2)
     #[test]
     fn read_only_plugin_and_lexer_edges() {
         use DbKind::{Clickhouse, Duckdb, Mssql};
         let bad = |s: &str, k| read_only_violation(s, k, true).is_some();
         let ds = |s: &str, k| read_only_violation(s, k, false).is_some();
-        // SQL Server: ; 없이 이어 쓴 문장 · SELECT INTO · 외부 읽기
+        // SQL Server: statements chained without ; · SELECT INTO · external reads
         assert!(bad("SELECT 1 DROP TABLE dbo.orders", Mssql));
         assert!(ds("SELECT 1 EXEC xp_cmdshell 'whoami'", Mssql));
         assert!(ds("select 1\nexec('drop table t')", Mssql));
@@ -800,7 +800,7 @@ mod tests {
         assert!(!ds("SELECT name, create_date FROM sys.tables WHERE name <> 'drop'", Mssql));
         assert!(!ds("SELECT [drop], [use] FROM dbo.t", Mssql));
         assert!(!ds("SELECT TOP 10 * FROM dbo.t ORDER BY id", Mssql));
-        // REST: Milvus 는 메서드와 상관없이 POST, 경로에 # · % · ..
+        // REST: Milvus uses POST regardless of method, # · % · .. in the path
         assert!(bad("GET /collections/drop\n{\"collectionName\": \"prod\"}", Milvus));
         assert!(bad("GET /entities/delete\n{}", Milvus));
         assert!(!bad("POST /collections/list\n{}", Milvus));
@@ -810,24 +810,24 @@ mod tests {
         assert!(bad("POST /collections/x/points/delete%2F..%2Fsearch\n{}", Qdrant));
         assert!(bad("POST /collections/x/points/delete/../search\n{}", Qdrant));
         assert!(!bad("POST /collections/x/points/search?timeout=5 {\"limit\": 3}", Qdrant));
-        // MongoDB: JSON5 이스케이프로 숨긴 $out / $merge
+        // MongoDB: $out / $merge hidden with JSON5 escapes
         assert!(bad("db.users.aggregate([{\"\\u0024out\": \"users\"}])", Mongodb));
         assert!(bad("db.users.aggregate([{'\\x24merge': {into: 'x'}}])", Mongodb));
         assert!(bad("db.users.aggregate([{$o\\u0075t: 'users'}])", Mongodb));
         assert!(bad("db.users.aggregate([{$facet: {a: [{$merge: 'x'}]}}])", Mongodb));
         assert!(bad("db.users.find({$expr: {$function: {body: 'x', args: [], lang: 'js'}}})", Mongodb));
         assert!(!bad("db.users.find({name: {$regex: '\\\\d+'}})", Mongodb));
-        // PostgreSQL: 낱말 끝의 e' 는 E-string 이 아니다 (뒤 토큰이 숨지 않게)
+        // PostgreSQL: e' at the end of a word is not an E-string (so the next token isn't hidden)
         assert!(bad("select name'\\', pg_terminate_backend(pid) from pg_stat_activity --'", Postgres));
         assert!(ds("select name'\\', set_config('default_transaction_read_only','off',false) --'", Postgres));
         assert!(bad("select é'\\'; delete from t; --'", Postgres));
         assert!(!bad("select E'it\\'s', 1", Postgres));
-        // PostgreSQL: U& 이름 · 문자열 해석 바꾸기 · SELECT INTO
+        // PostgreSQL: U& names · changing string interpretation · SELECT INTO
         assert!(ds("SET U&\"default_transaction_read\\005fonly\" = off", Postgres));
         assert!(ds("set standard_conforming_strings = off", Postgres));
         assert!(ds("select * into t2 from t", Postgres));
         assert!(!ds("select 'into', \"into\" from t", Postgres));
-        // DuckDB · ClickHouse (MCP): 파일 · 다른 서버 읽기
+        // DuckDB · ClickHouse (MCP): reading files · other servers
         assert!(bad("SELECT * FROM read_text('/Users/x/.ssh/id_rsa')", Duckdb));
         assert!(bad("select getenv('HOME')", Duckdb));
         assert!(bad("SELECT * FROM url('http://169.254.169.254/', 'RawBLOB', 'x String')", Clickhouse));
@@ -836,26 +836,26 @@ mod tests {
         assert!(!ds("SELECT * FROM read_csv('local.csv')", Duckdb), "the user's own read-only data source may read local files");
     }
 
-    /// 재검토에서 나온 우회 (2026-10 점검 3차)
+    /// Bypasses found in re-review (2026-10 review, round 3)
     #[test]
     fn read_only_quoted_names_and_lexer_gaps() {
         use DbKind::{Clickhouse, Mssql};
         let bad = |s: &str, k| read_only_violation(s, k, true).is_some();
         let ds = |s: &str, k| read_only_violation(s, k, false).is_some();
-        // 따옴표로 감싼 함수 이름도 함수다
+        // Quoted function names are functions too
         assert!(ds("select \"set_config\"('default_transaction_read_only','off',false)", Postgres));
         assert!(ds("select pg_catalog.\"set_config\"('transaction_read_only','off',true)", Postgres));
         assert!(bad("select \"pg_terminate_backend\"(pid) from pg_stat_activity", Postgres));
         assert!(bad("select pg_terminate_backend (pid) from pg_stat_activity", Postgres));
         assert!(bad("SELECT * FROM `file`('/etc/passwd', 'LineAsString')", Clickhouse));
-        // 비ASCII 달러 따옴표 태그
+        // Non-ASCII dollar-quote tags
         assert!(bad("select $é$ ' $é$, pg_terminate_backend(pid) from pg_stat_activity --'", Postgres));
         assert!(!bad("select $é$ pg_terminate_backend(1) $é$", Postgres));
-        // ClickHouse 문자열의 \' 와 # 주석
+        // \' in ClickHouse strings and # comments
         assert!(bad("SELECT '\\'' , * FROM url('http://169.254.169.254/', 'RawBLOB', 'x String') --'", Clickhouse));
         assert!(bad("select 1 # '\n, * from file('/etc/passwd', 'LineAsString') --'", Clickhouse));
         assert!(!bad("SELECT 'it\\'s' AS a", Clickhouse));
-        // SQL Server: 첫 낱말이 [이름] 이어도 뒤 문장을 본다, 문장 낱말 더
+        // SQL Server: check the following statement even if the first word is [name], more statement words
         assert!(ds("[desc] DROP TABLE dbo.orders", Mssql));
         assert!(ds("SELECT 1 DISABLE TRIGGER ALL ON dbo.t", Mssql));
         assert!(ds("SELECT 1 RECEIVE TOP (1) * FROM dbo.q", Mssql));
@@ -869,7 +869,7 @@ mod tests {
         assert!(!ok("set default_transaction_read_only = off"));
         assert!(!ok("start transaction read write"));
         assert!(!ok("update t set a = 1"));
-        // 데이터 소스 읽기 전용은 pg_sleep 같은 건 막지 않는다 (MCP 만)
+        // Data Source read-only doesn't block things like pg_sleep (MCP only)
         assert!(ok("select pg_sleep(0)"));
     }
 
@@ -935,15 +935,15 @@ mod tests {
         assert!(u("drop table t").is_some() && u("truncate t").is_some());
         assert!(u("delete from t where id = 1").is_none());
         assert!(u("select * from t").is_none());
-        // EXPLAIN ANALYZE 는 실제로 실행한다. 그냥 EXPLAIN 은 실행하지 않는다
+        // EXPLAIN ANALYZE actually runs. Plain EXPLAIN does not
         assert!(u("explain analyze delete from t").is_some());
         assert!(u("explain (analyze, buffers) update t set a = 1").is_some());
         assert!(u("explain delete from t").is_none());
         assert!(unsafe_statement("explain analyze delete from t", Mysql).is_some());
-        // CTE 안의 WHERE 없는 쓰기
+        // Write without WHERE inside a CTE
         assert!(u("with d as (delete from t returning *) select * from d").is_some());
         assert!(u("with d as (delete from t where id = 1 returning *) select * from d").is_none());
-        // 쓰기가 아닌 update 단어
+        // The word update used as a non-write
         assert!(u("insert into t values (1) on conflict (id) do update set a = 1").is_none());
         assert!(u("create trigger tr before update on t for each row execute function f()").is_none());
         assert!(u("grant update on t to u").is_none());

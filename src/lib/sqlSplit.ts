@@ -3,7 +3,7 @@ export interface Segment {
   end: number;
 }
 
-/** 세미콜론으로 문장을 나눈다. 문자열, 주석, PostgreSQL 달러 인용은 건너뛴다. */
+/** Split statements on semicolons. Skips strings, comments, and PostgreSQL dollar quoting. */
 export function splitStatements(text: string, backslashEscapes = false): Segment[] {
   const out: Segment[] = [];
   let start = 0;
@@ -59,7 +59,7 @@ export function splitStatements(text: string, backslashEscapes = false): Segment
   return out.filter((s) => text.slice(s.start, s.end).trim().length > 0);
 }
 
-/** 커서가 있는 문장. 커서가 문장 사이 빈 곳이면 바로 앞 문장을 고른다. */
+/** The statement at the cursor. If the cursor is in a gap between statements, picks the previous one. */
 export function statementAt(text: string, offset: number, backslashEscapes = false) {
   const segs = splitStatements(text, backslashEscapes);
   if (segs.length === 0) return null;
@@ -71,21 +71,21 @@ export function statementAt(text: string, offset: number, backslashEscapes = fal
   return { sql, start: pick.start + lead, end: pick.start + lead + sql.length };
 }
 
-/** 줄 머리에 오면 새 문장일 수 있는 키워드 (core sql.rs 의 SCRIPT_STARTERS 와 같다) */
+/** Keywords that may start a new statement at the start of a line (same as SCRIPT_STARTERS in core sql.rs) */
 const STARTERS = new Set(["SELECT", "INSERT", "UPDATE", "DELETE", "WITH", "CREATE", "ALTER", "DROP", "TRUNCATE", "GRANT", "REVOKE", "EXPLAIN", "SHOW", "MERGE", "CALL"]);
-/** 문장 머리로 오는 키워드 (이게 아니면 앞은 SQL 이 아닌 메모) — SQL_HEADS */
+/** Keywords that come at the head of a statement (otherwise what precedes is a non-SQL note) — SQL_HEADS */
 const HEADS = new Set([
   ...STARTERS,
   ..."BEGIN START COMMIT ROLLBACK END ABORT SAVEPOINT RELEASE SET RESET VALUES TABLE DO COPY VACUUM ANALYZE REFRESH LOCK REINDEX CLUSTER COMMENT DECLARE FETCH CLOSE PREPARE EXECUTE DEALLOCATE LISTEN NOTIFY UNLISTEN USE DESC DESCRIBE REPLACE LOAD OPTIMIZE RENAME IMPORT DISCARD CHECKPOINT SECURITY".split(" "),
 ]);
-/** 이 낱말 뒤의 줄은 앞 문장이 이어진다 — SCRIPT_CONT */
+/** After these words, the next line continues the previous statement — SCRIPT_CONT */
 const CONT = new Set(
   "UNION ALL INTERSECT EXCEPT MINUS DISTINCT AS DO THEN ELSE WHEN AND OR NOT IN EXISTS ANY SOME BEFORE AFTER OF ON FOR KEY INSTEAD BY FROM JOIN WHERE TABLE INTO RETURNING GRANT REVOKE EXPLAIN ANALYZE VERBOSE IS LIKE BETWEEN WITH".split(" "),
 );
 
 /**
- * 편집기용 문장 나누기: 세미콜론으로 나눈 뒤 `;` 없이 이어 쓴 문장도 줄 머리의 문장 키워드로 나눈다 (DataGrip 처럼, core sql::split_script 와 같은 규칙).
- * UNION · INSERT … SELECT · WITH … SELECT · GRANT SELECT 등은 한 문장.
+ * Statement splitting for the editor: after splitting on semicolons, also split statements written without `;` at line-start statement keywords (like DataGrip, same rules as core sql::split_script).
+ * UNION · INSERT … SELECT · WITH … SELECT · GRANT SELECT etc. are one statement.
  */
 export function splitScript(text: string, backslashEscapes = false): Segment[] {
   const out: Segment[] = [];

@@ -1,6 +1,6 @@
-//! 콘솔 탭마다 전용 연결(세션)을 둔다.
-//! - SELECT 계열은 서버 커서(DECLARE/FETCH)로 500행씩 가져온다 → "더 불러오기"
-//! - 백엔드 PID를 알고 있으므로 pg_cancel_backend 로 실행 중인 쿼리를 취소할 수 있다
+//! Each console tab gets its own dedicated connection (session).
+//! - SELECT-like statements fetch 500 rows at a time via a server cursor (DECLARE/FETCH) → "load more"
+//! - The backend PID is known, so a running query can be cancelled with pg_cancel_backend
 use crate::db::{pg_columns, pg_value, query_result, ColumnInfo, QueryResult};
 use crate::error::{AppError, AppResult};
 use futures::TryStreamExt;
@@ -11,7 +11,7 @@ use sqlx::{Column, Either, Executor, Postgres, Row, TypeInfo};
 use std::time::Instant;
 
 const CURSOR: &str = "dbtool_cur";
-/// Manual → Auto 전환을 막을 때
+/// When switching from Manual → Auto is blocked
 pub const PENDING_TX: &str = "There are uncommitted changes — commit or roll back first";
 
 pub struct PgSession {
@@ -20,20 +20,20 @@ pub struct PgSession {
     cursor_open: bool,
     cursor_sql: String,
     columns: Vec<ColumnInfo>,
-    /// Tx: Manual 모드 (DataGrip). 문장을 트랜잭션에 쌓았다가 Commit / Roll back
+    /// Tx: Manual mode (DataGrip). Statements accumulate in a transaction until Commit / Roll back
     manual: bool,
-    /// Manual 모드에서 열린 트랜잭션이 있는지
+    /// Whether a transaction is open in Manual mode
     pub in_tx: bool,
-    /// 커서를 마지막으로 쓴 시각 (오래 안 쓰면 닫는다)
+    /// Last time the cursor was used (closed when unused for long)
     cursor_used: Instant,
-    /// 오래 안 써서 커서를 닫았는지 (더 불러오기 때 이어서 다시 연다)
+    /// Whether the cursor was closed for being unused (reopened on load more)
     idle_closed: bool,
-    /// 지금 결과에서 커서로 읽은 행 수 (다시 열 때 OFFSET)
+    /// Rows read through the cursor for the current result (OFFSET when reopening)
     fetched: usize,
 }
 
-/// Auto 모드에서 결과를 끝까지 안 읽은 커서를 이만큼 안 쓰면 닫는다.
-/// 커서가 열린 동안은 트랜잭션도 열려 있어서 (idle in transaction) VACUUM·DDL 을 막는다
+/// In Auto mode, a cursor whose result was not fully read is closed after this long unused.
+/// While the cursor is open, the transaction is open too (idle in transaction) and blocks VACUUM/DDL
 pub const CURSOR_IDLE: std::time::Duration = std::time::Duration::from_secs(60);
 
 pub fn strip_comments_lead(sql: &str) -> String {
@@ -65,7 +65,7 @@ impl PgSession {
         Ok(Self { conn, pid, cursor_open: false, cursor_sql: String::new(), columns: Vec::new(), manual: false, in_tx: false, cursor_used: Instant::now(), idle_closed: false, fetched: 0 })
     }
 
-    /// keep-alive: 유휴 세션 연결이 끊기지 않도록
+    /// keep-alive: so idle session connections are not dropped
     pub async fn ping(&mut self) {
         let _ = self.conn.execute("select 1").await;
     }
@@ -75,22 +75,22 @@ impl PgSession {
         self.cursor_open
     }
 
-    /// 사용자가 연 트랜잭션이 있는지 (Manual 모드, 또는 Auto 에서 직접 BEGIN). 이때 커서는 savepoint 만 쓰고
-    /// COMMIT·ROLLBACK 으로 사용자 트랜잭션을 끝내지 않는다
+    /// Whether a user-opened transaction exists (Manual mode, or BEGIN run directly in Auto). The cursor then only uses savepoints
+    /// and never ends the user's transaction with COMMIT/ROLLBACK
     fn user_tx(&self) -> bool {
         self.manual || self.in_tx
     }
 
     pub async fn close_cursor(&mut self) {
         if self.cursor_open {
-            // 사용자 트랜잭션 안의 커서면 닫기만 한다 (커밋하면 사용자의 변경이 몰래 확정된다)
+            // A cursor inside the user's transaction is only closed (committing would silently finalize the user's changes)
             let sql = if self.user_tx() { "CLOSE dbtool_cur" } else { "CLOSE dbtool_cur; COMMIT" };
             let _ = self.conn.execute(sql).await;
             self.cursor_open = false;
         }
     }
 
-    /// Auto 모드에서 오래 안 쓴 커서를 닫고 트랜잭션을 끝낸다 (Manual 은 사용자 트랜잭션이라 두지 않는다)
+    /// In Auto mode, close cursors unused for long and end the transaction (Manual is left alone since it is the user's transaction)
     pub async fn close_idle_cursor(&mut self, idle: std::time::Duration) -> bool {
         if self.cursor_open && !self.user_tx() && self.cursor_used.elapsed() >= idle {
             self.close_cursor().await;
@@ -100,7 +100,7 @@ impl PgSession {
         false
     }
 
-    /// 탭을 닫을 때: 커서·트랜잭션을 정리해서 깨끗한 연결로 풀에 돌려준다
+    /// On tab close: clean up the cursor and transaction and return a clean connection to the pool
     pub async fn discard(&mut self) {
         self.close_cursor().await;
         if self.manual || self.in_tx {
@@ -109,7 +109,7 @@ impl PgSession {
         }
     }
 
-    /// 커서 쪽 실패를 되돌린다: 사용자 트랜잭션 안이면 savepoint 까지만 (트랜잭션은 살린다)
+    /// Undo a cursor-side failure: inside the user's transaction, only back to the savepoint (the transaction survives)
     async fn rollback(&mut self) {
         let sql = if self.user_tx() { "ROLLBACK TO SAVEPOINT dbtool_sp" } else { "ROLLBACK" };
         let _ = self.conn.execute(sql).await;
@@ -120,7 +120,7 @@ impl PgSession {
         self.in_tx
     }
 
-    /// Tx 모드 전환. 커밋 안 한 변경이 있으면 Auto 로 바꾸지 않는다 (먼저 Commit 또는 Roll back)
+    /// Switch Tx mode. Do not switch to Auto if there are uncommitted changes (Commit or Roll back first)
     pub async fn set_manual(&mut self, manual: bool) -> AppResult<()> {
         if !manual && self.in_tx {
             return Err(AppError::Msg(PENDING_TX.into()));
@@ -144,7 +144,7 @@ impl PgSession {
         Ok(())
     }
 
-    /// 사용자가 직접 BEGIN / COMMIT / ROLLBACK 을 실행한 경우 상태를 맞춘다
+    /// Sync the state when the user runs BEGIN / COMMIT / ROLLBACK directly
     fn track_tx_keywords(&mut self, sql: &str) {
         let s = strip_comments_lead(sql);
         if s.starts_with("begin") || s.starts_with("start transaction") {
@@ -183,7 +183,7 @@ impl PgSession {
                     return Ok(r);
                 }
                 Err(_) => {
-                    // DECLARE가 안 되는 문장(예: WITH ... DELETE) → 일반 실행으로. 진짜 오류면 아래에서 다시 난다.
+                    // Statements DECLARE cannot take (e.g. WITH ... DELETE) → run normally. A real error will surface again below.
                     self.rollback().await;
                 }
             }
@@ -193,7 +193,7 @@ impl PgSession {
         r
     }
 
-    /// 커서용 짧은 트랜잭션. 사용자 트랜잭션(Manual, 또는 Auto 에서 직접 BEGIN) 안이면 savepoint 로 보호.
+    /// Short transaction for the cursor. Inside a user transaction (Manual, or BEGIN run directly in Auto), protected by a savepoint.
     async fn declare(&mut self, query: &str) -> Result<(), sqlx::Error> {
         let declare = if self.user_tx() {
             format!("SAVEPOINT dbtool_sp; DECLARE {CURSOR} NO SCROLL CURSOR FOR {query}")
@@ -236,8 +236,8 @@ impl PgSession {
         Ok(query_result(columns, rows, affected, truncated, start, has_rs))
     }
 
-    /// 열린 커서에서 다음 `limit`행을 가져온다.
-    /// 오래 안 써서 닫은 커서면 같은 문장을 읽은 행 다음부터 (OFFSET) 다시 연다 (ORDER BY 가 없으면 순서는 DB 가 정한다)
+    /// Fetch the next `limit` rows from the open cursor.
+    /// If the cursor was closed for being unused, reopen the same statement after the rows already read (OFFSET) (without ORDER BY, the DB decides the order)
     pub async fn fetch(&mut self, limit: usize) -> AppResult<QueryResult> {
         if !self.cursor_open && self.idle_closed {
             let q = format!("SELECT * FROM (\n{}\n) AS qurry_page OFFSET {}", strip_trailing_semicolon(&self.cursor_sql), self.fetched);
@@ -282,12 +282,12 @@ impl PgSession {
     }
 }
 
-/// 콘솔 탭 세션 (DB 종류별)
+/// Console tab session (per DB kind)
 pub enum Session {
     Pg(PgSession),
     My(crate::mysql::MySession),
     Redis(crate::redisdb::RedisConn),
-    /// 드라이버 플러그인: 서버 커서·수동 트랜잭션 없이 한 번에 (limit 까지)
+    /// Driver plugin: all at once (up to limit), without server cursors or manual transactions
     Plugin(std::sync::Arc<crate::plugin::PluginConn>),
 }
 
@@ -300,7 +300,7 @@ impl Session {
             crate::db::Pool::Plugin(c) => Session::Plugin(c.clone()),
         })
     }
-    /// 취소용 백엔드 id (PG pid / MySQL connection id)
+    /// Backend id for cancelling (PG pid / MySQL connection id)
     pub fn backend_id(&self) -> i64 {
         match self {
             Session::Pg(s) => s.pid as i64,
@@ -352,7 +352,7 @@ impl Session {
             Session::Redis(_) | Session::Plugin(_) => {}
         }
     }
-    /// 커밋 안 한 변경이 있는지
+    /// Whether there are uncommitted changes
     pub fn in_tx(&self) -> bool {
         match self {
             Session::Pg(s) => s.in_tx(),
@@ -360,7 +360,7 @@ impl Session {
             Session::Redis(_) | Session::Plugin(_) => false,
         }
     }
-    /// 탭을 닫을 때: 열린 트랜잭션을 되돌리고 세션 설정을 풀어서 풀에 돌려준다
+    /// On tab close: roll back the open transaction, reset session settings and return the connection to the pool
     pub async fn discard(&mut self) {
         match self {
             Session::Pg(s) => s.discard().await,
@@ -384,13 +384,13 @@ impl Session {
     }
 }
 
-/// 다른 연결에서 해당 백엔드의 실행 중인 쿼리를 취소한다.
+/// Cancel the backend's running query from another connection.
 pub async fn cancel(pool: &PgPool, pid: i32) -> AppResult<bool> {
     Ok(sqlx::query_scalar("select pg_cancel_backend($1)").bind(pid).fetch_one(pool).await?)
 }
 
-/// 데이터 편집 결과를 한 트랜잭션으로 반영한다. 하나라도 실패하면 전부 롤백.
-/// 문장들을 한 트랜잭션으로 (하나라도 실패하면 전부 롤백). exact_one = 표 편집: UPDATE/DELETE 는 정확히 1행이어야 한다
+/// Apply data edits in one transaction. If any fails, roll back everything.
+/// Statements in one transaction (roll back everything if any fails). exact_one = table edits: each UPDATE/DELETE must hit exactly 1 row
 pub async fn execute_batch(pool: &PgPool, statements: &[String], exact_one: bool) -> AppResult<u64> {
     let mut tx = pool.begin().await?;
     let mut affected = 0;
@@ -403,7 +403,7 @@ pub async fn execute_batch(pool: &PgPool, statements: &[String], exact_one: bool
     Ok(affected)
 }
 
-/// 표 편집의 UPDATE/DELETE 가 0행이나 여러 행에 적용되면 (다른 사람이 바꿨거나 키가 겹침) 전부 롤백시킨다
+/// If a table edit's UPDATE/DELETE hits 0 or multiple rows (changed by someone else or duplicate keys), roll back everything
 pub fn check_exact_one(st: &str, n: u64, exact_one: bool) -> AppResult<()> {
     let s = strip_comments_lead(st);
     if exact_one && (s.starts_with("update") || s.starts_with("delete")) && n != 1 {
@@ -420,7 +420,7 @@ mod tests {
     use crate::db::{connect, Pool};
     use crate::store::{ConnectionConfig, DbKind};
 
-    /// 테스트 DB: 기본은 로컬 PostgreSQL. QURRY_TEST_PG=host:port:user:db 로 바꾼다 (예: 컨테이너)
+    /// Test DB: local PostgreSQL by default. Override with QURRY_TEST_PG=host:port:user:db (e.g. a container)
     async fn pool() -> PgPool {
         let env = std::env::var("QURRY_TEST_PG").ok();
         let part = |i: usize, d: String| env.as_ref().and_then(|e| e.split(':').nth(i).map(String::from)).unwrap_or(d);
@@ -432,7 +432,7 @@ mod tests {
         p
     }
 
-    /// Auto 모드에서 사용자가 직접 연 트랜잭션은 커서(SELECT)가 커밋하지 않는다 (예전엔 SELECT 한 번에 UPDATE 가 확정됐다)
+    /// In Auto mode, a cursor (SELECT) does not commit a transaction the user opened (a single SELECT used to finalize an UPDATE)
     #[tokio::test]
     #[ignore]
     async fn auto_mode_user_transaction_is_not_committed_by_select() {
@@ -444,7 +444,7 @@ mod tests {
         let mut s = PgSession::open(&p).await.unwrap();
         s.run("begin", 500).await.unwrap();
         s.run("update public.dbtool_tx_t set v = 'changed' where id = 1", 500).await.unwrap();
-        // 끝까지 읽는 SELECT, 여러 페이지 SELECT, 실패하는 SELECT 모두 트랜잭션을 건드리지 않는다
+        // A fully read SELECT, a multi-page SELECT and a failing SELECT all leave the transaction alone
         let r = s.run("select * from public.dbtool_tx_t", 500).await.unwrap();
         assert!(r.in_transaction);
         s.run("select g from generate_series(1, 1200) g", 500).await.unwrap();
@@ -453,14 +453,14 @@ mod tests {
         assert!(s.set_manual(true).await.is_ok() && s.set_manual(false).await.is_err(), "pending changes block switching to Auto");
         s.run("rollback", 500).await.unwrap();
         assert_eq!(seen().await, "a", "rolled back");
-        // Manual 에서 커밋 안 한 변경이 있으면 Auto 로 못 바꾼다
+        // With uncommitted changes in Manual, switching to Auto is not allowed
         s.set_manual(true).await.unwrap();
         s.run("update public.dbtool_tx_t set v = 'm' where id = 1", 500).await.unwrap();
         assert!(s.set_manual(false).await.is_err());
         s.rollback_tx().await.unwrap();
         s.set_manual(false).await.unwrap();
         assert_eq!(seen().await, "a");
-        // 표 편집 저장: 0행·여러 행에 적용되는 UPDATE/DELETE 는 전부 롤백
+        // Saving table edits: UPDATE/DELETE hitting 0 or multiple rows rolls back everything
         let none = execute_batch(&p, &["insert into public.dbtool_tx_t values (2, 'b')".into(), "update public.dbtool_tx_t set v = 'x' where id = 99".into()], true).await;
         assert!(none.is_err());
         let many = execute_batch(&p, &["update public.dbtool_tx_t set v = 'x' where id > 0".into()], true).await;
@@ -486,11 +486,11 @@ mod tests {
         let mut s = PgSession::open(&p).await.unwrap();
         let r1 = s.run("select g from generate_series(1,1200) g order by g -- tail comment", 500).await.unwrap();
         assert_eq!((r1.rows.len(), r1.truncated), (500, true));
-        // 오래 안 써서 닫힌 뒤 (트랜잭션도 끝난다)
+        // After it is closed for being unused (the transaction ends too)
         assert!(s.close_idle_cursor(std::time::Duration::ZERO).await);
         let state: String = sqlx::query_scalar("select state from pg_stat_activity where pid = $1").bind(s.pid).fetch_one(&p).await.unwrap();
         assert_eq!(state, "idle");
-        // 더 불러오면 읽은 다음 행부터 이어진다
+        // Loading more continues from the row after the ones read
         let r2 = s.fetch(500).await.unwrap();
         assert_eq!((r2.rows.len(), r2.truncated, r2.columns.len()), (500, true, 1));
         assert_eq!(r2.rows[0][0], Value::from(501));
@@ -499,7 +499,7 @@ mod tests {
         assert_eq!((r3.rows.len(), r3.truncated), (200, false));
         assert_eq!(r3.rows[0][0], Value::from(1001));
         assert!(s.fetch(500).await.is_err(), "no more rows");
-        // 그 사이 다른 문장을 실행했으면 예전 결과를 다시 열지 않는다
+        // If another statement ran in between, the old result is not reopened
         s.run("select g from generate_series(1,1200) g", 500).await.unwrap();
         assert!(s.close_idle_cursor(std::time::Duration::ZERO).await);
         s.run("set application_name = 'x'", 500).await.unwrap();
@@ -512,7 +512,7 @@ mod tests {
         let p = pool().await;
         let mut s = PgSession::open(&p).await.unwrap();
 
-        // 커서 페이징: 1200행 → 500 + 500 + 200
+        // Cursor paging: 1200 rows → 500 + 500 + 200
         let r1 = s.run("select g, 'v'||g as t, g::numeric/3 as n from generate_series(1,1200) g;", 500).await.unwrap();
         assert_eq!((r1.rows.len(), r1.truncated), (500, true));
         assert_eq!(r1.rows[0][0], Value::from(1));
@@ -524,25 +524,25 @@ mod tests {
         assert_eq!((r3.rows.len(), r3.truncated), (200, false));
         assert!(!s.has_more());
 
-        // 0행 SELECT도 컬럼이 나와야 함
+        // A 0-row SELECT must still return columns
         let e = s.run("select relname from pg_class where false", 500).await.unwrap();
         assert_eq!((e.columns.len(), e.rows.len()), (1, 0));
 
-        // 세션 유지: SET 이 다음 쿼리에도 적용
+        // Session persists: SET applies to the next query too
         s.run("set application_name = 'dbtool_sess'", 500).await.unwrap();
         let a = s.run("show application_name", 500).await.unwrap();
         assert_eq!(a.rows[0][0], Value::from("dbtool_sess"));
 
-        // DML / DDL은 일반 실행
+        // DML / DDL run normally
         s.run("create temp table t_sess(id int primary key, name text)", 500).await.unwrap();
         let ins = s.run("insert into t_sess values (1,'a'),(2,'b')", 500).await.unwrap();
         assert_eq!(ins.rows_affected, 2);
 
-        // 오류 후에도 세션이 계속 쓸 수 있어야 함
+        // The session must stay usable after an error
         assert!(s.run("select * from no_such_tbl", 500).await.is_err());
         assert_eq!(s.run("select 1", 500).await.unwrap().rows[0][0], Value::from(1));
 
-        // 취소: 다른 태스크에서 pg_sleep 실행 → cancel
+        // Cancel: run pg_sleep in another task → cancel
         let pid = s.pid;
         let p2 = p.clone();
         let canceller = tokio::spawn(async move {
@@ -556,7 +556,7 @@ mod tests {
         println!("cancelled after {:?}: {}", t0.elapsed(), res.unwrap_err());
         assert_eq!(s.run("select 2", 500).await.unwrap().rows[0][0], Value::from(2));
 
-        // Tx: Manual — 커밋 전에는 다른 연결에서 안 보이고, Roll back 하면 사라진다
+        // Tx: Manual — invisible to other connections before commit, gone after Roll back
         sqlx::query("create table if not exists public.dbtool_tx_t(id int primary key)").execute(&p).await.unwrap();
         sqlx::query("truncate public.dbtool_tx_t").execute(&p).await.unwrap();
         s.set_manual(true).await.unwrap();
@@ -564,7 +564,7 @@ mod tests {
         assert!(ins.in_transaction);
         let seen: i64 = sqlx::query_scalar("select count(*) from public.dbtool_tx_t").fetch_one(&p).await.unwrap();
         assert_eq!(seen, 0, "uncommitted row must not be visible");
-        // Manual 트랜잭션 안에서 SELECT(커서)도 자기 변경을 본다
+        // Inside a Manual transaction, SELECT (cursor) sees its own changes too
         let mine = s.run("select count(*) from public.dbtool_tx_t", 500).await.unwrap();
         assert_eq!(mine.rows[0][0], Value::from(1));
         s.rollback_tx().await.unwrap();
@@ -574,14 +574,14 @@ mod tests {
         s.commit().await.unwrap();
         let committed: i64 = sqlx::query_scalar("select count(*) from public.dbtool_tx_t").fetch_one(&p).await.unwrap();
         assert_eq!(committed, 1);
-        // DECLARE 가 안 되는 문장도 manual 트랜잭션을 깨지 않는다
+        // Statements DECLARE cannot take do not break the manual transaction either
         let w = s.run("with x as (delete from public.dbtool_tx_t where id = 2 returning id) select count(*) from x", 500).await.unwrap();
         assert_eq!(w.rows[0][0], Value::from(1));
         s.rollback_tx().await.unwrap();
         s.set_manual(false).await.unwrap();
         sqlx::query("drop table public.dbtool_tx_t").execute(&p).await.unwrap();
 
-        // 일괄 편집: 실패 시 전부 롤백
+        // Batch edit: roll back everything on failure
         sqlx::query("create table if not exists public.dbtool_batch_t(id int primary key, name text)").execute(&p).await.unwrap();
         sqlx::query("truncate public.dbtool_batch_t").execute(&p).await.unwrap();
         let ok = execute_batch(&p, &["insert into public.dbtool_batch_t values (1,'a')".into(), "update public.dbtool_batch_t set name='b' where id=1".into()], true).await.unwrap();

@@ -5,7 +5,7 @@ import { RunningBar } from "./RunningBar";
 import { IcFilter, IcOrder } from "../ui/icons";
 import { IconButton, Notice, TextInput } from "../ui";
 
-/** DataGrip 테이블 데이터 에디터: 그리드 툴바 + WHERE / ORDER BY 바 + 그리드 */
+/** DataGrip table data editor: grid toolbar + WHERE / ORDER BY bar + grid */
 interface Props {
   title: string;
   where: string;

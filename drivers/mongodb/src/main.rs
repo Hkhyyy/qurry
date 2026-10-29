@@ -1,9 +1,9 @@
-//! Qurry 드라이버: MongoDB. DB → 컬렉션 (테이블처럼). 콘솔은 셸 문법 또는 명령 JSON:
+//! Qurry driver: MongoDB. DB → collections (like tables). The console takes shell syntax or command JSON:
 //!   db.users.find({age: {$gt: 30}}, {name: 1}).sort({name: 1}).limit(10)
 //!   db.users.aggregate([{$group: {_id: "$city", n: {$sum: 1}}}])
 //!   db.users.countDocuments({}) · insertOne({...}) · insertMany([...]) · updateOne(f, u) · updateMany · deleteOne · deleteMany
-//!   {"find": "users", "filter": {...}}  (그 밖의 명령도 그대로 runCommand)
-//! 탐색기에서 컬렉션을 열 때의 SELECT * FROM db.coll [LIMIT n] 은 find 로 바꾼다
+//!   {"find": "users", "filter": {...}}  (other commands also go to runCommand as is)
+//! SELECT * FROM db.coll [LIMIT n] from opening a collection in the explorer is turned into find
 use mongodb::bson::{Bson, Document, doc};
 use mongodb::sync::{Client, Database};
 use qurry_driver::{Column, ConnectParams, Driver, QueryOut, ok, params, serve};
@@ -15,7 +15,7 @@ struct Mongo {
     db: String,
 }
 
-/// 셸 확장 (ObjectId("…"), ISODate("…"), NumberLong(…)) → 확장 JSON, 그 뒤 JSON5 (따옴표 없는 키·작은따옴표)
+/// Shell extensions (ObjectId("…"), ISODate("…"), NumberLong(…)) → extended JSON, then JSON5 (unquoted keys, single quotes)
 fn parse_args(s: &str) -> Result<Vec<Bson>, String> {
     let re_oid = regex::Regex::new(r#"ObjectId\(\s*["']([0-9a-fA-F]{24})["']\s*\)"#).unwrap();
     let re_date = regex::Regex::new(r#"(?:ISODate|new Date)\(\s*["']([^"']+)["']\s*\)"#).unwrap();
@@ -34,7 +34,7 @@ fn as_doc(b: Option<&Bson>) -> Document {
     }
 }
 
-/// bson → 화면 값 (ObjectId·날짜는 글로, 중첩은 JSON 그대로)
+/// bson → display value (ObjectId and dates as text, nested values as JSON)
 fn value(b: &Bson) -> Value {
     match b {
         Bson::ObjectId(o) => Value::String(o.to_hex()),
@@ -50,7 +50,7 @@ fn value(b: &Bson) -> Value {
     }
 }
 
-/// 문서들 → 표 (처음 나온 순서로 키를 모아 열로)
+/// Documents → table (keys collected as columns in order of first appearance)
 fn table(docs: Vec<Document>, truncated: bool) -> QueryOut {
     let mut keys: Vec<String> = vec![];
     for d in &docs {
@@ -86,7 +86,7 @@ impl Mongo {
 
     fn query(&self, text: &str, limit: usize) -> Result<QueryOut, String> {
         let t = text.trim().trim_end_matches(';').trim();
-        // 탐색기: SELECT * FROM db.coll [LIMIT n]
+        // Explorer: SELECT * FROM db.coll [LIMIT n]
         let sel = regex::Regex::new(r#"(?is)^select\s+\*\s+from\s+(?:"?([^".\s]+)"?\.)?"?([^"\s;]+)"?\s*(?:limit\s+(\d+))?$"#).unwrap();
         if let Some(c) = sel.captures(t) {
             let n = c.get(3).and_then(|x| x.as_str().parse().ok()).unwrap_or(limit).min(limit);
@@ -98,7 +98,7 @@ impl Mongo {
         if t.starts_with('{') {
             let cmd = parse_args(t)?.into_iter().next().and_then(|b| b.as_document().cloned()).ok_or("expected a command document")?;
             let r = self.db()?.run_command(cmd).run().map_err(|e| e.to_string())?;
-            // find / aggregate 명령이면 cursor.firstBatch 를 표로
+            // For find / aggregate commands, show cursor.firstBatch as a table
             if let Ok(c) = r.get_document("cursor") {
                 let batch: Vec<Document> = c.get_array("firstBatch").map(|a| a.iter().filter_map(|b| b.as_document().cloned()).collect()).unwrap_or_default();
                 return Ok(table(batch, false));
@@ -115,7 +115,7 @@ impl Mongo {
         let coll = caps.get(1).or(caps.get(2)).unwrap().as_str().to_string();
         let mut method = caps[3].to_string();
         let mut rest = caps[4].to_string();
-        // 끝에 붙은 .sort() .limit() .skip() 을 떼어 낸다
+        // Strip trailing .sort() .limit() .skip()
         let (mut sort, mut lim, mut skip) = (None, None, 0u64);
         let tail = regex::Regex::new(r#"(?s)^(.*)\)\.(sort|limit|skip)\((.*)$"#).unwrap();
         while let Some(c) = tail.captures(&rest.clone()) {
@@ -185,7 +185,7 @@ impl Driver for Mongo {
             }
             "connect" => {
                 let c: ConnectParams = params(p)?;
-                // host 에 mongodb:// 나 mongodb+srv:// URI 를 넣어도 된다
+                // host may also be a mongodb:// or mongodb+srv:// URI
                 let uri = if c.host.starts_with("mongodb") {
                     c.host.clone()
                 } else {
@@ -215,7 +215,7 @@ impl Driver for Mongo {
             "tableDetail" => {
                 let coll = p.get("table").and_then(Value::as_str).unwrap_or("");
                 let c = self.db()?.collection::<Document>(coll);
-                // 문서 100개를 보고 필드와 타입을 짐작한다
+                // Look at 100 documents to guess fields and types
                 let docs: Vec<Document> = c.find(Document::new()).limit(100).run().map_err(|e| e.to_string())?.filter_map(Result::ok).collect();
                 let mut fields: Vec<(String, String)> = vec![];
                 for d in &docs {
@@ -249,7 +249,7 @@ impl Driver for Mongo {
     }
 }
 
-/// URI 의 사용자·비밀번호 (특수 문자를 %XX 로)
+/// User and password of the URI (special characters as %XX)
 fn enc(s: &str) -> String {
     s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }

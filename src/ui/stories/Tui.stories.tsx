@@ -3,8 +3,8 @@ import data from "./tui-snapshots.json";
 import { Scene, TuiScreen } from "./TuiScreen";
 
 /**
- * TUI. 실제 TUI 코드 (crates/tui/src/kit — atoms · molecules · organisms) 로 가상 터미널에 그린 그대로다.
- * 바뀌면 `pnpm tui-snapshots` 로 다시 그린다. 테마는 터미널 색이라 위 Theme 와 상관없다
+ * TUI. Drawn exactly as the real TUI code (crates/tui/src/kit — atoms · molecules · organisms) renders to a virtual terminal.
+ * Redraw with `pnpm tui-snapshots` after changes. The theme uses terminal colors, so it's unaffected by the Theme above
  */
 const scenes = (data as { scenes: Scene[] }).scenes;
 const by = (name: string): StoryObj<{ scene: Scene }> => ({ name, args: { scene: scenes.find((s) => s.name === name)! } });

@@ -189,7 +189,7 @@ a { color: var(--c-548af7); cursor: pointer; }
 .tab.active { color: var(--text); border-bottom-color: var(--accent); }
 .tab-close { opacity: .5; padding: 0 2px; }
 .tab-close:hover { opacity: 1; }
-/* 탭 사이 구분선 (Data Source 색이 같은 탭끼리 붙어 보이지 않게) */
+/* Separator between tabs (so tabs with the same Data Source color don't look merged) */
 .tab + .tab { border-left: 2px solid var(--bg); }
 .editor-area { flex: 1; min-height: 0; position: relative; background: var(--bg); }
 .editor-host { position: absolute; inset: 0; }
@@ -261,7 +261,7 @@ input:disabled, select:disabled { opacity: .45; }
 .grid-toolbar, .filter-bar { white-space: nowrap; overflow: hidden; }
 .grid-toolbar button, .filter-bar button { flex: none; }
 .grid-toolbar .muted { overflow: hidden; text-overflow: ellipsis; }
-/* 분할 패널 안에서도 에디터가 패널 높이를 꽉 채우도록 */
+/* Make the editor fill the panel height inside split panels too */
 .editor-area { height: 100%; }
 
 .scope-list { max-height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; background: var(--bg); }
@@ -298,7 +298,7 @@ input:disabled, select:disabled { opacity: .45; }
 .dt-row input[type=number] { width: 64px; }
 .dt-row .dt-year { width: 80px; }
 
-/* ── DataGrip 트리 모양 ── */
+/* ── DataGrip tree look ── */
 .tree { padding: 2px 0; }
 .tree-node { height: 24px; gap: 5px; padding-right: 8px; font-size: 13px; }
 .tree-node .twisty { width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; flex: none; }
@@ -313,7 +313,7 @@ input:disabled, select:disabled { opacity: .45; }
 .scope-badge { border: 1px solid var(--c-6f737a); background: rgba(0,0,0,.12); color: var(--c-c9ccd1); border-radius: 3px; padding: 0 4px; line-height: 15px; font-size: 11px; }
 .ssh-badge { border-radius: 3px; }
 
-/* ── DataGrip 그리드 툴바 ── */
+/* ── DataGrip grid toolbar ── */
 .dg-filter { flex: none; height: 30px; display: flex; align-items: stretch; background: var(--bg); border-bottom: 1px solid var(--border); }
 .dg-filter-field { flex: 1; display: flex; align-items: center; gap: 6px; padding: 0 8px; color: var(--c-868a91); min-width: 0; }
 .dg-filter-field:first-child { flex: 2; }
@@ -350,7 +350,7 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .ddl-layer { flex-direction: column; }
 .ddl-editor { flex: 1; min-height: 0; position: relative; }
 
-/* ── 콘솔 ── */
+/* ── Console ── */
 .console-pane { position: absolute; inset: 0; display: flex; flex-direction: column; }
 .console-pane > [data-panel-group] { flex: 1; min-height: 0; }
 .console-toolbar .tb.run { color: var(--ok); font-size: 12px; }
@@ -492,7 +492,7 @@ button.tb.danger:hover:not(:disabled) { color: var(--danger); }
 .rd-server { height: 100%; display: flex; flex-direction: column; }
 .rd-server .rd-table-wrap { flex: 1; }
 
-/* ── Scrollbars: DataGrip(IntelliJ) 처럼 얇고 테마 색. 트랙 없음, 호버 때만 진하게 ── */
+/* ── Scrollbars: thin and theme-colored like DataGrip (IntelliJ). No track, darker only on hover ── */
 :root { --sb-thumb: rgba(255,255,255,.16); --sb-thumb-hover: rgba(255,255,255,.30); }
 :root[data-theme="light"] { --sb-thumb: rgba(0,0,0,.18); --sb-thumb-hover: rgba(0,0,0,.34); }
 :root[data-theme="hc"] { --sb-thumb: rgba(255,255,255,.45); --sb-thumb-hover: rgba(255,255,255,.7); }
@@ -502,9 +502,9 @@ button.tb.danger:hover:not(:disabled) { color: var(--danger); }
 ::-webkit-scrollbar-thumb { background: var(--sb-thumb); border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; min-height: 28px; min-width: 28px; }
 ::-webkit-scrollbar-thumb:hover, ::-webkit-scrollbar-thumb:active { background: var(--sb-thumb-hover); background-clip: padding-box; }
 ::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
-/* macOS 고무줄(바운스) 스크롤 끄기 — 패널 끝에서 화면 전체가 튕기지 않게 */
+/* Disable macOS rubber-band (bounce) scrolling — so the whole screen doesn't bounce at a panel's edge */
 html, body, #root, * { overscroll-behavior: none; }
-/* 좁은 폭에서도 제목은 한 줄 */
+/* Keep the title on one line even at narrow widths */
 .explorer-head, .explorer-title, .panel-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .explorer-title { flex: 1; min-width: 0; }
 .ui-modal.keymap { max-height: 82vh; }
@@ -520,7 +520,7 @@ html, body, #root, * { overscroll-behavior: none; }
 .ui-modal.settings.size-xl { width: 900px; }
 .keymap-editor { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .keymap-editor-list { overflow: auto; max-height: 56vh; padding-right: 4px; }
-/* Settings 는 크기가 고정 → 키맵 목록이 창 높이를 채운다 */
+/* Settings has a fixed size → the keymap list fills the window height */
 .ui-modal.settings.fixed .ui-modal-body { display: flex; flex-direction: column; }
 .ui-modal.settings.fixed .settings-body { flex: 1; min-height: 0; }
 .ui-modal.settings.fixed .keymap-editor-list { flex: 1; min-height: 0; max-height: none; }
@@ -536,7 +536,7 @@ html, body, #root, * { overscroll-behavior: none; }
 .keymap-editor-foot { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .keymap-editor-foot .hint { margin: 0; }
 
-/* 내보내기·가져오기 */
+/* Export·import */
 .transfer-file { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; }
 .transfer-map { max-height: 46vh; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
 .transfer-map table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -547,7 +547,7 @@ html, body, #root, * { overscroll-behavior: none; }
 .gen-badges { display: inline-flex; flex-wrap: wrap; gap: var(--ui-sp-2); }
 .gen-sample td, .gen-plan td { white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 
-/* DBA 리포트 */
+/* DBA reports */
 .dba { display: flex; flex-direction: column; height: 100%; }
 .dba-bar { gap: var(--ui-sp-3); }
 .dba-bar select { min-width: 220px; }
@@ -571,7 +571,7 @@ html, body, #root, * { overscroll-behavior: none; }
 .erd-edge { fill: none; stroke: var(--muted); stroke-width: 1.4; opacity: .7; }
 .erd-edge.on { stroke: var(--accent); stroke-width: 2.2; opacity: 1; }
 
-/* 비교·마이그레이션 */
+/* Compare·migrations */
 .mig { display: flex; flex-direction: column; height: 100%; padding: 8px 12px; gap: 8px; box-sizing: border-box; }
 .mig-tabs { margin: 0; }
 .mig-end { flex-wrap: wrap; }
@@ -601,7 +601,7 @@ html, body, #root, * { overscroll-behavior: none; }
 .rag-note { font-size: 12px; }
 .rag-q { font-size: 13px; padding: 6px 8px; }
 
-/* 워크스페이스 (맨 왼쪽) */
+/* Workspaces (far left) */
 .ws-row { flex: 1; min-height: 0; display: flex; }
 .ws-row > .main { flex: 1; min-width: 0; }
 .ws-bar { width: 52px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 0; border-right: 1px solid var(--border); background: var(--panel-2); overflow-y: auto; }
@@ -611,7 +611,7 @@ html, body, #root, * { overscroll-behavior: none; }
 
 .tree-node .node-icon.rd-type { width: auto; }
 
-/* 결과 차트 (View as › Chart) */
+/* Result chart (View as › Chart) */
 .chart-wrap { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .chart-wrap .ui-toolbar { flex-wrap: wrap; row-gap: var(--ui-sp-1); height: auto; min-height: var(--ui-h-lg); }
 .chart-area { position: relative; flex: 1; min-height: 120px; overflow: hidden; }
@@ -628,7 +628,7 @@ html, body, #root, * { overscroll-behavior: none; }
 .chart-dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
 .chart-empty { padding: var(--ui-sp-6); color: var(--ui-text-muted); text-align: center; }
 
-/* 테이블 만들기 · 고치기 */
+/* Create · modify table */
 .ui-modal.designer { width: min(1100px, 94vw); }
 .designer-head { display: grid; grid-template-columns: 260px 1fr; gap: var(--ui-sp-4); }
 .designer-body { max-height: 38vh; overflow: auto; border: 1px solid var(--ui-border); border-radius: 6px; margin: var(--ui-sp-2) 0; }
@@ -637,7 +637,7 @@ html, body, #root, * { overscroll-behavior: none; }
 .designer-add { padding: var(--ui-sp-2); }
 .designer-sql { max-height: 22vh; overflow: auto; }
 
-/* Monaco 에디터 우클릭 메뉴: 그림자 DOM 안이라 에디터의 --vscode-* 색이 닿지 않아 배경이 투명했다 → 앱 메뉴와 같은 색 (그림자 DOM 으로 상속된다) */
+/* Monaco editor context menu: inside the shadow DOM, the editor's --vscode-* colors don't reach it so the background was transparent → same color as the app menus (inherited into the shadow DOM) */
 .shadow-root-host {
   --vscode-menu-background: var(--ui-surface);
   --vscode-menu-foreground: var(--ui-text);

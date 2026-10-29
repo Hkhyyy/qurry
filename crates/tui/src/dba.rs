@@ -1,4 +1,4 @@
-//! DBA 리포트 탭 (⌃K › Database Admin…): 세션·락은 3초마다 다시 불러오고, c 쿼리 취소 · K 세션 끊기 · Enter 쿼리를 콘솔로 · g SQL 만들기
+//! DBA report tab (⌃K › Database Admin…): sessions and locks reload every 3 seconds; c cancel query · K kill session · Enter query to console · g generate SQL
 use crate::app::{App, DbaTab, Focus, PAction, PItem, Palette, Popup, Tab, TabKind};
 use crate::grid::Grid;
 use crate::tree::NodeKind;
@@ -7,11 +7,11 @@ use qurry_core::sql;
 use std::collections::HashMap;
 use tui_textarea::TextArea;
 
-/// 저절로 다시 불러오는 리포트 (지금 상태를 보는 것)
+/// Reports that reload automatically (views of the current state)
 const LIVE: [&str; 3] = ["sessions", "locks", "vacuum_progress"];
 
 impl App {
-    /// 리포트를 볼 접속 대상: 트리에서 고른 Data Source·DB, 아니면 지금 탭의 대상
+    /// Connection target for the report: the Data Source / DB selected in the tree, otherwise the current tab's target
     fn dba_target(&self) -> Option<(String, String)> {
         if self.focus == Focus::Tree
             && let Some(n) = self.tree.selected().filter(|n| matches!(n.kind, NodeKind::Conn | NodeKind::Db | NodeKind::Schema))
@@ -23,7 +23,7 @@ impl App {
         Some((t.conn.clone(), t.db.clone()))
     }
 
-    /// ⌃K › Database Admin…: 이 DB 의 리포트 목록
+    /// ⌃K › Database Admin…: this DB's report list
     pub fn dba_palette(&mut self) {
         let Some((conn, _)) = self.dba_target() else {
             self.status = "Select a data source (or open a tab) first".into();
@@ -38,7 +38,7 @@ impl App {
         self.popup = Some(Popup::Palette(Palette { title: "Database Admin".into(), input: TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
     }
 
-    /// 리포트 탭을 연다 (같은 대상의 DBA 탭이 있으면 거기서 바꾼다)
+    /// Open a report tab (if a DBA tab for the same target exists, switch it there)
     pub fn dba_open(&mut self, report: String) {
         let Some((conn, db)) = self.dba_target() else { return };
         let info = reports(self.kind_of(&conn)).into_iter().find(|r| r.id == report);
@@ -68,7 +68,7 @@ impl App {
         self.dba_reload(id);
     }
 
-    /// 세션·락: 이 탭이 보이고 자동이면 3초마다 다시 불러온다 (탭을 닫으면 멈춘다)
+    /// Sessions and locks: reload every 3 seconds while this tab is visible and auto is on (stops when the tab closes)
     pub(crate) fn dba_ticker(&self, id: u64) {
         let tx = self.tx.clone();
         tokio::spawn(async move {
@@ -114,7 +114,7 @@ impl App {
         self.spawn(async move { st.dba_report(target, report).await.map_err(|e| e.to_string()) }, move |a, r| a.dba_apply(id, r));
     }
 
-    /// 불러온 결과를 넣는다. 고른 행은 같은 pid 를 따라간다 (순서가 바뀌어도 다른 세션을 고르지 않게)
+    /// Put in the loaded results. The selected row follows the same pid (so a different session isn't selected when the order changes)
     pub fn dba_apply(&mut self, id: u64, r: Result<qurry_core::db::QueryResult, String>) {
         let Some(Tab { kind: TabKind::Dba(d), .. }) = self.tab_mut(id) else { return };
         d.running = false;
@@ -142,14 +142,14 @@ impl App {
         }
     }
 
-    /// 지금 행: 열 이름 → 값
+    /// Current row: column name → value
     fn dba_row(&self) -> Option<HashMap<String, String>> {
         let Some(Tab { kind: TabKind::Dba(d), .. }) = self.tabs.get(self.active) else { return None };
         let g = d.grid.as_ref()?;
         Some(g.result.columns.iter().enumerate().map(|(c, col)| (col.name.clone(), g.value(g.row, c).unwrap_or_default())).collect())
     }
 
-    /// c / K: 지금 행의 세션 (pid) 쿼리 취소 / 연결 끊기. 묻고 한다
+    /// c / K: cancel the query / kill the connection of the current row's session (pid). Asks first
     pub fn dba_kill(&mut self, terminate: bool) {
         let Some(t) = self.tabs.get(self.active) else { return };
         let (id, target) = (t.id, t.target.clone());
@@ -158,7 +158,7 @@ impl App {
             self.status = "This report has no sessions to stop".into();
             return;
         }
-        // Vacuum Progress 는 취소만 (연결을 끊는 동작이 없는 리포트에서 K 는 하지 않는다)
+        // Vacuum Progress only allows cancel (K does nothing in reports without a kill-connection action)
         if terminate && !d.info.as_ref().is_some_and(|i| i.actions.iter().any(|a| matches!(a, DAction::Kill { terminate: true, .. }))) {
             self.status = "This report can only cancel (c)".into();
             return;
@@ -190,7 +190,7 @@ impl App {
         });
     }
 
-    /// Enter: 지금 행의 쿼리를 콘솔로. g: 이 리포트의 SQL 동작 고르기
+    /// Enter: current row's query to the console. g: choose an SQL action for this report
     pub fn dba_actions(&mut self, open_query: bool) {
         let Some(Tab { kind: TabKind::Dba(d), .. }) = self.tabs.get(self.active) else { return };
         let sqls: Vec<(String, String)> = d.info.iter().flat_map(|i| i.actions.iter()).filter_map(|a| match a {
@@ -212,7 +212,7 @@ impl App {
         self.popup = Some(Popup::Palette(Palette { title: "Generate SQL from this row".into(), input: TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
     }
 
-    /// 템플릿에 지금 행 값을 넣어 새 콘솔로
+    /// Fill a template with the current row's values into a new console
     pub fn dba_sql(&mut self, template: String) {
         let Some(row) = self.dba_row() else { return };
         let Some(t) = self.tabs.get(self.active) else { return };
@@ -224,13 +224,13 @@ impl App {
         }
     }
 
-    /// ⌃K › Show Diagram (ERD): 트리에서 고른 스키마(또는 DB 의 사용자 스키마 전부)의 관계를 글로 + Mermaid (y 로 복사)
+    /// ⌃K › Show Diagram (ERD): relationships of the schema selected in the tree (or all user schemas of the DB) as text + Mermaid (copy with y)
     pub fn erd_open(&mut self) {
         let Some((conn, db)) = self.dba_target() else {
             self.status = "Select a schema or a database first".into();
             return;
         };
-        // Data Source 행에서: 기본 DB(대개 postgres — 비어 있다)를 그리지 말고 어느 DB 인지 고른다
+        // From a Data Source row: instead of drawing the default DB (usually postgres — empty), choose which DB
         if self.focus == Focus::Tree && self.tree.selected().is_some_and(|n| n.kind == NodeKind::Conn) {
             let st = self.state.clone();
             let c2 = conn.clone();
@@ -251,7 +251,7 @@ impl App {
         self.erd_run(conn, db, picked);
     }
 
-    /// 이 DB 의 다이어그램 (picked = 그 스키마만, 없으면 시스템이 아닌 스키마 전부)
+    /// This DB's diagram (picked = only those schemas, otherwise all non-system schemas)
     pub fn erd_run(&mut self, conn: String, db: String, picked: Option<String>) {
         let kind = self.kind_of(&conn);
         let target = sql::target_id(&conn, Some(&db));
@@ -283,7 +283,7 @@ impl App {
         );
     }
 
-    /// a: 자동 다시 불러오기 켜고 끄기
+    /// a: toggle auto reload
     pub fn dba_toggle_auto(&mut self) {
         if let Some(Tab { kind: TabKind::Dba(d), .. }) = self.tabs.get_mut(self.active) {
             d.auto = !d.auto;

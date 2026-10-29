@@ -1,9 +1,9 @@
-//! Qurry 드라이버: Chroma (REST v2, 기본 8000). DB = Chroma database (default_tenant 안), 컬렉션 = 테이블.
-//! 콘솔은 그 DB 기준 경로 (컬렉션은 이름으로 써도 된다):
+//! Qurry driver: Chroma (REST v2, default 8000). DB = Chroma database (in default_tenant), collection = table.
+//! The console uses paths relative to that DB (collections can be referred to by name):
 //!   GET /collections
 //!   POST /collections/docs/query
 //!   {query_embeddings: [[0.1, 0.2]], n_results: 5}
-//! /api/... 로 시작하면 그대로 보낸다
+//! Paths starting with /api/... are sent as is
 use qurry_driver::rest::{Http, parse_request, table};
 use qurry_driver::{ConnectParams, Driver, QueryOut, ok, params, serve};
 use serde_json::{Map, Value, json};
@@ -16,7 +16,7 @@ struct Chroma {
     db: String,
 }
 
-/// get/query 결과 (열마다 배열) → 행. query 는 질의마다 한 겹 더 싸여 있다
+/// get/query result (an array per column) → rows. query is wrapped one more level per query
 fn columnar(v: &Value, limit: usize) -> Option<QueryOut> {
     let ids = v.get("ids")?.as_array()?;
     let nested = ids.first().is_some_and(Value::is_array);
@@ -65,7 +65,7 @@ impl Chroma {
         Ok(v)
     }
 
-    /// 컬렉션 이름 → id (API 는 /collections/{id}/... 를 받는다)
+    /// Collection name → id (the API takes /collections/{id}/...)
     fn coll_id(&self, name: &str) -> Result<String, String> {
         if is_uuid(name) {
             return Ok(name.into());
@@ -74,7 +74,7 @@ impl Chroma {
         v["id"].as_str().map(String::from).ok_or_else(|| format!("collection {name} not found"))
     }
 
-    /// 콘솔 경로 → API 경로: DB 기준 경로를 붙이고, /collections/<이름>/<더> 의 이름을 id 로
+    /// Console path → API path: prepend the DB base path, and turn the name in /collections/<name>/<rest> into the id
     fn api_path(&self, path: &str) -> Result<String, String> {
         if path.starts_with("/api/") {
             return Ok(path.into());
@@ -89,7 +89,7 @@ impl Chroma {
     fn query(&self, text: &str, limit: usize) -> Result<QueryOut, String> {
         let t = text.trim();
         let lower = t.to_lowercase();
-        // 탐색기: SELECT * FROM db.coll [LIMIT n] → get
+        // Explorer: SELECT * FROM db.coll [LIMIT n] → get
         if lower.starts_with("select") {
             let after = lower.find(" from ").map(|i| &t[i + 6..]).ok_or("Chroma isn't SQL — use REST, e.g. POST /collections/<name>/query")?;
             let coll = after.split_whitespace().next().unwrap_or("").rsplit('.').next().unwrap_or("").trim_matches('"').to_string();
@@ -103,7 +103,7 @@ impl Chroma {
             return Ok(out);
         }
         let mut out = table(&v, &["metadata"], limit);
-        // add/upsert/delete 는 빈 {} 를 돌려준다
+        // add/upsert/delete return an empty {}
         if m != "GET" && v.as_object().is_some_and(Map::is_empty) {
             out = QueryOut { has_result_set: false, rows_affected: 1, ..Default::default() };
         }
@@ -154,7 +154,7 @@ impl Driver for Chroma {
                 let dim = info["dimension"].as_u64().map(|d| d.to_string()).unwrap_or_else(|| "?".into());
                 let col = |n: &str, t: &str, pk: bool| json!({ "name": n, "dataType": t, "nullable": !pk, "defaultValue": null, "comment": null, "isPk": pk });
                 let mut columns = vec![col("id", "string", true), col("document", "text", false), col("embedding", &format!("vector({dim}, {space})"), false)];
-                // metadata 필드: 50개를 보고 짐작
+                // metadata fields: guessed from 50 records
                 let got = Chroma::call(self, "POST", &format!("{}/collections/{id}/get", self.prefix()), Some(&json!({ "limit": 50, "include": ["metadatas"] })))?;
                 let mut seen: Vec<String> = vec![];
                 for m in got["metadatas"].as_array().into_iter().flatten() {

@@ -1,5 +1,5 @@
 import * as monaco from "monaco-editor/editor/editor.api";
-// editor.api 는 핵심만 있고 자동완성(suggest)·찾기·괄호매칭 같은 기능이 빠져 있다 → editor.main 으로 전부 등록
+// editor.api has only the core and lacks features like autocomplete (suggest)·find·bracket matching → register everything via editor.main
 import "monaco-editor/editor/editor.main";
 import "monaco-editor/languages/definitions/pgsql/register";
 import "monaco-editor/languages/definitions/mysql/register";
@@ -63,9 +63,9 @@ monaco.editor.defineTheme("dbtool-hc", {
 });
 
 /**
- * 콘솔 탭을 닫을 때: 그 콘솔의 되돌리기(undo) 기록을 버린다.
- * Monaco 는 닫힌 모델의 undo 를 같은 주소로 다시 열 때를 위해 (최대 20MB) 들고 있는데, 콘솔 주소(console-<탭 id>.sql)는 다시 쓰지 않는다.
- * 화면에 없는 탭(다른 워크스페이스)이면 같은 주소로 내용이 다른 모델을 잠깐 만들어 남은 기록을 버리게 한다
+ * When closing a console tab: discard that console's undo history.
+ * Monaco keeps a closed model's undo (up to 20MB) in case the same URI is reopened, but console URIs (console-<tab id>.sql) are never reused.
+ * For a tab not on screen (another workspace), briefly create a model with the same URI and different content so the leftover history is discarded
  */
 export function forgetConsoleModel(tabId: string) {
   const uri = monaco.Uri.parse(`console-${tabId}.sql`);

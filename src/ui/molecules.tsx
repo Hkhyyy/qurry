@@ -1,14 +1,14 @@
 /**
- * 분자 (molecules): 원자 몇 개를 묶은 한 줄 · 한 칸 — 목록 한 줄, 상세 줄, 메뉴 항목, 폼 칸, 탭, 안내, 구역 제목.
- * 규격은 README.md
+ * Molecules: a row · cell made of a few atoms — list row, detail row, menu item, form field, tab, hint, section title.
+ * Spec in README.md
  */
 import { HTMLAttributes, InputHTMLAttributes, MouseEvent, ReactNode, useEffect, useState } from "react";
 import { Avatar, Kbd, Radio, Swatch, Text, TextInput } from "./atoms";
 import { cx } from "./cx";
 import { Chevron } from "./icons";
 
-// ───────── 폼 ─────────
-/** 라벨 + 칸 한 줄. 힌트 · 오류는 칸 아래 */
+// ───────── Form ─────────
+/** Label + field on one line. Hint · error below the field */
 export function Field({ label, hint, error, children, className }: { label: ReactNode; hint?: ReactNode; error?: ReactNode; children: ReactNode; className?: string }) {
   return (
     <label className={cx("ui-field", className)}>
@@ -21,7 +21,7 @@ export function Field({ label, hint, error, children, className }: { label: Reac
     </label>
   );
 }
-/** 여럿 중 하나 (라디오). 선택지마다 짧은 설명 (hint) */
+/** One of several (radio). Short description (hint) per option */
 export function RadioGroup<T extends string | number>({ value, onChange, options, row }: { value: T; onChange: (v: T) => void; options: { value: T; label: ReactNode; hint?: ReactNode; disabled?: boolean }[]; row?: boolean }) {
   return (
     <div className={cx("ui-radio-group", row && "row")} role="radiogroup">
@@ -34,11 +34,11 @@ export function RadioGroup<T extends string | number>({ value, onChange, options
     </div>
   );
 }
-/** 폼 · 창 안의 구역 제목 (줄 전체) */
+/** Section title inside a form · window (full width) */
 export const FormSection = ({ children }: { children: ReactNode }) => <div className="ui-form-section">{children}</div>;
-/** 칸 아래 · 창 아래의 작은 회색 설명 */
+/** Small gray description below a field · window */
 export const Hint = ({ children, className }: { children: ReactNode; className?: string }) => <div className={cx("ui-hint", className)}>{children}</div>;
-/** 색 고르기 (Data Source 색). value = null 은 색 없음 */
+/** Color picker (Data Source color). value = null means no color */
 export function ColorPicker({ value, options, onChange, custom }: { value: string | null; options: { name: string; value: string | null }[]; onChange: (v: string | null) => void; custom?: boolean }) {
   const isPreset = options.some((c) => c.value?.toLowerCase() === value?.toLowerCase());
   return (
@@ -52,7 +52,7 @@ export function ColorPicker({ value, options, onChange, custom }: { value: strin
 }
 
 const HEX = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i;
-/** #abc · abc → #aabbcc (아니면 null) */
+/** #abc · abc → #aabbcc (otherwise null) */
 export function normalizeHex(s: string): string | null {
   const m = HEX.exec(s.trim());
   if (!m) return null;
@@ -60,11 +60,11 @@ export function normalizeHex(s: string): string | null {
   return `#${h.toLowerCase()}`;
 }
 
-/** 직접 고르기: 시스템 색 고르개 (macOS 는 화면 픽셀을 찍는 스포이드 포함) + hex 입력 */
+/** Custom pick: system color picker (on macOS includes an eyedropper for screen pixels) + hex input */
 function CustomColor({ value, onChange }: { value: string | null; onChange: (v: string) => void }) {
   const [text, setText] = useState(value ?? "");
   useEffect(() => setText((t) => (normalizeHex(t) === value ? t : value ?? "")), [value]);
-  // 맞는 hex 면 치는 대로 바로 적용 (OK 를 바로 눌러도 들어가게), 틀린 채로 나가면 되돌린다
+  // Apply valid hex immediately as typed (so pressing OK right away works), revert if left invalid
   const type = (t: string) => {
     setText(t);
     const h = normalizeHex(t);
@@ -88,7 +88,7 @@ function CustomColor({ value, onChange }: { value: string | null; onChange: (v: 
 }
 
 /**
- * 찾기 칸: ⌕ + 입력 (+ 불러오는 중 ◌). bare = 테두리 없이 크게 (팝오버 머리 — Search Everywhere)
+ * Search field: ⌕ + input (+ loading ◌). bare = large without border (popover header — Search Everywhere)
  */
 export function SearchField({ busy, bare, className, ...rest }: InputHTMLAttributes<HTMLInputElement> & { busy?: boolean; bare?: boolean }) {
   return (
@@ -104,7 +104,7 @@ export function SearchField({ busy, bare, className, ...rest }: InputHTMLAttribu
   );
 }
 
-// ───────── 탭 · 제목 ─────────
+// ───────── Tabs · titles ─────────
 export function Tabs<T extends string>({ items, value, onChange, size }: { items: { id: T; label: ReactNode }[]; value: T; onChange: (id: T) => void; size?: "sm" }) {
   return (
     <div className={cx("ui-tabs", size === "sm" && "size-sm")} role="tablist">
@@ -116,10 +116,10 @@ export function Tabs<T extends string>({ items, value, onChange, size }: { items
     </div>
   );
 }
-/** 목록 · 창 안의 작은 구역 제목 (Actions · Files · Format · To …) */
+/** Small section title inside a list · window (Actions · Files · Format · To …) */
 export const SectionTitle = ({ children, className }: { children: ReactNode; className?: string }) => <div className={cx("ui-section-title", className)}>{children}</div>;
 
-// ───────── 안내 ─────────
+// ───────── Hints ─────────
 export function Notice({ tone, children, className }: { tone?: "warn" | "danger" | "ok"; children: ReactNode; className?: string }) {
   return <div className={cx("ui-notice", tone && `tone-${tone}`, className)}>{children}</div>;
 }
@@ -132,7 +132,7 @@ export function EmptyState({ title, children, action }: { title?: ReactNode; chi
     </div>
   );
 }
-/** 키 안내 줄: "↩ Open · ⇥ Next tab" — 키는 Kbd, 사이는 · */
+/** Key hint line: "↩ Open · ⇥ Next tab" — keys are Kbd, separated by · */
 export function KeyHints({ items, className }: { items: [string, string][]; className?: string }) {
   return (
     <div className={cx("ui-key-hints", className)}>
@@ -145,10 +145,10 @@ export function KeyHints({ items, className }: { items: [string, string][]; clas
   );
 }
 
-// ───────── 목록 한 줄 ─────────
+// ───────── List row ─────────
 /**
- * 목록의 한 줄 (검색 결과 · 히스토리 · 전환기 · 마이그레이션 · RAG 인덱스 …).
- * [색 띠] [아이콘] 제목 설명 ……… 오른쪽
+ * One list row (search results · history · switcher · migrations · RAG index …).
+ * [color stripe] [icon] title description ……… right
  */
 export function ListItem({
   title,
@@ -170,19 +170,19 @@ export function ListItem({
 }: {
   title: ReactNode;
   icon?: ReactNode;
-  /** 맨 앞 (체크박스 등) */
+  /** Leading slot (checkbox etc.) */
   leading?: ReactNode;
-  /** 두 번째 줄 (작은 회색) */
+  /** Second line (small gray) */
   subtitle?: ReactNode;
-  /** Data Source 색 띠 */
+  /** Data Source color stripe */
   color?: string | null;
   hint?: ReactNode;
   trailing?: ReactNode;
   selected?: boolean;
-  /** 열려 있지 않은 것 · 비활성 */
+  /** Not open · disabled */
   dim?: boolean;
   mono?: boolean;
-  /** 마우스를 올리면 보일 전체 제목 */
+  /** Full title shown on hover */
   title2?: string;
   onClick?: (e: MouseEvent) => void;
   onDoubleClick?: (e: MouseEvent) => void;
@@ -221,7 +221,7 @@ export function ListItem({
   );
 }
 
-/** 상세 한 줄: 코드 (문장 · 쿼리) + 오른쪽 값 (행 수 · pid · 버전). tone 이면 값 색 */
+/** Detail row: code (statement · query) + value on the right (rows · pid · version). Value colored by tone */
 export function DetailRow({ children, value, tone }: { children: ReactNode; value?: ReactNode; tone?: "danger" | "warn" }) {
   return (
     <div className="ui-detail-row">
@@ -231,8 +231,8 @@ export function DetailRow({ children, value, tone }: { children: ReactNode; valu
   );
 }
 
-// ───────── 메뉴 항목 ─────────
-/** 메뉴 한 줄: 이름 ……… 단축키 (하위 메뉴면 ▸) */
+// ───────── Menu item ─────────
+/** Menu row: name ……… shortcut (▸ for submenus) */
 export function MenuItem({ label, shortcut, danger, disabled, hasSubmenu, children, onClick, onMouseEnter }: { label: ReactNode; shortcut?: string; danger?: boolean; disabled?: boolean; hasSubmenu?: boolean; children?: ReactNode; onClick?: () => void; onMouseEnter?: () => void }) {
   return (
     <div
@@ -250,11 +250,11 @@ export function MenuItem({ label, shortcut, danger, disabled, hasSubmenu, childr
   );
 }
 export const MenuSeparator = () => <div className="ui-menu-sep" role="separator" />;
-/** 메뉴 안의 흐린 설명 줄 (누를 수 없음) */
+/** Dimmed description row in a menu (not clickable) */
 export const MenuLabel = ({ children }: { children: ReactNode }) => <div className="ui-menu-label-row">{children}</div>;
 
-// ───────── 상태 줄 ─────────
-/** 상태 줄 오른쪽의 작은 칸 (1:20 · UTF-8 · 🔒 Read-only · 업데이트) */
+// ───────── Status bar ─────────
+/** Small cell on the right of the status bar (1:20 · UTF-8 · 🔒 Read-only · update) */
 export function StatusItem({ children, title, onClick, accent }: { children: ReactNode; title?: string; onClick?: () => void; accent?: boolean }) {
   return onClick ? (
     <button type="button" className={cx("ui-status-item", "clickable", accent && "accent")} title={title} onClick={onClick}>
@@ -267,10 +267,10 @@ export function StatusItem({ children, title, onClick, accent }: { children: Rea
   );
 }
 
-// ───────── 트리 한 줄 ─────────
+// ───────── Tree row ─────────
 /**
- * 트리의 한 줄 (Database Explorer · 스키마 고르기): 들여쓰기 ▸ 아이콘 이름 [배지] 설명.
- * ▸ 를 누르면 onToggle, 줄을 누르면 onSelect, 두 번 누르면 onDoubleClick (없으면 onToggle)
+ * One tree row (Database Explorer · schema picker): indent ▸ icon name [badge] description.
+ * Clicking ▸ calls onToggle, clicking the row calls onSelect, double-click calls onDoubleClick (onToggle if absent)
  */
 export function TreeRow({
   depth,
@@ -302,15 +302,15 @@ export function TreeRow({
   label: ReactNode;
   sub?: ReactNode;
   badge?: ReactNode;
-  /** 오른쪽 끝 (TTL · 개수) */
+  /** Right end (TTL · count) */
   trailing?: ReactNode;
-  /** 아이콘 앞 (체크박스) */
+  /** Before the icon (checkbox) */
   leading?: ReactNode;
   selected?: boolean;
   title?: string;
   className?: string;
   style?: React.CSSProperties;
-  /** Select In Explorer 가 찾는 열쇠 */
+  /** Key that Select In Explorer looks for */
   dataNode?: string;
   onSelect?: () => void;
   onToggle?: () => void;
@@ -354,10 +354,10 @@ export function TreeRow({
   );
 }
 
-// ───────── 탭 하나 (편집기 탭 · 결과 탭) ─────────
+// ───────── A single tab (editor tab · result tab) ─────────
 /**
- * 닫을 수 있는 탭: [아이콘] 이름 (📌 | ×). 고정(pinned)하면 × 대신 📌 (누르면 풀기).
- * variant = editor (위쪽 편집기 탭) · result (콘솔 아래 결과 탭). 끌기 · 우클릭은 그대로 넘긴다
+ * Closable tab: [icon] name (📌 | ×). When pinned, 📌 instead of × (click to unpin).
+ * variant = editor (editor tab on top) · result (result tab below the console). Drag · right-click are passed through
  */
 export function TabItem({
   label,
@@ -403,8 +403,8 @@ export function TabItem({
   );
 }
 
-// ───────── 왼쪽 세로 막대 칸 (워크스페이스) ─────────
-/** 세로 막대의 한 칸: 이니셜 사각형 + 작은 이름. 우클릭 · 두 번 클릭은 그대로 넘긴다 */
+// ───────── Left vertical bar cell (workspace) ─────────
+/** One cell of the vertical bar: initials square + small name. Right-click · double-click are passed through */
 export function RailItem({ initials, label, active, ...rest }: HTMLAttributes<HTMLButtonElement> & { initials: string; label: string; active?: boolean }) {
   return (
     <button type="button" className={cx("ui-rail-item", active && "active")} aria-pressed={active} {...rest}>

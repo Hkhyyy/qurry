@@ -1,8 +1,8 @@
-//! Qurry 드라이버: Qdrant (REST, 기본 6333). 컬렉션 = 테이블. 콘솔은 REST 그대로:
+//! Qurry driver: Qdrant (REST, default 6333). Collection = table. The console speaks raw REST:
 //!   GET /collections
 //!   POST /collections/items/points/search
 //!   {"vector": [0.1, 0.2, 0.3], "limit": 5, "with_payload": true}
-//! 탐색기에서 컬렉션을 열 때의 SELECT * FROM x.coll 은 scroll 로 바꾼다
+//! SELECT * FROM x.coll from opening a collection in the explorer becomes a scroll
 use qurry_driver::rest::{Http, parse_request, table};
 use qurry_driver::{ConnectParams, Driver, QueryOut, ok, params, serve};
 use serde_json::{Value, json};
@@ -24,7 +24,7 @@ impl Qdrant {
     fn query(&self, text: &str, limit: usize) -> Result<QueryOut, String> {
         let t = text.trim();
         let lower = t.to_lowercase();
-        // 탐색기: SELECT * FROM x.coll [LIMIT n] → scroll
+        // Explorer: SELECT * FROM x.coll [LIMIT n] → scroll
         if lower.starts_with("select") {
             let coll = lower.split(" from ").nth(1).ok_or("Qdrant isn't SQL — use REST, e.g. POST /collections/<name>/points/search")?;
             let coll = t[t.len() - coll.len()..].split_whitespace().next().unwrap_or("").rsplit('.').next().unwrap_or("").trim_matches('"').to_string();
@@ -34,7 +34,7 @@ impl Qdrant {
         }
         let (m, p, body) = parse_request(t)?;
         let v = self.call(&m, &p, body.as_ref())?;
-        // 결과 모양: result 가 배열, 또는 result.points / result.collections …
+        // Result shape: result is an array, or result.points / result.collections …
         let r = v.get("result").unwrap_or(&v);
         let main = match r {
             Value::Object(o) => o.values().find(|x| x.is_array()).unwrap_or(r),
@@ -83,7 +83,7 @@ impl Driver for Qdrant {
                 let info = Qdrant::call(self, "GET", &format!("/collections/{coll}"), None)?;
                 let vecs = info.pointer("/result/config/params/vectors").cloned().unwrap_or(Value::Null);
                 let mut columns = vec![json!({ "name": "id", "dataType": "point id", "nullable": false, "defaultValue": null, "comment": null, "isPk": true })];
-                // 이름 없는 벡터 하나 {size, distance} 또는 이름 붙은 여러 개
+                // One unnamed vector {size, distance} or several named ones
                 match &vecs {
                     Value::Object(o) if o.contains_key("size") => columns.push(json!({ "name": "vector", "dataType": format!("vector({}, {})", o["size"], o["distance"].as_str().unwrap_or("")), "nullable": false, "defaultValue": null, "comment": null, "isPk": false })),
                     Value::Object(o) => {
@@ -93,7 +93,7 @@ impl Driver for Qdrant {
                     }
                     _ => {}
                 }
-                // payload 필드: 50개를 보고 짐작
+                // payload fields: guessed from 50 points
                 let pts = Qdrant::call(self, "POST", &format!("/collections/{coll}/points/scroll"), Some(&json!({ "limit": 50, "with_payload": true, "with_vector": false })))?;
                 let mut seen: Vec<(String, String)> = vec![];
                 for pt in pts.pointer("/result/points").and_then(Value::as_array).into_iter().flatten() {

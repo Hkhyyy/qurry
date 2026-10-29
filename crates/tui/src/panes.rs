@@ -1,21 +1,21 @@
-//! 에디터 화면 분할 트리 (GUI 의 Split Right / Split Down). 칸(그룹)은 잎, 나눈 곳은 가지. 칸은 최대 MAX 개
+//! Editor split tree (the GUI's Split Right / Split Down). Panes (groups) are leaves, splits are branches. At most MAX panes
 use crate::app::SplitDir;
 
 pub const MAX: usize = 4;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pane {
-    /// 칸 id (Tab.group)
+    /// Pane id (Tab.group)
     Leaf(usize),
-    /// pct = 첫 번째(a: 왼쪽/위) 가 차지하는 비율(%)
+    /// pct = share (%) taken by the first (a: left/top)
     Split { dir: SplitDir, pct: u16, a: Box<Pane>, b: Box<Pane> },
 }
 
-/// 가지 위치: 뿌리에서 a(false)/b(true) 로 내려가는 길
+/// Branch position: the path from the root going a(false)/b(true)
 pub type Path = Vec<bool>;
 
 impl Pane {
-    /// 칸 id 들 (왼쪽/위부터)
+    /// Pane ids (from left/top)
     pub fn leaves(&self) -> Vec<usize> {
         match self {
             Pane::Leaf(g) => vec![*g],
@@ -27,7 +27,7 @@ impl Pane {
         matches!(self, Pane::Split { .. })
     }
 
-    /// 칸 g 를 dir 방향으로 나눠 새 칸 id 를 돌려준다 (이미 MAX 개면 None)
+    /// Splits pane g in direction dir and returns the new pane id (None if already MAX)
     pub fn split(&mut self, g: usize, dir: SplitDir) -> Option<usize> {
         let ls = self.leaves();
         if ls.len() >= MAX || !ls.contains(&g) {
@@ -49,7 +49,7 @@ impl Pane {
         }
     }
 
-    /// 칸 g 를 없애고 옆 칸이 그 자리를 채운다 (마지막 칸은 없애지 않는다)
+    /// Removes pane g and the neighbor fills its place (the last pane isn't removed)
     pub fn remove(&mut self, g: usize) {
         if let Pane::Split { a, b, .. } = self {
             if **a == Pane::Leaf(g) {
@@ -63,7 +63,7 @@ impl Pane {
         }
     }
 
-    /// 칸 g 를 감싼 가지 중 dir 방향으로 나눈 가장 가까운 것 (←/→ 는 좌우 경계선, ↑/↓ 는 위아래 경계선)
+    /// Nearest branch around pane g split in direction dir (←/→ is the left-right border, ↑/↓ the top-bottom border)
     pub fn ancestor_with_dir(&self, g: usize, want: SplitDir) -> Option<Path> {
         fn walk(p: &Pane, g: usize, want: SplitDir, path: &mut Path, best: &mut Option<Path>) -> bool {
             match p {
@@ -89,7 +89,7 @@ impl Pane {
         best
     }
 
-    /// 가지의 비율 (path 가 가지가 아니면 None)
+    /// Branch ratio (None if path isn't a branch)
     pub fn pct_mut(&mut self, path: &[bool]) -> Option<&mut u16> {
         match (self, path.split_first()) {
             (Pane::Split { pct, .. }, None) => Some(pct),
@@ -109,10 +109,10 @@ mod tests {
         assert_eq!(p.split(0, SplitDir::Right), Some(1));
         assert_eq!(p.split(0, SplitDir::Down), Some(2));
         assert_eq!(p.split(1, SplitDir::Down), Some(3));
-        // 2x2: 왼쪽 위·왼쪽 아래·오른쪽 위·오른쪽 아래
+        // 2x2: top-left · bottom-left · top-right · bottom-right
         assert_eq!(p.leaves(), [0, 2, 1, 3]);
         assert_eq!(p.split(3, SplitDir::Right), None);
-        // 3 은 오른쪽 열의 아래: 좌우 경계선은 뿌리, 위아래 경계선은 오른쪽 열
+        // 3 is bottom of the right column: the left-right border is the root, the top-bottom border is the right column
         assert_eq!(p.ancestor_with_dir(3, SplitDir::Right), Some(vec![]));
         assert_eq!(p.ancestor_with_dir(3, SplitDir::Down), Some(vec![true]));
         *p.pct_mut(&[true]).unwrap() = 30;
@@ -121,7 +121,7 @@ mod tests {
         p.remove(1);
         p.remove(3);
         assert_eq!(p, Pane::Leaf(0));
-        // 지운 id 를 다시 쓴다
+        // Removed ids are reused
         assert_eq!(p.split(0, SplitDir::Down), Some(1));
     }
 }

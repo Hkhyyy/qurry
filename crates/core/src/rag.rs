@@ -1,5 +1,5 @@
-//! RAG: 테이블의 글을 임베딩(OpenAI · Ollama)해서 벡터 저장소(pgvector · Qdrant · Chroma · Milvus)에 넣고, 질문과 가까운 행을 찾는다.
-//! 저장소에 쓰는 것도 보통 쿼리와 같은 길(run_query)로 간다: Read-only Data Source 에는 쓰지 않는다.
+//! RAG: embed table text (OpenAI · Ollama), store it in a vector store (pgvector · Qdrant · Chroma · Milvus), and find rows close to a question.
+//! Writes to the store usually go the same way as queries (run_query): nothing is written to a Read-only Data Source.
 use crate::app::AppState;
 use crate::db::{ColumnInfo, QueryResult, cell_text};
 use crate::error::{AppError, AppResult};
@@ -9,11 +9,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::atomic::Ordering;
 
-/// 임베딩할 묶음 크기
+/// Batch size for embedding
 const BATCH: usize = 64;
-/// 행 하나의 글 상한 (임베딩 모델 입력 한도 안쪽)
+/// Text cap per row (within the embedding model's input limit)
 const MAX_CHARS: usize = 4000;
-/// OpenAI API 키가 든 비밀 이름
+/// Secret name holding the OpenAI API key
 pub const OPENAI_KEY: &str = "rag:openai";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -22,7 +22,7 @@ pub struct RagIndex {
     #[serde(default)]
     pub id: String,
     pub name: String,
-    /// 원본 접속 대상 (conn 또는 conn::db) · 스키마 · 테이블 · 행을 가리키는 열 · 임베딩할 글 열
+    /// Source connection target (conn or conn::db) · schema · table · row id column · text columns to embed
     pub source: String,
     pub schema: String,
     pub table: String,
@@ -31,10 +31,10 @@ pub struct RagIndex {
     /// openai | ollama
     pub provider: String,
     pub model: String,
-    /// 비면 기본 주소 (OpenAI 호환 서버·다른 Ollama 주소)
+    /// Empty = default URL (OpenAI-compatible server·another Ollama URL)
     #[serde(default)]
     pub base_url: String,
-    /// 저장할 곳: 접속 대상 · 컬렉션 (pgvector 는 [schema.]테이블)
+    /// Where to store: connection target · collection (for pgvector, [schema.]table)
     pub dest: String,
     pub collection: String,
     #[serde(default)]
@@ -49,17 +49,17 @@ pub fn default_model(provider: &str) -> &'static str {
     if provider == "openai" { "text-embedding-3-small" } else { "nomic-embed-text" }
 }
 
-/// 서버 주소: 정한 것 → 환경변수 (OPENAI_BASE_URL · OLLAMA_HOST, 각 도구와 같은 이름) → 기본
+/// Server URL: configured → env var (OPENAI_BASE_URL · OLLAMA_HOST, same names as each tool) → default
 fn base_url(provider: &str, base: &str) -> String {
     let (env, def) = if provider == "openai" { ("OPENAI_BASE_URL", "https://api.openai.com/v1") } else { ("OLLAMA_HOST", "http://localhost:11434") };
     let b = Some(base.trim().to_string()).filter(|b| !b.is_empty()).or_else(|| std::env::var(env).ok().filter(|b| !b.trim().is_empty())).unwrap_or_else(|| def.into());
-    // OLLAMA_HOST 는 "127.0.0.1:11434" 처럼 스킴 없이 쓰기도 한다
+    // OLLAMA_HOST is sometimes written without a scheme, like "127.0.0.1:11434"
     let b = if b.starts_with("http://") || b.starts_with("https://") { b } else { format!("http://{b}") };
     b.trim_end_matches('/').to_string()
 }
 
-/// 저장한 OpenAI 키 (또는 OPENAI_API_KEY) 를 이 서버로 보내도 되는지: OpenAI 이거나 OPENAI_BASE_URL 로 정한 서버, 그리고 https (이 컴퓨터의 http 는 괜찮다).
-/// 인덱스마다 적은 "OpenAI 호환" 서버로는 보내지 않는다 (로컬 · LAN 서버에 진짜 키가 평문으로 가지 않게)
+/// Whether the saved OpenAI key (or OPENAI_API_KEY) may be sent to this server: OpenAI or the server set via OPENAI_BASE_URL, and https (http on this machine is fine).
+/// Not sent to "OpenAI-compatible" servers set per index (so a real key doesn't go in plaintext to local · LAN servers)
 fn openai_key_allowed(base: &str) -> bool {
     let url = base_url("openai", base);
     let trusted = std::iter::once("https://api.openai.com/v1".to_string()).chain(std::env::var("OPENAI_BASE_URL").ok().map(|b| base_url("openai", &b)));
@@ -69,7 +69,7 @@ fn openai_key_allowed(base: &str) -> bool {
     trusted.into_iter().any(|t| t == url) && (url.starts_with("https://") || local)
 }
 
-/// 글 묶음 → 벡터 (블로킹 HTTP. spawn_blocking 안에서 부른다)
+/// Text batch → vectors (blocking HTTP; call inside spawn_blocking)
 fn embed_blocking(provider: &str, model: &str, base: &str, key: Option<&str>, texts: &[String]) -> AppResult<Vec<Vec<f32>>> {
     let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(std::time::Duration::from_secs(300))).http_status_as_error(false).max_redirects(0).build().into();
     let (url, body) = match provider {
@@ -90,7 +90,7 @@ fn embed_blocking(provider: &str, model: &str, base: &str, key: Option<&str>, te
         return Err(AppError::Msg(format!("{provider}: {msg}{hint}")));
     }
     let vecs: Vec<Vec<f32>> = match provider {
-        // OpenAI 는 data[].index 순서를 지킨다
+        // OpenAI preserves data[].index order
         "openai" => {
             let mut d: Vec<(u64, Vec<f32>)> = v["data"].as_array().into_iter().flatten().map(|x| (x["index"].as_u64().unwrap_or(0), floats(&x["embedding"]))).collect();
             d.sort_by_key(|x| x.0);
@@ -108,7 +108,7 @@ fn floats(v: &Value) -> Vec<f32> {
     v.as_array().into_iter().flatten().filter_map(Value::as_f64).map(|f| f as f32).collect()
 }
 
-/// 행 → 임베딩할 글: 열이 하나면 값만, 여럿이면 "열: 값" 줄
+/// Row → text to embed: just the value for one column, "column: value" lines for several
 fn row_text(cols: &[String], vals: &[Value]) -> String {
     let parts: Vec<String> = cols.iter().zip(vals).filter(|(_, v)| !v.is_null()).map(|(c, v)| if cols.len() == 1 { cell_text(v) } else { format!("{c}: {}", cell_text(v)) }).collect();
     let t = parts.join("\n");
@@ -119,18 +119,18 @@ fn vec_lit(v: &[f32]) -> String {
     format!("[{}]", v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(","))
 }
 
-/// pgvector 테이블 이름: "schema.name" 또는 "name" (public)
+/// pgvector table name: "schema.name" or "name" (public)
 fn pg_table(collection: &str) -> String {
     let (s, t) = collection.split_once('.').unwrap_or(("public", collection));
     format!("{}.{}", quote_ident(DbKind::Postgres, s), quote_ident(DbKind::Postgres, t))
 }
 
-/// Qdrant 점 id 는 정수나 UUID 여야 한다: 원본 id 로 늘 같은 UUID
+/// Qdrant point ids must be integers or UUIDs: always the same UUID for a source id
 fn point_id(source_id: &str) -> String {
     uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, source_id.as_bytes()).to_string()
 }
 
-/// 결과에서 이 이름들 중 처음 있는 열
+/// The first of these column names present in the result
 fn col(r: &QueryResult, names: &[&str]) -> Option<usize> {
     names.iter().find_map(|n| r.columns.iter().position(|c| c.name == *n))
 }
@@ -156,7 +156,7 @@ impl AppState {
         self.rag_indexes()?.into_iter().find(|x| x.id == id || x.name == id).ok_or_else(|| AppError::Msg(format!("RAG index '{id}' not found")))
     }
 
-    /// 새로 만들거나 고친다 (id 가 비면 새로). 원본·모델·저장할 곳이 바뀌면 다시 만들어야 한다 (rows 를 0 으로)
+    /// Create or update (new if id is empty). Changing the source·model·destination requires a rebuild (rows set to 0)
     pub fn rag_save(&self, mut idx: RagIndex) -> AppResult<RagIndex> {
         if idx.name.trim().is_empty() || idx.text_columns.is_empty() || idx.id_column.is_empty() || idx.collection.trim().is_empty() {
             return Err(AppError::Msg("Name, ID column, text columns and collection are required".into()));
@@ -183,7 +183,7 @@ impl AppState {
         Ok(idx)
     }
 
-    /// 정의만 지운다 (저장소의 벡터는 남는다)
+    /// Delete only the definition (vectors in the store remain)
     pub fn rag_delete(&self, id: &str) -> AppResult<()> {
         let list: Vec<RagIndex> = self.rag_indexes()?.into_iter().filter(|x| x.id != id).collect();
         self.rag_write(&list)
@@ -199,9 +199,9 @@ impl AppState {
 
     async fn embed(&self, idx: &RagIndex, texts: Vec<String>) -> AppResult<Vec<Vec<f32>>> {
         let key = if idx.provider == "openai" {
-            // 저장한 키, 없으면 OPENAI_API_KEY (OpenAI 호환 로컬 서버는 키 없이도)
+            // Saved key, else OPENAI_API_KEY (OpenAI-compatible local servers work without a key)
             if !openai_key_allowed(&idx.base_url) {
-                // 다른 OpenAI 호환 서버: 키 없이 (보통 로컬 서버는 키가 없다)
+                // Other OpenAI-compatible servers: no key (local servers usually have none)
                 None
             } else {
                 let k = self.secret(OPENAI_KEY)?.filter(|k| !k.is_empty()).or_else(|| std::env::var("OPENAI_API_KEY").ok().filter(|k| !k.is_empty()));
@@ -225,7 +225,7 @@ impl AppState {
         }
     }
 
-    /// 저장소에 컬렉션(테이블)이 없으면 만든다
+    /// Create the collection (table) in the store if missing
     async fn rag_prepare(&self, idx: &RagIndex, kind: DbKind, dim: usize) -> AppResult<()> {
         let q = |s: String| self.run_query(idx.dest.clone(), s, Some(10), None);
         let c = &idx.collection;
@@ -275,7 +275,7 @@ impl AppState {
         Ok(())
     }
 
-    /// 원본 테이블을 처음부터 다시 임베딩해 넣는다 (같은 id 는 덮어쓴다). 진행: job rows/total. 넣은 행 수
+    /// Re-embed the source table from scratch (same ids are overwritten). Progress: job rows/total. Returns rows inserted
     pub async fn rag_build(&self, id: String, job_id: String) -> AppResult<u64> {
         let job = self.job(&job_id).unwrap_or_else(|| self.start_job(&job_id));
         let r = async {
@@ -292,7 +292,7 @@ impl AppState {
             let cols: Vec<String> = std::iter::once(&idx.id_column).chain(&idx.text_columns).map(|c| q(c)).collect();
             let (mut last, mut done, mut dim) = (None::<String>, 0u64, None::<usize>);
             loop {
-                // id 순으로 이어서 읽는다 (OFFSET 은 뒤로 갈수록 느리다). 행 수는 run_query 의 limit 로
+                // Keep reading in id order (OFFSET gets slower further in). Row count via run_query's limit
                 let after = last.as_ref().map(|l| format!(" WHERE {} > {}", q(&idx.id_column), literal(src_kind, Some(l)))).unwrap_or_default();
                 let page = self.run_query(idx.source.clone(), format!("SELECT {} FROM {table}{after} ORDER BY {}", cols.join(", "), q(&idx.id_column)), Some(BATCH), None).await?;
                 if page.rows.is_empty() {
@@ -320,12 +320,12 @@ impl AppState {
                     break;
                 }
             }
-            // pgvector: 거리 인덱스 (HNSW 는 2000 차원까지 — 넘으면 인덱스 없이 쓴다)
+            // pgvector: distance index (HNSW supports up to 2000 dimensions — beyond that, no index)
             if dest_kind == DbKind::Postgres && dim.is_some() {
                 let t = pg_table(&idx.collection);
                 self.run_query(idx.dest.clone(), format!("CREATE INDEX IF NOT EXISTS {} ON {t} USING hnsw (embedding vector_cosine_ops)", quote_ident(DbKind::Postgres, &format!("{}_embedding_idx", idx.collection.rsplit('.').next().unwrap_or("rag")))), Some(1), None).await.ok();
             }
-            // 만든 결과 (rag_save 는 사용자가 고친 것을 저장하며 이 값들을 지킨다)
+            // Build results (rag_save keeps these values when saving user edits)
             let mut list = self.rag_indexes()?;
             if let Some(x) = list.iter_mut().find(|x| x.id == idx.id) {
                 x.dim = dim.or(x.dim);
@@ -340,7 +340,7 @@ impl AppState {
         r
     }
 
-    /// 질문과 가까운 행: score(1 = 같은 뜻) + 원본 행의 열들. 원본을 못 읽으면 score · id · content
+    /// Rows close to the question: score (1 = same meaning) + the source row's columns. If the source can't be read, score · id · content
     pub async fn rag_search(&self, id: String, query: String, limit: usize) -> AppResult<QueryResult> {
         let started = std::time::Instant::now();
         let idx = self.rag_get(&id)?;
@@ -361,7 +361,7 @@ impl AppState {
         let r = self.run_query(idx.dest.clone(), sql, Some(limit), None).await?;
         let (ic, tc) = (col(&r, &["source_id", "payload.source_id", "id"]), col(&r, &["content", "payload.content", "document"]));
         let sc = col(&r, &["score", "distance"]);
-        // Chroma 는 거리(0 = 같음), 나머지는 유사도
+        // Chroma returns distance (0 = identical), the others similarity
         let chroma = kind == DbKind::Chroma;
         let hits: Vec<(String, f64, Value)> = r
             .rows
@@ -373,7 +373,7 @@ impl AppState {
             .collect();
         let score = |s: f64| json!((s * 10000.0).round() / 10000.0);
         let col_info = |n: &str, t: &str| ColumnInfo { name: n.into(), type_name: t.into() };
-        // 원본 행을 붙인다
+        // Attach the source rows
         let src_kind = self.source(&idx.source)?.kind;
         let q = |s: &str| quote_ident(src_kind, s);
         let src = if hits.is_empty() {
@@ -433,7 +433,7 @@ mod tests {
         assert_eq!(base_url("openai", "https://example.com/v1"), "https://example.com/v1");
     }
 
-    /// 가짜 임베딩 서버: OpenAI(/embeddings)·Ollama(/api/embed) 형식. 벡터 = 글자 a~h 의 개수
+    /// Fake embedding server: OpenAI(/embeddings)·Ollama(/api/embed) formats. Vector = counts of letters a~h
     async fn fake_embedder() -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -478,7 +478,7 @@ mod tests {
         format!("http://{addr}")
     }
 
-    /// PG 표 → (pgvector · 있으면 Qdrant · Chroma · Milvus) 로 만들고 찾기. 가짜 임베딩 서버로 (OpenAI·Ollama 형식 모두)
+    /// PG table → build and search in (pgvector · Qdrant · Chroma · Milvus if available). With a fake embedding server (both OpenAI·Ollama formats)
     #[tokio::test]
     #[ignore]
     async fn rag_build_and_search_everywhere() {
@@ -497,7 +497,7 @@ mod tests {
         }
         q("drop table if exists qurry_rag_docs").await.ok();
         q("create table qurry_rag_docs (id int primary key, title text, body text)").await.unwrap();
-        // 묶음(64) 경계를 넘게 행을 넣는다
+        // Insert enough rows to cross the batch (64) boundary
         q("insert into qurry_rag_docs select g, 'filler ' || g, 'zzz' from generate_series(1, 70) g").await.unwrap();
         q("insert into qurry_rag_docs values (100, 'abba', 'aaaa bbbb'), (101, 'hedge', 'eeee hhhh'), (102, 'cafe', 'cccc ffff')").await.unwrap();
         let base = fake_embedder().await;
@@ -513,7 +513,7 @@ mod tests {
         }
         q("drop table if exists qurry_rag_vec").await.ok();
         for (i, (dest, coll)) in dests.iter().enumerate() {
-            // 남은 컬렉션 지우기
+            // Delete leftover collections
             match dest.as_str() {
                 "qdrant" | "chroma" => { st.run_query(dest.clone(), format!("DELETE /collections/{coll}"), None, None).await.ok(); }
                 "milvus" => { st.run_query(dest.clone(), format!("POST /collections/drop\n{{collectionName: '{coll}'}}"), None, None).await.ok(); }
@@ -529,7 +529,7 @@ mod tests {
             let title = r.columns.iter().position(|c| c.name == "title").unwrap_or_else(|| panic!("{dest}: {:?}", r.columns.iter().map(|c| &c.name).collect::<Vec<_>>()));
             assert_eq!(r.rows[0][title], json!("hedge"), "{dest}: {:?}", r.rows);
             assert!(r.rows[0][0].as_f64().unwrap() > 0.9, "{dest}: score {:?}", r.rows[0][0]);
-            // 다시 만들어도 같은 id 는 덮어쓴다
+            // Rebuilding overwrites the same ids too
             assert_eq!(st.rag_build(idx.id.clone(), "again".into()).await.unwrap(), 73);
         }
         assert_eq!(q("select count(*) from qurry_rag_vec").await.unwrap().rows[0][0], json!(73));
