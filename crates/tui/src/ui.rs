@@ -905,7 +905,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                         _ => fl.value.clone(),
                     };
                     let sel = i == form.sel;
-                    let mut spans = field_row(&fl.label, 15, shown + if sel && matches!(fl.kind, FieldKind::Text | FieldKind::Secret) { "▏" } else { "" }, sel);
+                    let mut spans = field_row(&fl.label, 17, shown + if sel && matches!(fl.kind, FieldKind::Text | FieldKind::Secret) { "▏" } else { "" }, sel);
                     if fl.label == "Color" {
                         let c = COLOR_PRESETS.iter().find(|p| p.0 == fl.value).and_then(|p| hex(p.1)).or_else(|| form.edit.as_ref().and_then(|e| e.color.as_deref()).filter(|_| fl.value == "custom").and_then(hex));
                         if let Some(c) = c {
