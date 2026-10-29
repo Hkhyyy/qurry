@@ -27,6 +27,7 @@ fn scan(sql: &str, kind: DbKind) -> Scan {
     let n = b.len();
     let (mut toks, mut i, mut depth, mut exec_comment) = (Vec::new(), 0usize, 0i32, false);
     let my = kind == DbKind::Mysql;
+    let backslash = crate::sql::backslash_escapes(kind);
     while i < n {
         let c = b[i];
         let d = if i + 1 < n { b[i + 1] } else { 0 };
@@ -38,7 +39,8 @@ fn scan(sql: &str, kind: DbKind) -> Scan {
             i = sql[i..].find('\n').map(|j| i + j + 1).unwrap_or(n);
             continue;
         }
-        if c == b'#' && my {
+        // MySQL # 주석, ClickHouse "# " · "#!" 주석
+        if c == b'#' && crate::sql::hash_comment(kind, d) {
             i = sql[i..].find('\n').map(|j| i + j + 1).unwrap_or(n);
             continue;
         }
@@ -71,11 +73,11 @@ fn scan(sql: &str, kind: DbKind) -> Scan {
         // 문자열 / 인용 식별자: 통째로 한 토큰 (식별자는 이름으로 쓰일 수 있어 단어로 남긴다)
         if c == b'\'' || c == b'"' || c == b'`' {
             // PG E'…' 는 \ 가 이스케이프. name' 처럼 낱말 끝의 e 는 아니다 (sql::split_statements 와 같은 규칙)
-            let e_string = kind == DbKind::Postgres && c == b'\'' && i > 0 && (b[i - 1] == b'e' || b[i - 1] == b'E') && (i < 2 || !(b[i - 2].is_ascii_alphanumeric() || b[i - 2] == b'_' || b[i - 2] >= 0x80));
+            let e_string = kind == DbKind::Postgres && c == b'\'' && crate::sql::is_e_string(b, i);
             let mut j = i + 1;
             while j < n {
                 // MySQL 백틱 이름 안의 \ 는 이스케이프가 아니다
-                if ((my && c != b'`') || e_string) && b[j] == b'\\' {
+                if ((backslash && c != b'`') || e_string) && b[j] == b'\\' {
                     j += 2;
                     continue;
                 }
@@ -108,7 +110,7 @@ fn scan(sql: &str, kind: DbKind) -> Scan {
             let rest = &sql[i..];
             if let Some(te) = rest[1..].find('$').map(|j| j + 2) {
                 let tag = &rest[..te];
-                if tag[1..te - 1].chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') && !tag[1..].starts_with(|ch: char| ch.is_ascii_digit()) {
+                if crate::sql::is_dollar_tag(tag) {
                     let start = i;
                     i = sql[i + te..].find(tag).map(|j| i + te + j + te).unwrap_or(n);
                     toks.push(Tok { text: "'".into(), word: false, depth, quoted: false, start, end: i });
@@ -281,6 +283,7 @@ const SIDE_EFFECT_FUNCS: &[&str] = &[
 const MSSQL_STATEMENT_WORDS: &[&str] = &[
     "drop", "alter", "create", "exec", "execute", "truncate", "grant", "revoke", "deny", "declare", "waitfor", "backup", "restore", "kill", "use",
     "dbcc", "shutdown", "reconfigure", "bulk", "set", "begin", "commit", "rollback", "save", "checkpoint", "if", "while", "goto", "print", "raiserror", "throw",
+    "end", "disable", "enable", "receive", "send", "move", "get", "setuser", "revert", "open", "close", "fetch", "deallocate", "add", "updatetext", "writetext",
 ];
 /// SQL Server: 다른 서버·파일을 읽는 함수
 const MSSQL_EXTERNAL_FUNCS: &[&str] = &["openrowset", "opendatasource", "openquery"];
@@ -327,10 +330,15 @@ pub fn read_only_violation(sql: &str, kind: DbKind, strict: bool) -> Option<Stri
     }
     let words: Vec<&str> = sc.toks.iter().map(|t| t.text.as_str()).collect();
     let bare = |t: &Tok| t.word && !t.quoted;
-    if kind == DbKind::Mssql
-        && let Some(t) = sc.toks.iter().filter(|t| bare(t)).skip(1).find(|t| MSSQL_STATEMENT_WORDS.contains(&t.text.as_str()))
-    {
-        return Some(format!("Read-only mode: '{}' starts another statement (SQL Server runs the whole batch)", t.text));
+    if kind == DbKind::Mssql {
+        let fi = sc.toks.iter().position(|t| t.word).unwrap_or(0);
+        // [이름] 으로 시작하면 SQL Server 는 프로시저 호출로 본다 (EXEC 없이)
+        if sc.toks.get(fi).is_some_and(|t| t.quoted) {
+            return Some("Read-only mode: a statement can't start with a [name] (SQL Server runs it as a procedure)".into());
+        }
+        if let Some(t) = sc.toks.iter().skip(fi + 1).filter(|t| bare(t)).find(|t| MSSQL_STATEMENT_WORDS.contains(&t.text.as_str())) {
+            return Some(format!("Read-only mode: '{}' starts another statement (SQL Server runs the whole batch; write [{}] for a column)", t.text, t.text));
+        }
     }
     // SELECT … INTO 새 테이블 (PostgreSQL · SQL Server)
     if matches!(kind, DbKind::Postgres | DbKind::Mssql) && sc.toks.iter().any(|t| bare(t) && t.text == "into") {
@@ -359,7 +367,8 @@ pub fn read_only_violation(sql: &str, kind: DbKind, strict: bool) -> Option<Stri
         return Some(format!("Read-only mode: {} inside the statement is not allowed", sc.toks[w].text.to_uppercase()));
     }
     for (i, t) in sc.toks.iter().enumerate() {
-        let call = t.word && !t.quoted && sc.toks.get(i + 1).is_some_and(|n| n.text == "(");
+        // "set_config"(…) · `file`(…) 처럼 따옴표로 감싼 이름도 함수 이름이다
+        let call = t.word && sc.toks.get(i + 1).is_some_and(|n| n.text == "(");
         // set_config 는 읽기 전용 설정을 끌 수 있어 Data Source 읽기 전용에서도 막는다. 나머지 부작용 함수는 MCP(strict)에서
         if call && (t.text == "set_config" || (strict && SIDE_EFFECT_FUNCS.contains(&t.text.as_str()))) {
             return Some(format!("Read-only mode: {}() is not allowed (it has side effects outside the transaction)", t.text));
@@ -455,8 +464,17 @@ pub const REDIS_STRICT_MAX: i64 = 1000;
 /// 키 하나를 통째로 읽는 것 (요소가 수백만 개면 서버가 멈추고 MCP 가 메모리를 다 쓴다). args = 명령 뒤의 인자 (대문자 아님)
 pub fn redis_strict_violation(cmd: &str, args: &[String]) -> Option<String> {
     let num = |i: usize| args.get(i).and_then(|a| a.parse::<i64>().ok());
-    let opt = |name: &str| args.iter().position(|a| a.eq_ignore_ascii_case(name));
-    let too_many = |n: Option<i64>| n.is_none_or(|n| n.abs() > REDIS_STRICT_MAX);
+    // 옵션은 키 · 범위 같은 앞 인자 뒤에서만 찾는다 (키 이름이 LIMIT · COUNT 여도 속지 않게)
+    let fixed = match cmd {
+        "SCAN" => 1,
+        "HSCAN" | "SSCAN" | "ZSCAN" | "LPOS" => 2,
+        "XINFO" => 2,
+        "GEOSEARCH" => 1,
+        _ => 3,
+    };
+    let opt = |name: &str| args.iter().enumerate().skip(fixed).find(|(_, a)| a.eq_ignore_ascii_case(name)).map(|(i, _)| i);
+    // LIMIT · COUNT 는 1 이상 (0 · 음수는 "전부" 인 명령이 있다)
+    let too_many = |n: Option<i64>| n.is_none_or(|n| n <= 0 || n > REDIS_STRICT_MAX);
     let whole = || Some(format!("{cmd} reads the whole key in read-only mode — use redis_get (it reads at most the given limit) or {}", match cmd {
         "HGETALL" | "HKEYS" | "HVALS" => "HSCAN",
         "SMEMBERS" => "SSCAN",
@@ -477,8 +495,12 @@ pub fn redis_strict_violation(cmd: &str, args: &[String]) -> Option<String> {
         "ZRANGE" if opt("BYSCORE").or(opt("BYLEX")).is_none() && range(num(1), num(2)) => need_limit("a start..stop range"),
         "ZRANGEBYSCORE" | "ZRANGEBYLEX" | "ZREVRANGEBYSCORE" | "ZREVRANGEBYLEX" if opt("LIMIT").is_none_or(|i| too_many(num(i + 2))) => need_limit("LIMIT offset count"),
         "XRANGE" | "XREVRANGE" if opt("COUNT").is_none_or(|i| too_many(num(i + 1))) => need_limit("COUNT"),
-        "SRANDMEMBER" | "HRANDFIELD" | "ZRANDMEMBER" if args.len() > 1 && too_many(num(1)) => need_limit("a count"),
+        // 음수 count 는 그 수만큼 (겹쳐서) 돌려준다
+        "SRANDMEMBER" | "HRANDFIELD" | "ZRANDMEMBER" if args.len() > 1 && num(1).is_none_or(|n| n.abs() > REDIS_STRICT_MAX) => need_limit("a count"),
         "SCAN" | "HSCAN" | "SSCAN" | "ZSCAN" if opt("COUNT").is_some_and(|i| too_many(num(i + 1))) => need_limit("COUNT"),
+        "LPOS" if opt("COUNT").is_some_and(|i| too_many(num(i + 1))) => need_limit("COUNT"),
+        "GEOSEARCH" if opt("COUNT").is_none_or(|i| too_many(num(i + 1))) => need_limit("COUNT"),
+        "XINFO" if opt("FULL").is_some() && opt("COUNT").is_some_and(|i| too_many(num(i + 1))) => need_limit("COUNT"),
         _ => None,
     }
 }
@@ -724,6 +746,32 @@ mod tests {
         assert!(!ds("SELECT * FROM read_csv('local.csv')", Duckdb), "the user's own read-only data source may read local files");
     }
 
+    /// 재검토에서 나온 우회 (2026-10 점검 3차)
+    #[test]
+    fn read_only_quoted_names_and_lexer_gaps() {
+        use DbKind::{Clickhouse, Mssql};
+        let bad = |s: &str, k| read_only_violation(s, k, true).is_some();
+        let ds = |s: &str, k| read_only_violation(s, k, false).is_some();
+        // 따옴표로 감싼 함수 이름도 함수다
+        assert!(ds("select \"set_config\"('default_transaction_read_only','off',false)", Postgres));
+        assert!(ds("select pg_catalog.\"set_config\"('transaction_read_only','off',true)", Postgres));
+        assert!(bad("select \"pg_terminate_backend\"(pid) from pg_stat_activity", Postgres));
+        assert!(bad("select pg_terminate_backend (pid) from pg_stat_activity", Postgres));
+        assert!(bad("SELECT * FROM `file`('/etc/passwd', 'LineAsString')", Clickhouse));
+        // 비ASCII 달러 따옴표 태그
+        assert!(bad("select $é$ ' $é$, pg_terminate_backend(pid) from pg_stat_activity --'", Postgres));
+        assert!(!bad("select $é$ pg_terminate_backend(1) $é$", Postgres));
+        // ClickHouse 문자열의 \' 와 # 주석
+        assert!(bad("SELECT '\\'' , * FROM url('http://169.254.169.254/', 'RawBLOB', 'x String') --'", Clickhouse));
+        assert!(bad("select 1 # '\n, * from file('/etc/passwd', 'LineAsString') --'", Clickhouse));
+        assert!(!bad("SELECT 'it\\'s' AS a", Clickhouse));
+        // SQL Server: 첫 낱말이 [이름] 이어도 뒤 문장을 본다, 문장 낱말 더
+        assert!(ds("[desc] DROP TABLE dbo.orders", Mssql));
+        assert!(ds("SELECT 1 DISABLE TRIGGER ALL ON dbo.t", Mssql));
+        assert!(ds("SELECT 1 RECEIVE TOP (1) * FROM dbo.q", Mssql));
+        assert!(!ds("SELECT [open], [close] FROM dbo.prices", Mssql));
+    }
+
     #[test]
     fn read_only_data_source_allows_session_statements() {
         let ok = |s: &str| read_only_violation(s, Postgres, false).is_none();
@@ -745,6 +793,13 @@ mod tests {
         for bad in ["HGETALL big", "SMEMBERS s", "SUNION a b", "LRANGE l 0 -1", "LRANGE l 0 5000", "ZRANGE z 0 -1", "ZRANGE z -inf +inf BYSCORE", "ZRANGEBYSCORE z -inf +inf",
             "ZRANGEBYSCORE z -inf +inf LIMIT 0 100000", "XRANGE s - +", "SRANDMEMBER s -100000", "SCAN 0 COUNT 1000000", "KEYS *", "CONFIG GET *"] {
             assert!(v(bad).is_some(), "{bad}");
+        }
+        for bad in ["ZRANGEBYSCORE z -inf +inf LIMIT 0 -1", "ZRANGE z 0 +inf BYSCORE LIMIT 0 0", "LPOS l x COUNT 0", "GEOSEARCH g FROMLONLAT 0 0 BYRADIUS 9 km", "XINFO STREAM s FULL COUNT 0",
+            "XRANGE s - + COUNT -1", "ZRANGEBYSCORE LIMIT 0 5", "XRANGE COUNT 5 +"] {
+            assert!(v(bad).is_some(), "{bad}");
+        }
+        for ok in ["LPOS l x", "LPOS l x COUNT 5", "GEOSEARCH g FROMLONLAT 0 0 BYRADIUS 9 km COUNT 10", "XINFO STREAM s", "XINFO STREAM s FULL COUNT 10", "SRANDMEMBER s -5"] {
+            assert!(v(ok).is_none(), "{ok}");
         }
         for ok in ["GET a", "HGET h f", "HSCAN h 0 COUNT 100", "LRANGE l 0 99", "ZRANGE z 0 9", "ZRANGE z 0 +inf BYSCORE LIMIT 0 10", "ZRANGEBYSCORE z 0 1 LIMIT 0 10",
             "XRANGE s - + COUNT 10", "SRANDMEMBER s 5", "SRANDMEMBER s", "SCAN 0 MATCH a:* COUNT 100", "HLEN h"] {

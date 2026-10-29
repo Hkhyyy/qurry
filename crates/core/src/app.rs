@@ -328,8 +328,12 @@ pub async fn redis_pool(state: &AppState, id: &str) -> AppResult<crate::redisdb:
 /// 읽기 전용(MCP) 쿼리 시간 제한 (남이 보낸 쿼리로 서버를 오래 붙잡지 않게)
 const SERVER_CHANGED: &str = "The server, user or SSH tunnel changed (or SSL was turned off) — enter the password again. The saved one is only sent to the server it was saved for.";
 const SSH_CHANGED: &str = "The SSH server changed — enter the SSH password / passphrase again. The saved one is only sent to the server it was saved for.";
+/// MCP 읽기: 60초, 문자열 해석은 guard 와 같게 (서버 · 역할 설정이 standard_conforming_strings = off 여도)
 const READ_ONLY_TIMEOUT_PG: &str = "SET LOCAL statement_timeout = '60s'";
+const READ_ONLY_STRINGS_PG: &str = "SET LOCAL standard_conforming_strings = on";
 const READ_ONLY_TIMEOUT_MY: &str = "SET SESSION max_execution_time = 60000";
+/// MCP 에서 Redis 값 하나로 읽을 수 있는 크기
+const REDIS_READ_MAX_BYTES: i64 = 16 << 20;
 /// MCP CSV 내보내기 상한
 const EXPORT_MAX_BYTES: u64 = 512 << 20;
 const EXPORT_MAX_PLUGIN_ROWS: usize = 1_000_000;
@@ -354,6 +358,7 @@ impl AppState {
                 let mut tx = p.begin().await?;
                 tx.execute("SET TRANSACTION READ ONLY").await?;
                 tx.execute(READ_ONLY_TIMEOUT_PG).await?;
+                tx.execute(READ_ONLY_STRINGS_PG).await?;
                 let r = db::run_on(&mut tx, &sql, limit).await;
                 let _ = tx.rollback().await;
                 r
@@ -377,6 +382,19 @@ impl AppState {
                 let rest: Vec<String> = args.iter().skip(1).map(|a| String::from_utf8_lossy(a).into_owned()).collect();
                 if let Some(why) = crate::guard::redis_strict_violation(&cmd, &rest) {
                     return Err(AppError::Msg(why));
+                }
+                // 값을 통째로 돌려주는 명령: 읽기 전에 크기를 본다
+                let keys: &[String] = match cmd.as_str() {
+                    "GET" | "JSON.GET" => rest.get(..1).unwrap_or(&[]),
+                    "MGET" => &rest,
+                    "JSON.MGET" => rest.split_last().map(|(_, k)| k).unwrap_or(&[]),
+                    _ => &[],
+                };
+                for k in keys {
+                    let n = crate::redisdb::memory_usage(&m, k.as_bytes()).await?;
+                    if n > REDIS_READ_MAX_BYTES {
+                        return Err(AppError::Msg(format!("{k} is {} MB — too big to read here (use GETRANGE, or redis_get for a preview)", n >> 20)));
+                    }
                 }
                 crate::redisdb::run(&m, &sql, limit).await
             }
@@ -411,6 +429,7 @@ impl AppState {
                 let mut tx = p.begin().await?;
                 tx.execute("SET TRANSACTION READ ONLY").await?;
                 tx.execute(READ_ONLY_TIMEOUT_PG).await?;
+                tx.execute(READ_ONLY_STRINGS_PG).await?;
                 let r = db::export_pg_on(&mut tx, sql, out).await;
                 let _ = tx.rollback().await;
                 r?

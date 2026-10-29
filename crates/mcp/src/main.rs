@@ -241,8 +241,9 @@ impl Server {
                 if kind == DbKind::Redis {
                     let key = s("name").ok_or("name is required")?;
                     let d = st.redis_key(t.clone(), key, Some(1)).await.map_err(e)?;
-                    if d.length > qurry_core::guard::REDIS_STRICT_MAX {
-                        return Err(format!("The key has {} elements — use redis_get with a limit", d.length));
+                    let big = if d.ty == "string" { d.length > qurry_core::redisdb::STRING_PREVIEW_MAX } else { d.length > qurry_core::guard::REDIS_STRICT_MAX };
+                    if big {
+                        return Err(format!("The key is too big for its DDL ({} {}) — use redis_get with a limit", d.length, if d.ty == "string" { "bytes" } else { "elements" }));
                     }
                 }
                 Ok(Value::String(st.object_ddl(t, schema_or(kind, &db), s("name").ok_or("name is required")?, k).await.map_err(e)?))
