@@ -2333,8 +2333,8 @@ impl App {
                 f("SSH key file", ssh.key_path.clone(), FieldKind::Text),
                 f("SSH secret", saved(c.ssh_secret_saved), FieldKind::Secret),
                 f("SSL", if c.active_ssl().is_some() { "on" } else { "off" }.into(), FieldKind::Toggle),
-                // Newly enabled SSL is verify-full (require only encrypts and doesn't verify the certificate)
-                f("SSL mode", c.ssl.as_ref().map(|x| x.mode().to_string()).unwrap_or_else(|| "verify-full".into()), ch(&["require", "verify-ca", "verify-full"])),
+                // Newly enabled SSL is require: verifying needs a CA the built-in list knows, or a CA file (AWS RDS, a company CA, SSH tunnels)
+                f("SSL mode", c.ssl.as_ref().map(|x| x.mode().to_string()).unwrap_or_else(|| "require".into()), ch(&["require", "verify-ca", "verify-full"])),
                 f("CA file", c.ssl.as_ref().map(|x| x.ca_file.clone()).unwrap_or_default(), FieldKind::Text),
                 f("Client cert", c.ssl.as_ref().map(|x| x.cert_file.clone()).unwrap_or_default(), FieldKind::Text),
                 f("Client key", c.ssl.as_ref().map(|x| x.key_file.clone()).unwrap_or_default(), FieldKind::Text),

@@ -58,8 +58,8 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   const [legacyMcp] = useState<"off" | "write">(() => (edit?.options?.confirmChanges ? "off" : edit ? "write" : "off"));
   // A value core doesn't know ("On", a typo) means off there, so show and save it as off
   const mcpValue: "off" | "read" | "write" = opt.mcp == null ? legacyMcp : ["off", "read", "write"].includes(opt.mcp) ? opt.mcp : "off";
-  // Newly enabled SSL verifies the certificate and host name (require only encrypts)
-  const ssl: SslConfig = cfg.ssl ?? { enabled: false, mode: "verify-full", caFile: "", certFile: "", keyFile: "" };
+  // Newly enabled SSL is require: verifying needs a CA the built-in list knows (AWS RDS, a company CA, a server behind an SSH tunnel need a CA file)
+  const ssl: SslConfig = cfg.ssl ?? { enabled: false, mode: "require", caFile: "", certFile: "", keyFile: "" };
   const setSsl = <K extends keyof SslConfig>(k: K, v: SslConfig[K]) => setCfg((c) => ({ ...c, ssl: { ...ssl, ...(c.ssl ?? {}), [k]: v } }));
   const rmode: RedisMode = cfg.redis ?? { mode: "standalone", sentinelMaster: "", nodes: "" };
   const setRedis = <K extends keyof RedisMode>(k: K, v: RedisMode[K]) => setCfg((c) => ({ ...c, redis: { ...rmode, ...(c.redis ?? {}), [k]: v } }));
@@ -303,7 +303,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
             <span key={k} style={{ display: "contents" }}>
               <label>{k === "caFile" ? "CA file" : k === "certFile" ? "Client cert" : "Client key"}</label>
               <div className="ui-row">
-                <TextInput grow disabled={!ssl.enabled} value={ssl[k]} placeholder={k === "caFile" ? "(system trust store)" : "(none)"} onChange={(e) => setSsl(k, e.target.value)} />
+                <TextInput grow disabled={!ssl.enabled} value={ssl[k]} placeholder={k !== "caFile" ? "(none)" : cfg.kind === "redis" ? "(system trust store)" : "(built-in public CA list)"} onChange={(e) => setSsl(k, e.target.value)} />
                 <Button size="sm" disabled={!ssl.enabled} onClick={() => pickFile(k)}>
                   Browse…
                 </Button>
