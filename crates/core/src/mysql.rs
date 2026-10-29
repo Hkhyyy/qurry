@@ -87,18 +87,27 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
             })
         })
     };
+    // SSL 을 정하지 않아도 TLS 를 요구한다 (인증서는 확인하지 않는다). 평문은 이 컴퓨터 · SSH 터널이거나 "Allow unencrypted" 를 켰을 때만
+    // (예전 서버(MySQL 5.7 등)는 TLS 1.2 를 못 맞춘다. 누가 중간에서 TLS 를 끊어도 같은 모양이라 저절로 평문으로 가지 않는다)
     let explicit_ssl = cfg.active_ssl().is_some();
+    let plain_ok = crate::db::plaintext_allowed(cfg, host);
+    if !explicit_ssl && !plain_ok {
+        opts = opts.ssl_mode(sqlx::mysql::MySqlSslMode::Required);
+    }
     let pool = match pool_opts().connect_with(opts.clone()).await {
-        // SSL 을 정하지 않으면 TLS 를 먼저 해 본다 (Preferred). 예전 서버(MySQL 5.7 등)는 TLS 1.2 를 못 맞춰 핸드셰이크에서 끊긴다 → 평문으로 다시
-        Err(e) if !explicit_ssl && is_tls_failure(&e) => pool_opts().connect_with(opts.ssl_mode(sqlx::mysql::MySqlSslMode::Disabled)).await?,
+        Err(e) if !explicit_ssl && is_tls_failure(&e) && plain_ok => pool_opts().connect_with(opts.ssl_mode(sqlx::mysql::MySqlSslMode::Disabled)).await?,
+        Err(e) if !explicit_ssl && is_tls_failure(&e) => return Err(AppError::Msg(format!("{NEEDS_TLS}\n({e})"))),
         r => r?,
     };
     Ok(pool)
 }
 
+/// TLS 가 안 되는 서버에 평문으로 가지 않을 때
+pub const NEEDS_TLS: &str = "This server didn't set up an encrypted (TLS) connection, so Qurry didn't send the password. If it's an old server without TLS 1.2 and the network is trusted, tick \"Allow unencrypted connection\" in the data source's Options.";
+
 /// SSL 을 정하지 않은 소스가 평문으로 붙었으면 알릴 말 (TLS 가 안 돼 평문으로 다시 접속했을 때 — 누가 TLS 를 일부러 끊어도 이렇게 된다)
 pub async fn plaintext_note(p: &MySqlPool, cfg: &ConnectionConfig) -> Option<String> {
-    if cfg.active_ssl().is_some() {
+    if cfg.active_ssl().is_some() || crate::db::is_local(cfg) {
         return None;
     }
     let row: Option<(String, String)> = sqlx::query_as("SHOW SESSION STATUS LIKE 'Ssl_cipher'").fetch_optional(p).await.ok()?;
@@ -596,13 +605,16 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn mysql_plaintext_is_reported() {
+        // 원격 서버라고 치고 본다 (이 컴퓨터 · 터널은 알리지 않는다)
+        let remote = ConnectionConfig { host: "db.example".into(), ..cfg() };
         // 기본 접속: TLS 가 되면 말하지 않고, 안 돼서 평문으로 붙었으면 (TLS 1.2 를 못 하는 MySQL 5.7) 알린다
         let Pool::My(auto) = crate::db::connect(&cfg(), Some("dbtool")).await.expect("connect") else { unreachable!() };
         let (_, cipher): (String, String) = sqlx::query_as("SHOW SESSION STATUS LIKE 'Ssl_cipher'").fetch_one(&auto).await.unwrap();
-        assert_eq!(plaintext_note(&auto, &cfg()).await.is_some(), cipher.is_empty());
+        assert_eq!(plaintext_note(&auto, &remote).await.is_some(), cipher.is_empty());
         let opts = sqlx::mysql::MySqlConnectOptions::new().host("127.0.0.1").port(13306).username("root").password("dbtool").ssl_mode(sqlx::mysql::MySqlSslMode::Disabled);
         let plain = sqlx::mysql::MySqlPoolOptions::new().max_connections(1).connect_with(opts).await.unwrap();
-        assert!(plaintext_note(&plain, &cfg()).await.is_some_and(|n| n.contains("Not encrypted")));
+        assert!(plaintext_note(&plain, &remote).await.is_some_and(|n| n.contains("Not encrypted")));
+        assert_eq!(plaintext_note(&plain, &cfg()).await, None, "this computer: nothing to intercept");
     }
 
     #[tokio::test]

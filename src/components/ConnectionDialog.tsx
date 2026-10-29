@@ -324,6 +324,14 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
           <Checkbox checked={!!opt.confirmChanges} onChange={(v) => setOpt("confirmChanges", v)} title="Before UPDATE / DELETE / INSERT … run, show how many rows will change and ask">
             Production: show affected rows and confirm changes
           </Checkbox>
+          {cfg.kind === "mysql" && (
+            <>
+              <span />
+              <Checkbox checked={!!opt.allowPlaintext} onChange={(v) => setOpt("allowPlaintext", v)} title="Without SSL settings Qurry requires TLS from remote servers. Old servers (MySQL 5.7) can't do TLS 1.2 — tick this to connect to them without encryption on a network you trust.">
+                Allow unencrypted connection (old servers without TLS 1.2)
+              </Checkbox>
+            </>
+          )}
           <label>MCP (AI tools)</label>
           <div className="ui-row">
             <Select value={opt.mcp ?? legacyMcp} onChange={(e) => setOpt("mcp", e.target.value as ConnOptions["mcp"])} title="What qurry-mcp (Claude Code and other AI tools) may do with this data source. For Read, connect with a read-only database user.">

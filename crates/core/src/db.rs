@@ -45,6 +45,30 @@ pub(crate) fn query_result(columns: Vec<ColumnInfo>, rows: Vec<Vec<Value>>, rows
 
 /// DB 하나당 최대 연결 수 (탭 수 + 트리·자동완성 같은 메타 조회)
 pub const POOL_MAX: u32 = 32;
+
+/// 이 컴퓨터의 서버거나 SSH 터널로 가는지 (중간에서 가로챌 네트워크가 없다)
+pub fn is_local(cfg: &ConnectionConfig) -> bool {
+    cfg.active_ssh().is_some() || is_loopback(&cfg.host)
+}
+
+pub fn is_loopback(host: &str) -> bool {
+    let h = host.trim().trim_start_matches('[').trim_end_matches(']').to_lowercase();
+    h == "localhost" || h == "::1" || h.starts_with("127.")
+}
+
+/// SSL 을 정하지 않은 접속이 TLS 없이 붙어도 되는지: 실제로 붙는 곳이 이 컴퓨터 (터널 포함) 이거나, 소스에서 허용했을 때
+pub fn plaintext_allowed(cfg: &ConnectionConfig, connect_host: &str) -> bool {
+    cfg.options.allow_plaintext || is_local(cfg) || is_loopback(connect_host)
+}
+
+/// PostgreSQL 이 TLS 없이 붙었으면 알릴 말 (SSL 을 정하지 않으면 서버가 TLS 를 못 할 때 평문으로 간다. 이 컴퓨터 · 터널은 빼고)
+pub async fn pg_plaintext_note(p: &sqlx::PgPool, cfg: &ConnectionConfig) -> Option<String> {
+    if cfg.active_ssl().is_some() || is_local(cfg) {
+        return None;
+    }
+    let ssl: Option<bool> = sqlx::query_scalar("select ssl from pg_stat_ssl where pid = pg_backend_pid()").fetch_optional(p).await.ok().flatten();
+    (ssl == Some(false)).then(|| "⚠ Not encrypted: the server didn't offer TLS, so the password and data travel in plain text. Enable SSL in the data source to require it.".to_string())
+}
 /// 쉬는 연결은 1분 뒤 닫는다 (트리·검색 색인을 읽을 때 한꺼번에 연 연결이 운영 서버에 오래 남지 않게). 탭이 쥔 연결은 쉬는 것이 아니라 그대로
 pub const POOL_IDLE: Duration = Duration::from_secs(60);
 
@@ -568,6 +592,21 @@ fn fallback(bytes: Option<&[u8]>, ty: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// SSL 을 정하지 않은 원격 서버는 평문을 허용하지 않는다 (이 컴퓨터 · SSH 터널 · 직접 허용만)
+    #[test]
+    fn plaintext_only_where_nothing_can_intercept() {
+        let mut c: ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "a", "kind": "mysql", "host": "db.example", "port": 3306, "user": "u" })).unwrap();
+        assert!(!plaintext_allowed(&c, "db.example"));
+        assert!(plaintext_allowed(&c, "127.0.0.1"), "through a tunnel the client connects to 127.0.0.1");
+        c.options.allow_plaintext = true;
+        assert!(plaintext_allowed(&c, "db.example"));
+        c.options.allow_plaintext = false;
+        for h in ["localhost", "127.0.0.1", "::1", "[::1]"] {
+            c.host = h.into();
+            assert!(is_local(&c), "{h}");
+        }
+    }
 
     /// 로컬 PostgreSQL 대상 테스트. `cargo test -- --ignored` 로 실행한다.
     fn local_cfg() -> ConnectionConfig {

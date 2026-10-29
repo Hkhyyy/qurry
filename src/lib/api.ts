@@ -58,6 +58,8 @@ export interface ConnOptions {
   singleDb?: boolean;
   /** Production: 바꾸는 문장은 바뀔 행 수를 보여 주고 확인 */
   confirmChanges?: boolean;
+  /** SSL 을 정하지 않은 원격 MySQL 이 TLS 를 못 하면 평문으로 붙어도 된다 */
+  allowPlaintext?: boolean;
   /** MCP 서버에 보이는지 (없으면 예전 소스: Production 은 숨김, 나머지는 읽기·쓰기) */
   mcp?: "off" | "read" | "write" | null;
   startupScript?: string;

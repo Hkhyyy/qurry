@@ -581,6 +581,7 @@ impl AppState {
         let version = pool.server_version().await;
         let plain = match &pool {
             Pool::My(p) => crate::mysql::plaintext_note(p, &config).await,
+            Pool::Pg(p) => db::pg_plaintext_note(p, &config).await,
             _ => None,
         };
         pool.close().await;
@@ -608,12 +609,15 @@ impl AppState {
         let pool = ensure_pool(self, &id).await?;
         let v = pool.server_version().await?;
         // 평문으로 붙었으면 버전 옆에 알린다 (상태줄 · TUI 상태)
-        Ok(match &pool {
-            Pool::My(p) => match crate::mysql::plaintext_note(p, &self.source(&id)?).await {
-                Some(n) => format!("{v} — {n}"),
-                None => v,
-            },
-            _ => v,
+        let cfg = self.source(&id)?;
+        let note = match &pool {
+            Pool::My(p) => crate::mysql::plaintext_note(p, &cfg).await,
+            Pool::Pg(p) => db::pg_plaintext_note(p, &cfg).await,
+            _ => None,
+        };
+        Ok(match note {
+            Some(n) => format!("{v} — {n}"),
+            None => v,
         })
     }
 
