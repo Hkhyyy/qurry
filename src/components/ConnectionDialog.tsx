@@ -323,7 +323,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
           </Checkbox>
           <label>MCP (AI tools)</label>
           <div className="ui-row">
-            <Select value={opt.mcp ?? (opt.confirmChanges ? "off" : "write")} onChange={(e) => setOpt("mcp", e.target.value as ConnOptions["mcp"])} title="What qurry-mcp (Claude Code and other AI tools) may do with this data source">
+            <Select value={opt.mcp ?? (opt.confirmChanges ? "off" : "write")} onChange={(e) => setOpt("mcp", e.target.value as ConnOptions["mcp"])} title="What qurry-mcp (Claude Code and other AI tools) may do with this data source. For Read, connect with a read-only database user.">
               <option value="off">Off — not listed, no connection</option>
               <option value="read">Read</option>
               <option value="write" disabled={!!cfg.readOnly}>Read &amp; write (when qurry-mcp runs with --allow-write)</option>
