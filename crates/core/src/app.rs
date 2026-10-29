@@ -548,12 +548,16 @@ impl AppState {
         };
         let (pool, tunnel) = connect_config(&config, password.as_deref(), ssh_secret.as_deref()).await?;
         let version = pool.server_version().await;
+        let plain = match &pool {
+            Pool::My(p) => crate::mysql::plaintext_note(p, &config).await,
+            _ => None,
+        };
         pool.close().await;
         drop(tunnel);
         let via = config.active_ssh().map(|s| format!("  (via SSH {}@{})", s.user, s.host)).unwrap_or_default();
-        version.map(|v| match db::version_note(config.kind, &v) {
-            Some(n) => format!("{v}{via}\n{n}"),
-            None => format!("{v}{via}"),
+        version.map(|v| {
+            let notes: Vec<String> = db::version_note(config.kind, &v).into_iter().chain(plain).collect();
+            if notes.is_empty() { format!("{v}{via}") } else { format!("{v}{via}\n{}", notes.join("\n")) }
         })
     }
 
@@ -570,7 +574,16 @@ impl AppState {
 
     pub async fn connect(&self, id: String) -> AppResult<String> {
         crate::log!("[qurry] connect {id}");
-        ensure_pool(self, &id).await?.server_version().await
+        let pool = ensure_pool(self, &id).await?;
+        let v = pool.server_version().await?;
+        // 평문으로 붙었으면 버전 옆에 알린다 (상태줄 · TUI 상태)
+        Ok(match &pool {
+            Pool::My(p) => match crate::mysql::plaintext_note(p, &self.source(&id)?).await {
+                Some(n) => format!("{v} — {n}"),
+                None => v,
+            },
+            _ => v,
+        })
     }
 
     pub async fn disconnect(&self, id: String) -> AppResult<()> {

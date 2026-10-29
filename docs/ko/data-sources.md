@@ -14,7 +14,7 @@ Qurry 가 다루는 데이터베이스, 연결 방법 (SSH, SSL, 옵션), 덜 �
 
 연결 옵션:
 - **SSH 터널** (키 또는 비밀번호). 호스트 키는 `~/.ssh/known_hosts` 로 확인합니다. 키가 바뀌었으면 거부하고, 처음 보는 서버는 SHA256 지문을 보여 주며 **Trust host key** 를 고를 때까지 멈춥니다 (GUI: Data Source 창, TUI: 폼에서 `⌃y` 또는 `⌃k › Trust SSH Host Key`).
-- **SSL/TLS**: Require / Verify CA / Full Verification, CA 와 클라이언트 인증서는 선택. PostgreSQL · MySQL · Redis 에서 됩니다.
+- **SSL/TLS**: Require / Verify CA / Full Verification, CA 와 클라이언트 인증서는 선택. PostgreSQL · MySQL · Redis 에서 됩니다. SSL 을 켜면 Full Verification (인증서와 호스트 이름 확인) 으로 시작합니다. **Require** 는 암호화만 하고 인증서는 확인하지 않아서 중간에 끼어드는 공격은 막지 못합니다. SSL 을 꺼 두어도 MySQL 은 먼저 TLS 로 해 보고, 서버가 못 하면 (MySQL 5.7 이하) TLS 없이 접속합니다 — 그때는 Test Connection 과 상태줄에 "Not encrypted" 가 보입니다. 반드시 암호화하려면 SSL 을 켜세요.
 - **Options 탭**: 읽기 전용, 트랜잭션 방식과 격리 수준, 시간대, keep-alive, 오래 안 쓰면 자동 연결 끊기, 단일 데이터베이스 모드, 시작 스크립트.
 - **Production**: 데이터를 바꾸는 문장을 실행하기 전에 바뀔 행 수를 세어 (같은 테이블 · WHERE 로 `SELECT count(*)`, 아무것도 바꾸지 않음) 보여 주고 묻습니다. 셀 수 없는 문장 (`UPDATE … FROM`, `DELETE … USING`, CTE) 도 묻습니다. 구조를 바꾸는 문장 (DDL) 은 "schema change" 로 보입니다. GUI: Options 탭 · TUI: Data Source 폼의 `Production` 토글.
 - **MCP**: AI 도구가 `qurry-mcp` 로 할 수 있는 것 — Off (새 Data Source. 목록에 없고 접속하지 않음), Read, Read & write (`--allow-write` 일 때). [MCP 서버](mcp.md) 참고. GUI: Options 탭 · TUI: `MCP` 칸.

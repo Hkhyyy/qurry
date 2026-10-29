@@ -54,7 +54,8 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
 
   const ssh = cfg.ssh ?? EMPTY_SSH;
   const opt: ConnOptions = cfg.options ?? {};
-  const ssl: SslConfig = cfg.ssl ?? { enabled: false, mode: "require", caFile: "", certFile: "", keyFile: "" };
+  // 새로 켜는 SSL 은 인증서와 호스트 이름까지 확인한다 (require 는 암호화만)
+  const ssl: SslConfig = cfg.ssl ?? { enabled: false, mode: "verify-full", caFile: "", certFile: "", keyFile: "" };
   const setSsl = <K extends keyof SslConfig>(k: K, v: SslConfig[K]) => setCfg((c) => ({ ...c, ssl: { ...ssl, ...(c.ssl ?? {}), [k]: v } }));
   const rmode: RedisMode = cfg.redis ?? { mode: "standalone", sentinelMaster: "", nodes: "" };
   const setRedis = <K extends keyof RedisMode>(k: K, v: RedisMode[K]) => setCfg((c) => ({ ...c, redis: { ...rmode, ...(c.redis ?? {}), [k]: v } }));
