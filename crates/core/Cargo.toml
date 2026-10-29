@@ -23,6 +23,8 @@ csv = "1"
 calamine = { version = "=0.36.1", features = ["dates"] }
 regex = "1"
 minisign-verify = "0.2"
+# 비밀번호 파일의 마스터 키를 OS 키체인에 둘 때 (설정에서 켠다). 리눅스는 순수 Rust Secret Service (libdbus 없이)
+keyring = { version = "3", features = ["apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust"] }
 sha2 = "0.10"
 qurry-driver = { workspace = true }
 # RAG 임베딩 (OpenAI · Ollama). 드라이버들과 같은 HTTP 클라이언트

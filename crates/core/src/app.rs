@@ -20,7 +20,7 @@ pub struct AppState {
     pub sessions: RwLock<HashMap<String, SessionEntry>>,
     /// 접속 id → SSH 터널 (풀과 수명을 같이 함)
     pub tunnels: RwLock<HashMap<String, crate::tunnel::Tunnel>>,
-    /// 키체인에서 한 번 읽은 비밀값 (앱이 켜져 있는 동안 다시 묻지 않도록)
+    /// 한 번 풀어 둔 비밀값 (앱이 켜져 있는 동안 파일을 다시 읽지 않도록)
     pub secrets: std::sync::Mutex<HashMap<String, Option<String>>>,
     /// 비밀번호 저장소 (암호화 파일). 키체인 팝업을 피한다.
     pub secret_file: crate::secrets::SecretFile,
@@ -53,10 +53,22 @@ impl AppState {
         if let Some(v) = self.secrets.lock().unwrap().get(key) {
             return Ok(v.clone());
         }
-        // 키체인은 절대 읽지 않는다 (macOS 팝업 방지). 암호화 파일만 사용.
-        let v = self.secret_file.get(key);
+        // 비밀번호는 암호화 파일에만 (키체인에는 많아야 마스터 키 하나: crate::secrets)
+        let v = self.secret_file.get(key)?;
         self.secrets.lock().unwrap().insert(key.to_string(), v.clone());
         Ok(v)
+    }
+
+    /// 비밀번호 파일의 마스터 키가 있는 곳 (설정 화면에 보인다)
+    pub fn secret_key_location(&self) -> crate::secrets::KeyLocation {
+        crate::secrets::key_location(&self.store.dir())
+    }
+
+    /// 마스터 키를 OS 키체인으로 / 파일로 옮긴다. 키는 같으니 지금 열린 저장소는 그대로 쓴다
+    pub fn set_secret_key_location(&self, keychain: bool) -> AppResult<crate::secrets::KeyLocation> {
+        let to = if keychain { crate::secrets::KeyLocation::Keychain } else { crate::secrets::KeyLocation::File };
+        crate::secrets::move_key(&self.store.dir(), to, &crate::secrets::OsKeychain)?;
+        Ok(self.secret_key_location())
     }
 
     pub fn set_secret(&self, key: &str, value: Option<&str>) -> AppResult<()> {
