@@ -368,10 +368,19 @@ impl Server {
                 if stmts.is_empty() {
                     return Err("statements is empty".into());
                 }
-                // 앱이라면 확인을 받는 문장: MCP 에는 물어볼 사람이 없다
                 for s in &stmts {
+                    // 원소 하나에 문장 하나 (한 글에 여러 문장을 넣으면 서버는 다 실행한다)
+                    if kind != DbKind::Redis && sql::split_statements(s, kind).len() > 1 {
+                        return Err(format!("Put one statement in each item of statements: {s}"));
+                    }
+                    // 앱이라면 확인을 받는 문장: MCP 에는 물어볼 사람이 없다
                     if let Some(why) = qurry_core::guard::unsafe_statement(s, kind) {
                         return Err(format!("{why} — refused over MCP. Ask the user to run it in Qurry: {s}"));
+                    }
+                    if kind == DbKind::Redis
+                        && let Some(why) = qurry_core::guard::redis_mcp_write_violation(s)
+                    {
+                        return Err(why);
                     }
                 }
                 let n = st.execute_batch(t, stmts.clone(), false).await.map_err(e)?;
