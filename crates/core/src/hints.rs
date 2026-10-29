@@ -32,6 +32,9 @@ pub struct HintReq {
     /// true = 그 경로의 json 객체 키, false = 값
     #[serde(default)]
     pub keys: bool,
+    /// true = 그 경로의 json 에서 많이 나온 `키: 값` 을 @> 조건으로 (`[{"code": "x"}]` · `{"code": "x"}`, PostgreSQL)
+    #[serde(default)]
+    pub pairs: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -100,6 +103,24 @@ pub fn keys_sql(kind: DbKind, r: &HintReq) -> String {
     }
 }
 
+/// @> 조건 추천 SQL (PostgreSQL): 배열이면 원소 객체의, 객체면 그 객체의 `키: 값` (값이 글 · 수 · 참거짓) 을 많이 나온 순으로.
+/// 개수 = 그 조건에 맞는 행 수
+pub fn pairs_sql(r: &HintReq) -> String {
+    let kind = DbKind::Postgres;
+    let t = format!("{}.{}", quote_ident(kind, &r.schema), quote_ident(kind, &r.table));
+    let c = quote_ident(kind, &r.column);
+    let e = if r.path.is_empty() { "c::jsonb".to_string() } else { format!("c::jsonb #> {}", pg_path(&r.path)) };
+    format!(
+        "SELECT (CASE WHEN x.arr THEN jsonb_build_array(jsonb_build_object(p.k, p.v)) ELSE jsonb_build_object(p.k, p.v) END)::text AS v, count(DISTINCT s.rn) AS n \
+         FROM (SELECT row_number() OVER () AS rn, {e} AS j FROM (SELECT {c} AS c FROM {t} WHERE {c} IS NOT NULL LIMIT {KEY_SAMPLE}) s0) s \
+         CROSS JOIN LATERAL (SELECT true, el FROM jsonb_array_elements(CASE WHEN jsonb_typeof(s.j) = 'array' THEN s.j END) el \
+                             UNION ALL SELECT false, s.j WHERE jsonb_typeof(s.j) = 'object') x(arr, o) \
+         CROSS JOIN LATERAL jsonb_each(CASE WHEN jsonb_typeof(x.o) = 'object' THEN x.o END) p(k, v) \
+         WHERE jsonb_typeof(p.v) IN ('string', 'number', 'boolean') AND length(p.v::text) <= {MAX_LEN} \
+         GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT {MAX_HINTS}"
+    )
+}
+
 fn pairs(rows: &[Vec<Value>]) -> Vec<Hint> {
     rows.iter()
         .filter_map(|r| {
@@ -135,7 +156,7 @@ impl AppState {
     /// 컬럼 값 · json 키 추천 (PostgreSQL · MySQL. 그 밖은 빈 목록)
     pub async fn column_hints(&self, id: String, req: HintReq) -> AppResult<Vec<Hint>> {
         use sqlx::Executor;
-        let key = format!("{id}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}", req.schema, req.table, req.column, req.path.join("\u{2}"), req.keys);
+        let key = format!("{id}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}{}", req.schema, req.table, req.column, req.path.join("\u{2}"), req.keys, req.pairs);
         if let Some((at, v)) = CACHE.lock().unwrap().get(&key)
             && at.elapsed() < CACHE_FOR
         {
@@ -143,7 +164,13 @@ impl AppState {
         }
         let hints = match ensure_pool(self, &id).await? {
             Pool::Pg(p) => {
-                let sql = if req.keys { keys_sql(DbKind::Postgres, &req) } else { values_sql(DbKind::Postgres, &req) };
+                let sql = if req.pairs {
+                    pairs_sql(&req)
+                } else if req.keys {
+                    keys_sql(DbKind::Postgres, &req)
+                } else {
+                    values_sql(DbKind::Postgres, &req)
+                };
                 let mut tx = p.begin().await?;
                 tx.execute("SET TRANSACTION READ ONLY").await?;
                 tx.execute("SET LOCAL statement_timeout = '3s'").await?;
@@ -151,6 +178,8 @@ impl AppState {
                 let _ = tx.rollback().await;
                 pairs(&r?.rows)
             }
+            // MySQL 은 JSON_CONTAINS 이 따로라 @> 조건은 없다
+            Pool::My(_) if req.pairs => vec![],
             Pool::My(p) => {
                 let mut conn = p.acquire().await?;
                 conn.execute("START TRANSACTION READ ONLY").await?;
@@ -176,7 +205,7 @@ mod tests {
     use super::*;
 
     fn req(path: &[&str], keys: bool) -> HintReq {
-        HintReq { schema: "public".into(), table: "Orders".into(), column: "data".into(), path: path.iter().map(|s| s.to_string()).collect(), keys }
+        HintReq { schema: "public".into(), table: "Orders".into(), column: "data".into(), path: path.iter().map(|s| s.to_string()).collect(), keys, pairs: false }
     }
 
     #[test]
@@ -210,7 +239,7 @@ mod tests {
                    insert into public.hint_t select g, case when g % 3 = 0 then 'paid' else 'ready' end, jsonb_build_object('kind', 'k' || (g % 2), 'meta', jsonb_build_object('src', 'web')) from generate_series(1, 30) g")
             .await
             .unwrap();
-        let rq = |column: &str, path: &[&str], keys: bool| HintReq { schema: "public".into(), table: "hint_t".into(), column: column.into(), path: path.iter().map(|s| s.to_string()).collect(), keys };
+        let rq = |column: &str, path: &[&str], keys: bool| HintReq { schema: "public".into(), table: "hint_t".into(), column: column.into(), path: path.iter().map(|s| s.to_string()).collect(), keys, pairs: false };
         let run = |sql: String| {
             let p = p.clone();
             async move { pairs(&db::run_on(&mut p.acquire().await.unwrap(), &sql, 100).await.unwrap().rows) }
@@ -220,6 +249,29 @@ mod tests {
         assert_eq!(run(keys_sql(DbKind::Postgres, &rq("data", &["meta"], true))).await, vec![Hint { value: "src".into(), count: 30 }]);
         assert_eq!(run(values_sql(DbKind::Postgres, &rq("data", &["kind"], false))).await.len(), 2);
         assert_eq!(run(values_sql(DbKind::Postgres, &rq("id", &[], false))).await.len(), 30);
+        // 객체의 배열: 키는 없고, @> 조건은 원소의 키: 값
+        p.execute("alter table public.hint_t add column reasons jsonb; \
+                   update public.hint_t set reasons = case when id % 2 = 0 then '[{\"code\": \"self_transfer\", \"n\": 1}, {\"code\": \"overpay\"}]'::jsonb else '[{\"code\": \"overpay\", \"detail\": [1]}]'::jsonb end")
+            .await
+            .unwrap();
+        assert!(run(keys_sql(DbKind::Postgres, &rq("reasons", &[], true))).await.is_empty());
+        let mut pr = rq("reasons", &[], false);
+        pr.pairs = true;
+        assert_eq!(
+            run(pairs_sql(&pr)).await,
+            vec![
+                Hint { value: r#"[{"code": "overpay"}]"#.into(), count: 30 },
+                Hint { value: r#"[{"code": "self_transfer"}]"#.into(), count: 15 },
+                Hint { value: r#"[{"n": 1}]"#.into(), count: 15 },
+            ]
+        );
+        // 객체면 {키: 값}
+        let mut po = rq("data", &[], false);
+        po.pairs = true;
+        assert_eq!(run(pairs_sql(&po)).await.iter().map(|h| h.value.as_str()).collect::<Vec<_>>(), [r#"{"kind": "k0"}"#, r#"{"kind": "k1"}"#]);
+        // 고른 조건이 실제로 맞는 행 수
+        let n: i64 = sqlx::query_scalar(r#"select count(*) from public.hint_t where reasons @> '[{"code": "self_transfer"}]'"#).fetch_one(&p).await.unwrap();
+        assert_eq!(n, 15);
         p.execute("drop table public.hint_t").await.unwrap();
     }
 
@@ -237,7 +289,7 @@ mod tests {
         for g in 1..=30 {
             p.execute(format!("insert into hint_t values ({g}, '{}', json_object('kind', 'k{}', 'meta', json_object('src', 'web')))", if g % 3 == 0 { "paid" } else { "ready" }, g % 2).as_str()).await.unwrap();
         }
-        let rq = |column: &str, path: &[&str], keys: bool| HintReq { schema: db.clone(), table: "hint_t".into(), column: column.into(), path: path.iter().map(|s| s.to_string()).collect(), keys };
+        let rq = |column: &str, path: &[&str], keys: bool| HintReq { schema: db.clone(), table: "hint_t".into(), column: column.into(), path: path.iter().map(|s| s.to_string()).collect(), keys, pairs: false };
         let rows = |sql: String| {
             let p = p.clone();
             async move { crate::mysql::run_on(&mut p.acquire().await.unwrap(), &sql, 5000).await.unwrap().rows }

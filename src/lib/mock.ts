@@ -88,10 +88,32 @@ const handlers: Record<string, (a: any) => unknown> = {
   }),
   completion_meta: () => [
     { schema: "public", name: "users", columns: [["id", "bigint"], ["user_name", "varchar"]] },
-    { schema: "public", name: "orders", columns: [["id", "bigint"], ["status", "varchar"], ["amount", "numeric"], ["data", "jsonb"]] },
+    { schema: "public", name: "orders", columns: [["id", "bigint"], ["status", "varchar"], ["amount", "numeric"], ["data", "jsonb"], ["reasons", "jsonb"]] },
   ],
-  column_hints: (a: { req: { column: string; path: string[]; keys: boolean } }) =>
-    a.req.keys
+  // 공유 워크스페이스 목록 (TUI 와 같이 쓰는 파일 흉내). 시험에서 window.__sharedWs 로 바꾼다
+  shared_workspaces: () => (window as any).__sharedWs ?? null,
+  adopt_workspaces: (a: any) => {
+    const w = window as any;
+    if (!w.__sharedWs) w.__sharedWs = a.local;
+    return { list: w.__sharedWs, renamed: [] };
+  },
+  sync_workspaces: (a: any) => {
+    const w = window as any;
+    const list: any[] = (w.__sharedWs ?? a.prev).filter((x: any) => a.next.some((n: any) => n.id === x.id) || !a.prev.some((p: any) => p.id === x.id));
+    for (const n of a.next) {
+      const i = list.findIndex((x) => x.id === n.id);
+      if (i < 0) list.push(n);
+      else list[i] = { ...list[i], name: n.name, connIds: n.connIds };
+    }
+    w.__sharedWs = list;
+    return list;
+  },
+  column_hints: (a: { req: { column: string; path: string[]; keys: boolean; pairs?: boolean } }) =>
+    a.req.pairs
+      ? [{ value: '[{"code": "out_of_scope_payment_type"}]', count: 120 }, { value: '[{"code": "self_transfer"}]', count: 31 }]
+      : a.req.keys && a.req.column === "reasons"
+      ? []
+      : a.req.keys
       ? a.req.path.length ? [{ value: "src", count: 30 }, { value: "ip", count: 12 }] : [{ value: "kind", count: 30 }, { value: "meta", count: 30 }, { value: "coupon", count: 4 }]
       : a.req.column === "status" ? [{ value: "ready", count: 20 }, { value: "paid", count: 10 }, { value: "it's late", count: 1 }]
       : a.req.column === "amount" ? [{ value: "1000", count: 7 }, { value: "2500", count: 3 }]

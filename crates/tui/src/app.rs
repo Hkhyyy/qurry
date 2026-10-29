@@ -576,6 +576,8 @@ impl Default for WsSaved {
 
 /// 워크스페이스 (crate::workspace): 이름 + 지금 것이 아니면 보관한 탭들
 pub struct Workspace {
+    /// GUI 와 같이 쓰는 목록 (workspaces.json) 의 id
+    pub id: String,
     pub name: String,
     /// 이 워크스페이스의 탐색기에 보일 Data Source id
     pub conns: Vec<String>,
@@ -636,6 +638,10 @@ pub struct App {
     /// 지난번 탭을 되살렸는지 (Data Source 목록을 처음 읽은 뒤 한 번), 마지막으로 저장한 내용
     restored: bool,
     saved_ws: String,
+    /// 마지막으로 공유 워크스페이스 목록과 맞춘 것 (None = 아직)
+    pub ws_shared: Option<Vec<qurry_core::workspaces::WsInfo>>,
+    /// 저장 파일이 전에 공유 목록과 맞춘 적이 있다 (없는 워크스페이스는 다른 쪽에서 지운 것)
+    pub ws_synced: bool,
 }
 
 pub fn fuzzy(q: &str, text: &str) -> Option<i64> {
@@ -718,9 +724,11 @@ impl App {
             restart: false,
             restored: false,
             saved_ws: String::new(),
+            ws_shared: None,
+            ws_synced: false,
             next_id: 1,
             exec: Default::default(),
-            workspaces: vec![Workspace { name: "Default".into(), conns: vec![], saved: None }],
+            workspaces: vec![Workspace { id: uuid::Uuid::new_v4().to_string(), name: "Default".into(), conns: vec![], saved: None }],
             cur_ws: 0,
         };
         if let Some(e) = keys_err {
@@ -763,8 +771,10 @@ impl App {
                     if let Some(v) = a.state.store.workspace("tui") {
                         crate::workspace::restore(a, &v);
                     }
+                    a.ws_adopt_shared();
                 }
                 a.ws_adopt_orphans();
+                a.ws_push();
                 a.rebuild_roots();
                 if first {
                     a.saved_ws = crate::workspace::to_json(a).to_string();
@@ -3091,24 +3101,34 @@ impl App {
         let empty = complete::Meta::new(vec![]);
         // 값 · json 키 자리: 읽어 둔 값이 있으면 그것, 없으면 읽어 와서 다시 연다
         if let Some(h) = meta.as_deref().and_then(|m| complete::hint_at(m, &stmt, &before, &db, kind == DbKind::Mysql)) {
+            use complete::HintMode;
             let after = lines.get(row).and_then(|l| l.chars().nth(col));
-            let key = format!("{target}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}", h.schema, h.table, h.column, h.path.join("\u{2}"), h.keys);
-            match self.hints.get(&key).filter(|(at, _)| at.elapsed() < std::time::Duration::from_secs(120)) {
-                Some((_, hints)) => {
-                    let items = complete::hint_items(&h, hints, h.quoted && after != Some('\''));
-                    let prefix = h.typed.chars().count();
-                    c.complete = if items.is_empty() || !(explicit || h.quoted) { None } else { Some(Completion { items, sel: 0, prefix }) };
+            let key = |mode: HintMode| format!("{target}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{mode:?}", h.schema, h.table, h.column, h.path.join("\u{2}"));
+            let hints_cache = &self.hints;
+            let fresh = |k: &str| hints_cache.get(k).filter(|(at, _)| at.elapsed() < std::time::Duration::from_secs(120)).map(|(_, v)| v.clone());
+            let mut want = (h.mode, fresh(&key(h.mode)));
+            // 키가 없는 json (객체의 배열 등): 키 대신 많이 나온 키: 값을 @> 조건으로 (연산자째 바꾼다)
+            if h.mode == HintMode::Keys && want.1.as_ref().is_some_and(|v| v.is_empty()) && kind != DbKind::Mysql {
+                want = (HintMode::Pairs, fresh(&key(HintMode::Pairs)));
+            }
+            match want {
+                (mode, Some(hints)) => {
+                    let as_pairs = mode == HintMode::Pairs && h.mode == HintMode::Keys;
+                    let items = complete::hint_items(&h, &hints, h.quoted && after != Some('\''), as_pairs);
+                    let prefix = if as_pairs { h.op.chars().count() } else { h.typed.chars().count() };
+                    c.complete = if items.is_empty() { None } else { Some(Completion { items, sel: 0, prefix }) };
                 }
-                None => {
+                (mode, None) => {
                     c.complete = None;
-                    if self.hints_loading.insert(key.clone()) {
+                    let k = key(mode);
+                    if self.hints_loading.insert(k.clone()) {
                         let st = self.state.clone();
-                        let req = qurry_core::hints::HintReq { schema: h.schema, table: h.table, column: h.column, path: h.path, keys: h.keys };
+                        let req = qurry_core::hints::HintReq { schema: h.schema, table: h.table, column: h.column, path: h.path, keys: mode == HintMode::Keys, pairs: mode == HintMode::Pairs };
                         self.spawn(async move { st.column_hints(target, req).await.map_err(err) }, move |a, r| {
-                            a.hints_loading.remove(&key);
+                            a.hints_loading.remove(&k);
                             match r {
                                 Ok(v) => {
-                                    a.hints.insert(key, (std::time::Instant::now(), v));
+                                    a.hints.insert(k, (std::time::Instant::now(), v));
                                     a.update_completion(explicit);
                                 }
                                 Err(e) => a.status = format!("Value suggestions: {e}"),

@@ -135,6 +135,10 @@ export const api = {
   /** 열어 둔 탭·분할 (다시 켜면 그대로) */
   loadWorkspace: () => invoke<unknown>("load_workspace"),
   saveWorkspace: (ws: unknown) => invoke<void>("save_workspace", { ws }),
+  /** 워크스페이스 목록 (이름 · Data Source) 은 TUI 와 같이 쓴다 */
+  sharedWorkspaces: () => invoke<WsInfo[] | null>("shared_workspaces"),
+  adoptWorkspaces: (local: WsInfo[], synced: boolean) => invoke<{ list: WsInfo[]; renamed: [string, string][] }>("adopt_workspaces", { local, synced }),
+  syncWorkspaces: (prev: WsInfo[], next: WsInfo[]) => invoke<WsInfo[]>("sync_workspaces", { prev, next }),
   listConnections: () => invoke<ConnectionView[]>("list_connections"),
   saveConnection: (config: ConnectionConfig, password?: string, sshSecret?: string) =>
     invoke<ConnectionConfig>("save_connection", { config, password: password ?? null, sshSecret: sshSecret ?? null }),
@@ -183,6 +187,8 @@ export interface ColumnMeta { name: string; dataType: string; nullable: boolean;
 export interface IndexMeta { name: string; definition: string; isUnique: boolean; isPrimary: boolean }
 export interface ConstraintMeta { name: string; kind: "p" | "f" | "u" | "c"; definition: string }
 export interface TableDetail { columns: ColumnMeta[]; indexes: IndexMeta[]; constraints: ConstraintMeta[] }
+/** 워크스페이스 목록 한 줄 (GUI · TUI 공유) */
+export interface WsInfo { id: string; name: string; connIds: string[] }
 export interface CompletionTable { schema: string; name: string; columns: [string, string][] }
 
 export type DbaAction = { kind: "kill"; label: string; terminate: boolean } | { kind: "sql"; label: string; template: string };
@@ -311,7 +317,7 @@ export const meta = {
   similarRowsSql: (id: string, schema: string, table: string, column: string, pk: [string, string | null][]) => invoke<string>("similar_rows_sql", { id, schema, table, column, pk }),
   completion: (id: string) => invoke<CompletionTable[]>("completion_meta", { id }),
   /** 자동완성 값 추천: 컬럼 값 · json 키 (앞쪽 일부 행, 많이 나온 순) */
-  hints: (id: string, req: { schema: string; table: string; column: string; path: string[]; keys: boolean }) => invoke<{ value: string; count: number }[]>("column_hints", { id, req }),
+  hints: (id: string, req: { schema: string; table: string; column: string; path: string[]; keys: boolean; pairs?: boolean }) => invoke<{ value: string; count: number }[]>("column_hints", { id, req }),
   ddl: (id: string, schema: string, name: string, kind: string) => invoke<string>("object_ddl", { id, schema, name, kind }),
   objectIndex: (id: string) => invoke<IndexEntry[]>("object_index", { id }),
   /** 접속하지 않은 Data Source 의 지난 객체·컬럼 목록 (접속해서 읽을 때마다 저장된다) */

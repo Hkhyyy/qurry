@@ -8,6 +8,7 @@
 - **TUI**: `⌥1`…`⌥9` 바꾸기 (터미널은 `⌘` 를 스스로 쓰므로), `⌥n` 새로, `⌥⇧N` 이름 바꾸기 (또는 `⌃k` › Switch / New / Rename / Delete Workspace…, Move Tab to Workspace…). 탐색기에서 `w` 는 고른 Data Source 를 다른 워크스페이스로 옮깁니다. 워크스페이스가 둘 이상이면 위쪽 띠에 보입니다 (눌러서 바꾸기). 탐색기 토글은 `⌥1` 에서 `⌥0` 으로 옮겼습니다.
 - **워크스페이스마다 Database Explorer 가 따로 있습니다**: 그 워크스페이스에 넣은 Data Source 가, 펼쳐 둔 그대로 보입니다. 새 워크스페이스는 비어서 시작합니다 — 탐색기의 `+` 로 Data Source 를 넣거나 (새로 만들거나 이미 있는 것), Data Source 우클릭 › Add to Workspace / Remove from This Workspace (TUI: Data Source 폼 (`e` / `n`) 의 **Workspace** 칸으로 옮기거나 `⌃k` › Add Data Source to This Workspace… / Remove Data Source from This Workspace). Data Source 자체 (호스트, 비밀번호) 는 함께 쓰고, 새로 만든 것은 지금 워크스페이스에 들어갑니다.
 - 워크스페이스는 탭 · 탐색기와 함께 저장되어 다음에 열 때 그대로 돌아옵니다.
+- **GUI 와 TUI 가 워크스페이스 목록을 같이 씁니다** — 이름과 각 탐색기의 Data Source (설정 폴더의 `workspaces.json`). 어느 쪽에서 워크스페이스를 만들고 · 이름을 바꾸고 · 지우거나 Data Source 를 넣으면, 둘 다 켜져 있어도 몇 초 안에 다른 쪽에 반영됩니다. 탭과 화면 분할은 앱마다 따로입니다. 다른 쪽에서 지운 워크스페이스는 이쪽 탭도 닫습니다 (그 안 콘솔에 커밋 안 한 변경이 있으면 남깁니다). 처음 맞출 때는 두 앱에서 이름이 같은 워크스페이스끼리 묶습니다.
 
 ---
 
