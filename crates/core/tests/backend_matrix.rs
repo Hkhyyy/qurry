@@ -337,7 +337,7 @@ async fn pg_tools() {
     let p = st.fake_preview(ID.into(), "qm_tools".into(), "orders".into(), 3).await.unwrap();
     assert_eq!(p.plan.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "customer_id", "total"]);
     assert_eq!((p.result.rows.len(), p.result.columns.len()), (3, 3));
-    assert_eq!(st.fake_fill(ID.into(), "qm_tools".into(), "orders".into(), 5).await.unwrap(), 5);
+    assert_eq!(st.fake_fill(ID.into(), "qm_tools".into(), "orders".into(), 5).await.unwrap().rows, 5);
     assert_eq!(q(&st, "select count(*)::int from qm_tools.orders").await.rows[0][0], json!(7));
 
     // Schema compare: the target gets the missing table and column
@@ -525,7 +525,7 @@ async fn mysql_tools() {
     let p = st.fake_preview(ID.into(), "qm_tools".into(), "orders".into(), 3).await.unwrap();
     assert_eq!(p.plan.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "customer_id", "total"]);
     assert_eq!((p.result.rows.len(), p.result.columns.len()), (3, 3));
-    assert_eq!(st.fake_fill(ID.into(), "qm_tools".into(), "orders".into(), 5).await.unwrap(), 5);
+    assert_eq!(st.fake_fill(ID.into(), "qm_tools".into(), "orders".into(), 5).await.unwrap().rows, 5);
     assert_eq!(q(&st, "select count(*) from qm_tools.orders").await.rows[0][0], json!(7));
 
     q(&st, "drop database if exists qm_dst").await;

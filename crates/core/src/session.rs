@@ -54,6 +54,13 @@ pub fn is_select_like(sql: &str) -> bool {
     ["select", "with", "values", "table", "("].iter().any(|k| s.starts_with(k))
 }
 
+/// EXPLAIN (GENERIC_PLAN) of a statement with $1 … has no values to bind, which the extended protocol expects: it goes over the simple protocol.
+/// One statement only (the simple protocol would run everything after a `;` too)
+pub fn is_generic_plan(sql: &str) -> bool {
+    let s = strip_comments_lead(sql);
+    s.starts_with("explain") && s.contains("generic_plan") && !strip_trailing_semicolon(&s).contains(';')
+}
+
 fn strip_trailing_semicolon(sql: &str) -> &str {
     sql.trim_end().trim_end_matches(';').trim_end()
 }
@@ -308,7 +315,10 @@ async fn run_direct_on(conn: &mut PgConnection, sql: &str, limit: usize, start: 
     let mut has_rs = false;
     {
         #[allow(deprecated)]
-        let mut stream = sqlx::query(sql).persistent(false).fetch_many(&mut *conn);
+        let mut stream = match is_generic_plan(sql) {
+            true => sqlx::raw_sql(sql).fetch_many(&mut *conn),
+            false => sqlx::query(sql).persistent(false).fetch_many(&mut *conn),
+        };
         while let Some(item) = stream.try_next().await? {
             match item {
                 Either::Left(done) => affected += done.rows_affected(),

@@ -268,6 +268,33 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     });
     scenes.push(app_scene(h, "Copy related rows", "⌃k › Copy Related Rows To: FK 로 이어진 행 · 가린 개인정보 컬럼을 보여 주고 확인", 120, 22));
     h.app.popup = None;
+    // Database Admin: a refresh that ran into the time limit keeps the last sessions · a report the server can't run
+    let sessions = qurry_core::db::QueryResult {
+        columns: [("pid", "INT4"), ("user", "TEXT"), ("state", "TEXT"), ("blocking", "INT4"), ("query_sec", "TEXT"), ("query", "TEXT")].iter().map(|(n, t)| qurry_core::db::ColumnInfo { name: n.to_string(), type_name: t.to_string() }).collect(),
+        rows: [(4123, "app", "idle in transaction", 2, "184.2", "UPDATE payment SET amount = 0 WHERE id = 4"), (4188, "app", "active", 0, "61.0", "UPDATE payment SET card_brand = 'VISA' WHERE id = 4"), (4201, "batch", "active", 0, "12.4", "DELETE FROM payment WHERE id = 4")]
+            .iter()
+            .map(|(p, u, st, b, s, q)| vec![json!(p), json!(u), json!(st), json!(b), json!(s), json!(q)])
+            .collect(),
+        rows_affected: 0,
+        truncated: false,
+        elapsed_ms: 9,
+        has_result_set: true,
+        in_transaction: false,
+        warning: None,
+    };
+    let timeout = "The report ran into its time limit (30 s, or a stricter one set on the server). The server may be busy or the statistics very large: try again later.\n(error returned from database: canceling statement due to statement timeout)";
+    let info = |kind, id| qurry_core::dba::reports(kind).into_iter().find(|r| r.id == id);
+    let d = crate::app::DbaTab { report: "sessions".into(), info: info(qurry_core::store::DbKind::Postgres, "sessions"), grid: Some(crate::grid::Grid::new(sessions)), loaded: Some(std::time::Instant::now()), error: Some(timeout.into()), running: false, auto: true, gone: None };
+    h.app.push_tab("prod", "rentalpay".into(), "Sessions".into(), crate::app::TabKind::Dba(d));
+    h.app.focus = crate::app::Focus::Grid;
+    scenes.push(app_scene(h, "Database Admin: refresh failed", "A refresh that ran into the time limit keeps the last sessions (c / K still work) and says how old they are", 120, 22));
+    let maria = "performance_schema / sys schema is not available on this server — enable performance_schema to see this (MariaDB has it off by default, and some of these tables only exist on MySQL).\n(error returned from database: 1146 (42S02): Table 'performance_schema.events_statements_summary_by_digest' doesn't exist)";
+    let d = crate::app::DbaTab { report: "slow_queries".into(), info: info(qurry_core::store::DbKind::Mysql, "slow_queries"), grid: None, loaded: None, error: Some(maria.into()), running: false, auto: true, gone: None };
+    h.app.push_tab("prod", "rentalpay".into(), "Slow Queries".into(), crate::app::TabKind::Dba(d));
+    scenes.push(app_scene(h, "Database Admin: report error", "A report the server can't run: what to turn on, then the server's error", 120, 22));
+    for _ in 0..2 {
+        h.app.close_tab_now(h.app.active);
+    }
     // Redis
     h.redis_tab(&["session:9f2c", "session:a771", "user:41", "user:41:cart", "queue:mail", "rank:daily"]);
     scenes.push(app_scene(h, "Redis", "Redis 키 브라우저: 키 · 타입 · TTL", 120, 22));

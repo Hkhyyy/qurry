@@ -119,6 +119,8 @@ pub struct DbaTab {
     pub report: String,
     pub info: Option<qurry_core::dba::ReportInfo>,
     pub grid: Option<Grid>,
+    /// When the grid was loaded (a failed refresh keeps the grid and says how old it is)
+    pub loaded: Option<std::time::Instant>,
     pub error: Option<String>,
     pub running: bool,
     pub auto: bool,
@@ -239,6 +241,8 @@ pub enum PAction {
     Pick(String),
     /// DBA report row action (template SQL → console)
     DbaSql(String),
+    /// DBA report row action: EXPLAIN of the row's query → console
+    DbaExplain,
     /// Export: format picked → pick target
     ExportFormat(qurry_core::transfer::Format),
     /// Export: (format, clipboard)
@@ -1234,7 +1238,7 @@ impl App {
     }
 
     pub fn restore_dba(&mut self, conn: &str, db: String, title: String, report: &str) -> Option<u64> {
-        let d = DbaTab { report: report.into(), info: None, grid: None, error: None, running: false, auto: true, gone: None };
+        let d = DbaTab { report: report.into(), info: None, grid: None, loaded: None, error: None, running: false, auto: true, gone: None };
         self.restored_tab(conn, db, title, TabKind::Dba(d))
     }
 
@@ -2606,6 +2610,7 @@ impl App {
             PAction::OpenUndo { conn, db, undo, note } => self.open_undo(conn, db, undo, note),
             PAction::Pick(v) => self.flow_pick(v),
             PAction::DbaSql(t) => self.dba_sql(t),
+            PAction::DbaExplain => self.dba_explain(),
             PAction::ExportTo(f, clipboard) => self.export_to(f, clipboard),
             PAction::Exec(e) => {
                 self.exec = e;

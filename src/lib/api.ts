@@ -208,7 +208,7 @@ export interface TableDetail { columns: ColumnMeta[]; indexes: IndexMeta[]; cons
 export interface WsInfo { id: string; name: string; connIds: string[] }
 export interface CompletionTable { schema: string; name: string; columns: [string, string][] }
 
-export type DbaAction = { kind: "kill"; label: string; terminate: boolean } | { kind: "sql"; label: string; template: string };
+export type DbaAction = { kind: "kill"; label: string; terminate: boolean } | { kind: "sql"; label: string; template: string } | { kind: "explain"; label: string };
 export interface DbaReportInfo { id: string; title: string; group: string; help: string; actions: DbaAction[] }
 /** Execution plan analysis (core): shares·warnings. PlanNode is in components/ConsolePane */
 export const analyzePlan = (json: string) => invoke<import("../components/ConsolePane").PlanNode>("analyze_plan", { json });
@@ -325,6 +325,7 @@ export const dba = {
   run: (id: string, report: string) => invoke<QueryResult>("dba_report", { id, report }),
   kill: (id: string, pid: number, terminate: boolean) => invoke<boolean>("kill_session", { id, pid, terminate }),
   actionSql: (id: string, template: string, row: Record<string, string>) => invoke<string>("dba_action_sql", { id, template, row }),
+  explain: (id: string, query: string) => invoke<string>("dba_explain", { id, query }),
 };
 
 export interface DataPreview { format: DataFormat; columns: string[]; rows: (string | null)[][]; bytes: number }

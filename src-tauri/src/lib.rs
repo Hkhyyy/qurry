@@ -129,6 +129,7 @@ pub fn run() {
             commands::dba_report,
             commands::kill_session,
             commands::dba_action_sql,
+            commands::dba_explain,
             commands::pick_data_file,
             commands::import_data,
             commands::save_text_file,

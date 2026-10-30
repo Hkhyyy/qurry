@@ -1021,7 +1021,7 @@ mod tests {
     /// The count comes back as a number (PostgreSQL) or as text (MySQL and some drivers)
     #[test]
     fn impact_count_reads_numbers_and_text() {
-        let r = |v: serde_json::Value| crate::db::QueryResult { columns: vec![], rows: vec![vec![v]], rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false };
+        let r = |v: serde_json::Value| crate::db::QueryResult { columns: vec![], rows: vec![vec![v]], rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None };
         assert_eq!(impact_count(&r(12408.into())), Some(12408));
         assert_eq!(impact_count(&r("12408".into())), Some(12408));
         assert_eq!(impact_count(&r(serde_json::Value::Null)), None);

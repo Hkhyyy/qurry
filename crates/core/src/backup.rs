@@ -114,7 +114,7 @@ fn closest(mut with_v: Vec<(Vec<u64>, PathBuf)>, server_major: Option<u64>, ok: 
 }
 
 /// PG server major version (16, 17 …)
-async fn pg_major(st: &AppState, id: &str) -> Option<u64> {
+pub(crate) async fn pg_major(st: &AppState, id: &str) -> Option<u64> {
     let r = ensure_pool(st, id).await.ok()?.run_query("SHOW server_version_num", 1).await.ok()?;
     crate::db::cell_text(r.rows.first()?.first()?).parse::<u64>().ok().map(|n| n / 10000)
 }

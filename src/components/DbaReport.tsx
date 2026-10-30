@@ -23,9 +23,13 @@ export function DbaReport(p: {
   const [list, setList] = useState<DbaReportInfo[]>([]);
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** When the shown result was loaded (HH:MM:SS), for the stale banner after a failed refresh */
+  const [loadedAt, setLoadedAt] = useState("");
   const [running, setRunning] = useState(false);
   const [auto, setAuto] = useState(true);
   const seq = useRef(0);
+  /** A load is running (the auto-refresh tick waits for it) */
+  const inFlight = useRef(false);
   // Restored tabs load when first shown (so they don't connect to every DB at startup)
   const [seen, setSeen] = useState(p.visible);
   useEffect(() => {
@@ -39,18 +43,23 @@ export function DbaReport(p: {
 
   const load = async () => {
     const n = ++seq.current;
+    inFlight.current = true;
     setRunning(true);
     try {
       const r = await dba.run(p.target, p.report);
       if (n !== seq.current) return;
       setResult(r);
+      setLoadedAt(new Date().toTimeString().slice(0, 8));
       setError(null);
     } catch (e) {
+      // A failed refresh keeps the last result on screen (a busy server is when sessions need killing); the error shows above it
       if (n !== seq.current) return;
       setError(String(e));
-      setResult(null);
     } finally {
-      if (n === seq.current) setRunning(false);
+      if (n === seq.current) {
+        inFlight.current = false;
+        setRunning(false);
+      }
     }
   };
   useEffect(() => {
@@ -58,10 +67,10 @@ export function DbaReport(p: {
     setResult(null);
     load();
   }, [p.target, p.report, seen]);
-  // Sessions · locks: every 3 seconds while visible
+  // Sessions · locks: every 3 seconds while visible. A tick is skipped while the last load still runs, so slow loads don't pile up on a busy server
   useEffect(() => {
     if (!auto || !p.visible || !LIVE.has(p.report)) return;
-    const t = setInterval(load, 3000);
+    const t = setInterval(() => inFlight.current || load(), 3000);
     return () => clearInterval(t);
   }, [auto, p.visible, p.report, p.target]);
 
@@ -88,6 +97,8 @@ export function DbaReport(p: {
         } catch (e) {
           p.onStatus(String(e));
         }
+      } else if (a.kind === "explain") {
+        p.onOpenConsole(await dba.explain(p.target, str(row.query)));
       } else {
         const vals = Object.fromEntries(Object.entries(row).map(([k, v]) => [k, str(v)]));
         p.onOpenConsole(await dba.actionSql(p.target, a.template, vals));
@@ -120,7 +131,12 @@ export function DbaReport(p: {
         <Text tone="muted" className="dba-help">{info?.help}</Text>
       </Toolbar>
       {info?.actions.length ? <div className="dba-hint muted">Right-click a row: {info.actions.map((a) => a.label).join(" · ")}</div> : null}
-      {error ? (
+      {error && result && (
+        <Notice tone="warn" className="dba-stale">
+          Refresh failed, showing data from {loadedAt}: {error}
+        </Notice>
+      )}
+      {error && !result ? (
         <Notice tone="danger">{error}</Notice>
       ) : (
         <div className="dba-grid">

@@ -525,6 +525,12 @@ pub fn dba_action_sql(state: State<'_, AppState>, id: String, template: String, 
     Ok(qurry_core::dba::action_sql(state.kind_of(&id)?, &template, &row))
 }
 
+/// Explain in Console for a Slow Queries row (normalized statements: generic plan on PG16+, otherwise a note to fill in the parameters)
+#[tauri::command]
+pub async fn dba_explain(state: State<'_, AppState>, id: String, query: String) -> AppResult<String> {
+    state.dba_explain(id, query).await
+}
+
 #[tauri::command]
 pub fn cancel_job(state: State<'_, AppState>, job: String) {
     state.cancel_job(&job)

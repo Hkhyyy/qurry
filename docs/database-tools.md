@@ -4,20 +4,22 @@ English | [한국어](ko/database-tools.md)
 
 Admin reports, diagrams, schema and data comparison, migrations, backups, importing files, test data, copying related rows, charts, query history and explain plans.
 
-## Database admin (PostgreSQL, MySQL)
+## Database admin (PostgreSQL, MySQL, MariaDB)
 
 GUI: right-click a data source › **Tools** › Sessions & Locks, Slow Queries, … — TUI: `⌃k` › **Database Admin…**
 
 | Group | Reports |
 |---|---|
 | Activity | **Sessions** (who blocks whom, query / transaction age; refreshes every 3 s) · **Lock Waits** — right-click / `c` cancel the query, `K` terminate the session |
-| Performance | **Slow Queries** — top 100 by total time (`pg_stat_statements` / `performance_schema`), open or EXPLAIN in a console |
-| Storage | **Table Sizes** · **Table Bloat** · **Index Bloat** (space held by deleted rows, estimated from statistics — PostgreSQL) · **Table Fragmentation** (MySQL) · **Unused Indexes** · **Duplicate Indexes** · **Foreign Keys Without an Index** — generate DROP / CREATE INDEX, VACUUM FULL, REINDEX, OPTIMIZE TABLE |
+| Performance | **Slow Queries** — top 100 by total time (`pg_stat_statements` / `performance_schema`), open or EXPLAIN in a console (their text has `$1` / `?` / `(...)` in place of values: PostgreSQL 16+ gets `EXPLAIN (GENERIC_PLAN)`, elsewhere fill in the values first) |
+| Storage | **Table Sizes** · **Table Bloat** · **Index Bloat** (space held by deleted rows, estimated from statistics — PostgreSQL) · **Table Fragmentation** (MySQL) · **Unused Indexes** (with the time the scans were counted since) · **Duplicate Indexes** · **Foreign Keys Without an Index** — generate DROP / CREATE INDEX, VACUUM FULL, REINDEX, OPTIMIZE TABLE |
 | Maintenance | **Vacuum & Dead Rows** · **Vacuum Progress** (VACUUM, VACUUM FULL / autovacuum running now: phase, % scanned — cancel it) · **Transaction ID Age** (wraparound) — generate VACUUM ANALYZE (PostgreSQL) |
 | Server | **Server Overview** (uptime, connections, cache hit ratio) · **Replication** lag · **Settings** |
 | Security | **Users & Roles** · **Table Privileges** — generate GRANT / REVOKE |
 
-Generated SQL opens in a new console; nothing changes until you run it. Stopping sessions asks first (showing the pid and query) and is blocked on read-only data sources.
+Generated SQL opens in a new console; nothing changes until you run it. Stopping sessions asks first (showing the pid and query) and is blocked on read-only data sources. On Amazon RDS / Aurora MySQL, where KILL of another user's session is denied, Qurry uses `mysql.rds_kill` / `mysql.rds_kill_query`.
+
+Each report query stops after 30 seconds (`statement_timeout` / `max_execution_time` for that query only, not the connection); a stricter limit set on the server, role or connection stays. A report that hits the limit says so. Through pgbouncer in statement pooling mode, which allows no transaction, PostgreSQL reports run without the limit. Sessions and Lock Waits skip a refresh while the last one is still running.
 
 ## Diagram (ERD)
 
