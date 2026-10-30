@@ -1,5 +1,5 @@
 //! Tauri commands called from the frontend. The actual logic lives in qurry_core::app::AppState.
-use crate::app::{AppState, ConnectionView, ImportResult};
+use crate::app::{AppState, BatchResult, ConnectionView, ImportResult};
 use crate::db::QueryResult;
 use crate::error::AppResult;
 use crate::store::ConnectionConfig;
@@ -80,12 +80,12 @@ pub async fn set_tx_mode(state: State<'_, AppState>, id: String, tab_id: String,
 }
 
 #[tauri::command]
-pub async fn commit_tx(state: State<'_, AppState>, tab_id: String) -> AppResult<()> {
+pub async fn commit_tx(state: State<'_, AppState>, tab_id: String) -> AppResult<Option<String>> {
     state.commit_tx(tab_id).await
 }
 
 #[tauri::command]
-pub async fn rollback_tx(state: State<'_, AppState>, tab_id: String) -> AppResult<()> {
+pub async fn rollback_tx(state: State<'_, AppState>, tab_id: String) -> AppResult<Option<String>> {
     state.rollback_tx(tab_id).await
 }
 
@@ -96,7 +96,7 @@ pub async fn close_session(state: State<'_, AppState>, tab_id: String) -> AppRes
 
 #[tauri::command]
 /// exact_one = saving a table edit (roll everything back unless UPDATE/DELETE hits exactly 1 row)
-pub async fn execute_batch(state: State<'_, AppState>, id: String, statements: Vec<String>, exact_one: Option<bool>) -> AppResult<u64> {
+pub async fn execute_batch(state: State<'_, AppState>, id: String, statements: Vec<String>, exact_one: Option<bool>) -> AppResult<BatchResult> {
     state.execute_batch(id, statements, exact_one.unwrap_or(false)).await
 }
 
@@ -432,7 +432,7 @@ pub async fn fake_preview(state: State<'_, AppState>, id: String, schema: String
 
 /// Insert test data in one transaction. Number of rows inserted
 #[tauri::command]
-pub async fn fake_fill(state: State<'_, AppState>, id: String, schema: String, table: String, rows: usize) -> AppResult<u64> {
+pub async fn fake_fill(state: State<'_, AppState>, id: String, schema: String, table: String, rows: usize) -> AppResult<BatchResult> {
     state.fake_fill(id, schema, table, rows).await
 }
 
@@ -474,7 +474,7 @@ pub fn rename_ddl(state: State<'_, AppState>, id: String, what: String, schema: 
 
 /// Run the generated DDL (PG: one transaction)
 #[tauri::command]
-pub async fn run_ddl(state: State<'_, AppState>, id: String, statements: Vec<String>) -> AppResult<()> {
+pub async fn run_ddl(state: State<'_, AppState>, id: String, statements: Vec<String>) -> AppResult<Option<String>> {
     state.run_ddl(id, statements).await
 }
 

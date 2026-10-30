@@ -405,10 +405,11 @@ fn apply(app: &mut App) {
         let n = sql.len();
         a.status = "Running…".into();
         a.spawn(async move { st.run_ddl(target, sql).await }, move |a, r| match r {
-            Ok(()) => {
+            Ok(warning) => {
                 a.designer = None;
                 a.status = if created { format!("Table {name} created") } else { format!("Table {name} modified ({n} statement(s))") };
                 a.schema_changed(&conn, &db);
+                a.warn_ran(warning);
             }
             Err(e) => {
                 a.status.clear();
@@ -647,13 +648,14 @@ impl App {
                 let st = a.state.clone();
                 let db = db.unwrap_or_else(|| a.default_db(&conn));
                 a.spawn(async move { st.run_ddl(target, sql).await }, move |a, r| match r {
-                    Ok(()) => {
+                    Ok(warning) => {
                         // Schemas · tables reload under that DB; a new DB reloads the Data Source
                         a.schema_changed(&conn, &db);
                         if let Some(n) = a.tree.roots.iter().find(|n| n.conn == conn).cloned() {
                             a.refresh_node(&n);
                         }
                         a.status = done;
+                        a.warn_ran(warning);
                     }
                     Err(e) => a.status = e.to_string(),
                 });

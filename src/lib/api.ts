@@ -98,6 +98,14 @@ export interface QueryResult {
   elapsedMs: number;
   hasResultSet: boolean;
   inTransaction?: boolean;
+  /** It ran, but something after it failed (e.g. the Production log couldn't record the result): show it, don't run it again */
+  warning?: string;
+}
+
+/** Statements run in one transaction: rows changed; warning = committed, but the Production log couldn't record the result */
+export interface BatchResult {
+  rows: number;
+  warning?: string;
 }
 
 /** password: undefined → keep existing, "" → delete */
@@ -160,11 +168,12 @@ export const api = {
   fetchMore: (tabId: string, limit = 500) => invoke<QueryResult>("fetch_more", { tabId, limit }),
   cancelQuery: (tabId: string) => invoke<boolean>("cancel_query", { tabId }),
   setTxMode: (id: string, tabId: string, manual: boolean) => invoke<void>("set_tx_mode", { id, tabId, manual }),
-  commitTx: (tabId: string) => invoke<void>("commit_tx", { tabId }),
-  rollbackTx: (tabId: string) => invoke<void>("rollback_tx", { tabId }),
+  /** → a warning when it committed but couldn't be logged */
+  commitTx: (tabId: string) => invoke<string | null>("commit_tx", { tabId }),
+  rollbackTx: (tabId: string) => invoke<string | null>("rollback_tx", { tabId }),
   closeSession: (tabId: string) => invoke<void>("close_session", { tabId }),
   /** exactOne = saving grid edits (roll back everything unless each UPDATE/DELETE hits exactly 1 row) */
-  executeBatch: (id: string, statements: string[], exactOne = false) => invoke<number>("execute_batch", { id, statements, exactOne }),
+  executeBatch: (id: string, statements: string[], exactOne = false) => invoke<BatchResult>("execute_batch", { id, statements, exactOne }),
   // For file writes the backend opens the save dialog itself (the webview doesn't pick the path). null if canceled
   exportConnections: () => invoke<[number, string] | null>("export_connections"),
   /** Pick a file to import → preview the changes. importPicked on confirm */
@@ -209,11 +218,11 @@ export interface Snippet { id: string; name: string; sql: string; connId?: strin
 export interface FakePreview { plan: { name: string; dataType: string; how: string }[]; result: QueryResult; warnings: string[] }
 export const fake = {
   preview: (id: string, schema: string, table: string, rows = 8) => invoke<FakePreview>("fake_preview", { id, schema, table, rows }),
-  fill: (id: string, schema: string, table: string, rows: number) => invoke<number>("fake_fill", { id, schema, table, rows }),
+  fill: (id: string, schema: string, table: string, rows: number) => invoke<BatchResult>("fake_fill", { id, schema, table, rows }),
 };
 /** Copy a slice of production data: start rows + rows linked by FK → another Data Source (personal data is masked) */
 export interface SubsetSpec { schema: string; table: string; filter: string; depth: number; mask: boolean }
-export interface SubsetPlan { tables: { schema: string; table: string; rows: number; masked: { column: string; mask: string }[]; reason: string }[]; total: number }
+export interface SubsetPlan { tables: { schema: string; table: string; rows: number; masked: { column: string; mask: string }[]; reason: string }[]; total: number; warning?: string }
 export const subset = {
   preview: (source: string, spec: SubsetSpec) => invoke<SubsetPlan>("subset_preview", { source, spec }),
   copy: (source: string, spec: SubsetSpec, target: string) => invoke<SubsetPlan>("subset_copy", { source, spec, target }),
@@ -233,10 +242,11 @@ export const ddl = {
   table: (id: string, before: TableDef | null, after: TableDef) => invoke<string[]>("table_ddl", { id, before, after }),
   newObject: (id: string, object: NewObject) => invoke<string[]>("new_object_ddl", { id, object }),
   rename: (id: string, what: string, schema: string, old: string, newName: string) => invoke<string>("rename_ddl", { id, what, schema, old, new: newName }),
-  run: (id: string, statements: string[]) => invoke<void>("run_ddl", { id, statements }),
+  /** A warning when it ran but the Production log couldn't record it */
+  run: (id: string, statements: string[]) => invoke<string | null>("run_ddl", { id, statements }),
 };
 /** Production log: changes run on Production Data Sources (shared with the TUI) */
-export interface AuditEntry { id: string; ts: number; connId: string; connName: string; database?: string; sql: string; rows?: number; error?: string; inTx: boolean; undo?: string; note?: string }
+export interface AuditEntry { id: string; ts: number; connId: string; connName: string; database?: string; sql: string; rows?: number; error?: string; inTx: boolean; undo?: string; note?: string; /** Logged before it ran, no result recorded: still running, or Qurry stopped (outcome unknown) */ started?: boolean }
 export const auditLog = (connId: string | null, filter: string, limit = 500) => invoke<AuditEntry[]>("audit_log", { connId, filter, limit });
 /** Query history·snippets (config folder, shared with the TUI) */
 export const history = {

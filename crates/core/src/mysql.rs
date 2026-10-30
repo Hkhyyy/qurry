@@ -290,21 +290,48 @@ pub async fn export_on(conn: &mut sqlx::MySqlConnection, sql: &str, out: &mut cr
 }
 
 pub async fn execute_batch(p: &MySqlPool, statements: &[String], exact_one: bool) -> AppResult<u64> {
-    execute_batch_with(p, statements, exact_one, false).await
+    Ok(execute_batch_with(p, statements, exact_one, false, &[]).await?.0)
 }
 
-/// prepared = each statement over the prepared-statement protocol, which takes exactly one statement (MCP)
-pub async fn execute_batch_with(p: &MySqlPool, statements: &[String], exact_one: bool, prepared: bool) -> AppResult<u64> {
+/// prepared = each statement over the prepared-statement protocol, which takes exactly one statement (MCP).
+/// snaps = undo snapshot to take right before each statement, in the transaction (audit::UndoPlan) → (rows changed, each snapshot's result with the rows its statement changed)
+pub async fn execute_batch_with(p: &MySqlPool, statements: &[String], exact_one: bool, prepared: bool, snaps: &[Option<&str>]) -> AppResult<(u64, Vec<Option<(AppResult<QueryResult>, u64)>>)> {
     let mut tx = p.begin().await?;
     let mut affected = 0;
-    for st in statements {
+    let mut shots = Vec::new();
+    for (i, st) in statements.iter().enumerate() {
+        let shot = match snaps.get(i).copied().flatten() {
+            Some(q) => Some(snapshot_on(&mut tx, q).await),
+            None => None,
+        };
+        // Cancelled · lock wait timeout · deadlock (the server may have rolled back the statements before): nothing is saved (dropping tx rolls back)
+        if let Some(Err(e)) = &shot
+            && crate::audit::stops_change(e)
+        {
+            return Err(crate::audit::stopped(e, false));
+        }
         let r = if prepared { sqlx::query(st).execute(&mut *tx).await } else { tx.execute(sqlx::raw_sql(st)).await };
         let n = r.map_err(|e| AppError::Msg(format!("{e}\n→ {st}")))?.rows_affected();
         crate::session::check_exact_one(st, n, exact_one)?;
+        shots.push(shot.map(|s| (s, n)));
         affected += n;
     }
     tx.commit().await?;
-    Ok(affected)
+    Ok((affected, shots))
+}
+
+/// Undo snapshot (a SELECT … FOR UPDATE from audit::UndoPlan) in the open transaction (text protocol: `value` reads text values);
+/// a failing SELECT leaves the MySQL transaction as it was, except a deadlock (and a lock wait timeout with innodb_rollback_on_timeout), which rolls back all of it
+async fn snapshot_on(conn: &mut sqlx::MySqlConnection, sql: &str) -> AppResult<QueryResult> {
+    run_on(conn, sql, crate::audit::UNDO_MAX_ROWS + 1).await
+}
+
+/// MySQL error number (1213 = deadlock, …)
+fn error_number(e: &AppError) -> Option<u16> {
+    match e {
+        AppError::Db(sqlx::Error::Database(d)) => d.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>().map(|m| m.number()),
+        _ => None,
+    }
 }
 
 pub async fn cancel(p: &MySqlPool, id: i64) -> AppResult<bool> {
@@ -394,6 +421,61 @@ impl MySession {
         }
         r.in_transaction = self.in_tx;
         Ok(r)
+    }
+
+    /// A change with its undo snapshot right before it, in one transaction (Session::run_with_snapshot)
+    pub async fn run_with_snapshot(&mut self, snap: &str, sql: &str, limit: usize) -> (AppResult<QueryResult>, AppResult<QueryResult>) {
+        self.more = None;
+        let own = !self.manual && !self.in_tx;
+        let had_tx = self.in_tx;
+        if own {
+            if let Err(e) = self.conn.execute("BEGIN").await {
+                return (Err(AppError::Msg(e.to_string())), Err(e.into()));
+            }
+            self.in_tx = true;
+        }
+        let shot = snapshot_on(&mut self.conn, snap).await;
+        // Cancelled · lock wait timeout · deadlock while locking the rows: don't run the change
+        if let Err(e) = &shot
+            && crate::audit::stops_change(e)
+        {
+            let gone = if own {
+                let _ = self.rollback_tx().await;
+                true
+            } else {
+                // InnoDB rolls back the whole transaction on a deadlock, and on a lock wait timeout with innodb_rollback_on_timeout
+                match error_number(e) {
+                    Some(1213) => true,
+                    Some(1205) => sqlx::query_scalar::<_, i64>("SELECT @@innodb_rollback_on_timeout").fetch_one(&mut *self.conn).await.is_ok_and(|v| v != 0),
+                    _ => false,
+                }
+            };
+            if gone {
+                self.in_tx = false;
+            }
+            return (Err(AppError::Msg(e.to_string())), Err(crate::audit::stopped(e, had_tx && gone)));
+        }
+        // Manual: the snapshot's locking read already opened the transaction (its locks are held until Commit / Roll back)
+        if shot.is_ok() {
+            self.in_tx = true;
+        }
+        let mut r = self.run(sql, limit).await;
+        if own {
+            if r.is_ok()
+                && let Err(e) = self.commit().await
+            {
+                r = Err(e);
+            }
+            match &mut r {
+                Ok(q) => q.in_transaction = false,
+                // The change or its COMMIT failed: nothing of it stays, and no transaction is left open
+                Err(_) => {
+                    let _ = self.rollback_tx().await;
+                    self.in_tx = false;
+                }
+            }
+        }
+        (shot, r)
     }
 
     pub async fn fetch(&mut self, limit: usize) -> AppResult<QueryResult> {
@@ -672,8 +754,8 @@ mod tests {
     async fn mysql_prepared_batch_refuses_multiple_statements() {
         let Pool::My(p) = crate::db::connect(&cfg(), Some("dbtool")).await.expect("connect") else { unreachable!() };
         sqlx::raw_sql("drop table if exists qurry_prep; create table qurry_prep (a int)").execute(&p).await.unwrap();
-        assert!(execute_batch_with(&p, &["insert into qurry_prep values (1); drop table qurry_prep".into()], false, true).await.is_err());
-        assert_eq!(execute_batch_with(&p, &["insert into qurry_prep values (1)".into()], false, true).await.unwrap(), 1);
+        assert!(execute_batch_with(&p, &["insert into qurry_prep values (1); drop table qurry_prep".into()], false, true, &[]).await.is_err());
+        assert_eq!(execute_batch_with(&p, &["insert into qurry_prep values (1)".into()], false, true, &[]).await.unwrap().0, 1);
         sqlx::raw_sql("drop table qurry_prep").execute(&p).await.unwrap();
     }
 

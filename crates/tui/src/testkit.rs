@@ -92,6 +92,7 @@ impl Harness {
             elapsed_ms: 0,
             has_result_set: true,
             in_transaction: false,
+            warning: None,
         };
         let tt = TableTab {
             schema: "public".into(),

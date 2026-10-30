@@ -376,6 +376,7 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .ol .ts { color: var(--c-6f737a); }
 .ol.sql { color: var(--c-a9b7c6); }
 .ol.info { color: var(--c-5fb865); }
+.ol.warn { color: var(--ui-warn); }
 .ol.error { color: var(--danger); }
 .plan-view { position: absolute; inset: 0; display: flex; }
 .plan-view .plan-table { flex: 1; overflow: auto; min-width: 0; }

@@ -57,6 +57,9 @@ pub struct SubsetPlan {
     /// Insert order (parents first)
     pub tables: Vec<SubsetTable>,
     pub total: usize,
+    /// After a copy: it was copied, but the Production log couldn't record it
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -399,7 +402,7 @@ impl Walk<'_> {
                 SubsetTable { masked: t.masks.iter().map(|(i, m)| MaskedColumn { column: t.cols[*i].name.clone(), mask: *m }).collect(), rows: t.rows.len(), reason: t.reason.clone(), schema: k.0, table: k.1 }
             })
             .collect();
-        SubsetPlan { total: tables.iter().map(|t| t.rows).sum(), tables }
+        SubsetPlan { total: tables.iter().map(|t| t.rows).sum(), tables, warning: None }
     }
 }
 
@@ -486,8 +489,8 @@ impl AppState {
                 }
             }
         }
-        let plan = w.plan();
-        self.execute_batch(target, stmts, false).await?;
+        let mut plan = w.plan();
+        plan.warning = self.execute_batch(target, stmts, false).await?.warning;
         Ok(plan)
     }
 }

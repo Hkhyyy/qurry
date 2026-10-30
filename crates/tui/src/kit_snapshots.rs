@@ -195,6 +195,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         elapsed_ms: 18,
         has_result_set: true,
         in_transaction: false,
+        warning: None,
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         c.result_title = "Result 1: select card_brand, count(*) as payments,".into();
@@ -221,11 +222,14 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         in_tx,
         undo: undo.then(|| "UPDATE …".into()),
         note: None,
+        started: false,
     };
     for e in [
         entry("1", 90, "delete from payment where created_at < now() - interval '1 year'", Some(12408), false, false),
         entry("2", 12, "update payment set amount = 0 where id = 4", Some(1), true, true),
         entry("3", 10, "COMMIT", None, false, false),
+        // Logged before it ran, no result yet (still running, or Qurry stopped)
+        qurry_core::audit::AuditEntry { started: true, ..entry("4", 1, "update payment set status = 'refunded' where id = 7", None, false, false) },
     ] {
         h.app.state.audit.add(e).unwrap();
     }

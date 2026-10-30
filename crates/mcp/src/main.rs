@@ -367,8 +367,13 @@ impl Server {
                     }
                 }
                 // PostgreSQL / MySQL: each item as a prepared statement, so the server itself refuses more than one statement
-                let n = st.execute_batch_prepared(t, stmts.clone()).await.map_err(e)?;
-                Ok(json!({ "statements": stmts.len(), "rows_affected": n }))
+                let r = st.execute_batch_prepared(t, stmts.clone()).await.map_err(e)?;
+                let mut out = json!({ "statements": stmts.len(), "rows_affected": r.rows });
+                // Committed, but the Production log couldn't record the result: say so instead of failing (a retry would run it twice)
+                if let Some(w) = r.warning {
+                    out["warning"] = w.into();
+                }
+                Ok(out)
             }
             "list_rag_indexes" => {
                 let names: std::collections::HashMap<String, String> = self.sources().await?.into_iter().map(|c| (c.config.id, c.config.name)).collect();

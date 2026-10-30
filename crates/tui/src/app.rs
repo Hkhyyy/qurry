@@ -40,6 +40,8 @@ pub struct Console {
 
 /// Max lines kept in the console Output log (same as the GUI)
 const OUTPUT_MAX: usize = 1000;
+/// Output line prefix of a warning (drawn in the warn color, like the GUI): it ran, so not an error to run again
+pub const WARNING: &str = "Warning: ";
 
 impl Console {
     /// One line in the Output log (old lines are dropped)
@@ -1531,7 +1533,7 @@ impl App {
                                 Some(g) => g.result.columns.clone(),
                                 None => cols.into_iter().map(|(name, type_name)| qurry_core::db::ColumnInfo { name, type_name }).collect(),
                             };
-                            let empty = qurry_core::db::QueryResult { columns, rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false };
+                            let empty = qurry_core::db::QueryResult { columns, rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None };
                             tt.grid = Some(Grid::new(empty));
                         }
                         tt.error = Some(e.clone());
@@ -1965,6 +1967,7 @@ impl App {
                                 _ => res,
                             };
                             c.in_tx = res.in_transaction;
+                            let warning = res.warning.clone();
                             if dry {
                                 c.log(false, "Explain Analyze ran the statement in a transaction and rolled it back — nothing was changed".into());
                             } else if !res.in_transaction && !qurry_core::guard::is_read(&s, kind) {
@@ -1991,6 +1994,11 @@ impl App {
                                     c.show_output = true;
                                 }
                             }
+                            // It ran, but its result couldn't be logged: not a failure (don't run it again)
+                            if let Some(w) = warning {
+                                status = format!("Warning: {}", w.lines().next().unwrap_or(""));
+                                c.log(false, format!("{WARNING}{w}"));
+                            }
                         }
                         Err(e) => {
                             c.log(true, e.clone());
@@ -2010,18 +2018,23 @@ impl App {
                 }
                 // Even on error the session may have an open transaction (e.g. first Manual statement failed) → sync the Commit/Roll back display
                 if failed {
-                    let st = a.state.clone();
-                    let session = a.tab_mut(id).and_then(|t| if let TabKind::Console(c) = &t.kind { Some(c.session.clone()) } else { None });
-                    if let Some(session) = session {
-                        a.spawn(async move { st.tx_state(session).await }, move |a, in_tx| {
-                            if let Some(TabKind::Console(c)) = a.tab_mut(id).map(|t| &mut t.kind) {
-                                c.in_tx = in_tx;
-                            }
-                        });
-                    }
+                    a.sync_tx(id);
                 }
             },
         );
+    }
+
+    /// Read the console session's transaction state into the tab (after an error, the Commit / Roll back display may be stale)
+    fn sync_tx(&mut self, id: u64) {
+        let st = self.state.clone();
+        let session = self.tab_mut(id).and_then(|t| if let TabKind::Console(c) = &t.kind { Some(c.session.clone()) } else { None });
+        if let Some(session) = session {
+            self.spawn(async move { st.tx_state(session).await }, move |a, in_tx| {
+                if let Some(TabKind::Console(c)) = a.tab_mut(id).map(|t| &mut t.kind) {
+                    c.in_tx = in_tx;
+                }
+            });
+        }
     }
 
     pub fn fetch_more(&mut self) {
@@ -2110,14 +2123,24 @@ impl App {
                 self.spawn(
                     async move { if commit { st.commit_tx(session).await } else { st.rollback_tx(session).await }.map_err(err) },
                     move |a, r| match r {
-                        Ok(()) => {
+                        Ok(warning) => {
+                            let done = if commit { "Committed" } else { "Rolled back" };
                             if let Some(TabKind::Console(c)) = a.tab_mut(id).map(|t| &mut t.kind) {
                                 c.in_tx = false;
-                                c.log(false, if commit { "Committed".into() } else { "Rolled back".into() });
+                                c.log(false, done.into());
+                                if let Some(w) = &warning {
+                                    c.log(false, format!("{WARNING}{w}"));
+                                }
                             }
-                            a.status = if commit { "Committed".into() } else { "Rolled back".into() };
+                            a.status = match warning {
+                                Some(w) => format!("{done} · Warning: {}", w.lines().next().unwrap_or("")),
+                                None => done.into(),
+                            };
                         }
-                        Err(e) => a.status = e,
+                        Err(e) => {
+                            a.status = e;
+                            a.sync_tx(id);
+                        }
                     },
                 );
             }
@@ -2200,12 +2223,24 @@ impl App {
         let st = self.state.clone();
         self.status = format!("Submitting {n} statement(s)…");
         self.spawn(async move { st.execute_batch(target, stmts, true).await.map_err(err) }, move |a, r| match r {
-            Ok(rows) => {
-                a.status = format!("{n} statement(s) submitted, {rows} row(s) affected");
+            Ok(r) => {
+                a.status = format!("{n} statement(s) submitted, {} row(s) affected", r.rows);
                 a.reload_table(id);
+                // Saved, but its result couldn't be logged: not a failure (submitting again would save it twice)
+                if let Some(w) = r.warning {
+                    a.status.push_str(" · Warning: the Production log couldn't record it");
+                    a.popup = Some(Popup::Message { title: "Submitted, with a warning".into(), text: w });
+                }
             }
             Err(e) => a.popup = Some(Popup::Message { title: "Submit failed".into(), text: e }),
         });
+    }
+
+    /// It ran, but the Production log couldn't record it: a popup, not a failure (running it again would repeat it)
+    pub(crate) fn warn_ran(&mut self, warning: Option<String>) {
+        if let Some(w) = warning {
+            self.popup = Some(Popup::Message { title: "Ran, with a warning".into(), text: w });
+        }
     }
 
     // ───────── Connections ─────────
@@ -3300,6 +3335,7 @@ pub fn redis_grid(d: &KeyDetail) -> Option<Grid> {
         elapsed_ms: 0,
         has_result_set: true,
         in_transaction: false,
+        warning: None,
     };
     Some(Grid::new(result))
 }

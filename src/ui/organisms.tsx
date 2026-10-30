@@ -234,7 +234,8 @@ export interface ConfirmOptions {
   /** Statement · target and the value next to it (e.g. rows to change) */
   detail?: { text: string; value?: string; tone?: "danger" | "warn" }[];
   okLabel?: string;
-  cancelLabel?: string;
+  /** null = no Cancel button (a notice to acknowledge) */
+  cancelLabel?: string | null;
   danger?: boolean;
 }
 type ConfirmReq = ConfirmOptions & { resolve: (ok: boolean) => void };
@@ -277,9 +278,11 @@ export function ConfirmHost() {
       onClose={() => done(false)}
       footer={
         <>
-          <Button autoFocus={req.danger} onClick={() => done(false)}>
-            {req.cancelLabel ?? "Cancel"}
-          </Button>
+          {req.cancelLabel !== null && (
+            <Button autoFocus={req.danger} onClick={() => done(false)}>
+              {req.cancelLabel ?? "Cancel"}
+            </Button>
+          )}
           <Button ref={okRef} variant={req.danger ? "danger" : "primary"} onClick={() => done(true)}>
             {req.okLabel ?? "OK"}
           </Button>

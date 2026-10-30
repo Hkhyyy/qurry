@@ -417,6 +417,7 @@ impl AppState {
                         elapsed_ms: r.elapsed_ms,
                         has_result_set: true,
                         in_transaction: false,
+                        warning: None,
                     });
                 }
                 Ok(r) => return Ok(r),

@@ -85,7 +85,10 @@ impl App {
             .audit_log(None, String::new(), 1000)
             .into_iter()
             .map(|e| {
-                let status = if e.error.is_some() {
+                let status = if e.started {
+                    // Logged before it ran, no result: still running, or Qurry stopped — the outcome is unknown
+                    "no result recorded".to_string()
+                } else if e.error.is_some() {
                     "failed".to_string()
                 } else if let Some(n) = e.rows {
                     format!("{n} row(s){}", if e.in_tx { ", not committed yet" } else { "" })

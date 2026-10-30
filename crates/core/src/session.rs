@@ -6,7 +6,7 @@ use crate::error::{AppError, AppResult};
 use futures::TryStreamExt;
 use serde_json::Value;
 use sqlx::pool::PoolConnection;
-use sqlx::postgres::{PgPool, PgRow};
+use sqlx::postgres::{PgConnection, PgPool, PgRow};
 use sqlx::{Column, Either, Executor, Postgres, Row, TypeInfo};
 use std::time::Instant;
 
@@ -132,8 +132,10 @@ impl PgSession {
 
     pub async fn commit(&mut self) -> AppResult<()> {
         self.close_cursor().await;
-        self.conn.execute("COMMIT").await?;
+        let r = self.conn.execute("COMMIT").await;
+        // A failed COMMIT (e.g. a deferred foreign key) ends the transaction too: PostgreSQL rolls it back
         self.in_tx = false;
+        r?;
         Ok(())
     }
 
@@ -208,32 +210,47 @@ impl PgSession {
     }
 
     async fn run_direct(&mut self, sql: &str, limit: usize, start: Instant) -> AppResult<QueryResult> {
-        let mut columns = Vec::new();
-        let mut rows: Vec<Vec<Value>> = Vec::new();
-        let mut affected = 0u64;
-        let mut truncated = false;
-        let mut has_rs = false;
+        run_direct_on(&mut self.conn, sql, limit, start).await
+    }
+
+    /// A change with its undo snapshot right before it, in one transaction (Session::run_with_snapshot)
+    async fn run_with_snapshot(&mut self, snap: &str, sql: &str, limit: usize) -> (AppResult<QueryResult>, AppResult<QueryResult>) {
+        self.close_cursor().await;
+        let own = !self.user_tx();
+        let began = !self.in_tx;
+        if began {
+            if let Err(e) = self.conn.execute("BEGIN").await {
+                return (Err(AppError::Msg(e.to_string())), Err(e.into()));
+            }
+            self.in_tx = true;
+        }
+        let shot = pg_snapshot(&mut self.conn, snap).await;
+        // Cancelled · timed out while locking the rows: don't run the change (the savepoint kept the user's transaction as it was)
+        if let Err(e) = &shot
+            && crate::audit::stops_change(e)
         {
-            #[allow(deprecated)]
-            let mut stream = sqlx::query(sql).persistent(false).fetch_many(&mut *self.conn);
-            while let Some(item) = stream.try_next().await? {
-                match item {
-                    Either::Left(done) => affected += done.rows_affected(),
-                    Either::Right(row) => {
-                        has_rs = true;
-                        if columns.is_empty() {
-                            columns = pg_columns(&row);
-                        }
-                        if rows.len() >= limit {
-                            truncated = true;
-                            break;
-                        }
-                        rows.push((0..row.len()).map(|i| pg_value(&row, i)).collect());
-                    }
+            if began {
+                let _ = self.rollback_tx().await;
+            }
+            return (Err(AppError::Msg(e.to_string())), Err(crate::audit::stopped(e, false)));
+        }
+        let mut r = self.run(sql, limit).await;
+        if own {
+            if r.is_ok()
+                && let Err(e) = self.commit().await
+            {
+                r = Err(e);
+            }
+            match &mut r {
+                Ok(q) => q.in_transaction = false,
+                // The change or its COMMIT failed: nothing of it stays, and no transaction is left open
+                Err(_) => {
+                    let _ = self.rollback_tx().await;
+                    self.in_tx = false;
                 }
             }
         }
-        Ok(query_result(columns, rows, affected, truncated, start, has_rs))
+        (shot, r)
     }
 
     /// Fetch the next `limit` rows from the open cursor.
@@ -282,6 +299,52 @@ impl PgSession {
     }
 }
 
+/// Run a statement on the connection (no cursor)
+async fn run_direct_on(conn: &mut PgConnection, sql: &str, limit: usize, start: Instant) -> AppResult<QueryResult> {
+    let mut columns = Vec::new();
+    let mut rows: Vec<Vec<Value>> = Vec::new();
+    let mut affected = 0u64;
+    let mut truncated = false;
+    let mut has_rs = false;
+    {
+        #[allow(deprecated)]
+        let mut stream = sqlx::query(sql).persistent(false).fetch_many(&mut *conn);
+        while let Some(item) = stream.try_next().await? {
+            match item {
+                Either::Left(done) => affected += done.rows_affected(),
+                Either::Right(row) => {
+                    has_rs = true;
+                    if columns.is_empty() {
+                        columns = pg_columns(&row);
+                    }
+                    if rows.len() >= limit {
+                        truncated = true;
+                        break;
+                    }
+                    rows.push((0..row.len()).map(|i| pg_value(&row, i)).collect());
+                }
+            }
+        }
+    }
+    Ok(query_result(columns, rows, affected, truncated, start, has_rs))
+}
+
+/// Undo snapshot inside the open transaction, under a savepoint: if it fails, the transaction carries on as it was (PostgreSQL would abort it)
+async fn pg_snapshot(conn: &mut PgConnection, sql: &str) -> AppResult<QueryResult> {
+    conn.execute("SAVEPOINT qurry_snap").await?;
+    let mut r = run_direct_on(conn, sql, crate::audit::UNDO_MAX_ROWS + 1, Instant::now()).await;
+    // A row lock needs the UPDATE privilege: a role with only SELECT and DELETE gets the snapshot without the lock (as before rows were locked)
+    if let Err(AppError::Db(sqlx::Error::Database(e))) = &r
+        && e.code().as_deref() == Some("42501")
+        && let Some(plain) = crate::audit::pg_unlocked(sql)
+    {
+        conn.execute("ROLLBACK TO SAVEPOINT qurry_snap").await?;
+        r = run_direct_on(conn, &plain, crate::audit::UNDO_MAX_ROWS + 1, Instant::now()).await;
+    }
+    conn.execute(if r.is_ok() { "RELEASE SAVEPOINT qurry_snap" } else { "ROLLBACK TO SAVEPOINT qurry_snap" }).await?;
+    r
+}
+
 /// Console tab session (per DB kind)
 pub enum Session {
     Pg(PgSession),
@@ -314,6 +377,17 @@ impl Session {
             Session::My(s) => s.run(sql, limit).await,
             Session::Redis(m) => crate::redisdb::run(m, sql, limit).await,
             Session::Plugin(c) => c.query(sql, limit).await,
+        }
+    }
+    /// Run a change with its undo snapshot (audit::UndoPlan, a SELECT … FOR UPDATE) right before it in the same transaction, so nobody changes the rows in between.
+    /// In the user's transaction (Manual · BEGIN) both join it; otherwise they get one of their own, committed right after the change (rolled back if it fails).
+    /// A failing snapshot leaves the transaction as it was, and the change still runs (without undo) — unless it was cancelled, timed out or
+    /// deadlocked (audit::stops_change): then the change doesn't run either. → (snapshot, change)
+    pub async fn run_with_snapshot(&mut self, snap: &str, sql: &str, limit: usize) -> (AppResult<QueryResult>, AppResult<QueryResult>) {
+        match self {
+            Session::Pg(s) => s.run_with_snapshot(snap, sql, limit).await,
+            Session::My(s) => s.run_with_snapshot(snap, sql, limit).await,
+            _ => (Err(AppError::Msg("Undo is kept for PostgreSQL and MySQL only".into())), self.run(sql, limit).await),
         }
     }
     pub async fn fetch(&mut self, limit: usize) -> AppResult<QueryResult> {
@@ -392,21 +466,34 @@ pub async fn cancel(pool: &PgPool, pid: i32) -> AppResult<bool> {
 /// Apply data edits in one transaction. If any fails, roll back everything.
 /// Statements in one transaction (roll back everything if any fails). exact_one = table edits: each UPDATE/DELETE must hit exactly 1 row
 pub async fn execute_batch(pool: &PgPool, statements: &[String], exact_one: bool) -> AppResult<u64> {
-    execute_batch_with(pool, statements, exact_one, false).await
+    Ok(execute_batch_with(pool, statements, exact_one, false, &[]).await?.0)
 }
 
-/// prepared = each statement as a prepared statement (extended protocol): the server refuses more than one statement per item (MCP)
-pub async fn execute_batch_with(pool: &PgPool, statements: &[String], exact_one: bool, prepared: bool) -> AppResult<u64> {
+/// prepared = each statement as a prepared statement (extended protocol): the server refuses more than one statement per item (MCP).
+/// snaps = undo snapshot to take right before each statement, in the transaction (audit::UndoPlan) → (rows changed, each snapshot's result with the rows its statement changed)
+pub async fn execute_batch_with(pool: &PgPool, statements: &[String], exact_one: bool, prepared: bool, snaps: &[Option<&str>]) -> AppResult<(u64, Vec<Option<(AppResult<QueryResult>, u64)>>)> {
     let mut tx = pool.begin().await?;
     let mut affected = 0;
-    for st in statements {
+    let mut shots = Vec::new();
+    for (i, st) in statements.iter().enumerate() {
+        let shot = match snaps.get(i).copied().flatten() {
+            Some(q) => Some(pg_snapshot(&mut tx, q).await),
+            None => None,
+        };
+        // Cancelled · timed out while locking the rows: nothing is saved (dropping tx rolls back)
+        if let Some(Err(e)) = &shot
+            && crate::audit::stops_change(e)
+        {
+            return Err(crate::audit::stopped(e, false));
+        }
         let r = if prepared { sqlx::query(st).execute(&mut *tx).await } else { tx.execute(st.as_str()).await };
         let n = r.map_err(|e| AppError::Msg(format!("{e}\n→ {st}")))?.rows_affected();
         check_exact_one(st, n, exact_one)?;
+        shots.push(shot.map(|s| (s, n)));
         affected += n;
     }
     tx.commit().await?;
-    Ok(affected)
+    Ok((affected, shots))
 }
 
 /// If a table edit's UPDATE/DELETE hits 0 or multiple rows (changed by someone else or duplicate keys), roll back everything
@@ -433,9 +520,9 @@ mod tests {
     async fn prepared_batch_refuses_multiple_statements() {
         let p = pool().await;
         sqlx::raw_sql("drop table if exists qurry_prep; create table qurry_prep (a int)").execute(&p).await.unwrap();
-        let e = execute_batch_with(&p, &["insert into qurry_prep values (1); drop table qurry_prep".into()], false, true).await.unwrap_err().to_string();
+        let e = execute_batch_with(&p, &["insert into qurry_prep values (1); drop table qurry_prep".into()], false, true, &[]).await.unwrap_err().to_string();
         assert!(e.contains("multiple commands"), "{e}");
-        assert_eq!(execute_batch_with(&p, &["insert into qurry_prep values (1)".into()], false, true).await.unwrap(), 1);
+        assert_eq!(execute_batch_with(&p, &["insert into qurry_prep values (1)".into()], false, true, &[]).await.unwrap().0, 1);
         sqlx::raw_sql("drop table qurry_prep").execute(&p).await.unwrap();
     }
 
@@ -609,5 +696,52 @@ mod tests {
         let n: i64 = sqlx::query_scalar("select count(*) from public.dbtool_batch_t").fetch_one(&p).await.unwrap();
         assert_eq!(n, 1);
         sqlx::query("drop table public.dbtool_batch_t").execute(&p).await.unwrap();
+    }
+
+    /// A failing undo snapshot leaves the transaction usable: the change still runs and commits (Auto), or joins the user's transaction (Manual)
+    async fn failed_snapshot_keeps_the_change(pool: Pool, schema: &str, drop: &str) {
+        let mut s = Session::open(&pool).await.unwrap();
+        let t = "audit_hardening_s.qurry_snap_fail";
+        for q in [schema, &format!("drop table if exists {t}"), &format!("create table {t} (id int primary key, v int)"), &format!("insert into {t} values (1, 1)")] {
+            s.run(q, 1).await.unwrap();
+        }
+        let v = |r: QueryResult| r.rows[0][0].to_string().trim_matches('"').to_string();
+        let bad = "select * from qurry_no_such_table for update";
+        let (shot, r) = s.run_with_snapshot(bad, &format!("update {t} set v = 2 where id = 1"), 10).await;
+        assert!(shot.is_err());
+        assert_eq!(r.unwrap().rows_affected, 1);
+        assert!(!s.in_tx());
+        s.set_manual(true).await.unwrap();
+        let (shot, r) = s.run_with_snapshot(bad, &format!("update {t} set v = 3 where id = 1"), 10).await;
+        assert!(shot.is_err());
+        assert!(r.unwrap().in_transaction);
+        assert!(s.in_tx());
+        s.rollback_tx().await.unwrap();
+        s.set_manual(false).await.unwrap();
+        assert_eq!(v(s.run(&format!("select v from {t}"), 1).await.unwrap()), "2");
+        // A working snapshot sees the row as it is in the transaction, which commits after the change
+        let (shot, r) = s.run_with_snapshot(&format!("select v from {t} where id = 1 for update"), &format!("update {t} set v = 4 where id = 1"), 10).await;
+        assert_eq!((v(shot.unwrap()), r.unwrap().in_transaction, s.in_tx()), ("2".into(), false, false));
+        assert_eq!(v(s.run(&format!("select v from {t}"), 1).await.unwrap()), "4");
+        s.run(drop, 1).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn pg_failed_snapshot_keeps_the_change() {
+        failed_snapshot_keeps_the_change(Pool::Pg(pool().await), "create schema if not exists audit_hardening_s", "drop schema audit_hardening_s cascade").await;
+    }
+
+    /// QURRY_TEST_MY=host:port:user:password:db
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_failed_snapshot_keeps_the_change() {
+        let Ok(e) = std::env::var("QURRY_TEST_MY") else { return };
+        let p: Vec<&str> = e.split(':').collect();
+        let cfg = ConnectionConfig {
+            id: "t".into(), name: "t".into(), kind: DbKind::Mysql, host: p[0].into(), port: p[1].parse().unwrap(), user: p[2].into(), database: p[4].into(),
+            color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+        };
+        failed_snapshot_keeps_the_change(connect(&cfg, Some(p[3])).await.unwrap(), "create database if not exists audit_hardening_s", "drop database audit_hardening_s").await;
     }
 }

@@ -1777,6 +1777,7 @@ mod tests {
             elapsed_ms: 0,
             has_result_set: true,
             in_transaction: false,
+            warning: None,
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
         let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res(&[10, 20, 30]))), error: None, running: false, auto: true };
@@ -1876,6 +1877,7 @@ mod tests {
             elapsed_ms: 0,
             has_result_set: true,
             in_transaction: false,
+            warning: None,
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "vacuum_progress");
         let d = crate::app::DbaTab { report: "vacuum_progress".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res)), error: None, running: false, auto: true };
@@ -1924,7 +1926,10 @@ mod tests {
         let entry = |id: &str, sql: &str, undo: Option<&str>| qurry_core::audit::AuditEntry {
             id: id.into(), ts: 1, conn_id: "p".into(), conn_name: "PROD".into(), database: None, sql: sql.into(), rows: Some(2), error: None, in_tx: false,
             undo: undo.map(String::from), note: undo.is_none().then(|| "More than 1000 rows change: no undo kept".into()),
+            started: false,
         };
+        // Logged before it ran with no result: its outcome is unknown, so it says so (not a row count, not "committed")
+        h.app.state.audit.add(qurry_core::audit::AuditEntry { rows: None, started: true, ..entry("c", "COMMIT", None) }).unwrap();
         h.app.state.audit.add(entry("a", "delete from big", None)).unwrap();
         h.app.state.audit.add(entry("b", "update t set a = 1 where id = 2", Some("UPDATE t SET a = 0 WHERE id = 2;"))).unwrap();
         h.console_tab();
@@ -1933,6 +1938,7 @@ mod tests {
         let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no log") };
         assert_eq!(p.items[0].label, "update t set a = 1 where id = 2");
         assert!(p.items[0].hint.starts_with("↶ undo · 2 row(s)") && p.items[0].hint.ends_with("PROD"), "{}", p.items[0].hint);
+        assert!(p.items[2].hint.starts_with("no result recorded"), "{}", p.items[2].hint);
         h.key("Enter");
         assert_eq!(h.app.tabs.len(), tabs + 1);
         assert_eq!(h.console_text(), "UPDATE t SET a = 0 WHERE id = 2;");

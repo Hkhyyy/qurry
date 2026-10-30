@@ -37,10 +37,13 @@ pub struct QueryResult {
     /// Tx: whether an uncommitted transaction is open in Manual mode
     #[serde(default)]
     pub in_transaction: bool,
+    /// It ran, but something after it failed (e.g. its result couldn't be written to the Production log): show it, don't offer to run it again
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 pub(crate) fn query_result(columns: Vec<ColumnInfo>, rows: Vec<Vec<Value>>, rows_affected: u64, truncated: bool, start: Instant, has_result_set: bool) -> QueryResult {
-    QueryResult { columns, rows, rows_affected, truncated, elapsed_ms: start.elapsed().as_millis() as u64, has_result_set, in_transaction: false }
+    QueryResult { columns, rows, rows_affected, truncated, elapsed_ms: start.elapsed().as_millis() as u64, has_result_set, in_transaction: false, warning: None }
 }
 
 /// Max connections per DB (number of tabs + metadata queries such as the tree and autocomplete)
@@ -358,6 +361,7 @@ async fn run_pg(pool: &PgPool, sql: &str, limit: usize) -> AppResult<QueryResult
         elapsed_ms: start.elapsed().as_millis() as u64,
         has_result_set,
         in_transaction: false,
+        warning: None,
     })
 }
 
@@ -380,7 +384,7 @@ pub async fn run_on(conn: &mut sqlx::PgConnection, sql: &str, limit: usize) -> A
             rows.push((0..row.len()).map(|i| pg_value(&row, i)).collect());
         }
     }
-    Ok(QueryResult { columns, rows, rows_affected: 0, truncated, elapsed_ms: start.elapsed().as_millis() as u64, has_result_set: true, in_transaction: false })
+    Ok(QueryResult { columns, rows, rows_affected: 0, truncated, elapsed_ms: start.elapsed().as_millis() as u64, has_result_set: true, in_transaction: false, warning: None })
 }
 
 async fn export_pg(pool: &PgPool, sql: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {

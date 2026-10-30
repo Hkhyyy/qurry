@@ -1,6 +1,6 @@
 //! Screen drawing
 use crate::keys::disp;
-use crate::app::{App, Drag, DropTarget, FieldKind, Focus, Popup, SplitDir, TabKind};
+use crate::app::{App, Drag, DropTarget, FieldKind, Focus, Popup, SplitDir, TabKind, WARNING};
 use crate::tree::NodeKind;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Tabs, Wrap};
@@ -414,7 +414,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                     .rev()
                     .take(res.height as usize)
                     .rev()
-                    .map(|(e, s)| Line::styled(s.clone(), Style::default().fg(if *e { DANGER } else if s.contains("> ") { ACCENT } else { Color::Gray })))
+                    .map(|(e, s)| Line::styled(s.clone(), Style::default().fg(if *e { DANGER } else if s.starts_with(WARNING) { WARN } else if s.contains("> ") { ACCENT } else { Color::Gray })))
                     .collect();
                 let p = Paragraph::new(if lines.is_empty() { vec![Line::styled(format!("Execute a statement ({k_run}) to see the output."), Style::default().fg(DIM))] } else { lines })
                     .wrap(Wrap { trim: false })

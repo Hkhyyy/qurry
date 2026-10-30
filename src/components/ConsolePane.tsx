@@ -57,7 +57,7 @@ export interface ResultEntry {
 export interface OutputLine {
   ts: string;
   text: string;
-  level: "sql" | "info" | "error";
+  level: "sql" | "info" | "warn" | "error";
 }
 
 interface Props {

@@ -157,7 +157,7 @@ pub fn to_result(plan: &PlanNode) -> QueryResult {
         }
     }
     walk(plan, 0, &mut rows);
-    QueryResult { columns, rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false }
+    QueryResult { columns, rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None }
 }
 
 #[cfg(test)]
