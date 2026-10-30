@@ -1,5 +1,5 @@
-//! 드라이버 플러그인 호스트: qurry-driver-<이름> 실행 파일을 띄워 stdio 로 JSON 한 줄씩 주고받는다 (프로토콜: crates/driver).
-//! 실행 파일 위치: QURRY_DRIVERS_DIR → 설정 폴더/drivers → 이 실행 파일 옆 (개발 빌드)
+//! Driver plugin host: launches the qurry-driver-<name> executable and exchanges one JSON line at a time over stdio (protocol: crates/driver).
+//! Executable location: QURRY_DRIVERS_DIR → config folder/drivers → next to this executable (dev builds)
 use crate::error::{AppError, AppResult};
 use crate::store::{ConnectionConfig, DbKind};
 use serde::de::DeserializeOwned;
@@ -8,19 +8,19 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-/// 드라이버가 깔려 있지 않다 (UI 는 이 글로 시작하면 받을지 묻는다)
+/// The driver is not installed (if the message starts with this, the UI asks whether to download it)
 pub const MISSING: &str = "Driver not installed:";
 
 pub fn exe_name(driver: &str) -> String {
     format!("qurry-driver-{driver}{}", std::env::consts::EXE_SUFFIX)
 }
 
-/// 받은 드라이버를 두는 폴더
+/// Folder for downloaded drivers
 pub fn drivers_dir() -> PathBuf {
     crate::config_dir().join("drivers")
 }
 
-/// 드라이버 실행 파일 (없으면 None)
+/// Driver executable (None if missing)
 pub fn driver_path(driver: &str) -> Option<PathBuf> {
     let name = exe_name(driver);
     let mut dirs: Vec<PathBuf> = vec![];
@@ -28,7 +28,7 @@ pub fn driver_path(driver: &str) -> Option<PathBuf> {
         dirs.push(d.into());
     }
     dirs.push(drivers_dir());
-    // 개발 빌드: target/debug 에 같이 있다. 앱 번들: 실행 파일 옆
+    // Dev builds: it sits in target/debug too. App bundle: next to the executable
     if let Some(d) = std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf())) {
         dirs.push(d.clone());
         if let Some(up) = d.parent() {
@@ -43,7 +43,7 @@ struct Io {
     stdout: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
 }
 
-/// 띄운 드라이버 하나 (접속 하나)
+/// One launched driver (one connection)
 pub struct PluginConn {
     pub driver: String,
     io: tokio::sync::Mutex<Io>,
@@ -66,13 +66,13 @@ impl Drop for PluginConn {
 }
 
 impl PluginConn {
-    /// 드라이버를 띄우고 프로토콜을 맞춘다
+    /// Launch the driver and negotiate the protocol
     pub async fn start(driver: &str) -> AppResult<std::sync::Arc<Self>> {
         let path = driver_path(driver).ok_or_else(|| AppError::Msg(format!("{MISSING} {driver}")))?;
         let mut child = tokio::process::Command::new(&path)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            // 드라이버의 stderr 가 TUI 화면을 깨뜨리지 않게
+            // So the driver's stderr does not corrupt the TUI screen
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true)
             .spawn()
@@ -87,7 +87,7 @@ impl PluginConn {
         Ok(c)
     }
 
-    /// 요청 하나 → 결과 (한 번에 하나씩)
+    /// One request → result (one at a time)
     pub async fn call<T: DeserializeOwned>(&self, method: &str, params: Value) -> AppResult<T> {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let mut io = self.io.lock().await;
@@ -111,8 +111,13 @@ impl PluginConn {
     }
 
     pub async fn query(&self, sql: &str, limit: usize) -> AppResult<crate::db::QueryResult> {
+        self.query_opts(sql, limit, false).await
+    }
+
+    /// read_only = a read that passed guard (MCP). Makes the driver read-only on the server side too (ClickHouse readonly)
+    pub async fn query_opts(&self, sql: &str, limit: usize, read_only: bool) -> AppResult<crate::db::QueryResult> {
         let start = std::time::Instant::now();
-        let o: qurry_driver::QueryOut = self.call("query", json!({ "sql": sql, "limit": limit })).await?;
+        let o: qurry_driver::QueryOut = self.call("query", json!({ "sql": sql, "limit": limit, "readOnly": read_only })).await?;
         Ok(crate::db::QueryResult {
             columns: o.columns.into_iter().map(|c| crate::db::ColumnInfo { name: c.name, type_name: c.type_name }).collect(),
             rows: o.rows,
@@ -125,7 +130,7 @@ impl PluginConn {
     }
 }
 
-/// 이 플랫폼의 릴리스 이름 끝 (드라이버 파일: qurry-driver-<이름>_<버전>_<타깃>.tar.gz)
+/// Release name suffix for this platform (driver file: qurry-driver-<name>_<version>_<target>.tar.gz)
 pub fn target() -> Option<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => Some("aarch64-apple-darwin"),
@@ -135,12 +140,12 @@ pub fn target() -> Option<&'static str> {
     }
 }
 
-/// 릴리스의 드라이버 파일 이름
+/// Driver file name in the release
 pub fn asset_name(driver: &str, version: &str, target: &str) -> String {
     format!("qurry-driver-{driver}_{version}_{target}.tar.gz")
 }
 
-/// 드라이버를 받아 깐다: 이 버전 릴리스에서 HTTPS 로 받고, SHA256SUMS 서명(업데이트와 같은 키)과 해시를 확인한 뒤 drivers 폴더로. 깐 경로
+/// Download and install a driver: fetch over HTTPS from this version's release, verify the SHA256SUMS signature (same key as updates) and hash, then into the drivers folder. Returns the installed path
 pub async fn install(driver: &str) -> AppResult<PathBuf> {
     let driver = driver.to_string();
     tokio::task::spawn_blocking(move || install_blocking(&driver, env!("CARGO_PKG_VERSION"))).await.map_err(|e| AppError::Msg(e.to_string()))?
@@ -188,7 +193,7 @@ fn install_blocking(driver: &str, version: &str) -> AppResult<PathBuf> {
         let dir = drivers_dir();
         std::fs::create_dir_all(&dir)?;
         let dest = dir.join(exe_name(driver));
-        // 바꿔 넣기: 임시 이름으로 옮긴 뒤 rename (쓰는 중인 드라이버가 깨지지 않게)
+        // Swap in: move under a temporary name, then rename (so a driver in use is not broken)
         let part = dir.join(format!("{}.part", exe_name(driver)));
         std::fs::copy(&exe, &part)?;
         #[cfg(unix)]
@@ -203,7 +208,7 @@ fn install_blocking(driver: &str, version: &str) -> AppResult<PathBuf> {
     r
 }
 
-/// 드라이버로 접속한다
+/// Connect via a driver
 pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, port: Option<u16>) -> AppResult<std::sync::Arc<PluginConn>> {
     let driver = cfg.kind.driver().ok_or_else(|| AppError::Msg(format!("{:?} has no driver plugin", cfg.kind)))?;
     let c = PluginConn::start(driver).await?;
@@ -213,13 +218,13 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, port: Optio
         user: cfg.user.clone(),
         password: password.map(String::from),
         database: cfg.database.clone(),
-        options: json!({ "readOnly": cfg.read_only, "ssl": cfg.active_ssl().map(|s| s.mode().to_string()), "oracleClient": cfg.options.oracle_client }),
+        options: json!({ "readOnly": cfg.read_only, "sandbox": crate::SANDBOX.load(std::sync::atomic::Ordering::Relaxed), "ssl": cfg.active_ssl().map(|s| s.mode().to_string()), "oracleClient": cfg.options.oracle_client }),
     };
     let _: Value = c.call("connect", serde_json::to_value(params)?).await?;
     Ok(c)
 }
 
-/// 드라이버가 없는 DB 종류인지
+/// Whether this DB kind has no driver
 pub fn is_plugin(kind: DbKind) -> bool {
     kind.driver().is_some()
 }
@@ -228,7 +233,7 @@ pub fn is_plugin(kind: DbKind) -> bool {
 mod tests {
     use super::*;
 
-    /// 드라이버 공통 시험: 테이블 만들기 → 넣기 → 조회 (limit) → 목록·상세 (PK·FK) → DDL
+    /// Common driver test: create table → insert → select (limit) → list/details (PK, FK) → DDL
     pub(crate) async fn conformance(cfg: ConnectionConfig, password: Option<&str>, schema: &str, setup: &[&str], parent: &str, child: &str, fk: bool) {
         let c = connect(&cfg, password, None).await.unwrap_or_else(|e| panic!("{:?}: {e}", cfg.kind));
         let v: String = c.call("version", Value::Null).await.unwrap();
@@ -272,12 +277,12 @@ mod tests {
             "insert into child values (1, 1, 'x'), (2, 2, 'y')",
         ], "parent", "child", true).await;
         std::fs::remove_file(file).ok();
-        // 없는 드라이버는 정해진 글로 (UI 가 받을지 묻는다)
+        // A missing driver gives the fixed message (the UI asks whether to download it)
         let e = PluginConn::start("nope").await.unwrap_err().to_string();
         assert!(e.starts_with(MISSING), "{e}");
     }
 
-    /// 서버 DB: QURRY_TEST_<KIND>=host:port:user:password:database 일 때만
+    /// Server DBs: only when QURRY_TEST_<KIND>=host:port:user:password:database is set
     fn server_cfg(kind: &str, env: &str) -> Option<(ConnectionConfig, String)> {
         let e = std::env::var(env).ok()?;
         let p: Vec<&str> = e.splitn(5, ':').collect();
@@ -320,7 +325,7 @@ mod tests {
         ], "q_parent", "q_child", true).await;
     }
 
-    /// MongoDB: 셸 문법 (insertMany · find · sort/limit · aggregate · countDocuments), 탐색기 SELECT * FROM, 필드 짐작
+    /// MongoDB: shell syntax (insertMany · find · sort/limit · aggregate · countDocuments), explorer SELECT * FROM, field inference
     #[tokio::test]
     #[ignore]
     async fn mongodb_driver_shell_queries() {
@@ -339,7 +344,7 @@ mod tests {
         assert_eq!(a.rows[0][a.columns.iter().position(|c| c.name == "total").unwrap()], json!(175));
         assert_eq!(c.query("db.q_users.updateMany({age: {$gt: 50}}, {$set: {senior: true}})", 1).await.unwrap().rows_affected, 2);
         assert_eq!(c.query("db.q_users.deleteOne({name: 'Ada'})", 1).await.unwrap().rows_affected, 1);
-        // 탐색기: 컬렉션 목록, SELECT * FROM db.coll, 필드 짐작
+        // Explorer: collection list, SELECT * FROM db.coll, field inference
         let objs: crate::meta::SchemaObjects = c.call("objects", json!({ "schema": cfg.database })).await.unwrap();
         assert!(objs.relations.iter().any(|r| r.name == "q_users"));
         let all = c.query(&format!("SELECT * FROM {}.q_users", cfg.database), 500).await.unwrap();
@@ -350,7 +355,7 @@ mod tests {
         c.query("db.q_users.drop()", 1).await.ok();
     }
 
-    /// Oracle: Instant Client 가 있어야 한다 (ORACLE_CLIENT_LIB_DIR). 스키마 = 사용자 (대문자)
+    /// Oracle: requires Instant Client (ORACLE_CLIENT_LIB_DIR). Schema = user (uppercase)
     #[tokio::test]
     #[ignore]
     async fn oracle_driver_conformance() {
@@ -371,7 +376,7 @@ mod tests {
         ], "q_parent", "q_child", true).await;
     }
 
-    /// Qdrant: REST 콘솔 (컬렉션 만들기 → upsert → search), 탐색기 (목록 · scroll · 벡터/payload 컬럼)
+    /// Qdrant: REST console (create collection → upsert → search), explorer (list · scroll · vector/payload columns)
     #[tokio::test]
     #[ignore]
     async fn qdrant_driver_rest_console() {
@@ -407,7 +412,7 @@ mod tests {
         c.query("DELETE /collections/q_items", 1).await.unwrap();
     }
 
-    /// Chroma: 이름으로 쓴 컬렉션 경로, get/query 의 열 배열 → 행
+    /// Chroma: collection paths by name, column arrays from get/query → rows
     #[tokio::test]
     #[ignore]
     async fn chroma_driver_rest_console() {
@@ -439,7 +444,7 @@ mod tests {
         c.query("DELETE /collections/q_docs", 1).await.unwrap();
     }
 
-    /// Milvus: POST 경로에 dbName 채우기, 몇 건 넣었는지, search, 탐색기
+    /// Milvus: fill dbName in POST paths, insert count, search, explorer
     #[tokio::test]
     #[ignore]
     async fn milvus_driver_rest_console() {
@@ -474,7 +479,7 @@ mod tests {
         assert!(install_blocking("../evil", "0.2.0").unwrap_err().to_string().contains("bad driver name"));
     }
 
-    /// 없는 버전의 릴리스에서는 받지 못한다 (네트워크가 있을 때만 의미가 있다)
+    /// Releases of nonexistent versions cannot be downloaded (meaningful only with network access)
     #[test]
     #[ignore]
     fn install_fails_cleanly_for_a_missing_release() {

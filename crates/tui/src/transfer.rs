@@ -1,11 +1,11 @@
-//! 데이터 내보내기 (형식 → 파일/클립보드 → 경로) 와 가져오기 (파일 → 컬럼 짝짓기 확인 → 넣기). 진행은 상태줄 막대
+//! Data export (format → file/clipboard → path) and import (file → confirm column mapping → insert). Progress as a status-line bar
 use crate::app::{App, Focus, PAction, PItem, Palette, Popup, Tab, TabKind, byte_offset};
 use crate::tree::NodeKind;
 use qurry_core::sql;
 use qurry_core::transfer::{Dest, Format, ImportSpec};
 use tui_textarea::TextArea;
 
-/// 내보낼 것: (접속 대상, SQL, 이름, SQL INSERT 대상 테이블)
+/// What to export: (connection target, SQL, name, target table for SQL INSERT)
 type Source = (String, String, String, Option<(String, String)>);
 
 /// 1234567 → "1,234,567"
@@ -17,7 +17,7 @@ fn home() -> String {
     std::env::var("HOME").unwrap_or_default()
 }
 
-/// "~/x" → 홈 아래
+/// "~/x" → under home
 fn expand(p: &str) -> String {
     match p.trim().strip_prefix("~/") {
         Some(rest) => format!("{}/{rest}", home()),
@@ -25,14 +25,14 @@ fn expand(p: &str) -> String {
     }
 }
 
-/// 파일 열 이름 → 같은 이름의 컬럼 (대소문자·공백·_·- 무시). GUI lib/transfer.ts autoMap 과 같다
+/// File column name → column with the same name (ignoring case·spaces·_·-). Same as autoMap in GUI lib/transfer.ts
 fn match_column<'a>(file: &str, cols: &'a [String]) -> Option<&'a String> {
     let norm = |s: &str| s.to_lowercase().chars().filter(|c| !c.is_whitespace() && *c != '_' && *c != '-').collect::<String>();
     cols.iter().find(|c| norm(c) == norm(file))
 }
 
 impl App {
-    /// 트리에서 고른 테이블, 아니면 지금 탭 (테이블: 걸러 둔 그대로, 콘솔: 커서의 문장)
+    /// The table picked in the tree, otherwise the current tab (table: as filtered, console: the statement at the cursor)
     fn export_source(&self) -> Option<Source> {
         if self.focus == Focus::Tree
             && let Some(n) = self.tree.selected().filter(|n| n.is_relation())
@@ -64,7 +64,7 @@ impl App {
         self.popup = Some(Popup::Palette(Palette { title: title.into(), input: TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
     }
 
-    /// 1. 형식
+    /// 1. Format
     pub fn export_start(&mut self) {
         if self.export_source().is_none() {
             self.status = "Select a table, or open a table or console tab to export".into();
@@ -82,7 +82,7 @@ impl App {
         self.chooser("Export Data — format", items);
     }
 
-    /// 2. 파일 / 클립보드
+    /// 2. File / clipboard
     pub fn export_dest(&mut self, f: Format) {
         let items = vec![
             PItem { label: "File…".into(), hint: "all rows, choose where to save".into(), action: PAction::ExportTo(f, false) },
@@ -91,7 +91,7 @@ impl App {
         self.chooser(&format!("Export {} — to", f.label()), items);
     }
 
-    /// 3. 파일이면 경로를 묻고, 돌린다
+    /// 3. If a file, ask for the path, then run
     pub fn export_to(&mut self, f: Format, clipboard: bool) {
         let Some(src) = self.export_source() else { return };
         if clipboard {
@@ -127,7 +127,7 @@ impl App {
         });
     }
 
-    /// 상태줄에 올리고 진행이 바뀌는 동안 화면을 다시 그리게 한다
+    /// Put it on the status line and redraw the screen while the progress changes
     pub(crate) fn start_job(&mut self, label: &str) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         let job = self.state.start_job(&id);
@@ -148,9 +148,9 @@ impl App {
         self.jobs.retain(|j| j.0 != id);
     }
 
-    /// 가져오기: 트리에서 고른 테이블·스키마(새 테이블), 아니면 지금 테이블 탭. 파일 경로를 묻는다
+    /// Import: the table·schema (new table) picked in the tree, otherwise the current table tab. Asks for the file path
     pub fn import_start(&mut self) {
-        // (대상, 스키마, 테이블, 이미 아는 컬럼)
+        // (target, schema, table, already-known columns)
         type To = (String, String, Option<String>, Option<Vec<String>>);
         let mut to: Option<To> = None;
         if self.focus == Focus::Tree
@@ -183,7 +183,7 @@ impl App {
         };
         match (table, cols) {
             (Some(t), Some(c)) => self.import_confirm(target, schema, Some(t), c, pv, path),
-            // 컬럼을 읽어 와서
+            // Read the columns, then
             (Some(t), None) => {
                 let st = self.state.clone();
                 let (tg, sc, tb) = (target.clone(), schema.clone(), t.clone());
@@ -192,7 +192,7 @@ impl App {
                     Err(e) => a.status = format!("Import: {e}"),
                 });
             }
-            // 새 테이블: 파일 이름, 열 이름 그대로
+            // New table: file name, column names as is
             (None, _) => {
                 let cols = pv.columns.clone();
                 self.import_confirm(target, schema, None, cols, pv, path)
@@ -243,7 +243,7 @@ impl App {
                     if create {
                         a.status += " (Refresh the explorer to see the new table)";
                     }
-                    // 열려 있는 그 테이블 탭은 다시 불러온다
+                    // Reload that table's tab if it's open
                     let open: Vec<u64> = a.tabs.iter().filter(|t| matches!(&t.kind, TabKind::Table(tt) if tt.schema == schema && tt.table == table)).map(|t| t.id).collect();
                     for id in open {
                         a.reload_table(id);
@@ -254,7 +254,7 @@ impl App {
         });
     }
 
-    /// 백업·복원 대상: 트리에서 고른 Data Source·DB, 아니면 지금 탭
+    /// Backup·restore target: the Data Source·DB picked in the tree, otherwise the current tab
     fn backup_target(&self) -> Option<(String, String)> {
         if self.focus == Focus::Tree
             && let Some(n) = self.tree.selected()
@@ -264,7 +264,7 @@ impl App {
         self.tabs.get(self.active).map(|t| (t.conn.clone(), t.db.clone()))
     }
 
-    /// ⌃K › Back Up Database…: 파일 경로 (.dump = PG custom, 나머지는 SQL) → pg_dump / mysqldump, 상태줄 진행
+    /// ⌃K › Back Up Database…: file path (.dump = PG custom, others SQL) → pg_dump / mysqldump, progress on the status line
     pub fn backup_start(&mut self) {
         let Some((conn, db)) = self.backup_target() else {
             self.status = "Select a data source or database first".into();
@@ -291,7 +291,7 @@ impl App {
         });
     }
 
-    /// ⌃K › Restore Database…: 백업 파일 → 묻고 → pg_restore / psql / mysql
+    /// ⌃K › Restore Database…: backup file → confirm → pg_restore / psql / mysql
     pub fn restore_start(&mut self) {
         let Some((conn, db)) = self.backup_target() else {
             self.status = "Select a data source or database first".into();
@@ -321,10 +321,10 @@ impl App {
     }
 }
 
-/// 오늘 날짜 (YYYY-MM-DD, 파일 이름용)
+/// Today's date (YYYY-MM-DD, for file names)
 fn chrono_date() -> String {
     let days = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() / 86400).unwrap_or(0) as i64;
-    // 1970-01-01 부터 날 수 → 연·월·일 (Howard Hinnant 알고리즘)
+    // Days since 1970-01-01 → year·month·day (Howard Hinnant's algorithm)
     let z = days + 719468;
     let era = z.div_euclid(146097);
     let doe = z - era * 146097;

@@ -1,10 +1,10 @@
-//! Manage Shown Schemas: 트리에 보일 DB·스키마를 고르는 창 (GUI src/components/ScopePopup.tsx 와 같은 규칙).
-//! 상태와 체크 규칙만 여기 있고, 그리기는 ui.rs, 키는 input.rs 가 한다
+//! Manage Shown Schemas: window for choosing which DBs and schemas show in the tree (same rules as GUI src/components/ScopePopup.tsx).
+//! Only state and check rules live here; drawing is in ui.rs, keys in input.rs
 use qurry_core::meta::SchemaInfo;
 use qurry_core::store::{Scope, SCOPE_ALL, SCOPE_DEFAULT};
 use std::collections::{HashMap, HashSet};
 
-/// 창의 한 줄
+/// One line of the window
 #[derive(Debug, Clone, PartialEq)]
 pub enum Row {
     AllDbs,
@@ -13,16 +13,16 @@ pub enum Row {
     AllSchemas(String),
     DefaultSchema(String),
     Schema { db: String, name: String, system: bool },
-    /// 스키마를 읽는 중이거나 실패 (db, 글)
+    /// Schemas loading or failed (db, text)
     Note(String, String),
 }
 
-/// 체크 표시
+/// Check mark
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Check {
     Off,
     On,
-    /// All databases / Default database 규칙으로만 보인다
+    /// Shown only by the All databases / Default database rules
     Implicit,
 }
 
@@ -30,18 +30,18 @@ pub struct ScopeEditor {
     pub conn: String,
     pub dbs: Vec<String>,
     pub default_db: String,
-    /// 보일 DB ("*" = 전부, "@default" = 기본 DB)
+    /// DBs to show ("*" = all, "@default" = default DB)
     databases: Vec<String>,
-    /// DB → 보일 스키마 (없으면 전부)
+    /// DB → schemas to show (none = all)
     schemas: HashMap<String, Vec<String>>,
     open: HashSet<String>,
-    /// 읽은 스키마 (없으면 읽는 중)
+    /// Loaded schemas (none = loading)
     loaded: HashMap<String, Result<Vec<SchemaInfo>, String>>,
     pub sel: usize,
 }
 
 impl ScopeEditor {
-    /// focus_db: DB 줄에서 열었으면 그 DB 를 펼치고 고른 채로 (스키마는 불러와서 set_schemas 로 넣는다)
+    /// focus_db: if opened from a DB line, start with that DB expanded and selected (schemas are loaded and passed in via set_schemas)
     pub fn new(conn: String, dbs: Vec<String>, default_db: String, scope: &Scope, focus_db: Option<&str>) -> Self {
         let databases = match &scope.databases {
             Some(d) if !d.is_empty() => d.clone(),
@@ -68,7 +68,7 @@ impl ScopeEditor {
                 Some(Ok(list)) => {
                     out.push(Row::AllSchemas(db.clone()));
                     out.push(Row::DefaultSchema(db.clone()));
-                    // 시스템 스키마 먼저, 그다음 이름순 (GUI 와 같다)
+                    // System schemas first, then by name (same as the GUI)
                     let mut list: Vec<&SchemaInfo> = list.iter().collect();
                     list.sort_by(|a, b| b.is_system.cmp(&a.is_system).then_with(|| a.name.cmp(&b.name)));
                     out.extend(list.into_iter().map(|s| Row::Schema { db: db.clone(), name: s.name.clone(), system: s.is_system }));
@@ -78,7 +78,7 @@ impl ScopeEditor {
         out
     }
 
-    /// 이 DB 에서 보일 스키마 (필터가 없으면 전부)
+    /// Schemas to show for this DB (all if there is no filter)
     fn sch_list(&self, db: &str) -> Vec<String> {
         self.schemas.get(db).cloned().unwrap_or_else(|| vec![SCOPE_ALL.into()])
     }
@@ -101,7 +101,7 @@ impl ScopeEditor {
         }
     }
 
-    /// Space: 고른 줄을 켜고 끈다
+    /// Space: toggle the selected line
     pub fn toggle(&mut self) {
         fn flip(v: &mut Vec<String>, x: &str) {
             if let Some(i) = v.iter().position(|d| d == x) {
@@ -129,14 +129,14 @@ impl ScopeEditor {
         }
     }
 
-    /// →: DB 를 펼친다. 아직 스키마를 안 읽었으면 그 DB 이름 (불러올 것)
+    /// →: expand the DB. If its schemas aren't loaded yet, the DB name (to load)
     pub fn expand(&mut self) -> Option<String> {
         let Some(Row::Db(db)) = self.rows().get(self.sel).cloned() else { return None };
         self.open.insert(db.clone());
         (!self.loaded.contains_key(&db)).then_some(db)
     }
 
-    /// ←: DB 를 접는다 (스키마 줄에서는 그 DB 로)
+    /// ←: collapse the DB (from a schema line, go to its DB)
     pub fn collapse(&mut self) {
         let parent = match self.rows().get(self.sel).cloned() {
             Some(Row::Db(db)) => {
@@ -158,7 +158,7 @@ impl ScopeEditor {
         self.sel = (self.sel as isize + d).clamp(0, n.saturating_sub(1) as isize) as usize;
     }
 
-    /// 저장할 범위 ("전부"는 필터 없음으로 정리)
+    /// Scope to save ("all" is normalized to no filter)
     pub fn scope(&self) -> Scope {
         let all = |v: &Vec<String>| v.len() == 1 && v[0] == SCOPE_ALL;
         Scope {
@@ -184,7 +184,7 @@ mod tests {
         e.sel = e.rows().iter().position(|r| *r == row).unwrap_or_else(|| panic!("no row {row:?} in {:?}", e.rows()));
     }
 
-    /// 범위가 없으면 All databases 만 켜져 있고, DB 들은 그 규칙으로 보인다
+    /// With no scope, only All databases is checked, and DBs show by that rule
     #[test]
     fn starts_from_all_databases() {
         let e = editor(Scope::default());
@@ -195,7 +195,7 @@ mod tests {
         assert_eq!(e.scope(), Scope::default());
     }
 
-    /// DB 를 골라 보이게: All databases 를 끄고 shop 을 켜면 shop 만
+    /// Pick a DB to show: turning off All databases and on shop shows only shop
     #[test]
     fn pick_databases() {
         let mut e = editor(Scope::default());
@@ -206,14 +206,14 @@ mod tests {
         assert_eq!(e.check(&Row::Db("shop".into())), Check::On);
         assert_eq!(e.check(&Row::Db("app".into())), Check::Off);
         assert_eq!(e.scope().databases, Some(vec!["shop".to_string()]));
-        // Default database 를 켜면 postgres 도 (규칙으로)
+        // Turning on Default database also shows postgres (by the rule)
         select(&mut e, Row::DefaultDb);
         e.toggle();
         assert_eq!(e.check(&Row::Db("postgres".into())), Check::Implicit);
         assert_eq!(e.scope().databases, Some(vec!["shop".to_string(), SCOPE_DEFAULT.to_string()]));
     }
 
-    /// DB 를 펼치면 스키마를 불러오고 (시스템 스키마 먼저), 하나만 고르면 그 DB 는 그 스키마만
+    /// Expanding a DB loads its schemas (system schemas first); picking just one limits that DB to that schema
     #[test]
     fn pick_schemas_of_a_database() {
         let mut e = editor(Scope::default());
@@ -233,25 +233,25 @@ mod tests {
                 Row::Schema { db: "shop".into(), name: "sales".into(), system: false },
             ]
         );
-        // 필터가 없으면 All schemas 가 켜져 있다
+        // With no filter, All schemas is checked
         assert_eq!(e.check(&Row::AllSchemas("shop".into())), Check::On);
-        // GUI 와 같은 순서: sales 를 켜고 All schemas 를 끈다 (전부 끄면 다시 "전부")
+        // Same order as the GUI: turn on sales and turn off All schemas (turning everything off goes back to "all")
         select(&mut e, Row::Schema { db: "shop".into(), name: "sales".into(), system: false });
         e.toggle();
         select(&mut e, Row::AllSchemas("shop".into()));
         e.toggle();
         assert_eq!(e.check(&Row::Schema { db: "shop".into(), name: "public".into(), system: false }), Check::Off);
         assert_eq!(e.scope().schemas.get("shop"), Some(&vec!["sales".to_string()]));
-        // 스키마 줄에서 ← 는 DB 로 가고, 한 번 더 ← 는 접는다
+        // On a schema line, ← goes to the DB, and another ← collapses it
         e.collapse();
         assert_eq!(e.rows()[e.sel], Row::Db("shop".into()));
         e.collapse();
         assert!(!e.rows().contains(&Row::AllSchemas("shop".into())));
-        // 이미 읽었으면 다시 펼칠 때 또 부르지 않는다
+        // Once loaded, expanding again doesn't fetch again
         assert_eq!(e.expand(), None);
     }
 
-    /// 지금 범위에서 시작: Default schema 는 public 을 켠 것으로 보인다
+    /// Starting from the current scope: Default schema shows as public checked
     #[test]
     fn starts_from_saved_scope() {
         let scope = Scope { databases: Some(vec!["shop".into()]), schemas: HashMap::from([("shop".to_string(), vec![SCOPE_DEFAULT.to_string()])]) };
@@ -265,7 +265,7 @@ mod tests {
         assert_eq!(e.scope(), scope);
     }
 
-    /// 실패하면 그 줄에 오류를 보인다
+    /// On failure, show the error on that line
     #[test]
     fn schema_load_error_is_shown() {
         let mut e = editor(Scope::default());

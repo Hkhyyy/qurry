@@ -1,4 +1,4 @@
-//! Qurry 드라이버: DuckDB (파일 하나, :memory: 도). 스키마가 있다 (기본 main)
+//! Qurry driver: DuckDB (a single file, :memory: too). Has schemas (default main)
 use duckdb::{Connection, types::Value as DV};
 use qurry_driver::{Column, ConnectParams, Driver, QueryOut, ok, params, serve};
 use serde_json::{Value, json};
@@ -35,7 +35,7 @@ fn value(v: DV) -> Value {
     }
 }
 
-/// 결과를 돌려주는 문장인지 (아니면 execute 해서 바뀐 행 수)
+/// Whether the statement returns results (otherwise execute it for the affected row count)
 fn returns_rows(sql: &str) -> bool {
     let w = sql.trim_start().split(|c: char| c.is_whitespace() || c == '(').next().unwrap_or("").to_lowercase();
     ["select", "with", "show", "describe", "pragma", "values", "table", "from", "explain", "summarize", "call"].contains(&w.as_str())
@@ -82,13 +82,24 @@ impl Driver for Duck {
                 let c: ConnectParams = params(p)?;
                 let path = if c.database.trim().is_empty() { ":memory:" } else { c.database.trim() };
                 let read_only = c.options.get("readOnly").and_then(Value::as_bool).unwrap_or(false);
-                let cfg = duckdb::Config::default().access_mode(if read_only { duckdb::AccessMode::ReadOnly } else { duckdb::AccessMode::ReadWrite }).map_err(|e| e.to_string())?;
+                let mut cfg = duckdb::Config::default().access_mode(if read_only { duckdb::AccessMode::ReadOnly } else { duckdb::AccessMode::ReadWrite }).map_err(|e| e.to_string())?;
+                // MCP: disable local file · URL reads and extension install · load, and lock it so it can't be re-enabled
+                if c.options.get("sandbox").and_then(Value::as_bool).unwrap_or(false) {
+                    cfg = cfg.enable_external_access(false).and_then(|c| c.enable_autoload_extension(false)).and_then(|c| c.with("lock_configuration", "true")).map_err(|e| e.to_string())?;
+                }
                 self.conn = Some(Connection::open_with_flags(path, cfg).map_err(|e| format!("{path}: {e}"))?);
                 ok(Value::Null)
             }
             "query" => {
                 let sql = p.get("sql").and_then(Value::as_str).unwrap_or("");
                 let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(500) as usize;
+                // A read (MCP): run it in a transaction that is always rolled back (DuckDB rolls back DDL too), whatever the checks missed
+                if p.get("readOnly").and_then(Value::as_bool).unwrap_or(false) {
+                    self.db()?.execute_batch("BEGIN TRANSACTION").map_err(|e| e.to_string())?;
+                    let r = self.query(sql, limit);
+                    let back = self.db()?.execute_batch("ROLLBACK").map_err(|e| e.to_string());
+                    return ok(r.and_then(|o| back.map(|_| o))?);
+                }
                 ok(self.query(sql, limit)?)
             }
             "databases" => ok(self.col("SELECT database_name FROM duckdb_databases() WHERE NOT internal ORDER BY 1")?.into_iter().map(|r| r[0].clone()).collect::<Vec<_>>()),

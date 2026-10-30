@@ -10,7 +10,7 @@ export interface SwitchItem {
   color?: string | null;
 }
 
-/** ⌃⇥ Switcher: ⌃ 를 누르고 있는 동안 ⇥ 로 이동, ⌃ 를 떼면 선택 */
+/** ⌃⇥ Switcher: while holding ⌃, move with ⇥; release ⌃ to select */
 export function Switcher({ items, start, onPick, onClose }: { items: SwitchItem[]; start: number; onPick: (k: string) => void; onClose: () => void }) {
   const [i, setI] = useState(Math.min(start, items.length - 1));
   const iRef = useRef(i);
@@ -55,7 +55,7 @@ export function Switcher({ items, start, onPick, onClose }: { items: SwitchItem[
   );
 }
 
-/** ⌘e Recent Files: 입력하면 바로 거른다 (speed search) */
+/** ⌘e Recent Files: filters as you type (speed search) */
 export function RecentFiles({ items, onPick, onClose, title = "Recent Files", start }: { items: SwitchItem[]; onPick: (k: string) => void; onClose: () => void; title?: string; start?: number }) {
   const [q, setQ] = useState("");
   const [i, setI] = useState(start ?? (items.length > 1 ? 1 : 0));

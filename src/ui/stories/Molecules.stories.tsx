@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Badge, Checkbox, ColorPicker, DetailRow, EmptyState, Field, FormSection, Hint, Kbd, KeyHints, ListItem, MenuItem, MenuLabel, MenuSeparator, Notice, RadioGroup, RailItem, SearchField, SectionTitle, Select, StatusItem, TabItem, Tabs, Text, TextInput, TreeRow } from "..";
 import { DatabaseIcon, FolderIcon, PgIcon, SchemaIcon, TableIcon } from "../icons";
 
-/** 분자: 원자 몇 개를 묶은 한 줄 · 한 칸 */
+/** Molecules: a row · cell made of a few atoms */
 const meta: Meta = { title: "GUI/2 Molecules" };
 export default meta;
 type S = StoryObj;
@@ -111,7 +111,7 @@ export const Feedback: S = {
   ),
 };
 
-/** 목록 한 줄: 검색 결과 · 히스토리 · 전환기 · 마이그레이션 · RAG */
+/** List row: search results · history · switcher · migration · RAG */
 export const ListItems: S = {
   name: "ListItem",
   render: () => (
@@ -127,7 +127,7 @@ export const ListItems: S = {
   ),
 };
 
-/** 상세 줄: 확인 창의 문장 + 행 수 · pid */
+/** Detail row: confirm dialog statement + row count · pid */
 export const DetailRows: S = {
   name: "DetailRow",
   render: () => (
@@ -160,7 +160,7 @@ export const MenuItems: S = {
   ),
 };
 
-/** 트리 한 줄: 탐색기 · 스키마 고르기 · Redis 키 */
+/** Tree row: explorer · schema picker · Redis keys */
 export const TreeRows: S = {
   name: "TreeRow",
   render: () => (
@@ -177,7 +177,7 @@ export const TreeRows: S = {
   ),
 };
 
-/** 탭 하나: 편집기 탭 · 결과 탭 */
+/** One tab: editor tab · result tab */
 export const TabItems: S = {
   name: "TabItem · RailItem · StatusItem",
   render: () => (

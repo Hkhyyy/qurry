@@ -8,7 +8,7 @@ import { TYPE_COLOR } from "./RedisBrowser";
 import { keyTree, type KeyNode } from "../lib/keyTree";
 import { ColumnIcon, DatabaseIcon, FkIcon, FolderIcon, IndexIcon, KeyIcon, MySqlIcon, PgIcon, RedisIcon, RoutineIcon, SchemaIcon, SequenceIcon, TableIcon, ViewIcon } from "../ui/icons";
 
-/** 트리 노드가 가리키는 대상. 우클릭 메뉴와 단축키(F4, ⌘b, ⌘⇧L)가 이걸 기준으로 동작한다. */
+/** What a tree node points to. The context menu and shortcuts (F4, ⌘b, ⌘⇧L) act on this. */
 export interface NodeInfo {
   kind: "conn" | "db" | "schema" | "table" | "view" | "matview" | "foreign" | "partitioned" | "sequence" | "routine" | "key";
   conn: ConnectionView;
@@ -16,18 +16,18 @@ export interface NodeInfo {
   schema?: string;
   name?: string;
   refresh?: () => void;
-  /** 객체 노드: 부모(스키마의 객체 목록)를 다시 읽는다 (DROP 뒤) */
+  /** Object node: reload the parent (the schema's object list) (after DROP) */
   refreshParent?: () => void;
 }
 
-/** Select In Database Explorer (⌥F1, Search Everywhere 결과): 트리를 펼치고 노드를 선택한다 */
+/** Select In Database Explorer (⌥F1, Search Everywhere results): expand the tree and select the node */
 export interface RevealTarget { connId: string; db?: string; schema?: string; name?: string; kind?: string }
 let pendingReveal: RevealTarget | null = null;
-/** 콘솔에서 구조를 바꾸는 문장(DDL)을 실행한 뒤: 그 데이터베이스의 트리 중 이미 읽은 부분을 다시 읽는다 */
+/** After running a structure-changing statement (DDL) in the console: reload the already-loaded parts of that database's tree */
 export function schemaChanged(connId: string, db: string) {
   window.dispatchEvent(new CustomEvent("dbtool-schema-changed", { detail: { connId, db } }));
 }
-/** 탐색기 Collapse All: 모든 Data Source · DB · 스키마 · 폴더를 접는다 (연결은 그대로) */
+/** Explorer Collapse All: collapse every Data Source · DB · schema · folder (connections stay) */
 export function collapseTree() {
   window.dispatchEvent(new CustomEvent("dbtool-collapse"));
 }
@@ -58,7 +58,7 @@ export function revealInTree(t: RevealTarget) {
   setTimeout(tick, 50);
 }
 function useReveal(fn: (t: RevealTarget) => void) {
-  // 리스너는 마운트 때 한 번만 단다 (렌더마다 다시 달지 않게). fn 은 ref 로 최신 것을 쓴다
+  // Attach the listener once on mount (not again on every render). fn uses the latest one via a ref
   const ref = useRef(fn);
   ref.current = fn;
   useEffect(() => {
@@ -71,7 +71,7 @@ function useReveal(fn: (t: RevealTarget) => void) {
 
 export const isRelation = (k: NodeInfo["kind"]) => ["table", "view", "matview", "foreign", "partitioned"].includes(k);
 
-/** 트리 선택 상태 (DataGrip: 클릭 = 선택, ▸ / 더블클릭 = 펼치기) */
+/** Tree selection state (DataGrip: click = select, ▸ / double-click = expand) */
 export const TreeSelection = createContext<{ sel: string | null; setSel: (id: string, info?: NodeInfo) => void }>({
   sel: null,
   setSel: () => {},
@@ -81,10 +81,10 @@ interface Props {
   conn: ConnectionView;
   filter: string;
   showSystem: boolean;
-  /** 테이블·뷰 더블클릭 = Edit Data(F4), 루틴 더블클릭 = DDL */
+  /** Table · view double-click = Edit Data (F4), routine double-click = DDL */
   onActivate: (info: NodeInfo) => void;
   onMenu: (e: React.MouseEvent, info: NodeInfo) => void;
-  /** 스키마 선택 팝업에서 적용 */
+  /** Apply from the schema picker popup */
   onScopeChange: (conn: ConnectionView, scope: Scope) => void;
 }
 
@@ -141,7 +141,7 @@ function Status({ depth, load, kind, onRetry }: { depth: number; load: Load<unkn
   const [installing, setInstalling] = useState(false);
   const [installErr, setInstallErr] = useState<string | null>(null);
   if (!load || load.state === "ok") return null;
-  // 드라이버가 없으면 바로 받을 수 있게
+  // So the driver can be downloaded right away if missing
   const missing = load.state === "error" && load.msg.includes(DRIVER_MISSING) && kind;
   return (
     <div className={"tree-status" + (load.state === "error" ? " err" : "")} style={{ paddingLeft: 24 + depth * 19 }}>
@@ -157,7 +157,7 @@ function Status({ depth, load, kind, onRetry }: { depth: number; load: Load<unkn
               await api.installDriver(kind);
               onRetry?.();
             } catch (e) {
-              // Tauri 웹뷰에는 alert 가 없다 → 줄 안에
+              // The Tauri webview has no alert → show inline
               setInstallErr(String(e));
             } finally {
               setInstalling(false);
@@ -178,11 +178,11 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
   const [opened, setOpened] = useState(false);
   const [dbs, setDbs] = useState<Load<string[]>>();
   const [openDbs, setOpenDbs] = useState<Set<string>>(new Set());
-  const [gen, setGen] = useState(0); // 새로고침 시 하위 노드를 다시 마운트
+  const [gen, setGen] = useState(0); // Remount child nodes on refresh
   const theme = useTheme();
   const defaultDb = conn.kind === "redis" ? redisDb(conn.database) : conn.kind === "sqlite" || conn.kind === "duckdb" ? "main" : conn.database || (conn.kind === "postgres" ? "postgres" : "");
 
-  // Single database mode: 기본 DB 하나만
+  // Single database mode: only the default DB
   const MY_SYS = ["information_schema", "performance_schema", "mysql", "sys"];
   const dbShown = (d: string) =>
     conn.options?.singleDb ? d === defaultDb : (conn.kind !== "mysql" || showSystem || !MY_SYS.includes(d) || d === defaultDb) && dbVisible(conn.scope, d, defaultDb);
@@ -192,7 +192,7 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
     meta.databases(conn.id).then(
       (data) => {
         setDbs({ state: "ok", data });
-        // 접속됨: 다음에 접속하지 않고도 Search Everywhere 에서 찾도록 검색 캐시를 채운다
+        // Connected: fill the search cache so Search Everywhere finds things next time without connecting
         if (conn.kind !== "redis") meta.warmSearchCache(conn.id).catch(() => {});
         const others = data.filter((d) => !["postgres", "rdsadmin", "template0", "template1"].includes(d));
         const auto = conn.database ? defaultDb : others.length === 1 ? others[0] : others.length === 0 ? defaultDb : null;
@@ -219,7 +219,7 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
       return !o;
     });
   const refreshAll = () => {
-    // 스키마가 바뀌었을 수 있으니 자동완성 메타도 다시 읽게 한다
+    // The schema may have changed, so make autocomplete metadata reload too
     invalidateCompletion(conn.id);
     setGen((g) => g + 1);
     loadDbs(true);
@@ -344,8 +344,8 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
   onCount: (shown: number, total: number) => void;
 }) {
   const target = targetId(conn.id, db);
-  // MySQL: database == schema → 스키마 줄 없이 바로 객체 폴더를 보인다 (DataGrip 과 같음)
-  // DB 가 곧 스키마인 것: 스키마 단계 없이 테이블
+  // MySQL: database == schema → show object folders directly without a schema row (same as DataGrip)
+  // DBs that are the schema: tables without a schema level
   const flat = ["mysql", "redis", "sqlite", "clickhouse", "mongodb", "qdrant", "chroma", "milvus"].includes(conn.kind);
   const dd = flat ? -1 : 0;
   const [open, setOpen] = useState<Set<string>>(new Set());
@@ -401,7 +401,7 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
   useEffect(() => {
     loadSchemas();
   }, []);
-  // DDL 뒤: 펼친 모양은 그대로 두고 읽어 둔 스키마 목록 · 객체 · 테이블 상세만 조용히 다시 읽는다
+  // After DDL: keep the expanded layout and quietly reload the loaded schema lists · objects · table details
   const latest = useRef({ objects, details });
   latest.current = { objects, details };
   useEffect(() => {
@@ -417,7 +417,7 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
         const i = key.indexOf(".");
         meta.table(target, key.slice(0, i), key.slice(i + 1)).then(
           (data) => setDetails((x) => ({ ...x, [key]: { state: "ok", data } })),
-          // 테이블이 없어졌으면 상세를 지운다 (목록에서도 빠진다)
+          // If the table is gone, clear its details (it also drops from the list)
           () => setDetails((x) => { const n = { ...x }; delete n[key]; return n; }),
         );
       }
@@ -435,7 +435,7 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
     if (objects[t.schema]?.state !== "ok" && objects[t.schema]?.state !== "loading") loadObjects(t.schema);
   });
 
-  // DB 노드 배지("1 of 3")용 스키마 개수
+  // Schema count for the DB node badge ("1 of 3")
   useEffect(() => {
     if (schemas?.state === "ok")
       onCount(schemas.data.filter((s) => schemaVisible(conn.scope, db, s.name, s.isSystem, showSystem)).length, schemas.data.length);
@@ -491,7 +491,7 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
                 </div>
               );
             };
-            // Redis 키: ":" 로 묶은 폴더 (Medis 처럼)
+            // Redis keys: folders split on ":" (like Medis)
             const keyRows = (nodes: KeyNode<RelationInfo>[], depth: number, base: string): React.ReactNode =>
               nodes.map((n) => {
                 if (n.kind === "key") return item(n.item, depth);

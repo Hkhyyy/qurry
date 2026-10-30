@@ -6,7 +6,7 @@ describe("dialogs", () => {
     vi.unstubAllGlobals();
     registerTextDialog(null);
   });
-  it("Tauri 의 async confirm 도 대답을 기다린다 (Promise 를 참으로 보지 않는다)", async () => {
+  it("waits for Tauri's async confirm too (a Promise is not taken as true)", async () => {
     vi.stubGlobal("window", { confirm: () => Promise.resolve(false) });
     expect(await ask("drop?")).toBe(false);
     vi.stubGlobal("window", { confirm: () => Promise.resolve(true) });
@@ -14,13 +14,13 @@ describe("dialogs", () => {
     vi.stubGlobal("window", { confirm: () => false });
     expect(await ask("drop?")).toBe(false);
   });
-  it("글 입력은 등록된 앱 창으로 (Tauri 에는 prompt 가 없다)", async () => {
+  it("text input goes to the registered in-app dialog (Tauri has no prompt)", async () => {
     registerTextDialog((r) => r.resolve(r.value + "!"));
     expect(await askText("Name", "a")).toBe("a!");
     registerTextDialog((r) => r.resolve(null));
     expect(await askText("Name")).toBeNull();
   });
-  it("이름과 함께 고르기 (스니펫: 이 Data Source 만 / 전체) — OK·Cancel 로 고르지 않는다", async () => {
+  it("choose along with a name (snippet: this data source only / all) — not chosen with OK / Cancel", async () => {
     registerTextDialog((r) => {
       expect(r.choices).toEqual(["Only this data source", "All data sources"]);
       expect(r.choice).toBe(0);

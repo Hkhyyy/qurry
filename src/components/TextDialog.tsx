@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { registerTextDialog, TextRequest } from "../lib/dialogs";
 import { Button, Modal, RadioGroup, TextInput } from "../ui";
 
-/** askText() 가 띄우는 한 줄 입력 창 (Tauri 웹뷰에는 window.prompt 가 없다). App 에 하나 둔다 */
+/** Single-line input dialog shown by askText() (the Tauri webview has no window.prompt). App holds one */
 export function TextDialog() {
   const [req, setReq] = useState<TextRequest | null>(null);
   const [value, setValue] = useState("");

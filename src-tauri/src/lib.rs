@@ -1,7 +1,7 @@
 #[cfg(target_os = "macos")]
 mod bundle;
 mod commands;
-// 엔진은 qurry-core (TUI·MCP 와 공유)
+// The engine is qurry-core (shared with TUI and MCP)
 pub use qurry_core::{app, db, error, meta, redisdb, secrets, store};
 
 use tauri::Manager;
@@ -17,10 +17,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
-            // 기본 메뉴의 "Close Window(⌘W)"가 탭 닫기 단축키를 가로채지 않도록 메뉴를 직접 구성
+            // Build the menu manually so the default menu's "Close Window(⌘W)" does not steal the close-tab shortcut
             use tauri::menu::{MenuBuilder, SubmenuBuilder};
             let check_updates = tauri::menu::MenuItemBuilder::with_id("check-update", "Check for Updates…").build(app)?;
-            // Settings (⌘, 는 웹뷰 키맵이 처리 — 메뉴 가속키를 달면 이중 실행)
+            // Settings (⌘, is handled by the webview keymap — a menu accelerator would run it twice)
             let settings = tauri::menu::MenuItemBuilder::with_id("settings", "Settings…").build(app)?;
             let app_menu = SubmenuBuilder::new(app, "Qurry")
                 .about(None)
@@ -44,7 +44,7 @@ pub fn run() {
                 .select_all()
                 .build()?;
             let window_menu = SubmenuBuilder::new(app, "Window").minimize().fullscreen().build()?;
-            // Help › Keymap Reference (단축키는 웹뷰에서 ⇧⌘/ 로 처리 — 메뉴 가속키를 달면 이중 실행)
+            // Help › Keymap Reference (the shortcut ⇧⌘/ is handled in the webview — a menu accelerator would run it twice)
             let keymap = tauri::menu::MenuItemBuilder::with_id("keymap", "Keymap Reference").build(app)?;
             let help_menu = SubmenuBuilder::new(app, "Help").item(&keymap).build()?;
             app.set_menu(MenuBuilder::new(app).items(&[&app_menu, &edit_menu, &window_menu, &help_menu]).build()?)?;
@@ -83,6 +83,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::list_connections,
             commands::save_connection,
+            commands::set_connection_color,
+            commands::set_connection_scope,
             commands::delete_connection,
             commands::test_connection,
             commands::test_ssh,
@@ -144,6 +146,8 @@ pub fn run() {
             commands::rag_save,
             commands::rag_delete,
             commands::rag_has_key,
+            commands::secret_key_location,
+            commands::set_secret_key_location,
             commands::rag_set_key,
             commands::rag_build,
             commands::rag_search,

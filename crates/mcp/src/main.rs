@@ -1,11 +1,12 @@
-//! Qurry MCP 서버 (stdio, JSON-RPC 2.0). GUI·TUI 와 같은 엔진(qurry-core)·같은 Data Source 를 쓴다.
+//! Qurry MCP server (stdio, JSON-RPC 2.0). Uses the same engine (qurry-core) and the same Data Sources as the GUI·TUI.
 //!
-//! 기본은 읽기 전용: PG/MySQL 은 READ ONLY 트랜잭션 안에서 한 문장만, Redis 는 읽기 명령만.
-//! `--allow-write` 로 켜면 `execute` 도구가 생긴다 (Data Source 의 Read-only 설정은 그래도 지킨다).
-use qurry_core::app::AppState;
+//! Read-only by default: PG/MySQL run a single statement inside a READ ONLY transaction, Redis allows read commands only.
+//! `--allow-write` adds the `execute` tool (a Data Source's Read-only setting is still honored).
+//! MCP exposure is set per Data Source (Options › MCP: Off / Read / Read & write — store::McpAccess). Hidden sources are not listed and cannot be connected to.
+use qurry_core::app::{AppState, ConnectionView};
 use qurry_core::db::QueryResult;
 use qurry_core::sql;
-use qurry_core::store::DbKind;
+use qurry_core::store::{DbKind, McpAccess};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -152,7 +153,7 @@ impl Server {
         if self.allow_write {
             t.push(tool(
                 "execute",
-                "Execute statements that modify data or schema (INSERT/UPDATE/DELETE/DDL; Redis write commands). Statements run in one transaction (all or nothing). Rejected for read-only data sources.",
+                "Change data, one statement per item, from an allow-list. SQL: one INSERT, or UPDATE / DELETE with a WHERE. MongoDB: insertOne / insertMany, and updateOne / updateMany / replaceOne / deleteOne / deleteMany with a non-empty filter. Vector DBs: adding points, and deleting points by id. Redis: reads, and writes to single keys without expiry options. PostgreSQL/MySQL: all items in one transaction (all or nothing); other kinds run them one by one with no rollback. Only for data sources whose MCP access is 'Read & write' (see list_data_sources). Anything else (DDL such as CREATE / ALTER / DROP, TRUNCATE, MERGE, scripts, deletes of whole keys or collections) is refused — ask the user to run it in Qurry.",
                 ds_props(json!({ "statements": { "type": "array", "items": { "type": "string" } } })),
                 &["data_source", "statements"],
                 false,
@@ -161,23 +162,21 @@ impl Server {
         t
     }
 
-    /// 이름 또는 id → (id, 종류, 기본 DB, read-only)
-    async fn resolve(&self, a: &Value) -> Result<(String, DbKind, String, bool), String> {
-        let want = a.get("data_source").and_then(|v| v.as_str()).ok_or("data_source is required")?;
+    /// Only Data Sources visible to MCP
+    async fn sources(&self) -> Result<Vec<qurry_core::app::ConnectionView>, String> {
         let list = self.state.list_connections().await.map_err(|e| e.to_string())?;
-        let c = list
-            .iter()
-            .find(|c| c.config.id == want)
-            .or_else(|| list.iter().find(|c| c.config.name.eq_ignore_ascii_case(want)))
-            .or_else(|| {
-                let m: Vec<_> = list.iter().filter(|c| c.config.name.to_lowercase().contains(&want.to_lowercase())).collect();
-                if m.len() == 1 { Some(m[0]) } else { None }
-            })
-            .ok_or_else(|| format!("Data source not found: {want}. Available: {}", list.iter().map(|c| c.config.name.as_str()).collect::<Vec<_>>().join(", ")))?;
-        Ok((c.config.id.clone(), c.config.kind, sql::default_db(&c.config), c.config.read_only))
+        Ok(list.into_iter().filter(|c| c.config.mcp_access(self.allow_write) != McpAccess::Off).collect())
     }
 
-    async fn target(&self, a: &Value) -> Result<(String, DbKind, String, bool), String> {
+    /// Name or id → (id, kind, default DB, MCP access)
+    async fn resolve(&self, a: &Value) -> Result<(String, DbKind, String, McpAccess), String> {
+        let want = a.get("data_source").and_then(|v| v.as_str()).ok_or("data_source is required")?;
+        let all = self.state.list_connections().await.map_err(|e| e.to_string())?;
+        let c = find_source(&all, want, self.allow_write)?;
+        Ok((c.config.id.clone(), c.config.kind, sql::default_db(&c.config), c.config.mcp_access(self.allow_write)))
+    }
+
+    async fn target(&self, a: &Value) -> Result<(String, DbKind, String, McpAccess), String> {
         let (id, kind, def, ro) = self.resolve(a).await?;
         let db = a.get("database").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(String::from).unwrap_or(def);
         Ok((sql::target_id(&id, Some(&db)), kind, db, ro))
@@ -191,15 +190,17 @@ impl Server {
         let schema_or = |kind: DbKind, db: &str| s("schema").unwrap_or_else(|| if kind == DbKind::Postgres { "public".into() } else { db.to_string() });
         match name {
             "list_data_sources" => {
-                let list = st.list_connections().await.map_err(e)?;
+                let list = self.sources().await?;
                 Ok(Value::Array(
                     list.iter()
                         .map(|c| {
                             json!({
                                 "id": c.config.id, "name": c.config.name, "kind": c.config.kind,
-                                "host": c.config.host, "port": c.config.port, "user": c.config.user,
+                                "host": qurry_core::store::without_userinfo(&c.config.host), "port": c.config.port, "user": c.config.user,
                                 "default_database": sql::default_db(&c.config),
-                                "read_only": c.config.read_only, "ssh_tunnel": c.config.active_ssh().map(|s| format!("{}@{}", s.user, s.host)),
+                                "read_only": c.config.read_only, "production": c.config.options.confirm_changes,
+                                "mcp_access": if c.config.mcp_access(self.allow_write) == McpAccess::Write { "write" } else { "read" },
+                                "ssh_tunnel": c.config.active_ssh().map(|s| format!("{}@{}", s.user, s.host)),
                                 "connected": c.connected
                             })
                         })
@@ -228,18 +229,27 @@ impl Server {
             "get_ddl" => {
                 let (t, kind, db, _) = self.target(a).await?;
                 let k = s("kind").unwrap_or_else(|| if kind == DbKind::Redis { "key".into() } else { "table".into() });
+                // DDL of a Redis key reads the whole value: use redis_get (up to the limit) for large keys
+                if kind == DbKind::Redis {
+                    let key = s("name").ok_or("name is required")?;
+                    let d = st.redis_key(t.clone(), key, Some(1)).await.map_err(e)?;
+                    let big = if d.ty == "string" { d.length > qurry_core::redisdb::STRING_PREVIEW_MAX } else { d.length > qurry_core::guard::REDIS_STRICT_MAX };
+                    if big {
+                        return Err(format!("The key is too big for its DDL ({} {}) — use redis_get with a limit", d.length, if d.ty == "string" { "bytes" } else { "elements" }));
+                    }
+                }
                 Ok(Value::String(st.object_ddl(t, schema_or(kind, &db), s("name").ok_or("name is required")?, k).await.map_err(e)?))
             }
             "search_objects" => {
                 let q = s("query").ok_or("query is required")?;
                 let limit = n("limit", 30);
-                let list = st.list_connections().await.map_err(e)?;
+                let list = self.sources().await?;
                 let only = if a.get("data_source").is_some() { Some(self.resolve(a).await?.0) } else { None };
                 let mut hits: Vec<(i64, Value)> = vec![];
                 let mut errors = vec![];
                 for c in list.iter().filter(|c| only.as_ref().map(|o| o == &c.config.id).unwrap_or(true)) {
                     let def = sql::default_db(&c.config);
-                    // 찾을 DB: 지정한 DB, 아니면 앱의 Schemas 탭에서 보이게 한 DB 들 (최대 8개)
+                    // DBs to search: the given DB, otherwise the DBs made visible in the app's Schemas tab (at most 8)
                     let dbs: Vec<String> = match s("database").filter(|_| only.is_some()) {
                         Some(d) => vec![d],
                         None if c.config.kind == DbKind::Redis || c.config.options.single_db => vec![def.clone()],
@@ -336,31 +346,39 @@ impl Server {
             "export_csv" => {
                 let (t, ..) = self.target(a).await?;
                 let q = s("sql").ok_or("sql is required")?;
-                // 정해진 폴더에만, 새 파일로 (남이 정한 경로에 쓰지 않는다)
+                // Only in the designated folder, as a new file (never write to a path chosen by someone else)
                 let path = qurry_core::export_path(&s("file_name").ok_or("file_name is required")?).map_err(e)?;
                 let rows = st.export_csv_read_only(t, q, path.clone()).await.map_err(e)?;
                 Ok(json!({ "rows": rows, "path": path.display().to_string() }))
             }
             "execute" if self.allow_write => {
-                let (t, _, _, ro) = self.target(a).await?;
-                if ro {
-                    return Err("This data source is marked read-only in Qurry".into());
+                let (t, kind, _, access) = self.target(a).await?;
+                if access != McpAccess::Write {
+                    return Err("This data source is read-only for MCP (Qurry: data source › Options › MCP: Read & write)".into());
                 }
                 let stmts: Vec<String> = a.get("statements").and_then(|v| v.as_array()).ok_or("statements is required")?.iter().filter_map(|x| x.as_str().map(String::from)).collect();
                 if stmts.is_empty() {
                     return Err("statements is empty".into());
                 }
-                let n = st.execute_batch(t, stmts.clone(), false).await.map_err(e)?;
+                // Allow-list (guard::mcp_execute_violation): INSERT, UPDATE / DELETE with WHERE and their MongoDB / vector DB / Redis equivalents
+                for s in &stmts {
+                    if let Some(why) = qurry_core::guard::mcp_execute_violation(s, kind) {
+                        return Err(format!("{why}: {s}"));
+                    }
+                }
+                // PostgreSQL / MySQL: each item as a prepared statement, so the server itself refuses more than one statement
+                let n = st.execute_batch_prepared(t, stmts.clone()).await.map_err(e)?;
                 Ok(json!({ "statements": stmts.len(), "rows_affected": n }))
             }
             "list_rag_indexes" => {
-                let names: std::collections::HashMap<String, String> = st.list_connections().await.map_err(e)?.into_iter().map(|c| (c.config.id, c.config.name)).collect();
+                let names: std::collections::HashMap<String, String> = self.sources().await?.into_iter().map(|c| (c.config.id, c.config.name)).collect();
+                let shown = |t: &str| names.contains_key(qurry_core::app::split_target(t).0);
                 let name_of = |t: &str| {
                     let (id, db) = qurry_core::app::split_target(t);
                     let n = names.get(id).cloned().unwrap_or_else(|| id.to_string());
                     db.map(|d| format!("{n} / {d}")).unwrap_or(n)
                 };
-                Ok(json!(st.rag_indexes().map_err(e)?.iter().map(|x| json!({
+                Ok(json!(st.rag_indexes().map_err(e)?.iter().filter(|x| shown(&x.source) && shown(&x.dest)).map(|x| json!({
                     "name": x.name, "id": x.id, "source": name_of(&x.source), "table": format!("{}.{}", x.schema, x.table),
                     "text_columns": x.text_columns, "store": name_of(&x.dest), "collection": x.collection,
                     "embeddings": format!("{} {}", x.provider, x.model), "rows": x.rows, "built_at": x.built_at
@@ -369,11 +387,41 @@ impl Server {
             "semantic_search" => {
                 let index = s("index").ok_or("index is required")?;
                 let query = s("query").ok_or("query is required")?;
-                Ok(result_json(&st.rag_search(index, query, n("limit", 10).min(50)).await.map_err(e)?))
+                // Both the source table and the store must be visible to MCP (the store contains text from source rows)
+                let ids: std::collections::HashSet<String> = self.sources().await?.into_iter().map(|c| c.config.id).collect();
+                let shown = |t: &str| ids.contains(qurry_core::app::split_target(t).0);
+                // Resolve once and search exactly the index that was checked (by id)
+                let x = st.rag_get(&index).map_err(e)?;
+                if !(shown(&x.source) && shown(&x.dest)) {
+                    return Err(format!("RAG index '{index}' not found"));
+                }
+                Ok(result_json(&st.rag_search(x.id, query, n("limit", 10).min(50)).await.map_err(e)?))
             }
             other => Err(format!("Unknown tool: {other}")),
         }
     }
+}
+
+/// The Data Source an MCP client asked for: id, name (any case) or a unique part of the name, among the ones shared with MCP.
+/// A hidden source that matches by id or name gets its own error (the user turned it off — it isn't missing), and nothing else about it is shown
+fn find_source<'a>(all: &'a [ConnectionView], want: &str, allow_write: bool) -> Result<&'a ConnectionView, String> {
+    let shown = |c: &ConnectionView| c.config.mcp_access(allow_write) != McpAccess::Off;
+    let list: Vec<&ConnectionView> = all.iter().filter(|c| shown(c)).collect();
+    let found = list
+        .iter()
+        .find(|c| c.config.id == want)
+        .or_else(|| list.iter().find(|c| c.config.name.eq_ignore_ascii_case(want)))
+        .or_else(|| {
+            let m: Vec<_> = list.iter().filter(|c| c.config.name.to_lowercase().contains(&want.to_lowercase())).collect();
+            if m.len() == 1 { Some(m[0]) } else { None }
+        });
+    if let Some(c) = found {
+        return Ok(c);
+    }
+    if all.iter().any(|c| !shown(c) && (c.config.id == want || c.config.name.eq_ignore_ascii_case(want))) {
+        return Err(format!("Data source \"{want}\" is not shared with MCP — turn it on in Qurry: data source › Options › MCP (TUI: data source form)"));
+    }
+    Err(format!("Data source not found: {want}. Available: {}", list.iter().map(|c| c.config.name.as_str()).collect::<Vec<_>>().join(", ")))
 }
 
 fn result_json(r: &QueryResult) -> Value {
@@ -422,7 +470,7 @@ fn fuzzy(q: &str, text: &str) -> Option<i64> {
 async fn handle(server: Arc<Server>, msg: Value) -> Option<Value> {
     let method = msg.get("method").and_then(|m| m.as_str()).unwrap_or("").to_string();
     let params = msg.get("params").cloned().unwrap_or(Value::Null);
-    let id = msg.get("id").cloned()?; // 알림(notification)에는 응답하지 않는다
+    let id = msg.get("id").cloned()?; // Notifications get no response
     let result: Result<Value, (i64, String)> = match method.as_str() {
         "initialize" => {
             let asked = params.get("protocolVersion").and_then(|v| v.as_str()).unwrap_or(PROTOCOLS[0]);
@@ -473,9 +521,12 @@ async fn main() -> std::io::Result<()> {
         return Ok(());
     }
     let dir = args.iter().position(|a| a == "--config-dir").and_then(|i| args.get(i + 1)).map(std::path::PathBuf::from);
-    // stdout 은 프로토콜 전용. 엔진 로그(stderr)는 --verbose 일 때만
+    // stdout is for the protocol only. Engine logs (stderr) only with --verbose
     qurry_core::QUIET.store(!args.iter().any(|a| a == "--verbose"), std::sync::atomic::Ordering::Relaxed);
-    let state = Arc::new(qurry_core::open_state(dir).map_err(|e| std::io::Error::other(e.to_string()))?);
+    qurry_core::SANDBOX.store(true, std::sync::atomic::Ordering::Relaxed);
+    let mut state = qurry_core::open_state(dir).map_err(|e| std::io::Error::other(e.to_string()))?;
+    state.mcp = true;
+    let state = Arc::new(state);
     let server = Arc::new(Server { state: state.clone(), allow_write: args.iter().any(|a| a == "--allow-write") });
     // keep-alive / auto-disconnect
     {
@@ -497,7 +548,7 @@ async fn main() -> std::io::Result<()> {
         }
         let server = server.clone();
         let out = out.clone();
-        // 요청마다 따로 처리 (긴 쿼리가 다른 요청을 막지 않게)
+        // Handle each request separately (so a long query doesn't block other requests)
         tasks.spawn(async move {
             let reply = match serde_json::from_str::<Value>(&line) {
                 Ok(Value::Array(batch)) => {
@@ -519,7 +570,69 @@ async fn main() -> std::io::Result<()> {
             }
         });
     }
-    // stdin 이 닫혀도 진행 중인 응답은 마저 보낸다
+    // Even if stdin closes, finish sending in-flight responses
     while tasks.join_next().await.is_some() {}
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn source(id: &str, name: &str, mcp: Option<&str>, production: bool) -> ConnectionView {
+        let mut config: qurry_core::store::ConnectionConfig =
+            serde_json::from_value(json!({ "id": id, "name": name, "kind": "postgres", "host": "db.internal", "port": 5432, "user": "admin" })).unwrap();
+        config.options.mcp = mcp.map(String::from);
+        config.options.confirm_changes = production;
+        ConnectionView { config, has_password: true, connected: false }
+    }
+
+    #[test]
+    fn hidden_sources_say_they_are_not_shared() {
+        let all = [source("1", "Dev", Some("read"), false), source("2", "Prod", None, true), source("3", "Analytics", Some("off"), false)];
+        let find = |w: &str| find_source(&all, w, false).map(|c| c.config.id.clone());
+        assert_eq!(find("dev").unwrap(), "1");
+        assert_eq!(find("1").unwrap(), "1");
+        // An old Production source (no MCP setting) and a source set to Off: by name (any case) or id
+        for w in ["Prod", "prod", "2", "Analytics", "3"] {
+            let e = find(w).unwrap_err();
+            assert!(e.contains("is not shared with MCP") && e.contains("Options › MCP"), "{w}: {e}");
+            assert!(!e.contains("db.internal") && !e.contains("admin"), "{e}");
+        }
+        // A part of a hidden name doesn't match it, and hidden sources aren't listed as available
+        let e = find("Analy").unwrap_err();
+        assert!(e.starts_with("Data source not found") && !e.contains("Analytics") && !e.contains("Prod"), "{e}");
+    }
+
+    /// "Docs" (on a shared source) and "docs" (on a hidden one): the index that is checked is the one that runs
+    #[tokio::test]
+    async fn semantic_search_checks_the_index_it_runs() {
+        let dir = std::env::temp_dir().join(format!("qurry-mcp-rag-{}-{}", std::process::id(), std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()));
+        let state = qurry_core::open_state(Some(dir.clone())).unwrap();
+        state.store.save(&source("shown", "Shown", Some("read"), false).config).unwrap();
+        state.store.save(&source("hidden", "Hidden", Some("off"), false).config).unwrap();
+        let idx = |id: &str, name: &str, src: &str| json!({ "id": id, "name": name, "source": src, "schema": "public", "table": "t", "idColumn": "id",
+            "textColumns": ["body"], "provider": "ollama", "model": "m", "dest": src, "collection": "c" });
+        std::fs::write(dir.join("rag.json"), json!([idx("i1", "Docs", "shown"), idx("i2", "docs", "hidden")]).to_string()).unwrap();
+        let server = Server { state: Arc::new(state), allow_write: false };
+        let search = |index: &str| json!({ "index": index, "query": "q" });
+        // The visible one gets past the check (and stops at "not built yet"); the hidden one is not found, by name or id
+        let e = server.call("semantic_search", &search("Docs")).await.unwrap_err();
+        assert!(e.contains("Build the index \"Docs\" first"), "{e}");
+        for w in ["docs", "i2"] {
+            let e = server.call("semantic_search", &search(w)).await.unwrap_err();
+            assert!(e.contains("not found"), "{w}: {e}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn uri_passwords_are_hidden() {
+        assert_eq!(qurry_core::store::without_userinfo("mongodb+srv://app:s3cret@cluster0.x.net/?retryWrites=true"), "mongodb+srv://cluster0.x.net/?retryWrites=true");
+        assert_eq!(qurry_core::store::without_userinfo("mongodb://a:b@h1:27017,h2:27017/db"), "mongodb://h1:27017,h2:27017/db");
+        assert_eq!(qurry_core::store::without_userinfo("https://qdrant.example.com"), "https://qdrant.example.com");
+        assert_eq!(qurry_core::store::without_userinfo("db.internal"), "db.internal");
+        assert_eq!(qurry_core::store::without_userinfo("u:p@db.internal"), "db.internal");
+        assert_eq!(qurry_core::store::without_userinfo("mongodb://app:p/a?s#s@h1:27017/db"), "mongodb://h1:27017/db");
+    }
 }

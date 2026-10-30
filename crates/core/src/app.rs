@@ -1,4 +1,4 @@
-//! 앱 상태: Data Source 풀·세션·SSH 터널·비밀번호. GUI(Tauri)·TUI·MCP 가 같은 메서드를 쓴다.
+//! App state: Data Source pools, sessions, SSH tunnels, passwords. GUI (Tauri), TUI and MCP use the same methods.
 use crate::db::{self, Pool, QueryResult};
 use crate::error::{AppError, AppResult};
 use crate::session::{self, Session};
@@ -16,43 +16,63 @@ pub struct SessionEntry {
 pub struct AppState {
     pub store: Store,
     pub pools: RwLock<HashMap<String, Pool>>,
-    /// 콘솔 탭 id → 세션
+    /// Console tab id → session
     pub sessions: RwLock<HashMap<String, SessionEntry>>,
-    /// 접속 id → SSH 터널 (풀과 수명을 같이 함)
+    /// Connection id → SSH tunnel (lives as long as the pool)
     pub tunnels: RwLock<HashMap<String, crate::tunnel::Tunnel>>,
-    /// 키체인에서 한 번 읽은 비밀값 (앱이 켜져 있는 동안 다시 묻지 않도록)
-    pub secrets: std::sync::Mutex<HashMap<String, Option<String>>>,
-    /// 비밀번호 저장소 (암호화 파일). 키체인 팝업을 피한다.
+    /// Password store (encrypted file). Avoids keychain popups.
     pub secret_file: crate::secrets::SecretFile,
-    /// Data Source id → 마지막 사용 시각 (Auto-disconnect)
+    /// Data Source id → last used time (Auto-disconnect)
     pub last_used: std::sync::Mutex<HashMap<String, std::time::Instant>>,
-    /// Data Source id → 마지막 keep-alive 시각
+    /// Data Source id → last keep-alive time
     pub last_ping: std::sync::Mutex<HashMap<String, std::time::Instant>>,
-    /// 탭 id → Manual 모드 (다시 접속해 세션을 새로 열 때도 같은 모드로)
+    /// Tab id → Manual mode (keep the same mode when reconnecting opens a new session)
     pub tab_manual: std::sync::Mutex<HashMap<String, bool>>,
-    /// 쿼리 히스토리·스니펫 (GUI·TUI 공용)
+    /// Query history and snippets (shared by GUI and TUI)
     pub history: crate::history::History,
-    /// 운영 작업 기록 (Production Data Source 의 변경 · 되돌리기 SQL)
+    /// Production audit log (changes to Production Data Sources · undo SQL)
     pub audit: crate::audit::Audit,
-    /// 내보내기·가져오기 작업 id → 진행·취소
+    /// Export/import job id → progress and cancel
     pub jobs: std::sync::Mutex<HashMap<String, std::sync::Arc<crate::transfer::Job>>>,
+    /// MCP server: never reads passwords of Data Sources hidden from MCP (crate::store::McpAccess)
+    pub mcp: bool,
 }
 
 impl AppState {
-    /// 키체인 조회는 처음 한 번만. 이후에는 메모리 캐시.
+    /// Saved password or SSH secret for a key, read from the secrets file each time (nothing is cached in memory).
     pub fn secret(&self, key: &str) -> AppResult<Option<String>> {
-        if let Some(v) = self.secrets.lock().unwrap().get(key) {
-            return Ok(v.clone());
+        // MCP server: never reads passwords of Data Sources hidden from MCP (so it cannot connect either)
+        if self.mcp {
+            let id = key.strip_suffix("#ssh").unwrap_or(key);
+            if let Some(c) = self.store.get(id)?.filter(|c| c.mcp_access(false) == store::McpAccess::Off) {
+                return Err(AppError::Msg(format!("Data source \"{}\" is not shared with MCP (turn it on in the data source's Options)", c.name)));
+            }
         }
-        // 키체인은 절대 읽지 않는다 (macOS 팝업 방지). 암호화 파일만 사용.
-        let v = self.secret_file.get(key);
-        self.secrets.lock().unwrap().insert(key.to_string(), v.clone());
-        Ok(v)
+        // No in-memory cache: another app (the GUI) may have changed the server and its password since; the file is cheap to read
+        // Passwords live only in the encrypted file (the keychain holds at most the master key: crate::secrets)
+        self.secret_file.get(key)
+    }
+
+    /// Where the password file's master key is kept (shown in Settings)
+    pub fn secret_key_location(&self) -> crate::secrets::KeyLocation {
+        crate::secrets::key_location(&self.store.dir())
+    }
+
+    /// Move the master key to the OS keychain / to a file. The key is the same, so the open store stays in use
+    pub fn set_secret_key_location(&self, keychain: bool) -> AppResult<crate::secrets::KeyLocation> {
+        let to = if keychain { crate::secrets::KeyLocation::Keychain } else { crate::secrets::KeyLocation::File };
+        self.secret_file.ensure_key()?;
+        crate::secrets::move_key(&self.store.dir(), to, &crate::secrets::OsKeychain)?;
+        Ok(self.secret_key_location())
+    }
+
+    /// The secret only for a source that has one (flag, or an entry in the file): sources without a password still connect when secrets.json is damaged
+    pub(crate) fn saved_secret(&self, key: &str, saved: bool) -> AppResult<Option<String>> {
+        if saved || self.secret_file.contains(key)? { self.secret(key) } else { Ok(None) }
     }
 
     pub fn set_secret(&self, key: &str, value: Option<&str>) -> AppResult<()> {
         self.secret_file.set(key, value)?;
-        self.secrets.lock().unwrap().insert(key.to_string(), value.map(str::to_string));
         Ok(())
     }
 }
@@ -61,7 +81,7 @@ impl AppState {
     pub fn new(store: Store, secret_file: crate::secrets::SecretFile) -> Self {
         let history = crate::history::History::new(&store.dir());
         let audit = crate::audit::Audit::new(&store.dir());
-        Self { history, audit, store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), secrets: Default::default(), secret_file, last_used: Default::default(), last_ping: Default::default(), tab_manual: Default::default(), jobs: Default::default() }
+        Self { history, audit, store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), secret_file, last_used: Default::default(), last_ping: Default::default(), tab_manual: Default::default(), jobs: Default::default(), mcp: false }
     }
 }
 
@@ -74,7 +94,7 @@ pub struct ConnectionView {
     pub connected: bool,
 }
 
-/// 트리에 보이는 DB (Data Source › Schemas 탭의 범위, 시스템 DB 숨김). GUI·TUI·검색 캐시 공용
+/// DBs shown in the tree (scope from the Data Source › Schemas tab, system DBs hidden). Shared by GUI, TUI and the search cache
 pub fn visible_dbs(cfg: &ConnectionConfig, dbs: Vec<String>, def: &str) -> Vec<String> {
     let hidden: &[&str] = match cfg.kind {
         store::DbKind::Postgres => &["template0", "template1", "rdsadmin"],
@@ -93,7 +113,7 @@ pub fn visible_dbs(cfg: &ConnectionConfig, dbs: Vec<String>, def: &str) -> Vec<S
         .collect()
 }
 
-/// 접속 대상 id: "<data source id>" 또는 "<data source id>::<database>"
+/// Connection target id: "<data source id>" or "<data source id>::<database>"
 pub fn split_target(id: &str) -> (&str, Option<&str>) {
     match id.split_once("::") {
         Some((base, db)) if !db.is_empty() => (base, Some(db)),
@@ -105,7 +125,7 @@ pub fn belongs(key: &str, id: &str) -> bool {
     key == id || key.starts_with(&format!("{id}::"))
 }
 
-/// 연결이 끊긴 오류인지 (네트워크·서버 재시작·SSH 터널). 문법 오류 같은 쿼리 오류는 아니다
+/// Whether the error means the connection was lost (network, server restart, SSH tunnel). Not query errors such as syntax errors
 pub fn is_conn_lost(e: &AppError) -> bool {
     match e {
         AppError::Db(sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed | sqlx::Error::WorkerCrashed | sqlx::Error::Tls(_) | sqlx::Error::Protocol(_)) => true,
@@ -118,8 +138,8 @@ pub fn is_conn_lost(e: &AppError) -> bool {
     }
 }
 
-/// 연결이 끊겼으면: 탭 세션을 버리고 (계속 죽은 연결을 쓰지 않게, 다음 실행이 새로 연결한다),
-/// 풀도 응답이 없으면 (SSH 터널이 죽은 경우 등) 닫는다. 같은 문장을 다시 보내지는 않는다 (서버가 이미 실행했을 수 있다)
+/// If the connection was lost: drop the tab session (so the dead connection is not reused; the next run reconnects),
+/// and close the pool too if it does not respond (e.g. the SSH tunnel died). Never resend the same statement (the server may have already run it)
 async fn recover(state: &AppState, id: &str, tab: Option<&str>, lost_tx: bool, e: AppError) -> AppError {
     if !is_conn_lost(&e) {
         return e;
@@ -141,7 +161,7 @@ async fn recover(state: &AppState, id: &str, tab: Option<&str>, lost_tx: bool, e
     ))
 }
 
-/// 해당 Data Source의 모든 DB 풀·세션·터널을 닫는다.
+/// Close all DB pools, sessions and tunnels of the Data Source.
 pub async fn drop_pool(state: &AppState, id: &str) {
     state.sessions.write().await.retain(|_, e| !belongs(&e.conn_id, id));
     let removed: Vec<Pool> = {
@@ -156,7 +176,7 @@ pub async fn drop_pool(state: &AppState, id: &str) {
     state.last_ping.lock().unwrap().retain(|k, _| !belongs(k, id));
 }
 
-/// SSH 설정이 있으면 터널을 먼저 연 뒤 접속한다.
+/// If SSH is configured, open the tunnel first, then connect.
 pub async fn connect_config(
     cfg: &ConnectionConfig,
     password: Option<&str>,
@@ -177,7 +197,7 @@ pub fn touch(state: &AppState, id: &str) {
     state.last_used.lock().unwrap().insert(base, std::time::Instant::now());
 }
 
-/// 한 번 돌 때마다: keep-alive 쿼리 / 유휴 접속 끊기. 끊은 Data Source id 목록을 돌려준다.
+/// One pass: keep-alive queries / drop idle connections. Returns the ids of the disconnected Data Sources.
 pub async fn housekeeping(state: &AppState) -> Vec<String> {
     use std::time::{Duration, Instant};
     let bases: Vec<String> = {
@@ -187,7 +207,7 @@ pub async fn housekeeping(state: &AppState) -> Vec<String> {
         b.dedup();
         b
     };
-    // 결과를 끝까지 안 읽고 오래 둔 커서 닫기 (열린 트랜잭션이 VACUUM·DDL 을 막지 않게). 실행 중인 세션은 건너뛴다
+    // Close cursors left unread for a long time (so open transactions do not block VACUUM/DDL). Skip sessions that are running
     let sessions: Vec<_> = state.sessions.read().await.values().map(|e| e.session.clone()).collect();
     for s in sessions {
         if let Ok(mut g) = s.try_lock() {
@@ -200,8 +220,8 @@ pub async fn housekeeping(state: &AppState) -> Vec<String> {
         let now = Instant::now();
         if let Some(secs) = cfg.options.auto_disconnect_secs.filter(|s| *s > 0) {
             let last = *state.last_used.lock().unwrap().entry(base.clone()).or_insert(now);
-            // 실행 중인 쿼리(세션 잠김)가 있으면 끊지 않는다
-            // 실행 중인 쿼리가 있거나 커밋 안 한 변경이 있는 세션이 있으면 끊지 않는다 (끊으면 변경이 사라진다)
+            // Do not disconnect while a query is running (session locked)
+            // Do not disconnect if any session has a running query or uncommitted changes (disconnecting would lose the changes)
             let busy = state.sessions.read().await.values().any(|e| belongs(&e.conn_id, &base) && e.session.try_lock().map(|g| g.in_tx()).unwrap_or(true));
             if !busy && now.duration_since(last) >= Duration::from_secs(secs as u64) {
                 drop_pool(state, &base).await;
@@ -238,12 +258,14 @@ pub async fn housekeeping(state: &AppState) -> Vec<String> {
     dropped
 }
 
-/// 드라이버 풀의 내보내기 (전체를 한 번에 받아 쓴다)
-async fn pool_export(pool: &Pool, sql: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {
-    pool.export(sql, out).await
-}
-
+/// Export from a driver pool (fetch the whole result at once, then write)
 pub async fn ensure_pool(state: &AppState, id: &str) -> AppResult<Pool> {
+    // MCP server: never connect to hidden Data Sources (sources without a password · pools already open too)
+    if state.mcp
+        && let Some(c) = state.store.get(split_target(id).0)?.filter(|c| c.mcp_access(false) == store::McpAccess::Off)
+    {
+        return Err(AppError::Msg(format!("Data source \"{}\" is not shared with MCP", c.name)));
+    }
     touch(state, id);
     if let Some(p) = state.pools.read().await.get(id) {
         return Ok(p.clone());
@@ -253,14 +275,14 @@ pub async fn ensure_pool(state: &AppState, id: &str) -> AppResult<Pool> {
         .store
         .get(base)?
         .ok_or_else(|| AppError::Msg("Data source not found".into()))?;
-    // 파일 DB (SQLite·DuckDB) 는 database 가 파일 경로다: DB 이름(main)으로 덮지 않는다
+    // For file DBs (SQLite, DuckDB) database is the file path: do not overwrite it with the DB name (main)
     if let Some(db) = db.filter(|_| !cfg.kind.is_file()) {
         cfg.database = db.to_string();
     }
-    let password = state.secret(base)?;
-    let ssh_secret = if cfg.active_ssh().is_some() { state.secret(&store::ssh_secret_key(base))? } else { None };
+    let password = state.saved_secret(base, cfg.password_saved)?;
+    let ssh_secret = if cfg.active_ssh().is_some() { state.saved_secret(&store::ssh_secret_key(base), cfg.ssh_secret_saved)? } else { None };
     let (pool, tunnel) = connect_config(&cfg, password.as_deref(), ssh_secret.as_deref()).await.map_err(|e| match e {
-        // sqlx 는 "pool timed out while waiting for an open connection" 이라고만 한다
+        // sqlx only says "pool timed out while waiting for an open connection"
         AppError::Db(sqlx::Error::PoolTimedOut) => AppError::Msg(format!(
             "Can't connect to {}:{} — the server didn't answer within 10s. Check that it's up (VPN / SSH tunnel), then run it again.",
             cfg.host, cfg.port
@@ -284,14 +306,14 @@ pub async fn ensure_session(state: &AppState, id: &str, tab_id: &str) -> AppResu
             return Ok(e.session.clone());
         }
     }
-    // 같은 탭이 다른 DB 로 바뀌었으면 이전 세션은 정리해서 돌려준다
+    // If the same tab switched to another DB, clean up and return the previous session
     let old = state.sessions.write().await.remove(tab_id);
     if let Some(e) = old {
         e.session.lock().await.discard().await;
     }
     let pool = ensure_pool(state, id).await?;
     let mut s = Session::open(&pool).await?;
-    // 탭이 Manual 이면 새 세션도 Manual (재접속 후 몰래 Auto 가 되면 다음 변경이 바로 커밋된다)
+    // If the tab is Manual, the new session is Manual too (silently becoming Auto after a reconnect would commit the next change right away)
     if state.tab_manual.lock().unwrap().get(tab_id).copied().unwrap_or(false) {
         s.set_manual(true).await?;
     }
@@ -308,9 +330,79 @@ pub async fn redis_pool(state: &AppState, id: &str) -> AppResult<crate::redisdb:
     }
 }
 
-/// 읽기 전용(MCP) 쿼리 시간 제한 (남이 보낸 쿼리로 서버를 오래 붙잡지 않게)
+/// Time limit for read-only (MCP) queries (so queries sent by others do not hold the server for long)
+const SERVER_CHANGED: &str = "The server, port, user, type, SSH tunnel or Redis nodes changed, or SSL was turned off, its verification lowered or its CA file changed — enter the password again. The saved one is only sent to the server it was saved for.";
+const SSH_CHANGED: &str = "The SSH server changed — enter the SSH password / passphrase again. The saved one is only sent to the server it was saved for.";
+/// MCP reads: 60 seconds, string parsing matches guard (even if the server or role sets standard_conforming_strings = off)
 const READ_ONLY_TIMEOUT_PG: &str = "SET LOCAL statement_timeout = '60s'";
+const READ_ONLY_STRINGS_PG: &str = "SET LOCAL standard_conforming_strings = on";
 const READ_ONLY_TIMEOUT_MY: &str = "SET SESSION max_execution_time = 60000";
+/// Max size of a single Redis value readable from MCP
+const REDIS_READ_MAX_BYTES: i64 = 16 << 20;
+/// Max size of an MCP CSV export
+const EXPORT_MAX_BYTES: u64 = 512 << 20;
+const EXPORT_MAX_PLUGIN_ROWS: usize = 1_000_000;
+
+/// MCP Redis reads (query, and reads sent to execute): the guard's limits, then what only the server knows — whole-key reads
+/// (HGETALL, LRANGE 0 -1, XRANGE without COUNT …) up to REDIS_STRICT_MAX elements, and values up to REDIS_READ_MAX_BYTES.
+/// Commands that aren't reads are left to the caller
+async fn check_redis_read(m: &crate::redisdb::RedisConn, line: &str) -> AppResult<()> {
+    use crate::guard::REDIS_STRICT_MAX;
+    let args = crate::redisdb::parse_command(line.trim().trim_end_matches(';').trim())?;
+    let cmd = String::from_utf8_lossy(&args[0]).to_uppercase();
+    let sub = args.get(1).map(|a| String::from_utf8_lossy(a).to_uppercase()).unwrap_or_default();
+    if !crate::redisdb::is_read_command(&cmd, &sub) {
+        return Ok(());
+    }
+    let rest: Vec<String> = args.iter().skip(1).map(|a| String::from_utf8_lossy(a).into_owned()).collect();
+    if let Some(why) = crate::guard::redis_strict_violation(&cmd, &rest) {
+        return Err(AppError::Msg(why));
+    }
+    // Whole keys: count the elements (and then the bytes) before reading
+    if let Some(c) = crate::guard::redis_size_check(&cmd, &rest) {
+        let mut n = 0i64;
+        for k in &c.keys {
+            n = n.saturating_add(crate::redisdb::element_count(m, c.count, k.as_bytes()).await?);
+        }
+        if n > REDIS_STRICT_MAX {
+            return Err(AppError::Msg(format!("{cmd} would read {n} elements — at most {REDIS_STRICT_MAX} in read-only mode; use {} (or redis_get for a preview)", c.instead)));
+        }
+        let mut bytes = 0i64;
+        for k in &c.keys {
+            bytes = bytes.saturating_add(crate::redisdb::memory_usage(m, k.as_bytes(), 0).await?);
+        }
+        if bytes > REDIS_READ_MAX_BYTES {
+            return Err(AppError::Msg(format!("{cmd} would read {} MB — too big to read here; use {}", bytes >> 20, c.instead)));
+        }
+    }
+    // Commands that return a whole value: check the size before reading
+    // GETRANGE with a bounded range reads at most that much
+    let range_small = cmd == "GETRANGE" && matches!((rest.get(1).and_then(|a| a.parse::<i64>().ok()), rest.get(2).and_then(|a| a.parse::<i64>().ok())), (Some(a), Some(b)) if a >= 0 && b >= a && b - a < REDIS_READ_MAX_BYTES);
+    let keys: &[String] = match cmd.as_str() {
+        "GET" | "JSON.GET" => rest.get(..1).unwrap_or(&[]),
+        "GETRANGE" if !range_small => rest.get(..1).unwrap_or(&[]),
+        "MGET" => &rest,
+        "JSON.MGET" => rest.split_last().map(|(_, k)| k).unwrap_or(&[]),
+        _ => &[],
+    };
+    let json = cmd.starts_with("JSON.");
+    for k in keys {
+        let n = crate::redisdb::value_size(m, k.as_bytes(), json).await?;
+        if n > REDIS_READ_MAX_BYTES {
+            return Err(AppError::Msg(format!("{k} is {} MB — too big to read here (use GETRANGE, or redis_get for a preview)", n >> 20)));
+        }
+    }
+    // HGET / HMGET: one hash field can be big too
+    if matches!(cmd.as_str(), "HGET" | "HMGET") && rest.len() > 1 {
+        for f in &rest[1..] {
+            let n = crate::redisdb::field_len(m, rest[0].as_bytes(), f.as_bytes()).await?;
+            if n > REDIS_READ_MAX_BYTES {
+                return Err(AppError::Msg(format!("{}.{f} is {} MB — too big to read here", rest[0], n >> 20)));
+            }
+        }
+    }
+    Ok(())
+}
 
 #[derive(Serialize)]
 pub struct ImportResult {
@@ -319,8 +411,8 @@ pub struct ImportResult {
 }
 
 impl AppState {
-    /// 읽기 전용으로 실행 (MCP 기본). 검사는 guard (한 문장·읽기 명령·부작용 함수 금지), 실행은 READ ONLY 트랜잭션 안에서
-    /// 60초 제한을 걸고 끝나면 롤백. MySQL 은 prepared 프로토콜 (서버가 한 문장만 받는다). Redis: 읽기 명령만 (CONFIG·KEYS 제외)
+    /// Run read-only (the MCP default). guard checks it (one statement, read commands, no side-effect functions); it runs inside a READ ONLY transaction
+    /// with a 60-second limit, rolled back at the end. MySQL uses the prepared protocol (the server accepts only one statement). Redis: read commands only (no CONFIG, KEYS)
     pub async fn run_read_only(&self, id: String, sql: String, limit: usize) -> AppResult<QueryResult> {
         use sqlx::Executor;
         let kind = self.kind_of(&id)?;
@@ -332,15 +424,20 @@ impl AppState {
                 let mut tx = p.begin().await?;
                 tx.execute("SET TRANSACTION READ ONLY").await?;
                 tx.execute(READ_ONLY_TIMEOUT_PG).await?;
+                tx.execute(READ_ONLY_STRINGS_PG).await?;
                 let r = db::run_on(&mut tx, &sql, limit).await;
                 let _ = tx.rollback().await;
                 r
             }
             Pool::My(p) => {
                 let mut conn = p.acquire().await?;
-                conn.execute(READ_ONLY_TIMEOUT_MY).await?;
-                conn.execute("START TRANSACTION READ ONLY").await?;
-                let r = crate::mysql::run_read_only_on(&mut conn, &sql, limit).await;
+                // Always reset the time limit, even on failure, so it does not stay on the pooled connection
+                let r = async {
+                    conn.execute(READ_ONLY_TIMEOUT_MY).await?;
+                    conn.execute("START TRANSACTION READ ONLY").await?;
+                    crate::mysql::run_read_only_on(&mut conn, &sql, limit).await
+                }
+                .await;
                 let _ = conn.execute("ROLLBACK").await;
                 let _ = conn.execute("SET SESSION max_execution_time = 0").await;
                 r
@@ -352,44 +449,69 @@ impl AppState {
                 if !crate::redisdb::is_read_command(&cmd, &sub) {
                     return Err(AppError::Msg(format!("{cmd} is not a read-only command")));
                 }
-                if let Some(why) = crate::guard::redis_strict_violation(&cmd) {
-                    return Err(AppError::Msg(why));
-                }
+                check_redis_read(&m, &sql).await?;
                 crate::redisdb::run(&m, &sql, limit).await
             }
-            // 드라이버: 서버 쪽 READ ONLY 트랜잭션이 없다 — guard 검사(한 문장·읽기 명령)를 통과한 것만
-            Pool::Plugin(c) => c.query(&sql, limit).await,
+            // Drivers: no server-side READ ONLY transaction — only what passes the guard check (one statement, read commands)
+            Pool::Plugin(c) => c.query_opts(&sql, limit, true).await,
         }
     }
 
-    /// 읽기 전용 쿼리 결과를 CSV 로 (MCP). 검사·실행 모두 run_read_only 와 같은 규칙 (전체 결과도 READ ONLY 트랜잭션 안에서)
+    /// Read-only query result to CSV (MCP). Same rules as run_read_only for checking and running (the full result also runs in a READ ONLY transaction)
     pub async fn export_csv_read_only(&self, id: String, sql: String, path: std::path::PathBuf) -> AppResult<u64> {
-        use sqlx::Executor;
         let kind = self.kind_of(&id)?;
         if let Some(why) = crate::guard::read_only_violation(&sql, kind, true) {
             return Err(AppError::Msg(why));
         }
         let pool = ensure_pool(self, &id).await?;
-        let mut out = crate::transfer::Exporter::csv_file(&path).await?;
+        // Same time limit as run_read_only, plus a file size limit (so it does not fill the disk). On failure, delete the partial file
+        let mut out = crate::transfer::Exporter::csv_file(&path).await?.max_bytes(EXPORT_MAX_BYTES);
+        let r = match Self::export_read_only_into(pool, &sql, &mut out).await {
+            Ok(()) => out.finish().await.map(|e| e.rows),
+            Err(e) => Err(e),
+        };
+        if r.is_err() {
+            let _ = std::fs::remove_file(&path);
+        }
+        r
+    }
+
+    async fn export_read_only_into(pool: Pool, sql: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {
+        use sqlx::Executor;
         match pool {
             Pool::Pg(p) => {
                 let mut tx = p.begin().await?;
                 tx.execute("SET TRANSACTION READ ONLY").await?;
-                let r = db::export_pg_on(&mut tx, &sql, &mut out).await;
+                tx.execute(READ_ONLY_TIMEOUT_PG).await?;
+                tx.execute(READ_ONLY_STRINGS_PG).await?;
+                let r = db::export_pg_on(&mut tx, sql, out).await;
                 let _ = tx.rollback().await;
                 r?
             }
             Pool::My(p) => {
                 let mut conn = p.acquire().await?;
-                conn.execute("START TRANSACTION READ ONLY").await?;
-                let r = crate::mysql::export_on(&mut conn, &sql, &mut out, true).await;
+                let r = async {
+                    conn.execute(READ_ONLY_TIMEOUT_MY).await?;
+                    conn.execute("START TRANSACTION READ ONLY").await?;
+                    crate::mysql::export_on(&mut conn, sql, out, true).await
+                }
+                .await;
                 let _ = conn.execute("ROLLBACK").await;
+                let _ = conn.execute("SET SESSION max_execution_time = 0").await;
                 r?
             }
             Pool::Redis(..) => return Err(AppError::Msg("CSV export of Redis commands is not available in read-only mode".into())),
-            Pool::Plugin(_) => pool_export(&pool, &sql, &mut out).await?,
+            Pool::Plugin(c) => {
+                let r = tokio::time::timeout(std::time::Duration::from_secs(60), c.query_opts(sql, EXPORT_MAX_PLUGIN_ROWS, true))
+                    .await
+                    .map_err(|_| AppError::Msg("The export took over 60 s — narrow the query".into()))??;
+                out.header(&r.columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>()).await?;
+                for row in &r.rows {
+                    out.row(row).await?;
+                }
+            }
         }
-        Ok(out.finish().await?.rows)
+        Ok(())
     }
 
     pub fn kind_of(&self, id: &str) -> AppResult<crate::store::DbKind> {
@@ -408,7 +530,7 @@ impl AppState {
             .into_iter()
             .map(|c| {
                 Ok(ConnectionView {
-                    has_password: c.password_saved || self.secret_file.contains(&c.id),
+                    has_password: c.password_saved || self.secret_file.contains(&c.id).unwrap_or(true),
                     connected: pools.keys().any(|k| belongs(k, &c.id)),
                     config: c,
                 })
@@ -416,81 +538,145 @@ impl AppState {
             .collect()
     }
 
-    /// `password`: None이면 기존 비밀번호 유지, 빈 문자열이면 삭제.
+    /// `password`: None keeps the existing password, an empty string deletes it.
     pub async fn save_connection(&self, mut config: ConnectionConfig, password: Option<String>, ssh_secret: Option<String>) -> AppResult<ConnectionConfig> {
         crate::log!("[qurry] save_connection host={} user={} db={}", config.host, config.user, config.database);
         if config.id.is_empty() {
             config.id = uuid::Uuid::new_v4().to_string();
+            // New sources (including duplicates) default to MCP Off unless set
+            if config.options.mcp.is_none() {
+                config.options.mcp = Some("off".into());
+            }
         }
-        // 저장 여부 플래그는 서버가 관리한다 (None = 기존 값 유지)
-        let prev = self.store.get(&config.id)?;
-        config.password_saved = prev.as_ref().is_some_and(|p| p.password_saved);
-        config.ssh_secret_saved = prev.as_ref().is_some_and(|p| p.ssh_secret_saved);
-        match password.as_deref() {
-            Some("") => {
-                self.set_secret(&config.id, None)?;
-                config.password_saved = false;
-            }
-            Some(p) => {
-                self.set_secret(&config.id, Some(p))?;
-                config.password_saved = true;
-            }
-            None => {}
+        // Read the key now: in keychain mode that may show a prompt, and other apps would wait on the store lock meanwhile
+        if [&password, &ssh_secret].iter().any(|s| s.as_deref().is_some_and(|s| !s.is_empty())) {
+            self.secret_file.ensure_key()?;
         }
-        let sk = store::ssh_secret_key(&config.id);
-        match ssh_secret.as_deref() {
-            Some("") => {
-                self.set_secret(&sk, None)?;
-                config.ssh_secret_saved = false;
+        // Check against the saved source, set the secrets and write under the store lock: another app's save in between
+        // (another server, a password saved or removed) can't be decided on stale settings
+        let config = self.store.save_with(config, |prev, config| {
+            // If the server changed, do not use the saved password for the new server: ask for it again
+            // "Saved" means the password actually exists, not the flag (old imports left entries with only the flag turned off).
+            // A damaged secrets.json that may hold it counts as saved
+            if let Some(p) = prev {
+                if password.is_none() && self.secret_file.contains(&p.id).unwrap_or(true) && !p.same_server(config) {
+                    return Err(AppError::Msg(SERVER_CHANGED.into()));
+                }
+                if ssh_secret.is_none() && self.secret_file.contains(&store::ssh_secret_key(&p.id)).unwrap_or(true) && config.active_ssh().is_some() && !p.same_ssh(config) {
+                    return Err(AppError::Msg(SSH_CHANGED.into()));
+                }
             }
-            Some(p) => {
-                self.set_secret(&sk, Some(p))?;
-                config.ssh_secret_saved = true;
+            // The saved-password flag is managed on the backend (None = keep the existing value)
+            config.password_saved = prev.is_some_and(|p| p.password_saved);
+            config.ssh_secret_saved = prev.is_some_and(|p| p.ssh_secret_saved);
+            match password.as_deref() {
+                Some("") => {
+                    self.set_secret(&config.id, None)?;
+                    config.password_saved = false;
+                }
+                Some(p) => {
+                    self.set_secret(&config.id, Some(p))?;
+                    config.password_saved = true;
+                }
+                None => {}
             }
-            None => {}
-        }
-        self.store.save(&config)?;
-        drop_pool(self, &config.id).await; // 설정이 바뀌었을 수 있으므로 다시 접속하게 한다
+            let sk = store::ssh_secret_key(&config.id);
+            match ssh_secret.as_deref() {
+                Some("") => {
+                    self.set_secret(&sk, None)?;
+                    config.ssh_secret_saved = false;
+                }
+                Some(p) => {
+                    self.set_secret(&sk, Some(p))?;
+                    config.ssh_secret_saved = true;
+                }
+                None => {}
+            }
+            Ok(())
+        })?;
+        drop_pool(self, &config.id).await; // The settings may have changed, so force a reconnect
         Ok(config)
+    }
+
+    /// Explorer menu: change only the color (another app's change to the source since the list was read stays; no reconnect)
+    pub async fn set_connection_color(&self, id: String, color: Option<String>) -> AppResult<ConnectionConfig> {
+        self.modify_connection(&id, |c| c.color = color)
+    }
+
+    /// Explorer menu: change only the shown databases and schemas
+    pub async fn set_connection_scope(&self, id: String, scope: store::Scope) -> AppResult<ConnectionConfig> {
+        self.modify_connection(&id, |c| c.scope = scope)
+    }
+
+    fn modify_connection(&self, id: &str, f: impl FnOnce(&mut ConnectionConfig)) -> AppResult<ConnectionConfig> {
+        self.store
+            .modify(id, |c| {
+                f(c);
+                Ok(c.clone())
+            })?
+            .ok_or_else(|| AppError::Msg("Data source not found".into()))
     }
 
     pub async fn delete_connection(&self, id: String) -> AppResult<()> {
         drop_pool(self, &id).await;
-        self.set_secret(&id, None)?;
-        self.set_secret(&store::ssh_secret_key(&id), None)?;
+        // A damaged secrets.json (left untouched) doesn't keep the data source: it is removed, and the error says the password stayed
+        let forgot = self.set_secret(&id, None).and_then(|_| self.set_secret(&store::ssh_secret_key(&id), None));
         crate::search_cache::remove_conn(&self.store.dir(), &id);
-        self.store.delete(&id)
+        self.store.delete(&id)?;
+        forgot.map_err(|e| AppError::Msg(format!("The data source was removed, but its saved password couldn't be: {e}")))
     }
 
-    /// 저장하지 않고 접속만 시험한다. `password`가 None이면 저장된 비밀번호를 쓴다.
+    /// The saved password, if it may be sent to config (only when it is the same server as the saved settings)
+    fn saved_password_for(&self, config: &ConnectionConfig) -> AppResult<Option<String>> {
+        match self.store.get(&config.id)? {
+            Some(p) if self.secret_file.contains(&p.id).unwrap_or(true) && !p.same_server(config) => Err(AppError::Msg(SERVER_CHANGED.into())),
+            Some(p) => self.saved_secret(&config.id, p.password_saved),
+            None => Ok(None),
+        }
+    }
+
+    fn saved_ssh_secret_for(&self, config: &ConnectionConfig) -> AppResult<Option<String>> {
+        match self.store.get(&config.id)? {
+            Some(p) if self.secret_file.contains(&store::ssh_secret_key(&p.id)).unwrap_or(true) && !p.same_ssh(config) => Err(AppError::Msg(SSH_CHANGED.into())),
+            Some(p) => self.saved_secret(&store::ssh_secret_key(&config.id), p.ssh_secret_saved),
+            None => Ok(None),
+        }
+    }
+
+    /// Test the connection without saving. If `password` is None, use the saved password (only when it is the same server as the saved settings).
     pub async fn test_connection(&self, config: ConnectionConfig, password: Option<String>, ssh_secret: Option<String>) -> AppResult<String> {
         let password = match password {
             Some(p) => Some(p),
-            None if !config.id.is_empty() => self.secret(&config.id)?,
+            None if !config.id.is_empty() => self.saved_password_for(&config)?,
             None => None,
         };
         let ssh_secret = match ssh_secret {
             Some(p) => Some(p),
-            None if !config.id.is_empty() && config.active_ssh().is_some() => self.secret(&store::ssh_secret_key(&config.id))?,
+            None if !config.id.is_empty() && config.active_ssh().is_some() => self.saved_ssh_secret_for(&config)?,
             None => None,
         };
         let (pool, tunnel) = connect_config(&config, password.as_deref(), ssh_secret.as_deref()).await?;
         let version = pool.server_version().await;
+        let plain = match &pool {
+            Pool::My(p) => crate::mysql::plaintext_note(p, &config).await,
+            Pool::Pg(p) => db::pg_plaintext_note(p, &config).await,
+            _ => None,
+        };
         pool.close().await;
         drop(tunnel);
         let via = config.active_ssh().map(|s| format!("  (via SSH {}@{})", s.user, s.host)).unwrap_or_default();
-        version.map(|v| match db::version_note(config.kind, &v) {
-            Some(n) => format!("{v}{via}\n{n}"),
-            None => format!("{v}{via}"),
+        version.map(|v| {
+            let notes: Vec<String> = db::version_note(config.kind, &v).into_iter().chain(plain).collect();
+            if notes.is_empty() { format!("{v}{via}") } else { format!("{v}{via}\n{}", notes.join("\n")) }
         })
     }
 
-    /// SSH/SSL 탭의 Test Connection: SSH 로그인만 확인한다.
+    /// Test Connection on the SSH/SSL tab: checks only the SSH login.
     pub async fn test_ssh(&self, config: ConnectionConfig, ssh_secret: Option<String>) -> AppResult<String> {
         let ssh = config.ssh.as_ref().filter(|s| !s.host.is_empty()).ok_or_else(|| AppError::Msg("Enter the SSH host".into()))?;
         let secret = match ssh_secret {
             Some(p) => Some(p),
-            None if !config.id.is_empty() => self.secret(&store::ssh_secret_key(&config.id))?,
+            None if !config.id.is_empty() => self.saved_ssh_secret_for(&config)?,
             None => None,
         };
         crate::tunnel::test_login(ssh, secret.as_deref()).await
@@ -498,7 +684,19 @@ impl AppState {
 
     pub async fn connect(&self, id: String) -> AppResult<String> {
         crate::log!("[qurry] connect {id}");
-        ensure_pool(self, &id).await?.server_version().await
+        let pool = ensure_pool(self, &id).await?;
+        let v = pool.server_version().await?;
+        // If connected in plain text, say so next to the version (status bar · TUI status)
+        let cfg = self.source(&id)?;
+        let note = match &pool {
+            Pool::My(p) => crate::mysql::plaintext_note(p, &cfg).await,
+            Pool::Pg(p) => db::pg_plaintext_note(p, &cfg).await,
+            _ => None,
+        };
+        Ok(match note {
+            Some(n) => format!("{v} — {n}"),
+            None => v,
+        })
     }
 
     pub async fn disconnect(&self, id: String) -> AppResult<()> {
@@ -506,8 +704,8 @@ impl AppState {
         Ok(())
     }
 
-    /// `tab_id`가 있으면 그 콘솔의 세션에서 실행한다 (커서·취소 지원).
-    /// Production Data Source 면 바꾸는 문장을 운영 작업 기록에 남기고, 단순한 UPDATE / DELETE 는 되돌리기 SQL 도 (crate::audit)
+    /// If `tab_id` is set, run in that console's session (cursor and cancel support).
+    /// For Production Data Sources, log modifying statements to the audit log, with undo SQL for simple UPDATE / DELETE (crate::audit)
     pub async fn run_query(&self, id: String, sql: String, limit: Option<usize>, tab_id: Option<String>) -> AppResult<QueryResult> {
         let limit = limit.unwrap_or(500);
         self.check_read_only(&id, &sql)?;
@@ -556,12 +754,12 @@ impl AppState {
         r
     }
 
-    /// 운영 작업 기록 (최근 것부터)
+    /// Production audit log (newest first)
     pub fn audit_log(&self, conn: Option<String>, filter: String, limit: usize) -> Vec<crate::audit::AuditEntry> {
         self.audit.list(conn.as_deref(), &filter, limit)
     }
 
-    /// 콘솔의 Commit / Roll back 을 운영 작업 기록에 (기록한 변경이 커밋 전이었을 때만)
+    /// Log the console's Commit / Roll back to the audit log (only if the logged changes were uncommitted)
     async fn audit_tx_end(&self, tab_id: &str, word: &str) {
         let conn = self.sessions.read().await.get(tab_id).map(|e| e.conn_id.clone());
         if let Some(c) = conn
@@ -609,7 +807,7 @@ impl AppState {
         Ok(())
     }
 
-    /// 탭 세션에 커밋 안 한 변경이 있는지 (오류 뒤에도 Commit/Roll back 버튼을 맞게 보이려고)
+    /// Whether the tab session has uncommitted changes (to show the Commit/Roll back buttons correctly even after an error)
     pub async fn tx_state(&self, tab_id: String) -> bool {
         let sess = self.sessions.read().await.get(&tab_id).map(|e| e.session.clone());
         match sess {
@@ -618,7 +816,7 @@ impl AppState {
         }
     }
 
-    /// Read-only Redis Data Source 면 쓰기 명령을 막는다
+    /// Block write commands on Read-only Redis Data Sources
     fn check_read_only_redis(&self, id: &str, cmd: &str, sub: &str) -> AppResult<()> {
         let cfg = self.source(id)?;
         let (cmd, sub) = (cmd.to_uppercase(), sub.to_uppercase());
@@ -628,12 +826,12 @@ impl AppState {
         Ok(())
     }
 
-    /// Data Source 설정 (읽기 전용 여부 등)
+    /// Data Source settings (read-only flag, etc.)
     pub(crate) fn source(&self, id: &str) -> AppResult<ConnectionConfig> {
         self.store.get(split_target(id).0)?.ok_or_else(|| AppError::Msg("Data source not found".into()))
     }
 
-    /// Read-only Data Source 면 데이터를 바꾸는 문장을 막는다 (UI 와 상관없이 여기서 지킨다)
+    /// Block data-modifying statements on Read-only Data Sources (enforced here, regardless of the UI)
     pub(crate) fn check_read_only(&self, id: &str, sql: &str) -> AppResult<()> {
         let cfg = self.source(id)?;
         if !cfg.read_only {
@@ -668,7 +866,7 @@ impl AppState {
 
     pub async fn close_session(&self, tab_id: String) -> AppResult<()> {
         self.tab_manual.lock().unwrap().remove(&tab_id);
-        // 쿼리가 돌고 있으면 먼저 취소한다 (안 그러면 끝날 때까지 연결과 정리 작업이 묶인다)
+        // Cancel a running query first (otherwise the connection and cleanup stay tied up until it ends)
         let busy = self.sessions.read().await.get(&tab_id).is_some_and(|e| e.session.try_lock().is_err());
         if busy {
             let _ = self.cancel_query(tab_id.clone()).await;
@@ -681,8 +879,24 @@ impl AppState {
         Ok(())
     }
 
-    /// 문장들을 한 트랜잭션으로. exact_one = 표 편집 저장 (UPDATE/DELETE 가 정확히 1행이 아니면 전부 롤백)
+    /// Statements in one transaction. exact_one = saving table edits (roll back everything unless each UPDATE/DELETE hits exactly 1 row)
     pub async fn execute_batch(&self, id: String, statements: Vec<String>, exact_one: bool) -> AppResult<u64> {
+        self.execute_batch_with(id, statements, exact_one, false).await
+    }
+
+    /// MCP execute: like execute_batch, but PostgreSQL / MySQL run each statement as a prepared statement (one statement per item, enforced by the server)
+    /// Redis reads among the items get the same size checks as run_read_only
+    pub async fn execute_batch_prepared(&self, id: String, statements: Vec<String>) -> AppResult<u64> {
+        if self.kind_of(&id)? == store::DbKind::Redis {
+            let m = redis_pool(self, &id).await?;
+            for st in &statements {
+                check_redis_read(&m, st).await?;
+            }
+        }
+        self.execute_batch_with(id, statements, false, true).await
+    }
+
+    async fn execute_batch_with(&self, id: String, statements: Vec<String>, exact_one: bool, prepared: bool) -> AppResult<u64> {
         for st in &statements {
             self.check_read_only(&id, st)?;
         }
@@ -698,15 +912,15 @@ impl AppState {
             }
         }
         let r = match ensure_pool(self, &id).await? {
-            Pool::Pg(pg) => session::execute_batch(&pg, &statements, exact_one).await,
-            Pool::My(my) => crate::mysql::execute_batch(&my, &statements, exact_one).await,
+            Pool::Pg(pg) => session::execute_batch_with(&pg, &statements, exact_one, prepared).await,
+            Pool::My(my) => crate::mysql::execute_batch_with(&my, &statements, exact_one, prepared).await,
             Pool::Redis(m, _) => {
                 for st in &statements {
                     crate::redisdb::run(&m, st, 1).await?;
                 }
                 Ok(statements.len() as u64)
             }
-            // 드라이버: 차례로 (트랜잭션은 드라이버가 모른다 — exact_one 만 지킨다)
+            // Drivers: one by one (drivers know nothing about transactions — only exact_one is enforced)
             Pool::Plugin(c) => {
                 let mut affected = 0;
                 for st in &statements {
@@ -726,7 +940,7 @@ impl AppState {
         }
     }
 
-    /// 읽을 때마다 검색 캐시에 저장한다 (Redis 키는 저장하지 않는다)
+    /// Save to the search cache on every read (Redis keys are not saved)
     pub async fn object_index(&self, id: String) -> AppResult<Vec<crate::meta::IndexEntry>> {
         let pool = ensure_pool(self, &id).await?;
         let r = crate::meta::object_index(&pool).await?;
@@ -736,8 +950,8 @@ impl AppState {
         Ok(r)
     }
 
-    /// 접속하면 바로 (백그라운드로) 보이는 DB 의 객체·컬럼 목록을 읽어 검색 캐시를 채운다.
-    /// 그래야 다음에 접속하지 않고도 Search Everywhere 에서 찾는다. 10분 안에 채운 DB 는 건너뛴다
+    /// On connect, immediately read (in the background) the objects and columns of the visible DBs to fill the search cache.
+    /// That way Search Everywhere finds them next time without connecting. Skip DBs filled within the last 10 minutes
     pub async fn warm_search_cache(&self, conn: String) -> AppResult<()> {
         let cfg = self.store.get(&conn)?.ok_or_else(|| AppError::Msg("Data source not found".into()))?;
         if cfg.kind == store::DbKind::Redis {
@@ -761,7 +975,7 @@ impl AppState {
         Ok(())
     }
 
-    /// 접속하지 않은 Data Source 도 찾을 수 있게 저장해 둔 객체·컬럼 목록
+    /// Saved object and column lists, so Data Sources that are not connected can be searched too
     pub fn cached_index(&self) -> AppResult<Vec<crate::search_cache::CachedIndex>> {
         let ids: Vec<String> = self.store.list()?.into_iter().map(|c| c.id).collect();
         Ok(crate::search_cache::load_all(&self.store.dir(), |c| ids.iter().any(|i| i == c)))
@@ -779,7 +993,7 @@ impl AppState {
         crate::redisdb::key_detail(&redis_pool(self, &id).await?, &key, limit.unwrap_or(1000)).await
     }
 
-    /// 터미널: redis-cli 처럼 한 줄을 그대로
+    /// Terminal: one line as is, like redis-cli
     pub async fn redis_exec_line(&self, id: String, line: String) -> AppResult<serde_json::Value> {
         self.check_read_only(&id, &line)?;
         let args: Vec<String> = crate::redisdb::parse_command(&line)?.into_iter().map(|a| String::from_utf8_lossy(&a).into_owned()).collect();
@@ -795,18 +1009,33 @@ impl AppState {
         self.store.export_to(std::path::Path::new(&path))
     }
 
-    /// 가져오기 미리보기: 추가·변경될 Data Source 와 위험한 변경 (Read-only 해제, 서버·SSH·시작 스크립트 변경)
+    /// Import preview: Data Sources to be added or changed, and risky changes (Read-only turned off, server/SSH/startup script changed)
     pub fn import_preview(&self, path: String) -> AppResult<Vec<String>> {
         self.store.import_preview(std::path::Path::new(&path))
     }
 
-    /// 처음 보는 SSH 서버 키를 사용자가 확인하고 신뢰 (known_hosts 에 등록)
+    /// The user confirms and trusts an unknown SSH server key (added to known_hosts)
     pub fn trust_ssh_host(&self, host: String, port: u16) -> AppResult<String> {
         crate::tunnel::trust_host_key(&host, port)
     }
 
     pub async fn import_connections(&self, path: String) -> AppResult<ImportResult> {
-        let (added, updated) = self.store.import_from(std::path::Path::new(&path))?;
+        // Importing a different server under the same id deletes the old password (so it is not sent to the new server) —
+        // before the store is written, so a failure (damaged secrets.json) imports nothing
+        let (added, updated, forget) = self.store.import_from(std::path::Path::new(&path), |forget| {
+            for (id, password, ssh) in forget {
+                if *password {
+                    self.set_secret(id, None)?;
+                }
+                if *ssh {
+                    self.set_secret(&store::ssh_secret_key(id), None)?;
+                }
+            }
+            Ok(())
+        })?;
+        for (id, _, _) in forget {
+            drop_pool(self, &id).await;
+        }
         Ok(ImportResult { added, updated })
     }
 
@@ -843,7 +1072,7 @@ impl AppState {
         crate::meta::table_detail(&ensure_pool(self, &id).await?, &schema, &table).await
     }
 
-    /// pgvector: 이 행과 가까운 행을 찾는 SQL (벡터 인덱스의 거리 연산자로). pk = (열, 값)
+    /// pgvector: SQL that finds rows close to this row (using the vector index's distance operator). pk = (column, value)
     pub async fn similar_rows_sql(&self, id: String, schema: String, table: String, column: String, pk: Vec<(String, Option<String>)>) -> AppResult<String> {
         if pk.is_empty() {
             return Err(AppError::Msg(format!("{schema}.{table} has no primary key — can't pick the row to compare")));
@@ -871,7 +1100,216 @@ impl AppState {
 mod tests {
     use super::*;
 
-    /// Auto-disconnect: 유휴 시간이 지나면 풀·세션을 닫는다. keep-alive 는 세션을 살려 둔다.
+    /// Changing only the host and doing Test / Save does not send the saved password to the new server; it asks for it again (before connecting)
+    #[tokio::test]
+    async fn saved_password_is_not_sent_to_a_changed_server() {
+        let dir = std::env::temp_dir().join(format!("qurry-pw-{}", uuid::Uuid::new_v4()));
+        let st = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+        let cfg = ConnectionConfig {
+            id: "a".into(), name: "a".into(), kind: crate::store::DbKind::Postgres, host: "127.0.0.1".into(), port: 1,
+            user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+        };
+        let saved = st.save_connection(cfg, Some("pw".into()), None).await.unwrap();
+        let mut moved = saved.clone();
+        moved.host = "attacker.example".into();
+        let e = st.test_connection(moved.clone(), None, None).await.unwrap_err().to_string();
+        assert!(e.contains("enter the password again"), "{e}");
+        let e = st.save_connection(moved.clone(), None, None).await.unwrap_err().to_string();
+        assert!(e.contains("enter the password again"), "{e}");
+        // Keep the saved password even if only the flag is off (old imports)
+        let mut flag_off = saved.clone();
+        flag_off.password_saved = false;
+        st.store.save(&flag_off).unwrap();
+        let e = st.test_connection(moved.clone(), None, None).await.unwrap_err().to_string();
+        assert!(e.contains("enter the password again"), "{e}");
+        // Giving a new password saves it · renaming only leaves it as is
+        st.save_connection(moved, Some("pw2".into()), None).await.unwrap();
+        let mut renamed = st.store.get("a").unwrap().unwrap();
+        renamed.name = "b".into();
+        st.save_connection(renamed, None, None).await.unwrap();
+        assert_eq!(st.secret("a").unwrap().as_deref(), Some("pw2"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// New or duplicated sources are MCP Off. The MCP server does not connect to hidden sources (even without a password)
+    #[tokio::test]
+    async fn new_sources_start_hidden_from_mcp() {
+        let dir = std::env::temp_dir().join(format!("qurry-mcpnew-{}", uuid::Uuid::new_v4()));
+        let mut st = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+        let cfg = ConnectionConfig {
+            id: String::new(), name: "trust".into(), kind: crate::store::DbKind::Postgres, host: "127.0.0.1".into(), port: 1,
+            user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+        };
+        let saved = st.save_connection(cfg, None, None).await.unwrap();
+        assert_eq!(saved.options.mcp.as_deref(), Some("off"));
+        st.mcp = true;
+        let e = st.connect(saved.id.clone()).await.unwrap_err().to_string();
+        assert!(e.contains("not shared with MCP"), "{e}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The MCP server does not read passwords of Data Sources hidden from MCP. The app is unaffected
+    #[test]
+    fn mcp_hidden_source_secrets_stay_locked() {
+        let dir = std::env::temp_dir().join(format!("qurry-mcp-{}", uuid::Uuid::new_v4()));
+        let mut st = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+        let mut cfg = ConnectionConfig {
+            id: "prod".into(), name: "prod".into(), kind: crate::store::DbKind::Postgres, host: "db".into(), port: 5432,
+            user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: true,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+        };
+        cfg.options.confirm_changes = true;
+        st.store.save(&cfg).unwrap();
+        st.set_secret("prod", Some("pw")).unwrap();
+        st.set_secret("prod#ssh", Some("sshpw")).unwrap();
+        assert_eq!(st.secret("prod").unwrap().as_deref(), Some("pw"));
+        st.mcp = true;
+        assert!(st.secret("prod").is_err() && st.secret("prod#ssh").is_err());
+        cfg.options.mcp = Some("read".into());
+        st.store.save(&cfg).unwrap();
+        assert_eq!(st.secret("prod").unwrap().as_deref(), Some("pw"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A damaged secrets.json only blocks sources that have a saved password; deleting still removes the source (the file is left as is)
+    #[tokio::test]
+    async fn damaged_secrets_only_block_sources_with_a_password() {
+        let dir = std::env::temp_dir().join(format!("qurry-dmg-{}", uuid::Uuid::new_v4()));
+        let st = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+        let mk = |id: &str| ConnectionConfig {
+            id: id.into(), name: id.into(), kind: crate::store::DbKind::Postgres, host: "db".into(), port: 5432,
+            user: "u".into(), database: "d".into(), color: None, password_saved: false,
+            ssh: Some(crate::store::SshConfig { enabled: true, host: "127.0.0.1".into(), port: 1, user: "me".into(), auth: Default::default(), key_path: String::new() }),
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+        };
+        st.save_connection(mk("pw"), Some("secret".into()), None).await.unwrap();
+        st.save_connection(mk("trust"), None, None).await.unwrap();
+        // A password in the file whose flag was cleared (old imports did that)
+        st.save_connection(mk("flagless"), Some("secret".into()), None).await.unwrap();
+        st.store.save(&mk("flagless")).unwrap();
+        let damaged = "{ \"flagless\": \"x\", \"pw\": \"tru";
+        std::fs::write(dir.join("secrets.json"), damaged).unwrap();
+        let e = st.connect("pw".into()).await.unwrap_err().to_string();
+        assert!(e.contains("damaged"), "{e}");
+        let e = st.connect("flagless".into()).await.unwrap_err().to_string();
+        assert!(e.contains("damaged"), "{e}");
+        // No saved password or SSH secret: tries the SSH server (nothing listens on port 1), not the secrets file
+        let e = st.connect("trust".into()).await.unwrap_err().to_string();
+        assert!(!e.contains("damaged"), "{e}");
+        let e = st.test_connection(mk("trust"), None, None).await.unwrap_err().to_string();
+        assert!(!e.contains("damaged"), "{e}");
+        let e = st.delete_connection("pw".into()).await.unwrap_err().to_string();
+        assert!(e.contains("was removed") && e.contains("damaged"), "{e}");
+        assert!(st.store.get("pw").unwrap().is_none());
+        assert_eq!(std::fs::read_to_string(dir.join("secrets.json")).unwrap(), damaged);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The explorer's color and scope menus change only that part: another app's change since the list was read stays
+    #[tokio::test]
+    async fn color_and_scope_change_only_their_part() {
+        let dir = std::env::temp_dir().join(format!("qurry-part-{}", uuid::Uuid::new_v4()));
+        let st = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+        let cfg = ConnectionConfig {
+            id: "p".into(), name: "p".into(), kind: crate::store::DbKind::Postgres, host: "db".into(), port: 5432,
+            user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+        };
+        st.save_connection(cfg, Some("pw".into()), None).await.unwrap();
+        // Another app turns on Read-only
+        let other = Store::new(dir.clone());
+        let mut c = other.get("p").unwrap().unwrap();
+        c.read_only = true;
+        other.save(&c).unwrap();
+        st.set_connection_color("p".into(), Some("#f00".into())).await.unwrap();
+        let scope = crate::store::Scope { databases: Some(vec!["d".into()]), schemas: Default::default() };
+        st.set_connection_scope("p".into(), scope).await.unwrap();
+        let c = st.store.get("p").unwrap().unwrap();
+        assert!(c.read_only && c.password_saved, "{c:?}");
+        assert_eq!((c.color.as_deref(), c.scope.databases.as_deref()), (Some("#f00"), Some(&["d".to_string()][..])));
+        assert!(st.set_connection_color("missing".into(), None).await.is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A form save (password kept) racing with another app saving or removing the password keeps the "password saved" flag
+    /// matching the file: the saved source is read under the store lock, not before
+    #[test]
+    fn form_save_racing_a_password_save_keeps_the_flag() {
+        for round in 0..4 {
+            form_save_race(round % 2 == 0);
+        }
+    }
+
+    fn form_save_race(end_with_password: bool) {
+        let dir = std::env::temp_dir().join(format!("qurry-race-{}", uuid::Uuid::new_v4()));
+        let cfg = ConnectionConfig {
+            id: "r".into(), name: "r".into(), kind: crate::store::DbKind::Postgres, host: "db".into(), port: 5432,
+            user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+        };
+        Store::new(dir.clone()).save(&cfg).unwrap();
+        // Create the key before the threads open the file
+        crate::secrets::SecretFile::open(&dir).unwrap();
+        let run = |pw: bool| {
+            let (dir, cfg) = (dir.clone(), cfg.clone());
+            move || {
+                let st = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+                let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+                // The password side sets and removes it in turn, ending on `end_with_password`
+                let n = if pw { 20 + usize::from(end_with_password) } else { 40 };
+                for i in 0..n {
+                    let mut c = cfg.clone();
+                    c.name = format!("r{i}");
+                    let p = pw.then(|| if i % 2 == 0 { format!("pw{i}") } else { String::new() });
+                    rt.block_on(st.save_connection(c, p, None)).unwrap();
+                }
+            }
+        };
+        std::thread::scope(|sc| {
+            sc.spawn(run(false));
+            sc.spawn(run(true));
+        });
+        let st = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+        assert_eq!(st.store.get("r").unwrap().unwrap().password_saved, st.secret_file.contains("r").unwrap());
+        assert_eq!(st.secret_file.contains("r").unwrap(), end_with_password);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// An import that turns on "Allow unencrypted" while secrets.json is damaged fails as a whole: the store isn't changed,
+    /// so after the file is repaired the old password isn't sent on the plaintext path
+    #[tokio::test]
+    async fn import_needing_a_password_removed_fails_before_writing() {
+        let dir = std::env::temp_dir().join(format!("qurry-impdmg-{}", uuid::Uuid::new_v4()));
+        let st = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+        let cfg = ConnectionConfig {
+            id: "m".into(), name: "m".into(), kind: crate::store::DbKind::Mysql, host: "db.example".into(), port: 3306,
+            user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+        };
+        st.save_connection(cfg, Some("pw".into()), None).await.unwrap();
+        let file = dir.join("import.json");
+        st.export_connections(file.display().to_string()).await.unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        v["connections"][0]["options"]["allowPlaintext"] = true.into();
+        std::fs::write(&file, v.to_string()).unwrap();
+        let good = std::fs::read(dir.join("secrets.json")).unwrap();
+        std::fs::write(dir.join("secrets.json"), b"{ \"m\": \"tru").unwrap();
+        let e = st.import_connections(file.display().to_string()).await.err().expect("import must fail").to_string();
+        assert!(e.contains("damaged"), "{e}");
+        let c = st.store.get("m").unwrap().unwrap();
+        assert!(!c.options.allow_plaintext && c.password_saved, "{c:?}");
+        // Repaired: the import goes through and the password is gone
+        std::fs::write(dir.join("secrets.json"), good).unwrap();
+        st.import_connections(file.display().to_string()).await.unwrap();
+        let c = st.store.get("m").unwrap().unwrap();
+        assert!(c.options.allow_plaintext && !c.password_saved);
+        assert_eq!(st.saved_secret("m", c.password_saved).unwrap(), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Auto-disconnect: close pools and sessions after the idle time. keep-alive keeps the session alive.
     #[tokio::test]
     #[ignore]
     async fn housekeeping_keepalive_and_auto_disconnect() {

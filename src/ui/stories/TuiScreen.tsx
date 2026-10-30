@@ -1,4 +1,4 @@
-/** TUI 장면 (crates/tui/src/kit_snapshots.rs 가 가상 터미널에 그린 것) 을 글자 · 색 그대로 */
+/** TUI scene (drawn on a virtual terminal by crates/tui/src/kit_snapshots.rs), with chars · colors as is */
 export type Run = [string, string | null, string | null, boolean, boolean, boolean, boolean, boolean];
 export interface Scene {
   name: string;
@@ -11,8 +11,8 @@ export interface Scene {
 const FG = "#abb2bf";
 
 /**
- * 터미널은 글자마다 칸이 정해져 있지만, 웹 글꼴에서 기호 (⛁ ◧ ▦ ▾ ⌥ …) 는 다른 글꼴로 그려져 폭이 다르다 → 줄이 밀린다.
- * 영문 · 숫자 · 흔한 기호가 아닌 글자는 하나씩 정확히 1ch 상자에 넣는다 (두 칸 글자는 묶음째 2ch — 아래)
+ * Terminals give each char a fixed cell, but in web fonts symbols (⛁ ◧ ▦ ▾ ⌥ …) are drawn with other fonts and differ in width → lines shift.
+ * Chars other than Latin letters · digits · common symbols each go in an exact 1ch box (two-cell chars as a group of 2ch — below)
  */
 function cells(t: string) {
   const out: React.ReactNode[] = [];
@@ -48,7 +48,7 @@ export function TuiScreen({ scene }: { scene: Scene }) {
           font: "13px/1.25 'JetBrains Mono', Menlo, monospace",
           borderRadius: 6,
           boxShadow: "0 0 0 1px #393b40",
-          // 한글 두 칸 글자가 정확히 두 칸이 되도록
+          // So two-cell Korean chars take exactly two cells
           fontVariantLigatures: "none",
         }}
       >
@@ -63,7 +63,7 @@ export function TuiScreen({ scene }: { scene: Scene }) {
                   fontWeight: bold ? 700 : undefined,
                   fontStyle: it ? "italic" : undefined,
                   textDecoration: [ul && "underline", st && "line-through"].filter(Boolean).join(" ") || undefined,
-                  // 두 칸 글자: 웹 글꼴 폭과 상관없이 정확히 두 칸
+                  // Two-cell chars: exactly two cells regardless of web font width
                   ...(wide ? { display: "inline-block", width: "2ch", textAlign: "center", overflow: "hidden", verticalAlign: "top" } : {}),
                 }}
               >

@@ -1,4 +1,4 @@
-//! 테스트용: DB 없이 App 을 띄우고 키를 넣어 상태·화면을 확인한다
+//! For tests: launch App without a DB, feed keys, and check state and screen
 use crate::app::{Apply, App, TabKind, TableTab};
 use crate::grid::Grid;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
@@ -12,7 +12,7 @@ pub struct Harness {
     _dir: TempDir,
 }
 
-/// 끝나면 지우는 설정 폴더
+/// Config folder deleted when done
 struct TempDir(std::path::PathBuf);
 impl Drop for TempDir {
     fn drop(&mut self) {
@@ -21,7 +21,7 @@ impl Drop for TempDir {
 }
 
 impl Harness {
-    /// 빈 설정 폴더로 띄운다 (tokio 런타임 안에서: 백그라운드 작업을 쓴다)
+    /// Launch with an empty config folder (inside a tokio runtime: uses background tasks)
     pub async fn new() -> Self {
         let dir = std::env::temp_dir().join(format!("qurry-tui-test-{}", uuid::Uuid::new_v4()));
         let state = Arc::new(qurry_core::open_state(Some(dir.clone())).unwrap());
@@ -32,14 +32,14 @@ impl Harness {
         h
     }
 
-    /// 백그라운드 작업 결과를 더 오지 않을 때까지 반영한다
+    /// Apply background task results until no more arrive
     pub async fn settle(&mut self) {
         while let Ok(Some(a)) = tokio::time::timeout(std::time::Duration::from_millis(100), self.rx.recv()).await {
             a(&mut self.app);
         }
     }
 
-    /// 키 하나: "a", "Ctrl+A", "Alt+Shift+Left", "Enter", "Tab", "Esc", "Down", "F1" …
+    /// One key: "a", "Ctrl+A", "Alt+Shift+Left", "Enter", "Tab", "Esc", "Down", "F1" …
     pub fn key(&mut self, spec: &str) {
         let mut m = KeyModifiers::NONE;
         let mut parts: Vec<&str> = spec.split('+').collect();
@@ -75,14 +75,14 @@ impl Harness {
         crate::input::on_event(&mut self.app, Event::Key(KeyEvent::new(code, m)));
     }
 
-    /// 글자를 친다
+    /// Type text
     pub fn type_str(&mut self, s: &str) {
         for c in s.chars() {
             crate::input::on_event(&mut self.app, Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)));
         }
     }
 
-    /// DB 없이 결과가 채워진 테이블 탭을 연다 (pk 가 있으면 편집 가능)
+    /// Open a table tab filled with results, without a DB (editable if pk is set)
     pub fn table_tab(&mut self, table: &str, cols: &[&str], rows: &[&[&str]], pk: &[&str]) -> u64 {
         let result = QueryResult {
             columns: cols.iter().map(|c| ColumnInfo { name: c.to_string(), type_name: "text".into() }).collect(),
@@ -108,7 +108,7 @@ impl Harness {
         self.app.push_tab("test", "postgres".into(), table.into(), TabKind::Table(tt))
     }
 
-    /// DB 없이 키 목록이 채워진 Redis 키 브라우저 탭을 연다
+    /// Open a Redis key browser tab filled with a key list, without a DB
     pub fn redis_tab(&mut self, keys: &[&str]) -> u64 {
         let r = crate::app::RedisTab {
             pattern: "*".into(),
@@ -127,12 +127,12 @@ impl Harness {
         self.app.push_tab("test", "db0".into(), "redis".into(), TabKind::Redis(r))
     }
 
-    /// 빈 쿼리 콘솔을 열고 편집기에 포커스
+    /// Open an empty query console and focus the editor
     pub fn console_tab(&mut self) -> u64 {
         self.console_with("", 0, 0)
     }
 
-    /// 내용이 든 쿼리 콘솔을 열고 커서를 (줄, 칸) 에 둔다
+    /// Open a query console with content and put the cursor at (line, column)
     pub fn console_with(&mut self, sql: &str, row: u16, col: u16) -> u64 {
         let id = self.app.restore_console("test", "postgres".into(), "console".into(), sql).unwrap();
         let i = self.app.tab_index(id).unwrap();
@@ -143,7 +143,7 @@ impl Harness {
         id
     }
 
-    /// 지금 콘솔의 Output 줄들
+    /// Output lines of the current console
     pub fn console_output(&self) -> Vec<String> {
         match self.app.tabs.get(self.app.active).map(|t| &t.kind) {
             Some(TabKind::Console(c)) => c.output.iter().map(|x| x.1.clone()).collect(),
@@ -151,7 +151,7 @@ impl Harness {
         }
     }
 
-    /// 지금 탭이 콘솔이면 편집기 내용
+    /// Editor content if the current tab is a console
     pub fn console_text(&self) -> String {
         match self.app.tabs.get(self.app.active).map(|t| &t.kind) {
             Some(TabKind::Console(c)) => c.editor.lines().join("\n"),
@@ -159,7 +159,7 @@ impl Harness {
         }
     }
 
-    /// 마우스 왼쪽 버튼: "down" / "drag" / "up"
+    /// Left mouse button: "down" / "drag" / "up"
     pub fn mouse(&mut self, kind: &str, x: u16, y: u16) {
         use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
         let kind = match kind {
@@ -171,7 +171,7 @@ impl Harness {
         crate::input::on_event(&mut self.app, Event::Mouse(MouseEvent { kind, column: x, row: y, modifiers: KeyModifiers::NONE }));
     }
 
-    /// 지금 콘솔 편집기의 (커서, 선택한 글)
+    /// (cursor, selected text) of the current console editor
     pub fn console_cursor(&self) -> ((usize, usize), Option<String>) {
         match self.app.tabs.get(self.app.active).map(|t| &t.kind) {
             Some(TabKind::Console(c)) => {
@@ -182,7 +182,7 @@ impl Harness {
         }
     }
 
-    /// 터미널 붙여넣기 (bracketed paste)
+    /// Terminal paste (bracketed paste)
     pub fn paste(&mut self, s: &str) {
         crate::input::on_event(&mut self.app, Event::Paste(s.into()));
     }
@@ -194,7 +194,7 @@ impl Harness {
         }
     }
 
-    /// 화면을 그려 글자만 돌려준다 (줄마다 \n)
+    /// Draw the screen and return only the text (\n per line)
     pub fn screen(&mut self, w: u16, h: u16) -> String {
         let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
         term.draw(|f| crate::ui::draw(f, &mut self.app)).unwrap();

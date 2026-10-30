@@ -1,4 +1,4 @@
-//! Qurry 드라이버: SQL Server (tiberius, TDS). DB → 스키마(dbo …) → 테이블
+//! Qurry driver: SQL Server (tiberius, TDS). DB → schema (dbo …) → table
 use qurry_driver::{Column, ConnectParams, Driver, QueryOut, ok, params, serve};
 use serde_json::{Value, json};
 use tiberius::{AuthMethod, Client, ColumnData, Config, EncryptionLevel, FromSql};
@@ -8,6 +8,8 @@ use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
 struct Ms {
     rt: tokio::runtime::Runtime,
     client: Option<Client<Compat<TcpStream>>>,
+    /// Read-only Data Source
+    read_only: bool,
 }
 
 fn lit(s: &str) -> String {
@@ -40,7 +42,7 @@ fn value(d: &ColumnData<'static>) -> Value {
     }
 }
 
-/// 바뀐 행 수를 돌려주는 문장인지 (아니면 결과를 읽는다)
+/// Whether the statement returns an affected row count (otherwise read the results)
 fn is_write(sql: &str) -> bool {
     let w = sql.trim_start().split(|c: char| c.is_whitespace() || c == '(').next().unwrap_or("").to_lowercase();
     ["insert", "update", "delete", "merge", "create", "alter", "drop", "truncate", "grant", "revoke"].contains(&w.as_str())
@@ -69,6 +71,11 @@ impl Ms {
         })
     }
 
+    fn exec(&mut self, sql: &str) -> Result<(), String> {
+        let client = self.client.as_mut().ok_or("not connected")?;
+        self.rt.block_on(async { client.simple_query(sql).await.map_err(|e| e.to_string())?.into_results().await.map(|_| ()).map_err(|e| e.to_string()) })
+    }
+
     fn rows(&mut self, sql: &str) -> Result<Vec<Vec<Value>>, String> {
         Ok(self.query(sql, 1_000_000)?.rows)
     }
@@ -92,7 +99,7 @@ impl Driver for Ms {
                     cfg.database(c.database.trim());
                 }
                 cfg.application_name("qurry");
-                // 인증서 확인은 SSL "verify" 일 때만 (사내 서버는 자체 서명이 흔하다)
+                // Verify certificates only with SSL "verify" (self-signed is common for in-house servers)
                 match c.options.get("ssl").and_then(Value::as_str) {
                     Some(m) if m.starts_with("verify") => cfg.encryption(EncryptionLevel::Required),
                     Some(_) => {
@@ -107,11 +114,19 @@ impl Driver for Ms {
                     Client::connect(cfg, tcp.compat_write()).await.map_err(|e| e.to_string())
                 })?;
                 self.client = Some(client);
+                self.read_only = c.options.get("readOnly").and_then(Value::as_bool).unwrap_or(false);
                 ok(Value::Null)
             }
             "query" => {
                 let sql = p.get("sql").and_then(Value::as_str).unwrap_or("").to_string();
                 let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(500) as usize;
+                // Read-only (Read-only Data Source · MCP): run inside a transaction and always roll back (so writes · DDL the guard missed don't persist)
+                if self.read_only || p.get("readOnly").and_then(Value::as_bool).unwrap_or(false) {
+                    self.exec("SET XACT_ABORT ON; BEGIN TRANSACTION")?;
+                    let r = self.query(&sql, limit);
+                    let back = self.exec("IF @@TRANCOUNT > 0 ROLLBACK; SET XACT_ABORT OFF");
+                    return ok(r.and_then(|o| back.map(|_| o))?);
+                }
                 ok(self.query(&sql, limit)?)
             }
             "databases" => ok(self.rows("SELECT name FROM sys.databases WHERE state = 0 ORDER BY name")?.into_iter().map(|r| r[0].clone()).collect::<Vec<_>>()),
@@ -175,7 +190,7 @@ impl Driver for Ms {
                     constraints.push(json!({ "name": name, "kind": "f", "definition": format!("FOREIGN KEY ({}) REFERENCES {to_t} ({})", from.iter().map(|c| q(c)).collect::<Vec<_>>().join(", "), to.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ")) }));
                 }
                 let idx = self.rows(&format!(
-                    // STRING_AGG 는 2017 부터: 예전 서버도 되게 FOR XML PATH
+                    // STRING_AGG is 2017+: FOR XML PATH so older servers work too
                     "SELECT i.name, i.is_unique, i.is_primary_key, STUFF((SELECT ', ' + c.name FROM sys.index_columns ic JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
                        WHERE ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.is_included_column = 0 ORDER BY ic.key_ordinal FOR XML PATH('')), 1, 2, '')
                      FROM sys.indexes i WHERE i.object_id = OBJECT_ID({obj}) AND i.name IS NOT NULL"
@@ -189,7 +204,7 @@ impl Driver for Ms {
             "ddl" => {
                 let (s, n) = (p.get("schema").and_then(Value::as_str).unwrap_or("dbo").to_string(), p.get("name").and_then(Value::as_str).unwrap_or("").to_string());
                 let obj = lit(&format!("{}.{}", q(&s), q(&n)));
-                // 뷰·루틴은 정의가 있다. 테이블은 컬럼·키로 만든다
+                // Views·routines have definitions. Tables are built from columns·keys
                 let def = self.rows(&format!("SELECT OBJECT_DEFINITION(OBJECT_ID({obj}))"))?;
                 if let Some(d) = def.first().and_then(|r| r[0].as_str()) {
                     return ok(format!("{}\n", d.trim()));
@@ -208,5 +223,5 @@ impl Driver for Ms {
 
 fn main() {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio");
-    serve(Ms { rt, client: None });
+    serve(Ms { rt, client: None, read_only: false });
 }

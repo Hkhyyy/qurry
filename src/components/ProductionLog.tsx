@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AuditEntry, auditLog } from "../lib/api";
 import { Badge, Button, CodeBlock, List, ListItem, Modal, Notice, SearchField, SectionTitle, Text } from "../ui";
 
-/** 한 줄 요약: 바뀐 행 수 · 오류 · 커밋 전 */
+/** One-line summary: changed rows · error · uncommitted */
 export function auditStatus(e: AuditEntry): { text: string; tone: "neutral" | "warn" | "danger" | "accent" } {
   if (e.error) return { text: "failed", tone: "danger" };
   if (e.sql === "COMMIT") return { text: "committed", tone: "accent" };
@@ -12,8 +12,8 @@ export function auditStatus(e: AuditEntry): { text: string; tone: "neutral" | "w
 }
 
 /**
- * 운영 작업 기록: Production Data Source 에서 실행한 바꾸는 문장 (TUI 와 같은 파일).
- * 단순한 UPDATE / DELETE 는 실행 직전에 떠 둔 행으로 되돌리기 SQL 을 남긴다 — 콘솔에 열어 보고 실행한다 (저절로 실행하지 않는다)
+ * Production log: modifying statements run on Production Data Sources (same file as the TUI).
+ * Simple UPDATE / DELETE leave undo SQL built from rows captured right before running — open it in a console and run it (never run automatically)
  */
 export function ProductionLog({ connId, onOpenUndo, onClose }: { connId: string | null; onOpenUndo: (e: AuditEntry) => void; onClose: () => void }) {
   const [items, setItems] = useState<AuditEntry[]>([]);

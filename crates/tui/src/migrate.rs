@@ -1,38 +1,38 @@
-//! 비교·마이그레이션 (⌃K): Compare Schemas… (원본 → 대상 스키마 고르기 → DDL 을 대상 콘솔에), Compare Table Data… (같은 이름 테이블 → 동기화 SQL),
-//! Run Migrations… (폴더 → 상태 → 확인하고 적용)
+//! Compare·migrate (⌃K): Compare Schemas… (source → pick target schema → DDL into the target console), Compare Table Data… (same-name table → sync SQL),
+//! Run Migrations… (folder → status → confirm and apply)
 use crate::app::{App, Focus, PAction, PItem, Palette, Popup, Tab, TabKind};
 use crate::tree::NodeKind;
 use qurry_core::sql;
 use tui_textarea::TextArea;
 
-/// 고르는 중인 단계
+/// Current picking step
 #[derive(Clone, Debug)]
 pub enum Flow {
-    /// 원본 스키마 고르기
+    /// Pick the source schema
     SchemaSource,
-    /// 대상 스키마 고르기 (원본: conn, db, schema)
+    /// Pick the target schema (source: conn, db, schema)
     SchemaTarget(String, String, String),
-    /// 같은 이름 테이블이 있을 대상 스키마 고르기 (원본: conn, db, schema, table)
+    /// Pick the target schema holding the same-name table (source: conn, db, schema, table)
     DataTarget(String, String, String, String),
-    /// RAG: 검색할 · 만들 인덱스 고르기, 새 인덱스의 저장할 곳 · 임베딩 제공자 고르기 (crate::rag)
+    /// RAG: pick an index to search · build, the new index's destination · embedding provider (crate::rag)
     RagSearch,
     RagBuild,
     RagDest(Box<qurry_core::rag::RagIndex>),
     RagProvider(Box<qurry_core::rag::RagIndex>),
-    /// 워크스페이스 고르기 (crate::workspace): 바꾸기, 탭 옮기기 (탭 id)
+    /// Pick a workspace (crate::workspace): switch, move a tab (tab id)
     WsSwitch,
     WsMove(u64),
     WsAddConn,
     WsMoveConn(String),
-    /// 다이어그램을 그릴 DB 고르기 (Data Source)
+    /// Pick the DB to diagram (Data Source)
     ErdDb(String),
-    /// 운영 데이터 일부 복사 (crate::datatools): 자식 단계 고르기 · 넣을 Data Source 고르기 (원본 대상 id, 원본 Data Source, 조건)
+    /// Copy part of production data (crate::datatools): pick child steps · destination Data Source (source target id, source Data Source, condition)
     CopyDepth(Box<(String, String, qurry_core::subset::SubsetSpec)>),
     CopyMask(Box<(String, String, qurry_core::subset::SubsetSpec)>),
     CopyTarget(Box<(String, String, qurry_core::subset::SubsetSpec)>),
 }
 
-/// 고를 수 있는 곳 하나: "conn\u{1}db\u{1}schema"
+/// One pickable location: "conn\u{1}db\u{1}schema"
 fn pack(conn: &str, db: &str, schema: &str) -> String {
     format!("{conn}\u{1}{db}\u{1}{schema}")
 }
@@ -43,7 +43,7 @@ fn unpack(v: &str) -> (String, String, String) {
 }
 
 impl App {
-    /// 접속한 SQL Data Source 들의 (기본 DB 의) 스키마로 고르기 창을 띄운다
+    /// Open a picker with the schemas (of the default DB) of connected SQL Data Sources
     fn pick_schema(&mut self, title: &str, flow: Flow) {
         let conns: Vec<(String, String, String, qurry_core::store::DbKind)> = self
             .conns
@@ -64,7 +64,7 @@ impl App {
                 for (id, name, db, kind) in conns {
                     let target = sql::target_id(&id, Some(&db));
                     let schemas: Vec<String> = match kind {
-                        // MySQL: DB 가 곧 스키마
+                        // MySQL: a DB is the schema
                         qurry_core::store::DbKind::Mysql => st.list_databases(id.clone()).await.unwrap_or_default(),
                         _ => st.list_schemas(target).await.map(|v| v.into_iter().filter(|s| !s.is_system).map(|s| s.name).collect()).unwrap_or_default(),
                     };
@@ -88,7 +88,7 @@ impl App {
         self.pick_schema("Compare Schemas — source (the one to copy from)", Flow::SchemaSource);
     }
 
-    /// ⌃K › Compare Table Data…: 트리에서 고른 테이블, 아니면 지금 테이블 탭
+    /// ⌃K › Compare Table Data…: the table selected in the tree, otherwise the current table tab
     pub fn compare_data_start(&mut self) {
         let src = if self.focus == Focus::Tree
             && let Some(n) = self.tree.selected().filter(|n| matches!(&n.kind, NodeKind::Object(k) if k == "table" || k == "partitioned"))
@@ -106,7 +106,7 @@ impl App {
         self.pick_schema(&format!("Compare Data of {s}.{t} — target schema (a table with the same name)"), Flow::DataTarget(c, d, s, t));
     }
 
-    /// 고르기 창에서 고른 것
+    /// What was picked in the picker
     pub fn flow_pick(&mut self, value: String) {
         let (conn, db, schema) = unpack(&value);
         match self.flow.take() {
@@ -170,7 +170,7 @@ impl App {
         }
     }
 
-    /// ⌃K › Run Migrations…: 폴더 → 상태 → 적용할 것이 있으면 묻는다
+    /// ⌃K › Run Migrations…: folder → status → asks if there's anything to apply
     pub fn migrations_start(&mut self) {
         let target = match self.tabs.get(self.active) {
             Some(t) if self.focus != Focus::Tree => Some((t.conn.clone(), t.db.clone())),

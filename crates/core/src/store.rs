@@ -1,10 +1,10 @@
-//! 접속 설정 저장소 (JSON 파일). 비밀번호는 secrets.rs 의 암호화 파일에 둔다.
+//! Connection settings store (JSON file). Passwords go in the encrypted file in secrets.rs.
 use crate::error::AppResult;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::{fs, path::PathBuf};
 
-/// 단축키 사용자 설정: 액션 id → 키 목록 (기본값과 다른 것만)
+/// User keyboard shortcut settings: action id → key list (only those differing from the defaults)
 pub type Keymap = BTreeMap<String, Vec<String>>;
 
 
@@ -14,21 +14,21 @@ pub enum DbKind {
     Postgres,
     Mysql,
     Redis,
-    // 아래는 드라이버 플러그인 (필요할 때 받는다): crate::plugin
+    // Below are driver plugins (downloaded when needed): crate::plugin
     Sqlite,
     Mssql,
     Clickhouse,
     Duckdb,
     Mongodb,
     Oracle,
-    // 벡터 DB (REST)
+    // Vector DBs (REST)
     Qdrant,
     Chroma,
     Milvus,
 }
 
 impl DbKind {
-    /// 드라이버 플러그인 이름 (기본으로 들어 있는 PG·MySQL·Redis 는 None)
+    /// Driver plugin name (None for the built-in PG·MySQL·Redis)
     pub fn driver(self) -> Option<&'static str> {
         match self {
             DbKind::Postgres | DbKind::Mysql | DbKind::Redis => None,
@@ -44,17 +44,17 @@ impl DbKind {
         }
     }
 
-    /// DB 가 곧 스키마 (트리에 스키마 단계가 없다)
+    /// The DB is the schema (no schema level in the tree)
     pub fn flat(self) -> bool {
         matches!(self, DbKind::Mysql | DbKind::Redis | DbKind::Sqlite | DbKind::Clickhouse | DbKind::Mongodb | DbKind::Qdrant | DbKind::Chroma | DbKind::Milvus)
     }
 
-    /// 파일 하나가 DB 인 것 (호스트·포트 대신 파일 경로)
+    /// A single file is the DB (file path instead of host·port)
     pub fn is_file(self) -> bool {
         matches!(self, DbKind::Sqlite | DbKind::Duckdb)
     }
 
-    /// 벡터 DB: 콘솔이 SQL 이 아니라 REST (METHOD /path + JSON)
+    /// Vector DB: the console is REST (METHOD /path + JSON), not SQL
     pub fn is_vector(self) -> bool {
         matches!(self, DbKind::Qdrant | DbKind::Chroma | DbKind::Milvus)
     }
@@ -72,30 +72,30 @@ pub struct ConnectionConfig {
     pub user: String,
     #[serde(default)]
     pub database: String,
-    /// 트리에 보일 DB·스키마 (DataGrip Data Source 속성의 Schemas 탭). 비어 있으면 전부.
+    /// DBs·schemas shown in the tree (Schemas tab of the DataGrip Data Source properties). Empty means all.
     #[serde(default)]
     pub scope: Scope,
-    /// 키체인에 비밀번호를 저장했는지 (목록 표시용 — 키체인을 읽지 않기 위해)
+    /// Whether the password was saved in the keychain (for list display — to avoid reading the keychain)
     #[serde(default)]
     pub password_saved: bool,
     #[serde(default)]
     pub ssh_secret_saved: bool,
-    /// SSH 터널 (DataGrip의 SSH/SSL 탭)
+    /// SSH tunnel (DataGrip's SSH/SSL tab)
     #[serde(default)]
     pub ssh: Option<SshConfig>,
-    /// DataGrip처럼 접속을 색으로 구분 (예: "#5c2b2b"). 없으면 기본색.
+    /// Color-code the connection like DataGrip (e.g. "#5c2b2b"). Default color if absent.
     #[serde(default)]
     pub color: Option<String>,
-    /// DataGrip Options 탭의 Read-only: 세션을 읽기 전용 트랜잭션으로 연다 (서버가 쓰기를 거부)
+    /// Read-only from DataGrip's Options tab: open the session as a read-only transaction (the server rejects writes)
     #[serde(default)]
     pub read_only: bool,
-    /// DataGrip Options 탭의 나머지 Connection 설정
+    /// The remaining Connection settings from DataGrip's Options tab
     #[serde(default)]
     pub options: ConnOptions,
-    /// SSH/SSL 탭의 SSL (PostgreSQL·MySQL·Redis 공통)
+    /// SSL from the SSH/SSL tab (shared by PostgreSQL·MySQL·Redis)
     #[serde(default)]
     pub ssl: Option<SslConfig>,
-    /// Redis 연결 방식 (Standalone / Sentinel / Cluster)
+    /// Redis connection mode (Standalone / Sentinel / Cluster)
     #[serde(default)]
     pub redis: Option<RedisMode>,
 }
@@ -105,7 +105,7 @@ pub struct ConnectionConfig {
 pub struct SslConfig {
     #[serde(default)]
     pub enabled: bool,
-    /// require (암호화만, 인증서 검증 안 함) | verify-ca | verify-full (호스트 이름까지)
+    /// require (encryption only, no certificate check) | verify-ca | verify-full (host name too)
     #[serde(default)]
     pub mode: String,
     #[serde(default)]
@@ -128,10 +128,10 @@ pub struct RedisMode {
     /// standalone | sentinel | cluster
     #[serde(default)]
     pub mode: String,
-    /// Sentinel 이 감시하는 마스터 이름
+    /// Master name watched by Sentinel
     #[serde(default)]
     pub sentinel_master: String,
-    /// sentinel: Sentinel 노드들 / cluster: 추가 시드 노드들 ("host:port", 쉼표·공백 구분)
+    /// sentinel: Sentinel nodes / cluster: extra seed nodes ("host:port", separated by commas·spaces)
     #[serde(default)]
     pub nodes: String,
 }
@@ -139,34 +139,41 @@ pub struct RedisMode {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnOptions {
-    /// 새 콘솔의 기본 Tx 모드 (Transaction control: Manual)
+    /// Default Tx mode for new consoles (Transaction control: Manual)
     #[serde(default)]
     pub tx_manual: bool,
-    /// 기본 격리 수준: "read uncommitted" | "read committed" | "repeatable read" | "serializable" (None = 서버 기본)
+    /// Default isolation level: "read uncommitted" | "read committed" | "repeatable read" | "serializable" (None = server default)
     #[serde(default)]
     pub isolation: Option<String>,
-    /// Switch schema: "auto" | "manual" | "disable" (프론트에서 사용)
+    /// Switch schema: "auto" | "manual" | "disable" (used by the frontend)
     #[serde(default)]
     pub switch_schema: Option<String>,
-    /// 세션 TimeZone (None = 서버 기본)
+    /// Session TimeZone (None = server default)
     #[serde(default)]
     pub time_zone: Option<String>,
     /// Run keep-alive query each N seconds
     #[serde(default)]
     pub keep_alive_secs: Option<u32>,
-    /// Auto-disconnect after N seconds (유휴)
+    /// Auto-disconnect after N seconds (idle)
     #[serde(default)]
     pub auto_disconnect_secs: Option<u32>,
-    /// Single database mode: 기본 DB만 보이고 쓴다
+    /// Single database mode: only the default DB is shown and used
     #[serde(default)]
     pub single_db: bool,
-    /// Startup script: 연결마다 접속 직후 실행
+    /// Startup script: run right after each connection is made
     #[serde(default)]
     pub startup_script: String,
-    /// Production: 데이터를 바꾸는 문장은 바뀔 행 수를 보여 주고 확인을 받는다
+    /// Production: statements that change data show the affected row count and ask for confirmation
     #[serde(default)]
     pub confirm_changes: bool,
-    /// Oracle: Instant Client 폴더 (비면 ORACLE_CLIENT_LIB_DIR · 시스템 기본)
+    /// A remote MySQL with no SSL setting may connect in plain text if it can't do TLS (old servers · trusted networks).
+    /// This and mcp are also saved in connection-access.json, which wins over connections.json (Store::list)
+    #[serde(default)]
+    pub allow_plaintext: bool,
+    /// Whether it's visible to the MCP server: "off" | "read" | "write" (None = source created before this was set, ConnectionConfig::mcp_access)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<String>,
+    /// Oracle: Instant Client folder (if empty, ORACLE_CLIENT_LIB_DIR · system default)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oracle_client: Option<String>,
 }
@@ -174,10 +181,10 @@ pub struct ConnOptions {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Scope {
-    /// None = 모든 DB
+    /// None = all DBs
     #[serde(default)]
     pub databases: Option<Vec<String>>,
-    /// DB 이름 → 보일 스키마 (없으면 전부)
+    /// DB name → schemas to show (all if absent)
     #[serde(default)]
     pub schemas: std::collections::HashMap<String, Vec<String>>,
 }
@@ -185,7 +192,7 @@ pub struct Scope {
 pub const SCOPE_ALL: &str = "*";
 pub const SCOPE_DEFAULT: &str = "@default";
 
-/// 트리에 보일 DB·스키마 규칙 (GUI src/lib/api.ts 의 dbVisible / schemaVisible 와 같다)
+/// Rules for which DBs·schemas show in the tree (same as dbVisible / schemaVisible in GUI src/lib/api.ts)
 impl Scope {
     pub fn db_visible(&self, db: &str, default_db: &str) -> bool {
         match self.databases.as_deref() {
@@ -245,14 +252,93 @@ impl ConnectionConfig {
     pub fn active_ssh(&self) -> Option<&SshConfig> {
         self.ssh.as_ref().filter(|s| s.enabled && !s.host.is_empty())
     }
+
+    /// Whether this is the same SSH server, so the saved SSH secret may be sent
+    pub fn same_ssh(&self, other: &ConnectionConfig) -> bool {
+        let t = |c: &ConnectionConfig| c.ssh.as_ref().map(|s| (s.host.trim().to_lowercase(), s.port, s.user.trim().to_string()));
+        t(self) == t(other)
+    }
+
+    /// Whether self's (saved settings) password may be sent to other: same kind · server · user · SSH tunnel, and TLS not turned off.
+    /// So an old password doesn't go to a new server when only the host is changed before Test, or a different server is imported with the same id
+    /// Redis Sentinel · Cluster nodes are servers too. Turning SSL off, lowering verification, or changing the CA counts as a different server
+    pub fn same_server(&self, other: &ConnectionConfig) -> bool {
+        let t = |c: &ConnectionConfig| {
+            // Only Redis has nodes; no Redis settings = standalone (the TUI form always fills them in)
+            let redis = (c.kind == DbKind::Redis).then(|| {
+                let r = c.redis.clone().unwrap_or_default();
+                (c.redis_mode().to_string(), r.sentinel_master.trim().to_string(), r.nodes.split([',', ' ']).filter(|n| !n.is_empty()).map(|n| n.to_lowercase()).collect::<Vec<_>>())
+            });
+            (c.kind, c.host.trim().to_lowercase(), c.port, c.user.trim().to_string(), c.active_ssh().map(|s| (s.host.trim().to_lowercase(), s.port)), redis)
+        };
+        let rank = |c: &ConnectionConfig| match c.active_ssl().map(|s| s.mode()) {
+            None => 0,
+            Some("verify-full") => 3,
+            Some("verify-ca") => 2,
+            Some(_) => 1,
+        };
+        let ca = |c: &ConnectionConfig| c.active_ssl().map(|s| s.ca_file.trim().to_string()).unwrap_or_default();
+        // "Allow unencrypted connection" isn't checked: the destination stays the same (and it's what the TLS error tells the user to turn on)
+        t(self) == t(other) && rank(other) >= rank(self) && (rank(self) < 2 || ca(self) == ca(other))
+    }
 }
 
-/// SSH 비밀번호/키 passphrase 의 저장 키
+/// What the MCP server may do with this Data Source
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum McpAccess {
+    /// Not listed, and its connection·password are not used
+    Off,
+    Read,
+    /// Also execute, when started with --allow-write
+    Write,
+}
+
+impl McpAccess {
+    /// The options.mcp value that stores this access
+    pub fn as_str(self) -> &'static str {
+        match self {
+            McpAccess::Off => "off",
+            McpAccess::Read => "read",
+            McpAccess::Write => "write",
+        }
+    }
+}
+
+impl ConnectionConfig {
+    /// MCP exposure. Old sources without a setting are hidden if Production, otherwise as before (read, write with --allow-write).
+    /// Read-only Data Sources have no write
+    pub fn mcp_access(&self, allow_write: bool) -> McpAccess {
+        let a = match self.options.mcp.as_deref() {
+            Some("off") => McpAccess::Off,
+            Some("read") => McpAccess::Read,
+            Some("write") => McpAccess::Write,
+            // Any other value (a typo, "On", "") is Off — never more than the user picked
+            Some(_) => McpAccess::Off,
+            None if self.options.confirm_changes => McpAccess::Off,
+            None => McpAccess::Write,
+        };
+        if a == McpAccess::Write && (!allow_write || self.read_only) { McpAccess::Read } else { a }
+    }
+}
+
+/// Strip user:pass@ from URIs like mongodb://user:pass@host (so passwords don't end up in the AI conversation or an error message)
+pub fn without_userinfo(host: &str) -> String {
+    match host.split_once("://") {
+        // The password may contain raw / ? #, so treat everything up to the last @ as user info
+        Some((scheme, rest)) => match rest.rfind('@') {
+            Some(at) => format!("{scheme}://{}", &rest[at + 1..]),
+            None => host.to_string(),
+        },
+        None => host.rsplit_once('@').map(|(_, h)| h.to_string()).unwrap_or_else(|| host.to_string()),
+    }
+}
+
+/// Storage key for the SSH password/key passphrase
 pub fn ssh_secret_key(id: &str) -> String {
     format!("{id}#ssh")
 }
 
-/// Export 파일 형식. 비밀번호는 포함하지 않는다.
+/// Export file format. Passwords are not included.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExportFile {
     pub app: String,
@@ -262,6 +348,18 @@ pub struct ExportFile {
 
 pub struct Store {
     path: PathBuf,
+}
+
+/// Per-source settings that older apps (0.2.12 and before) don't know. They are kept in connection-access.json too (by connection id),
+/// because an older app saving connections.json drops fields it doesn't know — an MCP Off source would be shared again.
+/// connections.json still has them, for when the side file is missing or has no entry for a source
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct Access {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mcp: Option<String>,
+    #[serde(default)]
+    allow_plaintext: bool,
 }
 
 impl Store {
@@ -275,7 +373,32 @@ impl Store {
         if !self.path.exists() {
             return Ok(Vec::new());
         }
-        Ok(serde_json::from_str(&fs::read_to_string(&self.path)?)?)
+        let mut all: Vec<ConnectionConfig> = serde_json::from_str(&fs::read_to_string(&self.path)?)?;
+        // The side file wins; without an entry, what connections.json has (written by builds before the side file)
+        let access = self.access()?;
+        for c in &mut all {
+            if let Some(a) = access.get(&c.id) {
+                c.options.allow_plaintext = a.allow_plaintext;
+                if a.mcp.is_some() {
+                    c.options.mcp = a.mcp.clone();
+                }
+            }
+        }
+        Ok(all)
+    }
+
+    fn access_path(&self) -> PathBuf {
+        self.path.with_file_name("connection-access.json")
+    }
+
+    /// Damaged: an error, not empty (empty would share Off sources with MCP again)
+    fn access(&self) -> AppResult<BTreeMap<String, Access>> {
+        let path = self.access_path();
+        match fs::read_to_string(&path) {
+            Ok(s) => serde_json::from_str(&s).map_err(|e| crate::error::AppError::Msg(format!("{} is damaged ({e}) — restore it from a backup, or move it away: MCP access and \"Allow unencrypted connection\" are then read from connections.json (check them if an older Qurry version saved your data sources since)", path.display()))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
+            Err(e) => Err(e.into()),
+        }
     }
 
     pub fn get(&self, id: &str) -> AppResult<Option<ConnectionConfig>> {
@@ -283,17 +406,52 @@ impl Store {
     }
 
     pub fn save(&self, config: &ConnectionConfig) -> AppResult<()> {
-        let mut all = self.list()?;
-        match all.iter_mut().find(|c| c.id == config.id) {
-            Some(existing) => *existing = config.clone(),
-            None => all.push(config.clone()),
-        }
-        self.write(&all)
+        self.update(|all| {
+            match all.iter_mut().find(|c| c.id == config.id) {
+                Some(existing) => *existing = config.clone(),
+                None => all.push(config.clone()),
+            }
+            Ok(())
+        })
+    }
+
+    /// Change part of one source (scope, color …) under the lock, so another app's change to it in between isn't reverted. None if it doesn't exist
+    pub fn modify<T>(&self, id: &str, f: impl FnOnce(&mut ConnectionConfig) -> AppResult<T>) -> AppResult<Option<T>> {
+        self.update(|all| all.iter_mut().find(|c| c.id == id).map(f).transpose())
+    }
+
+    /// Save a whole source, deciding against the saved one under the lock: `f` gets what is saved now (None for a new source)
+    /// and the config to save, and may refuse (nothing is written then)
+    pub fn save_with(&self, mut config: ConnectionConfig, f: impl FnOnce(Option<&ConnectionConfig>, &mut ConnectionConfig) -> AppResult<()>) -> AppResult<ConnectionConfig> {
+        self.update(|all| {
+            let i = all.iter().position(|c| c.id == config.id);
+            f(i.map(|i| &all[i]), &mut config)?;
+            match i {
+                Some(i) => all[i] = config.clone(),
+                None => all.push(config.clone()),
+            }
+            Ok(config)
+        })
     }
 
     pub fn delete(&self, id: &str) -> AppResult<()> {
-        let all: Vec<_> = self.list()?.into_iter().filter(|c| c.id != id).collect();
-        self.write(&all)
+        self.update(|all| {
+            all.retain(|c| c.id != id);
+            Ok(())
+        })
+    }
+
+    /// Read · change · write under a file lock shared by GUI · TUI · MCP (so concurrent saves don't lose one side's change)
+    fn update<T>(&self, f: impl FnOnce(&mut Vec<ConnectionConfig>) -> AppResult<T>) -> AppResult<T> {
+        if let Some(dir) = self.path.parent() {
+            crate::secrets::private_dir(dir)?;
+        }
+        let lock = fs::OpenOptions::new().create(true).truncate(false).write(true).open(self.path.with_extension("json.lock"))?;
+        lock.lock()?;
+        let mut all = self.list()?;
+        let out = f(&mut all)?;
+        self.write(&all)?;
+        Ok(out)
     }
 
     pub fn export_to(&self, path: &std::path::Path) -> AppResult<usize> {
@@ -304,7 +462,7 @@ impl Store {
         Ok(n)
     }
 
-    /// 같은 id는 덮어쓰고 새 id는 추가한다. 반환값: (추가, 갱신)
+    /// Overwrite the same id, add new ids. Returns: (added, updated)
     fn read_import(path: &std::path::Path) -> AppResult<Vec<ConnectionConfig>> {
         let text = fs::read_to_string(path)?;
         Ok(match serde_json::from_str::<ExportFile>(&text) {
@@ -313,7 +471,7 @@ impl Store {
         })
     }
 
-    /// 가져오기 전에 무엇이 바뀌는지 (남이 준 파일이 Read-only 를 끄거나 접속 시 실행할 SQL 을 넣을 수 있다)
+    /// What changes before importing (a file from someone else can turn off Read-only or add SQL to run on connect)
     pub fn import_preview(&self, path: &std::path::Path) -> AppResult<Vec<String>> {
         let all = self.list()?;
         let mut out = vec![];
@@ -322,8 +480,29 @@ impl Store {
             match all.iter().find(|e| !c.id.is_empty() && e.id == c.id) {
                 None => {
                     let mut line = format!("+ add \"{}\" ({}@{}:{})", c.name, c.user, c.host, c.port);
+                    let mut notes = vec![];
                     if !script(&c).is_empty() {
-                        line += " — runs a startup script on connect";
+                        notes.push("runs a startup script on connect".to_string());
+                    }
+                    // What the import will really allow (unset becomes Off, see import_from)
+                    let mut as_saved = c.clone();
+                    as_saved.options.mcp.get_or_insert_with(|| "off".into());
+                    match as_saved.mcp_access(true) {
+                        McpAccess::Off => {}
+                        McpAccess::Read => notes.push("shared with MCP (read)".into()),
+                        McpAccess::Write => notes.push("shared with MCP (read & write)".into()),
+                    }
+                    if c.active_ssl().is_some_and(|s| s.mode() == "require") {
+                        notes.push("SSL without certificate checks".into());
+                    }
+                    if c.options.allow_plaintext {
+                        notes.push("allows unencrypted connections".into());
+                    }
+                    if c.options.oracle_client.as_deref().is_some_and(|p| !p.trim().is_empty()) {
+                        notes.push("loads Oracle client libraries from a folder".into());
+                    }
+                    if !notes.is_empty() {
+                        line += &format!(" — {}", notes.join(", "));
                     }
                     out.push(line);
                 }
@@ -332,8 +511,42 @@ impl Store {
                     if (e.host.as_str(), e.port, e.user.as_str()) != (c.host.as_str(), c.port, c.user.as_str()) {
                         ch.push(format!("server {}@{}:{} → {}@{}:{}", e.user, e.host, e.port, c.user, c.host, c.port));
                     }
+                    if e.kind != c.kind {
+                        ch.push(format!("changes the type {:?} → {:?}", e.kind, c.kind));
+                    }
                     if e.read_only && !c.read_only {
                         ch.push("turns Read-only OFF".into());
+                    }
+                    if e.active_ssl().is_some() && c.active_ssl().is_none() {
+                        ch.push("turns SSL OFF (the password would be sent unencrypted)".into());
+                    } else if let (Some(a), Some(b)) = (e.active_ssl(), c.active_ssl())
+                        && a.mode() != b.mode()
+                    {
+                        ch.push(format!("SSL {} → {}", a.mode(), b.mode()));
+                    }
+                    let files = |x: &ConnectionConfig| x.ssl.as_ref().map(|s| (s.ca_file.clone(), s.cert_file.clone(), s.key_file.clone()));
+                    if files(e) != files(&c) {
+                        ch.push("changes the SSL certificate files".into());
+                    }
+                    if e.redis.as_ref().map(|r| (&r.mode, &r.nodes, &r.sentinel_master)) != c.redis.as_ref().map(|r| (&r.mode, &r.nodes, &r.sentinel_master)) {
+                        ch.push("changes the Redis nodes".into());
+                    }
+                    if !e.options.allow_plaintext && c.options.allow_plaintext {
+                        ch.push("allows unencrypted connections (the password may travel in plain text)".into());
+                    }
+                    if e.options.oracle_client != c.options.oracle_client {
+                        ch.push("changes the Oracle client library folder".into());
+                    }
+                    if e.options.confirm_changes && !c.options.confirm_changes {
+                        ch.push("turns Production OFF".into());
+                    }
+                    let mut as_saved = c.clone();
+                    as_saved.options.mcp.get_or_insert_with(|| e.mcp_access(true).as_str().into());
+                    if e.mcp_access(true) < as_saved.mcp_access(true) {
+                        ch.push("shares more with MCP (AI tools)".into());
+                    }
+                    if Self::import_moves_server(e, &c) && e.password_saved {
+                        ch.push("the saved password will be removed and asked again".into());
                     }
                     if e.active_ssh().map(|s| (&s.host, s.port)) != c.active_ssh().map(|s| (&s.host, s.port)) {
                         ch.push("changes the SSH tunnel".into());
@@ -348,30 +561,62 @@ impl Store {
         Ok(out)
     }
 
-    pub fn import_from(&self, path: &std::path::Path) -> AppResult<(usize, usize)> {
+    /// (added, changed, sources whose passwords to delete: (id, DB password, SSH secret)). The saved flags follow the current values, not the file.
+    /// `forget` deletes those passwords before the store is written (under its lock): if it fails, nothing is imported — otherwise the store would
+    /// say "no password" (or allow plain text) while the old password stayed in the file
+    pub fn import_from(&self, path: &std::path::Path, forget: impl FnOnce(&[(String, bool, bool)]) -> AppResult<()>) -> AppResult<(usize, usize, Vec<(String, bool, bool)>)> {
         let incoming = Self::read_import(path)?;
-        let mut all = self.list()?;
-        let (mut added, mut updated) = (0, 0);
+        self.update(|all| {
+            let r = Self::merge_import(all, incoming)?;
+            forget(&r.2)?;
+            Ok(r)
+        })
+    }
+
+    /// Like a server change for the saved password: same_server, plus a file turning on "Allow unencrypted"
+    /// (which the user may tick in the dialog, but an imported file could use to have the password sent without TLS)
+    fn import_moves_server(e: &ConnectionConfig, c: &ConnectionConfig) -> bool {
+        !e.same_server(c) || (!e.options.allow_plaintext && c.options.allow_plaintext)
+    }
+
+    fn merge_import(all: &mut Vec<ConnectionConfig>, incoming: Vec<ConnectionConfig>) -> AppResult<(usize, usize, Vec<(String, bool, bool)>)> {
+        let (mut added, mut updated, mut forget) = (0, 0, vec![]);
         for mut c in incoming {
             if c.id.is_empty() {
                 c.id = uuid::Uuid::new_v4().to_string();
             }
             match all.iter_mut().find(|e| e.id == c.id) {
                 Some(e) => {
+                    // A file without an MCP setting keeps what the source has now (not the legacy default for unset)
+                    if c.options.mcp.is_none() {
+                        c.options.mcp = Some(e.mcp_access(true).as_str().into());
+                    }
+                    // Regardless of the flags (including entries whose flag alone was cleared by an old import), a different server goes on the delete list
+                    let (pw, ssh) = (Self::import_moves_server(e, &c), !e.same_ssh(&c));
+                    c.password_saved = e.password_saved && !pw;
+                    c.ssh_secret_saved = e.ssh_secret_saved && !ssh;
+                    if pw || ssh {
+                        forget.push((c.id.clone(), pw, ssh));
+                    }
                     *e = c;
                     updated += 1;
                 }
                 None => {
+                    // New sources have no saved password, and MCP is Off unless the file sets it
+                    c.password_saved = false;
+                    c.ssh_secret_saved = false;
+                    if c.options.mcp.is_none() {
+                        c.options.mcp = Some("off".into());
+                    }
                     all.push(c);
                     added += 1;
                 }
             }
         }
-        self.write(&all)?;
-        Ok((added, updated))
+        Ok((added, updated, forget))
     }
 
-    /// 설정 폴더 (connections.json 이 있는 곳)
+    /// Config folder (where connections.json lives)
     pub fn dir(&self) -> PathBuf {
         self.path.parent().map(|p| p.to_path_buf()).unwrap_or_default()
     }
@@ -380,7 +625,7 @@ impl Store {
         self.path.with_file_name("keymap.json")
     }
 
-    /// keymap.json 의 한 구역 ("gui" / "tui"). 파일이 없으면 빈 설정
+    /// One section of keymap.json ("gui" / "tui"). Empty settings if the file doesn't exist
     pub fn keymap(&self, section: &str) -> AppResult<Keymap> {
         let path = self.keymap_path();
         if !path.exists() {
@@ -390,7 +635,7 @@ impl Store {
         Ok(all.remove(section).unwrap_or_default())
     }
 
-    /// 한 구역만 바꾸고 다른 구역(GUI ↔ TUI)은 그대로 둔다
+    /// Change only one section and leave the other (GUI ↔ TUI) as is
     pub fn save_keymap(&self, section: &str, map: &Keymap) -> AppResult<()> {
         let path = self.keymap_path();
         let mut all: BTreeMap<String, Keymap> = if path.exists() { serde_json::from_str(&fs::read_to_string(&path)?)? } else { BTreeMap::new() };
@@ -402,9 +647,9 @@ impl Store {
         Ok(())
     }
 
-    /// 열어 둔 탭·화면 분할 (DataGrip 처럼 다시 켜면 그대로). client = "gui" / "tui", 파일을 따로 둔다 (동시에 써도 서로 덮지 않게).
-    /// 콘솔 SQL 이 들어가므로 0600. 내용은 클라이언트가 정한다
-    /// 설정 폴더 안의 파일
+    /// Open tabs·split layout (restored on restart, like DataGrip). client = "gui" / "tui", in separate files (so concurrent writes don't overwrite each other).
+    /// 0600 since it contains console SQL. The content is up to the client
+    /// A file in the config folder
     pub(crate) fn file(&self, name: &str) -> PathBuf {
         self.path.with_file_name(name)
     }
@@ -422,8 +667,17 @@ impl Store {
         if let Some(dir) = self.path.parent() {
             fs::create_dir_all(dir)?;
         }
-        // 호스트·사용자·SSH 키 경로가 들어 있다 → 본인만 읽게
+        let access: BTreeMap<_, _> = all.iter().map(|c| (c.id.clone(), Access { mcp: c.options.mcp.clone(), allow_plaintext: c.options.allow_plaintext })).collect();
+        // The side file first, keeping entries of removed sources: if connections.json can't be written, the side file still matches either version
+        let mut merged = self.access()?;
+        merged.extend(access.clone());
+        crate::secrets::write_private(&self.access_path(), serde_json::to_string_pretty(&merged)?.as_bytes())?;
+        // Contains host·user·SSH key paths → owner-only read
         crate::secrets::write_private(&self.path, serde_json::to_string_pretty(all)?.as_bytes())?;
+        // Only now drop the entries of removed sources
+        if merged.len() != access.len() {
+            crate::secrets::write_private(&self.access_path(), serde_json::to_string_pretty(&access)?.as_bytes())?;
+        }
         Ok(())
     }
 }
@@ -431,6 +685,65 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_secrets_follow_the_server() {
+        let a: ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "x", "name": "a", "kind": "postgres", "host": "db.internal", "port": 5432, "user": "app",
+            "ssl": { "enabled": true, "mode": "verify-full" }, "ssh": { "enabled": true, "host": "bastion", "port": 22, "user": "me" } })).unwrap();
+        let mut b = a.clone();
+        b.name = "renamed".into();
+        b.color = Some("#f00".into());
+        assert!(a.same_server(&b) && a.same_ssh(&b));
+        b.host = "DB.internal ".into();
+        assert!(a.same_server(&b));
+        let changes: [fn(&mut ConnectionConfig); 8] = [|c| c.host = "attacker.example".into(), |c| c.port = 5433, |c| c.user = "root".into(), |c| c.kind = DbKind::Mysql,
+            |c| c.ssl.as_mut().unwrap().enabled = false, |c| c.ssh.as_mut().unwrap().host = "evil".into(), |c| c.ssl.as_mut().unwrap().mode = "require".into(),
+            |c| c.ssl.as_mut().unwrap().ca_file = "/tmp/evil-ca.pem".into()];
+        for f in changes {
+            let mut c = a.clone();
+            f(&mut c);
+            assert!(!a.same_server(&c), "{c:?}");
+        }
+        // Same destination: allowing plain text (what the TLS error suggests) and stray spaces around the user keep the password
+        let mut c = a.clone();
+        c.options.allow_plaintext = true;
+        c.user = " app ".into();
+        c.ssh.as_mut().unwrap().user = "me ".into();
+        assert!(a.same_server(&c) && a.same_ssh(&c));
+        let mut c = a.clone();
+        c.ssh.as_mut().unwrap().user = "other".into();
+        assert!(!a.same_ssh(&c));
+        // Redis: Sentinel / Cluster nodes are servers too; no settings = standalone
+        let r: ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "r", "name": "r", "kind": "redis", "host": "cache", "port": 6379, "user": "" })).unwrap();
+        let mut same = r.clone();
+        same.redis = Some(RedisMode { mode: "standalone".into(), sentinel_master: String::new(), nodes: String::new() });
+        assert!(r.same_server(&same), "the TUI form's filled-in standalone settings are the same server");
+        let mut moved = r.clone();
+        moved.redis = Some(RedisMode { mode: "sentinel".into(), sentinel_master: "m".into(), nodes: "evil:26379".into() });
+        assert!(!r.same_server(&moved));
+    }
+
+    #[test]
+    fn mcp_access_defaults() {
+        let mut c: ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "a", "kind": "postgres", "host": "h", "port": 1, "user": "u" })).unwrap();
+        // Old source: as before (read, write with --allow-write)
+        assert_eq!(c.mcp_access(false), McpAccess::Read);
+        assert_eq!(c.mcp_access(true), McpAccess::Write);
+        // Production stays hidden until set
+        c.options.confirm_changes = true;
+        assert_eq!(c.mcp_access(true), McpAccess::Off);
+        c.options.mcp = Some("write".into());
+        assert_eq!(c.mcp_access(true), McpAccess::Write);
+        assert_eq!(c.mcp_access(false), McpAccess::Read);
+        c.read_only = true;
+        assert_eq!(c.mcp_access(true), McpAccess::Read);
+        c.options.mcp = Some("off".into());
+        assert_eq!(c.mcp_access(true), McpAccess::Off);
+        for odd in ["On", "", "WRITE", "yes"] {
+            c.options.mcp = Some(odd.into());
+            assert_eq!(c.mcp_access(true), McpAccess::Off, "{odd}");
+        }
+    }
 
     #[test]
     fn scope_rules_match_gui() {
@@ -478,10 +791,246 @@ mod tests {
 
         let b = Store::new(base.join("b"));
         b.save(&conn("2", "old name")).unwrap();
-        assert_eq!(b.import_from(&file).unwrap(), (1, 1));
+        assert_eq!(b.import_from(&file, |_| Ok(())).unwrap(), (1, 1, vec![]));
+        // Newly imported sources get MCP Off (unless the file sets it)
+        assert_eq!(b.get("1").unwrap().unwrap().options.mcp.as_deref(), Some("off"));
         let names: Vec<_> = b.list().unwrap().into_iter().map(|c| c.name).collect();
         assert_eq!(names, vec!["PROD", "DEV"]);
         assert_eq!(b.get("1").unwrap().unwrap().color.as_deref(), Some("#5c2b2b"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Importing a different server with the same id doesn't use the saved password (delete list · preview warning)
+    #[test]
+    fn import_to_another_server_forgets_the_password() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        let b = Store::new(base.join("b"));
+        let mut mine = conn("2", "PROD");
+        mine.password_saved = true;
+        mine.ssl = Some(SslConfig { enabled: true, mode: "verify-full".into(), ..Default::default() });
+        b.save(&mine).unwrap();
+        let mut theirs = mine.clone();
+        theirs.host = "attacker.example".into();
+        theirs.ssl = None;
+        let file = base.join("in.json");
+        std::fs::write(&file, serde_json::to_string(&vec![theirs]).unwrap()).unwrap();
+        let p = b.import_preview(&file).unwrap().join("\n");
+        assert!(p.contains("attacker.example") && p.contains("SSL OFF") && p.contains("password will be removed"), "{p}");
+        assert_eq!(b.import_from(&file, |_| Ok(())).unwrap(), (0, 1, vec![("2".to_string(), true, false)]));
+        assert!(!b.get("2").unwrap().unwrap().password_saved);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// An imported file turning on "Allow unencrypted" doesn't keep the saved password (someone in the middle could strip TLS and read it)
+    #[test]
+    fn import_allowing_plaintext_forgets_the_password() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        let b = Store::new(base.join("b"));
+        let mut mine = conn("4", "db");
+        mine.kind = DbKind::Mysql;
+        mine.password_saved = true;
+        b.save(&mine).unwrap();
+        let mut theirs = mine.clone();
+        theirs.options.allow_plaintext = true;
+        let file = base.join("in.json");
+        std::fs::write(&file, serde_json::to_string(&vec![theirs]).unwrap()).unwrap();
+        let p = b.import_preview(&file).unwrap().join("\n");
+        assert!(p.contains("unencrypted") && p.contains("password will be removed and asked again"), "{p}");
+        assert_eq!(b.import_from(&file, |_| Ok(())).unwrap(), (0, 1, vec![("4".to_string(), true, false)]));
+        let got = b.get("4").unwrap().unwrap();
+        assert!(got.options.allow_plaintext && !got.password_saved);
+        // Already allowed: importing the same setting keeps it
+        let mut again = got.clone();
+        again.password_saved = true;
+        b.save(&again).unwrap();
+        assert_eq!(b.import_from(&file, |_| Ok(())).unwrap(), (0, 1, vec![]));
+        assert!(b.get("4").unwrap().unwrap().password_saved);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// An update without an MCP setting keeps the current access; turning on plain text shows in the preview
+    #[test]
+    fn import_update_keeps_mcp_and_shows_plaintext() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        let b = Store::new(base.join("b"));
+        let mut mine = conn("3", "db");
+        mine.options.mcp = Some("off".into());
+        b.save(&mine).unwrap();
+        let mut theirs = mine.clone();
+        theirs.options.mcp = None;
+        theirs.options.allow_plaintext = true;
+        let file = base.join("in.json");
+        std::fs::write(&file, serde_json::to_string(&vec![theirs]).unwrap()).unwrap();
+        let p = b.import_preview(&file).unwrap().join("\n");
+        assert!(p.contains("unencrypted") && !p.contains("MCP"), "{p}");
+        b.import_from(&file, |_| Ok(())).unwrap();
+        assert_eq!(b.get("3").unwrap().unwrap().mcp_access(true), McpAccess::Off);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// An older app rewriting connections.json without the newer fields doesn't lose MCP Off or "Allow unencrypted"
+    #[test]
+    fn older_app_rewrite_keeps_access_settings() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        let s = Store::new(base.clone());
+        let mut c = conn("1", "DEV");
+        c.options.mcp = Some("off".into());
+        c.options.allow_plaintext = true;
+        s.save(&c).unwrap();
+        s.save(&conn("2", "other")).unwrap();
+        let text = std::fs::read_to_string(base.join("connections.json")).unwrap();
+        // Also in connections.json (so a missing side file doesn't share Off sources again)
+        assert!(text.contains("allowPlaintext") && text.contains("\"mcp\""), "{text}");
+        // What an older app writes back: the fields it doesn't know are gone
+        let mut old: serde_json::Value = serde_json::from_str(&text).unwrap();
+        old[0]["name"] = "renamed by an older app".into();
+        for c in old.as_array_mut().unwrap() {
+            let o = c["options"].as_object_mut().unwrap();
+            o.remove("mcp");
+            o.remove("allowPlaintext");
+        }
+        std::fs::write(base.join("connections.json"), old.to_string()).unwrap();
+        let got = s.get("1").unwrap().unwrap();
+        assert_eq!(got.name, "renamed by an older app");
+        assert_eq!(got.mcp_access(true), McpAccess::Off);
+        assert!(got.options.allow_plaintext);
+        // Data saved by builds before the side file: connections.json is used when the side file has no entry
+        std::fs::remove_file(base.join("connection-access.json")).unwrap();
+        old[0]["options"]["mcp"] = "read".into();
+        old[0]["options"]["allowPlaintext"] = true.into();
+        std::fs::write(base.join("connections.json"), old.to_string()).unwrap();
+        let got = s.get("1").unwrap().unwrap();
+        assert_eq!((got.options.mcp.as_deref(), got.options.allow_plaintext), (Some("read"), true));
+        // Deleting a source removes its entry
+        s.save(&got).unwrap();
+        s.delete("1").unwrap();
+        let side = std::fs::read_to_string(base.join("connection-access.json")).unwrap();
+        assert!(!side.contains("\"1\"") && side.contains("\"2\""), "{side}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(base.join("connection-access.json")).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Without the side file (only connections.json restored or synced), MCP Off and "Allow unencrypted" stay as saved
+    #[test]
+    fn missing_side_file_keeps_access_settings() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        let s = Store::new(base.clone());
+        let mut c = conn("1", "DEV");
+        c.options.mcp = Some("off".into());
+        c.options.allow_plaintext = true;
+        s.save(&c).unwrap();
+        std::fs::remove_file(base.join("connection-access.json")).unwrap();
+        let got = s.get("1").unwrap().unwrap();
+        assert_eq!(got.mcp_access(true), McpAccess::Off);
+        assert!(got.options.allow_plaintext);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Two apps saving at once: A writes the side file, B writes both files from its older view, A writes connections.json.
+    /// A's new source has no side entry, and still stays MCP Off
+    #[test]
+    fn interleaved_saves_keep_mcp_off() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        let s = Store::new(base.clone());
+        s.save(&conn("old", "shared")).unwrap();
+        let b_side = std::fs::read_to_string(base.join("connection-access.json")).unwrap();
+        let mut c = conn("new", "hidden");
+        c.options.mcp = Some("off".into());
+        s.save(&c).unwrap();
+        // B's side file (written from its view without the new source) lands after A's
+        std::fs::write(base.join("connection-access.json"), b_side).unwrap();
+        assert_eq!(s.get("new").unwrap().unwrap().mcp_access(true), McpAccess::Off);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A failed connections.json write doesn't drop the side entry of the source it still lists
+    #[test]
+    fn side_entries_are_pruned_only_after_connections_are_written() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        let s = Store::new(base.clone());
+        let mut c = conn("1", "DEV");
+        c.options.mcp = Some("off".into());
+        s.save(&c).unwrap();
+        // write_private's temp file for connections.json can't be created
+        let blocker = base.join(format!("connections.tmp-{}", std::process::id()));
+        std::fs::create_dir(&blocker).unwrap();
+        assert!(s.delete("1").is_err());
+        std::fs::remove_dir(&blocker).unwrap();
+        let side = std::fs::read_to_string(base.join("connection-access.json")).unwrap();
+        assert!(side.contains("\"1\""), "{side}");
+        assert_eq!(s.get("1").unwrap().unwrap().mcp_access(true), McpAccess::Off);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A damaged side file is still an error, and its message says moving it away is safe now
+    #[test]
+    fn damaged_side_file_is_an_error() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        let s = Store::new(base.clone());
+        let mut c = conn("1", "DEV");
+        c.options.mcp = Some("off".into());
+        s.save(&c).unwrap();
+        std::fs::write(base.join("connection-access.json"), "{ \"1\": ").unwrap();
+        let e = s.list().unwrap_err().to_string();
+        assert!(e.contains("damaged") && e.contains("connections.json"), "{e}");
+        assert!(s.save(&conn("2", "x")).is_err());
+        // Following the advice keeps Off
+        std::fs::remove_file(base.join("connection-access.json")).unwrap();
+        assert_eq!(s.get("1").unwrap().unwrap().mcp_access(true), McpAccess::Off);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Saves from several apps at once (GUI · TUI · MCP) don't lose each other's sources
+    #[test]
+    fn concurrent_saves_keep_every_source() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        std::thread::scope(|sc| {
+            for t in 0..4 {
+                let base = base.clone();
+                sc.spawn(move || {
+                    let s = Store::new(base);
+                    for i in 0..10 {
+                        let mut c = conn(&format!("{t}-{i}"), "x");
+                        c.options.mcp = Some("off".into());
+                        s.save(&c).unwrap();
+                    }
+                });
+            }
+        });
+        let all = Store::new(base.clone()).list().unwrap();
+        assert_eq!(all.len(), 40);
+        assert!(all.iter().all(|c| c.mcp_access(true) == McpAccess::Off));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Changing one part of a source (scope, color …) from several apps at once keeps every change: read · change · write under the lock
+    #[test]
+    fn concurrent_modifies_keep_every_change() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        Store::new(base.clone()).save(&conn("a", "x")).unwrap();
+        std::thread::scope(|sc| {
+            for t in 0..4 {
+                let base = base.clone();
+                sc.spawn(move || {
+                    let s = Store::new(base);
+                    for i in 0..10 {
+                        s.modify("a", |c| {
+                            c.scope.schemas.insert(format!("{t}-{i}"), vec![]);
+                            Ok(())
+                        })
+                        .unwrap()
+                        .unwrap();
+                    }
+                });
+            }
+        });
+        let s = Store::new(base.clone());
+        assert_eq!(s.get("a").unwrap().unwrap().scope.schemas.len(), 40);
+        assert_eq!(s.modify("missing", |_| Ok(())).unwrap(), None);
         let _ = std::fs::remove_dir_all(&base);
     }
 

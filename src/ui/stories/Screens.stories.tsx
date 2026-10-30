@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-// 가짜 백엔드 (앱의 ?mock 과 같다): 화면이 부르는 명령에 정해진 데이터를 돌려준다
+// Fake backend (same as the app's ?mock): returns fixed data for the commands screens call
 import "../../lib/mock";
 import "../../lib/monaco";
 import App from "../../App";
@@ -24,7 +24,7 @@ import { BackupDialog, ExportDialog, ImportDialog } from "../../components/Trans
 import { UpdateDialog } from "../../components/UpdateDialog";
 import { WorkspaceBar } from "../../components/WorkspaceBar";
 
-/** 화면: 실제 화면 컴포넌트를 가짜 데이터로 (앱의 ?mock 과 같은 데이터). 버튼은 눌러 볼 수 있다 */
+/** Screens: real screen components with fake data (same data as the app's ?mock). Buttons are clickable */
 const meta: Meta = { title: "GUI/5 Screens", parameters: { layout: "fullscreen" } };
 export default meta;
 type S = StoryObj;
@@ -56,7 +56,7 @@ const sales: QueryResult = {
 
 const Frame = ({ children, h = 560 }: { children: React.ReactNode; h?: number }) => <div style={{ height: h, display: "flex", flexDirection: "column", border: "1px solid var(--ui-border)" }}>{children}</div>;
 
-/** 앱 전체 (탐색기 · 탭 · 콘솔). 탐색기 우클릭, ⇧⌘A 로 Find Action, 콘솔에서 ⌘↩ 실행 */
+/** Whole app (explorer · tabs · console). Right-click the explorer, ⇧⌘A for Find Action, ⌘↩ in the console to run */
 export const FullApp: S = { name: "App (whole window)", render: () => <div style={{ height: "100vh" }}><App /></div> };
 
 export const NewDataSource: S = { name: "Data Source — new", render: () => <ConnectionDialog onClose={noop} onSaved={noop} /> };

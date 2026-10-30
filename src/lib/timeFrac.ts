@@ -1,9 +1,9 @@
-/** 시간 컬럼의 소수 초 자릿수를 컬럼 안에서 맞춘다 (보기만): 03:19:15 · 09:38:06.521101 → 03:19:15.000000 · 09:38:06.521101 */
+/** Align fractional-second digits of a time column within the column (display only): 03:19:15 · 09:38:06.521101 → 03:19:15.000000 · 09:38:06.521101 */
 const TIME = /^((?:\d{4,}-\d\d-\d\d[ T])?\d\d:\d\d:\d\d)(?:\.(\d+))?/;
 
 export const isTimeType = (typeName: string) => /TIME/i.test(typeName) && !/INTERVAL/i.test(typeName);
 
-/** 불러온 값 중 가장 긴 소수 초 자릿수 (없으면 0) */
+/** The longest fractional-second digit count among the loaded values (0 if none) */
 export function fracWidth(values: unknown[]): number {
   let n = 0;
   for (const v of values) {

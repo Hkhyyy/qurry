@@ -1,7 +1,7 @@
-//! 객체 만들기 · 고치기 (⌃k › New Table… · Modify Table… · New View / Schema / Database / Sequence… · Rename…).
-//! 테이블은 디자이너 창: 컬럼 · 인덱스 · FK 목록을 키로 고치고, 아래에 만들어질 SQL 이 바로 보인다.
-//! 한 줄은 SQL 과 비슷하게 쓴다 — 컬럼 `email varchar(100) not null default 'x' auto pk comment 'login'`,
-//! 인덱스 `users_email_idx (email) unique`, FK `orders_user_fk (user_id) -> public.users (id) on delete cascade`
+//! Create · modify objects (⌃k › New Table… · Modify Table… · New View / Schema / Database / Sequence… · Rename…).
+//! Tables use the designer window: edit column · index · FK lists with keys, with the resulting SQL shown live below.
+//! Each line is written much like SQL — column `email varchar(100) not null default 'x' auto pk comment 'login'`,
+//! index `users_email_idx (email) unique`, FK `orders_user_fk (user_id) -> public.users (id) on delete cascade`
 use crate::app::{App, Popup};
 use crate::kit::*;
 use crate::tree::NodeKind;
@@ -20,15 +20,15 @@ pub struct Designer {
     pub kind: DbKind,
     pub before: Option<TableDef>,
     pub def: TableDef,
-    /// 컬럼 → 인덱스 → FK 를 이어서 센 줄
+    /// Line counted across columns → indexes → FKs
     pub sel: usize,
     pub sql: Result<Vec<String>, String>,
     pub message: Option<String>,
 }
 
-// ───────── 한 줄 글 ↔ 정의 ─────────
+// ───────── Line text ↔ definition ─────────
 
-/// 공백으로 나누되 '…' · (…) 안은 한 덩어리
+/// Split on whitespace, keeping '…' · (…) as one chunk
 fn tokens(s: &str) -> Vec<String> {
     let (mut out, mut cur, mut depth, mut quote) = (vec![], String::new(), 0i32, false);
     for c in s.chars() {
@@ -62,7 +62,7 @@ fn names(s: &str) -> Vec<String> {
 
 const COL_WORDS: &[&str] = &["not", "null", "default", "auto", "pk", "comment"];
 
-/// `name type [not null | null] [default expr] [auto] [pk] [comment 'text']` → (컬럼, PK 인지)
+/// `name type [not null | null] [default expr] [auto] [pk] [comment 'text']` → (column, whether PK)
 pub fn parse_column(spec: &str) -> Result<(ColumnDef, bool), String> {
     let t = tokens(spec);
     if t.len() < 2 {
@@ -173,7 +173,7 @@ pub fn parse_fk(spec: &str, schema: &str) -> Result<ForeignKeyDef, String> {
             return Err(bad());
         }
         let which = rest.get(i + 1).ok_or_else(bad)?.clone();
-        // SET NULL · SET DEFAULT · NO ACTION 은 두 낱말
+        // SET NULL · SET DEFAULT · NO ACTION are two words
         let two = matches!(rest.get(i + 2).map(String::as_str), Some("SET" | "NO"));
         let action = if two { format!("{} {}", rest.get(i + 2).unwrap(), rest.get(i + 3).ok_or_else(bad)?) } else { rest.get(i + 2).ok_or_else(bad)?.clone() };
         match which.as_str() {
@@ -197,7 +197,7 @@ pub fn fk_spec(f: &ForeignKeyDef, schema: &str) -> String {
     s
 }
 
-// ───────── 디자이너 ─────────
+// ───────── Designer ─────────
 
 enum Row {
     Col(usize),
@@ -227,7 +227,7 @@ impl Designer {
         self.def.primary_key.iter().any(|x| x == name)
     }
 
-    /// 컬럼 이름이 바뀌면 PK · 인덱스 · FK 도 따라간다
+    /// Renaming a column also updates the PK · indexes · FKs
     fn rename_col(&mut self, old: &str, new: &str) {
         let ren = |xs: &mut Vec<String>| xs.iter_mut().filter(|x| *x == old).for_each(|x| *x = new.to_string());
         ren(&mut self.def.primary_key);
@@ -236,7 +236,7 @@ impl Designer {
     }
 }
 
-/// 입력을 받고 디자이너로 돌아온다 (입력 팝업이 디자이너 위에 뜬다)
+/// Take input and return to the designer (the input popup opens over the designer)
 fn ask(app: &mut App, title: &str, init: &str, apply: impl FnOnce(&mut Designer, String) -> Result<(), String> + 'static) {
     app.input(title, init, move |a, v| {
         if let Some(d) = a.designer.as_mut() {
@@ -297,7 +297,7 @@ pub fn key(app: &mut App, k: KeyEvent) {
                     } else if !pk && was {
                         d.def.primary_key.retain(|x| *x != n.name);
                     }
-                    // 지금 DB 의 이름 (orig) 은 그대로 → 이름 바꾸기 · 고치기가 된다
+                    // Keep the current DB name (orig) → becomes a rename · modify
                     d.def.columns[i] = ColumnDef { orig: d.def.columns[i].orig.clone(), ..n };
                     Ok(())
                 });
@@ -386,7 +386,7 @@ pub fn key(app: &mut App, k: KeyEvent) {
     }
 }
 
-/// 실행: 운영이면 묻고, PG 는 한 트랜잭션
+/// Run: ask first on Production, one transaction on PG
 fn apply(app: &mut App) {
     let Some(d) = app.designer.as_ref() else { return };
     let sql = match &d.sql {
@@ -506,10 +506,10 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(hint), Rect { y: inner.y + h, height: 1, ..inner });
 }
 
-// ───────── 열기 ─────────
+// ───────── Opening ─────────
 
 impl App {
-    /// 고른 노드: (대상, Data Source, DB, 스키마) — MySQL 은 DB 가 곧 스키마, PG 는 public
+    /// Selected node: (target, Data Source, DB, schema) — in MySQL the DB is the schema, in PG public
     fn ddl_place(&self) -> Option<(String, String, Option<String>, String)> {
         let (conn, db, schema) = match (self.focus, self.tree.selected()) {
             (crate::app::Focus::Tree, Some(n)) => (n.conn.clone(), n.db.clone(), n.schema.clone()),
@@ -569,7 +569,7 @@ impl App {
         });
     }
 
-    /// New ▸ Database · Schema · View · Sequence: 이름 (뷰는 쿼리도) → SQL 확인 → 실행
+    /// New ▸ Database · Schema · View · Sequence: name (plus query for views) → confirm SQL → run
     pub fn new_object(&mut self, what: &'static str) {
         let Some((target, conn, db, schema)) = self.ddl_place() else {
             return self.status = "Select a PostgreSQL / MySQL data source, database or schema first".into();
@@ -602,7 +602,7 @@ impl App {
         });
     }
 
-    /// Rename… (⇧F6): 테이블 · 뷰 · 시퀀스 · 스키마 · DB (PG)
+    /// Rename… (⇧F6): table · view · sequence · schema · DB (PG)
     pub fn rename_object(&mut self) {
         let Some(n) = self.tree.selected().filter(|_| self.focus == crate::app::Focus::Tree) else {
             return self.status = "Select a table, view, sequence, schema or database in the explorer".into();
@@ -630,7 +630,7 @@ impl App {
         });
     }
 
-    /// 만든 SQL 을 보여 주고 (운영이면 빨간 창) 실행, 끝나면 트리를 다시 읽는다
+    /// Show the generated SQL (red window on Production), run it, then reload the tree
     fn confirm_ddl(&mut self, target: String, conn: String, db: Option<String>, sql: Vec<String>, done: String) {
         let prod = self.production_name(&conn);
         let text = format!(
@@ -648,7 +648,7 @@ impl App {
                 let db = db.unwrap_or_else(|| a.default_db(&conn));
                 a.spawn(async move { st.run_ddl(target, sql).await }, move |a, r| match r {
                     Ok(()) => {
-                        // 스키마 · 테이블은 그 DB 아래를, 새 DB 는 Data Source 를 다시 읽는다
+                        // Schemas · tables reload under that DB; a new DB reloads the Data Source
                         a.schema_changed(&conn, &db);
                         if let Some(n) = a.tree.roots.iter().find(|n| n.conn == conn).cloned() {
                             a.refresh_node(&n);
@@ -675,10 +675,10 @@ mod tests {
         let (c, _) = parse_column("price numeric(10, 2) default 0").unwrap();
         assert_eq!((c.data_type.as_str(), c.default.as_deref(), c.nullable), ("numeric(10, 2)", Some("0"), true));
         assert!(parse_column("x").is_err());
-        // 타입은 여러 낱말일 수 있다 (double precision), 모르는 키워드 짝은 오류
+        // Types can be several words (double precision); an unknown keyword pair is an error
         assert_eq!(parse_column("x double precision").unwrap().0.data_type, "double precision");
         assert!(parse_column("x int not wat").unwrap_err().contains("not"));
-        // 글로 바꿨다가 다시 읽으면 같다
+        // Converting to text and reading back gives the same result
         let (c, pk) = parse_column("status text not null default 'active' comment 'state'").unwrap();
         assert_eq!(parse_column(&column_spec(&c, pk)).unwrap(), (c, pk));
     }

@@ -1,8 +1,8 @@
-/** 결과 표 → 차트 데이터 (ResultChart 가 그린다). 같은 X 는 합치고, COUNT 는 행 수 */
+/** Result table → chart data (drawn by ResultChart). Same X values are merged, COUNT is the row count */
 import type { Cell, QueryResult } from "./api";
 
 export type ChartKind = "bar" | "line" | "pie";
-/** Y 로 고를 수 있는 것: 컬럼 번호, 또는 행 수 */
+/** What can be picked as Y: a column index, or the row count */
 export const COUNT = -1;
 
 export interface ChartData {
@@ -19,7 +19,7 @@ export const toNumber = (c: Cell): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 
-/** 수로 볼 수 있는 컬럼: 타입이 수이거나, 비어 있지 않은 값의 대부분이 수 */
+/** Columns that can be treated as numeric: numeric type, or most non-empty values are numbers */
 export function numericColumns(r: QueryResult): number[] {
   return r.columns
     .map((c, i) => {
@@ -32,7 +32,7 @@ export function numericColumns(r: QueryResult): number[] {
 
 const ID_NAME = /^id$|_id$|^id_/i;
 
-/** 처음 고를 축: X = 수가 아닌 첫 컬럼 (없으면 첫 컬럼), Y = X 가 아닌 첫 수 컬럼 (id 같은 것은 뒤로, 없으면 행 수) */
+/** Initial axes: X = first non-numeric column (else the first column), Y = first numeric column other than X (id-like ones last, else the row count) */
 export function defaultAxes(r: QueryResult): { x: number; ys: number[] } {
   const nums = numericColumns(r);
   const x = r.columns.findIndex((_, i) => !nums.includes(i));
@@ -45,8 +45,8 @@ export function defaultAxes(r: QueryResult): { x: number; ys: number[] } {
 const label = (c: Cell) => (c === null ? "(null)" : String(c));
 
 /**
- * X 마다 Y 를 합친다 (같은 X 가 여러 행이면 합, COUNT 는 행 수). 날짜·수 X 는 오름차순, 나머지는 처음 나온 순서.
- * 파이는 큰 것부터 maxSlices-1 개 + 나머지는 "Other"
+ * Aggregate Y per X (sum when the same X spans rows, COUNT is the row count). Date·numeric X ascending, others in first-seen order.
+ * Pie: the largest maxSlices-1 + the rest as "Other"
  */
 export function buildChart(r: QueryResult, x: number, ys: number[], kind: ChartKind, maxSlices = 10): ChartData {
   const order: string[] = [];
@@ -76,7 +76,7 @@ export function buildChart(r: QueryResult, x: number, ys: number[], kind: ChartK
   return { labels: order, series: names.map((name, j) => ({ name, values: order.map((k) => sums.get(k)![j]) })) };
 }
 
-/** 보기 좋은 눈금: min..max 를 덮는 1·2·5 × 10ⁿ 간격 */
+/** Nice ticks: 1·2·5 × 10ⁿ steps covering min..max */
 export function niceTicks(min: number, max: number, count = 5): number[] {
   if (min === max) {
     max = min + 1;
@@ -93,7 +93,7 @@ export function niceTicks(min: number, max: number, count = 5): number[] {
   return out;
 }
 
-/** 축 글: 1,200 · 1.2M · 0.25 */
+/** Axis labels: 1,200 · 1.2M · 0.25 */
 export function shortNumber(n: number): string {
   const a = Math.abs(n);
   if (a >= 1e9) return `${+(n / 1e9).toFixed(1)}B`;

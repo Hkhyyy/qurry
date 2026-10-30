@@ -1,5 +1,5 @@
-//! 백업·복원: pg_dump / pg_restore / psql, mysqldump / mysql 을 돌린다 (PATH 와 흔한 설치 위치에서 찾는다).
-//! 비밀번호는 명령줄이 아니라 환경변수로 (ps 에 보이지 않게). SSH 터널이면 터널 포트로. 진행은 쓴(읽은) 바이트
+//! Backup / restore: runs pg_dump / pg_restore / psql, mysqldump / mysql (found in PATH and common install locations).
+//! Passwords go via environment variables, not the command line (so they don't show in ps). With an SSH tunnel, the tunnel port is used. Progress is bytes written (read)
 use crate::app::{AppState, ensure_pool, split_target};
 use crate::error::{AppError, AppResult};
 use crate::store::DbKind;
@@ -11,14 +11,14 @@ use std::sync::atomic::Ordering;
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupOptions {
-    /// PG: "custom" (pg_restore 로 되살린다, 기본) · "plain" (SQL 파일)
+    /// PG: "custom" (restored with pg_restore, default) · "plain" (SQL file)
     #[serde(default)]
     pub format: String,
     #[serde(default)]
     pub schema_only: bool,
     #[serde(default)]
     pub data_only: bool,
-    /// PG: 이 스키마들만 (비면 전부)
+    /// PG: only these schemas (empty = all)
     #[serde(default)]
     pub schemas: Vec<String>,
 }
@@ -26,18 +26,23 @@ pub struct BackupOptions {
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RestoreOptions {
-    /// PG custom: 있던 객체를 먼저 지운다 (--clean --if-exists)
+    /// PG custom: drop existing objects first (--clean --if-exists)
     #[serde(default)]
     pub clean: bool,
 }
 
-/// 도구가 있을 만한 폴더 (PATH 다음)
+/// Folders where tools are likely to be (after PATH)
 fn tool_dirs() -> Vec<PathBuf> {
+    // Tests against real servers can pin the client version (e.g. only /opt/homebrew/opt/libpq/bin)
+    #[cfg(test)]
+    if let Some(d) = std::env::var_os("QURRY_TEST_TOOL_DIRS") {
+        return std::env::split_paths(&d).collect();
+    }
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
     for d in ["/opt/homebrew/bin", "/usr/local/bin", "/opt/homebrew/opt/libpq/bin", "/usr/local/opt/libpq/bin", "/opt/homebrew/opt/mysql-client/bin", "/usr/local/opt/mysql-client/bin", "/opt/homebrew/opt/mysql/bin", "/usr/local/mysql/bin", "/usr/bin"] {
         dirs.push(d.into());
     }
-    // 버전별 폴더: postgresql@16, mysql-client@8.4, Postgres.app, /usr/lib/postgresql/16
+    // Per-version folders: postgresql@16, mysql-client@8.4, Postgres.app, /usr/lib/postgresql/16
     for (parent, prefix, sub) in [
         ("/opt/homebrew/opt", "postgresql@", "bin"),
         ("/usr/local/opt", "postgresql@", "bin"),
@@ -60,22 +65,45 @@ fn tool_dirs() -> Vec<PathBuf> {
 
 /// "pg_dump (PostgreSQL) 16.4" → [16, 4]
 fn version_of(p: &Path) -> Vec<u64> {
-    let out = std::process::Command::new(p).arg("--version").output().ok();
-    let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    let text = version_text(p);
     text.split(|c: char| !c.is_ascii_digit() && c != '.').find(|w| w.contains('.') || w.parse::<u64>().is_ok()).map(|w| w.split('.').filter_map(|x| x.parse().ok()).collect()).unwrap_or_default()
 }
 
-/// 도구 위치: PATH, Homebrew·Postgres.app·리눅스 기본 위치. 여럿이면 버전이 가장 높은 것
+fn version_text(p: &Path) -> String {
+    let out = std::process::Command::new(p).arg("--version").output().ok();
+    out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
+}
+
+/// MariaDB builds of mysql / mysqldump take other TLS options (--ssl, --ssl-verify-server-cert instead of --ssl-mode)
+fn is_mariadb(p: &Path) -> bool {
+    version_text(p).contains("MariaDB")
+}
+
+/// Tool location: PATH, Homebrew, Postgres.app, Linux default locations. If several, the highest version
 pub fn find_tool(name: &str) -> Option<PathBuf> {
     find_tool_for(name, None)
 }
 
-/// 서버 주 버전에 맞는 도구: 서버 이상 중 가장 가까운 것 (pg_dump 는 서버보다 낮으면 못 쓰고, 너무 높으면 옛 서버가 모르는 SET 을 쓴다).
-/// 서버 이상이 없으면 가장 높은 것 (도구가 버전 차이를 알려 준다)
+/// Tool matching the server major version: the closest one at or above the server (pg_dump can't be used if older than the server, and if too new it emits SETs an old server doesn't know).
+/// If none is at or above the server, the highest one (the tool reports the version mismatch)
 pub fn find_tool_for(name: &str, server_major: Option<u64>) -> Option<PathBuf> {
+    find_tool_where(name, server_major, |_| true)
+}
+
+/// find_tool_for among only the builds whose version passes `ok` (so an older build that passes isn't skipped for a closer one that doesn't)
+fn find_tool_where(name: &str, server_major: Option<u64>, ok: impl Fn(&[u64]) -> bool) -> Option<PathBuf> {
     let mut found: Vec<PathBuf> = tool_dirs().into_iter().map(|d| d.join(name)).filter(|p| p.is_file()).collect();
     found.dedup();
-    let mut with_v: Vec<(Vec<u64>, PathBuf)> = found.into_iter().map(|p| (version_of(&p), p)).collect();
+    // MariaDB's 10.x / 11.x version numbers aren't comparable with MySQL's, so a MySQL build wins when both exist
+    if name.starts_with("mysql") && found.iter().any(|p| !is_mariadb(p)) {
+        found.retain(|p| !is_mariadb(p));
+    }
+    closest(found.into_iter().map(|p| (version_of(&p), p)).collect(), server_major, ok)
+}
+
+/// The pick of find_tool_where from (version, path) pairs
+fn closest(mut with_v: Vec<(Vec<u64>, PathBuf)>, server_major: Option<u64>, ok: impl Fn(&[u64]) -> bool) -> Option<PathBuf> {
+    with_v.retain(|(v, _)| ok(v));
     with_v.sort();
     if let Some(m) = server_major
         && let Some((_, p)) = with_v.iter().find(|(v, _)| v.first().is_some_and(|&x| x >= m))
@@ -85,34 +113,256 @@ pub fn find_tool_for(name: &str, server_major: Option<u64>) -> Option<PathBuf> {
     with_v.pop().map(|x| x.1)
 }
 
-/// PG 서버 주 버전 (16, 17 …)
+/// PG server major version (16, 17 …)
 async fn pg_major(st: &AppState, id: &str) -> Option<u64> {
     let r = ensure_pool(st, id).await.ok()?.run_query("SHOW server_version_num", 1).await.ok()?;
     crate::db::cell_text(r.rows.first()?.first()?).parse::<u64>().ok().map(|n| n / 10000)
 }
 
-/// 새 pg_dump 가 백업 머리에 넣는데 예전 서버는 모르는 설정 (이름, 생긴 버전)
+/// Settings that newer pg_dump puts in the dump header but older servers don't know (name, version introduced)
 const NEWER_SETTINGS: &[(&str, u64)] = &[("SET transaction_timeout", 17)];
 
-/// 예전 서버가 모르는 SET 줄을 뺀 SQL 사본 (뺄 것이 없는 서버면 None)
-fn strip_newer_settings(src: &Path, server: Option<u64>) -> AppResult<Option<PathBuf>> {
-    use std::io::{BufRead, Write};
-    let drop: Vec<&str> = NEWER_SETTINGS.iter().filter(|(_, v)| server.is_some_and(|s| s < *v)).map(|(n, _)| *n).collect();
-    if drop.is_empty() {
-        return Ok(None);
+
+/// File readable and writable only by the owner (0600). The dump contains all the data, so others can't read it in /tmp
+fn private_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        o.mode(0o600);
+        let f = o.open(path)?;
+        // Also for a file that already existed (a backup file the user chose to overwrite)
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        return Ok(f);
     }
-    let out = std::env::temp_dir().join(format!("qurry-restore-{}.sql", uuid::Uuid::new_v4()));
-    let mut r = std::io::BufReader::new(std::fs::File::open(src)?);
-    let mut w = std::io::BufWriter::new(std::fs::File::create(&out)?);
-    let mut line = Vec::new();
-    while r.read_until(b'\n', &mut line)? > 0 {
-        if !(line.starts_with(b"SET ") && drop.iter().any(|d| line.starts_with(d.as_bytes()))) {
-            w.write_all(&line)?;
+    #[allow(unreachable_code)]
+    o.open(path)
+}
+
+/// The -d of pg_dump · pg_restore · psql: the value is also parsed as a connection string (putting host=… in it goes to another server), so pin it to just a DB name
+fn pg_dbname(db: &str) -> String {
+    format!("dbname='{}'", db.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+/// Finds mysql client commands that do something on this computer, line by line. A second check: mysql runs with --binary-mode, which switches these off.
+/// Like the mysql client (checked against mysql 8.4): system / tee / pager / source / connect / edit / ssl_session_data_print … only at the start of a
+/// statement — nothing but blank space and comments since the last delimiter (the one DELIMITER / \d set), on this line or earlier ones — and \! \T \P
+/// \. \r \e \u \C anywhere; both outside strings ('…' "…" with backslash escapes as mysqldump writes them, `…` without) and comments (-- · # to the end
+/// of the line, /* */ but not /*! */, whose contents mysql runs). Not inside the data: mysqldump writes a\!b in a string as 'a\\!b'.
+/// After SET sql_mode = '…NO_BACKSLASH_ESCAPES…' (mysqldump writes one before a routine created in that mode) a backslash in a string is a character,
+/// until sql_mode is set again without it — the client follows the server's mode the same way. Followed: the session's sql_mode in a SET of up to
+/// STATEMENT_MAX bytes, set to a string or expression (on if it names the mode), DEFAULT, or a user variable saved from @@sql_mode before. Not followed:
+/// other ways to change it (a procedure that sets it, PREPARE …), where this check can go out of step; --binary-mode is the defence there.
+/// ANSI_QUOTES changes nothing here: the client reads "…" as a string either way.
+/// (psql needs no line check: it runs with \restrict, and an older psql isn't used for plain SQL)
+struct MyScan {
+    /// The quote of the string the line starts in (0 = none)
+    quote: u8,
+    /// Inside /* */
+    comment: bool,
+    /// The current statement has begun (more than blank space and comments since the last delimiter)
+    started: bool,
+    delimiter: Vec<u8>,
+    /// The current statement without its comments, up to STATEMENT_MAX bytes (one more = longer), to follow SET sql_mode
+    statement: Vec<u8>,
+    /// NO_BACKSLASH_ESCAPES is on
+    no_escapes: bool,
+    /// User variables set to @@sql_mode: whether NO_BACKSLASH_ESCAPES was on then (SET @saved_sql_mode = @@sql_mode)
+    saved: std::collections::HashMap<String, bool>,
+}
+
+/// The mysql client's named commands that reach this computer or another server
+const NAMED_COMMANDS: &[&str] = &["system", "tee", "notee", "pager", "nopager", "source", "connect", "edit", "ssl_session_data_print"];
+const STATEMENT_MAX: usize = 4096;
+
+impl Default for MyScan {
+    fn default() -> Self {
+        MyScan { quote: 0, comment: false, started: false, delimiter: b";".to_vec(), statement: Vec::new(), no_escapes: false, saved: Default::default() }
+    }
+}
+
+/// The first word from here (up to blank space)
+fn word_at(line: &[u8], i: usize) -> &[u8] {
+    let rest = &line[i..];
+    &rest[..rest.iter().position(|c| c.is_ascii_whitespace()).unwrap_or(rest.len())]
+}
+
+impl MyScan {
+    fn is_local_command(&mut self, line: &[u8]) -> bool {
+        let at = |i: usize| line.get(i).copied().unwrap_or(0);
+        let mut i = 0;
+        while i < line.len() {
+            let c = line[i];
+            if self.comment {
+                if c == b'*' && at(i + 1) == b'/' {
+                    self.comment = false;
+                    i += 1;
+                }
+            } else if self.quote != 0 {
+                self.push(c);
+                if c == b'\\' && self.quote != b'`' && !self.no_escapes {
+                    self.push(at(i + 1));
+                    i += 1;
+                } else if c == self.quote {
+                    self.quote = 0;
+                }
+            } else if c.is_ascii_whitespace() {
+                if self.started {
+                    self.push(c);
+                }
+            } else if !self.started && NAMED_COMMANDS.iter().any(|n| word_at(line, i).eq_ignore_ascii_case(n.as_bytes())) {
+                return true;
+            } else if !self.started && word_at(line, i).eq_ignore_ascii_case(b"delimiter") {
+                // DELIMITER x takes the rest of the line
+                self.set_delimiter(&line[i + 9..]);
+                return false;
+            } else if c == b'\\' {
+                match at(i + 1) {
+                    b'!' | b'T' | b'P' | b'.' | b'r' | b'e' | b'u' | b'C' => return true,
+                    b'd' => {
+                        // \d x: the rest of the line is scanned on after x
+                        let from = i + 2 + line[i + 2..].iter().take_while(|c| c.is_ascii_whitespace()).count();
+                        let len = word_at(line, from).len();
+                        self.set_delimiter(&line[from..]);
+                        i = from + len;
+                        continue;
+                    }
+                    b'g' | b'G' => self.end_statement(),
+                    _ => {
+                        self.started = true;
+                        self.push(c);
+                        if let Some(&next) = line.get(i + 1) {
+                            self.push(next);
+                        }
+                    }
+                }
+                i += 1;
+            } else if line[i..].starts_with(&self.delimiter) {
+                self.end_statement();
+                i += self.delimiter.len();
+                continue;
+            } else if c == b'#' || (c == b'-' && at(i + 1) == b'-' && (i + 2 >= line.len() || at(i + 2).is_ascii_whitespace())) {
+                return false;
+            } else if c == b'/' && at(i + 1) == b'*' && !matches!(at(i + 2), b'!' | b'+') {
+                self.comment = true;
+                i += 1;
+            } else {
+                self.started = true;
+                self.push(c);
+                if matches!(c, b'\'' | b'"' | b'`') {
+                    self.quote = c;
+                }
+            }
+            i += 1;
         }
-        line.clear();
+        false
     }
-    w.flush()?;
-    Ok(Some(out))
+
+    fn push(&mut self, c: u8) {
+        if self.statement.len() <= STATEMENT_MAX {
+            self.statement.push(c);
+        }
+    }
+
+    /// The first word of the text (DELIMITER's argument), if any
+    fn set_delimiter(&mut self, text: &[u8]) {
+        let text = &text[text.iter().take_while(|c| c.is_ascii_whitespace()).count()..];
+        let word = word_at(text, 0);
+        if !word.is_empty() {
+            self.delimiter = word.to_vec();
+        }
+    }
+
+    /// A statement ended (the delimiter, \g): follow SET sql_mode in it
+    fn end_statement(&mut self) {
+        if self.statement.len() <= STATEMENT_MAX {
+            self.follow_sql_mode();
+        }
+        self.statement.clear();
+        self.started = false;
+    }
+
+    fn follow_sql_mode(&mut self) {
+        // /*!50003 SET … */: its contents run
+        let text = String::from_utf8_lossy(&self.statement).to_ascii_lowercase();
+        let mut code = String::new();
+        let mut rest = text.as_str();
+        while let Some(p) = rest.find("/*!") {
+            code.push_str(&rest[..p]);
+            rest = rest[p + 3..].trim_start_matches(|c: char| c.is_ascii_digit());
+        }
+        code.push_str(rest);
+        let code = code.replace("*/", " ");
+        let Some(list) = code.trim_start().strip_prefix("set").filter(|r| r.starts_with(|c: char| c.is_ascii_whitespace())) else { return };
+        // The assignments: split at commas outside strings and brackets
+        let (mut parts, mut start, mut quote, mut depth, mut escaped) = (Vec::new(), 0, None, 0, false);
+        for (i, c) in list.char_indices() {
+            match quote {
+                Some(q) => {
+                    if escaped {
+                        escaped = false;
+                    } else if c == '\\' && q != '`' && !self.no_escapes {
+                        escaped = true;
+                    } else if c == q {
+                        quote = None;
+                    }
+                }
+                None => match c {
+                    '\'' | '"' | '`' => quote = Some(c),
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    ',' if depth == 0 => {
+                        parts.push(&list[start..i]);
+                        start = i + 1;
+                    }
+                    _ => {}
+                },
+            }
+        }
+        parts.push(&list[start..]);
+        for part in parts {
+            let Some(eq) = part.find('=') else { continue };
+            let (target, value) = (part[..eq].trim().trim_end_matches(':').trim(), part[eq + 1..].trim());
+            if let Some(var) = target.strip_prefix('@').filter(|v| !v.starts_with('@')) {
+                if ["@@sql_mode", "@@session.sql_mode", "@@local.sql_mode"].contains(&value) {
+                    self.saved.insert(var.to_string(), self.no_escapes);
+                }
+                continue;
+            }
+            let target = target.strip_prefix("session").or_else(|| target.strip_prefix("local")).filter(|t| t.starts_with(char::is_whitespace)).map_or(target, str::trim_start);
+            let target = target.strip_prefix("@@session.").or_else(|| target.strip_prefix("@@local.")).or_else(|| target.strip_prefix("@@")).unwrap_or(target);
+            if target != "sql_mode" {
+                continue;
+            }
+            if let Some(var) = value.strip_prefix('@') {
+                // A saved user variable; @@sql_mode or an unknown variable: unchanged
+                if let Some(&on) = self.saved.get(var) {
+                    self.no_escapes = on;
+                }
+            } else {
+                self.no_escapes = value.contains("no_backslash_escapes");
+            }
+        }
+    }
+}
+
+/// The first line of the SQL that MyScan::is_local_command. Read line by line without blocking; stops on cancel
+async fn local_command(mut sql: impl tokio::io::AsyncBufRead + Unpin, job: &Job) -> AppResult<Option<String>> {
+    use tokio::io::AsyncBufReadExt;
+    let (mut line, mut scan) = (Vec::new(), MyScan::default());
+    loop {
+        line.clear();
+        if sql.read_until(b'\n', &mut line).await? == 0 {
+            return Ok(None);
+        }
+        if job.cancelled() {
+            return Err(AppError::Msg(crate::transfer::CANCELLED.into()));
+        }
+        if scan.is_local_command(&line) {
+            return Ok(Some(String::from_utf8_lossy(&line).trim_end().to_string()));
+        }
+    }
 }
 
 fn missing(tool: &str) -> AppError {
@@ -124,28 +374,239 @@ fn missing(tool: &str) -> AppError {
     AppError::Msg(format!("{tool} was not found. {hint}"))
 }
 
-/// 접속 정보: (호스트, 포트, 사용자, DB, 비밀번호, 설정)
+/// Connection info: (host, port, user, DB, password, settings)
 async fn endpoint(st: &AppState, id: &str) -> AppResult<(String, u16, String, String, Option<String>, crate::store::ConnectionConfig)> {
     let cfg = st.source(id)?;
     let (base, db) = split_target(id);
     let db = db.map(String::from).unwrap_or_else(|| crate::sql::default_db(&cfg));
-    // SSH 터널이면 터널을 연 뒤 그 포트로
+    // With an SSH tunnel, open the tunnel and use its port
     ensure_pool(st, id).await?;
     let local = st.tunnels.read().await.get(id).map(|t| t.local_port);
     let (host, port) = match local {
         Some(p) => ("127.0.0.1".to_string(), p),
         None => (cfg.host.clone(), cfg.port),
     };
-    Ok((host, port, cfg.user.clone(), db, st.secret(base)?, cfg))
+    Ok((host, port, cfg.user.clone(), db, st.saved_secret(base, cfg.password_saved)?, cfg))
 }
 
-/// 도구를 돌린다: stdin = 이 파일을 넣으며 진행, stdout = 이 파일로, watch = 이 파일 크기로 진행. 취소되면 끝낸다
-async fn run_tool(mut cmd: tokio::process::Command, tool: &str, stdin: Option<&Path>, stdout: Option<&Path>, watch: Option<&Path>, job: &Arc<Job>) -> AppResult<()> {
+/// Whether psql knows \restrict (from 17.6 · 16.10 · 15.14 · 14.19 · 13.22)
+fn psql_restricts(v: &[u64]) -> bool {
+    let (major, minor) = (v.first().copied().unwrap_or(0), v.get(1).copied().unwrap_or(0));
+    match major {
+        0..=12 => false,
+        13 => minor >= 22,
+        14 => minor >= 19,
+        15 => minor >= 14,
+        16 => minor >= 10,
+        17 => minor >= 6,
+        _ => true,
+    }
+}
+
+/// psql for plain SQL: its commands (\! · \o · \copy … program · \connect …) are switched off with \restrict, so only a psql that knows it is used —
+/// the closest such one to the server. An older psql can't switch its commands off: plain SQL isn't restored with it
+fn restricting_psql(server: Option<u64>, what: &str) -> AppResult<PathBuf> {
+    if let Some(p) = find_tool_where("psql", server, psql_restricts) {
+        return Ok(p);
+    }
+    let found = find_tool_for("psql", server).ok_or_else(|| missing("psql"))?;
+    Err(AppError::Msg(format!(
+        "Restoring {what} needs psql 17.6 / 16.10 / 15.14 / 14.19 / 13.22 or newer (it can switch psql commands off; found {}). Update the PostgreSQL client tools (macOS: brew upgrade libpq · Ubuntu: the postgresql-client package)",
+        version_label(&found)
+    )))
+}
+
+/// "16.9 (/usr/bin/psql)", or "/usr/bin/psql, version unknown" when --version can't be read
+fn version_label(tool: &Path) -> String {
+    let v = version_of(tool);
+    if v.is_empty() {
+        format!("{}, version unknown", tool.display())
+    } else {
+        format!("{} ({})", v.iter().map(|x| x.to_string()).collect::<Vec<_>>().join("."), tool.display())
+    }
+}
+
+/// Whether mysql knows --system-command (from 8.0.40 · 8.4.3 · 9.1)
+fn mysql_has_system_command_option(tool: &Path) -> bool {
+    std::process::Command::new(tool).arg("--help").output().map(|o| String::from_utf8_lossy(&o.stdout).contains("--system-command")).unwrap_or(false)
+}
+
+/// Whether pg_restore of this major version, restoring straight into the server, would SET settings the server doesn't know
+/// (pg_restore 17+ sends SET transaction_timeout whatever the server). Unknown versions: no (pg_restore then reports what went wrong)
+fn sends_unknown_settings(pg_restore: Option<u64>, server: Option<u64>) -> bool {
+    NEWER_SETTINGS.iter().any(|(_, v)| server.is_some_and(|s| s < *v) && pg_restore.is_some_and(|t| t >= *v))
+}
+
+/// What psql reads instead of the .sql file as is (streamed to its stdin, no copy): `\restrict <key>` first, so psql commands in the file are switched off;
+/// the file's own \restrict · \unrestrict lines left out (pg_dump 17.6+ writes them; left in, the file could switch commands back on with a key it chose);
+/// and SETs an older server doesn't know left out. Only pg_dump's own lines are left out: those of its header (before the first statement other than
+/// SET / set_config) and the file's last \unrestrict line (in files put one after the other, also the \unrestrict · \restrict between them and the
+/// next header) — never COPY data or the lines of a string over several lines
+struct PsqlInput {
+    key: String,
+    drop: Vec<&'static str>,
+}
+
+impl PsqlInput {
+    fn new(server: Option<u64>) -> Self {
+        let drop = NEWER_SETTINGS.iter().filter(|(_, v)| server.is_some_and(|s| s < *v)).map(|(n, _)| *n).collect();
+        PsqlInput { key: uuid::Uuid::new_v4().simple().to_string(), drop }
+    }
+}
+
+/// Where feed_psql is in the file
+struct PsqlLines<'a> {
+    input: &'a PsqlInput,
+    /// Still in pg_dump's header (blank lines, comments, \restrict <key>, SET …; and SELECT pg_catalog.set_config(…);)
+    header: bool,
+    /// Inside the data of COPY … FROM stdin (until \.). A line of a string over several lines that looks like `COPY … FROM stdin;` sets it too
+    /// (pg_dump --inserts of 'a\ncopy t from stdin;\nb', a function body): the file's own key below still ends the file there
+    copy: bool,
+    /// The key of the header's \restrict <key>: a random token pg_dump made, so an \unrestrict with it is pg_dump's own, even where this
+    /// filter thinks it is in COPY data (data that happens to be exactly that line is practically impossible)
+    key: Option<Vec<u8>>,
+    /// An \unrestrict <key> line and the blank lines and comments after it: left out if the file ends there; with the file's key and the next
+    /// dump's \restrict after it (cat schema.sql data.sql), the two are left out and that dump's header is filtered too
+    held: Vec<u8>,
+    /// The held \unrestrict has the file's key
+    held_key: bool,
+}
+
+/// The key of `\restrict <key>` / `\unrestrict <key>` as pg_dump writes it: at the start of the line, one key and nothing else
+fn restrict_key<'t>(text: &'t [u8], command: &[u8]) -> Option<&'t [u8]> {
+    text.strip_prefix(command).and_then(|r| r.strip_prefix(b" ")).filter(|key| !key.is_empty() && !key.iter().any(|c| c.is_ascii_whitespace()))
+}
+
+/// A whole one-line SET …; or SELECT pg_catalog.set_config(…); (no string left open)
+fn header_statement(text: &[u8]) -> bool {
+    (text.starts_with(b"SET ") || text.starts_with(b"SELECT pg_catalog.set_config(")) && text.ends_with(b";") && text.iter().filter(|&&c| c == b'\'').count() % 2 == 0 && !text.contains(&b'$')
+}
+
+impl<'a> PsqlLines<'a> {
+    fn new(input: &'a PsqlInput) -> Self {
+        PsqlLines { input, header: true, copy: false, key: None, held: Vec::new(), held_key: false }
+    }
+
+    /// What psql gets for this line of the file
+    fn line(&mut self, line: &[u8], out: &mut Vec<u8>) {
+        let text = line.strip_suffix(b"\n").unwrap_or(line);
+        let text = text.strip_suffix(b"\r").unwrap_or(text);
+        if !self.held.is_empty() {
+            if text.trim_ascii().is_empty() || text.starts_with(b"--") {
+                self.held.extend_from_slice(line);
+                return;
+            }
+            if let Some(next) = restrict_key(text, b"\\restrict").filter(|_| self.held_key) {
+                // The next pg_dump file: its \restrict and the \unrestrict before it left out (the lines between kept), its header filtered
+                let first = self.held.iter().position(|&c| c == b'\n').map_or(self.held.len(), |i| i + 1);
+                out.extend_from_slice(&self.held[first..]);
+                self.held.clear();
+                (self.header, self.copy, self.key) = (true, false, Some(next.to_vec()));
+                return;
+            }
+            // Not the end: kept as it is (in COPY data, data)
+            out.append(&mut self.held);
+        }
+        let unrestrict = restrict_key(text, b"\\unrestrict");
+        let own = unrestrict.is_some() && unrestrict == self.key.as_deref();
+        if self.copy && !own {
+            self.copy = text != b"\\.";
+            out.extend_from_slice(line);
+            return;
+        }
+        if self.header {
+            self.header = text.trim_ascii().is_empty() || text.starts_with(b"--") || restrict_key(text, b"\\restrict").is_some() || header_statement(text);
+        }
+        if self.header {
+            if let Some(k) = restrict_key(text, b"\\restrict") {
+                self.key.get_or_insert_with(|| k.to_vec());
+                return;
+            }
+            if self.input.drop.iter().any(|d| text.strip_prefix(d.as_bytes()).is_some_and(|r| r.starts_with(b" ") || r.starts_with(b"="))) {
+                return;
+            }
+        }
+        if unrestrict.is_some() {
+            self.held.extend_from_slice(line);
+            self.held_key = own;
+            return;
+        }
+        let lower = text.to_ascii_lowercase();
+        self.copy = lower.starts_with(b"copy ") && lower.ends_with(b" from stdin;");
+        out.extend_from_slice(line);
+    }
+
+    /// The end of the file: the closing \unrestrict on a line of its own, unless the file ended inside COPY data (there it would be data) —
+    /// a file that ends with its own \unrestrict ended outside it
+    fn end(&self, out: &mut Vec<u8>) {
+        if !self.copy || (self.held_key && !self.held.is_empty()) {
+            out.extend_from_slice(format!("\n\\unrestrict {}\n", self.input.key).as_bytes());
+        }
+    }
+}
+
+/// Copy the file to the tool's stdin with progress. Ok(false) = cancelled: the caller keeps stdin open, so the tool isn't told the input ended
+async fn feed_file(mut r: impl tokio::io::AsyncRead + Unpin, w: &mut (impl tokio::io::AsyncWrite + Unpin), job: &Job) -> std::io::Result<bool> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut buf = vec![0u8; 256 * 1024];
+    loop {
+        let n = r.read(&mut buf).await?;
+        if n == 0 {
+            return Ok(true);
+        }
+        if job.cancelled() {
+            return Ok(false);
+        }
+        w.write_all(&buf[..n]).await?;
+        job.done.fetch_add(n as u64, Ordering::Relaxed);
+    }
+}
+
+/// feed_file for psql: the file line by line as PsqlInput says, between \restrict and \unrestrict
+async fn feed_psql(mut r: impl tokio::io::AsyncBufRead + Unpin, w: &mut (impl tokio::io::AsyncWrite + Unpin), input: &PsqlInput, job: &Job) -> std::io::Result<bool> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    // Not dropped with a flush or shutdown on cancel, so the tool's stdin stays open
+    let mut w = tokio::io::BufWriter::with_capacity(256 * 1024, w);
+    w.write_all(format!("\\restrict {}\n", input.key).as_bytes()).await?;
+    let mut lines = PsqlLines::new(input);
+    let (mut line, mut out) = (Vec::new(), Vec::new());
+    loop {
+        line.clear();
+        let n = r.read_until(b'\n', &mut line).await?;
+        if n == 0 {
+            break;
+        }
+        if job.cancelled() {
+            return Ok(false);
+        }
+        out.clear();
+        lines.line(&line, &mut out);
+        w.write_all(&out).await?;
+        job.done.fetch_add(n as u64, Ordering::Relaxed);
+    }
+    out.clear();
+    lines.end(&mut out);
+    w.write_all(&out).await?;
+    w.flush().await?;
+    Ok(true)
+}
+
+/// Stop if the SQL to restore has lines that run commands on this computer (pg_dump · mysqldump don't write such lines)
+async fn refuse_local_commands(file: &Path, job: &Job) -> AppResult<()> {
+    match local_command(tokio::io::BufReader::with_capacity(256 * 1024, tokio::fs::File::open(file).await?), job).await? {
+        Some(line) => Err(AppError::Msg(format!("This file runs commands on your computer, so it was not restored (pg_dump / mysqldump never write these):\n{}", line.chars().take(200).collect::<String>()))),
+        None => Ok(()),
+    }
+}
+
+/// Run a tool: stdin = feed this file with progress (through PsqlInput if given), stdout = into this file, watch = progress by this file's size. Kill it on cancel
+/// (before its input ends: at the end of its input, psql --single-transaction would commit what it has so far)
+async fn run_tool(mut cmd: tokio::process::Command, tool: &str, stdin: Option<&Path>, psql: Option<PsqlInput>, stdout: Option<&Path>, watch: Option<&Path>, job: &Arc<Job>) -> AppResult<()> {
+    use tokio::io::AsyncReadExt;
     cmd.stderr(std::process::Stdio::piped()).kill_on_drop(true);
     cmd.stdin(if stdin.is_some() { std::process::Stdio::piped() } else { std::process::Stdio::null() });
     match stdout {
-        Some(p) => cmd.stdout(std::fs::File::create(p)?),
+        Some(p) => cmd.stdout(private_file(p)?),
         None => cmd.stdout(std::process::Stdio::null()),
     };
     let mut child = cmd.spawn().map_err(|e| AppError::Msg(format!("Could not start {tool}: {e}")))?;
@@ -155,90 +616,192 @@ async fn run_tool(mut cmd: tokio::process::Command, tool: &str, stdin: Option<&P
         let _ = err.read_to_string(&mut s).await;
         s
     });
+    // A feed that stops early (cancel, read error) says why here and keeps the tool's stdin open until the tool is killed
+    let (stopped_tx, mut stopped) = tokio::sync::mpsc::channel::<String>(1);
     let feed = match (stdin, child.stdin.take()) {
         (Some(p), Some(mut w)) => {
-            let mut f = tokio::fs::File::open(p).await?;
+            let f = tokio::fs::File::open(p).await?;
             let job = job.clone();
             Some(tokio::spawn(async move {
-                let mut buf = vec![0u8; 256 * 1024];
-                loop {
-                    let n = f.read(&mut buf).await?;
-                    if n == 0 || job.cancelled() {
-                        break;
-                    }
-                    w.write_all(&buf[..n]).await?;
-                    job.done.fetch_add(n as u64, Ordering::Relaxed);
-                }
-                drop(w);
-                Ok::<_, std::io::Error>(())
+                let r = match psql {
+                    Some(input) => feed_psql(tokio::io::BufReader::with_capacity(256 * 1024, f), &mut w, &input, &job).await,
+                    None => feed_file(f, &mut w, &job).await,
+                };
+                let why = match r {
+                    Ok(true) => return,
+                    Ok(false) => crate::transfer::CANCELLED.to_string(),
+                    Err(e) => e.to_string(),
+                };
+                let _ = stopped_tx.send(why).await;
+                // w (the tool's stdin) lives as long as this task: until the tool is killed and the task aborted
+                std::future::pending::<()>().await;
             }))
         }
         _ => None,
     };
+    let tail = |stderr: &str| {
+        let tail: Vec<&str> = stderr.lines().filter(|l| !l.trim().is_empty()).collect();
+        tail[tail.len().saturating_sub(8)..].join("\n")
+    };
     let status = loop {
         tokio::select! {
             s = child.wait() => break s?,
+            Some(why) = stopped.recv() => {
+                let _ = child.kill().await;
+                if let Some(f) = &feed {
+                    f.abort();
+                }
+                if job.cancelled() {
+                    return Err(AppError::Msg(crate::transfer::CANCELLED.into()));
+                }
+                // Usually the tool stopped first (its error is in stderr) and writing to it failed
+                let stderr = tail(&errs.await.unwrap_or_default());
+                return Err(AppError::Msg(format!("{tool} failed:\n{}", if stderr.is_empty() { why } else { stderr })));
+            }
             _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {
                 if let Some(m) = watch.and_then(|w| std::fs::metadata(w).ok()) {
                     job.done.store(m.len(), Ordering::Relaxed);
                 }
                 if job.cancelled() {
                     let _ = child.kill().await;
+                    if let Some(f) = &feed {
+                        f.abort();
+                    }
                     return Err(AppError::Msg(crate::transfer::CANCELLED.into()));
                 }
             }
         }
     };
     if let Some(f) = feed {
+        f.abort();
         let _ = f.await;
     }
     let stderr = errs.await.unwrap_or_default();
     if !status.success() {
-        let tail: Vec<&str> = stderr.lines().filter(|l| !l.trim().is_empty()).collect();
-        let tail = tail[tail.len().saturating_sub(8)..].join("\n");
-        return Err(AppError::Msg(format!("{tool} failed ({status}):\n{tail}")));
+        return Err(AppError::Msg(format!("{tool} failed ({status}):\n{}", tail(&stderr))));
     }
     Ok(())
 }
 
-/// PG 접속 환경변수 (비밀번호·SSL 은 명령줄에 싣지 않는다)
-fn pg_env(cmd: &mut tokio::process::Command, password: Option<&str>, cfg: &crate::store::ConnectionConfig) {
-    if let Some(p) = password {
-        cmd.env("PGPASSWORD", p);
-    }
-    cmd.env("PGCONNECT_TIMEOUT", "10");
-    match cfg.active_ssl() {
-        Some(s) => {
-            cmd.env("PGSSLMODE", s.mode());
-            for (k, v) in [("PGSSLROOTCERT", &s.ca_file), ("PGSSLCERT", &s.cert_file), ("PGSSLKEY", &s.key_file)] {
-                if !v.is_empty() {
-                    cmd.env(k, v);
-                }
-            }
-        }
-        None => {
-            cmd.env("PGSSLMODE", "prefer");
-        }
+/// PG connection environment variables (password and SSL are not put on the command line)
+/// Password file passed to the tool (0600, deleted when the tool finishes)
+struct SecretTemp(PathBuf);
+
+impl Drop for SecretTemp {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
     }
 }
 
-fn my_args(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str, password: Option<&str>, cfg: &crate::store::ConnectionConfig) {
-    cmd.arg("-h").arg(host).arg("-P").arg(port.to_string()).arg("-u").arg(user).arg("--protocol=TCP");
-    if let Some(p) = password {
-        cmd.env("MYSQL_PWD", p);
+fn secret_temp(prefix: &str, content: &str) -> AppResult<SecretTemp> {
+    use std::io::Write;
+    // Guarded before anything is written, so a failed write doesn't leave a partial copy behind
+    let t = SecretTemp(std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::new_v4())));
+    private_file(&t.0)?.write_all(content.as_bytes())?;
+    Ok(t)
+}
+
+/// Password file lines for this server · user (None if the password has a line break, which the file can't hold).
+/// For a Unix socket directory libpq matches the host field against "localhost" when it is its default socket directory (and the path otherwise),
+/// so a socket directory gets both lines
+fn pgpass(host: &str, port: u16, user: &str, password: &str) -> Option<String> {
+    if password.contains(['\n', '\r']) {
+        return None;
     }
-    if let Some(s) = cfg.active_ssl() {
-        cmd.arg(format!("--ssl-mode={}", match s.mode() { "verify-full" => "VERIFY_IDENTITY", "verify-ca" => "VERIFY_CA", _ => "REQUIRED" }));
-        for (k, v) in [("--ssl-ca", &s.ca_file), ("--ssl-cert", &s.cert_file), ("--ssl-key", &s.key_file)] {
-            if !v.is_empty() {
-                cmd.arg(format!("{k}={v}"));
+    let esc = |s: &str| s.replace('\\', "\\\\").replace(':', "\\:");
+    let line = |h: &str| format!("{}:{port}:*:{}:{}\n", esc(h), esc(user), esc(password));
+    let socket = host.starts_with('/') || host.starts_with('@');
+    Some(if socket { line(host) + &line("localhost") } else { line(host) })
+}
+
+/// Password goes via a PGPASSFILE matching only this server · user, not an environment variable (so a \connect in the dump to another server doesn't carry it along).
+/// Only a password with a line break goes in PGPASSWORD (psql's \connect is switched off by \restrict anyway)
+fn pg_env(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str, password: Option<&str>, cfg: &crate::store::ConnectionConfig) -> AppResult<Option<SecretTemp>> {
+    // Settings from the user's environment would override the host, port or TLS rules given here
+    for k in ["PGPASSWORD", "PGHOSTADDR", "PGSERVICE", "PGSERVICEFILE", "PGSSLNEGOTIATION", "PGREQUIRESSL", "PGGSSENCMODE"] {
+        cmd.env_remove(k);
+    }
+    let pass = match password.map(|p| (p, pgpass(host, port, user, p))) {
+        Some((_, Some(lines))) => {
+            let t = secret_temp("qurry-pgpass", &lines)?;
+            cmd.env("PGPASSFILE", &t.0);
+            Some(t)
+        }
+        // A line break can't be written in a password file: this one process gets it in its environment
+        Some((p, None)) => {
+            cmd.env("PGPASSWORD", p);
+            None
+        }
+        None => None,
+    };
+    cmd.env("PGCONNECT_TIMEOUT", "10");
+    match cfg.active_ssl() {
+        Some(s) => {
+            crate::db::check_ssl_mode(s.mode())?;
+            cmd.env("PGSSLMODE", s.mode());
+            for (k, v) in [("PGSSLROOTCERT", &s.ca_file), ("PGSSLCERT", &s.cert_file), ("PGSSLKEY", &s.key_file)] {
+                if !v.is_empty() {
+                    cmd.env(k, crate::tunnel::expand_home(v));
+                }
             }
         }
+        // Same rule as the app: a remote server must set up TLS unless plain text is allowed
+        None => {
+            cmd.env("PGSSLMODE", if crate::db::plaintext_allowed(cfg, host) { "prefer" } else { "require" });
+        }
+    }
+    Ok(pass)
+}
+
+/// Password via --defaults-extra-file (0600). This option must come first
+fn my_args(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str, password: Option<&str>, cfg: &crate::store::ConnectionConfig) -> AppResult<Option<SecretTemp>> {
+    let pass = match password {
+        Some(p) => {
+            // Option-file escapes: \\ \" and line breaks / tabs, so the value can't end the line or add options
+            let v = p.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t");
+            let t = secret_temp("qurry-my", &format!("[client]\npassword=\"{v}\"\n"))?;
+            cmd.arg(format!("--defaults-extra-file={}", t.0.display()));
+            Some(t)
+        }
+        None => None,
+    };
+    cmd.env_remove("MYSQL_PWD");
+    cmd.arg("-h").arg(host).arg("-P").arg(port.to_string()).arg("-u").arg(user).arg("--protocol=TCP");
+    let mariadb = is_mariadb(Path::new(cmd.as_std().get_program()));
+    let mode = match cfg.active_ssl() {
+        Some(s) => {
+            crate::db::check_ssl_mode(s.mode())?;
+            Some(s.mode())
+        }
+        None if !crate::db::plaintext_allowed(cfg, host) => Some("require"),
+        None => None,
+    };
+    for a in mode.map(|m| my_tls_args(m, mariadb)).unwrap_or_default() {
+        cmd.arg(a);
+    }
+    if let Some(s) = cfg.active_ssl() {
+        for (k, v) in [("--ssl-ca", &s.ca_file), ("--ssl-cert", &s.cert_file), ("--ssl-key", &s.key_file)] {
+            if !v.is_empty() {
+                cmd.arg(format!("{k}={}", crate::tunnel::expand_home(v)));
+            }
+        }
+    }
+    Ok(pass)
+}
+
+/// TLS options for the MySQL client. MariaDB has no --ssl-mode; its --ssl-verify-server-cert checks the CA and the host name
+fn my_tls_args(mode: &str, mariadb: bool) -> Vec<&'static str> {
+    match (mariadb, mode) {
+        (true, "verify-ca" | "verify-full") => vec!["--ssl", "--ssl-verify-server-cert"],
+        (true, _) => vec!["--ssl"],
+        (false, "verify-full") => vec!["--ssl-mode=VERIFY_IDENTITY"],
+        (false, "verify-ca") => vec!["--ssl-mode=VERIFY_CA"],
+        (false, _) => vec!["--ssl-mode=REQUIRED"],
     }
 }
 
 impl AppState {
-    /// 백업 파일을 만든다. 쓴 바이트 (실패·취소하면 쓰던 파일을 지운다)
+    /// Create a backup file. Bytes written (on failure or cancel, the partial file is deleted)
     pub async fn backup(&self, id: String, path: String, opts: BackupOptions, job_id: String) -> AppResult<u64> {
         let job = self.job(&job_id).unwrap_or_else(|| self.start_job(&job_id));
         let file = PathBuf::from(&path);
@@ -248,7 +811,8 @@ impl AppState {
                 DbKind::Postgres => {
                     let tool = find_tool_for("pg_dump", pg_major(self, &id).await).ok_or_else(|| missing("pg_dump"))?;
                     let mut cmd = tokio::process::Command::new(tool);
-                    cmd.arg("-h").arg(&host).arg("-p").arg(port.to_string()).arg("-U").arg(&user).arg("-d").arg(&db).arg("--no-password");
+                    cmd.arg("-h").arg(&host).arg("-p").arg(port.to_string()).arg("-U").arg(&user).arg("-d").arg(pg_dbname(&db)).arg("--no-password");
+                    drop(private_file(&file)?);
                     cmd.arg("-F").arg(if opts.format == "plain" { "p" } else { "c" }).arg("-f").arg(&file);
                     if opts.schema_only {
                         cmd.arg("--schema-only");
@@ -259,13 +823,13 @@ impl AppState {
                     for sc in &opts.schemas {
                         cmd.arg("-n").arg(sc);
                     }
-                    pg_env(&mut cmd, password.as_deref(), &cfg);
-                    run_tool(cmd, "pg_dump", None, None, Some(&file), &job).await?;
+                    let _pass = pg_env(&mut cmd, &host, port, &user, password.as_deref(), &cfg)?;
+                    run_tool(cmd, "pg_dump", None, None, None, Some(&file), &job).await?;
                 }
                 DbKind::Mysql => {
                     let tool = find_tool("mysqldump").ok_or_else(|| missing("mysqldump"))?;
                     let mut cmd = tokio::process::Command::new(tool);
-                    my_args(&mut cmd, &host, port, &user, password.as_deref(), &cfg);
+                    let _pass = my_args(&mut cmd, &host, port, &user, password.as_deref(), &cfg)?;
                     cmd.args(["--single-transaction", "--routines", "--triggers", "--events", "--hex-blob"]);
                     if opts.schema_only {
                         cmd.arg("--no-data");
@@ -273,8 +837,9 @@ impl AppState {
                     if opts.data_only {
                         cmd.arg("--no-create-info");
                     }
-                    cmd.arg(&db);
-                    run_tool(cmd, "mysqldump", None, Some(&file), Some(&file), &job).await?;
+                    // After -- it is read only as a DB name (so a server-provided name like "--tee=…" doesn't become an option)
+                    cmd.arg("--").arg(&db);
+                    run_tool(cmd, "mysqldump", None, None, Some(&file), Some(&file), &job).await?;
                 }
                 DbKind::Redis => return Err(AppError::Msg("Back up Redis with BGSAVE / its RDB file".into())),
                 k => return Err(AppError::Msg(format!("Back up is not available for {k:?} data sources yet"))),
@@ -289,7 +854,7 @@ impl AppState {
         r
     }
 
-    /// 백업 파일로 되살린다 (pg_dump custom → pg_restore, SQL → psql / mysql). 한 트랜잭션: 실패하면 되돌린다 (MySQL DDL 은 예외)
+    /// Restore from a backup file (pg_dump custom → pg_restore, SQL → psql / mysql). One transaction: rolled back on failure (except MySQL DDL)
     pub async fn restore(&self, id: String, path: String, opts: RestoreOptions, job_id: String) -> AppResult<()> {
         let job = self.job(&job_id).unwrap_or_else(|| self.start_job(&job_id));
         let file = PathBuf::from(&path);
@@ -305,54 +870,69 @@ impl AppState {
                     let mut head = [0u8; 5];
                     let custom = std::io::Read::read_exact(&mut std::fs::File::open(&file)?, &mut head).is_ok() && &head == b"PGDMP";
                     let server = pg_major(self, &id).await;
-                    let mut sql_file = None;
+                    // The SQL that pg_restore expanded the archive to: removed however the restore ends (it holds all the data)
+                    let mut expanded = None;
+                    let mut psql = None;
                     if custom {
                         let tool = find_tool_for("pg_restore", server).ok_or_else(|| missing("pg_restore"))?;
+                        let sends_unknown = sends_unknown_settings(version_of(&tool).first().copied(), server);
                         let mut cmd = tokio::process::Command::new(tool);
                         cmd.args(["--no-owner"]);
                         if opts.clean {
                             cmd.args(["--clean", "--if-exists"]);
                         }
-                        if NEWER_SETTINGS.iter().any(|(_, v)| server.is_some_and(|s| s < *v)) {
-                            // 예전 서버: SQL 로 풀어서 모르는 설정을 빼고 psql 로 (pg_restore 는 그 SET 에서 멈춘다)
-                            let tmp = std::env::temp_dir().join(format!("qurry-restore-{}.sql", uuid::Uuid::new_v4()));
-                            cmd.arg("-f").arg(&tmp).arg(&file);
-                            let r = run_tool(cmd, "pg_restore", None, None, None, &job).await;
-                            let stripped = r.and_then(|_| strip_newer_settings(&tmp, server));
-                            std::fs::remove_file(&tmp).ok();
-                            sql_file = stripped?;
+                        if sends_unknown {
+                            // This pg_restore is newer than the server and would SET settings it doesn't know (and stop there): expand to SQL and replay it
+                            // through psql without them. psql is checked first, so an archive isn't expanded only to be refused
+                            psql = Some(restricting_psql(server, "this backup into an older server (it goes through psql, so the newer pg_restore's settings can be left out)")?);
+                            let tmp = SecretTemp(std::env::temp_dir().join(format!("qurry-restore-{}.sql", uuid::Uuid::new_v4())));
+                            // Create it as an owner-only file before pg_restore writes (the dump contains all the data)
+                            drop(private_file(&tmp.0)?);
+                            cmd.arg("-f").arg(&tmp.0).arg(&file);
+                            run_tool(cmd, "pg_restore", None, None, None, None, &job).await?;
+                            expanded = Some(tmp);
                         } else {
-                            cmd.arg("-h").arg(&host).arg("-p").arg(port.to_string()).arg("-U").arg(&user).arg("-d").arg(&db).arg("--no-password");
+                            cmd.arg("-h").arg(&host).arg("-p").arg(port.to_string()).arg("-U").arg(&user).arg("-d").arg(pg_dbname(&db)).arg("--no-password");
                             cmd.args(["--exit-on-error", "--single-transaction"]);
                             cmd.arg(&file);
-                            pg_env(&mut cmd, password.as_deref(), &cfg);
-                            run_tool(cmd, "pg_restore", None, None, None, &job).await?;
+                            let _pass = pg_env(&mut cmd, &host, port, &user, password.as_deref(), &cfg)?;
+                            run_tool(cmd, "pg_restore", None, None, None, None, &job).await?;
                         }
-                    } else {
-                        sql_file = strip_newer_settings(&file, server)?;
                     }
-                    if !custom || sql_file.is_some() {
-                        let src = sql_file.clone().unwrap_or_else(|| file.clone());
-                        let tool = find_tool_for("psql", server).ok_or_else(|| missing("psql"))?;
+                    if !custom || expanded.is_some() {
+                        let src = expanded.as_ref().map_or(file.clone(), |t| t.0.clone());
+                        let tool = match psql {
+                            Some(t) => t,
+                            None => restricting_psql(server, "a .sql file")?,
+                        };
                         let mut cmd = tokio::process::Command::new(tool);
-                        cmd.arg("-h").arg(&host).arg("-p").arg(port.to_string()).arg("-U").arg(&user).arg("-d").arg(&db).arg("--no-password");
+                        cmd.arg("-h").arg(&host).arg("-p").arg(port.to_string()).arg("-U").arg(&user).arg("-d").arg(pg_dbname(&db)).arg("--no-password");
                         cmd.args(["-X", "-q", "-v", "ON_ERROR_STOP=1", "--single-transaction", "-f", "-"]);
-                        pg_env(&mut cmd, password.as_deref(), &cfg);
+                        let _pass = pg_env(&mut cmd, &host, port, &user, password.as_deref(), &cfg)?;
                         job.total.store(std::fs::metadata(&src).map(|m| m.len()).unwrap_or(size), Ordering::Relaxed);
-                        let r = run_tool(cmd, "psql", Some(&src), None, None, &job).await;
-                        if let Some(t) = sql_file {
-                            std::fs::remove_file(t).ok();
-                        }
-                        r?;
+                        run_tool(cmd, "psql", Some(&src), Some(PsqlInput::new(server)), None, None, &job).await.map_err(|e| match e.to_string() {
+                            // An \unrestrict that isn't the file's last line reaches psql, which refuses it (the key isn't ours)
+                            m if m.contains("backslash commands are restricted") || m.contains("\\unrestrict: wrong key") => AppError::Msg(format!(
+                                "{m}\n(The file uses psql commands such as \\connect — e.g. a dump made with pg_dump -C or pg_dumpall. Qurry restores SQL only: restore it into the database you picked without those lines, or run it with psql yourself)"
+                            )),
+                            _ => e,
+                        })?;
                     }
                 }
                 DbKind::Mysql => {
+                    refuse_local_commands(&file, &job).await?;
                     let tool = find_tool("mysql").ok_or_else(|| missing("mysql"))?;
+                    let system_off = mysql_has_system_command_option(&tool);
                     let mut cmd = tokio::process::Command::new(tool);
-                    my_args(&mut cmd, &host, port, &user, password.as_deref(), &cfg);
-                    cmd.arg(&db);
+                    let _pass = my_args(&mut cmd, &host, port, &user, password.as_deref(), &cfg)?;
+                    // Disable mysql client commands (system · tee · pager · source · connect …) (only charset · delimiter remain)
+                    cmd.arg("--binary-mode");
+                    if system_off {
+                        cmd.arg("--system-command=OFF");
+                    }
+                    cmd.arg("--").arg(&db);
                     job.total.store(size, Ordering::Relaxed);
-                    run_tool(cmd, "mysql", Some(&file), None, None, &job).await?;
+                    run_tool(cmd, "mysql", Some(&file), None, None, None, &job).await?;
                 }
                 DbKind::Redis => return Err(AppError::Msg("Restore Redis from its RDB file".into())),
                 k => return Err(AppError::Msg(format!("Restore is not available for {k:?} data sources yet"))),
@@ -370,19 +950,327 @@ mod tests {
     use super::*;
 
     #[test]
-    fn strips_settings_old_servers_do_not_know() {
-        let src = std::env::temp_dir().join(format!("qurry-strip-{}.sql", uuid::Uuid::new_v4()));
-        std::fs::write(&src, "SET statement_timeout = 0;\nSET transaction_timeout = 0;\nCREATE TABLE t (x int);\n").unwrap();
-        assert!(strip_newer_settings(&src, Some(17)).unwrap().is_none());
-        let out = strip_newer_settings(&src, Some(12)).unwrap().unwrap();
-        assert_eq!(std::fs::read_to_string(&out).unwrap(), "SET statement_timeout = 0;\nCREATE TABLE t (x int);\n");
-        std::fs::remove_file(src).ok();
-        std::fs::remove_file(out).ok();
+    fn mariadb_clients_get_their_own_tls_options() {
+        assert_eq!(my_tls_args("require", false), ["--ssl-mode=REQUIRED"]);
+        assert_eq!(my_tls_args("verify-full", false), ["--ssl-mode=VERIFY_IDENTITY"]);
+        assert_eq!(my_tls_args("require", true), ["--ssl"]);
+        assert_eq!(my_tls_args("verify-ca", true), ["--ssl", "--ssl-verify-server-cert"]);
+    }
+
+    /// A psql without \restrict isn't picked over a newer one that has it, even when it is closer to the server
+    #[test]
+    fn picks_the_closest_psql_that_restricts() {
+        let c = |v: &[u64], p: &str| (v.to_vec(), PathBuf::from(p));
+        let all = vec![c(&[16, 9], "/a/psql16.9"), c(&[18, 0], "/b/psql18"), c(&[17, 6], "/c/psql17.6"), c(&[12, 22], "/d/psql12")];
+        assert_eq!(closest(all.clone(), Some(16), |_| true), Some("/a/psql16.9".into()));
+        assert_eq!(closest(all.clone(), Some(16), psql_restricts), Some("/c/psql17.6".into()));
+        assert_eq!(closest(all.clone(), Some(18), psql_restricts), Some("/b/psql18".into()));
+        // None at or above the server: the highest that qualifies
+        assert_eq!(closest(vec![c(&[16, 10], "/a"), c(&[16, 9], "/b")], Some(18), psql_restricts), Some("/a".into()));
+        assert_eq!(closest(vec![c(&[16, 9], "/a"), c(&[], "/b")], Some(16), psql_restricts), None);
+        assert_eq!(version_label(Path::new("/surely/not/psql")), "/surely/not/psql, version unknown");
+    }
+
+    #[test]
+    fn pgpass_lines() {
+        assert_eq!(pgpass("db.example", 5432, "u", "p:w\\"), Some("db.example:5432:*:u:p\\:w\\\\\n".into()));
+        assert_eq!(pgpass("/tmp", 5433, "u", "pw"), Some("/tmp:5433:*:u:pw\nlocalhost:5433:*:u:pw\n".into()));
+        assert_eq!(pgpass("/var/run/postgresql", 5432, "u", "a\nb"), None);
+        assert_eq!(pgpass("h", 5432, "u", "a\r"), None);
+    }
+
+    #[test]
+    fn pg_dbname_is_one_literal_name() {
+        assert_eq!(pg_dbname("shop"), "dbname='shop'");
+        assert_eq!(pg_dbname("host=evil dbname=x"), "dbname='host=evil dbname=x'");
+        assert_eq!(pg_dbname("it's\\"), "dbname='it\\'s\\\\'");
+    }
+
+    #[tokio::test]
+    async fn restore_scripts_with_local_commands_are_refused() {
+        let job = Job::new();
+        let found = |sql: String| {
+            let job = job.clone();
+            async move { local_command(sql.as_bytes(), &job).await.unwrap() }
+        };
+        assert!(found("-- MySQL dump\nCREATE TABLE t (a int);\nINSERT INTO t VALUES (1);\n".into()).await.is_none());
+        // mysqldump writes a\!b in a string as 'a\\!b': that is data, not a command
+        assert!(found("INSERT INTO `t` VALUES (1,'a\\\\!b'),(2,'\\\\! ls');\n".into()).await.is_none());
+        for bad in ["system rm -rf ~", "system\tid", "\\! id", "\\! ls", "  \\! ls", "tee /Users/x/.zshrc", "\\T /tmp/x", "pager sh", "source /etc/passwd", "connect db evil.host"] {
+            assert_eq!(found(format!("select 1;\n{bad}\n")).await, Some(bad.to_string()), "{bad}");
+        }
+        job.cancel();
+        assert!(local_command("select 1;\n".as_bytes(), &job).await.is_err());
+    }
+
+    /// The mysql client also runs \! … later in a line, outside strings and comments; inside strings (as mysqldump writes them) it is data
+    #[tokio::test]
+    async fn client_commands_later_in_a_line_are_refused() {
+        let found = |sql: &'static str| async move { local_command(sql.as_bytes(), &Job::new()).await.unwrap() };
+        for bad in [
+            "select 1; \\! touch /tmp/p",
+            "select 1;\\T /tmp/x",
+            "select 'a' \\P sh",
+            "insert into t values ('it\\'s', 1); \\. /etc/x",
+            "select `a\\` \\u other",
+            "/*!40101 \\C latin1 */;",
+            "select 1 /* note */ \\r db evil.host",
+            "select \"a\\\"b\" \\! id",
+        ] {
+            assert_eq!(found(bad).await.as_deref(), Some(bad), "{bad}");
+        }
+        // Strings that span lines, comments and escapes are followed: these are data or comments
+        for ok in [
+            "INSERT INTO `t` VALUES (1,'a\\\\!b'),(2,'\\\\! ls'),(3,'it\\'s \\\\! x'),(4,\"q\\\"\\\\T\");\n",
+            "INSERT INTO t VALUES ('a\nsystem ls\n\\! id\n');\n",
+            "select 1; -- \\! not run\nselect 2; # \\! nor this\n",
+            "/* \\! a comment\n\\! still a comment */ select 1;\n",
+            "select `odd\\` from t;\n",
+            "/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;\nDELIMITER ;;\n/*!50003 CREATE*/ /*!50020 DEFINER=`root`@`%`*/ /*!50003 TRIGGER `t_bi` BEFORE INSERT ON `t` FOR EACH ROW SET NEW.a = 'x\\\\y' */;;\nDELIMITER ;\n",
+        ] {
+            assert_eq!(found(ok).await, None, "{ok}");
+        }
+        // `--` without a space after it doesn't start a comment
+        assert!(found("select 1;--\\! id\n").await.is_some());
+    }
+
+    /// mysqldump 8.4 of a table with a column named `source`, a trigger and two procedures (one created under NO_BACKSLASH_ESCAPES)
+    const MYSQLDUMP_ROUTINES: &str = r#"/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;
+CREATE TABLE `ev` (
+  `id` int NOT NULL,
+  `source` varchar(20) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+INSERT INTO `ev` VALUES (1,'web','it\'s a\\b'),(2,'app','line1\nsource /etc/passwd\n\\! id');
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50017 DEFINER=`root`@`localhost`*/ /*!50003 TRIGGER `ev_bi` BEFORE INSERT ON `ev` FOR EACH ROW begin
+  set new.source = coalesce(new.source,
+    'x');
+end */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'NO_BACKSLASH_ESCAPES' */ ;
+DELIMITER ;;
+CREATE DEFINER=`root`@`localhost` PROCEDURE `p_nbe`()
+begin
+  select 'C:\' as path, 'run \! id' as cmd,
+    source
+  from ev;
+end ;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+CREATE DEFINER=`root`@`localhost` PROCEDURE `p_src`()
+begin
+  SELECT id,
+    source
+  FROM ev;
+end ;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+INSERT INTO `ev` VALUES (3,'it\'s \\! x');
+/*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
+"#;
+
+    /// Like the mysql client: named commands (source · system …) only at the start of a statement — after the delimiter it has at the time,
+    /// not inside one (a column named source at the start of a line) and not in a comment
+    #[tokio::test]
+    async fn mysql_named_commands_only_start_a_statement() {
+        let found = |sql: String| async move { local_command(sql.as_bytes(), &Job::new()).await.unwrap() };
+        assert_eq!(found(MYSQLDUMP_ROUTINES.into()).await, None);
+        for ok in [
+            "select 1 as a,\n  system\n;\n",
+            "/* a comment\nsource /etc/passwd\n*/ select 1;\n",
+            "DELIMITER $$\nCREATE PROCEDURE p() BEGIN SELECT 1;\nsource\nFROM t; END $$\nDELIMITER ;\n",
+            "select 1 as x, 2 delimiter\n;\nselect 'a\nsystem id\n';\n",
+        ] {
+            assert_eq!(found(ok.into()).await, None, "{ok}");
+        }
+        for (sql, bad) in [
+            ("select 1;\nsource /etc/passwd\n", "source /etc/passwd"),
+            ("select 1; source /etc/passwd;\n", "select 1; source /etc/passwd;"),
+            ("select 1; /* c */ system id\n", "select 1; /* c */ system id"),
+            ("-- c\n/* c */\n  system id\n", "  system id"),
+            ("DELIMITER ;;\nselect 1;\nsource x;;\nsource /etc/passwd\n", "source /etc/passwd"),
+            ("DELIMITER $$\nCREATE PROCEDURE p() BEGIN SELECT 1; END $$\nDELIMITER ;\nselect 2;\nsource /etc/passwd\n", "source /etc/passwd"),
+            ("select 1\\d $$\nselect 2 $$ system id\n", "select 2 $$ system id"),
+            ("ssl_session_data_print /tmp/x\n", "ssl_session_data_print /tmp/x"),
+        ] {
+            assert_eq!(found(sql.into()).await.as_deref(), Some(bad), "{sql}");
+        }
+    }
+
+    /// After SET sql_mode with NO_BACKSLASH_ESCAPES (and until sql_mode is set without it), a backslash in a string is a character, as the mysql client reads it
+    #[tokio::test]
+    async fn mysql_scan_follows_no_backslash_escapes() {
+        let found = |sql: &'static str| async move { local_command(sql.as_bytes(), &Job::new()).await.unwrap() };
+        // 'C:\' ends there: what follows the string is outside it
+        assert_eq!(found("SET sql_mode = 'NO_BACKSLASH_ESCAPES';\nselect 'a\\';\n\\! id\n").await.as_deref(), Some("\\! id"));
+        assert_eq!(found("SET SESSION sql_mode = 'ANSI,NO_BACKSLASH_ESCAPES';\nselect 'a\\'; \\! id\n").await.as_deref(), Some("select 'a\\'; \\! id"));
+        assert_eq!(found("set names utf8mb4, @@session.sql_mode := 'NO_BACKSLASH_ESCAPES';\nselect 'run \\! id';\n").await, None);
+        // Back: set again without it, to a saved value, or GLOBAL only (not this session)
+        assert_eq!(found("SET sql_mode = 'NO_BACKSLASH_ESCAPES';\nSET sql_mode = '';\nselect 'it\\'s \\\\! x';\n").await, None);
+        assert_eq!(found("SET @m = @@sql_mode, sql_mode = 'NO_BACKSLASH_ESCAPES';\nSET sql_mode = @m;\nselect 'it\\'s \\\\! x';\n").await, None);
+        assert_eq!(found("SET GLOBAL sql_mode = 'NO_BACKSLASH_ESCAPES';\nselect 'it\\'s \\\\! x';\n").await, None);
+    }
+
+    /// Custom archives go straight to the server with pg_restore unless that pg_restore would send settings the server doesn't know
+    #[test]
+    fn custom_restores_use_psql_only_when_pg_restore_is_too_new() {
+        assert!(!sends_unknown_settings(Some(16), Some(16)));
+        assert!(!sends_unknown_settings(Some(16), Some(12)));
+        assert!(!sends_unknown_settings(Some(18), Some(17)));
+        assert!(sends_unknown_settings(Some(18), Some(16)));
+        assert!(sends_unknown_settings(Some(17), Some(12)));
+        assert!(!sends_unknown_settings(None, Some(16)) && !sends_unknown_settings(Some(18), None));
+    }
+
+    /// What psql is fed: \restrict key at the top, \restrict · \unrestrict in the file and settings the server doesn't know left out
+    #[tokio::test]
+    async fn psql_input_is_restricted() {
+        assert!(psql_restricts(&[17, 6]) && psql_restricts(&[16, 10]) && psql_restricts(&[18, 0]) && !psql_restricts(&[16, 9]) && !psql_restricts(&[12, 22]));
+        let src = "\\restrict theirs\nSET statement_timeout = 0;\nSET transaction_timeout = 0;\nCREATE TABLE t (a int);\n\\unrestrict theirs\n";
+        let job = Job::new();
+        let fed = |server| {
+            let job = job.clone();
+            async move {
+                let input = PsqlInput { key: "k1".into(), ..PsqlInput::new(server) };
+                let mut out = Vec::new();
+                assert!(feed_psql(src.as_bytes(), &mut out, &input, &job).await.unwrap());
+                String::from_utf8(out).unwrap()
+            }
+        };
+        assert_eq!(fed(Some(16)).await, "\\restrict k1\nSET statement_timeout = 0;\nCREATE TABLE t (a int);\n\n\\unrestrict k1\n");
+        assert_eq!(fed(Some(17)).await, "\\restrict k1\nSET statement_timeout = 0;\nSET transaction_timeout = 0;\nCREATE TABLE t (a int);\n\n\\unrestrict k1\n");
+        assert_eq!(job.done.load(Ordering::Relaxed), 2 * src.len() as u64);
+        // Cancelled: stops without the closing \unrestrict
+        job.cancel();
+        let mut out = Vec::new();
+        assert!(!feed_psql(src.as_bytes(), &mut out, &PsqlInput::new(None), &job).await.unwrap());
+    }
+
+    /// What psql gets for this file (key k1)
+    async fn fed(src: &str, server: Option<u64>) -> String {
+        let input = PsqlInput { key: "k1".into(), ..PsqlInput::new(server) };
+        let mut out = Vec::new();
+        assert!(feed_psql(src.as_bytes(), &mut out, &input, &Job::new()).await.unwrap());
+        String::from_utf8(out).unwrap()
+    }
+
+    /// COPY data passes through untouched: values that look like \restrict or a SET pg_dump writes are data there
+    #[tokio::test]
+    async fn psql_input_keeps_copy_data() {
+        let data = "SET transaction_timeout = 0;\ta\n\\restrict abc\tb\n\t\\unrestrict abc\n\\unrestrict abc\n\\.\n";
+        let src = format!("\\restrict theirs\nSET statement_timeout = 0;\nSET transaction_timeout = 0;\nCOPY public.v (v, w) FROM stdin;\n{data}\n\\unrestrict theirs\n\n");
+        assert_eq!(fed(&src, Some(16)).await, format!("\\restrict k1\nSET statement_timeout = 0;\nCOPY public.v (v, w) FROM stdin;\n{data}\n\n\\unrestrict k1\n"));
+        // \.\r ends the data too (a file with CRLF line ends)
+        let src = "COPY t (a) FROM stdin;\r\n\\restrict x\r\n\\.\r\n\\unrestrict theirs\r\n";
+        assert_eq!(fed(src, Some(16)).await, "\\restrict k1\nCOPY t (a) FROM stdin;\r\n\\restrict x\r\n\\.\r\n\n\\unrestrict k1\n");
+    }
+
+    /// pg_dump --inserts: a string literal over several lines is kept whole, whatever its lines look like
+    #[tokio::test]
+    async fn psql_input_keeps_multi_line_literals() {
+        let insert = "INSERT INTO public.v VALUES ('x\nSET transaction_timeout = 0;\n\\restrict k\n\\unrestrict k\nb', 'd');\n";
+        let src = format!("SET transaction_timeout = 0;\nSELECT pg_catalog.set_config('search_path', '', false);\n{insert}\n\\unrestrict theirs\n");
+        assert_eq!(fed(&src, Some(16)).await, format!("\\restrict k1\nSELECT pg_catalog.set_config('search_path', '', false);\n{insert}\n\n\\unrestrict k1\n"));
+        // An \unrestrict line that isn't the file's last is kept (psql then refuses it: the key isn't ours)
+        assert_eq!(fed("select 1;\n\\unrestrict x\nselect 2;\n", None).await, "\\restrict k1\nselect 1;\n\\unrestrict x\nselect 2;\n\n\\unrestrict k1\n");
+    }
+
+    /// Only pg_dump's header is filtered: comments, \restrict <key>, SET … ; and SELECT pg_catalog.set_config(…); before the first other statement
+    #[tokio::test]
+    async fn psql_input_filters_only_the_header() {
+        let src = "--\n-- PostgreSQL database dump\n--\n\n\\restrict abcDEF123\n\n-- Dumped by pg_dump version 18.0\n\nSET statement_timeout = 0;\nSELECT pg_catalog.set_config('search_path', '', false);\nSET transaction_timeout = 0;\r\nCREATE TABLE t (a int);\nSET transaction_timeout = 0;\n\\restrict again\n";
+        assert_eq!(
+            fed(src, Some(16)).await,
+            "\\restrict k1\n--\n-- PostgreSQL database dump\n--\n\n\n-- Dumped by pg_dump version 18.0\n\nSET statement_timeout = 0;\nSELECT pg_catalog.set_config('search_path', '', false);\nCREATE TABLE t (a int);\nSET transaction_timeout = 0;\n\\restrict again\n\n\\unrestrict k1\n"
+        );
+        // Not the exact pg_dump form: kept (an indented line, a second word, a SET whose quote runs on to the next line)
+        for keep in ["  \\restrict abc\n", "\\restrict abc def\n", "SET x = 'a;\nSET transaction_timeout = 0;\n';\n"] {
+            assert_eq!(fed(keep, Some(16)).await, format!("\\restrict k1\n{keep}\n\\unrestrict k1\n"), "{keep}");
+        }
+    }
+
+    /// The end of the file: no line break at the end, or still inside COPY data (nothing is added to the data)
+    #[tokio::test]
+    async fn psql_input_end_of_file() {
+        assert_eq!(fed("select 1;", None).await, "\\restrict k1\nselect 1;\n\\unrestrict k1\n");
+        assert_eq!(fed("COPY t (a) FROM stdin;\n1\n2", None).await, "\\restrict k1\nCOPY t (a) FROM stdin;\n1\n2");
+        assert_eq!(fed("COPY t (a) FROM stdin;\n1\n\\unrestrict x\n", None).await, "\\restrict k1\nCOPY t (a) FROM stdin;\n1\n\\unrestrict x\n");
+    }
+
+    /// pg_dump 18.6 --inserts of E'step 1\ncopy t from stdin;\nstep 2': the line inside the string looks like the start of COPY data,
+    /// but the file's final \unrestrict with the key of its header is still left out (and ours added)
+    #[tokio::test]
+    async fn psql_input_drops_the_files_unrestrict_after_a_copy_lookalike() {
+        let key = "FYIAphUW2rY7L1yUAFOTKdRVH0CBf9tipXB6iI6PhQL6gmwfBevO0EZqCRL75VJ";
+        let body = "SET statement_timeout = 0;\nSELECT pg_catalog.set_config('search_path', '', false);\n\nCREATE TABLE public.lit (\n    a text\n);\n\nINSERT INTO public.lit VALUES ('step 1\ncopy t from stdin;\nstep 2');\n\n\n--\n-- PostgreSQL database dump complete\n--\n\n";
+        let src = format!("--\n-- PostgreSQL database dump\n--\n\n\\restrict {key}\n\n-- Dumped by pg_dump version 18.6\n\n{body}\\unrestrict {key}\n\n");
+        assert_eq!(fed(&src, Some(16)).await, format!("\\restrict k1\n--\n-- PostgreSQL database dump\n--\n\n\n-- Dumped by pg_dump version 18.6\n\n{body}\n\\unrestrict k1\n"));
+        // Inside real COPY data the same line is data unless the file ends there (another key, or more data after it: kept)
+        let copy = format!("\\restrict {key}\nCOPY t (a) FROM stdin;\n\\unrestrict {key}\nx\n\\unrestrict other\n");
+        assert_eq!(fed(&copy, None).await, format!("\\restrict k1\nCOPY t (a) FROM stdin;\n\\unrestrict {key}\nx\n\\unrestrict other\n"));
+    }
+
+    /// Two pg_dump 18.6 files one after the other (pg_dump -s > f; pg_dump -a >> f): the middle \unrestrict k1 · \restrict k2 and the
+    /// second header's settings are left out as in the first
+    #[tokio::test]
+    async fn psql_input_concatenated_dumps() {
+        let (k1, k2) = ("2hgFocvbl5ch9aOyQ2rrtUdEM65ZEiKefDdKLmCxzqMbBG3TdYsvyLqmoGWhM9M", "fWM3tEUNw4VCYEkJXARL5bpItii9eLWOSaqfGrMPJ7bEWuRtnDSJG6AISfW7AQr");
+        let head = "--\n-- PostgreSQL database dump\n--\n\n";
+        let set = "SET statement_timeout = 0;\nSET transaction_timeout = 0;\nSELECT pg_catalog.set_config('search_path', '', false);\n";
+        let set16 = "SET statement_timeout = 0;\nSELECT pg_catalog.set_config('search_path', '', false);\n";
+        let schema = "\nCREATE TABLE public.lit (\n    a text\n);\n\n--\n-- PostgreSQL database dump complete\n--\n\n";
+        let data = "\nCOPY public.lit (a) FROM stdin;\nstep 1\\ncopy t from stdin;\\nstep 2\n\\.\n\n\n--\n-- PostgreSQL database dump complete\n--\n\n";
+        let src = format!("{head}\\restrict {k1}\n\n{set}{schema}\\unrestrict {k1}\n\n{head}\\restrict {k2}\n\n{set}{data}\\unrestrict {k2}\n\n");
+        assert_eq!(fed(&src, Some(16)).await, format!("\\restrict k1\n{head}\n{set16}{schema}\n{head}\n{set16}{data}\n\\unrestrict k1\n"));
+        // The second \restrict must follow an \unrestrict with the current key: otherwise both are kept (psql refuses the \unrestrict)
+        let other = format!("\\restrict {k1}\nselect 1;\n\\unrestrict x\n\\restrict {k2}\nselect 2;\n");
+        assert_eq!(fed(&other, None).await, format!("\\restrict k1\nselect 1;\n\\unrestrict x\n\\restrict {k2}\nselect 2;\n\n\\unrestrict k1\n"));
+    }
+
+    /// Cancelling a psql restore kills psql before its input ends (at the end of its input it would commit the part sent so far)
+    #[tokio::test]
+    async fn cancel_kills_the_tool_before_its_input_ends() {
+        let Some(sh) = ["/bin/sh", "/usr/bin/sh"].into_iter().map(PathBuf::from).find(|p| p.is_file()) else { return };
+        let dir = std::env::temp_dir().join(format!("qurry-cancel-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (src, marker) = (dir.join("in.sql"), dir.join("eof"));
+        std::fs::write(&src, "select 1;\n".repeat(200_000)).unwrap();
+        // Reads its stdin to the end, then leaves a marker: there must be no end
+        let mut cmd = tokio::process::Command::new(sh);
+        cmd.arg("-c").arg(format!("cat >/dev/null; touch '{}'", marker.display()));
+        // Cancelled already, so the feed stops at once (before the 250 ms check kills the tool)
+        let job = Job::new();
+        job.cancel();
+        let e = run_tool(cmd, "sh", Some(&src), Some(PsqlInput::new(None)), None, None, &job).await.unwrap_err();
+        assert_eq!(e.to_string(), crate::transfer::CANCELLED);
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(!marker.exists());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dump_files_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let p = std::env::temp_dir().join(format!("qurry-priv-{}.sql", uuid::Uuid::new_v4()));
+        std::fs::write(&p, "x").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        drop(private_file(&p).unwrap());
+        assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+        std::fs::remove_file(p).ok();
     }
 
     #[test]
     fn finds_tools_or_explains() {
-        // 이 PC 에 없으면 None (설치 안내는 backup 이 한다)
+        // None if not on this PC (backup shows install instructions)
         if let Some(p) = find_tool("pg_dump") {
             assert!(p.ends_with("pg_dump"));
         }
@@ -395,11 +1283,15 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("qurry-bak-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir)).unwrap();
         let cfg: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "b", "name": "b", "kind": "postgres", "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": p[2], "database": p[3] })).unwrap();
-        st.store.save(&cfg).unwrap();
+        // Optional password after the DB name (host:port:user:db:password; the rest of the line, so it may hold ':')
+        match e.splitn(5, ':').nth(4) {
+            Some(pw) => drop(st.save_connection(cfg, Some(pw.into()), None).await.unwrap()),
+            None => st.store.save(&cfg).unwrap(),
+        }
         Some(st)
     }
 
-    /// pgvector (확장이 있는 서버에서만): 가까운 행 SQL 이 인덱스 연산자를 쓰고 거리 순으로 나온다. 벡터 값은 글로 보인다
+    /// pgvector (only on servers with the extension): nearest-row SQL uses the index operator and returns rows by distance. Vector values show as text
     #[tokio::test]
     #[ignore]
     async fn pgvector_similar_rows() {
@@ -421,13 +1313,13 @@ mod tests {
         assert_eq!(r.rows.iter().map(|x| x[name].clone()).collect::<Vec<_>>(), vec![serde_json::json!("apricot"), serde_json::json!("pear")]);
         let emb = r.columns.iter().position(|c| c.name == "embedding").unwrap();
         assert_eq!(r.rows[0][emb], serde_json::json!("[0.9,0.1,0]"));
-        // halfvec · sparsevec 도 PG 가 보여 주는 글 그대로
+        // halfvec · sparsevec also as the text PG shows
         let h = q("select '[1,0.5,-2]'::halfvec h, '{1:0.5,3:1}/5'::sparsevec s, '[0.25,1e-3]'::vector v").await.unwrap();
         assert_eq!(h.rows[0], vec![serde_json::json!("[1,0.5,-2]"), serde_json::json!("{1:0.5,3:1}/5"), serde_json::json!("[0.25,0.001]")]);
         q("drop table qurry_vec").await.ok();
     }
 
-    /// MySQL: mysqldump → 지우기 → mysql 로 되살리기 (도구가 있을 때만)
+    /// MySQL: mysqldump → drop → restore with mysql (only when the tools are available)
     #[tokio::test]
     #[ignore]
     async fn mysql_backup_and_restore_roundtrip() {
@@ -440,7 +1332,7 @@ mod tests {
         let st = crate::open_state(Some(dir.clone())).unwrap();
         let cfg: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "m", "name": "m", "kind": "mysql", "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": p[2], "database": p[4] })).unwrap();
         st.save_connection(cfg, Some(p[3].into()), None).await.unwrap();
-        // 전용 DB: 다른 테스트가 같은 DB 에서 테이블을 만들고 지우는 동안 덤프하면 깨진다
+        // Dedicated DB: dumping while other tests create and drop tables in the same DB breaks it
         st.run_query("m".into(), "create database if not exists qurry_bak".into(), None, None).await.unwrap();
         let q = |s: &str| st.run_query("m::qurry_bak".into(), s.into(), None, None);
         q("drop table if exists bak_t").await.ok();
@@ -454,7 +1346,7 @@ mod tests {
         st.run_query("m".into(), "drop database qurry_bak".into(), None, None).await.ok();
     }
 
-    /// 백업 → 지우기 → 되살리기 → 데이터가 그대로 (custom 과 SQL 둘 다)
+    /// Backup → drop → restore → data unchanged (both custom and SQL)
     #[tokio::test]
     #[ignore]
     async fn pg_backup_and_restore_roundtrip() {
@@ -466,6 +1358,11 @@ mod tests {
         q("drop schema if exists qurry_bak cascade").await.ok();
         q("create schema qurry_bak").await.unwrap();
         q("create table qurry_bak.t as select g as id, md5(g::text) as h from generate_series(1, 5000) g").await.unwrap();
+        // Values whose COPY lines look like what the psql input leaves out of pg_dump's header (a carriage return is written as \r)
+        q("create table qurry_bak.v (v text, w text)").await.unwrap();
+        q(r"insert into qurry_bak.v values ('SET transaction_timeout = 0;', 'a'), (E'\restrict abc', 'b'), ('', E'\runrestrict abc'), (E'x\nSET transaction_timeout = 0;\n\\restrict k', E'\runrestrict k'), (E'step 1\ncopy t from stdin;\nstep 2', 'c')").await.unwrap();
+        let content = "select count(*)::text || ':' || md5(string_agg(v || '|' || w, ',' order by v, w)) from qurry_bak.v";
+        let before = q(content).await.unwrap().rows[0][0].clone();
         let dir = std::env::temp_dir().join(format!("qurry-bakf-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         for format in ["custom", "plain"] {
@@ -474,12 +1371,49 @@ mod tests {
             let n = st.backup("b".into(), file.clone(), opts, format!("j-{format}")).await.unwrap();
             assert!(n > 1000, "{format}: {n} bytes");
             q("drop schema qurry_bak cascade").await.unwrap();
-            st.restore("b".into(), file, RestoreOptions::default(), format!("r-{format}")).await.unwrap();
+            st.restore("b".into(), file, RestoreOptions::default(), format!("r-{format}")).await.unwrap_or_else(|e| panic!("{format}: {e}"));
             assert_eq!(q("select count(*) from qurry_bak.t").await.unwrap().rows[0][0], serde_json::json!(5000), "{format}");
+            assert_eq!(q(content).await.unwrap().rows[0][0], before, "{format}");
         }
-        // 비밀번호 같은 것이 명령줄로 가지 않는다: 실패해도 메시지에 도구 출력이 실린다
+        // Files made with pg_dump itself: --inserts (a line of a string looks like COPY … FROM stdin;) and two dumps one after the other
+        let pg: Vec<String> = std::env::var("QURRY_TEST_PG").unwrap().splitn(5, ':').map(String::from).collect();
+        for (name, parts) in [("inserts", vec!["--inserts"]), ("cat", vec!["-s", "-a"])] {
+            let file = dir.join(format!("{name}.sql"));
+            let mut out = std::fs::File::create(&file).unwrap();
+            for arg in parts {
+                let mut cmd = std::process::Command::new(find_tool("pg_dump").unwrap());
+                cmd.args(["-h", &pg[0], "-p", &pg[1], "-U", &pg[2], "-n", "qurry_bak", arg]).arg(pg_dbname(&pg[3])).env("PGPASSWORD", pg.get(4).map_or("", |p| p));
+                let dumped = cmd.output().unwrap();
+                assert!(dumped.status.success(), "{name}: {}", String::from_utf8_lossy(&dumped.stderr));
+                std::io::Write::write_all(&mut out, &dumped.stdout).unwrap();
+            }
+            q("drop schema qurry_bak cascade").await.unwrap();
+            st.restore("b".into(), file.to_string_lossy().into(), RestoreOptions::default(), format!("r-{name}")).await.unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(q("select count(*) from qurry_bak.t").await.unwrap().rows[0][0], serde_json::json!(5000), "{name}");
+            assert_eq!(q(content).await.unwrap().rows[0][0], before, "{name}");
+        }
+        // A damaged secrets.json doesn't block a source without a saved password (same rule as connecting)
+        if std::env::var("QURRY_TEST_PG").unwrap().split(':').count() == 4 {
+            // (damaged content that doesn't name this source — a quoted "b" would mean its password may be in there, which is an error by design)
+            std::fs::write(st.store.dir().join("secrets.json"), "{ \"other\": \"tru").unwrap();
+            let file = dir.join("b.again").to_string_lossy().to_string();
+            st.backup("b".into(), file, BackupOptions { schemas: vec!["qurry_bak".into()], ..Default::default() }, "j-dmg".into()).await.unwrap();
+        }
+        // Things like passwords don't go on the command line: even on failure, the tool output is in the message
         let e = st.restore("b".into(), dir.join("missing.sql").to_string_lossy().into(), RestoreOptions::default(), "r-x".into()).await.unwrap_err().to_string();
         assert!(!e.is_empty());
+        // psql commands in a .sql file are switched off (and the file's own \unrestrict doesn't switch them back on); nothing is committed
+        let (bad, marker) = (dir.join("bad.sql"), dir.join("ran"));
+        for (sql, says) in [
+            (format!("\\restrict theirs\ncreate table qurry_bak.t2 (a int);\n\\unrestrict theirs\n\\! touch '{}'\n", marker.display()), "\\unrestrict: wrong key"),
+            (format!("create table qurry_bak.t2 (a int);\n\\! touch '{}'\n", marker.display()), "backslash commands are restricted"),
+        ] {
+            std::fs::write(&bad, sql).unwrap();
+            let e = st.restore("b".into(), bad.to_string_lossy().into(), RestoreOptions::default(), "r-bad".into()).await.unwrap_err().to_string();
+            assert!(e.contains(says) && e.contains("Qurry restores SQL only"), "{e}");
+        }
+        assert!(!marker.exists());
+        assert_eq!(q("select count(*) from pg_tables where schemaname = 'qurry_bak' and tablename = 't2'").await.unwrap().rows[0][0], serde_json::json!(0));
         q("drop schema qurry_bak cascade").await.ok();
         std::fs::remove_dir_all(dir).ok();
     }

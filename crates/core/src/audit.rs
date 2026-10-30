@@ -1,7 +1,7 @@
-//! 운영 작업 기록: Production Data Source 에서 실행한 바꾸는 문장 · 영향 행 수 · 시각 (GUI·TUI 공용).
-//! 되돌리기 SQL: 단순한 UPDATE / DELETE (guard::simple_dml) 는 실행 직전에 바뀔 행을 떠 두고 (최대 UNDO_MAX_ROWS 행)
-//! 되돌리는 SQL 을 만들어 기록에 남긴다. 저절로 실행하지 않는다 — 콘솔에 열어 보고 실행한다 (그때도 Production 확인을 거친다).
-//! 기록: config/audit.jsonl (한 줄에 하나, 0600). 비밀번호는 history::redact 로 가린다
+//! Production audit log: changing statements run against a Production Data Source · affected rows · time (shared by GUI and TUI).
+//! Undo SQL: for simple UPDATE / DELETE (guard::simple_dml), snapshot the rows about to change right before running (at most UNDO_MAX_ROWS rows)
+//! and record SQL that reverts them. It never runs on its own — open it in a console and run it (Production confirmation still applies).
+//! Log: config/audit.jsonl (one entry per line, 0600). Passwords are masked with history::redact
 use crate::db::{Pool, QueryResult};
 use crate::error::AppResult;
 use crate::guard::SimpleDml;
@@ -12,43 +12,43 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-/// 이보다 많은 행을 바꾸면 되돌리기 SQL 을 남기지 않는다
+/// Changing more rows than this records no undo SQL
 pub const UNDO_MAX_ROWS: usize = 1000;
-/// 떠 둔 행이 이보다 크면 남기지 않는다 (기록 파일이 너무 커지지 않게)
+/// Skip when the snapshot rows are larger than this (keeps the log file from growing too large)
 const UNDO_MAX_BYTES: usize = 1 << 20;
-/// 남길 기록 수
+/// Number of entries to keep
 const MAX_ENTRIES: usize = 2000;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuditEntry {
     pub id: String,
-    /// 밀리초 (Unix)
+    /// Milliseconds (Unix)
     pub ts: i64,
     pub conn_id: String,
     pub conn_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub database: Option<String>,
     pub sql: String,
-    /// 바뀐 행 수 (오류면 없음)
+    /// Rows changed (none on error)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rows: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// 실행했을 때 아직 커밋 전이었다 (Manual 모드 · 직접 BEGIN). 뒤에 COMMIT / ROLLBACK 기록이 따로 남는다
+    /// Not yet committed when run (Manual mode · explicit BEGIN). A separate COMMIT / ROLLBACK entry follows
     #[serde(default)]
     pub in_tx: bool,
-    /// 되돌리는 SQL
+    /// SQL that reverts the change
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub undo: Option<String>,
-    /// 되돌리기 SQL 을 못 만든 이유
+    /// Why undo SQL could not be built
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
 
 pub struct Audit {
     dir: PathBuf,
-    /// 기록한 변경이 아직 커밋 전인 콘솔 (그 콘솔의 COMMIT / ROLLBACK 도 기록한다)
+    /// Consoles with a logged change not yet committed (their COMMIT / ROLLBACK is logged too)
     pending: Mutex<HashSet<String>>,
     write: Mutex<()>,
 }
@@ -57,12 +57,12 @@ fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
-/// 첫 낱말 (앞 주석은 건너뛴다)
+/// First word (skips leading comments)
 fn first_word(sql: &str) -> String {
     crate::session::strip_comments_lead(sql).split(|c: char| !c.is_ascii_alphabetic()).next().unwrap_or("").to_string()
 }
 
-/// 기록할 문장인지: 데이터·구조를 바꾸는 것 (읽기 · 세션 설정 · BEGIN · EXPLAIN 은 아니다)
+/// Whether the statement should be logged: it changes data or structure (not reads · session settings · BEGIN · EXPLAIN)
 pub fn is_change(sql: &str, kind: DbKind) -> bool {
     if kind == DbKind::Redis {
         let Ok(args) = crate::redisdb::parse_command(sql) else { return false };
@@ -75,7 +75,7 @@ pub fn is_change(sql: &str, kind: DbKind) -> bool {
     !matches!(first_word(sql).as_str(), "" | "set" | "use" | "begin" | "start" | "savepoint" | "release" | "commit" | "end" | "rollback" | "abort" | "explain" | "show" | "describe" | "desc")
 }
 
-/// COMMIT / ROLLBACK 문장이면 기록에 남길 이름 (ROLLBACK TO SAVEPOINT 는 아니다)
+/// Name to log if the statement is COMMIT / ROLLBACK (not ROLLBACK TO SAVEPOINT)
 fn tx_end(sql: &str) -> Option<&'static str> {
     let s = crate::session::strip_comments_lead(sql);
     match first_word(sql).as_str() {
@@ -102,7 +102,7 @@ impl Audit {
     pub fn add(&self, mut e: AuditEntry) -> AppResult<()> {
         use std::io::Write;
         e.sql = crate::history::redact(e.sql.trim());
-        // 한 문장은 64 KB 까지만 (큰 INSERT 를 통째로 남기지 않게)
+        // Keep at most 64 KB per statement (don't store a huge INSERT whole)
         if e.sql.len() > 64 * 1024 {
             let mut cut = 64 * 1024;
             while !e.sql.is_char_boundary(cut) {
@@ -122,7 +122,7 @@ impl Audit {
             opts.mode(0o600);
         }
         opts.open(self.file())?.write_all(line.as_bytes())?;
-        // 길어졌으면 최근 것만 남긴다
+        // If it grew too long, keep only the most recent entries
         let n = std::fs::read(self.file()).map(|b| b.iter().filter(|&&c| c == b'\n').count()).unwrap_or(0);
         if n > MAX_ENTRIES + MAX_ENTRIES / 10 {
             let all = self.read();
@@ -136,7 +136,7 @@ impl Audit {
         Ok(())
     }
 
-    /// 최근 것부터. conn = 그 Data Source 만 (DB 를 고른 대상 "id::db" 도 포함), filter = 문장에 들어 있는 글 (대소문자 무시)
+    /// Newest first. conn = only that Data Source (including DB-scoped targets "id::db"), filter = text contained in the statement (case-insensitive)
     pub fn list(&self, conn: Option<&str>, filter: &str, limit: usize) -> Vec<AuditEntry> {
         let f = filter.to_lowercase();
         let mut all = self.read();
@@ -149,7 +149,7 @@ impl Audit {
             .collect()
     }
 
-    /// 문장을 실행한 뒤: 바꾸는 문장이면 기록, 기록한 변경이 커밋 전인 콘솔의 COMMIT / ROLLBACK 도 기록
+    /// After running a statement: log it if it changes data, and log COMMIT / ROLLBACK for consoles with an uncommitted logged change
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn after(&self, conn_id: &str, conn_name: &str, kind: DbKind, tab: Option<&str>, sql: &str, r: &AppResult<QueryResult>, undo: Option<Result<String, String>>) {
         let entry = |sql: String| AuditEntry {
@@ -190,7 +190,7 @@ impl Audit {
         }
     }
 
-    /// 표 편집 저장처럼 문장 여럿을 한 트랜잭션으로 실행한 뒤 (실패하면 전부 되돌려졌다). exact_one = 문장마다 1행
+    /// After running several statements in one transaction, like saving table edits (on failure everything was rolled back). exact_one = 1 row per statement
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn after_batch(&self, conn_id: &str, conn_name: &str, kind: DbKind, statements: &[String], err: Option<String>, exact_one: bool, mut undos: Vec<Option<Result<String, String>>>) {
         undos.resize(statements.len(), None);
@@ -222,7 +222,7 @@ impl Audit {
         }
     }
 
-    /// 콘솔의 Commit / Roll back 버튼 · 콘솔을 닫아 되돌릴 때
+    /// The console's Commit / Roll back buttons · rolling back by closing the console
     pub(crate) fn tx_closed(&self, conn_id: &str, conn_name: &str, tab: &str, word: &str) {
         if self.pending.lock().unwrap().remove(tab) {
             let e = AuditEntry {
@@ -243,9 +243,9 @@ impl Audit {
     }
 }
 
-// ───────── 되돌리기 SQL ─────────
+// ───────── Undo SQL ─────────
 
-/// 테이블 컬럼: 이름 · PK 인지 · 계산 컬럼인지 (넣을 수 없다) · MySQL 바이너리 (HEX 로 뜬다)
+/// Table column: name · whether PK · whether generated (cannot be inserted) · MySQL binary (snapshotted as HEX)
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Col {
     pub name: String,
@@ -254,8 +254,8 @@ pub(crate) struct Col {
     pub binary: bool,
 }
 
-/// 실행 직전: 바뀔 행을 떠 두고 되돌리는 SQL 을 만든다. sess = 콘솔 세션 (트랜잭션 안의 상태를 본다), 없으면 풀에서.
-/// 만들 수 없으면 이유 (문장은 그대로 실행한다)
+/// Right before running: snapshot the rows about to change and build SQL that reverts them. sess = console session (sees state inside the transaction), otherwise the pool.
+/// If it can't be built, the reason (the statement still runs as is)
 pub(crate) async fn prepare(pool: &Pool, sess: Option<&mut Session>, sql: &str, kind: DbKind) -> Result<String, String> {
     if !matches!(kind, DbKind::Postgres | DbKind::Mysql) {
         return Err("Undo is kept for PostgreSQL and MySQL only".into());
@@ -322,7 +322,7 @@ fn my_name_parts(s: &str) -> Vec<String> {
     out
 }
 
-/// 테이블 컬럼 (table = SQL 에 쓴 이름: public."Order Items" · `shop`.`users`)
+/// Table columns (table = the name as written in SQL: public."Order Items" · `shop`.`users`)
 pub(crate) async fn table_columns(pool: &Pool, table: &str, kind: DbKind) -> AppResult<Vec<Col>> {
     Ok(match (pool, kind) {
         (Pool::Pg(p), _) => {
@@ -357,8 +357,8 @@ pub(crate) async fn table_columns(pool: &Pool, table: &str, kind: DbKind) -> App
     })
 }
 
-/// 바뀔 행을 뜨는 SELECT. PG: 행들을 JSON 한 덩어리로 (값을 잃지 않는다 — 되돌릴 때 jsonb_populate_recordset 으로 푼다).
-/// MySQL: 글자로 (바이너리는 HEX)
+/// SELECT that snapshots the rows about to change. PG: rows as one JSON blob (no value loss — unpacked with jsonb_populate_recordset when undoing).
+/// MySQL: as text (binary as HEX)
 fn snapshot_sql(d: &SimpleDml, cols: &[Col], kind: DbKind) -> String {
     let cond = d.cond.as_ref().map(|c| format!(" WHERE {c}")).unwrap_or_default();
     match kind {
@@ -380,7 +380,7 @@ fn snapshot_sql(d: &SimpleDml, cols: &[Col], kind: DbKind) -> String {
     }
 }
 
-/// 되돌릴 때 바꿀 컬럼: UPDATE 가 바꾼 컬럼 (알 수 없으면 PK·계산 컬럼 빼고 전부). PK 를 바꾸면 되돌릴 수 없다
+/// Columns to set when undoing: the columns the UPDATE changed (if unknown, all except PK and generated columns). Changing the PK can't be undone
 fn restore_cols<'a>(d: &SimpleDml, cols: &'a [Col], kind: DbKind) -> Result<Vec<&'a Col>, String> {
     if !cols.iter().any(|c| c.pk) {
         return Err(format!("{} has no primary key: no undo kept", d.table));
@@ -393,7 +393,7 @@ fn restore_cols<'a>(d: &SimpleDml, cols: &'a [Col], kind: DbKind) -> Result<Vec<
     Ok(if set.is_empty() { cols.iter().filter(|c| !c.pk && !c.generated).collect() } else { set })
 }
 
-/// PG 글 상수: $qurry$…$qurry$ (안에 그 글이 있으면 '…')
+/// PG string literal: $qurry$…$qurry$ ('…' if the text contains that tag)
 pub(crate) fn pg_text(s: &str) -> String {
     if s.contains("$qurry$") { format!("'{}'", s.replace('\'', "''")) } else { format!("$qurry${s}$qurry$") }
 }
@@ -477,7 +477,7 @@ mod tests {
             pg_undo(&d, &cols, "[]").unwrap(),
             "UPDATE users AS qurry_t SET name = qurry_old.name\nFROM jsonb_populate_recordset(NULL::users, $qurry$[]$qurry$) AS qurry_old\nWHERE qurry_t.id = qurry_old.id;\n"
         );
-        // PK 를 바꾸거나 PK 가 없으면 남기지 않는다
+        // Skip when the PK changes or there is no PK
         let d = crate::guard::simple_dml("update users set id = id + 1", DbKind::Postgres).unwrap();
         assert!(pg_undo(&d, &cols, "[]").is_err());
         let d = crate::guard::simple_dml("update users set name = 'x'", DbKind::Postgres).unwrap();
@@ -508,7 +508,7 @@ mod tests {
         a.after("c1::shop", "[PROD] kr", DbKind::Postgres, Some("tab"), "update t set a = 1 where b = 2", &q(2, true), Some(Ok("UNDO".into())));
         a.after("c1", "[PROD] kr", DbKind::Postgres, Some("tab"), "select 1", &q(0, true), None);
         a.after("c1", "[PROD] kr", DbKind::Postgres, Some("tab"), "commit", &q(0, false), None);
-        // 기록한 변경이 없는 콘솔의 COMMIT 은 남기지 않는다
+        // Don't log COMMIT for a console with no logged change
         a.after("c1", "[PROD] kr", DbKind::Postgres, Some("other"), "commit", &q(0, false), None);
         a.after("c2", "dev", DbKind::Postgres, None, "alter user x password 'secret'", &Err(crate::error::AppError::Msg("denied".into())), None);
         let all = a.list(None, "", 10);
@@ -519,7 +519,7 @@ mod tests {
         assert_eq!(a.list(None, "UPDATE", 10).len(), 1);
     }
 
-    // ───────── 실제 서버 (QURRY_TEST_PG=host:port:user:db · QURRY_TEST_MY=host:port:user:password:db) ─────────
+    // ───────── Real servers (QURRY_TEST_PG=host:port:user:db · QURRY_TEST_MY=host:port:user:password:db) ─────────
 
     async fn prod_state(kind: DbKind, env: &str) -> Option<crate::app::AppState> {
         let e = std::env::var(env).ok()?;
@@ -537,7 +537,7 @@ mod tests {
         Some(st)
     }
 
-    /// 바꾼 뒤 되돌리기 SQL 을 실행하면 처음과 같아진다 (UPDATE · DELETE, Auto · Manual, 표 편집 저장)
+    /// Running the undo SQL after a change restores the original (UPDATE · DELETE, Auto · Manual, table edit save)
     async fn undo_restores(kind: DbKind, env: &str, ddl: &str, table: &str) {
         let Some(st) = prod_state(kind, env).await else { return };
         let q = |s: &str| st.run_query("d".into(), s.into(), Some(1000), None);
@@ -547,7 +547,7 @@ mod tests {
         let dump = || async { serde_json::to_string(&q(&format!("select * from {table} order by id")).await.unwrap().rows).unwrap() };
         let before = dump().await;
         let undo_last = || st.audit_log(None, String::new(), 1).remove(0);
-        // UPDATE (콘솔 세션, Auto)
+        // UPDATE (console session, Auto)
         st.run_query("d".into(), format!("update {table} set name = 'zz', price = price * 10 where id <= 2"), None, Some("t1".into())).await.unwrap();
         let e = undo_last();
         assert_eq!(e.rows, Some(2), "{e:?}");
@@ -557,14 +557,14 @@ mod tests {
             q(&undo[a..b]).await.unwrap();
         }
         assert_eq!(dump().await, before, "{undo}");
-        // DELETE (풀)
+        // DELETE (pool)
         q(&format!("delete from {table} where id <> 2")).await.unwrap();
         let undo = undo_last().undo.expect("undo");
         for (a, b) in crate::sql::split_statements(&undo, kind) {
             q(&undo[a..b]).await.unwrap();
         }
         assert_eq!(dump().await, before, "{undo}");
-        // Manual: 커밋 전 변경도 기록하고, Commit 이 따로 남는다
+        // Manual: uncommitted changes are logged too, and Commit gets its own entry
         st.set_tx_mode("d".into(), "t2".into(), true).await.unwrap();
         st.run_query("d".into(), format!("delete from {table} where id = 3"), None, Some("t2".into())).await.unwrap();
         assert!(undo_last().in_tx);
@@ -575,14 +575,14 @@ mod tests {
             q(&undo[a..b]).await.unwrap();
         }
         assert_eq!(dump().await, before);
-        // 표 편집 저장 (한 트랜잭션)
+        // Table edit save (one transaction)
         st.execute_batch("d".into(), vec![format!("update {table} set name = 'q' where id = 3")], true).await.unwrap();
         let undo = undo_last().undo.unwrap();
         for (a, b) in crate::sql::split_statements(&undo, kind) {
             q(&undo[a..b]).await.unwrap();
         }
         assert_eq!(dump().await, before);
-        // 되돌릴 수 없는 것: 이유만
+        // Cannot be undone: reason only
         q(&format!("update {table} set id = id + 10 where id = 1")).await.unwrap();
         assert!(undo_last().note.unwrap().contains("primary key"));
         q(&format!("drop table {table}")).await.unwrap();

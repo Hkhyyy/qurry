@@ -3,7 +3,7 @@ import { ColumnDef, ConnectionView, ddl, ForeignKeyDef, IndexDef, NewObject, Tab
 import { ask } from "../lib/dialogs";
 import { Button, Checkbox, CodeBlock, Field, Hint, IconButton, Modal, Notice, SectionTitle, Select, Table, Tabs, Td, Text, TextArea, TextInput, Th } from "../ui";
 
-/** 타입 칸 자동완성 */
+/** Autocomplete for the type field */
 const TYPES: Record<string, string[]> = {
   postgres: ["integer", "bigint", "smallint", "numeric(10,2)", "real", "double precision", "boolean", "text", "varchar(255)", "char(1)", "date", "timestamp", "timestamptz", "time", "interval", "uuid", "json", "jsonb", "bytea", "inet", "text[]"],
   mysql: ["int", "bigint", "smallint", "tinyint(1)", "decimal(10,2)", "float", "double", "varchar(255)", "char(1)", "text", "longtext", "date", "datetime", "timestamp", "time", "json", "blob", "enum('a','b')"],
@@ -12,7 +12,7 @@ const ACTIONS = ["NO ACTION", "RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT"];
 
 const split = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
 
-/** 만든 DDL 미리보기 + 실행 (운영이면 묻는다). 실패하면 이유 */
+/** Preview + run the generated DDL (asks if production). The reason on failure */
 async function runDdl(target: string, conn: ConnectionView, statements: string[], what: string): Promise<string | null> {
   if (conn.options?.confirmChanges && !(await ask(`Run ${statements.length} statement${statements.length > 1 ? "s" : ""} to ${what}?`, { title: `Production: ${conn.name}`, detail: statements.map((s) => ({ text: s.replace(/\s+/g, " ").slice(0, 300), value: "schema change", tone: "danger" as const })), okLabel: "Run", danger: true }))) return "cancelled";
   try {
@@ -23,7 +23,7 @@ async function runDdl(target: string, conn: ConnectionView, statements: string[]
   }
 }
 
-/** 미리보기를 짧게 늦춰 부른다 (칸마다 치는 동안 매번 부르지 않게) */
+/** Call the preview with a short delay (so it isn't called on every keystroke in each field) */
 function usePreview<T>(input: T, make: (v: T) => Promise<string[]>): { sql: string[]; err: string | null } {
   const [out, setOut] = useState<{ sql: string[]; err: string | null }>({ sql: [], err: null });
   const key = JSON.stringify(input);
@@ -35,8 +35,8 @@ function usePreview<T>(input: T, make: (v: T) => Promise<string[]>): { sql: stri
 }
 
 /**
- * 테이블 만들기 · 고치기 (New ▸ Table… · Modify Table… ⌘F6): 컬럼 · 키와 인덱스 · 외래 키. 바꾸면 아래에 DDL 이 바로 보인다.
- * PG 는 한 트랜잭션으로 (실패하면 아무것도 안 바뀜), MySQL 은 문장마다 바로 반영된다
+ * Create · modify table (New ▸ Table… · Modify Table… ⌘F6): columns · keys and indexes · foreign keys. Changes show the DDL right below.
+ * PG runs in one transaction (nothing changes on failure); MySQL applies each statement immediately
  */
 export function TableDesigner({ target, conn, schema, table, onDone, onOpenConsole, onClose }: { target: string; conn: ConnectionView; schema: string; table?: string; onDone: (msg: string) => void; onOpenConsole: (sql: string) => void; onClose: () => void }) {
   const [before, setBefore] = useState<TableDef | null>(null);
@@ -61,7 +61,7 @@ export function TableDesigner({ target, conn, schema, table, onDone, onOpenConso
   const setCol = (i: number, patch: Partial<ColumnDef>) => {
     const old = def.columns[i];
     const columns = def.columns.map((c, j) => (j === i ? { ...c, ...patch } : c));
-    // 이름을 바꾸면 PK · 인덱스 · FK 의 컬럼 이름도 따라간다
+    // Renaming also updates the column name in PK · indexes · FKs
     const ren = (xs: string[]) => (patch.name !== undefined ? xs.map((x) => (x === old.name ? patch.name! : x)) : xs);
     set({ columns, primaryKey: ren(def.primaryKey), indexes: def.indexes.map((x) => ({ ...x, columns: ren(x.columns) })), foreignKeys: def.foreignKeys.map((f) => ({ ...f, columns: ren(f.columns) })) });
   };
@@ -285,7 +285,7 @@ export function TableDesigner({ target, conn, schema, table, onDone, onOpenConso
 
 export type NewKind = "database" | "schema" | "view" | "matview" | "sequence";
 
-/** New ▸ Database · Schema · View · Materialized View · Sequence: 몇 칸 + DDL 미리보기 */
+/** New ▸ Database · Schema · View · Materialized View · Sequence: a few fields + DDL preview */
 export function NewObjectDialog({ kind, target, conn, schema, onDone, onOpenConsole, onClose }: { kind: NewKind; target: string; conn: ConnectionView; schema: string; onDone: (msg: string) => void; onOpenConsole: (sql: string) => void; onClose: () => void }) {
   const [name, setName] = useState("");
   const [charset, setCharset] = useState(conn.kind === "mysql" ? "utf8mb4" : "");

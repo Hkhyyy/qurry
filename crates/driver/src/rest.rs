@@ -1,8 +1,8 @@
-//! REST 로 붙는 드라이버(벡터 DB)들이 같이 쓰는 것: 콘솔 글 "METHOD /path\n{json}" 읽기, JSON 결과를 표로 펼치기
+//! Shared by REST-based drivers (vector DBs): parsing console text "METHOD /path\n{json}", flattening JSON results into tables
 use crate::{Column, QueryOut};
 use serde_json::{Map, Value};
 
-/// 콘솔 글: 첫 줄 "GET /collections" · "POST /x/search", 그 뒤는 본문 (JSON5: 따옴표 없는 키·끝 쉼표 허용)
+/// Console text: first line "GET /collections" · "POST /x/search", then the body (JSON5: unquoted keys and trailing commas allowed)
 pub fn parse_request(text: &str) -> Result<(String, String, Option<Value>), String> {
     let t = text.trim().trim_end_matches(';').trim();
     let (first, rest) = t.split_once('\n').unwrap_or((t, ""));
@@ -13,14 +13,14 @@ pub fn parse_request(text: &str) -> Result<(String, String, Option<Value>), Stri
     }
     let path = parts.next().ok_or("missing path")?.to_string();
     let path = if path.starts_with('/') { path } else { format!("/{path}") };
-    // 같은 줄에 본문이 붙어 있어도 된다
+    // The body may also be on the same line
     let inline: String = parts.collect::<Vec<_>>().join(" ");
     let body_text = format!("{inline}\n{rest}");
     let body = if body_text.trim().is_empty() { None } else { Some(json5::from_str::<Value>(body_text.trim()).map_err(|e| format!("can't read the JSON body: {e}"))?) };
     Ok((method, path, body))
 }
 
-/// HTTP 로 JSON 을 주고받는 곳: 기준 주소 + 붙일 헤더 (인증)
+/// Endpoint exchanging JSON over HTTP: base URL + headers to attach (auth)
 pub struct Http {
     pub base: String,
     pub headers: Vec<(String, String)>,
@@ -28,15 +28,16 @@ pub struct Http {
 }
 
 impl Http {
-    /// host 가 http(s):// 로 시작하면 그대로, 아니면 host:port (ssl 옵션이면 https)
+    /// If host starts with http(s)://, use it as is; otherwise host:port (https with the ssl option)
     pub fn new(p: &crate::ConnectParams, default_port: u16) -> Http {
         let tls = p.options.get("ssl").is_some_and(|s| !s.is_null() && s != false);
         let base = if p.host.starts_with("http://") || p.host.starts_with("https://") { p.host.trim_end_matches('/').to_string() } else { format!("{}://{}:{}", if tls { "https" } else { "http" }, p.host, if p.port == 0 { default_port } else { p.port }) };
-        let agent = ureq::Agent::config_builder().timeout_connect(Some(std::time::Duration::from_secs(10))).timeout_global(Some(std::time::Duration::from_secs(300))).http_status_as_error(false).build().into();
+        // Do not follow redirects: so auth headers like api-key do not follow to another server (or http)
+        let agent = ureq::Agent::config_builder().timeout_connect(Some(std::time::Duration::from_secs(10))).timeout_global(Some(std::time::Duration::from_secs(300))).http_status_as_error(false).max_redirects(0).build().into();
         Http { base, headers: vec![], agent }
     }
 
-    /// (상태 코드, JSON 본문 — JSON 이 아니면 글 그대로)
+    /// (status code, JSON body — raw text if not JSON)
     pub fn send(&self, method: &str, path: &str, body: Option<&Value>) -> Result<(u16, Value), String> {
         let url = format!("{}{path}", self.base);
         let mut res = match method {
@@ -66,7 +67,7 @@ impl Http {
     }
 }
 
-/// 긴 벡터(숫자 배열)는 앞부분만: [0.12, 0.5, … (1536)]
+/// Long vectors (number arrays) show only the start: [0.12, 0.5, … (1536)]
 fn show(v: &Value) -> Value {
     match v {
         Value::Array(a) if a.len() > 8 && a.iter().all(Value::is_number) => {
@@ -77,7 +78,7 @@ fn show(v: &Value) -> Value {
     }
 }
 
-/// 객체 하나를 열로: payload / metadata 같은 안쪽 객체는 한 단계 펼친다 (payload.city)
+/// One object into columns: inner objects like payload / metadata are flattened one level (payload.city)
 fn flatten(o: &Map<String, Value>, nest: &[&str]) -> Vec<(String, Value)> {
     let mut out = vec![];
     for (k, v) in o {
@@ -93,7 +94,7 @@ fn flatten(o: &Map<String, Value>, nest: &[&str]) -> Vec<(String, Value)> {
     out
 }
 
-/// JSON 결과 → 표. 배열이면 행마다, 객체면 한 행. nest = 펼칠 안쪽 객체 이름
+/// JSON result → table. Arrays give one row per item, objects one row. nest = name of the inner object to flatten
 pub fn table(v: &Value, nest: &[&str], limit: usize) -> QueryOut {
     let items: Vec<&Value> = match v {
         Value::Array(a) => a.iter().collect(),

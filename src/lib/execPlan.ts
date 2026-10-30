@@ -6,7 +6,7 @@ export interface ExecSettings {
   outside: "nothing" | "whole" | "below";
   selection: "single" | "separate";
 }
-/** DataGrip 처럼 커서가 문장 안이면 무엇을 실행할지 묻는다 */
+/** Like DataGrip, ask what to run when the cursor is inside a statement */
 export const DEFAULT_EXEC: ExecSettings = { inside: "ask", outside: "nothing", selection: "separate" };
 
 export interface Stmt {
@@ -16,11 +16,11 @@ export interface Stmt {
 }
 export type ExecPlan = { run: Stmt[] } | { ask: { label: string; stmts: Stmt[] }[] } | null;
 
-/** 문장을 시작할 수 있는 키워드 (이 줄 앞의 SQL 이 아닌 줄은 제목·메모로 보고 뺀다) */
+/** Keywords that can start a statement (non-SQL lines before such a line are treated as titles/notes and dropped) */
 const SQL_START = /^\s*(\(|select|with|insert|update|delete|merge|upsert|begin|start|commit|rollback|end|abort|savepoint|release|grant|revoke|create|alter|drop|truncate|comment|set|reset|show|explain|analyze|vacuum|values|table|copy|call|do|lock|declare|fetch|close|prepare|execute|deallocate|listen|notify|unlisten|refresh|reindex|cluster|discard|checkpoint|use|describe|desc|replace|load|handler|optimize|kill|flush|rename|import)\b/i;
 const NOTE_KEEP = /^\s*(--|\/\*|#|$)/;
 
-/** 앞의 SQL 이 아닌 줄(번호 제목 등)을 뺀 시작 위치. 키워드로 시작하는 줄이 없으면 그대로 */
+/** Start position after dropping leading non-SQL lines (numbered titles etc.). Unchanged if no line starts with a keyword */
 function skipNotes(text: string, start: number, end: number): number {
   let pos = start;
   let cut = start;
@@ -42,9 +42,9 @@ function skipNotes(text: string, start: number, end: number): number {
 const TX_BEGIN = /^(begin|start\s+transaction)\b/i;
 const TX_END = /^(commit|rollback|end|abort)\b/i;
 
-/** 선택 영역이 없을 때 커서 위치로 실행할 문장을 정한다 */
+/** With no selection, decide which statement to run from the cursor position */
 export function planExecution(text: string, offset: number, segs: Segment[], s: ExecSettings): ExecPlan {
-  // froms: 커서 판정용 시작 (제목 줄 포함). all: 실행·강조할 범위 (제목 줄 뺌)
+  // froms: starts for cursor matching (title lines included). all: ranges to run and highlight (title lines excluded)
   const froms: number[] = [];
   const all: Stmt[] = segs.map((g) => {
     const raw = text.slice(g.start, g.end);
@@ -60,7 +60,7 @@ export function planExecution(text: string, offset: number, segs: Segment[], s: 
   if (idx < 0) {
     if (s.outside === "whole") return { run: all };
     if (s.outside === "below") return { run: all.filter((_, i) => froms[i] >= offset) };
-    // Nothing: 바로 앞 문장이 같은 줄 끝이면 그 문장 (세미콜론 직후 캐럿)
+    // Nothing: if the previous statement ends on the same line, that statement (caret right after the semicolon)
     const prev = [...all].reverse().find((x) => x.end <= offset && !text.slice(x.end, offset).includes("\n"));
     return prev ? { run: [prev] } : null;
   }
@@ -78,7 +78,7 @@ export function planExecution(text: string, offset: number, segs: Segment[], s: 
   return ask.length === 1 ? { run: [all[idx]] } : { ask };
 }
 
-/** 커서 문장(idx)을 감싼 가장 가까운 BEGIN … COMMIT/ROLLBACK */
+/** Nearest BEGIN … COMMIT/ROLLBACK enclosing the cursor statement (idx) */
 function txAround(all: Stmt[], idx: number): Stmt[] | null {
   let b = idx;
   while (b >= 0 && !TX_BEGIN.test(all[b].sql)) {

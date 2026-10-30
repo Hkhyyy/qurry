@@ -1,6 +1,6 @@
-//! 새 버전 확인: GitHub 의 최신 릴리스(main 에 머지될 때마다 자동으로 올라간다)와 지금 버전을 비교한다.
-//! 한 시간에 한 번만 묻고 결과는 설정 폴더의 update-check.json 에 둔다. QURRY_NO_UPDATE_CHECK=1 이면 묻지 않는다.
-//! HTTP 는 curl 로 한다 (macOS·Linux 기본 도구, 의존성 추가 없이)
+//! Update check: compare the current version with the latest GitHub release (published automatically on every merge to main).
+//! Asks at most once an hour and keeps the result in update-check.json in the config folder. Doesn't ask if QURRY_NO_UPDATE_CHECK=1.
+//! HTTP goes through curl (a default tool on macOS·Linux, no extra dependency)
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -19,19 +19,19 @@ pub struct Asset {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Release {
-    /// "0.1.2" (태그의 v 를 뗀 것)
+    /// "0.1.2" (the tag without the v)
     pub version: String,
-    /// 릴리스 페이지
+    /// Release page
     pub url: String,
-    /// 릴리스 노트 (마크다운)
+    /// Release notes (markdown)
     pub notes: String,
     pub assets: Vec<Asset>,
-    /// 최근 릴리스들의 바뀐 것 (최신부터, 이 릴리스 포함)
+    /// Changes in recent releases (newest first, including this release)
     #[serde(default)]
     pub history: Vec<VersionNotes>,
 }
 
-/// 한 버전에서 바뀐 것 ("[feat] 제목 (#PR)")
+/// What changed in one version ("[feat] title (#PR)")
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VersionNotes {
@@ -39,7 +39,7 @@ pub struct VersionNotes {
     pub changes: Vec<String>,
 }
 
-/// 릴리스 노트에서 바뀐 것만: GitHub 자동 노트의 "## What's Changed" 줄 → "제목 (#PR)"
+/// Only the changes from the release notes: lines under "## What's Changed" in GitHub's auto notes → "title (#PR)"
 pub fn changes(notes: &str) -> Vec<String> {
     let mut out = vec![];
     let mut on = false;
@@ -50,13 +50,13 @@ pub fn changes(notes: &str) -> Vec<String> {
             continue;
         }
         let Some(item) = t.strip_prefix("* ").or_else(|| t.strip_prefix("- ")).filter(|_| on) else { continue };
-        // "제목 by @사람 in https://…/pull/17"
+        // "title by @person in https://…/pull/17"
         let (title, pr) = match item.rsplit_once(" in https://") {
             Some((head, url)) => (head, url.rsplit_once("/pull/").map(|(_, n)| n.trim())),
             None => (item, None),
         };
         let title = title.rsplit_once(" by @").map(|(t, _)| t).unwrap_or(title).trim();
-        // 터미널에 그대로 찍히므로 제어문자(ESC 등)는 뺀다
+        // Printed to the terminal as is, so strip control characters (ESC etc.)
         let title: String = title.chars().filter(|c| !c.is_control()).collect();
         out.push(match pr {
             Some(n) => format!("{title} (#{n})"),
@@ -66,7 +66,7 @@ pub fn changes(notes: &str) -> Vec<String> {
     out
 }
 
-/// 버전마다 바뀐 것을 글로 (TUI 창, --update)
+/// Changes per version as text (TUI window, --update)
 pub fn changes_text(notes: &[VersionNotes]) -> String {
     let mut s = String::new();
     for v in notes {
@@ -83,7 +83,7 @@ pub fn changes_text(notes: &[VersionNotes]) -> String {
 }
 
 impl Release {
-    /// 지금 버전보다 새 버전들의 바뀐 것 (최신부터)
+    /// Changes in versions newer than the current one (newest first)
     pub fn changes_since(&self, current: &str) -> Vec<VersionNotes> {
         self.history.iter().filter(|v| is_newer(current, &v.version)).cloned().collect()
     }
@@ -100,11 +100,11 @@ struct Cache {
 }
 
 pub fn disabled() -> bool {
-    // 예전 이름(DBTOOL_NO_UPDATE_CHECK)도 받는다
+    // Also accept the old name (DBTOOL_NO_UPDATE_CHECK)
     ["QURRY_NO_UPDATE_CHECK", "DBTOOL_NO_UPDATE_CHECK"].iter().any(|k| std::env::var(k).is_ok_and(|v| !v.is_empty() && v != "0"))
 }
 
-/// "0.1.10" > "0.1.9" 처럼 숫자로 비교한다. 못 읽으면 새 버전이 아닌 것으로
+/// Compare numerically, so "0.1.10" > "0.1.9". If unparsable, treat as not newer
 pub fn is_newer(current: &str, latest: &str) -> bool {
     let parse = |s: &str| -> Option<Vec<u64>> { s.trim_start_matches('v').split('.').map(|p| p.parse().ok()).collect() };
     match (parse(current), parse(latest)) {
@@ -117,7 +117,7 @@ fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-/// GitHub API 로 최근 릴리스들을 읽어 최신 릴리스 (+ 버전마다 바뀐 것)
+/// Read recent releases via the GitHub API: the latest release (+ changes per version)
 pub async fn latest_release() -> AppResult<Release> {
     let out = tokio::process::Command::new("curl")
         .args(["-fsSL", "-m", "10", "-H", "Accept: application/vnd.github+json", &format!("https://api.github.com/repos/{REPO}/releases?per_page=30")])
@@ -141,7 +141,7 @@ fn parse_release(v: &serde_json::Value) -> Option<Release> {
     (!version.is_empty()).then(|| Release { version, url: s("html_url"), notes: s("body"), assets, history: vec![] })
 }
 
-/// 릴리스 목록 (draft·prerelease 는 뺀다) → 가장 높은 버전 + 버전마다 바뀐 것
+/// Release list (draft·prerelease excluded) → highest version + changes per version
 fn parse_releases(json: &[u8]) -> AppResult<Release> {
     let v: serde_json::Value = serde_json::from_slice(json)?;
     let mut all: Vec<Release> = v
@@ -155,7 +155,7 @@ fn parse_releases(json: &[u8]) -> AppResult<Release> {
     Ok(latest)
 }
 
-/// 새 버전이 있으면 Some. force 가 아니면 한 시간에 한 번만 네트워크로 묻고 그 사이엔 저장해 둔 결과를 쓴다
+/// Some if there's a new version. Unless force, asks the network at most once an hour and uses the saved result in between
 pub async fn check(dir: &Path, current: &str, force: bool) -> AppResult<Option<Release>> {
     let path = dir.join(CACHE_FILE);
     let cached: Option<Cache> = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok());
@@ -170,11 +170,11 @@ pub async fn check(dir: &Path, current: &str, force: bool) -> AppResult<Option<R
     Ok(latest.filter(|r| is_newer(current, &r.version)))
 }
 
-/// 업데이트 서명 공개키 (GUI tauri.conf.json 의 plugins.updater.pubkey 와 같다 — 테스트가 확인)
+/// Update signing public key (same as plugins.updater.pubkey in the GUI tauri.conf.json — checked by a test)
 pub const UPDATE_PUBKEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDA0MjA1NDlDN0EyODFEM0YKUldRL0hTaDZuRlFnQklTVks5ZFNkdVBNamNqK0JJWEY0akRmR3p3azVGQ2ZiTXUwM2xiL3VtUWwK";
 
 
-/// SHA256SUMS 의 서명(릴리스의 SHA256SUMS.sig, tauri signer 형식 = minisign 서명 글의 base64) 확인
+/// Verify the SHA256SUMS signature (the release's SHA256SUMS.sig, tauri signer format = base64 of the minisign signature text)
 pub fn verify_sums(sums: &[u8], sig_b64: &str) -> Result<(), String> {
     use base64::Engine;
     let b64 = |s: &str| -> Result<String, String> {
@@ -186,7 +186,7 @@ pub fn verify_sums(sums: &[u8], sig_b64: &str) -> Result<(), String> {
     pk.verify(sums, &sig, false).map_err(|e| format!("signature check failed: {e}"))
 }
 
-/// SHA256SUMS 에서 파일 이름의 해시
+/// Hash for a file name from SHA256SUMS
 pub fn expected_sha(sums: &str, name: &str) -> Option<String> {
     sums.lines().find_map(|l| {
         let (hash, file) = l.split_once(char::is_whitespace)?;
@@ -194,7 +194,7 @@ pub fn expected_sha(sums: &str, name: &str) -> Option<String> {
     })
 }
 
-/// 파일의 SHA-256 (16진)
+/// SHA-256 of a file (hex)
 pub fn sha256_of(path: &Path) -> std::io::Result<String> {
     use sha2::Digest;
     let mut h = sha2::Sha256::new();
@@ -228,17 +228,17 @@ mod tests {
         assert_eq!(r.asset("dbtool-cli_", "aarch64-apple-darwin.tar.gz").unwrap().url, "https://x/tgz");
     }
 
-    /// 릴리스 노트에서 바뀐 것만 (GitHub 자동 노트의 What's Changed: 제목 (#PR))
+    /// Only the changes from the release notes (What's Changed in GitHub's auto notes: title (#PR))
     #[test]
     fn changes_from_release_notes() {
         let body = "## dbtool 0.1.12 (macOS)\n\n### Install\n* not this\n\n## What's Changed\n* [fix] ; 없는 문장 나누기 by @Hkhyyy in https://github.com/Hkhyyy/dbtool/pull/17\n* [feat] 다른 것 by @someone in https://github.com/Hkhyyy/dbtool/pull/16\n\n## New Contributors\n* @x made their first contribution\n\n**Full Changelog**: https://github.com/Hkhyyy/dbtool/compare/v0.1.11...v0.1.12";
         assert_eq!(changes(body), ["[fix] ; 없는 문장 나누기 (#17)", "[feat] 다른 것 (#16)"]);
         assert!(changes("no section").is_empty());
-        // PR 제목의 터미널 제어문자는 지운다 (--update 가 그대로 찍는다)
+        // Terminal control characters in PR titles are removed (--update prints them as is)
         assert_eq!(changes("## What's Changed\n* [fix] a\x1b]0;x\x07b by @u in https://github.com/Hkhyyy/qurry/pull/9"), ["[fix] a]0;xb (#9)"]);
     }
 
-    /// 릴리스 목록 → 최신 + 버전마다 바뀐 것, 지금 버전보다 새 것만 (최신부터)
+    /// Release list → latest + changes per version, only those newer than the current version (newest first)
     #[test]
     fn changes_since_current_version() {
         let json = br###"[
@@ -257,7 +257,7 @@ mod tests {
         ]);
     }
 
-    /// TUI 창·--update 에 찍는 글: 버전마다 바뀐 것
+    /// Text printed in the TUI window·--update: changes per version
     #[test]
     fn changes_as_text() {
         let v = vec![
@@ -274,7 +274,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let rel = Release { version: "9.9.9".into(), url: "u".into(), notes: String::new(), assets: vec![], history: vec![] };
         std::fs::write(dir.join(CACHE_FILE), serde_json::to_string(&Cache { checked_at: now(), latest: Some(rel.clone()) }).unwrap()).unwrap();
-        // 네트워크 없이 저장된 결과로 답한다
+        // Answers from the saved result without the network
         assert_eq!(check(&dir, "0.1.0", false).await.unwrap(), Some(rel));
         assert_eq!(check(&dir, "9.9.9", false).await.unwrap(), None);
         let _ = std::fs::remove_dir_all(&dir);

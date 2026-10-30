@@ -1,6 +1,6 @@
-//! 워크스페이스 (Orca 처럼): 각자 탭·화면 분할. Alt+1~9 로 바꾸고, 지금 것이 아닌 것은 탭 그대로 보관한다 (세션·트랜잭션·결과).
-//! 열어 둔 탭·화면 분할을 저장하고 다시 켤 때 되살린다 (DataGrip 처럼). 파일: config/workspace-tui.json (0600)
-//! 되살린 탭은 바로 접속하지 않는다: 보이는 탭만 불러오고, 나머지는 처음 고를 때 (Tab.stale)
+//! Workspaces (like Orca): each has its own tabs and splits. Switch with Alt+1~9; the inactive ones keep their tabs as is (sessions, transactions, results).
+//! Saves the open tabs and splits and restores them on the next launch (like DataGrip). File: config/workspace-tui.json (0600)
+//! Restored tabs do not connect right away: only visible tabs are loaded, the rest when first selected (Tab.stale)
 use crate::app::{App, Focus, PAction, PItem, Palette, Popup, SplitDir, Tab, TabKind, Workspace, WsSaved};
 use crate::panes::Pane;
 use serde_json::{json, Value};
@@ -24,7 +24,7 @@ fn pane_from(v: &Value) -> Option<Pane> {
     Some(Pane::Split { dir, pct, a: Box::new(pane_from(v.get("a")?)?), b: Box::new(pane_from(v.get("b")?)?) })
 }
 
-/// 워크스페이스 하나의 탭·분할 (지금 것은 app 에서, 나머지는 보관한 것에서)
+/// Tabs and splits of one workspace (the current one from app, the others from storage)
 fn ws_json(id: &str, name: &str, conns: &[String], tabs: &[Tab], panes: &Pane, active: usize, group_active: &[Option<u64>]) -> Value {
     let tabs_v: Vec<Value> = tabs
         .iter()
@@ -66,11 +66,11 @@ pub fn to_json(app: &App) -> Value {
             }
         })
         .collect();
-    // shared: 워크스페이스 목록을 GUI 와 같이 쓰는 파일 (workspaces.json) 과 맞춘 적이 있다
+    // shared: has been synced with the workspace list file shared with the GUI (workspaces.json)
     json!({ "version": 2, "shared": true, "current": app.cur_ws, "workspaces": list, "exec": app.exec.to_json() })
 }
 
-/// 저장해 둔 워크스페이스·탭을 되살린다 (version 1 = 워크스페이스 하나). 없어진 Data Source 의 탭은 버린다
+/// Restore the saved workspaces and tabs (version 1 = a single workspace). Tabs of removed Data Sources are dropped
 pub fn restore(app: &mut App, v: &Value) {
     if let Some(e) = v.get("exec") {
         app.exec = crate::exec::ExecSettings::from_json(e);
@@ -80,7 +80,7 @@ pub fn restore(app: &mut App, v: &Value) {
         _ => vec![v.clone()],
     };
     let cur = v.get("current").and_then(Value::as_u64).map(|x| x as usize).filter(|i| *i < list.len()).unwrap_or(0);
-    // 탐색기 목록이 없던 저장 파일 (0.2.0 이전·0.2.0): 첫 워크스페이스가 모든 Data Source 를 가진다
+    // Save files without explorer lists (before 0.2.0, 0.2.0): the first workspace gets all Data Sources
     let has_lists = list.iter().any(|w| w.get("conns").is_some_and(Value::is_array));
     let all: Vec<String> = app.conns.iter().map(|c| c.config.id.clone()).collect();
     app.workspaces = list
@@ -99,7 +99,7 @@ pub fn restore(app: &mut App, v: &Value) {
             saved: None,
         })
         .collect();
-    // 지금 것이 아닌 워크스페이스: 되살려서 보관 (보일 때 불러온다)
+    // Inactive workspaces: restore and keep in storage (loaded when shown)
     for (i, w) in list.iter().enumerate() {
         if i != cur {
             restore_one(app, w, false);
@@ -111,12 +111,12 @@ pub fn restore(app: &mut App, v: &Value) {
     restore_one(app, &list[cur], true);
 }
 
-/// 워크스페이스 하나를 지금 화면으로 되살린다. show = 칸마다 보이는 탭을 불러온다
+/// Restore one workspace into the current screen. show = load the visible tab of each pane
 fn restore_one(app: &mut App, v: &Value, show: bool) {
     let Some(tabs) = v.get("tabs").and_then(Value::as_array) else { return };
     let mut panes = v.get("panes").and_then(pane_from).unwrap_or(Pane::Leaf(0));
     let leaves = panes.leaves();
-    // 저장 순번 → 되살린 탭 id
+    // Saved index → restored tab id
     let mut ids: Vec<Option<u64>> = vec![];
     for t in tabs {
         let s = |k: &str| t.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
@@ -151,7 +151,7 @@ fn restore_one(app: &mut App, v: &Value, show: bool) {
     if app.tabs.is_empty() {
         return;
     }
-    // 탭이 없는 칸은 없앤다
+    // Remove panes without tabs
     for g in panes.leaves() {
         if !app.tabs.iter().any(|t| t.group == g) && panes.leaves().len() > 1 {
             panes.remove(g);
@@ -178,7 +178,7 @@ fn restore_one(app: &mut App, v: &Value, show: bool) {
 }
 
 impl App {
-    /// 칸마다 보이는 탭을 불러오고 (되살린 탭이면 이때 접속) 활성 탭에 포커스 (마지막에)
+    /// Load the visible tab of each pane (restored tabs connect now) and focus the active tab (last)
     pub fn show_visible(&mut self) {
         if self.tabs.is_empty() {
             self.focus = Focus::Tree;
@@ -195,7 +195,7 @@ impl App {
         self.activate(active);
     }
 
-    /// 지금 화면의 탭·분할을 떼어 낸다 (보관용). 화면은 빈다
+    /// Detach the current screen's tabs and splits (for storage). The screen becomes empty
     pub fn take_live(&mut self) -> WsSaved {
         let s = WsSaved {
             tree: std::mem::take(&mut self.tree),
@@ -218,7 +218,7 @@ impl App {
         self.group_active = s.group_active;
     }
 
-    /// Alt+1~9 · ⌃K › Switch Workspace: 지금 것은 그대로 보관하고 i 번째로
+    /// Alt+1~9 · ⌃K › Switch Workspace: keep the current one as is and go to the i-th
     pub fn ws_switch(&mut self, i: usize) {
         if i == self.cur_ws || i >= self.workspaces.len() {
             return;
@@ -257,7 +257,7 @@ impl App {
         });
     }
 
-    /// ⌃K › Delete Workspace…: 지금 워크스페이스와 그 탭을 닫는다 (커밋 안 한 변경은 롤백)
+    /// ⌃K › Delete Workspace…: close the current workspace and its tabs (uncommitted changes are rolled back)
     pub fn ws_delete(&mut self) {
         if self.workspaces.len() < 2 {
             self.status = "This is the only workspace".into();
@@ -292,7 +292,7 @@ impl App {
         self.tabs.iter().filter(|t| matches!(&t.kind, TabKind::Console(c) if c.in_tx)).count()
     }
 
-    /// ⌃K › Switch Workspace… / Move Tab to Workspace…: 고르기 창
+    /// ⌃K › Switch Workspace… / Move Tab to Workspace…: picker
     pub fn ws_pick(&mut self, move_tab: bool) {
         let tab = if move_tab {
             match self.tabs.get(self.active) {
@@ -324,7 +324,7 @@ impl App {
         self.popup = Some(Popup::Palette(Palette { title: title.into(), input: tui_textarea::TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
     }
 
-    /// 고르기 창에서 고른 워크스페이스
+    /// Workspace chosen in the picker
     pub fn ws_flow(&mut self, flow: crate::migrate::Flow, value: String) {
         use crate::migrate::Flow;
         match (flow, value.as_str()) {
@@ -377,7 +377,7 @@ impl App {
         }
     }
 
-    /// 폼에 보이는 워크스페이스 이름: "2 Reports" (이름이 같아도 구분되게 번호를 붙인다)
+    /// Workspace name shown in the form: "2 Reports" (numbered so identical names stay distinct)
     pub fn ws_label(&self, i: usize) -> String {
         format!("{} {}", i + 1, self.workspaces.get(i).map(|w| w.name.as_str()).unwrap_or(""))
     }
@@ -387,7 +387,7 @@ impl App {
         label.split_whitespace().next()?.parse::<usize>().ok().and_then(|n| n.checked_sub(1)).filter(|i| *i < self.workspaces.len())
     }
 
-    /// 이 Data Source 가 들어 있는 워크스페이스 (여럿이면 지금 것, 아니면 첫 것. 없으면 지금 것)
+    /// Workspace containing this Data Source (the current one if several, else the first. If none, the current one)
     pub fn ws_of_conn(&self, id: &str) -> usize {
         let has = |i: usize| self.workspaces[i].conns.iter().any(|c| c == id);
         if has(self.cur_ws) {
@@ -396,7 +396,7 @@ impl App {
         (0..self.workspaces.len()).find(|i| has(*i)).unwrap_or(self.cur_ws)
     }
 
-    /// Data Source 폼의 Workspace: from 에서 빼고 to 에 넣는다 (from = None: 새 Data Source)
+    /// Workspace field in the Data Source form: remove from from, add to to (from = None: new Data Source)
     pub fn ws_place_conn(&mut self, id: &str, from: Option<usize>, to: usize) {
         if Some(to) == from || to >= self.workspaces.len() {
             return;
@@ -413,7 +413,7 @@ impl App {
         }
     }
 
-    /// ⌃K › Add Data Source to Workspace…: 이 워크스페이스 탐색기에 없는 Data Source 고르기
+    /// ⌃K › Add Data Source to Workspace…: pick a Data Source not in this workspace's explorer
     pub fn ws_add_conn_pick(&mut self) {
         let mine = &self.workspaces[self.cur_ws].conns;
         let items: Vec<PItem> = self
@@ -430,7 +430,7 @@ impl App {
         self.popup = Some(Popup::Palette(Palette { title: "Add to this workspace's explorer".into(), input: tui_textarea::TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
     }
 
-    /// 탐색기 w: 고른 Data Source 를 다른 워크스페이스로 (고르기 창)
+    /// Explorer w: move the selected Data Source to another workspace (picker)
     pub fn ws_move_conn_pick(&mut self) {
         let Some(conn) = self.tree.selected().map(|n| n.conn.clone()) else {
             self.status = "Select a data source in the explorer first".into();
@@ -446,7 +446,7 @@ impl App {
         self.popup = Some(Popup::Palette(Palette { title: format!("Move {name} to workspace"), input: tui_textarea::TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
     }
 
-    /// ⌃K › Remove Data Source from Workspace: 탐색기에서 고른 Data Source 를 이 워크스페이스에서 뺀다 (Data Source 는 그대로)
+    /// ⌃K › Remove Data Source from Workspace: remove the Data Source selected in the explorer from this workspace (the Data Source itself stays)
     pub fn ws_remove_conn(&mut self) {
         let Some(conn) = self.tree.selected().map(|n| n.conn.clone()) else {
             self.status = "Select a data source in the explorer first".into();
@@ -458,7 +458,7 @@ impl App {
         self.status = format!("Removed from {} (the data source itself is kept)", self.workspaces[i].name);
     }
 
-    /// 탭을 다른 워크스페이스로 (세션 그대로). 그 워크스페이스의 첫 칸 맨 뒤에, 보이는 탭으로
+    /// Move a tab to another workspace (session intact). Placed at the end of that workspace's first pane, as the visible tab
     fn ws_move(&mut self, id: u64, to: usize) {
         if to == self.cur_ws || to >= self.workspaces.len() {
             return;
@@ -476,14 +476,14 @@ impl App {
     }
 }
 
-// ───────── 워크스페이스 목록을 GUI 와 같이 쓴다 (qurry_core::workspaces) ─────────
+// ───────── Workspace list shared with the GUI (qurry_core::workspaces) ─────────
 
 impl App {
     fn ws_infos(&self) -> Vec<qurry_core::workspaces::WsInfo> {
         self.workspaces.iter().map(|w| qurry_core::workspaces::WsInfo { id: w.id.clone(), name: w.name.clone(), conn_ids: w.conns.clone() }).collect()
     }
 
-    /// 처음 켤 때: 이 앱의 목록을 공유 목록에 맞춘다 (처음이면 이름이 같은 것끼리 묶는다)
+    /// On first launch: sync this app's list with the shared list (the first time, pair entries with the same name)
     pub fn ws_adopt_shared(&mut self) {
         let local = self.ws_infos();
         match self.state.store.adopt_workspaces(&local, self.ws_synced) {
@@ -500,7 +500,7 @@ impl App {
         }
     }
 
-    /// 이 앱에서 바꾼 것만 공유 파일에 (키 · 일을 처리할 때마다 부른다 — 안 바뀌었으면 아무것도 안 한다)
+    /// Write only this app's changes to the shared file (called on every key/event — does nothing if unchanged)
     pub fn ws_push(&mut self) {
         let Some(prev) = &self.ws_shared else { return };
         let next = self.ws_infos();
@@ -521,7 +521,7 @@ impl App {
         }
     }
 
-    /// 다른 쪽 (GUI) 에서 바꾼 것을 받아 온다 (몇 초마다)
+    /// Pull changes made on the other side (GUI) (every few seconds)
     pub fn ws_pull(&mut self) {
         self.ws_push();
         let Some(prev) = &self.ws_shared else { return };
@@ -532,8 +532,8 @@ impl App {
         }
     }
 
-    /// 공유 목록을 반영: 순서 · 이름 · Data Source. 다른 쪽에서 지운 워크스페이스는 탭을 닫는다
-    /// (커밋 안 한 콘솔이 있으면 남긴다 — 다음 동기화 때 되살아난다)
+    /// Apply the shared list: order · names · Data Sources. Workspaces deleted on the other side close their tabs
+    /// (kept if a console has uncommitted changes — it comes back on the next sync)
     fn ws_apply_shared(&mut self, list: &[qurry_core::workspaces::WsInfo]) {
         if list.is_empty() {
             return;
@@ -543,7 +543,7 @@ impl App {
             let tabs: &[Tab] = if i == a.cur_ws { &a.tabs } else { a.workspaces[i].saved.as_ref().map(|s| s.tabs.as_slice()).unwrap_or(&[]) };
             tabs.iter().any(|t| matches!(&t.kind, TabKind::Console(c) if c.in_tx))
         };
-        // 지금 워크스페이스가 지워졌으면 화면을 떼어 둔다
+        // If the current workspace was deleted, detach the screen
         let cur_gone = !list.iter().any(|w| w.id == cur_id) && !dirty(self, self.cur_ws);
         if cur_gone {
             let live = self.take_live();
@@ -587,7 +587,7 @@ impl App {
 mod tests {
     use crate::testkit::Harness;
 
-    /// "test" Data Source 가 있는 빈 앱 (되살릴 때 없는 Data Source 의 탭은 버리므로)
+    /// Empty app with a "test" Data Source (restoring drops tabs of missing Data Sources)
     async fn harness() -> Harness {
         let mut h = Harness::new().await;
         let cfg = serde_json::from_value(serde_json::json!({ "id": "test", "name": "test", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "postgres" })).unwrap();
@@ -597,7 +597,7 @@ mod tests {
         h
     }
 
-    /// GUI 와 같이 쓰는 목록: GUI 가 만들고 · 이름을 바꾸고 · 지운 것이 들어오고, TUI 에서 바꾼 것은 GUI 쪽 변경을 지우지 않는다
+    /// List shared with the GUI: workspaces the GUI creates · renames · deletes come in, and TUI changes do not erase GUI changes
     #[tokio::test]
     async fn workspace_list_is_shared_with_the_gui() {
         use qurry_core::workspaces::WsInfo;
@@ -607,13 +607,13 @@ mod tests {
         let shared = store.shared_workspaces().expect("adopted on start");
         assert_eq!(shared.iter().map(|w| (w.name.as_str(), w.conn_ids.clone())).collect::<Vec<_>>(), [("Default", vec!["test".to_string()])]);
         let names = |h: &Harness| h.app.workspaces.iter().map(|w| w.name.clone()).collect::<Vec<_>>();
-        // GUI 가 Reports 를 만들었다
+        // The GUI created Reports
         let mut gui = shared.clone();
         gui.push(WsInfo { id: "g2".into(), name: "Reports".into(), conn_ids: vec!["test".into()] });
         store.sync_workspaces(&shared, &gui).unwrap();
         h.app.ws_pull();
         assert_eq!(names(&h), ["Default", "Reports"]);
-        // TUI 에서 이름을 바꾸고 탭을 연 채로, GUI 는 Reports 에서 Data Source 를 뺐다
+        // The TUI renamed and opened a tab, while the GUI removed the Data Source from Reports
         h.table_tab("orders", &["id"], &[&["1"]], &["id"]);
         h.app.workspaces[0].name = "Main".into();
         let gui_prev = store.shared_workspaces().unwrap();
@@ -625,12 +625,12 @@ mod tests {
         assert_eq!(now.iter().map(|w| (w.name.as_str(), w.conn_ids.len())).collect::<Vec<_>>(), [("Main", 1), ("Reports", 0)]);
         assert_eq!(h.app.workspaces[1].conns.len(), 0, "the GUI change came back");
         assert_eq!(titles(&h), ["orders"], "tabs stay");
-        // GUI 가 지금 워크스페이스 (Main) 를 지웠다 → Reports 로
+        // The GUI deleted the current workspace (Main) → Reports
         let gui: Vec<WsInfo> = now.iter().filter(|w| w.name != "Main").cloned().collect();
         store.sync_workspaces(&now, &gui).unwrap();
         h.app.ws_pull();
         assert_eq!((names(&h), h.app.cur_ws, h.app.tabs.len()), (vec!["Reports".to_string()], 0, 0));
-        // 저장 파일에 id 와 shared 가 남는다 (다음에 켤 때 짝짓기)
+        // The save file keeps id and shared (for pairing on the next launch)
         let v = super::to_json(&h.app);
         assert_eq!((v["shared"].as_bool(), v["workspaces"][0]["id"].as_str()), (Some(true), Some("g2")));
     }
@@ -643,20 +643,20 @@ mod tests {
     async fn workspaces_keep_their_tabs_and_late_results() {
         let mut h = harness().await;
         h.table_tab("orders", &["id"], &[&["1"]], &["id"]);
-        // 새 워크스페이스 (이름 그대로 Enter) → 빈 화면
+        // New workspace (Enter with the default name) → empty screen
         h.app.ws_new();
         h.key("Enter");
         assert_eq!((h.app.cur_ws, h.app.tabs.len()), (1, 0));
         let users = h.table_tab("users", &["id"], &[&["1"]], &["id"]);
         assert!(h.screen(100, 20).contains("1 Default"), "the workspace strip shows when there are two");
-        // Alt+1: 처음 워크스페이스, 탭 그대로
+        // Alt+1: the first workspace, tabs intact
         h.key("Alt+1");
         assert_eq!((h.app.cur_ws, titles(&h)), (0, vec!["orders".to_string()]));
-        // 보관된 탭에 늦게 온 결과도 남는다
+        // Results that arrive late in stored tabs are kept too
         h.app.tab_mut(users).unwrap().title = "users (done)".into();
         h.key("Alt+2");
         assert_eq!(titles(&h), ["users (done)"]);
-        // 없는 번호는 무시
+        // Missing numbers are ignored
         h.key("Alt+9");
         assert_eq!(h.app.cur_ws, 1);
     }
@@ -669,7 +669,7 @@ mod tests {
         h.app.ws_new();
         h.key("Enter");
         h.key("Alt+1");
-        // items 를 2 번 워크스페이스로 (고르기 창의 첫 줄)
+        // Move items to workspace 2 (first line of the picker)
         let i = h.app.tab_index(items).unwrap();
         h.app.activate(i);
         h.app.ws_pick(true);
@@ -677,7 +677,7 @@ mod tests {
         assert_eq!(titles(&h), ["orders"]);
         h.key("Alt+2");
         assert_eq!(titles(&h), ["items"]);
-        // 저장 → 새 앱에서 되살리기: 워크스페이스·지금 것·탭
+        // Save → restore in a new app: workspaces · current one · tabs
         h.app.ws_rename();
         for _ in 0..20 {
             h.key("Backspace");
@@ -692,11 +692,11 @@ mod tests {
         assert_eq!((h2.app.cur_ws, titles(&h2)), (1, vec!["items".to_string()]));
         h2.key("Alt+1");
         assert_eq!(titles(&h2), ["orders"]);
-        // 예전 형식 (version 1) 은 워크스페이스 하나
+        // The old format (version 1) is a single workspace
         let mut h3 = harness().await;
         super::restore(&mut h3.app, &serde_json::json!({ "version": 1, "tabs": v["workspaces"][0]["tabs"], "panes": { "leaf": 0 } }));
         assert_eq!((h3.app.workspaces.len(), titles(&h3)), (1, vec!["orders".to_string()]));
-        // 지우기: 확인하면 옆 워크스페이스로
+        // Delete: on confirm, go to the neighboring workspace
         h2.app.ws_delete();
         h2.key("Enter");
         assert_eq!(h2.app.workspaces.len(), 1);
@@ -715,16 +715,16 @@ mod tests {
         h.app.ws_new();
         h.key("Enter");
         assert!(roots(&h).is_empty(), "a new workspace starts with an empty explorer");
-        // 있던 Data Source 를 넣는다
+        // Add an existing Data Source
         h.app.ws_add_conn_pick();
         h.key("Enter");
         assert_eq!(roots(&h), ["test"]);
-        // 이 워크스페이스에서만 뺀다
+        // Remove it from this workspace only
         h.app.ws_remove_conn();
         assert!(roots(&h).is_empty());
         h.key("Alt+1");
         assert_eq!(roots(&h), ["test"], "Default keeps it");
-        // 새 Data Source 는 지금 워크스페이스로 (Alt+2 에서 만들면 거기)
+        // New Data Sources go to the current workspace (created in Alt+2 → there)
         h.key("Alt+2");
         let cfg = serde_json::from_value(serde_json::json!({ "id": "new", "name": "new", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "postgres" })).unwrap();
         h.app.state.save_connection(cfg, None, None).await.unwrap();
@@ -733,7 +733,7 @@ mod tests {
         assert_eq!(roots(&h), ["new"]);
         h.key("Alt+1");
         assert_eq!(roots(&h), ["test"]);
-        // 저장 → 되살리기: 워크스페이스마다 목록
+        // Save → restore: a list per workspace
         let v = super::to_json(&h.app);
         let mut h2 = harness().await;
         h2.app.state.save_connection(serde_json::from_value(serde_json::json!({ "id": "new", "name": "new", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "postgres" })).unwrap(), None, None).await.unwrap();
@@ -744,7 +744,7 @@ mod tests {
         assert_eq!(roots(&h2), ["test"]);
         h2.key("Alt+2");
         assert_eq!(roots(&h2), ["new"]);
-        // 예전 저장 파일 (목록 없음): 첫 워크스페이스가 전부
+        // Old save file (no lists): the first workspace gets everything
         let mut old = v.clone();
         for w in old["workspaces"].as_array_mut().unwrap() {
             w.as_object_mut().unwrap().remove("conns");
@@ -756,7 +756,7 @@ mod tests {
         assert_eq!(h3.app.workspaces[0].conns, ["test"]);
     }
 
-    /// 폼의 Workspace 칸을 고른다 (◂ ▸ 로 한 칸)
+    /// Choose the form's Workspace field (◂ ▸ moves one step)
     fn pick_workspace(h: &mut Harness) {
         let Some(crate::app::Popup::ConnForm(f)) = h.app.popup.as_mut() else { panic!("no form") };
         f.sel = f.fields.iter().position(|x| x.label == "Workspace").unwrap();
@@ -769,7 +769,7 @@ mod tests {
         h.app.ws_new();
         h.key("Enter");
         h.key("Alt+1");
-        // 고치기: Default(1) → 2 로
+        // Edit: Default(1) → 2
         let cfg = h.app.conn("test").unwrap().config.clone();
         h.app.conn_form(Some(cfg));
         let Some(crate::app::Popup::ConnForm(f)) = h.app.popup.as_ref() else { panic!() };
@@ -781,7 +781,7 @@ mod tests {
         assert_eq!(h.app.workspaces[1].conns, ["test"]);
         h.key("Alt+2");
         assert_eq!(roots(&h), ["test"]);
-        // 새로 만들기: 지금(2) 이 기본, 1 로 바꿔 만든다
+        // Create: the current one (2) is the default; switch to 1 and create
         h.app.conn_form(None);
         let Some(crate::app::Popup::ConnForm(f)) = h.app.popup.as_mut() else { panic!() };
         assert_eq!(f.fields.iter().find(|x| x.label == "Workspace").unwrap().value, "2 Workspace 2");
@@ -798,7 +798,7 @@ mod tests {
     #[tokio::test]
     async fn workspace_keys_and_explorer_toggle() {
         let mut h = harness().await;
-        // Alt+0 = 탐색기 (Alt+1 은 워크스페이스)
+        // Alt+0 = explorer (Alt+1 is a workspace)
         h.table_tab("t", &["id"], &[&["1"]], &["id"]);
         h.app.focus = crate::app::Focus::Tree;
         h.key("Alt+0");
@@ -806,7 +806,7 @@ mod tests {
         h.key("Alt+0");
         assert!(h.app.explorer);
         h.app.close_tab_now(0);
-        // Alt+N: 새 워크스페이스 (이름 그대로 Enter) · Alt+Shift+N: 이름 바꾸기
+        // Alt+N: new workspace (Enter with the default name) · Alt+Shift+N: rename
         h.key("Alt+n");
         h.key("Enter");
         assert_eq!((h.app.workspaces.len(), h.app.cur_ws), (2, 1));
@@ -817,13 +817,13 @@ mod tests {
         h.type_str("Ops");
         h.key("Enter");
         assert_eq!(h.app.workspaces[1].name, "Ops");
-        // macOS 화면에는 Alt+ / Ctrl+ 대신 ⌥ / ⌃ (워크스페이스 띠 안내가 그대로 찍히던 것)
+        // macOS shows ⌥ / ⌃ instead of Alt+ / Ctrl+ (the workspace bar hints used to print them as is)
         if cfg!(target_os = "macos") {
             let scr = h.screen(140, 30);
             assert!(scr.contains("⌥1…9"), "{scr}");
             assert!(!scr.contains("Alt+") && !scr.contains("Ctrl+"), "{scr}");
         }
-        // 탐색기 w: Default 의 test 를 Ops 로
+        // Explorer w: move test from Default to Ops
         h.key("Alt+1");
         h.app.focus = crate::app::Focus::Tree;
         h.app.tree.sel = 0;

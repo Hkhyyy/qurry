@@ -19,14 +19,15 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
           database: edit.database, color: edit.color ?? null, ssh: edit.ssh ?? null,
           scope: edit.scope, readOnly: edit.readOnly ?? false, options: edit.options ?? {}, ssl: edit.ssl ?? null, redis: edit.redis ?? null,
         }
-      : { id: "", name: "", kind: "postgres", host: "localhost", port: 5432, user: "", database: "", color: null, ssh: null },
+      : // New sources start hidden from MCP (turn it on in Options › MCP)
+        { id: "", name: "", kind: "postgres", host: "localhost", port: 5432, user: "", database: "", color: null, ssh: null, options: { mcp: "off" } },
   );
   const [tab, setTab] = useState<"general" | "ssh" | "schemas" | "options">("general");
   const [password, setPassword] = useState<string | undefined>(undefined);
   const [sshSecret, setSshSecret] = useState<string | undefined>(undefined);
   const [test, setTest] = useState<{ ok: boolean; msg: string } | null>(null);
   const [busy, setBusy] = useState(false);
-  // 드라이버 플러그인: 깔려 있는지 (null = 기본으로 들어 있는 DB)
+  // Driver plugin: whether it is installed (null = built-in DB)
   const [driver, setDriver] = useState<boolean | null>(null);
   const [installing, setInstalling] = useState(false);
   useEffect(() => {
@@ -53,6 +54,11 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
 
   const ssh = cfg.ssh ?? EMPTY_SSH;
   const opt: ConnOptions = cfg.options ?? {};
+  // MCP for older sources that never set it: behavior at the time the dialog opened (hidden if Production). Editing doesn't change this value
+  const [legacyMcp] = useState<"off" | "write">(() => (edit?.options?.confirmChanges ? "off" : edit ? "write" : "off"));
+  // A value core doesn't know ("On", a typo) means off there, so show and save it as off
+  const mcpValue: "off" | "read" | "write" = opt.mcp == null ? legacyMcp : ["off", "read", "write"].includes(opt.mcp) ? opt.mcp : "off";
+  // Newly enabled SSL is require: verifying needs a CA the built-in list knows (AWS RDS, a company CA, a server behind an SSH tunnel need a CA file)
   const ssl: SslConfig = cfg.ssl ?? { enabled: false, mode: "require", caFile: "", certFile: "", keyFile: "" };
   const setSsl = <K extends keyof SslConfig>(k: K, v: SslConfig[K]) => setCfg((c) => ({ ...c, ssl: { ...ssl, ...(c.ssl ?? {}), [k]: v } }));
   const rmode: RedisMode = cfg.redis ?? { mode: "standalone", sentinelMaster: "", nodes: "" };
@@ -69,7 +75,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
     setBusy(true);
     setTest(null);
     try {
-      // SSH 탭에서는 SSH 로그인만, General 탭에서는 (SSH 경유) DB 접속까지 확인
+      // On the SSH tab, test only the SSH login; on the General tab, test the DB connection too (via SSH)
       const v = tab === "ssh" ? await api.testSsh(cfg, sshSecret) : await api.testConnection(cfg, password, sshSecret);
       setTest({ ok: true, msg: v });
     } catch (e) {
@@ -82,7 +88,8 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   const save = async () => {
     const name = cfg.name.trim() || `${cfg.user}@${cfg.host}`;
     try {
-      const saved = await api.saveConnection({ ...cfg, name }, password, sshSecret);
+      // Save the shown MCP value as is (if left unset, it would turn on by itself after Production is turned off)
+      const saved = await api.saveConnection({ ...cfg, name, options: { ...opt, mcp: mcpValue } }, password, sshSecret);
       onSaved(saved);
     } catch (e) {
       setTest({ ok: false, msg: `Save failed: ${String(e)}` });
@@ -288,7 +295,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
           </Checkbox>
           <label>Mode</label>
           <Select disabled={!ssl.enabled} value={ssl.mode || "require"} onChange={(e) => setSsl("mode", e.target.value)}>
-            <option value="require">Require (encrypt, don't verify)</option>
+            <option value="require">Require — encrypt, no certificate check</option>
             <option value="verify-ca">Verify CA</option>
             <option value="verify-full">Full Verification (CA + host name)</option>
           </Select>
@@ -296,7 +303,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
             <span key={k} style={{ display: "contents" }}>
               <label>{k === "caFile" ? "CA file" : k === "certFile" ? "Client cert" : "Client key"}</label>
               <div className="ui-row">
-                <TextInput grow disabled={!ssl.enabled} value={ssl[k]} placeholder={k === "caFile" ? "(system trust store)" : "(none)"} onChange={(e) => setSsl(k, e.target.value)} />
+                <TextInput grow disabled={!ssl.enabled} value={ssl[k]} placeholder={k !== "caFile" ? "(none)" : cfg.kind === "redis" ? "(system trust store)" : "(built-in public CA list)"} onChange={(e) => setSsl(k, e.target.value)} />
                 <Button size="sm" disabled={!ssl.enabled} onClick={() => pickFile(k)}>
                   Browse…
                 </Button>
@@ -319,6 +326,22 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
           <Checkbox checked={!!opt.confirmChanges} onChange={(v) => setOpt("confirmChanges", v)} title="Before UPDATE / DELETE / INSERT … run, show how many rows will change and ask">
             Production: show affected rows and confirm changes
           </Checkbox>
+          {(cfg.kind === "mysql" || cfg.kind === "postgres") && (
+            <>
+              <span />
+              <Checkbox checked={!!opt.allowPlaintext} onChange={(v) => setOpt("allowPlaintext", v)} title="Without SSL settings Qurry requires TLS from remote servers. Tick this to connect to a server without TLS (or an old MySQL 5.7 without TLS 1.2) on a network you trust.">
+                Allow unencrypted connection (servers without TLS)
+              </Checkbox>
+            </>
+          )}
+          <label>MCP (AI tools)</label>
+          <div className="ui-row">
+            <Select value={mcpValue} onChange={(e) => setOpt("mcp", e.target.value as ConnOptions["mcp"])} title="What qurry-mcp (Claude Code and other AI tools) may do with this data source. For Read, connect with a read-only database user.">
+              <option value="off">Off — not listed, no connection</option>
+              <option value="read">Read</option>
+              <option value="write" disabled={!!cfg.readOnly}>Read &amp; write (when qurry-mcp runs with --allow-write)</option>
+            </Select>
+          </div>
           <label>Transaction control</label>
           <div className="ui-row">
             <Select value={opt.txManual ? "manual" : "auto"} onChange={(e) => setOpt("txManual", e.target.value === "manual")}>
@@ -382,7 +405,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
           </Button>
         </div>
       )}
-      {/* 처음 보는 SSH 서버: 지문을 확인한 뒤 신뢰 → 다시 시험 */}
+      {/* Unknown SSH server: trust after checking the fingerprint → test again */}
       {test && !test.ok && test.msg.includes("Unknown SSH host key") && cfg.ssh && (
         <div className="ui-row conn-test-actions">
           <Button
@@ -409,7 +432,7 @@ export function ColorSwatches({ value, onChange, custom }: { value: string | nul
 
 type Scope = NonNullable<ConnectionConfig["scope"]>;
 
-/** DataGrip Data Source 속성의 Schemas 탭: 트리에 보일 DB·스키마를 고른다 */
+/** Schemas tab of DataGrip Data Source properties: choose which DBs and schemas show in the tree */
 function SchemasTab({ connId, scope, onChange }: { connId?: string; scope: Scope; onChange: (s: Scope) => void }) {
   const [dbs, setDbs] = useState<string[] | null>(null);
   const [err, setErr] = useState<string | null>(null);

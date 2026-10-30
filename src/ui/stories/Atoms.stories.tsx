@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useState } from "react";
 import { Avatar, Badge, Button, Checkbox, Code, CodeBlock, Divider, IconButton, Kbd, ProgressBar, Radio, Row, Select, Spacer, Swatch, Text, TextArea, TextInput, ToolButton } from "..";
 
-/** 원자: 더 쪼갤 수 없는 조각. 화면 코드는 맨 HTML 대신 이것을 쓴다 */
+/** Atoms: pieces that can't be split further. Screen code uses these instead of bare HTML */
 const meta: Meta = { title: "GUI/1 Atoms" };
 export default meta;
 type S = StoryObj;

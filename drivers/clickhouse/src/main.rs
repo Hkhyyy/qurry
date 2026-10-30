@@ -1,4 +1,4 @@
-//! Qurry 드라이버: ClickHouse (HTTP 인터페이스, 기본 8123 / TLS 8443). DB = 스키마 (MySQL 처럼 한 단계)
+//! Qurry driver: ClickHouse (HTTP interface, default 8123 / TLS 8443). DB = schema (one level, like MySQL)
 use qurry_driver::{Column, ConnectParams, Driver, QueryOut, ok, params, serve};
 use serde_json::{Value, json};
 
@@ -9,25 +9,35 @@ struct Ch {
     password: String,
     database: String,
     agent: Option<ureq::Agent>,
+    /// Read-only Data Source
+    read_only: bool,
+    /// This query is read-only (Read-only Data Source or MCP read): the server also enforces readonly=2
+    ro: bool,
+    /// The user profile is already readonly (then sending readonly is an error: the server already blocks)
+    server_ro: bool,
 }
 
 fn lit(s: &str) -> String {
     format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
-/// 결과를 돌려주는 문장인지
+/// Whether the statement returns results
 fn returns_rows(sql: &str) -> bool {
     let w = sql.trim_start().split(|c: char| c.is_whitespace() || c == '(').next().unwrap_or("").to_lowercase();
     ["select", "with", "show", "describe", "desc", "explain", "exists"].contains(&w.as_str())
 }
 
 impl Ch {
-    /// 쿼리 하나 (설정은 URL 로). 응답 본문과 요약 헤더
+    /// One query (settings via URL). Response body and summary header
     fn post(&self, sql: &str, settings: &[(&str, String)]) -> Result<(String, Option<String>), String> {
         let agent = self.agent.as_ref().ok_or("not connected")?;
         let mut req = agent.post(&self.url).header("X-ClickHouse-User", &self.user).header("X-ClickHouse-Key", &self.password).query("database", &self.database);
         for (k, v) in settings {
             req = req.query(*k, v);
+        }
+        // readonly=2: reads only, settings for this request (max_result_rows …) can still change
+        if self.ro && !self.server_ro {
+            req = req.query("readonly", "2");
         }
         let mut res = req.config().http_status_as_error(false).build().send(sql).map_err(|e| e.to_string())?;
         let summary = res.headers().get("X-ClickHouse-Summary").and_then(|v| v.to_str().ok()).map(String::from);
@@ -46,7 +56,7 @@ impl Ch {
             let n = summary.and_then(|s| serde_json::from_str::<Value>(&s).ok()).and_then(|v| v.get("written_rows").and_then(|x| x.as_str().and_then(|s| s.parse().ok()))).unwrap_or(0);
             return Ok(QueryOut { rows_affected: n, ..Default::default() });
         }
-        // 한 행 더 받아 잘렸는지 안다
+        // Fetch one extra row to know if it was truncated
         let (body, _) = self.post(&format!("{sql} FORMAT JSONCompact"), &[("max_result_rows", (limit + 1).to_string()), ("result_overflow_mode", "break".into())])?;
         let v: Value = serde_json::from_str(&body).map_err(|e| format!("bad reply: {e}"))?;
         let columns: Vec<Column> = v["meta"].as_array().map(|m| m.iter().map(|c| Column { name: c["name"].as_str().unwrap_or("").into(), type_name: c["type"].as_str().unwrap_or("").to_uppercase() }).collect()).unwrap_or_default();
@@ -74,17 +84,26 @@ impl Driver for Ch {
                 self.user = if c.user.is_empty() { "default".into() } else { c.user };
                 self.password = c.password.unwrap_or_default();
                 self.database = if c.database.trim().is_empty() { "default".into() } else { c.database.trim().into() };
-                self.agent = Some(ureq::Agent::config_builder().timeout_connect(Some(std::time::Duration::from_secs(10))).build().into());
+                // Don't follow redirects (so X-ClickHouse-Key isn't sent to another server)
+                self.agent = Some(ureq::Agent::config_builder().timeout_connect(Some(std::time::Duration::from_secs(10))).max_redirects(0).build().into());
+                self.read_only = c.options.get("readOnly").and_then(Value::as_bool).unwrap_or(false);
+                // Least-privilege users already have readonly=1 in their profile: check first (without sending readonly) and decide
+                self.ro = false;
                 self.query("SELECT 1", 1)?;
+                self.server_ro = self.rows("SELECT getSetting('readonly')").ok().and_then(|r| r.first().and_then(|x| x.first()).map(|v| v.as_str().map(|s| s != "0").unwrap_or_else(|| v.as_u64().is_some_and(|n| n > 0)))).unwrap_or(false);
+                self.ro = self.read_only;
                 ok(Value::Null)
             }
             "query" => {
                 let sql = p.get("sql").and_then(Value::as_str).unwrap_or("");
                 let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(500) as usize;
-                ok(self.query(sql, limit)?)
+                self.ro = self.read_only || p.get("readOnly").and_then(Value::as_bool).unwrap_or(false);
+                let r = self.query(sql, limit);
+                self.ro = self.read_only;
+                ok(r?)
             }
             "databases" => ok(self.rows("SELECT name FROM system.databases ORDER BY name")?.into_iter().map(|r| r[0].clone()).collect::<Vec<_>>()),
-            // DB 가 곧 스키마
+            // DB is the schema
             "schemas" => ok(json!([{ "name": self.database, "isSystem": false }])),
             "objects" => {
                 let db = p.get("schema").and_then(Value::as_str).unwrap_or(&self.database).to_string();

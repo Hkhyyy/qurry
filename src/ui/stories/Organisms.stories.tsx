@@ -36,7 +36,7 @@ import {
   ToolbarSep,
 } from "..";
 
-/** 유기체: 분자를 모은 덩어리 — 도구 막대 · 대화상자 · 확인 창 · 메뉴 · 팝오버 · 목록 · 표 · 폼 */
+/** Organisms: blocks made of molecules — toolbar · dialog · confirm dialog · menu · popover · list · table · form */
 const meta: Meta = { title: "GUI/3 Organisms" };
 export default meta;
 type S = StoryObj;
@@ -142,7 +142,7 @@ export const MenuStory: S = {
   ),
 };
 
-/** Search Everywhere 처럼: 머리 (탭 · 찾기 칸) + 목록 + 아래 키 안내 */
+/** Like Search Everywhere: header (tabs · search field) + list + key hints below */
 export const PopoverStory: S = {
   name: "Popover",
   parameters: { layout: "fullscreen" },
@@ -246,7 +246,7 @@ function OpenConfirm(o: ConfirmOptions) {
   return <ConfirmHost />;
 }
 
-/** 확인 창 (confirm()): 위험하면 빨간 버튼 · 기본 포커스는 Cancel */
+/** Confirm dialog (confirm()): red button when dangerous · default focus on Cancel */
 export const ConfirmProduction: S = {
   parameters: { layout: "fullscreen" },
   render: () => (

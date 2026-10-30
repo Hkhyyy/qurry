@@ -1,4 +1,4 @@
-//! Database Explorer 트리 (지연 로딩). 키: "conn" / "conn|db" / "conn|db|schema" / "conn|db|schema|g:tables" / ".../o:name"
+//! Database Explorer tree (lazy loading). Keys: "conn" / "conn|db" / "conn|db|schema" / "conn|db|schema|g:tables" / ".../o:name"
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -17,7 +17,7 @@ pub enum NodeKind {
 pub struct Node {
     pub key: String,
     pub label: String,
-    /// 오른쪽에 흐리게 (타입, 개수 등)
+    /// Dimmed on the right (type, count, etc.)
     pub hint: String,
     pub kind: NodeKind,
     pub conn: String,
@@ -44,13 +44,13 @@ pub struct Tree {
     pub loading: HashSet<String>,
     pub sel: usize,
     pub offset: usize,
-    /// 스피드 서치 (/)
+    /// Speed search (/)
     pub filter: String,
-    /// 가로 스크롤 (긴 이름)
+    /// Horizontal scroll (long names)
     pub hoff: usize,
 }
 
-/// 대소문자 무시 포함 검사. ASCII 이름은 새 문자열을 만들지 않는다 (트리를 그릴 때마다 노드마다 불린다)
+/// Case-insensitive contains check. ASCII names don't allocate a new string (called per node every time the tree is drawn)
 fn contains_ci(hay: &str, lower_needle: &str) -> bool {
     if hay.is_ascii() && lower_needle.is_ascii() {
         let (h, n) = (hay.as_bytes(), lower_needle.as_bytes());
@@ -60,7 +60,7 @@ fn contains_ci(hay: &str, lower_needle: &str) -> bool {
 }
 
 impl Tree {
-    /// 화면에 보이는 줄: (깊이, 노드)
+    /// Lines visible on screen: (depth, node)
     pub fn visible(&self) -> Vec<(usize, &Node)> {
         let mut out = Vec::new();
         let f = self.filter.to_lowercase();
@@ -68,7 +68,7 @@ impl Tree {
             for n in nodes {
                 let open = t.expanded.contains(&n.key);
                 let kids = if open { t.children.get(&n.key) } else { None };
-                // 필터: 이름이 맞거나 펼쳐진 자식 중에 맞는 게 있으면 보인다
+                // Filter: visible if the name matches or an expanded child matches
                 if !f.is_empty() && !matches!(n.kind, NodeKind::Conn | NodeKind::Db | NodeKind::Schema | NodeKind::Group) && !contains_ci(&n.label, f) {
                     continue;
                 }
@@ -76,7 +76,7 @@ impl Tree {
                 if let Some(k) = kids {
                     walk(t, k, depth + 1, f, out);
                 } else if open && t.loading.contains(&n.key) {
-                    // 로딩 표시는 렌더러가 hint 로 보여 준다
+                    // The renderer shows the loading indicator as a hint
                 }
             }
         }
@@ -106,7 +106,7 @@ impl Tree {
         }
     }
 
-    /// 접속 끊김·새로 고침: 그 아래 캐시를 지운다
+    /// Disconnect·refresh: clear the cache below it
     pub fn forget(&mut self, prefix: &str) {
         self.children.retain(|k, _| !(k == prefix || k.starts_with(&format!("{prefix}|"))));
         self.loading.retain(|k| !(k == prefix || k.starts_with(&format!("{prefix}|"))));
@@ -122,8 +122,8 @@ impl Tree {
     }
 }
 
-/// Redis 키를 ":" 로 끊어 폴더로 묶는다 (Medis 처럼). 폴더 먼저 (이름순), 그다음 키.
-/// 폴더 아래 노드는 children 에 넣는다. 키 줄은 전체 이름 그대로
+/// Group Redis keys into folders split on ":" (like Medis). Folders first (by name), then keys.
+/// Nodes under a folder go in children. Key lines keep the full name
 pub fn key_folders(children: &mut HashMap<String, Vec<Node>>, parent: &str, keys: Vec<Node>) -> Vec<Node> {
     fn level(children: &mut HashMap<String, Vec<Node>>, parent: &str, keys: Vec<Node>, depth: usize) -> Vec<Node> {
         let mut folders: std::collections::BTreeMap<String, Vec<Node>> = Default::default();
@@ -159,7 +159,7 @@ mod tests {
         Node { key: format!("g|o:{name}"), label: name.into(), hint: "zset".into(), kind: NodeKind::Object("key".into()), conn: "c".into(), db: Some("0".into()), schema: Some("0".into()), name: Some(name.into()), expandable: false }
     }
 
-    /// dev:sessions:{1} → dev / sessions / dev:sessions:{1}. 폴더 옆에는 그 아래 키 개수
+    /// dev:sessions:{1} → dev / sessions / dev:sessions:{1}. Folders show the count of keys below them
     #[test]
     fn redis_keys_are_grouped_by_colon() {
         let mut ch = HashMap::new();
@@ -171,7 +171,7 @@ mod tests {
         let dev = &ch[&top[0].key];
         assert_eq!(show(dev), ["/admin 1", "/sessions 2"]);
         assert_eq!(show(&ch[&dev[1].key]), ["dev:sessions:{2} zset", "dev:sessions:{1} zset"]);
-        // 키를 열 때 쓰는 정보는 그대로
+        // Info used to open the key stays as is
         assert_eq!(ch[&dev[1].key][0].name.as_deref(), Some("dev:sessions:{2}"));
     }
 

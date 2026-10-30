@@ -3,22 +3,22 @@ import type { QueryResult } from "../lib/api";
 import { buildChart, ChartKind, COUNT, defaultAxes, niceTicks, numericColumns, shortNumber } from "../lib/chart";
 import { Select, Spacer, Text, ToolButton, Toolbar, ToolbarSep } from "../ui";
 
-/** 시리즈 색 (어두운 · 밝은 테마 둘 다 보이는 것) */
+/** Series colors (visible on both dark · light themes) */
 const COLORS = ["#4e9af1", "#e5a540", "#59b36b", "#d9605a", "#a77fd8", "#4fb6b0", "#d47fb0", "#9aa0a6", "#c9b458", "#6c8ebf"];
-/** 막대 · 선 차트에 그리는 X 값 수 */
+/** Number of X values drawn in bar · line charts */
 const MAX_POINTS = 500;
 const M = { top: 12, right: 16, bottom: 34, left: 56 };
 
 /**
- * 결과 표를 차트로 (View as › Chart): 선 · 막대 · 파이. X 하나, Y 여럿 (수 컬럼 또는 행 수).
- * 같은 X 는 합친다. 불러온 행만 쓴다 (더 불러오면 다시 그린다)
+ * Result table as a chart (View as › Chart): line · bar · pie. One X, several Y (numeric columns or row count).
+ * Equal X values are merged. Only loaded rows are used (redrawn when more are loaded)
  */
 export function ResultChart({ result }: { result: QueryResult }) {
   const nums = useMemo(() => numericColumns(result), [result]);
   const colKey = result.columns.map((c) => c.name).join("\u0001");
   const [kind, setKind] = useState<ChartKind>("bar");
   const [axes, setAxes] = useState(() => defaultAxes(result));
-  // 다른 결과 (컬럼이 바뀜) 면 축을 다시 고른다
+  // For a different result (columns changed), pick the axes again
   useEffect(() => setAxes(defaultAxes(result)), [colKey]);
   const ys = kind === "pie" ? axes.ys.slice(0, 1) : axes.ys;
   const data = useMemo(() => buildChart(result, axes.x, ys, kind), [result, axes, kind]);
@@ -106,7 +106,7 @@ export function ResultChart({ result }: { result: QueryResult }) {
 type Hover = { i: number; x: number; y: number } | null;
 type ChartProps = { data: { labels: string[]; series: { name: string; values: number[] }[] }; w: number; h: number; hover: Hover; setHover: (h: Hover) => void };
 
-/** 막대 · 선: 눈금 · X 글 (겹치면 건너뛴다) · 마우스를 올린 X 강조 */
+/** Bar · line: ticks · X labels (skipped when overlapping) · hovered X highlight */
 function Axes({ data, kind, w, h, hover, setHover }: ChartProps & { kind: ChartKind }) {
   const pw = Math.max(10, w - M.left - M.right);
   const ph = Math.max(10, h - M.top - M.bottom);
@@ -166,7 +166,7 @@ function Axes({ data, kind, w, h, hover, setHover }: ChartProps & { kind: ChartK
   );
 }
 
-/** 파이: 조각 + 오른쪽 범례 (이름 · 몫) */
+/** Pie: slices + legend on the right (name · share) */
 function Pie({ data, w, h, hover, setHover }: ChartProps) {
   const vals = data.series[0]?.values ?? [];
   const total = vals.reduce((a, b) => a + b, 0) || 1;

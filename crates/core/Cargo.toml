@@ -22,8 +22,12 @@ dirs = "6"
 csv = "1"
 calamine = { version = "=0.36.1", features = ["dates"] }
 regex = "1"
+# reads MongoDB shell arguments the way the driver does (MCP execute checks)
+json5 = "1"
 minisign-verify = "0.2"
+# For keeping the password file's master key in the OS keychain (enabled in settings). Linux uses a pure-Rust Secret Service (no libdbus)
+keyring = { version = "3", features = ["apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust"] }
 sha2 = "0.10"
 qurry-driver = { workspace = true }
-# RAG 임베딩 (OpenAI · Ollama). 드라이버들과 같은 HTTP 클라이언트
+# RAG embeddings (OpenAI · Ollama). Same HTTP client as the drivers
 ureq = { version = "3", default-features = false, features = ["rustls", "gzip", "json"] }

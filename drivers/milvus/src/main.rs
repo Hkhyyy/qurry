@@ -1,5 +1,5 @@
-//! Qurry 드라이버: Milvus (REST v2, 기본 19530). DB = Milvus database, 컬렉션 = 테이블.
-//! 콘솔은 /v2/vectordb 뒤의 경로 (dbName 은 지금 DB 로 채운다):
+//! Qurry driver: Milvus (REST v2, default 19530). DB = Milvus database, collection = table.
+//! The console uses paths after /v2/vectordb (dbName is filled with the current DB):
 //!   POST /entities/search
 //!   {collectionName: 'docs', data: [[0.1, 0.2]], limit: 5, outputFields: ['*']}
 use qurry_driver::rest::{Http, parse_request, table};
@@ -13,7 +13,7 @@ struct Milvus {
 }
 
 impl Milvus {
-    /// path 는 /v2/vectordb 뒤. 본문에 dbName 이 없으면 지금 DB
+    /// path is after /v2/vectordb. If the body has no dbName, the current DB
     fn call(&self, path: &str, body: Value) -> Result<Value, String> {
         let mut body = if body.is_object() { body } else { json!({}) };
         if body.get("dbName").is_none() && !path.starts_with("/databases/") {
@@ -34,7 +34,7 @@ impl Milvus {
     fn query(&self, text: &str, limit: usize) -> Result<QueryOut, String> {
         let t = text.trim();
         let lower = t.to_lowercase();
-        // 탐색기: SELECT * FROM db.coll [LIMIT n] → entities/query
+        // Explorer: SELECT * FROM db.coll [LIMIT n] → entities/query
         if lower.starts_with("select") {
             let after = lower.find(" from ").map(|i| &t[i + 6..]).ok_or("Milvus isn't SQL — use REST, e.g. POST /entities/search")?;
             let coll = after.split_whitespace().next().unwrap_or("").rsplit('.').next().unwrap_or("").trim_matches('"').to_string();
@@ -45,7 +45,7 @@ impl Milvus {
         let (_m, p, body) = parse_request(t)?;
         let v = self.call(&p, body.unwrap_or(json!({})))?;
         let data = &v["data"];
-        // insert/upsert/delete: 몇 건
+        // insert/upsert/delete: how many
         if let Some(n) = ["insertCount", "upsertCount", "deleteCount"].iter().find_map(|k| data.get(*k).and_then(Value::as_u64)) {
             return Ok(QueryOut { has_result_set: false, rows_affected: n, ..Default::default() });
         }
@@ -63,7 +63,7 @@ impl Milvus {
     }
 }
 
-/// describe 의 필드 타입: 벡터는 차원과 거리 함께 FloatVector(768, COSINE)
+/// Field type in describe: vectors include dimension and metric, e.g. FloatVector(768, COSINE)
 fn field_type(f: &Value, indexes: &Value) -> String {
     let ty = f["type"].as_str().unwrap_or("");
     let dim = f["params"].as_array().into_iter().flatten().find(|p| p["key"] == "dim").and_then(|p| p["value"].as_str());
@@ -82,7 +82,7 @@ impl Driver for Milvus {
             "connect" => {
                 let c: ConnectParams = params(p)?;
                 let mut http = Http::new(&c, 19530);
-                // 사용자가 있으면 user:password, 없으면 비밀번호를 토큰(API key)으로
+                // user:password if there's a user, otherwise the password as a token (API key)
                 let pw = c.password.unwrap_or_default();
                 let token = if c.user.is_empty() { pw } else { format!("{}:{pw}", c.user) };
                 if !token.is_empty() {
@@ -93,7 +93,7 @@ impl Driver for Milvus {
                 self.collections()?;
                 ok(Value::Null)
             }
-            // REST 로는 서버 버전을 알 수 없다
+            // The server version isn't available over REST
             "version" => ok("Milvus (REST v2)"),
             "query" => {
                 let sql = p.get("sql").and_then(Value::as_str).unwrap_or("");

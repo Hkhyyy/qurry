@@ -1,4 +1,4 @@
-/** 트리 아이콘 (직접 그린 16px SVG — DataGrip과 같은 형태·색감) */
+/** Tree icons (hand-drawn 16px SVG — same shapes · colors as DataGrip) */
 const S = (p: { children: React.ReactNode; title?: string }) => (
   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
     {p.children}
@@ -15,7 +15,7 @@ export const Chevron = ({ open }: { open: boolean }) => (
   </svg>
 );
 
-/** PostgreSQL 데이터 소스 (코끼리) */
+/** PostgreSQL data source (elephant) */
 export const PgIcon = () => (
   <S>
     <path
@@ -41,7 +41,7 @@ export const RedisIcon = () => (
   </S>
 );
 
-/** 데이터베이스: 원통 (DataGrip New UI) */
+/** Database: cylinder (DataGrip New UI) */
 export const DatabaseIcon = () => (
   <S>
     <ellipse cx="8" cy="4" rx="5" ry="1.9" stroke="var(--ui-icon-db)" strokeWidth="1.1" />
@@ -50,7 +50,7 @@ export const DatabaseIcon = () => (
   </S>
 );
 
-/** 스키마: 겹친 층 */
+/** Schema: stacked layers */
 export const SchemaIcon = () => (
   <S>
     <path d="M8 2.5 13.5 5.3 8 8.1 2.5 5.3 8 2.5Z" stroke="var(--ui-icon)" strokeWidth="1.1" strokeLinejoin="round" />
@@ -58,14 +58,14 @@ export const SchemaIcon = () => (
   </S>
 );
 
-/** 묶음 폴더 (tables · views …): 선만 */
+/** Group folder (tables · views …): outline only */
 export const FolderIcon = () => (
   <S>
     <path d="M2 4.3c0-.6.5-1.1 1.1-1.1h3.1l1.4 1.5h5.3c.6 0 1.1.5 1.1 1.1v6c0 .6-.5 1.1-1.1 1.1H3.1c-.6 0-1.1-.5-1.1-1.1V4.3Z" stroke="var(--ui-icon)" strokeWidth="1.1" strokeLinejoin="round" />
   </S>
 );
 
-/** 테이블: 칸 + 파란 머리 줄 */
+/** Table: cells + blue header row */
 export const TableIcon = () => (
   <S>
     <rect x="2.5" y="3" width="11" height="10" rx="1.2" stroke="var(--ui-icon)" strokeWidth="1.1" />
@@ -128,7 +128,7 @@ export const IndexIcon = () => (
   </S>
 );
 
-/* ── 그리드 툴바 아이콘 (16px 선 아이콘) ── */
+/* ── Grid toolbar icons (16px line icons) ── */
 const L = ({ d, children }: { d?: string; children?: React.ReactNode }) => (
   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
     {d && <path d={d} />}
@@ -179,9 +179,9 @@ export const IcGear = () => (
 );
 export const IcFilter = () => <L d="M2.5 3.5h11L9.5 8.5V13l-3-1.5v-3l-4-5Z" />;
 export const IcOrder = () => <L d="M3 4h10M3 8h7M3 12h4" />;
-/** 모두 접기 (DataGrip Collapse All) */
+/** Collapse all (DataGrip Collapse All) */
 export const IcCollapseAll = () => <L d="M4.5 3 8 6.5 11.5 3M4.5 13 8 9.5l3.5 3.5" />;
-/** 더 보기 (세로 점 셋) */
+/** More (three vertical dots) */
 export const IcMoreV = () => (
   <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
     <circle cx="8" cy="3.5" r="1.2" />

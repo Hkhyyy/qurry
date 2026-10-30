@@ -12,8 +12,8 @@ GUI: Data Source 우클릭 › **Tools** › Sessions & Locks, Slow Queries, …
 |---|---|
 | 활동 | **Sessions** (누가 누구를 막는지, 쿼리 · 트랜잭션이 얼마나 됐는지, 3초마다 새로 고침) · **Lock Waits** — 우클릭 / `c` 쿼리 취소, `K` 세션 종료 |
 | 성능 | **Slow Queries** — 총 시간 기준 상위 100개 (`pg_stat_statements` / `performance_schema`), 콘솔에서 열거나 EXPLAIN |
-| 용량 | **Table Sizes** · **Unused Indexes** · **Duplicate Indexes** · **Foreign Keys Without an Index** — DROP / CREATE INDEX 생성 |
-| 유지보수 | **Vacuum & Dead Rows** · **Transaction ID Age** (wraparound) — VACUUM ANALYZE 생성 (PostgreSQL) |
+| 용량 | **Table Sizes** · **Table Bloat** · **Index Bloat** (지운 행이 차지한 공간, 통계로 어림 — PostgreSQL) · **Table Fragmentation** (MySQL) · **Unused Indexes** · **Duplicate Indexes** · **Foreign Keys Without an Index** — DROP / CREATE INDEX, VACUUM FULL, REINDEX, OPTIMIZE TABLE 생성 |
+| 유지보수 | **Vacuum & Dead Rows** · **Vacuum Progress** (지금 도는 VACUUM, VACUUM FULL / autovacuum: 단계, 스캔한 비율 — 취소 가능) · **Transaction ID Age** (wraparound) — VACUUM ANALYZE 생성 (PostgreSQL) |
 | 서버 | **Server Overview** (가동 시간, 연결 수, 캐시 적중률) · **Replication** 지연 · **Settings** |
 | 보안 | **Users & Roles** · **Table Privileges** — GRANT / REVOKE 생성 |
 
@@ -32,7 +32,7 @@ GUI — Data Source 우클릭 › Tools › Compare & Migrate · TUI — `⌃k` 
 
 ## 백업 · 복원
 
-데이터베이스 우클릭 › Tools › Back Up Database… / Restore Database… (TUI: `⌃k`). 이 컴퓨터의 `pg_dump` / `pg_restore` / `psql` 또는 `mysqldump` / `mysql` 을 실행합니다 (Homebrew `libpq`, `mysql-client`, Postgres.app, 리눅스의 흔한 위치도 찾습니다. PostgreSQL 은 서버 버전에 가장 가까운 클라이언트를 씁니다). 비밀번호는 환경 변수로 넘기고, SSH 터널을 쓰고, 진행 상황은 상태 표시줄에 나오며 취소할 수 있습니다.
+데이터베이스 우클릭 › Tools › Back Up Database… / Restore Database… (TUI: `⌃k`). 이 컴퓨터의 `pg_dump` / `pg_restore` / `psql` 또는 `mysqldump` / `mysql` 을 실행합니다 (Homebrew `libpq`, `mysql-client`, Postgres.app, 리눅스의 흔한 위치도 찾습니다. PostgreSQL 은 서버 버전에 가장 가까운 클라이언트를 씁니다). SSH 터널을 쓰고, 진행 상황은 상태 표시줄에 나오며 취소할 수 있습니다. 백업 파일과 임시 덤프는 본인만 읽을 수 있고, 비밀번호는 그 서버에만 맞는 개인 파일로 도구에 넘깁니다. `.sql` 파일을 복원할 때는 SQL 만 실행합니다: 파일 안의 psql · mysql 클라이언트 명령 (프로그램 실행, 파일 쓰기, 다른 곳에 접속) 은 꺼 둡니다 — psql 17.6 / 16.10 / 15.14 / 14.19 / 13.22 이상이 필요해서, 그보다 예전 psql 로는 `.sql` 파일을 복원하지 않습니다 (커스텀 형식 백업은 `pg_restore` 로 복원하므로 상관없습니다 — 다만 가장 가까운 `pg_restore` 가 17 이상이고 서버가 그보다 예전이면, 서버가 모르는 설정을 보내므로 psql 로 대신 복원합니다). `\connect` 로 데이터베이스를 바꾸는 덤프 (`pg_dump -C`, `pg_dumpall`) 는 안내와 함께 멈추니, psql 로 직접 복원하세요.
 
 ## 객체 만들기 · 고치기 (PostgreSQL, MySQL)
 

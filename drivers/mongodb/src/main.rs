@@ -1,9 +1,9 @@
-//! Qurry 드라이버: MongoDB. DB → 컬렉션 (테이블처럼). 콘솔은 셸 문법 또는 명령 JSON:
+//! Qurry driver: MongoDB. DB → collections (like tables). The console takes shell syntax or command JSON:
 //!   db.users.find({age: {$gt: 30}}, {name: 1}).sort({name: 1}).limit(10)
 //!   db.users.aggregate([{$group: {_id: "$city", n: {$sum: 1}}}])
 //!   db.users.countDocuments({}) · insertOne({...}) · insertMany([...]) · updateOne(f, u) · updateMany · deleteOne · deleteMany
-//!   {"find": "users", "filter": {...}}  (그 밖의 명령도 그대로 runCommand)
-//! 탐색기에서 컬렉션을 열 때의 SELECT * FROM db.coll [LIMIT n] 은 find 로 바꾼다
+//!   {"find": "users", "filter": {...}}  (other commands also go to runCommand as is)
+//! SELECT * FROM db.coll [LIMIT n] from opening a collection in the explorer is turned into find
 use mongodb::bson::{Bson, Document, doc};
 use mongodb::sync::{Client, Database};
 use qurry_driver::{Column, ConnectParams, Driver, QueryOut, ok, params, serve};
@@ -15,7 +15,7 @@ struct Mongo {
     db: String,
 }
 
-/// 셸 확장 (ObjectId("…"), ISODate("…"), NumberLong(…)) → 확장 JSON, 그 뒤 JSON5 (따옴표 없는 키·작은따옴표)
+/// Shell extensions (ObjectId("…"), ISODate("…"), NumberLong(…)) → extended JSON, then JSON5 (unquoted keys, single quotes)
 fn parse_args(s: &str) -> Result<Vec<Bson>, String> {
     let re_oid = regex::Regex::new(r#"ObjectId\(\s*["']([0-9a-fA-F]{24})["']\s*\)"#).unwrap();
     let re_date = regex::Regex::new(r#"(?:ISODate|new Date)\(\s*["']([^"']+)["']\s*\)"#).unwrap();
@@ -27,14 +27,22 @@ fn parse_args(s: &str) -> Result<Vec<Bson>, String> {
     v.as_array().unwrap().iter().map(|x| Bson::try_from(x.clone()).map_err(|e| e.to_string())).collect()
 }
 
-fn as_doc(b: Option<&Bson>) -> Document {
+/// A missing argument is an empty document; anything else must be a document.
+/// A scalar such as ObjectId("…") or {$numberLong: "1"} is refused rather than read as "match everything".
+fn as_doc(b: Option<&Bson>) -> Result<Document, String> {
     match b {
-        Some(Bson::Document(d)) => d.clone(),
-        _ => Document::new(),
+        None => Ok(Document::new()),
+        Some(Bson::Document(d)) => Ok(d.clone()),
+        Some(other) => Err(format!("expected a document, got {:?}", other.element_type())),
     }
 }
 
-/// bson → 화면 값 (ObjectId·날짜는 글로, 중첩은 JSON 그대로)
+/// Every element must be a document (pipeline stages, documents to insert).
+fn docs(a: &[Bson]) -> Result<Vec<Document>, String> {
+    a.iter().map(|b| as_doc(Some(b))).collect()
+}
+
+/// bson → display value (ObjectId and dates as text, nested values as JSON)
 fn value(b: &Bson) -> Value {
     match b {
         Bson::ObjectId(o) => Value::String(o.to_hex()),
@@ -50,7 +58,7 @@ fn value(b: &Bson) -> Value {
     }
 }
 
-/// 문서들 → 표 (처음 나온 순서로 키를 모아 열로)
+/// Documents → table (keys collected as columns in order of first appearance)
 fn table(docs: Vec<Document>, truncated: bool) -> QueryOut {
     let mut keys: Vec<String> = vec![];
     for d in &docs {
@@ -86,7 +94,7 @@ impl Mongo {
 
     fn query(&self, text: &str, limit: usize) -> Result<QueryOut, String> {
         let t = text.trim().trim_end_matches(';').trim();
-        // 탐색기: SELECT * FROM db.coll [LIMIT n]
+        // Explorer: SELECT * FROM db.coll [LIMIT n]
         let sel = regex::Regex::new(r#"(?is)^select\s+\*\s+from\s+(?:"?([^".\s]+)"?\.)?"?([^"\s;]+)"?\s*(?:limit\s+(\d+))?$"#).unwrap();
         if let Some(c) = sel.captures(t) {
             let n = c.get(3).and_then(|x| x.as_str().parse().ok()).unwrap_or(limit).min(limit);
@@ -98,7 +106,7 @@ impl Mongo {
         if t.starts_with('{') {
             let cmd = parse_args(t)?.into_iter().next().and_then(|b| b.as_document().cloned()).ok_or("expected a command document")?;
             let r = self.db()?.run_command(cmd).run().map_err(|e| e.to_string())?;
-            // find / aggregate 명령이면 cursor.firstBatch 를 표로
+            // For find / aggregate commands, show cursor.firstBatch as a table
             if let Ok(c) = r.get_document("cursor") {
                 let batch: Vec<Document> = c.get_array("firstBatch").map(|a| a.iter().filter_map(|b| b.as_document().cloned()).collect()).unwrap_or_default();
                 return Ok(table(batch, false));
@@ -115,7 +123,7 @@ impl Mongo {
         let coll = caps.get(1).or(caps.get(2)).unwrap().as_str().to_string();
         let mut method = caps[3].to_string();
         let mut rest = caps[4].to_string();
-        // 끝에 붙은 .sort() .limit() .skip() 을 떼어 낸다
+        // Strip trailing .sort() .limit() .skip()
         let (mut sort, mut lim, mut skip) = (None, None, 0u64);
         let tail = regex::Regex::new(r#"(?s)^(.*)\)\.(sort|limit|skip)\((.*)$"#).unwrap();
         while let Some(c) = tail.captures(&rest.clone()) {
@@ -135,11 +143,11 @@ impl Mongo {
         let err = |e: mongodb::error::Error| e.to_string();
         let changed = |n: u64| Ok(QueryOut { rows_affected: n, ..Default::default() });
         match method.as_str() {
-            "find" => self.find(&coll, as_doc(args.first()), args.get(1).and_then(|b| b.as_document().cloned()), sort, skip, lim.unwrap_or(limit).min(limit)),
-            "findOne" => self.find(&coll, as_doc(args.first()), args.get(1).and_then(|b| b.as_document().cloned()), None, 0, 1),
+            "find" => self.find(&coll, as_doc(args.first())?, args.get(1).and_then(|b| b.as_document().cloned()), sort, skip, lim.unwrap_or(limit).min(limit)),
+            "findOne" => self.find(&coll, as_doc(args.first())?, args.get(1).and_then(|b| b.as_document().cloned()), None, 0, 1),
             "aggregate" => {
                 let pipeline: Vec<Document> = match args.first() {
-                    Some(Bson::Array(a)) => a.iter().filter_map(|b| b.as_document().cloned()).collect(),
+                    Some(Bson::Array(a)) => docs(a)?,
                     _ => return Err("aggregate expects an array of stages".into()),
                 };
                 let mut docs: Vec<Document> = c.aggregate(pipeline).run().map_err(err)?.take(limit + 1).collect::<Result<_, _>>().map_err(err)?;
@@ -147,29 +155,29 @@ impl Mongo {
                 docs.truncate(limit);
                 Ok(table(docs, truncated))
             }
-            "countDocuments" | "count" => Ok(table(vec![doc! { "count": c.count_documents(as_doc(args.first())).run().map_err(err)? as i64 }], false)),
+            "countDocuments" | "count" => Ok(table(vec![doc! { "count": c.count_documents(as_doc(args.first())?).run().map_err(err)? as i64 }], false)),
             "distinct" => {
                 let field = args.first().and_then(|b| b.as_str()).ok_or("distinct expects a field name")?;
-                Ok(table(c.distinct(field, as_doc(args.get(1))).run().map_err(err)?.into_iter().map(|v| doc! { field: v }).collect(), false))
+                Ok(table(c.distinct(field, as_doc(args.get(1))?).run().map_err(err)?.into_iter().map(|v| doc! { field: v }).collect(), false))
             }
             "insertOne" => {
-                c.insert_one(as_doc(args.first())).run().map_err(err)?;
+                c.insert_one(as_doc(args.first())?).run().map_err(err)?;
                 changed(1)
             }
             "insertMany" => match args.first() {
-                Some(Bson::Array(a)) => changed(c.insert_many(a.iter().filter_map(|b| b.as_document().cloned()).collect::<Vec<_>>()).run().map_err(err)?.inserted_ids.len() as u64),
+                Some(Bson::Array(a)) => changed(c.insert_many(docs(a)?).run().map_err(err)?.inserted_ids.len() as u64),
                 _ => Err("insertMany expects an array of documents".into()),
             },
-            "updateOne" => changed(c.update_one(as_doc(args.first()), as_doc(args.get(1))).run().map_err(err)?.modified_count),
-            "updateMany" => changed(c.update_many(as_doc(args.first()), as_doc(args.get(1))).run().map_err(err)?.modified_count),
-            "replaceOne" => changed(c.replace_one(as_doc(args.first()), as_doc(args.get(1))).run().map_err(err)?.modified_count),
-            "deleteOne" => changed(c.delete_one(as_doc(args.first())).run().map_err(err)?.deleted_count),
-            "deleteMany" => changed(c.delete_many(as_doc(args.first())).run().map_err(err)?.deleted_count),
+            "updateOne" => changed(c.update_one(as_doc(args.first())?, as_doc(args.get(1))?).run().map_err(err)?.modified_count),
+            "updateMany" => changed(c.update_many(as_doc(args.first())?, as_doc(args.get(1))?).run().map_err(err)?.modified_count),
+            "replaceOne" => changed(c.replace_one(as_doc(args.first())?, as_doc(args.get(1))?).run().map_err(err)?.modified_count),
+            "deleteOne" => changed(c.delete_one(as_doc(args.first())?).run().map_err(err)?.deleted_count),
+            "deleteMany" => changed(c.delete_many(as_doc(args.first())?).run().map_err(err)?.deleted_count),
             "drop" => {
                 c.drop().run().map_err(err)?;
                 changed(0)
             }
-            "createIndex" => Ok(table(vec![doc! { "name": c.create_index(mongodb::IndexModel::builder().keys(as_doc(args.first())).build()).run().map_err(err)?.index_name }], false)),
+            "createIndex" => Ok(table(vec![doc! { "name": c.create_index(mongodb::IndexModel::builder().keys(as_doc(args.first())?).build()).run().map_err(err)?.index_name }], false)),
             m => Err(format!("{m} isn't supported here — run it as a command: {{\"{m}\": \"{coll}\", …}}")),
         }
     }
@@ -185,7 +193,7 @@ impl Driver for Mongo {
             }
             "connect" => {
                 let c: ConnectParams = params(p)?;
-                // host 에 mongodb:// 나 mongodb+srv:// URI 를 넣어도 된다
+                // host may also be a mongodb:// or mongodb+srv:// URI
                 let uri = if c.host.starts_with("mongodb") {
                     c.host.clone()
                 } else {
@@ -215,7 +223,7 @@ impl Driver for Mongo {
             "tableDetail" => {
                 let coll = p.get("table").and_then(Value::as_str).unwrap_or("");
                 let c = self.db()?.collection::<Document>(coll);
-                // 문서 100개를 보고 필드와 타입을 짐작한다
+                // Look at 100 documents to guess fields and types
                 let docs: Vec<Document> = c.find(Document::new()).limit(100).run().map_err(|e| e.to_string())?.filter_map(Result::ok).collect();
                 let mut fields: Vec<(String, String)> = vec![];
                 for d in &docs {
@@ -249,11 +257,28 @@ impl Driver for Mongo {
     }
 }
 
-/// URI 의 사용자·비밀번호 (특수 문자를 %XX 로)
+/// User and password of the URI (special characters as %XX)
 fn enc(s: &str) -> String {
     s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
 
 fn main() {
     serve(Mongo::default());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scalar_filters_are_refused() {
+        for a in [r#"ObjectId("507f1f77bcf86cd799439011")"#, r#"{$numberLong: "1"}"#, r#"{$date: "2020-01-01T00:00:00Z"}, {$set: {a: 1}}"#, "1", r#""x""#] {
+            let args = parse_args(a).unwrap();
+            assert!(as_doc(args.first()).is_err(), "{a}");
+        }
+        let args = parse_args(r#"{_id: ObjectId("507f1f77bcf86cd799439011")}"#).unwrap();
+        assert_eq!(as_doc(args.first()).unwrap().len(), 1);
+        assert!(as_doc(None).unwrap().is_empty());
+        assert!(docs(&parse_args(r#"{a: 1}, ObjectId("507f1f77bcf86cd799439011")"#).unwrap()).is_err());
+    }
 }

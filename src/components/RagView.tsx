@@ -4,12 +4,12 @@ import { ConnectionView, dialectOf, KIND_LABEL, meta, QueryResult, rag, RAG_DEFA
 import { ResultGrid } from "./ResultGrid";
 import { Button, EmptyState, List, ListItem, Notice, Row, Select, Spacer, Text, TextInput } from "../ui";
 
-/** 원본이 될 수 있는 SQL Data Source */
+/** SQL Data Sources that can be a source */
 const isSqlSource = (c: ConnectionView) => c.kind !== "redis" && c.kind !== "mongodb" && !VECTOR_KINDS.includes(c.kind);
-/** 벡터를 넣을 수 있는 곳 */
+/** Places that can store vectors */
 const isStore = (c: ConnectionView) => c.kind === "postgres" || VECTOR_KINDS.includes(c.kind);
 const FLAT = ["mysql", "sqlite", "clickhouse"];
-/** 접속 대상: 기본 DB 면 Data Source id 그대로 */
+/** Connection target: the Data Source id as is for the default DB */
 const tid = (c: ConnectionView, db?: string) => targetId(c.id, db && db !== (c.database || (c.kind === "postgres" ? "postgres" : "")) ? db : undefined);
 const isText = (t: string) => /char|text|string|clob|json|xml/i.test(t);
 
@@ -29,7 +29,7 @@ const blank = (connId: string, db?: string, schema?: string, table?: string): Dr
   _db: db,
 });
 
-/** 고르는 중인 원본 DB (저장 형식에는 없다: source 의 conn::db 로 들어간다) */
+/** Source DB being picked (not in the saved format: goes into source's conn::db) */
 type Draft = RagIndex & { _db?: string };
 
 function IndexForm({ conns, init, hasKey, onKeySaved, onSaved, onCancel }: { conns: ConnectionView[]; init: Draft; hasKey: boolean; onKeySaved: () => void; onSaved: (x: RagIndex) => void; onCancel: () => void }) {
@@ -62,7 +62,7 @@ function IndexForm({ conns, init, hasKey, onKeySaved, onSaved, onCancel }: { con
     meta.table(tid(sc, db), schema, d.table).then(
       (t) => {
         setCols(t.columns);
-        // 처음 고른 테이블: PK 와 글 열을 미리 고른다
+        // First table picked: preselect the PK and text column
         setD((x) => (x.idColumn && x.textColumns.length ? x : { ...x, idColumn: x.idColumn || t.columns.find((c) => c.isPk)?.name || "", textColumns: x.textColumns.length ? x.textColumns : t.columns.filter((c) => !c.isPk && isText(c.dataType)).map((c) => c.name) }));
       },
       () => setCols([]),
@@ -192,7 +192,7 @@ function IndexForm({ conns, init, hasKey, onKeySaved, onSaved, onCancel }: { con
   );
 }
 
-/** AI Search (RAG) 탭: 인덱스 목록 · 만들기/고치기 · Build (임베딩) · 의미 검색 */
+/** AI Search (RAG) tab: index list · create/modify · Build (embedding) · semantic search */
 export function RagView(p: {
   conns: ConnectionView[];
   initial?: { connId: string; db?: string; schema?: string; table?: string };

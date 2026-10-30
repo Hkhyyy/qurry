@@ -1,24 +1,24 @@
-//! 스키마 비교: 대상(target)을 원본(source)과 같게 만드는 DDL. 순서: 테이블 만들기(외래 키 빼고) → 컬럼 → 인덱스·제약 → 외래 키 → 뷰 → 지우기(맨 끝, 위험 표시)
+//! Schema compare: DDL that makes the target match the source. Order: create tables (without foreign keys) → columns → indexes·constraints → foreign keys → views → drops (last, marked dangerous)
 use crate::app::{AppState, ensure_pool};
 use crate::db::Pool;
 use crate::error::{AppError, AppResult};
 use crate::store::DbKind;
 use std::collections::BTreeMap;
 
-/// 바꿀 것 하나
+/// One change
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Change {
     /// create_table · add_column · alter_column · create_index · add_constraint · create_view · drop_…
     pub kind: String,
-    /// 대상 (테이블, 테이블.컬럼 …)
+    /// Target (table, table.column …)
     pub object: String,
     pub sql: String,
-    /// 데이터·객체를 지운다 (기본으로 고르지 않는다)
+    /// Deletes data·objects (not selected by default)
     pub destructive: bool,
 }
 
-/// 비교에 쓰는 스키마 모양. 열·인덱스·제약은 이름 → 정의 글 (같으면 같다)
+/// Schema shape used for comparing. Columns·indexes·constraints are name → definition text (same text means same)
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Model {
     pub tables: BTreeMap<String, TableModel>,
@@ -30,21 +30,21 @@ pub struct Col {
     pub ty: String,
     pub not_null: bool,
     pub default: Option<String>,
-    /// MySQL: SHOW CREATE TABLE 의 그 줄 (비교·만들기에 그대로)
+    /// MySQL: that line from SHOW CREATE TABLE (used as is for comparing·creating)
     pub line: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TableModel {
-    /// 순서대로 (이름, 컬럼)
+    /// In order (name, column)
     pub columns: Vec<(String, Col)>,
-    /// 외래 키가 아닌 제약 (PK·UNIQUE·CHECK) 과 인덱스: 이름 → 만드는 글
+    /// Non-foreign-key constraints (PK·UNIQUE·CHECK) and indexes: name → creating text
     pub keys: BTreeMap<String, String>,
-    /// 외래 키: 이름 → 정의
+    /// Foreign keys: name → definition
     pub fks: BTreeMap<String, String>,
 }
 
-/// 자기 스키마 이름을 뺀다 (두 스키마를 같은 글로 비교하려고): "s".x · s.x · `s`.x
+/// Strip its own schema name (to compare two schemas as the same text): "s".x · s.x · `s`.x
 fn norm(def: &str, schema: &str, kind: DbKind) -> String {
     let q = crate::sql::quote_ident(kind, schema);
     let mut out = def.replace(&format!("{q}."), "");
@@ -56,7 +56,7 @@ fn norm(def: &str, schema: &str, kind: DbKind) -> String {
     out
 }
 
-/// 원본 정의를 대상 스키마로
+/// Source definition onto the target schema
 fn remap(def: &str, src: &str, dst: &str, kind: DbKind) -> String {
     if src == dst {
         return def.to_string();
@@ -71,7 +71,7 @@ fn remap(def: &str, src: &str, dst: &str, kind: DbKind) -> String {
     out
 }
 
-/// MySQL: 같은 DB 를 가리키는 REFERENCES `t` 에 DB 이름을 붙인다 (다른 DB 에 연결한 채로 돌려도 맞게)
+/// MySQL: add the DB name to REFERENCES `t` pointing at the same DB (so it's right even when run while connected to another DB)
 fn qualify_refs(line: &str, db: &str) -> String {
     let mut out = String::new();
     let mut rest = line;
@@ -139,7 +139,7 @@ async fn my_model(p: &sqlx::MySqlPool, db: &str) -> AppResult<Model> {
         let row = sqlx::query(&format!("SHOW CREATE TABLE {}.{}", q(db), q(&t))).fetch_one(p).await?;
         let ddl: String = row.try_get::<String, _>(1).or_else(|_| row.try_get::<Vec<u8>, _>(1).map(|b| String::from_utf8_lossy(&b).into_owned()))?;
         let mut tm = TableModel::default();
-        // CREATE TABLE `t` ( … ) ENGINE=… : 괄호 안 줄
+        // CREATE TABLE `t` ( … ) ENGINE=… : lines inside the parentheses
         for l in ddl.lines().skip(1) {
             let l = l.trim().trim_end_matches(',');
             if l.starts_with(')') {
@@ -165,17 +165,17 @@ fn change(kind: &str, object: String, sql: String) -> Change {
     Change { destructive: kind.starts_with("drop"), kind: kind.into(), object, sql }
 }
 
-/// 대상(dst)을 원본(src)과 같게 만드는 DDL
+/// DDL that makes the target (dst) match the source (src)
 pub fn diff(src: &Model, dst: &Model, kind: DbKind, src_schema: &str, dst_schema: &str) -> Vec<Change> {
     let q = |s: &str| crate::sql::quote_ident(kind, s);
     let tbl = |t: &str| format!("{}.{}", q(dst_schema), q(t));
     let map = |d: &str| {
-        // 비교용으로 뺀 스키마 이름을 대상 스키마로 다시 붙인다 (MySQL 외래 키는 qualify_refs 로)
+        // Re-attach the target schema to the schema name stripped for comparing (MySQL foreign keys via qualify_refs)
         if kind == DbKind::Mysql { qualify_refs(d, dst_schema) } else { remap(d, src_schema, dst_schema, kind) }
     };
     let pg = kind == DbKind::Postgres;
     let col_sql = |c: &Col| if pg { format!("{}{}{}", c.ty, c.default.as_ref().map(|d| format!(" DEFAULT {d}")).unwrap_or_default(), if c.not_null { " NOT NULL" } else { "" }) } else { c.line.clone() };
-    // PG: 비교용으로 스키마를 뺀 정의 → 대상 스키마를 붙인다 (인덱스·기본값의 시퀀스)
+    // PG: definition with the schema stripped for comparing → attach the target schema (sequences in indexes·defaults)
     let pg_qualify = |d: &str| -> String {
         if !pg {
             return d.to_string();
@@ -189,7 +189,7 @@ pub fn diff(src: &Model, dst: &Model, kind: DbKind, src_schema: &str, dst_schema
             }
             _ => d.to_string(),
         };
-        // nextval('seq'::regclass) · REFERENCES t( → 대상 스키마
+        // nextval('seq'::regclass) · REFERENCES t( → target schema
         let d = d.replace("nextval('", &format!("nextval('{}.", q(dst_schema)));
         match d.find("REFERENCES ") {
             Some(i) => format!("{}REFERENCES {}.{}", &d[..i], q(dst_schema), &d[i + 11..]),
@@ -221,7 +221,7 @@ pub fn diff(src: &Model, dst: &Model, kind: DbKind, src_schema: &str, dst_schema
                         lines.push(format!("    {}", c.line));
                     }
                 }
-                // 제약(PK·UNIQUE·CHECK)은 테이블과 같이, 인덱스는 따로
+                // Constraints (PK·UNIQUE·CHECK) go with the table, indexes separately
                 for k in s.keys.values() {
                     if !pg || k.starts_with("CONSTRAINT") {
                         lines.push(format!("    {k}"));
@@ -273,7 +273,7 @@ pub fn diff(src: &Model, dst: &Model, kind: DbKind, src_schema: &str, dst_schema
                 for (n, _) in d.columns.iter().filter(|x| !s.columns.iter().any(|y| y.0 == x.0)) {
                     drops.push(change("drop_column", format!("{t}.{n}"), format!("ALTER TABLE {} DROP COLUMN {};", tbl(t), q(n))));
                 }
-                // 키·인덱스
+                // Keys·indexes
                 let drop_key = |n: &str, k: &str| -> String {
                     match (pg, k.starts_with("CONSTRAINT"), n == "PRIMARY") {
                         (true, true, _) => format!("ALTER TABLE {} DROP CONSTRAINT {};", tbl(t), q(n)),
@@ -290,7 +290,7 @@ pub fn diff(src: &Model, dst: &Model, kind: DbKind, src_schema: &str, dst_schema
                         (false, _) => format!("ALTER TABLE {} ADD {k};", tbl(t)),
                     }
                 };
-                // 인덱스(KEY·INDEX) 와 제약(CONSTRAINT …)을 나눠 이름 붙인다
+                // Split indexes (KEY·INDEX) and constraints (CONSTRAINT …) and name them
                 let is_index = |k: &str| !k.starts_with("CONSTRAINT") && (pg || !k.starts_with("PRIMARY"));
                 for (n, k) in &s.keys {
                     match d.keys.get(n) {
@@ -332,7 +332,7 @@ pub fn diff(src: &Model, dst: &Model, kind: DbKind, src_schema: &str, dst_schema
     create.into_iter().chain(cols).chain(keys).chain(fks).chain(views).chain(drops).collect()
 }
 
-/// 뷰 정의 (스키마를 뺀 글) 의 테이블 이름에 대상 스키마를 붙인다: FROM t / JOIN t → FROM dst.t
+/// Attach the target schema to table names in the view definition (schema-stripped text): FROM t / JOIN t → FROM dst.t
 fn remap_view(def: &str, dst: &str, kind: DbKind) -> String {
     let q = crate::sql::quote_ident(kind, dst);
     let mut out = String::new();
@@ -354,7 +354,7 @@ fn remap_view(def: &str, dst: &str, kind: DbKind) -> String {
 }
 
 impl AppState {
-    /// 두 스키마를 비교한다 (같은 DB 종류끼리). 대상(target)을 원본(source)과 같게 만드는 DDL
+    /// Compare two schemas (of the same DB kind). DDL that makes the target match the source
     pub async fn compare_schemas(&self, source_id: String, source_schema: String, target_id: String, target_schema: String) -> AppResult<Vec<Change>> {
         let (sk, tk) = (self.kind_of(&source_id)?, self.kind_of(&target_id)?);
         if sk != tk {
@@ -374,7 +374,7 @@ impl AppState {
     }
 }
 
-/// 데이터 비교 결과: 같은 기본 키끼리 맞춰 본 행 수와, 대상을 원본과 같게 만드는 SQL
+/// Data compare result: row counts matched by primary key, and SQL that makes the target match the source
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DataDiff {
@@ -382,17 +382,17 @@ pub struct DataDiff {
     pub only_source: u64,
     pub only_target: u64,
     pub different: u64,
-    /// INSERT (원본에만) · UPDATE (다른 값) · DELETE (대상에만, 맨 끝)
+    /// INSERT (source only) · UPDATE (different values) · DELETE (target only, last)
     pub sql: String,
-    /// 행이 너무 많아 앞부분만 비교했다
+    /// Too many rows, so only the first part was compared
     pub truncated: bool,
 }
 
-/// 비교할 최대 행 수 (양쪽 각각)
+/// Max rows to compare (each side)
 pub const MAX_COMPARE_ROWS: usize = 200_000;
 
 impl AppState {
-    /// 두 테이블의 데이터를 기본 키로 맞춰 비교한다 (공통 컬럼만)
+    /// Compare the data of two tables by primary key (common columns only)
     pub async fn compare_data(&self, source_id: String, source_schema: String, source_table: String, target_id: String, target_schema: String, target_table: String) -> AppResult<DataDiff> {
         let (kind, tk) = (self.kind_of(&source_id)?, self.kind_of(&target_id)?);
         if kind != tk || kind == DbKind::Redis {
@@ -409,7 +409,7 @@ impl AppState {
         if tpk != pk {
             return Err(AppError::Msg(format!("The primary keys differ ({} vs {})", pk.join(", "), tpk.join(", "))));
         }
-        // 양쪽에 다 있는 컬럼만
+        // Only columns present on both sides
         let cols: Vec<String> = sd.columns.iter().map(|c| c.name.clone()).filter(|n| td.columns.iter().any(|t| t.name == *n)).collect();
         let q = |s: &str| crate::sql::quote_ident(kind, s);
         let list = cols.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ");
@@ -462,9 +462,9 @@ impl AppState {
     }
 }
 
-// ───────── 마이그레이션 파일 (Flyway 식: V1__init.sql, V2__add_index.sql …) ─────────
+// ───────── Migration files (Flyway style: V1__init.sql, V2__add_index.sql …) ─────────
 
-/// 적용 기록 테이블 (접속한 DB 의 기본 스키마)
+/// Applied-history table (in the connected DB's default schema)
 pub const HISTORY_TABLE: &str = "qurry_schema_history";
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -474,7 +474,7 @@ pub struct Migration {
     pub description: String,
     pub file: String,
     pub checksum: String,
-    /// pending · applied · changed (적용한 뒤 파일이 바뀜) · missing (기록은 있는데 파일이 없음)
+    /// pending · applied · changed (file changed after applying) · missing (recorded but the file is gone)
     pub status: String,
     pub applied_at: Option<String>,
 }
@@ -492,7 +492,7 @@ fn version_key(v: &str) -> Vec<u64> {
     v.split('.').map(|p| p.parse().unwrap_or(0)).collect()
 }
 
-/// 내용이 바뀌었는지 보는 값 (FNV-1a, 줄바꿈 CRLF 는 LF 로)
+/// Value for detecting content changes (FNV-1a, CRLF newlines as LF)
 fn checksum(text: &str) -> String {
     let mut h: u64 = 0xcbf29ce484222325;
     for b in text.replace("\r\n", "\n").bytes() {
@@ -502,7 +502,7 @@ fn checksum(text: &str) -> String {
     format!("{h:016x}")
 }
 
-/// 폴더의 마이그레이션 파일 (버전 순서): (버전, 설명, 파일 이름, 내용)
+/// Migration files in the folder (in version order): (version, description, file name, content)
 fn scan_dir(dir: &str) -> AppResult<Vec<(String, String, String, String)>> {
     let mut out = vec![];
     for e in std::fs::read_dir(dir)? {
@@ -517,7 +517,7 @@ fn scan_dir(dir: &str) -> AppResult<Vec<(String, String, String, String)>> {
 }
 
 impl AppState {
-    /// 적용 기록: 버전 → (checksum, 적용 시각). 기록 테이블이 없으면 비어 있다
+    /// Applied history: version → (checksum, applied time). Empty if the history table doesn't exist
     async fn history_of(&self, pool: &Pool) -> std::collections::HashMap<String, (String, String)> {
         let q = format!("SELECT version, checksum, CAST(applied_at AS CHAR(40)) FROM {HISTORY_TABLE}");
         let q = if matches!(pool, Pool::Pg(_)) { q.replace("CHAR(40)", "text") } else { q };
@@ -527,7 +527,7 @@ impl AppState {
         }
     }
 
-    /// 폴더의 마이그레이션과 적용 상태
+    /// Migrations in the folder and their applied state
     pub async fn migration_status(&self, id: String, dir: String) -> AppResult<Vec<Migration>> {
         let pool = ensure_pool(self, &id).await?;
         let mut applied = self.history_of(&pool).await;
@@ -543,7 +543,7 @@ impl AppState {
                 Migration { version, description, file, checksum, status: status.into(), applied_at }
             })
             .collect();
-        // 기록은 있는데 파일이 없는 것
+        // Recorded but the file is gone
         for (version, (checksum, at)) in applied {
             out.push(Migration { version, description: String::new(), file: String::new(), checksum, status: "missing".into(), applied_at: Some(at) });
         }
@@ -551,7 +551,7 @@ impl AppState {
         Ok(out)
     }
 
-    /// 아직 적용하지 않은 것을 버전 순서로 (파일마다 트랜잭션, 실패하면 거기서 멈춘다). 적용한 버전들
+    /// Apply the not-yet-applied ones in version order (a transaction per file, stops at the first failure). The applied versions
     pub async fn apply_migrations(&self, id: String, dir: String) -> AppResult<Vec<String>> {
         let cfg = self.source(&id)?;
         if cfg.read_only {
@@ -584,7 +584,7 @@ impl AppState {
                     tx.commit().await.map_err(|e| fail(e.to_string()))?;
                 }
                 Pool::My(p) => {
-                    // MySQL: DDL 은 저절로 커밋된다 (데이터 문장만 함께 되돌린다)
+                    // MySQL: DDL commits implicitly (only data statements are rolled back together)
                     let mut tx = p.begin().await?;
                     for s in stmts.iter().chain(std::iter::once(&insert)) {
                         sqlx::Executor::execute(&mut *tx, sqlx::raw_sql(s.as_str())).await.map_err(|e| fail(e.to_string()))?;
@@ -600,7 +600,7 @@ impl AppState {
     }
 }
 
-/// 다음 버전으로 저장: V{n}__{설명}.sql. 저장한 경로
+/// Save as the next version: V{n}__{description}.sql. The saved path
 pub fn save_migration(dir: &str, description: &str, sql: &str) -> AppResult<String> {
     let next = scan_dir(dir)?.iter().filter_map(|f| version_key(&f.0).first().copied()).max().unwrap_or(0) + 1;
     let mut desc: String = description.trim().chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
@@ -629,7 +629,7 @@ mod tests {
         Some((st, db.to_string()))
     }
 
-    /// 비교 → 만든 SQL 을 대상에 돌림 → 다시 비교하면 차이가 없다
+    /// Compare → run the generated SQL on the target → comparing again shows no differences
     async fn roundtrip(kind: DbKind, setup: &[&str], src: &str, dst: &str) {
         let Some((st, _)) = state(kind).await else { return };
         let q = |s: String| st.run_query("x".into(), s, None, None);
@@ -643,7 +643,7 @@ mod tests {
             assert!(kinds.contains(&want), "{want} missing in {kinds:?}\n{changes:#?}");
         }
         assert!(changes.iter().filter(|c| c.kind.starts_with("drop")).all(|c| c.destructive));
-        // 지우는 것은 맨 끝
+        // Drops come last
         let first_drop = changes.iter().position(|c| c.destructive).unwrap();
         assert!(changes[first_drop..].iter().all(|c| c.destructive), "{changes:#?}");
         for c in &changes {
@@ -674,25 +674,25 @@ mod tests {
         assert_eq!(st.apply_migrations("x".into(), d.clone()).await.unwrap(), ["1", "2", "10"]);
         assert!(st.migration_status("x".into(), d.clone()).await.unwrap().iter().all(|m| m.status == "applied"));
         assert_eq!(q("select count(*) from qurry_mig_a").await.unwrap().rows[0][0], serde_json::json!(2));
-        // 실패하면 그 파일은 롤백되고 기록하지 않는다
+        // On failure that file is rolled back and not recorded
         std::fs::write(dir.join("V11__bad.sql"), "insert into qurry_mig_a values (11, 'z');\nselect * from no_such_table;").unwrap();
         let e = st.apply_migrations("x".into(), d.clone()).await.unwrap_err().to_string();
         assert!(e.contains("V11") && e.contains("no_such_table"), "{e}");
         assert_eq!(q("select count(*) from qurry_mig_a").await.unwrap().rows[0][0], serde_json::json!(2));
         std::fs::remove_file(dir.join("V11__bad.sql")).unwrap();
-        // 적용한 파일이 바뀌면 알리고 적용하지 않는다
+        // If an applied file changed, report it and don't apply
         std::fs::write(dir.join("V1__create.sql"), "create table qurry_mig_a (id bigint primary key);").unwrap();
         std::fs::write(dir.join("V12__more.sql"), "select 1;").unwrap();
         assert_eq!(st.migration_status("x".into(), d.clone()).await.unwrap()[0].status, "changed");
         assert!(st.apply_migrations("x".into(), d.clone()).await.unwrap_err().to_string().contains("V1"));
-        // 다음 버전으로 저장
+        // Save as the next version
         let p = save_migration(&d, "add index!", "create index on qurry_mig_a (name);").unwrap();
         assert!(p.ends_with("V13__add_index.sql"), "{p}");
         q("drop table if exists qurry_schema_history, qurry_mig_a").await.ok();
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-    /// 데이터 비교 → 만든 SQL 을 대상에 → 다시 비교하면 모두 같다
+    /// Data compare → generated SQL on the target → comparing again shows everything equal
     #[tokio::test]
     #[ignore]
     async fn pg_data_compare_and_sync() {
@@ -733,7 +733,7 @@ mod tests {
                 "create table qurry_src.orders (id bigint primary key, customer_id int references qurry_src.customers(id), total numeric(10,2) not null default 0)",
                 "create index orders_customer_idx on qurry_src.orders (customer_id)",
                 "create view qurry_src.big_orders as select id, total from qurry_src.orders where total > 100",
-                // 대상: 컬럼 모자람·타입 다름·남는 컬럼·남는 테이블
+                // Target: missing column·different type·extra column·extra table
                 "create table qurry_dst.customers (id serial primary key, email text, name text, legacy int)",
                 "create table qurry_dst.old_stuff (id int)",
             ],

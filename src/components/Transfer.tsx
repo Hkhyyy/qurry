@@ -9,19 +9,19 @@ function lastChoice(): { format: DataFormat; clipboard: boolean } {
     const v = JSON.parse(localStorage.getItem(LAST) ?? "");
     if (FORMATS.some((f) => f.id === v.format)) return { format: v.format, clipboard: !!v.clipboard };
   } catch {
-    /* 처음이면 CSV 파일 */
+    /* CSV file the first time */
   }
   return { format: "csv", clipboard: false };
 }
 
-/** 내보내기 전에 형식과 대상(파일/클립보드)을 고른다. 고른 것은 다음에도 */
+/** Choose the format and target (file/clipboard) before exporting. The choice is remembered */
 export function ExportDialog({ what, onExport, onClose }: { what: string; onExport: (format: DataFormat, clipboard: boolean) => void; onClose: () => void }) {
   const [c, setC] = useState(lastChoice);
   const go = () => {
     try {
       localStorage.setItem(LAST, JSON.stringify(c));
     } catch {
-      /* 저장 못 해도 내보내기는 한다 */
+      /* Export anyway even if saving fails */
     }
     onExport(c.format, c.clipboard);
   };
@@ -54,7 +54,7 @@ export function ExportDialog({ what, onExport, onClose }: { what: string; onExpo
   );
 }
 
-/** 가져오기: 파일 고르기 → 미리보기 → 파일 열마다 넣을 컬럼 (같은 이름은 자동). table 이 없으면 새 테이블 */
+/** Import: pick file → preview → target column per file column (same names map automatically). Without table, a new table */
 export function ImportDialog({ target, schema, table, onImport, onClose }: {
   target: string;
   schema: string;
@@ -166,7 +166,7 @@ export function ImportDialog({ target, schema, table, onImport, onClose }: {
 
 export interface TransferJob { id: string; label: string; rows: number; done: number; total: number }
 
-/** 하단 진행 막대: 도는 내보내기·가져오기마다 (취소 가능) */
+/** Bottom progress bar: one per running export/import (cancellable) */
 export function TransferBar({ jobs }: { jobs: TransferJob[] }) {
   return (
     <>
@@ -189,7 +189,7 @@ export function TransferBar({ jobs }: { jobs: TransferJob[] }) {
   );
 }
 
-/** 백업 (pg_dump / mysqldump): 형식·범위를 고른다 */
+/** Backup (pg_dump / mysqldump): choose format and scope */
 export function BackupDialog({ what, pg, onRun, onClose }: { what: string; pg: boolean; onRun: (o: { format: "custom" | "plain"; schemaOnly: boolean; dataOnly: boolean }) => void; onClose: () => void }) {
   const [format, setFormat] = useState<"custom" | "plain">(pg ? "custom" : "plain");
   const [part, setPart] = useState<"all" | "schema" | "data">("all");

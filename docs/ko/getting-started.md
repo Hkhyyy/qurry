@@ -62,7 +62,7 @@ GUI · TUI · MCP 서버는 같은 Data Source 와 비밀번호를 읽습니다.
 
 - 설정 폴더: `~/Library/Application Support/com.hyunkyo.dbtool` (macOS), `~/.config/com.hyunkyo.dbtool` (Linux). dbtool 시절 Data Source 와 비밀번호를 그대로 쓰려고 폴더 이름은 예전 그대로입니다.
 - 바꾼 단축키는 그 폴더의 `keymap.json` 에 저장됩니다 (`"gui"` · `"tui"` 구역, 바꾼 것만).
-- 비밀번호는 그 폴더의 `secrets.json` 에 AES-GCM 으로 암호화해 저장합니다 (키는 `secret.key`). 폴더는 0700, 파일은 0600 입니다. OS 키체인은 쓰지 않으므로 파일을 읽을 수 있는 사람 (또는 이 폴더의 복사본을 가진 사람) 은 비밀번호를 풀 수 있습니다.
+- 비밀번호는 그 폴더의 `secrets.json` 에 AES-GCM 으로 암호화해 저장합니다. 폴더는 0700, 파일은 0600 입니다. 기본은 키도 같은 폴더 (`secret.key`) 에 있어서, 파일을 읽을 수 있는 사람 (또는 백업처럼 이 폴더의 복사본을 가진 사람) 은 비밀번호를 풀 수 있습니다. 키를 시스템 키체인 (macOS Keychain, 리눅스 Secret Service, Windows 자격 증명 관리자) 에 두려면: GUI **Settings › Passwords** · TUI `⌃k` › **Password Key…**. 키체인에는 키 하나만 들어갑니다. 앱마다 (GUI, TUI, MCP 서버) 한 번씩 접근을 묻고, macOS 에서는 Qurry 가 코드 서명되기 전까지 업데이트할 때마다 다시 묻습니다. SSH 로 쓰거나 키체인이 없는 헤드리스 리눅스에서는 폴더에 두세요. 키를 옮기기 전에 그 컴퓨터의 Qurry 앱을 모두 업데이트하세요: Qurry 0.1.0, 0.1.1 은 쓸 수 없는 `secret.key` 를 새 키로 바꿔서, 그 뒤 그 버전이 저장한 비밀번호는 다른 앱이 읽지 못합니다.
 
 ---
 

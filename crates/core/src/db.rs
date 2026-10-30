@@ -1,4 +1,4 @@
-//! DB 접속과 쿼리 실행. 지금은 PostgreSQL만 지원한다.
+//! DB connections and query execution. Only PostgreSQL is supported for now.
 use crate::error::AppResult;
 use crate::store::{ConnectionConfig, DbKind};
 use futures::TryStreamExt;
@@ -12,9 +12,9 @@ use std::time::{Duration, Instant};
 pub enum Pool {
     Pg(PgPool),
     My(sqlx::MySqlPool),
-    /// (연결, 이 풀이 가리키는 DB 번호)
+    /// (connection, DB index this pool points to)
     Redis(crate::redisdb::RedisConn, i64),
-    /// 드라이버 플러그인 (따로 띄운 프로세스)
+    /// Driver plugin (separate process)
     Plugin(std::sync::Arc<crate::plugin::PluginConn>),
 }
 
@@ -34,7 +34,7 @@ pub struct QueryResult {
     pub truncated: bool,
     pub elapsed_ms: u64,
     pub has_result_set: bool,
-    /// Tx: Manual 모드에서 커밋되지 않은 트랜잭션이 열려 있는지
+    /// Tx: whether an uncommitted transaction is open in Manual mode
     #[serde(default)]
     pub in_transaction: bool,
 }
@@ -43,16 +43,53 @@ pub(crate) fn query_result(columns: Vec<ColumnInfo>, rows: Vec<Vec<Value>>, rows
     QueryResult { columns, rows, rows_affected, truncated, elapsed_ms: start.elapsed().as_millis() as u64, has_result_set, in_transaction: false }
 }
 
-/// DB 하나당 최대 연결 수 (탭 수 + 트리·자동완성 같은 메타 조회)
+/// Max connections per DB (number of tabs + metadata queries such as the tree and autocomplete)
 pub const POOL_MAX: u32 = 32;
-/// 쉬는 연결은 1분 뒤 닫는다 (트리·검색 색인을 읽을 때 한꺼번에 연 연결이 운영 서버에 오래 남지 않게). 탭이 쥔 연결은 쉬는 것이 아니라 그대로
+
+/// Whether it is a server on this machine or goes through an SSH tunnel (no network in between to intercept)
+pub fn is_local(cfg: &ConnectionConfig) -> bool {
+    cfg.active_ssh().is_some() || is_loopback(&cfg.host)
+}
+
+pub fn is_loopback(host: &str) -> bool {
+    let h = host.trim().trim_start_matches('[').trim_end_matches(']').to_lowercase();
+    // A real loopback address (127.0.0.0/8, ::1, also as ::ffff:127.x.x.x) — not a name that merely starts with 127.
+    // 0.0.0.0 / :: as a destination is this machine too. A host starting with / is a Unix socket directory (PostgreSQL), which never leaves the machine
+    let local = |ip: std::net::IpAddr| ip.is_loopback() || ip.is_unspecified();
+    h == "localhost"
+        || h.starts_with('/')
+        || h.parse::<std::net::IpAddr>().is_ok_and(|ip| local(ip) || matches!(ip, std::net::IpAddr::V6(v6) if v6.to_ipv4_mapped().is_some_and(|v4| local(v4.into()))))
+}
+
+/// The SSL modes Qurry knows; anything else is refused instead of being passed on to a driver or tool
+pub fn check_ssl_mode(mode: &str) -> crate::error::AppResult<()> {
+    match mode {
+        "require" | "verify-ca" | "verify-full" => Ok(()),
+        m => Err(crate::error::AppError::Msg(format!("Unknown SSL mode '{m}' (use require, verify-ca or verify-full)"))),
+    }
+}
+
+/// Whether a connection with no SSL setting may connect without TLS: the actual endpoint is this machine (including tunnels), or the source allows it
+pub fn plaintext_allowed(cfg: &ConnectionConfig, connect_host: &str) -> bool {
+    cfg.options.allow_plaintext || is_local(cfg) || is_loopback(connect_host)
+}
+
+/// Message to show when PostgreSQL connected without TLS (with no SSL setting, it falls back to plain text if the server lacks TLS. Except this machine · tunnels)
+pub async fn pg_plaintext_note(p: &sqlx::PgPool, cfg: &ConnectionConfig) -> Option<String> {
+    if cfg.active_ssl().is_some() || is_local(cfg) {
+        return None;
+    }
+    let ssl: Option<bool> = sqlx::query_scalar("select ssl from pg_stat_ssl where pid = pg_backend_pid()").fetch_optional(p).await.ok().flatten();
+    (ssl == Some(false)).then(|| "⚠ Not encrypted: the server didn't offer TLS, so the password and data travel in plain text. Enable SSL in the data source to require it.".to_string())
+}
+/// Close idle connections after 1 minute (so connections opened in bulk while reading the tree or search index do not linger on production servers). Connections held by tabs are not idle and stay
 pub const POOL_IDLE: Duration = Duration::from_secs(60);
 
 pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>) -> AppResult<Pool> {
     connect_via(cfg, password, None).await
 }
 
-/// `tunnel_port`가 있으면 SSH 터널의 로컬 포트로 접속한다.
+/// If `tunnel_port` is set, connect to the SSH tunnel's local port.
 pub async fn connect_via(cfg: &ConnectionConfig, password: Option<&str>, tunnel_port: Option<u16>) -> AppResult<Pool> {
     match cfg.kind {
         DbKind::Sqlite | DbKind::Mssql | DbKind::Clickhouse | DbKind::Duckdb | DbKind::Mongodb | DbKind::Oracle | DbKind::Qdrant | DbKind::Chroma | DbKind::Milvus => Ok(Pool::Plugin(crate::plugin::connect(cfg, password, tunnel_port).await?)),
@@ -66,23 +103,29 @@ pub async fn connect_via(cfg: &ConnectionConfig, password: Option<&str>, tunnel_
                 .port(port)
                 .username(&cfg.user)
                 .application_name("qurry");
-            // DataGrip처럼 비워 두면 postgres DB로 접속한다 (PG 기본값인 사용자명 DB는 없을 때가 많음)
+            // Like DataGrip, an empty value connects to the postgres DB (the PG default, a DB named after the user, often does not exist)
             let database = if cfg.database.trim().is_empty() { "postgres" } else { cfg.database.trim() };
             opts = opts.database(database);
             if let Some(p) = password.filter(|p| !p.is_empty()) {
                 opts = opts.password(p);
             }
             if cfg.read_only {
-                opts = opts.options([("default_transaction_read_only", "on")]);
+                // Do not leave the parsing of \ in strings to server settings (match the rules guard reads with)
+                opts = opts.options([("default_transaction_read_only", "on"), ("standard_conforming_strings", "on")]);
             }
-            // SSH/SSL 탭의 SSL
+            // Without SSL settings a remote server must still set up TLS (certificate not checked); plain text only for this computer,
+            // an SSH tunnel, or when the data source allows it (Prefer would quietly fall back to plain text if TLS were cut)
+            if cfg.active_ssl().is_none() && !plaintext_allowed(cfg, host) {
+                opts = opts.ssl_mode(sqlx::postgres::PgSslMode::Require);
+            }
+            // SSL from the SSH/SSL tab
             if let Some(ssl) = cfg.active_ssl() {
                 use sqlx::postgres::PgSslMode;
                 opts = opts.ssl_mode(match ssl.mode() {
                     "verify-full" => PgSslMode::VerifyFull,
                     "verify-ca" => PgSslMode::VerifyCa,
                     "require" => PgSslMode::Require,
-                    // 모르는 값을 검증 없는 require 로 넘기지 않는다
+                    // Do not pass unknown values on as unverified require
                     m => return Err(crate::error::AppError::Msg(format!("Unknown SSL mode '{m}' (use require, verify-ca or verify-full)"))),
                 });
                 let home = |p: &str| p.strip_prefix("~/").map(|r| format!("{}/{r}", std::env::var("HOME").unwrap_or_default())).unwrap_or_else(|| p.to_string());
@@ -100,11 +143,11 @@ pub async fn connect_via(cfg: &ConnectionConfig, password: Option<&str>, tunnel_
             if let Some(iso) = cfg.options.isolation.as_deref().filter(|i| LEVELS.contains(i)) {
                 opts = opts.options([("default_transaction_isolation", iso)]);
             }
-            // sqlx 가 시작 파라미터로 TimeZone=UTC 를 보내므로 접속 직후 SET 으로 바꾼다
+            // sqlx sends TimeZone=UTC as a startup parameter, so change it with SET right after connecting
             let tz = cfg.options.time_zone.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(|t| t.replace('\'', "''"));
             let script = cfg.options.startup_script.trim().to_string();
             let pool = PgPoolOptions::new()
-                // 콘솔·테이블 탭마다 연결을 하나씩 전용으로 쓴다. 연결은 필요할 때만 열리므로 상한만 넉넉히
+                // Each console/table tab uses one dedicated connection. Connections open only when needed, so just keep the cap generous
                 .max_connections(crate::db::POOL_MAX)
                 .idle_timeout(crate::db::POOL_IDLE)
                 .acquire_timeout(Duration::from_secs(10))
@@ -123,7 +166,12 @@ pub async fn connect_via(cfg: &ConnectionConfig, password: Option<&str>, tunnel_
                     })
                 })
                 .connect_with(opts)
-                .await?;
+                .await
+                .map_err(|e| match &e {
+                    // Required TLS that the server can't set up: say what to do instead of a bare TLS error
+                    sqlx::Error::Tls(_) if cfg.active_ssl().is_none() => crate::error::AppError::Msg(format!("{}\n({e})", crate::mysql::NEEDS_TLS.replace(" without TLS 1.2", ""))),
+                    _ => e.into(),
+                })?;
             Ok(Pool::Pg(pool))
         }
         DbKind::Mysql => {
@@ -144,9 +192,9 @@ pub async fn connect_via(cfg: &ConnectionConfig, password: Option<&str>, tunnel_
     }
 }
 
-/// 시험한 버전보다 오래된 서버면 알림 (대부분은 되지만 확인하지 않았다)
+/// Warn when the server is older than the tested version (mostly works, but not verified)
 pub fn version_note(kind: DbKind, version: &str) -> Option<String> {
-    // 버전 글에서 첫 숫자들 (2017 같은 해도)
+    // The first digits in the version text (years like 2017 too)
     let nums: Vec<u32> = version.split(|c: char| !c.is_ascii_digit()).filter(|s| !s.is_empty()).filter_map(|s| s.parse().ok()).collect();
     let first = *nums.first()?;
     let lower = version.to_lowercase();
@@ -154,7 +202,7 @@ pub fn version_note(kind: DbKind, version: &str) -> Option<String> {
         DbKind::Postgres => (12, "PostgreSQL 12"),
         DbKind::Mysql if lower.contains("mariadb") => (10, "MariaDB 10.5"),
         DbKind::Mysql => (5, "MySQL 5.7"),
-        // "Microsoft SQL Server 2017 (RTM-CU…" → 해
+        // "Microsoft SQL Server 2017 (RTM-CU…" → year
         DbKind::Mssql => (2017, "SQL Server 2017"),
         DbKind::Mongodb => (5, "MongoDB 5"),
         DbKind::Clickhouse => (22, "ClickHouse 22"),
@@ -205,7 +253,7 @@ impl Pool {
         }
     }
 
-    /// 쿼리를 다시 실행해 전체 결과를 내보낸다 (형식·대상은 out 이 정한다)
+    /// Rerun the query and export the full result (out decides the format and target)
     pub async fn export(&self, sql: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {
         match self {
             Pool::Pg(p) => export_pg(p, sql, out).await,
@@ -222,14 +270,14 @@ impl Pool {
         }
     }
 
-    /// CSV 파일로 (BOM 포함). 행 수
+    /// To a CSV file (with BOM). Row count
     pub async fn export_csv(&self, sql: &str, path: &std::path::Path) -> AppResult<u64> {
         let mut out = crate::transfer::Exporter::csv_file(path).await?;
         self.export(sql, &mut out).await?;
         Ok(out.finish().await?.rows)
     }
 
-    /// 쿼리 하나를 실행해 최대 `limit` 행까지 돌려준다.
+    /// Run one query and return up to `limit` rows.
     pub async fn run_query(&self, sql: &str, limit: usize) -> AppResult<QueryResult> {
         match self {
             Pool::Pg(p) => run_pg(p, sql, limit).await,
@@ -240,7 +288,7 @@ impl Pool {
     }
 
     /// keep-alive
-    /// keep-alive. 응답 없는 서버 하나 때문에 정리 루틴이 멈추지 않게 5초로 끊는다
+    /// keep-alive. Cut off at 5 seconds so one unresponsive server does not stall the cleanup routine
     pub async fn ping(&self) {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), self.ping_inner()).await;
     }
@@ -286,7 +334,7 @@ async fn run_pg(pool: &PgPool, sql: &str, limit: usize) -> AppResult<QueryResult
             }
         }
     }
-    // 결과가 0행이면 컬럼 정보를 알 수 없으므로 describe로 보충한다.
+    // With 0 rows the column info is unknown, so fill it in with describe.
     if !has_result_set {
         if let Ok(desc) = pool.describe(sql).await {
             if !desc.columns().is_empty() {
@@ -313,7 +361,7 @@ async fn run_pg(pool: &PgPool, sql: &str, limit: usize) -> AppResult<QueryResult
     })
 }
 
-/// 이미 잡은 연결(트랜잭션)에서 SELECT 를 실행해 QueryResult 로 (Full-text Search 용)
+/// Run a SELECT on an already acquired connection (transaction) into a QueryResult (for Full-text Search)
 pub async fn run_on(conn: &mut sqlx::PgConnection, sql: &str, limit: usize) -> AppResult<QueryResult> {
     let start = Instant::now();
     let mut columns = Vec::new();
@@ -340,7 +388,7 @@ async fn export_pg(pool: &PgPool, sql: &str, out: &mut crate::transfer::Exporter
     export_pg_on(&mut conn, sql, out).await
 }
 
-/// 이미 잡은 연결(읽기 전용 트랜잭션일 수도)에서 내보낸다
+/// Export on an already acquired connection (possibly a read-only transaction)
 pub async fn export_pg_on(conn: &mut sqlx::PgConnection, sql: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {
     let mut stream = sqlx::query(sql).persistent(false).fetch(&mut *conn);
     while let Some(row) = stream.try_next().await? {
@@ -379,7 +427,7 @@ pub(crate) fn pg_columns(row: &PgRow) -> Vec<ColumnInfo> {
         .collect()
 }
 
-/// JS 숫자로 정확히 표현되지 않는 큰 정수는 문자열로 보낸다.
+/// Large integers not exactly representable as JS numbers are sent as strings.
 pub(crate) fn int_value(v: i64) -> Value {
     if v.unsigned_abs() <= (1u64 << 53) {
         Value::from(v)
@@ -448,8 +496,8 @@ pub(crate) fn pg_value(row: &PgRow, i: usize) -> Value {
     })
 }
 
-/// pgvector 바이너리 → PG 텍스트 출력과 같은 글: vector/halfvec "[1,0.5]", sparsevec "{1:0.5,3:1}/5"
-/// vector: dim(u16) unused(u16) f32[dim] · halfvec: 같은 머리 + f16[dim] · sparsevec: dim(i32) nnz(i32) unused(i32) idx(i32)[nnz] f32[nnz]
+/// pgvector binary → the same text as PG's text output: vector/halfvec "[1,0.5]", sparsevec "{1:0.5,3:1}/5"
+/// vector: dim(u16) unused(u16) f32[dim] · halfvec: same header + f16[dim] · sparsevec: dim(i32) nnz(i32) unused(i32) idx(i32)[nnz] f32[nnz]
 fn decode_pgvector(ty: &str, b: &[u8]) -> Option<String> {
     let u16_at = |i: usize| -> Option<u16> { Some(u16::from_be_bytes([*b.get(i)?, *b.get(i + 1)?])) };
     let u32_at = |i: usize| -> Option<u32> { Some(u32::from_be_bytes(b.get(i..i + 4)?.try_into().ok()?)) };
@@ -476,7 +524,7 @@ fn decode_pgvector(ty: &str, b: &[u8]) -> Option<String> {
     }
 }
 
-/// IEEE 754 반정밀도 → f32
+/// IEEE 754 half precision → f32
 fn f16_to_f32(h: u16) -> f32 {
     let sign = if h & 0x8000 != 0 { -1.0 } else { 1.0 };
     let exp = ((h >> 10) & 0x1f) as i32;
@@ -488,7 +536,7 @@ fn f16_to_f32(h: u16) -> f32 {
     }
 }
 
-/// simple query 프로토콜(텍스트 포맷)로 받은 값
+/// Value received via the simple query protocol (text format)
 fn text_value(ty: &str, s: &str) -> Value {
     match ty {
         "BOOL" => Value::from(s == "t"),
@@ -500,8 +548,8 @@ fn text_value(ty: &str, s: &str) -> Value {
     }
 }
 
-/// PostgreSQL NUMERIC 바이너리 → PG 텍스트 출력과 같은 문자열 (dscale 유지).
-/// 형식: ndigits(i16) weight(i16) sign(u16) dscale(u16) digits[base 10000 i16]
+/// PostgreSQL NUMERIC binary → the same string as PG's text output (dscale preserved).
+/// Format: ndigits(i16) weight(i16) sign(u16) dscale(u16) digits[base 10000 i16]
 fn decode_pg_numeric(b: &[u8]) -> Option<String> {
     let rd = |i: usize| -> Option<i16> { Some(i16::from_be_bytes([*b.get(i)?, *b.get(i + 1)?])) };
     let ndigits = rd(0)? as usize;
@@ -554,7 +602,7 @@ fn decode_pg_numeric(b: &[u8]) -> Option<String> {
     Some(out)
 }
 
-/// 모르는 타입은 UTF-8 바이트면 그대로, 아니면 타입 이름만 표시한다.
+/// Unknown types: shown as is if UTF-8 bytes, otherwise only the type name.
 fn fallback(bytes: Option<&[u8]>, ty: &str) -> Value {
     match bytes.and_then(|b| std::str::from_utf8(b).ok()) {
         Some(s) if !s.chars().any(|c| c.is_control() && c != '\n' && c != '\t') => {
@@ -568,7 +616,26 @@ fn fallback(bytes: Option<&[u8]>, ty: &str) -> Value {
 mod tests {
     use super::*;
 
-    /// 로컬 PostgreSQL 대상 테스트. `cargo test -- --ignored` 로 실행한다.
+    /// Remote servers with no SSL setting do not allow plain text (only this machine · SSH tunnels · explicit allow)
+    #[test]
+    fn plaintext_only_where_nothing_can_intercept() {
+        let mut c: ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "a", "kind": "mysql", "host": "db.example", "port": 3306, "user": "u" })).unwrap();
+        assert!(!plaintext_allowed(&c, "db.example"));
+        assert!(plaintext_allowed(&c, "127.0.0.1"), "through a tunnel the client connects to 127.0.0.1");
+        c.options.allow_plaintext = true;
+        assert!(plaintext_allowed(&c, "db.example"));
+        c.options.allow_plaintext = false;
+        for h in ["localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0", "::ffff:127.0.0.1", "[::ffff:127.0.0.1]", "/var/run/postgresql", "/tmp"] {
+            c.host = h.into();
+            assert!(is_local(&c), "{h}");
+        }
+        for h in ["127.evil.example", "127.0.0.1.example", "db.example", "::ffff:10.0.0.1"] {
+            c.host = h.into();
+            assert!(!is_local(&c), "{h}");
+        }
+    }
+
+    /// Tests against a local PostgreSQL. Run with `cargo test -- --ignored`.
     fn local_cfg() -> ConnectionConfig {
         ConnectionConfig {
             id: "test".into(),
@@ -585,6 +652,22 @@ mod tests {
             ssh_secret_saved: false,
             scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
         }
+    }
+
+    /// A remote PostgreSQL without SSL settings must set up TLS: the local test server has no TLS, reached through an address that isn't loopback by name
+    /// ("127.1" resolves to 127.0.0.1 but isn't an IP literal, so Qurry treats it as remote; ::ffff:127.0.0.1 now counts as this machine)
+    #[tokio::test]
+    #[ignore]
+    async fn pg_remote_requires_tls() {
+        let mut cfg = local_cfg();
+        cfg.host = "127.1".into();
+        assert!(!is_loopback(&cfg.host) && is_loopback("::ffff:127.0.0.1"));
+        let r = connect(&cfg, None).await;
+        let Err(e) = r else { panic!("connected without TLS") };
+        let e = e.to_string();
+        assert!(e.contains("didn't set up an encrypted") || e.contains("TLS") || e.contains("SSL"), "{e}");
+        cfg.options.allow_plaintext = true;
+        assert!(connect(&cfg, None).await.is_ok(), "allowed plain text connects");
     }
 
     #[tokio::test]

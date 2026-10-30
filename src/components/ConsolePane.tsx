@@ -32,10 +32,10 @@ export interface PlanNode {
   actualTime?: number;
   actualRows?: number;
   loops?: number;
-  /** 자식 몫을 뺀 이 노드만의 시간(ms) / 비용 */
+  /** Time (ms) / cost of this node alone, excluding children */
   selfTime?: number;
   selfCost?: number;
-  /** 전체에서 이 노드 몫 (%): ANALYZE 면 시간, 아니면 비용 */
+  /** This node's share of the total (%): time with ANALYZE, otherwise cost */
   pct: number;
   warnings: string[];
   props: [string, string][];
@@ -49,7 +49,7 @@ export interface ResultEntry {
   kind: "result" | "plan";
   result: QueryResult | null;
   plan?: PlanNode;
-  /** DB 가 준 계획 원본 (JSON) — Copy JSON */
+  /** Raw plan from the DB (JSON) — Copy JSON */
   planJson?: string;
   pinned: boolean;
 }
@@ -78,7 +78,7 @@ interface Props {
   txManual: boolean;
   inTx: boolean;
   onChange: (sql: string) => void;
-  /** 실제 실행: 문장 목록 */
+  /** Actual execution: list of statements */
   onExecute: (statements: string[], explain?: "plan" | "analyze") => void;
   onCancel: () => void;
   onSetActiveResult: (id: string) => void;
@@ -111,11 +111,11 @@ export function ConsolePane(p: Props) {
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
     } catch {
-      /* 저장 실패는 무시 */
+      /* Ignore save failures */
     }
   };
 
-  /** ⌘↩ 실행 규칙 (DataGrip Query Execution 설정) */
+  /** ⌘↩ execution rules (DataGrip Query Execution settings) */
   const splitFn = p.dialect?.split ?? ((t: string) => splitScript(t, p.dialect?.monaco === "mysql"));
   const onRun = (req: RunRequest) => {
     const { text, offset, selection } = req;
@@ -134,7 +134,7 @@ export function ConsolePane(p: Props) {
       req.highlight(plan.run.map((x) => ({ start: x.start, end: x.end })));
       return p.onExecute(plan.run.map((x) => x.sql), req.explain);
     }
-    // Ask what to execute: Statements 팝업
+    // Ask what to execute: Statements popup
     setChooser({ options: plan.ask.map((o) => ({ label: o.label, stmts: o.stmts.map((x) => x.sql), ranges: o.stmts })), idx: 0, req });
   };
 
@@ -155,12 +155,12 @@ export function ConsolePane(p: Props) {
   const radio = <T extends string>(cur: T, val: T, label: string, set: (v: T) => void): MenuItem => ({ label: (cur === val ? "● " : "　") + label, action: () => set(val) });
 
   const active = p.results.find((r) => r.id === p.activeResult);
-  // 고른 결과 탭이 없으면 (다시 실행해 지워짐) Output 을 보인다 — 빈 칸 대신
+  // If the selected result tab is gone (cleared by a rerun), show Output — instead of an empty pane
   const shown = active ? p.activeResult : "output";
 
   return (
     <div className="console-pane">
-      {/* ── 콘솔 툴바 (DataGrip) ── */}
+      {/* ── Console toolbar (DataGrip) ── */}
       <Toolbar className="console-toolbar" onMouseDown={(e) => e.stopPropagation()}>
         <IconButton tone="ok" title={`Execute (${isMac ? "⌘↩" : "Ctrl+Enter"})`} onClick={() => api?.run()} disabled={p.running}>▶</IconButton>
         <ToolButton
@@ -269,7 +269,7 @@ export function ConsolePane(p: Props) {
         <PanelResizeHandle className="resize-v" />
         <Panel defaultSize={42} minSize={10}>
           <div className="panel results-panel">
-            {/* 결과 탭: Output + 결과 셋들 (Services 결과 영역) */}
+            {/* Result tabs: Output + result sets (Services results area) */}
             <div className="result-tabs">
               <TabStrip
                 activeKey={shown}
@@ -343,7 +343,7 @@ export function ConsolePane(p: Props) {
   );
 }
 
-/** Query Plan: Operations Tree (DataGrip Explain Plan) + 노드마다 몫(%) 막대, 경고(⚠), 고른 노드의 상세 */
+/** Query Plan: Operations Tree (DataGrip Explain Plan) + per-node share (%) bar, warnings (⚠), details of the selected node */
 function PlanView({ plan, json }: { plan: PlanNode; json?: string }) {
   const [sel, setSel] = useState<PlanNode | null>(plan);
   const [copied, setCopied] = useState("");

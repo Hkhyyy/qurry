@@ -1,6 +1,6 @@
-//! MySQL / MariaDB 드라이버. PostgreSQL 쪽과 같은 모양(QueryResult, 메타데이터, 세션)을 돌려준다.
-//! - 인자 없는 쿼리는 텍스트 프로토콜(COM_QUERY)로 가므로 값은 텍스트 바이트로 받는다
-//! - MySQL 에는 스키마 계층이 없다: database == schema
+//! MySQL / MariaDB driver. Returns the same shapes as the PostgreSQL side (QueryResult, metadata, sessions).
+//! - Queries without parameters go over the text protocol (COM_QUERY), so values arrive as text bytes
+//! - MySQL has no schema level: database == schema
 use crate::db::{int_value, query_result, ColumnInfo, QueryResult};
 use crate::error::{AppError, AppResult};
 use crate::meta::{
@@ -14,6 +14,7 @@ use serde_json::Value;
 use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlRow};
 use sqlx::pool::PoolConnection;
 use sqlx::{Column, Either, Executor, MySql, Row, TypeInfo, ValueRef};
+use std::io::ErrorKind;
 use std::time::{Duration, Instant};
 
 pub const SYSTEM_DBS: [&str; 4] = ["information_schema", "performance_schema", "mysql", "sys"];
@@ -21,7 +22,7 @@ pub const SYSTEM_DBS: [&str; 4] = ["information_schema", "performance_schema", "
 pub fn ident(s: &str) -> String {
     format!("`{}`", s.replace('`', "``"))
 }
-/// MySQL 문자열 리터럴: 백슬래시도 이스케이프 문자다
+/// MySQL string literal: backslash is also an escape character
 pub fn lit(s: &str) -> String {
     format!("'{}'", s.replace('\\', "\\\\").replace('\'', "''"))
 }
@@ -53,7 +54,7 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
             opts = opts.ssl_client_key(home(ssl.key_file.trim()));
         }
     }
-    // 접속 직후 실행할 세션 설정 (Options 탭)
+    // Session settings to run right after connecting (Options tab)
     let mut init: Vec<String> = Vec::new();
     const LEVELS: [&str; 4] = ["read uncommitted", "read committed", "repeatable read", "serializable"];
     if let Some(iso) = cfg.options.isolation.as_deref().filter(|i| LEVELS.contains(i)) {
@@ -69,7 +70,7 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
     let pool_opts = || {
         let (init, script) = (init.clone(), script.clone());
         MySqlPoolOptions::new()
-        // 콘솔·테이블 탭마다 연결을 하나씩 전용으로 쓴다. 연결은 필요할 때만 열리므로 상한만 넉넉히
+        // Each console·table tab gets its own dedicated connection. Connections open only when needed, so just keep the cap generous
         .max_connections(crate::db::POOL_MAX)
         .idle_timeout(crate::db::POOL_IDLE)
         .acquire_timeout(Duration::from_secs(10))
@@ -87,22 +88,82 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
             })
         })
     };
+    // Require TLS even when SSL isn't set (certificate not verified). Plaintext only for this machine · SSH tunnels, or when "Allow unencrypted" is on
+    // (Old servers (MySQL 5.7 etc.) can't negotiate TLS 1.2. Someone stripping TLS in the middle looks the same, so we don't fall back to plaintext automatically)
     let explicit_ssl = cfg.active_ssl().is_some();
+    let plain_ok = crate::db::plaintext_allowed(cfg, host);
+    if !explicit_ssl && !plain_ok {
+        opts = opts.ssl_mode(sqlx::mysql::MySqlSslMode::Required);
+    }
     let pool = match pool_opts().connect_with(opts.clone()).await {
-        // SSL 을 정하지 않으면 TLS 를 먼저 해 본다 (Preferred). 예전 서버(MySQL 5.7 등)는 TLS 1.2 를 못 맞춰 핸드셰이크에서 끊긴다 → 평문으로 다시
-        Err(e) if !explicit_ssl && is_tls_failure(&e) => pool_opts().connect_with(opts.ssl_mode(sqlx::mysql::MySqlSslMode::Disabled)).await?,
-        r => r?,
+        Err(e) => match on_connect_error(&e, explicit_ssl, plain_ok) {
+            OnConnectError::RetryPlain => pool_opts().connect_with(opts.ssl_mode(sqlx::mysql::MySqlSslMode::Disabled)).await?,
+            OnConnectError::NeedsTls => return Err(AppError::Msg(format!("{NEEDS_TLS}\n({e})"))),
+            OnConnectError::Dropped => return Err(AppError::Msg(format!("{DROPPED_TLS}\n({e})"))),
+            OnConnectError::Fail => return Err(e.into()),
+        },
+        Ok(p) => p,
     };
     Ok(pool)
 }
 
-/// TLS 를 맞추지 못한 접속 실패 (인증 실패 등은 아니다)
+#[derive(Debug, PartialEq)]
+enum OnConnectError {
+    /// Plain text is allowed: connect again without TLS
+    RetryPlain,
+    /// Tell the user about "Allow unencrypted connection"
+    NeedsTls,
+    /// The server dropped the connection: maybe an old server refusing TLS, maybe a proxy without a backend — a softer hint
+    Dropped,
+    Fail,
+}
+
+/// What to do when the first connect fails. A TLS failure, or the server just dropping the connection (some old servers do during the
+/// handshake), counts only when SSL isn't set explicitly. sqlx doesn't say at which step a connection was dropped (a proxy without a
+/// backend, or a drop after auth, look the same), so a drop gets a hint that doesn't claim TLS was the cause
+fn on_connect_error(e: &sqlx::Error, explicit_ssl: bool, plain_ok: bool) -> OnConnectError {
+    let dropped = matches!(e, sqlx::Error::Io(io) if matches!(io.kind(), ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted));
+    if explicit_ssl || !(is_tls_failure(e) || dropped) {
+        OnConnectError::Fail
+    } else if plain_ok {
+        OnConnectError::RetryPlain
+    } else if dropped {
+        OnConnectError::Dropped
+    } else {
+        OnConnectError::NeedsTls
+    }
+}
+
+/// When the server dropped the connection while TLS was required (the cause isn't known for sure)
+pub const DROPPED_TLS: &str = "The server closed the connection while setting up encryption — it may be an old MySQL without TLS 1.2 (then, on a network you trust, turn on \"Allow unencrypted connection\" for this data source: GUI: Options tab · TUI: data source form, \"Allow unencrypted\"), or check the host, port and any proxy in between.";
+
+/// When not falling back to plaintext on a server without TLS
+pub const NEEDS_TLS: &str = "This server didn't set up an encrypted (TLS) connection, so Qurry didn't send the password. If it's an old server without TLS 1.2 and the network is trusted, turn on \"Allow unencrypted connection\" for this data source (GUI: Options tab · TUI: data source form, \"Allow unencrypted\").";
+
+/// Message when a source without SSL set connected in plaintext (reconnected in plaintext because TLS failed — also what happens when someone deliberately strips TLS)
+pub async fn plaintext_note(p: &MySqlPool, cfg: &ConnectionConfig) -> Option<String> {
+    if cfg.active_ssl().is_some() || crate::db::is_local(cfg) {
+        return None;
+    }
+    let row: Option<(String, String)> = sqlx::query_as("SHOW SESSION STATUS LIKE 'Ssl_cipher'").fetch_optional(p).await.ok()?;
+    row.filter(|(_, c)| c.is_empty()).map(|_| "⚠ Not encrypted: TLS didn't work with this server, so Qurry connected without it (the password and data travel in plain text). Enable SSL in the data source to require it.".to_string())
+}
+
+/// Connection failure from failing to negotiate TLS (not auth failures etc.)
 fn is_tls_failure(e: &sqlx::Error) -> bool {
     match e {
         sqlx::Error::Tls(_) => true,
-        sqlx::Error::Io(io) => io.to_string().to_lowercase().contains("handshake") || io.to_string().contains("AlertReceived"),
+        sqlx::Error::Io(io) => is_rustls_error(io),
         _ => false,
     }
+}
+
+/// sqlx hands rustls handshake errors over as InvalidData I/O errors; matched by rustls' Display texts (rustls::Error), e.g.
+/// MySQL 5.7 limited to TLS 1.0/1.1: "received fatal alert: HandshakeFailure", MySQL 5.5: "received corrupt message of type UnknownProtocolVersion"
+fn is_rustls_error(io: &std::io::Error) -> bool {
+    const TEXTS: [&str; 6] = ["received fatal alert", "received corrupt message", "received unexpected message", "peer is incompatible", "peer misbehaved", "handshake"];
+    let m = io.to_string().to_lowercase();
+    io.kind() == ErrorKind::InvalidData && TEXTS.iter().any(|t| m.contains(t))
 }
 
 pub async fn server_version(p: &MySqlPool) -> AppResult<String> {
@@ -114,7 +175,7 @@ pub(crate) fn columns_of(row: &MySqlRow) -> Vec<ColumnInfo> {
     row.columns().iter().map(|c| ColumnInfo { name: c.name().to_string(), type_name: c.type_info().name().to_string() }).collect()
 }
 
-/// 텍스트 프로토콜 값 → JSON
+/// Text protocol value → JSON
 pub(crate) fn value(row: &MySqlRow, i: usize) -> Value {
     let raw = match row.try_get_raw(i) {
         Ok(r) => r,
@@ -144,7 +205,7 @@ pub(crate) fn value(row: &MySqlRow, i: usize) -> Value {
         },
         "FLOAT" | "DOUBLE" => s.parse::<f64>().ok().filter(|f| f.is_finite()).map(Value::from).unwrap_or_else(|| Value::from(s.as_ref())),
         "BIT" => {
-            // BIT(n) 는 텍스트 프로토콜에서도 바이너리로 온다
+            // BIT(n) arrives as binary even over the text protocol
             let n = bytes.iter().fold(0u64, |a, b| (a << 8) | *b as u64);
             Value::from(n)
         }
@@ -152,7 +213,7 @@ pub(crate) fn value(row: &MySqlRow, i: usize) -> Value {
     }
 }
 
-/// 풀에서 쿼리 하나 실행
+/// Run one query on the pool
 pub async fn run(p: &MySqlPool, sql: &str, limit: usize) -> AppResult<QueryResult> {
     let mut conn = p.acquire().await?;
     run_on(&mut conn, sql, limit).await
@@ -162,8 +223,8 @@ pub async fn run_on(conn: &mut sqlx::MySqlConnection, sql: &str, limit: usize) -
     run_on_with(conn, sql, limit, false).await
 }
 
-/// 읽기 전용 경로: prepared 프로토콜로 실행 (서버가 한 문장만 받는다 → `;` 로 문장을 덧붙이는 우회가 통하지 않는다).
-/// prepared 로 안 되는 문장(일부 SHOW 등, 오류 1295)만 텍스트 프로토콜로 — 이때도 guard 검사는 이미 지났다
+/// Read-only path: run via the prepared protocol (the server accepts only one statement → appending statements with `;` doesn't work as a bypass).
+/// Only statements that can't be prepared (some SHOW etc., error 1295) go over the text protocol — the guard check has already passed by then
 pub async fn run_read_only_on(conn: &mut sqlx::MySqlConnection, sql: &str, limit: usize) -> AppResult<QueryResult> {
     match run_on_with(conn, sql, limit, true).await {
         Err(AppError::Db(sqlx::Error::Database(e))) if e.code().as_deref() == Some("HY000") && e.message().contains("prepared statement protocol") => run_on_with(conn, sql, limit, false).await,
@@ -190,14 +251,14 @@ async fn run_on_with(conn: &mut sqlx::MySqlConnection, sql: &str, limit: usize, 
                     }
                     if rows.len() >= limit {
                         truncated = true;
-                        continue; // 다음 결과/OK 패킷까지 소비해야 연결을 재사용할 수 있다
+                        continue; // Must consume up to the next result/OK packet to reuse the connection
                     }
                     rows.push((0..row.len()).map(|i| value(&row, i)).collect());
                 }
             }
         }
     }
-    // 0행 SELECT 의 컬럼 정보
+    // Column info for a 0-row SELECT
     if !has_rs && is_select_like(sql) {
         if let Ok(d) = conn.describe(sql).await {
             if !d.columns().is_empty() {
@@ -214,7 +275,7 @@ pub async fn export(p: &MySqlPool, sql: &str, out: &mut crate::transfer::Exporte
     export_on(&mut conn, sql, out, false).await
 }
 
-/// 이미 잡은 연결에서 내보낸다. prepared = 한 문장만 실행되는 prepared 프로토콜 (읽기 전용 경로)
+/// Export on an already acquired connection. prepared = the prepared protocol that runs only one statement (read-only path)
 pub async fn export_on(conn: &mut sqlx::MySqlConnection, sql: &str, out: &mut crate::transfer::Exporter, prepared: bool) -> AppResult<()> {
     let mut stream = if prepared { conn.fetch(sqlx::query(sql)) } else { conn.fetch(sqlx::raw_sql(sql)) };
     while let Some(row) = stream.try_next().await? {
@@ -229,10 +290,16 @@ pub async fn export_on(conn: &mut sqlx::MySqlConnection, sql: &str, out: &mut cr
 }
 
 pub async fn execute_batch(p: &MySqlPool, statements: &[String], exact_one: bool) -> AppResult<u64> {
+    execute_batch_with(p, statements, exact_one, false).await
+}
+
+/// prepared = each statement over the prepared-statement protocol, which takes exactly one statement (MCP)
+pub async fn execute_batch_with(p: &MySqlPool, statements: &[String], exact_one: bool, prepared: bool) -> AppResult<u64> {
     let mut tx = p.begin().await?;
     let mut affected = 0;
     for st in statements {
-        let n = tx.execute(sqlx::raw_sql(st)).await.map_err(|e| AppError::Msg(format!("{e}\n→ {st}")))?.rows_affected();
+        let r = if prepared { sqlx::query(st).execute(&mut *tx).await } else { tx.execute(sqlx::raw_sql(st)).await };
+        let n = r.map_err(|e| AppError::Msg(format!("{e}\n→ {st}")))?.rows_affected();
         crate::session::check_exact_one(st, n, exact_one)?;
         affected += n;
     }
@@ -245,15 +312,15 @@ pub async fn cancel(p: &MySqlPool, id: i64) -> AppResult<bool> {
     Ok(true)
 }
 
-// ───────── 콘솔 세션 ─────────
+// ───────── Console session ─────────
 
-/// 콘솔 탭 전용 연결. MySQL 에는 프로토콜 수준 커서가 없으므로 "더 불러오기"는 LIMIT/OFFSET 으로 다시 조회한다.
+/// Dedicated connection for a console tab. MySQL has no protocol-level cursor, so "load more" re-queries with LIMIT/OFFSET.
 pub struct MySession {
     conn: PoolConnection<MySql>,
     pub id: i64,
     manual: bool,
     pub in_tx: bool,
-    /// (SELECT 문, 다음 OFFSET)
+    /// (SELECT statement, next OFFSET)
     more: Option<(String, usize)>,
 }
 
@@ -272,7 +339,7 @@ impl MySession {
         self.more = None;
     }
 
-    /// 탭을 닫을 때: 열린 트랜잭션을 되돌리고 autocommit 을 원래대로 (풀의 다른 사용자가 물려받지 않게)
+    /// On tab close: roll back the open transaction and restore autocommit (so other pool users don't inherit it)
     pub async fn discard(&mut self) {
         self.more = None;
         if self.manual || self.in_tx {
@@ -285,7 +352,7 @@ impl MySession {
         }
     }
 
-    /// 커밋 안 한 변경이 있으면 Auto 로 바꾸지 않는다 (먼저 Commit 또는 Roll back)
+    /// Don't switch to Auto with uncommitted changes (Commit or Roll back first)
     pub async fn set_manual(&mut self, manual: bool) -> AppResult<()> {
         if !manual && self.in_tx {
             return Err(AppError::Msg(crate::session::PENDING_TX.into()));
@@ -317,7 +384,7 @@ impl MySession {
         } else if s.starts_with("commit") || (s.starts_with("rollback") && !s.starts_with("rollback to")) {
             self.in_tx = false;
         } else if self.manual && !is_select_like(sql) && !s.starts_with("show") && !s.starts_with("set") && !s.starts_with("use") {
-            // autocommit=0 에서는 첫 변경 문장이 트랜잭션을 연다
+            // With autocommit=0, the first modifying statement opens a transaction
             self.in_tx = true;
         }
         if r.truncated && is_select_like(sql) {
@@ -340,8 +407,8 @@ impl MySession {
     }
 }
 
-// ───────── 메타데이터 (information_schema) ─────────
-// MySQL 8 의 information_schema 컬럼은 바이너리 문자열로 오는 경우가 있어 전부 CAST(... AS CHAR) 한다
+// ───────── Metadata (information_schema) ─────────
+// MySQL 8 information_schema columns sometimes come back as binary strings, so everything is CAST(... AS CHAR)
 
 pub async fn list_databases(p: &MySqlPool) -> AppResult<Vec<String>> {
     Ok(sqlx::query_scalar("select cast(schema_name as char) from information_schema.schemata order by 1").fetch_all(p).await?)
@@ -583,6 +650,33 @@ mod tests {
         }
     }
 
+    /// Notify when a source without SSL set connected in plaintext (silent when connected over TLS)
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_plaintext_is_reported() {
+        // Treat it as a remote server (this machine · tunnels aren't notified)
+        let remote = ConnectionConfig { host: "db.example".into(), ..cfg() };
+        // Default connection: silent if TLS works; notify if it fell back to plaintext (MySQL 5.7 without TLS 1.2)
+        let Pool::My(auto) = crate::db::connect(&cfg(), Some("dbtool")).await.expect("connect") else { unreachable!() };
+        let (_, cipher): (String, String) = sqlx::query_as("SHOW SESSION STATUS LIKE 'Ssl_cipher'").fetch_one(&auto).await.unwrap();
+        assert_eq!(plaintext_note(&auto, &remote).await.is_some(), cipher.is_empty());
+        let opts = sqlx::mysql::MySqlConnectOptions::new().host("127.0.0.1").port(13306).username("root").password("dbtool").ssl_mode(sqlx::mysql::MySqlSslMode::Disabled);
+        let plain = sqlx::mysql::MySqlPoolOptions::new().max_connections(1).connect_with(opts).await.unwrap();
+        assert!(plaintext_note(&plain, &remote).await.is_some_and(|n| n.contains("Not encrypted")));
+        assert_eq!(plaintext_note(&plain, &cfg()).await, None, "this computer: nothing to intercept");
+    }
+
+    /// MCP execute path: the prepared-statement protocol takes exactly one statement
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_prepared_batch_refuses_multiple_statements() {
+        let Pool::My(p) = crate::db::connect(&cfg(), Some("dbtool")).await.expect("connect") else { unreachable!() };
+        sqlx::raw_sql("drop table if exists qurry_prep; create table qurry_prep (a int)").execute(&p).await.unwrap();
+        assert!(execute_batch_with(&p, &["insert into qurry_prep values (1); drop table qurry_prep".into()], false, true).await.is_err());
+        assert_eq!(execute_batch_with(&p, &["insert into qurry_prep values (1)".into()], false, true).await.unwrap(), 1);
+        sqlx::raw_sql("drop table qurry_prep").execute(&p).await.unwrap();
+    }
+
     #[tokio::test]
     #[ignore]
     async fn mysql_end_to_end() {
@@ -601,7 +695,7 @@ mod tests {
         ] {
             sqlx::raw_sql(s).execute(p).await.unwrap_or_else(|e| panic!("{s}: {e}"));
         }
-        // 값 변환
+        // Value conversion
         let r = pool.run_query("select id, customer, amount, paid, created, memo, img, 9007199254740993 as big, 1.5e0 as f from orders order by id", 500).await.unwrap();
         println!("{:?}\n{:?}", r.columns, r.rows[0]);
         assert_eq!(r.rows.len(), 3);
@@ -612,13 +706,13 @@ mod tests {
         assert_eq!(r.rows[0][7], "9007199254740993");
         assert_eq!(r.rows[2][5], "한글 메모");
         assert!(r.rows[1][2].is_null());
-        // 0행 SELECT 도 컬럼이 나온다
+        // A 0-row SELECT returns columns too
         let z = pool.run_query("select id, customer from orders where 1 = 0", 10).await.unwrap();
         assert!(z.has_result_set && z.columns.len() == 2 && z.rows.is_empty());
         // DML
         let u = pool.run_query("update orders set memo = 'x' where customer = 'bob'", 10).await.unwrap();
         assert_eq!(u.rows_affected, 1);
-        // 메타데이터
+        // Metadata
         let dbs = crate::meta::list_databases(&pool).await.unwrap();
         assert!(dbs.contains(&"shop".to_string()));
         let sch = crate::meta::list_schemas(&pool).await.unwrap();
@@ -657,7 +751,7 @@ mod tests {
         let w = &h[1].where_clause;
         let n = pool.run_query(&format!("select count(*) from orders where {w}"), 1).await.unwrap();
         assert_eq!(n.rows[0][0], 1);
-        // 세션: 더 불러오기, Manual Tx, 취소 id
+        // Session: load more, Manual Tx, cancel id
         let mut s = crate::session::Session::open(&pool).await.unwrap();
         assert!(s.backend_id() > 0);
         let first = s.run("select * from orders order by id", 2).await.unwrap();
@@ -668,7 +762,7 @@ mod tests {
         s.set_manual(true).await.unwrap();
         let ins = s.run("insert into orders(customer) values ('dave')", 10).await.unwrap();
         assert!(ins.in_transaction);
-        // 다른 연결에서는 아직 안 보인다
+        // Not visible from another connection yet
         let other = pool.run_query("select count(*) from orders where customer = 'dave'", 1).await.unwrap();
         assert_eq!(other.rows[0][0], 0);
         s.rollback_tx().await.unwrap();
@@ -676,7 +770,7 @@ mod tests {
         assert_eq!(after.rows[0][0], 0);
         assert!(!after.in_transaction);
         s.set_manual(false).await.unwrap();
-        // 편집 배치
+        // Edit batch
         crate::mysql::execute_batch(p, &["update orders set memo = 'y' where id = 1".into()], true).await.unwrap();
         // Read-only
         let mut ro = cfg();
@@ -689,6 +783,46 @@ mod tests {
         assert!(e.is_err() && format!("{}", e.unwrap_err()).to_lowercase().contains("read only"));
     }
 
+    /// Real errors from old servers (sqlx + rustls) count as TLS failures; auth and network errors don't
+    #[test]
+    fn rustls_handshake_errors_are_tls_failures() {
+        use std::io::{Error, ErrorKind};
+        for m in ["received fatal alert: HandshakeFailure", "received fatal alert: ProtocolVersion", "received corrupt message of type UnknownProtocolVersion",
+            "received corrupt message of type InvalidContentType", "peer is incompatible: ServerTlsVersionIsDisabledByOurConfig", "peer misbehaved: IllegalTlsInnerPlaintext", "handshake not complete"]
+        {
+            assert!(super::is_tls_failure(&sqlx::Error::Io(Error::new(ErrorKind::InvalidData, m))), "{m}");
+        }
+        assert!(super::is_tls_failure(&sqlx::Error::Tls("server does not support TLS".into())));
+        assert!(!super::is_tls_failure(&sqlx::Error::Io(Error::new(ErrorKind::ConnectionRefused, "Connection refused (os error 61)"))));
+        assert!(!super::is_tls_failure(&sqlx::Error::Io(Error::new(ErrorKind::InvalidData, "invalid packet sequence"))));
+        assert!(!super::is_tls_failure(&sqlx::Error::Protocol("Access denied for user 'u'".into())));
+    }
+
+    /// A dropped connection can't be told apart from a proxy with no backend or a drop after auth: it gets a softer hint
+    /// (old MySQL without TLS 1.2, or check the host, port and proxy) — not "didn't send the password"
+    #[test]
+    fn dropped_handshake_gets_the_tls_hint() {
+        use super::OnConnectError::*;
+        use std::io::{Error, ErrorKind};
+        let io = |k: ErrorKind, m: &str| sqlx::Error::Io(Error::new(k, m));
+        for k in [ErrorKind::UnexpectedEof, ErrorKind::ConnectionReset, ErrorKind::ConnectionAborted] {
+            let e = io(k, "unexpected end of file");
+            assert_eq!(super::on_connect_error(&e, false, false), Dropped, "{k:?}");
+            assert_eq!(super::on_connect_error(&e, false, true), RetryPlain, "{k:?}");
+            // SSL set explicitly: the raw error
+            assert_eq!(super::on_connect_error(&e, true, false), Fail, "{k:?}");
+        }
+        assert!(!super::DROPPED_TLS.contains("didn't send the password") && super::DROPPED_TLS.contains("proxy") && super::DROPPED_TLS.contains("Allow unencrypted"));
+        let tls = io(ErrorKind::InvalidData, "received fatal alert: HandshakeFailure");
+        assert_eq!(super::on_connect_error(&tls, false, false), NeedsTls);
+        assert_eq!(super::on_connect_error(&tls, false, true), RetryPlain);
+        assert_eq!(super::on_connect_error(&tls, true, false), Fail);
+        for e in [io(ErrorKind::ConnectionRefused, "Connection refused (os error 61)"), sqlx::Error::Protocol("Access denied for user 'u'".into())] {
+            assert_eq!(super::on_connect_error(&e, false, false), Fail, "{e}");
+            assert_eq!(super::on_connect_error(&e, false, true), Fail, "{e}");
+        }
+    }
+
     #[tokio::test]
     #[ignore]
     async fn mysql_ssl() {
@@ -697,7 +831,7 @@ mod tests {
         let pool = crate::db::connect(&c, Some("dbtool")).await.expect("ssl require");
         let r = pool.run_query("show session status like 'Ssl_version'", 5).await.unwrap();
         assert!(r.rows[0][1].as_str().unwrap().starts_with("TLS"), "{:?}", r.rows);
-        // 자체 서명 인증서라 검증 모드는 실패해야 한다
+        // Self-signed certificate, so verify mode must fail
         c.ssl = Some(crate::store::SslConfig { enabled: true, mode: "verify-full".into(), ..Default::default() });
         assert!(crate::db::connect(&c, Some("dbtool")).await.is_err());
     }

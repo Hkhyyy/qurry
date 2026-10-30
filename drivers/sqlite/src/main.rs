@@ -1,4 +1,4 @@
-//! Qurry 드라이버: SQLite (파일 하나). database = 파일 경로, 스키마 = main (ATTACH 한 DB 도)
+//! Qurry driver: SQLite (a single file). database = file path, schema = main (plus ATTACHed DBs)
 use qurry_driver::{Column, ConnectParams, Driver, QueryOut, ok, params, serve};
 use rusqlite::{Connection, OpenFlags, types::ValueRef};
 use serde_json::{Value, json};
@@ -48,7 +48,7 @@ impl Sqlite {
         Ok(out)
     }
 
-    /// 한 열짜리 결과의 글들
+    /// Texts of a single-column result
     fn strings(&self, sql: &str) -> Result<Vec<String>, String> {
         Ok(self.query(sql, 100_000)?.rows.into_iter().map(|r| r.first().and_then(|v| v.as_str()).unwrap_or("").to_string()).collect())
     }
@@ -71,9 +71,16 @@ impl Driver for Sqlite {
             "query" => {
                 let sql = p.get("sql").and_then(Value::as_str).unwrap_or("");
                 let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(500) as usize;
+                // A read (MCP): SQLite itself refuses writes for this one query (PRAGMA query_only), whatever the checks missed
+                if p.get("readOnly").and_then(Value::as_bool).unwrap_or(false) {
+                    self.db()?.execute_batch("PRAGMA query_only = ON").map_err(|e| e.to_string())?;
+                    let r = self.query(sql, limit);
+                    self.db()?.execute_batch("PRAGMA query_only = OFF").map_err(|e| e.to_string())?;
+                    return ok(r?);
+                }
                 ok(self.query(sql, limit)?)
             }
-            // SQLite: DB = 스키마 (main, temp 는 빼고 ATTACH 한 것)
+            // SQLite: DB = schema (main and ATTACHed ones, excluding temp)
             "databases" => ok(self.strings("SELECT name FROM pragma_database_list WHERE name <> 'temp'")?),
             "schemas" => {
                 let db = p.get("database").and_then(Value::as_str).unwrap_or("main").to_string();

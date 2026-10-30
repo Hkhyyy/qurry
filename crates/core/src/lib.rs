@@ -1,6 +1,8 @@
-//! Qurry 엔진. GUI(Tauri) · TUI · MCP 서버가 모두 이 crate 의 `app::AppState` 를 쓴다.
-/// 진단 로그 끄기 (TUI 는 화면을 쓰므로 stderr 로그를 막는다)
+//! Qurry engine. The GUI (Tauri) · TUI · MCP server all use this crate's `app::AppState`.
+/// Turn off diagnostic logs (the TUI owns the screen, so stderr logs are suppressed)
 pub static QUIET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// MCP server: open drivers so they can't touch anything outside the server (local files·URLs·extension installs) (DuckDB enable_external_access = false)
+pub static SANDBOX: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[macro_export]
 macro_rules! log {
@@ -41,7 +43,7 @@ pub mod tunnel;
 pub mod update;
 pub mod workspaces;
 
-/// Tauri 앱과 같은 설정 폴더 (Data Source 목록·암호화된 비밀번호 공유)
+/// Same config folder as the Tauri app (shares the Data Source list·encrypted passwords)
 /// macOS: ~/Library/Application Support/com.hyunkyo.dbtool
 pub const APP_IDENTIFIER: &str = "com.hyunkyo.dbtool";
 
@@ -49,17 +51,17 @@ pub fn config_dir() -> std::path::PathBuf {
     dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join(APP_IDENTIFIER)
 }
 
-/// MCP export_csv 가 쓰는 폴더 (~/Downloads/qurry-exports). 남이 정한 경로에 파일을 쓰지 않도록 여기로만 쓴다
+/// Folder used by MCP export_csv (~/Downloads/qurry-exports). Files are written only here, never to a path chosen by someone else
 pub fn export_dir() -> std::path::PathBuf {
     dirs::download_dir().or_else(dirs::home_dir).unwrap_or_else(|| std::path::PathBuf::from(".")).join("qurry-exports")
 }
 
-/// export_dir 안의 새 파일 경로. 이름에 경로가 들어가면 거부하고, 같은 이름이 있으면 덮어쓰지 않고 " (2)" 를 붙인다
+/// New file path inside export_dir. Names containing a path are rejected; an existing name gets " (2)" instead of being overwritten
 pub fn export_path(name: &str) -> error::AppResult<std::path::PathBuf> {
     export_path_in(&export_dir(), name)
 }
 
-/// dir 안에 새 파일을 만들어 그 경로를 돌려준다 (있는지 보고 만드는 사이에 끼어들 틈이 없게 create_new 로 바로 만든다)
+/// Create a new file in dir and return its path (created directly with create_new, so nothing can slip in between checking and creating)
 fn export_path_in(dir: &std::path::Path, name: &str) -> error::AppResult<std::path::PathBuf> {
     let name = name.trim();
     if name.is_empty() || name.starts_with('.') || name.contains(['/', '\\', '\0']) || name.contains("..") {
@@ -71,7 +73,7 @@ fn export_path_in(dir: &std::path::Path, name: &str) -> error::AppResult<std::pa
     let mut path = dir.join(&name);
     let mut n = 2;
     loop {
-        // create_new 는 이미 있으면(심볼릭 링크 포함) 실패한다
+        // create_new fails if it already exists (including symlinks)
         match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(_) => return Ok(path),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -83,7 +85,7 @@ fn export_path_in(dir: &std::path::Path, name: &str) -> error::AppResult<std::pa
     }
 }
 
-/// 설정 폴더의 Data Source·비밀번호로 앱 상태를 연다
+/// Open the app state with the config folder's Data Sources·passwords
 pub fn open_state(dir: Option<std::path::PathBuf>) -> error::AppResult<app::AppState> {
     let dir = dir.unwrap_or_else(config_dir);
     std::fs::create_dir_all(&dir)?;
@@ -93,7 +95,7 @@ pub fn open_state(dir: Option<std::path::PathBuf>) -> error::AppResult<app::AppS
 
 #[cfg(test)]
 mod tests {
-    /// 같은 이름을 연달아 받아도 (아직 쓰기 전이어도) 서로 다른 새 파일 — 이름을 고를 때 바로 만든다
+    /// Requesting the same name repeatedly (even before writing) gives distinct new files — the file is created when the name is picked
     #[test]
     fn export_path_claims_a_new_file() {
         let dir = std::env::temp_dir().join(format!("qurry-exp-{}", uuid::Uuid::new_v4()));

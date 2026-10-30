@@ -1,4 +1,4 @@
-//! 화면 그리기
+//! Screen drawing
 use crate::keys::disp;
 use crate::app::{App, Drag, DropTarget, FieldKind, Focus, Popup, SplitDir, TabKind};
 use crate::tree::NodeKind;
@@ -8,7 +8,7 @@ use serde_json::Value;
 
 pub use crate::kit::*;
 
-/// GUI(src/lib/api.ts COLOR_PRESETS) 와 같은 Data Source 색
+/// Data Source colors, same as the GUI (src/lib/api.ts COLOR_PRESETS)
 pub const COLOR_PRESETS: &[(&str, &str)] = &[
     ("red", "#6e2a2a"),
     ("orange", "#6e4a22"),
@@ -20,7 +20,7 @@ pub const COLOR_PRESETS: &[(&str, &str)] = &[
     ("gray", "#45474d"),
 ];
 
-/// 폼에 보일 색 이름 (프리셋이 아니면 custom)
+/// Color name shown in the form (custom if not a preset)
 pub fn color_name(c: Option<&str>) -> &'static str {
     match c {
         None => "none",
@@ -28,7 +28,7 @@ pub fn color_name(c: Option<&str>) -> &'static str {
     }
 }
 
-/// 활성 탭처럼 강조할 때 쓰는 밝은 색
+/// Bright color used for highlighting, like the active tab
 pub fn type_color(t: &str) -> Color {
     match t {
         "string" => Color::Rgb(95, 158, 160),
@@ -41,7 +41,7 @@ pub fn type_color(t: &str) -> Color {
     }
 }
 
-/// redis-cli 와 같은 출력
+/// Output in the same form as redis-cli
 pub fn format_reply(v: &Value) -> String {
     fn go(v: &Value, indent: usize) -> String {
         match v {
@@ -70,7 +70,7 @@ pub fn format_reply(v: &Value) -> String {
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let [main, status] = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(f.area());
-    // 워크스페이스가 둘 이상이면 맨 위 한 줄: 1 Default │ 2 Reports (Alt+n · 클릭)
+    // With two or more workspaces, one line at the top: 1 Default │ 2 Reports (Alt+n · click)
     app.hits.workspaces.clear();
     app.hits.text = Rect::default();
     app.hits.cancel = Rect::default();
@@ -87,7 +87,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         let w = app.explorer_width(main.width);
         let [l, r] = Layout::horizontal([Constraint::Length(w), Constraint::Min(10)]).areas(main);
         draw_tree(f, app, l);
-        // 트리 오른쪽 테두리와 맞닿은 칸까지 두 칸 (끌어서 폭 조절. 한 칸은 맞히기 어렵다)
+        // Two cells up to the one touching the tree's right border (drag to resize; one cell is hard to hit)
         app.hits.explorer_divider = Rect { x: l.right().saturating_sub(1), y: l.y, width: 2, height: l.height };
         r
     } else {
@@ -100,6 +100,22 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     if app.popup.is_some() {
         draw_popup(f, app);
+    }
+    sanitize(f.buffer_mut());
+}
+
+/// Whether a char can control the terminal: C0 · DEL · C1 (ESC sequences, OSC 52 clipboard, screen clear …) and text-direction overrides
+pub fn is_unsafe_char(c: char) -> bool {
+    c.is_control() || matches!(c, '\u{200e}' | '\u{200f}' | '\u{061c}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+}
+
+/// Strip such chars from the drawn screen. Done once at the end, whether they came from DB values · names · errors · the status line (ratatui's Span doesn't filter them)
+fn sanitize(buf: &mut ratatui::buffer::Buffer) {
+    for cell in buf.content.iter_mut() {
+        if cell.symbol().chars().any(is_unsafe_char) {
+            let clean: String = cell.symbol().chars().filter(|c| !is_unsafe_char(*c)).collect();
+            cell.set_symbol(if clean.is_empty() { " " } else { &clean });
+        }
     }
 }
 
@@ -158,7 +174,7 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
             .indent(*depth)
             .chevron(n.expandable.then_some(open))
             .hint(if loading { "loading…".to_string() } else { n.hint.clone() })
-            // GUI 처럼 Data Source 아래 전체를 그 색으로 (고른 줄이 이긴다)
+            // Like the GUI, color everything under a Data Source (the selected line wins)
             .bg(conn_color)
             .selected(i == app.tree.sel, focused);
         if !glyph.is_empty() {
@@ -167,13 +183,13 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
         if matches!(n.kind, NodeKind::Conn) {
             row = row.bold();
         }
-        // 정확히 탐색기 폭으로 (가로 스크롤 반영). 배경색이 줄 끝까지 가고, 끝에 걸린 한글이 색을 끊지 않게
+        // Exactly the explorer width (with horizontal scroll applied), so the background reaches the line end and a wide char cut at the end doesn't break the color
         lines.push(row.fit(app.tree.hoff, inner.width as usize));
     }
     if vis.is_empty() {
         lines.push(Line::from(muted("No data sources. Press n to add one.")));
     }
-    // 가로 스크롤 (Shift+←/→, 트랙패드 좌우) 은 fit_spans 가 이미 했다
+    // Horizontal scroll (Shift+←/→, trackpad left/right) is already done by fit_spans
     f.render_widget(Paragraph::new(lines), inner);
 }
 
@@ -215,7 +231,7 @@ fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
     } else {
         draw_group(f, app, None, area, true);
     }
-    // 탭을 끄는 중: 놓일 곳을 칠한다
+    // Dragging a tab: paint where it will land
     if let Some(Drag::Tab { id, moved: true }) = app.drag {
         let (x, y) = app.drag_pos;
         let r = crate::input::drop_target(app, id, x, y).and_then(|t| {
@@ -233,7 +249,7 @@ fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-/// 나눈 화면: 가지는 둘로 나누고 잎(칸)은 그린다. 경계선 위치를 기록한다 (끌어서 비율 조절)
+/// Split screen: split branches in two and draw leaves (panes). Records divider positions (drag to change the ratio)
 fn draw_panes(f: &mut Frame, app: &mut App, p: &crate::panes::Pane, area: Rect, path: &mut Vec<bool>, fg: usize) {
     use crate::panes::Pane;
     match p {
@@ -244,12 +260,12 @@ fn draw_panes(f: &mut Frame, app: &mut App, p: &crate::panes::Pane, area: Rect, 
                 SplitDir::Right => Layout::horizontal([p, q]).areas(area),
                 SplitDir::Down => Layout::vertical([p, q]).areas(area),
             };
-            // 경계선: 좌우면 맞닿은 두 테두리, 상하면 첫 칸의 아래 테두리 (탭 바 줄은 빼고)
+            // Divider: for left/right, the two touching borders; for top/bottom, the first pane's bottom border (excluding the tab bar line)
             let divider = match dir {
                 SplitDir::Right => Rect { x: ra.right().saturating_sub(1), y: ra.y + 1, width: 2, height: ra.height.saturating_sub(1) },
                 SplitDir::Down => Rect { x: ra.x, y: ra.bottom().saturating_sub(1), width: ra.width, height: 1 },
             };
-            // 위아래: 아래 첫 칸의 탭 바 (빈 곳을 잡으면 경계선처럼 끈다. 테두리 한 줄만으로는 맞히기 어렵다)
+            // Top/bottom: the tab bar of the lower first pane (grabbing an empty spot drags it like a divider; a single border line is hard to hit)
             let grab = if *dir == SplitDir::Down { Rect { height: 1, ..rb } } else { Rect::default() };
             app.hits.splits.push((path.clone(), area, divider, grab, *dir));
             path.push(false);
@@ -258,7 +274,7 @@ fn draw_panes(f: &mut Frame, app: &mut App, p: &crate::panes::Pane, area: Rect, 
             path.push(true);
             draw_panes(f, app, b, rb, path, fg);
             path.pop();
-            // 좌우: 오른쪽 칸 탭 바 첫 칸(여백)에 구분선 (두 칸의 탭 바가 한 줄로 이어져 보이지 않게)
+            // Left/right: a separator in the first cell (margin) of the right pane's tab bar (so the two tab bars don't look like one line)
             if *dir == SplitDir::Right && rb.width > 0 {
                 f.buffer_mut().set_string(rb.x, rb.y, "┃", Style::default().fg(DIM));
             }
@@ -266,13 +282,13 @@ fn draw_panes(f: &mut Frame, app: &mut App, p: &crate::panes::Pane, area: Rect, 
     }
 }
 
-/// 칸 하나: 탭 바 + 보이는 탭. g = None 이면 나뉘지 않은 화면 (모든 탭)
+/// One pane: tab bar + visible tab. g = None means an unsplit screen (all tabs)
 fn draw_group(f: &mut Frame, app: &mut App, g: Option<usize>, area: Rect, focused: bool) {
     use unicode_width::UnicodeWidthStr;
     let [bar, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(3)]).areas(area);
     let idx: Vec<usize> = (0..app.tabs.len()).filter(|&i| g.is_none_or(|g| app.tabs[i].group == g)).collect();
     let shown = if focused { app.active } else { g.and_then(|g| app.group_tab(g)).unwrap_or(app.active) };
-    // 탭 너비: Tabs 위젯은 " 제목 " + "│" 순서로 그린다. " " + 아이콘(2) + 제목 + " *"? + " "
+    // Tab width: the Tabs widget draws " title " + "│". " " + icon(2) + title + " *"? + " "
     let widths: Vec<u16> = idx
         .iter()
         .map(|&i| {
@@ -282,7 +298,7 @@ fn draw_group(f: &mut Frame, app: &mut App, g: Option<usize>, area: Rect, focuse
         })
         .collect();
     let sel = idx.iter().position(|&i| i == shown).unwrap_or(0);
-    // 탭 바에 다 안 들어가면 보이는 탭이 들어오도록 앞쪽 탭을 뺀다
+    // If the tab bar overflows, drop leading tabs so the visible tab fits
     let mut start = 0;
     while start < sel && widths[start..=sel].iter().map(|w| w + 1).sum::<u16>() > bar.width {
         start += 1;
@@ -293,7 +309,7 @@ fn draw_group(f: &mut Frame, app: &mut App, g: Option<usize>, area: Rect, focuse
         x += w + 1;
     }
     app.hits.groups.push((g.unwrap_or(0), bar, body));
-    // Data Source 색은 탭 배경으로 (GUI 와 같이). 보이는 탭은 굵게 + 밝게 (포커스 없는 칸은 덜 밝게)
+    // Data Source color as the tab background (like the GUI). The visible tab is bold + bright (less bright in unfocused panes)
     let titles: Vec<Line> = idx[start..]
         .iter()
         .map(|&i| {
@@ -327,18 +343,18 @@ fn draw_group(f: &mut Frame, app: &mut App, g: Option<usize>, area: Rect, focuse
     draw_pane(f, app, shown, body, focused);
 }
 
-/// 탭 하나의 본문. focused = 포커스가 있는 칸 (마우스 판정 영역도 이 칸만 기록)
+/// Body of one tab. focused = the focused pane (mouse hit areas are recorded only for this pane)
 fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool) {
-    // 포커스 없는 칸은 Tree 포커스처럼 (테두리·커서를 흐리게) 그린다
+    // Unfocused panes are drawn like Tree focus (dimmed border·cursor)
     let focus = if focused { app.focus } else { Focus::Tree };
     let ro = app.tabs.get(idx).and_then(|t| app.conn(&t.conn)).map(|c| c.config.read_only).unwrap_or(false);
     let pct = app.console_pct;
-    // 바꿀 수 있는 명령은 지금 키맵의 첫 키로 안내한다
+    // Rebindable commands are shown with their first key in the current keymap
     let k = |a: crate::app::Action| app.keys.keys(a).first().map(|s| disp(s)).unwrap_or_else(|| "—".into());
     use crate::app::Action as A;
     let (k_out, k_run, k_commit, k_rollback, k_cancel, k_submit) = (k(A::ToggleOutput), k(A::Execute), k(A::Commit), k(A::Rollback), k(A::Cancel), k(A::Submit));
     let finding = focused && matches!(app.popup, Some(Popup::Find(_)));
-    // 실행 · 불러오기가 얼마나 걸리고 있는지 (0.5초마다 다시 그린다)
+    // How long run · load has been going (redrawn every 0.5s)
     let took = app.run_elapsed(idx).map(|d| crate::app::elapsed_text(d.as_millis() as u64));
     let tab = &mut app.tabs[idx];
     let db = tab.db.clone();
@@ -346,7 +362,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
     match &mut tab.kind {
         TabKind::Console(c) => {
             let [ed, res] = Layout::vertical([Constraint::Percentage(pct), Constraint::Percentage(100 - pct)]).areas(body);
-            // 찾기 바는 편집기 위에 자리를 잡는다 (글을 가리지 않게)
+            // The find bar takes a spot above the editor (so it doesn't cover text)
             let (find_bar, ed) = if finding {
                 let [b, e] = Layout::vertical([Constraint::Length(4), Constraint::Min(3)]).areas(ed);
                 (b, e)
@@ -364,7 +380,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             if !editing {
                 c.complete = None;
             }
-            // [■ Cancel] 자리 (제목은 왼쪽 위 모서리 다음 칸부터)
+            // [■ Cancel] spot (the title starts right after the top-left corner)
             app.hits.cancel = match (c.running, title.find("[■ Cancel")) {
                 (true, Some(at)) => {
                     use unicode_width::UnicodeWidthStr;
@@ -376,11 +392,11 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             };
             c.editor.set_block(panel(title, editing));
             c.editor.set_line_number_style(Style::default().fg(DIM));
-            // 커서 칸에는 보이지 않는 표시(밑줄 색)를 단다: 그린 뒤 찾아서 자동완성 위치·마우스 위치 계산에 쓴다
+            // Put an invisible mark (underline color) on the cursor cell: found after drawing and used to place autocomplete·compute mouse positions
             let mark = Style::default().underline_color(CARET_MARK);
             c.editor.set_cursor_style(if editing { mark.add_modifier(Modifier::REVERSED) } else { mark });
             f.render_widget(&c.editor, ed);
-            // tui-textarea 는 스크롤 위치를 공개하지 않는다 → 방금 그린 커서 칸
+            // tui-textarea doesn't expose its scroll position → use the cursor cell just drawn
             let drawn = find_caret(f, ed);
             let caret = if editing && c.complete.is_some() { drawn } else { None };
             if focused {
@@ -427,7 +443,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 ])),
                 filt,
             );
-            // 쿼리가 실패하면: 표 위에 오류 한 줄과 고칠 방법, 표는 비운 채로 (어떻게 빠져나가는지 보이게)
+            // If the query failed: one error line and how to fix it above the grid, grid left empty (so the way out is visible)
             let grid = if let Some(e) = &tt.error {
                 let [msg, rest] = Layout::vertical([Constraint::Length(2), Constraint::Min(3)]).areas(grid);
                 let mut hint = vec![Span::styled(" w ", Style::default().fg(ACCENT)), Span::raw("fix WHERE · "), Span::styled("o ", Style::default().fg(ACCENT)), Span::raw("fix ORDER BY · "), Span::styled("r ", Style::default().fg(ACCENT)), Span::raw("run again")];
@@ -451,7 +467,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             }
         }
         TabKind::Text(t) => {
-            // 끝을 넘어 내리지 않는다 (마지막 줄이 맨 아래에 오도록)
+            // Don't scroll past the end (so the last line sits at the bottom)
             let lines = t.text.lines().count() as u16;
             t.scroll = t.scroll.min(lines.saturating_sub(body.height.saturating_sub(2)));
             let p = Paragraph::new(t.text.as_str()).scroll((t.scroll, 0)).block(panel(format!(" {title} — {lines} lines · ↑↓ PgUp/PgDn wheel scroll · y copies all "), focus != Focus::Tree));
@@ -461,7 +477,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             }
         }
         TabKind::Dba(d) => {
-            // 위 한 줄: 무엇을 보는지 · 아래: 표 (또는 무엇을 켜야 하는지)
+            // Top line: what is shown · below: the grid (or what to turn on)
             let [help, grid] = Layout::vertical([Constraint::Length(1), Constraint::Min(3)]).areas(body);
             let live = ["sessions", "locks"].contains(&d.report.as_str());
             let state = if d.running { " · loading…" } else if live && d.auto { " · auto 3s" } else { "" };
@@ -532,8 +548,8 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
     }
 }
 
-/// 에디터 안에서 커서(반전 칸) 위치
-/// 콘솔 커서 칸 표시 (밑줄을 켜지 않으니 보이지 않는다)
+/// Cursor (inverted cell) position in the editor
+/// Console cursor cell mark (invisible since underline isn't turned on)
 const CARET_MARK: Color = Color::Rgb(1, 2, 3);
 
 fn find_caret(f: &mut Frame, area: Rect) -> Option<(u16, u16)> {
@@ -548,7 +564,7 @@ fn find_caret(f: &mut Frame, area: Rect) -> Option<(u16, u16)> {
     None
 }
 
-/// 자동완성 목록: 커서 아래 (공간이 없으면 위)
+/// Autocomplete list: below the cursor (above if there is no room)
 fn draw_completion(f: &mut Frame, cmp: &crate::app::Completion, x: u16, y: u16) {
     use crate::complete::ItemKind;
     use unicode_width::UnicodeWidthStr;
@@ -584,7 +600,7 @@ fn draw_completion(f: &mut Frame, cmp: &crate::app::Completion, x: u16, y: u16) 
     f.render_widget(List::new(items).block(panel(title, true)).style(Style::default().bg(POPUP_BG)), r);
 }
 
-/// 하단 안내: (이 화면에서 쓰는 키, 자주 쓰는 전역 키). 바꿀 수 있는 명령은 지금 키맵의 첫 키로
+/// Bottom hints: (keys used on this screen, common global keys). Rebindable commands use their first key in the current keymap
 fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'static str)>) {
     use crate::app::Action as A;
     let key = |a: A| app.keys.keys(a).first().map(|k| disp(k));
@@ -608,10 +624,14 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
                 Some(TabKind::Redis(_)) => vec![fixed("Enter", "value"), fixed("/", "pattern"), fixed("a", "add"), fixed("D", "del key"), fixed("t", "TTL"), fixed("R", "rename"), fixed(":", "command")],
                 Some(TabKind::Text(_)) => vec![fixed("y", "copy"), fixed("Esc", "explorer")],
                 Some(TabKind::Dba(d)) => {
-                    let kill = d.info.as_ref().is_some_and(|i| i.actions.iter().any(|a| matches!(a, qurry_core::dba::Action::Kill { .. })));
+                    let has = |t: Option<bool>| d.info.as_ref().is_some_and(|i| i.actions.iter().any(|a| matches!(a, qurry_core::dba::Action::Kill { terminate, .. } if t.is_none_or(|t| *terminate == t))));
                     let mut v = vec![fixed("r", "refresh"), fixed("p", "reports")];
-                    if kill {
-                        v.extend([fixed("c", "cancel query"), fixed("K", "terminate"), fixed("a", "auto")]);
+                    if has(None) {
+                        v.push(fixed("c", "cancel query"));
+                        if has(Some(true)) {
+                            v.push(fixed("K", "terminate"));
+                        }
+                        v.push(fixed("a", "auto"));
                     }
                     v.extend([fixed("Enter", "query→console"), fixed("g", "SQL"), fixed("y", "copy")]);
                     v
@@ -624,7 +644,7 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
     (ctx.into_iter().flatten().collect(), glob.into_iter().flatten().collect())
 }
 
-/// 안내 한 줄: 화면 키 · … │ 전역 키 · … (폭 w 를 넘으면 화면 키를 뒤에서부터 뺀다)
+/// One hint line: screen keys · … │ global keys · … (if wider than w, drop screen keys from the end)
 fn hint_line(mut ctx: Vec<(String, &'static str)>, glob: Vec<(String, &'static str)>, w: usize) -> Line<'static> {
     use unicode_width::UnicodeWidthStr;
     let width = |v: &[(String, &str)]| v.iter().map(|(k, l)| k.width() + 1 + l.width() + 3).sum::<usize>();
@@ -652,14 +672,14 @@ fn hint_line(mut ctx: Vec<(String, &'static str)>, glob: Vec<(String, &'static s
 }
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
-    // 새 버전 알림은 상태 글 앞에 계속 보인다
+    // The new-version notice stays visible in front of the status text
     let badge = app.update.as_ref().map(|v| format!(" ⬆ v{v} available — {} › Update Qurry & Restart ", app.keys.label(crate::app::Action::Palette)));
     let bw = badge.as_ref().map(|b| b.chars().count() as u16).unwrap_or(0);
-    // 폭이 모자라면 오른쪽 안내를 줄인다 (업데이트 알림·상태 글이 잘리지 않게)
+    // If width is short, shrink the right-side hints (so the update notice·status text isn't cut)
     let (ctx, glob) = status_hints(app);
-    // 내보내기·가져오기가 돌면 상태 글 대신 진행 막대 (⌃K › Cancel Export/Import 로 멈춘다)
+    // While export·import runs, a progress bar instead of status text (stop with ⌃K › Cancel Export/Import)
     let status = if app.jobs.is_empty() { disp(&app.status) } else { app.jobs.iter().map(|(_, label, j)| job_line(label, j.progress())).collect::<Vec<_>>().join("  ·  ") };
-    // 상태 글은 화면 폭의 절반까지는 먼저 자리를 잡는다 (오류·결과 문구가 잘리지 않게)
+    // Status text claims up to half the screen width first (so error·result messages aren't cut)
     let sw = (status.chars().count() as u16 + 2).clamp(12, area.width / 2);
     let hints = hint_line(ctx, glob, area.width.saturating_sub(bw + sw) as usize);
     let hw = (hints.width() as u16).min(area.width.saturating_sub(bw + 12));
@@ -667,7 +687,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     if let Some(b) = badge {
         f.render_widget(Paragraph::new(b).style(Style::default().fg(Color::Black).bg(WARN)), u);
     }
-    // 지금 탭의 Data Source 가 운영 · 읽기 전용이면 상태 글 앞에 배지
+    // Badge before the status text if the current tab's Data Source is production · read-only
     let conn = app.tabs.get(app.active).and_then(|t| app.conn(&t.conn));
     let mut line = vec![Span::raw(" ")];
     if let Some(c) = conn {
@@ -685,10 +705,10 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(hints).style(Style::default().bg(SURFACE)), r);
 }
 
-/// "Export users ▕████░░░░░░▏ 1,234 rows · 42%". 전체를 모르면 막대가 왔다 갔다 한다
+/// "Export users ▕████░░░░░░▏ 1,234 rows · 42%". If the total is unknown the bar bounces back and forth
 fn job_line(label: &str, (rows, done, total): (u64, u64, u64)) -> String {
     const W: usize = 10;
-    // 백업·복원은 행 대신 바이트로 나아간다
+    // Backup·restore progress in bytes instead of rows
     let n = if rows == 0 && done > 0 { format!("{:.1} MB", done as f64 / 1048576.0) } else { format!("{} rows", crate::transfer::thousands(rows)) };
     let (bar, pct) = if total > 0 {
         let pct = (done * 100 / total).min(99) as usize;
@@ -700,6 +720,15 @@ fn job_line(label: &str, (rows, done, total): (u64, u64, u64)) -> String {
     format!("{label} ▕{bar}▏ {n}{pct}")
 }
 
+/// Shown next to the data source form's SSL mode: Require encrypts but doesn't stop someone in the middle
+fn ssl_mode_note(mode: &str) -> &'static str {
+    match mode {
+        "verify-full" => "checks the CA and host name",
+        "verify-ca" => "checks the certificate's CA",
+        _ => "encrypt, no certificate check",
+    }
+}
+
 fn draw_popup(f: &mut Frame, app: &mut App) {
     if matches!(app.popup, Some(Popup::Find(_))) {
         return crate::find::draw(f, app);
@@ -707,7 +736,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
     let area = f.area();
     match app.popup.as_mut().unwrap() {
         Popup::Help { sel, scroll, record, message } => {
-            // Start here (고르지 않는 줄) → Commands → 고정 키
+            // Start here (non-selectable line) → Commands → fixed keys
             let mut lines = vec![section("Start here")];
             for (k, d) in crate::help::start_here(&app.keys) {
                 lines.push(key_row(&k, d, 30, false, false));
@@ -721,7 +750,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                 lines.push(key_row(&keys, crate::input::name_of(*a), 30, custom, i == *sel));
             }
             lines.push(Line::raw(""));
-            // 고정 키 목록: Commands 다음 번호부터 이어서 고를 수 있다 (바꾸지는 못한다)
+            // Fixed key list: selectable continuing from the number after Commands (not rebindable)
             let mut i = crate::keys::DEFAULT_KEYS.len();
             let mut sel_line = top + *sel;
             for (title, rows) in crate::help::HELP {
@@ -737,7 +766,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             }
             let r = centered(area, 104, area.height.saturating_sub(2));
             let h = r.height.saturating_sub(2);
-            // 고른 줄이 보이도록
+            // Keep the selected line visible
             let row = sel_line as u16;
             if row < *scroll {
                 *scroll = row.saturating_sub(1);
@@ -755,7 +784,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             let inner = popup(f, r, title);
             f.render_widget(Paragraph::new(lines).scroll((*scroll, 0)), inner);
         }
-        // 위에서 따로 그린다
+        // Drawn separately above
         Popup::Find(_) => {}
         Popup::Message { title, text } => {
             let r = centered(area, 90, (text.lines().count() as u16 + 4).min(30));
@@ -811,10 +840,10 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             f.render_widget(Paragraph::new(lines), inner);
         }
         Popup::Confirm { text, .. } => {
-            // 여러 줄 (이유 · 문장 · 질문). 운영 DB · 위험 문장이면 빨간 테두리, "→ N rows" 는 많을수록 눈에 띄게
+            // Multiple lines (reason · statement · question). Red border for production DB · dangerous statements; "→ N rows" stands out more the larger it is
             let danger = text.starts_with("Production") || text.ends_with("Run it anyway?");
             let lines = confirm_lines(text);
-            // 긴 문장은 접힌다 → 접힌 줄까지 세어 높이를 잡는다 (아래 y/n 안내가 잘리지 않게)
+            // Long statements wrap → count wrapped lines for the height (so the y/n hint below isn't cut)
             let w = 90u16.min(area.width.saturating_sub(4));
             let r = centered(area, 90, wrapped_height(&lines, w.saturating_sub(2)) + 2);
             let inner = if danger { popup_danger(f, r, " Confirm ") } else { popup(f, r, " Confirm ") };
@@ -826,7 +855,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             let hint = if words.is_empty() { "Enter / Esc" } else { "Enter / Esc · Tab complete" };
             input.set_block(panel(format!(" {} ({hint}) ", disp(title)), true));
             f.render_widget(&*input, r);
-            // 자동완성 목록: 입력칸 바로 아래, 커서 근처
+            // Autocomplete list: right below the input, near the cursor
             if let Some((items, sel, _)) = complete {
                 let w = items.iter().map(|s| s.chars().count()).max().unwrap_or(0) as u16 + 4;
                 let x = (r.x + 1 + input.cursor().1 as u16).min(r.right().saturating_sub(w));
@@ -860,7 +889,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                 .skip(off)
                 .take(h)
                 .map(|(i, it)| {
-                    // 이름·힌트 안의 키 표기도 화면 규칙으로 ("Ctrl+Z (grid)" → ⌃z)
+                    // Key labels inside names·hints follow the screen rules too ("Ctrl+Z (grid)" → ⌃z)
                     ListItem::new(Row::new(disp(&it.label)).hint(format!(" {}", disp(&it.hint))).selected(i == sel, true).line())
                 })
                 .collect();
@@ -885,13 +914,16 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                         _ => fl.value.clone(),
                     };
                     let sel = i == form.sel;
-                    let mut spans = field_row(&fl.label, 15, shown + if sel && matches!(fl.kind, FieldKind::Text | FieldKind::Secret) { "▏" } else { "" }, sel);
+                    let mut spans = field_row(&fl.label, 17, shown + if sel && matches!(fl.kind, FieldKind::Text | FieldKind::Secret) { "▏" } else { "" }, sel);
                     if fl.label == "Color" {
                         let c = COLOR_PRESETS.iter().find(|p| p.0 == fl.value).and_then(|p| hex(p.1)).or_else(|| form.edit.as_ref().and_then(|e| e.color.as_deref()).filter(|_| fl.value == "custom").and_then(hex));
                         if let Some(c) = c {
                             spans.push(Span::raw(" "));
                             spans.push(swatch(c));
                         }
+                    }
+                    if fl.label == "SSL mode" {
+                        spans.push(Span::styled(format!("  {}", ssl_mode_note(&fl.value)), Style::default().fg(DIM)));
                     }
                     Line::from(spans)
                 })
@@ -913,25 +945,33 @@ mod tests {
 
     #[test]
     fn tree_row_fills_exactly_the_width_even_when_a_wide_char_straddles_the_edge() {
-        // "ab" + "가나" (두 칸씩) = 6칸. 5칸에 맞추면 "나" 가 끝에 걸린다 → 빈칸(같은 스타일)으로 채워 5칸
+        // "ab" + "가나" (two cells each) = 6 cells. Fitting to 5 cuts "나" at the end → pad with a blank (same style) to 5 cells
         let st = Style::default().bg(Color::Green);
         let out = fit_spans(vec![Span::styled("ab", st), Span::styled("가나", st)], 0, 5);
         let text: String = out.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "ab가 ");
         assert!(out.iter().all(|s| s.style.bg == Some(Color::Green)), "{out:?}");
-        // 짧으면 빈칸으로 채운다
+        // Shorter content is padded with blanks
         let out = fit_spans(vec![Span::raw("ab")], 0, 4);
         assert_eq!(out.iter().map(|s| s.content.as_ref()).collect::<String>(), "ab  ");
-        // 가로 스크롤 (앞 3칸 건너뜀): "가" 의 오른쪽 반에서 시작 → 빈칸
+        // Horizontal scroll (skip the first 3 cells): starts on the right half of "가" → blank
         let out = fit_spans(vec![Span::raw("ab가나다")], 3, 4);
         assert_eq!(out.iter().map(|s| s.content.as_ref()).collect::<String>(), " 나 ");
+    }
+
+    /// The SSL mode choice says what each mode checks (Require doesn't check the certificate)
+    #[test]
+    fn ssl_mode_note_says_what_is_checked() {
+        assert_eq!(ssl_mode_note("require"), "encrypt, no certificate check");
+        assert_eq!(ssl_mode_note("verify-ca"), "checks the certificate's CA");
+        assert_eq!(ssl_mode_note("verify-full"), "checks the CA and host name");
     }
 
     #[test]
     fn popup_clears_wide_chars_straddling_its_edges() {
         let mut term = Terminal::new(ratatui::backend::TestBackend::new(20, 1)).unwrap();
         term.draw(|f| {
-            // "가" 가 3·4 칸, "나" 가 9·10 칸 → 팝업 4..10 의 양쪽 가장자리에 걸친다
+            // "가" is at cells 3·4, "나" at 9·10 → straddling both edges of the popup 4..10
             f.buffer_mut().set_string(0, 0, "abc가defg나", Style::default().bg(Color::Yellow));
             clear(f, Rect::new(4, 0, 6, 1));
             f.render_widget(Paragraph::new("│popup").style(Style::default()), Rect::new(4, 0, 6, 1));

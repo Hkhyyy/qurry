@@ -12,8 +12,8 @@ GUI: right-click a data source › **Tools** › Sessions & Locks, Slow Queries,
 |---|---|
 | Activity | **Sessions** (who blocks whom, query / transaction age; refreshes every 3 s) · **Lock Waits** — right-click / `c` cancel the query, `K` terminate the session |
 | Performance | **Slow Queries** — top 100 by total time (`pg_stat_statements` / `performance_schema`), open or EXPLAIN in a console |
-| Storage | **Table Sizes** · **Unused Indexes** · **Duplicate Indexes** · **Foreign Keys Without an Index** — generate DROP / CREATE INDEX |
-| Maintenance | **Vacuum & Dead Rows** · **Transaction ID Age** (wraparound) — generate VACUUM ANALYZE (PostgreSQL) |
+| Storage | **Table Sizes** · **Table Bloat** · **Index Bloat** (space held by deleted rows, estimated from statistics — PostgreSQL) · **Table Fragmentation** (MySQL) · **Unused Indexes** · **Duplicate Indexes** · **Foreign Keys Without an Index** — generate DROP / CREATE INDEX, VACUUM FULL, REINDEX, OPTIMIZE TABLE |
+| Maintenance | **Vacuum & Dead Rows** · **Vacuum Progress** (VACUUM, VACUUM FULL / autovacuum running now: phase, % scanned — cancel it) · **Transaction ID Age** (wraparound) — generate VACUUM ANALYZE (PostgreSQL) |
 | Server | **Server Overview** (uptime, connections, cache hit ratio) · **Replication** lag · **Settings** |
 | Security | **Users & Roles** · **Table Privileges** — generate GRANT / REVOKE |
 
@@ -32,7 +32,7 @@ GUI — right-click a data source › Tools › Compare & Migrate; TUI — `⌃k
 
 ## Back up / restore
 
-Right-click a database › Tools › Back Up Database… / Restore Database… (TUI: `⌃k`). Runs `pg_dump` / `pg_restore` / `psql` or `mysqldump` / `mysql` from this computer (Homebrew `libpq`, `mysql-client`, Postgres.app and the usual Linux paths are found too; for PostgreSQL the client closest to the server version is used). Passwords go through the environment, SSH tunnels are used, progress shows in the status bar and can be cancelled.
+Right-click a database › Tools › Back Up Database… / Restore Database… (TUI: `⌃k`). Runs `pg_dump` / `pg_restore` / `psql` or `mysqldump` / `mysql` from this computer (Homebrew `libpq`, `mysql-client`, Postgres.app and the usual Linux paths are found too; for PostgreSQL the client closest to the server version is used). SSH tunnels are used, progress shows in the status bar and can be cancelled. Backup files and temporary dumps are readable only by you, and passwords go to the tools in a private file for that one server. Restoring a `.sql` file runs only SQL: psql and mysql client commands in the file (running programs, writing files, connecting elsewhere) are switched off — this needs psql 17.6 / 16.10 / 15.14 / 14.19 / 13.22 or newer, so an older psql doesn't restore `.sql` files (custom-format backups go through `pg_restore` and aren't affected — except when the closest `pg_restore` is 17 or newer and the server is older: it would send settings that server doesn't know, so the backup is replayed through psql instead). Dumps that switch databases with `\connect` (`pg_dump -C`, `pg_dumpall`) stop with a message — restore those with psql yourself.
 
 ## Create and modify objects (PostgreSQL, MySQL)
 
