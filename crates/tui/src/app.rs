@@ -1986,6 +1986,7 @@ impl App {
                 let n = out.len();
                 // Changing statements already committed in Auto mode (reported on failure midway: earlier ones are not rolled back)
                 let mut committed = 0;
+                let mut warned = 0;
                 let mut failed = false;
                 let ddl = out.iter().any(|(s, r, dry)| r.is_ok() && !dry && !explain && qurry_core::guard::is_ddl(s, kind));
                 for (i, (s, r, dry)) in out.into_iter().enumerate() {
@@ -2030,9 +2031,12 @@ impl App {
                                     c.show_output = true;
                                 }
                             }
-                            // It ran, but its result couldn't be logged: not a failure (don't run it again)
+                            // It ran, but its result couldn't be logged: not a failure (don't run it again). Several statements: counted below (as the GUI does)
                             if let Some(w) = warning {
-                                status = format!("Warning: {}", w.lines().next().unwrap_or(""));
+                                warned += 1;
+                                if n == 1 {
+                                    status = format!("Warning: {}", w.lines().next().unwrap_or(""));
+                                }
                                 c.log(false, format!("{WARNING}{w}"));
                             }
                         }
@@ -2046,6 +2050,9 @@ impl App {
                             status = format!("Error: {}", e.lines().next().unwrap_or(""));
                         }
                     }
+                }
+                if warned > 0 && n > 1 {
+                    status = format!("{status} · {warned} with a warning (see Output)");
                 }
                 a.status = status;
                 // If tables·columns were created, changed, or dropped, show it in the explorer right away

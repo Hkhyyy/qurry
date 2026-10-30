@@ -85,6 +85,31 @@ async fn f5_stops_at_the_first_error() {
     assert!(console(&h).show_output);
 }
 
+/// A statement that ran but whose result the Production log couldn't record: a later statement's status doesn't hide its warning
+#[tokio::test]
+async fn f5_keeps_an_earlier_warning_in_the_status() {
+    fn warns(q: &str) -> Result<QueryResult, String> {
+        let mut r = fake(q)?;
+        if q.starts_with("update") {
+            r.warning = Some("It ran, but the result couldn't be written to the Production log".into());
+        }
+        Ok(r)
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(warns);
+    h.app.exec.inside = crate::exec::Inside::Whole;
+    h.console_with("update t set a = 1 where id = 1;\nselect id from t;", 0, 3);
+    h.key("F5");
+    h.settle().await;
+    assert!(h.console_output().contains(&"Warning: It ran, but the result couldn't be written to the Production log".to_string()));
+    assert_eq!(h.app.status, "2 row(s) retrieved in 7 ms · 1 with a warning (see Output)");
+    // One statement: the warning itself
+    h.console_with("update t set a = 1 where id = 1", 0, 3);
+    h.key("F5");
+    h.settle().await;
+    assert_eq!(h.app.status, "Warning: It ran, but the result couldn't be written to the Production log");
+}
+
 /// Production Data Source: the counted rows of each changing statement are shown before anything runs; yes runs them
 #[tokio::test]
 async fn production_confirm_shows_counted_rows() {
