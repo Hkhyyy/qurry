@@ -15,7 +15,7 @@ const preview: Preview = {
   },
   initialGlobals: { theme: "dark" },
   parameters: { layout: "padded", backgrounds: { disable: true } },
-  // Shared WASM, as main.tsx does before the app renders (loaded once, later stories reuse it)
+  // Shared WASM, awaited so stories can call shared() (main.tsx starts it without waiting; loaded once, later stories reuse it)
   loaders: [async () => (await initShared(), {})],
   decorators: [
     (Story, ctx) => {

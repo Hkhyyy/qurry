@@ -9,6 +9,6 @@ describe("shared wasm", () => {
   it("throws before init, saying how to fix it", async () => {
     vi.resetModules();
     const fresh = await import("./shared");
-    expect(() => fresh.shared()).toThrow(/await initShared\(\).*pnpm wasm/);
+    expect(() => fresh.shared()).toThrow(/not ready.*pnpm wasm/);
   });
 });
