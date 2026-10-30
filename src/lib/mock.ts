@@ -178,6 +178,7 @@ const handlers: Record<string, (a: any) => unknown> = {
     { id: "slow_queries", title: "Slow Queries (Top 100)", group: "Performance", help: "By total time.", actions: [{ kind: "sql", label: "Open Query in Console", template: "{=query}" }, { kind: "explain", label: "Explain in Console" }] },
     { id: "table_sizes", title: "Table Sizes", group: "Storage", help: "Biggest first.", actions: [] },
     { id: "unused_indexes", title: "Unused Indexes", group: "Storage", help: "Indexes never used since statistics were reset; counting_since tells since when.", actions: [{ kind: "sql", label: "Generate DROP INDEX", template: "DROP INDEX CONCURRENTLY {schema}.{index};" }] },
+    { id: "roles", title: "Users & Roles", group: "Security", help: "Login roles and their powers. superuser / createrole are the dangerous ones.", actions: [] },
   ]),
   // Story targets: "busy" runs past the report time limit, "flaky" loads once and then its refreshes do, "maria" has no performance_schema.
   // Any target: "roles" is denied (app isn't a superuser), "table_sizes" takes 2 s (so a switch shows its loading state)

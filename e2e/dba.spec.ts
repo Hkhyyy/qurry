@@ -8,6 +8,9 @@ test("switching reports drops the previous report's error while the new one load
   await menuItem(page, "Users & Privileges").click();
   const error = page.locator(".dba .ui-notice", { hasText: "permission denied" });
   await expect(error).toBeVisible();
+  // The toolbar names the denied report, not the list's first one
+  await expect(page.locator(".dba-bar select")).toHaveValue("roles");
+  await expect(page.locator(".dba-help")).toHaveText(/Login roles/);
 
   await page.locator(".dba-bar select").selectOption("table_sizes");
   await expect(page.locator(".dba-bar").getByRole("button", { name: "Loading…" })).toBeVisible();
