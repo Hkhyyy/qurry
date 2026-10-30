@@ -259,6 +259,11 @@ pub fn impact_count_sql(sql: &str, kind: DbKind) -> Option<String> {
     })
 }
 
+/// The number in the first cell of the count query's result (drivers such as MySQL may return it as text)
+pub fn impact_count(r: &crate::db::QueryResult) -> Option<i64> {
+    r.rows.first().and_then(|x| x.first()).and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+}
+
 /// First words allowed in read-only mode
 const READ_WORDS: &[&str] = &["select", "with", "values", "table", "show", "explain", "describe", "desc"];
 /// The console of a read-only Data Source also allows transaction control and session settings
@@ -1011,6 +1016,16 @@ mod tests {
         assert_eq!(my("DELETE FROM t WHERE a = 1 ORDER BY id LIMIT 10"), None);
         assert_eq!(my("UPDATE a JOIN b ON a.id = b.id SET a.x = 1"), None);
         assert_eq!(my("UPDATE a, b SET a.x = b.x WHERE a.id = b.id"), None);
+    }
+
+    /// The count comes back as a number (PostgreSQL) or as text (MySQL and some drivers)
+    #[test]
+    fn impact_count_reads_numbers_and_text() {
+        let r = |v: serde_json::Value| crate::db::QueryResult { columns: vec![], rows: vec![vec![v]], rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false };
+        assert_eq!(impact_count(&r(12408.into())), Some(12408));
+        assert_eq!(impact_count(&r("12408".into())), Some(12408));
+        assert_eq!(impact_count(&r(serde_json::Value::Null)), None);
+        assert_eq!(impact_count(&crate::db::QueryResult { rows: vec![], ..r(1.into()) }), None);
     }
 
     /// Shape used for undo SQL: table name (without alias) · changed columns

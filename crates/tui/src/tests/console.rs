@@ -87,13 +87,13 @@ async fn f5_stops_at_the_first_error() {
 /// Production Data Source: the counted rows of each changing statement are shown before anything runs; yes runs them
 #[tokio::test]
 async fn production_confirm_shows_counted_rows() {
-    // Counting queries answer 1 for id = 4 and 12,408 otherwise; the statements themselves go to `fake`
+    // Counting queries answer 1 for id = 4 and 12,408 (as text, as MySQL and some drivers return it) otherwise; the statements themselves go to `fake`
     fn counts(q: &str) -> Result<QueryResult, String> {
         if !q.starts_with("SELECT count(*)") {
             return fake(q);
         }
-        let n: i64 = if q.contains("id = 4") { 1 } else { 12408 };
-        Ok(QueryResult { columns: vec![ColumnInfo { name: "count".into(), type_name: "int8".into() }], rows: vec![vec![n.into()]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false })
+        let n: serde_json::Value = if q.contains("id = 4") { 1.into() } else { "12408".into() };
+        Ok(QueryResult { columns: vec![ColumnInfo { name: "count".into(), type_name: "int8".into() }], rows: vec![vec![n]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false })
     }
     let mut h = Harness::new().await;
     let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
@@ -124,6 +124,24 @@ async fn production_confirm_shows_counted_rows() {
         h.console_output(),
         ["PROD> update payment set amount = 0 where id = 4", "PROD> delete from payment where amount < 0", "3 row(s) affected in 7 ms", "3 row(s) affected in 7 ms"]
     );
+}
+
+/// Explain Analyze of a changing statement on PostgreSQL: BEGIN, the EXPLAIN and ROLLBACK all go through the same session (the fake here)
+#[tokio::test]
+async fn explain_analyze_wraps_changes_in_a_rolled_back_transaction() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.to_string());
+        fake(q)
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(record);
+    h.console_with("delete from t where a = 1", 0, 0);
+    h.app.analyze_next = true;
+    h.app.run_stmts(vec!["delete from t where a = 1".into()], true, false);
+    h.app.analyze_next = false;
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["BEGIN", "EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) delete from t where a = 1", "ROLLBACK"]);
 }
 
 /// ⌃Space lists columns after "alias." (from the loaded metadata); Enter replaces the typed prefix with the picked one

@@ -431,7 +431,7 @@ impl AppState {
         let kind = self.kind_of(&id)?;
         let Some(q) = crate::guard::impact_count_sql(&sql, kind) else { return Ok(None) };
         let r = ensure_pool(self, &id).await?.run_query(&q, 1).await?;
-        Ok(r.rows.first().and_then(|x| x.first()).and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))))
+        Ok(crate::guard::impact_count(&r))
     }
 
     /// Cancel the session's current query, or (terminate) drop the connection. Blocked for Read-only Data Sources
