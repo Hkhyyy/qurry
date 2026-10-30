@@ -26,6 +26,8 @@ export function DbaReport(p: {
   const [running, setRunning] = useState(false);
   const [auto, setAuto] = useState(true);
   const seq = useRef(0);
+  /** A load is running (the auto-refresh tick waits for it) */
+  const inFlight = useRef(false);
   // Restored tabs load when first shown (so they don't connect to every DB at startup)
   const [seen, setSeen] = useState(p.visible);
   useEffect(() => {
@@ -39,6 +41,7 @@ export function DbaReport(p: {
 
   const load = async () => {
     const n = ++seq.current;
+    inFlight.current = true;
     setRunning(true);
     try {
       const r = await dba.run(p.target, p.report);
@@ -50,7 +53,10 @@ export function DbaReport(p: {
       setError(String(e));
       setResult(null);
     } finally {
-      if (n === seq.current) setRunning(false);
+      if (n === seq.current) {
+        inFlight.current = false;
+        setRunning(false);
+      }
     }
   };
   useEffect(() => {
@@ -58,10 +64,10 @@ export function DbaReport(p: {
     setResult(null);
     load();
   }, [p.target, p.report, seen]);
-  // Sessions · locks: every 3 seconds while visible
+  // Sessions · locks: every 3 seconds while visible. A tick is skipped while the last load still runs, so slow loads don't pile up on a busy server
   useEffect(() => {
     if (!auto || !p.visible || !LIVE.has(p.report)) return;
-    const t = setInterval(load, 3000);
+    const t = setInterval(() => inFlight.current || load(), 3000);
     return () => clearInterval(t);
   }, [auto, p.visible, p.report, p.target]);
 

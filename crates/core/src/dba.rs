@@ -210,14 +210,20 @@ ORDER BY DATA_FREE DESC LIMIT 300"#],
         info: || info("unused_indexes", "Unused Indexes", "Storage", "Indexes never used since statistics were reset (unique and primary keys are left out); counting_since tells since when (MySQL: since the server started). They cost disk and slow down writes. Check replicas too before dropping.", vec![
             Action::Sql { label: "Generate DROP INDEX", template: "DROP INDEX CONCURRENTLY {schema}.{index};" },
         ]),
-        pg: &[r#"SELECT s.schemaname AS schema, s.relname AS "table", s.indexrelname AS "index", s.idx_scan AS scans, pg_size_pretty(pg_relation_size(s.indexrelid)) AS size, pg_get_indexdef(s.indexrelid) AS definition,
-       coalesce((SELECT stats_reset FROM pg_stat_database WHERE datname = current_database()), pg_postmaster_start_time()) AS counting_since
+        pg: &[r#"SELECT s.schemaname AS schema, s.relname AS "table", s.indexrelname AS "index", s.idx_scan AS scans,
+       coalesce((SELECT stats_reset FROM pg_stat_database WHERE datname = current_database()), pg_postmaster_start_time()) AS counting_since,
+       pg_size_pretty(pg_relation_size(s.indexrelid)) AS size, pg_get_indexdef(s.indexrelid) AS definition
 FROM pg_stat_user_indexes s JOIN pg_index i ON i.indexrelid = s.indexrelid
 WHERE s.idx_scan = 0 AND NOT i.indisunique AND NOT i.indisprimary
 ORDER BY pg_relation_size(s.indexrelid) DESC"#],
+        // performance_schema counts since the server started
         my: &[
-            r#"SELECT object_schema AS `schema`, object_name AS `table`, index_name AS `index` FROM sys.schema_unused_indexes ORDER BY object_schema, object_name"#,
-            r#"SELECT OBJECT_SCHEMA AS `schema`, OBJECT_NAME AS `table`, INDEX_NAME AS `index` FROM performance_schema.table_io_waits_summary_by_index_usage
+            r#"SELECT object_schema AS `schema`, object_name AS `table`, index_name AS `index`,
+       NOW() - INTERVAL (SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME = 'Uptime') SECOND AS counting_since
+FROM sys.schema_unused_indexes ORDER BY object_schema, object_name"#,
+            r#"SELECT OBJECT_SCHEMA AS `schema`, OBJECT_NAME AS `table`, INDEX_NAME AS `index`,
+       NOW() - INTERVAL (SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME = 'Uptime') SECOND AS counting_since
+FROM performance_schema.table_io_waits_summary_by_index_usage
 WHERE INDEX_NAME IS NOT NULL AND INDEX_NAME <> 'PRIMARY' AND COUNT_STAR = 0 AND OBJECT_SCHEMA NOT IN ('mysql', 'sys', 'performance_schema') ORDER BY 1, 2"#,
         ],
     },
@@ -389,12 +395,12 @@ pub fn action_sql(kind: DbKind, template: &str, row: &HashMap<String, String>) -
     out
 }
 
-/// EXPLAIN for a statement from Slow Queries. Their text is normalized ($1 from pg_stat_statements, ? from DIGEST_TEXT), which EXPLAIN can't run:
+/// EXPLAIN for a statement from Slow Queries. Their text is normalized ($1 from pg_stat_statements; ?, (...) for value lists and /* , ... */ for more rows from DIGEST_TEXT), which EXPLAIN can't run:
 /// PostgreSQL 16+ plans it generically, otherwise the console gets a note to fill in the parameters first
 pub fn explain_sql(kind: DbKind, pg_major: Option<u64>, query: &str) -> String {
     let (params, mark) = match kind {
         DbKind::Postgres => (query.as_bytes().windows(2).any(|w| w[0] == b'$' && w[1].is_ascii_digit()), "$1, $2 …"),
-        _ => (query.contains('?'), "?"),
+        _ => (query.contains('?') || query.contains("(...)") || query.contains("/* , ... */"), "?, (...)"),
     };
     match params {
         false => format!("EXPLAIN {query}"),
@@ -416,19 +422,55 @@ fn my_time_limited(sql: &str, secs: u32) -> String {
     }
 }
 
-/// Run a report query with a time limit that ends with it (PG: SET LOCAL in its own transaction), not on the pooled session
+/// Run a report query with a time limit that ends with it, not on the pooled session. The limit only tightens: a stricter server / role / session limit stays
 async fn run_limited(pool: &Pool, kind: DbKind, sql: &str, secs: u32) -> AppResult<QueryResult> {
-    use sqlx::Executor;
+    let ms = secs * 1000;
     match pool {
+        // BEGIN and SET LOCAL in one round trip (setting 0 = no limit)
         Pool::Pg(p) => {
-            let mut tx = p.begin().await?;
-            tx.execute(format!("SET LOCAL statement_timeout = '{secs}s'").as_str()).await?;
+            let begin = format!("BEGIN; SELECT set_config('statement_timeout', '{ms}', true) WHERE (SELECT setting::bigint FROM pg_settings WHERE name = 'statement_timeout') NOT BETWEEN 1 AND {ms}");
+            let mut tx = match p.begin_with(begin).await {
+                Ok(tx) => tx,
+                // pgbouncer in statement pooling mode allows no transaction: run without the limit
+                Err(e) if e.to_string().contains("transaction blocks not allowed") => return pool.run_query(sql, REPORT_ROWS).await,
+                Err(e) => return Err(e.into()),
+            };
             let r = crate::db::run_pg_on(&mut tx, sql, REPORT_ROWS).await;
             let _ = tx.rollback().await;
             r
         }
-        _ if kind == DbKind::Mysql => pool.run_query(&my_time_limited(sql, secs), REPORT_ROWS).await,
+        _ if kind == DbKind::Mysql && sql.starts_with("SELECT ") => {
+            let cur = pool.run_query("SHOW VARIABLES WHERE Variable_name IN ('max_execution_time', 'max_statement_time')", 2).await?;
+            let stricter = cur.rows.iter().any(|r| {
+                let (name, v) = (crate::db::cell_text(&r[0]), crate::db::cell_text(&r[1]).parse::<f64>().unwrap_or(0.0));
+                // MySQL max_execution_time is in ms, MariaDB max_statement_time in seconds
+                let cur_ms = if name == "max_statement_time" { v * 1000.0 } else { v };
+                cur_ms > 0.0 && cur_ms <= ms as f64
+            });
+            pool.run_query(&if stricter { sql.to_string() } else { my_time_limited(sql, secs) }, REPORT_ROWS).await
+        }
         _ => pool.run_query(sql, REPORT_ROWS).await,
+    }
+}
+
+/// Run the first of a report's queries that works (views differ by version and privileges). A time limit ends the search: the next query would hide it
+async fn run_first(pool: &Pool, kind: DbKind, list: &[&str], secs: u32) -> AppResult<QueryResult> {
+    let mut last = None;
+    for q in list {
+        match run_limited(pool, kind, q, secs).await {
+            Err(e) if is_timeout(&e) => return Err(e),
+            Err(e) => last = Some(e),
+            ok => return ok,
+        }
+    }
+    Err(last.expect("report has queries"))
+}
+
+/// Statement time limit hit (PG 57014 query_canceled, MySQL 3024, MariaDB 1969)
+fn is_timeout(e: &AppError) -> bool {
+    match e {
+        AppError::Db(sqlx::Error::Database(d)) => d.code().as_deref() == Some("57014") || matches!(my_errno(e), Some(3024 | 1969)),
+        _ => false,
     }
 }
 
@@ -444,7 +486,10 @@ fn my_errno(e: &AppError) -> Option<u16> {
 fn explain(report: &str, kind: DbKind, e: AppError) -> AppError {
     let m = e.to_string();
     let lower = m.to_lowercase();
-    let hint = if report == "slow_queries" && kind == DbKind::Postgres && lower.contains("pg_stat_statements") {
+    let timeout = format!("The report ran into its time limit ({REPORT_TIMEOUT_S} s, or a stricter one set on the server). The server may be busy or the statistics very large: try again later.");
+    let hint = if is_timeout(&e) {
+        Some(timeout.as_str())
+    } else if report == "slow_queries" && kind == DbKind::Postgres && lower.contains("pg_stat_statements") {
         Some("pg_stat_statements is not enabled. Add it to shared_preload_libraries (restart), then run: CREATE EXTENSION pg_stat_statements;")
     } else if lower.contains("denied") || lower.contains("permission") {
         Some("You don't have the privilege to read this (ask for pg_monitor / PROCESS / performance_schema access).")
@@ -460,7 +505,7 @@ fn explain(report: &str, kind: DbKind, e: AppError) -> AppError {
 }
 
 impl AppState {
-    /// Run a report (read-only). If views differ by version/privileges, try the queries in order
+    /// Run a report (read-only)
     pub async fn dba_report(&self, id: String, report: String) -> AppResult<QueryResult> {
         let kind = self.kind_of(&id)?;
         let d = DEFS.iter().find(|d| (d.info)().id == report).ok_or_else(|| AppError::Msg(format!("Unknown report: {report}")))?;
@@ -469,26 +514,20 @@ impl AppState {
             return Err(AppError::Msg(format!("{} is not available for this database", (d.info)().title)));
         }
         let pool = ensure_pool(self, &id).await?;
-        let mut last = None;
-        for q in list {
-            match run_limited(&pool, kind, q, REPORT_TIMEOUT_S).await {
-                // An empty SHOW … result has no columns either (servers without replication, etc.)
-                Ok(r) if !r.has_result_set || r.columns.is_empty() => {
-                    return Ok(QueryResult {
-                        columns: vec![crate::db::ColumnInfo { name: "info".into(), type_name: "TEXT".into() }],
-                        rows: vec![vec![serde_json::Value::from("Nothing to show (e.g. no replication on this server)")]],
-                        rows_affected: 0,
-                        truncated: false,
-                        elapsed_ms: r.elapsed_ms,
-                        has_result_set: true,
-                        in_transaction: false,
-                    });
-                }
-                Ok(r) => return Ok(r),
-                Err(e) => last = Some(e),
-            }
+        match run_first(&pool, kind, list, REPORT_TIMEOUT_S).await {
+            // An empty SHOW … result has no columns either (servers without replication, etc.)
+            Ok(r) if !r.has_result_set || r.columns.is_empty() => Ok(QueryResult {
+                columns: vec![crate::db::ColumnInfo { name: "info".into(), type_name: "TEXT".into() }],
+                rows: vec![vec![serde_json::Value::from("Nothing to show (e.g. no replication on this server)")]],
+                rows_affected: 0,
+                truncated: false,
+                elapsed_ms: r.elapsed_ms,
+                has_result_set: true,
+                in_transaction: false,
+            }),
+            Ok(r) => Ok(r),
+            Err(e) => Err(explain(&report, kind, e)),
         }
-        Err(explain(&report, kind, last.unwrap()))
     }
 
     /// Explain in Console for a Slow Queries row (see explain_sql)
@@ -577,6 +616,11 @@ mod tests {
         let my = explain_sql(DbKind::Mysql, None, "SELECT * FROM `t` WHERE `id` = ?");
         assert!(my.starts_with("-- ") && my.contains('?') && my.ends_with("\nEXPLAIN SELECT * FROM `t` WHERE `id` = ?"), "{my}");
         assert_eq!(explain_sql(DbKind::Mysql, None, "SELECT 1"), "EXPLAIN SELECT 1");
+        // DIGEST_TEXT collapses value lists and extra rows
+        for q in ["SELECT * FROM `mysql` . `user` WHERE SYSTEM_USER IN (...)", "INSERT INTO `t` VALUES (...) /* , ... */"] {
+            let my = explain_sql(DbKind::Mysql, None, q);
+            assert!(my.starts_with("-- ") && my.contains("(...)") && my.ends_with(&format!("\nEXPLAIN {q}")), "{my}");
+        }
     }
 
     /// MySQL report queries carry their own time limit (MySQL hint, MariaDB executable comment), so it doesn't stay on the pooled session
@@ -616,7 +660,12 @@ mod tests {
     }
 
     async fn state(kind: DbKind, env: &str) -> Option<AppState> {
-        let (c, pass) = cfg(kind, env)?;
+        state_with(kind, env, "").await
+    }
+
+    async fn state_with(kind: DbKind, env: &str, startup_script: &str) -> Option<AppState> {
+        let (mut c, pass) = cfg(kind, env)?;
+        c.options.startup_script = startup_script.into();
         let dir = std::env::temp_dir().join(format!("qurry-dba-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir)).unwrap();
         st.save_connection(c, pass, None).await.unwrap();
@@ -687,12 +736,33 @@ mod tests {
         let e = e.to_string().to_lowercase();
         assert!(e.contains("timeout") || e.contains("maximum statement execution time") || e.contains("max_statement_time"), "{e}");
         assert!(run_limited(&pool, kind, "SELECT 1", 1).await.is_ok());
+        // A time limit ends the search for a working query: the next one would hide it
+        let e = run_first(&pool, kind, &[sleep, "SELECT 1"], 1).await.expect_err("time limit");
+        assert!(is_timeout(&e), "{e}");
+        assert!(explain("x", kind, e).to_string().contains("time limit"));
+    }
+
+    /// The report limit only tightens: a stricter session limit (here from the startup script; a role or global setting works the same) stays
+    async fn stricter_server_limit_stays(kind: DbKind, env: &str, sleep: &str) {
+        let Some(st) = state(kind, env).await else { return };
+        let mariadb = kind == DbKind::Mysql && st.run_query("d".into(), "SELECT VERSION()".into(), None, None).await.unwrap().rows[0][0].to_string().to_lowercase().contains("mariadb");
+        let script = match kind {
+            DbKind::Postgres => "SET statement_timeout = '1s'",
+            _ if mariadb => "SET SESSION max_statement_time = 1",
+            _ => "SET SESSION max_execution_time = 1000",
+        };
+        let st = state_with(kind, env, script).await.unwrap();
+        let pool = ensure_pool(&st, "d").await.unwrap();
+        let t = std::time::Instant::now();
+        let e = run_limited(&pool, kind, sleep, 30).await.expect_err("server limit");
+        assert!(t.elapsed() < std::time::Duration::from_millis(2900) && is_timeout(&e), "{e}");
     }
 
     #[tokio::test]
     #[ignore]
     async fn pg_report_time_limit() {
         report_time_limit(DbKind::Postgres, "QURRY_TEST_PG", "SELECT pg_sleep(3)").await;
+        stricter_server_limit_stays(DbKind::Postgres, "QURRY_TEST_PG", "SELECT pg_sleep(3)").await;
         let Some(st) = state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
         let r = st.run_query("d".into(), "SHOW statement_timeout".into(), None, None).await.unwrap();
         assert_eq!(crate::db::cell_text(&r.rows[0][0]), "0");
@@ -702,24 +772,45 @@ mod tests {
     #[ignore]
     async fn mysql_report_time_limit() {
         // SLEEP() / BENCHMARK() cut short return a value instead of an error; a long join fails like a report query would
-        report_time_limit(DbKind::Mysql, "QURRY_TEST_MY", "SELECT COUNT(*) FROM information_schema.COLUMNS a, information_schema.COLUMNS b, information_schema.COLUMNS c").await;
+        let slow = "SELECT COUNT(*) FROM information_schema.COLUMNS a, information_schema.COLUMNS b, information_schema.COLUMNS c";
+        report_time_limit(DbKind::Mysql, "QURRY_TEST_MY", slow).await;
+        stricter_server_limit_stays(DbKind::Mysql, "QURRY_TEST_MY", slow).await;
     }
 
-    /// Unused Indexes tells since when the scans were counted
-    #[tokio::test]
-    #[ignore]
-    async fn pg_unused_indexes_show_counting_window() {
-        let Some(st) = state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
+    /// Unused Indexes tells since when the scans were counted, right next to the scans (MySQL lists unused ones only, after the index name)
+    async fn unused_indexes_show_counting_window(kind: DbKind, env: &str) {
+        let Some(st) = state(kind, env).await else { return };
         let q = |s: &str| st.run_query("d".into(), s.into(), None, None);
         q("drop table if exists qurry_dba_unused").await.ok();
         q("create table qurry_dba_unused (id int, v int)").await.unwrap();
         q("create index qurry_dba_unused_v on qurry_dba_unused (v)").await.unwrap();
-        let r = st.dba_report("d".into(), "unused_indexes".into()).await.unwrap();
+        // MySQL counts index use for tables it has opened
+        q("select * from qurry_dba_unused").await.unwrap();
+        let r = st.dba_report("d".into(), "unused_indexes".into()).await;
         q("drop table qurry_dba_unused").await.ok();
+        let r = match r {
+            // MariaDB has performance_schema off by default
+            Err(e) if kind == DbKind::Mysql && e.to_string().contains("performance_schema") => return,
+            r => r.unwrap(),
+        };
         let col = r.columns.iter().position(|c| c.name == "counting_since").expect("counting_since column");
+        let before = r.columns.iter().position(|c| c.name == if kind == DbKind::Postgres { "scans" } else { "index" }).unwrap();
+        assert_eq!(col, before + 1);
         let idx = r.columns.iter().position(|c| c.name == "index").unwrap();
         let row = r.rows.iter().find(|x| crate::db::cell_text(&x[idx]) == "qurry_dba_unused_v").expect("unused index");
         assert!(!crate::db::cell_text(&row[col]).is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn pg_unused_indexes_show_counting_window() {
+        unused_indexes_show_counting_window(DbKind::Postgres, "QURRY_TEST_PG").await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_unused_indexes_show_counting_window() {
+        unused_indexes_show_counting_window(DbKind::Mysql, "QURRY_TEST_MY").await;
     }
 
     /// RDS MySQL: KILL of another user's thread is denied without CONNECTION_ADMIN → mysql.rds_kill / rds_kill_query when the server has them.

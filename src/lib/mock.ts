@@ -167,12 +167,29 @@ const handlers: Record<string, (a: any) => unknown> = {
   dba_reports: () => [
     { id: "sessions", title: "Sessions", group: "Activity", help: "Connections and what they run. blocking = how many sessions wait for this one.", actions: [{ kind: "kill", label: "Cancel Query", terminate: false }, { kind: "kill", label: "Terminate Session", terminate: true }, { kind: "sql", label: "Open Query in Console", template: "{=query}" }] },
     { id: "locks", title: "Lock Waits", group: "Activity", help: "Who waits for whom.", actions: [] },
-    { id: "slow_queries", title: "Slow Queries (Top 100)", group: "Performance", help: "By total time.", actions: [] },
+    { id: "slow_queries", title: "Slow Queries (Top 100)", group: "Performance", help: "By total time.", actions: [{ kind: "sql", label: "Open Query in Console", template: "{=query}" }, { kind: "explain", label: "Explain in Console" }] },
     { id: "table_sizes", title: "Table Sizes", group: "Storage", help: "Biggest first.", actions: [] },
+    { id: "unused_indexes", title: "Unused Indexes", group: "Storage", help: "Indexes never used since statistics were reset; counting_since tells since when.", actions: [{ kind: "sql", label: "Generate DROP INDEX", template: "DROP INDEX CONCURRENTLY {schema}.{index};" }] },
   ],
   dba_report: (a: any) =>
     a.report === "slow_queries"
-      ? Promise.reject("pg_stat_statements is not enabled. Add it to shared_preload_libraries (restart), then run: CREATE EXTENSION pg_stat_statements;")
+      ? {
+          columns: ["total_ms", "calls", "mean_ms", "max_ms", "rows", "cache_hit_pct", "query"].map((name) => ({ name, typeName: name === "query" ? "TEXT" : "NUMERIC" })),
+          rows: [
+            ["91234.5", 18234, "5.00", "812.40", 18234, "99.1", "SELECT * FROM orders WHERE customer_id = $1 AND status = $2"],
+            ["40211.0", 12, "3350.92", "4102.11", 1200000, "71.4", "SELECT count(*) FROM order_items"],
+          ],
+          rowsAffected: 0, truncated: false, elapsedMs: 4, hasResultSet: true,
+        }
+      : a.report === "unused_indexes"
+      ? {
+          columns: ["schema", "table", "index", "scans", "counting_since", "size", "definition"].map((name) => ({ name, typeName: name === "scans" ? "INT8" : name === "counting_since" ? "TIMESTAMPTZ" : "TEXT" })),
+          rows: [
+            ["public", "orders", "orders_status_idx", 0, "2026-09-01 04:00:12.5 +09:00", "182 MB", "CREATE INDEX orders_status_idx ON public.orders USING btree (status)"],
+            ["public", "order_items", "order_items_qty_idx", 0, "2026-09-01 04:00:12.5 +09:00", "41 MB", "CREATE INDEX order_items_qty_idx ON public.order_items USING btree (qty)"],
+          ],
+          rowsAffected: 0, truncated: false, elapsedMs: 2, hasResultSet: true,
+        }
       : {
           columns: ["pid", "user", "db", "state", "blocking", "blocked_by", "query_sec", "query"].map((name) => ({ name, typeName: name === "pid" || name === "blocking" ? "INT4" : "TEXT" })),
           rows: [
@@ -295,7 +312,7 @@ const handlers: Record<string, (a: any) => unknown> = {
       children: [{ op: "Seq Scan", detail: "on big_t  filter: (h ~~ 'ab%'::text)", startup: 0, total: 989.9, rows: 12, actualTime: 25.2, actualRows: 383, loops: 2, selfTime: 25.2, pct: 56.0,
         warnings: ["Seq Scan reads the whole table (~200,000 rows) — an index on the filter columns may help", "Filter removed 99% of rows (199,234 rows)"], props: [["Relation Name", "big_t"], ["Rows Removed by Filter", "99617"]], children: [] }] }],
   }),
-  dba_explain: (a: any) => `EXPLAIN ${a.query}`,
+  dba_explain: (a: any) => (/\$\d/.test(a.query) ? `-- Replace the parameters ($1, $2 …) with real values, then run:\nEXPLAIN ${a.query}` : `EXPLAIN ${a.query}`),
   dba_action_sql: (a: any) => a.template.replace(/\{=?(\w+)\}/g, (_: string, k: string) => a.row[k] ?? ""),
   pick_data_file: () => ["~/Downloads/new_users.csv", { format: "csv", columns: ["ID", "Name", "Email", "signup date"], rows: [["1", "Kim", "kim@example.com", "2026-01-02"], ["2", "Lee", null, "2026-01-03"]], bytes: 12_400_000 }],
   import_data: () => new Promise((ok) => setTimeout(() => ok(1234), 4000)),

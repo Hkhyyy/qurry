@@ -142,6 +142,22 @@ export const Dba: S = {
     </Frame>
   ),
 };
+export const DbaSlowQueries: S = {
+  name: "Database Admin: Slow Queries",
+  render: () => (
+    <Frame h={600}>
+      <DbaReport target="prod" connName="[PROD] shop_app" report="slow_queries" readOnly={false} dialect={dialectOf("postgres")} visible onReport={noop} onOpenConsole={noop} onStatus={noop} />
+    </Frame>
+  ),
+};
+export const DbaUnusedIndexes: S = {
+  name: "Database Admin: Unused Indexes",
+  render: () => (
+    <Frame h={600}>
+      <DbaReport target="prod" connName="[PROD] shop_app" report="unused_indexes" readOnly={false} dialect={dialectOf("postgres")} visible onReport={noop} onOpenConsole={noop} onStatus={noop} />
+    </Frame>
+  ),
+};
 export const Migrate: S = { name: "Compare & Migrate", render: () => <Frame h={600}><MigrateView conns={CONNS} initialConnId="dev" onOpenConsole={noop} onStatus={noop} /></Frame> };
 export const Rag: S = { name: "AI Search (RAG)", render: () => <Frame h={600}><RagView conns={CONNS} runJob={async (_l, run) => run("job")} onStatus={noop} /></Frame> };
 export const Redis: S = {

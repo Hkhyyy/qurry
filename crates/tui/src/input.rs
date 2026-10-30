@@ -1888,6 +1888,37 @@ mod tests {
         assert!(matches!(&h.app.popup, Some(crate::app::Popup::Confirm { text, .. }) if text.contains("Cancel the query of session 77")));
     }
 
+    /// Slow Queries: g lists Explain in Console, which opens a console with the EXPLAIN (a normalized statement gets a note to fill in the values first)
+    #[tokio::test]
+    async fn dba_slow_query_explains_in_console() {
+        use qurry_core::db::{ColumnInfo, QueryResult};
+        let mut h = Harness::new().await;
+        // MySQL needs no server for this (no generic plans)
+        let cfg = serde_json::from_value(serde_json::json!({ "id": "test", "name": "test", "kind": "mysql", "host": "127.0.0.1", "port": 1, "user": "u", "database": "shop" })).unwrap();
+        h.app.state.save_connection(cfg, None, None).await.unwrap();
+        h.app.reload_conns();
+        let res = QueryResult {
+            columns: vec![ColumnInfo { name: "calls".into(), type_name: "INT8".into() }, ColumnInfo { name: "query".into(), type_name: "TEXT".into() }],
+            rows: vec![vec![serde_json::json!(12), serde_json::json!("SELECT * FROM `orders` WHERE `id` IN (...)")]],
+            rows_affected: 0,
+            truncated: false,
+            elapsed_ms: 0,
+            has_result_set: true,
+            in_transaction: false,
+        };
+        let info = qurry_core::dba::reports(qurry_core::store::DbKind::Mysql).into_iter().find(|r| r.id == "slow_queries");
+        let d = crate::app::DbaTab { report: "slow_queries".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res)), error: None, running: false, auto: true };
+        h.app.push_tab("test", "shop".into(), "Slow Queries".into(), TabKind::Dba(d));
+        h.key("g");
+        let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no action list") };
+        assert!(p.items.iter().any(|i| i.label == "Explain in Console"), "{:?}", p.items.iter().map(|i| &i.label).collect::<Vec<_>>());
+        h.type_str("Explain");
+        h.key("Enter");
+        h.settle().await;
+        let text = h.console_text();
+        assert!(text.starts_with("-- Replace the parameters") && text.ends_with("\nEXPLAIN SELECT * FROM `orders` WHERE `id` IN (...)"), "{text}");
+    }
+
     /// ⌃K › Query History / Snippets: same history as the GUI. Picking one inserts it into the console. Save Query as Snippet asks for a name
     #[tokio::test]
     async fn history_and_snippets_insert_into_console() {
