@@ -19,6 +19,8 @@ mod workspace;
 mod testkit;
 #[cfg(test)]
 mod kit_snapshots;
+#[cfg(test)]
+mod tests;
 mod scope;
 mod selfupdate;
 mod snippets;
