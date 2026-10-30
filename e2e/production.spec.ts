@@ -1,19 +1,19 @@
 import { dialog, expect, openApp, openConsole, runAll, status, test, typeSql } from "./app";
 
-// [PROD] shop_app has options.confirmChanges (mock preview_impact counts 3 rows with WHERE, 500 without; DDL can't be counted)
+// [PROD] shop_app has options.confirmChanges (mock preview_impact counts UPDATE/DELETE: 3 rows with WHERE, 500 without; INSERT and DDL can't be counted)
 test.beforeEach(async ({ page }) => {
   await openApp(page);
   await openConsole(page, "[PROD] shop_app");
 });
 
-test("changes list each statement with its row count; DDL shows schema change", async ({ page }) => {
+test("changes list each statement with its row count; INSERT can't be counted, DDL shows schema change", async ({ page }) => {
   await typeSql(page, "update users set user_name = 'x' where id = 1;\ninsert into users (user_name) values ('y');\nalter table users add column x int;\nselect 1;");
   await runAll(page);
   await expect(dialog(page).locator(".ui-modal-title")).toHaveText("Production: [PROD] shop_app");
   await expect(dialog(page).locator(".ui-confirm-message")).toHaveText("These statements change data. Run them?");
   const rows = dialog(page).locator(".ui-detail-row");
   await expect(rows.locator(".ui-detail-text")).toHaveText(["update users set user_name = 'x' where id = 1", "insert into users (user_name) values ('y')", "alter table users add column x int"]);
-  await expect(rows.locator(".ui-detail-value")).toHaveText(["3 rows", "500 rows", "schema change"]);
+  await expect(rows.locator(".ui-detail-value")).toHaveText(["3 rows", "can't count", "schema change"]);
   await expect(rows.locator(".ui-detail-value")).toHaveClass([/tone-warn/, /tone-danger/, /tone-danger/]);
   await expect(dialog(page).getByRole("button", { name: "Run" })).toHaveClass(/ui-btn-danger/);
   await dialog(page).getByRole("button", { name: "Run" }).click();
