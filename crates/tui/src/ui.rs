@@ -859,9 +859,8 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             let inner = if danger { popup_danger(f, r, " Confirm ") } else { popup(f, r, " Confirm ") };
             f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
         }
-        Popup::Input { title, input, complete, words, .. } => {
-            // A title's first line goes on the border; the lines after it (answers, reasons) in a box below, wrapped, so they aren't cut off
-            let (head, body) = title.split_once('\n').unwrap_or((title.as_str(), ""));
+        Popup::Input { title, body, input, complete, words, .. } => {
+            // The title goes on the border; the body (answers, reasons) in a box below, wrapped, so it isn't cut off
             let body: Vec<Line> = body.lines().map(|l| Line::raw(disp(l))).collect();
             let bh = if body.is_empty() { 0 } else { wrapped_height(&body, 90u16.min(area.width.saturating_sub(4)).saturating_sub(2)) + 2 };
             let all = centered(area, 90, 3 + bh);
@@ -872,7 +871,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             }
             clear(f, r);
             let hint = if words.is_empty() { "Enter / Esc" } else { "Enter / Esc · Tab complete" };
-            input.set_block(panel(format!(" {} ({hint}) ", disp(head)), true));
+            input.set_block(panel(format!(" {} ({hint}) ", disp(title)), true));
             f.render_widget(&*input, r);
             // Autocomplete list: right below the input, near the cursor
             if let Some((items, sel, _)) = complete {

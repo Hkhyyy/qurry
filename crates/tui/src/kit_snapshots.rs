@@ -284,12 +284,12 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     };
     let timeout = "The report ran into its time limit (30 s, or a stricter one set on the server). The server may be busy or the statistics very large: try again later.\n(error returned from database: canceling statement due to statement timeout)";
     let info = |kind, id| qurry_core::dba::reports(kind).into_iter().find(|r| r.id == id);
-    let d = crate::app::DbaTab { report: "sessions".into(), info: info(qurry_core::store::DbKind::Postgres, "sessions"), grid: Some(crate::grid::Grid::new(sessions)), loaded: Some(std::time::Instant::now()), error: Some(timeout.into()), running: false, auto: true, gone: None };
+    let d = crate::app::DbaTab { report: "sessions".into(), info: info(qurry_core::store::DbKind::Postgres, "sessions"), grid: Some(crate::grid::Grid::new(sessions)), loaded: Some(std::time::Instant::now()), error: Some(timeout.into()), running: false, run: 0, auto: true, gone: None };
     h.app.push_tab("prod", "rentalpay".into(), "Sessions".into(), crate::app::TabKind::Dba(d));
     h.app.focus = crate::app::Focus::Grid;
     scenes.push(app_scene(h, "Database Admin: refresh failed", "A refresh that ran into the time limit keeps the last sessions (c / K still work) and says how old they are", 120, 22));
     let maria = "performance_schema / sys schema is not available on this server — enable performance_schema to see this (MariaDB has it off by default, and some of these tables only exist on MySQL).\n(error returned from database: 1146 (42S02): Table 'performance_schema.events_statements_summary_by_digest' doesn't exist)";
-    let d = crate::app::DbaTab { report: "slow_queries".into(), info: info(qurry_core::store::DbKind::Mysql, "slow_queries"), grid: None, loaded: None, error: Some(maria.into()), running: false, auto: true, gone: None };
+    let d = crate::app::DbaTab { report: "slow_queries".into(), info: info(qurry_core::store::DbKind::Mysql, "slow_queries"), grid: None, loaded: None, error: Some(maria.into()), running: false, run: 0, auto: true, gone: None };
     h.app.push_tab("prod", "rentalpay".into(), "Slow Queries".into(), crate::app::TabKind::Dba(d));
     scenes.push(app_scene(h, "Database Admin: report error", "A report the server can't run: what to turn on, then the server's error", 120, 22));
     for _ in 0..2 {

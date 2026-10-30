@@ -2,7 +2,7 @@
 use super::atoms::*;
 use super::molecules::*;
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, BorderType, Borders};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 
 /// Panel border (bold · accent color when focused)
 pub fn panel(title: impl Into<Line<'static>>, focused: bool) -> Block<'static> {
@@ -60,10 +60,9 @@ pub fn confirm_lines(text: &str) -> Vec<Line<'static>> {
     lines
 }
 
-/// How many lines it becomes when wrapped (Wrap) — for sizing the popup (if short, the hints below get cut)
+/// How many lines it becomes when wrapped (Wrap, by word as Paragraph wraps it) — for sizing the popup (if short, the hints below get cut)
 pub fn wrapped_height(lines: &[Line], width: u16) -> u16 {
-    let w = width.max(1) as usize;
-    lines.iter().map(|l| l.width().max(1).div_ceil(w)).sum::<usize>() as u16
+    Paragraph::new(lines.to_vec()).wrap(Wrap { trim: false }).line_count(width.max(1)) as u16
 }
 
 #[cfg(test)]
@@ -75,5 +74,12 @@ mod tests {
         let lines = vec![Line::raw("a".repeat(10)), Line::raw(""), Line::raw("b".repeat(25))];
         // 10 cells wide: 1 + 1 + 3
         assert_eq!(wrapped_height(&lines, 10), 5);
+    }
+
+    #[test]
+    fn wrapped_height_wraps_by_word() {
+        // 20 cells fit 2 rows of 10 by count, but no two words share a row
+        let lines = vec![Line::raw("aaaaaa bbbbbb cccccc")];
+        assert_eq!(wrapped_height(&lines, 10), 3);
     }
 }
