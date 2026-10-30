@@ -13,6 +13,9 @@ use std::time::Instant;
 const CURSOR: &str = "dbtool_cur";
 /// When switching from Manual → Auto is blocked
 pub const PENDING_TX: &str = "There are uncommitted changes — commit or roll back first";
+/// A COMMIT of a PostgreSQL transaction an earlier error aborted: the server rolled it back
+const ABORTED_COMMIT: &str =
+    "Not committed: an earlier statement in this transaction failed, so PostgreSQL rolled back the whole transaction and none of its changes were saved. Run the changes again (without the failing statement).";
 
 pub struct PgSession {
     conn: PoolConnection<Postgres>,
@@ -139,6 +142,7 @@ impl PgSession {
 
     pub async fn commit(&mut self) -> AppResult<()> {
         self.close_cursor().await;
+        self.refuse_aborted_commit().await?;
         let r = self.conn.execute("COMMIT").await;
         // A failed COMMIT (e.g. a deferred foreign key) ends the transaction too: PostgreSQL rolls it back
         self.in_tx = false;
@@ -151,6 +155,22 @@ impl PgSession {
         self.conn.execute("ROLLBACK").await?;
         self.in_tx = false;
         Ok(())
+    }
+
+    /// PostgreSQL answers COMMIT of a transaction an error aborted with ROLLBACK, not an error: end it so and say so (an error,
+    /// so the console and the Production log don't read it as committed)
+    async fn refuse_aborted_commit(&mut self) -> AppResult<()> {
+        if !self.in_tx {
+            return Ok(());
+        }
+        match self.conn.execute("SELECT 1").await {
+            Err(sqlx::Error::Database(d)) if d.code().as_deref() == Some("25P02") => {
+                self.conn.execute("ROLLBACK").await?;
+                self.in_tx = false;
+                Err(AppError::Msg(ABORTED_COMMIT.into()))
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Sync the state when the user runs BEGIN / COMMIT / ROLLBACK directly
@@ -180,6 +200,9 @@ impl PgSession {
         if self.manual && !self.in_tx && !strip_comments_lead(sql).starts_with("begin") {
             self.conn.execute("BEGIN").await?;
             self.in_tx = true;
+        }
+        if crate::audit::tx_end(sql) == Some("COMMIT") {
+            self.refuse_aborted_commit().await?;
         }
         if is_select_like(sql) {
             match self.declare(strip_trailing_semicolon(sql)).await {

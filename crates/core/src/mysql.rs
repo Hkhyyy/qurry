@@ -360,6 +360,18 @@ fn commits_implicitly(sql: &str, s: &str) -> bool {
         || (first == "reset" && !s.starts_with("reset persist"))
 }
 
+/// Whether MySQL committed the open transaction before `sql` failed with `e`: it does so for DDL and LOCK TABLES before running them,
+/// so even when they then fail (a duplicate column, a missing table, no privilege), but not for one that doesn't parse (1064)
+pub(crate) fn committed_before_failing(sql: &str, e: &AppError) -> bool {
+    let s = strip_comments_lead(sql);
+    (commits_implicitly(sql, &s) || is_lock_tables(&s)) && error_number(e).is_some_and(|n| n != 1064) && !crate::app::is_conn_lost(e)
+}
+
+fn is_lock_tables(s: &str) -> bool {
+    let words: Vec<&str> = s.split_whitespace().take(2).collect();
+    words.first() == Some(&"lock") && words.get(1).is_some_and(|w| w.starts_with("table"))
+}
+
 /// Dedicated connection for a console tab. MySQL has no protocol-level cursor, so "load more" re-queries with LIMIT/OFFSET.
 pub struct MySession {
     conn: PoolConnection<MySql>,
@@ -446,6 +458,12 @@ impl MySession {
                 if s.starts_with("commit") && matches!(e, AppError::Db(sqlx::Error::Database(_))) {
                     // A COMMIT the server refused ends the transaction: it was rolled back
                     self.in_tx = false;
+                } else if committed_before_failing(sql, &e) {
+                    self.in_tx = false;
+                    // A failed LOCK TABLES has released the tables locked before
+                    if is_lock_tables(&s) {
+                        self.locked = false;
+                    }
                 } else if self.tx_rolled_back(&e).await {
                     self.in_tx = false;
                 } else if self.manual && opens_tx(&s) && !s.starts_with("rollback") && error_number(&e) != Some(1064) {
@@ -470,7 +488,7 @@ impl MySession {
                     self.in_tx = false;
                 }
             }
-        } else if words.first() == Some(&"lock") && words.get(1).is_some_and(|w| w.starts_with("table")) {
+        } else if is_lock_tables(&s) {
             self.locked = true;
             self.in_tx = false;
         } else if words.first() == Some(&"unlock") && words.get(1).is_some_and(|w| w.starts_with("table")) {

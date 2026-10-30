@@ -79,7 +79,7 @@ pub fn is_change(sql: &str, kind: DbKind) -> bool {
 }
 
 /// Name to log if the statement is COMMIT / ROLLBACK (not ROLLBACK TO SAVEPOINT)
-fn tx_end(sql: &str) -> Option<&'static str> {
+pub(crate) fn tx_end(sql: &str) -> Option<&'static str> {
     let s = crate::session::strip_comments_lead(sql);
     match first_word(sql).as_str() {
         "commit" | "end" => Some("COMMIT"),
@@ -1568,6 +1568,80 @@ mod tests {
         run(format!("update {s}.t set v = 40 where id = 3")).await.unwrap();
         assert!(!st.tx_state("m".into()).await);
         followup_drop(&st, DbKind::Mysql, s).await;
+    }
+
+    /// MySQL Manual: the server commits the open transaction before DDL and LOCK TABLES even when they then fail (not when they don't
+    /// parse). The console no longer offers to roll it back, the log records the commit, and a later ROLLBACK doesn't claim to undo it
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_failed_ddl_still_commits() {
+        let Some(st) = prod_state(DbKind::Mysql, "QURRY_TEST_MY").await else { return };
+        let s = "audit_followups_ddl";
+        followup_table(&st, DbKind::Mysql, s).await;
+        let run = |sql: String| st.run_query("d".into(), sql, None, Some("m".into()));
+        let log = |n: usize| st.audit_log(None, String::new(), n).into_iter().map(|e| e.sql).collect::<Vec<_>>();
+        st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
+        run(format!("update {s}.t set v = 10 where id = 1")).await.unwrap();
+        // 1060: duplicate column name
+        let e = run(format!("alter table {s}.t add column v int")).await.unwrap_err().to_string();
+        assert!(e.contains("1060") && e.contains("committed the open transaction"), "{e}");
+        assert!(!st.tx_state("m".into()).await);
+        assert_eq!(log(3), [IMPLICIT_COMMIT.to_string(), format!("alter table {s}.t add column v int"), format!("update {s}.t set v = 10 where id = 1")]);
+        st.rollback_tx("m".into()).await.unwrap();
+        assert_eq!(log(1), [IMPLICIT_COMMIT]);
+        assert_eq!(followup_values(&st, s).await, "[[10],[2],[3]]");
+        // 1146: LOCK TABLES of a table that doesn't exist
+        run(format!("update {s}.t set v = 20 where id = 2")).await.unwrap();
+        run(format!("lock tables {s}.missing write")).await.unwrap_err();
+        assert!(!st.tx_state("m".into()).await);
+        assert_eq!(log(1), [IMPLICIT_COMMIT]);
+        // A DDL that doesn't parse (1064) leaves the transaction open
+        run(format!("update {s}.t set v = 30 where id = 3")).await.unwrap();
+        let e = run(format!("alter table {s}.t add column")).await.unwrap_err().to_string();
+        assert!(e.contains("1064") && !e.contains("committed"), "{e}");
+        assert!(st.tx_state("m".into()).await);
+        st.rollback_tx("m".into()).await.unwrap();
+        assert_eq!(log(1), ["ROLLBACK"]);
+        assert_eq!(followup_values(&st, s).await, "[[10],[20],[3]]");
+        followup_drop(&st, DbKind::Mysql, s).await;
+    }
+
+    /// PostgreSQL: COMMIT of a transaction an error aborted is a ROLLBACK on the server. Qurry says so (not committed) and logs
+    /// it as rolled back by the server, for the Commit button and a typed COMMIT
+    #[tokio::test]
+    #[ignore]
+    async fn pg_commit_of_an_aborted_transaction() {
+        let Some(st) = prod_state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
+        let s = "audit_followups_aborted";
+        followup_table(&st, DbKind::Postgres, s).await;
+        let run = |sql: String| st.run_query("d".into(), sql, None, Some("m".into()));
+        let log = |n: usize| st.audit_log(None, String::new(), n).into_iter().map(|e| (e.sql, e.error.is_some())).collect::<Vec<_>>();
+        st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
+        for commit in ["button", "commit", "end"] {
+            run(format!("update {s}.t set v = 10 where id = 1")).await.unwrap();
+            run("select 1 / 0".into()).await.unwrap_err();
+            assert!(st.tx_state("m".into()).await);
+            let e = match commit {
+                "button" => st.commit_tx("m".into()).await.unwrap_err(),
+                typed => run(typed.into()).await.unwrap_err(),
+            }
+            .to_string();
+            assert!(e.contains("Not committed") && e.contains("rolled back"), "{commit}: {e}");
+            assert!(!st.tx_state("m".into()).await);
+            let l = log(2);
+            assert_eq!(l[0], (BY_SERVER.to_string(), false), "{commit}: {l:?}");
+            assert!(l[1].1, "{commit}: {l:?}");
+            assert_eq!(followup_values(&st, s).await, "[[1],[2],[3]]");
+        }
+        // A transaction that recovered with ROLLBACK TO SAVEPOINT commits as usual
+        run(format!("update {s}.t set v = 10 where id = 1")).await.unwrap();
+        run("savepoint a".into()).await.unwrap();
+        run("select 1 / 0".into()).await.unwrap_err();
+        run("rollback to savepoint a".into()).await.unwrap();
+        st.commit_tx("m".into()).await.unwrap();
+        assert_eq!(log(1), [("COMMIT".to_string(), false)]);
+        assert_eq!(followup_values(&st, s).await, "[[10],[2],[3]]");
+        followup_drop(&st, DbKind::Postgres, s).await;
     }
 
     /// MySQL 8.0.24+ ends an idle session (wait_timeout) with error 4031: that is a lost connection, so the logged change is closed
