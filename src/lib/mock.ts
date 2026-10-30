@@ -1,7 +1,7 @@
 /** For development: opening in a browser with ?mock uses fake data instead of the Tauri backend (for checking screens). */
 const conns = [
   { id: "dev", name: "[DEV] shop_app", kind: "postgres", host: "dev-db.example.com", port: 5432, user: "app", database: "shop_app", color: "#5f5b24", hasPassword: true, connected: true },
-  { id: "prod", name: "[PROD] shop_app", kind: "postgres", host: "prod-db", port: 5432, user: "app", database: "shop_app", color: "#6e2a2a", hasPassword: true, connected: false,
+  { id: "prod", name: "[PROD] shop_app", kind: "postgres", host: "prod-db", port: 5432, user: "app", database: "shop_app", color: "#6e2a2a", hasPassword: true, connected: false, options: { confirmChanges: true },
     ssh: { enabled: true, host: "bastion.example.com", port: 22, user: "ec2-user", auth: "key", keyPath: "~/.ssh/id_ed25519" } },
   { id: "my", name: "[MySQL] shop", kind: "mysql", host: "127.0.0.1", port: 13306, user: "root", database: "shop", color: "#22524f", hasPassword: true, connected: true },
   { id: "rd", name: "[Redis] cache", kind: "redis", host: "127.0.0.1", port: 16379, user: "", database: "0", color: "#6e2a2a", hasPassword: false, connected: true },
@@ -15,7 +15,7 @@ const result = {
     { name: "created_at", typeName: "TIMESTAMPTZ" },
     { name: "memo", typeName: "TEXT" },
   ],
-  rows: Array.from({ length: 500 }, (_, i) => [i + 1, `user_${i + 1}`, (i * 1234.5).toFixed(2), "2026-10-15 12:00:00.000 +09:00", i % 3 ? null : "note"]),
+  rows: Array.from({ length: 500 }, (_, i) => [i + 1, `user_${i + 1}`, (i * 1234.5).toFixed(2), `2026-10-15 12:00:00${["", ".5", ".125"][i % 3]} +09:00`, i % 3 ? null : "note"]),
   rowsAffected: 0,
   truncated: true,
   elapsedMs: 12,
@@ -63,7 +63,11 @@ const handlers: Record<string, (a: any) => unknown> = {
     { schema: "public", table: "users", whereClause: `"user_name"::text ilike '%${a.req.text}%'`, result: { ...result, rows: result.rows.slice(0, 3), truncated: false } },
   ],
   list_schemas: (a: any) => (String(a.id).startsWith("rd") ? [{ name: String(a.id).split("::")[1] || "db0", isSystem: false }] : null) ?? (String(a.id).startsWith("my") ? [{ name: String(a.id).split("::")[1] || "shop", isSystem: false }] : null) ?? [{ name: "public", isSystem: false }, { name: "billing", isSystem: false }, { name: "pg_catalog", isSystem: true }],
-  list_objects: (a: any) => String(a.id).startsWith("rd") ? { relations: [["events", "stream"], ["rank", "zset"], ["session:abc", "string"], ["tags", "set"], ["user:1", "hash"]].map(([name, t]) => ({ name, kind: "key", comment: t, rowEstimate: null })), routines: [] } : ({
+  list_objects: (a: any) => String(a.id).startsWith("rd") ? { relations: [["events", "stream"], ["rank", "zset"], ["session:abc", "string"], ["tags", "set"], ["user:1", "hash"]].map(([name, t]) => ({ name, kind: "key", comment: t, rowEstimate: null })), routines: [] } : a.schema === "billing" ? {
+    // users in two schemas (same-name table tabs)
+    relations: [{ name: "invoices", kind: "table", comment: null, rowEstimate: 800 }, { name: "users", kind: "table", comment: "billing accounts", rowEstimate: 40 }],
+    routines: [],
+  } : ({
     relations: [
       { name: "contracts", kind: "table", comment: "계약", rowEstimate: 1200 },
       { name: "payments", kind: "table", comment: null, rowEstimate: 50000 },
@@ -160,6 +164,8 @@ const handlers: Record<string, (a: any) => unknown> = {
   load_workspace: () => JSON.parse(localStorage.getItem("mock-ws") ?? "null"),
   save_workspace: (a: any) => (localStorage.setItem("mock-ws", JSON.stringify(a.ws)), null),
   tx_state: () => (globalThis as any).__mockManual === true,
+  // Production confirmation: rows a change would touch (null = can't count, e.g. DDL)
+  preview_impact: (a: any) => (/^\s*(insert|update|delete)\b/i.test(a.sql) ? (/\bwhere\b/i.test(a.sql) ? 3 : 500) : null),
   unsafe_reason: (a: any) => (/^\s*(delete|update)\b(?![\s\S]*\bwhere\b)/i.test(a.sql) ? "DELETE without WHERE changes every row" : /^\s*(drop|truncate)\b/i.test(a.sql) ? "DROP removes data" : null),
   trust_ssh_host: () => "Trusted",
   export_data: (a: any) => new Promise((ok) => setTimeout(() => ok({ rows: 500, path: a.clipboard ? null : `~/Downloads/${a.defaultName}.${a.format}`, text: a.clipboard ? "id\tname\n1\ta\n" : null }), 4000)),
