@@ -24,6 +24,12 @@ pub async fn set_connection_color(state: State<'_, AppState>, id: String, color:
     state.set_connection_color(id, color).await
 }
 
+/// From a TLS connect error: turn on "Allow unencrypted connection" for the source (password kept) and reconnect next time
+#[tauri::command]
+pub async fn allow_plaintext(state: State<'_, AppState>, id: String) -> AppResult<ConnectionConfig> {
+    state.allow_plaintext(id).await
+}
+
 /// Explorer menu: change only the shown databases and schemas
 #[tauri::command]
 pub async fn set_connection_scope(state: State<'_, AppState>, id: String, scope: qurry_core::store::Scope) -> AppResult<ConnectionConfig> {

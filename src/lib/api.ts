@@ -158,6 +158,8 @@ export const api = {
     invoke<ConnectionConfig>("save_connection", { config, password: password ?? null, sshSecret: sshSecret ?? null }),
   setConnectionColor: (id: string, color: string | null) => invoke<ConnectionConfig>("set_connection_color", { id, color }),
   setConnectionScope: (id: string, scope: NonNullable<ConnectionConfig["scope"]>) => invoke<ConnectionConfig>("set_connection_scope", { id, scope }),
+  /** After a TLS connect error (wasm tlsOptIn): turn on "Allow unencrypted connection", keeping the saved password */
+  allowPlaintext: (id: string) => invoke<ConnectionConfig>("allow_plaintext", { id }),
   deleteConnection: (id: string) => invoke<void>("delete_connection", { id }),
   testConnection: (config: ConnectionConfig, password?: string, sshSecret?: string) =>
     invoke<string>("test_connection", { config, password: password ?? null, sshSecret: sshSecret ?? null }),

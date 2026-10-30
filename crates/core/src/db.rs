@@ -172,7 +172,7 @@ pub async fn connect_via(cfg: &ConnectionConfig, password: Option<&str>, tunnel_
                 .await
                 .map_err(|e| match &e {
                     // Required TLS that the server can't set up: say what to do instead of a bare TLS error
-                    sqlx::Error::Tls(_) if cfg.active_ssl().is_none() => crate::error::AppError::Msg(format!("{}\n({e})", crate::mysql::NEEDS_TLS.replace(" without TLS 1.2", ""))),
+                    sqlx::Error::Tls(_) if cfg.active_ssl().is_none() => crate::error::AppError::Msg(format!("{}\n({e})", qurry_shared::errors::needs_tls_pg())),
                     _ => e.into(),
                 })?;
             Ok(Pool::Pg(pool))
@@ -668,18 +668,42 @@ mod tests {
 
     /// A remote PostgreSQL without SSL settings must set up TLS: the local test server has no TLS, reached through an address that isn't loopback by name
     /// ("127.1" resolves to 127.0.0.1 but isn't an IP literal, so Qurry treats it as remote; ::ffff:127.0.0.1 now counts as this machine)
+    /// QURRY_TEST_PG=host:port:user:db (the server must have no TLS)
     #[tokio::test]
     #[ignore]
     async fn pg_remote_requires_tls() {
         let mut cfg = local_cfg();
+        if let Ok(e) = std::env::var("QURRY_TEST_PG") {
+            let p: Vec<&str> = e.split(':').collect();
+            (cfg.port, cfg.user, cfg.database) = (p[1].parse().unwrap(), p[2].into(), p[3].into());
+        }
         cfg.host = "127.1".into();
         assert!(!is_loopback(&cfg.host) && is_loopback("::ffff:127.0.0.1"));
-        let r = connect(&cfg, None).await;
-        let Err(e) = r else { panic!("connected without TLS") };
-        let e = e.to_string();
-        assert!(e.contains("didn't set up an encrypted") || e.contains("TLS") || e.contains("SSL"), "{e}");
-        cfg.options.allow_plaintext = true;
-        assert!(connect(&cfg, None).await.is_ok(), "allowed plain text connects");
+        opt_in_then_connect(cfg, "pw").await;
+    }
+
+    /// QURRY_TEST_MY_NOTLS=host:port:user:password:db — a MySQL started without TLS (the shared one has TLS)
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_remote_requires_tls() {
+        let e = std::env::var("QURRY_TEST_MY_NOTLS").expect("QURRY_TEST_MY_NOTLS");
+        let p: Vec<&str> = e.split(':').collect();
+        let cfg = ConnectionConfig { kind: DbKind::Mysql, host: "127.1".into(), port: p[1].parse().unwrap(), user: p[2].into(), database: p[4].into(), ..local_cfg() };
+        opt_in_then_connect(cfg, p[3]).await;
+    }
+
+    /// The TLS error is one the GUI offers "Allow unencrypted" for; after AppState::allow_plaintext the saved password connects
+    async fn opt_in_then_connect(cfg: ConnectionConfig, password: &str) {
+        let dir = std::env::temp_dir().join(format!("qurry-tlsopt-{}", uuid::Uuid::new_v4()));
+        let st = crate::app::AppState::new(crate::store::Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+        let id = st.save_connection(cfg, Some(password.into()), None).await.unwrap().id;
+        let e = st.connect(id.clone()).await.expect_err("connected without TLS").to_string();
+        assert!(qurry_shared::errors::tls_opt_in(&e), "{e}");
+        let c = st.allow_plaintext(id.clone()).await.unwrap();
+        assert!(c.options.allow_plaintext && c.password_saved);
+        let v = st.connect(id).await.expect("allowed plain text connects with the saved password");
+        assert!(v.contains("Not encrypted"), "{v}");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

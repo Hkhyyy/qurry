@@ -85,6 +85,7 @@ pub fn run() {
             commands::save_connection,
             commands::set_connection_color,
             commands::set_connection_scope,
+            commands::allow_plaintext,
             commands::delete_connection,
             commands::test_connection,
             commands::test_ssh,
