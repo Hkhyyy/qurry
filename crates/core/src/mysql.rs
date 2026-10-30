@@ -402,9 +402,26 @@ impl MySession {
         Ok(())
     }
 
+    /// Whether InnoDB rolled back the whole transaction on this error: a deadlock, and a lock wait timeout with innodb_rollback_on_timeout
+    async fn tx_rolled_back(&mut self, e: &AppError) -> bool {
+        match error_number(e) {
+            Some(1213) => true,
+            Some(1205) => sqlx::query_scalar::<_, i64>("SELECT @@innodb_rollback_on_timeout").fetch_one(&mut *self.conn).await.is_ok_and(|v| v != 0),
+            _ => false,
+        }
+    }
+
     pub async fn run(&mut self, sql: &str, limit: usize) -> AppResult<QueryResult> {
         self.more = None;
-        let mut r = run_on(&mut self.conn, sql, limit).await?;
+        let mut r = match run_on(&mut self.conn, sql, limit).await {
+            Ok(r) => r,
+            Err(e) => {
+                if self.in_tx && self.tx_rolled_back(&e).await {
+                    self.in_tx = false;
+                }
+                return Err(e);
+            }
+        };
         let s = strip_comments_lead(sql);
         if s.starts_with("begin") || s.starts_with("start transaction") {
             self.in_tx = true;
@@ -439,16 +456,13 @@ impl MySession {
         if let Err(e) = &shot
             && crate::audit::stops_change(e)
         {
-            let gone = if own {
+            // No transaction was open before: end the one the snapshot ran in (Qurry's own, or the one autocommit=0 opened in Manual)
+            // with the row locks it took before it stopped
+            let gone = if !had_tx {
                 let _ = self.rollback_tx().await;
                 true
             } else {
-                // InnoDB rolls back the whole transaction on a deadlock, and on a lock wait timeout with innodb_rollback_on_timeout
-                match error_number(e) {
-                    Some(1213) => true,
-                    Some(1205) => sqlx::query_scalar::<_, i64>("SELECT @@innodb_rollback_on_timeout").fetch_one(&mut *self.conn).await.is_ok_and(|v| v != 0),
-                    _ => false,
-                }
+                self.tx_rolled_back(e).await
             };
             if gone {
                 self.in_tx = false;

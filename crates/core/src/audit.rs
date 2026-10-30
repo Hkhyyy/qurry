@@ -1268,4 +1268,61 @@ mod tests {
     async fn mysql_lost_connection_is_logged() {
         lost_connection_is_logged(DbKind::Mysql, "QURRY_TEST_MY").await;
     }
+
+    /// MySQL: a deadlock on the change itself (no snapshot: INSERT … ON DUPLICATE KEY UPDATE) rolls back the whole Manual transaction.
+    /// The console no longer shows an open transaction, and the log closes it as rolled back by the server
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_change_deadlock_closes_the_transaction() {
+        let Some(st) = prod_state(DbKind::Mysql, "QURRY_TEST_MY").await else { return };
+        let s = "audit_followups_dead";
+        followup_table(&st, DbKind::Mysql, s).await;
+        let run = |tab: &str, sql: String| st.run_query("d".into(), sql, None, Some(tab.into()));
+        st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
+        st.set_tx_mode("d".into(), "o".into(), true).await.unwrap();
+        run("m", format!("update {s}.t set v = 10 where id = 1")).await.unwrap();
+        // o holds more rows, so InnoDB picks m as the deadlock victim
+        run("o", format!("update {s}.t set v = 20 where id in (2, 3)")).await.unwrap();
+        let m = async {
+            tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+            run("m", format!("insert into {s}.t values (2, 0) on duplicate key update v = 11")).await
+        };
+        let (o, m) = tokio::join!(run("o", format!("update {s}.t set v = 21 where id = 1")), m);
+        o.unwrap();
+        let e = m.unwrap_err().to_string();
+        assert!(e.contains("Deadlock"), "{e}");
+        assert!(!st.tx_state("m".into()).await);
+        assert_eq!(st.audit_log(None, String::new(), 2)[0].sql, BY_SERVER);
+        st.commit_tx("o".into()).await.unwrap();
+        assert_eq!(followup_values(&st, s).await, "[[21],[20],[20]]");
+        followup_drop(&st, DbKind::Mysql, s).await;
+    }
+
+    /// MySQL Manual console with no transaction open: a snapshot cancelled after it locked some rows leaves no transaction
+    /// (and so no row locks) behind
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_cancelled_snapshot_leaves_no_transaction() {
+        let Some(st) = prod_state(DbKind::Mysql, "QURRY_TEST_MY").await else { return };
+        let s = "audit_followups_cancel";
+        followup_table(&st, DbKind::Mysql, s).await;
+        let run = |tab: &str, sql: String| st.run_query("d".into(), sql, None, Some(tab.into()));
+        st.set_tx_mode("d".into(), "o".into(), true).await.unwrap();
+        run("o", format!("update {s}.t set v = 30 where id = 3")).await.unwrap();
+        st.set_tx_mode("d".into(), "c".into(), true).await.unwrap();
+        // The snapshot locks row 2, then waits for row 3
+        let cancel = async {
+            tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+            st.cancel_query("c".into()).await.unwrap()
+        };
+        let (r, _) = tokio::join!(run("c", format!("update {s}.t set v = 0 where id >= 2")), cancel);
+        let e = r.unwrap_err().to_string();
+        assert!(e.starts_with("Not run: ") && !e.contains("lost"), "{e}");
+        assert!(!st.tx_state("c".into()).await);
+        let pid = st.sessions.read().await.get("c").unwrap().pid;
+        let open = st.run_query("d".into(), format!("select count(*) from information_schema.innodb_trx where trx_mysql_thread_id = {pid}"), None, None).await.unwrap();
+        assert_eq!(serde_json::to_string(&open.rows).unwrap(), "[[0]]");
+        st.rollback_tx("o".into()).await.unwrap();
+        followup_drop(&st, DbKind::Mysql, s).await;
+    }
 }
