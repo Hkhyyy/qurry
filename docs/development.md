@@ -4,6 +4,17 @@ English | [한국어](ko/development.md)
 
 Building from source, how the code is laid out, and the tests.
 
+## Prerequisites
+
+Rust (stable), Node.js 22 and pnpm 10. The GUI also runs Rust compiled to WebAssembly (`crates/shared`), which needs:
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.129 --locked   # must equal the wasm-bindgen version in crates/shared-wasm/Cargo.toml
+```
+
+`pnpm wasm` builds it into `src/wasm/pkg` (not committed); `pnpm dev`, `pnpm build`, `pnpm test` and the Storybook scripts run it first, and it says what to install when something is missing. If [binaryen](https://github.com/WebAssembly/binaryen)'s `wasm-opt` is installed, the module is also shrunk with it (optional).
+
 ## Build & run
 
 ```bash
@@ -32,6 +43,8 @@ src           GUI frontend (React + Monaco)
 crates/tui    TUI (ratatui)
 crates/mcp    MCP server (stdio JSON-RPC)
 crates/driver qurry-driver: the driver protocol (one JSON request / response per line over stdio) + REST helpers
+crates/shared qurry-shared: pure Rust logic shared with the GUI (no I/O, builds for wasm32)
+crates/shared-wasm  qurry-shared-wasm: wasm-bindgen wrapper the GUI calls through src/lib/shared.ts
 drivers/*     driver programs (SQLite, DuckDB, SQL Server, ClickHouse, MongoDB, Oracle, Qdrant, Chroma, Milvus)
 ```
 
