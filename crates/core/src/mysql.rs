@@ -99,6 +99,7 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
         Err(e) => match on_connect_error(&e, explicit_ssl, plain_ok) {
             OnConnectError::RetryPlain => pool_opts().connect_with(opts.ssl_mode(sqlx::mysql::MySqlSslMode::Disabled)).await?,
             OnConnectError::NeedsTls => return Err(AppError::Msg(format!("{NEEDS_TLS}\n({e})"))),
+            OnConnectError::Dropped => return Err(AppError::Msg(format!("{DROPPED_TLS}\n({e})"))),
             OnConnectError::Fail => return Err(e.into()),
         },
         Ok(p) => p,
@@ -112,21 +113,29 @@ enum OnConnectError {
     RetryPlain,
     /// Tell the user about "Allow unencrypted connection"
     NeedsTls,
+    /// The server dropped the connection: maybe an old server refusing TLS, maybe a proxy without a backend — a softer hint
+    Dropped,
     Fail,
 }
 
-/// What to do when the first connect fails. A TLS failure, or the server just dropping the connection during the handshake (some old servers do),
-/// counts only when SSL isn't set explicitly
+/// What to do when the first connect fails. A TLS failure, or the server just dropping the connection (some old servers do during the
+/// handshake), counts only when SSL isn't set explicitly. sqlx doesn't say at which step a connection was dropped (a proxy without a
+/// backend, or a drop after auth, look the same), so a drop gets a hint that doesn't claim TLS was the cause
 fn on_connect_error(e: &sqlx::Error, explicit_ssl: bool, plain_ok: bool) -> OnConnectError {
     let dropped = matches!(e, sqlx::Error::Io(io) if matches!(io.kind(), ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted));
     if explicit_ssl || !(is_tls_failure(e) || dropped) {
         OnConnectError::Fail
     } else if plain_ok {
         OnConnectError::RetryPlain
+    } else if dropped {
+        OnConnectError::Dropped
     } else {
         OnConnectError::NeedsTls
     }
 }
+
+/// When the server dropped the connection while TLS was required (the cause isn't known for sure)
+pub const DROPPED_TLS: &str = "The server closed the connection while setting up encryption — it may be an old MySQL without TLS 1.2 (then, on a network you trust, turn on \"Allow unencrypted connection\" for this data source: GUI: Options tab · TUI: data source form, \"Allow unencrypted\"), or check the host, port and any proxy in between.";
 
 /// When not falling back to plaintext on a server without TLS
 pub const NEEDS_TLS: &str = "This server didn't set up an encrypted (TLS) connection, so Qurry didn't send the password. If it's an old server without TLS 1.2 and the network is trusted, turn on \"Allow unencrypted connection\" for this data source (GUI: Options tab · TUI: data source form, \"Allow unencrypted\").";
@@ -789,7 +798,8 @@ mod tests {
         assert!(!super::is_tls_failure(&sqlx::Error::Protocol("Access denied for user 'u'".into())));
     }
 
-    /// An old server that just drops the connection during the TLS handshake gets the "Allow unencrypted" hint (or plain text when allowed)
+    /// A dropped connection can't be told apart from a proxy with no backend or a drop after auth: it gets a softer hint
+    /// (old MySQL without TLS 1.2, or check the host, port and proxy) — not "didn't send the password"
     #[test]
     fn dropped_handshake_gets_the_tls_hint() {
         use super::OnConnectError::*;
@@ -797,11 +807,12 @@ mod tests {
         let io = |k: ErrorKind, m: &str| sqlx::Error::Io(Error::new(k, m));
         for k in [ErrorKind::UnexpectedEof, ErrorKind::ConnectionReset, ErrorKind::ConnectionAborted] {
             let e = io(k, "unexpected end of file");
-            assert_eq!(super::on_connect_error(&e, false, false), NeedsTls, "{k:?}");
+            assert_eq!(super::on_connect_error(&e, false, false), Dropped, "{k:?}");
             assert_eq!(super::on_connect_error(&e, false, true), RetryPlain, "{k:?}");
             // SSL set explicitly: the raw error
             assert_eq!(super::on_connect_error(&e, true, false), Fail, "{k:?}");
         }
+        assert!(!super::DROPPED_TLS.contains("didn't send the password") && super::DROPPED_TLS.contains("proxy") && super::DROPPED_TLS.contains("Allow unencrypted"));
         let tls = io(ErrorKind::InvalidData, "received fatal alert: HandshakeFailure");
         assert_eq!(super::on_connect_error(&tls, false, false), NeedsTls);
         assert_eq!(super::on_connect_error(&tls, false, true), RetryPlain);
