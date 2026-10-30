@@ -1683,6 +1683,14 @@ INSERT INTO `ev` VALUES (3,'it\'s \\! x');
             assert_eq!(q("select count(*) from bak_v").await.unwrap().rows[0][0], serde_json::json!(3));
             assert_eq!(q(objects).await.unwrap().rows[0][0], serde_json::json!(4));
         }
+        // Data only (--no-create-info) still writes the routine, trigger and event with their DEFINER= (not the view), so leaving them out applies there too
+        for strip_definers in [false, true] {
+            let file = dir.join(format!("d-{strip_definers}.sql")).to_string_lossy().to_string();
+            let opts = BackupOptions { data_only: true, strip_definers, ..Default::default() };
+            st.backup("m::qurry_mysqldump".into(), file.clone(), opts, "j".into()).await.unwrap();
+            let text = std::fs::read_to_string(&file).unwrap();
+            assert_eq!(text.matches("DEFINER=`").count(), if strip_definers { 0 } else { 3 }, "{text}");
+        }
         st.run_query("m".into(), "drop database qurry_mysqldump".into(), None, None).await.ok();
         std::fs::remove_dir_all(dir).ok();
     }
