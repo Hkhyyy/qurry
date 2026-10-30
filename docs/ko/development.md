@@ -4,6 +4,17 @@
 
 소스에서 빌드하기, 코드 구조, 테스트입니다.
 
+## 준비물
+
+Rust (stable), Node.js 22, pnpm 10. GUI 는 WebAssembly 로 컴파일한 Rust (`crates/shared`) 도 쓰므로 이것도 필요합니다:
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.129 --locked   # crates/shared-wasm/Cargo.toml 의 wasm-bindgen 버전과 같아야 함
+```
+
+`pnpm wasm` 이 `src/wasm/pkg` 로 빌드합니다 (커밋하지 않음). `pnpm dev`, `pnpm build`, `pnpm test`, Storybook 스크립트가 먼저 이걸 돌리고, 빠진 게 있으면 무엇을 설치할지 알려 줍니다. [binaryen](https://github.com/WebAssembly/binaryen) 의 `wasm-opt` 가 깔려 있으면 모듈을 더 줄입니다 (로컬에서는 선택. CI 와 릴리스 빌드는 `npm install -g binaryen@132.0.0` 으로 설치하며, 로컬에서도 같은 명령으로 깔 수 있습니다).
+
 ## 빌드와 실행
 
 ```bash
@@ -32,6 +43,8 @@ src           GUI 프런트엔드 (React + Monaco)
 crates/tui    TUI (ratatui)
 crates/mcp    MCP 서버 (stdio JSON-RPC)
 crates/driver qurry-driver: 드라이버 프로토콜 (stdio 로 한 줄에 JSON 요청 / 응답 하나) + REST 도우미
+crates/shared qurry-shared: GUI 와 함께 쓰는 순수 Rust 로직 (I/O 없음, wasm32 로 빌드됨)
+crates/shared-wasm  qurry-shared-wasm: GUI 가 src/lib/shared.ts 로 부르는 wasm-bindgen 래퍼
 drivers/*     드라이버 프로그램 (SQLite, DuckDB, SQL Server, ClickHouse, MongoDB, Oracle, Qdrant, Chroma, Milvus)
 ```
 

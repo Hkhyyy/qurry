@@ -1,0 +1,9 @@
+[package]
+name = "qurry-shared"
+version = "0.1.0"
+edition = "2024"
+description = "Pure Rust logic shared by the GUI (as WASM), the TUI and the backend"
+publish = false
+
+[dependencies]
+serde = { workspace = true }

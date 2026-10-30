@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import "../src/App.css";
 import "../src/ui/tokens.css";
 import "../src/ui/ui.css";
+import { initShared } from "../src/lib/shared";
 
 // Switch the theme from the top toolbar (same data-theme as the app's Settings › Appearance)
 const preview: Preview = {
@@ -14,6 +15,8 @@ const preview: Preview = {
   },
   initialGlobals: { theme: "dark" },
   parameters: { layout: "padded", backgrounds: { disable: true } },
+  // Shared WASM, awaited so stories can call shared() (main.tsx starts it without waiting; loaded once, later stories reuse it)
+  loaders: [async () => (await initShared(), {})],
   decorators: [
     (Story, ctx) => {
       const theme = ctx.globals.theme as string;
