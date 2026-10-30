@@ -705,53 +705,76 @@ impl AppState {
     }
 
     /// If `tab_id` is set, run in that console's session (cursor and cancel support).
-    /// For Production Data Sources, log modifying statements to the audit log, with undo SQL for simple UPDATE / DELETE (crate::audit)
+    /// For Production Data Sources, log modifying statements to the audit log before they run (not run if that fails),
+    /// with undo SQL for simple UPDATE / DELETE (crate::audit)
     pub async fn run_query(&self, id: String, sql: String, limit: Option<usize>, tab_id: Option<String>) -> AppResult<QueryResult> {
         let limit = limit.unwrap_or(500);
         self.check_read_only(&id, &sql)?;
         let cfg = self.source(&id)?;
         let watch = cfg.options.confirm_changes;
-        let change = watch && crate::audit::is_change(&sql, cfg.kind);
-        let r = match tab_id.as_deref() {
-            Some(tab) => {
-                let sess = match ensure_session(self, &id, tab).await {
-                    Ok(s) => s,
-                    Err(e) => return Err(recover(self, &id, Some(tab), false, e).await),
-                };
-                let (r, in_tx, undo) = {
-                    let mut s = sess.lock().await;
-                    let undo = match change {
-                        true => Some(crate::audit::prepare(&ensure_pool(self, &id).await?, Some(&mut s), &sql, cfg.kind).await),
-                        false => None,
-                    };
-                    let in_tx = s.in_tx();
-                    (s.run(&sql, limit).await, in_tx, undo)
-                };
-                if watch {
-                    self.audit.after(&id, &cfg.name, cfg.kind, Some(tab), &sql, &r, undo);
-                }
-                match r {
-                    Err(e) => Err(recover(self, &id, Some(tab), in_tx, e).await),
-                    ok => ok,
-                }
-            }
-            None => {
-                let pool = ensure_pool(self, &id).await?;
-                let undo = match change {
-                    true => Some(crate::audit::prepare(&pool, None, &sql, cfg.kind).await),
-                    false => None,
-                };
-                let r = pool.run_query(&sql, limit).await;
-                if watch {
-                    self.audit.after(&id, &cfg.name, cfg.kind, None, &sql, &r, undo);
-                }
-                match r {
-                    Err(e) => Err(recover(self, &id, None, false, e).await),
-                    ok => ok,
-                }
-            }
+        let tab = tab_id.as_deref();
+        let started = match watch {
+            true => self.audit.before(&id, &cfg.name, cfg.kind, tab, &sql)?,
+            false => None,
         };
-        r
+        let undo = watch && crate::audit::is_change(&sql, cfg.kind);
+        let (r, undo, in_tx) = self.run_with_undo(&id, cfg.kind, &sql, limit, tab, undo).await;
+        let logged = match watch {
+            true => self.audit.after(started, &id, &cfg.name, cfg.kind, tab, &sql, &r, undo),
+            false => Ok(()),
+        };
+        match r {
+            Err(e) => Err(recover(self, &id, tab, in_tx, e).await),
+            Ok(q) => logged.map(|_| q),
+        }
+    }
+
+    /// Run in the console's session (or on the pool). undo = also keep undo SQL: the snapshot runs in the change's transaction (Session::run_with_snapshot).
+    /// → (result, undo SQL or why there is none, whether the console had a transaction open)
+    async fn run_with_undo(&self, id: &str, kind: store::DbKind, sql: &str, limit: usize, tab: Option<&str>, undo: bool) -> (AppResult<QueryResult>, Option<Result<String, String>>, bool) {
+        let pool = match ensure_pool(self, id).await {
+            Ok(p) => p,
+            Err(e) => return (Err(e), None, false),
+        };
+        let plan = match undo {
+            true => Some(crate::audit::plan(&pool, sql, kind).await),
+            false => None,
+        };
+        let sess = match tab {
+            Some(t) => match ensure_session(self, id, t).await {
+                Ok(s) => Some(s),
+                Err(e) => return (Err(e), None, false),
+            },
+            None => None,
+        };
+        let (mut guard, mut temp);
+        let s: &mut Session = match &sess {
+            Some(s) => {
+                guard = s.lock().await;
+                &mut guard
+            }
+            // On the pool: a connection of its own for the snapshot's transaction
+            None if matches!(plan, Some(Ok(_))) => match Session::open(&pool).await {
+                Ok(s) => {
+                    temp = s;
+                    &mut temp
+                }
+                Err(e) => return (Err(e), None, false),
+            },
+            None => return (pool.run_query(sql, limit).await, plan.and_then(|p| p.err()).map(Err), false),
+        };
+        let in_tx = s.in_tx();
+        let (r, undo) = match plan {
+            Some(Ok(p)) => {
+                let (snap, r) = s.run_with_snapshot(&p.snapshot, sql, limit).await;
+                (r, Some(p.undo(snap)))
+            }
+            other => (s.run(sql, limit).await, other.and_then(|p| p.err()).map(Err)),
+        };
+        if sess.is_none() {
+            s.discard().await;
+        }
+        (r, undo, in_tx)
     }
 
     /// Production audit log (newest first)
@@ -760,12 +783,11 @@ impl AppState {
     }
 
     /// Log the console's Commit / Roll back to the audit log (only if the logged changes were uncommitted)
-    async fn audit_tx_end(&self, tab_id: &str, word: &str) {
+    async fn audit_tx_end(&self, tab_id: &str, word: &str) -> AppResult<()> {
         let conn = self.sessions.read().await.get(tab_id).map(|e| e.conn_id.clone());
-        if let Some(c) = conn
-            && let Ok(cfg) = self.source(&c)
-        {
-            self.audit.tx_closed(&c, &cfg.name, tab_id, word);
+        match conn.map(|c| (self.source(&c), c)) {
+            Some((Ok(cfg), c)) => self.audit.tx_closed(&c, &cfg.name, tab_id, word),
+            _ => Ok(()),
         }
     }
 
@@ -850,18 +872,26 @@ impl AppState {
         }
     }
 
+    /// Production: the COMMIT of logged changes goes into the log first; if it can't be written, the transaction stays open
     pub async fn commit_tx(&self, tab_id: String) -> AppResult<()> {
-        let sess = self.sessions.read().await.get(&tab_id).map(|e| e.session.clone()).ok_or_else(|| AppError::Msg("Session closed".into()))?;
-        sess.lock().await.commit().await?;
-        self.audit_tx_end(&tab_id, "COMMIT").await;
-        Ok(())
+        let (sess, conn) = self.sessions.read().await.get(&tab_id).map(|e| (e.session.clone(), e.conn_id.clone())).ok_or_else(|| AppError::Msg("Session closed".into()))?;
+        let cfg = self.source(&conn).ok();
+        let started = match &cfg {
+            Some(c) => self.audit.before(&conn, &c.name, c.kind, Some(&tab_id), "COMMIT")?,
+            None => None,
+        };
+        let r = sess.lock().await.commit().await.map(|_| db::query_result(vec![], vec![], 0, false, std::time::Instant::now(), false));
+        let logged = match &cfg {
+            Some(c) => self.audit.after(started, &conn, &c.name, c.kind, Some(&tab_id), "COMMIT", &r, None),
+            None => Ok(()),
+        };
+        r.and(logged)
     }
 
     pub async fn rollback_tx(&self, tab_id: String) -> AppResult<()> {
         let sess = self.sessions.read().await.get(&tab_id).map(|e| e.session.clone()).ok_or_else(|| AppError::Msg("Session closed".into()))?;
         sess.lock().await.rollback_tx().await?;
-        self.audit_tx_end(&tab_id, "ROLLBACK").await;
-        Ok(())
+        self.audit_tx_end(&tab_id, "ROLLBACK").await
     }
 
     pub async fn close_session(&self, tab_id: String) -> AppResult<()> {
@@ -871,7 +901,9 @@ impl AppState {
         if busy {
             let _ = self.cancel_query(tab_id.clone()).await;
         }
-        self.audit_tx_end(&tab_id, "ROLLBACK (console closed)").await;
+        if let Err(e) = self.audit_tx_end(&tab_id, "ROLLBACK (console closed)").await {
+            crate::log!("[qurry] {e}");
+        }
         let removed = self.sessions.write().await.remove(&tab_id);
         if let Some(e) = removed {
             e.session.lock().await.discard().await;
@@ -901,43 +933,66 @@ impl AppState {
             self.check_read_only(&id, st)?;
         }
         let cfg = self.source(&id)?;
+        let watch = cfg.options.confirm_changes;
+        // Production: the changes go into the log before they run (not run if that fails)
+        let started = match watch {
+            true => self.audit.before_batch(&id, &cfg.name, cfg.kind, &statements)?,
+            false => vec![],
+        };
         let mut undos = Vec::new();
-        if cfg.options.confirm_changes {
-            let pool = ensure_pool(self, &id).await?;
-            for st in &statements {
-                undos.push(match crate::audit::is_change(st, cfg.kind) {
-                    true => Some(crate::audit::prepare(&pool, None, st, cfg.kind).await),
-                    false => None,
-                });
-            }
+        let r = self.run_batch(&id, cfg.kind, &statements, exact_one, prepared, watch, &mut undos).await;
+        let logged = match watch {
+            true => self.audit.after_batch(started, r.as_ref().err().map(|e| e.to_string()), exact_one, undos),
+            false => Ok(()),
+        };
+        match r {
+            Err(e) => Err(recover(self, &id, None, false, e).await),
+            Ok(n) => logged.map(|_| n),
         }
-        let r = match ensure_pool(self, &id).await? {
-            Pool::Pg(pg) => session::execute_batch_with(&pg, &statements, exact_one, prepared).await,
-            Pool::My(my) => crate::mysql::execute_batch_with(&my, &statements, exact_one, prepared).await,
+    }
+
+    /// undo = also keep undo SQL for each statement (into `undos`): the snapshots run in the batch's transaction, right before their statements
+    #[allow(clippy::too_many_arguments)]
+    async fn run_batch(&self, id: &str, kind: store::DbKind, statements: &[String], exact_one: bool, prepared: bool, undo: bool, undos: &mut Vec<Option<Result<String, String>>>) -> AppResult<u64> {
+        let pool = ensure_pool(self, id).await?;
+        let mut plans = Vec::new();
+        for st in statements {
+            plans.push(match undo && crate::audit::is_change(st, kind) {
+                true => Some(crate::audit::plan(&pool, st, kind).await),
+                false => None,
+            });
+        }
+        let snaps: Vec<Option<&str>> = plans.iter().map(|p| p.as_ref().and_then(|p| p.as_ref().ok()).map(|p| p.snapshot.as_str())).collect();
+        let (n, mut shots) = match pool {
+            Pool::Pg(pg) => session::execute_batch_with(&pg, statements, exact_one, prepared, &snaps).await?,
+            Pool::My(my) => crate::mysql::execute_batch_with(&my, statements, exact_one, prepared, &snaps).await?,
             Pool::Redis(m, _) => {
-                for st in &statements {
+                for st in statements {
                     crate::redisdb::run(&m, st, 1).await?;
                 }
-                Ok(statements.len() as u64)
+                (statements.len() as u64, vec![])
             }
             // Drivers: one by one (drivers know nothing about transactions — only exact_one is enforced)
             Pool::Plugin(c) => {
                 let mut affected = 0;
-                for st in &statements {
+                for st in statements {
                     let n = c.query(st, 1).await?.rows_affected;
                     session::check_exact_one(st, n, exact_one)?;
                     affected += n;
                 }
-                Ok(affected)
+                (affected, vec![])
             }
         };
-        if cfg.options.confirm_changes {
-            self.audit.after_batch(&id, &cfg.name, cfg.kind, &statements, r.as_ref().err().map(|e| e.to_string()), exact_one, undos);
-        }
-        match r {
-            Err(e) => Err(recover(self, &id, None, false, e).await),
-            ok => ok,
-        }
+        shots.resize_with(plans.len(), || None);
+        *undos = plans
+            .into_iter()
+            .zip(shots)
+            .map(|(p, shot)| match (p, shot) {
+                (Some(Ok(p)), Some(shot)) => Some(p.undo(shot)),
+                (p, _) => p.and_then(|p| p.err()).map(Err),
+            })
+            .collect();
+        Ok(n)
     }
 
     /// Save to the search cache on every read (Redis keys are not saved)
