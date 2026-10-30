@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { api, DataPreview, meta } from "../lib/api";
+import { api, type BackupOptions, DataPreview, meta } from "../lib/api";
 import { autoMap, DataFormat, FORMATS, progressText } from "../lib/transfer";
-import { Button, Hint, IconButton, Modal, Notice, ProgressBar, RadioGroup, SectionTitle, Select, StatusItem, Table, Td, Text, TextInput, Th } from "../ui";
+import { Button, Checkbox, Hint, IconButton, Modal, Notice, ProgressBar, RadioGroup, SectionTitle, Select, StatusItem, Table, Td, Text, TextInput, Th } from "../ui";
 
 const LAST = "qurry.export";
 function lastChoice(): { format: DataFormat; clipboard: boolean } {
@@ -190,9 +190,10 @@ export function TransferBar({ jobs }: { jobs: TransferJob[] }) {
 }
 
 /** Backup (pg_dump / mysqldump): choose format and scope */
-export function BackupDialog({ what, pg, onRun, onClose }: { what: string; pg: boolean; onRun: (o: { format: "custom" | "plain"; schemaOnly: boolean; dataOnly: boolean }) => void; onClose: () => void }) {
+export function BackupDialog({ what, pg, onRun, onClose }: { what: string; pg: boolean; onRun: (o: Omit<BackupOptions, "schemas">) => void; onClose: () => void }) {
   const [format, setFormat] = useState<"custom" | "plain">(pg ? "custom" : "plain");
   const [part, setPart] = useState<"all" | "schema" | "data">("all");
+  const [stripDefiners, setStripDefiners] = useState(false);
   return (
     <Modal
       title={<>Back Up {what}</>}
@@ -200,7 +201,7 @@ export function BackupDialog({ what, pg, onRun, onClose }: { what: string; pg: b
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" autoFocus onClick={() => onRun({ format, schemaOnly: part === "schema", dataOnly: part === "data" })}>
+          <Button variant="primary" autoFocus onClick={() => onRun({ format, schemaOnly: part === "schema", dataOnly: part === "data", stripDefiners: !pg && part !== "data" && stripDefiners })}>
             Choose File & Back Up
           </Button>
         </>
@@ -229,6 +230,13 @@ export function BackupDialog({ what, pg, onRun, onClose }: { what: string; pg: b
           { value: "data", label: <b>Data only</b> },
         ]}
       />
+      {!pg && (
+        // A data-only dump has no routines, views, triggers or events
+        <Checkbox checked={stripDefiners && part !== "data"} disabled={part === "data"} onChange={setStripDefiners}>
+          <b>Leave out DEFINER= clauses</b>
+          <Text tone="muted"> for restoring into RDS and other managed services, where another user's DEFINER needs SUPER. The objects then belong to the user who restores them.</Text>
+        </Checkbox>
+      )}
       <Hint>Runs {pg ? "pg_dump" : "mysqldump"} on this computer (install the client tools if it's missing). The password is passed through the environment, not the command line.</Hint>
     </Modal>
   );
