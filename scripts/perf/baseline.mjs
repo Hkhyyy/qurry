@@ -43,7 +43,8 @@ async function setText(page, text) {
   await page.keyboard.press("Escape");
 }
 
-// From the Ctrl+Space keydown to the first suggestion row on screen, measured in the page
+// From the Ctrl+Space keydown to the first suggestion row in the DOM, measured in the page. A MutationObserver
+// stamps the time right after the mutating task (polling per animation frame would round to ~16.7 ms steps)
 async function suggestLatency(page) {
   const out = [];
   for (let i = 0; i < RUNS + 2; i++) {
@@ -51,11 +52,18 @@ async function suggestLatency(page) {
     await page.waitForFunction(() => !document.querySelector(".suggest-widget.visible"));
     await page.evaluate(() => {
       window.__t0 = 0;
+      window.__t1 = 0;
       document.addEventListener("keydown", () => (window.__t0 = performance.now()), { capture: true, once: true });
+      const mo = new MutationObserver(() => {
+        if (!document.querySelector(".suggest-widget.visible .monaco-list-row")) return;
+        window.__t1 = performance.now();
+        mo.disconnect();
+      });
+      mo.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
     });
     await page.keyboard.press("Control+Space");
-    const h = await page.waitForFunction(() => document.querySelector(".suggest-widget.visible .monaco-list-row") && performance.now() - window.__t0, null, { polling: "raf" });
-    const ms = await h.jsonValue();
+    await page.waitForFunction(() => window.__t1);
+    const ms = await page.evaluate(() => window.__t1 - window.__t0);
     if (i >= 2) out.push(ms); // first two are warm-up
   }
   await page.keyboard.press("Escape");
