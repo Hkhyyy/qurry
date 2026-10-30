@@ -28,3 +28,4 @@ export const ScreenTableDesigner = { ...by("Table designer"), name: "Screen · T
 export const ScreenGenerateData = { ...by("Generate test data"), name: "Screen · Generate test data" };
 export const ScreenCopyRows = { ...by("Copy related rows"), name: "Screen · Copy related rows" };
 export const ScreenRedis = { ...by("Redis"), name: "Screen · Redis" };
+export const ScreenMysqlBackupDefiners = { ...by("MySQL backup: DEFINER= question"), name: "Screen · MySQL backup: DEFINER= question" };

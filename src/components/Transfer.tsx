@@ -201,7 +201,7 @@ export function BackupDialog({ what, pg, onRun, onClose }: { what: string; pg: b
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" autoFocus onClick={() => onRun({ format, schemaOnly: part === "schema", dataOnly: part === "data", stripDefiners: !pg && part !== "data" && stripDefiners })}>
+          <Button variant="primary" autoFocus onClick={() => onRun({ format, schemaOnly: part === "schema", dataOnly: part === "data", stripDefiners: !pg && stripDefiners })}>
             Choose File & Back Up
           </Button>
         </>
@@ -231,8 +231,8 @@ export function BackupDialog({ what, pg, onRun, onClose }: { what: string; pg: b
         ]}
       />
       {!pg && (
-        // A data-only dump has no routines, views, triggers or events
-        <Checkbox checked={stripDefiners && part !== "data"} disabled={part === "data"} onChange={setStripDefiners}>
+        // Also for Data only: mysqldump --no-create-info still writes the routines, triggers and events, with their DEFINER=
+        <Checkbox checked={stripDefiners} onChange={setStripDefiners}>
           <b>Leave out DEFINER= clauses</b>
           <Text tone="muted"> for restoring into RDS and other managed services, where another user's DEFINER needs SUPER. The objects then belong to the user who restores them.</Text>
         </Checkbox>

@@ -123,6 +123,8 @@ pub struct DbaTab {
     pub loaded: Option<std::time::Instant>,
     pub error: Option<String>,
     pub running: bool,
+    /// Bumped by each load; only the latest load's result is put in (an older run of the same report must not clear running)
+    pub run: u64,
     pub auto: bool,
     /// The selected session disappeared after a reload (its pid). c / K then terminate nothing
     pub gone: Option<String>,
@@ -301,7 +303,8 @@ pub enum Popup {
     Help { sel: usize, scroll: u16, record: Option<bool>, message: Option<String> },
     Message { title: String, text: String },
     /// Single-line input. words = autocomplete candidates (columns·keywords for table WHERE/ORDER BY), complete = open list (candidates, selection, prefix length to replace)
-    Input { title: String, input: TextArea<'static>, on_ok: Box<dyn FnOnce(&mut App, String)>, words: Vec<String>, complete: Option<(Vec<String>, usize, usize)> },
+    /// body = app-written explanation shown in a box under the input (never interpolated names, so a name can't pose as it)
+    Input { title: String, body: String, input: TextArea<'static>, on_ok: Box<dyn FnOnce(&mut App, String)>, words: Vec<String>, complete: Option<(Vec<String>, usize, usize)> },
     Confirm { text: String, on_yes: Box<dyn FnOnce(&mut App)> },
     Palette(Palette),
     ConnForm(ConnForm),
@@ -1238,7 +1241,7 @@ impl App {
     }
 
     pub fn restore_dba(&mut self, conn: &str, db: String, title: String, report: &str) -> Option<u64> {
-        let d = DbaTab { report: report.into(), info: None, grid: None, loaded: None, error: None, running: false, auto: true, gone: None };
+        let d = DbaTab { report: report.into(), info: None, grid: None, loaded: None, error: None, running: false, run: 0, auto: true, gone: None };
         self.restored_tab(conn, db, title, TabKind::Dba(d))
     }
 
@@ -2659,12 +2662,20 @@ impl App {
         self.input_words(title, init, vec![], on_ok);
     }
 
+    /// Input with an explanation box under it (answers, reasons); the title stays one line on the border
+    pub fn input_with_body(&mut self, title: &str, body: &str, on_ok: impl FnOnce(&mut App, String) + 'static) {
+        self.input(title, "", on_ok);
+        if let Some(Popup::Input { body: b, .. }) = &mut self.popup {
+            *b = body.into();
+        }
+    }
+
     /// Single-line input with autocomplete (typed word filters words, ⌃Space / Tab opens it right away)
     pub fn input_words(&mut self, title: impl Into<String>, init: &str, words: Vec<String>, on_ok: impl FnOnce(&mut App, String) + 'static) {
         let mut t = TextArea::new(vec![init.to_string()]);
         t.move_cursor(tui_textarea::CursorMove::End);
         t.set_cursor_line_style(ratatui::style::Style::default());
-        self.popup = Some(Popup::Input { title: title.into(), input: t, on_ok: Box::new(on_ok), words, complete: None });
+        self.popup = Some(Popup::Input { title: title.into(), body: String::new(), input: t, on_ok: Box::new(on_ok), words, complete: None });
     }
 
     /// Autocomplete candidates for the table tab's WHERE / ORDER BY: columns + common keywords

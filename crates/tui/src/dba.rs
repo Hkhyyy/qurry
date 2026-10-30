@@ -52,6 +52,8 @@ impl App {
                     d.report = report;
                     d.info = info;
                     d.grid = None;
+                    d.loaded = None;
+                    d.gone = None;
                     d.error = None;
                 }
                 let id = t.id;
@@ -59,7 +61,7 @@ impl App {
                 id
             }
             None => {
-                let d = DbaTab { report, info, grid: None, loaded: None, error: None, running: false, auto: true, gone: None };
+                let d = DbaTab { report, info, grid: None, loaded: None, error: None, running: false, run: 0, auto: true, gone: None };
                 let id = self.push_tab(&conn, db, title, TabKind::Dba(d));
                 self.dba_ticker(id);
                 id
@@ -106,17 +108,23 @@ impl App {
         let target = t.target.clone();
         let TabKind::Dba(d) = &mut t.kind else { return };
         d.running = true;
+        d.run += 1;
+        let run = d.run;
         let report = d.report.clone();
         if d.info.is_none() {
             d.info = reports(kind).into_iter().find(|r| r.id == report);
         }
         let st = self.state.clone();
-        self.spawn(async move { st.dba_report(target, report).await.map_err(|e| e.to_string()) }, move |a, r| a.dba_apply(id, r));
+        self.spawn(async move { st.dba_report(target, report).await.map_err(|e| e.to_string()) }, move |a, r| a.dba_apply(id, run, r));
     }
 
-    /// Put in the loaded results (a failed refresh keeps the last grid). The selected row follows the same pid (so a different session isn't selected when the order changes)
-    pub fn dba_apply(&mut self, id: u64, r: Result<qurry_core::db::QueryResult, String>) {
+    /// Put in the loaded results (a failed refresh keeps the last grid). The selected row follows the same pid (so a different session isn't selected when the order changes).
+    /// A result of an older run (a report the tab has since switched away from, or an earlier run of the same one) is dropped: the latest run is still going
+    pub fn dba_apply(&mut self, id: u64, run: u64, r: Result<qurry_core::db::QueryResult, String>) {
         let Some(Tab { kind: TabKind::Dba(d), .. }) = self.tab_mut(id) else { return };
+        if d.run != run {
+            return;
+        }
         d.running = false;
         match r {
             Ok(res) => {

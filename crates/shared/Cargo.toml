@@ -5,5 +5,10 @@ edition = "2024"
 description = "Pure Rust logic shared by the GUI (as WASM), the TUI and the backend"
 publish = false
 
+# Pure Rust only: no tokio, sqlx or redis (CI step "qurry-shared stays pure" fails on them)
 [dependencies]
 serde = { workspace = true }
+serde_json = { workspace = true }
+regex = "1"
+# reads MongoDB shell arguments the way the driver does (guard)
+json5 = "1"

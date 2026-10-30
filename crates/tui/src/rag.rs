@@ -181,6 +181,7 @@ impl App {
         t.set_cursor_line_style(ratatui::style::Style::default());
         self.popup = Some(Popup::Input {
             title: format!("OpenAI API key for RAG ({}; empty = remove)", if self.state.rag_has_key() { "saved" } else { "not set" }),
+            body: String::new(),
             input: t,
             on_ok: Box::new(|a, k| {
                 let k = k.trim().to_string();

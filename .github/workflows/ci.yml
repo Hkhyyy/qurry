@@ -75,6 +75,18 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
+      # qurry-shared is built to WASM for the GUI and holds the read-only checks: it must not pull in a runtime or a DB client
+      - name: qurry-shared stays pure (no tokio, sqlx or redis)
+        run: |
+          # Run cargo tree on its own so its failure fails the step; --target all also covers target-specific deps (wasm32)
+          deps=$(cargo tree --locked -p qurry-shared -e normal,build --target all --prefix none --format '{p}') || { echo "::error::cargo tree failed for qurry-shared"; exit 1; }
+          [ -n "$deps" ] || { echo "::error::cargo tree listed nothing for qurry-shared"; exit 1; }
+          bad=$(printf '%s\n' "$deps" | awk '{print $1}' | grep -xE 'tokio(-.*)?|sqlx(-.*)?|redis(-.*)?' | sort -u | tr '\n' ' ' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::qurry-shared depends on: $bad— keep I/O in qurry-core and pass plain values into qurry-shared (see 'cargo tree -p qurry-shared --target all -i <crate>' for the path)"
+            exit 1
+          fi
+
       # Milvus standalone needs a run command, so start it directly instead of as a service (comes up while building)
       - name: Start Milvus
         run: docker run -d --name milvus -p 19530:19530 -e ETCD_USE_EMBED=true -e ETCD_DATA_DIR=/var/lib/milvus/etcd -e COMMON_STORAGETYPE=local -e DEPLOY_MODE=STANDALONE milvusdb/milvus:v2.5.4 milvus run standalone
@@ -86,7 +98,7 @@ jobs:
         run: for i in $(seq 1 90); do curl -sf -XPOST localhost:19530/v2/vectordb/collections/list -d '{}' | grep -q '"code":0' && break; sleep 2; done
 
       - name: Unit tests
-        run: cargo test --locked -p qurry-core -p qurry-tui -p qurry-mcp -p qurry-shared
+        run: cargo test --locked -p qurry-core -p qurry-tui -p qurry-mcp -p qurry-shared -p qurry-shared-wasm
 
       - name: Integration tests (PostgreSQL / MySQL / Redis)
         env:
