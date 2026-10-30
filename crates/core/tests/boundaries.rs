@@ -5,8 +5,16 @@
 
 use std::path::{Path, PathBuf};
 
-/// Things only the homes may contain (in code, not in comments)
-const FORBIDDEN: &[&str] = &["\"connections.json\"", "\"connection-access.json\"", "\"secrets.json\"", "SecretFile::", "SecretFile {"];
+/// Things only the homes may contain (in code, not in comments); secret.key(.keychain) hold or point to the password key
+const FORBIDDEN: &[&str] = &[
+    "\"connections.json\"",
+    "\"connection-access.json\"",
+    "\"secrets.json\"",
+    "\"secret.key\"",
+    "\"secret.key.keychain\"",
+    "SecretFile::",
+    "SecretFile {",
+];
 /// Files that are a home for everything above
 const HOMES: &[&str] = &["crates/core/src/store.rs", "crates/core/src/secrets.rs"];
 
@@ -33,6 +41,17 @@ fn strip(src: &str, blank_strings: bool) -> Vec<u8> {
                 let end = src[i + 2..].find("*/").map_or(b.len(), |p| i + 2 + p + 2);
                 blank(&mut out, i, end);
                 i = end;
+            }
+            // Raw strings (r"..", r#".."#, br#".."#): end at `"` plus the same number of `#`
+            b'r' if raw_hashes(b, i).is_some() => {
+                let h = raw_hashes(b, i).unwrap();
+                let start = i + 2 + h;
+                let close = format!("\"{}", "#".repeat(h));
+                let end = src[start..].find(&close).map_or(b.len(), |p| start + p);
+                if blank_strings {
+                    blank(&mut out, start, end);
+                }
+                i = (end + close.len()).min(b.len());
             }
             b'"' => {
                 let mut j = i + 1;
@@ -62,6 +81,14 @@ fn strip(src: &str, blank_strings: bool) -> Vec<u8> {
         }
     }
     out
+}
+
+/// The `#` count when the `r` at `i` starts a raw string (`r"`, `r#"`, `br#"`), not an identifier like `for"`
+fn raw_hashes(b: &[u8], i: usize) -> Option<usize> {
+    let ident = |k: usize| b[k].is_ascii_alphanumeric() || b[k] == b'_';
+    let prefix_ok = i == 0 || !ident(i - 1) || (b[i - 1] == b'b' && (i == 1 || !ident(i - 2)));
+    let h = b[i + 1..].iter().take_while(|&&c| c == b'#').count();
+    (prefix_ok && b.get(i + 1 + h) == Some(&b'"')).then_some(h)
 }
 
 /// End of the item starting at `from`: its matching `}`, or the `;` if that comes first
@@ -174,6 +201,11 @@ fn after() { std::fs::write(dir.join("connections.json"), "x"); }
 "#;
     let lines: Vec<usize> = hits("x.rs", src).into_iter().map(|(l, _)| l).collect();
     assert_eq!(lines, vec![4, 7]);
+
+    // Raw strings: quotes and `//` inside them neither flip the string state nor start a comment
+    let raw = "#[cfg(test)] mod t { fn f() { let j = r#\"{\"a\":1}\"#; } }\nfn after() { SecretFile::open(&d); }\n\
+               fn url() { let u = br##\"\"# http://x\"##; std::fs::write(d.join(\"secret.key\"), u); }\n";
+    assert_eq!(hits("x.rs", raw), vec![(2, "SecretFile::"), (3, "\"secret.key\"")]);
 
     let lib = "pub fn open_state(dir: P) -> R { let s = SecretFile::open(&dir)?; Ok(s) }\nfn other() { SecretFile::open(&d); }\n";
     assert_eq!(hits("crates/core/src/lib.rs", lib), vec![(2, "SecretFile::")]);
