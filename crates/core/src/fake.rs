@@ -610,6 +610,7 @@ impl AppState {
             elapsed_ms: 0,
             has_result_set: true,
             in_transaction: false,
+            warning: None,
         };
         Ok(FakePreview { plan, result, warnings: p.warnings })
     }

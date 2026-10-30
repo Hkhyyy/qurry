@@ -132,8 +132,10 @@ impl PgSession {
 
     pub async fn commit(&mut self) -> AppResult<()> {
         self.close_cursor().await;
-        self.conn.execute("COMMIT").await?;
+        let r = self.conn.execute("COMMIT").await;
+        // A failed COMMIT (e.g. a deferred foreign key) ends the transaction too: PostgreSQL rolls it back
         self.in_tx = false;
+        r?;
         Ok(())
     }
 
@@ -215,25 +217,38 @@ impl PgSession {
     async fn run_with_snapshot(&mut self, snap: &str, sql: &str, limit: usize) -> (AppResult<QueryResult>, AppResult<QueryResult>) {
         self.close_cursor().await;
         let own = !self.user_tx();
-        if !self.in_tx {
+        let began = !self.in_tx;
+        if began {
             if let Err(e) = self.conn.execute("BEGIN").await {
                 return (Err(AppError::Msg(e.to_string())), Err(e.into()));
             }
             self.in_tx = true;
         }
         let shot = pg_snapshot(&mut self.conn, snap).await;
+        // Cancelled · timed out while locking the rows: don't run the change (the savepoint kept the user's transaction as it was)
+        if let Err(e) = &shot
+            && crate::audit::stops_change(e)
+        {
+            if began {
+                let _ = self.rollback_tx().await;
+            }
+            return (Err(AppError::Msg(e.to_string())), Err(crate::audit::stopped(e, false)));
+        }
         let mut r = self.run(sql, limit).await;
         if own {
-            r = match r {
-                Ok(mut q) => self.commit().await.map(|_| {
-                    q.in_transaction = false;
-                    q
-                }),
-                Err(e) => {
+            if r.is_ok()
+                && let Err(e) = self.commit().await
+            {
+                r = Err(e);
+            }
+            match &mut r {
+                Ok(q) => q.in_transaction = false,
+                // The change or its COMMIT failed: nothing of it stays, and no transaction is left open
+                Err(_) => {
                     let _ = self.rollback_tx().await;
-                    Err(e)
+                    self.in_tx = false;
                 }
-            };
+            }
         }
         (shot, r)
     }
@@ -317,7 +332,15 @@ async fn run_direct_on(conn: &mut PgConnection, sql: &str, limit: usize, start: 
 /// Undo snapshot inside the open transaction, under a savepoint: if it fails, the transaction carries on as it was (PostgreSQL would abort it)
 async fn pg_snapshot(conn: &mut PgConnection, sql: &str) -> AppResult<QueryResult> {
     conn.execute("SAVEPOINT qurry_snap").await?;
-    let r = run_direct_on(conn, sql, crate::audit::UNDO_MAX_ROWS + 1, Instant::now()).await;
+    let mut r = run_direct_on(conn, sql, crate::audit::UNDO_MAX_ROWS + 1, Instant::now()).await;
+    // A row lock needs the UPDATE privilege: a role with only SELECT and DELETE gets the snapshot without the lock (as before rows were locked)
+    if let Err(AppError::Db(sqlx::Error::Database(e))) = &r
+        && e.code().as_deref() == Some("42501")
+        && let Some(plain) = crate::audit::pg_unlocked(sql)
+    {
+        conn.execute("ROLLBACK TO SAVEPOINT qurry_snap").await?;
+        r = run_direct_on(conn, &plain, crate::audit::UNDO_MAX_ROWS + 1, Instant::now()).await;
+    }
     conn.execute(if r.is_ok() { "RELEASE SAVEPOINT qurry_snap" } else { "ROLLBACK TO SAVEPOINT qurry_snap" }).await?;
     r
 }
@@ -358,7 +381,8 @@ impl Session {
     }
     /// Run a change with its undo snapshot (audit::UndoPlan, a SELECT … FOR UPDATE) right before it in the same transaction, so nobody changes the rows in between.
     /// In the user's transaction (Manual · BEGIN) both join it; otherwise they get one of their own, committed right after the change (rolled back if it fails).
-    /// A failing snapshot leaves the transaction as it was, and the change still runs. → (snapshot, change)
+    /// A failing snapshot leaves the transaction as it was, and the change still runs (without undo) — unless it was cancelled, timed out or
+    /// deadlocked (audit::stops_change): then the change doesn't run either. → (snapshot, change)
     pub async fn run_with_snapshot(&mut self, snap: &str, sql: &str, limit: usize) -> (AppResult<QueryResult>, AppResult<QueryResult>) {
         match self {
             Session::Pg(s) => s.run_with_snapshot(snap, sql, limit).await,
@@ -452,10 +476,17 @@ pub async fn execute_batch_with(pool: &PgPool, statements: &[String], exact_one:
     let mut affected = 0;
     let mut shots = Vec::new();
     for (i, st) in statements.iter().enumerate() {
-        shots.push(match snaps.get(i).copied().flatten() {
+        let shot = match snaps.get(i).copied().flatten() {
             Some(q) => Some(pg_snapshot(&mut tx, q).await),
             None => None,
-        });
+        };
+        // Cancelled · timed out while locking the rows: nothing is saved (dropping tx rolls back)
+        if let Some(Err(e)) = &shot
+            && crate::audit::stops_change(e)
+        {
+            return Err(crate::audit::stopped(e, false));
+        }
+        shots.push(shot);
         let r = if prepared { sqlx::query(st).execute(&mut *tx).await } else { tx.execute(st.as_str()).await };
         let n = r.map_err(|e| AppError::Msg(format!("{e}\n→ {st}")))?.rows_affected();
         check_exact_one(st, n, exact_one)?;

@@ -275,6 +275,7 @@ mod tests {
             elapsed_ms: 0,
             has_result_set: true,
             in_transaction: false,
+            warning: None,
         };
         let (title, text) = super::bar_chart(&r, 10, 30).unwrap();
         assert_eq!(title, "Chart: sum of amount by region");

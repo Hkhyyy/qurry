@@ -410,6 +410,14 @@ pub struct ImportResult {
     pub updated: usize,
 }
 
+/// Statements run in one transaction (execute_batch): rows changed, and a warning when they committed but their result couldn't be logged
+#[derive(Debug, Serialize)]
+pub struct BatchResult {
+    pub rows: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+}
+
 impl AppState {
     /// Run read-only (the MCP default). guard checks it (one statement, read commands, no side-effect functions); it runs inside a READ ONLY transaction
     /// with a 60-second limit, rolled back at the end. MySQL uses the prepared protocol (the server accepts only one statement). Redis: read commands only (no CONFIG, KEYS)
@@ -725,7 +733,11 @@ impl AppState {
         };
         match r {
             Err(e) => Err(recover(self, &id, tab, in_tx, e).await),
-            Ok(q) => logged.map(|_| q),
+            // It ran (and may be committed): a log failure now is a warning, so nobody runs it again
+            Ok(mut q) => {
+                q.warning = logged.err().map(|e| e.to_string());
+                Ok(q)
+            }
         }
     }
 
@@ -872,8 +884,9 @@ impl AppState {
         }
     }
 
-    /// Production: the COMMIT of logged changes goes into the log first; if it can't be written, the transaction stays open
-    pub async fn commit_tx(&self, tab_id: String) -> AppResult<()> {
+    /// Production: the COMMIT of logged changes goes into the log first; if it can't be written, the transaction stays open.
+    /// → a warning when it committed but its result couldn't be logged
+    pub async fn commit_tx(&self, tab_id: String) -> AppResult<Option<String>> {
         let (sess, conn) = self.sessions.read().await.get(&tab_id).map(|e| (e.session.clone(), e.conn_id.clone())).ok_or_else(|| AppError::Msg("Session closed".into()))?;
         let cfg = self.source(&conn).ok();
         let started = match &cfg {
@@ -885,13 +898,14 @@ impl AppState {
             Some(c) => self.audit.after(started, &conn, &c.name, c.kind, Some(&tab_id), "COMMIT", &r, None),
             None => Ok(()),
         };
-        r.and(logged)
+        r.map(|_| logged.err().map(|e| e.to_string()))
     }
 
-    pub async fn rollback_tx(&self, tab_id: String) -> AppResult<()> {
+    /// → a warning when it rolled back but that couldn't be logged
+    pub async fn rollback_tx(&self, tab_id: String) -> AppResult<Option<String>> {
         let sess = self.sessions.read().await.get(&tab_id).map(|e| e.session.clone()).ok_or_else(|| AppError::Msg("Session closed".into()))?;
         sess.lock().await.rollback_tx().await?;
-        self.audit_tx_end(&tab_id, "ROLLBACK").await
+        Ok(self.audit_tx_end(&tab_id, "ROLLBACK").await.err().map(|e| e.to_string()))
     }
 
     pub async fn close_session(&self, tab_id: String) -> AppResult<()> {
@@ -912,13 +926,13 @@ impl AppState {
     }
 
     /// Statements in one transaction. exact_one = saving table edits (roll back everything unless each UPDATE/DELETE hits exactly 1 row)
-    pub async fn execute_batch(&self, id: String, statements: Vec<String>, exact_one: bool) -> AppResult<u64> {
+    pub async fn execute_batch(&self, id: String, statements: Vec<String>, exact_one: bool) -> AppResult<BatchResult> {
         self.execute_batch_with(id, statements, exact_one, false).await
     }
 
     /// MCP execute: like execute_batch, but PostgreSQL / MySQL run each statement as a prepared statement (one statement per item, enforced by the server)
     /// Redis reads among the items get the same size checks as run_read_only
-    pub async fn execute_batch_prepared(&self, id: String, statements: Vec<String>) -> AppResult<u64> {
+    pub async fn execute_batch_prepared(&self, id: String, statements: Vec<String>) -> AppResult<BatchResult> {
         if self.kind_of(&id)? == store::DbKind::Redis {
             let m = redis_pool(self, &id).await?;
             for st in &statements {
@@ -928,7 +942,7 @@ impl AppState {
         self.execute_batch_with(id, statements, false, true).await
     }
 
-    async fn execute_batch_with(&self, id: String, statements: Vec<String>, exact_one: bool, prepared: bool) -> AppResult<u64> {
+    async fn execute_batch_with(&self, id: String, statements: Vec<String>, exact_one: bool, prepared: bool) -> AppResult<BatchResult> {
         for st in &statements {
             self.check_read_only(&id, st)?;
         }
@@ -947,7 +961,8 @@ impl AppState {
         };
         match r {
             Err(e) => Err(recover(self, &id, None, false, e).await),
-            Ok(n) => logged.map(|_| n),
+            // Committed: a log failure now is a warning, so nobody saves it again
+            Ok(rows) => Ok(BatchResult { rows, warning: logged.err().map(|e| e.to_string()) }),
         }
     }
 

@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { AuditEntry, auditLog } from "../lib/api";
 import { Badge, Button, CodeBlock, List, ListItem, Modal, Notice, SearchField, SectionTitle, Text } from "../ui";
 
-/** One-line summary: changed rows · error · uncommitted */
+/** One-line summary: changed rows · error · uncommitted · no result recorded */
 export function auditStatus(e: AuditEntry): { text: string; tone: "neutral" | "warn" | "danger" | "accent" } {
+  // Logged before it ran with no result: still running, or Qurry stopped — the outcome (even of a COMMIT) is unknown
+  if (e.started) return { text: "no result recorded", tone: "warn" };
   if (e.error) return { text: "failed", tone: "danger" };
   if (e.sql === "COMMIT") return { text: "committed", tone: "accent" };
   if (e.sql.startsWith("ROLLBACK")) return { text: "rolled back", tone: "neutral" };

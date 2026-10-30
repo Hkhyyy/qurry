@@ -126,6 +126,7 @@ impl PluginConn {
             elapsed_ms: start.elapsed().as_millis() as u64,
             has_result_set: o.has_result_set,
             in_transaction: false,
+            warning: None,
         })
     }
 }

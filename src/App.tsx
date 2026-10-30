@@ -862,8 +862,8 @@ export default function App() {
     const sql = `${verb} ${verb === "DROP" ? kw + " " : ""}${q(info.schema)}.${q(info.name)};`;
     if (!(await ask("Execute this statement?", { title: info.conn.name, detail: [{ text: sql }], okLabel: "Execute" }))) return;
     try {
-      await api.executeBatch(target, [sql]);
-      setStatus(`Executed: ${sql}`);
+      const r = await api.executeBatch(target, [sql]);
+      setStatus(`Executed: ${sql}${r.warning ? ` · Warning: ${r.warning}` : ""}`);
       (verb === "DROP" ? info.refreshParent ?? info.refresh : info.refresh)?.();
     } catch (e) {
       setStatus(String(e));
@@ -1300,6 +1300,8 @@ export default function App() {
     let lastActive = "output";
     // Number of changing statements already committed in Auto mode (reported if a later one fails)
     let committed = 0;
+    // Statements that ran but whose result the Production log couldn't record (a warning, not a failure: running them again would repeat them)
+    let warned = 0;
     for (const sql0 of stmts) {
       const isMy = c?.kind === "mysql";
       const bare = sql0.replace(/;\s*$/, "");
@@ -1326,6 +1328,10 @@ export default function App() {
         pushHistory({ connId: tab.connId, database: tab.database, sql: sql0 });
         updTab(tabId, (t) => ({ ...t, inTx: !!r.inTransaction }));
         if (!r.inTransaction && !isReadStmt(sql0) && !dry) committed++;
+        if (r.warning) {
+          warned++;
+          log(tabId, "warn", `Warning: ${r.warning}`);
+        }
         if (explain && !isMy) {
           const raw = String(r.rows[0]?.[0] ?? "");
           const plan = await analyzePlan(raw).catch(() => null);
@@ -1357,7 +1363,7 @@ export default function App() {
         log(tabId, "error", String(e));
         if (committed > 0) log(tabId, "error", `Note: ${committed} earlier statement${committed > 1 ? "s" : ""} of this run ${committed > 1 ? "were" : "was"} already committed (Auto mode) and ${committed > 1 ? "were" : "was"} not rolled back`);
         // Even on error a transaction may be open (e.g. first statement fails in Manual) → sync the Commit/Roll back buttons
-        api.txState(tabId).then((inTx) => updTab(tabId, (t) => ({ ...t, inTx })), () => {});
+        syncTx(tabId);
         // DDL among the earlier statements may already be applied
         if (!explain && stmts.some((s) => DDL_RE.test(s))) schemaChanged(tab.connId, tab.database ?? (c?.database || (c?.kind === "postgres" ? "postgres" : "")));
         lastActive = "output";
@@ -1368,7 +1374,7 @@ export default function App() {
       }
     }
     updTab(tabId, (t) => ({ ...t, running: false, activeResult: lastActive, lastSql: stmts[stmts.length - 1] }));
-    setStatus(`${stmts.length} statement${stmts.length > 1 ? "s" : ""} executed`);
+    setStatus(`${stmts.length} statement${stmts.length > 1 ? "s" : ""} executed${warned ? ` · ${warned} with a warning (see Output)` : ""}`);
     // If tables or columns were created, altered, or dropped, show it in the explorer right away
     if (!explain && stmts.some((s) => DDL_RE.test(s))) schemaChanged(tab.connId, tab.database ?? (c?.database || (c?.kind === "postgres" ? "postgres" : "")));
     refresh();
@@ -1398,29 +1404,37 @@ export default function App() {
     }
   };
 
+  /** Read the console's transaction state into the tab (after an error the Commit / Roll back buttons may be stale) */
+  const syncTx = (tabId: string) => api.txState(tabId).then((inTx) => updTab(tabId, (t) => ({ ...t, inTx })), () => {});
   const setTxMode = async (tab: Tab, manual: boolean) => {
     try {
       // Ask first if there are uncommitted changes (it used to commit silently)
       if (!manual && tab.inTx) {
         if (!(await ask("This console has uncommitted changes.", { title: "Switch to Auto", okLabel: "Commit and Switch", cancelLabel: "Stay in Manual" }))) return;
-        await api.commitTx(tab.id);
+        const warning = await api.commitTx(tab.id);
         log(tab.id, "info", "Transaction committed");
+        if (warning) log(tab.id, "warn", `Warning: ${warning}`);
       }
       await api.setTxMode(tab.target, tab.id, manual);
       updTab(tab.id, (t) => ({ ...t, txManual: manual, inTx: manual ? t.inTx : false }));
       log(tab.id, "info", `Transaction mode: ${manual ? "Manual" : "Auto"}`);
     } catch (e) {
       setStatus(String(e));
+      syncTx(tab.id);
     }
   };
   const txEnd = async (tab: Tab, what: "commit" | "rollback") => {
     try {
-      if (what === "commit") await api.commitTx(tab.id);
-      else await api.rollbackTx(tab.id);
+      const warning = what === "commit" ? await api.commitTx(tab.id) : await api.rollbackTx(tab.id);
       updTab(tab.id, (t) => ({ ...t, inTx: false }));
       log(tab.id, "info", what === "commit" ? "Transaction committed" : "Transaction rolled back");
+      if (warning) {
+        log(tab.id, "warn", `Warning: ${warning}`);
+        setStatus(`Warning: ${warning}`);
+      }
     } catch (e) {
       log(tab.id, "error", String(e));
+      syncTx(tab.id);
     }
   };
 
@@ -1464,8 +1478,9 @@ export default function App() {
 
   const submitEdits = async (tab: Tab, statements: string[]) => {
     // Save only if each UPDATE/DELETE affects exactly 1 row (otherwise roll back everything)
-    const n = await api.executeBatch(tab.target, statements, true);
-    setStatus(`Submitted ${statements.length} statements, ${n} rows affected`);
+    const r = await api.executeBatch(tab.target, statements, true);
+    // A warning means it was saved (only the Production log couldn't record it): reload as on success, so it isn't submitted twice
+    setStatus(`Submitted ${statements.length} statements, ${r.rows} rows affected${r.warning ? ` · Warning: ${r.warning}` : ""}`);
     if (tab.lastSql) run(tab, tab.lastSql);
   };
 

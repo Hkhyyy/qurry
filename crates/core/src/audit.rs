@@ -44,6 +44,9 @@ pub struct AuditEntry {
     /// Why undo SQL could not be built
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Logged before it ran and no result recorded: still running, or Qurry stopped (or couldn't write the result), so the outcome is unknown
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub started: bool,
 }
 
 pub struct Audit {
@@ -86,7 +89,7 @@ fn tx_end(sql: &str) -> Option<&'static str> {
 }
 
 /// Note on an entry written before its statement ran. The entry with the result (same id) replaces it; if none follows, it stays as written
-const STARTED: &str = "Logged before it ran; no result was recorded (Qurry stopped, or couldn't write the log while it ran)";
+const STARTED: &str = "Running, or stopped before its result was recorded (Qurry quit, or couldn't write the log after it ran)";
 
 /// A new entry for a statement (no result yet)
 fn entry(conn_id: &str, conn_name: &str, sql: &str) -> AuditEntry {
@@ -102,6 +105,7 @@ fn entry(conn_id: &str, conn_name: &str, sql: &str) -> AuditEntry {
         in_tx: false,
         undo: None,
         note: None,
+        started: false,
     }
 }
 
@@ -186,6 +190,7 @@ impl Audit {
         }
         let marked = entries.iter().cloned().map(|mut e| {
             e.note = Some(STARTED.into());
+            e.started = true;
             e
         });
         self.append(marked.collect()).map_err(|e| {
@@ -433,10 +438,12 @@ pub(crate) async fn table_columns(pool: &Pool, table: &str, kind: DbKind) -> App
 fn snapshot_sql(d: &SimpleDml, cols: &[Col], kind: DbKind) -> String {
     let cond = d.cond.as_ref().map(|c| format!(" WHERE {c}")).unwrap_or_default();
     match kind {
+        // UPDATE locks like UPDATE does (FOR NO KEY UPDATE: other sessions' foreign-key checks on child rows aren't blocked); DELETE takes FOR UPDATE
         DbKind::Postgres => format!(
-            "SELECT coalesce(jsonb_agg(to_jsonb(qurry_x)), '[]'::jsonb)::text, count(*) FROM (SELECT * FROM {}{cond} LIMIT {} FOR UPDATE) qurry_x",
+            "SELECT coalesce(jsonb_agg(to_jsonb(qurry_x)), '[]'::jsonb)::text, count(*) FROM (SELECT * FROM {}{cond} LIMIT {}{}{PG_SNAP_END}",
             d.from,
-            UNDO_MAX_ROWS + 1
+            UNDO_MAX_ROWS + 1,
+            if d.delete { PG_LOCK_DELETE } else { PG_LOCK_UPDATE }
         ),
         _ => {
             let exprs: Vec<String> = cols
@@ -449,6 +456,36 @@ fn snapshot_sql(d: &SimpleDml, cols: &[Col], kind: DbKind) -> String {
             format!("SELECT {} FROM {}{cond} LIMIT {} FOR UPDATE", exprs.join(", "), d.from, UNDO_MAX_ROWS + 1)
         }
     }
+}
+
+const PG_LOCK_UPDATE: &str = " FOR NO KEY UPDATE";
+const PG_LOCK_DELETE: &str = " FOR UPDATE";
+const PG_SNAP_END: &str = ") qurry_x";
+
+/// The PostgreSQL snapshot without its row lock (a row lock needs the UPDATE privilege, which a DELETE-only role lacks). None = not from snapshot_sql
+pub(crate) fn pg_unlocked(snapshot: &str) -> Option<String> {
+    let body = snapshot.strip_suffix(PG_SNAP_END)?;
+    let body = body.strip_suffix(PG_LOCK_UPDATE).or_else(|| body.strip_suffix(PG_LOCK_DELETE))?;
+    Some(format!("{body}{PG_SNAP_END}"))
+}
+
+/// Snapshot errors after which the change must not run: cancelled (Cancel · statement_timeout), lock wait timed out, deadlock, serialization failure.
+/// Other errors (no privilege, row lock not allowed on a view, …) only mean no undo is kept, and the change still runs
+pub(crate) fn stops_change(e: &AppError) -> bool {
+    let AppError::Db(sqlx::Error::Database(d)) = e else { return false };
+    match d.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>() {
+        // ER_QUERY_INTERRUPTED (KILL QUERY) · ER_LOCK_WAIT_TIMEOUT · ER_LOCK_DEADLOCK
+        Some(m) => matches!(m.number(), 1317 | 1205 | 1213),
+        None => matches!(d.code().as_deref(), Some("57014" | "55P03" | "40P01" | "40001")),
+    }
+}
+
+/// The error of a change not run because its snapshot stopped (stops_change). lost_tx = the server also rolled back the open transaction (MySQL deadlock)
+pub(crate) fn stopped(e: &AppError, lost_tx: bool) -> AppError {
+    AppError::Msg(format!(
+        "Not run: {e} — it stopped while locking the rows it changes (to keep their undo), so nothing was changed.{}",
+        if lost_tx { " The server also rolled back the open transaction: the uncommitted changes made in it before are lost." } else { "" }
+    ))
 }
 
 /// Columns to set when undoing: the columns the UPDATE changed (if unknown, all except PK and generated columns). Changing the PK can't be undone
@@ -556,6 +593,21 @@ mod tests {
         assert_eq!(pg_text("a$qurry$b'"), "'a$qurry$b'''");
     }
 
+    /// PostgreSQL: UPDATE locks FOR NO KEY UPDATE (like UPDATE itself), DELETE FOR UPDATE; both can drop the lock (DELETE-only roles)
+    #[test]
+    fn pg_snapshot_locks_like_the_change() {
+        let cols = vec![col("id", true), col("name", false)];
+        let snap = |sql: &str| snapshot_sql(&crate::guard::simple_dml(sql, DbKind::Postgres).unwrap(), &cols, DbKind::Postgres);
+        let up = snap("update users set name = 'x' where id = 1");
+        assert!(up.ends_with("WHERE id = 1 LIMIT 1001 FOR NO KEY UPDATE) qurry_x"), "{up}");
+        let del = snap("delete from users where id = 1");
+        assert!(del.ends_with("WHERE id = 1 LIMIT 1001 FOR UPDATE) qurry_x"), "{del}");
+        assert!(pg_unlocked(&up).unwrap().ends_with("WHERE id = 1 LIMIT 1001) qurry_x"));
+        assert!(pg_unlocked(&del).unwrap().ends_with("WHERE id = 1 LIMIT 1001) qurry_x"));
+        assert_eq!(pg_unlocked("select * from t for update"), None);
+        assert!(snapshot_sql(&crate::guard::simple_dml("update users set name = 'x'", DbKind::Mysql).unwrap(), &cols, DbKind::Mysql).ends_with(" FOR UPDATE"));
+    }
+
     #[test]
     fn mysql_undo_sql() {
         let mut cols = vec![col("id", true), col("name", false), Col { name: "img".into(), pk: false, generated: false, binary: true }];
@@ -575,7 +627,7 @@ mod tests {
         let d = std::env::temp_dir().join(format!("qurry-audit-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&d).unwrap();
         let a = Audit::new(&d);
-        let q = |rows_affected: u64, in_transaction: bool| -> AppResult<QueryResult> { Ok(QueryResult { columns: vec![], rows: vec![], rows_affected, truncated: false, elapsed_ms: 0, has_result_set: false, in_transaction }) };
+        let q = |rows_affected: u64, in_transaction: bool| -> AppResult<QueryResult> { Ok(QueryResult { columns: vec![], rows: vec![], rows_affected, truncated: false, elapsed_ms: 0, has_result_set: false, in_transaction, warning: None }) };
         let run = |conn: &str, tab: Option<&str>, sql: &str, r: AppResult<QueryResult>, undo: Option<Result<String, String>>| {
             let started = a.before(conn, "[PROD] kr", DbKind::Postgres, tab, sql).unwrap();
             a.after(started, conn, "[PROD] kr", DbKind::Postgres, tab, sql, &r, undo).unwrap();
@@ -602,15 +654,17 @@ mod tests {
         let d = std::env::temp_dir().join(format!("qurry-audit-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&d).unwrap();
         let a = Audit::new(&d);
-        let ok = Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: 1, truncated: false, elapsed_ms: 0, has_result_set: false, in_transaction: false });
+        let ok = Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: 1, truncated: false, elapsed_ms: 0, has_result_set: false, in_transaction: false, warning: None });
         assert!(a.before("c1", "[PROD] kr", DbKind::Postgres, None, "select 1").unwrap().is_none());
         let started = a.before("c1", "[PROD] kr", DbKind::Postgres, None, "delete from t where id = 1").unwrap();
         let e = a.list(None, "", 10).remove(0);
         assert_eq!((e.sql.as_str(), e.rows, e.note.as_deref()), ("delete from t where id = 1", None, Some(STARTED)));
+        assert!(e.started);
         a.after(started, "c1", "[PROD] kr", DbKind::Postgres, None, "delete from t where id = 1", &ok, Some(Ok("UNDO".into()))).unwrap();
         let all = a.list(None, "", 10);
         assert_eq!(all.len(), 1);
         assert_eq!((all[0].id.as_str(), all[0].rows, all[0].note.as_deref(), all[0].undo.as_deref()), (e.id.as_str(), Some(1), None, Some("UNDO")));
+        assert!(!all[0].started);
         // The result can't be written
         let started = a.before("c1", "[PROD] kr", DbKind::Postgres, None, "delete from t where id = 2").unwrap();
         std::fs::set_permissions(a.file(), std::fs::Permissions::from_mode(0o400)).unwrap();
@@ -799,5 +853,173 @@ mod tests {
     #[ignore]
     async fn mysql_undo_restores() {
         undo_restores(DbKind::Mysql, "QURRY_TEST_MY", "create table qurry_undo (id int primary key, name varchar(20), price decimal(10,2), born datetime, bin varbinary(10), total decimal(10,2) as (price * 2) stored)", "qurry_undo").await;
+    }
+
+    /// A schema (PostgreSQL) / database (MySQL) of this test's own with table `t` (id, v) holding rows (1, 1) (2, 2) (3, 3)
+    async fn own_table(st: &crate::app::AppState, kind: DbKind, t: &str) {
+        let q = |s: String| st.run_query("d".into(), s, None, None);
+        q(if kind == DbKind::Mysql { "create database if not exists audit_hardening".into() } else { "create schema if not exists audit_hardening".into() }).await.unwrap();
+        q(format!("drop table if exists audit_hardening.{t}")).await.unwrap();
+        q(format!("create table audit_hardening.{t} (id int primary key, v int)")).await.unwrap();
+        q(format!("insert into audit_hardening.{t} values (1, 1), (2, 2), (3, 3)")).await.unwrap();
+    }
+
+    async fn values(st: &crate::app::AppState, t: &str) -> String {
+        serde_json::to_string(&st.run_query("d".into(), format!("select v from audit_hardening.{t} order by id"), None, None).await.unwrap().rows).unwrap()
+    }
+
+    async fn drop_own(st: &crate::app::AppState, kind: DbKind) {
+        let sql = if kind == DbKind::Mysql { "drop database audit_hardening" } else { "drop schema audit_hardening cascade" };
+        st.run_query("d".into(), sql.into(), None, None).await.unwrap();
+    }
+
+    /// Cancel while the change waits in its snapshot (another session holds the row): the change is not run, in Auto or in the user's
+    /// transaction (which stays open with its earlier change)
+    async fn cancelled_snapshot_runs_nothing(kind: DbKind, env: &str) {
+        let Some(st) = prod_state(kind, env).await else { return };
+        own_table(&st, kind, "qurry_cancel").await;
+        let run = |tab: &str, sql: &str| st.run_query("d".into(), sql.into(), None, Some(tab.into()));
+        st.set_tx_mode("d".into(), "other".into(), true).await.unwrap();
+        run("other", "update audit_hardening.qurry_cancel set v = 10 where id = 1").await.unwrap();
+        for manual in [false, true] {
+            st.set_tx_mode("d".into(), "c".into(), manual).await.unwrap();
+            if manual {
+                run("c", "update audit_hardening.qurry_cancel set v = 20 where id = 2").await.unwrap();
+            }
+            let cancel = async {
+                tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+                st.cancel_query("c".into()).await.unwrap()
+            };
+            let (r, _) = tokio::join!(run("c", "update audit_hardening.qurry_cancel set v = 30 where id = 1"), cancel);
+            let e = r.unwrap_err().to_string();
+            assert!(e.starts_with("Not run: ") && e.contains("nothing was changed") && !e.contains("lost"), "{e}");
+            assert_eq!(st.tx_state("c".into()).await, manual);
+            if manual {
+                st.commit_tx("c".into()).await.unwrap();
+            }
+        }
+        st.commit_tx("other".into()).await.unwrap();
+        // The cancelled change never ran: row 1 has the other session's value, row 2 the Manual console's
+        assert_eq!(values(&st, "qurry_cancel").await, "[[10],[20],[3]]");
+        drop_own(&st, kind).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn pg_cancelled_snapshot_runs_nothing() {
+        cancelled_snapshot_runs_nothing(DbKind::Postgres, "QURRY_TEST_PG").await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_cancelled_snapshot_runs_nothing() {
+        cancelled_snapshot_runs_nothing(DbKind::Mysql, "QURRY_TEST_MY").await;
+    }
+
+    /// MySQL: a deadlock on the snapshot rolls back the user's whole transaction. The change is not run, the console no longer
+    /// shows an open transaction, and the message says the earlier changes are lost
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_snapshot_deadlock_reports_the_lost_transaction() {
+        let Some(st) = prod_state(DbKind::Mysql, "QURRY_TEST_MY").await else { return };
+        own_table(&st, DbKind::Mysql, "qurry_dead").await;
+        let run = |tab: &str, sql: &str| st.run_query("d".into(), sql.into(), None, Some(tab.into()));
+        st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
+        st.set_tx_mode("d".into(), "o".into(), true).await.unwrap();
+        run("m", "update audit_hardening.qurry_dead set v = 10 where id = 1").await.unwrap();
+        // o holds more rows, so InnoDB picks m as the deadlock victim
+        run("o", "update audit_hardening.qurry_dead set v = 20 where id in (2, 3)").await.unwrap();
+        let m = async {
+            tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+            run("m", "update audit_hardening.qurry_dead set v = 11 where id = 2").await
+        };
+        let (o, m) = tokio::join!(run("o", "update audit_hardening.qurry_dead set v = 21 where id = 1"), m);
+        o.unwrap();
+        let e = m.unwrap_err().to_string();
+        assert!(e.starts_with("Not run: ") && e.contains("changes made in it before are lost"), "{e}");
+        assert!(!st.tx_state("m".into()).await);
+        st.commit_tx("o".into()).await.unwrap();
+        // Rolling back now finds nothing of m's: its first change is gone and its second never ran
+        st.rollback_tx("m".into()).await.unwrap();
+        assert_eq!(values(&st, "qurry_dead").await, "[[21],[20],[20]]");
+        drop_own(&st, DbKind::Mysql).await;
+    }
+
+    /// PostgreSQL: the snapshot of an UPDATE doesn't block other sessions' foreign-key checks (FOR NO KEY UPDATE), and a COMMIT of
+    /// Qurry's own transaction that fails (deferred foreign key) leaves no transaction open
+    #[tokio::test]
+    #[ignore]
+    async fn pg_snapshot_locks_and_failed_commit() {
+        let Some(st) = prod_state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
+        own_table(&st, DbKind::Postgres, "qurry_parent").await;
+        let q = |s: &str| st.run_query("d".into(), s.into(), None, None);
+        q("create table audit_hardening.qurry_child (id int primary key, parent_id int references audit_hardening.qurry_parent deferrable initially deferred)").await.unwrap();
+        q("insert into audit_hardening.qurry_child values (1, 1)").await.unwrap();
+        // A Manual console's uncommitted UPDATE of parent 1 doesn't hold up an insert of a child of parent 1
+        st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
+        st.run_query("d".into(), "update audit_hardening.qurry_parent set v = 9 where id = 1".into(), None, Some("m".into())).await.unwrap();
+        let insert = tokio::time::timeout(std::time::Duration::from_secs(5), q("insert into audit_hardening.qurry_child values (2, 1)")).await;
+        assert!(insert.expect("blocked by the snapshot's lock").is_ok());
+        st.rollback_tx("m".into()).await.unwrap();
+        // Auto: Qurry's BEGIN … DELETE … COMMIT fails at COMMIT
+        let e = st.run_query("d".into(), "delete from audit_hardening.qurry_parent where id = 1".into(), None, Some("a".into())).await.unwrap_err().to_string();
+        assert!(e.contains("foreign key"), "{e}");
+        assert!(!st.tx_state("a".into()).await);
+        let r = st.run_query("d".into(), "update audit_hardening.qurry_parent set v = 5 where id = 1".into(), None, Some("a".into())).await.unwrap();
+        assert!(!r.in_transaction);
+        assert!(!st.audit_log(None, String::new(), 1)[0].in_tx);
+        assert_eq!(values(&st, "qurry_parent").await, "[[5],[2],[3]]");
+        drop_own(&st, DbKind::Postgres).await;
+    }
+
+    /// PostgreSQL: a role with SELECT and DELETE but not UPDATE can't lock rows; its DELETE still keeps undo (snapshot without the lock)
+    #[tokio::test]
+    #[ignore]
+    async fn pg_delete_only_role_keeps_undo() {
+        let Some(st) = prod_state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
+        own_table(&st, DbKind::Postgres, "qurry_del").await;
+        let q = |s: &str| st.run_query("d".into(), s.into(), None, None);
+        q("drop role if exists audit_hardening_del").await.unwrap();
+        q("create role audit_hardening_del login").await.unwrap();
+        q("grant usage on schema audit_hardening to audit_hardening_del").await.unwrap();
+        q("grant select, delete on audit_hardening.qurry_del to audit_hardening_del").await.unwrap();
+        let e = std::env::var("QURRY_TEST_PG").unwrap();
+        let p: Vec<&str> = e.split(':').collect();
+        let del = prod_state_at(DbKind::Postgres, &format!("{}:{}:audit_hardening_del:{}", p[0], p[1], p[3]), None).await;
+        del.run_query("d".into(), "delete from audit_hardening.qurry_del where id = 1".into(), None, Some("t".into())).await.unwrap();
+        let entry = del.audit_log(None, String::new(), 1).remove(0);
+        let undo = entry.undo.unwrap_or_else(|| panic!("no undo: {:?}", entry.note));
+        for (a, b) in crate::sql::split_statements(&undo, DbKind::Postgres) {
+            q(&undo[a..b]).await.unwrap();
+        }
+        assert_eq!(values(&st, "qurry_del").await, "[[1],[2],[3]]");
+        del.disconnect("d".into()).await.unwrap();
+        drop_own(&st, DbKind::Postgres).await;
+        q("drop role audit_hardening_del").await.unwrap();
+    }
+
+    /// A change that ran but whose result couldn't be logged comes back as a result with a warning (not an error to retry)
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore]
+    async fn pg_log_failure_after_the_run_is_a_warning() {
+        use std::os::unix::fs::PermissionsExt;
+        let Some(st) = prod_state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
+        own_table(&st, DbKind::Postgres, "qurry_warn").await;
+        let log = st.store.dir().join("audit.jsonl");
+        let slow = "do $$ begin perform pg_sleep(1); end $$";
+        let lock = || async {
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o400)).unwrap();
+        };
+        let (r, _) = tokio::join!(st.run_query("d".into(), slow.into(), None, Some("t".into())), lock());
+        assert!(r.unwrap().warning.is_some_and(|w| w.starts_with("It ran, but")));
+        std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let (r, _) = tokio::join!(st.execute_batch("d".into(), vec![slow.into()], false), lock());
+        assert!(r.unwrap().warning.is_some_and(|w| w.starts_with("It ran, but")));
+        std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o600)).unwrap();
+        // Both stay in the log as "no result recorded"
+        assert!(st.audit_log(None, "pg_sleep".into(), 2).iter().all(|e| e.started));
+        drop_own(&st, DbKind::Postgres).await;
     }
 }
