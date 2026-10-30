@@ -4,20 +4,22 @@
 
 관리 리포트, 다이어그램, 스키마 · 데이터 비교, 마이그레이션, 백업, 파일 가져오기, 테스트 데이터, 관련 행 복사, 차트, 쿼리 히스토리, 실행 계획입니다.
 
-## 데이터베이스 관리 (PostgreSQL, MySQL)
+## 데이터베이스 관리 (PostgreSQL, MySQL, MariaDB)
 
 GUI: Data Source 우클릭 › **Tools** › Sessions & Locks, Slow Queries, … — TUI: `⌃k` › **Database Admin…**
 
 | 묶음 | 리포트 |
 |---|---|
 | 활동 | **Sessions** (누가 누구를 막는지, 쿼리 · 트랜잭션이 얼마나 됐는지, 3초마다 새로 고침) · **Lock Waits** — 우클릭 / `c` 쿼리 취소, `K` 세션 종료 |
-| 성능 | **Slow Queries** — 총 시간 기준 상위 100개 (`pg_stat_statements` / `performance_schema`), 콘솔에서 열거나 EXPLAIN |
-| 용량 | **Table Sizes** · **Table Bloat** · **Index Bloat** (지운 행이 차지한 공간, 통계로 어림 — PostgreSQL) · **Table Fragmentation** (MySQL) · **Unused Indexes** · **Duplicate Indexes** · **Foreign Keys Without an Index** — DROP / CREATE INDEX, VACUUM FULL, REINDEX, OPTIMIZE TABLE 생성 |
+| 성능 | **Slow Queries** — 총 시간 기준 상위 100개 (`pg_stat_statements` / `performance_schema`), 콘솔에서 열거나 EXPLAIN (값 자리에 `$1` / `?` 가 들어간 문장이라 PostgreSQL 16+ 는 `EXPLAIN (GENERIC_PLAN)`, 그 밖에는 값을 먼저 채워야 함) |
+| 용량 | **Table Sizes** · **Table Bloat** · **Index Bloat** (지운 행이 차지한 공간, 통계로 어림 — PostgreSQL) · **Table Fragmentation** (MySQL) · **Unused Indexes** (언제부터 센 스캔 수인지 함께) · **Duplicate Indexes** · **Foreign Keys Without an Index** — DROP / CREATE INDEX, VACUUM FULL, REINDEX, OPTIMIZE TABLE 생성 |
 | 유지보수 | **Vacuum & Dead Rows** · **Vacuum Progress** (지금 도는 VACUUM, VACUUM FULL / autovacuum: 단계, 스캔한 비율 — 취소 가능) · **Transaction ID Age** (wraparound) — VACUUM ANALYZE 생성 (PostgreSQL) |
 | 서버 | **Server Overview** (가동 시간, 연결 수, 캐시 적중률) · **Replication** 지연 · **Settings** |
 | 보안 | **Users & Roles** · **Table Privileges** — GRANT / REVOKE 생성 |
 
-만든 SQL 은 새 콘솔에 열리고, 실행하기 전까지는 아무것도 바뀌지 않습니다. 세션 종료는 먼저 묻고 (pid 와 쿼리를 보여 줌), 읽기 전용 Data Source 에서는 막힙니다.
+만든 SQL 은 새 콘솔에 열리고, 실행하기 전까지는 아무것도 바뀌지 않습니다. 세션 종료는 먼저 묻고 (pid 와 쿼리를 보여 줌), 읽기 전용 Data Source 에서는 막힙니다. 다른 사용자의 세션을 KILL 할 수 없는 Amazon RDS / Aurora MySQL 에서는 `mysql.rds_kill` / `mysql.rds_kill_query` 를 씁니다.
+
+리포트 쿼리는 30초가 지나면 멈춥니다 (`statement_timeout` / `max_execution_time` 은 그 쿼리에만 걸리고 연결에는 남지 않음).
 
 ## 다이어그램 (ERD)
 
