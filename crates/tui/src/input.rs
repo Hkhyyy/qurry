@@ -1764,6 +1764,36 @@ mod tests {
         assert_eq!(h.app.tabs.len(), n);
     }
 
+    /// Switching the report of a reused DBA tab clears its grid, and a result of the old report that lands afterwards is dropped
+    #[tokio::test]
+    async fn dba_switch_drops_the_old_reports_result() {
+        use qurry_core::db::{ColumnInfo, QueryResult};
+        let mut h = Harness::new().await;
+        let res = |col: &str, v: i64| QueryResult {
+            columns: vec![ColumnInfo { name: col.into(), type_name: "INT4".into() }],
+            rows: vec![vec![serde_json::json!(v)]],
+            rows_affected: 0,
+            truncated: false,
+            elapsed_ms: 0,
+            has_result_set: true,
+            in_transaction: false,
+            warning: None,
+        };
+        let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
+        let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res("pid", 4123))), loaded: None, error: None, running: true, auto: true };
+        let id = h.app.push_tab("test", "postgres".into(), "Sessions".into(), TabKind::Dba(d));
+        h.app.run_action(Action::DbaReports);
+        h.type_str("Table Sizes");
+        h.key("Enter");
+        assert!(matches!(&h.app.tabs[h.app.active].kind, TabKind::Dba(d) if d.report == "table_sizes" && d.grid.is_none()));
+        // The sessions refresh that was running before the switch
+        h.app.dba_apply(id, "sessions", Ok(res("pid", 4123)));
+        assert!(matches!(&h.app.tabs[h.app.active].kind, TabKind::Dba(d) if d.grid.is_none() && d.running));
+        assert!(!h.screen(120, 24).contains("4123"));
+        h.app.dba_apply(id, "table_sizes", Ok(res("bytes", 777)));
+        assert!(matches!(&h.app.tabs[h.app.active].kind, TabKind::Dba(d) if d.grid.as_ref().is_some_and(|g| g.result.columns[0].name == "bytes") && !d.running));
+    }
+
     /// Follows the selected session (pid) even when auto-refresh reorders rows (so another session isn't killed)
     #[tokio::test]
     async fn dba_selection_follows_pid_across_reloads() {
@@ -1783,12 +1813,12 @@ mod tests {
         let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res(&[10, 20, 30]))), loaded: None, error: None, running: false, auto: true };
         let id = h.app.push_tab("test", "postgres".into(), "Sessions".into(), TabKind::Dba(d));
         h.key("Down");
-        h.app.dba_apply(id, Ok(res(&[30, 20, 10])));
+        h.app.dba_apply(id, "sessions", Ok(res(&[30, 20, 10])));
         let TabKind::Dba(d) = &h.app.tabs[h.app.active].kind else { panic!() };
         let g = d.grid.as_ref().unwrap();
         assert_eq!(g.value(g.row, 0).as_deref(), Some("20"));
         // If the selected session disappears, nothing is selected (so the wrong session isn't killed)
-        h.app.dba_apply(id, Ok(res(&[30, 10])));
+        h.app.dba_apply(id, "sessions", Ok(res(&[30, 10])));
         let TabKind::Dba(d) = &h.app.tabs[h.app.active].kind else { panic!() };
         assert!(d.grid.as_ref().unwrap().result.rows.len() == 2);
         h.key("K");
@@ -1814,10 +1844,10 @@ mod tests {
         let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: None, loaded: None, error: None, running: false, auto: true };
         let id = h.app.push_tab("test", "postgres".into(), "Sessions".into(), TabKind::Dba(d));
         // No result yet: the error replaces the grid
-        h.app.dba_apply(id, Err("The report ran into its time limit".into()));
+        h.app.dba_apply(id, "sessions", Err("The report ran into its time limit".into()));
         assert!(matches!(&h.app.tabs[h.app.active].kind, TabKind::Dba(d) if d.grid.is_none() && d.error.is_some()));
-        h.app.dba_apply(id, Ok(res));
-        h.app.dba_apply(id, Err("The report ran into its time limit (30 s, or a stricter one set on the server).\n(statement timeout)".into()));
+        h.app.dba_apply(id, "sessions", Ok(res));
+        h.app.dba_apply(id, "sessions", Err("The report ran into its time limit (30 s, or a stricter one set on the server).\n(statement timeout)".into()));
         let TabKind::Dba(d) = &h.app.tabs[h.app.active].kind else { panic!() };
         assert!(d.grid.as_ref().is_some_and(|g| g.rows() == 1) && d.error.is_some());
         let screen = h.screen(120, 24);

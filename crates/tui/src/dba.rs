@@ -52,6 +52,8 @@ impl App {
                     d.report = report;
                     d.info = info;
                     d.grid = None;
+                    d.loaded = None;
+                    d.gone = None;
                     d.error = None;
                 }
                 let id = t.id;
@@ -111,12 +113,17 @@ impl App {
             d.info = reports(kind).into_iter().find(|r| r.id == report);
         }
         let st = self.state.clone();
-        self.spawn(async move { st.dba_report(target, report).await.map_err(|e| e.to_string()) }, move |a, r| a.dba_apply(id, r));
+        let report2 = report.clone();
+        self.spawn(async move { st.dba_report(target, report).await.map_err(|e| e.to_string()) }, move |a, r| a.dba_apply(id, &report2, r));
     }
 
-    /// Put in the loaded results (a failed refresh keeps the last grid). The selected row follows the same pid (so a different session isn't selected when the order changes)
-    pub fn dba_apply(&mut self, id: u64, r: Result<qurry_core::db::QueryResult, String>) {
+    /// Put in the loaded results (a failed refresh keeps the last grid). The selected row follows the same pid (so a different session isn't selected when the order changes).
+    /// A result of a report the tab has since switched away from is dropped (the new report's run is still going)
+    pub fn dba_apply(&mut self, id: u64, report: &str, r: Result<qurry_core::db::QueryResult, String>) {
         let Some(Tab { kind: TabKind::Dba(d), .. }) = self.tab_mut(id) else { return };
+        if d.report != report {
+            return;
+        }
         d.running = false;
         match r {
             Ok(res) => {
