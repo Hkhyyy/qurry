@@ -75,6 +75,15 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
+      # qurry-shared is built to WASM for the GUI and holds the read-only checks: it must not pull in a runtime or a DB client
+      - name: qurry-shared stays pure (no tokio, sqlx or redis)
+        run: |
+          bad=$(cargo tree --locked -p qurry-shared -e normal,build --prefix none --format '{p}' | awk '{print $1}' | grep -xE 'tokio(-.*)?|sqlx(-.*)?|redis' | sort -u | tr '\n' ' ' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::qurry-shared depends on: $bad— keep I/O in qurry-core and pass plain values into qurry-shared (see 'cargo tree -p qurry-shared -i <crate>' for the path)"
+            exit 1
+          fi
+
       # Milvus standalone needs a run command, so start it directly instead of as a service (comes up while building)
       - name: Start Milvus
         run: docker run -d --name milvus -p 19530:19530 -e ETCD_USE_EMBED=true -e ETCD_DATA_DIR=/var/lib/milvus/etcd -e COMMON_STORAGETYPE=local -e DEPLOY_MODE=STANDALONE milvusdb/milvus:v2.5.4 milvus run standalone
