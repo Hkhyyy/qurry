@@ -35,7 +35,7 @@ const KEYWORDS = (
   "asc desc nulls first last count sum avg min max coalesce now current_date current_timestamp interval true false begin commit rollback explain analyze"
 ).split(" ");
 
-function tablesInStatement(text: string) {
+export function tablesInStatement(text: string) {
   const out: { ref: string; alias?: string }[] = [];
   const re = /\b(?:from|join|update|into)\s+((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))?)(?:\s+(?:as\s+)?(\w+))?/gi;
   let m: RegExpExecArray | null;
@@ -46,7 +46,7 @@ function tablesInStatement(text: string) {
   return out;
 }
 
-function findTable(all: CompletionTable[], ref: string) {
+export function findTable(all: CompletionTable[], ref: string) {
   const [a, b] = ref.toLowerCase().split(".");
   return b ? all.find((t) => t.schema.toLowerCase() === a && t.name.toLowerCase() === b) : all.find((t) => t.name.toLowerCase() === a && t.schema === "public") ?? all.find((t) => t.name.toLowerCase() === a);
 }
