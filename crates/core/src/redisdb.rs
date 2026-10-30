@@ -833,10 +833,11 @@ fn raw_text(v: &RV) -> Value {
 /// Max bytes of a string value shown in key details (only the beginning if over, truncated)
 pub const STRING_PREVIEW_MAX: i64 = 1 << 20;
 
-/// Memory used by the key (bytes, 0 if missing). For checking size before reading the value
+/// Memory used by the key (bytes, 0 if missing). For checking size before reading the value.
+/// SAMPLES 0 counts every element (the default samples 5 and under-counts when they are small); callers cap the element count first
 pub async fn memory_usage(m: &RedisConn, key: &[u8]) -> AppResult<i64> {
     let mut mgr = m.clone();
-    let v: Option<i64> = redis::cmd("MEMORY").arg("USAGE").arg(key).query_async(&mut mgr).await.map_err(err)?;
+    let v: Option<i64> = redis::cmd("MEMORY").arg("USAGE").arg(key).arg("SAMPLES").arg(0).query_async(&mut mgr).await.map_err(err)?;
     Ok(v.unwrap_or(0))
 }
 
@@ -1105,6 +1106,32 @@ mod tests {
         }
         assert_eq!(st.run_read_only("rd::db6".into(), format!("ZRANGEBYSCORE {z} -inf +inf LIMIT 0 5"), 2000).await.unwrap().rows.len(), 5);
         let _: () = redis::cmd("DEL").arg(z).arg(s).arg(l).query_async(&mut c).await.unwrap();
+    }
+
+    /// The 16 MB check counts every element: MEMORY USAGE's default sampling (the first 5 list nodes) reads a list whose first elements are small as ~10 MB
+    #[tokio::test]
+    #[ignore]
+    async fn redis_size_check_counts_every_element() {
+        let dir = std::env::temp_dir().join(format!("qurry-rmem-{}", uuid::Uuid::new_v4()));
+        let st = crate::open_state(Some(dir)).unwrap();
+        st.save_connection(cfg("db7"), None, None).await.unwrap();
+        let pool = crate::db::connect(&cfg("db7"), None).await.expect("connect");
+        let Pool::Redis(m, _) = &pool else { panic!() };
+        let mut c = m.clone();
+        let k = "qurry:mem:l";
+        let _: () = redis::cmd("DEL").arg(k).query_async(&mut c).await.unwrap();
+        // 10 KB each: one list node per element, so the 5 sampled nodes are the small ones
+        let _: () = redis::cmd("RPUSH").arg(k).arg(vec!["s".repeat(10 << 10); 5]).query_async(&mut c).await.unwrap();
+        let big = "x".repeat(60 << 10);
+        for _ in 0..995 {
+            let _: () = redis::cmd("RPUSH").arg(k).arg(&big).query_async(&mut c).await.unwrap();
+        }
+        let sampled: i64 = redis::cmd("MEMORY").arg("USAGE").arg(k).query_async(&mut c).await.unwrap();
+        assert!(sampled < 16 << 20, "default sampling under-counts: {sampled}");
+        assert!(memory_usage(m, k.as_bytes()).await.unwrap() > 50 << 20);
+        let e = st.run_read_only("rd::db7".into(), format!("LRANGE {k} 0 -1"), 1000).await.unwrap_err().to_string();
+        assert!(e.contains("too big"), "{e}");
+        let _: () = redis::cmd("DEL").arg(k).query_async(&mut c).await.unwrap();
     }
 
     #[tokio::test]
