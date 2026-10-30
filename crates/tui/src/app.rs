@@ -648,7 +648,7 @@ pub struct App {
     pub ws_shared: Option<Vec<qurry_core::workspaces::WsInfo>>,
     /// The save file has synced with the shared list before (missing workspaces were deleted elsewhere)
     pub ws_synced: bool,
-    /// Tests only (testkit): answers console statements instead of the database
+    /// Tests only (testkit): answers console statements and the Production row counts instead of the database
     #[cfg(test)]
     pub fake_db: Option<fn(&str) -> Result<QueryResult, String>>,
 }
@@ -1827,12 +1827,22 @@ impl App {
             let writes: Vec<String> = stmts.iter().filter(|s| !qurry_core::guard::is_read(s, kind)).cloned().collect();
             if !writes.is_empty() {
                 let st = self.state.clone();
+                #[cfg(test)]
+                let fake = self.fake_db;
+                #[cfg(not(test))]
+                let fake: Option<fn(&str) -> Result<QueryResult, String>> = None;
                 self.status = "Counting the rows this will change…".into();
                 self.spawn(
                     async move {
                         let mut out = vec![];
                         for w in writes {
-                            let n = st.preview_impact(target.clone(), w.clone()).await;
+                            let n = match fake {
+                                Some(f) => match qurry_core::guard::impact_count_sql(&w, kind) {
+                                    Some(q) => f(&q).map(|r| r.rows.first().and_then(|x| x.first()).and_then(|v| v.as_i64())).map_err(qurry_core::error::AppError::Msg),
+                                    None => Ok(None),
+                                },
+                                None => st.preview_impact(target.clone(), w.clone()).await,
+                            };
                             out.push((w, n));
                         }
                         out

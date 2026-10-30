@@ -84,6 +84,48 @@ async fn f5_stops_at_the_first_error() {
     assert!(console(&h).show_output);
 }
 
+/// Production Data Source: the counted rows of each changing statement are shown before anything runs; yes runs them
+#[tokio::test]
+async fn production_confirm_shows_counted_rows() {
+    // Counting queries answer 1 for id = 4 and 12,408 otherwise; the statements themselves go to `fake`
+    fn counts(q: &str) -> Result<QueryResult, String> {
+        if !q.starts_with("SELECT count(*)") {
+            return fake(q);
+        }
+        let n: i64 = if q.contains("id = 4") { 1 } else { 12408 };
+        Ok(QueryResult { columns: vec![ColumnInfo { name: "count".into(), type_name: "int8".into() }], rows: vec![vec![n.into()]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false })
+    }
+    let mut h = Harness::new().await;
+    let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+        "id": "p", "name": "PROD", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "d"
+    }))
+    .unwrap();
+    cfg.options.confirm_changes = true;
+    h.app.state.store.save(&cfg).unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    h.app.fake_db = Some(counts);
+    h.app.exec.inside = crate::exec::Inside::Whole;
+    let sql = "update payment set amount = 0 where id = 4;\ndelete from payment where amount < 0;";
+    let id = h.app.restore_console("p", "d".into(), "console".into(), sql).unwrap();
+    let i = h.app.tab_index(id).unwrap();
+    h.app.activate(i);
+    h.key("F5");
+    h.settle().await;
+    let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
+    assert_eq!(
+        text,
+        "Production data source \"PROD\" — this changes data:\n\n  update payment set amount = 0 where id = 4\n    → 1 row\n  delete from payment where amount < 0\n    → 12,408 rows\n\nRun it?"
+    );
+    assert!(h.console_output().is_empty(), "nothing runs before the answer");
+    h.key("y");
+    h.settle().await;
+    assert_eq!(
+        h.console_output(),
+        ["PROD> update payment set amount = 0 where id = 4", "PROD> delete from payment where amount < 0", "3 row(s) affected in 7 ms", "3 row(s) affected in 7 ms"]
+    );
+}
+
 /// ⌃Space lists columns after "alias." (from the loaded metadata); Enter replaces the typed prefix with the picked one
 #[tokio::test]
 async fn completion_popup_lists_and_inserts() {
