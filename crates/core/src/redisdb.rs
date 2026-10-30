@@ -984,9 +984,12 @@ mod tests {
     use crate::store::DbKind;
 
     /// docker run -d --name dbtool-redis-test -p 16379:6379 redis:7-alpine
+    /// (another server: QURRY_TEST_REDIS=host:port)
     fn cfg(db: &str) -> ConnectionConfig {
+        let addr = std::env::var("QURRY_TEST_REDIS").unwrap_or_else(|_| "127.0.0.1:16379".into());
+        let (host, port) = addr.rsplit_once(':').expect("QURRY_TEST_REDIS=host:port");
         ConnectionConfig {
-            id: "rd".into(), name: "rd".into(), kind: DbKind::Redis, host: "127.0.0.1".into(), port: 16379, user: String::new(),
+            id: "rd".into(), name: "rd".into(), kind: DbKind::Redis, host: host.into(), port: port.parse().expect("QURRY_TEST_REDIS port"), user: String::new(),
             database: db.into(), color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(),
             read_only: false, options: Default::default(), ssl: None, redis: None,
         }
@@ -1068,6 +1071,40 @@ mod tests {
         let e = st.execute_batch_prepared("rd::db5".into(), vec!["LRANGE lbig 0 -1".into()]).await.unwrap_err().to_string();
         assert!(e.contains("1500 elements"), "{e}");
         let _: () = redis::cmd("FLUSHDB").query_async(&mut c).await.unwrap();
+    }
+
+    /// MCP read: Redis takes the last of a repeated LIMIT / COUNT, so a small first one must not let a whole key through
+    #[tokio::test]
+    #[ignore]
+    async fn redis_repeated_options_are_refused() {
+        let dir = std::env::temp_dir().join(format!("qurry-rrep-{}", uuid::Uuid::new_v4()));
+        let st = crate::open_state(Some(dir)).unwrap();
+        st.save_connection(cfg("db6"), None, None).await.unwrap();
+        let pool = crate::db::connect(&cfg("db6"), None).await.expect("connect");
+        let Pool::Redis(m, _) = &pool else { panic!() };
+        let mut c = m.clone();
+        let (z, s, l) = ("qurry:rep:z", "qurry:rep:s", "qurry:rep:l");
+        let _: () = redis::cmd("DEL").arg(z).arg(s).arg(l).query_async(&mut c).await.unwrap();
+        for i in 0..1500 {
+            let _: () = redis::cmd("ZADD").arg(z).arg(i).arg(format!("m{i}")).query_async(&mut c).await.unwrap();
+        }
+        for _ in 0..1500 {
+            let _: String = redis::cmd("XADD").arg(s).arg("*").arg("f").arg("v").query_async(&mut c).await.unwrap();
+        }
+        let _: () = redis::cmd("RPUSH").arg(l).arg(vec!["x"; 1500]).query_async(&mut c).await.unwrap();
+        // What Redis does with them: the last one wins
+        let n: Vec<String> = redis::cmd("ZRANGEBYSCORE").arg(z).arg("-inf").arg("+inf").arg("LIMIT").arg(0).arg(1).arg("LIMIT").arg(0).arg(-1).query_async(&mut c).await.unwrap();
+        assert_eq!(n.len(), 1500);
+        let n: Vec<i64> = redis::cmd("LPOS").arg(l).arg("x").arg("COUNT").arg(1).arg("COUNT").arg(0).query_async(&mut c).await.unwrap();
+        assert_eq!(n.len(), 1500);
+        for bad in [format!("ZRANGEBYSCORE {z} -inf +inf LIMIT 0 1 LIMIT 0 -1"), format!("ZRANGE {z} -inf +inf BYSCORE LIMIT 0 1 LIMIT 0 -1"),
+            format!("XRANGE {s} - + COUNT 1 COUNT 1500"), format!("LPOS {l} x COUNT 1 COUNT 0")] {
+            let e = st.run_read_only("rd::db6".into(), bad.clone(), 2000).await.unwrap_err().to_string();
+            assert!(e.contains("more than once"), "{bad}: {e}");
+            assert!(st.execute_batch_prepared("rd::db6".into(), vec![bad.clone()]).await.is_err(), "{bad}");
+        }
+        assert_eq!(st.run_read_only("rd::db6".into(), format!("ZRANGEBYSCORE {z} -inf +inf LIMIT 0 5"), 2000).await.unwrap().rows.len(), 5);
+        let _: () = redis::cmd("DEL").arg(z).arg(s).arg(l).query_async(&mut c).await.unwrap();
     }
 
     #[tokio::test]

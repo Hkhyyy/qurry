@@ -502,17 +502,46 @@ fn dml_words(toks: &[Tok]) -> impl Iterator<Item = usize> + '_ {
 /// Number of elements a single Redis command may return in MCP
 pub const REDIS_STRICT_MAX: i64 = 1000;
 
-/// Position of an option (LIMIT, COUNT, BYSCORE …) in a Redis command's arguments. Looks only after leading arguments like key · range
-/// (so a key named LIMIT · COUNT doesn't fool it)
+/// Options of the Redis reads the MCP limits check: how many leading arguments (key · range …) come first, and each option with
+/// how many values it takes
+fn redis_opt_spec(cmd: &str) -> (usize, &'static [(&'static str, usize)]) {
+    match cmd {
+        "ZRANGE" => (3, &[("BYSCORE", 0), ("BYLEX", 0), ("REV", 0), ("LIMIT", 2), ("WITHSCORES", 0)]),
+        "ZRANGEBYSCORE" | "ZREVRANGEBYSCORE" | "ZRANGEBYLEX" | "ZREVRANGEBYLEX" | "ZREVRANGE" => (3, &[("LIMIT", 2), ("WITHSCORES", 0)]),
+        "XRANGE" | "XREVRANGE" => (3, &[("COUNT", 1)]),
+        "LPOS" => (2, &[("RANK", 1), ("COUNT", 1), ("MAXLEN", 1)]),
+        "SCAN" => (1, &[("MATCH", 1), ("COUNT", 1), ("TYPE", 1)]),
+        "HSCAN" | "SSCAN" | "ZSCAN" => (2, &[("MATCH", 1), ("COUNT", 1), ("NOVALUES", 0)]),
+        "GEOSEARCH" => (1, &[("FROMMEMBER", 1), ("FROMLONLAT", 2), ("BYRADIUS", 2), ("BYBOX", 3), ("ASC", 0), ("DESC", 0), ("COUNT", 1), ("ANY", 0),
+            ("WITHCOORD", 0), ("WITHDIST", 0), ("WITHHASH", 0)]),
+        "XINFO" => (2, &[("FULL", 0), ("COUNT", 1)]),
+        _ => (3, &[]),
+    }
+}
+
+/// Options in a Redis command's arguments as Redis reads them: (name, position), in order. Skips each option's values
+/// (so in SCAN 0 MATCH COUNT, COUNT is the pattern) and the leading arguments (so a key named LIMIT · COUNT doesn't fool it).
+/// Unknown words are skipped (Redis refuses them)
+fn redis_opts(cmd: &str, args: &[String]) -> Vec<(&'static str, usize)> {
+    let (fixed, spec) = redis_opt_spec(cmd);
+    let mut out = Vec::new();
+    let mut i = fixed;
+    while i < args.len() {
+        match spec.iter().find(|(n, _)| args[i].eq_ignore_ascii_case(n)) {
+            Some(&(n, arity)) => {
+                out.push((n, i));
+                i += 1 + arity;
+            }
+            None => i += 1,
+        }
+    }
+    out
+}
+
+/// Position of an option (LIMIT, COUNT, BYSCORE …) in a Redis command's arguments. The last one when repeated, as Redis reads it
+/// (redis_strict_violation refuses repeats anyway)
 fn redis_opt(cmd: &str, args: &[String], name: &str) -> Option<usize> {
-    let fixed = match cmd {
-        "SCAN" => 1,
-        "HSCAN" | "SSCAN" | "ZSCAN" | "LPOS" => 2,
-        "XINFO" => 2,
-        "GEOSEARCH" => 1,
-        _ => 3,
-    };
-    args.iter().enumerate().skip(fixed).find(|(_, a)| a.eq_ignore_ascii_case(name)).map(|(i, _)| i)
+    redis_opts(cmd, args).into_iter().rev().find(|(n, _)| *n == name).map(|(_, i)| i)
 }
 
 /// Elements LRANGE / ZRANGE start stop returns, from the indexes alone (both from the start, or both from the end).
@@ -565,6 +594,11 @@ pub fn redis_strict_violation(cmd: &str, args: &[String]) -> Option<String> {
         _ => true,
     };
     let need_limit = |what: &str| Some(format!("{cmd} needs {what} of at most {REDIS_STRICT_MAX} in read-only mode"));
+    // Redis takes the last of a repeated option (LIMIT 0 1 LIMIT 0 -1 reads everything)
+    let opts = redis_opts(cmd, args);
+    if let Some((n, _)) = opts.iter().enumerate().find_map(|(k, o)| opts[..k].iter().any(|p| p.0 == o.0).then_some(o)) {
+        return Some(format!("{cmd}: {n} given more than once — not allowed in read-only mode"));
+    }
     match cmd {
         "CONFIG" => Some("CONFIG is not allowed in read-only mode (it can reveal passwords)".into()),
         "KEYS" => Some("KEYS is not allowed in read-only mode (it blocks the server on large databases) — use redis_scan".into()),
@@ -1241,6 +1275,45 @@ mod tests {
             "XRANGE s - + COUNT 10", "SRANDMEMBER s 5", "SRANDMEMBER s", "SCAN 0 MATCH a:* COUNT 100", "HLEN h"] {
             assert!(v(ok).is_none(), "{ok}");
         }
+    }
+
+    /// Redis takes the last of a repeated option (LIMIT 0 1 LIMIT 0 -1 reads everything), so a repeat is refused,
+    /// and an option's value that looks like an option name is not read as one
+    #[test]
+    fn redis_repeated_options() {
+        let split = |line: &str| {
+            let mut w = line.split_whitespace();
+            (w.next().unwrap().to_uppercase(), w.map(String::from).collect::<Vec<_>>())
+        };
+        let v = |line: &str| {
+            let (cmd, a) = split(line);
+            redis_strict_violation(&cmd, &a)
+        };
+        let size = |line: &str| {
+            let (cmd, a) = split(line);
+            redis_size_check(&cmd, &a)
+        };
+        for bad in ["ZRANGEBYSCORE z -inf +inf LIMIT 0 1 LIMIT 0 -1", "ZRANGE z -inf +inf BYSCORE LIMIT 0 1 LIMIT 0 -1", "XRANGE s - + COUNT 1 COUNT 100",
+            "LPOS l x COUNT 1 COUNT 0", "XREVRANGE s + - count 1 COUNT 5000", "ZREVRANGEBYLEX z + - LIMIT 0 1 limit 0 -1", "SCAN 0 COUNT 10 COUNT 1000000",
+            "HSCAN h 0 COUNT 10 COUNT 100000", "GEOSEARCH g FROMLONLAT 0 0 BYRADIUS 9 km COUNT 1 COUNT 100000", "XINFO STREAM s FULL COUNT 1 COUNT 0",
+            "ZRANGE z 0 1 BYSCORE BYSCORE LIMIT 0 1", "ZRANGEBYSCORE z 0 1 WITHSCORES WITHSCORES LIMIT 0 1", "SCAN 0 MATCH a MATCH b", "SCAN 0 TYPE hash TYPE set",
+            "LPOS l x RANK 1 RANK 2", "LPOS l x MAXLEN 1 MAXLEN 0", "ZRANGE z 0 1 REV REV"] {
+            assert!(v(bad).is_some_and(|e| e.contains("more than once")), "{bad}: {:?}", v(bad));
+        }
+        // A value equal to an option name is a value: SCAN's MATCH COUNT is the pattern "COUNT"
+        for bad in ["SCAN 0 MATCH COUNT COUNT 1000000", "SCAN 0 COUNT 1000000 MATCH COUNT", "LPOS l x RANK COUNT COUNT 0"] {
+            assert!(v(bad).is_some(), "{bad}");
+        }
+        for ok in ["SCAN 0 MATCH COUNT COUNT 10", "SCAN 0 COUNT 10 MATCH COUNT", "LPOS l COUNT COUNT 5", "XRANGE s COUNT + COUNT 5", "ZRANGEBYSCORE z LIMIT +inf LIMIT 0 5"] {
+            assert!(v(ok).is_none(), "{ok}: {:?}", v(ok));
+        }
+        assert!(size("XRANGE s COUNT + COUNT 5").is_none() && size("ZRANGEBYSCORE z LIMIT +inf LIMIT 0 5").is_none());
+        // Other forms that read everything: LIMIT with a negative count, COUNT 0, a huge SCAN COUNT
+        for bad in ["ZRANGE z -inf +inf BYSCORE LIMIT 0 -5", "ZRANGEBYLEX z - + LIMIT 0 -1", "LPOS l x COUNT 0 MAXLEN 0", "SSCAN s 0 COUNT 99999999", "ZRANGE z [a [z BYLEX REV LIMIT 0 -1"] {
+            assert!(v(bad).is_some(), "{bad}");
+        }
+        // MAXLEN 0 only scans the whole list; COUNT still caps what comes back
+        assert!(v("LPOS l x COUNT 5 MAXLEN 0").is_none());
     }
 
     #[test]
