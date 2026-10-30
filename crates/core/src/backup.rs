@@ -145,23 +145,66 @@ fn pg_dbname(db: &str) -> String {
     format!("dbname='{}'", db.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
-/// Whether this line of an SQL file is a mysql client command that does something on this computer. A second check: mysql runs with --binary-mode,
-/// which switches these off. Looks for system / tee / pager / source / connect … and \! \T \P \. \r \e at the start of a line, where the mysql client
-/// reads them (not inside the data: mysqldump writes a\!b in a string as 'a\\!b').
+/// Finds mysql client commands that do something on this computer, line by line. A second check: mysql runs with --binary-mode, which switches these off.
+/// Like the mysql client: system / tee / pager / source / connect … at the start of a line (outside a string), and \! \T \P \. \r \e \u \C anywhere
+/// outside strings ('…' "…" with backslash escapes as mysqldump writes them, `…` without) and comments (-- · # to the end of the line, /* */ but not
+/// /*! */, whose contents mysql runs). Not inside the data: mysqldump writes a\!b in a string as 'a\\!b'.
 /// (psql needs no line check: it runs with \restrict, and an older psql isn't used for plain SQL)
-fn is_local_command(line: &[u8]) -> bool {
-    let line = String::from_utf8_lossy(line);
-    let t = line.trim_start();
-    let word = t.split_whitespace().next().unwrap_or("").to_lowercase();
-    let bad_word = ["system", "tee", "notee", "pager", "nopager", "source", "connect", "edit"].contains(&word.as_str());
-    let bad_slash = t.strip_prefix('\\').is_some_and(|c| c.starts_with(['!', 'T', 'P', '.', 'r', 'e']));
-    bad_word || bad_slash
+#[derive(Default)]
+struct MyScan {
+    /// The quote of the string the line starts in (0 = none)
+    quote: u8,
+    /// Inside /* */
+    comment: bool,
 }
 
-/// The first line of the SQL that is_local_command. Read line by line without blocking; stops on cancel
+impl MyScan {
+    fn is_local_command(&mut self, line: &[u8]) -> bool {
+        if self.quote == 0 {
+            let text = String::from_utf8_lossy(line);
+            let word = text.split_whitespace().next().unwrap_or("").to_lowercase();
+            if ["system", "tee", "notee", "pager", "nopager", "source", "connect", "edit"].contains(&word.as_str()) {
+                return true;
+            }
+        }
+        let at = |i: usize| line.get(i).copied().unwrap_or(0);
+        let mut i = 0;
+        while i < line.len() {
+            let c = line[i];
+            if self.comment {
+                if c == b'*' && at(i + 1) == b'/' {
+                    self.comment = false;
+                    i += 1;
+                }
+            } else if self.quote != 0 {
+                if c == b'\\' && self.quote != b'`' {
+                    i += 1;
+                } else if c == self.quote {
+                    self.quote = 0;
+                }
+            } else if c == b'\\' {
+                if matches!(at(i + 1), b'!' | b'T' | b'P' | b'.' | b'r' | b'e' | b'u' | b'C') {
+                    return true;
+                }
+                i += 1;
+            } else if c == b'#' || (c == b'-' && at(i + 1) == b'-' && (i + 2 >= line.len() || at(i + 2).is_ascii_whitespace())) {
+                return false;
+            } else if c == b'/' && at(i + 1) == b'*' && !matches!(at(i + 2), b'!' | b'+') {
+                self.comment = true;
+                i += 1;
+            } else if matches!(c, b'\'' | b'"' | b'`') {
+                self.quote = c;
+            }
+            i += 1;
+        }
+        false
+    }
+}
+
+/// The first line of the SQL that MyScan::is_local_command. Read line by line without blocking; stops on cancel
 async fn local_command(mut sql: impl tokio::io::AsyncBufRead + Unpin, job: &Job) -> AppResult<Option<String>> {
     use tokio::io::AsyncBufReadExt;
-    let mut line = Vec::new();
+    let (mut line, mut scan) = (Vec::new(), MyScan::default());
     loop {
         line.clear();
         if sql.read_until(b'\n', &mut line).await? == 0 {
@@ -170,7 +213,7 @@ async fn local_command(mut sql: impl tokio::io::AsyncBufRead + Unpin, job: &Job)
         if job.cancelled() {
             return Err(AppError::Msg(crate::transfer::CANCELLED.into()));
         }
-        if is_local_command(&line) {
+        if scan.is_local_command(&line) {
             return Ok(Some(String::from_utf8_lossy(&line).trim_end().to_string()));
         }
     }
@@ -788,6 +831,37 @@ mod tests {
         }
         job.cancel();
         assert!(local_command("select 1;\n".as_bytes(), &job).await.is_err());
+    }
+
+    /// The mysql client also runs \! … later in a line, outside strings and comments; inside strings (as mysqldump writes them) it is data
+    #[tokio::test]
+    async fn client_commands_later_in_a_line_are_refused() {
+        let found = |sql: &'static str| async move { local_command(sql.as_bytes(), &Job::new()).await.unwrap() };
+        for bad in [
+            "select 1; \\! touch /tmp/p",
+            "select 1;\\T /tmp/x",
+            "select 'a' \\P sh",
+            "insert into t values ('it\\'s', 1); \\. /etc/x",
+            "select `a\\` \\u other",
+            "/*!40101 \\C latin1 */;",
+            "select 1 /* note */ \\r db evil.host",
+            "select \"a\\\"b\" \\! id",
+        ] {
+            assert_eq!(found(bad).await.as_deref(), Some(bad), "{bad}");
+        }
+        // Strings that span lines, comments and escapes are followed: these are data or comments
+        for ok in [
+            "INSERT INTO `t` VALUES (1,'a\\\\!b'),(2,'\\\\! ls'),(3,'it\\'s \\\\! x'),(4,\"q\\\"\\\\T\");\n",
+            "INSERT INTO t VALUES ('a\nsystem ls\n\\! id\n');\n",
+            "select 1; -- \\! not run\nselect 2; # \\! nor this\n",
+            "/* \\! a comment\n\\! still a comment */ select 1;\n",
+            "select `odd\\` from t;\n",
+            "/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;\nDELIMITER ;;\n/*!50003 CREATE*/ /*!50020 DEFINER=`root`@`%`*/ /*!50003 TRIGGER `t_bi` BEFORE INSERT ON `t` FOR EACH ROW SET NEW.a = 'x\\\\y' */;;\nDELIMITER ;\n",
+        ] {
+            assert_eq!(found(ok).await, None, "{ok}");
+        }
+        // `--` without a space after it doesn't start a comment
+        assert!(found("select 1;--\\! id\n").await.is_some());
     }
 
     /// Custom archives go straight to the server with pg_restore unless that pg_restore would send settings the server doesn't know
