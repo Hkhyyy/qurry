@@ -369,7 +369,7 @@ async fn check_redis_read(m: &crate::redisdb::RedisConn, line: &str) -> AppResul
         }
         let mut bytes = 0i64;
         for k in &c.keys {
-            bytes = bytes.saturating_add(crate::redisdb::memory_usage(m, k.as_bytes()).await?);
+            bytes = bytes.saturating_add(crate::redisdb::memory_usage(m, k.as_bytes(), 0).await?);
         }
         if bytes > REDIS_READ_MAX_BYTES {
             return Err(AppError::Msg(format!("{cmd} would read {} MB — too big to read here; use {}", bytes >> 20, c.instead)));
@@ -385,8 +385,9 @@ async fn check_redis_read(m: &crate::redisdb::RedisConn, line: &str) -> AppResul
         "JSON.MGET" => rest.split_last().map(|(_, k)| k).unwrap_or(&[]),
         _ => &[],
     };
+    let json = cmd.starts_with("JSON.");
     for k in keys {
-        let n = crate::redisdb::memory_usage(m, k.as_bytes()).await?;
+        let n = crate::redisdb::value_size(m, k.as_bytes(), json).await?;
         if n > REDIS_READ_MAX_BYTES {
             return Err(AppError::Msg(format!("{k} is {} MB — too big to read here (use GETRANGE, or redis_get for a preview)", n >> 20)));
         }

@@ -833,12 +833,25 @@ fn raw_text(v: &RV) -> Value {
 /// Max bytes of a string value shown in key details (only the beginning if over, truncated)
 pub const STRING_PREVIEW_MAX: i64 = 1 << 20;
 
-/// Memory used by the key (bytes, 0 if missing). For checking size before reading the value.
-/// SAMPLES 0 counts every element (the default samples 5 and under-counts when they are small); callers cap the element count first
-pub async fn memory_usage(m: &RedisConn, key: &[u8]) -> AppResult<i64> {
+/// Memory used by the key (bytes, 0 if missing), sampling `samples` elements of a collection (0 = every element: exact but O(N);
+/// Redis's default 5 under-counts when the sampled elements are small). Pass 0 only after the element count was checked
+pub async fn memory_usage(m: &RedisConn, key: &[u8], samples: u32) -> AppResult<i64> {
     let mut mgr = m.clone();
-    let v: Option<i64> = redis::cmd("MEMORY").arg("USAGE").arg(key).arg("SAMPLES").arg(0).query_async(&mut mgr).await.map_err(err)?;
+    let v: Option<i64> = redis::cmd("MEMORY").arg("USAGE").arg(key).arg("SAMPLES").arg(samples).query_async(&mut mgr).await.map_err(err)?;
     Ok(v.unwrap_or(0))
+}
+
+/// Size in bytes of the value GET (`json` false) or JSON.GET (`json` true) would return — 0 when the key is missing or of another
+/// type (the command then fails with WRONGTYPE or returns nil without reading anything). Strings use STRLEN (O(1));
+/// a JSON document uses MEMORY USAGE, which walks the document the read would return anyway
+pub async fn value_size(m: &RedisConn, key: &[u8], json: bool) -> AppResult<i64> {
+    let mut mgr = m.clone();
+    let ty = key_type(&mut mgr, key).await?;
+    match (json, ty.as_str()) {
+        (false, "string") => redis::cmd("STRLEN").arg(key).query_async(&mut mgr).await.map_err(err),
+        (true, "ReJSON-RL") => memory_usage(m, key, 0).await,
+        _ => Ok(0),
+    }
 }
 
 /// Number of elements with a length command (HLEN, SCARD, LLEN, ZCARD, XLEN; 0 if missing)
@@ -1128,10 +1141,40 @@ mod tests {
         }
         let sampled: i64 = redis::cmd("MEMORY").arg("USAGE").arg(k).query_async(&mut c).await.unwrap();
         assert!(sampled < 16 << 20, "default sampling under-counts: {sampled}");
-        assert!(memory_usage(m, k.as_bytes()).await.unwrap() > 50 << 20);
+        assert!(memory_usage(m, k.as_bytes(), 0).await.unwrap() > 50 << 20);
         let e = st.run_read_only("rd::db7".into(), format!("LRANGE {k} 0 -1"), 1000).await.unwrap_err().to_string();
         assert!(e.contains("too big"), "{e}");
         let _: () = redis::cmd("DEL").arg(k).query_async(&mut c).await.unwrap();
+    }
+
+    /// GET / MGET / GETRANGE size checks don't run MEMORY USAGE … SAMPLES 0 (O(N)) on a key whose elements nobody counted:
+    /// `GET bighash` must not walk the hash before Redis answers WRONGTYPE
+    #[tokio::test]
+    #[ignore]
+    async fn redis_string_size_check_does_not_walk_other_types() {
+        let dir = std::env::temp_dir().join(format!("qurry-rstr-{}", uuid::Uuid::new_v4()));
+        let st = crate::open_state(Some(dir)).unwrap();
+        st.save_connection(cfg("db8"), None, None).await.unwrap();
+        let pool = crate::db::connect(&cfg("db8"), None).await.expect("connect");
+        let Pool::Redis(m, _) = &pool else { panic!() };
+        let mut c = m.clone();
+        let h = "qurry:str:bighash";
+        let _: () = redis::cmd("DEL").arg(h).query_async(&mut c).await.unwrap();
+        let fields: Vec<String> = (0..5000).flat_map(|i| [format!("f{i}"), "v".into()]).collect();
+        let _: () = redis::cmd("HSET").arg(h).arg(&fields).query_async(&mut c).await.unwrap();
+        let _: () = redis::cmd("SET").arg("qurry:str:s").arg("hi").query_async(&mut c).await.unwrap();
+        async fn memory_calls(c: &mut RedisConn) -> i64 {
+            let info: String = redis::cmd("INFO").arg("commandstats").query_async(c).await.unwrap();
+            info.lines().find_map(|l| l.strip_prefix("cmdstat_memory|usage:calls=")).and_then(|r| r.split(',').next()).map_or(0, |n| n.parse().unwrap())
+        }
+        let before = memory_calls(&mut c).await;
+        let e = st.run_read_only("rd::db8".into(), format!("GET {h}"), 10).await.unwrap_err().to_string();
+        assert!(e.contains("WRONGTYPE"), "{e}");
+        assert!(st.run_read_only("rd::db8".into(), format!("MGET qurry:str:s {h}"), 10).await.is_ok());
+        assert!(st.run_read_only("rd::db8".into(), format!("GETRANGE {h} 0 -1"), 10).await.is_err());
+        assert!(st.run_read_only("rd::db8".into(), "GET qurry:str:s".into(), 10).await.is_ok());
+        assert_eq!(memory_calls(&mut c).await, before, "string size checks ran MEMORY USAGE");
+        let _: () = redis::cmd("DEL").arg(h).arg("qurry:str:s").query_async(&mut c).await.unwrap();
     }
 
     #[tokio::test]
