@@ -84,11 +84,6 @@ fn version_text(p: &Path) -> String {
     out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
 }
 
-/// MariaDB builds of mysql / mysqldump take other TLS options (--ssl, --ssl-verify-server-cert instead of --ssl-mode)
-fn is_mariadb(p: &Path) -> bool {
-    version_text(p).contains("MariaDB")
-}
-
 /// Tool location: PATH, Homebrew, Postgres.app, Linux default locations. If several, the highest version
 pub fn find_tool(name: &str) -> Option<PathBuf> {
     find_tool_for(name, None)
@@ -935,8 +930,8 @@ fn pg_env(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str, 
     Ok(pass)
 }
 
-/// Password via --defaults-extra-file (0600). This option must come first
-fn my_args(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str, password: Option<&str>, cfg: &crate::store::ConnectionConfig) -> AppResult<Option<SecretTemp>> {
+/// Password via --defaults-extra-file (0600). This option must come first. mariadb: the client is a MariaDB build, which takes other TLS options (my_tls_args)
+fn my_args(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str, password: Option<&str>, cfg: &crate::store::ConnectionConfig, mariadb: bool) -> AppResult<Option<SecretTemp>> {
     let pass = match password {
         Some(p) => {
             // Option-file escapes: \\ \" and line breaks / tabs, so the value can't end the line or add options
@@ -949,7 +944,6 @@ fn my_args(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str,
     };
     cmd.env_remove("MYSQL_PWD");
     cmd.arg("-h").arg(host).arg("-P").arg(port.to_string()).arg("-u").arg(user).arg("--protocol=TCP");
-    let mariadb = is_mariadb(Path::new(cmd.as_std().get_program()));
     let mode = match cfg.active_ssl() {
         Some(s) => {
             crate::db::check_ssl_mode(s.mode())?;
@@ -1016,7 +1010,7 @@ impl AppState {
                     let server = my_server(self, &id).await;
                     let (tool, client) = find_mysqldump(server.as_ref())?;
                     let mut cmd = tokio::process::Command::new(tool);
-                    let _pass = my_args(&mut cmd, &host, port, &user, password.as_deref(), &cfg)?;
+                    let _pass = my_args(&mut cmd, &host, port, &user, password.as_deref(), &cfg, client.mariadb)?;
                     cmd.args(["--single-transaction", "--routines", "--triggers", "--events", "--hex-blob"]);
                     cmd.args(mysqldump_flags(&client, server.as_ref()));
                     if opts.schema_only {
@@ -1115,7 +1109,7 @@ impl AppState {
                     let server = my_server(self, &id).await;
                     let (tool, client, sandbox) = find_mysql(server.as_ref())?;
                     let mut cmd = tokio::process::Command::new(tool);
-                    let _pass = my_args(&mut cmd, &host, port, &user, password.as_deref(), &cfg)?;
+                    let _pass = my_args(&mut cmd, &host, port, &user, password.as_deref(), &cfg, client.mariadb)?;
                     // Disable mysql client commands (system · tee · pager · source · connect …) (only charset · delimiter remain)
                     cmd.arg("--binary-mode");
                     if let Some(o) = sandbox {
@@ -1682,6 +1676,14 @@ INSERT INTO `ev` VALUES (3,'it\'s \\! x');
             st.restore("m::qurry_mysqldump".into(), file, RestoreOptions::default(), "r".into()).await.unwrap();
             assert_eq!(q("select count(*) from bak_v").await.unwrap().rows[0][0], serde_json::json!(3));
             assert_eq!(q(objects).await.unwrap().rows[0][0], serde_json::json!(4));
+        }
+        // Data only (--no-create-info) still writes the routine, trigger and event with their DEFINER= (not the view), so leaving them out applies there too
+        for strip_definers in [false, true] {
+            let file = dir.join(format!("d-{strip_definers}.sql")).to_string_lossy().to_string();
+            let opts = BackupOptions { data_only: true, strip_definers, ..Default::default() };
+            st.backup("m::qurry_mysqldump".into(), file.clone(), opts, "j".into()).await.unwrap();
+            let text = std::fs::read_to_string(&file).unwrap();
+            assert_eq!(text.matches("DEFINER=`").count(), if strip_definers { 0 } else { 3 }, "{text}");
         }
         st.run_query("m".into(), "drop database qurry_mysqldump".into(), None, None).await.ok();
         std::fs::remove_dir_all(dir).ok();

@@ -278,7 +278,8 @@ impl App {
             if pg {
                 return a.backup_run(conn, db, path, false);
             }
-            a.input("Leave out DEFINER= clauses? y = leave out, Enter = keep (leave out to restore on RDS and other managed services, where another user's DEFINER needs SUPER)", "", move |a, yn| {
+            let why = "y leaves them out, Enter keeps them, Esc cancels the backup.\nLeave them out to restore on RDS and other managed services, where another user's DEFINER needs SUPER (the objects then belong to the user who restores them).";
+            a.input_with_body("Leave out DEFINER= clauses?", why, move |a, yn| {
                 let yn = yn.trim();
                 a.backup_run(conn, db, path, yn.eq_ignore_ascii_case("y") || yn.eq_ignore_ascii_case("yes"))
             });
@@ -393,7 +394,21 @@ mod tests {
         h.app.backup_start();
         assert!(popup_title(&h).unwrap().starts_with("Back up to"));
         answer(&mut h, "/surely/not/a/dir/shop.sql");
-        assert!(popup_title(&h).unwrap().starts_with("Leave out DEFINER= clauses?"), "{:?}", popup_title(&h));
+        assert_eq!(popup_title(&h).as_deref(), Some("Leave out DEFINER= clauses?"));
+        // The question fits the border at 80x24; the answers and the reason are in the body
+        let screen = h.screen(80, 24);
+        for s in ["Leave out DEFINER= clauses? (Enter / Esc)", "y leaves them out, Enter keeps them, Esc cancels the backup", "needs SUPER"] {
+            assert!(screen.contains(s), "{s}\n{screen}");
+        }
+        // Only the input has the thick (focused) border; the body box under it is plain
+        let rows: Vec<&str> = screen.lines().collect();
+        let y = rows.iter().position(|l| l.contains("y leaves them out")).unwrap();
+        assert!(rows[y - 2].contains("┗━") && rows[y - 1].contains("┌─"), "{screen}");
+        // On a narrow terminal the body box grows with the word wrap, so the reason's last words still show
+        let screen = h.screen(60, 20);
+        for s in ["backup.", "them).", "(Enter / Esc)"] {
+            assert!(screen.contains(s), "{s}\n{screen}");
+        }
         // It opens empty, so a typed y is the whole answer (not "ny")
         h.type_str("y");
         let Some(Popup::Input { input, .. }) = &h.app.popup else { panic!("no input popup") };

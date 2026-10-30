@@ -1144,7 +1144,7 @@ fn popup_key(app: &mut App, k: KeyEvent) {
             KeyCode::Char('n') | KeyCode::Esc => {}
             _ => app.popup = Some(Popup::Confirm { text, on_yes }),
         },
-        Popup::Input { title, mut input, on_ok, words, mut complete } => {
+        Popup::Input { title, body, mut input, on_ok, words, mut complete } => {
             // If the autocomplete list is open: ↑↓ select · Tab/Enter insert · Esc close
             if let Some((items, sel, prefix)) = &mut complete {
                 match k.code {
@@ -1161,7 +1161,7 @@ fn popup_key(app: &mut App, k: KeyEvent) {
                     _ => complete = None,
                 }
                 if complete.is_some() || matches!(k.code, KeyCode::Tab | KeyCode::Enter | KeyCode::Esc) {
-                    app.popup = Some(Popup::Input { title, input, on_ok, words, complete });
+                    app.popup = Some(Popup::Input { title, body, input, on_ok, words, complete });
                     return;
                 }
             }
@@ -1175,7 +1175,7 @@ fn popup_key(app: &mut App, k: KeyEvent) {
                         input.input(k);
                     }
                     complete = input_complete(&input, &words, force);
-                    app.popup = Some(Popup::Input { title, input, on_ok, words, complete });
+                    app.popup = Some(Popup::Input { title, body, input, on_ok, words, complete });
                 }
             }
         }
@@ -1764,6 +1764,55 @@ mod tests {
         assert_eq!(h.app.tabs.len(), n);
     }
 
+    /// A name with a newline (PostgreSQL quoted identifier, Redis key) stays on the input's border: it can't open an explanation box of its own
+    #[tokio::test]
+    async fn input_title_newline_does_not_make_a_body() {
+        let mut h = Harness::new().await;
+        h.app.input("Generate test data into public.orders\nThis is a scratch copy, safe to fill", "", |_, _| {});
+        let screen = h.screen(120, 24);
+        let row = screen.lines().find(|l| l.contains("Generate test data into public.orders")).expect(&screen);
+        assert!(row.contains("safe to fill") && row.contains("(Enter / Esc)"), "{screen}");
+        assert_eq!(screen.matches("safe to fill").count(), 1, "{screen}");
+    }
+
+    /// Switching the report of a reused DBA tab clears its grid, and a result of an older run that lands afterwards is dropped (also A → B → A)
+    #[tokio::test]
+    async fn dba_switch_drops_the_old_reports_result() {
+        use qurry_core::db::{ColumnInfo, QueryResult};
+        let mut h = Harness::new().await;
+        let res = |col: &str, v: i64| QueryResult {
+            columns: vec![ColumnInfo { name: col.into(), type_name: "INT4".into() }],
+            rows: vec![vec![serde_json::json!(v)]],
+            rows_affected: 0,
+            truncated: false,
+            elapsed_ms: 0,
+            has_result_set: true,
+            in_transaction: false,
+            warning: None,
+        };
+        let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
+        let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res("pid", 4123))), loaded: None, error: None, running: true, run: 0, auto: true };
+        let id = h.app.push_tab("test", "postgres".into(), "Sessions".into(), TabKind::Dba(d));
+        h.app.run_action(Action::DbaReports);
+        h.type_str("Table Sizes");
+        h.key("Enter");
+        assert!(matches!(&h.app.tabs[h.app.active].kind, TabKind::Dba(d) if d.report == "table_sizes" && d.grid.is_none()));
+        // The sessions refresh that was running before the switch (run 0; Table Sizes is run 1)
+        h.app.dba_apply(id, 0, Ok(res("pid", 4123)));
+        assert!(matches!(&h.app.tabs[h.app.active].kind, TabKind::Dba(d) if d.grid.is_none() && d.running));
+        assert!(!h.screen(120, 24).contains("4123"));
+        // Back to Sessions (run 2) before either older run lands: neither clears running, though run 0 is the same report
+        h.app.run_action(Action::DbaReports);
+        h.type_str("Sessions");
+        h.key("Enter");
+        assert!(matches!(&h.app.tabs[h.app.active].kind, TabKind::Dba(d) if d.report == "sessions" && d.run == 2));
+        h.app.dba_apply(id, 1, Ok(res("bytes", 777)));
+        h.app.dba_apply(id, 0, Ok(res("pid", 4123)));
+        assert!(matches!(&h.app.tabs[h.app.active].kind, TabKind::Dba(d) if d.grid.is_none() && d.running));
+        h.app.dba_apply(id, 2, Ok(res("pid", 5555)));
+        assert!(matches!(&h.app.tabs[h.app.active].kind, TabKind::Dba(d) if d.grid.is_some() && !d.running));
+    }
+
     /// Follows the selected session (pid) even when auto-refresh reorders rows (so another session isn't killed)
     #[tokio::test]
     async fn dba_selection_follows_pid_across_reloads() {
@@ -1780,15 +1829,15 @@ mod tests {
             warning: None,
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
-        let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res(&[10, 20, 30]))), loaded: None, error: None, running: false, auto: true };
+        let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res(&[10, 20, 30]))), loaded: None, error: None, running: false, run: 0, auto: true };
         let id = h.app.push_tab("test", "postgres".into(), "Sessions".into(), TabKind::Dba(d));
         h.key("Down");
-        h.app.dba_apply(id, Ok(res(&[30, 20, 10])));
+        h.app.dba_apply(id, 0, Ok(res(&[30, 20, 10])));
         let TabKind::Dba(d) = &h.app.tabs[h.app.active].kind else { panic!() };
         let g = d.grid.as_ref().unwrap();
         assert_eq!(g.value(g.row, 0).as_deref(), Some("20"));
         // If the selected session disappears, nothing is selected (so the wrong session isn't killed)
-        h.app.dba_apply(id, Ok(res(&[30, 10])));
+        h.app.dba_apply(id, 0, Ok(res(&[30, 10])));
         let TabKind::Dba(d) = &h.app.tabs[h.app.active].kind else { panic!() };
         assert!(d.grid.as_ref().unwrap().result.rows.len() == 2);
         h.key("K");
@@ -1811,13 +1860,13 @@ mod tests {
             warning: None,
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
-        let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: None, loaded: None, error: None, running: false, auto: true };
+        let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: None, loaded: None, error: None, running: false, run: 0, auto: true };
         let id = h.app.push_tab("test", "postgres".into(), "Sessions".into(), TabKind::Dba(d));
         // No result yet: the error replaces the grid
-        h.app.dba_apply(id, Err("The report ran into its time limit".into()));
+        h.app.dba_apply(id, 0, Err("The report ran into its time limit".into()));
         assert!(matches!(&h.app.tabs[h.app.active].kind, TabKind::Dba(d) if d.grid.is_none() && d.error.is_some()));
-        h.app.dba_apply(id, Ok(res));
-        h.app.dba_apply(id, Err("The report ran into its time limit (30 s, or a stricter one set on the server).\n(statement timeout)".into()));
+        h.app.dba_apply(id, 0, Ok(res));
+        h.app.dba_apply(id, 0, Err("The report ran into its time limit (30 s, or a stricter one set on the server).\n(statement timeout)".into()));
         let TabKind::Dba(d) = &h.app.tabs[h.app.active].kind else { panic!() };
         assert!(d.grid.as_ref().is_some_and(|g| g.rows() == 1) && d.error.is_some());
         let screen = h.screen(120, 24);
@@ -1911,7 +1960,7 @@ mod tests {
             warning: None,
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "vacuum_progress");
-        let d = crate::app::DbaTab { report: "vacuum_progress".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res)), loaded: None, error: None, running: false, auto: true };
+        let d = crate::app::DbaTab { report: "vacuum_progress".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res)), loaded: None, error: None, running: false, run: 0, auto: true };
         h.app.push_tab("test", "postgres".into(), "Vacuum Progress".into(), TabKind::Dba(d));
         h.key("K");
         assert!(h.app.popup.is_none(), "must not offer to terminate a vacuum");
@@ -1941,7 +1990,7 @@ mod tests {
             warning: None,
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Mysql).into_iter().find(|r| r.id == "slow_queries");
-        let d = crate::app::DbaTab { report: "slow_queries".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res)), loaded: None, error: None, running: false, auto: true };
+        let d = crate::app::DbaTab { report: "slow_queries".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res)), loaded: None, error: None, running: false, run: 0, auto: true };
         h.app.push_tab("test", "shop".into(), "Slow Queries".into(), TabKind::Dba(d));
         h.key("g");
         let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no action list") };
