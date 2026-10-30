@@ -13,7 +13,7 @@ rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version 0.2.129 --locked   # must equal the wasm-bindgen version in crates/shared-wasm/Cargo.toml
 ```
 
-`pnpm wasm` builds it into `src/wasm/pkg` (not committed); `pnpm dev`, `pnpm build`, `pnpm test` and the Storybook scripts run it first, and it says what to install when something is missing. If [binaryen](https://github.com/WebAssembly/binaryen)'s `wasm-opt` is installed, the module is also shrunk with it (optional).
+`pnpm wasm` builds it into `src/wasm/pkg` (not committed); `pnpm dev`, `pnpm build`, `pnpm test` and the Storybook scripts run it first, and it says what to install when something is missing. If [binaryen](https://github.com/WebAssembly/binaryen)'s `wasm-opt` is installed, the module is also shrunk with it (optional locally; CI and release builds install it with `npm install -g binaryen@132.0.0`, and so can you).
 
 ## Build & run
 

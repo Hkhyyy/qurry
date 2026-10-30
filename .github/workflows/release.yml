@@ -120,6 +120,10 @@ jobs:
         if: steps.wb-cache.outputs.cache-hit != 'true'
         run: cargo install wasm-bindgen-cli --version "${{ steps.wb.outputs.version }}" --locked
 
+      # wasm-opt -Oz for the shipped module (scripts/wasm.sh runs it when it is on PATH)
+      - name: Install wasm-opt (binaryen)
+        run: npm install -g binaryen@132.0.0
+
       - name: Set version in manifests
         run: |
           for f in crates/core/Cargo.toml crates/tui/Cargo.toml crates/mcp/Cargo.toml crates/driver/Cargo.toml src-tauri/Cargo.toml drivers/*/Cargo.toml; do

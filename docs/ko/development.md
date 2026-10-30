@@ -13,7 +13,7 @@ rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version 0.2.129 --locked   # crates/shared-wasm/Cargo.toml 의 wasm-bindgen 버전과 같아야 함
 ```
 
-`pnpm wasm` 이 `src/wasm/pkg` 로 빌드합니다 (커밋하지 않음). `pnpm dev`, `pnpm build`, `pnpm test`, Storybook 스크립트가 먼저 이걸 돌리고, 빠진 게 있으면 무엇을 설치할지 알려 줍니다. [binaryen](https://github.com/WebAssembly/binaryen) 의 `wasm-opt` 가 깔려 있으면 모듈을 더 줄입니다 (선택).
+`pnpm wasm` 이 `src/wasm/pkg` 로 빌드합니다 (커밋하지 않음). `pnpm dev`, `pnpm build`, `pnpm test`, Storybook 스크립트가 먼저 이걸 돌리고, 빠진 게 있으면 무엇을 설치할지 알려 줍니다. [binaryen](https://github.com/WebAssembly/binaryen) 의 `wasm-opt` 가 깔려 있으면 모듈을 더 줄입니다 (로컬에서는 선택. CI 와 릴리스 빌드는 `npm install -g binaryen@132.0.0` 으로 설치하며, 로컬에서도 같은 명령으로 깔 수 있습니다).
 
 ## 빌드와 실행
 
