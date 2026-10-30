@@ -272,6 +272,8 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
 
 /// Every Storybook scene, in file order
 async fn all_scenes() -> Vec<Value> {
+    // Same text on every OS: the snapshots hold the macOS key notation (⌃k), which Linux CI would otherwise draw as Ctrl+k
+    crate::keys::FORCE_MAC_GLYPHS.set(true);
     let mut scenes = vec![atoms(), molecules(), organisms()];
     let mut h = Harness::new().await;
     explorer(&mut h).await;

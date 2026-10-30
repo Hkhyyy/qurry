@@ -115,10 +115,24 @@ pub fn spec(k: &KeyEvent) -> Option<String> {
     Some(s + &key)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Tests only: ⌃⌥⇧ symbols on every OS while the Storybook scenes are drawn (the committed snapshots use the macOS notation)
+    pub static FORCE_MAC_GLYPHS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn mac_glyphs() -> bool {
+    #[cfg(test)]
+    if FORCE_MAC_GLYPHS.get() {
+        return true;
+    }
+    cfg!(target_os = "macos")
+}
+
 /// Display notation: ⌃⌥⇧ symbols on macOS (same as the GUI; terminal Alt = Option), Ctrl+ / Alt+ / Shift+ elsewhere.
 /// Screen text is written with symbols ("⌃k"), and the storage format ("Alt+X") is accepted too
 pub fn disp(s: &str) -> String {
-    if cfg!(target_os = "macos") {
+    if mac_glyphs() {
         lower_unshifted(s).replace("Ctrl+", "⌃").replace("Alt+", "⌥").replace("Shift+", "⇧")
     } else {
         lower_unshifted(&glyph_words(s))
