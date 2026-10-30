@@ -648,6 +648,9 @@ pub struct App {
     pub ws_shared: Option<Vec<qurry_core::workspaces::WsInfo>>,
     /// The save file has synced with the shared list before (missing workspaces were deleted elsewhere)
     pub ws_synced: bool,
+    /// Tests only (testkit): answers console statements instead of the database
+    #[cfg(test)]
+    pub fake_db: Option<fn(&str) -> Result<QueryResult, String>>,
 }
 
 pub fn fuzzy(q: &str, text: &str) -> Option<i64> {
@@ -733,6 +736,8 @@ impl App {
             saved_ws: String::new(),
             ws_shared: None,
             ws_synced: false,
+            #[cfg(test)]
+            fake_db: None,
             next_id: 1,
             exec: Default::default(),
             workspaces: vec![Workspace { id: uuid::Uuid::new_v4().to_string(), name: "Default".into(), conns: vec![], saved: None }],
@@ -1884,6 +1889,10 @@ impl App {
         let stmts2 = stmts.clone();
         let tx = self.tx.clone();
         let echo_name = conn_name.clone();
+        #[cfg(test)]
+        let fake = self.fake_db;
+        #[cfg(not(test))]
+        let fake: Option<fn(&str) -> Result<QueryResult, String>> = None;
         self.status = "Executing…".into();
         self.spawn(
             async move {
@@ -1922,7 +1931,10 @@ impl App {
                             break;
                         }
                     }
-                    let r = st.run_query(target.clone(), q, Some(500), Some(session.clone())).await.map_err(err);
+                    let r = match fake {
+                        Some(f) => f(&q),
+                        None => st.run_query(target.clone(), q, Some(500), Some(session.clone())).await.map_err(err),
+                    };
                     let r = if dry {
                         let back = if in_tx0 { "ROLLBACK TO SAVEPOINT qurry_explain" } else { "ROLLBACK" };
                         match st.run_query(target.clone(), back.into(), None, Some(session.clone())).await {
