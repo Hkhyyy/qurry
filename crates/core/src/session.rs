@@ -351,8 +351,20 @@ async fn pg_snapshot(conn: &mut PgConnection, sql: &str) -> AppResult<QueryResul
         conn.execute("ROLLBACK TO SAVEPOINT qurry_snap").await?;
         r = run_direct_on(conn, &plain, crate::audit::UNDO_MAX_ROWS + 1, Instant::now()).await;
     }
-    conn.execute(if r.is_ok() { "RELEASE SAVEPOINT qurry_snap" } else { "ROLLBACK TO SAVEPOINT qurry_snap" }).await?;
+    end_snapshot(conn, r.is_ok()).await?;
     r
+}
+
+/// Close the snapshot's savepoint: keep what it read (ok) or undo it. A RELEASE that fails (a cancel landing on it) leaves the
+/// transaction aborted: roll back to the savepoint, so the user's transaction goes on as it was
+async fn end_snapshot(conn: &mut PgConnection, ok: bool) -> AppResult<()> {
+    if !ok {
+        conn.execute("ROLLBACK TO SAVEPOINT qurry_snap").await?;
+    } else if let Err(e) = conn.execute("RELEASE SAVEPOINT qurry_snap").await {
+        let _ = conn.execute("ROLLBACK TO SAVEPOINT qurry_snap").await;
+        return Err(e.into());
+    }
+    Ok(())
 }
 
 /// Console tab session (per DB kind)
@@ -740,6 +752,22 @@ mod tests {
     #[ignore]
     async fn pg_failed_snapshot_keeps_the_change() {
         failed_snapshot_keeps_the_change(Pool::Pg(pool().await), "create schema if not exists audit_hardening_s", "drop schema audit_hardening_s cascade").await;
+    }
+
+    /// A RELEASE of the snapshot's savepoint that fails (a cancel landing on it) rolls back to the savepoint, so the user's
+    /// transaction isn't left aborted: it goes on with what it changed before
+    #[tokio::test]
+    #[ignore]
+    async fn pg_failed_release_keeps_the_transaction() {
+        let p = pool().await;
+        let mut c = p.acquire().await.unwrap();
+        c.execute("BEGIN; CREATE TEMP TABLE qurry_release (v int); INSERT INTO qurry_release VALUES (1); SAVEPOINT qurry_snap").await.unwrap();
+        // The transaction is aborted, as a cancel landing on RELEASE leaves it
+        assert!(c.execute("SELECT 1 / 0").await.is_err());
+        assert!(end_snapshot(&mut c, true).await.is_err());
+        let v: i32 = sqlx::query_scalar("SELECT v FROM qurry_release").fetch_one(&mut *c).await.unwrap();
+        assert_eq!(v, 1);
+        c.execute("ROLLBACK").await.unwrap();
     }
 
     /// QURRY_TEST_MY=host:port:user:password:db
