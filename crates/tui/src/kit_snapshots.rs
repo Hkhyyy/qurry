@@ -1,6 +1,6 @@
 //! Storybook "TUI" screens: scenes drawn by the real TUI code on a virtual terminal, saved as JSON with characters and colors intact.
 //! Regenerate: `pnpm tui-snapshots` (= cargo test -p qurry-tui kit_snapshots -- --ignored)
-//! → src/ui/stories/tui-snapshots.json
+//! → src/ui/stories/tui-snapshots.json. `snapshots_match_storybook` fails when the drawn scenes differ from that file
 use crate::app::Popup;
 use crate::kit::*;
 use crate::testkit::Harness;
@@ -270,9 +270,8 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.app.focus = crate::app::Focus::Tree;
 }
 
-#[tokio::test]
-#[ignore = "only when regenerating the TUI screens for Storybook (pnpm tui-snapshots)"]
-async fn kit_snapshots() {
+/// Every Storybook scene, in file order
+async fn all_scenes() -> Vec<Value> {
     let mut scenes = vec![atoms(), molecules(), organisms()];
     let mut h = Harness::new().await;
     explorer(&mut h).await;
@@ -298,7 +297,35 @@ async fn kit_snapshots() {
     h.key("Enter");
     h.key("Alt+1");
     scenes.push(app_scene(&mut h, "Workspaces", "워크스페이스가 둘 이상이면 위쪽 띠 (⌥1…9 · 눌러서 바꾸기)", 120, 22));
-    let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/ui/stories/tui-snapshots.json");
-    std::fs::write(&out, serde_json::to_string(&json!({ "scenes": scenes })).unwrap()).unwrap();
+    scenes
+}
+
+fn json_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/ui/stories/tui-snapshots.json")
+}
+
+#[tokio::test]
+#[ignore = "only when regenerating the TUI screens for Storybook (pnpm tui-snapshots)"]
+async fn kit_snapshots() {
+    let out = json_path();
+    std::fs::write(&out, serde_json::to_string(&json!({ "scenes": all_scenes().await })).unwrap()).unwrap();
     println!("wrote {}", out.display());
+}
+
+/// The committed Storybook file matches what the TUI draws now, cell by cell: text and style (runs of [text, fg, bg, bold, underline, italic, strikethrough, wide])
+#[tokio::test]
+async fn snapshots_match_storybook() {
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(json_path()).unwrap()).unwrap();
+    let saved = saved["scenes"].as_array().unwrap();
+    let now = all_scenes().await;
+    let names = |v: &[Value]| v.iter().map(|s| s["name"].clone()).collect::<Vec<_>>();
+    assert_eq!(names(saved), names(&now), "scene list changed — regenerate: pnpm tui-snapshots");
+    let text = |row: &Value| row.as_array().unwrap().iter().filter_map(|r| r[0].as_str()).collect::<String>();
+    for (a, b) in saved.iter().zip(&now) {
+        let name = &b["name"];
+        assert_eq!((&a["w"], &a["h"], &a["desc"]), (&b["w"], &b["h"], &b["desc"]), "scene {name}: size or description changed — regenerate: pnpm tui-snapshots");
+        for (y, (ra, rb)) in a["rows"].as_array().unwrap().iter().zip(b["rows"].as_array().unwrap()).enumerate() {
+            assert!(ra == rb, "scene {name}, row {y} differs — regenerate: pnpm tui-snapshots\n  saved: {}\n  now:   {}\n  saved runs: {ra}\n  now runs:   {rb}", text(ra), text(rb));
+        }
+    }
 }
