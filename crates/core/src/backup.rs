@@ -146,27 +146,50 @@ fn pg_dbname(db: &str) -> String {
 }
 
 /// Finds mysql client commands that do something on this computer, line by line. A second check: mysql runs with --binary-mode, which switches these off.
-/// Like the mysql client: system / tee / pager / source / connect … at the start of a line (outside a string), and \! \T \P \. \r \e \u \C anywhere
-/// outside strings ('…' "…" with backslash escapes as mysqldump writes them, `…` without) and comments (-- · # to the end of the line, /* */ but not
-/// /*! */, whose contents mysql runs). Not inside the data: mysqldump writes a\!b in a string as 'a\\!b'.
+/// Like the mysql client (checked against mysql 8.4): system / tee / pager / source / connect / edit / ssl_session_data_print … only at the start of a
+/// statement — nothing but blank space and comments since the last delimiter (the one DELIMITER / \d set), on this line or earlier ones — and \! \T \P
+/// \. \r \e \u \C anywhere; both outside strings ('…' "…" with backslash escapes as mysqldump writes them, `…` without) and comments (-- · # to the end
+/// of the line, /* */ but not /*! */, whose contents mysql runs). Not inside the data: mysqldump writes a\!b in a string as 'a\\!b'.
+/// After SET sql_mode = '…NO_BACKSLASH_ESCAPES…' (mysqldump writes one before a routine created in that mode) a backslash in a string is a character,
+/// until sql_mode is set again without it — the client follows the server's mode the same way. Followed: the session's sql_mode in a SET of up to
+/// STATEMENT_MAX bytes, set to a string or expression (on if it names the mode), DEFAULT, or a user variable saved from @@sql_mode before. Not followed:
+/// other ways to change it (a procedure that sets it, PREPARE …), where this check can go out of step; --binary-mode is the defence there.
+/// ANSI_QUOTES changes nothing here: the client reads "…" as a string either way.
 /// (psql needs no line check: it runs with \restrict, and an older psql isn't used for plain SQL)
-#[derive(Default)]
 struct MyScan {
     /// The quote of the string the line starts in (0 = none)
     quote: u8,
     /// Inside /* */
     comment: bool,
+    /// The current statement has begun (more than blank space and comments since the last delimiter)
+    started: bool,
+    delimiter: Vec<u8>,
+    /// The current statement without its comments, up to STATEMENT_MAX bytes (one more = longer), to follow SET sql_mode
+    statement: Vec<u8>,
+    /// NO_BACKSLASH_ESCAPES is on
+    no_escapes: bool,
+    /// User variables set to @@sql_mode: whether NO_BACKSLASH_ESCAPES was on then (SET @saved_sql_mode = @@sql_mode)
+    saved: std::collections::HashMap<String, bool>,
+}
+
+/// The mysql client's named commands that reach this computer or another server
+const NAMED_COMMANDS: &[&str] = &["system", "tee", "notee", "pager", "nopager", "source", "connect", "edit", "ssl_session_data_print"];
+const STATEMENT_MAX: usize = 4096;
+
+impl Default for MyScan {
+    fn default() -> Self {
+        MyScan { quote: 0, comment: false, started: false, delimiter: b";".to_vec(), statement: Vec::new(), no_escapes: false, saved: Default::default() }
+    }
+}
+
+/// The first word from here (up to blank space)
+fn word_at(line: &[u8], i: usize) -> &[u8] {
+    let rest = &line[i..];
+    &rest[..rest.iter().position(|c| c.is_ascii_whitespace()).unwrap_or(rest.len())]
 }
 
 impl MyScan {
     fn is_local_command(&mut self, line: &[u8]) -> bool {
-        if self.quote == 0 {
-            let text = String::from_utf8_lossy(line);
-            let word = text.split_whitespace().next().unwrap_or("").to_lowercase();
-            if ["system", "tee", "notee", "pager", "nopager", "source", "connect", "edit"].contains(&word.as_str()) {
-                return true;
-            }
-        }
         let at = |i: usize| line.get(i).copied().unwrap_or(0);
         let mut i = 0;
         while i < line.len() {
@@ -177,27 +200,150 @@ impl MyScan {
                     i += 1;
                 }
             } else if self.quote != 0 {
-                if c == b'\\' && self.quote != b'`' {
+                self.push(c);
+                if c == b'\\' && self.quote != b'`' && !self.no_escapes {
+                    self.push(at(i + 1));
                     i += 1;
                 } else if c == self.quote {
                     self.quote = 0;
                 }
+            } else if c.is_ascii_whitespace() {
+                if self.started {
+                    self.push(c);
+                }
+            } else if !self.started && NAMED_COMMANDS.iter().any(|n| word_at(line, i).eq_ignore_ascii_case(n.as_bytes())) {
+                return true;
+            } else if !self.started && word_at(line, i).eq_ignore_ascii_case(b"delimiter") {
+                // DELIMITER x takes the rest of the line
+                self.set_delimiter(&line[i + 9..]);
+                return false;
             } else if c == b'\\' {
-                if matches!(at(i + 1), b'!' | b'T' | b'P' | b'.' | b'r' | b'e' | b'u' | b'C') {
-                    return true;
+                match at(i + 1) {
+                    b'!' | b'T' | b'P' | b'.' | b'r' | b'e' | b'u' | b'C' => return true,
+                    b'd' => {
+                        // \d x: the rest of the line is scanned on after x
+                        let from = i + 2 + line[i + 2..].iter().take_while(|c| c.is_ascii_whitespace()).count();
+                        let len = word_at(line, from).len();
+                        self.set_delimiter(&line[from..]);
+                        i = from + len;
+                        continue;
+                    }
+                    b'g' | b'G' => self.end_statement(),
+                    _ => {
+                        self.started = true;
+                        self.push(c);
+                        if let Some(&next) = line.get(i + 1) {
+                            self.push(next);
+                        }
+                    }
                 }
                 i += 1;
+            } else if line[i..].starts_with(&self.delimiter) {
+                self.end_statement();
+                i += self.delimiter.len();
+                continue;
             } else if c == b'#' || (c == b'-' && at(i + 1) == b'-' && (i + 2 >= line.len() || at(i + 2).is_ascii_whitespace())) {
                 return false;
             } else if c == b'/' && at(i + 1) == b'*' && !matches!(at(i + 2), b'!' | b'+') {
                 self.comment = true;
                 i += 1;
-            } else if matches!(c, b'\'' | b'"' | b'`') {
-                self.quote = c;
+            } else {
+                self.started = true;
+                self.push(c);
+                if matches!(c, b'\'' | b'"' | b'`') {
+                    self.quote = c;
+                }
             }
             i += 1;
         }
         false
+    }
+
+    fn push(&mut self, c: u8) {
+        if self.statement.len() <= STATEMENT_MAX {
+            self.statement.push(c);
+        }
+    }
+
+    /// The first word of the text (DELIMITER's argument), if any
+    fn set_delimiter(&mut self, text: &[u8]) {
+        let text = &text[text.iter().take_while(|c| c.is_ascii_whitespace()).count()..];
+        let word = word_at(text, 0);
+        if !word.is_empty() {
+            self.delimiter = word.to_vec();
+        }
+    }
+
+    /// A statement ended (the delimiter, \g): follow SET sql_mode in it
+    fn end_statement(&mut self) {
+        if self.statement.len() <= STATEMENT_MAX {
+            self.follow_sql_mode();
+        }
+        self.statement.clear();
+        self.started = false;
+    }
+
+    fn follow_sql_mode(&mut self) {
+        // /*!50003 SET … */: its contents run
+        let text = String::from_utf8_lossy(&self.statement).to_ascii_lowercase();
+        let mut code = String::new();
+        let mut rest = text.as_str();
+        while let Some(p) = rest.find("/*!") {
+            code.push_str(&rest[..p]);
+            rest = rest[p + 3..].trim_start_matches(|c: char| c.is_ascii_digit());
+        }
+        code.push_str(rest);
+        let code = code.replace("*/", " ");
+        let Some(list) = code.trim_start().strip_prefix("set").filter(|r| r.starts_with(|c: char| c.is_ascii_whitespace())) else { return };
+        // The assignments: split at commas outside strings and brackets
+        let (mut parts, mut start, mut quote, mut depth, mut escaped) = (Vec::new(), 0, None, 0, false);
+        for (i, c) in list.char_indices() {
+            match quote {
+                Some(q) => {
+                    if escaped {
+                        escaped = false;
+                    } else if c == '\\' && q != '`' && !self.no_escapes {
+                        escaped = true;
+                    } else if c == q {
+                        quote = None;
+                    }
+                }
+                None => match c {
+                    '\'' | '"' | '`' => quote = Some(c),
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    ',' if depth == 0 => {
+                        parts.push(&list[start..i]);
+                        start = i + 1;
+                    }
+                    _ => {}
+                },
+            }
+        }
+        parts.push(&list[start..]);
+        for part in parts {
+            let Some(eq) = part.find('=') else { continue };
+            let (target, value) = (part[..eq].trim().trim_end_matches(':').trim(), part[eq + 1..].trim());
+            if let Some(var) = target.strip_prefix('@').filter(|v| !v.starts_with('@')) {
+                if ["@@sql_mode", "@@session.sql_mode", "@@local.sql_mode"].contains(&value) {
+                    self.saved.insert(var.to_string(), self.no_escapes);
+                }
+                continue;
+            }
+            let target = target.strip_prefix("session").or_else(|| target.strip_prefix("local")).filter(|t| t.starts_with(char::is_whitespace)).map_or(target, str::trim_start);
+            let target = target.strip_prefix("@@session.").or_else(|| target.strip_prefix("@@local.")).or_else(|| target.strip_prefix("@@")).unwrap_or(target);
+            if target != "sql_mode" {
+                continue;
+            }
+            if let Some(var) = value.strip_prefix('@') {
+                // A saved user variable; @@sql_mode or an unknown variable: unchanged
+                if let Some(&on) = self.saved.get(var) {
+                    self.no_escapes = on;
+                }
+            } else {
+                self.no_escapes = value.contains("no_backslash_escapes");
+            }
+        }
     }
 }
 
@@ -886,6 +1032,91 @@ mod tests {
         }
         // `--` without a space after it doesn't start a comment
         assert!(found("select 1;--\\! id\n").await.is_some());
+    }
+
+    /// mysqldump 8.4 of a table with a column named `source`, a trigger and two procedures (one created under NO_BACKSLASH_ESCAPES)
+    const MYSQLDUMP_ROUTINES: &str = r#"/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;
+CREATE TABLE `ev` (
+  `id` int NOT NULL,
+  `source` varchar(20) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+INSERT INTO `ev` VALUES (1,'web','it\'s a\\b'),(2,'app','line1\nsource /etc/passwd\n\\! id');
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50017 DEFINER=`root`@`localhost`*/ /*!50003 TRIGGER `ev_bi` BEFORE INSERT ON `ev` FOR EACH ROW begin
+  set new.source = coalesce(new.source,
+    'x');
+end */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'NO_BACKSLASH_ESCAPES' */ ;
+DELIMITER ;;
+CREATE DEFINER=`root`@`localhost` PROCEDURE `p_nbe`()
+begin
+  select 'C:\' as path, 'run \! id' as cmd,
+    source
+  from ev;
+end ;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+CREATE DEFINER=`root`@`localhost` PROCEDURE `p_src`()
+begin
+  SELECT id,
+    source
+  FROM ev;
+end ;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+INSERT INTO `ev` VALUES (3,'it\'s \\! x');
+/*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
+"#;
+
+    /// Like the mysql client: named commands (source · system …) only at the start of a statement — after the delimiter it has at the time,
+    /// not inside one (a column named source at the start of a line) and not in a comment
+    #[tokio::test]
+    async fn mysql_named_commands_only_start_a_statement() {
+        let found = |sql: String| async move { local_command(sql.as_bytes(), &Job::new()).await.unwrap() };
+        assert_eq!(found(MYSQLDUMP_ROUTINES.into()).await, None);
+        for ok in [
+            "select 1 as a,\n  system\n;\n",
+            "/* a comment\nsource /etc/passwd\n*/ select 1;\n",
+            "DELIMITER $$\nCREATE PROCEDURE p() BEGIN SELECT 1;\nsource\nFROM t; END $$\nDELIMITER ;\n",
+            "select 1 as x, 2 delimiter\n;\nselect 'a\nsystem id\n';\n",
+        ] {
+            assert_eq!(found(ok.into()).await, None, "{ok}");
+        }
+        for (sql, bad) in [
+            ("select 1;\nsource /etc/passwd\n", "source /etc/passwd"),
+            ("select 1; source /etc/passwd;\n", "select 1; source /etc/passwd;"),
+            ("select 1; /* c */ system id\n", "select 1; /* c */ system id"),
+            ("-- c\n/* c */\n  system id\n", "  system id"),
+            ("DELIMITER ;;\nselect 1;\nsource x;;\nsource /etc/passwd\n", "source /etc/passwd"),
+            ("DELIMITER $$\nCREATE PROCEDURE p() BEGIN SELECT 1; END $$\nDELIMITER ;\nselect 2;\nsource /etc/passwd\n", "source /etc/passwd"),
+            ("select 1\\d $$\nselect 2 $$ system id\n", "select 2 $$ system id"),
+            ("ssl_session_data_print /tmp/x\n", "ssl_session_data_print /tmp/x"),
+        ] {
+            assert_eq!(found(sql.into()).await.as_deref(), Some(bad), "{sql}");
+        }
+    }
+
+    /// After SET sql_mode with NO_BACKSLASH_ESCAPES (and until sql_mode is set without it), a backslash in a string is a character, as the mysql client reads it
+    #[tokio::test]
+    async fn mysql_scan_follows_no_backslash_escapes() {
+        let found = |sql: &'static str| async move { local_command(sql.as_bytes(), &Job::new()).await.unwrap() };
+        // 'C:\' ends there: what follows the string is outside it
+        assert_eq!(found("SET sql_mode = 'NO_BACKSLASH_ESCAPES';\nselect 'a\\';\n\\! id\n").await.as_deref(), Some("\\! id"));
+        assert_eq!(found("SET SESSION sql_mode = 'ANSI,NO_BACKSLASH_ESCAPES';\nselect 'a\\'; \\! id\n").await.as_deref(), Some("select 'a\\'; \\! id"));
+        assert_eq!(found("set names utf8mb4, @@session.sql_mode := 'NO_BACKSLASH_ESCAPES';\nselect 'run \\! id';\n").await, None);
+        // Back: set again without it, to a saved value, or GLOBAL only (not this session)
+        assert_eq!(found("SET sql_mode = 'NO_BACKSLASH_ESCAPES';\nSET sql_mode = '';\nselect 'it\\'s \\\\! x';\n").await, None);
+        assert_eq!(found("SET @m = @@sql_mode, sql_mode = 'NO_BACKSLASH_ESCAPES';\nSET sql_mode = @m;\nselect 'it\\'s \\\\! x';\n").await, None);
+        assert_eq!(found("SET GLOBAL sql_mode = 'NO_BACKSLASH_ESCAPES';\nselect 'it\\'s \\\\! x';\n").await, None);
     }
 
     /// Custom archives go straight to the server with pg_restore unless that pg_restore would send settings the server doesn't know
