@@ -5137,10 +5137,10 @@ dependencies = [
  "csv",
  "dirs 6.0.0",
  "futures",
- "json5",
  "keyring",
  "minisign-verify 0.2.5",
  "qurry-driver",
+ "qurry-shared",
  "rand 0.8.8",
  "redis",
  "regex",
@@ -5265,7 +5265,10 @@ dependencies = [
 name = "qurry-shared"
 version = "0.1.0"
 dependencies = [
+ "json5",
+ "regex",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
