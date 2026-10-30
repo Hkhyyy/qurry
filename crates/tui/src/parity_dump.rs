@@ -181,11 +181,8 @@ fn result_golden() -> Golden {
     for e in arr(&corpus("results")) {
         let r = result_of(e);
         let names: Vec<&str> = r.columns.iter().map(|c| c.name.as_str()).collect();
-        // The TUI's chart picks its axes inside bar_chart: read them back from its title ("Chart: sum of Y by X" / "Chart: row count by X")
-        let axes = crate::datatools::bar_chart(&r, 40, 30).map(|(title, _)| {
-            let (what, x) = title.trim_start_matches("Chart: ").split_once(" by ").unwrap();
-            json!({ "x": x, "y": what.strip_prefix("sum of ") })
-        });
+        let (_, x, y) = crate::datatools::chart_axes(&r);
+        let axes = json!({ "x": names[x], "y": y.map(|y| names[y]) });
         let col = |c: usize| r.rows.iter().map(move |row| &row[c]);
         let frac = |c: usize| col(c).filter_map(|v| v.as_str().and_then(grid::time_frac)).map(|x| x.1).max().unwrap_or(0);
         let column_g = Grid::new(result_of(e));
@@ -274,8 +271,12 @@ fn column_golden() -> Golden {
     out
 }
 
+/// Storage specs get keyLabel and formatSpec, display strings keyLabel only. formatSpec is the macOS notation on every host (as in the TS dump)
 fn spec_golden() -> Golden {
-    strings(&corpus("keyspecs")).into_iter().map(|s| (s.clone(), json!({ "keyLabel": crate::keys::lower_unshifted(&s), "formatSpec": crate::keys::disp(&s) }))).collect()
+    let c = corpus("keyspecs");
+    let specs = strings(&c["specs"]).into_iter().map(|s| (s.clone(), json!({ "keyLabel": crate::keys::lower_unshifted(&s), "formatSpec": crate::keys::disp_mac(&s) })));
+    let labels = strings(&c["labels"]).into_iter().map(|s| (s.clone(), json!({ "keyLabel": crate::keys::lower_unshifted(&s) })));
+    specs.chain(labels).collect()
 }
 
 fn fuzzy_golden() -> Golden {

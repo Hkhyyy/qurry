@@ -20,7 +20,6 @@
     "keyLabel": "Ctrl+k"
   },
   "Ctrl+K · Ctrl+Shift+K · Alt+Enter": {
-    "formatSpec": "⌃k · ⌃⇧K · ⌥Enter",
     "keyLabel": "Ctrl+k · Ctrl+Shift+K · Alt+Enter"
   },
   "Ctrl+Shift+K": {
@@ -64,7 +63,6 @@
     "keyLabel": "Mod+["
   },
   "Run (⌘↩) · ⌘F2": {
-    "formatSpec": "Run (⌘↩) · ⌘F2",
     "keyLabel": "Run (⌘↩) · ⌘F2"
   },
   "Shift+F6": {
@@ -72,23 +70,18 @@
     "keyLabel": "Shift+F6"
   },
   "⇧⌘A": {
-    "formatSpec": "⇧⌘A",
     "keyLabel": "⇧⌘A"
   },
   "⌃k": {
-    "formatSpec": "⌃k",
     "keyLabel": "⌃k"
   },
   "⌘K": {
-    "formatSpec": "⌘k",
     "keyLabel": "⌘k"
   },
   "⌥+wheel": {
-    "formatSpec": "⌥+wheel",
     "keyLabel": "⌥+wheel"
   },
   "⌥⌘Y": {
-    "formatSpec": "⌥⌘y",
     "keyLabel": "⌥⌘y"
   }
 }

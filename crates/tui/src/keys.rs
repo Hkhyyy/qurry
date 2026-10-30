@@ -119,10 +119,15 @@ pub fn spec(k: &KeyEvent) -> Option<String> {
 /// Screen text is written with symbols ("⌃k"), and the storage format ("Alt+X") is accepted too
 pub fn disp(s: &str) -> String {
     if cfg!(target_os = "macos") {
-        lower_unshifted(s).replace("Ctrl+", "⌃").replace("Alt+", "⌥").replace("Shift+", "⇧")
+        disp_mac(s)
     } else {
         lower_unshifted(&glyph_words(s))
     }
+}
+
+/// disp's macOS notation, on any host (the parity dump pins it)
+pub(crate) fn disp_mac(s: &str) -> String {
+    lower_unshifted(s).replace("Ctrl+", "⌃").replace("Alt+", "⌥").replace("Shift+", "⇧")
 }
 
 /// ⌃⌥⇧ symbols → Ctrl+ / Alt+ / Shift+ (non-macOS terminal screens). Combos containing ⌘ (⇧⌘A: Mac terminal keys) stay as is
@@ -371,6 +376,11 @@ mod tests {
     }
 
     /// Screen text uses symbols → words when not on macOS (only one + in ⌥+wheel)
+    #[test]
+    fn mac_notation_on_any_host() {
+        assert_eq!(disp_mac("Mod+K · Ctrl+K · Alt+Shift+X · ⌥+wheel"), "Mod+K · ⌃k · ⌥⇧X · ⌥+wheel");
+    }
+
     #[test]
     fn glyphs_become_words_off_macos() {
         assert_eq!(lower_unshifted(&glyph_words("⌃k · ⌥⇧N · ⌥+wheel · ⇧Tab · ⇧⌘A")), "Ctrl+k · Alt+Shift+N · Alt+wheel · Shift+Tab · ⇧⌘A");

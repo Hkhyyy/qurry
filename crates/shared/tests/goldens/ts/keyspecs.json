@@ -64,31 +64,24 @@
     "formatSpec": "⌘↩"
   },
   "⌘K": {
-    "keyLabel": "⌘k",
-    "formatSpec": "⌘k"
+    "keyLabel": "⌘k"
   },
   "⌥⌘Y": {
-    "keyLabel": "⌥⌘y",
-    "formatSpec": "⌥⌘y"
+    "keyLabel": "⌥⌘y"
   },
   "⇧⌘A": {
-    "keyLabel": "⇧⌘A",
-    "formatSpec": "⇧⌘A"
+    "keyLabel": "⇧⌘A"
   },
   "⌃k": {
-    "keyLabel": "⌃k",
-    "formatSpec": "⌃k"
+    "keyLabel": "⌃k"
   },
   "Run (⌘↩) · ⌘F2": {
-    "keyLabel": "Run (⌘↩) · ⌘F2",
-    "formatSpec": "Run (⌘↩) · ⌘F2"
+    "keyLabel": "Run (⌘↩) · ⌘F2"
   },
   "Ctrl+K · Ctrl+Shift+K · Alt+Enter": {
-    "keyLabel": "Ctrl+k · Ctrl+Shift+K · Alt+Enter",
-    "formatSpec": "⌃⇧↩"
+    "keyLabel": "Ctrl+k · Ctrl+Shift+K · Alt+Enter"
   },
   "⌥+wheel": {
-    "keyLabel": "⌥+wheel",
-    "formatSpec": "wheel"
+    "keyLabel": "⌥+wheel"
   }
 }

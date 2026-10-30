@@ -1,6 +1,9 @@
 {
   "empty": {
-    "defaultAxes": null,
+    "defaultAxes": {
+      "x": "a",
+      "y": "b"
+    },
     "fracWidth": {
       "a": 0,
       "b": 0

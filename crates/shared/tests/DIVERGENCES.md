@@ -25,7 +25,7 @@ Inputs are in `corpus/` (ids as listed); `‸` in a corpus text is the cursor. O
 | valuehints › hintable | 31 | 0 | 1 | 1 |
 | valuehints › pairsForKeys | 7 | 0 | 0 | 0 |
 | results › numericColumns | 0 | 0 | 10 | 0 |
-| results › defaultAxes | 10 | 1 | 0 | 0 |
+| results › defaultAxes | 10 | 0 | 0 | 0 |
 | results › buildChart(bar) | 0 | 0 | 10 | 0 |
 | results › buildChart(pie) | 0 | 0 | 10 | 0 |
 | results › inList | 10 | 1 | 0 | 0 |
@@ -48,7 +48,7 @@ Inputs are in `corpus/` (ids as listed); `‸` in a corpus text is the cursor. O
 | rediskeys › keyTree | 7 | 1 | 0 | 0 |
 | columns › autoMap | 6 | 0 | 1 | 0 |
 | keyspecs › keyLabel | 23 | 0 | 0 | 0 |
-| keyspecs › formatSpec | 23 | 12 | 0 | 0 |
+| keyspecs › formatSpec | 16 | 10 | 0 | 0 |
 | fuzzy › fuzzyScore | 18 | 11 | 0 | 0 |
 
 TS only / Rust only: inputs where only one side has that function (no counterpart, or the dialect isn't handled there).
@@ -80,7 +80,6 @@ TS only / Rust only: inputs where only one side has that function (no counterpar
 | valuehints | ` korean-column ` | hintContext | ` null ` | ` {"column":"상태","mode":"values","op":null,"path":[],"quoted":true,"ref":null,"typed":""} ` |
 | results | ` inlist-mix ` | inList | ` "(('010', 12345678901234567890, true, 1.50), ('a''b', -3, false, 'NaN'), ('x', 1e5, NULL, -0.5), ('y', '+4', true, '.5'))" ` | ` "(('010', 12345678901234567890, true, 1.50), ('a''b', -3, false, 'NaN'), ('x', 1e5, NULL, -0.5), ('y', +4, true, .5))" ` |
 | results | ` inlist-mix ` | inList(column) | ` {"code":"('010', 'a''b', 'x', 'y')","flag":"(true, false)","n":"(12345678901234567890, -3, 1e5, '+4')","price":"(1.50, 'NaN', -0.5, '.5')"} ` | ` {"code":"('010', 'a''b', 'x', 'y')","flag":"(true, false)","n":"(12345678901234567890, -3, 1e5, +4)","price":"(1.50, 'NaN', -0.5, .5)"} ` |
-| results | ` empty ` | defaultAxes | ` {"x":"a","y":"b"} ` | ` null ` |
 | rediskeys | ` korean-emoji ` | keyTree | ` [{"children":[{"key":"사용자:1"},{"key":"사용자:2"}],"count":2,"folder":"사용자","path":"사용자"},{"children":[{"key":"😀:x"}],"count":1,"folder":"😀","path":"😀"},{"children":[{"key":"！:x"}],"count":1,"folder":"！","path":"！"},{"key":"키"}] ` | ` [{"children":[{"key":"사용자:1"},{"key":"사용자:2"}],"count":2,"folder":"사용자","path":"사용자"},{"children":[{"key":"！:x"}],"count":1,"folder":"！","path":"！"},{"children":[{"key":"😀:x"}],"count":1,"folder":"😀","path":"😀"},{"key":"키"}] ` |
 | keyspecs | ` Mod+K ` | formatSpec | ` "⌘k" ` | ` "Mod+K" ` |
 | keyspecs | ` Mod+Shift+K ` | formatSpec | ` "⇧⌘K" ` | ` "Mod+⇧K" ` |
@@ -92,8 +91,6 @@ TS only / Rust only: inputs where only one side has that function (no counterpar
 | keyspecs | ` Mod+[ ` | formatSpec | ` "⌘[" ` | ` "Mod+[" ` |
 | keyspecs | ` Alt++ ` | formatSpec | ` "⌥" ` | ` "⌥+" ` |
 | keyspecs | ` Mod+Enter ` | formatSpec | ` "⌘↩" ` | ` "Mod+Enter" ` |
-| keyspecs | ` Ctrl+K · Ctrl+Shift+K · Alt+Enter ` | formatSpec | ` "⌃⇧↩" ` | ` "⌃k · ⌃⇧K · ⌥Enter" ` |
-| keyspecs | ` ⌥+wheel ` | formatSpec | ` "wheel" ` | ` "⌥+wheel" ` |
 | fuzzy | ` substring-word-start ` | fuzzyScore | ` 593 ` | ` 493 ` |
 | fuzzy | ` substring-mid-word ` | fuzzyScore | ` 398.5 ` | ` 499 ` |
 | fuzzy | ` substring-camel ` | fuzzyScore | ` 590.6 ` | ` 491 ` |

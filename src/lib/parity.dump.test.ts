@@ -35,6 +35,8 @@ import fuzzyCorpus from "../../crates/shared/tests/corpus/fuzzy.json";
 
 // completion.ts registers Monaco providers on import; only its pure helpers are dumped
 vi.mock("./monaco", () => ({ monaco: { languages: { registerCompletionItemProvider: () => ({}) } } }));
+// shortcuts.ts reads navigator.platform on import: pin macOS so the goldens are the same on every host (parity_dump.rs uses disp_mac)
+vi.hoisted(() => vi.stubGlobal("navigator", { platform: "MacIntel" }));
 
 type Golden = Record<string, Record<string, unknown>>;
 const CARET = "‸";
@@ -173,8 +175,12 @@ function columnGolden(): Golden {
   return Object.fromEntries(columnCorpus.map((e) => [e.id, { autoMap: autoMap(e.file, e.table) }]));
 }
 
+/** Storage specs get keyLabel and formatSpec (macOS notation, pinned above), display strings keyLabel only */
 function specGolden(): Golden {
-  return Object.fromEntries(specCorpus.map((s) => [s, { keyLabel: keyLabel(s), formatSpec: formatSpec(s) }]));
+  return Object.fromEntries([
+    ...specCorpus.specs.map((s) => [s, { keyLabel: keyLabel(s), formatSpec: formatSpec(s) }]),
+    ...specCorpus.labels.map((s) => [s, { keyLabel: keyLabel(s) }]),
+  ]);
 }
 
 function fuzzyGolden(): Golden {
