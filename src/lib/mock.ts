@@ -21,6 +21,7 @@ const result = {
   elapsedMs: 12,
   hasResultSet: true,
 };
+let flakyLoads = 0;
 const handlers: Record<string, (a: any) => unknown> = {
   list_connections: () => conns,
   list_databases: (a: any) => (a.id === "rd" ? ["db0", "db3"] : a.id === "my" ? ["information_schema", "mysql", "shop", "sys"] : ["postgres", "shop_app", "shop_app_test"]),
@@ -164,15 +165,21 @@ const handlers: Record<string, (a: any) => unknown> = {
   trust_ssh_host: () => "Trusted",
   export_data: (a: any) => new Promise((ok) => setTimeout(() => ok({ rows: 500, path: a.clipboard ? null : `~/Downloads/${a.defaultName}.${a.format}`, text: a.clipboard ? "id\tname\n1\ta\n" : null }), 4000)),
   cancel_job: () => null,
-  dba_reports: () => [
+  // A report tab asks for the list before its first load: "flaky" starts over with a good load
+  dba_reports: (a: any) => (a.id === "flaky" && (flakyLoads = 0), [
     { id: "sessions", title: "Sessions", group: "Activity", help: "Connections and what they run. blocking = how many sessions wait for this one.", actions: [{ kind: "kill", label: "Cancel Query", terminate: false }, { kind: "kill", label: "Terminate Session", terminate: true }, { kind: "sql", label: "Open Query in Console", template: "{=query}" }] },
     { id: "locks", title: "Lock Waits", group: "Activity", help: "Who waits for whom.", actions: [] },
     { id: "slow_queries", title: "Slow Queries (Top 100)", group: "Performance", help: "By total time.", actions: [{ kind: "sql", label: "Open Query in Console", template: "{=query}" }, { kind: "explain", label: "Explain in Console" }] },
     { id: "table_sizes", title: "Table Sizes", group: "Storage", help: "Biggest first.", actions: [] },
     { id: "unused_indexes", title: "Unused Indexes", group: "Storage", help: "Indexes never used since statistics were reset; counting_since tells since when.", actions: [{ kind: "sql", label: "Generate DROP INDEX", template: "DROP INDEX CONCURRENTLY {schema}.{index};" }] },
-  ],
+  ]),
+  // Story targets: "busy" runs past the report time limit, "flaky" loads once and then its refreshes do, "maria" has no performance_schema
   dba_report: (a: any) =>
-    a.report === "slow_queries"
+    a.id === "busy" || (a.id === "flaky" && flakyLoads++ > 0)
+      ? Promise.reject("The report ran into its time limit (30 s, or a stricter one set on the server). The server may be busy or the statistics very large: try again later.\n(error returned from database: canceling statement due to statement timeout)")
+      : a.id === "maria"
+      ? Promise.reject("performance_schema / sys schema is not available on this server — enable performance_schema to see this (MariaDB has it off by default, and some of these tables only exist on MySQL).\n(error returned from database: 1146 (42S02): Table 'performance_schema.events_statements_summary_by_digest' doesn't exist)")
+      : a.report === "slow_queries"
       ? {
           columns: ["total_ms", "calls", "mean_ms", "max_ms", "rows", "cache_hit_pct", "query"].map((name) => ({ name, typeName: name === "query" ? "TEXT" : "NUMERIC" })),
           rows: [

@@ -1779,7 +1779,7 @@ mod tests {
             in_transaction: false,
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
-        let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res(&[10, 20, 30]))), error: None, running: false, auto: true };
+        let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res(&[10, 20, 30]))), loaded: None, error: None, running: false, auto: true };
         let id = h.app.push_tab("test", "postgres".into(), "Sessions".into(), TabKind::Dba(d));
         h.key("Down");
         h.app.dba_apply(id, Ok(res(&[30, 20, 10])));
@@ -1792,6 +1792,36 @@ mod tests {
         assert!(d.grid.as_ref().unwrap().result.rows.len() == 2);
         h.key("K");
         assert!(h.app.popup.is_none(), "must not offer to kill a session that is gone");
+    }
+
+    /// A refresh that fails (time limit on a busy server) keeps the last sessions on screen, so the blocker can still be killed
+    #[tokio::test]
+    async fn dba_failed_refresh_keeps_the_last_grid() {
+        use qurry_core::db::{ColumnInfo, QueryResult};
+        let mut h = Harness::new().await;
+        let res = QueryResult {
+            columns: vec![ColumnInfo { name: "pid".into(), type_name: "INT4".into() }],
+            rows: vec![vec![serde_json::json!(4123)]],
+            rows_affected: 0,
+            truncated: false,
+            elapsed_ms: 0,
+            has_result_set: true,
+            in_transaction: false,
+        };
+        let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
+        let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: None, loaded: None, error: None, running: false, auto: true };
+        let id = h.app.push_tab("test", "postgres".into(), "Sessions".into(), TabKind::Dba(d));
+        // No result yet: the error replaces the grid
+        h.app.dba_apply(id, Err("The report ran into its time limit".into()));
+        assert!(matches!(&h.app.tabs[h.app.active].kind, TabKind::Dba(d) if d.grid.is_none() && d.error.is_some()));
+        h.app.dba_apply(id, Ok(res));
+        h.app.dba_apply(id, Err("The report ran into its time limit (30 s, or a stricter one set on the server).\n(statement timeout)".into()));
+        let TabKind::Dba(d) = &h.app.tabs[h.app.active].kind else { panic!() };
+        assert!(d.grid.as_ref().is_some_and(|g| g.rows() == 1) && d.error.is_some());
+        let screen = h.screen(120, 24);
+        assert!(screen.contains("Refresh failed, showing data from 0 s ago: The report ran into its time limit") && screen.contains("4123"), "{screen}");
+        h.key("K");
+        assert!(h.app.popup.is_some(), "the kept session can still be terminated");
     }
 
     /// Control characters (ESC, C1, direction overrides) in DB values · names · errors · the status line don't reach the terminal
@@ -1878,7 +1908,7 @@ mod tests {
             in_transaction: false,
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "vacuum_progress");
-        let d = crate::app::DbaTab { report: "vacuum_progress".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res)), error: None, running: false, auto: true };
+        let d = crate::app::DbaTab { report: "vacuum_progress".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res)), loaded: None, error: None, running: false, auto: true };
         h.app.push_tab("test", "postgres".into(), "Vacuum Progress".into(), TabKind::Dba(d));
         h.key("K");
         assert!(h.app.popup.is_none(), "must not offer to terminate a vacuum");
@@ -1907,7 +1937,7 @@ mod tests {
             in_transaction: false,
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Mysql).into_iter().find(|r| r.id == "slow_queries");
-        let d = crate::app::DbaTab { report: "slow_queries".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res)), error: None, running: false, auto: true };
+        let d = crate::app::DbaTab { report: "slow_queries".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res)), loaded: None, error: None, running: false, auto: true };
         h.app.push_tab("test", "shop".into(), "Slow Queries".into(), TabKind::Dba(d));
         h.key("g");
         let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no action list") };

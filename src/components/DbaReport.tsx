@@ -23,6 +23,8 @@ export function DbaReport(p: {
   const [list, setList] = useState<DbaReportInfo[]>([]);
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** When the shown result was loaded (HH:MM:SS), for the stale banner after a failed refresh */
+  const [loadedAt, setLoadedAt] = useState("");
   const [running, setRunning] = useState(false);
   const [auto, setAuto] = useState(true);
   const seq = useRef(0);
@@ -47,11 +49,12 @@ export function DbaReport(p: {
       const r = await dba.run(p.target, p.report);
       if (n !== seq.current) return;
       setResult(r);
+      setLoadedAt(new Date().toTimeString().slice(0, 8));
       setError(null);
     } catch (e) {
+      // A failed refresh keeps the last result on screen (a busy server is when sessions need killing); the error shows above it
       if (n !== seq.current) return;
       setError(String(e));
-      setResult(null);
     } finally {
       if (n === seq.current) {
         inFlight.current = false;
@@ -128,7 +131,12 @@ export function DbaReport(p: {
         <Text tone="muted" className="dba-help">{info?.help}</Text>
       </Toolbar>
       {info?.actions.length ? <div className="dba-hint muted">Right-click a row: {info.actions.map((a) => a.label).join(" · ")}</div> : null}
-      {error ? (
+      {error && result && (
+        <Notice tone="warn" className="dba-stale">
+          Refresh failed, showing data from {loadedAt}: {error}
+        </Notice>
+      )}
+      {error && !result ? (
         <Notice tone="danger">{error}</Notice>
       ) : (
         <div className="dba-grid">

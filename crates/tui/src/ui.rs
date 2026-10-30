@@ -484,13 +484,23 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             let text = d.info.as_ref().map(|i| i.help).unwrap_or("");
             f.render_widget(Paragraph::new(Line::from(vec![Span::styled(format!(" {}{state} ", d.info.as_ref().map(|i| i.title).unwrap_or("")), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)), Span::styled(text, Style::default().fg(DIM))])), help);
             let title = format!(" {db} — {} rows ", d.grid.as_ref().map(|g| g.rows()).unwrap_or(0));
+            // Where the grid is drawn (mouse hits): below the message when a refresh failed
+            let mut area = grid;
             match (&mut d.grid, &d.error) {
-                (_, Some(e)) => f.render_widget(Paragraph::new(e.as_str()).style(Style::default().fg(DANGER)).wrap(Wrap { trim: false }).block(panel(" Error ", focus == Focus::Grid)), grid),
+                (None, Some(e)) => f.render_widget(Paragraph::new(e.as_str()).style(Style::default().fg(DANGER)).wrap(Wrap { trim: false }).block(panel(" Error ", focus == Focus::Grid)), grid),
+                (Some(g), Some(e)) => {
+                    let [msg, rest] = Layout::vertical([Constraint::Length(3), Constraint::Min(3)]).areas(grid);
+                    let age = d.loaded.map(|t| format!(" from {} s ago", t.elapsed().as_secs())).unwrap_or_default();
+                    let text = format!(" Refresh failed, showing data{age}: {}", e.lines().next().unwrap_or(""));
+                    f.render_widget(Paragraph::new(text).style(Style::default().fg(WARN)).wrap(Wrap { trim: false }), msg);
+                    g.render(f, rest, title, focus == Focus::Grid);
+                    area = rest;
+                }
                 (Some(g), None) => g.render(f, grid, title, focus == Focus::Grid),
                 (None, None) => f.render_widget(Paragraph::new("Loading…").block(panel(title, focus == Focus::Grid)), grid),
             }
             if focused {
-                app.hits.results = grid;
+                app.hits.results = area;
             }
         }
         TabKind::Redis(r) => {

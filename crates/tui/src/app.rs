@@ -117,6 +117,8 @@ pub struct DbaTab {
     pub report: String,
     pub info: Option<qurry_core::dba::ReportInfo>,
     pub grid: Option<Grid>,
+    /// When the grid was loaded (a failed refresh keeps the grid and says how old it is)
+    pub loaded: Option<std::time::Instant>,
     pub error: Option<String>,
     pub running: bool,
     pub auto: bool,
@@ -1218,7 +1220,7 @@ impl App {
     }
 
     pub fn restore_dba(&mut self, conn: &str, db: String, title: String, report: &str) -> Option<u64> {
-        let d = DbaTab { report: report.into(), info: None, grid: None, error: None, running: false, auto: true, gone: None };
+        let d = DbaTab { report: report.into(), info: None, grid: None, loaded: None, error: None, running: false, auto: true, gone: None };
         self.restored_tab(conn, db, title, TabKind::Dba(d))
     }
 
