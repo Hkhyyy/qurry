@@ -763,9 +763,15 @@ impl AppState {
             }
             false => Ok(()),
         };
+        // Whether the console still has the transaction open after a failed statement (MySession asks the server after DDL)
+        let open = match (&r, tab) {
+            (Err(_), Some(t)) if in_tx => self.tx_state(t.into()).await,
+            _ => true,
+        };
         match r {
-            Err(e) if in_tx && cfg.kind == store::DbKind::Mysql && crate::mysql::committed_before_failing(&sql, &e) => Err(AppError::Msg(format!(
-                "{e} — MySQL committed the open transaction before running it: the changes made in it before are saved, and Roll back can't undo them (the Production log has their undo SQL)."
+            Err(e) if in_tx && cfg.kind == store::DbKind::Mysql && crate::mysql::committed_before_failing(&sql, &e, open) => Err(AppError::Msg(format!(
+                "{e} — MySQL committed the open transaction before running it: the changes made in it before are saved, and Roll back can't undo them{}.",
+                if watch { " (the Production log has their undo SQL where it could keep it)" } else { "" }
             ))),
             Err(e) => {
                 let tx = if in_tx { crate::audit::ended_by(&sql, &e, true) } else { None };
@@ -855,7 +861,7 @@ impl AppState {
         let word = match r {
             Ok(_) if kind == store::DbKind::Mysql => (!open || begin()).then_some(crate::audit::IMPLICIT_COMMIT),
             Ok(_) => (!open).then_some(crate::audit::BY_SERVER),
-            Err(e) if kind == store::DbKind::Mysql && crate::mysql::committed_before_failing(sql, e) => Some(crate::audit::IMPLICIT_COMMIT),
+            Err(e) if kind == store::DbKind::Mysql && crate::mysql::committed_before_failing(sql, e, open) => Some(crate::audit::IMPLICIT_COMMIT),
             Err(e) => crate::audit::ended_by(sql, e, open),
         };
         match word {

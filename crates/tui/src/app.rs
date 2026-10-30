@@ -302,6 +302,8 @@ pub enum Popup {
     /// sel counts the top Commands and the fixed key list below as one sequence (only Commands can be changed)
     Help { sel: usize, scroll: u16, record: Option<bool>, message: Option<String> },
     Message { title: String, text: String },
+    /// A Message over another popup (Production Log's note over the log): closing it goes back there, as it was
+    Note { title: String, text: String, back: Box<Popup> },
     /// Single-line input. words = autocomplete candidates (columns·keywords for table WHERE/ORDER BY), complete = open list (candidates, selection, prefix length to replace)
     /// body = app-written explanation shown in a box under the input (never interpolated names, so a name can't pose as it)
     Input { title: String, body: String, input: TextArea<'static>, on_ok: Box<dyn FnOnce(&mut App, String)>, words: Vec<String>, complete: Option<(Vec<String>, usize, usize)> },
@@ -2610,7 +2612,7 @@ impl App {
     }
 
     pub fn run_palette(&mut self, item: PItem, ddl: bool) {
-        self.popup = None;
+        let shown = self.popup.take();
         match item.action {
             PAction::Act(a) => self.run_action(a),
             PAction::Tab(id) => {
@@ -2622,7 +2624,7 @@ impl App {
             PAction::ExportFormat(f) => self.export_dest(f),
             PAction::Dba(r) => self.dba_open(r),
             PAction::InsertSql(q) => self.insert_sql(q),
-            PAction::OpenUndo { conn, db, undo, note } => self.open_undo(conn, db, undo, note),
+            PAction::OpenUndo { conn, db, undo, note } => self.open_undo(conn, db, undo, note, shown),
             PAction::Pick(v) => self.flow_pick(v),
             PAction::DbaSql(t) => self.dba_sql(t),
             PAction::DbaExplain => self.dba_explain(),

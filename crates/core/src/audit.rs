@@ -1570,8 +1570,10 @@ mod tests {
         followup_drop(&st, DbKind::Mysql, s).await;
     }
 
-    /// MySQL Manual: the server commits the open transaction before DDL and LOCK TABLES even when they then fail (not when they don't
-    /// parse). The console no longer offers to roll it back, the log records the commit, and a later ROLLBACK doesn't claim to undo it
+    /// MySQL Manual: the server commits the open transaction before DDL and LOCK TABLES even when they then fail, but not when they fail
+    /// while parsing or resolving names, nor for temporary tables or MariaDB's ANALYZE <statement>. Where it committed, the console no
+    /// longer offers to roll it back, the log records the commit, and a later ROLLBACK doesn't claim to undo it; elsewhere it stays open.
+    /// QURRY_TEST_MY can point at MariaDB too (its database must exist)
     #[tokio::test]
     #[ignore]
     async fn mysql_failed_ddl_still_commits() {
@@ -1584,7 +1586,7 @@ mod tests {
         run(format!("update {s}.t set v = 10 where id = 1")).await.unwrap();
         // 1060: duplicate column name
         let e = run(format!("alter table {s}.t add column v int")).await.unwrap_err().to_string();
-        assert!(e.contains("1060") && e.contains("committed the open transaction"), "{e}");
+        assert!(e.contains("1060") && e.contains("committed the open transaction") && e.contains("Production log"), "{e}");
         assert!(!st.tx_state("m".into()).await);
         assert_eq!(log(3), [IMPLICIT_COMMIT.to_string(), format!("alter table {s}.t add column v int"), format!("update {s}.t set v = 10 where id = 1")]);
         st.rollback_tx("m".into()).await.unwrap();
@@ -1595,14 +1597,38 @@ mod tests {
         run(format!("lock tables {s}.missing write")).await.unwrap_err();
         assert!(!st.tx_state("m".into()).await);
         assert_eq!(log(1), [IMPLICIT_COMMIT]);
-        // A DDL that doesn't parse (1064) leaves the transaction open
-        run(format!("update {s}.t set v = 30 where id = 3")).await.unwrap();
-        let e = run(format!("alter table {s}.t add column")).await.unwrap_err().to_string();
-        assert!(e.contains("1064") && !e.contains("committed"), "{e}");
-        assert!(st.tx_state("m".into()).await);
-        st.rollback_tx("m".into()).await.unwrap();
-        assert_eq!(log(1), ["ROLLBACK"]);
-        assert_eq!(followup_values(&st, s).await, "[[10],[20],[3]]");
+        // These leave the transaction open: a DDL that doesn't parse (1064), a name too long (1059), temporary tables however spaced,
+        // MariaDB's CREATE OR REPLACE TEMPORARY and ANALYZE UPDATE (MySQL: 1064)
+        let long = "c".repeat(70);
+        for ddl in [
+            format!("alter table {s}.t add column"),
+            format!("alter table {s}.t add column {long} int"),
+            format!("lock tables {s}.{long} write"),
+            format!("create  temporary table {s}.tt1 (a int)"),
+            format!("create\ntemporary table {s}.tt2 (a int)"),
+            format!("create or replace temporary table {s}.tt3 (a int)"),
+            format!("analyze update {s}.t set v = 40 where id = 3"),
+        ] {
+            run(format!("update {s}.t set v = 30 where id = 3")).await.unwrap();
+            if let Err(e) = run(ddl.clone()).await {
+                assert!(!e.to_string().contains("committed"), "{ddl}: {e}");
+            }
+            assert!(st.tx_state("m".into()).await, "{ddl}");
+            assert_ne!(log(1), [IMPLICIT_COMMIT], "{ddl}");
+            st.rollback_tx("m".into()).await.unwrap();
+            assert_eq!(log(1), ["ROLLBACK"], "{ddl}");
+            assert_eq!(followup_values(&st, s).await, "[[10],[20],[3]]", "{ddl}");
+        }
+        // Not a Production source: nothing logged, so the error doesn't point to the Production log
+        let mut dev = st.source("d").unwrap();
+        (dev.id, dev.name, dev.options.confirm_changes) = ("n".into(), "dev".into(), false);
+        let pass = std::env::var("QURRY_TEST_MY").unwrap().split(':').nth(3).map(String::from);
+        st.save_connection(dev, pass, None).await.unwrap();
+        st.set_tx_mode("n".into(), "dev".into(), true).await.unwrap();
+        st.run_query("n".into(), format!("update {s}.t set v = 50 where id = 3"), None, Some("dev".into())).await.unwrap();
+        let e = st.run_query("n".into(), format!("alter table {s}.t add column v int"), None, Some("dev".into())).await.unwrap_err().to_string();
+        assert!(e.contains("committed the open transaction") && !e.contains("Production log"), "{e}");
+        st.close_session("dev".into()).await.unwrap();
         followup_drop(&st, DbKind::Mysql, s).await;
     }
 

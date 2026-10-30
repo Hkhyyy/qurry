@@ -347,24 +347,36 @@ fn opens_tx(s: &str) -> bool {
 }
 
 /// Whether MySQL commits the open transaction when the statement runs (and leaves none open): DDL but on temporary tables,
-/// table maintenance, FLUSH, RESET. s = strip_comments_lead(sql). LOCK / UNLOCK TABLES and SET autocommit are handled by the session
+/// table maintenance, FLUSH, RESET. s = strip_comments_lead(sql). LOCK / UNLOCK TABLES and SET autocommit are handled by the session.
+/// A guess from the words: with a transaction open, the session asks the server (MySession::tx_open)
 fn commits_implicitly(sql: &str, s: &str) -> bool {
-    let first = s.split_whitespace().next().unwrap_or("");
-    if s.starts_with("create temporary") || s.starts_with("drop temporary") {
+    let w: Vec<&str> = s.split_whitespace().take(4).collect();
+    let first = w.first().copied().unwrap_or("");
+    // CREATE [OR REPLACE] TEMPORARY … (OR REPLACE: MariaDB), DROP TEMPORARY …
+    let after = if w.get(1..3) == Some(&["or", "replace"][..]) { w.get(3) } else { w.get(1) };
+    if (first == "create" || first == "drop") && after == Some(&"temporary") {
         return false;
     }
+    // ANALYZE [NO_WRITE_TO_BINLOG | LOCAL] TABLE. MariaDB's ANALYZE SELECT / UPDATE … is an EXPLAIN that runs the statement
+    let analyze_table = first == "analyze" && w.get(1).is_some_and(|x| ["table", "no_write_to_binlog", "local"].contains(x));
     crate::guard::is_ddl(sql, crate::store::DbKind::Mysql)
-        || ["analyze", "optimize", "repair", "flush", "cache"].contains(&first)
+        || analyze_table
+        || ["optimize", "repair", "flush", "cache"].contains(&first)
         || s.starts_with("check table")
         || s.starts_with("load index")
         || (first == "reset" && !s.starts_with("reset persist"))
 }
 
-/// Whether MySQL committed the open transaction before `sql` failed with `e`: it does so for DDL and LOCK TABLES before running them,
-/// so even when they then fail (a duplicate column, a missing table, no privilege), but not for one that doesn't parse (1064)
-pub(crate) fn committed_before_failing(sql: &str, e: &AppError) -> bool {
-    let s = strip_comments_lead(sql);
-    (commits_implicitly(sql, &s) || is_lock_tables(&s)) && error_number(e).is_some_and(|n| n != 1064) && !crate::app::is_conn_lost(e)
+/// Whether MySQL may commit the open transaction before running the statement: DDL and the like (commits_implicitly), LOCK TABLES
+fn commits_before_running(sql: &str, s: &str) -> bool {
+    commits_implicitly(sql, s) || is_lock_tables(s)
+}
+
+/// Whether MySQL committed the console's open transaction before `sql` failed with `e`. It does for DDL and LOCK TABLES that then fail
+/// (a duplicate column, a missing table), but not for one that fails while parsing or resolving names (1064, 1046, 1059 …), and the
+/// error number doesn't tell which: the session asked the server. open = the session still has the transaction open
+pub(crate) fn committed_before_failing(sql: &str, e: &AppError, open: bool) -> bool {
+    !open && commits_before_running(sql, &strip_comments_lead(sql)) && error_number(e).is_some() && !crate::app::is_conn_lost(e)
 }
 
 fn is_lock_tables(s: &str) -> bool {
@@ -449,6 +461,21 @@ impl MySession {
         }
     }
 
+    /// Whether the server still has a transaction open on this connection, after a statement that may have committed it.
+    /// Setting the next transaction's isolation level fails (1568) only inside one, and set to the session's level it changes nothing.
+    /// No privilege needed (MySQL 8 has no @@in_transaction; MariaDB before 11.1 names the variable tx_isolation).
+    /// Without an answer the transaction counts as open: never claim changes are committed without knowing
+    async fn tx_open(&mut self) -> bool {
+        for v in ["transaction_isolation", "tx_isolation"] {
+            match self.conn.execute(format!("SET @@{v} = @@SESSION.{v}").as_str()).await.map_err(AppError::from) {
+                Ok(_) => return false,
+                Err(e) if error_number(&e) == Some(1193) => continue,
+                Err(_) => return true,
+            }
+        }
+        true
+    }
+
     pub async fn run(&mut self, sql: &str, limit: usize) -> AppResult<QueryResult> {
         self.more = None;
         let mut r = match run_on(&mut self.conn, sql, limit).await {
@@ -458,10 +485,12 @@ impl MySession {
                 if s.starts_with("commit") && matches!(e, AppError::Db(sqlx::Error::Database(_))) {
                     // A COMMIT the server refused ends the transaction: it was rolled back
                     self.in_tx = false;
-                } else if committed_before_failing(sql, &e) {
-                    self.in_tx = false;
-                    // A failed LOCK TABLES has released the tables locked before
-                    if is_lock_tables(&s) {
+                } else if commits_before_running(sql, &s) && error_number(&e).is_some() && !crate::app::is_conn_lost(&e) {
+                    if self.in_tx {
+                        self.in_tx = self.tx_open().await;
+                    }
+                    // A LOCK TABLES that got as far as committing has released the tables locked before
+                    if is_lock_tables(&s) && !self.in_tx {
                         self.locked = false;
                     }
                 } else if self.tx_rolled_back(&e).await {
@@ -496,7 +525,9 @@ impl MySession {
                 self.in_tx = false;
             }
         } else if commits_implicitly(sql, &s) {
-            self.in_tx = false;
+            if self.in_tx {
+                self.in_tx = self.tx_open().await;
+            }
         } else if self.manual && opens_tx(&s) {
             // With autocommit=0, any statement opens a transaction, not only a change: WITH … DELETE, SELECT … FOR UPDATE (its row locks),
             // SELECT f() where f writes. Like PostgreSQL's Manual mode, it stays open until Commit / Roll back
@@ -816,7 +847,16 @@ mod tests {
         for q in ["ALTER TABLE orders ADD COLUMN c int", "-- x\ncreate index i on t (a)", "DROP TABLE t", "truncate t", "rename table a to b", "grant select on t to u", "ANALYZE TABLE t", "optimize table t", "flush privileges", "reset master", "check table t"] {
             assert!(c(q), "{q}");
         }
-        for q in ["create temporary table x (a int)", "DROP TEMPORARY TABLE x", "update t set a = 1", "select 1", "reset persist x", "set autocommit = 1", "lock tables t write", "checksum table t"] {
+        for q in ["ANALYZE NO_WRITE_TO_BINLOG TABLE t", "analyze local table t"] {
+            assert!(c(q), "{q}");
+        }
+        for q in [
+            "create temporary table x (a int)", "DROP TEMPORARY TABLE x", "CREATE  TEMPORARY TABLE x (a int)", "create\ntemporary table x (a int)",
+            "CREATE OR REPLACE TEMPORARY TABLE x (a int)", "drop\t temporary table if exists x",
+            // MariaDB: an EXPLAIN that runs the statement
+            "analyze update t set v = 100 where id = 2", "ANALYZE SELECT * FROM t", "analyze format=json select 1",
+            "update t set a = 1", "select 1", "reset persist x", "set autocommit = 1", "lock tables t write", "checksum table t",
+        ] {
             assert!(!c(q), "{q}");
         }
     }

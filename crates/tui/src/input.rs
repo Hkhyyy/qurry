@@ -1139,6 +1139,13 @@ fn popup_key(app: &mut App, k: KeyEvent) {
                 app.popup = Some(popup);
             }
         }
+        // Closing it goes back to what it was opened from
+        Popup::Note { title, text, back } => {
+            app.popup = match k.code {
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::F(1) => Some(*back),
+                _ => Some(Popup::Note { title, text, back }),
+            };
+        }
         Popup::Confirm { text, on_yes } => match k.code {
             KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => on_yes(app),
             KeyCode::Char('n') | KeyCode::Esc => {}
@@ -1211,11 +1218,14 @@ fn popup_key(app: &mut App, k: KeyEvent) {
                 KeyCode::PageUp => p.sel = p.sel.saturating_sub(15),
                 KeyCode::Enter => {
                     if let Some(it) = App::palette_matches(&p).get(p.sel).map(|x| (*x).clone()) {
+                        // Shown while it runs, as on a click: an item can come back to it (Production Log's note)
+                        app.popup = Some(Popup::Palette(p));
                         return app.run_palette(it, false);
                     }
                 }
                 KeyCode::Char('b') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                     if let Some(it) = App::palette_matches(&p).get(p.sel).map(|x| (*x).clone()) {
+                        app.popup = Some(Popup::Palette(p));
                         return app.run_palette(it, true);
                     }
                 }
@@ -2059,9 +2069,20 @@ mod tests {
         h.key("Enter");
         assert_eq!(h.app.tabs.len(), tabs + 1);
         // Without undo SQL, its note in a popup (the status bar would cut a long one off)
-        let Some(crate::app::Popup::Message { text, .. }) = &h.app.popup else { panic!("no note") };
+        let Some(crate::app::Popup::Note { text, .. }) = &h.app.popup else { panic!("no note") };
         assert!(text.contains("no undo kept"), "{text}");
+        // The log stays in view behind it, and Esc goes back to it with the same entry and filter
+        assert!(h.screen(100, 30).contains("update t set a = 1 where id = 2"));
         h.key("Esc");
+        let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("log closed") };
+        assert!(p.title.starts_with("Production Log") && p.sel == 1, "{}", p.sel);
+        h.type_str("big");
+        h.key("Enter");
+        h.key("Esc");
+        let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("log closed") };
+        assert_eq!((p.input.lines().join(""), crate::app::App::palette_matches(p)[p.sel].label.as_str()), ("big".to_string(), "delete from big"));
+        h.key("Esc");
+        assert!(h.app.popup.is_none());
         let unknown = qurry_core::audit::AuditEntry {
             rows: None, error: Some("Connection reset by peer (os error 54)".into()), note: Some(qurry_core::audit::COMMIT_UNKNOWN_NOTE.into()),
             ..entry("d", qurry_core::audit::COMMIT_UNKNOWN, None)
@@ -2069,7 +2090,7 @@ mod tests {
         h.app.state.audit.add(unknown).unwrap();
         h.app.run_action(Action::ProductionLog);
         h.key("Enter");
-        let Some(crate::app::Popup::Message { text, .. }) = &h.app.popup else { panic!("no note") };
+        let Some(crate::app::Popup::Note { text, .. }) = &h.app.popup else { panic!("no note") };
         assert!(text.contains(qurry_core::audit::COMMIT_UNKNOWN_NOTE) && text.contains("os error 54"), "{text}");
         // The whole note shows, wrapped, in a narrow terminal too
         let screen = h.screen(50, 20);
