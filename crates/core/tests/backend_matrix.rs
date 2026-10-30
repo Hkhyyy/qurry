@@ -41,12 +41,27 @@ fn redis_env(db: &str) -> ConnectionConfig {
     cfg("redis", host, port, "", db)
 }
 
+/// An AppState whose config folder is removed when the test drops it,
+/// so the saved password and the key that decrypts it don't outlive the test
+struct Matrix {
+    st: AppState,
+    // Declared after `st`: the folder goes after the state is dropped
+    dir: tempfile::TempDir,
+}
+
+impl std::ops::Deref for Matrix {
+    type Target = AppState;
+    fn deref(&self) -> &AppState {
+        &self.st
+    }
+}
+
 /// A fresh config folder with one saved source (id "m"; Production audit on)
-async fn state(c: &ConnectionConfig, password: Option<String>) -> AppState {
-    let dir = std::env::temp_dir().join(format!("qurry-matrix-{}", uuid::Uuid::new_v4()));
-    let st = qurry_core::open_state(Some(dir)).unwrap();
+async fn state(c: &ConnectionConfig, password: Option<String>) -> Matrix {
+    let dir = tempfile::Builder::new().prefix("qurry-matrix-").tempdir().unwrap();
+    let st = qurry_core::open_state(Some(dir.path().to_path_buf())).unwrap();
     st.save_connection(c.clone(), password, None).await.unwrap();
-    st
+    Matrix { st, dir }
 }
 
 async fn q(st: &AppState, sql: &str) -> db::QueryResult {
@@ -73,13 +88,19 @@ fn err<T>(r: qurry_core::error::AppResult<T>) -> String {
 // ───────── Dispatch decided before any connection ─────────
 
 /// A source that would refuse connections: these checks must answer without connecting
-async fn offline(kind: &str) -> AppState {
+async fn offline(kind: &str) -> Matrix {
     let mut c = cfg(kind, "127.0.0.1", "1", "u", "d");
     c.id = kind.into();
-    let dir = std::env::temp_dir().join(format!("qurry-matrix-{}", uuid::Uuid::new_v4()));
-    let st = qurry_core::open_state(Some(dir)).unwrap();
-    st.save_connection(c, None, None).await.unwrap();
-    st
+    state(&c, None).await
+}
+
+#[tokio::test]
+async fn config_folder_is_removed_with_the_state() {
+    let st = state(&cfg("mysql", "127.0.0.1", "1", "u", "d"), Some("pw".into())).await;
+    let dir = st.dir.path().to_path_buf();
+    assert!(dir.join("secrets.json").exists() && dir.join("secret.key").exists(), "the password was saved");
+    drop(st);
+    assert!(!dir.exists(), "{dir:?} left behind");
 }
 
 #[tokio::test]
@@ -199,7 +220,7 @@ async fn pg_session_fetch_cancel_tx() {
     let ins = st.run_query(ID.into(), "insert into qm_tx values (1)".into(), None, tab()).await.unwrap();
     assert!(ins.in_transaction && ins.rows_affected == 1);
     assert!(st.tx_state("pg-tab".into()).await);
-    let count = |st: std::sync::Arc<AppState>| async move { q(&st, "select count(*)::int from qm_tx").await.rows[0][0].clone() };
+    let count = |st: std::sync::Arc<Matrix>| async move { q(&st, "select count(*)::int from qm_tx").await.rows[0][0].clone() };
     assert_eq!(count(st.clone()).await, json!(0));
     st.rollback_tx("pg-tab".into()).await.unwrap();
     assert!(!st.tx_state("pg-tab".into()).await);
@@ -341,7 +362,7 @@ async fn pg_tools() {
 // ───────── MySQL ─────────
 
 /// A fresh database `name` and a state whose source points at it
-async fn my_state(name: &str) -> Option<AppState> {
+async fn my_state(name: &str) -> Option<Matrix> {
     let (c, pw) = my_env()?;
     let boot = state(&c, Some(pw.clone())).await;
     q(&boot, &format!("drop database if exists {name}")).await;
@@ -407,7 +428,7 @@ async fn mysql_session_fetch_cancel_tx() {
     let ins = st.run_query(ID.into(), "insert into tx values (1)".into(), None, tab()).await.unwrap();
     assert!(ins.in_transaction && ins.rows_affected == 1);
     assert!(st.tx_state("my-tab".into()).await);
-    let count = |st: std::sync::Arc<AppState>| async move { q(&st, "select count(*) from tx").await.rows[0][0].clone() };
+    let count = |st: std::sync::Arc<Matrix>| async move { q(&st, "select count(*) from tx").await.rows[0][0].clone() };
     assert_eq!(count(st.clone()).await, json!(0));
     st.rollback_tx("my-tab".into()).await.unwrap();
     assert!(!st.tx_state("my-tab".into()).await);

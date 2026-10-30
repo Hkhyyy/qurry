@@ -31,3 +31,6 @@ sha2 = "0.10"
 qurry-driver = { workspace = true }
 # RAG embeddings (OpenAI · Ollama). Same HTTP client as the drivers
 ureq = { version = "3", default-features = false, features = ["rustls", "gzip", "json"] }
+
+[dev-dependencies]
+tempfile = "3"
