@@ -2181,6 +2181,11 @@ impl App {
                             };
                         }
                         Err(e) => {
+                            // In Output too: the status bar cuts it off, and a COMMIT on a lost connection says there to check the data
+                            if let Some(TabKind::Console(c)) = a.tab_mut(id).map(|t| &mut t.kind) {
+                                c.log(true, e.clone());
+                                c.show_output = true;
+                            }
                             a.status = e;
                             a.sync_tx(id);
                         }

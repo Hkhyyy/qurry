@@ -12,7 +12,7 @@ export function auditStatus(e: AuditEntry): { text: string; tone: "neutral" | "w
   // A COMMIT cut off by a lost connection: it may have committed (audit::COMMIT_UNKNOWN)
   if (e.sql === COMMIT_UNKNOWN) return { text: "outcome unknown", tone: "warn" };
   if (e.error) return { text: "failed", tone: "danger" };
-  if (e.sql === "COMMIT") return { text: "committed", tone: "accent" };
+  if (e.sql.startsWith("COMMIT")) return { text: "committed", tone: "accent" };
   if (e.sql.startsWith("ROLLBACK")) return { text: "rolled back", tone: "neutral" };
   const rows = e.rows == null ? "done" : `${e.rows.toLocaleString("en-US")} row${e.rows === 1 ? "" : "s"}`;
   return { text: e.inTx ? `${rows} · not committed yet` : rows, tone: e.inTx ? "warn" : "neutral" };
@@ -35,6 +35,7 @@ export function ProductionLog({ connId, onOpenUndo, onClose }: { connId: string 
     return items.filter((e) => !f || e.sql.toLowerCase().includes(f) || e.connName.toLowerCase().includes(f));
   }, [items, q]);
   const cur = list[Math.min(idx, list.length - 1)];
+  const unknown = cur?.sql === COMMIT_UNKNOWN;
   const where = (e: AuditEntry) => (e.database ? `${e.connName} · ${e.database}` : e.connName);
 
   return (
@@ -92,9 +93,16 @@ export function ProductionLog({ connId, onOpenUndo, onClose }: { connId: string 
                 {new Date(cur.ts).toLocaleString()} · {where(cur)} · {auditStatus(cur).text}
               </Text>
               <CodeBlock>{cur.sql}</CodeBlock>
-              {cur.error && <Notice tone="danger">{cur.error}</Notice>}
+              {unknown ? (
+                // It may have committed: what to do first, then the driver error
+                <Notice tone="warn">
+                  {cur.note} ({cur.error})
+                </Notice>
+              ) : (
+                cur.error && <Notice tone="danger">{cur.error}</Notice>
+              )}
               <SectionTitle>Undo</SectionTitle>
-              {cur.undo ? <CodeBlock className="audit-undo">{cur.undo}</CodeBlock> : <Text tone="muted">{cur.note ?? "No undo for this statement."}</Text>}
+              {cur.undo ? <CodeBlock className="audit-undo">{cur.undo}</CodeBlock> : <Text tone="muted">{(!unknown && cur.note) || "No undo for this statement."}</Text>}
             </>
           )}
         </div>

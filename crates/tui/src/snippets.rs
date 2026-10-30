@@ -21,6 +21,14 @@ fn ago(ts: i64) -> String {
     }
 }
 
+/// What picking a Production log entry without undo SQL says: the error, but first what to do for a COMMIT of unknown outcome
+fn note(e: &qurry_core::audit::AuditEntry) -> String {
+    match (&e.error, &e.note) {
+        (Some(err), Some(n)) if e.sql == qurry_core::audit::COMMIT_UNKNOWN => format!("{n} ({err})"),
+        _ => e.error.clone().or(e.note.clone()).unwrap_or_else(|| "No undo for this statement".into()),
+    }
+}
+
 impl App {
     /// Data Source of the current tab
     fn snip_conn(&self) -> Option<String> {
@@ -108,7 +116,7 @@ impl App {
                     label: one_line(&e.sql, 120),
                     // When narrow the end is cut → important things (undo · row count) first
                     hint: [undo, status, ago(e.ts), place].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join(" · "),
-                    action: PAction::OpenUndo { conn: conn.into(), db: db.map(String::from), note: e.error.clone().or(e.note.clone()).unwrap_or_else(|| "No undo for this statement".into()), undo: e.undo },
+                    action: PAction::OpenUndo { conn: conn.into(), db: db.map(String::from), note: note(&e), undo: e.undo },
                 }
             })
             .collect();

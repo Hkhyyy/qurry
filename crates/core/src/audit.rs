@@ -273,6 +273,7 @@ impl Audit {
             Err(err) if tx_end(sql) == Some("COMMIT") && crate::app::is_conn_lost(err) => {
                 e.sql = COMMIT_UNKNOWN.into();
                 e.error = Some(err.to_string());
+                e.note = Some(COMMIT_UNKNOWN_NOTE.into());
                 self.finish(vec![e])?;
                 if let Some(t) = tab {
                     self.pending.lock().unwrap().remove(t);
@@ -322,8 +323,14 @@ impl Audit {
 
 /// Log entry for a console transaction with logged changes that the server ended without a COMMIT
 pub(crate) const BY_SERVER: &str = "ROLLBACK (by the server)";
+/// Log entry for a console transaction with logged changes closed by Disconnect (and reconnecting after its settings changed): the server rolls it back
+pub(crate) const DISCONNECTED: &str = "ROLLBACK (disconnected)";
+/// Log entry for a MySQL console transaction with logged changes that a statement committed (DDL, LOCK TABLES, SET autocommit = 1, BEGIN …)
+pub(crate) const IMPLICIT_COMMIT: &str = "COMMIT (implicit)";
 /// Log entry for a COMMIT cut off by a lost connection: the server may have committed before the connection went
 pub const COMMIT_UNKNOWN: &str = "COMMIT outcome unknown (connection lost)";
+/// What to do about it (the entry's note)
+pub const COMMIT_UNKNOWN_NOTE: &str = "The server may have committed before the connection was lost. Check the data before you run these changes again.";
 
 /// How the console's transaction ended when `sql` failed with `e` (open = the session still has it open; None = nothing ended).
 /// A lost connection rolls it back on the server, unless `sql` was the COMMIT; otherwise it ended only if the session closed it
@@ -757,6 +764,8 @@ mod tests {
         let all = a.list(None, "", 10);
         assert_eq!(all.iter().map(|e| e.sql.as_str()).collect::<Vec<_>>(), vec![COMMIT_UNKNOWN, "update t set a = 1 where id = 1"]);
         assert!(all[0].error.as_deref().is_some_and(|e| e.contains("connection reset")) && !all[0].started);
+        // The entry says what to do next
+        assert_eq!(all[0].note.as_deref(), Some(COMMIT_UNKNOWN_NOTE));
         // Nothing left open: a later server rollback adds no entry
         a.tx_closed("c1", "[PROD] kr", "tab", BY_SERVER).unwrap();
         assert_eq!(a.list(None, "", 10).len(), 2);
@@ -1460,5 +1469,125 @@ mod tests {
     #[ignore]
     async fn mysql_dead_pool_closes_every_console() {
         dead_pool_closes_every_console(DbKind::Mysql, "QURRY_TEST_MY").await;
+    }
+
+    /// Disconnect (Deactivate › Disconnect and Roll Back) with a logged change uncommitted: the log closes the transaction, so a
+    /// COMMIT in the reconnected console doesn't read as committing it
+    async fn disconnect_closes_the_logged_transaction(kind: DbKind, env: &str) {
+        let Some(st) = prod_state(kind, env).await else { return };
+        let s = "audit_followups_disc";
+        followup_table(&st, kind, s).await;
+        let run = |sql: String| st.run_query("d".into(), sql, None, Some("m".into()));
+        st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
+        run(format!("update {s}.t set v = 10 where id = 1")).await.unwrap();
+        st.disconnect("d".into()).await.unwrap();
+        st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
+        run(format!("update {s}.t set v = 12 where id = 3")).await.unwrap();
+        st.commit_tx("m".into()).await.unwrap();
+        let log = st.audit_log(None, String::new(), 4).into_iter().map(|e| e.sql).collect::<Vec<_>>();
+        assert_eq!(log, ["COMMIT".to_string(), format!("update {s}.t set v = 12 where id = 3"), DISCONNECTED.into(), format!("update {s}.t set v = 10 where id = 1")]);
+        assert_eq!(followup_values(&st, s).await, "[[1],[2],[12]]");
+        followup_drop(&st, kind, s).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn pg_disconnect_closes_the_logged_transaction() {
+        disconnect_closes_the_logged_transaction(DbKind::Postgres, "QURRY_TEST_PG").await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_disconnect_closes_the_logged_transaction() {
+        disconnect_closes_the_logged_transaction(DbKind::Mysql, "QURRY_TEST_MY").await;
+    }
+
+    /// MySQL Manual: a statement that fails still leaves the transaction open (autocommit=0), with the row locks it took before a
+    /// lock wait timeout or what a procedure changed before it failed. The console shows it, so switching to Auto doesn't commit it silently
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_failed_statement_keeps_the_transaction() {
+        let Some(st) = prod_state(DbKind::Mysql, "QURRY_TEST_MY").await else { return };
+        let s = "audit_followups_failed";
+        followup_table(&st, DbKind::Mysql, s).await;
+        let run = |tab: &str, sql: String| st.run_query("d".into(), sql, None, Some(tab.into()));
+        st.set_tx_mode("d".into(), "o".into(), true).await.unwrap();
+        run("o", format!("update {s}.t set v = 30 where id = 3")).await.unwrap();
+        st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
+        run("m", "set innodb_lock_wait_timeout = 1".into()).await.unwrap();
+        assert!(!st.tx_state("m".into()).await);
+        // Locks row 2, times out on row 3 (no snapshot: not a simple single-table change)
+        let e = run("m", format!("update {s}.t t join (select 2 as id union select 3) x using (id) set t.v = 0")).await.unwrap_err().to_string();
+        assert!(e.contains("Lock wait timeout"), "{e}");
+        assert!(st.tx_state("m".into()).await);
+        assert!(st.set_tx_mode("d".into(), "m".into(), false).await.is_err());
+        st.rollback_tx("m".into()).await.unwrap();
+        st.rollback_tx("o".into()).await.unwrap();
+        // A procedure that changes a row, then fails
+        run("m", format!("create procedure {s}.p() begin update {s}.t set v = 77 where id = 1; signal sqlstate '45000' set message_text = 'nope'; end")).await.unwrap();
+        let e = run("m", format!("call {s}.p()")).await.unwrap_err().to_string();
+        assert!(e.contains("nope"), "{e}");
+        assert!(st.tx_state("m".into()).await);
+        assert!(st.set_tx_mode("d".into(), "m".into(), false).await.is_err());
+        st.rollback_tx("m".into()).await.unwrap();
+        assert_eq!(followup_values(&st, s).await, "[[1],[2],[3]]");
+        // A typo doesn't open one
+        run("m", "selec 1".into()).await.unwrap_err();
+        assert!(!st.tx_state("m".into()).await);
+        followup_drop(&st, DbKind::Mysql, s).await;
+    }
+
+    /// MySQL Manual: DDL, BEGIN and a typed SET autocommit = 1 commit the open transaction on the server. The console no longer offers
+    /// to roll it back, and the log records the commit instead of a later ROLLBACK that wouldn't undo anything
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_implicit_commit_is_logged() {
+        let Some(st) = prod_state(DbKind::Mysql, "QURRY_TEST_MY").await else { return };
+        let s = "audit_followups_implicit";
+        followup_table(&st, DbKind::Mysql, s).await;
+        let run = |sql: String| st.run_query("d".into(), sql, None, Some("m".into()));
+        let log = |n: usize| st.audit_log(None, String::new(), n).into_iter().map(|e| e.sql).collect::<Vec<_>>();
+        st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
+        run(format!("update {s}.t set v = 10 where id = 1")).await.unwrap();
+        run(format!("alter table {s}.t add column c int")).await.unwrap();
+        assert!(!st.tx_state("m".into()).await);
+        assert_eq!(log(3), [IMPLICIT_COMMIT.to_string(), format!("alter table {s}.t add column c int"), format!("update {s}.t set v = 10 where id = 1")]);
+        run(format!("update {s}.t set v = 20 where id = 2")).await.unwrap();
+        run("begin".into()).await.unwrap();
+        assert!(st.tx_state("m".into()).await);
+        assert_eq!(log(1), [IMPLICIT_COMMIT]);
+        run(format!("update {s}.t set v = 30 where id = 3")).await.unwrap();
+        run("set autocommit = 1".into()).await.unwrap();
+        assert!(!st.tx_state("m".into()).await);
+        assert_eq!(log(1), [IMPLICIT_COMMIT]);
+        // Nothing was left to roll back
+        st.rollback_tx("m".into()).await.unwrap();
+        assert_eq!(log(1), [IMPLICIT_COMMIT]);
+        assert_eq!(serde_json::to_string(&st.run_query("d".into(), format!("select v from {s}.t order by id"), None, None).await.unwrap().rows).unwrap(), "[[10],[20],[30]]");
+        // The session follows the server: now Auto, a change commits right away
+        run(format!("update {s}.t set v = 40 where id = 3")).await.unwrap();
+        assert!(!st.tx_state("m".into()).await);
+        followup_drop(&st, DbKind::Mysql, s).await;
+    }
+
+    /// MySQL 8.0.24+ ends an idle session (wait_timeout) with error 4031: that is a lost connection, so the logged change is closed
+    /// as rolled back by the server and the console reconnects
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_idle_timeout_is_a_lost_connection() {
+        let Some(st) = prod_state(DbKind::Mysql, "QURRY_TEST_MY").await else { return };
+        let s = "audit_followups_idle";
+        followup_table(&st, DbKind::Mysql, s).await;
+        let run = |sql: String| st.run_query("d".into(), sql, None, Some("m".into()));
+        st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
+        run("set session wait_timeout = 1".into()).await.unwrap();
+        run(format!("update {s}.t set v = 10 where id = 1")).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+        let e = run("select 1".into()).await.unwrap_err().to_string();
+        assert!(e.contains("4031") && e.contains("rolled back by the server"), "{e}");
+        assert_eq!(st.audit_log(None, String::new(), 1)[0].sql, BY_SERVER);
+        assert!(!st.tx_state("m".into()).await);
+        assert_eq!(followup_values(&st, s).await, "[[1],[2],[3]]");
+        followup_drop(&st, DbKind::Mysql, s).await;
     }
 }

@@ -1419,6 +1419,8 @@ export default function App() {
       updTab(tab.id, (t) => ({ ...t, txManual: manual, inTx: manual ? t.inTx : false }));
       log(tab.id, "info", `Transaction mode: ${manual ? "Manual" : "Auto"}`);
     } catch (e) {
+      // In the console Output too (a COMMIT on a lost connection says there to check the data)
+      log(tab.id, "error", String(e));
       setStatus(String(e));
       syncTx(tab.id);
     }

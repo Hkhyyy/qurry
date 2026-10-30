@@ -327,7 +327,7 @@ async fn snapshot_on(conn: &mut sqlx::MySqlConnection, sql: &str) -> AppResult<Q
 }
 
 /// MySQL error number (1213 = deadlock, …)
-fn error_number(e: &AppError) -> Option<u16> {
+pub(crate) fn error_number(e: &AppError) -> Option<u16> {
     match e {
         AppError::Db(sqlx::Error::Database(d)) => d.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>().map(|m| m.number()),
         _ => None,
@@ -341,12 +341,33 @@ pub async fn cancel(p: &MySqlPool, id: i64) -> AppResult<bool> {
 
 // ───────── Console session ─────────
 
+/// In Manual mode (autocommit=0), whether the statement opens the transaction: every one but SHOW / SET / USE
+fn opens_tx(s: &str) -> bool {
+    !s.starts_with("show") && !s.starts_with("set") && !s.starts_with("use")
+}
+
+/// Whether MySQL commits the open transaction when the statement runs (and leaves none open): DDL but on temporary tables,
+/// table maintenance, FLUSH, RESET. s = strip_comments_lead(sql). LOCK / UNLOCK TABLES and SET autocommit are handled by the session
+fn commits_implicitly(sql: &str, s: &str) -> bool {
+    let first = s.split_whitespace().next().unwrap_or("");
+    if s.starts_with("create temporary") || s.starts_with("drop temporary") {
+        return false;
+    }
+    crate::guard::is_ddl(sql, crate::store::DbKind::Mysql)
+        || ["analyze", "optimize", "repair", "flush", "cache"].contains(&first)
+        || s.starts_with("check table")
+        || s.starts_with("load index")
+        || (first == "reset" && !s.starts_with("reset persist"))
+}
+
 /// Dedicated connection for a console tab. MySQL has no protocol-level cursor, so "load more" re-queries with LIMIT/OFFSET.
 pub struct MySession {
     conn: PoolConnection<MySql>,
     pub id: i64,
     manual: bool,
     pub in_tx: bool,
+    /// LOCK TABLES is in effect (UNLOCK TABLES then commits the open transaction)
+    locked: bool,
     /// (SELECT statement, next OFFSET)
     more: Option<(String, usize)>,
 }
@@ -355,7 +376,7 @@ impl MySession {
     pub async fn open(p: &MySqlPool) -> AppResult<Self> {
         let mut conn = p.acquire().await?;
         let id: u64 = sqlx::query_scalar("select connection_id()").fetch_one(&mut *conn).await?;
-        Ok(Self { conn, id: id as i64, manual: false, in_tx: false, more: None })
+        Ok(Self { conn, id: id as i64, manual: false, in_tx: false, locked: false, more: None })
     }
 
     pub async fn ping(&mut self) {
@@ -391,8 +412,13 @@ impl MySession {
     }
 
     pub async fn commit(&mut self) -> AppResult<()> {
-        self.conn.execute("COMMIT").await?;
-        self.in_tx = false;
+        let r = self.conn.execute("COMMIT").await;
+        // A COMMIT the server refused (e.g. a Group Replication certification failure) ends the transaction too: it was rolled back.
+        // Not a lost connection: then it is unknown whether it committed
+        if matches!(r, Ok(_) | Err(sqlx::Error::Database(_))) {
+            self.in_tx = false;
+        }
+        r?;
         Ok(())
     }
 
@@ -416,18 +442,44 @@ impl MySession {
         let mut r = match run_on(&mut self.conn, sql, limit).await {
             Ok(r) => r,
             Err(e) => {
-                if self.in_tx && self.tx_rolled_back(&e).await {
+                let s = strip_comments_lead(sql);
+                if s.starts_with("commit") && matches!(e, AppError::Db(sqlx::Error::Database(_))) {
+                    // A COMMIT the server refused ends the transaction: it was rolled back
                     self.in_tx = false;
+                } else if self.tx_rolled_back(&e).await {
+                    self.in_tx = false;
+                } else if self.manual && opens_tx(&s) && !s.starts_with("rollback") && error_number(&e) != Some(1064) {
+                    // With autocommit=0 a statement that fails (but parsed) still leaves the transaction open: the row locks it took
+                    // before a lock wait timeout, what a procedure changed before it failed
+                    self.in_tx = true;
                 }
                 return Err(e);
             }
         };
         let s = strip_comments_lead(sql);
+        let words: Vec<&str> = s.split_whitespace().take(2).collect();
         if s.starts_with("begin") || s.starts_with("start transaction") {
             self.in_tx = true;
         } else if s.starts_with("commit") || (s.starts_with("rollback") && !s.starts_with("rollback to")) {
             self.in_tx = false;
-        } else if self.manual && !s.starts_with("show") && !s.starts_with("set") && !s.starts_with("use") {
+        } else if s.starts_with("set") && s.contains("autocommit") {
+            // A typed SET autocommit: follow what the server now does (switching it on commits the open transaction)
+            if let Ok(on) = sqlx::query_scalar::<_, i64>("SELECT @@autocommit").fetch_one(&mut *self.conn).await {
+                self.manual = on == 0;
+                if on != 0 {
+                    self.in_tx = false;
+                }
+            }
+        } else if words.first() == Some(&"lock") && words.get(1).is_some_and(|w| w.starts_with("table")) {
+            self.locked = true;
+            self.in_tx = false;
+        } else if words.first() == Some(&"unlock") && words.get(1).is_some_and(|w| w.starts_with("table")) {
+            if std::mem::take(&mut self.locked) {
+                self.in_tx = false;
+            }
+        } else if commits_implicitly(sql, &s) {
+            self.in_tx = false;
+        } else if self.manual && opens_tx(&s) {
             // With autocommit=0, any statement opens a transaction, not only a change: WITH … DELETE, SELECT … FOR UPDATE (its row locks),
             // SELECT f() where f writes. Like PostgreSQL's Manual mode, it stays open until Commit / Roll back
             self.in_tx = true;
@@ -458,7 +510,8 @@ impl MySession {
             && crate::audit::stops_change(e)
         {
             // No transaction was open before: end the one the snapshot ran in (Qurry's own, or the one autocommit=0 opened in Manual,
-            // which holds nothing else since in Manual every statement but SHOW / SET / USE sets in_tx) with the row locks it took before it stopped
+            // which holds nothing else since in Manual every statement but SHOW / SET / USE sets in_tx, also when it fails)
+            // with the row locks it took before it stopped
             let gone = if !had_tx {
                 let _ = self.rollback_tx().await;
                 true
@@ -737,6 +790,18 @@ mod tests {
     use super::*;
     use crate::db::Pool;
     use crate::store::DbKind;
+
+    /// Statements MySQL commits the open transaction for (and leaves none open)
+    #[test]
+    fn implicit_commits() {
+        let c = |q: &str| commits_implicitly(q, &strip_comments_lead(q));
+        for q in ["ALTER TABLE orders ADD COLUMN c int", "-- x\ncreate index i on t (a)", "DROP TABLE t", "truncate t", "rename table a to b", "grant select on t to u", "ANALYZE TABLE t", "optimize table t", "flush privileges", "reset master", "check table t"] {
+            assert!(c(q), "{q}");
+        }
+        for q in ["create temporary table x (a int)", "DROP TEMPORARY TABLE x", "update t set a = 1", "select 1", "reset persist x", "set autocommit = 1", "lock tables t write", "checksum table t"] {
+            assert!(!c(q), "{q}");
+        }
+    }
 
     /// docker run -d --name dbtool-mysql-test -e MYSQL_ROOT_PASSWORD=dbtool -e MYSQL_DATABASE=shop -p 13306:3306 mysql:8.4
     fn cfg() -> ConnectionConfig {

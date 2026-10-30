@@ -192,3 +192,16 @@ async fn completion_popup_lists_and_inserts() {
     assert_eq!(h.console_text(), "select u.email from users u");
     assert!(console(&h).complete.is_none());
 }
+
+/// A failed Commit goes to Output too, not only to the status bar that cuts it off (a COMMIT on a lost connection says there to check the data)
+#[tokio::test]
+async fn failed_commit_is_in_output() {
+    let mut h = Harness::new().await;
+    h.console_tab();
+    h.app.tx(crate::app::Action::Commit);
+    h.settle().await;
+    // No session for this console: commit_tx fails
+    assert_eq!(h.console_output(), ["Session closed"]);
+    assert!(console(&h).show_output);
+    assert_eq!(h.app.status, "Session closed");
+}
