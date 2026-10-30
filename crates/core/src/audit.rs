@@ -837,12 +837,14 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_snapshot_matches_change() {
+        let _one = one_at_a_time().await;
         snapshot_matches_change(DbKind::Postgres, "QURRY_TEST_PG", "create table audit_hardening.qurry_snap (id int primary key, price numeric(10,2))").await;
     }
 
     #[tokio::test]
     #[ignore]
     async fn mysql_snapshot_matches_change() {
+        let _one = one_at_a_time().await;
         snapshot_matches_change(DbKind::Mysql, "QURRY_TEST_MY", "create table audit_hardening.qurry_snap (id int primary key, price decimal(10,2))").await;
     }
 
@@ -910,6 +912,12 @@ mod tests {
         undo_restores(DbKind::Mysql, "QURRY_TEST_MY", "create table qurry_undo (id int primary key, name varchar(20), price decimal(10,2), born datetime, bin varbinary(10), total decimal(10,2) as (price * 2) stored)", "qurry_undo").await;
     }
 
+    /// The real-server tests below share the audit_hardening schema / database (and drop it when they pass), so they run one at a time
+    async fn one_at_a_time() -> tokio::sync::MutexGuard<'static, ()> {
+        static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        LOCK.lock().await
+    }
+
     /// A schema (PostgreSQL) / database (MySQL) of this test's own with table `t` (id, v) holding rows (1, 1) (2, 2) (3, 3)
     async fn own_table(st: &crate::app::AppState, kind: DbKind, t: &str) {
         let q = |s: String| st.run_query("d".into(), s, None, None);
@@ -962,12 +970,14 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_cancelled_snapshot_runs_nothing() {
+        let _one = one_at_a_time().await;
         cancelled_snapshot_runs_nothing(DbKind::Postgres, "QURRY_TEST_PG").await;
     }
 
     #[tokio::test]
     #[ignore]
     async fn mysql_cancelled_snapshot_runs_nothing() {
+        let _one = one_at_a_time().await;
         cancelled_snapshot_runs_nothing(DbKind::Mysql, "QURRY_TEST_MY").await;
     }
 
@@ -976,6 +986,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn mysql_snapshot_deadlock_reports_the_lost_transaction() {
+        let _one = one_at_a_time().await;
         let Some(st) = prod_state(DbKind::Mysql, "QURRY_TEST_MY").await else { return };
         own_table(&st, DbKind::Mysql, "qurry_dead").await;
         let run = |tab: &str, sql: &str| st.run_query("d".into(), sql.into(), None, Some(tab.into()));
@@ -1007,6 +1018,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_snapshot_locks_and_failed_commit() {
+        let _one = one_at_a_time().await;
         let Some(st) = prod_state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
         own_table(&st, DbKind::Postgres, "qurry_parent").await;
         let q = |s: &str| st.run_query("d".into(), s.into(), None, None);
@@ -1040,6 +1052,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_delete_only_role_keeps_undo() {
+        let _one = one_at_a_time().await;
         let Some(st) = prod_state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
         own_table(&st, DbKind::Postgres, "qurry_del").await;
         let q = |s: &str| st.run_query("d".into(), s.into(), None, None);
@@ -1067,6 +1080,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_rls_hidden_rows_keep_no_undo() {
+        let _one = one_at_a_time().await;
         let Some(st) = prod_state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
         own_table(&st, DbKind::Postgres, "qurry_rls").await;
         let q = |s: &str| st.run_query("d".into(), s.into(), None, None);
@@ -1100,6 +1114,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_rows_joining_during_the_change_keep_no_undo() {
+        let _one = one_at_a_time().await;
         let Some(st) = prod_state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
         own_table(&st, DbKind::Postgres, "qurry_join").await;
         let run = |tab: &str, sql: &str| st.run_query("d".into(), sql.into(), None, Some(tab.into()));
@@ -1125,6 +1140,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_log_failure_after_the_run_is_a_warning() {
+        let _one = one_at_a_time().await;
         use std::os::unix::fs::PermissionsExt;
         let Some(st) = prod_state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
         own_table(&st, DbKind::Postgres, "qurry_warn").await;
