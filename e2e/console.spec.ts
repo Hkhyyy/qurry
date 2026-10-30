@@ -1,4 +1,4 @@
-import { editor, expect, openApp, openConsole, resultTabs, runAll, status, suggestions, test, typeSql } from "./app";
+import { dialog, editor, expect, openApp, openConsole, resultTabs, runAll, status, suggestions, test, typeSql } from "./app";
 
 test.beforeEach(async ({ page }) => {
   await openApp(page);
@@ -57,4 +57,28 @@ test("Explain Plan → plan tab with the node tree", async ({ page }) => {
   await expect(plan).toContainText("2 nodes worth a look");
   for (const op of ["Gather Merge", "Sort", "Seq Scan"]) await expect(plan).toContainText(op);
   await expect(editor(page)).toBeVisible();
+});
+
+test("a failed Commit says so in a notice, the status bar and Output", async ({ page }) => {
+  const msg = "connection lost while committing, so it is unknown whether the changes were committed. Check the data before you run them again";
+  await page.locator(".work-layer:visible .console-toolbar").getByText("Tx: Auto").click();
+  await page.getByRole("menuitem", { name: /Manual/ }).click();
+  await editor(page).click();
+  await typeSql(page, "update users set user_name = 'a' where id = 1");
+  await runAll(page);
+  const commit = page.locator(".work-layer:visible .console-toolbar").getByRole("button", { name: "Commit" });
+  await expect(commit).toBeEnabled();
+  // Look at something else first: the failure brings Output back
+  await typeSql(page, "select 1");
+  await runAll(page);
+  await expect(resultTabs(page)).toHaveText(["Output", /^Result/]);
+  await expect(resultTabs(page).nth(1)).toHaveAttribute("aria-selected", "true");
+  await page.evaluate((m) => ((globalThis as any).__mockCommitError = m), msg);
+  await commit.click();
+  await expect(dialog(page)).toContainText("Commit failed");
+  await expect(dialog(page)).toContainText(msg);
+  await dialog(page).getByRole("button", { name: "OK" }).click();
+  await expect(status(page)).toContainText("unknown whether the changes were committed");
+  await expect(resultTabs(page).first()).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".work-layer:visible .output-log")).toContainText(msg);
 });

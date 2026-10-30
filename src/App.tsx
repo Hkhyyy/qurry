@@ -1406,12 +1406,24 @@ export default function App() {
 
   /** Read the console's transaction state into the tab (after an error the Commit / Roll back buttons may be stale) */
   const syncTx = (tabId: string) => api.txState(tabId).then((inTx) => updTab(tabId, (t) => ({ ...t, inTx })), () => {});
+  /** Commit / Roll back failed: in Output (the status bar cuts it off) and the status bar; a failed COMMIT also in a notice, since it
+   * may say the changes were not saved, or that it is unknown whether they were and the data needs a check */
+  const txFailed = (tab: Tab, e: unknown, commit: boolean) => {
+    log(tab.id, "error", String(e));
+    setStatus(String(e));
+    patch(tab.id, { activeResult: "output" });
+    syncTx(tab.id);
+    if (commit) void notice(String(e), "Commit failed");
+  };
   const setTxMode = async (tab: Tab, manual: boolean) => {
+    let commit = false;
     try {
       // Ask first if there are uncommitted changes (it used to commit silently)
       if (!manual && tab.inTx) {
         if (!(await ask("This console has uncommitted changes.", { title: "Switch to Auto", okLabel: "Commit and Switch", cancelLabel: "Stay in Manual" }))) return;
+        commit = true;
         const warning = await api.commitTx(tab.id);
+        commit = false;
         log(tab.id, "info", "Transaction committed");
         if (warning) log(tab.id, "warn", `Warning: ${warning}`);
       }
@@ -1419,10 +1431,7 @@ export default function App() {
       updTab(tab.id, (t) => ({ ...t, txManual: manual, inTx: manual ? t.inTx : false }));
       log(tab.id, "info", `Transaction mode: ${manual ? "Manual" : "Auto"}`);
     } catch (e) {
-      // In the console Output too (a COMMIT on a lost connection says there to check the data)
-      log(tab.id, "error", String(e));
-      setStatus(String(e));
-      syncTx(tab.id);
+      txFailed(tab, e, commit);
     }
   };
   const txEnd = async (tab: Tab, what: "commit" | "rollback") => {
@@ -1435,8 +1444,7 @@ export default function App() {
         setStatus(`Warning: ${warning}`);
       }
     } catch (e) {
-      log(tab.id, "error", String(e));
-      syncTx(tab.id);
+      txFailed(tab, e, what === "commit");
     }
   };
 

@@ -130,7 +130,12 @@ const handlers: Record<string, (a: any) => unknown> = {
         ? { ...result, columns: [], rows: [], rowsAffected: 3, truncated: false, hasResultSet: false, inTransaction: (globalThis as any).__mockManual === true }
         : { ...result, inTransaction: (globalThis as any).__mockManual === true },
   set_tx_mode: (a: any) => { (globalThis as any).__mockManual = a.manual; return null; },
-  commit_tx: () => null,
+  // e2e sets __mockCommitError for a COMMIT that fails (e.g. the connection lost while committing)
+  commit_tx: () => {
+    const e = (globalThis as any).__mockCommitError;
+    if (e) throw e;
+    return null;
+  },
   rollback_tx: () => null,
   rag_indexes: () => (globalThis as any).__rag ?? ((globalThis as any).__rag = [{ id: "r1", name: "tickets search", source: "dev", schema: "public", table: "users", idColumn: "id", textColumns: ["user_name"], provider: "ollama", model: "nomic-embed-text", baseUrl: "", dest: "dev", collection: "users_embeddings", dim: 768, rows: 3000, builtAt: "2026-10-27 14:50" }]),
   rag_save: (a: any) => { const x = { ...a.index, id: a.index.id || "r" + Date.now() }; const l = (globalThis as any).__rag ?? []; (globalThis as any).__rag = [...l.filter((y: any) => y.id !== x.id), x]; return x; },
