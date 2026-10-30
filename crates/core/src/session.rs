@@ -470,8 +470,8 @@ pub async fn execute_batch(pool: &PgPool, statements: &[String], exact_one: bool
 }
 
 /// prepared = each statement as a prepared statement (extended protocol): the server refuses more than one statement per item (MCP).
-/// snaps = undo snapshot to take right before each statement, in the transaction (audit::UndoPlan) → (rows changed, each snapshot's result)
-pub async fn execute_batch_with(pool: &PgPool, statements: &[String], exact_one: bool, prepared: bool, snaps: &[Option<&str>]) -> AppResult<(u64, Vec<Option<AppResult<QueryResult>>>)> {
+/// snaps = undo snapshot to take right before each statement, in the transaction (audit::UndoPlan) → (rows changed, each snapshot's result with the rows its statement changed)
+pub async fn execute_batch_with(pool: &PgPool, statements: &[String], exact_one: bool, prepared: bool, snaps: &[Option<&str>]) -> AppResult<(u64, Vec<Option<(AppResult<QueryResult>, u64)>>)> {
     let mut tx = pool.begin().await?;
     let mut affected = 0;
     let mut shots = Vec::new();
@@ -486,10 +486,10 @@ pub async fn execute_batch_with(pool: &PgPool, statements: &[String], exact_one:
         {
             return Err(crate::audit::stopped(e, false));
         }
-        shots.push(shot);
         let r = if prepared { sqlx::query(st).execute(&mut *tx).await } else { tx.execute(st.as_str()).await };
         let n = r.map_err(|e| AppError::Msg(format!("{e}\n→ {st}")))?.rows_affected();
         check_exact_one(st, n, exact_one)?;
+        shots.push(shot.map(|s| (s, n)));
         affected += n;
     }
     tx.commit().await?;

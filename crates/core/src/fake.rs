@@ -615,8 +615,9 @@ impl AppState {
         Ok(FakePreview { plan, result, warnings: p.warnings })
     }
 
-    /// Generate rows rows and insert them in one transaction. Returns rows inserted (fewer if PK · UNIQUE can't be kept unique)
-    pub async fn fake_fill(&self, id: String, schema: String, table: String, rows: usize) -> AppResult<u64> {
+    /// Generate rows rows and insert them in one transaction. Returns rows inserted (fewer if PK · UNIQUE can't be kept unique),
+    /// with a warning when they were inserted but the Production log couldn't record it
+    pub async fn fake_fill(&self, id: String, schema: String, table: String, rows: usize) -> AppResult<crate::app::BatchResult> {
         if rows == 0 || rows > MAX_ROWS {
             return Err(AppError::Msg(format!("Choose 1 to {MAX_ROWS} rows")));
         }
@@ -625,8 +626,8 @@ impl AppState {
         if made.is_empty() {
             return Err(AppError::Msg("Couldn't make rows that don't clash with the keys".into()));
         }
-        self.execute_batch(id, insert_sql(&p.rel, &p.shape, &made, p.kind), false).await?;
-        Ok(made.len() as u64)
+        let r = self.execute_batch(id, insert_sql(&p.rel, &p.shape, &made, p.kind), false).await?;
+        Ok(crate::app::BatchResult { rows: made.len() as u64, warning: r.warning })
     }
 }
 
@@ -744,9 +745,9 @@ mod tests {
         // With an empty parent, a NOT NULL FK can't be filled
         let e = st.fake_fill("d".into(), schema.into(), "qf_items".into(), 10).await.unwrap_err().to_string();
         assert!(e.contains("fill it first"), "{e}");
-        assert_eq!(st.fake_fill("d".into(), schema.into(), "qf_users".into(), 300).await.unwrap(), 300);
-        assert_eq!(st.fake_fill("d".into(), schema.into(), "qf_users".into(), 300).await.unwrap(), 300, "second fill must not clash with existing keys");
-        assert_eq!(st.fake_fill("d".into(), schema.into(), "qf_items".into(), 1000).await.unwrap(), 1000);
+        assert_eq!(st.fake_fill("d".into(), schema.into(), "qf_users".into(), 300).await.unwrap().rows, 300);
+        assert_eq!(st.fake_fill("d".into(), schema.into(), "qf_users".into(), 300).await.unwrap().rows, 300, "second fill must not clash with existing keys");
+        assert_eq!(st.fake_fill("d".into(), schema.into(), "qf_items".into(), 1000).await.unwrap().rows, 1000);
         let pv = st.fake_preview("d".into(), schema.into(), "qf_items".into(), 5).await.unwrap();
         assert_eq!(pv.result.rows.len(), 5);
         assert!(pv.plan.iter().any(|c| c.name == "user_id" && c.how.contains("qf_users")), "{:?}", pv.plan);

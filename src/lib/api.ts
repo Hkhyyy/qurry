@@ -218,11 +218,11 @@ export interface Snippet { id: string; name: string; sql: string; connId?: strin
 export interface FakePreview { plan: { name: string; dataType: string; how: string }[]; result: QueryResult; warnings: string[] }
 export const fake = {
   preview: (id: string, schema: string, table: string, rows = 8) => invoke<FakePreview>("fake_preview", { id, schema, table, rows }),
-  fill: (id: string, schema: string, table: string, rows: number) => invoke<number>("fake_fill", { id, schema, table, rows }),
+  fill: (id: string, schema: string, table: string, rows: number) => invoke<BatchResult>("fake_fill", { id, schema, table, rows }),
 };
 /** Copy a slice of production data: start rows + rows linked by FK → another Data Source (personal data is masked) */
 export interface SubsetSpec { schema: string; table: string; filter: string; depth: number; mask: boolean }
-export interface SubsetPlan { tables: { schema: string; table: string; rows: number; masked: { column: string; mask: string }[]; reason: string }[]; total: number }
+export interface SubsetPlan { tables: { schema: string; table: string; rows: number; masked: { column: string; mask: string }[]; reason: string }[]; total: number; warning?: string }
 export const subset = {
   preview: (source: string, spec: SubsetSpec) => invoke<SubsetPlan>("subset_preview", { source, spec }),
   copy: (source: string, spec: SubsetSpec, target: string) => invoke<SubsetPlan>("subset_copy", { source, spec, target }),
@@ -242,7 +242,8 @@ export const ddl = {
   table: (id: string, before: TableDef | null, after: TableDef) => invoke<string[]>("table_ddl", { id, before, after }),
   newObject: (id: string, object: NewObject) => invoke<string[]>("new_object_ddl", { id, object }),
   rename: (id: string, what: string, schema: string, old: string, newName: string) => invoke<string>("rename_ddl", { id, what, schema, old, new: newName }),
-  run: (id: string, statements: string[]) => invoke<void>("run_ddl", { id, statements }),
+  /** A warning when it ran but the Production log couldn't record it */
+  run: (id: string, statements: string[]) => invoke<string | null>("run_ddl", { id, statements }),
 };
 /** Production log: changes run on Production Data Sources (shared with the TUI) */
 export interface AuditEntry { id: string; ts: number; connId: string; connName: string; database?: string; sql: string; rows?: number; error?: string; inTx: boolean; undo?: string; note?: string; /** Logged before it ran, no result recorded: still running, or Qurry stopped (outcome unknown) */ started?: boolean }

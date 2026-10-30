@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ask, askText } from "./lib/dialogs";
+import { ask, askText, notice } from "./lib/dialogs";
 import { listen } from "@tauri-apps/api/event";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { analyzePlan, api, auditLog, backup, ConnectionView, ddl, previewImpact, dialectOf, meta, VECTOR_KINDS, QueryResult, redisDb, removedDespite, secretKey, setUpdateCheckEnabled, targetId, UpdateInfo, updateCheckEnabled } from "./lib/api";
@@ -1482,6 +1482,8 @@ export default function App() {
     // A warning means it was saved (only the Production log couldn't record it): reload as on success, so it isn't submitted twice
     setStatus(`Submitted ${statements.length} statements, ${r.rows} rows affected${r.warning ? ` · Warning: ${r.warning}` : ""}`);
     if (tab.lastSql) run(tab, tab.lastSql);
+    // The reload replaces the status line right away, and a table tab has no Output: tell them in a dialog (as the TUI does)
+    if (r.warning) void notice(r.warning, "Submitted, with a warning");
   };
 
   // ───────── Closing tabs / splits ─────────

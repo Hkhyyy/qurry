@@ -40,6 +40,8 @@ pub struct Console {
 
 /// Max lines kept in the console Output log (same as the GUI)
 const OUTPUT_MAX: usize = 1000;
+/// Output line prefix of a warning (drawn in the warn color, like the GUI): it ran, so not an error to run again
+pub const WARNING: &str = "Warning: ";
 
 impl Console {
     /// One line in the Output log (old lines are dropped)
@@ -1995,7 +1997,7 @@ impl App {
                             // It ran, but its result couldn't be logged: not a failure (don't run it again)
                             if let Some(w) = warning {
                                 status = format!("Warning: {}", w.lines().next().unwrap_or(""));
-                                c.log(true, w);
+                                c.log(false, format!("{WARNING}{w}"));
                             }
                         }
                         Err(e) => {
@@ -2127,7 +2129,7 @@ impl App {
                                 c.in_tx = false;
                                 c.log(false, done.into());
                                 if let Some(w) = &warning {
-                                    c.log(true, w.clone());
+                                    c.log(false, format!("{WARNING}{w}"));
                                 }
                             }
                             a.status = match warning {
@@ -2232,6 +2234,13 @@ impl App {
             }
             Err(e) => a.popup = Some(Popup::Message { title: "Submit failed".into(), text: e }),
         });
+    }
+
+    /// It ran, but the Production log couldn't record it: a popup, not a failure (running it again would repeat it)
+    pub(crate) fn warn_ran(&mut self, warning: Option<String>) {
+        if let Some(w) = warning {
+            self.popup = Some(Popup::Message { title: "Ran, with a warning".into(), text: w });
+        }
     }
 
     // ───────── Connections ─────────

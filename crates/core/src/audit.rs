@@ -178,7 +178,10 @@ impl Audit {
                 out.push_str(&serde_json::to_string(i)?);
                 out.push('\n');
             }
-            crate::secrets::write_private(&self.file(), out.as_bytes())?;
+            // The entries are on disk already: a failed trim (e.g. a full disk) only leaves the file longer until the next append
+            if let Err(e) = crate::secrets::write_private(&self.file(), out.as_bytes()) {
+                crate::log!("[qurry] couldn't trim {}: {e}", self.file().display());
+            }
         }
         Ok(())
     }
@@ -319,7 +322,8 @@ pub(crate) struct Col {
 }
 
 /// How to keep a statement's undo: `snapshot` is a SELECT … FOR UPDATE of the rows it changes, run right before it in the same transaction
-/// (Session::run_with_snapshot · execute_batch_with), so nobody can change them in between; `undo` turns its result into SQL that reverts them
+/// (Session::run_with_snapshot · execute_batch_with), so nobody can change the rows it saved in between; `undo` turns its result into SQL that reverts them
+/// (rows that start to match only after the snapshot aren't locked: `undo` keeps no undo when the change hits more rows than it saved)
 pub(crate) struct UndoPlan {
     pub snapshot: String,
     d: SimpleDml,
@@ -344,30 +348,36 @@ pub(crate) async fn plan(pool: &Pool, sql: &str, kind: DbKind) -> Result<UndoPla
 }
 
 impl UndoPlan {
-    /// Undo SQL from the snapshot's result
-    pub(crate) fn undo(&self, snap: AppResult<QueryResult>) -> Result<String, String> {
+    /// Undo SQL from the snapshot's result. changed = rows the statement changed: more than the snapshot saved (rows that matched
+    /// only once it ran, row-level security hiding locked rows, triggers) means the undo would miss rows, so none is kept
+    pub(crate) fn undo(&self, snap: AppResult<QueryResult>, changed: u64) -> Result<String, String> {
         let (d, cols) = (&self.d, &self.cols);
         let r = snap.map_err(|e| format!("Couldn't save the rows before the change: {e}"))?;
         let head = format!(
             "-- Undo for: {}\n-- Saved in its transaction right before it ran. Rows changed again since then are overwritten.\n",
             self.sql.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect::<String>()
         );
+        let saved = match self.kind {
+            DbKind::Postgres => r.rows.first().and_then(|x| x.get(1)).and_then(Value::as_i64).unwrap_or(0) as usize,
+            _ => r.rows.len(),
+        };
+        if saved > UNDO_MAX_ROWS {
+            return Err(format!("More than {UNDO_MAX_ROWS} rows change: no undo kept"));
+        }
+        if changed > saved as u64 {
+            return Err(format!(
+                "It changed {changed} rows but only {saved} were saved right before it ran (rows that matched only once it ran, row-level security or triggers): no undo kept"
+            ));
+        }
         let body = match self.kind {
             DbKind::Postgres => {
                 let json = r.rows.first().and_then(|x| x.first()).and_then(|v| v.as_str()).unwrap_or("[]").to_string();
-                let n = r.rows.first().and_then(|x| x.get(1)).and_then(Value::as_i64).unwrap_or(0) as usize;
-                if n > UNDO_MAX_ROWS {
-                    return Err(format!("More than {UNDO_MAX_ROWS} rows change: no undo kept"));
-                }
                 if json.len() > UNDO_MAX_BYTES {
                     return Err("The rows are too large to keep an undo".into());
                 }
                 pg_undo(d, cols, &json)?
             }
             _ => {
-                if r.rows.len() > UNDO_MAX_ROWS {
-                    return Err(format!("More than {UNDO_MAX_ROWS} rows change: no undo kept"));
-                }
                 if r.rows.iter().flatten().map(|v| v.as_str().map_or(4, str::len)).sum::<usize>() > UNDO_MAX_BYTES {
                     return Err("The rows are too large to keep an undo".into());
                 }
@@ -606,6 +616,51 @@ mod tests {
         assert!(pg_unlocked(&del).unwrap().ends_with("WHERE id = 1 LIMIT 1001) qurry_x"));
         assert_eq!(pg_unlocked("select * from t for update"), None);
         assert!(snapshot_sql(&crate::guard::simple_dml("update users set name = 'x'", DbKind::Mysql).unwrap(), &cols, DbKind::Mysql).ends_with(" FOR UPDATE"));
+    }
+
+    /// A change that hits more rows than the snapshot saved keeps no undo (it would miss rows); as many or fewer is fine
+    #[test]
+    fn undo_needs_every_changed_row() {
+        let qr = |rows: Vec<Vec<Value>>| -> AppResult<QueryResult> { Ok(QueryResult { columns: vec![], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None }) };
+        let cols = vec![col("id", true), col("v", false)];
+        let plan = |sql: &str, kind: DbKind| {
+            let d = crate::guard::simple_dml(sql, kind).unwrap();
+            UndoPlan { snapshot: snapshot_sql(&d, &cols, kind), d, cols: cols.clone(), kind, sql: sql.into() }
+        };
+        let pg = plan("delete from t where id = 1", DbKind::Postgres);
+        let one = || qr(vec![vec![Value::from(r#"[{"id":1,"v":1}]"#), Value::from(1)]]);
+        assert!(pg.undo(one(), 1).is_ok());
+        assert!(pg.undo(one(), 0).is_ok());
+        let e = pg.undo(one(), 2).unwrap_err();
+        assert!(e.contains("changed 2 rows but only 1 were saved") && e.contains("row-level security"), "{e}");
+        // Row-level security hid the row from the locking read: nothing saved, one row deleted
+        assert!(pg.undo(qr(vec![vec![Value::from("[]"), Value::from(0)]]), 1).is_err());
+        let my = plan("update t set v = 2 where v = 1", DbKind::Mysql);
+        let rows = || qr(vec![vec![Value::from("1"), Value::from("1")]]);
+        assert!(my.undo(rows(), 1).is_ok());
+        assert!(my.undo(rows(), 3).unwrap_err().contains("changed 3 rows but only 1"));
+    }
+
+    /// Once the entry is on disk, a failed trim of a long log is not a failed write (the change isn't refused); the next append trims it
+    #[cfg(unix)]
+    #[test]
+    fn trim_failure_is_not_a_write_failure() {
+        let d = std::env::temp_dir().join(format!("qurry-audit-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&d).unwrap();
+        let a = Audit::new(&d);
+        let line = serde_json::to_string(&entry("c1", "[PROD] kr", "delete from t where id = 1")).unwrap();
+        std::fs::write(a.file(), format!("{line}\n").repeat(MAX_ENTRIES + MAX_ENTRIES / 10 + 5)).unwrap();
+        let lines = || std::fs::read_to_string(a.file()).unwrap().lines().count();
+        // The trim's temporary file can't be created
+        let tmp = a.file().with_extension(format!("tmp-{}", std::process::id()));
+        std::fs::create_dir(&tmp).unwrap();
+        let before = lines();
+        assert!(a.before("c1", "[PROD] kr", DbKind::Postgres, None, "delete from t where id = 2").unwrap().is_some());
+        assert_eq!(lines(), before + 1);
+        std::fs::remove_dir(&tmp).unwrap();
+        a.before("c1", "[PROD] kr", DbKind::Postgres, None, "delete from t where id = 3").unwrap();
+        assert!(lines() <= MAX_ENTRIES, "{}", lines());
+        assert_eq!(a.list(None, "", 1)[0].sql, "delete from t where id = 3");
     }
 
     #[test]
@@ -938,6 +993,8 @@ mod tests {
         let e = m.unwrap_err().to_string();
         assert!(e.starts_with("Not run: ") && e.contains("changes made in it before are lost"), "{e}");
         assert!(!st.tx_state("m".into()).await);
+        // The log says the first change was rolled back (a later COMMIT doesn't read as committing it)
+        assert_eq!(st.audit_log(None, "by the server".into(), 5).len(), 1);
         st.commit_tx("o".into()).await.unwrap();
         // Rolling back now finds nothing of m's: its first change is gone and its second never ran
         st.rollback_tx("m".into()).await.unwrap();
@@ -969,6 +1026,13 @@ mod tests {
         assert!(!r.in_transaction);
         assert!(!st.audit_log(None, String::new(), 1)[0].in_tx);
         assert_eq!(values(&st, "qurry_parent").await, "[[5],[2],[3]]");
+        // Manual: a failed COMMIT is logged, then the rollback the server did; closing the console logs nothing more
+        st.set_tx_mode("d".into(), "m2".into(), true).await.unwrap();
+        st.run_query("d".into(), "delete from audit_hardening.qurry_parent where id = 1".into(), None, Some("m2".into())).await.unwrap();
+        assert!(st.commit_tx("m2".into()).await.unwrap_err().to_string().contains("foreign key"));
+        st.close_session("m2".into()).await.unwrap();
+        let log: Vec<(String, bool)> = st.audit_log(None, String::new(), 3).into_iter().map(|e| (e.sql, e.error.is_some())).collect();
+        assert_eq!(log[..2], [("ROLLBACK (by the server)".to_string(), false), ("COMMIT".to_string(), true)], "{log:?}");
         drop_own(&st, DbKind::Postgres).await;
     }
 
@@ -998,6 +1062,64 @@ mod tests {
         q("drop role audit_hardening_del").await.unwrap();
     }
 
+    /// PostgreSQL row-level security with SELECT and DELETE policies but no UPDATE policy: the locking snapshot sees no rows
+    /// (FOR UPDATE applies the UPDATE policies), the DELETE still deletes one. No undo is kept, with the reason
+    #[tokio::test]
+    #[ignore]
+    async fn pg_rls_hidden_rows_keep_no_undo() {
+        let Some(st) = prod_state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
+        own_table(&st, DbKind::Postgres, "qurry_rls").await;
+        let q = |s: &str| st.run_query("d".into(), s.into(), None, None);
+        for s in [
+            "drop role if exists audit_hardening_rls",
+            "create role audit_hardening_rls login",
+            "grant usage on schema audit_hardening to audit_hardening_rls",
+            "grant select, update, delete on audit_hardening.qurry_rls to audit_hardening_rls",
+            "alter table audit_hardening.qurry_rls enable row level security",
+            "create policy s on audit_hardening.qurry_rls for select using (true)",
+            "create policy d on audit_hardening.qurry_rls for delete using (true)",
+        ] {
+            q(s).await.unwrap();
+        }
+        let e = std::env::var("QURRY_TEST_PG").unwrap();
+        let p: Vec<&str> = e.split(':').collect();
+        let rls = prod_state_at(DbKind::Postgres, &format!("{}:{}:audit_hardening_rls:{}", p[0], p[1], p[3]), None).await;
+        let r = rls.run_query("d".into(), "delete from audit_hardening.qurry_rls where id = 1".into(), None, Some("t".into())).await.unwrap();
+        assert_eq!(r.rows_affected, 1);
+        let entry = rls.audit_log(None, String::new(), 1).remove(0);
+        assert!(entry.undo.is_none(), "{entry:?}");
+        assert!(entry.note.as_deref().is_some_and(|n| n.contains("changed 1 rows but only 0 were saved")), "{entry:?}");
+        assert_eq!(values(&st, "qurry_rls").await, "[[2],[3]]");
+        rls.disconnect("d".into()).await.unwrap();
+        drop_own(&st, DbKind::Postgres).await;
+        q("drop role audit_hardening_rls").await.unwrap();
+    }
+
+    /// PostgreSQL READ COMMITTED: a row that starts to match while the snapshot waits for a lock is changed but not saved
+    /// (the change takes a newer snapshot). No undo is kept, instead of one that misses that row
+    #[tokio::test]
+    #[ignore]
+    async fn pg_rows_joining_during_the_change_keep_no_undo() {
+        let Some(st) = prod_state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
+        own_table(&st, DbKind::Postgres, "qurry_join").await;
+        let run = |tab: &str, sql: &str| st.run_query("d".into(), sql.into(), None, Some(tab.into()));
+        // Another session holds row 2 and inserts row 4, both matching v < 5, uncommitted
+        st.set_tx_mode("d".into(), "other".into(), true).await.unwrap();
+        run("other", "update audit_hardening.qurry_join set v = 2 where id = 2").await.unwrap();
+        run("other", "insert into audit_hardening.qurry_join values (4, 4)").await.unwrap();
+        let other = async {
+            tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+            st.commit_tx("other".into()).await
+        };
+        let (r, c) = tokio::join!(run("c", "delete from audit_hardening.qurry_join where v < 5"), other);
+        c.unwrap();
+        assert_eq!(r.unwrap().rows_affected, 4);
+        let entry = st.audit_log(None, "where v < 5".into(), 1).remove(0);
+        assert!(entry.undo.is_none(), "{entry:?}");
+        assert!(entry.note.as_deref().is_some_and(|n| n.contains("changed 4 rows but only 3 were saved")), "{entry:?}");
+        drop_own(&st, DbKind::Postgres).await;
+    }
+
     /// A change that ran but whose result couldn't be logged comes back as a result with a warning (not an error to retry)
     #[cfg(unix)]
     #[tokio::test]
@@ -1018,8 +1140,12 @@ mod tests {
         let (r, _) = tokio::join!(st.execute_batch("d".into(), vec![slow.into()], false), lock());
         assert!(r.unwrap().warning.is_some_and(|w| w.starts_with("It ran, but")));
         std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o600)).unwrap();
-        // Both stay in the log as "no result recorded"
-        assert!(st.audit_log(None, "pg_sleep".into(), 2).iter().all(|e| e.started));
+        // The DDL editor passes it on too
+        let (r, _) = tokio::join!(st.run_ddl("d".into(), vec![slow.into()]), lock());
+        assert!(r.unwrap().is_some_and(|w| w.starts_with("It ran, but")));
+        std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o600)).unwrap();
+        // All stay in the log as "no result recorded"
+        assert!(st.audit_log(None, "pg_sleep".into(), 3).iter().all(|e| e.started));
         drop_own(&st, DbKind::Postgres).await;
     }
 }

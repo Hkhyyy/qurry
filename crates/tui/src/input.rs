@@ -1938,7 +1938,7 @@ mod tests {
         let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no log") };
         assert_eq!(p.items[0].label, "update t set a = 1 where id = 2");
         assert!(p.items[0].hint.starts_with("↶ undo · 2 row(s)") && p.items[0].hint.ends_with("PROD"), "{}", p.items[0].hint);
-        assert!(p.items[2].hint.starts_with("no result"), "{}", p.items[2].hint);
+        assert!(p.items[2].hint.starts_with("no result recorded"), "{}", p.items[2].hint);
         h.key("Enter");
         assert_eq!(h.app.tabs.len(), tabs + 1);
         assert_eq!(h.console_text(), "UPDATE t SET a = 0 WHERE id = 2;");

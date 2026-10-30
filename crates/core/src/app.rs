@@ -728,7 +728,10 @@ impl AppState {
         let undo = watch && crate::audit::is_change(&sql, cfg.kind);
         let (r, undo, in_tx) = self.run_with_undo(&id, cfg.kind, &sql, limit, tab, undo).await;
         let logged = match watch {
-            true => self.audit.after(started, &id, &cfg.name, cfg.kind, tab, &sql, &r, undo),
+            true => {
+                let a = self.audit.after(started, &id, &cfg.name, cfg.kind, tab, &sql, &r, undo);
+                a.and(self.audit_lost_tx(&id, &cfg.name, tab).await)
+            }
             false => Ok(()),
         };
         match r {
@@ -779,7 +782,8 @@ impl AppState {
         let (r, undo) = match plan {
             Some(Ok(p)) => {
                 let (snap, r) = s.run_with_snapshot(&p.snapshot, sql, limit).await;
-                (r, Some(p.undo(snap)))
+                let changed = r.as_ref().map_or(0, |q| q.rows_affected);
+                (r, Some(p.undo(snap, changed)))
             }
             other => (s.run(sql, limit).await, other.and_then(|p| p.err()).map(Err)),
         };
@@ -799,6 +803,14 @@ impl AppState {
         let conn = self.sessions.read().await.get(tab_id).map(|e| e.conn_id.clone());
         match conn.map(|c| (self.source(&c), c)) {
             Some((Ok(cfg), c)) => self.audit.tx_closed(&c, &cfg.name, tab_id, word),
+            _ => Ok(()),
+        }
+    }
+
+    /// The console's transaction with logged changes ended without a COMMIT (deadlock, failed COMMIT, lost connection): log that the server rolled it back
+    async fn audit_lost_tx(&self, id: &str, name: &str, tab: Option<&str>) -> AppResult<()> {
+        match tab {
+            Some(t) if !self.tx_state(t.into()).await => self.audit.tx_closed(id, name, t, "ROLLBACK (by the server)"),
             _ => Ok(()),
         }
     }
@@ -895,7 +907,10 @@ impl AppState {
         };
         let r = sess.lock().await.commit().await.map(|_| db::query_result(vec![], vec![], 0, false, std::time::Instant::now(), false));
         let logged = match &cfg {
-            Some(c) => self.audit.after(started, &conn, &c.name, c.kind, Some(&tab_id), "COMMIT", &r, None),
+            Some(c) => {
+                let a = self.audit.after(started, &conn, &c.name, c.kind, Some(&tab_id), "COMMIT", &r, None);
+                a.and(self.audit_lost_tx(&conn, &c.name, Some(&tab_id)).await)
+            }
             None => Ok(()),
         };
         r.map(|_| logged.err().map(|e| e.to_string()))
@@ -1003,7 +1018,7 @@ impl AppState {
             .into_iter()
             .zip(shots)
             .map(|(p, shot)| match (p, shot) {
-                (Some(Ok(p)), Some(shot)) => Some(p.undo(shot)),
+                (Some(Ok(p)), Some((shot, changed))) => Some(p.undo(shot, changed)),
                 (p, _) => p.and_then(|p| p.err()).map(Err),
             })
             .collect();

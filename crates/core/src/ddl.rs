@@ -591,23 +591,29 @@ impl AppState {
     }
 
     /// Run the generated DDL: PG in one transaction (nothing changes on failure). CREATE / DROP DATABASE run one by one outside a transaction.
-    /// MySQL applies DDL immediately, so one by one (on failure, report that earlier ones were already applied)
-    pub async fn run_ddl(&self, id: String, statements: Vec<String>) -> AppResult<()> {
+    /// MySQL applies DDL immediately, so one by one (on failure, report that earlier ones were already applied).
+    /// → a warning when it ran but the Production log couldn't record it (don't run it again)
+    pub async fn run_ddl(&self, id: String, statements: Vec<String>) -> AppResult<Option<String>> {
         let kind = self.kind_of(&id)?;
         let outside = |s: &str| {
             let l = s.trim_start().to_uppercase();
             l.starts_with("CREATE DATABASE") || l.starts_with("ALTER DATABASE") || l.starts_with("DROP DATABASE")
         };
         if kind == DbKind::Postgres && !statements.iter().any(|s| outside(s)) {
-            self.execute_batch(id, statements, false).await?;
-            return Ok(());
+            return Ok(self.execute_batch(id, statements, false).await?.warning);
         }
+        let mut warning = None;
         for (i, s) in statements.iter().enumerate() {
-            if let Err(e) = self.run_query(id.clone(), s.clone(), Some(1), None).await {
-                return Err(if i > 0 { AppError::Msg(format!("{e}\n(The first {i} statement(s) were already applied)")) } else { e });
+            match self.run_query(id.clone(), s.clone(), Some(1), None).await {
+                Ok(q) => warning = warning.or(q.warning),
+                Err(e) if i > 0 => {
+                    let w = warning.map(|w| format!("\nWarning: {w}")).unwrap_or_default();
+                    return Err(AppError::Msg(format!("{e}\n(The first {i} statement(s) were already applied){w}")));
+                }
+                Err(e) => return Err(e),
             }
         }
-        Ok(())
+        Ok(warning)
     }
 }
 

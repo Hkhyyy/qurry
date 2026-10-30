@@ -432,7 +432,7 @@ pub async fn fake_preview(state: State<'_, AppState>, id: String, schema: String
 
 /// Insert test data in one transaction. Number of rows inserted
 #[tauri::command]
-pub async fn fake_fill(state: State<'_, AppState>, id: String, schema: String, table: String, rows: usize) -> AppResult<u64> {
+pub async fn fake_fill(state: State<'_, AppState>, id: String, schema: String, table: String, rows: usize) -> AppResult<BatchResult> {
     state.fake_fill(id, schema, table, rows).await
 }
 
@@ -474,7 +474,7 @@ pub fn rename_ddl(state: State<'_, AppState>, id: String, what: String, schema: 
 
 /// Run the generated DDL (PG: one transaction)
 #[tauri::command]
-pub async fn run_ddl(state: State<'_, AppState>, id: String, statements: Vec<String>) -> AppResult<()> {
+pub async fn run_ddl(state: State<'_, AppState>, id: String, statements: Vec<String>) -> AppResult<Option<String>> {
     state.run_ddl(id, statements).await
 }
 

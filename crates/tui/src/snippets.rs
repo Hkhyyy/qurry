@@ -87,7 +87,7 @@ impl App {
             .map(|e| {
                 let status = if e.started {
                     // Logged before it ran, no result: still running, or Qurry stopped — the outcome is unknown
-                    "no result".to_string()
+                    "no result recorded".to_string()
                 } else if e.error.is_some() {
                     "failed".to_string()
                 } else if let Some(n) = e.rows {

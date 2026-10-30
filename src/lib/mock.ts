@@ -276,7 +276,7 @@ const handlers: Record<string, (a: any) => unknown> = {
     ],
   }),
   subset_copy: () => new Promise((ok) => setTimeout(() => ok({ total: 9, tables: [] }), 800)),
-  fake_fill: (a: any) => new Promise((ok) => setTimeout(() => ok(a.rows), 600)),
+  fake_fill: (a: any) => new Promise((ok) => setTimeout(() => ok({ rows: a.rows }), 600)),
   audit_log: () => [
     { id: "a4", ts: Date.now() - 5000, connId: "prod", connName: "[PROD] shop_app", sql: "update orders set status = 'refunded' where id = 7", inTx: false, started: true,
       note: "Running, or stopped before its result was recorded (Qurry quit, or couldn't write the log after it ran)" },

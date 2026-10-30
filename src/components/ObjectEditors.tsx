@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ColumnDef, ConnectionView, ddl, ForeignKeyDef, IndexDef, NewObject, TableDef } from "../lib/api";
-import { ask } from "../lib/dialogs";
+import { ask, notice } from "../lib/dialogs";
 import { Button, Checkbox, CodeBlock, Field, Hint, IconButton, Modal, Notice, SectionTitle, Select, Table, Tabs, Td, Text, TextArea, TextInput, Th } from "../ui";
 
 /** Autocomplete for the type field */
@@ -16,7 +16,9 @@ const split = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
 async function runDdl(target: string, conn: ConnectionView, statements: string[], what: string): Promise<string | null> {
   if (conn.options?.confirmChanges && !(await ask(`Run ${statements.length} statement${statements.length > 1 ? "s" : ""} to ${what}?`, { title: `Production: ${conn.name}`, detail: statements.map((s) => ({ text: s.replace(/\s+/g, " ").slice(0, 300), value: "schema change", tone: "danger" as const })), okLabel: "Run", danger: true }))) return "cancelled";
   try {
-    await ddl.run(target, statements);
+    // Ran, but the Production log couldn't record it: not a failure (running it again would repeat it)
+    const warning = await ddl.run(target, statements);
+    if (warning) await notice(warning, "Ran, with a warning");
     return null;
   } catch (e) {
     return String(e);

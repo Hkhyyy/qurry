@@ -228,9 +228,18 @@ impl AppState {
         }
     }
 
+    /// A write to the store. It ran but the Production log couldn't record it: into the app log (a build job has no place to show it)
+    async fn rag_store_write(&self, dest: &str, sql: String) -> AppResult<QueryResult> {
+        let r = self.run_query(dest.into(), sql, Some(10), None).await?;
+        if let Some(w) = &r.warning {
+            crate::log!("[qurry] RAG write to {dest}: {w}");
+        }
+        Ok(r)
+    }
+
     /// Create the collection (table) in the store if missing
     async fn rag_prepare(&self, idx: &RagIndex, kind: DbKind, dim: usize) -> AppResult<()> {
-        let q = |s: String| self.run_query(idx.dest.clone(), s, Some(10), None);
+        let q = |s: String| self.rag_store_write(&idx.dest, s);
         let c = &idx.collection;
         match kind {
             DbKind::Postgres => {
@@ -274,7 +283,7 @@ impl AppState {
             DbKind::Milvus => format!("POST /entities/upsert\n{}", json!({ "collectionName": c, "data": items.iter().map(|(id, t, v)| json!({ "source_id": id, "content": t, "embedding": v })).collect::<Vec<_>>() })),
             _ => unreachable!(),
         };
-        self.run_query(idx.dest.clone(), sql, Some(10), None).await?;
+        self.rag_store_write(&idx.dest, sql).await?;
         Ok(())
     }
 

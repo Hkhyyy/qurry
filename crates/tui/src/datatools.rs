@@ -71,7 +71,10 @@ impl App {
                         a.status = format!("Inserting {} rows…", thousands(n as u64));
                         a.spawn(async move { st.fake_fill(target, schema, table, n).await }, move |a, r| {
                             a.status = match r {
-                                Ok(k) => format!("{} test row(s) inserted into {where_}", thousands(k)),
+                                Ok(k) => {
+                                    a.warn_ran(k.warning);
+                                    format!("{} test row(s) inserted into {where_}", thousands(k.rows))
+                                }
                                 Err(e) => format!("Generate test data: {e}"),
                             };
                         });
@@ -163,7 +166,10 @@ impl App {
                     a.status = "Copying…".into();
                     a.spawn(async move { st.subset_copy(source, spec, into).await }, move |a, r| {
                         a.status = match r {
-                            Ok(p) => format!("{} related row(s) copied into {name} (rows already there were skipped)", thousands(p.total as u64)),
+                            Ok(p) => {
+                                a.warn_ran(p.warning);
+                                format!("{} related row(s) copied into {name} (rows already there were skipped)", thousands(p.total as u64))
+                            }
                             Err(e) => format!("Copy related rows: {e}"),
                         };
                     });
