@@ -240,7 +240,7 @@ async fn endpoint(st: &AppState, id: &str) -> AppResult<(String, u16, String, St
         Some(p) => ("127.0.0.1".to_string(), p),
         None => (cfg.host.clone(), cfg.port),
     };
-    Ok((host, port, cfg.user.clone(), db, st.secret(base)?, cfg))
+    Ok((host, port, cfg.user.clone(), db, st.saved_secret(base, cfg.password_saved)?, cfg))
 }
 
 /// Whether psql knows \restrict (from 17.6 · 16.10 · 15.14 · 14.19 · 13.22)
@@ -1089,6 +1089,12 @@ mod tests {
             st.restore("b".into(), file, RestoreOptions::default(), format!("r-{format}")).await.unwrap_or_else(|e| panic!("{format}: {e}"));
             assert_eq!(q("select count(*) from qurry_bak.t").await.unwrap().rows[0][0], serde_json::json!(5000), "{format}");
             assert_eq!(q(content).await.unwrap().rows[0][0], before, "{format}");
+        }
+        // A damaged secrets.json doesn't block a source without a saved password (same rule as connecting)
+        if std::env::var("QURRY_TEST_PG").unwrap().split(':').count() == 4 {
+            std::fs::write(st.store.dir().join("secrets.json"), "{ \"b\": \"tru").unwrap();
+            let file = dir.join("b.again").to_string_lossy().to_string();
+            st.backup("b".into(), file, BackupOptions { schemas: vec!["qurry_bak".into()], ..Default::default() }, "j-dmg".into()).await.unwrap();
         }
         // Things like passwords don't go on the command line: even on failure, the tool output is in the message
         let e = st.restore("b".into(), dir.join("missing.sql").to_string_lossy().into(), RestoreOptions::default(), "r-x".into()).await.unwrap_err().to_string();

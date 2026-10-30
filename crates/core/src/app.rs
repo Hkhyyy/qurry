@@ -67,7 +67,7 @@ impl AppState {
     }
 
     /// The secret only for a source that has one (flag, or an entry in the file): sources without a password still connect when secrets.json is damaged
-    fn saved_secret(&self, key: &str, saved: bool) -> AppResult<Option<String>> {
+    pub(crate) fn saved_secret(&self, key: &str, saved: bool) -> AppResult<Option<String>> {
         if saved || self.secret_file.contains(key) { self.secret(key) } else { Ok(None) }
     }
 
