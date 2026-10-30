@@ -21,6 +21,9 @@ pub struct BackupOptions {
     /// PG: only these schemas (empty = all)
     #[serde(default)]
     pub schemas: Vec<String>,
+    /// MySQL: leave out DEFINER= clauses, so a restore without SUPER (RDS and other managed services) works
+    #[serde(default)]
+    pub strip_definers: bool,
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -65,7 +68,13 @@ fn tool_dirs() -> Vec<PathBuf> {
 
 /// "pg_dump (PostgreSQL) 16.4" → [16, 4]
 fn version_of(p: &Path) -> Vec<u64> {
-    let text = version_text(p);
+    version_in(&version_text(p))
+}
+
+/// The version in --version text (or a server's VERSION()). MySQL 5.7 and MariaDB 10 clients write their own number first:
+/// "mysqldump  Ver 10.13 Distrib 5.7.44, …" → [5, 7, 44]
+fn version_in(text: &str) -> Vec<u64> {
+    let text = text.split_once("Distrib ").map_or(text, |x| x.1);
     text.split(|c: char| !c.is_ascii_digit() && c != '.').find(|w| w.contains('.') || w.parse::<u64>().is_ok()).map(|w| w.split('.').filter_map(|x| x.parse().ok()).collect()).unwrap_or_default()
 }
 
@@ -92,25 +101,152 @@ pub fn find_tool_for(name: &str, server_major: Option<u64>) -> Option<PathBuf> {
 
 /// find_tool_for among only the builds whose version passes `ok` (so an older build that passes isn't skipped for a closer one that doesn't)
 fn find_tool_where(name: &str, server_major: Option<u64>, ok: impl Fn(&[u64]) -> bool) -> Option<PathBuf> {
-    let mut found: Vec<PathBuf> = tool_dirs().into_iter().map(|d| d.join(name)).filter(|p| p.is_file()).collect();
-    found.dedup();
-    // MariaDB's 10.x / 11.x version numbers aren't comparable with MySQL's, so a MySQL build wins when both exist
-    if name.starts_with("mysql") && found.iter().any(|p| !is_mariadb(p)) {
-        found.retain(|p| !is_mariadb(p));
-    }
-    closest(found.into_iter().map(|p| (version_of(&p), p)).collect(), server_major, ok)
+    let found = tool_paths(name).into_iter().map(|p| (version_of(&p), p)).collect();
+    closest(found, server_major.map(|m| vec![m]).as_deref(), ok)
 }
 
-/// The pick of find_tool_where from (version, path) pairs
-fn closest(mut with_v: Vec<(Vec<u64>, PathBuf)>, server_major: Option<u64>, ok: impl Fn(&[u64]) -> bool) -> Option<PathBuf> {
+fn tool_paths(name: &str) -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = tool_dirs().into_iter().map(|d| d.join(name)).filter(|p| p.is_file()).collect();
+    found.dedup();
+    found
+}
+
+/// The pick of find_tool_where from (version, tool) pairs: the lowest version at or above the server's (compared as far as the server's goes)
+fn closest<T: Ord + Clone>(mut with_v: Vec<(Vec<u64>, T)>, server: Option<&[u64]>, ok: impl Fn(&[u64]) -> bool) -> Option<T> {
     with_v.retain(|(v, _)| ok(v));
     with_v.sort();
-    if let Some(m) = server_major
-        && let Some((_, p)) = with_v.iter().find(|(v, _)| v.first().is_some_and(|&x| x >= m))
+    if let Some(s) = server
+        && let Some((_, p)) = with_v.iter().find(|(v, _)| v.as_slice() >= s)
     {
         return Some(p.clone());
     }
     with_v.pop().map(|x| x.1)
+}
+
+/// A MySQL or MariaDB server or client build. Their version numbers aren't comparable (MariaDB 10.x / 11.x)
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct MyBuild {
+    mariadb: bool,
+    version: Vec<u64>,
+}
+
+impl MyBuild {
+    /// From a client's --version text or the server's VERSION()
+    fn of(text: &str) -> Self {
+        MyBuild { mariadb: text.contains("MariaDB"), version: version_in(text) }
+    }
+
+    /// "MySQL 8.4.3" · "MariaDB 11.8.9"
+    fn label(&self) -> String {
+        format!("{} {}", if self.mariadb { "MariaDB" } else { "MySQL" }, self.version.iter().map(|x| x.to_string()).collect::<Vec<_>>().join("."))
+    }
+}
+
+/// mysqldump / mysql for this server: a build of the same kind, the closest at or above the server's major.minor (as for pg_dump). With none of
+/// that kind, one of the other kind (a failure then says so — my_failed). An unknown server is taken as MySQL
+fn find_my_tool(name: &str, server: Option<&MyBuild>) -> AppResult<(PathBuf, MyBuild)> {
+    let found = tool_paths(name).into_iter().map(|p| (MyBuild::of(&version_text(&p)), p)).collect();
+    pick_my(found, server).ok_or_else(|| missing(name))
+}
+
+fn pick_my(mut found: Vec<(MyBuild, PathBuf)>, server: Option<&MyBuild>) -> Option<(PathBuf, MyBuild)> {
+    let mariadb = server.is_some_and(|s| s.mariadb);
+    if found.iter().any(|(b, _)| b.mariadb == mariadb) {
+        found.retain(|(b, _)| b.mariadb == mariadb);
+    }
+    let want = server.map(|s| s.version.iter().take(2).copied().collect::<Vec<_>>());
+    closest(found.into_iter().map(|(b, p)| (b.version.clone(), (p, b))).collect(), want.as_deref(), |_| true)
+}
+
+/// MySQL / MariaDB server version
+async fn my_server(st: &AppState, id: &str) -> Option<MyBuild> {
+    let r = ensure_pool(st, id).await.ok()?.run_query("SELECT VERSION()", 1).await.ok()?;
+    Some(MyBuild::of(&crate::db::cell_text(r.rows.first()?.first()?)))
+}
+
+/// A failed mysqldump / mysql that isn't a build for this server (the other kind, or older): the error says which client ran and what to install
+fn my_failed(e: AppError, tool: &str, client: &MyBuild, server: Option<&MyBuild>) -> AppError {
+    let Some(s) = server.filter(|s| client.mariadb != s.mariadb || client.version.as_slice() < &s.version[..s.version.len().min(2)]) else { return e };
+    if e.to_string() == crate::transfer::CANCELLED {
+        return e;
+    }
+    AppError::Msg(format!(
+        "{e}\n(The server is {} but the closest {tool} found is {}. Install a matching client — macOS: brew install mysql-client, mysql-client@8.0 or mariadb · Ubuntu: mysql-client or mariadb-client — and Qurry uses it)",
+        s.label(),
+        client.label()
+    ))
+}
+
+/// mysqldump options for this client and server: no SET @@GLOBAL.GTID_PURGED in the dump (MySQL builds; restoring it into another GTID server such as RDS fails),
+/// and no column statistics from an 8.0+ client when the server has none (MySQL 5.7, MariaDB: the dump stops otherwise)
+fn mysqldump_flags(client: &MyBuild, server: Option<&MyBuild>) -> Vec<&'static str> {
+    let mut flags = Vec::new();
+    if !client.mariadb {
+        flags.push("--set-gtid-purged=OFF");
+        if client.version.first().is_some_and(|&v| v >= 8) && server.is_some_and(|s| s.mariadb || s.version.first().is_some_and(|&v| v < 8)) {
+            flags.push("--column-statistics=0");
+        }
+    }
+    flags
+}
+
+/// A mysqldump line without its DEFINER=`user`@`host` clause, where mysqldump writes one: CREATE DEFINER=… PROCEDURE · FUNCTION, and
+/// /*!50013 DEFINER=… of a view, /*!50017 · /*!50117 of a trigger · an event. None if the line has no such clause
+fn strip_definer(line: &[u8]) -> Option<Vec<u8>> {
+    const AT: &[&[u8]] = &[b"CREATE ", b"/*!50013 ", b"/*!50003 CREATE*/ /*!50017 ", b"/*!50106 CREATE*/ /*!50117 "];
+    let start = AT.iter().find(|p| line.starts_with(p) && line[p.len()..].starts_with(b"DEFINER=`"))?.len();
+    // `user`@`host`, a backtick inside doubled
+    let mut i = start + b"DEFINER=".len();
+    for part in 0..2 {
+        if line.get(i) != Some(&b'`') {
+            return None;
+        }
+        i += 1;
+        loop {
+            match (line.get(i), line.get(i + 1)) {
+                (Some(b'`'), Some(b'`')) => i += 2,
+                (Some(b'`'), _) => break,
+                (Some(_), _) => i += 1,
+                (None, _) => return None,
+            }
+        }
+        i += 1;
+        if part == 0 {
+            if line.get(i) != Some(&b'@') {
+                return None;
+            }
+            i += 1;
+        }
+    }
+    if line.get(i) == Some(&b' ') {
+        i += 1;
+    }
+    Some([&line[..start], &line[i..]].concat())
+}
+
+/// Rewrite a mysqldump file without its DEFINER= clauses (strip_definer on lines that start outside strings and comments)
+async fn strip_definers(file: &Path, job: &Job) -> AppResult<()> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    let tmp = SecretTemp(PathBuf::from(format!("{}.qurry-tmp", file.display())));
+    let mut r = tokio::io::BufReader::with_capacity(256 * 1024, tokio::fs::File::open(file).await?);
+    let mut w = tokio::io::BufWriter::with_capacity(256 * 1024, tokio::fs::File::from_std(private_file(&tmp.0)?));
+    let (mut line, mut scan) = (Vec::new(), MyScan::default());
+    loop {
+        line.clear();
+        if r.read_until(b'\n', &mut line).await? == 0 {
+            break;
+        }
+        if job.cancelled() {
+            return Err(AppError::Msg(crate::transfer::CANCELLED.into()));
+        }
+        let stripped = if scan.quote == 0 && !scan.comment { strip_definer(&line) } else { None };
+        scan.is_local_command(&line);
+        w.write_all(stripped.as_deref().unwrap_or(&line)).await?;
+    }
+    w.flush().await?;
+    drop(w);
+    std::fs::rename(&tmp.0, file)?;
+    Ok(())
 }
 
 /// PG server major version (16, 17 …)
@@ -827,10 +963,12 @@ impl AppState {
                     run_tool(cmd, "pg_dump", None, None, None, Some(&file), &job).await?;
                 }
                 DbKind::Mysql => {
-                    let tool = find_tool("mysqldump").ok_or_else(|| missing("mysqldump"))?;
+                    let server = my_server(self, &id).await;
+                    let (tool, client) = find_my_tool("mysqldump", server.as_ref())?;
                     let mut cmd = tokio::process::Command::new(tool);
                     let _pass = my_args(&mut cmd, &host, port, &user, password.as_deref(), &cfg)?;
                     cmd.args(["--single-transaction", "--routines", "--triggers", "--events", "--hex-blob"]);
+                    cmd.args(mysqldump_flags(&client, server.as_ref()));
                     if opts.schema_only {
                         cmd.arg("--no-data");
                     }
@@ -839,7 +977,10 @@ impl AppState {
                     }
                     // After -- it is read only as a DB name (so a server-provided name like "--tee=…" doesn't become an option)
                     cmd.arg("--").arg(&db);
-                    run_tool(cmd, "mysqldump", None, None, Some(&file), Some(&file), &job).await?;
+                    run_tool(cmd, "mysqldump", None, None, Some(&file), Some(&file), &job).await.map_err(|e| my_failed(e, "mysqldump", &client, server.as_ref()))?;
+                    if opts.strip_definers {
+                        strip_definers(&file, &job).await?;
+                    }
                 }
                 DbKind::Redis => return Err(AppError::Msg("Back up Redis with BGSAVE / its RDB file".into())),
                 k => return Err(AppError::Msg(format!("Back up is not available for {k:?} data sources yet"))),
@@ -854,7 +995,7 @@ impl AppState {
         r
     }
 
-    /// Restore from a backup file (pg_dump custom → pg_restore, SQL → psql / mysql). One transaction: rolled back on failure (except MySQL DDL)
+    /// Restore from a backup file (pg_dump custom → pg_restore, SQL → psql / mysql). PostgreSQL: one transaction, rolled back on failure. MySQL: not atomic — what ran before a failure stays
     pub async fn restore(&self, id: String, path: String, opts: RestoreOptions, job_id: String) -> AppResult<()> {
         let job = self.job(&job_id).unwrap_or_else(|| self.start_job(&job_id));
         let file = PathBuf::from(&path);
@@ -921,7 +1062,8 @@ impl AppState {
                 }
                 DbKind::Mysql => {
                     refuse_local_commands(&file, &job).await?;
-                    let tool = find_tool("mysql").ok_or_else(|| missing("mysql"))?;
+                    let server = my_server(self, &id).await;
+                    let (tool, client) = find_my_tool("mysql", server.as_ref())?;
                     let system_off = mysql_has_system_command_option(&tool);
                     let mut cmd = tokio::process::Command::new(tool);
                     let _pass = my_args(&mut cmd, &host, port, &user, password.as_deref(), &cfg)?;
@@ -932,7 +1074,7 @@ impl AppState {
                     }
                     cmd.arg("--").arg(&db);
                     job.total.store(size, Ordering::Relaxed);
-                    run_tool(cmd, "mysql", Some(&file), None, None, None, &job).await?;
+                    run_tool(cmd, "mysql", Some(&file), None, None, None, &job).await.map_err(|e| my_failed(e, "mysql", &client, server.as_ref()))?;
                 }
                 DbKind::Redis => return Err(AppError::Msg("Restore Redis from its RDB file".into())),
                 k => return Err(AppError::Msg(format!("Restore is not available for {k:?} data sources yet"))),
@@ -962,13 +1104,92 @@ mod tests {
     fn picks_the_closest_psql_that_restricts() {
         let c = |v: &[u64], p: &str| (v.to_vec(), PathBuf::from(p));
         let all = vec![c(&[16, 9], "/a/psql16.9"), c(&[18, 0], "/b/psql18"), c(&[17, 6], "/c/psql17.6"), c(&[12, 22], "/d/psql12")];
-        assert_eq!(closest(all.clone(), Some(16), |_| true), Some("/a/psql16.9".into()));
-        assert_eq!(closest(all.clone(), Some(16), psql_restricts), Some("/c/psql17.6".into()));
-        assert_eq!(closest(all.clone(), Some(18), psql_restricts), Some("/b/psql18".into()));
+        assert_eq!(closest(all.clone(), Some(&[16][..]), |_| true), Some("/a/psql16.9".into()));
+        assert_eq!(closest(all.clone(), Some(&[16][..]), psql_restricts), Some("/c/psql17.6".into()));
+        assert_eq!(closest(all.clone(), Some(&[18][..]), psql_restricts), Some("/b/psql18".into()));
         // None at or above the server: the highest that qualifies
-        assert_eq!(closest(vec![c(&[16, 10], "/a"), c(&[16, 9], "/b")], Some(18), psql_restricts), Some("/a".into()));
-        assert_eq!(closest(vec![c(&[16, 9], "/a"), c(&[], "/b")], Some(16), psql_restricts), None);
+        assert_eq!(closest(vec![c(&[16, 10], "/a"), c(&[16, 9], "/b")], Some(&[18][..]), psql_restricts), Some("/a".into()));
+        assert_eq!(closest(vec![c(&[16, 9], "/a"), c(&[], "/b")], Some(&[16][..]), psql_restricts), None);
         assert_eq!(version_label(Path::new("/surely/not/psql")), "/surely/not/psql, version unknown");
+    }
+
+    /// Client --version texts (from the mysql:8.4 · 8.0 · 5.7 and mariadb:11 images) and server VERSION()s
+    #[test]
+    fn mysql_builds_and_versions() {
+        let b = |m: bool, v: &[u64]| MyBuild { mariadb: m, version: v.to_vec() };
+        assert_eq!(MyBuild::of("mysqldump  Ver 8.4.13 for Linux on x86_64 (MySQL Community Server - GPL)"), b(false, &[8, 4, 13]));
+        assert_eq!(MyBuild::of("mysqldump  Ver 10.13 Distrib 5.7.44, for Linux (x86_64)"), b(false, &[5, 7, 44]));
+        assert_eq!(MyBuild::of("mysql  Ver 14.14 Distrib 5.7.44, for Linux (x86_64) using  EditLine wrapper"), b(false, &[5, 7, 44]));
+        assert_eq!(MyBuild::of("mysqldump  Ver 10.19 Distrib 10.11.6-MariaDB, for debian-linux-gnu (aarch64)"), b(true, &[10, 11, 6]));
+        assert_eq!(MyBuild::of("mariadb-dump from 11.8.9-MariaDB, client 10.20 for debian-linux-gnu (aarch64)"), b(true, &[11, 8, 9]));
+        assert_eq!(MyBuild::of("5.7.44-log"), b(false, &[5, 7, 44]));
+        assert_eq!(MyBuild::of("10.11.6-MariaDB-1:10.11.6+maria~ubu2204"), b(true, &[10, 11, 6]));
+        assert_eq!(version_in("pg_dump (PostgreSQL) 16.4"), [16, 4]);
+        assert_eq!(b(true, &[11, 8, 9]).label(), "MariaDB 11.8.9");
+    }
+
+    /// The same kind as the server, the closest at or above its major.minor; the other kind only when there's nothing else
+    #[test]
+    fn picks_the_mysql_client_for_the_server() {
+        let b = |m: bool, v: &[u64]| MyBuild { mariadb: m, version: v.to_vec() };
+        let all = vec![(b(false, &[8, 0, 44]), "/my80".into()), (b(false, &[8, 4, 13]), "/my84".into()), (b(false, &[5, 7, 44]), "/my57".into()), (b(true, &[11, 8, 9]), "/maria11".into())];
+        let pick = |found: &Vec<(MyBuild, PathBuf)>, s: Option<MyBuild>| pick_my(found.clone(), s.as_ref()).map(|x| x.0);
+        assert_eq!(pick(&all, Some(b(false, &[8, 4, 3]))), Some("/my84".into()));
+        assert_eq!(pick(&all, Some(b(false, &[8, 0, 36]))), Some("/my80".into()));
+        assert_eq!(pick(&all, Some(b(false, &[5, 7, 44]))), Some("/my57".into()));
+        assert_eq!(pick(&all, Some(b(false, &[9, 1, 0]))), Some("/my84".into()));
+        assert_eq!(pick(&all, Some(b(true, &[10, 11, 6]))), Some("/maria11".into()));
+        assert_eq!(pick(&all, None), Some("/my84".into()));
+        let mysql_only: Vec<_> = all.iter().filter(|x| !x.0.mariadb).cloned().collect();
+        assert_eq!(pick(&mysql_only, Some(b(true, &[10, 11, 6]))), Some("/my84".into()));
+        // A failure says the client doesn't match (the other kind, or older than the server) — not when it matches, or on cancel
+        let e = || AppError::Msg("mysqldump failed".into());
+        let m = my_failed(e(), "mysqldump", &b(false, &[8, 4, 13]), Some(&b(true, &[10, 11, 6]))).to_string();
+        assert!(m.starts_with("mysqldump failed\n") && m.contains("The server is MariaDB 10.11.6 but the closest mysqldump found is MySQL 8.4.13"), "{m}");
+        assert!(my_failed(e(), "mysql", &b(false, &[8, 0, 44]), Some(&b(false, &[8, 4, 3]))).to_string().contains("MySQL 8.0.44"));
+        assert_eq!(my_failed(e(), "mysql", &b(false, &[8, 4, 13]), Some(&b(false, &[8, 4, 3]))).to_string(), "mysqldump failed");
+        assert_eq!(my_failed(e(), "mysql", &b(false, &[8, 4, 13]), Some(&b(false, &[5, 7, 44]))).to_string(), "mysqldump failed");
+        assert_eq!(my_failed(e(), "mysql", &b(false, &[8, 4, 13]), None).to_string(), "mysqldump failed");
+        assert_eq!(my_failed(AppError::Msg(crate::transfer::CANCELLED.into()), "mysql", &b(true, &[11]), Some(&b(false, &[8, 4]))).to_string(), crate::transfer::CANCELLED);
+    }
+
+    #[test]
+    fn mysqldump_flags_for_client_and_server() {
+        let b = |m: bool, v: &[u64]| MyBuild { mariadb: m, version: v.to_vec() };
+        let (my84, my57, maria) = (b(false, &[8, 4, 13]), b(false, &[5, 7, 44]), b(true, &[10, 11, 6]));
+        assert_eq!(mysqldump_flags(&my84, Some(&b(false, &[8, 0, 36]))), ["--set-gtid-purged=OFF"]);
+        assert_eq!(mysqldump_flags(&my84, Some(&my57)), ["--set-gtid-purged=OFF", "--column-statistics=0"]);
+        assert_eq!(mysqldump_flags(&my84, Some(&maria)), ["--set-gtid-purged=OFF", "--column-statistics=0"]);
+        assert_eq!(mysqldump_flags(&my84, None), ["--set-gtid-purged=OFF"]);
+        // A 5.7 client has no --column-statistics; MariaDB's has neither option
+        assert_eq!(mysqldump_flags(&my57, Some(&my57)), ["--set-gtid-purged=OFF"]);
+        assert!(mysqldump_flags(&maria, Some(&maria)).is_empty());
+    }
+
+    /// The DEFINER= clauses as mysqldump 8.4 writes them (routines, views, triggers, events); nothing else is touched
+    #[test]
+    fn strips_mysqldump_definer_clauses() {
+        let s = |l: &str| strip_definer(l.as_bytes()).map(|v| String::from_utf8(v).unwrap());
+        assert_eq!(s("CREATE DEFINER=`root`@`%` PROCEDURE `p`()\n").as_deref(), Some("CREATE PROCEDURE `p`()\n"));
+        assert_eq!(s("CREATE DEFINER=`a``b`@`10.0.%` FUNCTION `f`() RETURNS int\n").as_deref(), Some("CREATE FUNCTION `f`() RETURNS int\n"));
+        assert_eq!(s("/*!50013 DEFINER=`root`@`localhost` SQL SECURITY DEFINER */\n").as_deref(), Some("/*!50013 SQL SECURITY DEFINER */\n"));
+        assert_eq!(s("/*!50003 CREATE*/ /*!50017 DEFINER=`root`@`%`*/ /*!50003 TRIGGER `t` BEFORE INSERT ON `x` FOR EACH ROW set new.a = 1 */;;\n").as_deref(), Some("/*!50003 CREATE*/ /*!50017 */ /*!50003 TRIGGER `t` BEFORE INSERT ON `x` FOR EACH ROW set new.a = 1 */;;\n"));
+        assert_eq!(s("/*!50106 CREATE*/ /*!50117 DEFINER=`root`@`%`*/ /*!50106 EVENT `e` ON SCHEDULE EVERY 1 DAY */;;\n").as_deref(), Some("/*!50106 CREATE*/ /*!50117 */ /*!50106 EVENT `e` ON SCHEDULE EVERY 1 DAY */;;\n"));
+        assert_eq!(s("INSERT INTO `t` VALUES ('CREATE DEFINER=`root`@`%` PROCEDURE');\n"), None);
+        assert_eq!(s("CREATE TABLE `t` (\n"), None);
+        assert_eq!(s("CREATE DEFINER=`root` PROCEDURE `p`()\n"), None);
+    }
+
+    /// Lines inside a string (a routine body over several lines) are left alone
+    #[tokio::test]
+    async fn strip_definers_leaves_strings_alone() {
+        let dir = std::env::temp_dir().join(format!("qurry-def-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("d.sql");
+        std::fs::write(&f, "DELIMITER ;;\nCREATE DEFINER=`root`@`%` PROCEDURE `p`()\nselect 'a\nCREATE DEFINER=`root`@`%` PROCEDURE x';;\nDELIMITER ;\n").unwrap();
+        strip_definers(&f, &Job::new()).await.unwrap();
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "DELIMITER ;;\nCREATE PROCEDURE `p`()\nselect 'a\nCREATE DEFINER=`root`@`%` PROCEDURE x';;\nDELIMITER ;\n");
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
@@ -1319,7 +1540,8 @@ INSERT INTO `ev` VALUES (3,'it\'s \\! x');
         q("drop table qurry_vec").await.ok();
     }
 
-    /// MySQL: mysqldump → drop → restore with mysql (only when the tools are available)
+    /// MySQL: mysqldump → drop → restore with mysql (only when the tools are available), with routines · views · triggers · events
+    /// and without their DEFINER= clauses (QURRY_TEST_MY can point at a 5.7 / MariaDB server too)
     #[tokio::test]
     #[ignore]
     async fn mysql_backup_and_restore_roundtrip() {
@@ -1333,17 +1555,36 @@ INSERT INTO `ev` VALUES (3,'it\'s \\! x');
         let cfg: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "m", "name": "m", "kind": "mysql", "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": p[2], "database": p[4] })).unwrap();
         st.save_connection(cfg, Some(p[3].into()), None).await.unwrap();
         // Dedicated DB: dumping while other tests create and drop tables in the same DB breaks it
-        st.run_query("m".into(), "create database if not exists qurry_bak".into(), None, None).await.unwrap();
-        let q = |s: &str| st.run_query("m::qurry_bak".into(), s.into(), None, None);
+        st.run_query("m".into(), "create database if not exists qurry_mysqldump".into(), None, None).await.unwrap();
+        let q = |s: &str| st.run_query("m::qurry_mysqldump".into(), s.into(), None, None);
         q("drop table if exists bak_t").await.ok();
         q("create table bak_t (id int primary key, h varchar(40))").await.unwrap();
         q("insert into bak_t values (1, 'a'), (2, 'it''s'), (3, null)").await.unwrap();
-        let file = dir.join("m.sql").to_string_lossy().to_string();
-        assert!(st.backup("m::qurry_bak".into(), file.clone(), BackupOptions::default(), "j".into()).await.unwrap() > 100);
-        q("drop table bak_t").await.unwrap();
-        st.restore("m::qurry_bak".into(), file, RestoreOptions::default(), "r".into()).await.unwrap();
-        assert_eq!(q("select count(*) from bak_t").await.unwrap().rows[0][0], serde_json::json!(3));
-        st.run_query("m".into(), "drop database qurry_bak".into(), None, None).await.ok();
+        q("create or replace view bak_v as select id from bak_t").await.unwrap();
+        q("drop procedure if exists bak_p").await.ok();
+        q("create procedure bak_p() select count(*) from bak_t").await.unwrap();
+        q("create trigger bak_tr before insert on bak_t for each row set new.h = coalesce(new.h, 'x')").await.unwrap();
+        q("drop event if exists bak_e").await.ok();
+        q("create event bak_e on schedule every 1 day do delete from bak_t where id < 0").await.unwrap();
+        let objects = "select (select count(*) from information_schema.routines where routine_schema = 'qurry_mysqldump') + (select count(*) from information_schema.views where table_schema = 'qurry_mysqldump') + (select count(*) from information_schema.triggers where trigger_schema = 'qurry_mysqldump') + (select count(*) from information_schema.events where event_schema = 'qurry_mysqldump')";
+        assert_eq!(q(objects).await.unwrap().rows[0][0], serde_json::json!(4));
+        for strip_definers in [false, true] {
+            let file = dir.join(format!("m-{strip_definers}.sql")).to_string_lossy().to_string();
+            let opts = BackupOptions { strip_definers, ..Default::default() };
+            assert!(st.backup("m::qurry_mysqldump".into(), file.clone(), opts, "j".into()).await.unwrap() > 100);
+            let text = std::fs::read_to_string(&file).unwrap();
+            assert_eq!(text.matches("DEFINER=`").count(), if strip_definers { 0 } else { 4 }, "{text}");
+            assert!(!text.contains("GTID_PURGED"), "{text}");
+            q("drop view bak_v").await.unwrap();
+            q("drop table bak_t").await.unwrap();
+            q("drop procedure bak_p").await.unwrap();
+            q("drop event bak_e").await.unwrap();
+            st.restore("m::qurry_mysqldump".into(), file, RestoreOptions::default(), "r".into()).await.unwrap();
+            assert_eq!(q("select count(*) from bak_v").await.unwrap().rows[0][0], serde_json::json!(3));
+            assert_eq!(q(objects).await.unwrap().rows[0][0], serde_json::json!(4));
+        }
+        st.run_query("m".into(), "drop database qurry_mysqldump".into(), None, None).await.ok();
+        std::fs::remove_dir_all(dir).ok();
     }
 
     /// Backup → drop → restore → data unchanged (both custom and SQL)
