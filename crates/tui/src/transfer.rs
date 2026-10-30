@@ -278,8 +278,9 @@ impl App {
             if pg {
                 return a.backup_run(conn, db, path, false);
             }
-            a.input("Leave out DEFINER= clauses? y / n (y to restore on RDS and other managed services, where another user's DEFINER needs SUPER)", "n", move |a, yn| {
-                a.backup_run(conn, db, path, yn.trim().eq_ignore_ascii_case("y"))
+            a.input("Leave out DEFINER= clauses? y = leave out, Enter = keep (leave out to restore on RDS and other managed services, where another user's DEFINER needs SUPER)", "", move |a, yn| {
+                let yn = yn.trim();
+                a.backup_run(conn, db, path, yn.eq_ignore_ascii_case("y") || yn.eq_ignore_ascii_case("yes"))
             });
         });
     }
@@ -393,6 +394,10 @@ mod tests {
         assert!(popup_title(&h).unwrap().starts_with("Back up to"));
         answer(&mut h, "/surely/not/a/dir/shop.sql");
         assert!(popup_title(&h).unwrap().starts_with("Leave out DEFINER= clauses?"), "{:?}", popup_title(&h));
+        // It opens empty, so a typed y is the whole answer (not "ny")
+        h.type_str("y");
+        let Some(Popup::Input { input, .. }) = &h.app.popup else { panic!("no input popup") };
+        assert_eq!(input.lines(), ["y"]);
         // The restore confirmation names no PostgreSQL tool for MySQL
         h.app.popup = None;
         h.app.restore_start();
@@ -424,11 +429,13 @@ mod tests {
         }
         let dir = std::env::temp_dir().join(format!("qurry-tui-bak-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        for (yn, definers) in [("y", 0), ("n", 1)] {
+        for (yn, definers) in [("y", 0), ("yes", 0), ("", 1), ("n", 1)] {
             let file = dir.join(format!("{yn}.sql"));
             h.app.backup_start();
             answer(&mut h, &file.to_string_lossy());
-            answer(&mut h, yn);
+            // Typed into the real popup, as a user does
+            h.type_str(yn);
+            h.key("Enter");
             for _ in 0..600 {
                 h.settle().await;
                 if h.app.jobs.is_empty() {

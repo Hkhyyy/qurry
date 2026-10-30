@@ -955,8 +955,13 @@ export default function App() {
   };
   const startRestore = async (c: ConnectionView, db?: string) => {
     const where = `${c.name}${db ? ` / ${db}` : ""}`;
-    if (!(await ask(`Restore a backup into ${where}?\n\nIt runs the backup's statements on this database${c.kind === "mysql" ? ". A MySQL restore isn't atomic: if a statement fails, what ran before it stays" : " in one transaction: if a statement fails, nothing changes"}.${c.options?.confirmChanges ? "\n\n⚠ This is a Production data source." : ""}`))) return;
-    const clean = await ask("Drop the objects the backup contains before restoring them (--clean)?", { title: "Restore", okLabel: "Drop and Recreate", cancelLabel: "Keep and Add" });
+    const mysql = c.kind === "mysql";
+    const how = mysql
+      ? "Objects in the backup are dropped and recreated (by the backup's DROP … IF EXISTS statements); the rest of the database is left alone. A MySQL restore isn't atomic: if a statement fails, what ran before it stays."
+      : "It runs the backup's statements on this database in one transaction: if a statement fails, nothing changes.";
+    if (!(await ask(`Restore a backup into ${where}?\n\n${how}${c.options?.confirmChanges ? "\n\n⚠ This is a Production data source." : ""}`))) return;
+    // --clean is a pg_restore option: a MySQL dump drops its objects itself
+    const clean = !mysql && (await ask("Drop the objects the backup contains before restoring them (--clean)?", { title: "Restore", okLabel: "Drop and Recreate", cancelLabel: "Keep and Add" }));
     const r = await runJob(`Restore into ${where}`, (job) => backup.restore(dbTarget(c, db), clean, job));
     if (r) setStatus(`Restored ${r} into ${where}`);
   };

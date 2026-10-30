@@ -186,9 +186,11 @@ async fn my_server(st: &AppState, id: &str) -> Option<MyBuild> {
     Some(MyBuild::of(&crate::db::cell_text(r.rows.first()?.first()?)))
 }
 
-/// A failed mysqldump / mysql that isn't a build for this server (the other kind, or older): the error says which client ran and what to install
+/// A failed mysqldump / mysql that isn't a build for this server (the other kind, or for mysqldump older): the error says which client ran and what to install.
+/// Any mysql version restores into the server (find_mysql), so an older mysql gets no hint
 fn my_failed(e: AppError, tool: &str, client: &MyBuild, server: Option<&MyBuild>) -> AppError {
-    let Some(s) = server.filter(|s| client.mariadb != s.mariadb || client.version.as_slice() < &s.version[..s.version.len().min(2)]) else { return e };
+    let older = |s: &MyBuild| tool == "mysqldump" && client.version.as_slice() < &s.version[..s.version.len().min(2)];
+    let Some(s) = server.filter(|s| client.mariadb != s.mariadb || older(s)) else { return e };
     if e.to_string() == crate::transfer::CANCELLED {
         return e;
     }
@@ -199,12 +201,14 @@ fn my_failed(e: AppError, tool: &str, client: &MyBuild, server: Option<&MyBuild>
     ))
 }
 
-/// mysqldump options for this client and server: no SET @@GLOBAL.GTID_PURGED in the dump (MySQL builds; restoring it into another GTID server such as RDS fails),
+/// mysqldump options for this client and server: no SET @@GLOBAL.GTID_PURGED in the dump (MySQL builds from 5.6.9, which added the option; restoring it into another GTID server such as RDS fails),
 /// and no column statistics from an 8.0+ client when the server has none (MySQL 5.7, MariaDB: the dump stops otherwise)
 fn mysqldump_flags(client: &MyBuild, server: Option<&MyBuild>) -> Vec<&'static str> {
     let mut flags = Vec::new();
     if !client.mariadb {
-        flags.push("--set-gtid-purged=OFF");
+        if client.version.as_slice() >= [5, 6, 9].as_slice() {
+            flags.push("--set-gtid-purged=OFF");
+        }
         if client.version.first().is_some_and(|&v| v >= 8) && server.is_some_and(|s| s.mariadb || s.version.first().is_some_and(|&v| v < 8)) {
             flags.push("--column-statistics=0");
         }
@@ -212,12 +216,21 @@ fn mysqldump_flags(client: &MyBuild, server: Option<&MyBuild>) -> Vec<&'static s
     flags
 }
 
-/// A mysqldump line without its DEFINER=`user`@`host` clause, where mysqldump writes one: CREATE DEFINER=… PROCEDURE · FUNCTION, and
-/// /*!50013 DEFINER=… of a view, /*!50017 · /*!50117 of a trigger · an event. None if the line has no such clause
+/// A mysqldump line without its DEFINER=`user`@`host` (or MariaDB role: DEFINER=`role`) clause, where mysqldump writes one: CREATE DEFINER=… PROCEDURE · FUNCTION, and
+/// /*!50013 DEFINER=… of a view (MariaDB writes a role's in /*!50001 CREATE ALGORITHM=… DEFINER=…), /*!50017 · /*!50117 of a trigger · an event.
+/// None if the line has no such clause
 fn strip_definer(line: &[u8]) -> Option<Vec<u8>> {
-    const AT: &[&[u8]] = &[b"CREATE ", b"/*!50013 ", b"/*!50003 CREATE*/ /*!50017 ", b"/*!50106 CREATE*/ /*!50117 "];
+    const AT: &[&[u8]] = &[
+        b"CREATE ",
+        b"/*!50013 ",
+        b"/*!50003 CREATE*/ /*!50017 ",
+        b"/*!50106 CREATE*/ /*!50117 ",
+        b"/*!50001 CREATE ALGORITHM=UNDEFINED ",
+        b"/*!50001 CREATE ALGORITHM=MERGE ",
+        b"/*!50001 CREATE ALGORITHM=TEMPTABLE ",
+    ];
     let start = AT.iter().find(|p| line.starts_with(p) && line[p.len()..].starts_with(b"DEFINER=`"))?.len();
-    // `user`@`host`, a backtick inside doubled
+    // `user`@`host` or `role`, a backtick inside doubled
     let mut i = start + b"DEFINER=".len();
     for part in 0..2 {
         if line.get(i) != Some(&b'`') {
@@ -233,15 +246,16 @@ fn strip_definer(line: &[u8]) -> Option<Vec<u8>> {
             }
         }
         i += 1;
-        if part == 0 {
-            if line.get(i) != Some(&b'@') {
-                return None;
-            }
-            i += 1;
+        if part == 1 || line.get(i) != Some(&b'@') {
+            break;
         }
-    }
-    if line.get(i) == Some(&b' ') {
         i += 1;
+    }
+    // The clause ends at a space or the */ of its comment
+    match line.get(i) {
+        Some(b' ') => i += 1,
+        Some(b'*') => {}
+        _ => return None,
     }
     Some([&line[..start], &line[i..]].concat())
 }
@@ -944,7 +958,7 @@ fn my_args(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str,
         None if !crate::db::plaintext_allowed(cfg, host) => Some("require"),
         None => None,
     };
-    for a in mode.map(|m| my_tls_args(m, mariadb)).unwrap_or_default() {
+    for a in my_tls_args(mode, mariadb) {
         cmd.arg(a);
     }
     if let Some(s) = cfg.active_ssl() {
@@ -957,14 +971,18 @@ fn my_args(cmd: &mut tokio::process::Command, host: &str, port: u16, user: &str,
     Ok(pass)
 }
 
-/// TLS options for the MySQL client. MariaDB has no --ssl-mode; its --ssl-verify-server-cert checks the CA and the host name
-fn my_tls_args(mode: &str, mariadb: bool) -> Vec<&'static str> {
+/// TLS options for the MySQL client (None: no TLS mode, plaintext allowed). MariaDB has no --ssl-mode; its --ssl-verify-server-cert checks the CA
+/// and the host name, and since 11.4 it's on by default, so 'require' and no mode turn it off (no certificate check, like MySQL's REQUIRED /
+/// default PREFERRED and Qurry's own connection)
+fn my_tls_args(mode: Option<&str>, mariadb: bool) -> Vec<&'static str> {
     match (mariadb, mode) {
-        (true, "verify-ca" | "verify-full") => vec!["--ssl", "--ssl-verify-server-cert"],
-        (true, _) => vec!["--ssl"],
-        (false, "verify-full") => vec!["--ssl-mode=VERIFY_IDENTITY"],
-        (false, "verify-ca") => vec!["--ssl-mode=VERIFY_CA"],
-        (false, _) => vec!["--ssl-mode=REQUIRED"],
+        (true, Some("verify-ca" | "verify-full")) => vec!["--ssl", "--ssl-verify-server-cert"],
+        (true, Some(_)) => vec!["--ssl", "--skip-ssl-verify-server-cert"],
+        (true, None) => vec!["--skip-ssl-verify-server-cert"],
+        (false, Some("verify-full")) => vec!["--ssl-mode=VERIFY_IDENTITY"],
+        (false, Some("verify-ca")) => vec!["--ssl-mode=VERIFY_CA"],
+        (false, Some(_)) => vec!["--ssl-mode=REQUIRED"],
+        (false, None) => vec![],
     }
 }
 
@@ -1124,10 +1142,13 @@ mod tests {
 
     #[test]
     fn mariadb_clients_get_their_own_tls_options() {
-        assert_eq!(my_tls_args("require", false), ["--ssl-mode=REQUIRED"]);
-        assert_eq!(my_tls_args("verify-full", false), ["--ssl-mode=VERIFY_IDENTITY"]);
-        assert_eq!(my_tls_args("require", true), ["--ssl"]);
-        assert_eq!(my_tls_args("verify-ca", true), ["--ssl", "--ssl-verify-server-cert"]);
+        assert_eq!(my_tls_args(Some("require"), false), ["--ssl-mode=REQUIRED"]);
+        assert_eq!(my_tls_args(Some("verify-full"), false), ["--ssl-mode=VERIFY_IDENTITY"]);
+        assert!(my_tls_args(None, false).is_empty());
+        // MariaDB 11.4+ clients check the certificate by default: 'require' and no mode (plaintext allowed) don't
+        assert_eq!(my_tls_args(Some("require"), true), ["--ssl", "--skip-ssl-verify-server-cert"]);
+        assert_eq!(my_tls_args(None, true), ["--skip-ssl-verify-server-cert"]);
+        assert_eq!(my_tls_args(Some("verify-ca"), true), ["--ssl", "--ssl-verify-server-cert"]);
     }
 
     /// A psql without \restrict isn't picked over a newer one that has it, even when it is closer to the server
@@ -1177,7 +1198,10 @@ mod tests {
         let e = || AppError::Msg("mysqldump failed".into());
         let m = my_failed(e(), "mysqldump", &b(false, &[8, 4, 13]), Some(&b(true, &[10, 11, 6]))).to_string();
         assert!(m.starts_with("mysqldump failed\n") && m.contains("The server is MariaDB 10.11.6 but the closest mysqldump found is MySQL 8.4.13"), "{m}");
-        assert!(my_failed(e(), "mysql", &b(false, &[8, 0, 44]), Some(&b(false, &[8, 4, 3]))).to_string().contains("MySQL 8.0.44"));
+        assert!(my_failed(e(), "mysqldump", &b(false, &[8, 0, 44]), Some(&b(false, &[8, 4, 3]))).to_string().contains("MySQL 8.0.44"));
+        // Any mysql restores into the server: an older one isn't blamed for a failed restore, the other kind is
+        assert_eq!(my_failed(e(), "mysql", &b(false, &[8, 0, 44]), Some(&b(false, &[8, 4, 3]))).to_string(), "mysqldump failed");
+        assert!(my_failed(e(), "mysql", &b(false, &[8, 4, 13]), Some(&b(true, &[10, 11, 6]))).to_string().contains("MariaDB 10.11.6"));
         assert_eq!(my_failed(e(), "mysql", &b(false, &[8, 4, 13]), Some(&b(false, &[8, 4, 3]))).to_string(), "mysqldump failed");
         assert_eq!(my_failed(e(), "mysql", &b(false, &[8, 4, 13]), Some(&b(false, &[5, 7, 44]))).to_string(), "mysqldump failed");
         assert_eq!(my_failed(e(), "mysql", &b(false, &[8, 4, 13]), None).to_string(), "mysqldump failed");
@@ -1212,6 +1236,10 @@ mod tests {
         // A 5.7 client has no --column-statistics; MariaDB's has neither option
         assert_eq!(mysqldump_flags(&my57, Some(&my57)), ["--set-gtid-purged=OFF"]);
         assert!(mysqldump_flags(&maria, Some(&maria)).is_empty());
+        // --set-gtid-purged came in 5.6.9: older clients stop on it
+        assert!(mysqldump_flags(&b(false, &[5, 5, 62]), Some(&b(false, &[5, 5, 62]))).is_empty());
+        assert!(mysqldump_flags(&b(false, &[5, 6, 8]), None).is_empty());
+        assert_eq!(mysqldump_flags(&b(false, &[5, 6, 9]), None), ["--set-gtid-purged=OFF"]);
     }
 
     /// The DEFINER= clauses as mysqldump 8.4 writes them (routines, views, triggers, events); nothing else is touched
@@ -1225,7 +1253,14 @@ mod tests {
         assert_eq!(s("/*!50106 CREATE*/ /*!50117 DEFINER=`root`@`%`*/ /*!50106 EVENT `e` ON SCHEDULE EVERY 1 DAY */;;\n").as_deref(), Some("/*!50106 CREATE*/ /*!50117 */ /*!50106 EVENT `e` ON SCHEDULE EVERY 1 DAY */;;\n"));
         assert_eq!(s("INSERT INTO `t` VALUES ('CREATE DEFINER=`root`@`%` PROCEDURE');\n"), None);
         assert_eq!(s("CREATE TABLE `t` (\n"), None);
-        assert_eq!(s("CREATE DEFINER=`root` PROCEDURE `p`()\n"), None);
+        // A MariaDB role as the definer has no @host
+        assert_eq!(s("CREATE DEFINER=`r` PROCEDURE `p`()\n").as_deref(), Some("CREATE PROCEDURE `p`()\n"));
+        assert_eq!(s("/*!50013 DEFINER=`r``x` SQL SECURITY DEFINER */\n").as_deref(), Some("/*!50013 SQL SECURITY DEFINER */\n"));
+        // As mariadb-dump 11.8 writes a role's view, trigger and event
+        assert_eq!(s("/*!50001 CREATE ALGORITHM=UNDEFINED DEFINER=`r` SQL SECURITY DEFINER VIEW `rv` AS select 1 AS `a` */;\n").as_deref(), Some("/*!50001 CREATE ALGORITHM=UNDEFINED SQL SECURITY DEFINER VIEW `rv` AS select 1 AS `a` */;\n"));
+        assert_eq!(s("/*!50003 CREATE*/ /*!50017 DEFINER=`r`*/ /*!50003 trigger rtr before insert on t for each row set new.a=1\n").as_deref(), Some("/*!50003 CREATE*/ /*!50017 */ /*!50003 trigger rtr before insert on t for each row set new.a=1\n"));
+        assert_eq!(s("/*!50106 CREATE*/ /*!50117 DEFINER=`r`*/ /*!50106 EVENT `re` ON SCHEDULE EVERY 1 DAY DO select 1\n").as_deref(), Some("/*!50106 CREATE*/ /*!50117 */ /*!50106 EVENT `re` ON SCHEDULE EVERY 1 DAY DO select 1\n"));
+        assert_eq!(s("CREATE DEFINER=`root PROCEDURE `p`()\n"), None);
     }
 
     /// Lines inside a string (a routine body over several lines) are left alone
@@ -1605,7 +1640,7 @@ INSERT INTO `ev` VALUES (3,'it\'s \\! x');
     #[ignore]
     async fn mysql_backup_and_restore_roundtrip() {
         let Ok(e) = std::env::var("QURRY_TEST_MY") else { return };
-        if find_tool("mysqldump").is_none() || find_tool("mysql").is_none() {
+        if find_tool("mysqldump").or_else(|| find_tool("mariadb-dump")).is_none() || find_tool("mysql").or_else(|| find_tool("mariadb")).is_none() {
             return;
         }
         let p: Vec<&str> = e.split(':').collect();
@@ -1649,6 +1684,34 @@ INSERT INTO `ev` VALUES (3,'it\'s \\! x');
             assert_eq!(q(objects).await.unwrap().rows[0][0], serde_json::json!(4));
         }
         st.run_query("m".into(), "drop database qurry_mysqldump".into(), None, None).await.ok();
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// TLS mode 'require' encrypts without checking the certificate, also with a MariaDB 11.4+ client (which checks by default): point QURRY_TEST_MY
+    /// at a server with a self-signed certificate (e.g. MariaDB 10.x started with --ssl-cert / --ssl-key) and the tools at that client
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_backup_and_restore_over_tls_without_a_certificate_check() {
+        let Ok(e) = std::env::var("QURRY_TEST_MY") else { return };
+        if find_tool("mysqldump").or_else(|| find_tool("mariadb-dump")).is_none() {
+            return;
+        }
+        let p: Vec<&str> = e.split(':').collect();
+        let dir = std::env::temp_dir().join(format!("qurry-bakt-{}", uuid::Uuid::new_v4()));
+        let st = crate::open_state(Some(dir.clone())).unwrap();
+        let ssl = serde_json::json!({ "enabled": true, "mode": "require" });
+        let cfg: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "m", "name": "m", "kind": "mysql", "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": p[2], "database": p[4], "ssl": ssl })).unwrap();
+        st.save_connection(cfg, Some(p[3].into()), None).await.unwrap();
+        st.run_query("m".into(), "create database if not exists qurry_mysqldump_tls".into(), None, None).await.unwrap();
+        let q = |s: &str| st.run_query("m::qurry_mysqldump_tls".into(), s.into(), None, None);
+        q("create table if not exists t (id int primary key)").await.unwrap();
+        q("insert ignore into t values (1), (2)").await.unwrap();
+        let file = dir.join("tls.sql").to_string_lossy().to_string();
+        st.backup("m::qurry_mysqldump_tls".into(), file.clone(), BackupOptions::default(), "j".into()).await.unwrap();
+        q("drop table t").await.unwrap();
+        st.restore("m::qurry_mysqldump_tls".into(), file, RestoreOptions::default(), "r".into()).await.unwrap();
+        assert_eq!(q("select count(*) from t").await.unwrap().rows[0][0], serde_json::json!(2));
+        st.run_query("m".into(), "drop database qurry_mysqldump_tls".into(), None, None).await.ok();
         std::fs::remove_dir_all(dir).ok();
     }
 
