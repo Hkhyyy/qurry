@@ -1092,7 +1092,8 @@ mod tests {
         }
         // A damaged secrets.json doesn't block a source without a saved password (same rule as connecting)
         if std::env::var("QURRY_TEST_PG").unwrap().split(':').count() == 4 {
-            std::fs::write(st.store.dir().join("secrets.json"), "{ \"b\": \"tru").unwrap();
+            // (damaged content that doesn't name this source — a quoted "b" would mean its password may be in there, which is an error by design)
+            std::fs::write(st.store.dir().join("secrets.json"), "{ \"other\": \"tru").unwrap();
             let file = dir.join("b.again").to_string_lossy().to_string();
             st.backup("b".into(), file, BackupOptions { schemas: vec!["qurry_bak".into()], ..Default::default() }, "j-dmg".into()).await.unwrap();
         }
