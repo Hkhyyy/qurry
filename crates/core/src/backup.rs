@@ -294,7 +294,8 @@ fn sends_unknown_settings(pg_restore: Option<u64>, server: Option<u64>) -> bool 
 /// What psql reads instead of the .sql file as is (streamed to its stdin, no copy): `\restrict <key>` first, so psql commands in the file are switched off;
 /// the file's own \restrict · \unrestrict lines left out (pg_dump 17.6+ writes them; left in, the file could switch commands back on with a key it chose);
 /// and SETs an older server doesn't know left out. Only pg_dump's own lines are left out: those of its header (before the first statement other than
-/// SET / set_config) and the file's last \unrestrict line — never COPY data or the lines of a string over several lines
+/// SET / set_config) and the file's last \unrestrict line (in files put one after the other, also the \unrestrict · \restrict between them and the
+/// next header) — never COPY data or the lines of a string over several lines
 struct PsqlInput {
     key: String,
     drop: Vec<&'static str>,
@@ -312,15 +313,22 @@ struct PsqlLines<'a> {
     input: &'a PsqlInput,
     /// Still in pg_dump's header (blank lines, comments, \restrict <key>, SET …; and SELECT pg_catalog.set_config(…);)
     header: bool,
-    /// Inside the data of COPY … FROM stdin (until \.)
+    /// Inside the data of COPY … FROM stdin (until \.). A line of a string over several lines that looks like `COPY … FROM stdin;` sets it too
+    /// (pg_dump --inserts of 'a\ncopy t from stdin;\nb', a function body): the file's own key below still ends the file there
     copy: bool,
-    /// An \unrestrict <key> line and the blank lines after it: left out if the file ends there
+    /// The key of the header's \restrict <key>: a random token pg_dump made, so an \unrestrict with it is pg_dump's own, even where this
+    /// filter thinks it is in COPY data (data that happens to be exactly that line is practically impossible)
+    key: Option<Vec<u8>>,
+    /// An \unrestrict <key> line and the blank lines and comments after it: left out if the file ends there; with the file's key and the next
+    /// dump's \restrict after it (cat schema.sql data.sql), the two are left out and that dump's header is filtered too
     held: Vec<u8>,
+    /// The held \unrestrict has the file's key
+    held_key: bool,
 }
 
-/// `\restrict <key>` / `\unrestrict <key>` as pg_dump writes it: at the start of the line, one key and nothing else
-fn restrict_command(text: &[u8], command: &[u8]) -> bool {
-    text.strip_prefix(command).and_then(|r| r.strip_prefix(b" ")).is_some_and(|key| !key.is_empty() && !key.iter().any(|c| c.is_ascii_whitespace()))
+/// The key of `\restrict <key>` / `\unrestrict <key>` as pg_dump writes it: at the start of the line, one key and nothing else
+fn restrict_key<'t>(text: &'t [u8], command: &[u8]) -> Option<&'t [u8]> {
+    text.strip_prefix(command).and_then(|r| r.strip_prefix(b" ")).filter(|key| !key.is_empty() && !key.iter().any(|c| c.is_ascii_whitespace()))
 }
 
 /// A whole one-line SET …; or SELECT pg_catalog.set_config(…); (no string left open)
@@ -330,36 +338,51 @@ fn header_statement(text: &[u8]) -> bool {
 
 impl<'a> PsqlLines<'a> {
     fn new(input: &'a PsqlInput) -> Self {
-        PsqlLines { input, header: true, copy: false, held: Vec::new() }
+        PsqlLines { input, header: true, copy: false, key: None, held: Vec::new(), held_key: false }
     }
 
     /// What psql gets for this line of the file
     fn line(&mut self, line: &[u8], out: &mut Vec<u8>) {
         let text = line.strip_suffix(b"\n").unwrap_or(line);
         let text = text.strip_suffix(b"\r").unwrap_or(text);
-        if self.copy {
+        if !self.held.is_empty() {
+            if text.trim_ascii().is_empty() || text.starts_with(b"--") {
+                self.held.extend_from_slice(line);
+                return;
+            }
+            if let Some(next) = restrict_key(text, b"\\restrict").filter(|_| self.held_key) {
+                // The next pg_dump file: its \restrict and the \unrestrict before it left out (the lines between kept), its header filtered
+                let first = self.held.iter().position(|&c| c == b'\n').map_or(self.held.len(), |i| i + 1);
+                out.extend_from_slice(&self.held[first..]);
+                self.held.clear();
+                (self.header, self.copy, self.key) = (true, false, Some(next.to_vec()));
+                return;
+            }
+            // Not the end: kept as it is (in COPY data, data)
+            out.append(&mut self.held);
+        }
+        let unrestrict = restrict_key(text, b"\\unrestrict");
+        let own = unrestrict.is_some() && unrestrict == self.key.as_deref();
+        if self.copy && !own {
             self.copy = text != b"\\.";
             out.extend_from_slice(line);
             return;
         }
-        if !self.held.is_empty() {
-            if text.trim_ascii().is_empty() {
-                self.held.extend_from_slice(line);
+        if self.header {
+            self.header = text.trim_ascii().is_empty() || text.starts_with(b"--") || restrict_key(text, b"\\restrict").is_some() || header_statement(text);
+        }
+        if self.header {
+            if let Some(k) = restrict_key(text, b"\\restrict") {
+                self.key.get_or_insert_with(|| k.to_vec());
                 return;
             }
-            out.append(&mut self.held);
-        }
-        if self.header {
-            self.header = text.trim_ascii().is_empty() || text.starts_with(b"--") || restrict_command(text, b"\\restrict") || header_statement(text);
-        }
-        if self.header {
-            let newer = self.input.drop.iter().any(|d| text.strip_prefix(d.as_bytes()).is_some_and(|r| r.starts_with(b" ") || r.starts_with(b"=")));
-            if newer || restrict_command(text, b"\\restrict") {
+            if self.input.drop.iter().any(|d| text.strip_prefix(d.as_bytes()).is_some_and(|r| r.starts_with(b" ") || r.starts_with(b"="))) {
                 return;
             }
         }
-        if restrict_command(text, b"\\unrestrict") {
+        if unrestrict.is_some() {
             self.held.extend_from_slice(line);
+            self.held_key = own;
             return;
         }
         let lower = text.to_ascii_lowercase();
@@ -367,9 +390,10 @@ impl<'a> PsqlLines<'a> {
         out.extend_from_slice(line);
     }
 
-    /// The end of the file: the closing \unrestrict on a line of its own, unless the file ended inside COPY data (there it would be data)
+    /// The end of the file: the closing \unrestrict on a line of its own, unless the file ended inside COPY data (there it would be data) —
+    /// a file that ends with its own \unrestrict ended outside it
     fn end(&self, out: &mut Vec<u8>) {
-        if !self.copy {
+        if !self.copy || (self.held_key && !self.held.is_empty()) {
             out.extend_from_slice(format!("\n\\unrestrict {}\n", self.input.key).as_bytes());
         }
     }
@@ -950,6 +974,36 @@ mod tests {
         assert_eq!(fed("COPY t (a) FROM stdin;\n1\n\\unrestrict x\n", None).await, "\\restrict k1\nCOPY t (a) FROM stdin;\n1\n\\unrestrict x\n");
     }
 
+    /// pg_dump 18.6 --inserts of E'step 1\ncopy t from stdin;\nstep 2': the line inside the string looks like the start of COPY data,
+    /// but the file's final \unrestrict with the key of its header is still left out (and ours added)
+    #[tokio::test]
+    async fn psql_input_drops_the_files_unrestrict_after_a_copy_lookalike() {
+        let key = "FYIAphUW2rY7L1yUAFOTKdRVH0CBf9tipXB6iI6PhQL6gmwfBevO0EZqCRL75VJ";
+        let body = "SET statement_timeout = 0;\nSELECT pg_catalog.set_config('search_path', '', false);\n\nCREATE TABLE public.lit (\n    a text\n);\n\nINSERT INTO public.lit VALUES ('step 1\ncopy t from stdin;\nstep 2');\n\n\n--\n-- PostgreSQL database dump complete\n--\n\n";
+        let src = format!("--\n-- PostgreSQL database dump\n--\n\n\\restrict {key}\n\n-- Dumped by pg_dump version 18.6\n\n{body}\\unrestrict {key}\n\n");
+        assert_eq!(fed(&src, Some(16)).await, format!("\\restrict k1\n--\n-- PostgreSQL database dump\n--\n\n\n-- Dumped by pg_dump version 18.6\n\n{body}\n\\unrestrict k1\n"));
+        // Inside real COPY data the same line is data unless the file ends there (another key, or more data after it: kept)
+        let copy = format!("\\restrict {key}\nCOPY t (a) FROM stdin;\n\\unrestrict {key}\nx\n\\unrestrict other\n");
+        assert_eq!(fed(&copy, None).await, format!("\\restrict k1\nCOPY t (a) FROM stdin;\n\\unrestrict {key}\nx\n\\unrestrict other\n"));
+    }
+
+    /// Two pg_dump 18.6 files one after the other (pg_dump -s > f; pg_dump -a >> f): the middle \unrestrict k1 · \restrict k2 and the
+    /// second header's settings are left out as in the first
+    #[tokio::test]
+    async fn psql_input_concatenated_dumps() {
+        let (k1, k2) = ("2hgFocvbl5ch9aOyQ2rrtUdEM65ZEiKefDdKLmCxzqMbBG3TdYsvyLqmoGWhM9M", "fWM3tEUNw4VCYEkJXARL5bpItii9eLWOSaqfGrMPJ7bEWuRtnDSJG6AISfW7AQr");
+        let head = "--\n-- PostgreSQL database dump\n--\n\n";
+        let set = "SET statement_timeout = 0;\nSET transaction_timeout = 0;\nSELECT pg_catalog.set_config('search_path', '', false);\n";
+        let set16 = "SET statement_timeout = 0;\nSELECT pg_catalog.set_config('search_path', '', false);\n";
+        let schema = "\nCREATE TABLE public.lit (\n    a text\n);\n\n--\n-- PostgreSQL database dump complete\n--\n\n";
+        let data = "\nCOPY public.lit (a) FROM stdin;\nstep 1\\ncopy t from stdin;\\nstep 2\n\\.\n\n\n--\n-- PostgreSQL database dump complete\n--\n\n";
+        let src = format!("{head}\\restrict {k1}\n\n{set}{schema}\\unrestrict {k1}\n\n{head}\\restrict {k2}\n\n{set}{data}\\unrestrict {k2}\n\n");
+        assert_eq!(fed(&src, Some(16)).await, format!("\\restrict k1\n{head}\n{set16}{schema}\n{head}\n{set16}{data}\n\\unrestrict k1\n"));
+        // The second \restrict must follow an \unrestrict with the current key: otherwise both are kept (psql refuses the \unrestrict)
+        let other = format!("\\restrict {k1}\nselect 1;\n\\unrestrict x\n\\restrict {k2}\nselect 2;\n");
+        assert_eq!(fed(&other, None).await, format!("\\restrict k1\nselect 1;\n\\unrestrict x\n\\restrict {k2}\nselect 2;\n\n\\unrestrict k1\n"));
+    }
+
     /// Cancelling a psql restore kills psql before its input ends (at the end of its input it would commit the part sent so far)
     #[tokio::test]
     async fn cancel_kills_the_tool_before_its_input_ends() {
@@ -1075,7 +1129,7 @@ mod tests {
         q("create table qurry_bak.t as select g as id, md5(g::text) as h from generate_series(1, 5000) g").await.unwrap();
         // Values whose COPY lines look like what the psql input leaves out of pg_dump's header (a carriage return is written as \r)
         q("create table qurry_bak.v (v text, w text)").await.unwrap();
-        q(r"insert into qurry_bak.v values ('SET transaction_timeout = 0;', 'a'), (E'\restrict abc', 'b'), ('', E'\runrestrict abc'), (E'x\nSET transaction_timeout = 0;\n\\restrict k', E'\runrestrict k')").await.unwrap();
+        q(r"insert into qurry_bak.v values ('SET transaction_timeout = 0;', 'a'), (E'\restrict abc', 'b'), ('', E'\runrestrict abc'), (E'x\nSET transaction_timeout = 0;\n\\restrict k', E'\runrestrict k'), (E'step 1\ncopy t from stdin;\nstep 2', 'c')").await.unwrap();
         let content = "select count(*)::text || ':' || md5(string_agg(v || '|' || w, ',' order by v, w)) from qurry_bak.v";
         let before = q(content).await.unwrap().rows[0][0].clone();
         let dir = std::env::temp_dir().join(format!("qurry-bakf-{}", uuid::Uuid::new_v4()));
@@ -1089,6 +1143,23 @@ mod tests {
             st.restore("b".into(), file, RestoreOptions::default(), format!("r-{format}")).await.unwrap_or_else(|e| panic!("{format}: {e}"));
             assert_eq!(q("select count(*) from qurry_bak.t").await.unwrap().rows[0][0], serde_json::json!(5000), "{format}");
             assert_eq!(q(content).await.unwrap().rows[0][0], before, "{format}");
+        }
+        // Files made with pg_dump itself: --inserts (a line of a string looks like COPY … FROM stdin;) and two dumps one after the other
+        let pg: Vec<String> = std::env::var("QURRY_TEST_PG").unwrap().splitn(5, ':').map(String::from).collect();
+        for (name, parts) in [("inserts", vec!["--inserts"]), ("cat", vec!["-s", "-a"])] {
+            let file = dir.join(format!("{name}.sql"));
+            let mut out = std::fs::File::create(&file).unwrap();
+            for arg in parts {
+                let mut cmd = std::process::Command::new(find_tool("pg_dump").unwrap());
+                cmd.args(["-h", &pg[0], "-p", &pg[1], "-U", &pg[2], "-n", "qurry_bak", arg]).arg(pg_dbname(&pg[3])).env("PGPASSWORD", pg.get(4).map_or("", |p| p));
+                let dumped = cmd.output().unwrap();
+                assert!(dumped.status.success(), "{name}: {}", String::from_utf8_lossy(&dumped.stderr));
+                std::io::Write::write_all(&mut out, &dumped.stdout).unwrap();
+            }
+            q("drop schema qurry_bak cascade").await.unwrap();
+            st.restore("b".into(), file.to_string_lossy().into(), RestoreOptions::default(), format!("r-{name}")).await.unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(q("select count(*) from qurry_bak.t").await.unwrap().rows[0][0], serde_json::json!(5000), "{name}");
+            assert_eq!(q(content).await.unwrap().rows[0][0], before, "{name}");
         }
         // A damaged secrets.json doesn't block a source without a saved password (same rule as connecting)
         if std::env::var("QURRY_TEST_PG").unwrap().split(':').count() == 4 {
