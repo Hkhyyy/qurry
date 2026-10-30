@@ -400,6 +400,10 @@ mod tests {
         for s in ["Leave out DEFINER= clauses? (Enter / Esc)", "y leaves them out, Enter keeps them, Esc cancels the backup", "needs SUPER"] {
             assert!(screen.contains(s), "{s}\n{screen}");
         }
+        // Only the input has the thick (focused) border; the body box under it is plain
+        let rows: Vec<&str> = screen.lines().collect();
+        let y = rows.iter().position(|l| l.contains("y leaves them out")).unwrap();
+        assert!(rows[y - 2].contains("┗━") && rows[y - 1].contains("┌─"), "{screen}");
         // On a narrow terminal the body box grows with the word wrap, so the reason's last words still show
         let screen = h.screen(60, 20);
         for s in ["backup.", "them).", "(Enter / Esc)"] {

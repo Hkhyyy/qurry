@@ -866,8 +866,11 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             let all = centered(area, 90, 3 + bh);
             let r = Rect { height: all.height.min(3), ..all };
             if bh > 0 {
-                let inner = popup(f, Rect { y: r.bottom(), height: all.height - r.height, ..all }, "");
-                f.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), inner);
+                // A plain border: only the input above reads as focused
+                let br = Rect { y: r.bottom(), height: all.height - r.height, ..all };
+                clear(f, br);
+                let b = panel("", false).style(Style::default().bg(POPUP_BG));
+                f.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }).block(b), br);
             }
             clear(f, r);
             let hint = if words.is_empty() { "Enter / Esc" } else { "Enter / Esc · Tab complete" };
