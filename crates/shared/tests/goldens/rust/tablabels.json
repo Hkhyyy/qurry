@@ -1,0 +1,45 @@
+{
+  "case-differs": {
+    "tableTabLabels": [
+      "Users",
+      "users"
+    ]
+  },
+  "korean": {
+    "tableTabLabels": [
+      "판매.주문",
+      "public.주문"
+    ]
+  },
+  "same-schema-other-db": {
+    "tableTabLabels": [
+      "app.public.users",
+      "dev.public.users"
+    ]
+  },
+  "same-table-other-schema": {
+    "tableTabLabels": [
+      "public.users",
+      "billing.users"
+    ]
+  },
+  "single": {
+    "tableTabLabels": [
+      "users"
+    ]
+  },
+  "three-mixed": {
+    "tableTabLabels": [
+      "a.public.users",
+      "b.public.users",
+      "billing.users",
+      "orders"
+    ]
+  },
+  "unique": {
+    "tableTabLabels": [
+      "users",
+      "orders"
+    ]
+  }
+}

@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Cell, Dialect, dialectOf, QueryResult } from "../lib/api";
 import { DateTimePicker, isTemporal } from "./DateTimePicker";
 import { ContextMenu, MenuItem } from "./Explorer";
-import { inList } from "../lib/inList";
+import { DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, raw } from "../lib/extract";
 import { ResultChart } from "./ResultChart";
 import { Button, CellEditor, CodeBlock, GridCell, GridHeaderCell, GridHeaderRow, GridRow, IconButton, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, TextArea, ToolButton, Toolbar, ToolbarSep } from "../ui";
 import {
@@ -23,13 +23,7 @@ export interface EditTarget {
   pk: string[];
 }
 
-/** DataGrip Data Extractors (copy formats) */
-export const EXTRACTORS = ["CSV", "TSV", "SQL Inserts", "SQL Updates", "Where Clause", "SQL IN List", "JSON", "Markdown"] as const;
-export type Extractor = (typeof EXTRACTORS)[number];
 let lastExtractor: Extractor = "CSV"; // The last chosen extractor is the default for new tabs (DataGrip)
-
-/** Display value inserted by Set DEFAULT */
-export const DEFAULT_TOKEN = "\u0000DEFAULT";
 
 interface Props {
   result: QueryResult;
@@ -72,14 +66,9 @@ function display(c: Cell): string {
   if (c === DEFAULT_TOKEN) return "<default>";
   return String(c);
 }
-const raw = (c: Cell) => (c === null ? "" : c === DEFAULT_TOKEN ? "DEFAULT" : String(c));
 
 /** Cells whose original value is not shown as is (arrays, bytea, etc.) are not editable. */
 const editableValue = (v: Cell, typeName: string) => typeName !== "BYTEA" && !(typeof v === "string" && /^<[A-Z0-9_ \[\]]+>$/.test(v));
-
-function csvField(s: string, sep: string) {
-  return s.includes(sep) || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s;
-}
 
 export function ResultGrid(p: Props) {
   const { result, edit, loadingMore } = p;
@@ -416,35 +405,9 @@ export function ResultGrid(p: Props) {
   /** header = a column-name line at the top of CSV · TSV (Copy is values only — DataGrip; Copy with Headers includes it) */
   const extract = (rows: number[], c0: number, c1: number, fmt: Extractor, header = true): string => {
     const cs = Array.from({ length: c1 - c0 + 1 }, (_, i) => c0 + i);
-    const names = cs.map((c) => cols[c].name);
-    const vals = rows.map((r) => cs.map((c) => valueAt(r, c)));
-    switch (fmt) {
-      case "TSV":
-        return [...(header ? [names.join("\t")] : []), ...vals.map((v) => v.map(raw).join("\t"))].join("\n");
-      case "CSV":
-        return [...(header ? [names.map((n) => csvField(n, ",")).join(",")] : []), ...vals.map((v) => v.map((x) => csvField(raw(x), ",")).join(","))].join("\n");
-      case "SQL Inserts":
-        return vals.map((v) => `INSERT INTO ${tableRef} (${names.map(quoteIdent).join(", ")}) VALUES (${v.map(lit).join(", ")});`).join("\n");
-      case "SQL Updates":
-        return rows
-          .map((r, i) => {
-            const w = pkIdx.length ? pkIdx.map((k) => `${quoteIdent(cols[k].name)} = ${sqlLiteral(valueAt(r, k))}`).join(" AND ") : "/* no key */";
-            return `UPDATE ${tableRef} SET ${names.map((n, j) => `${quoteIdent(n)} = ${lit(vals[i][j])}`).join(", ")} WHERE ${w};`;
-          })
-          .join("\n");
-      case "Where Clause":
-        return vals.map((v) => "(" + names.map((n, j) => (v[j] === null ? `${quoteIdent(n)} IS NULL` : `${quoteIdent(n)} = ${lit(v[j])}`)).join(" AND ") + ")").join(" OR\n");
-      case "SQL IN List":
-        return inList(vals.map((v) => v.map((x) => (x === DEFAULT_TOKEN ? null : x))), cs.map((c) => cols[c].typeName));
-      case "JSON":
-        return JSON.stringify(vals.map((v) => Object.fromEntries(names.map((n, j) => [n, v[j] === DEFAULT_TOKEN ? null : v[j]]))), null, 2);
-      case "Markdown":
-        return [
-          `| ${names.join(" | ")} |`,
-          `| ${names.map(() => "---").join(" | ")} |`,
-          ...vals.map((v) => `| ${v.map((x) => (x === null ? "" : raw(x)).replace(/\|/g, "\\|")).join(" | ")} |`),
-        ].join("\n");
-    }
+    // Key values are read only for SQL Updates (as before: other formats never touch the key columns)
+    const keys = fmt === "SQL Updates" ? rows.map((r) => pkIdx.map((k): [string, Cell] => [cols[k].name, valueAt(r, k)])) : [];
+    return extractRows(fmt, { names: cs.map((c) => cols[c].name), types: cs.map((c) => cols[c].typeName), vals: rows.map((r) => cs.map((c) => valueAt(r, c))), keys, tableRef, dialect: D, header });
   };
   const copySelection = (header = false) => {
     if (!rect) return;

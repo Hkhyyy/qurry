@@ -20,6 +20,18 @@ describe("splitStatements", () => {
     expect(parts("select 1 as `a\\`, 1 as `b`; delete from t; -- `", true)).toHaveLength(3);
     expect(splitScript("select 1 as `a\\`\nselect 2", true)).toHaveLength(2);
   });
+
+  it("commented-out or quoted code is never its own statement (MySQL # comments, PostgreSQL E'\\'')", () => {
+    const my = "select * from orders where id = 6 # was; delete from orders where id = 6\nselect 2;";
+    expect(parts(my, true)).toEqual([my.slice(0, -1)]);
+    expect(splitScript(my, true).map((s) => my.slice(s.start, s.end).trim())).toEqual(["select * from orders where id = 6 # was; delete from orders where id = 6", "select 2"]);
+    const pg = "select E'\\'; delete from t where id = 1; --'";
+    expect(parts(pg)).toEqual([pg]);
+    expect(splitScript(pg).map((s) => pg.slice(s.start, s.end))).toEqual([pg]);
+    expect(parts("select e'\\''; select 2")).toEqual(["select e'\\''", "select 2"]);
+    // name'…' is not an E-string: \ is a plain char there
+    expect(parts("select 1 as name'\\'; select 2")).toHaveLength(2);
+  });
 });
 
 describe("statementAt", () => {

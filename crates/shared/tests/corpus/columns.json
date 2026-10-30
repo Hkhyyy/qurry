@@ -1,0 +1,9 @@
+[
+  { "id": "basic", "file": ["User Name", "email", "ID", "created-at", "extra"], "table": ["id", "user_name", "Email", "created_at"] },
+  { "id": "new-table", "file": ["a", "B c"], "table": null },
+  { "id": "korean", "file": ["주문 번호", "상태", "금액"], "table": ["주문_번호", "상태"] },
+  { "id": "nbsp-tab", "file": ["user name", "e\tmail"], "table": ["username", "email"] },
+  { "id": "unicode-case", "file": ["STRASSE", "İD", "ÉTAT"], "table": ["straße", "id", "état"] },
+  { "id": "duplicate-match", "file": ["user_id"], "table": ["UserId", "user-id"] },
+  { "id": "empty-table", "file": ["a"], "table": [] }
+]

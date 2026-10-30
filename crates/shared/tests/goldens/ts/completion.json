@@ -1,0 +1,206 @@
+{
+  "join-aliases": {
+    "tablesInStatement": [
+      {
+        "ref": "users",
+        "alias": "u"
+      },
+      {
+        "ref": "orders",
+        "alias": "o"
+      }
+    ],
+    "findTable": [
+      "public.users",
+      "public.orders"
+    ]
+  },
+  "schema-as-alias": {
+    "tablesInStatement": [
+      {
+        "ref": "billing.invoices",
+        "alias": "i"
+      }
+    ],
+    "findTable": [
+      "billing.invoices"
+    ]
+  },
+  "quoted-schema-table": {
+    "tablesInStatement": [
+      {
+        "ref": "public.users",
+        "alias": null
+      }
+    ],
+    "findTable": [
+      "public.users"
+    ]
+  },
+  "insert-into": {
+    "tablesInStatement": [
+      {
+        "ref": "orders",
+        "alias": null
+      }
+    ],
+    "findTable": [
+      "public.orders"
+    ]
+  },
+  "korean-table": {
+    "tablesInStatement": [],
+    "findTable": []
+  },
+  "keyword-not-alias": {
+    "tablesInStatement": [
+      {
+        "ref": "users",
+        "alias": null
+      }
+    ],
+    "findTable": [
+      "public.users"
+    ]
+  },
+  "left-join-on": {
+    "tablesInStatement": [
+      {
+        "ref": "users",
+        "alias": null
+      },
+      {
+        "ref": "orders",
+        "alias": null
+      }
+    ],
+    "findTable": [
+      "public.users",
+      "public.orders"
+    ]
+  },
+  "delete-alias": {
+    "tablesInStatement": [
+      {
+        "ref": "users",
+        "alias": "u"
+      }
+    ],
+    "findTable": [
+      "public.users"
+    ]
+  },
+  "subquery": {
+    "tablesInStatement": [],
+    "findTable": []
+  },
+  "quoted-with-space": {
+    "tablesInStatement": [
+      {
+        "ref": "My Table",
+        "alias": "t"
+      }
+    ],
+    "findTable": [
+      "public.My Table"
+    ]
+  },
+  "newline-join-using": {
+    "tablesInStatement": [
+      {
+        "ref": "users",
+        "alias": null
+      }
+    ],
+    "findTable": [
+      "public.users"
+    ]
+  },
+  "comma-tables": {
+    "tablesInStatement": [
+      {
+        "ref": "users",
+        "alias": "a"
+      }
+    ],
+    "findTable": [
+      "public.users"
+    ]
+  },
+  "korean-alias": {
+    "tablesInStatement": [
+      {
+        "ref": "orders",
+        "alias": null
+      }
+    ],
+    "findTable": [
+      "public.orders"
+    ]
+  },
+  "from-in-string": {
+    "tablesInStatement": [
+      {
+        "ref": "users",
+        "alias": "x"
+      },
+      {
+        "ref": "orders",
+        "alias": null
+      }
+    ],
+    "findTable": [
+      "public.users",
+      "public.orders"
+    ]
+  },
+  "upper-keywords": {
+    "tablesInStatement": [
+      {
+        "ref": "Users",
+        "alias": "U"
+      },
+      {
+        "ref": "Orders",
+        "alias": "O"
+      }
+    ],
+    "findTable": [
+      "public.users",
+      "public.orders"
+    ]
+  },
+  "ref:users": {
+    "findTable": "public.users"
+  },
+  "ref:USERS": {
+    "findTable": "public.users"
+  },
+  "ref:billing.users": {
+    "findTable": "billing.users"
+  },
+  "ref:BILLING.INVOICES": {
+    "findTable": "billing.invoices"
+  },
+  "ref:invoices": {
+    "findTable": "billing.invoices"
+  },
+  "ref:public.invoices": {
+    "findTable": null
+  },
+  "ref:nope": {
+    "findTable": null
+  },
+  "ref:sales.주문": {
+    "findTable": "sales.주문"
+  },
+  "ref:주문": {
+    "findTable": "sales.주문"
+  },
+  "ref:My Table": {
+    "findTable": "public.My Table"
+  },
+  "ref:a.b.c": {
+    "findTable": null
+  }
+}

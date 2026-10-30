@@ -22,7 +22,7 @@ pub struct Grid {
     pub added: usize,
     pub widths: Vec<u16>,
     /// Fractional-second digits of time columns (aligned within a column, 0 = no alignment)
-    frac: Vec<usize>,
+    pub(crate) frac: Vec<usize>,
     /// Last rendered height (PgUp/PgDn)
     pub page: usize,
     /// Last rendered layout (mouse clicks): body area, (column index, x start, x end) of visible columns
@@ -52,8 +52,14 @@ pub fn cell_text(v: &Value) -> String {
         other => other.to_string(),
     }
 }
+/// Columns whose fractional seconds are aligned: time types except INTERVAL
+pub(crate) fn is_time_type(type_name: &str) -> bool {
+    let t = type_name.to_uppercase();
+    t.contains("TIME") && !t.contains("INTERVAL")
+}
+
 /// End position of "hh:mm:ss" and fractional-second digits of a time value ([date ]hh:mm:ss[.ffffff]…)
-fn time_frac(s: &str) -> Option<(usize, usize)> {
+pub(crate) fn time_frac(s: &str) -> Option<(usize, usize)> {
     let b = s.as_bytes();
     let start = match b.iter().position(|&c| c == b' ' || c == b'T') {
         Some(i) if i >= 10 && b[i - 3] == b'-' => i + 1,
@@ -136,8 +142,7 @@ impl Grid {
             .iter()
             .enumerate()
             .map(|(i, c)| {
-                let t = c.type_name.to_uppercase();
-                if !t.contains("TIME") || t.contains("INTERVAL") {
+                if !is_time_type(&c.type_name) {
                     return 0;
                 }
                 r.rows.iter().filter_map(|row| row.get(i)?.as_str().and_then(time_frac)).map(|x| x.1).max().unwrap_or(0)

@@ -3,7 +3,15 @@ export interface Segment {
   end: number;
 }
 
-/** Split statements on semicolons. Skips strings, comments, and PostgreSQL dollar quoting. */
+/** Whether the quote at i opens PostgreSQL E'…': it follows e/E, which does not follow a name char (same as core sql::is_e_string) */
+function isEString(text: string, i: number): boolean {
+  return text[i] === "'" && (text[i - 1] === "e" || text[i - 1] === "E") && !/[A-Za-z0-9_$\u0080-￿]/.test(text[i - 2] ?? " ");
+}
+
+/**
+ * Split statements on semicolons. Skips strings, comments, and PostgreSQL dollar quoting.
+ * `backslashEscapes` is the MySQL mode: \ escapes in strings and # starts a line comment. Otherwise \ escapes only inside E'…'.
+ */
 export function splitStatements(text: string, backslashEscapes = false): Segment[] {
   const out: Segment[] = [];
   let start = 0;
@@ -12,7 +20,7 @@ export function splitStatements(text: string, backslashEscapes = false): Segment
   while (i < n) {
     const c = text[i];
     const d = text[i + 1];
-    if (c === "-" && d === "-") {
+    if ((c === "-" && d === "-") || (c === "#" && backslashEscapes)) {
       const j = text.indexOf("\n", i);
       i = j < 0 ? n : j + 1;
       continue;
@@ -23,9 +31,10 @@ export function splitStatements(text: string, backslashEscapes = false): Segment
       continue;
     }
     if (c === "'" || c === '"' || c === "`") {
+      const eStr = !backslashEscapes && isEString(text, i);
       let j = i + 1;
       while (j < n) {
-        if (backslashEscapes && c !== "`" && text[j] === "\\") {
+        if (((backslashEscapes && c !== "`") || eStr) && text[j] === "\\") {
           j += 2;
           continue;
         }
@@ -123,7 +132,7 @@ function scriptCuts(text: string, s: number, e: number, backslashEscapes: boolea
       i++;
       continue;
     }
-    if (c === "-" && d === "-") {
+    if ((c === "-" && d === "-") || (c === "#" && backslashEscapes)) {
       const j = text.indexOf("\n", i);
       i = j < 0 || j > e ? e : j;
       continue;
@@ -138,9 +147,10 @@ function scriptCuts(text: string, s: number, e: number, backslashEscapes: boolea
     const firstOnLine = !lineHasCode;
     lineHasCode = true;
     if (c === "'" || c === '"' || c === "`") {
+      const eStr = !backslashEscapes && isEString(text, i);
       let j = i + 1;
       while (j < e) {
-        if (backslashEscapes && c !== "`" && text[j] === "\\") {
+        if (((backslashEscapes && c !== "`") || eStr) && text[j] === "\\") {
           j += 2;
           continue;
         }

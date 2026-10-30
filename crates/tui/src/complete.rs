@@ -55,7 +55,7 @@ fn is_word(c: char) -> bool {
 }
 
 /// Find `from|join|update|into <ref> [as] [alias]`
-fn tables_in_statement(text: &str) -> Vec<(String, Option<String>)> {
+pub(crate) fn tables_in_statement(text: &str) -> Vec<(String, Option<String>)> {
     let toks: Vec<String> = tokenize(text);
     let mut out = vec![];
     for (i, t) in toks.iter().enumerate() {
@@ -112,7 +112,7 @@ fn tokenize(text: &str) -> Vec<String> {
     out
 }
 
-fn find_table<'a>(m: &'a Meta, r: &str, db: &str) -> Option<&'a CompletionTable> {
+pub(crate) fn find_table<'a>(m: &'a Meta, r: &str, db: &str) -> Option<&'a CompletionTable> {
     let r = r.to_lowercase();
     let (schema, name) = match r.split_once('.') {
         Some((s, n)) => (Some(s), n),
@@ -226,14 +226,14 @@ pub enum HintMode {
     Pairs,
 }
 
-struct Ctx {
-    r#ref: Option<String>,
-    column: String,
-    path: Vec<String>,
-    mode: HintMode,
-    quoted: bool,
-    typed: String,
-    op: String,
+pub(crate) struct Ctx {
+    pub(crate) r#ref: Option<String>,
+    pub(crate) column: String,
+    pub(crate) path: Vec<String>,
+    pub(crate) mode: HintMode,
+    pub(crate) quoted: bool,
+    pub(crate) typed: String,
+    pub(crate) op: String,
 }
 
 static RES: std::sync::LazyLock<[regex::Regex; 4]> = std::sync::LazyLock::new(|| {
@@ -265,7 +265,7 @@ fn my_path(p: &str) -> Vec<String> {
 
 const NOT_COLUMN: [&str; 13] = ["where", "and", "or", "not", "set", "on", "select", "by", "when", "then", "else", "case", "from"];
 
-fn context(before: &str, mysql: bool) -> Option<Ctx> {
+pub(crate) fn context(before: &str, mysql: bool) -> Option<Ctx> {
     let g = |c: &regex::Captures, i: usize| c.get(i).map(|m| m.as_str().to_string());
     let not_col = |s: &str| NOT_COLUMN.iter().any(|k| s.eq_ignore_ascii_case(k));
     let [my_keys, my_vals, keys, vals] = &*RES;

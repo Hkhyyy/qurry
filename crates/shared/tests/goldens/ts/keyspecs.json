@@ -1,0 +1,87 @@
+{
+  "Mod+K": {
+    "keyLabel": "Mod+K",
+    "formatSpec": "⌘k"
+  },
+  "Mod+Shift+K": {
+    "keyLabel": "Mod+Shift+K",
+    "formatSpec": "⇧⌘K"
+  },
+  "Mod+Alt+O": {
+    "keyLabel": "Mod+Alt+o",
+    "formatSpec": "⌥⌘o"
+  },
+  "Ctrl+Alt+P": {
+    "keyLabel": "Ctrl+Alt+p",
+    "formatSpec": "⌃⌥p"
+  },
+  "Alt+Enter": {
+    "keyLabel": "Alt+Enter",
+    "formatSpec": "⌥↩"
+  },
+  "Shift+F6": {
+    "keyLabel": "Shift+F6",
+    "formatSpec": "⇧F6"
+  },
+  "F5": {
+    "keyLabel": "F5",
+    "formatSpec": "F5"
+  },
+  "Ctrl+K": {
+    "keyLabel": "Ctrl+k",
+    "formatSpec": "⌃k"
+  },
+  "Ctrl+Shift+K": {
+    "keyLabel": "Ctrl+Shift+K",
+    "formatSpec": "⌃⇧K"
+  },
+  "Ctrl+Alt+Shift+Up": {
+    "keyLabel": "Ctrl+Alt+Shift+Up",
+    "formatSpec": "⌃⌥⇧↑"
+  },
+  "Ctrl+Space": {
+    "keyLabel": "Ctrl+Space",
+    "formatSpec": "⌃Space"
+  },
+  "Ctrl+Tab": {
+    "keyLabel": "Ctrl+Tab",
+    "formatSpec": "⌃⇥"
+  },
+  "Mod+Backspace": {
+    "keyLabel": "Mod+Backspace",
+    "formatSpec": "⌘⌫"
+  },
+  "Mod+[": {
+    "keyLabel": "Mod+[",
+    "formatSpec": "⌘["
+  },
+  "Alt++": {
+    "keyLabel": "Alt++",
+    "formatSpec": "⌥"
+  },
+  "Mod+Enter": {
+    "keyLabel": "Mod+Enter",
+    "formatSpec": "⌘↩"
+  },
+  "⌘K": {
+    "keyLabel": "⌘k"
+  },
+  "⌥⌘Y": {
+    "keyLabel": "⌥⌘y"
+  },
+  "⇧⌘A": {
+    "keyLabel": "⇧⌘A"
+  },
+  "⌃k": {
+    "keyLabel": "⌃k"
+  },
+  "Run (⌘↩) · ⌘F2": {
+    "keyLabel": "Run (⌘↩) · ⌘F2"
+  },
+  "Ctrl+K · Ctrl+Shift+K · Alt+Enter": {
+    "keyLabel": "Ctrl+k · Ctrl+Shift+K · Alt+Enter"
+  },
+  "⌥+wheel": {
+    "keyLabel": "⌥+wheel"
+  }
+}

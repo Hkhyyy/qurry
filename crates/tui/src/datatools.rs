@@ -201,11 +201,9 @@ fn num(v: &serde_json::Value) -> Option<f64> {
     }
 }
 
-/// Result → (title, horizontal bar text). Same X values are merged. Date · numeric X in order, others largest first. Up to rows lines
-pub(crate) fn bar_chart(r: &qurry_core::db::QueryResult, width: usize, rows: usize) -> Option<(String, String)> {
-    if r.rows.is_empty() || r.columns.is_empty() {
-        return None;
-    }
+/// The chart's axes: (numeric columns, X, Y). X is the first non-numeric column (else 0); Y the first numeric non-id column
+/// other than X (else any numeric one; None = row count). Needs at least one column
+pub(crate) fn chart_axes(r: &qurry_core::db::QueryResult) -> (Vec<usize>, usize, Option<usize>) {
     let is_num = |i: usize| {
         let t = r.columns[i].type_name.to_uppercase();
         if NUM_TYPES.iter().any(|n| t.starts_with(n)) || t.contains("UNSIGNED") {
@@ -222,6 +220,15 @@ pub(crate) fn bar_chart(r: &qurry_core::db::QueryResult, width: usize, rows: usi
     };
     let cands: Vec<usize> = nums.iter().copied().filter(|&i| i != x).collect();
     let y = cands.iter().copied().find(|i| !id(i)).or(cands.first().copied());
+    (nums, x, y)
+}
+
+/// Result → (title, horizontal bar text). Same X values are merged. Date · numeric X in order, others largest first. Up to rows lines
+pub(crate) fn bar_chart(r: &qurry_core::db::QueryResult, width: usize, rows: usize) -> Option<(String, String)> {
+    if r.rows.is_empty() || r.columns.is_empty() {
+        return None;
+    }
+    let (nums, x, y) = chart_axes(r);
     let mut order: Vec<String> = vec![];
     let mut sums: std::collections::HashMap<String, f64> = Default::default();
     for row in &r.rows {
@@ -290,5 +297,20 @@ mod tests {
         assert!(text.ends_with("… 2 more"), "{text}");
         let big = QueryResult { rows: vec![vec![json!(1), json!("a"), json!("1332117.67")]], ..r };
         assert!(super::bar_chart(&big, 10, 30).unwrap().1.ends_with("1,332,117.67"));
+    }
+
+    #[test]
+    fn chart_axes_without_rows_follow_types() {
+        let r = QueryResult {
+            columns: [("a", "text"), ("b", "int4")].iter().map(|(n, t)| ColumnInfo { name: n.to_string(), type_name: t.to_string() }).collect(),
+            rows: vec![],
+            rows_affected: 0,
+            truncated: false,
+            elapsed_ms: 0,
+            has_result_set: true,
+            in_transaction: false,
+        };
+        assert_eq!(super::chart_axes(&r), (vec![1], 0, Some(1)));
+        assert!(super::bar_chart(&r, 10, 30).is_none());
     }
 }

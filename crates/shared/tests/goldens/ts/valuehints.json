@@ -1,0 +1,460 @@
+{
+  "eq-quote": {
+    "hintContext": {
+      "ref": null,
+      "column": "status",
+      "path": [],
+      "mode": "values",
+      "quoted": true,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "paid",
+    "hintable": true
+  },
+  "eq-typed": {
+    "hintContext": {
+      "ref": null,
+      "column": "status",
+      "path": [],
+      "mode": "values",
+      "quoted": true,
+      "typed": "pa",
+      "op": null
+    },
+    "hintInsert": "paid",
+    "hintable": true
+  },
+  "eq-bare": {
+    "hintContext": {
+      "ref": "o",
+      "column": "status",
+      "path": [],
+      "mode": "values",
+      "quoted": false,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "'it''s'",
+    "hintable": true
+  },
+  "in-list": {
+    "hintContext": {
+      "ref": "o",
+      "column": "status",
+      "path": [],
+      "mode": "values",
+      "quoted": true,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "b",
+    "hintable": true
+  },
+  "not-in-list": {
+    "hintContext": {
+      "ref": null,
+      "column": "status",
+      "path": [],
+      "mode": "values",
+      "quoted": false,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "'c'",
+    "hintable": true
+  },
+  "like": {
+    "hintContext": {
+      "ref": null,
+      "column": "status",
+      "path": [],
+      "mode": "values",
+      "quoted": true,
+      "typed": "x",
+      "op": null
+    },
+    "hintInsert": "x%",
+    "hintable": true
+  },
+  "ilike": {
+    "hintContext": {
+      "ref": null,
+      "column": "status",
+      "path": [],
+      "mode": "values",
+      "quoted": true,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "X",
+    "hintable": true
+  },
+  "neq": {
+    "hintContext": {
+      "ref": "o",
+      "column": "status",
+      "path": [],
+      "mode": "values",
+      "quoted": false,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "'void'",
+    "hintable": true
+  },
+  "bang-eq": {
+    "hintContext": {
+      "ref": null,
+      "column": "status",
+      "path": [],
+      "mode": "values",
+      "quoted": true,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "void",
+    "hintable": true
+  },
+  "numeric-bare": {
+    "hintContext": {
+      "ref": null,
+      "column": "total",
+      "path": [],
+      "mode": "values",
+      "quoted": false,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "12.50",
+    "hintable": true
+  },
+  "bool-bare": {
+    "hintContext": {
+      "ref": null,
+      "column": "flag",
+      "path": [],
+      "mode": "values",
+      "quoted": false,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "true",
+    "hintable": true
+  },
+  "int-quoted": {
+    "hintContext": {
+      "ref": null,
+      "column": "id",
+      "path": [],
+      "mode": "values",
+      "quoted": true,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "7",
+    "hintable": true
+  },
+  "json-keys": {
+    "hintContext": {
+      "ref": null,
+      "column": "data",
+      "path": [],
+      "mode": "keys",
+      "quoted": true,
+      "typed": "",
+      "op": "->>'"
+    },
+    "hintInsert": "name",
+    "hintable": true,
+    "pairsForKeys": "@> 'name'"
+  },
+  "json-keys-space": {
+    "hintContext": {
+      "ref": null,
+      "column": "data",
+      "path": [],
+      "mode": "keys",
+      "quoted": false,
+      "typed": "",
+      "op": " ->> "
+    },
+    "hintInsert": "'name'",
+    "hintable": true,
+    "pairsForKeys": " @> 'name'"
+  },
+  "json-keys-path": {
+    "hintContext": {
+      "ref": null,
+      "column": "data",
+      "path": [
+        "meta"
+      ],
+      "mode": "keys",
+      "quoted": true,
+      "typed": "",
+      "op": "->>'"
+    },
+    "hintInsert": "tag",
+    "hintable": true,
+    "pairsForKeys": "@> 'tag'"
+  },
+  "json-keys-index": {
+    "hintContext": {
+      "ref": null,
+      "column": "data",
+      "path": [
+        "0"
+      ],
+      "mode": "keys",
+      "quoted": true,
+      "typed": "",
+      "op": "->>'"
+    },
+    "hintInsert": "k",
+    "hintable": true,
+    "pairsForKeys": "@> 'k'"
+  },
+  "json-keys-alias": {
+    "hintContext": {
+      "ref": "o",
+      "column": "data",
+      "path": [
+        "a"
+      ],
+      "mode": "keys",
+      "quoted": true,
+      "typed": "b",
+      "op": " ->> 'b"
+    },
+    "hintInsert": "bc",
+    "hintable": true,
+    "pairsForKeys": " @> 'bc'"
+  },
+  "json-value-path": {
+    "hintContext": {
+      "ref": null,
+      "column": "data",
+      "path": [
+        "kind"
+      ],
+      "mode": "values",
+      "quoted": true,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "a",
+    "hintable": true
+  },
+  "json-no-path": {
+    "hintContext": {
+      "ref": null,
+      "column": "data",
+      "path": [],
+      "mode": "values",
+      "quoted": true,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "{}",
+    "hintable": false
+  },
+  "pairs": {
+    "hintContext": {
+      "ref": null,
+      "column": "reasons",
+      "path": [],
+      "mode": "pairs",
+      "quoted": true,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "{\"code\": \"x\"}",
+    "hintable": true
+  },
+  "pg-dollar-path": {
+    "hintContext": null
+  },
+  "mysql-keys": {
+    "hintContext": {
+      "ref": null,
+      "column": "data",
+      "path": [
+        "meta"
+      ],
+      "mode": "keys",
+      "quoted": true,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "tag",
+    "hintable": true,
+    "pairsForKeys": "@> 'tag'"
+  },
+  "mysql-keys-quoted-seg": {
+    "hintContext": {
+      "ref": "t",
+      "column": "data",
+      "path": [
+        "a b"
+      ],
+      "mode": "keys",
+      "quoted": true,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "c",
+    "hintable": true,
+    "pairsForKeys": "@> 'c'"
+  },
+  "mysql-value": {
+    "hintContext": {
+      "ref": null,
+      "column": "data",
+      "path": [
+        "a"
+      ],
+      "mode": "values",
+      "quoted": true,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "it''s",
+    "hintable": true
+  },
+  "mysql-plain": {
+    "hintContext": {
+      "ref": null,
+      "column": "status",
+      "path": [],
+      "mode": "values",
+      "quoted": true,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "a\\b",
+    "hintable": true
+  },
+  "mysql-pairs": {
+    "hintContext": null
+  },
+  "keyword-where": {
+    "hintContext": null
+  },
+  "keyword-from": {
+    "hintContext": {
+      "ref": null,
+      "column": "from",
+      "path": [],
+      "mode": "values",
+      "quoted": true,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "x",
+    "hintable": true
+  },
+  "keyword-and": {
+    "hintContext": null
+  },
+  "quoted-column": {
+    "hintContext": {
+      "ref": null,
+      "column": "Status",
+      "path": [],
+      "mode": "values",
+      "quoted": true,
+      "typed": "x",
+      "op": null
+    },
+    "hintInsert": "xy",
+    "hintable": true
+  },
+  "quoted-alias-column": {
+    "hintContext": {
+      "ref": "o",
+      "column": "Status",
+      "path": [],
+      "mode": "values",
+      "quoted": true,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "a",
+    "hintable": true
+  },
+  "korean-column": {
+    "hintContext": null
+  },
+  "array-column": {
+    "hintContext": {
+      "ref": null,
+      "column": "tags",
+      "path": [],
+      "mode": "values",
+      "quoted": true,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "{a}",
+    "hintable": false
+  },
+  "underscore-array": {
+    "hintContext": {
+      "ref": null,
+      "column": "tags",
+      "path": [],
+      "mode": "values",
+      "quoted": true,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "{1}",
+    "hintable": false
+  },
+  "geometry": {
+    "hintContext": {
+      "ref": null,
+      "column": "geom",
+      "path": [],
+      "mode": "values",
+      "quoted": true,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "POINT(0 0)",
+    "hintable": false
+  },
+  "bytea": {
+    "hintContext": {
+      "ref": null,
+      "column": "body",
+      "path": [],
+      "mode": "values",
+      "quoted": true,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "\\x00",
+    "hintable": false
+  },
+  "money-bare": {
+    "hintContext": {
+      "ref": null,
+      "column": "price",
+      "path": [],
+      "mode": "values",
+      "quoted": false,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "$1.00",
+    "hintable": true
+  },
+  "no-context": {
+    "hintContext": null
+  },
+  "after-gt": {
+    "hintContext": null
+  }
+}

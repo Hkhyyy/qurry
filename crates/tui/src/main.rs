@@ -19,6 +19,8 @@ mod workspace;
 mod testkit;
 #[cfg(test)]
 mod kit_snapshots;
+#[cfg(test)]
+mod parity_dump;
 mod scope;
 mod selfupdate;
 mod snippets;
