@@ -129,6 +129,8 @@ pub fn belongs(key: &str, id: &str) -> bool {
 pub fn is_conn_lost(e: &AppError) -> bool {
     match e {
         AppError::Db(sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed | sqlx::Error::WorkerCrashed | sqlx::Error::Tls(_) | sqlx::Error::Protocol(_)) => true,
+        // PostgreSQL ended the session (FATAL): terminated by an administrator or a server restart, crash, idle (in transaction) session timeout
+        AppError::Db(sqlx::Error::Database(d)) => matches!(d.code().as_deref(), Some("57P01" | "57P02" | "57P05" | "25P03")),
         AppError::Io(_) => true,
         AppError::Msg(m) => {
             let m = m.to_lowercase();
@@ -139,8 +141,9 @@ pub fn is_conn_lost(e: &AppError) -> bool {
 }
 
 /// If the connection was lost: drop the tab session (so the dead connection is not reused; the next run reconnects),
-/// and close the pool too if it does not respond (e.g. the SSH tunnel died). Never resend the same statement (the server may have already run it)
-async fn recover(state: &AppState, id: &str, tab: Option<&str>, lost_tx: bool, e: AppError) -> AppError {
+/// and close the pool too if it does not respond (e.g. the SSH tunnel died). Never resend the same statement (the server may have already run it).
+/// tx = how the console's open transaction ended (audit::ended_by), None if none was open
+async fn recover(state: &AppState, id: &str, tab: Option<&str>, tx: Option<&str>, e: AppError) -> AppError {
     if !is_conn_lost(&e) {
         return e;
     }
@@ -155,10 +158,13 @@ async fn recover(state: &AppState, id: &str, tab: Option<&str>, lost_tx: bool, e
         }
     }
     crate::log!("[qurry] connection lost on {id}: {e}");
-    AppError::Msg(format!(
-        "{e} — connection lost{}. Run it again to reconnect.",
-        if lost_tx { "; the open transaction was rolled back by the server" } else { "" }
-    ))
+    AppError::Msg(match tx {
+        Some(crate::audit::COMMIT_UNKNOWN) => format!(
+            "{e} — connection lost while committing, so it is unknown whether the changes were committed. Check the data before you run them again (the next run reconnects)."
+        ),
+        Some(_) => format!("{e} — connection lost; the open transaction was rolled back by the server. Run it again to reconnect."),
+        None => format!("{e} — connection lost. Run it again to reconnect."),
+    })
 }
 
 /// Close all DB pools, sessions and tunnels of the Data Source.
@@ -730,12 +736,15 @@ impl AppState {
         let logged = match watch {
             true => {
                 let a = self.audit.after(started, &id, &cfg.name, cfg.kind, tab, &sql, &r, undo);
-                a.and(self.audit_lost_tx(&id, &cfg.name, tab).await)
+                a.and(self.audit_lost_tx(&id, &cfg.name, tab, &sql, &r).await)
             }
             false => Ok(()),
         };
         match r {
-            Err(e) => Err(recover(self, &id, tab, in_tx, e).await),
+            Err(e) => {
+                let tx = if in_tx { crate::audit::ended_by(&sql, &e, true) } else { None };
+                Err(recover(self, &id, tab, tx, e).await)
+            }
             // It ran (and may be committed): a log failure now is a warning, so nobody runs it again
             Ok(mut q) => {
                 q.warning = logged.err().map(|e| e.to_string());
@@ -807,11 +816,18 @@ impl AppState {
         }
     }
 
-    /// The console's transaction with logged changes ended without a COMMIT (deadlock, failed COMMIT, lost connection): log that the server rolled it back
-    async fn audit_lost_tx(&self, id: &str, name: &str, tab: Option<&str>) -> AppResult<()> {
-        match tab {
-            Some(t) if !self.tx_state(t.into()).await => self.audit.tx_closed(id, name, t, "ROLLBACK (by the server)"),
-            _ => Ok(()),
+    /// The console's transaction with logged changes ended without a COMMIT after `sql` ran (deadlock, failed COMMIT, lost connection):
+    /// log that the server rolled it back, or that a COMMIT cut off by a lost connection has an unknown outcome (audit::ended_by)
+    async fn audit_lost_tx(&self, id: &str, name: &str, tab: Option<&str>, sql: &str, r: &AppResult<QueryResult>) -> AppResult<()> {
+        let Some(t) = tab else { return Ok(()) };
+        let open = self.tx_state(t.into()).await;
+        let word = match r {
+            Ok(_) => (!open).then_some(crate::audit::BY_SERVER),
+            Err(e) => crate::audit::ended_by(sql, e, open),
+        };
+        match word {
+            Some(w) => self.audit.tx_closed(id, name, t, w),
+            None => Ok(()),
         }
     }
 
@@ -827,7 +843,15 @@ impl AppState {
             (s.fetch(limit.unwrap_or(500)).await, in_tx)
         };
         match r {
-            Err(e) => Err(recover(self, &conn_id, Some(&tab_id), in_tx, e).await),
+            Err(e) => {
+                let tx = (in_tx && is_conn_lost(&e)).then_some(crate::audit::BY_SERVER);
+                if let Some(w) = tx
+                    && let Err(le) = self.audit_tx_end(&tab_id, w).await
+                {
+                    crate::log!("[qurry] {le}");
+                }
+                Err(recover(self, &conn_id, Some(&tab_id), tx, e).await)
+            }
             ok => ok,
         }
     }
@@ -909,11 +933,14 @@ impl AppState {
         let logged = match &cfg {
             Some(c) => {
                 let a = self.audit.after(started, &conn, &c.name, c.kind, Some(&tab_id), "COMMIT", &r, None);
-                a.and(self.audit_lost_tx(&conn, &c.name, Some(&tab_id)).await)
+                a.and(self.audit_lost_tx(&conn, &c.name, Some(&tab_id), "COMMIT", &r).await)
             }
             None => Ok(()),
         };
-        r.map(|_| logged.err().map(|e| e.to_string()))
+        match r {
+            Err(e) => Err(recover(self, &conn, Some(&tab_id), Some(crate::audit::COMMIT_UNKNOWN), e).await),
+            Ok(_) => Ok(logged.err().map(|e| e.to_string())),
+        }
     }
 
     /// → a warning when it rolled back but that couldn't be logged
@@ -975,7 +1002,7 @@ impl AppState {
             false => Ok(()),
         };
         match r {
-            Err(e) => Err(recover(self, &id, None, false, e).await),
+            Err(e) => Err(recover(self, &id, None, None, e).await),
             // Committed: a log failure now is a warning, so nobody saves it again
             Ok(rows) => Ok(BatchResult { rows, warning: logged.err().map(|e| e.to_string()) }),
         }

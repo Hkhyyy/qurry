@@ -310,6 +310,21 @@ impl Audit {
     }
 }
 
+/// Log entry for a console transaction with logged changes that the server ended without a COMMIT
+pub(crate) const BY_SERVER: &str = "ROLLBACK (by the server)";
+/// Log entry for a COMMIT cut off by a lost connection: the server may have committed before the connection went
+pub(crate) const COMMIT_UNKNOWN: &str = "COMMIT outcome unknown (connection lost)";
+
+/// How the console's transaction ended when `sql` failed with `e` (open = the session still has it open; None = nothing ended).
+/// A lost connection rolls it back on the server, unless `sql` was the COMMIT; otherwise it ended only if the session closed it
+/// (an error the server reported: deadlock, failed COMMIT)
+pub(crate) fn ended_by(sql: &str, e: &AppError, open: bool) -> Option<&'static str> {
+    if crate::app::is_conn_lost(e) {
+        return Some(if tx_end(sql) == Some("COMMIT") { COMMIT_UNKNOWN } else { BY_SERVER });
+    }
+    (!open).then_some(BY_SERVER)
+}
+
 // ───────── Undo SQL ─────────
 
 /// Table column: name · whether PK · whether generated (cannot be inserted) · MySQL binary (snapshotted as HEX)
@@ -560,6 +575,20 @@ mod tests {
 
     fn col(name: &str, pk: bool) -> Col {
         Col { name: name.into(), pk, generated: false, binary: false }
+    }
+
+    /// How the log closes the console's transaction after a failed statement: a lost connection rolls it back, unless the statement
+    /// was the COMMIT (it may have committed); otherwise only when the server ended it
+    #[test]
+    fn transaction_end_after_a_failure() {
+        let lost = || AppError::Db(sqlx::Error::Io(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "connection reset by peer")));
+        assert_eq!(ended_by("COMMIT", &lost(), false), Some(COMMIT_UNKNOWN));
+        assert_eq!(ended_by("-- done\nend", &lost(), true), Some(COMMIT_UNKNOWN));
+        assert_eq!(ended_by("update t set a = 1 where id = 1", &lost(), true), Some(BY_SERVER));
+        // Not lost: the session says whether the transaction is still open
+        let other = || AppError::Msg("Not run: deadlock".into());
+        assert_eq!(ended_by("update t set a = 1 where id = 1", &other(), false), Some(BY_SERVER));
+        assert_eq!(ended_by("update t set a = 1 where id = 1", &other(), true), None);
     }
 
     #[test]
@@ -1163,5 +1192,80 @@ mod tests {
         // All stay in the log as "no result recorded"
         assert!(st.audit_log(None, "pg_sleep".into(), 3).iter().all(|e| e.started));
         drop_own(&st, DbKind::Postgres).await;
+    }
+
+    /// A schema (PostgreSQL) / database (MySQL) `s` of the test's own, with table `s.t` (id, v) holding rows (1, 1) (2, 2) (3, 3)
+    async fn followup_table(st: &crate::app::AppState, kind: DbKind, s: &str) {
+        let my = kind == DbKind::Mysql;
+        for sql in [
+            if my { format!("drop database if exists {s}") } else { format!("drop schema if exists {s} cascade") },
+            if my { format!("create database {s}") } else { format!("create schema {s}") },
+            format!("create table {s}.t (id int primary key, v int)"),
+            format!("insert into {s}.t values (1, 1), (2, 2), (3, 3)"),
+        ] {
+            st.run_query("d".into(), sql, None, None).await.unwrap();
+        }
+    }
+
+    async fn followup_values(st: &crate::app::AppState, s: &str) -> String {
+        serde_json::to_string(&st.run_query("d".into(), format!("select v from {s}.t order by id"), None, None).await.unwrap().rows).unwrap()
+    }
+
+    async fn followup_drop(st: &crate::app::AppState, kind: DbKind, s: &str) {
+        let sql = if kind == DbKind::Mysql { format!("drop database {s}") } else { format!("drop schema {s} cascade") };
+        st.run_query("d".into(), sql, None, None).await.unwrap();
+    }
+
+    /// The server ends the console's connection (pg_terminate_backend · KILL) while a Manual transaction holds a logged change.
+    /// The next statement fails: the log closes the transaction as rolled back by the server, so a later COMMIT doesn't read as
+    /// committing the lost change. A COMMIT cut off the same way is logged as of unknown outcome, and the next run reconnects
+    async fn lost_connection_is_logged(kind: DbKind, env: &str) {
+        let Some(st) = prod_state(kind, env).await else { return };
+        let s = "audit_followups_lost";
+        followup_table(&st, kind, s).await;
+        let run = |sql: String| st.run_query("d".into(), sql, None, Some("m".into()));
+        let kill = || async {
+            let pid = st.sessions.read().await.get("m").unwrap().pid;
+            let sql = if kind == DbKind::Mysql { format!("KILL {pid}") } else { format!("select pg_terminate_backend({pid})") };
+            st.run_query("d".into(), sql, None, None).await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        };
+        let log = |n: usize| st.audit_log(None, String::new(), 20).into_iter().map(|e| e.sql).filter(|q| !q.starts_with("KILL")).take(n).collect::<Vec<_>>();
+        st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
+        run(format!("update {s}.t set v = 10 where id = 1")).await.unwrap();
+        kill().await;
+        let e = run(format!("update {s}.t set v = 11 where id = 2")).await.unwrap_err().to_string();
+        assert!(e.contains("connection lost") && e.contains("rolled back by the server"), "{e}");
+        assert!(!st.tx_state("m".into()).await);
+        // The tab reconnects (still Manual): a new change and its COMMIT
+        run(format!("update {s}.t set v = 12 where id = 3")).await.unwrap();
+        st.commit_tx("m".into()).await.unwrap();
+        assert_eq!(
+            log(5),
+            ["COMMIT".to_string(), format!("update {s}.t set v = 12 where id = 3"), BY_SERVER.into(), format!("update {s}.t set v = 11 where id = 2"), format!("update {s}.t set v = 10 where id = 1")]
+        );
+        assert_eq!(followup_values(&st, s).await, "[[1],[2],[12]]");
+        // COMMIT on a lost connection: it may or may not have committed
+        run(format!("update {s}.t set v = 13 where id = 1")).await.unwrap();
+        kill().await;
+        let e = st.commit_tx("m".into()).await.unwrap_err().to_string();
+        assert!(e.contains("unknown whether") && e.contains("Check"), "{e}");
+        assert_eq!(log(3), [COMMIT_UNKNOWN.to_string(), "COMMIT".into(), format!("update {s}.t set v = 13 where id = 1")]);
+        assert!(!st.tx_state("m".into()).await);
+        run("select 1".into()).await.unwrap();
+        st.rollback_tx("m".into()).await.unwrap();
+        followup_drop(&st, kind, s).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn pg_lost_connection_is_logged() {
+        lost_connection_is_logged(DbKind::Postgres, "QURRY_TEST_PG").await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_lost_connection_is_logged() {
+        lost_connection_is_logged(DbKind::Mysql, "QURRY_TEST_MY").await;
     }
 }
