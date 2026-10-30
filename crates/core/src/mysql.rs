@@ -96,14 +96,36 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
         opts = opts.ssl_mode(sqlx::mysql::MySqlSslMode::Required);
     }
     let pool = match pool_opts().connect_with(opts.clone()).await {
-        // Plain text is allowed: also when the server just drops the connection during the handshake (some old servers do)
-        Err(e) if !explicit_ssl && plain_ok && (is_tls_failure(&e) || matches!(&e, sqlx::Error::Io(io) if matches!(io.kind(), ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted))) => {
-            pool_opts().connect_with(opts.ssl_mode(sqlx::mysql::MySqlSslMode::Disabled)).await?
-        }
-        Err(e) if !explicit_ssl && is_tls_failure(&e) => return Err(AppError::Msg(format!("{NEEDS_TLS}\n({e})"))),
-        r => r?,
+        Err(e) => match on_connect_error(&e, explicit_ssl, plain_ok) {
+            OnConnectError::RetryPlain => pool_opts().connect_with(opts.ssl_mode(sqlx::mysql::MySqlSslMode::Disabled)).await?,
+            OnConnectError::NeedsTls => return Err(AppError::Msg(format!("{NEEDS_TLS}\n({e})"))),
+            OnConnectError::Fail => return Err(e.into()),
+        },
+        Ok(p) => p,
     };
     Ok(pool)
+}
+
+#[derive(Debug, PartialEq)]
+enum OnConnectError {
+    /// Plain text is allowed: connect again without TLS
+    RetryPlain,
+    /// Tell the user about "Allow unencrypted connection"
+    NeedsTls,
+    Fail,
+}
+
+/// What to do when the first connect fails. A TLS failure, or the server just dropping the connection during the handshake (some old servers do),
+/// counts only when SSL isn't set explicitly
+fn on_connect_error(e: &sqlx::Error, explicit_ssl: bool, plain_ok: bool) -> OnConnectError {
+    let dropped = matches!(e, sqlx::Error::Io(io) if matches!(io.kind(), ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted));
+    if explicit_ssl || !(is_tls_failure(e) || dropped) {
+        OnConnectError::Fail
+    } else if plain_ok {
+        OnConnectError::RetryPlain
+    } else {
+        OnConnectError::NeedsTls
+    }
 }
 
 /// When not falling back to plaintext on a server without TLS
@@ -765,6 +787,29 @@ mod tests {
         assert!(!super::is_tls_failure(&sqlx::Error::Io(Error::new(ErrorKind::ConnectionRefused, "Connection refused (os error 61)"))));
         assert!(!super::is_tls_failure(&sqlx::Error::Io(Error::new(ErrorKind::InvalidData, "invalid packet sequence"))));
         assert!(!super::is_tls_failure(&sqlx::Error::Protocol("Access denied for user 'u'".into())));
+    }
+
+    /// An old server that just drops the connection during the TLS handshake gets the "Allow unencrypted" hint (or plain text when allowed)
+    #[test]
+    fn dropped_handshake_gets_the_tls_hint() {
+        use super::OnConnectError::*;
+        use std::io::{Error, ErrorKind};
+        let io = |k: ErrorKind, m: &str| sqlx::Error::Io(Error::new(k, m));
+        for k in [ErrorKind::UnexpectedEof, ErrorKind::ConnectionReset, ErrorKind::ConnectionAborted] {
+            let e = io(k, "unexpected end of file");
+            assert_eq!(super::on_connect_error(&e, false, false), NeedsTls, "{k:?}");
+            assert_eq!(super::on_connect_error(&e, false, true), RetryPlain, "{k:?}");
+            // SSL set explicitly: the raw error
+            assert_eq!(super::on_connect_error(&e, true, false), Fail, "{k:?}");
+        }
+        let tls = io(ErrorKind::InvalidData, "received fatal alert: HandshakeFailure");
+        assert_eq!(super::on_connect_error(&tls, false, false), NeedsTls);
+        assert_eq!(super::on_connect_error(&tls, false, true), RetryPlain);
+        assert_eq!(super::on_connect_error(&tls, true, false), Fail);
+        for e in [io(ErrorKind::ConnectionRefused, "Connection refused (os error 61)"), sqlx::Error::Protocol("Access denied for user 'u'".into())] {
+            assert_eq!(super::on_connect_error(&e, false, false), Fail, "{e}");
+            assert_eq!(super::on_connect_error(&e, false, true), Fail, "{e}");
+        }
     }
 
     #[tokio::test]

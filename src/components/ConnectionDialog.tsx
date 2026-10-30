@@ -295,7 +295,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
           </Checkbox>
           <label>Mode</label>
           <Select disabled={!ssl.enabled} value={ssl.mode || "require"} onChange={(e) => setSsl("mode", e.target.value)}>
-            <option value="require">Require (encrypt, don't verify)</option>
+            <option value="require">Require — encrypt, no certificate check</option>
             <option value="verify-ca">Verify CA</option>
             <option value="verify-full">Full Verification (CA + host name)</option>
           </Select>

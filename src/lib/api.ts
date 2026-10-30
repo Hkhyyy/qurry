@@ -10,6 +10,8 @@ export const VECTOR_KINDS: DbKind[] = ["qdrant", "chroma", "milvus"];
 export const isFileKind = (k: DbKind) => k === "sqlite" || k === "duckdb";
 /** Start of the backend error when the driver is missing */
 export const DRIVER_MISSING = "Driver not installed:";
+/** A delete_connection error that still removed the data source (only its saved password stayed: AppState::delete_connection) */
+export const removedDespite = (e: unknown) => String(e).includes("The data source was removed, but its saved password couldn't be");
 
 export interface ConnectionConfig {
   id: string;

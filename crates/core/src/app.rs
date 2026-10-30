@@ -68,7 +68,7 @@ impl AppState {
 
     /// The secret only for a source that has one (flag, or an entry in the file): sources without a password still connect when secrets.json is damaged
     fn saved_secret(&self, key: &str, saved: bool) -> AppResult<Option<String>> {
-        if saved || self.secret_file.contains(key) { self.secret(key) } else { Ok(None) }
+        if saved || self.secret_file.contains(key)? { self.secret(key) } else { Ok(None) }
     }
 
     pub fn set_secret(&self, key: &str, value: Option<&str>) -> AppResult<()> {
@@ -529,7 +529,7 @@ impl AppState {
             .into_iter()
             .map(|c| {
                 Ok(ConnectionView {
-                    has_password: c.password_saved || self.secret_file.contains(&c.id),
+                    has_password: c.password_saved || self.secret_file.contains(&c.id).unwrap_or(true),
                     connected: pools.keys().any(|k| belongs(k, &c.id)),
                     config: c,
                 })
@@ -550,12 +550,13 @@ impl AppState {
         // The saved-password flag is managed on the backend (None = keep the existing value)
         let prev = self.store.get(&config.id)?;
         // If the server changed, do not use the saved password for the new server: ask for it again
-        // "Saved" means the password actually exists, not the flag (old imports left entries with only the flag turned off)
+        // "Saved" means the password actually exists, not the flag (old imports left entries with only the flag turned off).
+        // A damaged secrets.json that may hold it counts as saved
         if let Some(p) = &prev {
-            if password.is_none() && self.secret_file.contains(&p.id) && !p.same_server(&config) {
+            if password.is_none() && self.secret_file.contains(&p.id).unwrap_or(true) && !p.same_server(&config) {
                 return Err(AppError::Msg(SERVER_CHANGED.into()));
             }
-            if ssh_secret.is_none() && self.secret_file.contains(&store::ssh_secret_key(&p.id)) && config.active_ssh().is_some() && !p.same_ssh(&config) {
+            if ssh_secret.is_none() && self.secret_file.contains(&store::ssh_secret_key(&p.id)).unwrap_or(true) && config.active_ssh().is_some() && !p.same_ssh(&config) {
                 return Err(AppError::Msg(SSH_CHANGED.into()));
             }
         }
@@ -601,7 +602,7 @@ impl AppState {
     /// The saved password, if it may be sent to config (only when it is the same server as the saved settings)
     fn saved_password_for(&self, config: &ConnectionConfig) -> AppResult<Option<String>> {
         match self.store.get(&config.id)? {
-            Some(p) if self.secret_file.contains(&p.id) && !p.same_server(config) => Err(AppError::Msg(SERVER_CHANGED.into())),
+            Some(p) if self.secret_file.contains(&p.id).unwrap_or(true) && !p.same_server(config) => Err(AppError::Msg(SERVER_CHANGED.into())),
             Some(p) => self.saved_secret(&config.id, p.password_saved),
             None => Ok(None),
         }
@@ -609,7 +610,7 @@ impl AppState {
 
     fn saved_ssh_secret_for(&self, config: &ConnectionConfig) -> AppResult<Option<String>> {
         match self.store.get(&config.id)? {
-            Some(p) if self.secret_file.contains(&store::ssh_secret_key(&p.id)) && !p.same_ssh(config) => Err(AppError::Msg(SSH_CHANGED.into())),
+            Some(p) if self.secret_file.contains(&store::ssh_secret_key(&p.id)).unwrap_or(true) && !p.same_ssh(config) => Err(AppError::Msg(SSH_CHANGED.into())),
             Some(p) => self.saved_secret(&store::ssh_secret_key(&config.id), p.ssh_secret_saved),
             None => Ok(None),
         }
@@ -1153,8 +1154,14 @@ mod tests {
         };
         st.save_connection(mk("pw"), Some("secret".into()), None).await.unwrap();
         st.save_connection(mk("trust"), None, None).await.unwrap();
-        std::fs::write(dir.join("secrets.json"), "{ \"pw\": \"tru").unwrap();
+        // A password in the file whose flag was cleared (old imports did that)
+        st.save_connection(mk("flagless"), Some("secret".into()), None).await.unwrap();
+        st.store.save(&mk("flagless")).unwrap();
+        let damaged = "{ \"flagless\": \"x\", \"pw\": \"tru";
+        std::fs::write(dir.join("secrets.json"), damaged).unwrap();
         let e = st.connect("pw".into()).await.unwrap_err().to_string();
+        assert!(e.contains("damaged"), "{e}");
+        let e = st.connect("flagless".into()).await.unwrap_err().to_string();
         assert!(e.contains("damaged"), "{e}");
         // No saved password or SSH secret: tries the SSH server (nothing listens on port 1), not the secrets file
         let e = st.connect("trust".into()).await.unwrap_err().to_string();
@@ -1164,7 +1171,7 @@ mod tests {
         let e = st.delete_connection("pw".into()).await.unwrap_err().to_string();
         assert!(e.contains("was removed") && e.contains("damaged"), "{e}");
         assert!(st.store.get("pw").unwrap().is_none());
-        assert_eq!(std::fs::read_to_string(dir.join("secrets.json")).unwrap(), "{ \"pw\": \"tru");
+        assert_eq!(std::fs::read_to_string(dir.join("secrets.json")).unwrap(), damaged);
         let _ = std::fs::remove_dir_all(dir);
     }
 

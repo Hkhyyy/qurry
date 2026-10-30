@@ -167,7 +167,7 @@ pub struct ConnOptions {
     #[serde(default)]
     pub confirm_changes: bool,
     /// A remote MySQL with no SSL setting may connect in plain text if it can't do TLS (old servers · trusted networks).
-    /// This and mcp are saved in connection-access.json, not connections.json (Store::list)
+    /// This and mcp are also saved in connection-access.json, which wins over connections.json (Store::list)
     #[serde(default)]
     pub allow_plaintext: bool,
     /// Whether it's visible to the MCP server: "off" | "read" | "write" (None = source created before this was set, ConnectionConfig::mcp_access)
@@ -350,8 +350,9 @@ pub struct Store {
     path: PathBuf,
 }
 
-/// Per-source settings that older apps (0.2.12 and before) don't know. They live in connection-access.json (by connection id),
-/// because an older app saving connections.json drops fields it doesn't know — an MCP Off source would be shared again
+/// Per-source settings that older apps (0.2.12 and before) don't know. They are kept in connection-access.json too (by connection id),
+/// because an older app saving connections.json drops fields it doesn't know — an MCP Off source would be shared again.
+/// connections.json still has them, for when the side file is missing or has no entry for a source
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct Access {
@@ -394,7 +395,7 @@ impl Store {
     fn access(&self) -> AppResult<BTreeMap<String, Access>> {
         let path = self.access_path();
         match fs::read_to_string(&path) {
-            Ok(s) => serde_json::from_str(&s).map_err(|e| crate::error::AppError::Msg(format!("{} is damaged ({e}) — restore it from a backup, or move it away and set MCP access and \"Allow unencrypted connection\" again for each data source", path.display()))),
+            Ok(s) => serde_json::from_str(&s).map_err(|e| crate::error::AppError::Msg(format!("{} is damaged ({e}) — restore it from a backup, or move it away: MCP access and \"Allow unencrypted connection\" are then read from connections.json (check them if an older Qurry version saved your data sources since)", path.display()))),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
             Err(e) => Err(e.into()),
         }
@@ -405,17 +406,33 @@ impl Store {
     }
 
     pub fn save(&self, config: &ConnectionConfig) -> AppResult<()> {
-        let mut all = self.list()?;
-        match all.iter_mut().find(|c| c.id == config.id) {
-            Some(existing) => *existing = config.clone(),
-            None => all.push(config.clone()),
-        }
-        self.write(&all)
+        self.update(|all| {
+            match all.iter_mut().find(|c| c.id == config.id) {
+                Some(existing) => *existing = config.clone(),
+                None => all.push(config.clone()),
+            }
+            Ok(())
+        })
     }
 
     pub fn delete(&self, id: &str) -> AppResult<()> {
-        let all: Vec<_> = self.list()?.into_iter().filter(|c| c.id != id).collect();
-        self.write(&all)
+        self.update(|all| {
+            all.retain(|c| c.id != id);
+            Ok(())
+        })
+    }
+
+    /// Read · change · write under a file lock shared by GUI · TUI · MCP (so concurrent saves don't lose one side's change)
+    fn update<T>(&self, f: impl FnOnce(&mut Vec<ConnectionConfig>) -> AppResult<T>) -> AppResult<T> {
+        if let Some(dir) = self.path.parent() {
+            crate::secrets::private_dir(dir)?;
+        }
+        let lock = fs::OpenOptions::new().create(true).truncate(false).write(true).open(self.path.with_extension("json.lock"))?;
+        lock.lock()?;
+        let mut all = self.list()?;
+        let out = f(&mut all)?;
+        self.write(&all)?;
+        Ok(out)
     }
 
     pub fn export_to(&self, path: &std::path::Path) -> AppResult<usize> {
@@ -509,8 +526,8 @@ impl Store {
                     if e.mcp_access(true) < as_saved.mcp_access(true) {
                         ch.push("shares more with MCP (AI tools)".into());
                     }
-                    if !e.same_server(&c) && e.password_saved {
-                        ch.push("the saved password will be removed".into());
+                    if Self::import_moves_server(e, &c) && e.password_saved {
+                        ch.push("the saved password will be removed and asked again".into());
                     }
                     if e.active_ssh().map(|s| (&s.host, s.port)) != c.active_ssh().map(|s| (&s.host, s.port)) {
                         ch.push("changes the SSH tunnel".into());
@@ -528,7 +545,16 @@ impl Store {
     /// (added, changed, sources whose passwords to delete: (id, DB password, SSH secret)). The saved flags follow the current values, not the file
     pub fn import_from(&self, path: &std::path::Path) -> AppResult<(usize, usize, Vec<(String, bool, bool)>)> {
         let incoming = Self::read_import(path)?;
-        let mut all = self.list()?;
+        self.update(|all| Self::merge_import(all, incoming))
+    }
+
+    /// Like a server change for the saved password: same_server, plus a file turning on "Allow unencrypted"
+    /// (which the user may tick in the dialog, but an imported file could use to have the password sent without TLS)
+    fn import_moves_server(e: &ConnectionConfig, c: &ConnectionConfig) -> bool {
+        !e.same_server(c) || (!e.options.allow_plaintext && c.options.allow_plaintext)
+    }
+
+    fn merge_import(all: &mut Vec<ConnectionConfig>, incoming: Vec<ConnectionConfig>) -> AppResult<(usize, usize, Vec<(String, bool, bool)>)> {
         let (mut added, mut updated, mut forget) = (0, 0, vec![]);
         for mut c in incoming {
             if c.id.is_empty() {
@@ -541,7 +567,7 @@ impl Store {
                         c.options.mcp = Some(e.mcp_access(true).as_str().into());
                     }
                     // Regardless of the flags (including entries whose flag alone was cleared by an old import), a different server goes on the delete list
-                    let (pw, ssh) = (!e.same_server(&c), !e.same_ssh(&c));
+                    let (pw, ssh) = (Self::import_moves_server(e, &c), !e.same_ssh(&c));
                     c.password_saved = e.password_saved && !pw;
                     c.ssh_secret_saved = e.ssh_secret_saved && !ssh;
                     if pw || ssh {
@@ -562,7 +588,6 @@ impl Store {
                 }
             }
         }
-        self.write(&all)?;
         Ok((added, updated, forget))
     }
 
@@ -617,18 +642,17 @@ impl Store {
         if let Some(dir) = self.path.parent() {
             fs::create_dir_all(dir)?;
         }
-        // The side file first: entries of deleted sources go with it
         let access: BTreeMap<_, _> = all.iter().map(|c| (c.id.clone(), Access { mcp: c.options.mcp.clone(), allow_plaintext: c.options.allow_plaintext })).collect();
-        crate::secrets::write_private(&self.access_path(), serde_json::to_string_pretty(&access)?.as_bytes())?;
-        let mut json = serde_json::to_value(all)?;
-        for c in json.as_array_mut().into_iter().flatten() {
-            if let Some(o) = c.get_mut("options").and_then(|o| o.as_object_mut()) {
-                o.remove("mcp");
-                o.remove("allowPlaintext");
-            }
-        }
+        // The side file first, keeping entries of removed sources: if connections.json can't be written, the side file still matches either version
+        let mut merged = self.access()?;
+        merged.extend(access.clone());
+        crate::secrets::write_private(&self.access_path(), serde_json::to_string_pretty(&merged)?.as_bytes())?;
         // Contains host·user·SSH key paths → owner-only read
-        crate::secrets::write_private(&self.path, serde_json::to_string_pretty(&json)?.as_bytes())?;
+        crate::secrets::write_private(&self.path, serde_json::to_string_pretty(all)?.as_bytes())?;
+        // Only now drop the entries of removed sources
+        if merged.len() != access.len() {
+            crate::secrets::write_private(&self.access_path(), serde_json::to_string_pretty(&access)?.as_bytes())?;
+        }
         Ok(())
     }
 }
@@ -772,6 +796,33 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// An imported file turning on "Allow unencrypted" doesn't keep the saved password (someone in the middle could strip TLS and read it)
+    #[test]
+    fn import_allowing_plaintext_forgets_the_password() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        let b = Store::new(base.join("b"));
+        let mut mine = conn("4", "db");
+        mine.kind = DbKind::Mysql;
+        mine.password_saved = true;
+        b.save(&mine).unwrap();
+        let mut theirs = mine.clone();
+        theirs.options.allow_plaintext = true;
+        let file = base.join("in.json");
+        std::fs::write(&file, serde_json::to_string(&vec![theirs]).unwrap()).unwrap();
+        let p = b.import_preview(&file).unwrap().join("\n");
+        assert!(p.contains("unencrypted") && p.contains("password will be removed and asked again"), "{p}");
+        assert_eq!(b.import_from(&file).unwrap(), (0, 1, vec![("4".to_string(), true, false)]));
+        let got = b.get("4").unwrap().unwrap();
+        assert!(got.options.allow_plaintext && !got.password_saved);
+        // Already allowed: importing the same setting keeps it
+        let mut again = got.clone();
+        again.password_saved = true;
+        b.save(&again).unwrap();
+        assert_eq!(b.import_from(&file).unwrap(), (0, 1, vec![]));
+        assert!(b.get("4").unwrap().unwrap().password_saved);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// An update without an MCP setting keeps the current access; turning on plain text shows in the preview
     #[test]
     fn import_update_keeps_mcp_and_shows_plaintext() {
@@ -803,10 +854,16 @@ mod tests {
         s.save(&c).unwrap();
         s.save(&conn("2", "other")).unwrap();
         let text = std::fs::read_to_string(base.join("connections.json")).unwrap();
-        assert!(!text.contains("allowPlaintext") && !text.contains("\"mcp\""), "{text}");
+        // Also in connections.json (so a missing side file doesn't share Off sources again)
+        assert!(text.contains("allowPlaintext") && text.contains("\"mcp\""), "{text}");
         // What an older app writes back: the fields it doesn't know are gone
         let mut old: serde_json::Value = serde_json::from_str(&text).unwrap();
         old[0]["name"] = "renamed by an older app".into();
+        for c in old.as_array_mut().unwrap() {
+            let o = c["options"].as_object_mut().unwrap();
+            o.remove("mcp");
+            o.remove("allowPlaintext");
+        }
         std::fs::write(base.join("connections.json"), old.to_string()).unwrap();
         let got = s.get("1").unwrap().unwrap();
         assert_eq!(got.name, "renamed by an older app");
@@ -829,6 +886,99 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(std::fs::metadata(base.join("connection-access.json")).unwrap().permissions().mode() & 0o777, 0o600);
         }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Without the side file (only connections.json restored or synced), MCP Off and "Allow unencrypted" stay as saved
+    #[test]
+    fn missing_side_file_keeps_access_settings() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        let s = Store::new(base.clone());
+        let mut c = conn("1", "DEV");
+        c.options.mcp = Some("off".into());
+        c.options.allow_plaintext = true;
+        s.save(&c).unwrap();
+        std::fs::remove_file(base.join("connection-access.json")).unwrap();
+        let got = s.get("1").unwrap().unwrap();
+        assert_eq!(got.mcp_access(true), McpAccess::Off);
+        assert!(got.options.allow_plaintext);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Two apps saving at once: A writes the side file, B writes both files from its older view, A writes connections.json.
+    /// A's new source has no side entry, and still stays MCP Off
+    #[test]
+    fn interleaved_saves_keep_mcp_off() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        let s = Store::new(base.clone());
+        s.save(&conn("old", "shared")).unwrap();
+        let b_side = std::fs::read_to_string(base.join("connection-access.json")).unwrap();
+        let mut c = conn("new", "hidden");
+        c.options.mcp = Some("off".into());
+        s.save(&c).unwrap();
+        // B's side file (written from its view without the new source) lands after A's
+        std::fs::write(base.join("connection-access.json"), b_side).unwrap();
+        assert_eq!(s.get("new").unwrap().unwrap().mcp_access(true), McpAccess::Off);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A failed connections.json write doesn't drop the side entry of the source it still lists
+    #[test]
+    fn side_entries_are_pruned_only_after_connections_are_written() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        let s = Store::new(base.clone());
+        let mut c = conn("1", "DEV");
+        c.options.mcp = Some("off".into());
+        s.save(&c).unwrap();
+        // write_private's temp file for connections.json can't be created
+        let blocker = base.join(format!("connections.tmp-{}", std::process::id()));
+        std::fs::create_dir(&blocker).unwrap();
+        assert!(s.delete("1").is_err());
+        std::fs::remove_dir(&blocker).unwrap();
+        let side = std::fs::read_to_string(base.join("connection-access.json")).unwrap();
+        assert!(side.contains("\"1\""), "{side}");
+        assert_eq!(s.get("1").unwrap().unwrap().mcp_access(true), McpAccess::Off);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A damaged side file is still an error, and its message says moving it away is safe now
+    #[test]
+    fn damaged_side_file_is_an_error() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        let s = Store::new(base.clone());
+        let mut c = conn("1", "DEV");
+        c.options.mcp = Some("off".into());
+        s.save(&c).unwrap();
+        std::fs::write(base.join("connection-access.json"), "{ \"1\": ").unwrap();
+        let e = s.list().unwrap_err().to_string();
+        assert!(e.contains("damaged") && e.contains("connections.json"), "{e}");
+        assert!(s.save(&conn("2", "x")).is_err());
+        // Following the advice keeps Off
+        std::fs::remove_file(base.join("connection-access.json")).unwrap();
+        assert_eq!(s.get("1").unwrap().unwrap().mcp_access(true), McpAccess::Off);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Saves from several apps at once (GUI · TUI · MCP) don't lose each other's sources
+    #[test]
+    fn concurrent_saves_keep_every_source() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        std::thread::scope(|sc| {
+            for t in 0..4 {
+                let base = base.clone();
+                sc.spawn(move || {
+                    let s = Store::new(base);
+                    for i in 0..10 {
+                        let mut c = conn(&format!("{t}-{i}"), "x");
+                        c.options.mcp = Some("off".into());
+                        s.save(&c).unwrap();
+                    }
+                });
+            }
+        });
+        let all = Store::new(base.clone()).list().unwrap();
+        assert_eq!(all.len(), 40);
+        assert!(all.iter().all(|c| c.mcp_access(true) == McpAccess::Off));
         let _ = std::fs::remove_dir_all(&base);
     }
 

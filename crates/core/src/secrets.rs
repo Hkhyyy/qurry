@@ -294,8 +294,15 @@ impl SecretFile {
         })
     }
 
-    pub fn contains(&self, name: &str) -> bool {
-        self.load().is_ok_and(|a| a.contains_key(name))
+    /// Whether the file has an entry. Damaged: the damage error if the name still shows in the file (it may hold this password), otherwise false
+    pub fn contains(&self, name: &str) -> AppResult<bool> {
+        match self.load() {
+            Ok(a) => Ok(a.contains_key(name)),
+            Err(e) => match fs::read_to_string(&self.path) {
+                Ok(s) if !s.contains(&format!("\"{name}\"")) => Ok(false),
+                _ => Err(e),
+            },
+        }
     }
 }
 
@@ -316,7 +323,7 @@ mod tests {
         assert!(!std::fs::read_to_string(dir.join("secrets.json")).unwrap().contains("p@ss"));
         s2.set("a", None).unwrap();
         assert_eq!(s2.get("a").unwrap(), None);
-        assert!(s2.contains("b#ssh"));
+        assert!(s2.contains("b#ssh").unwrap());
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -362,7 +369,7 @@ mod tests {
         let s = SecretFile::open(&dir).unwrap();
         for t in 0..8 {
             for i in 0..20 {
-                assert!(s.contains(&format!("k{t}-{i}")), "k{t}-{i}");
+                assert!(s.contains(&format!("k{t}-{i}")).unwrap(), "k{t}-{i}");
             }
         }
         let _ = std::fs::remove_dir_all(dir);
@@ -399,7 +406,7 @@ mod tests {
         // Opens even without a key in the keychain (the app starts); the reason is reported when a password is used. No new key is created
         let empty = SecretFile::open_with(&dir, std::sync::Arc::new(MemVault::default())).unwrap();
         assert!(empty.get("a").is_err() && empty.set("b", Some("x")).is_err());
-        assert!(empty.contains("a"));
+        assert!(empty.contains("a").unwrap());
         assert_ne!(std::fs::read(dir.join("secret.key")).unwrap().len(), 32);
         move_key(&dir, KeyLocation::File, &*vault).unwrap();
         assert_eq!(key_location(&dir), KeyLocation::File);

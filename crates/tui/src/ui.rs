@@ -720,6 +720,15 @@ fn job_line(label: &str, (rows, done, total): (u64, u64, u64)) -> String {
     format!("{label} ▕{bar}▏ {n}{pct}")
 }
 
+/// Shown next to the data source form's SSL mode: Require encrypts but doesn't stop someone in the middle
+fn ssl_mode_note(mode: &str) -> &'static str {
+    match mode {
+        "verify-full" => "checks the CA and host name",
+        "verify-ca" => "checks the certificate's CA",
+        _ => "encrypt, no certificate check",
+    }
+}
+
 fn draw_popup(f: &mut Frame, app: &mut App) {
     if matches!(app.popup, Some(Popup::Find(_))) {
         return crate::find::draw(f, app);
@@ -913,6 +922,9 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                             spans.push(swatch(c));
                         }
                     }
+                    if fl.label == "SSL mode" {
+                        spans.push(Span::styled(format!("  {}", ssl_mode_note(&fl.value)), Style::default().fg(DIM)));
+                    }
                     Line::from(spans)
                 })
                 .collect();
@@ -945,6 +957,14 @@ mod tests {
         // Horizontal scroll (skip the first 3 cells): starts on the right half of "가" → blank
         let out = fit_spans(vec![Span::raw("ab가나다")], 3, 4);
         assert_eq!(out.iter().map(|s| s.content.as_ref()).collect::<String>(), " 나 ");
+    }
+
+    /// The SSL mode choice says what each mode checks (Require doesn't check the certificate)
+    #[test]
+    fn ssl_mode_note_says_what_is_checked() {
+        assert_eq!(ssl_mode_note("require"), "encrypt, no certificate check");
+        assert_eq!(ssl_mode_note("verify-ca"), "checks the certificate's CA");
+        assert_eq!(ssl_mode_note("verify-full"), "checks the CA and host name");
     }
 
     #[test]
