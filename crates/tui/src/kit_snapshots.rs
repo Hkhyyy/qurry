@@ -230,6 +230,8 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         entry("3", 10, "COMMIT", None, false, false),
         // Logged before it ran, no result yet (still running, or Qurry stopped)
         qurry_core::audit::AuditEntry { started: true, ..entry("4", 1, "update payment set status = 'refunded' where id = 7", None, false, false) },
+        // A COMMIT cut off by a lost connection (it may have committed)
+        qurry_core::audit::AuditEntry { error: Some("Connection reset by peer (os error 54)".into()), ..entry("5", 0, qurry_core::audit::COMMIT_UNKNOWN, None, false, false) },
     ] {
         h.app.state.audit.add(e).unwrap();
     }

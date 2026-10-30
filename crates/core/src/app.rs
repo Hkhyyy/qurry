@@ -154,7 +154,16 @@ async fn recover(state: &AppState, id: &str, tab: Option<&str>, tx: Option<&str>
     if let Some(p) = pool {
         let alive = tokio::time::timeout(std::time::Duration::from_secs(3), p.server_version()).await.is_ok_and(|r| r.is_ok());
         if !alive {
-            drop_pool(state, split_target(id).0).await;
+            let base = split_target(id).0;
+            let tabs = drop_pool(state, base).await;
+            // The Data Source's other consoles lost their connections too: the server rolled back their open transactions
+            if let Ok(cfg) = state.source(base) {
+                for (t, conn) in tabs {
+                    if let Err(le) = state.audit.tx_closed(&conn, &cfg.name, &t, crate::audit::BY_SERVER) {
+                        crate::log!("[qurry] {le}");
+                    }
+                }
+            }
         }
     }
     crate::log!("[qurry] connection lost on {id}: {e}");
@@ -167,9 +176,16 @@ async fn recover(state: &AppState, id: &str, tab: Option<&str>, tx: Option<&str>
     })
 }
 
-/// Close all DB pools, sessions and tunnels of the Data Source.
-pub async fn drop_pool(state: &AppState, id: &str) {
-    state.sessions.write().await.retain(|_, e| !belongs(&e.conn_id, id));
+/// Close all DB pools, sessions and tunnels of the Data Source. → the consoles whose sessions it closed (tab id, connection id)
+pub async fn drop_pool(state: &AppState, id: &str) -> Vec<(String, String)> {
+    let mut tabs = Vec::new();
+    state.sessions.write().await.retain(|t, e| {
+        let gone = belongs(&e.conn_id, id);
+        if gone {
+            tabs.push((t.clone(), e.conn_id.clone()));
+        }
+        !gone
+    });
     let removed: Vec<Pool> = {
         let mut pools = state.pools.write().await;
         let keys: Vec<String> = pools.keys().filter(|k| belongs(k, id)).cloned().collect();
@@ -180,6 +196,7 @@ pub async fn drop_pool(state: &AppState, id: &str) {
     }
     state.tunnels.write().await.retain(|k, _| !belongs(k, id));
     state.last_ping.lock().unwrap().retain(|k, _| !belongs(k, id));
+    tabs
 }
 
 /// If SSH is configured, open the tunnel first, then connect.

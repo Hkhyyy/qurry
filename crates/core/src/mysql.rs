@@ -427,8 +427,9 @@ impl MySession {
             self.in_tx = true;
         } else if s.starts_with("commit") || (s.starts_with("rollback") && !s.starts_with("rollback to")) {
             self.in_tx = false;
-        } else if self.manual && !is_select_like(sql) && !s.starts_with("show") && !s.starts_with("set") && !s.starts_with("use") {
-            // With autocommit=0, the first modifying statement opens a transaction
+        } else if self.manual && !s.starts_with("show") && !s.starts_with("set") && !s.starts_with("use") {
+            // With autocommit=0, any statement opens a transaction, not only a change: WITH … DELETE, SELECT … FOR UPDATE (its row locks),
+            // SELECT f() where f writes. Like PostgreSQL's Manual mode, it stays open until Commit / Roll back
             self.in_tx = true;
         }
         if r.truncated && is_select_like(sql) {
@@ -456,8 +457,8 @@ impl MySession {
         if let Err(e) = &shot
             && crate::audit::stops_change(e)
         {
-            // No transaction was open before: end the one the snapshot ran in (Qurry's own, or the one autocommit=0 opened in Manual)
-            // with the row locks it took before it stopped
+            // No transaction was open before: end the one the snapshot ran in (Qurry's own, or the one autocommit=0 opened in Manual,
+            // which holds nothing else since in Manual every statement but SHOW / SET / USE sets in_tx) with the row locks it took before it stopped
             let gone = if !had_tx {
                 let _ = self.rollback_tx().await;
                 true
@@ -864,7 +865,10 @@ mod tests {
         s.rollback_tx().await.unwrap();
         let after = s.run("select count(*) from orders where customer = 'dave'", 1).await.unwrap();
         assert_eq!(after.rows[0][0], 0);
-        assert!(!after.in_transaction);
+        // With autocommit=0 the SELECT opens a transaction too (as in PostgreSQL's Manual mode)
+        assert!(after.in_transaction);
+        assert!(s.set_manual(false).await.is_err());
+        s.rollback_tx().await.unwrap();
         s.set_manual(false).await.unwrap();
         // Edit batch
         crate::mysql::execute_batch(p, &["update orders set memo = 'y' where id = 1".into()], true).await.unwrap();

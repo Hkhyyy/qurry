@@ -269,6 +269,16 @@ impl Audit {
                     self.pending.lock().unwrap().remove(t);
                 }
             }
+            // A COMMIT cut off by a lost connection may have committed: the entry says so, not that it failed, and closes the transaction
+            Err(err) if tx_end(sql) == Some("COMMIT") && crate::app::is_conn_lost(err) => {
+                e.sql = COMMIT_UNKNOWN.into();
+                e.error = Some(err.to_string());
+                self.finish(vec![e])?;
+                if let Some(t) = tab {
+                    self.pending.lock().unwrap().remove(t);
+                }
+                return Ok(());
+            }
             Err(err) => e.error = Some(err.to_string()),
         }
         self.finish(vec![e])
@@ -313,7 +323,7 @@ impl Audit {
 /// Log entry for a console transaction with logged changes that the server ended without a COMMIT
 pub(crate) const BY_SERVER: &str = "ROLLBACK (by the server)";
 /// Log entry for a COMMIT cut off by a lost connection: the server may have committed before the connection went
-pub(crate) const COMMIT_UNKNOWN: &str = "COMMIT outcome unknown (connection lost)";
+pub const COMMIT_UNKNOWN: &str = "COMMIT outcome unknown (connection lost)";
 
 /// How the console's transaction ended when `sql` failed with `e` (open = the session still has it open; None = nothing ended).
 /// A lost connection rolls it back on the server, unless `sql` was the COMMIT; otherwise it ended only if the session closed it
@@ -728,6 +738,28 @@ mod tests {
         assert_eq!((all[2].rows, all[2].in_tx, all[2].undo.as_deref(), all[2].database.as_deref()), (Some(2), true, Some("UNDO"), Some("shop")));
         assert_eq!(a.list(Some("c1"), "", 10).len(), 2);
         assert_eq!(a.list(None, "UPDATE", 10).len(), 1);
+    }
+
+    /// A COMMIT cut off by a lost connection is one entry of unknown outcome (not a failed COMMIT), and it closes the transaction in the log
+    #[test]
+    fn commit_on_a_lost_connection_is_of_unknown_outcome() {
+        let d = std::env::temp_dir().join(format!("qurry-audit-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&d).unwrap();
+        let a = Audit::new(&d);
+        let changed = Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: 1, truncated: false, elapsed_ms: 0, has_result_set: false, in_transaction: true, warning: None });
+        let lost: AppResult<QueryResult> = Err(AppError::Db(sqlx::Error::Io(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "connection reset by peer"))));
+        let run = |sql: &str, r: &AppResult<QueryResult>| {
+            let started = a.before("c1", "[PROD] kr", DbKind::Postgres, Some("tab"), sql).unwrap();
+            a.after(started, "c1", "[PROD] kr", DbKind::Postgres, Some("tab"), sql, r, None).unwrap();
+        };
+        run("update t set a = 1 where id = 1", &changed);
+        run("COMMIT", &lost);
+        let all = a.list(None, "", 10);
+        assert_eq!(all.iter().map(|e| e.sql.as_str()).collect::<Vec<_>>(), vec![COMMIT_UNKNOWN, "update t set a = 1 where id = 1"]);
+        assert!(all[0].error.as_deref().is_some_and(|e| e.contains("connection reset")) && !all[0].started);
+        // Nothing left open: a later server rollback adds no entry
+        a.tx_closed("c1", "[PROD] kr", "tab", BY_SERVER).unwrap();
+        assert_eq!(a.list(None, "", 10).len(), 2);
     }
 
     /// A change is in the log before it runs; its result replaces that entry. If the result can't be written, that is reported and the first entry stays
@@ -1250,7 +1282,9 @@ mod tests {
         kill().await;
         let e = st.commit_tx("m".into()).await.unwrap_err().to_string();
         assert!(e.contains("unknown whether") && e.contains("Check"), "{e}");
-        assert_eq!(log(3), [COMMIT_UNKNOWN.to_string(), "COMMIT".into(), format!("update {s}.t set v = 13 where id = 1")]);
+        assert_eq!(log(2), [COMMIT_UNKNOWN.to_string(), format!("update {s}.t set v = 13 where id = 1")]);
+        let cut = st.audit_log(None, String::new(), 1).remove(0);
+        assert!(cut.error.is_some() && !cut.started, "{cut:?}");
         assert!(!st.tx_state("m".into()).await);
         run("select 1".into()).await.unwrap();
         st.rollback_tx("m".into()).await.unwrap();
@@ -1324,5 +1358,107 @@ mod tests {
         assert_eq!(serde_json::to_string(&open.rows).unwrap(), "[[0]]");
         st.rollback_tx("o".into()).await.unwrap();
         followup_drop(&st, DbKind::Mysql, s).await;
+    }
+
+    /// MySQL Manual console whose transaction Qurry didn't see open before (WITH … DELETE, SELECT … FOR UPDATE): a cancelled snapshot
+    /// keeps it, with the uncommitted delete and the row locks, instead of rolling it back without a word
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_cancelled_snapshot_keeps_the_open_transaction() {
+        let Some(st) = prod_state(DbKind::Mysql, "QURRY_TEST_MY").await else { return };
+        let s = "audit_followups_keep";
+        followup_table(&st, DbKind::Mysql, s).await;
+        let run = |tab: &str, sql: String| st.run_query("d".into(), sql, None, Some(tab.into()));
+        st.set_tx_mode("d".into(), "o".into(), true).await.unwrap();
+        run("o", format!("update {s}.t set v = 30 where id = 3")).await.unwrap();
+        st.set_tx_mode("d".into(), "c".into(), true).await.unwrap();
+        let open_trx = || async {
+            let pid = st.sessions.read().await.get("c").unwrap().pid;
+            let r = st.run_query("d".into(), format!("select count(*) from information_schema.innodb_trx where trx_mysql_thread_id = {pid}"), None, None).await.unwrap();
+            serde_json::to_string(&r.rows).unwrap()
+        };
+        // The snapshot locks row 2, then waits for row 3 until it's cancelled
+        let cancelled = || async {
+            let cancel = async {
+                tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+                st.cancel_query("c".into()).await.unwrap()
+            };
+            let (r, _) = tokio::join!(run("c", format!("update {s}.t set v = 0 where id >= 2")), cancel);
+            let e = r.unwrap_err().to_string();
+            assert!(e.starts_with("Not run: "), "{e}");
+        };
+        for first in [format!("with x as (select 1 as id) delete t from {s}.t t join x using (id)"), format!("select v from {s}.t where id = 1 for update")] {
+            run("c", first.clone()).await.unwrap();
+            assert!(st.tx_state("c".into()).await, "{first}");
+            if first.starts_with("with") {
+                // Logged as not committed yet, so its Roll back is logged too
+                assert!(st.audit_log(None, String::new(), 1)[0].in_tx);
+            }
+            cancelled().await;
+            assert!(st.tx_state("c".into()).await, "{first}");
+            assert_eq!(open_trx().await, "[[1]]", "{first}");
+            let seen = run("c", format!("select id from {s}.t order by id")).await.unwrap();
+            let want = if first.starts_with("with") { "[[2],[3]]" } else { "[[1],[2],[3]]" };
+            assert_eq!(serde_json::to_string(&seen.rows).unwrap(), want, "{first}");
+            st.rollback_tx("c".into()).await.unwrap();
+        }
+        st.rollback_tx("o".into()).await.unwrap();
+        followup_drop(&st, DbKind::Mysql, s).await;
+    }
+
+    /// Forwards 127.0.0.1:<port> to `target` until the task is aborted, which also drops every forwarded connection (like a dead SSH tunnel)
+    async fn proxy(target: String) -> (u16, tokio::task::JoinHandle<()>) {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        let h = tokio::spawn(async move {
+            let mut conns = tokio::task::JoinSet::new();
+            while let Ok((mut c, _)) = l.accept().await {
+                let target = target.clone();
+                conns.spawn(async move {
+                    if let Ok(mut s) = tokio::net::TcpStream::connect(target).await {
+                        let _ = tokio::io::copy_bidirectional(&mut c, &mut s).await;
+                    }
+                });
+            }
+        });
+        (port, h)
+    }
+
+    /// The connection to the server goes away for every console (the tunnel dies) while tab b has a logged change in a Manual transaction.
+    /// Tab a hits the error and the pool is dropped: b's transaction is closed in the log too, so a later COMMIT can't read as committing it
+    async fn dead_pool_closes_every_console(kind: DbKind, env: &str) {
+        let Some(direct) = prod_state(kind, env).await else { return };
+        let s = "audit_followups_pool";
+        followup_table(&direct, kind, s).await;
+        let e = std::env::var(env).unwrap();
+        let (host_port, rest) = e.split_at(e.match_indices(':').nth(1).unwrap().0);
+        let (port, tunnel) = proxy(host_port.to_string()).await;
+        let pass = (kind == DbKind::Mysql).then(|| rest.split(':').nth(2).unwrap().to_string());
+        let st = prod_state_at(kind, &format!("127.0.0.1:{port}{rest}"), pass).await;
+        let run = |tab: &str, sql: String| st.run_query("d".into(), sql, None, Some(tab.into()));
+        st.set_tx_mode("d".into(), "a".into(), true).await.unwrap();
+        st.set_tx_mode("d".into(), "b".into(), true).await.unwrap();
+        run("b", format!("update {s}.t set v = 10 where id = 1")).await.unwrap();
+        tunnel.abort();
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        let e = run("a", "select 1".into()).await.unwrap_err().to_string();
+        assert!(e.contains("connection lost"), "{e}");
+        assert!(st.sessions.read().await.is_empty());
+        let log = st.audit_log(None, String::new(), 2);
+        assert_eq!(log.iter().map(|e| e.sql.as_str()).collect::<Vec<_>>(), vec![BY_SERVER.to_string(), format!("update {s}.t set v = 10 where id = 1")]);
+        assert_eq!(followup_values(&direct, s).await, "[[1],[2],[3]]");
+        followup_drop(&direct, kind, s).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn pg_dead_pool_closes_every_console() {
+        dead_pool_closes_every_console(DbKind::Postgres, "QURRY_TEST_PG").await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_dead_pool_closes_every_console() {
+        dead_pool_closes_every_console(DbKind::Mysql, "QURRY_TEST_MY").await;
     }
 }

@@ -88,6 +88,9 @@ impl App {
                 let status = if e.started {
                     // Logged before it ran, no result: still running, or Qurry stopped — the outcome is unknown
                     "no result recorded".to_string()
+                } else if e.sql == qurry_core::audit::COMMIT_UNKNOWN {
+                    // A COMMIT cut off by a lost connection: it may have committed
+                    "outcome unknown".to_string()
                 } else if e.error.is_some() {
                     "failed".to_string()
                 } else if let Some(n) = e.rows {
