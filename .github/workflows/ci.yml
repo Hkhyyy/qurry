@@ -1,5 +1,6 @@
 # Run tests on every PR. Don't merge if they fail.
-# Rust: unit tests + integration tests (#[ignore]) against real DBs (PostgreSQL / MySQL / Redis service containers).
+# Rust: unit tests + integration tests (#[ignore]) against real DBs (PostgreSQL / MySQL / Redis service containers),
+#   including the per-backend matrix in crates/core/tests/backend_matrix.rs.
 #   SSL·TLS·Sentinel·Cluster·SSH tunnel tests are left out since they need separate servers.
 #   The GUI (src-tauri) needs webkit on Linux, so it's checked by the Release (macOS) build.
 # Web: vitest + tsc/vite build. E2E: Playwright against the mock app (Chromium, WebKit).
@@ -165,7 +166,8 @@ jobs:
           QURRY_TEST_CH: localhost:18123:qurry:pw:default
           QURRY_TEST_MONGO: localhost:17017:qurry:pw:qurrytest
           QURRY_TEST_MSSQL: "127.0.0.1:11433:sa:Qurry_pw1!:master"
-        run: cargo test --locked -p qurry-core -- --ignored --skip ssl --skip tls --skip sentinel --skip cluster --skip ssh_tunnel --skip redis
+        # --lib: tests/backend_matrix.rs pins output on the latest servers (rust job), not on these
+        run: cargo test --locked -p qurry-core --lib -- --ignored --skip ssl --skip tls --skip sentinel --skip cluster --skip ssh_tunnel --skip redis
 
   web:
     runs-on: ubuntu-latest
