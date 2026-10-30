@@ -278,7 +278,8 @@ impl App {
             if pg {
                 return a.backup_run(conn, db, path, false);
             }
-            a.input("Leave out DEFINER= clauses? y = leave out, Enter = keep (leave out to restore on RDS and other managed services, where another user's DEFINER needs SUPER)", "", move |a, yn| {
+            let ask = "Leave out DEFINER= clauses?\ny leaves them out, Enter keeps them, Esc cancels the backup.\nLeave them out to restore on RDS and other managed services, where another user's DEFINER needs SUPER (the objects then belong to the user who restores them).";
+            a.input(ask, "", move |a, yn| {
                 let yn = yn.trim();
                 a.backup_run(conn, db, path, yn.eq_ignore_ascii_case("y") || yn.eq_ignore_ascii_case("yes"))
             });
@@ -394,6 +395,11 @@ mod tests {
         assert!(popup_title(&h).unwrap().starts_with("Back up to"));
         answer(&mut h, "/surely/not/a/dir/shop.sql");
         assert!(popup_title(&h).unwrap().starts_with("Leave out DEFINER= clauses?"), "{:?}", popup_title(&h));
+        // The question fits the border at 80x24; the answers and the reason are in the body
+        let screen = h.screen(80, 24);
+        for s in ["Leave out DEFINER= clauses? (Enter / Esc)", "y leaves them out, Enter keeps them, Esc cancels the backup", "needs SUPER"] {
+            assert!(screen.contains(s), "{s}\n{screen}");
+        }
         // It opens empty, so a typed y is the whole answer (not "ny")
         h.type_str("y");
         let Some(Popup::Input { input, .. }) = &h.app.popup else { panic!("no input popup") };
