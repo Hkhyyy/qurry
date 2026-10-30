@@ -11,7 +11,8 @@
     "test": "vitest run",
     "storybook": "storybook dev -p 6006 --no-open",
     "build-storybook": "storybook build -o storybook-static",
-    "tui-snapshots": "cargo test -p qurry-tui kit_snapshots -- --ignored"
+    "tui-snapshots": "cargo test -p qurry-tui kit_snapshots -- --ignored",
+    "parity:dump": "PARITY_DUMP=1 vitest run src/lib/parity.dump.test.ts"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

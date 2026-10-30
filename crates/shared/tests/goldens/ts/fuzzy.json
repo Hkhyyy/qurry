@@ -1,0 +1,56 @@
+{
+  "empty-query": {
+    "fuzzyScore": 0
+  },
+  "exact": {
+    "fuzzyScore": 1000
+  },
+  "exact-case": {
+    "fuzzyScore": 1000
+  },
+  "prefix": {
+    "fuzzyScore": 795
+  },
+  "substring-word-start": {
+    "fuzzyScore": 593
+  },
+  "substring-mid-word": {
+    "fuzzyScore": 398.5
+  },
+  "substring-camel": {
+    "fuzzyScore": 590.6
+  },
+  "scattered": {
+    "fuzzyScore": 187
+  },
+  "scattered-camel": {
+    "fuzzyScore": 191.6
+  },
+  "scattered-space": {
+    "fuzzyScore": 194.8
+  },
+  "no-match": {
+    "fuzzyScore": null
+  },
+  "order-matters": {
+    "fuzzyScore": null
+  },
+  "korean-prefix": {
+    "fuzzyScore": 796
+  },
+  "korean-substring": {
+    "fuzzyScore": 397.6
+  },
+  "korean-scattered": {
+    "fuzzyScore": 197.6
+  },
+  "emoji": {
+    "fuzzyScore": 398.6
+  },
+  "emoji-scattered": {
+    "fuzzyScore": 197.6
+  },
+  "long-text": {
+    "fuzzyScore": 564.9
+  }
+}

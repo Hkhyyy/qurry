@@ -1,0 +1,17 @@
+[
+  { "id": "unique", "tabs": [{ "id": "1", "db": "app", "schema": "public", "table": "users" }, { "id": "2", "db": "app", "schema": "public", "table": "orders" }] },
+  { "id": "same-table-other-schema", "tabs": [{ "id": "1", "db": "app", "schema": "public", "table": "users" }, { "id": "2", "db": "app", "schema": "billing", "table": "users" }] },
+  { "id": "same-schema-other-db", "tabs": [{ "id": "1", "db": "app", "schema": "public", "table": "users" }, { "id": "2", "db": "dev", "schema": "public", "table": "users" }] },
+  {
+    "id": "three-mixed",
+    "tabs": [
+      { "id": "1", "db": "a", "schema": "public", "table": "users" },
+      { "id": "2", "db": "b", "schema": "public", "table": "users" },
+      { "id": "3", "db": "a", "schema": "billing", "table": "users" },
+      { "id": "4", "db": "a", "schema": "public", "table": "orders" }
+    ]
+  },
+  { "id": "case-differs", "tabs": [{ "id": "1", "db": "app", "schema": "public", "table": "Users" }, { "id": "2", "db": "app", "schema": "public", "table": "users" }] },
+  { "id": "korean", "tabs": [{ "id": "1", "db": "앱", "schema": "판매", "table": "주문" }, { "id": "2", "db": "앱", "schema": "public", "table": "주문" }] },
+  { "id": "single", "tabs": [{ "id": "1", "db": "app", "schema": "public", "table": "users" }] }
+]

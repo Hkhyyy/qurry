@@ -1,0 +1,703 @@
+{
+  "sales": {
+    "numericColumns": [
+      "amount",
+      "id"
+    ],
+    "defaultAxes": {
+      "x": "month",
+      "y": "amount"
+    },
+    "buildChart(bar)": {
+      "labels": [
+        "2024-01-01",
+        "2024-02-01",
+        "2024-03-01"
+      ],
+      "series": [
+        {
+          "name": "amount",
+          "values": [
+            250,
+            1200.5,
+            0
+          ]
+        }
+      ]
+    },
+    "buildChart(pie)": {
+      "labels": [
+        "2024-02-01",
+        "2024-01-01"
+      ],
+      "series": [
+        {
+          "name": "amount",
+          "values": [
+            1200.5,
+            250
+          ]
+        }
+      ]
+    },
+    "inList": "(('2024-02-01', 'west', '1,200.50', 1), ('2024-01-01', 'east', 300, 2), ('2024-01-01', 'west', -50, 3), ('2024-03-01', NULL, NULL, 4), ('2024-02-01', 'east', 'abc', 5))",
+    "inList(column)": {
+      "month": "('2024-02-01', '2024-01-01', '2024-03-01')",
+      "region": "('west', 'east')",
+      "amount": "('1,200.50', 300, -50, 'abc')",
+      "id": "(1, 2, 3, 4, 5)"
+    },
+    "extract(TSV, no header)": "2024-02-01\twest\t1,200.50\t1\n2024-01-01\teast\t300\t2\n2024-01-01\twest\t-50\t3\n2024-03-01\t\t\t4\n2024-02-01\teast\tabc\t5",
+    "extract(SQL Inserts, mysql)": "INSERT INTO MY_TABLE (month, region, amount, id) VALUES ('2024-02-01', 'west', '1,200.50', '1');\nINSERT INTO MY_TABLE (month, region, amount, id) VALUES ('2024-01-01', 'east', '300', '2');\nINSERT INTO MY_TABLE (month, region, amount, id) VALUES ('2024-01-01', 'west', '-50', '3');\nINSERT INTO MY_TABLE (month, region, amount, id) VALUES ('2024-03-01', NULL, NULL, '4');\nINSERT INTO MY_TABLE (month, region, amount, id) VALUES ('2024-02-01', 'east', 'abc', '5');",
+    "fracWidth": {
+      "month": 0,
+      "region": 0,
+      "amount": 0,
+      "id": 0
+    },
+    "padFrac": {},
+    "extract(CSV)": "month,region,amount,id\n2024-02-01,west,\"1,200.50\",1\n2024-01-01,east,300,2\n2024-01-01,west,-50,3\n2024-03-01,,,4\n2024-02-01,east,abc,5",
+    "extract(TSV)": "month\tregion\tamount\tid\n2024-02-01\twest\t1,200.50\t1\n2024-01-01\teast\t300\t2\n2024-01-01\twest\t-50\t3\n2024-03-01\t\t\t4\n2024-02-01\teast\tabc\t5",
+    "extract(SQL Inserts)": "INSERT INTO MY_TABLE (month, region, amount, id) VALUES ('2024-02-01', 'west', '1,200.50', '1');\nINSERT INTO MY_TABLE (month, region, amount, id) VALUES ('2024-01-01', 'east', '300', '2');\nINSERT INTO MY_TABLE (month, region, amount, id) VALUES ('2024-01-01', 'west', '-50', '3');\nINSERT INTO MY_TABLE (month, region, amount, id) VALUES ('2024-03-01', NULL, NULL, '4');\nINSERT INTO MY_TABLE (month, region, amount, id) VALUES ('2024-02-01', 'east', 'abc', '5');",
+    "extract(SQL Updates)": "UPDATE MY_TABLE SET month = '2024-02-01', region = 'west', amount = '1,200.50', id = '1' WHERE id = '1';\nUPDATE MY_TABLE SET month = '2024-01-01', region = 'east', amount = '300', id = '2' WHERE id = '2';\nUPDATE MY_TABLE SET month = '2024-01-01', region = 'west', amount = '-50', id = '3' WHERE id = '3';\nUPDATE MY_TABLE SET month = '2024-03-01', region = NULL, amount = NULL, id = '4' WHERE id = '4';\nUPDATE MY_TABLE SET month = '2024-02-01', region = 'east', amount = 'abc', id = '5' WHERE id = '5';",
+    "extract(Where Clause)": "(month = '2024-02-01' AND region = 'west' AND amount = '1,200.50' AND id = '1') OR\n(month = '2024-01-01' AND region = 'east' AND amount = '300' AND id = '2') OR\n(month = '2024-01-01' AND region = 'west' AND amount = '-50' AND id = '3') OR\n(month = '2024-03-01' AND region IS NULL AND amount IS NULL AND id = '4') OR\n(month = '2024-02-01' AND region = 'east' AND amount = 'abc' AND id = '5')",
+    "extract(SQL IN List)": "(('2024-02-01', 'west', '1,200.50', 1), ('2024-01-01', 'east', 300, 2), ('2024-01-01', 'west', -50, 3), ('2024-03-01', NULL, NULL, 4), ('2024-02-01', 'east', 'abc', 5))",
+    "extract(JSON)": "[\n  {\n    \"month\": \"2024-02-01\",\n    \"region\": \"west\",\n    \"amount\": \"1,200.50\",\n    \"id\": 1\n  },\n  {\n    \"month\": \"2024-01-01\",\n    \"region\": \"east\",\n    \"amount\": \"300\",\n    \"id\": 2\n  },\n  {\n    \"month\": \"2024-01-01\",\n    \"region\": \"west\",\n    \"amount\": \"-50\",\n    \"id\": 3\n  },\n  {\n    \"month\": \"2024-03-01\",\n    \"region\": null,\n    \"amount\": null,\n    \"id\": 4\n  },\n  {\n    \"month\": \"2024-02-01\",\n    \"region\": \"east\",\n    \"amount\": \"abc\",\n    \"id\": 5\n  }\n]",
+    "extract(Markdown)": "| month | region | amount | id |\n| --- | --- | --- | --- |\n| 2024-02-01 | west | 1,200.50 | 1 |\n| 2024-01-01 | east | 300 | 2 |\n| 2024-01-01 | west | -50 | 3 |\n| 2024-03-01 |  |  | 4 |\n| 2024-02-01 | east | abc | 5 |"
+  },
+  "ids-only": {
+    "numericColumns": [
+      "user_id",
+      "order_id"
+    ],
+    "defaultAxes": {
+      "x": "user_id",
+      "y": "order_id"
+    },
+    "buildChart(bar)": {
+      "labels": [
+        "1",
+        "2"
+      ],
+      "series": [
+        {
+          "name": "order_id",
+          "values": [
+            21,
+            12
+          ]
+        }
+      ]
+    },
+    "buildChart(pie)": {
+      "labels": [
+        "1",
+        "2"
+      ],
+      "series": [
+        {
+          "name": "order_id",
+          "values": [
+            21,
+            12
+          ]
+        }
+      ]
+    },
+    "inList": "((1, 10), (1, 11), (2, 12))",
+    "inList(column)": {
+      "user_id": "(1, 2)",
+      "order_id": "(10, 11, 12)"
+    },
+    "extract(TSV, no header)": "1\t10\n1\t11\n2\t12",
+    "extract(SQL Inserts, mysql)": "INSERT INTO MY_TABLE (user_id, order_id) VALUES ('1', '10');\nINSERT INTO MY_TABLE (user_id, order_id) VALUES ('1', '11');\nINSERT INTO MY_TABLE (user_id, order_id) VALUES ('2', '12');",
+    "fracWidth": {
+      "user_id": 0,
+      "order_id": 0
+    },
+    "padFrac": {},
+    "extract(CSV)": "user_id,order_id\n1,10\n1,11\n2,12",
+    "extract(TSV)": "user_id\torder_id\n1\t10\n1\t11\n2\t12",
+    "extract(SQL Inserts)": "INSERT INTO MY_TABLE (user_id, order_id) VALUES ('1', '10');\nINSERT INTO MY_TABLE (user_id, order_id) VALUES ('1', '11');\nINSERT INTO MY_TABLE (user_id, order_id) VALUES ('2', '12');",
+    "extract(SQL Updates)": "UPDATE MY_TABLE SET user_id = '1', order_id = '10' WHERE /* no key */;\nUPDATE MY_TABLE SET user_id = '1', order_id = '11' WHERE /* no key */;\nUPDATE MY_TABLE SET user_id = '2', order_id = '12' WHERE /* no key */;",
+    "extract(Where Clause)": "(user_id = '1' AND order_id = '10') OR\n(user_id = '1' AND order_id = '11') OR\n(user_id = '2' AND order_id = '12')",
+    "extract(SQL IN List)": "((1, 10), (1, 11), (2, 12))",
+    "extract(JSON)": "[\n  {\n    \"user_id\": 1,\n    \"order_id\": 10\n  },\n  {\n    \"user_id\": 1,\n    \"order_id\": 11\n  },\n  {\n    \"user_id\": 2,\n    \"order_id\": 12\n  }\n]",
+    "extract(Markdown)": "| user_id | order_id |\n| --- | --- |\n| 1 | 10 |\n| 1 | 11 |\n| 2 | 12 |"
+  },
+  "text-numbers": {
+    "numericColumns": [],
+    "defaultAxes": {
+      "x": "label",
+      "y": null
+    },
+    "buildChart(bar)": {
+      "labels": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "series": [
+        {
+          "name": "count",
+          "values": [
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      ]
+    },
+    "buildChart(pie)": {
+      "labels": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "series": [
+        {
+          "name": "count",
+          "values": [
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      ]
+    },
+    "inList": "(('a', '1', '2024-01-01 00:00:00'), ('b', '2.5', '2024-01-02 00:00:00'), ('c', '', '2024-01-03 00:00:00'), ('d', 'x', NULL))",
+    "inList(column)": {
+      "label": "('a', 'b', 'c', 'd')",
+      "n": "('1', '2.5', '', 'x')",
+      "when": "('2024-01-01 00:00:00', '2024-01-02 00:00:00', '2024-01-03 00:00:00')"
+    },
+    "extract(TSV, no header)": "a\t1\t2024-01-01 00:00:00\nb\t2.5\t2024-01-02 00:00:00\nc\t\t2024-01-03 00:00:00\nd\tx\t",
+    "extract(SQL Inserts, mysql)": "INSERT INTO MY_TABLE (label, n, `when`) VALUES ('a', '1', '2024-01-01 00:00:00');\nINSERT INTO MY_TABLE (label, n, `when`) VALUES ('b', '2.5', '2024-01-02 00:00:00');\nINSERT INTO MY_TABLE (label, n, `when`) VALUES ('c', '', '2024-01-03 00:00:00');\nINSERT INTO MY_TABLE (label, n, `when`) VALUES ('d', 'x', NULL);",
+    "fracWidth": {
+      "label": 0,
+      "n": 0,
+      "when": 0
+    },
+    "padFrac": {
+      "when": [
+        "2024-01-01 00:00:00",
+        "2024-01-02 00:00:00",
+        "2024-01-03 00:00:00",
+        null
+      ]
+    },
+    "extract(CSV)": "label,n,when\na,1,2024-01-01 00:00:00\nb,2.5,2024-01-02 00:00:00\nc,,2024-01-03 00:00:00\nd,x,",
+    "extract(TSV)": "label\tn\twhen\na\t1\t2024-01-01 00:00:00\nb\t2.5\t2024-01-02 00:00:00\nc\t\t2024-01-03 00:00:00\nd\tx\t",
+    "extract(SQL Inserts)": "INSERT INTO MY_TABLE (label, n, \"when\") VALUES ('a', '1', '2024-01-01 00:00:00');\nINSERT INTO MY_TABLE (label, n, \"when\") VALUES ('b', '2.5', '2024-01-02 00:00:00');\nINSERT INTO MY_TABLE (label, n, \"when\") VALUES ('c', '', '2024-01-03 00:00:00');\nINSERT INTO MY_TABLE (label, n, \"when\") VALUES ('d', 'x', NULL);",
+    "extract(SQL Updates)": "UPDATE MY_TABLE SET label = 'a', n = '1', \"when\" = '2024-01-01 00:00:00' WHERE /* no key */;\nUPDATE MY_TABLE SET label = 'b', n = '2.5', \"when\" = '2024-01-02 00:00:00' WHERE /* no key */;\nUPDATE MY_TABLE SET label = 'c', n = '', \"when\" = '2024-01-03 00:00:00' WHERE /* no key */;\nUPDATE MY_TABLE SET label = 'd', n = 'x', \"when\" = NULL WHERE /* no key */;",
+    "extract(Where Clause)": "(label = 'a' AND n = '1' AND \"when\" = '2024-01-01 00:00:00') OR\n(label = 'b' AND n = '2.5' AND \"when\" = '2024-01-02 00:00:00') OR\n(label = 'c' AND n = '' AND \"when\" = '2024-01-03 00:00:00') OR\n(label = 'd' AND n = 'x' AND \"when\" IS NULL)",
+    "extract(SQL IN List)": "(('a', '1', '2024-01-01 00:00:00'), ('b', '2.5', '2024-01-02 00:00:00'), ('c', '', '2024-01-03 00:00:00'), ('d', 'x', NULL))",
+    "extract(JSON)": "[\n  {\n    \"label\": \"a\",\n    \"n\": \"1\",\n    \"when\": \"2024-01-01 00:00:00\"\n  },\n  {\n    \"label\": \"b\",\n    \"n\": \"2.5\",\n    \"when\": \"2024-01-02 00:00:00\"\n  },\n  {\n    \"label\": \"c\",\n    \"n\": \"\",\n    \"when\": \"2024-01-03 00:00:00\"\n  },\n  {\n    \"label\": \"d\",\n    \"n\": \"x\",\n    \"when\": null\n  }\n]",
+    "extract(Markdown)": "| label | n | when |\n| --- | --- | --- |\n| a | 1 | 2024-01-01 00:00:00 |\n| b | 2.5 | 2024-01-02 00:00:00 |\n| c |  | 2024-01-03 00:00:00 |\n| d | x |  |"
+  },
+  "numeric-x": {
+    "numericColumns": [
+      "bucket",
+      "hits"
+    ],
+    "defaultAxes": {
+      "x": "bucket",
+      "y": "hits"
+    },
+    "buildChart(bar)": {
+      "labels": [
+        "-1",
+        "(null)",
+        "2",
+        "10"
+      ],
+      "series": [
+        {
+          "name": "hits",
+          "values": [
+            0,
+            3,
+            7,
+            6
+          ]
+        }
+      ]
+    },
+    "buildChart(pie)": {
+      "labels": [
+        "2",
+        "10",
+        "(null)"
+      ],
+      "series": [
+        {
+          "name": "hits",
+          "values": [
+            7,
+            6,
+            3
+          ]
+        }
+      ]
+    },
+    "inList": "((10, 5), (2, 7), (10, 1), (-1, 0), (NULL, 3))",
+    "inList(column)": {
+      "bucket": "(10, 2, -1)",
+      "hits": "(5, 7, 1, 0, 3)"
+    },
+    "extract(TSV, no header)": "10\t5\n2\t7\n10\t1\n-1\t0\n\t3",
+    "extract(SQL Inserts, mysql)": "INSERT INTO MY_TABLE (bucket, hits) VALUES ('10', '5');\nINSERT INTO MY_TABLE (bucket, hits) VALUES ('2', '7');\nINSERT INTO MY_TABLE (bucket, hits) VALUES ('10', '1');\nINSERT INTO MY_TABLE (bucket, hits) VALUES ('-1', '0');\nINSERT INTO MY_TABLE (bucket, hits) VALUES (NULL, '3');",
+    "fracWidth": {
+      "bucket": 0,
+      "hits": 0
+    },
+    "padFrac": {},
+    "extract(CSV)": "bucket,hits\n10,5\n2,7\n10,1\n-1,0\n,3",
+    "extract(TSV)": "bucket\thits\n10\t5\n2\t7\n10\t1\n-1\t0\n\t3",
+    "extract(SQL Inserts)": "INSERT INTO MY_TABLE (bucket, hits) VALUES ('10', '5');\nINSERT INTO MY_TABLE (bucket, hits) VALUES ('2', '7');\nINSERT INTO MY_TABLE (bucket, hits) VALUES ('10', '1');\nINSERT INTO MY_TABLE (bucket, hits) VALUES ('-1', '0');\nINSERT INTO MY_TABLE (bucket, hits) VALUES (NULL, '3');",
+    "extract(SQL Updates)": "UPDATE MY_TABLE SET bucket = '10', hits = '5' WHERE /* no key */;\nUPDATE MY_TABLE SET bucket = '2', hits = '7' WHERE /* no key */;\nUPDATE MY_TABLE SET bucket = '10', hits = '1' WHERE /* no key */;\nUPDATE MY_TABLE SET bucket = '-1', hits = '0' WHERE /* no key */;\nUPDATE MY_TABLE SET bucket = NULL, hits = '3' WHERE /* no key */;",
+    "extract(Where Clause)": "(bucket = '10' AND hits = '5') OR\n(bucket = '2' AND hits = '7') OR\n(bucket = '10' AND hits = '1') OR\n(bucket = '-1' AND hits = '0') OR\n(bucket IS NULL AND hits = '3')",
+    "extract(SQL IN List)": "((10, 5), (2, 7), (10, 1), (-1, 0), (NULL, 3))",
+    "extract(JSON)": "[\n  {\n    \"bucket\": 10,\n    \"hits\": 5\n  },\n  {\n    \"bucket\": 2,\n    \"hits\": 7\n  },\n  {\n    \"bucket\": 10,\n    \"hits\": 1\n  },\n  {\n    \"bucket\": -1,\n    \"hits\": 0\n  },\n  {\n    \"bucket\": null,\n    \"hits\": 3\n  }\n]",
+    "extract(Markdown)": "| bucket | hits |\n| --- | --- |\n| 10 | 5 |\n| 2 | 7 |\n| 10 | 1 |\n| -1 | 0 |\n|  | 3 |"
+  },
+  "pie-many": {
+    "numericColumns": [
+      "v"
+    ],
+    "defaultAxes": {
+      "x": "k",
+      "y": "v"
+    },
+    "buildChart(bar)": {
+      "labels": [
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f",
+        "g",
+        "h",
+        "i",
+        "j",
+        "k",
+        "l",
+        "m"
+      ],
+      "series": [
+        {
+          "name": "v",
+          "values": [
+            9,
+            8,
+            7,
+            6,
+            5,
+            4,
+            3,
+            2,
+            1,
+            0.5,
+            0.25,
+            -1,
+            0
+          ]
+        }
+      ]
+    },
+    "buildChart(pie)": {
+      "labels": [
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f",
+        "g",
+        "h",
+        "i",
+        "Other"
+      ],
+      "series": [
+        {
+          "name": "v",
+          "values": [
+            9,
+            8,
+            7,
+            6,
+            5,
+            4,
+            3,
+            2,
+            1,
+            0.75
+          ]
+        }
+      ]
+    },
+    "inList": "(('a', 9), ('b', 8), ('c', 7), ('d', 6), ('e', 5), ('f', 4), ('g', 3), ('h', 2), ('i', 1), ('j', 0.5), ('k', 0.25), ('l', -1), ('m', 0))",
+    "inList(column)": {
+      "k": "('a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm')",
+      "v": "(9, 8, 7, 6, 5, 4, 3, 2, 1, 0.5, 0.25, -1, 0)"
+    },
+    "extract(TSV, no header)": "a\t9\nb\t8\nc\t7\nd\t6\ne\t5\nf\t4\ng\t3\nh\t2\ni\t1\nj\t0.5\nk\t0.25\nl\t-1\nm\t0",
+    "extract(SQL Inserts, mysql)": "INSERT INTO MY_TABLE (k, v) VALUES ('a', '9');\nINSERT INTO MY_TABLE (k, v) VALUES ('b', '8');\nINSERT INTO MY_TABLE (k, v) VALUES ('c', '7');\nINSERT INTO MY_TABLE (k, v) VALUES ('d', '6');\nINSERT INTO MY_TABLE (k, v) VALUES ('e', '5');\nINSERT INTO MY_TABLE (k, v) VALUES ('f', '4');\nINSERT INTO MY_TABLE (k, v) VALUES ('g', '3');\nINSERT INTO MY_TABLE (k, v) VALUES ('h', '2');\nINSERT INTO MY_TABLE (k, v) VALUES ('i', '1');\nINSERT INTO MY_TABLE (k, v) VALUES ('j', '0.5');\nINSERT INTO MY_TABLE (k, v) VALUES ('k', '0.25');\nINSERT INTO MY_TABLE (k, v) VALUES ('l', '-1');\nINSERT INTO MY_TABLE (k, v) VALUES ('m', '0');",
+    "fracWidth": {
+      "k": 0,
+      "v": 0
+    },
+    "padFrac": {},
+    "extract(CSV)": "k,v\na,9\nb,8\nc,7\nd,6\ne,5\nf,4\ng,3\nh,2\ni,1\nj,0.5\nk,0.25\nl,-1\nm,0",
+    "extract(TSV)": "k\tv\na\t9\nb\t8\nc\t7\nd\t6\ne\t5\nf\t4\ng\t3\nh\t2\ni\t1\nj\t0.5\nk\t0.25\nl\t-1\nm\t0",
+    "extract(SQL Inserts)": "INSERT INTO MY_TABLE (k, v) VALUES ('a', '9');\nINSERT INTO MY_TABLE (k, v) VALUES ('b', '8');\nINSERT INTO MY_TABLE (k, v) VALUES ('c', '7');\nINSERT INTO MY_TABLE (k, v) VALUES ('d', '6');\nINSERT INTO MY_TABLE (k, v) VALUES ('e', '5');\nINSERT INTO MY_TABLE (k, v) VALUES ('f', '4');\nINSERT INTO MY_TABLE (k, v) VALUES ('g', '3');\nINSERT INTO MY_TABLE (k, v) VALUES ('h', '2');\nINSERT INTO MY_TABLE (k, v) VALUES ('i', '1');\nINSERT INTO MY_TABLE (k, v) VALUES ('j', '0.5');\nINSERT INTO MY_TABLE (k, v) VALUES ('k', '0.25');\nINSERT INTO MY_TABLE (k, v) VALUES ('l', '-1');\nINSERT INTO MY_TABLE (k, v) VALUES ('m', '0');",
+    "extract(SQL Updates)": "UPDATE MY_TABLE SET k = 'a', v = '9' WHERE /* no key */;\nUPDATE MY_TABLE SET k = 'b', v = '8' WHERE /* no key */;\nUPDATE MY_TABLE SET k = 'c', v = '7' WHERE /* no key */;\nUPDATE MY_TABLE SET k = 'd', v = '6' WHERE /* no key */;\nUPDATE MY_TABLE SET k = 'e', v = '5' WHERE /* no key */;\nUPDATE MY_TABLE SET k = 'f', v = '4' WHERE /* no key */;\nUPDATE MY_TABLE SET k = 'g', v = '3' WHERE /* no key */;\nUPDATE MY_TABLE SET k = 'h', v = '2' WHERE /* no key */;\nUPDATE MY_TABLE SET k = 'i', v = '1' WHERE /* no key */;\nUPDATE MY_TABLE SET k = 'j', v = '0.5' WHERE /* no key */;\nUPDATE MY_TABLE SET k = 'k', v = '0.25' WHERE /* no key */;\nUPDATE MY_TABLE SET k = 'l', v = '-1' WHERE /* no key */;\nUPDATE MY_TABLE SET k = 'm', v = '0' WHERE /* no key */;",
+    "extract(Where Clause)": "(k = 'a' AND v = '9') OR\n(k = 'b' AND v = '8') OR\n(k = 'c' AND v = '7') OR\n(k = 'd' AND v = '6') OR\n(k = 'e' AND v = '5') OR\n(k = 'f' AND v = '4') OR\n(k = 'g' AND v = '3') OR\n(k = 'h' AND v = '2') OR\n(k = 'i' AND v = '1') OR\n(k = 'j' AND v = '0.5') OR\n(k = 'k' AND v = '0.25') OR\n(k = 'l' AND v = '-1') OR\n(k = 'm' AND v = '0')",
+    "extract(SQL IN List)": "(('a', 9), ('b', 8), ('c', 7), ('d', 6), ('e', 5), ('f', 4), ('g', 3), ('h', 2), ('i', 1), ('j', 0.5), ('k', 0.25), ('l', -1), ('m', 0))",
+    "extract(JSON)": "[\n  {\n    \"k\": \"a\",\n    \"v\": 9\n  },\n  {\n    \"k\": \"b\",\n    \"v\": 8\n  },\n  {\n    \"k\": \"c\",\n    \"v\": 7\n  },\n  {\n    \"k\": \"d\",\n    \"v\": 6\n  },\n  {\n    \"k\": \"e\",\n    \"v\": 5\n  },\n  {\n    \"k\": \"f\",\n    \"v\": 4\n  },\n  {\n    \"k\": \"g\",\n    \"v\": 3\n  },\n  {\n    \"k\": \"h\",\n    \"v\": 2\n  },\n  {\n    \"k\": \"i\",\n    \"v\": 1\n  },\n  {\n    \"k\": \"j\",\n    \"v\": 0.5\n  },\n  {\n    \"k\": \"k\",\n    \"v\": 0.25\n  },\n  {\n    \"k\": \"l\",\n    \"v\": -1\n  },\n  {\n    \"k\": \"m\",\n    \"v\": 0\n  }\n]",
+    "extract(Markdown)": "| k | v |\n| --- | --- |\n| a | 9 |\n| b | 8 |\n| c | 7 |\n| d | 6 |\n| e | 5 |\n| f | 4 |\n| g | 3 |\n| h | 2 |\n| i | 1 |\n| j | 0.5 |\n| k | 0.25 |\n| l | -1 |\n| m | 0 |"
+  },
+  "times": {
+    "numericColumns": [
+      "iv"
+    ],
+    "defaultAxes": {
+      "x": "ts",
+      "y": "iv"
+    },
+    "buildChart(bar)": {
+      "labels": [
+        "(null)",
+        "2024-01-01",
+        "2024-01-01 03:19:15",
+        "2024-01-01 09:38:06.521101"
+      ],
+      "series": [
+        {
+          "name": "iv",
+          "values": [
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    "buildChart(pie)": {
+      "labels": [],
+      "series": [
+        {
+          "name": "iv",
+          "values": []
+        }
+      ]
+    },
+    "inList": "(('2024-01-01 03:19:15', '03:19:15.5', '2024-01-01T03:19:15.123+09:00', '01:00:00', '12:34:56.7', '03:19:15+09'), ('2024-01-01 09:38:06.521101', '12:00:00', '2024-01-01 03:19:15+00', '01:00:00.25', 'abc', '03:19:15.25+09'), (NULL, '24:00:00', '12345-01-01 00:00:00.1', '2 days', NULL, 'bad'), ('2024-01-01', '1:02:03', '2024-01-01T03:19:15.Z', NULL, '03:19:15', '03:19:15.999999+05:30'))",
+    "inList(column)": {
+      "ts": "('2024-01-01 03:19:15', '2024-01-01 09:38:06.521101', '2024-01-01')",
+      "t": "('03:19:15.5', '12:00:00', '24:00:00', '1:02:03')",
+      "tz": "('2024-01-01T03:19:15.123+09:00', '2024-01-01 03:19:15+00', '12345-01-01 00:00:00.1', '2024-01-01T03:19:15.Z')",
+      "iv": "('01:00:00', '01:00:00.25', '2 days')",
+      "txt": "('12:34:56.7', 'abc', '03:19:15')",
+      "ttz": "('03:19:15+09', '03:19:15.25+09', 'bad', '03:19:15.999999+05:30')"
+    },
+    "extract(TSV, no header)": "2024-01-01 03:19:15\t03:19:15.5\t2024-01-01T03:19:15.123+09:00\t01:00:00\t12:34:56.7\t03:19:15+09\n2024-01-01 09:38:06.521101\t12:00:00\t2024-01-01 03:19:15+00\t01:00:00.25\tabc\t03:19:15.25+09\n\t24:00:00\t12345-01-01 00:00:00.1\t2 days\t\tbad\n2024-01-01\t1:02:03\t2024-01-01T03:19:15.Z\t\t03:19:15\t03:19:15.999999+05:30",
+    "extract(SQL Inserts, mysql)": "INSERT INTO MY_TABLE (ts, t, tz, iv, txt, ttz) VALUES ('2024-01-01 03:19:15', '03:19:15.5', '2024-01-01T03:19:15.123+09:00', '01:00:00', '12:34:56.7', '03:19:15+09');\nINSERT INTO MY_TABLE (ts, t, tz, iv, txt, ttz) VALUES ('2024-01-01 09:38:06.521101', '12:00:00', '2024-01-01 03:19:15+00', '01:00:00.25', 'abc', '03:19:15.25+09');\nINSERT INTO MY_TABLE (ts, t, tz, iv, txt, ttz) VALUES (NULL, '24:00:00', '12345-01-01 00:00:00.1', '2 days', NULL, 'bad');\nINSERT INTO MY_TABLE (ts, t, tz, iv, txt, ttz) VALUES ('2024-01-01', '1:02:03', '2024-01-01T03:19:15.Z', NULL, '03:19:15', '03:19:15.999999+05:30');",
+    "fracWidth": {
+      "ts": 6,
+      "t": 1,
+      "tz": 3,
+      "iv": 2,
+      "txt": 1,
+      "ttz": 6
+    },
+    "padFrac": {
+      "ts": [
+        "2024-01-01 03:19:15.000000",
+        "2024-01-01 09:38:06.521101",
+        null,
+        "2024-01-01"
+      ],
+      "t": [
+        "03:19:15.5",
+        "12:00:00.0",
+        "24:00:00.0",
+        "1:02:03"
+      ],
+      "tz": [
+        "2024-01-01T03:19:15.123+09:00",
+        "2024-01-01 03:19:15.000+00",
+        "12345-01-01 00:00:00.100",
+        "2024-01-01T03:19:15.000.Z"
+      ],
+      "ttz": [
+        "03:19:15.000000+09",
+        "03:19:15.250000+09",
+        "bad",
+        "03:19:15.999999+05:30"
+      ]
+    },
+    "extract(CSV)": "ts,t,tz,iv,txt,ttz\n2024-01-01 03:19:15,03:19:15.5,2024-01-01T03:19:15.123+09:00,01:00:00,12:34:56.7,03:19:15+09\n2024-01-01 09:38:06.521101,12:00:00,2024-01-01 03:19:15+00,01:00:00.25,abc,03:19:15.25+09\n,24:00:00,12345-01-01 00:00:00.1,2 days,,bad\n2024-01-01,1:02:03,2024-01-01T03:19:15.Z,,03:19:15,03:19:15.999999+05:30",
+    "extract(TSV)": "ts\tt\ttz\tiv\ttxt\tttz\n2024-01-01 03:19:15\t03:19:15.5\t2024-01-01T03:19:15.123+09:00\t01:00:00\t12:34:56.7\t03:19:15+09\n2024-01-01 09:38:06.521101\t12:00:00\t2024-01-01 03:19:15+00\t01:00:00.25\tabc\t03:19:15.25+09\n\t24:00:00\t12345-01-01 00:00:00.1\t2 days\t\tbad\n2024-01-01\t1:02:03\t2024-01-01T03:19:15.Z\t\t03:19:15\t03:19:15.999999+05:30",
+    "extract(SQL Inserts)": "INSERT INTO MY_TABLE (ts, t, tz, iv, txt, ttz) VALUES ('2024-01-01 03:19:15', '03:19:15.5', '2024-01-01T03:19:15.123+09:00', '01:00:00', '12:34:56.7', '03:19:15+09');\nINSERT INTO MY_TABLE (ts, t, tz, iv, txt, ttz) VALUES ('2024-01-01 09:38:06.521101', '12:00:00', '2024-01-01 03:19:15+00', '01:00:00.25', 'abc', '03:19:15.25+09');\nINSERT INTO MY_TABLE (ts, t, tz, iv, txt, ttz) VALUES (NULL, '24:00:00', '12345-01-01 00:00:00.1', '2 days', NULL, 'bad');\nINSERT INTO MY_TABLE (ts, t, tz, iv, txt, ttz) VALUES ('2024-01-01', '1:02:03', '2024-01-01T03:19:15.Z', NULL, '03:19:15', '03:19:15.999999+05:30');",
+    "extract(SQL Updates)": "UPDATE MY_TABLE SET ts = '2024-01-01 03:19:15', t = '03:19:15.5', tz = '2024-01-01T03:19:15.123+09:00', iv = '01:00:00', txt = '12:34:56.7', ttz = '03:19:15+09' WHERE /* no key */;\nUPDATE MY_TABLE SET ts = '2024-01-01 09:38:06.521101', t = '12:00:00', tz = '2024-01-01 03:19:15+00', iv = '01:00:00.25', txt = 'abc', ttz = '03:19:15.25+09' WHERE /* no key */;\nUPDATE MY_TABLE SET ts = NULL, t = '24:00:00', tz = '12345-01-01 00:00:00.1', iv = '2 days', txt = NULL, ttz = 'bad' WHERE /* no key */;\nUPDATE MY_TABLE SET ts = '2024-01-01', t = '1:02:03', tz = '2024-01-01T03:19:15.Z', iv = NULL, txt = '03:19:15', ttz = '03:19:15.999999+05:30' WHERE /* no key */;",
+    "extract(Where Clause)": "(ts = '2024-01-01 03:19:15' AND t = '03:19:15.5' AND tz = '2024-01-01T03:19:15.123+09:00' AND iv = '01:00:00' AND txt = '12:34:56.7' AND ttz = '03:19:15+09') OR\n(ts = '2024-01-01 09:38:06.521101' AND t = '12:00:00' AND tz = '2024-01-01 03:19:15+00' AND iv = '01:00:00.25' AND txt = 'abc' AND ttz = '03:19:15.25+09') OR\n(ts IS NULL AND t = '24:00:00' AND tz = '12345-01-01 00:00:00.1' AND iv = '2 days' AND txt IS NULL AND ttz = 'bad') OR\n(ts = '2024-01-01' AND t = '1:02:03' AND tz = '2024-01-01T03:19:15.Z' AND iv IS NULL AND txt = '03:19:15' AND ttz = '03:19:15.999999+05:30')",
+    "extract(SQL IN List)": "(('2024-01-01 03:19:15', '03:19:15.5', '2024-01-01T03:19:15.123+09:00', '01:00:00', '12:34:56.7', '03:19:15+09'), ('2024-01-01 09:38:06.521101', '12:00:00', '2024-01-01 03:19:15+00', '01:00:00.25', 'abc', '03:19:15.25+09'), (NULL, '24:00:00', '12345-01-01 00:00:00.1', '2 days', NULL, 'bad'), ('2024-01-01', '1:02:03', '2024-01-01T03:19:15.Z', NULL, '03:19:15', '03:19:15.999999+05:30'))",
+    "extract(JSON)": "[\n  {\n    \"ts\": \"2024-01-01 03:19:15\",\n    \"t\": \"03:19:15.5\",\n    \"tz\": \"2024-01-01T03:19:15.123+09:00\",\n    \"iv\": \"01:00:00\",\n    \"txt\": \"12:34:56.7\",\n    \"ttz\": \"03:19:15+09\"\n  },\n  {\n    \"ts\": \"2024-01-01 09:38:06.521101\",\n    \"t\": \"12:00:00\",\n    \"tz\": \"2024-01-01 03:19:15+00\",\n    \"iv\": \"01:00:00.25\",\n    \"txt\": \"abc\",\n    \"ttz\": \"03:19:15.25+09\"\n  },\n  {\n    \"ts\": null,\n    \"t\": \"24:00:00\",\n    \"tz\": \"12345-01-01 00:00:00.1\",\n    \"iv\": \"2 days\",\n    \"txt\": null,\n    \"ttz\": \"bad\"\n  },\n  {\n    \"ts\": \"2024-01-01\",\n    \"t\": \"1:02:03\",\n    \"tz\": \"2024-01-01T03:19:15.Z\",\n    \"iv\": null,\n    \"txt\": \"03:19:15\",\n    \"ttz\": \"03:19:15.999999+05:30\"\n  }\n]",
+    "extract(Markdown)": "| ts | t | tz | iv | txt | ttz |\n| --- | --- | --- | --- | --- | --- |\n| 2024-01-01 03:19:15 | 03:19:15.5 | 2024-01-01T03:19:15.123+09:00 | 01:00:00 | 12:34:56.7 | 03:19:15+09 |\n| 2024-01-01 09:38:06.521101 | 12:00:00 | 2024-01-01 03:19:15+00 | 01:00:00.25 | abc | 03:19:15.25+09 |\n|  | 24:00:00 | 12345-01-01 00:00:00.1 | 2 days |  | bad |\n| 2024-01-01 | 1:02:03 | 2024-01-01T03:19:15.Z |  | 03:19:15 | 03:19:15.999999+05:30 |"
+  },
+  "inlist-mix": {
+    "numericColumns": [
+      "n",
+      "price"
+    ],
+    "defaultAxes": {
+      "x": "code",
+      "y": "n"
+    },
+    "buildChart(bar)": {
+      "labels": [
+        "010",
+        "a'b",
+        "(null)",
+        "x",
+        "y"
+      ],
+      "series": [
+        {
+          "name": "n",
+          "values": [
+            24691357802469134000,
+            -3,
+            0,
+            100000,
+            4
+          ]
+        }
+      ]
+    },
+    "buildChart(pie)": {
+      "labels": [
+        "010",
+        "x",
+        "y"
+      ],
+      "series": [
+        {
+          "name": "n",
+          "values": [
+            24691357802469134000,
+            100000,
+            4
+          ]
+        }
+      ]
+    },
+    "inList": "(('010', 12345678901234567890, true, 1.50), ('a''b', -3, false, 'NaN'), ('x', 1e5, NULL, -0.5), ('y', '+4', true, '.5'))",
+    "inList(column)": {
+      "code": "('010', 'a''b', 'x', 'y')",
+      "n": "(12345678901234567890, -3, 1e5, '+4')",
+      "flag": "(true, false)",
+      "price": "(1.50, 'NaN', -0.5, '.5')"
+    },
+    "extract(TSV, no header)": "010\t12345678901234567890\ttrue\t1.50\na'b\t-3\tfalse\tNaN\n010\t12345678901234567890\ttrue\t1.50\n\t\t\t\nx\t1e5\t\t-0.5\ny\t+4\ttrue\t.5",
+    "extract(SQL Inserts, mysql)": "INSERT INTO MY_TABLE (code, n, flag, price) VALUES ('010', '12345678901234567890', 'true', '1.50');\nINSERT INTO MY_TABLE (code, n, flag, price) VALUES ('a''b', '-3', 'false', 'NaN');\nINSERT INTO MY_TABLE (code, n, flag, price) VALUES ('010', '12345678901234567890', 'true', '1.50');\nINSERT INTO MY_TABLE (code, n, flag, price) VALUES (NULL, NULL, NULL, NULL);\nINSERT INTO MY_TABLE (code, n, flag, price) VALUES ('x', '1e5', NULL, '-0.5');\nINSERT INTO MY_TABLE (code, n, flag, price) VALUES ('y', '+4', 'true', '.5');",
+    "fracWidth": {
+      "code": 0,
+      "n": 0,
+      "flag": 0,
+      "price": 0
+    },
+    "padFrac": {},
+    "extract(CSV)": "code,n,flag,price\n010,12345678901234567890,true,1.50\na'b,-3,false,NaN\n010,12345678901234567890,true,1.50\n,,,\nx,1e5,,-0.5\ny,+4,true,.5",
+    "extract(TSV)": "code\tn\tflag\tprice\n010\t12345678901234567890\ttrue\t1.50\na'b\t-3\tfalse\tNaN\n010\t12345678901234567890\ttrue\t1.50\n\t\t\t\nx\t1e5\t\t-0.5\ny\t+4\ttrue\t.5",
+    "extract(SQL Inserts)": "INSERT INTO MY_TABLE (code, n, flag, price) VALUES ('010', '12345678901234567890', 'true', '1.50');\nINSERT INTO MY_TABLE (code, n, flag, price) VALUES ('a''b', '-3', 'false', 'NaN');\nINSERT INTO MY_TABLE (code, n, flag, price) VALUES ('010', '12345678901234567890', 'true', '1.50');\nINSERT INTO MY_TABLE (code, n, flag, price) VALUES (NULL, NULL, NULL, NULL);\nINSERT INTO MY_TABLE (code, n, flag, price) VALUES ('x', '1e5', NULL, '-0.5');\nINSERT INTO MY_TABLE (code, n, flag, price) VALUES ('y', '+4', 'true', '.5');",
+    "extract(SQL Updates)": "UPDATE MY_TABLE SET code = '010', n = '12345678901234567890', flag = 'true', price = '1.50' WHERE /* no key */;\nUPDATE MY_TABLE SET code = 'a''b', n = '-3', flag = 'false', price = 'NaN' WHERE /* no key */;\nUPDATE MY_TABLE SET code = '010', n = '12345678901234567890', flag = 'true', price = '1.50' WHERE /* no key */;\nUPDATE MY_TABLE SET code = NULL, n = NULL, flag = NULL, price = NULL WHERE /* no key */;\nUPDATE MY_TABLE SET code = 'x', n = '1e5', flag = NULL, price = '-0.5' WHERE /* no key */;\nUPDATE MY_TABLE SET code = 'y', n = '+4', flag = 'true', price = '.5' WHERE /* no key */;",
+    "extract(Where Clause)": "(code = '010' AND n = '12345678901234567890' AND flag = 'true' AND price = '1.50') OR\n(code = 'a''b' AND n = '-3' AND flag = 'false' AND price = 'NaN') OR\n(code = '010' AND n = '12345678901234567890' AND flag = 'true' AND price = '1.50') OR\n(code IS NULL AND n IS NULL AND flag IS NULL AND price IS NULL) OR\n(code = 'x' AND n = '1e5' AND flag IS NULL AND price = '-0.5') OR\n(code = 'y' AND n = '+4' AND flag = 'true' AND price = '.5')",
+    "extract(SQL IN List)": "(('010', 12345678901234567890, true, 1.50), ('a''b', -3, false, 'NaN'), ('x', 1e5, NULL, -0.5), ('y', '+4', true, '.5'))",
+    "extract(JSON)": "[\n  {\n    \"code\": \"010\",\n    \"n\": \"12345678901234567890\",\n    \"flag\": true,\n    \"price\": \"1.50\"\n  },\n  {\n    \"code\": \"a'b\",\n    \"n\": \"-3\",\n    \"flag\": false,\n    \"price\": \"NaN\"\n  },\n  {\n    \"code\": \"010\",\n    \"n\": \"12345678901234567890\",\n    \"flag\": true,\n    \"price\": \"1.50\"\n  },\n  {\n    \"code\": null,\n    \"n\": null,\n    \"flag\": null,\n    \"price\": null\n  },\n  {\n    \"code\": \"x\",\n    \"n\": \"1e5\",\n    \"flag\": null,\n    \"price\": \"-0.5\"\n  },\n  {\n    \"code\": \"y\",\n    \"n\": \"+4\",\n    \"flag\": true,\n    \"price\": \".5\"\n  }\n]",
+    "extract(Markdown)": "| code | n | flag | price |\n| --- | --- | --- | --- |\n| 010 | 12345678901234567890 | true | 1.50 |\n| a'b | -3 | false | NaN |\n| 010 | 12345678901234567890 | true | 1.50 |\n|  |  |  |  |\n| x | 1e5 |  | -0.5 |\n| y | +4 | true | .5 |"
+  },
+  "korean-emoji": {
+    "numericColumns": [
+      "값",
+      "id"
+    ],
+    "defaultAxes": {
+      "x": "이름",
+      "y": "값"
+    },
+    "buildChart(bar)": {
+      "labels": [
+        "김😀",
+        "a|b",
+        "line\nbreak",
+        "comma,quote\"",
+        "tab\there"
+      ],
+      "series": [
+        {
+          "name": "값",
+          "values": [
+            1,
+            2,
+            0,
+            4,
+            5
+          ]
+        }
+      ]
+    },
+    "buildChart(pie)": {
+      "labels": [
+        "tab\there",
+        "comma,quote\"",
+        "a|b",
+        "김😀"
+      ],
+      "series": [
+        {
+          "name": "값",
+          "values": [
+            5,
+            4,
+            2,
+            1
+          ]
+        }
+      ]
+    },
+    "inList": "(('김😀', 1, 1), ('a|b', 2, 2), ('line\nbreak', NULL, 3), ('comma,quote\"', 4, 4), ('tab\there', 5, 5))",
+    "inList(column)": {
+      "이름": "('김😀', 'a|b', 'line\nbreak', 'comma,quote\"', 'tab\there')",
+      "값": "(1, 2, 4, 5)",
+      "id": "(1, 2, 3, 4, 5)"
+    },
+    "extract(TSV, no header)": "김😀\t1\t1\na|b\t2\t2\nline\nbreak\t\t3\ncomma,quote\"\t4\t4\ntab\there\t5\t5",
+    "extract(SQL Inserts, mysql)": "INSERT INTO MY_TABLE (`이름`, `값`, id) VALUES ('김😀', '1', '1');\nINSERT INTO MY_TABLE (`이름`, `값`, id) VALUES ('a|b', '2', '2');\nINSERT INTO MY_TABLE (`이름`, `값`, id) VALUES ('line\nbreak', NULL, '3');\nINSERT INTO MY_TABLE (`이름`, `값`, id) VALUES ('comma,quote\"', '4', '4');\nINSERT INTO MY_TABLE (`이름`, `값`, id) VALUES ('tab\there', '5', '5');",
+    "fracWidth": {
+      "이름": 0,
+      "값": 0,
+      "id": 0
+    },
+    "padFrac": {},
+    "extract(CSV)": "이름,값,id\n김😀,1,1\na|b,2,2\n\"line\nbreak\",,3\n\"comma,quote\"\"\",4,4\ntab\there,5,5",
+    "extract(TSV)": "이름\t값\tid\n김😀\t1\t1\na|b\t2\t2\nline\nbreak\t\t3\ncomma,quote\"\t4\t4\ntab\there\t5\t5",
+    "extract(SQL Inserts)": "INSERT INTO MY_TABLE (\"이름\", \"값\", id) VALUES ('김😀', '1', '1');\nINSERT INTO MY_TABLE (\"이름\", \"값\", id) VALUES ('a|b', '2', '2');\nINSERT INTO MY_TABLE (\"이름\", \"값\", id) VALUES ('line\nbreak', NULL, '3');\nINSERT INTO MY_TABLE (\"이름\", \"값\", id) VALUES ('comma,quote\"', '4', '4');\nINSERT INTO MY_TABLE (\"이름\", \"값\", id) VALUES ('tab\there', '5', '5');",
+    "extract(SQL Updates)": "UPDATE MY_TABLE SET \"이름\" = '김😀', \"값\" = '1', id = '1' WHERE id = '1';\nUPDATE MY_TABLE SET \"이름\" = 'a|b', \"값\" = '2', id = '2' WHERE id = '2';\nUPDATE MY_TABLE SET \"이름\" = 'line\nbreak', \"값\" = NULL, id = '3' WHERE id = '3';\nUPDATE MY_TABLE SET \"이름\" = 'comma,quote\"', \"값\" = '4', id = '4' WHERE id = '4';\nUPDATE MY_TABLE SET \"이름\" = 'tab\there', \"값\" = '5', id = '5' WHERE id = '5';",
+    "extract(Where Clause)": "(\"이름\" = '김😀' AND \"값\" = '1' AND id = '1') OR\n(\"이름\" = 'a|b' AND \"값\" = '2' AND id = '2') OR\n(\"이름\" = 'line\nbreak' AND \"값\" IS NULL AND id = '3') OR\n(\"이름\" = 'comma,quote\"' AND \"값\" = '4' AND id = '4') OR\n(\"이름\" = 'tab\there' AND \"값\" = '5' AND id = '5')",
+    "extract(SQL IN List)": "(('김😀', 1, 1), ('a|b', 2, 2), ('line\nbreak', NULL, 3), ('comma,quote\"', 4, 4), ('tab\there', 5, 5))",
+    "extract(JSON)": "[\n  {\n    \"이름\": \"김😀\",\n    \"값\": 1,\n    \"id\": 1\n  },\n  {\n    \"이름\": \"a|b\",\n    \"값\": 2,\n    \"id\": 2\n  },\n  {\n    \"이름\": \"line\\nbreak\",\n    \"값\": null,\n    \"id\": 3\n  },\n  {\n    \"이름\": \"comma,quote\\\"\",\n    \"값\": 4,\n    \"id\": 4\n  },\n  {\n    \"이름\": \"tab\\there\",\n    \"값\": 5,\n    \"id\": 5\n  }\n]",
+    "extract(Markdown)": "| 이름 | 값 | id |\n| --- | --- | --- |\n| 김😀 | 1 | 1 |\n| a\\|b | 2 | 2 |\n| line\nbreak |  | 3 |\n| comma,quote\" | 4 | 4 |\n| tab\there | 5 | 5 |"
+  },
+  "empty": {
+    "numericColumns": [
+      "b"
+    ],
+    "defaultAxes": {
+      "x": "a",
+      "y": "b"
+    },
+    "buildChart(bar)": {
+      "labels": [],
+      "series": [
+        {
+          "name": "b",
+          "values": []
+        }
+      ]
+    },
+    "buildChart(pie)": {
+      "labels": [],
+      "series": [
+        {
+          "name": "b",
+          "values": []
+        }
+      ]
+    },
+    "inList": "(NULL)",
+    "inList(column)": {
+      "a": "(NULL)",
+      "b": "(NULL)"
+    },
+    "extract(TSV, no header)": "",
+    "extract(SQL Inserts, mysql)": "",
+    "fracWidth": {
+      "a": 0,
+      "b": 0
+    },
+    "padFrac": {},
+    "extract(CSV)": "a,b",
+    "extract(TSV)": "a\tb",
+    "extract(SQL Inserts)": "",
+    "extract(SQL Updates)": "",
+    "extract(Where Clause)": "",
+    "extract(SQL IN List)": "(NULL)",
+    "extract(JSON)": "[]",
+    "extract(Markdown)": "| a | b |\n| --- | --- |"
+  },
+  "single-number-column": {
+    "numericColumns": [
+      "total"
+    ],
+    "defaultAxes": {
+      "x": "total",
+      "y": null
+    },
+    "buildChart(bar)": {
+      "labels": [
+        "10",
+        "20"
+      ],
+      "series": [
+        {
+          "name": "count",
+          "values": [
+            2,
+            1
+          ]
+        }
+      ]
+    },
+    "buildChart(pie)": {
+      "labels": [
+        "10",
+        "20"
+      ],
+      "series": [
+        {
+          "name": "count",
+          "values": [
+            2,
+            1
+          ]
+        }
+      ]
+    },
+    "inList": "(10, 20)",
+    "inList(column)": {
+      "total": "(10, 20)"
+    },
+    "extract(TSV, no header)": "10\n20\n10",
+    "extract(SQL Inserts, mysql)": "INSERT INTO MY_TABLE (total) VALUES ('10');\nINSERT INTO MY_TABLE (total) VALUES ('20');\nINSERT INTO MY_TABLE (total) VALUES ('10');",
+    "fracWidth": {
+      "total": 0
+    },
+    "padFrac": {},
+    "extract(CSV)": "total\n10\n20\n10",
+    "extract(TSV)": "total\n10\n20\n10",
+    "extract(SQL Inserts)": "INSERT INTO MY_TABLE (total) VALUES ('10');\nINSERT INTO MY_TABLE (total) VALUES ('20');\nINSERT INTO MY_TABLE (total) VALUES ('10');",
+    "extract(SQL Updates)": "UPDATE MY_TABLE SET total = '10' WHERE /* no key */;\nUPDATE MY_TABLE SET total = '20' WHERE /* no key */;\nUPDATE MY_TABLE SET total = '10' WHERE /* no key */;",
+    "extract(Where Clause)": "(total = '10') OR\n(total = '20') OR\n(total = '10')",
+    "extract(SQL IN List)": "(10, 20)",
+    "extract(JSON)": "[\n  {\n    \"total\": \"10\"\n  },\n  {\n    \"total\": \"20\"\n  },\n  {\n    \"total\": \"10\"\n  }\n]",
+    "extract(Markdown)": "| total |\n| --- |\n| 10 |\n| 20 |\n| 10 |"
+  }
+}
