@@ -148,6 +148,8 @@ export const api = {
   listConnections: () => invoke<ConnectionView[]>("list_connections"),
   saveConnection: (config: ConnectionConfig, password?: string, sshSecret?: string) =>
     invoke<ConnectionConfig>("save_connection", { config, password: password ?? null, sshSecret: sshSecret ?? null }),
+  setConnectionColor: (id: string, color: string | null) => invoke<ConnectionConfig>("set_connection_color", { id, color }),
+  setConnectionScope: (id: string, scope: NonNullable<ConnectionConfig["scope"]>) => invoke<ConnectionConfig>("set_connection_scope", { id, scope }),
   deleteConnection: (id: string) => invoke<void>("delete_connection", { id }),
   testConnection: (config: ConnectionConfig, password?: string, sshSecret?: string) =>
     invoke<string>("test_connection", { config, password: password ?? null, sshSecret: sshSecret ?? null }),

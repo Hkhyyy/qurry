@@ -142,6 +142,16 @@ const handlers: Record<string, (a: any) => unknown> = {
     if (i >= 0) (conns as any)[i] = { ...conns[i], ...a.config };
     return a.config;
   },
+  set_connection_color: (a: any) => {
+    const c: any = conns.find((c: any) => c.id === a.id);
+    if (c) c.color = a.color;
+    return c;
+  },
+  set_connection_scope: (a: any) => {
+    const c: any = conns.find((c: any) => c.id === a.id);
+    if (c) c.scope = a.scope;
+    return c;
+  },
   fetch_more: () => ({ ...result, rows: result.rows.slice(0, 120).map((r) => [Number(r[0]) + 500, ...r.slice(1)]), truncated: false }),
   cancel_query: () => true,
   close_session: () => null,

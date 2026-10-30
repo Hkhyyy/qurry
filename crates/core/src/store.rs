@@ -415,6 +415,25 @@ impl Store {
         })
     }
 
+    /// Change part of one source (scope, color …) under the lock, so another app's change to it in between isn't reverted. None if it doesn't exist
+    pub fn modify<T>(&self, id: &str, f: impl FnOnce(&mut ConnectionConfig) -> AppResult<T>) -> AppResult<Option<T>> {
+        self.update(|all| all.iter_mut().find(|c| c.id == id).map(f).transpose())
+    }
+
+    /// Save a whole source, deciding against the saved one under the lock: `f` gets what is saved now (None for a new source)
+    /// and the config to save, and may refuse (nothing is written then)
+    pub fn save_with(&self, mut config: ConnectionConfig, f: impl FnOnce(Option<&ConnectionConfig>, &mut ConnectionConfig) -> AppResult<()>) -> AppResult<ConnectionConfig> {
+        self.update(|all| {
+            let i = all.iter().position(|c| c.id == config.id);
+            f(i.map(|i| &all[i]), &mut config)?;
+            match i {
+                Some(i) => all[i] = config.clone(),
+                None => all.push(config.clone()),
+            }
+            Ok(config)
+        })
+    }
+
     pub fn delete(&self, id: &str) -> AppResult<()> {
         self.update(|all| {
             all.retain(|c| c.id != id);
@@ -542,10 +561,16 @@ impl Store {
         Ok(out)
     }
 
-    /// (added, changed, sources whose passwords to delete: (id, DB password, SSH secret)). The saved flags follow the current values, not the file
-    pub fn import_from(&self, path: &std::path::Path) -> AppResult<(usize, usize, Vec<(String, bool, bool)>)> {
+    /// (added, changed, sources whose passwords to delete: (id, DB password, SSH secret)). The saved flags follow the current values, not the file.
+    /// `forget` deletes those passwords before the store is written (under its lock): if it fails, nothing is imported — otherwise the store would
+    /// say "no password" (or allow plain text) while the old password stayed in the file
+    pub fn import_from(&self, path: &std::path::Path, forget: impl FnOnce(&[(String, bool, bool)]) -> AppResult<()>) -> AppResult<(usize, usize, Vec<(String, bool, bool)>)> {
         let incoming = Self::read_import(path)?;
-        self.update(|all| Self::merge_import(all, incoming))
+        self.update(|all| {
+            let r = Self::merge_import(all, incoming)?;
+            forget(&r.2)?;
+            Ok(r)
+        })
     }
 
     /// Like a server change for the saved password: same_server, plus a file turning on "Allow unencrypted"
@@ -766,7 +791,7 @@ mod tests {
 
         let b = Store::new(base.join("b"));
         b.save(&conn("2", "old name")).unwrap();
-        assert_eq!(b.import_from(&file).unwrap(), (1, 1, vec![]));
+        assert_eq!(b.import_from(&file, |_| Ok(())).unwrap(), (1, 1, vec![]));
         // Newly imported sources get MCP Off (unless the file sets it)
         assert_eq!(b.get("1").unwrap().unwrap().options.mcp.as_deref(), Some("off"));
         let names: Vec<_> = b.list().unwrap().into_iter().map(|c| c.name).collect();
@@ -791,7 +816,7 @@ mod tests {
         std::fs::write(&file, serde_json::to_string(&vec![theirs]).unwrap()).unwrap();
         let p = b.import_preview(&file).unwrap().join("\n");
         assert!(p.contains("attacker.example") && p.contains("SSL OFF") && p.contains("password will be removed"), "{p}");
-        assert_eq!(b.import_from(&file).unwrap(), (0, 1, vec![("2".to_string(), true, false)]));
+        assert_eq!(b.import_from(&file, |_| Ok(())).unwrap(), (0, 1, vec![("2".to_string(), true, false)]));
         assert!(!b.get("2").unwrap().unwrap().password_saved);
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -811,14 +836,14 @@ mod tests {
         std::fs::write(&file, serde_json::to_string(&vec![theirs]).unwrap()).unwrap();
         let p = b.import_preview(&file).unwrap().join("\n");
         assert!(p.contains("unencrypted") && p.contains("password will be removed and asked again"), "{p}");
-        assert_eq!(b.import_from(&file).unwrap(), (0, 1, vec![("4".to_string(), true, false)]));
+        assert_eq!(b.import_from(&file, |_| Ok(())).unwrap(), (0, 1, vec![("4".to_string(), true, false)]));
         let got = b.get("4").unwrap().unwrap();
         assert!(got.options.allow_plaintext && !got.password_saved);
         // Already allowed: importing the same setting keeps it
         let mut again = got.clone();
         again.password_saved = true;
         b.save(&again).unwrap();
-        assert_eq!(b.import_from(&file).unwrap(), (0, 1, vec![]));
+        assert_eq!(b.import_from(&file, |_| Ok(())).unwrap(), (0, 1, vec![]));
         assert!(b.get("4").unwrap().unwrap().password_saved);
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -838,7 +863,7 @@ mod tests {
         std::fs::write(&file, serde_json::to_string(&vec![theirs]).unwrap()).unwrap();
         let p = b.import_preview(&file).unwrap().join("\n");
         assert!(p.contains("unencrypted") && !p.contains("MCP"), "{p}");
-        b.import_from(&file).unwrap();
+        b.import_from(&file, |_| Ok(())).unwrap();
         assert_eq!(b.get("3").unwrap().unwrap().mcp_access(true), McpAccess::Off);
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -979,6 +1004,33 @@ mod tests {
         let all = Store::new(base.clone()).list().unwrap();
         assert_eq!(all.len(), 40);
         assert!(all.iter().all(|c| c.mcp_access(true) == McpAccess::Off));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Changing one part of a source (scope, color …) from several apps at once keeps every change: read · change · write under the lock
+    #[test]
+    fn concurrent_modifies_keep_every_change() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        Store::new(base.clone()).save(&conn("a", "x")).unwrap();
+        std::thread::scope(|sc| {
+            for t in 0..4 {
+                let base = base.clone();
+                sc.spawn(move || {
+                    let s = Store::new(base);
+                    for i in 0..10 {
+                        s.modify("a", |c| {
+                            c.scope.schemas.insert(format!("{t}-{i}"), vec![]);
+                            Ok(())
+                        })
+                        .unwrap()
+                        .unwrap();
+                    }
+                });
+            }
+        });
+        let s = Store::new(base.clone());
+        assert_eq!(s.get("a").unwrap().unwrap().scope.schemas.len(), 40);
+        assert_eq!(s.modify("missing", |_| Ok(())).unwrap(), None);
         let _ = std::fs::remove_dir_all(&base);
     }
 

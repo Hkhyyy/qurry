@@ -298,8 +298,12 @@ impl SecretFile {
     pub fn contains(&self, name: &str) -> AppResult<bool> {
         match self.load() {
             Ok(a) => Ok(a.contains_key(name)),
-            Err(e) => match fs::read_to_string(&self.path) {
-                Ok(s) if !s.contains(&format!("\"{name}\"")) => Ok(false),
+            // Raw bytes: a file damaged into invalid UTF-8 must not block every source
+            Err(e) => match fs::read(&self.path) {
+                Ok(b) => {
+                    let quoted = serde_json::to_string(name)?;
+                    if b.windows(quoted.len()).any(|w| w == quoted.as_bytes()) { Err(e) } else { Ok(false) }
+                }
                 _ => Err(e),
             },
         }
@@ -344,6 +348,18 @@ mod tests {
         assert!(s.get("a").is_err());
         assert!(s.set("b", Some("2")).is_err());
         assert_eq!(std::fs::read_to_string(dir.join("secrets.json")).unwrap(), "{ \"a\": \"tru");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Damaged into invalid UTF-8: only names that still show in the raw bytes are in doubt, the rest have no saved secret
+    #[test]
+    fn contains_reads_invalid_utf8_as_bytes() {
+        let dir = std::env::temp_dir().join(format!("dbtool-secrets-{}", uuid::Uuid::new_v4()));
+        let s = SecretFile::open(&dir).unwrap();
+        s.set("a", Some("1")).unwrap();
+        std::fs::write(dir.join("secrets.json"), b"{ \"a\": \"\xff\xfe").unwrap();
+        assert!(s.contains("a").is_err());
+        assert!(!s.contains("b").unwrap());
         let _ = std::fs::remove_dir_all(dir);
     }
 

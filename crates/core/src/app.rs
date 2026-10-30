@@ -369,7 +369,7 @@ async fn check_redis_read(m: &crate::redisdb::RedisConn, line: &str) -> AppResul
         }
         let mut bytes = 0i64;
         for k in &c.keys {
-            bytes = bytes.saturating_add(crate::redisdb::memory_usage(m, k.as_bytes()).await?);
+            bytes = bytes.saturating_add(crate::redisdb::memory_usage(m, k.as_bytes(), 0).await?);
         }
         if bytes > REDIS_READ_MAX_BYTES {
             return Err(AppError::Msg(format!("{cmd} would read {} MB — too big to read here; use {}", bytes >> 20, c.instead)));
@@ -385,8 +385,9 @@ async fn check_redis_read(m: &crate::redisdb::RedisConn, line: &str) -> AppResul
         "JSON.MGET" => rest.split_last().map(|(_, k)| k).unwrap_or(&[]),
         _ => &[],
     };
+    let json = cmd.starts_with("JSON.");
     for k in keys {
-        let n = crate::redisdb::memory_usage(m, k.as_bytes()).await?;
+        let n = crate::redisdb::value_size(m, k.as_bytes(), json).await?;
         if n > REDIS_READ_MAX_BYTES {
             return Err(AppError::Msg(format!("{k} is {} MB — too big to read here (use GETRANGE, or redis_get for a preview)", n >> 20)));
         }
@@ -547,47 +548,73 @@ impl AppState {
                 config.options.mcp = Some("off".into());
             }
         }
-        // The saved-password flag is managed on the backend (None = keep the existing value)
-        let prev = self.store.get(&config.id)?;
-        // If the server changed, do not use the saved password for the new server: ask for it again
-        // "Saved" means the password actually exists, not the flag (old imports left entries with only the flag turned off).
-        // A damaged secrets.json that may hold it counts as saved
-        if let Some(p) = &prev {
-            if password.is_none() && self.secret_file.contains(&p.id).unwrap_or(true) && !p.same_server(&config) {
-                return Err(AppError::Msg(SERVER_CHANGED.into()));
-            }
-            if ssh_secret.is_none() && self.secret_file.contains(&store::ssh_secret_key(&p.id)).unwrap_or(true) && config.active_ssh().is_some() && !p.same_ssh(&config) {
-                return Err(AppError::Msg(SSH_CHANGED.into()));
-            }
+        // Read the key now: in keychain mode that may show a prompt, and other apps would wait on the store lock meanwhile
+        if [&password, &ssh_secret].iter().any(|s| s.as_deref().is_some_and(|s| !s.is_empty())) {
+            self.secret_file.ensure_key()?;
         }
-        config.password_saved = prev.as_ref().is_some_and(|p| p.password_saved);
-        config.ssh_secret_saved = prev.as_ref().is_some_and(|p| p.ssh_secret_saved);
-        match password.as_deref() {
-            Some("") => {
-                self.set_secret(&config.id, None)?;
-                config.password_saved = false;
+        // Check against the saved source, set the secrets and write under the store lock: another app's save in between
+        // (another server, a password saved or removed) can't be decided on stale settings
+        let config = self.store.save_with(config, |prev, config| {
+            // If the server changed, do not use the saved password for the new server: ask for it again
+            // "Saved" means the password actually exists, not the flag (old imports left entries with only the flag turned off).
+            // A damaged secrets.json that may hold it counts as saved
+            if let Some(p) = prev {
+                if password.is_none() && self.secret_file.contains(&p.id).unwrap_or(true) && !p.same_server(config) {
+                    return Err(AppError::Msg(SERVER_CHANGED.into()));
+                }
+                if ssh_secret.is_none() && self.secret_file.contains(&store::ssh_secret_key(&p.id)).unwrap_or(true) && config.active_ssh().is_some() && !p.same_ssh(config) {
+                    return Err(AppError::Msg(SSH_CHANGED.into()));
+                }
             }
-            Some(p) => {
-                self.set_secret(&config.id, Some(p))?;
-                config.password_saved = true;
+            // The saved-password flag is managed on the backend (None = keep the existing value)
+            config.password_saved = prev.is_some_and(|p| p.password_saved);
+            config.ssh_secret_saved = prev.is_some_and(|p| p.ssh_secret_saved);
+            match password.as_deref() {
+                Some("") => {
+                    self.set_secret(&config.id, None)?;
+                    config.password_saved = false;
+                }
+                Some(p) => {
+                    self.set_secret(&config.id, Some(p))?;
+                    config.password_saved = true;
+                }
+                None => {}
             }
-            None => {}
-        }
-        let sk = store::ssh_secret_key(&config.id);
-        match ssh_secret.as_deref() {
-            Some("") => {
-                self.set_secret(&sk, None)?;
-                config.ssh_secret_saved = false;
+            let sk = store::ssh_secret_key(&config.id);
+            match ssh_secret.as_deref() {
+                Some("") => {
+                    self.set_secret(&sk, None)?;
+                    config.ssh_secret_saved = false;
+                }
+                Some(p) => {
+                    self.set_secret(&sk, Some(p))?;
+                    config.ssh_secret_saved = true;
+                }
+                None => {}
             }
-            Some(p) => {
-                self.set_secret(&sk, Some(p))?;
-                config.ssh_secret_saved = true;
-            }
-            None => {}
-        }
-        self.store.save(&config)?;
+            Ok(())
+        })?;
         drop_pool(self, &config.id).await; // The settings may have changed, so force a reconnect
         Ok(config)
+    }
+
+    /// Explorer menu: change only the color (another app's change to the source since the list was read stays; no reconnect)
+    pub async fn set_connection_color(&self, id: String, color: Option<String>) -> AppResult<ConnectionConfig> {
+        self.modify_connection(&id, |c| c.color = color)
+    }
+
+    /// Explorer menu: change only the shown databases and schemas
+    pub async fn set_connection_scope(&self, id: String, scope: store::Scope) -> AppResult<ConnectionConfig> {
+        self.modify_connection(&id, |c| c.scope = scope)
+    }
+
+    fn modify_connection(&self, id: &str, f: impl FnOnce(&mut ConnectionConfig)) -> AppResult<ConnectionConfig> {
+        self.store
+            .modify(id, |c| {
+                f(c);
+                Ok(c.clone())
+            })?
+            .ok_or_else(|| AppError::Msg("Data source not found".into()))
     }
 
     pub async fn delete_connection(&self, id: String) -> AppResult<()> {
@@ -993,15 +1020,20 @@ impl AppState {
     }
 
     pub async fn import_connections(&self, path: String) -> AppResult<ImportResult> {
-        let (added, updated, forget) = self.store.import_from(std::path::Path::new(&path))?;
-        // Importing a different server under the same id deletes the old password (so it is not sent to the new server)
-        for (id, password, ssh) in forget {
-            if password {
-                self.set_secret(&id, None)?;
+        // Importing a different server under the same id deletes the old password (so it is not sent to the new server) —
+        // before the store is written, so a failure (damaged secrets.json) imports nothing
+        let (added, updated, forget) = self.store.import_from(std::path::Path::new(&path), |forget| {
+            for (id, password, ssh) in forget {
+                if *password {
+                    self.set_secret(id, None)?;
+                }
+                if *ssh {
+                    self.set_secret(&store::ssh_secret_key(id), None)?;
+                }
             }
-            if ssh {
-                self.set_secret(&store::ssh_secret_key(&id), None)?;
-            }
+            Ok(())
+        })?;
+        for (id, _, _) in forget {
             drop_pool(self, &id).await;
         }
         Ok(ImportResult { added, updated })
@@ -1172,6 +1204,108 @@ mod tests {
         assert!(e.contains("was removed") && e.contains("damaged"), "{e}");
         assert!(st.store.get("pw").unwrap().is_none());
         assert_eq!(std::fs::read_to_string(dir.join("secrets.json")).unwrap(), damaged);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The explorer's color and scope menus change only that part: another app's change since the list was read stays
+    #[tokio::test]
+    async fn color_and_scope_change_only_their_part() {
+        let dir = std::env::temp_dir().join(format!("qurry-part-{}", uuid::Uuid::new_v4()));
+        let st = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+        let cfg = ConnectionConfig {
+            id: "p".into(), name: "p".into(), kind: crate::store::DbKind::Postgres, host: "db".into(), port: 5432,
+            user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+        };
+        st.save_connection(cfg, Some("pw".into()), None).await.unwrap();
+        // Another app turns on Read-only
+        let other = Store::new(dir.clone());
+        let mut c = other.get("p").unwrap().unwrap();
+        c.read_only = true;
+        other.save(&c).unwrap();
+        st.set_connection_color("p".into(), Some("#f00".into())).await.unwrap();
+        let scope = crate::store::Scope { databases: Some(vec!["d".into()]), schemas: Default::default() };
+        st.set_connection_scope("p".into(), scope).await.unwrap();
+        let c = st.store.get("p").unwrap().unwrap();
+        assert!(c.read_only && c.password_saved, "{c:?}");
+        assert_eq!((c.color.as_deref(), c.scope.databases.as_deref()), (Some("#f00"), Some(&["d".to_string()][..])));
+        assert!(st.set_connection_color("missing".into(), None).await.is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A form save (password kept) racing with another app saving or removing the password keeps the "password saved" flag
+    /// matching the file: the saved source is read under the store lock, not before
+    #[test]
+    fn form_save_racing_a_password_save_keeps_the_flag() {
+        for round in 0..4 {
+            form_save_race(round % 2 == 0);
+        }
+    }
+
+    fn form_save_race(end_with_password: bool) {
+        let dir = std::env::temp_dir().join(format!("qurry-race-{}", uuid::Uuid::new_v4()));
+        let cfg = ConnectionConfig {
+            id: "r".into(), name: "r".into(), kind: crate::store::DbKind::Postgres, host: "db".into(), port: 5432,
+            user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+        };
+        Store::new(dir.clone()).save(&cfg).unwrap();
+        // Create the key before the threads open the file
+        crate::secrets::SecretFile::open(&dir).unwrap();
+        let run = |pw: bool| {
+            let (dir, cfg) = (dir.clone(), cfg.clone());
+            move || {
+                let st = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+                let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+                // The password side sets and removes it in turn, ending on `end_with_password`
+                let n = if pw { 20 + usize::from(end_with_password) } else { 40 };
+                for i in 0..n {
+                    let mut c = cfg.clone();
+                    c.name = format!("r{i}");
+                    let p = pw.then(|| if i % 2 == 0 { format!("pw{i}") } else { String::new() });
+                    rt.block_on(st.save_connection(c, p, None)).unwrap();
+                }
+            }
+        };
+        std::thread::scope(|sc| {
+            sc.spawn(run(false));
+            sc.spawn(run(true));
+        });
+        let st = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+        assert_eq!(st.store.get("r").unwrap().unwrap().password_saved, st.secret_file.contains("r").unwrap());
+        assert_eq!(st.secret_file.contains("r").unwrap(), end_with_password);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// An import that turns on "Allow unencrypted" while secrets.json is damaged fails as a whole: the store isn't changed,
+    /// so after the file is repaired the old password isn't sent on the plaintext path
+    #[tokio::test]
+    async fn import_needing_a_password_removed_fails_before_writing() {
+        let dir = std::env::temp_dir().join(format!("qurry-impdmg-{}", uuid::Uuid::new_v4()));
+        let st = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+        let cfg = ConnectionConfig {
+            id: "m".into(), name: "m".into(), kind: crate::store::DbKind::Mysql, host: "db.example".into(), port: 3306,
+            user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+        };
+        st.save_connection(cfg, Some("pw".into()), None).await.unwrap();
+        let file = dir.join("import.json");
+        st.export_connections(file.display().to_string()).await.unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        v["connections"][0]["options"]["allowPlaintext"] = true.into();
+        std::fs::write(&file, v.to_string()).unwrap();
+        let good = std::fs::read(dir.join("secrets.json")).unwrap();
+        std::fs::write(dir.join("secrets.json"), b"{ \"m\": \"tru").unwrap();
+        let e = st.import_connections(file.display().to_string()).await.err().expect("import must fail").to_string();
+        assert!(e.contains("damaged"), "{e}");
+        let c = st.store.get("m").unwrap().unwrap();
+        assert!(!c.options.allow_plaintext && c.password_saved, "{c:?}");
+        // Repaired: the import goes through and the password is gone
+        std::fs::write(dir.join("secrets.json"), good).unwrap();
+        st.import_connections(file.display().to_string()).await.unwrap();
+        let c = st.store.get("m").unwrap().unwrap();
+        assert!(c.options.allow_plaintext && !c.password_saved);
+        assert_eq!(st.saved_secret("m", c.password_saved).unwrap(), None);
         let _ = std::fs::remove_dir_all(dir);
     }
 

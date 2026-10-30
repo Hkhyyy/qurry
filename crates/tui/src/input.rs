@@ -1310,6 +1310,10 @@ fn popup_key(app: &mut App, k: KeyEvent) {
 }
 
 fn save_form(app: &mut App, mut form: crate::app::ConnForm) {
+    // What the form doesn't show (scope, startup script …) comes from the source as saved now, not as it was when the form opened
+    if let Some(fresh) = form.edit.as_ref().and_then(|e| app.state.store.get(&e.id).ok().flatten()) {
+        form.edit = Some(fresh);
+    }
     match App::form_config(&form) {
         Ok((cfg, pw, ssh)) => {
             let st = app.state.clone();
@@ -1801,6 +1805,33 @@ mod tests {
         let bad: Vec<char> = s.chars().filter(|c| (c.is_control() && *c != '\n') || ('\u{202a}'..='\u{202e}').contains(c) || ('\u{2066}'..='\u{2069}').contains(c)).collect();
         assert!(bad.is_empty(), "{bad:?}");
         assert!(s.contains("]52;c;"), "the rest of the text is still shown");
+    }
+
+    /// Saving the form keeps what it doesn't show (scope, startup script …) as saved now, not as it was when the form opened
+    #[tokio::test]
+    async fn conn_form_keeps_settings_it_does_not_show() {
+        use qurry_core::store::{ConnectionConfig, DbKind};
+        let mut h = Harness::new().await;
+        let cfg = ConnectionConfig {
+            id: "c1".into(), name: "pg".into(), kind: DbKind::Postgres, host: "localhost".into(), port: 5432, user: "postgres".into(), database: "postgres".into(),
+            scope: Default::default(), password_saved: false, ssh_secret_saved: false, ssh: None, color: None, read_only: false, options: Default::default(), ssl: None, redis: None,
+        };
+        h.app.state.store.save(&cfg).unwrap();
+        h.app.reload_conns();
+        h.app.conn_form(Some(cfg.clone()));
+        // Meanwhile the GUI changes what the TUI form doesn't show
+        let mut other = cfg.clone();
+        other.scope.databases = Some(vec!["shop".into()]);
+        other.options.startup_script = "SET search_path = shop".into();
+        h.app.state.store.save(&other).unwrap();
+        let Some(crate::app::Popup::ConnForm(f)) = &mut h.app.popup else { panic!() };
+        f.fields.iter_mut().find(|x| x.label == "Name").unwrap().value = "renamed".into();
+        h.key("Enter");
+        h.settle().await;
+        let saved = h.app.state.store.get("c1").unwrap().unwrap();
+        assert_eq!(saved.name, "renamed");
+        assert_eq!(saved.scope.databases, Some(vec!["shop".to_string()]));
+        assert_eq!(saved.options.startup_script, "SET search_path = shop");
     }
 
     /// A new Data Source starts hidden from MCP. Saves the MCP value shown in the form as is
