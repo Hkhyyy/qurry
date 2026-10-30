@@ -295,7 +295,8 @@ const handlers: Record<string, (a: any) => unknown> = {
     return [o.kind === "database" ? `CREATE DATABASE ${o.name}` : o.kind === "schema" ? `CREATE SCHEMA ${o.name}` : o.kind === "view" ? `CREATE ${o.materialized ? "MATERIALIZED " : ""}VIEW ${o.schema}.${o.name} AS\n${o.query}` : `CREATE SEQUENCE ${o.schema}.${o.name}`];
   },
   rename_ddl: (a: any) => `ALTER TABLE ${a.schema}.${a.old} RENAME TO ${a.new}`,
-  run_ddl: () => new Promise((ok) => setTimeout(() => ok(null), 300)),
+  // e2e sets __mockDdlWarning for "ran, but the Production log couldn't record it"
+  run_ddl: () => new Promise((ok) => setTimeout(() => ok((globalThis as any).__mockDdlWarning ?? null), 300)),
   subset_preview: () => ({
     total: 9,
     tables: [

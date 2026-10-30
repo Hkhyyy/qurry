@@ -1052,8 +1052,10 @@ export default function App() {
       const sql = await ddl.rename(what === "db" ? info.conn.id : nodeTarget(info), what, schemaOf(info), old, name);
       const c = info.conn;
       if (!(await ask(c.options?.confirmChanges ? "This changes the schema of a Production data source." : `Rename "${old}" to "${name}"?`, { title: c.options?.confirmChanges ? `Production: ${c.name}` : "Rename", detail: [{ text: sql, value: "schema change", tone: "danger" }], okLabel: "Rename", danger: !!c.options?.confirmChanges }))) return;
-      await ddl.run(what === "db" ? c.id : nodeTarget(info), [sql]);
+      // Ran, but the Production log couldn't record it: not a failure (running it again would repeat it)
+      const warning = await ddl.run(what === "db" ? c.id : nodeTarget(info), [sql]);
       setStatus(`Renamed ${old} to ${name}`);
+      if (warning) void notice(warning, "Ran, with a warning");
       if (what === "schema" || what === "db") info.refresh?.();
       else info.refreshParent?.();
       schemaChanged(c.id, info.db ?? (c.database || (c.kind === "postgres" ? "postgres" : "")));
