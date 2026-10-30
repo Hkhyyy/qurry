@@ -164,6 +164,7 @@ fn result_of(e: &Value) -> QueryResult {
         elapsed_ms: 0,
         has_result_set: true,
         in_transaction: false,
+        warning: None,
     }
 }
 

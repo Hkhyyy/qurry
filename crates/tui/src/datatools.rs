@@ -309,6 +309,7 @@ mod tests {
             elapsed_ms: 0,
             has_result_set: true,
             in_transaction: false,
+            warning: None,
         };
         assert_eq!(super::chart_axes(&r), (vec![1], 0, Some(1)));
         assert!(super::bar_chart(&r, 10, 30).is_none());

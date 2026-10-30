@@ -21,6 +21,8 @@ mod testkit;
 mod kit_snapshots;
 #[cfg(test)]
 mod parity_dump;
+#[cfg(test)]
+mod tests;
 mod scope;
 mod selfupdate;
 mod snippets;

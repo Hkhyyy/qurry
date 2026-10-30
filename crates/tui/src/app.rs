@@ -650,7 +650,13 @@ pub struct App {
     pub ws_shared: Option<Vec<qurry_core::workspaces::WsInfo>>,
     /// The save file has synced with the shared list before (missing workspaces were deleted elsewhere)
     pub ws_synced: bool,
+    /// Tests only (testkit): answers console statements and the Production row counts instead of the database
+    #[cfg(test)]
+    pub fake_db: Option<FakeDb>,
 }
+
+/// Tests only (testkit): stands in for the database, answering each query by its text
+pub type FakeDb = fn(&str) -> Result<QueryResult, String>;
 
 pub fn fuzzy(q: &str, text: &str) -> Option<i64> {
     if q.is_empty() {
@@ -687,6 +693,14 @@ pub fn fuzzy(q: &str, text: &str) -> Option<i64> {
 
 fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
+}
+
+/// Runs a console query on the session, or asks the test stand-in when there is one
+async fn console_query(st: &AppState, fake: Option<FakeDb>, target: &str, q: String, limit: Option<usize>, session: &str) -> Result<QueryResult, String> {
+    match fake {
+        Some(f) => f(&q),
+        None => st.run_query(target.into(), q, limit, Some(session.into())).await.map_err(err),
+    }
 }
 
 fn color_of(c: &ConnectionView) -> Option<String> {
@@ -735,6 +749,8 @@ impl App {
             saved_ws: String::new(),
             ws_shared: None,
             ws_synced: false,
+            #[cfg(test)]
+            fake_db: None,
             next_id: 1,
             exec: Default::default(),
             workspaces: vec![Workspace { id: uuid::Uuid::new_v4().to_string(), name: "Default".into(), conns: vec![], saved: None }],
@@ -1786,6 +1802,14 @@ impl App {
         self.popup = Some(Popup::Palette(Palette { title: "Query Execution Settings".into(), input: TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
     }
 
+    /// The test stand-in for the database (always None outside tests)
+    fn fake_db(&self) -> Option<FakeDb> {
+        #[cfg(test)]
+        return self.fake_db;
+        #[cfg(not(test))]
+        None
+    }
+
     /// confirmed = whether a dangerous statement (UPDATE/DELETE without WHERE, DROP, TRUNCATE) was confirmed
     pub fn run_stmts(&mut self, stmts: Vec<String>, explain: bool, confirmed: bool) {
         self.run_stmts_checked(stmts, explain, confirmed, confirmed)
@@ -1824,12 +1848,19 @@ impl App {
             let writes: Vec<String> = stmts.iter().filter(|s| !qurry_core::guard::is_read(s, kind)).cloned().collect();
             if !writes.is_empty() {
                 let st = self.state.clone();
+                let fake = self.fake_db();
                 self.status = "Counting the rows this will change…".into();
                 self.spawn(
                     async move {
                         let mut out = vec![];
                         for w in writes {
-                            let n = st.preview_impact(target.clone(), w.clone()).await;
+                            let n = match fake {
+                                Some(f) => match qurry_core::guard::impact_count_sql(&w, kind) {
+                                    Some(q) => f(&q).map(|r| qurry_core::guard::impact_count(&r)).map_err(qurry_core::error::AppError::Msg),
+                                    None => Ok(None),
+                                },
+                                None => st.preview_impact(target.clone(), w.clone()).await,
+                            };
                             out.push((w, n));
                         }
                         out
@@ -1886,6 +1917,7 @@ impl App {
         let stmts2 = stmts.clone();
         let tx = self.tx.clone();
         let echo_name = conn_name.clone();
+        let fake = self.fake_db();
         self.status = "Executing…".into();
         self.spawn(
             async move {
@@ -1919,17 +1951,17 @@ impl App {
                     let dry = analyze && wraps && !qurry_core::guard::is_read(&s, kind);
                     if dry {
                         let begin = if in_tx0 { "SAVEPOINT qurry_explain" } else { "BEGIN" };
-                        if let Err(e) = st.run_query(target.clone(), begin.into(), None, Some(session.clone())).await {
-                            out.push((s, Err(err(e)), false));
+                        if let Err(e) = console_query(&st, fake, &target, begin.into(), None, &session).await {
+                            out.push((s, Err(e), false));
                             break;
                         }
                     }
-                    let r = st.run_query(target.clone(), q, Some(500), Some(session.clone())).await.map_err(err);
+                    let r = console_query(&st, fake, &target, q, Some(500), &session).await;
                     let r = if dry {
                         let back = if in_tx0 { "ROLLBACK TO SAVEPOINT qurry_explain" } else { "ROLLBACK" };
-                        match st.run_query(target.clone(), back.into(), None, Some(session.clone())).await {
+                        match console_query(&st, fake, &target, back.into(), None, &session).await {
                             Ok(_) => r.map(|res| qurry_core::db::QueryResult { in_transaction: in_tx0, ..res }),
-                            Err(e) => Err(format!("Roll back after Explain Analyze failed: {}", err(e))),
+                            Err(e) => Err(format!("Roll back after Explain Analyze failed: {e}")),
                         }
                     } else {
                         r

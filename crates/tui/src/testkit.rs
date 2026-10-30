@@ -39,7 +39,7 @@ impl Harness {
         }
     }
 
-    /// One key: "a", "Ctrl+A", "Alt+Shift+Left", "Enter", "Tab", "Esc", "Down", "F1" …
+    /// One key: "a", "Ctrl+A", "Alt+Shift+Left", "Enter", "Tab", "Esc", "Down", "PgDn", "F1" …
     pub fn key(&mut self, spec: &str) {
         let mut m = KeyModifiers::NONE;
         let mut parts: Vec<&str> = spec.split('+').collect();
@@ -64,6 +64,8 @@ impl Harness {
             "Right" => KeyCode::Right,
             "Home" => KeyCode::Home,
             "End" => KeyCode::End,
+            "PgUp" => KeyCode::PageUp,
+            "PgDn" => KeyCode::PageDown,
             "Space" => KeyCode::Char(' '),
             f if f.len() > 1 && f.starts_with('F') => KeyCode::F(f[1..].parse().unwrap()),
             c if c.chars().count() == 1 => {
