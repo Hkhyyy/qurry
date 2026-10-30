@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ask, askText } from "./lib/dialogs";
 import { listen } from "@tauri-apps/api/event";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { analyzePlan, api, auditLog, backup, ConnectionView, ddl, previewImpact, dialectOf, meta, VECTOR_KINDS, QueryResult, redisDb, secretKey, setUpdateCheckEnabled, targetId, UpdateInfo, updateCheckEnabled } from "./lib/api";
+import { analyzePlan, api, auditLog, backup, ConnectionView, ddl, previewImpact, dialectOf, meta, VECTOR_KINDS, QueryResult, redisDb, removedDespite, secretKey, setUpdateCheckEnabled, targetId, UpdateInfo, updateCheckEnabled } from "./lib/api";
 import { RedisBrowser } from "./components/RedisBrowser";
 import { KeymapDialog } from "./components/KeymapDialog";
 import { KeymapEditor } from "./components/KeymapEditor";
@@ -2067,8 +2067,9 @@ export default function App() {
     try {
       await api.deleteConnection(c.id);
     } catch (e) {
-      // Removed even if its saved password couldn't be (damaged secrets file): the message says so
       setStatus(String(e));
+      // Removed even if its saved password couldn't be (damaged secrets file): the message says so. Any other error kept it, and its tabs stay
+      if (!removedDespite(e)) return;
     }
     closeTabs(tabsRef.current.filter((t) => t.connId === c.id).map((t) => t.id));
     refresh();
