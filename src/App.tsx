@@ -30,7 +30,7 @@ import { bindings, eventSpec, formatSpec, hit, loadKeymap, onKeymapChange } from
 import { invalidateCompletion } from "./lib/completion";
 import { useStatusWidgets } from "./lib/statusbar";
 import { tableTabLabels } from "./lib/tabLabels";
-import type { FtsRequest } from "./lib/api";
+import type { BackupOptions, FtsRequest } from "./lib/api";
 import { isRelation, NodeInfo, revealInTree, schemaChanged } from "./components/SchemaTree";
 import { leaf, leaves, MAX_PANES, Pane, prunePanes, splitPane } from "./lib/panes";
 import { connBg, connStripe, getThemePref, setThemePref, THEME_LABEL, ThemePref, useTheme } from "./lib/theme";
@@ -945,7 +945,7 @@ export default function App() {
   // ───────── Backup / restore ─────────
   const [backupReq, setBackupReq] = useState<{ c: ConnectionView; db?: string } | null>(null);
   const dbTarget = (c: ConnectionView, db?: string) => targetId(c.id, db && db !== (c.database || "postgres") ? db : undefined);
-  const startBackup = async (o: { format: "custom" | "plain"; schemaOnly: boolean; dataOnly: boolean }) => {
+  const startBackup = async (o: Omit<BackupOptions, "schemas">) => {
     const r0 = backupReq;
     setBackupReq(null);
     if (!r0) return;
@@ -955,7 +955,7 @@ export default function App() {
   };
   const startRestore = async (c: ConnectionView, db?: string) => {
     const where = `${c.name}${db ? ` / ${db}` : ""}`;
-    if (!(await ask(`Restore a backup into ${where}?\n\nIt runs the backup's statements on this database (in one transaction for PostgreSQL). ${c.options?.confirmChanges ? "\n\n⚠ This is a Production data source." : ""}`))) return;
+    if (!(await ask(`Restore a backup into ${where}?\n\nIt runs the backup's statements on this database${c.kind === "mysql" ? ". A MySQL restore isn't atomic: if a statement fails, what ran before it stays" : " in one transaction: if a statement fails, nothing changes"}.${c.options?.confirmChanges ? "\n\n⚠ This is a Production data source." : ""}`))) return;
     const clean = await ask("Drop the objects the backup contains before restoring them (--clean)?", { title: "Restore", okLabel: "Drop and Recreate", cancelLabel: "Keep and Add" });
     const r = await runJob(`Restore into ${where}`, (job) => backup.restore(dbTarget(c, db), clean, job));
     if (r) setStatus(`Restored ${r} into ${where}`);

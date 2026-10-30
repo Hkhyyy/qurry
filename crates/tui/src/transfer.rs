@@ -299,10 +299,11 @@ impl App {
         };
         let name = self.conn(&conn).map(|c| c.config.name.clone()).unwrap_or_default();
         let prod = self.conn(&conn).is_some_and(|c| c.config.options.confirm_changes);
+        let atomic = if self.kind_of(&conn) == qurry_core::store::DbKind::Mysql { "A MySQL restore isn't atomic: if a statement fails, what ran before it stays." } else { "One transaction: if a statement fails, nothing changes." };
         self.input("Restore from backup file (.dump or .sql)", &format!("{}/Downloads/", home()), move |a, p| {
             let path = expand(&p);
             a.popup = Some(Popup::Confirm {
-                text: format!("Restore {path}\ninto {name} / {db}?\n\nObjects in the backup are dropped and recreated (pg_restore --clean); the rest of the database is left alone. One transaction for PostgreSQL.{}", if prod { "\n\n⚠ This is a Production data source." } else { "" }),
+                text: format!("Restore {path}\ninto {name} / {db}?\n\nObjects in the backup are dropped and recreated (pg_restore --clean); the rest of the database is left alone. {atomic}{}", if prod { "\n\n⚠ This is a Production data source." } else { "" }),
                 on_yes: Box::new(move |a| {
                     let label = format!("Restore into {db}");
                     let job = a.start_job(&label);

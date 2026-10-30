@@ -257,7 +257,7 @@ export interface ErdRelation { name: string; fromSchema: string; fromTable: stri
 export const erd = (id: string, schemas: string[]) => invoke<[{ tables: ErdTable[]; relations: ErdRelation[] }, string]>("erd", { id, schemas });
 /** Save text to a file (save dialog). null if canceled */
 export const saveFile = (defaultName: string, text: string, filter: string, ext: string) => invoke<string | null>("save_file", { defaultName, text, filter, ext });
-export interface BackupOptions { format: "custom" | "plain"; schemaOnly: boolean; dataOnly: boolean; schemas: string[] }
+export interface BackupOptions { format: "custom" | "plain"; schemaOnly: boolean; dataOnly: boolean; schemas: string[]; stripDefiners: boolean }
 /** Backup·restore (pg_dump / mysqldump). Progress via "transfer-progress" */
 export const backup = {
   run: (id: string, opts: BackupOptions, defaultName: string, job: string) => invoke<[number, string] | null>("backup_db", { id, opts, defaultName, job }),
