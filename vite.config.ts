@@ -9,6 +9,8 @@ const host = process.env.TAURI_DEV_HOST;
 // https://vite.dev/config/
 export default defineConfig(() => ({
   plugins: [react()],
+  // e2e/ holds Playwright specs (npx playwright test), not vitest ones
+  test: { exclude: ["**/node_modules/**", "e2e/**"] },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
