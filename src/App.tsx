@@ -2021,15 +2021,14 @@ export default function App() {
   }, [conns]);
 
   // ───────── Misc ─────────
+  // Only that part: the list may be stale (another app changed the source since), so the backend changes it in the saved one
   const setColor = async (c: ConnectionView, color: string | null) => {
-    const { hasPassword: _h, connected: _c, ...config } = c;
-    await api.saveConnection({ ...config, color });
+    await api.setConnectionColor(c.id, color);
     refresh();
   };
 
   const setScope = async (c: ConnectionView, scope: NonNullable<ConnectionView["scope"]>) => {
-    const { hasPassword: _h, connected: _c, ...config } = c;
-    await api.saveConnection({ ...config, scope });
+    await api.setConnectionScope(c.id, scope);
     refresh();
   };
 

@@ -415,6 +415,25 @@ impl Store {
         })
     }
 
+    /// Change part of one source (scope, color …) under the lock, so another app's change to it in between isn't reverted. None if it doesn't exist
+    pub fn modify<T>(&self, id: &str, f: impl FnOnce(&mut ConnectionConfig) -> AppResult<T>) -> AppResult<Option<T>> {
+        self.update(|all| all.iter_mut().find(|c| c.id == id).map(f).transpose())
+    }
+
+    /// Save a whole source, deciding against the saved one under the lock: `f` gets what is saved now (None for a new source)
+    /// and the config to save, and may refuse (nothing is written then)
+    pub fn save_with(&self, mut config: ConnectionConfig, f: impl FnOnce(Option<&ConnectionConfig>, &mut ConnectionConfig) -> AppResult<()>) -> AppResult<ConnectionConfig> {
+        self.update(|all| {
+            let i = all.iter().position(|c| c.id == config.id);
+            f(i.map(|i| &all[i]), &mut config)?;
+            match i {
+                Some(i) => all[i] = config.clone(),
+                None => all.push(config.clone()),
+            }
+            Ok(config)
+        })
+    }
+
     pub fn delete(&self, id: &str) -> AppResult<()> {
         self.update(|all| {
             all.retain(|c| c.id != id);
@@ -985,6 +1004,33 @@ mod tests {
         let all = Store::new(base.clone()).list().unwrap();
         assert_eq!(all.len(), 40);
         assert!(all.iter().all(|c| c.mcp_access(true) == McpAccess::Off));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Changing one part of a source (scope, color …) from several apps at once keeps every change: read · change · write under the lock
+    #[test]
+    fn concurrent_modifies_keep_every_change() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        Store::new(base.clone()).save(&conn("a", "x")).unwrap();
+        std::thread::scope(|sc| {
+            for t in 0..4 {
+                let base = base.clone();
+                sc.spawn(move || {
+                    let s = Store::new(base);
+                    for i in 0..10 {
+                        s.modify("a", |c| {
+                            c.scope.schemas.insert(format!("{t}-{i}"), vec![]);
+                            Ok(())
+                        })
+                        .unwrap()
+                        .unwrap();
+                    }
+                });
+            }
+        });
+        let s = Store::new(base.clone());
+        assert_eq!(s.get("a").unwrap().unwrap().scope.schemas.len(), 40);
+        assert_eq!(s.modify("missing", |_| Ok(())).unwrap(), None);
         let _ = std::fs::remove_dir_all(&base);
     }
 

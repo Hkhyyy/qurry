@@ -83,6 +83,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::list_connections,
             commands::save_connection,
+            commands::set_connection_color,
+            commands::set_connection_scope,
             commands::delete_connection,
             commands::test_connection,
             commands::test_ssh,

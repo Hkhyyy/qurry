@@ -18,6 +18,18 @@ pub async fn save_connection(state: State<'_, AppState>, config: ConnectionConfi
     state.save_connection(config, password, ssh_secret).await
 }
 
+/// Explorer menu: change only the color (other settings are read from the store, not the possibly stale list)
+#[tauri::command]
+pub async fn set_connection_color(state: State<'_, AppState>, id: String, color: Option<String>) -> AppResult<ConnectionConfig> {
+    state.set_connection_color(id, color).await
+}
+
+/// Explorer menu: change only the shown databases and schemas
+#[tauri::command]
+pub async fn set_connection_scope(state: State<'_, AppState>, id: String, scope: qurry_core::store::Scope) -> AppResult<ConnectionConfig> {
+    state.set_connection_scope(id, scope).await
+}
+
 #[tauri::command]
 pub async fn delete_connection(state: State<'_, AppState>, id: String) -> AppResult<()> {
     state.delete_connection(id).await

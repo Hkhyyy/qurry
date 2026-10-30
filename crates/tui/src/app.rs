@@ -3043,22 +3043,19 @@ impl App {
     /// Save the chosen scope to the Data Source and redraw the tree.
     /// Connection settings are unchanged, so write to the store directly (save_connection closes the pool and drops open transactions)
     pub fn apply_scope(&mut self, e: crate::scope::ScopeEditor) {
-        // Re-read the saved config and change only the scope (so read-only·host etc. changed meanwhile in the GUI·MCP aren't reverted)
-        let cfg = match self.state.store.get(&e.conn) {
-            Ok(Some(mut cfg)) => {
-                cfg.scope = e.scope();
-                cfg
-            }
+        // Change only the scope, under the store lock (so read-only·host etc. changed meanwhile in the GUI·MCP aren't reverted)
+        let scope = e.scope();
+        let cfg = match self.state.store.modify(&e.conn, |c| {
+            c.scope = scope;
+            Ok(c.clone())
+        }) {
+            Ok(Some(cfg)) => cfg,
             Ok(None) => return,
             Err(er) => {
                 self.status = er.to_string();
                 return;
             }
         };
-        if let Err(er) = self.state.store.save(&cfg) {
-            self.status = er.to_string();
-            return;
-        }
         if let Some(c) = self.conns.iter_mut().find(|c| c.config.id == cfg.id) {
             c.config = cfg.clone();
         }
