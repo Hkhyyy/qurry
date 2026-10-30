@@ -1,0 +1,597 @@
+//! Backend matrix: pins what each operation that goes through `Pool` returns on PostgreSQL, MySQL and Redis,
+//! so a refactor of the dispatch shows up as a failing assertion instead of a changed screen.
+//! Real-server tests are #[ignore]d and read the same env vars as CI:
+//!   QURRY_TEST_PG=host:port:user:db · QURRY_TEST_MY=host:port:user:password:db · QURRY_TEST_REDIS=host:port (default 127.0.0.1:16379)
+//! cargo test -p qurry-core --test backend_matrix -- --ignored
+use qurry_core::app::AppState;
+use qurry_core::db::{self, Pool};
+use qurry_core::hints::HintReq;
+use qurry_core::store::{ConnectionConfig, DbKind};
+use qurry_core::transfer::{Dest, Format};
+use serde_json::{Value, json};
+
+const ID: &str = "m";
+
+fn cfg(kind: &str, host: &str, port: &str, user: &str, database: &str) -> ConnectionConfig {
+    serde_json::from_value(json!({
+        "id": ID, "name": "matrix", "kind": kind, "host": host, "port": port.parse::<u16>().unwrap(), "user": user, "database": database,
+        "options": { "confirmChanges": true },
+    }))
+    .unwrap()
+}
+
+/// QURRY_TEST_PG=host:port:user:db
+fn pg_env() -> Option<ConnectionConfig> {
+    let e = std::env::var("QURRY_TEST_PG").ok()?;
+    let p: Vec<&str> = e.split(':').collect();
+    Some(cfg("postgres", p[0], p[1], p[2], p[3]))
+}
+
+/// QURRY_TEST_MY=host:port:user:password:db → (source, password)
+fn my_env() -> Option<(ConnectionConfig, String)> {
+    let e = std::env::var("QURRY_TEST_MY").ok()?;
+    let p: Vec<&str> = e.split(':').collect();
+    Some((cfg("mysql", p[0], p[1], p[2], p[4]), p[3].to_string()))
+}
+
+/// QURRY_TEST_REDIS=host:port, on its own DB (the redisdb tests use 0 and 3–8)
+fn redis_env(db: &str) -> ConnectionConfig {
+    let addr = std::env::var("QURRY_TEST_REDIS").unwrap_or_else(|_| "127.0.0.1:16379".into());
+    let (host, port) = addr.rsplit_once(':').expect("QURRY_TEST_REDIS=host:port");
+    cfg("redis", host, port, "", db)
+}
+
+/// A fresh config folder with one saved source (id "m"; Production audit on)
+async fn state(c: &ConnectionConfig, password: Option<String>) -> AppState {
+    let dir = std::env::temp_dir().join(format!("qurry-matrix-{}", uuid::Uuid::new_v4()));
+    let st = qurry_core::open_state(Some(dir)).unwrap();
+    st.save_connection(c.clone(), password, None).await.unwrap();
+    st
+}
+
+async fn q(st: &AppState, sql: &str) -> db::QueryResult {
+    st.run_query(ID.into(), sql.into(), None, None).await.unwrap_or_else(|e| panic!("{sql}: {e}"))
+}
+
+async fn export(st: &AppState, sql: &str, format: Format, table: Option<(&str, &str)>) -> String {
+    let table = table.map(|(s, t)| (s.to_string(), t.to_string()));
+    let r = st.export(ID.into(), sql.into(), format, Dest::Clipboard, table, format!("{format:?}")).await.unwrap();
+    r.text.unwrap()
+}
+
+fn hint(schema: &str, table: &str, column: &str) -> HintReq {
+    serde_json::from_value(json!({ "schema": schema, "table": table, "column": column })).unwrap()
+}
+
+fn err<T>(r: qurry_core::error::AppResult<T>) -> String {
+    match r {
+        Ok(_) => panic!("expected an error"),
+        Err(e) => e.to_string(),
+    }
+}
+
+// ───────── Dispatch decided before any connection ─────────
+
+/// A source that would refuse connections: these checks must answer without connecting
+async fn offline(kind: &str) -> AppState {
+    let mut c = cfg(kind, "127.0.0.1", "1", "u", "d");
+    c.id = kind.into();
+    let dir = std::env::temp_dir().join(format!("qurry-matrix-{}", uuid::Uuid::new_v4()));
+    let st = qurry_core::open_state(Some(dir)).unwrap();
+    st.save_connection(c, None, None).await.unwrap();
+    st
+}
+
+#[tokio::test]
+async fn compare_refuses_mixed_kinds_and_redis_offline() {
+    let st = offline("postgres").await;
+    let mut r = cfg("redis", "127.0.0.1", "1", "", "db0");
+    r.id = "redis".into();
+    st.save_connection(r, None, None).await.unwrap();
+    let e = err(st.compare_schemas("postgres".into(), "public".into(), "redis".into(), "db0".into()).await);
+    assert!(e.contains("same kind"), "{e}");
+    let e = err(st.compare_data("redis".into(), "db0".into(), "a".into(), "redis".into(), "db0".into(), "a".into()).await);
+    assert!(e.contains("same kind"), "{e}");
+}
+
+#[tokio::test]
+async fn export_and_fake_fill_check_arguments_offline() {
+    let st = offline("mysql").await;
+    let e = err(st.export("mysql".into(), "select 1".into(), Format::Xlsx, Dest::Clipboard, None, "j".into()).await);
+    assert!(e.contains("import only"), "{e}");
+    let e = err(st.fake_fill("mysql".into(), "d".into(), "t".into(), 0).await);
+    assert!(e.contains("Choose 1 to"), "{e}");
+}
+
+/// Redis has one schema per DB, named after it; the explorer never asks the server
+#[test]
+fn redis_schema_is_the_db_name() {
+    let s = qurry_core::redisdb::list_schemas("db11");
+    assert_eq!(s.iter().map(|s| (s.name.as_str(), s.is_system)).collect::<Vec<_>>(), [("db11", false)]);
+    assert_eq!(qurry_core::redisdb::db_index("db11"), 11);
+    assert_eq!(qurry_core::redisdb::db_index(""), 0);
+}
+
+/// What the audit log counts as a change, per kind
+#[test]
+fn audit_change_per_kind() {
+    use qurry_core::audit::is_change;
+    assert!(is_change("update t set a = 1", DbKind::Postgres));
+    assert!(is_change("drop table t", DbKind::Mysql));
+    assert!(!is_change("select 1", DbKind::Postgres));
+    assert!(!is_change("set names utf8mb4", DbKind::Mysql));
+    assert!(!is_change("begin", DbKind::Postgres));
+    assert!(is_change("SET k v", DbKind::Redis), "SET is a write in Redis");
+    assert!(!is_change("GET k", DbKind::Redis));
+    assert!(!is_change("CONFIG GET maxmemory", DbKind::Redis));
+}
+
+/// SQL INSERT export quotes columns the way the target kind does
+#[test]
+fn sql_export_quotes_per_kind() {
+    use qurry_core::transfer::Encoder;
+    let line = |kind| {
+        let mut e = Encoder::new(Format::Sql, kind, "t");
+        e.header(&["a b".into()]);
+        e.row(&[Value::from("it's")])
+    };
+    assert_eq!(line(DbKind::Postgres), "INSERT INTO t (\"a b\") VALUES ('it''s');\n");
+    assert_eq!(line(DbKind::Mysql), "INSERT INTO t (`a b`) VALUES ('it''s');\n");
+}
+
+// ───────── PostgreSQL ─────────
+
+#[tokio::test]
+#[ignore]
+async fn pg_connect_and_query() {
+    let Some(c) = pg_env() else { return };
+    let pool = db::connect(&c, None).await.unwrap();
+    assert!(matches!(pool, Pool::Pg(_)));
+    let v = pool.server_version().await.unwrap();
+    assert!(v.starts_with("PostgreSQL "), "{v}");
+
+    let r = pool.run_query("select g, 'v' || g as t from generate_series(1, 10) g", 3).await.unwrap();
+    let cols: Vec<(&str, &str)> = r.columns.iter().map(|c| (c.name.as_str(), c.type_name.as_str())).collect();
+    assert_eq!(cols, [("g", "INT4"), ("t", "TEXT")]);
+    assert_eq!(r.rows, [[json!(1), json!("v1")], [json!(2), json!("v2")], [json!(3), json!("v3")]]);
+    assert!(r.truncated && r.has_result_set && !r.in_transaction);
+    let all = pool.run_query("select g from generate_series(1, 3) g", 3).await.unwrap();
+    assert!(!all.truncated, "exactly limit rows is not truncated");
+    let empty = pool.run_query("select 1 as a where false", 10).await.unwrap();
+    assert!(empty.has_result_set && empty.rows.is_empty() && empty.columns.len() == 1);
+    let ddl = pool.run_query("create temp table qm_t (a int)", 10).await.unwrap();
+    assert!(!ddl.has_result_set && ddl.columns.is_empty());
+    assert!(pool.run_query("select * from qm_no_such_table", 10).await.is_err());
+}
+
+#[tokio::test]
+#[ignore]
+async fn pg_session_fetch_cancel_tx() {
+    let Some(c) = pg_env() else { return };
+    let st = state(&c, None).await;
+    let tab = || Some("pg-tab".to_string());
+    let r1 = st.run_query(ID.into(), "select g from generate_series(1, 1200) g".into(), Some(500), tab()).await.unwrap();
+    assert_eq!((r1.rows.len(), r1.truncated, r1.rows[0][0].clone()), (500, true, json!(1)));
+    let r2 = st.fetch_more("pg-tab".into(), Some(500)).await.unwrap();
+    assert_eq!((r2.rows.len(), r2.truncated, r2.rows[0][0].clone()), (500, true, json!(501)));
+    let r3 = st.fetch_more("pg-tab".into(), Some(500)).await.unwrap();
+    assert_eq!((r3.rows.len(), r3.truncated), (200, false));
+    assert!(st.fetch_more("pg-tab".into(), Some(500)).await.is_err(), "no more rows");
+
+    // Cancel a running query from another task: the query fails, the session stays usable
+    let st = std::sync::Arc::new(st);
+    let st2 = st.clone();
+    let cancel = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        st2.cancel_query("pg-tab".into()).await.unwrap()
+    });
+    let t0 = std::time::Instant::now();
+    let slow = st.run_query(ID.into(), "select pg_sleep(10)".into(), None, tab()).await;
+    assert!(cancel.await.unwrap());
+    assert!(err(slow).contains("canceling statement"));
+    assert!(t0.elapsed().as_secs() < 5);
+    assert!(!st.cancel_query("pg-no-tab".into()).await.unwrap(), "unknown tab");
+
+    // Manual: uncommitted rows are invisible to the pool, Roll back drops them, Commit keeps them
+    q(&st, "drop table if exists qm_tx").await;
+    q(&st, "create table qm_tx (id int primary key)").await;
+    st.set_tx_mode(ID.into(), "pg-tab".into(), true).await.unwrap();
+    let ins = st.run_query(ID.into(), "insert into qm_tx values (1)".into(), None, tab()).await.unwrap();
+    assert!(ins.in_transaction && ins.rows_affected == 1);
+    assert!(st.tx_state("pg-tab".into()).await);
+    let count = |st: std::sync::Arc<AppState>| async move { q(&st, "select count(*)::int from qm_tx").await.rows[0][0].clone() };
+    assert_eq!(count(st.clone()).await, json!(0));
+    st.rollback_tx("pg-tab".into()).await.unwrap();
+    assert!(!st.tx_state("pg-tab".into()).await);
+    st.run_query(ID.into(), "insert into qm_tx values (2)".into(), None, tab()).await.unwrap();
+    st.commit_tx("pg-tab".into()).await.unwrap();
+    assert_eq!(count(st.clone()).await, json!(1));
+    st.set_tx_mode(ID.into(), "pg-tab".into(), false).await.unwrap();
+    st.close_session("pg-tab".into()).await.unwrap();
+    q(&st, "drop table qm_tx").await;
+}
+
+async fn pg_fixture(st: &AppState, schema: &str) {
+    for s in [
+        format!("drop schema if exists {schema} cascade"),
+        format!("create schema {schema}"),
+        format!("create table {schema}.customers (id serial primary key, name text not null default 'anon', tier text)"),
+        format!("comment on table {schema}.customers is 'People'"),
+        format!("create index customers_tier on {schema}.customers (tier)"),
+        format!("create table {schema}.orders (id int primary key, customer_id int not null references {schema}.customers (id), total numeric(10,2))"),
+        format!("create view {schema}.big_orders as select id, total from {schema}.orders where total > 100"),
+        format!("create function {schema}.twice(x int) returns int language sql as 'select x * 2'"),
+        format!("insert into {schema}.customers (name, tier) values ('a', 'gold'), ('b', 'gold'), ('c', 'silver')"),
+        format!("insert into {schema}.orders values (1, 1, 50), (2, 1, 150)"),
+    ] {
+        q(st, &s).await;
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn pg_metadata() {
+    let Some(c) = pg_env() else { return };
+    let st = state(&c, None).await;
+    pg_fixture(&st, "qm_meta").await;
+
+    let dbs = st.list_databases(ID.into()).await.unwrap();
+    assert!(dbs.contains(&"postgres".to_string()) && !dbs.iter().any(|d| d.starts_with("template")), "{dbs:?}");
+    let schemas = st.list_schemas(ID.into()).await.unwrap();
+    let flag = |n: &str| schemas.iter().find(|s| s.name == n).map(|s| s.is_system);
+    assert_eq!((flag("qm_meta"), flag("public"), flag("pg_catalog"), flag("information_schema")), (Some(false), Some(false), Some(true), Some(true)));
+    assert!(schemas.last().unwrap().is_system, "system schemas last");
+
+    let o = st.list_objects(ID.into(), "qm_meta".into()).await.unwrap();
+    let rels: Vec<(&str, &str)> = o.relations.iter().map(|r| (r.name.as_str(), r.kind.as_str())).collect();
+    assert_eq!(rels, [("big_orders", "view"), ("customers", "table"), ("customers_id_seq", "sequence"), ("orders", "table")]);
+    assert_eq!(o.relations[1].comment.as_deref(), Some("People"));
+    let r = &o.routines[0];
+    assert_eq!((o.routines.len(), r.name.as_str(), r.args.as_str(), r.returns.as_deref(), r.kind.as_str()), (1, "twice", "x integer", Some("integer"), "function"));
+
+    let d = st.table_detail(ID.into(), "qm_meta".into(), "customers".into()).await.unwrap();
+    let cols: Vec<(&str, &str, bool, bool)> = d.columns.iter().map(|c| (c.name.as_str(), c.data_type.as_str(), c.nullable, c.is_pk)).collect();
+    assert_eq!(cols, [("id", "integer", false, true), ("name", "text", false, false), ("tier", "text", true, false)]);
+    assert_eq!(d.columns[1].default_value.as_deref(), Some("'anon'::text"));
+    let idx: Vec<(&str, bool, bool)> = d.indexes.iter().map(|i| (i.name.as_str(), i.is_unique, i.is_primary)).collect();
+    assert_eq!(idx, [("customers_pkey", true, true), ("customers_tier", false, false)]);
+    let cons: Vec<(&str, &str, &str)> = d.constraints.iter().map(|c| (c.name.as_str(), c.kind.as_str(), c.definition.as_str())).collect();
+    assert_eq!(cons, [("customers_pkey", "p", "PRIMARY KEY (id)")]);
+    let fk = st.table_detail(ID.into(), "qm_meta".into(), "orders".into()).await.unwrap();
+    assert!(fk.constraints.iter().any(|c| c.kind == "f" && c.definition == "FOREIGN KEY (customer_id) REFERENCES qm_meta.customers(id)"), "{:?}", fk.constraints.iter().map(|c| &c.definition).collect::<Vec<_>>());
+
+    let ddl = st.object_ddl(ID.into(), "qm_meta".into(), "customers".into(), "table".into()).await.unwrap();
+    assert!(ddl.starts_with("CREATE TABLE qm_meta.customers\n(\n    id integer DEFAULT nextval("), "{ddl}");
+    assert!(ddl.contains("    name text DEFAULT 'anon'::text NOT NULL,\n") && ddl.contains("    CONSTRAINT customers_pkey PRIMARY KEY (id)\n);\n"), "{ddl}");
+    assert!(ddl.contains("\nCREATE INDEX customers_tier ON qm_meta.customers USING btree (tier);\n") && ddl.contains("COMMENT ON TABLE qm_meta.customers IS 'People';"), "{ddl}");
+    let view = st.object_ddl(ID.into(), "qm_meta".into(), "big_orders".into(), "view".into()).await.unwrap();
+    assert!(view.starts_with("CREATE OR REPLACE VIEW qm_meta.big_orders AS\n") && view.ends_with(";\n"), "{view}");
+    let seq = st.object_ddl(ID.into(), "qm_meta".into(), "customers_id_seq".into(), "sequence".into()).await.unwrap();
+    assert!(seq.starts_with("CREATE SEQUENCE qm_meta.customers_id_seq\n    START WITH 1\n    INCREMENT BY 1\n"), "{seq}");
+    let f = st.object_ddl(ID.into(), "qm_meta".into(), "twice".into(), "routine".into()).await.unwrap();
+    assert!(f.starts_with("CREATE OR REPLACE FUNCTION qm_meta.twice(x integer)"), "{f}");
+
+    let comp = st.completion_meta(ID.into()).await.unwrap();
+    let t = comp.iter().find(|t| t.schema == "qm_meta" && t.name == "customers").expect("customers in completion");
+    assert_eq!(t.columns, [("id".to_string(), "integer".to_string()), ("name".into(), "text".into()), ("tier".into(), "text".into())]);
+    assert!(comp.iter().any(|t| t.schema == "qm_meta" && t.name == "big_orders"), "views too");
+    assert!(!comp.iter().any(|t| t.schema == "pg_catalog"));
+
+    let idx = st.object_index(ID.into()).await.unwrap();
+    let mut mine: Vec<(&str, &str)> = idx.iter().filter(|e| e.schema == "qm_meta").map(|e| (e.name.as_str(), e.kind.as_str())).collect();
+    mine.sort();
+    assert_eq!(mine, [("big_orders", "view"), ("customers", "table"), ("customers_id_seq", "sequence"), ("orders", "table"), ("qm_meta", "schema"), ("twice", "function")]);
+    q(&st, "drop schema qm_meta cascade").await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn pg_tools() {
+    let Some(c) = pg_env() else { return };
+    let st = state(&c, None).await;
+    pg_fixture(&st, "qm_tools").await;
+
+    // Hints: most frequent first
+    let h = st.column_hints(ID.into(), hint("qm_tools", "customers", "tier")).await.unwrap();
+    assert_eq!(h.iter().map(|h| (h.value.as_str(), h.count)).collect::<Vec<_>>(), [("gold", 2), ("silver", 1)]);
+
+    // ERD
+    let e = st.erd(ID.into(), vec!["qm_tools".into()]).await.unwrap();
+    assert_eq!(e.tables.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["customers", "orders"], "tables only, no views");
+    let r = &e.relations[0];
+    assert_eq!((e.relations.len(), r.from_table.as_str(), r.from_columns.clone(), r.to_table.as_str(), r.to_columns.clone()), (1, "orders", vec!["customer_id".to_string()], "customers", vec!["id".to_string()]));
+    assert!(e.tables[0].columns[0].pk && !e.tables[0].columns[2].pk);
+
+    // Export
+    let sql = "select id, name, tier from qm_tools.customers order by id limit 2";
+    assert_eq!(export(&st, sql, Format::Csv, None).await, "id,name,tier\n1,a,gold\n2,b,gold\n");
+    assert_eq!(export(&st, sql, Format::Json, None).await, "[\n  {\"id\":1,\"name\":\"a\",\"tier\":\"gold\"},\n  {\"id\":2,\"name\":\"b\",\"tier\":\"gold\"}\n]\n");
+    assert_eq!(
+        export(&st, sql, Format::Sql, Some(("qm_tools", "customers"))).await,
+        "INSERT INTO qm_tools.customers (id, name, tier) VALUES (1, 'a', 'gold');\nINSERT INTO qm_tools.customers (id, name, tier) VALUES (2, 'b', 'gold');\n"
+    );
+    assert_eq!(export(&st, sql, Format::Markdown, None).await, "| id | name | tier |\n| --- | --- | --- |\n| 1 | a | gold |\n| 2 | b | gold |\n");
+
+    // Test data: preview inserts nothing, fill inserts with valid foreign keys
+    let p = st.fake_preview(ID.into(), "qm_tools".into(), "orders".into(), 3).await.unwrap();
+    assert_eq!(p.plan.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "customer_id", "total"]);
+    assert_eq!((p.result.rows.len(), p.result.columns.len()), (3, 3));
+    assert_eq!(st.fake_fill(ID.into(), "qm_tools".into(), "orders".into(), 5).await.unwrap(), 5);
+    assert_eq!(q(&st, "select count(*)::int from qm_tools.orders").await.rows[0][0], json!(7));
+
+    // Schema compare: the target gets the missing table and column
+    for s in ["drop schema if exists qm_dst cascade", "create schema qm_dst", "create table qm_dst.customers (id serial primary key, name text not null default 'anon')"] {
+        q(&st, s).await;
+    }
+    let ch = st.compare_schemas(ID.into(), "qm_tools".into(), ID.into(), "qm_dst".into()).await.unwrap();
+    let kinds: Vec<(&str, &str)> = ch.iter().map(|c| (c.kind.as_str(), c.object.as_str())).collect();
+    assert!(kinds.contains(&("add_column", "customers.tier")) && kinds.contains(&("create_table", "orders")) && kinds.contains(&("create_view", "big_orders")), "{kinds:?}");
+    assert!(ch.iter().all(|c| !c.destructive));
+
+    // Audit (Production audit on): a change is logged with its undo SQL
+    q(&st, "update qm_tools.customers set tier = 'bronze' where id = 3").await;
+    let a = st.audit_log(Some(ID.into()), String::new(), 1).remove(0);
+    assert_eq!((a.sql.as_str(), a.rows, a.error.is_none(), a.in_tx), ("update qm_tools.customers set tier = 'bronze' where id = 3", Some(1), true, false));
+    let u = a.undo.as_deref().unwrap_or_default();
+    assert!(u.contains("UPDATE qm_tools.customers AS qurry_t SET tier = qurry_old.tier") && u.contains(r#""tier": "silver""#), "{u}");
+    q(&st, "drop schema qm_tools cascade").await;
+    q(&st, "drop schema qm_dst cascade").await;
+}
+
+// ───────── MySQL ─────────
+
+/// A fresh database `name` and a state whose source points at it
+async fn my_state(name: &str) -> Option<AppState> {
+    let (c, pw) = my_env()?;
+    let boot = state(&c, Some(pw.clone())).await;
+    q(&boot, &format!("drop database if exists {name}")).await;
+    q(&boot, &format!("create database {name}")).await;
+    let mut c = c;
+    c.database = name.into();
+    Some(state(&c, Some(pw)).await)
+}
+
+#[tokio::test]
+#[ignore]
+async fn mysql_connect_and_query() {
+    let Some((c, pw)) = my_env() else { return };
+    let pool = db::connect(&c, Some(&pw)).await.unwrap();
+    assert!(matches!(pool, Pool::My(_)));
+    let v = pool.server_version().await.unwrap();
+    assert!(v.starts_with("MySQL ") || v.contains("MariaDB"), "{v}");
+
+    let r = pool.run_query("select 1 as g, 'v1' as t union all select 2, 'v2' union all select 3, 'v3' union all select 4, 'v4'", 3).await.unwrap();
+    let cols: Vec<(&str, &str)> = r.columns.iter().map(|c| (c.name.as_str(), c.type_name.as_str())).collect();
+    assert_eq!(cols, [("g", "BIGINT"), ("t", "VARCHAR")]);
+    assert_eq!(r.rows, [[json!(1), json!("v1")], [json!(2), json!("v2")], [json!(3), json!("v3")]]);
+    assert!(r.truncated && r.has_result_set && !r.in_transaction);
+    let empty = pool.run_query("select 1 as a from dual where false", 10).await.unwrap();
+    assert!(empty.has_result_set && empty.rows.is_empty() && empty.columns.len() == 1);
+    let ddl = pool.run_query("create temporary table qm_t (a int)", 10).await.unwrap();
+    assert!(!ddl.has_result_set && ddl.columns.is_empty());
+    assert!(pool.run_query("select * from qm_no_such_table", 10).await.is_err());
+}
+
+#[tokio::test]
+#[ignore]
+async fn mysql_session_fetch_cancel_tx() {
+    let Some(st) = my_state("qm_session").await else { return };
+    let tab = || Some("my-tab".to_string());
+    q(&st, "create table nums (n int primary key)").await;
+    // cte_max_recursion_depth is 1000: 1–1000, then 1001–1200
+    q(&st, "insert into nums with recursive s(n) as (select 1 union all select n + 1 from s where n < 1000) select n from s").await;
+    q(&st, "insert into nums select n + 1000 from nums where n <= 200").await;
+    let r1 = st.run_query(ID.into(), "select n from nums order by n".into(), Some(500), tab()).await.unwrap();
+    assert_eq!((r1.rows.len(), r1.truncated, r1.rows[0][0].clone()), (500, true, json!(1)));
+    let r2 = st.fetch_more("my-tab".into(), Some(500)).await.unwrap();
+    assert_eq!((r2.rows.len(), r2.truncated, r2.rows[0][0].clone()), (500, true, json!(501)));
+    let r3 = st.fetch_more("my-tab".into(), Some(500)).await.unwrap();
+    assert_eq!((r3.rows.len(), r3.truncated), (200, false));
+    assert!(st.fetch_more("my-tab".into(), Some(500)).await.is_err(), "no more rows");
+
+    // KILL QUERY interrupts SLEEP: it returns 1 early instead of failing
+    let st = std::sync::Arc::new(st);
+    let st2 = st.clone();
+    let cancel = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        st2.cancel_query("my-tab".into()).await.unwrap()
+    });
+    let t0 = std::time::Instant::now();
+    let slow = st.run_query(ID.into(), "select sleep(10)".into(), None, tab()).await.unwrap();
+    assert!(cancel.await.unwrap());
+    assert_eq!(slow.rows[0][0], json!(1));
+    assert!(t0.elapsed().as_secs() < 5);
+
+    q(&st, "create table tx (id int primary key)").await;
+    st.set_tx_mode(ID.into(), "my-tab".into(), true).await.unwrap();
+    let ins = st.run_query(ID.into(), "insert into tx values (1)".into(), None, tab()).await.unwrap();
+    assert!(ins.in_transaction && ins.rows_affected == 1);
+    assert!(st.tx_state("my-tab".into()).await);
+    let count = |st: std::sync::Arc<AppState>| async move { q(&st, "select count(*) from tx").await.rows[0][0].clone() };
+    assert_eq!(count(st.clone()).await, json!(0));
+    st.rollback_tx("my-tab".into()).await.unwrap();
+    assert!(!st.tx_state("my-tab".into()).await);
+    st.run_query(ID.into(), "insert into tx values (2)".into(), None, tab()).await.unwrap();
+    st.commit_tx("my-tab".into()).await.unwrap();
+    assert_eq!(count(st.clone()).await, json!(1));
+    st.set_tx_mode(ID.into(), "my-tab".into(), false).await.unwrap();
+    st.close_session("my-tab".into()).await.unwrap();
+    q(&st, "drop database qm_session").await;
+}
+
+async fn my_fixture(st: &AppState, db: &str) {
+    for s in [
+        format!("create table {db}.customers (id int auto_increment primary key, name varchar(20) not null default 'anon', tier varchar(10), key customers_tier (tier)) comment 'People'"),
+        format!("create table {db}.orders (id int primary key, customer_id int not null, total decimal(10,2), constraint orders_customer foreign key (customer_id) references {db}.customers (id))"),
+        format!("create view {db}.big_orders as select id, total from {db}.orders where total > 100"),
+        format!("create function {db}.twice(x int) returns int deterministic return x * 2"),
+        format!("insert into {db}.customers (name, tier) values ('a', 'gold'), ('b', 'gold'), ('c', 'silver')"),
+        format!("insert into {db}.orders values (1, 1, 50), (2, 1, 150)"),
+    ] {
+        q(st, &s).await;
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn mysql_metadata() {
+    let Some(st) = my_state("qm_meta").await else { return };
+    my_fixture(&st, "qm_meta").await;
+
+    let dbs = st.list_databases(ID.into()).await.unwrap();
+    assert!(dbs.contains(&"qm_meta".to_string()) && dbs.contains(&"mysql".to_string()), "{dbs:?}");
+    let schemas = st.list_schemas(ID.into()).await.unwrap();
+    assert_eq!(schemas.iter().map(|s| (s.name.as_str(), s.is_system)).collect::<Vec<_>>(), [("qm_meta", false)], "only the current database");
+
+    let o = st.list_objects(ID.into(), "qm_meta".into()).await.unwrap();
+    let rels: Vec<(&str, &str)> = o.relations.iter().map(|r| (r.name.as_str(), r.kind.as_str())).collect();
+    assert_eq!(rels, [("big_orders", "view"), ("customers", "table"), ("orders", "table")]);
+    assert_eq!(o.relations[1].comment.as_deref(), Some("People"));
+    assert_eq!(o.routines.iter().map(|r| (r.name.as_str(), r.kind.as_str())).collect::<Vec<_>>(), [("twice", "function")]);
+
+    let d = st.table_detail(ID.into(), "qm_meta".into(), "customers".into()).await.unwrap();
+    let cols: Vec<(&str, &str, bool, bool)> = d.columns.iter().map(|c| (c.name.as_str(), c.data_type.as_str(), c.nullable, c.is_pk)).collect();
+    assert_eq!(cols, [("id", "int", false, true), ("name", "varchar(20)", false, false), ("tier", "varchar(10)", true, false)]);
+    assert_eq!(d.columns[1].default_value.as_deref(), Some("anon"));
+    let idx: Vec<(&str, bool, bool)> = d.indexes.iter().map(|i| (i.name.as_str(), i.is_unique, i.is_primary)).collect();
+    assert_eq!(idx, [("customers_tier", false, false), ("PRIMARY", true, true)], "by name, case-insensitive");
+    let fk = st.table_detail(ID.into(), "qm_meta".into(), "orders".into()).await.unwrap();
+    assert!(fk.constraints.iter().any(|c| c.kind == "f" && c.name == "orders_customer"), "{:?}", fk.constraints.iter().map(|c| (&c.name, &c.kind)).collect::<Vec<_>>());
+
+    let ddl = st.object_ddl(ID.into(), "qm_meta".into(), "customers".into(), "table".into()).await.unwrap();
+    assert!(ddl.starts_with("CREATE TABLE `customers` (\n  `id` int NOT NULL AUTO_INCREMENT,"), "{ddl}");
+    assert!(ddl.contains("COMMENT='People'"), "{ddl}");
+    let view = st.object_ddl(ID.into(), "qm_meta".into(), "big_orders".into(), "view".into()).await.unwrap();
+    assert!(view.contains("VIEW `big_orders` AS select"), "{view}");
+    let f = st.object_ddl(ID.into(), "qm_meta".into(), "twice".into(), "routine".into()).await.unwrap();
+    assert!(f.contains("FUNCTION `twice`(x int) RETURNS int"), "{f}");
+
+    let comp = st.completion_meta(ID.into()).await.unwrap();
+    let t = comp.iter().find(|t| t.schema == "qm_meta" && t.name == "customers").expect("customers in completion");
+    assert_eq!(t.columns, [("id".to_string(), "int".to_string()), ("name".into(), "varchar(20)".into()), ("tier".into(), "varchar(10)".into())]);
+
+    let idx = st.object_index(ID.into()).await.unwrap();
+    let mut mine: Vec<(&str, &str)> = idx.iter().filter(|e| e.schema == "qm_meta").map(|e| (e.name.as_str(), e.kind.as_str())).collect();
+    mine.sort();
+    assert_eq!(mine, [("big_orders", "view"), ("customers", "table"), ("orders", "table"), ("qm_meta", "schema"), ("twice", "function")]);
+    q(&st, "drop database qm_meta").await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn mysql_tools() {
+    let Some(st) = my_state("qm_tools").await else { return };
+    my_fixture(&st, "qm_tools").await;
+
+    let h = st.column_hints(ID.into(), hint("qm_tools", "customers", "tier")).await.unwrap();
+    assert_eq!(h.iter().map(|h| (h.value.as_str(), h.count)).collect::<Vec<_>>(), [("gold", 2), ("silver", 1)]);
+
+    let e = st.erd(ID.into(), vec!["qm_tools".into()]).await.unwrap();
+    assert_eq!(e.tables.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["customers", "orders"], "tables only, no views");
+    let r = &e.relations[0];
+    assert_eq!((e.relations.len(), r.from_table.as_str(), r.from_columns.clone(), r.to_table.as_str(), r.to_columns.clone()), (1, "orders", vec!["customer_id".to_string()], "customers", vec!["id".to_string()]));
+
+    let sql = "select id, name, tier from qm_tools.customers order by id limit 2";
+    assert_eq!(export(&st, sql, Format::Csv, None).await, "id,name,tier\n1,a,gold\n2,b,gold\n");
+    assert_eq!(export(&st, sql, Format::Json, None).await, "[\n  {\"id\":1,\"name\":\"a\",\"tier\":\"gold\"},\n  {\"id\":2,\"name\":\"b\",\"tier\":\"gold\"}\n]\n");
+    assert_eq!(
+        export(&st, sql, Format::Sql, Some(("qm_tools", "customers"))).await,
+        "INSERT INTO qm_tools.customers (id, name, tier) VALUES (1, 'a', 'gold');\nINSERT INTO qm_tools.customers (id, name, tier) VALUES (2, 'b', 'gold');\n",
+        "plain identifiers stay unquoted"
+    );
+    assert_eq!(export(&st, sql, Format::Markdown, None).await, "| id | name | tier |\n| --- | --- | --- |\n| 1 | a | gold |\n| 2 | b | gold |\n");
+
+    let p = st.fake_preview(ID.into(), "qm_tools".into(), "orders".into(), 3).await.unwrap();
+    assert_eq!(p.plan.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "customer_id", "total"]);
+    assert_eq!((p.result.rows.len(), p.result.columns.len()), (3, 3));
+    assert_eq!(st.fake_fill(ID.into(), "qm_tools".into(), "orders".into(), 5).await.unwrap(), 5);
+    assert_eq!(q(&st, "select count(*) from qm_tools.orders").await.rows[0][0], json!(7));
+
+    q(&st, "drop database if exists qm_dst").await;
+    q(&st, "create database qm_dst").await;
+    q(&st, "create table qm_dst.customers (id int auto_increment primary key, name varchar(20) not null default 'anon')").await;
+    let ch = st.compare_schemas(ID.into(), "qm_tools".into(), ID.into(), "qm_dst".into()).await.unwrap();
+    let kinds: Vec<(&str, &str)> = ch.iter().map(|c| (c.kind.as_str(), c.object.as_str())).collect();
+    assert!(kinds.contains(&("add_column", "customers.tier")) && kinds.contains(&("create_table", "orders")) && kinds.contains(&("create_view", "big_orders")), "{kinds:?}");
+    assert!(ch.iter().all(|c| !c.destructive));
+
+    q(&st, "update qm_tools.customers set tier = 'bronze' where id = 3").await;
+    let a = st.audit_log(Some(ID.into()), String::new(), 1).remove(0);
+    assert_eq!((a.sql.as_str(), a.rows, a.error.is_none(), a.in_tx), ("update qm_tools.customers set tier = 'bronze' where id = 3", Some(1), true, false));
+    assert!(a.undo.as_deref().is_some_and(|u| u.contains("'silver'")), "{a:?}");
+    q(&st, "drop database qm_tools").await;
+    q(&st, "drop database qm_dst").await;
+}
+
+// ───────── Redis ─────────
+
+#[tokio::test]
+#[ignore]
+async fn redis_connect_and_query() {
+    let c = redis_env("db12");
+    let pool = db::connect(&c, None).await.unwrap();
+    assert!(matches!(pool, Pool::Redis(_, 12)));
+    let v = pool.server_version().await.unwrap();
+    assert!(v.starts_with("Redis "), "{v}");
+    pool.run_query("FLUSHDB", 10).await.unwrap();
+    pool.run_query("RPUSH qm:list a b c d", 10).await.unwrap();
+    let r = pool.run_query("LRANGE qm:list 0 -1", 3).await.unwrap();
+    assert!(r.truncated && r.has_result_set, "{r:?}");
+    assert_eq!(r.rows.len(), 3);
+    let s = pool.run_query("SET qm:s hello", 10).await.unwrap();
+    assert_eq!(s.rows, [[json!("OK")]]);
+    assert_eq!(pool.run_query("GET qm:s", 10).await.unwrap().rows, [[json!("hello")]]);
+    let e = err(pool.run_query("SELECT 2", 10).await);
+    assert!(e.contains("database selector"), "{e}");
+    assert!(pool.run_query("NOSUCHCOMMAND", 10).await.is_err());
+    pool.run_query("FLUSHDB", 10).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore]
+async fn redis_metadata_and_tools() {
+    let c = redis_env("db11");
+    let st = state(&c, None).await;
+    q(&st, "FLUSHDB").await;
+    q(&st, "SET qm:s hello").await;
+    q(&st, "HSET qm:h f1 v1").await;
+
+    assert!(st.list_databases(ID.into()).await.unwrap().contains(&"db11".to_string()));
+    let schemas = st.list_schemas(ID.into()).await.unwrap();
+    assert_eq!(schemas.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["db11"]);
+    let o = st.list_objects(ID.into(), "db11".into()).await.unwrap();
+    let mut rels: Vec<(&str, &str, Option<&str>)> = o.relations.iter().map(|r| (r.name.as_str(), r.kind.as_str(), r.comment.as_deref())).collect();
+    rels.sort();
+    assert_eq!(rels, [("qm:h", "key", Some("hash")), ("qm:s", "key", Some("string"))]);
+    assert!(o.routines.is_empty());
+    let d = st.table_detail(ID.into(), "db11".into(), "qm:s".into()).await.unwrap();
+    assert!(d.columns.is_empty() && d.indexes.is_empty() && d.constraints.is_empty());
+    assert_eq!(st.object_ddl(ID.into(), "db11".into(), "qm:h".into(), "key".into()).await.unwrap(), "HSET qm:h f1 v1");
+    assert!(st.completion_meta(ID.into()).await.unwrap().is_empty());
+    let mut idx: Vec<(String, String, String)> = st.object_index(ID.into()).await.unwrap().into_iter().map(|e| (e.schema, e.name, e.kind)).collect();
+    idx.sort();
+    assert_eq!(idx, [("db11".into(), "qm:h".into(), "key".into()), ("db11".into(), "qm:s".into(), "key".into())]);
+    assert!(st.column_hints(ID.into(), hint("db11", "qm:h", "f1")).await.unwrap().is_empty());
+
+    // Table tools refuse Redis
+    assert_eq!(err(st.erd(ID.into(), vec!["db11".into()]).await), "Redis has no tables");
+    assert_eq!(err(st.fake_preview(ID.into(), "db11".into(), "qm:h".into(), 3).await), "Redis has no tables");
+    assert_eq!(err(st.compare_schemas(ID.into(), "db11".into(), ID.into(), "db11".into()).await), "Redis has no schema to compare");
+
+    // Export runs the command
+    assert_eq!(export(&st, "HGETALL qm:h", Format::Csv, None).await, "field,value\nf1,v1\n");
+    assert_eq!(export(&st, "HGETALL qm:h", Format::Json, None).await, "[\n  {\"field\":\"f1\",\"value\":\"v1\"}\n]\n");
+
+    // Sessions: no cursors, no manual transactions, nothing to cancel
+    let r = st.run_query(ID.into(), "GET qm:s".into(), None, Some("rd-tab".into())).await.unwrap();
+    assert_eq!(r.rows, [[json!("hello")]]);
+    assert_eq!(err(st.fetch_more("rd-tab".into(), None).await), "No more rows");
+    assert!(err(st.set_tx_mode(ID.into(), "rd-tab".into(), true).await).contains("not supported for Redis"));
+    assert!(!st.cancel_query("rd-tab".into()).await.unwrap());
+
+    // Audit: writes are logged, without undo
+    q(&st, "SET qm:s bye").await;
+    let a = st.audit_log(Some(ID.into()), String::new(), 1).remove(0);
+    assert_eq!((a.sql.as_str(), a.error.is_none(), a.undo.is_none()), ("SET qm:s bye", true, true), "{a:?}");
+    q(&st, "FLUSHDB").await;
+}
