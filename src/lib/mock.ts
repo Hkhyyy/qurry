@@ -295,6 +295,7 @@ const handlers: Record<string, (a: any) => unknown> = {
       children: [{ op: "Seq Scan", detail: "on big_t  filter: (h ~~ 'ab%'::text)", startup: 0, total: 989.9, rows: 12, actualTime: 25.2, actualRows: 383, loops: 2, selfTime: 25.2, pct: 56.0,
         warnings: ["Seq Scan reads the whole table (~200,000 rows) — an index on the filter columns may help", "Filter removed 99% of rows (199,234 rows)"], props: [["Relation Name", "big_t"], ["Rows Removed by Filter", "99617"]], children: [] }] }],
   }),
+  dba_explain: (a: any) => `EXPLAIN ${a.query}`,
   dba_action_sql: (a: any) => a.template.replace(/\{=?(\w+)\}/g, (_: string, k: string) => a.row[k] ?? ""),
   pick_data_file: () => ["~/Downloads/new_users.csv", { format: "csv", columns: ["ID", "Name", "Email", "signup date"], rows: [["1", "Kim", "kim@example.com", "2026-01-02"], ["2", "Lee", null, "2026-01-03"]], bytes: 12_400_000 }],
   import_data: () => new Promise((ok) => setTimeout(() => ok(1234), 4000)),

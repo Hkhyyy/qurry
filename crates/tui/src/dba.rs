@@ -193,22 +193,22 @@ impl App {
     /// Enter: current row's query to the console. g: choose an SQL action for this report
     pub fn dba_actions(&mut self, open_query: bool) {
         let Some(Tab { kind: TabKind::Dba(d), .. }) = self.tabs.get(self.active) else { return };
-        let sqls: Vec<(String, String)> = d.info.iter().flat_map(|i| i.actions.iter()).filter_map(|a| match a {
-            DAction::Sql { label, template } => Some((label.to_string(), template.to_string())),
-            _ => None,
+        let items: Vec<PItem> = d.info.iter().flat_map(|i| i.actions.iter()).filter_map(|a| match a {
+            DAction::Sql { label, template } => Some(PItem { label: label.to_string(), hint: template.to_string(), action: PAction::DbaSql(template.to_string()) }),
+            DAction::Explain { label } => Some(PItem { label: label.to_string(), hint: "EXPLAIN {=query}".into(), action: PAction::DbaExplain }),
+            DAction::Kill { .. } => None,
         }).collect();
         if open_query {
-            match sqls.iter().find(|s| s.1 == "{=query}") {
-                Some((_, t)) => self.dba_sql(t.clone()),
-                None => self.status = "This report has no query to open".into(),
+            match items.iter().any(|i| i.hint == "{=query}") {
+                true => self.dba_sql("{=query}".into()),
+                false => self.status = "This report has no query to open".into(),
             }
             return;
         }
-        if sqls.is_empty() {
+        if items.is_empty() {
             self.status = "This report has no SQL actions".into();
             return;
         }
-        let items = sqls.into_iter().map(|(label, t)| PItem { label, hint: t.clone(), action: PAction::DbaSql(t) }).collect();
         self.popup = Some(Popup::Palette(Palette { title: "Generate SQL from this row".into(), input: TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
     }
 
@@ -218,7 +218,23 @@ impl App {
         let Some(t) = self.tabs.get(self.active) else { return };
         let (conn, db) = (t.conn.clone(), t.db.clone());
         let q = qurry_core::dba::action_sql(self.kind_of(&conn), &template, &row);
-        self.open_console(&conn, Some(db));
+        self.dba_console(&conn, db, q);
+    }
+
+    /// EXPLAIN of the current row's query into a new console (normalized statements: see qurry_core::dba::explain_sql)
+    pub fn dba_explain(&mut self) {
+        let Some(query) = self.dba_row().and_then(|r| r.get("query").cloned()) else { return };
+        let Some(t) = self.tabs.get(self.active) else { return };
+        let (conn, db, target) = (t.conn.clone(), t.db.clone(), t.target.clone());
+        let st = self.state.clone();
+        self.spawn(async move { st.dba_explain(target, query).await.map_err(|e| e.to_string()) }, move |a, r| match r {
+            Ok(q) => a.dba_console(&conn, db, q),
+            Err(e) => a.status = e,
+        });
+    }
+
+    fn dba_console(&mut self, conn: &str, db: String, q: String) {
+        self.open_console(conn, Some(db));
         if let Some(Tab { kind: TabKind::Console(c), .. }) = self.tabs.get_mut(self.active) {
             c.editor.insert_str(q);
         }

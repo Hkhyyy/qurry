@@ -237,6 +237,8 @@ pub enum PAction {
     Pick(String),
     /// DBA report row action (template SQL → console)
     DbaSql(String),
+    /// DBA report row action: EXPLAIN of the row's query → console
+    DbaExplain,
     /// Export: format picked → pick target
     ExportFormat(qurry_core::transfer::Format),
     /// Export: (format, clipboard)
@@ -2539,6 +2541,7 @@ impl App {
             PAction::OpenUndo { conn, db, undo, note } => self.open_undo(conn, db, undo, note),
             PAction::Pick(v) => self.flow_pick(v),
             PAction::DbaSql(t) => self.dba_sql(t),
+            PAction::DbaExplain => self.dba_explain(),
             PAction::ExportTo(f, clipboard) => self.export_to(f, clipboard),
             PAction::Exec(e) => {
                 self.exec = e;

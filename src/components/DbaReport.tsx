@@ -88,6 +88,8 @@ export function DbaReport(p: {
         } catch (e) {
           p.onStatus(String(e));
         }
+      } else if (a.kind === "explain") {
+        p.onOpenConsole(await dba.explain(p.target, str(row.query)));
       } else {
         const vals = Object.fromEntries(Object.entries(row).map(([k, v]) => [k, str(v)]));
         p.onOpenConsole(await dba.actionSql(p.target, a.template, vals));

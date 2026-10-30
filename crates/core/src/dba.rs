@@ -1,7 +1,7 @@
 //! DBA reports: sessions/locks, slow queries, size/indexes/bloat, maintenance/VACUUM progress, replication/server, privileges. Shows query results as tables with a few actions (end session, generate SQL).
 //! GUI and TUI show the same report list as is
 use crate::app::{AppState, ensure_pool};
-use crate::db::QueryResult;
+use crate::db::{Pool, QueryResult};
 use crate::error::{AppError, AppResult};
 use crate::store::DbKind;
 use std::collections::HashMap;
@@ -14,6 +14,8 @@ pub enum Action {
     Kill { label: &'static str, terminate: bool },
     /// Put SQL in the console. {col} = that column's value as an identifier (quoted), {=col} = as is
     Sql { label: &'static str, template: &'static str },
+    /// EXPLAIN of the query column in a console (normalized statements: generic plan on PG16+, otherwise a note to fill in the parameters)
+    Explain { label: &'static str },
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -47,10 +49,12 @@ const DEFS: &[Def] = &[
             a.push(Action::Sql { label: "Open Query in Console", template: "{=query}" });
             info("sessions", "Sessions", "Activity", "Connections and what they run. blocking = how many sessions wait for this one; blocked_by = whom this one waits for. Long query_sec / xact_sec are the usual suspects.", a)
         },
-        pg: &[r#"SELECT * FROM (SELECT a.pid, a.usename AS "user", a.datname AS db, a.application_name AS app, a.client_addr::text AS client, a.state,
+        // pg_blocking_pids() is costly (the docs warn against frequent calls): only for sessions waiting for a lock
+        pg: &[r#"WITH w AS (SELECT pid, pg_blocking_pids(pid) AS by FROM pg_stat_activity WHERE wait_event_type = 'Lock')
+SELECT * FROM (SELECT a.pid, a.usename AS "user", a.datname AS db, a.application_name AS app, a.client_addr::text AS client, a.state,
        a.wait_event_type || coalesce(':' || a.wait_event, '') AS wait,
-       (SELECT count(*) FROM pg_stat_activity b WHERE a.pid = ANY(pg_blocking_pids(b.pid))) AS blocking,
-       array_to_string(pg_blocking_pids(a.pid), ',') AS blocked_by,
+       (SELECT count(*) FROM w WHERE a.pid = ANY(w.by)) AS blocking,
+       coalesce((SELECT array_to_string(w.by, ',') FROM w WHERE w.pid = a.pid), '') AS blocked_by,
        round(extract(epoch FROM now() - a.query_start)::numeric, 1) AS query_sec,
        round(extract(epoch FROM now() - a.xact_start)::numeric, 1) AS xact_sec,
        left(a.query, 4000) AS query
@@ -81,7 +85,7 @@ ORDER BY waiting_sec DESC"#],
     Def {
         info: || info("slow_queries", "Slow Queries (Top 100)", "Performance", "Statements by total time spent since the statistics were reset. High mean_ms = slow each time; high calls with modest mean = worth caching or batching.", vec![
             Action::Sql { label: "Open Query in Console", template: "{=query}" },
-            Action::Sql { label: "Explain in Console", template: "EXPLAIN {=query}" },
+            Action::Explain { label: "Explain in Console" },
         ]),
         pg: &[
             r#"SELECT round(s.total_exec_time::numeric, 1) AS total_ms, s.calls, round(s.mean_exec_time::numeric, 2) AS mean_ms, round(s.max_exec_time::numeric, 2) AS max_ms, s.rows,
@@ -203,10 +207,11 @@ FROM information_schema.TABLES WHERE TABLE_TYPE = 'BASE TABLE' AND DATA_FREE > 0
 ORDER BY DATA_FREE DESC LIMIT 300"#],
     },
     Def {
-        info: || info("unused_indexes", "Unused Indexes", "Storage", "Indexes never used since statistics were reset (unique and primary keys are left out). They cost disk and slow down writes. Check replicas too before dropping.", vec![
+        info: || info("unused_indexes", "Unused Indexes", "Storage", "Indexes never used since statistics were reset (unique and primary keys are left out); counting_since tells since when (MySQL: since the server started). They cost disk and slow down writes. Check replicas too before dropping.", vec![
             Action::Sql { label: "Generate DROP INDEX", template: "DROP INDEX CONCURRENTLY {schema}.{index};" },
         ]),
-        pg: &[r#"SELECT s.schemaname AS schema, s.relname AS "table", s.indexrelname AS "index", s.idx_scan AS scans, pg_size_pretty(pg_relation_size(s.indexrelid)) AS size, pg_get_indexdef(s.indexrelid) AS definition
+        pg: &[r#"SELECT s.schemaname AS schema, s.relname AS "table", s.indexrelname AS "index", s.idx_scan AS scans, pg_size_pretty(pg_relation_size(s.indexrelid)) AS size, pg_get_indexdef(s.indexrelid) AS definition,
+       coalesce((SELECT stats_reset FROM pg_stat_database WHERE datname = current_database()), pg_postmaster_start_time()) AS counting_since
 FROM pg_stat_user_indexes s JOIN pg_index i ON i.indexrelid = s.indexrelid
 WHERE s.idx_scan = 0 AND NOT i.indisunique AND NOT i.indisprimary
 ORDER BY pg_relation_size(s.indexrelid) DESC"#],
@@ -303,12 +308,21 @@ UNION ALL SELECT 'commits / rollbacks', (SELECT xact_commit || ' / ' || xact_rol
 UNION ALL SELECT 'deadlocks', (SELECT deadlocks::text FROM pg_stat_database WHERE datname = current_database())
 UNION ALL SELECT 'temp files', (SELECT temp_files || ' (' || pg_size_pretty(temp_bytes) || ')' FROM pg_stat_database WHERE datname = current_database())
 UNION ALL SELECT 'in recovery (standby)', pg_is_in_recovery()::text"#],
-        my: &[r#"SELECT 'version' AS metric, VERSION() AS value
+        // MariaDB keeps information_schema.GLOBAL_STATUS (its performance_schema is off by default); MySQL 5.7+ moved it to performance_schema
+        my: &[
+            r#"SELECT 'version' AS metric, VERSION() AS value
+UNION ALL SELECT 'uptime (s)', VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME = 'UPTIME'
+UNION ALL SELECT 'connections', CONCAT((SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME = 'THREADS_CONNECTED'), ' / ', @@max_connections)
+UNION ALL SELECT 'buffer pool hit ratio', CONCAT(ROUND(100 - 100 * (SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME = 'INNODB_BUFFER_POOL_READS') / NULLIF((SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME = 'INNODB_BUFFER_POOL_READ_REQUESTS'), 0), 2), '%')
+UNION ALL SELECT 'slow queries', VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME = 'SLOW_QUERIES'
+UNION ALL SELECT 'aborted connections', VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME = 'ABORTED_CONNECTS'"#,
+            r#"SELECT 'version' AS metric, VERSION() AS value
 UNION ALL SELECT 'uptime (s)', VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME = 'Uptime'
 UNION ALL SELECT 'connections', CONCAT((SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME = 'Threads_connected'), ' / ', @@max_connections)
 UNION ALL SELECT 'buffer pool hit ratio', CONCAT(ROUND(100 - 100 * (SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME = 'Innodb_buffer_pool_reads') / NULLIF((SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME = 'Innodb_buffer_pool_read_requests'), 0), 2), '%')
 UNION ALL SELECT 'slow queries', VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME = 'Slow_queries'
-UNION ALL SELECT 'aborted connections', VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME = 'Aborted_connects'"#],
+UNION ALL SELECT 'aborted connections', VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME = 'Aborted_connects'"#,
+        ],
     },
     Def {
         info: || info("settings", "Settings", "Server", "Server settings; changed ones first.", vec![]),
@@ -375,6 +389,57 @@ pub fn action_sql(kind: DbKind, template: &str, row: &HashMap<String, String>) -
     out
 }
 
+/// EXPLAIN for a statement from Slow Queries. Their text is normalized ($1 from pg_stat_statements, ? from DIGEST_TEXT), which EXPLAIN can't run:
+/// PostgreSQL 16+ plans it generically, otherwise the console gets a note to fill in the parameters first
+pub fn explain_sql(kind: DbKind, pg_major: Option<u64>, query: &str) -> String {
+    let (params, mark) = match kind {
+        DbKind::Postgres => (query.as_bytes().windows(2).any(|w| w[0] == b'$' && w[1].is_ascii_digit()), "$1, $2 …"),
+        _ => (query.contains('?'), "?"),
+    };
+    match params {
+        false => format!("EXPLAIN {query}"),
+        true if kind == DbKind::Postgres && pg_major.is_some_and(|m| m >= 16) => format!("EXPLAIN (GENERIC_PLAN) {query}"),
+        true => format!("-- Replace the parameters ({mark}) with real values, then run:\nEXPLAIN {query}"),
+    }
+}
+
+/// Time limit of one report query (bloat estimates on huge catalogs can run long)
+const REPORT_TIMEOUT_S: u32 = 30;
+const REPORT_ROWS: usize = 2000;
+
+/// MySQL: the time limit travels with the statement — the MAX_EXECUTION_TIME hint (MySQL), SET STATEMENT … FOR in a comment only MariaDB runs.
+/// Other statements (SHOW …) are quick and take neither
+fn my_time_limited(sql: &str, secs: u32) -> String {
+    match sql.strip_prefix("SELECT ") {
+        Some(rest) => format!("/*M!100108 SET STATEMENT max_statement_time = {secs} FOR */ SELECT /*+ MAX_EXECUTION_TIME({}) */ {rest}", secs * 1000),
+        None => sql.to_string(),
+    }
+}
+
+/// Run a report query with a time limit that ends with it (PG: SET LOCAL in its own transaction), not on the pooled session
+async fn run_limited(pool: &Pool, kind: DbKind, sql: &str, secs: u32) -> AppResult<QueryResult> {
+    use sqlx::Executor;
+    match pool {
+        Pool::Pg(p) => {
+            let mut tx = p.begin().await?;
+            tx.execute(format!("SET LOCAL statement_timeout = '{secs}s'").as_str()).await?;
+            let r = crate::db::run_pg_on(&mut tx, sql, REPORT_ROWS).await;
+            let _ = tx.rollback().await;
+            r
+        }
+        _ if kind == DbKind::Mysql => pool.run_query(&my_time_limited(sql, secs), REPORT_ROWS).await,
+        _ => pool.run_query(sql, REPORT_ROWS).await,
+    }
+}
+
+/// MySQL error number (1095 = not owner of the thread; 1305 = no such procedure, or 1370 = may not execute it — MySQL checks that first)
+fn my_errno(e: &AppError) -> Option<u16> {
+    match e {
+        AppError::Db(sqlx::Error::Database(d)) => d.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>().map(|m| m.number()),
+        _ => None,
+    }
+}
+
 /// If the feature is off, what needs to be enabled
 fn explain(report: &str, kind: DbKind, e: AppError) -> AppError {
     let m = e.to_string();
@@ -384,7 +449,7 @@ fn explain(report: &str, kind: DbKind, e: AppError) -> AppError {
     } else if lower.contains("denied") || lower.contains("permission") {
         Some("You don't have the privilege to read this (ask for pg_monitor / PROCESS / performance_schema access).")
     } else if kind == DbKind::Mysql && (lower.contains("performance_schema") || lower.contains("sys.")) {
-        Some("performance_schema / sys schema is not available on this server — enable performance_schema to see this.")
+        Some("performance_schema / sys schema is not available on this server — enable performance_schema to see this (MariaDB has it off by default, and some of these tables only exist on MySQL).")
     } else {
         None
     };
@@ -406,7 +471,7 @@ impl AppState {
         let pool = ensure_pool(self, &id).await?;
         let mut last = None;
         for q in list {
-            match pool.run_query(q, 2000).await {
+            match run_limited(&pool, kind, q, REPORT_TIMEOUT_S).await {
                 // An empty SHOW … result has no columns either (servers without replication, etc.)
                 Ok(r) if !r.has_result_set || r.columns.is_empty() => {
                     return Ok(QueryResult {
@@ -424,6 +489,16 @@ impl AppState {
             }
         }
         Err(explain(&report, kind, last.unwrap()))
+    }
+
+    /// Explain in Console for a Slow Queries row (see explain_sql)
+    pub async fn dba_explain(&self, id: String, query: String) -> AppResult<String> {
+        let kind = self.kind_of(&id)?;
+        let major = match kind {
+            DbKind::Postgres => crate::backup::pg_major(self, &id).await,
+            _ => None,
+        };
+        Ok(explain_sql(kind, major, &query))
     }
 
     /// PROD safeguard: number of rows this statement would change (SELECT count(*) with the same table and condition). None if it cannot be counted
@@ -447,7 +522,16 @@ impl AppState {
             (DbKind::Mysql, true) => format!("KILL {pid}"),
             (k, _) => return Err(AppError::Msg(format!("Not available for {k:?}"))),
         };
-        let r = ensure_pool(self, &id).await?.run_query(&q, 1).await?;
+        let pool = ensure_pool(self, &id).await?;
+        let r = match pool.run_query(&q, 1).await {
+            // RDS / Aurora MySQL: killing another user's thread needs CONNECTION_ADMIN, which the master user lacks; mysql.rds_kill(_query) does it.
+            // Elsewhere (no such procedure) the KILL error stays
+            Err(e) if my_errno(&e) == Some(1095) => {
+                let call = format!("CALL mysql.{}({pid})", if terminate { "rds_kill" } else { "rds_kill_query" });
+                pool.run_query(&call, 1).await.map_err(|e2| if matches!(my_errno(&e2), Some(1305 | 1370)) { e } else { e2 })?
+            }
+            r => r?,
+        };
         Ok(match r.rows.first().and_then(|x| x.first()) {
             Some(serde_json::Value::Bool(b)) => *b,
             _ => true,
@@ -480,6 +564,42 @@ mod tests {
         }
         assert!(reports(DbKind::Mysql).iter().any(|r| r.id == "fragmentation"));
         assert!(reports(DbKind::Redis).is_empty());
+    }
+
+    /// Normalized statements ($1 from pg_stat_statements, ? from DIGEST_TEXT) can't be explained as they are
+    #[test]
+    fn explain_handles_placeholders() {
+        let pg = "select * from t where id = $1";
+        assert_eq!(explain_sql(DbKind::Postgres, Some(16), pg), "EXPLAIN (GENERIC_PLAN) select * from t where id = $1");
+        assert_eq!(explain_sql(DbKind::Postgres, Some(17), "select 1"), "EXPLAIN select 1");
+        let old = explain_sql(DbKind::Postgres, Some(15), pg);
+        assert!(old.starts_with("-- ") && old.contains("$1") && old.ends_with("\nEXPLAIN select * from t where id = $1"), "{old}");
+        let my = explain_sql(DbKind::Mysql, None, "SELECT * FROM `t` WHERE `id` = ?");
+        assert!(my.starts_with("-- ") && my.contains('?') && my.ends_with("\nEXPLAIN SELECT * FROM `t` WHERE `id` = ?"), "{my}");
+        assert_eq!(explain_sql(DbKind::Mysql, None, "SELECT 1"), "EXPLAIN SELECT 1");
+    }
+
+    /// MySQL report queries carry their own time limit (MySQL hint, MariaDB executable comment), so it doesn't stay on the pooled session
+    #[test]
+    fn mysql_report_queries_are_time_limited() {
+        assert_eq!(my_time_limited("SELECT a FROM t", 30), "/*M!100108 SET STATEMENT max_statement_time = 30 FOR */ SELECT /*+ MAX_EXECUTION_TIME(30000) */ a FROM t");
+        assert_eq!(my_time_limited("SHOW REPLICA STATUS", 30), "SHOW REPLICA STATUS");
+    }
+
+    /// MariaDB: performance_schema is off by default and some MySQL tables don't exist there at all — the hint says so
+    #[test]
+    fn performance_schema_hint_covers_mariadb() {
+        let e = explain("settings", DbKind::Mysql, AppError::Msg("Table 'performance_schema.global_variables' doesn't exist".into())).to_string();
+        assert!(e.contains("not available") && e.contains("MariaDB"), "{e}");
+    }
+
+    /// pg_blocking_pids() is costly: only sessions in a lock wait get it
+    #[test]
+    fn sessions_call_pg_blocking_pids_only_for_lock_waits() {
+        let q = DEFS.iter().find(|d| (d.info)().id == "sessions").unwrap().pg[0];
+        assert_eq!(q.matches("pg_blocking_pids(").count(), 1, "{q}");
+        let at = q.find("pg_blocking_pids(").unwrap();
+        assert!(q[at..].split(')').nth(1).is_some_and(|rest| rest.contains("wait_event_type = 'Lock'")), "{q}");
     }
 
     fn cfg(kind: DbKind, env: &str) -> Option<(crate::store::ConnectionConfig, Option<String>)> {
@@ -527,6 +647,115 @@ mod tests {
     #[ignore]
     async fn mysql_reports_run() {
         all_reports_run(DbKind::Mysql, "QURRY_TEST_MY").await;
+    }
+
+    /// Server Overview works without performance_schema (MariaDB has no performance_schema.global_status)
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_server_overview_runs() {
+        let Some(st) = state(DbKind::Mysql, "QURRY_TEST_MY").await else { return };
+        let r = st.dba_report("d".into(), "server".into()).await.unwrap();
+        assert!(r.rows.iter().any(|x| crate::db::cell_text(&x[0]).starts_with("uptime") && !crate::db::cell_text(&x[1]).is_empty()), "{:?}", r.rows);
+    }
+
+    /// Explain from Slow Queries: a generic plan on PG16+, otherwise a note to fill in the parameters
+    #[tokio::test]
+    #[ignore]
+    async fn pg_explain_of_normalized_query() {
+        let Some(st) = state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
+        let sql = st.dba_explain("d".into(), "select * from pg_class where oid = $1".into()).await.unwrap();
+        let major = crate::backup::pg_major(&st, "d").await.unwrap();
+        if major >= 16 {
+            assert!(sql.starts_with("EXPLAIN (GENERIC_PLAN) "), "{sql}");
+            // Runs in the console (its session) and on the pool
+            for tab in [Some("t".to_string()), None] {
+                let r = st.run_query("d".into(), sql.clone(), None, tab).await.unwrap();
+                assert!(crate::db::cell_text(&r.rows[0][0]).contains("Scan"), "{:?}", r.rows);
+            }
+        } else {
+            assert!(sql.starts_with("-- "), "{sql}");
+        }
+    }
+
+    /// Report queries stop at the time limit, which applies to that query only
+    async fn report_time_limit(kind: DbKind, env: &str, sleep: &str) {
+        let Some(st) = state(kind, env).await else { return };
+        let pool = ensure_pool(&st, "d").await.unwrap();
+        let t = std::time::Instant::now();
+        let e = run_limited(&pool, kind, sleep, 1).await.expect_err("time limit");
+        assert!(t.elapsed() < std::time::Duration::from_millis(2900), "{e}");
+        let e = e.to_string().to_lowercase();
+        assert!(e.contains("timeout") || e.contains("maximum statement execution time") || e.contains("max_statement_time"), "{e}");
+        assert!(run_limited(&pool, kind, "SELECT 1", 1).await.is_ok());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn pg_report_time_limit() {
+        report_time_limit(DbKind::Postgres, "QURRY_TEST_PG", "SELECT pg_sleep(3)").await;
+        let Some(st) = state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
+        let r = st.run_query("d".into(), "SHOW statement_timeout".into(), None, None).await.unwrap();
+        assert_eq!(crate::db::cell_text(&r.rows[0][0]), "0");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_report_time_limit() {
+        // SLEEP() / BENCHMARK() cut short return a value instead of an error; a long join fails like a report query would
+        report_time_limit(DbKind::Mysql, "QURRY_TEST_MY", "SELECT COUNT(*) FROM information_schema.COLUMNS a, information_schema.COLUMNS b, information_schema.COLUMNS c").await;
+    }
+
+    /// Unused Indexes tells since when the scans were counted
+    #[tokio::test]
+    #[ignore]
+    async fn pg_unused_indexes_show_counting_window() {
+        let Some(st) = state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
+        let q = |s: &str| st.run_query("d".into(), s.into(), None, None);
+        q("drop table if exists qurry_dba_unused").await.ok();
+        q("create table qurry_dba_unused (id int, v int)").await.unwrap();
+        q("create index qurry_dba_unused_v on qurry_dba_unused (v)").await.unwrap();
+        let r = st.dba_report("d".into(), "unused_indexes".into()).await.unwrap();
+        q("drop table qurry_dba_unused").await.ok();
+        let col = r.columns.iter().position(|c| c.name == "counting_since").expect("counting_since column");
+        let idx = r.columns.iter().position(|c| c.name == "index").unwrap();
+        let row = r.rows.iter().find(|x| crate::db::cell_text(&x[idx]) == "qurry_dba_unused_v").expect("unused index");
+        assert!(!crate::db::cell_text(&row[col]).is_empty());
+    }
+
+    /// RDS MySQL: KILL of another user's thread is denied without CONNECTION_ADMIN → mysql.rds_kill / rds_kill_query when the server has them.
+    /// Without them the KILL error stays. The procedures are created only on MariaDB (a throwaway test server)
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_kill_falls_back_to_rds_kill() {
+        let Some((c, pass)) = cfg(DbKind::Mysql, "QURRY_TEST_MY") else { return };
+        let root = sqlx::mysql::MySqlPoolOptions::new().max_connections(1).connect(&format!("mysql://{}:{}@{}:{}/{}", c.user, pass.clone().unwrap(), c.host, c.port, c.database)).await.unwrap();
+        let victim = sqlx::mysql::MySqlPoolOptions::new().max_connections(1).connect(&format!("mysql://{}:{}@{}:{}/{}", c.user, pass.unwrap(), c.host, c.port, c.database)).await.unwrap();
+        let vid: u64 = sqlx::query_scalar("SELECT CONNECTION_ID()").fetch_one(&victim).await.unwrap();
+        let mariadb = sqlx::query_scalar::<_, String>("SELECT VERSION()").fetch_one(&root).await.unwrap().to_lowercase().contains("mariadb");
+        sqlx::raw_sql("DROP USER IF EXISTS 'qurry_dba_kill'@'%'; CREATE USER 'qurry_dba_kill'@'%' IDENTIFIED BY 'pw'").execute(&root).await.unwrap();
+        let dir = std::env::temp_dir().join(format!("qurry-dba-{}", uuid::Uuid::new_v4()));
+        let st = crate::open_state(Some(dir)).unwrap();
+        st.save_connection(crate::store::ConnectionConfig { user: "qurry_dba_kill".into(), database: String::new(), ..c }, Some("pw".into()), None).await.unwrap();
+
+        let e = st.kill_session("d".into(), vid as i64, true).await.expect_err("not owner");
+        assert!(e.to_string().contains("not owner"), "{e}");
+        if mariadb {
+            sqlx::raw_sql(
+                "CREATE OR REPLACE PROCEDURE mysql.rds_kill(IN thread BIGINT) SQL SECURITY DEFINER KILL thread;
+                 CREATE OR REPLACE PROCEDURE mysql.rds_kill_query(IN thread BIGINT) SQL SECURITY DEFINER KILL QUERY thread;
+                 GRANT EXECUTE ON PROCEDURE mysql.rds_kill TO 'qurry_dba_kill'@'%'; GRANT EXECUTE ON PROCEDURE mysql.rds_kill_query TO 'qurry_dba_kill'@'%'",
+            )
+            .execute(&root)
+            .await
+            .unwrap();
+            assert!(st.kill_session("d".into(), vid as i64, false).await.unwrap());
+            assert!(st.kill_session("d".into(), vid as i64, true).await.unwrap());
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE ID = ?").bind(vid).fetch_one(&root).await.unwrap();
+            assert_eq!(left, 0, "victim connection was killed");
+            sqlx::raw_sql("DROP PROCEDURE mysql.rds_kill; DROP PROCEDURE mysql.rds_kill_query").execute(&root).await.ok();
+        }
+        sqlx::raw_sql("DROP USER IF EXISTS 'qurry_dba_kill'@'%'").execute(&root).await.ok();
     }
 
     /// PROD safeguard: count the rows to change in advance (without changing them)

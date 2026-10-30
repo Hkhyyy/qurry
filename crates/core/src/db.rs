@@ -308,6 +308,11 @@ impl Pool {
 }
 
 async fn run_pg(pool: &PgPool, sql: &str, limit: usize) -> AppResult<QueryResult> {
+    run_pg_on(&mut *pool.acquire().await?, sql, limit).await
+}
+
+/// Run one statement on an already acquired connection (transaction). With 0 rows the columns come from describe
+pub(crate) async fn run_pg_on(conn: &mut sqlx::PgConnection, sql: &str, limit: usize) -> AppResult<QueryResult> {
     let start = Instant::now();
     let mut columns = Vec::new();
     let mut rows: Vec<Vec<Value>> = Vec::new();
@@ -316,7 +321,10 @@ async fn run_pg(pool: &PgPool, sql: &str, limit: usize) -> AppResult<QueryResult
     let mut has_result_set = false;
     {
         #[allow(deprecated)]
-        let mut stream = sqlx::query(sql).persistent(false).fetch_many(pool);
+        let mut stream = match crate::session::is_generic_plan(sql) {
+            true => sqlx::raw_sql(sql).fetch_many(&mut *conn),
+            false => sqlx::query(sql).persistent(false).fetch_many(&mut *conn),
+        };
         while let Some(item) = stream.try_next().await? {
             match item {
                 Either::Left(done) => rows_affected += done.rows_affected(),
@@ -336,7 +344,7 @@ async fn run_pg(pool: &PgPool, sql: &str, limit: usize) -> AppResult<QueryResult
     }
     // With 0 rows the column info is unknown, so fill it in with describe.
     if !has_result_set {
-        if let Ok(desc) = pool.describe(sql).await {
+        if let Ok(desc) = conn.describe(sql).await {
             if !desc.columns().is_empty() {
                 has_result_set = true;
                 columns = desc
