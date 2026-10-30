@@ -1,0 +1,120 @@
+{
+  "version": 2,
+  "shared": true,
+  "current": "ws1",
+  "workspaces": [
+    {
+      "id": "ws1",
+      "name": "Default",
+      "connIds": [
+        "dev",
+        "prod",
+        "my",
+        "rd",
+        "local"
+      ],
+      "tabs": [
+        {
+          "kind": "table",
+          "title": "users",
+          "connId": "dev",
+          "group": 0,
+          "sql": "",
+          "where": "",
+          "orderBy": "",
+          "edit": {
+            "schema": "public",
+            "table": "users"
+          }
+        },
+        {
+          "kind": "table",
+          "title": "users",
+          "connId": "dev",
+          "group": 0,
+          "sql": "",
+          "where": "",
+          "orderBy": "",
+          "edit": {
+            "schema": "billing",
+            "table": "users"
+          }
+        },
+        {
+          "kind": "console",
+          "title": "console [DEV] shop_app",
+          "connId": "dev",
+          "group": 0,
+          "sql": "select * from users where id = 1;",
+          "where": "",
+          "orderBy": ""
+        },
+        {
+          "kind": "table",
+          "title": "users",
+          "connId": "dev",
+          "group": 1,
+          "sql": "",
+          "where": "",
+          "orderBy": "",
+          "edit": {
+            "schema": "billing",
+            "table": "users"
+          }
+        }
+      ],
+      "panes": {
+        "t": "split",
+        "dir": "right",
+        "a": {
+          "t": "leaf",
+          "g": 0
+        },
+        "b": {
+          "t": "leaf",
+          "g": 1
+        }
+      },
+      "activeIds": [
+        1,
+        3,
+        -1,
+        -1
+      ],
+      "focused": 1
+    },
+    {
+      "id": "ws-reports",
+      "name": "Reports",
+      "connIds": [
+        "my"
+      ],
+      "tabs": [
+        {
+          "kind": "table",
+          "title": "contracts",
+          "connId": "my",
+          "group": 0,
+          "sql": "",
+          "where": "",
+          "orderBy": "",
+          "edit": {
+            "schema": "shop",
+            "table": "contracts"
+          }
+        }
+      ],
+      "panes": {
+        "t": "leaf",
+        "g": 0
+      },
+      "activeIds": [
+        0,
+        -1,
+        -1,
+        -1
+      ],
+      "focused": 0
+    }
+  ]
+}

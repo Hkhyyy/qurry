@@ -1,0 +1,48 @@
+import { dialog, expect, openApp, openConsole, runAll, status, test, typeSql } from "./app";
+
+// [PROD] shop_app has options.confirmChanges (mock preview_impact counts 3 rows with WHERE, 500 without; DDL can't be counted)
+test.beforeEach(async ({ page }) => {
+  await openApp(page);
+  await openConsole(page, "[PROD] shop_app");
+});
+
+test("changes list each statement with its row count; DDL shows schema change", async ({ page }) => {
+  await typeSql(page, "update users set user_name = 'x' where id = 1;\ninsert into users (user_name) values ('y');\nalter table users add column x int;\nselect 1;");
+  await runAll(page);
+  await expect(dialog(page).locator(".ui-modal-title")).toHaveText("Production: [PROD] shop_app");
+  await expect(dialog(page).locator(".ui-confirm-message")).toHaveText("These statements change data. Run them?");
+  const rows = dialog(page).locator(".ui-detail-row");
+  await expect(rows.locator(".ui-detail-text")).toHaveText(["update users set user_name = 'x' where id = 1", "insert into users (user_name) values ('y')", "alter table users add column x int"]);
+  await expect(rows.locator(".ui-detail-value")).toHaveText(["3 rows", "500 rows", "schema change"]);
+  await expect(rows.locator(".ui-detail-value")).toHaveClass([/tone-warn/, /tone-danger/, /tone-danger/]);
+  await expect(dialog(page).getByRole("button", { name: "Run" })).toHaveClass(/ui-btn-danger/);
+  await dialog(page).getByRole("button", { name: "Run" }).click();
+  await expect(status(page)).toHaveText("4 statements executed");
+});
+
+test("Cancel runs nothing", async ({ page }) => {
+  await typeSql(page, "update users set user_name = 'x' where id = 1");
+  await runAll(page);
+  await dialog(page).getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  await expect(status(page)).toHaveText("Ready");
+});
+
+test("dangerous statement asks first, then the Production confirmation follows", async ({ page }) => {
+  await typeSql(page, "delete from users");
+  await runAll(page);
+  await expect(dialog(page)).toContainText("[PROD] shop_app: dangerous statement");
+  await expect(dialog(page)).toContainText("DELETE without WHERE changes every row. Run it anyway?");
+  await expect(dialog(page).locator("code")).toHaveText("delete from users");
+  await dialog(page).getByRole("button", { name: "Run Anyway" }).click();
+  await expect(dialog(page).locator(".ui-detail-value")).toHaveText("500 rows");
+  await dialog(page).getByRole("button", { name: "Run" }).click();
+  await expect(status(page)).toHaveText("1 statement executed");
+});
+
+test("reads run without a confirmation", async ({ page }) => {
+  await typeSql(page, "select * from users");
+  await page.keyboard.press("Meta+Enter");
+  await expect(status(page)).toHaveText("1 statement executed");
+  await expect(dialog(page)).toHaveCount(0);
+});
