@@ -994,15 +994,20 @@ impl AppState {
     }
 
     pub async fn import_connections(&self, path: String) -> AppResult<ImportResult> {
-        let (added, updated, forget) = self.store.import_from(std::path::Path::new(&path))?;
-        // Importing a different server under the same id deletes the old password (so it is not sent to the new server)
-        for (id, password, ssh) in forget {
-            if password {
-                self.set_secret(&id, None)?;
+        // Importing a different server under the same id deletes the old password (so it is not sent to the new server) —
+        // before the store is written, so a failure (damaged secrets.json) imports nothing
+        let (added, updated, forget) = self.store.import_from(std::path::Path::new(&path), |forget| {
+            for (id, password, ssh) in forget {
+                if *password {
+                    self.set_secret(id, None)?;
+                }
+                if *ssh {
+                    self.set_secret(&store::ssh_secret_key(id), None)?;
+                }
             }
-            if ssh {
-                self.set_secret(&store::ssh_secret_key(&id), None)?;
-            }
+            Ok(())
+        })?;
+        for (id, _, _) in forget {
             drop_pool(self, &id).await;
         }
         Ok(ImportResult { added, updated })
@@ -1173,6 +1178,38 @@ mod tests {
         assert!(e.contains("was removed") && e.contains("damaged"), "{e}");
         assert!(st.store.get("pw").unwrap().is_none());
         assert_eq!(std::fs::read_to_string(dir.join("secrets.json")).unwrap(), damaged);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// An import that turns on "Allow unencrypted" while secrets.json is damaged fails as a whole: the store isn't changed,
+    /// so after the file is repaired the old password isn't sent on the plaintext path
+    #[tokio::test]
+    async fn import_needing_a_password_removed_fails_before_writing() {
+        let dir = std::env::temp_dir().join(format!("qurry-impdmg-{}", uuid::Uuid::new_v4()));
+        let st = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+        let cfg = ConnectionConfig {
+            id: "m".into(), name: "m".into(), kind: crate::store::DbKind::Mysql, host: "db.example".into(), port: 3306,
+            user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+        };
+        st.save_connection(cfg, Some("pw".into()), None).await.unwrap();
+        let file = dir.join("import.json");
+        st.export_connections(file.display().to_string()).await.unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        v["connections"][0]["options"]["allowPlaintext"] = true.into();
+        std::fs::write(&file, v.to_string()).unwrap();
+        let good = std::fs::read(dir.join("secrets.json")).unwrap();
+        std::fs::write(dir.join("secrets.json"), b"{ \"m\": \"tru").unwrap();
+        let e = st.import_connections(file.display().to_string()).await.err().expect("import must fail").to_string();
+        assert!(e.contains("damaged"), "{e}");
+        let c = st.store.get("m").unwrap().unwrap();
+        assert!(!c.options.allow_plaintext && c.password_saved, "{c:?}");
+        // Repaired: the import goes through and the password is gone
+        std::fs::write(dir.join("secrets.json"), good).unwrap();
+        st.import_connections(file.display().to_string()).await.unwrap();
+        let c = st.store.get("m").unwrap().unwrap();
+        assert!(c.options.allow_plaintext && !c.password_saved);
+        assert_eq!(st.saved_secret("m", c.password_saved).unwrap(), None);
         let _ = std::fs::remove_dir_all(dir);
     }
 

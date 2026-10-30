@@ -542,10 +542,16 @@ impl Store {
         Ok(out)
     }
 
-    /// (added, changed, sources whose passwords to delete: (id, DB password, SSH secret)). The saved flags follow the current values, not the file
-    pub fn import_from(&self, path: &std::path::Path) -> AppResult<(usize, usize, Vec<(String, bool, bool)>)> {
+    /// (added, changed, sources whose passwords to delete: (id, DB password, SSH secret)). The saved flags follow the current values, not the file.
+    /// `forget` deletes those passwords before the store is written (under its lock): if it fails, nothing is imported — otherwise the store would
+    /// say "no password" (or allow plain text) while the old password stayed in the file
+    pub fn import_from(&self, path: &std::path::Path, forget: impl FnOnce(&[(String, bool, bool)]) -> AppResult<()>) -> AppResult<(usize, usize, Vec<(String, bool, bool)>)> {
         let incoming = Self::read_import(path)?;
-        self.update(|all| Self::merge_import(all, incoming))
+        self.update(|all| {
+            let r = Self::merge_import(all, incoming)?;
+            forget(&r.2)?;
+            Ok(r)
+        })
     }
 
     /// Like a server change for the saved password: same_server, plus a file turning on "Allow unencrypted"
@@ -766,7 +772,7 @@ mod tests {
 
         let b = Store::new(base.join("b"));
         b.save(&conn("2", "old name")).unwrap();
-        assert_eq!(b.import_from(&file).unwrap(), (1, 1, vec![]));
+        assert_eq!(b.import_from(&file, |_| Ok(())).unwrap(), (1, 1, vec![]));
         // Newly imported sources get MCP Off (unless the file sets it)
         assert_eq!(b.get("1").unwrap().unwrap().options.mcp.as_deref(), Some("off"));
         let names: Vec<_> = b.list().unwrap().into_iter().map(|c| c.name).collect();
@@ -791,7 +797,7 @@ mod tests {
         std::fs::write(&file, serde_json::to_string(&vec![theirs]).unwrap()).unwrap();
         let p = b.import_preview(&file).unwrap().join("\n");
         assert!(p.contains("attacker.example") && p.contains("SSL OFF") && p.contains("password will be removed"), "{p}");
-        assert_eq!(b.import_from(&file).unwrap(), (0, 1, vec![("2".to_string(), true, false)]));
+        assert_eq!(b.import_from(&file, |_| Ok(())).unwrap(), (0, 1, vec![("2".to_string(), true, false)]));
         assert!(!b.get("2").unwrap().unwrap().password_saved);
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -811,14 +817,14 @@ mod tests {
         std::fs::write(&file, serde_json::to_string(&vec![theirs]).unwrap()).unwrap();
         let p = b.import_preview(&file).unwrap().join("\n");
         assert!(p.contains("unencrypted") && p.contains("password will be removed and asked again"), "{p}");
-        assert_eq!(b.import_from(&file).unwrap(), (0, 1, vec![("4".to_string(), true, false)]));
+        assert_eq!(b.import_from(&file, |_| Ok(())).unwrap(), (0, 1, vec![("4".to_string(), true, false)]));
         let got = b.get("4").unwrap().unwrap();
         assert!(got.options.allow_plaintext && !got.password_saved);
         // Already allowed: importing the same setting keeps it
         let mut again = got.clone();
         again.password_saved = true;
         b.save(&again).unwrap();
-        assert_eq!(b.import_from(&file).unwrap(), (0, 1, vec![]));
+        assert_eq!(b.import_from(&file, |_| Ok(())).unwrap(), (0, 1, vec![]));
         assert!(b.get("4").unwrap().unwrap().password_saved);
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -838,7 +844,7 @@ mod tests {
         std::fs::write(&file, serde_json::to_string(&vec![theirs]).unwrap()).unwrap();
         let p = b.import_preview(&file).unwrap().join("\n");
         assert!(p.contains("unencrypted") && !p.contains("MCP"), "{p}");
-        b.import_from(&file).unwrap();
+        b.import_from(&file, |_| Ok(())).unwrap();
         assert_eq!(b.get("3").unwrap().unwrap().mcp_access(true), McpAccess::Off);
         let _ = std::fs::remove_dir_all(&base);
     }
