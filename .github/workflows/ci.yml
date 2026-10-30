@@ -95,7 +95,7 @@ jobs:
         run: for i in $(seq 1 90); do curl -sf -XPOST localhost:19530/v2/vectordb/collections/list -d '{}' | grep -q '"code":0' && break; sleep 2; done
 
       - name: Unit tests
-        run: cargo test --locked -p qurry-core -p qurry-tui -p qurry-mcp -p qurry-shared
+        run: cargo test --locked -p qurry-core -p qurry-tui -p qurry-mcp -p qurry-shared -p qurry-shared-wasm
 
       - name: Integration tests (PostgreSQL / MySQL / Redis)
         env:
