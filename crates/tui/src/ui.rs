@@ -797,7 +797,9 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
         // Drawn separately above
         Popup::Find(_) => {}
         Popup::Message { title, text } => {
-            let r = centered(area, 90, (text.lines().count() as u16 + 4).min(30));
+            // Sized by word wrap, so a long line isn't cut off in a narrow terminal
+            let lines: Vec<Line> = text.lines().map(|l| Line::raw(l.to_string())).collect();
+            let r = centered(area, 90, (wrapped_height(&lines, 90u16.min(area.width.saturating_sub(4)).saturating_sub(2)) + 4).min(30));
             let inner = popup(f, r, format!(" {} (Esc) ", disp(title)));
             f.render_widget(Paragraph::new(text.clone()).wrap(Wrap { trim: false }), inner);
         }

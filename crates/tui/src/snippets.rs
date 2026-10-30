@@ -126,7 +126,8 @@ impl App {
     /// Undo SQL into a new console of that Data Source (run it yourself — it goes through the Production confirmation)
     pub fn open_undo(&mut self, conn: String, db: Option<String>, undo: Option<String>, note: String) {
         let Some(undo) = undo else {
-            self.status = note;
+            // A popup, not the status bar: that cuts a long note off (a COMMIT of unknown outcome says what to check)
+            self.popup = Some(crate::app::Popup::Message { title: "Production log".into(), text: note });
             return;
         };
         if self.conn(&conn).is_none() {

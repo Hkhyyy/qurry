@@ -2058,7 +2058,22 @@ mod tests {
         h.key("Down");
         h.key("Enter");
         assert_eq!(h.app.tabs.len(), tabs + 1);
-        assert!(h.app.status.contains("no undo kept"), "{}", h.app.status);
+        // Without undo SQL, its note in a popup (the status bar would cut a long one off)
+        let Some(crate::app::Popup::Message { text, .. }) = &h.app.popup else { panic!("no note") };
+        assert!(text.contains("no undo kept"), "{text}");
+        h.key("Esc");
+        let unknown = qurry_core::audit::AuditEntry {
+            rows: None, error: Some("Connection reset by peer (os error 54)".into()), note: Some(qurry_core::audit::COMMIT_UNKNOWN_NOTE.into()),
+            ..entry("d", qurry_core::audit::COMMIT_UNKNOWN, None)
+        };
+        h.app.state.audit.add(unknown).unwrap();
+        h.app.run_action(Action::ProductionLog);
+        h.key("Enter");
+        let Some(crate::app::Popup::Message { text, .. }) = &h.app.popup else { panic!("no note") };
+        assert!(text.contains(qurry_core::audit::COMMIT_UNKNOWN_NOTE) && text.contains("os error 54"), "{text}");
+        // The whole note shows, wrapped, in a narrow terminal too
+        let screen = h.screen(50, 20);
+        assert!(screen.contains("Check the data before") && screen.contains("os error 54"), "{screen}");
     }
 
     /// ⌃K › Copy Related Rows: condition → child steps → destination (only other Data Sources of the same type). Generate Test Data asks for the row count
