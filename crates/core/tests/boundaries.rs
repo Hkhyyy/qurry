@@ -91,16 +91,21 @@ fn raw_hashes(b: &[u8], i: usize) -> Option<usize> {
     (prefix_ok && b.get(i + 1 + h) == Some(&b'"')).then_some(h)
 }
 
-/// End of the item starting at `from`: its matching `}`, or the `;` if that comes first
+/// End of the code an attribute at `from` applies to: an item or statement (`;` or its matching `}`), or a field or
+/// struct-literal entry (`,`, or the outer `}` that closes the list, which is not part of it). `(..)` and `[..]` are
+/// counted too, so a `,` inside them doesn't end it early.
 fn item_end(code: &[u8], from: usize) -> usize {
     let mut depth = 0;
     for (k, &c) in code.iter().enumerate().skip(from) {
         match c {
-            b';' if depth == 0 => return k + 1,
-            b'{' => depth += 1,
-            b'}' => {
-                depth -= 1;
+            b';' | b',' if depth == 0 => return k + 1,
+            b'{' | b'(' | b'[' => depth += 1,
+            b'}' | b')' | b']' => {
                 if depth == 0 {
+                    return k;
+                }
+                depth -= 1;
+                if depth == 0 && c == b'}' {
                     return k + 1;
                 }
             }
@@ -206,6 +211,12 @@ fn after() { std::fs::write(dir.join("connections.json"), "x"); }
     let raw = "#[cfg(test)] mod t { fn f() { let j = r#\"{\"a\":1}\"#; } }\nfn after() { SecretFile::open(&d); }\n\
                fn url() { let u = br##\"\"# http://x\"##; std::fs::write(d.join(\"secret.key\"), u); }\n";
     assert_eq!(hits("x.rs", raw), vec![(2, "SecretFile::"), (3, "\"secret.key\"")]);
+
+    // A test-only field, struct-literal entry or statement ends at its `,` / `;` / `}`, not at the outer `}`
+    let field = "struct S { #[cfg(test)] f: u8, }\nimpl S { fn save(&self, d: &Path) { std::fs::write(d.join(\"connections.json\"), \"[]\"); } }\n\
+                 fn new() -> S { S { #[cfg(test)] f: g(1, 2) } }\nfn after() { SecretFile::open(&d); }\n\
+                 fn stmt() { #[cfg(test)] if x { y(); } let s = SecretFile::open(&d); }\n";
+    assert_eq!(hits("x.rs", field), vec![(2, "\"connections.json\""), (4, "SecretFile::"), (5, "SecretFile::")]);
 
     let lib = "pub fn open_state(dir: P) -> R { let s = SecretFile::open(&dir)?; Ok(s) }\nfn other() { SecretFile::open(&d); }\n";
     assert_eq!(hits("crates/core/src/lib.rs", lib), vec![(2, "SecretFile::")]);
