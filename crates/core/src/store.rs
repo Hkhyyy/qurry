@@ -526,8 +526,8 @@ impl Store {
                     if e.mcp_access(true) < as_saved.mcp_access(true) {
                         ch.push("shares more with MCP (AI tools)".into());
                     }
-                    if !e.same_server(&c) && e.password_saved {
-                        ch.push("the saved password will be removed".into());
+                    if Self::import_moves_server(e, &c) && e.password_saved {
+                        ch.push("the saved password will be removed and asked again".into());
                     }
                     if e.active_ssh().map(|s| (&s.host, s.port)) != c.active_ssh().map(|s| (&s.host, s.port)) {
                         ch.push("changes the SSH tunnel".into());
@@ -548,6 +548,12 @@ impl Store {
         self.update(|all| Self::merge_import(all, incoming))
     }
 
+    /// Like a server change for the saved password: same_server, plus a file turning on "Allow unencrypted"
+    /// (which the user may tick in the dialog, but an imported file could use to have the password sent without TLS)
+    fn import_moves_server(e: &ConnectionConfig, c: &ConnectionConfig) -> bool {
+        !e.same_server(c) || (!e.options.allow_plaintext && c.options.allow_plaintext)
+    }
+
     fn merge_import(all: &mut Vec<ConnectionConfig>, incoming: Vec<ConnectionConfig>) -> AppResult<(usize, usize, Vec<(String, bool, bool)>)> {
         let (mut added, mut updated, mut forget) = (0, 0, vec![]);
         for mut c in incoming {
@@ -561,7 +567,7 @@ impl Store {
                         c.options.mcp = Some(e.mcp_access(true).as_str().into());
                     }
                     // Regardless of the flags (including entries whose flag alone was cleared by an old import), a different server goes on the delete list
-                    let (pw, ssh) = (!e.same_server(&c), !e.same_ssh(&c));
+                    let (pw, ssh) = (Self::import_moves_server(e, &c), !e.same_ssh(&c));
                     c.password_saved = e.password_saved && !pw;
                     c.ssh_secret_saved = e.ssh_secret_saved && !ssh;
                     if pw || ssh {
@@ -787,6 +793,33 @@ mod tests {
         assert!(p.contains("attacker.example") && p.contains("SSL OFF") && p.contains("password will be removed"), "{p}");
         assert_eq!(b.import_from(&file).unwrap(), (0, 1, vec![("2".to_string(), true, false)]));
         assert!(!b.get("2").unwrap().unwrap().password_saved);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// An imported file turning on "Allow unencrypted" doesn't keep the saved password (someone in the middle could strip TLS and read it)
+    #[test]
+    fn import_allowing_plaintext_forgets_the_password() {
+        let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
+        let b = Store::new(base.join("b"));
+        let mut mine = conn("4", "db");
+        mine.kind = DbKind::Mysql;
+        mine.password_saved = true;
+        b.save(&mine).unwrap();
+        let mut theirs = mine.clone();
+        theirs.options.allow_plaintext = true;
+        let file = base.join("in.json");
+        std::fs::write(&file, serde_json::to_string(&vec![theirs]).unwrap()).unwrap();
+        let p = b.import_preview(&file).unwrap().join("\n");
+        assert!(p.contains("unencrypted") && p.contains("password will be removed and asked again"), "{p}");
+        assert_eq!(b.import_from(&file).unwrap(), (0, 1, vec![("4".to_string(), true, false)]));
+        let got = b.get("4").unwrap().unwrap();
+        assert!(got.options.allow_plaintext && !got.password_saved);
+        // Already allowed: importing the same setting keeps it
+        let mut again = got.clone();
+        again.password_saved = true;
+        b.save(&again).unwrap();
+        assert_eq!(b.import_from(&file).unwrap(), (0, 1, vec![]));
+        assert!(b.get("4").unwrap().unwrap().password_saved);
         let _ = std::fs::remove_dir_all(&base);
     }
 
