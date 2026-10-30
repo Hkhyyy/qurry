@@ -179,9 +179,14 @@ const handlers: Record<string, (a: any) => unknown> = {
     { id: "table_sizes", title: "Table Sizes", group: "Storage", help: "Biggest first.", actions: [] },
     { id: "unused_indexes", title: "Unused Indexes", group: "Storage", help: "Indexes never used since statistics were reset; counting_since tells since when.", actions: [{ kind: "sql", label: "Generate DROP INDEX", template: "DROP INDEX CONCURRENTLY {schema}.{index};" }] },
   ]),
-  // Story targets: "busy" runs past the report time limit, "flaky" loads once and then its refreshes do, "maria" has no performance_schema
+  // Story targets: "busy" runs past the report time limit, "flaky" loads once and then its refreshes do, "maria" has no performance_schema.
+  // Any target: "roles" is denied (app isn't a superuser), "table_sizes" takes 2 s (so a switch shows its loading state)
   dba_report: (a: any) =>
-    a.id === "busy" || (a.id === "flaky" && flakyLoads++ > 0)
+    a.report === "table_sizes"
+      ? new Promise((ok) => setTimeout(() => ok(handlers.dba_report({ ...a, report: "sessions" })), 2000))
+      : a.report === "roles"
+      ? Promise.reject("permission denied for table pg_authid")
+      : a.id === "busy" || (a.id === "flaky" && flakyLoads++ > 0)
       ? Promise.reject("The report ran into its time limit (30 s, or a stricter one set on the server). The server may be busy or the statistics very large: try again later.\n(error returned from database: canceling statement due to statement timeout)")
       : a.id === "maria"
       ? Promise.reject("performance_schema / sys schema is not available on this server — enable performance_schema to see this (MariaDB has it off by default, and some of these tables only exist on MySQL).\n(error returned from database: 1146 (42S02): Table 'performance_schema.events_statements_summary_by_digest' doesn't exist)")

@@ -64,7 +64,10 @@ export function DbaReport(p: {
   };
   useEffect(() => {
     if (!seen) return;
+    // Another report: drop everything of the last one, so its error and load time don't show while this one loads
     setResult(null);
+    setError(null);
+    setLoadedAt("");
     load();
   }, [p.target, p.report, seen]);
   // Sessions · locks: every 3 seconds while visible. A tick is skipped while the last load still runs, so slow loads don't pile up on a busy server
