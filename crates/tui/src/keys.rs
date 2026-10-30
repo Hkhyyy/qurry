@@ -157,7 +157,7 @@ fn glyph_words(s: &str) -> String {
 }
 
 /// "Ctrl+K" → "Ctrl+k": a single letter with ⌃/⌥ and no Shift is shown lowercase (uppercase reads as a key needing Shift)
-fn lower_unshifted(s: &str) -> String {
+pub(crate) fn lower_unshifted(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while !rest.is_empty() {

@@ -26,7 +26,7 @@ fn expand(p: &str) -> String {
 }
 
 /// File column name → column with the same name (ignoring case·spaces·_·-). Same as autoMap in GUI lib/transfer.ts
-fn match_column<'a>(file: &str, cols: &'a [String]) -> Option<&'a String> {
+pub(crate) fn match_column<'a>(file: &str, cols: &'a [String]) -> Option<&'a String> {
     let norm = |s: &str| s.to_lowercase().chars().filter(|c| !c.is_whitespace() && *c != '_' && *c != '-').collect::<String>();
     cols.iter().find(|c| norm(c) == norm(file))
 }

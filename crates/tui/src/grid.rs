@@ -53,7 +53,7 @@ pub fn cell_text(v: &Value) -> String {
     }
 }
 /// End position of "hh:mm:ss" and fractional-second digits of a time value ([date ]hh:mm:ss[.ffffff]…)
-fn time_frac(s: &str) -> Option<(usize, usize)> {
+pub(crate) fn time_frac(s: &str) -> Option<(usize, usize)> {
     let b = s.as_bytes();
     let start = match b.iter().position(|&c| c == b' ' || c == b'T') {
         Some(i) if i >= 10 && b[i - 3] == b'-' => i + 1,
