@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # pnpm wasm: build crates/shared-wasm for the GUI into src/wasm/pkg (gitignored).
 # Needs the wasm32-unknown-unknown Rust target and wasm-bindgen-cli at the exact version of the wasm-bindgen crate.
-# wasm-opt (binaryen) shrinks the module further when it is installed; without it the build still works.
+# wasm-opt (binaryen) shrinks the module further when it is installed (CI and release builds install it); without it the build still works.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -20,8 +20,16 @@ if [ "$have" != "$want" ]; then
 fi
 
 cargo build --locked --target wasm32-unknown-unknown -p qurry-shared-wasm --profile wasm
-wasm-bindgen --target web --out-dir src/wasm/pkg "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/wasm/qurry_shared_wasm.wasm"
+# Generate into a temp dir and copy only files whose bytes changed: rewriting identical files would make a running
+# Vite / Storybook dev server reload the page whenever pnpm test or pnpm build starts in another terminal
+out=$(mktemp -d)
+trap 'rm -rf "$out"' EXIT
+wasm-bindgen --target web --out-dir "$out" "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/wasm/qurry_shared_wasm.wasm"
 if command -v wasm-opt >/dev/null; then
   # Same features rustc enables by default for wasm32-unknown-unknown (wasm-opt rejects the module otherwise)
-  wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int --enable-reference-types --enable-multivalue -o src/wasm/pkg/qurry_shared_wasm_bg.wasm src/wasm/pkg/qurry_shared_wasm_bg.wasm
+  wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int --enable-reference-types --enable-multivalue -o "$out/qurry_shared_wasm_bg.wasm" "$out/qurry_shared_wasm_bg.wasm"
 fi
+mkdir -p src/wasm/pkg
+for f in "$out"/*; do
+  cmp -s "$f" "src/wasm/pkg/${f##*/}" || cp "$f" src/wasm/pkg/
+done
