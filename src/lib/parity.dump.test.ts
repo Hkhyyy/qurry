@@ -132,7 +132,8 @@ function resultGolden(): Golden {
       "inList(column)": Object.fromEntries(names.map((n, c) => [n, inList(r.rows.map((row) => [row[c]]), [types[c]])])),
       "extract(TSV, no header)": extractRows("TSV", { ...base, dialect: dialectOf("postgres"), header: false }),
       "extract(SQL Inserts, mysql)": extractRows("SQL Inserts", { ...base, dialect: dialectOf("mysql") }),
-      fracWidth: Object.fromEntries(names.map((n, c) => [n, fracWidth(r.rows.map((row) => row[c]))])),
+      // As ResultGrid uses it: only time columns get a width
+      fracWidth: Object.fromEntries(names.map((n, c) => [n, isTimeType(types[c]) ? fracWidth(r.rows.map((row) => row[c])) : 0])),
       padFrac: Object.fromEntries(
         names.flatMap((n, c) => {
           if (!isTimeType(types[c])) return [];

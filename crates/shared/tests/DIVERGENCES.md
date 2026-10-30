@@ -7,8 +7,8 @@ Inputs are in `corpus/` (ids as listed); `‸` in a corpus text is the cursor. O
 
 | Corpus › function | Compared | Differ | TS only | Rust only |
 | --- | --- | --- | --- | --- |
-| sql › splitStatements | 46 | 5 | 0 | 3 |
-| sql › splitScript | 49 | 5 | 0 | 0 |
+| sql › splitStatements | 46 | 3 | 0 | 3 |
+| sql › splitScript | 49 | 3 | 0 | 0 |
 | sql › statementAt | 13 | 1 | 0 | 2 |
 | sql › planExecution(ask) | 15 | 0 | 0 | 0 |
 | sql › planExecution(smallest) | 15 | 0 | 0 | 0 |
@@ -24,7 +24,7 @@ Inputs are in `corpus/` (ids as listed); `‸` in a corpus text is the cursor. O
 | valuehints › hintInsert | 31 | 0 | 1 | 1 |
 | valuehints › hintable | 31 | 0 | 1 | 1 |
 | valuehints › pairsForKeys | 7 | 0 | 0 | 0 |
-| results › numericColumns | 0 | 0 | 10 | 0 |
+| results › numericColumns | 10 | 0 | 0 | 0 |
 | results › defaultAxes | 10 | 0 | 0 | 0 |
 | results › buildChart(bar) | 0 | 0 | 10 | 0 |
 | results › buildChart(pie) | 0 | 0 | 10 | 0 |
@@ -48,7 +48,7 @@ Inputs are in `corpus/` (ids as listed); `‸` in a corpus text is the cursor. O
 | rediskeys › keyTree | 7 | 1 | 0 | 0 |
 | columns › autoMap | 6 | 0 | 1 | 0 |
 | keyspecs › keyLabel | 23 | 0 | 0 | 0 |
-| keyspecs › formatSpec | 16 | 10 | 0 | 0 |
+| keyspecs › formatSpec | 10 | 4 | 6 | 0 |
 | fuzzy › fuzzyScore | 18 | 11 | 0 | 0 |
 
 TS only / Rust only: inputs where only one side has that function (no counterpart, or the dialect isn't handled there).
@@ -59,12 +59,8 @@ TS only / Rust only: inputs where only one side has that function (no counterpar
 | --- | --- | --- | --- | --- |
 | sql | ` dollar-inside-name ` | splitStatements | ` ["select foo$x$ from t; select 1"] ` | ` ["select foo$x$ from t"," select 1"] ` |
 | sql | ` dollar-inside-name ` | splitScript | ` ["select foo$x$ from t; select 1"] ` | ` ["select foo$x$ from t"," select 1"] ` |
-| sql | ` e-string-backslash-quote ` | splitStatements | ` ["select E'it\\'s"," here'; select 2"] ` | ` ["select E'it\\'s; here'"," select 2"] ` |
-| sql | ` e-string-backslash-quote ` | splitScript | ` ["select E'it\\'s"," here'; select 2"] ` | ` ["select E'it\\'s; here'"," select 2"] ` |
 | sql | ` nested-comment ` | splitStatements | ` ["/* outer /* inner */ still"," comment */ select 1"," select 2"] ` | ` ["/* outer /* inner */ still; comment */ select 1"," select 2"] ` |
 | sql | ` nested-comment ` | splitScript | ` ["/* outer /* inner */ still"," comment */ select 1"," select 2"] ` | ` ["/* outer /* inner */ still; comment */ select 1"," select 2"] ` |
-| sql | ` hash-comment-mysql ` | splitStatements | ` ["select 1 # comment"," still comment\nselect 2"] ` | ` ["select 1 # comment; still comment\nselect 2"] ` |
-| sql | ` hash-comment-mysql ` | splitScript | ` ["select 1 # comment"," still comment\nselect 2"] ` | ` ["select 1 # comment; still comment\n","select 2"] ` |
 | sql | ` dashdash-no-space-mysql ` | splitStatements | ` ["select 1--1;\nselect 2"] ` | ` ["select 1--1","\nselect 2"] ` |
 | sql | ` dashdash-no-space-mysql ` | splitScript | ` ["select 1--1;\n","select 2"] ` | ` ["select 1--1","\nselect 2"] ` |
 | sql | ` cursor-no-semicolon ` | statementAt | ` "select 1\nselect 2\nselect 3" ` | ` "select 2" ` |
@@ -81,16 +77,10 @@ TS only / Rust only: inputs where only one side has that function (no counterpar
 | results | ` inlist-mix ` | inList | ` "(('010', 12345678901234567890, true, 1.50), ('a''b', -3, false, 'NaN'), ('x', 1e5, NULL, -0.5), ('y', '+4', true, '.5'))" ` | ` "(('010', 12345678901234567890, true, 1.50), ('a''b', -3, false, 'NaN'), ('x', 1e5, NULL, -0.5), ('y', +4, true, .5))" ` |
 | results | ` inlist-mix ` | inList(column) | ` {"code":"('010', 'a''b', 'x', 'y')","flag":"(true, false)","n":"(12345678901234567890, -3, 1e5, '+4')","price":"(1.50, 'NaN', -0.5, '.5')"} ` | ` {"code":"('010', 'a''b', 'x', 'y')","flag":"(true, false)","n":"(12345678901234567890, -3, 1e5, +4)","price":"(1.50, 'NaN', -0.5, .5)"} ` |
 | rediskeys | ` korean-emoji ` | keyTree | ` [{"children":[{"key":"사용자:1"},{"key":"사용자:2"}],"count":2,"folder":"사용자","path":"사용자"},{"children":[{"key":"😀:x"}],"count":1,"folder":"😀","path":"😀"},{"children":[{"key":"！:x"}],"count":1,"folder":"！","path":"！"},{"key":"키"}] ` | ` [{"children":[{"key":"사용자:1"},{"key":"사용자:2"}],"count":2,"folder":"사용자","path":"사용자"},{"children":[{"key":"！:x"}],"count":1,"folder":"！","path":"！"},{"children":[{"key":"😀:x"}],"count":1,"folder":"😀","path":"😀"},{"key":"키"}] ` |
-| keyspecs | ` Mod+K ` | formatSpec | ` "⌘k" ` | ` "Mod+K" ` |
-| keyspecs | ` Mod+Shift+K ` | formatSpec | ` "⇧⌘K" ` | ` "Mod+⇧K" ` |
-| keyspecs | ` Mod+Alt+O ` | formatSpec | ` "⌥⌘o" ` | ` "Mod+⌥o" ` |
 | keyspecs | ` Alt+Enter ` | formatSpec | ` "⌥↩" ` | ` "⌥Enter" ` |
 | keyspecs | ` Ctrl+Alt+Shift+Up ` | formatSpec | ` "⌃⌥⇧↑" ` | ` "⌃⌥⇧Up" ` |
 | keyspecs | ` Ctrl+Tab ` | formatSpec | ` "⌃⇥" ` | ` "⌃Tab" ` |
-| keyspecs | ` Mod+Backspace ` | formatSpec | ` "⌘⌫" ` | ` "Mod+Backspace" ` |
-| keyspecs | ` Mod+[ ` | formatSpec | ` "⌘[" ` | ` "Mod+[" ` |
 | keyspecs | ` Alt++ ` | formatSpec | ` "⌥" ` | ` "⌥+" ` |
-| keyspecs | ` Mod+Enter ` | formatSpec | ` "⌘↩" ` | ` "Mod+Enter" ` |
 | fuzzy | ` substring-word-start ` | fuzzyScore | ` 593 ` | ` 493 ` |
 | fuzzy | ` substring-mid-word ` | fuzzyScore | ` 398.5 ` | ` 499 ` |
 | fuzzy | ` substring-camel ` | fuzzyScore | ` 590.6 ` | ` 491 ` |

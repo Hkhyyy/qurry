@@ -181,12 +181,14 @@ fn result_golden() -> Golden {
     for e in arr(&corpus("results")) {
         let r = result_of(e);
         let names: Vec<&str> = r.columns.iter().map(|c| c.name.as_str()).collect();
-        let (_, x, y) = crate::datatools::chart_axes(&r);
+        let (nums, x, y) = crate::datatools::chart_axes(&r);
         let axes = json!({ "x": names[x], "y": y.map(|y| names[y]) });
         let col = |c: usize| r.rows.iter().map(move |row| &row[c]);
-        let frac = |c: usize| col(c).filter_map(|v| v.as_str().and_then(grid::time_frac)).map(|x| x.1).max().unwrap_or(0);
         let column_g = Grid::new(result_of(e));
+        // The width the grid itself computed (not a copy of its rule)
+        let frac = |c: usize| column_g.frac[c];
         let mut o = json!({
+            "numericColumns": nums.iter().map(|&i| names[i]).collect::<Vec<_>>(),
             "defaultAxes": axes,
             "inList": all_selected(e).in_list().0,
             "inList(column)": names.iter().enumerate().map(|(c, n)| (n.to_string(), Value::from(column_g.column_in_list(c).0))).collect::<Map<_, _>>(),
@@ -194,10 +196,7 @@ fn result_golden() -> Golden {
             "padFrac": names
                 .iter()
                 .enumerate()
-                .filter(|(c, _)| {
-                    let t = r.columns[*c].type_name.to_uppercase();
-                    t.contains("TIME") && !t.contains("INTERVAL")
-                })
+                .filter(|(c, _)| grid::is_time_type(&r.columns[*c].type_name))
                 .map(|(c, n)| {
                     let w = frac(c);
                     (n.to_string(), col(c).map(|v| v.as_str().map(|s| Value::from(grid::pad_frac(s, w))).unwrap_or_else(|| v.clone())).collect::<Value>())
@@ -271,10 +270,17 @@ fn column_golden() -> Golden {
     out
 }
 
-/// Storage specs get keyLabel and formatSpec, display strings keyLabel only. formatSpec is the macOS notation on every host (as in the TS dump)
+/// Storage specs get keyLabel and formatSpec, display strings keyLabel only. formatSpec is the macOS notation on every host (as in the TS dump).
+/// `Mod+` specs are GUI-only (the TUI keymap has no Mod token), so they get no formatSpec here and count as TS only
 fn spec_golden() -> Golden {
     let c = corpus("keyspecs");
-    let specs = strings(&c["specs"]).into_iter().map(|s| (s.clone(), json!({ "keyLabel": crate::keys::lower_unshifted(&s), "formatSpec": crate::keys::disp_mac(&s) })));
+    let specs = strings(&c["specs"]).into_iter().map(|s| {
+        let mut o = json!({ "keyLabel": crate::keys::lower_unshifted(&s) });
+        if !s.contains("Mod+") {
+            o["formatSpec"] = crate::keys::disp_mac(&s).into();
+        }
+        (s, o)
+    });
     let labels = strings(&c["labels"]).into_iter().map(|s| (s.clone(), json!({ "keyLabel": crate::keys::lower_unshifted(&s) })));
     specs.chain(labels).collect()
 }
@@ -303,5 +309,21 @@ async fn parity_dump() {
     std::fs::create_dir_all(&dir).unwrap();
     for (name, g) in goldens {
         std::fs::write(dir.join(format!("{name}.json")), serde_json::to_string_pretty(&g).unwrap() + "\n").unwrap();
+    }
+}
+
+/// The dump reads the TUI's own results (not copies of its rules) and leaves GUI-only inputs out
+#[test]
+fn dump_uses_tui_values() {
+    for (id, o) in result_golden() {
+        assert!(o["numericColumns"].is_array(), "{id}: numericColumns from chart_axes");
+        let e = arr(&corpus("results")).iter().find(|e| e["id"] == id.as_str()).unwrap().clone();
+        let g = Grid::new(result_of(&e));
+        for (c, col) in g.result.columns.iter().enumerate() {
+            assert_eq!(o["fracWidth"][&col.name], g.frac[c], "{id}.{}: fracWidth is the grid's", col.name);
+        }
+    }
+    for (spec, o) in spec_golden() {
+        assert_eq!(o.get("formatSpec").is_some(), !spec.contains("Mod+") && strings(&corpus("keyspecs")["specs"]).contains(&spec), "{spec}");
     }
 }

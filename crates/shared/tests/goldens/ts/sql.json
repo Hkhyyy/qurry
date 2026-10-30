@@ -71,12 +71,12 @@
   },
   "e-string-backslash-quote": {
     "splitStatements": [
-      "select E'it\\'s",
-      " here'; select 2"
+      "select E'it\\'s; here'",
+      " select 2"
     ],
     "splitScript": [
-      "select E'it\\'s",
-      " here'; select 2"
+      "select E'it\\'s; here'",
+      " select 2"
     ]
   },
   "e-string-after-name": {
@@ -353,12 +353,11 @@
   },
   "hash-comment-mysql": {
     "splitStatements": [
-      "select 1 # comment",
-      " still comment\nselect 2"
+      "select 1 # comment; still comment\nselect 2"
     ],
     "splitScript": [
-      "select 1 # comment",
-      " still comment\nselect 2"
+      "select 1 # comment; still comment\n",
+      "select 2"
     ]
   },
   "dashdash-no-space-mysql": {

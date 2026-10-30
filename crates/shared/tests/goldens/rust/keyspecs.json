@@ -39,27 +39,21 @@
     "keyLabel": "F5"
   },
   "Mod+Alt+O": {
-    "formatSpec": "Mod+⌥o",
     "keyLabel": "Mod+Alt+o"
   },
   "Mod+Backspace": {
-    "formatSpec": "Mod+Backspace",
     "keyLabel": "Mod+Backspace"
   },
   "Mod+Enter": {
-    "formatSpec": "Mod+Enter",
     "keyLabel": "Mod+Enter"
   },
   "Mod+K": {
-    "formatSpec": "Mod+K",
     "keyLabel": "Mod+K"
   },
   "Mod+Shift+K": {
-    "formatSpec": "Mod+⇧K",
     "keyLabel": "Mod+Shift+K"
   },
   "Mod+[": {
-    "formatSpec": "Mod+[",
     "keyLabel": "Mod+["
   },
   "Run (⌘↩) · ⌘F2": {
