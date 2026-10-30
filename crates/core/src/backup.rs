@@ -146,27 +146,50 @@ fn pg_dbname(db: &str) -> String {
 }
 
 /// Finds mysql client commands that do something on this computer, line by line. A second check: mysql runs with --binary-mode, which switches these off.
-/// Like the mysql client: system / tee / pager / source / connect … at the start of a line (outside a string), and \! \T \P \. \r \e \u \C anywhere
-/// outside strings ('…' "…" with backslash escapes as mysqldump writes them, `…` without) and comments (-- · # to the end of the line, /* */ but not
-/// /*! */, whose contents mysql runs). Not inside the data: mysqldump writes a\!b in a string as 'a\\!b'.
+/// Like the mysql client (checked against mysql 8.4): system / tee / pager / source / connect / edit / ssl_session_data_print … only at the start of a
+/// statement — nothing but blank space and comments since the last delimiter (the one DELIMITER / \d set), on this line or earlier ones — and \! \T \P
+/// \. \r \e \u \C anywhere; both outside strings ('…' "…" with backslash escapes as mysqldump writes them, `…` without) and comments (-- · # to the end
+/// of the line, /* */ but not /*! */, whose contents mysql runs). Not inside the data: mysqldump writes a\!b in a string as 'a\\!b'.
+/// After SET sql_mode = '…NO_BACKSLASH_ESCAPES…' (mysqldump writes one before a routine created in that mode) a backslash in a string is a character,
+/// until sql_mode is set again without it — the client follows the server's mode the same way. Followed: the session's sql_mode in a SET of up to
+/// STATEMENT_MAX bytes, set to a string or expression (on if it names the mode), DEFAULT, or a user variable saved from @@sql_mode before. Not followed:
+/// other ways to change it (a procedure that sets it, PREPARE …), where this check can go out of step; --binary-mode is the defence there.
+/// ANSI_QUOTES changes nothing here: the client reads "…" as a string either way.
 /// (psql needs no line check: it runs with \restrict, and an older psql isn't used for plain SQL)
-#[derive(Default)]
 struct MyScan {
     /// The quote of the string the line starts in (0 = none)
     quote: u8,
     /// Inside /* */
     comment: bool,
+    /// The current statement has begun (more than blank space and comments since the last delimiter)
+    started: bool,
+    delimiter: Vec<u8>,
+    /// The current statement without its comments, up to STATEMENT_MAX bytes (one more = longer), to follow SET sql_mode
+    statement: Vec<u8>,
+    /// NO_BACKSLASH_ESCAPES is on
+    no_escapes: bool,
+    /// User variables set to @@sql_mode: whether NO_BACKSLASH_ESCAPES was on then (SET @saved_sql_mode = @@sql_mode)
+    saved: std::collections::HashMap<String, bool>,
+}
+
+/// The mysql client's named commands that reach this computer or another server
+const NAMED_COMMANDS: &[&str] = &["system", "tee", "notee", "pager", "nopager", "source", "connect", "edit", "ssl_session_data_print"];
+const STATEMENT_MAX: usize = 4096;
+
+impl Default for MyScan {
+    fn default() -> Self {
+        MyScan { quote: 0, comment: false, started: false, delimiter: b";".to_vec(), statement: Vec::new(), no_escapes: false, saved: Default::default() }
+    }
+}
+
+/// The first word from here (up to blank space)
+fn word_at(line: &[u8], i: usize) -> &[u8] {
+    let rest = &line[i..];
+    &rest[..rest.iter().position(|c| c.is_ascii_whitespace()).unwrap_or(rest.len())]
 }
 
 impl MyScan {
     fn is_local_command(&mut self, line: &[u8]) -> bool {
-        if self.quote == 0 {
-            let text = String::from_utf8_lossy(line);
-            let word = text.split_whitespace().next().unwrap_or("").to_lowercase();
-            if ["system", "tee", "notee", "pager", "nopager", "source", "connect", "edit"].contains(&word.as_str()) {
-                return true;
-            }
-        }
         let at = |i: usize| line.get(i).copied().unwrap_or(0);
         let mut i = 0;
         while i < line.len() {
@@ -177,27 +200,150 @@ impl MyScan {
                     i += 1;
                 }
             } else if self.quote != 0 {
-                if c == b'\\' && self.quote != b'`' {
+                self.push(c);
+                if c == b'\\' && self.quote != b'`' && !self.no_escapes {
+                    self.push(at(i + 1));
                     i += 1;
                 } else if c == self.quote {
                     self.quote = 0;
                 }
+            } else if c.is_ascii_whitespace() {
+                if self.started {
+                    self.push(c);
+                }
+            } else if !self.started && NAMED_COMMANDS.iter().any(|n| word_at(line, i).eq_ignore_ascii_case(n.as_bytes())) {
+                return true;
+            } else if !self.started && word_at(line, i).eq_ignore_ascii_case(b"delimiter") {
+                // DELIMITER x takes the rest of the line
+                self.set_delimiter(&line[i + 9..]);
+                return false;
             } else if c == b'\\' {
-                if matches!(at(i + 1), b'!' | b'T' | b'P' | b'.' | b'r' | b'e' | b'u' | b'C') {
-                    return true;
+                match at(i + 1) {
+                    b'!' | b'T' | b'P' | b'.' | b'r' | b'e' | b'u' | b'C' => return true,
+                    b'd' => {
+                        // \d x: the rest of the line is scanned on after x
+                        let from = i + 2 + line[i + 2..].iter().take_while(|c| c.is_ascii_whitespace()).count();
+                        let len = word_at(line, from).len();
+                        self.set_delimiter(&line[from..]);
+                        i = from + len;
+                        continue;
+                    }
+                    b'g' | b'G' => self.end_statement(),
+                    _ => {
+                        self.started = true;
+                        self.push(c);
+                        if let Some(&next) = line.get(i + 1) {
+                            self.push(next);
+                        }
+                    }
                 }
                 i += 1;
+            } else if line[i..].starts_with(&self.delimiter) {
+                self.end_statement();
+                i += self.delimiter.len();
+                continue;
             } else if c == b'#' || (c == b'-' && at(i + 1) == b'-' && (i + 2 >= line.len() || at(i + 2).is_ascii_whitespace())) {
                 return false;
             } else if c == b'/' && at(i + 1) == b'*' && !matches!(at(i + 2), b'!' | b'+') {
                 self.comment = true;
                 i += 1;
-            } else if matches!(c, b'\'' | b'"' | b'`') {
-                self.quote = c;
+            } else {
+                self.started = true;
+                self.push(c);
+                if matches!(c, b'\'' | b'"' | b'`') {
+                    self.quote = c;
+                }
             }
             i += 1;
         }
         false
+    }
+
+    fn push(&mut self, c: u8) {
+        if self.statement.len() <= STATEMENT_MAX {
+            self.statement.push(c);
+        }
+    }
+
+    /// The first word of the text (DELIMITER's argument), if any
+    fn set_delimiter(&mut self, text: &[u8]) {
+        let text = &text[text.iter().take_while(|c| c.is_ascii_whitespace()).count()..];
+        let word = word_at(text, 0);
+        if !word.is_empty() {
+            self.delimiter = word.to_vec();
+        }
+    }
+
+    /// A statement ended (the delimiter, \g): follow SET sql_mode in it
+    fn end_statement(&mut self) {
+        if self.statement.len() <= STATEMENT_MAX {
+            self.follow_sql_mode();
+        }
+        self.statement.clear();
+        self.started = false;
+    }
+
+    fn follow_sql_mode(&mut self) {
+        // /*!50003 SET … */: its contents run
+        let text = String::from_utf8_lossy(&self.statement).to_ascii_lowercase();
+        let mut code = String::new();
+        let mut rest = text.as_str();
+        while let Some(p) = rest.find("/*!") {
+            code.push_str(&rest[..p]);
+            rest = rest[p + 3..].trim_start_matches(|c: char| c.is_ascii_digit());
+        }
+        code.push_str(rest);
+        let code = code.replace("*/", " ");
+        let Some(list) = code.trim_start().strip_prefix("set").filter(|r| r.starts_with(|c: char| c.is_ascii_whitespace())) else { return };
+        // The assignments: split at commas outside strings and brackets
+        let (mut parts, mut start, mut quote, mut depth, mut escaped) = (Vec::new(), 0, None, 0, false);
+        for (i, c) in list.char_indices() {
+            match quote {
+                Some(q) => {
+                    if escaped {
+                        escaped = false;
+                    } else if c == '\\' && q != '`' && !self.no_escapes {
+                        escaped = true;
+                    } else if c == q {
+                        quote = None;
+                    }
+                }
+                None => match c {
+                    '\'' | '"' | '`' => quote = Some(c),
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    ',' if depth == 0 => {
+                        parts.push(&list[start..i]);
+                        start = i + 1;
+                    }
+                    _ => {}
+                },
+            }
+        }
+        parts.push(&list[start..]);
+        for part in parts {
+            let Some(eq) = part.find('=') else { continue };
+            let (target, value) = (part[..eq].trim().trim_end_matches(':').trim(), part[eq + 1..].trim());
+            if let Some(var) = target.strip_prefix('@').filter(|v| !v.starts_with('@')) {
+                if ["@@sql_mode", "@@session.sql_mode", "@@local.sql_mode"].contains(&value) {
+                    self.saved.insert(var.to_string(), self.no_escapes);
+                }
+                continue;
+            }
+            let target = target.strip_prefix("session").or_else(|| target.strip_prefix("local")).filter(|t| t.starts_with(char::is_whitespace)).map_or(target, str::trim_start);
+            let target = target.strip_prefix("@@session.").or_else(|| target.strip_prefix("@@local.")).or_else(|| target.strip_prefix("@@")).unwrap_or(target);
+            if target != "sql_mode" {
+                continue;
+            }
+            if let Some(var) = value.strip_prefix('@') {
+                // A saved user variable; @@sql_mode or an unknown variable: unchanged
+                if let Some(&on) = self.saved.get(var) {
+                    self.no_escapes = on;
+                }
+            } else {
+                self.no_escapes = value.contains("no_backslash_escapes");
+            }
+        }
     }
 }
 
@@ -294,7 +440,8 @@ fn sends_unknown_settings(pg_restore: Option<u64>, server: Option<u64>) -> bool 
 /// What psql reads instead of the .sql file as is (streamed to its stdin, no copy): `\restrict <key>` first, so psql commands in the file are switched off;
 /// the file's own \restrict · \unrestrict lines left out (pg_dump 17.6+ writes them; left in, the file could switch commands back on with a key it chose);
 /// and SETs an older server doesn't know left out. Only pg_dump's own lines are left out: those of its header (before the first statement other than
-/// SET / set_config) and the file's last \unrestrict line — never COPY data or the lines of a string over several lines
+/// SET / set_config) and the file's last \unrestrict line (in files put one after the other, also the \unrestrict · \restrict between them and the
+/// next header) — never COPY data or the lines of a string over several lines
 struct PsqlInput {
     key: String,
     drop: Vec<&'static str>,
@@ -312,15 +459,22 @@ struct PsqlLines<'a> {
     input: &'a PsqlInput,
     /// Still in pg_dump's header (blank lines, comments, \restrict <key>, SET …; and SELECT pg_catalog.set_config(…);)
     header: bool,
-    /// Inside the data of COPY … FROM stdin (until \.)
+    /// Inside the data of COPY … FROM stdin (until \.). A line of a string over several lines that looks like `COPY … FROM stdin;` sets it too
+    /// (pg_dump --inserts of 'a\ncopy t from stdin;\nb', a function body): the file's own key below still ends the file there
     copy: bool,
-    /// An \unrestrict <key> line and the blank lines after it: left out if the file ends there
+    /// The key of the header's \restrict <key>: a random token pg_dump made, so an \unrestrict with it is pg_dump's own, even where this
+    /// filter thinks it is in COPY data (data that happens to be exactly that line is practically impossible)
+    key: Option<Vec<u8>>,
+    /// An \unrestrict <key> line and the blank lines and comments after it: left out if the file ends there; with the file's key and the next
+    /// dump's \restrict after it (cat schema.sql data.sql), the two are left out and that dump's header is filtered too
     held: Vec<u8>,
+    /// The held \unrestrict has the file's key
+    held_key: bool,
 }
 
-/// `\restrict <key>` / `\unrestrict <key>` as pg_dump writes it: at the start of the line, one key and nothing else
-fn restrict_command(text: &[u8], command: &[u8]) -> bool {
-    text.strip_prefix(command).and_then(|r| r.strip_prefix(b" ")).is_some_and(|key| !key.is_empty() && !key.iter().any(|c| c.is_ascii_whitespace()))
+/// The key of `\restrict <key>` / `\unrestrict <key>` as pg_dump writes it: at the start of the line, one key and nothing else
+fn restrict_key<'t>(text: &'t [u8], command: &[u8]) -> Option<&'t [u8]> {
+    text.strip_prefix(command).and_then(|r| r.strip_prefix(b" ")).filter(|key| !key.is_empty() && !key.iter().any(|c| c.is_ascii_whitespace()))
 }
 
 /// A whole one-line SET …; or SELECT pg_catalog.set_config(…); (no string left open)
@@ -330,36 +484,51 @@ fn header_statement(text: &[u8]) -> bool {
 
 impl<'a> PsqlLines<'a> {
     fn new(input: &'a PsqlInput) -> Self {
-        PsqlLines { input, header: true, copy: false, held: Vec::new() }
+        PsqlLines { input, header: true, copy: false, key: None, held: Vec::new(), held_key: false }
     }
 
     /// What psql gets for this line of the file
     fn line(&mut self, line: &[u8], out: &mut Vec<u8>) {
         let text = line.strip_suffix(b"\n").unwrap_or(line);
         let text = text.strip_suffix(b"\r").unwrap_or(text);
-        if self.copy {
+        if !self.held.is_empty() {
+            if text.trim_ascii().is_empty() || text.starts_with(b"--") {
+                self.held.extend_from_slice(line);
+                return;
+            }
+            if let Some(next) = restrict_key(text, b"\\restrict").filter(|_| self.held_key) {
+                // The next pg_dump file: its \restrict and the \unrestrict before it left out (the lines between kept), its header filtered
+                let first = self.held.iter().position(|&c| c == b'\n').map_or(self.held.len(), |i| i + 1);
+                out.extend_from_slice(&self.held[first..]);
+                self.held.clear();
+                (self.header, self.copy, self.key) = (true, false, Some(next.to_vec()));
+                return;
+            }
+            // Not the end: kept as it is (in COPY data, data)
+            out.append(&mut self.held);
+        }
+        let unrestrict = restrict_key(text, b"\\unrestrict");
+        let own = unrestrict.is_some() && unrestrict == self.key.as_deref();
+        if self.copy && !own {
             self.copy = text != b"\\.";
             out.extend_from_slice(line);
             return;
         }
-        if !self.held.is_empty() {
-            if text.trim_ascii().is_empty() {
-                self.held.extend_from_slice(line);
+        if self.header {
+            self.header = text.trim_ascii().is_empty() || text.starts_with(b"--") || restrict_key(text, b"\\restrict").is_some() || header_statement(text);
+        }
+        if self.header {
+            if let Some(k) = restrict_key(text, b"\\restrict") {
+                self.key.get_or_insert_with(|| k.to_vec());
                 return;
             }
-            out.append(&mut self.held);
-        }
-        if self.header {
-            self.header = text.trim_ascii().is_empty() || text.starts_with(b"--") || restrict_command(text, b"\\restrict") || header_statement(text);
-        }
-        if self.header {
-            let newer = self.input.drop.iter().any(|d| text.strip_prefix(d.as_bytes()).is_some_and(|r| r.starts_with(b" ") || r.starts_with(b"=")));
-            if newer || restrict_command(text, b"\\restrict") {
+            if self.input.drop.iter().any(|d| text.strip_prefix(d.as_bytes()).is_some_and(|r| r.starts_with(b" ") || r.starts_with(b"="))) {
                 return;
             }
         }
-        if restrict_command(text, b"\\unrestrict") {
+        if unrestrict.is_some() {
             self.held.extend_from_slice(line);
+            self.held_key = own;
             return;
         }
         let lower = text.to_ascii_lowercase();
@@ -367,9 +536,10 @@ impl<'a> PsqlLines<'a> {
         out.extend_from_slice(line);
     }
 
-    /// The end of the file: the closing \unrestrict on a line of its own, unless the file ended inside COPY data (there it would be data)
+    /// The end of the file: the closing \unrestrict on a line of its own, unless the file ended inside COPY data (there it would be data) —
+    /// a file that ends with its own \unrestrict ended outside it
     fn end(&self, out: &mut Vec<u8>) {
-        if !self.copy {
+        if !self.copy || (self.held_key && !self.held.is_empty()) {
             out.extend_from_slice(format!("\n\\unrestrict {}\n", self.input.key).as_bytes());
         }
     }
@@ -864,6 +1034,91 @@ mod tests {
         assert!(found("select 1;--\\! id\n").await.is_some());
     }
 
+    /// mysqldump 8.4 of a table with a column named `source`, a trigger and two procedures (one created under NO_BACKSLASH_ESCAPES)
+    const MYSQLDUMP_ROUTINES: &str = r#"/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;
+CREATE TABLE `ev` (
+  `id` int NOT NULL,
+  `source` varchar(20) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+INSERT INTO `ev` VALUES (1,'web','it\'s a\\b'),(2,'app','line1\nsource /etc/passwd\n\\! id');
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+/*!50003 CREATE*/ /*!50017 DEFINER=`root`@`localhost`*/ /*!50003 TRIGGER `ev_bi` BEFORE INSERT ON `ev` FOR EACH ROW begin
+  set new.source = coalesce(new.source,
+    'x');
+end */;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'NO_BACKSLASH_ESCAPES' */ ;
+DELIMITER ;;
+CREATE DEFINER=`root`@`localhost` PROCEDURE `p_nbe`()
+begin
+  select 'C:\' as path, 'run \! id' as cmd,
+    source
+  from ev;
+end ;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' */ ;
+DELIMITER ;;
+CREATE DEFINER=`root`@`localhost` PROCEDURE `p_src`()
+begin
+  SELECT id,
+    source
+  FROM ev;
+end ;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+INSERT INTO `ev` VALUES (3,'it\'s \\! x');
+/*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
+"#;
+
+    /// Like the mysql client: named commands (source · system …) only at the start of a statement — after the delimiter it has at the time,
+    /// not inside one (a column named source at the start of a line) and not in a comment
+    #[tokio::test]
+    async fn mysql_named_commands_only_start_a_statement() {
+        let found = |sql: String| async move { local_command(sql.as_bytes(), &Job::new()).await.unwrap() };
+        assert_eq!(found(MYSQLDUMP_ROUTINES.into()).await, None);
+        for ok in [
+            "select 1 as a,\n  system\n;\n",
+            "/* a comment\nsource /etc/passwd\n*/ select 1;\n",
+            "DELIMITER $$\nCREATE PROCEDURE p() BEGIN SELECT 1;\nsource\nFROM t; END $$\nDELIMITER ;\n",
+            "select 1 as x, 2 delimiter\n;\nselect 'a\nsystem id\n';\n",
+        ] {
+            assert_eq!(found(ok.into()).await, None, "{ok}");
+        }
+        for (sql, bad) in [
+            ("select 1;\nsource /etc/passwd\n", "source /etc/passwd"),
+            ("select 1; source /etc/passwd;\n", "select 1; source /etc/passwd;"),
+            ("select 1; /* c */ system id\n", "select 1; /* c */ system id"),
+            ("-- c\n/* c */\n  system id\n", "  system id"),
+            ("DELIMITER ;;\nselect 1;\nsource x;;\nsource /etc/passwd\n", "source /etc/passwd"),
+            ("DELIMITER $$\nCREATE PROCEDURE p() BEGIN SELECT 1; END $$\nDELIMITER ;\nselect 2;\nsource /etc/passwd\n", "source /etc/passwd"),
+            ("select 1\\d $$\nselect 2 $$ system id\n", "select 2 $$ system id"),
+            ("ssl_session_data_print /tmp/x\n", "ssl_session_data_print /tmp/x"),
+        ] {
+            assert_eq!(found(sql.into()).await.as_deref(), Some(bad), "{sql}");
+        }
+    }
+
+    /// After SET sql_mode with NO_BACKSLASH_ESCAPES (and until sql_mode is set without it), a backslash in a string is a character, as the mysql client reads it
+    #[tokio::test]
+    async fn mysql_scan_follows_no_backslash_escapes() {
+        let found = |sql: &'static str| async move { local_command(sql.as_bytes(), &Job::new()).await.unwrap() };
+        // 'C:\' ends there: what follows the string is outside it
+        assert_eq!(found("SET sql_mode = 'NO_BACKSLASH_ESCAPES';\nselect 'a\\';\n\\! id\n").await.as_deref(), Some("\\! id"));
+        assert_eq!(found("SET SESSION sql_mode = 'ANSI,NO_BACKSLASH_ESCAPES';\nselect 'a\\'; \\! id\n").await.as_deref(), Some("select 'a\\'; \\! id"));
+        assert_eq!(found("set names utf8mb4, @@session.sql_mode := 'NO_BACKSLASH_ESCAPES';\nselect 'run \\! id';\n").await, None);
+        // Back: set again without it, to a saved value, or GLOBAL only (not this session)
+        assert_eq!(found("SET sql_mode = 'NO_BACKSLASH_ESCAPES';\nSET sql_mode = '';\nselect 'it\\'s \\\\! x';\n").await, None);
+        assert_eq!(found("SET @m = @@sql_mode, sql_mode = 'NO_BACKSLASH_ESCAPES';\nSET sql_mode = @m;\nselect 'it\\'s \\\\! x';\n").await, None);
+        assert_eq!(found("SET GLOBAL sql_mode = 'NO_BACKSLASH_ESCAPES';\nselect 'it\\'s \\\\! x';\n").await, None);
+    }
+
     /// Custom archives go straight to the server with pg_restore unless that pg_restore would send settings the server doesn't know
     #[test]
     fn custom_restores_use_psql_only_when_pg_restore_is_too_new() {
@@ -948,6 +1203,36 @@ mod tests {
         assert_eq!(fed("select 1;", None).await, "\\restrict k1\nselect 1;\n\\unrestrict k1\n");
         assert_eq!(fed("COPY t (a) FROM stdin;\n1\n2", None).await, "\\restrict k1\nCOPY t (a) FROM stdin;\n1\n2");
         assert_eq!(fed("COPY t (a) FROM stdin;\n1\n\\unrestrict x\n", None).await, "\\restrict k1\nCOPY t (a) FROM stdin;\n1\n\\unrestrict x\n");
+    }
+
+    /// pg_dump 18.6 --inserts of E'step 1\ncopy t from stdin;\nstep 2': the line inside the string looks like the start of COPY data,
+    /// but the file's final \unrestrict with the key of its header is still left out (and ours added)
+    #[tokio::test]
+    async fn psql_input_drops_the_files_unrestrict_after_a_copy_lookalike() {
+        let key = "FYIAphUW2rY7L1yUAFOTKdRVH0CBf9tipXB6iI6PhQL6gmwfBevO0EZqCRL75VJ";
+        let body = "SET statement_timeout = 0;\nSELECT pg_catalog.set_config('search_path', '', false);\n\nCREATE TABLE public.lit (\n    a text\n);\n\nINSERT INTO public.lit VALUES ('step 1\ncopy t from stdin;\nstep 2');\n\n\n--\n-- PostgreSQL database dump complete\n--\n\n";
+        let src = format!("--\n-- PostgreSQL database dump\n--\n\n\\restrict {key}\n\n-- Dumped by pg_dump version 18.6\n\n{body}\\unrestrict {key}\n\n");
+        assert_eq!(fed(&src, Some(16)).await, format!("\\restrict k1\n--\n-- PostgreSQL database dump\n--\n\n\n-- Dumped by pg_dump version 18.6\n\n{body}\n\\unrestrict k1\n"));
+        // Inside real COPY data the same line is data unless the file ends there (another key, or more data after it: kept)
+        let copy = format!("\\restrict {key}\nCOPY t (a) FROM stdin;\n\\unrestrict {key}\nx\n\\unrestrict other\n");
+        assert_eq!(fed(&copy, None).await, format!("\\restrict k1\nCOPY t (a) FROM stdin;\n\\unrestrict {key}\nx\n\\unrestrict other\n"));
+    }
+
+    /// Two pg_dump 18.6 files one after the other (pg_dump -s > f; pg_dump -a >> f): the middle \unrestrict k1 · \restrict k2 and the
+    /// second header's settings are left out as in the first
+    #[tokio::test]
+    async fn psql_input_concatenated_dumps() {
+        let (k1, k2) = ("2hgFocvbl5ch9aOyQ2rrtUdEM65ZEiKefDdKLmCxzqMbBG3TdYsvyLqmoGWhM9M", "fWM3tEUNw4VCYEkJXARL5bpItii9eLWOSaqfGrMPJ7bEWuRtnDSJG6AISfW7AQr");
+        let head = "--\n-- PostgreSQL database dump\n--\n\n";
+        let set = "SET statement_timeout = 0;\nSET transaction_timeout = 0;\nSELECT pg_catalog.set_config('search_path', '', false);\n";
+        let set16 = "SET statement_timeout = 0;\nSELECT pg_catalog.set_config('search_path', '', false);\n";
+        let schema = "\nCREATE TABLE public.lit (\n    a text\n);\n\n--\n-- PostgreSQL database dump complete\n--\n\n";
+        let data = "\nCOPY public.lit (a) FROM stdin;\nstep 1\\ncopy t from stdin;\\nstep 2\n\\.\n\n\n--\n-- PostgreSQL database dump complete\n--\n\n";
+        let src = format!("{head}\\restrict {k1}\n\n{set}{schema}\\unrestrict {k1}\n\n{head}\\restrict {k2}\n\n{set}{data}\\unrestrict {k2}\n\n");
+        assert_eq!(fed(&src, Some(16)).await, format!("\\restrict k1\n{head}\n{set16}{schema}\n{head}\n{set16}{data}\n\\unrestrict k1\n"));
+        // The second \restrict must follow an \unrestrict with the current key: otherwise both are kept (psql refuses the \unrestrict)
+        let other = format!("\\restrict {k1}\nselect 1;\n\\unrestrict x\n\\restrict {k2}\nselect 2;\n");
+        assert_eq!(fed(&other, None).await, format!("\\restrict k1\nselect 1;\n\\unrestrict x\n\\restrict {k2}\nselect 2;\n\n\\unrestrict k1\n"));
     }
 
     /// Cancelling a psql restore kills psql before its input ends (at the end of its input it would commit the part sent so far)
@@ -1075,7 +1360,7 @@ mod tests {
         q("create table qurry_bak.t as select g as id, md5(g::text) as h from generate_series(1, 5000) g").await.unwrap();
         // Values whose COPY lines look like what the psql input leaves out of pg_dump's header (a carriage return is written as \r)
         q("create table qurry_bak.v (v text, w text)").await.unwrap();
-        q(r"insert into qurry_bak.v values ('SET transaction_timeout = 0;', 'a'), (E'\restrict abc', 'b'), ('', E'\runrestrict abc'), (E'x\nSET transaction_timeout = 0;\n\\restrict k', E'\runrestrict k')").await.unwrap();
+        q(r"insert into qurry_bak.v values ('SET transaction_timeout = 0;', 'a'), (E'\restrict abc', 'b'), ('', E'\runrestrict abc'), (E'x\nSET transaction_timeout = 0;\n\\restrict k', E'\runrestrict k'), (E'step 1\ncopy t from stdin;\nstep 2', 'c')").await.unwrap();
         let content = "select count(*)::text || ':' || md5(string_agg(v || '|' || w, ',' order by v, w)) from qurry_bak.v";
         let before = q(content).await.unwrap().rows[0][0].clone();
         let dir = std::env::temp_dir().join(format!("qurry-bakf-{}", uuid::Uuid::new_v4()));
@@ -1089,6 +1374,23 @@ mod tests {
             st.restore("b".into(), file, RestoreOptions::default(), format!("r-{format}")).await.unwrap_or_else(|e| panic!("{format}: {e}"));
             assert_eq!(q("select count(*) from qurry_bak.t").await.unwrap().rows[0][0], serde_json::json!(5000), "{format}");
             assert_eq!(q(content).await.unwrap().rows[0][0], before, "{format}");
+        }
+        // Files made with pg_dump itself: --inserts (a line of a string looks like COPY … FROM stdin;) and two dumps one after the other
+        let pg: Vec<String> = std::env::var("QURRY_TEST_PG").unwrap().splitn(5, ':').map(String::from).collect();
+        for (name, parts) in [("inserts", vec!["--inserts"]), ("cat", vec!["-s", "-a"])] {
+            let file = dir.join(format!("{name}.sql"));
+            let mut out = std::fs::File::create(&file).unwrap();
+            for arg in parts {
+                let mut cmd = std::process::Command::new(find_tool("pg_dump").unwrap());
+                cmd.args(["-h", &pg[0], "-p", &pg[1], "-U", &pg[2], "-n", "qurry_bak", arg]).arg(pg_dbname(&pg[3])).env("PGPASSWORD", pg.get(4).map_or("", |p| p));
+                let dumped = cmd.output().unwrap();
+                assert!(dumped.status.success(), "{name}: {}", String::from_utf8_lossy(&dumped.stderr));
+                std::io::Write::write_all(&mut out, &dumped.stdout).unwrap();
+            }
+            q("drop schema qurry_bak cascade").await.unwrap();
+            st.restore("b".into(), file.to_string_lossy().into(), RestoreOptions::default(), format!("r-{name}")).await.unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(q("select count(*) from qurry_bak.t").await.unwrap().rows[0][0], serde_json::json!(5000), "{name}");
+            assert_eq!(q(content).await.unwrap().rows[0][0], before, "{name}");
         }
         // A damaged secrets.json doesn't block a source without a saved password (same rule as connecting)
         if std::env::var("QURRY_TEST_PG").unwrap().split(':').count() == 4 {
