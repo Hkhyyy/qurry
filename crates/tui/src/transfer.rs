@@ -264,7 +264,7 @@ impl App {
         self.tabs.get(self.active).map(|t| (t.conn.clone(), t.db.clone()))
     }
 
-    /// ⌃K › Back Up Database…: file path (.dump = PG custom, others SQL) → pg_dump / mysqldump, progress on the status line
+    /// ⌃K › Back Up Database…: file path (.dump = PG custom, others SQL) → MySQL: leave out DEFINER= clauses? → pg_dump / mysqldump, progress on the status line
     pub fn backup_start(&mut self) {
         let Some((conn, db)) = self.backup_target() else {
             self.status = "Select a data source or database first".into();
@@ -275,19 +275,28 @@ impl App {
         let def = format!("{}/Downloads/{db}-{date}.{}", home(), if pg { "dump" } else { "sql" });
         self.input("Back up to (.dump = PostgreSQL custom format, .sql = SQL)", &def, move |a, p| {
             let path = expand(&p);
-            let format = if path.ends_with(".dump") || path.ends_with(".backup") { "custom" } else { "plain" };
-            let opts = qurry_core::backup::BackupOptions { format: format.into(), ..Default::default() };
-            let label = format!("Back up {db}");
-            let job = a.start_job(&label);
-            let st = a.state.clone();
-            let (target, j2, p2) = (sql::target_id(&conn, Some(&db)), job.clone(), path.clone());
-            a.spawn(async move { st.backup(target, p2, opts, j2).await }, move |a, r| {
-                a.end_job(&job);
-                a.status = match r {
-                    Ok(n) => format!("Backed up {:.1} MB to {path}", n as f64 / 1048576.0),
-                    Err(e) => format!("{label}: {e}"),
-                };
+            if pg {
+                return a.backup_run(conn, db, path, false);
+            }
+            a.input("Leave out DEFINER= clauses? y / n (y to restore on RDS and other managed services, where another user's DEFINER needs SUPER)", "n", move |a, yn| {
+                a.backup_run(conn, db, path, yn.trim().eq_ignore_ascii_case("y"))
             });
+        });
+    }
+
+    fn backup_run(&mut self, conn: String, db: String, path: String, strip_definers: bool) {
+        let format = if path.ends_with(".dump") || path.ends_with(".backup") { "custom" } else { "plain" };
+        let opts = qurry_core::backup::BackupOptions { format: format.into(), strip_definers, ..Default::default() };
+        let label = format!("Back up {db}");
+        let job = self.start_job(&label);
+        let st = self.state.clone();
+        let (target, j2, p2) = (sql::target_id(&conn, Some(&db)), job.clone(), path.clone());
+        self.spawn(async move { st.backup(target, p2, opts, j2).await }, move |a, r| {
+            a.end_job(&job);
+            a.status = match r {
+                Ok(n) => format!("Backed up {:.1} MB to {path}", n as f64 / 1048576.0),
+                Err(e) => format!("{label}: {e}"),
+            };
         });
     }
 
@@ -299,11 +308,15 @@ impl App {
         };
         let name = self.conn(&conn).map(|c| c.config.name.clone()).unwrap_or_default();
         let prod = self.conn(&conn).is_some_and(|c| c.config.options.confirm_changes);
-        let atomic = if self.kind_of(&conn) == qurry_core::store::DbKind::Mysql { "A MySQL restore isn't atomic: if a statement fails, what ran before it stays." } else { "One transaction: if a statement fails, nothing changes." };
+        let how = if self.kind_of(&conn) == qurry_core::store::DbKind::Mysql {
+            "Objects in the backup are dropped and recreated (by the backup's DROP … IF EXISTS statements); the rest of the database is left alone. A MySQL restore isn't atomic: if a statement fails, what ran before it stays."
+        } else {
+            "Objects in the backup are dropped and recreated (pg_restore --clean); the rest of the database is left alone. One transaction: if a statement fails, nothing changes."
+        };
         self.input("Restore from backup file (.dump or .sql)", &format!("{}/Downloads/", home()), move |a, p| {
             let path = expand(&p);
             a.popup = Some(Popup::Confirm {
-                text: format!("Restore {path}\ninto {name} / {db}?\n\nObjects in the backup are dropped and recreated (pg_restore --clean); the rest of the database is left alone. {atomic}{}", if prod { "\n\n⚠ This is a Production data source." } else { "" }),
+                text: format!("Restore {path}\ninto {name} / {db}?\n\n{how}{}", if prod { "\n\n⚠ This is a Production data source." } else { "" }),
                 on_yes: Box::new(move |a| {
                     let label = format!("Restore into {db}");
                     let job = a.start_job(&label);
@@ -336,4 +349,96 @@ fn chrono_date() -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
     format!("{y:04}-{m:02}-{d:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::app::{Focus, Popup};
+    use crate::testkit::Harness;
+
+    /// A harness with one data source (from JSON) and a console on this DB, so ⌃K › Back Up Database… targets it
+    async fn harness(cfg: serde_json::Value, password: Option<&str>, db: &str) -> Harness {
+        let mut h = Harness::new().await;
+        let id = cfg["id"].as_str().unwrap().to_string();
+        h.app.state.save_connection(serde_json::from_value(cfg).unwrap(), password.map(String::from), None).await.unwrap();
+        h.app.reload_conns();
+        h.settle().await;
+        let tab = h.app.restore_console(&id, db.into(), "console".into(), "").unwrap();
+        let i = h.app.tab_index(tab).unwrap();
+        h.app.activate(i);
+        h.app.focus = Focus::Editor;
+        h
+    }
+
+    /// Answer the open input popup with this text
+    fn answer(h: &mut Harness, text: &str) {
+        let Some(Popup::Input { input, .. }) = h.app.popup.as_mut() else { panic!("no input popup: {}", h.app.status) };
+        *input = tui_textarea::TextArea::new(vec![text.to_string()]);
+        h.key("Enter");
+    }
+
+    fn popup_title(h: &Harness) -> Option<String> {
+        match &h.app.popup {
+            Some(Popup::Input { title, .. }) => Some(title.clone()),
+            _ => None,
+        }
+    }
+
+    /// MySQL backups ask about DEFINER= clauses after the path; PostgreSQL backups start right away
+    #[tokio::test]
+    async fn mysql_backup_asks_about_definers() {
+        let my = serde_json::json!({ "id": "m", "name": "m", "kind": "mysql", "host": "127.0.0.1", "port": 1, "user": "u", "database": "shop" });
+        let mut h = harness(my, None, "shop").await;
+        h.app.backup_start();
+        assert!(popup_title(&h).unwrap().starts_with("Back up to"));
+        answer(&mut h, "/surely/not/a/dir/shop.sql");
+        assert!(popup_title(&h).unwrap().starts_with("Leave out DEFINER= clauses?"), "{:?}", popup_title(&h));
+        // The restore confirmation names no PostgreSQL tool for MySQL
+        h.app.popup = None;
+        h.app.restore_start();
+        answer(&mut h, "/surely/not/a/dir/shop.sql");
+        let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm") };
+        assert!(text.contains("DROP … IF EXISTS") && text.contains("isn't atomic") && !text.contains("pg_restore"), "{text}");
+        let pg = serde_json::json!({ "id": "p", "name": "p", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "postgres" });
+        let mut h = harness(pg, None, "postgres").await;
+        h.app.backup_start();
+        answer(&mut h, "/surely/not/a/dir/p.dump");
+        assert!(h.app.popup.is_none());
+    }
+
+    /// The answer reaches the backup: y leaves the DEFINER= clauses out of the file, n keeps them (QURRY_TEST_MY, mysqldump in PATH)
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_backup_leaves_out_definers_when_asked() {
+        let Ok(e) = std::env::var("QURRY_TEST_MY") else { return };
+        if qurry_core::backup::find_tool("mysqldump").is_none() {
+            return;
+        }
+        let p: Vec<&str> = e.split(':').collect();
+        let cfg = serde_json::json!({ "id": "m", "name": "m", "kind": "mysql", "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": p[2], "database": p[4] });
+        let mut h = harness(cfg, Some(p[3]), "qurry_mysqldump_tui").await;
+        let st = h.app.state.clone();
+        st.run_query("m".into(), "create database if not exists qurry_mysqldump_tui".into(), None, None).await.unwrap();
+        for s in ["create table if not exists t (id int primary key)", "create or replace view v as select id from t"] {
+            st.run_query("m::qurry_mysqldump_tui".into(), s.into(), None, None).await.unwrap();
+        }
+        let dir = std::env::temp_dir().join(format!("qurry-tui-bak-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (yn, definers) in [("y", 0), ("n", 1)] {
+            let file = dir.join(format!("{yn}.sql"));
+            h.app.backup_start();
+            answer(&mut h, &file.to_string_lossy());
+            answer(&mut h, yn);
+            for _ in 0..600 {
+                h.settle().await;
+                if h.app.jobs.is_empty() {
+                    break;
+                }
+            }
+            assert!(h.app.status.starts_with("Backed up"), "{}", h.app.status);
+            assert_eq!(std::fs::read_to_string(&file).unwrap().matches("DEFINER=`").count(), definers, "{yn}");
+        }
+        st.run_query("m".into(), "drop database qurry_mysqldump_tui".into(), None, None).await.ok();
+        std::fs::remove_dir_all(dir).ok();
+    }
 }

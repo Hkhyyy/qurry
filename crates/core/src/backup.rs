@@ -52,6 +52,7 @@ fn tool_dirs() -> Vec<PathBuf> {
         ("/opt/homebrew/opt", "libpq@", "bin"),
         ("/opt/homebrew/opt", "mysql-client@", "bin"),
         ("/opt/homebrew/opt", "mysql@", "bin"),
+        ("/opt/homebrew/opt", "mariadb@", "bin"),
         ("/Applications/Postgres.app/Contents/Versions", "", "bin"),
         ("/usr/lib/postgresql", "", "bin"),
     ] {
@@ -142,20 +143,41 @@ impl MyBuild {
     }
 }
 
-/// mysqldump / mysql for this server: a build of the same kind, the closest at or above the server's major.minor (as for pg_dump). With none of
-/// that kind, one of the other kind (a failure then says so — my_failed). An unknown server is taken as MySQL
-fn find_my_tool(name: &str, server: Option<&MyBuild>) -> AppResult<(PathBuf, MyBuild)> {
-    let found = tool_paths(name).into_iter().map(|p| (MyBuild::of(&version_text(&p)), p)).collect();
-    pick_my(found, server).ok_or_else(|| missing(name))
+/// The builds of mysqldump / mysql found, also under MariaDB's own names (mariadb-dump / mariadb: newer MariaDB packages may have only those)
+fn my_tools(name: &str) -> Vec<(MyBuild, PathBuf)> {
+    let other = if name == "mysqldump" { "mariadb-dump" } else { "mariadb" };
+    tool_paths(name).into_iter().chain(tool_paths(other)).map(|p| (MyBuild::of(&version_text(&p)), p)).collect()
 }
 
-fn pick_my(mut found: Vec<(MyBuild, PathBuf)>, server: Option<&MyBuild>) -> Option<(PathBuf, MyBuild)> {
+/// Only the builds of the server's kind, when there are any (otherwise all: a failure then says the kind differs — my_failed). An unknown server is taken as MySQL
+fn same_kind(mut found: Vec<(MyBuild, PathBuf)>, server: Option<&MyBuild>) -> Vec<(MyBuild, PathBuf)> {
     let mariadb = server.is_some_and(|s| s.mariadb);
     if found.iter().any(|(b, _)| b.mariadb == mariadb) {
         found.retain(|(b, _)| b.mariadb == mariadb);
     }
+    found
+}
+
+/// mysqldump for this server: a build of the same kind, the closest at or above the server's major.minor (as for pg_dump)
+fn find_mysqldump(server: Option<&MyBuild>) -> AppResult<(PathBuf, MyBuild)> {
+    pick_my(my_tools("mysqldump"), server).ok_or_else(|| missing("mysqldump"))
+}
+
+fn pick_my(found: Vec<(MyBuild, PathBuf)>, server: Option<&MyBuild>) -> Option<(PathBuf, MyBuild)> {
     let want = server.map(|s| s.version.iter().take(2).copied().collect::<Vec<_>>());
-    closest(found.into_iter().map(|(b, p)| (b.version.clone(), (p, b))).collect(), want.as_deref(), |_| true)
+    closest(same_kind(found, server).into_iter().map(|(b, p)| (b.version.clone(), (p, b))).collect(), want.as_deref(), |_| true)
+}
+
+/// mysql for a restore: any version works with the server, so of the server's kind the highest build that can switch its shell commands off
+/// (sandbox_option), or else the highest one
+fn find_mysql(server: Option<&MyBuild>) -> AppResult<(PathBuf, MyBuild, Option<&'static str>)> {
+    let found = same_kind(my_tools("mysql"), server).into_iter().map(|(b, p)| (sandbox_option(&p, b.mariadb), b, p)).collect();
+    pick_mysql(found).ok_or_else(|| missing("mysql"))
+}
+
+fn pick_mysql(mut found: Vec<(Option<&'static str>, MyBuild, PathBuf)>) -> Option<(PathBuf, MyBuild, Option<&'static str>)> {
+    found.sort_by(|a, b| (a.0.is_some(), &a.1).cmp(&(b.0.is_some(), &b.1)));
+    found.pop().map(|(o, b, p)| (p, b, o))
 }
 
 /// MySQL / MariaDB server version
@@ -227,9 +249,16 @@ fn strip_definer(line: &[u8]) -> Option<Vec<u8>> {
 /// Rewrite a mysqldump file without its DEFINER= clauses (strip_definer on lines that start outside strings and comments)
 async fn strip_definers(file: &Path, job: &Job) -> AppResult<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-    let tmp = SecretTemp(PathBuf::from(format!("{}.qurry-tmp", file.display())));
+    // A new file under a name no one can guess: in a shared folder (/tmp) another user can't have put a link there to one of the user's files
+    let path = PathBuf::from(format!("{}.{}.qurry-tmp", file.display(), uuid::Uuid::new_v4().simple()));
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+    let created = o.open(&path)?;
+    let tmp = SecretTemp(path);
     let mut r = tokio::io::BufReader::with_capacity(256 * 1024, tokio::fs::File::open(file).await?);
-    let mut w = tokio::io::BufWriter::with_capacity(256 * 1024, tokio::fs::File::from_std(private_file(&tmp.0)?));
+    let mut w = tokio::io::BufWriter::with_capacity(256 * 1024, tokio::fs::File::from_std(created));
     let (mut line, mut scan) = (Vec::new(), MyScan::default());
     loop {
         line.clear();
@@ -562,9 +591,12 @@ fn version_label(tool: &Path) -> String {
     }
 }
 
-/// Whether mysql knows --system-command (from 8.0.40 · 8.4.3 · 9.1)
-fn mysql_has_system_command_option(tool: &Path) -> bool {
-    std::process::Command::new(tool).arg("--help").output().map(|o| String::from_utf8_lossy(&o.stdout).contains("--system-command")).unwrap_or(false)
+/// The mysql option that switches its shell commands off, if this build has one: --system-command=OFF (MySQL 8.0.40 · 8.4.3 · 9.1+),
+/// --sandbox (MariaDB 10.5.25 · 10.6.18 · 10.11.8 · 11.0.6+)
+fn sandbox_option(tool: &Path, mariadb: bool) -> Option<&'static str> {
+    let help = std::process::Command::new(tool).arg("--help").output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    let (option, arg) = if mariadb { ("--sandbox", "--sandbox") } else { ("--system-command", "--system-command=OFF") };
+    help.contains(option).then_some(arg)
 }
 
 /// Whether pg_restore of this major version, restoring straight into the server, would SET settings the server doesn't know
@@ -964,7 +996,7 @@ impl AppState {
                 }
                 DbKind::Mysql => {
                     let server = my_server(self, &id).await;
-                    let (tool, client) = find_my_tool("mysqldump", server.as_ref())?;
+                    let (tool, client) = find_mysqldump(server.as_ref())?;
                     let mut cmd = tokio::process::Command::new(tool);
                     let _pass = my_args(&mut cmd, &host, port, &user, password.as_deref(), &cfg)?;
                     cmd.args(["--single-transaction", "--routines", "--triggers", "--events", "--hex-blob"]);
@@ -1063,14 +1095,13 @@ impl AppState {
                 DbKind::Mysql => {
                     refuse_local_commands(&file, &job).await?;
                     let server = my_server(self, &id).await;
-                    let (tool, client) = find_my_tool("mysql", server.as_ref())?;
-                    let system_off = mysql_has_system_command_option(&tool);
+                    let (tool, client, sandbox) = find_mysql(server.as_ref())?;
                     let mut cmd = tokio::process::Command::new(tool);
                     let _pass = my_args(&mut cmd, &host, port, &user, password.as_deref(), &cfg)?;
                     // Disable mysql client commands (system · tee · pager · source · connect …) (only charset · delimiter remain)
                     cmd.arg("--binary-mode");
-                    if system_off {
-                        cmd.arg("--system-command=OFF");
+                    if let Some(o) = sandbox {
+                        cmd.arg(o);
                     }
                     cmd.arg("--").arg(&db);
                     job.total.store(size, Ordering::Relaxed);
@@ -1153,6 +1184,23 @@ mod tests {
         assert_eq!(my_failed(AppError::Msg(crate::transfer::CANCELLED.into()), "mysql", &b(true, &[11]), Some(&b(false, &[8, 4]))).to_string(), crate::transfer::CANCELLED);
     }
 
+    /// mysql for a restore isn't matched to the server's version: the highest build that switches shell commands off, else the highest
+    #[test]
+    fn picks_the_mysql_client_that_switches_shell_commands_off() {
+        let b = |v: &[u64]| MyBuild { mariadb: false, version: v.to_vec() };
+        let off = Some("--system-command=OFF");
+        let pick = |found: Vec<(Option<&'static str>, MyBuild, &str)>| pick_mysql(found.into_iter().map(|(o, b, p)| (o, b, PathBuf::from(p))).collect()).map(|x| (x.0, x.2));
+        assert_eq!(pick(vec![(None, b(&[5, 7, 44]), "/my57"), (off, b(&[8, 4, 13]), "/my84"), (None, b(&[8, 0, 36]), "/my80")]), Some(("/my84".into(), off)));
+        // 8.4.0–8.4.2 have no --system-command; 8.0.40+ has
+        assert_eq!(pick(vec![(None, b(&[8, 4, 2]), "/my842"), (off, b(&[8, 0, 41]), "/my80")]), Some(("/my80".into(), off)));
+        assert_eq!(pick(vec![(None, b(&[5, 7, 44]), "/my57"), (None, b(&[8, 0, 36]), "/my80")]), Some(("/my80".into(), None)));
+        assert_eq!(pick(vec![]), None);
+        // Of the server's kind first: a MariaDB server gets the MariaDB client (and its --sandbox)
+        let maria = MyBuild { mariadb: true, version: vec![11, 8, 9] };
+        let kinds = same_kind(vec![(b(&[8, 4, 13]), "/my84".into()), (maria.clone(), "/mariadb".into())], Some(&MyBuild { mariadb: true, version: vec![10, 11, 6] }));
+        assert_eq!(kinds, [(maria, PathBuf::from("/mariadb"))]);
+    }
+
     #[test]
     fn mysqldump_flags_for_client_and_server() {
         let b = |m: bool, v: &[u64]| MyBuild { mariadb: m, version: v.to_vec() };
@@ -1187,8 +1235,19 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("d.sql");
         std::fs::write(&f, "DELIMITER ;;\nCREATE DEFINER=`root`@`%` PROCEDURE `p`()\nselect 'a\nCREATE DEFINER=`root`@`%` PROCEDURE x';;\nDELIMITER ;\n").unwrap();
+        // A link planted at the old fixed temp name (another user in a shared folder) isn't written through
+        let victim = dir.join("victim");
+        std::fs::write(&victim, "mine").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&victim, dir.join("d.sql.qurry-tmp")).unwrap();
         strip_definers(&f, &Job::new()).await.unwrap();
         assert_eq!(std::fs::read_to_string(&f).unwrap(), "DELIMITER ;;\nCREATE PROCEDURE `p`()\nselect 'a\nCREATE DEFINER=`root`@`%` PROCEDURE x';;\nDELIMITER ;\n");
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "mine");
+        assert!(!std::fs::symlink_metadata(&f).unwrap().is_symlink());
+        // The temp file is gone (renamed over the backup)
+        let mut left: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        left.sort();
+        assert_eq!(left, if cfg!(unix) { vec!["d.sql", "d.sql.qurry-tmp", "victim"] } else { vec!["d.sql", "victim"] });
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -1568,6 +1627,12 @@ INSERT INTO `ev` VALUES (3,'it\'s \\! x');
         q("create event bak_e on schedule every 1 day do delete from bak_t where id < 0").await.unwrap();
         let objects = "select (select count(*) from information_schema.routines where routine_schema = 'qurry_mysqldump') + (select count(*) from information_schema.views where table_schema = 'qurry_mysqldump') + (select count(*) from information_schema.triggers where trigger_schema = 'qurry_mysqldump') + (select count(*) from information_schema.events where event_schema = 'qurry_mysqldump')";
         assert_eq!(q(objects).await.unwrap().rows[0][0], serde_json::json!(4));
+        // mysqldump writes SET @@GLOBAL.GTID_PURGED only from a server with GTIDs on: the check below shows --set-gtid-purged=OFF works only there
+        // (e.g. a server started with --gtid-mode=ON --enforce-gtid-consistency=ON). MariaDB has no @@gtid_mode
+        let gtid = q("select @@gtid_mode").await.is_ok_and(|r| r.rows[0][0] == serde_json::json!("ON"));
+        if !gtid {
+            eprintln!("GTIDs are off on this server: the GTID_PURGED check proves nothing here");
+        }
         for strip_definers in [false, true] {
             let file = dir.join(format!("m-{strip_definers}.sql")).to_string_lossy().to_string();
             let opts = BackupOptions { strip_definers, ..Default::default() };

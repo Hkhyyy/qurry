@@ -231,8 +231,8 @@ export function BackupDialog({ what, pg, onRun, onClose }: { what: string; pg: b
         ]}
       />
       {!pg && (
-        <Checkbox checked={stripDefiners} onChange={setStripDefiners}>
-          Leave out DEFINER= clauses (for restoring into RDS and other managed services, where another user's DEFINER needs SUPER)
+        <Checkbox checked={stripDefiners} onChange={setStripDefiners} title="For restoring into RDS and other managed services, where another user's DEFINER needs SUPER. The objects then belong to the user who restores them.">
+          Leave out DEFINER= clauses
         </Checkbox>
       )}
       <Hint>Runs {pg ? "pg_dump" : "mysqldump"} on this computer (install the client tools if it's missing). The password is passed through the environment, not the command line.</Hint>

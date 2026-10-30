@@ -123,6 +123,7 @@ export const Keymap: S = { name: "Keymap Reference (⇧⌘/)", render: () => <Ke
 export const Export: S = { name: "Export Data", render: () => <ExportDialog what="public.users" onExport={noop} onClose={noop} /> };
 export const Import: S = { name: "Import Data", render: () => <ImportDialog target="dev" schema="public" table="users" onImport={noop} onClose={noop} /> };
 export const Backup: S = { name: "Back Up Database", render: () => <BackupDialog what="shop_app" pg onRun={noop} onClose={noop} /> };
+export const BackupMysql: S = { name: "Back Up Database (MySQL)", render: () => <BackupDialog what="shop_app" pg={false} onRun={noop} onClose={noop} /> };
 export const Update: S = {
   name: "Update available",
   render: () => (
