@@ -10,7 +10,7 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(() => ({
   plugins: [react()],
   // e2e/ holds Playwright specs (npx playwright test), not vitest ones
-  test: { exclude: ["**/node_modules/**", "e2e/**"] },
+  test: { exclude: ["**/node_modules/**", "e2e/**"], setupFiles: ["vitest.setup.ts"] },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
@@ -35,5 +35,4 @@ export default defineConfig(() => ({
   },
   // `vite preview` serves the build under the app's production CSP, to check it the way the app loads it
   preview: { headers: { "Content-Security-Policy": tauriConf.app.security.csp } },
-  test: { setupFiles: ["vitest.setup.ts"] },
 }));
