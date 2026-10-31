@@ -1632,6 +1632,54 @@ mod tests {
         followup_drop(&st, DbKind::Mysql, s).await;
     }
 
+    /// MySQL: whether a statement committed the open transaction is the server's answer, not a guess from its words. SET autocommit = 1
+    /// with autocommit already on, UNLOCK TABLES after BEGIN (which released the locks) and a COMMIT that doesn't parse leave it open;
+    /// SET PASSWORD commits it though no word list has it
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_server_says_whether_it_committed() {
+        let Some(st) = prod_state(DbKind::Mysql, "QURRY_TEST_MY").await else { return };
+        let s = "audit_followups_server";
+        followup_table(&st, DbKind::Mysql, s).await;
+        let run = |sql: String| st.run_query("d".into(), sql, None, Some("m".into()));
+        let log = |n: usize| st.audit_log(None, String::new(), n).into_iter().map(|e| e.sql).collect::<Vec<_>>();
+        // Auto mode: BEGIN, a change, then a statement that leaves the transaction open
+        for (pre, stmt) in [(None, "set autocommit = 1"), (None, "set @note = 'autocommit'"), (Some(format!("lock tables {s}.t write")), "unlock tables")] {
+            if let Some(p) = pre {
+                run(p).await.unwrap();
+            }
+            run("begin".into()).await.unwrap();
+            run(format!("update {s}.t set v = 5 where id = 1")).await.unwrap();
+            run(stmt.into()).await.unwrap();
+            assert!(st.tx_state("m".into()).await, "{stmt}");
+            assert_ne!(log(1), [IMPLICIT_COMMIT], "{stmt}");
+            st.rollback_tx("m".into()).await.unwrap();
+            assert_eq!(log(1), ["ROLLBACK"], "{stmt}");
+            assert_eq!(followup_values(&st, s).await, "[[1],[2],[3]]", "{stmt}");
+        }
+        // Manual: COMMIT TRANSACTION doesn't parse (1064) and commits nothing
+        st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
+        run(format!("update {s}.t set v = 6 where id = 2")).await.unwrap();
+        let e = run("commit transaction".into()).await.unwrap_err().to_string();
+        assert!(e.contains("1064"), "{e}");
+        assert!(st.tx_state("m".into()).await);
+        assert!(st.set_tx_mode("d".into(), "m".into(), false).await.is_err());
+        assert_ne!(log(1), [BY_SERVER]);
+        st.rollback_tx("m".into()).await.unwrap();
+        assert_eq!(followup_values(&st, s).await, "[[1],[2],[3]]");
+        // Manual: SET PASSWORD commits it
+        let user = format!("'{s}'@'localhost'");
+        st.run_query("d".into(), format!("create user {user} identified by 'a'"), None, None).await.unwrap();
+        run(format!("update {s}.t set v = 7 where id = 3")).await.unwrap();
+        run(format!("set password for {user} = 'b'")).await.unwrap();
+        assert!(!st.tx_state("m".into()).await);
+        assert_eq!(log(1), [IMPLICIT_COMMIT]);
+        st.rollback_tx("m".into()).await.unwrap();
+        assert_eq!(followup_values(&st, s).await, "[[1],[2],[7]]");
+        st.run_query("d".into(), format!("drop user {user}"), None, None).await.unwrap();
+        followup_drop(&st, DbKind::Mysql, s).await;
+    }
+
     /// PostgreSQL: COMMIT of a transaction an error aborted is a ROLLBACK on the server. Qurry says so (not committed) and logs
     /// it as rolled back by the server, for the Commit button and a typed COMMIT
     #[tokio::test]

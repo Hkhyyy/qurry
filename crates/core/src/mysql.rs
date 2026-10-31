@@ -347,8 +347,8 @@ fn opens_tx(s: &str) -> bool {
 }
 
 /// Whether MySQL commits the open transaction when the statement runs (and leaves none open): DDL but on temporary tables,
-/// table maintenance, FLUSH, RESET. s = strip_comments_lead(sql). LOCK / UNLOCK TABLES and SET autocommit are handled by the session.
-/// A guess from the words: with a transaction open, the session asks the server (MySession::tx_open)
+/// table maintenance, FLUSH, RESET. s = strip_comments_lead(sql).
+/// A guess from the words, for a statement that failed: with a transaction open, the session then asks the server (MySession::tx_open)
 fn commits_implicitly(sql: &str, s: &str) -> bool {
     let w: Vec<&str> = s.split_whitespace().take(4).collect();
     let first = w.first().copied().unwrap_or("");
@@ -379,6 +379,12 @@ pub(crate) fn committed_before_failing(sql: &str, e: &AppError, open: bool) -> b
     !open && commits_before_running(sql, &strip_comments_lead(sql)) && error_number(e).is_some() && !crate::app::is_conn_lost(e)
 }
 
+/// Statements that change or read rows and never commit the open transaction (s = strip_comments_lead(sql))
+fn is_dml(s: &str) -> bool {
+    let first = s.split_whitespace().next().unwrap_or("");
+    ["insert", "update", "delete", "replace", "show", "explain", "describe", "desc"].contains(&first) || s.starts_with("load data")
+}
+
 fn is_lock_tables(s: &str) -> bool {
     let words: Vec<&str> = s.split_whitespace().take(2).collect();
     words.first() == Some(&"lock") && words.get(1).is_some_and(|w| w.starts_with("table"))
@@ -390,8 +396,6 @@ pub struct MySession {
     pub id: i64,
     manual: bool,
     pub in_tx: bool,
-    /// LOCK TABLES is in effect (UNLOCK TABLES then commits the open transaction)
-    locked: bool,
     /// (SELECT statement, next OFFSET)
     more: Option<(String, usize)>,
 }
@@ -400,7 +404,7 @@ impl MySession {
     pub async fn open(p: &MySqlPool) -> AppResult<Self> {
         let mut conn = p.acquire().await?;
         let id: u64 = sqlx::query_scalar("select connection_id()").fetch_one(&mut *conn).await?;
-        Ok(Self { conn, id: id as i64, manual: false, in_tx: false, locked: false, more: None })
+        Ok(Self { conn, id: id as i64, manual: false, in_tx: false, more: None })
     }
 
     pub async fn ping(&mut self) {
@@ -482,16 +486,13 @@ impl MySession {
             Ok(r) => r,
             Err(e) => {
                 let s = strip_comments_lead(sql);
-                if s.starts_with("commit") && matches!(e, AppError::Db(sqlx::Error::Database(_))) {
-                    // A COMMIT the server refused ends the transaction: it was rolled back
-                    self.in_tx = false;
-                } else if commits_before_running(sql, &s) && error_number(&e).is_some() && !crate::app::is_conn_lost(&e) {
+                // A COMMIT the server refused (rolled back) or a DDL / LOCK TABLES that committed before failing ended it, but one
+                // that failed to parse (COMMIT TRANSACTION: 1064) didn't: ask the server
+                let ask = s.starts_with("commit") && matches!(e, AppError::Db(sqlx::Error::Database(_)))
+                    || commits_before_running(sql, &s) && error_number(&e).is_some() && !crate::app::is_conn_lost(&e);
+                if ask {
                     if self.in_tx {
                         self.in_tx = self.tx_open().await;
-                    }
-                    // A LOCK TABLES that got as far as committing has released the tables locked before
-                    if is_lock_tables(&s) && !self.in_tx {
-                        self.locked = false;
                     }
                 } else if self.tx_rolled_back(&e).await {
                     self.in_tx = false;
@@ -504,30 +505,20 @@ impl MySession {
             }
         };
         let s = strip_comments_lead(sql);
-        let words: Vec<&str> = s.split_whitespace().take(2).collect();
+        if s.starts_with("set") && s.contains("autocommit") {
+            // A typed SET autocommit: follow the server's mode (whether it committed is asked below)
+            if let Ok(on) = sqlx::query_scalar::<_, i64>("SELECT @@autocommit").fetch_one(&mut *self.conn).await {
+                self.manual = on == 0;
+            }
+        }
         if s.starts_with("begin") || s.starts_with("start transaction") {
             self.in_tx = true;
         } else if s.starts_with("commit") || (s.starts_with("rollback") && !s.starts_with("rollback to")) {
             self.in_tx = false;
-        } else if s.starts_with("set") && s.contains("autocommit") {
-            // A typed SET autocommit: follow what the server now does (switching it on commits the open transaction)
-            if let Ok(on) = sqlx::query_scalar::<_, i64>("SELECT @@autocommit").fetch_one(&mut *self.conn).await {
-                self.manual = on == 0;
-                if on != 0 {
-                    self.in_tx = false;
-                }
-            }
-        } else if is_lock_tables(&s) {
-            self.locked = true;
-            self.in_tx = false;
-        } else if words.first() == Some(&"unlock") && words.get(1).is_some_and(|w| w.starts_with("table")) {
-            if std::mem::take(&mut self.locked) {
-                self.in_tx = false;
-            }
-        } else if commits_implicitly(sql, &s) {
-            if self.in_tx {
-                self.in_tx = self.tx_open().await;
-            }
+        } else if (self.manual || self.in_tx) && !is_select_like(sql) && !is_dml(&s) {
+            // DDL, LOCK / UNLOCK TABLES, SET autocommit, SET PASSWORD, INSTALL PLUGIN, CALL … may have committed the open transaction
+            // (or, in Manual, opened one), and a list of words misses some: ask the server
+            self.in_tx = self.tx_open().await;
         } else if self.manual && opens_tx(&s) {
             // With autocommit=0, any statement opens a transaction, not only a change: WITH … DELETE, SELECT … FOR UPDATE (its row locks),
             // SELECT f() where f writes. Like PostgreSQL's Manual mode, it stays open until Commit / Roll back
@@ -858,6 +849,18 @@ mod tests {
             "update t set a = 1", "select 1", "reset persist x", "set autocommit = 1", "lock tables t write", "checksum table t",
         ] {
             assert!(!c(q), "{q}");
+        }
+    }
+
+    /// The console asks the server after any statement but these (they never commit the open transaction)
+    #[test]
+    fn dml_never_commits() {
+        let d = |q: &str| is_dml(&strip_comments_lead(q));
+        for q in ["UPDATE t SET a = 1", "-- x\ninsert into t values (1)", "delete from t", "replace into t values (1)", "load data infile 'x' into table t", "show tables", "explain select 1", "desc t"] {
+            assert!(d(q), "{q}");
+        }
+        for q in ["set password = 'x'", "install plugin p soname 'p.so'", "unlock tables", "lock tables t write", "set autocommit = 1", "call p()", "load index into cache t", "start replica", "lock instance for backup", "updatex"] {
+            assert!(!d(q), "{q}");
         }
     }
 

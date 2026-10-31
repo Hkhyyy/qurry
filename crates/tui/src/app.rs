@@ -2191,6 +2191,10 @@ impl App {
                                 c.log(true, e.clone());
                                 c.show_output = true;
                             }
+                            // A failed COMMIT gets a notice to acknowledge, as in the GUI (not saved, or outcome unknown)
+                            if commit {
+                                a.popup = Some(Popup::Message { title: "Commit failed".into(), text: e.clone() });
+                            }
                             a.status = e;
                             a.sync_tx(id);
                         }

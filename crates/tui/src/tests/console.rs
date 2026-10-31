@@ -204,4 +204,12 @@ async fn failed_commit_is_in_output() {
     assert_eq!(h.console_output(), ["Session closed"]);
     assert!(console(&h).show_output);
     assert_eq!(h.app.status, "Session closed");
+    // And a notice to acknowledge, as in the GUI
+    let Some(crate::app::Popup::Message { title, text }) = &h.app.popup else { panic!("no notice") };
+    assert_eq!((title.as_str(), text.as_str()), ("Commit failed", "Session closed"));
+    // A failed Roll back doesn't get one
+    h.key("Esc");
+    h.app.tx(crate::app::Action::Rollback);
+    h.settle().await;
+    assert!(h.app.popup.is_none());
 }

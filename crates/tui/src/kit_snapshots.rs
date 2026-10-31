@@ -237,6 +237,9 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     }
     h.app.production_log();
     scenes.push(app_scene(h, "Production log", "⌃k › Production Log: 운영에서 실행한 변경 (↶ undo 가 있으면 ↩ 로 새 콘솔에)", 120, 22));
+    // An entry without undo SQL: ↩ shows its note over the log, wrapped (Esc goes back to the same entry)
+    h.key("Enter");
+    scenes.push(app_scene(h, "Production log · note", "Production Log › ↩ on COMMIT outcome unknown: 메모를 줄바꿈해 로그 위에 (Esc 로 같은 항목에)", 70, 22));
     h.app.popup = None;
     // Table designer (modify)
     let col = |n: &str, t: &str, null: bool| ColumnDef { name: n.into(), orig: Some(n.into()), data_type: t.into(), nullable: null, ..Default::default() };

@@ -24,6 +24,7 @@ export const ScreenWorkspaces = { ...by("Workspaces"), name: "Screen · Workspac
 export const ScreenConsole = { ...by("Console & result"), name: "Screen · Console & result" };
 export const ScreenChart = { ...by("Chart"), name: "Screen · Chart" };
 export const ScreenProductionLog = { ...by("Production log"), name: "Screen · Production log" };
+export const ScreenProductionLogNote = { ...by("Production log · note"), name: "Screen · Production log · note" };
 export const ScreenTableDesigner = { ...by("Table designer"), name: "Screen · Table designer (⌃F6)" };
 export const ScreenGenerateData = { ...by("Generate test data"), name: "Screen · Generate test data" };
 export const ScreenCopyRows = { ...by("Copy related rows"), name: "Screen · Copy related rows" };
