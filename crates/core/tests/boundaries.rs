@@ -119,10 +119,8 @@ fn item_end(code: &[u8], from: usize) -> usize {
 fn exempt(rel: &str, code: &[u8]) -> Vec<(usize, usize)> {
     let text = String::from_utf8_lossy(code);
     let mut ranges: Vec<(usize, usize)> = text.match_indices("#[cfg(test)]").map(|(p, _)| (p, item_end(code, p + "#[cfg(test)]".len()))).collect();
-    if rel == "crates/core/src/lib.rs" {
-        if let Some(p) = text.find("pub fn open_state(") {
-            ranges.push((p, item_end(code, p)));
-        }
+    if rel == "crates/core/src/lib.rs" && let Some(p) = text.find("pub fn open_state(") {
+        ranges.push((p, item_end(code, p)));
     }
     ranges
 }
