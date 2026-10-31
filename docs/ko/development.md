@@ -48,6 +48,14 @@ crates/shared-wasm  qurry-shared-wasm: GUI 가 src/lib/shared.ts 로 부르는 w
 drivers/*     드라이버 프로그램 (SQLite, DuckDB, SQL Server, ClickHouse, MongoDB, Oracle, Qdrant, Chroma, Milvus)
 ```
 
+데이터 소스와 저장된 비밀번호는 GUI · TUI · MCP 서버가 (나란히 도는 옛 버전 앱도) 함께 쓰므로, 설정 파일마다 `crates/core` 안에 집이 하나씩 있습니다:
+
+- `store.rs` 가 `connections.json` 과 `connection-access.json` 을 읽고 씀
+- `secrets.rs` 가 `secrets.json` 과 비밀번호 키 (`SecretFile`) 를 읽고 씀
+- `lib.rs` 의 `open_state` 가 앱 상태를 엶. 모든 앱은 `Store` 와 `SecretFile` 을 직접 만들지 않고 이 함수를 부름
+
+다른 코드가 (테스트 코드는 빼고) 이 파일들을 쓰거나 `SecretFile` 을 만들면 `crates/core/tests/boundaries.rs` 가 실패합니다.
+
 ## 테스트
 
 실패하는 테스트를 먼저 씁니다: 버그 수정은 그 버그를 재현하는 테스트로, 기능은 새 동작을 시험하는 테스트로 시작합니다 (테스트할 수 없는 화면 · 터미널 키는 손으로 확인). 모든 풀 리퀘스트에서 CI 가 돕니다: Rust 단위 테스트, PostgreSQL (pgvector 포함) / MySQL / Redis / ClickHouse / MongoDB / Qdrant / Chroma / Milvus 컨테이너로 통합 테스트, 같은 테스트를 옛 서버 (PostgreSQL 12, MySQL 5.7, ClickHouse 22.8, MongoDB 5, SQL Server 2017) 로, vitest 와 웹 빌드.
