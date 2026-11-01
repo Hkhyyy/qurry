@@ -38,6 +38,12 @@ pub fn unsafe_statement(sql: &str, kind: JsValue) -> Result<Option<String>, JsEr
     Ok(qurry_shared::guard::unsafe_statement(sql, parse_kind(kind)?))
 }
 
+/// The connect error asks for "Allow unencrypted connection" (the GUI then offers to turn it on)
+#[wasm_bindgen(js_name = tlsOptIn)]
+pub fn tls_opt_in(msg: &str) -> bool {
+    qurry_shared::errors::tls_opt_in(msg)
+}
+
 /// Statements split on `;` as the server reads them: [[start, end], …] in UTF-16 code units
 #[wasm_bindgen(js_name = splitStatements)]
 pub fn split_statements(text: &str, kind: JsValue) -> Result<JsValue, JsError> {

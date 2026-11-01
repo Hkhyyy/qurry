@@ -85,10 +85,20 @@ fn export_path_in(dir: &std::path::Path, name: &str) -> error::AppResult<std::pa
     }
 }
 
-/// Open the app state with the config folder's Data Sources·passwords
+/// Open the app state with the config folder's Data Sources·passwords.
+///
+/// The config files have three homes, shared by the GUI, the TUI and the MCP server (and by older app versions running
+/// side by side), so their locking, permissions and format rules live in one place:
+/// - `store.rs` reads and writes connections.json and connection-access.json
+/// - `secrets.rs` reads and writes secrets.json and the password key (`SecretFile`)
+/// - this function is the only place outside `secrets.rs` that constructs a `SecretFile`; every app opens its state here
+///
+/// `tests/boundaries.rs` fails when other code (test code aside) writes those files or constructs a `SecretFile`.
 pub fn open_state(dir: Option<std::path::PathBuf>) -> error::AppResult<app::AppState> {
     let dir = dir.unwrap_or_else(config_dir);
-    std::fs::create_dir_all(&dir)?;
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        error::AppError::Msg(format!("Cannot create the config folder {} ({e}) — check that you can write to it (and its parent folder)", dir.display()))
+    })?;
     let secrets = secrets::SecretFile::open(&dir)?;
     Ok(app::AppState::new(store::Store::new(dir), secrets))
 }
@@ -106,5 +116,15 @@ mod tests {
         assert!(b.ends_with("report (2).csv"));
         assert!(super::export_path_in(&dir, "../x").is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A config folder that can't be created names the folder and what to check
+    #[test]
+    fn open_state_says_which_folder_it_cannot_create() {
+        let file = std::env::temp_dir().join(format!("qurry-cfg-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&file, "").unwrap();
+        let e = super::open_state(Some(file.join("config"))).err().unwrap().to_string();
+        assert!(e.contains("Cannot create the config folder") && e.contains(&file.display().to_string()), "{e}");
+        let _ = std::fs::remove_file(&file);
     }
 }

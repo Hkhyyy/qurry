@@ -59,9 +59,7 @@ pub fn run() {
                 }
             });
 
-            let dir = app.path().app_config_dir()?;
-            let secret_file = secrets::SecretFile::open(&dir)?;
-            app.manage(app::AppState::new(store::Store::new(dir), secret_file));
+            app.manage(qurry_core::open_state(Some(app.path().app_config_dir()?))?);
             app.manage(commands::PendingImport::default());
             app.manage(commands::PendingData::default());
             app.manage(commands::PickedDirs::default());
@@ -85,6 +83,7 @@ pub fn run() {
             commands::save_connection,
             commands::set_connection_color,
             commands::set_connection_scope,
+            commands::allow_plaintext,
             commands::delete_connection,
             commands::test_connection,
             commands::test_ssh,

@@ -637,18 +637,44 @@ impl AppState {
 
     /// Explorer menu: change only the color (another app's change to the source since the list was read stays; no reconnect)
     pub async fn set_connection_color(&self, id: String, color: Option<String>) -> AppResult<ConnectionConfig> {
-        self.modify_connection(&id, |c| c.color = color)
+        self.modify_connection(&id, |c| {
+            c.color = color;
+            Ok(())
+        })
     }
 
     /// Explorer menu: change only the shown databases and schemas
     pub async fn set_connection_scope(&self, id: String, scope: store::Scope) -> AppResult<ConnectionConfig> {
-        self.modify_connection(&id, |c| c.scope = scope)
+        self.modify_connection(&id, |c| {
+            c.scope = scope;
+            Ok(())
+        })
     }
 
-    fn modify_connection(&self, id: &str, f: impl FnOnce(&mut ConnectionConfig)) -> AppResult<ConnectionConfig> {
+    /// The answer to a NEEDS_TLS / DROPPED_TLS connect error: turn on "Allow unencrypted connection" for this source and reconnect.
+    /// The saved password stays (same server, and the user chose this right at the error). Decided on the source as saved now, under the store lock
+    pub async fn allow_plaintext(&self, id: String) -> AppResult<ConnectionConfig> {
+        let c = self.modify_connection(&id, |c| {
+            if !matches!(c.kind, store::DbKind::Postgres | store::DbKind::Mysql) {
+                return Err(AppError::Msg("\"Allow unencrypted connection\" is only for PostgreSQL and MySQL data sources.".into()));
+            }
+            if c.options.confirm_changes {
+                return Err(AppError::Msg(format!("\"{}\" is a Production data source, so Qurry won't turn off encryption for it from here. If the server really has no TLS and the network is trusted, turn on \"Allow unencrypted connection\" yourself (GUI: data source Options tab · TUI: data source form, \"Allow unencrypted\").", c.name)));
+            }
+            if c.active_ssl().is_some() {
+                return Err(AppError::Msg(format!("\"{}\" has SSL turned on, so it always requires TLS. Check its SSL settings (GUI: SSH/SSL tab · TUI: data source form), or turn SSL off there first if the server has no TLS.", c.name)));
+            }
+            c.options.allow_plaintext = true;
+            Ok(())
+        })?;
+        drop_pool(self, &id).await; // The next connect uses the new setting
+        Ok(c)
+    }
+
+    fn modify_connection(&self, id: &str, f: impl FnOnce(&mut ConnectionConfig) -> AppResult<()>) -> AppResult<ConnectionConfig> {
         self.store
             .modify(id, |c| {
-                f(c);
+                f(c)?;
                 Ok(c.clone())
             })?
             .ok_or_else(|| AppError::Msg("Data source not found".into()))
@@ -1381,6 +1407,51 @@ mod tests {
         assert!(c.read_only && c.password_saved, "{c:?}");
         assert_eq!((c.color.as_deref(), c.scope.databases.as_deref()), (Some("#f00"), Some(&["d".to_string()][..])));
         assert!(st.set_connection_color("missing".into(), None).await.is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// "Allow unencrypted" from the TLS error: keeps the saved password and another app's change, writes the side file, reconnects;
+    /// Production, SSL-configured and non-SQL sources are refused (nothing written)
+    #[tokio::test]
+    async fn allow_plaintext_keeps_the_password_and_reconnects() {
+        let dir = std::env::temp_dir().join(format!("qurry-plain-{}", uuid::Uuid::new_v4()));
+        let st = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+        let mk = |id: &str, kind| ConnectionConfig {
+            id: id.into(), name: id.into(), kind, host: "db.example".into(), port: 5432,
+            user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+        };
+        st.save_connection(mk("p", crate::store::DbKind::Postgres), Some("pw".into()), None).await.unwrap();
+        // A pool that is open now (lazy: never connects)
+        let lazy = sqlx::postgres::PgPoolOptions::new().connect_lazy_with(sqlx::postgres::PgConnectOptions::new().host("db.example"));
+        st.pools.write().await.insert("p".into(), Pool::Pg(lazy));
+        // Another app turns on Read-only in between
+        let other = Store::new(dir.clone());
+        let mut c = other.get("p").unwrap().unwrap();
+        c.read_only = true;
+        other.save(&c).unwrap();
+        let got = st.allow_plaintext("p".into()).await.unwrap();
+        assert!(got.options.allow_plaintext && got.password_saved && got.read_only, "{got:?}");
+        let saved = st.store.get("p").unwrap().unwrap();
+        assert!(saved.options.allow_plaintext && saved.password_saved && saved.read_only, "{saved:?}");
+        assert_eq!(st.secret("p").unwrap().as_deref(), Some("pw"));
+        let side: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("connection-access.json")).unwrap()).unwrap();
+        assert_eq!(side["p"]["allowPlaintext"], true);
+        assert!(st.pools.read().await.is_empty(), "the pool was dropped");
+
+        let mut prod = mk("prod", crate::store::DbKind::Postgres);
+        prod.options.confirm_changes = true;
+        let mut ssl = mk("ssl", crate::store::DbKind::Mysql);
+        ssl.ssl = Some(serde_json::from_value(serde_json::json!({ "enabled": true, "mode": "require" })).unwrap());
+        for (c, want) in [(prod, "Production"), (ssl, "SSL turned on"), (mk("r", crate::store::DbKind::Redis), "only for PostgreSQL and MySQL")] {
+            let id = c.id.clone();
+            st.save_connection(c, Some("pw".into()), None).await.unwrap();
+            let e = st.allow_plaintext(id.clone()).await.unwrap_err().to_string();
+            assert!(e.contains(want), "{e}");
+            let c = st.store.get(&id).unwrap().unwrap();
+            assert!(!c.options.allow_plaintext && c.password_saved, "{c:?}");
+        }
+        assert!(st.allow_plaintext("missing".into()).await.is_err());
         let _ = std::fs::remove_dir_all(dir);
     }
 

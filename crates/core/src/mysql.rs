@@ -134,11 +134,7 @@ fn on_connect_error(e: &sqlx::Error, explicit_ssl: bool, plain_ok: bool) -> OnCo
     }
 }
 
-/// When the server dropped the connection while TLS was required (the cause isn't known for sure)
-pub const DROPPED_TLS: &str = "The server closed the connection while setting up encryption — it may be an old MySQL without TLS 1.2 (then, on a network you trust, turn on \"Allow unencrypted connection\" for this data source: GUI: Options tab · TUI: data source form, \"Allow unencrypted\"), or check the host, port and any proxy in between.";
-
-/// When not falling back to plaintext on a server without TLS
-pub const NEEDS_TLS: &str = "This server didn't set up an encrypted (TLS) connection, so Qurry didn't send the password. If it's an old server without TLS 1.2 and the network is trusted, turn on \"Allow unencrypted connection\" for this data source (GUI: Options tab · TUI: data source form, \"Allow unencrypted\").";
+pub use qurry_shared::errors::{DROPPED_TLS, NEEDS_TLS};
 
 /// Message when a source without SSL set connected in plaintext (reconnected in plaintext because TLS failed — also what happens when someone deliberately strips TLS)
 pub async fn plaintext_note(p: &MySqlPool, cfg: &ConnectionConfig) -> Option<String> {

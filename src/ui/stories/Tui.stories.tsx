@@ -28,5 +28,7 @@ export const ScreenProductionLogNote = { ...by("Production log · note"), name: 
 export const ScreenTableDesigner = { ...by("Table designer"), name: "Screen · Table designer (⌃F6)" };
 export const ScreenGenerateData = { ...by("Generate test data"), name: "Screen · Generate test data" };
 export const ScreenCopyRows = { ...by("Copy related rows"), name: "Screen · Copy related rows" };
-export const ScreenRedis = { ...by("Redis"), name: "Screen · Redis" };
+export const ScreenDbaStale = { ...by("Database Admin: refresh failed"), name: "Screen · Database Admin: refresh failed" };
+export const ScreenDbaError = { ...by("Database Admin: report error"), name: "Screen · Database Admin: report error" };
+export const ScreenRedis ={ ...by("Redis"), name: "Screen · Redis" };
 export const ScreenMysqlBackupDefiners = { ...by("MySQL backup: DEFINER= question"), name: "Screen · MySQL backup: DEFINER= question" };

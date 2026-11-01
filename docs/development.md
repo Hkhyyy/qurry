@@ -48,6 +48,14 @@ crates/shared-wasm  qurry-shared-wasm: wasm-bindgen wrapper the GUI calls throug
 drivers/*     driver programs (SQLite, DuckDB, SQL Server, ClickHouse, MongoDB, Oracle, Qdrant, Chroma, Milvus)
 ```
 
+The data sources and saved passwords are shared by the GUI, the TUI and the MCP server (and by older app versions running side by side), so each config file has one home in `crates/core`:
+
+- `store.rs` reads and writes `connections.json` and `connection-access.json`
+- `secrets.rs` reads and writes `secrets.json` and the password key (`SecretFile`)
+- `lib.rs` `open_state` opens the app state; every app calls it instead of building `Store` and `SecretFile` itself
+
+`crates/core/tests/boundaries.rs` fails when any other code (test code aside) writes those files or constructs a `SecretFile`.
+
 ## Tests
 
 Write the failing test first: a bug fix starts with a test that reproduces it, a feature with a test for the new behavior (screens and terminal keys that can't be tested are checked by hand). Every pull request runs the CI workflow: Rust unit tests, integration tests against PostgreSQL (with pgvector) / MySQL / Redis / ClickHouse / MongoDB / Qdrant / Chroma / Milvus containers, the same tests against older servers (PostgreSQL 12, MySQL 5.7, ClickHouse 22.8, MongoDB 5, SQL Server 2017), vitest and the web build.
