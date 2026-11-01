@@ -16,7 +16,7 @@ import { inList } from "./inList";
 import { keyTree, type KeyNode } from "./keyTree";
 import { formatSpec, keyLabel } from "./shortcuts";
 import { splitScript, splitStatements, statementAt, type Segment } from "./sqlSplit";
-import { DDL_RE, isReadStmt } from "./stmtKindLegacy";
+import { isDdl, isRead } from "./stmtKind";
 import { tableTabLabels, type TableTabKey } from "./tabLabels";
 import { fracWidth, isTimeType, padFrac } from "./timeFrac";
 import { autoMap } from "./transfer";
@@ -33,6 +33,7 @@ import columnCorpus from "../../crates/shared/tests/corpus/columns.json";
 import specCorpus from "../../crates/shared/tests/corpus/keyspecs.json";
 import fuzzyCorpus from "../../crates/shared/tests/corpus/fuzzy.json";
 import sqlTs from "../../crates/shared/tests/goldens/ts/sql.json";
+import stmtRust from "../../crates/shared/tests/goldens/rust/statements.json";
 
 // completion.ts registers Monaco providers on import; only its pure helpers are dumped
 vi.mock("./monaco", () => ({ monaco: { languages: { registerCompletionItemProvider: () => ({}) } } }));
@@ -77,7 +78,8 @@ function sqlGolden(): Golden {
 }
 
 function stmtGolden(): Golden {
-  return Object.fromEntries(stmtCorpus.map((e) => [e.id, { isReadStmt: isReadStmt(e.sql), DDL_RE: DDL_RE.test(e.sql) }]));
+  // Keys keep the names of the GUI's old checks (isReadStmt, DDL_RE) so the goldens and DIVERGENCES.md stay comparable
+  return Object.fromEntries(stmtCorpus.map((e) => [e.id, { isReadStmt: isRead(e.dialect as DbKind, e.sql), DDL_RE: isDdl(e.dialect as DbKind, e.sql) }]));
 }
 
 function completionGolden(): Golden {
@@ -278,6 +280,9 @@ interface Fs {
 describe("WASM facades reproduce the goldens", () => {
   it("splitting and execution plans: goldens/ts (the GUI's editor rules are kept, D2)", () => {
     expect(sqlGolden()).toEqual(sqlTs);
+  });
+  it("read / DDL checks: goldens/rust (D1: the GUI decides like the TUI, e.g. no Production confirmation for select 'delete')", () => {
+    expect(stmtGolden()).toEqual(stmtRust);
   });
 });
 

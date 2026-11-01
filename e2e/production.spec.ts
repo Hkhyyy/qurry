@@ -46,3 +46,21 @@ test("reads run without a confirmation", async ({ page }) => {
   await expect(status(page)).toHaveText("1 statement executed");
   await expect(dialog(page)).toHaveCount(0);
 });
+
+// D1 (0.3.0): the GUI reads statements with the core guard, like the TUI. A write keyword only inside a string doesn't make a read a
+// write, and a parenthesized SELECT is a read; a quoted name like "update" still counts as a write
+test("a read that only mentions a write keyword in a string runs without a confirmation", async ({ page }) => {
+  await typeSql(page, "select 'delete' as action");
+  await page.keyboard.press("Meta+Enter");
+  await expect(status(page)).toHaveText("1 statement executed");
+  await expect(dialog(page)).toHaveCount(0);
+});
+
+test("only the real writes are listed: string keywords and parenthesized selects are reads, a quoted \"update\" name is not", async ({ page }) => {
+  await typeSql(page, "select 'delete' as action;\n(select 1) union (select 2);\nselect \"update\" from users;\nupdate users set user_name = 'x' where id = 1;");
+  await runAll(page);
+  const rows = dialog(page).locator(".ui-detail-row");
+  await expect(rows.locator(".ui-detail-text")).toHaveText(['select "update" from users', "update users set user_name = 'x' where id = 1"]);
+  await dialog(page).getByRole("button", { name: "Run" }).click();
+  await expect(status(page)).toHaveText("4 statements executed");
+});

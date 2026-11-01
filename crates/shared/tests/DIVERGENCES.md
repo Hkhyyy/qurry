@@ -16,8 +16,8 @@ Inputs are in `corpus/` (ids as listed); `‸` in a corpus text is the cursor. O
 | sql › planExecution(fromCaret) | 15 | 0 | 0 | 0 |
 | sql › planExecution(outside:whole) | 15 | 0 | 0 | 0 |
 | sql › planExecution(outside:below) | 15 | 0 | 0 | 0 |
-| statements › isReadStmt | 32 | 2 | 0 | 0 |
-| statements › DDL_RE | 32 | 1 | 0 | 0 |
+| statements › isReadStmt | 32 | 0 | 0 | 0 |
+| statements › DDL_RE | 32 | 0 | 0 | 0 |
 | completion › tablesInStatement | 15 | 3 | 0 | 0 |
 | completion › findTable | 26 | 2 | 0 | 0 |
 | valuehints › hintContext | 39 | 2 | 0 | 0 |
@@ -64,9 +64,6 @@ TS only / Rust only: inputs where only one side has that function (no counterpar
 | sql | ` dashdash-no-space-mysql ` | splitStatements | ` ["select 1--1;\nselect 2"] ` | ` ["select 1--1","\nselect 2"] ` |
 | sql | ` dashdash-no-space-mysql ` | splitScript | ` ["select 1--1;\n","select 2"] ` | ` ["select 1--1","\nselect 2"] ` |
 | sql | ` cursor-no-semicolon ` | statementAt | ` "select 1\nselect 2\nselect 3" ` | ` "select 2" ` |
-| statements | ` word-in-string ` | isReadStmt | ` false ` | ` true ` |
-| statements | ` hash-comment-truncate ` | DDL_RE | ` false ` | ` true ` |
-| statements | ` paren-select ` | isReadStmt | ` false ` | ` true ` |
 | completion | ` korean-table ` | tablesInStatement | ` [] ` | ` [{"alias":null,"ref":"주문"}] ` |
 | completion | ` korean-table ` | findTable | ` [] ` | ` ["sales.주문"] ` |
 | completion | ` newline-join-using ` | tablesInStatement | ` [{"alias":null,"ref":"users"}] ` | ` [{"alias":null,"ref":"users"},{"alias":"o2","ref":"orders"}] ` |

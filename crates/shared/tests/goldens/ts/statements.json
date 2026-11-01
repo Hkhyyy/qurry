@@ -40,7 +40,7 @@
     "DDL_RE": false
   },
   "word-in-string": {
-    "isReadStmt": false,
+    "isReadStmt": true,
     "DDL_RE": false
   },
   "word-in-quoted-ident": {
@@ -89,7 +89,7 @@
   },
   "hash-comment-truncate": {
     "isReadStmt": false,
-    "DDL_RE": false
+    "DDL_RE": true
   },
   "comment-on": {
     "isReadStmt": false,
@@ -116,7 +116,7 @@
     "DDL_RE": true
   },
   "paren-select": {
-    "isReadStmt": false,
+    "isReadStmt": true,
     "DDL_RE": false
   },
   "redis-get": {
