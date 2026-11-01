@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { QueryResult, Dialect } from "../lib/api";
+import { QueryResult, Dialect, DbKind } from "../lib/api";
 import { splitScript } from "../lib/sqlSplit";
 import { DEFAULT_EXEC, ExecSettings, planExecution } from "../lib/execPlan";
 import { ConsoleEditor, EditorApi, RunRequest } from "./ConsoleEditor";
@@ -65,6 +65,8 @@ interface Props {
   target: string;
   initialSql: string;
   connName: string;
+  /** The data source's kind: how its statements are split and planned */
+  kind?: DbKind;
   dialect?: Dialect;
   database: string;
   schema: string;
@@ -98,6 +100,8 @@ interface Props {
   schemaSwitchDisabled?: boolean;
   registerApi: (tabId: string, api: EditorApi) => void;
   onClearOutput: () => void;
+  /** The run couldn't start (the statement splitter failed): show why in Output */
+  onError: (message: string) => void;
 }
 
 export function ConsolePane(p: Props) {
@@ -116,8 +120,16 @@ export function ConsolePane(p: Props) {
   };
 
   /** ⌘↩ execution rules (DataGrip Query Execution settings) */
-  const splitFn = p.dialect?.split ?? ((t: string) => splitScript(t, p.dialect?.monaco === "mysql"));
+  const splitFn = p.dialect?.split ?? ((t: string) => splitScript(t, p.kind));
   const onRun = (req: RunRequest) => {
+    try {
+      run(req);
+    } catch (e) {
+      // Splitting runs in the shared WebAssembly module; without it only a selection run as one statement works
+      p.onError(`Couldn't split the console into statements: ${e}. Restart Qurry; until then, select the statement and set Query Execution Settings › For selection execute › Exactly as a single statement.`);
+    }
+  };
+  const run = (req: RunRequest) => {
     const { text, offset, selection } = req;
     if (selection && selection.text.trim()) {
       if (settings.selection === "single") {
@@ -128,7 +140,7 @@ export function ConsolePane(p: Props) {
       req.highlight(segs.map((s) => ({ start: selection.start + s.start, end: selection.start + s.end })));
       return p.onExecute(segs.map((s) => selection.text.slice(s.start, s.end).trim()), req.explain);
     }
-    const plan = planExecution(text, offset, splitFn(text), settings);
+    const plan = planExecution(text, offset, splitFn(text), settings, p.kind);
     if (!plan) return;
     if ("run" in plan) {
       req.highlight(plan.run.map((x) => ({ start: x.start, end: x.end })));

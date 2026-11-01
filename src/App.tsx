@@ -2228,6 +2228,7 @@ export default function App() {
                     connName={c?.name ?? ""}
                     database={t.database || c?.database || (c?.kind === "mysql" ? "" : "postgres")}
                     schema={t.schema ?? (c?.kind === "mysql" ? t.database || c?.database || "" : "public")}
+                    kind={c?.kind}
                     dialect={dialectOf(c?.kind)}
                     dbList={dbCache[t.connId] ?? []}
                     schemaList={schemaCache[t.target] ?? []}
@@ -2259,6 +2260,7 @@ export default function App() {
                     schemaSwitchDisabled={conns.find((x) => x.id === t.connId)?.options?.switchSchema === "disable"}
                     registerApi={(id, a) => editorApis.current.set(id, a)}
                     onClearOutput={() => patch(t.id, { output: [] })}
+                    onError={(m) => (log(t.id, "error", m), patch(t.id, { activeResult: "output" }), setStatus("Query failed"))}
                   />
                 </div>
               );
