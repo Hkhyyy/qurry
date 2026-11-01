@@ -28,6 +28,7 @@ import { FindPanel, FindRun, FtsScope, FullTextSearchDialog } from "./components
 import { DEFAULT_FONT, editorFontSize, setEditorFontSize } from "./lib/prefs";
 import { bindings, eventSpec, formatSpec, hit, loadKeymap, onKeymapChange } from "./lib/shortcuts";
 import { invalidateCompletion } from "./lib/completion";
+import { shared } from "./lib/shared";
 import { useStatusWidgets } from "./lib/statusbar";
 import { tableTabLabels } from "./lib/tabLabels";
 import { DDL_RE, isReadStmt } from "./lib/stmtKindLegacy";
@@ -118,6 +119,14 @@ const isMac = navigator.platform.toLowerCase().includes("mac");
 /** Max rows kept in the result grid (same as the TUI). Beyond that, export to CSV */
 const MAX_ROWS = 100_000;
 const capMsg = (n: number) => `Showing the first ${n.toLocaleString()} rows — export to CSV for all of them`;
+/** Title of the notice for a failed Commit, decided in Rust like the TUI's (before the WASM has loaded: the generic one) */
+const commitNoticeTitle = (msg: string) => {
+  try {
+    return shared().commitFailedTitle(msg);
+  } catch {
+    return "Commit failed";
+  }
+};
 /** Shortcut shown in menus and Find Action (the first key) */
 const sk = (id: string) => {
   const b = bindings(id);
@@ -1413,7 +1422,7 @@ export default function App() {
     setStatus(String(e));
     patch(tab.id, { activeResult: "output" });
     syncTx(tab.id);
-    if (commit) void notice(String(e), "Commit failed");
+    if (commit) void notice(String(e), commitNoticeTitle(String(e)));
   };
   const setTxMode = async (tab: Tab, manual: boolean) => {
     let commit = false;

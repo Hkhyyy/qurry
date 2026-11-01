@@ -163,9 +163,7 @@ async fn recover(state: &AppState, id: &str, tab: Option<&str>, tx: Option<&str>
     }
     crate::log!("[qurry] connection lost on {id}: {e}");
     AppError::Msg(match tx {
-        Some(crate::audit::COMMIT_UNKNOWN) => format!(
-            "{e} — connection lost while committing, so it is unknown whether the changes were committed. Check the data before you run them again (the next run reconnects)."
-        ),
+        Some(crate::audit::COMMIT_UNKNOWN) => format!("{e} — {}", qurry_shared::errors::COMMIT_UNKNOWN_ERR),
         Some(_) => format!("{e} — connection lost; the open transaction was rolled back by the server. Run it again to reconnect."),
         None => format!("{e} — connection lost. Run it again to reconnect."),
     })

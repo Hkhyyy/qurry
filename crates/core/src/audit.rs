@@ -331,6 +331,8 @@ pub(crate) const IMPLICIT_COMMIT: &str = "COMMIT (implicit)";
 pub const COMMIT_UNKNOWN: &str = "COMMIT outcome unknown (connection lost)";
 /// What to do about it (the entry's note)
 pub const COMMIT_UNKNOWN_NOTE: &str = "The server may have committed before the connection was lost. Check the data before you run these changes again.";
+/// Title of the notice for the error of a failed Commit (the GUI has it through WASM)
+pub use qurry_shared::errors::commit_failed_title;
 
 /// How the console's transaction ended when `sql` failed with `e` (open = the session still has it open; None = nothing ended).
 /// A lost connection rolls it back on the server, unless `sql` was the COMMIT; otherwise it ended only if the session closed it
@@ -1680,8 +1682,6 @@ mod tests {
         followup_drop(&st, DbKind::Mysql, s).await;
     }
 
-    /// PostgreSQL: COMMIT of a transaction an error aborted is a ROLLBACK on the server. Qurry says so (not committed) and logs
-    /// it as rolled back by the server, for the Commit button and a typed COMMIT
     /// MySQL Manual: SET PASSWORD (1133), ALTER USER (1396) and INSTALL PLUGIN (1126) commit the open transaction even when they fail.
     /// The rule is the same as for a statement that ran: the console asks the server, so it shows no open transaction, the error says
     /// the changes are saved, and the log records the commit
@@ -1740,6 +1740,8 @@ mod tests {
         followup_drop(&st, DbKind::Mysql, s).await;
     }
 
+    /// PostgreSQL: COMMIT of a transaction an error aborted is a ROLLBACK on the server. Qurry says so (not committed) and logs
+    /// it as rolled back by the server, for the Commit button and a typed COMMIT
     #[tokio::test]
     #[ignore]
     async fn pg_commit_of_an_aborted_transaction() {

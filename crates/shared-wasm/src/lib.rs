@@ -44,6 +44,12 @@ pub fn tls_opt_in(msg: &str) -> bool {
     qurry_shared::errors::tls_opt_in(msg)
 }
 
+/// Title of the notice for a failed Commit: "Commit outcome unknown" when the connection was lost during it, else "Commit failed"
+#[wasm_bindgen(js_name = commitFailedTitle)]
+pub fn commit_failed_title(msg: &str) -> String {
+    qurry_shared::errors::commit_failed_title(msg).into()
+}
+
 /// Statements split on `;` as the server reads them: [[start, end], …] in UTF-16 code units
 #[wasm_bindgen(js_name = splitStatements)]
 pub fn split_statements(text: &str, kind: JsValue) -> Result<JsValue, JsError> {

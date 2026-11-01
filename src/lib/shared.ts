@@ -1,7 +1,7 @@
 // Rust shared with the backend and the TUI (crates/shared), compiled to WebAssembly by `pnpm wasm`.
 // main.tsx starts loading it without waiting (the app renders even if it fails), Storybook awaits it in a loader,
 // vitest initializes it in its setup file. Then call it synchronously through shared(); callers must handle it not being ready.
-import init, { initSync, ping } from "../wasm/pkg/qurry_shared_wasm";
+import init, { commitFailedTitle, initSync, ping } from "../wasm/pkg/qurry_shared_wasm";
 import wasmUrl from "../wasm/pkg/qurry_shared_wasm_bg.wasm?url";
 
 export interface PingResponse {
@@ -12,6 +12,8 @@ export interface PingResponse {
 
 const api = {
   ping: (text: string): PingResponse => ping({ text }),
+  /** Title of the notice for a failed Commit's error: "Commit outcome unknown" when the connection was lost during it */
+  commitFailedTitle: (msg: string): string => commitFailedTitle(msg),
 };
 
 let ready = false;
