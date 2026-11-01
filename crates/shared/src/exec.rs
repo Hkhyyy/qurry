@@ -1,6 +1,7 @@
-//! What ⌃Enter runs (DataGrip Settings › Database › Query Execution, same rules as the GUI's src/lib/execPlan.ts)
-use qurry_core::sql;
-use qurry_core::store::DbKind;
+//! What the console runs on ⌃↩ / ⌘↩ (DataGrip Settings › Database › Query Execution). The TUI calls it through qurry_core::exec,
+//! the GUI through WASM (src/lib/execPlan.ts). Offsets are UTF-8 byte offsets.
+use crate::kind::DbKind;
+use crate::sql;
 
 /// When the cursor is inside a statement
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -86,11 +87,19 @@ impl ExecSettings {
     }
 }
 
+/// A statement to run: its text and where it is in the planned text (bytes; the GUI highlights it)
+#[derive(Clone, PartialEq, Debug)]
+pub struct Stmt {
+    pub start: usize,
+    pub end: usize,
+    pub sql: String,
+}
+
 #[derive(PartialEq, Debug)]
 pub enum Plan {
-    Run(Vec<String>),
+    Run(Vec<Stmt>),
     /// (display name, statements to run)
-    Ask(Vec<(String, Vec<String>)>),
+    Ask(Vec<(String, Vec<Stmt>)>),
     Nothing,
 }
 
@@ -138,10 +147,10 @@ fn is_tx_end(s: &str) -> bool {
 }
 
 /// The nearest BEGIN … COMMIT/ROLLBACK enclosing the cursor statement (idx) (statement index range)
-fn tx_around(all: &[String], idx: usize) -> Option<(usize, usize)> {
+fn tx_around(all: &[Stmt], idx: usize) -> Option<(usize, usize)> {
     let mut b = idx as isize;
-    while b >= 0 && !is_tx_begin(&all[b as usize]) {
-        if (b as usize) < idx && is_tx_end(&all[b as usize]) {
+    while b >= 0 && !is_tx_begin(&all[b as usize].sql) {
+        if (b as usize) < idx && is_tx_end(&all[b as usize].sql) {
             return None;
         }
         b -= 1;
@@ -150,8 +159,8 @@ fn tx_around(all: &[String], idx: usize) -> Option<(usize, usize)> {
         return None;
     }
     let b = b as usize;
-    let mut e = if idx > b && is_tx_end(&all[idx]) { idx } else { idx.max(b + 1) };
-    while e < all.len() && !is_tx_end(&all[e]) {
+    let mut e = if idx > b && is_tx_end(&all[idx].sql) { idx } else { idx.max(b + 1) };
+    while e < all.len() && !is_tx_end(&all[e].sql) {
         e += 1;
     }
     (e < all.len()).then_some((b, e))
@@ -159,28 +168,34 @@ fn tx_around(all: &[String], idx: usize) -> Option<(usize, usize)> {
 
 /// Without a selection, pick the statement to run from the cursor position (offset, bytes)
 pub fn plan(text: &str, offset: usize, kind: DbKind, s: ExecSettings) -> Plan {
-    // (start for cursor matching — including title lines, end, statement to run — without title lines)
-    let segs: Vec<(usize, usize, String)> = sql::split_script(text, kind)
-        .into_iter()
-        .map(|(a, b)| {
+    plan_in(text, offset, &sql::split_script(text, kind), kind, s)
+}
+
+/// plan over statements already split (byte ranges in text, in order): the GUI splits with its own editor rules and console dialects
+pub fn plan_in(text: &str, offset: usize, segs: &[(usize, usize)], kind: DbKind, s: ExecSettings) -> Plan {
+    // (start for cursor matching — including title lines, the statement to run — without title lines)
+    let segs: Vec<(usize, Stmt)> = segs
+        .iter()
+        .map(|&(a, b)| {
             let raw = &text[a..b];
             let from = a + (raw.len() - raw.trim_start().len());
             let end = a + raw.trim_end().len();
             let at = if kind == DbKind::Redis { from } else { skip_notes(text, from, end) };
-            (from, end, text[at..end].trim().to_string())
+            let start = at + (text[at..end].len() - text[at..end].trim_start().len());
+            (from, Stmt { start, end, sql: text[start..end].to_string() })
         })
         .collect();
-    let all: Vec<String> = segs.iter().map(|x| x.2.clone()).collect();
+    let all: Vec<Stmt> = segs.iter().map(|x| x.1.clone()).collect();
     if all.is_empty() {
         return Plan::Nothing;
     }
-    let Some(idx) = segs.iter().position(|x| offset >= x.0 && offset <= x.1 + 1) else {
+    let Some(idx) = segs.iter().position(|x| offset >= x.0 && offset <= x.1.end + 1) else {
         return match s.outside {
             Outside::Whole => Plan::Run(all),
-            Outside::Below => Plan::Run(segs.iter().filter(|x| x.0 >= offset).map(|x| x.2.clone()).collect()),
+            Outside::Below => Plan::Run(segs.iter().filter(|x| x.0 >= offset).map(|x| x.1.clone()).collect()),
             // If the previous statement ends on the same line, that statement (cursor right after the semicolon)
-            Outside::Nothing => match segs.iter().rev().find(|x| x.1 <= offset && !text[x.1..offset].contains('\n')) {
-                Some(x) => Plan::Run(vec![x.2.clone()]),
+            Outside::Nothing => match all.iter().rev().find(|x| x.end <= offset && !text[x.end..offset].contains('\n')) {
+                Some(x) => Plan::Run(vec![x.clone()]),
                 None => Plan::Nothing,
             },
         };
@@ -190,10 +205,10 @@ pub fn plan(text: &str, offset: usize, kind: DbKind, s: ExecSettings) -> Plan {
         Inside::Whole => Plan::Run(all),
         Inside::FromCaret => Plan::Run(all[idx..].to_vec()),
         Inside::Ask => {
-            let label: String = all[idx].split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect();
+            let label: String = all[idx].sql.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect();
             let mut opts = vec![(label, vec![all[idx].clone()])];
             if let Some((b, e)) = tx_around(&all, idx).filter(|(b, e)| e - b + 1 < all.len()) {
-                let w = |x: &str| first_word(x).to_uppercase();
+                let w = |x: &Stmt| first_word(&x.sql).to_uppercase();
                 opts.push((format!("Transaction ({} … {}, {} statements)", w(&all[b]), w(&all[e]), e - b + 1), all[b..=e].to_vec()));
             }
             if all.len() > 1 {
@@ -207,13 +222,18 @@ pub fn plan(text: &str, offset: usize, kind: DbKind, s: ExecSettings) -> Plan {
     }
 }
 
-/// When running a selection
+/// When running a selection (offsets in the selected text)
 pub fn plan_selection(sel: &str, kind: DbKind, s: ExecSettings) -> Plan {
-    let v: Vec<String> = match s.selection {
-        Selection::Single => vec![sel.trim().to_string()],
-        Selection::Separate => sql::split_script(sel, kind).into_iter().map(|(a, b)| sel[a..b].trim().to_string()).collect(),
+    let trimmed = |a: usize, b: usize| {
+        let raw = &sel[a..b];
+        let start = a + (raw.len() - raw.trim_start().len());
+        Stmt { start, end: start + raw.trim().len(), sql: raw.trim().to_string() }
     };
-    let v: Vec<String> = v.into_iter().filter(|x| !x.is_empty()).collect();
+    let v: Vec<Stmt> = match s.selection {
+        Selection::Single => vec![trimmed(0, sel.len())],
+        Selection::Separate => sql::split_script(sel, kind).into_iter().map(|(a, b)| trimmed(a, b)).collect(),
+    };
+    let v: Vec<Stmt> = v.into_iter().filter(|x| !x.sql.is_empty()).collect();
     if v.is_empty() { Plan::Nothing } else { Plan::Run(v) }
 }
 
@@ -228,8 +248,18 @@ mod tests {
     fn p(offset: usize, s: ExecSettings) -> Plan {
         plan(SQL, offset, DbKind::Postgres, s)
     }
-    fn run(v: &[&str]) -> Plan {
-        Plan::Run(v.iter().map(|s| s.to_string()).collect())
+    /// The statements' text (ranges are checked in ranges_point_into_the_text)
+    fn sqls(p: Plan) -> Option<Vec<String>> {
+        match p {
+            Plan::Run(v) => Some(v.into_iter().map(|s| s.sql).collect()),
+            _ => None,
+        }
+    }
+    fn run(v: &[&str]) -> Option<Vec<String>> {
+        Some(v.iter().map(|s| s.to_string()).collect())
+    }
+    fn texts(v: &[Stmt]) -> Vec<&str> {
+        v.iter().map(|s| s.sql.as_str()).collect()
     }
     const ALL: [&str; 4] = ["BEGIN", "GRANT a TO x", "GRANT b TO x", "COMMIT"];
 
@@ -238,13 +268,13 @@ mod tests {
         let Plan::Ask(opts) = p(at("GRANT b"), ExecSettings::default()) else { panic!("should ask") };
         let labels: Vec<_> = opts.iter().map(|o| o.0.as_str()).collect();
         assert_eq!(labels, ["GRANT b TO x", "All statements (4)", "From caret to end"]);
-        assert_eq!(opts[1].1, ALL);
-        assert_eq!(opts[2].1, ["GRANT b TO x", "COMMIT"]);
+        assert_eq!(texts(&opts[1].1), ALL);
+        assert_eq!(texts(&opts[2].1), ["GRANT b TO x", "COMMIT"]);
         // First statement: 'from cursor to end' equals the whole, so drop it
         let Plan::Ask(opts) = p(at("BEGIN"), ExecSettings::default()) else { panic!("should ask") };
         assert_eq!(opts.len(), 2);
         // Don't ask if there's only one statement
-        assert_eq!(plan("select 1", 3, DbKind::Postgres, ExecSettings::default()), run(&["select 1"]));
+        assert_eq!(sqls(plan("select 1", 3, DbKind::Postgres, ExecSettings::default())), run(&["select 1"]));
     }
 
     /// Statements on separate lines without `;`: only the caret line's statement (not joined with the previous line)
@@ -253,7 +283,7 @@ mod tests {
         let t = "select * from logs.user_activity_log where user_idx = 1\nselect * from logs.user_activity_log where user_idx = 3\nselect * from public.users";
         let s = ExecSettings { inside: Inside::Smallest, ..Default::default() };
         let at = t.find("public.users").unwrap();
-        assert_eq!(plan(t, at, DbKind::Postgres, s), run(&["select * from public.users"]));
+        assert_eq!(sqls(plan(t, at, DbKind::Postgres, s)), run(&["select * from public.users"]));
         let Plan::Ask(opts) = plan(t, at, DbKind::Postgres, ExecSettings::default()) else { panic!("should ask") };
         assert_eq!(opts[0].0, "select * from public.users");
     }
@@ -261,12 +291,12 @@ mod tests {
     #[test]
     fn inside_modes() {
         let s = |inside| ExecSettings { inside, ..Default::default() };
-        assert_eq!(p(at("GRANT b"), s(Inside::Smallest)), run(&["GRANT b TO x"]));
-        assert_eq!(p(at("GRANT b"), s(Inside::Whole)), run(&ALL));
-        assert_eq!(p(at("GRANT b"), s(Inside::FromCaret)), run(&["GRANT b TO x", "COMMIT"]));
+        assert_eq!(sqls(p(at("GRANT b"), s(Inside::Smallest))), run(&["GRANT b TO x"]));
+        assert_eq!(sqls(p(at("GRANT b"), s(Inside::Whole))), run(&ALL));
+        assert_eq!(sqls(p(at("GRANT b"), s(Inside::FromCaret))), run(&["GRANT b TO x", "COMMIT"]));
         // A cursor right after a semicolon belongs to that statement
         let end = SQL.find("GRANT a TO x;").unwrap() + "GRANT a TO x;".len();
-        assert_eq!(p(end, s(Inside::Smallest)), run(&["GRANT a TO x"]));
+        assert_eq!(sqls(p(end, s(Inside::Smallest))), run(&["GRANT a TO x"]));
     }
 
     #[test]
@@ -274,8 +304,8 @@ mod tests {
         let blank = SQL.find("\n\n").unwrap() + 1;
         let s = |outside| ExecSettings { outside, ..Default::default() };
         assert_eq!(p(blank, s(Outside::Nothing)), Plan::Nothing);
-        assert_eq!(p(blank, s(Outside::Whole)), run(&ALL));
-        assert_eq!(p(blank, s(Outside::Below)), run(&["GRANT b TO x", "COMMIT"]));
+        assert_eq!(sqls(p(blank, s(Outside::Whole))), run(&ALL));
+        assert_eq!(sqls(p(blank, s(Outside::Below))), run(&["GRANT b TO x", "COMMIT"]));
     }
 
     #[test]
@@ -288,17 +318,17 @@ mod tests {
     #[test]
     fn selection_modes() {
         let sel = "GRANT a TO x;\n\nGRANT b TO x;";
-        assert_eq!(plan_selection(sel, DbKind::Postgres, ExecSettings::default()), run(&["GRANT a TO x", "GRANT b TO x"]));
+        assert_eq!(sqls(plan_selection(sel, DbKind::Postgres, ExecSettings::default())), run(&["GRANT a TO x", "GRANT b TO x"]));
         let single = ExecSettings { selection: Selection::Single, ..Default::default() };
-        assert_eq!(plan_selection(sel, DbKind::Postgres, single), run(&[sel]));
+        assert_eq!(sqls(plan_selection(sel, DbKind::Postgres, single)), run(&[sel]));
     }
     #[test]
     fn skips_note_lines_before_statement() {
         let sql = "1. 공격 페이로드 탐지 (SSRF)\nSELECT 1\nFROM t;\n\n2. 거부 에러코드\n-- 설명\nSELECT 2;";
         let s = ExecSettings { inside: Inside::Smallest, ..Default::default() };
-        assert_eq!(plan(sql, 3, DbKind::Postgres, s), run(&["SELECT 1\nFROM t"]));
-        assert_eq!(plan(sql, sql.find("2. 거부").unwrap() + 1, DbKind::Postgres, s), run(&["-- 설명\nSELECT 2"]));
-        assert_eq!(plan("foo bar", 1, DbKind::Postgres, s), run(&["foo bar"]));
+        assert_eq!(sqls(plan(sql, 3, DbKind::Postgres, s)), run(&["SELECT 1\nFROM t"]));
+        assert_eq!(sqls(plan(sql, sql.find("2. 거부").unwrap() + 1, DbKind::Postgres, s)), run(&["-- 설명\nSELECT 2"]));
+        assert_eq!(sqls(plan("foo bar", 1, DbKind::Postgres, s)), run(&["foo bar"]));
     }
 
     #[test]
@@ -307,9 +337,25 @@ mod tests {
         let Plan::Ask(opts) = plan(sql, sql.find("GRANT b").unwrap() + 1, DbKind::Postgres, ExecSettings::default()) else { panic!("should ask") };
         let labels: Vec<_> = opts.iter().map(|o| o.0.as_str()).collect();
         assert_eq!(labels, ["GRANT b TO x", "Transaction (BEGIN … COMMIT, 4 statements)", "All statements (5)", "From caret to end"]);
-        assert_eq!(opts[1].1, ["BEGIN", "GRANT a TO x", "GRANT b TO x", "COMMIT"]);
+        assert_eq!(texts(&opts[1].1), ["BEGIN", "GRANT a TO x", "GRANT b TO x", "COMMIT"]);
         let Plan::Ask(opts) = plan(sql, sql.find("SELECT 1").unwrap() + 1, DbKind::Postgres, ExecSettings::default()) else { panic!("should ask") };
         assert_eq!(opts.iter().map(|o| o.0.as_str()).collect::<Vec<_>>(), ["SELECT 1", "All statements (5)"]);
+    }
+
+    /// Each statement's range is where its text is (the GUI highlights the range), title lines and blanks outside it
+    #[test]
+    fn ranges_point_into_the_text() {
+        let sql = "1. 제목 😀\nSELECT 1\nFROM t;\n\n  select 2  ;";
+        let s = ExecSettings { inside: Inside::Whole, ..Default::default() };
+        let Plan::Run(v) = plan(sql, 3, DbKind::Postgres, s) else { panic!("should run") };
+        assert_eq!(v.iter().map(|x| &sql[x.start..x.end]).collect::<Vec<_>>(), ["SELECT 1\nFROM t", "select 2"]);
+        assert_eq!(texts(&v), ["SELECT 1\nFROM t", "select 2"]);
+        let sel = "  select 1;\n select 2 ";
+        let Plan::Run(v) = plan_selection(sel, DbKind::Postgres, ExecSettings::default()) else { panic!("should run") };
+        assert_eq!(v.iter().map(|x| (x.start, x.end)).collect::<Vec<_>>(), [(2, 10), (13, 21)]);
+        let single = ExecSettings { selection: Selection::Single, ..Default::default() };
+        let Plan::Run(v) = plan_selection(sel, DbKind::Postgres, single) else { panic!("should run") };
+        assert_eq!((v[0].start, v[0].end, v[0].sql.as_str()), (2, 21, "select 1;\n select 2"));
     }
 }
 

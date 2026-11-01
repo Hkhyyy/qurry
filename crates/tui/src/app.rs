@@ -254,7 +254,7 @@ pub enum PAction {
     /// Statements picked in the execution picker popup
     Run { stmts: Vec<String>, explain: bool },
     /// Change execution settings
-    Exec(crate::exec::ExecSettings),
+    Exec(qurry_core::exec::ExecSettings),
 }
 #[derive(Clone)]
 pub struct IndexEntryLite {
@@ -646,7 +646,7 @@ pub struct App {
     pub update: Option<String>,
     next_id: u64,
     /// What ⌃Enter runs (Query Execution Settings, saved in the workspace)
-    pub exec: crate::exec::ExecSettings,
+    pub exec: qurry_core::exec::ExecSettings,
     /// Workspaces and the current one (the current one's tabs are the tabs · panes … above)
     pub workspaces: Vec<Workspace>,
     pub cur_ws: usize,
@@ -1776,16 +1776,16 @@ impl App {
             return;
         }
         let plan = if let Some(((r0, c0), (r1, c1))) = c.editor.selection_range() {
-            crate::exec::plan_selection(&selected_text(c.editor.lines(), r0, c0, r1, c1), kind, self.exec)
+            qurry_core::exec::plan_selection(&selected_text(c.editor.lines(), r0, c0, r1, c1), kind, self.exec)
         } else {
             let (row, col) = c.editor.cursor();
-            crate::exec::plan(&c.editor.lines().join("\n"), byte_offset(c.editor.lines(), row, col), kind, self.exec)
+            qurry_core::exec::plan(&c.editor.lines().join("\n"), byte_offset(c.editor.lines(), row, col), kind, self.exec)
         };
         match plan {
-            crate::exec::Plan::Nothing => {}
-            crate::exec::Plan::Run(stmts) => self.run_stmts(stmts, explain, confirmed),
-            crate::exec::Plan::Ask(opts) => {
-                let items = opts.into_iter().map(|(label, stmts)| PItem { label, hint: String::new(), action: PAction::Run { stmts, explain } }).collect();
+            qurry_core::exec::Plan::Nothing => {}
+            qurry_core::exec::Plan::Run(stmts) => self.run_stmts(sqls(stmts), explain, confirmed),
+            qurry_core::exec::Plan::Ask(opts) => {
+                let items = opts.into_iter().map(|(label, stmts)| PItem { label, hint: String::new(), action: PAction::Run { stmts: sqls(stmts), explain } }).collect();
                 self.popup = Some(Popup::Palette(Palette { title: "Execute".into(), input: TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
             }
         }
@@ -1793,7 +1793,7 @@ impl App {
 
     /// Execution settings (DataGrip Settings › Database › Query Execution). Picking applies immediately and the window stays open
     pub fn palette_exec(&mut self) {
-        use crate::exec::{ExecSettings, Inside, Outside, Selection};
+        use qurry_core::exec::{ExecSettings, Inside, Outside, Selection};
         let e = self.exec;
         let mut items = vec![];
         let mut add = |group: &str, on: bool, label: &str, v: ExecSettings| items.push(PItem { label: format!("{} {label}", if on { "●" } else { " " }), hint: group.into(), action: PAction::Exec(v) });
@@ -3355,6 +3355,11 @@ pub fn byte_offset(lines: &[String], row: usize, col: usize) -> usize {
     }
     let line = lines.get(row).map(|s| s.as_str()).unwrap_or("");
     off + line.char_indices().nth(col).map(|(i, _)| i).unwrap_or(line.len())
+}
+
+/// The statements' text (the TUI doesn't highlight what runs, so the ranges aren't needed)
+fn sqls(v: Vec<qurry_core::exec::Stmt>) -> Vec<String> {
+    v.into_iter().map(|s| s.sql).collect()
 }
 
 pub fn selected_text(lines: &[String], r0: usize, c0: usize, r1: usize, c1: usize) -> String {

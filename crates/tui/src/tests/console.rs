@@ -66,7 +66,7 @@ async fn f5_runs_several_statements_in_order() {
 async fn f5_stops_at_the_first_error() {
     let mut h = Harness::new().await;
     h.app.fake_db = Some(fake);
-    h.app.exec.inside = crate::exec::Inside::Whole;
+    h.app.exec.inside = qurry_core::exec::Inside::Whole;
     h.console_with("update t set a = 1 where id = 1;\nselect * from boom;\nupdate t set a = 2 where id = 2;", 0, 3);
     h.key("F5");
     assert!(h.app.popup.is_none());
@@ -106,7 +106,7 @@ async fn production_confirm_shows_counted_rows() {
     h.app.reload_conns();
     h.settle().await;
     h.app.fake_db = Some(counts);
-    h.app.exec.inside = crate::exec::Inside::Whole;
+    h.app.exec.inside = qurry_core::exec::Inside::Whole;
     let sql = "update payment set amount = 0 where id = 4;\ndelete from payment where amount < 0;";
     let id = h.app.restore_console("p", "d".into(), "console".into(), sql).unwrap();
     let i = h.app.tab_index(id).unwrap();

@@ -21,6 +21,8 @@ pub mod dba;
 pub mod ddl;
 pub mod erd;
 pub mod error;
+/// What the console runs (Query Execution settings), shared with the GUI through WASM
+pub use qurry_shared::exec;
 pub mod fake;
 pub mod guard;
 pub mod hints;
