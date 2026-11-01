@@ -789,7 +789,7 @@ impl AppState {
             }
             false => Ok(()),
         };
-        // Whether the console still has the transaction open after a failed statement (MySession asks the server after DDL)
+        // Whether the console still has the transaction open after a failed statement (MySession asks the server after all but a SELECT or row change)
         let open = match (&r, tab) {
             (Err(_), Some(t)) if in_tx => self.tx_state(t.into()).await,
             _ => true,

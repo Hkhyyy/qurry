@@ -1682,6 +1682,64 @@ mod tests {
 
     /// PostgreSQL: COMMIT of a transaction an error aborted is a ROLLBACK on the server. Qurry says so (not committed) and logs
     /// it as rolled back by the server, for the Commit button and a typed COMMIT
+    /// MySQL Manual: SET PASSWORD (1133), ALTER USER (1396) and INSTALL PLUGIN (1126) commit the open transaction even when they fail.
+    /// The rule is the same as for a statement that ran: the console asks the server, so it shows no open transaction, the error says
+    /// the changes are saved, and the log records the commit
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_failed_statement_that_commits() {
+        let Some(st) = prod_state(DbKind::Mysql, "QURRY_TEST_MY").await else { return };
+        let s = "audit_followups_failcommit";
+        followup_table(&st, DbKind::Mysql, s).await;
+        let run = |sql: String| st.run_query("d".into(), sql, None, Some("m".into()));
+        let log = |n: usize| st.audit_log(None, String::new(), n).into_iter().map(|e| e.sql).collect::<Vec<_>>();
+        st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
+        let nobody = "'qurry_nobody'@'localhost'";
+        for (i, (code, stmt)) in [
+            ("1133", format!("set password for {nobody} = 'b'")),
+            ("1396", format!("alter user {nobody} identified by 'b'")),
+            ("1126", "install plugin qurry_nope soname 'qurry_nope.so'".to_string()),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            run(format!("update {s}.t set v = {} where id = 1", 10 + i)).await.unwrap();
+            let e = run(stmt.clone()).await.unwrap_err().to_string();
+            assert!(e.contains(code) && e.contains("committed the open transaction"), "{stmt}: {e}");
+            assert!(!st.tx_state("m".into()).await, "{stmt}");
+            assert_eq!(log(1), [IMPLICIT_COMMIT], "{stmt}");
+            st.rollback_tx("m".into()).await.unwrap();
+            assert_eq!(log(1), [IMPLICIT_COMMIT], "{stmt}");
+            assert_eq!(followup_values(&st, s).await, format!("[[{}],[2],[3]]", 10 + i), "{stmt}");
+        }
+        followup_drop(&st, DbKind::Mysql, s).await;
+    }
+
+    /// MySQL Manual: asking the server whether a transaction is open doesn't touch the next transaction's settings. SET TRANSACTION
+    /// ISOLATION LEVEL READ UNCOMMITTED, then other statements the console asks after, and the next SELECT still reads another
+    /// console's uncommitted change
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_tx_probe_keeps_set_transaction() {
+        let Some(st) = prod_state(DbKind::Mysql, "QURRY_TEST_MY").await else { return };
+        let s = "audit_followups_isolation";
+        followup_table(&st, DbKind::Mysql, s).await;
+        let run = |tab: &str, sql: String| st.run_query("d".into(), sql, None, Some(tab.into()));
+        st.set_tx_mode("d".into(), "o".into(), true).await.unwrap();
+        run("o", format!("update {s}.t set v = 99 where id = 1")).await.unwrap();
+        st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
+        run("m", "set transaction isolation level read uncommitted".into()).await.unwrap();
+        run("m", "set @qurry_note = 1".into()).await.unwrap();
+        run("m", "do 0".into()).await.unwrap();
+        assert!(!st.tx_state("m".into()).await);
+        let r = run("m", format!("select v from {s}.t where id = 1")).await.unwrap();
+        assert_eq!(serde_json::to_string(&r.rows).unwrap(), "[[99]]");
+        assert!(st.tx_state("m".into()).await);
+        st.rollback_tx("m".into()).await.unwrap();
+        st.rollback_tx("o".into()).await.unwrap();
+        followup_drop(&st, DbKind::Mysql, s).await;
+    }
+
     #[tokio::test]
     #[ignore]
     async fn pg_commit_of_an_aborted_transaction() {
