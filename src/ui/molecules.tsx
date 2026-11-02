@@ -127,14 +127,16 @@ export function Notice({ tone, children, className }: { tone?: "warn" | "danger"
  * Under a connect error that needs TLS (qurry_shared::errors::tls_opt_in): turn on "Allow unencrypted connection" for this data source in one click.
  * Never offered for Production (the core refuses too): it says where the setting is instead. A failed `onAllow` shows its error here
  */
-export function TlsOptIn({ host, production, onAllow }: { host: string; production?: boolean; onAllow: () => Promise<unknown> }) {
+export function TlsOptIn({ host, production, inDialog, onAllow }: { host: string; production?: boolean; inDialog?: boolean; onAllow: () => Promise<unknown> }) {
+  // Inside Data Source Properties the Options tab is right there; elsewhere it's the dialog's shortcut
+  const where = inDialog ? "Options" : "Data Source Properties (⌘;) ▸ Options";
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   if (production)
     return (
       <div className="ui-tls-optin">
         <span className="ui-tls-optin-detail">
-          Production data source: Qurry won't turn off encryption from here. If the server has no TLS and the network is trusted, turn on Data Source Properties (⌘;) ▸ Options ▸ Allow unencrypted connection.
+          Production data source: Qurry won't turn off encryption from here. If the server has no TLS and the network is trusted, turn on {where} ▸ Allow unencrypted connection.
         </span>
       </div>
     );
@@ -143,7 +145,7 @@ export function TlsOptIn({ host, production, onAllow }: { host: string; producti
       <Button
         size="sm"
         disabled={busy}
-        title="To undo, turn off Data Source Properties (⌘;) ▸ Options ▸ Allow unencrypted connection"
+        title={`To undo, turn off ${where} ▸ Allow unencrypted connection`}
         onClick={async () => {
           setBusy(true);
           setErr(null);

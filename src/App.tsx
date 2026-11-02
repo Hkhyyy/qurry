@@ -2292,7 +2292,7 @@ export default function App() {
                     schemaSwitchDisabled={conns.find((x) => x.id === t.connId)?.options?.switchSchema === "disable"}
                     registerApi={(id, a) => editorApis.current.set(id, a)}
                     onClearOutput={() => patch(t.id, { output: [] })}
-                    errorAction={<TlsFix conn={c} msg={t.output[t.output.length - 1]?.level === "error" ? t.output[t.output.length - 1].text : null} then={() => reconnectAfterTls(t.connId, t.id)} />}
+                    errorAction={<TlsFix conn={c} msg={t.output[t.output.length - 1]?.level === "error" ? t.output[t.output.length - 1].text : null} then={() => (editorApis.current.get(t.id)?.focus(), reconnectAfterTls(t.connId, t.id))} />}
                     onError={(m) => (log(t.id, "error", m), patch(t.id, { activeResult: "output" }), setStatus("Not run: the statement splitter couldn't load (see Output)"))}
                   />
                 </div>

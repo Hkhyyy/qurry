@@ -35,7 +35,8 @@ const result = {
 };
 let flakyLoads = 0;
 const handlers: Record<string, (a: any) => unknown> = {
-  list_connections: () => conns,
+  // A copy, as from the backend: state that holds the last list must see a change (Allow unencrypted, connect) as a new list
+  list_connections: () => structuredClone(conns),
   list_databases: (a: any) => (lanCheck(a.id), a.id === "lan" ? ["lan_app"] : a.id === "rd" ? ["db0", "db3"] : a.id === "my" ? ["information_schema", "mysql", "shop", "sys"] : ["postgres", "shop_app", "shop_app_test"]),
   redis_scan: (a: any) => ({
     cursor: "0",

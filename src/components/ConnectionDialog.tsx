@@ -411,6 +411,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
         <TlsOptIn
           host={cfg.host}
           production={!!opt.confirmChanges}
+          inDialog
           onAllow={() => {
             const next = { ...cfg, options: { ...opt, allowPlaintext: true } };
             setCfg(next);

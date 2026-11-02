@@ -11,7 +11,8 @@ export const needsTlsOptIn = (msg: string | null | undefined) => !!msg && shared
  */
 export function TlsFix({ conn, msg, then }: { conn: ConnectionView | undefined; msg: string | null | undefined; then: () => unknown }) {
   useSharedReady();
-  if (!conn || !needsTlsOptIn(msg)) return null;
+  // Already allowed (from the tree, a console or a table tab): the error is from before, the button would do nothing new
+  if (!conn || conn.options?.allowPlaintext || !needsTlsOptIn(msg)) return null;
   return (
     <TlsOptIn
       host={conn.host}

@@ -63,3 +63,69 @@ test("dialog: a failed Test Connection ticks the form's Allow unencrypted checkb
   await expect(dialog(page).getByRole("checkbox", { name: /Allow unencrypted connection/ })).toBeChecked();
   expect(await calls(page)).toMatchObject({ allow: 0, saves: 0 });
 });
+
+test("tree: keyboard only — Tab to the button, Enter allows it, and the keys stay in the tree", async ({ page, browserName }) => {
+  await openApp(page);
+  await expand(page, "LAN dev");
+  const tree = lanTree(page);
+  await expect(tree.getByRole("button", { name: ALLOW })).toBeVisible();
+  // WebKit (Safari, the macOS WebView) moves to buttons with ⌥⇥ unless “Press Tab to highlight each item” is on
+  await page.keyboard.press(browserName === "webkit" ? "Alt+Tab" : "Tab");
+  await expect(tree.getByRole("button", { name: ALLOW })).toBeFocused();
+  // Letters on the button aren't the tree's speed search
+  await page.keyboard.press("x");
+  await expect(page.locator(".speed-search")).toHaveCount(0);
+  await page.keyboard.press("Enter");
+  await expect(tree.getByRole("treeitem", { name: /^lan_app/ })).toBeVisible();
+  expect((await calls(page)).allow).toBe(1);
+  await expect(page.locator(".ws-explorer.on .tree")).toBeFocused();
+  // ↓ from the data source row selects its database
+  await page.keyboard.press("ArrowDown");
+  await expect(tree.getByRole("treeitem", { name: /^lan_app/ })).toHaveAttribute("aria-selected", "true");
+});
+
+test("console then tree: allowing it in the console reloads the tree's stale error and keeps the keys in the editor", async ({ page }) => {
+  await openApp(page);
+  await expand(page, "LAN dev");
+  const tree = lanTree(page);
+  await expect(tree.getByRole("button", { name: ALLOW })).toBeVisible();
+  await page.keyboard.press("Meta+Shift+L");
+  await editor(page).click();
+  await typeSql(page, "select 1");
+  await runAll(page);
+  const out = work(page).locator(".output-log");
+  await out.getByRole("button", { name: ALLOW }).click();
+  await expect(out.locator(".ol").last()).toContainText("Connected. Run again.");
+  // ⌘↩ runs again right away
+  await expect(editor(page).locator("textarea")).toBeFocused();
+  await expect(tree.getByRole("treeitem", { name: /^lan_app/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: ALLOW })).toHaveCount(0);
+  expect((await calls(page)).allow).toBe(1);
+});
+
+test("tree then console: after the tree allowed it, the console's old error has no button", async ({ page }) => {
+  await openApp(page);
+  await treeNode(page, "LAN dev").click();
+  await page.keyboard.press("Meta+Shift+L");
+  await editor(page).click();
+  await typeSql(page, "select 1");
+  await runAll(page);
+  const out = work(page).locator(".output-log");
+  await expect(out.getByRole("button", { name: ALLOW })).toBeVisible();
+  await expand(page, "LAN dev");
+  await lanTree(page).getByRole("button", { name: ALLOW }).click();
+  await expect(lanTree(page).getByRole("treeitem", { name: /^lan_app/ })).toBeVisible();
+  await expect(out.getByRole("button", { name: ALLOW })).toHaveCount(0);
+  expect((await calls(page)).allow).toBe(1);
+});
+
+test("dialog: for Production it points at this dialog's Options tab, not at ⌘;", async ({ page }) => {
+  await page.addInitScript(() => ((window as any).__mockLanProd = true));
+  await openApp(page);
+  await treeNode(page, "LAN dev").click();
+  await page.keyboard.press("Meta+;");
+  await dialog(page).getByRole("button", { name: "Test Connection" }).click();
+  const box = dialog(page).locator(".ui-tls-optin");
+  await expect(box).toContainText("turn on Options ▸ Allow unencrypted connection.");
+  await expect(box).not.toContainText("⌘;");
+});

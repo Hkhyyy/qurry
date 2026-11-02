@@ -172,6 +172,10 @@ export const TlsOptInProduction: S = {
         {TLS_ERROR}
         <TlsOptIn host="prod-db.internal" production onAllow={slow} />
       </div>
+      <Notice tone="danger">
+        In Data Source Properties (inDialog): the Options tab is right there
+        <TlsOptIn host="prod-db.internal" production inDialog onAllow={slow} />
+      </Notice>
     </Frame>
   ),
 };

@@ -84,7 +84,8 @@ export function Explorer(p: Props) {
     el.scrollIntoView({ block: "nearest" });
   };
   const onTreeKey = (e: React.KeyboardEvent) => {
-    if ((e.target as HTMLElement).tagName === "INPUT") return;
+    // A control inside the tree (Allow unencrypted, Install driver, an input) keeps its own keys: Enter presses the button
+    if ((e.target as HTMLElement).closest("button, input, select, textarea")) return;
     const list = rows();
     const cur = list.findIndex((el) => el.classList.contains("selected"));
     const el = list[cur];
