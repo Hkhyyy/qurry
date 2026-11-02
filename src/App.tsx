@@ -128,8 +128,11 @@ async function askExplainAnalyze(name: string | undefined, kind: DbKind, stmts: 
     return why ? [{ s, why }] : [];
   });
   if (!asks.length) return true;
-  const detail = asks.map(({ s }) => ({ text: s.replace(/\s+/g, " ").slice(0, 300), tone: "danger" as const }));
-  return ask(`Explain Analyse really runs the statement, and ${asks[0].why}. Run it anyway?`, { title: name ? `${name}: Explain Analyse` : "Explain Analyse", detail, okLabel: "Run Anyway", danger: true });
+  // Several: each statement with its own reason (as the TUI lists them)
+  const one = asks.length === 1;
+  const detail = asks.map(({ s, why }) => ({ text: s.replace(/\s+/g, " ").slice(0, 300) + (one ? "" : `\n${why}`), tone: "danger" as const }));
+  const text = one ? `Explain Analyse really runs the statement, and ${asks[0].why}. Run it anyway?` : `Explain Analyse really runs the statements, and ${asks.length} of them need a look. Run them anyway?`;
+  return ask(text, { title: name ? `${name}: Explain Analyse` : "Explain Analyse", detail, okLabel: "Run Anyway", danger: true });
 }
 /** Shortcut shown in menus and Find Action (the first key) */
 const sk = (id: string) => {

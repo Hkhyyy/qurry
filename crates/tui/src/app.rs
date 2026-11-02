@@ -2040,13 +2040,22 @@ impl App {
         // EXPLAIN ANALYZE actually runs the statement. PostgreSQL·MySQL run it inside a transaction and roll back (below); drivers may
         // not support transactions. Ask when the rollback may not undo it all or nothing does (guard::explain_analyze_ask, the GUI's rule and words)
         let wraps = matches!(kind, DbKind::Postgres | DbKind::Mysql);
-        if analyze
-            && !confirmed
-            && let Some((s, why)) = stmts.iter().find_map(|s| qurry_core::guard::explain_analyze_ask(s, kind).map(|w| (s, w)))
-        {
-            let preview: String = s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect();
+        let asks: Vec<(String, String)> = match analyze && !confirmed {
+            true => stmts.iter().filter_map(|s| qurry_core::guard::explain_analyze_ask(s, kind).map(|w| (s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect(), w))).collect(),
+            false => vec![],
+        };
+        if !asks.is_empty() {
+            // Several: each statement with its own reason (as the GUI lists them)
+            let text = match asks.as_slice() {
+                [(preview, why)] => format!("Explain Analyze really runs the statement ({why}):\n  {preview}\nRun it anyway?"),
+                _ => format!(
+                    "Explain Analyze really runs the statements, and {} of them need a look:\n{}\nRun them anyway?",
+                    asks.len(),
+                    asks.iter().map(|(p, why)| format!("  {p}\n    {why}")).collect::<Vec<_>>().join("\n")
+                ),
+            };
             self.popup = Some(Popup::Confirm {
-                text: format!("Explain Analyze really runs the statement ({why}):\n  {preview}\nRun it anyway?"),
+                text,
                 on_yes: Box::new(move |a| {
                     a.analyze_next = true;
                     a.run_stmts(stmts, explain, true);

@@ -492,7 +492,7 @@ async fn pg_full_text_search_text_is_not_sql_with_standard_conforming_strings_of
 async fn explain_analyze_of_a_writing_function(st: &AppState, kind: DbKind, call: &str, count: &str) {
     let tab = |sql: String| async move { st.run_query(ID.into(), sql.clone(), None, Some("ea".into())).await.unwrap_or_else(|e| panic!("{sql}: {e}")) };
     let explain = if kind == DbKind::Postgres { format!("EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) {call}") } else { format!("EXPLAIN ANALYZE {call}") };
-    assert!(qurry_core::guard::explain_analyze_ask(call, kind).is_some_and(|w| w.starts_with("it calls ")), "{call}");
+    assert_eq!(qurry_core::guard::explain_analyze_ask(call, kind), None, "{call}: a function's name says nothing of what it does");
     tab("BEGIN".into()).await;
     tab(explain.clone()).await;
     tab("ROLLBACK".into()).await;
