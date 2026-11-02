@@ -48,7 +48,7 @@ Rules the TUI and the MCP server took with no option when the grid helpers moved
 | numbers › shortNumber | 0 | 0 | 16 | 0 |
 | tablabels › tableTabLabels | 7 | 0 | 0 | 0 |
 | rediskeys › keyTree | 7 | 1 | 0 | 0 |
-| columns › autoMap | 6 | 0 | 1 | 0 |
+| columns › autoMap | 7 | 0 | 1 | 0 |
 | keyspecs › keyLabel | 23 | 0 | 0 | 0 |
 | keyspecs › formatSpec | 10 | 4 | 6 | 0 |
 | fuzzy › fuzzyScore | 19 | 12 | 0 | 0 |
@@ -95,8 +95,8 @@ TS only / Rust only: inputs where only one side has that function (no counterpar
 | fuzzy | ` scattered-space ` | fuzzyScore | ` 194.8 ` | ` 195 ` |
 | fuzzy | ` korean-prefix ` | fuzzyScore | ` 796 ` | ` 788 ` |
 | fuzzy | ` korean-substring ` | fuzzyScore | ` 397.6 ` | ` 493 ` |
-| fuzzy | ` korean-scattered ` | fuzzyScore | ` 197.6 ` | ` 191 ` |
+| fuzzy | ` korean-scattered ` | fuzzyScore | ` 197.6 ` | ` 197 ` |
 | fuzzy | ` emoji ` | fuzzyScore | ` 398.6 ` | ` 499 ` |
-| fuzzy | ` emoji-scattered ` | fuzzyScore | ` 197.6 ` | ` 196 ` |
-| fuzzy | ` korean-gap ` | fuzzyScore | ` 198.7 ` | ` 197 ` |
+| fuzzy | ` emoji-scattered ` | fuzzyScore | ` 197.6 ` | ` 199 ` |
+| fuzzy | ` korean-gap ` | fuzzyScore | ` 198.7 ` | ` 199 ` |
 | fuzzy | ` long-text ` | fuzzyScore | ` 564.9 ` | ` 465 ` |

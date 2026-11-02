@@ -3,7 +3,7 @@
     "fuzzyScore": 499
   },
   "emoji-scattered": {
-    "fuzzyScore": 196
+    "fuzzyScore": 199
   },
   "empty-query": {
     "fuzzyScore": 0
@@ -15,13 +15,13 @@
     "fuzzyScore": 1000
   },
   "korean-gap": {
-    "fuzzyScore": 197
+    "fuzzyScore": 199
   },
   "korean-prefix": {
     "fuzzyScore": 788
   },
   "korean-scattered": {
-    "fuzzyScore": 191
+    "fuzzyScore": 197
   },
   "korean-substring": {
     "fuzzyScore": 493

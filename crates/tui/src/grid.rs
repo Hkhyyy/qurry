@@ -40,8 +40,6 @@ pub struct Grid {
     pub anchor: Option<(usize, usize)>,
     /// Original position of each row while sorted on screen (restored when sorting is cleared)
     orig: Vec<usize>,
-    /// The kind whose string literals the IN list writes (the tab's connection; set before copying, PostgreSQL until then)
-    pub kind: DbKind,
 }
 
 /// Max rows kept in the result grid. Beyond that, export to CSV
@@ -85,7 +83,7 @@ fn cmp_cell(a: Option<&Value>, b: Option<&Value>, desc: bool) -> std::cmp::Order
 
 impl Grid {
     pub fn new(result: QueryResult) -> Self {
-        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, orig: vec![], kind: DbKind::Postgres };
+        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, orig: vec![] };
         g.compute_widths();
         g
     }
@@ -189,22 +187,22 @@ impl Grid {
 
     /// Range as IN-list text and value count. One column gives ('a', 'b'), several give row tuples (('a', 1), …). Duplicates·NULL are dropped.
     /// Numeric columns keep number text bare (numeric·bigint arrive as text); NaN and the like are quoted. Strings as `kind` reads them
-    fn in_list_of(&self, (r0, c0, r1, c1): (usize, usize, usize, usize)) -> (String, usize) {
+    fn in_list_of(&self, (r0, c0, r1, c1): (usize, usize, usize, usize), kind: DbKind) -> (String, usize) {
         let rows: Vec<Vec<Value>> = (r0..=r1.min(self.rows().saturating_sub(1))).map(|r| (c0..=c1).map(|c| self.cell(r, c)).collect()).collect();
         let types: Vec<String> = (c0..=c1).map(|c| self.result.columns.get(c).map(|x| x.type_name.clone()).unwrap_or_default()).collect();
-        extract::in_list(&rows, &types, self.kind, extract::Options::default())
+        extract::in_list(&rows, &types, kind, extract::Options::default())
     }
 
     /// Whole column as an IN list
-    pub fn column_in_list(&self, c: usize) -> (String, usize) {
-        self.in_list_of((0, c, self.rows().saturating_sub(1), c))
+    pub fn column_in_list(&self, c: usize, kind: DbKind) -> (String, usize) {
+        self.in_list_of((0, c, self.rows().saturating_sub(1), c), kind)
     }
 
     /// Selected range, or the whole current column if none, as an IN list
-    pub fn in_list(&self) -> (String, usize) {
+    pub fn in_list(&self, kind: DbKind) -> (String, usize) {
         match self.sel_rect() {
-            Some(r) => self.in_list_of(r),
-            None => self.column_in_list(self.col),
+            Some(r) => self.in_list_of(r, kind),
+            None => self.column_in_list(self.col, kind),
         }
     }
 
@@ -566,15 +564,20 @@ mod tests {
         let col = |n: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: String::new() };
         let rows = vec![vec![json!("1.2.3.4"), json!(1)], vec![json!("it's"), json!(2)], vec![Value::Null, json!(2)], vec![json!("1.2.3.4"), Value::Null]];
         let g = Grid::new(QueryResult { columns: vec![col("ip"), col("n")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None });
-        assert_eq!(g.column_in_list(0), ("('1.2.3.4', 'it''s')".to_string(), 2));
-        assert_eq!(g.column_in_list(1), ("(1, 2)".to_string(), 2));
+        assert_eq!(g.column_in_list(0, DbKind::Postgres), ("('1.2.3.4', 'it''s')".to_string(), 2));
+        assert_eq!(g.column_in_list(1, DbKind::Postgres), ("(1, 2)".to_string(), 2));
         // numeric·bigint arrive as text but go unquoted based on column type. Number-like values in text columns (010) are quoted
         let ty = |n: &str, t: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: t.into() };
         let rows = vec![vec![json!("1234.50"), json!("010"), json!("NaN")]];
         let g = Grid::new(QueryResult { columns: vec![ty("a", "NUMERIC"), ty("b", "VARCHAR"), ty("c", "NUMERIC")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None });
-        assert_eq!(g.column_in_list(0).0, "(1234.50)");
-        assert_eq!(g.column_in_list(1).0, "('010')");
-        assert_eq!(g.column_in_list(2).0, "('NaN')");
+        assert_eq!(g.column_in_list(0, DbKind::Postgres).0, "(1234.50)");
+        assert_eq!(g.column_in_list(1, DbKind::Postgres).0, "('010')");
+        assert_eq!(g.column_in_list(2, DbKind::Postgres).0, "('NaN')");
+        // Strings as the tab's kind reads them: MySQL doubles a backslash, PostgreSQL writes E''
+        let rows = vec![vec![json!(r"a\b")]];
+        let g = Grid::new(QueryResult { columns: vec![ty("s", "TEXT")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None });
+        assert_eq!(g.column_in_list(0, DbKind::Mysql).0, r"('a\\b')");
+        assert_eq!(g.column_in_list(0, DbKind::Postgres).0, r"(E'a\\b')");
     }
     /// Shift+arrow range: rectangle, copy as TSV (values only), IN list only the selected cells (row tuples for multiple columns). Plain movement clears it
     #[test]
@@ -585,13 +588,13 @@ mod tests {
         assert_eq!(g.sel_rect(), None);
         g.extend(1, 0);
         assert_eq!(g.sel_rect(), Some((0, 0, 1, 0)));
-        assert_eq!(g.in_list(), ("('1.2.3.4', '5.6.7.8')".to_string(), 2));
+        assert_eq!(g.in_list(DbKind::Postgres), ("('1.2.3.4', '5.6.7.8')".to_string(), 2));
         g.extend(0, 1);
         assert_eq!(g.selection_tsv(), "1.2.3.4\t1\n5.6.7.8\t2");
-        assert_eq!(g.in_list(), ("(('1.2.3.4', 1), ('5.6.7.8', 2))".to_string(), 2));
+        assert_eq!(g.in_list(DbKind::Postgres), ("(('1.2.3.4', 1), ('5.6.7.8', 2))".to_string(), 2));
         // Plain movement clears it, and the IN list is the whole current column
         g.move_by(1, 0);
         assert_eq!(g.sel_rect(), None);
-        assert_eq!(g.in_list(), ("(1, 2, 3)".to_string(), 3));
+        assert_eq!(g.in_list(DbKind::Postgres), ("(1, 2, 3)".to_string(), 3));
     }
 }

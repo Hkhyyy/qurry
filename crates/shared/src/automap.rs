@@ -1,7 +1,9 @@
 //! Import column mapping: which table column each file column goes into.
 
+/// Spaces are JavaScript's \s (the GUI's /[\s_-]/): a BOM (U+FEFF) is one, NEL (U+0085) is not
 fn norm(s: &str) -> String {
-    s.to_lowercase().chars().filter(|c| !c.is_whitespace() && *c != '_' && *c != '-').collect()
+    let space = |c: char| u16::try_from(u32::from(c)).is_ok_and(crate::fuzzy::js_space);
+    s.to_lowercase().chars().filter(|&c| !space(c) && c != '_' && c != '-').collect()
 }
 
 /// The first column with the file column's name, ignoring case, spaces, _ and -

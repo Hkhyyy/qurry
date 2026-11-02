@@ -18,6 +18,9 @@ pub enum KeyNode {
     Key { item: usize },
 }
 
+/// Folder levels at most: a key with more ":" sits in the deepest folder (a key of thousands of ":" would overflow the stack)
+pub const MAX_DEPTH: usize = 64;
+
 /// Folders first (by name), then keys in the order given. Keys keep their full names
 pub fn key_tree(keys: &[String], opts: Options) -> Vec<KeyNode> {
     level(keys, (0..keys.len()).collect(), 0, "", opts)
@@ -28,7 +31,7 @@ fn level(keys: &[String], items: Vec<usize>, depth: usize, prefix: &str, opts: O
     let mut leaves = vec![];
     for i in items {
         match keys[i].split(':').nth(depth) {
-            Some(seg) if keys[i].split(':').count() > depth + 1 => folders.entry(seg).or_default().push(i),
+            Some(seg) if depth < MAX_DEPTH && keys[i].split(':').nth(depth + 1).is_some() => folders.entry(seg).or_default().push(i),
             _ => leaves.push(KeyNode::Key { item: i }),
         }
     }
@@ -46,4 +49,20 @@ fn level(keys: &[String], items: Vec<usize>, depth: usize, prefix: &str, opts: O
         .collect();
     out.extend(leaves);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn folders_stop_at_max_depth() {
+        let keys = ["a:".repeat(10_000) + "x"];
+        let (mut nodes, mut depth) = (key_tree(&keys, Options::default()), 0);
+        while let [KeyNode::Folder { children, .. }] = nodes.as_slice() {
+            nodes = children.clone();
+            depth += 1;
+        }
+        assert_eq!((depth, nodes), (MAX_DEPTH, vec![KeyNode::Key { item: 0 }]));
+    }
 }

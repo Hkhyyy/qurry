@@ -895,6 +895,7 @@ export function ResultGrid(p: Props) {
 
 /** View as | Transpose: swap rows and columns */
 function TransposedView({ cols, rows }: { cols: QueryResult["columns"]; rows: Cell[][] }) {
+  useSharedReady(); // time fractions come from the WASM module: render again once it has loaded
   const fracW = cols.map((c, ci) => (isTimeType(c.typeName) ? fracWidth(rows.map((r) => r[ci])) : 0));
   return (
     <div className="grid-scroll transposed">

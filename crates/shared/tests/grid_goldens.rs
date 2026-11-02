@@ -147,16 +147,23 @@ fn auto_map_reproduces_both_goldens() {
     }
 }
 
-/// Rules the TUI and the MCP server took, with no option, when these helpers moved here. Both goldens hold the new output
-/// (corpus ids loose-dates and korean-gap), so DIVERGENCES.md doesn't list them
+/// Rules the TUI and the MCP server took, with no option, when these helpers moved here. The goldens hold the new output
+/// (corpus ids loose-dates, korean-gap and bom-nel)
 #[test]
 fn rules_the_tui_and_mcp_changed_to() {
     // TUI time fractions take the GUI's pattern: a date before the time is 4+ digits-dd-dd at the start. The TUI padded any time
     // after the first space or T when the 3rd char before it was - (+2026-06-06 10:00:00 and abcd-ef-gh 10:00:00 too)
     assert_eq!(format::pad_frac("+2026-06-06 10:00:00", 3), "+2026-06-06 10:00:00");
     assert_eq!(format::pad_frac("abcd-ef-gh 10:00:00", 3), "abcd-ef-gh 10:00:00");
-    // MCP search_objects takes the TUI palette's score: a skipped letter costs its UTF-8 bytes (it counted chars: 199 here)
-    assert_eq!(fuzzy::score("ac", "a가c", fuzzy::Options::default()), Some(197.0));
+    // The TUI palette takes MCP search_objects' gap between letters: skipped chars. It counted UTF-8 bytes from the byte after
+    // the matched letter's first, so a skipped or matched non-ASCII letter cost more (197 and 198 here)
+    let plain = |q: &str, t: &str| fuzzy::score(q, t, fuzzy::Options::default());
+    assert_eq!(plain("ac", "a가c"), Some(199.0));
+    assert_eq!(plain("가c", "가bc"), plain("ac", "abc"));
+    assert_eq!(plain("가 나", "가나x"), Some(200.0));
+    // The TUI's import column matching takes the GUI's spaces (JavaScript's \s): a BOM is one, NEL is not (it used char::is_whitespace)
+    let cols = ["a".to_string()];
+    assert_eq!(automap::auto_map(&["a\u{feff}".into(), "a\u{85}".into()], Some(&cols)), ["a", ""]);
 }
 
 #[test]

@@ -13,6 +13,15 @@ describe("keyTree", () => {
     expect(show(sessions)).toEqual(["dev:sessions:{2}", "dev:sessions:{1}"]);
     expect(dev[1].kind === "folder" && dev[1].path).toBe("dev:sessions");
   });
+  it("stops at 64 folder levels, so a key of thousands of : doesn't overflow the WASM stack", () => {
+    const key = "a:".repeat(10_000) + "x";
+    let nodes = keyTree([key], (k) => k);
+    let depth = 0;
+    for (; nodes.length === 1 && nodes[0].kind === "folder"; depth++) nodes = nodes[0].children;
+    expect([depth, show(nodes)]).toEqual([64, [key]]);
+    // The module still works afterwards
+    expect(show(keyTree(["a:b"], (k) => k))).toEqual(["/a 1"]);
+  });
 });
 
 describe("visibleRows", () => {

@@ -5,7 +5,8 @@
 pub struct Options {
     /// The GUI's JetBrains-style scoring (Search Everywhere): a substring or letter at a word start (after _ . - or a space,
     /// or an uppercase letter) scores higher, adjacent letters earn a bonus, positions and lengths count UTF-16 code units
-    /// and the length penalty is fractional. Otherwise the TUI's scoring: no word starts, UTF-8 byte positions, whole numbers
+    /// and the length penalty is fractional. Otherwise the TUI's scoring: no word starts, UTF-8 byte positions and lengths (but a gap
+    /// between letters counts chars), whole numbers
     pub word_starts: bool,
 }
 
@@ -27,8 +28,9 @@ fn plain(q: &str, text: &str) -> Option<i64> {
     if let Some(i) = t.find(&q) {
         return Some(500 - i as i64 - t.len() as i64 / 10);
     }
+    // Letters in order: each skipped letter (a char, not its UTF-8 bytes) costs 1, up to 10 per gap
     let mut score = 200;
-    let mut it = t.char_indices();
+    let mut it = t.chars().enumerate();
     let mut last = 0usize;
     for qc in q.chars().filter(|c| !c.is_whitespace()) {
         let (i, _) = it.find(|&(_, c)| c == qc)?;
@@ -39,7 +41,7 @@ fn plain(q: &str, text: &str) -> Option<i64> {
 }
 
 /// JavaScript's \s for one UTF-16 code unit
-fn js_space(u: u16) -> bool {
+pub(crate) fn js_space(u: u16) -> bool {
     matches!(u, 0x09..=0x0d | 0x20 | 0xa0 | 0x1680 | 0x2000..=0x200a | 0x2028 | 0x2029 | 0x202f | 0x205f | 0x3000 | 0xfeff)
 }
 

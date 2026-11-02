@@ -2812,8 +2812,7 @@ impl App {
                     self.status = "Open a result or table to copy a column".into();
                     return;
                 };
-                g.kind = kind;
-                let (text, n) = g.in_list();
+                let (text, n) = g.in_list(kind);
                 crate::input::copy(self, &text);
                 let short: String = text.chars().take(80).collect();
                 self.status = format!("Copied {n} values as an IN list: {short}{}", if text.chars().count() > 80 { "…" } else { "" });
