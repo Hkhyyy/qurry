@@ -91,13 +91,11 @@
   },
   "nested-comment": {
     "splitStatements": [
-      "/* outer /* inner */ still",
-      " comment */ select 1",
+      "/* outer /* inner */ still; comment */ select 1",
       " select 2"
     ],
     "splitScript": [
-      "/* outer /* inner */ still",
-      " comment */ select 1",
+      "/* outer /* inner */ still; comment */ select 1",
       " select 2"
     ]
   },

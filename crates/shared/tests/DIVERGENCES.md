@@ -7,8 +7,8 @@ Inputs are in `corpus/` (ids as listed); `‸` in a corpus text is the cursor. O
 
 | Corpus › function | Compared | Differ | TS only | Rust only |
 | --- | --- | --- | --- | --- |
-| sql › splitStatements | 46 | 3 | 0 | 3 |
-| sql › splitScript | 49 | 3 | 0 | 0 |
+| sql › splitStatements | 46 | 2 | 0 | 3 |
+| sql › splitScript | 49 | 2 | 0 | 0 |
 | sql › planExecution(ask) | 15 | 0 | 0 | 0 |
 | sql › planExecution(smallest) | 15 | 0 | 0 | 0 |
 | sql › planExecution(whole) | 15 | 0 | 0 | 0 |
@@ -59,8 +59,6 @@ TS only / Rust only: inputs where only one side has that function (no counterpar
 | --- | --- | --- | --- | --- |
 | sql | ` dollar-inside-name ` | splitStatements | ` ["select foo$x$ from t; select 1"] ` | ` ["select foo$x$ from t"," select 1"] ` |
 | sql | ` dollar-inside-name ` | splitScript | ` ["select foo$x$ from t; select 1"] ` | ` ["select foo$x$ from t"," select 1"] ` |
-| sql | ` nested-comment ` | splitStatements | ` ["/* outer /* inner */ still"," comment */ select 1"," select 2"] ` | ` ["/* outer /* inner */ still; comment */ select 1"," select 2"] ` |
-| sql | ` nested-comment ` | splitScript | ` ["/* outer /* inner */ still"," comment */ select 1"," select 2"] ` | ` ["/* outer /* inner */ still; comment */ select 1"," select 2"] ` |
 | sql | ` dashdash-no-space-mysql ` | splitStatements | ` ["select 1--1;\nselect 2"] ` | ` ["select 1--1","\nselect 2"] ` |
 | sql | ` dashdash-no-space-mysql ` | splitScript | ` ["select 1--1;\n","select 2"] ` | ` ["select 1--1","\nselect 2"] ` |
 | completion | ` korean-table ` | tablesInStatement | ` [] ` | ` [{"alias":null,"ref":"주문"}] ` |

@@ -15,7 +15,6 @@ export interface PingResponse {
 
 /** qurry_shared::sql::SplitOptions: editor rules where the GUI splits differently from the server (absent = the server's rule) */
 export interface SplitOptions {
-  flatComments?: boolean;
   mysqlDashComment?: boolean;
   dollarAfterName?: boolean;
 }

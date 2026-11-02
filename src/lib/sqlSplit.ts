@@ -12,7 +12,7 @@ export interface Segment {
  * Where the editor keeps the GUI's own splitting (D2 of the 0.3.0 architecture batch): the splitStatements and splitScript rows
  * of crates/shared/tests/DIVERGENCES.md. Only picks what the editor runs; the backend splits again by the server's rules before any check
  */
-const EDITOR: SplitOptions = { flatComments: true, mysqlDashComment: true, dollarAfterName: true };
+const EDITOR: SplitOptions = { mysqlDashComment: true, dollarAfterName: true };
 
 const segments = (r: [number, number][]): Segment[] => r.map(([start, end]) => ({ start, end }));
 

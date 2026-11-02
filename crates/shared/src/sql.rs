@@ -143,8 +143,6 @@ pub fn split_statements(text: &str, kind: DbKind) -> Vec<(usize, usize)> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SplitOptions {
-    /// `/* … */` never nests, in PostgreSQL too (`/* a /* b */` ends at the first `*/`)
-    pub flat_comments: bool,
     /// MySQL `--` starts a comment even without a space after it (`select 1--1`)
     pub mysql_dash_comment: bool,
     /// `$tag$` opens a dollar quote right after a name character too (`foo$x$`)
@@ -204,7 +202,7 @@ pub fn split_statements_with(text: &str, kind: DbKind, opts: SplitOptions) -> Ve
             // PG comments nest
             let (mut depth, mut j) = (1, i + 2);
             while j < n && depth > 0 {
-                if b[j] == b'/' && j + 1 < n && b[j + 1] == b'*' && kind == DbKind::Postgres && !opts.flat_comments {
+                if b[j] == b'/' && j + 1 < n && b[j + 1] == b'*' && kind == DbKind::Postgres {
                     depth += 1;
                     j += 2;
                 } else if b[j] == b'*' && j + 1 < n && b[j + 1] == b'/' {
@@ -361,7 +359,7 @@ fn script_cuts(text: &str, s: usize, e: usize, kind: DbKind, opts: SplitOptions)
         if c == b'/' && d == b'*' && !(kind == DbKind::Mysql && i + 2 < e && (b[i + 2] == b'!' || (b[i + 2] == b'M' && i + 3 < e && b[i + 3] == b'!'))) {
             let (mut dep, mut j) = (1, i + 2);
             while j < e && dep > 0 {
-                if b[j] == b'/' && j + 1 < e && b[j + 1] == b'*' && kind == DbKind::Postgres && !opts.flat_comments {
+                if b[j] == b'/' && j + 1 < e && b[j + 1] == b'*' && kind == DbKind::Postgres {
                     dep += 1;
                     j += 2;
                 } else if b[j] == b'*' && j + 1 < e && b[j + 1] == b'/' {
@@ -555,10 +553,6 @@ mod tests {
     #[test]
     fn split_options_keep_the_gui_rules() {
         let parts = |t: &str, k, o| split_script_with(t, k, o).into_iter().map(|(a, b)| t[a..b].to_string()).collect::<Vec<_>>();
-        let flat = SplitOptions { flat_comments: true, ..Default::default() };
-        let t = "/* outer /* inner */ still; comment */ select 1; select 2";
-        assert_eq!(parts(t, DbKind::Postgres, flat), ["/* outer /* inner */ still", " comment */ select 1", " select 2"]);
-        assert_eq!(parts(t, DbKind::Postgres, SplitOptions::default()), ["/* outer /* inner */ still; comment */ select 1", " select 2"]);
         let dash = SplitOptions { mysql_dash_comment: true, ..Default::default() };
         assert_eq!(parts("select 1--1;\nselect 2", DbKind::Mysql, dash), ["select 1--1;\n", "select 2"]);
         assert_eq!(split_statements_with("select 1--1;\nselect 2", DbKind::Mysql, dash).len(), 1);
@@ -566,8 +560,6 @@ mod tests {
         let dollar = SplitOptions { dollar_after_name: true, ..Default::default() };
         assert_eq!(split_statements_with("select foo$x$ from t; select 1", DbKind::Postgres, dollar).len(), 1);
         assert_eq!(split_statements("select foo$x$ from t; select 1", DbKind::Postgres).len(), 2);
-        // MySQL comments never nest, with or without the option
-        assert_eq!(split_statements_with("/* a /* b */ select 1; */ select 2", DbKind::Mysql, flat), split_statements("/* a /* b */ select 1; */ select 2", DbKind::Mysql));
     }
 
     #[test]
