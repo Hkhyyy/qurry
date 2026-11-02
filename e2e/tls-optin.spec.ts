@@ -131,6 +131,8 @@ test("dialog: for Production it points at this dialog's Options tab, not at ⌘;
 });
 
 test("dialog: after Allow the focus stays in the dialog and Escape still closes it", async ({ page }) => {
+  // A test that takes as long as a real connect: focus moves once Test Connection is enabled again, not when the promise ends
+  await page.addInitScript(() => ((window as any).__mockTestDelay = 300));
   await openApp(page);
   await treeNode(page, "LAN dev").click();
   await page.keyboard.press("Meta+;");
