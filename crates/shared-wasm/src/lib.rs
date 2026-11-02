@@ -73,24 +73,24 @@ pub fn statement_at(text: &str, offset: usize, kind: JsValue) -> Result<Option<S
 pub struct CompletionIndex {
     meta: complete::Meta,
     /// The last columns of the statement's tables and their JS array, and the same for the candidates after them (tables,
-    /// schemas, keywords). Both stay the same while typing (Monaco filters them), so thousands of candidates cross the
-    /// boundary once instead of on every key
-    lead: Memo,
-    rest: Memo,
+    /// schemas, keywords, by what they come from). Both stay the same while typing (Monaco filters them), so thousands of
+    /// candidates are built and cross the boundary once instead of on every key
+    lead: Memo<Vec<complete::Item>>,
+    rest: Memo<complete::Rest>,
 }
 
-type Memo = RefCell<Option<(Vec<complete::Item>, JsValue)>>;
+type Memo<K> = RefCell<Option<(K, JsValue)>>;
 
-/// The JS array for `items`: the last one when it holds the same items, else a new one (kept for next time)
-fn reuse(memo: &Memo, items: Vec<complete::Item>) -> Result<JsValue, JsError> {
+/// The JS value for `key`: the last one when the key is the same, else `make`'s (kept for next time)
+fn reuse<K: PartialEq>(memo: &Memo<K>, key: K, make: impl FnOnce(&K) -> Result<JsValue, JsError>) -> Result<JsValue, JsError> {
     let mut memo = memo.borrow_mut();
     if let Some((prev, js)) = &*memo
-        && *prev == items
+        && *prev == key
     {
         return Ok(js.clone());
     }
-    let js = serde_wasm_bindgen::to_value(&items)?;
-    *memo = Some((items, js.clone()));
+    let js = make(&key)?;
+    *memo = Some((key, js.clone()));
     Ok(js)
 }
 
@@ -127,9 +127,12 @@ impl CompletionIndex {
     /// Candidates at the caret (a UTF-16 offset into `text`), replacing the word before it. `db` is the tab's DB ("" for none).
     /// {startColumn, endColumn, lead, rest}: the candidates are lead then rest (either may be the same array as last time; don't change them)
     pub fn suggest(&self, text: &str, caret: usize, db: &str, mysql: bool) -> Result<JsValue, JsError> {
-        let mut s = suggestions(&self.meta, text, caret, db, mysql);
-        let rest = s.items.split_off(s.items.iter().position(|i| i.kind != complete::ItemKind::Column).unwrap_or(s.items.len()));
-        let (lead, rest) = (reuse(&self.lead, s.items)?, reuse(&self.rest, rest)?);
+        let (s, rest) = suggestions(&self.meta, text, caret, db, mysql);
+        let lead = reuse(&self.lead, s.items, |items| Ok(serde_wasm_bindgen::to_value(items)?))?;
+        let rest = match rest {
+            None => serde_wasm_bindgen::to_value(&Vec::<complete::Item>::new())?,
+            Some(r) => reuse(&self.rest, r, |r| Ok(serde_wasm_bindgen::to_value(&complete::rest_items(&self.meta, r, Options::GUI))?))?,
+        };
         Ok(serde_wasm_bindgen::to_value(&SuggestJs { start_column: s.start_column, end_column: s.end_column, lead, rest })?)
     }
 
@@ -175,11 +178,12 @@ pub fn pairs_insert(value: &str, op: &str) -> String {
     complete::pairs_insert(value, op)
 }
 
-fn suggestions(m: &complete::Meta, text: &str, caret: usize, db: &str, mysql: bool) -> Suggestions {
+/// The range and the leading candidates (the statement's columns), and what the rest comes from
+fn suggestions(m: &complete::Meta, text: &str, caret: usize, db: &str, mysql: bool) -> (Suggestions, Option<complete::Rest>) {
     let at = Caret::new(text, caret);
-    let (n, items) = complete::suggest(m, text, at.before, db, mysql, Options::GUI);
+    let (n, items, rest) = complete::suggest_lead(m, text, at.before, db, mysql, Options::GUI);
     let end = at.column();
-    Suggestions { start_column: end - utf16_tail(at.before, n), end_column: end, items }
+    (Suggestions { start_column: end - utf16_tail(at.before, n), end_column: end, items }, rest)
 }
 
 fn hint_suggestions(text: &str, caret: usize, h: &complete::HintAt, hints: &[complete::Hint], as_pairs: bool) -> Suggestions {
@@ -279,14 +283,14 @@ mod tests {
     fn suggest_ranges_are_utf16_columns() {
         let m = index();
         let (t, c) = caret("select '😀😀' as x,\n  '😀' || 상‸ from sales.주문");
-        let s = suggestions(&m, &t, c, "", false);
+        let (s, _) = suggestions(&m, &t, c, "", false);
         assert_eq!((s.start_column, s.end_column), (11, 12), "line 2: two spaces, '😀' (4 units), ' || ' (4), then 상 at column 11");
         assert!(s.items.iter().any(|i| i.label == "상태"));
         let (t, c) = caret("select e.‸ from \"😀 emoji\" e");
-        let s = suggestions(&m, &t, c, "", false);
+        let (s, _) = suggestions(&m, &t, c, "", false);
         assert_eq!(((s.start_column, s.end_column), s.items[0].label.as_str()), ((10, 10), "값"));
         let (t, c) = caret("select 주.번‸ from sales.주문 주");
-        let s = suggestions(&m, &t, c, "", false);
+        let (s, _) = suggestions(&m, &t, c, "", false);
         assert_eq!(((s.start_column, s.end_column), s.items.len()), ((10, 11), 2));
     }
 

@@ -204,17 +204,35 @@ fn find_table<'a>(m: &'a Meta, r: &str, db: &str) -> Option<&'a CompletionTable>
 /// `text` is the statement (or the whole script), `before` is the part of the cursor's line before the cursor, `db` is the tab's DB
 /// (in MySQL, schema = DB; "" for none), `mysql` reads MySQL json paths in value spots
 pub fn suggest(m: &Meta, text: &str, before: &str, db: &str, mysql: bool, o: Options) -> (usize, Vec<Item>) {
+    let (n, mut items, rest) = suggest_lead(m, text, before, db, mysql, o);
+    if let Some(r) = rest {
+        items.extend(rest_items(m, &r, o));
+    }
+    (n, items)
+}
+
+/// What the candidates after the statement's columns (tables, schemas, keywords) depend on. In the GUI it stays the same
+/// while typing, so the WASM index keeps their JS array instead of building thousands of items on every key
+#[derive(Clone, Debug, PartialEq)]
+pub struct Rest {
+    /// The typed word, lowercase, when candidates are filtered by it here ("" when the editor filters)
+    filter: String,
+    db: String,
+    keywords: bool,
+}
+
+/// `suggest` in two parts: (prefix length, the leading candidates, what the rest comes from). None = no rest (after a `.`, in quotes)
+pub fn suggest_lead(m: &Meta, text: &str, before: &str, db: &str, mysql: bool, o: Options) -> (usize, Vec<Item>, Option<Rest>) {
     let all = &m.tables;
     let prefix: String = before.chars().rev().take_while(|c| is_word(*c)).collect::<Vec<_>>().into_iter().rev().collect();
     let head = &before[..before.len() - prefix.len()];
     let p = prefix.to_lowercase();
     let n = prefix.chars().count();
     if o.quiet_in_value_quotes && context(before, mysql).is_some_and(|c| c.quoted) {
-        return (n, vec![]);
+        return (n, vec![], None);
     }
-    // Drop candidates identical to the fully typed word so Enter goes to a newline
-    let starts = |lower: &str| o.editor_filters || p.is_empty() || (lower.starts_with(&p) && lower != p);
-    let matches = |label: &str| o.editor_filters || p.is_empty() || starts(&label.to_lowercase());
+    let starts = |lower: &str| kept(lower, &p, o);
+    let matches = |label: &str| keeps_label(label, &p, o);
     let sorted = |mut v: Vec<Item>| {
         if o.editor_filters {
             v.sort_by(|a, b| a.label.cmp(&b.label));
@@ -226,7 +244,7 @@ pub fn suggest(m: &Meta, text: &str, before: &str, db: &str, mysql: bool, o: Opt
         let q: String = h.chars().rev().take_while(|c| is_word(*c) || *c == '"').collect::<Vec<_>>().into_iter().rev().collect();
         let q = q.replace('"', "").to_lowercase();
         if q.is_empty() {
-            return (n, vec![]);
+            return (n, vec![], None);
         }
         // alias. or table. → columns
         let refs = tables_in_statement(text);
@@ -237,7 +255,7 @@ pub fn suggest(m: &Meta, text: &str, before: &str, db: &str, mysql: bool, o: Opt
         let t = hit.and_then(|(r, _)| find_table(m, r, db)).or_else(|| find_table(m, &q, db));
         if let Some(t) = t {
             let items = t.columns.iter().filter(|(c, _)| matches(c)).map(|(c, ty)| Item { label: c.clone(), detail: ty.clone(), insert: c.clone(), kind: ItemKind::Column }).collect();
-            return (n, items);
+            return (n, items, None);
         }
         // schema. → tables
         let items = all
@@ -246,7 +264,7 @@ pub fn suggest(m: &Meta, text: &str, before: &str, db: &str, mysql: bool, o: Opt
             .filter(|(_, (ls, ln))| *ls == q && starts(ln))
             .map(|(t, _)| Item { label: t.name.clone(), detail: format!("{} cols", t.columns.len()), insert: t.name.clone(), kind: ItemKind::Table })
             .collect();
-        return (n, sorted(items));
+        return (n, sorted(items), None);
     }
 
     let mut columns: Vec<Item> = vec![];
@@ -267,18 +285,41 @@ pub fn suggest(m: &Meta, text: &str, before: &str, db: &str, mysql: bool, o: Opt
             }
         }
     }
-    let mut items = sorted(columns);
-    items.extend(m.by_label.iter().filter(|&&i| starts(&m.lower[i].1)).map(|&i| {
-        let t = &all[i];
-        let insert = if t.schema == "public" || t.schema == db { t.name.clone() } else { format!("{}.{}", t.schema, t.name) };
-        Item { label: t.name.clone(), detail: t.schema.clone(), insert, kind: ItemKind::Table }
-    }));
-    items.extend(m.schemas.iter().filter(|s| matches(s)).map(|s| Item { label: s.clone(), detail: "schema".into(), insert: s.clone(), kind: ItemKind::Schema }));
-    if !p.is_empty() || o.keywords_on_empty {
-        let kws: Vec<&str> = if o.editor_filters { SORTED_KEYWORDS.clone() } else { keywords().filter(|k| matches(k)).collect() };
+    let keywords = !p.is_empty() || o.keywords_on_empty;
+    let filter = if o.editor_filters { String::new() } else { p };
+    (n, sorted(columns), Some(Rest { filter, db: db.to_string(), keywords }))
+}
+
+/// The candidates after the statement's columns: tables (schema.table outside public and the tab's DB), schemas, keywords
+pub fn rest_items(m: &Meta, r: &Rest, o: Options) -> Vec<Item> {
+    let (p, db) = (r.filter.as_str(), r.db.as_str());
+    let mut items: Vec<Item> = m
+        .by_label
+        .iter()
+        .filter(|&&i| kept(&m.lower[i].1, p, o))
+        .map(|&i| {
+            let t = &m.tables[i];
+            let insert = if t.schema == "public" || t.schema == db { t.name.clone() } else { format!("{}.{}", t.schema, t.name) };
+            Item { label: t.name.clone(), detail: t.schema.clone(), insert, kind: ItemKind::Table }
+        })
+        .collect();
+    items.extend(m.schemas.iter().filter(|s| keeps_label(s, p, o)).map(|s| Item { label: s.clone(), detail: "schema".into(), insert: s.clone(), kind: ItemKind::Schema }));
+    if r.keywords {
+        let kws: Vec<&str> = if o.editor_filters { SORTED_KEYWORDS.clone() } else { keywords().filter(|k| keeps_label(k, p, o)).collect() };
         items.extend(kws.into_iter().map(|k| Item { label: k.into(), detail: "keyword".into(), insert: k.into(), kind: ItemKind::Keyword }));
     }
-    (n, items)
+    items
+}
+
+/// A candidate (lowercase) for the typed word `p` (lowercase): all when the editor filters or nothing is typed, else those that
+/// start with it, without the fully typed word itself (so Enter goes to a newline)
+fn kept(lower: &str, p: &str, o: Options) -> bool {
+    o.editor_filters || p.is_empty() || (lower.starts_with(p) && lower != p)
+}
+
+/// `kept` for a label in any letter case (lowercased only when it is checked)
+fn keeps_label(label: &str, p: &str, o: Options) -> bool {
+    o.editor_filters || p.is_empty() || kept(&label.to_lowercase(), p, o)
 }
 
 // ───────── Value · json key suggestions ─────────
