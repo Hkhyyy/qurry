@@ -12,6 +12,9 @@ const conns = [
 // The core's NEEDS_TLS for PostgreSQL (qurry_shared::errors::needs_tls_pg); the GUI recognises it through wasm tlsOptIn
 const NEEDS_TLS =
   'This server didn\'t set up an encrypted (TLS) connection, so Qurry didn\'t send the password. If it\'s an old server and the network is trusted, turn on "Allow unencrypted connection" for this data source (GUI: Options tab · TUI: data source form, "Allow unencrypted").\n(error communicating with database: TLS required)';
+// The core's error for a missing Session Manager plugin (ssm::explain): one of the longest, and what to do comes last
+const SSM_NO_PLUGIN =
+  "The AWS Session Manager plugin is not installed. Install it (macOS: brew install --cask session-manager-plugin; others: https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html), then try again.";
 const lan: any = conns.find((c) => c.id === "lan");
 // What the TLS e2e test counts
 const tls = ((globalThis as any).__mockTls = { allow: 0, runs: 0, saves: 0 });
@@ -165,9 +168,11 @@ const handlers: Record<string, (a: any) => unknown> = {
   rag_search: () => ({ ...result, columns: [{ name: "score", typeName: "FLOAT8" }, ...result.columns], rows: result.rows.slice(0, 5).map((r, i) => [0.91 - i * 0.07, ...r]), truncated: false }),
   similar_rows_sql: (a: any) => `SELECT ${a.column} <-> (SELECT ${a.column} FROM ${a.schema}.${a.table} WHERE ${a.pk.map((p: any) => `${p[0]} = '${p[1]}'`).join(" AND ")}) AS distance, *\nFROM ${a.schema}.${a.table}\nORDER BY distance\nLIMIT 20`,
   object_ddl: (a: any) => `CREATE TABLE ${a.schema}.${a.name}\n(\n    id bigint DEFAULT nextval('users_id_seq'::regclass) NOT NULL,\n    user_name character varying(50) NOT NULL,\n    CONSTRAINT users_pkey PRIMARY KEY (id)\n);\n`,
-  // Instance i-00000000000000000 never connects (like a stopped one): the test runs until cancel_test
+  // Instance i-00000000000000000 never connects (like a stopped one): the test runs until cancel_test. On i-0000000000000dead it
+  // fails with the core's long message for a missing Session Manager plugin
   test_connection: (a: any) => {
     if (a.config.host === lan.host && !a.config.options?.allowPlaintext) throw NEEDS_TLS;
+    if (a.config.ssm?.enabled && a.config.ssm.target === "i-0000000000000dead") throw SSM_NO_PLUGIN;
     return a.config.ssm?.enabled && a.config.ssm.target === "i-00000000000000000"
       ? new Promise((_, rej) => (testsRunning[a.testId] = () => rej("Test cancelled")))
       : a.config.ssm?.enabled

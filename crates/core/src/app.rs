@@ -234,6 +234,9 @@ pub async fn drop_pool(state: &AppState, id: &str) -> Vec<(String, String)> {
     if let Some(c) = state.connecting.lock().unwrap().get(split_target(id).0) {
         c.generation.fetch_add(1, SeqCst);
     }
+    // The tunnel goes before the pools: a connect that saw this generation and kept its pool while it was still open (keep_pool)
+    // has that pool closed below
+    state.tunnels.write().await.retain(|k, _| !belongs(k, id));
     let mut tabs = Vec::new();
     state.sessions.write().await.retain(|t, e| {
         let gone = belongs(&e.conn_id, id);
@@ -250,7 +253,6 @@ pub async fn drop_pool(state: &AppState, id: &str) -> Vec<(String, String)> {
     for p in removed {
         p.close().await;
     }
-    state.tunnels.write().await.retain(|k, _| !belongs(k, id));
     state.last_ping.lock().unwrap().retain(|k, _| !belongs(k, id));
     tabs
 }
@@ -396,7 +398,7 @@ pub async fn ensure_pool(state: &AppState, id: &str) -> AppResult<Pool> {
     };
     // Each database connects on its own: one that is missing or refused fails only for its caller, not for the whole source
     let pool = connect_pool(&cfg, password.as_deref(), port).await?;
-    keep_pool(state, &c, g, id, pool).await
+    keep_pool(state, &c, g, id, port, pool).await
 }
 
 /// The local port of the source's tunnel, and the generation it belongs to. The first caller opens it: one SSH / SSM session
@@ -455,11 +457,16 @@ async fn connect_pool(cfg: &ConnectionConfig, password: Option<&str>, port: Opti
 }
 
 /// Keeps the new pool unless the source was disconnected meanwhile (drop_pool): then the pool may point at a closed tunnel's
-/// port, which any program on this machine could take
-async fn keep_pool(state: &AppState, c: &Connecting, generation: u64, id: &str, pool: Pool) -> AppResult<Pool> {
+/// port, which any program on this machine could take. `port` = the tunnel port it connected through: that tunnel must still be
+/// open, since drop_pool counts the generation up before it closes the tunnel and a connect may have read both in between
+async fn keep_pool(state: &AppState, c: &Connecting, generation: u64, id: &str, port: Option<u16>, pool: Pool) -> AppResult<Pool> {
     {
         let mut pools = state.pools.write().await;
-        if c.generation.load(SeqCst) == generation {
+        let tunnel_open = match port {
+            Some(p) => state.tunnels.read().await.get(split_target(id).0).is_some_and(|t| t.local_port == p),
+            None => true,
+        };
+        if c.generation.load(SeqCst) == generation && tunnel_open {
             pools.insert(id.to_string(), pool.clone());
             return Ok(pool);
         }
@@ -1363,6 +1370,55 @@ mod tests {
         assert!(e.contains("disconnected while connecting"), "{e}");
         assert!(st.pools.read().await.is_empty());
         assert!(ensure_pool(&st, "slow").await.is_ok(), "the next call connects");
+    }
+
+    /// drop_pool racing a connect through the shared AWS SSM tunnel (fake aws): no pool may stay on the closed tunnel's port, which
+    /// the fast path would keep returning (tunnel_alive is None once the tunnel is gone)
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_connect_across_a_disconnect_keeps_no_pool_on_the_closed_tunnel() {
+        let lazy = |port| Pool::Pg(sqlx::postgres::PgPoolOptions::new().connect_lazy_with(sqlx::postgres::PgConnectOptions::new().host("127.0.0.1").port(port)));
+        let dir = tempfile::tempdir().unwrap();
+        let st = AppState::new(Store::new(dir.path().to_path_buf()), crate::secrets::SecretFile::open(dir.path()).unwrap());
+        let c = st.connecting("src");
+
+        // The connect read the tunnel's port, then drop_pool counted the generation up, and the connect read that generation
+        // before drop_pool closed the tunnel (shared_tunnel reads both in its own statements)
+        let (fake, t) = crate::ssm::tests::fake_tunnel().await;
+        let port = t.local_port;
+        st.tunnels.write().await.insert("src".into(), t);
+        drop_pool(&st, "src").await;
+        crate::ssm::tests::gone(fake.path()).await;
+        let g = c.generation.load(SeqCst);
+        let e = keep_pool(&st, &c, g, "src::db_b", Some(port), lazy(port)).await.err().expect("not kept: its tunnel is closed").to_string();
+        assert!(e.contains("disconnected while connecting") && e.contains("Run it again"), "{e}");
+        assert!(st.pools.read().await.is_empty());
+
+        // A pool kept while the tunnel was still open is closed with it: drop_pool closes the tunnel before it takes the pools
+        let (fake, t) = crate::ssm::tests::fake_tunnel().await;
+        st.tunnels.write().await.insert("src".into(), t);
+        let pools = st.pools.write().await;
+        let ((), tunnel_first) = tokio::join!(async { drop_pool(&st, "src").await; }, async {
+            let mut closed = false;
+            for _ in 0..50 {
+                if st.tunnels.read().await.is_empty() {
+                    closed = true;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            drop(pools);
+            closed
+        });
+        assert!(tunnel_first, "drop_pool waited for the pools before it closed the tunnel");
+        crate::ssm::tests::gone(fake.path()).await;
+
+        // A connect through the open tunnel is kept
+        let (_fake, t) = crate::ssm::tests::fake_tunnel().await;
+        let port = t.local_port;
+        st.tunnels.write().await.insert("src".into(), t);
+        assert!(keep_pool(&st, &c, c.generation.load(SeqCst), "src::db_b", Some(port), lazy(port)).await.is_ok());
+        drop_pool(&st, "src").await;
     }
 
     /// Changing only the host and doing Test / Save does not send the saved password to the new server; it asks for it again (before connecting)

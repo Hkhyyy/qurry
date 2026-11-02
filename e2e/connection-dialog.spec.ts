@@ -49,6 +49,36 @@ test("SSH/SSL tab: Tunnel None / SSH / AWS SSM, test and save through SSM", asyn
   await expect(dialog(page).getByRole("textbox", { name: "Instance id" })).toHaveValue("i-0123456789abcdef0");
 });
 
+test("AWS SSM: a long Test Connection error is scrolled into view in the fixed-size dialog", async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 700 });
+  await openProps(page);
+  const d = dialog(page);
+  await d.getByRole("combobox", { name: "Tunnel" }).selectOption("ssm");
+  // The mock's instance whose test fails with the missing-plugin message
+  await d.getByRole("textbox", { name: "Instance id" }).fill("i-0000000000000dead");
+  const box = await d.boundingBox();
+  await d.getByRole("button", { name: "Test Connection" }).click();
+  const notice = d.locator(".ui-notice.tone-danger");
+  await expect(notice).toContainText("session-manager-working-with-install-plugin.html), then try again.");
+  expect(await d.boundingBox(), "the dialog keeps its size").toEqual(box);
+  const body = d.locator(".ui-modal-body");
+  await expect
+    .poll(async () => {
+      const [n, b] = [await notice.boundingBox(), await body.boundingBox()];
+      return !!n && !!b && n.y >= b.y && n.y + n.height <= b.y + b.height;
+    }, { message: "the whole error, its last line included, is inside the dialog body" })
+    .toBe(true);
+  // The body scrolled, but the tab strip stays pinned at its top: the labels are still shown, not only the active underline
+  expect(await body.evaluate((el) => el.scrollTop), "the body scrolled to show the error").toBeGreaterThan(0);
+  const tab = d.getByRole("tab", { name: /SSH\/SSL/ });
+  const [t, b] = [await tab.boundingBox(), await body.boundingBox()];
+  expect(t && b && t.y >= b.y && t.y + t.height <= b.y + b.height, "the SSH/SSL tab is inside the dialog body").toBe(true);
+  expect(await tab.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
+  }), "nothing covers the SSH/SSL tab").toBe(true);
+});
+
 test("AWS SSM: a Test Connection that keeps starting shows the elapsed time and can be cancelled", async ({ page }) => {
   await openProps(page);
   const d = dialog(page);
