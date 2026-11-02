@@ -110,7 +110,11 @@ pub fn open_state(dir: Option<std::path::PathBuf>) -> error::AppResult<app::AppS
         error::AppError::Msg(format!("Cannot create the config folder {} ({e}) — check that you can write to it (and its parent folder)", dir.display()))
     })?;
     let secrets = secrets::SecretFile::open(&dir)?;
-    Ok(app::AppState::new(store::Store::new(dir), secrets))
+    let state = app::AppState::new(store::Store::new(dir), secrets);
+    if let Err(e) = state.forget_orphan_ssm_passwords() {
+        crate::log!("[qurry] saved AWS SSM passwords of deleted sources were not cleaned up: {e}");
+    }
+    Ok(state)
 }
 
 #[cfg(test)]

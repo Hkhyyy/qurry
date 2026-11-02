@@ -78,6 +78,19 @@ impl AppState {
         self.secret_file.set(key, value)?;
         Ok(())
     }
+
+    /// Forgets DB passwords saved under `<id>#ssm` whose data source is gone: an older app that deletes an AWS SSM source removes
+    /// only `<id>` and `<id>#ssh`. Only `#ssm` entries: older apps never write them, so a source an older app is saving right now
+    /// can't lose its password. Nothing is removed while connections.json can't be read
+    pub fn forget_orphan_ssm_passwords(&self) -> AppResult<()> {
+        let ids: std::collections::HashSet<String> = self.store.list()?.into_iter().map(|c| c.id).collect();
+        for key in self.secret_file.names()? {
+            if key.ends_with("#ssm") && !ids.contains(store::secret_owner(&key)) {
+                self.secret_file.set(&key, None)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl AppState {
@@ -1325,6 +1338,34 @@ mod tests {
         st.mcp = false;
         st.delete_connection(cfg.id).await.unwrap();
         assert!(!st.secret_file.contains(&format!("{id}#ssm")).unwrap());
+    }
+
+    /// An older app deleting an SSM source leaves `<id>#ssm` behind (it removes `<id>` and `<id>#ssh` only): the next start forgets it
+    #[tokio::test]
+    async fn ssm_password_of_a_source_deleted_by_an_older_app_is_forgotten() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let src = |name: &str| -> ConnectionConfig {
+            serde_json::from_value(serde_json::json!({ "name": name, "kind": "postgres", "host": "localhost", "port": 5432, "user": "app",
+                "ssm": { "enabled": true, "target": "i-0123456789abcdef0" } })).unwrap()
+        };
+        let gone = st.save_connection(src("gone"), Some("pw".into()), None).await.unwrap().id;
+        let kept = st.save_connection(src("kept"), Some("pw".into()), None).await.unwrap().id;
+        st.set_secret("api-key", Some("x")).unwrap();
+        // What the older app does
+        st.store.delete(&gone).unwrap();
+        st.set_secret(&gone, None).unwrap();
+        st.set_secret(&format!("{gone}#ssh"), None).unwrap();
+        drop(st);
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        assert!(!st.secret_file.contains(&format!("{gone}#ssm")).unwrap());
+        assert_eq!(st.secret(&format!("{kept}#ssm")).unwrap().as_deref(), Some("pw"));
+        assert!(st.secret_file.contains("api-key").unwrap());
+        // connections.json can't be read: nothing is removed
+        std::fs::write(dir.path().join("connections.json"), "{damaged").unwrap();
+        drop(st);
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        assert!(st.secret_file.contains(&format!("{kept}#ssm")).unwrap());
     }
 
     /// The MCP server does not read passwords of Data Sources hidden from MCP. The app is unaffected
