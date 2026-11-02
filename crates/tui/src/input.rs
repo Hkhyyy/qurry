@@ -1350,7 +1350,7 @@ fn save_form(app: &mut App, mut form: crate::app::ConnForm) {
 
 /// Command names shown in the palette·keymap
 pub fn name_of(a: Action) -> &'static str {
-    crate::app::ACTIONS.iter().find(|x| x.0 == a).map(|x| x.1).unwrap_or("?")
+    qurry_core::keymap::tui_command(&crate::keys::action_id(a)).map_or("?", |c| c.tui_title())
 }
 
 #[cfg(test)]
@@ -1478,7 +1478,7 @@ mod tests {
     #[tokio::test]
     async fn execute_smallest_runs_caret_statement() {
         let mut h = Harness::new().await;
-        h.app.exec.inside = crate::exec::Inside::Smallest;
+        h.app.exec.inside = qurry_core::exec::Inside::Smallest;
         h.console_with("BEGIN;\nGRANT a TO x;\n\nGRANT b TO x;\nCOMMIT;", 1, 2);
         h.key("F5");
         assert!(h.app.popup.is_none());

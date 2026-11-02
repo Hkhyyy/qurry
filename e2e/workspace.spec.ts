@@ -22,3 +22,18 @@ test("a saved workspace restores and saves back unchanged", async ({ page }) => 
   const saved = await page.evaluate(() => localStorage.getItem("mock-ws"));
   expect(JSON.parse(saved!)).toEqual(JSON.parse(fixture));
 });
+
+test("tab labels catch up once WebAssembly loads after the tabs restored", async ({ page }) => {
+  await page.addInitScript((ws) => localStorage.setItem("mock-ws", ws), fixture);
+  // Hold the module fetch until the restored tabs have drawn with the fallback labels
+  let release = () => {};
+  const held = new Promise<void>((r) => (release = r));
+  await page.route((u) => u.pathname.endsWith(".wasm") && !u.search, async (r) => {
+    await held;
+    await r.continue();
+  });
+  await openApp(page);
+  await expect.poll(() => tabStrips(page)).toEqual(["users | users | console [DEV] shop_app", "users"]);
+  release();
+  await expect.poll(() => tabStrips(page)).toEqual(["public.users | shop_app.billing.users | console [DEV] shop_app", "shop_app.billing.users"]);
+});

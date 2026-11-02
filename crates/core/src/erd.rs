@@ -1,6 +1,6 @@
 //! ERD: a schema's tables and columns (with PK and FK marks) and foreign key relationships. The GUI draws a diagram, the TUI a relationship list, and both can copy as Mermaid
 use crate::app::{AppState, ensure_pool};
-use crate::db::Pool;
+use crate::backend::{Backend, dispatch};
 use crate::error::AppResult;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -101,125 +101,12 @@ impl Erd {
 }
 
 /// (schema, table) → columns
-type Columns = std::collections::HashMap<(String, String), Vec<ErdColumn>>;
-
-async fn pg(p: &sqlx::PgPool, schemas: &[String]) -> AppResult<Erd> {
-    let rels: Vec<(String, String, String, Vec<String>, String, String, Vec<String>)> = sqlx::query_as(
-        "select con.conname::text, fn.nspname::text, fc.relname::text,
-                (select array_agg(a.attname::text order by k.ord) from unnest(con.conkey) with ordinality k(n, ord) join pg_attribute a on a.attrelid = con.conrelid and a.attnum = k.n),
-                tn.nspname::text, tc.relname::text,
-                (select array_agg(a.attname::text order by k.ord) from unnest(con.confkey) with ordinality k(n, ord) join pg_attribute a on a.attrelid = con.confrelid and a.attnum = k.n)
-         from pg_constraint con
-         join pg_class fc on fc.oid = con.conrelid join pg_namespace fn on fn.oid = fc.relnamespace
-         join pg_class tc on tc.oid = con.confrelid join pg_namespace tn on tn.oid = tc.relnamespace
-         where con.contype = 'f' and (fn.nspname = any($1) or tn.nspname = any($1))
-         order by fn.nspname, fc.relname, con.conname",
-    )
-    .bind(schemas)
-    .fetch_all(p)
-    .await?;
-    let mut wanted: Vec<(String, String)> = sqlx::query_as::<_, (String, String)>(
-        "select n.nspname::text, c.relname::text from pg_class c join pg_namespace n on n.oid = c.relnamespace
-         where c.relkind in ('r', 'p') and n.nspname = any($1) and not c.relispartition order by n.nspname, c.relname",
-    )
-    .bind(schemas)
-    .fetch_all(p)
-    .await?;
-    // Relationships pointing to another schema: include that table too
-    for r in &rels {
-        for k in [(r.1.clone(), r.2.clone()), (r.4.clone(), r.5.clone())] {
-            if !wanted.contains(&k) {
-                wanted.push(k);
-            }
-        }
-    }
-    let (ns, ts): (Vec<String>, Vec<String>) = wanted.iter().cloned().unzip();
-    let cols: Vec<(String, String, String, String, bool, bool)> = sqlx::query_as(
-        "select n.nspname::text, c.relname::text, a.attname::text, format_type(a.atttypid, a.atttypmod), not a.attnotnull,
-                exists(select 1 from pg_constraint pk where pk.conrelid = c.oid and pk.contype = 'p' and a.attnum = any(pk.conkey))
-         from unnest($1::text[], $2::text[]) w(ns, tn)
-         join pg_namespace n on n.nspname = w.ns join pg_class c on c.relnamespace = n.oid and c.relname = w.tn
-         join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
-         order by n.nspname, c.relname, a.attnum",
-    )
-    .bind(&ns)
-    .bind(&ts)
-    .fetch_all(p)
-    .await?;
-    let mut by: Columns = Default::default();
-    for (n, t, name, data_type, nullable, pk) in cols {
-        by.entry((n, t)).or_default().push(ErdColumn { name, data_type, pk, nullable });
-    }
-    Ok(Erd {
-        tables: wanted.into_iter().map(|(s, n)| ErdTable { columns: by.remove(&(s.clone(), n.clone())).unwrap_or_default(), schema: s, name: n }).collect(),
-        relations: rels.into_iter().map(|r| ErdRelation { name: r.0, from_schema: r.1, from_table: r.2, from_columns: r.3, to_schema: r.4, to_table: r.5, to_columns: r.6 }).collect(),
-    })
-}
-
-async fn my(p: &sqlx::MySqlPool, schemas: &[String]) -> AppResult<Erd> {
-    if schemas.is_empty() {
-        return Ok(Erd::default());
-    }
-    let marks = vec!["?"; schemas.len()].join(", ");
-    let rel_sql = format!(
-        "SELECT CAST(CONSTRAINT_NAME AS CHAR), CAST(TABLE_SCHEMA AS CHAR), CAST(TABLE_NAME AS CHAR), CAST(COLUMN_NAME AS CHAR),
-                CAST(REFERENCED_TABLE_SCHEMA AS CHAR), CAST(REFERENCED_TABLE_NAME AS CHAR), CAST(REFERENCED_COLUMN_NAME AS CHAR)
-         FROM information_schema.KEY_COLUMN_USAGE WHERE REFERENCED_TABLE_NAME IS NOT NULL AND (TABLE_SCHEMA IN ({marks}) OR REFERENCED_TABLE_SCHEMA IN ({marks}))
-         ORDER BY TABLE_SCHEMA, TABLE_NAME, CONSTRAINT_NAME, ORDINAL_POSITION"
-    );
-    let mut q = sqlx::query_as::<_, (String, String, String, String, String, String, String)>(&rel_sql);
-    for s in schemas.iter().chain(schemas.iter()) {
-        q = q.bind(s.clone());
-    }
-    let rows = q.fetch_all(p).await?;
-    let mut relations: Vec<ErdRelation> = vec![];
-    for (name, fs, ft, fc, ts, tt, tc) in rows {
-        match relations.last_mut() {
-            Some(r) if r.name == name && r.from_schema == fs && r.from_table == ft => {
-                r.from_columns.push(fc);
-                r.to_columns.push(tc);
-            }
-            _ => relations.push(ErdRelation { name, from_schema: fs, from_table: ft, from_columns: vec![fc], to_schema: ts, to_table: tt, to_columns: vec![tc] }),
-        }
-    }
-    let t_sql = format!("SELECT CAST(TABLE_SCHEMA AS CHAR), CAST(TABLE_NAME AS CHAR) FROM information_schema.TABLES WHERE TABLE_TYPE = 'BASE TABLE' AND TABLE_SCHEMA IN ({marks}) ORDER BY TABLE_SCHEMA, TABLE_NAME");
-    let mut q = sqlx::query_as::<_, (String, String)>(&t_sql);
-    for s in schemas {
-        q = q.bind(s.clone());
-    }
-    let mut wanted = q.fetch_all(p).await?;
-    for r in &relations {
-        for k in [(r.from_schema.clone(), r.from_table.clone()), (r.to_schema.clone(), r.to_table.clone())] {
-            if !wanted.contains(&k) {
-                wanted.push(k);
-            }
-        }
-    }
-    let all: Vec<String> = wanted.iter().map(|w| w.0.clone()).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
-    let c_sql = format!(
-        "SELECT CAST(TABLE_SCHEMA AS CHAR), CAST(TABLE_NAME AS CHAR), CAST(COLUMN_NAME AS CHAR), CAST(COLUMN_TYPE AS CHAR), CAST(IS_NULLABLE = 'YES' AS SIGNED), CAST(COLUMN_KEY = 'PRI' AS SIGNED) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA IN ({}) ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION",
-        vec!["?"; all.len()].join(", ")
-    );
-    let mut q = sqlx::query_as::<_, (String, String, String, String, i64, i64)>(&c_sql);
-    for s in &all {
-        q = q.bind(s.clone());
-    }
-    let mut by: Columns = Default::default();
-    for (s, t, name, data_type, nullable, pk) in q.fetch_all(p).await? {
-        by.entry((s, t)).or_default().push(ErdColumn { name, data_type, pk: pk != 0, nullable: nullable != 0 });
-    }
-    Ok(Erd { tables: wanted.into_iter().map(|(s, n)| ErdTable { columns: by.remove(&(s.clone(), n.clone())).unwrap_or_default(), schema: s, name: n }).collect(), relations })
-}
+pub(crate) type Columns = std::collections::HashMap<(String, String), Vec<ErdColumn>>;
 
 impl AppState {
     /// Tables and relationships of schemas. If a relationship points to another schema, that table is included too
     pub async fn erd(&self, id: String, schemas: Vec<String>) -> AppResult<Erd> {
-        let mut e = match ensure_pool(self, &id).await? {
-            Pool::Pg(p) => pg(&p, &schemas).await?,
-            Pool::My(p) => my(&p, &schemas).await?,
-            Pool::Redis(..) => return Err(crate::error::AppError::Msg("Redis has no tables".into())),
-            Pool::Plugin(c) => return Err(crate::error::AppError::Msg(format!("Diagrams are not available for the {} driver yet", c.driver))),
-        };
+        let mut e = dispatch!(ensure_pool(self, &id).await?, b => b.erd(&schemas).await)?;
         // In the order of the chosen schemas
         e.tables.sort_by_key(|t| (schemas.iter().position(|s| *s == t.schema).unwrap_or(usize::MAX), t.schema.clone(), t.name.clone()));
         Ok(e)

@@ -86,7 +86,7 @@ GUI: 결과에서 View as (눈 아이콘) › **Chart**: 막대 · 선 · 파이
 
 노드마다 자기 몫의 시간 (Explain Analyze) 또는 비용을 보여 주고, 볼 만한 것을 표시합니다 — 큰 테이블의 Seq Scan, 10배 이상 틀린 행 수 추정, 대부분의 행을 버리는 필터, 디스크로 넘친 정렬 · 해시. TUI: `⌥e` Explain, `⌃k` › Explain Analyze.
 
-Explain Analyze 는 문장을 실제로 실행합니다. 데이터를 바꾸는 문장 (UPDATE, DELETE, INSERT …) 은 PostgreSQL · MySQL 에서 트랜잭션 안에서 실행하고 되돌립니다 — 이미 트랜잭션이 열려 있으면 세이브포인트까지만 — 그래서 아무것도 바뀌지 않습니다.
+Explain Analyze 는 문장을 실제로 실행합니다. 데이터를 바꾸는 문장 (UPDATE, DELETE, INSERT, SELECT … INTO …) 은 PostgreSQL · MySQL 에서 트랜잭션 안에서 실행하고 되돌립니다 — 이미 트랜잭션이 열려 있으면 세이브포인트까지만 — 그래서 아무것도 바뀌지 않습니다.
 
 ---
 

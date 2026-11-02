@@ -427,14 +427,17 @@ export interface Dialect {
   monaco: string;
   /** Console statement splitting (semicolon-based if absent) */
   split?: (text: string) => { start: number; end: number }[];
+  /** The kind the Data Extractors (qurry_shared::extract) write identifiers and literals for: the connection's own kind */
+  quoting: DbKind;
 }
-const PG: Dialect = { q: quoteIdent, lit: sqlLiteral, text: (e) => `${e}::text`, monaco: "pgsql" };
+const PG: Dialect = { q: quoteIdent, lit: sqlLiteral, text: (e) => `${e}::text`, monaco: "pgsql", quoting: "postgres" };
 const MY: Dialect = {
   q: (s) => (/^[A-Za-z_][A-Za-z0-9_]*$/.test(s) && !RESERVED.has(s.toLowerCase()) ? s : "`" + s.replace(/`/g, "``") + "`"),
   // In MySQL strings backslash is also an escape char
   lit: (v) => (v === null ? "NULL" : `'${String(v).replace(/\\/g, "\\\\").replace(/'/g, "''")}'`),
   text: (e) => `CAST(${e} AS CHAR)`,
   monaco: "mysql",
+  quoting: "mysql",
 };
 /** Redis: one line = one command (# comments) */
 const RD: Dialect = {
@@ -442,6 +445,7 @@ const RD: Dialect = {
   lit: (v) => (v === null ? '""' : JSON.stringify(String(v))),
   text: (e) => e,
   monaco: "redis",
+  quoting: "redis",
   split: (text) => {
     const out: { start: number; end: number }[] = [];
     let pos = 0;
@@ -453,15 +457,18 @@ const RD: Dialect = {
     return out;
   },
 };
-/** Driver DBs: standard SQL quoting, text conversion via CAST (no PG ::text) */
-const GEN: Dialect = { ...PG, text: (e) => `CAST(${e} AS VARCHAR(4000))`, monaco: "sql" };
-const MONGO: Dialect = { q: (s) => s, lit: sqlLiteral, text: (e) => e, monaco: "javascript", split: RD.split };
+/** Driver DBs: standard SQL quoting, text conversion via CAST (no PG ::text). The extractors quote as the driver's kind (no PG E'') */
+const GEN = Object.fromEntries(PLUGIN_KINDS.map((k) => [k, { ...PG, text: (e: string) => `CAST(${e} AS VARCHAR(4000))`, monaco: "sql", quoting: k }])) as Record<DbKind, Dialect>;
+/** ClickHouse reads \ as an escape inside strings, as MySQL does */
+const CH: Dialect = { ...GEN.clickhouse, lit: MY.lit };
+const MONGO: Dialect = { q: (s) => s, lit: sqlLiteral, text: (e) => e, monaco: "javascript", split: RD.split, quoting: "mongodb" };
 /** One REST request = from a method line up to the next method line (including JSON body). Same rule as core's sql::split_rest */
 const REST: Dialect = {
   q: (s) => s,
   lit: sqlLiteral,
   text: (e) => e,
   monaco: "javascript",
+  quoting: "qdrant",
   split: (text) => {
     const out: { start: number; end: number }[] = [];
     let pos = 0;
@@ -481,7 +488,7 @@ const REST: Dialect = {
     return out;
   },
 };
-export const dialectOf = (kind?: DbKind) => (kind === "mysql" ? MY : kind === "redis" ? RD : kind === "mongodb" ? MONGO : kind && VECTOR_KINDS.includes(kind) ? REST : kind && PLUGIN_KINDS.includes(kind) ? GEN : PG);
+export const dialectOf = (kind?: DbKind) => (kind === "mysql" ? MY : kind === "redis" ? RD : kind === "mongodb" ? MONGO : kind && VECTOR_KINDS.includes(kind) ? REST : kind === "clickhouse" ? CH : kind && PLUGIN_KINDS.includes(kind) ? GEN[kind] : PG);
 
 /** Backend connection target: Data Source id + DB name */
 export const targetId = (connId: string, database?: string | null) => (database ? `${connId}::${database}` : connId);

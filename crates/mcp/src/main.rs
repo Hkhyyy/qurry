@@ -442,34 +442,9 @@ fn result_json(r: &QueryResult) -> Value {
     })
 }
 
+/// search_objects ranking: the TUI palette's score (qurry_shared::fuzzy); None = no match
 fn fuzzy(q: &str, text: &str) -> Option<i64> {
-    let (q, t) = (q.to_lowercase(), text.to_lowercase());
-    if q.is_empty() {
-        return Some(0);
-    }
-    if t == q {
-        return Some(1000);
-    }
-    if t.starts_with(&q) {
-        return Some(800 - t.len() as i64);
-    }
-    if let Some(i) = t.find(&q) {
-        return Some(500 - i as i64 - t.len() as i64 / 10);
-    }
-    let mut it = t.chars();
-    let mut score = 200i64;
-    for qc in q.chars().filter(|c| !c.is_whitespace()) {
-        let mut skipped = 0;
-        loop {
-            match it.next() {
-                Some(c) if c == qc => break,
-                Some(_) => skipped += 1,
-                None => return None,
-            }
-        }
-        score -= skipped.min(10);
-    }
-    Some(score - t.len() as i64 / 10)
+    qurry_core::fuzzy::score(q, text, Default::default()).map(|s| s as i64)
 }
 
 async fn handle(server: Arc<Server>, msg: Value) -> Option<Value> {

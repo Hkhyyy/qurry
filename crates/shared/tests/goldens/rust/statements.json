@@ -1,4 +1,20 @@
 {
+  "backslash-ansi-quotes": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
+  "backslash-no-backslash-escapes": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
+  "backslash-read": {
+    "DDL_RE": false,
+    "isReadStmt": true
+  },
+  "backslash-scs-off": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
   "call": {
     "DDL_RE": false,
     "isReadStmt": false
@@ -9,6 +25,10 @@
   },
   "create-index-upper": {
     "DDL_RE": true,
+    "isReadStmt": false
+  },
+  "dblink-exec": {
+    "DDL_RE": false,
     "isReadStmt": false
   },
   "desc": {

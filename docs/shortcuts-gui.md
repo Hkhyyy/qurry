@@ -57,7 +57,7 @@ Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…
 | `⇧⌘]` | Next tab |
 | `⇧⌘[` | Previous tab |
 | `⇧F6` | Rename console |
-| `⌥⇥` | Go to the next split (⇧ previous) |
+| `⌥⇥ / ⌥⇧⇥` | Go to the next split (⇧ previous) |
 | `right-click tab` | Pin, Split Right/Down (up to 4 panes), Move to Next Group, Close others… |
 | `drag tab` | Reorder, or drop on a pane's right/bottom edge to split it (up to 4) |
 
@@ -73,16 +73,16 @@ Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…
 | `⌥⇧⌘G` | Copy DDL to clipboard |
 | `⌥⇧⌘B` | Open DDL in console |
 | `⌥⇧⌘C` | Copy reference |
+| `F1` | Quick documentation |
 | `⌘F6` | Modify table (columns, keys, indexes, foreign keys) |
 | `⇧F6` | Rename table / view / sequence / schema / database |
-| `F1` | Quick documentation |
 | `⌘;` | Data source properties |
 | `⌘n` | New data source |
 | `⌘d` | Duplicate data source |
-| `⌘r` | Refresh |
+| `⌘r / ⌥⇧⌘R` | Refresh |
 | `⌥⌘y` | Refresh (anywhere) |
 | `⌘F2` | Disconnect |
-| `⌦` | Remove data source / drop object (asks first) |
+| `⌦ / ⌘⌫` | Remove data source / drop object (asks first) |
 | `type letters` | Speed search in the tree |
 
 ## Query console

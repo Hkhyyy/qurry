@@ -9,8 +9,8 @@ import { KeymapEditor } from "./components/KeymapEditor";
 import { UpdateDialog } from "./components/UpdateDialog";
 import { ContextMenu, Explorer, MenuItem } from "./components/Explorer";
 import { ConnectionDialog } from "./components/ConnectionDialog";
-import { ConsoleEditor, EditorApi } from "./components/ConsoleEditor";
-import { ConsolePane, OutputLine, ResultEntry } from "./components/ConsolePane";
+import { ConsoleEditor } from "./components/ConsoleEditor";
+import { ConsoleApi, ConsolePane, OutputLine, ResultEntry } from "./components/ConsolePane";
 import { HistoryDialog, migrateOldHistory, pushHistory, saveSnippet } from "./components/HistoryDialog";
 import { ProductionLog } from "./components/ProductionLog";
 import { CopyRowsDialog, GenerateDataDialog } from "./components/DataTools";
@@ -30,8 +30,9 @@ import { bindings, eventSpec, formatSpec, hit, loadKeymap, onKeymapChange } from
 import { invalidateCompletion } from "./lib/completion";
 import { shared } from "./lib/shared";
 import { useStatusWidgets } from "./lib/statusbar";
+import { useSharedReady } from "./lib/shared";
 import { tableTabLabels } from "./lib/tabLabels";
-import { DDL_RE, isReadStmt } from "./lib/stmtKindLegacy";
+import { isDdl, isRead } from "./lib/stmtKind";
 import type { BackupOptions, FtsRequest } from "./lib/api";
 import { isRelation, NodeInfo, revealInTree, schemaChanged } from "./components/SchemaTree";
 import { leaf, leaves, MAX_PANES, Pane, prunePanes, splitPane } from "./lib/panes";
@@ -136,8 +137,8 @@ const last = <T,>(a: T[]): T | undefined => a[a.length - 1];
 
 export default function App() {
   const theme = useTheme();
-  // Redraw the menu shortcut labels when the keymap changes
-  const [, setKeymapVer] = useState(0);
+  // Redraw the menu shortcut labels when the keymap changes (or the WASM module that draws them has loaded)
+  const [keymapVer, setKeymapVer] = useState(0);
   useEffect(() => {
     const off = onKeymapChange(() => setKeymapVer((n) => n + 1));
     void loadKeymap();
@@ -200,7 +201,7 @@ export default function App() {
   const [status, setStatus] = useState("Ready");
   const [treeSel, setTreeSel] = useState<NodeInfo | null>(null);
   const [tabMenu, setTabMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
-  const editorApis = useRef(new Map<string, EditorApi>());
+  const editorApis = useRef(new Map<string, ConsoleApi>());
   const [historyFor, setHistoryFor] = useState<string | null>(null);
   const [historyTab, setHistoryTab] = useState<"history" | "snippets">("history");
   /** Production operation log window (connId null = all Data Sources) */
@@ -293,12 +294,13 @@ export default function App() {
   const active = groupActive(focused) ?? leaves(panes).map(groupActive).find(Boolean) ?? null;
   const activeConn = conns.find((c) => c.id === active?.connId);
   // Several table tabs with the same name → schema.table (db.schema.table if the schema is also the same)
+  const wasmReady = useSharedReady();
   const tabLabels = useMemo(
     () =>
       tableTabLabels(
         tabs.flatMap((t) => (t.kind === "table" && t.edit ? [{ id: t.id, db: t.database || conns.find((c) => c.id === t.connId)?.database || "", schema: t.edit.schema, table: t.edit.table }] : [])),
       ),
-    [tabs, conns],
+    [tabs, conns, wasmReady],
   );
   const labelOf = (t: Tab) => tabLabels.get(t.id) ?? t.title;
   /** If the tab is in another workspace, change it there (so query results that finished meanwhile are not lost) */
@@ -1273,23 +1275,27 @@ export default function App() {
     const tab = tabsRef.current.find((t) => t.id === tabId);
     if (!tab || !stmts.length) return;
     const c = conns.find((x) => x.id === tab.connId);
+    const kind = c?.kind ?? "postgres";
     // Confirm dangerous statements (UPDATE/DELETE without WHERE, DROP, TRUNCATE — same rules as the core guard).
     // Explain Analyze actually runs the statement, so confirm it (only plain Explain is skipped)
     if (explain !== "plan") {
       for (const s of stmts) {
-        const why = await api.unsafeReason(c?.kind ?? "postgres", s).catch(() => null);
+        const why = await api.unsafeReason(kind, s).catch(() => null);
         if (why && !(await ask(`${why}. Run it anyway?`, { title: c ? `${c.name}: dangerous statement` : "Dangerous statement", detail: [{ text: s.slice(0, 300), tone: "danger" }], okLabel: "Run Anyway", danger: true }))) return;
       }
     }
     // Production: for data-changing statements, count the rows that will change, show it and ask (counted with SELECT count(*))
     if (c?.options?.confirmChanges && !explain) {
-      const writes = stmts.filter((s) => !isReadStmt(s));
+      // Same check as the TUI (core guard): a write keyword only inside a string or a comment (MySQL # too) doesn't make a read a write
+      const writes = stmts.filter((s) => !isRead(kind, s));
       if (writes.length) {
         setStatus("Counting the rows this will change…");
         const detail: { text: string; value: string; tone?: "danger" | "warn" }[] = [];
         for (const w of writes) {
           const n = await previewImpact(tab.target, w).catch((e) => `can't count: ${String(e).split("\n")[0]}`);
-          const value = typeof n === "number" ? `${n.toLocaleString("en-US")} row${n === 1 ? "" : "s"}` : n === null ? (DDL_RE.test(w) ? "schema change" : "can't count") : n;
+          // isDdl is null while the WASM module isn't loaded
+          const ddl = n === null ? isDdl(kind, w) : false;
+          const value = typeof n === "number" ? `${n.toLocaleString("en-US")} row${n === 1 ? "" : "s"}` : n === null ? (ddl ? "schema change" : ddl === null ? "can't count · may change the schema" : "can't count") : n;
           // More rows changed = more prominent: 0 rows normal, 1~99 warning, 100+ · uncountable · DDL danger
           const tone = typeof n === "number" ? (n >= 100 ? "danger" : n > 0 ? "warn" : undefined) : "danger";
           detail.push({ text: w.replace(/\s+/g, " ").slice(0, 300), value, tone });
@@ -1318,7 +1324,7 @@ export default function App() {
       log(tabId, "sql", `${c?.name ?? ""}> ${sql0}`);
       // Explain Analyse actually runs the statement → run changing statements in a transaction and always roll back
       // (if already in a transaction, only that part via a savepoint)
-      const dry = explain === "analyze" && !isReadStmt(sql0);
+      const dry = explain === "analyze" && !isRead(kind, sql0);
       const inTx0 = !!tabsRef.current.find((t) => t.id === tabId)?.inTx;
       try {
         let r: QueryResult;
@@ -1336,7 +1342,7 @@ export default function App() {
         }
         pushHistory({ connId: tab.connId, database: tab.database, sql: sql0 });
         updTab(tabId, (t) => ({ ...t, inTx: !!r.inTransaction }));
-        if (!r.inTransaction && !isReadStmt(sql0) && !dry) committed++;
+        if (!r.inTransaction && !isRead(kind, sql0) && !dry) committed++;
         if (r.warning) {
           warned++;
           log(tabId, "warn", `Warning: ${r.warning}`);
@@ -1374,7 +1380,7 @@ export default function App() {
         // Even on error a transaction may be open (e.g. first statement fails in Manual) → sync the Commit/Roll back buttons
         syncTx(tabId);
         // DDL among the earlier statements may already be applied
-        if (!explain && stmts.some((s) => DDL_RE.test(s))) schemaChanged(tab.connId, tab.database ?? (c?.database || (c?.kind === "postgres" ? "postgres" : "")));
+        if (!explain && stmts.some((s) => isDdl(kind, s) !== false)) schemaChanged(tab.connId, tab.database ?? (c?.database || (c?.kind === "postgres" ? "postgres" : "")));
         lastActive = "output";
         updTab(tabId, (t) => ({ ...t, running: false, activeResult: "output" }));
         setStatus("Query failed");
@@ -1385,7 +1391,7 @@ export default function App() {
     updTab(tabId, (t) => ({ ...t, running: false, activeResult: lastActive, lastSql: stmts[stmts.length - 1] }));
     setStatus(`${stmts.length} statement${stmts.length > 1 ? "s" : ""} executed${warned ? ` · ${warned} with a warning (see Output)` : ""}`);
     // If tables or columns were created, altered, or dropped, show it in the explorer right away
-    if (!explain && stmts.some((s) => DDL_RE.test(s))) schemaChanged(tab.connId, tab.database ?? (c?.database || (c?.kind === "postgres" ? "postgres" : "")));
+    if (!explain && stmts.some((s) => isDdl(kind, s) !== false)) schemaChanged(tab.connId, tab.database ?? (c?.database || (c?.kind === "postgres" ? "postgres" : "")));
     refresh();
   };
 
@@ -1493,6 +1499,14 @@ export default function App() {
     } catch (e) {
       setStatus(String(e));
     }
+  };
+
+  /** ⌘F2: cancel the running statement, or the ⌘↩ still waiting for the WebAssembly module */
+  const canCancel = (t?: Tab | null) => !!t && (t.running || !!editorApis.current.get(t.id)?.loading());
+  const cancelRun = (t: Tab) => {
+    const ed = editorApis.current.get(t.id);
+    if (ed?.loading()) ed.cancelPending();
+    else cancel(t);
   };
 
   const submitEdits = async (tab: Tab, statements: string[]) => {
@@ -1835,7 +1849,7 @@ export default function App() {
       { name: "Execute", shortcut: sk("editor.run"), group: "Run", run: () => t && editorApis.current.get(t.id)?.run(), disabled: t?.kind !== "console" },
       { name: "Explain Plan", group: "Run", run: () => t && editorApis.current.get(t.id)?.run("plan"), disabled: t?.kind !== "console" },
       { name: "Explain Analyse", group: "Run", run: () => t && editorApis.current.get(t.id)?.run("analyze"), disabled: t?.kind !== "console" },
-      { name: "Cancel Running Statements", shortcut: sk("editor.cancel"), group: "Run", run: () => t && cancel(t), disabled: !t?.running },
+      { name: "Cancel Running Statements", shortcut: sk("editor.cancel"), group: "Run", run: () => t && cancelRun(t), disabled: !canCancel(t) },
       { name: "Commit", group: "Transaction", run: () => t && txEnd(t, "commit"), disabled: !t?.inTx },
       { name: "Roll Back", group: "Transaction", run: () => t && txEnd(t, "rollback"), disabled: !t?.inTx },
       { name: "Transaction Mode: Manual", group: "Transaction", run: () => t && setTxMode(t, true), disabled: t?.kind !== "console" },
@@ -1976,9 +1990,9 @@ export default function App() {
         setHistoryFor(active.id);
         return;
       }
-      if (is("editor.cancel") && !inTree && active?.running) {
+      if (is("editor.cancel") && !inTree && active && canCancel(active)) {
         e.preventDefault();
-        cancel(active);
+        cancelRun(active);
         return;
       }
       // ⇧F6 = rename console (same as Rename File… in the tab menu)
@@ -2054,7 +2068,8 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [conns]);
+    // keymapVer: menus opened from keys (⇧⌘F10 …) show the current shortcut labels
+  }, [conns, keymapVer]);
 
   // ───────── Misc ─────────
   // Only that part: the list may be stale (another app changed the source since), so the backend changes it in the saved one
@@ -2249,6 +2264,7 @@ export default function App() {
                     connName={c?.name ?? ""}
                     database={t.database || c?.database || (c?.kind === "mysql" ? "" : "postgres")}
                     schema={t.schema ?? (c?.kind === "mysql" ? t.database || c?.database || "" : "public")}
+                    kind={c?.kind}
                     dialect={dialectOf(c?.kind)}
                     dbList={dbCache[t.connId] ?? []}
                     schemaList={schemaCache[t.target] ?? []}
@@ -2280,6 +2296,7 @@ export default function App() {
                     schemaSwitchDisabled={conns.find((x) => x.id === t.connId)?.options?.switchSchema === "disable"}
                     registerApi={(id, a) => editorApis.current.set(id, a)}
                     onClearOutput={() => patch(t.id, { output: [] })}
+                    onError={(m) => (log(t.id, "error", m), patch(t.id, { activeResult: "output" }), setStatus("Not run: the statement splitter couldn't load (see Output)"))}
                   />
                 </div>
               );

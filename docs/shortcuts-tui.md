@@ -29,22 +29,22 @@ Press **F1** inside `qurry-tui`, or run `qurry-tui --help`, to see the same list
 | Key | Action |
 |---|---|
 | `⌃q` | Quit |
-| `F1` | Keymap |
-| `⌃k` | Actions Palette |
 | `⌃p` | Search Everywhere (objects · columns · tabs · actions) |
 | `⌃o` | Go to Database Object |
+| `⌃k` | Actions Palette |
+| `F1` | Keymap |
+| `⌥0` | Database Explorer |
 | `⌃b` | Go to DDL |
+| `⌃F6` | Modify Table… (change columns, keys, indexes, foreign keys → ALTER) |
+| `⇧F6` | Rename… (table, view, sequence, schema, database) |
 | `⌃e` | Recent Tabs / Switcher |
 | `⌃l` | New Query Console |
 | `⌃w` | Close Tab |
 | `⌥Right / ⌃PgDn` | Next Tab |
 | `⌥Left / ⌃PgUp` | Previous Tab |
-| `⌥0` | Database Explorer |
 | `⌥n` | New Workspace… |
 | `⌥⇧N` | Rename Workspace… |
 | `F6` | Cycle Focus (explorer → editor → results) |
-| `⌃F6` | Modify Table… (selected table) |
-| `⇧F6` | Rename… (selected table, view, sequence, schema or database) |
 | `⌥\` | Split Right (focused pane, up to 4) |
 | `⌥-` | Split Down (focused pane, up to 4) |
 | `⌥Tab` | Go to the Next Split |

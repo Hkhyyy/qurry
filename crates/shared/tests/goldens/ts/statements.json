@@ -40,7 +40,7 @@
     "DDL_RE": false
   },
   "word-in-string": {
-    "isReadStmt": false,
+    "isReadStmt": true,
     "DDL_RE": false
   },
   "word-in-quoted-ident": {
@@ -89,7 +89,7 @@
   },
   "hash-comment-truncate": {
     "isReadStmt": false,
-    "DDL_RE": false
+    "DDL_RE": true
   },
   "comment-on": {
     "isReadStmt": false,
@@ -116,6 +116,26 @@
     "DDL_RE": true
   },
   "paren-select": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
+  "backslash-no-backslash-escapes": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "backslash-scs-off": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "backslash-read": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
+  "backslash-ansi-quotes": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "dblink-exec": {
     "isReadStmt": false,
     "DDL_RE": false
   },

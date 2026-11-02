@@ -1,5 +1,5 @@
 //! TUI state and actions. All real DB work goes through qurry_core::app::AppState (same engine as the GUI).
-use crate::complete::{self, Item};
+use qurry_core::complete::{self, Item, Options};
 use crate::grid::{raw_text, Grid};
 use crate::tree::{Node, NodeKind, Tree};
 use qurry_core::app::{AppState, ConnectionView};
@@ -254,7 +254,7 @@ pub enum PAction {
     /// Statements picked in the execution picker popup
     Run { stmts: Vec<String>, explain: bool },
     /// Change execution settings
-    Exec(crate::exec::ExecSettings),
+    Exec(qurry_core::exec::ExecSettings),
 }
 #[derive(Clone)]
 pub struct IndexEntryLite {
@@ -414,102 +414,102 @@ pub enum Action {
     Quit,
 }
 
-/// Action palette list: (action, name, hint). Hints for rebindable commands (keys::DEFAULT_KEYS) come from the current keymap
-pub const ACTIONS: &[(Action, &str, &str)] = &[
-    (Action::NewConsole, "New Query Console", ""),
-    (Action::Execute, "Execute (asks what to run — see Query Execution Settings)", ""),
-    (Action::Explain, "Explain Plan", ""),
-    (Action::ExplainAnalyze, "Explain Analyze (runs the statement: real times and row counts)", ""),
-    (Action::Cancel, "Cancel Running Statement", ""),
-    (Action::TxToggle, "Toggle Transaction Mode (Auto/Manual)", ""),
-    (Action::Commit, "Commit", ""),
-    (Action::Rollback, "Roll Back", ""),
-    (Action::ExecSettings, "Query Execution Settings (what ⌃Enter runs)", ""),
-    (Action::ClearConsole, "Clear Console (delete all text)", "⌘A ⌫ (console)"),
-    (Action::SearchEverywhere, "Search Everywhere (objects · columns · tabs · actions)", ""),
-    (Action::GoToObject, "Go to Database Object", ""),
-    (Action::RecentTabs, "Recent Tabs / Switcher", ""),
-    (Action::EditData, "Edit Data (open table)", "F4 / Enter"),
-    (Action::Ddl, "Go to DDL", ""),
-    (Action::Submit, "Submit Changes", ""),
-    (Action::Revert, "Revert Changes", "⌃z (grid)"),
-    (Action::AddRow, "Add Row", "Insert / a"),
-    (Action::DeleteRow, "Delete Row", "Delete / d"),
-    (Action::SetNull, "Set NULL", "n (grid)"),
-    (Action::ExportCsv, "Export Data… (CSV, TSV, JSON, SQL INSERT, Markdown)", "x (grid)"),
-    (Action::CopyInList, "Copy Column as IN List  ('a', 'b', …)", "Y (grid)"),
-    (Action::FindSimilar, "Find Similar Rows (pgvector, by the vector column)", ""),
-    (Action::RagSearch, "AI Search (RAG)… — ask a table in plain words", ""),
-    (Action::RagBuild, "Build RAG Index… (embed the rows)", ""),
-    (Action::RagNew, "New RAG Index from the Selected Table…", ""),
-    (Action::RagKey, "Set OpenAI API Key (RAG)…", ""),
-    (Action::WsSwitch, "Switch Workspace…", "⌥1…9"),
-    (Action::WsNew, "New Workspace…", ""),
-    (Action::WsRename, "Rename Workspace…", ""),
-    (Action::WsDelete, "Delete Workspace…", ""),
-    (Action::WsMoveTab, "Move Tab to Workspace…", ""),
-    (Action::WsAddConn, "Add Data Source to This Workspace…", ""),
-    (Action::WsMoveConn, "Move Data Source to Another Workspace…", "w (explorer)"),
-    (Action::WsRemoveConn, "Remove Data Source from This Workspace", ""),
-    (Action::Find, "Find / Replace in Editor (regex)", ""),
-    (Action::QueryHistory, "Query History… (shared with the GUI)", ""),
-    (Action::ProductionLog, "Production Log… (changes run on Production data sources, undo SQL)", ""),
-    (Action::Snippets, "Snippets…", ""),
-    (Action::SaveSnippet, "Save Query as Snippet…", ""),
-    (Action::ShowDiagram, "Show Diagram (ERD): foreign keys of a schema, as text + Mermaid", ""),
-    (Action::CompareSchemas, "Compare Schemas… (DDL to make one schema look like another)", ""),
-    (Action::CompareData, "Compare Table Data… (sync SQL by primary key)", ""),
-    (Action::RunMigrations, "Run Migrations… (folder of V1__name.sql files)", ""),
-    (Action::BackupDb, "Back Up Database… (pg_dump / mysqldump)", ""),
-    (Action::RestoreDb, "Restore Database… (from a .dump / .sql backup)", ""),
-    (Action::DbaReports, "Database Admin… (sessions & locks, slow queries, sizes, indexes, vacuum, server, privileges)", ""),
-    (Action::ImportData, "Import Data from File… (CSV, TSV, JSON, Excel)", ""),
-    (Action::GenerateTestData, "Generate Test Data… (fill the selected table with realistic rows)", ""),
-    (Action::NewTable, "New Table… (columns, keys, indexes, foreign keys — SQL shown before it runs)", ""),
-    (Action::ModifyTable, "Modify Table… (change columns, keys, indexes, foreign keys → ALTER)", ""),
-    (Action::NewView, "New View…", ""),
-    (Action::NewSchema, "New Schema… (PostgreSQL)", ""),
-    (Action::NewDatabase, "New Database…", ""),
-    (Action::NewSequence, "New Sequence… (PostgreSQL)", ""),
-    (Action::RenameObject, "Rename… (table, view, sequence, schema, database)", ""),
-    (Action::ChartResult, "Chart Result (bars: sum of a number column by the first text column)", ""),
-    (Action::CopyRelatedRows, "Copy Related Rows To… (rows + foreign-key related rows into another data source, personal data masked)", ""),
-    (Action::CancelTransfer, "Cancel Export/Import", ""),
-    (Action::NewDataSource, "New Data Source…", "n (explorer)"),
-    (Action::EditDataSource, "Data Source Properties…", "e (explorer)"),
-    (Action::DeleteDataSource, "Remove Data Source", "D (explorer)"),
-    (Action::Connect, "Connect", "c (explorer)"),
-    (Action::Disconnect, "Disconnect", ""),
-    (Action::Refresh, "Refresh", "r (explorer · table · Redis)"),
-    (Action::ManageSchemas, "Manage Shown Schemas… (databases · schemas in the explorer)", "s (explorer)"),
-    (Action::CloseTab, "Close Tab", ""),
-    (Action::NextTab, "Next Tab", ""),
-    (Action::PrevTab, "Previous Tab", ""),
-    (Action::ToggleExplorer, "Database Explorer", ""),
-    (Action::ToggleOutput, "Toggle Output / Result", ""),
-    (Action::Complete, "Code Completion", ""),
-    (Action::SplitRight, "Split Right (focused pane, up to 4)", ""),
-    (Action::SplitDown, "Split Down (focused pane, up to 4)", ""),
-    (Action::Unsplit, "Unsplit All", ""),
-    (Action::OtherSplit, "Go to the Next Split", ""),
-    (Action::SplitShrink, "Move Split Divider Left / Up", ""),
-    (Action::SplitGrow, "Move Split Divider Right / Down", ""),
-    (Action::ExplorerNarrower, "Database Explorer Narrower", ""),
-    (Action::ExplorerWider, "Database Explorer Wider", ""),
-    (Action::ShrinkEditor, "Shrink Editor (console)", ""),
-    (Action::GrowEditor, "Grow Editor (console)", ""),
-    (Action::PaneUp, "Go to the Split Above", ""),
-    (Action::PaneDown, "Go to the Split Below", ""),
-    (Action::PaneLeft, "Go to the Split on the Left", ""),
-    (Action::PaneRight, "Go to the Split on the Right", ""),
-    (Action::CycleFocus, "Cycle Focus (explorer → editor → results)", ""),
-    (Action::Palette, "Actions Palette", ""),
-    (Action::TrustSshHost, "Trust SSH Host Key (after checking its fingerprint)", ""),
-    (Action::PasswordKey, "Password Key… (keep it in the config folder or the system keychain)", ""),
-    (Action::CheckUpdate, "Check for Updates", ""),
-    (Action::InstallUpdate, "Update Qurry & Restart (download the latest release)", ""),
-    (Action::Help, "Keymap", ""),
-    (Action::Quit, "Quit", ""),
+/// Action palette list, in palette order: (action, hint). Names come from the shared command table (input::name_of); hints for rebindable commands (keys::DEFAULT_KEYS) from the current keymap
+pub const ACTIONS: &[(Action, &str)] = &[
+    (Action::NewConsole, ""),
+    (Action::Execute, ""),
+    (Action::Explain, ""),
+    (Action::ExplainAnalyze, ""),
+    (Action::Cancel, ""),
+    (Action::TxToggle, ""),
+    (Action::Commit, ""),
+    (Action::Rollback, ""),
+    (Action::ExecSettings, ""),
+    (Action::ClearConsole, "⌘A ⌫ (console)"),
+    (Action::SearchEverywhere, ""),
+    (Action::GoToObject, ""),
+    (Action::RecentTabs, ""),
+    (Action::EditData, "F4 / Enter"),
+    (Action::Ddl, ""),
+    (Action::Submit, ""),
+    (Action::Revert, "⌃z (grid)"),
+    (Action::AddRow, "Insert / a"),
+    (Action::DeleteRow, "Delete / d"),
+    (Action::SetNull, "n (grid)"),
+    (Action::ExportCsv, "x (grid)"),
+    (Action::CopyInList, "Y (grid)"),
+    (Action::FindSimilar, ""),
+    (Action::RagSearch, ""),
+    (Action::RagBuild, ""),
+    (Action::RagNew, ""),
+    (Action::RagKey, ""),
+    (Action::WsSwitch, "⌥1…9"),
+    (Action::WsNew, ""),
+    (Action::WsRename, ""),
+    (Action::WsDelete, ""),
+    (Action::WsMoveTab, ""),
+    (Action::WsAddConn, ""),
+    (Action::WsMoveConn, "w (explorer)"),
+    (Action::WsRemoveConn, ""),
+    (Action::Find, ""),
+    (Action::QueryHistory, ""),
+    (Action::ProductionLog, ""),
+    (Action::Snippets, ""),
+    (Action::SaveSnippet, ""),
+    (Action::ShowDiagram, ""),
+    (Action::CompareSchemas, ""),
+    (Action::CompareData, ""),
+    (Action::RunMigrations, ""),
+    (Action::BackupDb, ""),
+    (Action::RestoreDb, ""),
+    (Action::DbaReports, ""),
+    (Action::ImportData, ""),
+    (Action::GenerateTestData, ""),
+    (Action::NewTable, ""),
+    (Action::ModifyTable, ""),
+    (Action::NewView, ""),
+    (Action::NewSchema, ""),
+    (Action::NewDatabase, ""),
+    (Action::NewSequence, ""),
+    (Action::RenameObject, ""),
+    (Action::ChartResult, ""),
+    (Action::CopyRelatedRows, ""),
+    (Action::CancelTransfer, ""),
+    (Action::NewDataSource, "n (explorer)"),
+    (Action::EditDataSource, "e (explorer)"),
+    (Action::DeleteDataSource, "D (explorer)"),
+    (Action::Connect, "c (explorer)"),
+    (Action::Disconnect, ""),
+    (Action::Refresh, "r (explorer · table · Redis)"),
+    (Action::ManageSchemas, "s (explorer)"),
+    (Action::CloseTab, ""),
+    (Action::NextTab, ""),
+    (Action::PrevTab, ""),
+    (Action::ToggleExplorer, ""),
+    (Action::ToggleOutput, ""),
+    (Action::Complete, ""),
+    (Action::SplitRight, ""),
+    (Action::SplitDown, ""),
+    (Action::Unsplit, ""),
+    (Action::OtherSplit, ""),
+    (Action::SplitShrink, ""),
+    (Action::SplitGrow, ""),
+    (Action::ExplorerNarrower, ""),
+    (Action::ExplorerWider, ""),
+    (Action::ShrinkEditor, ""),
+    (Action::GrowEditor, ""),
+    (Action::PaneUp, ""),
+    (Action::PaneDown, ""),
+    (Action::PaneLeft, ""),
+    (Action::PaneRight, ""),
+    (Action::CycleFocus, ""),
+    (Action::Palette, ""),
+    (Action::TrustSshHost, ""),
+    (Action::PasswordKey, ""),
+    (Action::CheckUpdate, ""),
+    (Action::InstallUpdate, ""),
+    (Action::Help, ""),
+    (Action::Quit, ""),
 ];
 
 fn object_items(conn: &str, name: &str, db: &str, es: Vec<IndexEntry>, tag: &str) -> Vec<PItem> {
@@ -648,7 +648,7 @@ pub struct App {
     pub update: Option<String>,
     next_id: u64,
     /// What ⌃Enter runs (Query Execution Settings, saved in the workspace)
-    pub exec: crate::exec::ExecSettings,
+    pub exec: qurry_core::exec::ExecSettings,
     /// Workspaces and the current one (the current one's tabs are the tabs · panes … above)
     pub workspaces: Vec<Workspace>,
     pub cur_ws: usize,
@@ -667,37 +667,9 @@ pub struct App {
 /// Tests only (testkit): stands in for the database, answering each query by its text
 pub type FakeDb = fn(&str) -> Result<QueryResult, String>;
 
+/// Palette search score (qurry_shared::fuzzy with the TUI's scoring); None = no match
 pub fn fuzzy(q: &str, text: &str) -> Option<i64> {
-    if q.is_empty() {
-        return Some(0);
-    }
-    let (q, t) = (q.to_lowercase(), text.to_lowercase());
-    if t == q {
-        return Some(1000);
-    }
-    if t.starts_with(&q) {
-        return Some(800 - t.len() as i64);
-    }
-    if let Some(i) = t.find(&q) {
-        return Some(500 - i as i64 - t.len() as i64 / 10);
-    }
-    let mut score = 200;
-    let mut it = t.char_indices().peekable();
-    let mut last = 0usize;
-    for qc in q.chars().filter(|c| !c.is_whitespace()) {
-        loop {
-            match it.next() {
-                Some((i, c)) if c == qc => {
-                    score -= (i.saturating_sub(last)).min(10) as i64;
-                    last = i + 1;
-                    break;
-                }
-                Some(_) => continue,
-                None => return None,
-            }
-        }
-    }
-    Some(score - t.len() as i64 / 10)
+    qurry_core::fuzzy::score(q, text, Default::default()).map(|s| s as i64)
 }
 
 fn err<E: std::fmt::Display>(e: E) -> String {
@@ -1449,23 +1421,13 @@ impl App {
 
     /// Tab title: schema.table if several table tabs share the name, db.schema.table if the schema matches too (DataGrip)
     pub fn tab_label(&self, t: &Tab) -> String {
-        let TabKind::Table(me) = &t.kind else { return t.title.clone() };
-        let same: Vec<&TableTab> = self
-            .tabs
-            .iter()
-            .filter(|x| x.id != t.id)
-            .filter_map(|x| match &x.kind {
-                TabKind::Table(o) if o.table == me.table => Some(o),
-                _ => None,
-            })
-            .collect();
-        if same.is_empty() {
-            t.title.clone()
-        } else if same.iter().any(|o| o.schema == me.schema) {
-            format!("{}.{}.{}", t.db, me.schema, me.table)
-        } else {
-            format!("{}.{}", me.schema, me.table)
-        }
+        let key = |t: &Tab| match &t.kind {
+            TabKind::Table(o) => Some(qurry_core::labels::TableTab { id: t.id.to_string(), db: t.db.clone(), schema: o.schema.clone(), table: o.table.clone() }),
+            _ => None,
+        };
+        let Some(me) = key(t) else { return t.title.clone() };
+        let all: Vec<_> = self.tabs.iter().filter_map(key).collect();
+        qurry_core::labels::label(&me, &all).unwrap_or_else(|| t.title.clone())
     }
 
     pub fn open_table(&mut self, conn: &str, db: String, schema: String, table: String, kind: String) {
@@ -1777,17 +1739,20 @@ impl App {
         if c.running {
             return;
         }
-        let plan = if let Some(((r0, c0), (r1, c1))) = c.editor.selection_range() {
-            crate::exec::plan_selection(&selected_text(c.editor.lines(), r0, c0, r1, c1), kind, self.exec)
-        } else {
-            let (row, col) = c.editor.cursor();
-            crate::exec::plan(&c.editor.lines().join("\n"), byte_offset(c.editor.lines(), row, col), kind, self.exec)
-        };
+        if let Some(((r0, c0), (r1, c1))) = c.editor.selection_range() {
+            let stmts = qurry_core::exec::plan_selection(&selected_text(c.editor.lines(), r0, c0, r1, c1), kind, self.exec);
+            if !stmts.is_empty() {
+                self.run_stmts(stmts, explain, confirmed);
+            }
+            return;
+        }
+        let (row, col) = c.editor.cursor();
+        let plan = qurry_core::exec::plan(&c.editor.lines().join("\n"), byte_offset(c.editor.lines(), row, col), kind, self.exec);
         match plan {
-            crate::exec::Plan::Nothing => {}
-            crate::exec::Plan::Run(stmts) => self.run_stmts(stmts, explain, confirmed),
-            crate::exec::Plan::Ask(opts) => {
-                let items = opts.into_iter().map(|(label, stmts)| PItem { label, hint: String::new(), action: PAction::Run { stmts, explain } }).collect();
+            qurry_core::exec::Plan::Nothing => {}
+            qurry_core::exec::Plan::Run(stmts) => self.run_stmts(sqls(stmts), explain, confirmed),
+            qurry_core::exec::Plan::Ask(opts) => {
+                let items = opts.into_iter().map(|(label, stmts)| PItem { label, hint: String::new(), action: PAction::Run { stmts: sqls(stmts), explain } }).collect();
                 self.popup = Some(Popup::Palette(Palette { title: "Execute".into(), input: TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
             }
         }
@@ -1795,7 +1760,7 @@ impl App {
 
     /// Execution settings (DataGrip Settings › Database › Query Execution). Picking applies immediately and the window stays open
     pub fn palette_exec(&mut self) {
-        use crate::exec::{ExecSettings, Inside, Outside, Selection};
+        use qurry_core::exec::{ExecSettings, Inside, Outside, Selection};
         let e = self.exec;
         let mut items = vec![];
         let mut add = |group: &str, on: bool, label: &str, v: ExecSettings| items.push(PItem { label: format!("{} {label}", if on { "●" } else { " " }), hint: group.into(), action: PAction::Exec(v) });
@@ -2495,7 +2460,7 @@ impl App {
         let items = ACTIONS
             .iter()
             .filter(|(a, ..)| *a != Action::Palette)
-            .map(|(a, n, k)| PItem { label: n.to_string(), hint: if k.is_empty() { self.keys.label(*a) } else { k.to_string() }, action: PAction::Act(*a) })
+            .map(|(a, k)| PItem { label: crate::input::name_of(*a).to_string(), hint: if k.is_empty() { self.keys.label(*a) } else { k.to_string() }, action: PAction::Act(*a) })
             .collect();
         self.popup = Some(Popup::Palette(Palette { title: "Actions".into(), input: TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
     }
@@ -2511,9 +2476,9 @@ impl App {
     /// Search Everywhere (the GUI's ⇧⇧): recent tabs + actions + DB objects in one list
     pub fn palette_everywhere(&mut self) {
         let mut items: Vec<PItem> = self.mru.iter().filter_map(|id| self.tabs.iter().find(|t| t.id == *id)).map(|t| PItem { label: self.tab_label(t), hint: format!("tab · {}", t.db), action: PAction::Tab(t.id) }).collect();
-        items.extend(ACTIONS.iter().filter(|(a, ..)| *a != Action::SearchEverywhere).map(|(a, n, k)| {
+        items.extend(ACTIONS.iter().filter(|(a, _)| *a != Action::SearchEverywhere).map(|(a, k)| {
             let key = if k.is_empty() { self.keys.label(*a) } else { k.to_string() };
-            PItem { label: n.to_string(), hint: format!("action · {key}"), action: PAction::Act(*a) }
+            PItem { label: crate::input::name_of(*a).to_string(), hint: format!("action · {key}"), action: PAction::Act(*a) }
         }));
         self.palette_objects("Search Everywhere", items);
     }
@@ -2863,11 +2828,12 @@ impl App {
             Action::Snippets => self.snippets_palette(),
             Action::SaveSnippet => self.save_snippet(),
             Action::CopyInList => {
+                let kind = self.tabs.get(self.active).map_or(DbKind::Postgres, |t| self.kind_of(&t.conn));
                 let Some(g) = self.grid_mut() else {
                     self.status = "Open a result or table to copy a column".into();
                     return;
                 };
-                let (text, n) = g.in_list();
+                let (text, n) = g.in_list(kind);
                 crate::input::copy(self, &text);
                 let short: String = text.chars().take(80).collect();
                 self.status = format!("Copied {n} values as an IN list: {short}{}", if text.chars().count() > 80 { "…" } else { "" });
@@ -3273,7 +3239,7 @@ impl App {
             match want {
                 (mode, Some(hints)) => {
                     let as_pairs = mode == HintMode::Pairs && h.mode == HintMode::Keys;
-                    let items = complete::hint_items(&h, &hints, h.quoted && after != Some('\''), as_pairs);
+                    let items = complete::hint_items(&h, &hints, after, as_pairs, Options::TUI);
                     let prefix = if as_pairs { h.op.chars().count() } else { h.typed.chars().count() };
                     c.complete = if items.is_empty() { None } else { Some(Completion { items, sel: 0, prefix }) };
                 }
@@ -3298,7 +3264,7 @@ impl App {
             }
             return;
         }
-        let (prefix, items) = complete::suggest(meta.as_deref().unwrap_or(&empty), &stmt, &before, &db);
+        let (prefix, items) = complete::suggest(meta.as_deref().unwrap_or(&empty), &stmt, &before, &db, kind == DbKind::Mysql, Options::TUI);
         // Auto-open only after '.' or while typing a word
         let keep = explicit || prefix > 0 || before.ends_with('.');
         c.complete = if items.is_empty() || !keep { None } else { Some(Completion { items, sel: 0, prefix }) };
@@ -3373,6 +3339,11 @@ pub fn byte_offset(lines: &[String], row: usize, col: usize) -> usize {
     }
     let line = lines.get(row).map(|s| s.as_str()).unwrap_or("");
     off + line.char_indices().nth(col).map(|(i, _)| i).unwrap_or(line.len())
+}
+
+/// The statements' text (the TUI doesn't highlight what runs, so the ranges aren't needed)
+fn sqls(v: Vec<qurry_core::exec::Stmt>) -> Vec<String> {
+    v.into_iter().map(|s| s.sql).collect()
 }
 
 pub fn selected_text(lines: &[String], r0: usize, c0: usize, r1: usize, c1: usize) -> String {

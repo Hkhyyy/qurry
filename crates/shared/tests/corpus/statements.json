@@ -29,6 +29,11 @@
   { "id": "korean-table", "dialect": "postgres", "sql": "select * from 삭제목록" },
   { "id": "korean-ddl", "dialect": "postgres", "sql": "create table 주문 (번호 int)" },
   { "id": "paren-select", "dialect": "postgres", "sql": "(select 1) union (select 2)" },
+  { "id": "backslash-no-backslash-escapes", "dialect": "mysql", "sql": "with a as (select 'x\\') delete from t -- ') select 1" },
+  { "id": "backslash-scs-off", "dialect": "postgres", "sql": "with a as (select 'x\\' as c, '), d as (delete from t returning 1) select 1 -- ' as e) select 1" },
+  { "id": "backslash-read", "dialect": "mysql", "sql": "select 'C:\\path', 'delete' as action" },
+  { "id": "backslash-ansi-quotes", "dialect": "mysql", "sql": "with a as (select 'p\\' \"  ' as \"a\\\") delete from t -- \"" },
+  { "id": "dblink-exec", "dialect": "postgres", "sql": "select dblink_exec('dbname=prod', 'delete from orders')" },
   { "id": "redis-get", "dialect": "redis", "sql": "GET a" },
   { "id": "redis-set", "dialect": "redis", "sql": "SET a 1" }
 ]

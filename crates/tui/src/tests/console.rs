@@ -66,7 +66,7 @@ async fn f5_runs_several_statements_in_order() {
 async fn f5_stops_at_the_first_error() {
     let mut h = Harness::new().await;
     h.app.fake_db = Some(fake);
-    h.app.exec.inside = crate::exec::Inside::Whole;
+    h.app.exec.inside = qurry_core::exec::Inside::Whole;
     h.console_with("update t set a = 1 where id = 1;\nselect * from boom;\nupdate t set a = 2 where id = 2;", 0, 3);
     h.key("F5");
     assert!(h.app.popup.is_none());
@@ -97,7 +97,7 @@ async fn f5_keeps_an_earlier_warning_in_the_status() {
     }
     let mut h = Harness::new().await;
     h.app.fake_db = Some(warns);
-    h.app.exec.inside = crate::exec::Inside::Whole;
+    h.app.exec.inside = qurry_core::exec::Inside::Whole;
     h.console_with("update t set a = 1 where id = 1;\nselect id from t;", 0, 3);
     h.key("F5");
     h.settle().await;
@@ -131,7 +131,7 @@ async fn production_confirm_shows_counted_rows() {
     h.app.reload_conns();
     h.settle().await;
     h.app.fake_db = Some(counts);
-    h.app.exec.inside = crate::exec::Inside::Whole;
+    h.app.exec.inside = qurry_core::exec::Inside::Whole;
     let sql = "update payment set amount = 0 where id = 4;\ndelete from payment where amount < 0;";
     let id = h.app.restore_console("p", "d".into(), "console".into(), sql).unwrap();
     let i = h.app.tab_index(id).unwrap();
@@ -179,7 +179,7 @@ async fn completion_popup_lists_and_inserts() {
     h.console_with(sql, 0, 9);
     let t = |n: &str, cols: &[&str]| CompletionTable { schema: "public".into(), name: n.into(), columns: cols.iter().map(|c| (c.to_string(), "text".to_string())).collect() };
     let target = h.app.tabs[h.app.active].target.clone();
-    h.app.completion.insert(target, std::sync::Arc::new(crate::complete::Meta::new(vec![t("users", &["id", "user_name", "email"]), t("orders", &["id", "total"])])));
+    h.app.completion.insert(target, std::sync::Arc::new(qurry_core::complete::Meta::new(vec![t("users", &["id", "user_name", "email"]), t("orders", &["id", "total"])])));
     h.key("Ctrl+Space");
     let items = |h: &Harness| console(h).complete.as_ref().map(|c| c.items.iter().map(|i| i.label.clone()).collect::<Vec<_>>()).unwrap_or_default();
     assert_eq!(items(&h), ["id", "user_name", "email"]);

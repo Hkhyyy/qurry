@@ -134,6 +134,30 @@ pub(crate) fn escapes_in(kind: DbKind, quote: u8) -> bool {
 }
 
 pub fn split_statements(text: &str, kind: DbKind) -> Vec<(usize, usize)> {
+    split_statements_with(text, kind, SplitOptions::default())
+}
+
+/// Editor rules the GUI keeps from its old TypeScript splitter, where it splits differently from the server and the TUI
+/// (D2 in the 0.3.0 architecture batch; the inputs are the splitStatements · splitScript rows of tests/DIVERGENCES.md).
+/// The default is the server's rules. Only for picking what the editor runs: the backend splits again with the default before any check.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SplitOptions {
+    /// MySQL `--` starts a comment even without a space after it (`select 1--1`)
+    pub mysql_dash_comment: bool,
+    /// `$tag$` opens a dollar quote right after a name character too (`foo$x$`)
+    pub dollar_after_name: bool,
+}
+
+impl SplitOptions {
+    /// `--` at b[i] starts a line comment (MySQL needs a space or control char after it unless mysql_dash_comment)
+    fn dash_comment(self, b: &[u8], i: usize, e: usize, kind: DbKind) -> bool {
+        b[i] == b'-' && i + 1 < e && b[i + 1] == b'-' && (kind != DbKind::Mysql || self.mysql_dash_comment || i + 2 >= e || b[i + 2].is_ascii_whitespace() || b[i + 2].is_ascii_control())
+    }
+}
+
+/// split_statements with the given editor rules
+pub fn split_statements_with(text: &str, kind: DbKind, opts: SplitOptions) -> Vec<(usize, usize)> {
     if kind == DbKind::Redis {
         let mut out = Vec::new();
         let mut pos = 0;
@@ -156,7 +180,7 @@ pub fn split_statements(text: &str, kind: DbKind) -> Vec<(usize, usize)> {
     while i < n {
         let c = b[i];
         let d = if i + 1 < n { b[i + 1] } else { 0 };
-        if c == b'-' && d == b'-' && (kind != DbKind::Mysql || i + 2 >= n || b[i + 2].is_ascii_whitespace() || b[i + 2].is_ascii_control()) {
+        if opts.dash_comment(b, i, n, kind) {
             i = text[i..].find('\n').map(|j| i + j + 1).unwrap_or(n);
             continue;
         }
@@ -222,7 +246,7 @@ pub fn split_statements(text: &str, kind: DbKind) -> Vec<(usize, usize)> {
             i = (j + 1).min(n);
             continue;
         }
-        if c == b'$' && dollar_quotes(kind) && dollar_opens(b, i) {
+        if c == b'$' && dollar_quotes(kind) && (dollar_opens(b, i) || opts.dollar_after_name) {
             let rest = &text[i..];
             let tag_end = rest[1..].find('$').map(|j| j + 2);
             if let Some(te) = tag_end {
@@ -272,14 +296,19 @@ fn split_rest(text: &str) -> Vec<(usize, usize)> {
 /// `select … where x = 3` followed by a line `select * from users` → two statements. UNION·INSERT … SELECT·WITH … SELECT·GRANT SELECT etc. are one statement.
 /// Used only to pick the statement to run (the read-only check uses split_statements, same as the server)
 pub fn split_script(text: &str, kind: DbKind) -> Vec<(usize, usize)> {
-    let segs = split_statements(text, kind);
+    split_script_with(text, kind, SplitOptions::default())
+}
+
+/// split_script with the given editor rules
+pub fn split_script_with(text: &str, kind: DbKind, opts: SplitOptions) -> Vec<(usize, usize)> {
+    let segs = split_statements_with(text, kind, opts);
     if kind == DbKind::Redis || kind.is_vector() {
         return segs;
     }
     let mut out = Vec::new();
     for (s, e) in segs {
         let mut start = s;
-        for cut in script_cuts(text, s, e, kind) {
+        for cut in script_cuts(text, s, e, kind, opts) {
             out.push((start, cut));
             start = cut;
         }
@@ -303,7 +332,7 @@ const SCRIPT_CONT: &[&str] = &[
 ];
 
 /// split_script: line-start positions within [s, e) where a new statement begins
-fn script_cuts(text: &str, s: usize, e: usize, kind: DbKind) -> Vec<usize> {
+fn script_cuts(text: &str, s: usize, e: usize, kind: DbKind, opts: SplitOptions) -> Vec<usize> {
     let b = text.as_bytes();
     let mut cuts = Vec::new();
     let (mut i, mut depth, mut line_start, mut line_has_code) = (s, 0i32, s, false);
@@ -323,7 +352,7 @@ fn script_cuts(text: &str, s: usize, e: usize, kind: DbKind) -> Vec<usize> {
             continue;
         }
         // Comments (line end / block) — same rules as split_statements
-        if (c == b'-' && d == b'-' && (kind != DbKind::Mysql || i + 2 >= e || b[i + 2].is_ascii_whitespace())) || (c == b'#' && hash_comment(kind, d)) {
+        if opts.dash_comment(b, i, e, kind) || (c == b'#' && hash_comment(kind, d)) {
             i = text[i..e].find('\n').map(|j| i + j).unwrap_or(e);
             continue;
         }
@@ -372,7 +401,7 @@ fn script_cuts(text: &str, s: usize, e: usize, kind: DbKind) -> Vec<usize> {
             prev_punct = false;
             continue;
         }
-        if c == b'$' && dollar_quotes(kind) && dollar_opens(b, i) {
+        if c == b'$' && dollar_quotes(kind) && (dollar_opens(b, i) || opts.dollar_after_name) {
             let rest = &text[i..e];
             if let Some(te) = rest[1..].find('$').map(|j| j + 2) {
                 let tag = &rest[..te];
@@ -518,6 +547,19 @@ mod tests {
         assert_eq!(split_script("insert into t values (1) on duplicate key\nupdate a = 1", DbKind::Mysql).len(), 1);
         // Redis as is (one line = command)
         assert_eq!(split_script("GET a\nSET b 1", DbKind::Redis).len(), 2);
+    }
+
+    /// Each editor option changes only its own rule (the GUI's rows in tests/DIVERGENCES.md); the default stays the server's
+    #[test]
+    fn split_options_keep_the_gui_rules() {
+        let parts = |t: &str, k, o| split_script_with(t, k, o).into_iter().map(|(a, b)| t[a..b].to_string()).collect::<Vec<_>>();
+        let dash = SplitOptions { mysql_dash_comment: true, ..Default::default() };
+        assert_eq!(parts("select 1--1;\nselect 2", DbKind::Mysql, dash), ["select 1--1;\n", "select 2"]);
+        assert_eq!(split_statements_with("select 1--1;\nselect 2", DbKind::Mysql, dash).len(), 1);
+        assert_eq!(split_statements("select 1--1;\nselect 2", DbKind::Mysql).len(), 2);
+        let dollar = SplitOptions { dollar_after_name: true, ..Default::default() };
+        assert_eq!(split_statements_with("select foo$x$ from t; select 1", DbKind::Postgres, dollar).len(), 1);
+        assert_eq!(split_statements("select foo$x$ from t; select 1", DbKind::Postgres).len(), 2);
     }
 
     #[test]

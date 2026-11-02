@@ -16,15 +16,20 @@ macro_rules! log {
 pub mod app;
 pub mod audit;
 pub mod backup;
+mod backend;
 pub mod db;
 pub mod dba;
 pub mod ddl;
 pub mod erd;
 pub mod error;
+/// What the console runs (Query Execution settings), shared with the GUI through WASM
+pub use qurry_shared::exec;
 pub mod fake;
 pub mod guard;
 pub mod hints;
 pub mod history;
+/// Command shortcut table and key notation, shared with the GUI through WASM
+pub use qurry_shared::keymap;
 pub mod meta;
 pub mod plugin;
 pub mod migrate;
@@ -42,6 +47,10 @@ pub mod transfer;
 pub mod tunnel;
 pub mod update;
 pub mod workspaces;
+/// Console autocompletion rules (one copy, also the GUI's through WASM)
+pub use qurry_shared::complete;
+/// Grid and search helpers shared with the GUI through WASM (time fractions, tab labels, extractors, fuzzy scores, key folders, auto-map)
+pub use qurry_shared::{automap, extract, format, fuzzy, keytree, labels};
 
 /// Same config folder as the Tauri app (shares the Data Source list·encrypted passwords)
 /// macOS: ~/Library/Application Support/com.hyunkyo.dbtool

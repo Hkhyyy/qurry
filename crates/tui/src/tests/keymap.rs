@@ -2,6 +2,7 @@ use crate::app::{Action, App, Popup};
 use crate::keys::{DEFAULT_KEYS, Keymap};
 use crate::testkit::Harness;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::collections::BTreeMap;
 
 fn message(h: &Harness) -> Option<String> {
     match &h.app.popup {
@@ -44,4 +45,19 @@ async fn keymap_rebinding_round_trip() {
     assert!(h.app.state.store.keymap("tui").unwrap().is_empty());
     h.key("Esc");
     assert!(h.app.popup.is_none());
+}
+
+/// A keymap.json saved by an earlier version loads to the same TUI bindings as before (same action ids and defaults; lowercase notation normalized)
+#[tokio::test]
+async fn saved_keymap_file_loads_the_same() {
+    let h = Harness::new().await;
+    std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/../shared/tests/keymap/keymap.json"), h.app.state.store.dir().join("keymap.json")).unwrap();
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let next = App::new(h.app.state.clone(), tx);
+    let now: BTreeMap<String, Vec<String>> = DEFAULT_KEYS.iter().map(|(a, _)| (crate::keys::action_id(*a), next.keys.keys(*a).to_vec())).collect();
+    let want: serde_json::Value = serde_json::from_str(include_str!("../../../shared/tests/keymap/effective.json")).unwrap();
+    let want: BTreeMap<String, Vec<String>> = serde_json::from_value(want["tui"].clone()).unwrap();
+    // On failure: an action id or a default key changed, so users' keymap.json would load differently.
+    // Keep the old id (keymap.json stores the Action's name) and the old default; change effective.json only for an intended default change
+    assert_eq!(now, want);
 }

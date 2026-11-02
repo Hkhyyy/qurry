@@ -2,8 +2,8 @@
 //! and writes crates/shared/tests/goldens/rust/*.json — same ids, keys (the GUI function names) and output shapes as src/lib/parity.dump.test.ts.
 //! `pnpm parity:dump` then compares both sides into crates/shared/tests/DIVERGENCES.md. A `‸` in a corpus text marks the cursor (byte offset here).
 use crate::app::{Tab, TabKind, TableTab};
-use crate::complete::{self, HintAt, HintMode, Meta};
-use crate::exec::{self, ExecSettings, Inside, Outside, Plan};
+use qurry_core::complete::{self, HintAt, HintMode, Meta, Options};
+use qurry_core::exec::{self, ExecSettings, Inside, Outside, Plan};
 use crate::grid::{self, Grid};
 use crate::tree::{self, Node, NodeKind};
 use qurry_core::db::{ColumnInfo, QueryResult};
@@ -59,10 +59,11 @@ fn slices(text: &str, segs: &[(usize, usize)]) -> Value {
 }
 
 fn plan(p: Plan) -> Value {
+    let sqls = |v: Vec<exec::Stmt>| v.into_iter().map(|s| s.sql).collect::<Vec<_>>();
     match p {
         Plan::Nothing => Value::Null,
-        Plan::Run(v) => json!({ "run": v }),
-        Plan::Ask(opts) => json!({ "ask": opts.into_iter().map(|(label, stmts)| json!({ "label": label, "stmts": stmts })).collect::<Vec<_>>() }),
+        Plan::Run(v) => json!({ "run": sqls(v) }),
+        Plan::Ask(opts) => json!({ "ask": opts.into_iter().map(|(label, stmts)| json!({ "label": label, "stmts": sqls(stmts) })).collect::<Vec<_>>() }),
     }
 }
 
@@ -96,31 +97,6 @@ fn stmt_golden() -> Golden {
         .collect()
 }
 
-fn completion_golden() -> Golden {
-    let c = corpus("completion");
-    let tables = arr(&c["tables"])
-        .iter()
-        .map(|t| CompletionTable { schema: st(&t["schema"]).into(), name: st(&t["name"]).into(), columns: arr(&t["columns"]).iter().map(|p| (st(&p[0]).into(), st(&p[1]).into())).collect() })
-        .collect();
-    let m = Meta::new(tables);
-    let found = |r: &str| Value::from(complete::find_table(&m, r, "").map(|t| format!("{}.{}", t.schema, t.name)));
-    let mut out = Golden::new();
-    for e in arr(&c["cases"]) {
-        let refs = complete::tables_in_statement(st(&e["text"]));
-        out.insert(
-            st(&e["id"]).into(),
-            json!({
-                "tablesInStatement": refs.iter().map(|(r, a)| json!({ "ref": r, "alias": a })).collect::<Vec<_>>(),
-                "findTable": refs.iter().map(|(r, _)| found(r)).collect::<Vec<_>>(),
-            }),
-        );
-    }
-    for r in arr(&c["refs"]) {
-        out.insert(format!("ref:{}", st(r)), json!({ "findTable": found(st(r)) }));
-    }
-    out
-}
-
 fn hint_golden() -> Golden {
     let mut out = Golden::new();
     for e in arr(&corpus("valuehints")) {
@@ -139,16 +115,16 @@ fn hint_golden() -> Golden {
         };
         let op = (!c.op.is_empty()).then(|| c.op.clone());
         o.insert("hintContext".into(), json!({ "ref": c.r#ref, "column": c.column, "path": c.path, "mode": mode, "quoted": c.quoted, "typed": c.typed, "op": op }));
-        // hint_items builds the inserted text (typed left empty: its prefix filter isn't part of hintInsert)
-        let h = HintAt { schema: String::new(), table: String::new(), column: c.column.clone(), type_name: ty.into(), path: c.path.clone(), mode: c.mode, quoted: c.quoted, typed: String::new(), op: c.op.clone() };
+        // hint_items builds the inserted text (typed left empty: its prefix filter isn't part of hintInsert; a ' after the cursor, so no closing quote is added)
+        let h = HintAt { schema: String::new(), table: String::new(), column: c.column.clone(), type_name: ty.into(), path: c.path.clone(), mode: c.mode, quoted: c.quoted, typed: String::new(), op: c.op.clone(), mysql };
         let hints = [Hint { value: value.into(), count: 1 }];
-        o.insert("hintInsert".into(), complete::hint_items(&h, &hints, false, false)[0].insert.clone().into());
+        o.insert("hintInsert".into(), complete::hint_items(&h, &hints, Some('\''), false, Options::TUI)[0].insert.clone().into());
         // hint_at decides hintable: a one-table statement whose only column is the hinted one
         let name = c.r#ref.clone().unwrap_or_else(|| "t".into());
         let m = Meta::new(vec![CompletionTable { schema: "public".into(), name: name.clone(), columns: vec![(c.column.clone(), ty.into())] }]);
         o.insert("hintable".into(), complete::hint_at(&m, &format!("select * from \"{name}\""), before, "", mysql).is_some().into());
         if c.mode == HintMode::Keys {
-            o.insert("pairsForKeys".into(), complete::hint_items(&h, &hints, false, true)[0].insert.clone().into());
+            o.insert("pairsForKeys".into(), complete::hint_items(&h, &hints, Some('\''), true, Options::TUI)[0].insert.clone().into());
         }
         out.insert(st(&e["id"]).into(), o.into());
     }
@@ -182,8 +158,11 @@ fn result_golden() -> Golden {
     for e in arr(&corpus("results")) {
         let r = result_of(e);
         let names: Vec<&str> = r.columns.iter().map(|c| c.name.as_str()).collect();
-        let (nums, x, y) = crate::datatools::chart_axes(&r);
-        let axes = json!({ "x": names[x], "y": y.map(|y| names[y]) });
+        // The TUI's chart options, as bar_chart uses them
+        let cols = crate::datatools::chart_columns(&r);
+        let nums = qurry_shared::chart::numeric_columns(&cols, &r.rows, qurry_shared::chart::Options::TUI);
+        let a = qurry_shared::chart::default_axes(&cols, &r.rows, qurry_shared::chart::Options::TUI);
+        let axes = json!({ "x": names[a.x], "y": a.y.map(|y| names[y]) });
         let col = |c: usize| r.rows.iter().map(move |row| &row[c]);
         let column_g = Grid::new(result_of(e));
         // The width the grid itself computed (not a copy of its rule)
@@ -191,8 +170,9 @@ fn result_golden() -> Golden {
         let mut o = json!({
             "numericColumns": nums.iter().map(|&i| names[i]).collect::<Vec<_>>(),
             "defaultAxes": axes,
-            "inList": all_selected(e).in_list().0,
-            "inList(column)": names.iter().enumerate().map(|(c, n)| (n.to_string(), Value::from(column_g.column_in_list(c).0))).collect::<Map<_, _>>(),
+            "inList": all_selected(e).in_list(DbKind::Postgres).0,
+            "inList(mysql)": all_selected(e).in_list(DbKind::Mysql).0,
+            "inList(column)": names.iter().enumerate().map(|(c, n)| (n.to_string(), Value::from(column_g.column_in_list(c, DbKind::Postgres).0))).collect::<Map<_, _>>(),
             "fracWidth": names.iter().enumerate().map(|(c, n)| (n.to_string(), Value::from(frac(c)))).collect::<Map<_, _>>(),
             "padFrac": names
                 .iter()
@@ -276,13 +256,13 @@ fn column_golden() -> Golden {
 fn spec_golden() -> Golden {
     let c = corpus("keyspecs");
     let specs = strings(&c["specs"]).into_iter().map(|s| {
-        let mut o = json!({ "keyLabel": crate::keys::lower_unshifted(&s) });
+        let mut o = json!({ "keyLabel": qurry_core::keymap::key_label(&s) });
         if !s.contains("Mod+") {
-            o["formatSpec"] = crate::keys::disp_mac(&s).into();
+            o["formatSpec"] = qurry_core::keymap::disp_mac(&s).into();
         }
         (s, o)
     });
-    let labels = strings(&c["labels"]).into_iter().map(|s| (s.clone(), json!({ "keyLabel": crate::keys::lower_unshifted(&s) })));
+    let labels = strings(&c["labels"]).into_iter().map(|s| (s.clone(), json!({ "keyLabel": qurry_core::keymap::key_label(&s) })));
     specs.chain(labels).collect()
 }
 
@@ -297,7 +277,6 @@ async fn parity_dump() {
     let goldens = [
         ("sql", sql_golden()),
         ("statements", stmt_golden()),
-        ("completion", completion_golden()),
         ("valuehints", hint_golden()),
         ("results", result_golden()),
         ("tablabels", tab_golden(&mut h)),
@@ -317,7 +296,7 @@ async fn parity_dump() {
 #[test]
 fn dump_uses_tui_values() {
     for (id, o) in result_golden() {
-        assert!(o["numericColumns"].is_array(), "{id}: numericColumns from chart_axes");
+        assert!(o["numericColumns"].is_array(), "{id}: numericColumns with the TUI chart options");
         let e = arr(&corpus("results")).iter().find(|e| e["id"] == id.as_str()).unwrap().clone();
         let g = Grid::new(result_of(&e));
         for (c, col) in g.result.columns.iter().enumerate() {

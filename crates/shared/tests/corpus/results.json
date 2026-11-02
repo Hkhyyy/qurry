@@ -73,5 +73,25 @@
     "id": "single-number-column",
     "columns": [{ "name": "total", "typeName": "numeric" }],
     "rows": [["10"], ["20"], ["10"]]
+  },
+  {
+    "id": "big-floats",
+    "columns": [{ "name": "v", "typeName": "float8" }],
+    "rows": [[9007199254740992.0], [1e16], [1e20], [1152921504606846976.0], [1e21], [1.5e-7]]
+  },
+  {
+    "id": "backslash",
+    "columns": [{ "name": "s", "typeName": "text" }],
+    "rows": [["a\\'b"], ["x\\') OR 1=1 -- "]]
+  },
+  {
+    "id": "loose-dates",
+    "columns": [{ "name": "ts", "typeName": "timestamp" }],
+    "rows": [["+2026-06-06 10:00:00"], ["abcd-ef-gh 10:00:00"], ["2026-06-06 10:00:00.5"]]
+  },
+  {
+    "id": "year-float-x",
+    "columns": [{ "name": "ratio", "typeName": "float8" }, { "name": "yr", "typeName": "year" }, { "name": "qty", "typeName": "text" }],
+    "rows": [[1.5, null, "1,000"], [0.25, null, "2"], [1.5, null, " 3 "], [2, null, ""]]
   }
 ]

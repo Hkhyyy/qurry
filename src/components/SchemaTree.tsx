@@ -6,6 +6,7 @@ import { Button, Notice, TreeRow } from "../ui";
 import { invalidateCompletion } from "../lib/completion";
 import { TYPE_COLOR } from "./RedisBrowser";
 import { keyTree, type KeyNode } from "../lib/keyTree";
+import { useSharedReady } from "../lib/shared";
 import { ColumnIcon, DatabaseIcon, FkIcon, FolderIcon, IndexIcon, KeyIcon, MySqlIcon, PgIcon, RedisIcon, RoutineIcon, SchemaIcon, SequenceIcon, TableIcon, ViewIcon } from "../ui/icons";
 
 /** What a tree node points to. The context menu and shortcuts (F4, ⌘b, ⌘⇧L) act on this. */
@@ -353,6 +354,8 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
   const [schemas, setSchemas] = useState<Load<SchemaInfo[]>>();
   const [objects, setObjects] = useState<Record<string, Load<{ relations: RelationInfo[]; routines: RoutineInfo[] }>>>({});
   const [details, setDetails] = useState<Record<string, Load<TableDetail>>>({});
+  // Redis key folders come from the WASM module: render again once it has loaded
+  useSharedReady();
 
   const toggle = (key: string, onOpen?: () => void) =>
     setOpen((s) => {

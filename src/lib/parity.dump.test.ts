@@ -5,25 +5,23 @@
  * Goldens map corpus id → function → output. Both dumps use the same keys and output shapes (segment text, not offsets).
  * A `‸` in a corpus text marks the cursor (removed before the call; UTF-16 offset here, byte offset in Rust).
  */
-import { describe, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { dialectOf, type Cell, type DbKind, type QueryResult } from "./api";
 import { buildChart, COUNT, defaultAxes, niceTicks, numericColumns, shortNumber } from "./chart";
-import { findTable, tablesInStatement } from "./completion";
 import { DEFAULT_EXEC, planExecution, type ExecPlan, type ExecSettings } from "./execPlan";
 import { EXTRACTORS, extractRows, type Extractor } from "./extract";
 import { fuzzyScore } from "./fuzzy";
 import { inList } from "./inList";
 import { keyTree, type KeyNode } from "./keyTree";
 import { formatSpec, keyLabel } from "./shortcuts";
-import { splitScript, splitStatements, statementAt, type Segment } from "./sqlSplit";
-import { DDL_RE, isReadStmt } from "./stmtKindLegacy";
+import { splitScript, splitStatements, type Segment } from "./sqlSplit";
+import { isDdl, isRead } from "./stmtKind";
 import { tableTabLabels, type TableTabKey } from "./tabLabels";
 import { fracWidth, isTimeType, padFrac } from "./timeFrac";
 import { autoMap } from "./transfer";
 import { hintable, hintContext, hintInsert, pairsForKeys } from "./valueHint";
 import sqlCorpus from "../../crates/shared/tests/corpus/sql.json";
 import stmtCorpus from "../../crates/shared/tests/corpus/statements.json";
-import completionCorpus from "../../crates/shared/tests/corpus/completion.json";
 import hintCorpus from "../../crates/shared/tests/corpus/valuehints.json";
 import resultCorpus from "../../crates/shared/tests/corpus/results.json";
 import numberCorpus from "../../crates/shared/tests/corpus/numbers.json";
@@ -32,9 +30,14 @@ import keyCorpus from "../../crates/shared/tests/corpus/rediskeys.json";
 import columnCorpus from "../../crates/shared/tests/corpus/columns.json";
 import specCorpus from "../../crates/shared/tests/corpus/keyspecs.json";
 import fuzzyCorpus from "../../crates/shared/tests/corpus/fuzzy.json";
+import sqlTs from "../../crates/shared/tests/goldens/ts/sql.json";
+import stmtRust from "../../crates/shared/tests/goldens/rust/statements.json";
+import resultTs from "../../crates/shared/tests/goldens/ts/results.json";
+import tabTs from "../../crates/shared/tests/goldens/ts/tablabels.json";
+import keyTs from "../../crates/shared/tests/goldens/ts/rediskeys.json";
+import columnTs from "../../crates/shared/tests/goldens/ts/columns.json";
+import fuzzyTs from "../../crates/shared/tests/goldens/ts/fuzzy.json";
 
-// completion.ts registers Monaco providers on import; only its pure helpers are dumped
-vi.mock("./monaco", () => ({ monaco: { languages: { registerCompletionItemProvider: () => ({}) } } }));
 // shortcuts.ts reads navigator.platform on import: pin macOS so the goldens are the same on every host (parity_dump.rs uses disp_mac)
 vi.hoisted(() => vi.stubGlobal("navigator", { platform: "MacIntel" }));
 
@@ -44,7 +47,7 @@ const CARET = "‸";
 const caret = (text: string) => ({ text: text.replace(CARET, ""), at: text.indexOf(CARET) });
 const slices = (text: string, segs: Segment[]) => segs.map((s) => text.slice(s.start, s.end));
 /** The console's splitter (ConsolePane): the dialect's own (Redis lines) or splitScript */
-const consoleSplit = (kind: DbKind) => (t: string) => dialectOf(kind).split?.(t) ?? splitScript(t, kind === "mysql");
+const consoleSplit = (kind: DbKind) => (t: string) => dialectOf(kind).split?.(t) ?? splitScript(t, kind);
 const plan = (p: ExecPlan) =>
   p === null ? null : "run" in p ? { run: p.run.map((s) => s.sql) } : { ask: p.ask.map((o) => ({ label: o.label, stmts: o.stmts.map((s) => s.sql) })) };
 
@@ -62,14 +65,12 @@ function sqlGolden(): Golden {
   const out: Golden = {};
   for (const e of sqlCorpus) {
     const kind = e.dialect as DbKind;
-    const mysql = kind === "mysql";
     const { text, at } = caret(e.text);
     const o: Record<string, unknown> = {};
-    if (kind !== "redis") o.splitStatements = slices(text, splitStatements(text, mysql));
+    if (kind !== "redis") o.splitStatements = slices(text, splitStatements(text, kind));
     o.splitScript = slices(text, consoleSplit(kind)(text));
     if (at >= 0) {
-      if (kind !== "redis") o.statementAt = statementAt(text, at, mysql)?.sql ?? null;
-      for (const [name, s] of Object.entries(PLANS)) o[`planExecution(${name})`] = plan(planExecution(text, at, consoleSplit(kind)(text), s));
+      for (const [name, s] of Object.entries(PLANS)) o[`planExecution(${name})`] = plan(planExecution(text, at, consoleSplit(kind)(text), s, kind));
     }
     out[e.id] = o;
   }
@@ -77,33 +78,20 @@ function sqlGolden(): Golden {
 }
 
 function stmtGolden(): Golden {
-  return Object.fromEntries(stmtCorpus.map((e) => [e.id, { isReadStmt: isReadStmt(e.sql), DDL_RE: DDL_RE.test(e.sql) }]));
-}
-
-function completionGolden(): Golden {
-  const all = completionCorpus.tables as { schema: string; name: string; columns: [string, string][] }[];
-  const found = (ref: string) => {
-    const t = findTable(all, ref);
-    return t ? `${t.schema}.${t.name}` : null;
-  };
-  const out: Golden = {};
-  for (const c of completionCorpus.cases) {
-    const refs = tablesInStatement(c.text);
-    out[c.id] = { tablesInStatement: refs.map((r) => ({ ref: r.ref, alias: r.alias ?? null })), findTable: refs.map((r) => found(r.ref)) };
-  }
-  for (const r of completionCorpus.refs) out[`ref:${r}`] = { findTable: found(r) };
-  return out;
+  // Keys keep the names of the GUI's old checks (isReadStmt, DDL_RE) so the goldens and DIVERGENCES.md stay comparable
+  return Object.fromEntries(stmtCorpus.map((e) => [e.id, { isReadStmt: isRead(e.dialect as DbKind, e.sql), DDL_RE: isDdl(e.dialect as DbKind, e.sql) }]));
 }
 
 function hintGolden(): Golden {
   const out: Golden = {};
   for (const e of hintCorpus) {
-    const ctx = hintContext(e.before, "mysql" in e && !!e.mysql);
+    const mysql = "mysql" in e && !!e.mysql;
+    const ctx = hintContext(e.before, mysql);
     const o: Record<string, unknown> = {
       hintContext: ctx && { ref: ctx.ref ?? null, column: ctx.column, path: ctx.path, mode: ctx.mode, quoted: ctx.quoted, typed: ctx.typed, op: ctx.op ?? null },
     };
     if (ctx) {
-      o.hintInsert = hintInsert(e.value, ctx, e.typeName);
+      o.hintInsert = hintInsert(e.value, ctx, e.typeName, mysql);
       o.hintable = hintable(ctx, e.typeName);
       if (ctx.mode === "keys") o.pairsForKeys = pairsForKeys(e.value, ctx);
     }
@@ -129,6 +117,7 @@ function resultGolden(): Golden {
       "buildChart(bar)": buildChart(r, axes.x, axes.ys, "bar"),
       "buildChart(pie)": buildChart(r, axes.x, axes.ys, "pie"),
       inList: inList(r.rows, types),
+      "inList(mysql)": inList(r.rows, types, "mysql"),
       "inList(column)": Object.fromEntries(names.map((n, c) => [n, inList(r.rows.map((row) => [row[c]]), [types[c]])])),
       "extract(TSV, no header)": extractRows("TSV", { ...base, dialect: dialectOf("postgres"), header: false }),
       "extract(SQL Inserts, mysql)": extractRows("SQL Inserts", { ...base, dialect: dialectOf("mysql") }),
@@ -191,7 +180,7 @@ function fuzzyGolden(): Golden {
 const GOLDENS: Record<string, () => Golden> = {
   sql: sqlGolden,
   statements: stmtGolden,
-  completion: completionGolden,
+  // completion: the GUI runs qurry_shared::complete through WASM (src/lib/completion.test.ts and goldens/completion/ check both front ends)
   valuehints: hintGolden,
   results: resultGolden,
   numbers: numberGolden,
@@ -249,6 +238,8 @@ function divergences(ts: Record<string, Golden>, rust: Record<string, Golden>): 
     "",
     "Generated by `pnpm parity:dump` from `goldens/ts` and `goldens/rust` (run `cargo test -p qurry-tui parity_dump -- --ignored` first). Do not edit by hand.",
     "Inputs are in `corpus/` (ids as listed); `‸` in a corpus text is the cursor. Outputs are compact JSON.",
+    "`valuehints` is one implementation on both sides: valueHint.ts calls qurry_shared::complete through WASM, so it only guards the WASM wiring.",
+    "Rules the TUI and the MCP server took with no option when the grid helpers moved to qurry-shared are not listed here (both sides now agree): see `rules_the_tui_and_mcp_changed_to` in grid_goldens.rs.",
     "",
     "## Summary",
     "",
@@ -273,6 +264,21 @@ interface Fs {
   readFileSync(p: URL, enc: "utf8"): string;
   writeFileSync(p: URL, s: string): void;
 }
+
+// Runs with plain `pnpm test`: the WASM facades keep what the GUI did before they replaced its TypeScript copies (D2 options)
+describe("WASM facades reproduce the goldens", () => {
+  it("splitting and execution plans: goldens/ts (the GUI's editor rules are kept, D2)", () => {
+    expect(sqlGolden()).toEqual(sqlTs);
+  });
+  it("read / DDL checks: goldens/rust (D1: the GUI decides like the TUI, e.g. no Production confirmation for select 'delete')", () => {
+    expect(stmtGolden()).toEqual(stmtRust);
+  });
+  it("results: IN lists, Data Extractors, fractional seconds", () => expect(resultGolden()).toEqual(resultTs));
+  it("table tab labels", () => expect(tabGolden()).toEqual(tabTs));
+  it("Redis key folders", () => expect(keyGolden()).toEqual(keyTs));
+  it("import auto-map", () => expect(columnGolden()).toEqual(columnTs));
+  it("fuzzy scores", () => expect(fuzzyGolden()).toEqual(fuzzyTs));
+});
 
 describe.skipIf(!import.meta.env.PARITY_DUMP)("parity dump", () => {
   it("writes TS goldens (and DIVERGENCES.md when Rust goldens exist)", async () => {
