@@ -3172,19 +3172,29 @@ impl App {
     pub fn palette_update_channel(&mut self) {
         use qurry_core::update::Channel;
         let on = self.state.store.update_channel();
-        let items = [(Channel::Stable, "releases only (default)"), (Channel::Beta, "also the pre-release built from every merge to main")]
+        let channels = [(Channel::Stable, "releases only (default)"), (Channel::Beta, "also the pre-release built from every merge to main")];
+        // Opens on the saved channel, so Enter keeps it
+        let sel = channels.iter().position(|(c, _)| *c == on).unwrap_or(0);
+        let items = channels
             .into_iter()
             .map(|(c, hint)| PItem { label: format!("{} {}", if c == on { "●" } else { " " }, channel_name(c)), hint: hint.into(), action: PAction::Channel(c) })
             .collect();
-        self.popup = Some(Popup::Palette(Palette { title: "Update Channel".into(), input: TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
+        self.popup = Some(Popup::Palette(Palette { title: "Update Channel".into(), input: TextArea::default(), items, sel, loading: 0, cache: Default::default() }));
     }
 
     fn set_update_channel(&mut self, channel: qurry_core::update::Channel) {
         self.status = match self.state.store.set_update_channel(channel) {
             Ok(()) => {
-                // The ⬆ badge may be from the other channel; the next check sets it again
-                self.update = None;
-                format!("Update channel: {} — {} › Check for Updates looks now", channel_name(channel), self.keys.label(Action::Palette))
+                // The ⬆ badge follows the new channel, from the saved check (both channels, no request) as in the GUI
+                let cur = env!("CARGO_PKG_VERSION");
+                let saved = if qurry_core::update::disabled() { None } else { qurry_core::update::cached(&self.state.store.dir(), cur, channel) };
+                self.update = saved.clone().flatten().map(|r| r.version);
+                let name = channel_name(channel);
+                match saved {
+                    Some(Some(r)) => format!("Update channel: {name} — Qurry {} is available — {} › Update Qurry & Restart", r.version, self.keys.label(Action::Palette)),
+                    Some(None) => format!("Update channel: {name} — you have the latest {} version ({cur})", name.to_lowercase()),
+                    None => format!("Update channel: {name} — {} › Check for Updates looks now", self.keys.label(Action::Palette)),
+                }
             }
             Err(e) => format!("Couldn't save the update channel: {e}"),
         };

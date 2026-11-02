@@ -2792,11 +2792,10 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
   const pickChannel = async (c: UpdateChannel) => {
     setChannel(c);
     try {
-      await api.setUpdateChannel(c);
-      // From the saved check (both channels), no new request
-      const u = await api.checkUpdate(false);
-      onChannel(u.latest ? u : null);
-      setChMsg(u.latest ? `Qurry ${u.latest.version} is available on this channel.` : `You have the latest ${c} version (${u.current}).`);
+      // Answered from the saved check (both channels), never a new request
+      const u = await api.setUpdateChannel(c);
+      onChannel(u?.latest ? u : null);
+      setChMsg(!u ? "Saved. Check Now looks for updates on this channel." : u.latest ? `Qurry ${u.latest.version} is available on this channel.` : `You have the latest ${c} version (${u.current}).`);
     } catch (e) {
       setChMsg(String(e));
     }
@@ -2872,7 +2871,7 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
                 </Button>
               </div>
             </Field>
-            <Field label="Update channel" hint={chMsg ?? "Stable gets the releases made from a version tag. Beta also gets the pre-release built from every merge to main. The terminal UI uses the same channel."}>
+            <Field label="Channel" hint={chMsg ?? "Stable gets the releases made from a version tag. Beta also gets the pre-release built from every merge to main. The terminal UI uses the same channel."}>
               <div className="ui-row">
                 <Select value={channel ?? ""} disabled={!channel} onChange={(e) => pickChannel(e.target.value as UpdateChannel)}>
                   <option value="stable">Stable</option>

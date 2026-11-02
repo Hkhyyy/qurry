@@ -148,7 +148,8 @@ export type UpdateChannel = "stable" | "beta";
 export const api = {
   checkUpdate: (force = false) => invoke<UpdateInfo>("check_update", { force }),
   updateChannel: () => invoke<UpdateChannel>("update_channel"),
-  setUpdateChannel: (channel: UpdateChannel) => invoke<void>("set_update_channel", { channel }),
+  /** Saves the channel; what it offers from the saved check (no request), null if nothing was checked yet */
+  setUpdateChannel: (channel: UpdateChannel) => invoke<UpdateInfo | null>("set_update_channel", { channel }),
   /** Download the new version, swap it in, and restart the app (progress via the "update-progress" event) */
   installUpdate: () => invoke<void>("install_update"),
   /** Open tabs·splits (restored on restart) */

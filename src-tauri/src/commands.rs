@@ -693,9 +693,18 @@ pub fn update_channel(state: State<'_, AppState>) -> qurry_core::update::Channel
     state.store.update_channel()
 }
 
+/// Saves the channel, then answers what it offers from the saved check only (no request): None if nothing was checked yet or checks are off
 #[tauri::command]
-pub fn set_update_channel(state: State<'_, AppState>, channel: qurry_core::update::Channel) -> AppResult<()> {
-    state.store.set_update_channel(channel)
+pub fn set_update_channel(state: State<'_, AppState>, channel: qurry_core::update::Channel) -> AppResult<Option<UpdateInfo>> {
+    state.store.set_update_channel(channel)?;
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    if cfg!(debug_assertions) || qurry_core::update::disabled() {
+        return Ok(None);
+    }
+    Ok(qurry_core::update::cached(&state.store.dir(), &current, channel).map(|latest| {
+        let changes = latest.as_ref().map(|r| r.changes_since(&current)).unwrap_or_default();
+        UpdateInfo { current, latest, changes }
+    }))
 }
 
 /// Download the new version, replace the running app, and restart (Tauri updater: the release's latest.json + signature check).

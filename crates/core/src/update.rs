@@ -152,7 +152,8 @@ fn now() -> u64 {
 /// GET a GitHub API path of this repo ("releases?per_page=100")
 async fn github(path: &str) -> AppResult<Vec<u8>> {
     let out = tokio::process::Command::new("curl")
-        .args(["-fsSL", "-m", "10", "-H", "Accept: application/vnd.github+json", &format!("https://api.github.com/repos/{REPO}/{path}")])
+        // --compressed: GitHub gzips the release list (100 releases: about 4 MB → 300 KB), so it fits the 10 s on slow links
+        .args(["-fsSL", "--compressed", "-m", "10", "-H", "Accept: application/vnd.github+json", &format!("https://api.github.com/repos/{REPO}/{path}")])
         .output()
         .await
         .map_err(|e| AppError::Msg(format!("curl: {e}")))?;
@@ -168,7 +169,7 @@ async fn latest_releases() -> AppResult<Latest> {
     let mut stable = pick(&all, Channel::Stable);
     if stable.is_none() {
         // Only betas among the newest 100: GitHub's "latest" is the newest stable release
-        stable = github("releases/latest").await.ok().and_then(|b| serde_json::from_slice(&b).ok()).and_then(|v| parse_release(&v));
+        stable = github("releases/latest").await.ok().and_then(|b| serde_json::from_slice(&b).ok()).and_then(|v| parse_release(&v)).map(with_own_notes);
     }
     Ok(Latest { stable, beta: pick(&all, Channel::Beta) })
 }
@@ -188,6 +189,12 @@ fn parse_release(v: &serde_json::Value) -> Option<Release> {
     let version = s("tag_name").trim_start_matches('v').to_string();
     let prerelease = v["prerelease"].as_bool().unwrap_or(false);
     (!version.is_empty()).then(|| Release { version, url: s("html_url"), notes: s("body"), assets, history: vec![], prerelease })
+}
+
+/// A release found on its own (not in the list): its history is just its own changes
+fn with_own_notes(mut r: Release) -> Release {
+    r.history = vec![VersionNotes { version: r.version.clone(), changes: changes(&r.notes) }];
+    r
 }
 
 /// Release list → published releases (drafts excluded), in the API's order
@@ -210,8 +217,7 @@ fn pick(all: &[Release], channel: Channel) -> Option<Release> {
 /// (it holds both channels, so switching the channel needs no new request)
 pub async fn check(dir: &Path, current: &str, channel: Channel, force: bool) -> AppResult<Option<Release>> {
     let path = dir.join(CACHE_FILE);
-    let cached: Option<Cache> = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok());
-    let latest = match cached {
+    let latest = match read_cache(dir) {
         Some(c) if !force && now().saturating_sub(c.checked_at) < CHECK_EVERY_SECS => c.latest,
         _ => {
             let cache = Cache { checked_at: now(), latest: latest_releases().await? };
@@ -220,6 +226,15 @@ pub async fn check(dir: &Path, current: &str, channel: Channel, force: bool) -> 
         }
     };
     Ok(latest.of(channel).filter(|r| is_newer(current, &r.version)))
+}
+
+fn read_cache(dir: &Path) -> Option<Cache> {
+    std::fs::read_to_string(dir.join(CACHE_FILE)).ok().and_then(|t| serde_json::from_str(&t).ok())
+}
+
+/// Like check, from the saved result only (any age, never the network): None if nothing was checked yet. For a channel switch
+pub fn cached(dir: &Path, current: &str, channel: Channel) -> Option<Option<Release>> {
+    read_cache(dir).map(|c| c.latest.of(channel).filter(|r| is_newer(current, &r.version)))
 }
 
 /// Update signing public key (same as plugins.updater.pubkey in the GUI tauri.conf.json — checked by a test)
@@ -381,5 +396,27 @@ mod tests {
         assert_eq!(check(&dir, "9.9.9", Channel::Stable, false).await.unwrap(), None);
         assert_eq!(check(&dir, "9.9.9", Channel::Beta, false).await.unwrap(), Some(rel("10.0.0-beta.1")));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A channel switch reads the saved result whatever its age, and says when nothing was checked yet (no request either way)
+    #[test]
+    fn cached_answers_without_the_network() {
+        let dir = std::env::temp_dir().join(format!("dbtool-upd-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(cached(&dir, "0.1.0", Channel::Beta), None);
+        let rel = |v: &str| Release { version: v.into(), url: "u".into(), notes: String::new(), assets: vec![], history: vec![], prerelease: v.contains('-') };
+        let latest = Latest { stable: Some(rel("9.9.9")), beta: Some(rel("10.0.0-beta.1")) };
+        std::fs::write(dir.join(CACHE_FILE), serde_json::to_string(&Cache { checked_at: 0, latest }).unwrap()).unwrap();
+        assert_eq!(cached(&dir, "9.9.9", Channel::Stable), Some(None));
+        assert_eq!(cached(&dir, "9.9.9", Channel::Beta), Some(Some(rel("10.0.0-beta.1"))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The stable release from releases/latest (only betas in the list) still lists its own changes
+    #[test]
+    fn fallback_release_has_its_own_changes() {
+        let v = serde_json::json!({"tag_name":"v0.3.0","html_url":"s","body":"## What's Changed\n* [feat] x by @a in https://github.com/Hkhyyy/qurry/pull/5","assets":[]});
+        let r = with_own_notes(parse_release(&v).unwrap());
+        assert_eq!(r.changes_since("0.2.9"), vec![VersionNotes { version: "0.3.0".into(), changes: vec!["[feat] x (#5)".into()] }]);
     }
 }
