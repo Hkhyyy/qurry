@@ -103,8 +103,10 @@ pub enum Plan {
     Nothing,
 }
 
-/// Keywords that can start a statement (non-SQL lines before such a line are treated as titles·notes and dropped)
+/// Keywords that can start a statement (non-SQL lines before such a line are treated as titles·notes and dropped).
+/// T-SQL control words too: dropping `IF EXISTS (…)` above an UPDATE would run the UPDATE unconditionally
 const SQL_START: &[&str] = &[
+    "if", "else", "while", "exec",
     "select", "with", "insert", "update", "delete", "merge", "upsert", "begin", "start", "commit", "rollback", "end", "abort", "savepoint", "release", "grant", "revoke", "create", "alter", "drop",
     "truncate", "comment", "set", "reset", "show", "explain", "analyze", "vacuum", "values", "table", "copy", "call", "do", "lock", "declare", "fetch", "close", "prepare", "execute",
     "deallocate", "listen", "notify", "unlisten", "refresh", "reindex", "cluster", "discard", "checkpoint", "use", "describe", "desc", "replace", "load", "handler", "optimize", "kill",
@@ -325,6 +327,11 @@ mod tests {
         assert_eq!(sqls(plan(sql, 3, DbKind::Postgres, s)), run(&["SELECT 1\nFROM t"]));
         assert_eq!(sqls(plan(sql, sql.find("2. 거부").unwrap() + 1, DbKind::Postgres, s)), run(&["-- 설명\nSELECT 2"]));
         assert_eq!(sqls(plan("foo bar", 1, DbKind::Postgres, s)), run(&["foo bar"]));
+        // A T-SQL IF / WHILE line is the condition of the statement under it, not a note
+        let sql = "IF EXISTS (select 1 from t where a = 1)\nUPDATE t SET b = 0 WHERE c > 1";
+        assert_eq!(sqls(plan(sql, 1, DbKind::Mssql, s)), run(&[sql]));
+        let sql = "WHILE @i < 3\nDELETE TOP (1) FROM t";
+        assert_eq!(sqls(plan(sql, 1, DbKind::Mssql, s)), run(&[sql]));
     }
 
     #[test]
