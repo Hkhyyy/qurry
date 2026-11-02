@@ -370,6 +370,8 @@ async fn all_scenes() -> Vec<Value> {
         on_yes: Box::new(|_| {}),
     });
     scenes.push(app_scene(&mut h, "Production confirm", "운영 Data Source 에서 바꾸는 문장: 바뀔 행 수를 보여 주고 묻는다", 120, 22));
+    scenes.push(app_scene(&mut h, "Terminal too small: question waiting", "Below 40×10 with a dialog open, ⌃q doesn't quit: the message says to make the window larger to answer it", 36, 9));
+    scenes.push(app_scene(&mut h, "Production confirm: minimum size", "At 40×10 the question and its keys stay; the statements that don't fit are counted", 40, 10));
     h.app.popup = None;
     h.app.palette_actions();
     h.type_str("work");
@@ -377,6 +379,8 @@ async fn all_scenes() -> Vec<Value> {
     h.app.popup = None;
     h.app.conn_form(None);
     scenes.push(app_scene(&mut h, "Data source form", "n (탐색기): 새 Data Source. Workspace · Color 칸은 ◂ ▸ 로 고른다", 120, 34));
+    h.key("Up");
+    scenes.push(app_scene(&mut h, "Data source form: 80×24", "In a window too short for every field the fields scroll to the focused one (here the last); the key hints stay and the border says which field it is", 80, 24));
     h.app.popup = None;
     let ssm = serde_json::from_value(json!({ "id": "ssm", "name": "[PROD] orders (SSM)", "kind": "postgres", "host": "orders.cluster-abc.ap-northeast-2.rds.amazonaws.com", "port": 5432, "user": "app", "database": "orders",
         "ssm": { "enabled": true, "profile": "prod", "target": "i-0123456789abcdef0" } })).unwrap();

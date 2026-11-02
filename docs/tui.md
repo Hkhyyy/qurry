@@ -17,8 +17,8 @@ The TUI picks one color mode when it starts, from these environment variables (t
 
 When colors are off or limited to 16, the status line says so at startup, with what to change:
 
-- `NO_COLOR is set: colors off (unset NO_COLOR for colors)` — run `unset NO_COLOR` (or remove it from your shell profile) and start `qurry-tui` again.
-- `16 colors: set COLORTERM=truecolor for more if supported` — if your terminal does show 24-bit colors, `export COLORTERM=truecolor` before starting. Most modern terminals (iTerm2, kitty, WezTerm, Ghostty, Alacritty, Windows Terminal) set it themselves; it often gets lost over `ssh`, `sudo` or inside `tmux` / `screen`.
+- `Colors off: unset NO_COLOR` — run `unset NO_COLOR` (or remove it from your shell profile) and start `qurry-tui` again.
+- `16 colors: try COLORTERM=truecolor` — if your terminal does show 24-bit colors, `export COLORTERM=truecolor` before starting. Most modern terminals (iTerm2, kitty, WezTerm, Ghostty, Alacritty, Windows Terminal) set it themselves; it often gets lost over `ssh`, `sudo` or inside `tmux` / `screen`.
 
 Over `ssh` or `sudo` (and in `tmux`, below) `COLORTERM` usually doesn't arrive, so a 24-bit terminal gets the 256 or 16 colors: `export COLORTERM=truecolor` on the other side, or pass it along with `SendEnv COLORTERM` in `~/.ssh/config` and `AcceptEnv COLORTERM` in the server's `sshd_config` (`sudo --preserve-env=COLORTERM` for sudo).
 
@@ -32,7 +32,9 @@ Some things never depend on color:
 ## Small windows
 
 The layout is drawn down to **40 × 10** cells. 80 × 24 and larger is comfortable; in a small window, hide the explorer with `⌥0` or narrow it with `⌥[`.
-Below 40 × 10 the TUI shows `Terminal too small` with the current size and the size it needs, instead of a broken screen. Nothing is lost: make the window larger and everything is back where it was. Meanwhile keys and clicks do nothing, so nothing unseen is run or answered; only `⌃q` quits.
+Dialogs stay usable down to that size: when the Data Source form doesn't fit, its fields scroll to the one you are on (the bottom border shows which, e.g. `12/28`) and the key hints stay at the bottom (a long test message above them is cut and ends in `⋯`); a confirm keeps its question and `y / Enter` · `n / Esc` at the bottom and says how many lines above it are hidden and how many rows those statements would change (`⋯ 4 lines hidden · 12,409 rows`), so make the window larger to read them before you answer.
+
+Below 40 × 10 the TUI shows `Terminal too small` with the current size and the size it needs, instead of a broken screen. Nothing is lost: make the window larger and everything is back where it was. Meanwhile keys and clicks do nothing, so nothing unseen is run or answered; only `⌃q` quits, and only when nothing waits for an answer. With a dialog open the message says `A dialog is open: make the window larger to answer it`, and with uncommitted changes in a console `N console(s) have uncommitted changes: make the window larger to quit`; make the window larger, then answer the dialog, or press `⌃q` and choose whether to roll the changes back.
 
 ## tmux and other multiplexers
 

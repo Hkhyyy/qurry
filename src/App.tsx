@@ -137,6 +137,8 @@ const sk = (id: string) => {
   return b.length ? formatSpec(b[0]) : undefined;
 };
 const last = <T,>(a: T[]): T | undefined => a[a.length - 1];
+/** A tab's database by name: its own, else the connection's default (a tab on the default keeps none) */
+const tabDatabase = (t: { database?: string }, c?: ConnectionView) => t.database || c?.database || (c?.kind === "mysql" ? "" : "postgres");
 
 export default function App() {
   const theme = useTheme();
@@ -2290,7 +2292,7 @@ export default function App() {
                     target={t.target}
                     initialSql={sqlOf(t)}
                     connName={c?.name ?? ""}
-                    database={t.database || c?.database || (c?.kind === "mysql" ? "" : "postgres")}
+                    database={tabDatabase(t, c)}
                     schema={t.schema ?? (c?.kind === "mysql" ? t.database || c?.database || "" : "public")}
                     kind={c?.kind}
                     dialect={dialectOf(c?.kind)}
@@ -2483,6 +2485,7 @@ export default function App() {
                 <ConsoleEditor
                   tabId={t.id}
                   connId={t.target}
+                  database={tabDatabase(t, conns.find((x) => x.id === t.connId))}
                   initialSql={t.sql}
                   language={dialectOf(conns.find((x) => x.id === t.connId)?.kind).monaco}
                   readOnly

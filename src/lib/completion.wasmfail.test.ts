@@ -25,7 +25,7 @@ it("tells the user once that autocomplete is off", async () => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   const { bindModel } = await import("./completion");
   const model = { uri: { toString: () => "inmemory://x" }, getValue: () => "sel", getLineContent: () => "sel", getOffsetAt: () => 3 };
-  bindModel("inmemory://x", "c");
+  bindModel("inmemory://x", "c", "postgres");
   for (let i = 0; i < 3; i++) {
     const r = await providers.get("pgsql").provideCompletionItems(model, { lineNumber: 1, column: 4 }, { triggerKind: 0 });
     expect(r.suggestions).toEqual([]);

@@ -17,8 +17,8 @@ TUI 는 시작할 때 아래 환경 변수로 색 모드를 하나 고릅니다 
 
 색이 꺼졌거나 16색뿐이면 시작할 때 상태 줄에 무엇을 바꾸면 되는지 나옵니다:
 
-- `NO_COLOR is set: colors off (unset NO_COLOR for colors)` — `unset NO_COLOR` 를 실행하고 (또는 셸 프로필에서 지우고) `qurry-tui` 를 다시 시작하세요.
-- `16 colors: set COLORTERM=truecolor for more if supported` — 터미널이 24비트 색을 보여 준다면 시작 전에 `export COLORTERM=truecolor`. 요즘 터미널 (iTerm2, kitty, WezTerm, Ghostty, Alacritty, Windows Terminal) 은 스스로 설정하지만, `ssh`, `sudo`, `tmux` / `screen` 안에서는 자주 빠집니다.
+- `Colors off: unset NO_COLOR` — `unset NO_COLOR` 를 실행하고 (또는 셸 프로필에서 지우고) `qurry-tui` 를 다시 시작하세요.
+- `16 colors: try COLORTERM=truecolor` — 터미널이 24비트 색을 보여 준다면 시작 전에 `export COLORTERM=truecolor`. 요즘 터미널 (iTerm2, kitty, WezTerm, Ghostty, Alacritty, Windows Terminal) 은 스스로 설정하지만, `ssh`, `sudo`, `tmux` / `screen` 안에서는 자주 빠집니다.
 
 `ssh` 나 `sudo` 로 (그리고 아래 `tmux` 안에서) 실행하면 보통 `COLORTERM` 이 전달되지 않아 24비트 터미널에서도 256색이나 16색이 됩니다: 접속한 쪽에서 `export COLORTERM=truecolor` 를 하거나, `~/.ssh/config` 의 `SendEnv COLORTERM` 과 서버 `sshd_config` 의 `AcceptEnv COLORTERM` 으로 넘기세요 (sudo 는 `sudo --preserve-env=COLORTERM`).
 
@@ -32,7 +32,9 @@ TUI 는 시작할 때 아래 환경 변수로 색 모드를 하나 고릅니다 
 ## 작은 창
 
 화면은 **40 × 10** 칸까지 그려집니다. 80 × 24 이상이면 넉넉하고, 작은 창에서는 `⌥0` 으로 탐색기를 숨기거나 `⌥[` 로 좁히세요.
-40 × 10 보다 작으면 깨진 화면 대신 `Terminal too small` 과 지금 크기, 필요한 크기가 나옵니다. 잃는 것은 없습니다: 창을 키우면 모두 그대로 돌아옵니다. 그동안 키와 클릭은 아무것도 하지 않아 보이지 않는 것이 실행되거나 답해지지 않습니다; `⌃q` 로 끝내기만 됩니다.
+대화 상자도 그 크기까지 쓸 수 있습니다: Data Source 폼이 다 들어가지 않으면 칸이 지금 있는 칸까지 스크롤되고 (아래 테두리에 `12/28` 처럼 몇 번째 칸인지 나옵니다) 키 안내는 아래에 남습니다 (그 위의 긴 테스트 메시지는 잘리고 `⋯` 로 끝납니다). 확인 창은 질문과 `y / Enter` · `n / Esc` 를 아래에 남기고, 위에서 가려진 줄 수와 그 문장들이 바꿀 행 수를 알려 줍니다 (`⋯ 4 lines hidden · 12,409 rows`). 답하기 전에 창을 키워 읽어 보세요.
+
+40 × 10 보다 작으면 깨진 화면 대신 `Terminal too small` 과 지금 크기, 필요한 크기가 나옵니다. 잃는 것은 없습니다: 창을 키우면 모두 그대로 돌아옵니다. 그동안 키와 클릭은 아무것도 하지 않아 보이지 않는 것이 실행되거나 답해지지 않습니다; `⌃q` 로 끝내기만 되고, 그것도 답을 기다리는 것이 없을 때만입니다. 대화 상자가 열려 있으면 `A dialog is open: make the window larger to answer it`, 콘솔에 커밋하지 않은 변경이 있으면 `N console(s) have uncommitted changes: make the window larger to quit` 이 나옵니다. 창을 키운 뒤 대화 상자에 답하거나, `⌃q` 를 누르고 변경을 되돌릴지 고르세요.
 
 ## tmux 와 다른 멀티플렉서
 

@@ -43,15 +43,7 @@ pub fn confirm_lines(text: &str) -> Vec<Line<'static>> {
     let mut lines: Vec<Line> = text
         .lines()
         .map(|l| match l.trim_start().strip_prefix("→ ") {
-            Some(v) => {
-                let n: Option<u64> = v.split_whitespace().next().and_then(|x| x.replace(',', "").parse().ok());
-                let c = match n {
-                    Some(0) => DIM,
-                    Some(n) if n < 100 => WARN,
-                    _ => DANGER,
-                };
-                Line::from(vec![Span::raw(l[..l.len() - v.len()].to_string()), Span::styled(v.to_string(), Style::default().fg(c).add_modifier(Modifier::BOLD))])
-            }
+            Some(v) => Line::from(vec![Span::raw(l[..l.len() - v.len()].to_string()), Span::styled(v.to_string(), count_style(row_count(v)))]),
             None => Line::raw(l.to_string()),
         })
         .collect();
@@ -60,14 +52,102 @@ pub fn confirm_lines(text: &str) -> Vec<Line<'static>> {
     lines
 }
 
+/// The N of "→ N rows" (None when it isn't a number: "schema change", "can't count")
+fn row_count(v: &str) -> Option<u64> {
+    v.split_whitespace().next().and_then(|x| x.replace(',', "").parse().ok())
+}
+
+/// "→ N rows": 0 dimmed · 1~99 WARN · 100+ or unknown DANGER
+fn count_style(n: Option<u64>) -> Style {
+    let c = match n {
+        Some(0) => DIM,
+        Some(n) if n < 100 => WARN,
+        _ => DANGER,
+    };
+    Style::default().fg(c).add_modifier(Modifier::BOLD)
+}
+
 /// How many lines it becomes when wrapped (Wrap, by word as Paragraph wraps it) — for sizing the popup (if short, the hints below get cut)
 pub fn wrapped_height(lines: &[Line], width: u16) -> u16 {
     Paragraph::new(lines.to_vec()).wrap(Wrap { trim: false }).line_count(width.max(1)) as u16
 }
 
+/// Lines cut to `height` rows of `width` (wrapped): blank lines go first, then the lines that don't fit give way to one
+/// saying how many are hidden and what their "→ N rows" add up to, so a confirm never hides what it would change.
+/// Wraps each line once and stops at the first that doesn't fit: a confirm of thousands of statements draws in a frame
+pub fn cut_lines(mut lines: Vec<Line<'static>>, width: u16, height: u16) -> Vec<Line<'static>> {
+    let mut ends = fitting_rows(&lines, width, height);
+    if ends.len() == lines.len() {
+        return lines;
+    }
+    lines.retain(|l| !l.to_string().trim().is_empty());
+    ends = fitting_rows(&lines, width, height);
+    if ends.len() == lines.len() {
+        return lines;
+    }
+    let counts: Vec<Option<Option<u64>>> = lines.iter().map(|l| l.to_string().trim_start().strip_prefix("→ ").map(row_count)).collect();
+    let mut keep = ends.len();
+    loop {
+        let marker = hidden_marker(lines.len() - keep, &counts[keep..]);
+        let above = keep.checked_sub(1).map_or(0, |i| ends[i]);
+        if keep == 0 || above + wrapped_height(std::slice::from_ref(&marker), width) <= height {
+            lines.truncate(keep);
+            lines.push(marker);
+            return lines;
+        }
+        keep -= 1;
+    }
+}
+
+/// Wrapped rows up to the end of each line, for the first lines that fit in `height`
+fn fitting_rows(lines: &[Line], width: u16, height: u16) -> Vec<u16> {
+    let mut ends = Vec::new();
+    let mut total = 0;
+    for l in lines {
+        total += wrapped_height(std::slice::from_ref(l), width);
+        if total > height {
+            break;
+        }
+        ends.push(total);
+    }
+    ends
+}
+
+/// "⋯ 4 lines hidden · 12,408 rows · 1 not counted": the hidden lines and the row counts among them
+fn hidden_marker(n: usize, counts: &[Option<Option<u64>>]) -> Line<'static> {
+    let mut text = format!("⋯ {n} lines hidden");
+    let known: Vec<u64> = counts.iter().flatten().flatten().copied().collect();
+    let total: u64 = known.iter().sum();
+    if !known.is_empty() {
+        text += &format!(" · {} row{}", crate::transfer::thousands(total), if total == 1 { "" } else { "s" });
+    }
+    let unknown = counts.iter().flatten().filter(|c| c.is_none()).count();
+    if unknown > 0 {
+        text += &format!(" · {unknown} not counted");
+    }
+    Line::styled(text, if known.is_empty() && unknown == 0 { Style::default().fg(WARN) } else { count_style(if unknown > 0 { None } else { Some(total) }) })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cut_lines_says_how_many_are_hidden() {
+        let lines: Vec<Line<'static>> = ["one", "two", "three", "four"].into_iter().map(Line::raw).collect();
+        assert_eq!(cut_lines(lines.clone(), 30, 4).len(), 4);
+        let cut: Vec<String> = cut_lines(lines, 30, 3).iter().map(|l| l.to_string()).collect();
+        assert_eq!(cut, ["one", "two", "⋯ 2 lines hidden"]);
+    }
+
+    #[test]
+    fn cut_lines_drops_blank_lines_first_and_adds_up_hidden_rows() {
+        let lines: Vec<Line<'static>> = ["head", "", "a", "  → 1 row", "b", "  → 12,408 rows", "c", "  → schema change", ""].into_iter().map(Line::raw).collect();
+        let cut: Vec<String> = cut_lines(lines.clone(), 60, 7).iter().map(|l| l.to_string()).collect();
+        assert_eq!(cut, ["head", "a", "  → 1 row", "b", "  → 12,408 rows", "c", "  → schema change"]);
+        let cut: Vec<String> = cut_lines(lines, 60, 3).iter().map(|l| l.to_string()).collect();
+        assert_eq!(cut, ["head", "a", "⋯ 5 lines hidden · 12,409 rows · 1 not counted"]);
+    }
 
     #[test]
     fn wrapped_height_counts_folded_lines() {

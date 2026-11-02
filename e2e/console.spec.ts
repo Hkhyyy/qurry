@@ -27,6 +27,14 @@ test.describe("completion", () => {
     await expect(suggestions(page).first()).toBeVisible();
     await expect(suggestions(page)).toHaveText([/^ready\s*20 rows$/, /^paid\s*10 rows$/, /^it's late\s*1 row$/]);
   });
+
+  test("MySQL console on the data source's default database inserts its tables bare, as the TUI does", async ({ page }) => {
+    await openConsole(page, "[MySQL] shop");
+    await typeSql(page, "select * from ord");
+    await expect(suggestions(page).first()).toBeVisible();
+    await page.keyboard.press("Enter");
+    await expect(editor(page).locator(".view-line").first()).toHaveText(/^select\s\*\sfrom\sorders$/);
+  });
 });
 
 test("run one statement → one result tab", async ({ page }) => {

@@ -109,7 +109,8 @@ const handlers: Record<string, (a: any) => unknown> = {
       { name: "users_contract_fk", kind: "f", definition: "FOREIGN KEY (contract_id) REFERENCES contracts(id)" },
     ],
   }),
-  completion_meta: () => [
+  // MySQL: the schema is the database (shop is the data source's default)
+  completion_meta: (a: any) => a.id.split("::")[0] === "my" ? [{ schema: "shop", name: "orders", columns: [["id", "bigint"], ["status", "varchar"]] }] : [
     { schema: "public", name: "users", columns: [["id", "bigint"], ["user_name", "varchar"]] },
     { schema: "public", name: "orders", columns: [["id", "bigint"], ["status", "varchar"], ["amount", "numeric"], ["data", "jsonb"], ["reasons", "jsonb"]] },
   ],

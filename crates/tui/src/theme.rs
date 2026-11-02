@@ -47,9 +47,9 @@ impl ColorMode {
     pub fn notice(self) -> Option<&'static str> {
         match self {
             Self::TrueColor | Self::Ansi256 => None,
-            // Short enough for the status text's half of an 120-cell line
-            Self::Ansi16 => Some("16 colors: set COLORTERM=truecolor for more if supported"),
-            Self::NoColor => Some("NO_COLOR is set: colors off (unset NO_COLOR for colors)"),
+            // Short enough for the status text's half of an 80-cell line
+            Self::Ansi16 => Some("16 colors: try COLORTERM=truecolor"),
+            Self::NoColor => Some("Colors off: unset NO_COLOR"),
         }
     }
 
@@ -63,7 +63,10 @@ impl ColorMode {
         if self == Self::TrueColor {
             return;
         }
-        let mut seen = std::collections::HashMap::new();
+        // A frame has only a handful of distinct colors, mostly in runs of equal cells: map each color once and
+        // reuse the previous cell's result while the colors don't change
+        let mut seen = Vec::new();
+        let mut last: Option<([Color; 3], [Color; 3])> = None;
         for cell in buf.content.iter_mut() {
             // Terminal themes give the 16 colors very different brightness; reverse video reads in all of them
             let selection = self.reverses_selection() && [SEL, DROP, CELL_EDITED].contains(&cell.bg);
@@ -84,21 +87,49 @@ impl ColorMode {
                 cell.underline_color = Color::Reset;
                 continue;
             }
-            // A frame has only a handful of distinct colors: look each up once
-            let mut color = |c: Color, bg: bool| *seen.entry((c, bg)).or_insert_with(|| self.color(c, bg));
-            let bg = color(cell.bg, true);
-            let mut fg = color(cell.fg, false);
-            // 16 colors: one text color on any colored background, dark on the hues that are light in common palettes,
-            // white on the dark ones (xterm's blue gives black text about 2:1); and text never in its own background's color
-            if self == Self::Ansi16 && !matches!(bg, Color::Reset | Color::Black | Color::DarkGray) {
-                fg = if matches!(bg, Color::Red | Color::Blue | Color::Magenta) { Color::White } else { Color::Black };
-            } else if fg == bg && fg != Color::Reset {
-                fg = Color::White;
-            }
+            let key = [cell.fg, cell.bg, cell.underline_color];
+            let [fg, bg, ul] = match last {
+                Some((k, v)) if k == key => v,
+                _ => {
+                    let v = self.map_colors(key, &mut seen);
+                    last = Some((key, v));
+                    v
+                }
+            };
             cell.fg = fg;
             cell.bg = bg;
-            cell.underline_color = color(cell.underline_color, false);
+            cell.underline_color = ul;
         }
+    }
+
+    /// A cell's [fg, bg, underline] in this mode. RGB colors go through `seen`, the frame's colors already mapped
+    /// (a short list: a frame has a few dozen at most); named colors need no lookup
+    fn map_colors(self, [fg, bg, ul]: [Color; 3], seen: &mut Vec<(Color, bool, Color)>) -> [Color; 3] {
+        let mut color = |c: Color, bg: bool| {
+            if !matches!(c, Color::Rgb(..)) {
+                return self.color(c, bg);
+            }
+            // Only the 16-color mapping depends on whether it is a background
+            let bg = bg && self == Self::Ansi16;
+            match seen.iter().find(|e| e.0 == c && e.1 == bg) {
+                Some(e) => e.2,
+                None => {
+                    let m = self.color(c, bg);
+                    seen.push((c, bg, m));
+                    m
+                }
+            }
+        };
+        let bg = color(bg, true);
+        let mut fg = color(fg, false);
+        // 16 colors: one text color on any colored background, dark on the hues that are light in common palettes,
+        // white on the dark ones (xterm's blue gives black text about 2:1); and text never in its own background's color
+        if self == Self::Ansi16 && !matches!(bg, Color::Reset | Color::Black | Color::DarkGray) {
+            fg = if matches!(bg, Color::Red | Color::Blue | Color::Magenta) { Color::White } else { Color::Black };
+        } else if fg == bg && fg != Color::Reset {
+            fg = Color::White;
+        }
+        [fg, bg, color(ul, false)]
     }
 
     /// One color in this mode (named terminal colors are already fine everywhere except NoColor)
@@ -264,6 +295,29 @@ mod tests {
         buf[(0, 0)].set_symbol("x").set_style(st);
         mode.apply(&mut buf);
         buf[(0, 0)].clone()
+    }
+
+    /// A whole frame maps each cell as it would alone: runs of equal cells, colors seen before, and the same color as text and background
+    #[test]
+    fn whole_frame_maps_like_single_cells() {
+        let styles = [
+            Style::default().fg(ACCENT).bg(SURFACE),
+            Style::default().fg(ACCENT).bg(SURFACE),
+            Style::default().fg(SURFACE).bg(ACCENT),
+            Style::default().fg(DIM).bg(hex("#6e2a2a").unwrap()),
+            Style::default().fg(ACCENT).bg(SURFACE),
+            Style::default().fg(Color::Yellow).bg(SEL_BLUR).underline_color(ACCENT),
+        ];
+        for mode in [ColorMode::Ansi256, ColorMode::Ansi16] {
+            let mut buf = Buffer::empty(Rect::new(0, 0, styles.len() as u16, 1));
+            for (x, st) in styles.iter().enumerate() {
+                buf[(x as u16, 0)].set_symbol("x").set_style(*st);
+            }
+            mode.apply(&mut buf);
+            for (x, st) in styles.iter().enumerate() {
+                assert_eq!(buf[(x as u16, 0)], cell(mode, *st), "{mode:?} cell {x}");
+            }
+        }
     }
 
     #[test]

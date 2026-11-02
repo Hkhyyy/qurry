@@ -1392,6 +1392,16 @@ impl App {
         self.tabs.iter().chain(saved).filter(|t| conn.is_none_or(|c| t.conn == c) && matches!(&t.kind, TabKind::Console(c) if c.in_tx)).map(|t| t.id).collect()
     }
 
+    /// What has to be answered on screen before quitting (a dialog or the designer is open, or uncommitted changes would
+    /// be asked about): under the 'terminal too small' message the quit key then waits for a larger window
+    pub fn quit_waits_for(&self) -> Option<String> {
+        if self.popup.is_some() || self.designer.is_some() {
+            return Some("A dialog is open: make the window larger to answer it".into());
+        }
+        let n = self.pending_tabs(None).len();
+        (n > 0).then(|| format!("{n} console(s) have uncommitted changes: make the window larger to quit"))
+    }
+
     /// Close a tab. Ask first if there are uncommitted changes (closing rolls them back)
     pub fn close_tab(&mut self, i: usize) {
         let Some(id) = self.tabs.get(i).map(|t| t.id) else { return };
