@@ -1,4 +1,4 @@
-import { expect, openApp, openConsole, resultTabs, status, test, typeSql, work } from "./app";
+import { dialog, expect, openApp, openConsole, resultTabs, status, test, typeSql, work } from "./app";
 
 // ⌘↩ splits and plans the console in the shared WebAssembly module, which main.tsx loads without waiting
 // The module's fetch only, not the `?url` import Vite serves as a script
@@ -69,4 +69,38 @@ test("without the WebAssembly module a selection run as one statement still runs
   await page.keyboard.press("Meta+A");
   await page.keyboard.press("Meta+Enter");
   await expect(resultTabs(page)).toHaveText(["Output", /^users/]);
+});
+
+test("⌘F2 cancels a ⌘↩ still waiting for the WebAssembly module, like a run", async ({ page }) => {
+  let release = () => {};
+  const gate = new Promise<void>((r) => (release = r));
+  await page.route(WASM, async (route) => {
+    await gate;
+    await route.continue();
+  });
+  await openApp(page);
+  await openConsole(page);
+  await typeSql(page, "select * from users");
+  await page.keyboard.press("Meta+Enter");
+  await expect(work(page).locator(".running-bar")).toContainText("Loading the statement splitter");
+  await page.keyboard.press("Meta+F2");
+  await expect(work(page).locator(".running-bar")).toHaveCount(0);
+  // The cancelled run never starts once the module is there
+  const loaded = page.waitForResponse((r) => WASM(new URL(r.url())));
+  release();
+  await loaded;
+  await page.waitForTimeout(500);
+  await expect(resultTabs(page)).toHaveText(["Output"]);
+  await expect(work(page).locator(".output-log .ol.sql")).toHaveCount(0);
+});
+
+test("without the WebAssembly module, a DDL on Production may change the schema (not just can't count)", async ({ page }) => {
+  await page.route(WASM, (route) => route.abort());
+  await page.addInitScript(() => localStorage.setItem("dbtool.execSettings", JSON.stringify({ inside: "ask", outside: "nothing", selection: "single" })));
+  await openApp(page);
+  await openConsole(page, "[PROD] shop_app");
+  await typeSql(page, "alter table users add column x int");
+  await page.keyboard.press("Meta+A");
+  await page.keyboard.press("Meta+Enter");
+  await expect(dialog(page).locator(".ui-detail-value")).toHaveText("can't count · may change the schema");
 });

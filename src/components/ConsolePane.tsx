@@ -61,6 +61,16 @@ export interface OutputLine {
   level: "sql" | "info" | "warn" | "error";
 }
 
+/** The editor's API plus the ⌘↩ waiting for the WebAssembly module, which ⌘F2 cancels like a run */
+export interface ConsoleApi extends EditorApi {
+  loading: () => boolean;
+  cancelPending: () => void;
+}
+
+/** Output when the module failed to load, so ⌘↩ couldn't plan the console */
+export const SPLITTER_FAILED =
+  "Couldn't split the console into statements: Qurry couldn't load its WebAssembly module, usually because the system WebView is too old (update macOS, or webkit2gtk on Linux). Until then, select the statement and set Query Execution Settings › For selection execute › Exactly as a single statement.";
+
 interface Props {
   tabId: string;
   target: string;
@@ -99,7 +109,7 @@ interface Props {
   onSwitchSchema: (schema: string) => void;
   /** Data Source Options → Switch schema: Disable */
   schemaSwitchDisabled?: boolean;
-  registerApi: (tabId: string, api: EditorApi) => void;
+  registerApi: (tabId: string, api: ConsoleApi) => void;
   onClearOutput: () => void;
   /** The run couldn't start (the statement splitter failed): show why in Output */
   onError: (message: string) => void;
@@ -150,11 +160,7 @@ export function ConsolePane(p: Props) {
         const last = done();
         if (last) api?.run(last.explain);
       },
-      () =>
-        done() &&
-        p.onError(
-          "Couldn't split the console into statements: Qurry couldn't load its WebAssembly module, usually because the system WebView is too old (update macOS, or webkit2gtk on Linux). Until then, select the statement and set Query Execution Settings › For selection execute › Exactly as a single statement.",
-        ),
+      () => done() && p.onError(SPLITTER_FAILED),
     );
   };
   const run = (req: RunRequest) => {
@@ -284,7 +290,7 @@ export function ConsolePane(p: Props) {
               onRun={onRun}
               registerApi={(id, a) => {
                 setApi(a);
-                p.registerApi(id, a);
+                p.registerApi(id, { ...a, loading: () => pending.current !== null, cancelPending });
               }}
             />
             {chooser && (

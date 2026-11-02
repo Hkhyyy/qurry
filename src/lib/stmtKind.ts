@@ -15,11 +15,14 @@ export function isRead(kind: DbKind, sql: string): boolean {
   }
 }
 
-/** The statement changes structure (CREATE, ALTER, DROP …; leading comments skipped). False while the WASM module isn't loaded */
-export function isDdl(kind: DbKind, sql: string): boolean {
+/**
+ * The statement changes structure (CREATE, ALTER, DROP …; leading comments skipped). Null while the WASM module isn't loaded:
+ * it may, so the explorer reloads and Production says so
+ */
+export function isDdl(kind: DbKind, sql: string): boolean | null {
   try {
     return shared().isDdl(sql, kind);
   } catch {
-    return false;
+    return null;
   }
 }

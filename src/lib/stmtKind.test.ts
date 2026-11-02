@@ -12,6 +12,12 @@ describe("stmtKind (core guard through WASM)", () => {
     expect(isDdl("postgres", "# wipe\ntruncate t")).toBe(false);
   });
 
+  it("SELECT … INTO and sequence writers change data", () => {
+    expect(isRead("postgres", "select * into newtab from t")).toBe(false);
+    expect(isRead("mysql", "select * from t into outfile '/tmp/x'")).toBe(false);
+    expect(isRead("postgres", "select nextval('s')")).toBe(false);
+  });
+
   it("with a backslash in a string, a read must be a read under both of the server's string rules", () => {
     // MySQL NO_BACKSLASH_ESCAPES / PostgreSQL standard_conforming_strings = off end the string early and run the DELETE
     expect(isRead("mysql", "with a as (select 'x\\') delete from t -- ') select 1")).toBe(false);
@@ -19,10 +25,10 @@ describe("stmtKind (core guard through WASM)", () => {
     expect(isRead("mysql", "select 'C:\\path', 'delete' as action")).toBe(true);
   });
 
-  it("without the WASM module every statement is a write and not DDL (Production then asks)", async () => {
+  it("without the WASM module every statement is a write that may be DDL (Production asks, the explorer reloads)", async () => {
     vi.resetModules();
     const fresh = await import("./stmtKind");
     expect(fresh.isRead("postgres", "select 1")).toBe(false);
-    expect(fresh.isDdl("postgres", "drop table t")).toBe(false);
+    expect(fresh.isDdl("postgres", "drop table t")).toBe(null);
   });
 });
