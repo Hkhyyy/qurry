@@ -33,6 +33,13 @@ export const ScreenDbaError = { ...by("Database Admin: report error"), name: "Sc
 export const ScreenRedis ={ ...by("Redis"), name: "Screen · Redis" };
 export const ScreenMysqlBackupDefiners = { ...by("MySQL backup: DEFINER= question"), name: "Screen · MySQL backup: DEFINER= question" };
 export const ScreenTooSmall = { ...by("Terminal too small"), name: "Screen · Terminal too small" };
+// Small windows: what stays when a dialog doesn't fit
+export const ScreenTooSmallQuestion = { ...by("Terminal too small: question waiting"), name: "Small · Terminal too small: question waiting" };
+export const ScreenProductionConfirmMin = { ...by("Production confirm: minimum size"), name: "Small · Production confirm (40×10)" };
+export const ScreenGenerateDataMin = { ...by("Generate test data: minimum size"), name: "Small · Generate test data (40×10)" };
+export const ScreenCopyRows80 = { ...by("Copy related rows: 80×24"), name: "Small · Copy related rows (80×24)" };
+export const ScreenConfirmTooSmall = { ...by("Confirm: too small to answer"), name: "Small · Confirm too small to answer" };
+export const ScreenDataSourceForm80 = { ...by("Data source form: 80×24"), name: "Small · Data source form (80×24)" };
 export const ScreenUpdateChannel = { ...by("Update channel"), name: "Screen · Update channel" };
 // The explorer screen in each color mode the TUI picks from NO_COLOR · COLORTERM · TERM (crates/tui/src/theme.rs)
 export const ColorsTruecolor = { ...by("Colors: truecolor"), name: "Colors · truecolor" };

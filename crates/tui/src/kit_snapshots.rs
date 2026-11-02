@@ -372,6 +372,19 @@ async fn all_scenes() -> Vec<Value> {
     scenes.push(app_scene(&mut h, "Production confirm", "운영 Data Source 에서 바꾸는 문장: 바뀔 행 수를 보여 주고 묻는다", 120, 22));
     scenes.push(app_scene(&mut h, "Terminal too small: question waiting", "Below 40×10 with a dialog open, ⌃q doesn't quit: the message says to make the window larger to answer it", 36, 9));
     scenes.push(app_scene(&mut h, "Production confirm: minimum size", "At 40×10 the question and its keys stay; the statements that don't fit are counted", 40, 10));
+    // Question first, warnings after the details: the columns / tables in between give way, the ⚠ lines stay
+    let cols: Vec<_> = (0..12).map(|i| qurry_core::fake::ColPlan { name: format!("col_{i}"), data_type: "text".into(), how: "random values".into() }).collect();
+    h.app.popup = Some(Popup::Confirm { text: crate::datatools::fake_confirm_text(1000, "public.payment", &cols, &[], Some("[PROD] rentalpay")), on_yes: Box::new(|_| {}) });
+    scenes.push(app_scene(&mut h, "Generate test data: minimum size", "At 40×10 the question, the ⚠ Production line and the keys stay; the columns in between are counted as hidden", 40, 10));
+    let tables = (0..24)
+        .map(|i| qurry_core::subset::SubsetTable { schema: "public".into(), table: format!("contract_{i}"), rows: 25, masked: vec![], reason: "child of users".into() })
+        .collect();
+    let plan = qurry_core::subset::SubsetPlan { tables, total: 600, warning: None };
+    h.app.popup = Some(Popup::Confirm { text: crate::datatools::copy_confirm_text(&plan, "[PROD] rentalpay", Some("[PROD] rentalpay"), false), on_yes: Box::new(|_| {}) });
+    scenes.push(app_scene(&mut h, "Copy related rows: 80×24", "Into a Production source, not masked, with more tables than fit: both ⚠ warnings and the question stay, the tables that don't fit are counted", 80, 24));
+    let notes: String = (0..8).map(|i| format!("\n⚠ Column note_{i} has a check constraint the generated values may not meet")).collect();
+    h.app.popup = Some(Popup::Confirm { text: format!("Insert 10 generated rows into public.notes?\n{notes}"), on_yes: Box::new(|_| {}) });
+    scenes.push(app_scene(&mut h, "Confirm: too small to answer", "When even the question and the ⚠ lines don't fit, y / Enter don't answer: the keys line says to enlarge the window (n / Esc still cancel)", 40, 10));
     h.app.popup = None;
     h.app.palette_actions();
     h.type_str("work");

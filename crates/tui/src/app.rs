@@ -630,6 +630,8 @@ pub struct Hits {
     pub text: ratatui::layout::Rect,
     /// Workspace strip: (number, area)
     pub workspaces: Vec<(usize, ratatui::layout::Rect)>,
+    /// The open confirm's question or warnings didn't fit the window: y / Enter don't answer it
+    pub confirm_unseen: bool,
 }
 
 /// Tabs·split of a workspace other than the current one (tab objects kept as is: console sessions·transactions·results survive)
@@ -962,7 +964,7 @@ impl App {
         self.popup = Some(Popup::AllowPlaintext {
             opened: std::time::Instant::now(),
             // It can open over another tab or source: name the one y changes
-            text: format!("Allow unencrypted for \"{}\"?\n\nThe password will be sent unencrypted to {}. Use only on a network you trust.\nTo undo, turn off \"Allow unencrypted\" in the data source form (e in the explorer).", c.name, c.host),
+            text: format!("Allow unencrypted for \"{}\"?\n\n⚠ The password will be sent unencrypted to {}. Use only on a network you trust.\nTo undo, turn off \"Allow unencrypted\" in the data source form (e in the explorer).", c.name, c.host),
             on_yes: Box::new(move |a| {
                 a.status = format!("Allowing unencrypted for \"{}\"…", c.name);
                 let st = a.state.clone();

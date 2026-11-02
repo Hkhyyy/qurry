@@ -72,45 +72,52 @@ pub fn wrapped_height(lines: &[Line], width: u16) -> u16 {
     Paragraph::new(lines.to_vec()).wrap(Wrap { trim: false }).line_count(width.max(1)) as u16
 }
 
-/// Lines cut to `height` rows of `width` (wrapped): blank lines go first, then the lines that don't fit give way to one
-/// saying how many are hidden and what their "→ N rows" add up to, so a confirm never hides what it would change.
-/// Wraps each line once and stops at the first that doesn't fit: a confirm of thousands of statements draws in a frame
-pub fn cut_lines(mut lines: Vec<Line<'static>>, width: u16, height: u16) -> Vec<Line<'static>> {
-    let mut ends = fitting_rows(&lines, width, height);
-    if ends.len() == lines.len() {
+/// Lines cut to `height` rows of `width` (wrapped): blank lines go first, then the lines not marked `keep` give way, from the
+/// last, to one saying how many are hidden and what their "→ N rows" add up to, so a confirm never hides what it would change.
+/// The marker stands where the first hidden line was. Wraps each line once: a confirm of thousands of statements draws in a frame.
+/// The result can still be taller than `height` when the kept lines alone don't fit (the caller checks)
+pub fn cut_lines(lines: Vec<Line<'static>>, keep: &[bool], width: u16, height: u16) -> Vec<Line<'static>> {
+    let rows = |l: &Line| wrapped_height(std::slice::from_ref(l), width);
+    let mut rows_of: Vec<u16> = lines.iter().map(rows).collect();
+    if rows_of.iter().sum::<u16>() <= height {
         return lines;
     }
-    lines.retain(|l| !l.to_string().trim().is_empty());
-    ends = fitting_rows(&lines, width, height);
-    if ends.len() == lines.len() {
+    let (lines, keep): (Vec<_>, Vec<bool>) = lines.into_iter().zip(keep.iter().copied()).filter(|(l, _)| !l.to_string().trim().is_empty()).unzip();
+    rows_of = lines.iter().map(rows).collect();
+    let free: Vec<usize> = (0..lines.len()).filter(|&i| !keep[i]).collect();
+    if free.is_empty() || rows_of.iter().sum::<u16>() <= height {
         return lines;
     }
-    let counts: Vec<Option<Option<u64>>> = lines.iter().map(|l| l.to_string().trim_start().strip_prefix("→ ").map(row_count)).collect();
-    let mut keep = ends.len();
-    loop {
-        let marker = hidden_marker(lines.len() - keep, &counts[keep..]);
-        let above = keep.checked_sub(1).map_or(0, |i| ends[i]);
-        if keep == 0 || above + wrapped_height(std::slice::from_ref(&marker), width) <= height {
-            lines.truncate(keep);
-            lines.push(marker);
-            return lines;
-        }
-        keep -= 1;
+    // The most free lines (from the top) that fit next to the kept ones and a one-row marker; then fewer while the marker wraps
+    let mut used: u16 = rows_of.iter().zip(&keep).filter(|(_, k)| **k).map(|(r, _)| *r).sum();
+    let mut n = 0;
+    while used + rows_of[free[n]] < height {
+        used += rows_of[free[n]];
+        n += 1;
     }
-}
-
-/// Wrapped rows up to the end of each line, for the first lines that fit in `height`
-fn fitting_rows(lines: &[Line], width: u16, height: u16) -> Vec<u16> {
-    let mut ends = Vec::new();
-    let mut total = 0;
-    for l in lines {
-        total += wrapped_height(std::slice::from_ref(l), width);
-        if total > height {
-            break;
+    let counts: Vec<Option<Option<u64>>> = free.iter().map(|&i| lines[i].to_string().trim_start().strip_prefix("→ ").map(row_count)).collect();
+    let marker = loop {
+        let marker = hidden_marker(free.len() - n, &counts[n..]);
+        if n == 0 || used + rows(&marker) <= height {
+            break marker;
         }
-        ends.push(total);
+        n -= 1;
+        used -= rows_of[free[n]];
+    };
+    let mut shown = keep;
+    for &i in &free[..n] {
+        shown[i] = true;
     }
-    ends
+    let mut out = Vec::with_capacity(shown.iter().filter(|s| **s).count() + 1);
+    for (i, l) in lines.into_iter().enumerate() {
+        if i == free[n] {
+            out.push(marker.clone());
+        }
+        if shown[i] {
+            out.push(l);
+        }
+    }
+    out
 }
 
 /// "⋯ 4 lines hidden · 12,408 rows · 1 not counted": the hidden lines and the row counts among them
@@ -135,17 +142,17 @@ mod tests {
     #[test]
     fn cut_lines_says_how_many_are_hidden() {
         let lines: Vec<Line<'static>> = ["one", "two", "three", "four"].into_iter().map(Line::raw).collect();
-        assert_eq!(cut_lines(lines.clone(), 30, 4).len(), 4);
-        let cut: Vec<String> = cut_lines(lines, 30, 3).iter().map(|l| l.to_string()).collect();
+        assert_eq!(cut_lines(lines.clone(), &[false; 4], 30, 4).len(), 4);
+        let cut: Vec<String> = cut_lines(lines, &[false; 4], 30, 3).iter().map(|l| l.to_string()).collect();
         assert_eq!(cut, ["one", "two", "⋯ 2 lines hidden"]);
     }
 
     #[test]
     fn cut_lines_drops_blank_lines_first_and_adds_up_hidden_rows() {
         let lines: Vec<Line<'static>> = ["head", "", "a", "  → 1 row", "b", "  → 12,408 rows", "c", "  → schema change", ""].into_iter().map(Line::raw).collect();
-        let cut: Vec<String> = cut_lines(lines.clone(), 60, 7).iter().map(|l| l.to_string()).collect();
+        let cut: Vec<String> = cut_lines(lines.clone(), &[false; 9], 60, 7).iter().map(|l| l.to_string()).collect();
         assert_eq!(cut, ["head", "a", "  → 1 row", "b", "  → 12,408 rows", "c", "  → schema change"]);
-        let cut: Vec<String> = cut_lines(lines, 60, 3).iter().map(|l| l.to_string()).collect();
+        let cut: Vec<String> = cut_lines(lines, &[false; 9], 60, 3).iter().map(|l| l.to_string()).collect();
         assert_eq!(cut, ["head", "a", "⋯ 5 lines hidden · 12,409 rows · 1 not counted"]);
     }
 

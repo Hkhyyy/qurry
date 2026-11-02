@@ -1159,12 +1159,20 @@ fn popup_key(app: &mut App, k: KeyEvent) {
             };
         }
         Popup::Confirm { text, on_yes } => match k.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter if app.hits.confirm_unseen => {
+                app.status = "The window is too small to show the whole question: enlarge it, then answer (n / Esc cancels)".into();
+                app.popup = Some(Popup::Confirm { text, on_yes });
+            }
             KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => on_yes(app),
             KeyCode::Char('n') | KeyCode::Esc => {}
             _ => app.popup = Some(Popup::Confirm { text, on_yes }),
         },
         Popup::AllowPlaintext { text, on_yes, opened } => match k.code {
             _ if opened.elapsed() < App::TLS_ASK_GRACE => app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened }),
+            KeyCode::Char('y') | KeyCode::Char('Y') if app.hits.confirm_unseen => {
+                app.status = "The window is too small to show the whole question: enlarge it, then answer (n / Esc cancels)".into();
+                app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened });
+            }
             KeyCode::Char('y') | KeyCode::Char('Y') => on_yes(app),
             KeyCode::Char('n') | KeyCode::Esc => {}
             _ => app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened }),
