@@ -263,7 +263,7 @@ impl App {
                     let items = dbs.into_iter().map(|d| crate::app::PItem { label: d.clone(), hint: String::new(), action: crate::app::PAction::Pick(d) }).collect();
                     a.status.clear();
                     a.flow = Some(crate::migrate::Flow::ErdDb(conn));
-                    a.popup = Some(crate::app::Popup::Palette(crate::app::Palette { title: "Diagram of which database?".into(), input: tui_textarea::TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
+                    a.open_after_notices(crate::app::Popup::Palette(crate::app::Palette { title: "Diagram of which database?".into(), input: tui_textarea::TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
                 }
                 Ok(dbs) => a.erd_run(conn, dbs.into_iter().next().unwrap_or(db), None),
                 Err(e) => a.status = format!("Diagram: {e}"),

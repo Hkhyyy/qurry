@@ -1027,7 +1027,7 @@ impl App {
                     // If the driver is missing, ask whether to download it (expand again afterwards)
                     if e.contains(qurry_core::plugin::MISSING) && let Some(d) = kind.driver() {
                         let k2 = key.clone();
-                        a.popup = Some(Popup::Confirm {
+                        a.open_after_notices(Popup::Confirm {
                             text: format!("The {d} driver isn't installed.\n\nDownload it from this Qurry version's GitHub release (its signature is checked) and connect?"),
                             on_yes: Box::new(move |a| {
                                 a.status = format!("Installing the {d} driver…");
@@ -2019,7 +2019,7 @@ impl App {
                             })
                             .collect();
                         a.status.clear();
-                        a.popup = Some(Popup::Confirm {
+                        a.open_after_notices(Popup::Confirm {
                             text: format!("Production data source \"{name}\" — this changes data:\n\n{}\n\nRun it?", lines.join("\n")),
                             on_yes: Box::new(move |a| a.run_stmts_checked(stmts, explain, true, true)),
                         });
@@ -2710,9 +2710,9 @@ impl App {
     }
 
     /// Add DB objects to the open palette (turns one Data Source's loading count into the number of DBs)
-    fn index_into_palette(&mut self, cfg: &ConnectionConfig, dbs: Vec<String>) {
+    pub(crate) fn index_into_palette(&mut self, cfg: &ConnectionConfig, dbs: Vec<String>) {
         // Search Everywhere also finds columns (the GUI's All / Symbols)
-        let columns = match &mut self.popup {
+        let columns = match self.popup_under() {
             Some(Popup::Palette(p)) => {
                 p.loading = (p.loading + dbs.len()).saturating_sub(1);
                 p.title == "Search Everywhere" && cfg.kind != DbKind::Redis
@@ -2771,6 +2771,22 @@ impl App {
         self.popup = Some(match self.popup.take() {
             Some(back) => Popup::Note { title, text, back: Box::new(back) },
             None => Popup::Message { title, text },
+        });
+    }
+
+    /// A popup that an async result opens (a confirmation after the row counts, a picker after a load). Under a notice it goes
+    /// below the notices (taking the place of what was there), so a notice such as a failed Commit is read first, not replaced
+    pub(crate) fn open_after_notices(&mut self, p: Popup) {
+        fn below(top: Popup, p: Popup) -> Popup {
+            match top {
+                Popup::Message { title, text } => Popup::Note { title, text, back: Box::new(p) },
+                Popup::Note { title, text, back } => Popup::Note { title, text, back: Box::new(below(*back, p)) },
+                _ => p,
+            }
+        }
+        self.popup = Some(match self.popup.take() {
+            Some(top) => below(top, p),
+            None => p,
         });
     }
 

@@ -5,4 +5,5 @@ mod console;
 mod explorer;
 mod keymap;
 mod tabs;
+mod notices;
 mod tls_optin;
