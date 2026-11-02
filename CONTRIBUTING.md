@@ -15,7 +15,7 @@ rustup target add wasm32-unknown-unknown
 cargo install wasm-bindgen-cli --version 0.2.129 --locked
 ```
 
-If the version changes, `pnpm wasm` stops and prints the `cargo install` line to run.
+If the version changes, `pnpm wasm` stops and prints the `cargo install` line to run. If [binaryen](https://github.com/WebAssembly/binaryen)'s `wasm-opt` is installed, the module is also shrunk with it (optional; CI and release builds install it with `npm install -g binaryen@132.0.0`).
 
 ```bash
 pnpm install
@@ -40,12 +40,12 @@ npx playwright test --project=chromium        # GUI end to end, against the mock
 
 ### Against real servers
 
-Tests that need a server are marked `#[ignore]` and read the server from environment variables. Start throwaway containers named `qurry-demo-…` (change a port on the left if it is taken):
+Tests that need a server are marked `#[ignore]` and read the server from environment variables. Start throwaway containers named `qurry-demo-…`, reachable only from this computer (if a port is taken, change it in `-p` and in the variable below):
 
 ```bash
-docker run -d --name qurry-demo-pg -e POSTGRES_HOST_AUTH_METHOD=trust -p 55432:5432 pgvector/pgvector:pg16
-docker run -d --name qurry-demo-mysql -e MYSQL_ROOT_PASSWORD=dbtool -e MYSQL_DATABASE=shop -p 13306:3306 mysql:8.4
-docker run -d --name qurry-demo-redis -p 16379:6379 redis:7-alpine
+docker run -d --name qurry-demo-pg -e POSTGRES_HOST_AUTH_METHOD=trust -p 127.0.0.1:55432:5432 pgvector/pgvector:pg16
+docker run -d --name qurry-demo-mysql -e MYSQL_ROOT_PASSWORD=dbtool -e MYSQL_DATABASE=shop -p 127.0.0.1:13306:3306 mysql:8.4
+docker run -d --name qurry-demo-redis -p 127.0.0.1:16379:6379 redis:7-alpine
 ```
 
 Then run the ignored tests the way CI does (the SSL, TLS, Sentinel, Cluster and SSH tunnel tests need their own servers; see the comments in `crates/core/src/redisdb.rs` and `crates/core/src/db.rs`):
@@ -57,7 +57,7 @@ export QURRY_TEST_REDIS=127.0.0.1:16379                    # host:port
 cargo test -p qurry-core -- --ignored --skip ssl --skip tls --skip sentinel --skip cluster --skip ssh_tunnel
 ```
 
-MySQL takes about half a minute to accept connections after it starts. The Redis tests empty databases 0 and 3–8 (`FLUSHDB`), so don't point `QURRY_TEST_REDIS` at a Redis you care about. Remove the containers when you are done:
+MySQL takes about half a minute to accept connections after it starts. The Redis tests empty databases 0, 3–8, 11 and 12 (`FLUSHDB`), so don't point `QURRY_TEST_REDIS` at a Redis you care about. Remove the containers when you are done:
 
 ```bash
 docker rm -f qurry-demo-pg qurry-demo-mysql qurry-demo-redis

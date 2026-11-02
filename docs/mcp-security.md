@@ -14,6 +14,8 @@ The AI client (and the model behind it) is **not** trusted. Neither is the data 
 
 Each data source has an MCP setting (Off / Read / Read & write). The server is started either read-only (the default) or with `--allow-write`.
 
+Only `qurry-mcp` 0.2.13 or newer reads the MCP setting. An older `qurry-mcp` or `dbtool-mcp` shares every data source, Production included. The GUI doesn't update it: after updating, run `brew upgrade qurry` or `qurry-tui --update` (check with `qurry-tui --version`), then restart the AI client so it starts the new `qurry-mcp`.
+
 | MCP setting | Without `--allow-write` | With `--allow-write` |
 |---|---|---|
 | **Off** | Nothing. Not listed; its password is never read and no connection is opened (also when the client asks for it by name or id) | Same |
@@ -22,7 +24,7 @@ Each data source has an MCP setting (Off / Read / Read & write). The server is s
 | *(not set: made before the setting existed)* | Read, or **Off** if it is a Production data source | Read & write, or **Off** if it is a Production data source |
 
 - New data sources start **Off** (GUI and TUI), and so does a copy of a data source. Any value other than `off` / `read` / `write` in the config file counts as Off.
-- **Production data sources are Off until you choose Read or Read & write for them.**
+- **Production data sources are Off until you choose Read or Read & write for them.** This is only the default for a data source that never had an MCP setting: turning Production on later doesn't change a setting you already chose, so set it to Off yourself.
 - A visible data source exposes every database and schema its database user can see. The Schemas tab only decides which databases `search_objects` looks through; it is not a limit on `query`.
 - `list_data_sources` shows the host, port, user name and SSH user; passwords never (a password inside a URI such as `mongodb://user:pass@host` is removed).
 - `export_csv` writes only new files in `~/Downloads/qurry-exports`, named by the client without folders, and never overwrites one.
@@ -30,11 +32,13 @@ Each data source has an MCP setting (Off / Read / Read & write). The server is s
 
 ## How read-only is enforced
 
-Reading tools go through the same engine check (`qurry_core::guard`) before anything is sent, and the database enforces what it can on top:
+`query`, `explain` and `export_csv` take SQL or a command from the client. They go through the same engine check (`qurry_core::guard`) before anything is sent, and the database enforces what it can on top:
 
 - **PostgreSQL / MySQL**: exactly one reading statement, run in a READ ONLY transaction with a 60 s limit that is always rolled back. Writable CTEs, `EXPLAIN ANALYZE` of a change, `SELECT … INTO OUTFILE`, switching read-only off and known functions with side effects (`pg_terminate_backend`, `pg_read_file`, `dblink`, `load_file`, `sleep`, …) are refused before they run.
 - **Redis**: read commands only, not `CONFIG` or `KEYS`, and at most 1,000 elements per command.
 - **Driver data sources** (SQL Server, DuckDB, ClickHouse, MongoDB, vector databases) have no READ ONLY transaction, so the statement check is stricter, DuckDB is opened without external access and ClickHouse reads run with `readonly=2`.
+
+The other tools take no SQL: they run statements Qurry writes itself, without the engine check. `full_text_search` on PostgreSQL and MySQL runs one `SELECT` per table in a READ ONLY transaction that is rolled back, with a 15 s limit per table and none for the whole call. The browse tools (databases, schemas, objects, columns, DDL, `search_objects`) read the catalog. `redis_get` reads up to 10,000 elements of a value and `redis_scan` up to 5,000 keys per call.
 
 The full list is in [MCP server › How read-only is enforced](mcp.md). These checks are a second line of defence: a function the checks don't know about runs if the database user may run it.
 
@@ -61,7 +65,7 @@ Qurry passes data to the client as it is. It does not look for or remove instruc
 - **Prompt injection.** See above. Limit what the agent can reach instead.
 - **An agent with shell or file access.** The MCP setting only governs requests to `qurry-mcp`. An agent that can run commands as you can start `qurry-mcp --allow-write` itself, run `qurry-tui`, or edit the config folder — the same as any program you run.
 - **Database permissions.** A database user that may drop tables, read server files or call other servers can still be used for that through anything the checks don't know about. That is why MCP should get its own least-privilege user.
-- **Load.** A read can still be expensive. PostgreSQL and MySQL reads stop after 60 s; nothing limits how many the agent sends.
+- **Load.** A read can still be expensive. On PostgreSQL and MySQL, `query`, `explain` and `export_csv` stop after 60 s, and `full_text_search` after 15 s per table, so one call on a schema with many tables can take minutes. Nothing limits how many calls the agent sends.
 - **Other programs on your computer.** Anything that runs as you can start `qurry-mcp` and get the same access.
 
 ## Recommendations

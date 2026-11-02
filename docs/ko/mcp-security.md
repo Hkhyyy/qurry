@@ -14,6 +14,8 @@ AI 클라이언트 (와 그 뒤의 모델) 는 믿지 **않습니다**. 읽어 �
 
 Data Source 마다 MCP 설정 (Off / Read / Read & write) 이 있습니다. 서버는 읽기 전용 (기본) 이거나 `--allow-write` 로 띄웁니다.
 
+MCP 설정은 `qurry-mcp` 0.2.13 이상만 읽습니다. 그보다 옛 `qurry-mcp` 나 `dbtool-mcp` 는 Production 을 포함해 모든 Data Source 를 내보입니다. GUI 를 업데이트해도 이건 바뀌지 않으니, 업데이트한 뒤 `brew upgrade qurry` 나 `qurry-tui --update` 를 실행하고 (`qurry-tui --version` 으로 확인), AI 클라이언트를 다시 시작해 새 `qurry-mcp` 를 띄우게 하세요.
+
 | MCP 설정 | `--allow-write` 없이 | `--allow-write` 로 |
 |---|---|---|
 | **Off** | 아무것도. 목록에 없고, 비밀번호를 읽지도 접속하지도 않습니다 (클라이언트가 이름이나 id 로 직접 요청해도) | 같음 |
@@ -22,7 +24,7 @@ Data Source 마다 MCP 설정 (Off / Read / Read & write) 이 있습니다. 서�
 | *(설정 없음: 이 설정이 생기기 전에 만든 것)* | Read, Production Data Source 면 **Off** | Read & write, Production Data Source 면 **Off** |
 
 - 새 Data Source 는 **Off** 로 시작합니다 (GUI · TUI). Data Source 를 복사한 것도 마찬가지입니다. 설정 파일에 `off` / `read` / `write` 가 아닌 값이 있으면 Off 로 봅니다.
-- **Production Data Source 는 Read 나 Read & write 를 골라 주기 전까지 Off 입니다.**
+- **Production Data Source 는 Read 나 Read & write 를 골라 주기 전까지 Off 입니다.** 이건 MCP 설정을 한 번도 정하지 않은 Data Source 의 기본값일 뿐입니다: 나중에 Production 을 켜도 이미 고른 설정은 바뀌지 않으니, Off 는 직접 골라 주세요.
 - 보이는 Data Source 는 그 DB 사용자가 볼 수 있는 모든 데이터베이스와 스키마를 내보입니다. Schemas 탭은 `search_objects` 가 어느 데이터베이스를 뒤질지만 정할 뿐, `query` 를 막지 않습니다.
 - `list_data_sources` 는 호스트, 포트, 사용자 이름, SSH 사용자를 보여 줍니다. 비밀번호는 절대 보이지 않습니다 (`mongodb://user:pass@host` 처럼 URI 안의 비밀번호도 지웁니다).
 - `export_csv` 는 `~/Downloads/qurry-exports` 에 새 파일만 씁니다. 이름은 클라이언트가 폴더 없이 정하고, 있는 파일을 덮어쓰지 않습니다.
@@ -30,11 +32,13 @@ Data Source 마다 MCP 설정 (Off / Read / Read & write) 이 있습니다. 서�
 
 ## 읽기 전용은 어떻게 지키는가
 
-읽는 도구는 무엇이든 보내기 전에 같은 엔진 검사 (`qurry_core::guard`) 를 거치고, 데이터베이스가 할 수 있는 것은 그 위에서 데이터베이스가 지킵니다.
+`query`, `explain`, `export_csv` 는 클라이언트가 준 SQL 이나 명령을 받습니다. 이 도구들은 보내기 전에 같은 엔진 검사 (`qurry_core::guard`) 를 거치고, 데이터베이스가 할 수 있는 것은 그 위에서 데이터베이스가 지킵니다.
 
 - **PostgreSQL / MySQL**: 읽는 문장 정확히 하나를, 60초 제한이 걸린 READ ONLY 트랜잭션에서 실행하고 항상 롤백합니다. 쓰기 CTE, 변경문의 `EXPLAIN ANALYZE`, `SELECT … INTO OUTFILE`, 읽기 전용 끄기, 부작용이 있는 알려진 함수 (`pg_terminate_backend`, `pg_read_file`, `dblink`, `load_file`, `sleep` …) 는 실행 전에 거부합니다.
 - **Redis**: 읽기 명령만, `CONFIG` 와 `KEYS` 는 빼고, 명령 하나에 원소 1,000개까지.
 - **드라이버 Data Source** (SQL Server, DuckDB, ClickHouse, MongoDB, 벡터 DB) 는 READ ONLY 트랜잭션이 없어서 문장 검사가 더 엄격하고, DuckDB 는 외부 접근을 끈 채 열며 ClickHouse 읽기는 `readonly=2` 로 실행합니다.
+
+다른 도구는 SQL 을 받지 않습니다: Qurry 가 직접 만든 문장을 엔진 검사 없이 실행합니다. PostgreSQL · MySQL 의 `full_text_search` 는 테이블마다 `SELECT` 하나를 롤백하는 READ ONLY 트랜잭션에서 실행하고, 테이블마다 15초 제한이 있지만 호출 전체에는 제한이 없습니다. 둘러보기 도구 (데이터베이스, 스키마, 객체, 컬럼, DDL, `search_objects`) 는 카탈로그를 읽습니다. `redis_get` 은 값의 원소를 10,000개까지, `redis_scan` 은 호출 한 번에 키를 5,000개까지 읽습니다.
 
 전체 목록은 [MCP 서버 › 읽기 전용을 지키는 방법](mcp.md)에 있습니다. 이 검사들은 두 번째 방어선입니다: 검사가 모르는 함수는 DB 사용자에게 권한이 있으면 실행됩니다.
 
@@ -61,7 +65,7 @@ Qurry 는 데이터를 있는 그대로 클라이언트에 넘깁니다. 그 안
 - **프롬프트 인젝션.** 위를 보세요. 대신 에이전트가 닿는 범위를 줄이세요.
 - **셸이나 파일에 접근하는 에이전트.** MCP 설정은 `qurry-mcp` 로 오는 요청만 다스립니다. 내 계정으로 명령을 실행할 수 있는 에이전트는 `qurry-mcp --allow-write` 를 직접 띄우거나, `qurry-tui` 를 실행하거나, 설정 폴더를 고칠 수 있습니다 — 내가 실행하는 다른 프로그램과 같습니다.
 - **DB 권한.** 테이블을 지우거나, 서버 파일을 읽거나, 다른 서버를 부를 수 있는 DB 사용자라면, 검사가 모르는 방법으로 그 일을 할 수 있습니다. 그래서 MCP 에는 최소 권한의 전용 사용자를 주어야 합니다.
-- **부하.** 읽기도 비쌀 수 있습니다. PostgreSQL · MySQL 읽기는 60초에 멈추지만, 에이전트가 몇 번 보내는지는 제한하지 않습니다.
+- **부하.** 읽기도 비쌀 수 있습니다. PostgreSQL · MySQL 에서 `query`, `explain`, `export_csv` 는 60초에, `full_text_search` 는 테이블마다 15초에 멈추므로, 테이블이 많은 스키마에서는 호출 한 번이 몇 분 걸릴 수 있습니다. 에이전트가 몇 번 보내는지는 제한하지 않습니다.
 - **내 컴퓨터의 다른 프로그램.** 내 계정으로 실행되는 무엇이든 `qurry-mcp` 를 띄워 같은 접근을 얻을 수 있습니다.
 
 ## 권장 사항

@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Only the latest stable release (the one marked **Latest** on the [Releases](https://github.com/Hkhyyy/qurry/releases) page) gets security fixes. Fixes are not backported to older versions; the GUI and `qurry-tui --update` update to the latest release.
+Only the latest stable release (the one marked **Latest** on the [Releases](https://github.com/Hkhyyy/qurry/releases) page) gets security fixes. Fixes are not backported to older versions; the GUI and `qurry-tui --update` update to the latest release. `qurry-mcp` comes with `qurry-tui`, not with the GUI: update it with `brew upgrade qurry` or `qurry-tui --update` and restart the AI client that runs it.
 
 ## Reporting a vulnerability
 
