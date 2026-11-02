@@ -501,12 +501,14 @@ mod tests {
         assert!(install_blocking("../evil", "0.2.0").unwrap_err().to_string().contains("bad driver name"));
     }
 
-    /// Releases of nonexistent versions cannot be downloaded (meaningful only with network access)
+    /// Releases of nonexistent versions cannot be downloaded (meaningful only with network access); a missing beta says to update
     #[test]
     #[ignore]
     fn install_fails_cleanly_for_a_missing_release() {
-        let e = install_blocking("sqlite", "0.0.0-nope").unwrap_err().to_string();
+        let e = install_blocking("sqlite", "0.0.0").unwrap_err().to_string();
         assert!(e.contains("Could not download"), "{e}");
+        let e = install_blocking("sqlite", "0.0.0-nope").unwrap_err().to_string();
+        assert!(e.contains("(v0.0.0-nope) was removed"), "{e}");
     }
 
     #[tokio::test]
