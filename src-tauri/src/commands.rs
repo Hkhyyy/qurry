@@ -709,6 +709,8 @@ pub async fn install_update(app: tauri::AppHandle) -> AppResult<()> {
         )
         .await
         .map_err(msg)?;
+    // restart() exits without RunEvent::Exit: stop the AWS SSM tunnels' aws CLI first
+    qurry_core::ssm::kill_all();
     // macOS: keep the app folder and replace only Contents (so a pinned Dock icon keeps pointing at this app).
     // If that fails (e.g. a location needing admin rights), fall back to the updater's default install
     #[cfg(target_os = "macos")]

@@ -106,13 +106,20 @@ pub struct Tunnel {
 /// What forwards the port: the SSH accept loop, or the aws CLI process (killed when dropped)
 enum Keep {
     Task(JoinHandle<()>),
-    #[allow(dead_code)] // held for its Drop
     Process(crate::ssm::Process),
 }
 
 impl Tunnel {
     pub(crate) fn process(local_port: u16, p: crate::ssm::Process) -> Self {
         Self { local_port, keep: Keep::Process(p) }
+    }
+
+    /// Still forwarding: the SSH accept loop runs, or the aws CLI hasn't exited (SSM idle timeout, network, session ended)
+    pub fn alive(&self) -> bool {
+        match &self.keep {
+            Keep::Task(t) => !t.is_finished(),
+            Keep::Process(p) => p.alive(),
+        }
     }
 }
 

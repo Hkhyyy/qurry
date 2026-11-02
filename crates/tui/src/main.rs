@@ -73,12 +73,17 @@ async fn main() -> std::io::Result<()> {
         let _ = restore();
         hook(p);
     }));
+    // AWS SSM tunnels run the aws CLI in its own process group: stop it on a panic, a closed terminal (SIGHUP) or SIGTERM too
+    qurry_core::ssm::kill_on_panic();
+    tokio::spawn(qurry_core::ssm::kill_on_signals());
     let mut term = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     let res = run(&mut term, state, check_update.then_some(cfg_dir)).await;
     if enhanced {
         let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
     }
     restore()?;
+    // Background tasks may still hold the state (and its tunnels), and exec() drops nothing
+    qurry_core::ssm::kill_all();
     // After an in-app update, relaunch the new executable with the same arguments
     if res? {
         let exe = selfupdate::current_exe().ok_or_else(|| std::io::Error::other("cannot find this executable"))?;

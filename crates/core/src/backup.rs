@@ -551,16 +551,17 @@ fn missing(tool: &str) -> AppError {
 /// Connection info: (host, port, user, DB, password, settings)
 async fn endpoint(st: &AppState, id: &str) -> AppResult<(String, u16, String, String, Option<String>, crate::store::ConnectionConfig)> {
     let cfg = st.source(id)?;
-    let (base, db) = split_target(id);
-    let db = db.map(String::from).unwrap_or_else(|| crate::sql::default_db(&cfg));
-    // With an SSH tunnel, open the tunnel and use its port
+    let db = split_target(id).1.map(String::from).unwrap_or_else(|| crate::sql::default_db(&cfg));
+    // With an SSH / AWS SSM tunnel, open the tunnel and use its port
     ensure_pool(st, id).await?;
-    let local = st.tunnels.read().await.get(id).map(|t| t.local_port);
+    let local = crate::app::tunnel_port(st, id).await;
     let (host, port) = match local {
         Some(p) => ("127.0.0.1".to_string(), p),
+        // Never straight to the host with the password when the source goes through a tunnel
+        None if cfg.tunneled() => return Err(AppError::Msg("The tunnel of this data source was closed meanwhile — run it again.".into())),
         None => (cfg.host.clone(), cfg.port),
     };
-    Ok((host, port, cfg.user.clone(), db, st.saved_secret(base, cfg.password_saved)?, cfg))
+    Ok((host, port, cfg.user.clone(), db, st.saved_secret(&cfg.password_key(), cfg.password_saved)?, cfg))
 }
 
 /// Whether psql knows \restrict (from 17.6 · 16.10 · 15.14 · 14.19 · 13.22)

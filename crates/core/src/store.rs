@@ -47,7 +47,8 @@ pub struct ConnectionConfig {
     /// Redis connection mode (Standalone / Sentinel / Cluster)
     #[serde(default)]
     pub redis: Option<RedisMode>,
-    /// AWS SSM Session Manager tunnel (the other choice next to SSH). Older apps ignore it
+    /// AWS SSM Session Manager tunnel (the other choice next to SSH). Older apps ignore it and drop it when they save, so it is
+    /// kept in connection-tunnels.json too (Store::list), and the DB password of an SSM source is saved under a key they don't read
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssm: Option<SsmConfig>,
 }
@@ -223,8 +224,15 @@ impl ConnectionConfig {
         self.ssh.as_ref().filter(|s| s.enabled && !s.host.is_empty())
     }
 
+    /// Turned on, even without a target: connecting then fails with "enter the instance id" instead of going straight to the host
     pub fn active_ssm(&self) -> Option<&SsmConfig> {
-        self.ssm.as_ref().filter(|s| s.enabled && !s.target.trim().is_empty())
+        self.ssm.as_ref().filter(|s| s.enabled)
+    }
+
+    /// Where the DB password is saved. Through AWS SSM it is `<id>#ssm`, which older apps (that don't know SSM and would
+    /// connect straight to the host) never read: they find no saved password and ask for it
+    pub fn password_key(&self) -> String {
+        if self.active_ssm().is_some() { format!("{}#ssm", self.id) } else { self.id.clone() }
     }
 
     /// Whether the connection goes through a tunnel (SSH or AWS SSM): the client connects to a port on this machine
@@ -319,6 +327,16 @@ pub fn ssh_secret_key(id: &str) -> String {
     format!("{id}#ssh")
 }
 
+/// Every key a source's DB password may be saved under (ConnectionConfig::password_key)
+pub fn password_keys(id: &str) -> [String; 2] {
+    [id.to_string(), format!("{id}#ssm")]
+}
+
+/// The data source a secrets key belongs to (DB password, SSH secret, or the DB password of an SSM source)
+pub fn secret_owner(key: &str) -> &str {
+    key.strip_suffix("#ssh").or_else(|| key.strip_suffix("#ssm")).unwrap_or(key)
+}
+
 /// Export file format. Passwords are not included.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExportFile {
@@ -357,6 +375,8 @@ impl Store {
         let mut all: Vec<ConnectionConfig> = serde_json::from_str(&fs::read_to_string(&self.path)?)?;
         // The side file wins; without an entry, what connections.json has (written by builds before the side file)
         let access = self.access()?;
+        // AWS SSM settings an older app dropped from connections.json come back from their own side file (no older app writes it)
+        let tunnels = self.tunnels()?;
         for c in &mut all {
             if let Some(a) = access.get(&c.id) {
                 c.options.allow_plaintext = a.allow_plaintext;
@@ -364,8 +384,25 @@ impl Store {
                     c.options.mcp = a.mcp.clone();
                 }
             }
+            if c.ssm.is_none() {
+                c.ssm = tunnels.get(&c.id).cloned();
+            }
         }
         Ok(all)
+    }
+
+    fn tunnels_path(&self) -> PathBuf {
+        self.path.with_file_name("connection-tunnels.json")
+    }
+
+    /// Connection id → AWS SSM settings. Damaged: an error (empty would let an SSM source connect straight to its host)
+    fn tunnels(&self) -> AppResult<BTreeMap<String, SsmConfig>> {
+        let path = self.tunnels_path();
+        match fs::read_to_string(&path) {
+            Ok(s) => serde_json::from_str(&s).map_err(|e| crate::error::AppError::Msg(format!("{} is damaged ({e}) — restore it from a backup, or move it away and check the AWS SSM tunnel of your data sources", path.display()))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
+            Err(e) => Err(e.into()),
+        }
     }
 
     fn access_path(&self) -> PathBuf {
@@ -652,6 +689,11 @@ impl Store {
             fs::create_dir_all(dir)?;
         }
         let access: BTreeMap<_, _> = all.iter().map(|c| (c.id.clone(), Access { mcp: c.options.mcp.clone(), allow_plaintext: c.options.allow_plaintext })).collect();
+        // Before connections.json, so the SSM setting can't be lost in between. A source whose SSM settings are removed loses its entry
+        let tunnels: BTreeMap<_, _> = all.iter().filter_map(|c| Some((c.id.clone(), c.ssm.clone()?))).collect();
+        if !tunnels.is_empty() || self.tunnels_path().exists() {
+            crate::secrets::write_private(&self.tunnels_path(), serde_json::to_string_pretty(&tunnels)?.as_bytes())?;
+        }
         // The side file first, keeping entries of removed sources: if connections.json can't be written, the side file still matches either version
         let mut merged = self.access()?;
         merged.extend(access.clone());
@@ -728,10 +770,10 @@ mod tests {
             f(&mut c);
             assert!(!a.same_server(&c), "{c:?}");
         }
-        // Only the target: an empty instance id is no tunnel
+        // An empty instance id is still the SSM choice (connecting asks for it), never a direct connection
         let mut c = a.clone();
         c.ssm.as_mut().unwrap().target = " ".into();
-        assert!(!c.tunneled());
+        assert!(c.tunneled() && c.password_key().ends_with("#ssm"));
     }
 
     #[test]
@@ -923,6 +965,39 @@ mod tests {
             assert_eq!(std::fs::metadata(base.join("connection-access.json")).unwrap().permissions().mode() & 0o777, 0o600);
         }
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// An older app (no AWS SSM) rewriting connections.json, or its connection-access.json, doesn't lose the SSM tunnel
+    /// (that source would then connect straight to its host with the saved password)
+    #[test]
+    fn older_app_rewrite_keeps_the_ssm_tunnel() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Store::new(dir.path().to_path_buf());
+        let mut c = conn("1", "PROD");
+        let ssm = SsmConfig { enabled: true, profile: "prod".into(), region: "ap-northeast-2".into(), target: "i-0123456789abcdef0".into() };
+        c.ssm = Some(ssm.clone());
+        s.save(&c).unwrap();
+        s.save(&conn("2", "other")).unwrap();
+        // What an older app writes back: no ssm in either file it knows
+        let mut old: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.path().join("connections.json")).unwrap()).unwrap();
+        old[0].as_object_mut().unwrap().remove("ssm");
+        old[0]["color"] = "#f00".into();
+        std::fs::write(dir.path().join("connections.json"), old.to_string()).unwrap();
+        std::fs::write(dir.path().join("connection-access.json"), r#"{"1":{"mcp":"off","allowPlaintext":false}}"#).unwrap();
+        let got = s.get("1").unwrap().unwrap();
+        assert_eq!(got.color.as_deref(), Some("#f00"));
+        assert_eq!(got.ssm.as_ref(), Some(&ssm));
+        assert_eq!(got.password_key(), "1#ssm");
+        // The next save by this version writes it back to connections.json; turning SSM off stays off
+        s.save(&got).unwrap();
+        assert!(std::fs::read_to_string(dir.path().join("connections.json")).unwrap().contains("i-0123456789abcdef0"));
+        let mut off = got.clone();
+        off.ssm.as_mut().unwrap().enabled = false;
+        s.save(&off).unwrap();
+        assert!(s.get("1").unwrap().unwrap().active_ssm().is_none());
+        // A damaged side file is an error, not "no tunnel"
+        std::fs::write(dir.path().join("connection-tunnels.json"), "{").unwrap();
+        assert!(s.get("1").unwrap_err().to_string().contains("connection-tunnels.json is damaged"));
     }
 
     /// Without the side file (only connections.json restored or synced), MCP Off and "Allow unencrypted" stay as saved

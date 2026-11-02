@@ -1,5 +1,6 @@
 //! AWS SSM Session Manager tunnel: runs `aws ssm start-session` with the AWS-StartPortForwardingSessionToRemoteHost document on a free
-//! local port, waits until that port accepts, and stops the CLI (and the Session Manager plugin it starts) when the Tunnel is dropped.
+//! local port, waits until the plugin says it opened that port, and stops the CLI (and the Session Manager plugin it starts) when the
+//! Tunnel is dropped, and when the app exits, panics or is told to stop (kill_all: these processes would otherwise keep the port open).
 //! Qurry stores no AWS secrets: the AWS CLI uses the user's own config, SSO login or environment. Arguments go as a vector (no shell)
 //! and are checked first, so a data source can't add CLI options or document parameters.
 use crate::error::{AppError, AppResult};
@@ -20,20 +21,120 @@ const INSTALL_PLUGIN: &str = "https://docs.aws.amazon.com/systems-manager/latest
 /// How much of the CLI's latest output is kept for the error message
 const TAIL: usize = 4096;
 
-/// The running `aws ssm start-session`. Dropping it kills the CLI and everything it started
+/// How long the CLI and the plugin get to end the session on the AWS side before they are killed
+const GRACE: Duration = Duration::from_millis(1500);
+
+/// Process groups of the running CLIs (each is its group's leader), for kill_all
+static GROUPS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+/// The running `aws ssm start-session`. Dropping it stops the CLI and everything it started
 pub struct Process {
-    child: Child,
+    child: Mutex<Option<Child>>,
+}
+
+impl Process {
+    fn new(child: Child) -> Self {
+        if let Some(pid) = child.id() {
+            GROUPS.lock().unwrap().push(pid);
+        }
+        Self { child: Mutex::new(Some(child)) }
+    }
+
+    /// The CLI is still running (it exits when the session ends: idle timeout, network, session terminated)
+    pub(crate) fn alive(&self) -> bool {
+        self.child.lock().unwrap().as_mut().is_some_and(|c| matches!(c.try_wait(), Ok(None)))
+    }
+
+    fn exited(&self) -> bool {
+        !self.alive()
+    }
 }
 
 impl Drop for Process {
     fn drop(&mut self) {
+        let Some(mut child) = self.child.lock().unwrap().take() else { return };
         // The CLI runs session-manager-plugin as its own child, which holds the port and the session: stop the whole process group.
         // id() is None once the CLI was reaped (then its pid may belong to someone else)
         #[cfg(unix)]
-        if let Some(pid) = self.child.id() {
-            unsafe { libc::killpg(pid as libc::pid_t, libc::SIGKILL) };
+        if let Some(pid) = child.id() {
+            GROUPS.lock().unwrap().retain(|p| *p != pid);
+            // SIGTERM first so they can end the session; the rest is killed after GRACE, without holding up the caller
+            signal_group(pid, libc::SIGTERM);
+            std::thread::spawn(move || {
+                let _ = wait_group(pid, GRACE, || {
+                    let _ = child.try_wait();
+                });
+                signal_group(pid, libc::SIGKILL);
+            });
         }
         // Elsewhere kill_on_drop stops the CLI only
+    }
+}
+
+#[cfg(unix)]
+fn signal_group(pid: u32, sig: libc::c_int) {
+    unsafe { libc::killpg(pid as libc::pid_t, sig) };
+}
+
+/// Waits until nothing is left in the group (true) or `within` has passed
+#[cfg(unix)]
+fn wait_group(pid: u32, within: Duration, mut reap: impl FnMut()) -> bool {
+    let end = Instant::now() + within;
+    loop {
+        reap();
+        if unsafe { libc::killpg(pid as libc::pid_t, 0) } != 0 {
+            return true;
+        }
+        if Instant::now() >= end {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Stops every running SSM CLI and plugin now. For exit paths where the Tunnels are never dropped: the GUI quitting (the process
+/// exits without dropping its state), a panic (abort), a signal, or the TUI relaunching itself after an update
+pub fn kill_all() {
+    let groups = std::mem::take(&mut *GROUPS.lock().unwrap_or_else(|e| e.into_inner()));
+    stop_now(&groups);
+}
+
+/// SIGTERM, a short grace (the app is exiting), then SIGKILL
+fn stop_now(groups: &[u32]) {
+    #[cfg(unix)]
+    {
+        for pid in groups {
+            signal_group(*pid, libc::SIGTERM);
+        }
+        for pid in groups {
+            let _ = wait_group(*pid, Duration::from_millis(300), || {});
+            signal_group(*pid, libc::SIGKILL);
+        }
+    }
+}
+
+/// kill_all on a panic (the release builds abort, so no Drop runs), before the hook already set
+pub fn kill_on_panic() {
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |p| {
+        kill_all();
+        hook(p);
+    }));
+}
+
+/// Waits for SIGTERM / SIGINT / SIGHUP (an MCP host stopping the server, the terminal closing), stops the SSM processes and exits
+pub async fn kill_on_signals() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let (Ok(mut term), Ok(mut int), Ok(mut hup)) = (signal(SignalKind::terminate()), signal(SignalKind::interrupt()), signal(SignalKind::hangup())) else { return };
+        let code = tokio::select! {
+            _ = term.recv() => libc::SIGTERM,
+            _ = int.recv() => libc::SIGINT,
+            _ = hup.recv() => libc::SIGHUP,
+        };
+        kill_all();
+        std::process::exit(128 + code);
     }
 }
 
@@ -65,17 +166,20 @@ async fn open_with(aws: &Path, path: Option<OsString>, ssm: &SsmConfig, host: &s
     // Read the output for as long as the CLI runs (the plugin writes a line per connection; a full pipe would stop it)
     let tail = Arc::new(Mutex::new(String::new()));
     let readers = [drain(child.stdout.take(), tail.clone()), drain(child.stderr.take(), tail.clone())];
-    let mut child = Process { child };
+    let child = Process::new(child);
+    // The plugin prints this once it listens on the port. Until then the port is free (free_port let it go), and another
+    // program on this machine could have taken it: a successful connect alone doesn't say the plugin is behind it
+    let opened = format!("Port {local} opened for sessionId");
     let deadline = Instant::now() + timeout;
     loop {
-        if child.child.try_wait()?.is_some() {
+        if child.exited() {
             for r in readers {
                 let _ = tokio::time::timeout(Duration::from_secs(1), r).await;
             }
             let out = tail.lock().unwrap().clone();
             return Err(AppError::Msg(explain(&out, ssm)));
         }
-        if tokio::net::TcpStream::connect(("127.0.0.1", local)).await.is_ok() {
+        if tail.lock().unwrap().contains(&opened) && tokio::net::TcpStream::connect(("127.0.0.1", local)).await.is_ok() {
             return Ok(Tunnel::process(local, child));
         }
         if Instant::now() >= deadline {
@@ -116,6 +220,9 @@ fn drain(r: Option<impl AsyncRead + Unpin + Send + 'static>, tail: Arc<Mutex<Str
 /// The CLI arguments. Each value is checked: no shell is involved, but a value could still pass another option or document parameter
 fn args(ssm: &SsmConfig, host: &str, port: u16, local: u16) -> AppResult<Vec<String>> {
     let target = ssm.target.trim();
+    if target.is_empty() {
+        return Err(AppError::Msg("Enter the instance id (i-…) for the AWS SSM tunnel (GUI: SSH/SSL tab · TUI: SSM target).".into()));
+    }
     let hex = |s: &str, n: std::ops::RangeInclusive<usize>| n.contains(&s.len()) && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
     if !target.strip_prefix("i-").or_else(|| target.strip_prefix("mi-")).is_some_and(|h| hex(h, 8..=17)) {
         return Err(AppError::Msg(format!("AWS SSM target must be an instance id like i-0123456789abcdef0 (or a managed node mi-…), not {target:?}")));
@@ -183,7 +290,8 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     /// A fake `aws` that prints what the real CLI prints. "ok" starts a fake plugin (a child, like the real CLI) that listens on
-    /// localPortNumber and forwards to host:portNumber; it writes its argv and the pids next to itself
+    /// localPortNumber and forwards to host:portNumber; it writes its argv and the pids next to itself, and a line per start to
+    /// `starts`. "silent" is "ok" with a plugin that never says it opened the port
     const FAKE: &str = r#"#!/usr/bin/env python3
 import json, os, socket, subprocess, sys, threading, time
 MODE = "@MODE@"
@@ -207,7 +315,8 @@ if sys.argv[1:2] == ["--plugin"]:
     srv = socket.socket()
     srv.bind(("127.0.0.1", local))
     srv.listen(16)
-    print(f"Port {local} opened for sessionId qurry-test-0123456789abcdef.", flush=True)
+    if MODE != "silent":
+        print(f"Port {local} opened for sessionId qurry-test-0123456789abcdef.", flush=True)
     print("Waiting for connections...", flush=True)
     while True:
         c, _ = srv.accept()
@@ -223,7 +332,9 @@ args = sys.argv[1:]
 with open(os.path.join(HERE, "argv.json"), "w") as f:
     json.dump(args, f)
 params = dict(kv.split("=", 1) for kv in args[args.index("--parameters") + 1].split(","))
-if MODE == "ok":
+if MODE in ("ok", "silent"):
+    with open(os.path.join(HERE, "starts"), "a") as f:
+        f.write(f"{os.getpid()}\n")
     print("\nStarting session with SessionId: qurry-test-0123456789abcdef", flush=True)
     p = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--plugin", params["host"], params["portNumber"], params["localPortNumber"]])
     with open(os.path.join(HERE, "pids"), "w") as f:
@@ -312,6 +423,45 @@ sys.exit(255)
         assert!(tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_err(), "the port is closed with the plugin");
     }
 
+    /// Something listening on the port is not enough: the plugin has to say it opened it (another local program could hold it)
+    #[tokio::test]
+    async fn waits_for_the_plugin_to_open_the_port() {
+        let (dir, t) = open_fake("silent", "127.0.0.1", 9, Duration::from_secs(3)).await;
+        let e = t.err().expect("not ready without the plugin's line").to_string();
+        assert!(e.contains("didn't open local port"), "{e}");
+        gone(dir.path()).await;
+    }
+
+    /// A tunnel whose CLI has exited says so (ensure_pool then opens it again), and stop_now (kill_all) stops a CLI and its plugin
+    #[tokio::test]
+    async fn notices_a_stopped_cli_and_stops_groups_now() {
+        let echo = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = echo.local_addr().unwrap().port();
+        let (dir, t) = open_fake("ok", "127.0.0.1", port, Duration::from_secs(10)).await;
+        let t = t.expect("tunnel");
+        assert!(t.alive());
+        let pids = std::fs::read_to_string(dir.path().join("pids")).unwrap();
+        let cli: u32 = pids.split_whitespace().next().unwrap().parse().unwrap();
+        stop_now(&[cli]);
+        gone(dir.path()).await;
+        for _ in 0..50 {
+            if !t.alive() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(!t.alive(), "the exited CLI is noticed");
+    }
+
+    #[tokio::test]
+    async fn empty_target_is_an_error_not_a_direct_connection() {
+        let mut c: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "a", "kind": "postgres", "host": "localhost", "port": 5432, "user": "u" })).unwrap();
+        c.ssm = Some(SsmConfig { target: " ".into(), ..cfg() });
+        assert!(c.tunneled());
+        let e = crate::app::connect_config(&c, None, None).await.err().unwrap().to_string();
+        assert!(e.contains("Enter the instance id"), "{e}");
+    }
+
     #[tokio::test]
     async fn cli_missing_says_how_to_install() {
         let dir = tempfile::tempdir().unwrap();
@@ -335,10 +485,10 @@ sys.exit(255)
     #[tokio::test]
     async fn times_out_and_stops_the_cli() {
         let start = Instant::now();
-        let (dir, t) = open_fake("hang", "db.internal", 5432, Duration::from_secs(1)).await;
+        let (dir, t) = open_fake("hang", "db.internal", 5432, Duration::from_secs(3)).await;
         let e = t.err().unwrap().to_string();
-        assert!(e.contains("didn't open local port") && e.contains("within 1s"), "{e}");
-        assert!(start.elapsed() < Duration::from_secs(5));
+        assert!(e.contains("didn't open local port") && e.contains("within 3s"), "{e}");
+        assert!(start.elapsed() < Duration::from_secs(8));
         gone(dir.path()).await;
     }
 
@@ -423,6 +573,32 @@ sys.exit(255)
         assert_eq!(r.rows[0][0], serde_json::Value::from(1000));
         let argv = std::fs::read_to_string(fake.path().join("argv.json")).unwrap();
         assert!(argv.contains(&format!("host={},portNumber={}", pg[0], pg[1])), "{argv}");
+        // One SSM session for the source, however many databases are opened, also when they are opened at the same time
+        for db in ["qurry_ssm_a", "qurry_ssm_b"] {
+            let _ = st.run_query(saved.id.clone(), format!("create database {db}"), None, None).await;
+        }
+        let starts = || std::fs::read_to_string(fake.path().join("starts")).unwrap().lines().count();
+        let before = starts();
+        st.warm_search_cache(saved.id.clone()).await.unwrap();
+        assert!(st.pools.read().await.len() >= 3, "the default DB and the two new ones");
+        assert_eq!(st.tunnels.read().await.len(), 1, "one tunnel for the source");
+        assert_eq!(starts(), before, "no other aws CLI was started");
+        // The CLI stops (idle timeout): the next uses open the session again (once, though they come together) instead of
+        // connecting to a dead port
+        let cli: u32 = std::fs::read_to_string(fake.path().join("pids")).unwrap().split_whitespace().next().unwrap().parse().unwrap();
+        stop_now(&[cli]);
+        gone(fake.path()).await;
+        let targets = [saved.id.clone(), format!("{}::qurry_ssm_a", saved.id), format!("{}::qurry_ssm_b", saved.id), format!("{}::qurry_ssm_a", saved.id)];
+        let pools = futures::future::join_all(targets.iter().map(|t| crate::app::ensure_pool(&st, t))).await;
+        for p in pools {
+            assert!(p.expect("pool").server_version().await.is_ok());
+        }
+        assert_eq!(starts(), before + 1, "one new session");
+        assert_eq!(st.tunnels.read().await.len(), 1);
+        crate::app::drop_pool(&st, &saved.id).await;
+        for db in ["qurry_ssm_a", "qurry_ssm_b"] {
+            let _ = st.run_query(saved.id.clone(), format!("drop database if exists {db} with (force)"), None, None).await;
+        }
         st.disconnect(saved.id).await.unwrap();
         gone(fake.path()).await;
     }

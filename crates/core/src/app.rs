@@ -18,8 +18,10 @@ pub struct AppState {
     pub pools: RwLock<HashMap<String, Pool>>,
     /// Console tab id → session
     pub sessions: RwLock<HashMap<String, SessionEntry>>,
-    /// Connection id → SSH / AWS SSM tunnel (lives as long as the pool)
+    /// Data source id (not `id::db`) → SSH / AWS SSM tunnel, shared by the pools of all its databases (they go to the same host:port)
     pub tunnels: RwLock<HashMap<String, crate::tunnel::Tunnel>>,
+    /// Data source id → held while its pool and tunnel are being opened, so callers arriving together open one (an SSM session takes seconds)
+    connecting: std::sync::Mutex<HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>,
     /// Password store (encrypted file). Avoids keychain popups.
     pub secret_file: crate::secrets::SecretFile,
     /// Data Source id → last used time (Auto-disconnect)
@@ -43,7 +45,7 @@ impl AppState {
     pub fn secret(&self, key: &str) -> AppResult<Option<String>> {
         // MCP server: never reads passwords of Data Sources hidden from MCP (so it cannot connect either)
         if self.mcp {
-            let id = key.strip_suffix("#ssh").unwrap_or(key);
+            let id = store::secret_owner(key);
             if let Some(c) = self.store.get(id)?.filter(|c| c.mcp_access(false) == store::McpAccess::Off) {
                 return Err(AppError::Msg(format!("Data source \"{}\" is not shared with MCP (turn it on in the data source's Options)", c.name)));
             }
@@ -81,7 +83,7 @@ impl AppState {
     pub fn new(store: Store, secret_file: crate::secrets::SecretFile) -> Self {
         let history = crate::history::History::new(&store.dir());
         let audit = crate::audit::Audit::new(&store.dir());
-        Self { history, audit, store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), secret_file, last_used: Default::default(), last_ping: Default::default(), tab_manual: Default::default(), jobs: Default::default(), mcp: false }
+        Self { history, audit, store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), connecting: Default::default(), secret_file, last_used: Default::default(), last_ping: Default::default(), tab_manual: Default::default(), jobs: Default::default(), mcp: false }
     }
 }
 
@@ -182,14 +184,28 @@ pub async fn connect_config(
     password: Option<&str>,
     ssh_secret: Option<&str>,
 ) -> AppResult<(Pool, Option<crate::tunnel::Tunnel>)> {
-    let tunnel = match (cfg.active_ssh(), cfg.active_ssm()) {
+    let tunnel = open_tunnel(cfg, ssh_secret).await?;
+    let pool = db::connect_via(cfg, password, tunnel.as_ref().map(|t| t.local_port)).await?;
+    Ok((pool, tunnel))
+}
+
+async fn open_tunnel(cfg: &ConnectionConfig, ssh_secret: Option<&str>) -> AppResult<Option<crate::tunnel::Tunnel>> {
+    Ok(match (cfg.active_ssh(), cfg.active_ssm()) {
         (Some(_), Some(_)) => return Err(AppError::Msg("Both an SSH and an AWS SSM tunnel are turned on — choose one (GUI: SSH/SSL tab · TUI: Tunnel).".into())),
         (Some(ssh), None) => Some(crate::tunnel::open(ssh, ssh_secret, &cfg.host, cfg.port).await?),
         (None, Some(ssm)) => Some(crate::ssm::open(ssm, &cfg.host, cfg.port).await?),
         (None, None) => None,
-    };
-    let pool = db::connect_via(cfg, password, tunnel.as_ref().map(|t| t.local_port)).await?;
-    Ok((pool, tunnel))
+    })
+}
+
+/// The data source's tunnel: None without one, Some(false) once it has stopped (the aws CLI exited: idle timeout, network, session ended)
+async fn tunnel_alive(state: &AppState, base: &str) -> Option<bool> {
+    state.tunnels.read().await.get(base).map(|t| t.alive())
+}
+
+/// The local port of the data source's open tunnel
+pub async fn tunnel_port(state: &AppState, id: &str) -> Option<u16> {
+    state.tunnels.read().await.get(split_target(id).0).map(|t| t.local_port)
 }
 
 pub fn touch(state: &AppState, id: &str) {
@@ -216,6 +232,12 @@ pub async fn housekeeping(state: &AppState) -> Vec<String> {
     }
     let mut dropped = Vec::new();
     for base in bases {
+        // A stopped tunnel's port is free for anyone on this machine: don't let the pools (keep-alive) connect to it again
+        if tunnel_alive(state, &base).await == Some(false) {
+            drop_pool(state, &base).await;
+            dropped.push(base);
+            continue;
+        }
         let Ok(Some(cfg)) = state.store.get(&base) else { continue };
         let now = Instant::now();
         if let Some(secs) = cfg.options.auto_disconnect_secs.filter(|s| *s > 0) {
@@ -267,10 +289,24 @@ pub async fn ensure_pool(state: &AppState, id: &str) -> AppResult<Pool> {
         return Err(AppError::Msg(format!("Data source \"{}\" is not shared with MCP", c.name)));
     }
     touch(state, id);
-    if let Some(p) = state.pools.read().await.get(id) {
+    let (base, db) = split_target(id);
+    let pool = state.pools.read().await.get(id).cloned();
+    if let Some(p) = pool
+        && tunnel_alive(state, base).await != Some(false)
+    {
+        return Ok(p);
+    }
+    // One connect per data source at a time: the others wait, then use what it opened
+    let lock = state.connecting.lock().unwrap().entry(base.to_string()).or_default().clone();
+    let _connecting = lock.lock().await;
+    let alive = tunnel_alive(state, base).await;
+    if alive == Some(false) {
+        // Its pools would connect to a port nobody holds now (or someone else does): open the tunnel and the pools again
+        crate::log!("[qurry] the tunnel of {base} has stopped; reconnecting");
+        drop_pool(state, base).await;
+    } else if let Some(p) = state.pools.read().await.get(id) {
         return Ok(p.clone());
     }
-    let (base, db) = split_target(id);
     let mut cfg = state
         .store
         .get(base)?
@@ -279,9 +315,12 @@ pub async fn ensure_pool(state: &AppState, id: &str) -> AppResult<Pool> {
     if let Some(db) = db.filter(|_| !cfg.kind.is_file()) {
         cfg.database = db.to_string();
     }
-    let password = state.saved_secret(base, cfg.password_saved)?;
+    let password = state.saved_secret(&cfg.password_key(), cfg.password_saved)?;
     let ssh_secret = if cfg.active_ssh().is_some() { state.saved_secret(&store::ssh_secret_key(base), cfg.ssh_secret_saved)? } else { None };
-    let (pool, tunnel) = connect_config(&cfg, password.as_deref(), ssh_secret.as_deref()).await.map_err(|e| match e {
+    // Another database of the same source may have opened the tunnel already (one SSM session and aws CLI per source, not per database)
+    let shared = if cfg.tunneled() { state.tunnels.read().await.get(base).map(|t| t.local_port) } else { None };
+    let tunnel = if shared.is_none() { open_tunnel(&cfg, ssh_secret.as_deref()).await? } else { None };
+    let pool = db::connect_via(&cfg, password.as_deref(), shared.or(tunnel.as_ref().map(|t| t.local_port))).await.map_err(|e| match e {
         // sqlx only says "pool timed out while waiting for an open connection"
         AppError::Db(sqlx::Error::PoolTimedOut) => AppError::Msg(format!(
             "Can't connect to {}:{} — the server didn't answer within 10s. Check that it's up (VPN / SSH tunnel), then run it again.",
@@ -290,7 +329,7 @@ pub async fn ensure_pool(state: &AppState, id: &str) -> AppResult<Pool> {
         e => e,
     })?;
     if let Some(t) = tunnel {
-        state.tunnels.write().await.insert(id.to_string(), t);
+        state.tunnels.write().await.insert(base.to_string(), t);
     }
     state
         .pools
@@ -538,7 +577,7 @@ impl AppState {
             .into_iter()
             .map(|c| {
                 Ok(ConnectionView {
-                    has_password: c.password_saved || self.secret_file.contains(&c.id).unwrap_or(true),
+                    has_password: c.password_saved || self.secret_file.contains(&c.password_key()).unwrap_or(true),
                     connected: pools.keys().any(|k| belongs(k, &c.id)),
                     config: c,
                 })
@@ -567,7 +606,7 @@ impl AppState {
             // "Saved" means the password actually exists, not the flag (old imports left entries with only the flag turned off).
             // A damaged secrets.json that may hold it counts as saved
             if let Some(p) = prev {
-                if password.is_none() && self.secret_file.contains(&p.id).unwrap_or(true) && !p.same_server(config) {
+                if password.is_none() && self.secret_file.contains(&p.password_key()).unwrap_or(true) && !p.same_server(config) {
                     return Err(AppError::Msg(SERVER_CHANGED.into()));
                 }
                 if ssh_secret.is_none() && self.secret_file.contains(&store::ssh_secret_key(&p.id)).unwrap_or(true) && config.active_ssh().is_some() && !p.same_ssh(config) {
@@ -579,11 +618,18 @@ impl AppState {
             config.ssh_secret_saved = prev.is_some_and(|p| p.ssh_secret_saved);
             match password.as_deref() {
                 Some("") => {
-                    self.set_secret(&config.id, None)?;
+                    for k in store::password_keys(&config.id) {
+                        self.set_secret(&k, None)?;
+                    }
                     config.password_saved = false;
                 }
                 Some(p) => {
-                    self.set_secret(&config.id, Some(p))?;
+                    // Only under the key for this setup (switching to or from AWS SSM moves it)
+                    let key = config.password_key();
+                    for k in store::password_keys(&config.id).iter().filter(|k| **k != key) {
+                        self.set_secret(k, None)?;
+                    }
+                    self.set_secret(&key, Some(p))?;
                     config.password_saved = true;
                 }
                 None => {}
@@ -654,7 +700,7 @@ impl AppState {
     pub async fn delete_connection(&self, id: String) -> AppResult<()> {
         drop_pool(self, &id).await;
         // A damaged secrets.json (left untouched) doesn't keep the data source: it is removed, and the error says the password stayed
-        let forgot = self.set_secret(&id, None).and_then(|_| self.set_secret(&store::ssh_secret_key(&id), None));
+        let forgot = store::password_keys(&id).iter().chain([&store::ssh_secret_key(&id)]).try_for_each(|k| self.set_secret(k, None));
         crate::search_cache::remove_conn(&self.store.dir(), &id);
         self.store.delete(&id)?;
         forgot.map_err(|e| AppError::Msg(format!("The data source was removed, but its saved password couldn't be: {e}")))
@@ -663,8 +709,8 @@ impl AppState {
     /// The saved password, if it may be sent to config (only when it is the same server as the saved settings)
     fn saved_password_for(&self, config: &ConnectionConfig) -> AppResult<Option<String>> {
         match self.store.get(&config.id)? {
-            Some(p) if self.secret_file.contains(&p.id).unwrap_or(true) && !p.same_server(config) => Err(AppError::Msg(SERVER_CHANGED.into())),
-            Some(p) => self.saved_secret(&config.id, p.password_saved),
+            Some(p) if self.secret_file.contains(&p.password_key()).unwrap_or(true) && !p.same_server(config) => Err(AppError::Msg(SERVER_CHANGED.into())),
+            Some(p) => self.saved_secret(&p.password_key(), p.password_saved),
             None => Ok(None),
         }
     }
@@ -1140,7 +1186,9 @@ impl AppState {
         let (added, updated, forget) = self.store.import_from(std::path::Path::new(&path), |forget| {
             for (id, password, ssh) in forget {
                 if *password {
-                    self.set_secret(id, None)?;
+                    for k in store::password_keys(id) {
+                        self.set_secret(&k, None)?;
+                    }
                 }
                 if *ssh {
                     self.set_secret(&store::ssh_secret_key(id), None)?;
@@ -1263,6 +1311,36 @@ mod tests {
         let e = st.connect(saved.id.clone()).await.unwrap_err().to_string();
         assert!(e.contains("not shared with MCP"), "{e}");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// An SSM source's DB password is saved under `<id>#ssm`, which older apps (that would connect straight to the host) don't read.
+    /// Switching the tunnel moves it; deleting removes both; MCP locks it like the others
+    #[tokio::test]
+    async fn ssm_password_is_kept_from_older_apps() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut st = AppState::new(Store::new(dir.path().to_path_buf()), crate::secrets::SecretFile::open(dir.path()).unwrap());
+        let mut cfg: ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "prod", "kind": "postgres", "host": "localhost", "port": 5432, "user": "app",
+            "ssm": { "enabled": true, "profile": "prod", "region": "ap-northeast-2", "target": "i-0123456789abcdef0" } })).unwrap();
+        cfg = st.save_connection(cfg, Some("pw".into()), None).await.unwrap();
+        let id = cfg.id.clone();
+        assert!(!st.secret_file.contains(&id).unwrap(), "an older app finds no password under the id");
+        assert_eq!(st.secret(&format!("{id}#ssm")).unwrap().as_deref(), Some("pw"));
+        assert!(st.list_connections().await.unwrap()[0].has_password);
+        assert_eq!(st.saved_password_for(&cfg).unwrap().as_deref(), Some("pw"));
+        // Turning SSM off is another server: the password is asked again, and then saved under the id only
+        cfg.ssm.as_mut().unwrap().enabled = false;
+        assert!(st.save_connection(cfg.clone(), None, None).await.is_err());
+        cfg = st.save_connection(cfg, Some("pw2".into()), None).await.unwrap();
+        assert_eq!(st.secret(&id).unwrap().as_deref(), Some("pw2"));
+        assert!(!st.secret_file.contains(&format!("{id}#ssm")).unwrap());
+        cfg.ssm.as_mut().unwrap().enabled = true;
+        cfg = st.save_connection(cfg, Some("pw3".into()), None).await.unwrap();
+        assert!(!st.secret_file.contains(&id).unwrap());
+        st.mcp = true;
+        assert!(st.secret(&format!("{id}#ssm")).unwrap_err().to_string().contains("not shared with MCP"));
+        st.mcp = false;
+        st.delete_connection(cfg.id).await.unwrap();
+        assert!(!st.secret_file.contains(&format!("{id}#ssm")).unwrap());
     }
 
     /// The MCP server does not read passwords of Data Sources hidden from MCP. The app is unaffected
