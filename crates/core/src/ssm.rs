@@ -7,7 +7,7 @@ use crate::error::{AppError, AppResult};
 use crate::store::SsmConfig;
 use crate::tunnel::Tunnel;
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -29,20 +29,31 @@ static GROUPS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
 /// The running `aws ssm start-session`. Dropping it stops the CLI and everything it started
 pub struct Process {
-    child: Mutex<Option<Child>>,
+    /// The CLI's pid (its process group) and the CLI itself, until the group is stopped
+    child: Mutex<Option<(u32, Child)>>,
 }
 
 impl Process {
     fn new(child: Child) -> Self {
-        if let Some(pid) = child.id() {
+        let child = child.id().map(|pid| {
             GROUPS.lock().unwrap().push(pid);
-        }
-        Self { child: Mutex::new(Some(child)) }
+            (pid, child)
+        });
+        Self { child: Mutex::new(child) }
     }
 
-    /// The CLI is still running (it exits when the session ends: idle timeout, network, session terminated)
+    /// The CLI is still running (it exits when the session ends: idle timeout, network, session terminated).
+    /// Once it has exited, what is left of its group (a plugin that outlived it holds the port) is stopped right away
     pub(crate) fn alive(&self) -> bool {
-        self.child.lock().unwrap().as_mut().is_some_and(|c| matches!(c.try_wait(), Ok(None)))
+        let mut g = self.child.lock().unwrap();
+        let Some((pid, c)) = g.as_mut() else { return false };
+        if matches!(c.try_wait(), Ok(None)) {
+            return true;
+        }
+        let pid = *pid;
+        g.take();
+        stop_group(pid, None);
+        false
     }
 
     fn exited(&self) -> bool {
@@ -52,23 +63,44 @@ impl Process {
 
 impl Drop for Process {
     fn drop(&mut self) {
-        let Some(mut child) = self.child.lock().unwrap().take() else { return };
-        // The CLI runs session-manager-plugin as its own child, which holds the port and the session: stop the whole process group.
-        // id() is None once the CLI was reaped (then its pid may belong to someone else)
-        #[cfg(unix)]
-        if let Some(pid) = child.id() {
-            GROUPS.lock().unwrap().retain(|p| *p != pid);
-            // SIGTERM first so they can end the session; the rest is killed after GRACE, without holding up the caller
+        if let Some((pid, child)) = self.child.lock().unwrap().take() {
+            stop_group(pid, Some(child));
+        }
+    }
+}
+
+/// Forgets the group and stops what is left of it. The CLI runs session-manager-plugin as its own child, which holds the port and
+/// the session, so the whole group is stopped: SIGTERM first so they can end the session, SIGKILL after GRACE (without holding up
+/// the caller). A group is only signalled while it has members: a pgid can't be reused until its last member is gone, but after
+/// that the number may belong to another program's group. `child` is the CLI when it hasn't been reaped yet
+fn stop_group(pid: u32, child: Option<Child>) {
+    GROUPS.lock().unwrap_or_else(|e| e.into_inner()).retain(|p| *p != pid);
+    #[cfg(unix)]
+    {
+        let mut child = child;
+        let mut reap = move || {
+            if let Some(c) = child.as_mut() {
+                let _ = c.try_wait();
+            }
+        };
+        reap();
+        if group_alive(pid) {
             signal_group(pid, libc::SIGTERM);
             std::thread::spawn(move || {
-                let _ = wait_group(pid, GRACE, || {
-                    let _ = child.try_wait();
-                });
-                signal_group(pid, libc::SIGKILL);
+                if !wait_group(pid, GRACE, reap) {
+                    signal_group(pid, libc::SIGKILL);
+                }
             });
         }
-        // Elsewhere kill_on_drop stops the CLI only
     }
+    // Elsewhere kill_on_drop stops the CLI only
+    #[cfg(not(unix))]
+    drop((pid, child));
+}
+
+#[cfg(unix)]
+fn group_alive(pid: u32) -> bool {
+    unsafe { libc::killpg(pid as libc::pid_t, 0) == 0 }
 }
 
 #[cfg(unix)]
@@ -82,7 +114,7 @@ fn wait_group(pid: u32, within: Duration, mut reap: impl FnMut()) -> bool {
     let end = Instant::now() + within;
     loop {
         reap();
-        if unsafe { libc::killpg(pid as libc::pid_t, 0) } != 0 {
+        if !group_alive(pid) {
             return true;
         }
         if Instant::now() >= end {
@@ -103,12 +135,14 @@ pub fn kill_all() {
 fn stop_now(groups: &[u32]) {
     #[cfg(unix)]
     {
+        // GROUPS only holds CLIs that haven't been reaped, so these pids are still theirs
         for pid in groups {
             signal_group(*pid, libc::SIGTERM);
         }
         for pid in groups {
-            let _ = wait_group(*pid, Duration::from_millis(300), || {});
-            signal_group(*pid, libc::SIGKILL);
+            if !wait_group(*pid, Duration::from_millis(300), || {}) {
+                signal_group(*pid, libc::SIGKILL);
+            }
         }
     }
 }
@@ -145,9 +179,13 @@ fn cli_missing() -> AppError {
 /// Opens the tunnel to `host:port` as seen from the target instance (the data source's host/port)
 pub async fn open(ssm: &SsmConfig, host: &str, port: u16) -> AppResult<Tunnel> {
     // A GUI app started from the Dock has a short PATH: look where the AWS installers put the CLI and the plugin too
-    let aws = crate::backup::tool_paths("aws").into_iter().next().ok_or_else(cli_missing)?;
-    let path = std::env::join_paths(crate::backup::tool_dirs()).ok();
-    open_with(&aws, path, ssm, host, port, READY_TIMEOUT).await
+    open_in(&crate::backup::tool_dirs(), ssm, host, port, READY_TIMEOUT).await
+}
+
+/// The first `aws` in `dirs`, run with `dirs` as its PATH (the CLI runs session-manager-plugin from PATH)
+async fn open_in(dirs: &[PathBuf], ssm: &SsmConfig, host: &str, port: u16, timeout: Duration) -> AppResult<Tunnel> {
+    let aws = dirs.iter().map(|d| d.join("aws")).find(|p| p.is_file()).ok_or_else(cli_missing)?;
+    open_with(&aws, std::env::join_paths(dirs).ok(), ssm, host, port, timeout).await
 }
 
 async fn open_with(aws: &Path, path: Option<OsString>, ssm: &SsmConfig, host: &str, port: u16, timeout: Duration) -> AppResult<Tunnel> {
@@ -291,7 +329,8 @@ mod tests {
 
     /// A fake `aws` that prints what the real CLI prints. "ok" starts a fake plugin (a child, like the real CLI) that listens on
     /// localPortNumber and forwards to host:portNumber; it writes its argv and the pids next to itself, and a line per start to
-    /// `starts`. "silent" is "ok" with a plugin that never says it opened the port
+    /// `starts`. "silent" is "ok" with a plugin that never says it opened the port; "onpath" is "ok" when session-manager-plugin is
+/// on its PATH and "plugin" (the real CLI's message) when it isn't
     const FAKE: &str = r#"#!/usr/bin/env python3
 import json, os, socket, subprocess, sys, threading, time
 MODE = "@MODE@"
@@ -329,6 +368,14 @@ if sys.argv[1:2] == ["--plugin"]:
         threading.Thread(target=pipe, args=(c, u), daemon=True).start()
         threading.Thread(target=pipe, args=(u, c), daemon=True).start()
 args = sys.argv[1:]
+with open(os.path.join(HERE, "pids"), "w") as f:
+    f.write(f"{os.getpid()}")
+if MODE == "onpath":
+    import shutil
+    if not shutil.which("session-manager-plugin"):
+        MODE = "plugin"
+    else:
+        MODE = "ok"
 with open(os.path.join(HERE, "argv.json"), "w") as f:
     json.dump(args, f)
 params = dict(kv.split("=", 1) for kv in args[args.index("--parameters") + 1].split(","))
@@ -341,8 +388,6 @@ if MODE in ("ok", "silent"):
         f.write(f"{os.getpid()} {p.pid}")
     sys.exit(p.wait())
 if MODE == "hang":
-    with open(os.path.join(HERE, "pids"), "w") as f:
-        f.write(f"{os.getpid()}")
     time.sleep(3600)
 if MODE == "plugin":
     sys.stderr.write("\nSessionManagerPlugin is not found. Please refer to SessionManager Documentation here: http://docs.aws.amazon.com/console/systems-manager/session-manager-plugin-not-found\n")
@@ -355,7 +400,10 @@ sys.exit(255)
 
     pub(crate) fn fake_aws(dir: &Path, mode: &str) -> std::path::PathBuf {
         let p = dir.join("aws");
-        std::fs::write(&p, FAKE.replace("@MODE@", mode)).unwrap();
+        // An absolute interpreter: some tests give the CLI a PATH without python3
+        let python = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).map(|d| d.join("python3")).find(|p| p.is_file()).expect("python3 on PATH");
+        let script = FAKE.replace("@MODE@", mode).replacen("/usr/bin/env python3", &python.to_string_lossy(), 1);
+        std::fs::write(&p, script).unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
         p
     }
@@ -451,6 +499,67 @@ sys.exit(255)
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         assert!(!t.alive(), "the exited CLI is noticed");
+    }
+
+    fn cli_pid(dir: &Path) -> u32 {
+        std::fs::read_to_string(dir.join("pids")).unwrap().split_whitespace().next().unwrap().parse().unwrap()
+    }
+
+    fn in_groups(pid: u32) -> bool {
+        GROUPS.lock().unwrap().contains(&pid)
+    }
+
+    /// A CLI that exited (here: a failed start) is forgotten, so kill_all never signals its pid, which may be reused by then
+    #[tokio::test]
+    async fn a_failed_start_leaves_no_group_behind() {
+        for mode in ["early", "sso", "plugin"] {
+            let (dir, t) = open_fake(mode, "db.internal", 5432, Duration::from_secs(10)).await;
+            assert!(t.is_err(), "{mode}");
+            assert!(!in_groups(cli_pid(dir.path())), "{mode}: the exited CLI's pid is still kept for kill_all");
+        }
+    }
+
+    /// The CLI dies but its plugin lives on (a crash, an OOM kill): the plugin still holds the forward to the database. Noticing the
+    /// exit stops the rest of the group and forgets the pid; dropping the Tunnel afterwards signals nothing
+    #[tokio::test]
+    async fn a_plugin_that_outlives_its_cli_is_stopped() {
+        let echo = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let echo_port = echo.local_addr().unwrap().port();
+        let (dir, t) = open_fake("ok", "127.0.0.1", echo_port, Duration::from_secs(10)).await;
+        let t = t.expect("tunnel");
+        let cli = cli_pid(dir.path());
+        assert!(in_groups(cli));
+        unsafe { libc::kill(cli as libc::pid_t, libc::SIGKILL) };
+        for _ in 0..50 {
+            if !t.alive() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(!t.alive());
+        assert!(!in_groups(cli), "the exited CLI's pid is forgotten");
+        gone(dir.path()).await;
+        let port = t.local_port;
+        drop(t);
+        assert!(tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_err(), "nothing forwards on the port any more");
+    }
+
+    /// `open` finds aws in the tool folders and gives the CLI those folders as PATH, where it finds session-manager-plugin
+    #[tokio::test]
+    async fn finds_the_cli_and_the_plugin_in_the_tool_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        fake_aws(dir.path(), "onpath");
+        let e = open_in(&[dir.path().to_path_buf()], &cfg(), "127.0.0.1", 9, Duration::from_secs(10)).await.err().expect("no plugin yet").to_string();
+        assert!(e.contains("brew install --cask session-manager-plugin"), "{e}");
+        let plugin = dir.path().join("session-manager-plugin");
+        std::fs::write(&plugin, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&plugin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let t = open_in(&[dir.path().join("empty"), dir.path().to_path_buf()], &cfg(), "127.0.0.1", 9, Duration::from_secs(10)).await.expect("tunnel");
+        drop(t);
+        gone(dir.path()).await;
+        let empty = tempfile::tempdir().unwrap();
+        let e = open_in(&[empty.path().to_path_buf()], &cfg(), "db", 5432, Duration::from_secs(5)).await.err().unwrap().to_string();
+        assert!(e.contains("AWS CLI not found") && e.contains(INSTALL_CLI), "{e}");
     }
 
     #[tokio::test]
