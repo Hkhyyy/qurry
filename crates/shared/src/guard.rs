@@ -37,7 +37,7 @@ enum Quotes {
     /// The other backslash rule: MySQL NO_BACKSLASH_ESCAPES (\ is a plain char), PostgreSQL standard_conforming_strings = off (\ escapes in '…' too)
     OtherBackslash,
     /// MySQL ANSI_QUOTES: "…" is a name where \ is a plain char, while \ still escapes in '…'
-    AnsiQuotes,
+    Ansi,
 }
 
 fn scan_as(sql: &str, kind: DbKind, quotes: Quotes) -> Scan {
@@ -48,7 +48,7 @@ fn scan_as(sql: &str, kind: DbKind, quotes: Quotes) -> Scan {
     let backslash = crate::sql::backslash_escapes(kind);
     let escapes = |q: u8| match (quotes, kind) {
         (Quotes::OtherBackslash, DbKind::Mysql) => false,
-        (Quotes::OtherBackslash, DbKind::Postgres) | (Quotes::AnsiQuotes, DbKind::Mysql) => q == b'\'',
+        (Quotes::OtherBackslash, DbKind::Postgres) | (Quotes::Ansi, DbKind::Mysql) => q == b'\'',
         _ => backslash && crate::sql::escapes_in(kind, q),
     };
     while i < n {
@@ -995,7 +995,7 @@ pub fn is_read(sql: &str, kind: DbKind) -> bool {
     let ansi = backslash && kind == DbKind::Mysql && sql.contains('"');
     read(scan(sql, kind))
         && (!backslash || read(scan_as(sql, kind, Quotes::OtherBackslash)))
-        && (!ansi || read(scan_as(sql, kind, Quotes::AnsiQuotes)))
+        && (!ansi || read(scan_as(sql, kind, Quotes::Ansi)))
 }
 
 /// Whether the statement changes structure (the explorer tree is reloaded after running). Skips leading comments
