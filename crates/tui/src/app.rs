@@ -2271,17 +2271,17 @@ impl App {
                 // Saved, but its result couldn't be logged: not a failure (submitting again would save it twice)
                 if let Some(w) = r.warning {
                     a.status.push_str(" · Warning: the Production log couldn't record it");
-                    a.popup = Some(Popup::Message { title: "Submitted, with a warning".into(), text: w });
+                    a.notice("Submitted, with a warning".into(), w);
                 }
             }
-            Err(e) => a.popup = Some(Popup::Message { title: "Submit failed".into(), text: e }),
+            Err(e) => a.notice("Submit failed".into(), e),
         });
     }
 
     /// It ran, but the Production log couldn't record it: a popup, not a failure (running it again would repeat it)
     pub(crate) fn warn_ran(&mut self, warning: Option<String>) {
         if let Some(w) = warning {
-            self.popup = Some(Popup::Message { title: "Ran, with a warning".into(), text: w });
+            self.notice("Ran, with a warning".into(), w);
         }
     }
 
@@ -2565,7 +2565,7 @@ impl App {
                 if let Err(e) = &r {
                     a.status = format!("{name}/{db}: {e}");
                 }
-                if let Some(Popup::Palette(p)) = &mut a.popup {
+                if let Some(Popup::Palette(p)) = a.popup_under() {
                     p.loading = p.loading.saturating_sub(1);
                     if let Ok(es) = r {
                         p.items.extend(object_items(&conn, &name, &db, es, ""));
@@ -2581,7 +2581,7 @@ impl App {
         let target = sql::target_id(&cfg.id, Some(&db));
         let (conn, name) = (cfg.id.clone(), cfg.name.clone());
         self.spawn(async move { st.completion_meta(target).await.map_err(err) }, move |a, r| {
-            let (Some(Popup::Palette(p)), Ok(ts)) = (&mut a.popup, r) else { return };
+            let (Some(Popup::Palette(p)), Ok(ts)) = (a.popup_under(), r) else { return };
             p.items.extend(column_items(&conn, &name, &db, ts, ""));
         });
     }
@@ -2600,13 +2600,23 @@ impl App {
         cache.as_ref().map(|c| c.2.iter().map(|&i| &p.items[i]).collect()).unwrap_or_default()
     }
 
-    /// A notice to acknowledge. Over a popup that is open (the palette, a confirmation, the Production Log) it doesn't replace it:
-    /// closing the notice goes back there, as it was
+    /// A notice to acknowledge. Over a popup that is open (the palette, a confirmation, the Production Log, another notice) it
+    /// doesn't replace it: closing the notice goes back there, as it was
     pub fn notice(&mut self, title: String, text: String) {
         self.popup = Some(match self.popup.take() {
             Some(back) => Popup::Note { title, text, back: Box::new(back) },
             None => Popup::Message { title, text },
         });
+    }
+
+    /// The popup the user works in: the open one, or the one under the notices covering it. An async result for that popup (palette
+    /// items, a connection test, schemas) goes there, so it isn't lost while a notice is shown
+    pub(crate) fn popup_under(&mut self) -> Option<&mut Popup> {
+        let mut p = self.popup.as_mut()?;
+        while let Popup::Note { back, .. } = p {
+            p = back;
+        }
+        Some(p)
     }
 
     pub fn run_palette(&mut self, item: PItem, ddl: bool) {
@@ -3130,7 +3140,7 @@ impl App {
         let st = self.state.clone();
         let target = sql::target_id(&conn, Some(&db));
         self.spawn(async move { st.list_schemas(target).await.map_err(err) }, move |a, r| {
-            if let Some(Popup::Scope(e)) = &mut a.popup {
+            if let Some(Popup::Scope(e)) = a.popup_under() {
                 if e.conn == conn {
                     e.set_schemas(&db, r);
                 }
@@ -3244,7 +3254,7 @@ impl App {
         // How to update goes at the top (with many versions the bottom of the window gets cut off)
         let text = format!("You have {cur} — {how}\n\n{}", if changes.is_empty() { "See the release page for what changed.\n".into() } else { changes });
         self.status = format!("Qurry {} is available — {how}", r.version);
-        self.popup = Some(Popup::Message { title: format!("Qurry {} is available", r.version), text });
+        self.notice(format!("Qurry {} is available", r.version), text);
         self.update = Some(r.version);
     }
 

@@ -1069,8 +1069,8 @@ fn redis_key(app: &mut App, id: u64, k: KeyEvent) {
                     let target = a.tab_mut(id).map(|t| t.target.clone()).unwrap_or_default();
                     let shown = line.clone();
                     a.spawn(async move { st.redis_exec_line(target, line).await.map_err(|e| e.to_string()) }, move |a, r| match r {
-                        Ok(v) => a.popup = Some(Popup::Message { title: shown, text: crate::ui::format_reply(&v) }),
-                        Err(e) => a.popup = Some(Popup::Message { title: shown, text: format!("(error) {e}") }),
+                        Ok(v) => a.notice(shown, crate::ui::format_reply(&v)),
+                        Err(e) => a.notice(shown, format!("(error) {e}")),
                     });
                 };
                 // Destructive commands like FLUSHALL·FLUSHDB·DEL ask once more
@@ -1268,7 +1268,7 @@ fn popup_key(app: &mut App, k: KeyEvent) {
                             let st = app.state.clone();
                             form.message = Some((true, "Testing…".into()));
                             app.spawn(async move { st.test_connection(cfg, pw, ssh).await.map_err(|e| e.to_string()) }, |a, r| {
-                                if let Some(Popup::ConnForm(f)) = &mut a.popup {
+                                if let Some(Popup::ConnForm(f)) = a.popup_under() {
                                     f.message = Some(match r {
                                         Ok(v) => (true, format!("✓ {v}")),
                                         Err(e) if e.contains(qurry_core::tunnel::UNKNOWN_HOST) => (false, format!("✕ {e} Press ⌃y to trust it.")),
@@ -1933,6 +1933,48 @@ mod tests {
         assert_eq!(saved.name, "renamed");
         assert_eq!(saved.scope.databases, Some(vec!["shop".to_string()]));
         assert_eq!(saved.options.startup_script, "SET search_path = shop");
+    }
+
+    /// A notice (a failed Commit) shown while a connection test runs: the result goes to the form under it, not lost with
+    /// 'Testing…' left on after Esc
+    #[tokio::test]
+    async fn async_result_reaches_the_popup_under_a_notice() {
+        use qurry_core::store::{ConnectionConfig, DbKind};
+        let mut h = Harness::new().await;
+        let cfg = ConnectionConfig {
+            id: "c1".into(), name: "pg".into(), kind: DbKind::Postgres, host: "qurry.invalid".into(), port: 1, user: "postgres".into(), database: "postgres".into(),
+            scope: Default::default(), password_saved: false, ssh_secret_saved: false, ssh: None, color: None, read_only: false, options: Default::default(), ssl: None, redis: None,
+        };
+        h.app.conn_form(Some(cfg));
+        h.key("Ctrl+t");
+        h.app.notice("Commit outcome unknown".into(), "Check the data".into());
+        let testing = |h: &mut Harness| matches!(h.app.popup_under(), Some(crate::app::Popup::ConnForm(f)) if f.message.as_ref().is_some_and(|m| m.1 == "Testing…"));
+        for _ in 0..100 {
+            if !testing(&mut h) {
+                break;
+            }
+            h.settle().await;
+        }
+        assert!(matches!(h.app.popup, Some(crate::app::Popup::Note { .. })));
+        h.key("Esc");
+        let Some(crate::app::Popup::ConnForm(f)) = &h.app.popup else { panic!("no form") };
+        let m = &f.message.as_ref().unwrap().1;
+        assert!(m.starts_with('✕'), "{m}");
+    }
+
+    /// Popups that open later (a run's warning, Submit, an update) stack over a notice instead of replacing it: Esc goes back to it
+    #[tokio::test]
+    async fn later_popup_keeps_the_notice() {
+        let mut h = Harness::new().await;
+        h.app.notice("Commit outcome unknown".into(), "Check the data".into());
+        h.app.warn_ran(Some("The Production log couldn't record it".into()));
+        let Some(crate::app::Popup::Note { title, .. }) = &h.app.popup else { panic!("no warning") };
+        assert_eq!(title, "Ran, with a warning");
+        h.key("Esc");
+        let Some(crate::app::Popup::Message { title, .. }) = &h.app.popup else { panic!("notice lost") };
+        assert_eq!(title, "Commit outcome unknown");
+        h.key("Esc");
+        assert!(h.app.popup.is_none());
     }
 
     /// A new Data Source starts hidden from MCP. Saves the MCP value shown in the form as is
