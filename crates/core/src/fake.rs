@@ -2,6 +2,7 @@
 //! FKs pick from values already in the referenced table. Auto-increment · computed columns are left empty (the server fills them).
 //! Inserts run in one transaction (execute_batch): if anything fails, nothing goes in
 use crate::app::{AppState, ensure_pool};
+use crate::backend::{Backend, dispatch};
 use crate::db::Pool;
 use crate::error::{AppError, AppResult};
 use crate::store::DbKind;
@@ -391,13 +392,13 @@ fn insert_sql(table: &str, shape: &TableShape, rows: &[Vec<Cell>], kind: DbKind)
 // ───────── Reading the structure ─────────
 
 /// Texts inside '…' (CHECK (status IN ('a','b')) · enum('a','b'))
-fn quoted_literals(s: &str) -> Vec<String> {
+pub(crate) fn quoted_literals(s: &str) -> Vec<String> {
     let re = regex::Regex::new(r"'((?:[^']|'')*)'").unwrap();
     re.captures_iter(s).map(|c| c[1].replace("''", "'")).collect()
 }
 
 /// "varchar(20)" · "numeric(10,2)" · "decimal(10,2) unsigned" → (20 / 10, 2)
-fn type_args(t: &str) -> (Option<u32>, Option<u32>) {
+pub(crate) fn type_args(t: &str) -> (Option<u32>, Option<u32>) {
     let Some(a) = t.find('(') else { return (None, None) };
     let Some(b) = t[a..].find(')') else { return (None, None) };
     let mut it = t[a + 1..a + b].split(',').map(|x| x.trim().parse::<u32>().ok());
@@ -407,116 +408,6 @@ fn type_args(t: &str) -> (Option<u32>, Option<u32>) {
 pub(crate) fn qualified(kind: DbKind, schema: &str, table: &str) -> String {
     let q = |s: &str| crate::sql::quote_ident(kind, s);
     if schema.is_empty() { q(table) } else { format!("{}.{}", q(schema), q(table)) }
-}
-
-async fn shape(pool: &Pool, kind: DbKind, schema: &str, table: &str) -> AppResult<TableShape> {
-    let rel = qualified(kind, schema, table);
-    match pool {
-        Pool::Pg(p) => {
-            let cols: Vec<(String, String, String, bool, bool, Vec<String>)> = sqlx::query_as(
-                "SELECT a.attname::text, format_type(a.atttypid, a.atttypmod), (CASE WHEN t.typtype = 'd' THEN bt.typname ELSE t.typname END)::text, \
-                        NOT a.attnotnull, \
-                        coalesce(a.attidentity <> '' OR a.attgenerated <> '' OR pg_get_expr(d.adbin, d.adrelid) LIKE 'nextval(%', false), \
-                        coalesce((SELECT array_agg(e.enumlabel::text ORDER BY e.enumsortorder) FROM pg_enum e WHERE e.enumtypid = a.atttypid), '{}') \
-                 FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid LEFT JOIN pg_type bt ON bt.oid = t.typbasetype \
-                 LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum \
-                 WHERE a.attrelid = $1::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum",
-            )
-            .bind(&rel)
-            .fetch_all(p)
-            .await?;
-            let keys: Vec<(String, bool, i16)> = sqlx::query_as(
-                "SELECT a.attname::text, i.indisprimary, i.indnatts FROM pg_index i JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) \
-                 WHERE i.indrelid = $1::regclass AND i.indisunique AND i.indpred IS NULL",
-            )
-            .bind(&rel)
-            .fetch_all(p)
-            .await?;
-            let checks: Vec<(String, String)> = sqlx::query_as(
-                "SELECT a.attname::text, pg_get_constraintdef(c.oid) FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1] \
-                 WHERE c.conrelid = $1::regclass AND c.contype = 'c' AND array_length(c.conkey, 1) = 1",
-            )
-            .bind(&rel)
-            .fetch_all(p)
-            .await?;
-            let fks: Vec<(String, Vec<String>, Vec<String>)> = sqlx::query_as(
-                "SELECT c.confrelid::regclass::text, \
-                   array(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(n, o) JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.n ORDER BY k.o), \
-                   array(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(n, o) JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.n ORDER BY k.o) \
-                 FROM pg_constraint c WHERE c.conrelid = $1::regclass AND c.contype = 'f'",
-            )
-            .bind(&rel)
-            .fetch_all(p)
-            .await?;
-            let cols = cols
-                .into_iter()
-                .map(|(name, data_type, base, nullable, auto, enums)| {
-                    let (len, scale) = type_args(&data_type);
-                    let pk = keys.iter().any(|(k, p, _)| *k == name && *p);
-                    let unique = keys.iter().any(|(k, p, n)| *k == name && !*p && *n == 1) || (pk && keys.iter().filter(|(_, p, _)| *p).count() == 1);
-                    let mut choices = enums;
-                    if choices.is_empty() {
-                        choices = checks.iter().filter(|(c, _)| *c == name).flat_map(|(_, def)| if def.contains("ANY") || def.contains(" IN ") { quoted_literals(def) } else { vec![] }).collect();
-                    }
-                    Col { name, data_type, base, len, scale, nullable, auto, pk, unique, choices, unsigned: false }
-                })
-                .collect();
-            Ok(TableShape { cols, fks: fks.into_iter().map(|(ref_table, cols, ref_cols)| Fk { cols, ref_table, ref_cols }).collect() })
-        }
-        Pool::My(p) => {
-            let cols: Vec<(String, String, String, i64, i64, String)> = sqlx::query_as(
-                "SELECT CAST(COLUMN_NAME AS CHAR), CAST(COLUMN_TYPE AS CHAR), CAST(DATA_TYPE AS CHAR), CAST(IS_NULLABLE = 'YES' AS SIGNED), \
-                        CAST(EXTRA LIKE '%auto_increment%' OR EXTRA LIKE '%GENERATED%' AS SIGNED), CAST(COLUMN_KEY AS CHAR) \
-                 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
-            )
-            .bind(schema)
-            .bind(table)
-            .fetch_all(p)
-            .await?;
-            let uniq: Vec<(String,)> = sqlx::query_as(
-                "SELECT CAST(MAX(COLUMN_NAME) AS CHAR) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND TABLE_NAME = ? \
-                 AND NON_UNIQUE = 0 AND INDEX_NAME <> 'PRIMARY' GROUP BY INDEX_NAME HAVING COUNT(*) = 1",
-            )
-            .bind(schema)
-            .bind(table)
-            .fetch_all(p)
-            .await?;
-            let fk_rows: Vec<(String, String, String, String, String)> = sqlx::query_as(
-                "SELECT CAST(CONSTRAINT_NAME AS CHAR), CAST(COLUMN_NAME AS CHAR), CAST(REFERENCED_TABLE_SCHEMA AS CHAR), CAST(REFERENCED_TABLE_NAME AS CHAR), CAST(REFERENCED_COLUMN_NAME AS CHAR) \
-                 FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND TABLE_NAME = ? AND REFERENCED_TABLE_NAME IS NOT NULL \
-                 ORDER BY CONSTRAINT_NAME, ORDINAL_POSITION",
-            )
-            .bind(schema)
-            .bind(table)
-            .fetch_all(p)
-            .await?;
-            let mut fks: Vec<(String, Fk)> = vec![];
-            for (cname, col, rs, rt, rc) in fk_rows {
-                match fks.iter_mut().find(|(n, _)| *n == cname) {
-                    Some((_, f)) => {
-                        f.cols.push(col);
-                        f.ref_cols.push(rc);
-                    }
-                    None => fks.push((cname, Fk { cols: vec![col], ref_table: qualified(DbKind::Mysql, &rs, &rt), ref_cols: vec![rc] })),
-                }
-            }
-            let pks = cols.iter().filter(|c| c.5 == "PRI").count();
-            let cols = cols
-                .into_iter()
-                .map(|(name, ctype, base, nullable, auto, key)| {
-                    let lower = ctype.to_lowercase();
-                    let (len, scale) = type_args(&lower);
-                    let base = base.to_lowercase();
-                    let choices = if base == "enum" || base == "set" { quoted_literals(&ctype) } else { vec![] };
-                    let pk = key == "PRI";
-                    Col { unique: uniq.iter().any(|(u,)| *u == name) || (pk && pks == 1), name, data_type: ctype, base, len, scale, nullable: nullable != 0, auto: auto != 0, pk, choices, unsigned: lower.contains("unsigned") }
-                })
-                .collect();
-            Ok(TableShape { cols, fks: fks.into_iter().map(|x| x.1).collect() })
-        }
-        Pool::Redis(..) => Err(AppError::Msg("Redis has no tables".into())),
-        Pool::Plugin(c) => Err(AppError::Msg(format!("Test data is not available for the {} driver yet", c.driver))),
-    }
 }
 
 /// Values for an FK to reference (random from the parent table). If self-referencing, from existing rows
@@ -560,7 +451,7 @@ impl AppState {
     async fn fake_prepare(&self, id: &str, schema: &str, table: &str) -> AppResult<Prepared> {
         let kind = self.kind_of(id)?;
         let pool = ensure_pool(self, id).await?;
-        let shape = shape(&pool, kind, schema, table).await?;
+        let shape = dispatch!(pool, b => b.table_shape(schema, table).await)?;
         if shape.cols.is_empty() {
             return Err(AppError::Msg(format!("Couldn't find table {schema}.{table}")));
         }
