@@ -820,6 +820,9 @@ async fn mysql_explain_analyze_never_commits_pending_work() {
     explain_analyze_keeps_pending_work(&st, "typed", &["SET autocommit = 0", "insert into t values (1)"], explain, count).await;
     explain_analyze_keeps_pending_work(&st, "call", &["call off()", "insert into t values (1)"], explain, count).await;
     explain_analyze_keeps_pending_work(&st, "dump", &["/*!40101 SET autocommit = 0 */", "insert into t values (1)"], explain, count).await;
+    // Autocommit on, a transaction opened where Qurry's tracker can't see it: the server is asked
+    explain_analyze_keeps_pending_work(&st, "hidden", &["/*!40101 START TRANSACTION */", "insert into t values (1)"], explain, count).await;
+    explain_analyze_keeps_pending_work(&st, "hash", &["# note\nSTART TRANSACTION", "insert into t values (1)"], explain, count).await;
     st.set_tx_mode(ID.into(), "manual".into(), true).await.unwrap();
     explain_analyze_keeps_pending_work(&st, "manual", &["insert into t values (1)"], explain, count).await;
     st.set_tx_mode(ID.into(), "manual-f".into(), true).await.unwrap();

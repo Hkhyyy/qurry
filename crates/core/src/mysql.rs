@@ -321,18 +321,20 @@ impl MySession {
         }
     }
 
-    /// Whether a BEGIN now could commit pending work: a transaction is open, or the server has autocommit off (then one may be open
-    /// though Qurry didn't see it: autocommit turned off in a procedure, a /*! … */ comment or the server's default). Such a session
-    /// is followed as Manual from then on, so its changes show as pending and closing the tab turns autocommit back on
+    /// Whether a BEGIN now could commit pending work: a transaction is open (Qurry saw it open, or the server says so: a START
+    /// TRANSACTION inside a /*! … */ comment or after a # comment), or the server has autocommit off (then one may be open though
+    /// Qurry didn't see it: autocommit turned off in a procedure, a /*! … */ comment or the server's default). One the server
+    /// reports is followed from then on, so its changes show as pending; an autocommit=0 session is followed as Manual (asked even
+    /// with one open), so closing the tab turns autocommit back on before the connection goes back to the pool
     pub async fn tx_may_be_open(&mut self) -> AppResult<bool> {
-        if self.in_tx {
-            return Ok(true);
-        }
-        let on: i64 = sqlx::query_scalar("SELECT @@autocommit").fetch_one(&mut *self.conn).await.map_err(|e| {
-            AppError::Msg(format!("Explain Analyse didn't run the statement: it couldn't ask the server whether autocommit is on ({e}). Nothing was run or committed; try again, or Commit or Roll back first"))
-        })?;
+        self.in_tx = self.in_tx || self.tx_open().await == Some(true);
+        let on: i64 = match sqlx::query_scalar("SELECT @@autocommit").fetch_one(&mut *self.conn).await {
+            Ok(on) => on,
+            Err(_) if self.in_tx => return Ok(true),
+            Err(e) => return Err(AppError::Msg(format!("Explain Analyse didn't run the statement: it couldn't ask the server whether autocommit is on ({e}). Nothing was run or committed; try again, or Commit or Roll back first"))),
+        };
         self.manual |= on == 0;
-        Ok(on == 0)
+        Ok(self.in_tx || on == 0)
     }
 
     /// Whether to ask the server if the transaction is still open after `sql` (s = strip_comments_lead(sql)) ran or failed: one
