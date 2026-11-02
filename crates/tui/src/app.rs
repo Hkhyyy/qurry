@@ -1986,13 +1986,16 @@ impl App {
     }
 
     /// on_yes of a confirm that runs statements: they run in the console that asked (tab id), shown again, never in whichever tab
-    /// is active when it is answered (that may be another source, whose own checks would be skipped). Nothing runs once it is closed
+    /// is active when it is answered (that may be another source, whose own checks would be skipped). Nothing runs (and the status
+    /// says why) while it is busy, once it is closed or while it is in another workspace
     fn in_console(id: u64, run: impl FnOnce(&mut App) + 'static) -> Box<dyn FnOnce(&mut App)> {
         Box::new(move |a| match a.tab_index(id) {
+            Some(i) if matches!(&a.tabs[i].kind, TabKind::Console(c) if c.running) => a.status = "The console is busy: nothing ran. Run it again when it finishes.".into(),
             Some(i) => {
                 a.activate(i);
                 run(a)
             }
+            None if a.tab_mut(id).is_some() => a.status = "The console is in another workspace: nothing ran".into(),
             None => a.status = "The console was closed: nothing ran".into(),
         })
     }

@@ -187,3 +187,31 @@ async fn a_waiting_production_confirm_runs_nothing_once_its_console_is_closed() 
     assert!(!running(&h, b), "ran in tab B: {}", h.app.status);
     assert_eq!(h.app.status, "The console was closed: nothing ran");
 }
+
+/// The console that asked is still running something else: y runs nothing (it isn't dropped silently) and says so
+#[tokio::test]
+async fn a_waiting_production_confirm_runs_nothing_while_its_console_is_busy() {
+    let (mut h, a, b) = confirm_waits_while_the_palette_switches_tabs(false).await;
+    let i = h.app.tab_index(a).unwrap();
+    let crate::app::TabKind::Console(c) = &mut h.app.tabs[i].kind else { panic!("tab A is not a console") };
+    c.running = true;
+    h.key("y");
+    assert!(!running(&h, b), "ran in tab B: {}", h.app.status);
+    assert_eq!(h.app.status, "The console is busy: nothing ran. Run it again when it finishes.");
+    assert_eq!(h.app.tabs[h.app.active].id, b);
+}
+
+/// The console that asked went to another workspace (stashed with it): y runs nothing and says where it is
+#[tokio::test]
+async fn a_waiting_production_confirm_runs_nothing_while_its_console_is_in_another_workspace() {
+    let (mut h, a, b) = confirm_waits_while_the_palette_switches_tabs(false).await;
+    let confirm = h.app.popup.take();
+    h.app.ws_new();
+    h.key("Enter");
+    assert!(h.app.tab_index(a).is_none() && h.app.tab_mut(a).is_some());
+    h.app.popup = confirm;
+    h.key("y");
+    assert!(h.app.tab_mut(b).is_some_and(|t| matches!(&t.kind, crate::app::TabKind::Console(c) if !c.running)), "ran in tab B: {}", h.app.status);
+    assert!(h.app.tab_mut(a).is_some_and(|t| matches!(&t.kind, crate::app::TabKind::Console(c) if !c.running)), "ran in tab A: {}", h.app.status);
+    assert_eq!(h.app.status, "The console is in another workspace: nothing ran");
+}
