@@ -450,6 +450,62 @@ mod tests {
         assert_eq!((v[0].insert.as_str(), v[0].label.as_str()), (r#" @> '[{"code": "x"}]'"#, r#"@> '[{"code": "x"}]'"#));
     }
 
+    /// The TUI's completion over tests/corpus/suggest.json (`‸` = cursor), as update_completion builds it, compared with
+    /// tests/goldens/completion/tui.json. `UPDATE_GOLDENS=1 cargo test -p qurry-shared complete` rewrites the golden
+    #[test]
+    fn corpus_matches_tui_golden() {
+        use serde_json::{Value, json};
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../shared/tests");
+        let corpus: Value = serde_json::from_str(&std::fs::read_to_string(root.join("corpus/suggest.json")).unwrap()).unwrap();
+        let st = |v: &Value| v.as_str().unwrap_or_default().to_string();
+        let tables = corpus["tables"].as_array().unwrap().iter().map(|t| CompletionTable { schema: st(&t["schema"]), name: st(&t["name"]), columns: t["columns"].as_array().unwrap().iter().map(|p| (st(&p[0]), st(&p[1]))).collect() }).collect();
+        let m = Meta::new(tables);
+        let items = |v: Vec<Item>| v.into_iter().map(|i| json!({ "label": i.label, "detail": i.detail, "insert": i.insert, "kind": format!("{:?}", i.kind) })).collect::<Vec<_>>();
+        let mut out = serde_json::Map::new();
+        for c in corpus["cases"].as_array().unwrap() {
+            let raw = st(&c["text"]);
+            let at = raw.find('‸').unwrap();
+            let text = raw.replacen('‸', "", 1);
+            let before = &text[text[..at].rfind('\n').map_or(0, |i| i + 1)..at];
+            let after = text[at..].chars().next();
+            let (db, mysql) = (st(&c["db"]), c["mysql"].as_bool().unwrap_or(false));
+            let hints = |mode: &str| c["hints"].get(mode).map(|v| v.as_array().unwrap().iter().map(|p| qurry_core::hints::Hint { value: st(&p[0]), count: p[1].as_i64().unwrap() }).collect::<Vec<_>>());
+            let o = if let Some(h) = hint_at(&m, &text, before, &db, mysql) {
+                let name = |m: HintMode| format!("{m:?}").to_lowercase();
+                let mut asked = vec![name(h.mode)];
+                let mut got = (h.mode, hints(&name(h.mode)).unwrap_or_default());
+                if h.mode == HintMode::Keys && got.1.is_empty() && !mysql {
+                    asked.push("pairs".into());
+                    got = (HintMode::Pairs, hints("pairs").unwrap_or_default());
+                }
+                let as_pairs = got.0 == HintMode::Pairs && h.mode == HintMode::Keys;
+                let prefix = if as_pairs { h.op.chars().count() } else { h.typed.chars().count() };
+                let hint = json!({ "schema": h.schema, "table": h.table, "column": h.column, "path": h.path, "asked": asked });
+                json!({ "hint": hint, "prefix": prefix, "items": items(hint_items(&h, &got.1, h.quoted && after != Some('\''), as_pairs)) })
+            } else {
+                let (prefix, v) = suggest(&m, &text, before, &db);
+                json!({ "prefix": prefix, "items": items(v) })
+            };
+            out.insert(st(&c["id"]), o);
+        }
+        // One item per line, so a diff of the golden shows which ones changed
+        let lines: Vec<String> = out
+            .iter()
+            .map(|(id, o)| {
+                let its: Vec<String> = o["items"].as_array().unwrap().iter().map(|i| format!("\n      {i}")).collect();
+                let hint = o.get("hint").map(|h| format!("\n    \"hint\": {h},")).unwrap_or_default();
+                format!("  {}: {{{hint}\n    \"prefix\": {},\n    \"items\": [{}{}]\n  }}", json!(id), o["prefix"], its.join(","), if its.is_empty() { "" } else { "\n    " })
+            })
+            .collect();
+        let got = format!("{{\n{}\n}}\n", lines.join(",\n"));
+        let golden = root.join("goldens/completion/tui.json");
+        if std::env::var_os("UPDATE_GOLDENS").is_some() {
+            std::fs::write(&golden, &got).unwrap();
+        }
+        let want = std::fs::read_to_string(&golden).expect("missing golden: run with UPDATE_GOLDENS=1");
+        assert_eq!(serde_json::from_str::<Value>(&got).unwrap(), serde_json::from_str::<Value>(&want).unwrap());
+    }
+
     #[test]
     fn mysql_schema_is_db() {
         let all = Meta::new(vec![CompletionTable { schema: "shop".into(), name: "items".into(), columns: vec![] }]);
