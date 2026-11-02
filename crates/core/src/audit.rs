@@ -2009,4 +2009,47 @@ mod tests {
         assert_eq!(followup_values(&st, s).await, "[[1],[2],[3]]");
         followup_drop(&st, DbKind::Mysql, s).await;
     }
+
+    /// MariaDB: BEGIN NOT ATOMIC … END is a compound statement, not BEGIN. In Manual it doesn't commit the open transaction: no
+    /// 'committed' warning, no COMMIT (implicit) in the log, and Roll back undoes the change and is logged. One that commits inside
+    /// ended the transaction either way for all Qurry can tell; in Auto, one that starts a transaction leaves it open.
+    /// QURRY_TEST_MY pointing at MariaDB (skipped on MySQL)
+    #[tokio::test]
+    #[ignore]
+    async fn mariadb_begin_not_atomic_is_not_begin() {
+        let Some(st) = prod_state(DbKind::Mysql, "QURRY_TEST_MY").await else { return };
+        if !server_version(&st).await.contains("MariaDB") {
+            return;
+        }
+        let s = "audit_followups_not_atomic";
+        followup_table(&st, DbKind::Mysql, s).await;
+        let run = |tab: &str, sql: String| st.run_query("d".into(), sql, None, Some(tab.into()));
+        let log = |n: usize| st.audit_log(None, String::new(), n).into_iter().map(|e| e.sql).collect::<Vec<_>>();
+        st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
+        run("m", format!("update {s}.t set v = 10 where id = 1")).await.unwrap();
+        let r = run("m", "BEGIN NOT ATOMIC SELECT 1; END".into()).await.unwrap();
+        assert_eq!(r.warning, None);
+        assert!(st.tx_state("m".into()).await);
+        assert_ne!(log(1), [IMPLICIT_COMMIT]);
+        st.rollback_tx("m".into()).await.unwrap();
+        assert_eq!(log(1), ["ROLLBACK"]);
+        assert_eq!(followup_values(&st, s).await, "[[1],[2],[3]]");
+        // A plain BEGIN still commits it
+        run("m", format!("update {s}.t set v = 10 where id = 1")).await.unwrap();
+        run("m", "begin work;".into()).await.unwrap();
+        assert_eq!(log(1), [IMPLICIT_COMMIT]);
+        st.rollback_tx("m".into()).await.unwrap();
+        // One that commits inside: the console can't tell committed from rolled back
+        run("m", format!("update {s}.t set v = 20 where id = 2")).await.unwrap();
+        run("m", "begin not atomic commit; end".into()).await.unwrap();
+        assert!(!st.tx_state("m".into()).await);
+        assert_eq!(log(1), [ENDED_UNKNOWN]);
+        assert_eq!(followup_values(&st, s).await, "[[10],[20],[3]]");
+        // Auto: a transaction it starts stays open, and Roll back undoes it
+        run("a", format!("begin not atomic start transaction; update {s}.t set v = 30 where id = 3; end")).await.unwrap();
+        assert!(st.tx_state("a".into()).await);
+        st.rollback_tx("a".into()).await.unwrap();
+        assert_eq!(followup_values(&st, s).await, "[[10],[20],[3]]");
+        followup_drop(&st, DbKind::Mysql, s).await;
+    }
 }

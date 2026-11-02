@@ -350,11 +350,19 @@ fn asks_server(sql: &str, s: &str) -> bool {
     !is_select_like(sql) && !is_dml(s)
 }
 
-/// Whether `s` (strip_comments_lead) runs statements of its own that can COMMIT or ROLLBACK: a CALL, or EXECUTE of a prepared
-/// COMMIT / ROLLBACK. When the transaction ended with it, the server's answer can't tell whether it committed or rolled back
+/// A plain BEGIN (s = strip_comments_lead(sql)): `begin` or `begin work`, optionally with `;`. Not a MariaDB compound statement
+/// (BEGIN NOT ATOMIC … END), which doesn't commit the open transaction
+fn is_begin(s: &str) -> bool {
+    let w: Vec<&str> = s.trim_end().trim_end_matches(';').split_whitespace().collect();
+    w == ["begin"] || w == ["begin", "work"]
+}
+
+/// Whether `s` (strip_comments_lead) runs statements of its own that can COMMIT or ROLLBACK: a CALL, EXECUTE of a prepared
+/// COMMIT / ROLLBACK, or a MariaDB BEGIN NOT ATOMIC … END. When the transaction ended with it, the server's answer can't tell
+/// whether it committed or rolled back
 fn ends_in_procedure(s: &str) -> bool {
     let first = s.split_whitespace().next().unwrap_or("");
-    ["call", "execute"].contains(&first)
+    ["call", "execute"].contains(&first) || (first == "begin" && !is_begin(s))
 }
 
 /// Statements that change rows (s = strip_comments_lead(sql))
@@ -475,6 +483,12 @@ impl MySession {
         }
     }
 
+    /// Whether to ask the server if the transaction is still open after `sql` (s = strip_comments_lead(sql)) ran or failed: one
+    /// rule for both. In Auto with none open, only a CALL, EXECUTE or BEGIN NOT ATOMIC can leave one open
+    fn asks(&self, sql: &str, s: &str) -> bool {
+        (self.manual || self.in_tx || ends_in_procedure(s)) && asks_server(sql, s)
+    }
+
     /// After `s` (strip_comments_lead) ran or failed with `err`: follow the server's answer whether the transaction is still open.
     /// Without one it stays as it was (or opens in Manual), so Qurry never claims changes are committed without knowing. If the
     /// statement ended it (not a COMMIT / ROLLBACK), `ended` says how: committed, unless it can also have rolled it back (a CALL or
@@ -500,7 +514,7 @@ impl MySession {
             Ok(r) => r,
             Err(e) => {
                 let s = strip_comments_lead(sql);
-                if (self.manual || self.in_tx || ends_in_procedure(&s)) && asks_server(sql, &s) && error_number(&e).is_some() && !crate::app::is_conn_lost(&e) {
+                if self.asks(sql, &s) && error_number(&e).is_some() && !crate::app::is_conn_lost(&e) {
                     // Same rule as for one that ran: a DDL or SET PASSWORD that committed before failing, a COMMIT the server refused
                     // (rolled back) ended it, one that failed to parse (COMMIT TRANSACTION: 1064) didn't, a CALL may have opened one
                     self.follow_server(&s, Some(&e)).await;
@@ -521,7 +535,7 @@ impl MySession {
                 self.manual = on == 0;
             }
         }
-        if s.starts_with("begin") || s.starts_with("start transaction") {
+        if is_begin(&s) || s.starts_with("start transaction") {
             // It committed the one that was open
             if self.in_tx {
                 self.ended = Some(crate::audit::IMPLICIT_COMMIT);
@@ -530,8 +544,7 @@ impl MySession {
             self.in_tx = true;
         } else if s.starts_with("commit") || (s.starts_with("rollback") && !s.starts_with("rollback to")) {
             self.in_tx = false;
-        } else if (self.manual || self.in_tx || ends_in_procedure(&s)) && asks_server(sql, &s) {
-            // In Auto with none open, a CALL or EXECUTE can leave one open (a procedure's START TRANSACTION without COMMIT)
+        } else if self.asks(sql, &s) {
             self.follow_server(&s, None).await;
         } else if self.manual && opens_tx(&s) {
             // With autocommit=0, any statement opens a transaction, not only a change: WITH … DELETE, SELECT … FOR UPDATE (its row locks),
@@ -872,8 +885,20 @@ mod tests {
         for q in ["call p()", "CALL s.p", "-- x\n call p()", "execute stmt", "EXECUTE s USING @a"] {
             assert!(ends_in_procedure(&strip_comments_lead(q)), "{q}");
         }
-        for q in ["create table t (a int)", "set password = 'x'", "callx", "do 0", "deallocate prepare s", "prepare s from 'commit'"] {
+        for q in ["create table t (a int)", "set password = 'x'", "callx", "do 0", "deallocate prepare s", "prepare s from 'commit'", "begin", "BEGIN WORK;", "begin ;"] {
             assert!(!ends_in_procedure(&strip_comments_lead(q)), "{q}");
+        }
+        assert!(ends_in_procedure(&strip_comments_lead("BEGIN NOT ATOMIC SELECT 1; END")));
+    }
+
+    /// Only a plain BEGIN commits the open transaction and opens one; a MariaDB compound statement asks the server
+    #[test]
+    fn plain_begin_only() {
+        for q in ["begin", "BEGIN;", "-- x\nbegin work", "begin  work ;"] {
+            assert!(is_begin(&strip_comments_lead(q)), "{q}");
+        }
+        for q in ["begin not atomic select 1; end", "BEGIN NOT ATOMIC\n  UPDATE t SET v = 1;\nEND", "beginx", "begin work x"] {
+            assert!(!is_begin(&strip_comments_lead(q)), "{q}");
         }
     }
 
