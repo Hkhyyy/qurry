@@ -699,5 +699,64 @@
     "extract(SQL IN List)": "(10, 20)",
     "extract(JSON)": "[\n  {\n    \"total\": \"10\"\n  },\n  {\n    \"total\": \"20\"\n  },\n  {\n    \"total\": \"10\"\n  }\n]",
     "extract(Markdown)": "| total |\n| --- |\n| 10 |\n| 20 |\n| 10 |"
+  },
+  "year-float-x": {
+    "numericColumns": [
+      "ratio",
+      "yr",
+      "qty"
+    ],
+    "defaultAxes": {
+      "x": "ratio",
+      "y": "yr"
+    },
+    "buildChart(bar)": {
+      "labels": [
+        "0.25",
+        "1.5",
+        "2"
+      ],
+      "series": [
+        {
+          "name": "yr",
+          "values": [
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    "buildChart(pie)": {
+      "labels": [],
+      "series": [
+        {
+          "name": "yr",
+          "values": []
+        }
+      ]
+    },
+    "inList": "((1.5, NULL, '1,000'), (0.25, NULL, '2'), (1.5, NULL, ' 3 '), (2, NULL, ''))",
+    "inList(column)": {
+      "ratio": "(1.5, 0.25, 2)",
+      "yr": "(NULL)",
+      "qty": "('1,000', '2', ' 3 ', '')"
+    },
+    "extract(TSV, no header)": "1.5\t\t1,000\n0.25\t\t2\n1.5\t\t 3 \n2\t\t",
+    "extract(SQL Inserts, mysql)": "INSERT INTO MY_TABLE (ratio, yr, qty) VALUES ('1.5', NULL, '1,000');\nINSERT INTO MY_TABLE (ratio, yr, qty) VALUES ('0.25', NULL, '2');\nINSERT INTO MY_TABLE (ratio, yr, qty) VALUES ('1.5', NULL, ' 3 ');\nINSERT INTO MY_TABLE (ratio, yr, qty) VALUES ('2', NULL, '');",
+    "fracWidth": {
+      "ratio": 0,
+      "yr": 0,
+      "qty": 0
+    },
+    "padFrac": {},
+    "extract(CSV)": "ratio,yr,qty\n1.5,,\"1,000\"\n0.25,,2\n1.5,, 3 \n2,,",
+    "extract(TSV)": "ratio\tyr\tqty\n1.5\t\t1,000\n0.25\t\t2\n1.5\t\t 3 \n2\t\t",
+    "extract(SQL Inserts)": "INSERT INTO MY_TABLE (ratio, yr, qty) VALUES ('1.5', NULL, '1,000');\nINSERT INTO MY_TABLE (ratio, yr, qty) VALUES ('0.25', NULL, '2');\nINSERT INTO MY_TABLE (ratio, yr, qty) VALUES ('1.5', NULL, ' 3 ');\nINSERT INTO MY_TABLE (ratio, yr, qty) VALUES ('2', NULL, '');",
+    "extract(SQL Updates)": "UPDATE MY_TABLE SET ratio = '1.5', yr = NULL, qty = '1,000' WHERE /* no key */;\nUPDATE MY_TABLE SET ratio = '0.25', yr = NULL, qty = '2' WHERE /* no key */;\nUPDATE MY_TABLE SET ratio = '1.5', yr = NULL, qty = ' 3 ' WHERE /* no key */;\nUPDATE MY_TABLE SET ratio = '2', yr = NULL, qty = '' WHERE /* no key */;",
+    "extract(Where Clause)": "(ratio = '1.5' AND yr IS NULL AND qty = '1,000') OR\n(ratio = '0.25' AND yr IS NULL AND qty = '2') OR\n(ratio = '1.5' AND yr IS NULL AND qty = ' 3 ') OR\n(ratio = '2' AND yr IS NULL AND qty = '')",
+    "extract(SQL IN List)": "((1.5, NULL, '1,000'), (0.25, NULL, '2'), (1.5, NULL, ' 3 '), (2, NULL, ''))",
+    "extract(JSON)": "[\n  {\n    \"ratio\": 1.5,\n    \"yr\": null,\n    \"qty\": \"1,000\"\n  },\n  {\n    \"ratio\": 0.25,\n    \"yr\": null,\n    \"qty\": \"2\"\n  },\n  {\n    \"ratio\": 1.5,\n    \"yr\": null,\n    \"qty\": \" 3 \"\n  },\n  {\n    \"ratio\": 2,\n    \"yr\": null,\n    \"qty\": \"\"\n  }\n]",
+    "extract(Markdown)": "| ratio | yr | qty |\n| --- | --- | --- |\n| 1.5 |  | 1,000 |\n| 0.25 |  | 2 |\n| 1.5 |  |  3  |\n| 2 |  |  |"
   }
 }

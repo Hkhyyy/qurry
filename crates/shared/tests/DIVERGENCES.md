@@ -24,26 +24,26 @@ Inputs are in `corpus/` (ids as listed); `‸` in a corpus text is the cursor. O
 | valuehints › hintInsert | 31 | 0 | 1 | 1 |
 | valuehints › hintable | 31 | 0 | 1 | 1 |
 | valuehints › pairsForKeys | 7 | 0 | 0 | 0 |
-| results › numericColumns | 10 | 0 | 0 | 0 |
-| results › defaultAxes | 10 | 0 | 0 | 0 |
-| results › buildChart(bar) | 0 | 0 | 10 | 0 |
-| results › buildChart(pie) | 0 | 0 | 10 | 0 |
-| results › inList | 10 | 1 | 0 | 0 |
-| results › inList(column) | 10 | 1 | 0 | 0 |
-| results › extract(TSV, no header) | 9 | 0 | 1 | 0 |
-| results › extract(SQL Inserts, mysql) | 0 | 0 | 10 | 0 |
-| results › fracWidth | 10 | 0 | 0 | 0 |
-| results › padFrac | 10 | 0 | 0 | 0 |
-| results › extract(CSV) | 0 | 0 | 10 | 0 |
-| results › extract(TSV) | 0 | 0 | 10 | 0 |
-| results › extract(SQL Inserts) | 0 | 0 | 10 | 0 |
-| results › extract(SQL Updates) | 0 | 0 | 10 | 0 |
-| results › extract(Where Clause) | 0 | 0 | 10 | 0 |
-| results › extract(SQL IN List) | 0 | 0 | 10 | 0 |
-| results › extract(JSON) | 0 | 0 | 10 | 0 |
-| results › extract(Markdown) | 0 | 0 | 10 | 0 |
+| results › numericColumns | 11 | 1 | 0 | 0 |
+| results › defaultAxes | 11 | 1 | 0 | 0 |
+| results › buildChart(bar) | 0 | 0 | 11 | 0 |
+| results › buildChart(pie) | 0 | 0 | 11 | 0 |
+| results › inList | 11 | 1 | 0 | 0 |
+| results › inList(column) | 11 | 1 | 0 | 0 |
+| results › extract(TSV, no header) | 10 | 0 | 1 | 0 |
+| results › extract(SQL Inserts, mysql) | 0 | 0 | 11 | 0 |
+| results › fracWidth | 11 | 0 | 0 | 0 |
+| results › padFrac | 11 | 0 | 0 | 0 |
+| results › extract(CSV) | 0 | 0 | 11 | 0 |
+| results › extract(TSV) | 0 | 0 | 11 | 0 |
+| results › extract(SQL Inserts) | 0 | 0 | 11 | 0 |
+| results › extract(SQL Updates) | 0 | 0 | 11 | 0 |
+| results › extract(Where Clause) | 0 | 0 | 11 | 0 |
+| results › extract(SQL IN List) | 0 | 0 | 11 | 0 |
+| results › extract(JSON) | 0 | 0 | 11 | 0 |
+| results › extract(Markdown) | 0 | 0 | 11 | 0 |
 | numbers › niceTicks | 0 | 0 | 11 | 0 |
-| numbers › shortNumber | 0 | 0 | 16 | 0 |
+| numbers › shortNumber | 0 | 0 | 22 | 0 |
 | tablabels › tableTabLabels | 7 | 0 | 0 | 0 |
 | rediskeys › keyTree | 7 | 1 | 0 | 0 |
 | columns › autoMap | 6 | 0 | 1 | 0 |
@@ -76,6 +76,8 @@ TS only / Rust only: inputs where only one side has that function (no counterpar
 | valuehints | ` korean-column ` | hintContext | ` null ` | ` {"column":"상태","mode":"values","op":null,"path":[],"quoted":true,"ref":null,"typed":""} ` |
 | results | ` inlist-mix ` | inList | ` "(('010', 12345678901234567890, true, 1.50), ('a''b', -3, false, 'NaN'), ('x', 1e5, NULL, -0.5), ('y', '+4', true, '.5'))" ` | ` "(('010', 12345678901234567890, true, 1.50), ('a''b', -3, false, 'NaN'), ('x', 1e5, NULL, -0.5), ('y', +4, true, .5))" ` |
 | results | ` inlist-mix ` | inList(column) | ` {"code":"('010', 'a''b', 'x', 'y')","flag":"(true, false)","n":"(12345678901234567890, -3, 1e5, '+4')","price":"(1.50, 'NaN', -0.5, '.5')"} ` | ` {"code":"('010', 'a''b', 'x', 'y')","flag":"(true, false)","n":"(12345678901234567890, -3, 1e5, +4)","price":"(1.50, 'NaN', -0.5, .5)"} ` |
+| results | ` year-float-x ` | numericColumns | ` ["ratio","yr","qty"] ` | ` ["ratio"] ` |
+| results | ` year-float-x ` | defaultAxes | ` {"x":"ratio","y":"yr"} ` | ` {"x":"yr","y":"ratio"} ` |
 | rediskeys | ` korean-emoji ` | keyTree | ` [{"children":[{"key":"사용자:1"},{"key":"사용자:2"}],"count":2,"folder":"사용자","path":"사용자"},{"children":[{"key":"😀:x"}],"count":1,"folder":"😀","path":"😀"},{"children":[{"key":"！:x"}],"count":1,"folder":"！","path":"！"},{"key":"키"}] ` | ` [{"children":[{"key":"사용자:1"},{"key":"사용자:2"}],"count":2,"folder":"사용자","path":"사용자"},{"children":[{"key":"！:x"}],"count":1,"folder":"！","path":"！"},{"children":[{"key":"😀:x"}],"count":1,"folder":"😀","path":"😀"},{"key":"키"}] ` |
 | keyspecs | ` Alt+Enter ` | formatSpec | ` "⌥↩" ` | ` "⌥Enter" ` |
 | keyspecs | ` Ctrl+Alt+Shift+Up ` | formatSpec | ` "⌃⌥⇧↑" ` | ` "⌃⌥⇧Up" ` |

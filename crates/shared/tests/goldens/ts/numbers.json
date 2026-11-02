@@ -156,5 +156,23 @@
   },
   "short:99999.99": {
     "shortNumber": "100K"
+  },
+  "short:1250000": {
+    "shortNumber": "1.3M"
+  },
+  "short:2250000000": {
+    "shortNumber": "2.3B"
+  },
+  "short:0.125": {
+    "shortNumber": "0.13"
+  },
+  "short:-0.125": {
+    "shortNumber": "-0.13"
+  },
+  "short:-0.001": {
+    "shortNumber": "0"
+  },
+  "short:1e+30": {
+    "shortNumber": "1e+21B"
   }
 }

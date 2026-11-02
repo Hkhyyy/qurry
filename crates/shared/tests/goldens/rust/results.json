@@ -250,5 +250,27 @@
         "2024-01-01T03:19:15.000.Z"
       ]
     }
+  },
+  "year-float-x": {
+    "defaultAxes": {
+      "x": "yr",
+      "y": "ratio"
+    },
+    "extract(TSV, no header)": "1.5\t\t1,000\n0.25\t\t2\n1.5\t\t 3 \n2\t\t",
+    "fracWidth": {
+      "qty": 0,
+      "ratio": 0,
+      "yr": 0
+    },
+    "inList": "((1.5, NULL, '1,000'), (0.25, NULL, '2'), (1.5, NULL, ' 3 '), (2, NULL, ''))",
+    "inList(column)": {
+      "qty": "('1,000', '2', ' 3 ', '')",
+      "ratio": "(1.5, 0.25, 2)",
+      "yr": "(NULL)"
+    },
+    "numericColumns": [
+      "ratio"
+    ],
+    "padFrac": {}
   }
 }
