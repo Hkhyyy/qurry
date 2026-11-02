@@ -5,6 +5,9 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Mou
 use ratatui::layout::Rect;
 use std::time::Instant;
 
+/// A yes pressed during a quiet confirm's pause (TLS_ASK_GRACE) doesn't count: say so instead of ignoring it
+const TOO_SOON: &str = "Wait a moment, then answer (n / Esc cancels)";
+
 fn inside(r: Rect, x: u16, y: u16) -> bool {
     r.width > 0 && x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height
 }
@@ -1172,7 +1175,12 @@ fn popup_key(app: &mut App, k: KeyEvent) {
         // n / Esc always cancel. A confirm that came up on its own (`opened`) takes y / Enter only after a pause, like AllowPlaintext below
         Popup::Confirm { text, on_yes, opened } => match k.code {
             KeyCode::Char('n') | KeyCode::Esc => {}
-            _ if opened.is_some_and(|t| t.elapsed() < App::TLS_ASK_GRACE) => app.popup = Some(Popup::Confirm { text, on_yes, opened: Some(Instant::now()) }),
+            _ if opened.is_some_and(|t| t.elapsed() < App::TLS_ASK_GRACE) => {
+                if matches!(k.code, KeyCode::Char('y' | 'Y') | KeyCode::Enter) {
+                    app.status = TOO_SOON.into();
+                }
+                app.popup = Some(Popup::Confirm { text, on_yes, opened: Some(Instant::now()) })
+            }
             KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter if app.hits.confirm_unseen => {
                 app.status = "The window is too small to show the whole question: enlarge it, then answer (n / Esc cancels)".into();
                 app.popup = Some(Popup::Confirm { text, on_yes, opened });
@@ -1184,7 +1192,12 @@ fn popup_key(app: &mut App, k: KeyEvent) {
         // goes on into the popup never allows plaintext. n / Esc cancel at once
         Popup::AllowPlaintext { text, on_yes, opened } => match k.code {
             KeyCode::Char('n') | KeyCode::Esc => {}
-            _ if opened.elapsed() < App::TLS_ASK_GRACE => app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened: Instant::now() }),
+            _ if opened.elapsed() < App::TLS_ASK_GRACE => {
+                if matches!(k.code, KeyCode::Char('y' | 'Y')) {
+                    app.status = TOO_SOON.into();
+                }
+                app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened: Instant::now() })
+            }
             KeyCode::Char('y') | KeyCode::Char('Y') if app.hits.confirm_unseen => {
                 app.status = "The window is too small to show the whole question: enlarge it, then answer (n / Esc cancels)".into();
                 app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened });

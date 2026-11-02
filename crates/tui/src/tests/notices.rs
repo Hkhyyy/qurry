@@ -88,7 +88,7 @@ async fn production_confirm_takes_enter_only_after_a_pause() {
     h.key("x");
     h.key("Enter");
     assert!(matches!(&h.app.popup, Some(Popup::Confirm { .. })), "{}", h.app.status);
-    assert!(!h.app.status.starts_with("Executing"), "{}", h.app.status);
+    assert_eq!(h.app.status, "Wait a moment, then answer (n / Esc cancels)");
     read_it(&mut h);
     h.key("Enter");
     assert!(h.app.popup.is_none());
@@ -129,4 +129,61 @@ async fn a_confirm_waits_for_the_popup_being_typed_in() {
     read_it(&mut h);
     h.key("Enter");
     assert_eq!(h.app.status, "ran");
+}
+
+/// Tab A (PROD, the delete) and tab B (a console on another Production source, OTHER). F5 in tab A, then Recent Tabs opens before
+/// the counts are back, so the confirm waits; the user picks tab B and the palette closes. Returns (A, B) with the confirm read
+async fn confirm_waits_while_the_palette_switches_tabs(close_a: bool) -> (Harness, u64, u64) {
+    let mut h = production_console().await;
+    let a = h.app.tabs[h.app.active].id;
+    let cfg = serde_json::from_value(serde_json::json!({
+        "id": "o", "name": "OTHER", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "d", "options": { "confirmChanges": true }
+    }))
+    .unwrap();
+    h.app.state.store.save(&cfg).unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    let b = h.app.restore_console("o", "d".into(), "other".into(), "select 1").unwrap();
+    h.key("F5");
+    h.app.palette_tabs();
+    for _ in 0..100 {
+        h.settle().await;
+        if !h.app.waiting.is_empty() {
+            break;
+        }
+    }
+    assert!(!h.app.waiting.is_empty(), "the confirm doesn't wait: {}", h.app.status);
+    if close_a {
+        h.app.close_tab(h.app.tab_index(a).unwrap());
+    }
+    let Some(Popup::Palette(p)) = &mut h.app.popup else { panic!("palette gone") };
+    p.sel = p.items.iter().position(|i| matches!(i.action, crate::app::PAction::Tab(id) if id == b)).unwrap();
+    h.key("Enter");
+    assert_eq!(h.app.tabs[h.app.active].id, b);
+    read_it(&mut h);
+    (h, a, b)
+}
+
+fn running(h: &Harness, id: u64) -> bool {
+    h.app.tab_index(id).is_some_and(|i| matches!(&h.app.tabs[i].kind, crate::app::TabKind::Console(c) if c.running))
+}
+
+/// The confirm runs its statements in the console that asked (tab A, shown again), never in the tab active when y is pressed
+#[tokio::test]
+async fn a_waiting_production_confirm_runs_in_the_console_that_asked() {
+    let (mut h, a, b) = confirm_waits_while_the_palette_switches_tabs(false).await;
+    h.key("y");
+    assert!(!running(&h, b), "ran in tab B: {}", h.app.status);
+    assert!(running(&h, a), "tab A didn't run: {}", h.app.status);
+    assert_eq!(h.app.tabs[h.app.active].id, a);
+}
+
+/// The console that asked was closed meanwhile: y runs nothing and says so
+#[tokio::test]
+async fn a_waiting_production_confirm_runs_nothing_once_its_console_is_closed() {
+    let (mut h, a, b) = confirm_waits_while_the_palette_switches_tabs(true).await;
+    assert!(h.app.tab_index(a).is_none());
+    h.key("y");
+    assert!(!running(&h, b), "ran in tab B: {}", h.app.status);
+    assert_eq!(h.app.status, "The console was closed: nothing ran");
 }

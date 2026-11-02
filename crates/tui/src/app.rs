@@ -1985,6 +1985,18 @@ impl App {
         self.run_stmts_checked(stmts, explain, confirmed, confirmed)
     }
 
+    /// on_yes of a confirm that runs statements: they run in the console that asked (tab id), shown again, never in whichever tab
+    /// is active when it is answered (that may be another source, whose own checks would be skipped). Nothing runs once it is closed
+    fn in_console(id: u64, run: impl FnOnce(&mut App) + 'static) -> Box<dyn FnOnce(&mut App)> {
+        Box::new(move |a| match a.tab_index(id) {
+            Some(i) => {
+                a.activate(i);
+                run(a)
+            }
+            None => a.status = "The console was closed: nothing ran".into(),
+        })
+    }
+
     /// unsafe_ok = dangerous statement confirmed, prod_ok = Production confirmation (rows to change) given
     fn run_stmts_checked(&mut self, stmts: Vec<String>, explain: bool, confirmed: bool, prod_ok: bool) {
         let analyze = explain && self.analyze_next;
@@ -2007,7 +2019,7 @@ impl App {
             && let Some((why, s)) = stmts.iter().find_map(|s| qurry_core::guard::unsafe_statement(s, kind).map(|w| (w, s.clone())))
         {
             let preview: String = s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect();
-            self.popup = Some(Popup::Confirm { opened: None, text: format!("{why}:\n  {preview}\nRun it anyway?"), on_yes: Box::new(move |a| a.run_stmts_checked(stmts, explain, true, prod_ok)) });
+            self.popup = Some(Popup::Confirm { opened: None, text: format!("{why}:\n  {preview}\nRun it anyway?"), on_yes: Self::in_console(id, move |a| a.run_stmts_checked(stmts, explain, true, prod_ok)) });
             return;
         }
         // Production Data Source: count the rows to change, show it, and ask (counting is SELECT count(*) — changes nothing)
@@ -2053,7 +2065,7 @@ impl App {
                         a.open_after_notices(Popup::Confirm {
                             opened: None,
                             text: format!("Production data source \"{name}\" — this changes data:\n\n{}\n\nRun it?", lines.join("\n")),
-                            on_yes: Box::new(move |a| a.run_stmts_checked(stmts, explain, true, true)),
+                            on_yes: Self::in_console(id, move |a| a.run_stmts_checked(stmts, explain, true, true)),
                         });
                     },
                 );
@@ -2071,7 +2083,7 @@ impl App {
             self.popup = Some(Popup::Confirm {
                 opened: None,
                 text: explain_analyze_ask_text(&asks),
-                on_yes: Box::new(move |a| {
+                on_yes: Self::in_console(id, move |a| {
                     a.analyze_next = true;
                     a.run_stmts(stmts, explain, true);
                     a.analyze_next = false;
