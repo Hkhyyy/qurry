@@ -91,7 +91,7 @@ pnpm tui-snapshots    # redraw the TUI screens for Storybook after changing the 
 
 ## Docs
 
-The user guide is in English (`docs/`) and Korean (`docs/ko/`), chapter for chapter. A change to a feature updates both. After changing a shortcut, regenerate the tables in both languages' [shortcuts-gui.md](shortcuts-gui.md) and [shortcuts-tui.md](shortcuts-tui.md) with `python3 scripts/gen-keymap-docs.py`.
+The user guide is in English (`docs/`) and Korean (`docs/ko/`), chapter for chapter. A change to a feature updates both. After changing a shortcut, regenerate the tables in both languages' [shortcuts-gui.md](shortcuts-gui.md) and [shortcuts-tui.md](shortcuts-tui.md) with `python3 scripts/gen-keymap-docs.py`. Rebindable commands of both apps (ids, names, default keys) are one table, `crates/shared/src/keymap-table.json`; an id is what keymap.json stores, so it never changes.
 
 ---
 

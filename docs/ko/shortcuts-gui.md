@@ -57,7 +57,7 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `⇧⌘]` | Next tab |
 | `⇧⌘[` | Previous tab |
 | `⇧F6` | Rename console |
-| `⌥⇥` | Go to the next split (⇧ previous) |
+| `⌥⇥ / ⌥⇧⇥` | Go to the next split (⇧ previous) |
 | `right-click tab` | Pin, Split Right/Down (up to 4 panes), Move to Next Group, Close others… |
 | `drag tab` | Reorder, or drop on a pane's right/bottom edge to split it (up to 4) |
 
@@ -73,16 +73,16 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `⌥⇧⌘G` | Copy DDL to clipboard |
 | `⌥⇧⌘B` | Open DDL in console |
 | `⌥⇧⌘C` | Copy reference |
+| `F1` | Quick documentation |
 | `⌘F6` | Modify table (columns, keys, indexes, foreign keys) |
 | `⇧F6` | Rename table / view / sequence / schema / database |
-| `F1` | Quick documentation |
 | `⌘;` | Data source properties |
 | `⌘n` | New data source |
 | `⌘d` | Duplicate data source |
-| `⌘r` | Refresh |
+| `⌘r / ⌥⇧⌘R` | Refresh |
 | `⌥⌘y` | Refresh (anywhere) |
 | `⌘F2` | Disconnect |
-| `⌦` | Remove data source / drop object (asks first) |
+| `⌦ / ⌘⌫` | Remove data source / drop object (asks first) |
 | `type letters` | Speed search in the tree |
 
 ## Query console
@@ -122,7 +122,7 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `⌘⌫` | Delete rows |
 | `⌥⌘z` | Revert selected changes |
 | `⌘↩` | Submit changes |
-| `⌘c / ⌘v` | 복사 (고른 extractor 로. CSV · TSV 는 값만 — 우클릭 › Copy with Headers 는 컬럼 이름까지) / 붙여넣기 |
+| `⌘c / ⌘v` | Copy (with chosen extractor; CSV / TSV copy values only — right-click › Copy with Headers adds the column names) / paste |
 | `⌘a` | Select all |
 | `⌘f` | Find in grid |
 | `⌘r` | Reload |
