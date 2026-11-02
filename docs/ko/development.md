@@ -6,14 +6,7 @@
 
 ## 준비물
 
-Rust (stable), Node.js 22, pnpm 10. GUI 는 WebAssembly 로 컴파일한 Rust (`crates/shared`) 도 쓰므로 이것도 필요합니다:
-
-```bash
-rustup target add wasm32-unknown-unknown
-cargo install wasm-bindgen-cli --version 0.2.129 --locked   # crates/shared-wasm/Cargo.toml 의 wasm-bindgen 버전과 같아야 함
-```
-
-`pnpm wasm` 이 `src/wasm/pkg` 로 빌드합니다 (커밋하지 않음). `pnpm dev`, `pnpm build`, `pnpm test`, Storybook 스크립트가 먼저 이걸 돌리고, 빠진 게 있으면 무엇을 설치할지 알려 줍니다. [binaryen](https://github.com/WebAssembly/binaryen) 의 `wasm-opt` 가 깔려 있으면 모듈을 더 줄입니다 (로컬에서는 선택. CI 와 릴리스 빌드는 `npm install -g binaryen@132.0.0` 으로 설치하며, 로컬에서도 같은 명령으로 깔 수 있습니다).
+Rust, Node.js, pnpm, WebAssembly 도구: [CONTRIBUTING › Setup](../../CONTRIBUTING.md#setup) (영어).
 
 ## 빌드와 실행
 
@@ -58,23 +51,9 @@ drivers/*     드라이버 프로그램 (SQLite, DuckDB, SQL Server, ClickHouse,
 
 ## 테스트
 
-실패하는 테스트를 먼저 씁니다: 버그 수정은 그 버그를 재현하는 테스트로, 기능은 새 동작을 시험하는 테스트로 시작합니다 (테스트할 수 없는 화면 · 터미널 키는 손으로 확인). 모든 풀 리퀘스트에서 CI 가 돕니다: Rust 단위 테스트, PostgreSQL (pgvector 포함) / MySQL / Redis / ClickHouse / MongoDB / Qdrant / Chroma / Milvus 컨테이너로 통합 테스트, 같은 테스트를 옛 서버 (PostgreSQL 12, MySQL 5.7, ClickHouse 22.8, MongoDB 5, SQL Server 2017) 로, vitest 와 웹 빌드.
+단위 테스트와 실제 PostgreSQL · MySQL · Redis 컨테이너로 도는 테스트를 실행하는 방법: [CONTRIBUTING › Tests](../../CONTRIBUTING.md#tests) (영어). 모든 풀 리퀘스트에서 CI 가 돕니다: Rust 단위 테스트, PostgreSQL (pgvector 포함) / MySQL / Redis / ClickHouse / MongoDB / Qdrant / Chroma / Milvus 컨테이너로 통합 테스트, 같은 테스트를 옛 서버 (PostgreSQL 12, MySQL 5.7, ClickHouse 22.8, MongoDB 5, SQL Server 2017) 로, vitest 와 웹 빌드.
 
-```bash
-cargo test -p qurry-core -p qurry-tui -p qurry-mcp   # 단위 테스트 (DB 없이)
-pnpm test                                               # GUI 로직 (src/lib/*.test.ts, vitest)
-cargo test --workspace -- --include-ignored --skip tunnel   # 로컬 PostgreSQL 과 아래 컨테이너 필요
-QURRY_TEST_PG=127.0.0.1:15499:postgres:shop cargo test -p qurry-core session -- --ignored   # 다른 곳의 PostgreSQL (host:port:user:db)
-```
-
-통합 테스트용 컨테이너:
-
-```bash
-docker run -d --name dbtool-mysql-test -e MYSQL_ROOT_PASSWORD=dbtool -e MYSQL_DATABASE=shop -p 13306:3306 mysql:8.4
-docker run -d --name dbtool-redis-test -p 16379:6379 redis:7-alpine
-# TLS (16391), Sentinel (26392 → 16392), Cluster (17001-17003) 서버: crates/core/src/redisdb.rs 의 테스트 주석 참고
-# (TLS 인증서 폴더: QURRY_TEST_TLS_DIR, 기본 /tmp/dbtool-tls)
-```
+Redis TLS (16391), Sentinel (26392 → 16392), Cluster (17001-17003) 서버는 `crates/core/src/redisdb.rs` 의 테스트 주석에 있습니다 (TLS 인증서 폴더: `QURRY_TEST_TLS_DIR`, 기본 `/tmp/dbtool-tls`).
 
 드라이버 · 벡터 DB 테스트는 서버를 `host:port:user:password:database` 로 주면 (그리고 드라이버를 빌드했으면 — `cargo build -p qurry-driver-<name>`) 돕니다: `QURRY_TEST_CH`, `QURRY_TEST_MSSQL`, `QURRY_TEST_MONGO`, `QURRY_TEST_ORACLE`, `QURRY_TEST_QDRANT`, `QURRY_TEST_CHROMA`, `QURRY_TEST_MILVUS` (예: `QURRY_TEST_QDRANT=127.0.0.1:6333:::qdrant`). pgvector 와 RAG 테스트는 서버에 `vector` 확장이 있으면 (`pgvector/pgvector:pg16`) `QURRY_TEST_PG` 를 씁니다. RAG 테스트는 가짜 임베딩 서버를 써서 모델이 필요 없습니다.
 
@@ -82,12 +61,7 @@ TUI 테스트는 DB 없이 앱을 움직일 수 있습니다: `crates/tui/src/te
 
 ## UI 컴포넌트와 Storybook
 
-GUI 는 `src/ui` 의 공통 컴포넌트 (버튼, 도구 막대, 대화상자, 확인 창, 폼 칸, 탭, 안내) 와 디자인 토큰 (간격, 글자 크기, 테마별 색) 으로 만든다. 규칙은 [src/ui/README.md](../../src/ui/README.md). TUI 는 `crates/tui/src/kit` 에서 같은 이름 · 같은 색을 쓴다. 둘 다 원자 · 분자 · 유기체로 나눈다.
-
-```bash
-pnpm storybook        # http://localhost:6006 — GUI 컴포넌트를 테마별로, TUI 화면까지
-pnpm tui-snapshots    # TUI 를 바꾼 뒤 Storybook 의 TUI 화면을 다시 그린다
-```
+GUI 는 `src/ui` 의 공통 컴포넌트 (버튼, 도구 막대, 대화상자, 확인 창, 폼 칸, 탭, 안내) 와 디자인 토큰 (간격, 글자 크기, 테마별 색) 으로 만든다. 규칙은 [src/ui/README.md](../../src/ui/README.md). TUI 는 `crates/tui/src/kit` 에서 같은 이름 · 같은 색을 쓴다. 둘 다 원자 · 분자 · 유기체로 나눈다. Storybook 실행: [CONTRIBUTING › UI and Storybook](../../CONTRIBUTING.md#ui-and-storybook) (영어).
 
 ## 문서
 

@@ -74,6 +74,12 @@ async fn export(st: &AppState, sql: &str, format: Format, table: Option<(&str, &
     r.text.unwrap()
 }
 
+/// Search the given tables for "needle"
+fn fts(tables: Vec<(&str, &str)>) -> qurry_core::meta::FtsRequest {
+    let tables: Vec<(String, String)> = tables.into_iter().map(|(s, t)| (s.into(), t.into())).collect();
+    serde_json::from_value(json!({ "text": "needle", "mode": "contains", "matchCase": false, "columns": "text", "tables": tables, "limit": 10 })).unwrap()
+}
+
 fn hint(schema: &str, table: &str, column: &str) -> HintReq {
     serde_json::from_value(json!({ "schema": schema, "table": table, "column": column })).unwrap()
 }
@@ -420,6 +426,32 @@ async fn pg_jobs() {
     q(&boot, "drop database qm_jobs with (force)").await;
 }
 
+/// Full-text search reads in a READ ONLY transaction: a view whose function has a side effect
+/// that a rollback can't undo (nextval) is refused, so the table gives no hit and the sequence doesn't move
+#[tokio::test]
+#[ignore]
+async fn pg_full_text_search_is_read_only() {
+    let Some(c) = pg_env() else { return };
+    let st = state(&c, None).await;
+    for s in [
+        "drop schema if exists qm_fts_ro cascade",
+        "create schema qm_fts_ro",
+        "create sequence qm_fts_ro.hits",
+        "create table qm_fts_ro.t (id int, body text)",
+        "insert into qm_fts_ro.t values (1, 'needle')",
+        "create function qm_fts_ro.f() returns bigint language sql volatile as 'select nextval(''qm_fts_ro.hits'')'",
+        "create view qm_fts_ro.v as select id, body, qm_fts_ro.f() as x from qm_fts_ro.t",
+    ] {
+        q(&st, s).await;
+    }
+    let hits = st.full_text_search(ID.into(), fts(vec![("qm_fts_ro", "v")])).await.unwrap();
+    assert!(hits.is_empty(), "{hits:?}");
+    assert_eq!(q(&st, "select is_called from qm_fts_ro.hits").await.rows[0][0], json!(false), "nextval ran");
+    // A plain table is still found
+    assert_eq!(st.full_text_search(ID.into(), fts(vec![("qm_fts_ro", "t")])).await.unwrap().len(), 1);
+    q(&st, "drop schema qm_fts_ro cascade").await;
+}
+
 // ───────── MySQL ─────────
 
 /// A fresh database `name` and a state whose source points at it
@@ -617,6 +649,28 @@ async fn mysql_jobs() {
     let a = st.audit_log(Some(ID.into()), String::new(), 1).remove(0);
     assert!(a.undo.as_deref().is_some_and(|u| u.contains("00FF")), "{a:?}");
     q(&st, "drop database qm_jobs").await;
+}
+
+/// Full-text search reads in a READ ONLY transaction: a view whose stored function writes is refused (error 1792), not committed
+#[tokio::test]
+#[ignore]
+async fn mysql_full_text_search_is_read_only() {
+    let Some(st) = my_state("qm_fts_ro").await else { return };
+    for s in [
+        "create table qm_fts_ro.audit (id int auto_increment primary key)",
+        "create table qm_fts_ro.t (id int, body text)",
+        "insert into qm_fts_ro.t values (1, 'needle')",
+        "create function qm_fts_ro.f() returns int deterministic modifies sql data begin insert into qm_fts_ro.audit values (); return 1; end",
+        "create view qm_fts_ro.v as select id, body, qm_fts_ro.f() as x from qm_fts_ro.t",
+    ] {
+        q(&st, s).await;
+    }
+    let hits = st.full_text_search(ID.into(), fts(vec![("qm_fts_ro", "v")])).await.unwrap();
+    assert!(hits.is_empty(), "{hits:?}");
+    assert_eq!(q(&st, "select count(*) from qm_fts_ro.audit").await.rows[0][0], json!(0), "the function's INSERT was committed");
+    // A plain table is still found
+    assert_eq!(st.full_text_search(ID.into(), fts(vec![("qm_fts_ro", "t")])).await.unwrap().len(), 1);
+    q(&st, "drop database qm_fts_ro").await;
 }
 
 // ───────── Redis ─────────

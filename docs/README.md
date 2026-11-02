@@ -13,6 +13,7 @@ Everything Qurry does, chapter by chapter. Start with **Getting started** if you
 | [Database tools](database-tools.md) | Admin reports (sessions, locks, slow queries, sizes, vacuum, privileges), diagrams, compare & migrate, backup & restore, creating and modifying tables / views / schemas, import (CSV / JSON / Excel), test data, copying related rows with masking, charts, history & snippets, explain plans |
 | [Vector databases and AI search](vector-and-rag.md) | Qdrant, Chroma, Milvus, pgvector, and searching a table by meaning (RAG) |
 | [MCP server](mcp.md) | Let AI tools such as Claude Code explore and query your databases, read-only by default |
+| [MCP threat model](mcp-security.md) | What an AI client can reach per MCP setting, how read-only is enforced, prompt injection, and what Qurry does not protect against |
 | [Safety](safety.md) | Read-only data sources, transactions, confirmations, the production log and undo SQL, and how releases are signed |
 | [GUI keyboard shortcuts](shortcuts-gui.md) | Every GUI shortcut (also in the app: `⇧⌘/`) |
 | [TUI keyboard shortcuts](shortcuts-tui.md) | Every TUI key (also in the app: `F1`) |

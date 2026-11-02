@@ -1359,7 +1359,7 @@ mod tests {
     async fn housekeeping_keepalive_and_auto_disconnect() {
         let dir = std::env::temp_dir().join(format!("dbtool-hk-{}", uuid::Uuid::new_v4()));
         let state = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
-        // QURRY_TEST_PG=host:port:user:db (default: this machine's PostgreSQL)
+        // QURRY_TEST_PG=host:port:user:db (default: local PostgreSQL as $USER)
         let env = std::env::var("QURRY_TEST_PG").ok();
         let part = |i: usize, d: String| env.as_ref().and_then(|e| e.split(':').nth(i).map(String::from)).unwrap_or(d);
         let mut cfg = ConnectionConfig {
