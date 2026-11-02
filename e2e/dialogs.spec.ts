@@ -15,6 +15,31 @@ test("Settings (⌘,): sections, theme, Escape closes", async ({ page }) => {
   await expect(dialog(page)).toHaveCount(0);
 });
 
+test("Settings › Updates › Channel: stable by default, beta is kept after reopening", async ({ page }) => {
+  await page.keyboard.press("Meta+Comma");
+  const channel = dialog(page).getByRole("combobox", { name: /Channel/ });
+  await expect(channel.locator("option")).toHaveText(["Stable", "Beta"]);
+  await expect(channel).toHaveValue("stable");
+  await channel.selectOption("beta");
+  // The mock offers 0.1.2 over 0.1.0
+  await expect(dialog(page).getByText("Qurry 0.1.2 is available on this channel.")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Meta+Comma");
+  await expect(dialog(page).getByRole("combobox", { name: /Channel/ })).toHaveValue("beta");
+});
+
+test("Settings › Updates › Channel with automatic checks off: saved without a request, Check Now looks", async ({ page }) => {
+  await page.evaluate(() => localStorage.setItem("dbtool.updateCheck", "off"));
+  await openApp(page);
+  await page.keyboard.press("Meta+Comma");
+  const field = dialog(page).locator(".ui-field-label", { hasText: "Channel" });
+  // The label fits its column (not "Chan…")
+  expect(await field.evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(true);
+  await dialog(page).getByRole("combobox", { name: /Channel/ }).selectOption("beta");
+  await expect(dialog(page).getByText("Saved. Check Now looks for updates on this channel.")).toBeVisible();
+  await expect(page.locator(".statusbar")).not.toContainText("available");
+});
+
 test("Keymap Reference (⇧⌘/) lists every row with ⌘⌥⌃⇧ keys", async ({ page }) => {
   await page.keyboard.press("Meta+Shift+Slash");
   await expect(dialog(page).locator(".ui-modal-title")).toHaveText("Keymap Reference");

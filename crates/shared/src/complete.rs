@@ -119,12 +119,26 @@ pub fn is_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
+/// Keywords a table reference follows
+const REF_KEYWORDS: [&str; 4] = ["from", "join", "update", "into"];
+
+fn is_ref_keyword(w: &str) -> bool {
+    REF_KEYWORDS.iter().any(|k| w.eq_ignore_ascii_case(k))
+}
+
+/// The ref a qualifier (lowercase) names: an alias first, else a table by its name without the schema
+fn named<'a>(refs: &'a [(String, Option<String>)], q: &str) -> Option<&'a (String, Option<String>)> {
+    refs.iter()
+        .find(|(_, a)| a.as_ref().is_some_and(|a| a.to_lowercase() == q))
+        .or_else(|| refs.iter().find(|(r, _)| r.rsplit('.').next().unwrap_or(r).to_lowercase() == q))
+}
+
 /// Find `from|join|update|into <ref> [as] [alias]`
 fn tables_in_statement(text: &str) -> Vec<(String, Option<String>)> {
     let mut toks = Tokens { text, at: 0 };
     let mut out = vec![];
     while let Some(t) = toks.next() {
-        if !["from", "join", "update", "into"].iter().any(|k| t.eq_ignore_ascii_case(k)) {
+        if !is_ref_keyword(t) {
             continue;
         }
         // Look ahead without consuming (the ref and alias are still visited as tokens)
@@ -185,6 +199,12 @@ impl<'a> Iterator for Tokens<'a> {
     }
 }
 
+/// The tab's DB as the schema its bare names live in: only in MySQL, where the schema is the DB. A PostgreSQL schema named
+/// after the database isn't on the default search_path, so its tables keep their schema
+fn db_schema(db: &str, mysql: bool) -> &str {
+    if mysql { db } else { "" }
+}
+
 /// The table a reference names: `schema.table`, or a bare name (in `public` or the tab's DB first, then any schema)
 fn find_table<'a>(m: &'a Meta, r: &str, db: &str) -> Option<&'a CompletionTable> {
     let r = r.to_lowercase();
@@ -201,7 +221,7 @@ fn find_table<'a>(m: &'a Meta, r: &str, db: &str) -> Option<&'a CompletionTable>
 }
 
 /// Build candidates from the text before the cursor. Returns: (length of the prefix to replace in chars, candidates)
-/// `text` is the statement (or the whole script), `before` is the part of the cursor's line before the cursor, `db` is the tab's DB
+/// `text` is the caret's statement (sql::statement_at: aliases and table refs resolve in it, not in the rest of the script), `before` is the part of the cursor's line before the cursor, `db` is the tab's DB
 /// (in MySQL, schema = DB; "" for none), `mysql` reads MySQL json paths in value spots
 pub fn suggest(m: &Meta, text: &str, before: &str, db: &str, mysql: bool, o: Options) -> (usize, Vec<Item>) {
     let (n, mut items, rest) = suggest_lead(m, text, before, db, mysql, o);
@@ -223,6 +243,7 @@ pub struct Rest {
 
 /// `suggest` in two parts: (prefix length, the leading candidates, what the rest comes from). None = no rest (after a `.`, in quotes)
 pub fn suggest_lead(m: &Meta, text: &str, before: &str, db: &str, mysql: bool, o: Options) -> (usize, Vec<Item>, Option<Rest>) {
+    let db = db_schema(db, mysql);
     let all = &m.tables;
     let prefix: String = before.chars().rev().take_while(|c| is_word(*c)).collect::<Vec<_>>().into_iter().rev().collect();
     let head = &before[..before.len() - prefix.len()];
@@ -252,13 +273,10 @@ pub fn suggest_lead(m: &Meta, text: &str, before: &str, db: &str, mysql: bool, o
         }
         // A schema of that name wins where a table name goes (`from sales.`) and over a table the statement doesn't name
         let schema = m.lower.iter().any(|(ls, _)| *ls == q);
-        let at_ref = h[..start].trim_end().rsplit(|c: char| !is_word(c)).next().is_some_and(|w| ["from", "join", "update", "into"].iter().any(|k| w.eq_ignore_ascii_case(k)));
+        let at_ref = h[..start].trim_end().rsplit(|c: char| !is_word(c)).next().is_some_and(is_ref_keyword);
         // alias. or table. → columns
         let refs = tables_in_statement(text);
-        let hit = refs
-            .iter()
-            .find(|(_, a)| a.as_ref().is_some_and(|a| a.to_lowercase() == q))
-            .or_else(|| refs.iter().find(|(r, _)| r.rsplit('.').next().unwrap_or(r).to_lowercase() == q));
+        let hit = named(&refs, &q);
         let t = if schema && at_ref { None } else { hit.and_then(|(r, _)| find_table(m, r, db)).or_else(|| if schema { None } else { find_table(m, &q, db) }) };
         if let Some(t) = t {
             let items = t.columns.iter().filter(|(c, _)| matches(c)).map(|(c, ty)| Item { label: c.clone(), detail: ty.clone(), insert: c.clone(), kind: ItemKind::Column }).collect();
@@ -275,7 +293,7 @@ pub fn suggest_lead(m: &Meta, text: &str, before: &str, db: &str, mysql: bool, o
     }
 
     let mut columns: Vec<Item> = vec![];
-    // Labels already in `columns`: the GUI passes the whole script, which can name thousands of columns
+    // Labels already in `columns`: a long statement can name thousands of columns
     let mut seen: HashSet<&str> = HashSet::new();
     let refs = tables_in_statement(text);
     let mut looked: HashSet<&str> = HashSet::new();
@@ -453,29 +471,26 @@ pub fn hintable(mode: HintMode, path: &[String], type_name: &str) -> bool {
 
 /// If the cursor is at a value · json key spot, that table · column (only for columns worth suggesting)
 pub fn hint_at(m: &Meta, text: &str, before: &str, db: &str, mysql: bool) -> Option<HintAt> {
+    let db = db_schema(db, mysql);
     let ctx = context(before, mysql)?;
     let refs = tables_in_statement(text);
-    let named: Vec<&(String, Option<String>)> = match &ctx.r#ref {
-        Some(q) => {
-            let q = q.to_lowercase();
-            refs.iter()
-                .find(|(_, a)| a.as_ref().is_some_and(|a| a.to_lowercase() == q))
-                .or_else(|| refs.iter().find(|(r, _)| r.rsplit('.').next().unwrap_or(r).to_lowercase() == q))
-                .into_iter()
-                .collect()
-        }
+    let candidates: Vec<&(String, Option<String>)> = match &ctx.r#ref {
+        Some(q) => named(&refs, &q.to_lowercase()).into_iter().collect(),
         None => refs.iter().collect(),
     };
     let lc = ctx.column.to_lowercase();
-    let (t, (col, ty)) = named.iter().filter_map(|(r, _)| find_table(m, r, db)).find_map(|t| t.columns.iter().find(|(c, _)| c.to_lowercase() == lc).map(|c| (t, c)))?;
+    let (t, (col, ty)) = candidates.iter().filter_map(|(r, _)| find_table(m, r, db)).find_map(|t| t.columns.iter().find(|(c, _)| c.to_lowercase() == lc).map(|c| (t, c)))?;
     hintable(ctx.mode, &ctx.path, ty).then(|| HintAt { schema: t.schema.clone(), table: t.name.clone(), column: col.clone(), type_name: ty.clone(), path: ctx.path, mode: ctx.mode, quoted: ctx.quoted, typed: ctx.typed, op: ctx.op, mysql })
 }
 
 /// Text to insert for a value: inside quotes only doubled ' (and doubled \ on MySQL, where it escapes) plus the closing quote
-/// when `close`; outside, numeric · boolean column values as they are, the rest '…'
+/// when `close`; outside, a number or true/false in a numeric · boolean column as it is, the rest '…'.
+/// Bare needs both: the type is one by its name (a domain such as realm_name is not real), and the value itself is a plain literal
+/// (a value is data from the DB, so anything else would be SQL typed into the statement)
 pub fn hint_insert(value: &str, mode: HintMode, path: &[String], type_name: &str, quoted: bool, close: bool, mysql: bool) -> String {
     let esc = if mysql { value.replace('\\', "\\\\") } else { value.to_string() }.replace('\'', "''");
-    let bare = mode == HintMode::Values && path.is_empty() && ["int", "numeric", "decimal", "float", "double", "real", "serial", "bool", "bit", "money"].iter().any(|k| type_name.to_lowercase().contains(k));
+    let literal = crate::extract::number_text(value, true) || value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false");
+    let bare = mode == HintMode::Values && path.is_empty() && crate::extract::numeric_type(type_name) && literal;
     if quoted {
         if close { format!("{esc}'") } else { esc }
     } else if bare {
@@ -647,6 +662,12 @@ mod tests {
         assert_eq!(hint_items(&my, &hs(&[r"x\' or 1=1 -- "]), None, false, TUI)[0].insert, r"'x\\'' or 1=1 -- '", "MySQL: the value stays one literal");
         let h = hint_at(&m, "select * from orders where id = ", "select * from orders where id = ", "app", false).unwrap();
         assert_eq!(hint_items(&h, &hs(&["7"]), None, false, TUI)[0].insert, "7");
+        // Bare only for a plain number or true/false in a column whose type is numeric · boolean by name
+        let bare = |v: &str, ty: &str| hint_insert(v, HintMode::Values, &[], ty, false, false, false);
+        assert_eq!(bare("x' or true; delete from realm_users; --", "realm_name"), "'x'' or true; delete from realm_users; --'", "a domain named *real*");
+        assert_eq!(bare("7", "realm_name"), "'7'");
+        assert_eq!(bare("1; drop table t", "int4"), "'1; drop table t'", "not a number, even in a numeric column");
+        assert_eq!([bare("-1.5e3", "numeric(10,2)"), bare("TRUE", "boolean"), bare("1", "tinyint(1)"), bare("2", "interval")], ["-1.5e3", "TRUE", "1", "'2'"]);
         let h = hint_at(&m, "select * from orders where data ->> ", "select * from orders where data ->> ", "app", false).unwrap();
         assert_eq!(hint_items(&h, &hs(&["kind"]), None, false, TUI)[0].insert, "'kind'");
         let v = hint_items(&h, &hs(&[r#"[{"code": "x"}]"#]), None, true, TUI);
@@ -663,6 +684,18 @@ mod tests {
         let all = Meta::new(vec![CompletionTable { schema: "shop".into(), name: "items".into(), columns: vec![] }]);
         let (_, v) = suggest(&all, "select * from it", "select * from it", "shop", true, TUI);
         assert_eq!(v[0].insert, "items");
+    }
+
+    #[test]
+    fn postgres_db_is_not_a_schema() {
+        // Database `app` with schemas `app` and `public`: bare names resolve on search_path ("$user", public), not in `app`
+        let t = |schema: &str, name: &str, col: &str| CompletionTable { schema: schema.into(), name: name.into(), columns: vec![(col.into(), "text".into())] };
+        let m = Meta::new(vec![t("app", "orders", "o"), t("app", "users", "a_only"), t("public", "users", "p_only")]);
+        let (_, v) = suggest(&m, "select * from ord", "select * from ord", "app", false, TUI);
+        assert_eq!(v.iter().find(|i| i.label == "orders").map(|i| i.insert.as_str()), Some("app.orders"));
+        let text = "select * from users u where u.";
+        let (_, v) = suggest(&m, text, text, "app", false, TUI);
+        assert!(v.iter().any(|i| i.label == "p_only") && !v.iter().any(|i| i.label == "a_only"), "{v:?}");
     }
 
     #[test]
@@ -715,7 +748,7 @@ mod tests {
         }
     }
 
-    /// A long console (the GUI passes the whole script): 300 statements over tables with 20 distinct columns each, ~6k columns.
+    /// A long text (as if a whole script were passed): 300 statements over tables with 20 distinct columns each, ~6k columns.
     /// Timing only means something in a release build: `cargo test --release -p qurry-shared long_script -- --ignored`
     #[test]
     #[ignore = "timing: run with --release"]
@@ -759,6 +792,8 @@ mod tests {
             let before = &text[text[..at].rfind('\n').map_or(0, |i| i + 1)..at];
             let after = text[at..].chars().next();
             let (db, mysql) = (st(&c["db"]), c["mysql"].as_bool().unwrap_or(false));
+            // As update_completion: the caret's statement
+            let text = crate::sql::statement_at(&text, at, if mysql { crate::DbKind::Mysql } else { crate::DbKind::Postgres }).unwrap_or_default();
             let hints = |mode: &str| c["hints"].get(mode).map(|v| v.as_array().unwrap().iter().map(|p| Hint { value: st(&p[0]), count: p[1].as_i64().unwrap() }).collect::<Vec<_>>());
             let o = if let Some(h) = hint_at(&m, &text, before, &db, mysql) {
                 let name = |m: HintMode| format!("{m:?}").to_lowercase();

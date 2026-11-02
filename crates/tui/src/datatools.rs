@@ -255,6 +255,13 @@ mod tests {
         assert!(text.ends_with("… 2 more"), "{text}");
         let big = QueryResult { rows: vec![vec![json!(1), json!("a"), json!("1332117.67")]], ..r };
         assert!(super::bar_chart(&big, 10, 30).unwrap().1.ends_with("1,332,117.67"));
+        // A float X reads as the grid next to it shows the cell (2.0, not JavaScript's 2)
+        let floats = QueryResult {
+            columns: [("price", "FLOAT8"), ("n", "INT8")].iter().map(|(n, t)| ColumnInfo { name: n.to_string(), type_name: t.to_string() }).collect(),
+            rows: vec![vec![json!(2.5), json!(3)], vec![json!(2.0), json!(1)]],
+            ..big
+        };
+        assert_eq!(super::bar_chart(&floats, 10, 30).unwrap().1, "2.0 │███ 1\n2.5 │██████████ 3");
     }
 
     #[test]

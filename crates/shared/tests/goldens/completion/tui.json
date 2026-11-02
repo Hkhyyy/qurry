@@ -13,6 +13,21 @@
       {"detail":"varchar","insert":"user_name","kind":"Column","label":"user_name"}
     ]
   },
+  "alias-reused-dot": {
+    "prefix": 0,
+    "items": [
+      {"detail":"int8","insert":"id","kind":"Column","label":"id"},
+      {"detail":"varchar","insert":"user_name","kind":"Column","label":"user_name"},
+      {"detail":"text","insert":"email","kind":"Column","label":"email"}
+    ]
+  },
+  "alias-reused-hint": {
+    "hint": {"asked":["values"],"column":"status","path":[],"schema":"public","table":"orders"},
+    "prefix": 0,
+    "items": [
+      {"detail":"10 rows","insert":"paid'","kind":"Value","label":"paid"}
+    ]
+  },
   "columns-of-statement": {
     "prefix": 1,
     "items": [
@@ -70,6 +85,14 @@
       {"detail":"public","insert":"users","kind":"Table","label":"users"},
       {"detail":"billing","insert":"billing.users","kind":"Table","label":"users"},
       {"detail":"keyword","insert":"using","kind":"Keyword","label":"using"}
+    ]
+  },
+  "hint-domain-type-quoted": {
+    "hint": {"asked":["values"],"column":"realm","path":[],"schema":"public","table":"sales"},
+    "prefix": 0,
+    "items": [
+      {"detail":"1 row","insert":"'x'' or true; delete from realm_users; --'","kind":"Value","label":"x' or true; delete from realm_users; --"},
+      {"detail":"1 row","insert":"'7'","kind":"Value","label":"7"}
     ]
   },
   "hint-keys-quoted": {
@@ -319,7 +342,8 @@
   "table-named-like-schema": {
     "prefix": 0,
     "items": [
-      {"detail":"text","insert":"region","kind":"Column","label":"region"}
+      {"detail":"text","insert":"region","kind":"Column","label":"region"},
+      {"detail":"realm_name","insert":"realm","kind":"Column","label":"realm"}
     ]
   },
   "typed-word": {

@@ -180,6 +180,8 @@ pub fn run() {
             commands::sync_workspaces,
             commands::save_keymap,
             commands::check_update,
+            commands::update_channel,
+            commands::set_update_channel,
             commands::install_update,
         ])
         .build(app_context())

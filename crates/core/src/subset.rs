@@ -444,7 +444,7 @@ impl AppState {
             }
             // MySQL: the same-named table in the target DB (qualifying with the source DB name would insert into the source)
             let rel = if tk == DbKind::Mysql { crate::sql::quote_ident(tk, &key.1) } else { qualified(tk, &key) };
-            let tcols = crate::audit::table_columns(&tpool, &rel, tk).await?;
+            let tcols = crate::audit::table_columns(&tpool, &rel).await?;
             if tcols.is_empty() {
                 return Err(AppError::Msg(format!("{}.{} doesn't exist in the target — create it first (Compare Schemas makes the DDL)", key.0, key.1)));
             }

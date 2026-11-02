@@ -42,6 +42,15 @@ describe("inList", () => {
     expect(extractRows("SQL IN List", { ...x, dialect: dialectOf("mssql") })).toBe("('x\\'') OR 1=1 -- ')");
     expect(extractRows("SQL IN List", { ...x, dialect: dialectOf("sqlite") })).toBe("('x\\'') OR 1=1 -- ')");
   });
+  it("the grid's filters and edit SQL (Dialect.lit) write the literal its copy formats write", () => {
+    for (const kind of ["postgres", "mysql", "clickhouse", "mssql", "sqlite", "duckdb", "oracle"] as const)
+      for (const v of ["a\\b", "it's", "x\\') OR 1=1 -- ", "plain"]) {
+        const copied = extractRows("SQL IN List", { names: ["s"], types: ["text"], vals: [[v]], keys: [], tableRef: "t", header: false, dialect: dialectOf(kind) });
+        expect([kind, v, dialectOf(kind).lit(v)]).toEqual([kind, v, copied.slice(1, -1)]);
+      }
+    expect(dialectOf("postgres").lit("a\\b")).toBe("E'a\\\\b'");
+    expect(dialectOf("postgres").lit(null)).toBe("NULL");
+  });
   it("numbers as the grid shows them (String())", () => {
     const nums = [2 ** 53, 1e16, 1e20, 2 ** 60, 1e21, 1.5e-7, 0.1 + 0.2, -0];
     expect(inList(nums.map((n) => [n]))).toBe(`(${nums.map(String).join(", ")})`);

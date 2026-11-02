@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ConnectionView, dbVisible, meta, targetId } from "../lib/api";
 import { fuzzyScore } from "../lib/fuzzy";
+import { useSharedReady } from "../lib/shared";
 import { ColumnIcon, RoutineIcon, SchemaIcon, SequenceIcon, TableIcon, ViewIcon } from "../ui/icons";
 import { Kbd, KeyHints, List, ListGroup, ListItem, Notice, Overlay, Popover, Row, SearchField, Select, Spacer, Tabs } from "../ui";
 
@@ -187,6 +188,8 @@ export function SearchEverywhere(p: Props) {
   }, [scopeKey, tab]);
 
   const connName = (id: string) => p.conns.find((c) => c.id === id)?.name ?? "";
+  // Scores come from the WASM module (unranked substring matches until it has loaded): rank again once it has
+  const wasmReady = useSharedReady();
   const rows: Row[] = useMemo(() => {
     const query = q.trim();
     const out: Row[] = [];
@@ -222,7 +225,7 @@ export function SearchEverywhere(p: Props) {
     }
     // Same score: shorter name first (stable sort)
     return out.sort((a, b) => b.score - a.score).slice(0, 200);
-  }, [q, tab, objects, columns, p.files, p.actions]);
+  }, [q, tab, objects, columns, p.files, p.actions, wasmReady]);
 
   useEffect(() => setSel(0), [q, tab]);
   useEffect(() => {

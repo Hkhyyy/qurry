@@ -90,6 +90,118 @@ mod tests {
         assert!(called && kept, "nextval / lo_create changed nothing");
     }
 
+    /// A selection run as one statement goes to the server as one text, which runs every statement in it: a write after a read
+    /// (in a DO body, a PREPARE string) is a write. QURRY_TEST_PG=host:port:user:db · QURRY_TEST_MY=host:port:user:password:db
+    /// (each uses its own run4_guard_fixes schema / database)
+    #[tokio::test]
+    #[ignore]
+    async fn multi_statement_reads_that_write() {
+        use sqlx::Connection;
+        let pg = "select 1; do $$ begin delete from run4_guard_fixes.t; end $$";
+        let my = "select 1; prepare s from 'delete from run4_guard_fixes.t'; execute s";
+        assert!(!is_read(pg, DbKind::Postgres) && !is_read(my, DbKind::Mysql));
+        let fixture = "create table run4_guard_fixes.t (a int); insert into run4_guard_fixes.t values (1), (2), (3)";
+        let count = "select count(*) from run4_guard_fixes.t";
+        if let Ok(e) = std::env::var("QURRY_TEST_PG") {
+            let p: Vec<&str> = e.split(':').collect();
+            let mut c = sqlx::PgConnection::connect(&format!("postgres://{}@{}:{}/{}", p[2], p[0], p[1], p[3])).await.unwrap();
+            sqlx::raw_sql("drop schema if exists run4_guard_fixes cascade; create schema run4_guard_fixes").execute(&mut c).await.unwrap();
+            sqlx::raw_sql(fixture).execute(&mut c).await.unwrap();
+            sqlx::raw_sql(pg).execute(&mut c).await.unwrap();
+            let (n,): (i64,) = sqlx::query_as(count).fetch_one(&mut c).await.unwrap();
+            sqlx::raw_sql("drop schema run4_guard_fixes cascade").execute(&mut c).await.unwrap();
+            assert_eq!(n, 0, "PostgreSQL didn't run the DO body");
+        }
+        if let Ok(e) = std::env::var("QURRY_TEST_MY") {
+            let p: Vec<&str> = e.split(':').collect();
+            let mut c = sqlx::MySqlConnection::connect(&format!("mysql://{}:{}@{}:{}/{}", p[2], p[3], p[0], p[1], p[4])).await.unwrap();
+            sqlx::raw_sql("drop database if exists run4_guard_fixes; create database run4_guard_fixes").execute(&mut c).await.unwrap();
+            sqlx::raw_sql(fixture).execute(&mut c).await.unwrap();
+            sqlx::raw_sql(my).execute(&mut c).await.unwrap();
+            let (n,): (i64,) = sqlx::query_as(count).fetch_one(&mut c).await.unwrap();
+            sqlx::raw_sql("drop database run4_guard_fixes").execute(&mut c).await.unwrap();
+            assert_eq!(n, 0, "MySQL didn't run the prepared DELETE");
+        }
+    }
+
+    /// Explain Analyse's BEGIN … ROLLBACK undoes a DELETE but not nextval / setval, so rollback_undoes tells them apart.
+    /// QURRY_TEST_PG=host:port:user:db (schema run4_guard_fixes_rb)
+    #[tokio::test]
+    #[ignore]
+    async fn rollback_undoes_matches_the_server() {
+        use sqlx::Connection;
+        let del = "delete from run4_guard_fixes_rb.t";
+        let seq = "select nextval('run4_guard_fixes_rb.s'), setval('run4_guard_fixes_rb.s2', 5)";
+        assert!(rollback_undoes(del, DbKind::Postgres) && !rollback_undoes(seq, DbKind::Postgres));
+        let Ok(e) = std::env::var("QURRY_TEST_PG") else { return };
+        let p: Vec<&str> = e.split(':').collect();
+        let mut c = sqlx::PgConnection::connect(&format!("postgres://{}@{}:{}/{}", p[2], p[0], p[1], p[3])).await.unwrap();
+        sqlx::raw_sql(
+            "drop schema if exists run4_guard_fixes_rb cascade; create schema run4_guard_fixes_rb; create table run4_guard_fixes_rb.t (a int); \
+             insert into run4_guard_fixes_rb.t values (1), (2); create sequence run4_guard_fixes_rb.s; create sequence run4_guard_fixes_rb.s2",
+        )
+        .execute(&mut c)
+        .await
+        .unwrap();
+        for s in [del, seq] {
+            sqlx::raw_sql(&format!("begin; explain analyze {s}; rollback")).execute(&mut c).await.unwrap();
+        }
+        let (n,): (i64,) = sqlx::query_as("select count(*) from run4_guard_fixes_rb.t").fetch_one(&mut c).await.unwrap();
+        let (called,): (bool,) = sqlx::query_as("select is_called from run4_guard_fixes_rb.s").fetch_one(&mut c).await.unwrap();
+        let (last,): (i64,) = sqlx::query_as("select last_value from run4_guard_fixes_rb.s2").fetch_one(&mut c).await.unwrap();
+        sqlx::raw_sql("drop schema run4_guard_fixes_rb cascade").execute(&mut c).await.unwrap();
+        assert_eq!(n, 2, "the rollback didn't undo the DELETE");
+        assert!(called && last == 5, "the rollback undid nextval / setval");
+        // set_config and a transaction-level advisory lock are undone; a session-level advisory lock stays
+        let undone = "select set_config('run4_guard_fixes.x', '1', false), pg_advisory_xact_lock(4101)";
+        let stays = "select pg_advisory_lock(4102)";
+        assert!(rollback_undoes(undone, DbKind::Postgres) && !rollback_undoes(stays, DbKind::Postgres));
+        let locks = "select count(*) from pg_locks where locktype = 'advisory' and pid = pg_backend_pid()";
+        sqlx::raw_sql(&format!("begin; {undone}; rollback")).execute(&mut c).await.unwrap();
+        let (setting,): (Option<String>,) = sqlx::query_as("select nullif(current_setting('run4_guard_fixes.x', true), '')").fetch_one(&mut c).await.unwrap();
+        let (held,): (i64,) = sqlx::query_as(locks).fetch_one(&mut c).await.unwrap();
+        assert!(setting.is_none() && held == 0, "the rollback didn't undo set_config / pg_advisory_xact_lock");
+        sqlx::raw_sql(&format!("begin; {stays}; rollback")).execute(&mut c).await.unwrap();
+        let (held,): (i64,) = sqlx::query_as(locks).fetch_one(&mut c).await.unwrap();
+        sqlx::raw_sql("select pg_advisory_unlock_all()").execute(&mut c).await.unwrap();
+        assert_eq!(held, 1, "the rollback released pg_advisory_lock");
+    }
+
+    /// Of several statements Explain Analyse explains the first and runs the rest; a COMMIT (PostgreSQL) or DDL (MySQL's implicit
+    /// commit) among them keeps the DELETE before it, so rollback_undoes says no. QURRY_TEST_PG · QURRY_TEST_MY (run4_guard_fixes_multi)
+    #[tokio::test]
+    #[ignore]
+    async fn rollback_undoes_not_several_statements() {
+        use sqlx::Connection;
+        let pg = "select 1; delete from run4_guard_fixes_multi.t; commit";
+        let my = "select 1; delete from run4_guard_fixes_multi.t; create table run4_guard_fixes_multi.u (a int)";
+        assert!(!rollback_undoes(pg, DbKind::Postgres) && !rollback_undoes(my, DbKind::Mysql));
+        let fixture = "create table run4_guard_fixes_multi.t (a int); insert into run4_guard_fixes_multi.t values (1), (2)";
+        let count = "select count(*) from run4_guard_fixes_multi.t";
+        if let Ok(e) = std::env::var("QURRY_TEST_PG") {
+            let p: Vec<&str> = e.split(':').collect();
+            let mut c = sqlx::PgConnection::connect(&format!("postgres://{}@{}:{}/{}", p[2], p[0], p[1], p[3])).await.unwrap();
+            sqlx::raw_sql("drop schema if exists run4_guard_fixes_multi cascade; create schema run4_guard_fixes_multi").execute(&mut c).await.unwrap();
+            sqlx::raw_sql(fixture).execute(&mut c).await.unwrap();
+            sqlx::raw_sql(&format!("begin; explain analyze {pg}")).execute(&mut c).await.unwrap();
+            sqlx::raw_sql("rollback").execute(&mut c).await.unwrap();
+            let (n,): (i64,) = sqlx::query_as(count).fetch_one(&mut c).await.unwrap();
+            sqlx::raw_sql("drop schema run4_guard_fixes_multi cascade").execute(&mut c).await.unwrap();
+            assert_eq!(n, 0, "PostgreSQL: the COMMIT didn't keep the DELETE");
+        }
+        if let Ok(e) = std::env::var("QURRY_TEST_MY") {
+            let p: Vec<&str> = e.split(':').collect();
+            let mut c = sqlx::MySqlConnection::connect(&format!("mysql://{}:{}@{}:{}/{}", p[2], p[3], p[0], p[1], p[4])).await.unwrap();
+            sqlx::raw_sql("drop database if exists run4_guard_fixes_multi; create database run4_guard_fixes_multi").execute(&mut c).await.unwrap();
+            sqlx::raw_sql(fixture).execute(&mut c).await.unwrap();
+            sqlx::raw_sql(&format!("begin; explain analyze {my}")).execute(&mut c).await.unwrap();
+            sqlx::raw_sql("rollback").execute(&mut c).await.unwrap();
+            let (n,): (i64,) = sqlx::query_as(count).fetch_one(&mut c).await.unwrap();
+            sqlx::raw_sql("drop database run4_guard_fixes_multi").execute(&mut c).await.unwrap();
+            assert_eq!(n, 0, "MySQL: the CREATE TABLE didn't commit the DELETE");
+        }
+    }
+
     /// Core's guard, sql and DbKind are the shared items, not copies: two glob imports of the same name only compile
     /// (instead of failing as ambiguous, E0659) when both paths name the same item
     #[test]

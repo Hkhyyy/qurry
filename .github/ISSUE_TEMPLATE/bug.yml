@@ -1,0 +1,56 @@
+name: Bug report
+description: Something in Qurry doesn't work as it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Security problems don't go here — see [SECURITY.md](https://github.com/Hkhyyy/qurry/blob/main/SECURITY.md). Leave out passwords, host names and data you can't share.
+  - type: input
+    id: version
+    attributes:
+      label: Qurry version
+      description: "GUI: Qurry › About Qurry · TUI and MCP: `qurry-tui --version`"
+      placeholder: "0.2.13"
+    validations:
+      required: true
+  - type: dropdown
+    id: app
+    attributes:
+      label: Where it happens
+      multiple: true
+      options:
+        - GUI
+        - TUI (qurry-tui)
+        - MCP server (qurry-mcp)
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: macOS 15.1 (Apple Silicon), Ubuntu 24.04, …
+    validations:
+      required: true
+  - type: input
+    id: database
+    attributes:
+      label: Database and version
+      description: And how you connect, if it matters (SSH tunnel, SSL, Sentinel / Cluster, driver)
+      placeholder: PostgreSQL 16 over an SSH tunnel
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a console on …
+        2. Run …
+        3. Press …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+      description: Paste the exact error message. A screenshot helps for screen problems.
+    validations:
+      required: true

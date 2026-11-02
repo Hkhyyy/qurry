@@ -684,6 +684,25 @@ impl Store {
         crate::secrets::write_private(&self.path.with_file_name(format!("workspace-{client}.json")), serde_json::to_string(v)?.as_bytes())
     }
 
+    /// settings.json: app settings the GUI and the TUI share. Keys this version doesn't know are kept
+    fn settings(&self) -> serde_json::Map<String, serde_json::Value> {
+        fs::read_to_string(self.file("settings.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    }
+
+    /// Update channel (stable unless beta was picked; an unknown value is stable too)
+    pub fn update_channel(&self) -> crate::update::Channel {
+        self.settings().remove("updateChannel").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
+    }
+
+    pub fn set_update_channel(&self, channel: crate::update::Channel) -> AppResult<()> {
+        let mut all = self.settings();
+        all.insert("updateChannel".into(), serde_json::to_value(channel)?);
+        if let Some(dir) = self.path.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        crate::secrets::write_private(&self.file("settings.json"), serde_json::to_string_pretty(&all)?.as_bytes())
+    }
+
     fn write(&self, all: &[ConnectionConfig]) -> AppResult<()> {
         if let Some(dir) = self.path.parent() {
             fs::create_dir_all(dir)?;
@@ -711,6 +730,23 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The update channel is stable until beta is picked, and saving it keeps the other settings in settings.json
+    #[test]
+    fn update_channel_setting() {
+        use crate::update::Channel;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("cfg"));
+        assert_eq!(store.update_channel(), Channel::Stable);
+        store.set_update_channel(Channel::Beta).unwrap();
+        assert_eq!(store.update_channel(), Channel::Beta);
+        let path = dir.path().join("cfg/settings.json");
+        fs::write(&path, r#"{"updateChannel": "nightly", "later": 1}"#).unwrap();
+        assert_eq!(store.update_channel(), Channel::Stable, "an unknown channel is stable");
+        store.set_update_channel(Channel::Beta).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved, serde_json::json!({ "updateChannel": "beta", "later": 1 }));
+    }
 
     #[test]
     fn saved_secrets_follow_the_server() {

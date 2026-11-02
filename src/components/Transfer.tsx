@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, type BackupOptions, DataPreview, meta } from "../lib/api";
+import { useSharedReady } from "../lib/shared";
 import { autoMap, DataFormat, FORMATS, progressText } from "../lib/transfer";
 import { Button, Checkbox, Hint, IconButton, Modal, Notice, ProgressBar, RadioGroup, SectionTitle, Select, StatusItem, Table, Td, Text, TextInput, Th } from "../ui";
 
@@ -88,9 +89,20 @@ export function ImportDialog({ target, schema, table, onImport, onClose }: {
       setErr(String(e));
     }
   };
+  // autoMap runs in the WASM module (every column skipped until it has loaded): map again once it has, unless the user already edited the map
+  const wasmReady = useSharedReady();
+  const edited = useRef(false);
   useEffect(() => {
+    edited.current = false;
     if (file) setMap(autoMap(file.pv.columns, create ? null : cols));
   }, [file, cols]);
+  useEffect(() => {
+    if (file && !edited.current) setMap(autoMap(file.pv.columns, create ? null : cols));
+  }, [wasmReady]);
+  const editMap = (i: number, v: string) => {
+    edited.current = true;
+    setMap(map.map((m, j) => (j === i ? v : m)));
+  };
 
   const chosen = map.map((c, i) => [i, c.trim()] as [number, string]).filter(([, c]) => c);
   const ok = !!file && chosen.length > 0 && !!name.trim();
@@ -140,9 +152,9 @@ export function ImportDialog({ target, schema, table, onImport, onClose }: {
                   <Td muted>{file.pv.rows.slice(0, 3).map((r) => r[i] ?? "NULL").join(", ")}</Td>
                   <Td>
                     {create ? (
-                      <TextInput value={map[i] ?? ""} onChange={(e) => setMap(map.map((m, j) => (j === i ? e.target.value : m)))} />
+                      <TextInput value={map[i] ?? ""} onChange={(e) => editMap(i, e.target.value)} />
                     ) : (
-                      <Select value={map[i] ?? ""} onChange={(e) => setMap(map.map((m, j) => (j === i ? e.target.value : m)))}>
+                      <Select value={map[i] ?? ""} onChange={(e) => editMap(i, e.target.value)}>
                         <option value="">— skip —</option>
                         {(cols ?? []).map((c) => (
                           <option key={c} value={c}>

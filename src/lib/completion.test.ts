@@ -65,7 +65,7 @@ async function complete(c: Case, i: number) {
   const head = text.slice(0, at).split("\n");
   const position = { lineNumber: head.length, column: head[head.length - 1].length + 1 };
   const uri = `inmemory://case/${i}`;
-  bindModel(uri, "c");
+  bindModel(uri, c.db ? `c::${c.db}` : "c");
   current = c;
   asked.length = 0;
   const context = c.trigger ? { triggerKind: 1, triggerCharacter: c.trigger } : { triggerKind: 0 };

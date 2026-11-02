@@ -10,15 +10,21 @@ export interface Segment {
 
 /**
  * Where the editor keeps the GUI's own splitting (D2 of the 0.3.0 architecture batch): the splitStatements and splitScript rows
- * of crates/shared/tests/DIVERGENCES.md. Only picks what the editor runs; the backend splits again by the server's rules before any check
+ * of crates/shared/tests/DIVERGENCES.md. Only picks what the editor runs; the backend splits again by the server's rules before any check.
+ * MySQL `--` with no space after it is not a comment here either (`select 1--1; delete …` would run the DELETE inside what looked like one statement)
  */
-const EDITOR: SplitOptions = { mysqlDashComment: true, dollarAfterName: true };
+const EDITOR: SplitOptions = { dollarAfterName: true };
 
 const segments = (r: [number, number][]): Segment[] => r.map(([start, end]) => ({ start, end }));
 
 /** Split statements on semicolons, skipping strings, quoted names, comments and dollar quotes as `kind` reads them */
 export function splitStatements(text: string, kind: DbKind = "postgres"): Segment[] {
   return segments(shared().splitStatements(text, kind, EDITOR));
+}
+
+/** The statement at the cursor, trimmed (between statements, the one just before); null if the text has none */
+export function statementAt(text: string, offset: number, kind: DbKind = "postgres"): string | null {
+  return shared().statementAt(text, offset, kind) ?? null;
 }
 
 /**

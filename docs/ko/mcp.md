@@ -37,6 +37,8 @@ claude mcp add qurry-rw -- qurry-mcp --allow-write  # execute 도구 추가
 - 드라이버 Data Source (SQL Server, DuckDB, ClickHouse, MongoDB, 벡터 DB) 는 READ ONLY 트랜잭션이 없어서 더 엄격하게 봅니다: 한 문장만 (SQL Server 배치에 이어 쓴 두 번째 문장도 안 됨), `SELECT … INTO` 안 됨, 파일이나 다른 서버를 읽는 함수 (`OPENROWSET`, ClickHouse `url()` / `file()` / `remote()` …, DuckDB `read_text()` …) 안 됨, 벡터 DB 는 search / query / list 요청만, MongoDB 는 `$out` / `$merge` 안 됨. DuckDB 는 외부 접근을 끄고 열고, ClickHouse 읽기는 `readonly=2` 로 실행합니다 (사용자가 이미 읽기 전용이면 그대로). MCP 서버에만 해당하고, 앱에서 읽기 전용 DuckDB Data Source 는 내 컴퓨터의 파일을 읽을 수 있습니다.
 - 그래도 MCP 서버에는 **최소 권한 DB 사용자** (읽기 전용 역할, superuser · FILE 권한 없음) 를 주세요. 위 검사는 두 번째 방어선이지 DB 권한을 대신하지 않습니다.
 
+무엇을 막고 무엇을 막지 못하는지 (데이터를 통한 프롬프트 인젝션 포함): [MCP 위협 모델](mcp-security.md).
+
 옵션: `--config-dir DIR` (다른 설정 폴더 사용), `--verbose` (엔진 로그를 stderr 로).
 
 ---
