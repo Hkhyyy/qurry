@@ -55,6 +55,9 @@ pub struct VersionNotes {
     pub changes: Vec<String>,
 }
 
+/// Start of the macOS 13 warning item in the notes of stable releases (.github/workflows/release.yml)
+const MACOS13_ITEM: &str = "[breaking] The GUI needs macOS 13";
+
 /// Only the changes from the release notes: lines under "## What's Changed" in GitHub's auto notes → "title (#PR)"
 pub fn changes(notes: &str) -> Vec<String> {
     let mut out = vec![];
@@ -66,6 +69,10 @@ pub fn changes(notes: &str) -> Vec<String> {
             continue;
         }
         let Some(item) = t.strip_prefix("* ").or_else(|| t.strip_prefix("- ")).filter(|_| on) else { continue };
+        // The release workflow puts this on every stable release for apps from before 0.3.0; this app already runs on macOS 13+
+        if item.starts_with(MACOS13_ITEM) {
+            continue;
+        }
         // "title by @person in https://…/pull/17"
         let (title, pr) = match item.rsplit_once(" in https://") {
             Some((head, url)) => (head, url.rsplit_once("/pull/").map(|(_, n)| n.trim())),
@@ -303,6 +310,9 @@ mod tests {
         assert!(changes("no section").is_empty());
         // Terminal control characters in PR titles are removed (--update prints them as is)
         assert_eq!(changes("## What's Changed\n* [fix] a\x1b]0;x\x07b by @u in https://github.com/Hkhyyy/qurry/pull/9"), ["[fix] a]0;xb (#9)"]);
+        // The macOS 13 warning the workflow adds for apps from before 0.3.0 is not a change for this app
+        let notes = "## What's Changed\n* [breaking] The GUI needs macOS 13 Ventura or later. On macOS 12 or older, don't update: keep Qurry 0.2.x\n\n## What's Changed\n* [fix] real by @u in https://github.com/Hkhyyy/qurry/pull/9";
+        assert_eq!(changes(notes), ["[fix] real (#9)"]);
     }
 
     /// Release list → latest + changes per version, only those newer than the current version (newest first)

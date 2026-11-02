@@ -41,7 +41,7 @@ GUI 는 0.3.0 부터 macOS 13 Ventura 이상이 필요합니다 (WebAssembly 를
 - **`main` 에 있는 커밋의 버전 태그** → stable 릴리스 `vX.Y.Z`. latest 로 표시하고, 이전 stable 릴리스 이후의 변경을 노트로 달고, Homebrew formula 도 올립니다. 내보낼 beta 의 커밋에 태그를 붙이세요: `git tag vX.Y.Z <sha> && git push origin vX.Y.Z`. `main` 에 없는 커밋의 태그나 가장 새 stable 릴리스보다 낮은 태그는 거절되고, 실행 로그가 고치는 법을 알려 줍니다 (`git push --delete origin vX.Y.Z` 로 태그를 지우고 맞는 태그를 올리기).
 - **워크플로를 바꾸는 Pull request** → 빌드만 하고 아무것도 게시하지 않습니다.
 
-macOS 13 경고는 0.3.0 이상의 첫 stable 릴리스 노트 맨 위에만 붙습니다 (0.3.0 이전 앱은 "What's Changed" 항목만 보여 줍니다). beta 의 `.deb` 는 패키지 버전이 `X.Y.Z~beta.N` 이라서 `dpkg` 와 `apt` 가 stable `X.Y.Z` 보다 낮게 봅니다.
+모든 stable 릴리스 노트 맨 위에 macOS 13 경고가 붙습니다. 0.3.0 이전 앱은 "What's Changed" 항목만 보여 주고 어떤 stable 릴리스든 받을 수 있기 때문입니다. 0.3.0 이후 앱은 이 항목을 보여 주지 않습니다. beta 의 `.deb` 는 패키지 버전이 `X.Y.Z~beta.N` 이라서 `dpkg` 와 `apt` 가 stable `X.Y.Z` 보다 낮게 봅니다.
 
 두 채널 모두 같은 파일, 서명, `SHA256SUMS`, 빌드 출처 증명을 붙입니다 ([안전장치](safety.md)).
 

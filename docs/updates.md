@@ -41,7 +41,7 @@ For maintainers. `.github/workflows/release.yml` builds, signs and publishes:
 - **Version tag on `main`** → the stable release `vX.Y.Z`, marked latest, with notes since the previous stable release, and the Homebrew formula. Tag the commit of the beta you want to ship: `git tag vX.Y.Z <sha> && git push origin vX.Y.Z`. A tag that is not on `main`, or is lower than the newest stable release, is refused and the run says how to fix it (delete the tag with `git push --delete origin vX.Y.Z` and push the right one).
 - **Pull request changing the workflow** → builds only, nothing is published.
 
-Only the first stable release from 0.3.0 on gets the macOS 13 warning at the top of its notes (apps from before 0.3.0 show only the "What's Changed" items). The `.deb` of a beta has the package version `X.Y.Z~beta.N`, so `dpkg` and `apt` sort it below the stable `X.Y.Z`.
+Every stable release gets the macOS 13 warning at the top of its notes, because apps from before 0.3.0 show only the "What's Changed" items and can be offered any stable release; apps from 0.3.0 on leave that item out. The `.deb` of a beta has the package version `X.Y.Z~beta.N`, so `dpkg` and `apt` sort it below the stable `X.Y.Z`.
 
 Both channels get the same files, signatures, `SHA256SUMS` and build provenance attestations ([Safety](safety.md)).
 
