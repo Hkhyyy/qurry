@@ -42,6 +42,8 @@ pub mod transfer;
 pub mod tunnel;
 pub mod update;
 pub mod workspaces;
+/// Grid and search helpers shared with the GUI through WASM (time fractions, tab labels, extractors, fuzzy scores, key folders, auto-map)
+pub use qurry_shared::{automap, extract, format, fuzzy, keytree, labels};
 
 /// Same config folder as the Tauri app (shares the Data Source list·encrypted passwords)
 /// macOS: ~/Library/Application Support/com.hyunkyo.dbtool

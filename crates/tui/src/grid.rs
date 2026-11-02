@@ -52,40 +52,8 @@ pub fn cell_text(v: &Value) -> String {
         other => other.to_string(),
     }
 }
-/// Columns whose fractional seconds are aligned: time types except INTERVAL
-pub(crate) fn is_time_type(type_name: &str) -> bool {
-    let t = type_name.to_uppercase();
-    t.contains("TIME") && !t.contains("INTERVAL")
-}
-
-/// End position of "hh:mm:ss" and fractional-second digits of a time value ([date ]hh:mm:ss[.ffffff]…)
-pub(crate) fn time_frac(s: &str) -> Option<(usize, usize)> {
-    let b = s.as_bytes();
-    let start = match b.iter().position(|&c| c == b' ' || c == b'T') {
-        Some(i) if i >= 10 && b[i - 3] == b'-' => i + 1,
-        _ => 0,
-    };
-    let t = b.get(start..start + 8)?;
-    let ok = t.iter().enumerate().all(|(i, &c)| if i == 2 || i == 5 { c == b':' } else { c.is_ascii_digit() });
-    if !ok {
-        return None;
-    }
-    let end = start + 8;
-    let digits = if b.get(end) == Some(&b'.') { b[end + 1..].iter().take_while(|c| c.is_ascii_digit()).count() } else { 0 };
-    Some((end, digits))
-}
-
-/// 03:19:15 → 03:19:15.000000 (pad with 0 up to width digits)
-pub fn pad_frac(s: &str, width: usize) -> String {
-    match time_frac(s) {
-        Some((end, d)) if d < width => {
-            let rest = &s[end + if d > 0 { 1 + d } else { 0 }..];
-            let frac = if d > 0 { &s[end + 1..end + 1 + d] } else { "" };
-            format!("{}.{:0<width$}{rest}", &s[..end], frac)
-        }
-        _ => s.to_string(),
-    }
-}
+pub(crate) use qurry_core::format::{is_time_type, pad_frac};
+use qurry_core::extract::{self, Format, Rows};
 
 pub fn raw_text(v: &Value) -> Option<String> {
     match v {
@@ -145,7 +113,7 @@ impl Grid {
                 if !is_time_type(&c.type_name) {
                     return 0;
                 }
-                r.rows.iter().filter_map(|row| row.get(i)?.as_str().and_then(time_frac)).map(|x| x.1).max().unwrap_or(0)
+                qurry_core::format::frac_width(r.rows.iter().filter_map(|row| row.get(i)?.as_str()))
             })
             .collect();
     }
@@ -208,42 +176,20 @@ impl Grid {
         self.result.rows.get(r).and_then(|row| row.get(c)).and_then(raw_text)
     }
 
-    /// One cell as an SQL value (NULL is None). Numeric columns keep the value as is (numeric·bigint arrive as text), only when it looks numeric (NaN etc. are quoted)
-    fn sql_value(&self, r: usize, c: usize) -> Option<String> {
-        let ty = self.result.columns.get(c).map(|x| x.type_name.to_lowercase()).unwrap_or_default();
-        let head: String = ty.chars().take_while(|ch| ch.is_ascii_alphanumeric()).collect();
-        let numeric_col = ["int", "int2", "int4", "int8", "integer", "tinyint", "smallint", "mediumint", "bigint", "serial", "serial4", "serial8", "smallserial", "bigserial", "numeric", "decimal", "real", "float", "float4", "float8", "double", "bool", "boolean", "oid"].contains(&head.as_str());
-        let num = |s: &str| {
-            let t = s.strip_prefix('-').unwrap_or(s);
-            !t.is_empty() && t.parse::<f64>().is_ok() && t.chars().all(|ch| ch.is_ascii_digit() || ".eE+-".contains(ch))
-        };
-        let lit = |s: String| if numeric_col && num(&s) { s } else { format!("'{}'", s.replace('\'', "''")) };
+    /// One cell with edits applied, as the shared IN list reads it (an edit is text; NULL is Null)
+    fn cell(&self, r: usize, c: usize) -> Value {
         match self.edits.get(&(r, c)) {
-            Some(v) => v.clone().map(lit),
-            None => match self.result.rows.get(r)?.get(c)? {
-                Value::Null => None,
-                v @ (Value::Number(_) | Value::Bool(_)) => Some(v.to_string()),
-                v => raw_text(v).map(lit),
-            },
+            Some(v) => v.clone().map_or(Value::Null, Value::String),
+            None => self.result.rows.get(r).and_then(|row| row.get(c)).cloned().unwrap_or(Value::Null),
         }
     }
 
-    /// Range as IN-list text and value count. One column gives ('a', 'b'), several give row tuples (('a', 1), …). Duplicates·NULL are dropped
+    /// Range as IN-list text and value count. One column gives ('a', 'b'), several give row tuples (('a', 1), …). Duplicates·NULL are dropped.
+    /// Numeric columns keep number text bare (numeric·bigint arrive as text); NaN and the like are quoted
     fn in_list_of(&self, (r0, c0, r1, c1): (usize, usize, usize, usize)) -> (String, usize) {
-        let mut seen = std::collections::HashSet::new();
-        let items: Vec<String> = (r0..=r1.min(self.rows().saturating_sub(1)))
-            .filter_map(|r| {
-                let vals: Vec<Option<String>> = (c0..=c1).map(|c| self.sql_value(r, c)).collect();
-                if vals.iter().all(|v| v.is_none()) {
-                    return None;
-                }
-                let vals: Vec<String> = vals.into_iter().map(|v| v.unwrap_or_else(|| "NULL".into())).collect();
-                Some(if c0 == c1 { vals[0].clone() } else { format!("({})", vals.join(", ")) })
-            })
-            .filter(|x| seen.insert(x.clone()))
-            .collect();
-        let n = items.len();
-        (format!("({})", if n == 0 { "NULL".into() } else { items.join(", ") }), n)
+        let rows: Vec<Vec<Value>> = (r0..=r1.min(self.rows().saturating_sub(1))).map(|r| (c0..=c1).map(|c| self.cell(r, c)).collect()).collect();
+        let types: Vec<String> = (c0..=c1).map(|c| self.result.columns.get(c).map(|x| x.type_name.clone()).unwrap_or_default()).collect();
+        extract::in_list(&rows, &types, extract::Options::default())
     }
 
     /// Whole column as an IN list
@@ -274,8 +220,9 @@ impl Grid {
 
     /// Selected range as TSV (values only, NULL as empty): pastes into a sheet as cells
     pub fn selection_tsv(&self) -> String {
-        let Some((r0, c0, r1, c1)) = self.sel_rect() else { return self.value(self.row, self.col).unwrap_or_default() };
-        (r0..=r1).map(|r| (c0..=c1).map(|c| self.value(r, c).unwrap_or_default()).collect::<Vec<_>>().join("\t")).collect::<Vec<_>>().join("\n")
+        let (r0, c0, r1, c1) = self.sel_rect().unwrap_or((self.row, self.col, self.row, self.col));
+        let vals = (r0..=r1).map(|r| (c0..=c1).map(|c| self.value(r, c).map_or(Value::Null, Value::String)).collect()).collect();
+        extract::rows(Format::Tsv, &Rows { vals, ..Default::default() }, qurry_core::store::DbKind::Postgres, extract::Options::default())
     }
 
     pub fn dirty(&self) -> bool {

@@ -8,10 +8,7 @@ use tui_textarea::TextArea;
 /// What to export: (connection target, SQL, name, target table for SQL INSERT)
 type Source = (String, String, String, Option<(String, String)>);
 
-/// 1234567 → "1,234,567"
-pub fn thousands(n: u64) -> String {
-    n.to_string().as_bytes().rchunks(3).rev().map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join(",")
-}
+pub use qurry_core::format::thousands;
 
 fn home() -> String {
     std::env::var("HOME").unwrap_or_default()
@@ -25,11 +22,8 @@ fn expand(p: &str) -> String {
     }
 }
 
-/// File column name → column with the same name (ignoring case·spaces·_·-). Same as autoMap in GUI lib/transfer.ts
-pub(crate) fn match_column<'a>(file: &str, cols: &'a [String]) -> Option<&'a String> {
-    let norm = |s: &str| s.to_lowercase().chars().filter(|c| !c.is_whitespace() && *c != '_' && *c != '-').collect::<String>();
-    cols.iter().find(|c| norm(c) == norm(file))
-}
+/// File column name → column with the same name (ignoring case·spaces·_·-), as autoMap maps it in the GUI
+pub(crate) use qurry_core::automap::match_column;
 
 impl App {
     /// The table picked in the tree, otherwise the current tab (table: as filtered, console: the statement at the cursor)
