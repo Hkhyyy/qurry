@@ -5276,6 +5276,7 @@ name = "qurry-shared-wasm"
 version = "0.1.0"
 dependencies = [
  "qurry-shared",
+ "serde",
  "serde-wasm-bindgen",
  "wasm-bindgen",
 ]
