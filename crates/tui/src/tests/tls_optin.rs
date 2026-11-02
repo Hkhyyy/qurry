@@ -19,14 +19,35 @@ fn no_tls(_: &str) -> Result<QueryResult, String> {
     Err(format!("{}\n(error communicating with database: TLS required)", qurry_shared::errors::needs_tls_pg()))
 }
 
-/// A PostgreSQL without TLS that rejects every login: answers N to the TLS request (the core's NEEDS_TLS) and fails the plain-text
-/// startup with an authentication error (so a connect after "Allow unencrypted" fails at once instead of waiting for a timeout)
+/// One backend message: tag, length, body
+fn pg_msg(tag: u8, body: &[u8]) -> Vec<u8> {
+    let mut m = vec![tag];
+    m.extend((body.len() as i32 + 4).to_be_bytes());
+    m.extend(body);
+    m
+}
+
+/// The one-column, one-row answer to `sql`: (RowDescription, DataRow + CommandComplete). A session's pg_backend_pid() gets an int4 (binary,
+/// as sqlx asks for it), everything else the text "PostgreSQL 16 (no TLS)"
+fn pg_answer(sql: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let pid = sql.windows(14).any(|w| w == b"pg_backend_pid");
+    let (oid, len, v): (i32, i16, Vec<u8>) = if pid { (23, 4, 7i32.to_be_bytes().to_vec()) } else { (25, -1, b"PostgreSQL 16 (no TLS)".to_vec()) };
+    let cols = [&1i16.to_be_bytes()[..], b"v\0", &0i32.to_be_bytes(), &0i16.to_be_bytes(), &oid.to_be_bytes(), &len.to_be_bytes(), &(-1i32).to_be_bytes(), &0i16.to_be_bytes()].concat();
+    let row = [pg_msg(b'D', &[&1i16.to_be_bytes()[..], &(v.len() as i32).to_be_bytes(), &v].concat()), pg_msg(b'C', b"SELECT 1\0")].concat();
+    (pg_msg(b'T', &cols), row)
+}
+
+/// A PostgreSQL without TLS: answers N to the TLS request (the core's NEEDS_TLS), then lets the plain-text login in and answers every
+/// statement with one row (pg_answer: enough for a connect after "Allow unencrypted" to succeed and a table tab to show rows)
 async fn no_tls_server() -> u16 {
+    let ready = pg_msg(b'Z', b"I");
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = l.local_addr().unwrap().port();
     tokio::spawn(async move {
         while let Ok((mut s, _)) = l.accept().await {
+            let ready = ready.clone();
             tokio::spawn(async move {
+                // Startup: the TLS request (N), then the plain-text startup message (no password asked)
                 loop {
                     let Ok(len) = s.read_i32().await else { return };
                     let mut body = vec![0; (len - 4).max(0) as usize];
@@ -37,12 +58,50 @@ async fn no_tls_server() -> u16 {
                         let _ = s.write_all(b"N").await;
                         continue;
                     }
-                    let fields = b"SFATAL\0C28P01\0Mpassword authentication failed for user \"u\"\0\0";
-                    let mut msg = vec![b'E'];
-                    msg.extend((fields.len() as i32 + 4).to_be_bytes());
-                    msg.extend(fields);
-                    let _ = s.write_all(&msg).await;
-                    return;
+                    let ok = [pg_msg(b'R', &0i32.to_be_bytes()), pg_msg(b'K', &[1i32.to_be_bytes(), 2i32.to_be_bytes()].concat()), ready.clone()].concat();
+                    if s.write_all(&ok).await.is_err() {
+                        return;
+                    }
+                    break;
+                }
+                // Simple and extended query protocol: prepared statements by name (sqlx reuses them), Bind picks the one to answer for
+                let mut prepared = std::collections::HashMap::<Vec<u8>, (Vec<u8>, Vec<u8>)>::new();
+                let mut answer = pg_answer(b"");
+                let name = |b: &[u8], skip: usize| b.split(|c| *c == 0).nth(skip).unwrap_or_default().to_vec();
+                loop {
+                    let Ok(tag) = s.read_u8().await else { return };
+                    let Ok(len) = s.read_i32().await else { return };
+                    let mut body = vec![0; (len - 4).max(0) as usize];
+                    if s.read_exact(&mut body).await.is_err() {
+                        return;
+                    }
+                    match tag {
+                        b'Q' => answer = pg_answer(&body),
+                        b'P' => {
+                            answer = pg_answer(&body);
+                            prepared.insert(name(&body, 0), answer.clone());
+                        }
+                        b'B' => answer = prepared.get(&name(&body, 1)).cloned().unwrap_or_else(|| answer.clone()),
+                        // Describe of a statement by name
+                        b'D' if body.first() == Some(&b'S') => answer = prepared.get(&name(&body[1..], 0)).cloned().unwrap_or_else(|| answer.clone()),
+                        _ => {}
+                    }
+                    let (cols, row) = &answer;
+                    let out = match tag {
+                        b'Q' => [cols.clone(), row.clone(), ready.clone()].concat(),
+                        b'P' => pg_msg(b'1', &[]),
+                        b'B' => pg_msg(b'2', &[]),
+                        b'C' => pg_msg(b'3', &[]),
+                        b'D' if body.first() == Some(&b'S') => [pg_msg(b't', &0i16.to_be_bytes()), cols.clone()].concat(),
+                        b'D' => cols.clone(),
+                        b'E' => row.clone(),
+                        b'S' => ready.clone(),
+                        b'X' => return,
+                        _ => vec![],
+                    };
+                    if s.write_all(&out).await.is_err() {
+                        return;
+                    }
                 }
             });
         }
@@ -83,23 +142,67 @@ async fn run_error_asks_then_allows_and_only_reconnects() {
     h.settle().await;
     assert_eq!(RUNS.load(Ordering::SeqCst), runs + 1);
     let Some(Popup::AllowPlaintext { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
-    assert!(text.starts_with("Allow unencrypted for this data source?"), "{text}");
+    // It may open over another tab: it names the source y changes
+    assert!(text.starts_with("Allow unencrypted for \"LAN dev\"?"), "{text}");
     assert!(text.contains("The password will be sent unencrypted to 127.1. Use only on a network you trust."), "{text}");
     assert!(text.contains("To undo, turn off \"Allow unencrypted\" in the data source form"), "{text}");
     let s = h.screen(110, 24);
-    assert!(s.contains("Allow unencrypted for this data source?") && s.contains("y allow") && !s.contains("Enter"), "{s}");
+    assert!(s.contains("Allow unencrypted for \"LAN dev\"?") && s.contains("y allow") && !s.contains("Enter"), "{s}");
     read_it(&mut h);
     h.key("y");
     h.settle().await;
     let c = saved(&h).await;
     assert!(c.options.allow_plaintext && c.password_saved, "{c:?}");
     assert!(h.app.conn("test").unwrap().config.options.allow_plaintext, "the form's copy is updated too");
-    // Only a reconnect (the server turns the login down): the console says how it went, the statement isn't run again
-    assert!(h.app.status.starts_with("Connection failed:") && h.app.status.contains("password authentication failed"), "{}", h.app.status);
-    let out = h.console_output();
-    assert!(out.last().is_some_and(|l| l.starts_with("Connection failed:")), "{out:?}");
-    assert_eq!(RUNS.load(Ordering::SeqCst), runs + 1);
+    // Only a reconnect (now in plain text, and it works): the console says what to do next, the statement isn't run again
+    assert_eq!(h.console_output().last().map(String::as_str), Some("Connected. Run again."));
+    assert_eq!(RUNS.load(Ordering::SeqCst), runs + 1, "the statement isn't run again");
     assert!(h.app.popup.is_none());
+}
+
+/// A table tab that failed on the TLS error: y reconnects and the tab loads its rows again (reload_conns → retry_failed_tables)
+#[tokio::test]
+async fn table_tab_reloads_after_allow() {
+    let mut h = lan(false).await;
+    h.app.open_table("test", String::new(), "public".into(), "users".into(), "table".into());
+    h.settle().await;
+    let table = |h: &Harness| match h.app.tabs.get(h.app.active).map(|t| &t.kind) {
+        Some(TabKind::Table(t)) => (t.error.clone(), t.grid.as_ref().map(|g| g.result.rows.len()).unwrap_or(0)),
+        _ => panic!("no table tab"),
+    };
+    assert!(table(&h).0.is_some_and(|e| qurry_shared::errors::tls_opt_in(&e)), "{:?}", table(&h));
+    read_it(&mut h);
+    h.key("y");
+    h.settle().await;
+    let (error, rows) = table(&h);
+    assert!(error.is_none() && rows == 1, "{error:?} {rows} {}", h.app.status);
+}
+
+/// The data source form's ⌃t Test hits the TLS error: like the GUI dialog's Allow button, it points at the setting (selects the field,
+/// changes nothing); Space turns it on in the form only and ⌃t tests again
+#[tokio::test]
+async fn form_test_selects_allow_unencrypted() {
+    let mut h = lan(false).await;
+    let cfg = h.app.conn("test").unwrap().config.clone();
+    h.app.conn_form(Some(cfg));
+    h.key("Ctrl+t");
+    h.settle().await;
+    let field = |h: &Harness| match &h.app.popup {
+        Some(Popup::ConnForm(f)) => (f.fields[f.sel].label, f.fields[f.sel].value.clone(), f.message.clone().unwrap_or_default().1),
+        _ => panic!("no form"),
+    };
+    let (label, value, msg) = field(&h);
+    assert_eq!((label, value.as_str()), ("Allow unencrypted", "off"));
+    assert!(msg.ends_with("\nOn a trusted network, Space turns on \"Allow unencrypted\" (selected), then ⌃t tests again."), "{msg}");
+    // The form grows to show the whole result and keeps its key hints
+    let s = h.screen(120, 50);
+    assert!(s.contains("then ⌃t tests again.") && s.contains("Esc cancel") && s.contains("(error occurred while"), "{s}");
+    h.key("Space");
+    h.key("Ctrl+t");
+    h.settle().await;
+    let (_, value, msg) = field(&h);
+    assert!(value == "on" && msg.starts_with("✓ PostgreSQL 16 (no TLS)"), "{value} {msg}");
+    assert!(!saved(&h).await.options.allow_plaintext, "nothing is saved before Enter");
 }
 
 #[tokio::test]
@@ -109,7 +212,7 @@ async fn production_gets_only_a_status_line() {
     h.key("F5");
     h.settle().await;
     assert!(h.app.popup.is_none());
-    assert_eq!(h.app.status, "Production: trusted network only — explorer: e › \"Allow unencrypted\"");
+    assert_eq!(h.app.status, "\"LAN dev\" is Production: turn on \"Allow unencrypted\" yourself in its form (e in the explorer)");
     assert!(!saved(&h).await.options.allow_plaintext);
 }
 
@@ -127,16 +230,17 @@ async fn tree_expand_asks_no_keeps_it_yes_loads_again() {
     assert!(h.app.popup.is_none() && !saved(&h).await.options.allow_plaintext);
     h.app.offer_tls_opt_in("test", "connection refused", |a| a.reexpand("test"));
     assert!(h.app.popup.is_none(), "only TLS errors ask");
-    h.app.reexpand("test");
+    // The error isn't cached: ← → (collapse, expand again) loads again and asks again
+    h.key("Left");
+    h.key("Right");
     h.settle().await;
     assert!(matches!(h.app.popup, Some(Popup::AllowPlaintext { .. })), "expanding again asks again: {}", h.app.status);
     read_it(&mut h);
     h.key("y");
     h.settle().await;
     assert!(saved(&h).await.options.allow_plaintext);
-    // Loaded again, now in plain text: the server's own answer, no second ask
-    let kids: Vec<String> = h.app.tree.children.get("test").map(|n| n.iter().map(|n| n.label.clone()).collect()).unwrap_or_default();
-    assert!(kids.iter().any(|l| l.contains("password authentication failed")), "{kids:?}");
+    // Loaded again, now in plain text: no error, no second ask
+    assert!(!h.app.tree.failed("test"), "{:?}", h.app.tree.children.get("test").map(|n| n.iter().map(|n| n.label.clone()).collect::<Vec<_>>()));
     assert!(h.app.popup.is_none());
 }
 
@@ -172,10 +276,15 @@ async fn an_open_popup_is_never_replaced() {
     h.settle().await;
     let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("popup gone") };
     assert_eq!(text, "Production: this changes data. Run it?");
-    assert_eq!(h.app.status, "\"LAN dev\": the server has no TLS — expand or run again to allow unencrypted");
+    assert_eq!(h.app.status, "\"LAN dev\": the server has no TLS — expand it again (← →) or run again to allow unencrypted");
     h.key("y");
     assert_eq!(h.app.status, "ran");
     assert!(!saved(&h).await.options.allow_plaintext);
+    // What the status line says works: ← → loads again, and now that no popup is open it asks
+    h.key("Left");
+    h.key("Right");
+    h.settle().await;
+    assert!(matches!(h.app.popup, Some(Popup::AllowPlaintext { .. })), "{}", h.app.status);
 }
 
 /// The shared PostgreSQL has no TLS; at "127.1" Qurry treats it as remote. Expand → popup → y → the databases load with the saved password

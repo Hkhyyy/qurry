@@ -854,6 +854,10 @@ impl App {
             self.tree.expanded.remove(&n.key);
         } else {
             self.tree.expanded.insert(n.key.clone());
+            // An error from the last load isn't cached: expanding again tries again (and asks about TLS again)
+            if self.tree.failed(&n.key) {
+                self.tree.children.remove(&n.key);
+            }
             self.load_children(n.clone());
             // If the connection fell back to plaintext, say so in the status bar (same wording as the GUI)
             if matches!(n.kind, NodeKind::Conn) && matches!(self.kind_of(&n.conn), DbKind::Postgres | DbKind::Mysql) {
@@ -893,17 +897,18 @@ impl App {
         let Some(c) = self.conn(conn).map(|c| c.config.clone()) else { return };
         // Short enough for the status line next to the key hints on a 120-column terminal
         if c.options.confirm_changes {
-            self.status = "Production: trusted network only — explorer: e › \"Allow unencrypted\"".into();
+            self.status = format!("\"{}\" is Production: turn on \"Allow unencrypted\" yourself in its form (e in the explorer)", c.name);
             return;
         }
         // This comes back from a background load: never replace a popup the user is reading (a y meant for it would allow plaintext)
         if self.popup.is_some() {
-            self.status = format!("\"{}\": the server has no TLS — expand or run again to allow unencrypted", c.name);
+            self.status = format!("\"{}\": the server has no TLS — expand it again (← →) or run again to allow unencrypted", c.name);
             return;
         }
         self.popup = Some(Popup::AllowPlaintext {
             opened: std::time::Instant::now(),
-            text: format!("Allow unencrypted for this data source?\n\nThe password will be sent unencrypted to {}. Use only on a network you trust.\nTo undo, turn off \"Allow unencrypted\" in the data source form (e in the explorer).", c.host),
+            // It can open over another tab or source: name the one y changes
+            text: format!("Allow unencrypted for \"{}\"?\n\nThe password will be sent unencrypted to {}. Use only on a network you trust.\nTo undo, turn off \"Allow unencrypted\" in the data source form (e in the explorer).", c.name, c.host),
             on_yes: Box::new(move |a| {
                 a.status = format!("Allowing unencrypted for \"{}\"…", c.name);
                 let st = a.state.clone();
@@ -940,7 +945,7 @@ impl App {
             a.status = msg;
             a.reload_conns();
             // A tree that still shows the earlier error under the now connected source loads again (as the GUI does)
-            if r.is_ok() && a.tree.children.get(&conn).is_some_and(|n| n.len() == 1 && n[0].kind == NodeKind::Info) {
+            if r.is_ok() && a.tree.failed(&conn) {
                 a.reexpand(&conn);
             }
         });

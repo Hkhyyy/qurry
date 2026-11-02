@@ -1268,6 +1268,13 @@ fn popup_key(app: &mut App, k: KeyEvent) {
                                     f.message = Some(match r {
                                         Ok(v) => (true, format!("✓ {v}")),
                                         Err(e) if e.contains(qurry_core::tunnel::UNKNOWN_HOST) => (false, format!("✕ {e} Press ⌃y to trust it.")),
+                                        // The GUI dialog's Allow button, as a field to turn on: select it (the form only changes when Space is pressed)
+                                        Err(e) if qurry_shared::errors::tls_opt_in(&e) => {
+                                            if let Some(i) = f.fields.iter().position(|x| x.label == "Allow unencrypted") {
+                                                f.sel = i;
+                                            }
+                                            (false, format!("✕ {e}\nOn a trusted network, Space turns on \"Allow unencrypted\" (selected), then ⌃t tests again."))
+                                        }
                                         Err(e) => (false, format!("✕ {e}")),
                                     });
                                 }

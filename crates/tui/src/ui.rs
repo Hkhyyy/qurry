@@ -962,9 +962,6 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             f.render_widget(List::new(items).block(panel(hint, true)), list);
         }
         Popup::ConnForm(form) => {
-            let h = form.fields.len() as u16 + 6;
-            let r = centered(area, 72, h);
-            clear(f, r);
             let mut lines: Vec<Line> = form
                 .fields
                 .iter()
@@ -992,11 +989,17 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                 })
                 .collect();
             lines.push(Line::raw(""));
+            // The test result, one row per line of it
             if let Some((ok, m)) = &form.message {
-                lines.push(Line::styled(disp(m), Style::default().fg(if *ok { OK } else { DANGER })));
+                lines.extend(disp(m).lines().map(|l| Line::styled(l.to_string(), Style::default().fg(if *ok { OK } else { DANGER }))));
             }
             lines.push(Line::styled(disp("↑↓/Tab move · type to edit · Space/←→ toggle · ⌃t test · ⌃s / Enter save · Esc cancel"), Style::default().fg(DIM)));
             let t = if form.edit.is_some() { " Data Source Properties " } else { " New Data Source " };
+            // As tall as the wrapped text, so a long result (a TLS error and its hint) doesn't push the key hints out; a row is kept for the
+            // result before the first test, so a one-line result doesn't make the form jump
+            let w = centered(area, 72, 0).width;
+            let r = centered(area, 72, wrapped_height(&lines, w.saturating_sub(2)) + 2 + form.message.is_none() as u16);
+            clear(f, r);
             f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(panel(t, true)), r);
         }
     }
