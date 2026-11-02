@@ -155,6 +155,12 @@ pub fn plan_execution(text: &str, offset: usize, segs: JsValue, kind: JsValue, s
     Ok(serde_wasm_bindgen::to_value(&plan)?)
 }
 
+/// A value as a string literal `kind` reads (qurry_shared::sql::literal; null → NULL): the grid's filters and edit SQL, as its copy formats
+#[wasm_bindgen(js_name = sqlLiteral)]
+pub fn sql_literal(kind: JsValue, value: Option<String>) -> Result<String, JsError> {
+    Ok(qurry_shared::sql::literal(parse_kind(kind)?, value.as_deref()))
+}
+
 /// Statement at the caret (a UTF-16 offset, as in a JS string), trimmed; undefined if the text has none
 #[wasm_bindgen(js_name = statementAt)]
 pub fn statement_at(text: &str, offset: usize, kind: JsValue) -> Result<Option<String>, JsError> {

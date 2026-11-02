@@ -147,6 +147,8 @@ const api = {
   /** A label per tab, undefined where the table name is unique */
   tableTabLabels: (tabs: TableTabKey[]): (string | undefined)[] => wasm.tableTabLabels(tabs),
   isNumericType: (typeName: string): boolean => wasm.isNumericType(typeName),
+  /** null → NULL */
+  sqlLiteral: (kind: DbKind, value: string | null): string => wasm.sqlLiteral(kind, value),
   inList: (rows: Cell[][], types: string[], kind: DbKind, opts: ExtractOptions): string => wasm.inList(rows, types, kind, opts),
   extractRows: (fmt: Extractor, rows: ExtractRowsInput, kind: DbKind, opts: ExtractOptions): string => wasm.extractRows(fmt, rows, kind, opts),
   fuzzyScore: (query: string, text: string, wordStarts: boolean): number | undefined => wasm.fuzzyScore(query, text, wordStarts),

@@ -317,6 +317,14 @@ mod tests {
         assert_eq!(in_list(&rows, &[], DbKind::Mssql, Options::default()).0, "('x\\'') OR 1=1 -- ')");
     }
 
+    /// ClickHouse also reads \ as an escape inside "names": a column name can't end the identifier early
+    #[test]
+    fn clickhouse_names_escape_backslashes() {
+        let x = Rows { names: vec!["a\\".into(), ") VALUES (1); DROP TABLE t; -- ".into()], types: vec![], vals: vec![vec![json!("1"), json!("2")]], keys: vec![], table_ref: "t".into(), header: false };
+        assert_eq!(rows(Format::SqlInserts, &x, DbKind::Clickhouse, Options::default()), "INSERT INTO t (\"a\\\\\", \") VALUES (1); DROP TABLE t; -- \") VALUES ('1', '2');");
+        assert_eq!(crate::sql::quote_ident(DbKind::Postgres, "a\\"), "\"a\\\"", "PostgreSQL names keep \\ as it is");
+    }
+
     #[test]
     fn literals_follow_the_kind() {
         let v = json!("a\\'b");
