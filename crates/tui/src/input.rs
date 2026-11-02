@@ -1944,6 +1944,37 @@ mod tests {
         assert_eq!(cfg_of(&h).options.mcp.as_deref(), Some("off"));
     }
 
+    /// Tunnel: none / ssh / aws ssm. One tunnel at a time; a source that never used SSM is saved without it
+    #[tokio::test]
+    async fn conn_form_tunnel_choice() {
+        let mut h = Harness::new().await;
+        let cfg_of = |h: &Harness| match &h.app.popup {
+            Some(crate::app::Popup::ConnForm(f)) => App::form_config(f).unwrap().0,
+            _ => panic!("no form"),
+        };
+        let set = |h: &mut Harness, label: &str, v: &str| {
+            let Some(crate::app::Popup::ConnForm(f)) = &mut h.app.popup else { panic!() };
+            f.fields.iter_mut().find(|x| x.label == label).unwrap().value = v.into();
+        };
+        h.app.conn_form(None);
+        assert_eq!(cfg_of(&h).ssm, None);
+        set(&mut h, "Tunnel", "aws ssm");
+        set(&mut h, "AWS profile", " prod ");
+        set(&mut h, "AWS region", "ap-northeast-2");
+        set(&mut h, "SSM target", "i-0123456789abcdef0");
+        let c = cfg_of(&h);
+        assert_eq!(c.active_ssm().map(|s| (s.profile.as_str(), s.region.as_str(), s.target.as_str())), Some(("prod", "ap-northeast-2", "i-0123456789abcdef0")));
+        assert!(c.active_ssh().is_none());
+        // Reopened: the choice and fields come back; switching to SSH turns SSM off but keeps its fields
+        h.app.conn_form(Some(c));
+        assert_eq!(cfg_of(&h).active_ssm().map(|s| s.target.clone()), Some("i-0123456789abcdef0".into()));
+        set(&mut h, "Tunnel", "ssh");
+        set(&mut h, "SSH host", "bastion");
+        let c = cfg_of(&h);
+        assert!(c.active_ssh().is_some() && c.active_ssm().is_none());
+        assert_eq!(c.ssm.unwrap().target, "i-0123456789abcdef0");
+    }
+
     /// Vacuum Progress only cancels: K (kill connection) doesn't even ask, and isn't in the hint line
     #[tokio::test]
     async fn dba_vacuum_progress_only_cancels() {

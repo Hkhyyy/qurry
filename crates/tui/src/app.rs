@@ -7,7 +7,7 @@ use qurry_core::db::{ColumnInfo, QueryResult};
 use qurry_core::meta::{IndexEntry, SchemaObjects};
 use qurry_core::redisdb::{KeyDetail, KeyRow};
 use qurry_core::sql;
-use qurry_core::store::{ConnectionConfig, DbKind, RedisMode, SshAuth, SshConfig, SslConfig};
+use qurry_core::store::{ConnectionConfig, DbKind, RedisMode, SshAuth, SshConfig, SsmConfig, SslConfig};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -800,7 +800,7 @@ impl App {
             .map(|c| Node {
                 key: c.config.id.clone(),
                 label: c.config.name.clone(),
-                hint: format!("{:?}", c.config.kind).to_lowercase() + if c.config.active_ssh().is_some() { " · ssh" } else { "" },
+                hint: format!("{:?}", c.config.kind).to_lowercase() + if c.config.active_ssh().is_some() { " · ssh" } else if c.config.active_ssm().is_some() { " · ssm" } else { "" },
                 kind: NodeKind::Conn,
                 conn: c.config.id.clone(),
                 db: None,
@@ -2337,6 +2337,8 @@ impl App {
             options: Default::default(), ssl: None, redis: None, ssm: None,
         });
         let ssh = c.ssh.clone().unwrap_or(SshConfig { enabled: false, host: String::new(), port: 22, user: String::new(), auth: SshAuth::Key, key_path: "~/.ssh/id_ed25519".into() });
+        let ssm = c.ssm.clone().unwrap_or_default();
+        let tunnel = if ssm.enabled { "aws ssm" } else if ssh.enabled { "ssh" } else { "none" };
         let kind = serde_json::to_value(c.kind).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_else(|| "postgres".into());
         let f = |label, value: String, kind| Field { label, value, kind };
         let ch = |xs: &[&str]| FieldKind::Choice(xs.iter().map(|x| x.to_string()).collect());
@@ -2364,13 +2366,17 @@ impl App {
                 f("Allow unencrypted", if c.options.allow_plaintext { "on" } else { "off" }.into(), FieldKind::Toggle),
                 // Whether it's visible to qurry-mcp (AI tools). New sources start off
                 f("MCP", if edit.is_some() { mcp_label(&c) } else { "off" }.into(), ch(&["off", "read", "write"])),
-                f("SSH tunnel", if ssh.enabled { "on" } else { "off" }.into(), FieldKind::Toggle),
+                f("Tunnel", tunnel.into(), ch(&["none", "ssh", "aws ssm"])),
                 f("SSH host", ssh.host.clone(), FieldKind::Text),
                 f("SSH port", ssh.port.to_string(), FieldKind::Text),
                 f("SSH user", ssh.user.clone(), FieldKind::Text),
                 f("SSH auth", if ssh.auth == SshAuth::Key { "key" } else { "password" }.into(), ch(&["key", "password"])),
                 f("SSH key file", ssh.key_path.clone(), FieldKind::Text),
                 f("SSH secret", saved(c.ssh_secret_saved), FieldKind::Secret),
+                // AWS SSM: the AWS CLI signs in with the user's own AWS config / SSO; nothing secret is kept here
+                f("AWS profile", ssm.profile.clone(), FieldKind::Text),
+                f("AWS region", ssm.region.clone(), FieldKind::Text),
+                f("SSM target", ssm.target.clone(), FieldKind::Text),
                 f("SSL", if c.active_ssl().is_some() { "on" } else { "off" }.into(), FieldKind::Toggle),
                 // Newly enabled SSL is require: verifying needs a CA the built-in list knows, or a CA file (AWS RDS, a company CA, SSH tunnels)
                 f("SSL mode", c.ssl.as_ref().map(|x| x.mode().to_string()).unwrap_or_else(|| "require".into()), ch(&["require", "verify-ca", "verify-full"])),
@@ -2423,13 +2429,16 @@ impl App {
             name => c.color = crate::ui::COLOR_PRESETS.iter().find(|p| p.0 == name).map(|p| p.1.to_string()),
         }
         c.ssh = Some(SshConfig {
-            enabled: v("SSH tunnel") == "on",
+            enabled: v("Tunnel") == "ssh",
             host: v("SSH host").trim().into(),
             port: v("SSH port").trim().parse().unwrap_or(22),
             user: v("SSH user").trim().into(),
             auth: if v("SSH auth") == "password" { SshAuth::Password } else { SshAuth::Key },
             key_path: v("SSH key file").trim().into(),
         });
+        // Kept while off (like SSH) so switching back finds the fields filled; an untouched source gets no ssm key
+        let ssm = SsmConfig { enabled: v("Tunnel") == "aws ssm", profile: v("AWS profile").trim().into(), region: v("AWS region").trim().into(), target: v("SSM target").trim().into() };
+        c.ssm = (c.ssm.is_some() || ssm != SsmConfig::default()).then_some(ssm);
         c.ssl = Some(SslConfig { enabled: v("SSL") == "on", mode: v("SSL mode"), ca_file: v("CA file").trim().into(), cert_file: v("Client cert").trim().into(), key_file: v("Client key").trim().into() });
         c.redis = if c.kind == DbKind::Redis { Some(RedisMode { mode: v("Redis mode"), sentinel_master: v("Sentinel master").trim().into(), nodes: v("Redis nodes").trim().into() }) } else { None };
         let secret = |s: String| if s == "<saved>" { None } else { Some(s) };
