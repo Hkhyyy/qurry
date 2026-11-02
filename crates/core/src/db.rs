@@ -1,10 +1,11 @@
 //! DB connections and query execution. Only PostgreSQL is supported for now.
+use crate::backend::{Backend, dispatch};
 use crate::error::AppResult;
 use crate::store::{ConnectionConfig, DbKind};
 use futures::TryStreamExt;
 use serde::Serialize;
 use serde_json::Value;
-use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions, PgRow};
+use sqlx::postgres::{PgPool, PgRow};
 use sqlx::{Column, Either, Executor, Row, TypeInfo, ValueRef};
 use std::time::{Duration, Instant};
 
@@ -77,14 +78,6 @@ pub fn plaintext_allowed(cfg: &ConnectionConfig, connect_host: &str) -> bool {
     cfg.options.allow_plaintext || is_local(cfg) || is_loopback(connect_host)
 }
 
-/// Message to show when PostgreSQL connected without TLS (with no SSL setting, it falls back to plain text if the server lacks TLS. Except this machine · tunnels)
-pub async fn pg_plaintext_note(p: &sqlx::PgPool, cfg: &ConnectionConfig) -> Option<String> {
-    if cfg.active_ssl().is_some() || is_local(cfg) {
-        return None;
-    }
-    let ssl: Option<bool> = sqlx::query_scalar("select ssl from pg_stat_ssl where pid = pg_backend_pid()").fetch_optional(p).await.ok().flatten();
-    (ssl == Some(false)).then(|| "⚠ Not encrypted: the server didn't offer TLS, so the password and data travel in plain text. Enable SSL in the data source to require it.".to_string())
-}
 /// Close idle connections after 1 minute (so connections opened in bulk while reading the tree or search index do not linger on production servers). Connections held by tabs are not idle and stay
 pub const POOL_IDLE: Duration = Duration::from_secs(60);
 
@@ -94,104 +87,15 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>) -> AppResul
 
 /// If `tunnel_port` is set, connect to the SSH tunnel's local port.
 pub async fn connect_via(cfg: &ConnectionConfig, password: Option<&str>, tunnel_port: Option<u16>) -> AppResult<Pool> {
+    let (host, port) = match tunnel_port {
+        Some(p) => ("127.0.0.1", p),
+        None => (cfg.host.as_str(), cfg.port),
+    };
     match cfg.kind {
         DbKind::Sqlite | DbKind::Mssql | DbKind::Clickhouse | DbKind::Duckdb | DbKind::Mongodb | DbKind::Oracle | DbKind::Qdrant | DbKind::Chroma | DbKind::Milvus => Ok(Pool::Plugin(crate::plugin::connect(cfg, password, tunnel_port).await?)),
-        DbKind::Postgres => {
-            let (host, port) = match tunnel_port {
-                Some(p) => ("127.0.0.1", p),
-                None => (cfg.host.as_str(), cfg.port),
-            };
-            let mut opts = PgConnectOptions::new()
-                .host(host)
-                .port(port)
-                .username(&cfg.user)
-                .application_name("qurry");
-            // Like DataGrip, an empty value connects to the postgres DB (the PG default, a DB named after the user, often does not exist)
-            let database = if cfg.database.trim().is_empty() { "postgres" } else { cfg.database.trim() };
-            opts = opts.database(database);
-            if let Some(p) = password.filter(|p| !p.is_empty()) {
-                opts = opts.password(p);
-            }
-            if cfg.read_only {
-                // Do not leave the parsing of \ in strings to server settings (match the rules guard reads with)
-                opts = opts.options([("default_transaction_read_only", "on"), ("standard_conforming_strings", "on")]);
-            }
-            // Without SSL settings a remote server must still set up TLS (certificate not checked); plain text only for this computer,
-            // an SSH tunnel, or when the data source allows it (Prefer would quietly fall back to plain text if TLS were cut)
-            if cfg.active_ssl().is_none() && !plaintext_allowed(cfg, host) {
-                opts = opts.ssl_mode(sqlx::postgres::PgSslMode::Require);
-            }
-            // SSL from the SSH/SSL tab
-            if let Some(ssl) = cfg.active_ssl() {
-                use sqlx::postgres::PgSslMode;
-                opts = opts.ssl_mode(match ssl.mode() {
-                    "verify-full" => PgSslMode::VerifyFull,
-                    "verify-ca" => PgSslMode::VerifyCa,
-                    "require" => PgSslMode::Require,
-                    // Do not pass unknown values on as unverified require
-                    m => return Err(crate::error::AppError::Msg(format!("Unknown SSL mode '{m}' (use require, verify-ca or verify-full)"))),
-                });
-                let home = |p: &str| p.strip_prefix("~/").map(|r| format!("{}/{r}", std::env::var("HOME").unwrap_or_default())).unwrap_or_else(|| p.to_string());
-                if !ssl.ca_file.trim().is_empty() {
-                    opts = opts.ssl_root_cert(home(ssl.ca_file.trim()));
-                }
-                if !ssl.cert_file.trim().is_empty() {
-                    opts = opts.ssl_client_cert(home(ssl.cert_file.trim()));
-                }
-                if !ssl.key_file.trim().is_empty() {
-                    opts = opts.ssl_client_key(home(ssl.key_file.trim()));
-                }
-            }
-            const LEVELS: [&str; 4] = ["read uncommitted", "read committed", "repeatable read", "serializable"];
-            if let Some(iso) = cfg.options.isolation.as_deref().filter(|i| LEVELS.contains(i)) {
-                opts = opts.options([("default_transaction_isolation", iso)]);
-            }
-            // sqlx sends TimeZone=UTC as a startup parameter, so change it with SET right after connecting
-            let tz = cfg.options.time_zone.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(|t| t.replace('\'', "''"));
-            let script = cfg.options.startup_script.trim().to_string();
-            let pool = PgPoolOptions::new()
-                // Each console/table tab uses one dedicated connection. Connections open only when needed, so just keep the cap generous
-                .max_connections(crate::db::POOL_MAX)
-                .idle_timeout(crate::db::POOL_IDLE)
-                .acquire_timeout(Duration::from_secs(10))
-                .after_connect(move |conn, _meta| {
-                    let script = script.clone();
-                    let tz = tz.clone();
-                    Box::pin(async move {
-                        use sqlx::Executor;
-                        if let Some(tz) = tz {
-                            conn.execute(format!("set time zone '{tz}'").as_str()).await?;
-                        }
-                        if !script.is_empty() {
-                            conn.execute(sqlx::raw_sql(&script)).await?;
-                        }
-                        Ok(())
-                    })
-                })
-                .connect_with(opts)
-                .await
-                .map_err(|e| match &e {
-                    // Required TLS that the server can't set up: say what to do instead of a bare TLS error
-                    sqlx::Error::Tls(_) if cfg.active_ssl().is_none() => crate::error::AppError::Msg(format!("{}\n({e})", qurry_shared::errors::needs_tls_pg())),
-                    _ => e.into(),
-                })?;
-            Ok(Pool::Pg(pool))
-        }
-        DbKind::Mysql => {
-            let (host, port) = match tunnel_port {
-                Some(p) => ("127.0.0.1", p),
-                None => (cfg.host.as_str(), cfg.port),
-            };
-            Ok(Pool::My(crate::mysql::connect(cfg, password, host, port).await?))
-        }
-        DbKind::Redis => {
-            let (host, port) = match tunnel_port {
-                Some(p) => ("127.0.0.1", p),
-                None => (cfg.host.as_str(), cfg.port),
-            };
-            let m = crate::redisdb::connect(cfg, password, host, port).await?;
-            Ok(Pool::Redis(m, crate::redisdb::db_index(&cfg.database)))
-        }
+        DbKind::Postgres => Ok(Pool::Pg(crate::backend::pg::connect(cfg, password, host, port).await?)),
+        DbKind::Mysql => Ok(Pool::My(crate::backend::mysql::connect(cfg, password, host, port).await?)),
+        DbKind::Redis => Ok(Pool::Redis(crate::redisdb::connect(cfg, password, host, port).await?, crate::redisdb::db_index(&cfg.database))),
     }
 }
 
@@ -240,37 +144,16 @@ mod version_tests {
 
 impl Pool {
     pub async fn server_version(&self) -> AppResult<String> {
-        match self {
-            Pool::Pg(p) => Ok(sqlx::query_scalar::<_, String>("select version()").fetch_one(p).await?),
-            Pool::My(p) => crate::mysql::server_version(p).await,
-            Pool::Redis(m, _) => crate::redisdb::server_version(m).await,
-            Pool::Plugin(c) => c.call("version", Value::Null).await,
-        }
+        dispatch!(self, b => b.server_version().await)
     }
 
     pub async fn close(&self) {
-        match self {
-            Pool::Pg(p) => p.close().await,
-            Pool::My(p) => p.close().await,
-            Pool::Redis(..) | Pool::Plugin(_) => {}
-        }
+        dispatch!(self, b => Backend::close(b).await)
     }
 
     /// Rerun the query and export the full result (out decides the format and target)
     pub async fn export(&self, sql: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {
-        match self {
-            Pool::Pg(p) => export_pg(p, sql, out).await,
-            Pool::My(p) => crate::mysql::export(p, sql, out).await,
-            Pool::Redis(m, _) => crate::redisdb::export(m, sql, out).await,
-            Pool::Plugin(c) => {
-                let r = c.query(sql, 10_000_000).await?;
-                out.header(&r.columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>()).await?;
-                for row in &r.rows {
-                    out.row(row).await?;
-                }
-                Ok(())
-            }
-        }
+        dispatch!(self, b => b.export(sql, out).await)
     }
 
     /// To a CSV file (with BOM). Row count
@@ -282,36 +165,13 @@ impl Pool {
 
     /// Run one query and return up to `limit` rows.
     pub async fn run_query(&self, sql: &str, limit: usize) -> AppResult<QueryResult> {
-        match self {
-            Pool::Pg(p) => run_pg(p, sql, limit).await,
-            Pool::My(p) => crate::mysql::run(p, sql, limit).await,
-            Pool::Redis(m, _) => crate::redisdb::run(m, sql, limit).await,
-            Pool::Plugin(c) => c.query(sql, limit).await,
-        }
+        dispatch!(self, b => b.run_query(sql, limit).await)
     }
 
-    /// keep-alive
     /// keep-alive. Cut off at 5 seconds so one unresponsive server does not stall the cleanup routine
     pub async fn ping(&self) {
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), self.ping_inner()).await;
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async { dispatch!(self, b => b.ping().await) }).await;
     }
-
-    async fn ping_inner(&self) {
-        match self {
-            Pool::Pg(p) => {
-                let _ = sqlx::query("select 1").execute(p).await;
-            }
-            Pool::My(p) => {
-                let _ = sqlx::query("select 1").execute(p).await;
-            }
-            Pool::Redis(m, _) => crate::redisdb::ping(m).await,
-            Pool::Plugin(_) => {}
-        }
-    }
-}
-
-async fn run_pg(pool: &PgPool, sql: &str, limit: usize) -> AppResult<QueryResult> {
-    run_pg_on(&mut *pool.acquire().await?, sql, limit).await
 }
 
 /// Run one statement on an already acquired connection (transaction). With 0 rows the columns come from describe
@@ -393,11 +253,6 @@ pub async fn run_on(conn: &mut sqlx::PgConnection, sql: &str, limit: usize) -> A
         }
     }
     Ok(QueryResult { columns, rows, rows_affected: 0, truncated, elapsed_ms: start.elapsed().as_millis() as u64, has_result_set: true, in_transaction: false, warning: None })
-}
-
-async fn export_pg(pool: &PgPool, sql: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {
-    let mut conn = pool.acquire().await?;
-    export_pg_on(&mut conn, sql, out).await
 }
 
 /// Export on an already acquired connection (possibly a read-only transaction)
@@ -647,17 +502,18 @@ mod tests {
         }
     }
 
-    /// Tests against a local PostgreSQL. Run with `cargo test -- --ignored`.
+    /// Tests against a local PostgreSQL. Run with `cargo test -- --ignored`. QURRY_TEST_PG=host:port:user:db picks another server (e.g. a container)
     fn local_cfg() -> ConnectionConfig {
+        let env = std::env::var("QURRY_TEST_PG").ok();
+        let part = |i: usize| env.as_ref().and_then(|e| e.split(':').nth(i).map(String::from));
         ConnectionConfig {
             id: "test".into(),
             name: "local".into(),
             kind: DbKind::Postgres,
-            host: std::env::var("QURRY_TEST_PG_HOST").unwrap_or_else(|_| "localhost".into()),
-            port: 5432,
-            user: std::env::var("QURRY_TEST_PG_USER")
-                .unwrap_or_else(|_| std::env::var("USER").unwrap()),
-            database: std::env::var("QURRY_TEST_PG_DB").unwrap_or_else(|_| "postgres".into()),
+            host: part(0).unwrap_or_else(|| std::env::var("QURRY_TEST_PG_HOST").unwrap_or_else(|_| "localhost".into())),
+            port: part(1).map_or(5432, |p| p.parse().expect("QURRY_TEST_PG port")),
+            user: part(2).unwrap_or_else(|| std::env::var("QURRY_TEST_PG_USER").unwrap_or_else(|_| std::env::var("USER").unwrap())),
+            database: part(3).unwrap_or_else(|| std::env::var("QURRY_TEST_PG_DB").unwrap_or_else(|_| "postgres".into())),
             color: None,
             ssh: None,
             password_saved: false,
@@ -673,10 +529,6 @@ mod tests {
     #[ignore]
     async fn pg_remote_requires_tls() {
         let mut cfg = local_cfg();
-        if let Ok(e) = std::env::var("QURRY_TEST_PG") {
-            let p: Vec<&str> = e.split(':').collect();
-            (cfg.port, cfg.user, cfg.database) = (p[1].parse().unwrap(), p[2].into(), p[3].into());
-        }
         cfg.host = "127.1".into();
         assert!(!is_loopback(&cfg.host) && is_loopback("::ffff:127.0.0.1"));
         opt_in_then_connect(cfg, "pw").await;

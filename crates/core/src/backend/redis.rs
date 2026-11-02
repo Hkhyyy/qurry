@@ -1,11 +1,14 @@
 //! Redis: one schema per DB (named db<n>), keys as objects. The queries live in crate::redisdb
-use super::Backend;
+use super::{Backend, Snapshots};
+use crate::db::QueryResult;
 use crate::erd::Erd;
 use crate::error::{AppError, AppResult};
 use crate::fake::TableShape;
 use crate::hints::{Hint, HintReq};
 use crate::meta::{CompletionTable, FtsHit, FtsRequest, IndexEntry, SchemaInfo, SchemaObjects, TableDetail};
 use crate::redisdb::RedisConn;
+use crate::session::Session;
+use crate::transfer::Exporter;
 
 /// The connection and the DB index the pool points to
 pub(crate) struct Redis<'a> {
@@ -63,5 +66,47 @@ impl Backend for Redis<'_> {
 
     async fn table_shape(&self, _schema: &str, _table: &str) -> AppResult<TableShape> {
         Err(AppError::Msg("Redis has no tables".into()))
+    }
+
+    // ───── Connection: db.rs · app.rs ─────
+
+    async fn server_version(&self) -> AppResult<String> {
+        crate::redisdb::server_version(self.conn).await
+    }
+
+    async fn ping(&self) {
+        crate::redisdb::ping(self.conn).await
+    }
+
+    // ───── Running: db.rs · session.rs · app.rs ─────
+
+    async fn run_query(&self, sql: &str, limit: usize) -> AppResult<QueryResult> {
+        crate::redisdb::run(self.conn, sql, limit).await
+    }
+
+    async fn export(&self, sql: &str, out: &mut Exporter) -> AppResult<()> {
+        crate::redisdb::export(self.conn, sql, out).await
+    }
+
+    /// Within the size limits (redisdb::check_read). AppState::run_read_only has already refused anything but read commands (no CONFIG, KEYS)
+    async fn run_read_only(&self, sql: &str, limit: usize) -> AppResult<QueryResult> {
+        crate::redisdb::check_read(self.conn, sql).await?;
+        crate::redisdb::run(self.conn, sql, limit).await
+    }
+
+    async fn export_read_only(&self, _sql: &str, _out: &mut Exporter) -> AppResult<()> {
+        Err(AppError::Msg("CSV export of Redis commands is not available in read-only mode".into()))
+    }
+
+    async fn open_session(&self) -> AppResult<Session> {
+        Ok(Session::Redis(self.conn.clone()))
+    }
+
+    /// One command after another (no transaction)
+    async fn execute_batch(&self, statements: &[String], _exact_one: bool, _prepared: bool, _snaps: &[Option<&str>]) -> AppResult<(u64, Snapshots)> {
+        for st in statements {
+            crate::redisdb::run(self.conn, st, 1).await?;
+        }
+        Ok((statements.len() as u64, vec![]))
     }
 }
