@@ -142,7 +142,7 @@ const review = async (it, round) => {
             `Review branch ${it.branch} (diff: \`git diff ${BASE === 'main' ? 'origin/main' : BASE}...${it.branch}\`) for Qurry work item "${it.slug}".\n` +
             `Task it implements:\n${it.task}\n\nYour lens: ${l.focus}.\n` +
             'Read the code; run tests or real-server checks when a claim depends on behavior. Report only concrete problems with file:line and a scenario — no style nits. Empty list if it is fine. ' +
-            'Do not modify any branch.',
+            'Do not modify any branch.\n' + houseRules,
           { agentType: l.type, isolation: 'worktree', schema: FINDINGS, phase: 'Review', label: `review r${round} ${l.key}: ${it.slug}` },
         ).then((r) => (r?.findings || []).map((f) => ({ ...f, lens: l.key }))),
       ),
@@ -159,7 +159,7 @@ const review = async (it, round) => {
       agent(
         readBranch(it.branch) +
           `Try to REFUTE this review finding on branch ${it.branch} of Qurry. Check the code (and run it if needed). Default to real=false if you cannot confirm it.\n\n` +
-          `${f.severity.toUpperCase()} [${f.lens}] ${f.title}\nWhere: ${f.where}\nScenario: ${f.scenario}`,
+          `${f.severity.toUpperCase()} [${f.lens}] ${f.title}\nWhere: ${f.where}\nScenario: ${f.scenario}\n\n${houseRules}`,
         { isolation: 'worktree', schema: VERDICT, phase: 'Review', label: `verify: ${f.title.slice(0, 40)}`, effort: 'high' },
       ).then((v) => ({ f, real: !!v?.real, why: v?.why || '' })),
     ),
