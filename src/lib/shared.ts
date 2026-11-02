@@ -50,6 +50,12 @@ export function initShared(): Promise<void> {
 export function initSharedSync(bytes: BufferSource) {
   wasm.initSync({ module: bytes });
   ready = true;
+  loading = Promise.resolve();
+}
+
+/** Whether shared() can be called now */
+export function sharedReady(): boolean {
+  return ready;
 }
 
 export function shared(): typeof api {

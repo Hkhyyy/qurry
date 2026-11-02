@@ -3,6 +3,7 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { QueryResult, Dialect, DbKind } from "../lib/api";
 import { splitScript } from "../lib/sqlSplit";
 import { DEFAULT_EXEC, ExecSettings, planExecution } from "../lib/execPlan";
+import { initShared, sharedReady } from "../lib/shared";
 import { ConsoleEditor, EditorApi, RunRequest } from "./ConsoleEditor";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { ResultGrid } from "./ResultGrid";
@@ -122,12 +123,17 @@ export function ConsolePane(p: Props) {
   /** ⌘↩ execution rules (DataGrip Query Execution settings) */
   const splitFn = p.dialect?.split ?? ((t: string) => splitScript(t, p.kind));
   const onRun = (req: RunRequest) => {
-    try {
-      run(req);
-    } catch (e) {
-      // Splitting runs in the shared WebAssembly module; without it only a selection run as one statement works
-      p.onError(`Couldn't split the console into statements: ${e}. Restart Qurry; until then, select the statement and set Query Execution Settings › For selection execute › Exactly as a single statement.`);
-    }
+    // Splitting and planning run in the shared WebAssembly module; a selection run as one statement doesn't need it
+    const single = !!req.selection?.text.trim() && settings.selection === "single";
+    if (single || sharedReady()) return run(req);
+    // Still loading at startup: run once it is there. Failed (main.tsx logs why): say what the user can do
+    initShared().then(
+      () => run(req),
+      () =>
+        p.onError(
+          "Couldn't split the console into statements: Qurry couldn't load its WebAssembly module, usually because the system WebView is too old (update macOS, or webkit2gtk on Linux). Until then, select the statement and set Query Execution Settings › For selection execute › Exactly as a single statement.",
+        ),
+    );
   };
   const run = (req: RunRequest) => {
     const { text, offset, selection } = req;
