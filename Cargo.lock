@@ -5277,6 +5277,7 @@ version = "0.1.0"
 dependencies = [
  "qurry-shared",
  "serde-wasm-bindgen",
+ "serde_json",
  "wasm-bindgen",
 ]
 

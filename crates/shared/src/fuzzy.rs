@@ -1,8 +1,7 @@
 //! Fuzzy matching for search popups: exact > prefix > substring > letters in order. Higher scores come first; None = no match.
 
 /// Where the GUI scores differently from the TUI and the MCP server (D2; the fuzzyScore rows of crates/shared/tests/DIVERGENCES.md)
-#[derive(Debug, Clone, Copy, Default, serde::Deserialize)]
-#[serde(rename_all = "camelCase", default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Options {
     /// The GUI's JetBrains-style scoring (Search Everywhere): a substring or letter at a word start (after _ . - or a space,
     /// or an uppercase letter) scores higher, adjacent letters earn a bonus, positions and lengths count UTF-16 code units

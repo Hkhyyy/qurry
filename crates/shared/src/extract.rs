@@ -114,7 +114,7 @@ fn raw_text(v: &Value) -> String {
 }
 
 /// Numeric and boolean column types (PostgreSQL, MySQL); not interval and the like
-fn numeric_type(t: &str) -> bool {
+pub fn numeric_type(t: &str) -> bool {
     const TYPES: [&str; 25] = [
         "int", "int2", "int4", "int8", "integer", "tinyint", "smallint", "mediumint", "bigint", "serial", "serial2", "serial4", "serial8", "smallserial", "bigserial", "numeric", "decimal", "real", "float", "float4", "float8",
         "double", "bool", "boolean", "oid",

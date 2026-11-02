@@ -64,6 +64,77 @@ pub fn statement_at(text: &str, offset: usize, kind: JsValue) -> Result<Option<S
     Ok(qurry_shared::sql::statement_at(text, byte_offset(text, offset), parse_kind(kind)?))
 }
 
+// Grid and search helpers. `opts` objects are the option structs of each qurry_shared module in camelCase ({} = the TUI's rules)
+
+/// Time column (fractional seconds are aligned): time types except INTERVAL
+#[wasm_bindgen(js_name = isTimeType)]
+pub fn is_time_type(type_name: &str) -> bool {
+    qurry_shared::format::is_time_type(type_name)
+}
+
+/// The longest fractional-second digit count among a column's text values (0 if none)
+#[wasm_bindgen(js_name = fracWidth)]
+pub fn frac_width(values: JsValue) -> Result<usize, JsError> {
+    let v: Vec<String> = serde_wasm_bindgen::from_value(values)?;
+    Ok(qurry_shared::format::frac_width(v.iter().map(String::as_str)))
+}
+
+/// 03:19:15 → 03:19:15.000000 (`width` fractional digits)
+#[wasm_bindgen(js_name = padFrac)]
+pub fn pad_frac(s: &str, width: usize) -> String {
+    qurry_shared::format::pad_frac(s, width)
+}
+
+/// [{id, db, schema, table}, …] → a label per tab (schema.table or db.schema.table), null where the name is unique
+#[wasm_bindgen(js_name = tableTabLabels)]
+pub fn table_tab_labels(tabs: JsValue) -> Result<JsValue, JsError> {
+    let tabs: Vec<qurry_shared::labels::TableTab> = serde_wasm_bindgen::from_value(tabs)?;
+    Ok(serde_wasm_bindgen::to_value(&qurry_shared::labels::table_tab_labels(&tabs))?)
+}
+
+/// Numeric or boolean column type: the IN list leaves its number text bare
+#[wasm_bindgen(js_name = isNumericType)]
+pub fn is_numeric_type(type_name: &str) -> bool {
+    qurry_shared::extract::numeric_type(type_name)
+}
+
+/// Rows of cells (strings, numbers, booleans, null) as a list to put after IN; `types` one per column
+#[wasm_bindgen(js_name = inList)]
+pub fn in_list(rows: JsValue, types: JsValue, opts: JsValue) -> Result<String, JsError> {
+    let rows: Vec<Vec<serde_json::Value>> = serde_wasm_bindgen::from_value(rows)?;
+    let types: Vec<String> = serde_wasm_bindgen::from_value(types)?;
+    Ok(qurry_shared::extract::in_list(&rows, &types, serde_wasm_bindgen::from_value(opts)?).0)
+}
+
+/// Rows ({names, types, vals, keys, tableRef, header}) as text in a Data Extractor format ("CSV", "SQL Inserts" …) for `kind`
+#[wasm_bindgen(js_name = extractRows)]
+pub fn extract_rows(format: JsValue, rows: JsValue, kind: JsValue, opts: JsValue) -> Result<String, JsError> {
+    let rows: qurry_shared::extract::Rows = serde_wasm_bindgen::from_value(rows)?;
+    Ok(qurry_shared::extract::rows(serde_wasm_bindgen::from_value(format)?, &rows, parse_kind(kind)?, serde_wasm_bindgen::from_value(opts)?))
+}
+
+/// Search score of `text` for `query` (higher first), undefined if it doesn't match. `word_starts` is the one fuzzy option, passed
+/// as a plain argument: search popups call this once per item on every keystroke
+#[wasm_bindgen(js_name = fuzzyScore)]
+pub fn fuzzy_score(query: &str, text: &str, word_starts: bool) -> Option<f64> {
+    qurry_shared::fuzzy::score(query, text, qurry_shared::fuzzy::Options { word_starts })
+}
+
+/// Redis key names → folders split on ":": [{kind: "folder", name, path, count, children} | {kind: "key", item: index}, …]
+#[wasm_bindgen(js_name = keyTree)]
+pub fn key_tree(keys: JsValue, opts: JsValue) -> Result<JsValue, JsError> {
+    let keys: Vec<String> = serde_wasm_bindgen::from_value(keys)?;
+    Ok(serde_wasm_bindgen::to_value(&qurry_shared::keytree::key_tree(&keys, serde_wasm_bindgen::from_value(opts)?))?)
+}
+
+/// Table column for each file column ("" = skip); `table` null is a new table (the file's names)
+#[wasm_bindgen(js_name = autoMap)]
+pub fn auto_map(file: JsValue, table: JsValue) -> Result<JsValue, JsError> {
+    let file: Vec<String> = serde_wasm_bindgen::from_value(file)?;
+    let table: Option<Vec<String>> = serde_wasm_bindgen::from_value(table)?;
+    Ok(serde_wasm_bindgen::to_value(&qurry_shared::automap::auto_map(&file, table.as_deref()))?)
+}
+
 /// Byte ranges → UTF-16 ranges. split_* returns them in order, on char boundaries, so one pass over the text converts them all
 fn utf16_ranges(text: &str, ranges: &[(usize, usize)]) -> Vec<[usize; 2]> {
     let (mut byte, mut units) = (0, 0);
