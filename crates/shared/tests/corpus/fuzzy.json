@@ -16,5 +16,6 @@
   { "id": "korean-scattered", "query": "주역", "text": "주문내역" },
   { "id": "emoji", "query": "😀", "text": "a😀b" },
   { "id": "emoji-scattered", "query": "ab", "text": "a😀b" },
+  { "id": "korean-gap", "query": "ac", "text": "a가c" },
   { "id": "long-text", "query": "a", "text": "the_quick_brown_fox_jumps_over_a_lazy_dog" }
 ]

@@ -98,12 +98,12 @@ pub fn is_numeric_type(type_name: &str) -> bool {
     qurry_shared::extract::numeric_type(type_name)
 }
 
-/// Rows of cells (strings, numbers, booleans, null) as a list to put after IN; `types` one per column
+/// Rows of cells (strings, numbers, booleans, null) as a list to put after IN, strings as `kind` reads them; `types` one per column
 #[wasm_bindgen(js_name = inList)]
-pub fn in_list(rows: JsValue, types: JsValue, opts: JsValue) -> Result<String, JsError> {
+pub fn in_list(rows: JsValue, types: JsValue, kind: JsValue, opts: JsValue) -> Result<String, JsError> {
     let rows: Vec<Vec<serde_json::Value>> = serde_wasm_bindgen::from_value(rows)?;
     let types: Vec<String> = serde_wasm_bindgen::from_value(types)?;
-    Ok(qurry_shared::extract::in_list(&rows, &types, serde_wasm_bindgen::from_value(opts)?).0)
+    Ok(qurry_shared::extract::in_list(&rows, &types, parse_kind(kind)?, serde_wasm_bindgen::from_value(opts)?).0)
 }
 
 /// Rows ({names, types, vals, keys, tableRef, header}) as text in a Data Extractor format ("CSV", "SQL Inserts" …) for `kind`

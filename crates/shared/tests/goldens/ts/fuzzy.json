@@ -50,6 +50,9 @@
   "emoji-scattered": {
     "fuzzyScore": 197.6
   },
+  "korean-gap": {
+    "fuzzyScore": 198.7
+  },
   "long-text": {
     "fuzzyScore": 564.9
   }

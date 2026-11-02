@@ -41,6 +41,7 @@
       ]
     },
     "inList": "(('2024-02-01', 'west', '1,200.50', 1), ('2024-01-01', 'east', 300, 2), ('2024-01-01', 'west', -50, 3), ('2024-03-01', NULL, NULL, 4), ('2024-02-01', 'east', 'abc', 5))",
+    "inList(mysql)": "(('2024-02-01', 'west', '1,200.50', 1), ('2024-01-01', 'east', 300, 2), ('2024-01-01', 'west', -50, 3), ('2024-03-01', NULL, NULL, 4), ('2024-02-01', 'east', 'abc', 5))",
     "inList(column)": {
       "month": "('2024-02-01', '2024-01-01', '2024-03-01')",
       "region": "('west', 'east')",
@@ -105,6 +106,7 @@
       ]
     },
     "inList": "((1, 10), (1, 11), (2, 12))",
+    "inList(mysql)": "((1, 10), (1, 11), (2, 12))",
     "inList(column)": {
       "user_id": "(1, 2)",
       "order_id": "(10, 11, 12)"
@@ -170,6 +172,7 @@
       ]
     },
     "inList": "(('a', '1', '2024-01-01 00:00:00'), ('b', '2.5', '2024-01-02 00:00:00'), ('c', '', '2024-01-03 00:00:00'), ('d', 'x', NULL))",
+    "inList(mysql)": "(('a', '1', '2024-01-01 00:00:00'), ('b', '2.5', '2024-01-02 00:00:00'), ('c', '', '2024-01-03 00:00:00'), ('d', 'x', NULL))",
     "inList(column)": {
       "label": "('a', 'b', 'c', 'd')",
       "n": "('1', '2.5', '', 'x')",
@@ -245,6 +248,7 @@
       ]
     },
     "inList": "((10, 5), (2, 7), (10, 1), (-1, 0), (NULL, 3))",
+    "inList(mysql)": "((10, 5), (2, 7), (10, 1), (-1, 0), (NULL, 3))",
     "inList(column)": {
       "bucket": "(10, 2, -1)",
       "hits": "(5, 7, 1, 0, 3)"
@@ -342,6 +346,7 @@
       ]
     },
     "inList": "(('a', 9), ('b', 8), ('c', 7), ('d', 6), ('e', 5), ('f', 4), ('g', 3), ('h', 2), ('i', 1), ('j', 0.5), ('k', 0.25), ('l', -1), ('m', 0))",
+    "inList(mysql)": "(('a', 9), ('b', 8), ('c', 7), ('d', 6), ('e', 5), ('f', 4), ('g', 3), ('h', 2), ('i', 1), ('j', 0.5), ('k', 0.25), ('l', -1), ('m', 0))",
     "inList(column)": {
       "k": "('a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm')",
       "v": "(9, 8, 7, 6, 5, 4, 3, 2, 1, 0.5, 0.25, -1, 0)"
@@ -399,6 +404,7 @@
       ]
     },
     "inList": "(('2024-01-01 03:19:15', '03:19:15.5', '2024-01-01T03:19:15.123+09:00', '01:00:00', '12:34:56.7', '03:19:15+09'), ('2024-01-01 09:38:06.521101', '12:00:00', '2024-01-01 03:19:15+00', '01:00:00.25', 'abc', '03:19:15.25+09'), (NULL, '24:00:00', '12345-01-01 00:00:00.1', '2 days', NULL, 'bad'), ('2024-01-01', '1:02:03', '2024-01-01T03:19:15.Z', NULL, '03:19:15', '03:19:15.999999+05:30'))",
+    "inList(mysql)": "(('2024-01-01 03:19:15', '03:19:15.5', '2024-01-01T03:19:15.123+09:00', '01:00:00', '12:34:56.7', '03:19:15+09'), ('2024-01-01 09:38:06.521101', '12:00:00', '2024-01-01 03:19:15+00', '01:00:00.25', 'abc', '03:19:15.25+09'), (NULL, '24:00:00', '12345-01-01 00:00:00.1', '2 days', NULL, 'bad'), ('2024-01-01', '1:02:03', '2024-01-01T03:19:15.Z', NULL, '03:19:15', '03:19:15.999999+05:30'))",
     "inList(column)": {
       "ts": "('2024-01-01 03:19:15', '2024-01-01 09:38:06.521101', '2024-01-01')",
       "t": "('03:19:15.5', '12:00:00', '24:00:00', '1:02:03')",
@@ -500,6 +506,7 @@
       ]
     },
     "inList": "(('010', 12345678901234567890, true, 1.50), ('a''b', -3, false, 'NaN'), ('x', 1e5, NULL, -0.5), ('y', '+4', true, '.5'))",
+    "inList(mysql)": "(('010', 12345678901234567890, true, 1.50), ('a''b', -3, false, 'NaN'), ('x', 1e5, NULL, -0.5), ('y', '+4', true, '.5'))",
     "inList(column)": {
       "code": "('010', 'a''b', 'x', 'y')",
       "n": "(12345678901234567890, -3, 1e5, '+4')",
@@ -574,6 +581,7 @@
       ]
     },
     "inList": "(('김😀', 1, 1), ('a|b', 2, 2), ('line\nbreak', NULL, 3), ('comma,quote\"', 4, 4), ('tab\there', 5, 5))",
+    "inList(mysql)": "(('김😀', 1, 1), ('a|b', 2, 2), ('line\nbreak', NULL, 3), ('comma,quote\"', 4, 4), ('tab\there', 5, 5))",
     "inList(column)": {
       "이름": "('김😀', 'a|b', 'line\nbreak', 'comma,quote\"', 'tab\there')",
       "값": "(1, 2, 4, 5)",
@@ -623,6 +631,7 @@
       ]
     },
     "inList": "(NULL)",
+    "inList(mysql)": "(NULL)",
     "inList(column)": {
       "a": "(NULL)",
       "b": "(NULL)"
@@ -682,6 +691,7 @@
       ]
     },
     "inList": "(10, 20)",
+    "inList(mysql)": "(10, 20)",
     "inList(column)": {
       "total": "(10, 20)"
     },
@@ -699,5 +709,201 @@
     "extract(SQL IN List)": "(10, 20)",
     "extract(JSON)": "[\n  {\n    \"total\": \"10\"\n  },\n  {\n    \"total\": \"20\"\n  },\n  {\n    \"total\": \"10\"\n  }\n]",
     "extract(Markdown)": "| total |\n| --- |\n| 10 |\n| 20 |\n| 10 |"
+  },
+  "big-floats": {
+    "numericColumns": [
+      "v"
+    ],
+    "defaultAxes": {
+      "x": "v",
+      "y": null
+    },
+    "buildChart(bar)": {
+      "labels": [
+        "1.5e-7",
+        "9007199254740992",
+        "10000000000000000",
+        "1152921504606847000",
+        "100000000000000000000",
+        "1e+21"
+      ],
+      "series": [
+        {
+          "name": "count",
+          "values": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      ]
+    },
+    "buildChart(pie)": {
+      "labels": [
+        "1.5e-7",
+        "9007199254740992",
+        "10000000000000000",
+        "1152921504606847000",
+        "100000000000000000000",
+        "1e+21"
+      ],
+      "series": [
+        {
+          "name": "count",
+          "values": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
+      ]
+    },
+    "inList": "(9007199254740992, 10000000000000000, 100000000000000000000, 1152921504606847000, 1e+21, 1.5e-7)",
+    "inList(mysql)": "(9007199254740992, 10000000000000000, 100000000000000000000, 1152921504606847000, 1e+21, 1.5e-7)",
+    "inList(column)": {
+      "v": "(9007199254740992, 10000000000000000, 100000000000000000000, 1152921504606847000, 1e+21, 1.5e-7)"
+    },
+    "extract(TSV, no header)": "9007199254740992\n10000000000000000\n100000000000000000000\n1152921504606847000\n1e+21\n1.5e-7",
+    "extract(SQL Inserts, mysql)": "INSERT INTO MY_TABLE (v) VALUES ('9007199254740992');\nINSERT INTO MY_TABLE (v) VALUES ('10000000000000000');\nINSERT INTO MY_TABLE (v) VALUES ('100000000000000000000');\nINSERT INTO MY_TABLE (v) VALUES ('1152921504606847000');\nINSERT INTO MY_TABLE (v) VALUES ('1e+21');\nINSERT INTO MY_TABLE (v) VALUES ('1.5e-7');",
+    "fracWidth": {
+      "v": 0
+    },
+    "padFrac": {},
+    "extract(CSV)": "v\n9007199254740992\n10000000000000000\n100000000000000000000\n1152921504606847000\n1e+21\n1.5e-7",
+    "extract(TSV)": "v\n9007199254740992\n10000000000000000\n100000000000000000000\n1152921504606847000\n1e+21\n1.5e-7",
+    "extract(SQL Inserts)": "INSERT INTO MY_TABLE (v) VALUES ('9007199254740992');\nINSERT INTO MY_TABLE (v) VALUES ('10000000000000000');\nINSERT INTO MY_TABLE (v) VALUES ('100000000000000000000');\nINSERT INTO MY_TABLE (v) VALUES ('1152921504606847000');\nINSERT INTO MY_TABLE (v) VALUES ('1e+21');\nINSERT INTO MY_TABLE (v) VALUES ('1.5e-7');",
+    "extract(SQL Updates)": "UPDATE MY_TABLE SET v = '9007199254740992' WHERE /* no key */;\nUPDATE MY_TABLE SET v = '10000000000000000' WHERE /* no key */;\nUPDATE MY_TABLE SET v = '100000000000000000000' WHERE /* no key */;\nUPDATE MY_TABLE SET v = '1152921504606847000' WHERE /* no key */;\nUPDATE MY_TABLE SET v = '1e+21' WHERE /* no key */;\nUPDATE MY_TABLE SET v = '1.5e-7' WHERE /* no key */;",
+    "extract(Where Clause)": "(v = '9007199254740992') OR\n(v = '10000000000000000') OR\n(v = '100000000000000000000') OR\n(v = '1152921504606847000') OR\n(v = '1e+21') OR\n(v = '1.5e-7')",
+    "extract(SQL IN List)": "(9007199254740992, 10000000000000000, 100000000000000000000, 1152921504606847000, 1e+21, 1.5e-7)",
+    "extract(JSON)": "[\n  {\n    \"v\": 9007199254740992\n  },\n  {\n    \"v\": 10000000000000000\n  },\n  {\n    \"v\": 100000000000000000000\n  },\n  {\n    \"v\": 1152921504606847000\n  },\n  {\n    \"v\": 1e+21\n  },\n  {\n    \"v\": 1.5e-7\n  }\n]",
+    "extract(Markdown)": "| v |\n| --- |\n| 9007199254740992 |\n| 10000000000000000 |\n| 100000000000000000000 |\n| 1152921504606847000 |\n| 1e+21 |\n| 1.5e-7 |"
+  },
+  "backslash": {
+    "numericColumns": [],
+    "defaultAxes": {
+      "x": "s",
+      "y": null
+    },
+    "buildChart(bar)": {
+      "labels": [
+        "a\\'b",
+        "x\\') OR 1=1 -- "
+      ],
+      "series": [
+        {
+          "name": "count",
+          "values": [
+            1,
+            1
+          ]
+        }
+      ]
+    },
+    "buildChart(pie)": {
+      "labels": [
+        "a\\'b",
+        "x\\') OR 1=1 -- "
+      ],
+      "series": [
+        {
+          "name": "count",
+          "values": [
+            1,
+            1
+          ]
+        }
+      ]
+    },
+    "inList": "('a\\''b', 'x\\'') OR 1=1 -- ')",
+    "inList(mysql)": "('a\\\\''b', 'x\\\\'') OR 1=1 -- ')",
+    "inList(column)": {
+      "s": "('a\\''b', 'x\\'') OR 1=1 -- ')"
+    },
+    "extract(TSV, no header)": "a\\'b\nx\\') OR 1=1 -- ",
+    "extract(SQL Inserts, mysql)": "INSERT INTO MY_TABLE (s) VALUES ('a\\\\''b');\nINSERT INTO MY_TABLE (s) VALUES ('x\\\\'') OR 1=1 -- ');",
+    "fracWidth": {
+      "s": 0
+    },
+    "padFrac": {},
+    "extract(CSV)": "s\na\\'b\nx\\') OR 1=1 -- ",
+    "extract(TSV)": "s\na\\'b\nx\\') OR 1=1 -- ",
+    "extract(SQL Inserts)": "INSERT INTO MY_TABLE (s) VALUES ('a\\''b');\nINSERT INTO MY_TABLE (s) VALUES ('x\\'') OR 1=1 -- ');",
+    "extract(SQL Updates)": "UPDATE MY_TABLE SET s = 'a\\''b' WHERE /* no key */;\nUPDATE MY_TABLE SET s = 'x\\'') OR 1=1 -- ' WHERE /* no key */;",
+    "extract(Where Clause)": "(s = 'a\\''b') OR\n(s = 'x\\'') OR 1=1 -- ')",
+    "extract(SQL IN List)": "('a\\''b', 'x\\'') OR 1=1 -- ')",
+    "extract(JSON)": "[\n  {\n    \"s\": \"a\\\\'b\"\n  },\n  {\n    \"s\": \"x\\\\') OR 1=1 -- \"\n  }\n]",
+    "extract(Markdown)": "| s |\n| --- |\n| a\\'b |\n| x\\') OR 1=1 --  |"
+  },
+  "loose-dates": {
+    "numericColumns": [],
+    "defaultAxes": {
+      "x": "ts",
+      "y": null
+    },
+    "buildChart(bar)": {
+      "labels": [
+        "+2026-06-06 10:00:00",
+        "2026-06-06 10:00:00.5",
+        "abcd-ef-gh 10:00:00"
+      ],
+      "series": [
+        {
+          "name": "count",
+          "values": [
+            1,
+            1,
+            1
+          ]
+        }
+      ]
+    },
+    "buildChart(pie)": {
+      "labels": [
+        "+2026-06-06 10:00:00",
+        "2026-06-06 10:00:00.5",
+        "abcd-ef-gh 10:00:00"
+      ],
+      "series": [
+        {
+          "name": "count",
+          "values": [
+            1,
+            1,
+            1
+          ]
+        }
+      ]
+    },
+    "inList": "('+2026-06-06 10:00:00', 'abcd-ef-gh 10:00:00', '2026-06-06 10:00:00.5')",
+    "inList(mysql)": "('+2026-06-06 10:00:00', 'abcd-ef-gh 10:00:00', '2026-06-06 10:00:00.5')",
+    "inList(column)": {
+      "ts": "('+2026-06-06 10:00:00', 'abcd-ef-gh 10:00:00', '2026-06-06 10:00:00.5')"
+    },
+    "extract(TSV, no header)": "+2026-06-06 10:00:00\nabcd-ef-gh 10:00:00\n2026-06-06 10:00:00.5",
+    "extract(SQL Inserts, mysql)": "INSERT INTO MY_TABLE (ts) VALUES ('+2026-06-06 10:00:00');\nINSERT INTO MY_TABLE (ts) VALUES ('abcd-ef-gh 10:00:00');\nINSERT INTO MY_TABLE (ts) VALUES ('2026-06-06 10:00:00.5');",
+    "fracWidth": {
+      "ts": 1
+    },
+    "padFrac": {
+      "ts": [
+        "+2026-06-06 10:00:00",
+        "abcd-ef-gh 10:00:00",
+        "2026-06-06 10:00:00.5"
+      ]
+    },
+    "extract(CSV)": "ts\n+2026-06-06 10:00:00\nabcd-ef-gh 10:00:00\n2026-06-06 10:00:00.5",
+    "extract(TSV)": "ts\n+2026-06-06 10:00:00\nabcd-ef-gh 10:00:00\n2026-06-06 10:00:00.5",
+    "extract(SQL Inserts)": "INSERT INTO MY_TABLE (ts) VALUES ('+2026-06-06 10:00:00');\nINSERT INTO MY_TABLE (ts) VALUES ('abcd-ef-gh 10:00:00');\nINSERT INTO MY_TABLE (ts) VALUES ('2026-06-06 10:00:00.5');",
+    "extract(SQL Updates)": "UPDATE MY_TABLE SET ts = '+2026-06-06 10:00:00' WHERE /* no key */;\nUPDATE MY_TABLE SET ts = 'abcd-ef-gh 10:00:00' WHERE /* no key */;\nUPDATE MY_TABLE SET ts = '2026-06-06 10:00:00.5' WHERE /* no key */;",
+    "extract(Where Clause)": "(ts = '+2026-06-06 10:00:00') OR\n(ts = 'abcd-ef-gh 10:00:00') OR\n(ts = '2026-06-06 10:00:00.5')",
+    "extract(SQL IN List)": "('+2026-06-06 10:00:00', 'abcd-ef-gh 10:00:00', '2026-06-06 10:00:00.5')",
+    "extract(JSON)": "[\n  {\n    \"ts\": \"+2026-06-06 10:00:00\"\n  },\n  {\n    \"ts\": \"abcd-ef-gh 10:00:00\"\n  },\n  {\n    \"ts\": \"2026-06-06 10:00:00.5\"\n  }\n]",
+    "extract(Markdown)": "| ts |\n| --- |\n| +2026-06-06 10:00:00 |\n| abcd-ef-gh 10:00:00 |\n| 2026-06-06 10:00:00.5 |"
   }
 }

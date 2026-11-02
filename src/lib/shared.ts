@@ -16,7 +16,7 @@ export interface PingResponse {
 /** qurry_shared::extract::Options: where the GUI writes values differently from the TUI (absent = the TUI's rule) */
 export interface ExtractOptions {
   strictNumbers?: boolean;
-  plainLiterals?: boolean;
+  jsNumbers?: boolean;
 }
 
 /** qurry_shared::keytree::Options */
@@ -45,7 +45,7 @@ const api = {
   /** A label per tab, undefined where the table name is unique */
   tableTabLabels: (tabs: TableTabKey[]): (string | undefined)[] => wasm.tableTabLabels(tabs),
   isNumericType: (typeName: string): boolean => wasm.isNumericType(typeName),
-  inList: (rows: Cell[][], types: string[], opts: ExtractOptions): string => wasm.inList(rows, types, opts),
+  inList: (rows: Cell[][], types: string[], kind: DbKind, opts: ExtractOptions): string => wasm.inList(rows, types, kind, opts),
   extractRows: (fmt: Extractor, rows: ExtractRowsInput, kind: DbKind, opts: ExtractOptions): string => wasm.extractRows(fmt, rows, kind, opts),
   fuzzyScore: (query: string, text: string, wordStarts: boolean): number | undefined => wasm.fuzzyScore(query, text, wordStarts),
   keyTree: (names: string[], opts: KeyTreeOptions): SharedKeyNode[] => wasm.keyTree(names, opts),
@@ -86,3 +86,6 @@ export function shared(): typeof api {
 export function sharedOr<T>(fallback: T, f: (s: typeof api) => T): T {
   return ready ? f(api) : fallback;
 }
+
+/** The module is loaded (shared() won't throw) */
+export const sharedReady = () => ready;

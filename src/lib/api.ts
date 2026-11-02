@@ -427,7 +427,7 @@ export interface Dialect {
   monaco: string;
   /** Console statement splitting (semicolon-based if absent) */
   split?: (text: string) => { start: number; end: number }[];
-  /** The kind whose identifier and literal rules q and lit follow: the Data Extractors (qurry_shared::extract) quote with it. Drivers quote as PostgreSQL */
+  /** The kind whose identifier and literal rules q and lit follow: the Data Extractors (qurry_shared::extract) quote with it. Drivers quote as PostgreSQL, ClickHouse with its own literals */
   quoting: DbKind;
 }
 const PG: Dialect = { q: quoteIdent, lit: sqlLiteral, text: (e) => `${e}::text`, monaco: "pgsql", quoting: "postgres" };
@@ -459,6 +459,8 @@ const RD: Dialect = {
 };
 /** Driver DBs: standard SQL quoting, text conversion via CAST (no PG ::text) */
 const GEN: Dialect = { ...PG, text: (e) => `CAST(${e} AS VARCHAR(4000))`, monaco: "sql" };
+/** ClickHouse reads \ as an escape inside strings, as MySQL does */
+const CH: Dialect = { ...GEN, lit: MY.lit, quoting: "clickhouse" };
 const MONGO: Dialect = { q: (s) => s, lit: sqlLiteral, text: (e) => e, monaco: "javascript", split: RD.split, quoting: "mongodb" };
 /** One REST request = from a method line up to the next method line (including JSON body). Same rule as core's sql::split_rest */
 const REST: Dialect = {
@@ -486,7 +488,7 @@ const REST: Dialect = {
     return out;
   },
 };
-export const dialectOf = (kind?: DbKind) => (kind === "mysql" ? MY : kind === "redis" ? RD : kind === "mongodb" ? MONGO : kind && VECTOR_KINDS.includes(kind) ? REST : kind && PLUGIN_KINDS.includes(kind) ? GEN : PG);
+export const dialectOf = (kind?: DbKind) => (kind === "mysql" ? MY : kind === "redis" ? RD : kind === "mongodb" ? MONGO : kind && VECTOR_KINDS.includes(kind) ? REST : kind === "clickhouse" ? CH : kind && PLUGIN_KINDS.includes(kind) ? GEN : PG);
 
 /** Backend connection target: Data Source id + DB name */
 export const targetId = (connId: string, database?: string | null) => (database ? `${connId}::${database}` : connId);

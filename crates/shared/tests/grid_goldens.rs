@@ -15,7 +15,7 @@ fn strings(v: &Value) -> Vec<String> {
 }
 
 /// What the GUI passes (src/lib/inList.ts, extract.ts …)
-const GUI: extract::Options = extract::Options { strict_numbers: true, plain_literals: true };
+const GUI: extract::Options = extract::Options { strict_numbers: true, js_numbers: true };
 
 /// Only the functions both goldens have, compared on what this side computed (a golden may hold functions not moved here)
 fn check(file: &str, golden: &Value, id: &str, got: &Map<String, Value>) {
@@ -64,10 +64,11 @@ fn results_reproduce_both_goldens() {
         let rows = rows_of(e);
         let widths = frac_widths(&names, &types, &rows);
         let fracs: Map<String, Value> = names.iter().zip(&widths).map(|(n, w)| (n.clone(), (*w).into())).collect();
-        let col_lists = |o: extract::Options| -> Value { names.iter().enumerate().map(|(c, n)| (n.clone(), Value::from(extract::in_list(&column(&rows, c), &types[c..=c], o).0))).collect::<Map<_, _>>().into() };
+        let col_lists = |o: extract::Options| -> Value { names.iter().enumerate().map(|(c, n)| (n.clone(), Value::from(extract::in_list(&column(&rows, c), &types[c..=c], DbKind::Postgres, o).0))).collect::<Map<_, _>>().into() };
 
         let mut tui = Map::new();
-        tui.insert("inList".into(), extract::in_list(&rows, &types, extract::Options::default()).0.into());
+        tui.insert("inList".into(), extract::in_list(&rows, &types, DbKind::Postgres, extract::Options::default()).0.into());
+        tui.insert("inList(mysql)".into(), extract::in_list(&rows, &types, DbKind::Mysql, extract::Options::default()).0.into());
         tui.insert("inList(column)".into(), col_lists(extract::Options::default()));
         tui.insert("fracWidth".into(), fracs.clone().into());
         tui.insert("padFrac".into(), pad_fracs(&names, &types, &rows, &widths));
@@ -81,7 +82,8 @@ fn results_reproduce_both_goldens() {
         let keys = rows.iter().map(|r| id_col.map(|i| vec![("id".to_string(), r[i].clone())]).unwrap_or_default()).collect();
         let base = Rows { names: names.clone(), types: types.clone(), vals: rows.clone(), keys, table_ref: "MY_TABLE".into(), header: true };
         let mut gui = Map::new();
-        gui.insert("inList".into(), extract::in_list(&rows, &types, GUI).0.into());
+        gui.insert("inList".into(), extract::in_list(&rows, &types, DbKind::Postgres, GUI).0.into());
+        gui.insert("inList(mysql)".into(), extract::in_list(&rows, &types, DbKind::Mysql, GUI).0.into());
         gui.insert("inList(column)".into(), col_lists(GUI));
         gui.insert("fracWidth".into(), fracs.into());
         gui.insert("padFrac".into(), pad_fracs(&names, &types, &rows, &widths));
@@ -143,6 +145,18 @@ fn auto_map_reproduces_both_goldens() {
             check(golden, &g, id, &Map::from_iter([("autoMap".to_string(), json!(got))]));
         }
     }
+}
+
+/// Rules the TUI and the MCP server took, with no option, when these helpers moved here. Both goldens hold the new output
+/// (corpus ids loose-dates and korean-gap), so DIVERGENCES.md doesn't list them
+#[test]
+fn rules_the_tui_and_mcp_changed_to() {
+    // TUI time fractions take the GUI's pattern: a date before the time is 4+ digits-dd-dd at the start. The TUI padded any time
+    // after the first space or T when the 3rd char before it was - (+2026-06-06 10:00:00 and abcd-ef-gh 10:00:00 too)
+    assert_eq!(format::pad_frac("+2026-06-06 10:00:00", 3), "+2026-06-06 10:00:00");
+    assert_eq!(format::pad_frac("abcd-ef-gh 10:00:00", 3), "abcd-ef-gh 10:00:00");
+    // MCP search_objects takes the TUI palette's score: a skipped letter costs its UTF-8 bytes (it counted chars: 199 here)
+    assert_eq!(fuzzy::score("ac", "a가c", fuzzy::Options::default()), Some(197.0));
 }
 
 #[test]

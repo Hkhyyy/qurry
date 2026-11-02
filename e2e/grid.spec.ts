@@ -75,3 +75,14 @@ test("time fractions are padded to milliseconds in the grid", async ({ page }) =
   await expect(rows.nth(2).getByRole("gridcell").nth(3)).toHaveText("2026-10-15 12:00:00.500 +09:00");
   await expect(rows.nth(3).getByRole("gridcell").nth(3)).toHaveText("2026-10-15 12:00:00.125 +09:00");
 });
+
+test("a WebView that refuses WebAssembly: multi-cell copy says why nothing was copied", async ({ page }) => {
+  // The module fetch only (not Vite's `.wasm?url` import, which is JavaScript)
+  await page.route((u) => u.pathname.endsWith(".wasm") && !u.search, (r) => r.abort());
+  await openApp(page);
+  await treeItem(page, "users").first().dblclick();
+  await expect(work(page).getByRole("gridcell", { name: "user_1", exact: true })).toBeVisible();
+  await selectRows12(page);
+  await page.keyboard.press("Meta+C");
+  await expect(page.locator(".statusbar")).toContainText("Copy formats need WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk");
+});

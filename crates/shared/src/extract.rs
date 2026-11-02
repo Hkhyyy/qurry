@@ -6,16 +6,16 @@ use serde_json::Value;
 /// The value Set DEFAULT puts in a GUI cell (written as DEFAULT, never as a string)
 pub const DEFAULT_TOKEN: &str = "\u{0}DEFAULT";
 
-/// Where the GUI writes values differently from the TUI (D2; the inList rows of crates/shared/tests/DIVERGENCES.md and the GUI's literals)
+/// Where the GUI writes values differently from the TUI (D2; the inList rows of crates/shared/tests/DIVERGENCES.md and number cells)
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Options {
     /// IN list: in a numeric column only -?digits[.digits][e±digits] text stays bare (the GUI). Otherwise any number text does,
     /// such as +4 or .5 (the TUI)
     pub strict_numbers: bool,
-    /// Extractors: literals as the GUI's dialects write them: '…' with only quotes doubled (a backslash stays as it is, in
-    /// PostgreSQL and ClickHouse too), MySQL also doubles \, Redis gets JSON strings. Otherwise sql::literal (PostgreSQL E'…' for a \)
-    pub plain_literals: bool,
+    /// Number cells as JavaScript's String() writes them, as the GUI's grid shows them (1e16 as 10000000000000000).
+    /// Otherwise as serde_json writes them, as the TUI's grid shows them
+    pub js_numbers: bool,
 }
 
 /// Data Extractor formats, named as the GUI's menu shows them
@@ -77,40 +77,62 @@ fn is_default(v: &Value) -> bool {
 }
 
 /// A cell as plain text: NULL is empty, DEFAULT is DEFAULT
-fn raw(v: &Value) -> String {
+fn raw(v: &Value, opts: Options) -> String {
     match v {
         Value::Null => String::new(),
         Value::String(s) if s == DEFAULT_TOKEN => "DEFAULT".into(),
-        Value::String(s) => s.clone(),
-        other => other.to_string(),
+        other => raw_text(other, opts),
     }
 }
 
-fn quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
+/// A string literal of `kind`: '…' with quotes doubled, and \ doubled where the server reads it as an escape (MySQL,
+/// ClickHouse). Elsewhere a \ stays as it is (PostgreSQL: standard_conforming_strings, on by default)
+fn quote(kind: DbKind, s: &str) -> String {
+    if sql::backslash_escapes(kind) { sql::literal(kind, Some(s)) } else { format!("'{}'", s.replace('\'', "''")) }
 }
 
-/// A cell as an SQL literal of `kind`
+/// A cell as an SQL literal of `kind` (Redis: a JSON string)
 fn literal(kind: DbKind, v: &Value, opts: Options) -> String {
-    let text = (!v.is_null()).then(|| raw_text(v));
-    if !opts.plain_literals {
-        return sql::literal(kind, text.as_deref());
-    }
-    match (kind, text) {
-        (DbKind::Redis, None) => "\"\"".into(),
-        (DbKind::Redis, Some(t)) => Value::from(t).to_string(),
-        (_, None) => "NULL".into(),
-        (DbKind::Mysql, Some(t)) => sql::literal(DbKind::Mysql, Some(&t)),
-        (_, Some(t)) => quote(&t),
+    match (kind, v) {
+        (DbKind::Redis, Value::Null) => "\"\"".into(),
+        (DbKind::Redis, v) => Value::from(raw_text(v, opts)).to_string(),
+        (_, Value::Null) => "NULL".into(),
+        (_, v) => quote(kind, &raw_text(v, opts)),
     }
 }
 
 /// Text of a non-NULL cell (a DEFAULT token as it is)
-fn raw_text(v: &Value) -> String {
+fn raw_text(v: &Value, opts: Options) -> String {
     match v {
         Value::String(s) => s.clone(),
+        Value::Number(n) if opts.js_numbers => js_number(n),
         other => other.to_string(),
     }
+}
+
+/// A number as JavaScript's Number.prototype.toString writes it: integers below 1e21 in full, other exponents as e+21 and
+/// e-7. Integers serde_json holds exactly (i64, u64) print the same either way
+fn js_number(n: &serde_json::Number) -> String {
+    let Some(f) = n.as_f64().filter(|_| n.is_f64()) else { return n.to_string() };
+    if f == 0.0 {
+        return "0".into();
+    }
+    // Shortest round-trip digits (as JavaScript picks them) and the decimal point's place: 0.ddd × 10^point
+    let e = format!("{:e}", f.abs());
+    let (mantissa, exp) = e.split_once('e').unwrap();
+    let digits = mantissa.replace('.', "");
+    let (k, point) = (digits.len() as i32, exp.parse::<i32>().unwrap() + 1);
+    let body = if k <= point && point <= 21 {
+        format!("{digits}{}", "0".repeat((point - k) as usize))
+    } else if 0 < point && point <= 21 {
+        format!("{}.{}", &digits[..point as usize], &digits[point as usize..])
+    } else if -6 < point && point <= 0 {
+        format!("0.{}{digits}", "0".repeat(-point as usize))
+    } else {
+        let frac = if k > 1 { format!(".{}", &digits[1..]) } else { String::new() };
+        format!("{}{frac}e{}{}", &digits[..1], if point > 0 { "+" } else { "-" }, (point - 1).abs())
+    };
+    if f < 0.0 { format!("-{body}") } else { body }
 }
 
 /// Numeric and boolean column types (PostgreSQL, MySQL); not interval and the like
@@ -147,16 +169,15 @@ fn number_text(s: &str, strict: bool) -> bool {
     rest.is_empty()
 }
 
-/// Rows as a list to put after IN, and how many items it has: ('a', 'b'), or one tuple per row with several columns
+/// Rows as a list to put after IN (strings as `kind` reads them), and how many items it has: ('a', 'b'), or one tuple per row with several columns
 /// (('a', 1), ('b', 2)). Rows of only NULL and duplicates are left out. In numeric columns (`types`, one per column) number text stays bare
 /// (numeric and bigint arrive as text); elsewhere it is quoted (010 in a text column)
-pub fn in_list(rows: &[Vec<Value>], types: &[String], opts: Options) -> (String, usize) {
+pub fn in_list(rows: &[Vec<Value>], types: &[String], kind: DbKind, opts: Options) -> (String, usize) {
     let lit = |c: usize, v: &Value| match v {
         Value::Null => "NULL".to_string(),
-        Value::Number(_) | Value::Bool(_) => v.to_string(),
+        Value::Number(_) | Value::Bool(_) => raw_text(v, opts),
         Value::String(s) if types.get(c).is_some_and(|t| numeric_type(t)) && number_text(s, opts.strict_numbers) => s.clone(),
-        Value::String(s) => quote(s),
-        other => quote(&other.to_string()),
+        other => quote(kind, &raw_text(other, opts)),
     };
     let mut seen = std::collections::HashSet::new();
     let items: Vec<String> = rows
@@ -175,7 +196,7 @@ fn csv_field(s: &str) -> String {
 
 /// JSON.stringify(rows, null, 2): an object per row with the column names as keys (a repeated name keeps its first place and
 /// its last value; names that are array indices come first, ascending, as in a JavaScript object)
-fn json_rows(x: &Rows) -> String {
+fn json_rows(x: &Rows, opts: Options) -> String {
     let index = |k: &str| k.parse::<u32>().ok().filter(|n| *n < u32::MAX && n.to_string() == k);
     let mut order: Vec<usize> = vec![];
     for (j, n) in x.names.iter().enumerate() {
@@ -193,8 +214,12 @@ fn json_rows(x: &Rows) -> String {
             return "  {}".to_string();
         }
         let fields = order.iter().map(|&j| {
-            let c = v.get(j).filter(|c| !is_default(c)).unwrap_or(&Value::Null);
-            format!("    {}: {}", Value::from(x.names[j].as_str()), c)
+            let c = match v.get(j).filter(|c| !is_default(c)) {
+                Some(Value::Number(n)) if opts.js_numbers => js_number(n),
+                Some(c) => c.to_string(),
+                None => "null".into(),
+            };
+            format!("    {}: {c}", Value::from(x.names[j].as_str()))
         });
         format!("  {{\n{}\n  }}", fields.collect::<Vec<_>>().join(",\n"))
     };
@@ -209,10 +234,10 @@ pub fn rows(fmt: Format, x: &Rows, kind: DbKind, opts: Options) -> String {
     let lines = |head: Option<String>, body: Vec<String>| head.into_iter().chain(body).collect::<Vec<_>>().join("\n");
     let names = x.names.iter();
     match fmt {
-        Format::Tsv => lines(x.header.then(|| x.names.join("\t")), x.vals.iter().map(|v| v.iter().map(raw).collect::<Vec<_>>().join("\t")).collect()),
+        Format::Tsv => lines(x.header.then(|| x.names.join("\t")), x.vals.iter().map(|v| v.iter().map(|c| raw(c, opts)).collect::<Vec<_>>().join("\t")).collect()),
         Format::Csv => lines(
             x.header.then(|| x.names.iter().map(|n| csv_field(n)).collect::<Vec<_>>().join(",")),
-            x.vals.iter().map(|v| v.iter().map(|c| csv_field(&raw(c))).collect::<Vec<_>>().join(",")).collect(),
+            x.vals.iter().map(|v| v.iter().map(|c| csv_field(&raw(c, opts))).collect::<Vec<_>>().join(",")).collect(),
         ),
         Format::SqlInserts => {
             let cols = names.map(|n| q(n)).collect::<Vec<_>>().join(", ");
@@ -244,12 +269,12 @@ pub fn rows(fmt: Format, x: &Rows, kind: DbKind, opts: Options) -> String {
             .join(" OR\n"),
         Format::SqlInList => {
             let vals: Vec<Vec<Value>> = x.vals.iter().map(|v| v.iter().map(|c| if is_default(c) { Value::Null } else { c.clone() }).collect()).collect();
-            in_list(&vals, &x.types, opts).0
+            in_list(&vals, &x.types, kind, opts).0
         }
-        Format::Json => json_rows(x),
+        Format::Json => json_rows(x, opts),
         Format::Markdown => lines(
             Some(format!("| {} |\n| {} |", x.names.join(" | "), x.names.iter().map(|_| "---").collect::<Vec<_>>().join(" | "))),
-            x.vals.iter().map(|v| format!("| {} |", v.iter().map(|c| raw(c).replace('|', "\\|")).collect::<Vec<_>>().join(" | "))).collect(),
+            x.vals.iter().map(|v| format!("| {} |", v.iter().map(|c| raw(c, opts).replace('|', "\\|")).collect::<Vec<_>>().join(" | "))).collect(),
         ),
     }
 }
@@ -262,8 +287,8 @@ mod tests {
     #[test]
     fn in_list_keeps_numbers_in_numeric_columns() {
         let t = |s: &str| vec![s.to_string()];
-        let one = |v: Value, ty: &str, o: Options| in_list(&[vec![v]], &t(ty), o).0;
-        assert_eq!(in_list(&[vec![json!("1.2.3.4")], vec![json!("it's")], vec![Value::Null], vec![json!("1.2.3.4")]], &[], Options::default()), ("('1.2.3.4', 'it''s')".into(), 2));
+        let one = |v: Value, ty: &str, o: Options| in_list(&[vec![v]], &t(ty), DbKind::Postgres, o).0;
+        assert_eq!(in_list(&[vec![json!("1.2.3.4")], vec![json!("it's")], vec![Value::Null], vec![json!("1.2.3.4")]], &[], DbKind::Postgres, Options::default()), ("('1.2.3.4', 'it''s')".into(), 2));
         assert_eq!(one(json!("010"), "varchar", Options::default()), "('010')");
         assert_eq!(one(json!("NaN"), "numeric", Options::default()), "('NaN')");
         assert_eq!(one(json!("+4"), "int8", Options::default()), "(+4)");
@@ -271,24 +296,50 @@ mod tests {
         assert_eq!(one(json!("1e-5"), "float8", Options { strict_numbers: true, ..Default::default() }), "(1e-5)");
         assert!(numeric_type("BIGINT UNSIGNED") && numeric_type("double precision") && numeric_type("numeric(10,2)"));
         assert!(!numeric_type("interval") && !numeric_type("int4range") && !numeric_type("_int4"));
-        assert_eq!(in_list(&[vec![Value::Null]], &[], Options::default()), ("(NULL)".into(), 0));
+        assert_eq!(in_list(&[vec![Value::Null]], &[], DbKind::Postgres, Options::default()), ("(NULL)".into(), 0));
+    }
+
+    /// A \ ends a string early where the server reads it as an escape: x\') OR 1=1 -- must stay one value after IN
+    #[test]
+    fn in_list_escapes_backslashes_where_the_server_does() {
+        let rows = [vec![json!("x\\') OR 1=1 -- ")]];
+        assert_eq!(in_list(&rows, &[], DbKind::Mysql, Options::default()).0, "('x\\\\'') OR 1=1 -- ')");
+        assert_eq!(in_list(&rows, &[], DbKind::Clickhouse, Options::default()).0, "('x\\\\'') OR 1=1 -- ')");
+        assert_eq!(in_list(&rows, &[], DbKind::Postgres, Options::default()).0, "('x\\'') OR 1=1 -- ')");
     }
 
     #[test]
-    fn literals_follow_the_option() {
-        let plain = Options { plain_literals: true, ..Default::default() };
+    fn literals_follow_the_kind() {
         let v = json!("a\\'b");
-        assert_eq!(literal(DbKind::Postgres, &v, Options::default()), "E'a\\\\''b'");
-        assert_eq!(literal(DbKind::Postgres, &v, plain), "'a\\''b'");
-        assert_eq!(literal(DbKind::Mysql, &v, plain), "'a\\\\''b'");
-        assert_eq!(literal(DbKind::Redis, &v, plain), "\"a\\\\'b\"");
-        assert_eq!(literal(DbKind::Redis, &Value::Null, plain), "\"\"");
+        assert_eq!(literal(DbKind::Postgres, &v, Options::default()), "'a\\''b'");
+        assert_eq!(literal(DbKind::Mysql, &v, Options::default()), "'a\\\\''b'");
+        assert_eq!(literal(DbKind::Clickhouse, &v, Options::default()), "'a\\\\''b'");
+        assert_eq!(literal(DbKind::Redis, &v, Options::default()), "\"a\\\\'b\"");
+        assert_eq!(literal(DbKind::Redis, &Value::Null, Options::default()), "\"\"");
+        assert_eq!(literal(DbKind::Mysql, &Value::Null, Options::default()), "NULL");
+    }
+
+    #[test]
+    fn numbers_as_javascript_writes_them() {
+        let js = |v: Value| raw_text(&v, Options { js_numbers: true, ..Default::default() });
+        assert_eq!(js(json!(9007199254740992.0)), "9007199254740992");
+        assert_eq!(js(json!(1e16)), "10000000000000000");
+        assert_eq!(js(json!(1e20)), "100000000000000000000");
+        assert_eq!(js(json!(1e21)), "1e+21");
+        assert_eq!(js(json!(1152921504606846976.0)), "1152921504606847000");
+        assert_eq!(js(json!(-1.5)), "-1.5");
+        assert_eq!(js(json!(0.000001)), "0.000001");
+        assert_eq!(js(json!(1.5e-7)), "1.5e-7");
+        assert_eq!(js(json!(123.456)), "123.456");
+        assert_eq!(js(json!(-0.0)), "0");
+        assert_eq!(js(json!(u64::MAX)), "18446744073709551615");
+        assert_eq!(raw_text(&json!(1e16), Options::default()), "1e+16");
     }
 
     #[test]
     fn json_keeps_javascript_key_order() {
         let x = Rows { names: vec!["b".into(), "2".into(), "a".into(), "b".into()], vals: vec![vec![json!(1), json!(2), json!(DEFAULT_TOKEN), json!(4)]], ..Default::default() };
-        assert_eq!(json_rows(&x), "[\n  {\n    \"2\": 2,\n    \"b\": 4,\n    \"a\": null\n  }\n]");
-        assert_eq!(json_rows(&Rows::default()), "[]");
+        assert_eq!(json_rows(&x, Options::default()), "[\n  {\n    \"2\": 2,\n    \"b\": 4,\n    \"a\": null\n  }\n]");
+        assert_eq!(json_rows(&Rows::default(), Options::default()), "[]");
     }
 }
