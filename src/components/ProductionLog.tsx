@@ -7,12 +7,18 @@ type Tone = "neutral" | "warn" | "danger" | "accent";
 /** Tone of each result word qurry-shared's audit::status gives */
 const TONES: Record<string, Tone> = { "no result recorded": "warn", "outcome unknown": "warn", failed: "danger", committed: "accent", "rolled back": "neutral" };
 
-/** Result word decided in Rust like the TUI's (before the WASM has loaded: none, the rows say it) */
+/** A transaction end as the log writes it: COMMIT, ROLLBACK (by the server), ENDED (committed or rolled back) … */
+const TX_END = /^(COMMIT|ROLLBACK|ENDED)\b/;
+
+/**
+ * Result word decided in Rust like the TUI's. Without the WASM module (not loaded yet, or it failed) never less than what keeps the
+ * log safe to read: no result recorded, a transaction end as logged (it may be of unknown outcome: a warning), failed
+ */
 const statusWord = (e: AuditEntry) => {
   try {
     return shared().auditStatus(!!e.started, e.sql, !!e.error);
   } catch {
-    return undefined;
+    return e.started ? "no result recorded" : TX_END.test(e.sql) ? e.sql : e.error ? "failed" : undefined;
   }
 };
 
@@ -42,7 +48,9 @@ export function ProductionLog({ connId, onOpenUndo, onClose }: { connId: string 
   }, [items, q]);
   const cur = list[Math.min(idx, list.length - 1)];
   // The changes may or may not be saved (a COMMIT cut off by a lost connection, a transaction a statement ended either way): the note says what to do
-  const unknown = cur && statusWord(cur) === "outcome unknown";
+  // (Without the WASM module: any transaction end with a note)
+  const word = cur && statusWord(cur);
+  const unknown = cur && (word === "outcome unknown" || (word === cur.sql && !!cur.note));
   const where = (e: AuditEntry) => (e.database ? `${e.connName} · ${e.database}` : e.connName);
 
   return (
