@@ -4,6 +4,7 @@
 
 pub mod errors;
 pub mod guard;
+pub mod keymap;
 pub mod kind;
 pub mod redis_cmd;
 pub mod sql;
