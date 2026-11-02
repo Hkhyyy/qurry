@@ -246,6 +246,7 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
         badge={
           <>
             {conn.ssh?.enabled && <span className="ssh-badge" title={`SSH via ${conn.ssh.user}@${conn.ssh.host}:${conn.ssh.port}`}>SSH</span>}
+            {conn.ssm?.enabled && <span className="ssh-badge" title={`AWS SSM via ${conn.ssm.target}${conn.ssm.profile || conn.ssm.region ? ` (${conn.ssm.profile || "default"}/${conn.ssm.region || "default"})` : ""}`}>SSM</span>}
             {dbs?.state === "ok" && (
               <span
                 className="scope-badge"

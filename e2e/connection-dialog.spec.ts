@@ -30,6 +30,7 @@ test("SSH/SSL tab: Tunnel None / SSH / AWS SSM, test and save through SSM", asyn
   await expect(d.getByText("✓ PostgreSQL 16.11  (via AWS SSM i-0123456789abcdef0)")).toBeVisible();
 
   await tunnel.selectOption("none");
+  await expect(d.getByText("(via AWS SSM i-0123456789abcdef0)"), "a result for the other tunnel is cleared").toHaveCount(0);
   await expect(d.getByRole("tab", { name: "SSH/SSL", exact: true })).toBeVisible();
   await expect(d.getByPlaceholder("bastion.example.com")).toBeDisabled();
   await tunnel.selectOption("ssm");
@@ -38,6 +39,10 @@ test("SSH/SSL tab: Tunnel None / SSH / AWS SSM, test and save through SSM", asyn
 
   await d.getByRole("button", { name: "OK" }).click();
   await expect(dialog(page)).toHaveCount(0);
+  // The explorer row shows the tunnel like an SSH one
+  const badge = treeNode(page, "[PROD] shop_app").locator(".ssh-badge");
+  await expect(badge).toHaveText("SSM");
+  await expect(badge).toHaveAttribute("title", "AWS SSM via i-0123456789abcdef0 (prod/ap-northeast-2)");
   await openProps(page);
   await expect(dialog(page).getByRole("combobox", { name: "Tunnel" })).toHaveValue("ssm");
   await expect(dialog(page).getByRole("textbox", { name: "AWS profile" })).toHaveValue("prod");

@@ -74,13 +74,16 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   const set = <K extends keyof ConnectionConfig>(k: K, v: ConnectionConfig[K]) => setCfg((c) => ({ ...c, [k]: v }));
   const setSsh = <K extends keyof SshConfig>(k: K, v: SshConfig[K]) => setCfg((c) => ({ ...c, ssh: { ...(c.ssh ?? EMPTY_SSH), [k]: v } }));
   const setSsm = <K extends keyof SsmConfig>(k: K, v: SsmConfig[K]) => setCfg((c) => ({ ...c, ssm: { ...(c.ssm ?? EMPTY_SSM), [k]: v } }));
-  // One tunnel at a time; the other keeps its fields (a source that never used SSM gets no ssm settings)
-  const setTunnel = (t: typeof tunnel) =>
+  // One tunnel at a time; the other keeps its fields (a source that never used SSM gets no ssm settings).
+  // The last test result was for the other tunnel (its "Trust Host Key" button would act on the SSH server)
+  const setTunnel = (t: typeof tunnel) => {
+    setTest(null);
     setCfg((c) => ({
       ...c,
       ssh: c.ssh || t === "ssh" ? { ...(c.ssh ?? EMPTY_SSH), enabled: t === "ssh" } : c.ssh,
       ssm: c.ssm || t === "ssm" ? { ...(c.ssm ?? EMPTY_SSM), enabled: t === "ssm" } : c.ssm,
     }));
+  };
   const sshTest = tab === "ssh" && tunnel === "ssh";
 
   const runTest = async () => {
