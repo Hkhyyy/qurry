@@ -127,6 +127,18 @@ macro_rules! dispatch {
 }
 pub(crate) use dispatch;
 
+/// `apply_migration` for the SQL kinds: `stmts` in one transaction, a failing statement or COMMIT through `fail`
+async fn run_in_tx<DB: sqlx::Database>(pool: &sqlx::Pool<DB>, stmts: &[&str], fail: impl Fn(String) -> AppError) -> AppResult<()>
+where
+    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+{
+    let mut tx = pool.begin().await?;
+    for s in stmts {
+        sqlx::Executor::execute(&mut *tx, sqlx::raw_sql(s)).await.map_err(|e| fail(e.to_string()))?;
+    }
+    tx.commit().await.map_err(|e| fail(e.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

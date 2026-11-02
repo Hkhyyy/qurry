@@ -409,6 +409,13 @@ async fn pg_jobs() {
     c.database = "qm_jobs".into();
     let st = state(&c, None).await;
     assert!(jobs(&st, "public").await > 0, "EXPLAIN gives the export a row estimate");
+
+    // A deferred foreign key fails at COMMIT: reported like a failing statement, and the whole file is rolled back
+    let dir = st.dir.path().join("migrations");
+    std::fs::write(dir.join("V4__late.sql"), "create table parents (id int primary key);\ncreate table kids (id int primary key, parent int references parents deferrable initially deferred);\ninsert into kids values (1, 99);").unwrap();
+    let e = err(st.apply_migrations(ID.into(), dir.to_string_lossy().into()).await);
+    assert!(e.starts_with("V4 (V4__late.sql) failed and was rolled back: ") && e.contains("kids"), "{e}");
+    assert_eq!(q(&st, "select to_regclass('kids') is null").await.rows[0][0], json!(true), "V4's tables were rolled back");
     drop(st);
     q(&boot, "drop database qm_jobs with (force)").await;
 }

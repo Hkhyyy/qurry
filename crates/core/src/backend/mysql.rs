@@ -297,12 +297,7 @@ impl Backend for MySqlPool {
 
     /// DDL commits implicitly (only data statements are rolled back together)
     async fn apply_migration(&self, stmts: &[&str], fail: impl Fn(String) -> AppError) -> AppResult<()> {
-        let mut tx = self.begin().await?;
-        for s in stmts {
-            sqlx::Executor::execute(&mut *tx, sqlx::raw_sql(s)).await.map_err(|e| fail(e.to_string()))?;
-        }
-        tx.commit().await.map_err(|e| fail(e.to_string()))?;
-        Ok(())
+        super::run_in_tx(self, stmts, fail).await
     }
 
     async fn import_tx(&self) -> AppResult<Tx> {
