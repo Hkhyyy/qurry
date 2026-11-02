@@ -452,6 +452,41 @@ async fn pg_full_text_search_is_read_only() {
     q(&st, "drop schema qm_fts_ro cascade").await;
 }
 
+/// Full-text search on a database with standard_conforming_strings = off (a legacy setting): a \ in the search text can't end
+/// the string early, so `\' or …` finds nothing and runs nothing (before, every row came back)
+#[tokio::test]
+#[ignore]
+async fn pg_full_text_search_text_is_not_sql_with_standard_conforming_strings_off() {
+    let Some(mut c) = pg_env() else { return };
+    let boot = state(&c, None).await;
+    q(&boot, "drop database if exists qm_guard_scs with (force)").await;
+    q(&boot, "create database qm_guard_scs").await;
+    q(&boot, "alter database qm_guard_scs set standard_conforming_strings = off").await;
+    c.database = "qm_guard_scs".into();
+    let st = state(&c, None).await;
+    assert_eq!(q(&st, "show standard_conforming_strings").await.rows[0][0], json!("off"));
+    q(&st, "create table t (id int, body text)").await;
+    q(&st, "insert into t values (1, 'needle'), (2, 'hay')").await;
+    for mode in ["matches", "like", "contains"] {
+        let mut r = fts(vec![("public", "t")]);
+        r.text = "\\' or inet_server_port() > 0 --".into();
+        r.mode = mode.into();
+        r.match_case = true;
+        let hits = st.full_text_search(ID.into(), r).await.unwrap();
+        assert!(hits.is_empty(), "{mode}: {hits:?}");
+    }
+    // A backslash in the text is still searched for as itself
+    q(&st, "insert into t values (3, E'a\\\\b')").await;
+    let mut r = fts(vec![("public", "t")]);
+    r.text = "a\\b".into();
+    r.mode = "matches".into();
+    let hits = st.full_text_search(ID.into(), r).await.unwrap();
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert_eq!(hits[0].result.rows.len(), 1);
+    drop(st);
+    q(&boot, "drop database qm_guard_scs with (force)").await;
+}
+
 // ───────── MySQL ─────────
 
 /// A fresh database `name` and a state whose source points at it
