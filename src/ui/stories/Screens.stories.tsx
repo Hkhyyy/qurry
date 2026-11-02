@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import { userEvent, within } from "storybook/test";
 // Fake backend (same as the app's ?mock): returns fixed data for the commands screens call
 import "../../lib/mock";
 import "../../lib/monaco";
@@ -63,6 +64,20 @@ export const FullApp: S = { name: "App (whole window)", render: () => <div style
 
 export const NewDataSource: S = { name: "Data Source — new", render: () => <ConnectionDialog onClose={noop} onSaved={noop} /> };
 export const EditDataSource: S = { name: "Data Source — edit (SSH)", render: () => <ConnectionDialog edit={{ ...PROD, ssh: { enabled: true, host: "bastion.example.com", port: 22, user: "ec2-user", auth: "key", keyPath: "~/.ssh/id_ed25519" } } as ConnectionView} onClose={noop} onSaved={noop} /> };
+/** SSH/SSL tab with Tunnel = AWS SSM: profile · region · instance id. Test Connection answers "(via AWS SSM i-…)" */
+export const EditDataSourceSsm: S = {
+  name: "Data Source — edit (AWS SSM)",
+  render: () => (
+    <ConnectionDialog
+      edit={{ ...PROD, host: "orders.cluster-abc.ap-northeast-2.rds.amazonaws.com", ssm: { enabled: true, profile: "prod", region: "ap-northeast-2", target: "i-0123456789abcdef0" } } as ConnectionView}
+      onClose={noop}
+      onSaved={noop}
+    />
+  ),
+  play: async ({ canvasElement }) => {
+    await userEvent.click(within(canvasElement.ownerDocument.body).getByRole("tab", { name: /SSH\/SSL/ }));
+  },
+};
 
 export const TableNew: S = { name: "New Table", render: () => <TableDesigner target="dev" conn={DEV} schema="public" onDone={noop} onOpenConsole={noop} onClose={noop} /> };
 export const TableModify: S = { name: "Modify Table (⌘F6)", render: () => <TableDesigner target="dev" conn={DEV} schema="public" table="customers" onDone={noop} onOpenConsole={noop} onClose={noop} /> };

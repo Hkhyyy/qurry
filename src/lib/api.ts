@@ -23,6 +23,8 @@ export interface ConnectionConfig {
   database: string;
   color?: string | null;
   ssh?: SshConfig | null;
+  /** AWS SSM Session Manager tunnel (instead of SSH) */
+  ssm?: SsmConfig | null;
   /** DBs·schemas shown in the tree. No databases = all; no schemas[db] = all schemas of that DB */
   scope?: { databases?: string[] | null; schemas?: Record<string, string[]> };
   /** Options → Read-only */
@@ -76,6 +78,17 @@ export interface SshConfig {
   user: string;
   auth: "password" | "key";
   keyPath: string;
+}
+
+/** No AWS secrets: the aws CLI uses the user's AWS config or SSO login */
+export interface SsmConfig {
+  enabled: boolean;
+  /** Empty = the CLI's default profile */
+  profile: string;
+  /** Empty = the profile's region */
+  region: string;
+  /** Instance id (i-… / mi-…) */
+  target: string;
 }
 
 export interface ConnectionView extends ConnectionConfig {

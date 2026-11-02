@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Button, Checkbox, ColorPicker, EmptyState, FormGrid, FormSection, Hint, Modal, Notice, Select, Spacer, Tabs, Text, TextArea, TextInput } from "../ui";
-import { api, COLOR_PRESETS, ConnOptions, RedisMode, SslConfig, ConnectionConfig, ConnectionView, DbKind, DEFAULT_PORT, DRIVER_MISSING, isFileKind, KIND_LABEL, meta, SchemaInfo, SshConfig, targetId } from "../lib/api";
+import { api, COLOR_PRESETS, ConnOptions, RedisMode, SslConfig, ConnectionConfig, ConnectionView, DbKind, DEFAULT_PORT, DRIVER_MISSING, isFileKind, KIND_LABEL, meta, SchemaInfo, SshConfig, SsmConfig, targetId } from "../lib/api";
 
 interface Props {
   edit?: ConnectionView;
@@ -10,13 +10,14 @@ interface Props {
 }
 
 const EMPTY_SSH: SshConfig = { enabled: false, host: "", port: 22, user: "", auth: "key", keyPath: "~/.ssh/id_ed25519" };
+const EMPTY_SSM: SsmConfig = { enabled: false, profile: "", region: "", target: "" };
 
 export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   const [cfg, setCfg] = useState<ConnectionConfig>(
     edit
       ? {
           id: edit.id, name: edit.name, kind: edit.kind, host: edit.host, port: edit.port, user: edit.user,
-          database: edit.database, color: edit.color ?? null, ssh: edit.ssh ?? null,
+          database: edit.database, color: edit.color ?? null, ssh: edit.ssh ?? null, ssm: edit.ssm ?? null,
           scope: edit.scope, readOnly: edit.readOnly ?? false, options: edit.options ?? {}, ssl: edit.ssl ?? null, redis: edit.redis ?? null,
         }
       : // New sources start hidden from MCP (turn it on in Options › MCP)
@@ -53,6 +54,8 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   };
 
   const ssh = cfg.ssh ?? EMPTY_SSH;
+  const ssm = cfg.ssm ?? EMPTY_SSM;
+  const tunnel: "none" | "ssh" | "ssm" = ssm.enabled ? "ssm" : ssh.enabled ? "ssh" : "none";
   const opt: ConnOptions = cfg.options ?? {};
   // MCP for older sources that never set it: behavior at the time the dialog opened (hidden if Production). Editing doesn't change this value
   const [legacyMcp] = useState<"off" | "write">(() => (edit?.options?.confirmChanges ? "off" : edit ? "write" : "off"));
@@ -70,13 +73,22 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   const setOpt = <K extends keyof ConnOptions>(k: K, v: ConnOptions[K]) => setCfg((c) => ({ ...c, options: { ...(c.options ?? {}), [k]: v } }));
   const set = <K extends keyof ConnectionConfig>(k: K, v: ConnectionConfig[K]) => setCfg((c) => ({ ...c, [k]: v }));
   const setSsh = <K extends keyof SshConfig>(k: K, v: SshConfig[K]) => setCfg((c) => ({ ...c, ssh: { ...(c.ssh ?? EMPTY_SSH), [k]: v } }));
+  const setSsm = <K extends keyof SsmConfig>(k: K, v: SsmConfig[K]) => setCfg((c) => ({ ...c, ssm: { ...(c.ssm ?? EMPTY_SSM), [k]: v } }));
+  // One tunnel at a time; the other keeps its fields (a source that never used SSM gets no ssm settings)
+  const setTunnel = (t: typeof tunnel) =>
+    setCfg((c) => ({
+      ...c,
+      ssh: c.ssh || t === "ssh" ? { ...(c.ssh ?? EMPTY_SSH), enabled: t === "ssh" } : c.ssh,
+      ssm: c.ssm || t === "ssm" ? { ...(c.ssm ?? EMPTY_SSM), enabled: t === "ssm" } : c.ssm,
+    }));
+  const sshTest = tab === "ssh" && tunnel === "ssh";
 
   const runTest = async () => {
     setBusy(true);
     setTest(null);
     try {
-      // On the SSH tab, test only the SSH login; on the General tab, test the DB connection too (via SSH)
-      const v = tab === "ssh" ? await api.testSsh(cfg, sshSecret) : await api.testConnection(cfg, password, sshSecret);
+      // On the SSH tab, test only the SSH login; otherwise the DB connection through the tunnel (AWS SSM starts a session for it)
+      const v = sshTest ? await api.testSsh(cfg, sshSecret) : await api.testConnection(cfg, password, sshSecret);
       setTest({ ok: true, msg: v });
     } catch (e) {
       setTest({ ok: false, msg: String(e) });
@@ -107,6 +119,8 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
       ? "Changes apply on the next connection (the data source is reconnected on OK)."
       : tab === "schemas"
       ? "Only checked databases and schemas are shown in the Database Explorer. Nothing checked = show all."
+      : tab === "ssh" && tunnel === "ssm"
+      ? "The database host/port on the General tab are reached from the instance (e.g. an RDS endpoint). Test Connection starts a session and connects through it."
       : tab === "ssh"
       ? "The database host/port on the General tab are resolved from the SSH server. Host keys are checked against ~/.ssh/known_hosts."
       : "Passwords are stored encrypted in the app data folder (no Keychain prompts).";
@@ -122,7 +136,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
       footer={
         <>
           <Button onClick={runTest} disabled={busy}>
-            {busy ? "Testing…" : tab === "ssh" ? "Test SSH Connection" : "Test Connection"}
+            {busy ? "Testing…" : sshTest ? "Test SSH Connection" : "Test Connection"}
           </Button>
           <Spacer />
           <Button onClick={onClose}>Cancel</Button>
@@ -135,7 +149,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
       <Tabs
         items={[
           { id: "general", label: "General" },
-          { id: "ssh", label: `SSH/SSL${ssh.enabled || ssl.enabled ? " ●" : ""}` },
+          { id: "ssh", label: `SSH/SSL${tunnel !== "none" || ssl.enabled ? " ●" : ""}` },
           { id: "schemas", label: `Schemas${cfg.scope?.databases?.length ? " ●" : ""}` },
           { id: "options", label: "Options" },
         ]}
@@ -257,37 +271,54 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
 
       {tab === "ssh" && (
         <FormGrid>
-          <FormSection>SSH tunnel</FormSection>
-          <span />
-          <Checkbox checked={ssh.enabled} onChange={(v) => setSsh("enabled", v)}>
-            Use SSH tunnel
-          </Checkbox>
-          <label>Host</label>
-          <div className="ui-row">
-            <TextInput grow disabled={!ssh.enabled} value={ssh.host} placeholder="bastion.example.com" onChange={(e) => setSsh("host", e.target.value)} />
-            <Text tone="muted">Port</Text>
-            {port(ssh.port, (n) => setSsh("port", n), 22, !ssh.enabled)}
-          </div>
-          <label>User</label>
-          <TextInput disabled={!ssh.enabled} value={ssh.user} onChange={(e) => setSsh("user", e.target.value)} />
-          <label>Auth type</label>
-          <Select disabled={!ssh.enabled} value={ssh.auth} onChange={(e) => setSsh("auth", e.target.value as SshConfig["auth"])}>
-            <option value="key">Key pair</option>
-            <option value="password">Password</option>
+          <FormSection>Tunnel</FormSection>
+          <label>Tunnel</label>
+          <Select className="w-auto" aria-label="Tunnel" value={tunnel} onChange={(e) => setTunnel(e.target.value as typeof tunnel)}>
+            <option value="none">None</option>
+            <option value="ssh">SSH</option>
+            <option value="ssm">AWS SSM (Session Manager)</option>
           </Select>
-          {ssh.auth === "key" && (
+          {tunnel === "ssm" ? (
             <>
-              <label>Private key</label>
+              <label>AWS profile</label>
+              <TextInput aria-label="AWS profile" value={ssm.profile} placeholder="(default profile)" onChange={(e) => setSsm("profile", e.target.value)} />
+              <label>Region</label>
+              <TextInput aria-label="Region" value={ssm.region} placeholder="(the profile's region)" onChange={(e) => setSsm("region", e.target.value)} />
+              <label>Instance id</label>
+              <TextInput aria-label="Instance id" value={ssm.target} placeholder="i-0123456789abcdef0" onChange={(e) => setSsm("target", e.target.value)} />
+              <span />
+              <Text tone="muted">Runs the AWS CLI v2 with the Session Manager plugin, signed in with your AWS config or SSO. Qurry stores no AWS secrets.</Text>
+            </>
+          ) : (
+            <>
+              <label>Host</label>
               <div className="ui-row">
-                <TextInput grow disabled={!ssh.enabled} value={ssh.keyPath} onChange={(e) => setSsh("keyPath", e.target.value)} />
-                <Button size="sm" disabled={!ssh.enabled} onClick={browseKey}>
-                  Browse…
-                </Button>
+                <TextInput grow disabled={!ssh.enabled} value={ssh.host} placeholder="bastion.example.com" onChange={(e) => setSsh("host", e.target.value)} />
+                <Text tone="muted">Port</Text>
+                {port(ssh.port, (n) => setSsh("port", n), 22, !ssh.enabled)}
               </div>
+              <label>User</label>
+              <TextInput disabled={!ssh.enabled} value={ssh.user} onChange={(e) => setSsh("user", e.target.value)} />
+              <label>Auth type</label>
+              <Select disabled={!ssh.enabled} value={ssh.auth} onChange={(e) => setSsh("auth", e.target.value as SshConfig["auth"])}>
+                <option value="key">Key pair</option>
+                <option value="password">Password</option>
+              </Select>
+              {ssh.auth === "key" && (
+                <>
+                  <label>Private key</label>
+                  <div className="ui-row">
+                    <TextInput grow disabled={!ssh.enabled} value={ssh.keyPath} onChange={(e) => setSsh("keyPath", e.target.value)} />
+                    <Button size="sm" disabled={!ssh.enabled} onClick={browseKey}>
+                      Browse…
+                    </Button>
+                  </div>
+                </>
+              )}
+              <label>{ssh.auth === "key" ? "Passphrase" : "Password"}</label>
+              <TextInput type="password" disabled={!ssh.enabled} value={sshSecret ?? ""} placeholder={edit?.ssh?.enabled ? "<saved — leave empty to keep>" : ssh.auth === "key" ? "(none)" : ""} onChange={(e) => setSshSecret(e.target.value)} />
             </>
           )}
-          <label>{ssh.auth === "key" ? "Passphrase" : "Password"}</label>
-          <TextInput type="password" disabled={!ssh.enabled} value={sshSecret ?? ""} placeholder={edit?.ssh?.enabled ? "<saved — leave empty to keep>" : ssh.auth === "key" ? "(none)" : ""} onChange={(e) => setSshSecret(e.target.value)} />
           <FormSection>SSL / TLS</FormSection>
           <span />
           <Checkbox checked={ssl.enabled} onChange={(v) => setSsl("enabled", v)}>
