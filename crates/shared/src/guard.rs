@@ -315,6 +315,9 @@ const MSSQL_STATEMENT_WORDS: &[&str] = &[
     "dbcc", "shutdown", "reconfigure", "bulk", "set", "begin", "commit", "rollback", "save", "checkpoint", "if", "while", "goto", "print", "raiserror", "throw",
     "end", "setuser", "revert", "open", "close", "fetch", "deallocate", "add", "updatetext", "writetext",
 ];
+/// MSSQL_STATEMENT_WORDS that are common column names (stock prices' open · close) and change no data as a statement of their own:
+/// is_read doesn't count them as a chained statement (read_only_violation still refuses them, with the [name] hint)
+const MSSQL_HARMLESS_STATEMENT_WORDS: &[&str] = &["open", "close", "add", "save", "use", "print", "end"];
 /// SQL Server: functions that read other servers · files
 const MSSQL_EXTERNAL_FUNCS: &[&str] = &["openrowset", "opendatasource", "openquery"];
 /// ClickHouse table functions: read outside the server (other servers · files · URLs) (MCP)
@@ -344,8 +347,8 @@ const DUCKDB_EXTERNAL_FUNCS: &[&str] = &[
 
 /// SQL Server runs a whole batch and needs no `;` between statements: the first bare word after the first word (at `fi`) that starts
 /// another statement. CASE … END and OFFSET … ROWS FETCH NEXT are part of a SELECT. (Non-reserved words like RECEIVE or DISABLE are left
-/// to the driver, which runs reads in a transaction it always rolls back)
-fn mssql_next_statement(toks: &[Tok], fi: usize) -> Option<&Tok> {
+/// to the driver, which runs reads in a transaction it always rolls back). `skip`: words not to count
+fn mssql_next_statement<'a>(toks: &'a [Tok], fi: usize, skip: &[&str]) -> Option<&'a Tok> {
     let mut case_depth = 0i32;
     let mut prev = "";
     toks.iter().skip(fi + 1).filter(|t| t.word && !t.quoted).find(|t| {
@@ -360,7 +363,7 @@ fn mssql_next_statement(toks: &[Tok], fi: usize) -> Option<&Tok> {
                 false
             }
             "fetch" => !matches!(prev, "row" | "rows"),
-            _ => MSSQL_STATEMENT_WORDS.contains(&w),
+            _ => MSSQL_STATEMENT_WORDS.contains(&w) && !skip.contains(&w),
         };
         prev = w;
         hit
@@ -407,7 +410,7 @@ pub fn read_only_violation(sql: &str, kind: DbKind, strict: bool) -> Option<Stri
         if sc.toks.get(fi).is_some_and(|t| t.quoted) {
             return Some("Read-only mode: a statement can't start with a [name] (SQL Server runs it as a procedure)".into());
         }
-        if let Some(t) = mssql_next_statement(&sc.toks, fi) {
+        if let Some(t) = mssql_next_statement(&sc.toks, fi, &[]) {
             return Some(format!("Read-only mode: '{}' starts another statement (SQL Server runs the whole batch; write [{}] for a column)", t.text, t.text));
         }
     }
@@ -1018,7 +1021,7 @@ fn read_one(sc: Scan, kind: DbKind) -> bool {
         }
     }
     // SQL Server also starts a statement without `;` (`select 1 exec purge`)
-    let chained = kind == DbKind::Mssql && sc.toks.iter().position(|t| t.word).is_some_and(|fi| mssql_next_statement(&sc.toks, fi).is_some());
+    let chained = kind == DbKind::Mssql && sc.toks.iter().position(|t| t.word).is_some_and(|fi| mssql_next_statement(&sc.toks, fi, MSSQL_HARMLESS_STATEMENT_WORDS).is_some());
     !firsts.is_empty()
         && !chained
         && firsts.iter().all(|w| READ_WORDS.contains(w))
@@ -1613,6 +1616,12 @@ mod tests {
         for s in ["select case when a = 1 then 1 end from t", "select a from t order by a offset 0 rows fetch next 5 rows only", "select [set], [exec] from t", "select 1; select 2"] {
             assert!(is_read(s, DbKind::Mssql), "{s}");
         }
+        // Statement words that are common column names and change nothing on their own stay reads; read-only mode still asks for [open]
+        for s in ["select open, close from prices", "select add, save, print from t", "select [open], [close] from prices"] {
+            assert!(is_read(s, DbKind::Mssql), "{s}");
+        }
+        assert!(read_only_violation("select open, close from prices", DbKind::Mssql, false).is_some());
+        assert!(!is_read("select open from prices exec purge", DbKind::Mssql));
         assert!(!is_read("", Postgres) && !is_read(" -- only a note", Postgres));
     }
 

@@ -79,6 +79,10 @@
     "DDL_RE": false,
     "isReadStmt": false
   },
+  "mssql-open-close-columns": {
+    "DDL_RE": false,
+    "isReadStmt": true
+  },
   "multi-call": {
     "DDL_RE": false,
     "isReadStmt": false

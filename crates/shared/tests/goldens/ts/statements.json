@@ -167,6 +167,10 @@
     "isReadStmt": true,
     "DDL_RE": false
   },
+  "mssql-open-close-columns": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
   "redis-get": {
     "isReadStmt": false,
     "DDL_RE": false
