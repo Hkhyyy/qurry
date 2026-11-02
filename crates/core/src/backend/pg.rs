@@ -413,11 +413,10 @@ impl Backend for PgPool {
 
     async fn table_def(&self, schema: &str, table: &str) -> AppResult<TableDef> {
         let mut t = TableDef { schema: schema.into(), name: table.into(), ..Default::default() };
-        const REL: &str = "(SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = $2)";
         let cols: Vec<(String, String, bool, Option<String>, bool, Option<String>)> = sqlx::query_as(&format!(
             "SELECT a.attname::text, format_type(a.atttypid, a.atttypmod), NOT a.attnotnull, pg_get_expr(d.adbin, d.adrelid), a.attidentity <> '', col_description(a.attrelid, a.attnum) \
              FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum \
-             WHERE a.attrelid = {REL} AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum"
+             WHERE a.attrelid = {REL_OID} AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum"
         ))
         .bind(schema)
         .bind(table)
@@ -427,10 +426,10 @@ impl Backend for PgPool {
             return Err(AppError::Msg(format!("Couldn't find table {schema}.{table}")));
         }
         t.columns = cols.into_iter().map(|(name, data_type, nullable, default, auto_increment, comment)| ColumnDef { orig: Some(name.clone()), name, data_type, nullable, default, auto_increment, comment }).collect();
-        t.comment = sqlx::query_scalar::<_, Option<String>>(&format!("SELECT obj_description({REL}, 'pg_class')")).bind(schema).bind(table).fetch_one(self).await?;
+        t.comment = sqlx::query_scalar::<_, Option<String>>(&format!("SELECT obj_description({REL_OID}, 'pg_class')")).bind(schema).bind(table).fetch_one(self).await?;
         let pk: Option<(String, Vec<String>)> = sqlx::query_as(&format!(
             "SELECT c.conname::text, array(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(n, o) JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.n ORDER BY k.o) \
-             FROM pg_constraint c WHERE c.conrelid = {REL} AND c.contype = 'p'"
+             FROM pg_constraint c WHERE c.conrelid = {REL_OID} AND c.contype = 'p'"
         ))
         .bind(schema)
         .bind(table)
@@ -445,7 +444,7 @@ impl Backend for PgPool {
             "SELECT i.relname::text, ix.indisunique, EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conindid = ix.indexrelid AND c.contype = 'u'), \
                     array(SELECT a.attname::text FROM unnest(ix.indkey) WITH ORDINALITY k(n, o) JOIN pg_attribute a ON a.attrelid = ix.indrelid AND a.attnum = k.n ORDER BY k.o), \
                     ix.indexprs IS NOT NULL OR ix.indpred IS NOT NULL, pg_get_indexdef(ix.indexrelid) \
-             FROM pg_index ix JOIN pg_class i ON i.oid = ix.indexrelid WHERE ix.indrelid = {REL} AND NOT ix.indisprimary ORDER BY i.relname"
+             FROM pg_index ix JOIN pg_class i ON i.oid = ix.indexrelid WHERE ix.indrelid = {REL_OID} AND NOT ix.indisprimary ORDER BY i.relname"
         ))
         .bind(schema)
         .bind(table)
@@ -462,7 +461,7 @@ impl Backend for PgPool {
                array(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(n, o) JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.n ORDER BY k.o), \
                c.confdeltype::text, c.confupdtype::text \
              FROM pg_constraint c JOIN pg_class rc ON rc.oid = c.confrelid JOIN pg_namespace rn ON rn.oid = rc.relnamespace \
-             WHERE c.conrelid = {REL} AND c.contype = 'f' ORDER BY c.conname"
+             WHERE c.conrelid = {REL_OID} AND c.contype = 'f' ORDER BY c.conname"
         ))
         .bind(schema)
         .bind(table)
