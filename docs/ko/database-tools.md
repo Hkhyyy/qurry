@@ -86,7 +86,7 @@ GUI: 결과에서 View as (눈 아이콘) › **Chart**: 막대 · 선 · 파이
 
 노드마다 자기 몫의 시간 (Explain Analyze) 또는 비용을 보여 주고, 볼 만한 것을 표시합니다 — 큰 테이블의 Seq Scan, 10배 이상 틀린 행 수 추정, 대부분의 행을 버리는 필터, 디스크로 넘친 정렬 · 해시. TUI: `⌥e` Explain, `⌃k` › Explain Analyze.
 
-Explain Analyze 는 문장을 실제로 실행합니다. 데이터를 바꾸는 문장 (UPDATE, DELETE, INSERT, SELECT … INTO …) 은 PostgreSQL · MySQL 에서 트랜잭션 안에서 실행하고 되돌립니다 — 이미 트랜잭션이 열려 있으면 세이브포인트까지만 — 그래서 테이블 변경은 되돌려집니다 (MySQL 에서는 InnoDB 같은 트랜잭션 테이블만이고, MyISAM · MEMORY 는 아닙니다). 되돌릴 수 없는 것 (시퀀스 값, `dblink_exec`, `SELECT … INTO OUTFILE`) 은 먼저 묻습니다 ([안전장치](safety.md)).
+Explain Analyze 는 문장을 실제로 실행합니다. PostgreSQL · MySQL 에서는 트랜잭션 안에서 실행하고 되돌립니다 — 이미 트랜잭션이 열려 있으면 세이브포인트까지만 — 그래서 테이블 변경은 되돌려집니다 (MySQL 에서는 InnoDB 같은 트랜잭션 테이블만이고, MyISAM · MEMORY 는 아닙니다). 되돌릴 수 없는 것 (시퀀스 값, `dblink_exec`, `SELECT … INTO OUTFILE`) 과 Qurry 가 모르는 함수를 부르는 `SELECT` 는 먼저 묻습니다 ([안전장치](safety.md)).
 
 ---
 

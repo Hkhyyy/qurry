@@ -16,14 +16,24 @@ export function isRead(kind: DbKind, sql: string): boolean {
 }
 
 /**
- * Explain Analyse's rollback undoes everything the statement does: not for nextval / setval, dblink_exec, server files, locks or
- * SELECT … INTO OUTFILE. False while the WASM module isn't loaded, so Explain Analyse then asks first
+ * Why Explain Analyse asks before it runs the statement (qurry_shared::guard::explain_analyze_ask, the TUI's words), or undefined.
+ * Without the WASM module nothing can be checked, so it asks
  */
-export function rollbackUndoes(kind: DbKind, sql: string): boolean {
+export function explainAnalyzeAsk(kind: DbKind, sql: string): string | undefined {
   try {
-    return shared().rollbackUndoes(sql, kind);
+    return shared().explainAnalyzeAsk(sql, kind);
   } catch {
-    return false;
+    return "it can't be checked without the statement splitter";
+  }
+}
+
+/** What Output says after Explain Analyse rolled the statement back (PostgreSQL · MySQL; the words after "Explain Analyse "), or undefined */
+export function explainAnalyzeNote(kind: DbKind, sql: string): { level: "info" | "warn"; text: string } | undefined {
+  try {
+    const n = shared().explainAnalyzeNote(sql, kind);
+    return n && { level: n[0] ? "warn" : "info", text: n[1] };
+  } catch {
+    return { level: "info", text: "ran the statement in a transaction and rolled it back; it couldn't be checked for effects a rollback doesn't undo" };
   }
 }
 

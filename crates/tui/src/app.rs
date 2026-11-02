@@ -1878,15 +1878,14 @@ impl App {
                 return;
             }
         }
-        // EXPLAIN ANALYZE actually runs the statement. PostgreSQL·MySQL run changing statements inside a transaction and roll back (below).
-        // Drivers may not support transactions, and a rollback doesn't undo everything (sequences, other servers, files), so ask
+        // EXPLAIN ANALYZE actually runs the statement. PostgreSQL·MySQL run it inside a transaction and roll back (below); drivers may
+        // not support transactions. Ask when the rollback may not undo it all or nothing does (guard::explain_analyze_ask, the GUI's rule and words)
         let wraps = matches!(kind, DbKind::Postgres | DbKind::Mysql);
         if analyze
             && !confirmed
-            && let Some(s) = stmts.iter().find(|s| !qurry_core::guard::is_read(s, kind) && (!wraps || !qurry_core::guard::rollback_undoes(s, kind)))
+            && let Some((s, why)) = stmts.iter().find_map(|s| qurry_core::guard::explain_analyze_ask(s, kind).map(|w| (s, w)))
         {
             let preview: String = s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect();
-            let why = if wraps { UNDONE_ASK } else { "it changes data" };
             self.popup = Some(Popup::Confirm {
                 text: format!("Explain Analyze really runs the statement ({why}):\n  {preview}\nRun it anyway?"),
                 on_yes: Box::new(move |a| {
@@ -1936,8 +1935,9 @@ impl App {
                     } else {
                         s.clone()
                     };
-                    // Explain Analyze of a changing statement: run inside a transaction (a savepoint if one is already open) and always roll back
-                    let dry = analyze && wraps && !qurry_core::guard::is_read(&s, kind);
+                    // Explain Analyze: run inside a transaction (a savepoint if one is already open) and always roll back. Reads too: a
+                    // function a SELECT calls may write
+                    let dry = analyze && wraps;
                     if dry {
                         let begin = if in_tx0 { "SAVEPOINT qurry_explain" } else { "BEGIN" };
                         if let Err(e) = console_query(&st, fake, &target, begin.into(), None, &session).await {
@@ -1989,10 +1989,11 @@ impl App {
                             };
                             c.in_tx = res.in_transaction;
                             let warning = res.warning.clone();
-                            if dry && qurry_core::guard::rollback_undoes(&s, kind) {
-                                c.log(false, "Explain Analyze ran the statement in a transaction and rolled it back — nothing was changed".into());
-                            } else if dry {
-                                c.log(true, format!("Explain Analyze ran the statement in a transaction and rolled it back, but {UNDONE_LOG}"));
+                            if dry {
+                                // A warning, not an error: it ran (Output draws WARNING lines in the warning colour, as the GUI does)
+                                if let Some((warn, note)) = qurry_core::guard::explain_analyze_note(&s, kind) {
+                                    c.log(false, format!("{}Explain Analyze {note}", if warn { WARNING } else { "" }));
+                                }
                             } else if !res.in_transaction && !qurry_core::guard::is_read(&s, kind) {
                                 committed += 1;
                             }
@@ -3377,10 +3378,6 @@ pub fn byte_offset(lines: &[String], row: usize, col: usize) -> usize {
     let line = lines.get(row).map(|s| s.as_str()).unwrap_or("");
     off + line.char_indices().nth(col).map(|(i, _)| i).unwrap_or(line.len())
 }
-
-/// Explain Analyze of a write a rollback can't undo (qurry_core::guard::rollback_undoes): the question before, the note after
-const UNDONE_ASK: &str = "a rollback can't undo what it does outside the transaction: sequence values, other servers, files, locks, or a COMMIT · MySQL DDL among several statements";
-const UNDONE_LOG: &str = "what it did outside the transaction stays (sequence values, other servers, files, locks, or a COMMIT · MySQL DDL among several statements)";
 
 /// The statements' text (the TUI doesn't highlight what runs, so the ranges aren't needed)
 fn sqls(v: Vec<qurry_core::exec::Stmt>) -> Vec<String> {

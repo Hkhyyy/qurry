@@ -18,6 +18,7 @@ What changed in each Qurry version, for people who use it. The format follows [K
 - GUI console: while the WebAssembly module loads, `⌘↩` shows a loading bar and runs once it arrives. Without the module, a notice says once when a console opens that autocomplete is off.
 - Grid copy writes PostgreSQL strings with a backslash as `E'…'`, and MySQL value hints double backslashes.
 - Errors for operations a driver plugin doesn't support read "<op> isn't available for the <driver> driver".
+- **Explain Analyze** on PostgreSQL and MySQL rolls back every statement, reads included, and asks first before a `SELECT` that calls a function Qurry doesn't know (a user-defined one could write or reach another server; Run Anyway goes on, Explain Plan shows the plan without running it). It no longer asks the "dangerous statement" question as well, in the GUI as in the TUI.
 - Contributors need the `wasm32-unknown-unknown` target and `wasm-bindgen-cli` 0.2.129 ([Development](docs/development.md)).
 
 ### Fixed
@@ -28,3 +29,6 @@ What changed in each Qurry version, for people who use it. The format follows [K
 - Database Admin reports on managed services, MariaDB and large servers (#64); a failed refresh keeps the last result and says how old it is.
 - MySQL backup and restore: the client that matches the server's kind and version, `--set-gtid-purged=OFF`, optional removal of `DEFINER=` clauses, and shell commands off during a restore.
 - Production log: a change is logged before it runs, and undo SQL is kept only when every changed row was saved.
+- PostgreSQL full-text search and value hints write a search text or value with a backslash as `E'…'`, so a server with `standard_conforming_strings = off` can't read it as SQL.
+- SQL Server: a `SELECT` of columns named `open`, `close` and the like is a read again (no Production confirmation).
+- TUI: the Explain Analyze note about what a rollback can't undo is a warning, not an error.

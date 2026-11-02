@@ -1070,6 +1070,128 @@ pub fn rollback_undoes(sql: &str, kind: DbKind) -> bool {
         })
 }
 
+/// Explain Analyse of a write a rollback can't undo (rollback_undoes): why the GUI and the TUI ask first
+const ANALYZE_UNDONE_ASK: &str =
+    "a rollback can't undo what it does outside the transaction: sequence values, other servers, files, locks, or a COMMIT · MySQL DDL among several statements";
+/// What a function may do that a rollback doesn't undo (a function body can't be checked by name)
+const FUNCTION_EFFECTS: &str = "sequence values, other servers, files, locks";
+
+/// Why Explain Analyse should ask before it runs `sql` (it really runs the statement), or None to run it without asking.
+/// PostgreSQL · MySQL run it in a transaction they roll back: they ask for a write the rollback doesn't fully undo, and for a read
+/// that calls a function Qurry doesn't know (a user-defined one may write, call nextval or another server). Other kinds aren't
+/// wrapped (drivers may not support transactions), so they ask for every write. GUI and TUI ask with these words
+pub fn explain_analyze_ask(sql: &str, kind: DbKind) -> Option<String> {
+    let read = is_read(sql, kind);
+    if !matches!(kind, DbKind::Postgres | DbKind::Mysql) {
+        return (!read).then(|| "it changes data".into());
+    }
+    if !read {
+        return (!rollback_undoes(sql, kind)).then(|| ANALYZE_UNDONE_ASK.into());
+    }
+    unknown_call(sql, kind).map(|f| format!("it calls {f}(), and a rollback can't undo what a function does outside the transaction ({FUNCTION_EFFECTS})"))
+}
+
+/// What Output says after Explain Analyse ran `sql` in the transaction it rolled back (PostgreSQL · MySQL), as the words after
+/// "Explain Analyse ": (warn, text). None for a read that calls no unknown function (nothing to say)
+pub fn explain_analyze_note(sql: &str, kind: DbKind) -> Option<(bool, String)> {
+    const RAN: &str = "ran the statement in a transaction and rolled it back";
+    if is_read(sql, kind) {
+        return unknown_call(sql, kind).map(|f| (true, format!("{RAN}, but what {f}() did outside the transaction stays ({FUNCTION_EFFECTS})")));
+    }
+    Some(if rollback_undoes(sql, kind) {
+        // A trigger, or a function the statement calls, can still reach outside the transaction: no name check sees inside them
+        (false, format!("{RAN}: its table changes were undone, but not what a trigger or function did outside the transaction ({FUNCTION_EFFECTS})"))
+    } else {
+        (true, format!("{RAN}, but what it did outside the transaction stays ({FUNCTION_EFFECTS}, or a COMMIT · MySQL DDL among several statements)"))
+    })
+}
+
+/// Functions (and words written like calls) whose effects a rollback undoes or that have none: PostgreSQL · MySQL built-ins
+/// a SELECT commonly calls. Any other call in a read may be a user-defined function, so Explain Analyse asks first
+const KNOWN_CALLS: &[&str] = &[
+    // words followed by ( that aren't function calls
+    "select", "from", "join", "where", "and", "or", "not", "on", "using", "in", "exists", "any", "all", "some", "values", "over", "filter",
+    "within", "as", "when", "then", "else", "case", "by", "having", "like", "ilike", "between", "is", "union", "except", "intersect", "lateral",
+    "distinct", "limit", "offset", "with", "recursive", "materialized", "array", "row", "returning", "set", "index", "key", "use", "force",
+    "ignore", "partition", "columns", "match", "against", "explain", "table", "into", "only", "group", "order", "window", "rows", "range",
+    "groups", "cube", "rollup", "grouping", "sets", "ordinality", "escape", "similar", "to", "for", "of", "lock", "nulls", "first", "last",
+    // types written with a length or precision
+    "char", "character", "varchar", "nchar", "numeric", "decimal", "dec", "float", "double", "real", "time", "timestamp", "timestamptz",
+    "interval", "bit", "varbit", "varying", "binary", "varbinary", "datetime", "int", "integer", "signed", "unsigned", "vector", "halfvec",
+    "sparsevec",
+    // aggregates and window functions
+    "count", "sum", "avg", "min", "max", "every", "string_agg", "group_concat", "stddev", "stddev_pop", "stddev_samp", "variance", "var_pop",
+    "var_samp", "corr", "covar_pop", "covar_samp", "mode", "percentile_cont", "percentile_disc", "row_number", "rank", "dense_rank",
+    "percent_rank", "cume_dist", "ntile", "lag", "lead", "first_value", "last_value", "nth_value", "xmlagg", "any_value",
+    // conditionals and comparison
+    "coalesce", "nullif", "greatest", "least", "if", "ifnull", "isnull", "nvl", "num_nonnulls", "num_nulls",
+    // strings
+    "lower", "upper", "initcap", "length", "char_length", "character_length", "octet_length", "bit_length", "substring", "substr", "mid",
+    "trim", "ltrim", "rtrim", "btrim", "replace", "translate", "concat", "concat_ws", "position", "strpos", "instr", "locate", "left", "right",
+    "lpad", "rpad", "repeat", "reverse", "split_part", "format", "quote_ident", "quote_literal", "quote_nullable", "ascii", "chr", "md5",
+    "sha1", "sha2", "sha224", "sha256", "sha384", "sha512", "encode", "decode", "hex", "unhex", "starts_with", "overlay", "soundex",
+    "difference", "levenshtein", "similarity", "unaccent", "field", "find_in_set", "elt", "insert", "space", "strcmp", "uuid",
+    "gen_random_uuid", "uuid_generate_v4", "convert", "cast", "collate", "bin", "oct", "conv", "crc32", "base64", "from_base64",
+    "to_base64", "inet_aton", "inet_ntoa", "host", "network", "masklen", "inet", "cidr",
+    // numbers
+    "abs", "round", "floor", "ceil", "ceiling", "trunc", "truncate", "mod", "power", "pow", "sqrt", "cbrt", "exp", "ln", "log", "log10",
+    "log2", "sign", "random", "rand", "pi", "degrees", "radians", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "div", "gcd", "lcm",
+    "width_bucket", "scale",
+    // dates and times
+    "now", "current_date", "current_time", "current_timestamp", "localtime", "localtimestamp", "clock_timestamp", "statement_timestamp",
+    "transaction_timestamp", "timeofday", "age", "extract", "make_date", "make_time", "make_timestamp", "make_timestamptz", "make_interval",
+    "justify_days", "justify_hours", "justify_interval", "isfinite", "timezone", "date", "year", "month", "day", "hour", "minute", "second",
+    "week", "quarter", "dayname", "monthname", "dayofweek", "dayofmonth", "dayofyear", "weekday", "weekofyear", "yearweek", "curdate",
+    "curtime", "sysdate", "utc_date", "utc_time", "utc_timestamp", "unix_timestamp", "from_unixtime", "str_to_date", "datediff", "timediff",
+    "timestampdiff", "timestampadd", "adddate", "subdate", "addtime", "subtime", "last_day", "makedate", "maketime", "period_add",
+    "period_diff", "sec_to_time", "time_to_sec", "convert_tz", "get_format",
+    // text search (besides ts_… and to_…)
+    "plainto_tsquery", "phraseto_tsquery", "websearch_to_tsquery", "setweight", "strip", "numnode", "querytree",
+    // arrays, sets and JSON
+    "unnest", "generate_series", "generate_subscripts", "cardinality", "jsonb", "json", "row_to_json", "hstore", "exist", "defined",
+    // catalog and session information
+    "version", "database", "schema", "current_schema", "current_schemas", "current_user", "session_user", "user", "current_database",
+    "current_setting", "has_table_privilege", "has_schema_privilege", "has_column_privilege", "has_database_privilege",
+    "has_function_privilege", "format_type", "obj_description", "col_description", "connection_id", "last_insert_id", "found_rows",
+    "row_count", "lastval", "currval", "inet_server_addr", "inet_server_port", "inet_client_addr", "txid_current", "pg_backend_pid",
+    "pg_typeof", "pg_column_size", "pg_size_pretty", "pg_relation_size", "pg_total_relation_size", "pg_table_size", "pg_indexes_size",
+    "pg_database_size", "pg_get_viewdef", "pg_get_indexdef", "pg_get_constraintdef", "pg_get_functiondef", "pg_get_triggerdef",
+    "pg_get_expr", "pg_get_userbyid", "pg_get_serial_sequence", "pg_table_is_visible", "pg_postmaster_start_time", "pg_is_in_recovery",
+    "pg_current_wal_lsn", "pg_last_wal_replay_lsn", "pg_wal_lsn_diff", "to_regclass", "to_regtype", "to_regproc", "pg_encoding_to_char",
+    // pgvector
+    "l2_distance", "l1_distance", "cosine_distance", "inner_product", "vector_dims", "vector_norm", "l2_normalize", "binary_quantize",
+    "subvector", "hamming_distance", "jaccard_distance",
+];
+/// Built-in families by name: json_… / jsonb_… / array_… / regexp_… / date_… / to_… (to_char, to_tsvector …) / string_… / ts… search
+/// (text search; ts_stat is already a write by is_read) / st_… (PostGIS) / bool_… bit_… regr_… aggregates
+const KNOWN_CALL_PREFIXES: &[&str] = &["json_", "jsonb_", "array_", "regexp_", "date_", "to_", "string_", "ts_", "st_", "bool_", "bit_", "regr_"];
+
+/// The first call in a read that may be a user-defined function (PostgreSQL · MySQL), under every way the server may read its quotes.
+/// A word followed by ( is no call after AS, :: or another name or `)` (an alias's column list, a type), nor a WITH name(…) AS ( header
+fn unknown_call(sql: &str, kind: DbKind) -> Option<String> {
+    let found = std::cell::RefCell::new(None);
+    every_reading(sql, kind, |sc| {
+        let toks = &sc.toks;
+        let hit = toks.iter().enumerate().find(|&(i, t)| {
+            if !t.word || toks.get(i + 1).is_none_or(|n| n.text != "(") {
+                return false;
+            }
+            let prev = i.checked_sub(1).map(|p| &toks[p]);
+            let after_name = prev.is_some_and(|p| (p.word && (p.quoted || p.text == "as" || !KNOWN_CALLS.contains(&p.text.as_str()))) || p.text == ")" || p.text == ":");
+            // The ) that closes this call, then `AS (` or `AS MATERIALIZED` / `AS NOT MATERIALIZED`: a WITH name(columns) AS (…) header
+            let close = toks[i + 1..].iter().position(|c| c.text == ")" && c.depth == toks[i + 1].depth).map(|j| i + 1 + j);
+            let cte = close.is_some_and(|c| toks.get(c + 1).is_some_and(|a| a.text == "as") && toks.get(c + 2).is_some_and(|n| ["(", "materialized", "not"].contains(&n.text.as_str())));
+            let known = !t.quoted && (KNOWN_CALLS.contains(&t.text.as_str()) || KNOWN_CALL_PREFIXES.iter().any(|p| t.text.starts_with(p)));
+            !after_name && !cte && !known
+        });
+        if let Some((_, t)) = hit {
+            found.borrow_mut().get_or_insert_with(|| t.text.clone());
+        }
+        hit.is_none()
+    });
+    found.into_inner()
+}
+
 /// Whether the statement changes structure (the explorer tree is reloaded after running). Skips leading comments
 pub fn is_ddl(sql: &str, kind: DbKind) -> bool {
     if kind == DbKind::Redis {
@@ -1658,5 +1780,56 @@ mod tests {
         assert!(!rollback_undoes("delete from t; commit", Postgres));
         assert!(!rollback_undoes("delete from t; create table x (a int)", Mysql));
         assert!(rollback_undoes("delete from t; -- done", Postgres));
+    }
+
+    /// Explain Analyse asks before a read that calls a function it doesn't know (a user-defined one may write, call nextval or
+    /// another server), as it does before a write a rollback can't undo; built-ins and words written like calls don't ask
+    #[test]
+    fn explain_analyze_asks_before_unknown_functions_and_what_a_rollback_cant_undo() {
+        let ask = |s: &str, k: DbKind| explain_analyze_ask(s, k);
+        for (s, f) in [
+            ("select archive_old_orders()", "archive_old_orders"),
+            ("select * from app.purge(30)", "purge"),
+            ("select \"MakeInvoice\"(1)", "makeinvoice"),
+            ("select pg_logical_slot_get_changes('s', null, null)", "pg_logical_slot_get_changes"),
+            ("with x as (select g(1) a) select a from x", "g"),
+            ("select count(*) from t where id = any(select f(id) from u)", "f"),
+        ] {
+            let why = ask(s, Postgres).unwrap_or_else(|| panic!("{s}"));
+            assert_eq!(why, format!("it calls {f}(), and a rollback can't undo what a function does outside the transaction (sequence values, other servers, files, locks)"));
+        }
+        assert!(ask("select g()", Mysql).is_some());
+        for s in [
+            "select count(*), max(created_at), coalesce(name, '') from t where id in (1, 2) and exists (select 1 from u)",
+            "select date_trunc('day', ts), to_char(ts, 'YYYY'), jsonb_agg(x) filter (where x > 0) over (partition by y) from t",
+            "select * from generate_series(1, 3) as g(n)",
+            "select * from unnest(array[1]) u(x)",
+            "with recursive t(n) as (select 1 union all select n + 1 from t) select n from t",
+            "select cast(x as numeric(10, 2)), y::varchar(20) from t",
+            "select * from t tablesample bernoulli (10)",
+            "select embedding <-> '[1,2]' as d, cosine_distance(embedding, '[1,2]') from items",
+            "select 'archive()' from t",
+        ] {
+            assert_eq!(ask(s, Postgres), None, "{s}");
+        }
+        assert_eq!(ask("select * from t force index (i) where match (a) against ('x') and if(a, 1, 0)", Mysql), None);
+        // Writes: only what a rollback can't undo
+        assert_eq!(ask("delete from t", Postgres), None);
+        assert_eq!(ask("select nextval('s')", Postgres).as_deref(), Some(ANALYZE_UNDONE_ASK));
+        // Not wrapped in a transaction: every write, as before
+        assert_eq!(ask("delete from t", DbKind::Sqlite).as_deref(), Some("it changes data"));
+        assert_eq!(ask("select f()", DbKind::Sqlite), None);
+    }
+
+    /// What Output says after the rolled-back run: nothing for a plain read, a caveat for a write, a warning for what stays
+    #[test]
+    fn explain_analyze_note_says_what_the_rollback_left() {
+        assert_eq!(explain_analyze_note("select * from t", Postgres), None);
+        let (warn, text) = explain_analyze_note("update t set a = 1", Postgres).unwrap();
+        assert!(!warn && text.contains("its table changes were undone, but not what a trigger or function did"), "{text}");
+        let (warn, text) = explain_analyze_note("select nextval('s')", Postgres).unwrap();
+        assert!(warn && text.contains("what it did outside the transaction stays"), "{text}");
+        let (warn, text) = explain_analyze_note("select archive()", Mysql).unwrap();
+        assert!(warn && text.contains("what archive() did outside the transaction stays"), "{text}");
     }
 }
