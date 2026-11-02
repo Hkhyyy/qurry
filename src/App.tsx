@@ -17,6 +17,7 @@ import { CopyRowsDialog, GenerateDataDialog } from "./components/DataTools";
 import { NewKind, NewObjectDialog, TableDesigner } from "./components/ObjectEditors";
 import { EditTarget } from "./components/ResultGrid";
 import { TableEditor } from "./components/TableEditor";
+import { TlsFix } from "./components/TlsFix";
 import { RagView } from "./components/RagView";
 import { WorkspaceBar, WorkspaceInfo } from "./components/WorkspaceBar";
 import { forgetConsoleModel } from "./lib/monaco";
@@ -1253,6 +1254,22 @@ export default function App() {
     if (!updStashed(id, fn)) setTabs((ts) => ts.map((t) => (t.id === id ? fn(t) : t)));
   };
   const log = (id: string, level: OutputLine["level"], text: string) => updTab(id, (t) => ({ ...t, output: [...t.output.slice(-999), { ts: nowTs(), text, level }] }));
+  /**
+   * After "Allow unencrypted" under a console's or table tab's connect error: only reconnect. A console never runs the statement again (it may write);
+   * a table tab reloads once connected, as after any failed connection
+   */
+  const reconnectAfterTls = async (connId: string, consoleTab?: string) => {
+    setStatus(`Connecting to ${conns.find((c) => c.id === connId)?.name ?? connId}…`);
+    try {
+      await api.connect(connId);
+      if (consoleTab) log(consoleTab, "info", "Connected. Run again.");
+      setStatus(consoleTab ? "Connected. Run again." : "Connected");
+    } catch (e) {
+      if (consoleTab) log(consoleTab, "error", String(e));
+      setStatus(`Connection failed: ${String(e)}`);
+    }
+    refresh();
+  };
   /** Result tab title: leading comment of the query → table name → Result N (DataGrip) */
   const resultTitle = (sql: string, n: number) => {
     const c = /^\s*(?:--\s*(.+)|\/\*\s*([\s\S]*?)\*\/)/.exec(sql);
@@ -2275,6 +2292,7 @@ export default function App() {
                     schemaSwitchDisabled={conns.find((x) => x.id === t.connId)?.options?.switchSchema === "disable"}
                     registerApi={(id, a) => editorApis.current.set(id, a)}
                     onClearOutput={() => patch(t.id, { output: [] })}
+                    errorAction={<TlsFix conn={c} msg={t.output[t.output.length - 1]?.level === "error" ? t.output[t.output.length - 1].text : null} then={() => reconnectAfterTls(t.connId, t.id)} />}
                     onError={(m) => (log(t.id, "error", m), patch(t.id, { activeResult: "output" }), setStatus("Not run: the statement splitter couldn't load (see Output)"))}
                   />
                 </div>
@@ -2369,6 +2387,7 @@ export default function App() {
                   orderBy={t.orderBy}
                   running={t.running}
                   error={t.error}
+                  errorAction={<TlsFix conn={conns.find((x) => x.id === t.connId)} msg={t.error} then={() => reconnectAfterTls(t.connId)} />}
                   result={t.result}
                   query={t.lastSql}
                   edit={t.edit && t.lastSql === t.tableSql ? t.edit : undefined}

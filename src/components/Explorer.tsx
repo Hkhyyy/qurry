@@ -229,6 +229,7 @@ export function Explorer(p: Props) {
                 showSystem={showSystem}
                 onActivate={p.onActivate}
                 onScopeChange={p.onScopeChange}
+                onConnsChanged={p.onRefresh}
                 onMenu={(e, info) => setMenu({ x: e.clientX, y: e.clientY, items: p.buildMenu(info), conn: info.kind === "conn" ? info.conn : undefined })}
               />
             ))}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Button, Checkbox, ColorPicker, EmptyState, FormGrid, FormSection, Hint, Modal, Notice, Select, Spacer, Tabs, Text, TextArea, TextInput } from "../ui";
+import { Button, Checkbox, ColorPicker, EmptyState, FormGrid, FormSection, Hint, Modal, Notice, Select, Spacer, Tabs, Text, TextArea, TextInput, TlsOptIn } from "../ui";
+import { needsTlsOptIn } from "./TlsFix";
 import { api, COLOR_PRESETS, ConnOptions, RedisMode, SslConfig, ConnectionConfig, ConnectionView, DbKind, DEFAULT_PORT, DRIVER_MISSING, isFileKind, KIND_LABEL, meta, SchemaInfo, SshConfig, targetId } from "../lib/api";
 
 interface Props {
@@ -71,12 +72,12 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   const set = <K extends keyof ConnectionConfig>(k: K, v: ConnectionConfig[K]) => setCfg((c) => ({ ...c, [k]: v }));
   const setSsh = <K extends keyof SshConfig>(k: K, v: SshConfig[K]) => setCfg((c) => ({ ...c, ssh: { ...(c.ssh ?? EMPTY_SSH), [k]: v } }));
 
-  const runTest = async () => {
+  const runTest = async (c = cfg) => {
     setBusy(true);
     setTest(null);
     try {
       // On the SSH tab, test only the SSH login; on the General tab, test the DB connection too (via SSH)
-      const v = tab === "ssh" ? await api.testSsh(cfg, sshSecret) : await api.testConnection(cfg, password, sshSecret);
+      const v = tab === "ssh" ? await api.testSsh(c, sshSecret) : await api.testConnection(c, password, sshSecret);
       setTest({ ok: true, msg: v });
     } catch (e) {
       setTest({ ok: false, msg: String(e) });
@@ -121,7 +122,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
       onClose={onClose}
       footer={
         <>
-          <Button onClick={runTest} disabled={busy}>
+          <Button onClick={() => runTest()} disabled={busy}>
             {busy ? "Testing…" : tab === "ssh" ? "Test SSH Connection" : "Test Connection"}
           </Button>
           <Spacer />
@@ -404,6 +405,18 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
             {installing ? "Installing…" : `Install the ${KIND_LABEL[cfg.kind]} driver`}
           </Button>
         </div>
+      )}
+      {/* Server without TLS: tick Allow unencrypted in this form (saved only with OK) → test again */}
+      {test && !test.ok && needsTlsOptIn(test.msg) && (
+        <TlsOptIn
+          host={cfg.host}
+          production={!!opt.confirmChanges}
+          onAllow={() => {
+            const next = { ...cfg, options: { ...opt, allowPlaintext: true } };
+            setCfg(next);
+            return runTest(next);
+          }}
+        />
       )}
       {/* Unknown SSH server: trust after checking the fingerprint → test again */}
       {test && !test.ok && test.msg.includes("Unknown SSH host key") && cfg.ssh && (

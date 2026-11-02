@@ -7,6 +7,7 @@ import { invalidateCompletion } from "../lib/completion";
 import { TYPE_COLOR } from "./RedisBrowser";
 import { keyTree, type KeyNode } from "../lib/keyTree";
 import { useSharedReady } from "../lib/shared";
+import { TlsFix } from "./TlsFix";
 import { ColumnIcon, DatabaseIcon, FkIcon, FolderIcon, IndexIcon, KeyIcon, MySqlIcon, PgIcon, RedisIcon, RoutineIcon, SchemaIcon, SequenceIcon, TableIcon, ViewIcon } from "../ui/icons";
 
 /** What a tree node points to. The context menu and shortcuts (F4, ⌘b, ⌘⇧L) act on this. */
@@ -87,6 +88,8 @@ interface Props {
   onMenu: (e: React.MouseEvent, info: NodeInfo) => void;
   /** Apply from the schema picker popup */
   onScopeChange: (conn: ConnectionView, scope: Scope) => void;
+  /** The saved source changed here (Allow unencrypted): read the data sources again */
+  onConnsChanged?: () => void;
 }
 
 type Load<T> = { state: "loading" } | { state: "error"; msg: string } | { state: "ok"; data: T };
@@ -138,7 +141,7 @@ function Row({ depth, open, onToggle, icon, iconClass, label, sub, title, onDoub
   );
 }
 
-function Status({ depth, load, kind, onRetry }: { depth: number; load: Load<unknown> | undefined; kind?: DbKind; onRetry?: () => void }) {
+function Status({ depth, load, kind, conn, onRetry, onConnsChanged }: { depth: number; load: Load<unknown> | undefined; kind?: DbKind; conn?: ConnectionView; onRetry?: () => void; onConnsChanged?: () => void }) {
   const [installing, setInstalling] = useState(false);
   const [installErr, setInstallErr] = useState<string | null>(null);
   if (!load || load.state === "ok") return null;
@@ -169,11 +172,12 @@ function Status({ depth, load, kind, onRetry }: { depth: number; load: Load<unkn
         </Button>
       )}
       {installErr && <Notice tone="danger">{installErr}</Notice>}
+      {load.state === "error" && <TlsFix conn={conn} msg={load.msg} then={() => (onConnsChanged?.(), onRetry?.())} />}
     </div>
   );
 }
 
-export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onScopeChange }: Props) {
+export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onScopeChange, onConnsChanged }: Props) {
   const [popup, setPopup] = useState<{ x: number; y: number; focusDb?: string } | null>(null);
   const [schemaCounts, setSchemaCounts] = useState<Record<string, { shown: number; total: number }>>({});
   const [opened, setOpened] = useState(false);
@@ -267,7 +271,7 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
       />
       {opened && (
         <div key={gen}>
-          <Status depth={1} load={dbs} kind={conn.kind} onRetry={() => loadDbs(true)} />
+          <Status depth={1} load={dbs} kind={conn.kind} conn={conn} onRetry={() => loadDbs(true)} onConnsChanged={onConnsChanged} />
           {dbs?.state === "ok" &&
             dbs.data.filter((db) => dbShown(db)).map((db) => {
               const dOpen = openDbs.has(db);

@@ -114,6 +114,8 @@ type Columns = QueryResult["columns"];
 // Offsets are UTF-16 code units (JS string indices); the wrapper converts them. Statement checks are UI decisions only: the backend enforces read-only
 const api = {
   ping: (text: string): PingResponse => wasm.ping({ text }),
+  /** The connect error is one where "Allow unencrypted connection" for the source is the way forward (qurry_shared::errors::tls_opt_in) */
+  tlsOptIn: (msg: string): boolean => wasm.tlsOptIn(msg),
   isRead: (sql: string, kind: DbKind): boolean => wasm.isRead(sql, kind),
   isDdl: (sql: string, kind: DbKind): boolean => wasm.isDdl(sql, kind),
   splitStatements: (text: string, kind: DbKind, opts: SplitOptions): [number, number][] => wasm.splitStatements(text, kind, opts),
