@@ -42,7 +42,7 @@ Inputs are in `corpus/` (ids as listed); `‸` in a corpus text is the cursor. O
 | results › extract(SQL IN List) | 0 | 0 | 11 | 0 |
 | results › extract(JSON) | 0 | 0 | 11 | 0 |
 | results › extract(Markdown) | 0 | 0 | 11 | 0 |
-| numbers › niceTicks | 0 | 0 | 11 | 0 |
+| numbers › niceTicks | 0 | 0 | 16 | 0 |
 | numbers › shortNumber | 0 | 0 | 22 | 0 |
 | tablabels › tableTabLabels | 7 | 0 | 0 | 0 |
 | rediskeys › keyTree | 7 | 1 | 0 | 0 |

@@ -63,17 +63,38 @@ fn is_time(type_lower: &str) -> bool {
     type_lower.contains("date") || type_lower.contains("time")
 }
 
-/// A cell as a number: JSON numbers, and strings that read as one once thousands commas and surrounding spaces are dropped
+/// A cell as a number, as the GUI's JavaScript read it: JSON numbers, and strings through Number() once thousands commas are dropped
 pub fn number(v: &Value) -> Option<f64> {
     match v {
         Value::Number(n) => n.as_f64(),
-        Value::String(s) => s.replace(',', "").trim().parse::<f64>().ok(),
+        Value::String(s) => js_string_number(&s.replace(',', "")),
         _ => None,
     }
     .filter(|f| f.is_finite())
 }
 
+/// JavaScript's Number(string): surrounding whitespace ignored, blank → 0, 0x · 0o · 0b integer literals
+fn js_string_number(s: &str) -> Option<f64> {
+    // JavaScript whitespace: Unicode White_Space except U+0085, plus the BOM
+    let t = s.trim_matches(|c: char| (c.is_whitespace() && c != '\u{85}') || c == '\u{feff}');
+    if t.is_empty() {
+        return Some(0.0);
+    }
+    let radix = match t.get(..2) {
+        Some("0x" | "0X") => 16,
+        Some("0o" | "0O") => 8,
+        Some("0b" | "0B") => 2,
+        _ => return t.parse().ok(),
+    };
+    let digits = &t[2..];
+    if digits.is_empty() {
+        return None;
+    }
+    digits.chars().try_fold(0.0, |n, c| c.to_digit(radix).map(|d| n * f64::from(radix) + f64::from(d)))
+}
+
 /// Numeric by type, or (not a date/time column) at least 90% of the first 200 non-empty values are numbers
+/// (the GUI sends only those 200 rows for this: SAMPLE in src/lib/chart.ts)
 fn is_numeric(cols: &[Column], rows: &[Vec<Value>], i: usize, opts: Options) -> bool {
     let t = cols[i].type_name.to_lowercase();
     if NUM_TYPES.iter().any(|p| t.starts_with(p)) || (opts.year_is_number && t.starts_with("year")) || t.contains("unsigned") {
@@ -177,7 +198,8 @@ pub fn nice_ticks(mut min: f64, mut max: f64, count: f64) -> Vec<f64> {
         min = min.min(0.0);
     }
     let raw = (max - min) / count.max(1.0);
-    let mag = 10f64.powf(raw.log10().floor());
+    // Parsed, not powf: on wasm32 powf(10, -5) is not the double nearest 1e-5, and 2 × it then falls short of raw
+    let mag: f64 = format!("1e{}", raw.log10().floor()).parse().unwrap_or(f64::NAN);
     let step = [1.0, 2.0, 5.0, 10.0].iter().map(|m| m * mag).find(|s| *s >= raw).unwrap_or(10.0 * mag);
     let lo = (min / step).floor() * step;
     let hi = (max / step).ceil() * step;
@@ -343,6 +365,18 @@ mod tests {
         assert_eq!(number(&json!(" 1,200.5 ")), Some(1200.5));
         assert_eq!(number(&json!("NaN")), None);
         assert_eq!(number(&json!(true)), None);
+        // As JavaScript's Number(): blank is 0, JavaScript whitespace (BOM, line separator) is trimmed, non-decimal literals unsigned only
+        assert_eq!(number(&json!(" ")), Some(0.0));
+        assert_eq!(number(&json!(",")), Some(0.0));
+        assert_eq!(number(&json!("\u{feff}7\u{2028}")), Some(7.0));
+        assert_eq!(number(&json!("\u{85}7")), None);
+        assert_eq!(number(&json!("0x10")), Some(16.0));
+        assert_eq!(number(&json!("0O7")), Some(7.0));
+        assert_eq!(number(&json!("0b11")), Some(3.0));
+        assert_eq!(number(&json!("-0x10")), None);
+        assert_eq!(number(&json!("0x")), None);
+        assert_eq!(number(&json!("1_0")), None);
+        assert_eq!(number(&json!("Infinity")), None);
         assert_eq!(short_number(-1000.0), "-1,000");
         assert_eq!(short_number(f64::NAN), "NaN");
         assert_eq!(short_number(f64::INFINITY), "InfinityB");
