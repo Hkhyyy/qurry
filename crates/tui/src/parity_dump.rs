@@ -2,7 +2,7 @@
 //! and writes crates/shared/tests/goldens/rust/*.json — same ids, keys (the GUI function names) and output shapes as src/lib/parity.dump.test.ts.
 //! `pnpm parity:dump` then compares both sides into crates/shared/tests/DIVERGENCES.md. A `‸` in a corpus text marks the cursor (byte offset here).
 use crate::app::{Tab, TabKind, TableTab};
-use crate::complete::{self, HintAt, HintMode, Meta};
+use qurry_core::complete::{self, HintAt, HintMode, Meta, Options};
 use crate::exec::{self, ExecSettings, Inside, Outside, Plan};
 use crate::grid::{self, Grid};
 use crate::tree::{self, Node, NodeKind};
@@ -142,13 +142,13 @@ fn hint_golden() -> Golden {
         // hint_items builds the inserted text (typed left empty: its prefix filter isn't part of hintInsert)
         let h = HintAt { schema: String::new(), table: String::new(), column: c.column.clone(), type_name: ty.into(), path: c.path.clone(), mode: c.mode, quoted: c.quoted, typed: String::new(), op: c.op.clone() };
         let hints = [Hint { value: value.into(), count: 1 }];
-        o.insert("hintInsert".into(), complete::hint_items(&h, &hints, false, false)[0].insert.clone().into());
+        o.insert("hintInsert".into(), complete::hint_items(&h, &hints, false, false, Options::TUI)[0].insert.clone().into());
         // hint_at decides hintable: a one-table statement whose only column is the hinted one
         let name = c.r#ref.clone().unwrap_or_else(|| "t".into());
         let m = Meta::new(vec![CompletionTable { schema: "public".into(), name: name.clone(), columns: vec![(c.column.clone(), ty.into())] }]);
         o.insert("hintable".into(), complete::hint_at(&m, &format!("select * from \"{name}\""), before, "", mysql).is_some().into());
         if c.mode == HintMode::Keys {
-            o.insert("pairsForKeys".into(), complete::hint_items(&h, &hints, false, true)[0].insert.clone().into());
+            o.insert("pairsForKeys".into(), complete::hint_items(&h, &hints, false, true, Options::TUI)[0].insert.clone().into());
         }
         out.insert(st(&e["id"]).into(), o.into());
     }

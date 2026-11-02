@@ -131,7 +131,7 @@
     "hint": {"asked":["values"],"column":"status","path":[],"schema":"public","table":"orders"},
     "prefix": 0,
     "items": [
-      {"detail":"1234 rows","insert":"'ready'","kind":"Value","label":"ready"}
+      {"detail":"1,234 rows","insert":"'ready'","kind":"Value","label":"ready"}
     ]
   },
   "hint-values-quoted": {

@@ -1,5 +1,5 @@
 //! TUI state and actions. All real DB work goes through qurry_core::app::AppState (same engine as the GUI).
-use crate::complete::{self, Item};
+use qurry_core::complete::{self, Item, Options};
 use crate::grid::{raw_text, Grid};
 use crate::tree::{Node, NodeKind, Tree};
 use qurry_core::app::{AppState, ConnectionView};
@@ -3255,7 +3255,7 @@ impl App {
             match want {
                 (mode, Some(hints)) => {
                     let as_pairs = mode == HintMode::Pairs && h.mode == HintMode::Keys;
-                    let items = complete::hint_items(&h, &hints, h.quoted && after != Some('\''), as_pairs);
+                    let items = complete::hint_items(&h, &hints, h.quoted && after != Some('\''), as_pairs, Options::TUI);
                     let prefix = if as_pairs { h.op.chars().count() } else { h.typed.chars().count() };
                     c.complete = if items.is_empty() { None } else { Some(Completion { items, sel: 0, prefix }) };
                 }
@@ -3280,7 +3280,7 @@ impl App {
             }
             return;
         }
-        let (prefix, items) = complete::suggest(meta.as_deref().unwrap_or(&empty), &stmt, &before, &db);
+        let (prefix, items) = complete::suggest(meta.as_deref().unwrap_or(&empty), &stmt, &before, &db, kind == DbKind::Mysql, Options::TUI);
         // Auto-open only after '.' or while typing a word
         let keep = explicit || prefix > 0 || before.ends_with('.');
         c.complete = if items.is_empty() || !keep { None } else { Some(Completion { items, sel: 0, prefix }) };

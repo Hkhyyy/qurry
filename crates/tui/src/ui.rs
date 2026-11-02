@@ -576,7 +576,7 @@ fn find_caret(f: &mut Frame, area: Rect) -> Option<(u16, u16)> {
 
 /// Autocomplete list: below the cursor (above if there is no room)
 fn draw_completion(f: &mut Frame, cmp: &crate::app::Completion, x: u16, y: u16) {
-    use crate::complete::ItemKind;
+    use qurry_core::complete::ItemKind;
     use unicode_width::UnicodeWidthStr;
     let screen = f.area();
     let shown = cmp.items.len().min(10);

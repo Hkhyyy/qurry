@@ -74,13 +74,8 @@ pub struct TableDetail {
     pub constraints: Vec<ConstraintMeta>,
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CompletionTable {
-    pub schema: String,
-    pub name: String,
-    pub columns: Vec<(String, String)>,
-}
+/// Autocomplete metadata row: defined in qurry_shared::complete (the GUI's WASM and the TUI complete from it)
+pub use qurry_shared::complete::CompletionTable;
 
 pub async fn list_databases(pool: &Pool) -> AppResult<Vec<String>> {
     let p = match pool {
