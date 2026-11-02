@@ -764,7 +764,7 @@ mod tests {
         ConnectionConfig {
             id: "my".into(), name: "my".into(), kind: DbKind::Mysql, host: e[0].clone(), port: e[1].parse().unwrap(), user: e[2].clone(),
             database: e[4].clone(), color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(),
-            read_only: false, options: Default::default(), ssl: None, redis: None,
+            read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         }
     }
 

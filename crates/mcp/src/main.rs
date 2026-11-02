@@ -201,6 +201,7 @@ impl Server {
                                 "read_only": c.config.read_only, "production": c.config.options.confirm_changes,
                                 "mcp_access": if c.config.mcp_access(self.allow_write) == McpAccess::Write { "write" } else { "read" },
                                 "ssh_tunnel": c.config.active_ssh().map(|s| format!("{}@{}", s.user, s.host)),
+                                "ssm_tunnel": c.config.active_ssm().map(|s| s.target.trim().to_string()),
                                 "connected": c.connected
                             })
                         })
@@ -506,6 +507,9 @@ async fn main() -> std::io::Result<()> {
     qurry_core::SANDBOX.store(true, std::sync::atomic::Ordering::Relaxed);
     let mut state = qurry_core::open_state(dir).map_err(|e| std::io::Error::other(e.to_string()))?;
     state.mcp = true;
+    // AWS SSM tunnels run the aws CLI: stop it when the host stops this server or it panics
+    qurry_core::ssm::kill_on_panic();
+    tokio::spawn(qurry_core::ssm::kill_on_signals());
     let state = Arc::new(state);
     let server = Arc::new(Server { state: state.clone(), allow_write: args.iter().any(|a| a == "--allow-write") });
     // keep-alive / auto-disconnect
@@ -552,6 +556,7 @@ async fn main() -> std::io::Result<()> {
     }
     // Even if stdin closes, finish sending in-flight responses
     while tasks.join_next().await.is_some() {}
+    qurry_core::ssm::kill_all();
     Ok(())
 }
 

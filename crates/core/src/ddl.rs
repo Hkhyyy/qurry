@@ -611,7 +611,7 @@ mod tests {
         let (user, pass, db) = if kind == DbKind::Mysql { (p[2], Some(p[3].to_string()), p[4]) } else { (p[2], None, p[3]) };
         let c = crate::store::ConnectionConfig {
             id: "d".into(), name: "d".into(), kind, host: p[0].into(), port: p[1].parse().unwrap(), user: user.into(), database: db.into(),
-            color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+            color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         };
         let st = crate::open_state(Some(std::env::temp_dir().join(format!("qurry-ddl-{}", uuid::Uuid::new_v4())))).unwrap();
         st.save_connection(c, pass, None).await.unwrap();

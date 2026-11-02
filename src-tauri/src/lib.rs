@@ -12,11 +12,14 @@ pub(crate) fn app_context<R: tauri::Runtime>() -> tauri::Context<R> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    qurry_core::ssm::kill_on_panic();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            // SIGTERM / SIGINT / SIGHUP end the process without RunEvent::Exit: stop the AWS SSM tunnels' aws CLI then too
+            tauri::async_runtime::spawn(qurry_core::ssm::kill_on_signals());
             // Build the menu manually so the default menu's "Close Window(⌘W)" does not steal the close-tab shortcut
             use tauri::menu::{MenuBuilder, SubmenuBuilder};
             let check_updates = tauri::menu::MenuItemBuilder::with_id("check-update", "Check for Updates…").build(app)?;
@@ -87,6 +90,7 @@ pub fn run() {
             commands::delete_connection,
             commands::test_connection,
             commands::test_ssh,
+            commands::cancel_test,
             commands::connect,
             commands::disconnect,
             commands::run_query,
@@ -181,6 +185,12 @@ pub fn run() {
             commands::set_update_channel,
             commands::install_update,
         ])
-        .run(app_context())
-        .expect("error while running tauri application");
+        .build(app_context())
+        .expect("error while running tauri application")
+        .run(|_, event| {
+            // Quitting ends the process without dropping the app state, so the AWS SSM tunnels' aws CLI would keep running
+            if let tauri::RunEvent::Exit = event {
+                qurry_core::ssm::kill_all();
+            }
+        });
 }

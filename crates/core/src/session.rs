@@ -545,7 +545,7 @@ mod tests {
         let part = |i: usize, d: String| env.as_ref().and_then(|e| e.split(':').nth(i).map(String::from)).unwrap_or(d);
         let cfg = ConnectionConfig {
             id: "t".into(), name: "t".into(), kind: DbKind::Postgres, host: part(0, "localhost".into()), port: part(1, "5432".into()).parse().unwrap(),
-            user: part(2, std::env::var("USER").unwrap()), database: part(3, String::new()), color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+            user: part(2, std::env::var("USER").unwrap()), database: part(3, String::new()), color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         };
         let Pool::Pg(p) = connect(&cfg, None).await.unwrap() else { unreachable!() };
         p
@@ -770,7 +770,7 @@ mod tests {
         let p: Vec<&str> = e.split(':').collect();
         let cfg = ConnectionConfig {
             id: "t".into(), name: "t".into(), kind: DbKind::Mysql, host: p[0].into(), port: p[1].parse().unwrap(), user: p[2].into(), database: p[4].into(),
-            color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+            color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         };
         failed_snapshot_keeps_the_change(connect(&cfg, Some(p[3])).await.unwrap(), "create database if not exists audit_hardening_s", "drop database audit_hardening_s").await;
     }

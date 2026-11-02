@@ -24,6 +24,8 @@ export interface ConnectionConfig {
   database: string;
   color?: string | null;
   ssh?: SshConfig | null;
+  /** AWS SSM Session Manager tunnel (instead of SSH) */
+  ssm?: SsmConfig | null;
   /** DBs·schemas shown in the tree. No databases = all; no schemas[db] = all schemas of that DB */
   scope?: { databases?: string[] | null; schemas?: Record<string, string[]> };
   /** Options → Read-only */
@@ -77,6 +79,17 @@ export interface SshConfig {
   user: string;
   auth: "password" | "key";
   keyPath: string;
+}
+
+/** No AWS secrets: the aws CLI uses the user's AWS config or SSO login */
+export interface SsmConfig {
+  enabled: boolean;
+  /** Empty = the CLI's default profile */
+  profile: string;
+  /** Empty = the profile's region */
+  region: string;
+  /** Instance id (i-… / mi-…) */
+  target: string;
 }
 
 export interface ConnectionView extends ConnectionConfig {
@@ -168,9 +181,11 @@ export const api = {
   /** After a TLS connect error (wasm tlsOptIn): turn on "Allow unencrypted connection", keeping the saved password */
   allowPlaintext: (id: string) => invoke<ConnectionConfig>("allow_plaintext", { id }),
   deleteConnection: (id: string) => invoke<void>("delete_connection", { id }),
-  testConnection: (config: ConnectionConfig, password?: string, sshSecret?: string) =>
-    invoke<string>("test_connection", { config, password: password ?? null, sshSecret: sshSecret ?? null }),
-  testSsh: (config: ConnectionConfig, sshSecret?: string) => invoke<string>("test_ssh", { config, sshSecret: sshSecret ?? null }),
+  /** `testId`: cancelTest(testId) stops it (an AWS SSM session can take up to 30 s); it then fails with "Test cancelled" */
+  testConnection: (config: ConnectionConfig, password?: string, sshSecret?: string, testId?: string) =>
+    invoke<string>("test_connection", { config, password: password ?? null, sshSecret: sshSecret ?? null, testId: testId ?? null }),
+  testSsh: (config: ConnectionConfig, sshSecret?: string, testId?: string) => invoke<string>("test_ssh", { config, sshSecret: sshSecret ?? null, testId: testId ?? null }),
+  cancelTest: (testId: string) => invoke<void>("cancel_test", { testId }),
   connect: (id: string) => invoke<string>("connect", { id }),
   disconnect: (id: string) => invoke<void>("disconnect", { id }),
   runQuery: (id: string, sql: string, tabId?: string, limit = 500) => invoke<QueryResult>("run_query", { id, sql, limit, tabId: tabId ?? null }),

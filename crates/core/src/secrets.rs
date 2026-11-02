@@ -294,6 +294,11 @@ impl SecretFile {
         })
     }
 
+    /// The entry names (no values are decrypted)
+    pub fn names(&self) -> AppResult<Vec<String>> {
+        Ok(self.load()?.into_keys().collect())
+    }
+
     /// Whether the file has an entry. Damaged: the damage error if the name still shows in the file (it may hold this password), otherwise false
     pub fn contains(&self, name: &str) -> AppResult<bool> {
         match self.load() {

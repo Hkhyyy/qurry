@@ -37,6 +37,8 @@ let flakyLoads = 0;
 let updateChannel = "stable";
 /** Whether check_update ran (the real app then has a saved check that a channel switch answers from) */
 let updateChecked = false;
+/** Test Connections waiting for cancel_test, by test id */
+const testsRunning: Record<string, () => void> = {};
 const handlers: Record<string, (a: any) => unknown> = {
   // A copy, as from the backend: state that holds the last list must see a change (Allow unencrypted, connect) as a new list
   list_connections: () => structuredClone(conns),
@@ -162,9 +164,19 @@ const handlers: Record<string, (a: any) => unknown> = {
   rag_search: () => ({ ...result, columns: [{ name: "score", typeName: "FLOAT8" }, ...result.columns], rows: result.rows.slice(0, 5).map((r, i) => [0.91 - i * 0.07, ...r]), truncated: false }),
   similar_rows_sql: (a: any) => `SELECT ${a.column} <-> (SELECT ${a.column} FROM ${a.schema}.${a.table} WHERE ${a.pk.map((p: any) => `${p[0]} = '${p[1]}'`).join(" AND ")}) AS distance, *\nFROM ${a.schema}.${a.table}\nORDER BY distance\nLIMIT 20`,
   object_ddl: (a: any) => `CREATE TABLE ${a.schema}.${a.name}\n(\n    id bigint DEFAULT nextval('users_id_seq'::regclass) NOT NULL,\n    user_name character varying(50) NOT NULL,\n    CONSTRAINT users_pkey PRIMARY KEY (id)\n);\n`,
+  // Instance i-00000000000000000 never connects (like a stopped one): the test runs until cancel_test
   test_connection: (a: any) => {
     if (a.config.host === lan.host && !a.config.options?.allowPlaintext) throw NEEDS_TLS;
-    return "PostgreSQL 16.11  (via SSH ec2-user@bastion.example.com)";
+    return a.config.ssm?.enabled && a.config.ssm.target === "i-00000000000000000"
+      ? new Promise((_, rej) => (testsRunning[a.testId] = () => rej("Test cancelled")))
+      : a.config.ssm?.enabled
+        ? `PostgreSQL 16.11  (via AWS SSM ${a.config.ssm.target})`
+        : "PostgreSQL 16.11  (via SSH ec2-user@bastion.example.com)";
+  },
+  cancel_test: (a: any) => {
+    testsRunning[a.testId]?.();
+    delete testsRunning[a.testId];
+    return null;
   },
   connect: (a: any) => {
     lanCheck(a.id);

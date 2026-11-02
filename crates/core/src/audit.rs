@@ -846,7 +846,7 @@ mod tests {
         options.confirm_changes = true;
         let c = crate::store::ConnectionConfig {
             id: "d".into(), name: "[PROD] test".into(), kind, host: p[0].into(), port: p[1].parse().unwrap(), user: user.into(), database: db.into(),
-            color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options, ssl: None, redis: None,
+            color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options, ssl: None, redis: None, ssm: None,
         };
         let dir = std::env::temp_dir().join(format!("qurry-audit-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir)).unwrap();

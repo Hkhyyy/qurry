@@ -43,14 +43,38 @@ pub async fn delete_connection(state: State<'_, AppState>, id: String) -> AppRes
 
 /// Only tests the connection without saving. If `password` is None, the saved password is used.
 #[tauri::command]
-pub async fn test_connection(state: State<'_, AppState>, config: ConnectionConfig, password: Option<String>, ssh_secret: Option<String>) -> AppResult<String> {
-    state.test_connection(config, password, ssh_secret).await
+pub async fn test_connection(state: State<'_, AppState>, config: ConnectionConfig, password: Option<String>, ssh_secret: Option<String>, test_id: Option<String>) -> AppResult<String> {
+    cancellable_test(test_id, state.test_connection(config, password, ssh_secret)).await
 }
 
 /// Test Connection on the SSH/SSL tab: checks the SSH login only.
 #[tauri::command]
-pub async fn test_ssh(state: State<'_, AppState>, config: ConnectionConfig, ssh_secret: Option<String>) -> AppResult<String> {
-    state.test_ssh(config, ssh_secret).await
+pub async fn test_ssh(state: State<'_, AppState>, config: ConnectionConfig, ssh_secret: Option<String>, test_id: Option<String>) -> AppResult<String> {
+    cancellable_test(test_id, state.test_ssh(config, ssh_secret)).await
+}
+
+/// Running Test Connections by the dialog's test id, for cancel_test
+static TESTS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Notify>>>> = std::sync::LazyLock::new(Default::default);
+
+/// Runs a test that cancel_test can stop: the test is dropped, and with it its SSH / AWS SSM tunnel (an SSM session can take 30s)
+async fn cancellable_test(id: Option<String>, test: impl std::future::Future<Output = AppResult<String>>) -> AppResult<String> {
+    let Some(id) = id else { return test.await };
+    let cancel = std::sync::Arc::new(tokio::sync::Notify::new());
+    TESTS.lock().unwrap().insert(id.clone(), cancel.clone());
+    let r = tokio::select! {
+        r = test => r,
+        _ = cancel.notified() => Err(crate::error::AppError::Msg("Test cancelled".into())),
+    };
+    TESTS.lock().unwrap().remove(&id);
+    r
+}
+
+#[tauri::command]
+pub fn cancel_test(test_id: String) {
+    if let Some(c) = TESTS.lock().unwrap().remove(&test_id) {
+        // notify_one keeps the wake-up if the test isn't waiting yet
+        c.notify_one();
+    }
 }
 
 #[tauri::command]
@@ -738,6 +762,8 @@ pub async fn install_update(app: tauri::AppHandle, state: State<'_, AppState>) -
         )
         .await
         .map_err(msg)?;
+    // restart() exits without RunEvent::Exit: stop the AWS SSM tunnels' aws CLI first
+    qurry_core::ssm::kill_all();
     // macOS: keep the app folder and replace only Contents (so a pinned Dock icon keeps pointing at this app).
     // If that fails (e.g. a location needing admin rights), fall back to the updater's default install
     #[cfg(target_os = "macos")]
@@ -768,6 +794,31 @@ mod ipc_tests {
             headers: Default::default(),
             invoke_key: INVOKE_KEY.to_string(),
         }
+    }
+
+    /// cancel_test drops the running test (and so its tunnel) and the dialog gets "Test cancelled"
+    #[tokio::test]
+    async fn a_test_can_be_cancelled() {
+        struct Dropped(std::sync::Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let guard = Dropped(dropped.clone());
+        let test = async move {
+            let _guard = guard;
+            std::future::pending::<AppResult<String>>().await
+        };
+        let run = tokio::spawn(cancellable_test(Some("t1".into()), test));
+        tokio::task::yield_now().await;
+        cancel_test("t1".into());
+        let e = run.await.unwrap().unwrap_err().to_string();
+        assert_eq!(e, "Test cancelled");
+        assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(TESTS.lock().unwrap().is_empty());
+        cancel_test("unknown".into());
     }
 
     /// Call commands with the same JSON the frontend sends.

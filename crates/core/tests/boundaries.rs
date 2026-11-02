@@ -1,5 +1,5 @@
 //! Architecture rule: the data source list and the passwords have one home each.
-//! connections.json / connection-access.json are written only by crates/core/src/store.rs, secrets.json only by
+//! connections.json / connection-access.json / connection-tunnels.json are written only by crates/core/src/store.rs, secrets.json only by
 //! crates/core/src/secrets.rs, and SecretFile is constructed only there and in lib.rs::open_state, which every app
 //! (GUI, TUI, MCP) uses to open its state. Test code (`#[cfg(test)]` items, `tests/` folders) is exempt.
 
@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 const FORBIDDEN: &[&str] = &[
     "\"connections.json\"",
     "\"connection-access.json\"",
+    "\"connection-tunnels.json\"",
     "\"secrets.json\"",
     "\"secret.key\"",
     "\"secret.key.keychain\"",
@@ -185,7 +186,7 @@ fn data_sources_and_secrets_have_one_home() {
     let found = violations(&root);
     assert!(
         found.is_empty(),
-        "Only crates/core/src/store.rs (connections.json, connection-access.json), crates/core/src/secrets.rs (secrets.json, SecretFile) \
+        "Only crates/core/src/store.rs (connections.json, connection-access.json, connection-tunnels.json), crates/core/src/secrets.rs (secrets.json, SecretFile) \
          and qurry_core::open_state may touch these. Open the app state with qurry_core::open_state(Some(dir)) instead:\n{}",
         found.join("\n")
     );

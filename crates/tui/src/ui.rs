@@ -770,6 +770,29 @@ fn ssl_mode_note(mode: &str) -> &'static str {
     }
 }
 
+/// What an empty form field means (the GUI shows the same as a placeholder)
+fn empty_field_note(label: &str) -> Option<&'static str> {
+    match label {
+        "AWS profile" => Some("(default profile)"),
+        "AWS region" => Some("(the profile's region)"),
+        _ => None,
+    }
+}
+
+/// Rows the data source form keeps for its message, so a test result appearing doesn't resize it
+const FORM_MESSAGE_ROWS: u16 = 3;
+
+/// The data source form's message: the running test with its elapsed time and how to cancel it, or the last result
+fn conn_form_message(form: &crate::app::ConnForm) -> Vec<Line<'static>> {
+    let (ok, m) = match (&form.testing, &form.message) {
+        (Some((started, _)), _) => (true, format!("Testing… {}s · ⌃t / Esc cancel", started.elapsed().as_secs())),
+        (None, Some((ok, m))) => (*ok, disp(m)),
+        (None, None) => return vec![],
+    };
+    // One row per line of it (a TLS error is followed by its hint)
+    m.lines().map(|l| Line::styled(l.to_string(), Style::default().fg(if ok { OK } else { DANGER }))).collect()
+}
+
 fn draw_popup(f: &mut Frame, app: &mut App) {
     if matches!(app.popup, Some(Popup::Find(_))) {
         return crate::find::draw(f, app);
@@ -971,10 +994,29 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             f.render_widget(List::new(items).block(panel(hint, true)), list);
         }
         Popup::ConnForm(form) => {
-            let mut lines: Vec<Line> = form
-                .fields
+            // The message (test results, errors) and the key hints stay at the bottom; the fields scroll around the selection.
+            // The size stays the same whatever the Tunnel and the message (a test starting or failing doesn't move the form)
+            let msg = conn_form_message(form);
+            let hint = vec![Line::styled(disp("↑↓/Tab move · type to edit · Space/←→ toggle · ⌃t test · ⌃s / Enter save · Esc cancel"), Style::default().fg(DIM))];
+            let w = 72.min(area.width.saturating_sub(4)).saturating_sub(2);
+            let (msg_h, hint_h) = (wrapped_height(&msg, w).max(FORM_MESSAGE_ROWS), wrapped_height(&hint, w));
+            let vis = form.visible();
+            let r = centered(area, 72, form.max_visible() as u16 + 1 + FORM_MESSAGE_ROWS + hint_h + 2);
+            clear(f, r);
+            let block = panel(if form.edit.is_some() { " Data Source Properties " } else { " New Data Source " }, true);
+            let inner = block.inner(r);
+            f.render_widget(block, r);
+            let foot_h = (msg_h + hint_h).min(inner.height.saturating_sub(2));
+            let [rows, _, foot_r] = Layout::vertical([Constraint::Min(1), Constraint::Length(1), Constraint::Length(foot_h)]).areas(inner);
+            let [msg_r, hint_r] = Layout::vertical([Constraint::Min(0), Constraint::Length(hint_h)]).areas(foot_r);
+            let h = rows.height as usize;
+            let pos = vis.iter().position(|&i| i == form.sel).unwrap_or(0);
+            let off = pos.saturating_sub(h.saturating_sub(1)).min(vis.len().saturating_sub(h));
+            let lines: Vec<Line> = vis
                 .iter()
-                .enumerate()
+                .skip(off)
+                .take(h)
+                .map(|&i| (i, &form.fields[i]))
                 .map(|(i, fl)| {
                     let shown = match fl.kind {
                         FieldKind::Secret if fl.value != "<saved>" => "•".repeat(fl.value.chars().count()),
@@ -994,22 +1036,15 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                     if fl.label == "SSL mode" {
                         spans.push(Span::styled(format!("  {}", ssl_mode_note(&fl.value)), Style::default().fg(DIM)));
                     }
+                    if let Some(note) = empty_field_note(fl.label).filter(|_| fl.value.trim().is_empty()) {
+                        spans.push(Span::styled(format!("  {note}"), Style::default().fg(DIM)));
+                    }
                     Line::from(spans)
                 })
                 .collect();
-            lines.push(Line::raw(""));
-            // The test result, one row per line of it
-            if let Some((ok, m)) = &form.message {
-                lines.extend(disp(m).lines().map(|l| Line::styled(l.to_string(), Style::default().fg(if *ok { OK } else { DANGER }))));
-            }
-            lines.push(Line::styled(disp("↑↓/Tab move · type to edit · Space/←→ toggle · ⌃t test · ⌃s / Enter save · Esc cancel"), Style::default().fg(DIM)));
-            let t = if form.edit.is_some() { " Data Source Properties " } else { " New Data Source " };
-            // As tall as the wrapped text, so a long result (a TLS error and its hint) doesn't push the key hints out; a row is kept for the
-            // result before the first test, so a one-line result doesn't make the form jump
-            let w = centered(area, 72, 0).width;
-            let r = centered(area, 72, wrapped_height(&lines, w.saturating_sub(2)) + 2 + form.message.is_none() as u16);
-            clear(f, r);
-            f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(panel(t, true)), r);
+            f.render_widget(Paragraph::new(lines), rows);
+            f.render_widget(Paragraph::new(msg).wrap(Wrap { trim: false }), msg_r);
+            f.render_widget(Paragraph::new(hint).wrap(Wrap { trim: false }), hint_r);
         }
     }
 }

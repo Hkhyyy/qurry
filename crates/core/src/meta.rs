@@ -174,7 +174,7 @@ mod tests {
             ssh: None,
             password_saved: false,
             ssh_secret_saved: false,
-            scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+            scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         };
         let pool = crate::db::connect(&cfg, None).await.unwrap();
         let Pool::Pg(p) = &pool else { unreachable!() };

@@ -41,6 +41,7 @@ pub mod search_cache;
 pub mod secrets;
 pub mod session;
 pub mod sql;
+pub mod ssm;
 pub mod store;
 pub mod subset;
 pub mod transfer;
@@ -98,7 +99,7 @@ fn export_path_in(dir: &std::path::Path, name: &str) -> error::AppResult<std::pa
 ///
 /// The config files have three homes, shared by the GUI, the TUI and the MCP server (and by older app versions running
 /// side by side), so their locking, permissions and format rules live in one place:
-/// - `store.rs` reads and writes connections.json and connection-access.json
+/// - `store.rs` reads and writes connections.json, connection-access.json and connection-tunnels.json
 /// - `secrets.rs` reads and writes secrets.json and the password key (`SecretFile`)
 /// - this function is the only place outside `secrets.rs` that constructs a `SecretFile`; every app opens its state here
 ///
@@ -109,7 +110,11 @@ pub fn open_state(dir: Option<std::path::PathBuf>) -> error::AppResult<app::AppS
         error::AppError::Msg(format!("Cannot create the config folder {} ({e}) — check that you can write to it (and its parent folder)", dir.display()))
     })?;
     let secrets = secrets::SecretFile::open(&dir)?;
-    Ok(app::AppState::new(store::Store::new(dir), secrets))
+    let state = app::AppState::new(store::Store::new(dir), secrets);
+    if let Err(e) = state.forget_orphan_ssm_passwords() {
+        crate::log!("[qurry] saved AWS SSM passwords of deleted sources were not cleaned up: {e}");
+    }
+    Ok(state)
 }
 
 #[cfg(test)]

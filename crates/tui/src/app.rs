@@ -7,7 +7,7 @@ use qurry_core::db::{ColumnInfo, QueryResult};
 use qurry_core::meta::{IndexEntry, SchemaObjects};
 use qurry_core::redisdb::{KeyDetail, KeyRow};
 use qurry_core::sql;
-use qurry_core::store::{ConnectionConfig, DbKind, RedisMode, SshAuth, SshConfig, SslConfig};
+use qurry_core::store::{ConnectionConfig, DbKind, RedisMode, SshAuth, SshConfig, SsmConfig, SslConfig};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -297,6 +297,52 @@ pub struct ConnForm {
     pub fields: Vec<Field>,
     pub sel: usize,
     pub message: Option<(bool, String)>,
+    /// The Test Connection running now: when it started, and how to cancel it (dropping it stops its SSH / SSM tunnel)
+    pub testing: Option<(std::time::Instant, tokio::task::AbortHandle)>,
+}
+
+/// The Tunnel choice a form field belongs to (None: shown with every choice)
+fn tunnel_of(label: &str) -> Option<&'static str> {
+    if label.starts_with("SSH ") {
+        Some("ssh")
+    } else if label.starts_with("AWS ") || label == "SSM target" {
+        Some("aws ssm")
+    } else {
+        None
+    }
+}
+
+impl ConnForm {
+    pub fn value(&self, label: &str) -> &str {
+        self.fields.iter().find(|f| f.label == label).map_or("", |f| f.value.as_str())
+    }
+
+    /// Indices of the fields shown: only the chosen tunnel's fields (the other tunnel's keep their values for switching back)
+    pub fn visible(&self) -> Vec<usize> {
+        let tunnel = self.value("Tunnel");
+        (0..self.fields.len()).filter(|&i| tunnel_of(self.fields[i].label).is_none_or(|t| t == tunnel)).collect()
+    }
+
+    /// The most fields any Tunnel choice shows: the popup keeps that height, so choosing another tunnel doesn't resize it
+    pub fn max_visible(&self) -> usize {
+        let count = |t: &str| self.fields.iter().filter(|f| tunnel_of(f.label) == Some(t)).count();
+        self.fields.len() - count("ssh").min(count("aws ssm"))
+    }
+
+    /// Cancels the running Test Connection (its tunnel and aws CLI stop with it)
+    pub fn cancel_test(&mut self) -> bool {
+        let Some((_, h)) = self.testing.take() else { return false };
+        h.abort();
+        self.message = Some((false, "Test cancelled".into()));
+        true
+    }
+
+    /// Moves the selection by `d` shown fields (wrapping around)
+    pub fn step(&mut self, d: isize) {
+        let v = self.visible();
+        let pos = v.iter().position(|&i| i == self.sel).unwrap_or(0) as isize;
+        self.sel = v[(pos + d).rem_euclid(v.len() as isize) as usize];
+    }
 }
 
 pub enum Popup {
@@ -765,11 +811,17 @@ impl App {
     }
 
     pub fn spawn<T: Send + 'static>(&self, fut: impl Future<Output = T> + Send + 'static, apply: impl FnOnce(&mut App, T) + Send + 'static) {
+        self.spawn_abortable(fut, apply);
+    }
+
+    /// spawn that can be cancelled: abort() drops the future, and `apply` doesn't run
+    pub fn spawn_abortable<T: Send + 'static>(&self, fut: impl Future<Output = T> + Send + 'static, apply: impl FnOnce(&mut App, T) + Send + 'static) -> tokio::task::AbortHandle {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let v = fut.await;
             let _ = tx.send(Box::new(move |a: &mut App| apply(a, v)));
-        });
+        })
+        .abort_handle()
     }
 
     pub fn conn(&self, id: &str) -> Option<&ConnectionView> {
@@ -822,7 +874,7 @@ impl App {
             .map(|c| Node {
                 key: c.config.id.clone(),
                 label: c.config.name.clone(),
-                hint: format!("{:?}", c.config.kind).to_lowercase() + if c.config.active_ssh().is_some() { " · ssh" } else { "" },
+                hint: format!("{:?}", c.config.kind).to_lowercase() + if c.config.active_ssh().is_some() { " · ssh" } else if c.config.active_ssm().is_some() { " · ssm" } else { "" },
                 kind: NodeKind::Conn,
                 conn: c.config.id.clone(),
                 db: None,
@@ -2464,9 +2516,11 @@ impl App {
             ssh: None,
             color: None,
             read_only: false,
-            options: Default::default(), ssl: None, redis: None,
+            options: Default::default(), ssl: None, redis: None, ssm: None,
         });
         let ssh = c.ssh.clone().unwrap_or(SshConfig { enabled: false, host: String::new(), port: 22, user: String::new(), auth: SshAuth::Key, key_path: "~/.ssh/id_ed25519".into() });
+        let ssm = c.ssm.clone().unwrap_or_default();
+        let tunnel = if ssm.enabled { "aws ssm" } else if ssh.enabled { "ssh" } else { "none" };
         let kind = serde_json::to_value(c.kind).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_else(|| "postgres".into());
         let f = |label, value: String, kind| Field { label, value, kind };
         let ch = |xs: &[&str]| FieldKind::Choice(xs.iter().map(|x| x.to_string()).collect());
@@ -2494,13 +2548,17 @@ impl App {
                 f("Allow unencrypted", if c.options.allow_plaintext { "on" } else { "off" }.into(), FieldKind::Toggle),
                 // Whether it's visible to qurry-mcp (AI tools). New sources start off
                 f("MCP", if edit.is_some() { mcp_label(&c) } else { "off" }.into(), ch(&["off", "read", "write"])),
-                f("SSH tunnel", if ssh.enabled { "on" } else { "off" }.into(), FieldKind::Toggle),
+                f("Tunnel", tunnel.into(), ch(&["none", "ssh", "aws ssm"])),
                 f("SSH host", ssh.host.clone(), FieldKind::Text),
                 f("SSH port", ssh.port.to_string(), FieldKind::Text),
                 f("SSH user", ssh.user.clone(), FieldKind::Text),
                 f("SSH auth", if ssh.auth == SshAuth::Key { "key" } else { "password" }.into(), ch(&["key", "password"])),
                 f("SSH key file", ssh.key_path.clone(), FieldKind::Text),
                 f("SSH secret", saved(c.ssh_secret_saved), FieldKind::Secret),
+                // AWS SSM: the AWS CLI signs in with the user's own AWS config / SSO; nothing secret is kept here
+                f("AWS profile", ssm.profile.clone(), FieldKind::Text),
+                f("AWS region", ssm.region.clone(), FieldKind::Text),
+                f("SSM target", ssm.target.clone(), FieldKind::Text),
                 f("SSL", if c.active_ssl().is_some() { "on" } else { "off" }.into(), FieldKind::Toggle),
                 // Newly enabled SSL is require: verifying needs a CA the built-in list knows, or a CA file (AWS RDS, a company CA, SSH tunnels)
                 f("SSL mode", c.ssl.as_ref().map(|x| x.mode().to_string()).unwrap_or_else(|| "require".into()), ch(&["require", "verify-ca", "verify-full"])),
@@ -2514,6 +2572,7 @@ impl App {
             edit,
             sel: 0,
             message: None,
+            testing: None,
         }));
     }
 
@@ -2534,7 +2593,7 @@ impl App {
             ssh: None,
             color: None,
             read_only: false,
-            options: Default::default(), ssl: None, redis: None,
+            options: Default::default(), ssl: None, redis: None, ssm: None,
         });
         c.kind = serde_json::from_value(serde_json::Value::String(v("Type"))).unwrap_or(DbKind::Postgres);
         c.host = v("Host").trim().into();
@@ -2553,13 +2612,16 @@ impl App {
             name => c.color = crate::ui::COLOR_PRESETS.iter().find(|p| p.0 == name).map(|p| p.1.to_string()),
         }
         c.ssh = Some(SshConfig {
-            enabled: v("SSH tunnel") == "on",
+            enabled: v("Tunnel") == "ssh",
             host: v("SSH host").trim().into(),
             port: v("SSH port").trim().parse().unwrap_or(22),
             user: v("SSH user").trim().into(),
             auth: if v("SSH auth") == "password" { SshAuth::Password } else { SshAuth::Key },
             key_path: v("SSH key file").trim().into(),
         });
+        // Kept while off (like SSH) so switching back finds the fields filled; an untouched source gets no ssm key
+        let ssm = SsmConfig { enabled: v("Tunnel") == "aws ssm", profile: v("AWS profile").trim().into(), region: v("AWS region").trim().into(), target: v("SSM target").trim().into() };
+        c.ssm = (c.ssm.is_some() || ssm != SsmConfig::default()).then_some(ssm);
         c.ssl = Some(SslConfig { enabled: v("SSL") == "on", mode: v("SSL mode"), ca_file: v("CA file").trim().into(), cert_file: v("Client cert").trim().into(), key_file: v("Client key").trim().into() });
         c.redis = if c.kind == DbKind::Redis { Some(RedisMode { mode: v("Redis mode"), sentinel_master: v("Sentinel master").trim().into(), nodes: v("Redis nodes").trim().into() }) } else { None };
         let secret = |s: String| if s == "<saved>" { None } else { Some(s) };
@@ -3496,6 +3558,7 @@ impl App {
     /// If a tab is running, the elapsed time needs redrawing
     pub fn any_running(&self) -> bool {
         self.tabs.iter().any(|t| matches!(&t.kind, TabKind::Console(c) if c.running) || matches!(&t.kind, TabKind::Table(tt) if tt.running))
+            || matches!(&self.popup, Some(Popup::ConnForm(f)) if f.testing.is_some())
     }
 }
 
