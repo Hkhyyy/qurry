@@ -34,6 +34,9 @@ const result = {
   hasResultSet: true,
 };
 let flakyLoads = 0;
+let updateChannel = "stable";
+/** Whether check_update ran (the real app then has a saved check that a channel switch answers from) */
+let updateChecked = false;
 const handlers: Record<string, (a: any) => unknown> = {
   // A copy, as from the backend: state that holds the last list must see a change (Allow unencrypted, connect) as a new list
   list_connections: () => structuredClone(conns),
@@ -372,15 +375,20 @@ const handlers: Record<string, (a: any) => unknown> = {
   import_picked: () => ({ added: 0, updated: 1 }),
   save_keymap: () => null,
   install_update: () => new Promise((_, rej) => setTimeout(() => rej("Update failed: mock"), 800)),
-  check_update: () => ({
+  update_channel: () => updateChannel,
+  set_update_channel: (a: any) => ((updateChannel = a.channel), updateChecked ? updateInfo() : null),
+  check_update: () => ((updateChecked = true), updateInfo()),
+};
+function updateInfo() {
+  return {
     current: "0.1.0",
     latest: { version: "0.1.2", url: "https://github.com/Hkhyyy/qurry/releases/tag/v0.1.2", notes: "## dbtool 0.1.2\n- something new", assets: [{ name: "dbtool_0.1.2_aarch64.dmg", url: "https://example.com/dbtool_0.1.2_aarch64.dmg" }] },
     changes: [
       { version: "0.1.2", changes: ["[feat] TUI 키 안내: ⌃P 시작, F1 Start here, 상태줄 (#18)", "[fix] ; 없는 문장 나누기 (#17)"] },
       { version: "0.1.1", changes: ["[fix] 분할 탭 바 구분선, GUI 탭 사이 간격 (#16)"] },
     ],
-  }),
-};
+  };
+}
 (window as any).__TAURI_INTERNALS__ = {
   invoke: async (cmd: string, args: unknown) => {
     const h = handlers[cmd];

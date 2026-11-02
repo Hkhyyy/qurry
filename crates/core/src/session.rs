@@ -1,6 +1,7 @@
 //! Each console tab gets its own dedicated connection (session).
 //! - SELECT-like statements fetch 500 rows at a time via a server cursor (DECLARE/FETCH) → "load more"
 //! - The backend PID is known, so a running query can be cancelled with pg_cancel_backend
+use crate::backend::{Backend, dispatch};
 use crate::db::{pg_columns, pg_value, query_result, ColumnInfo, QueryResult};
 use crate::error::{AppError, AppResult};
 use futures::TryStreamExt;
@@ -340,7 +341,7 @@ async fn run_direct_on(conn: &mut PgConnection, sql: &str, limit: usize, start: 
 }
 
 /// Undo snapshot inside the open transaction, under a savepoint: if it fails, the transaction carries on as it was (PostgreSQL would abort it)
-async fn pg_snapshot(conn: &mut PgConnection, sql: &str) -> AppResult<QueryResult> {
+pub(crate) async fn pg_snapshot(conn: &mut PgConnection, sql: &str) -> AppResult<QueryResult> {
     conn.execute("SAVEPOINT qurry_snap").await?;
     let mut r = run_direct_on(conn, sql, crate::audit::UNDO_MAX_ROWS + 1, Instant::now()).await;
     // A row lock needs the UPDATE privilege: a role with only SELECT and DELETE gets the snapshot without the lock (as before rows were locked)
@@ -366,12 +367,7 @@ pub enum Session {
 
 impl Session {
     pub async fn open(pool: &crate::db::Pool) -> AppResult<Self> {
-        Ok(match pool {
-            crate::db::Pool::Pg(p) => Session::Pg(PgSession::open(p).await?),
-            crate::db::Pool::My(p) => Session::My(crate::mysql::MySession::open(p).await?),
-            crate::db::Pool::Redis(m, _) => Session::Redis(m.clone()),
-            crate::db::Pool::Plugin(c) => Session::Plugin(c.clone()),
-        })
+        dispatch!(pool, b => b.open_session().await)
     }
     /// Backend id for cancelling (PG pid / MySQL connection id)
     pub fn backend_id(&self) -> i64 {
@@ -468,44 +464,6 @@ impl Session {
     }
 }
 
-/// Cancel the backend's running query from another connection.
-pub async fn cancel(pool: &PgPool, pid: i32) -> AppResult<bool> {
-    Ok(sqlx::query_scalar("select pg_cancel_backend($1)").bind(pid).fetch_one(pool).await?)
-}
-
-/// Apply data edits in one transaction. If any fails, roll back everything.
-/// Statements in one transaction (roll back everything if any fails). exact_one = table edits: each UPDATE/DELETE must hit exactly 1 row
-pub async fn execute_batch(pool: &PgPool, statements: &[String], exact_one: bool) -> AppResult<u64> {
-    Ok(execute_batch_with(pool, statements, exact_one, false, &[]).await?.0)
-}
-
-/// prepared = each statement as a prepared statement (extended protocol): the server refuses more than one statement per item (MCP).
-/// snaps = undo snapshot to take right before each statement, in the transaction (audit::UndoPlan) → (rows changed, each snapshot's result with the rows its statement changed)
-pub async fn execute_batch_with(pool: &PgPool, statements: &[String], exact_one: bool, prepared: bool, snaps: &[Option<&str>]) -> AppResult<(u64, Vec<Option<(AppResult<QueryResult>, u64)>>)> {
-    let mut tx = pool.begin().await?;
-    let mut affected = 0;
-    let mut shots = Vec::new();
-    for (i, st) in statements.iter().enumerate() {
-        let shot = match snaps.get(i).copied().flatten() {
-            Some(q) => Some(pg_snapshot(&mut tx, q).await),
-            None => None,
-        };
-        // Cancelled · timed out while locking the rows: nothing is saved (dropping tx rolls back)
-        if let Some(Err(e)) = &shot
-            && crate::audit::stops_change(e)
-        {
-            return Err(crate::audit::stopped(e, false));
-        }
-        let r = if prepared { sqlx::query(st).execute(&mut *tx).await } else { tx.execute(st.as_str()).await };
-        let n = r.map_err(|e| AppError::Msg(format!("{e}\n→ {st}")))?.rows_affected();
-        check_exact_one(st, n, exact_one)?;
-        shots.push(shot.map(|s| (s, n)));
-        affected += n;
-    }
-    tx.commit().await?;
-    Ok((affected, shots))
-}
-
 /// If a table edit's UPDATE/DELETE hits 0 or multiple rows (changed by someone else or duplicate keys), roll back everything
 pub fn check_exact_one(st: &str, n: u64, exact_one: bool) -> AppResult<()> {
     let s = strip_comments_lead(st);
@@ -530,9 +488,9 @@ mod tests {
     async fn prepared_batch_refuses_multiple_statements() {
         let p = pool().await;
         sqlx::raw_sql("drop table if exists qurry_prep; create table qurry_prep (a int)").execute(&p).await.unwrap();
-        let e = execute_batch_with(&p, &["insert into qurry_prep values (1); drop table qurry_prep".into()], false, true, &[]).await.unwrap_err().to_string();
+        let e = p.execute_batch(&["insert into qurry_prep values (1); drop table qurry_prep".into()], false, true, &[]).await.unwrap_err().to_string();
         assert!(e.contains("multiple commands"), "{e}");
-        assert_eq!(execute_batch_with(&p, &["insert into qurry_prep values (1)".into()], false, true, &[]).await.unwrap().0, 1);
+        assert_eq!(p.execute_batch(&["insert into qurry_prep values (1)".into()], false, true, &[]).await.unwrap().0, 1);
         sqlx::raw_sql("drop table qurry_prep").execute(&p).await.unwrap();
     }
 
@@ -576,12 +534,12 @@ mod tests {
         s.set_manual(false).await.unwrap();
         assert_eq!(seen().await, "a");
         // Saving table edits: UPDATE/DELETE hitting 0 or multiple rows rolls back everything
-        let none = execute_batch(&p, &["insert into public.dbtool_tx_t values (2, 'b')".into(), "update public.dbtool_tx_t set v = 'x' where id = 99".into()], true).await;
+        let none = p.execute_batch(&["insert into public.dbtool_tx_t values (2, 'b')".into(), "update public.dbtool_tx_t set v = 'x' where id = 99".into()], true, false, &[]).await;
         assert!(none.is_err());
-        let many = execute_batch(&p, &["update public.dbtool_tx_t set v = 'x' where id > 0".into()], true).await;
+        let many = p.execute_batch(&["update public.dbtool_tx_t set v = 'x' where id > 0".into()], true, false, &[]).await;
         assert!(many.is_ok(), "one row matches");
         sqlx::query("insert into public.dbtool_tx_t values (3, 'c')").execute(&p).await.unwrap();
-        assert!(execute_batch(&p, &["delete from public.dbtool_tx_t where id > 0".into()], true).await.is_err());
+        assert!(p.execute_batch(&["delete from public.dbtool_tx_t where id > 0".into()], true, false, &[]).await.is_err());
         let n: i64 = sqlx::query_scalar("select count(*) from public.dbtool_tx_t").fetch_one(&p).await.unwrap();
         assert_eq!(n, 2, "row 2 insert was rolled back, rows 1 and 3 remain");
         sqlx::query("drop table public.dbtool_tx_t").execute(&p).await.unwrap();
@@ -662,7 +620,7 @@ mod tests {
         let p2 = p.clone();
         let canceller = tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-            cancel(&p2, pid).await.unwrap()
+            p2.cancel(pid as i64).await.unwrap()
         });
         let t0 = Instant::now();
         let res = s.run("select pg_sleep(10)", 500).await;
@@ -699,9 +657,9 @@ mod tests {
         // Batch edit: roll back everything on failure
         sqlx::query("create table if not exists public.dbtool_batch_t(id int primary key, name text)").execute(&p).await.unwrap();
         sqlx::query("truncate public.dbtool_batch_t").execute(&p).await.unwrap();
-        let ok = execute_batch(&p, &["insert into public.dbtool_batch_t values (1,'a')".into(), "update public.dbtool_batch_t set name='b' where id=1".into()], true).await.unwrap();
-        assert_eq!(ok, 2);
-        let bad = execute_batch(&p, &["insert into public.dbtool_batch_t values (2,'c')".into(), "insert into public.dbtool_batch_t values (1,'dup')".into()], true).await;
+        let ok = p.execute_batch(&["insert into public.dbtool_batch_t values (1,'a')".into(), "update public.dbtool_batch_t set name='b' where id=1".into()], true, false, &[]).await.unwrap();
+        assert_eq!(ok.0, 2);
+        let bad = p.execute_batch(&["insert into public.dbtool_batch_t values (2,'c')".into(), "insert into public.dbtool_batch_t values (1,'dup')".into()], true, false, &[]).await;
         assert!(bad.is_err());
         let n: i64 = sqlx::query_scalar("select count(*) from public.dbtool_batch_t").fetch_one(&p).await.unwrap();
         assert_eq!(n, 1);

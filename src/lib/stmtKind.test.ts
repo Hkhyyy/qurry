@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { isDdl, isRead } from "./stmtKind";
+import { isDdl, isRead, rollbackUndoes } from "./stmtKind";
 
 describe("stmtKind (core guard through WASM)", () => {
   it("reads the statement as the TUI does (D1)", () => {
@@ -18,6 +18,19 @@ describe("stmtKind (core guard through WASM)", () => {
     expect(isRead("postgres", "select nextval('s')")).toBe(false);
   });
 
+  it("text with several statements is a read only if every one is", () => {
+    expect(isRead("postgres", "select 1; do $$ begin delete from orders; end $$")).toBe(false);
+    expect(isRead("mysql", "select 1; prepare s from 'delete from orders'; execute s")).toBe(false);
+    expect(isRead("postgres", "select 1; select 2;")).toBe(true);
+  });
+
+  it("Explain Analyse's rollback undoes table writes, not sequences or other servers", () => {
+    expect(rollbackUndoes("postgres", "delete from t")).toBe(true);
+    expect(rollbackUndoes("postgres", "select nextval('s')")).toBe(false);
+    expect(rollbackUndoes("postgres", "select dblink_exec('dbname=x', 'delete from t')")).toBe(false);
+    expect(rollbackUndoes("mysql", "select * from t into outfile '/tmp/x'")).toBe(false);
+  });
+
   it("with a backslash in a string, a read must be a read under both of the server's string rules", () => {
     // MySQL NO_BACKSLASH_ESCAPES / PostgreSQL standard_conforming_strings = off end the string early and run the DELETE
     expect(isRead("mysql", "with a as (select 'x\\') delete from t -- ') select 1")).toBe(false);
@@ -30,5 +43,6 @@ describe("stmtKind (core guard through WASM)", () => {
     const fresh = await import("./stmtKind");
     expect(fresh.isRead("postgres", "select 1")).toBe(false);
     expect(fresh.isDdl("postgres", "drop table t")).toBe(null);
+    expect(fresh.rollbackUndoes("postgres", "delete from t")).toBe(false);
   });
 });

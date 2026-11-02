@@ -344,10 +344,12 @@ impl Grid {
         }
     }
 
-    pub fn render(&mut self, f: &mut Frame, area: Rect, title: String, focused: bool) {
+    pub fn render(&mut self, f: &mut Frame, area: Rect, title: String, focused: bool, color: crate::theme::ColorMode) {
         let block = Block::default()
             .borders(Borders::ALL)
             .title(title)
+            // Thick when focused, like kit::panel: focus shows without colors too (NO_COLOR)
+            .border_type(if focused { ratatui::widgets::BorderType::Thick } else { ratatui::widgets::BorderType::Plain })
             .border_style(if focused { Style::default().fg(Color::Cyan) } else { Style::default().fg(Color::DarkGray) });
         let inner = block.inner(area);
         f.render_widget(block, area);
@@ -445,7 +447,18 @@ impl Grid {
             .map(|r| {
                 let deleted = self.deleted.contains(&r);
                 let added = self.is_added(r);
-                let num = Cell::from(format!("{:>w$}", r + 1, w = num_w as usize - 1)).style(Style::default().fg(if added { crate::kit::OK } else if deleted { crate::kit::DANGER } else { Color::DarkGray }));
+                let edited_row = self.edits.range((r, 0)..(r + 1, 0)).next().is_some();
+                // Pending changes are marked next to the row number too, so they show without colors (NO_COLOR): + added · - deleted · ~ edited
+                let (mark, num_c) = if added {
+                    ('+', crate::kit::OK)
+                } else if deleted {
+                    ('-', crate::kit::DANGER)
+                } else if edited_row {
+                    ('~', Color::Yellow)
+                } else {
+                    (' ', Color::DarkGray)
+                };
+                let num = Cell::from(format!("{:>w$}{mark}", r + 1, w = num_w as usize - 1)).style(Style::default().fg(num_c));
                 Row::new(std::iter::once(num).chain(cols.iter().map(|&c| {
                     let edited = self.edits.contains_key(&(r, c));
                     let v = self.shown(r, c, self.widths[c] as usize + 1);
@@ -458,7 +471,7 @@ impl Grid {
                     let text = if numeric[c] && v.is_some() { format!("{text:>w$}") } else { text };
                     let mut st = if v.is_none() { Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC) } else if numeric[c] { Style::default().fg(crate::kit::NUMBER) } else { Style::default() };
                     if edited {
-                        st = st.fg(Color::Yellow);
+                        st = st.fg(Color::Yellow).add_modifier(Modifier::BOLD);
                     }
                     if deleted {
                         st = st.fg(crate::kit::DANGER).add_modifier(Modifier::CROSSED_OUT);
@@ -467,9 +480,12 @@ impl Grid {
                         st = st.fg(crate::kit::OK);
                     }
                     let in_sel = sel.is_some_and(|(r0, c0, r1, c1)| r >= r0 && r <= r1 && c >= c0 && c <= c1);
-                    if r == self.row && c == self.col {
+                    let cursor = r == self.row && c == self.col;
+                    // Where the range and the cursor are both reverse video, the cursor is the one cell of the range left plain (like a spreadsheet)
+                    let hole = cursor && color.reverses_selection() && sel.is_some_and(|(r0, c0, r1, c1)| r0 != r1 || c0 != c1);
+                    if cursor && !hole {
                         st = st.bg(crate::kit::selected(focused));
-                    } else if in_sel {
+                    } else if in_sel && !cursor {
                         st = st.bg(crate::kit::CELL_EDITED);
                     } else if r == self.row {
                         st = st.bg(crate::kit::CELL_RANGE);
@@ -501,7 +517,7 @@ impl Grid {
                 buf[(x, y)].set_symbol("│").set_style(line);
             }
         }
-        // Horizontal scrollbar: visible range in bold on the bottom border (click or drag to move)
+        // Horizontal scrollbar: visible range in bold on the bottom border (click or drag to move); a block on the focused, already thick border
         self.hbar = Rect::default();
         if self.col_off > 0 || self.col_off + full < self.cols() {
             let track = Rect { x: inner.x, y: area.bottom().saturating_sub(1), width: inner.width, height: 1 };
@@ -511,7 +527,7 @@ impl Grid {
             let len = ((full.max(1) as u32 * tw).div_ceil(n) as u16).clamp(2, track.width - start);
             let thumb = Style::default().fg(if focused { Color::Cyan } else { Color::Gray });
             for x in track.x + start..track.x + start + len {
-                buf[(x, track.y)].set_symbol("━").set_style(thumb);
+                buf[(x, track.y)].set_symbol(if focused { "█" } else { "━" }).set_style(thumb);
             }
             self.hbar = track;
         }
@@ -596,5 +612,101 @@ mod tests {
         g.move_by(1, 0);
         assert_eq!(g.sel_rect(), None);
         assert_eq!(g.in_list(DbKind::Postgres), ("(1, 2, 3)".to_string(), 3));
+    }
+
+    /// Focus shows in the border's shape, not only its color (NO_COLOR has none); the scrollbar thumb stays visible on the thick border
+    #[test]
+    fn focused_grid_has_a_thick_border_and_a_block_thumb() {
+        let col = |n: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: String::new() };
+        let cols: Vec<_> = (0..12).map(|i| col(&format!("column_{i}"))).collect();
+        let rows = vec![(0..12).map(|i| json!(i)).collect()];
+        let mut g = Grid::new(QueryResult { columns: cols, rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None });
+        let draw = |g: &mut Grid, focused: bool| {
+            let mut term = Terminal::new(ratatui::backend::TestBackend::new(40, 6)).unwrap();
+            term.draw(|f| g.render(f, f.area(), "t".into(), focused, Default::default())).unwrap();
+            let buf = term.backend().buffer().clone();
+            (buf[(0, 0)].symbol().to_string(), (0..40).map(|x| buf[(x, 5)].symbol()).collect::<String>())
+        };
+        let (corner, bottom) = draw(&mut g, true);
+        assert_eq!(corner, "┏");
+        assert!(bottom.contains('█') && bottom.contains('━'), "{bottom}");
+        let (corner, bottom) = draw(&mut g, false);
+        assert_eq!(corner, "┌");
+        assert!(bottom.contains('━') && bottom.contains('─'), "{bottom}");
+    }
+
+    /// A 3×3 grid of "r{row}c{col}" values
+    fn grid3() -> Grid {
+        let col = |n: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: String::new() };
+        let rows = (0..3).map(|r| (0..3).map(|c| json!(format!("r{r}c{c}"))).collect()).collect();
+        Grid::new(QueryResult { columns: vec![col("a"), col("b"), col("c")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None })
+    }
+
+    /// Draw focused in a color mode: the screen's lines and its buffer
+    fn draw_in(g: &mut Grid, mode: crate::theme::ColorMode) -> (Vec<String>, ratatui::buffer::Buffer) {
+        let mut term = Terminal::new(ratatui::backend::TestBackend::new(40, 8)).unwrap();
+        term.draw(|f| {
+            g.render(f, f.area(), "t".into(), true, mode);
+            mode.apply(f.buffer_mut());
+        })
+        .unwrap();
+        let buf = term.backend().buffer().clone();
+        ((0..8).map(|y| (0..40).map(|x| buf[(x, y)].symbol()).collect()).collect(), buf)
+    }
+
+    /// The cell at the first character of a drawn value
+    fn cell_of(lines: &[String], buf: &ratatui::buffer::Buffer, v: &str) -> ratatui::buffer::Cell {
+        let (y, x) = lines.iter().enumerate().find_map(|(y, l)| l.find(v).map(|i| (y, l[..i].chars().count()))).unwrap_or_else(|| panic!("{v} not drawn"));
+        buf[(x as u16, y as u16)].clone()
+    }
+
+    /// Unsaved changes don't rely on color (NO_COLOR drops it): edited cells are bold, the row number says + added · - deleted · ~ edited
+    #[test]
+    fn pending_changes_show_without_colors() {
+        use crate::theme::ColorMode;
+        let mut g = grid3();
+        g.set_value(0, 1, "e0c1".into());
+        g.deleted.insert(1);
+        g.add_row();
+        g.set_value(3, 0, "n3c0".into());
+        g.row = 2;
+        let (lines, buf) = draw_in(&mut g, ColorMode::NoColor);
+        let (edited, plain) = (cell_of(&lines, &buf, "e0c1"), cell_of(&lines, &buf, "r0c2"));
+        assert_eq!((edited.fg, edited.bg), (plain.fg, plain.bg));
+        assert!(edited.modifier.contains(Modifier::BOLD) && !plain.modifier.contains(Modifier::BOLD), "{:?} vs {:?}", edited.modifier, plain.modifier);
+        let num = |v: &str| {
+            let l: Vec<char> = lines.iter().find(|l| l.contains(v)).unwrap().chars().collect();
+            l[1..3].iter().collect::<String>()
+        };
+        assert_eq!(num("r0c2"), "1~");
+        assert_eq!(num("r1c2"), "2-");
+        assert_eq!(num("r2c2"), "3 ");
+        assert_eq!(num("n3c0"), "4+");
+        // Colored modes have the marks too (one rule)
+        let (lines, _) = draw_in(&mut g, ColorMode::TrueColor);
+        assert!(lines.iter().any(|l| l.contains("1~")), "{lines:?}");
+    }
+
+    /// The cursor inside a range stays apart from the range in every color mode
+    #[test]
+    fn cursor_stands_out_of_a_range_in_every_color_mode() {
+        use crate::theme::ColorMode;
+        let mut g = grid3();
+        g.anchor = Some((0, 0));
+        (g.row, g.col) = (1, 1);
+        let look = |c: ratatui::buffer::Cell| (c.bg, c.modifier.contains(Modifier::REVERSED));
+        for mode in [ColorMode::TrueColor, ColorMode::Ansi256, ColorMode::Ansi16, ColorMode::NoColor] {
+            let (lines, buf) = draw_in(&mut g, mode);
+            let [cur, range, out] = ["r1c1", "r0c0", "r2c2"].map(|v| look(cell_of(&lines, &buf, v)));
+            assert_ne!(cur, range, "{mode:?}");
+            assert_ne!(range, out, "{mode:?}: the range shows");
+            if mode.reverses_selection() {
+                assert!(range.1 && !cur.1, "{mode:?}: the range is reversed, the cursor is the plain cell in it");
+            }
+        }
+        // A single cell is just the cursor, reversed where selections are
+        g.anchor = None;
+        let (lines, buf) = draw_in(&mut g, ColorMode::NoColor);
+        assert!(look(cell_of(&lines, &buf, "r1c1")).1);
     }
 }

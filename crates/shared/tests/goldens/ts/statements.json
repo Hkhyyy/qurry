@@ -139,6 +139,34 @@
     "isReadStmt": false,
     "DDL_RE": false
   },
+  "multi-do-body": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "multi-prepare": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "multi-call": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "multi-reads": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
+  "mssql-chained-exec": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "mssql-chained-drop": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "mssql-case-end": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
   "redis-get": {
     "isReadStmt": false,
     "DDL_RE": false

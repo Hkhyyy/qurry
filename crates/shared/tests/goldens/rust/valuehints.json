@@ -54,6 +54,19 @@
     "hintInsert": "\\x00",
     "hintable": false
   },
+  "domain-type-quoted": {
+    "hintContext": {
+      "column": "realm",
+      "mode": "values",
+      "op": null,
+      "path": [],
+      "quoted": false,
+      "ref": null,
+      "typed": ""
+    },
+    "hintInsert": "'x'' or true; --'",
+    "hintable": true
+  },
   "eq-bare": {
     "hintContext": {
       "column": "status",
@@ -284,7 +297,7 @@
     "hintInsert": "x%",
     "hintable": true
   },
-  "money-bare": {
+  "money-text-quoted": {
     "hintContext": {
       "column": "price",
       "mode": "values",
@@ -294,7 +307,7 @@
       "ref": null,
       "typed": ""
     },
-    "hintInsert": "$1.00",
+    "hintInsert": "'$1.00'",
     "hintable": true
   },
   "mysql-keys": {
@@ -400,6 +413,19 @@
       "typed": ""
     },
     "hintInsert": "12.50",
+    "hintable": true
+  },
+  "numeric-not-a-number": {
+    "hintContext": {
+      "column": "id",
+      "mode": "values",
+      "op": null,
+      "path": [],
+      "quoted": false,
+      "ref": null,
+      "typed": ""
+    },
+    "hintInsert": "'1; drop table t'",
     "hintable": true
   },
   "pairs": {

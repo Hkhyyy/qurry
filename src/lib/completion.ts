@@ -83,12 +83,13 @@ for (const lang of ["pgsql", "mysql"]) {
       const text = model.getValue();
       const caret = model.getOffsetAt(position);
       const range = (s: Suggestions) => new monaco.Range(position.lineNumber, s.startColumn, position.lineNumber, s.endColumn);
-      // db "": bare names only for tables in public (other schemas, MySQL DBs included, are inserted as schema.table)
+      // The tab's DB (connId is "dataSource::db"): in MySQL the schema is the DB, so its tables are inserted bare (complete.rs ignores it for PG)
+      const db = connId?.split("::")[1] ?? "";
 
       // Value · json key: where status = '… / data->>'… / reasons @> '…
       // The line alone tells whether this is a value spot, so the whole script crosses into WASM only there (and for suggest)
       const before = model.getLineContent(position.lineNumber).slice(0, position.column - 1);
-      const hint = connId && shared().hintContext(before, mysql) ? idx.hintAt(text, caret, "", mysql) : undefined;
+      const hint = connId && shared().hintContext(before, mysql) ? idx.hintAt(text, caret, db, mysql) : undefined;
       if (hint && connId) {
         const ask = (mode: "values" | "keys" | "pairs") => meta.hints(connId, { schema: hint.schema, table: hint.table, column: hint.column, path: hint.path, keys: mode === "keys", pairs: mode === "pairs" }).catch(() => []);
         let hints = await ask(hint.mode);
@@ -109,7 +110,7 @@ for (const lang of ["pgsql", "mysql"]) {
         };
       }
       if (quiet) return { suggestions: [] };
-      const s = idx.suggest(text, caret, "", mysql);
+      const s = idx.suggest(text, caret, db, mysql);
       const r = range(s);
       const kind: Record<CompletionItem["kind"], monaco.languages.CompletionItemKind> = { column: K.Field, table: K.Class, schema: K.Module, keyword: K.Keyword, value: K.Value };
       return {

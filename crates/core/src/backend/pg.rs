@@ -1,13 +1,21 @@
-//! PostgreSQL: pg_catalog queries
-use super::Backend;
+//! PostgreSQL: pg_catalog queries, connecting (TLS rules), MCP reads in a READ ONLY transaction, batches, and the jobs (schema compare,
+//! migrations, import, undo columns). The console session is crate::session::PgSession
+use super::{Backend, Snapshots};
+use crate::audit;
+use crate::db::QueryResult;
 use crate::ddl::{ColumnDef, ForeignKeyDef, IndexDef, TableDef, action};
 use crate::erd::{Columns, Erd, ErdColumn, ErdRelation, ErdTable};
 use crate::error::{AppError, AppResult};
 use crate::fake::{Col, Fk, TableShape, quoted_literals, type_args};
 use crate::hints::{Hint, HintReq};
 use crate::meta::{ColumnMeta, CompletionTable, ConstraintMeta, FtsHit, FtsRequest, IndexEntry, IndexMeta, RelationInfo, RoutineInfo, SchemaInfo, SchemaObjects, TableDetail};
-use crate::store::DbKind;
-use sqlx::PgPool;
+use crate::migrate::{self, Model, norm};
+use crate::session::{PgSession, Session, check_exact_one, pg_snapshot};
+use crate::store::{ConnectionConfig, DbKind};
+use crate::transfer::{Exporter, Tx};
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
+use sqlx::{Executor, PgPool};
+use std::time::Duration;
 
 const REL_OID: &str = "(select c.oid from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = $1 and c.relname = $2)";
 
@@ -328,6 +336,8 @@ impl Backend for PgPool {
             let sql = format!("select * from {}.{} where {where_clause} limit {}", ident(&schema), ident(&table), r.limit.max(1));
             // Per-statement timeout so one slow table doesn't stall everything
             let mut tx = self.begin().await?;
+            // READ ONLY: a function with side effects called from a view is refused, not just rolled back (nextval, dblink)
+            sqlx::query("set transaction read only").execute(&mut *tx).await?;
             sqlx::query("set local statement_timeout = '15s'").execute(&mut *tx).await?;
             let res = crate::db::run_on(&mut *tx, &sql, r.limit.max(1)).await;
             let _ = tx.rollback().await;
@@ -526,4 +536,238 @@ impl Backend for PgPool {
             .collect();
         Ok(TableShape { cols, fks: fks.into_iter().map(|(ref_table, cols, ref_cols)| Fk { cols, ref_table, ref_cols }).collect() })
     }
+
+    // ───── Connection: db.rs · app.rs ─────
+
+    async fn server_version(&self) -> AppResult<String> {
+        Ok(sqlx::query_scalar::<_, String>("select version()").fetch_one(self).await?)
+    }
+
+    async fn close(&self) {
+        PgPool::close(self).await
+    }
+
+    async fn ping(&self) {
+        let _ = sqlx::query("select 1").execute(self).await;
+    }
+
+    /// With no SSL setting, it falls back to plain text if the server lacks TLS (except this machine · tunnels)
+    async fn plaintext_note(&self, cfg: &ConnectionConfig) -> Option<String> {
+        if cfg.active_ssl().is_some() || crate::db::is_local(cfg) {
+            return None;
+        }
+        let ssl: Option<bool> = sqlx::query_scalar("select ssl from pg_stat_ssl where pid = pg_backend_pid()").fetch_optional(self).await.ok().flatten();
+        (ssl == Some(false)).then(|| "⚠ Not encrypted: the server didn't offer TLS, so the password and data travel in plain text. Enable SSL in the data source to require it.".to_string())
+    }
+
+    // ───── Running: db.rs · session.rs · app.rs ─────
+
+    async fn run_query(&self, sql: &str, limit: usize) -> AppResult<QueryResult> {
+        crate::db::run_pg_on(&mut *self.acquire().await?, sql, limit).await
+    }
+
+    async fn export(&self, sql: &str, out: &mut Exporter) -> AppResult<()> {
+        let mut conn = self.acquire().await?;
+        crate::db::export_pg_on(&mut conn, sql, out).await
+    }
+
+    async fn run_read_only(&self, sql: &str, limit: usize) -> AppResult<QueryResult> {
+        let mut tx = begin_read_only(self).await?;
+        let r = crate::db::run_on(&mut tx, sql, limit).await;
+        let _ = tx.rollback().await;
+        r
+    }
+
+    async fn export_read_only(&self, sql: &str, out: &mut Exporter) -> AppResult<()> {
+        let mut tx = begin_read_only(self).await?;
+        let r = crate::db::export_pg_on(&mut tx, sql, out).await;
+        let _ = tx.rollback().await;
+        r
+    }
+
+    async fn open_session(&self) -> AppResult<Session> {
+        Ok(Session::Pg(PgSession::open(self).await?))
+    }
+
+    /// Cancel the backend's running query from another connection
+    async fn cancel(&self, pid: i64) -> AppResult<bool> {
+        Ok(sqlx::query_scalar("select pg_cancel_backend($1)").bind(pid as i32).fetch_one(self).await?)
+    }
+
+    /// One transaction: if any statement fails, everything rolls back
+    async fn execute_batch(&self, statements: &[String], exact_one: bool, prepared: bool, snaps: &[Option<&str>]) -> AppResult<(u64, Snapshots)> {
+        let mut tx = self.begin().await?;
+        let mut affected = 0;
+        let mut shots = Vec::new();
+        for (i, st) in statements.iter().enumerate() {
+            let shot = match snaps.get(i).copied().flatten() {
+                Some(q) => Some(pg_snapshot(&mut tx, q).await),
+                None => None,
+            };
+            // Cancelled · timed out while locking the rows: nothing is saved (dropping tx rolls back)
+            if let Some(Err(e)) = &shot
+                && crate::audit::stops_change(e)
+            {
+                return Err(crate::audit::stopped(e, false));
+            }
+            let r = if prepared { sqlx::query(st).execute(&mut *tx).await } else { tx.execute(st.as_str()).await };
+            let n = r.map_err(|e| AppError::Msg(format!("{e}\n→ {st}")))?.rows_affected();
+            check_exact_one(st, n, exact_one)?;
+            shots.push(shot.map(|s| (s, n)));
+            affected += n;
+        }
+        tx.commit().await?;
+        Ok((affected, shots))
+    }
+
+    // ───── Jobs: migrate.rs · transfer.rs · audit.rs ─────
+
+    async fn schema_model(&self, schema: &str) -> AppResult<Model> {
+        let tables: Vec<(String,)> = sqlx::query_as("select c.relname::text from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = $1 and c.relkind in ('r', 'p') and not c.relispartition order by 1")
+            .bind(schema)
+            .fetch_all(self)
+            .await?;
+        let mut m = Model::default();
+        for (t,) in tables {
+            let d = self.table_detail(schema, &t).await?;
+            let cons: Vec<&str> = d.constraints.iter().map(|c| c.name.as_str()).collect();
+            let mut tm = migrate::TableModel { columns: d.columns.iter().map(|c| (c.name.clone(), migrate::Col { ty: c.data_type.clone(), not_null: !c.nullable, default: c.default_value.as_deref().map(|x| norm(x, schema, DbKind::Postgres)), line: String::new() })).collect(), ..Default::default() };
+            for c in &d.constraints {
+                let def = norm(&c.definition, schema, DbKind::Postgres);
+                if c.kind == "f" {
+                    tm.fks.insert(c.name.clone(), def);
+                } else {
+                    tm.keys.insert(c.name.clone(), format!("CONSTRAINT {} {def}", crate::sql::quote_ident(DbKind::Postgres, &c.name)));
+                }
+            }
+            for i in d.indexes.iter().filter(|i| !cons.contains(&i.name.as_str())) {
+                tm.keys.insert(i.name.clone(), norm(&i.definition, schema, DbKind::Postgres));
+            }
+            m.tables.insert(t, tm);
+        }
+        let views: Vec<(String, String)> = sqlx::query_as("select c.relname::text, pg_get_viewdef(c.oid, true) from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = $1 and c.relkind = 'v' order by 1")
+            .bind(schema)
+            .fetch_all(self)
+            .await?;
+        for (v, def) in views {
+            m.views.insert(v, norm(def.trim().trim_end_matches(';'), schema, DbKind::Postgres));
+        }
+        Ok(m)
+    }
+
+    async fn apply_migration(&self, stmts: &[&str], fail: impl Fn(String) -> AppError) -> AppResult<()> {
+        super::run_in_tx(self, stmts, fail).await
+    }
+
+    async fn import_tx(&self) -> AppResult<Tx> {
+        Ok(Tx::Pg(self.begin().await?))
+    }
+
+    /// The EXPLAIN estimate, so it may be off
+    async fn estimate_rows(&self, sql: &str) -> Option<u64> {
+        let head = sql.split_whitespace().next()?.to_ascii_lowercase();
+        if !["select", "with", "table", "values"].contains(&head.as_str()) {
+            return None;
+        }
+        let v: serde_json::Value = sqlx::query_scalar(&format!("EXPLAIN (FORMAT JSON) {sql}")).fetch_one(self).await.ok()?;
+        v.get(0)?.get("Plan")?.get("Plan Rows")?.as_f64().map(|n| n as u64)
+    }
+
+    async fn table_columns(&self, table: &str) -> AppResult<Vec<audit::Col>> {
+        let rows: Vec<(String, bool, bool)> = sqlx::query_as(
+            "SELECT a.attname::text, coalesce(a.attnum = ANY(i.indkey), false), a.attgenerated <> '' \
+             FROM pg_attribute a LEFT JOIN pg_index i ON i.indrelid = a.attrelid AND i.indisprimary \
+             WHERE a.attrelid = $1::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum",
+        )
+        .bind(table)
+        .fetch_all(self)
+        .await?;
+        Ok(rows.into_iter().map(|(name, pk, generated)| audit::Col { name, pk, generated, binary: false }).collect())
+    }
+}
+
+/// The transaction MCP reads and MCP CSV exports run in (the caller rolls it back): READ ONLY, 60 seconds (so queries sent by others
+/// do not hold the server for long), string parsing that matches guard (even if the server or role sets standard_conforming_strings = off)
+async fn begin_read_only(pool: &PgPool) -> AppResult<sqlx::Transaction<'static, sqlx::Postgres>> {
+    let mut tx = pool.begin().await?;
+    tx.execute("SET TRANSACTION READ ONLY").await?;
+    tx.execute("SET LOCAL statement_timeout = '60s'").await?;
+    tx.execute("SET LOCAL standard_conforming_strings = on").await?;
+    Ok(tx)
+}
+
+/// Connect to `host`:`port`: the server, or the SSH tunnel's local port (db::connect_via)
+pub(crate) async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str, port: u16) -> AppResult<PgPool> {
+    let mut opts = PgConnectOptions::new()
+        .host(host)
+        .port(port)
+        .username(&cfg.user)
+        .application_name("qurry");
+    // Like DataGrip, an empty value connects to the postgres DB (the PG default, a DB named after the user, often does not exist)
+    let database = if cfg.database.trim().is_empty() { "postgres" } else { cfg.database.trim() };
+    opts = opts.database(database);
+    if let Some(p) = password.filter(|p| !p.is_empty()) {
+        opts = opts.password(p);
+    }
+    if cfg.read_only {
+        // Do not leave the parsing of \ in strings to server settings (match the rules guard reads with)
+        opts = opts.options([("default_transaction_read_only", "on"), ("standard_conforming_strings", "on")]);
+    }
+    // Without SSL settings a remote server must still set up TLS (certificate not checked); plain text only for this computer,
+    // an SSH tunnel, or when the data source allows it (Prefer would quietly fall back to plain text if TLS were cut)
+    if cfg.active_ssl().is_none() && !crate::db::plaintext_allowed(cfg, host) {
+        opts = opts.ssl_mode(PgSslMode::Require);
+    }
+    // SSL from the SSH/SSL tab
+    if let Some(ssl) = cfg.active_ssl() {
+        opts = opts.ssl_mode(match ssl.mode() {
+            "verify-full" => PgSslMode::VerifyFull,
+            "verify-ca" => PgSslMode::VerifyCa,
+            "require" => PgSslMode::Require,
+            // Do not pass unknown values on as unverified require
+            m => return Err(AppError::Msg(format!("Unknown SSL mode '{m}' (use require, verify-ca or verify-full)"))),
+        });
+        let home = |p: &str| p.strip_prefix("~/").map(|r| format!("{}/{r}", std::env::var("HOME").unwrap_or_default())).unwrap_or_else(|| p.to_string());
+        if !ssl.ca_file.trim().is_empty() {
+            opts = opts.ssl_root_cert(home(ssl.ca_file.trim()));
+        }
+        if !ssl.cert_file.trim().is_empty() {
+            opts = opts.ssl_client_cert(home(ssl.cert_file.trim()));
+        }
+        if !ssl.key_file.trim().is_empty() {
+            opts = opts.ssl_client_key(home(ssl.key_file.trim()));
+        }
+    }
+    const LEVELS: [&str; 4] = ["read uncommitted", "read committed", "repeatable read", "serializable"];
+    if let Some(iso) = cfg.options.isolation.as_deref().filter(|i| LEVELS.contains(i)) {
+        opts = opts.options([("default_transaction_isolation", iso)]);
+    }
+    // sqlx sends TimeZone=UTC as a startup parameter, so change it with SET right after connecting
+    let tz = cfg.options.time_zone.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(|t| t.replace('\'', "''"));
+    let script = cfg.options.startup_script.trim().to_string();
+    PgPoolOptions::new()
+        // Each console/table tab uses one dedicated connection. Connections open only when needed, so just keep the cap generous
+        .max_connections(crate::db::POOL_MAX)
+        .idle_timeout(crate::db::POOL_IDLE)
+        .acquire_timeout(Duration::from_secs(10))
+        .after_connect(move |conn, _meta| {
+            let script = script.clone();
+            let tz = tz.clone();
+            Box::pin(async move {
+                if let Some(tz) = tz {
+                    conn.execute(format!("set time zone '{tz}'").as_str()).await?;
+                }
+                if !script.is_empty() {
+                    conn.execute(sqlx::raw_sql(&script)).await?;
+                }
+                Ok(())
+            })
+        })
+        .connect_with(opts)
+        .await
+        .map_err(|e| match &e {
+            // Required TLS that the server can't set up: say what to do instead of a bare TLS error
+            sqlx::Error::Tls(_) if cfg.active_ssl().is_none() => AppError::Msg(format!("{}\n({e})", qurry_shared::errors::needs_tls_pg())),
+            _ => e.into(),
+        })
 }

@@ -33,12 +33,18 @@ fn css(c: Color) -> Value {
         Color::LightBlue => "#82aaff",
         Color::LightMagenta => "#d7a1f9",
         Color::LightCyan => "#89ddff",
+        // xterm 256 palette (0–15 are the named colors above; the TUI doesn't use them)
+        Color::Indexed(n @ 16..) => {
+            let (r, g, b) = crate::theme::rgb256(n);
+            return json!(format!("#{r:02x}{g:02x}{b:02x}"));
+        }
         Color::Indexed(_) => "#abb2bf",
     };
     json!(s)
 }
 
-/// Buffer → per line, runs of [text, fg, bg, bold, underline, italic, strikethrough, wide] (same styles are merged).
+/// Buffer → per line, runs of [text, fg, bg, bold, underline, italic, strikethrough, wide] (same styles are merged), plus [reverse, dim]
+/// at the end only when one of them is on (NO_COLOR draws with them).
 /// Wide (two-cell) characters (Korean) get their own run (wide = true) — so the web draws them exactly two cells wide. The following cell is skipped
 fn dump(buf: &Buffer) -> Value {
     use unicode_width::UnicodeWidthStr;
@@ -59,7 +65,18 @@ fn dump(buf: &Buffer) -> Value {
             x += w;
         }
         let b = |m: u16, f: Modifier| m & f.bits() != 0;
-        rows.push(Value::Array(runs.into_iter().map(|(t, fg, bg, m, wide)| json!([t, fg, bg, b(m, Modifier::BOLD), b(m, Modifier::UNDERLINED), b(m, Modifier::ITALIC), b(m, Modifier::CROSSED_OUT), wide])).collect()));
+        rows.push(Value::Array(
+            runs.into_iter()
+                .map(|(t, fg, bg, m, wide)| {
+                    let mut run = json!([t, fg, bg, b(m, Modifier::BOLD), b(m, Modifier::UNDERLINED), b(m, Modifier::ITALIC), b(m, Modifier::CROSSED_OUT), wide]);
+                    let (rev, dim) = (b(m, Modifier::REVERSED), b(m, Modifier::DIM));
+                    if rev || dim {
+                        run.as_array_mut().unwrap().extend([json!(rev), json!(dim)]);
+                    }
+                    run
+                })
+                .collect(),
+        ));
     }
     json!({ "w": a.width, "h": a.height, "rows": rows })
 }
@@ -313,6 +330,34 @@ async fn all_scenes() -> Vec<Value> {
     let mut h = Harness::new().await;
     explorer(&mut h).await;
     scenes.push(app_scene(&mut h, "Explorer & table", "탐색기 (운영 색 · 왼쪽 끝까지 이어지는 줄 색 · 한글 설명), 표 탭, 상태 줄의 PROD 배지", 120, 22));
+    // The same screen in each color mode (theme.rs maps the drawn frame; the mode comes from NO_COLOR · COLORTERM · TERM)
+    use crate::theme::ColorMode;
+    for (mode, name, desc) in [
+        (ColorMode::TrueColor, "Colors: truecolor", "COLORTERM=truecolor: the theme's 24-bit colors as they are"),
+        (ColorMode::Ansi256, "Colors: 256", "TERM=xterm-256color: each color mapped to the nearest of the xterm 256 palette"),
+        (ColorMode::Ansi16, "Colors: 16", "TERM=xterm: the 16 terminal colors by hue; text on light backgrounds turns dark"),
+        (ColorMode::NoColor, "Colors: NO_COLOR", "NO_COLOR=1: no colors; selections and badges in reverse video, muted text dim, the focused pane by its thick border"),
+    ] {
+        h.app.color = mode;
+        scenes.push(app_scene(&mut h, name, desc, 120, 22));
+    }
+    // Still NO_COLOR: what doesn't depend on color in the grid
+    let (focus, g) = (h.app.focus, h.app.grid_mut().unwrap());
+    let at = (g.row, g.col);
+    g.set_value(1, 3, "61000".into());
+    g.deleted.insert(2);
+    g.anchor = Some((0, 1));
+    (g.row, g.col) = (1, 2);
+    h.app.focus = crate::app::Focus::Grid;
+    scenes.push(app_scene(&mut h, "Colors: NO_COLOR grid", "NO_COLOR=1: unsaved changes by the row number (~ edited · - deleted · + added) and bold cells; the cursor is the plain cell in the reversed range", 120, 22));
+    let g = h.app.grid_mut().unwrap();
+    g.edits.clear();
+    g.deleted.clear();
+    g.anchor = None;
+    (g.row, g.col) = at;
+    h.app.focus = focus;
+    h.app.color = ColorMode::TrueColor;
+    scenes.push(app_scene(&mut h, "Terminal too small", "Below 40×10 the layout isn't drawn: the size, the size needed and how to quit", 36, 9));
     h.app.popup = Some(Popup::Confirm {
         text: "Production data source \"[PROD] rentalpay\" — this changes data:\n\n  update payment set amount = 0 where id = 4\n     → 1 row\n  delete from payment where created_at < now() - interval '1 year'\n     → 12,408 rows\n\nRun it?".into(),
         on_yes: Box::new(|_| {}),
@@ -353,6 +398,9 @@ async fn all_scenes() -> Vec<Value> {
     h.key("Enter");
     h.key("Alt+1");
     scenes.push(app_scene(&mut h, "Workspaces", "워크스페이스가 둘 이상이면 위쪽 띠 (⌥1…9 · 눌러서 바꾸기)", 120, 22));
+    h.app.palette_update_channel();
+    scenes.push(app_scene(&mut h, "Update channel", "⌃k › Update Channel…: stable (version tags only, the default) or beta (also every merge to main), shared with the GUI", 120, 22));
+    h.app.popup = None;
     scenes
 }
 

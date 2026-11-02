@@ -31,22 +31,25 @@ def code(k):
 
 def gui():
     src = (root / "src/lib/keymap.ts").read_text()
-    # Rebindable rows ([null, desc, id]) show the command's default keys
+    # Rebindable rows ([null, id]) show the command's default keys and its description in the table
     defaults = {c["gui"]: " / ".join(map(mac_spec, c.get("guiKeys", []))) for c in table if "gui" in c}
+    descs = {c["gui"]: c.get("guiDesc", c["title"]) for c in table if "gui" in c}
     out = []
     for m in re.finditer(r'title: "([^"]+)",\s*rows: \[(.*?)\n    \],', src, re.S):
         out.append(f"\n## {m.group(1)}\n\n| macOS | Action |\n|---|---|")
-        for k, d, i in re.findall(r'\[(null|"[^"]*"), "([^"]*)"(?:, "([^"]*)")?\]', m.group(2)):
-            k = defaults[i] if k == "null" else k[1:-1]
+        for k, d in re.findall(r'\[(null|"[^"]*"), "([^"]*)"\]', m.group(2)):
+            k, d = (defaults[d], descs[d]) if k == "null" else (k[1:-1], d)
             out.append(f"| {code(k)} | {esc(key_label(d))} |")
     return "\n".join(out)
 
 def tui():
     src = (root / "crates/tui/src/help.rs").read_text()
-    # Rebindable commands: TUI rows of the command table with default keys, in table order (as keys::DEFAULT_KEYS)
+    # Rebindable commands: TUI rows of the command table with default keys, in the TUI's order (keys::ORDER, as keys::DEFAULT_KEYS)
+    order = re.findall(r"Action::(\w+)", re.search(r"const ORDER: \[Action; \d+\] = \[(.*?)\];", (root / "crates/tui/src/keys.rs").read_text(), re.S).group(1))
+    by_id = {c["tui"]: c for c in table if "tui" in c}
     out = ["\n## Commands (default keys — change them in the F1 window)\n\n| Key | Action |\n|---|---|"]
-    for c in table:
-        if "tui" in c and c.get("tuiKeys"):
+    for c in (by_id[a] for a in order):
+        if c.get("tuiKeys"):
             out.append(f"| {code(' / '.join(c['tuiKeys']))} | {esc(sym(key_label(c.get('tuiTitle', c['title']))))} |")
     for m in re.finditer(r'\("([^"]+)", &\[(.*?)\]\),', src, re.S):
         out.append(f"\n## {sym(key_label(m.group(1)))}\n\n| Key | Action |\n|---|---|")

@@ -1,10 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_EXEC, planExecution } from "./execPlan";
+import { DEFAULT_EXEC, planExecution, planSelection } from "./execPlan";
 import { splitStatements } from "./sqlSplit";
 
 const SQL = "BEGIN;\nGRANT a TO x;\n\nGRANT b TO x;\nCOMMIT;";
 const plan = (offset: number, s = DEFAULT_EXEC) => planExecution(SQL, offset, splitStatements(SQL), s);
 const at = (needle: string) => SQL.indexOf(needle) + 1;
+
+describe("planSelection", () => {
+  it("separate statements or one, with ranges in the selection (UTF-16)", () => {
+    const sel = " select '😀';\n\nselect 2 ";
+    expect(planSelection(sel, splitStatements(sel), DEFAULT_EXEC)).toEqual([
+      { start: 1, end: 12, sql: "select '😀'" },
+      { start: 15, end: 23, sql: "select 2" },
+    ]);
+    expect(planSelection(sel, splitStatements(sel), { ...DEFAULT_EXEC, selection: "single" })).toEqual([{ start: 1, end: 23, sql: sel.trim() }]);
+    expect(planSelection(" \n ", [], { ...DEFAULT_EXEC, selection: "single" })).toEqual([]);
+  });
+});
 
 describe("planExecution (DataGrip Query Execution)", () => {
   it("default: asks what to run when the cursor is inside a statement", () => {

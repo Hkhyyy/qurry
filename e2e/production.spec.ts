@@ -82,3 +82,20 @@ test("MySQL: a WITH whose DELETE hides behind a backslash in a string asks first
   await expect(dialog(page).locator(".ui-modal-title")).toHaveText("Production: [MySQL] shop");
   await expect(dialog(page).locator(".ui-detail-text")).toHaveText("with a as (select 'x\\') delete from t -- ') select 1");
 });
+
+// A selection run as one statement goes to the server as one text, which runs all of it: a write after a read asks
+for (const [conn, sql] of [
+  ["[PROD] shop_app", "select 1; do $$ begin delete from orders; end $$"],
+  ["[MySQL] shop", "select 1; prepare s from 'delete from orders'; execute s"],
+] as const) {
+  test(`a selection run as one statement asks when a write follows a read: ${sql}`, async ({ page }) => {
+    await page.evaluate(() => localStorage.setItem("dbtool.execSettings", JSON.stringify({ inside: "ask", outside: "nothing", selection: "single" })));
+    await openConsole(page, conn);
+    await typeSql(page, sql);
+    await runAll(page);
+    await expect(dialog(page).locator(".ui-modal-title")).toHaveText(`Production: ${conn}`);
+    await expect(dialog(page).locator(".ui-detail-text")).toHaveText(sql);
+    await dialog(page).getByRole("button", { name: "Cancel" }).click();
+    await expect(status(page)).toHaveText("Ready");
+  });
+}

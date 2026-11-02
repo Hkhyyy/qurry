@@ -13,7 +13,7 @@ export interface RunRequest {
   text: string;
   offset: number;
   selection: { text: string; start: number; end: number } | null;
-  /** Briefly highlight the range to run in the editor */
+  /** Briefly highlight the range to run in the editor (not once the text changed after the press) */
   highlight: (ranges: { start: number; end: number }[]) => void;
   /** Explain Plan / Explain Analyse */
   explain?: "plan" | "analyze";
@@ -123,7 +123,10 @@ export function ConsoleEditor({ tabId, connId, initialSql, language, onChange, o
           const sel = ed.getSelection();
           const selection =
             sel && !sel.isEmpty() ? { text: m.getValueInRange(sel), start: m.getOffsetAt(sel.getStartPosition()), end: m.getOffsetAt(sel.getEndPosition()) } : null;
-          onRunRef.current({ text: m.getValue(), offset: m.getOffsetAt(ed.getPosition()!), selection, highlight, explain });
+          // The offsets are into the text at the press: after an edit (a run waiting for the module, the Statements chooser) they'd mark other text
+          const version = m.getAlternativeVersionId();
+          const mark = (ranges: { start: number; end: number }[]) => ed.getModel() === m && m.getAlternativeVersionId() === version && highlight(ranges);
+          onRunRef.current({ text: m.getValue(), offset: m.getOffsetAt(ed.getPosition()!), selection, highlight: mark, explain });
         };
         // ── DataGrip editor keymap (keys are editor.* in lib/shortcuts; re-registered on change) ──
         let registered: monaco.IDisposable[] = [];

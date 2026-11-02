@@ -255,6 +255,8 @@ pub enum PAction {
     Run { stmts: Vec<String>, explain: bool },
     /// Change execution settings
     Exec(qurry_core::exec::ExecSettings),
+    /// Update channel picked
+    Channel(qurry_core::update::Channel),
 }
 #[derive(Clone)]
 pub struct IndexEntryLite {
@@ -407,6 +409,7 @@ pub enum Action {
     ManageSchemas,
     PasswordKey,
     CheckUpdate,
+    UpdateChannel,
     InstallUpdate,
     Help,
     Quit,
@@ -505,10 +508,18 @@ pub const ACTIONS: &[(Action, &str)] = &[
     (Action::TrustSshHost, ""),
     (Action::PasswordKey, ""),
     (Action::CheckUpdate, ""),
+    (Action::UpdateChannel, ""),
     (Action::InstallUpdate, ""),
     (Action::Help, ""),
     (Action::Quit, ""),
 ];
+
+fn channel_name(c: qurry_core::update::Channel) -> &'static str {
+    match c {
+        qurry_core::update::Channel::Stable => "Stable",
+        qurry_core::update::Channel::Beta => "Beta",
+    }
+}
 
 fn object_items(conn: &str, name: &str, db: &str, es: Vec<IndexEntry>, tag: &str) -> Vec<PItem> {
     es.into_iter()
@@ -657,6 +668,10 @@ pub struct App {
     pub ws_shared: Option<Vec<qurry_core::workspaces::WsInfo>>,
     /// The save file has synced with the shared list before (missing workspaces were deleted elsewhere)
     pub ws_synced: bool,
+    /// What the terminal can show (set from the environment at startup; drawing maps the frame to it)
+    pub color: crate::theme::ColorMode,
+    /// The last frame was the 'terminal too small' message: keys and clicks would act on a screen that isn't drawn
+    pub too_small: bool,
     /// Tests only (testkit): answers console statements and the Production row counts instead of the database
     #[cfg(test)]
     pub fake_db: Option<FakeDb>,
@@ -728,6 +743,8 @@ impl App {
             saved_ws: String::new(),
             ws_shared: None,
             ws_synced: false,
+            color: Default::default(),
+            too_small: false,
             #[cfg(test)]
             fake_db: None,
             next_id: 1,
@@ -1807,7 +1824,7 @@ impl App {
             return;
         }
         if let Some(((r0, c0), (r1, c1))) = c.editor.selection_range() {
-            let stmts = qurry_core::exec::plan_selection(&selected_text(c.editor.lines(), r0, c0, r1, c1), kind, self.exec);
+            let stmts = sqls(qurry_core::exec::plan_selection(&selected_text(c.editor.lines(), r0, c0, r1, c1), kind, self.exec));
             if !stmts.is_empty() {
                 self.run_stmts(stmts, explain, confirmed);
             }
@@ -1931,16 +1948,16 @@ impl App {
             }
         }
         // EXPLAIN ANALYZE actually runs the statement. PostgreSQL·MySQL run changing statements inside a transaction and roll back (below).
-        // Drivers may not support transactions, so ask
+        // Drivers may not support transactions, and a rollback doesn't undo everything (sequences, other servers, files), so ask
         let wraps = matches!(kind, DbKind::Postgres | DbKind::Mysql);
         if analyze
-            && !wraps
             && !confirmed
-            && let Some(s) = stmts.iter().find(|s| !qurry_core::guard::is_read(s, kind))
+            && let Some(s) = stmts.iter().find(|s| !qurry_core::guard::is_read(s, kind) && (!wraps || !qurry_core::guard::rollback_undoes(s, kind)))
         {
             let preview: String = s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect();
+            let why = if wraps { UNDONE_ASK } else { "it changes data" };
             self.popup = Some(Popup::Confirm {
-                text: format!("Explain Analyze really runs the statement (it changes data):\n  {preview}\nRun it anyway?"),
+                text: format!("Explain Analyze really runs the statement ({why}):\n  {preview}\nRun it anyway?"),
                 on_yes: Box::new(move |a| {
                     a.analyze_next = true;
                     a.run_stmts(stmts, explain, true);
@@ -2042,8 +2059,10 @@ impl App {
                             };
                             c.in_tx = res.in_transaction;
                             let warning = res.warning.clone();
-                            if dry {
+                            if dry && qurry_core::guard::rollback_undoes(&s, kind) {
                                 c.log(false, "Explain Analyze ran the statement in a transaction and rolled it back — nothing was changed".into());
+                            } else if dry {
+                                c.log(true, format!("Explain Analyze ran the statement in a transaction and rolled it back, but {UNDONE_LOG}"));
                             } else if !res.in_transaction && !qurry_core::guard::is_read(&s, kind) {
                                 committed += 1;
                             }
@@ -2663,6 +2682,7 @@ impl App {
                     p.sel = p.items.iter().position(|i| i.hint == item.hint && i.label.chars().skip(2).eq(item.label.chars().skip(2))).unwrap_or(0);
                 }
             }
+            PAction::Channel(c) => self.set_update_channel(c),
             PAction::Object { conn, db, e } => {
                 let kind = match e.kind.as_str() {
                     "function" | "procedure" => "routine".to_string(),
@@ -2984,6 +3004,7 @@ impl App {
                 _ => self.status = "Select a PostgreSQL / MySQL data source in the explorer".into(),
             },
             Action::CheckUpdate => self.check_update(),
+            Action::UpdateChannel => self.palette_update_channel(),
             Action::PasswordKey => self.password_key(),
             Action::InstallUpdate => {
                 let n = self.pending_tabs(None).len();
@@ -3189,7 +3210,6 @@ impl App {
         }
     }
 
-    /// Check for a new version right now (⌃K › Check for Updates)
     /// Master key for the password file: config folder ↔ OS keychain (asks, then moves. Runs separately since a keychain popup may appear)
     fn password_key(&mut self) {
         use qurry_core::secrets::KeyLocation;
@@ -3215,18 +3235,52 @@ impl App {
         });
     }
 
+    /// Check for a new version right now (⌃K › Check for Updates)
     fn check_update(&mut self) {
         self.status = "Checking for updates…".into();
         let dir = self.state.store.dir();
+        let channel = self.state.store.update_channel();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let r = qurry_core::update::check(&dir, env!("CARGO_PKG_VERSION"), true).await;
+            let r = qurry_core::update::check(&dir, env!("CARGO_PKG_VERSION"), channel, true).await;
             let _ = tx.send(Box::new(move |a: &mut App| match r {
                 Ok(Some(r)) => a.show_update(r),
-                Ok(None) => a.status = format!("You have the latest version ({}).", env!("CARGO_PKG_VERSION")),
+                Ok(None) => a.status = format!("You have the latest {} version ({}).", channel_name(channel).to_lowercase(), env!("CARGO_PKG_VERSION")),
                 Err(e) => a.status = e.to_string(),
             }));
         });
+    }
+
+    /// ⌃K › Update Channel…: stable (version tags only) or beta (also every merge to main). Shared with the GUI
+    pub fn palette_update_channel(&mut self) {
+        use qurry_core::update::Channel;
+        let on = self.state.store.update_channel();
+        let channels = [(Channel::Stable, "releases only (default)"), (Channel::Beta, "also the pre-release built from every merge to main")];
+        // Opens on the saved channel, so Enter keeps it
+        let sel = channels.iter().position(|(c, _)| *c == on).unwrap_or(0);
+        let items = channels
+            .into_iter()
+            .map(|(c, hint)| PItem { label: format!("{} {}", if c == on { "●" } else { " " }, channel_name(c)), hint: hint.into(), action: PAction::Channel(c) })
+            .collect();
+        self.popup = Some(Popup::Palette(Palette { title: "Update Channel".into(), input: TextArea::default(), items, sel, loading: 0, cache: Default::default() }));
+    }
+
+    fn set_update_channel(&mut self, channel: qurry_core::update::Channel) {
+        self.status = match self.state.store.set_update_channel(channel) {
+            Ok(()) => {
+                // The ⬆ badge follows the new channel, from the saved check (both channels, no request) as in the GUI
+                let cur = env!("CARGO_PKG_VERSION");
+                let saved = if qurry_core::update::disabled() { None } else { qurry_core::update::cached(&self.state.store.dir(), cur, channel) };
+                self.update = saved.clone().flatten().map(|r| r.version);
+                let name = channel_name(channel);
+                match saved {
+                    Some(Some(r)) => format!("Update channel: {name} — Qurry {} is available — {} › Update Qurry & Restart", r.version, self.keys.label(Action::Palette)),
+                    Some(None) => format!("Update channel: {name} — you have the latest {} version ({cur})", name.to_lowercase()),
+                    None => format!("Update channel: {name} — {} › Check for Updates looks now", self.keys.label(Action::Palette)),
+                }
+            }
+            Err(e) => format!("Couldn't save the update channel: {e}"),
+        };
     }
 
     /// New version window: changes since the current version (per version) + how to update
@@ -3244,9 +3298,10 @@ impl App {
     /// Download the latest release, swap it in, and relaunch when done (open tabs are saved on quit)
     fn install_update(&mut self) {
         self.status = "Updating Qurry… (downloading)".into();
+        let channel = self.state.store.update_channel();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let r = crate::selfupdate::install(true).await;
+            let r = crate::selfupdate::install(channel, true).await;
             let _ = tx.send(Box::new(move |a: &mut App| match r {
                 Ok(crate::selfupdate::Outcome::Installed { version, .. }) => {
                     a.status = format!("Qurry {version} installed — restarting…");
@@ -3397,6 +3452,10 @@ pub fn byte_offset(lines: &[String], row: usize, col: usize) -> usize {
     let line = lines.get(row).map(|s| s.as_str()).unwrap_or("");
     off + line.char_indices().nth(col).map(|(i, _)| i).unwrap_or(line.len())
 }
+
+/// Explain Analyze of a write a rollback can't undo (qurry_core::guard::rollback_undoes): the question before, the note after
+const UNDONE_ASK: &str = "a rollback can't undo what it does outside the transaction: sequence values, other servers, files, locks, or a COMMIT · MySQL DDL among several statements";
+const UNDONE_LOG: &str = "what it did outside the transaction stays (sequence values, other servers, files, locks, or a COMMIT · MySQL DDL among several statements)";
 
 /// The statements' text (the TUI doesn't highlight what runs, so the ranges aren't needed)
 fn sqls(v: Vec<qurry_core::exec::Stmt>) -> Vec<String> {

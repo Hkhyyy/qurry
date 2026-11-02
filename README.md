@@ -25,7 +25,7 @@ All three share the same data sources and passwords, so a connection created in 
 brew install hkhyyy/qurry/qurry      # TUI + MCP (macOS, Linux)
 ```
 
-The desktop app (macOS `.dmg`, Linux `.AppImage` / `.deb`) and the TUI archives are on the [Releases](https://github.com/Hkhyyy/qurry/releases) page. Both apps tell you when a new version is out and update themselves. Details, including the first-launch warning on macOS: [Getting started](docs/getting-started.md).
+The desktop app (macOS 13+ `.dmg`, Linux `.AppImage` / `.deb`) and the TUI archives are on the [Releases](https://github.com/Hkhyyy/qurry/releases) page. Both apps tell you when a new version is out and update themselves. Details, including the first-launch warning on macOS: [Getting started](docs/getting-started.md).
 
 ## User guide
 
@@ -36,10 +36,14 @@ Also in Korean: [한국어 사용설명서](docs/ko/README.md)
 - [Workspaces](docs/workspaces.md)
 - [Database tools](docs/database-tools.md) — admin reports, diagrams, compare & migrate, backup, history, explain
 - [Vector databases and AI search (RAG)](docs/vector-and-rag.md)
-- [MCP server](docs/mcp.md) — for Claude Code and other AI tools
+- [MCP server](docs/mcp.md) — for Claude Code and other AI tools ([threat model](docs/mcp-security.md))
 - [Safety](docs/safety.md)
 - Keyboard shortcuts: [GUI](docs/shortcuts-gui.md) · [TUI](docs/shortcuts-tui.md)
 - [Development](docs/development.md) — build from source, tests
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 ## License
 

@@ -30,10 +30,10 @@ import { DEFAULT_FONT, editorFontSize, setEditorFontSize } from "./lib/prefs";
 import { bindings, eventSpec, formatSpec, hit, loadKeymap, onKeymapChange } from "./lib/shortcuts";
 import { invalidateCompletion } from "./lib/completion";
 import { useStatusWidgets } from "./lib/statusbar";
-import { useSharedReady } from "./lib/shared";
+import { sharedReady, useSharedReady } from "./lib/shared";
 import { tableTabLabels } from "./lib/tabLabels";
-import { isDdl, isRead } from "./lib/stmtKind";
-import type { BackupOptions, FtsRequest } from "./lib/api";
+import { isDdl, isRead, rollbackUndoes } from "./lib/stmtKind";
+import type { BackupOptions, FtsRequest, UpdateChannel } from "./lib/api";
 import { isRelation, NodeInfo, revealInTree, schemaChanged } from "./components/SchemaTree";
 import { leaf, leaves, MAX_PANES, Pane, prunePanes, splitPane } from "./lib/panes";
 import { connBg, connStripe, getThemePref, setThemePref, THEME_LABEL, ThemePref, useTheme } from "./lib/theme";
@@ -120,6 +120,9 @@ const isMac = navigator.platform.toLowerCase().includes("mac");
 /** Max rows kept in the result grid (same as the TUI). Beyond that, export to CSV */
 const MAX_ROWS = 100_000;
 const capMsg = (n: number) => `Showing the first ${n.toLocaleString()} rows — export to CSV for all of them`;
+/** Explain Analyse of a write a rollback can't undo (rollbackUndoes): the question before, the note after (same words as the TUI) */
+const UNDONE_ASK = "a rollback can't undo what it does outside the transaction: sequence values, other servers, files, locks, or a COMMIT · MySQL DDL among several statements";
+const UNDONE_LOG = "what it did outside the transaction stays (sequence values, other servers, files, locks, or a COMMIT · MySQL DDL among several statements)";
 /** Shortcut shown in menus and Find Action (the first key) */
 const sk = (id: string) => {
   const b = bindings(id);
@@ -1290,6 +1293,16 @@ export default function App() {
         if (why && !(await ask(`${why}. Run it anyway?`, { title: c ? `${c.name}: dangerous statement` : "Dangerous statement", detail: [{ text: s.slice(0, 300), tone: "danger" }], okLabel: "Run Anyway", danger: true }))) return;
       }
     }
+    // Explain Analyse rolls a write back on PostgreSQL · MySQL (below), but not what it does outside the transaction; other kinds aren't
+    // wrapped (drivers may not support transactions): ask first, as the TUI does. Without the module no statement can be checked
+    const wraps = kind === "postgres" || kind === "mysql";
+    const checked = sharedReady();
+    if (explain === "analyze") {
+      const kept = stmts.filter((s) => !isRead(kind, s) && (!wraps || !rollbackUndoes(kind, s)));
+      const why = !checked ? "it can't be checked without the statement splitter" : wraps ? UNDONE_ASK : "it changes data";
+      const detail = kept.map((s) => ({ text: s.replace(/\s+/g, " ").slice(0, 300), tone: "danger" as const }));
+      if (kept.length && !(await ask(`Explain Analyse really runs the statement, and ${why}. Run it anyway?`, { title: c ? `${c.name}: Explain Analyse` : "Explain Analyse", detail, okLabel: "Run Anyway", danger: true }))) return;
+    }
     // Production: for data-changing statements, count the rows that will change, show it and ask (counted with SELECT count(*))
     if (c?.options?.confirmChanges && !explain) {
       // Same check as the TUI (core guard): a write keyword only inside a string or a comment (MySQL # too) doesn't make a read a write
@@ -1330,7 +1343,7 @@ export default function App() {
       log(tabId, "sql", `${c?.name ?? ""}> ${sql0}`);
       // Explain Analyse actually runs the statement → run changing statements in a transaction and always roll back
       // (if already in a transaction, only that part via a savepoint)
-      const dry = explain === "analyze" && !isRead(kind, sql0);
+      const dry = explain === "analyze" && wraps && !isRead(kind, sql0);
       const inTx0 = !!tabsRef.current.find((t) => t.id === tabId)?.inTx;
       try {
         let r: QueryResult;
@@ -1342,7 +1355,9 @@ export default function App() {
             await api.runQuery(tab.target, inTx0 ? "ROLLBACK TO SAVEPOINT qurry_explain" : "ROLLBACK", tabId).catch((e) => log(tabId, "error", `Roll back after Explain Analyse failed: ${String(e)}`));
           }
           r = { ...r, inTransaction: inTx0 };
-          log(tabId, "info", "Explain Analyse ran the statement in a transaction and rolled it back — nothing was changed");
+          if (!checked) log(tabId, "info", "Explain Analyse ran the statement in a transaction and rolled it back; it couldn't be checked for effects a rollback doesn't undo");
+          else if (rollbackUndoes(kind, sql0)) log(tabId, "info", "Explain Analyse ran the statement in a transaction and rolled it back — nothing was changed");
+          else log(tabId, "warn", `Explain Analyse ran the statement in a transaction and rolled it back, but ${UNDONE_LOG}`);
         } else {
           r = await api.runQuery(tab.target, sql, tabId);
         }
@@ -1497,6 +1512,8 @@ export default function App() {
     }
   };
 
+  // Renders the status bar again when a ⌘↩ starts or stops waiting for the module (the wait lives in ConsolePane)
+  const [, setPendingRuns] = useState(0);
   /** ⌘F2: cancel the running statement, or the ⌘↩ still waiting for the WebAssembly module */
   const canCancel = (t?: Tab | null) => !!t && (t.running || !!editorApis.current.get(t.id)?.loading());
   const cancelRun = (t: Tab) => {
@@ -2294,6 +2311,7 @@ export default function App() {
                     onClearOutput={() => patch(t.id, { output: [] })}
                     errorAction={<TlsFix conn={c} msg={t.output[t.output.length - 1]?.level === "error" ? t.output[t.output.length - 1].text : null} then={() => (editorApis.current.get(t.id)?.focus(), reconnectAfterTls(t.connId, t.id))} />}
                     onError={(m) => (log(t.id, "error", m), patch(t.id, { activeResult: "output" }), setStatus("Not run: the statement splitter couldn't load (see Output)"))}
+                    onLoadingChange={() => setPendingRuns((n) => n + 1)}
                   />
                 </div>
               );
@@ -2594,6 +2612,7 @@ export default function App() {
             setSettingsOpen(false);
             setUpdateOpen(true);
           }}
+          onChannel={setUpdate}
         />
       )}
       {backupReq && <BackupDialog what={backupReq.db ?? backupReq.c.name} pg={backupReq.c.kind === "postgres"} onRun={startBackup} onClose={() => setBackupReq(null)} />}
@@ -2694,7 +2713,7 @@ export default function App() {
         />
       )}
       <StatusBar
-        run={{ canRun: !!active && active.kind === "console" && !active.running, running: !!active?.running, onRun: () => active && editorApis.current.get(active.id)?.run(), onCancel: () => active && cancel(active) }}
+        run={{ canRun: !!active && active.kind === "console" && !canCancel(active), running: canCancel(active), onRun: () => active && editorApis.current.get(active.id)?.run(), onCancel: () => active && cancelRun(active) }}
         onSettings={() => setSettingsOpen("appearance")}
         settingsKey={sk("settings")}
         onKeymap={() => setKeymapOpen(true)}
@@ -2797,10 +2816,27 @@ function PasswordSettings() {
   );
 }
 
-function SettingsDialog({ onClose, onUpdate, initialPage = "appearance" }: { onClose: () => void; onUpdate: (u: UpdateInfo) => void; initialPage?: "appearance" | "keymap" }) {
+/** onChannel: the update the new channel offers (null: none), so the status bar button follows the channel */
+export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "appearance" }: { onClose: () => void; onUpdate: (u: UpdateInfo) => void; onChannel: (u: UpdateInfo | null) => void; initialPage?: "appearance" | "keymap" }) {
   const [page, setPage] = useState<"appearance" | "keymap" | "passwords">(initialPage);
   const [checkOnStart, setCheckOnStart] = useState(updateCheckEnabled());
   const [updMsg, setUpdMsg] = useState<string | null>(null);
+  const [channel, setChannel] = useState<UpdateChannel | null>(null);
+  const [chMsg, setChMsg] = useState<string | null>(null);
+  useEffect(() => {
+    api.updateChannel().then(setChannel, (e) => setChMsg(String(e)));
+  }, []);
+  const pickChannel = async (c: UpdateChannel) => {
+    setChannel(c);
+    try {
+      // Answered from the saved check (both channels), never a new request
+      const u = await api.setUpdateChannel(c);
+      onChannel(u?.latest ? u : null);
+      setChMsg(!u ? "Saved. Check Now looks for updates on this channel." : u.latest ? `Qurry ${u.latest.version} is available on this channel.` : `You have the latest ${c} version (${u.current}).`);
+    } catch (e) {
+      setChMsg(String(e));
+    }
+  };
   const checkNow = async () => {
     setUpdMsg("Checking…");
     try {
@@ -2870,6 +2906,14 @@ function SettingsDialog({ onClose, onUpdate, initialPage = "appearance" }: { onC
                 <Button size="sm" onClick={checkNow}>
                   Check Now
                 </Button>
+              </div>
+            </Field>
+            <Field label="Channel" hint={chMsg ?? "Stable gets the releases made from a version tag. Beta also gets the pre-release built from every merge to main. The terminal UI uses the same channel."}>
+              <div className="ui-row">
+                <Select value={channel ?? ""} disabled={!channel} onChange={(e) => pickChannel(e.target.value as UpdateChannel)}>
+                  <option value="stable">Stable</option>
+                  <option value="beta">Beta</option>
+                </Select>
               </div>
             </Field>
           </div>

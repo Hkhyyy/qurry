@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DbKind } from "./api";
-import { splitScript, splitStatements } from "./sqlSplit";
+import { splitScript, splitStatements, statementAt } from "./sqlSplit";
 
 const parts = (sql: string, kind: DbKind = "postgres") => splitStatements(sql, kind).map((s) => sql.slice(s.start, s.end).trim());
 
@@ -15,6 +15,10 @@ describe("splitStatements", () => {
 
   it("MySQL follows backslash escapes", () => {
     expect(parts("select 'a\\';b'; select 2", "mysql")).toEqual(["select 'a\\';b'", "select 2"]);
+  });
+
+  it("MySQL --x is arithmetic, not a comment, so what follows it is its own statement (split like the server)", () => {
+    expect(parts("select 1--1; delete from orders where status = 'x'", "mysql")).toEqual(["select 1--1", "delete from orders where status = 'x'"]);
   });
 
   it("a \\ inside a MySQL backtick name is not an escape (split like the server)", () => {
@@ -32,6 +36,15 @@ describe("splitStatements", () => {
     expect(parts("select e'\\''; select 2")).toEqual(["select e'\\''", "select 2"]);
     // name'…' is not an E-string: \ is a plain char there
     expect(parts("select 1 as name'\\'; select 2")).toHaveLength(2);
+  });
+});
+
+describe("statementAt", () => {
+  it("the statement under the cursor, or the one just before when between statements", () => {
+    const sql = "select 1;\n\nselect 2;";
+    expect(statementAt(sql, 3)).toBe("select 1");
+    expect(statementAt(sql, sql.indexOf("2"))).toBe("select 2");
+    expect(statementAt("", 0)).toBeNull();
   });
 });
 
