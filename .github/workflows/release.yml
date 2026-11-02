@@ -354,6 +354,9 @@ jobs:
             mv notes.tmp release-notes.md
           else
             flags=(--latest)
+            # Apps from before 0.3.0 show only the "What's Changed" items in their update window: the macOS 13 warning must be one
+            { printf "## What's Changed\n* [breaking] The GUI needs macOS 13 Ventura or later. On macOS 12 or older, don't update: keep Qurry 0.2.x\n\n"; cat release-notes.md; } > notes.tmp
+            mv notes.tmp release-notes.md
           fi
           # Generated notes from the release before (for stable: the stable release before, so they cover all its betas)
           if [ -n "$PREV" ]; then flags+=(--notes-start-tag "$PREV"); fi
@@ -363,6 +366,13 @@ jobs:
             --notes-file release-notes.md \
             --generate-notes \
             "${flags[@]}"
+          if [ "$CHANNEL" = beta ]; then
+            # Apps from before 0.3.0 read only the newest 30 releases and skip pre-releases, so the newest stable release must stay
+            # among them: keep the newest 20 betas and none older than the newest stable release. Tags stay (beta.N counts them)
+            gh release list --limit 1000 --exclude-drafts --json tagName,isPrerelease --jq '.[] | "\(.isPrerelease) \(.tagName)"' |
+              awk '$1 == "false" { stable = 1; next } { n++; if (stable || n > 20) print $2 }' |
+              while read -r tag; do gh release delete "$tag" --yes; done
+          fi
 
       - name: Update Homebrew tap
         # brew install hkhyyy/qurry/qurry — Formula/qurry.rb with this release's version · checksums. Stable releases only

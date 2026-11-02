@@ -11,7 +11,7 @@ How Qurry finds and installs new versions, the stable and beta channels, and how
 | **Stable** (default) | Releases made from a version tag (`vX.Y.Z`). The maintainers tag one when a set of changes is ready. |
 | **Beta** | Also the pre-release built from every merge to `main` (`vX.Y.Z-beta.N`, up to a few a day). Beta offers whichever is newer, so once `X.Y.Z` is released you get that too. |
 
-Pick the channel in the GUI under **Settings › Appearance › Updates › Update channel**, or in the TUI with **⌃k › Update Channel…**. The GUI and the TUI share the setting (`settings.json` in the [config folder](getting-started.md#where-qurry-keeps-your-settings)), and so does `qurry-tui --update`.
+Pick the channel in the GUI under **Settings › Appearance › Updates › Channel**, or in the TUI with **⌃k › Update Channel…**. The GUI and the TUI share the setting (`settings.json` in the [config folder](getting-started.md#where-qurry-keeps-your-settings)), and so does `qurry-tui --update`.
 
 Going back from beta to stable doesn't install an older version: you keep the beta you have until a stable release is newer than it. To get off a beta right away, install the latest stable release from [Releases](https://github.com/Hkhyyy/qurry/releases) by hand.
 
@@ -23,7 +23,7 @@ Both apps check GitHub for a newer release of their channel when they start and 
 - **TUI** — the status line shows `⬆ vX.Y.Z available`. Run **⌃k › Update Qurry & Restart** to download the release, verify it against the signed `SHA256SUMS`, replace `qurry-tui` and `qurry-mcp` in place and restart with your tabs. **⌃k › Check for Updates** checks now and lists what changed in each version since yours. From a shell, `qurry-tui --update` does the same. A TUI built from source (`target/release`) is not checked or replaced; update it with `git pull` and `cargo build`. A Homebrew install is updated with `brew upgrade qurry`; Homebrew only gets stable releases.
 - Turn the check off with `qurry-tui --no-update-check` or `QURRY_NO_UPDATE_CHECK=1`.
 
-Apps from before 0.3.0 don't know the channels and only see stable releases.
+Apps from before 0.3.0 don't know the channels and only see stable releases. They look for one among the 30 newest releases, so the release workflow keeps only the 20 newest betas (and none older than the newest stable release); the pages of older betas are deleted.
 
 ## macOS 12 and older
 

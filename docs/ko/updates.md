@@ -11,7 +11,7 @@ Qurry 가 새 버전을 찾고 설치하는 방법, stable · beta 채널, 릴�
 | **Stable** (기본) | 버전 태그 (`vX.Y.Z`) 로 만든 릴리스. 변경이 모이면 메인테이너가 태그를 붙입니다. |
 | **Beta** | `main` 에 머지될 때마다 만드는 사전 릴리스 (`vX.Y.Z-beta.N`, 하루 몇 개까지) 도 받습니다. 둘 중 더 새 것을 주므로 `X.Y.Z` 가 나오면 그것도 받습니다. |
 
-채널은 GUI **Settings › Appearance › Updates › Update channel**, TUI **⌃k › Update Channel…** 에서 고릅니다. GUI 와 TUI 가 같은 설정을 씁니다 ([설정 폴더](getting-started.md#설정이-저장되는-곳) 의 `settings.json`). `qurry-tui --update` 도 마찬가지입니다.
+채널은 GUI **Settings › Appearance › Updates › Channel**, TUI **⌃k › Update Channel…** 에서 고릅니다. GUI 와 TUI 가 같은 설정을 씁니다 ([설정 폴더](getting-started.md#설정이-저장되는-곳) 의 `settings.json`). `qurry-tui --update` 도 마찬가지입니다.
 
 beta 에서 stable 로 돌아가도 이전 버전을 설치하지는 않습니다: 지금 beta 보다 새 stable 릴리스가 나올 때까지 그 beta 를 씁니다. 바로 beta 를 벗어나려면 [Releases](https://github.com/Hkhyyy/qurry/releases) 에서 최신 stable 릴리스를 직접 설치하세요.
 
@@ -23,7 +23,7 @@ beta 에서 stable 로 돌아가도 이전 버전을 설치하지는 않습니�
 - **TUI** — 상태 줄에 `⬆ vX.Y.Z available` 이 보입니다. **⌃k › Update Qurry & Restart** 는 릴리스를 받아 서명된 `SHA256SUMS` 로 확인하고 `qurry-tui` · `qurry-mcp` 를 그 자리에서 바꾼 뒤 탭 그대로 다시 시작합니다. **⌃k › Check for Updates** 는 바로 확인하고 바뀐 내용을 보여 줍니다. 셸에서는 `qurry-tui --update`. 소스에서 빌드한 TUI (`target/release`) 는 확인하거나 바꾸지 않으니 `git pull` 과 `cargo build` 로 올리세요. Homebrew 로 설치했다면 `brew upgrade qurry` 이고, Homebrew 에는 stable 릴리스만 올라갑니다.
 - 확인을 끄려면 `qurry-tui --no-update-check` 또는 `QURRY_NO_UPDATE_CHECK=1`.
 
-0.3.0 이전 앱은 채널을 모르고 stable 릴리스만 봅니다.
+0.3.0 이전 앱은 채널을 모르고 stable 릴리스만 봅니다. 가장 새 릴리스 30 개 안에서 찾으므로, 릴리스 워크플로는 가장 새 beta 20 개만 남깁니다 (가장 새 stable 릴리스보다 오래된 beta 도 지웁니다). 그보다 오래된 beta 의 릴리스 페이지는 지워집니다.
 
 ## macOS 12 이하
 
