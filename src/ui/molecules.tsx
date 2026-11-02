@@ -3,7 +3,7 @@
  * Spec in README.md
  */
 import { HTMLAttributes, InputHTMLAttributes, MouseEvent, ReactNode, useEffect, useState } from "react";
-import { Avatar, Kbd, Radio, Swatch, Text, TextInput } from "./atoms";
+import { Avatar, Button, Kbd, Radio, Swatch, Text, TextInput } from "./atoms";
 import { cx } from "./cx";
 import { Chevron } from "./icons";
 
@@ -122,6 +122,46 @@ export const SectionTitle = ({ children, className }: { children: ReactNode; cla
 // ───────── Hints ─────────
 export function Notice({ tone, children, className }: { tone?: "warn" | "danger" | "ok"; children: ReactNode; className?: string }) {
   return <div className={cx("ui-notice", tone && `tone-${tone}`, className)}>{children}</div>;
+}
+/**
+ * Under a connect error that needs TLS (qurry_shared::errors::tls_opt_in): turn on "Allow unencrypted connection" for this data source in one click.
+ * Never offered for Production (the core refuses too): it says where the setting is instead. A failed `onAllow` shows its error here
+ */
+export function TlsOptIn({ host, production, onAllow }: { host: string; production?: boolean; onAllow: () => Promise<unknown> }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  if (production)
+    return (
+      <div className="ui-tls-optin">
+        <span className="ui-tls-optin-detail">
+          Production data source: Qurry won't turn off encryption from here. If the server has no TLS and the network is trusted, turn on Data Source Properties (⌘;) ▸ Options ▸ Allow unencrypted connection.
+        </span>
+      </div>
+    );
+  return (
+    <div className="ui-tls-optin">
+      <Button
+        size="sm"
+        disabled={busy}
+        title="To undo, turn off Data Source Properties (⌘;) ▸ Options ▸ Allow unencrypted connection"
+        onClick={async () => {
+          setBusy(true);
+          setErr(null);
+          try {
+            await onAllow();
+          } catch (e) {
+            setErr(String(e));
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? "Allowing…" : "Allow unencrypted for this data source"}
+      </Button>
+      <span className="ui-tls-optin-detail">The password will be sent unencrypted to {host}. Use only on a network you trust.</span>
+      {err && <Notice tone="danger">{err}</Notice>}
+    </div>
+  );
 }
 export function EmptyState({ title, children, action }: { title?: ReactNode; children?: ReactNode; action?: ReactNode }) {
   return (
