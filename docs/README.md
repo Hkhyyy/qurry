@@ -15,4 +15,5 @@ Everything Qurry does, chapter by chapter. Start with **Getting started** if you
 | [Safety](safety.md) | Read-only data sources, transactions, confirmations, the production log and undo SQL, and how releases are signed |
 | [GUI keyboard shortcuts](shortcuts-gui.md) | Every GUI shortcut (also in the app: `⇧⌘/`) |
 | [TUI keyboard shortcuts](shortcuts-tui.md) | Every TUI key (also in the app: `F1`) |
+| [TUI in your terminal](tui.md) | Colors (NO_COLOR, 256 and 16-color terminals), small windows, tmux and ⌥ keys |
 | [Development](development.md) | Building from source, code layout, tests |

@@ -1,0 +1,37 @@
+# 터미널에서 쓰는 TUI
+
+[English](../tui.md) | 한국어
+
+`qurry-tui` 는 돌고 있는 터미널에 맞춥니다: 색을 몇 개 쓸 수 있는지, 창이 얼마나 큰지, tmux 나 터미널이 가져가는 키가 무엇인지. Qurry 에서 따로 설정할 것은 없고, 모두 환경을 따릅니다.
+
+## 색
+
+TUI 는 시작할 때 아래 환경 변수로 색 모드를 하나 고릅니다 (먼저 맞는 줄이 이깁니다):
+
+| 환경 | 보이는 것 |
+|---|---|
+| `NO_COLOR` 가 무엇으로든 설정됨 ([no-color.org](https://no-color.org) 참고) | 색이 전혀 없음. 선택한 줄, 배지 (`PROD`, `READ-ONLY`), 셀 커서는 반전으로, 흐린 글자는 dim 으로, 포커스가 있는 패널은 굵은 테두리로 보입니다 |
+| `COLORTERM=truecolor` 또는 `24bit`, 또는 `-direct` 로 끝나는 `TERM` | 24비트 테마 그대로 (GUI 와 같은 색) |
+| `256color` 가 들어간 `TERM` (예: `xterm-256color`, `tmux-256color`) | 각 색을 xterm 256색 팔레트에서 가장 가까운 색으로. 색조는 유지됩니다: 운영 Data Source 는 계속 빨간색 |
+| 그 밖 (예: `TERM=xterm`, `screen`) | 터미널 기본 16색. 선택한 줄은 반전으로, 색이 칠해진 줄의 글자는 어둡게 — 어떤 터미널 테마에서도 읽힙니다 |
+
+색이 꺼졌거나 16색뿐이면 시작할 때 상태 줄에 무엇을 바꾸면 되는지 나옵니다:
+
+- `NO_COLOR is set: colors off (unset NO_COLOR for colors)` — `unset NO_COLOR` 를 실행하고 (또는 셸 프로필에서 지우고) `qurry-tui` 를 다시 시작하세요.
+- `16 colors: set COLORTERM=truecolor for more if supported` — 터미널이 24비트 색을 보여 준다면 시작 전에 `export COLORTERM=truecolor`. 요즘 터미널 (iTerm2, kitty, WezTerm, Ghostty, Alacritty, Windows Terminal) 은 스스로 설정하지만, `ssh`, `sudo`, `tmux` / `screen` 안에서는 자주 빠집니다.
+
+`qurry-tui --help` 에도 같은 규칙이 나옵니다.
+
+## 작은 창
+
+화면은 **40 × 10** 칸까지 그려집니다. 80 × 24 이상이면 넉넉하고, 작은 창에서는 `⌥0` 으로 탐색기를 숨기거나 `⌥[` 로 좁히세요.
+40 × 10 보다 작으면 깨진 화면 대신 `Terminal too small` 과 지금 크기, 필요한 크기가 나옵니다. 잃는 것은 없습니다: 창을 키우면 모두 그대로 돌아옵니다. `⌃q` 로 끝내기도 됩니다.
+
+## tmux 와 다른 멀티플렉서
+
+- **`⌃b` (Go to DDL) 는 tmux 의 기본 prefix 입니다.** Qurry 는 DataGrip 처럼 이 키를 그대로 둡니다. tmux 에서는 `⌃b` 를 두 번 누르세요: tmux 가 `⌃b` 하나를 Qurry 에 넘깁니다. 또는 `⌃k` › **Go to DDL**, 또는 F1 창에서 다른 키를 주세요 (**Go to DDL** 을 고르고 Enter, 그다음 새 키).
+- **`⌥` 키** (`⌥1…9` 워크스페이스, `⌥0` 탐색기, `⌥Enter` 실행, 분할 키) 는 터미널이 Option 을 Meta 로 보내야 합니다: macOS 터미널은 *설정 › 프로파일 › 키보드 › Option 키를 Meta 키로 사용* 을 켜고, iTerm2 는 *Profiles › Keys › Left Option key* 를 *Esc+* 로. tmux 에서는 `~/.tmux.conf` 에 `set -s escape-time 10` 을 넣으면 `Esc` 와 `⌥` 키가 늦거나 두 키로 읽히지 않습니다.
+- **`⌃Enter`** 는 kitty 키보드 프로토콜이 필요한데 tmux 와 screen 은 넘겨 주지 않습니다: 그곳에서는 `F5` 나 `⌥Enter` 를 쓰세요.
+- **tmux 안에서 24비트 색**: tmux 가 바깥 터미널이 지원한다는 것을 알아야 하고 (tmux 3.2 이상: `set -as terminal-features ",xterm-256color:RGB"`), `COLORTERM=truecolor` 가 tmux 안의 셸까지 와야 합니다. 아니면 Qurry 는 256색 팔레트를 쓰는데, 거의 같아 보입니다.
+
+모든 키는 [TUI 단축키](shortcuts-tui.md) 에 있습니다.
