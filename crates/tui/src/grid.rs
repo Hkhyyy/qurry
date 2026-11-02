@@ -348,6 +348,8 @@ impl Grid {
         let block = Block::default()
             .borders(Borders::ALL)
             .title(title)
+            // Thick when focused, like kit::panel: focus shows without colors too (NO_COLOR)
+            .border_type(if focused { ratatui::widgets::BorderType::Thick } else { ratatui::widgets::BorderType::Plain })
             .border_style(if focused { Style::default().fg(Color::Cyan) } else { Style::default().fg(Color::DarkGray) });
         let inner = block.inner(area);
         f.render_widget(block, area);
@@ -501,7 +503,7 @@ impl Grid {
                 buf[(x, y)].set_symbol("│").set_style(line);
             }
         }
-        // Horizontal scrollbar: visible range in bold on the bottom border (click or drag to move)
+        // Horizontal scrollbar: visible range in bold on the bottom border (click or drag to move); a block on the focused, already thick border
         self.hbar = Rect::default();
         if self.col_off > 0 || self.col_off + full < self.cols() {
             let track = Rect { x: inner.x, y: area.bottom().saturating_sub(1), width: inner.width, height: 1 };
@@ -511,7 +513,7 @@ impl Grid {
             let len = ((full.max(1) as u32 * tw).div_ceil(n) as u16).clamp(2, track.width - start);
             let thumb = Style::default().fg(if focused { Color::Cyan } else { Color::Gray });
             for x in track.x + start..track.x + start + len {
-                buf[(x, track.y)].set_symbol("━").set_style(thumb);
+                buf[(x, track.y)].set_symbol(if focused { "█" } else { "━" }).set_style(thumb);
             }
             self.hbar = track;
         }
@@ -596,5 +598,26 @@ mod tests {
         g.move_by(1, 0);
         assert_eq!(g.sel_rect(), None);
         assert_eq!(g.in_list(DbKind::Postgres), ("(1, 2, 3)".to_string(), 3));
+    }
+
+    /// Focus shows in the border's shape, not only its color (NO_COLOR has none); the scrollbar thumb stays visible on the thick border
+    #[test]
+    fn focused_grid_has_a_thick_border_and_a_block_thumb() {
+        let col = |n: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: String::new() };
+        let cols: Vec<_> = (0..12).map(|i| col(&format!("column_{i}"))).collect();
+        let rows = vec![(0..12).map(|i| json!(i)).collect()];
+        let mut g = Grid::new(QueryResult { columns: cols, rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None });
+        let draw = |g: &mut Grid, focused: bool| {
+            let mut term = Terminal::new(ratatui::backend::TestBackend::new(40, 6)).unwrap();
+            term.draw(|f| g.render(f, f.area(), "t".into(), focused)).unwrap();
+            let buf = term.backend().buffer().clone();
+            (buf[(0, 0)].symbol().to_string(), (0..40).map(|x| buf[(x, 5)].symbol()).collect::<String>())
+        };
+        let (corner, bottom) = draw(&mut g, true);
+        assert_eq!(corner, "┏");
+        assert!(bottom.contains('█') && bottom.contains('━'), "{bottom}");
+        let (corner, bottom) = draw(&mut g, false);
+        assert_eq!(corner, "┌");
+        assert!(bottom.contains('━') && bottom.contains('─'), "{bottom}");
     }
 }

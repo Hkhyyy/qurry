@@ -68,7 +68,39 @@ pub fn format_reply(v: &Value) -> String {
     go(v, 0)
 }
 
+/// Smallest screen the layout is drawn for (explorer · tabs · status line still readable); below it, a message instead
+pub const MIN_SIZE: (u16, u16) = (40, 10);
+
 pub fn draw(f: &mut Frame, app: &mut App) {
+    let area = f.area();
+    if area.width < MIN_SIZE.0 || area.height < MIN_SIZE.1 {
+        // Nothing to click while the screen isn't drawn
+        app.hits = Default::default();
+        draw_too_small(f, app);
+    } else {
+        draw_screen(f, app);
+    }
+    sanitize(f.buffer_mut());
+    app.color.apply(f.buffer_mut());
+}
+
+/// Says the size and the size needed, centered and wrapped so it fits even a few cells
+fn draw_too_small(f: &mut Frame, app: &App) {
+    let a = f.area();
+    if a.is_empty() {
+        return;
+    }
+    let lines = vec![
+        Line::styled("Terminal too small", Style::default().fg(WARN).add_modifier(Modifier::BOLD)),
+        Line::raw(format!("{}×{} — needs {}×{}", a.width, a.height, MIN_SIZE.0, MIN_SIZE.1)),
+        Line::from(muted(format!("Make the window larger · {} quits", app.keys.label(crate::app::Action::Quit)))),
+    ];
+    let p = Paragraph::new(lines).alignment(Alignment::Center).wrap(Wrap { trim: true });
+    let h = (p.line_count(a.width) as u16).min(a.height);
+    f.render_widget(p, Rect { y: a.y + (a.height - h) / 2, height: h, ..a });
+}
+
+fn draw_screen(f: &mut Frame, app: &mut App) {
     let [main, status] = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(f.area());
     // With two or more workspaces, one line at the top: 1 Default │ 2 Reports (Alt+n · click)
     app.hits.workspaces.clear();
@@ -101,7 +133,6 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.popup.is_some() {
         draw_popup(f, app);
     }
-    sanitize(f.buffer_mut());
 }
 
 /// Whether a char can control the terminal: C0 · DEL · C1 (ESC sequences, OSC 52 clipboard, screen clear …) and text-direction overrides
@@ -986,6 +1017,26 @@ mod tests {
         assert_eq!(ssl_mode_note("require"), "encrypt, no certificate check");
         assert_eq!(ssl_mode_note("verify-ca"), "checks the certificate's CA");
         assert_eq!(ssl_mode_note("verify-full"), "checks the CA and host name");
+    }
+
+    /// Below the minimum size: a message with the size needed instead of a broken layout (narrower than 24 cells used to panic)
+    #[tokio::test]
+    async fn too_small_terminal_says_so_instead_of_drawing_the_layout() {
+        let mut h = crate::testkit::Harness::new().await;
+        h.table_tab("payment", &["id", "amount"], &[&["1", "2"]], &["id"]);
+        h.app.conn_form(None);
+        let s = h.screen(39, 10);
+        assert!(s.contains("Terminal too small") && s.contains("39×10 — needs 40×10"), "{s}");
+        assert!(s.contains("Make the window larger · ⌃q quits"), "{s}");
+        assert!(!s.contains("New Data Source"), "{s}");
+        assert!(h.screen(80, 9).contains("80×9 — needs 40×10"));
+        // At the minimum the layout is back
+        assert!(!h.screen(40, 10).contains("too small"));
+        // Tiny screens don't panic; the message wraps
+        for (w, ht) in [(1, 1), (10, 3), (23, 24), (24, 5)] {
+            h.screen(w, ht);
+        }
+        assert!(h.screen(20, 6).contains("Terminal too"));
     }
 
     #[test]

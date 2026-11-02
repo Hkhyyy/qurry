@@ -24,6 +24,7 @@ mod tests;
 mod scope;
 mod selfupdate;
 mod snippets;
+mod theme;
 mod transfer;
 mod tree;
 mod ui;
@@ -40,7 +41,7 @@ async fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!(
-            "qurry-tui {} [--config-dir DIR] [--no-update-check]\n       qurry-tui --update     download and install the latest release\n\nTerminal UI for Qurry (PostgreSQL / MySQL / Redis). Shares data sources with the Qurry app.\nA new version is checked every hour (off: --no-update-check or QURRY_NO_UPDATE_CHECK=1).\nPress F1 inside for this keymap.\n{}",
+            "qurry-tui {} [--config-dir DIR] [--no-update-check]\n       qurry-tui --update     download and install the latest release\n\nTerminal UI for Qurry (PostgreSQL / MySQL / Redis). Shares data sources with the Qurry app.\nA new version is checked every hour (off: --no-update-check or QURRY_NO_UPDATE_CHECK=1).\nColors follow the terminal: COLORTERM=truecolor for 24-bit, TERM=…-256color for 256, otherwise 16; NO_COLOR=1 turns them off.\nPress F1 inside for this keymap.\n{}",
             env!("CARGO_PKG_VERSION"),
             help::text()
         );
@@ -97,6 +98,10 @@ async fn run(term: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: Arc<
     // Return value = whether to relaunch (in-app update finished)
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<app::Apply>();
     let mut app = app::App::new(state.clone(), tx.clone());
+    app.color = theme::ColorMode::from_env();
+    if let Some(n) = app.color.notice() {
+        app.status = n.into();
+    }
     // Check for a new version (at launch + hourly, in the background). Failures are silently ignored
     if let Some(dir) = update_dir {
         let tx = tx.clone();
