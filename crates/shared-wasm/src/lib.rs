@@ -218,7 +218,8 @@ impl CompletionIndex {
         Ok(CompletionIndex { meta: complete::Meta::new(tables), lead: RefCell::new(None), rest: RefCell::new(None) })
     }
 
-    /// Candidates at the caret (a UTF-16 offset into `text`), replacing the word before it. `db` is the tab's DB ("" for none).
+    /// Candidates at the caret (a UTF-16 offset into `text`, the console), replacing the word before it; tables and aliases are the
+    /// caret's statement's. `db` is the tab's DB ("" for none).
     /// {startColumn, endColumn, lead, rest}: the candidates are lead then rest (either may be the same array as last time; don't change them)
     pub fn suggest(&self, text: &str, caret: usize, db: &str, mysql: bool) -> Result<JsValue, JsError> {
         let (s, rest) = suggestions(&self.meta, text, caret, db, mysql);
@@ -234,7 +235,7 @@ impl CompletionIndex {
     #[wasm_bindgen(js_name = hintAt)]
     pub fn hint_at(&self, text: &str, caret: usize, db: &str, mysql: bool) -> Result<JsValue, JsError> {
         let at = Caret::new(text, caret);
-        Ok(serde_wasm_bindgen::to_value(&complete::hint_at(&self.meta, text, at.before, db, mysql))?)
+        Ok(serde_wasm_bindgen::to_value(&complete::hint_at(&self.meta, &at.statement(text, mysql), at.before, db, mysql))?)
     }
 
     /// What meta.hints returned for `hint` → candidates. as_pairs = keys were asked, none came, so these are @> conditions
@@ -275,7 +276,7 @@ pub fn pairs_insert(value: &str, op: &str) -> String {
 /// The range and the leading candidates (the statement's columns), and what the rest comes from
 fn suggestions(m: &complete::Meta, text: &str, caret: usize, db: &str, mysql: bool) -> (Suggestions, Option<complete::Rest>) {
     let at = Caret::new(text, caret);
-    let (n, items, rest) = complete::suggest_lead(m, text, at.before, db, mysql, Options::GUI);
+    let (n, items, rest) = complete::suggest_lead(m, &at.statement(text, mysql), at.before, db, mysql, Options::GUI);
     let end = at.column();
     (Suggestions { start_column: end - utf16_tail(at.before, n), end_column: end, items }, rest)
 }
@@ -292,13 +293,20 @@ fn hint_suggestions(text: &str, caret: usize, h: &complete::HintAt, hints: &[com
 struct Caret<'a> {
     before: &'a str,
     after: Option<char>,
+    /// Byte offset in the text
+    at: usize,
 }
 
 impl<'a> Caret<'a> {
     fn new(text: &'a str, utf16: usize) -> Self {
         let b = byte_offset(text, utf16);
         let start = text[..b].rfind('\n').map_or(0, |i| i + 1);
-        Caret { before: &text[start..b], after: text[b..].chars().next() }
+        Caret { before: &text[start..b], after: text[b..].chars().next(), at: b }
+    }
+
+    /// The statement the caret is in (as the TUI passes it): an alias of another statement in the console doesn't resolve here
+    fn statement(&self, text: &str, mysql: bool) -> String {
+        qurry_shared::sql::statement_at(text, self.at, if mysql { DbKind::Mysql } else { DbKind::Postgres }).unwrap_or_default()
     }
 
     /// Monaco column of the caret (1-based, UTF-16)

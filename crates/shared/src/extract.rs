@@ -145,7 +145,8 @@ pub fn numeric_type(t: &str) -> bool {
     TYPES.iter().any(|w| t.strip_prefix(w).is_some_and(|rest| !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')))
 }
 
-fn number_text(s: &str, strict: bool) -> bool {
+/// Number text as SQL reads it bare. strict: digits with an optional fraction and exponent only (no sign but -, no `.5`)
+pub(crate) fn number_text(s: &str, strict: bool) -> bool {
     let t = s.strip_prefix('-').unwrap_or(s);
     if !strict {
         // One sign only: --1 would start a line comment
