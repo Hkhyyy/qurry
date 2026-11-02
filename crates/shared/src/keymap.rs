@@ -3,9 +3,11 @@
 //! the TUI reads both from here; scripts/gen-keymap-docs.py reads the table for docs/shortcuts-*.md.
 //!
 //! Table rows: `gui` = GUI command id, `tui` = TUI Action name (its Debug name), each absent when the app has no such command.
-//! keymap.json stores user keys under those ids ("gui" / "tui" sections), so an id never changes. `title` is the command's name
-//! on screen, `scope` where a GUI key works, `guiKeys` the GUI defaults ("Mod+Shift+L"), `tuiKeys` the TUI defaults ("Ctrl+L").
-//! Row order is the order each app lists its commands in: the GUI keymap editor per scope, the TUI F1 window and --help.
+//! keymap.json stores user keys under those ids ("gui" / "tui" sections), so an id never changes. A command both apps have is one row.
+//! `title` is the command's name on screen (`tuiTitle` when the TUI names it differently), `scope` where a GUI key works,
+//! `guiKeys` the GUI defaults ("Mod+Shift+L"), `tuiKeys` the TUI defaults ("Ctrl+L").
+//! Row order is the order each app lists its commands in: the GUI keymap editor per scope, the TUI F1 window and --help
+//! (where the two apps order a shared command differently, its row follows one of them).
 //!
 //! Spec notation: modifiers then the key, joined by "+": "Mod+Alt+O", "Ctrl+Shift+K", "F5", "Alt+\\".
 //! Mod = ⌘ on macOS / Ctrl elsewhere (GUI only; the terminal has no ⌘). Modifier order: Mod, Ctrl, Alt, Shift.
@@ -28,6 +30,7 @@ pub struct Command {
     pub gui: Option<String>,
     pub tui: Option<String>,
     pub title: String,
+    pub tui_title: Option<String>,
     #[serde(default)]
     pub scope: Scope,
     #[serde(default)]
@@ -39,6 +42,13 @@ pub struct Command {
 static TABLE: LazyLock<Vec<Command>> = LazyLock::new(|| {
     serde_json::from_str(include_str!("keymap-table.json")).unwrap_or_else(|e| panic!("crates/shared/src/keymap-table.json is not a valid command table ({e}): fix that row, then run cargo test -p qurry-shared"))
 });
+
+impl Command {
+    /// Name on the TUI's screen
+    pub fn tui_title(&self) -> &str {
+        self.tui_title.as_deref().unwrap_or(&self.title)
+    }
+}
 
 /// Every command, in table order
 pub fn commands() -> &'static [Command] {
@@ -285,9 +295,43 @@ mod tests {
                     assert!(tui_keys.insert(k), "{id}: default {k} is taken");
                 }
             } else {
-                assert!(c.tui_keys.is_empty(), "{}: TUI keys without a tui id", c.title);
+                assert!(c.tui_keys.is_empty() && c.tui_title.is_none(), "{}: TUI keys or title without a tui id", c.title);
             }
         }
         assert_eq!(tui_command("NewConsole").and_then(|c| c.gui.as_deref()), Some("console.new"));
+    }
+
+    /// A command both apps have is one row, so either app's id finds the other's
+    #[test]
+    fn shared_commands_are_one_row() {
+        let pairs = [
+            ("goto.object", "GoToObject"),
+            ("find.action", "Palette"),
+            ("keymap", "Help"),
+            ("explorer", "ToggleExplorer"),
+            ("tree.ddl", "Ddl"),
+            ("tree.modify", "ModifyTable"),
+            ("tree.rename", "RenameObject"),
+            ("tree.properties", "EditDataSource"),
+            ("tree.newDs", "NewDataSource"),
+            ("tree.disconnect", "Disconnect"),
+            ("console.new", "NewConsole"),
+            ("refresh", "Refresh"),
+            ("tab.close", "CloseTab"),
+            ("tab.next", "NextTab"),
+            ("tab.prev", "PrevTab"),
+            ("split.other", "OtherSplit"),
+            ("editor.run", "Execute"),
+            ("editor.cancel", "Cancel"),
+            ("editor.history", "QueryHistory"),
+        ];
+        for (gui, tui) in pairs {
+            assert_eq!(tui_command(tui).and_then(|c| c.gui.as_deref()), Some(gui), "{tui} should share a row with {gui}");
+        }
+        let shared: Vec<_> = commands().iter().filter_map(|c| c.gui.as_deref().zip(c.tui.as_deref())).collect();
+        assert_eq!(shared.len(), pairs.len(), "a new shared row: add it to this list ({shared:?})");
+        let modify = tui_command("ModifyTable").unwrap();
+        assert_eq!((modify.title.as_str(), modify.tui_title()), ("Modify Table", "Modify Table… (change columns, keys, indexes, foreign keys → ALTER)"));
+        assert_eq!(tui_command("Ddl").unwrap().tui_title(), "Go to DDL");
     }
 }

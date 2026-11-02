@@ -240,6 +240,14 @@ mod tests {
     #[test]
     fn every_action_has_a_table_row() {
         let ids: Vec<String> = crate::app::ACTIONS.iter().map(|(a, _)| action_id(*a)).collect();
+        // ACTIONS lists every variant of the enum (read from app.rs: the enum has no variant list of its own)
+        let src = include_str!("app.rs");
+        let body = src.split("pub enum Action {").nth(1).and_then(|s| s.split("\n}").next()).expect("pub enum Action in app.rs");
+        let mut variants: Vec<&str> = body.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with("//")).map(|l| l.trim_end_matches(',')).collect();
+        let mut listed: Vec<&str> = ids.iter().map(String::as_str).collect();
+        variants.sort_unstable();
+        listed.sort_unstable();
+        assert_eq!(variants, listed, "every Action variant goes in app.rs ACTIONS exactly once");
         for id in &ids {
             assert!(table::tui_command(id).is_some(), "Action::{id} has no row in crates/shared/src/keymap-table.json: add one with \"tui\": \"{id}\"");
         }
