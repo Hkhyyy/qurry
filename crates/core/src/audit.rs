@@ -2017,6 +2017,24 @@ mod tests {
         run("m", "begin work;".into()).await.unwrap();
         assert_eq!(log(1), [IMPLICIT_COMMIT]);
         st.rollback_tx("m".into()).await.unwrap();
+        // ... also with a comment after it, wherever it is; a comment inside BEGIN NOT ATOMIC doesn't make it one
+        for b in ["begin -- next batch", "begin/* x */", "BEGIN; -- note", "begin # x"] {
+            run("m", format!("update {s}.t set v = 10 where id = 1")).await.unwrap();
+            run("m", b.into()).await.unwrap();
+            assert_eq!(log(1), [IMPLICIT_COMMIT], "{b}");
+            st.rollback_tx("m".into()).await.unwrap();
+        }
+        for b in ["begin/*x*/not atomic select 1; end", "begin # x\n not atomic select 1; end"] {
+            run("m", format!("update {s}.t set v = 11 where id = 1")).await.unwrap();
+            run("m", b.into()).await.unwrap();
+            assert_ne!(log(1), [IMPLICIT_COMMIT], "{b}");
+            st.rollback_tx("m".into()).await.unwrap();
+            assert_eq!(followup_values(&st, s).await, "[[10],[2],[3]]", "{b}");
+        }
+        // In Auto a plain BEGIN with a comment opens a transaction
+        run("a", "begin/* x */".into()).await.unwrap();
+        assert!(st.tx_state("a".into()).await);
+        st.rollback_tx("a".into()).await.unwrap();
         // One that commits inside: the console can't tell committed from rolled back
         run("m", format!("update {s}.t set v = 20 where id = 2")).await.unwrap();
         run("m", "begin not atomic commit; end".into()).await.unwrap();

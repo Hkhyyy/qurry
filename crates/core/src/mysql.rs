@@ -161,11 +161,32 @@ fn asks_server(sql: &str, s: &str) -> bool {
     !is_select_like(sql) && !is_dml(s)
 }
 
-/// A plain BEGIN (s = strip_comments_lead(sql)), whatever follows it (`work`, `;`, a trailing comment the splitter left in). Not a
-/// MariaDB compound statement, which at top level is only BEGIN NOT ATOMIC … END and doesn't commit the open transaction
+/// The word after a leading BEGIN keyword (s = strip_comments_lead(sql)), comments skipped (`--`, `/* */`, `#`): "" for none.
+/// None when `s` doesn't start with the word BEGIN
+fn after_begin(s: &str) -> Option<&str> {
+    let mut rest = s.strip_prefix("begin").filter(|r| !r.starts_with(|c: char| c.is_alphanumeric() || c == '_'))?.trim_start();
+    loop {
+        rest = if let Some(r) = rest.strip_prefix("--").or_else(|| rest.strip_prefix('#')) {
+            r.split_once('\n').map_or("", |x| x.1)
+        } else if let Some(r) = rest.strip_prefix("/*") {
+            r.split_once("*/").map_or("", |x| x.1)
+        } else {
+            return Some(rest.split(|c: char| !c.is_alphanumeric() && c != '_').next().unwrap_or(""));
+        }
+        .trim_start();
+    }
+}
+
+/// A MariaDB compound statement: at top level only BEGIN NOT ATOMIC … END (a labeled one is a syntax error there). It doesn't
+/// commit the open transaction, and what it runs can commit or roll back
+fn is_compound(s: &str) -> bool {
+    after_begin(s) == Some("not")
+}
+
+/// A plain BEGIN (s = strip_comments_lead(sql)), whatever follows it (`work`, `;`, a trailing comment the splitter left in): it
+/// commits the open transaction and opens one
 fn is_begin(s: &str) -> bool {
-    let word = |t: &str| t.split(|c: char| !c.is_alphanumeric() && c != '_').next().unwrap_or("").to_string();
-    s.strip_prefix("begin").is_some_and(|rest| word(rest).is_empty() && word(&strip_comments_lead(rest)) != "not")
+    after_begin(s).is_some_and(|w| w != "not")
 }
 
 /// Whether `s` (strip_comments_lead) runs statements of its own that can COMMIT or ROLLBACK: a CALL, EXECUTE of a prepared
@@ -173,7 +194,7 @@ fn is_begin(s: &str) -> bool {
 /// whether it committed or rolled back
 fn ends_in_procedure(s: &str) -> bool {
     let first = s.split_whitespace().next().unwrap_or("");
-    ["call", "execute"].contains(&first) || (first == "begin" && !is_begin(s))
+    ["call", "execute"].contains(&first) || is_compound(s)
 }
 
 /// Statements that change rows (s = strip_comments_lead(sql))
@@ -715,7 +736,9 @@ mod tests {
         for q in ["create table t (a int)", "set password = 'x'", "callx", "do 0", "deallocate prepare s", "prepare s from 'commit'", "begin", "BEGIN WORK;", "begin ;"] {
             assert!(!ends_in_procedure(&strip_comments_lead(q)), "{q}");
         }
-        assert!(ends_in_procedure(&strip_comments_lead("BEGIN NOT ATOMIC SELECT 1; END")));
+        for q in ["BEGIN NOT ATOMIC SELECT 1; END", "begin/*x*/not atomic select 1; end", "begin # x\n not atomic select 1; end"] {
+            assert!(ends_in_procedure(&strip_comments_lead(q)), "{q}");
+        }
     }
 
     /// Only a plain BEGIN commits the open transaction and opens one; a MariaDB compound statement asks the server
@@ -725,7 +748,7 @@ mod tests {
             assert!(is_begin(&strip_comments_lead(q)), "{q}");
             assert!(!ends_in_procedure(&strip_comments_lead(q)), "{q}");
         }
-        for q in ["begin not atomic select 1; end", "BEGIN NOT ATOMIC\n  UPDATE t SET v = 1;\nEND", "begin /* x */ not atomic select 1; end", "beginx", "begin_x"] {
+        for q in ["begin not atomic select 1; end", "BEGIN NOT ATOMIC\n  UPDATE t SET v = 1;\nEND", "begin /* x */ not atomic select 1; end", "begin/*x*/not atomic select 1; end", "begin # x\n not atomic select 1; end", "beginx", "begin_x"] {
             assert!(!is_begin(&strip_comments_lead(q)), "{q}");
         }
     }
