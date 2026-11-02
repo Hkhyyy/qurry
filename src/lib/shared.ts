@@ -1,6 +1,7 @@
 // Rust shared with the backend and the TUI (crates/shared), compiled to WebAssembly by `pnpm wasm`.
 // main.tsx starts loading it without waiting (the app renders even if it fails), Storybook awaits it in a loader,
 // vitest initializes it in its setup file. Then call it synchronously through shared(); callers must handle it not being ready.
+import { useSyncExternalStore } from "react";
 import init, * as wasm from "../wasm/pkg/qurry_shared_wasm";
 import wasmUrl from "../wasm/pkg/qurry_shared_wasm_bg.wasm?url";
 import type { Cell, DbKind } from "./api";
@@ -54,13 +55,19 @@ const api = {
 
 let ready = false;
 let loading: Promise<void> | undefined;
+const listeners = new Set<() => void>();
+
+function markReady() {
+  ready = true;
+  listeners.forEach((l) => l());
+}
 
 /** Load the module (fetches the .wasm). Safe to call more than once */
 export function initShared(): Promise<void> {
   if (!loading) {
     performance.mark("qurry:shared-wasm-start");
     loading = init({ module_or_path: wasmUrl }).then(() => {
-      ready = true;
+      markReady();
       // Init time, also what the smoke test (scripts/perf/wasm-smoke.mjs) waits for
       performance.measure("qurry:shared-wasm-init", "qurry:shared-wasm-start");
     });
@@ -71,7 +78,7 @@ export function initShared(): Promise<void> {
 /** Same, from the .wasm bytes already in hand (tests) */
 export function initSharedSync(bytes: BufferSource) {
   wasm.initSync({ module: bytes });
-  ready = true;
+  markReady();
 }
 
 export function shared(): typeof api {
@@ -81,7 +88,8 @@ export function shared(): typeof api {
 
 /**
  * shared() when the module is loaded, otherwise `fallback`: for display helpers called while rendering, so a grid or tab bar
- * still draws (unformatted) while the module loads or after it failed. The failure itself is logged once at start (main.tsx)
+ * still draws (unformatted) while the module loads or after it failed. The failure itself is logged once at start (main.tsx).
+ * A useMemo over these keeps the fallback until its deps change: put useSharedReady() in its deps
  */
 export function sharedOr<T>(fallback: T, f: (s: typeof api) => T): T {
   return ready ? f(api) : fallback;
@@ -89,3 +97,11 @@ export function sharedOr<T>(fallback: T, f: (s: typeof api) => T): T {
 
 /** The module is loaded (shared() won't throw) */
 export const sharedReady = () => ready;
+
+const subscribe = (l: () => void) => {
+  listeners.add(l);
+  return () => listeners.delete(l);
+};
+
+/** sharedReady() as React state: the component renders again once the module has loaded */
+export const useSharedReady = () => useSyncExternalStore(subscribe, sharedReady);

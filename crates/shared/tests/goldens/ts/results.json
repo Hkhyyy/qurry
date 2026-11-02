@@ -820,10 +820,10 @@
         }
       ]
     },
-    "inList": "('a\\''b', 'x\\'') OR 1=1 -- ')",
+    "inList": "(E'a\\\\''b', E'x\\\\'') OR 1=1 -- ')",
     "inList(mysql)": "('a\\\\''b', 'x\\\\'') OR 1=1 -- ')",
     "inList(column)": {
-      "s": "('a\\''b', 'x\\'') OR 1=1 -- ')"
+      "s": "(E'a\\\\''b', E'x\\\\'') OR 1=1 -- ')"
     },
     "extract(TSV, no header)": "a\\'b\nx\\') OR 1=1 -- ",
     "extract(SQL Inserts, mysql)": "INSERT INTO MY_TABLE (s) VALUES ('a\\\\''b');\nINSERT INTO MY_TABLE (s) VALUES ('x\\\\'') OR 1=1 -- ');",
@@ -833,10 +833,10 @@
     "padFrac": {},
     "extract(CSV)": "s\na\\'b\nx\\') OR 1=1 -- ",
     "extract(TSV)": "s\na\\'b\nx\\') OR 1=1 -- ",
-    "extract(SQL Inserts)": "INSERT INTO MY_TABLE (s) VALUES ('a\\''b');\nINSERT INTO MY_TABLE (s) VALUES ('x\\'') OR 1=1 -- ');",
-    "extract(SQL Updates)": "UPDATE MY_TABLE SET s = 'a\\''b' WHERE /* no key */;\nUPDATE MY_TABLE SET s = 'x\\'') OR 1=1 -- ' WHERE /* no key */;",
-    "extract(Where Clause)": "(s = 'a\\''b') OR\n(s = 'x\\'') OR 1=1 -- ')",
-    "extract(SQL IN List)": "('a\\''b', 'x\\'') OR 1=1 -- ')",
+    "extract(SQL Inserts)": "INSERT INTO MY_TABLE (s) VALUES (E'a\\\\''b');\nINSERT INTO MY_TABLE (s) VALUES (E'x\\\\'') OR 1=1 -- ');",
+    "extract(SQL Updates)": "UPDATE MY_TABLE SET s = E'a\\\\''b' WHERE /* no key */;\nUPDATE MY_TABLE SET s = E'x\\\\'') OR 1=1 -- ' WHERE /* no key */;",
+    "extract(Where Clause)": "(s = E'a\\\\''b') OR\n(s = E'x\\\\'') OR 1=1 -- ')",
+    "extract(SQL IN List)": "(E'a\\\\''b', E'x\\\\'') OR 1=1 -- ')",
     "extract(JSON)": "[\n  {\n    \"s\": \"a\\\\'b\"\n  },\n  {\n    \"s\": \"x\\\\') OR 1=1 -- \"\n  }\n]",
     "extract(Markdown)": "| s |\n| --- |\n| a\\'b |\n| x\\') OR 1=1 --  |"
   },

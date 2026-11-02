@@ -8,9 +8,9 @@
     "fracWidth": {
       "s": 0
     },
-    "inList": "('a\\''b', 'x\\'') OR 1=1 -- ')",
+    "inList": "(E'a\\\\''b', E'x\\\\'') OR 1=1 -- ')",
     "inList(column)": {
-      "s": "('a\\''b', 'x\\'') OR 1=1 -- ')"
+      "s": "(E'a\\\\''b', E'x\\\\'') OR 1=1 -- ')"
     },
     "inList(mysql)": "('a\\\\''b', 'x\\\\'') OR 1=1 -- ')",
     "numericColumns": [],

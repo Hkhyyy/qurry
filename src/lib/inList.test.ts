@@ -33,7 +33,14 @@ describe("inList", () => {
     expect(extractRows("SQL IN List", { ...ch, dialect: dialectOf("clickhouse") })).toBe("('x\\\\'') OR 1=1 -- ')");
     expect(extractRows("SQL Inserts", { ...ch, dialect: dialectOf("clickhouse") })).toBe("INSERT INTO t (s) VALUES ('x\\\\'') OR 1=1 -- ');");
     expect(dialectOf("clickhouse").lit("a\\'b")).toBe("'a\\\\''b'");
-    expect(inList(evil)).toBe("('x\\'') OR 1=1 -- ')");
+  });
+  it("PostgreSQL writes a \\ as E'' (same value with standard_conforming_strings off); driver kinds keep '…'", () => {
+    const evil = [["x\\') OR 1=1 -- "]];
+    expect(inList(evil)).toBe("(E'x\\\\'') OR 1=1 -- ')");
+    const x = { names: ["s"], types: ["text"], vals: evil, keys: [], tableRef: "t", header: false };
+    expect(extractRows("Where Clause", { ...x, dialect: dialectOf("postgres") })).toBe("(s = E'x\\\\'') OR 1=1 -- ')");
+    expect(extractRows("SQL IN List", { ...x, dialect: dialectOf("mssql") })).toBe("('x\\'') OR 1=1 -- ')");
+    expect(extractRows("SQL IN List", { ...x, dialect: dialectOf("sqlite") })).toBe("('x\\'') OR 1=1 -- ')");
   });
   it("numbers as the grid shows them (String())", () => {
     const nums = [2 ** 53, 1e16, 1e20, 2 ** 60, 1e21, 1.5e-7, 0.1 + 0.2, -0];

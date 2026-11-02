@@ -85,10 +85,10 @@ fn raw(v: &Value, opts: Options) -> String {
     }
 }
 
-/// A string literal of `kind`: '…' with quotes doubled, and \ doubled where the server reads it as an escape (MySQL,
-/// ClickHouse). Elsewhere a \ stays as it is (PostgreSQL: standard_conforming_strings, on by default)
+/// A string literal of `kind` (sql::literal): '…' with quotes doubled, \ doubled where the server reads it as an escape
+/// (MySQL, ClickHouse), and PostgreSQL E'…' when the value has a \ (read the same whatever standard_conforming_strings is)
 fn quote(kind: DbKind, s: &str) -> String {
-    if sql::backslash_escapes(kind) { sql::literal(kind, Some(s)) } else { format!("'{}'", s.replace('\'', "''")) }
+    sql::literal(kind, Some(s))
 }
 
 /// A cell as an SQL literal of `kind` (Redis: a JSON string)
@@ -148,7 +148,8 @@ pub fn numeric_type(t: &str) -> bool {
 fn number_text(s: &str, strict: bool) -> bool {
     let t = s.strip_prefix('-').unwrap_or(s);
     if !strict {
-        return !t.is_empty() && t.parse::<f64>().is_ok() && t.chars().all(|c| c.is_ascii_digit() || ".eE+-".contains(c));
+        // One sign only: --1 would start a line comment
+        return !t.is_empty() && (t.len() == s.len() || !t.starts_with(['-', '+'])) && t.parse::<f64>().is_ok() && t.chars().all(|c| c.is_ascii_digit() || ".eE+-".contains(c));
     }
     let digits = |s: &str| s.len() - s.trim_start_matches(|c: char| c.is_ascii_digit()).len();
     let n = digits(t);
@@ -297,6 +298,11 @@ mod tests {
         assert!(numeric_type("BIGINT UNSIGNED") && numeric_type("double precision") && numeric_type("numeric(10,2)"));
         assert!(!numeric_type("interval") && !numeric_type("int4range") && !numeric_type("_int4"));
         assert_eq!(in_list(&[vec![Value::Null]], &[], DbKind::Postgres, Options::default()), ("(NULL)".into(), 0));
+        for s in ["--1", "-+1", "--1e5"] {
+            assert_eq!(one(json!(s), "int8", Options::default()), format!("('{s}')"));
+        }
+        assert_eq!(one(json!("-1"), "int8", Options::default()), "(-1)");
+        assert_eq!(one(json!(".5"), "numeric", Options::default()), "(.5)");
     }
 
     /// A \ ends a string early where the server reads it as an escape: x\') OR 1=1 -- must stay one value after IN
@@ -305,13 +311,17 @@ mod tests {
         let rows = [vec![json!("x\\') OR 1=1 -- ")]];
         assert_eq!(in_list(&rows, &[], DbKind::Mysql, Options::default()).0, "('x\\\\'') OR 1=1 -- ')");
         assert_eq!(in_list(&rows, &[], DbKind::Clickhouse, Options::default()).0, "('x\\\\'') OR 1=1 -- ')");
-        assert_eq!(in_list(&rows, &[], DbKind::Postgres, Options::default()).0, "('x\\'') OR 1=1 -- ')");
+        // PostgreSQL: E'' reads the same with standard_conforming_strings off; SQL Server and the like keep \ as it is
+        assert_eq!(in_list(&rows, &[], DbKind::Postgres, Options::default()).0, "(E'x\\\\'') OR 1=1 -- ')");
+        assert_eq!(in_list(&rows, &[], DbKind::Mssql, Options::default()).0, "('x\\'') OR 1=1 -- ')");
     }
 
     #[test]
     fn literals_follow_the_kind() {
         let v = json!("a\\'b");
-        assert_eq!(literal(DbKind::Postgres, &v, Options::default()), "'a\\''b'");
+        assert_eq!(literal(DbKind::Postgres, &v, Options::default()), "E'a\\\\''b'");
+        assert_eq!(literal(DbKind::Postgres, &json!("it's"), Options::default()), "'it''s'");
+        assert_eq!(literal(DbKind::Sqlite, &v, Options::default()), "'a\\''b'");
         assert_eq!(literal(DbKind::Mysql, &v, Options::default()), "'a\\\\''b'");
         assert_eq!(literal(DbKind::Clickhouse, &v, Options::default()), "'a\\\\''b'");
         assert_eq!(literal(DbKind::Redis, &v, Options::default()), "\"a\\\\'b\"");
