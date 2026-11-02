@@ -3305,10 +3305,10 @@ impl App {
         let st = self.state.clone();
         let target = sql::target_id(&conn, Some(&db));
         self.spawn(async move { st.list_schemas(target).await.map_err(err) }, move |a, r| {
-            if let Some(Popup::Scope(e)) = a.popup_under() {
-                if e.conn == conn {
-                    e.set_schemas(&db, r);
-                }
+            if let Some(Popup::Scope(e)) = a.popup_under()
+                && e.conn == conn
+            {
+                e.set_schemas(&db, r);
             }
         });
     }

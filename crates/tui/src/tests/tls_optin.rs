@@ -335,7 +335,7 @@ async fn pg_console_reconnects_and_reloads_the_tree() {
     assert_eq!(h.console_output().last().map(String::as_str), Some("Connected. Run again."));
     assert_eq!(RUNS.load(Ordering::SeqCst), runs + 1, "the statement isn't run again");
     let db = std::env::var("QURRY_TEST_PG").unwrap().split(':').nth(3).unwrap().to_string();
-    assert!(kids(&h).iter().any(|d| *d == db), "{:?}", kids(&h));
+    assert!(kids(&h).contains(&db), "{:?}", kids(&h));
     let _ = h.app.state.disconnect("test".into()).await;
 }
 
