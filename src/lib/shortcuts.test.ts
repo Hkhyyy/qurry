@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { keyLabel, SHORTCUTS } from "./shortcuts";
+import { describe, expect, it, vi } from "vitest";
+import { KEYMAP } from "./keymap";
+import { shared } from "./shared";
+import { bindable, bindings, conflicts, keyLabel, SHORTCUTS } from "./shortcuts";
 
 describe("keyLabel", () => {
   it("⌘/⌃/⌥ + letter without Shift is lowercase (uppercase = a key that needs Shift)", () => {
@@ -38,5 +40,44 @@ describe("global shortcuts", () => {
         seen.set(k, s.id);
       }
     expect(dup).toEqual([]);
+  });
+});
+
+describe("bindable / conflicts", () => {
+  const specs = [...new Set(SHORTCUTS.flatMap((s) => s.keys)), "L", "Enter", "Shift+Tab", "Up", "Shift+F", "Shift+F1", "F12", "Mod+K", "Ctrl+Shift+K", "Alt+\\"];
+
+  it("answer as qurry_shared::keymap does (through WASM)", () => {
+    for (const spec of specs) expect([spec, bindable(spec)]).toEqual([spec, shared().bindable(spec)]);
+    for (const s of SHORTCUTS)
+      for (const spec of specs) {
+        const wasm = shared().keyConflicts(s.id, s.scope, spec, SHORTCUTS.map((x) => ({ id: x.id, scope: x.scope, keys: bindings(x.id) })));
+        expect([s.id, spec, conflicts(s.id, spec).map((x) => x.id)]).toEqual([s.id, spec, wasm]);
+      }
+  });
+
+  it("work before the WASM module has loaded (keymap editor can still record)", async () => {
+    vi.resetModules();
+    const fresh = await import("./shortcuts");
+    expect((await import("./shared")).sharedReady()).toBe(false);
+    expect(fresh.bindable("Mod+K")).toBe(true);
+    expect(fresh.bindable("K")).toBe(false);
+    expect(fresh.conflicts("tree.duplicate", "Mod+D").map((s) => s.id)).toEqual([]);
+    expect(fresh.conflicts("goto.file", "Mod+D").map((s) => s.id)).toEqual(["tree.duplicate", "editor.duplicate"]);
+  });
+});
+
+describe("docs/shortcuts-gui.md", () => {
+  it("shows each rebindable row's default keys as qurry_shared::keymap::format_spec draws them (scripts/gen-keymap-docs.py has its own copy)", () => {
+    const esc = (s: string) => s.replace(/\|/g, "\\|");
+    const cell = (k: string) => (k.includes("`") ? `\`\` ${k} \`\`` : `\`${k}\``);
+    const docs = import.meta.glob<string>(["../../docs/shortcuts-gui.md", "../../docs/ko/shortcuts-gui.md"], { query: "?raw", import: "default", eager: true });
+    expect(Object.keys(docs)).toHaveLength(2);
+    for (const text of Object.values(docs)) {
+      for (const row of KEYMAP.flatMap((s) => s.rows)) {
+        if (row[0] !== null) continue;
+        const keys = SHORTCUTS.find((s) => s.id === row[2])!.keys.map((k) => shared().formatSpec(k, true)).join(" / ");
+        expect(text).toContain(`| ${cell(esc(keys))} | ${esc(keyLabel(row[1]))} |`);
+      }
+    }
   });
 });

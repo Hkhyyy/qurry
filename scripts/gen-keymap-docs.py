@@ -19,7 +19,8 @@ def sym(s):
 MAC_KEYS = {"Enter": "↩", "Backspace": "⌫", "Delete": "⌦", "Esc": "⎋", "Tab": "⇥", "Up": "↑", "Down": "↓", "Left": "←", "Right": "→", "PageUp": "⇞", "PageDown": "⇟"}
 
 def mac_spec(spec):
-    """GUI default key ("Mod+Shift+L") → macOS notation ("⇧⌘L"), as qurry_shared::keymap::format_spec draws it (letters: key_label in code())"""
+    """GUI default key ("Mod+Shift+L") → macOS notation ("⇧⌘L"), as qurry_shared::keymap::format_spec draws it (letters: key_label in code()).
+    src/lib/shortcuts.test.ts checks the generated docs against format_spec"""
     *mods, key = spec.split("+")
     return "".join(g for m, g in (("Ctrl", "⌃"), ("Alt", "⌥"), ("Shift", "⇧"), ("Mod", "⌘")) if m in mods) + MAC_KEYS.get(key, key)
 
@@ -46,7 +47,7 @@ def tui():
     out = ["\n## Commands (default keys — change them in the F1 window)\n\n| Key | Action |\n|---|---|"]
     for c in table:
         if "tui" in c and c.get("tuiKeys"):
-            out.append(f"| {code(' / '.join(c['tuiKeys']))} | {esc(sym(key_label(c['title'])))} |")
+            out.append(f"| {code(' / '.join(c['tuiKeys']))} | {esc(sym(key_label(c.get('tuiTitle', c['title']))))} |")
     for m in re.finditer(r'\("([^"]+)", &\[(.*?)\]\),', src, re.S):
         out.append(f"\n## {sym(key_label(m.group(1)))}\n\n| Key | Action |\n|---|---|")
         for k, d in re.findall(r'\("([^"]*)", "([^"]*)"\)', m.group(2)):

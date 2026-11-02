@@ -19,3 +19,16 @@ test("shortcuts work while the WebAssembly module loads, and their labels turn t
   release();
   await expect(row).toHaveText("⌘o");
 });
+
+test("the keymap editor records shortcuts when the WebAssembly module fails to load", async ({ page }) => {
+  await page.route(WASM, (route) => route.abort());
+  await openApp(page);
+  await page.keyboard.press("Meta+Comma");
+  await dialog(page).locator(".settings-nav").getByText("Keymap", { exact: true }).click();
+  const row = dialog(page).locator(".keymap-edit-row", { hasText: "Go to Database Object" });
+  await row.getByRole("button", { name: "Change" }).click();
+  await page.keyboard.press("Meta+KeyJ");
+  // Labels stay in the stored notation without the module, but the key is bound
+  await expect(dialog(page).locator(".keymap-editor-foot .hint")).toHaveText("Go to Database Object: Mod+J");
+  await expect(row.locator(".keymap-chip")).toHaveText(["Mod+J×"]);
+});

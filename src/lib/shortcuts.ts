@@ -71,9 +71,12 @@ export function formatSpec(spec: string): string {
   return sharedReady() ? shared().formatSpec(spec, isMac) : spec;
 }
 
+// bindable and conflicts stay in TS (not through WASM) so the keymap editor works while the module loads or if it fails to load;
+// shortcuts.test.ts checks they answer the same as qurry_shared::keymap::bindable / conflicts
+
 /** Keys that can be newly bound: modifier combos or F keys (others clash with typing·navigation. tree's default Delete is restored with Reset) */
 export function bindable(spec: string): boolean {
-  return sharedReady() && shared().bindable(spec);
+  return /^(Mod|Ctrl|Alt)\+/.test(spec) || /(^|\+)F\d{1,2}$/.test(spec);
 }
 
 // ───────── User settings ─────────
@@ -125,8 +128,8 @@ export async function loadKeymap() {
 export function conflicts(id: string, spec: string): Shortcut[] {
   const me = byId.get(id);
   if (!me) return [];
-  const ids = shared().keyConflicts(id, me.scope, spec, SHORTCUTS.map((s) => ({ id: s.id, scope: s.scope, keys: bindings(s.id) })));
-  return SHORTCUTS.filter((s) => ids.includes(s.id));
+  const overlap = (s: Scope) => s === me.scope || s === "global" || me.scope === "global";
+  return SHORTCUTS.filter((s) => s.id !== id && overlap(s.scope) && bindings(s.id).includes(spec));
 }
 
 function setKeys(id: string, keys: string[]) {
