@@ -163,15 +163,18 @@ mod tests {
 
     #[tokio::test]
     #[ignore]
+    /// Real DB: QURRY_TEST_PG=host:port:user:db cargo test -p qurry-core meta -- --ignored
     async fn pg_meta() {
+        let Ok(env) = std::env::var("QURRY_TEST_PG") else { return };
+        let s: Vec<&str> = env.split(':').collect();
         let cfg = ConnectionConfig {
             id: "t".into(),
             name: "t".into(),
             kind: DbKind::Postgres,
-            host: "localhost".into(),
-            port: 5432,
-            user: std::env::var("USER").unwrap(),
-            database: String::new(),
+            host: s[0].into(),
+            port: s[1].parse().unwrap(),
+            user: s[2].into(),
+            database: s[3].into(),
             color: None,
             ssh: None,
             password_saved: false,
