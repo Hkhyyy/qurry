@@ -72,12 +72,29 @@ pub fn statement_at(text: &str, offset: usize, kind: JsValue) -> Result<Option<S
 #[wasm_bindgen]
 pub struct CompletionIndex {
     meta: complete::Meta,
-    /// The last candidates after the statement's columns (tables, schemas, keywords) and their JS array. They stay the same
-    /// while typing (Monaco filters them), so thousands of tables cross the boundary once instead of on every key
-    rest: RefCell<Option<(Vec<complete::Item>, JsValue)>>,
+    /// The last columns of the statement's tables and their JS array, and the same for the candidates after them (tables,
+    /// schemas, keywords). Both stay the same while typing (Monaco filters them), so thousands of candidates cross the
+    /// boundary once instead of on every key
+    lead: Memo,
+    rest: Memo,
 }
 
-/// suggest's answer: the range on the caret's line, then the candidates as `lead` (columns, converted each time) + `rest` (reused)
+type Memo = RefCell<Option<(Vec<complete::Item>, JsValue)>>;
+
+/// The JS array for `items`: the last one when it holds the same items, else a new one (kept for next time)
+fn reuse(memo: &Memo, items: Vec<complete::Item>) -> Result<JsValue, JsError> {
+    let mut memo = memo.borrow_mut();
+    if let Some((prev, js)) = &*memo
+        && *prev == items
+    {
+        return Ok(js.clone());
+    }
+    let js = serde_wasm_bindgen::to_value(&items)?;
+    *memo = Some((items, js.clone()));
+    Ok(js)
+}
+
+/// suggest's answer: the range on the caret's line, then the candidates as `lead` (columns) + `rest`, each reused while unchanged
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SuggestJs {
@@ -104,24 +121,15 @@ impl CompletionIndex {
     #[wasm_bindgen(constructor)]
     pub fn new(tables_json: &str) -> Result<CompletionIndex, JsError> {
         let tables = serde_json::from_str(tables_json).map_err(|e| JsError::new(&format!("Completion metadata is not in the expected shape ({e})")))?;
-        Ok(CompletionIndex { meta: complete::Meta::new(tables), rest: RefCell::new(None) })
+        Ok(CompletionIndex { meta: complete::Meta::new(tables), lead: RefCell::new(None), rest: RefCell::new(None) })
     }
 
     /// Candidates at the caret (a UTF-16 offset into `text`), replacing the word before it. `db` is the tab's DB ("" for none).
-    /// {startColumn, endColumn, lead, rest}: the candidates are lead then rest (rest may be the same array as last time; don't change it)
+    /// {startColumn, endColumn, lead, rest}: the candidates are lead then rest (either may be the same array as last time; don't change them)
     pub fn suggest(&self, text: &str, caret: usize, db: &str, mysql: bool) -> Result<JsValue, JsError> {
         let mut s = suggestions(&self.meta, text, caret, db, mysql);
         let rest = s.items.split_off(s.items.iter().position(|i| i.kind != complete::ItemKind::Column).unwrap_or(s.items.len()));
-        let mut memo = self.rest.borrow_mut();
-        let rest = match &*memo {
-            Some((prev, js)) if *prev == rest => js.clone(),
-            _ => {
-                let js = serde_wasm_bindgen::to_value(&rest)?;
-                *memo = Some((rest, js.clone()));
-                js
-            }
-        };
-        let lead = serde_wasm_bindgen::to_value(&s.items)?;
+        let (lead, rest) = (reuse(&self.lead, s.items)?, reuse(&self.rest, rest)?);
         Ok(serde_wasm_bindgen::to_value(&SuggestJs { start_column: s.start_column, end_column: s.end_column, lead, rest })?)
     }
 

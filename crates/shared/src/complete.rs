@@ -109,6 +109,11 @@ static SORTED_KEYWORDS: std::sync::LazyLock<Vec<&'static str>> = std::sync::Lazy
     v
 });
 
+/// A keyword, in any letter case (binary search: a long script checks an alias for every table ref)
+fn is_keyword(w: &str) -> bool {
+    SORTED_KEYWORDS.binary_search_by(|k| k.bytes().cmp(w.bytes().map(|b| b.to_ascii_lowercase()))).is_ok()
+}
+
 /// Identifier characters: letters and digits of any script (Korean …) and `_`
 pub fn is_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
@@ -129,7 +134,7 @@ fn tables_in_statement(text: &str) -> Vec<(String, Option<String>)> {
         if a.is_some_and(|t| t.eq_ignore_ascii_case("as")) {
             a = ahead.next();
         }
-        let alias = a.filter(|a| a.chars().all(is_word) && !keywords().any(|k| k.eq_ignore_ascii_case(a))).map(str::to_string);
+        let alias = a.filter(|a| a.chars().all(is_word) && !is_keyword(a)).map(str::to_string);
         out.push((r.replace('"', ""), alias));
     }
     out
@@ -247,8 +252,14 @@ pub fn suggest(m: &Meta, text: &str, before: &str, db: &str, mysql: bool, o: Opt
     let mut columns: Vec<Item> = vec![];
     // Labels already in `columns`: the GUI passes the whole script, which can name thousands of columns
     let mut seen: HashSet<&str> = HashSet::new();
-    for (r, _) in tables_in_statement(text) {
-        if let Some(t) = find_table(m, &r, db) {
+    let refs = tables_in_statement(text);
+    let mut looked: HashSet<&str> = HashSet::new();
+    for (r, _) in &refs {
+        // A ref seen before adds no new columns
+        if !looked.insert(r) {
+            continue;
+        }
+        if let Some(t) = find_table(m, r, db) {
             for (c, ty) in &t.columns {
                 if matches(c) && seen.insert(c) {
                     columns.push(Item { label: c.clone(), detail: format!("{ty} · {}", t.name), insert: c.clone(), kind: ItemKind::Column });
