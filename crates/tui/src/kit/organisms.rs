@@ -65,9 +65,33 @@ pub fn wrapped_height(lines: &[Line], width: u16) -> u16 {
     Paragraph::new(lines.to_vec()).wrap(Wrap { trim: false }).line_count(width.max(1)) as u16
 }
 
+/// Lines cut to `height` rows of `width` (wrapped): the lines that don't fit give way to one saying how many are hidden
+pub fn cut_lines(lines: Vec<Line<'static>>, width: u16, height: u16) -> Vec<Line<'static>> {
+    if wrapped_height(&lines, width) <= height {
+        return lines;
+    }
+    let mut keep = lines.len();
+    loop {
+        keep -= 1;
+        let mut v = lines[..keep].to_vec();
+        v.push(Line::styled(format!("⋯ {} more lines hidden", lines.len() - keep), Style::default().fg(WARN)));
+        if keep == 0 || wrapped_height(&v, width) <= height {
+            return v;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cut_lines_says_how_many_are_hidden() {
+        let lines: Vec<Line<'static>> = ["one", "two", "three", "four"].into_iter().map(Line::raw).collect();
+        assert_eq!(cut_lines(lines.clone(), 30, 4).len(), 4);
+        let cut: Vec<String> = cut_lines(lines, 30, 3).iter().map(|l| l.to_string()).collect();
+        assert_eq!(cut, ["one", "two", "⋯ 2 more lines hidden"]);
+    }
 
     #[test]
     fn wrapped_height_counts_folded_lines() {

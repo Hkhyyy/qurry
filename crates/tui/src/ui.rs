@@ -89,10 +89,14 @@ fn draw_too_small(f: &mut Frame, app: &App) {
     if a.is_empty() {
         return;
     }
+    let last = match app.quit_waits_for() {
+        Some(why) => Line::styled(why, Style::default().fg(WARN)),
+        None => Line::from(muted(format!("Make the window larger · {} quits", app.keys.label(crate::app::Action::Quit)))),
+    };
     let lines = vec![
         Line::styled("Terminal too small", Style::default().fg(WARN).add_modifier(Modifier::BOLD)),
         Line::raw(format!("{}×{} — needs {}×{}", a.width, a.height, MIN_SIZE.0, MIN_SIZE.1)),
-        Line::from(muted(format!("Make the window larger · {} quits", app.keys.label(crate::app::Action::Quit)))),
+        last,
     ];
     let p = Paragraph::new(lines).alignment(Alignment::Center).wrap(Wrap { trim: true });
     let h = (p.line_count(a.width) as u16).min(a.height);
@@ -880,16 +884,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             let inner = popup(f, r, format!(" Manage Shown Schemas — {name} "));
             f.render_widget(Paragraph::new(lines), inner);
         }
-        Popup::Confirm { text, .. } => {
-            // Multiple lines (reason · statement · question). Red border for production DB · dangerous statements; "→ N rows" stands out more the larger it is
-            let danger = text.starts_with("Production") || text.ends_with("Run it anyway?");
-            let lines = confirm_lines(text);
-            // Long statements wrap → count wrapped lines for the height (so the y/n hint below isn't cut)
-            let w = 90u16.min(area.width.saturating_sub(4));
-            let r = centered(area, 90, wrapped_height(&lines, w.saturating_sub(2)) + 2);
-            let inner = if danger { popup_danger(f, r, " Confirm ") } else { popup(f, r, " Confirm ") };
-            f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
-        }
+        Popup::Confirm { text, .. } => draw_confirm(f, area, text),
         Popup::Input { title, body, input, complete, words, .. } => {
             // The title goes on the border; the body (answers, reasons) in a box below, wrapped, so it isn't cut off
             let body: Vec<Line> = body.lines().map(|l| Line::raw(disp(l))).collect();
@@ -950,45 +945,80 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             let hint = if p.title.starts_with("Go to") || p.title == "Search Everywhere" { format!(" Enter open · {ddl} DDL · Esc ") } else { " Enter · Esc ".into() };
             f.render_widget(List::new(items).block(panel(hint, true)), list);
         }
-        Popup::ConnForm(form) => {
-            let h = form.fields.len() as u16 + 6;
-            let r = centered(area, 72, h);
-            clear(f, r);
-            let mut lines: Vec<Line> = form
-                .fields
-                .iter()
-                .enumerate()
-                .map(|(i, fl)| {
-                    let shown = match fl.kind {
-                        FieldKind::Secret if fl.value != "<saved>" => "•".repeat(fl.value.chars().count()),
-                        FieldKind::Toggle => format!("[{}]", if fl.value == "on" { "x" } else { " " }),
-                        FieldKind::Choice(_) => format!("◂ {} ▸", fl.value),
-                        _ => fl.value.clone(),
-                    };
-                    let sel = i == form.sel;
-                    let mut spans = field_row(&fl.label, 17, shown + if sel && matches!(fl.kind, FieldKind::Text | FieldKind::Secret) { "▏" } else { "" }, sel);
-                    if fl.label == "Color" {
-                        let c = COLOR_PRESETS.iter().find(|p| p.0 == fl.value).and_then(|p| hex(p.1)).or_else(|| form.edit.as_ref().and_then(|e| e.color.as_deref()).filter(|_| fl.value == "custom").and_then(hex));
-                        if let Some(c) = c {
-                            spans.push(Span::raw(" "));
-                            spans.push(swatch(c));
-                        }
-                    }
-                    if fl.label == "SSL mode" {
-                        spans.push(Span::styled(format!("  {}", ssl_mode_note(&fl.value)), Style::default().fg(DIM)));
-                    }
-                    Line::from(spans)
-                })
-                .collect();
-            lines.push(Line::raw(""));
-            if let Some((ok, m)) = &form.message {
-                lines.push(Line::styled(disp(m), Style::default().fg(if *ok { OK } else { DANGER })));
-            }
-            lines.push(Line::styled(disp("↑↓/Tab move · type to edit · Space/←→ toggle · ⌃t test · ⌃s / Enter save · Esc cancel"), Style::default().fg(DIM)));
-            let t = if form.edit.is_some() { " Data Source Properties " } else { " New Data Source " };
-            f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(panel(t, true)), r);
-        }
+        Popup::ConnForm(form) => draw_conn_form(f, area, form),
     }
+}
+
+/// Confirm: multiple lines (reason · statement · question). Red border for production DB · dangerous statements; "→ N rows" stands out more the larger it is.
+/// The question and its keys stay at the bottom; in a window too short for the rest, the lines above say how many are hidden
+fn draw_confirm(f: &mut Frame, area: Rect, text: &str) {
+    let danger = text.starts_with("Production") || text.ends_with("Run it anyway?");
+    let mut lines = confirm_lines(text);
+    let ask = lines.split_off(lines.len().saturating_sub(3));
+    // Long statements wrap → count wrapped lines for the height (so the y/n hint below isn't cut)
+    let w = 90u16.min(area.width.saturating_sub(4)).saturating_sub(2);
+    let r = centered(area, 90, wrapped_height(&lines, w) + wrapped_height(&ask, w) + 2);
+    let inner = if danger { popup_danger(f, r, " Confirm ") } else { popup(f, r, " Confirm ") };
+    let ah = wrapped_height(&ask, inner.width).min(inner.height);
+    let [body, bottom] = Layout::vertical([Constraint::Min(0), Constraint::Length(ah)]).areas(inner);
+    f.render_widget(Paragraph::new(cut_lines(lines, body.width, body.height)).wrap(Wrap { trim: false }), body);
+    f.render_widget(Paragraph::new(ask).wrap(Wrap { trim: false }), bottom);
+}
+
+/// Data Source form. The message and key hints stay at the bottom; when the window is too short for every field,
+/// the fields scroll to keep the focused one in view and the bottom border says which field it is
+fn draw_conn_form(f: &mut Frame, area: Rect, form: &crate::app::ConnForm) {
+    let r = centered(area, 72, form.fields.len() as u16 + 6);
+    clear(f, r);
+    let fields: Vec<Line> = form
+        .fields
+        .iter()
+        .enumerate()
+        .map(|(i, fl)| {
+            let shown = match fl.kind {
+                FieldKind::Secret if fl.value != "<saved>" => "•".repeat(fl.value.chars().count()),
+                FieldKind::Toggle => format!("[{}]", if fl.value == "on" { "x" } else { " " }),
+                FieldKind::Choice(_) => format!("◂ {} ▸", fl.value),
+                _ => fl.value.clone(),
+            };
+            let sel = i == form.sel;
+            let mut spans = field_row(&fl.label, 17, shown + if sel && matches!(fl.kind, FieldKind::Text | FieldKind::Secret) { "▏" } else { "" }, sel);
+            if fl.label == "Color" {
+                let c = COLOR_PRESETS.iter().find(|p| p.0 == fl.value).and_then(|p| hex(p.1)).or_else(|| form.edit.as_ref().and_then(|e| e.color.as_deref()).filter(|_| fl.value == "custom").and_then(hex));
+                if let Some(c) = c {
+                    spans.push(Span::raw(" "));
+                    spans.push(swatch(c));
+                }
+            }
+            if fl.label == "SSL mode" {
+                spans.push(Span::styled(format!("  {}", ssl_mode_note(&fl.value)), Style::default().fg(DIM)));
+            }
+            Line::from(spans)
+        })
+        .collect();
+    let mut foot = vec![Line::raw("")];
+    if let Some((ok, m)) = &form.message {
+        foot.push(Line::styled(disp(m), Style::default().fg(if *ok { OK } else { DANGER })));
+    }
+    let t = if form.edit.is_some() { " Data Source Properties " } else { " New Data Source " };
+    let block = panel(t, true);
+    let inner = block.inner(r);
+    // The full key hints when everything fits, else the short ones
+    foot.push(Line::styled(disp("↑↓/Tab move · type to edit · Space/←→ toggle · ⌃t test · ⌃s / Enter save · Esc cancel"), Style::default().fg(DIM)));
+    if wrapped_height(&fields, inner.width) + wrapped_height(&foot, inner.width) > inner.height {
+        foot.pop();
+        foot.push(Line::styled(disp("⌃t test · ⌃s save · Esc cancel"), Style::default().fg(DIM)));
+    }
+    // At least the focused field stays visible, even when a long message takes the rest
+    let fh = wrapped_height(&foot, inner.width).min(inner.height.saturating_sub(1));
+    let [body, foot_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(fh)]).areas(inner);
+    // Scroll in wrapped rows: the focused field's last row at the bottom when it would be below
+    let rows_to = |n: usize| wrapped_height(&fields[..n], body.width);
+    let top = rows_to(form.sel + 1).saturating_sub(body.height);
+    let block = if rows_to(fields.len()) > body.height { block.title_bottom(Line::from(format!(" {}/{} ", form.sel + 1, fields.len())).right_aligned()) } else { block };
+    f.render_widget(block, r);
+    f.render_widget(Paragraph::new(fields).wrap(Wrap { trim: false }).scroll((top, 0)), body);
+    f.render_widget(Paragraph::new(foot).wrap(Wrap { trim: false }), foot_area);
 }
 
 #[cfg(test)]
@@ -1024,11 +1054,11 @@ mod tests {
     async fn too_small_terminal_says_so_instead_of_drawing_the_layout() {
         let mut h = crate::testkit::Harness::new().await;
         h.table_tab("payment", &["id", "amount"], &[&["1", "2"]], &["id"]);
-        h.app.conn_form(None);
         let s = h.screen(39, 10);
         assert!(s.contains("Terminal too small") && s.contains("39×10 — needs 40×10"), "{s}");
         assert!(s.contains("Make the window larger · ⌃q quits"), "{s}");
-        assert!(!s.contains("New Data Source"), "{s}");
+        h.app.conn_form(None);
+        assert!(!h.screen(39, 10).contains("New Data Source"));
         assert!(h.screen(80, 9).contains("80×9 — needs 40×10"));
         // At the minimum the layout is back
         assert!(!h.screen(40, 10).contains("too small"));
@@ -1072,6 +1102,94 @@ mod tests {
         h.screen(39, 30);
         h.key("Ctrl+Q");
         assert!(h.app.quit);
+    }
+
+    /// Under the message the quit key never answers or replaces a question nobody can see: the message says what waits
+    #[tokio::test]
+    async fn too_small_terminal_quit_waits_for_open_questions() {
+        let mut h = crate::testkit::Harness::new().await;
+        // A half-filled form stays as it is
+        h.app.conn_form(None);
+        h.type_str("half");
+        let s = h.screen(100, 9);
+        assert!(s.contains("A dialog is open: make the window larger to answer it") && !s.contains("quits"), "{s}");
+        h.key("Ctrl+Q");
+        assert!(!h.app.quit);
+        assert!(matches!(&h.app.popup, Some(Popup::ConnForm(f)) if f.fields[0].value == "half"));
+        h.app.popup = None;
+        // Uncommitted changes: no hidden 'Roll them back and quit?' that y or Enter could answer
+        h.console_tab();
+        if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.get_mut(h.app.active).map(|t| &mut t.kind) {
+            c.in_tx = true;
+        }
+        let s = h.screen(100, 9);
+        assert!(s.contains("1 console(s) have uncommitted changes: make the window larger to quit"), "{s}");
+        for k in ["Ctrl+Q", "y", "Enter"] {
+            h.key(k);
+        }
+        assert!(!h.app.quit && h.app.popup.is_none());
+        // Larger again: the quit key asks, and the answer is seen
+        h.screen(120, 30);
+        h.key("Ctrl+Q");
+        assert!(h.screen(120, 30).contains("Roll them back and quit?"));
+        h.key("y");
+        assert!(h.app.quit);
+    }
+
+    /// The Data Source form at 80×24 and at the minimum size: the focused field scrolls into view and the key hints stay
+    #[tokio::test]
+    async fn conn_form_scrolls_to_the_focused_field_in_small_windows() {
+        let mut h = crate::testkit::Harness::new().await;
+        h.app.conn_form(None);
+        let n = match &h.app.popup {
+            Some(Popup::ConnForm(f)) => f.fields.len(),
+            _ => unreachable!(),
+        };
+        // Everything fits at 120×40: no position shown
+        assert!(!h.screen(120, 40).contains(&format!("1/{n}")));
+        for _ in 1..n {
+            h.key("Tab");
+        }
+        for (w, ht) in [(80, 24), MIN_SIZE] {
+            let s = h.screen(w, ht);
+            assert!(s.contains("Redis nodes ▏"), "{w}×{ht}\n{s}");
+            assert!(s.contains("Esc cancel") && s.contains(&format!("{n}/{n}")), "{w}×{ht}\n{s}");
+        }
+        for _ in 1..n {
+            h.key("Up");
+        }
+        for (w, ht) in [(80, 24), MIN_SIZE] {
+            let s = h.screen(w, ht);
+            assert!(s.contains("Name ▏") && s.contains("Esc cancel"), "{w}×{ht}\n{s}");
+        }
+    }
+
+    /// The Production confirm at the minimum size keeps its question and keys; the statements that don't fit are counted
+    #[tokio::test]
+    async fn production_confirm_keeps_its_question_in_small_windows() {
+        let mut h = crate::testkit::Harness::new().await;
+        let text = "Production data source \"[PROD] kr\" — this changes data:\n\n  update payment set amount = 0 where id = 4\n     → 1 row\n  delete from payment where created_at < now() - interval '1 year'\n     → 12,408 rows\n\nRun it?";
+        h.app.popup = Some(Popup::Confirm { text: text.into(), on_yes: Box::new(|a| a.status = "ran".into()) });
+        let s = h.screen(80, 24);
+        assert!(s.contains("12,408 rows") && s.contains("Run it?") && !s.contains("hidden"), "{s}");
+        let (w, ht) = MIN_SIZE;
+        let s = h.screen(w, ht);
+        assert!(s.contains("Production data") && s.contains("more lines hidden"), "{s}");
+        assert!(s.contains("Run it?") && s.contains("y / Enter"), "{s}");
+        h.key("y");
+        assert_eq!(h.app.status, "ran");
+    }
+
+    /// The startup color notices fit an 80-column status line whole, with a gap before the key hints
+    #[tokio::test]
+    async fn color_notices_fit_80_columns() {
+        let mut h = crate::testkit::Harness::new().await;
+        for mode in [crate::theme::ColorMode::Ansi16, crate::theme::ColorMode::NoColor] {
+            let n = mode.notice().unwrap();
+            h.app.status = n.into();
+            let s = h.screen(80, 24);
+            assert!(s.lines().last().unwrap().contains(&format!("{n} ")), "{s}");
+        }
     }
 
     /// NO_COLOR: text selected in the editor stays visible (tui-textarea draws it on a color, which NO_COLOR drops)
