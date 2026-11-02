@@ -591,6 +591,12 @@ pub async fn import_data(app: tauri::AppHandle, state: State<'_, AppState>, pend
     r
 }
 
+/// Explain Analyse: [before, after] the statement, so it is rolled back without committing what is pending
+#[tauri::command]
+pub async fn explain_wrap(state: State<'_, AppState>, id: String, tab_id: String) -> AppResult<[&'static str; 2]> {
+    state.explain_wrap(id, tab_id).await
+}
+
 /// Whether the tab session has uncommitted changes (shows Commit/Roll back after an error)
 #[tauri::command]
 pub async fn tx_state(state: State<'_, AppState>, tab_id: String) -> AppResult<bool> {

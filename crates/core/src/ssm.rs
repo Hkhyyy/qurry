@@ -322,7 +322,7 @@ fn explain(out: &str, ssm: &SsmConfig) -> String {
 }
 
 #[cfg(all(test, unix))]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -419,7 +419,7 @@ sys.exit(255)
         !s.trim().is_empty() && !s.trim().starts_with('Z')
     }
 
-    async fn gone(dir: &Path) {
+    pub(crate) async fn gone(dir: &Path) {
         let pids = std::fs::read_to_string(dir.join("pids")).unwrap();
         for _ in 0..50 {
             if !pids.split_whitespace().any(alive) {
@@ -435,6 +435,12 @@ sys.exit(255)
         let aws = fake_aws(dir.path(), mode);
         let t = open_with(&aws, None, &cfg(), host, port, timeout).await;
         (dir, t)
+    }
+
+    /// An open tunnel through the fake aws (to 127.0.0.1:9), for the app tests. Keep the folder until it is gone
+    pub(crate) async fn fake_tunnel() -> (tempfile::TempDir, Tunnel) {
+        let (dir, t) = open_fake("ok", "127.0.0.1", 9, Duration::from_secs(10)).await;
+        (dir, t.expect("fake tunnel"))
     }
 
     #[tokio::test]

@@ -989,7 +989,10 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
 /// hidden and how many rows they would change. If even that doesn't fit, the keys line says to enlarge the window and the result is
 /// false: y / Enter don't answer a question that isn't on screen
 fn draw_confirm(f: &mut Frame, area: Rect, title: &'static str, text: &str, keys: Line<'static>) -> bool {
-    let danger = text.starts_with("Production") || text.ends_with("Run it anyway?") || text.lines().any(|l| l.starts_with('⚠') && l.contains("Production"));
+    let danger = text.starts_with("Production")
+        || text.ends_with("Run it anyway?")
+        || text.ends_with("Run them anyway?")
+        || text.lines().any(|l| l.starts_with('⚠') && l.contains("Production"));
     let mut lines = confirm_lines(text);
     let last = lines.len() - 1;
     lines[last] = keys;

@@ -53,6 +53,11 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   // The Allow button under a failed test goes away when it tests again: focus moves to Test Connection first (the same button
   // becomes Cancel Test and back), so Escape cancels the test, then closes the dialog
   const testButton = useRef<HTMLButtonElement>(null);
+  // The dialog keeps its size, so a long result (an SSM error ends with what to run or install) can end below the body: show its end
+  const testEnd = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (test) testEnd.current?.scrollIntoView({ block: "nearest" });
+  }, [test]);
   // Driver plugin: whether it is installed (null = built-in DB)
   const [driver, setDriver] = useState<boolean | null>(null);
   const [installing, setInstalling] = useState(false);
@@ -516,6 +521,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
           </Button>
         </div>
       )}
+      <div ref={testEnd} />
     </Modal>
   );
 }

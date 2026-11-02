@@ -204,10 +204,36 @@ async fn explain_analyze_asks_before_what_a_rollback_cant_undo() {
     assert!(!note.0 && note.1.starts_with(crate::app::WARNING), "{note:?}");
 }
 
-/// Explain Analyze of a SELECT runs in a rolled-back transaction too (a function it calls may write); one that calls a function
-/// Qurry doesn't know asks first, a plain one doesn't and says nothing more
+/// Explain Analyze of several statements that need a look for different reasons names each with its own reason (as the GUI does)
 #[tokio::test]
-async fn explain_analyze_wraps_reads_and_asks_before_unknown_functions() {
+async fn explain_analyze_lists_each_statement_with_its_reason() {
+    let mut h = Harness::new().await;
+    h.console_with("select nextval('s'); delete from audit", 0, 0);
+    h.app.analyze_next = true;
+    h.app.run_stmts(vec!["select nextval('s')".into(), "delete from audit".into()], true, false);
+    h.app.analyze_next = false;
+    let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
+    assert!(text.starts_with("Explain Analyze really runs the statements, and 2 of them need a look:"), "{text}");
+    assert!(text.contains("  select nextval('s')\n    a rollback can't undo what it does outside the transaction"), "{text}");
+    assert!(text.contains("  delete from audit\n    DELETE without WHERE changes every row, holding their locks"), "{text}");
+    // Drawn with the danger border, as the ask for one statement is
+    assert_eq!(confirm_border(&mut h), crate::kit::DANGER);
+}
+
+/// The colour of the Confirm popup's top border, just left of its title
+fn confirm_border(h: &mut Harness) -> ratatui::style::Color {
+    let (w, ht) = (120u16, 40u16);
+    let buf = h.buffer(w, ht);
+    let title: Vec<&str> = " Confirm ".split("").filter(|c| !c.is_empty()).collect();
+    let at = (0..ht).flat_map(|y| (1..w - title.len() as u16).map(move |x| (x, y))).find(|&(x, y)| title.iter().enumerate().all(|(i, c)| buf[(x + i as u16, y)].symbol() == *c));
+    let (x, y) = at.expect("no Confirm popup drawn");
+    buf[(x - 1, y)].fg
+}
+
+/// Explain Analyze of a SELECT runs in a rolled-back transaction too (a function it calls may write), without asking (a function's
+/// name says nothing of what it does) and saying nothing more
+#[tokio::test]
+async fn explain_analyze_wraps_reads() {
     static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
     fn record(q: &str) -> Result<QueryResult, String> {
         SEEN.lock().unwrap().push(q.to_string());
@@ -220,9 +246,7 @@ async fn explain_analyze_wraps_reads_and_asks_before_unknown_functions() {
     h.app.analyze_next = true;
     h.app.run_stmts(vec![sql.into()], true, false);
     h.app.analyze_next = false;
-    let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
-    assert!(text.contains("it calls archive_old_orders(), and a rollback can't undo what a function does outside the transaction"), "{text}");
-    h.key("y");
+    assert!(h.app.popup.is_none(), "a read that calls a user-defined function doesn't ask");
     h.settle().await;
     assert_eq!(*SEEN.lock().unwrap(), ["BEGIN", "EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) select archive_old_orders()", "ROLLBACK"]);
     SEEN.lock().unwrap().clear();

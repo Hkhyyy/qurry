@@ -55,7 +55,7 @@
 | `Notice` · `EmptyState` | 안내 · 경고 · 오류 한 덩어리 / 비어 있을 때 |
 | `ListItem` | 목록 한 줄: [앞(체크)] [색 띠] [아이콘] 제목 설명 ……… 오른쪽, 두 번째 줄 (`subtitle`), `selected` · `dim` · `mono` |
 | `TreeRow` | 트리 한 줄: 들여쓰기 ▸ [앞] 아이콘 이름 [배지] 설명 ……… 오른쪽 |
-| `DetailRow` | 코드 + 오른쪽 값 (행 수 · pid · 버전), 값 `tone` |
+| `DetailRow` | 코드 + 오른쪽 값 (행 수 · pid · 버전), 값 `tone`, 코드 아래 `note` (묻는 이유) |
 | `MenuItem` · `MenuSeparator` · `MenuLabel` | 메뉴 한 줄 (이름 ……… 단축키 · ▸) / 구분선 / 흐린 설명 줄 |
 | `TabItem` · `RailItem` · `StatusItem` | 닫을 수 있는 탭 (편집기 · 결과, 📌 고정) / 왼쪽 세로 막대 칸 / 상태 줄 칸 |
 
