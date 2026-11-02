@@ -86,7 +86,7 @@ Query history and snippets are kept in the config folder and shared by the GUI a
 
 Each node shows its own share of the time (Explain Analyze) or cost, and flags what is worth a look — a Seq Scan over a big table, row estimates off by 10× or more, filters that throw away most rows, sorts and hashes spilled to disk. TUI: `⌥e` Explain, `⌃k` › Explain Analyze.
 
-Explain Analyze really runs the statement. For one that changes data (UPDATE, DELETE, INSERT …) Qurry runs it on PostgreSQL and MySQL inside a transaction and rolls it back — or back to a savepoint when you already have a transaction open — so nothing is changed.
+Explain Analyze really runs the statement. For one that changes data (UPDATE, DELETE, INSERT, SELECT … INTO …) Qurry runs it on PostgreSQL and MySQL inside a transaction and rolls it back — or back to a savepoint when you already have a transaction open — so nothing is changed.
 
 ---
 

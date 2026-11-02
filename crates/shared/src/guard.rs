@@ -305,6 +305,10 @@ const SIDE_EFFECT_FUNCS: &[&str] = &[
     "load_file", "sleep", "benchmark", "get_lock", "release_lock", "release_all_locks",
 ];
 
+/// Functions that change data although the statement reads like a SELECT: sequences and large objects (is_read only: an INSERT
+/// over MCP execute may call nextval, and a read-only transaction refuses them anyway)
+const WRITE_FUNCS: &[&str] = &["nextval", "lo_create", "lo_creat", "lo_unlink", "lo_put", "lo_from_bytea", "lowrite", "lo_truncate", "lo_truncate64"];
+
 /// SQL Server can chain statements without ; (SELECT 1 DROP TABLE t is one batch). If one of these words follows a read statement, it's another statement
 const MSSQL_STATEMENT_WORDS: &[&str] = &[
     "drop", "alter", "create", "exec", "execute", "truncate", "grant", "revoke", "deny", "declare", "waitfor", "backup", "restore", "kill", "use",
@@ -979,7 +983,8 @@ pub fn redis_mcp_write_violation(line: &str) -> Option<String> {
 }
 
 /// Whether the statement doesn't change data (Production confirmation, Explain Analyse rollback, the Production log, and
-/// counting "already committed changes" in script failure notes). A call to a side-effect function (dblink_exec, setval …) is not a read.
+/// counting "already committed changes" in script failure notes). A call to a side-effect function (dblink_exec, setval, nextval …) is not a read,
+/// nor is SELECT … INTO (a new table in PostgreSQL · SQL Server, a file on the MySQL server, or variables).
 /// With a backslash the server's settings decide where strings end (MySQL NO_BACKSLASH_ESCAPES and ANSI_QUOTES,
 /// PostgreSQL standard_conforming_strings), so the statement must be a read under every rule
 pub fn is_read(sql: &str, kind: DbKind) -> bool {
@@ -988,7 +993,11 @@ pub fn is_read(sql: &str, kind: DbKind) -> bool {
         let call = |i: usize| sc.toks.get(i + 1).is_some_and(|n| n.text == "(");
         READ_WORDS.contains(&first)
             && !sc.toks.iter().enumerate().any(|(i, t)| {
-                t.word && (["insert", "update", "delete", "merge"].contains(&t.text.as_str()) || (call(i) && SIDE_EFFECT_FUNCS.contains(&t.text.as_str())))
+                let w = t.text.as_str();
+                t.word
+                    && (["insert", "update", "delete", "merge"].contains(&w)
+                        || (!t.quoted && w == "into")
+                        || (call(i) && (SIDE_EFFECT_FUNCS.contains(&w) || WRITE_FUNCS.contains(&w))))
             })
     };
     let backslash = matches!(kind, DbKind::Mysql | DbKind::Postgres) && sql.contains('\\');
@@ -1495,5 +1504,23 @@ mod tests {
         // The name alone (a column, a string) is not a call
         assert!(is_read("select setval from t", Postgres));
         assert!(is_read("select 'dblink_exec(x)'", Postgres));
+        // Sequences and large objects change data from a SELECT
+        for s in ["select nextval('s')", "select lo_unlink(1)", "select lo_create(0)", "select lo_put(1, 0, 'x')"] {
+            assert!(!is_read(s, Postgres), "{s}");
+        }
+        assert!(is_read("select nextval from t", Postgres));
+    }
+
+    /// SELECT … INTO creates a table (PostgreSQL · SQL Server) or writes a file on the MySQL server: not a read
+    #[test]
+    fn is_read_select_into() {
+        assert!(!is_read("select * into newtab from t", Postgres));
+        assert!(!is_read("with x as (select 1 a) select * into newtab from x", Postgres));
+        assert!(!is_read("select * from t into outfile '/tmp/x'", Mysql));
+        assert!(!is_read("select a into @v from t", Mysql));
+        assert!(!is_read("select * into newtab from t", DbKind::Mssql));
+        // The word in a string, a comment or a quoted name is not INTO
+        assert!(is_read("select 'into' as x, \"into\" from t -- into", Postgres));
+        assert!(is_read("select `into` from t", Mysql));
     }
 }

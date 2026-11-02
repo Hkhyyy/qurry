@@ -62,6 +62,34 @@ mod tests {
         }
     }
 
+    /// SELECTs that change data on the server are not reads: EXPLAIN ANALYZE of SELECT … INTO creates the table, and nextval /
+    /// lo_create persist although the statement is a SELECT. QURRY_TEST_PG=host:port:user:db (schema stmt_kind_exec_into)
+    #[tokio::test]
+    #[ignore]
+    async fn select_reads_that_write() {
+        use sqlx::Connection;
+        let into = "select * into stmt_kind_exec_into.n from stmt_kind_exec_into.t";
+        let seq = "select nextval('stmt_kind_exec_into.s')";
+        let lo = "select lo_create(0)";
+        assert!(!is_read(into, DbKind::Postgres) && !is_read(seq, DbKind::Postgres) && !is_read(lo, DbKind::Postgres));
+        let Ok(e) = std::env::var("QURRY_TEST_PG") else { return };
+        let p: Vec<&str> = e.split(':').collect();
+        let mut c = sqlx::PgConnection::connect(&format!("postgres://{}@{}:{}/{}", p[2], p[0], p[1], p[3])).await.unwrap();
+        sqlx::raw_sql("drop schema if exists stmt_kind_exec_into cascade; create schema stmt_kind_exec_into; create table stmt_kind_exec_into.t (a int); create sequence stmt_kind_exec_into.s")
+            .execute(&mut c)
+            .await
+            .unwrap();
+        sqlx::raw_sql(&format!("explain analyze {into}")).execute(&mut c).await.unwrap();
+        let (made,): (bool,) = sqlx::query_as("select to_regclass('stmt_kind_exec_into.n') is not null").fetch_one(&mut c).await.unwrap();
+        sqlx::raw_sql(seq).execute(&mut c).await.unwrap();
+        let (called,): (bool,) = sqlx::query_as("select is_called from stmt_kind_exec_into.s").fetch_one(&mut c).await.unwrap();
+        let (oid,): (sqlx::postgres::types::Oid,) = sqlx::query_as(lo).fetch_one(&mut c).await.unwrap();
+        let (kept,): (bool,) = sqlx::query_as("select exists (select 1 from pg_largeobject_metadata where oid = $1)").bind(oid).fetch_one(&mut c).await.unwrap();
+        sqlx::raw_sql(&format!("select lo_unlink({}); drop schema stmt_kind_exec_into cascade", oid.0)).execute(&mut c).await.unwrap();
+        assert!(made, "EXPLAIN ANALYZE of SELECT … INTO created no table");
+        assert!(called && kept, "nextval / lo_create changed nothing");
+    }
+
     /// Core's guard, sql and DbKind are the shared items, not copies: two glob imports of the same name only compile
     /// (instead of failing as ambiguous, E0659) when both paths name the same item
     #[test]
