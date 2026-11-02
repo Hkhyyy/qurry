@@ -1,6 +1,6 @@
 //! The TLS opt-in after a connect error that needs TLS: dev sources get a confirm popup (y turns on "Allow unencrypted" in the store, then
 //! reconnects or loads the tree again), Production gets only a status line pointing to the data source form. The popup opens on its own, so
-//! only a y pressed once it has been on screen for App::TLS_ASK_GRACE counts (never Enter)
+//! only a y pressed after App::TLS_ASK_GRACE without any other key counts (never Enter)
 use crate::app::{App, Focus, Popup, TabKind};
 use crate::testkit::Harness;
 use qurry_core::db::QueryResult;
@@ -260,10 +260,42 @@ async fn only_a_y_after_the_popup_was_read_allows() {
     h.settle().await;
     assert!(matches!(h.app.popup, Some(Popup::AllowPlaintext { .. })), "Enter doesn't answer it");
     assert!(!saved(&h).await.options.allow_plaintext);
+    // That Enter started the grace again
+    h.key("y");
+    assert!(matches!(h.app.popup, Some(Popup::AllowPlaintext { .. })), "a y right after a key doesn't answer it");
+    read_it(&mut h);
     h.key("y");
     h.settle().await;
     assert!(saved(&h).await.options.allow_plaintext);
     assert_eq!(h.console_text(), "select 1", "no key went to the editor");
+}
+
+/// Typing that goes on into the popup (F5, then the next statement) never allows plaintext: the grace runs from the last key, so a y
+/// counts only after a pause, however long the burst was
+#[tokio::test]
+async fn a_y_at_the_end_of_a_burst_of_keys_doesnt_allow() {
+    let mut h = lan(false).await;
+    h.console_with("select 1", 0, 0);
+    h.key("F5");
+    h.settle().await;
+    // Each key comes a bit under the grace after the one before: the whole burst is far longer than the grace
+    let gap = App::TLS_ASK_GRACE * 3 / 4;
+    for k in "ect * from city".chars().map(|c| if c == ' ' { "Space".to_string() } else { c.to_string() }) {
+        let Some(Popup::AllowPlaintext { opened, .. }) = &mut h.app.popup else { panic!("popup gone before {k}: {}", h.app.status) };
+        *opened -= gap;
+        h.key(&k);
+    }
+    h.settle().await;
+    assert!(matches!(h.app.popup, Some(Popup::AllowPlaintext { .. })), "{}", h.app.status);
+    assert!(!saved(&h).await.options.allow_plaintext, "the y of \"city\" doesn't allow");
+    // The question at the minimum size: the warning and the keys show; after a pause y allows
+    let (w, ht) = crate::ui::MIN_SIZE;
+    let s = h.screen(w, ht);
+    assert!(s.contains("Allow unencrypted for") && s.contains("⚠ The password will be") && s.contains("y allow"), "{s}");
+    read_it(&mut h);
+    h.key("y");
+    h.settle().await;
+    assert!(saved(&h).await.options.allow_plaintext);
 }
 
 /// The error comes back from a background load: a popup that is already open (another confirm, a form being typed in) stays

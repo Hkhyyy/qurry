@@ -1167,15 +1167,17 @@ fn popup_key(app: &mut App, k: KeyEvent) {
             KeyCode::Char('n') | KeyCode::Esc => {}
             _ => app.popup = Some(Popup::Confirm { text, on_yes }),
         },
+        // Only a y after a pause counts: every other key (and any key inside the grace) starts the grace again, so typing that
+        // goes on into the popup never allows plaintext
         Popup::AllowPlaintext { text, on_yes, opened } => match k.code {
-            _ if opened.elapsed() < App::TLS_ASK_GRACE => app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened }),
+            _ if opened.elapsed() < App::TLS_ASK_GRACE => app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened: std::time::Instant::now() }),
             KeyCode::Char('y') | KeyCode::Char('Y') if app.hits.confirm_unseen => {
                 app.status = "The window is too small to show the whole question: enlarge it, then answer (n / Esc cancels)".into();
                 app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened });
             }
             KeyCode::Char('y') | KeyCode::Char('Y') => on_yes(app),
             KeyCode::Char('n') | KeyCode::Esc => {}
-            _ => app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened }),
+            _ => app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened: std::time::Instant::now() }),
         },
         Popup::Input { title, body, mut input, on_ok, words, mut complete } => {
             // If the autocomplete list is open: ↑↓ select · Tab/Enter insert · Esc close

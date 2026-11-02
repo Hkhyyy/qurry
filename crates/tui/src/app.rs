@@ -356,8 +356,8 @@ pub enum Popup {
     /// body = app-written explanation shown in a box under the input (never interpolated names, so a name can't pose as it)
     Input { title: String, body: String, input: TextArea<'static>, on_ok: Box<dyn FnOnce(&mut App, String)>, words: Vec<String>, complete: Option<(Vec<String>, usize, usize)> },
     Confirm { text: String, on_yes: Box<dyn FnOnce(&mut App)> },
-    /// The TLS opt-in (offer_tls_opt_in). It opens on its own when a background load fails, so only a y pressed once it has been on screen
-    /// for TLS_ASK_GRACE allows plaintext: never Enter, never a key that was meant for the editor or the tree
+    /// The TLS opt-in (offer_tls_opt_in). It opens on its own when a background load fails, so only a y pressed after TLS_ASK_GRACE
+    /// without any key (`opened` restarts at each other key) allows plaintext: never Enter, never a key that was meant for the editor or the tree
     AllowPlaintext { text: String, on_yes: Box<dyn FnOnce(&mut App)>, opened: std::time::Instant },
     Palette(Palette),
     ConnForm(ConnForm),
@@ -941,7 +941,7 @@ impl App {
 
     // ───────── TLS opt-in ─────────
 
-    /// Keys pressed this soon after the opt-in popup opened were meant for what was on screen before it: they are ignored
+    /// Keys pressed this soon after the opt-in popup opened, or after the last key, were meant for what was on screen before it: they are ignored
     pub(crate) const TLS_ASK_GRACE: std::time::Duration = std::time::Duration::from_millis(400);
 
     /// A connect error that needs TLS (qurry_shared::errors::tls_opt_in): ask to allow unencrypted for this data source, then `then` (expand
