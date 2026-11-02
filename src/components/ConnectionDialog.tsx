@@ -96,8 +96,11 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   const setSsh = <K extends keyof SshConfig>(k: K, v: SshConfig[K]) => setCfg((c) => ({ ...c, ssh: { ...(c.ssh ?? EMPTY_SSH), [k]: v } }));
   const setSsm = <K extends keyof SsmConfig>(k: K, v: SsmConfig[K]) => setCfg((c) => ({ ...c, ssm: { ...(c.ssm ?? EMPTY_SSM), [k]: v } }));
   // One tunnel at a time; the other keeps its fields (a source that never used SSM gets no ssm settings).
-  // The last test result was for the other tunnel (its "Trust Host Key" button would act on the SSH server)
+  // A running test and the last result were for the other tunnel: stop it and drop both (no result for the old tunnel shows up later)
   const setTunnel = (t: typeof tunnel) => {
+    if (testingRef.current) void api.cancelTest(testingRef.current);
+    testingRef.current = null;
+    setTesting(null);
     setTest(null);
     setCfg((c) => ({
       ...c,
@@ -112,16 +115,18 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
     testingRef.current = id;
     setTesting(id);
     setTest(null);
+    let result: { ok: boolean; msg: string };
     try {
       // On the SSH tab, test only the SSH login; otherwise the DB connection through the tunnel (AWS SSM starts a session for it)
-      const v = sshTest ? await api.testSsh(cfg, sshSecret, id) : await api.testConnection(cfg, password, sshSecret, id);
-      setTest({ ok: true, msg: v });
+      result = { ok: true, msg: sshTest ? await api.testSsh(cfg, sshSecret, id) : await api.testConnection(cfg, password, sshSecret, id) };
     } catch (e) {
-      setTest({ ok: false, msg: String(e) });
-    } finally {
-      testingRef.current = null;
-      setTesting(null);
+      result = { ok: false, msg: String(e) };
     }
+    // Dropped meanwhile (the Tunnel changed): its result is for settings no longer shown
+    if (testingRef.current !== id) return;
+    testingRef.current = null;
+    setTesting(null);
+    setTest(result);
   };
   const cancelTest = () => void (testing && api.cancelTest(testing));
 
@@ -161,6 +166,13 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
       fixed
       stickyBackdrop
       onClose={onClose}
+      // Esc while testing cancels the test and keeps the dialog (and its edits); the next Esc closes it
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && testing) {
+          e.preventDefault();
+          cancelTest();
+        }
+      }}
       footer={
         <>
           {testing ? <Button onClick={cancelTest}>Cancel Test</Button> : <Button onClick={runTest}>{sshTest ? "Test SSH Connection" : "Test Connection"}</Button>}
@@ -464,7 +476,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
         </div>
       )}
       {/* Unknown SSH server: trust after checking the fingerprint → test again */}
-      {test && !test.ok && test.msg.includes("Unknown SSH host key") && cfg.ssh && (
+      {test && !test.ok && test.msg.includes("Unknown SSH host key") && tunnel === "ssh" && cfg.ssh && (
         <div className="ui-row conn-test-actions">
           <Button
             onClick={async () => {

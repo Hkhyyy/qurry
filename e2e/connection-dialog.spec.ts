@@ -64,4 +64,25 @@ test("AWS SSM: a Test Connection that keeps starting shows the elapsed time and 
   await expect(d.getByText("Test cancelled")).toBeVisible();
   await expect(d.getByRole("status")).toHaveCount(0);
   await expect(d.getByRole("button", { name: "Test Connection" })).toBeEnabled();
+
+  // Esc while testing cancels the test and keeps the dialog and its edits (like the TUI); the next Esc closes it
+  await d.getByRole("button", { name: "Test Connection" }).click();
+  await expect(d.getByRole("status")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(d.getByText("Test cancelled")).toBeVisible();
+  await expect(d.getByRole("textbox", { name: "Instance id" })).toHaveValue("i-00000000000000000");
+
+  // Choosing another Tunnel stops the test: no result for the old tunnel shows up afterwards
+  await d.getByRole("button", { name: "Test Connection" }).click();
+  await expect(d.getByRole("status")).toBeVisible();
+  await d.getByRole("combobox", { name: "Tunnel" }).selectOption("ssh");
+  await expect(d.getByRole("status")).toHaveCount(0);
+  await expect(d.getByRole("button", { name: "Test SSH Connection" })).toBeEnabled();
+  await page.waitForTimeout(300);
+  await expect(d.getByText("Test cancelled")).toHaveCount(0);
+  await expect(d.locator(".conn-test-actions")).toHaveCount(0);
+
+  await d.getByRole("button", { name: "Cancel", exact: true }).focus();
+  await page.keyboard.press("Escape");
+  await expect(dialog(page)).toHaveCount(0);
 });

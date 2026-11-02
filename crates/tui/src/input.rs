@@ -1261,6 +1261,13 @@ fn popup_key(app: &mut App, k: KeyEvent) {
                 KeyCode::Char('s') if k.modifiers.contains(KeyModifiers::CONTROL) => return save_form(app, form),
                 KeyCode::Enter => return save_form(app, form),
                 KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if !matches!(form.fields[form.sel].kind, FieldKind::Text | FieldKind::Secret) => {
+                    // A running test and the last message are for the other tunnel (⌃y would act on the SSH server): drop both
+                    if form.fields[form.sel].label == "Tunnel" {
+                        if let Some((_, h)) = form.testing.take() {
+                            h.abort();
+                        }
+                        form.message = None;
+                    }
                     let f = &mut form.fields[form.sel];
                     match &f.kind {
                         FieldKind::Toggle => f.value = if f.value == "on" { "off".into() } else { "on".into() },
@@ -2095,6 +2102,28 @@ mod tests {
         assert_eq!(form(&mut h).message.as_ref().map(|m| m.1.as_str()), Some("Test cancelled"), "a cancelled test reports nothing later");
         h.key("Esc");
         assert!(h.app.popup.is_none());
+        drop(l);
+    }
+
+    /// Choosing another Tunnel drops the running test and the last message: nothing for the old tunnel shows up later
+    #[tokio::test]
+    async fn conn_form_tunnel_change_drops_the_test() {
+        let mut h = Harness::new().await;
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        h.app.conn_form(None);
+        form(&mut h).fields.iter_mut().find(|x| x.label == "Port").unwrap().value = port.to_string();
+        form(&mut h).fields.iter_mut().find(|x| x.label == "Host").unwrap().value = "127.0.0.1".into();
+        form(&mut h).message = Some((false, "✕ Unknown SSH host key … Press ⌃y to trust it.".into()));
+        h.key("Ctrl+t");
+        assert!(form(&mut h).testing.is_some());
+        let f = form(&mut h);
+        f.sel = f.fields.iter().position(|x| x.label == "Tunnel").unwrap();
+        h.key("Right");
+        assert!(form(&mut h).testing.is_none(), "the test stopped");
+        h.settle().await;
+        assert_eq!(form(&mut h).message, None);
+        assert!(!h.screen(120, 40).contains("Testing…"));
         drop(l);
     }
 
