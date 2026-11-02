@@ -37,3 +37,4 @@ export const ColorsTruecolor = { ...by("Colors: truecolor"), name: "Colors · tr
 export const Colors256 = { ...by("Colors: 256"), name: "Colors · 256" };
 export const Colors16 = { ...by("Colors: 16"), name: "Colors · 16" };
 export const ColorsNoColor = { ...by("Colors: NO_COLOR"), name: "Colors · NO_COLOR" };
+export const ColorsNoColorGrid = { ...by("Colors: NO_COLOR grid"), name: "Colors · NO_COLOR grid" };

@@ -337,6 +337,21 @@ async fn all_scenes() -> Vec<Value> {
         h.app.color = mode;
         scenes.push(app_scene(&mut h, name, desc, 120, 22));
     }
+    // Still NO_COLOR: what doesn't depend on color in the grid
+    let (focus, g) = (h.app.focus, h.app.grid_mut().unwrap());
+    let at = (g.row, g.col);
+    g.set_value(1, 3, "61000".into());
+    g.deleted.insert(2);
+    g.anchor = Some((0, 1));
+    (g.row, g.col) = (1, 2);
+    h.app.focus = crate::app::Focus::Grid;
+    scenes.push(app_scene(&mut h, "Colors: NO_COLOR grid", "NO_COLOR=1: unsaved changes by the row number (~ edited · - deleted · + added) and bold cells; the cursor is the plain cell in the reversed range", 120, 22));
+    let g = h.app.grid_mut().unwrap();
+    g.edits.clear();
+    g.deleted.clear();
+    g.anchor = None;
+    (g.row, g.col) = at;
+    h.app.focus = focus;
     h.app.color = ColorMode::TrueColor;
     scenes.push(app_scene(&mut h, "Terminal too small", "Below 40×10 the layout isn't drawn: the size, the size needed and how to quit", 36, 9));
     h.app.popup = Some(Popup::Confirm {

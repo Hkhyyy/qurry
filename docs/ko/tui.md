@@ -10,22 +10,29 @@ TUI 는 시작할 때 아래 환경 변수로 색 모드를 하나 고릅니다 
 
 | 환경 | 보이는 것 |
 |---|---|
-| `NO_COLOR` 가 무엇으로든 설정됨 ([no-color.org](https://no-color.org) 참고) | 색이 전혀 없음. 선택한 줄, 배지 (`PROD`, `READ-ONLY`), 셀 커서는 반전으로, 흐린 글자는 dim 으로, 포커스가 있는 패널은 굵은 테두리로 보입니다 |
-| `COLORTERM=truecolor` 또는 `24bit`, 또는 `-direct` 로 끝나는 `TERM` | 24비트 테마 그대로 (GUI 와 같은 색) |
+| `NO_COLOR` 가 무엇으로든 설정됨 ([no-color.org](https://no-color.org) 참고) | 색이 전혀 없음. 선택 (편집기와 입력 칸에서 선택한 글자도), 배지 (`PROD`, `READ-ONLY`), 셀 커서는 반전으로, 흐린 글자는 dim 으로, 포커스가 있는 패널은 굵은 테두리로 보입니다 |
+| `COLORTERM=truecolor` 또는 `24bit`, `-direct` 로 끝나는 `TERM`, 또는 kitty, Alacritty, WezTerm, foot, Ghostty 의 `TERM` | 24비트 테마 그대로 (GUI 와 같은 색) |
 | `256color` 가 들어간 `TERM` (예: `xterm-256color`, `tmux-256color`) | 각 색을 xterm 256색 팔레트에서 가장 가까운 색으로. 색조는 유지됩니다: 운영 Data Source 는 계속 빨간색 |
-| 그 밖 (예: `TERM=xterm`, `screen`) | 터미널 기본 16색. 선택한 줄은 반전으로, 색이 칠해진 줄의 글자는 어둡게 — 어떤 터미널 테마에서도 읽힙니다 |
+| 그 밖 (예: `TERM=xterm`, `screen`) | 터미널 기본 16색. 선택한 줄은 반전으로, 색이 칠해진 줄의 글자는 검정 (빨강·파랑·자주 줄은 흰색) 으로 — 어떤 터미널 테마에서도 읽힙니다 |
 
 색이 꺼졌거나 16색뿐이면 시작할 때 상태 줄에 무엇을 바꾸면 되는지 나옵니다:
 
 - `NO_COLOR is set: colors off (unset NO_COLOR for colors)` — `unset NO_COLOR` 를 실행하고 (또는 셸 프로필에서 지우고) `qurry-tui` 를 다시 시작하세요.
 - `16 colors: set COLORTERM=truecolor for more if supported` — 터미널이 24비트 색을 보여 준다면 시작 전에 `export COLORTERM=truecolor`. 요즘 터미널 (iTerm2, kitty, WezTerm, Ghostty, Alacritty, Windows Terminal) 은 스스로 설정하지만, `ssh`, `sudo`, `tmux` / `screen` 안에서는 자주 빠집니다.
 
+`ssh` 나 `sudo` 로 (그리고 아래 `tmux` 안에서) 실행하면 보통 `COLORTERM` 이 전달되지 않아 24비트 터미널에서도 256색이나 16색이 됩니다: 접속한 쪽에서 `export COLORTERM=truecolor` 를 하거나, `~/.ssh/config` 의 `SendEnv COLORTERM` 과 서버 `sshd_config` 의 `AcceptEnv COLORTERM` 으로 넘기세요 (sudo 는 `sudo --preserve-env=COLORTERM`).
+
+색과 상관없이 보이는 것:
+
+- **저장하지 않은 그리드 변경**: 줄 번호 옆에 `+` 는 추가한 줄, `-` 는 삭제한 줄 (취소선도), `~` 는 셀을 고친 줄; 고친 셀은 굵게.
+- **범위 안의 셀 커서**: 반전을 쓰는 모드 (16색, `NO_COLOR`) 에서는 범위가 반전되고, 커서는 그 안에서 반전되지 않은 한 칸입니다 (스프레드시트처럼).
+
 `qurry-tui --help` 에도 같은 규칙이 나옵니다.
 
 ## 작은 창
 
 화면은 **40 × 10** 칸까지 그려집니다. 80 × 24 이상이면 넉넉하고, 작은 창에서는 `⌥0` 으로 탐색기를 숨기거나 `⌥[` 로 좁히세요.
-40 × 10 보다 작으면 깨진 화면 대신 `Terminal too small` 과 지금 크기, 필요한 크기가 나옵니다. 잃는 것은 없습니다: 창을 키우면 모두 그대로 돌아옵니다. `⌃q` 로 끝내기도 됩니다.
+40 × 10 보다 작으면 깨진 화면 대신 `Terminal too small` 과 지금 크기, 필요한 크기가 나옵니다. 잃는 것은 없습니다: 창을 키우면 모두 그대로 돌아옵니다. 그동안 키와 클릭은 아무것도 하지 않아 보이지 않는 것이 실행되거나 답해지지 않습니다; `⌃q` 로 끝내기만 됩니다.
 
 ## tmux 와 다른 멀티플렉서
 

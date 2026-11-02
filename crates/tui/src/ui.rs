@@ -73,9 +73,8 @@ pub const MIN_SIZE: (u16, u16) = (40, 10);
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
-    if area.width < MIN_SIZE.0 || area.height < MIN_SIZE.1 {
-        // Nothing to click while the screen isn't drawn
-        app.hits = Default::default();
+    app.too_small = area.width < MIN_SIZE.0 || area.height < MIN_SIZE.1;
+    if app.too_small {
         draw_too_small(f, app);
     } else {
         draw_screen(f, app);
@@ -378,6 +377,7 @@ fn draw_group(f: &mut Frame, app: &mut App, g: Option<usize>, area: Rect, focuse
 fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool) {
     // Unfocused panes are drawn like Tree focus (dimmed border·cursor)
     let focus = if focused { app.focus } else { Focus::Tree };
+    let color = app.color;
     let ro = app.tabs.get(idx).and_then(|t| app.conn(&t.conn)).map(|c| c.config.read_only).unwrap_or(false);
     let pct = app.console_pct;
     // Rebindable commands are shown with their first key in the current keymap
@@ -453,7 +453,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 f.render_widget(p, res);
             } else if let Some(g) = &mut c.grid {
                 let t = format!(" {} — {}{} rows ({k_out}: output) ", c.result_title, g.rows(), if g.result.truncated { "+" } else { "" });
-                g.render(f, res, t, focus == Focus::Grid);
+                g.render(f, res, t, focus == Focus::Grid, color);
             }
             if let (Some((x, y)), Some(cmp)) = (caret, &c.complete) {
                 draw_completion(f, cmp, x, y);
@@ -491,7 +491,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 let pend = if g.dirty() { format!(" · {} pending ({k_submit} submit, {} revert)", g.edits.len() + g.deleted.len() + g.added, disp("⌃z")) } else { String::new() };
                 let rows = if tt.error.is_some() && !g.dirty() { "query failed — no rows".to_string() } else { format!("{}{} rows", g.rows(), if g.result.truncated { "+" } else { "" }) };
                 let t = format!(" {}.{} — {rows}{}{}{} ", tt.schema, tt.table, if tt.pk.is_empty() { " · no PK (read-only)" } else { "" }, if ro { " · read-only" } else { "" }, pend);
-                g.render(f, grid, t, focus == Focus::Grid);
+                g.render(f, grid, t, focus == Focus::Grid, color);
             } else {
                 let msg = if tt.error.is_some() { String::new() } else { format!("Loading… {}", took.as_deref().unwrap_or("")) };
                 f.render_widget(Paragraph::new(msg).block(panel(format!(" {}.{} ", tt.schema, tt.table), focused)), grid);
@@ -524,10 +524,10 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                     let age = d.loaded.map(|t| format!(" from {} s ago", t.elapsed().as_secs())).unwrap_or_default();
                     let text = format!(" Refresh failed, showing data{age}: {}", e.lines().next().unwrap_or(""));
                     f.render_widget(Paragraph::new(text).style(Style::default().fg(WARN)).wrap(Wrap { trim: false }), msg);
-                    g.render(f, rest, title, focus == Focus::Grid);
+                    g.render(f, rest, title, focus == Focus::Grid, color);
                     area = rest;
                 }
-                (Some(g), None) => g.render(f, grid, title, focus == Focus::Grid),
+                (Some(g), None) => g.render(f, grid, title, focus == Focus::Grid, color),
                 (None, None) => f.render_widget(Paragraph::new("Loading…").block(panel(title, focus == Focus::Grid)), grid),
             }
             if focused {
@@ -578,7 +578,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                     let ttl = if d.ttl >= 0 { format!("TTL {}s", d.ttl / 1000) } else { "no TTL".into() };
                     let title = format!(" {} {key} · {} · {} {} ", d.ty.to_uppercase(), ttl, d.length, if d.ty == "string" { "bytes" } else { "items" });
                     match &mut r.value {
-                        Some(g) => g.render(f, right, title, vf),
+                        Some(g) => g.render(f, right, title, vf, color),
                         None => {
                             f.render_widget(Paragraph::new(r.text.as_deref().unwrap_or_default()).wrap(Wrap { trim: false }).block(panel(title, vf)), right);
                         }
@@ -1037,6 +1037,61 @@ mod tests {
             h.screen(w, ht);
         }
         assert!(h.screen(20, 6).contains("Terminal too"));
+    }
+
+    /// Under the message keys and clicks would act on a screen that isn't drawn: only the quit key works
+    #[tokio::test]
+    async fn too_small_terminal_ignores_keys_and_clicks_but_quit() {
+        let mut h = crate::testkit::Harness::new().await;
+        let cols: Vec<String> = (0..30).map(|i| format!("column_{i}")).collect();
+        let cols: Vec<&str> = cols.iter().map(|c| c.as_str()).collect();
+        h.table_tab("wide", &cols, &[&["1"; 30]], &["column_0"]);
+        h.app.focus = crate::app::Focus::Grid;
+        h.screen(120, 30);
+        let g = h.app.grid_mut().unwrap();
+        g.col_off = 10;
+        let bar = g.hbar;
+        assert!(bar.width > 0);
+        // A confirm that arrives (or was open) when the window shrinks
+        h.app.popup = Some(crate::app::Popup::Confirm { text: "Run it?".into(), on_yes: Box::new(|a| a.status = "ran".into()) });
+        assert!(h.screen(39, 30).contains("Terminal too small"));
+        h.key("Enter");
+        h.key("y");
+        h.paste("x");
+        assert!(h.app.popup.is_some() && h.app.status != "ran");
+        h.app.popup = None;
+        h.mouse("down", bar.x + 6, bar.y);
+        h.key("Right");
+        let g = h.app.grid_mut().unwrap();
+        assert_eq!((g.col_off, g.col), (10, 0), "the hidden grid doesn't scroll or move");
+        assert!(h.app.drag.is_none());
+        // Back at full size keys act again; the quit key works under the message too
+        h.screen(120, 30);
+        h.key("Right");
+        assert_eq!(h.app.grid_mut().unwrap().col, 1);
+        h.screen(39, 30);
+        h.key("Ctrl+Q");
+        assert!(h.app.quit);
+    }
+
+    /// NO_COLOR: text selected in the editor stays visible (tui-textarea draws it on a color, which NO_COLOR drops)
+    #[tokio::test]
+    async fn no_color_shows_selected_text_in_reverse_video() {
+        let mut h = crate::testkit::Harness::new().await;
+        h.console_with("select 12345 from t", 0, 0);
+        h.app.focus = crate::app::Focus::Editor;
+        for _ in 0..6 {
+            h.key("Shift+Right");
+        }
+        assert_eq!(h.console_cursor().1.as_deref(), Some("select"));
+        h.app.color = crate::theme::ColorMode::NoColor;
+        let buf = h.buffer(100, 30);
+        let (x, y) = (0..30).find_map(|y| {
+            let l: String = (0..100).map(|x| buf[(x, y)].symbol()).collect();
+            l.find("select 12345").map(|i| (l[..i].chars().count() as u16, y))
+        }).unwrap();
+        assert!((0..6).all(|i| buf[(x + i, y)].modifier.contains(Modifier::REVERSED)), "selected text is reversed");
+        assert!(!buf[(x + 7, y)].modifier.contains(Modifier::REVERSED), "the rest isn't");
     }
 
     #[test]

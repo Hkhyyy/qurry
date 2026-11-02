@@ -5,6 +5,9 @@ use crate::kit::{CELL_EDITED, DROP, SEL, SEL_BLUR};
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier};
 
+/// tui-textarea draws selected text on this background (no input here sets its own selection style)
+const TEXTAREA_SEL: Color = Color::LightBlue;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ColorMode {
     /// 24-bit colors (COLORTERM=truecolor / 24bit)
@@ -33,7 +36,8 @@ impl ColorMode {
             return Self::TrueColor;
         }
         match var("TERM") {
-            Some(t) if t.ends_with("-direct") => Self::TrueColor,
+            // Also terminals known for 24-bit colors, whose COLORTERM is lost over ssh or sudo
+            Some(t) if t.ends_with("-direct") || ["xterm-kitty", "alacritty", "wezterm", "foot", "xterm-ghostty"].contains(&t.as_str()) => Self::TrueColor,
             Some(t) if t.contains("256color") => Self::Ansi256,
             _ => Self::Ansi16,
         }
@@ -49,6 +53,11 @@ impl ColorMode {
         }
     }
 
+    /// Selections are shown in reverse video, not in a color (the grid then marks its cursor inside a range differently)
+    pub fn reverses_selection(self) -> bool {
+        matches!(self, Self::Ansi16 | Self::NoColor)
+    }
+
     /// Map every cell of a drawn frame to this mode
     pub fn apply(self, buf: &mut Buffer) {
         if self == Self::TrueColor {
@@ -56,14 +65,13 @@ impl ColorMode {
         }
         let mut seen = std::collections::HashMap::new();
         for cell in buf.content.iter_mut() {
-            let selection = [SEL, DROP, CELL_EDITED].contains(&cell.bg);
-            let reverse = match self {
-                // Also the unfocused selection (the thick border tells where the focus is) and badges (dark text on a light background)
-                Self::NoColor => selection || cell.bg == SEL_BLUR || (cell.bg != Color::Reset && cell.fg == Color::Black),
-                // Terminal themes give the 16 colors very different brightness; reverse video reads in all of them
-                Self::Ansi16 => selection,
-                _ => false,
-            };
+            // Terminal themes give the 16 colors very different brightness; reverse video reads in all of them
+            let selection = self.reverses_selection() && [SEL, DROP, CELL_EDITED].contains(&cell.bg);
+            let reverse = selection
+                || (self == Self::NoColor
+                    // Also the unfocused selection (the thick border tells where the focus is), text selected in an input
+                    // (tui-textarea's default selection style) and badges (dark text on a light background)
+                    && (cell.bg == SEL_BLUR || cell.bg == TEXTAREA_SEL || (cell.bg != Color::Reset && cell.fg == Color::Black)));
             if reverse || self == Self::NoColor {
                 let mut m = cell.modifier;
                 if reverse {
@@ -80,9 +88,10 @@ impl ColorMode {
             let mut color = |c: Color, bg: bool| *seen.entry((c, bg)).or_insert_with(|| self.color(c, bg));
             let bg = color(cell.bg, true);
             let mut fg = color(cell.fg, false);
-            // 16 colors: dark text on any colored background (themes make those mid-bright), and text never in its own background's color
+            // 16 colors: one text color on any colored background, dark on the hues that are light in common palettes,
+            // white on the dark ones (xterm's blue gives black text about 2:1); and text never in its own background's color
             if self == Self::Ansi16 && !matches!(bg, Color::Reset | Color::Black | Color::DarkGray) {
-                fg = Color::Black;
+                fg = if matches!(bg, Color::Red | Color::Blue | Color::Magenta) { Color::White } else { Color::Black };
             } else if fg == bg && fg != Color::Reset {
                 fg = Color::White;
             }
@@ -96,6 +105,8 @@ impl ColorMode {
     pub fn color(self, c: Color, bg: bool) -> Color {
         match (self, c) {
             (Self::NoColor, _) => Color::Reset,
+            // The grid's range is nearest to the selection's color: navy keeps the cursor inside it visible
+            (Self::Ansi256, CELL_EDITED) => Color::Indexed(17),
             (Self::Ansi256, Color::Rgb(r, g, b)) => Color::Indexed(ansi256(r, g, b)),
             (Self::Ansi16, Color::Rgb(r, g, b)) => ansi16(r, g, b, bg),
             _ => c,
@@ -191,6 +202,10 @@ mod tests {
         assert_eq!(ColorMode::detect(env(&[("TERM", "tmux-256color"), ("COLORTERM", "")])), Ansi256);
         assert_eq!(ColorMode::detect(env(&[("TERM", "xterm")])), Ansi16);
         assert_eq!(ColorMode::detect(env(&[("TERM", "screen")])), Ansi16);
+        // Truecolor terminals whose COLORTERM was lost (ssh, sudo)
+        for t in ["xterm-kitty", "alacritty", "wezterm", "foot", "xterm-ghostty"] {
+            assert_eq!(ColorMode::detect(env(&[("TERM", t)])), TrueColor, "{t}");
+        }
         assert_eq!(ColorMode::detect(env(&[])), Ansi16);
     }
 
@@ -218,6 +233,8 @@ mod tests {
         let i = |c: Color| ColorMode::Ansi256.color(c, true);
         assert_ne!(i(SEL), i(SEL_BLUR));
         assert_ne!(i(SEL_BLUR), i(POPUP_BG));
+        assert_ne!(i(SEL), i(CELL_EDITED), "the grid's cursor inside its range");
+        assert_ne!(i(SEL_BLUR), i(CELL_EDITED));
         assert_eq!(i(Color::Cyan), Color::Cyan, "named colors are left to the terminal");
     }
 
@@ -257,6 +274,10 @@ mod tests {
         assert!(cell(ColorMode::NoColor, Style::default().bg(SEL_BLUR)).modifier.contains(Modifier::REVERSED));
         // Badge: dark text on a light background
         assert!(cell(ColorMode::NoColor, Style::default().fg(Color::Black).bg(WARN)).modifier.contains(Modifier::REVERSED));
+        // Text selected in an input (tui-textarea's own selection style)
+        let c = cell(ColorMode::NoColor, tui_textarea::TextArea::default().selection_style());
+        assert_eq!((c.fg, c.bg), (Color::Reset, Color::Reset));
+        assert!(c.modifier.contains(Modifier::REVERSED));
         // Surfaces and Data Source colors just lose their color
         assert!(cell(ColorMode::NoColor, Style::default().bg(POPUP_BG)).modifier.is_empty());
         assert!(cell(ColorMode::NoColor, Style::default().bg(hex("#6e2a2a").unwrap())).modifier.is_empty());
@@ -271,8 +292,13 @@ mod tests {
         // Text on a colored Data Source row turns dark
         let c = cell(ColorMode::Ansi16, Style::default().bg(hex("#5f5b24").unwrap()));
         assert_eq!((c.fg, c.bg), (Color::Black, Color::Yellow));
-        let c = cell(ColorMode::Ansi16, Style::default().fg(C_DB).bg(hex("#6e2a2a").unwrap()));
-        assert_eq!((c.fg, c.bg), (Color::Black, Color::Red));
+        // … but white on the hues that are dark in common palettes (xterm's blue gives black text about 2:1)
+        for (h, bg) in [("#6e2a2a", Color::Red), ("#28406e", Color::Blue), ("#4f2f68", Color::Magenta)] {
+            let c = cell(ColorMode::Ansi16, Style::default().fg(C_DB).bg(hex(h).unwrap()));
+            assert_eq!((c.fg, c.bg), (Color::White, bg), "{h}");
+        }
+        let c = cell(ColorMode::Ansi16, Style::default().fg(C_DB).bg(hex("#2f5634").unwrap()));
+        assert_eq!((c.fg, c.bg), (Color::Black, Color::Green));
         // The selection is reverse video, whatever the terminal theme makes of blue
         let c = cell(ColorMode::Ansi16, Style::default().fg(ACCENT).bg(SEL).add_modifier(Modifier::BOLD));
         assert_eq!((c.fg, c.bg), (Color::Reset, Color::Reset));
