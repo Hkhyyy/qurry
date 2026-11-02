@@ -322,7 +322,7 @@ pub(crate) struct Col {
 }
 
 /// How to keep a statement's undo: `snapshot` is a SELECT … FOR UPDATE of the rows it changes, run right before it in the same transaction
-/// (Session::run_with_snapshot · execute_batch_with), so nobody can change the rows it saved in between; `undo` turns its result into SQL that reverts them
+/// (Session::run_with_snapshot · Backend::execute_batch), so nobody can change the rows it saved in between; `undo` turns its result into SQL that reverts them
 /// (rows that start to match only after the snapshot aren't locked: `undo` keeps no undo when the change hits more rows than it saved)
 pub(crate) struct UndoPlan {
     pub snapshot: String,

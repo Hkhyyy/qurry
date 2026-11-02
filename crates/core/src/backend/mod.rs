@@ -2,12 +2,16 @@
 //! Callers go through `dispatch!` on a `Pool`, which picks the impl at compile time (no `dyn`).
 //! An operation a kind doesn't implement falls back to the default, an "<op> isn't available for <kind>" error.
 //! The trait is grouped in sections (metadata first); each impl keeps the same sections in the same order.
+use crate::db::QueryResult;
 use crate::ddl::TableDef;
 use crate::erd::Erd;
 use crate::error::{AppError, AppResult};
 use crate::fake::TableShape;
 use crate::hints::{Hint, HintReq};
 use crate::meta::{CompletionTable, FtsHit, FtsRequest, IndexEntry, SchemaInfo, SchemaObjects, TableDetail};
+use crate::session::Session;
+use crate::store::ConnectionConfig;
+use crate::transfer::Exporter;
 
 pub(crate) mod mysql;
 pub(crate) mod pg;
@@ -75,7 +79,51 @@ pub(crate) trait Backend {
     async fn table_shape(&self, _schema: &str, _table: &str) -> AppResult<TableShape> {
         unsupported("Test data", self)
     }
+
+    // ───── Connection: db.rs · app.rs ─────
+
+    async fn server_version(&self) -> AppResult<String>;
+
+    /// Close the pool's connections (Redis and driver plugins hold nothing to close)
+    async fn close(&self) {}
+
+    /// keep-alive (Pool::ping cuts it off after 5 seconds)
+    async fn ping(&self) {}
+
+    /// What to say when it connected without TLS (None: encrypted, this machine, an SSH tunnel, or a kind that doesn't tell)
+    async fn plaintext_note(&self, _cfg: &ConnectionConfig) -> Option<String> {
+        None
+    }
+
+    // ───── Running: db.rs · session.rs · app.rs ─────
+
+    /// One statement on the pool, up to `limit` rows
+    async fn run_query(&self, sql: &str, limit: usize) -> AppResult<QueryResult>;
+
+    /// Rerun the query and write the full result to `out`
+    async fn export(&self, sql: &str, out: &mut Exporter) -> AppResult<()>;
+
+    /// MCP read, after the guard passed it (AppState::run_read_only): in a READ ONLY transaction with a time limit where the server has one
+    async fn run_read_only(&self, sql: &str, limit: usize) -> AppResult<QueryResult>;
+
+    /// MCP CSV export, after the guard passed it: the same rules as run_read_only for the full result
+    async fn export_read_only(&self, sql: &str, out: &mut Exporter) -> AppResult<()>;
+
+    /// A console tab's own session
+    async fn open_session(&self) -> AppResult<Session>;
+
+    /// Cancel the running query of a session (Session::backend_id). false: this kind can't
+    async fn cancel(&self, _backend_id: i64) -> AppResult<bool> {
+        Ok(false)
+    }
+
+    /// Statements in one transaction where the kind has them (see AppState::execute_batch). exact_one: each UPDATE/DELETE hits exactly
+    /// 1 row; prepared: one statement per item, enforced by the server (MCP); snaps: the undo snapshot to take right before each statement
+    async fn execute_batch(&self, statements: &[String], exact_one: bool, prepared: bool, snaps: &[Option<&str>]) -> AppResult<(u64, Snapshots)>;
 }
+
+/// Each statement's undo snapshot result with the rows its statement changed (None: no snapshot for it)
+pub(crate) type Snapshots = Vec<Option<(AppResult<QueryResult>, u64)>>;
 
 /// `dispatch!(pool, b => b.op(..).await)`: run the expression with `b` bound to the `Backend` behind `pool`
 /// (`Pool` or `&Pool`). Each arm is compiled for its own kind.
@@ -88,10 +136,7 @@ macro_rules! dispatch {
                 let $b = &$crate::backend::redis::Redis { conn, db: *db };
                 $body
             }
-            $crate::db::Pool::Plugin(c) => {
-                let $b = &**c;
-                $body
-            }
+            $crate::db::Pool::Plugin($b) => $body,
         }
     };
 }
@@ -107,6 +152,27 @@ mod tests {
     impl Backend for Bare {
         fn label(&self) -> String {
             "the bare driver".into()
+        }
+        async fn server_version(&self) -> AppResult<String> {
+            unreachable!()
+        }
+        async fn run_query(&self, _sql: &str, _limit: usize) -> AppResult<QueryResult> {
+            unreachable!()
+        }
+        async fn export(&self, _sql: &str, _out: &mut Exporter) -> AppResult<()> {
+            unreachable!()
+        }
+        async fn run_read_only(&self, _sql: &str, _limit: usize) -> AppResult<QueryResult> {
+            unreachable!()
+        }
+        async fn export_read_only(&self, _sql: &str, _out: &mut Exporter) -> AppResult<()> {
+            unreachable!()
+        }
+        async fn open_session(&self) -> AppResult<Session> {
+            unreachable!()
+        }
+        async fn execute_batch(&self, _statements: &[String], _exact_one: bool, _prepared: bool, _snaps: &[Option<&str>]) -> AppResult<(u64, Snapshots)> {
+            unreachable!()
         }
     }
 

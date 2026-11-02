@@ -1301,7 +1301,7 @@ mod tests {
         for ok in ["LRANGE l -10 -1", "ZRANGE z -1000 -1", "ZREVRANGE z -3 -2", "LRANGE l 5 2", "LRANGE l -1 -5", "LRANGE l 0 999"] {
             assert!(v(ok).is_none() && size(ok).is_none(), "{ok}");
         }
-        // Whole keys pass here and are counted at run time (qurry_core::app::check_redis_read)
+        // Whole keys pass here and are counted at run time (qurry_core::redisdb::check_read)
         for (line, count, keys) in [("HGETALL big", "HLEN", vec!["big"]), ("HVALS h", "HLEN", vec!["h"]), ("SMEMBERS s", "SCARD", vec!["s"]), ("SUNION a b", "SCARD", vec!["a", "b"]),
             ("LRANGE l 0 -1", "LLEN", vec!["l"]), ("LRANGE l -10 5", "LLEN", vec!["l"]), ("ZRANGE z 0 -1", "ZCARD", vec!["z"]), ("ZREVRANGE z 0 -1", "ZCARD", vec!["z"]),
             ("ZRANGE z -inf +inf BYSCORE", "ZCARD", vec!["z"]), ("ZRANGEBYSCORE z -inf +inf", "ZCARD", vec!["z"]), ("XRANGE s - +", "XLEN", vec!["s"]),

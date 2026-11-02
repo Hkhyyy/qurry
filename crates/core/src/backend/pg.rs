@@ -1,13 +1,18 @@
-//! PostgreSQL: pg_catalog queries
-use super::Backend;
+//! PostgreSQL: pg_catalog queries, connecting (TLS rules), MCP reads in a READ ONLY transaction, batches. The console session is crate::session::PgSession
+use super::{Backend, Snapshots};
+use crate::db::QueryResult;
 use crate::ddl::{ColumnDef, ForeignKeyDef, IndexDef, TableDef, action};
 use crate::erd::{Columns, Erd, ErdColumn, ErdRelation, ErdTable};
 use crate::error::{AppError, AppResult};
 use crate::fake::{Col, Fk, TableShape, quoted_literals, type_args};
 use crate::hints::{Hint, HintReq};
 use crate::meta::{ColumnMeta, CompletionTable, ConstraintMeta, FtsHit, FtsRequest, IndexEntry, IndexMeta, RelationInfo, RoutineInfo, SchemaInfo, SchemaObjects, TableDetail};
-use crate::store::DbKind;
-use sqlx::PgPool;
+use crate::session::{PgSession, Session, check_exact_one, pg_snapshot};
+use crate::store::{ConnectionConfig, DbKind};
+use crate::transfer::Exporter;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
+use sqlx::{Executor, PgPool};
+use std::time::Duration;
 
 const REL_OID: &str = "(select c.oid from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = $1 and c.relname = $2)";
 
@@ -526,4 +531,174 @@ impl Backend for PgPool {
             .collect();
         Ok(TableShape { cols, fks: fks.into_iter().map(|(ref_table, cols, ref_cols)| Fk { cols, ref_table, ref_cols }).collect() })
     }
+
+    // ───── Connection: db.rs · app.rs ─────
+
+    async fn server_version(&self) -> AppResult<String> {
+        Ok(sqlx::query_scalar::<_, String>("select version()").fetch_one(self).await?)
+    }
+
+    async fn close(&self) {
+        PgPool::close(self).await
+    }
+
+    async fn ping(&self) {
+        let _ = sqlx::query("select 1").execute(self).await;
+    }
+
+    /// With no SSL setting, it falls back to plain text if the server lacks TLS (except this machine · tunnels)
+    async fn plaintext_note(&self, cfg: &ConnectionConfig) -> Option<String> {
+        if cfg.active_ssl().is_some() || crate::db::is_local(cfg) {
+            return None;
+        }
+        let ssl: Option<bool> = sqlx::query_scalar("select ssl from pg_stat_ssl where pid = pg_backend_pid()").fetch_optional(self).await.ok().flatten();
+        (ssl == Some(false)).then(|| "⚠ Not encrypted: the server didn't offer TLS, so the password and data travel in plain text. Enable SSL in the data source to require it.".to_string())
+    }
+
+    // ───── Running: db.rs · session.rs · app.rs ─────
+
+    async fn run_query(&self, sql: &str, limit: usize) -> AppResult<QueryResult> {
+        crate::db::run_pg_on(&mut *self.acquire().await?, sql, limit).await
+    }
+
+    async fn export(&self, sql: &str, out: &mut Exporter) -> AppResult<()> {
+        let mut conn = self.acquire().await?;
+        crate::db::export_pg_on(&mut conn, sql, out).await
+    }
+
+    async fn run_read_only(&self, sql: &str, limit: usize) -> AppResult<QueryResult> {
+        let mut tx = self.begin().await?;
+        tx.execute("SET TRANSACTION READ ONLY").await?;
+        tx.execute(READ_ONLY_TIMEOUT).await?;
+        tx.execute(READ_ONLY_STRINGS).await?;
+        let r = crate::db::run_on(&mut tx, sql, limit).await;
+        let _ = tx.rollback().await;
+        r
+    }
+
+    async fn export_read_only(&self, sql: &str, out: &mut Exporter) -> AppResult<()> {
+        let mut tx = self.begin().await?;
+        tx.execute("SET TRANSACTION READ ONLY").await?;
+        tx.execute(READ_ONLY_TIMEOUT).await?;
+        tx.execute(READ_ONLY_STRINGS).await?;
+        let r = crate::db::export_pg_on(&mut tx, sql, out).await;
+        let _ = tx.rollback().await;
+        r
+    }
+
+    async fn open_session(&self) -> AppResult<Session> {
+        Ok(Session::Pg(PgSession::open(self).await?))
+    }
+
+    /// Cancel the backend's running query from another connection
+    async fn cancel(&self, pid: i64) -> AppResult<bool> {
+        Ok(sqlx::query_scalar("select pg_cancel_backend($1)").bind(pid as i32).fetch_one(self).await?)
+    }
+
+    /// One transaction: if any statement fails, everything rolls back
+    async fn execute_batch(&self, statements: &[String], exact_one: bool, prepared: bool, snaps: &[Option<&str>]) -> AppResult<(u64, Snapshots)> {
+        let mut tx = self.begin().await?;
+        let mut affected = 0;
+        let mut shots = Vec::new();
+        for (i, st) in statements.iter().enumerate() {
+            let shot = match snaps.get(i).copied().flatten() {
+                Some(q) => Some(pg_snapshot(&mut tx, q).await),
+                None => None,
+            };
+            // Cancelled · timed out while locking the rows: nothing is saved (dropping tx rolls back)
+            if let Some(Err(e)) = &shot
+                && crate::audit::stops_change(e)
+            {
+                return Err(crate::audit::stopped(e, false));
+            }
+            let r = if prepared { sqlx::query(st).execute(&mut *tx).await } else { tx.execute(st.as_str()).await };
+            let n = r.map_err(|e| AppError::Msg(format!("{e}\n→ {st}")))?.rows_affected();
+            check_exact_one(st, n, exact_one)?;
+            shots.push(shot.map(|s| (s, n)));
+            affected += n;
+        }
+        tx.commit().await?;
+        Ok((affected, shots))
+    }
+}
+
+/// Time limit for read-only (MCP) queries (so queries sent by others do not hold the server for long).
+/// MCP reads: 60 seconds, string parsing matches guard (even if the server or role sets standard_conforming_strings = off)
+const READ_ONLY_TIMEOUT: &str = "SET LOCAL statement_timeout = '60s'";
+const READ_ONLY_STRINGS: &str = "SET LOCAL standard_conforming_strings = on";
+
+/// Connect to `host`:`port`: the server, or the SSH tunnel's local port (db::connect_via)
+pub(crate) async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str, port: u16) -> AppResult<PgPool> {
+    let mut opts = PgConnectOptions::new()
+        .host(host)
+        .port(port)
+        .username(&cfg.user)
+        .application_name("qurry");
+    // Like DataGrip, an empty value connects to the postgres DB (the PG default, a DB named after the user, often does not exist)
+    let database = if cfg.database.trim().is_empty() { "postgres" } else { cfg.database.trim() };
+    opts = opts.database(database);
+    if let Some(p) = password.filter(|p| !p.is_empty()) {
+        opts = opts.password(p);
+    }
+    if cfg.read_only {
+        // Do not leave the parsing of \ in strings to server settings (match the rules guard reads with)
+        opts = opts.options([("default_transaction_read_only", "on"), ("standard_conforming_strings", "on")]);
+    }
+    // Without SSL settings a remote server must still set up TLS (certificate not checked); plain text only for this computer,
+    // an SSH tunnel, or when the data source allows it (Prefer would quietly fall back to plain text if TLS were cut)
+    if cfg.active_ssl().is_none() && !crate::db::plaintext_allowed(cfg, host) {
+        opts = opts.ssl_mode(PgSslMode::Require);
+    }
+    // SSL from the SSH/SSL tab
+    if let Some(ssl) = cfg.active_ssl() {
+        opts = opts.ssl_mode(match ssl.mode() {
+            "verify-full" => PgSslMode::VerifyFull,
+            "verify-ca" => PgSslMode::VerifyCa,
+            "require" => PgSslMode::Require,
+            // Do not pass unknown values on as unverified require
+            m => return Err(AppError::Msg(format!("Unknown SSL mode '{m}' (use require, verify-ca or verify-full)"))),
+        });
+        let home = |p: &str| p.strip_prefix("~/").map(|r| format!("{}/{r}", std::env::var("HOME").unwrap_or_default())).unwrap_or_else(|| p.to_string());
+        if !ssl.ca_file.trim().is_empty() {
+            opts = opts.ssl_root_cert(home(ssl.ca_file.trim()));
+        }
+        if !ssl.cert_file.trim().is_empty() {
+            opts = opts.ssl_client_cert(home(ssl.cert_file.trim()));
+        }
+        if !ssl.key_file.trim().is_empty() {
+            opts = opts.ssl_client_key(home(ssl.key_file.trim()));
+        }
+    }
+    const LEVELS: [&str; 4] = ["read uncommitted", "read committed", "repeatable read", "serializable"];
+    if let Some(iso) = cfg.options.isolation.as_deref().filter(|i| LEVELS.contains(i)) {
+        opts = opts.options([("default_transaction_isolation", iso)]);
+    }
+    // sqlx sends TimeZone=UTC as a startup parameter, so change it with SET right after connecting
+    let tz = cfg.options.time_zone.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(|t| t.replace('\'', "''"));
+    let script = cfg.options.startup_script.trim().to_string();
+    PgPoolOptions::new()
+        // Each console/table tab uses one dedicated connection. Connections open only when needed, so just keep the cap generous
+        .max_connections(crate::db::POOL_MAX)
+        .idle_timeout(crate::db::POOL_IDLE)
+        .acquire_timeout(Duration::from_secs(10))
+        .after_connect(move |conn, _meta| {
+            let script = script.clone();
+            let tz = tz.clone();
+            Box::pin(async move {
+                if let Some(tz) = tz {
+                    conn.execute(format!("set time zone '{tz}'").as_str()).await?;
+                }
+                if !script.is_empty() {
+                    conn.execute(sqlx::raw_sql(&script)).await?;
+                }
+                Ok(())
+            })
+        })
+        .connect_with(opts)
+        .await
+        .map_err(|e| match &e {
+            // Required TLS that the server can't set up: say what to do instead of a bare TLS error
+            sqlx::Error::Tls(_) if cfg.active_ssl().is_none() => AppError::Msg(format!("{}\n({e})", qurry_shared::errors::needs_tls_pg())),
+            _ => e.into(),
+        })
 }
