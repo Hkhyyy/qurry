@@ -300,6 +300,7 @@ export function ConsolePane(p: Props) {
             <ConsoleEditor
               tabId={p.tabId}
               connId={p.target}
+              database={p.database}
               initialSql={p.initialSql}
               language={p.dialect?.monaco ?? "pgsql"}
               onChange={p.onChange}

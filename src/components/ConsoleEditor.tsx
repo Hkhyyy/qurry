@@ -30,6 +30,8 @@ export interface EditorApi {
 interface Props {
   tabId: string;
   connId: string;
+  /** The console's database by name (the connection's default included): completion inserts its MySQL tables bare */
+  database: string;
   initialSql: string;
   language: string;
   onChange: (sql: string) => void;
@@ -57,11 +59,11 @@ function monacoKey(spec: string): number | null {
 }
 const keysOf = (id: string) => bindings(id).map(monacoKey).filter((n): n is number => n !== null);
 
-export function ConsoleEditor({ tabId, connId, initialSql, language, onChange, onRun, registerApi, readOnly }: Props) {
+export function ConsoleEditor({ tabId, connId, database, initialSql, language, onChange, onRun, registerApi, readOnly }: Props) {
   const modelUri = useRef<string | null>(null);
   useEffect(() => {
-    if (modelUri.current) bindModel(modelUri.current, connId);
-  }, [connId]);
+    if (modelUri.current) bindModel(modelUri.current, connId, database);
+  }, [connId, database]);
   const theme = useTheme();
   const onRunRef = useRef(onRun);
   onRunRef.current = onRun;
@@ -92,7 +94,7 @@ export function ConsoleEditor({ tabId, connId, initialSql, language, onChange, o
         const model = ed.getModel();
         if (model) {
           modelUri.current = model.uri.toString();
-          bindModel(modelUri.current, connId);
+          bindModel(modelUri.current, connId, database);
         }
         const caret = () => {
           const pos = ed.getPosition();

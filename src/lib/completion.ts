@@ -5,8 +5,8 @@ import { monaco } from "./monaco";
 import { CompletionTable, meta } from "./api";
 import { initShared, shared, type Completion, type CompletionItem, type Suggestions } from "./shared";
 
-/** Console (model URI) → connection id, connection id → its completion index */
-const modelConn = new Map<string, string>();
+/** Console (model URI) → its target (connection id, or "dataSource::db") and database name; target → its completion index */
+const modelConn = new Map<string, { connId: string; db: string }>();
 const cache = new Map<string, Promise<Completion>>();
 let noConnection: Completion | undefined;
 let warned = false;
@@ -27,8 +27,9 @@ function load(connId: string): Promise<Completion> {
   return p;
 }
 
-export function bindModel(uri: string, connId: string) {
-  modelConn.set(uri, connId);
+/** db: the console's database by name, also when it is the connection's default (the target then has no "::db"), as the TUI passes it */
+export function bindModel(uri: string, connId: string, db: string) {
+  modelConn.set(uri, { connId, db });
   // A module that can't load is said when the console opens, not later as a dialog that takes the keys being typed
   if (!cache.has(connId)) load(connId).catch(warnOff);
 }
@@ -75,7 +76,8 @@ for (const lang of ["pgsql", "mysql"]) {
     // Value · json key suggestions: right away after a quote · after '->>' · in the space after '=' (not opened in other spaces or after '>')
     triggerCharacters: [".", "'", " ", ">"],
     async provideCompletionItems(model, position, context) {
-      const connId = modelConn.get(model.uri.toString());
+      const bound = modelConn.get(model.uri.toString());
+      const connId = bound?.connId;
       const idx = await indexFor(connId);
       if (!idx) return { suggestions: [] };
       const K = monaco.languages.CompletionItemKind;
@@ -83,8 +85,8 @@ for (const lang of ["pgsql", "mysql"]) {
       const text = model.getValue();
       const caret = model.getOffsetAt(position);
       const range = (s: Suggestions) => new monaco.Range(position.lineNumber, s.startColumn, position.lineNumber, s.endColumn);
-      // The tab's DB (connId is "dataSource::db"): in MySQL the schema is the DB, so its tables are inserted bare (complete.rs ignores it for PG)
-      const db = connId?.split("::")[1] ?? "";
+      // The tab's DB: in MySQL the schema is the DB, so its tables are inserted bare (complete.rs ignores it for PG)
+      const db = bound?.db ?? "";
 
       // Value · json key: where status = '… / data->>'… / reasons @> '…
       // The line alone tells whether this is a value spot, so the whole script crosses into WASM only there (and for suggest)
