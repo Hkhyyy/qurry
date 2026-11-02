@@ -5,7 +5,7 @@ import { useSyncExternalStore } from "react";
 import init, * as wasm from "../wasm/pkg/qurry_shared_wasm";
 import wasmUrl from "../wasm/pkg/qurry_shared_wasm_bg.wasm?url";
 import type { Cell, CompletionTable, DbKind, QueryResult } from "./api";
-import type { ExecPlan, ExecSettings } from "./execPlan";
+import type { ExecPlan, ExecSettings, Stmt } from "./execPlan";
 import type { Extractor } from "./extract";
 import type { Segment } from "./sqlSplit";
 import type { TableTabKey } from "./tabLabels";
@@ -18,7 +18,6 @@ export interface PingResponse {
 
 /** qurry_shared::sql::SplitOptions: editor rules where the GUI splits differently from the server (absent = the server's rule) */
 export interface SplitOptions {
-  mysqlDashComment?: boolean;
   dollarAfterName?: boolean;
 }
 
@@ -119,6 +118,8 @@ const api = {
   splitStatements: (text: string, kind: DbKind, opts: SplitOptions): [number, number][] => wasm.splitStatements(text, kind, opts),
   splitScript: (text: string, kind: DbKind, opts: SplitOptions): [number, number][] => wasm.splitScript(text, kind, opts),
   planExecution: (text: string, offset: number, segs: Segment[], kind: DbKind, settings: ExecSettings): ExecPlan | undefined => wasm.planExecution(text, offset, segs, kind, settings),
+  planSelection: (sel: string, segs: Segment[], settings: ExecSettings): Stmt[] => wasm.planSelection(sel, segs, settings),
+  statementAt: (text: string, offset: number, kind: DbKind): string | undefined => wasm.statementAt(text, offset, kind),
   completionIndex: (tables: CompletionTable[]): Completion => {
     let idx: wasm.CompletionIndex | undefined = new wasm.CompletionIndex(JSON.stringify(tables));
     // A request can still hold this index after free() (it awaited the backend for hints)

@@ -31,7 +31,7 @@ test("⌘↩ while the WebAssembly module is still loading runs once it has load
   await expect(status(page)).toHaveText("1 statement executed");
 });
 
-test("while the WebAssembly module loads, ⌘↩ shows it and runs once, the editor as it is when the module arrives", async ({ page }) => {
+test("while the WebAssembly module loads, ⌘↩ shows it and runs once, what the last press asked for", async ({ page }) => {
   let release = () => {};
   const gate = new Promise<void>((r) => (release = r));
   await page.route(WASM, async (route) => {
@@ -44,7 +44,7 @@ test("while the WebAssembly module loads, ⌘↩ shows it and runs once, the edi
   await page.keyboard.press("Meta+Enter");
   await expect(work(page).locator(".running-bar")).toContainText("Loading the statement splitter");
   await expect(work(page).getByTitle(/^Execute/)).toBeDisabled();
-  // Pressed again after an edit: still one run, of the current text
+  // Pressed again after an edit: still one run, of the text at the last press
   await page.keyboard.press("Meta+Enter");
   await typeSql(page, "select * from contracts");
   await page.keyboard.press("Meta+Enter");
@@ -54,6 +54,86 @@ test("while the WebAssembly module loads, ⌘↩ shows it and runs once, the edi
   await resultTabs(page).first().click();
   await expect(work(page).locator(".output-log .ol.sql")).toHaveCount(1);
   await expect(work(page).locator(".output-log .ol.sql")).toContainText("select * from contracts");
+});
+
+/** Hold the module's fetch until the returned release() is called */
+async function holdWasm(page: Page) {
+  let release = () => {};
+  const gate = new Promise<void>((r) => (release = r));
+  await page.route(WASM, async (route) => {
+    await gate;
+    await route.continue();
+  });
+  return async () => {
+    const loaded = page.waitForResponse((r) => WASM(new URL(r.url())));
+    release();
+    await loaded;
+  };
+}
+
+test("a ⌘↩ waiting for the module runs the text it was pressed on, not an edit made while it waited", async ({ page }) => {
+  const release = await holdWasm(page);
+  await openApp(page);
+  await openConsole(page);
+  await typeSql(page, "select * from users");
+  await page.keyboard.press("Meta+Enter");
+  await typeSql(page, "delete from users where id = 5");
+  await release();
+  await expect(resultTabs(page)).toHaveText(["Output", /^users/]);
+  await resultTabs(page).first().click();
+  await expect(work(page).locator(".output-log .ol.sql")).toHaveCount(1);
+  await expect(work(page).locator(".output-log .ol.sql")).toContainText("select * from users");
+});
+
+test("the toolbar's Cancel cancels a ⌘↩ waiting for the module", async ({ page }) => {
+  const release = await holdWasm(page);
+  await openApp(page);
+  await openConsole(page);
+  await typeSql(page, "select * from users");
+  await page.keyboard.press("Meta+Enter");
+  const stop = work(page).getByTitle(/^Cancel Running Statements/);
+  await expect(stop).toBeEnabled();
+  await stop.click();
+  await expect(work(page).locator(".running-bar")).toHaveCount(0);
+  await expect(stop).toBeDisabled();
+  await release();
+  await page.waitForTimeout(500);
+  await expect(work(page).locator(".output-log .ol.sql")).toHaveCount(0);
+});
+
+test("a run started while a ⌘↩ waits for the module replaces it", async ({ page }) => {
+  const release = await holdWasm(page);
+  await page.addInitScript(() => localStorage.setItem("dbtool.execSettings", JSON.stringify({ inside: "smallest", outside: "nothing", selection: "single" })));
+  await openApp(page);
+  await openConsole(page);
+  await typeSql(page, "select * from contracts");
+  await page.keyboard.press("Meta+Enter");
+  // A selection run as one statement doesn't wait for the module
+  await typeSql(page, "select * from users");
+  await page.keyboard.press("Meta+A");
+  await page.keyboard.press("Meta+Enter");
+  await expect(resultTabs(page)).toHaveText(["Output", /^users/]);
+  await release();
+  await page.waitForTimeout(500);
+  await resultTabs(page).first().click();
+  await expect(work(page).locator(".output-log .ol.sql")).toHaveCount(1);
+});
+
+test("closing the console drops the ⌘↩ waiting for the module", async ({ page }) => {
+  // (Completion's provider reading the closed editor's model is another matter, left out here)
+  const errors: string[] = [];
+  page.on("pageerror", (e) => !e.stack?.includes("provideCompletionItems") && errors.push(e.message));
+  const release = await holdWasm(page);
+  await openApp(page);
+  await openConsole(page);
+  await typeSql(page, "select * from users");
+  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("Meta+W");
+  await expect(editor(page)).toHaveCount(0);
+  await release();
+  await page.waitForTimeout(500);
+  expect(errors).toEqual([]);
+  await expect(status(page)).not.toHaveText("1 statement executed");
 });
 
 test("⌘↩ without the WebAssembly module says why and how to run anyway, in user words", async ({ page }) => {

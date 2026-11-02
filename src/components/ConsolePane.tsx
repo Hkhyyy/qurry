@@ -1,8 +1,8 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { QueryResult, Dialect, DbKind } from "../lib/api";
 import { splitScript } from "../lib/sqlSplit";
-import { DEFAULT_EXEC, ExecSettings, planExecution } from "../lib/execPlan";
+import { DEFAULT_EXEC, ExecSettings, planExecution, planSelection } from "../lib/execPlan";
 import { initShared, sharedReady } from "../lib/shared";
 import { ConsoleEditor, EditorApi, RunRequest } from "./ConsoleEditor";
 import { ContextMenu, MenuItem } from "./Explorer";
@@ -120,13 +120,15 @@ export function ConsolePane(p: Props) {
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const [chooser, setChooser] = useState<{ options: { label: string; stmts: string[]; ranges: { start: number; end: number }[] }[]; idx: number; req: RunRequest } | null>(null);
   const [api, setApi] = useState<EditorApi | null>(null);
-  /** A ⌘↩ waiting for the WebAssembly module (null once it ran or was cancelled) */
-  const pending = useRef<{ explain?: "plan" | "analyze" } | null>(null);
+  /** A ⌘↩ waiting for the WebAssembly module, as the editor was at the press (null once it ran or was cancelled) */
+  const pending = useRef<RunRequest | null>(null);
   const [loading, setLoading] = useState(false);
   const cancelPending = () => {
     pending.current = null;
     setLoading(false);
   };
+  // A closed console never runs what was waiting
+  useEffect(() => () => void (pending.current = null), []);
 
   const setSettings = (s: ExecSettings) => {
     setSettingsState(s);
@@ -139,13 +141,20 @@ export function ConsolePane(p: Props) {
 
   /** ⌘↩ execution rules (DataGrip Query Execution settings) */
   const splitFn = p.dialect?.split ?? ((t: string) => splitScript(t, p.kind));
+  // The run waiting for the module calls the latest render's run, and is skipped if a run started meanwhile
+  const running = useRef(p.running);
+  running.current = p.running;
+  const latestRun = useRef<(req: RunRequest) => void>(() => {});
   const onRun = (req: RunRequest) => {
     // Splitting and planning run in the shared WebAssembly module; a selection run as one statement doesn't need it
     const single = !!req.selection?.text.trim() && settings.selection === "single";
-    if (single || sharedReady()) return run(req);
-    // Still loading at startup: show it like a run, and once it is there run the editor as it is then (one pending run, the last press's mode)
+    if (single || sharedReady()) {
+      if (pending.current) cancelPending();
+      return run(req);
+    }
+    // Still loading at startup: show it like a run, and once it is there run what the last press asked for (one pending run)
     const waiting = pending.current;
-    pending.current = { explain: req.explain };
+    pending.current = req;
     if (waiting) return;
     setLoading(true);
     const done = () => {
@@ -158,7 +167,7 @@ export function ConsolePane(p: Props) {
     initShared().then(
       () => {
         const last = done();
-        if (last) api?.run(last.explain);
+        if (last && !running.current) latestRun.current(last);
       },
       () => done() && p.onError(SPLITTER_FAILED),
     );
@@ -166,13 +175,12 @@ export function ConsolePane(p: Props) {
   const run = (req: RunRequest) => {
     const { text, offset, selection } = req;
     if (selection && selection.text.trim()) {
-      if (settings.selection === "single") {
-        req.highlight([{ start: selection.start, end: selection.end }]);
-        return p.onExecute([selection.text.trim()], req.explain);
-      }
-      const segs = splitFn(selection.text);
-      req.highlight(segs.map((s) => ({ start: selection.start + s.start, end: selection.start + s.end })));
-      return p.onExecute(segs.map((s) => selection.text.slice(s.start, s.end).trim()), req.explain);
+      const sel = selection.text;
+      // As one statement without the module too (the way to run while it failed to load)
+      const stmts = settings.selection === "single" && !sharedReady() ? [{ start: 0, end: sel.length, sql: sel.trim() }] : planSelection(sel, splitFn(sel), settings);
+      if (!stmts.length) return;
+      req.highlight(stmts.map((s) => ({ start: selection.start + s.start, end: selection.start + s.end })));
+      return p.onExecute(stmts.map((s) => s.sql), req.explain);
     }
     const plan = planExecution(text, offset, splitFn(text), settings, p.kind);
     if (!plan) return;
@@ -183,6 +191,8 @@ export function ConsolePane(p: Props) {
     // Ask what to execute: Statements popup
     setChooser({ options: plan.ask.map((o) => ({ label: o.label, stmts: o.stmts.map((x) => x.sql), ranges: o.stmts })), idx: 0, req });
   };
+
+  latestRun.current = run;
 
   const pickChoice = (i: number) => {
     if (!chooser) return;
@@ -263,7 +273,7 @@ export function ConsolePane(p: Props) {
             <ToolButton title="Roll back" onClick={p.onRollback} disabled={!p.inTx}>↶ Roll back</ToolButton>
           </>
         )}
-        <IconButton tone="danger" title={`Cancel Running Statements (${isMac ? "⌘F2" : "Ctrl+F2"})`} onClick={p.onCancel} disabled={!p.running}><IcStop /></IconButton>
+        <IconButton tone="danger" title={`Cancel Running Statements (${isMac ? "⌘F2" : "Ctrl+F2"})`} onClick={loading ? cancelPending : p.onCancel} disabled={!p.running && !loading}><IcStop /></IconButton>
         <Spacer />
         <span className="cb-ds">{p.connName}</span>
         <Select className="cb-sel" value={p.database} onFocus={p.onLoadDbs} onMouseDown={p.onLoadDbs} onChange={(e) => p.onSwitchDb(e.target.value)} title="Database">

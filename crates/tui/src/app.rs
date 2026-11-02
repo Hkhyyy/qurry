@@ -1738,7 +1738,7 @@ impl App {
             return;
         }
         if let Some(((r0, c0), (r1, c1))) = c.editor.selection_range() {
-            let stmts = qurry_core::exec::plan_selection(&selected_text(c.editor.lines(), r0, c0, r1, c1), kind, self.exec);
+            let stmts = sqls(qurry_core::exec::plan_selection(&selected_text(c.editor.lines(), r0, c0, r1, c1), kind, self.exec));
             if !stmts.is_empty() {
                 self.run_stmts(stmts, explain, confirmed);
             }

@@ -136,6 +136,12 @@ enum JsPlan {
     Ask(Vec<JsChoice>),
 }
 
+/// Statements with UTF-16 ranges in `text`
+fn js_stmts(text: &str, v: Vec<exec::Stmt>) -> Vec<JsStmt> {
+    let r = utf16_ranges(text, &v.iter().map(|s| (s.start, s.end)).collect::<Vec<_>>());
+    v.into_iter().zip(r).map(|(s, [start, end])| JsStmt { start, end, sql: s.sql }).collect()
+}
+
 /// What to run from the caret (qurry_shared::exec::plan_in) over `segs` (the console's statements, UTF-16 ranges in order) with the
 /// Query Execution settings ({inside, outside, selection}; unknown values fall back to the defaults): {run} | {ask} | undefined
 #[wasm_bindgen(js_name = planExecution)]
@@ -143,16 +149,23 @@ pub fn plan_execution(text: &str, offset: usize, segs: JsValue, kind: JsValue, s
     let segs: Vec<Segment> = serde_wasm_bindgen::from_value(segs)?;
     let segs = byte_ranges(text, &segs.iter().map(|s| (s.start, s.end)).collect::<Vec<_>>());
     let settings = ExecSettings::from_json(&serde_wasm_bindgen::from_value(settings)?);
-    let js = |v: Vec<exec::Stmt>| {
-        let r = utf16_ranges(text, &v.iter().map(|s| (s.start, s.end)).collect::<Vec<_>>());
-        v.into_iter().zip(r).map(|(s, [start, end])| JsStmt { start, end, sql: s.sql }).collect()
-    };
+    let js = |v| js_stmts(text, v);
     let plan = match exec::plan_in(text, byte_offset(text, offset), &segs, parse_kind(kind)?, settings) {
         Plan::Nothing => None,
         Plan::Run(v) => Some(JsPlan::Run(js(v))),
         Plan::Ask(opts) => Some(JsPlan::Ask(opts.into_iter().map(|(label, v)| JsChoice { label, stmts: js(v) }).collect())),
     };
     Ok(serde_wasm_bindgen::to_value(&plan)?)
+}
+
+/// What to run from a selection (qurry_shared::exec::plan_selection_in) over `segs` (its statements, UTF-16 ranges in the selection)
+/// with the Query Execution settings: [{start, end, sql}, …], ranges in the selection
+#[wasm_bindgen(js_name = planSelection)]
+pub fn plan_selection(sel: &str, segs: JsValue, settings: JsValue) -> Result<JsValue, JsError> {
+    let segs: Vec<Segment> = serde_wasm_bindgen::from_value(segs)?;
+    let segs = byte_ranges(sel, &segs.iter().map(|s| (s.start, s.end)).collect::<Vec<_>>());
+    let v = exec::plan_selection_in(sel, &segs, ExecSettings::from_json(&serde_wasm_bindgen::from_value(settings)?));
+    Ok(serde_wasm_bindgen::to_value(&js_stmts(sel, v))?)
 }
 
 /// Statement at the caret (a UTF-16 offset, as in a JS string), trimmed; undefined if the text has none
