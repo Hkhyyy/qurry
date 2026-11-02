@@ -1,4 +1,4 @@
-import { dialog, expect, openApp, openConsole, runAll, status, test, typeSql } from "./app";
+import { dialog, editor, expect, openApp, openConsole, resultTabs, runAll, status, test, typeSql } from "./app";
 
 // [PROD] shop_app has options.confirmChanges (mock preview_impact counts UPDATE/DELETE: 3 rows with WHERE, 500 without; INSERT and DDL can't be counted)
 test.beforeEach(async ({ page }) => {
@@ -99,3 +99,44 @@ for (const [conn, sql] of [
     await expect(status(page)).toHaveText("Ready");
   });
 }
+
+// Explain Analyse really runs the statement. PostgreSQL rolls it back, reads too: a SELECT that calls a function Qurry doesn't know
+// asks first (a user-defined one may write or reach another server), so does a DELETE without WHERE (every row locked until the
+// rollback), a plain read and a filtered write the rollback undoes don't ask
+const explainAnalyse = async (page: Parameters<typeof typeSql>[0], sql: string) => {
+  await editor(page).click();
+  await typeSql(page, sql);
+  await page.locator(".work-layer:visible .console-toolbar").getByText("Explain").click();
+  await page.getByRole("menuitem", { name: "Explain Analyse" }).click();
+};
+
+test("Explain Analyse of a SELECT that calls a user-defined function asks first, then says what may stay", async ({ page }) => {
+  await explainAnalyse(page, "select archive_old_orders()");
+  await expect(dialog(page).locator(".ui-modal-title")).toHaveText("[PROD] shop_app: Explain Analyse");
+  await expect(dialog(page)).toContainText("it calls archive_old_orders(), and a rollback can't undo what a function does outside the transaction");
+  await dialog(page).getByRole("button", { name: "Run Anyway" }).click();
+  await resultTabs(page).first().click();
+  const output = page.locator(".work-layer:visible .output-log");
+  await expect(output).toContainText("rolled it back, but what archive_old_orders() did outside the transaction stays");
+});
+
+test("Explain Analyse of a plain read or a filtered DELETE the rollback undoes asks nothing (one rule with the TUI)", async ({ page }) => {
+  await explainAnalyse(page, "select count(*) from users");
+  await expect(resultTabs(page)).toHaveText(["Output", /^Plan: users/]);
+  await expect(dialog(page)).toHaveCount(0);
+  await explainAnalyse(page, "delete from users where id = 1");
+  await expect(resultTabs(page)).toHaveText(["Output", /^Plan: users/]);
+  await expect(dialog(page)).toHaveCount(0);
+  await resultTabs(page).first().click();
+  await expect(page.locator(".work-layer:visible .output-log")).toContainText("its table changes were undone, but not what a trigger or function did outside the transaction");
+});
+
+test("Explain Analyse of a DELETE without WHERE asks once, with that reason (one rule with the TUI)", async ({ page }) => {
+  await explainAnalyse(page, "delete from users");
+  await expect(dialog(page)).toHaveCount(1);
+  await expect(dialog(page).locator(".ui-modal-title")).toHaveText("[PROD] shop_app: Explain Analyse");
+  await expect(dialog(page)).toContainText("DELETE without WHERE changes every row, holding their locks until the rollback undoes it");
+  await dialog(page).getByRole("button", { name: "Run Anyway" }).click();
+  await expect(resultTabs(page)).toHaveText(["Output", /^Plan: users/]);
+  await expect(dialog(page)).toHaveCount(0);
+});

@@ -195,6 +195,74 @@ async fn explain_analyze_asks_before_what_a_rollback_cant_undo() {
     let out = h.console_output();
     assert!(out.iter().any(|l| l.contains("rolled it back, but what it did outside the transaction stays")), "{out:?}");
     assert!(!out.iter().any(|l| l.contains("nothing was changed")), "{out:?}");
+    // It ran: a warning (drawn in the warning colour, as the GUI does), not an error
+    let TabKind::Console(c) = &h.app.tabs[h.app.active].kind else { panic!() };
+    let note = c.output.iter().find(|l| l.1.contains("what it did outside the transaction stays")).unwrap();
+    assert!(!note.0 && note.1.starts_with(crate::app::WARNING), "{note:?}");
+}
+
+/// Explain Analyze of a SELECT runs in a rolled-back transaction too (a function it calls may write); one that calls a function
+/// Qurry doesn't know asks first, a plain one doesn't and says nothing more
+#[tokio::test]
+async fn explain_analyze_wraps_reads_and_asks_before_unknown_functions() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.to_string());
+        fake(q)
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(record);
+    let sql = "select archive_old_orders()";
+    h.console_with(sql, 0, 0);
+    h.app.analyze_next = true;
+    h.app.run_stmts(vec![sql.into()], true, false);
+    h.app.analyze_next = false;
+    let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
+    assert!(text.contains("it calls archive_old_orders(), and a rollback can't undo what a function does outside the transaction"), "{text}");
+    h.key("y");
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["BEGIN", "EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) select archive_old_orders()", "ROLLBACK"]);
+    SEEN.lock().unwrap().clear();
+    let before = h.console_output().len();
+    h.app.analyze_next = true;
+    h.app.run_stmts(vec!["select count(*) from t".into()], true, false);
+    h.app.analyze_next = false;
+    assert!(h.app.popup.is_none(), "a plain read doesn't ask");
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["BEGIN", "EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) select count(*) from t", "ROLLBACK"]);
+    let out = h.console_output();
+    assert!(!out[before..].iter().any(|l| l.contains("rolled it back")), "{out:?}");
+}
+
+/// Explain Analyze of a SELECT inside an open transaction on a read-only Data Source: the savepoint it wraps the statement in
+/// passes the read-only check (the fake refuses what core's check_read_only refuses), so the plan runs
+#[tokio::test]
+async fn explain_analyze_in_a_transaction_on_a_read_only_source_runs() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn read_only(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.to_string());
+        match qurry_core::guard::read_only_violation(q, qurry_core::store::DbKind::Postgres, false) {
+            Some(why) => Err(why),
+            None => fake(q).map(|r| QueryResult { in_transaction: true, ..r }),
+        }
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(read_only);
+    let sql = "select * from orders";
+    h.console_with(sql, 0, 0);
+    if let TabKind::Console(c) = &mut h.app.tabs[h.app.active].kind {
+        c.in_tx = true;
+    }
+    h.app.analyze_next = true;
+    h.app.run_stmts(vec![sql.into()], true, false);
+    h.app.analyze_next = false;
+    assert!(h.app.popup.is_none(), "a plain read doesn't ask");
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["SAVEPOINT qurry_explain", "EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) select * from orders", "ROLLBACK TO SAVEPOINT qurry_explain"]);
+    let out = h.console_output();
+    assert!(!out.iter().any(|l| l.contains("Read-only mode")), "{out:?}");
+    let TabKind::Console(c) = &h.app.tabs[h.app.active].kind else { panic!() };
+    assert!(c.in_tx, "still in the transaction the user opened");
 }
 
 /// ⌃Space lists columns after "alias." (from the loaded metadata); Enter replaces the typed prefix with the picked one

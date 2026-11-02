@@ -30,11 +30,11 @@ import { DEFAULT_FONT, editorFontSize, setEditorFontSize } from "./lib/prefs";
 import { bindings, eventSpec, formatSpec, hit, loadKeymap, onKeymapChange } from "./lib/shortcuts";
 import { invalidateCompletion } from "./lib/completion";
 import { useStatusWidgets } from "./lib/statusbar";
-import { sharedReady, useSharedReady } from "./lib/shared";
+import { useSharedReady } from "./lib/shared";
 import { commitNoticeTitle } from "./lib/commitNotice";
 import { tableTabLabels } from "./lib/tabLabels";
-import { isDdl, isRead, rollbackUndoes } from "./lib/stmtKind";
-import type { BackupOptions, FtsRequest, UpdateChannel } from "./lib/api";
+import { explainAnalyzeAsk, explainAnalyzeNote, isDdl, isRead } from "./lib/stmtKind";
+import type { BackupOptions, DbKind, FtsRequest, UpdateChannel } from "./lib/api";
 import { isRelation, NodeInfo, revealInTree, schemaChanged } from "./components/SchemaTree";
 import { leaf, leaves, MAX_PANES, Pane, prunePanes, splitPane } from "./lib/panes";
 import { connBg, connStripe, getThemePref, setThemePref, THEME_LABEL, ThemePref, useTheme } from "./lib/theme";
@@ -121,9 +121,16 @@ const isMac = navigator.platform.toLowerCase().includes("mac");
 /** Max rows kept in the result grid (same as the TUI). Beyond that, export to CSV */
 const MAX_ROWS = 100_000;
 const capMsg = (n: number) => `Showing the first ${n.toLocaleString()} rows — export to CSV for all of them`;
-/** Explain Analyse of a write a rollback can't undo (rollbackUndoes): the question before, the note after (same words as the TUI) */
-const UNDONE_ASK = "a rollback can't undo what it does outside the transaction: sequence values, other servers, files, locks, or a COMMIT · MySQL DDL among several statements";
-const UNDONE_LOG = "what it did outside the transaction stays (sequence values, other servers, files, locks, or a COMMIT · MySQL DDL among several statements)";
+/** Explain Analyse: ask before the statements qurry_shared::guard::explain_analyze_ask names (the TUI's words). True = go on */
+async function askExplainAnalyze(name: string | undefined, kind: DbKind, stmts: string[]): Promise<boolean> {
+  const asks = stmts.flatMap((s) => {
+    const why = explainAnalyzeAsk(kind, s);
+    return why ? [{ s, why }] : [];
+  });
+  if (!asks.length) return true;
+  const detail = asks.map(({ s }) => ({ text: s.replace(/\s+/g, " ").slice(0, 300), tone: "danger" as const }));
+  return ask(`Explain Analyse really runs the statement, and ${asks[0].why}. Run it anyway?`, { title: name ? `${name}: Explain Analyse` : "Explain Analyse", detail, okLabel: "Run Anyway", danger: true });
+}
 /** Shortcut shown in menus and Find Action (the first key) */
 const sk = (id: string) => {
   const b = bindings(id);
@@ -1290,24 +1297,18 @@ export default function App() {
     if (!tab || !stmts.length) return;
     const c = conns.find((x) => x.id === tab.connId);
     const kind = c?.kind ?? "postgres";
-    // Confirm dangerous statements (UPDATE/DELETE without WHERE, DROP, TRUNCATE — same rules as the core guard).
-    // Explain Analyze actually runs the statement, so confirm it (only plain Explain is skipped)
-    if (explain !== "plan") {
+    // Confirm dangerous statements (UPDATE/DELETE without WHERE, DROP, TRUNCATE — same rules as the core guard). Not for Explain:
+    // Explain Analyse asks its own question below, with this reason when there is one (one dialog, as in the TUI)
+    if (!explain) {
       for (const s of stmts) {
         const why = await api.unsafeReason(kind, s).catch(() => null);
         if (why && !(await ask(`${why}. Run it anyway?`, { title: c ? `${c.name}: dangerous statement` : "Dangerous statement", detail: [{ text: s.slice(0, 300), tone: "danger" }], okLabel: "Run Anyway", danger: true }))) return;
       }
     }
-    // Explain Analyse rolls a write back on PostgreSQL · MySQL (below), but not what it does outside the transaction; other kinds aren't
-    // wrapped (drivers may not support transactions): ask first, as the TUI does. Without the module no statement can be checked
+    // Explain Analyse really runs the statement: PostgreSQL · MySQL roll it back (below), other kinds don't. Ask first when the rollback
+    // may not undo it all or nothing does (qurry_shared::guard::explain_analyze_ask, the TUI's rule and words)
     const wraps = kind === "postgres" || kind === "mysql";
-    const checked = sharedReady();
-    if (explain === "analyze") {
-      const kept = stmts.filter((s) => !isRead(kind, s) && (!wraps || !rollbackUndoes(kind, s)));
-      const why = !checked ? "it can't be checked without the statement splitter" : wraps ? UNDONE_ASK : "it changes data";
-      const detail = kept.map((s) => ({ text: s.replace(/\s+/g, " ").slice(0, 300), tone: "danger" as const }));
-      if (kept.length && !(await ask(`Explain Analyse really runs the statement, and ${why}. Run it anyway?`, { title: c ? `${c.name}: Explain Analyse` : "Explain Analyse", detail, okLabel: "Run Anyway", danger: true }))) return;
-    }
+    if (explain === "analyze" && !(await askExplainAnalyze(c?.name, kind, stmts))) return;
     // Production: for data-changing statements, count the rows that will change, show it and ask (counted with SELECT count(*))
     if (c?.options?.confirmChanges && !explain) {
       // Same check as the TUI (core guard): a write keyword only inside a string or a comment (MySQL # too) doesn't make a read a write
@@ -1346,9 +1347,9 @@ export default function App() {
       const bare = sql0.replace(/;\s*$/, "");
       const sql = !explain ? sql0 : isMy ? `EXPLAIN ${explain === "analyze" ? "ANALYZE " : ""}${bare}` : `EXPLAIN (FORMAT JSON${explain === "analyze" ? ", ANALYZE, BUFFERS" : ""}) ${bare}`;
       log(tabId, "sql", `${c?.name ?? ""}> ${sql0}`);
-      // Explain Analyse actually runs the statement → run changing statements in a transaction and always roll back
-      // (if already in a transaction, only that part via a savepoint)
-      const dry = explain === "analyze" && wraps && !isRead(kind, sql0);
+      // Explain Analyse actually runs the statement → run it in a transaction and always roll back (if already in a transaction,
+      // only that part via a savepoint). Reads too: a function a SELECT calls may write
+      const dry = explain === "analyze" && wraps;
       const inTx0 = !!tabsRef.current.find((t) => t.id === tabId)?.inTx;
       try {
         let r: QueryResult;
@@ -1360,9 +1361,8 @@ export default function App() {
             await api.runQuery(tab.target, inTx0 ? "ROLLBACK TO SAVEPOINT qurry_explain" : "ROLLBACK", tabId).catch((e) => log(tabId, "error", `Roll back after Explain Analyse failed: ${String(e)}`));
           }
           r = { ...r, inTransaction: inTx0 };
-          if (!checked) log(tabId, "info", "Explain Analyse ran the statement in a transaction and rolled it back; it couldn't be checked for effects a rollback doesn't undo");
-          else if (rollbackUndoes(kind, sql0)) log(tabId, "info", "Explain Analyse ran the statement in a transaction and rolled it back — nothing was changed");
-          else log(tabId, "warn", `Explain Analyse ran the statement in a transaction and rolled it back, but ${UNDONE_LOG}`);
+          const note = explainAnalyzeNote(kind, sql0);
+          if (note) log(tabId, note.level, `Explain Analyse ${note.text}`);
         } else {
           r = await api.runQuery(tab.target, sql, tabId);
         }

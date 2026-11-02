@@ -452,6 +452,73 @@ async fn pg_full_text_search_is_read_only() {
     q(&st, "drop schema qm_fts_ro cascade").await;
 }
 
+/// Full-text search on a database with standard_conforming_strings = off (a legacy setting): a \ in the search text can't end
+/// the string early, so `\' or …` finds nothing and runs nothing (before, every row came back)
+#[tokio::test]
+#[ignore]
+async fn pg_full_text_search_text_is_not_sql_with_standard_conforming_strings_off() {
+    let Some(mut c) = pg_env() else { return };
+    let boot = state(&c, None).await;
+    q(&boot, "drop database if exists qm_guard_scs with (force)").await;
+    q(&boot, "create database qm_guard_scs").await;
+    q(&boot, "alter database qm_guard_scs set standard_conforming_strings = off").await;
+    c.database = "qm_guard_scs".into();
+    let st = state(&c, None).await;
+    assert_eq!(q(&st, "show standard_conforming_strings").await.rows[0][0], json!("off"));
+    q(&st, "create table t (id int, body text)").await;
+    q(&st, "insert into t values (1, 'needle'), (2, 'hay')").await;
+    for mode in ["matches", "like", "contains"] {
+        let mut r = fts(vec![("public", "t")]);
+        r.text = "\\' or inet_server_port() > 0 --".into();
+        r.mode = mode.into();
+        r.match_case = true;
+        let hits = st.full_text_search(ID.into(), r).await.unwrap();
+        assert!(hits.is_empty(), "{mode}: {hits:?}");
+    }
+    // A backslash in the text is still searched for as itself
+    q(&st, "insert into t values (3, E'a\\\\b')").await;
+    let mut r = fts(vec![("public", "t")]);
+    r.text = "a\\b".into();
+    r.mode = "matches".into();
+    let hits = st.full_text_search(ID.into(), r).await.unwrap();
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert_eq!(hits[0].result.rows.len(), 1);
+    drop(st);
+    q(&boot, "drop database qm_guard_scs with (force)").await;
+}
+
+/// Explain Analyse as the GUI and the TUI run it (BEGIN, the EXPLAIN, ROLLBACK on the tab's session) of a SELECT whose function
+/// writes: the guard asks first, the rollback undoes the function's insert, and the same EXPLAIN without it (before) kept the row
+async fn explain_analyze_of_a_writing_function(st: &AppState, kind: DbKind, call: &str, count: &str) {
+    let tab = |sql: String| async move { st.run_query(ID.into(), sql.clone(), None, Some("ea".into())).await.unwrap_or_else(|e| panic!("{sql}: {e}")) };
+    let explain = if kind == DbKind::Postgres { format!("EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) {call}") } else { format!("EXPLAIN ANALYZE {call}") };
+    assert!(qurry_core::guard::explain_analyze_ask(call, kind).is_some_and(|w| w.starts_with("it calls ")), "{call}");
+    tab("BEGIN".into()).await;
+    tab(explain.clone()).await;
+    tab("ROLLBACK".into()).await;
+    assert_eq!(q(st, count).await.rows[0][0].to_string().trim_matches('"'), "0", "the rollback undid the function's insert");
+    tab(explain).await;
+    assert_eq!(q(st, count).await.rows[0][0].to_string().trim_matches('"'), "1", "without the transaction the insert stays");
+    st.close_session("ea".into()).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore]
+async fn pg_explain_analyze_rolls_back_what_a_selected_function_writes() {
+    let Some(c) = pg_env() else { return };
+    let st = state(&c, None).await;
+    for s in [
+        "drop schema if exists qm_guard_ea cascade",
+        "create schema qm_guard_ea",
+        "create table qm_guard_ea.t (a int)",
+        "create function qm_guard_ea.g() returns int language plpgsql volatile as $$ begin insert into qm_guard_ea.t values (77); return 1; end $$",
+    ] {
+        q(&st, s).await;
+    }
+    explain_analyze_of_a_writing_function(&st, DbKind::Postgres, "select qm_guard_ea.g()", "select count(*) from qm_guard_ea.t").await;
+    q(&st, "drop schema qm_guard_ea cascade").await;
+}
+
 // ───────── MySQL ─────────
 
 /// A fresh database `name` and a state whose source points at it
@@ -671,6 +738,48 @@ async fn mysql_full_text_search_is_read_only() {
     // A plain table is still found
     assert_eq!(st.full_text_search(ID.into(), fts(vec![("qm_fts_ro", "t")])).await.unwrap().len(), 1);
     q(&st, "drop database qm_fts_ro").await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn mysql_explain_analyze_rolls_back_what_a_selected_function_writes() {
+    let Some(st) = my_state("qm_guard_ea").await else { return };
+    q(&st, "create table t (a int) engine = innodb").await;
+    q(&st, "create function g() returns int deterministic modifies sql data begin insert into t values (77); return 1; end").await;
+    explain_analyze_of_a_writing_function(&st, DbKind::Mysql, "select g()", "select count(*) from t").await;
+    q(&st, "drop database qm_guard_ea").await;
+}
+
+/// Explain Analyse of a SELECT inside a transaction the user opened, as the GUI and the TUI send it on a read-only Data Source:
+/// the savepoint around it passes the read-only check, so the plan runs and the transaction stays open
+async fn explain_analyze_in_a_read_only_transaction(mut c: ConnectionConfig, password: Option<String>, explain: &str) {
+    c.read_only = true;
+    let st = state(&c, password).await;
+    let tab = |sql: &str| {
+        let sql = sql.to_string();
+        let st = &st;
+        async move { st.run_query(ID.into(), sql.clone(), None, Some("ea-ro".into())).await.unwrap_or_else(|e| panic!("{sql}: {e}")) }
+    };
+    tab("BEGIN").await;
+    tab("SAVEPOINT qurry_explain").await;
+    assert!(!tab(explain).await.rows.is_empty(), "{explain}");
+    assert!(tab("ROLLBACK TO SAVEPOINT qurry_explain").await.in_transaction);
+    tab("ROLLBACK").await;
+    st.close_session("ea-ro".into()).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore]
+async fn pg_explain_analyze_in_a_transaction_on_a_read_only_source() {
+    let Some(c) = pg_env() else { return };
+    explain_analyze_in_a_read_only_transaction(c, None, "EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) select 1").await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn mysql_explain_analyze_in_a_transaction_on_a_read_only_source() {
+    let Some((c, pw)) = my_env() else { return };
+    explain_analyze_in_a_read_only_transaction(c, Some(pw), "EXPLAIN ANALYZE select 1").await;
 }
 
 // ───────── Redis ─────────

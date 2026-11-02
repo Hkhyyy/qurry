@@ -25,8 +25,10 @@ fn qi(s: &str) -> String {
     if simple { s.to_string() } else { format!("\"{}\"", s.replace('"', "\"\"")) }
 }
 
+/// A string literal as the server reads it whatever standard_conforming_strings is set to (E'…' when it has a backslash): the shared
+/// rule, so text a user or an MCP client typed into full-text search can't end the string early
 fn lit(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
+    crate::sql::literal(DbKind::Postgres, Some(s))
 }
 
 fn ident(s: &str) -> String {
@@ -336,7 +338,8 @@ impl Backend for PgPool {
             let sql = format!("select * from {}.{} where {where_clause} limit {}", ident(&schema), ident(&table), r.limit.max(1));
             // Per-statement timeout so one slow table doesn't stall everything
             let mut tx = self.begin().await?;
-            // READ ONLY: a function with side effects called from a view is refused, not just rolled back (nextval, dblink)
+            // READ ONLY: a local write from a function called by a view is refused, not just rolled back (nextval, INSERT in a function).
+            // It doesn't stop what a function does on another connection (dblink): that needs a role without it (docs/mcp-security.md)
             sqlx::query("set transaction read only").execute(&mut *tx).await?;
             sqlx::query("set local statement_timeout = '15s'").execute(&mut *tx).await?;
             let res = crate::db::run_on(&mut *tx, &sql, r.limit.max(1)).await;
@@ -770,4 +773,27 @@ pub(crate) async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host
             sqlx::Error::Tls(_) if cfg.active_ssl().is_none() => AppError::Msg(format!("{}\n({e})", qurry_shared::errors::needs_tls_pg())),
             _ => e.into(),
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn req(mode: &str, text: &str) -> FtsRequest {
+        serde_json::from_value(serde_json::json!({ "text": text, "mode": mode, "matchCase": true, "columns": "text", "limit": 10 })).unwrap()
+    }
+
+    /// With standard_conforming_strings = off a \ in '…' escapes the next quote, so the search text could end the string early:
+    /// a backslash makes it E'…', which every setting reads the same way
+    #[test]
+    fn full_text_search_text_stays_a_string_whatever_the_server_reads_backslashes_as() {
+        let evil = "\\' or true --";
+        assert_eq!(fts_cond("b", false, &req("matches", evil)), "\"b\"::text = E'\\\\'' or true --'");
+        assert_eq!(fts_cond("b", false, &req("like", evil)), "\"b\"::text like E'\\\\'' or true --'");
+        assert_eq!(fts_cond("b", true, &req("matches", "\\'1")), "\"b\"::text = E'\\\\''1'");
+        // contains · starts · ends already escaped the backslash for LIKE; the string then holds it as before
+        assert_eq!(fts_cond("b", false, &req("contains", "a\\b")), "\"b\"::text like E'%a\\\\\\\\b%'");
+        // Without a backslash the literal is unchanged
+        assert_eq!(fts_cond("b", false, &req("matches", "it's")), "\"b\"::text = 'it''s'");
+    }
 }

@@ -41,6 +41,7 @@
   { "id": "mssql-chained-exec", "dialect": "mssql", "sql": "select 1 exec purge" },
   { "id": "mssql-chained-drop", "dialect": "mssql", "sql": "select 1\ndrop table t" },
   { "id": "mssql-case-end", "dialect": "mssql", "sql": "select case when a = 1 then 1 end from t" },
+  { "id": "mssql-open-close-columns", "dialect": "mssql", "sql": "select open, close from prices" },
   { "id": "redis-get", "dialect": "redis", "sql": "GET a" },
   { "id": "redis-set", "dialect": "redis", "sql": "SET a 1" }
 ]

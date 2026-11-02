@@ -51,6 +51,13 @@ describe("inList", () => {
     expect(dialectOf("postgres").lit("a\\b")).toBe("E'a\\\\b'");
     expect(dialectOf("postgres").lit(null)).toBe("NULL");
   });
+  it("the grid's filters, sort and edit SQL (Dialect.q) quote names as its copy formats do (qurry_shared::sql::quote_ident)", () => {
+    for (const kind of ["postgres", "mysql", "clickhouse", "mssql", "sqlite", "duckdb", "oracle"] as const)
+      for (const n of ["a\\", 'k\\" OR 1=1 --', 'id"', "Id", "select", "plain", "a b", "x`y"]) {
+        const copied = extractRows("SQL Inserts", { names: [n], types: ["int4"], vals: [[1]], keys: [], tableRef: "t", header: false, dialect: dialectOf(kind) });
+        expect([kind, n, dialectOf(kind).q(n)]).toEqual([kind, n, /^INSERT INTO t \((.*)\) VALUES /.exec(copied)?.[1]]);
+      }
+  });
   it("numbers as the grid shows them (String())", () => {
     const nums = [2 ** 53, 1e16, 1e20, 2 ** 60, 1e21, 1.5e-7, 0.1 + 0.2, -0];
     expect(inList(nums.map((n) => [n]))).toBe(`(${nums.map(String).join(", ")})`);

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { isDdl, isRead, rollbackUndoes } from "./stmtKind";
+import { explainAnalyzeAsk, explainAnalyzeNote, isDdl, isRead } from "./stmtKind";
 
 describe("stmtKind (core guard through WASM)", () => {
   it("reads the statement as the TUI does (D1)", () => {
@@ -24,11 +24,19 @@ describe("stmtKind (core guard through WASM)", () => {
     expect(isRead("postgres", "select 1; select 2;")).toBe(true);
   });
 
-  it("Explain Analyse's rollback undoes table writes, not sequences or other servers", () => {
-    expect(rollbackUndoes("postgres", "delete from t")).toBe(true);
-    expect(rollbackUndoes("postgres", "select nextval('s')")).toBe(false);
-    expect(rollbackUndoes("postgres", "select dblink_exec('dbname=x', 'delete from t')")).toBe(false);
-    expect(rollbackUndoes("mysql", "select * from t into outfile '/tmp/x'")).toBe(false);
+  it("Explain Analyse asks with the TUI's words: a write a rollback can't undo, a read that calls a function it doesn't know", () => {
+    expect(explainAnalyzeAsk("postgres", "delete from t where id = 1")).toBe(undefined);
+    expect(explainAnalyzeAsk("postgres", "delete from t")).toBe("DELETE without WHERE changes every row, holding their locks until the rollback undoes it");
+    expect(explainAnalyzeAsk("postgres", "update t set a = f(1) where id = 1")).toMatch(/^it calls f\(\), and a rollback can't undo/);
+    expect(explainAnalyzeAsk("postgres", "select nextval('s')")).toMatch(/^a rollback can't undo what it does outside the transaction/);
+    expect(explainAnalyzeAsk("postgres", "select dblink_exec('dbname=x', 'delete from t')")).toMatch(/^a rollback can't undo/);
+    expect(explainAnalyzeAsk("mysql", "select * from t into outfile '/tmp/x'")).toMatch(/^a rollback can't undo/);
+    expect(explainAnalyzeAsk("postgres", "select archive_old_orders()")).toMatch(/^it calls archive_old_orders\(\), and a rollback can't undo/);
+    expect(explainAnalyzeAsk("postgres", "select count(*) from t")).toBe(undefined);
+    expect(explainAnalyzeAsk("sqlite", "delete from t where id = 1")).toBe("it changes data");
+    expect(explainAnalyzeNote("postgres", "select 1")).toBe(undefined);
+    expect(explainAnalyzeNote("postgres", "update t set a = 1")).toEqual({ level: "info", text: expect.stringContaining("its table changes were undone") });
+    expect(explainAnalyzeNote("postgres", "select archive()")).toEqual({ level: "warn", text: expect.stringContaining("what archive() did outside the transaction stays") });
   });
 
   it("with a backslash in a string, a read must be a read under both of the server's string rules", () => {
@@ -43,6 +51,7 @@ describe("stmtKind (core guard through WASM)", () => {
     const fresh = await import("./stmtKind");
     expect(fresh.isRead("postgres", "select 1")).toBe(false);
     expect(fresh.isDdl("postgres", "drop table t")).toBe(null);
-    expect(fresh.rollbackUndoes("postgres", "delete from t")).toBe(false);
+    expect(fresh.explainAnalyzeAsk("postgres", "delete from t")).toBe("it can't be checked without the statement splitter");
+    expect(fresh.explainAnalyzeNote("postgres", "select 1")?.text).toMatch(/couldn't be checked/);
   });
 });

@@ -75,7 +75,7 @@
     "hint": {"asked":["values"],"column":"status","path":[],"schema":"public","table":"orders"},
     "prefix": 0,
     "items": [
-      {"detail":"1 row","insert":"'x\\'' or 1=1 -- '","kind":"Value","label":"x\\' or 1=1 -- "}
+      {"detail":"1 row","insert":"E'x\\\\'' or 1=1 -- '","kind":"Value","label":"x\\' or 1=1 -- "}
     ]
   },
   "hint-bytea-quoted": {

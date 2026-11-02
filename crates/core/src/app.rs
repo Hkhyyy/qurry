@@ -1695,7 +1695,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// Every run path asks the guard before it reaches a backend: each source's server is a tripwire (a listener that counts any
+    /// Each AppState run path asks the guard before it reaches a backend (console and tab queries, batches, CSV and full exports,
+    /// Redis command lines and argument lists, MCP reads and CSV exports): each source's server is a tripwire (a listener that counts any
     /// connection), and a statement the guard refuses comes back with the guard's error while nothing connected.
     /// Redis has no SQL guard: its MCP read refuses a write command by name before connecting. (MCP CSV export of Redis commands is
     /// refused by the backend for every command, so it isn't a guard path and isn't checked here)
@@ -1728,6 +1729,13 @@ mod tests {
             source(st.run_query(id.clone(), write.into(), None, Some("tab".into())).await.unwrap_err().to_string());
             source(err(st.execute_batch(id.clone(), vec![write.into()], false).await));
             source(err(st.execute_batch_prepared(id.clone(), vec![write.into()]).await));
+            source(st.export_csv(id.clone(), write.into(), dir.join("x.csv").display().to_string()).await.unwrap_err().to_string());
+            let export = st.export(id.clone(), write.into(), crate::transfer::Format::Csv, crate::transfer::Dest::Clipboard, None, "job".into());
+            source(export.await.err().expect("refused").to_string());
+            if kind == DbKind::Redis {
+                source(st.redis_exec_line(id.clone(), write.into()).await.unwrap_err().to_string());
+                source(st.redis_exec(id.clone(), vec!["DEL".into(), "k".into()]).await.unwrap_err().to_string());
+            }
             let e = st.run_read_only(id.clone(), write.into(), 10).await.unwrap_err().to_string();
             match crate::guard::read_only_violation(write, kind, true) {
                 Some(why) => {
