@@ -231,7 +231,7 @@ mod tests {
         let mut ssh = SshConfig { enabled: true, host: "localhost".into(), port: 2222, user: "root".into(), auth: SshAuth::Password, key_path: String::new() };
 
         // 0) Unknown server: show the fingerprint and stop → once the user trusts it, it passes from then on
-        let first = test_login(&ssh, Some("sshpw")).await.err().expect("unknown host must stop").to_string();
+        let first = test_login(&ssh, Some("sshpw")).await.expect_err("unknown host must stop").to_string();
         println!("{first}");
         assert!(first.contains(UNKNOWN_HOST) && first.contains("SHA256:"), "{first}");
         assert!(std::fs::read_to_string(&kh).unwrap().is_empty(), "not learned before the user trusts it");
