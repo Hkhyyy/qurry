@@ -1283,6 +1283,18 @@ mod tests {
         st.run_query("d".into(), sql, None, None).await.unwrap();
     }
 
+    /// select version() of the MySQL-protocol server (8.4.3 · 5.7.44-log · 11.8.2-MariaDB-…)
+    async fn server_version(st: &crate::app::AppState) -> String {
+        st.run_query("d".into(), "select version()".into(), None, None).await.unwrap().rows[0][0].to_string()
+    }
+
+    /// Whether the server is MySQL `min` or later (not MariaDB, whose versions count differently): WITH … DELETE needs 8.0, error 4031 8.0.24
+    async fn mysql_at_least(st: &crate::app::AppState, min: [u32; 3]) -> bool {
+        let v = server_version(st).await;
+        let nums: Vec<u32> = v.trim_matches('"').split(['.', '-']).take(3).map(|n| n.parse().unwrap_or(0)).collect();
+        !v.contains("MariaDB") && nums.as_slice() >= min.as_slice()
+    }
+
     /// The server ends the console's connection (pg_terminate_backend · KILL) while a Manual transaction holds a logged change.
     /// The next statement fails: the log closes the transaction as rolled back by the server, so a later COMMIT doesn't read as
     /// committing the lost change. A COMMIT cut off the same way is logged as of unknown outcome, and the next run reconnects
@@ -1297,7 +1309,7 @@ mod tests {
             st.run_query("d".into(), sql, None, None).await.unwrap();
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         };
-        let log = |n: usize| st.audit_log(None, String::new(), 20).into_iter().map(|e| e.sql).filter(|q| !q.starts_with("KILL")).take(n).collect::<Vec<_>>();
+        let log = |n: usize| st.audit_log(None, String::new(), 20).into_iter().map(|e| e.sql).filter(|q| !q.starts_with("KILL") && !q.starts_with("select pg_terminate_backend")).take(n).collect::<Vec<_>>();
         st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
         run(format!("update {s}.t set v = 10 where id = 1")).await.unwrap();
         kill().await;
@@ -1422,7 +1434,11 @@ mod tests {
             let e = r.unwrap_err().to_string();
             assert!(e.starts_with("Not run: "), "{e}");
         };
-        for first in [format!("with x as (select 1 as id) delete t from {s}.t t join x using (id)"), format!("select v from {s}.t where id = 1 for update")] {
+        let mut firsts = vec![format!("select v from {s}.t where id = 1 for update")];
+        if mysql_at_least(&st, [8, 0, 0]).await {
+            firsts.insert(0, format!("with x as (select 1 as id) delete t from {s}.t t join x using (id)"));
+        }
+        for first in firsts {
             run("c", first.clone()).await.unwrap();
             assert!(st.tx_state("c".into()).await, "{first}");
             if first.starts_with("with") {
@@ -1698,7 +1714,9 @@ mod tests {
         let user = format!("'{s}'@'localhost'");
         st.run_query("d".into(), format!("create user {user} identified by 'a'"), None, None).await.unwrap();
         run(format!("update {s}.t set v = 7 where id = 3")).await.unwrap();
-        run(format!("set password for {user} = 'b'")).await.unwrap();
+        // MariaDB takes a hash there unless it's PASSWORD('…') (1372)
+        let pw = if server_version(&st).await.contains("MariaDB") { "password('b')" } else { "'b'" };
+        run(format!("set password for {user} = {pw}")).await.unwrap();
         assert!(!st.tx_state("m".into()).await);
         assert_eq!(log(1), [IMPLICIT_COMMIT]);
         st.rollback_tx("m".into()).await.unwrap();
@@ -1890,13 +1908,18 @@ mod tests {
             assert!(!e.contains("committed") && !e.contains("saved"), "{before} / {failing}: {e}");
             st.rollback_tx("m".into()).await.unwrap();
         }
-        // After a change it does (when the server answers), a change written as WITH … DELETE too
-        for change in [format!("update {s}.t set v = 30 where id = 3"), format!("with x as (select 2 as id) delete from {s}.t where id in (select id from x)")] {
+        // After a change it does (when the server answers), a change written as WITH … DELETE too (MySQL 8.0+)
+        let with_delete = mysql_at_least(&st, [8, 0, 0]).await;
+        let mut changes = vec![format!("update {s}.t set v = 30 where id = 3")];
+        if with_delete {
+            changes.push(format!("with x as (select 2 as id) delete from {s}.t where id in (select id from x)"));
+        }
+        for change in changes {
             run(change.clone()).await.unwrap();
             let e = run(format!("alter table {s}.t add column v int")).await.unwrap_err().to_string();
             assert!(e.contains("committed the open transaction") && e.contains("saved"), "{change}: {e}");
         }
-        assert_eq!(followup_values(&st, s).await, "[[1],[30]]");
+        assert_eq!(followup_values(&st, s).await, if with_delete { "[[1],[30]]" } else { "[[1],[2],[30]]" });
         followup_drop(&st, DbKind::Mysql, s).await;
     }
 
@@ -1964,7 +1987,7 @@ mod tests {
     }
 
     /// MySQL 8.0.24+ ends an idle session (wait_timeout) with error 4031: that is a lost connection, so the logged change is closed
-    /// as rolled back by the server and the console reconnects
+    /// as rolled back by the server and the console reconnects. Older servers and MariaDB drop the socket without 4031: the same
     #[tokio::test]
     #[ignore]
     async fn mysql_idle_timeout_is_a_lost_connection() {
@@ -1977,7 +2000,10 @@ mod tests {
         run(format!("update {s}.t set v = 10 where id = 1")).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
         let e = run("select 1".into()).await.unwrap_err().to_string();
-        assert!(e.contains("4031") && e.contains("rolled back by the server"), "{e}");
+        assert!(e.contains("rolled back by the server"), "{e}");
+        if mysql_at_least(&st, [8, 0, 24]).await {
+            assert!(e.contains("4031"), "{e}");
+        }
         assert_eq!(st.audit_log(None, String::new(), 1)[0].sql, BY_SERVER);
         assert!(!st.tx_state("m".into()).await);
         assert_eq!(followup_values(&st, s).await, "[[1],[2],[3]]");
