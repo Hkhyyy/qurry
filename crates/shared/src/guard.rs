@@ -26,20 +26,29 @@ struct Scan {
 }
 
 fn scan(sql: &str, kind: DbKind) -> Scan {
-    scan_as(sql, kind, false)
+    scan_as(sql, kind, Quotes::Default)
 }
 
-/// flip = read '…' with the other backslash rule a server setting can pick: MySQL NO_BACKSLASH_ESCAPES (\ is a plain char),
-/// PostgreSQL standard_conforming_strings = off (\ escapes in '…' too)
-fn scan_as(sql: &str, kind: DbKind, flip: bool) -> Scan {
+/// How a server setting can make the server read quotes once there is a backslash
+#[derive(Clone, Copy)]
+enum Quotes {
+    /// The kind's default (crate::sql::backslash_escapes)
+    Default,
+    /// The other backslash rule: MySQL NO_BACKSLASH_ESCAPES (\ is a plain char), PostgreSQL standard_conforming_strings = off (\ escapes in '…' too)
+    OtherBackslash,
+    /// MySQL ANSI_QUOTES: "…" is a name where \ is a plain char, while \ still escapes in '…'
+    AnsiQuotes,
+}
+
+fn scan_as(sql: &str, kind: DbKind, quotes: Quotes) -> Scan {
     let b = sql.as_bytes();
     let n = b.len();
     let (mut toks, mut i, mut depth, mut exec_comment) = (Vec::new(), 0usize, 0i32, false);
     let my = kind == DbKind::Mysql;
     let backslash = crate::sql::backslash_escapes(kind);
-    let escapes = |q: u8| match (flip, kind) {
-        (true, DbKind::Mysql) => false,
-        (true, DbKind::Postgres) => q == b'\'',
+    let escapes = |q: u8| match (quotes, kind) {
+        (Quotes::OtherBackslash, DbKind::Mysql) => false,
+        (Quotes::OtherBackslash, DbKind::Postgres) | (Quotes::AnsiQuotes, DbKind::Mysql) => q == b'\'',
         _ => backslash && crate::sql::escapes_in(kind, q),
     };
     while i < n {
@@ -969,16 +978,24 @@ pub fn redis_mcp_write_violation(line: &str) -> Option<String> {
     far.then(|| format!("{cmd} offset must be below {} bytes over MCP", REDIS_MCP_MAX_OFFSET))
 }
 
-/// Whether the statement doesn't change data (for counting "already committed changes" in script failure notes)
-/// With a backslash the server's settings decide where strings end (MySQL NO_BACKSLASH_ESCAPES,
-/// PostgreSQL standard_conforming_strings), so the statement must be a read under both rules
+/// Whether the statement doesn't change data (Production confirmation, Explain Analyse rollback, the Production log, and
+/// counting "already committed changes" in script failure notes). A call to a side-effect function (dblink_exec, setval …) is not a read.
+/// With a backslash the server's settings decide where strings end (MySQL NO_BACKSLASH_ESCAPES and ANSI_QUOTES,
+/// PostgreSQL standard_conforming_strings), so the statement must be a read under every rule
 pub fn is_read(sql: &str, kind: DbKind) -> bool {
     let read = |sc: Scan| {
         let first = sc.toks.iter().find(|t| t.word).map(|t| t.text.as_str()).unwrap_or("");
-        READ_WORDS.contains(&first) && !sc.toks.iter().any(|t| t.word && ["insert", "update", "delete", "merge"].contains(&t.text.as_str()))
+        let call = |i: usize| sc.toks.get(i + 1).is_some_and(|n| n.text == "(");
+        READ_WORDS.contains(&first)
+            && !sc.toks.iter().enumerate().any(|(i, t)| {
+                t.word && (["insert", "update", "delete", "merge"].contains(&t.text.as_str()) || (call(i) && SIDE_EFFECT_FUNCS.contains(&t.text.as_str())))
+            })
     };
-    let ambiguous = matches!(kind, DbKind::Mysql | DbKind::Postgres) && sql.contains('\\');
-    read(scan(sql, kind)) && (!ambiguous || read(scan_as(sql, kind, true)))
+    let backslash = matches!(kind, DbKind::Mysql | DbKind::Postgres) && sql.contains('\\');
+    let ansi = backslash && kind == DbKind::Mysql && sql.contains('"');
+    read(scan(sql, kind))
+        && (!backslash || read(scan_as(sql, kind, Quotes::OtherBackslash)))
+        && (!ansi || read(scan_as(sql, kind, Quotes::AnsiQuotes)))
 }
 
 /// Whether the statement changes structure (the explorer tree is reloaded after running). Skips leading comments
@@ -1462,5 +1479,21 @@ mod tests {
             assert!(is_read(s, Mysql) && is_read(s, Postgres), "{s}");
         }
         assert!(is_read("# delete\nselect 1", Mysql));
+        // MySQL ANSI_QUOTES: \ escapes in '…' but "…" is a name where \ is plain, so the DELETE is code
+        let ansi = r#"with a as (select 'p\' "  ' as "a\") delete from t -- ""#;
+        assert!(!is_read(ansi, Mysql), "{ansi}");
+        assert!(is_read(r#"select 'C:\path' as "a\""#, Mysql));
+    }
+
+    /// Dynamic SQL and other side-effect calls are not reads (Production asks, Explain Analyse rolls back)
+    #[test]
+    fn is_read_side_effect_calls() {
+        for s in ["select dblink_exec('dbname=prod', 'delete from orders')", "select setval('s', 1)", r#"select "set_config"('a', 'b', false)"#] {
+            assert!(!is_read(s, Postgres), "{s}");
+        }
+        assert!(!is_read("select get_lock('a', 10)", Mysql));
+        // The name alone (a column, a string) is not a call
+        assert!(is_read("select setval from t", Postgres));
+        assert!(is_read("select 'dblink_exec(x)'", Postgres));
     }
 }

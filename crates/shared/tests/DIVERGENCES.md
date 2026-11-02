@@ -16,8 +16,8 @@ Inputs are in `corpus/` (ids as listed); `‸` in a corpus text is the cursor. O
 | sql › planExecution(outside:whole) | 15 | 0 | 0 | 0 |
 | sql › planExecution(outside:below) | 15 | 0 | 0 | 0 |
 | sql › statementAt | 0 | 0 | 0 | 15 |
-| statements › isReadStmt | 35 | 0 | 0 | 0 |
-| statements › DDL_RE | 35 | 0 | 0 | 0 |
+| statements › isReadStmt | 37 | 0 | 0 | 0 |
+| statements › DDL_RE | 37 | 0 | 0 | 0 |
 | completion › tablesInStatement | 15 | 3 | 0 | 0 |
 | completion › findTable | 26 | 2 | 0 | 0 |
 | valuehints › hintContext | 39 | 2 | 0 | 0 |

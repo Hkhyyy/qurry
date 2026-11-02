@@ -31,19 +31,23 @@ mod tests {
         use sqlx::Connection;
         let my = "with a as (select 'x\\') delete from stmt_kind_exec.t -- ') select 1";
         let pg = "with a as (select 'x\\' as c, '), d as (delete from stmt_kind_exec.t returning 1) select 1 -- ' as e) select 1";
-        assert!(!is_read(my, DbKind::Mysql) && !is_read(pg, DbKind::Postgres));
+        // ANSI_QUOTES: \ escapes in '…' but not in "…" (a name)
+        let ansi = r#"with a as (select 'p\' "  ' as "a\") delete from stmt_kind_exec.t -- ""#;
+        assert!(!is_read(my, DbKind::Mysql) && !is_read(pg, DbKind::Postgres) && !is_read(ansi, DbKind::Mysql));
         let fixture = "create table stmt_kind_exec.t (a int); insert into stmt_kind_exec.t values (1), (2), (3)";
         let count = "select count(*) from stmt_kind_exec.t";
         if let Ok(e) = std::env::var("QURRY_TEST_MY") {
             let p: Vec<&str> = e.split(':').collect();
             let mut c = sqlx::MySqlConnection::connect(&format!("mysql://{}:{}@{}:{}/{}", p[2], p[3], p[0], p[1], p[4])).await.unwrap();
-            sqlx::raw_sql("drop database if exists stmt_kind_exec; create database stmt_kind_exec").execute(&mut c).await.unwrap();
-            sqlx::raw_sql(fixture).execute(&mut c).await.unwrap();
-            sqlx::raw_sql("set session sql_mode = 'NO_BACKSLASH_ESCAPES'").execute(&mut c).await.unwrap();
-            sqlx::raw_sql(my).execute(&mut c).await.unwrap();
-            let (n,): (i64,) = sqlx::query_as(count).fetch_one(&mut c).await.unwrap();
-            sqlx::raw_sql("drop database stmt_kind_exec").execute(&mut c).await.unwrap();
-            assert_eq!(n, 0, "MySQL ran the DELETE");
+            for (mode, sql) in [("NO_BACKSLASH_ESCAPES", my), ("ANSI_QUOTES", ansi)] {
+                sqlx::raw_sql("set session sql_mode = default; drop database if exists stmt_kind_exec; create database stmt_kind_exec").execute(&mut c).await.unwrap();
+                sqlx::raw_sql(fixture).execute(&mut c).await.unwrap();
+                sqlx::raw_sql(&format!("set session sql_mode = '{mode}'")).execute(&mut c).await.unwrap();
+                sqlx::raw_sql(sql).execute(&mut c).await.unwrap();
+                let (n,): (i64,) = sqlx::query_as(count).fetch_one(&mut c).await.unwrap();
+                sqlx::raw_sql("drop database stmt_kind_exec").execute(&mut c).await.unwrap();
+                assert_eq!(n, 0, "MySQL ran the DELETE under {mode}");
+            }
         }
         if let Ok(e) = std::env::var("QURRY_TEST_PG") {
             let p: Vec<&str> = e.split(':').collect();

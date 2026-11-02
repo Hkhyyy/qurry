@@ -131,6 +131,14 @@
     "isReadStmt": true,
     "DDL_RE": false
   },
+  "backslash-ansi-quotes": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "dblink-exec": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
   "redis-get": {
     "isReadStmt": false,
     "DDL_RE": false
