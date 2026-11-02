@@ -2106,6 +2106,15 @@ mod tests {
         h.key("Enter");
         let Some(crate::app::Popup::Note { text, .. }) = &h.app.popup else { panic!("no note") };
         assert_eq!(text, qurry_core::audit::ENDED_UNKNOWN_NOTE);
+        // A transaction a statement or the server ended says how, as in the GUI
+        h.key("Esc");
+        h.key("Esc");
+        for (id, sql) in [("i", "COMMIT (implicit)"), ("s", "ROLLBACK (by the server)")] {
+            h.app.state.audit.add(qurry_core::audit::AuditEntry { rows: None, ..entry(id, sql, None) }).unwrap();
+        }
+        h.app.run_action(Action::ProductionLog);
+        let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no log") };
+        assert!(p.items[0].hint.starts_with("rolled back") && p.items[1].hint.starts_with("committed"), "{} | {}", p.items[0].hint, p.items[1].hint);
     }
 
     /// ⌃K › Copy Related Rows: condition → child steps → destination (only other Data Sources of the same type). Generate Test Data asks for the row count

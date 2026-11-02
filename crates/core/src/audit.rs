@@ -331,19 +331,12 @@ pub(crate) const BY_SERVER: &str = "ROLLBACK (by the server)";
 pub(crate) const DISCONNECTED: &str = "ROLLBACK (disconnected)";
 /// Log entry for a MySQL console transaction with logged changes that a statement committed (DDL, LOCK TABLES, SET autocommit = 1, BEGIN …)
 pub(crate) const IMPLICIT_COMMIT: &str = "COMMIT (implicit)";
-/// Log entry for a MySQL console transaction with logged changes that a statement ended either way: a CALL (or EXECUTE) whose
-/// procedure committed or rolled it back, a deadlock or lock wait timeout (after a DDL's commit, or rolling it back)
-pub const ENDED_UNKNOWN: &str = "ENDED (committed or rolled back)";
-/// What to do about it (the entry's note)
+/// Log entries of unknown outcome and the rules that read the log back: in qurry-shared, so the GUI has them through WASM
+pub use qurry_shared::audit::{COMMIT_UNKNOWN, ENDED_UNKNOWN, outcome_unknown, status};
+/// What to do about ENDED_UNKNOWN (the entry's note)
 pub const ENDED_UNKNOWN_NOTE: &str = "The transaction ended in the statement before this entry (a CALL, a deadlock or a lock wait timeout), and MySQL doesn't say whether it committed or rolled back the changes made before it. Check the data before you run them again.";
-/// Log entry for a COMMIT cut off by a lost connection: the server may have committed before the connection went
-pub const COMMIT_UNKNOWN: &str = "COMMIT outcome unknown (connection lost)";
-/// What to do about it (the entry's note)
+/// What to do about COMMIT_UNKNOWN (the entry's note)
 pub const COMMIT_UNKNOWN_NOTE: &str = "The server may have committed before the connection was lost. Check the data before you run these changes again.";
-/// Whether the log entry is one whose outcome is unknown (the changes may or may not be saved): its note says what to do
-pub fn outcome_unknown(sql: &str) -> bool {
-    sql == COMMIT_UNKNOWN || sql == ENDED_UNKNOWN
-}
 /// Title of the notice for the error of a failed Commit (the GUI has it through WASM)
 pub use qurry_shared::errors::commit_failed_title;
 
@@ -1812,6 +1805,27 @@ mod tests {
         assert!(!st.tx_state("m".into()).await);
         assert_eq!(log(1), [ENDED_UNKNOWN]);
         assert_eq!(followup_values(&st, s).await, "[[70],[2],[3]]");
+        followup_drop(&st, DbKind::Mysql, s).await;
+    }
+
+    /// MySQL Auto: a CALL whose procedure starts a transaction and doesn't commit leaves it open on the server. The console shows it
+    /// open, so the changes after it are logged as not committed yet and Roll back undoes them (before, it showed none open)
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_auto_call_that_opens_a_transaction() {
+        let Some(st) = prod_state(DbKind::Mysql, "QURRY_TEST_MY").await else { return };
+        let s = "audit_followups_auto_call";
+        followup_table(&st, DbKind::Mysql, s).await;
+        st.run_query("d".into(), format!("create procedure {s}.o() begin start transaction; update {s}.t set v = 80 where id = 1; end"), None, None).await.unwrap();
+        let run = |sql: String| st.run_query("d".into(), sql, None, Some("a".into()));
+        run(format!("call {s}.o()")).await.unwrap();
+        assert!(st.tx_state("a".into()).await);
+        run(format!("update {s}.t set v = 90 where id = 2")).await.unwrap();
+        assert!(st.tx_state("a".into()).await);
+        assert!(st.audit_log(None, String::new(), 1)[0].in_tx);
+        st.rollback_tx("a".into()).await.unwrap();
+        assert!(!st.tx_state("a".into()).await);
+        assert_eq!(followup_values(&st, s).await, "[[1],[2],[3]]");
         followup_drop(&st, DbKind::Mysql, s).await;
     }
 

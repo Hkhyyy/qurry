@@ -93,14 +93,8 @@ impl App {
             .audit_log(None, String::new(), 1000)
             .into_iter()
             .map(|e| {
-                let status = if e.started {
-                    // Logged before it ran, no result: still running, or Qurry stopped — the outcome is unknown
-                    "no result recorded".to_string()
-                } else if qurry_core::audit::outcome_unknown(&e.sql) {
-                    // A COMMIT cut off by a lost connection, a transaction a CALL ended: it may have committed
-                    "outcome unknown".to_string()
-                } else if e.error.is_some() {
-                    "failed".to_string()
+                let status = if let Some(word) = qurry_core::audit::status(e.started, &e.sql, e.error.is_some()) {
+                    word.to_string()
                 } else if let Some(n) = e.rows {
                     format!("{n} row(s){}", if e.in_tx { ", not committed yet" } else { "" })
                 } else {

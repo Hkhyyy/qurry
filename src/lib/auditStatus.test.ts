@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { COMMIT_UNKNOWN, ENDED_UNKNOWN, auditStatus } from "../components/ProductionLog";
+import { auditStatus } from "../components/ProductionLog";
+import rust from "../../crates/shared/src/audit.rs?raw";
 import type { AuditEntry } from "./api";
+
+// The log words as core writes them (crates/shared/src/audit.rs), not a copy
+const word = (name: string) => rust.match(new RegExp(`pub const ${name}: &str = "([^"]+)";`))![1];
+const COMMIT_UNKNOWN = word("COMMIT_UNKNOWN");
+const ENDED_UNKNOWN = word("ENDED_UNKNOWN");
 
 const entry = (e: Partial<AuditEntry>): AuditEntry => ({ id: "a", ts: 0, connId: "p", connName: "PROD", sql: "delete from t where id = 1", inTx: false, ...e });
 
@@ -17,6 +23,11 @@ describe("auditStatus", () => {
 
   it("shows a transaction a CALL ended as of unknown outcome, not as done", () => {
     expect(auditStatus(entry({ sql: ENDED_UNKNOWN }))).toEqual({ text: "outcome unknown", tone: "warn" });
+  });
+
+  it("shows how a transaction ended, also when the server or a statement ended it", () => {
+    expect(auditStatus(entry({ sql: "COMMIT (implicit)" }))).toEqual({ text: "committed", tone: "accent" });
+    expect(auditStatus(entry({ sql: "ROLLBACK (by the server)" }))).toEqual({ text: "rolled back", tone: "neutral" });
   });
 
   it("shows results as before", () => {

@@ -1,24 +1,25 @@
 import { useEffect, useMemo, useState } from "react";
 import { AuditEntry, auditLog } from "../lib/api";
+import { shared } from "../lib/shared";
 import { Badge, Button, CodeBlock, List, ListItem, Modal, Notice, SearchField, SectionTitle, Text } from "../ui";
 
-/** Log entry of a COMMIT cut off by a lost connection (crates/core audit::COMMIT_UNKNOWN) */
-export const COMMIT_UNKNOWN = "COMMIT outcome unknown (connection lost)";
-/** Log entry of a MySQL transaction a statement ended, committed or rolled back (crates/core audit::ENDED_UNKNOWN) */
-export const ENDED_UNKNOWN = "ENDED (committed or rolled back)";
+type Tone = "neutral" | "warn" | "danger" | "accent";
+/** Tone of each result word qurry-shared's audit::status gives */
+const TONES: Record<string, Tone> = { "no result recorded": "warn", "outcome unknown": "warn", failed: "danger", committed: "accent", "rolled back": "neutral" };
 
-/** The changes may or may not be saved: the entry's note says what to do (crates/core audit::outcome_unknown) */
-const outcomeUnknown = (e: AuditEntry) => e.sql === COMMIT_UNKNOWN || e.sql === ENDED_UNKNOWN;
+/** Result word decided in Rust like the TUI's (before the WASM has loaded: none, the rows say it) */
+const statusWord = (e: AuditEntry) => {
+  try {
+    return shared().auditStatus(!!e.started, e.sql, !!e.error);
+  } catch {
+    return undefined;
+  }
+};
 
 /** One-line summary: changed rows · error · uncommitted · no result recorded */
-export function auditStatus(e: AuditEntry): { text: string; tone: "neutral" | "warn" | "danger" | "accent" } {
-  // Logged before it ran with no result: still running, or Qurry stopped — the outcome (even of a COMMIT) is unknown
-  if (e.started) return { text: "no result recorded", tone: "warn" };
-  // A COMMIT cut off by a lost connection, a transaction a statement ended either way: it may have committed
-  if (outcomeUnknown(e)) return { text: "outcome unknown", tone: "warn" };
-  if (e.error) return { text: "failed", tone: "danger" };
-  if (e.sql.startsWith("COMMIT")) return { text: "committed", tone: "accent" };
-  if (e.sql.startsWith("ROLLBACK")) return { text: "rolled back", tone: "neutral" };
+export function auditStatus(e: AuditEntry): { text: string; tone: Tone } {
+  const word = statusWord(e);
+  if (word) return { text: word, tone: TONES[word] ?? "warn" };
   const rows = e.rows == null ? "done" : `${e.rows.toLocaleString("en-US")} row${e.rows === 1 ? "" : "s"}`;
   return { text: e.inTx ? `${rows} · not committed yet` : rows, tone: e.inTx ? "warn" : "neutral" };
 }
@@ -40,7 +41,8 @@ export function ProductionLog({ connId, onOpenUndo, onClose }: { connId: string 
     return items.filter((e) => !f || e.sql.toLowerCase().includes(f) || e.connName.toLowerCase().includes(f));
   }, [items, q]);
   const cur = list[Math.min(idx, list.length - 1)];
-  const unknown = cur && outcomeUnknown(cur);
+  // The changes may or may not be saved (a COMMIT cut off by a lost connection, a transaction a statement ended either way): the note says what to do
+  const unknown = cur && statusWord(cur) === "outcome unknown";
   const where = (e: AuditEntry) => (e.database ? `${e.connName} · ${e.database}` : e.connName);
 
   return (

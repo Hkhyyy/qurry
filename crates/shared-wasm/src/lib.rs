@@ -50,6 +50,12 @@ pub fn commit_failed_title(msg: &str) -> String {
     qurry_shared::errors::commit_failed_title(msg).into()
 }
 
+/// Result word of a Production log entry ("outcome unknown", "failed", "committed" …), or undefined when its rows say it
+#[wasm_bindgen(js_name = auditStatus)]
+pub fn audit_status(started: bool, sql: &str, failed: bool) -> Option<String> {
+    qurry_shared::audit::status(started, sql, failed).map(String::from)
+}
+
 /// Statements split on `;` as the server reads them: [[start, end], …] in UTF-16 code units
 #[wasm_bindgen(js_name = splitStatements)]
 pub fn split_statements(text: &str, kind: JsValue) -> Result<JsValue, JsError> {

@@ -392,9 +392,12 @@ impl MySession {
         let mut conn = p.acquire().await?;
         let id: u64 = sqlx::query_scalar("select connection_id()").fetch_one(&mut *conn).await?;
         let mut s = Self { conn, id: id as i64, manual: false, in_tx: false, changed: false, ended: None, probe: true, more: None };
-        s.conn.execute("START TRANSACTION").await?;
-        s.probe = s.tx_open().await != Some(false);
-        s.conn.execute("ROLLBACK").await?;
+        // Best effort: a MySQL-protocol server without transactions (ClickHouse, older StarRocks / Doris) still opens, without the probe
+        let began = s.conn.execute("START TRANSACTION").await.is_ok();
+        s.probe = began && s.tx_open().await != Some(false);
+        if began {
+            let _ = s.conn.execute("ROLLBACK").await;
+        }
         Ok(s)
     }
 
@@ -497,7 +500,7 @@ impl MySession {
             Ok(r) => r,
             Err(e) => {
                 let s = strip_comments_lead(sql);
-                if (self.manual || self.in_tx) && asks_server(sql, &s) && error_number(&e).is_some() && !crate::app::is_conn_lost(&e) {
+                if (self.manual || self.in_tx || ends_in_procedure(&s)) && asks_server(sql, &s) && error_number(&e).is_some() && !crate::app::is_conn_lost(&e) {
                     // Same rule as for one that ran: a DDL or SET PASSWORD that committed before failing, a COMMIT the server refused
                     // (rolled back) ended it, one that failed to parse (COMMIT TRANSACTION: 1064) didn't, a CALL may have opened one
                     self.follow_server(&s, Some(&e)).await;
@@ -527,7 +530,8 @@ impl MySession {
             self.in_tx = true;
         } else if s.starts_with("commit") || (s.starts_with("rollback") && !s.starts_with("rollback to")) {
             self.in_tx = false;
-        } else if (self.manual || self.in_tx) && asks_server(sql, &s) {
+        } else if (self.manual || self.in_tx || ends_in_procedure(&s)) && asks_server(sql, &s) {
+            // In Auto with none open, a CALL or EXECUTE can leave one open (a procedure's START TRANSACTION without COMMIT)
             self.follow_server(&s, None).await;
         } else if self.manual && opens_tx(&s) {
             // With autocommit=0, any statement opens a transaction, not only a change: WITH … DELETE, SELECT … FOR UPDATE (its row locks),
