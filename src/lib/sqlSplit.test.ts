@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DbKind } from "./api";
-import { splitScript, splitStatements, statementAt } from "./sqlSplit";
+import { splitScript, splitStatements } from "./sqlSplit";
 
 const parts = (sql: string, kind: DbKind = "postgres") => splitStatements(sql, kind).map((s) => sql.slice(s.start, s.end).trim());
 
@@ -32,15 +32,6 @@ describe("splitStatements", () => {
     expect(parts("select e'\\''; select 2")).toEqual(["select e'\\''", "select 2"]);
     // name'…' is not an E-string: \ is a plain char there
     expect(parts("select 1 as name'\\'; select 2")).toHaveLength(2);
-  });
-});
-
-describe("statementAt", () => {
-  it("the statement under the cursor, or the one just before when between statements", () => {
-    const sql = "select 1;\n\nselect 2;";
-    expect(statementAt(sql, 3)?.sql).toBe("select 1");
-    expect(statementAt(sql, sql.indexOf("2"))?.sql).toBe("select 2");
-    expect(statementAt("", 0)).toBeNull();
   });
 });
 

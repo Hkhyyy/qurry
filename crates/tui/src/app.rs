@@ -1775,12 +1775,15 @@ impl App {
         if c.running {
             return;
         }
-        let plan = if let Some(((r0, c0), (r1, c1))) = c.editor.selection_range() {
-            qurry_core::exec::plan_selection(&selected_text(c.editor.lines(), r0, c0, r1, c1), kind, self.exec)
-        } else {
-            let (row, col) = c.editor.cursor();
-            qurry_core::exec::plan(&c.editor.lines().join("\n"), byte_offset(c.editor.lines(), row, col), kind, self.exec)
-        };
+        if let Some(((r0, c0), (r1, c1))) = c.editor.selection_range() {
+            let stmts = qurry_core::exec::plan_selection(&selected_text(c.editor.lines(), r0, c0, r1, c1), kind, self.exec);
+            if !stmts.is_empty() {
+                self.run_stmts(stmts, explain, confirmed);
+            }
+            return;
+        }
+        let (row, col) = c.editor.cursor();
+        let plan = qurry_core::exec::plan(&c.editor.lines().join("\n"), byte_offset(c.editor.lines(), row, col), kind, self.exec);
         match plan {
             qurry_core::exec::Plan::Nothing => {}
             qurry_core::exec::Plan::Run(stmts) => self.run_stmts(sqls(stmts), explain, confirmed),

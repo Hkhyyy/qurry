@@ -21,18 +21,6 @@ export function splitStatements(text: string, kind: DbKind = "postgres"): Segmen
   return segments(shared().splitStatements(text, kind, EDITOR));
 }
 
-/** The statement at the cursor. If the cursor is in a gap between statements, picks the previous one. */
-export function statementAt(text: string, offset: number, kind: DbKind = "postgres") {
-  const segs = splitStatements(text, kind);
-  if (segs.length === 0) return null;
-  let pick = segs.find((s) => offset >= s.start && offset <= s.end + 1);
-  if (!pick) pick = [...segs].reverse().find((s) => s.end < offset) ?? segs[0];
-  const raw = text.slice(pick.start, pick.end);
-  const lead = raw.length - raw.trimStart().length;
-  const sql = raw.trim();
-  return { sql, start: pick.start + lead, end: pick.start + lead + sql.length };
-}
-
 /**
  * Statement splitting for the editor: after splitting on semicolons, also split statements written without `;` at line-start statement keywords (like DataGrip).
  * UNION · INSERT … SELECT · WITH … SELECT · GRANT SELECT etc. are one statement.

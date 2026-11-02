@@ -222,19 +222,14 @@ pub fn plan_in(text: &str, offset: usize, segs: &[(usize, usize)], kind: DbKind,
     }
 }
 
-/// When running a selection (offsets in the selected text)
-pub fn plan_selection(sel: &str, kind: DbKind, s: ExecSettings) -> Plan {
-    let trimmed = |a: usize, b: usize| {
-        let raw = &sel[a..b];
-        let start = a + (raw.len() - raw.trim_start().len());
-        Stmt { start, end: start + raw.trim().len(), sql: raw.trim().to_string() }
+/// Statements to run from a selection (empty: nothing). The GUI keeps its own copy of this rule (ConsolePane.tsx),
+/// so that a selection run as one statement works even without the shared WASM
+pub fn plan_selection(sel: &str, kind: DbKind, s: ExecSettings) -> Vec<String> {
+    let v: Vec<String> = match s.selection {
+        Selection::Single => vec![sel.trim().to_string()],
+        Selection::Separate => sql::split_script(sel, kind).into_iter().map(|(a, b)| sel[a..b].trim().to_string()).collect(),
     };
-    let v: Vec<Stmt> = match s.selection {
-        Selection::Single => vec![trimmed(0, sel.len())],
-        Selection::Separate => sql::split_script(sel, kind).into_iter().map(|(a, b)| trimmed(a, b)).collect(),
-    };
-    let v: Vec<Stmt> = v.into_iter().filter(|x| !x.sql.is_empty()).collect();
-    if v.is_empty() { Plan::Nothing } else { Plan::Run(v) }
+    v.into_iter().filter(|x| !x.is_empty()).collect()
 }
 
 #[cfg(test)]
@@ -318,9 +313,10 @@ mod tests {
     #[test]
     fn selection_modes() {
         let sel = "GRANT a TO x;\n\nGRANT b TO x;";
-        assert_eq!(sqls(plan_selection(sel, DbKind::Postgres, ExecSettings::default())), run(&["GRANT a TO x", "GRANT b TO x"]));
+        assert_eq!(plan_selection(sel, DbKind::Postgres, ExecSettings::default()), ["GRANT a TO x", "GRANT b TO x"]);
         let single = ExecSettings { selection: Selection::Single, ..Default::default() };
-        assert_eq!(sqls(plan_selection(sel, DbKind::Postgres, single)), run(&[sel]));
+        assert_eq!(plan_selection(sel, DbKind::Postgres, single), [sel]);
+        assert!(plan_selection(" \n ", DbKind::Postgres, single).is_empty());
     }
     #[test]
     fn skips_note_lines_before_statement() {
@@ -350,12 +346,6 @@ mod tests {
         let Plan::Run(v) = plan(sql, 3, DbKind::Postgres, s) else { panic!("should run") };
         assert_eq!(v.iter().map(|x| &sql[x.start..x.end]).collect::<Vec<_>>(), ["SELECT 1\nFROM t", "select 2"]);
         assert_eq!(texts(&v), ["SELECT 1\nFROM t", "select 2"]);
-        let sel = "  select 1;\n select 2 ";
-        let Plan::Run(v) = plan_selection(sel, DbKind::Postgres, ExecSettings::default()) else { panic!("should run") };
-        assert_eq!(v.iter().map(|x| (x.start, x.end)).collect::<Vec<_>>(), [(2, 10), (13, 21)]);
-        let single = ExecSettings { selection: Selection::Single, ..Default::default() };
-        let Plan::Run(v) = plan_selection(sel, DbKind::Postgres, single) else { panic!("should run") };
-        assert_eq!((v[0].start, v[0].end, v[0].sql.as_str()), (2, 21, "select 1;\n select 2"));
     }
 }
 
