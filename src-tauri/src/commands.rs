@@ -670,6 +670,8 @@ pub fn save_keymap(state: State<'_, AppState>, map: crate::store::Keymap) -> App
 #[serde(rename_all = "camelCase")]
 pub struct UpdateInfo {
     current: String,
+    /// The update channel the check was for (messages name it, as in the TUI)
+    channel: qurry_core::update::Channel,
     latest: Option<qurry_core::update::Release>,
     /// Changes in versions newer than the current one (newest first)
     changes: Vec<qurry_core::update::VersionNotes>,
@@ -679,12 +681,13 @@ pub struct UpdateInfo {
 #[tauri::command]
 pub async fn check_update(state: State<'_, AppState>, force: bool) -> AppResult<UpdateInfo> {
     let current = env!("CARGO_PKG_VERSION").to_string();
+    let channel = state.store.update_channel();
     if (cfg!(debug_assertions) && !force) || (qurry_core::update::disabled() && !force) {
-        return Ok(UpdateInfo { current, latest: None, changes: vec![] });
+        return Ok(UpdateInfo { current, channel, latest: None, changes: vec![] });
     }
-    let latest = qurry_core::update::check(&state.store.dir(), &current, state.store.update_channel(), force).await?;
+    let latest = qurry_core::update::check(&state.store.dir(), &current, channel, force).await?;
     let changes = latest.as_ref().map(|r| r.changes_since(&current)).unwrap_or_default();
-    Ok(UpdateInfo { current, latest, changes })
+    Ok(UpdateInfo { current, channel, latest, changes })
 }
 
 /// Update channel (Settings › Appearance › Updates; the TUI shares it)
@@ -703,7 +706,7 @@ pub fn set_update_channel(state: State<'_, AppState>, channel: qurry_core::updat
     }
     Ok(qurry_core::update::cached(&state.store.dir(), &current, channel).map(|latest| {
         let changes = latest.as_ref().map(|r| r.changes_since(&current)).unwrap_or_default();
-        UpdateInfo { current, latest, changes }
+        UpdateInfo { current, channel, latest, changes }
     }))
 }
 
@@ -716,7 +719,8 @@ pub async fn install_update(app: tauri::AppHandle, state: State<'_, AppState>) -
     use tauri_plugin_updater::UpdaterExt;
     let msg = |e: tauri_plugin_updater::Error| crate::error::AppError::Msg(format!("Update failed: {e}"));
     let current = env!("CARGO_PKG_VERSION");
-    let Some(release) = qurry_core::update::check(&state.store.dir(), current, state.store.update_channel(), false).await? else {
+    // Fresh, as the TUI: an hour-old answer may name a beta whose release was pruned since (its latest.json is gone)
+    let Some(release) = qurry_core::update::check(&state.store.dir(), current, state.store.update_channel(), true).await? else {
         return Err(crate::error::AppError::Msg(format!("No update to install: {current} is the latest version on this update channel (Settings › Appearance › Updates).")));
     };
     // Built from the version, not taken from the API response: only this repo's release files

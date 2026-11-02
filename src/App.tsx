@@ -162,7 +162,7 @@ export default function App() {
       if (!updateCheckEnabled()) return;
       api
         .checkUpdate(false)
-        .then((u) => u.latest && setUpdate(u))
+        .then((u) => setUpdate(offered(u)))
         .catch(() => {});
     };
     check();
@@ -227,11 +227,11 @@ export default function App() {
       setStatus("Checking for updates…");
       try {
         const u = await api.checkUpdate(true);
+        setUpdate(offered(u));
         if (u.latest) {
-          setUpdate(u);
           setUpdateOpen(true);
           setStatus("");
-        } else setStatus(`You have the latest version (${u.current}).`);
+        } else setStatus(upToDate(u));
       } catch (e) {
         setStatus(String(e));
       }
@@ -2797,7 +2797,11 @@ function PasswordSettings() {
   );
 }
 
-/** onChannel: the update the new channel offers (null: none), so the status bar button follows the channel */
+/** The update a check offers, or null: a check that finds nothing clears the status bar button (the TUI may have switched the shared channel) */
+const offered = (u: UpdateInfo) => (u.latest ? u : null);
+const upToDate = (u: UpdateInfo) => `You have the latest ${u.channel} version (${u.current}).`;
+
+/** onChannel: the update the new channel (or a check that finds nothing) offers (null: none), so the status bar button follows the channel */
 export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "appearance" }: { onClose: () => void; onUpdate: (u: UpdateInfo) => void; onChannel: (u: UpdateInfo | null) => void; initialPage?: "appearance" | "keymap" }) {
   const [page, setPage] = useState<"appearance" | "keymap" | "passwords">(initialPage);
   const [checkOnStart, setCheckOnStart] = useState(updateCheckEnabled());
@@ -2808,13 +2812,18 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
     api.updateChannel().then(setChannel, (e) => setChMsg(String(e)));
   }, []);
   const pickChannel = async (c: UpdateChannel) => {
+    const was = channel;
     setChannel(c);
+    // A Check Now answer was for the channel before
+    setUpdMsg(null);
     try {
       // Answered from the saved check (both channels), never a new request
       const u = await api.setUpdateChannel(c);
-      onChannel(u?.latest ? u : null);
-      setChMsg(!u ? "Saved. Check Now looks for updates on this channel." : u.latest ? `Qurry ${u.latest.version} is available on this channel.` : `You have the latest ${c} version (${u.current}).`);
+      onChannel(u && offered(u));
+      setChMsg(!u ? "Saved. Check Now looks for updates on this channel." : u.latest ? `Qurry ${u.latest.version} is available on this channel.` : upToDate(u));
     } catch (e) {
+      // Not saved: the select shows the channel still in use
+      setChannel(was);
       setChMsg(String(e));
     }
   };
@@ -2823,7 +2832,10 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
     try {
       const u = await api.checkUpdate(true);
       if (u.latest) onUpdate(u);
-      else setUpdMsg(`You have the latest version (${u.current}).`);
+      else {
+        onChannel(null);
+        setUpdMsg(upToDate(u));
+      }
     } catch (e) {
       setUpdMsg(String(e));
     }

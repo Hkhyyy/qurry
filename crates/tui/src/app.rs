@@ -3169,11 +3169,21 @@ impl App {
         tokio::spawn(async move {
             let r = qurry_core::update::check(&dir, env!("CARGO_PKG_VERSION"), channel, true).await;
             let _ = tx.send(Box::new(move |a: &mut App| match r {
-                Ok(Some(r)) => a.show_update(r),
-                Ok(None) => a.status = format!("You have the latest {} version ({}).", channel_name(channel).to_lowercase(), env!("CARGO_PKG_VERSION")),
+                Ok(r) => a.update_checked(channel, r),
                 Err(e) => a.status = e.to_string(),
             }));
         });
+    }
+
+    /// A forced check's answer. None also clears the ⬆ badge: the GUI may have switched the shared channel since it was set
+    pub fn update_checked(&mut self, channel: qurry_core::update::Channel, r: Option<qurry_core::update::Release>) {
+        match r {
+            Some(r) => self.show_update(r),
+            None => {
+                self.update = None;
+                self.status = format!("You have the latest {} version ({}).", channel_name(channel).to_lowercase(), env!("CARGO_PKG_VERSION"));
+            }
+        }
     }
 
     /// ⌃K › Update Channel…: stable (version tags only) or beta (also every merge to main). Shared with the GUI
@@ -3233,10 +3243,7 @@ impl App {
                     a.restart = true;
                     a.quit = true;
                 }
-                Ok(crate::selfupdate::Outcome::UpToDate) => {
-                    a.update = None;
-                    a.status = format!("You have the latest version ({}).", env!("CARGO_PKG_VERSION"));
-                }
+                Ok(crate::selfupdate::Outcome::UpToDate) => a.update_checked(channel, None),
                 Ok(crate::selfupdate::Outcome::Skipped(why)) => a.status = why,
                 Err(e) => a.status = format!("Update failed: {e}"),
             }));

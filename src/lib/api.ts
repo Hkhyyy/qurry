@@ -119,6 +119,8 @@ export interface ReleaseInfo {
 }
 export interface UpdateInfo {
   current: string;
+  /** The update channel the check was for */
+  channel: UpdateChannel;
   latest: ReleaseInfo | null;
   /** Changes in versions newer than the current one (newest first) */
   changes?: { version: string; changes: string[] }[];

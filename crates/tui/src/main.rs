@@ -108,10 +108,11 @@ async fn run(term: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: Arc<
         let st = state.clone();
         tokio::spawn(async move {
             loop {
-                if let Ok(Some(r)) = qurry_core::update::check(&dir, env!("CARGO_PKG_VERSION"), st.store.update_channel(), false).await {
-                    if tx.send(Box::new(move |a: &mut app::App| a.update = Some(r.version))).is_err() {
-                        break;
-                    }
+                // No update clears the ⬆ badge too: the GUI may have switched the shared channel since the last check
+                if let Ok(r) = qurry_core::update::check(&dir, env!("CARGO_PKG_VERSION"), st.store.update_channel(), false).await
+                    && tx.send(Box::new(move |a: &mut app::App| a.update = r.map(|r| r.version))).is_err()
+                {
+                    break;
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(60 * 60)).await;
             }

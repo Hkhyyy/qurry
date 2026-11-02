@@ -40,6 +40,30 @@ test("Settings › Updates › Channel with automatic checks off: saved without 
   await expect(page.locator(".statusbar")).not.toContainText("available");
 });
 
+test("Settings › Updates › Check Now that finds nothing clears the status bar button and names the channel", async ({ page }) => {
+  // The startup check offers 0.1.2
+  await expect(page.locator(".statusbar")).toContainText("⬆ v0.1.2 available");
+  // The TUI switched the shared channel: nothing newer now
+  await page.evaluate(() => ((window as any).__mockNoUpdate = true));
+  await page.keyboard.press("Meta+Comma");
+  await dialog(page).getByRole("button", { name: "Check Now" }).click();
+  await expect(dialog(page).getByText("You have the latest stable version (0.1.0).")).toBeVisible();
+  await expect(page.locator(".statusbar")).not.toContainText("available");
+  // Picking a channel drops the answer for the channel before
+  await dialog(page).getByRole("combobox", { name: /Channel/ }).selectOption("beta");
+  await expect(dialog(page).getByText("You have the latest beta version (0.1.0).")).toBeVisible();
+  await expect(dialog(page).getByText("You have the latest stable version (0.1.0).")).toHaveCount(0);
+});
+
+test("Settings › Updates › Channel: a channel that couldn't be saved isn't shown as picked", async ({ page }) => {
+  await page.evaluate(() => ((window as any).__mockChannelSaveFails = true));
+  await page.keyboard.press("Meta+Comma");
+  const channel = dialog(page).getByRole("combobox", { name: /Channel/ });
+  await channel.selectOption("beta");
+  await expect(dialog(page).getByText("Couldn't save the settings: permission denied")).toBeVisible();
+  await expect(channel).toHaveValue("stable");
+});
+
 test("Keymap Reference (⇧⌘/) lists every row with ⌘⌥⌃⇧ keys", async ({ page }) => {
   await page.keyboard.press("Meta+Shift+Slash");
   await expect(dialog(page).locator(".ui-modal-title")).toHaveText("Keymap Reference");

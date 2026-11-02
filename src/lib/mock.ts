@@ -347,13 +347,20 @@ const handlers: Record<string, (a: any) => unknown> = {
   save_keymap: () => null,
   install_update: () => new Promise((_, rej) => setTimeout(() => rej("Update failed: mock"), 800)),
   update_channel: () => updateChannel,
-  set_update_channel: (a: any) => ((updateChannel = a.channel), updateChecked ? updateInfo() : null),
+  // window.__mockChannelSaveFails: the settings file can't be written
+  set_update_channel: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
+    updateChannel = a.channel;
+    return updateChecked ? updateInfo() : null;
+  },
   check_update: () => ((updateChecked = true), updateInfo()),
 };
+/** window.__mockNoUpdate: the channel offers nothing newer (e.g. the TUI switched it back to stable) */
 function updateInfo() {
   return {
     current: "0.1.0",
-    latest: { version: "0.1.2", url: "https://github.com/Hkhyyy/qurry/releases/tag/v0.1.2", notes: "## dbtool 0.1.2\n- something new", assets: [{ name: "dbtool_0.1.2_aarch64.dmg", url: "https://example.com/dbtool_0.1.2_aarch64.dmg" }] },
+    channel: updateChannel,
+    latest: (window as any).__mockNoUpdate ? null : { version: "0.1.2", url: "https://github.com/Hkhyyy/qurry/releases/tag/v0.1.2", notes: "## dbtool 0.1.2\n- something new", assets: [{ name: "dbtool_0.1.2_aarch64.dmg", url: "https://example.com/dbtool_0.1.2_aarch64.dmg" }] },
     changes: [
       { version: "0.1.2", changes: ["[feat] TUI 키 안내: ⌃P 시작, F1 Start here, 상태줄 (#18)", "[fix] ; 없는 문장 나누기 (#17)"] },
       { version: "0.1.1", changes: ["[fix] 분할 탭 바 구분선, GUI 탭 사이 간격 (#16)"] },
