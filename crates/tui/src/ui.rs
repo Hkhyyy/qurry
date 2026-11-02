@@ -984,8 +984,8 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
 }
 
 /// Confirm: multiple lines (reason · statement · question). Red border for production DB · dangerous statements; "→ N rows" stands out more the larger it is.
-/// In a window too short for all of it, the popup takes the whole height; the first line, the questions (a line ending in "?"), the
-/// warnings (⚠) and the keys stay, and the details in between (statements, columns, tables) give way to a line saying how many are
+/// In a window too short for all of it, the popup takes the whole height; the first line, the questions (a line ending in "?" or
+/// with a "? " in it), the warnings (⚠) and the keys stay, and the details in between (statements, columns, tables) give way to a line saying how many are
 /// hidden and how many rows they would change. If even that doesn't fit, the keys line says to enlarge the window and the result is
 /// false: y / Enter don't answer a question that isn't on screen
 fn draw_confirm(f: &mut Frame, area: Rect, title: &'static str, text: &str, keys: Line<'static>) -> bool {
@@ -998,12 +998,12 @@ fn draw_confirm(f: &mut Frame, area: Rect, title: &'static str, text: &str, keys
         .enumerate()
         .map(|(i, l)| {
             let t = l.to_string();
-            i == 0 || i == last || t.starts_with('⚠') || (!t.starts_with(' ') && t.trim_end().ends_with('?'))
+            i == 0 || i == last || t.starts_with('⚠') || (!t.starts_with(' ') && (t.trim_end().ends_with('?') || t.contains("? ")))
         })
         .collect();
     // Long statements wrap → count wrapped lines for the height (so the y/n hint below isn't cut)
     let w = 90u16.min(area.width.saturating_sub(4)).saturating_sub(2);
-    let want = wrapped_height(&lines, w) + 2;
+    let want = wrapped_height(&lines, w).saturating_add(2);
     let mut r = centered(area, 90, want);
     if r.height < want {
         r = Rect { y: area.y, height: area.height, ..r };
@@ -1185,7 +1185,7 @@ mod tests {
         let bar = g.hbar;
         assert!(bar.width > 0);
         // A confirm that arrives (or was open) when the window shrinks
-        h.app.popup = Some(crate::app::Popup::Confirm { text: "Run it?".into(), on_yes: Box::new(|a| a.status = "ran".into()) });
+        h.app.popup = Some(crate::app::Popup::Confirm { opened: None, text: "Run it?".into(), on_yes: Box::new(|a| a.status = "ran".into()) });
         assert!(h.screen(39, 30).contains("Terminal too small"));
         h.key("Enter");
         h.key("y");
@@ -1272,7 +1272,7 @@ mod tests {
     async fn production_confirm_keeps_its_question_in_small_windows() {
         let mut h = crate::testkit::Harness::new().await;
         let text = "Production data source \"[PROD] kr\" — this changes data:\n\n  update payment set amount = 0 where id = 4\n     → 1 row\n  delete from payment where created_at < now() - interval '1 year'\n     → 12,408 rows\n\nRun it?";
-        h.app.popup = Some(Popup::Confirm { text: text.into(), on_yes: Box::new(|a| a.status = "ran".into()) });
+        h.app.popup = Some(Popup::Confirm { opened: None, text: text.into(), on_yes: Box::new(|a| a.status = "ran".into()) });
         let s = h.screen(80, 24);
         assert!(s.contains("12,408 rows") && s.contains("Run it?") && !s.contains("hidden"), "{s}");
         // Every row that would change shows, as its own line or in the hidden total
@@ -1284,7 +1284,7 @@ mod tests {
         }
         // One statement at the minimum size: its row count shows
         let one = "Production data source \"[PROD] kr\" — this changes data:\n\n  update payment set amount = 0 where id = 4\n     → 1 row\n\nRun it?";
-        h.app.popup = Some(Popup::Confirm { text: one.into(), on_yes: Box::new(|a| a.status = "ran".into()) });
+        h.app.popup = Some(Popup::Confirm { opened: None, text: one.into(), on_yes: Box::new(|a| a.status = "ran".into()) });
         let (w, ht) = MIN_SIZE;
         let s = h.screen(w, ht);
         assert!(s.contains("1 row") && s.contains("Run it?"), "{s}");
@@ -1298,7 +1298,7 @@ mod tests {
         let mut h = crate::testkit::Harness::new().await;
         let lines: Vec<String> = (0..1000).map(|i| format!("  update payment set amount = 0 where id = {i}\n     → 1 row")).collect();
         let text = format!("Production data source \"[PROD] kr\" — this changes data:\n\n{}\n\nRun it?", lines.join("\n"));
-        h.app.popup = Some(Popup::Confirm { text, on_yes: Box::new(|_| {}) });
+        h.app.popup = Some(Popup::Confirm { opened: None, text, on_yes: Box::new(|_| {}) });
         for (w, ht) in [MIN_SIZE, (80, 24)] {
             let t = std::time::Instant::now();
             let s = h.screen(w, ht);

@@ -282,11 +282,13 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.app.designer = None;
     // Test data · copy related rows confirmation
     h.app.popup = Some(Popup::Confirm {
+        opened: None,
         text: "Insert 1,000 generated rows into public.payment?\n\n  id          left to the database (auto / generated)\n  user_id     picked from public.users (id)\n  amount      random values\n  card_brand  one of: VISA, MASTER, AMEX\n  created_at  random values\n\n⚠ Production data source \"[PROD] rentalpay\"\n\nAll rows go in one transaction — if one fails, nothing is inserted.".into(),
         on_yes: Box::new(|_| {}),
     });
     scenes.push(app_scene(h, "Generate test data", "⌃k › Generate Test Data: 컬럼마다 채우는 법을 보여 주고 확인", 120, 24));
     h.app.popup = Some(Popup::Confirm {
+        opened: None,
         text: "Copy 29 rows into \"[DEV] rentalpay\"? (in insert order)\n\n  users         1  start · masked: email, name, phone\n  contract      3  child of users\n  payment      25  child of contract\n\nOne transaction; rows already there are skipped. The tables must exist in the target.".into(),
         on_yes: Box::new(|_| {}),
     });
@@ -366,6 +368,7 @@ async fn all_scenes() -> Vec<Value> {
     h.app.color = ColorMode::TrueColor;
     scenes.push(app_scene(&mut h, "Terminal too small", "Below 40×10 the layout isn't drawn: the size, the size needed and how to quit", 36, 9));
     h.app.popup = Some(Popup::Confirm {
+        opened: None,
         text: "Production data source \"[PROD] rentalpay\" — this changes data:\n\n  update payment set amount = 0 where id = 4\n     → 1 row\n  delete from payment where created_at < now() - interval '1 year'\n     → 12,408 rows\n\nRun it?".into(),
         on_yes: Box::new(|_| {}),
     });
@@ -374,16 +377,16 @@ async fn all_scenes() -> Vec<Value> {
     scenes.push(app_scene(&mut h, "Production confirm: minimum size", "At 40×10 the question and its keys stay; the statements that don't fit are counted", 40, 10));
     // Question first, warnings after the details: the columns / tables in between give way, the ⚠ lines stay
     let cols: Vec<_> = (0..12).map(|i| qurry_core::fake::ColPlan { name: format!("col_{i}"), data_type: "text".into(), how: "random values".into() }).collect();
-    h.app.popup = Some(Popup::Confirm { text: crate::datatools::fake_confirm_text(1000, "public.payment", &cols, &[], Some("[PROD] rentalpay")), on_yes: Box::new(|_| {}) });
+    h.app.popup = Some(Popup::Confirm { opened: None, text: crate::datatools::fake_confirm_text(1000, "public.payment", &cols, &[], Some("[PROD] rentalpay")), on_yes: Box::new(|_| {}) });
     scenes.push(app_scene(&mut h, "Generate test data: minimum size", "At 40×10 the question, the ⚠ Production line and the keys stay; the columns in between are counted as hidden", 40, 10));
     let tables = (0..24)
         .map(|i| qurry_core::subset::SubsetTable { schema: "public".into(), table: format!("contract_{i}"), rows: 25, masked: vec![], reason: "child of users".into() })
         .collect();
     let plan = qurry_core::subset::SubsetPlan { tables, total: 600, warning: None };
-    h.app.popup = Some(Popup::Confirm { text: crate::datatools::copy_confirm_text(&plan, "[PROD] rentalpay", Some("[PROD] rentalpay"), false), on_yes: Box::new(|_| {}) });
+    h.app.popup = Some(Popup::Confirm { opened: None, text: crate::datatools::copy_confirm_text(&plan, "[PROD] rentalpay", Some("[PROD] rentalpay"), false), on_yes: Box::new(|_| {}) });
     scenes.push(app_scene(&mut h, "Copy related rows: 80×24", "Into a Production source, not masked, with more tables than fit: both ⚠ warnings and the question stay, the tables that don't fit are counted", 80, 24));
     let notes: String = (0..8).map(|i| format!("\n⚠ Column note_{i} has a check constraint the generated values may not meet")).collect();
-    h.app.popup = Some(Popup::Confirm { text: format!("Insert 10 generated rows into public.notes?\n{notes}"), on_yes: Box::new(|_| {}) });
+    h.app.popup = Some(Popup::Confirm { opened: None, text: format!("Insert 10 generated rows into public.notes?\n{notes}"), on_yes: Box::new(|_| {}) });
     scenes.push(app_scene(&mut h, "Confirm: too small to answer", "When even the question and the ⚠ lines don't fit, y / Enter don't answer: the keys line says to enlarge the window (n / Esc still cancel)", 40, 10));
     h.app.popup = None;
     h.app.palette_actions();

@@ -3,6 +3,7 @@ use crate::app::{Action, App, Drag, DropTarget, FieldKind, Focus, Popup, SplitDi
 use crate::tree::NodeKind;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::layout::Rect;
+use std::time::Instant;
 
 fn inside(r: Rect, x: u16, y: u16) -> bool {
     r.width > 0 && x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height
@@ -376,6 +377,11 @@ pub fn on_event(app: &mut App, ev: Event) {
             _ => {}
         },
         _ => {}
+    }
+    // A confirm that waited for the popup the user was in comes up once that one is closed (quiet, so the closing key doesn't answer it)
+    if app.popup.is_none() && !app.waiting.is_empty() {
+        let p = app.waiting.remove(0);
+        app.open_after_notices(p);
     }
 }
 
@@ -925,7 +931,7 @@ fn redis_key(app: &mut App, id: u64, k: KeyEvent) {
                     }
                     _ => return,
                 };
-                app.popup = Some(Popup::Confirm { text: format!("{}?", cmd.join(" ")), on_yes: Box::new(move |a| a.redis_cmd(id, cmd, false)) });
+                app.popup = Some(Popup::Confirm { opened: None, text: format!("{}?", cmd.join(" ")), on_yes: Box::new(move |a| a.redis_cmd(id, cmd, false)) });
             }
             KeyCode::Char('a') => {
                 let Some(key) = cur_key else { return };
@@ -1020,7 +1026,7 @@ fn redis_key(app: &mut App, id: u64, k: KeyEvent) {
         KeyCode::Char('r') => app.redis_scan(id, true),
         KeyCode::Char('D') | KeyCode::Delete => {
             if let Some(key) = cur_key {
-                app.popup = Some(Popup::Confirm { text: format!("Delete key \"{key}\"?"), on_yes: Box::new(move |a| {
+                app.popup = Some(Popup::Confirm { opened: None, text: format!("Delete key \"{key}\"?"), on_yes: Box::new(move |a| {
                     if let Some(TabKind::Redis(r)) = a.tab_mut(id).map(|t| &mut t.kind) {
                         r.detail = None;
                         r.value = None;
@@ -1077,7 +1083,7 @@ fn redis_key(app: &mut App, id: u64, k: KeyEvent) {
                 };
                 // Destructive commands like FLUSHALL·FLUSHDB·DEL ask once more
                 match qurry_core::guard::unsafe_statement(&line, qurry_core::store::DbKind::Redis) {
-                    Some(why) => a.popup = Some(Popup::Confirm { text: format!("{why}:\n  {line}\nRun it anyway?"), on_yes: Box::new(move |a| run(a, line)) }),
+                    Some(why) => a.popup = Some(Popup::Confirm { opened: None, text: format!("{why}:\n  {line}\nRun it anyway?"), on_yes: Box::new(move |a| run(a, line)) }),
                     None => run(a, line),
                 }
             });
@@ -1151,33 +1157,40 @@ fn popup_key(app: &mut App, k: KeyEvent) {
                 app.popup = Some(popup);
             }
         }
-        // Closing it goes back to what it was opened from
+        // Closing it goes back to what it was opened from. A question under it comes up quiet, so a second press meant for the
+        // notice (or typing that goes on) doesn't answer it
         Popup::Note { title, text, back } => {
             app.popup = match k.code {
-                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::F(1) => Some(*back),
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::F(1) => Some(match *back {
+                    Popup::Confirm { text, on_yes, .. } => Popup::Confirm { text, on_yes, opened: Some(Instant::now()) },
+                    Popup::AllowPlaintext { text, on_yes, .. } => Popup::AllowPlaintext { text, on_yes, opened: Instant::now() },
+                    back => back,
+                }),
                 _ => Some(Popup::Note { title, text, back }),
             };
         }
-        Popup::Confirm { text, on_yes } => match k.code {
+        // n / Esc always cancel. A confirm that came up on its own (`opened`) takes y / Enter only after a pause, like AllowPlaintext below
+        Popup::Confirm { text, on_yes, opened } => match k.code {
+            KeyCode::Char('n') | KeyCode::Esc => {}
+            _ if opened.is_some_and(|t| t.elapsed() < App::TLS_ASK_GRACE) => app.popup = Some(Popup::Confirm { text, on_yes, opened: Some(Instant::now()) }),
             KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter if app.hits.confirm_unseen => {
                 app.status = "The window is too small to show the whole question: enlarge it, then answer (n / Esc cancels)".into();
-                app.popup = Some(Popup::Confirm { text, on_yes });
+                app.popup = Some(Popup::Confirm { text, on_yes, opened });
             }
             KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => on_yes(app),
-            KeyCode::Char('n') | KeyCode::Esc => {}
-            _ => app.popup = Some(Popup::Confirm { text, on_yes }),
+            _ => app.popup = Some(Popup::Confirm { text, on_yes, opened: opened.map(|_| Instant::now()) }),
         },
         // Only a y after a pause counts: every other key (and any key inside the grace) starts the grace again, so typing that
-        // goes on into the popup never allows plaintext
+        // goes on into the popup never allows plaintext. n / Esc cancel at once
         Popup::AllowPlaintext { text, on_yes, opened } => match k.code {
-            _ if opened.elapsed() < App::TLS_ASK_GRACE => app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened: std::time::Instant::now() }),
+            KeyCode::Char('n') | KeyCode::Esc => {}
+            _ if opened.elapsed() < App::TLS_ASK_GRACE => app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened: Instant::now() }),
             KeyCode::Char('y') | KeyCode::Char('Y') if app.hits.confirm_unseen => {
                 app.status = "The window is too small to show the whole question: enlarge it, then answer (n / Esc cancels)".into();
                 app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened });
             }
             KeyCode::Char('y') | KeyCode::Char('Y') => on_yes(app),
-            KeyCode::Char('n') | KeyCode::Esc => {}
-            _ => app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened: std::time::Instant::now() }),
+            _ => app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened: Instant::now() }),
         },
         Popup::Input { title, body, mut input, on_ok, words, mut complete } => {
             // If the autocomplete list is open: ↑↓ select · Tab/Enter insert · Esc close

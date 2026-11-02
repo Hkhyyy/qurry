@@ -316,11 +316,45 @@ async fn a_y_at_the_end_of_a_burst_of_keys_doesnt_allow() {
     assert!(saved(&h).await.options.allow_plaintext);
 }
 
+/// Esc taps a bit apart, as soon as the popup shows: the first one closes it (the grace only holds back y)
+#[tokio::test]
+async fn esc_closes_at_once() {
+    let mut h = lan(false).await;
+    h.console_with("select 1", 0, 0);
+    h.key("F5");
+    h.settle().await;
+    let Some(Popup::AllowPlaintext { opened, .. }) = &mut h.app.popup else { panic!("no popup: {}", h.app.status) };
+    *opened -= App::TLS_ASK_GRACE * 3 / 4;
+    h.key("Esc");
+    assert!(h.app.popup.is_none());
+    assert!(!saved(&h).await.options.allow_plaintext);
+}
+
+/// A notice over the popup (another console's warning) closed with Enter: the popup comes back quiet, so a y right after doesn't allow
+#[tokio::test]
+async fn a_y_right_after_closing_a_notice_over_it_doesnt_allow() {
+    let mut h = lan(false).await;
+    h.console_with("select 1", 0, 0);
+    h.key("F5");
+    h.settle().await;
+    read_it(&mut h);
+    h.app.notice("Ran, with a warning".into(), "…".into());
+    h.key("Enter");
+    h.key("y");
+    h.settle().await;
+    assert!(matches!(h.app.popup, Some(Popup::AllowPlaintext { .. })), "{}", h.app.status);
+    assert!(!saved(&h).await.options.allow_plaintext);
+    read_it(&mut h);
+    h.key("y");
+    h.settle().await;
+    assert!(saved(&h).await.options.allow_plaintext);
+}
+
 /// The error comes back from a background load: a popup that is already open (another confirm, a form being typed in) stays
 #[tokio::test]
 async fn an_open_popup_is_never_replaced() {
     let mut h = lan(false).await;
-    h.app.popup = Some(Popup::Confirm { text: "Production: this changes data. Run it?".into(), on_yes: Box::new(|a| a.status = "ran".into()) });
+    h.app.popup = Some(Popup::Confirm { opened: None, text: "Production: this changes data. Run it?".into(), on_yes: Box::new(|a| a.status = "ran".into()) });
     h.app.focus = Focus::Tree;
     h.app.reexpand("test");
     h.settle().await;

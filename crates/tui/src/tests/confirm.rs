@@ -21,7 +21,7 @@ fn subset_copy() -> String {
 }
 
 fn confirm(h: &mut Harness, text: String) {
-    h.app.popup = Some(Popup::Confirm { text, on_yes: Box::new(|a| a.status = "ran".into()) });
+    h.app.popup = Some(Popup::Confirm { opened: None, text, on_yes: Box::new(|a| a.status = "ran".into()) });
 }
 
 /// The popup's border is red (the cell left of the " Confirm " title)
@@ -57,6 +57,39 @@ async fn production_writes_show_the_question_and_the_warning_at_any_size() {
         h.key("y");
         assert_eq!(h.app.status, "ran");
     }
+}
+
+/// The password-key confirm (a question followed by its reasons) keeps its question in a small window, or doesn't answer
+#[tokio::test]
+async fn password_key_confirm_keeps_its_question() {
+    let mut h = Harness::new().await;
+    h.app.run_action(crate::app::Action::PasswordKey);
+    let Some(Popup::Confirm { text, .. }) = h.app.popup.take() else { panic!("no confirm: {}", h.app.status) };
+    assert!(text.contains("Move it into the system keychain?"), "{text}");
+    for (w, ht) in [MIN_SIZE, (40, 10), (80, 24)] {
+        confirm(&mut h, text.clone());
+        let s = h.screen(w, ht);
+        h.key("y");
+        assert!(s.contains("Move it into the system") || h.app.status != "ran", "{w}×{ht}\n{s}");
+        if s.contains("y / Enter yes") {
+            assert!(s.contains("Move it into the system"), "{w}×{ht}\n{s}");
+        }
+        h.app.status.clear();
+        h.app.popup = None;
+    }
+}
+
+/// A confirm too tall to count in u16 rows (a script of 32,766 statements on Production, two lines each) never counts as fitting:
+/// the question and the hidden-lines marker show, or y doesn't answer
+#[tokio::test]
+async fn a_confirm_taller_than_u16_rows_keeps_its_question() {
+    let mut h = Harness::new().await;
+    let stmts: Vec<String> = (0..32_766).map(|i| format!("  delete from t where id = {i}\n    → 1 row")).collect();
+    confirm(&mut h, format!("Production data source \"p\" — this changes data:\n\n{}\n\nRun it?", stmts.join("\n")));
+    let s = h.screen(80, 24);
+    h.key("y");
+    assert!((s.contains("Run it?") && s.contains("lines hidden")) || h.app.status != "ran", "{s}");
+    assert!(s.contains("Run it?"), "{s}");
 }
 
 /// When even the question and the warnings don't fit, the keys line says how to go on and y / Enter don't answer

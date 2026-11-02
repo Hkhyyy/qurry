@@ -67,9 +67,10 @@ fn count_style(n: Option<u64>) -> Style {
     Style::default().fg(c).add_modifier(Modifier::BOLD)
 }
 
-/// How many lines it becomes when wrapped (Wrap, by word as Paragraph wraps it) — for sizing the popup (if short, the hints below get cut)
+/// How many lines it becomes when wrapped (Wrap, by word as Paragraph wraps it) — for sizing the popup (if short, the hints below get cut).
+/// Saturates at u16::MAX: text too tall to count is too tall, never small
 pub fn wrapped_height(lines: &[Line], width: u16) -> u16 {
-    Paragraph::new(lines.to_vec()).wrap(Wrap { trim: false }).line_count(width.max(1)) as u16
+    Paragraph::new(lines.to_vec()).wrap(Wrap { trim: false }).line_count(width.max(1)).min(u16::MAX as usize) as u16
 }
 
 /// Lines cut to `height` rows of `width` (wrapped): blank lines go first, then the lines not marked `keep` give way, from the
@@ -79,26 +80,26 @@ pub fn wrapped_height(lines: &[Line], width: u16) -> u16 {
 pub fn cut_lines(lines: Vec<Line<'static>>, keep: &[bool], width: u16, height: u16) -> Vec<Line<'static>> {
     let rows = |l: &Line| wrapped_height(std::slice::from_ref(l), width);
     let mut rows_of: Vec<u16> = lines.iter().map(rows).collect();
-    if rows_of.iter().sum::<u16>() <= height {
+    if rows_of.iter().fold(0u16, |a, r| a.saturating_add(*r)) <= height {
         return lines;
     }
     let (lines, keep): (Vec<_>, Vec<bool>) = lines.into_iter().zip(keep.iter().copied()).filter(|(l, _)| !l.to_string().trim().is_empty()).unzip();
     rows_of = lines.iter().map(rows).collect();
     let free: Vec<usize> = (0..lines.len()).filter(|&i| !keep[i]).collect();
-    if free.is_empty() || rows_of.iter().sum::<u16>() <= height {
+    if free.is_empty() || rows_of.iter().fold(0u16, |a, r| a.saturating_add(*r)) <= height {
         return lines;
     }
     // The most free lines (from the top) that fit next to the kept ones and a one-row marker; then fewer while the marker wraps
-    let mut used: u16 = rows_of.iter().zip(&keep).filter(|(_, k)| **k).map(|(r, _)| *r).sum();
+    let mut used: u16 = rows_of.iter().zip(&keep).filter(|(_, k)| **k).fold(0u16, |a, (r, _)| a.saturating_add(*r));
     let mut n = 0;
-    while used + rows_of[free[n]] < height {
+    while used.saturating_add(rows_of[free[n]]) < height {
         used += rows_of[free[n]];
         n += 1;
     }
     let counts: Vec<Option<Option<u64>>> = free.iter().map(|&i| lines[i].to_string().trim_start().strip_prefix("→ ").map(row_count)).collect();
     let marker = loop {
         let marker = hidden_marker(free.len() - n, &counts[n..]);
-        if n == 0 || used + rows(&marker) <= height {
+        if n == 0 || used.saturating_add(rows(&marker)) <= height {
             break marker;
         }
         n -= 1;
