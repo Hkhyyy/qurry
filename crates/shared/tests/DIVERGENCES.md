@@ -20,9 +20,9 @@ Rules the TUI and the MCP server took with no option when the grid helpers moved
 | sql › statementAt | 0 | 0 | 0 | 15 |
 | statements › isReadStmt | 37 | 0 | 0 | 0 |
 | statements › DDL_RE | 37 | 0 | 0 | 0 |
-| valuehints › hintContext | 39 | 0 | 0 | 0 |
-| valuehints › hintInsert | 32 | 0 | 0 | 0 |
-| valuehints › hintable | 32 | 0 | 0 | 0 |
+| valuehints › hintContext | 41 | 0 | 0 | 0 |
+| valuehints › hintInsert | 34 | 0 | 0 | 0 |
+| valuehints › hintable | 34 | 0 | 0 | 0 |
 | valuehints › pairsForKeys | 7 | 0 | 0 | 0 |
 | results › numericColumns | 14 | 1 | 0 | 0 |
 | results › defaultAxes | 14 | 1 | 0 | 0 |
@@ -43,7 +43,7 @@ Rules the TUI and the MCP server took with no option when the grid helpers moved
 | results › extract(SQL IN List) | 0 | 0 | 14 | 0 |
 | results › extract(JSON) | 0 | 0 | 14 | 0 |
 | results › extract(Markdown) | 0 | 0 | 14 | 0 |
-| numbers › niceTicks | 0 | 0 | 16 | 0 |
+| numbers › niceTicks | 0 | 0 | 18 | 0 |
 | numbers › shortNumber | 0 | 0 | 22 | 0 |
 | tablabels › tableTabLabels | 7 | 0 | 0 | 0 |
 | rediskeys › keyTree | 7 | 1 | 0 | 0 |

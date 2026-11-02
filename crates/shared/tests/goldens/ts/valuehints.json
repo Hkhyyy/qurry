@@ -438,7 +438,7 @@
     "hintInsert": "\\x00",
     "hintable": false
   },
-  "money-bare": {
+  "money-text-quoted": {
     "hintContext": {
       "ref": null,
       "column": "price",
@@ -448,7 +448,33 @@
       "typed": "",
       "op": null
     },
-    "hintInsert": "$1.00",
+    "hintInsert": "'$1.00'",
+    "hintable": true
+  },
+  "domain-type-quoted": {
+    "hintContext": {
+      "ref": null,
+      "column": "realm",
+      "path": [],
+      "mode": "values",
+      "quoted": false,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "'x'' or true; --'",
+    "hintable": true
+  },
+  "numeric-not-a-number": {
+    "hintContext": {
+      "ref": null,
+      "column": "id",
+      "path": [],
+      "mode": "values",
+      "quoted": false,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "'1; drop table t'",
     "hintable": true
   },
   "no-context": {
