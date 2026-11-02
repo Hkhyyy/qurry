@@ -947,6 +947,35 @@ mod tests {
     }
 
     /// MCP read: whole keys (HGETALL, SMEMBERS, set ops, LRANGE 0 -1, XRANGE without COUNT) are read when small, refused when over 1,000 elements
+    /// Redis has no SQL guard: the MCP read path and a read-only source refuse a write before it runs (the key stays as it was);
+    /// CSV export of commands is refused in read-only mode. Own keys in db14, no FLUSHDB
+    #[tokio::test]
+    #[ignore]
+    async fn redis_read_only_refuses_writes_before_running() {
+        let dir = std::env::temp_dir().join(format!("qurry-rro-{}", uuid::Uuid::new_v4()));
+        let st = crate::open_state(Some(dir.clone())).unwrap();
+        st.save_connection(cfg("db14"), None, None).await.unwrap();
+        let ro = ConnectionConfig { id: "rdro".into(), name: "rdro".into(), read_only: true, ..cfg("db14") };
+        st.save_connection(ro, None, None).await.unwrap();
+        let pool = crate::db::connect(&cfg("db14"), None).await.expect("connect");
+        let Pool::Redis(m, 14) = &pool else { panic!("db index") };
+        let mut c = m.clone();
+        let _: () = redis::cmd("SET").arg("qurry:guard:k").arg("before").query_async(&mut c).await.unwrap();
+        let value = || async { run(m, "GET qurry:guard:k", 1).await.unwrap().rows[0][0].clone() };
+        let e = st.run_read_only("rd::db14".into(), "SET qurry:guard:k after".into(), 10).await.unwrap_err().to_string();
+        assert_eq!(e, "SET is not a read-only command");
+        let e = st.export_csv_read_only("rd::db14".into(), "GET qurry:guard:k".into(), dir.join("x.csv")).await.unwrap_err().to_string();
+        assert_eq!(e, "CSV export of Redis commands is not available in read-only mode");
+        let e = st.run_query("rdro::db14".into(), "SET qurry:guard:k after".into(), None, Some("tab".into())).await.unwrap_err().to_string();
+        assert_eq!(e, "Data source \"rdro\" is read-only: SET changes data");
+        let e = st.execute_batch_prepared("rdro::db14".into(), vec!["DEL qurry:guard:k".into()]).await.err().expect("refused").to_string();
+        assert_eq!(e, "Data source \"rdro\" is read-only: DEL changes data");
+        assert_eq!(value().await, "before");
+        assert_eq!(st.run_read_only("rd::db14".into(), "GET qurry:guard:k".into(), 10).await.unwrap().rows[0][0], "before");
+        let _: () = redis::cmd("DEL").arg("qurry:guard:k").query_async(&mut c).await.unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[tokio::test]
     #[ignore]
     async fn redis_whole_key_reads_need_a_small_key() {

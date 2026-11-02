@@ -1465,15 +1465,64 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// Every run path asks the guard before it reaches a backend: each source's server is a tripwire (a listener that counts any
+    /// connection), and a statement the guard refuses comes back with the guard's error while nothing connected.
+    /// Redis has no SQL guard for MCP reads (its read check needs the server: redis_read_only_refuses_writes_before_running), so only
+    /// the read-only-source paths are checked for it
+    #[tokio::test]
+    async fn guard_runs_before_the_backend_on_every_run_path() {
+        use crate::store::DbKind;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let trip = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = trip.local_addr().unwrap().port();
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let h = hits.clone();
+        tokio::spawn(async move {
+            while let Ok((s, _)) = trip.accept().await {
+                h.fetch_add(1, Ordering::SeqCst);
+                drop(s);
+            }
+        });
+        let dir = std::env::temp_dir().join(format!("qurry-guard-{}", uuid::Uuid::new_v4()));
+        let st = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+        for (kind, write) in [(DbKind::Postgres, "delete from t"), (DbKind::Mysql, "delete from t"), (DbKind::Clickhouse, "delete from t where 1"), (DbKind::Redis, "DEL k")] {
+            let id = format!("{kind:?}");
+            let cfg = ConnectionConfig {
+                id: id.clone(), name: id.clone(), kind, host: "127.0.0.1".into(), port, user: "u".into(), database: "d".into(), color: None, ssh: None,
+                password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: true, options: Default::default(), ssl: None, redis: None,
+            };
+            st.save_connection(cfg, None, None).await.unwrap();
+            let err = |r: AppResult<BatchResult>| r.err().expect("refused").to_string();
+            let source = |e: String| assert!(e.contains(&format!("\"{id}\" is read-only")), "{kind:?}: {e}");
+            source(st.run_query(id.clone(), write.into(), None, None).await.unwrap_err().to_string());
+            source(st.run_query(id.clone(), write.into(), None, Some("tab".into())).await.unwrap_err().to_string());
+            source(err(st.execute_batch(id.clone(), vec![write.into()], false).await));
+            if kind != DbKind::Redis {
+                let why = crate::guard::read_only_violation(write, kind, true).expect("the guard refuses it");
+                let e = st.run_read_only(id.clone(), write.into(), 10).await.unwrap_err().to_string();
+                assert!(e.contains(&why) && e.contains("--allow-write"), "{kind:?}: {e}");
+                let e = st.export_csv_read_only(id.clone(), write.into(), dir.join("x.csv")).await.unwrap_err().to_string();
+                assert_eq!(e, why, "{kind:?}");
+                source(err(st.execute_batch_prepared(id.clone(), vec![write.into()]).await));
+            }
+            assert_eq!(hits.load(Ordering::SeqCst), 0, "{kind:?}: a refused statement reached the server");
+        }
+        assert!(st.pools.read().await.is_empty() && st.sessions.read().await.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// Auto-disconnect: close pools and sessions after the idle time. keep-alive keeps the session alive.
     #[tokio::test]
     #[ignore]
     async fn housekeeping_keepalive_and_auto_disconnect() {
         let dir = std::env::temp_dir().join(format!("dbtool-hk-{}", uuid::Uuid::new_v4()));
         let state = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+        // QURRY_TEST_PG=host:port:user:db (default: this machine's PostgreSQL)
+        let env = std::env::var("QURRY_TEST_PG").ok();
+        let part = |i: usize, d: String| env.as_ref().and_then(|e| e.split(':').nth(i).map(String::from)).unwrap_or(d);
         let mut cfg = ConnectionConfig {
-            id: "hk".into(), name: "hk".into(), kind: crate::store::DbKind::Postgres, host: "localhost".into(), port: 5432,
-            user: std::env::var("USER").unwrap(), database: "postgres".into(), color: None, ssh: None, password_saved: false,
+            id: "hk".into(), name: "hk".into(), kind: crate::store::DbKind::Postgres, host: part(0, "localhost".into()), port: part(1, "5432".into()).parse().unwrap(),
+            user: part(2, std::env::var("USER").unwrap()), database: part(3, "postgres".into()), color: None, ssh: None, password_saved: false,
             ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
         };
         cfg.options.keep_alive_secs = Some(1);
