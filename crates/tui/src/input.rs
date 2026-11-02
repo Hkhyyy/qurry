@@ -1340,7 +1340,7 @@ fn save_form(app: &mut App, mut form: crate::app::ConnForm) {
 
 /// Command names shown in the palette·keymap
 pub fn name_of(a: Action) -> &'static str {
-    crate::app::ACTIONS.iter().find(|x| x.0 == a).map(|x| x.1).unwrap_or("?")
+    qurry_core::keymap::tui_command(&crate::keys::action_id(a)).map_or("?", |c| c.tui_title())
 }
 
 #[cfg(test)]

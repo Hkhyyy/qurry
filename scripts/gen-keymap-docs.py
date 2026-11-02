@@ -1,7 +1,9 @@
-"""Regenerate the user guide's shortcut tables from the GUI (src/lib/keymap.ts)·TUI (crates/tui/src/help.rs).
+"""Regenerate the user guide's shortcut tables from the command table both apps share (crates/shared/src/keymap-table.json),
+the GUI Keymap Reference (src/lib/keymap.ts) and the TUI's fixed keys (crates/tui/src/help.rs).
 Usage: python3 scripts/gen-keymap-docs.py  (replaces the content between <!-- keymap:…:start/end --> in shortcuts-gui.md · shortcuts-tui.md under docs/ and docs/ko/)"""
-import re, pathlib
+import json, re, pathlib
 root = pathlib.Path(__file__).resolve().parent.parent
+table = json.loads((root / "crates/shared/src/keymap-table.json").read_text())
 
 def esc(s): return s.replace("|", "\\|")
 
@@ -14,6 +16,14 @@ def sym(s):
     """Ctrl+/Alt+/Shift+ → ⌃/⌥/⇧ (same as the macOS notation of crates/tui keys::disp)"""
     return re.sub(r"\b(?:(?:Ctrl|Alt|Shift)\+)+", lambda m: m.group(0).replace("Ctrl+", "⌃").replace("Alt+", "⌥").replace("Shift+", "⇧"), s)
 
+MAC_KEYS = {"Enter": "↩", "Backspace": "⌫", "Delete": "⌦", "Esc": "⎋", "Tab": "⇥", "Up": "↑", "Down": "↓", "Left": "←", "Right": "→", "PageUp": "⇞", "PageDown": "⇟"}
+
+def mac_spec(spec):
+    """GUI default key ("Mod+Shift+L") → macOS notation ("⇧⌘L"), as qurry_shared::keymap::format_spec draws it (letters: key_label in code()).
+    src/lib/shortcuts.test.ts checks the generated docs against format_spec"""
+    *mods, key = spec.split("+")
+    return "".join(g for m, g in (("Ctrl", "⌃"), ("Alt", "⌥"), ("Shift", "⇧"), ("Mod", "⌘")) if m in mods) + MAC_KEYS.get(key, key)
+
 def code(k):
     """Key cell of the table: keys containing ` are wrapped as `` k ``"""
     k = esc(sym(key_label(k)))
@@ -21,22 +31,23 @@ def code(k):
 
 def gui():
     src = (root / "src/lib/keymap.ts").read_text()
+    # Rebindable rows ([null, desc, id]) show the command's default keys
+    defaults = {c["gui"]: " / ".join(map(mac_spec, c.get("guiKeys", []))) for c in table if "gui" in c}
     out = []
     for m in re.finditer(r'title: "([^"]+)",\s*rows: \[(.*?)\n    \],', src, re.S):
         out.append(f"\n## {m.group(1)}\n\n| macOS | Action |\n|---|---|")
-        for k, d in re.findall(r'\["([^"]*)", "([^"]*)"(?:, "[^"]*")?\]', m.group(2)):
+        for k, d, i in re.findall(r'\[(null|"[^"]*"), "([^"]*)"(?:, "([^"]*)")?\]', m.group(2)):
+            k = defaults[i] if k == "null" else k[1:-1]
             out.append(f"| {code(k)} | {esc(key_label(d))} |")
     return "\n".join(out)
 
 def tui():
     src = (root / "crates/tui/src/help.rs").read_text()
-    # Rebindable commands: default keys in keys.rs + names in app.rs ACTIONS
-    names = dict(re.findall(r'\(Action::(\w+), "([^"]*)", "[^"]*"\)', (root / "crates/tui/src/app.rs").read_text()))
-    keys = (root / "crates/tui/src/keys.rs").read_text()
+    # Rebindable commands: TUI rows of the command table with default keys, in table order (as keys::DEFAULT_KEYS)
     out = ["\n## Commands (default keys — change them in the F1 window)\n\n| Key | Action |\n|---|---|"]
-    for a, ks in re.findall(r'\(Action::(\w+), &\[(.*?)\]\)', keys):
-        k = " / ".join(re.findall(r'"([^"]*)"', ks)).replace("\\\\", "\\")
-        out.append(f"| {code(k)} | {esc(sym(key_label(names[a])))} |")
+    for c in table:
+        if "tui" in c and c.get("tuiKeys"):
+            out.append(f"| {code(' / '.join(c['tuiKeys']))} | {esc(sym(key_label(c.get('tuiTitle', c['title']))))} |")
     for m in re.finditer(r'\("([^"]+)", &\[(.*?)\]\),', src, re.S):
         out.append(f"\n## {sym(key_label(m.group(1)))}\n\n| Key | Action |\n|---|---|")
         for k, d in re.findall(r'\("([^"]*)", "([^"]*)"\)', m.group(2)):

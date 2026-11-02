@@ -383,6 +383,39 @@ pub fn auto_map(file: JsValue, table: JsValue) -> Result<JsValue, JsError> {
     Ok(serde_wasm_bindgen::to_value(&qurry_shared::automap::auto_map(&file, table.as_deref()))?)
 }
 
+/// Key notation in on-screen text: ⌘/⌃/⌥ + a letter without Shift is lowercase ("⌘k")
+#[wasm_bindgen(js_name = keyLabel)]
+pub fn key_label(s: &str) -> String {
+    qurry_shared::keymap::key_label(s)
+}
+
+/// GUI display of a spec ("Mod+Shift+L" → "⇧⌘L" on macOS, "Ctrl+Shift+L" elsewhere)
+#[wasm_bindgen(js_name = formatSpec)]
+pub fn format_spec(spec: &str, mac: bool) -> String {
+    qurry_shared::keymap::format_spec(spec, mac)
+}
+
+/// Whether a spec can be a command shortcut
+#[wasm_bindgen]
+pub fn bindable(spec: &str) -> bool {
+    qurry_shared::keymap::bindable(spec)
+}
+
+#[derive(serde::Deserialize)]
+struct Bound {
+    id: String,
+    scope: qurry_shared::keymap::Scope,
+    keys: Vec<String>,
+}
+
+/// Commands other than `id` that use `spec` in an overlapping scope. `bound`: [{ id, scope, keys }] for every command
+#[wasm_bindgen(js_name = keyConflicts)]
+pub fn key_conflicts(id: String, scope: JsValue, spec: &str, bound: JsValue) -> Result<Vec<String>, JsError> {
+    let bound: Vec<Bound> = serde_wasm_bindgen::from_value(bound)?;
+    let scope = serde_wasm_bindgen::from_value(scope)?;
+    Ok(qurry_shared::keymap::conflicts(&id, scope, spec, bound.iter().map(|b| (b.id.clone(), b.scope, b.keys.as_slice()))))
+}
+
 /// Byte ranges → UTF-16 ranges. split_* returns them in order, on char boundaries, so one pass over the text converts them all
 fn utf16_ranges(text: &str, ranges: &[(usize, usize)]) -> Vec<[usize; 2]> {
     let (mut byte, mut units) = (0, 0);

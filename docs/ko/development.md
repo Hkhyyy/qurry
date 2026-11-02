@@ -91,7 +91,7 @@ pnpm tui-snapshots    # TUI 를 바꾼 뒤 Storybook 의 TUI 화면을 다시 �
 
 ## 문서
 
-사용설명서는 영어 (`docs/`) 와 한국어 (`docs/ko/`) 가 장마다 짝입니다. 기능이 바뀌면 둘 다 고칩니다. 단축키를 바꾼 뒤에는 `python3 scripts/gen-keymap-docs.py` 로 두 언어의 [shortcuts-gui.md](shortcuts-gui.md) · [shortcuts-tui.md](shortcuts-tui.md) 표를 다시 만듭니다.
+사용설명서는 영어 (`docs/`) 와 한국어 (`docs/ko/`) 가 장마다 짝입니다. 기능이 바뀌면 둘 다 고칩니다. 단축키를 바꾼 뒤에는 `python3 scripts/gen-keymap-docs.py` 로 두 언어의 [shortcuts-gui.md](shortcuts-gui.md) · [shortcuts-tui.md](shortcuts-tui.md) 표를 다시 만듭니다. 두 앱의 바꿀 수 있는 명령 (id · 이름 · 기본 키) 은 표 하나, `crates/shared/src/keymap-table.json` 에 있습니다. id 는 keymap.json 에 저장되는 이름이라 바꾸지 않습니다.
 
 ---
 

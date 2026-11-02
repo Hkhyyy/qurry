@@ -128,8 +128,8 @@ const last = <T,>(a: T[]): T | undefined => a[a.length - 1];
 
 export default function App() {
   const theme = useTheme();
-  // Redraw the menu shortcut labels when the keymap changes
-  const [, setKeymapVer] = useState(0);
+  // Redraw the menu shortcut labels when the keymap changes (or the WASM module that draws them has loaded)
+  const [keymapVer, setKeymapVer] = useState(0);
   useEffect(() => {
     const off = onKeymapChange(() => setKeymapVer((n) => n + 1));
     void loadKeymap();
@@ -2047,7 +2047,8 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [conns]);
+    // keymapVer: menus opened from keys (⇧⌘F10 …) show the current shortcut labels
+  }, [conns, keymapVer]);
 
   // ───────── Misc ─────────
   // Only that part: the list may be stale (another app changed the source since), so the backend changes it in the saved one

@@ -256,13 +256,13 @@ fn column_golden() -> Golden {
 fn spec_golden() -> Golden {
     let c = corpus("keyspecs");
     let specs = strings(&c["specs"]).into_iter().map(|s| {
-        let mut o = json!({ "keyLabel": crate::keys::lower_unshifted(&s) });
+        let mut o = json!({ "keyLabel": qurry_core::keymap::key_label(&s) });
         if !s.contains("Mod+") {
-            o["formatSpec"] = crate::keys::disp_mac(&s).into();
+            o["formatSpec"] = qurry_core::keymap::disp_mac(&s).into();
         }
         (s, o)
     });
-    let labels = strings(&c["labels"]).into_iter().map(|s| (s.clone(), json!({ "keyLabel": crate::keys::lower_unshifted(&s) })));
+    let labels = strings(&c["labels"]).into_iter().map(|s| (s.clone(), json!({ "keyLabel": qurry_core::keymap::key_label(&s) })));
     specs.chain(labels).collect()
 }
 
