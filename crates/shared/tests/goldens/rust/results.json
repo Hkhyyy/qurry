@@ -269,7 +269,8 @@
       "yr": "(NULL)"
     },
     "numericColumns": [
-      "ratio"
+      "ratio",
+      "qty"
     ],
     "padFrac": {}
   }

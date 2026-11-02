@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 qurry-core = { workspace = true }
+qurry-shared = { path = "../shared" }
 tokio = { workspace = true }
 serde_json = { workspace = true }
 # unstable-rendered-line-info: Paragraph::line_count, so popups are sized the way they wrap (by word)

@@ -300,6 +300,21 @@ mod tests {
         }
     }
 
+    /// The TUI's dump (goldens/rust, parity_dump.rs) comes out the same with Options::TUI
+    #[test]
+    fn matches_the_tui_goldens() {
+        let corpus: Vec<Value> = serde_json::from_str(include_str!("../tests/corpus/results.json")).unwrap();
+        let rust = golden(include_str!("../tests/goldens/rust/results.json"));
+        for e in &corpus {
+            let id = e["id"].as_str().unwrap();
+            let (c, r) = result(e);
+            let nums: Vec<&str> = numeric_columns(&c, &r, Options::TUI).iter().map(|&i| c[i].name.as_str()).collect();
+            assert_eq!(json!(nums), rust[id]["numericColumns"], "{id}: numericColumns");
+            let a = default_axes(&c, &r, Options::TUI);
+            assert_eq!(json!({ "x": c[a.x].name, "y": a.y.map(|y| &c[y].name) }), rust[id]["defaultAxes"], "{id}: defaultAxes");
+        }
+    }
+
     #[test]
     fn year_is_numeric_by_type_only_for_the_gui() {
         let c = cols(&[("yr", "YEAR"), ("n", "text")]);

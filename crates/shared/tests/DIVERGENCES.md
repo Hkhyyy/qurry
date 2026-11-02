@@ -76,7 +76,7 @@ TS only / Rust only: inputs where only one side has that function (no counterpar
 | valuehints | ` korean-column ` | hintContext | ` null ` | ` {"column":"상태","mode":"values","op":null,"path":[],"quoted":true,"ref":null,"typed":""} ` |
 | results | ` inlist-mix ` | inList | ` "(('010', 12345678901234567890, true, 1.50), ('a''b', -3, false, 'NaN'), ('x', 1e5, NULL, -0.5), ('y', '+4', true, '.5'))" ` | ` "(('010', 12345678901234567890, true, 1.50), ('a''b', -3, false, 'NaN'), ('x', 1e5, NULL, -0.5), ('y', +4, true, .5))" ` |
 | results | ` inlist-mix ` | inList(column) | ` {"code":"('010', 'a''b', 'x', 'y')","flag":"(true, false)","n":"(12345678901234567890, -3, 1e5, '+4')","price":"(1.50, 'NaN', -0.5, '.5')"} ` | ` {"code":"('010', 'a''b', 'x', 'y')","flag":"(true, false)","n":"(12345678901234567890, -3, 1e5, +4)","price":"(1.50, 'NaN', -0.5, .5)"} ` |
-| results | ` year-float-x ` | numericColumns | ` ["ratio","yr","qty"] ` | ` ["ratio"] ` |
+| results | ` year-float-x ` | numericColumns | ` ["ratio","yr","qty"] ` | ` ["ratio","qty"] ` |
 | results | ` year-float-x ` | defaultAxes | ` {"x":"ratio","y":"yr"} ` | ` {"x":"yr","y":"ratio"} ` |
 | rediskeys | ` korean-emoji ` | keyTree | ` [{"children":[{"key":"사용자:1"},{"key":"사용자:2"}],"count":2,"folder":"사용자","path":"사용자"},{"children":[{"key":"😀:x"}],"count":1,"folder":"😀","path":"😀"},{"children":[{"key":"！:x"}],"count":1,"folder":"！","path":"！"},{"key":"키"}] ` | ` [{"children":[{"key":"사용자:1"},{"key":"사용자:2"}],"count":2,"folder":"사용자","path":"사용자"},{"children":[{"key":"！:x"}],"count":1,"folder":"！","path":"！"},{"children":[{"key":"😀:x"}],"count":1,"folder":"😀","path":"😀"},{"key":"키"}] ` |
 | keyspecs | ` Alt+Enter ` | formatSpec | ` "⌥↩" ` | ` "⌥Enter" ` |

@@ -182,8 +182,11 @@ fn result_golden() -> Golden {
     for e in arr(&corpus("results")) {
         let r = result_of(e);
         let names: Vec<&str> = r.columns.iter().map(|c| c.name.as_str()).collect();
-        let (nums, x, y) = crate::datatools::chart_axes(&r);
-        let axes = json!({ "x": names[x], "y": y.map(|y| names[y]) });
+        // The TUI's chart options, as bar_chart uses them
+        let cols = crate::datatools::chart_columns(&r);
+        let nums = qurry_shared::chart::numeric_columns(&cols, &r.rows, qurry_shared::chart::Options::TUI);
+        let a = qurry_shared::chart::default_axes(&cols, &r.rows, qurry_shared::chart::Options::TUI);
+        let axes = json!({ "x": names[a.x], "y": a.y.map(|y| names[y]) });
         let col = |c: usize| r.rows.iter().map(move |row| &row[c]);
         let column_g = Grid::new(result_of(e));
         // The width the grid itself computed (not a copy of its rule)
@@ -317,7 +320,7 @@ async fn parity_dump() {
 #[test]
 fn dump_uses_tui_values() {
     for (id, o) in result_golden() {
-        assert!(o["numericColumns"].is_array(), "{id}: numericColumns from chart_axes");
+        assert!(o["numericColumns"].is_array(), "{id}: numericColumns with the TUI chart options");
         let e = arr(&corpus("results")).iter().find(|e| e["id"] == id.as_str()).unwrap().clone();
         let g = Grid::new(result_of(&e));
         for (c, col) in g.result.columns.iter().enumerate() {
