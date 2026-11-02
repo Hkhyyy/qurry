@@ -21,6 +21,14 @@ fn ago(ts: i64) -> String {
     }
 }
 
+/// What picking a Production log entry without undo SQL says: the error, but first what to do for a COMMIT of unknown outcome
+fn note(e: &qurry_core::audit::AuditEntry) -> String {
+    match (&e.error, &e.note) {
+        (Some(err), Some(n)) if qurry_core::audit::outcome_unknown(&e.sql) => format!("{n} ({err})"),
+        _ => e.error.clone().or(e.note.clone()).unwrap_or_else(|| "No undo for this statement".into()),
+    }
+}
+
 impl App {
     /// Data Source of the current tab
     fn snip_conn(&self) -> Option<String> {
@@ -85,11 +93,8 @@ impl App {
             .audit_log(None, String::new(), 1000)
             .into_iter()
             .map(|e| {
-                let status = if e.started {
-                    // Logged before it ran, no result: still running, or Qurry stopped — the outcome is unknown
-                    "no result recorded".to_string()
-                } else if e.error.is_some() {
-                    "failed".to_string()
+                let status = if let Some(word) = qurry_core::audit::status(e.started, &e.sql, e.error.is_some()) {
+                    word.to_string()
                 } else if let Some(n) = e.rows {
                     format!("{n} row(s){}", if e.in_tx { ", not committed yet" } else { "" })
                 } else {
@@ -105,7 +110,7 @@ impl App {
                     label: one_line(&e.sql, 120),
                     // When narrow the end is cut → important things (undo · row count) first
                     hint: [undo, status, ago(e.ts), place].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join(" · "),
-                    action: PAction::OpenUndo { conn: conn.into(), db: db.map(String::from), note: e.error.clone().or(e.note.clone()).unwrap_or_else(|| "No undo for this statement".into()), undo: e.undo },
+                    action: PAction::OpenUndo { conn: conn.into(), db: db.map(String::from), note: note(&e), undo: e.undo },
                 }
             })
             .collect();
@@ -113,9 +118,12 @@ impl App {
     }
 
     /// Undo SQL into a new console of that Data Source (run it yourself — it goes through the Production confirmation)
-    pub fn open_undo(&mut self, conn: String, db: Option<String>, undo: Option<String>, note: String) {
+    /// log = the Production Log it was picked from: the note shows over it, and closing the note goes back to the same entry and filter
+    pub fn open_undo(&mut self, conn: String, db: Option<String>, undo: Option<String>, note: String, log: Option<Popup>) {
         let Some(undo) = undo else {
-            self.status = note;
+            // A popup, not the status bar: that cuts a long note off (a COMMIT of unknown outcome says what to check)
+            self.popup = log;
+            self.notice("Production log".into(), note);
             return;
         };
         if self.conn(&conn).is_none() {

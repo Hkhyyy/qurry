@@ -16,9 +16,24 @@ pub fn tls_opt_in(msg: &str) -> bool {
     msg.contains(NEEDS_TLS) || msg.contains(DROPPED_TLS) || msg.contains(&needs_tls_pg())
 }
 
+/// When the connection was lost during a COMMIT (after the server error)
+pub const COMMIT_UNKNOWN_ERR: &str = "connection lost while committing, so it is unknown whether the changes were committed. Check the data before you run them again (the next run reconnects).";
+
+/// Title of the notice for a failed COMMIT (GUI and TUI): it may not have failed when the connection was lost during it
+pub fn commit_failed_title(msg: &str) -> &'static str {
+    if msg.contains(COMMIT_UNKNOWN_ERR) { "Commit outcome unknown" } else { "Commit failed" }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commit_failed_title_says_when_the_outcome_is_unknown() {
+        assert_eq!(commit_failed_title(&format!("Connection reset by peer (os error 54) — {COMMIT_UNKNOWN_ERR}")), "Commit outcome unknown");
+        assert_eq!(commit_failed_title("Session closed"), "Commit failed");
+        assert_eq!(commit_failed_title("1180 (HY000): Got error 149 during COMMIT"), "Commit failed");
+    }
 
     #[test]
     fn tls_opt_in_matches_the_connect_errors_only() {

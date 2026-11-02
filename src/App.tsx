@@ -30,6 +30,7 @@ import { bindings, eventSpec, formatSpec, hit, loadKeymap, onKeymapChange } from
 import { invalidateCompletion } from "./lib/completion";
 import { useStatusWidgets } from "./lib/statusbar";
 import { sharedReady, useSharedReady } from "./lib/shared";
+import { commitNoticeTitle } from "./lib/commitNotice";
 import { tableTabLabels } from "./lib/tabLabels";
 import { isDdl, isRead, rollbackUndoes } from "./lib/stmtKind";
 import type { BackupOptions, FtsRequest, UpdateChannel } from "./lib/api";
@@ -1057,8 +1058,10 @@ export default function App() {
       const sql = await ddl.rename(what === "db" ? info.conn.id : nodeTarget(info), what, schemaOf(info), old, name);
       const c = info.conn;
       if (!(await ask(c.options?.confirmChanges ? "This changes the schema of a Production data source." : `Rename "${old}" to "${name}"?`, { title: c.options?.confirmChanges ? `Production: ${c.name}` : "Rename", detail: [{ text: sql, value: "schema change", tone: "danger" }], okLabel: "Rename", danger: !!c.options?.confirmChanges }))) return;
-      await ddl.run(what === "db" ? c.id : nodeTarget(info), [sql]);
+      // Ran, but the Production log couldn't record it: not a failure (running it again would repeat it)
+      const warning = await ddl.run(what === "db" ? c.id : nodeTarget(info), [sql]);
       setStatus(`Renamed ${old} to ${name}`);
+      if (warning) void notice(warning, "Ran, with a warning");
       if (what === "schema" || what === "db") info.refresh?.();
       else info.refreshParent?.();
       schemaChanged(c.id, info.db ?? (c.database || (c.kind === "postgres" ? "postgres" : "")));
@@ -1425,12 +1428,24 @@ export default function App() {
 
   /** Read the console's transaction state into the tab (after an error the Commit / Roll back buttons may be stale) */
   const syncTx = (tabId: string) => api.txState(tabId).then((inTx) => updTab(tabId, (t) => ({ ...t, inTx })), () => {});
+  /** Commit / Roll back failed: in Output (the status bar cuts it off) and the status bar; a failed COMMIT also in a notice, since it
+   * may say the changes were not saved, or that it is unknown whether they were and the data needs a check */
+  const txFailed = (tab: Tab, e: unknown, commit: boolean) => {
+    log(tab.id, "error", String(e));
+    setStatus(String(e));
+    patch(tab.id, { activeResult: "output" });
+    syncTx(tab.id);
+    if (commit) void notice(String(e), commitNoticeTitle(String(e)));
+  };
   const setTxMode = async (tab: Tab, manual: boolean) => {
+    let commit = false;
     try {
       // Ask first if there are uncommitted changes (it used to commit silently)
       if (!manual && tab.inTx) {
         if (!(await ask("This console has uncommitted changes.", { title: "Switch to Auto", okLabel: "Commit and Switch", cancelLabel: "Stay in Manual" }))) return;
+        commit = true;
         const warning = await api.commitTx(tab.id);
+        commit = false;
         log(tab.id, "info", "Transaction committed");
         if (warning) log(tab.id, "warn", `Warning: ${warning}`);
       }
@@ -1438,8 +1453,7 @@ export default function App() {
       updTab(tab.id, (t) => ({ ...t, txManual: manual, inTx: manual ? t.inTx : false }));
       log(tab.id, "info", `Transaction mode: ${manual ? "Manual" : "Auto"}`);
     } catch (e) {
-      setStatus(String(e));
-      syncTx(tab.id);
+      txFailed(tab, e, commit);
     }
   };
   const txEnd = async (tab: Tab, what: "commit" | "rollback") => {
@@ -1452,8 +1466,7 @@ export default function App() {
         setStatus(`Warning: ${warning}`);
       }
     } catch (e) {
-      log(tab.id, "error", String(e));
-      syncTx(tab.id);
+      txFailed(tab, e, what === "commit");
     }
   };
 

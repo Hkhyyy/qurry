@@ -304,6 +304,8 @@ pub enum Popup {
     /// sel counts the top Commands and the fixed key list below as one sequence (only Commands can be changed)
     Help { sel: usize, scroll: u16, record: Option<bool>, message: Option<String> },
     Message { title: String, text: String },
+    /// A Message over another popup (Production Log's note over the log): closing it goes back there, as it was
+    Note { title: String, text: String, back: Box<Popup> },
     /// Single-line input. words = autocomplete candidates (columns·keywords for table WHERE/ORDER BY), complete = open list (candidates, selection, prefix length to replace)
     /// body = app-written explanation shown in a box under the input (never interpolated names, so a name can't pose as it)
     Input { title: String, body: String, input: TextArea<'static>, on_ok: Box<dyn FnOnce(&mut App, String)>, words: Vec<String>, complete: Option<(Vec<String>, usize, usize)> },
@@ -1971,6 +1973,7 @@ impl App {
                 let n = out.len();
                 // Changing statements already committed in Auto mode (reported on failure midway: earlier ones are not rolled back)
                 let mut committed = 0;
+                let mut warned = 0;
                 let mut failed = false;
                 let ddl = out.iter().any(|(s, r, dry)| r.is_ok() && !dry && !explain && qurry_core::guard::is_ddl(s, kind));
                 for (i, (s, r, dry)) in out.into_iter().enumerate() {
@@ -2017,9 +2020,12 @@ impl App {
                                     c.show_output = true;
                                 }
                             }
-                            // It ran, but its result couldn't be logged: not a failure (don't run it again)
+                            // It ran, but its result couldn't be logged: not a failure (don't run it again). Several statements: counted below (as the GUI does)
                             if let Some(w) = warning {
-                                status = format!("Warning: {}", w.lines().next().unwrap_or(""));
+                                warned += 1;
+                                if n == 1 {
+                                    status = format!("Warning: {}", w.lines().next().unwrap_or(""));
+                                }
                                 c.log(false, format!("{WARNING}{w}"));
                             }
                         }
@@ -2033,6 +2039,9 @@ impl App {
                             status = format!("Error: {}", e.lines().next().unwrap_or(""));
                         }
                     }
+                }
+                if warned > 0 && n > 1 {
+                    status = format!("{status} · {warned} with a warning (see Output)");
                 }
                 a.status = status;
                 // If tables·columns were created, changed, or dropped, show it in the explorer right away
@@ -2161,6 +2170,16 @@ impl App {
                             };
                         }
                         Err(e) => {
+                            // In Output too: the status bar cuts it off, and a COMMIT on a lost connection says there to check the data
+                            if let Some(TabKind::Console(c)) = a.tab_mut(id).map(|t| &mut t.kind) {
+                                c.log(true, e.clone());
+                                c.show_output = true;
+                            }
+                            // A failed COMMIT gets a notice to acknowledge, as in the GUI (not saved, or outcome unknown). A slow one
+                            // can return while another popup is open: the notice goes over it
+                            if commit {
+                                a.notice(qurry_core::audit::commit_failed_title(&e).into(), e.clone());
+                            }
                             a.status = e;
                             a.sync_tx(id);
                         }
@@ -2252,17 +2271,17 @@ impl App {
                 // Saved, but its result couldn't be logged: not a failure (submitting again would save it twice)
                 if let Some(w) = r.warning {
                     a.status.push_str(" · Warning: the Production log couldn't record it");
-                    a.popup = Some(Popup::Message { title: "Submitted, with a warning".into(), text: w });
+                    a.notice("Submitted, with a warning".into(), w);
                 }
             }
-            Err(e) => a.popup = Some(Popup::Message { title: "Submit failed".into(), text: e }),
+            Err(e) => a.notice("Submit failed".into(), e),
         });
     }
 
     /// It ran, but the Production log couldn't record it: a popup, not a failure (running it again would repeat it)
     pub(crate) fn warn_ran(&mut self, warning: Option<String>) {
         if let Some(w) = warning {
-            self.popup = Some(Popup::Message { title: "Ran, with a warning".into(), text: w });
+            self.notice("Ran, with a warning".into(), w);
         }
     }
 
@@ -2546,7 +2565,7 @@ impl App {
                 if let Err(e) = &r {
                     a.status = format!("{name}/{db}: {e}");
                 }
-                if let Some(Popup::Palette(p)) = &mut a.popup {
+                if let Some(Popup::Palette(p)) = a.popup_under() {
                     p.loading = p.loading.saturating_sub(1);
                     if let Ok(es) = r {
                         p.items.extend(object_items(&conn, &name, &db, es, ""));
@@ -2562,7 +2581,7 @@ impl App {
         let target = sql::target_id(&cfg.id, Some(&db));
         let (conn, name) = (cfg.id.clone(), cfg.name.clone());
         self.spawn(async move { st.completion_meta(target).await.map_err(err) }, move |a, r| {
-            let (Some(Popup::Palette(p)), Ok(ts)) = (&mut a.popup, r) else { return };
+            let (Some(Popup::Palette(p)), Ok(ts)) = (a.popup_under(), r) else { return };
             p.items.extend(column_items(&conn, &name, &db, ts, ""));
         });
     }
@@ -2581,8 +2600,27 @@ impl App {
         cache.as_ref().map(|c| c.2.iter().map(|&i| &p.items[i]).collect()).unwrap_or_default()
     }
 
+    /// A notice to acknowledge. Over a popup that is open (the palette, a confirmation, the Production Log, another notice) it
+    /// doesn't replace it: closing the notice goes back there, as it was
+    pub fn notice(&mut self, title: String, text: String) {
+        self.popup = Some(match self.popup.take() {
+            Some(back) => Popup::Note { title, text, back: Box::new(back) },
+            None => Popup::Message { title, text },
+        });
+    }
+
+    /// The popup the user works in: the open one, or the one under the notices covering it. An async result for that popup (palette
+    /// items, a connection test, schemas) goes there, so it isn't lost while a notice is shown
+    pub(crate) fn popup_under(&mut self) -> Option<&mut Popup> {
+        let mut p = self.popup.as_mut()?;
+        while let Popup::Note { back, .. } = p {
+            p = back;
+        }
+        Some(p)
+    }
+
     pub fn run_palette(&mut self, item: PItem, ddl: bool) {
-        self.popup = None;
+        let shown = self.popup.take();
         match item.action {
             PAction::Act(a) => self.run_action(a),
             PAction::Tab(id) => {
@@ -2594,7 +2632,7 @@ impl App {
             PAction::ExportFormat(f) => self.export_dest(f),
             PAction::Dba(r) => self.dba_open(r),
             PAction::InsertSql(q) => self.insert_sql(q),
-            PAction::OpenUndo { conn, db, undo, note } => self.open_undo(conn, db, undo, note),
+            PAction::OpenUndo { conn, db, undo, note } => self.open_undo(conn, db, undo, note, shown),
             PAction::Pick(v) => self.flow_pick(v),
             PAction::DbaSql(t) => self.dba_sql(t),
             PAction::DbaExplain => self.dba_explain(),
@@ -3102,7 +3140,7 @@ impl App {
         let st = self.state.clone();
         let target = sql::target_id(&conn, Some(&db));
         self.spawn(async move { st.list_schemas(target).await.map_err(err) }, move |a, r| {
-            if let Some(Popup::Scope(e)) = &mut a.popup {
+            if let Some(Popup::Scope(e)) = a.popup_under() {
                 if e.conn == conn {
                     e.set_schemas(&db, r);
                 }
@@ -3216,7 +3254,7 @@ impl App {
         // How to update goes at the top (with many versions the bottom of the window gets cut off)
         let text = format!("You have {cur} — {how}\n\n{}", if changes.is_empty() { "See the release page for what changed.\n".into() } else { changes });
         self.status = format!("Qurry {} is available — {how}", r.version);
-        self.popup = Some(Popup::Message { title: format!("Qurry {} is available", r.version), text });
+        self.notice(format!("Qurry {} is available", r.version), text);
         self.update = Some(r.version);
     }
 

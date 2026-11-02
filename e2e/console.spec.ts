@@ -60,6 +60,37 @@ test("Explain Plan → plan tab with the node tree", async ({ page }) => {
   await expect(editor(page)).toBeVisible();
 });
 
+// The backend's message for a Commit cut off by a lost connection (app.rs: `{e} — {COMMIT_UNKNOWN_ERR}`), and one that just failed
+const commitLost =
+  "Connection reset by peer (os error 54) — connection lost while committing, so it is unknown whether the changes were committed. Check the data before you run them again (the next run reconnects).";
+for (const [msg, title] of [
+  [commitLost, "Commit outcome unknown"],
+  ["Session closed", "Commit failed"],
+]) {
+  test(`a failed Commit says so in a notice, the status bar and Output: ${title}`, async ({ page }) => {
+    await page.locator(".work-layer:visible .console-toolbar").getByText("Tx: Auto").click();
+    await page.getByRole("menuitem", { name: /Manual/ }).click();
+    await editor(page).click();
+    await typeSql(page, "update users set user_name = 'a' where id = 1");
+    await runAll(page);
+    const commit = page.locator(".work-layer:visible .console-toolbar").getByRole("button", { name: "Commit" });
+    await expect(commit).toBeEnabled();
+    // Look at something else first: the failure brings Output back
+    await typeSql(page, "select 1");
+    await runAll(page);
+    await expect(resultTabs(page)).toHaveText(["Output", /^Result/]);
+    await expect(resultTabs(page).nth(1)).toHaveAttribute("aria-selected", "true");
+    await page.evaluate((m) => ((globalThis as any).__mockCommitError = m), msg);
+    await commit.click();
+    await expect(dialog(page)).toContainText(title);
+    await expect(dialog(page)).toContainText(msg);
+    await dialog(page).getByRole("button", { name: "OK" }).click();
+    await expect(status(page)).toContainText(msg);
+    await expect(resultTabs(page).first()).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator(".work-layer:visible .output-log")).toContainText(msg);
+  });
+}
+
 // A rollback undoes a DELETE but not a sequence step: Explain Analyse asks first and doesn't claim nothing changed
 test("Explain Analyse asks before a write a rollback can't undo, and says what stays", async ({ page }) => {
   await typeSql(page, "select nextval('orders_id_seq')");

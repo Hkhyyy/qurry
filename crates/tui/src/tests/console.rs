@@ -85,6 +85,31 @@ async fn f5_stops_at_the_first_error() {
     assert!(console(&h).show_output);
 }
 
+/// A statement that ran but whose result the Production log couldn't record: a later statement's status doesn't hide its warning
+#[tokio::test]
+async fn f5_keeps_an_earlier_warning_in_the_status() {
+    fn warns(q: &str) -> Result<QueryResult, String> {
+        let mut r = fake(q)?;
+        if q.starts_with("update") {
+            r.warning = Some("It ran, but the result couldn't be written to the Production log".into());
+        }
+        Ok(r)
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(warns);
+    h.app.exec.inside = qurry_core::exec::Inside::Whole;
+    h.console_with("update t set a = 1 where id = 1;\nselect id from t;", 0, 3);
+    h.key("F5");
+    h.settle().await;
+    assert!(h.console_output().contains(&"Warning: It ran, but the result couldn't be written to the Production log".to_string()));
+    assert_eq!(h.app.status, "2 row(s) retrieved in 7 ms · 1 with a warning (see Output)");
+    // One statement: the warning itself
+    h.console_with("update t set a = 1 where id = 1", 0, 3);
+    h.key("F5");
+    h.settle().await;
+    assert_eq!(h.app.status, "Warning: It ran, but the result couldn't be written to the Production log");
+}
+
 /// Production Data Source: the counted rows of each changing statement are shown before anything runs; yes runs them
 #[tokio::test]
 async fn production_confirm_shows_counted_rows() {
@@ -193,4 +218,34 @@ async fn completion_popup_lists_and_inserts() {
     h.key("Enter");
     assert_eq!(h.console_text(), "select u.email from users u");
     assert!(console(&h).complete.is_none());
+}
+
+/// A failed Commit goes to Output too, not only to the status bar that cuts it off (a COMMIT on a lost connection says there to check the data)
+#[tokio::test]
+async fn failed_commit_is_in_output() {
+    let mut h = Harness::new().await;
+    h.console_tab();
+    h.app.tx(crate::app::Action::Commit);
+    h.settle().await;
+    // No session for this console: commit_tx fails
+    assert_eq!(h.console_output(), ["Session closed"]);
+    assert!(console(&h).show_output);
+    assert_eq!(h.app.status, "Session closed");
+    // And a notice to acknowledge, as in the GUI
+    let Some(crate::app::Popup::Message { title, text }) = &h.app.popup else { panic!("no notice") };
+    assert_eq!((title.as_str(), text.as_str()), ("Commit failed", "Session closed"));
+    // A failed Roll back doesn't get one
+    h.key("Esc");
+    h.app.tx(crate::app::Action::Rollback);
+    h.settle().await;
+    assert!(h.app.popup.is_none());
+    // A popup opened while the COMMIT was running (a confirmation here) stays: the notice goes over it, and Esc goes back to it
+    h.app.tx(crate::app::Action::Commit);
+    h.app.popup = Some(crate::app::Popup::Confirm { text: "Roll back and close the tab?".into(), on_yes: Box::new(|_| {}) });
+    h.settle().await;
+    let Some(crate::app::Popup::Note { title, back, .. }) = &h.app.popup else { panic!("no notice over the confirmation") };
+    assert_eq!(title, "Commit failed");
+    assert!(matches!(**back, crate::app::Popup::Confirm { .. }));
+    h.key("Esc");
+    assert!(matches!(h.app.popup, Some(crate::app::Popup::Confirm { .. })));
 }

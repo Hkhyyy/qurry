@@ -245,13 +245,20 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         entry("1", 90, "delete from payment where created_at < now() - interval '1 year'", Some(12408), false, false),
         entry("2", 12, "update payment set amount = 0 where id = 4", Some(1), true, true),
         entry("3", 10, "COMMIT", None, false, false),
+        // A transaction a CALL ended (committed or rolled back: unknown)
+        qurry_core::audit::AuditEntry { note: Some(qurry_core::audit::ENDED_UNKNOWN_NOTE.into()), ..entry("6", 6, qurry_core::audit::ENDED_UNKNOWN, None, false, false) },
         // Logged before it ran, no result yet (still running, or Qurry stopped)
         qurry_core::audit::AuditEntry { started: true, ..entry("4", 1, "update payment set status = 'refunded' where id = 7", None, false, false) },
+        // A COMMIT cut off by a lost connection (it may have committed)
+        qurry_core::audit::AuditEntry { error: Some("Connection reset by peer (os error 54)".into()), note: Some(qurry_core::audit::COMMIT_UNKNOWN_NOTE.into()), ..entry("5", 0, qurry_core::audit::COMMIT_UNKNOWN, None, false, false) },
     ] {
         h.app.state.audit.add(e).unwrap();
     }
     h.app.production_log();
     scenes.push(app_scene(h, "Production log", "⌃k › Production Log: 운영에서 실행한 변경 (↶ undo 가 있으면 ↩ 로 새 콘솔에)", 120, 22));
+    // An entry without undo SQL: ↩ shows its note over the log, wrapped (Esc goes back to the same entry)
+    h.key("Enter");
+    scenes.push(app_scene(h, "Production log · note", "Production Log › ↩ on COMMIT outcome unknown: 메모를 줄바꿈해 로그 위에 (Esc 로 같은 항목에)", 70, 22));
     h.app.popup = None;
     // Table designer (modify)
     let col = |n: &str, t: &str, null: bool| ColumnDef { name: n.into(), orig: Some(n.into()), data_type: t.into(), nullable: null, ..Default::default() };

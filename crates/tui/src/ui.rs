@@ -774,6 +774,13 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
     if matches!(app.popup, Some(Popup::Find(_))) {
         return crate::find::draw(f, app);
     }
+    // A note stays over the popup it was opened from: draw that first
+    if let Some(Popup::Note { title, text, back }) = app.popup.take_if(|p| matches!(p, Popup::Note { .. })) {
+        app.popup = Some(*back);
+        draw_popup(f, app);
+        let back = Box::new(app.popup.take().expect("drawn"));
+        app.popup = Some(Popup::Note { title, text, back });
+    }
     let area = f.area();
     match app.popup.as_mut().unwrap() {
         Popup::Help { sel, scroll, record, message } => {
@@ -827,8 +834,10 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
         }
         // Drawn separately above
         Popup::Find(_) => {}
-        Popup::Message { title, text } => {
-            let r = centered(area, 90, (text.lines().count() as u16 + 4).min(30));
+        Popup::Message { title, text } | Popup::Note { title, text, .. } => {
+            // Sized by word wrap, so a long line isn't cut off in a narrow terminal
+            let lines: Vec<Line> = text.lines().map(|l| Line::raw(l.to_string())).collect();
+            let r = centered(area, 90, (wrapped_height(&lines, 90u16.min(area.width.saturating_sub(4)).saturating_sub(2)) + 4).min(30));
             let inner = popup(f, r, format!(" {} (Esc) ", disp(title)));
             f.render_widget(Paragraph::new(text.clone()).wrap(Wrap { trim: false }), inner);
         }

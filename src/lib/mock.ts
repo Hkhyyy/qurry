@@ -133,7 +133,12 @@ const handlers: Record<string, (a: any) => unknown> = {
         ? { ...result, columns: [], rows: [], rowsAffected: 3, truncated: false, hasResultSet: false, inTransaction: (globalThis as any).__mockManual === true }
         : { ...result, inTransaction: (globalThis as any).__mockManual === true },
   set_tx_mode: (a: any) => { (globalThis as any).__mockManual = a.manual; return null; },
-  commit_tx: () => null,
+  // e2e sets __mockCommitError for a COMMIT that fails (e.g. the connection lost while committing)
+  commit_tx: () => {
+    const e = (globalThis as any).__mockCommitError;
+    if (e) throw e;
+    return null;
+  },
   rollback_tx: () => null,
   rag_indexes: () => (globalThis as any).__rag ?? ((globalThis as any).__rag = [{ id: "r1", name: "tickets search", source: "dev", schema: "public", table: "users", idColumn: "id", textColumns: ["user_name"], provider: "ollama", model: "nomic-embed-text", baseUrl: "", dest: "dev", collection: "users_embeddings", dim: 768, rows: 3000, builtAt: "2026-10-27 14:50" }]),
   rag_save: (a: any) => { const x = { ...a.index, id: a.index.id || "r" + Date.now() }; const l = (globalThis as any).__rag ?? []; (globalThis as any).__rag = [...l.filter((y: any) => y.id !== x.id), x]; return x; },
@@ -304,7 +309,8 @@ const handlers: Record<string, (a: any) => unknown> = {
     return [o.kind === "database" ? `CREATE DATABASE ${o.name}` : o.kind === "schema" ? `CREATE SCHEMA ${o.name}` : o.kind === "view" ? `CREATE ${o.materialized ? "MATERIALIZED " : ""}VIEW ${o.schema}.${o.name} AS\n${o.query}` : `CREATE SEQUENCE ${o.schema}.${o.name}`];
   },
   rename_ddl: (a: any) => `ALTER TABLE ${a.schema}.${a.old} RENAME TO ${a.new}`,
-  run_ddl: () => new Promise((ok) => setTimeout(() => ok(null), 300)),
+  // e2e sets __mockDdlWarning for "ran, but the Production log couldn't record it"
+  run_ddl: () => new Promise((ok) => setTimeout(() => ok((globalThis as any).__mockDdlWarning ?? null), 300)),
   subset_preview: () => ({
     total: 9,
     tables: [
@@ -317,8 +323,11 @@ const handlers: Record<string, (a: any) => unknown> = {
   subset_copy: () => new Promise((ok) => setTimeout(() => ok({ total: 9, tables: [] }), 800)),
   fake_fill: (a: any) => new Promise((ok) => setTimeout(() => ok({ rows: a.rows }), 600)),
   audit_log: () => [
+    { id: "a5", ts: Date.now() - 2000, connId: "prod", connName: "[PROD] shop_app", sql: "COMMIT outcome unknown (connection lost)", inTx: false, error: "error communicating with database: Connection reset by peer (os error 54)", note: "The server may have committed before the connection was lost. Check the data before you run these changes again." },
     { id: "a4", ts: Date.now() - 5000, connId: "prod", connName: "[PROD] shop_app", sql: "update orders set status = 'refunded' where id = 7", inTx: false, started: true,
       note: "Running, or stopped before its result was recorded (Qurry quit, or couldn't write the log after it ran)" },
+    { id: "a6", ts: Date.now() - 20000, connId: "prod", connName: "[PROD] shop_app", sql: "ENDED (committed or rolled back)", inTx: false,
+      note: "The transaction ended in the statement before this entry (a CALL, a deadlock or a lock wait timeout), and MySQL doesn't say whether it committed or rolled back the changes made before it. Check the data before you run them again." },
     { id: "a3", ts: Date.now() - 30000, connId: "prod", connName: "[PROD] shop_app", sql: "COMMIT", inTx: false },
     { id: "a2", ts: Date.now() - 60000, connId: "prod", connName: "[PROD] shop_app", sql: "update users set user_name = 'kim' where id <= 3", rows: 3, inTx: true,
       undo: "-- Undo for: update users set user_name = 'kim' where id <= 3\n-- Saved just before it ran. Rows changed again since then are overwritten.\nUPDATE users AS qurry_t SET user_name = qurry_old.user_name\nFROM jsonb_populate_recordset(NULL::users, $qurry$[{\"id\":1,\"user_name\":\"user_1\"}]$qurry$) AS qurry_old\nWHERE qurry_t.id = qurry_old.id;\n" },

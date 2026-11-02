@@ -139,7 +139,7 @@ pub(crate) async fn snapshot_on(conn: &mut sqlx::MySqlConnection, sql: &str) -> 
 }
 
 /// MySQL error number (1213 = deadlock, …)
-fn error_number(e: &AppError) -> Option<u16> {
+pub(crate) fn error_number(e: &AppError) -> Option<u16> {
     match e {
         AppError::Db(sqlx::Error::Database(d)) => d.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>().map(|m| m.number()),
         _ => None,
@@ -148,12 +148,87 @@ fn error_number(e: &AppError) -> Option<u16> {
 
 // ───────── Console session ─────────
 
+/// In Manual mode (autocommit=0), whether the statement opens the transaction: every one but SHOW / SET / USE
+fn opens_tx(s: &str) -> bool {
+    !s.starts_with("show") && !s.starts_with("set") && !s.starts_with("use")
+}
+
+/// Whether the console asks the server if its transaction is still open after the statement, whether it ran or failed: after every
+/// statement but a SELECT and a row change (s = strip_comments_lead(sql)). MySQL commits the open transaction for DDL, LOCK / UNLOCK
+/// TABLES, SET autocommit, SET PASSWORD, INSTALL PLUGIN … (some also when they then fail, not when they fail to parse), and a CALL or
+/// DO can open one in Manual: no list of words gets them all right
+fn asks_server(sql: &str, s: &str) -> bool {
+    !is_select_like(sql) && !is_dml(s)
+}
+
+/// The leading word of `s` (strip_comments_lead), ending at any character that isn't a letter, digit or `_`, so a comment glued to
+/// it (`call/**/p()`) doesn't hide it
+fn first_word(s: &str) -> &str {
+    s.split(|c: char| !c.is_alphanumeric() && c != '_').next().unwrap_or("")
+}
+
+/// The word after a leading BEGIN keyword (s = strip_comments_lead(sql)), comments skipped (`--`, `/* */`, `#`): "" for none.
+/// None when `s` doesn't start with the word BEGIN
+fn after_begin(s: &str) -> Option<&str> {
+    let mut rest = s.strip_prefix("begin").filter(|r| !r.starts_with(|c: char| c.is_alphanumeric() || c == '_'))?.trim_start();
+    loop {
+        rest = if let Some(r) = rest.strip_prefix("--").or_else(|| rest.strip_prefix('#')) {
+            r.split_once('\n').map_or("", |x| x.1)
+        } else if let Some(r) = rest.strip_prefix("/*") {
+            r.split_once("*/").map_or("", |x| x.1)
+        } else {
+            return Some(first_word(rest));
+        }
+        .trim_start();
+    }
+}
+
+/// A MariaDB compound statement: at top level only BEGIN NOT ATOMIC … END (a labeled one is a syntax error there). It doesn't
+/// commit the open transaction, and what it runs can commit or roll back
+pub(crate) fn is_compound(s: &str) -> bool {
+    after_begin(s) == Some("not")
+}
+
+/// A plain BEGIN (s = strip_comments_lead(sql)), whatever follows it (`work`, `;`, a trailing comment the splitter left in): it
+/// commits the open transaction and opens one
+fn is_begin(s: &str) -> bool {
+    after_begin(s).is_some_and(|w| w != "not")
+}
+
+/// Whether `s` (strip_comments_lead) runs statements of its own that can COMMIT or ROLLBACK: a CALL, EXECUTE of a prepared
+/// COMMIT / ROLLBACK, or a MariaDB BEGIN NOT ATOMIC … END. When the transaction ended with it, the server's answer can't tell
+/// whether it committed or rolled back
+fn ends_in_procedure(s: &str) -> bool {
+    let first = first_word(s);
+    ["call", "execute"].contains(&first) || is_compound(s)
+}
+
+/// Statements that change rows (s = strip_comments_lead(sql))
+fn changes_rows(s: &str) -> bool {
+    let first = first_word(s);
+    ["insert", "update", "delete", "replace"].contains(&first) || s.starts_with("load data")
+}
+
+/// Statements that change or read rows and never commit the open transaction (s = strip_comments_lead(sql))
+fn is_dml(s: &str) -> bool {
+    let first = first_word(s);
+    changes_rows(s) || ["show", "explain", "describe", "desc"].contains(&first)
+}
+
 /// Dedicated connection for a console tab. MySQL has no protocol-level cursor, so "load more" re-queries with LIMIT/OFFSET.
 pub struct MySession {
     conn: PoolConnection<MySql>,
     pub id: i64,
     manual: bool,
     pub in_tx: bool,
+    /// A change ran in the open transaction (audit::is_change, as the Production log has it): a transaction opened by BEGIN or
+    /// guessed after a SELECT in Manual mode has none, so ending it saves nothing
+    pub changed: bool,
+    /// How the last statement ended the open transaction, when it did by itself (audit::IMPLICIT_COMMIT or audit::ENDED_UNKNOWN):
+    /// not a COMMIT / ROLLBACK, a deadlock in a row change or a lost connection
+    pub ended: Option<&'static str>,
+    /// tx_open's answer can be trusted: it saw the transaction the session opened to check it (TiDB, Vitess accept the SET inside one)
+    probe: bool,
     /// (SELECT statement, next OFFSET)
     more: Option<(String, usize)>,
 }
@@ -162,7 +237,14 @@ impl MySession {
     pub async fn open(p: &MySqlPool) -> AppResult<Self> {
         let mut conn = p.acquire().await?;
         let id: u64 = sqlx::query_scalar("select connection_id()").fetch_one(&mut *conn).await?;
-        Ok(Self { conn, id: id as i64, manual: false, in_tx: false, more: None })
+        let mut s = Self { conn, id: id as i64, manual: false, in_tx: false, changed: false, ended: None, probe: true, more: None };
+        // Best effort: a MySQL-protocol server without transactions (ClickHouse, older StarRocks / Doris) still opens, without the probe
+        let began = s.conn.execute("START TRANSACTION").await.is_ok();
+        s.probe = began && s.tx_open().await != Some(false);
+        if began {
+            let _ = s.conn.execute("ROLLBACK").await;
+        }
+        Ok(s)
     }
 
     pub async fn ping(&mut self) {
@@ -198,8 +280,13 @@ impl MySession {
     }
 
     pub async fn commit(&mut self) -> AppResult<()> {
-        self.conn.execute("COMMIT").await?;
-        self.in_tx = false;
+        let r = self.conn.execute("COMMIT").await;
+        // A COMMIT the server refused (e.g. a Group Replication certification failure) ends the transaction too: it was rolled back.
+        // Not a lost connection: then it is unknown whether it committed
+        if matches!(r, Ok(_) | Err(sqlx::Error::Database(_))) {
+            self.in_tx = false;
+        }
+        r?;
         Ok(())
     }
 
@@ -209,18 +296,100 @@ impl MySession {
         Ok(())
     }
 
+    /// Whether InnoDB rolled back the whole transaction on this error: a deadlock, and a lock wait timeout with innodb_rollback_on_timeout
+    async fn tx_rolled_back(&mut self, e: &AppError) -> bool {
+        match error_number(e) {
+            Some(1213) => true,
+            Some(1205) => sqlx::query_scalar::<_, i64>("SELECT @@innodb_rollback_on_timeout").fetch_one(&mut *self.conn).await.is_ok_and(|v| v != 0),
+            _ => false,
+        }
+    }
+
+    /// Whether the server has a transaction open on this connection (asks_server), changing nothing: MySQL refuses to set
+    /// session_track_gtids inside one (1766), and set to its own value it is a no-op. (Not the isolation level: setting it outside a
+    /// transaction would undo a pending SET TRANSACTION ISOLATION LEVEL.) MariaDB has no session_track_gtids (1193) but has
+    /// @@in_transaction. No privilege needed. None = no answer (MySQL 5.6, or a server that gets it wrong: `probe`)
+    async fn tx_open(&mut self) -> Option<bool> {
+        if !self.probe {
+            return None;
+        }
+        match self.conn.execute("SET @@SESSION.session_track_gtids = @@SESSION.session_track_gtids").await.map_err(AppError::from) {
+            Ok(_) => Some(false),
+            Err(e) if error_number(&e) == Some(1766) => Some(true),
+            Err(e) if error_number(&e) == Some(1193) => sqlx::query_scalar::<_, u64>("SELECT @@in_transaction").fetch_one(&mut *self.conn).await.ok().map(|n| n != 0),
+            Err(_) => None,
+        }
+    }
+
+    /// Whether to ask the server if the transaction is still open after `sql` (s = strip_comments_lead(sql)) ran or failed: one
+    /// rule for both. In Auto with none open, only a CALL, EXECUTE or BEGIN NOT ATOMIC can leave one open
+    fn asks(&self, sql: &str, s: &str) -> bool {
+        (self.manual || self.in_tx || ends_in_procedure(s)) && asks_server(sql, s)
+    }
+
+    /// After `s` (strip_comments_lead) ran or failed with `err`: follow the server's answer whether the transaction is still open.
+    /// Without one it stays as it was (or opens in Manual), so Qurry never claims changes are committed without knowing. If the
+    /// statement ended it (not a COMMIT / ROLLBACK), `ended` says how: committed, unless it can also have rolled it back (a CALL or
+    /// EXECUTE; a deadlock or lock wait timeout: a DDL waiting for its metadata lock times out after the commit, a SET with a
+    /// SELECT … FOR UPDATE rolls it back)
+    async fn follow_server(&mut self, s: &str, err: Option<&AppError>) {
+        let was = self.in_tx;
+        let opened = self.manual && opens_tx(s) && err.is_none_or(|e| error_number(e) != Some(1064));
+        self.in_tx = self.tx_open().await.unwrap_or(was || opened);
+        if was && !self.in_tx && !s.starts_with("commit") && !s.starts_with("rollback") {
+            let either = ends_in_procedure(s) || err.is_some_and(|e| matches!(error_number(e), Some(1205 | 1213)));
+            self.ended = Some(if either { crate::audit::ENDED_UNKNOWN } else { crate::audit::IMPLICIT_COMMIT });
+        }
+    }
+
     pub async fn run(&mut self, sql: &str, limit: usize) -> AppResult<QueryResult> {
         self.more = None;
-        let mut r = run_on(&mut self.conn, sql, limit).await?;
+        self.ended = None;
+        if !self.in_tx {
+            self.changed = false;
+        }
+        let mut r = match run_on(&mut self.conn, sql, limit).await {
+            Ok(r) => r,
+            Err(e) => {
+                let s = strip_comments_lead(sql);
+                if self.asks(sql, &s) && error_number(&e).is_some() && !crate::app::is_conn_lost(&e) {
+                    // Same rule as for one that ran: a DDL or SET PASSWORD that committed before failing, a COMMIT the server refused
+                    // (rolled back) ended it, one that failed to parse (COMMIT TRANSACTION: 1064) didn't, a CALL may have opened one
+                    self.follow_server(&s, Some(&e)).await;
+                } else if self.tx_rolled_back(&e).await {
+                    self.in_tx = false;
+                } else if self.manual && opens_tx(&s) && !s.starts_with("rollback") && error_number(&e) != Some(1064) {
+                    // With autocommit=0 a statement that fails (but parsed) still leaves the transaction open: the row locks it took
+                    // before a lock wait timeout, what a procedure changed before it failed
+                    self.in_tx = true;
+                }
+                return Err(e);
+            }
+        };
         let s = strip_comments_lead(sql);
-        if s.starts_with("begin") || s.starts_with("start transaction") {
+        if s.starts_with("set") && s.contains("autocommit") {
+            // A typed SET autocommit: follow the server's mode (whether it committed is asked below)
+            if let Ok(on) = sqlx::query_scalar::<_, i64>("SELECT @@autocommit").fetch_one(&mut *self.conn).await {
+                self.manual = on == 0;
+            }
+        }
+        if is_begin(&s) || s.starts_with("start transaction") {
+            // It committed the one that was open
+            if self.in_tx {
+                self.ended = Some(crate::audit::IMPLICIT_COMMIT);
+                self.changed = false;
+            }
             self.in_tx = true;
         } else if s.starts_with("commit") || (s.starts_with("rollback") && !s.starts_with("rollback to")) {
             self.in_tx = false;
-        } else if self.manual && !is_select_like(sql) && !s.starts_with("show") && !s.starts_with("set") && !s.starts_with("use") {
-            // With autocommit=0, the first modifying statement opens a transaction
+        } else if self.asks(sql, &s) {
+            self.follow_server(&s, None).await;
+        } else if self.manual && opens_tx(&s) {
+            // With autocommit=0, any statement opens a transaction, not only a change: WITH … DELETE, SELECT … FOR UPDATE (its row locks),
+            // SELECT f() where f writes. Like PostgreSQL's Manual mode, it stays open until Commit / Roll back
             self.in_tx = true;
         }
+        self.changed |= self.in_tx && crate::audit::is_change(sql, crate::store::DbKind::Mysql);
         if r.truncated && is_select_like(sql) {
             self.more = Some((sql.trim().trim_end_matches(';').trim().to_string(), limit));
         } else {
@@ -233,6 +402,9 @@ impl MySession {
     /// A change with its undo snapshot right before it, in one transaction (Session::run_with_snapshot)
     pub async fn run_with_snapshot(&mut self, snap: &str, sql: &str, limit: usize) -> (AppResult<QueryResult>, AppResult<QueryResult>) {
         self.more = None;
+        if !self.in_tx {
+            self.changed = false;
+        }
         let own = !self.manual && !self.in_tx;
         let had_tx = self.in_tx;
         if own {
@@ -246,16 +418,14 @@ impl MySession {
         if let Err(e) = &shot
             && crate::audit::stops_change(e)
         {
-            let gone = if own {
+            // No transaction was open before: end the one the snapshot ran in (Qurry's own, or the one autocommit=0 opened in Manual,
+            // which holds nothing else since in Manual every statement but SHOW / SET / USE sets in_tx, also when it fails)
+            // with the row locks it took before it stopped
+            let gone = if !had_tx {
                 let _ = self.rollback_tx().await;
                 true
             } else {
-                // InnoDB rolls back the whole transaction on a deadlock, and on a lock wait timeout with innodb_rollback_on_timeout
-                match error_number(e) {
-                    Some(1213) => true,
-                    Some(1205) => sqlx::query_scalar::<_, i64>("SELECT @@innodb_rollback_on_timeout").fetch_one(&mut *self.conn).await.is_ok_and(|v| v != 0),
-                    _ => false,
-                }
+                self.tx_rolled_back(e).await
             };
             if gone {
                 self.in_tx = false;
@@ -532,6 +702,7 @@ pub async fn full_text_search(p: &MySqlPool, r: &FtsRequest) -> AppResult<Vec<Ft
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::backend::Backend;
     use crate::db::Pool;
     use crate::store::{ConnectionConfig, DbKind};
@@ -543,6 +714,49 @@ mod tests {
 
     fn pw() -> String {
         env()[3].clone()
+    }
+
+    /// The console asks the server after any statement but a SELECT and a row change (they never commit the open transaction),
+    /// whether it ran or failed
+    #[test]
+    fn asks_the_server_after_all_but_dml() {
+        let a = |q: &str| asks_server(q, &strip_comments_lead(q));
+        for q in ["UPDATE t SET a = 1", "-- x\ninsert into t values (1)", "delete from t", "replace into t values (1)", "load data infile 'x' into table t", "show tables", "explain select 1", "desc t", "select 1", "with x as (select 1) select * from x", "update/**/t set a = 1"] {
+            assert!(!a(q), "{q}");
+        }
+        for q in [
+            "set password = 'x'", "alter user u identified by 'x'", "install plugin p soname 'p.so'", "unlock tables", "lock tables t write", "set autocommit = 1",
+            "set transaction isolation level read uncommitted", "call p()", "do 0", "load index into cache t", "start replica", "lock instance for backup", "updatex",
+            "create temporary table x (a int)", "analyze update t set v = 1", "commit", "commit transaction",
+        ] {
+            assert!(a(q), "{q}");
+        }
+    }
+
+    /// A CALL or EXECUTE can end the transaction either way (a procedure's ROLLBACK, a prepared COMMIT); other statements commit it
+    #[test]
+    fn call_and_execute_end_in_procedure() {
+        for q in ["call p()", "CALL s.p", "-- x\n call p()", "execute stmt", "EXECUTE s USING @a", "call/**/p()", "execute/**/s"] {
+            assert!(ends_in_procedure(&strip_comments_lead(q)), "{q}");
+        }
+        for q in ["create table t (a int)", "set password = 'x'", "callx", "do 0", "deallocate prepare s", "prepare s from 'commit'", "begin", "BEGIN WORK;", "begin ;"] {
+            assert!(!ends_in_procedure(&strip_comments_lead(q)), "{q}");
+        }
+        for q in ["BEGIN NOT ATOMIC SELECT 1; END", "begin/*x*/not atomic select 1; end", "begin # x\n not atomic select 1; end"] {
+            assert!(ends_in_procedure(&strip_comments_lead(q)), "{q}");
+        }
+    }
+
+    /// Only a plain BEGIN commits the open transaction and opens one; a MariaDB compound statement asks the server
+    #[test]
+    fn plain_begin_only() {
+        for q in ["begin", "BEGIN;", "-- x\nbegin work", "begin  work ;", "begin -- x", "BEGIN /* x */", "begin /* x */ work", "begin work -- go", "begin; -- note", "begin\n# x", "begin/* x */"] {
+            assert!(is_begin(&strip_comments_lead(q)), "{q}");
+            assert!(!ends_in_procedure(&strip_comments_lead(q)), "{q}");
+        }
+        for q in ["begin not atomic select 1; end", "BEGIN NOT ATOMIC\n  UPDATE t SET v = 1;\nEND", "begin /* x */ not atomic select 1; end", "begin/*x*/not atomic select 1; end", "begin # x\n not atomic select 1; end", "beginx", "begin_x"] {
+            assert!(!is_begin(&strip_comments_lead(q)), "{q}");
+        }
     }
 
     fn cfg() -> ConnectionConfig {
@@ -672,7 +886,10 @@ mod tests {
         s.rollback_tx().await.unwrap();
         let after = s.run("select count(*) from orders where customer = 'dave'", 1).await.unwrap();
         assert_eq!(after.rows[0][0], 0);
-        assert!(!after.in_transaction);
+        // With autocommit=0 the SELECT opens a transaction too (as in PostgreSQL's Manual mode)
+        assert!(after.in_transaction);
+        assert!(s.set_manual(false).await.is_err());
+        s.rollback_tx().await.unwrap();
         s.set_manual(false).await.unwrap();
         // Edit batch
         p.execute_batch(&["update orders set memo = 'y' where id = 1".into()], true, false, &[]).await.unwrap();

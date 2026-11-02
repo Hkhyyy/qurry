@@ -1,4 +1,4 @@
-import { editor, expect, menuItem, openApp, tabStrips, test, treeItem } from "./app";
+import { dialog, editor, expect, menuItem, openApp, tabStrips, test, treeItem } from "./app";
 
 test.beforeEach(async ({ page }) => openApp(page));
 
@@ -73,4 +73,27 @@ test("Navigation → Jump to Query Console… offers New Query Console, then the
       - separator
       - menuitem "console [DEV] shop_app"
   `);
+});
+
+test("Rename… shows the warning when it ran but the Production log couldn't record it", async ({ page }) => {
+  await page.evaluate(() => ((globalThis as any).__mockDdlWarning = "It ran, but the result couldn't be written to the Production log"));
+  await treeItem(page, "users").first().click({ button: "right" });
+  await menuItem(page, /^Rename…/).click();
+  await expect(dialog(page).getByRole("textbox")).toHaveValue("users");
+  await dialog(page).getByRole("textbox").fill("members");
+  await dialog(page).getByRole("button", { name: "OK" }).click();
+  await dialog(page).getByRole("button", { name: "Rename" }).click();
+  await expect(dialog(page)).toContainText("Ran, with a warning");
+  await expect(dialog(page)).toContainText("It ran, but the result couldn't be written to the Production log");
+});
+
+test("Enter in the Rename… name field doesn't also answer the confirmation that follows", async ({ page }) => {
+  await treeItem(page, "users").first().click({ button: "right" });
+  await menuItem(page, /^Rename…/).click();
+  await dialog(page).getByRole("textbox").fill("members");
+  await page.keyboard.press("Enter");
+  await expect(dialog(page)).toContainText('Rename "users" to "members"?');
+  await dialog(page).getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog(page)).toHaveCount(0);
+  await expect(treeItem(page, "users").first()).toBeVisible();
 });

@@ -1069,8 +1069,8 @@ fn redis_key(app: &mut App, id: u64, k: KeyEvent) {
                     let target = a.tab_mut(id).map(|t| t.target.clone()).unwrap_or_default();
                     let shown = line.clone();
                     a.spawn(async move { st.redis_exec_line(target, line).await.map_err(|e| e.to_string()) }, move |a, r| match r {
-                        Ok(v) => a.popup = Some(Popup::Message { title: shown, text: crate::ui::format_reply(&v) }),
-                        Err(e) => a.popup = Some(Popup::Message { title: shown, text: format!("(error) {e}") }),
+                        Ok(v) => a.notice(shown, crate::ui::format_reply(&v)),
+                        Err(e) => a.notice(shown, format!("(error) {e}")),
                     });
                 };
                 // Destructive commands like FLUSHALL·FLUSHDB·DEL ask once more
@@ -1149,6 +1149,13 @@ fn popup_key(app: &mut App, k: KeyEvent) {
                 app.popup = Some(popup);
             }
         }
+        // Closing it goes back to what it was opened from
+        Popup::Note { title, text, back } => {
+            app.popup = match k.code {
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::F(1) => Some(*back),
+                _ => Some(Popup::Note { title, text, back }),
+            };
+        }
         Popup::Confirm { text, on_yes } => match k.code {
             KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => on_yes(app),
             KeyCode::Char('n') | KeyCode::Esc => {}
@@ -1221,11 +1228,14 @@ fn popup_key(app: &mut App, k: KeyEvent) {
                 KeyCode::PageUp => p.sel = p.sel.saturating_sub(15),
                 KeyCode::Enter => {
                     if let Some(it) = App::palette_matches(&p).get(p.sel).map(|x| (*x).clone()) {
+                        // Shown while it runs, as on a click: an item can come back to it (Production Log's note)
+                        app.popup = Some(Popup::Palette(p));
                         return app.run_palette(it, false);
                     }
                 }
                 KeyCode::Char('b') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                     if let Some(it) = App::palette_matches(&p).get(p.sel).map(|x| (*x).clone()) {
+                        app.popup = Some(Popup::Palette(p));
                         return app.run_palette(it, true);
                     }
                 }
@@ -1258,7 +1268,7 @@ fn popup_key(app: &mut App, k: KeyEvent) {
                             let st = app.state.clone();
                             form.message = Some((true, "Testing…".into()));
                             app.spawn(async move { st.test_connection(cfg, pw, ssh).await.map_err(|e| e.to_string()) }, |a, r| {
-                                if let Some(Popup::ConnForm(f)) = &mut a.popup {
+                                if let Some(Popup::ConnForm(f)) = a.popup_under() {
                                     f.message = Some(match r {
                                         Ok(v) => (true, format!("✓ {v}")),
                                         Err(e) if e.contains(qurry_core::tunnel::UNKNOWN_HOST) => (false, format!("✕ {e} Press ⌃y to trust it.")),
@@ -1925,6 +1935,48 @@ mod tests {
         assert_eq!(saved.options.startup_script, "SET search_path = shop");
     }
 
+    /// A notice (a failed Commit) shown while a connection test runs: the result goes to the form under it, not lost with
+    /// 'Testing…' left on after Esc
+    #[tokio::test]
+    async fn async_result_reaches_the_popup_under_a_notice() {
+        use qurry_core::store::{ConnectionConfig, DbKind};
+        let mut h = Harness::new().await;
+        let cfg = ConnectionConfig {
+            id: "c1".into(), name: "pg".into(), kind: DbKind::Postgres, host: "qurry.invalid".into(), port: 1, user: "postgres".into(), database: "postgres".into(),
+            scope: Default::default(), password_saved: false, ssh_secret_saved: false, ssh: None, color: None, read_only: false, options: Default::default(), ssl: None, redis: None,
+        };
+        h.app.conn_form(Some(cfg));
+        h.key("Ctrl+t");
+        h.app.notice("Commit outcome unknown".into(), "Check the data".into());
+        let testing = |h: &mut Harness| matches!(h.app.popup_under(), Some(crate::app::Popup::ConnForm(f)) if f.message.as_ref().is_some_and(|m| m.1 == "Testing…"));
+        for _ in 0..100 {
+            if !testing(&mut h) {
+                break;
+            }
+            h.settle().await;
+        }
+        assert!(matches!(h.app.popup, Some(crate::app::Popup::Note { .. })));
+        h.key("Esc");
+        let Some(crate::app::Popup::ConnForm(f)) = &h.app.popup else { panic!("no form") };
+        let m = &f.message.as_ref().unwrap().1;
+        assert!(m.starts_with('✕'), "{m}");
+    }
+
+    /// Popups that open later (a run's warning, Submit, an update) stack over a notice instead of replacing it: Esc goes back to it
+    #[tokio::test]
+    async fn later_popup_keeps_the_notice() {
+        let mut h = Harness::new().await;
+        h.app.notice("Commit outcome unknown".into(), "Check the data".into());
+        h.app.warn_ran(Some("The Production log couldn't record it".into()));
+        let Some(crate::app::Popup::Note { title, .. }) = &h.app.popup else { panic!("no warning") };
+        assert_eq!(title, "Ran, with a warning");
+        h.key("Esc");
+        let Some(crate::app::Popup::Message { title, .. }) = &h.app.popup else { panic!("notice lost") };
+        assert_eq!(title, "Commit outcome unknown");
+        h.key("Esc");
+        assert!(h.app.popup.is_none());
+    }
+
     /// A new Data Source starts hidden from MCP. Saves the MCP value shown in the form as is
     #[tokio::test]
     async fn conn_form_mcp_default() {
@@ -2068,7 +2120,53 @@ mod tests {
         h.key("Down");
         h.key("Enter");
         assert_eq!(h.app.tabs.len(), tabs + 1);
-        assert!(h.app.status.contains("no undo kept"), "{}", h.app.status);
+        // Without undo SQL, its note in a popup (the status bar would cut a long one off)
+        let Some(crate::app::Popup::Note { text, .. }) = &h.app.popup else { panic!("no note") };
+        assert!(text.contains("no undo kept"), "{text}");
+        // The log stays in view behind it, and Esc goes back to it with the same entry and filter
+        assert!(h.screen(100, 30).contains("update t set a = 1 where id = 2"));
+        h.key("Esc");
+        let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("log closed") };
+        assert!(p.title.starts_with("Production Log") && p.sel == 1, "{}", p.sel);
+        h.type_str("big");
+        h.key("Enter");
+        h.key("Esc");
+        let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("log closed") };
+        assert_eq!((p.input.lines().join(""), crate::app::App::palette_matches(p)[p.sel].label.as_str()), ("big".to_string(), "delete from big"));
+        h.key("Esc");
+        assert!(h.app.popup.is_none());
+        let unknown = qurry_core::audit::AuditEntry {
+            rows: None, error: Some("Connection reset by peer (os error 54)".into()), note: Some(qurry_core::audit::COMMIT_UNKNOWN_NOTE.into()),
+            ..entry("d", qurry_core::audit::COMMIT_UNKNOWN, None)
+        };
+        h.app.state.audit.add(unknown).unwrap();
+        h.app.run_action(Action::ProductionLog);
+        h.key("Enter");
+        let Some(crate::app::Popup::Note { text, .. }) = &h.app.popup else { panic!("no note") };
+        assert!(text.contains(qurry_core::audit::COMMIT_UNKNOWN_NOTE) && text.contains("os error 54"), "{text}");
+        // The whole note shows, wrapped, in a narrow terminal too
+        let screen = h.screen(50, 20);
+        assert!(screen.contains("Check the data before") && screen.contains("os error 54"), "{screen}");
+        // A transaction a CALL ended: of unknown outcome too, and ↩ shows what to do
+        h.key("Esc");
+        h.key("Esc");
+        let ended = qurry_core::audit::AuditEntry { rows: None, note: Some(qurry_core::audit::ENDED_UNKNOWN_NOTE.into()), ..entry("e", qurry_core::audit::ENDED_UNKNOWN, None) };
+        h.app.state.audit.add(ended).unwrap();
+        h.app.run_action(Action::ProductionLog);
+        let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no log") };
+        assert!(p.items[0].hint.starts_with("outcome unknown"), "{}", p.items[0].hint);
+        h.key("Enter");
+        let Some(crate::app::Popup::Note { text, .. }) = &h.app.popup else { panic!("no note") };
+        assert_eq!(text, qurry_core::audit::ENDED_UNKNOWN_NOTE);
+        // A transaction a statement or the server ended says how, as in the GUI
+        h.key("Esc");
+        h.key("Esc");
+        for (id, sql) in [("i", "COMMIT (implicit)"), ("s", "ROLLBACK (by the server)")] {
+            h.app.state.audit.add(qurry_core::audit::AuditEntry { rows: None, ..entry(id, sql, None) }).unwrap();
+        }
+        h.app.run_action(Action::ProductionLog);
+        let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no log") };
+        assert!(p.items[0].hint.starts_with("rolled back") && p.items[1].hint.starts_with("committed"), "{} | {}", p.items[0].hint, p.items[1].hint);
     }
 
     /// ⌃K › Copy Related Rows: condition → child steps → destination (only other Data Sources of the same type). Generate Test Data asks for the row count

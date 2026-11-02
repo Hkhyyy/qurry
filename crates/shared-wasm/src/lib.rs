@@ -56,6 +56,18 @@ pub fn tls_opt_in(msg: &str) -> bool {
     qurry_shared::errors::tls_opt_in(msg)
 }
 
+/// Title of the notice for a failed Commit: "Commit outcome unknown" when the connection was lost during it, else "Commit failed"
+#[wasm_bindgen(js_name = commitFailedTitle)]
+pub fn commit_failed_title(msg: &str) -> String {
+    qurry_shared::errors::commit_failed_title(msg).into()
+}
+
+/// Result word of a Production log entry ("outcome unknown", "failed", "committed" …), or undefined when its rows say it
+#[wasm_bindgen(js_name = auditStatus)]
+pub fn audit_status(started: bool, sql: &str, failed: bool) -> Option<String> {
+    qurry_shared::audit::status(started, sql, failed).map(String::from)
+}
+
 fn from<T: serde::de::DeserializeOwned>(v: JsValue) -> Result<T, JsError> {
     Ok(serde_wasm_bindgen::from_value(v)?)
 }

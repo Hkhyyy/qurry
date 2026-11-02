@@ -113,6 +113,10 @@ type Columns = QueryResult["columns"];
 // Offsets are UTF-16 code units (JS string indices); the wrapper converts them. Statement checks are UI decisions only: the backend enforces read-only
 const api = {
   ping: (text: string): PingResponse => wasm.ping({ text }),
+  /** Title of the notice for a failed Commit's error: "Commit outcome unknown" when the connection was lost during it */
+  commitFailedTitle: (msg: string): string => wasm.commitFailedTitle(msg),
+  /** Result word of a Production log entry ("outcome unknown", "failed", "committed" …), or undefined when its rows say it */
+  auditStatus: (started: boolean, sql: string, failed: boolean): string | undefined => wasm.auditStatus(started, sql, failed),
   isRead: (sql: string, kind: DbKind): boolean => wasm.isRead(sql, kind),
   isDdl: (sql: string, kind: DbKind): boolean => wasm.isDdl(sql, kind),
   rollbackUndoes: (sql: string, kind: DbKind): boolean => wasm.rollbackUndoes(sql, kind),

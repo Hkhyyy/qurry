@@ -130,6 +130,11 @@ pub fn belongs(key: &str, id: &str) -> bool {
 pub fn is_conn_lost(e: &AppError) -> bool {
     match e {
         AppError::Db(sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed | sqlx::Error::WorkerCrashed | sqlx::Error::Tls(_) | sqlx::Error::Protocol(_)) => true,
+        // PostgreSQL ended the session (FATAL): terminated by an administrator or a server restart, crash, idle (in transaction) session timeout
+        // MySQL: idle session timeout (4031), connection killed (1927), server shutdown (1053), gone away / lost during query (2006 / 2013)
+        AppError::Db(sqlx::Error::Database(d)) => {
+            matches!(d.code().as_deref(), Some("57P01" | "57P02" | "57P05" | "25P03")) || matches!(crate::mysql::error_number(e), Some(4031 | 1927 | 1053 | 2006 | 2013))
+        }
         AppError::Io(_) => true,
         AppError::Msg(m) => {
             let m = m.to_lowercase();
@@ -139,9 +144,21 @@ pub fn is_conn_lost(e: &AppError) -> bool {
     }
 }
 
+/// What a console statement saw of its session's transaction (AppState::run_with_undo)
+#[derive(Default)]
+struct TxSeen {
+    /// A transaction was open before it ran
+    open: bool,
+    /// A change had run in it (Session::tx_changed)
+    changed: bool,
+    /// How the statement ended it by itself (Session::tx_ended)
+    ended: Option<&'static str>,
+}
+
 /// If the connection was lost: drop the tab session (so the dead connection is not reused; the next run reconnects),
-/// and close the pool too if it does not respond (e.g. the SSH tunnel died). Never resend the same statement (the server may have already run it)
-async fn recover(state: &AppState, id: &str, tab: Option<&str>, lost_tx: bool, e: AppError) -> AppError {
+/// and close the pool too if it does not respond (e.g. the SSH tunnel died). Never resend the same statement (the server may have already run it).
+/// tx = how the console's open transaction ended (audit::ended_by), None if none was open
+async fn recover(state: &AppState, id: &str, tab: Option<&str>, tx: Option<&str>, e: AppError) -> AppError {
     if !is_conn_lost(&e) {
         return e;
     }
@@ -152,19 +169,39 @@ async fn recover(state: &AppState, id: &str, tab: Option<&str>, lost_tx: bool, e
     if let Some(p) = pool {
         let alive = tokio::time::timeout(std::time::Duration::from_secs(3), p.server_version()).await.is_ok_and(|r| r.is_ok());
         if !alive {
-            drop_pool(state, split_target(id).0).await;
+            // The Data Source's other consoles lost their connections too: the server rolled back their open transactions
+            drop_pool_logged(state, split_target(id).0, crate::audit::BY_SERVER).await;
         }
     }
     crate::log!("[qurry] connection lost on {id}: {e}");
-    AppError::Msg(format!(
-        "{e} — connection lost{}. Run it again to reconnect.",
-        if lost_tx { "; the open transaction was rolled back by the server" } else { "" }
-    ))
+    AppError::Msg(match tx {
+        Some(crate::audit::COMMIT_UNKNOWN) => format!("{e} — {}", qurry_shared::errors::COMMIT_UNKNOWN_ERR),
+        Some(_) => format!("{e} — connection lost; the open transaction was rolled back by the server. Run it again to reconnect."),
+        None => format!("{e} — connection lost. Run it again to reconnect."),
+    })
 }
 
-/// Close all DB pools, sessions and tunnels of the Data Source.
-pub async fn drop_pool(state: &AppState, id: &str) {
-    state.sessions.write().await.retain(|_, e| !belongs(&e.conn_id, id));
+/// drop_pool, and close in the Production log the logged transactions of the consoles it closed (the server rolls them back): word = how
+pub(crate) async fn drop_pool_logged(state: &AppState, id: &str, word: &str) {
+    let tabs = drop_pool(state, id).await;
+    let Ok(cfg) = state.source(id) else { return };
+    for (t, conn) in tabs {
+        if let Err(e) = state.audit.tx_closed(&conn, &cfg.name, &t, word) {
+            crate::log!("[qurry] {e}");
+        }
+    }
+}
+
+/// Close all DB pools, sessions and tunnels of the Data Source. → the consoles whose sessions it closed (tab id, connection id)
+pub async fn drop_pool(state: &AppState, id: &str) -> Vec<(String, String)> {
+    let mut tabs = Vec::new();
+    state.sessions.write().await.retain(|t, e| {
+        let gone = belongs(&e.conn_id, id);
+        if gone {
+            tabs.push((t.clone(), e.conn_id.clone()));
+        }
+        !gone
+    });
     let removed: Vec<Pool> = {
         let mut pools = state.pools.write().await;
         let keys: Vec<String> = pools.keys().filter(|k| belongs(k, id)).cloned().collect();
@@ -175,6 +212,7 @@ pub async fn drop_pool(state: &AppState, id: &str) {
     }
     state.tunnels.write().await.retain(|k, _| !belongs(k, id));
     state.last_ping.lock().unwrap().retain(|k, _| !belongs(k, id));
+    tabs
 }
 
 /// If SSH is configured, open the tunnel first, then connect.
@@ -225,7 +263,7 @@ pub async fn housekeeping(state: &AppState) -> Vec<String> {
             // Do not disconnect if any session has a running query or uncommitted changes (disconnecting would lose the changes)
             let busy = state.sessions.read().await.values().any(|e| belongs(&e.conn_id, &base) && e.session.try_lock().map(|g| g.in_tx()).unwrap_or(true));
             if !busy && now.duration_since(last) >= Duration::from_secs(secs as u64) {
-                drop_pool(state, &base).await;
+                drop_pool_logged(state, &base, crate::audit::DISCONNECTED).await;
                 state.last_used.lock().unwrap().remove(&base);
                 dropped.push(base);
                 continue;
@@ -469,7 +507,7 @@ impl AppState {
             }
             Ok(())
         })?;
-        drop_pool(self, &config.id).await; // The settings may have changed, so force a reconnect
+        drop_pool_logged(self, &config.id, crate::audit::DISCONNECTED).await; // The settings may have changed, so force a reconnect
         Ok(config)
     }
 
@@ -519,7 +557,7 @@ impl AppState {
     }
 
     pub async fn delete_connection(&self, id: String) -> AppResult<()> {
-        drop_pool(self, &id).await;
+        drop_pool_logged(self, &id, crate::audit::DISCONNECTED).await;
         // A damaged secrets.json (left untouched) doesn't keep the data source: it is removed, and the error says the password stayed
         let forgot = self.set_secret(&id, None).and_then(|_| self.set_secret(&store::ssh_secret_key(&id), None));
         crate::search_cache::remove_conn(&self.store.dir(), &id);
@@ -593,7 +631,7 @@ impl AppState {
     }
 
     pub async fn disconnect(&self, id: String) -> AppResult<()> {
-        drop_pool(self, &id).await;
+        drop_pool_logged(self, &id, crate::audit::DISCONNECTED).await;
         Ok(())
     }
 
@@ -611,30 +649,49 @@ impl AppState {
             false => None,
         };
         let undo = watch && crate::audit::is_change(&sql, cfg.kind);
-        let (r, undo, in_tx) = self.run_with_undo(&id, cfg.kind, &sql, limit, tab, undo).await;
+        let (r, undo, tx) = self.run_with_undo(&id, cfg.kind, &sql, limit, tab, undo).await;
         let logged = match watch {
             true => {
                 let a = self.audit.after(started, &id, &cfg.name, cfg.kind, tab, &sql, &r, undo);
-                a.and(self.audit_lost_tx(&id, &cfg.name, tab).await)
+                a.and(self.audit_lost_tx(&id, &cfg.name, tab, &sql, &r, tx.ended).await)
             }
             false => Ok(()),
         };
+        // The statement ended the open MySQL transaction by itself, whether it ran or failed: say what became of the changes in it
+        let ended = match tx.ended {
+            Some(w) if tx.changed => Some(format!(
+                "{}, and Roll back can't undo them{}",
+                match w {
+                    crate::audit::IMPLICIT_COMMIT => "MySQL committed the open transaction before running it: the changes made in it before are saved",
+                    _ => "the open transaction ended while it ran, and MySQL doesn't say whether it committed or rolled back the changes made in it before: check the data before you run them again",
+                },
+                if watch { " (the Production log has their undo SQL where it could keep it)" } else { "" }
+            )),
+            _ => None,
+        };
         match r {
-            Err(e) => Err(recover(self, &id, tab, in_tx, e).await),
+            Err(e) => match ended {
+                Some(n) => Err(AppError::Msg(format!("{e} — {n}."))),
+                None => {
+                    let lost = if tx.open { crate::audit::ended_by(&sql, &e, true) } else { None };
+                    Err(recover(self, &id, tab, lost, e).await)
+                }
+            },
             // It ran (and may be committed): a log failure now is a warning, so nobody runs it again
             Ok(mut q) => {
-                q.warning = logged.err().map(|e| e.to_string());
+                let warnings: Vec<String> = ended.into_iter().chain(logged.err().map(|e| e.to_string())).collect();
+                q.warning = (!warnings.is_empty()).then(|| warnings.join(". "));
                 Ok(q)
             }
         }
     }
 
     /// Run in the console's session (or on the pool). undo = also keep undo SQL: the snapshot runs in the change's transaction (Session::run_with_snapshot).
-    /// → (result, undo SQL or why there is none, whether the console had a transaction open)
-    async fn run_with_undo(&self, id: &str, kind: store::DbKind, sql: &str, limit: usize, tab: Option<&str>, undo: bool) -> (AppResult<QueryResult>, Option<Result<String, String>>, bool) {
+    /// → (result, undo SQL or why there is none, what happened to the console's transaction)
+    async fn run_with_undo(&self, id: &str, kind: store::DbKind, sql: &str, limit: usize, tab: Option<&str>, undo: bool) -> (AppResult<QueryResult>, Option<Result<String, String>>, TxSeen) {
         let pool = match ensure_pool(self, id).await {
             Ok(p) => p,
-            Err(e) => return (Err(e), None, false),
+            Err(e) => return (Err(e), None, TxSeen::default()),
         };
         let plan = match undo {
             true => Some(crate::audit::plan(&pool, sql, kind).await),
@@ -643,7 +700,7 @@ impl AppState {
         let sess = match tab {
             Some(t) => match ensure_session(self, id, t).await {
                 Ok(s) => Some(s),
-                Err(e) => return (Err(e), None, false),
+                Err(e) => return (Err(e), None, TxSeen::default()),
             },
             None => None,
         };
@@ -659,11 +716,11 @@ impl AppState {
                     temp = s;
                     &mut temp
                 }
-                Err(e) => return (Err(e), None, false),
+                Err(e) => return (Err(e), None, TxSeen::default()),
             },
-            None => return (pool.run_query(sql, limit).await, plan.and_then(|p| p.err()).map(Err), false),
+            None => return (pool.run_query(sql, limit).await, plan.and_then(|p| p.err()).map(Err), TxSeen::default()),
         };
-        let in_tx = s.in_tx();
+        let (open, changed) = (s.in_tx(), s.tx_changed());
         let (r, undo) = match plan {
             Some(Ok(p)) => {
                 let (snap, r) = s.run_with_snapshot(&p.snapshot, sql, limit).await;
@@ -672,10 +729,11 @@ impl AppState {
             }
             other => (s.run(sql, limit).await, other.and_then(|p| p.err()).map(Err)),
         };
+        let ended = s.tx_ended();
         if sess.is_none() {
             s.discard().await;
         }
-        (r, undo, in_tx)
+        (r, undo, TxSeen { open, changed, ended })
     }
 
     /// Production audit log (newest first)
@@ -692,11 +750,19 @@ impl AppState {
         }
     }
 
-    /// The console's transaction with logged changes ended without a COMMIT (deadlock, failed COMMIT, lost connection): log that the server rolled it back
-    async fn audit_lost_tx(&self, id: &str, name: &str, tab: Option<&str>) -> AppResult<()> {
-        match tab {
-            Some(t) if !self.tx_state(t.into()).await => self.audit.tx_closed(id, name, t, "ROLLBACK (by the server)"),
-            _ => Ok(()),
+    /// The console's transaction with logged changes ended without a COMMIT after `sql` ran: as the MySQL session says the statement
+    /// ended it (`ended`: DDL, SET PASSWORD, BEGIN … committed it; a CALL, deadlock or lock wait timeout either way), else rolled back
+    /// by the server (deadlock, failed COMMIT, lost connection), or a COMMIT cut off by a lost connection has an unknown outcome (audit::ended_by)
+    async fn audit_lost_tx(&self, id: &str, name: &str, tab: Option<&str>, sql: &str, r: &AppResult<QueryResult>, ended: Option<&'static str>) -> AppResult<()> {
+        let Some(t) = tab else { return Ok(()) };
+        let open = self.tx_state(t.into()).await;
+        let word = ended.or(match r {
+            Ok(_) => (!open).then_some(crate::audit::BY_SERVER),
+            Err(e) => crate::audit::ended_by(sql, e, open),
+        });
+        match word {
+            Some(w) => self.audit.tx_closed(id, name, t, w),
+            None => Ok(()),
         }
     }
 
@@ -712,7 +778,15 @@ impl AppState {
             (s.fetch(limit.unwrap_or(500)).await, in_tx)
         };
         match r {
-            Err(e) => Err(recover(self, &conn_id, Some(&tab_id), in_tx, e).await),
+            Err(e) => {
+                let tx = (in_tx && is_conn_lost(&e)).then_some(crate::audit::BY_SERVER);
+                if let Some(w) = tx
+                    && let Err(le) = self.audit_tx_end(&tab_id, w).await
+                {
+                    crate::log!("[qurry] {le}");
+                }
+                Err(recover(self, &conn_id, Some(&tab_id), tx, e).await)
+            }
             ok => ok,
         }
     }
@@ -790,11 +864,14 @@ impl AppState {
         let logged = match &cfg {
             Some(c) => {
                 let a = self.audit.after(started, &conn, &c.name, c.kind, Some(&tab_id), "COMMIT", &r, None);
-                a.and(self.audit_lost_tx(&conn, &c.name, Some(&tab_id)).await)
+                a.and(self.audit_lost_tx(&conn, &c.name, Some(&tab_id), "COMMIT", &r, None).await)
             }
             None => Ok(()),
         };
-        r.map(|_| logged.err().map(|e| e.to_string()))
+        match r {
+            Err(e) => Err(recover(self, &conn, Some(&tab_id), Some(crate::audit::COMMIT_UNKNOWN), e).await),
+            Ok(_) => Ok(logged.err().map(|e| e.to_string())),
+        }
     }
 
     /// → a warning when it rolled back but that couldn't be logged
@@ -860,7 +937,7 @@ impl AppState {
             false => Ok(()),
         };
         match r {
-            Err(e) => Err(recover(self, &id, None, false, e).await),
+            Err(e) => Err(recover(self, &id, None, None, e).await),
             // Committed: a log failure now is a warning, so nobody saves it again
             Ok(rows) => Ok(BatchResult { rows, warning: logged.err().map(|e| e.to_string()) }),
         }
@@ -985,7 +1062,7 @@ impl AppState {
             Ok(())
         })?;
         for (id, _, _) in forget {
-            drop_pool(self, &id).await;
+            drop_pool_logged(self, &id, crate::audit::DISCONNECTED).await;
         }
         Ok(ImportResult { added, updated })
     }

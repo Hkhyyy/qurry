@@ -14,6 +14,9 @@ use std::time::Instant;
 const CURSOR: &str = "dbtool_cur";
 /// When switching from Manual → Auto is blocked
 pub const PENDING_TX: &str = "There are uncommitted changes — commit or roll back first";
+/// A COMMIT of a PostgreSQL transaction an earlier error aborted: the server rolled it back
+const ABORTED_COMMIT: &str =
+    "Not committed: an earlier statement in this transaction failed, so PostgreSQL rolled back the whole transaction and none of its changes were saved. Run the changes again (without the failing statement).";
 
 pub struct PgSession {
     conn: PoolConnection<Postgres>,
@@ -140,6 +143,7 @@ impl PgSession {
 
     pub async fn commit(&mut self) -> AppResult<()> {
         self.close_cursor().await;
+        self.refuse_aborted_commit().await?;
         let r = self.conn.execute("COMMIT").await;
         // A failed COMMIT (e.g. a deferred foreign key) ends the transaction too: PostgreSQL rolls it back
         self.in_tx = false;
@@ -152,6 +156,22 @@ impl PgSession {
         self.conn.execute("ROLLBACK").await?;
         self.in_tx = false;
         Ok(())
+    }
+
+    /// PostgreSQL answers COMMIT of a transaction an error aborted with ROLLBACK, not an error: end it so and say so (an error,
+    /// so the console and the Production log don't read it as committed)
+    async fn refuse_aborted_commit(&mut self) -> AppResult<()> {
+        if !self.in_tx {
+            return Ok(());
+        }
+        match self.conn.execute("SELECT 1").await {
+            Err(sqlx::Error::Database(d)) if d.code().as_deref() == Some("25P02") => {
+                self.conn.execute("ROLLBACK").await?;
+                self.in_tx = false;
+                Err(AppError::Msg(ABORTED_COMMIT.into()))
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Sync the state when the user runs BEGIN / COMMIT / ROLLBACK directly
@@ -181,6 +201,9 @@ impl PgSession {
         if self.manual && !self.in_tx && !strip_comments_lead(sql).starts_with("begin") {
             self.conn.execute("BEGIN").await?;
             self.in_tx = true;
+        }
+        if crate::audit::tx_end(sql) == Some("COMMIT") {
+            self.refuse_aborted_commit().await?;
         }
         if is_select_like(sql) {
             match self.declare(strip_trailing_semicolon(sql)).await {
@@ -352,8 +375,20 @@ pub(crate) async fn pg_snapshot(conn: &mut PgConnection, sql: &str) -> AppResult
         conn.execute("ROLLBACK TO SAVEPOINT qurry_snap").await?;
         r = run_direct_on(conn, &plain, crate::audit::UNDO_MAX_ROWS + 1, Instant::now()).await;
     }
-    conn.execute(if r.is_ok() { "RELEASE SAVEPOINT qurry_snap" } else { "ROLLBACK TO SAVEPOINT qurry_snap" }).await?;
+    end_snapshot(conn, r.is_ok()).await?;
     r
+}
+
+/// Close the snapshot's savepoint: keep what it read (ok) or undo it. A RELEASE that fails (a cancel landing on it) leaves the
+/// transaction aborted: roll back to the savepoint, so the user's transaction goes on as it was
+async fn end_snapshot(conn: &mut PgConnection, ok: bool) -> AppResult<()> {
+    if !ok {
+        conn.execute("ROLLBACK TO SAVEPOINT qurry_snap").await?;
+    } else if let Err(e) = conn.execute("RELEASE SAVEPOINT qurry_snap").await {
+        let _ = conn.execute("ROLLBACK TO SAVEPOINT qurry_snap").await;
+        return Err(e.into());
+    }
+    Ok(())
 }
 
 /// Console tab session (per DB kind)
@@ -438,6 +473,17 @@ impl Session {
             Session::Pg(s) => s.in_tx(),
             Session::My(s) => s.in_tx,
             Session::Redis(_) | Session::Plugin(_) => false,
+        }
+    }
+    /// Whether a change ran in the open MySQL transaction (MySession::changed)
+    pub fn tx_changed(&self) -> bool {
+        matches!(self, Session::My(s) if s.in_tx && s.changed)
+    }
+    /// How the last statement ended the open MySQL transaction by itself (MySession::ended)
+    pub fn tx_ended(&self) -> Option<&'static str> {
+        match self {
+            Session::My(s) => s.ended,
+            _ => None,
         }
     }
     /// On tab close: roll back the open transaction, reset session settings and return the connection to the pool
@@ -698,6 +744,22 @@ mod tests {
     #[ignore]
     async fn pg_failed_snapshot_keeps_the_change() {
         failed_snapshot_keeps_the_change(Pool::Pg(pool().await), "create schema if not exists audit_hardening_s", "drop schema audit_hardening_s cascade").await;
+    }
+
+    /// A RELEASE of the snapshot's savepoint that fails (a cancel landing on it) rolls back to the savepoint, so the user's
+    /// transaction isn't left aborted: it goes on with what it changed before
+    #[tokio::test]
+    #[ignore]
+    async fn pg_failed_release_keeps_the_transaction() {
+        let p = pool().await;
+        let mut c = p.acquire().await.unwrap();
+        c.execute("BEGIN; CREATE TEMP TABLE qurry_release (v int); INSERT INTO qurry_release VALUES (1); SAVEPOINT qurry_snap").await.unwrap();
+        // The transaction is aborted, as a cancel landing on RELEASE leaves it
+        assert!(c.execute("SELECT 1 / 0").await.is_err());
+        assert!(end_snapshot(&mut c, true).await.is_err());
+        let v: i32 = sqlx::query_scalar("SELECT v FROM qurry_release").fetch_one(&mut *c).await.unwrap();
+        assert_eq!(v, 1);
+        c.execute("ROLLBACK").await.unwrap();
     }
 
     /// QURRY_TEST_MY=host:port:user:password:db
