@@ -1161,6 +1161,12 @@ fn popup_key(app: &mut App, k: KeyEvent) {
             KeyCode::Char('n') | KeyCode::Esc => {}
             _ => app.popup = Some(Popup::Confirm { text, on_yes }),
         },
+        Popup::AllowPlaintext { text, on_yes, opened } => match k.code {
+            _ if opened.elapsed() < App::TLS_ASK_GRACE => app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened }),
+            KeyCode::Char('y') | KeyCode::Char('Y') => on_yes(app),
+            KeyCode::Char('n') | KeyCode::Esc => {}
+            _ => app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened }),
+        },
         Popup::Input { title, body, mut input, on_ok, words, mut complete } => {
             // If the autocomplete list is open: ↑↓ select · Tab/Enter insert · Esc close
             if let Some((items, sel, prefix)) = &mut complete {
@@ -1272,6 +1278,13 @@ fn popup_key(app: &mut App, k: KeyEvent) {
                                     f.message = Some(match r {
                                         Ok(v) => (true, format!("✓ {v}")),
                                         Err(e) if e.contains(qurry_core::tunnel::UNKNOWN_HOST) => (false, format!("✕ {e} Press ⌃y to trust it.")),
+                                        // The GUI dialog's Allow button, as a field to turn on: select it (the form only changes when Space is pressed)
+                                        Err(e) if qurry_shared::errors::tls_opt_in(&e) => {
+                                            if let Some(i) = f.fields.iter().position(|x| x.label == "Allow unencrypted") {
+                                                f.sel = i;
+                                            }
+                                            (false, format!("✕ {e}\nOn a trusted network, Space turns on \"Allow unencrypted\" (selected), then ⌃t tests again."))
+                                        }
                                         Err(e) => (false, format!("✕ {e}")),
                                     });
                                 }

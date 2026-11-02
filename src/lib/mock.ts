@@ -6,7 +6,19 @@ const conns = [
   { id: "my", name: "[MySQL] shop", kind: "mysql", host: "127.0.0.1", port: 13306, user: "root", database: "shop", color: "#22524f", hasPassword: true, connected: true, options: { confirmChanges: true } },
   { id: "rd", name: "[Redis] cache", kind: "redis", host: "127.0.0.1", port: 16379, user: "", database: "0", color: "#6e2a2a", hasPassword: false, connected: true },
   { id: "local", name: "[LOCAL] TestServer", kind: "postgres", host: "localhost", port: 5432, user: "dev", database: "", color: null, hasPassword: false, connected: false },
+  // A remote server without TLS: connects only after allow_plaintext. window.__mockLanProd (set before load) makes it Production
+  { id: "lan", name: "LAN dev", kind: "postgres", host: "10.0.0.12", port: 5432, user: "dev", database: "lan_app", color: null, hasPassword: true, connected: false, options: { confirmChanges: !!(globalThis as any).__mockLanProd, allowPlaintext: false } },
 ];
+// The core's NEEDS_TLS for PostgreSQL (qurry_shared::errors::needs_tls_pg); the GUI recognises it through wasm tlsOptIn
+const NEEDS_TLS =
+  'This server didn\'t set up an encrypted (TLS) connection, so Qurry didn\'t send the password. If it\'s an old server and the network is trusted, turn on "Allow unencrypted connection" for this data source (GUI: Options tab · TUI: data source form, "Allow unencrypted").\n(error communicating with database: TLS required)';
+const lan: any = conns.find((c) => c.id === "lan");
+// What the TLS e2e test counts
+const tls = ((globalThis as any).__mockTls = { allow: 0, runs: 0, saves: 0 });
+/** Throws NEEDS_TLS for "LAN dev" targets (id or id::db) until plain text is allowed */
+const lanCheck = (id: unknown) => {
+  if (String(id).split("::")[0] === "lan" && !lan.options.allowPlaintext) throw NEEDS_TLS;
+};
 const result = {
   columns: [
     { name: "id", typeName: "INT8" },
@@ -26,8 +38,9 @@ let updateChannel = "stable";
 /** Whether check_update ran (the real app then has a saved check that a channel switch answers from) */
 let updateChecked = false;
 const handlers: Record<string, (a: any) => unknown> = {
-  list_connections: () => conns,
-  list_databases: (a: any) => (a.id === "rd" ? ["db0", "db3"] : a.id === "my" ? ["information_schema", "mysql", "shop", "sys"] : ["postgres", "shop_app", "shop_app_test"]),
+  // A copy, as from the backend: state that holds the last list must see a change (Allow unencrypted, connect) as a new list
+  list_connections: () => structuredClone(conns),
+  list_databases: (a: any) => (lanCheck(a.id), a.id === "lan" ? ["lan_app"] : a.id === "rd" ? ["db0", "db3"] : a.id === "my" ? ["information_schema", "mysql", "shop", "sys"] : ["postgres", "shop_app", "shop_app_test"]),
   redis_scan: (a: any) => ({
     cursor: "0",
     keys: [
@@ -127,11 +140,11 @@ const handlers: Record<string, (a: any) => unknown> = {
       : a.req.column === "amount" ? [{ value: "1000", count: 7 }, { value: "2500", count: 3 }]
       : [{ value: "k0", count: 15 }, { value: "k1", count: 15 }],
   run_query: (a: any) =>
-    /^EXPLAIN/i.test(a.sql)
+    (String(a.id).startsWith("lan") && (tls.runs++, lanCheck(a.id)), /^EXPLAIN/i.test(a.sql)
       ? { ...result, columns: [{ name: "QUERY PLAN", typeName: "JSON" }], rows: [[JSON.stringify([{ Plan: { "Node Type": "Hash Join", "Join Type": "Inner", "Startup Cost": 1.5, "Total Cost": 45.2, "Plan Rows": 120, "Plan Width": 64, "Hash Cond": "(u.contract_id = c.id)", Plans: [{ "Node Type": "Seq Scan", "Relation Name": "users", Schema: "public", Alias: "u", "Startup Cost": 0, "Total Cost": 22.1, "Plan Rows": 1200, "Plan Width": 40 }, { "Node Type": "Hash", "Startup Cost": 1.2, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24, Plans: [{ "Node Type": "Index Scan", "Relation Name": "contracts", "Index Name": "contracts_pkey", "Startup Cost": 0.1, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24 }] }] } }])]], truncated: false }
       : /^\s*(insert|update|delete)/i.test(a.sql)
         ? { ...result, columns: [], rows: [], rowsAffected: 3, truncated: false, hasResultSet: false, inTransaction: (globalThis as any).__mockManual === true }
-        : { ...result, inTransaction: (globalThis as any).__mockManual === true },
+        : { ...result, inTransaction: (globalThis as any).__mockManual === true }),
   set_tx_mode: (a: any) => { (globalThis as any).__mockManual = a.manual; return null; },
   // e2e sets __mockCommitError for a COMMIT that fails (e.g. the connection lost while committing)
   commit_tx: () => {
@@ -149,8 +162,24 @@ const handlers: Record<string, (a: any) => unknown> = {
   rag_search: () => ({ ...result, columns: [{ name: "score", typeName: "FLOAT8" }, ...result.columns], rows: result.rows.slice(0, 5).map((r, i) => [0.91 - i * 0.07, ...r]), truncated: false }),
   similar_rows_sql: (a: any) => `SELECT ${a.column} <-> (SELECT ${a.column} FROM ${a.schema}.${a.table} WHERE ${a.pk.map((p: any) => `${p[0]} = '${p[1]}'`).join(" AND ")}) AS distance, *\nFROM ${a.schema}.${a.table}\nORDER BY distance\nLIMIT 20`,
   object_ddl: (a: any) => `CREATE TABLE ${a.schema}.${a.name}\n(\n    id bigint DEFAULT nextval('users_id_seq'::regclass) NOT NULL,\n    user_name character varying(50) NOT NULL,\n    CONSTRAINT users_pkey PRIMARY KEY (id)\n);\n`,
-  test_connection: () => "PostgreSQL 16.11  (via SSH ec2-user@bastion.example.com)",
+  test_connection: (a: any) => {
+    if (a.config.host === lan.host && !a.config.options?.allowPlaintext) throw NEEDS_TLS;
+    return "PostgreSQL 16.11  (via SSH ec2-user@bastion.example.com)";
+  },
+  connect: (a: any) => {
+    lanCheck(a.id);
+    const c: any = conns.find((c) => c.id === a.id);
+    if (c) c.connected = true;
+    return "PostgreSQL 16.11 on mock";
+  },
+  allow_plaintext: () => {
+    if (lan.options.confirmChanges) throw `"${lan.name}" is a Production data source, so Qurry won't turn off encryption for it from here.`;
+    tls.allow++;
+    lan.options = { ...lan.options, allowPlaintext: true };
+    return lan;
+  },
   save_connection: (a: any) => {
+    tls.saves++;
     const i = conns.findIndex((c: any) => c.id === a.config.id);
     if (i >= 0) (conns as any)[i] = { ...conns[i], ...a.config };
     return a.config;

@@ -60,6 +60,10 @@ fn contains_ci(hay: &str, lower_needle: &str) -> bool {
 }
 
 impl Tree {
+    /// The node's children are only the error its load ended with (load_children): expanding it again loads again
+    pub fn failed(&self, key: &str) -> bool {
+        self.children.get(key).is_some_and(|n| n.len() == 1 && n[0].kind == NodeKind::Info)
+    }
     /// Lines visible on screen: (depth, node)
     pub fn visible(&self) -> Vec<(usize, &Node)> {
         let mut out = Vec::new();

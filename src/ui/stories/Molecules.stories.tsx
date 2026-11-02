@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useState } from "react";
-import { Badge, Checkbox, ColorPicker, DetailRow, EmptyState, Field, FormSection, Hint, Kbd, KeyHints, ListItem, MenuItem, MenuLabel, MenuSeparator, Notice, RadioGroup, RailItem, SearchField, SectionTitle, Select, StatusItem, TabItem, Tabs, Text, TextInput, TreeRow } from "..";
+import { Badge, Checkbox, ColorPicker, DetailRow, EmptyState, Field, FormSection, Hint, Kbd, KeyHints, ListItem, MenuItem, MenuLabel, MenuSeparator, Notice, RadioGroup, RailItem, SearchField, SectionTitle, Select, StatusItem, TabItem, Tabs, Text, TextInput, TlsOptIn, TreeRow } from "..";
 import { DatabaseIcon, FolderIcon, PgIcon, SchemaIcon, TableIcon } from "../icons";
 
 /** Molecules: a row · cell made of a few atoms */
@@ -143,6 +143,40 @@ export const DetailRows: S = {
         create table refunds(id int)
       </DetailRow>
     </div>
+  ),
+};
+
+/** Under a connect error that needs TLS (tree status, console Output, table tab, Test Connection). The click resolves after a second here */
+const TLS_ERROR = "This server didn't set up an encrypted (TLS) connection, so Qurry didn't send the password. If it's an old server and the network is trusted, turn on \"Allow unencrypted connection\" for this data source (GUI: Options tab · TUI: data source form, \"Allow unencrypted\").";
+const slow = () => new Promise((r) => setTimeout(r, 1000));
+export const TlsOptInDev: S = {
+  name: "TlsOptIn · dev",
+  render: () => (
+    <Frame width={420}>
+      <div className="tree-status err" style={{ paddingLeft: 24 }}>
+        {TLS_ERROR}
+        <TlsOptIn host="10.0.0.12" onAllow={slow} />
+      </div>
+      <div className="tree-status err" style={{ paddingLeft: 24 }}>
+        The allow step itself failed:
+        <TlsOptIn host="10.0.0.12" onAllow={() => slow().then(() => Promise.reject("Data source not found"))} />
+      </div>
+    </Frame>
+  ),
+};
+export const TlsOptInProduction: S = {
+  name: "TlsOptIn · Production",
+  render: () => (
+    <Frame width={420}>
+      <div className="tree-status err" style={{ paddingLeft: 24 }}>
+        {TLS_ERROR}
+        <TlsOptIn host="prod-db.internal" production onAllow={slow} />
+      </div>
+      <Notice tone="danger">
+        In Data Source Properties (inDialog): the Options tab is right there
+        <TlsOptIn host="prod-db.internal" production inDialog onAllow={slow} />
+      </Notice>
+    </Frame>
   ),
 };
 

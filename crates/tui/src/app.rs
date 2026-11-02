@@ -310,6 +310,9 @@ pub enum Popup {
     /// body = app-written explanation shown in a box under the input (never interpolated names, so a name can't pose as it)
     Input { title: String, body: String, input: TextArea<'static>, on_ok: Box<dyn FnOnce(&mut App, String)>, words: Vec<String>, complete: Option<(Vec<String>, usize, usize)> },
     Confirm { text: String, on_yes: Box<dyn FnOnce(&mut App)> },
+    /// The TLS opt-in (offer_tls_opt_in). It opens on its own when a background load fails, so only a y pressed once it has been on screen
+    /// for TLS_ASK_GRACE allows plaintext: never Enter, never a key that was meant for the editor or the tree
+    AllowPlaintext { text: String, on_yes: Box<dyn FnOnce(&mut App)>, opened: std::time::Instant },
     Palette(Palette),
     ConnForm(ConnForm),
     /// Manage Shown Schemas (DBs·schemas shown in the tree)
@@ -853,6 +856,10 @@ impl App {
             self.tree.expanded.remove(&n.key);
         } else {
             self.tree.expanded.insert(n.key.clone());
+            // An error from the last load isn't cached: expanding again tries again (and asks about TLS again)
+            if self.tree.failed(&n.key) {
+                self.tree.children.remove(&n.key);
+            }
             self.load_children(n.clone());
             // If the connection fell back to plaintext, say so in the status bar (same wording as the GUI)
             if matches!(n.kind, NodeKind::Conn) && matches!(self.kind_of(&n.conn), DbKind::Postgres | DbKind::Mysql) {
@@ -869,6 +876,83 @@ impl App {
         self.tree.clamp();
     }
 
+    /// Load a node's children again (after the driver was installed or unencrypted was allowed)
+    pub(crate) fn reexpand(&mut self, key: &str) {
+        self.tree.children.remove(key);
+        self.tree.expanded.remove(key);
+        if let Some(n) = self.tree.visible().into_iter().map(|(_, n)| n).find(|n| n.key == key).cloned() {
+            self.toggle_node(&n);
+        }
+    }
+
+    // ───────── TLS opt-in ─────────
+
+    /// Keys pressed this soon after the opt-in popup opened were meant for what was on screen before it: they are ignored
+    pub(crate) const TLS_ASK_GRACE: std::time::Duration = std::time::Duration::from_millis(400);
+
+    /// A connect error that needs TLS (qurry_shared::errors::tls_opt_in): ask to allow unencrypted for this data source, then `then` (expand
+    /// again, or reconnect). Never for Production (the core refuses too): the status line says where the setting is instead
+    pub(crate) fn offer_tls_opt_in(&mut self, conn: &str, err: &str, then: impl FnOnce(&mut App) + Send + 'static) {
+        if !qurry_shared::errors::tls_opt_in(err) {
+            return;
+        }
+        let Some(c) = self.conn(conn).map(|c| c.config.clone()) else { return };
+        // Short enough for the status line next to the key hints on a 120-column terminal
+        if c.options.confirm_changes {
+            self.status = format!("\"{}\" is Production: turn on \"Allow unencrypted\" yourself in its form (e in the explorer)", c.name);
+            return;
+        }
+        // This comes back from a background load: never replace a popup the user is reading (a y meant for it would allow plaintext)
+        if self.popup.is_some() {
+            self.status = format!("\"{}\": the server has no TLS — expand it again (← →) or run again to allow unencrypted", c.name);
+            return;
+        }
+        self.popup = Some(Popup::AllowPlaintext {
+            opened: std::time::Instant::now(),
+            // It can open over another tab or source: name the one y changes
+            text: format!("Allow unencrypted for \"{}\"?\n\nThe password will be sent unencrypted to {}. Use only on a network you trust.\nTo undo, turn off \"Allow unencrypted\" in the data source form (e in the explorer).", c.name, c.host),
+            on_yes: Box::new(move |a| {
+                a.status = format!("Allowing unencrypted for \"{}\"…", c.name);
+                let st = a.state.clone();
+                a.spawn(async move { st.allow_plaintext(c.id).await.map_err(|e| e.to_string()) }, move |a, r| match r {
+                    Ok(cfg) => {
+                        a.status = format!("Allowed unencrypted for \"{}\" (to undo, turn off \"Allow unencrypted\" in its data source form)", cfg.name);
+                        // The form edits this copy: keep it in step with the store
+                        if let Some(v) = a.conns.iter_mut().find(|v| v.config.id == cfg.id) {
+                            v.config = cfg;
+                        }
+                        then(a);
+                    }
+                    Err(e) => a.status = e,
+                });
+            }),
+        });
+    }
+
+    /// After the TLS opt-in under a run error: only reconnect. A console never runs the statement again (it may write); a table tab reloads
+    /// once connected, as after any failed connection (reload_conns)
+    fn reconnect_after_tls(&mut self, conn: String, console: Option<u64>) {
+        let st = self.state.clone();
+        self.status = format!("Connecting to \"{}\"…", self.conn(&conn).map(|c| c.config.name.as_str()).unwrap_or(&conn));
+        let id = conn.clone();
+        self.spawn(async move { st.connect(id).await.map_err(|e| e.to_string()) }, move |a, r| {
+            let msg = match &r {
+                Ok(_) if console.is_some() => "Connected. Run again.".to_string(),
+                Ok(_) => "Connected".to_string(),
+                Err(e) => format!("Connection failed: {e}"),
+            };
+            if let Some(TabKind::Console(c)) = console.and_then(|id| a.tab_mut(id)).map(|t| &mut t.kind) {
+                c.log(r.is_err(), msg.clone());
+            }
+            a.status = msg;
+            a.reload_conns();
+            // A tree that still shows the earlier error under the now connected source loads again (as the GUI does)
+            if r.is_ok() && a.tree.failed(&conn) {
+                a.reexpand(&conn);
+            }
+        });
+    }
+
     pub fn load_children(&mut self, n: Node) {
         let key = n.key.clone();
         if self.tree.children.contains_key(&key) || self.tree.loading.contains(&key) {
@@ -879,6 +963,7 @@ impl App {
         let conn = n.conn.clone();
         let kind = self.kind_of(&conn);
         let cfg = self.conn(&conn).map(|c| c.config.clone());
+        let conn_id = conn.clone();
         let done = move |a: &mut App, key: String, r: Result<Vec<Node>, String>| {
             a.tree.loading.remove(&key);
             match r {
@@ -897,18 +982,15 @@ impl App {
                                 a.spawn(async move { qurry_core::plugin::install(d).await.map_err(|e| e.to_string()) }, move |a, r| match r {
                                     Ok(_) => {
                                         a.status = format!("{d} driver installed");
-                                        a.tree.children.remove(&k2);
-                                        a.tree.expanded.remove(&k2);
-                                        if let Some(n) = a.tree.roots.iter().find(|n| n.key == k2).cloned() {
-                                            a.toggle_node(&n);
-                                        }
+                                        a.reexpand(&k2);
                                     }
                                     Err(e) => a.status = e,
                                 });
                             }),
                         });
                     }
-                    a.status = if e.contains(qurry_core::tunnel::UNKNOWN_HOST) { format!("{e} — ⌃k › Trust SSH Host Key") } else { e };
+                    a.status = if e.contains(qurry_core::tunnel::UNKNOWN_HOST) { format!("{e} — ⌃k › Trust SSH Host Key") } else { e.clone() };
+                    a.offer_tls_opt_in(&conn_id, &e, move |a| a.reexpand(&key));
                 }
             }
             a.tree.clamp();
@@ -1505,6 +1587,7 @@ impl App {
             move |a, (pk, cols, r)| {
                 // A table opened from the search cache was just connected: sync the explorer display
                 let conn = a.tab_mut(id).map(|t| t.conn.clone()).unwrap_or_default();
+                let tls_err = r.as_ref().err().cloned();
                 let fresh = r.is_ok() && a.conn(&conn).is_some_and(|c| !c.connected);
                 if fresh {
                     a.reload_conns();
@@ -1543,6 +1626,9 @@ impl App {
                         tt.error = Some(e.clone());
                         a.status = e;
                     }
+                }
+                if let Some(e) = tls_err {
+                    a.offer_tls_opt_in(&conn.clone(), &e, move |a| a.reconnect_after_tls(conn, None));
                 }
             },
         );
@@ -1975,6 +2061,7 @@ impl App {
                 let mut committed = 0;
                 let mut warned = 0;
                 let mut failed = false;
+                let mut tls_err = None;
                 let ddl = out.iter().any(|(s, r, dry)| r.is_ok() && !dry && !explain && qurry_core::guard::is_ddl(s, kind));
                 for (i, (s, r, dry)) in out.into_iter().enumerate() {
                     if r.is_ok() {
@@ -2031,6 +2118,7 @@ impl App {
                         }
                         Err(e) => {
                             c.log(true, e.clone());
+                            tls_err = Some(e.clone());
                             if committed > 0 {
                                 c.log(true, format!("Note: {committed} earlier statement(s) of this run were already committed (Auto mode) and were not rolled back"));
                             }
@@ -2051,6 +2139,10 @@ impl App {
                 // Even on error the session may have an open transaction (e.g. first Manual statement failed) → sync the Commit/Roll back display
                 if failed {
                     a.sync_tx(id);
+                }
+                if let Some(e) = tls_err {
+                    let conn = hist_conn.clone();
+                    a.offer_tls_opt_in(&hist_conn, &e, move |a| a.reconnect_after_tls(conn, Some(id)));
                 }
             },
         );

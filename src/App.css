@@ -226,7 +226,7 @@ button.small { padding: 1px 8px; font-size: 12px; font-weight: 400; }
 .tree-node.conn { font-weight: 600; }
 .tree-node .node-sub { font-weight: 400; }
 .tree-status { color: var(--muted); font-size: 12px; padding: 3px 0; }
-.tree-status.err { color: var(--danger); white-space: normal; padding-right: 10px; }
+.tree-status.err { color: var(--danger); white-space: normal; padding-right: 10px; width: 0; min-width: 100%; box-sizing: border-box; } /* wraps at the tree's width instead of widening it */
 
 .grid-wrap { position: absolute; inset: 0; display: flex; flex-direction: column; }
 .grid-wrap .grid-scroll { position: relative; inset: auto; flex: 1; min-height: 0; }

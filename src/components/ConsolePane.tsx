@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { ReactNode, useEffect, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { QueryResult, Dialect, DbKind } from "../lib/api";
 import { splitScript } from "../lib/sqlSplit";
@@ -111,6 +111,8 @@ interface Props {
   schemaSwitchDisabled?: boolean;
   registerApi: (tabId: string, api: ConsoleApi) => void;
   onClearOutput: () => void;
+  /** Under the Output log: a way out of its last error (the TLS opt-in), or nothing */
+  errorAction?: ReactNode;
   /** The run couldn't start (the statement splitter failed): show why in Output */
   onError: (message: string) => void;
   /** A ⌘↩ started or stopped waiting for the module (the status bar's Run · Cancel follow it) */
@@ -379,6 +381,7 @@ export function ConsolePane(p: Props) {
                       <span className="ts">[{l.ts}]</span> {l.text}
                     </div>
                   ))}
+                  {p.errorAction}
                 </div>
               )}
               {active?.kind === "result" && active.result && (

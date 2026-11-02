@@ -11,7 +11,8 @@
         "prod",
         "my",
         "rd",
-        "local"
+        "local",
+        "lan"
       ],
       "tabs": [
         {
