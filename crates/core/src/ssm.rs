@@ -376,6 +376,11 @@ sys.exit(255)
             ("\nThe config profile (dev) could not be found\n", "isn't in your AWS config"),
             ("\nYou must specify a region. You can also configure your region by running \"aws configure\".\n", "No AWS region"),
             ("\nAn error occurred (InvalidInstanceId) when calling the StartSession operation: \n", "failed: An error occurred (InvalidInstanceId)"),
+            // aws-cli 2.x on this machine, without credentials / config
+            ("aws: [ERROR]: Error loading SSO Token: Token for my-sso does not exist\n", "Run: aws sso login --profile dev"),
+            ("aws: [ERROR]: An error occurred (NoCredentials): Unable to locate credentials. You can configure credentials by running \"aws login\".\n", "found no credentials"),
+            ("aws: [ERROR]: The config profile (nope) could not be found\n", "isn't in your AWS config"),
+            ("aws: [ERROR]: An error occurred (NoRegion): You must specify a region. You can also configure your region by running \"aws configure\".\n", "No AWS region"),
         ];
         for (out, want) in cases {
             let e = explain(out, &c);
@@ -406,7 +411,7 @@ sys.exit(255)
         let path = std::env::join_paths(std::iter::once(fake.path().to_path_buf()).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()))).unwrap();
         unsafe { std::env::set_var("PATH", path) };
         let dir = tempfile::tempdir().unwrap();
-        let st = crate::app::AppState::new(crate::store::Store::new(dir.path().to_path_buf()), crate::secrets::SecretFile::open(dir.path()).unwrap());
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
         let mut c: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "ssm", "kind": "postgres", "host": pg[0], "port": pg[1].parse::<u16>().unwrap(), "user": pg[2], "database": pg[3] })).unwrap();
         c.ssm = Some(cfg());
         let msg = st.test_connection(c.clone(), None, None).await.expect("test via ssm");
