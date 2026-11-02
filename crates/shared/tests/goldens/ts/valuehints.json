@@ -342,17 +342,7 @@
     "hintContext": null
   },
   "keyword-from": {
-    "hintContext": {
-      "ref": null,
-      "column": "from",
-      "path": [],
-      "mode": "values",
-      "quoted": true,
-      "typed": "",
-      "op": null
-    },
-    "hintInsert": "x",
-    "hintable": true
+    "hintContext": null
   },
   "keyword-and": {
     "hintContext": null
@@ -384,7 +374,17 @@
     "hintable": true
   },
   "korean-column": {
-    "hintContext": null
+    "hintContext": {
+      "ref": null,
+      "column": "상태",
+      "path": [],
+      "mode": "values",
+      "quoted": true,
+      "typed": "",
+      "op": null
+    },
+    "hintInsert": "완료😀",
+    "hintable": true
   },
   "array-column": {
     "hintContext": {

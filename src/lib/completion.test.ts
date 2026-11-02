@@ -3,9 +3,9 @@
  * crates/shared/tests/goldens/completion/gui.json. `UPDATE_GOLDENS=1 npx vitest run src/lib/completion.test.ts` rewrites the golden.
  * The TUI side of the same corpus is checked in crates/shared (goldens/completion/tui.json).
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import corpus from "../../crates/shared/tests/corpus/suggest.json";
+import golden from "../../crates/shared/tests/goldens/completion/gui.json";
 
 const providers = vi.hoisted(() => new Map<string, any>());
 vi.mock("./monaco", () => {
@@ -87,7 +87,8 @@ async function complete(c: Case, i: number) {
 }
 
 /** One suggestion per line, so a diff of the golden shows which ones changed */
-const format = (out: Record<string, { hintRequests: unknown[]; suggestions: unknown[] }>) =>
+type Out = Record<string, { hintRequests: unknown[]; suggestions: unknown[] }>;
+const format = (out: Out) =>
   "{\n" +
   Object.entries(out)
     .map(([id, o]) => `  ${JSON.stringify(id)}: {\n    "hintRequests": ${JSON.stringify(o.hintRequests)},\n    "suggestions": [${o.suggestions.map((s) => "\n      " + JSON.stringify(s)).join(",")}${o.suggestions.length ? "\n    " : ""}]\n  }`)
@@ -96,11 +97,12 @@ const format = (out: Record<string, { hintRequests: unknown[]; suggestions: unkn
 
 describe("console completion (GUI)", () => {
   it("matches the golden for every corpus case", async () => {
-    const golden = new URL("../../crates/shared/tests/goldens/completion/gui.json", import.meta.url);
-    const out: Record<string, unknown> = {};
+    const out: Out = {};
     for (const [i, c] of (corpus.cases as Case[]).entries()) out[c.id] = await complete(c, i);
-    if (process.env.UPDATE_GOLDENS) writeFileSync(golden, format(out));
-    expect(existsSync(golden), "missing golden: run with UPDATE_GOLDENS=1").toBe(true);
-    expect(out).toEqual(JSON.parse(readFileSync(golden, "utf8")));
+    if (import.meta.env.UPDATE_GOLDENS) {
+      const fs: { writeFileSync(p: URL, s: string): void } = await import("node:" + "fs");
+      return fs.writeFileSync(new URL("../../crates/shared/tests/goldens/completion/gui.json", import.meta.url), format(out));
+    }
+    expect(out).toEqual(golden);
   });
 });

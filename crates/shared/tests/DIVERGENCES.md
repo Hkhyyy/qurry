@@ -18,11 +18,9 @@ Inputs are in `corpus/` (ids as listed); `‸` in a corpus text is the cursor. O
 | sql › planExecution(outside:below) | 15 | 0 | 0 | 0 |
 | statements › isReadStmt | 32 | 2 | 0 | 0 |
 | statements › DDL_RE | 32 | 1 | 0 | 0 |
-| completion › tablesInStatement | 15 | 3 | 0 | 0 |
-| completion › findTable | 26 | 2 | 0 | 0 |
-| valuehints › hintContext | 39 | 2 | 0 | 0 |
-| valuehints › hintInsert | 31 | 0 | 1 | 1 |
-| valuehints › hintable | 31 | 0 | 1 | 1 |
+| valuehints › hintContext | 39 | 0 | 0 | 0 |
+| valuehints › hintInsert | 32 | 0 | 0 | 0 |
+| valuehints › hintable | 32 | 0 | 0 | 0 |
 | valuehints › pairsForKeys | 7 | 0 | 0 | 0 |
 | results › numericColumns | 10 | 0 | 0 | 0 |
 | results › defaultAxes | 10 | 0 | 0 | 0 |
@@ -67,13 +65,6 @@ TS only / Rust only: inputs where only one side has that function (no counterpar
 | statements | ` word-in-string ` | isReadStmt | ` false ` | ` true ` |
 | statements | ` hash-comment-truncate ` | DDL_RE | ` false ` | ` true ` |
 | statements | ` paren-select ` | isReadStmt | ` false ` | ` true ` |
-| completion | ` korean-table ` | tablesInStatement | ` [] ` | ` [{"alias":null,"ref":"주문"}] ` |
-| completion | ` korean-table ` | findTable | ` [] ` | ` ["sales.주문"] ` |
-| completion | ` newline-join-using ` | tablesInStatement | ` [{"alias":null,"ref":"users"}] ` | ` [{"alias":null,"ref":"users"},{"alias":"o2","ref":"orders"}] ` |
-| completion | ` newline-join-using ` | findTable | ` ["public.users"] ` | ` ["public.users","public.orders"] ` |
-| completion | ` korean-alias ` | tablesInStatement | ` [{"alias":null,"ref":"orders"}] ` | ` [{"alias":"주","ref":"orders"}] ` |
-| valuehints | ` keyword-from ` | hintContext | ` {"column":"from","mode":"values","op":null,"path":[],"quoted":true,"ref":null,"typed":""} ` | ` null ` |
-| valuehints | ` korean-column ` | hintContext | ` null ` | ` {"column":"상태","mode":"values","op":null,"path":[],"quoted":true,"ref":null,"typed":""} ` |
 | results | ` inlist-mix ` | inList | ` "(('010', 12345678901234567890, true, 1.50), ('a''b', -3, false, 'NaN'), ('x', 1e5, NULL, -0.5), ('y', '+4', true, '.5'))" ` | ` "(('010', 12345678901234567890, true, 1.50), ('a''b', -3, false, 'NaN'), ('x', 1e5, NULL, -0.5), ('y', +4, true, .5))" ` |
 | results | ` inlist-mix ` | inList(column) | ` {"code":"('010', 'a''b', 'x', 'y')","flag":"(true, false)","n":"(12345678901234567890, -3, 1e5, '+4')","price":"(1.50, 'NaN', -0.5, '.5')"} ` | ` {"code":"('010', 'a''b', 'x', 'y')","flag":"(true, false)","n":"(12345678901234567890, -3, 1e5, +4)","price":"(1.50, 'NaN', -0.5, .5)"} ` |
 | rediskeys | ` korean-emoji ` | keyTree | ` [{"children":[{"key":"사용자:1"},{"key":"사용자:2"}],"count":2,"folder":"사용자","path":"사용자"},{"children":[{"key":"😀:x"}],"count":1,"folder":"😀","path":"😀"},{"children":[{"key":"！:x"}],"count":1,"folder":"！","path":"！"},{"key":"키"}] ` | ` [{"children":[{"key":"사용자:1"},{"key":"사용자:2"}],"count":2,"folder":"사용자","path":"사용자"},{"children":[{"key":"！:x"}],"count":1,"folder":"！","path":"！"},{"children":[{"key":"😀:x"}],"count":1,"folder":"😀","path":"😀"},{"key":"키"}] ` |

@@ -8,7 +8,6 @@
 import { describe, it, vi } from "vitest";
 import { dialectOf, type Cell, type DbKind, type QueryResult } from "./api";
 import { buildChart, COUNT, defaultAxes, niceTicks, numericColumns, shortNumber } from "./chart";
-import { findTable, tablesInStatement } from "./completion";
 import { DEFAULT_EXEC, planExecution, type ExecPlan, type ExecSettings } from "./execPlan";
 import { EXTRACTORS, extractRows, type Extractor } from "./extract";
 import { fuzzyScore } from "./fuzzy";
@@ -23,7 +22,6 @@ import { autoMap } from "./transfer";
 import { hintable, hintContext, hintInsert, pairsForKeys } from "./valueHint";
 import sqlCorpus from "../../crates/shared/tests/corpus/sql.json";
 import stmtCorpus from "../../crates/shared/tests/corpus/statements.json";
-import completionCorpus from "../../crates/shared/tests/corpus/completion.json";
 import hintCorpus from "../../crates/shared/tests/corpus/valuehints.json";
 import resultCorpus from "../../crates/shared/tests/corpus/results.json";
 import numberCorpus from "../../crates/shared/tests/corpus/numbers.json";
@@ -33,8 +31,6 @@ import columnCorpus from "../../crates/shared/tests/corpus/columns.json";
 import specCorpus from "../../crates/shared/tests/corpus/keyspecs.json";
 import fuzzyCorpus from "../../crates/shared/tests/corpus/fuzzy.json";
 
-// completion.ts registers Monaco providers on import; only its pure helpers are dumped
-vi.mock("./monaco", () => ({ monaco: { languages: { registerCompletionItemProvider: () => ({}) } } }));
 // shortcuts.ts reads navigator.platform on import: pin macOS so the goldens are the same on every host (parity_dump.rs uses disp_mac)
 vi.hoisted(() => vi.stubGlobal("navigator", { platform: "MacIntel" }));
 
@@ -78,21 +74,6 @@ function sqlGolden(): Golden {
 
 function stmtGolden(): Golden {
   return Object.fromEntries(stmtCorpus.map((e) => [e.id, { isReadStmt: isReadStmt(e.sql), DDL_RE: DDL_RE.test(e.sql) }]));
-}
-
-function completionGolden(): Golden {
-  const all = completionCorpus.tables as { schema: string; name: string; columns: [string, string][] }[];
-  const found = (ref: string) => {
-    const t = findTable(all, ref);
-    return t ? `${t.schema}.${t.name}` : null;
-  };
-  const out: Golden = {};
-  for (const c of completionCorpus.cases) {
-    const refs = tablesInStatement(c.text);
-    out[c.id] = { tablesInStatement: refs.map((r) => ({ ref: r.ref, alias: r.alias ?? null })), findTable: refs.map((r) => found(r.ref)) };
-  }
-  for (const r of completionCorpus.refs) out[`ref:${r}`] = { findTable: found(r) };
-  return out;
 }
 
 function hintGolden(): Golden {
@@ -191,7 +172,7 @@ function fuzzyGolden(): Golden {
 const GOLDENS: Record<string, () => Golden> = {
   sql: sqlGolden,
   statements: stmtGolden,
-  completion: completionGolden,
+  // completion: the GUI runs qurry_shared::complete through WASM (src/lib/completion.test.ts and goldens/completion/ check both front ends)
   valuehints: hintGolden,
   results: resultGolden,
   numbers: numberGolden,
