@@ -198,9 +198,8 @@ mod tests {
     #[ignore]
     async fn pg_values_and_keys() {
         use sqlx::Executor;
-        let env = std::env::var("QURRY_TEST_PG").unwrap();
-        let s: Vec<&str> = env.split(':').collect();
-        let p = sqlx::PgPool::connect(&format!("postgres://{}@{}:{}/{}", s[2], s[0], s[1], s[3])).await.unwrap();
+        let Some(s) = crate::testenv::pg() else { return };
+        let crate::db::Pool::Pg(p) = crate::db::connect(&s.cfg, s.password.as_deref()).await.unwrap() else { unreachable!() };
         p.execute("drop table if exists public.hint_t; create table public.hint_t (id int, status text, data jsonb); \
                    insert into public.hint_t select g, case when g % 3 = 0 then 'paid' else 'ready' end, jsonb_build_object('kind', 'k' || (g % 2), 'meta', jsonb_build_object('src', 'web')) from generate_series(1, 30) g")
             .await
@@ -246,10 +245,9 @@ mod tests {
     #[ignore]
     async fn mysql_values_and_keys() {
         use sqlx::Executor;
-        let env = std::env::var("QURRY_TEST_MY").unwrap();
-        let s: Vec<&str> = env.split(':').collect();
-        let db = s[4].to_string();
-        let p = sqlx::MySqlPool::connect(&format!("mysql://{}:{}@{}:{}/{db}?ssl-mode=disabled", s[2], s[3], s[0], s[1])).await.unwrap();
+        let Some(s) = crate::testenv::my() else { return };
+        let db = s.cfg.database.clone();
+        let crate::db::Pool::My(p) = crate::db::connect(&s.cfg, s.password.as_deref()).await.unwrap() else { unreachable!() };
         p.execute("drop table if exists hint_t").await.unwrap();
         p.execute("create table hint_t (id int, status varchar(20), data json)").await.unwrap();
         for g in 1..=30 {

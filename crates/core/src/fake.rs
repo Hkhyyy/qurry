@@ -611,22 +611,17 @@ mod tests {
 
     // ───────── Real server ─────────
 
-    async fn state(kind: DbKind, env: &str) -> Option<AppState> {
-        let e = std::env::var(env).ok()?;
-        let p: Vec<&str> = e.split(':').collect();
-        let (user, pass, db) = if kind == DbKind::Mysql { (p[2], Some(p[3].to_string()), p[4]) } else { (p[2], None, p[3]) };
-        let c = crate::store::ConnectionConfig {
-            id: "d".into(), name: "d".into(), kind, host: p[0].into(), port: p[1].parse().unwrap(), user: user.into(), database: db.into(),
-            color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
-        };
+    async fn state(kind: DbKind) -> Option<AppState> {
+        let crate::testenv::Server { cfg: mut c, password: pass } = crate::testenv::server(kind)?;
+        c.id = "d".into();
         let st = crate::open_state(Some(std::env::temp_dir().join(format!("qurry-fake-{}", uuid::Uuid::new_v4())))).unwrap();
         st.save_connection(c, pass, None).await.unwrap();
         Some(st)
     }
 
     /// Inserting into a real table passes all the server's constraints (NOT NULL · length · UNIQUE · FK · CHECK · enum)
-    async fn fills_real_tables(kind: DbKind, env: &str, ddl: &[&str], schema: &str) {
-        let Some(st) = state(kind, env).await else { return };
+    async fn fills_real_tables(kind: DbKind, ddl: &[&str], schema: &str) {
+        let Some(st) = state(kind).await else { return };
         let q = |s: &str| st.run_query("d".into(), s.into(), None, None);
         q("drop table if exists qf_items").await.unwrap();
         q("drop table if exists qf_users").await.unwrap();
@@ -654,7 +649,6 @@ mod tests {
     async fn pg_fills_real_tables() {
         fills_real_tables(
             DbKind::Postgres,
-            "QURRY_TEST_PG",
             &[
                 "drop type if exists qf_status",
                 "create type qf_status as enum ('new', 'paid', 'shipped')",
@@ -673,7 +667,6 @@ mod tests {
     async fn mysql_fills_real_tables() {
         fills_real_tables(
             DbKind::Mysql,
-            "QURRY_TEST_MY",
             &[
                 "create table qf_users (id int primary key, email varchar(60) not null unique, name varchar(12) not null, age tinyint unsigned, \
                  tier enum('free','pro') not null, joined date, active tinyint(1) not null, meta json, avatar blob, location point)",

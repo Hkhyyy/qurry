@@ -494,15 +494,15 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn rag_build_and_search_everywhere() {
-        let Ok(pg) = std::env::var("QURRY_TEST_PG") else { return };
-        let p: Vec<&str> = pg.split(':').collect();
+        let Some(crate::testenv::Server { cfg: mut pg, password }) = crate::testenv::pg() else { return };
         let dir = std::env::temp_dir().join(format!("qurry-rag-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir.clone())).unwrap();
         let save = |id: &str, kind: &str, host: &str, port: u16, user: &str, db: &str| {
             let cfg: crate::store::ConnectionConfig = serde_json::from_value(json!({ "id": id, "name": id, "kind": kind, "host": host, "port": port, "user": user, "database": db })).unwrap();
             st.store.save(&cfg).unwrap();
         };
-        save("pg", "postgres", p[0], p[1].parse().unwrap(), p[2], p[3]);
+        (pg.id, pg.name) = ("pg".into(), "pg".into());
+        st.save_connection(pg, password, None).await.unwrap();
         let q = |s: &str| st.run_query("pg".into(), s.into(), None, None);
         if q("create extension if not exists vector").await.is_err() {
             return;

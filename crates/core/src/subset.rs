@@ -528,24 +528,19 @@ mod tests {
 
     // ───────── Real server ─────────
 
-    async fn two_dbs(kind: DbKind, env: &str) -> Option<AppState> {
-        let e = std::env::var(env).ok()?;
-        let p: Vec<&str> = e.split(':').collect();
-        let (user, pass, db) = if kind == DbKind::Mysql { (p[2], Some(p[3].to_string()), p[4]) } else { (p[2], None, p[3]) };
+    async fn two_dbs(kind: DbKind) -> Option<AppState> {
+        let crate::testenv::Server { cfg: mut c, password: pass } = crate::testenv::server(kind)?;
+        (c.id, c.name) = ("s".into(), "source".into());
         let st = crate::open_state(Some(std::env::temp_dir().join(format!("qurry-subset-{}", uuid::Uuid::new_v4())))).unwrap();
-        let c = crate::store::ConnectionConfig {
-            id: "s".into(), name: "source".into(), kind, host: p[0].into(), port: p[1].parse().unwrap(), user: user.into(), database: db.into(),
-            color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
-        };
         st.save_connection(c, pass, None).await.unwrap();
         Some(st)
     }
 
     /// One customer → orders (children) → order items (grandchildren) · products (items' parents) · referrer (self-referencing parent). Personal data masked, all FKs match
-    async fn copies_related_rows(kind: DbKind, env: &str, target_db: &str) {
-        let Some(st) = two_dbs(kind, env).await else { return };
+    async fn copies_related_rows(kind: DbKind, target_db: &str) {
+        let Some(st) = two_dbs(kind).await else { return };
         let q = |id: &str, s: &str| st.run_query(id.into(), s.into(), None, None);
-        let src_db = if kind == DbKind::Mysql { std::env::var(env).unwrap().split(':').nth(4).unwrap().to_string() } else { "public".into() };
+        let src_db = if kind == DbKind::Mysql { crate::testenv::my().unwrap().cfg.database } else { "public".into() };
         let src_db = src_db.as_str();
         if kind == DbKind::Postgres {
             let _ = q("s", &format!("drop database if exists {target_db}")).await;
@@ -606,12 +601,12 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_copies_related_rows() {
-        copies_related_rows(DbKind::Postgres, "QURRY_TEST_PG", "qurry_subset_tgt").await;
+        copies_related_rows(DbKind::Postgres, "qurry_subset_tgt").await;
     }
 
     #[tokio::test]
     #[ignore]
     async fn mysql_copies_related_rows() {
-        copies_related_rows(DbKind::Mysql, "QURRY_TEST_MY", "qurry_subset_tgt").await;
+        copies_related_rows(DbKind::Mysql, "qurry_subset_tgt").await;
     }
 }

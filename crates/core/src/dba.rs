@@ -647,25 +647,18 @@ mod tests {
         assert!(q[at..].split(')').nth(1).is_some_and(|rest| rest.contains("wait_event_type = 'Lock'")), "{q}");
     }
 
-    fn cfg(kind: DbKind, env: &str) -> Option<(crate::store::ConnectionConfig, Option<String>)> {
-        let e = std::env::var(env).ok()?;
-        let p: Vec<&str> = e.split(':').collect();
-        let (user, pass, db) = if kind == DbKind::Mysql { (p[2], Some(p[3].to_string()), p[4]) } else { (p[2], None, p[3]) };
-        Some((
-            crate::store::ConnectionConfig {
-                id: "d".into(), name: "d".into(), kind, host: p[0].into(), port: p[1].parse().unwrap(), user: user.into(), database: db.into(),
-                color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
-            },
-            pass,
-        ))
+    fn cfg(kind: DbKind) -> Option<(crate::store::ConnectionConfig, Option<String>)> {
+        let crate::testenv::Server { cfg: mut c, password } = crate::testenv::server(kind)?;
+        c.id = "d".into();
+        Some((c, password))
     }
 
-    async fn state(kind: DbKind, env: &str) -> Option<AppState> {
-        state_with(kind, env, "").await
+    async fn state(kind: DbKind) -> Option<AppState> {
+        state_with(kind, "").await
     }
 
-    async fn state_with(kind: DbKind, env: &str, startup_script: &str) -> Option<AppState> {
-        let (mut c, pass) = cfg(kind, env)?;
+    async fn state_with(kind: DbKind, startup_script: &str) -> Option<AppState> {
+        let (mut c, pass) = cfg(kind)?;
         c.options.startup_script = startup_script.into();
         let dir = std::env::temp_dir().join(format!("qurry-dba-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir)).unwrap();
@@ -674,8 +667,8 @@ mod tests {
     }
 
     /// Every report runs, or tells what to enable if the feature is off (pg_stat_statements, etc.)
-    async fn all_reports_run(kind: DbKind, env: &str) {
-        let Some(st) = state(kind, env).await else { return };
+    async fn all_reports_run(kind: DbKind) {
+        let Some(st) = state(kind).await else { return };
         for r in reports(kind) {
             match st.dba_report("d".into(), r.id.into()).await {
                 Ok(res) => assert!(res.has_result_set, "{}", r.id),
@@ -690,20 +683,20 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_reports_run() {
-        all_reports_run(DbKind::Postgres, "QURRY_TEST_PG").await;
+        all_reports_run(DbKind::Postgres).await;
     }
 
     #[tokio::test]
     #[ignore]
     async fn mysql_reports_run() {
-        all_reports_run(DbKind::Mysql, "QURRY_TEST_MY").await;
+        all_reports_run(DbKind::Mysql).await;
     }
 
     /// Server Overview works without performance_schema (MariaDB has no performance_schema.global_status)
     #[tokio::test]
     #[ignore]
     async fn mysql_server_overview_runs() {
-        let Some(st) = state(DbKind::Mysql, "QURRY_TEST_MY").await else { return };
+        let Some(st) = state(DbKind::Mysql).await else { return };
         let r = st.dba_report("d".into(), "server".into()).await.unwrap();
         assert!(r.rows.iter().any(|x| crate::db::cell_text(&x[0]).starts_with("uptime") && !crate::db::cell_text(&x[1]).is_empty()), "{:?}", r.rows);
     }
@@ -712,7 +705,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_explain_of_normalized_query() {
-        let Some(st) = state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
+        let Some(st) = state(DbKind::Postgres).await else { return };
         let sql = st.dba_explain("d".into(), "select * from pg_class where oid = $1".into()).await.unwrap();
         let major = crate::backup::pg_major(&st, "d").await.unwrap();
         if major >= 16 {
@@ -728,8 +721,8 @@ mod tests {
     }
 
     /// Report queries stop at the time limit, which applies to that query only
-    async fn report_time_limit(kind: DbKind, env: &str, sleep: &str) {
-        let Some(st) = state(kind, env).await else { return };
+    async fn report_time_limit(kind: DbKind, sleep: &str) {
+        let Some(st) = state(kind).await else { return };
         let pool = ensure_pool(&st, "d").await.unwrap();
         let t = std::time::Instant::now();
         let e = run_limited(&pool, kind, sleep, 1).await.expect_err("time limit");
@@ -744,15 +737,15 @@ mod tests {
     }
 
     /// The report limit only tightens: a stricter session limit (here from the startup script; a role or global setting works the same) stays
-    async fn stricter_server_limit_stays(kind: DbKind, env: &str, sleep: &str) {
-        let Some(st) = state(kind, env).await else { return };
+    async fn stricter_server_limit_stays(kind: DbKind, sleep: &str) {
+        let Some(st) = state(kind).await else { return };
         let mariadb = kind == DbKind::Mysql && st.run_query("d".into(), "SELECT VERSION()".into(), None, None).await.unwrap().rows[0][0].to_string().to_lowercase().contains("mariadb");
         let script = match kind {
             DbKind::Postgres => "SET statement_timeout = '1s'",
             _ if mariadb => "SET SESSION max_statement_time = 1",
             _ => "SET SESSION max_execution_time = 1000",
         };
-        let st = state_with(kind, env, script).await.unwrap();
+        let st = state_with(kind, script).await.unwrap();
         let pool = ensure_pool(&st, "d").await.unwrap();
         let t = std::time::Instant::now();
         let e = run_limited(&pool, kind, sleep, 30).await.expect_err("server limit");
@@ -762,9 +755,9 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_report_time_limit() {
-        report_time_limit(DbKind::Postgres, "QURRY_TEST_PG", "SELECT pg_sleep(3)").await;
-        stricter_server_limit_stays(DbKind::Postgres, "QURRY_TEST_PG", "SELECT pg_sleep(3)").await;
-        let Some(st) = state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
+        report_time_limit(DbKind::Postgres, "SELECT pg_sleep(3)").await;
+        stricter_server_limit_stays(DbKind::Postgres, "SELECT pg_sleep(3)").await;
+        let Some(st) = state(DbKind::Postgres).await else { return };
         let r = st.run_query("d".into(), "SHOW statement_timeout".into(), None, None).await.unwrap();
         assert_eq!(crate::db::cell_text(&r.rows[0][0]), "0");
     }
@@ -774,13 +767,13 @@ mod tests {
     async fn mysql_report_time_limit() {
         // SLEEP() / BENCHMARK() cut short return a value instead of an error; a long join fails like a report query would
         let slow = "SELECT COUNT(*) FROM information_schema.COLUMNS a, information_schema.COLUMNS b, information_schema.COLUMNS c";
-        report_time_limit(DbKind::Mysql, "QURRY_TEST_MY", slow).await;
-        stricter_server_limit_stays(DbKind::Mysql, "QURRY_TEST_MY", slow).await;
+        report_time_limit(DbKind::Mysql, slow).await;
+        stricter_server_limit_stays(DbKind::Mysql, slow).await;
     }
 
     /// Unused Indexes tells since when the scans were counted, right next to the scans (MySQL lists unused ones only, after the index name)
-    async fn unused_indexes_show_counting_window(kind: DbKind, env: &str) {
-        let Some(st) = state(kind, env).await else { return };
+    async fn unused_indexes_show_counting_window(kind: DbKind) {
+        let Some(st) = state(kind).await else { return };
         let q = |s: &str| st.run_query("d".into(), s.into(), None, None);
         q("drop table if exists qurry_dba_unused").await.ok();
         q("create table qurry_dba_unused (id int, v int)").await.unwrap();
@@ -805,13 +798,13 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_unused_indexes_show_counting_window() {
-        unused_indexes_show_counting_window(DbKind::Postgres, "QURRY_TEST_PG").await;
+        unused_indexes_show_counting_window(DbKind::Postgres).await;
     }
 
     #[tokio::test]
     #[ignore]
     async fn mysql_unused_indexes_show_counting_window() {
-        unused_indexes_show_counting_window(DbKind::Mysql, "QURRY_TEST_MY").await;
+        unused_indexes_show_counting_window(DbKind::Mysql).await;
     }
 
     /// RDS MySQL: KILL of another user's thread is denied without CONNECTION_ADMIN → mysql.rds_kill / rds_kill_query when the server has them.
@@ -819,7 +812,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn mysql_kill_falls_back_to_rds_kill() {
-        let Some((c, pass)) = cfg(DbKind::Mysql, "QURRY_TEST_MY") else { return };
+        let Some((c, pass)) = cfg(DbKind::Mysql) else { return };
         let root = sqlx::mysql::MySqlPoolOptions::new().max_connections(1).connect(&format!("mysql://{}:{}@{}:{}/{}", c.user, pass.clone().unwrap(), c.host, c.port, c.database)).await.unwrap();
         let victim = sqlx::mysql::MySqlPoolOptions::new().max_connections(1).connect(&format!("mysql://{}:{}@{}:{}/{}", c.user, pass.unwrap(), c.host, c.port, c.database)).await.unwrap();
         let vid: u64 = sqlx::query_scalar("SELECT CONNECTION_ID()").fetch_one(&victim).await.unwrap();
@@ -854,7 +847,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_preview_impact_counts_rows() {
-        let Some(st) = state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
+        let Some(st) = state(DbKind::Postgres).await else { return };
         let q = |s: &str| st.run_query("d".into(), s.into(), None, None);
         q("drop table if exists qurry_impact").await.ok();
         q("create table qurry_impact as select g as id from generate_series(1, 100) g").await.unwrap();
@@ -869,7 +862,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_bloat_shows_deleted_space() {
-        let Some(st) = state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
+        let Some(st) = state(DbKind::Postgres).await else { return };
         let q = |s: &str| st.run_query("d".into(), s.into(), None, None);
         q("drop table if exists qurry_bloat").await.ok();
         q("create table qurry_bloat (id int primary key, pad text) with (autovacuum_enabled = false)").await.unwrap();
@@ -892,8 +885,8 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_vacuum_full_shows_in_progress() {
-        let Some(st) = state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
-        let (c, _) = cfg(DbKind::Postgres, "QURRY_TEST_PG").unwrap();
+        let Some(st) = state(DbKind::Postgres).await else { return };
+        let (c, _) = cfg(DbKind::Postgres).unwrap();
         let other = sqlx::postgres::PgPoolOptions::new().max_connections(1).connect(&format!("postgres://{}@{}:{}/{}", c.user, c.host, c.port, c.database)).await.unwrap();
         sqlx::raw_sql("drop table if exists qurry_vfull; create table qurry_vfull as select g as id, repeat('x', 100) as pad from generate_series(1, 3000000) g").execute(&other).await.unwrap();
         let full = tokio::spawn(async move { sqlx::raw_sql("vacuum full qurry_vfull").execute(&other).await.map(|_| other) });
@@ -916,8 +909,8 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_blocking_session_is_shown_and_killed() {
-        let Some(st) = state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
-        let (c, _) = cfg(DbKind::Postgres, "QURRY_TEST_PG").unwrap();
+        let Some(st) = state(DbKind::Postgres).await else { return };
+        let (c, _) = cfg(DbKind::Postgres).unwrap();
         let url = format!("postgres://{}@{}:{}/{}", c.user, c.host, c.port, c.database);
         let a = sqlx::postgres::PgPoolOptions::new().max_connections(1).connect(&url).await.unwrap();
         let b = sqlx::postgres::PgPoolOptions::new().max_connections(1).connect(&url).await.unwrap();

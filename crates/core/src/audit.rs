@@ -713,7 +713,7 @@ mod tests {
     /// Production: a change that can't be logged is not run (refused before connecting); reads still run
     #[tokio::test]
     async fn production_change_is_refused_when_the_log_cant_be_written() {
-        let st = prod_state_at(DbKind::Postgres, "127.0.0.1:1:u:db", None).await;
+        let st = prod_state_at(crate::testenv::parse_pg("127.0.0.1:1:u:db").cfg, None).await;
         std::fs::create_dir(st.store.dir().join("audit.jsonl")).unwrap();
         let e = st.run_query("d".into(), "update t set a = 1 where id = 1".into(), None, None).await.unwrap_err().to_string();
         assert!(e.starts_with("Not run: ") && e.contains("audit.jsonl") && e.contains("run it again"), "{e}");
@@ -726,22 +726,15 @@ mod tests {
 
     // ───────── Real servers (QURRY_TEST_PG=host:port:user:db · QURRY_TEST_MY=host:port:user:password:db) ─────────
 
-    async fn prod_state(kind: DbKind, env: &str) -> Option<crate::app::AppState> {
-        let e = std::env::var(env).ok()?;
-        let p: Vec<&str> = e.split(':').collect();
-        let pass = (kind == DbKind::Mysql).then(|| p[3].to_string());
-        Some(prod_state_at(kind, &e, pass).await)
+    async fn prod_state(kind: DbKind) -> Option<crate::app::AppState> {
+        let crate::testenv::Server { cfg, password } = crate::testenv::server(kind)?;
+        Some(prod_state_at(cfg, password).await)
     }
 
-    async fn prod_state_at(kind: DbKind, e: &str, pass: Option<String>) -> crate::app::AppState {
-        let p: Vec<&str> = e.split(':').collect();
-        let (user, db) = if kind == DbKind::Mysql { (p[2], p[4]) } else { (p[2], p[3]) };
-        let mut options = crate::store::ConnOptions::default();
-        options.confirm_changes = true;
-        let c = crate::store::ConnectionConfig {
-            id: "d".into(), name: "[PROD] test".into(), kind, host: p[0].into(), port: p[1].parse().unwrap(), user: user.into(), database: db.into(),
-            color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options, ssl: None, redis: None,
-        };
+    /// A production data source (confirm changes on) on the server of `c`
+    async fn prod_state_at(mut c: crate::store::ConnectionConfig, pass: Option<String>) -> crate::app::AppState {
+        (c.id, c.name) = ("d".into(), "[PROD] test".into());
+        c.options.confirm_changes = true;
         let dir = std::env::temp_dir().join(format!("qurry-audit-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir)).unwrap();
         st.save_connection(c, pass, None).await.unwrap();
@@ -751,8 +744,8 @@ mod tests {
     /// The snapshot is taken in the change's transaction with FOR UPDATE: a row another session is changing is saved
     /// as it is once that session commits (the value the change overwrote), not as it was before. Console (Auto) · pool · table edit save.
     /// Then Production refuses a COMMIT that can't be logged, and the transaction stays open
-    async fn snapshot_matches_change(kind: DbKind, env: &str, ddl: &str) {
-        let Some(st) = prod_state(kind, env).await else { return };
+    async fn snapshot_matches_change(kind: DbKind, ddl: &str) {
+        let Some(st) = prod_state(kind).await else { return };
         let q = |s: &str| st.run_query("d".into(), s.into(), Some(1000), None);
         q(if kind == DbKind::Mysql { "create database if not exists audit_hardening" } else { "create schema if not exists audit_hardening" }).await.unwrap();
         q("drop table if exists audit_hardening.qurry_snap").await.unwrap();
@@ -809,19 +802,19 @@ mod tests {
     #[ignore]
     async fn pg_snapshot_matches_change() {
         let _one = one_at_a_time().await;
-        snapshot_matches_change(DbKind::Postgres, "QURRY_TEST_PG", "create table audit_hardening.qurry_snap (id int primary key, price numeric(10,2))").await;
+        snapshot_matches_change(DbKind::Postgres, "create table audit_hardening.qurry_snap (id int primary key, price numeric(10,2))").await;
     }
 
     #[tokio::test]
     #[ignore]
     async fn mysql_snapshot_matches_change() {
         let _one = one_at_a_time().await;
-        snapshot_matches_change(DbKind::Mysql, "QURRY_TEST_MY", "create table audit_hardening.qurry_snap (id int primary key, price decimal(10,2))").await;
+        snapshot_matches_change(DbKind::Mysql, "create table audit_hardening.qurry_snap (id int primary key, price decimal(10,2))").await;
     }
 
     /// Running the undo SQL after a change restores the original (UPDATE · DELETE, Auto · Manual, table edit save)
-    async fn undo_restores(kind: DbKind, env: &str, ddl: &str, table: &str) {
-        let Some(st) = prod_state(kind, env).await else { return };
+    async fn undo_restores(kind: DbKind, ddl: &str, table: &str) {
+        let Some(st) = prod_state(kind).await else { return };
         let q = |s: &str| st.run_query("d".into(), s.into(), Some(1000), None);
         q(&format!("drop table if exists {table}")).await.unwrap();
         q(ddl).await.unwrap();
@@ -874,13 +867,13 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_undo_restores() {
-        undo_restores(DbKind::Postgres, "QURRY_TEST_PG", "create table qurry_undo (id int primary key, name text, price numeric(10,2), born timestamptz, bin bytea, total numeric generated always as (price * 2) stored)", "qurry_undo").await;
+        undo_restores(DbKind::Postgres, "create table qurry_undo (id int primary key, name text, price numeric(10,2), born timestamptz, bin bytea, total numeric generated always as (price * 2) stored)", "qurry_undo").await;
     }
 
     #[tokio::test]
     #[ignore]
     async fn mysql_undo_restores() {
-        undo_restores(DbKind::Mysql, "QURRY_TEST_MY", "create table qurry_undo (id int primary key, name varchar(20), price decimal(10,2), born datetime, bin varbinary(10), total decimal(10,2) as (price * 2) stored)", "qurry_undo").await;
+        undo_restores(DbKind::Mysql, "create table qurry_undo (id int primary key, name varchar(20), price decimal(10,2), born datetime, bin varbinary(10), total decimal(10,2) as (price * 2) stored)", "qurry_undo").await;
     }
 
     /// The real-server tests below share the audit_hardening schema / database (and drop it when they pass), so they run one at a time
@@ -909,8 +902,8 @@ mod tests {
 
     /// Cancel while the change waits in its snapshot (another session holds the row): the change is not run, in Auto or in the user's
     /// transaction (which stays open with its earlier change)
-    async fn cancelled_snapshot_runs_nothing(kind: DbKind, env: &str) {
-        let Some(st) = prod_state(kind, env).await else { return };
+    async fn cancelled_snapshot_runs_nothing(kind: DbKind) {
+        let Some(st) = prod_state(kind).await else { return };
         own_table(&st, kind, "qurry_cancel").await;
         let run = |tab: &str, sql: &str| st.run_query("d".into(), sql.into(), None, Some(tab.into()));
         st.set_tx_mode("d".into(), "other".into(), true).await.unwrap();
@@ -942,14 +935,14 @@ mod tests {
     #[ignore]
     async fn pg_cancelled_snapshot_runs_nothing() {
         let _one = one_at_a_time().await;
-        cancelled_snapshot_runs_nothing(DbKind::Postgres, "QURRY_TEST_PG").await;
+        cancelled_snapshot_runs_nothing(DbKind::Postgres).await;
     }
 
     #[tokio::test]
     #[ignore]
     async fn mysql_cancelled_snapshot_runs_nothing() {
         let _one = one_at_a_time().await;
-        cancelled_snapshot_runs_nothing(DbKind::Mysql, "QURRY_TEST_MY").await;
+        cancelled_snapshot_runs_nothing(DbKind::Mysql).await;
     }
 
     /// MySQL: a deadlock on the snapshot rolls back the user's whole transaction. The change is not run, the console no longer
@@ -958,7 +951,7 @@ mod tests {
     #[ignore]
     async fn mysql_snapshot_deadlock_reports_the_lost_transaction() {
         let _one = one_at_a_time().await;
-        let Some(st) = prod_state(DbKind::Mysql, "QURRY_TEST_MY").await else { return };
+        let Some(st) = prod_state(DbKind::Mysql).await else { return };
         own_table(&st, DbKind::Mysql, "qurry_dead").await;
         let run = |tab: &str, sql: &str| st.run_query("d".into(), sql.into(), None, Some(tab.into()));
         st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
@@ -990,7 +983,7 @@ mod tests {
     #[ignore]
     async fn pg_snapshot_locks_and_failed_commit() {
         let _one = one_at_a_time().await;
-        let Some(st) = prod_state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
+        let Some(st) = prod_state(DbKind::Postgres).await else { return };
         own_table(&st, DbKind::Postgres, "qurry_parent").await;
         let q = |s: &str| st.run_query("d".into(), s.into(), None, None);
         q("create table audit_hardening.qurry_child (id int primary key, parent_id int references audit_hardening.qurry_parent deferrable initially deferred)").await.unwrap();
@@ -1024,16 +1017,16 @@ mod tests {
     #[ignore]
     async fn pg_delete_only_role_keeps_undo() {
         let _one = one_at_a_time().await;
-        let Some(st) = prod_state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
+        let Some(st) = prod_state(DbKind::Postgres).await else { return };
         own_table(&st, DbKind::Postgres, "qurry_del").await;
         let q = |s: &str| st.run_query("d".into(), s.into(), None, None);
         q("drop role if exists audit_hardening_del").await.unwrap();
         q("create role audit_hardening_del login").await.unwrap();
         q("grant usage on schema audit_hardening to audit_hardening_del").await.unwrap();
         q("grant select, delete on audit_hardening.qurry_del to audit_hardening_del").await.unwrap();
-        let e = std::env::var("QURRY_TEST_PG").unwrap();
-        let p: Vec<&str> = e.split(':').collect();
-        let del = prod_state_at(DbKind::Postgres, &format!("{}:{}:audit_hardening_del:{}", p[0], p[1], p[3]), None).await;
+        let mut c = crate::testenv::pg().unwrap().cfg;
+        c.user = "audit_hardening_del".into();
+        let del = prod_state_at(c, None).await;
         del.run_query("d".into(), "delete from audit_hardening.qurry_del where id = 1".into(), None, Some("t".into())).await.unwrap();
         let entry = del.audit_log(None, String::new(), 1).remove(0);
         let undo = entry.undo.unwrap_or_else(|| panic!("no undo: {:?}", entry.note));
@@ -1052,7 +1045,7 @@ mod tests {
     #[ignore]
     async fn pg_rls_hidden_rows_keep_no_undo() {
         let _one = one_at_a_time().await;
-        let Some(st) = prod_state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
+        let Some(st) = prod_state(DbKind::Postgres).await else { return };
         own_table(&st, DbKind::Postgres, "qurry_rls").await;
         let q = |s: &str| st.run_query("d".into(), s.into(), None, None);
         for s in [
@@ -1066,9 +1059,9 @@ mod tests {
         ] {
             q(s).await.unwrap();
         }
-        let e = std::env::var("QURRY_TEST_PG").unwrap();
-        let p: Vec<&str> = e.split(':').collect();
-        let rls = prod_state_at(DbKind::Postgres, &format!("{}:{}:audit_hardening_rls:{}", p[0], p[1], p[3]), None).await;
+        let mut c = crate::testenv::pg().unwrap().cfg;
+        c.user = "audit_hardening_rls".into();
+        let rls = prod_state_at(c, None).await;
         let r = rls.run_query("d".into(), "delete from audit_hardening.qurry_rls where id = 1".into(), None, Some("t".into())).await.unwrap();
         assert_eq!(r.rows_affected, 1);
         let entry = rls.audit_log(None, String::new(), 1).remove(0);
@@ -1086,7 +1079,7 @@ mod tests {
     #[ignore]
     async fn pg_rows_joining_during_the_change_keep_no_undo() {
         let _one = one_at_a_time().await;
-        let Some(st) = prod_state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
+        let Some(st) = prod_state(DbKind::Postgres).await else { return };
         own_table(&st, DbKind::Postgres, "qurry_join").await;
         let run = |tab: &str, sql: &str| st.run_query("d".into(), sql.into(), None, Some(tab.into()));
         // Another session holds row 2 and inserts row 4, both matching v < 5, uncommitted
@@ -1113,7 +1106,7 @@ mod tests {
     async fn pg_log_failure_after_the_run_is_a_warning() {
         let _one = one_at_a_time().await;
         use std::os::unix::fs::PermissionsExt;
-        let Some(st) = prod_state(DbKind::Postgres, "QURRY_TEST_PG").await else { return };
+        let Some(st) = prod_state(DbKind::Postgres).await else { return };
         own_table(&st, DbKind::Postgres, "qurry_warn").await;
         let log = st.store.dir().join("audit.jsonl");
         let slow = "do $$ begin perform pg_sleep(1); end $$";

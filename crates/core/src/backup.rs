@@ -1587,14 +1587,12 @@ INSERT INTO `ev` VALUES (3,'it\'s \\! x');
     }
 
     async fn state() -> Option<AppState> {
-        let e = std::env::var("QURRY_TEST_PG").ok()?;
-        let p: Vec<&str> = e.split(':').collect();
+        let crate::testenv::Server { mut cfg, password } = crate::testenv::pg()?;
+        (cfg.id, cfg.name) = ("b".into(), "b".into());
         let dir = std::env::temp_dir().join(format!("qurry-bak-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir)).unwrap();
-        let cfg: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "b", "name": "b", "kind": "postgres", "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": p[2], "database": p[3] })).unwrap();
-        // Optional password after the DB name (host:port:user:db:password; the rest of the line, so it may hold ':')
-        match e.splitn(5, ':').nth(4) {
-            Some(pw) => drop(st.save_connection(cfg, Some(pw.into()), None).await.unwrap()),
+        match password {
+            Some(pw) => drop(st.save_connection(cfg, Some(pw), None).await.unwrap()),
             None => st.store.save(&cfg).unwrap(),
         }
         Some(st)
@@ -1633,15 +1631,14 @@ INSERT INTO `ev` VALUES (3,'it\'s \\! x');
     #[tokio::test]
     #[ignore]
     async fn mysql_backup_and_restore_roundtrip() {
-        let Ok(e) = std::env::var("QURRY_TEST_MY") else { return };
+        let Some(crate::testenv::Server { mut cfg, password }) = crate::testenv::my() else { return };
         if find_tool("mysqldump").or_else(|| find_tool("mariadb-dump")).is_none() || find_tool("mysql").or_else(|| find_tool("mariadb")).is_none() {
             return;
         }
-        let p: Vec<&str> = e.split(':').collect();
+        (cfg.id, cfg.name) = ("m".into(), "m".into());
         let dir = std::env::temp_dir().join(format!("qurry-bakm-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir.clone())).unwrap();
-        let cfg: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "m", "name": "m", "kind": "mysql", "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": p[2], "database": p[4] })).unwrap();
-        st.save_connection(cfg, Some(p[3].into()), None).await.unwrap();
+        st.save_connection(cfg, password, None).await.unwrap();
         // Dedicated DB: dumping while other tests create and drop tables in the same DB breaks it
         st.run_query("m".into(), "create database if not exists qurry_mysqldump".into(), None, None).await.unwrap();
         let q = |s: &str| st.run_query("m::qurry_mysqldump".into(), s.into(), None, None);
@@ -1694,16 +1691,15 @@ INSERT INTO `ev` VALUES (3,'it\'s \\! x');
     #[tokio::test]
     #[ignore]
     async fn mysql_backup_and_restore_over_tls_without_a_certificate_check() {
-        let Ok(e) = std::env::var("QURRY_TEST_MY") else { return };
+        let Some(crate::testenv::Server { mut cfg, password }) = crate::testenv::my() else { return };
         if find_tool("mysqldump").or_else(|| find_tool("mariadb-dump")).is_none() {
             return;
         }
-        let p: Vec<&str> = e.split(':').collect();
+        (cfg.id, cfg.name) = ("m".into(), "m".into());
+        cfg.ssl = Some(serde_json::from_value(serde_json::json!({ "enabled": true, "mode": "require" })).unwrap());
         let dir = std::env::temp_dir().join(format!("qurry-bakt-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir.clone())).unwrap();
-        let ssl = serde_json::json!({ "enabled": true, "mode": "require" });
-        let cfg: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "m", "name": "m", "kind": "mysql", "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": p[2], "database": p[4], "ssl": ssl })).unwrap();
-        st.save_connection(cfg, Some(p[3].into()), None).await.unwrap();
+        st.save_connection(cfg, password, None).await.unwrap();
         st.run_query("m".into(), "create database if not exists qurry_mysqldump_tls".into(), None, None).await.unwrap();
         let q = |s: &str| st.run_query("m::qurry_mysqldump_tls".into(), s.into(), None, None);
         q("create table if not exists t (id int primary key)").await.unwrap();
@@ -1747,13 +1743,13 @@ INSERT INTO `ev` VALUES (3,'it\'s \\! x');
             assert_eq!(q(content).await.unwrap().rows[0][0], before, "{format}");
         }
         // Files made with pg_dump itself: --inserts (a line of a string looks like COPY … FROM stdin;) and two dumps one after the other
-        let pg: Vec<String> = std::env::var("QURRY_TEST_PG").unwrap().splitn(5, ':').map(String::from).collect();
+        let pg = crate::testenv::pg().unwrap();
         for (name, parts) in [("inserts", vec!["--inserts"]), ("cat", vec!["-s", "-a"])] {
             let file = dir.join(format!("{name}.sql"));
             let mut out = std::fs::File::create(&file).unwrap();
             for arg in parts {
                 let mut cmd = std::process::Command::new(find_tool("pg_dump").unwrap());
-                cmd.args(["-h", &pg[0], "-p", &pg[1], "-U", &pg[2], "-n", "qurry_bak", arg]).arg(pg_dbname(&pg[3])).env("PGPASSWORD", pg.get(4).map_or("", |p| p));
+                cmd.args(["-h", &pg.cfg.host, "-p", &pg.cfg.port.to_string(), "-U", &pg.cfg.user, "-n", "qurry_bak", arg]).arg(pg_dbname(&pg.cfg.database)).env("PGPASSWORD", pg.password.as_deref().unwrap_or(""));
                 let dumped = cmd.output().unwrap();
                 assert!(dumped.status.success(), "{name}: {}", String::from_utf8_lossy(&dumped.stderr));
                 std::io::Write::write_all(&mut out, &dumped.stdout).unwrap();
@@ -1764,7 +1760,7 @@ INSERT INTO `ev` VALUES (3,'it\'s \\! x');
             assert_eq!(q(content).await.unwrap().rows[0][0], before, "{name}");
         }
         // A damaged secrets.json doesn't block a source without a saved password (same rule as connecting)
-        if std::env::var("QURRY_TEST_PG").unwrap().split(':').count() == 4 {
+        if pg.password.is_none() {
             // (damaged content that doesn't name this source — a quoted "b" would mean its password may be in there, which is an error by design)
             std::fs::write(st.store.dir().join("secrets.json"), "{ \"other\": \"tru").unwrap();
             let file = dir.join("b.again").to_string_lossy().to_string();

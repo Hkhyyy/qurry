@@ -10,6 +10,15 @@ pub struct Server {
     pub password: Option<String>,
 }
 
+/// The test server of a kind: QURRY_TEST_PG for PostgreSQL, QURRY_TEST_MY for MySQL
+pub fn server(kind: DbKind) -> Option<Server> {
+    match kind {
+        DbKind::Postgres => pg(),
+        DbKind::Mysql => my(),
+        k => panic!("no test server variable for {k:?}"),
+    }
+}
+
 /// QURRY_TEST_PG=host:port:user:db[:password] (the password is the rest of the line, so it may hold ':')
 pub fn pg() -> Option<Server> {
     std::env::var("QURRY_TEST_PG").ok().map(|e| parse_pg(&e))
@@ -25,7 +34,8 @@ pub fn my_from(var: &str) -> Option<Server> {
     std::env::var(var).ok().map(|e| parse_my(var, &e))
 }
 
-fn parse_pg(e: &str) -> Server {
+/// A QURRY_TEST_PG line (also a server that isn't there, for tests that fail before connecting)
+pub fn parse_pg(e: &str) -> Server {
     let p: Vec<&str> = e.splitn(5, ':').collect();
     assert!(p.len() >= 4, "QURRY_TEST_PG must be host:port:user:db[:password], not {e:?}");
     Server { cfg: cfg(DbKind::Postgres, "QURRY_TEST_PG", p[0], p[1], p[2], p[3]), password: p.get(4).map(|s| s.to_string()) }

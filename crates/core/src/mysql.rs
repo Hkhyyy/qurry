@@ -534,47 +534,38 @@ pub async fn full_text_search(p: &MySqlPool, r: &FtsRequest) -> AppResult<Vec<Ft
 mod tests {
     use crate::backend::Backend;
     use crate::db::Pool;
-    use crate::store::{ConnectionConfig, DbKind};
+    use crate::store::ConnectionConfig;
 
-    /// QURRY_TEST_MY=host:port:user:password:db (default 127.0.0.1:13306:root:dbtool:shop)
-    fn env() -> Vec<String> {
-        std::env::var("QURRY_TEST_MY").unwrap_or_else(|_| "127.0.0.1:13306:root:dbtool:shop".into()).split(':').map(String::from).collect()
-    }
-
-    fn pw() -> String {
-        env()[3].clone()
-    }
-
-    fn cfg() -> ConnectionConfig {
-        let e = env();
-        ConnectionConfig {
-            id: "my".into(), name: "my".into(), kind: DbKind::Mysql, host: e[0].clone(), port: e[1].parse().unwrap(), user: e[2].clone(),
-            database: e[4].clone(), color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(),
-            read_only: false, options: Default::default(), ssl: None, redis: None,
-        }
+    /// QURRY_TEST_MY=host:port:user:password:db (crate::testenv): the data source and its password
+    fn server() -> Option<(ConnectionConfig, String)> {
+        let crate::testenv::Server { mut cfg, password } = crate::testenv::my()?;
+        (cfg.id, cfg.name) = ("my".into(), "my".into());
+        Some((cfg, password.unwrap_or_default()))
     }
 
     /// Notify when a source without SSL set connected in plaintext (silent when connected over TLS)
     #[tokio::test]
     #[ignore]
     async fn mysql_plaintext_is_reported() {
+        let Some((cfg, pw)) = server() else { return };
         // Treat it as a remote server (this machine · tunnels aren't notified)
-        let remote = ConnectionConfig { host: "db.example".into(), ..cfg() };
+        let remote = ConnectionConfig { host: "db.example".into(), ..cfg.clone() };
         // Default connection: silent if TLS works; notify if it fell back to plaintext (MySQL 5.7 without TLS 1.2)
-        let Pool::My(auto) = crate::db::connect(&cfg(), Some(pw().as_str())).await.expect("connect") else { unreachable!() };
+        let Pool::My(auto) = crate::db::connect(&cfg, Some(pw.as_str())).await.expect("connect") else { unreachable!() };
         let (_, cipher): (String, String) = sqlx::query_as("SHOW SESSION STATUS LIKE 'Ssl_cipher'").fetch_one(&auto).await.unwrap();
         assert_eq!(auto.plaintext_note(&remote).await.is_some(), cipher.is_empty());
-        let opts = sqlx::mysql::MySqlConnectOptions::new().host(&env()[0]).port(env()[1].parse().unwrap()).username(&env()[2]).password(&pw()).ssl_mode(sqlx::mysql::MySqlSslMode::Disabled);
+        let opts = sqlx::mysql::MySqlConnectOptions::new().host(&cfg.host).port(cfg.port).username(&cfg.user).password(&pw).ssl_mode(sqlx::mysql::MySqlSslMode::Disabled);
         let plain = sqlx::mysql::MySqlPoolOptions::new().max_connections(1).connect_with(opts).await.unwrap();
         assert!(plain.plaintext_note(&remote).await.is_some_and(|n| n.contains("Not encrypted")));
-        assert_eq!(plain.plaintext_note(&cfg()).await, None, "this computer: nothing to intercept");
+        assert_eq!(plain.plaintext_note(&cfg).await, None, "this computer: nothing to intercept");
     }
 
     /// MCP execute path: the prepared-statement protocol takes exactly one statement
     #[tokio::test]
     #[ignore]
     async fn mysql_prepared_batch_refuses_multiple_statements() {
-        let Pool::My(p) = crate::db::connect(&cfg(), Some(pw().as_str())).await.expect("connect") else { unreachable!() };
+        let Some((cfg, pw)) = server() else { return };
+        let Pool::My(p) = crate::db::connect(&cfg, Some(pw.as_str())).await.expect("connect") else { unreachable!() };
         sqlx::raw_sql("drop table if exists qurry_prep; create table qurry_prep (a int)").execute(&p).await.unwrap();
         assert!(p.execute_batch(&["insert into qurry_prep values (1); drop table qurry_prep".into()], false, true, &[]).await.is_err());
         assert_eq!(p.execute_batch(&["insert into qurry_prep values (1)".into()], false, true, &[]).await.unwrap().0, 1);
@@ -584,7 +575,8 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn mysql_end_to_end() {
-        let pool = crate::db::connect(&cfg(), Some(pw().as_str())).await.expect("connect");
+        let Some((cfg, pw)) = server() else { return };
+        let pool = crate::db::connect(&cfg, Some(pw.as_str())).await.expect("connect");
         assert!(pool.server_version().await.unwrap().starts_with("MySQL"));
         let Pool::My(p) = &pool else { unreachable!() };
         for s in [
@@ -677,10 +669,10 @@ mod tests {
         // Edit batch
         p.execute_batch(&["update orders set memo = 'y' where id = 1".into()], true, false, &[]).await.unwrap();
         // Read-only
-        let mut ro = cfg();
+        let mut ro = cfg.clone();
         ro.read_only = true;
         ro.options.time_zone = Some("+09:00".into());
-        let rp = crate::db::connect(&ro, Some(pw().as_str())).await.unwrap();
+        let rp = crate::db::connect(&ro, Some(pw.as_str())).await.unwrap();
         let tz = rp.run_query("select @@session.time_zone", 1).await.unwrap();
         assert_eq!(tz.rows[0][0], "+09:00");
         let e = rp.run_query("update orders set memo = 'z' where id = 1", 1).await;
@@ -690,13 +682,14 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn mysql_ssl() {
-        let mut c = cfg();
+        let Some((cfg, pw)) = server() else { return };
+        let mut c = cfg;
         c.ssl = Some(crate::store::SslConfig { enabled: true, mode: "require".into(), ..Default::default() });
-        let pool = crate::db::connect(&c, Some(pw().as_str())).await.expect("ssl require");
+        let pool = crate::db::connect(&c, Some(pw.as_str())).await.expect("ssl require");
         let r = pool.run_query("show session status like 'Ssl_version'", 5).await.unwrap();
         assert!(r.rows[0][1].as_str().unwrap().starts_with("TLS"), "{:?}", r.rows);
         // Self-signed certificate, so verify mode must fail
         c.ssl = Some(crate::store::SslConfig { enabled: true, mode: "verify-full".into(), ..Default::default() });
-        assert!(crate::db::connect(&c, Some(pw().as_str())).await.is_err());
+        assert!(crate::db::connect(&c, Some(pw.as_str())).await.is_err());
     }
 }
