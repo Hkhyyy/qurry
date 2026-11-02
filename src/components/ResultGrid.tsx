@@ -6,6 +6,7 @@ import { Cell, Dialect, dialectOf, QueryResult } from "../lib/api";
 import { DateTimePicker, isTemporal } from "./DateTimePicker";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, raw } from "../lib/extract";
+import { sharedReady, useSharedReady } from "../lib/shared";
 import { ResultChart } from "./ResultChart";
 import { Button, CellEditor, CodeBlock, GridCell, GridHeaderCell, GridHeaderRow, GridRow, IconButton, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, TextArea, ToolButton, Toolbar, ToolbarSep } from "../ui";
 import {
@@ -191,7 +192,8 @@ export function ResultGrid(p: Props) {
   );
   const total = ROWNUM_W + widths.reduce((a, b) => a + b, 0);
   // Time columns: align fractional-second digits within the column (values unchanged)
-  const fracW = useMemo(() => cols.map((c, ci) => (isTimeType(c.typeName) ? fracWidth(result.rows.map((r) => r[ci])) : 0)), [cols, result.rows]);
+  const wasmReady = useSharedReady();
+  const fracW = useMemo(() => cols.map((c, ci) => (isTimeType(c.typeName) ? fracWidth(result.rows.map((r) => r[ci])) : 0)), [cols, result.rows, wasmReady]);
   const shown = (v: Cell, ci: number) => (fracW[ci] && typeof v === "string" ? padFrac(v, fracW[ci]) : display(v));
 
   const virt = useVirtualizer({ count: rowCount, getScrollElement: () => scrollRef.current, estimateSize: () => ROW_H, overscan: 20 });
@@ -409,18 +411,24 @@ export function ResultGrid(p: Props) {
     const keys = fmt === "SQL Updates" ? rows.map((r) => pkIdx.map((k): [string, Cell] => [cols[k].name, valueAt(r, k)])) : [];
     return extractRows(fmt, { names: cs.map((c) => cols[c].name), types: cs.map((c) => cols[c].typeName), vals: rows.map((r) => cs.map((c) => valueAt(r, c))), keys, tableRef, dialect: D, header });
   };
+  /** The shared WASM writes the formats: without it (a WebView that refused WebAssembly) say why nothing is copied */
+  const formatted = (make: () => string): string | undefined => {
+    if (sharedReady()) return make();
+    setStatusWidget("aggregate", "Copy formats need WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk");
+  };
   const copySelection = (header = false) => {
     if (!rect) return;
     const single = rect.r0 === rect.r1 && rect.c0 === rect.c1;
-    const text = single && !header && (extractor === "CSV" || extractor === "TSV") ? raw(valueAt(dataIndex(rect.r0), rect.c0)) : extract(selRows(), rect.c0, rect.c1, extractor, header);
-    navigator.clipboard.writeText(text);
+    const text = single && !header && (extractor === "CSV" || extractor === "TSV") ? raw(valueAt(dataIndex(rect.r0), rect.c0)) : formatted(() => extract(selRows(), rect.c0, rect.c1, extractor, header));
+    if (text !== undefined) navigator.clipboard.writeText(text);
   };
   /** Selected cells as ('a', 'b') (paste straight into WHERE x IN). If only one cell is selected, its whole column */
   const copyInList = () => {
     if (!rect) return;
     const single = rect.r0 === rect.r1 && rect.c0 === rect.c1;
     const rows = single ? Array.from({ length: rowCount }, (_, i) => dataIndex(i)) : selRows();
-    navigator.clipboard.writeText(extract(rows, rect.c0, rect.c1, "SQL IN List"));
+    const text = formatted(() => extract(rows, rect.c0, rect.c1, "SQL IN List"));
+    if (text !== undefined) navigator.clipboard.writeText(text);
   };
   /** Paste: split multi-line TSV/CSV into cells, adding new rows if there are not enough (DataGrip) */
   const paste = async () => {
@@ -887,6 +895,7 @@ export function ResultGrid(p: Props) {
 
 /** View as | Transpose: swap rows and columns */
 function TransposedView({ cols, rows }: { cols: QueryResult["columns"]; rows: Cell[][] }) {
+  useSharedReady(); // time fractions come from the WASM module: render again once it has loaded
   const fracW = cols.map((c, ci) => (isTimeType(c.typeName) ? fracWidth(rows.map((r) => r[ci])) : 0));
   return (
     <div className="grid-scroll transposed">

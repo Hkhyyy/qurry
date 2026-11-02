@@ -167,8 +167,9 @@ fn result_golden() -> Golden {
         let mut o = json!({
             "numericColumns": nums.iter().map(|&i| names[i]).collect::<Vec<_>>(),
             "defaultAxes": axes,
-            "inList": all_selected(e).in_list().0,
-            "inList(column)": names.iter().enumerate().map(|(c, n)| (n.to_string(), Value::from(column_g.column_in_list(c).0))).collect::<Map<_, _>>(),
+            "inList": all_selected(e).in_list(DbKind::Postgres).0,
+            "inList(mysql)": all_selected(e).in_list(DbKind::Mysql).0,
+            "inList(column)": names.iter().enumerate().map(|(c, n)| (n.to_string(), Value::from(column_g.column_in_list(c, DbKind::Postgres).0))).collect::<Map<_, _>>(),
             "fracWidth": names.iter().enumerate().map(|(c, n)| (n.to_string(), Value::from(frac(c)))).collect::<Map<_, _>>(),
             "padFrac": names
                 .iter()

@@ -665,37 +665,9 @@ pub struct App {
 /// Tests only (testkit): stands in for the database, answering each query by its text
 pub type FakeDb = fn(&str) -> Result<QueryResult, String>;
 
+/// Palette search score (qurry_shared::fuzzy with the TUI's scoring); None = no match
 pub fn fuzzy(q: &str, text: &str) -> Option<i64> {
-    if q.is_empty() {
-        return Some(0);
-    }
-    let (q, t) = (q.to_lowercase(), text.to_lowercase());
-    if t == q {
-        return Some(1000);
-    }
-    if t.starts_with(&q) {
-        return Some(800 - t.len() as i64);
-    }
-    if let Some(i) = t.find(&q) {
-        return Some(500 - i as i64 - t.len() as i64 / 10);
-    }
-    let mut score = 200;
-    let mut it = t.char_indices().peekable();
-    let mut last = 0usize;
-    for qc in q.chars().filter(|c| !c.is_whitespace()) {
-        loop {
-            match it.next() {
-                Some((i, c)) if c == qc => {
-                    score -= (i.saturating_sub(last)).min(10) as i64;
-                    last = i + 1;
-                    break;
-                }
-                Some(_) => continue,
-                None => return None,
-            }
-        }
-    }
-    Some(score - t.len() as i64 / 10)
+    qurry_core::fuzzy::score(q, text, Default::default()).map(|s| s as i64)
 }
 
 fn err<E: std::fmt::Display>(e: E) -> String {
@@ -1447,23 +1419,13 @@ impl App {
 
     /// Tab title: schema.table if several table tabs share the name, db.schema.table if the schema matches too (DataGrip)
     pub fn tab_label(&self, t: &Tab) -> String {
-        let TabKind::Table(me) = &t.kind else { return t.title.clone() };
-        let same: Vec<&TableTab> = self
-            .tabs
-            .iter()
-            .filter(|x| x.id != t.id)
-            .filter_map(|x| match &x.kind {
-                TabKind::Table(o) if o.table == me.table => Some(o),
-                _ => None,
-            })
-            .collect();
-        if same.is_empty() {
-            t.title.clone()
-        } else if same.iter().any(|o| o.schema == me.schema) {
-            format!("{}.{}.{}", t.db, me.schema, me.table)
-        } else {
-            format!("{}.{}", me.schema, me.table)
-        }
+        let key = |t: &Tab| match &t.kind {
+            TabKind::Table(o) => Some(qurry_core::labels::TableTab { id: t.id.to_string(), db: t.db.clone(), schema: o.schema.clone(), table: o.table.clone() }),
+            _ => None,
+        };
+        let Some(me) = key(t) else { return t.title.clone() };
+        let all: Vec<_> = self.tabs.iter().filter_map(key).collect();
+        qurry_core::labels::label(&me, &all).unwrap_or_else(|| t.title.clone())
     }
 
     pub fn open_table(&mut self, conn: &str, db: String, schema: String, table: String, kind: String) {
@@ -2848,11 +2810,12 @@ impl App {
             Action::Snippets => self.snippets_palette(),
             Action::SaveSnippet => self.save_snippet(),
             Action::CopyInList => {
+                let kind = self.tabs.get(self.active).map_or(DbKind::Postgres, |t| self.kind_of(&t.conn));
                 let Some(g) = self.grid_mut() else {
                     self.status = "Open a result or table to copy a column".into();
                     return;
                 };
-                let (text, n) = g.in_list();
+                let (text, n) = g.in_list(kind);
                 crate::input::copy(self, &text);
                 let short: String = text.chars().take(80).collect();
                 self.status = format!("Copied {n} values as an IN list: {short}{}", if text.chars().count() > 80 { "…" } else { "" });

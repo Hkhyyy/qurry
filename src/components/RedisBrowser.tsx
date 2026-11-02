@@ -4,6 +4,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { api, QueryResult, redis, RedisKeyDetail, RedisKeyRow, RedisReply } from "../lib/api";
 import { keyTree, parentPaths, visibleRows } from "../lib/keyTree";
+import { useSharedReady } from "../lib/shared";
 import { FolderIcon } from "../ui/icons";
 import { Badge, Button, EmptyState, FormGrid, IconButton, Modal, Notice, Select, Spacer, Table, Tabs, Td, Text, TextArea, TextInput, Th, ToolButton, Toolbar, TreeRow } from "../ui";
 
@@ -88,7 +89,8 @@ export function RedisBrowser(p: Props) {
   // Keys appear as folders grouped by ":" (Medis). open = expanded folders, cur = selected folder (null when a key is selected)
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [cur, setCur] = useState<string | null>(null);
-  const rows = useMemo(() => visibleRows(keyTree(keys, (k) => k.key), open), [keys, open]);
+  const wasmReady = useSharedReady();
+  const rows = useMemo(() => visibleRows(keyTree(keys, (k) => k.key), open), [keys, open, wasmReady]);
   const toggle = (path: string) =>
     setOpen((o) => {
       const n = new Set(o);

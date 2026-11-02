@@ -29,6 +29,7 @@ import { DEFAULT_FONT, editorFontSize, setEditorFontSize } from "./lib/prefs";
 import { bindings, eventSpec, formatSpec, hit, loadKeymap, onKeymapChange } from "./lib/shortcuts";
 import { invalidateCompletion } from "./lib/completion";
 import { useStatusWidgets } from "./lib/statusbar";
+import { useSharedReady } from "./lib/shared";
 import { tableTabLabels } from "./lib/tabLabels";
 import { isDdl, isRead } from "./lib/stmtKind";
 import type { BackupOptions, FtsRequest } from "./lib/api";
@@ -284,12 +285,13 @@ export default function App() {
   const active = groupActive(focused) ?? leaves(panes).map(groupActive).find(Boolean) ?? null;
   const activeConn = conns.find((c) => c.id === active?.connId);
   // Several table tabs with the same name → schema.table (db.schema.table if the schema is also the same)
+  const wasmReady = useSharedReady();
   const tabLabels = useMemo(
     () =>
       tableTabLabels(
         tabs.flatMap((t) => (t.kind === "table" && t.edit ? [{ id: t.id, db: t.database || conns.find((c) => c.id === t.connId)?.database || "", schema: t.edit.schema, table: t.edit.table }] : [])),
       ),
-    [tabs, conns],
+    [tabs, conns, wasmReady],
   );
   const labelOf = (t: Tab) => tabLabels.get(t.id) ?? t.title;
   /** If the tab is in another workspace, change it there (so query results that finished meanwhile are not lost) */

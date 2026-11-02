@@ -2,11 +2,17 @@
 //! Pure Rust only: no I/O, no async, no platform APIs, so it builds for `wasm32-unknown-unknown`.
 //! qurry-core re-exports these modules (qurry_core::guard, qurry_core::sql, qurry_core::exec, qurry_core::complete, qurry_core::store::DbKind), so there is one copy.
 
+pub mod automap;
 pub mod complete;
 pub mod errors;
 pub mod exec;
+pub mod extract;
+pub mod format;
+pub mod fuzzy;
 pub mod guard;
+pub mod keytree;
 pub mod kind;
+pub mod labels;
 pub mod redis_cmd;
 pub mod sql;
 

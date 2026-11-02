@@ -8,6 +8,13 @@
       ""
     ]
   },
+  "bom-nel": {
+    "autoMap": [
+      "a",
+      "b",
+      ""
+    ]
+  },
   "duplicate-match": {
     "autoMap": [
       "UserId"
