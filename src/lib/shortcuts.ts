@@ -13,6 +13,8 @@ export type Scope = "global" | "tree" | "editor";
 export interface Shortcut {
   id: string;
   title: string;
+  /** Its line in Help › Keymap Reference */
+  desc: string;
   scope: Scope;
   keys: string[];
 }
@@ -20,12 +22,13 @@ export interface Shortcut {
 interface Row {
   gui?: string;
   title: string;
+  guiDesc?: string;
   scope?: Scope;
   guiKeys?: string[];
 }
 
 // Imported as JSON, not through WASM: keys work while the module loads (or if the WebView refuses it)
-export const SHORTCUTS: Shortcut[] = (TABLE as Row[]).flatMap((r) => (r.gui ? [{ id: r.gui, title: r.title, scope: r.scope ?? "global", keys: r.guiKeys ?? [] }] : []));
+export const SHORTCUTS: Shortcut[] = (TABLE as Row[]).flatMap((r) => (r.gui ? [{ id: r.gui, title: r.title, desc: r.guiDesc ?? r.title, scope: r.scope ?? "global", keys: r.guiKeys ?? [] }] : []));
 
 export const SCOPE_LABEL: Record<Scope, string> = { global: "Global", tree: "Database Explorer", editor: "Query Console" };
 
@@ -59,7 +62,8 @@ export function eventSpec(e: { code: string; metaKey: boolean; ctrlKey: boolean;
   return [...mods, k].join("+");
 }
 
-// Notation is drawn by the shared WASM module (same rules as the TUI); until it has loaded, specs show as stored ("Mod+Shift+L")
+// Notation is drawn by the shared WASM module (same rules as the TUI). Until it has loaded (or if the WebView refuses it), formatSpec
+// draws specs with a small copy of its rule, so labels never show the stored "Mod+Shift+L"; on-screen text is already written in it
 
 /** Character in key notation: ⌘/⌃/⌥ (Ctrl+/Alt+) without Shift + a single letter is lowercase ("⌘k"). Uppercase means a key that needs Shift ("⇧⌘A") */
 export function keyLabel(s: string): string {
@@ -68,7 +72,19 @@ export function keyLabel(s: string): string {
 
 /** Display: ⌃⌥⇧⌘ symbols on macOS, Ctrl+Alt+Shift+ elsewhere (letters follow keyLabel rules) */
 export function formatSpec(spec: string): string {
-  return sharedReady() ? shared().formatSpec(spec, isMac) : spec;
+  return sharedReady() ? shared().formatSpec(spec, isMac) : formatSpecTs(spec);
+}
+
+const MAC_KEYS: Record<string, string> = { Enter: "↩", Backspace: "⌫", Delete: "⌦", Esc: "⎋", Tab: "⇥", Up: "↑", Down: "↓", Left: "←", Right: "→", PageUp: "⇞", PageDown: "⇟" };
+
+/** formatSpec without the module: qurry_shared::keymap::format_spec for the specs commands use (shortcuts.test.ts compares them) */
+function formatSpecTs(spec: string): string {
+  const parts = spec.split("+");
+  let key = parts.pop()!;
+  const has = (m: string) => parts.includes(m);
+  if (/^[A-Z]$/.test(key) && parts.length && !has("Shift")) key = key.toLowerCase();
+  if (isMac) return (has("Ctrl") ? "⌃" : "") + (has("Alt") ? "⌥" : "") + (has("Shift") ? "⇧" : "") + (has("Mod") ? "⌘" : "") + (MAC_KEYS[key] ?? key);
+  return [has("Mod") || has("Ctrl") ? "Ctrl" : "", has("Alt") ? "Alt" : "", has("Shift") ? "Shift" : "", key].filter(Boolean).join("+");
 }
 
 // bindable and conflicts stay in TS (not through WASM) so the keymap editor works while the module loads or if it fails to load;

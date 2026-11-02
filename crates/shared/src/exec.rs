@@ -103,32 +103,34 @@ pub enum Plan {
     Nothing,
 }
 
-/// Keywords that can start a statement (non-SQL lines before such a line are treated as titles·notes and dropped).
-/// T-SQL control words too: dropping `IF EXISTS (…)` above an UPDATE would run the UPDATE unconditionally
+/// Keywords that can start a statement (non-SQL lines before such a line are treated as titles·notes and dropped)
 const SQL_START: &[&str] = &[
-    "if", "else", "while", "exec",
     "select", "with", "insert", "update", "delete", "merge", "upsert", "begin", "start", "commit", "rollback", "end", "abort", "savepoint", "release", "grant", "revoke", "create", "alter", "drop",
     "truncate", "comment", "set", "reset", "show", "explain", "analyze", "vacuum", "values", "table", "copy", "call", "do", "lock", "declare", "fetch", "close", "prepare", "execute",
     "deallocate", "listen", "notify", "unlisten", "refresh", "reindex", "cluster", "discard", "checkpoint", "use", "describe", "desc", "replace", "load", "handler", "optimize", "kill",
     "flush", "rename", "import",
 ];
+/// T-SQL control words start a statement only on SQL Server: dropping `IF EXISTS (…)` above an UPDATE would run the UPDATE
+/// unconditionally, while elsewhere a note line such as "If you need all users:" is a note
+const MSSQL_START: &[&str] = &["if", "else", "while", "exec"];
 
 fn first_word(s: &str) -> String {
     s.trim_start().chars().take_while(|c| c.is_ascii_alphabetic()).collect::<String>().to_ascii_lowercase()
 }
 
-fn starts_sql(line: &str) -> bool {
-    line.trim_start().starts_with('(') || SQL_START.contains(&first_word(line).as_str())
+fn starts_sql(line: &str, kind: DbKind) -> bool {
+    let w = first_word(line);
+    line.trim_start().starts_with('(') || SQL_START.contains(&w.as_str()) || (kind == DbKind::Mssql && MSSQL_START.contains(&w.as_str()))
 }
 
 /// Start position after dropping leading non-SQL lines (numbered titles etc.). Unchanged if no line starts with a keyword
-fn skip_notes(text: &str, start: usize, end: usize) -> usize {
+fn skip_notes(text: &str, start: usize, end: usize, kind: DbKind) -> usize {
     let mut pos = start;
     let mut cut = start;
     while pos < end {
         let line_end = text[pos..end].find('\n').map(|i| pos + i).unwrap_or(end);
         let line = &text[pos..line_end];
-        if starts_sql(line) {
+        if starts_sql(line, kind) {
             return cut;
         }
         let t = line.trim_start();
@@ -182,7 +184,7 @@ pub fn plan_in(text: &str, offset: usize, segs: &[(usize, usize)], kind: DbKind,
             let raw = &text[a..b];
             let from = a + (raw.len() - raw.trim_start().len());
             let end = a + raw.trim_end().len();
-            let at = if kind == DbKind::Redis { from } else { skip_notes(text, from, end) };
+            let at = if kind == DbKind::Redis { from } else { skip_notes(text, from, end, kind) };
             let start = at + (text[at..end].len() - text[at..end].trim_start().len());
             (from, Stmt { start, end, sql: text[start..end].to_string() })
         })
@@ -224,14 +226,24 @@ pub fn plan_in(text: &str, offset: usize, segs: &[(usize, usize)], kind: DbKind,
     }
 }
 
-/// Statements to run from a selection (empty: nothing). The GUI keeps its own copy of this rule (ConsolePane.tsx),
-/// so that a selection run as one statement works even without the shared WASM
-pub fn plan_selection(sel: &str, kind: DbKind, s: ExecSettings) -> Vec<String> {
-    let v: Vec<String> = match s.selection {
-        Selection::Single => vec![sel.trim().to_string()],
-        Selection::Separate => sql::split_script(sel, kind).into_iter().map(|(a, b)| sel[a..b].trim().to_string()).collect(),
+/// Statements to run from a selection (empty: nothing)
+pub fn plan_selection(sel: &str, kind: DbKind, s: ExecSettings) -> Vec<Stmt> {
+    plan_selection_in(sel, &sql::split_script(sel, kind), s)
+}
+
+/// plan_selection over statements already split (byte ranges in sel, as for plan_in), ranges in sel. The GUI runs a selection
+/// as one statement without this too, so that works while the shared WASM is missing
+pub fn plan_selection_in(sel: &str, segs: &[(usize, usize)], s: ExecSettings) -> Vec<Stmt> {
+    let trimmed = |a: usize, b: usize| {
+        let raw = &sel[a..b];
+        let start = a + (raw.len() - raw.trim_start().len());
+        Stmt { start, end: a + raw.trim_end().len(), sql: raw.trim().to_string() }
     };
-    v.into_iter().filter(|x| !x.is_empty()).collect()
+    let v: Vec<Stmt> = match s.selection {
+        Selection::Single => vec![trimmed(0, sel.len())],
+        Selection::Separate => segs.iter().map(|&(a, b)| trimmed(a, b)).collect(),
+    };
+    v.into_iter().filter(|x| !x.sql.is_empty()).collect()
 }
 
 #[cfg(test)]
@@ -315,9 +327,11 @@ mod tests {
     #[test]
     fn selection_modes() {
         let sel = "GRANT a TO x;\n\nGRANT b TO x;";
-        assert_eq!(plan_selection(sel, DbKind::Postgres, ExecSettings::default()), ["GRANT a TO x", "GRANT b TO x"]);
+        let v = plan_selection(sel, DbKind::Postgres, ExecSettings::default());
+        assert_eq!(texts(&v), ["GRANT a TO x", "GRANT b TO x"]);
+        assert_eq!(v.iter().map(|x| &sel[x.start..x.end]).collect::<Vec<_>>(), ["GRANT a TO x", "GRANT b TO x"]);
         let single = ExecSettings { selection: Selection::Single, ..Default::default() };
-        assert_eq!(plan_selection(sel, DbKind::Postgres, single), [sel]);
+        assert_eq!(plan_selection(sel, DbKind::Postgres, single), [Stmt { start: 0, end: sel.len(), sql: sel.into() }]);
         assert!(plan_selection(" \n ", DbKind::Postgres, single).is_empty());
     }
     #[test]
@@ -332,6 +346,11 @@ mod tests {
         assert_eq!(sqls(plan(sql, 1, DbKind::Mssql, s)), run(&[sql]));
         let sql = "WHILE @i < 3\nDELETE TOP (1) FROM t";
         assert_eq!(sqls(plan(sql, 1, DbKind::Mssql, s)), run(&[sql]));
+        // Elsewhere such a line is a note
+        for kind in [DbKind::Postgres, DbKind::Mysql] {
+            assert_eq!(sqls(plan("If you need all users:\nselect * from users", 1, kind, s)), run(&["select * from users"]));
+            assert_eq!(sqls(plan("Exec this after the deploy\nselect 1", 1, kind, s)), run(&["select 1"]));
+        }
     }
 
     #[test]

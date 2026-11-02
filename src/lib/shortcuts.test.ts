@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { KEYMAP } from "./keymap";
+import { KEYMAP, rowDesc } from "./keymap";
 import { shared } from "./shared";
 import { bindable, bindings, conflicts, keyLabel, SHORTCUTS } from "./shortcuts";
 
@@ -63,6 +63,24 @@ describe("bindable / conflicts", () => {
     expect(fresh.bindable("K")).toBe(false);
     expect(fresh.conflicts("tree.duplicate", "Mod+D").map((s) => s.id)).toEqual([]);
     expect(fresh.conflicts("goto.file", "Mod+D").map((s) => s.id)).toEqual(["tree.duplicate", "editor.duplicate"]);
+    // Labels as the module draws them, not the stored "Mod+O"
+    const mac = navigator.platform.toLowerCase().includes("mac");
+    for (const spec of specs) expect([spec, fresh.formatSpec(spec)]).toEqual([spec, shared().formatSpec(spec, mac)]);
+  });
+
+  it("before the WASM module has loaded, labels on the other platform match the module too", async () => {
+    const mac = navigator.platform.toLowerCase().includes("mac");
+    const platform = Object.getOwnPropertyDescriptor(navigator, "platform");
+    Object.defineProperty(navigator, "platform", { value: mac ? "Linux x86_64" : "MacIntel", configurable: true });
+    try {
+      vi.resetModules();
+      const fresh = await import("./shortcuts");
+      expect((await import("./shared")).sharedReady()).toBe(false);
+      for (const spec of specs) expect([spec, fresh.formatSpec(spec)]).toEqual([spec, shared().formatSpec(spec, !mac)]);
+    } finally {
+      if (platform) Object.defineProperty(navigator, "platform", platform);
+      else delete (navigator as { platform?: string }).platform;
+    }
   });
 });
 
@@ -75,8 +93,8 @@ describe("docs/shortcuts-gui.md", () => {
     for (const text of Object.values(docs)) {
       for (const row of KEYMAP.flatMap((s) => s.rows)) {
         if (row[0] !== null) continue;
-        const keys = SHORTCUTS.find((s) => s.id === row[2])!.keys.map((k) => shared().formatSpec(k, true)).join(" / ");
-        expect(text).toContain(`| ${cell(esc(keys))} | ${esc(keyLabel(row[1]))} |`);
+        const keys = SHORTCUTS.find((s) => s.id === row[1])!.keys.map((k) => shared().formatSpec(k, true)).join(" / ");
+        expect(text).toContain(`| ${cell(esc(keys))} | ${esc(keyLabel(rowDesc(row)))} |`);
       }
     }
   });

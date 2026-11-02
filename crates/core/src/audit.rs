@@ -3,6 +3,7 @@
 //! Undo SQL: for simple UPDATE / DELETE (guard::simple_dml), snapshot the rows about to change right before running, in the same transaction and
 //! locked (SELECT … FOR UPDATE, at most UNDO_MAX_ROWS rows), and record SQL that reverts them. It never runs on its own — open it in a console and run it (Production confirmation still applies).
 //! Log: config/audit.jsonl (one entry per line, 0600). Passwords are masked with history::redact
+use crate::backend::{Backend, dispatch};
 use crate::db::{Pool, QueryResult};
 use crate::error::{AppError, AppResult};
 use crate::guard::SimpleDml;
@@ -362,7 +363,7 @@ pub(crate) struct Col {
 }
 
 /// How to keep a statement's undo: `snapshot` is a SELECT … FOR UPDATE of the rows it changes, run right before it in the same transaction
-/// (Session::run_with_snapshot · execute_batch_with), so nobody can change the rows it saved in between; `undo` turns its result into SQL that reverts them
+/// (Session::run_with_snapshot · Backend::execute_batch), so nobody can change the rows it saved in between; `undo` turns its result into SQL that reverts them
 /// (rows that start to match only after the snapshot aren't locked: `undo` keeps no undo when the change hits more rows than it saved)
 pub(crate) struct UndoPlan {
     pub snapshot: String,
@@ -380,7 +381,7 @@ pub(crate) async fn plan(pool: &Pool, sql: &str, kind: DbKind) -> Result<UndoPla
     let Some(d) = crate::guard::simple_dml(sql, kind) else {
         return Err("Undo is kept for simple UPDATE / DELETE on one table only".into());
     };
-    let cols = table_columns(pool, &d.table, kind).await.map_err(|e| format!("Couldn't read the table's columns: {e}"))?;
+    let cols = table_columns(pool, &d.table).await.map_err(|e| format!("Couldn't read the table's columns: {e}"))?;
     if cols.is_empty() {
         return Err(format!("Couldn't find table {}", d.table));
     }
@@ -429,7 +430,7 @@ impl UndoPlan {
 }
 
 /// MySQL `a`.`b` → ["a", "b"]
-fn my_name_parts(s: &str) -> Vec<String> {
+pub(crate) fn my_name_parts(s: &str) -> Vec<String> {
     let (mut out, mut cur, mut q) = (Vec::new(), String::new(), false);
     let mut it = s.chars().peekable();
     while let Some(c) = it.next() {
@@ -449,38 +450,8 @@ fn my_name_parts(s: &str) -> Vec<String> {
 }
 
 /// Table columns (table = the name as written in SQL: public."Order Items" · `shop`.`users`)
-pub(crate) async fn table_columns(pool: &Pool, table: &str, kind: DbKind) -> AppResult<Vec<Col>> {
-    Ok(match (pool, kind) {
-        (Pool::Pg(p), _) => {
-            let rows: Vec<(String, bool, bool)> = sqlx::query_as(
-                "SELECT a.attname::text, coalesce(a.attnum = ANY(i.indkey), false), a.attgenerated <> '' \
-                 FROM pg_attribute a LEFT JOIN pg_index i ON i.indrelid = a.attrelid AND i.indisprimary \
-                 WHERE a.attrelid = $1::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum",
-            )
-            .bind(table)
-            .fetch_all(p)
-            .await?;
-            rows.into_iter().map(|(name, pk, generated)| Col { name, pk, generated, binary: false }).collect()
-        }
-        (Pool::My(p), _) => {
-            let parts = my_name_parts(table);
-            let (schema, name) = match parts.as_slice() {
-                [s, n] => (Some(s.clone()), n.clone()),
-                _ => (None, parts.last().cloned().unwrap_or_default()),
-            };
-            let rows: Vec<(String, String, i64, i64)> = sqlx::query_as(
-                "SELECT CAST(COLUMN_NAME AS CHAR), CAST(DATA_TYPE AS CHAR), CAST(COLUMN_KEY = 'PRI' AS SIGNED), CAST(EXTRA LIKE '%GENERATED%' AS SIGNED) \
-                 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = COALESCE(?, DATABASE()) AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
-            )
-            .bind(schema)
-            .bind(name)
-            .fetch_all(p)
-            .await?;
-            let bin = |t: &str| t.contains("blob") || t.contains("binary") || t == "bit" || ["geometry", "point", "linestring", "polygon", "multipoint", "multilinestring", "multipolygon", "geometrycollection"].contains(&t);
-            rows.into_iter().map(|(name, t, pk, generated)| Col { name, pk: pk != 0, generated: generated != 0, binary: bin(&t.to_lowercase()) }).collect()
-        }
-        _ => vec![],
-    })
+pub(crate) async fn table_columns(pool: &Pool, table: &str) -> AppResult<Vec<Col>> {
+    dispatch!(pool, b => b.table_columns(table).await)
 }
 
 /// SELECT … FOR UPDATE that snapshots the rows about to change (and locks them until the change commits). PG: rows as one JSON blob (no value loss — unpacked with jsonb_populate_recordset when undoing).

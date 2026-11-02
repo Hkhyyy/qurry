@@ -32,6 +32,12 @@ pub fn is_read(sql: &str, kind: JsValue) -> Result<bool, JsError> {
     Ok(qurry_shared::guard::is_read(sql, parse_kind(kind)?))
 }
 
+/// UI only: Explain Analyse's rollback undoes everything the statement does (not nextval, dblink_exec, INTO OUTFILE …)
+#[wasm_bindgen(js_name = rollbackUndoes)]
+pub fn rollback_undoes(sql: &str, kind: JsValue) -> Result<bool, JsError> {
+    Ok(qurry_shared::guard::rollback_undoes(sql, parse_kind(kind)?))
+}
+
 /// UI only, not a security check: the statement changes structure (reload the explorer tree)
 #[wasm_bindgen(js_name = isDdl)]
 pub fn is_ddl(sql: &str, kind: JsValue) -> Result<bool, JsError> {
@@ -148,6 +154,12 @@ enum JsPlan {
     Ask(Vec<JsChoice>),
 }
 
+/// Statements with UTF-16 ranges in `text`
+fn js_stmts(text: &str, v: Vec<exec::Stmt>) -> Vec<JsStmt> {
+    let r = utf16_ranges(text, &v.iter().map(|s| (s.start, s.end)).collect::<Vec<_>>());
+    v.into_iter().zip(r).map(|(s, [start, end])| JsStmt { start, end, sql: s.sql }).collect()
+}
+
 /// What to run from the caret (qurry_shared::exec::plan_in) over `segs` (the console's statements, UTF-16 ranges in order) with the
 /// Query Execution settings ({inside, outside, selection}; unknown values fall back to the defaults): {run} | {ask} | undefined
 #[wasm_bindgen(js_name = planExecution)]
@@ -155,16 +167,29 @@ pub fn plan_execution(text: &str, offset: usize, segs: JsValue, kind: JsValue, s
     let segs: Vec<Segment> = serde_wasm_bindgen::from_value(segs)?;
     let segs = byte_ranges(text, &segs.iter().map(|s| (s.start, s.end)).collect::<Vec<_>>());
     let settings = ExecSettings::from_json(&serde_wasm_bindgen::from_value(settings)?);
-    let js = |v: Vec<exec::Stmt>| {
-        let r = utf16_ranges(text, &v.iter().map(|s| (s.start, s.end)).collect::<Vec<_>>());
-        v.into_iter().zip(r).map(|(s, [start, end])| JsStmt { start, end, sql: s.sql }).collect()
-    };
+    let js = |v| js_stmts(text, v);
     let plan = match exec::plan_in(text, byte_offset(text, offset), &segs, parse_kind(kind)?, settings) {
         Plan::Nothing => None,
         Plan::Run(v) => Some(JsPlan::Run(js(v))),
         Plan::Ask(opts) => Some(JsPlan::Ask(opts.into_iter().map(|(label, v)| JsChoice { label, stmts: js(v) }).collect())),
     };
     Ok(serde_wasm_bindgen::to_value(&plan)?)
+}
+
+/// What to run from a selection (qurry_shared::exec::plan_selection_in) over `segs` (its statements, UTF-16 ranges in the selection)
+/// with the Query Execution settings: [{start, end, sql}, …], ranges in the selection
+#[wasm_bindgen(js_name = planSelection)]
+pub fn plan_selection(sel: &str, segs: JsValue, settings: JsValue) -> Result<JsValue, JsError> {
+    let segs: Vec<Segment> = serde_wasm_bindgen::from_value(segs)?;
+    let segs = byte_ranges(sel, &segs.iter().map(|s| (s.start, s.end)).collect::<Vec<_>>());
+    let v = exec::plan_selection_in(sel, &segs, ExecSettings::from_json(&serde_wasm_bindgen::from_value(settings)?));
+    Ok(serde_wasm_bindgen::to_value(&js_stmts(sel, v))?)
+}
+
+/// A value as a string literal `kind` reads (qurry_shared::sql::literal; null → NULL): the grid's filters and edit SQL, as its copy formats
+#[wasm_bindgen(js_name = sqlLiteral)]
+pub fn sql_literal(kind: JsValue, value: Option<String>) -> Result<String, JsError> {
+    Ok(qurry_shared::sql::literal(parse_kind(kind)?, value.as_deref()))
 }
 
 /// Statement at the caret (a UTF-16 offset, as in a JS string), trimmed; undefined if the text has none
@@ -230,7 +255,8 @@ impl CompletionIndex {
         Ok(CompletionIndex { meta: complete::Meta::new(tables), lead: RefCell::new(None), rest: RefCell::new(None) })
     }
 
-    /// Candidates at the caret (a UTF-16 offset into `text`), replacing the word before it. `db` is the tab's DB ("" for none).
+    /// Candidates at the caret (a UTF-16 offset into `text`, the console), replacing the word before it; tables and aliases are the
+    /// caret's statement's. `db` is the tab's DB ("" for none).
     /// {startColumn, endColumn, lead, rest}: the candidates are lead then rest (either may be the same array as last time; don't change them)
     pub fn suggest(&self, text: &str, caret: usize, db: &str, mysql: bool) -> Result<JsValue, JsError> {
         let (s, rest) = suggestions(&self.meta, text, caret, db, mysql);
@@ -246,7 +272,7 @@ impl CompletionIndex {
     #[wasm_bindgen(js_name = hintAt)]
     pub fn hint_at(&self, text: &str, caret: usize, db: &str, mysql: bool) -> Result<JsValue, JsError> {
         let at = Caret::new(text, caret);
-        Ok(serde_wasm_bindgen::to_value(&complete::hint_at(&self.meta, text, at.before, db, mysql))?)
+        Ok(serde_wasm_bindgen::to_value(&complete::hint_at(&self.meta, &at.statement(text, mysql), at.before, db, mysql))?)
     }
 
     /// What meta.hints returned for `hint` → candidates. as_pairs = keys were asked, none came, so these are @> conditions
@@ -287,7 +313,7 @@ pub fn pairs_insert(value: &str, op: &str) -> String {
 /// The range and the leading candidates (the statement's columns), and what the rest comes from
 fn suggestions(m: &complete::Meta, text: &str, caret: usize, db: &str, mysql: bool) -> (Suggestions, Option<complete::Rest>) {
     let at = Caret::new(text, caret);
-    let (n, items, rest) = complete::suggest_lead(m, text, at.before, db, mysql, Options::GUI);
+    let (n, items, rest) = complete::suggest_lead(m, &at.statement(text, mysql), at.before, db, mysql, Options::GUI);
     let end = at.column();
     (Suggestions { start_column: end - utf16_tail(at.before, n), end_column: end, items }, rest)
 }
@@ -304,13 +330,20 @@ fn hint_suggestions(text: &str, caret: usize, h: &complete::HintAt, hints: &[com
 struct Caret<'a> {
     before: &'a str,
     after: Option<char>,
+    /// Byte offset in the text
+    at: usize,
 }
 
 impl<'a> Caret<'a> {
     fn new(text: &'a str, utf16: usize) -> Self {
         let b = byte_offset(text, utf16);
         let start = text[..b].rfind('\n').map_or(0, |i| i + 1);
-        Caret { before: &text[start..b], after: text[b..].chars().next() }
+        Caret { before: &text[start..b], after: text[b..].chars().next(), at: b }
+    }
+
+    /// The statement the caret is in (as the TUI passes it): an alias of another statement in the console doesn't resolve here
+    fn statement(&self, text: &str, mysql: bool) -> String {
+        qurry_shared::sql::statement_at(text, self.at, if mysql { DbKind::Mysql } else { DbKind::Postgres }).unwrap_or_default()
     }
 
     /// Monaco column of the caret (1-based, UTF-16)

@@ -862,7 +862,8 @@
   "table-named-like-schema": {
     "hintRequests": [],
     "suggestions": [
-      {"label":"region","description":"text","kind":"Field","insertText":"region","range":[1,14,1,14]}
+      {"label":"region","description":"text","kind":"Field","insertText":"region","range":[1,14,1,14]},
+      {"label":"realm","description":"realm_name","kind":"Field","insertText":"realm","range":[1,14,1,14]}
     ]
   },
   "emoji-before-word": {
@@ -965,7 +966,7 @@
     "hintRequests": [],
     "suggestions": [
       {"label":"invoices","description":"billing","kind":"Class","insertText":"billing.invoices","range":[1,15,1,17]},
-      {"label":"items","description":"shop","kind":"Class","insertText":"shop.items","range":[1,15,1,17]},
+      {"label":"items","description":"shop","kind":"Class","insertText":"items","range":[1,15,1,17]},
       {"label":"orders","description":"public","kind":"Class","insertText":"orders","range":[1,15,1,17]},
       {"label":"sales","description":"public","kind":"Class","insertText":"sales","range":[1,15,1,17]},
       {"label":"users","description":"public","kind":"Class","insertText":"users","range":[1,15,1,17]},
@@ -1149,7 +1150,7 @@
       {"label":"id","description":"int · items","kind":"Field","insertText":"id","range":[1,36,1,36]},
       {"label":"sku","description":"varchar(20) · items","kind":"Field","insertText":"sku","range":[1,36,1,36]},
       {"label":"invoices","description":"billing","kind":"Class","insertText":"billing.invoices","range":[1,36,1,36]},
-      {"label":"items","description":"shop","kind":"Class","insertText":"shop.items","range":[1,36,1,36]},
+      {"label":"items","description":"shop","kind":"Class","insertText":"items","range":[1,36,1,36]},
       {"label":"orders","description":"public","kind":"Class","insertText":"orders","range":[1,36,1,36]},
       {"label":"sales","description":"public","kind":"Class","insertText":"sales","range":[1,36,1,36]},
       {"label":"users","description":"public","kind":"Class","insertText":"users","range":[1,36,1,36]},
@@ -1236,6 +1237,27 @@
       {"label":"when","kind":"Keyword","insertText":"when","range":[1,36,1,36]},
       {"label":"where","kind":"Keyword","insertText":"where","range":[1,36,1,36]},
       {"label":"with","kind":"Keyword","insertText":"with","range":[1,36,1,36]}
+    ]
+  },
+  "hint-domain-type-quoted": {
+    "hintRequests": [{"schema":"public","table":"sales","column":"realm","path":[],"keys":false,"pairs":false}],
+    "suggestions": [
+      {"label":"x' or true; delete from realm_users; --","description":"1 row","kind":"Value","insertText":"'x'' or true; delete from realm_users; --'","range":[1,26,1,26]},
+      {"label":"7","description":"1 row","kind":"Value","insertText":"'7'","range":[1,26,1,26]}
+    ]
+  },
+  "alias-reused-dot": {
+    "hintRequests": [],
+    "suggestions": [
+      {"label":"id","description":"int8","kind":"Field","insertText":"id","range":[2,10,2,10]},
+      {"label":"user_name","description":"varchar","kind":"Field","insertText":"user_name","range":[2,10,2,10]},
+      {"label":"email","description":"text","kind":"Field","insertText":"email","range":[2,10,2,10]}
+    ]
+  },
+  "alias-reused-hint": {
+    "hintRequests": [{"schema":"public","table":"orders","column":"status","path":[],"keys":false,"pairs":false}],
+    "suggestions": [
+      {"label":"paid","description":"10 rows","kind":"Value","insertText":"paid","range":[2,42,2,42]}
     ]
   }
 }

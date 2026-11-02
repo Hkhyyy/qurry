@@ -1,4 +1,5 @@
 //! App state: Data Source pools, sessions, SSH tunnels, passwords. GUI (Tauri), TUI and MCP use the same methods.
+use crate::backend::{Backend, dispatch};
 use crate::db::{self, Pool, QueryResult};
 use crate::error::{AppError, AppResult};
 use crate::session::{self, Session};
@@ -368,79 +369,10 @@ pub async fn redis_pool(state: &AppState, id: &str) -> AppResult<crate::redisdb:
     }
 }
 
-/// Time limit for read-only (MCP) queries (so queries sent by others do not hold the server for long)
 const SERVER_CHANGED: &str = "The server, port, user, type, SSH tunnel or Redis nodes changed, or SSL was turned off, its verification lowered or its CA file changed — enter the password again. The saved one is only sent to the server it was saved for.";
 const SSH_CHANGED: &str = "The SSH server changed — enter the SSH password / passphrase again. The saved one is only sent to the server it was saved for.";
-/// MCP reads: 60 seconds, string parsing matches guard (even if the server or role sets standard_conforming_strings = off)
-const READ_ONLY_TIMEOUT_PG: &str = "SET LOCAL statement_timeout = '60s'";
-const READ_ONLY_STRINGS_PG: &str = "SET LOCAL standard_conforming_strings = on";
-const READ_ONLY_TIMEOUT_MY: &str = "SET SESSION max_execution_time = 60000";
-/// Max size of a single Redis value readable from MCP
-const REDIS_READ_MAX_BYTES: i64 = 16 << 20;
 /// Max size of an MCP CSV export
 const EXPORT_MAX_BYTES: u64 = 512 << 20;
-const EXPORT_MAX_PLUGIN_ROWS: usize = 1_000_000;
-
-/// MCP Redis reads (query, and reads sent to execute): the guard's limits, then what only the server knows — whole-key reads
-/// (HGETALL, LRANGE 0 -1, XRANGE without COUNT …) up to REDIS_STRICT_MAX elements, and values up to REDIS_READ_MAX_BYTES.
-/// Commands that aren't reads are left to the caller
-async fn check_redis_read(m: &crate::redisdb::RedisConn, line: &str) -> AppResult<()> {
-    use crate::guard::REDIS_STRICT_MAX;
-    let args = crate::redisdb::parse_command(line.trim().trim_end_matches(';').trim())?;
-    let cmd = String::from_utf8_lossy(&args[0]).to_uppercase();
-    let sub = args.get(1).map(|a| String::from_utf8_lossy(a).to_uppercase()).unwrap_or_default();
-    if !crate::redisdb::is_read_command(&cmd, &sub) {
-        return Ok(());
-    }
-    let rest: Vec<String> = args.iter().skip(1).map(|a| String::from_utf8_lossy(a).into_owned()).collect();
-    if let Some(why) = crate::guard::redis_strict_violation(&cmd, &rest) {
-        return Err(AppError::Msg(why));
-    }
-    // Whole keys: count the elements (and then the bytes) before reading
-    if let Some(c) = crate::guard::redis_size_check(&cmd, &rest) {
-        let mut n = 0i64;
-        for k in &c.keys {
-            n = n.saturating_add(crate::redisdb::element_count(m, c.count, k.as_bytes()).await?);
-        }
-        if n > REDIS_STRICT_MAX {
-            return Err(AppError::Msg(format!("{cmd} would read {n} elements — at most {REDIS_STRICT_MAX} in read-only mode; use {} (or redis_get for a preview)", c.instead)));
-        }
-        let mut bytes = 0i64;
-        for k in &c.keys {
-            bytes = bytes.saturating_add(crate::redisdb::memory_usage(m, k.as_bytes(), 0).await?);
-        }
-        if bytes > REDIS_READ_MAX_BYTES {
-            return Err(AppError::Msg(format!("{cmd} would read {} MB — too big to read here; use {}", bytes >> 20, c.instead)));
-        }
-    }
-    // Commands that return a whole value: check the size before reading
-    // GETRANGE with a bounded range reads at most that much
-    let range_small = cmd == "GETRANGE" && matches!((rest.get(1).and_then(|a| a.parse::<i64>().ok()), rest.get(2).and_then(|a| a.parse::<i64>().ok())), (Some(a), Some(b)) if a >= 0 && b >= a && b - a < REDIS_READ_MAX_BYTES);
-    let keys: &[String] = match cmd.as_str() {
-        "GET" | "JSON.GET" => rest.get(..1).unwrap_or(&[]),
-        "GETRANGE" if !range_small => rest.get(..1).unwrap_or(&[]),
-        "MGET" => &rest,
-        "JSON.MGET" => rest.split_last().map(|(_, k)| k).unwrap_or(&[]),
-        _ => &[],
-    };
-    let json = cmd.starts_with("JSON.");
-    for k in keys {
-        let n = crate::redisdb::value_size(m, k.as_bytes(), json).await?;
-        if n > REDIS_READ_MAX_BYTES {
-            return Err(AppError::Msg(format!("{k} is {} MB — too big to read here (use GETRANGE, or redis_get for a preview)", n >> 20)));
-        }
-    }
-    // HGET / HMGET: one hash field can be big too
-    if matches!(cmd.as_str(), "HGET" | "HMGET") && rest.len() > 1 {
-        for f in &rest[1..] {
-            let n = crate::redisdb::field_len(m, rest[0].as_bytes(), f.as_bytes()).await?;
-            if n > REDIS_READ_MAX_BYTES {
-                return Err(AppError::Msg(format!("{}.{f} is {} MB — too big to read here", rest[0], n >> 20)));
-            }
-        }
-    }
-    Ok(())
-}
 
 #[derive(Serialize)]
 pub struct ImportResult {
@@ -460,47 +392,20 @@ impl AppState {
     /// Run read-only (the MCP default). guard checks it (one statement, read commands, no side-effect functions); it runs inside a READ ONLY transaction
     /// with a 60-second limit, rolled back at the end. MySQL uses the prepared protocol (the server accepts only one statement). Redis: read commands only (no CONFIG, KEYS)
     pub async fn run_read_only(&self, id: String, sql: String, limit: usize) -> AppResult<QueryResult> {
-        use sqlx::Executor;
         let kind = self.kind_of(&id)?;
         if let Some(why) = crate::guard::read_only_violation(&sql, kind, true) {
             return Err(AppError::Msg(format!("{why} (start the MCP server with --allow-write to change data)")));
         }
-        match ensure_pool(self, &id).await? {
-            Pool::Pg(p) => {
-                let mut tx = p.begin().await?;
-                tx.execute("SET TRANSACTION READ ONLY").await?;
-                tx.execute(READ_ONLY_TIMEOUT_PG).await?;
-                tx.execute(READ_ONLY_STRINGS_PG).await?;
-                let r = db::run_on(&mut tx, &sql, limit).await;
-                let _ = tx.rollback().await;
-                r
+        // Redis has no SQL guard: refuse a write here too, before anything connects
+        if kind == store::DbKind::Redis {
+            let args = crate::redisdb::parse_command(&sql)?;
+            let cmd = String::from_utf8_lossy(&args[0]).to_uppercase();
+            let sub = args.get(1).map(|a| String::from_utf8_lossy(a).to_uppercase()).unwrap_or_default();
+            if !crate::redisdb::is_read_command(&cmd, &sub) {
+                return Err(AppError::Msg(format!("{cmd} is not a read-only command")));
             }
-            Pool::My(p) => {
-                let mut conn = p.acquire().await?;
-                // Always reset the time limit, even on failure, so it does not stay on the pooled connection
-                let r = async {
-                    conn.execute(READ_ONLY_TIMEOUT_MY).await?;
-                    conn.execute("START TRANSACTION READ ONLY").await?;
-                    crate::mysql::run_read_only_on(&mut conn, &sql, limit).await
-                }
-                .await;
-                let _ = conn.execute("ROLLBACK").await;
-                let _ = conn.execute("SET SESSION max_execution_time = 0").await;
-                r
-            }
-            Pool::Redis(m, _) => {
-                let args = crate::redisdb::parse_command(&sql)?;
-                let cmd = String::from_utf8_lossy(&args[0]).to_uppercase();
-                let sub = args.get(1).map(|a| String::from_utf8_lossy(a).to_uppercase()).unwrap_or_default();
-                if !crate::redisdb::is_read_command(&cmd, &sub) {
-                    return Err(AppError::Msg(format!("{cmd} is not a read-only command")));
-                }
-                check_redis_read(&m, &sql).await?;
-                crate::redisdb::run(&m, &sql, limit).await
-            }
-            // Drivers: no server-side READ ONLY transaction — only what passes the guard check (one statement, read commands)
-            Pool::Plugin(c) => c.query_opts(&sql, limit, true).await,
         }
+        dispatch!(ensure_pool(self, &id).await?, b => b.run_read_only(&sql, limit).await)
     }
 
     /// Read-only query result to CSV (MCP). Same rules as run_read_only for checking and running (the full result also runs in a READ ONLY transaction)
@@ -512,7 +417,7 @@ impl AppState {
         let pool = ensure_pool(self, &id).await?;
         // Same time limit as run_read_only, plus a file size limit (so it does not fill the disk). On failure, delete the partial file
         let mut out = crate::transfer::Exporter::csv_file(&path).await?.max_bytes(EXPORT_MAX_BYTES);
-        let r = match Self::export_read_only_into(pool, &sql, &mut out).await {
+        let r = match dispatch!(pool, b => b.export_read_only(&sql, &mut out).await) {
             Ok(()) => out.finish().await.map(|e| e.rows),
             Err(e) => Err(e),
         };
@@ -520,44 +425,6 @@ impl AppState {
             let _ = std::fs::remove_file(&path);
         }
         r
-    }
-
-    async fn export_read_only_into(pool: Pool, sql: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {
-        use sqlx::Executor;
-        match pool {
-            Pool::Pg(p) => {
-                let mut tx = p.begin().await?;
-                tx.execute("SET TRANSACTION READ ONLY").await?;
-                tx.execute(READ_ONLY_TIMEOUT_PG).await?;
-                tx.execute(READ_ONLY_STRINGS_PG).await?;
-                let r = db::export_pg_on(&mut tx, sql, out).await;
-                let _ = tx.rollback().await;
-                r?
-            }
-            Pool::My(p) => {
-                let mut conn = p.acquire().await?;
-                let r = async {
-                    conn.execute(READ_ONLY_TIMEOUT_MY).await?;
-                    conn.execute("START TRANSACTION READ ONLY").await?;
-                    crate::mysql::export_on(&mut conn, sql, out, true).await
-                }
-                .await;
-                let _ = conn.execute("ROLLBACK").await;
-                let _ = conn.execute("SET SESSION max_execution_time = 0").await;
-                r?
-            }
-            Pool::Redis(..) => return Err(AppError::Msg("CSV export of Redis commands is not available in read-only mode".into())),
-            Pool::Plugin(c) => {
-                let r = tokio::time::timeout(std::time::Duration::from_secs(60), c.query_opts(sql, EXPORT_MAX_PLUGIN_ROWS, true))
-                    .await
-                    .map_err(|_| AppError::Msg("The export took over 60 s — narrow the query".into()))??;
-                out.header(&r.columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>()).await?;
-                for row in &r.rows {
-                    out.row(row).await?;
-                }
-            }
-        }
-        Ok(())
     }
 
     pub fn kind_of(&self, id: &str) -> AppResult<crate::store::DbKind> {
@@ -729,11 +596,7 @@ impl AppState {
         };
         let (pool, tunnel) = connect_config(&config, password.as_deref(), ssh_secret.as_deref()).await?;
         let version = pool.server_version().await;
-        let plain = match &pool {
-            Pool::My(p) => crate::mysql::plaintext_note(p, &config).await,
-            Pool::Pg(p) => db::pg_plaintext_note(p, &config).await,
-            _ => None,
-        };
+        let plain = dispatch!(pool, b => b.plaintext_note(&config).await);
         pool.close().await;
         drop(tunnel);
         let via = config.active_ssh().map(|s| format!("  (via SSH {}@{})", s.user, s.host)).unwrap_or_default();
@@ -760,11 +623,7 @@ impl AppState {
         let v = pool.server_version().await?;
         // If connected in plain text, say so next to the version (status bar · TUI status)
         let cfg = self.source(&id)?;
-        let note = match &pool {
-            Pool::My(p) => crate::mysql::plaintext_note(p, &cfg).await,
-            Pool::Pg(p) => db::pg_plaintext_note(p, &cfg).await,
-            _ => None,
-        };
+        let note = dispatch!(pool, b => b.plaintext_note(&cfg).await);
         Ok(match note {
             Some(n) => format!("{v} — {n}"),
             None => v,
@@ -937,11 +796,7 @@ impl AppState {
             Some(e) => (e.conn_id.clone(), e.pid),
             None => return Ok(false),
         };
-        match ensure_pool(self, &conn_id).await? {
-            Pool::Pg(pg) => session::cancel(&pg, pid as i32).await,
-            Pool::My(my) => crate::mysql::cancel(&my, pid).await,
-            Pool::Redis(..) | Pool::Plugin(_) => Ok(false),
-        }
+        dispatch!(ensure_pool(self, &conn_id).await?, b => b.cancel(pid).await)
     }
 
     /// Tx: Auto / Manual
@@ -1052,9 +907,13 @@ impl AppState {
     /// Redis reads among the items get the same size checks as run_read_only
     pub async fn execute_batch_prepared(&self, id: String, statements: Vec<String>) -> AppResult<BatchResult> {
         if self.kind_of(&id)? == store::DbKind::Redis {
+            // A read-only source refuses a write before the size checks connect
+            for st in &statements {
+                self.check_read_only(&id, st)?;
+            }
             let m = redis_pool(self, &id).await?;
             for st in &statements {
-                check_redis_read(&m, st).await?;
+                crate::redisdb::check_read(&m, st).await?;
             }
         }
         self.execute_batch_with(id, statements, false, true).await
@@ -1096,26 +955,7 @@ impl AppState {
             });
         }
         let snaps: Vec<Option<&str>> = plans.iter().map(|p| p.as_ref().and_then(|p| p.as_ref().ok()).map(|p| p.snapshot.as_str())).collect();
-        let (n, mut shots) = match pool {
-            Pool::Pg(pg) => session::execute_batch_with(&pg, statements, exact_one, prepared, &snaps).await?,
-            Pool::My(my) => crate::mysql::execute_batch_with(&my, statements, exact_one, prepared, &snaps).await?,
-            Pool::Redis(m, _) => {
-                for st in statements {
-                    crate::redisdb::run(&m, st, 1).await?;
-                }
-                (statements.len() as u64, vec![])
-            }
-            // Drivers: one by one (drivers know nothing about transactions — only exact_one is enforced)
-            Pool::Plugin(c) => {
-                let mut affected = 0;
-                for st in statements {
-                    let n = c.query(st, 1).await?.rows_affected;
-                    session::check_exact_one(st, n, exact_one)?;
-                    affected += n;
-                }
-                (affected, vec![])
-            }
-        };
+        let (n, mut shots) = dispatch!(pool, b => b.execute_batch(statements, exact_one, prepared, &snaps).await)?;
         shots.resize_with(plans.len(), || None);
         *undos = plans
             .into_iter()
@@ -1542,15 +1382,66 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// Every run path asks the guard before it reaches a backend: each source's server is a tripwire (a listener that counts any
+    /// connection), and a statement the guard refuses comes back with the guard's error while nothing connected.
+    /// Redis has no SQL guard: its MCP read refuses a write command by name before connecting. (MCP CSV export of Redis commands is
+    /// refused by the backend for every command, so it isn't a guard path and isn't checked here)
+    #[tokio::test]
+    async fn guard_runs_before_the_backend_on_every_run_path() {
+        use crate::store::DbKind;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let trip = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = trip.local_addr().unwrap().port();
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let h = hits.clone();
+        tokio::spawn(async move {
+            while let Ok((s, _)) = trip.accept().await {
+                h.fetch_add(1, Ordering::SeqCst);
+                drop(s);
+            }
+        });
+        let dir = std::env::temp_dir().join(format!("qurry-guard-{}", uuid::Uuid::new_v4()));
+        let st = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+        for (kind, write) in [(DbKind::Postgres, "delete from t"), (DbKind::Mysql, "delete from t"), (DbKind::Clickhouse, "delete from t where 1"), (DbKind::Redis, "DEL k")] {
+            let id = format!("{kind:?}");
+            let cfg = ConnectionConfig {
+                id: id.clone(), name: id.clone(), kind, host: "127.0.0.1".into(), port, user: "u".into(), database: "d".into(), color: None, ssh: None,
+                password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: true, options: Default::default(), ssl: None, redis: None,
+            };
+            st.save_connection(cfg, None, None).await.unwrap();
+            let err = |r: AppResult<BatchResult>| r.expect_err("refused").to_string();
+            let source = |e: String| assert!(e.contains(&format!("\"{id}\" is read-only")), "{kind:?}: {e}");
+            source(st.run_query(id.clone(), write.into(), None, None).await.unwrap_err().to_string());
+            source(st.run_query(id.clone(), write.into(), None, Some("tab".into())).await.unwrap_err().to_string());
+            source(err(st.execute_batch(id.clone(), vec![write.into()], false).await));
+            source(err(st.execute_batch_prepared(id.clone(), vec![write.into()]).await));
+            let e = st.run_read_only(id.clone(), write.into(), 10).await.unwrap_err().to_string();
+            match crate::guard::read_only_violation(write, kind, true) {
+                Some(why) => {
+                    assert!(e.contains(&why) && e.contains("--allow-write"), "{kind:?}: {e}");
+                    let e = st.export_csv_read_only(id.clone(), write.into(), dir.join("x.csv")).await.unwrap_err().to_string();
+                    assert_eq!(e, why, "{kind:?}");
+                }
+                None => assert_eq!(e, "DEL is not a read-only command", "{kind:?}"),
+            }
+            assert_eq!(hits.load(Ordering::SeqCst), 0, "{kind:?}: a refused statement reached the server");
+        }
+        assert!(st.pools.read().await.is_empty() && st.sessions.read().await.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// Auto-disconnect: close pools and sessions after the idle time. keep-alive keeps the session alive.
     #[tokio::test]
     #[ignore]
     async fn housekeeping_keepalive_and_auto_disconnect() {
         let dir = std::env::temp_dir().join(format!("dbtool-hk-{}", uuid::Uuid::new_v4()));
         let state = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+        // QURRY_TEST_PG=host:port:user:db (default: local PostgreSQL as $USER)
+        let env = std::env::var("QURRY_TEST_PG").ok();
+        let part = |i: usize, d: String| env.as_ref().and_then(|e| e.split(':').nth(i).map(String::from)).unwrap_or(d);
         let mut cfg = ConnectionConfig {
-            id: "hk".into(), name: "hk".into(), kind: crate::store::DbKind::Postgres, host: "localhost".into(), port: 5432,
-            user: std::env::var("USER").unwrap(), database: "postgres".into(), color: None, ssh: None, password_saved: false,
+            id: "hk".into(), name: "hk".into(), kind: crate::store::DbKind::Postgres, host: part(0, "localhost".into()), port: part(1, "5432".into()).parse().unwrap(),
+            user: part(2, std::env::var("USER").unwrap()), database: part(3, "postgres".into()), color: None, ssh: None, password_saved: false,
             ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
         };
         cfg.options.keep_alive_secs = Some(1);

@@ -5,7 +5,7 @@
     { "schema": "billing", "name": "invoices", "columns": [["id", "int4"], ["amount", "numeric"]] },
     { "schema": "billing", "name": "users", "columns": [["id", "int4"], ["plan", "text"]] },
     { "schema": "sales", "name": "주문", "columns": [["번호", "int4"], ["상태", "text"]] },
-    { "schema": "public", "name": "sales", "columns": [["region", "text"]] },
+    { "schema": "public", "name": "sales", "columns": [["region", "text"], ["realm", "realm_name"]] },
     { "schema": "public", "name": "😀 emoji", "columns": [["값", "text"]] },
     { "schema": "shop", "name": "items", "columns": [["id", "int"], ["sku", "varchar(20)"], ["data", "json"]] }
   ],
@@ -49,6 +49,9 @@
     { "id": "hint-backslash-bare", "text": "select * from orders where status = ‸", "hints": { "values": [["x\\' or 1=1 -- ", 1]] } },
     { "id": "hint-mysql-backslash-bare", "mysql": true, "db": "shop", "text": "select * from items where sku = ‸", "hints": { "values": [["x\\' or 1=1 -- ", 1]] } },
     { "id": "hint-mysql-backslash-quoted", "mysql": true, "db": "shop", "text": "select * from items where sku = '‸", "hints": { "values": [["a\\b's", 1]] } },
-    { "id": "hint-mysql-no-pairs", "mysql": true, "db": "shop", "text": "select * from items where data @> '‸" }
+    { "id": "hint-mysql-no-pairs", "mysql": true, "db": "shop", "text": "select * from items where data @> '‸" },
+    { "id": "hint-domain-type-quoted", "text": "update sales set realm = ‸", "hints": { "values": [["x' or true; delete from realm_users; --", 1], ["7", 1]] } },
+    { "id": "alias-reused-dot", "text": "select * from orders o;\nselect o.‸ from users o" },
+    { "id": "alias-reused-hint", "text": "select * from users o;\nselect * from orders o where o.status = '‸", "hints": { "values": [["paid", 10]] } }
   ]
 }

@@ -8,14 +8,12 @@ use crate::meta::{
     SchemaObjects, TableDetail,
 };
 use crate::session::{is_select_like, strip_comments_lead};
-use crate::store::ConnectionConfig;
 use futures::TryStreamExt;
 use serde_json::Value;
-use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlRow};
+use sqlx::mysql::{MySqlPool, MySqlRow};
 use sqlx::pool::PoolConnection;
 use sqlx::{Column, Either, Executor, MySql, Row, TypeInfo, ValueRef};
-use std::io::ErrorKind;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 pub const SYSTEM_DBS: [&str; 4] = ["information_schema", "performance_schema", "mysql", "sys"];
 
@@ -25,146 +23,6 @@ pub fn ident(s: &str) -> String {
 /// MySQL string literal: backslash is also an escape character
 pub fn lit(s: &str) -> String {
     format!("'{}'", s.replace('\\', "\\\\").replace('\'', "''"))
-}
-
-pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str, port: u16) -> AppResult<MySqlPool> {
-    let mut opts = MySqlConnectOptions::new().host(host).port(port).username(&cfg.user).charset("utf8mb4");
-    if let Some(p) = password.filter(|p| !p.is_empty()) {
-        opts = opts.password(p);
-    }
-    if !cfg.database.trim().is_empty() {
-        opts = opts.database(cfg.database.trim());
-    }
-    if let Some(ssl) = cfg.active_ssl() {
-        use sqlx::mysql::MySqlSslMode;
-        opts = opts.ssl_mode(match ssl.mode() {
-            "verify-full" => MySqlSslMode::VerifyIdentity,
-            "verify-ca" => MySqlSslMode::VerifyCa,
-            "require" => MySqlSslMode::Required,
-            m => return Err(AppError::Msg(format!("Unknown SSL mode '{m}' (use require, verify-ca or verify-full)"))),
-        });
-        let home = |p: &str| p.strip_prefix("~/").map(|r| format!("{}/{r}", std::env::var("HOME").unwrap_or_default())).unwrap_or_else(|| p.to_string());
-        if !ssl.ca_file.trim().is_empty() {
-            opts = opts.ssl_ca(home(ssl.ca_file.trim()));
-        }
-        if !ssl.cert_file.trim().is_empty() {
-            opts = opts.ssl_client_cert(home(ssl.cert_file.trim()));
-        }
-        if !ssl.key_file.trim().is_empty() {
-            opts = opts.ssl_client_key(home(ssl.key_file.trim()));
-        }
-    }
-    // Session settings to run right after connecting (Options tab)
-    let mut init: Vec<String> = Vec::new();
-    const LEVELS: [&str; 4] = ["read uncommitted", "read committed", "repeatable read", "serializable"];
-    if let Some(iso) = cfg.options.isolation.as_deref().filter(|i| LEVELS.contains(i)) {
-        init.push(format!("SET SESSION TRANSACTION ISOLATION LEVEL {}", iso.to_uppercase()));
-    }
-    if cfg.read_only {
-        init.push("SET SESSION TRANSACTION READ ONLY".into());
-    }
-    if let Some(tz) = cfg.options.time_zone.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
-        init.push(format!("SET time_zone = {}", lit(tz)));
-    }
-    let script = cfg.options.startup_script.trim().to_string();
-    let pool_opts = || {
-        let (init, script) = (init.clone(), script.clone());
-        MySqlPoolOptions::new()
-        // Each console·table tab gets its own dedicated connection. Connections open only when needed, so just keep the cap generous
-        .max_connections(crate::db::POOL_MAX)
-        .idle_timeout(crate::db::POOL_IDLE)
-        .acquire_timeout(Duration::from_secs(10))
-        .after_connect(move |conn, _| {
-            let init = init.clone();
-            let script = script.clone();
-            Box::pin(async move {
-                for s in &init {
-                    conn.execute(s.as_str()).await?;
-                }
-                if !script.is_empty() {
-                    conn.execute(sqlx::raw_sql(&script)).await?;
-                }
-                Ok(())
-            })
-        })
-    };
-    // Require TLS even when SSL isn't set (certificate not verified). Plaintext only for this machine · SSH tunnels, or when "Allow unencrypted" is on
-    // (Old servers (MySQL 5.7 etc.) can't negotiate TLS 1.2. Someone stripping TLS in the middle looks the same, so we don't fall back to plaintext automatically)
-    let explicit_ssl = cfg.active_ssl().is_some();
-    let plain_ok = crate::db::plaintext_allowed(cfg, host);
-    if !explicit_ssl && !plain_ok {
-        opts = opts.ssl_mode(sqlx::mysql::MySqlSslMode::Required);
-    }
-    let pool = match pool_opts().connect_with(opts.clone()).await {
-        Err(e) => match on_connect_error(&e, explicit_ssl, plain_ok) {
-            OnConnectError::RetryPlain => pool_opts().connect_with(opts.ssl_mode(sqlx::mysql::MySqlSslMode::Disabled)).await?,
-            OnConnectError::NeedsTls => return Err(AppError::Msg(format!("{NEEDS_TLS}\n({e})"))),
-            OnConnectError::Dropped => return Err(AppError::Msg(format!("{DROPPED_TLS}\n({e})"))),
-            OnConnectError::Fail => return Err(e.into()),
-        },
-        Ok(p) => p,
-    };
-    Ok(pool)
-}
-
-#[derive(Debug, PartialEq)]
-enum OnConnectError {
-    /// Plain text is allowed: connect again without TLS
-    RetryPlain,
-    /// Tell the user about "Allow unencrypted connection"
-    NeedsTls,
-    /// The server dropped the connection: maybe an old server refusing TLS, maybe a proxy without a backend — a softer hint
-    Dropped,
-    Fail,
-}
-
-/// What to do when the first connect fails. A TLS failure, or the server just dropping the connection (some old servers do during the
-/// handshake), counts only when SSL isn't set explicitly. sqlx doesn't say at which step a connection was dropped (a proxy without a
-/// backend, or a drop after auth, look the same), so a drop gets a hint that doesn't claim TLS was the cause
-fn on_connect_error(e: &sqlx::Error, explicit_ssl: bool, plain_ok: bool) -> OnConnectError {
-    let dropped = matches!(e, sqlx::Error::Io(io) if matches!(io.kind(), ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted));
-    if explicit_ssl || !(is_tls_failure(e) || dropped) {
-        OnConnectError::Fail
-    } else if plain_ok {
-        OnConnectError::RetryPlain
-    } else if dropped {
-        OnConnectError::Dropped
-    } else {
-        OnConnectError::NeedsTls
-    }
-}
-
-pub use qurry_shared::errors::{DROPPED_TLS, NEEDS_TLS};
-
-/// Message when a source without SSL set connected in plaintext (reconnected in plaintext because TLS failed — also what happens when someone deliberately strips TLS)
-pub async fn plaintext_note(p: &MySqlPool, cfg: &ConnectionConfig) -> Option<String> {
-    if cfg.active_ssl().is_some() || crate::db::is_local(cfg) {
-        return None;
-    }
-    let row: Option<(String, String)> = sqlx::query_as("SHOW SESSION STATUS LIKE 'Ssl_cipher'").fetch_optional(p).await.ok()?;
-    row.filter(|(_, c)| c.is_empty()).map(|_| "⚠ Not encrypted: TLS didn't work with this server, so Qurry connected without it (the password and data travel in plain text). Enable SSL in the data source to require it.".to_string())
-}
-
-/// Connection failure from failing to negotiate TLS (not auth failures etc.)
-fn is_tls_failure(e: &sqlx::Error) -> bool {
-    match e {
-        sqlx::Error::Tls(_) => true,
-        sqlx::Error::Io(io) => is_rustls_error(io),
-        _ => false,
-    }
-}
-
-/// sqlx hands rustls handshake errors over as InvalidData I/O errors; matched by rustls' Display texts (rustls::Error), e.g.
-/// MySQL 5.7 limited to TLS 1.0/1.1: "received fatal alert: HandshakeFailure", MySQL 5.5: "received corrupt message of type UnknownProtocolVersion"
-fn is_rustls_error(io: &std::io::Error) -> bool {
-    const TEXTS: [&str; 6] = ["received fatal alert", "received corrupt message", "received unexpected message", "peer is incompatible", "peer misbehaved", "handshake"];
-    let m = io.to_string().to_lowercase();
-    io.kind() == ErrorKind::InvalidData && TEXTS.iter().any(|t| m.contains(t))
-}
-
-pub async fn server_version(p: &MySqlPool) -> AppResult<String> {
-    let v: String = sqlx::query_scalar("select cast(version() as char)").fetch_one(p).await?;
-    Ok(if v.to_lowercase().contains("mariadb") { format!("MariaDB {v}") } else { format!("MySQL {v}") })
 }
 
 pub(crate) fn columns_of(row: &MySqlRow) -> Vec<ColumnInfo> {
@@ -207,12 +65,6 @@ pub(crate) fn value(row: &MySqlRow, i: usize) -> Value {
         }
         _ => Value::from(s.as_ref()),
     }
-}
-
-/// Run one query on the pool
-pub async fn run(p: &MySqlPool, sql: &str, limit: usize) -> AppResult<QueryResult> {
-    let mut conn = p.acquire().await?;
-    run_on(&mut conn, sql, limit).await
 }
 
 pub async fn run_on(conn: &mut sqlx::MySqlConnection, sql: &str, limit: usize) -> AppResult<QueryResult> {
@@ -266,11 +118,6 @@ async fn run_on_with(conn: &mut sqlx::MySqlConnection, sql: &str, limit: usize, 
     Ok(query_result(columns, rows, affected, truncated, start, has_rs))
 }
 
-pub async fn export(p: &MySqlPool, sql: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {
-    let mut conn = p.acquire().await?;
-    export_on(&mut conn, sql, out, false).await
-}
-
 /// Export on an already acquired connection. prepared = the prepared protocol that runs only one statement (read-only path)
 pub async fn export_on(conn: &mut sqlx::MySqlConnection, sql: &str, out: &mut crate::transfer::Exporter, prepared: bool) -> AppResult<()> {
     let mut stream = if prepared { conn.fetch(sqlx::query(sql)) } else { conn.fetch(sqlx::raw_sql(sql)) };
@@ -285,40 +132,9 @@ pub async fn export_on(conn: &mut sqlx::MySqlConnection, sql: &str, out: &mut cr
     Ok(())
 }
 
-pub async fn execute_batch(p: &MySqlPool, statements: &[String], exact_one: bool) -> AppResult<u64> {
-    Ok(execute_batch_with(p, statements, exact_one, false, &[]).await?.0)
-}
-
-/// prepared = each statement over the prepared-statement protocol, which takes exactly one statement (MCP).
-/// snaps = undo snapshot to take right before each statement, in the transaction (audit::UndoPlan) → (rows changed, each snapshot's result with the rows its statement changed)
-pub async fn execute_batch_with(p: &MySqlPool, statements: &[String], exact_one: bool, prepared: bool, snaps: &[Option<&str>]) -> AppResult<(u64, Vec<Option<(AppResult<QueryResult>, u64)>>)> {
-    let mut tx = p.begin().await?;
-    let mut affected = 0;
-    let mut shots = Vec::new();
-    for (i, st) in statements.iter().enumerate() {
-        let shot = match snaps.get(i).copied().flatten() {
-            Some(q) => Some(snapshot_on(&mut tx, q).await),
-            None => None,
-        };
-        // Cancelled · lock wait timeout · deadlock (the server may have rolled back the statements before): nothing is saved (dropping tx rolls back)
-        if let Some(Err(e)) = &shot
-            && crate::audit::stops_change(e)
-        {
-            return Err(crate::audit::stopped(e, false));
-        }
-        let r = if prepared { sqlx::query(st).execute(&mut *tx).await } else { tx.execute(sqlx::raw_sql(st)).await };
-        let n = r.map_err(|e| AppError::Msg(format!("{e}\n→ {st}")))?.rows_affected();
-        crate::session::check_exact_one(st, n, exact_one)?;
-        shots.push(shot.map(|s| (s, n)));
-        affected += n;
-    }
-    tx.commit().await?;
-    Ok((affected, shots))
-}
-
 /// Undo snapshot (a SELECT … FOR UPDATE from audit::UndoPlan) in the open transaction (text protocol: `value` reads text values);
 /// a failing SELECT leaves the MySQL transaction as it was, except a deadlock (and a lock wait timeout with innodb_rollback_on_timeout), which rolls back all of it
-async fn snapshot_on(conn: &mut sqlx::MySqlConnection, sql: &str) -> AppResult<QueryResult> {
+pub(crate) async fn snapshot_on(conn: &mut sqlx::MySqlConnection, sql: &str) -> AppResult<QueryResult> {
     run_on(conn, sql, crate::audit::UNDO_MAX_ROWS + 1).await
 }
 
@@ -328,11 +144,6 @@ pub(crate) fn error_number(e: &AppError) -> Option<u16> {
         AppError::Db(sqlx::Error::Database(d)) => d.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>().map(|m| m.number()),
         _ => None,
     }
-}
-
-pub async fn cancel(p: &MySqlPool, id: i64) -> AppResult<bool> {
-    sqlx::query(&format!("KILL QUERY {id}")).execute(p).await?;
-    Ok(true)
 }
 
 // ───────── Console session ─────────
@@ -846,7 +657,13 @@ pub async fn full_text_search(p: &MySqlPool, r: &FtsRequest) -> AppResult<Vec<Ft
     for (schema, table, conds) in tables.into_iter().filter(|t| !t.2.is_empty()) {
         let where_clause = conds.join(" OR ");
         let sql = format!("select * from {}.{} where {where_clause} limit {}", ident(&schema), ident(&table), r.limit.max(1));
-        match run_on(&mut conn, &sql, r.limit.max(1)).await {
+        // READ ONLY and rolled back: a view or function with side effects (an INSERT in a stored function) is refused, not committed
+        let res = match conn.execute("START TRANSACTION READ ONLY").await {
+            Ok(_) => run_on(&mut conn, &sql, r.limit.max(1)).await,
+            Err(e) => Err(e.into()),
+        };
+        let _ = conn.execute("ROLLBACK").await;
+        match res {
             Ok(result) if !result.rows.is_empty() => hits.push(FtsHit { schema, table, where_clause, result }),
             Ok(_) => {}
             Err(e) => crate::log!("[qurry] fts {schema}.{table}: {e}"),
@@ -859,8 +676,18 @@ pub async fn full_text_search(p: &MySqlPool, r: &FtsRequest) -> AppResult<Vec<Ft
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::Backend;
     use crate::db::Pool;
-    use crate::store::DbKind;
+    use crate::store::{ConnectionConfig, DbKind};
+
+    /// QURRY_TEST_MY=host:port:user:password:db (default 127.0.0.1:13306:root:dbtool:shop)
+    fn env() -> Vec<String> {
+        std::env::var("QURRY_TEST_MY").unwrap_or_else(|_| "127.0.0.1:13306:root:dbtool:shop".into()).split(':').map(String::from).collect()
+    }
+
+    fn pw() -> String {
+        env()[3].clone()
+    }
 
     /// The console asks the server after any statement but a SELECT and a row change (they never commit the open transaction),
     /// whether it ran or failed
@@ -903,11 +730,11 @@ mod tests {
         }
     }
 
-    /// docker run -d --name dbtool-mysql-test -e MYSQL_ROOT_PASSWORD=dbtool -e MYSQL_DATABASE=shop -p 13306:3306 mysql:8.4
     fn cfg() -> ConnectionConfig {
+        let e = env();
         ConnectionConfig {
-            id: "my".into(), name: "my".into(), kind: DbKind::Mysql, host: "127.0.0.1".into(), port: 13306, user: "root".into(),
-            database: "shop".into(), color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(),
+            id: "my".into(), name: "my".into(), kind: DbKind::Mysql, host: e[0].clone(), port: e[1].parse().unwrap(), user: e[2].clone(),
+            database: e[4].clone(), color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(),
             read_only: false, options: Default::default(), ssl: None, redis: None,
         }
     }
@@ -919,30 +746,30 @@ mod tests {
         // Treat it as a remote server (this machine · tunnels aren't notified)
         let remote = ConnectionConfig { host: "db.example".into(), ..cfg() };
         // Default connection: silent if TLS works; notify if it fell back to plaintext (MySQL 5.7 without TLS 1.2)
-        let Pool::My(auto) = crate::db::connect(&cfg(), Some("dbtool")).await.expect("connect") else { unreachable!() };
+        let Pool::My(auto) = crate::db::connect(&cfg(), Some(pw().as_str())).await.expect("connect") else { unreachable!() };
         let (_, cipher): (String, String) = sqlx::query_as("SHOW SESSION STATUS LIKE 'Ssl_cipher'").fetch_one(&auto).await.unwrap();
-        assert_eq!(plaintext_note(&auto, &remote).await.is_some(), cipher.is_empty());
-        let opts = sqlx::mysql::MySqlConnectOptions::new().host("127.0.0.1").port(13306).username("root").password("dbtool").ssl_mode(sqlx::mysql::MySqlSslMode::Disabled);
+        assert_eq!(auto.plaintext_note(&remote).await.is_some(), cipher.is_empty());
+        let opts = sqlx::mysql::MySqlConnectOptions::new().host(&env()[0]).port(env()[1].parse().unwrap()).username(&env()[2]).password(&pw()).ssl_mode(sqlx::mysql::MySqlSslMode::Disabled);
         let plain = sqlx::mysql::MySqlPoolOptions::new().max_connections(1).connect_with(opts).await.unwrap();
-        assert!(plaintext_note(&plain, &remote).await.is_some_and(|n| n.contains("Not encrypted")));
-        assert_eq!(plaintext_note(&plain, &cfg()).await, None, "this computer: nothing to intercept");
+        assert!(plain.plaintext_note(&remote).await.is_some_and(|n| n.contains("Not encrypted")));
+        assert_eq!(plain.plaintext_note(&cfg()).await, None, "this computer: nothing to intercept");
     }
 
     /// MCP execute path: the prepared-statement protocol takes exactly one statement
     #[tokio::test]
     #[ignore]
     async fn mysql_prepared_batch_refuses_multiple_statements() {
-        let Pool::My(p) = crate::db::connect(&cfg(), Some("dbtool")).await.expect("connect") else { unreachable!() };
+        let Pool::My(p) = crate::db::connect(&cfg(), Some(pw().as_str())).await.expect("connect") else { unreachable!() };
         sqlx::raw_sql("drop table if exists qurry_prep; create table qurry_prep (a int)").execute(&p).await.unwrap();
-        assert!(execute_batch_with(&p, &["insert into qurry_prep values (1); drop table qurry_prep".into()], false, true, &[]).await.is_err());
-        assert_eq!(execute_batch_with(&p, &["insert into qurry_prep values (1)".into()], false, true, &[]).await.unwrap().0, 1);
+        assert!(p.execute_batch(&["insert into qurry_prep values (1); drop table qurry_prep".into()], false, true, &[]).await.is_err());
+        assert_eq!(p.execute_batch(&["insert into qurry_prep values (1)".into()], false, true, &[]).await.unwrap().0, 1);
         sqlx::raw_sql("drop table qurry_prep").execute(&p).await.unwrap();
     }
 
     #[tokio::test]
     #[ignore]
     async fn mysql_end_to_end() {
-        let pool = crate::db::connect(&cfg(), Some("dbtool")).await.expect("connect");
+        let pool = crate::db::connect(&cfg(), Some(pw().as_str())).await.expect("connect");
         assert!(pool.server_version().await.unwrap().starts_with("MySQL"));
         let Pool::My(p) = &pool else { unreachable!() };
         for s in [
@@ -1036,56 +863,16 @@ mod tests {
         s.rollback_tx().await.unwrap();
         s.set_manual(false).await.unwrap();
         // Edit batch
-        crate::mysql::execute_batch(p, &["update orders set memo = 'y' where id = 1".into()], true).await.unwrap();
+        p.execute_batch(&["update orders set memo = 'y' where id = 1".into()], true, false, &[]).await.unwrap();
         // Read-only
         let mut ro = cfg();
         ro.read_only = true;
         ro.options.time_zone = Some("+09:00".into());
-        let rp = crate::db::connect(&ro, Some("dbtool")).await.unwrap();
+        let rp = crate::db::connect(&ro, Some(pw().as_str())).await.unwrap();
         let tz = rp.run_query("select @@session.time_zone", 1).await.unwrap();
         assert_eq!(tz.rows[0][0], "+09:00");
         let e = rp.run_query("update orders set memo = 'z' where id = 1", 1).await;
         assert!(e.is_err() && format!("{}", e.unwrap_err()).to_lowercase().contains("read only"));
-    }
-
-    /// Real errors from old servers (sqlx + rustls) count as TLS failures; auth and network errors don't
-    #[test]
-    fn rustls_handshake_errors_are_tls_failures() {
-        use std::io::{Error, ErrorKind};
-        for m in ["received fatal alert: HandshakeFailure", "received fatal alert: ProtocolVersion", "received corrupt message of type UnknownProtocolVersion",
-            "received corrupt message of type InvalidContentType", "peer is incompatible: ServerTlsVersionIsDisabledByOurConfig", "peer misbehaved: IllegalTlsInnerPlaintext", "handshake not complete"]
-        {
-            assert!(super::is_tls_failure(&sqlx::Error::Io(Error::new(ErrorKind::InvalidData, m))), "{m}");
-        }
-        assert!(super::is_tls_failure(&sqlx::Error::Tls("server does not support TLS".into())));
-        assert!(!super::is_tls_failure(&sqlx::Error::Io(Error::new(ErrorKind::ConnectionRefused, "Connection refused (os error 61)"))));
-        assert!(!super::is_tls_failure(&sqlx::Error::Io(Error::new(ErrorKind::InvalidData, "invalid packet sequence"))));
-        assert!(!super::is_tls_failure(&sqlx::Error::Protocol("Access denied for user 'u'".into())));
-    }
-
-    /// A dropped connection can't be told apart from a proxy with no backend or a drop after auth: it gets a softer hint
-    /// (old MySQL without TLS 1.2, or check the host, port and proxy) — not "didn't send the password"
-    #[test]
-    fn dropped_handshake_gets_the_tls_hint() {
-        use super::OnConnectError::*;
-        use std::io::{Error, ErrorKind};
-        let io = |k: ErrorKind, m: &str| sqlx::Error::Io(Error::new(k, m));
-        for k in [ErrorKind::UnexpectedEof, ErrorKind::ConnectionReset, ErrorKind::ConnectionAborted] {
-            let e = io(k, "unexpected end of file");
-            assert_eq!(super::on_connect_error(&e, false, false), Dropped, "{k:?}");
-            assert_eq!(super::on_connect_error(&e, false, true), RetryPlain, "{k:?}");
-            // SSL set explicitly: the raw error
-            assert_eq!(super::on_connect_error(&e, true, false), Fail, "{k:?}");
-        }
-        assert!(!super::DROPPED_TLS.contains("didn't send the password") && super::DROPPED_TLS.contains("proxy") && super::DROPPED_TLS.contains("Allow unencrypted"));
-        let tls = io(ErrorKind::InvalidData, "received fatal alert: HandshakeFailure");
-        assert_eq!(super::on_connect_error(&tls, false, false), NeedsTls);
-        assert_eq!(super::on_connect_error(&tls, false, true), RetryPlain);
-        assert_eq!(super::on_connect_error(&tls, true, false), Fail);
-        for e in [io(ErrorKind::ConnectionRefused, "Connection refused (os error 61)"), sqlx::Error::Protocol("Access denied for user 'u'".into())] {
-            assert_eq!(super::on_connect_error(&e, false, false), Fail, "{e}");
-            assert_eq!(super::on_connect_error(&e, false, true), Fail, "{e}");
-        }
     }
 
     #[tokio::test]
@@ -1093,11 +880,11 @@ mod tests {
     async fn mysql_ssl() {
         let mut c = cfg();
         c.ssl = Some(crate::store::SslConfig { enabled: true, mode: "require".into(), ..Default::default() });
-        let pool = crate::db::connect(&c, Some("dbtool")).await.expect("ssl require");
+        let pool = crate::db::connect(&c, Some(pw().as_str())).await.expect("ssl require");
         let r = pool.run_query("show session status like 'Ssl_version'", 5).await.unwrap();
         assert!(r.rows[0][1].as_str().unwrap().starts_with("TLS"), "{:?}", r.rows);
         // Self-signed certificate, so verify mode must fail
         c.ssl = Some(crate::store::SslConfig { enabled: true, mode: "verify-full".into(), ..Default::default() });
-        assert!(crate::db::connect(&c, Some("dbtool")).await.is_err());
+        assert!(crate::db::connect(&c, Some(pw().as_str())).await.is_err());
     }
 }

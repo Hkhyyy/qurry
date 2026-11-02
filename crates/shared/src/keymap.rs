@@ -4,10 +4,10 @@
 //!
 //! Table rows: `gui` = GUI command id, `tui` = TUI Action name (its Debug name), each absent when the app has no such command.
 //! keymap.json stores user keys under those ids ("gui" / "tui" sections), so an id never changes. A command both apps have is one row.
-//! `title` is the command's name on screen (`tuiTitle` when the TUI names it differently), `scope` where a GUI key works,
+//! `title` is the command's name on screen (`tuiTitle` when the TUI names it differently; `guiDesc` its line in the GUI Keymap
+//! Reference and docs/shortcuts-gui.md when that says more than the title), `scope` where a GUI key works,
 //! `guiKeys` the GUI defaults ("Mod+Shift+L"), `tuiKeys` the TUI defaults ("Ctrl+L").
-//! Row order is the order each app lists its commands in: the GUI keymap editor per scope, the TUI F1 window and --help
-//! (where the two apps order a shared command differently, its row follows one of them).
+//! Row order is the GUI keymap editor's (per scope); the TUI F1 window and --help keep their own order (ORDER in crates/tui/src/keys.rs).
 //!
 //! Spec notation: modifiers then the key, joined by "+": "Mod+Alt+O", "Ctrl+Shift+K", "F5", "Alt+\\".
 //! Mod = ⌘ on macOS / Ctrl elsewhere (GUI only; the terminal has no ⌘). Modifier order: Mod, Ctrl, Alt, Shift.
@@ -31,6 +31,7 @@ pub struct Command {
     pub tui: Option<String>,
     pub title: String,
     pub tui_title: Option<String>,
+    pub gui_desc: Option<String>,
     #[serde(default)]
     pub scope: Scope,
     #[serde(default)]

@@ -120,6 +120,11 @@ const batch = BATCH || plan.batch
 log(`Plan: ${plan.items.length} item(s) → ${batch}: ${plan.items.map((i) => `${i.slug} (${i.owner})`).join(', ')}`)
 
 // ───────── per item: Build → Review → Fix (no barrier between items) ─────────
+// Commits must end up on the branch: if `git checkout <branch>` failed (checked out elsewhere), an agent can commit on a detached HEAD and the next review reads the old branch
+const keepBranch = (branch) =>
+  `Before you finish, make sure ${branch} points at your last commit: if \`git rev-parse ${branch}\` differs from \`git rev-parse HEAD\` and \`git merge-base --is-ancestor ${branch} HEAD\` succeeds, run \`git branch -f ${branch} HEAD\`; if the branch is not an ancestor, stop and say so in the report. Then run \`git checkout --detach\` so the branch is free for other worktrees.`
+// Reviewers and skeptics read a branch in their own worktree, detached, so the branch stays free for its fixer
+const readBranch = (branch) => `Start: \`git fetch origin -q; git checkout --detach ${branch}\` in your own worktree (your starting directory); never check out a branch by name. `
 const lensesFor = (it) => [
   { key: 'security', type: 'qurry-security', focus: 'security and data safety (credentials, what reaches a database or an AI tool, injection, temp files), and who this breaks after an update' },
   ...(it.userVisible ? [{ key: 'ui', type: 'qurry-ui', focus: 'UI/UX and GUI–TUI parity, Storybook updated, themes, keyboard flow, error/empty/loading states' }] : []),
@@ -133,11 +138,12 @@ const review = async (it, round) => {
     await parallel(
       lenses.map((l) => () =>
         agent(
-          `Review branch ${it.branch} (diff: \`git diff ${BASE === 'main' ? 'origin/main' : BASE}...${it.branch}\`) for Qurry work item "${it.slug}".\n` +
+          readBranch(it.branch) +
+            `Review branch ${it.branch} (diff: \`git diff ${BASE === 'main' ? 'origin/main' : BASE}...${it.branch}\`) for Qurry work item "${it.slug}".\n` +
             `Task it implements:\n${it.task}\n\nYour lens: ${l.focus}.\n` +
             'Read the code; run tests or real-server checks when a claim depends on behavior. Report only concrete problems with file:line and a scenario — no style nits. Empty list if it is fine. ' +
             'Do not modify any branch.',
-          { agentType: l.type, schema: FINDINGS, phase: 'Review', label: `review r${round} ${l.key}: ${it.slug}` },
+          { agentType: l.type, isolation: 'worktree', schema: FINDINGS, phase: 'Review', label: `review r${round} ${l.key}: ${it.slug}` },
         ).then((r) => (r?.findings || []).map((f) => ({ ...f, lens: l.key }))),
       ),
     )
@@ -151,9 +157,10 @@ const review = async (it, round) => {
   const judged = await parallel(
     serious.map((f) => () =>
       agent(
-        `Try to REFUTE this review finding on branch ${it.branch} of Qurry. Check the code (and run it if needed). Default to real=false if you cannot confirm it.\n\n` +
+        readBranch(it.branch) +
+          `Try to REFUTE this review finding on branch ${it.branch} of Qurry. Check the code (and run it if needed). Default to real=false if you cannot confirm it.\n\n` +
           `${f.severity.toUpperCase()} [${f.lens}] ${f.title}\nWhere: ${f.where}\nScenario: ${f.scenario}`,
-        { schema: VERDICT, phase: 'Review', label: `verify: ${f.title.slice(0, 40)}`, effort: 'high' },
+        { isolation: 'worktree', schema: VERDICT, phase: 'Review', label: `verify: ${f.title.slice(0, 40)}`, effort: 'high' },
       ).then((v) => ({ f, real: !!v?.real, why: v?.why || '' })),
     ),
   )
@@ -183,7 +190,7 @@ const build = (it) =>
         `Task:\n${it.task}\n\nExpected files: ${(it.files || []).join(', ') || '(your call)'}\n` +
         `Verification you must run and report:\n- ${it.verify.join('\n- ')}\n` +
         (it.breaks ? `\nWho this could break after an update: ${it.breaks} — make the failure message tell them how to recover.\n` : '') +
-        `\n${houseRules}\nCommit on ${it.branch} in focused commits. When done, run \`git checkout --detach\` so the branch is free for other worktrees. Return the build report.`,
+        `\n${houseRules}\nCommit on ${it.branch} in focused commits. ${keepBranch(it.branch)} Return the build report.`,
       { agentType: OWNER_TYPE[it.owner] || 'general-purpose', isolation: 'worktree', schema: BUILD, phase: 'Build', label: `build: ${it.slug}` },
     )
 const reviewAndFix = async (built, it) => {
@@ -199,7 +206,7 @@ const reviewAndFix = async (built, it) => {
           (open.length ? `Confirmed (must fix):\n${list(open)}\n\n` : '') +
           (lows.length ? `Low severity, unverified (fix only if real and the fix is small; otherwise leave it and say why in notes):\n${list(lows)}\n\n` : '') +
           `Add a test for each fix where possible and re-run the item's checks:\n- ${it.verify.join('\n- ')}\n\n${houseRules}\n` +
-          'Commit on the same branch, then `git checkout --detach`. Return the build report.',
+          `Commit on the same branch. ${keepBranch(it.branch)} Return the build report.`,
         { agentType: OWNER_TYPE[it.owner] || 'general-purpose', isolation: 'worktree', schema: BUILD, phase: 'Fix', label: `fix r${round}: ${it.slug}` },
       )
       fixes.push(fixed)

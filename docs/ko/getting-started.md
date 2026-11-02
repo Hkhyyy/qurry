@@ -20,19 +20,15 @@ brew install hkhyyy/qurry/qurry      # 업데이트: brew upgrade qurry
 | macOS, Intel | `Qurry_<version>_x64.dmg` | `qurry-cli_<version>_x86_64-apple-darwin.tar.gz` |
 | Linux x86_64 | `Qurry_<version>_amd64.AppImage` 또는 `.deb` | `qurry-cli_<version>_x86_64-unknown-linux-gnu.tar.gz` |
 
-- **macOS**: `Qurry.app` 을 응용 프로그램 폴더로 끌어 넣습니다. 아직 코드 서명이 없어서 처음 열 때 "확인되지 않은 개발자" / "손상됨" 경고가 뜹니다. `xattr -dr com.apple.quarantine /Applications/Qurry.app` 을 실행하거나 앱을 우클릭 → 열기 하세요.
+- **macOS**: GUI 는 macOS 13 Ventura 이상이 필요합니다 (macOS 12 이하는 Qurry 0.2.x 를 계속 쓰세요, [업데이트](updates.md#macos-12-이하) 참고. TUI 와 MCP 서버는 돌아갑니다). `Qurry.app` 을 응용 프로그램 폴더로 끌어 넣습니다. 아직 코드 서명이 없어서 처음 열 때 "확인되지 않은 개발자" / "손상됨" 경고가 뜹니다. `xattr -dr com.apple.quarantine /Applications/Qurry.app` 을 실행하거나 앱을 우클릭 → 열기 하세요.
 - **Linux**: `chmod +x Qurry_*.AppImage` 후 실행하거나 `sudo apt install ./Qurry_<version>_amd64.deb`. GUI 는 WebKitGTK 4.1 이 필요합니다 (Ubuntu 22.04+, Debian 12+, Fedora 38+).
 - **TUI / MCP**: `tar -xzf qurry-cli_….tar.gz && mkdir -p ~/.local/bin && mv qurry-tui qurry-mcp ~/.local/bin/` (macOS 는 먼저 `xattr -d com.apple.quarantine qurry-tui qurry-mcp`).
 
-`main` 이 바뀔 때마다 새 릴리스가 자동으로 나옵니다.
+stable 릴리스는 버전 태그로 나오고, `main` 이 바뀔 때마다 beta 사전 릴리스도 나옵니다.
 
 ## 업데이트
 
-두 앱 모두 시작할 때와 실행 중 한 시간마다 GitHub 에 새 릴리스가 있는지 확인하고 (GitHub API 요청 한 번), 있으면 알려 줍니다. 바로 확인할 수도 있습니다.
-
-- **GUI** — 상태 표시줄에 `⬆ vX.Y.Z available` 버튼이 나타나고, 지금 버전 이후 바뀐 내용을 버전별로 보여 줍니다. **Update & Restart** 는 새 버전을 받아 서명을 확인하고 앱을 바꾼 뒤 열려 있던 탭 그대로 다시 엽니다. 안 되면 릴리스 페이지에서 직접 받으면 됩니다. **Qurry › Check for Updates…** 또는 **Settings › Appearance › Updates** 에서 바로 확인할 수 있고, 자동 확인도 끌 수 있습니다. 앱 안 업데이트는 0.1.9 (Apple Silicon), Intel / Linux 는 첫 릴리스부터 됩니다.
-- **TUI** — 상태 줄에 `⬆ vX.Y.Z available` 이 보입니다. **⌃k › Update Qurry & Restart** 는 릴리스를 받아 서명된 `SHA256SUMS` 로 확인하고 `qurry-tui` · `qurry-mcp` 를 그 자리에서 바꾼 뒤 탭 그대로 다시 시작합니다. **⌃k › Check for Updates** 는 바로 확인하고 바뀐 내용을 보여 줍니다. 셸에서는 `qurry-tui --update`. 소스에서 빌드한 TUI (`target/release`) 는 확인하거나 바꾸지 않으니 `git pull` 과 `cargo build` 로 올리세요. Homebrew 로 설치했다면 `brew upgrade qurry`.
-- 확인을 끄려면 `qurry-tui --no-update-check` 또는 `QURRY_NO_UPDATE_CHECK=1`.
+두 앱 모두 새 버전이 나오면 알려 주고 그 자리에서 설치합니다: GUI `⬆ vX.Y.Z available` › **Update & Restart**, TUI **⌃k › Update Qurry & Restart** (또는 `qurry-tui --update`). beta 채널로 바꾸지 않으면 stable 릴리스만 받습니다 (GUI **Settings › Appearance › Updates**, TUI **⌃k › Update Channel…**). 채널, 확인 끄기, macOS 12 는 [업데이트](updates.md) 장에 있습니다.
 
 ## 처음 쓰기
 

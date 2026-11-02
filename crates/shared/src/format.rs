@@ -37,7 +37,8 @@ pub fn pad_frac(s: &str, width: usize) -> String {
     }
 }
 
-/// 1234567 → "1,234,567"
+/// 1234567 → "1,234,567" (the TUI). Not shared with the GUI: its row and key counts keep Number.toLocaleString,
+/// which groups digits as the user's locale does (1.234.567 in de-DE), so there is no WASM facade or golden for it
 pub fn thousands(n: u64) -> String {
     n.to_string().as_bytes().rchunks(3).rev().map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join(",")
 }

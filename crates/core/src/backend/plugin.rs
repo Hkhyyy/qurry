@@ -1,12 +1,19 @@
 //! Driver plugins: each operation is a method call to the driver process (protocol: crates/driver)
-use super::Backend;
-use crate::error::AppResult;
+use super::{Backend, Snapshots};
+use crate::db::QueryResult;
+use crate::error::{AppError, AppResult};
 use crate::hints::{Hint, HintReq};
 use crate::meta::{CompletionTable, IndexEntry, SchemaInfo, SchemaObjects, TableDetail};
 use crate::plugin::PluginConn;
+use crate::session::Session;
+use crate::transfer::Exporter;
 use serde_json::{Value, json};
+use std::sync::Arc;
 
-impl Backend for PluginConn {
+/// Max rows of an MCP CSV export
+const EXPORT_MAX_ROWS: usize = 1_000_000;
+
+impl Backend for Arc<PluginConn> {
     fn label(&self) -> String {
         format!("the {} driver", self.driver)
     }
@@ -63,4 +70,58 @@ impl Backend for PluginConn {
     async fn column_hints(&self, _req: &HintReq) -> AppResult<Vec<Hint>> {
         Ok(vec![])
     }
+
+    // ───── Connection: db.rs · app.rs ─────
+
+    async fn server_version(&self) -> AppResult<String> {
+        self.call("version", Value::Null).await
+    }
+
+    // ───── Running: db.rs · session.rs · app.rs ─────
+
+    async fn run_query(&self, sql: &str, limit: usize) -> AppResult<QueryResult> {
+        self.query(sql, limit).await
+    }
+
+    async fn export(&self, sql: &str, out: &mut Exporter) -> AppResult<()> {
+        let r = self.query(sql, 10_000_000).await?;
+        write_all(&r, out).await
+    }
+
+    /// No server-side READ ONLY transaction — only what passes the guard check (one statement, read commands)
+    async fn run_read_only(&self, sql: &str, limit: usize) -> AppResult<QueryResult> {
+        self.query_opts(sql, limit, true).await
+    }
+
+    async fn export_read_only(&self, sql: &str, out: &mut Exporter) -> AppResult<()> {
+        let r = tokio::time::timeout(std::time::Duration::from_secs(60), self.query_opts(sql, EXPORT_MAX_ROWS, true))
+            .await
+            .map_err(|_| AppError::Msg("The export took over 60 s — narrow the query".into()))??;
+        write_all(&r, out).await
+    }
+
+    /// All at once (up to limit), without server cursors or manual transactions
+    async fn open_session(&self) -> AppResult<Session> {
+        Ok(Session::Plugin(self.clone()))
+    }
+
+    /// One by one (drivers know nothing about transactions — only exact_one is enforced)
+    async fn execute_batch(&self, statements: &[String], exact_one: bool, _prepared: bool, _snaps: &[Option<&str>]) -> AppResult<(u64, Snapshots)> {
+        let mut affected = 0;
+        for st in statements {
+            let n = self.query(st, 1).await?.rows_affected;
+            crate::session::check_exact_one(st, n, exact_one)?;
+            affected += n;
+        }
+        Ok((affected, vec![]))
+    }
+}
+
+/// A driver's whole result to the export
+async fn write_all(r: &QueryResult, out: &mut Exporter) -> AppResult<()> {
+    out.header(&r.columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>()).await?;
+    for row in &r.rows {
+        out.row(row).await?;
+    }
+    Ok(())
 }

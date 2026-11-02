@@ -26,3 +26,8 @@ export type ExecPlan = { run: Stmt[] } | { ask: { label: string; stmts: Stmt[] }
 export function planExecution(text: string, offset: number, segs: Segment[], s: ExecSettings, kind: DbKind = "postgres"): ExecPlan {
   return shared().planExecution(text, offset, segs, kind, s) ?? null;
 }
+
+/** What a selection runs (`selection` setting), over its statements (`segs`, ranges in `sel`): ranges in `sel`, empty for nothing */
+export function planSelection(sel: string, segs: Segment[], s: ExecSettings): Stmt[] {
+  return shared().planSelection(sel, segs, s);
+}

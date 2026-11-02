@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { sharedOr } from "./shared";
 import type { DataFormat } from "./transfer";
 
 export type DbKind = "postgres" | "mysql" | "redis" | "sqlite" | "duckdb" | "mssql" | "clickhouse" | "mongodb" | "oracle" | "qdrant" | "chroma" | "milvus";
@@ -142,8 +143,14 @@ export const setUpdateCheckEnabled = (on: boolean) => {
   }
 };
 
+/** stable: releases from a version tag only; beta: also the pre-release built from every merge to main. Kept in the config folder, shared with the TUI */
+export type UpdateChannel = "stable" | "beta";
+
 export const api = {
   checkUpdate: (force = false) => invoke<UpdateInfo>("check_update", { force }),
+  updateChannel: () => invoke<UpdateChannel>("update_channel"),
+  /** Saves the channel; what it offers from the saved check (no request), null if nothing was checked yet */
+  setUpdateChannel: (channel: UpdateChannel) => invoke<UpdateInfo | null>("set_update_channel", { channel }),
   /** Download the new version, swap it in, and restart the app (progress via the "update-progress" event) */
   installUpdate: () => invoke<void>("install_update"),
   /** Open tabs·splits (restored on restart) */
@@ -416,8 +423,28 @@ export const KIND_LABEL: Record<DbKind, string> = {
   milvus: "Milvus",
 };
 
-/** Literal used in data-editing SQL. PG casts it to the column type. */
+/** Plain '…' literal (no backslash rule): MongoDB and REST consoles */
 export const sqlLiteral = (v: Cell) => (v === null ? "NULL" : `'${String(v).replace(/'/g, "''")}'`);
+
+/**
+ * A string literal as `kind` reads it, for the grid's filters and edit SQL: qurry_shared::sql::literal, the rule its copy formats use
+ * (PostgreSQL E'…' when the value has a \, so standard_conforming_strings doesn't matter; MySQL · ClickHouse double \). PG casts it to the column type.
+ * Without the WASM module the same rule in TS (literal.nowasm.test.ts), so editing still works
+ */
+const literalOf =
+  (kind: DbKind) =>
+  (v: Cell): string => {
+    if (v === null) return "NULL";
+    const s = String(v);
+    return sharedOr(literalTs(kind, s), (x) => x.sqlLiteral(kind, s));
+  };
+function literalTs(kind: DbKind, s: string): string {
+  const q = (t: string) => t.replace(/'/g, "''");
+  const bs = (t: string) => t.replace(/\\/g, "\\\\");
+  if (kind === "mysql" || kind === "clickhouse") return `'${q(bs(s))}'`;
+  if (kind === "postgres" && s.includes("\\")) return `E'${q(bs(s))}'`;
+  return `'${q(s)}'`;
+}
 
 /** SQL dialect per DB kind: identifier quoting, string literals, text cast */
 export interface Dialect {
@@ -430,11 +457,11 @@ export interface Dialect {
   /** The kind the Data Extractors (qurry_shared::extract) write identifiers and literals for: the connection's own kind */
   quoting: DbKind;
 }
-const PG: Dialect = { q: quoteIdent, lit: sqlLiteral, text: (e) => `${e}::text`, monaco: "pgsql", quoting: "postgres" };
+const PG: Dialect = { q: quoteIdent, lit: literalOf("postgres"), text: (e) => `${e}::text`, monaco: "pgsql", quoting: "postgres" };
 const MY: Dialect = {
   q: (s) => (/^[A-Za-z_][A-Za-z0-9_]*$/.test(s) && !RESERVED.has(s.toLowerCase()) ? s : "`" + s.replace(/`/g, "``") + "`"),
   // In MySQL strings backslash is also an escape char
-  lit: (v) => (v === null ? "NULL" : `'${String(v).replace(/\\/g, "\\\\").replace(/'/g, "''")}'`),
+  lit: literalOf("mysql"),
   text: (e) => `CAST(${e} AS CHAR)`,
   monaco: "mysql",
   quoting: "mysql",
@@ -457,10 +484,11 @@ const RD: Dialect = {
     return out;
   },
 };
-/** Driver DBs: standard SQL quoting, text conversion via CAST (no PG ::text). The extractors quote as the driver's kind (no PG E'') */
-const GEN = Object.fromEntries(PLUGIN_KINDS.map((k) => [k, { ...PG, text: (e: string) => `CAST(${e} AS VARCHAR(4000))`, monaco: "sql", quoting: k }])) as Record<DbKind, Dialect>;
-/** ClickHouse reads \ as an escape inside strings, as MySQL does */
-const CH: Dialect = { ...GEN.clickhouse, lit: MY.lit };
+/** Driver DBs: standard SQL quoting, text conversion via CAST (no PG ::text). Literals and the extractors as the driver's kind (no PG E'';
+ *  ClickHouse doubles \ as MySQL does) */
+const GEN = Object.fromEntries(PLUGIN_KINDS.map((k) => [k, { ...PG, lit: literalOf(k), text: (e: string) => `CAST(${e} AS VARCHAR(4000))`, monaco: "sql", quoting: k }])) as Record<DbKind, Dialect>;
+/** ClickHouse reads \ as an escape inside "names" too, so it is doubled: the rule of qurry_shared::sql::quote_ident(Clickhouse) */
+GEN.clickhouse.q = (s) => (/^[a-z_][a-z0-9_]*$/.test(s) && !RESERVED.has(s) ? s : `"${s.replace(/\\/g, "\\\\").replace(/"/g, '""')}"`);
 const MONGO: Dialect = { q: (s) => s, lit: sqlLiteral, text: (e) => e, monaco: "javascript", split: RD.split, quoting: "mongodb" };
 /** One REST request = from a method line up to the next method line (including JSON body). Same rule as core's sql::split_rest */
 const REST: Dialect = {
@@ -488,7 +516,7 @@ const REST: Dialect = {
     return out;
   },
 };
-export const dialectOf = (kind?: DbKind) => (kind === "mysql" ? MY : kind === "redis" ? RD : kind === "mongodb" ? MONGO : kind && VECTOR_KINDS.includes(kind) ? REST : kind === "clickhouse" ? CH : kind && PLUGIN_KINDS.includes(kind) ? GEN[kind] : PG);
+export const dialectOf = (kind?: DbKind) => (kind === "mysql" ? MY : kind === "redis" ? RD : kind === "mongodb" ? MONGO : kind && VECTOR_KINDS.includes(kind) ? REST : kind && PLUGIN_KINDS.includes(kind) ? GEN[kind] : PG);
 
 /** Backend connection target: Data Source id + DB name */
 export const targetId = (connId: string, database?: string | null) => (database ? `${connId}::${database}` : connId);

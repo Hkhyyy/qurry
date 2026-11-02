@@ -6,6 +6,7 @@
 
 `qurry-tui` 안에서 **F1** 을 누르거나 `qurry-tui --help` 를 실행하면 같은 목록이 나옵니다. F1 창 위쪽의 **Commands** 는 바꿀 수 있습니다: 하나를 고르고 Enter, 그다음 새 키 (`a` 두 번째 키 추가, `Del` 기본값으로). 마우스도 됩니다: 클릭으로 고르기, 더블클릭으로 열기 · 편집, 휠로 스크롤.
 ⌃Enter 는 kitty 키보드 프로토콜을 지원하는 터미널 (iTerm2, kitty, WezTerm, Ghostty) 에서만 구분됩니다. 다른 곳에서는 F5 나 ⌥Enter 를 쓰세요.
+tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 그것과 ⌥ 키는 [터미널에서 쓰는 TUI](tui.md#tmux-와-다른-멀티플렉서) 를 보세요.
 
 **처음이라면 `⌃p` 하나로 충분합니다.** 테이블 · 컬럼 · 열린 탭 · 명령을 찾습니다 (연결하지 않은 Data Source 는 마지막으로 읽었을 때 저장한 목록에서 찾음). 상태 줄에는 지금 보고 있는 곳 (탐색기, 콘솔, 테이블, 결과, Redis) 의 키와 가장 많이 쓰는 전역 키가 늘 나옵니다. F1 창도 같은 짧은 목록으로 시작합니다. Shift 가 필요 없는 키는 소문자로 (`⌃k`), 대문자는 Shift 를 뜻합니다 (`D`, `⌥⇧X`).
 
@@ -31,22 +32,22 @@
 | Key | Action |
 |---|---|
 | `⌃q` | Quit |
+| `F1` | Keymap |
+| `⌃k` | Actions Palette |
 | `⌃p` | Search Everywhere (objects · columns · tabs · actions) |
 | `⌃o` | Go to Database Object |
-| `⌃k` | Actions Palette |
-| `F1` | Keymap |
-| `⌥0` | Database Explorer |
 | `⌃b` | Go to DDL |
-| `⌃F6` | Modify Table… (change columns, keys, indexes, foreign keys → ALTER) |
-| `⇧F6` | Rename… (table, view, sequence, schema, database) |
 | `⌃e` | Recent Tabs / Switcher |
 | `⌃l` | New Query Console |
 | `⌃w` | Close Tab |
 | `⌥Right / ⌃PgDn` | Next Tab |
 | `⌥Left / ⌃PgUp` | Previous Tab |
+| `⌥0` | Database Explorer |
 | `⌥n` | New Workspace… |
 | `⌥⇧N` | Rename Workspace… |
 | `F6` | Cycle Focus (explorer → editor → results) |
+| `⌃F6` | Modify Table… (change columns, keys, indexes, foreign keys → ALTER) |
+| `⇧F6` | Rename… (table, view, sequence, schema, database) |
 | `⌥\` | Split Right (focused pane, up to 4) |
 | `⌥-` | Split Down (focused pane, up to 4) |
 | `⌥Tab` | Go to the Next Split |

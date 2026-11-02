@@ -35,7 +35,9 @@
   { "id": "underscore-array", "before": "where tags = '", "typeName": "_int4", "value": "{1}" },
   { "id": "geometry", "before": "where geom = '", "typeName": "geometry", "value": "POINT(0 0)" },
   { "id": "bytea", "before": "where body = '", "typeName": "bytea", "value": "\\x00" },
-  { "id": "money-bare", "before": "where price = ", "typeName": "money", "value": "$1.00" },
+  { "id": "money-text-quoted", "before": "where price = ", "typeName": "money", "value": "$1.00" },
+  { "id": "domain-type-quoted", "before": "set realm = ", "typeName": "realm_name", "value": "x' or true; --" },
+  { "id": "numeric-not-a-number", "before": "where id = ", "typeName": "int4", "value": "1; drop table t" },
   { "id": "no-context", "before": "select 1", "typeName": "text", "value": "x" },
   { "id": "after-gt", "before": "where n > '", "typeName": "int4", "value": "1" }
 ]
