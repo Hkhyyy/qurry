@@ -308,6 +308,9 @@ pub enum Popup {
     /// body = app-written explanation shown in a box under the input (never interpolated names, so a name can't pose as it)
     Input { title: String, body: String, input: TextArea<'static>, on_ok: Box<dyn FnOnce(&mut App, String)>, words: Vec<String>, complete: Option<(Vec<String>, usize, usize)> },
     Confirm { text: String, on_yes: Box<dyn FnOnce(&mut App)> },
+    /// The TLS opt-in (offer_tls_opt_in). It opens on its own when a background load fails, so only a y pressed once it has been on screen
+    /// for TLS_ASK_GRACE allows plaintext: never Enter, never a key that was meant for the editor or the tree
+    AllowPlaintext { text: String, on_yes: Box<dyn FnOnce(&mut App)>, opened: std::time::Instant },
     Palette(Palette),
     ConnForm(ConnForm),
     /// Manage Shown Schemas (DBs·schemas shown in the tree)
@@ -878,6 +881,9 @@ impl App {
 
     // ───────── TLS opt-in ─────────
 
+    /// Keys pressed this soon after the opt-in popup opened were meant for what was on screen before it: they are ignored
+    pub(crate) const TLS_ASK_GRACE: std::time::Duration = std::time::Duration::from_millis(400);
+
     /// A connect error that needs TLS (qurry_shared::errors::tls_opt_in): ask to allow unencrypted for this data source, then `then` (expand
     /// again, or reconnect). Never for Production (the core refuses too): the status line says where the setting is instead
     pub(crate) fn offer_tls_opt_in(&mut self, conn: &str, err: &str, then: impl FnOnce(&mut App) + Send + 'static) {
@@ -895,7 +901,8 @@ impl App {
             self.status = format!("\"{}\": the server has no TLS — expand or run again to allow unencrypted", c.name);
             return;
         }
-        self.popup = Some(Popup::Confirm {
+        self.popup = Some(Popup::AllowPlaintext {
+            opened: std::time::Instant::now(),
             text: format!("Allow unencrypted for this data source?\n\nThe password will be sent unencrypted to {}. Use only on a network you trust.\nTo undo, turn off \"Allow unencrypted\" in the data source form (e in the explorer).", c.host),
             on_yes: Box::new(move |a| {
                 a.status = format!("Allowing unencrypted for \"{}\"…", c.name);
@@ -920,7 +927,8 @@ impl App {
     fn reconnect_after_tls(&mut self, conn: String, console: Option<u64>) {
         let st = self.state.clone();
         self.status = format!("Connecting to \"{}\"…", self.conn(&conn).map(|c| c.config.name.as_str()).unwrap_or(&conn));
-        self.spawn(async move { st.connect(conn).await.map_err(|e| e.to_string()) }, move |a, r| {
+        let id = conn.clone();
+        self.spawn(async move { st.connect(id).await.map_err(|e| e.to_string()) }, move |a, r| {
             let msg = match &r {
                 Ok(_) if console.is_some() => "Connected. Run again.".to_string(),
                 Ok(_) => "Connected".to_string(),
@@ -931,6 +939,10 @@ impl App {
             }
             a.status = msg;
             a.reload_conns();
+            // A tree that still shows the earlier error under the now connected source loads again (as the GUI does)
+            if r.is_ok() && a.tree.children.get(&conn).is_some_and(|n| n.len() == 1 && n[0].kind == NodeKind::Info) {
+                a.reexpand(&conn);
+            }
         });
     }
 

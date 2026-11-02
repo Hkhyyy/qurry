@@ -1154,6 +1154,12 @@ fn popup_key(app: &mut App, k: KeyEvent) {
             KeyCode::Char('n') | KeyCode::Esc => {}
             _ => app.popup = Some(Popup::Confirm { text, on_yes }),
         },
+        Popup::AllowPlaintext { text, on_yes, opened } => match k.code {
+            _ if opened.elapsed() < App::TLS_ASK_GRACE => app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened }),
+            KeyCode::Char('y') | KeyCode::Char('Y') => on_yes(app),
+            KeyCode::Char('n') | KeyCode::Esc => {}
+            _ => app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened }),
+        },
         Popup::Input { title, body, mut input, on_ok, words, mut complete } => {
             // If the autocomplete list is open: ↑↓ select · Tab/Enter insert · Esc close
             if let Some((items, sel, prefix)) = &mut complete {

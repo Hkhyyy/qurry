@@ -890,6 +890,17 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             let inner = if danger { popup_danger(f, r, " Confirm ") } else { popup(f, r, " Confirm ") };
             f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
         }
+        Popup::AllowPlaintext { text, .. } => {
+            // Like Confirm, but only y allows (no Enter): the popup opened on its own
+            let mut lines = confirm_lines(text);
+            if let Some(l) = lines.last_mut() {
+                *l = key_hints(&[("y", "allow"), ("n / Esc", "cancel")]);
+            }
+            let w = 90u16.min(area.width.saturating_sub(4));
+            let r = centered(area, 90, wrapped_height(&lines, w.saturating_sub(2)) + 2);
+            let inner = popup(f, r, " Allow Unencrypted ");
+            f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+        }
         Popup::Input { title, body, input, complete, words, .. } => {
             // The title goes on the border; the body (answers, reasons) in a box below, wrapped, so it isn't cut off
             let body: Vec<Line> = body.lines().map(|l| Line::raw(disp(l))).collect();
