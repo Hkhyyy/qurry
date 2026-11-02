@@ -161,6 +161,12 @@ fn asks_server(sql: &str, s: &str) -> bool {
     !is_select_like(sql) && !is_dml(s)
 }
 
+/// The leading word of `s` (strip_comments_lead), ending at any character that isn't a letter, digit or `_`, so a comment glued to
+/// it (`call/**/p()`) doesn't hide it
+fn first_word(s: &str) -> &str {
+    s.split(|c: char| !c.is_alphanumeric() && c != '_').next().unwrap_or("")
+}
+
 /// The word after a leading BEGIN keyword (s = strip_comments_lead(sql)), comments skipped (`--`, `/* */`, `#`): "" for none.
 /// None when `s` doesn't start with the word BEGIN
 fn after_begin(s: &str) -> Option<&str> {
@@ -171,7 +177,7 @@ fn after_begin(s: &str) -> Option<&str> {
         } else if let Some(r) = rest.strip_prefix("/*") {
             r.split_once("*/").map_or("", |x| x.1)
         } else {
-            return Some(rest.split(|c: char| !c.is_alphanumeric() && c != '_').next().unwrap_or(""));
+            return Some(first_word(rest));
         }
         .trim_start();
     }
@@ -179,7 +185,7 @@ fn after_begin(s: &str) -> Option<&str> {
 
 /// A MariaDB compound statement: at top level only BEGIN NOT ATOMIC … END (a labeled one is a syntax error there). It doesn't
 /// commit the open transaction, and what it runs can commit or roll back
-fn is_compound(s: &str) -> bool {
+pub(crate) fn is_compound(s: &str) -> bool {
     after_begin(s) == Some("not")
 }
 
@@ -193,19 +199,19 @@ fn is_begin(s: &str) -> bool {
 /// COMMIT / ROLLBACK, or a MariaDB BEGIN NOT ATOMIC … END. When the transaction ended with it, the server's answer can't tell
 /// whether it committed or rolled back
 fn ends_in_procedure(s: &str) -> bool {
-    let first = s.split_whitespace().next().unwrap_or("");
+    let first = first_word(s);
     ["call", "execute"].contains(&first) || is_compound(s)
 }
 
 /// Statements that change rows (s = strip_comments_lead(sql))
 fn changes_rows(s: &str) -> bool {
-    let first = s.split_whitespace().next().unwrap_or("");
+    let first = first_word(s);
     ["insert", "update", "delete", "replace"].contains(&first) || s.starts_with("load data")
 }
 
 /// Statements that change or read rows and never commit the open transaction (s = strip_comments_lead(sql))
 fn is_dml(s: &str) -> bool {
-    let first = s.split_whitespace().next().unwrap_or("");
+    let first = first_word(s);
     changes_rows(s) || ["show", "explain", "describe", "desc"].contains(&first)
 }
 
@@ -715,7 +721,7 @@ mod tests {
     #[test]
     fn asks_the_server_after_all_but_dml() {
         let a = |q: &str| asks_server(q, &strip_comments_lead(q));
-        for q in ["UPDATE t SET a = 1", "-- x\ninsert into t values (1)", "delete from t", "replace into t values (1)", "load data infile 'x' into table t", "show tables", "explain select 1", "desc t", "select 1", "with x as (select 1) select * from x"] {
+        for q in ["UPDATE t SET a = 1", "-- x\ninsert into t values (1)", "delete from t", "replace into t values (1)", "load data infile 'x' into table t", "show tables", "explain select 1", "desc t", "select 1", "with x as (select 1) select * from x", "update/**/t set a = 1"] {
             assert!(!a(q), "{q}");
         }
         for q in [
@@ -730,7 +736,7 @@ mod tests {
     /// A CALL or EXECUTE can end the transaction either way (a procedure's ROLLBACK, a prepared COMMIT); other statements commit it
     #[test]
     fn call_and_execute_end_in_procedure() {
-        for q in ["call p()", "CALL s.p", "-- x\n call p()", "execute stmt", "EXECUTE s USING @a"] {
+        for q in ["call p()", "CALL s.p", "-- x\n call p()", "execute stmt", "EXECUTE s USING @a", "call/**/p()", "execute/**/s"] {
             assert!(ends_in_procedure(&strip_comments_lead(q)), "{q}");
         }
         for q in ["create table t (a int)", "set password = 'x'", "callx", "do 0", "deallocate prepare s", "prepare s from 'commit'", "begin", "BEGIN WORK;", "begin ;"] {

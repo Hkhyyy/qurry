@@ -76,7 +76,12 @@ pub fn is_change(sql: &str, kind: DbKind) -> bool {
     if crate::guard::is_read(sql, kind) {
         return false;
     }
-    !matches!(first_word(sql).as_str(), "" | "set" | "use" | "begin" | "start" | "savepoint" | "release" | "commit" | "end" | "rollback" | "abort" | "explain" | "show" | "describe" | "desc")
+    let word = first_word(sql);
+    if word == "begin" && kind == DbKind::Mysql && crate::mysql::is_compound(&crate::session::strip_comments_lead(sql)) {
+        // MariaDB BEGIN NOT ATOMIC … END runs statements of its own, like a CALL
+        return true;
+    }
+    !matches!(word.as_str(), "" | "set" | "use" | "begin" | "start" | "savepoint" | "release" | "commit" | "end" | "rollback" | "abort" | "explain" | "show" | "describe" | "desc")
 }
 
 /// Name to log if the statement is COMMIT / ROLLBACK (not ROLLBACK TO SAVEPOINT)
@@ -599,6 +604,11 @@ mod tests {
         assert!(!pg("set search_path to app"));
         assert!(!pg("begin"));
         assert!(!pg("commit"));
+        let my = |s: &str| is_change(s, DbKind::Mysql);
+        assert!(!my("begin work"));
+        assert!(!my("begin/* x */"));
+        assert!(my("begin not atomic update t set v = 1; end"));
+        assert!(my("BEGIN/*x*/NOT ATOMIC UPDATE t SET v = 1; END"));
         assert!(!pg("explain (analyze) update t set a = 1"));
         assert!(is_change("SET k v", DbKind::Redis));
         assert!(!is_change("GET k", DbKind::Redis));
@@ -1801,6 +1811,12 @@ mod tests {
         assert!(!st.tx_state("m".into()).await);
         assert_eq!(log(1), [ENDED_UNKNOWN]);
         assert_eq!(followup_values(&st, s).await, "[[70],[2],[3]]");
+        // Also with a comment glued to CALL
+        run(format!("update {s}.t set v = 71 where id = 2")).await.unwrap();
+        run(format!("call/**/{s}.r()")).await.unwrap();
+        assert!(!st.tx_state("m".into()).await);
+        assert_eq!(log(1), [ENDED_UNKNOWN]);
+        assert_eq!(followup_values(&st, s).await, "[[70],[2],[3]]");
         followup_drop(&st, DbKind::Mysql, s).await;
     }
 
@@ -1821,6 +1837,11 @@ mod tests {
         assert!(st.audit_log(None, String::new(), 1)[0].in_tx);
         st.rollback_tx("a".into()).await.unwrap();
         assert!(!st.tx_state("a".into()).await);
+        assert_eq!(followup_values(&st, s).await, "[[1],[2],[3]]");
+        // Also with a comment glued to CALL
+        run(format!("call/**/{s}.o()")).await.unwrap();
+        assert!(st.tx_state("a".into()).await);
+        st.rollback_tx("a".into()).await.unwrap();
         assert_eq!(followup_values(&st, s).await, "[[1],[2],[3]]");
         followup_drop(&st, DbKind::Mysql, s).await;
     }
@@ -2046,6 +2067,15 @@ mod tests {
         assert!(st.tx_state("a".into()).await);
         st.rollback_tx("a".into()).await.unwrap();
         assert_eq!(followup_values(&st, s).await, "[[10],[20],[3]]");
+        // One that changes rows is logged and tracked like a CALL: a DDL that then commits it says so and logs the commit
+        let change = format!("begin not atomic update {s}.t set v = 40 where id = 1; end");
+        run("m", change.clone()).await.unwrap();
+        let ddl = format!("create table {s}.x (a int)");
+        let w = run("m", ddl.clone()).await.unwrap().warning.unwrap_or_default();
+        assert!(w.contains("are saved"), "{w}");
+        assert_eq!(log(3), [IMPLICIT_COMMIT.to_string(), ddl, change]);
+        st.rollback_tx("m".into()).await.unwrap();
+        assert_eq!(followup_values(&st, s).await, "[[40],[20],[3]]");
         followup_drop(&st, DbKind::Mysql, s).await;
     }
 }
