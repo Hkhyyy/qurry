@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 // Fake backend (same as the app's ?mock): returns fixed data for the commands screens call
 import "../../lib/mock";
 import "../../lib/monaco";
-import App from "../../App";
+import App, { SettingsDialog } from "../../App";
 import { dialectOf, type ConnectionView, type QueryResult } from "../../lib/api";
 import { ConnectionDialog } from "../../components/ConnectionDialog";
 import { ConsolePane, SPLITTER_FAILED } from "../../components/ConsolePane";
@@ -60,6 +60,9 @@ const Frame = ({ children, h = 560 }: { children: React.ReactNode; h?: number })
 
 /** Whole app (explorer · tabs · console). Right-click the explorer, ⇧⌘A for Find Action, ⌘↩ in the console to run */
 export const FullApp: S = { name: "App (whole window)", render: () => <div style={{ height: "100vh" }}><App /></div> };
+
+/** Settings › Appearance: theme, the automatic update check and the update channel (stable or beta, shared with the TUI) */
+export const Settings: S = { name: "Settings — Appearance & updates", render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} /> };
 
 export const NewDataSource: S = { name: "Data Source — new", render: () => <ConnectionDialog onClose={noop} onSaved={noop} /> };
 export const EditDataSource: S = { name: "Data Source — edit (SSH)", render: () => <ConnectionDialog edit={{ ...PROD, ssh: { enabled: true, host: "bastion.example.com", port: 22, user: "ec2-user", auth: "key", keyPath: "~/.ssh/id_ed25519" } } as ConnectionView} onClose={noop} onSaved={noop} /> };

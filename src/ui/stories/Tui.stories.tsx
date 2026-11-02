@@ -31,3 +31,4 @@ export const ScreenDbaStale = { ...by("Database Admin: refresh failed"), name: "
 export const ScreenDbaError = { ...by("Database Admin: report error"), name: "Screen · Database Admin: report error" };
 export const ScreenRedis ={ ...by("Redis"), name: "Screen · Redis" };
 export const ScreenMysqlBackupDefiners = { ...by("MySQL backup: DEFINER= question"), name: "Screen · MySQL backup: DEFINER= question" };
+export const ScreenUpdateChannel = { ...by("Update channel"), name: "Screen · Update channel" };

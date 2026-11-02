@@ -15,6 +15,19 @@ test("Settings (⌘,): sections, theme, Escape closes", async ({ page }) => {
   await expect(dialog(page)).toHaveCount(0);
 });
 
+test("Settings › Update channel: stable by default, beta is kept after reopening", async ({ page }) => {
+  await page.keyboard.press("Meta+Comma");
+  const channel = dialog(page).getByRole("combobox", { name: /Update channel/ });
+  await expect(channel.locator("option")).toHaveText(["Stable", "Beta"]);
+  await expect(channel).toHaveValue("stable");
+  await channel.selectOption("beta");
+  // The mock offers 0.1.2 over 0.1.0
+  await expect(dialog(page).getByText("Qurry 0.1.2 is available on this channel.")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Meta+Comma");
+  await expect(dialog(page).getByRole("combobox", { name: /Update channel/ })).toHaveValue("beta");
+});
+
 test("Keymap Reference (⇧⌘/) lists every row with ⌘⌥⌃⇧ keys", async ({ page }) => {
   await page.keyboard.press("Meta+Shift+Slash");
   await expect(dialog(page).locator(".ui-modal-title")).toHaveText("Keymap Reference");

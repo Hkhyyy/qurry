@@ -2252,6 +2252,7 @@ mod tests {
                 VersionNotes { version: "9.0.0".into(), changes: vec!["[feat] a (#1)".into()] },
                 VersionNotes { version: "0.0.1".into(), changes: vec!["old".into()] },
             ],
+            prerelease: false,
         };
         h.app.show_update(r);
         assert_eq!(h.app.update.as_deref(), Some("9.0.1"));
@@ -2260,6 +2261,24 @@ mod tests {
             assert!(s.contains(want), "{want:?} in {s}");
         }
         assert!(!s.contains("old"), "{s}");
+    }
+
+    /// ⌃k › Update Channel…: stable is marked until beta is picked; the pick is saved for the GUI too and drops the ⬆ badge of the old channel
+    #[tokio::test]
+    async fn update_channel_is_picked_from_the_palette() {
+        use qurry_core::update::Channel;
+        let mut h = Harness::new().await;
+        h.app.update = Some("9.0.1".into());
+        h.app.palette_update_channel();
+        let s = h.screen(120, 30);
+        assert!(s.contains("Update Channel") && s.contains("● Stable") && s.contains("  Beta"), "{s}");
+        h.key("Down");
+        h.key("Enter");
+        assert_eq!(h.app.state.store.update_channel(), Channel::Beta);
+        assert_eq!(h.app.update, None);
+        assert!(h.app.status.starts_with("Update channel: Beta"), "{}", h.app.status);
+        h.app.palette_update_channel();
+        assert!(h.screen(120, 30).contains("● Beta"));
     }
 
     /// Rebinding a key updates on-screen hints too (console Output/result titles, table save hint, palette hints)

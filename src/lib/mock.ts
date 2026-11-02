@@ -22,6 +22,7 @@ const result = {
   hasResultSet: true,
 };
 let flakyLoads = 0;
+let updateChannel = "stable";
 const handlers: Record<string, (a: any) => unknown> = {
   list_connections: () => conns,
   list_databases: (a: any) => (a.id === "rd" ? ["db0", "db3"] : a.id === "my" ? ["information_schema", "mysql", "shop", "sys"] : ["postgres", "shop_app", "shop_app_test"]),
@@ -343,6 +344,8 @@ const handlers: Record<string, (a: any) => unknown> = {
   import_picked: () => ({ added: 0, updated: 1 }),
   save_keymap: () => null,
   install_update: () => new Promise((_, rej) => setTimeout(() => rej("Update failed: mock"), 800)),
+  update_channel: () => updateChannel,
+  set_update_channel: (a: any) => ((updateChannel = a.channel), null),
   check_update: () => ({
     current: "0.1.0",
     latest: { version: "0.1.2", url: "https://github.com/Hkhyyy/qurry/releases/tag/v0.1.2", notes: "## dbtool 0.1.2\n- something new", assets: [{ name: "dbtool_0.1.2_aarch64.dmg", url: "https://example.com/dbtool_0.1.2_aarch64.dmg" }] },

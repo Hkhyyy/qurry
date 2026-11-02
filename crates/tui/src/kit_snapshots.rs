@@ -349,6 +349,9 @@ async fn all_scenes() -> Vec<Value> {
     h.key("Enter");
     h.key("Alt+1");
     scenes.push(app_scene(&mut h, "Workspaces", "워크스페이스가 둘 이상이면 위쪽 띠 (⌥1…9 · 눌러서 바꾸기)", 120, 22));
+    h.app.palette_update_channel();
+    scenes.push(app_scene(&mut h, "Update channel", "⌃k › Update Channel…: stable (version tags only, the default) or beta (also every merge to main), shared with the GUI", 120, 22));
+    h.app.popup = None;
     scenes
 }
 
