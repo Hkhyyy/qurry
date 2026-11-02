@@ -139,6 +139,7 @@ pub fn run() {
             commands::pick_import_file,
             commands::import_picked,
             commands::tx_state,
+            commands::explain_wrap,
             commands::trust_ssh_host,
             commands::unsafe_reason,
             commands::list_databases,

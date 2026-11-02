@@ -128,8 +128,11 @@ async function askExplainAnalyze(name: string | undefined, kind: DbKind, stmts: 
     return why ? [{ s, why }] : [];
   });
   if (!asks.length) return true;
-  const detail = asks.map(({ s }) => ({ text: s.replace(/\s+/g, " ").slice(0, 300), tone: "danger" as const }));
-  return ask(`Explain Analyse really runs the statement, and ${asks[0].why}. Run it anyway?`, { title: name ? `${name}: Explain Analyse` : "Explain Analyse", detail, okLabel: "Run Anyway", danger: true });
+  // Several: each statement with its own reason (as the TUI lists them)
+  const one = asks.length === 1;
+  const detail = asks.map(({ s, why }) => ({ text: s.replace(/\s+/g, " ").slice(0, 300), note: one ? undefined : why }));
+  const text = one ? `Explain Analyse really runs the statement, and ${asks[0].why}. Run it anyway?` : `Explain Analyse really runs the statements, and ${asks.length} of them need a look. Run them anyway?`;
+  return ask(text, { title: name ? `${name}: Explain Analyse` : "Explain Analyse", detail, okLabel: "Run Anyway", danger: true });
 }
 /** Shortcut shown in menus and Find Action (the first key) */
 const sk = (id: string) => {
@@ -1353,20 +1356,22 @@ export default function App() {
       const bare = sql0.replace(/;\s*$/, "");
       const sql = !explain ? sql0 : isMy ? `EXPLAIN ${explain === "analyze" ? "ANALYZE " : ""}${bare}` : `EXPLAIN (FORMAT JSON${explain === "analyze" ? ", ANALYZE, BUFFERS" : ""}) ${bare}`;
       log(tabId, "sql", `${c?.name ?? ""}> ${sql0}`);
-      // Explain Analyse actually runs the statement → run it in a transaction and always roll back (if already in a transaction,
-      // only that part via a savepoint). Reads too: a function a SELECT calls may write
+      // Explain Analyse actually runs the statement → run it in a transaction and always roll back (a savepoint when one may be
+      // open, so nothing pending is committed: core's explain_wrap, the TUI's rule). Reads too: a function a SELECT calls may write
       const dry = explain === "analyze" && wraps;
       const inTx0 = !!tabsRef.current.find((t) => t.id === tabId)?.inTx;
       try {
         let r: QueryResult;
         if (dry) {
-          await api.runQuery(tab.target, inTx0 ? "SAVEPOINT qurry_explain" : "BEGIN", tabId);
+          const [begin, back] = await api.explainWrap(tab.target, tabId);
+          await api.runQuery(tab.target, begin, tabId);
+          let after: QueryResult | undefined;
           try {
             r = await api.runQuery(tab.target, sql, tabId);
           } finally {
-            await api.runQuery(tab.target, inTx0 ? "ROLLBACK TO SAVEPOINT qurry_explain" : "ROLLBACK", tabId).catch((e) => log(tabId, "error", `Roll back after Explain Analyse failed: ${String(e)}`));
+            after = await api.runQuery(tab.target, back, tabId).catch((e) => (log(tabId, "error", `Roll back after Explain Analyse failed: ${String(e)}`), undefined));
           }
-          r = { ...r, inTransaction: inTx0 };
+          r = { ...r, inTransaction: after?.inTransaction ?? inTx0 };
           const note = explainAnalyzeNote(kind, sql0);
           if (note) log(tabId, note.level, `Explain Analyse ${note.text}`);
         } else {

@@ -263,6 +263,22 @@ export const ConfirmProduction: S = {
     />
   ),
 };
+/** Explain Analyse of several statements that need a look: the SQL in the code, its reason a plain line under it */
+export const ConfirmExplainAnalyse: S = {
+  parameters: { layout: "fullscreen" },
+  render: () => (
+    <OpenConfirm
+      title="[PROD] kr: Explain Analyse"
+      message="Explain Analyse really runs the statements, and 2 of them need a look. Run them anyway?"
+      detail={[
+        { text: "select nextval('orders_id_seq')", note: "a rollback can't undo what it does outside the transaction: sequence values, other servers, files, locks, or a COMMIT · MySQL DDL among several statements" },
+        { text: "delete from users", note: "DELETE without WHERE changes every row, holding their locks until the rollback undoes it" },
+      ]}
+      okLabel="Run Anyway"
+      danger
+    />
+  ),
+};
 export const ConfirmTerminate: S = {
   parameters: { layout: "fullscreen" },
   render: () => <OpenConfirm title="[PROD] kr" message="Terminate Session 1385?" detail={[{ text: "select pg_sleep(600) /* sleeper */", value: "pid 1385" }]} okLabel="Terminate Session" danger />,

@@ -949,6 +949,14 @@ impl AppState {
         Ok(())
     }
 
+    /// Explain Analyse (PostgreSQL · MySQL): the statements to run before and after it in the console's session, so it is rolled back
+    /// without committing what is pending (Session::explain_wrap)
+    pub async fn explain_wrap(&self, id: String, tab_id: String) -> AppResult<[&'static str; 2]> {
+        let sess = ensure_session(self, &id, &tab_id).await?;
+        let mut s = sess.lock().await;
+        s.explain_wrap().await
+    }
+
     /// Whether the tab session has uncommitted changes (to show the Commit/Roll back buttons correctly even after an error)
     pub async fn tx_state(&self, tab_id: String) -> bool {
         let sess = self.sessions.read().await.get(&tab_id).map(|e| e.session.clone());

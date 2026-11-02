@@ -109,11 +109,11 @@ export function List({ children, empty, boxed, className, listRef, style }: { ch
 export const ListGroup = SectionTitle;
 
 /** Detail list (statement · row count in confirm boxes, query · pid in sessions …) */
-export function DetailList({ items }: { items: { text: ReactNode; value?: ReactNode; tone?: "danger" | "warn" }[] }) {
+export function DetailList({ items }: { items: { text: ReactNode; value?: ReactNode; tone?: "danger" | "warn"; note?: ReactNode }[] }) {
   return (
     <div className="ui-detail-list">
       {items.map((d, i) => (
-        <DetailRow key={i} value={d.value} tone={d.tone}>
+        <DetailRow key={i} value={d.value} tone={d.tone} note={d.note}>
           {d.text}
         </DetailRow>
       ))}
@@ -232,7 +232,7 @@ export interface ConfirmOptions {
   title?: string;
   message: ReactNode;
   /** Statement · target and the value next to it (e.g. rows to change) */
-  detail?: { text: string; value?: string; tone?: "danger" | "warn" }[];
+  detail?: { text: string; value?: string; tone?: "danger" | "warn"; note?: string }[];
   okLabel?: string;
   /** null = no Cancel button (a notice to acknowledge) */
   cancelLabel?: string | null;

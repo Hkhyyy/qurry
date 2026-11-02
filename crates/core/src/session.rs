@@ -14,6 +14,10 @@ use std::time::Instant;
 const CURSOR: &str = "dbtool_cur";
 /// When switching from Manual → Auto is blocked
 pub const PENDING_TX: &str = "There are uncommitted changes — commit or roll back first";
+/// Explain Analyse runs the statement between these and rolls it back (Session::explain_wrap): in a transaction of its own, or in a
+/// savepoint of the one that is open
+pub const EXPLAIN_BEGIN: [&str; 2] = ["BEGIN", "ROLLBACK"];
+pub const EXPLAIN_SAVEPOINT: [&str; 2] = ["SAVEPOINT qurry_explain", "ROLLBACK TO SAVEPOINT qurry_explain"];
 /// A COMMIT of a PostgreSQL transaction an earlier error aborted: the server rolled it back
 const ABORTED_COMMIT: &str =
     "Not committed: an earlier statement in this transaction failed, so PostgreSQL rolled back the whole transaction and none of its changes were saved. Run the changes again (without the failing statement).";
@@ -466,6 +470,15 @@ impl Session {
             Session::My(s) => s.close_cursor(),
             Session::Redis(_) | Session::Plugin(_) => {}
         }
+    }
+    /// How Explain Analyse wraps the statement it really runs: in a savepoint when a transaction is open (or MySQL autocommit is
+    /// off: a BEGIN would commit what is pending there), else in a transaction of its own. GUI and TUI both ask this
+    pub async fn explain_wrap(&mut self) -> AppResult<[&'static str; 2]> {
+        let open = match self {
+            Session::My(s) => s.tx_may_be_open().await?,
+            s => s.in_tx(),
+        };
+        Ok(if open { EXPLAIN_SAVEPOINT } else { EXPLAIN_BEGIN })
     }
     /// Whether there are uncommitted changes
     pub fn in_tx(&self) -> bool {

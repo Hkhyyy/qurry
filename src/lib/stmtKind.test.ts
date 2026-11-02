@@ -24,19 +24,20 @@ describe("stmtKind (core guard through WASM)", () => {
     expect(isRead("postgres", "select 1; select 2;")).toBe(true);
   });
 
-  it("Explain Analyse asks with the TUI's words: a write a rollback can't undo, a read that calls a function it doesn't know", () => {
+  it("Explain Analyse asks with the TUI's words: what a rollback can't undo, a DELETE without WHERE; not a function it doesn't know", () => {
     expect(explainAnalyzeAsk("postgres", "delete from t where id = 1")).toBe(undefined);
     expect(explainAnalyzeAsk("postgres", "delete from t")).toBe("DELETE without WHERE changes every row, holding their locks until the rollback undoes it");
-    expect(explainAnalyzeAsk("postgres", "update t set a = f(1) where id = 1")).toMatch(/^it calls f\(\), and a rollback can't undo/);
+    expect(explainAnalyzeAsk("postgres", "update t set a = f(1) where id = 1")).toBe(undefined);
     expect(explainAnalyzeAsk("postgres", "select nextval('s')")).toMatch(/^a rollback can't undo what it does outside the transaction/);
     expect(explainAnalyzeAsk("postgres", "select dblink_exec('dbname=x', 'delete from t')")).toMatch(/^a rollback can't undo/);
     expect(explainAnalyzeAsk("mysql", "select * from t into outfile '/tmp/x'")).toMatch(/^a rollback can't undo/);
-    expect(explainAnalyzeAsk("postgres", "select archive_old_orders()")).toMatch(/^it calls archive_old_orders\(\), and a rollback can't undo/);
+    expect(explainAnalyzeAsk("postgres", "select archive_old_orders()")).toBe(undefined);
     expect(explainAnalyzeAsk("postgres", "select count(*) from t")).toBe(undefined);
     expect(explainAnalyzeAsk("sqlite", "delete from t where id = 1")).toBe("it changes data");
     expect(explainAnalyzeNote("postgres", "select 1")).toBe(undefined);
     expect(explainAnalyzeNote("postgres", "update t set a = 1")).toEqual({ level: "info", text: expect.stringContaining("its table changes were undone") });
-    expect(explainAnalyzeNote("postgres", "select archive()")).toEqual({ level: "warn", text: expect.stringContaining("what archive() did outside the transaction stays") });
+    expect(explainAnalyzeNote("postgres", "select archive()")).toBe(undefined);
+    expect(explainAnalyzeNote("postgres", "select nextval('s')")).toEqual({ level: "warn", text: expect.stringContaining("what it did outside the transaction stays") });
   });
 
   it("with a backslash in a string, a read must be a read under both of the server's string rules", () => {

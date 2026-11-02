@@ -214,6 +214,8 @@ export const api = {
   pickDataFile: () => invoke<[string, DataPreview] | null>("pick_data_file"),
   importData: (id: string, spec: ImportSpec, job: string) => invoke<number>("import_data", { id, spec, job }),
   txState: (tabId: string) => invoke<boolean>("tx_state", { tabId }),
+  /** Explain Analyse: [before, after] the statement, a savepoint when a transaction may be open (core AppState::explain_wrap) */
+  explainWrap: (id: string, tabId: string) => invoke<[string, string]>("explain_wrap", { id, tabId }),
   trustSshHost: (host: string, port: number) => invoke<string>("trust_ssh_host", { host, port }),
   /** Reason if the statement is dangerous and needs confirmation before running (UPDATE/DELETE without WHERE, DROP, TRUNCATE, Redis FLUSH*·DEL) */
   /** Whether the driver plugin is installed (null for built-in DBs) · download and install */
