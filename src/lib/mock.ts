@@ -169,8 +169,11 @@ const handlers: Record<string, (a: any) => unknown> = {
   similar_rows_sql: (a: any) => `SELECT ${a.column} <-> (SELECT ${a.column} FROM ${a.schema}.${a.table} WHERE ${a.pk.map((p: any) => `${p[0]} = '${p[1]}'`).join(" AND ")}) AS distance, *\nFROM ${a.schema}.${a.table}\nORDER BY distance\nLIMIT 20`,
   object_ddl: (a: any) => `CREATE TABLE ${a.schema}.${a.name}\n(\n    id bigint DEFAULT nextval('users_id_seq'::regclass) NOT NULL,\n    user_name character varying(50) NOT NULL,\n    CONSTRAINT users_pkey PRIMARY KEY (id)\n);\n`,
   // Instance i-00000000000000000 never connects (like a stopped one): the test runs until cancel_test. On i-0000000000000dead it
-  // fails with the core's long message for a missing Session Manager plugin
-  test_connection: (a: any) => {
+  // fails with the core's long message for a missing Session Manager plugin. window.__mockTestDelay (ms, set before load) makes
+  // every test take that long, as a real connect does
+  test_connection: async (a: any) => {
+    const delay = (globalThis as any).__mockTestDelay;
+    if (delay) await new Promise((r) => setTimeout(r, delay));
     if (a.config.host === lan.host && !a.config.options?.allowPlaintext) throw NEEDS_TLS;
     if (a.config.ssm?.enabled && a.config.ssm.target === "i-0000000000000dead") throw SSM_NO_PLUGIN;
     return a.config.ssm?.enabled && a.config.ssm.target === "i-00000000000000000"

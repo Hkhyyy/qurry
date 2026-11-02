@@ -272,6 +272,7 @@ impl App {
             if dirty > 0 { format!("\n\n{dirty} console(s) have uncommitted changes — they are rolled back.") } else { String::new() }
         );
         self.popup = Some(Popup::Confirm {
+            opened: None,
             text,
             on_yes: Box::new(move |a| {
                 let closing = a.take_live();

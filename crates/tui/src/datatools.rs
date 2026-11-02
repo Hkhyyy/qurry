@@ -53,20 +53,9 @@ impl App {
                     Err(e) => return a.status = format!("Generate test data: {e}"),
                 };
                 a.status.clear();
-                let width = pv.plan.iter().map(|c| c.name.chars().count()).max().unwrap_or(0);
-                let mut text = format!("Insert {} generated rows into {where_}?\n\n", thousands(n as u64));
-                for c in &pv.plan {
-                    text.push_str(&format!("  {:width$}  {}\n", c.name, c.how));
-                }
-                for w in &pv.warnings {
-                    text.push_str(&format!("\n⚠ {w}"));
-                }
-                if let Some(name) = a.production_name(&conn) {
-                    text.push_str(&format!("\n⚠ Production data source \"{name}\""));
-                }
-                text.push_str("\n\nAll rows go in one transaction — if one fails, nothing is inserted.");
-                a.popup = Some(Popup::Confirm {
-                    text,
+                a.open_after_notices(Popup::Confirm {
+                    opened: None,
+                    text: fake_confirm_text(n, &where_, &pv.plan, &pv.warnings, a.production_name(&conn).as_deref()),
                     on_yes: Box::new(move |a| {
                         let st = a.state.clone();
                         a.status = format!("Inserting {} rows…", thousands(n as u64));
@@ -147,21 +136,9 @@ impl App {
             };
             a.status.clear();
             let name = a.conn(&into).map(|c| c.config.name.clone()).unwrap_or_default();
-            let width = plan.tables.iter().map(|t| t.table.chars().count()).max().unwrap_or(0);
-            let mut text = format!("Copy {} rows into \"{name}\"? (in insert order)\n\n", thousands(plan.total as u64));
-            for t in &plan.tables {
-                let masked: Vec<&str> = t.masked.iter().map(|m| m.column.as_str()).collect();
-                text.push_str(&format!("  {:width$}  {:>7}  {}{}\n", t.table, thousands(t.rows as u64), t.reason, if masked.is_empty() { String::new() } else { format!(" · masked: {}", masked.join(", ")) }));
-            }
-            if let Some(p) = a.production_name(&into) {
-                text.push_str(&format!("\n⚠ Production data source \"{p}\"\n"));
-            }
-            if !spec.mask {
-                text.push_str("\n⚠ Personal data is copied as is (not masked)\n");
-            }
-            text.push_str("\nOne transaction; rows already there are skipped. The tables must exist in the target.");
-            a.popup = Some(Popup::Confirm {
-                text,
+            a.open_after_notices(Popup::Confirm {
+                opened: None,
+                text: copy_confirm_text(&plan, &name, a.production_name(&into).as_deref(), spec.mask),
                 on_yes: Box::new(move |a| {
                     let st = a.state.clone();
                     a.status = "Copying…".into();
@@ -190,6 +167,41 @@ impl App {
             None => self.status = "Nothing to chart — the result has no rows".into(),
         }
     }
+}
+
+/// Generate data's confirm: the question, how each column is filled, the warnings
+pub(crate) fn fake_confirm_text(n: usize, where_: &str, plan: &[qurry_core::fake::ColPlan], warnings: &[String], production: Option<&str>) -> String {
+    let width = plan.iter().map(|c| c.name.chars().count()).max().unwrap_or(0);
+    let mut text = format!("Insert {} generated rows into {where_}?\n\n", thousands(n as u64));
+    for c in plan {
+        text.push_str(&format!("  {:width$}  {}\n", c.name, c.how));
+    }
+    for w in warnings {
+        text.push_str(&format!("\n⚠ {w}"));
+    }
+    if let Some(name) = production {
+        text.push_str(&format!("\n⚠ Production data source \"{name}\""));
+    }
+    text.push_str("\n\nAll rows go in one transaction — if one fails, nothing is inserted.");
+    text
+}
+
+/// Copy related rows' confirm: the question, the tables in insert order, the warnings
+pub(crate) fn copy_confirm_text(plan: &qurry_core::subset::SubsetPlan, name: &str, production: Option<&str>, mask: bool) -> String {
+    let width = plan.tables.iter().map(|t| t.table.chars().count()).max().unwrap_or(0);
+    let mut text = format!("Copy {} rows into \"{name}\"? (in insert order)\n\n", thousands(plan.total as u64));
+    for t in &plan.tables {
+        let masked: Vec<&str> = t.masked.iter().map(|m| m.column.as_str()).collect();
+        text.push_str(&format!("  {:width$}  {:>7}  {}{}\n", t.table, thousands(t.rows as u64), t.reason, if masked.is_empty() { String::new() } else { format!(" · masked: {}", masked.join(", ")) }));
+    }
+    if let Some(p) = production {
+        text.push_str(&format!("\n⚠ Production data source \"{p}\"\n"));
+    }
+    if !mask {
+        text.push_str("\n⚠ Personal data is copied as is (not masked)\n");
+    }
+    text.push_str("\nOne transaction; rows already there are skipped. The tables must exist in the target.");
+    text
 }
 
 /// The result's columns as qurry_shared::chart reads them

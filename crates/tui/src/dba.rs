@@ -183,6 +183,7 @@ impl App {
         let q: String = row.get("query").or(row.get("blocking_query")).cloned().unwrap_or_default().chars().take(200).collect();
         let st = self.state.clone();
         self.popup = Some(Popup::Confirm {
+            opened: None,
             text: format!("{what} {pid}?\n\n{q}"),
             on_yes: Box::new(move |a| {
                 a.spawn(async move { st.kill_session(target, pid, terminate).await.map_err(|e| e.to_string()) }, move |a, r| {
@@ -263,7 +264,7 @@ impl App {
                     let items = dbs.into_iter().map(|d| crate::app::PItem { label: d.clone(), hint: String::new(), action: crate::app::PAction::Pick(d) }).collect();
                     a.status.clear();
                     a.flow = Some(crate::migrate::Flow::ErdDb(conn));
-                    a.popup = Some(crate::app::Popup::Palette(crate::app::Palette { title: "Diagram of which database?".into(), input: tui_textarea::TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
+                    a.open_after_notices(crate::app::Popup::Palette(crate::app::Palette { title: "Diagram of which database?".into(), input: tui_textarea::TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
                 }
                 Ok(dbs) => a.erd_run(conn, dbs.into_iter().next().unwrap_or(db), None),
                 Err(e) => a.status = format!("Diagram: {e}"),

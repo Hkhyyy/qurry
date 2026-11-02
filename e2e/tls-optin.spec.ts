@@ -131,11 +131,16 @@ test("dialog: for Production it points at this dialog's Options tab, not at ⌘;
 });
 
 test("dialog: after Allow the focus stays in the dialog and Escape still closes it", async ({ page }) => {
+  // A test that takes as long as a real connect: focus moves once Test Connection is enabled again, not when the promise ends
+  await page.addInitScript(() => ((window as any).__mockTestDelay = 300));
   await openApp(page);
   await treeNode(page, "LAN dev").click();
   await page.keyboard.press("Meta+;");
   await dialog(page).getByRole("button", { name: "Test Connection" }).click();
   await dialog(page).getByRole("button", { name: ALLOW }).click();
+  // While it tests again the focus is on Cancel Test (so Escape cancels the test), not on the page
+  await expect(dialog(page).getByRole("button", { name: "Cancel Test" })).toBeVisible();
+  expect(await page.evaluate(() => document.activeElement?.textContent)).toBe("Cancel Test");
   await expect(dialog(page).locator(".ui-notice")).toContainText("✓ PostgreSQL");
   await expect(dialog(page).getByRole("button", { name: "Test Connection" })).toBeFocused();
   await page.keyboard.press("Escape");

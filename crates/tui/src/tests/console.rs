@@ -144,6 +144,9 @@ async fn production_confirm_shows_counted_rows() {
         "Production data source \"PROD\" — this changes data:\n\n  update payment set amount = 0 where id = 4\n    → 1 row\n  delete from payment where amount < 0\n    → 12,408 rows\n\nRun it?"
     );
     assert!(h.console_output().is_empty(), "nothing runs before the answer");
+    // It came up on its own: a y counts after a pause
+    let Some(Popup::Confirm { opened: Some(t), .. }) = &mut h.app.popup else { panic!("not a quiet confirm") };
+    *t -= crate::app::App::TLS_ASK_GRACE;
     h.key("y");
     h.settle().await;
     assert_eq!(
@@ -333,7 +336,7 @@ async fn failed_commit_is_in_output() {
     assert!(h.app.popup.is_none());
     // A popup opened while the COMMIT was running (a confirmation here) stays: the notice goes over it, and Esc goes back to it
     h.app.tx(crate::app::Action::Commit);
-    h.app.popup = Some(crate::app::Popup::Confirm { text: "Roll back and close the tab?".into(), on_yes: Box::new(|_| {}) });
+    h.app.popup = Some(crate::app::Popup::Confirm { opened: None, text: "Roll back and close the tab?".into(), on_yes: Box::new(|_| {}) });
     h.settle().await;
     let Some(crate::app::Popup::Note { title, back, .. }) = &h.app.popup else { panic!("no notice over the confirmation") };
     assert_eq!(title, "Commit failed");

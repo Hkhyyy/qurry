@@ -355,9 +355,11 @@ pub enum Popup {
     /// Single-line input. words = autocomplete candidates (columns·keywords for table WHERE/ORDER BY), complete = open list (candidates, selection, prefix length to replace)
     /// body = app-written explanation shown in a box under the input (never interpolated names, so a name can't pose as it)
     Input { title: String, body: String, input: TextArea<'static>, on_ok: Box<dyn FnOnce(&mut App, String)>, words: Vec<String>, complete: Option<(Vec<String>, usize, usize)> },
-    Confirm { text: String, on_yes: Box<dyn FnOnce(&mut App)> },
-    /// The TLS opt-in (offer_tls_opt_in). It opens on its own when a background load fails, so only a y pressed once it has been on screen
-    /// for TLS_ASK_GRACE allows plaintext: never Enter, never a key that was meant for the editor or the tree
+    /// `opened` is set when the confirm comes up on its own (open_after_notices, or a notice over it closing): then, as for
+    /// AllowPlaintext, y / Enter count only after TLS_ASK_GRACE without any key, so typing meant for the editor or a form never answers it
+    Confirm { text: String, on_yes: Box<dyn FnOnce(&mut App)>, opened: Option<std::time::Instant> },
+    /// The TLS opt-in (offer_tls_opt_in). It opens on its own when a background load fails, so only a y pressed after TLS_ASK_GRACE
+    /// without any key (`opened` restarts at each other key) allows plaintext: never Enter, never a key that was meant for the editor or the tree
     AllowPlaintext { text: String, on_yes: Box<dyn FnOnce(&mut App)>, opened: std::time::Instant },
     Palette(Palette),
     ConnForm(ConnForm),
@@ -630,6 +632,8 @@ pub struct Hits {
     pub text: ratatui::layout::Rect,
     /// Workspace strip: (number, area)
     pub workspaces: Vec<(usize, ratatui::layout::Rect)>,
+    /// The open confirm's question or warnings didn't fit the window: y / Enter don't answer it
+    pub confirm_unseen: bool,
 }
 
 /// Tabs·split of a workspace other than the current one (tab objects kept as is: console sessions·transactions·results survive)
@@ -679,6 +683,8 @@ pub struct App {
     pub focus: Focus,
     pub explorer: bool,
     pub popup: Option<Popup>,
+    /// Confirms an async result opened while the user works in another popup (a form, a palette): the next one opens when that closes
+    pub(crate) waiting: Vec<Popup>,
     pub status: String,
     pub quit: bool,
     /// Relaunch after quitting (after an in-app update)
@@ -795,6 +801,7 @@ impl App {
             focus: Focus::Tree,
             explorer: true,
             popup: None,
+            waiting: vec![],
             status: "Ready — not sure? ⌃p searches everything · F1 keymap".into(),
             quit: false,
             panes: crate::panes::Pane::Leaf(0),
@@ -960,7 +967,7 @@ impl App {
 
     // ───────── TLS opt-in ─────────
 
-    /// Keys pressed this soon after the opt-in popup opened were meant for what was on screen before it: they are ignored
+    /// Keys pressed this soon after the opt-in popup opened, or after the last key, were meant for what was on screen before it: they are ignored
     pub(crate) const TLS_ASK_GRACE: std::time::Duration = std::time::Duration::from_millis(400);
 
     /// A connect error that needs TLS (qurry_shared::errors::tls_opt_in): ask to allow unencrypted for this data source, then `then` (expand
@@ -983,7 +990,7 @@ impl App {
         self.popup = Some(Popup::AllowPlaintext {
             opened: std::time::Instant::now(),
             // It can open over another tab or source: name the one y changes
-            text: format!("Allow unencrypted for \"{}\"?\n\nThe password will be sent unencrypted to {}. Use only on a network you trust.\nTo undo, turn off \"Allow unencrypted\" in the data source form (e in the explorer).", c.name, c.host),
+            text: format!("Allow unencrypted for \"{}\"?\n\n⚠ The password will be sent unencrypted to {}. Use only on a network you trust.\nTo undo, turn off \"Allow unencrypted\" in the data source form (e in the explorer).", c.name, c.host),
             on_yes: Box::new(move |a| {
                 a.status = format!("Allowing unencrypted for \"{}\"…", c.name);
                 let st = a.state.clone();
@@ -1048,7 +1055,8 @@ impl App {
                     // If the driver is missing, ask whether to download it (expand again afterwards)
                     if e.contains(qurry_core::plugin::MISSING) && let Some(d) = kind.driver() {
                         let k2 = key.clone();
-                        a.popup = Some(Popup::Confirm {
+                        a.open_after_notices(Popup::Confirm {
+                            opened: None,
                             text: format!("The {d} driver isn't installed.\n\nDownload it from this Qurry version's GitHub release (its signature is checked) and connect?"),
                             on_yes: Box::new(move |a| {
                                 a.status = format!("Installing the {d} driver…");
@@ -1428,6 +1436,7 @@ impl App {
         let Some(id) = self.tabs.get(i).map(|t| t.id) else { return };
         if self.pending_tabs(None).contains(&id) {
             self.popup = Some(Popup::Confirm {
+                opened: None,
                 text: "This console has uncommitted changes. Roll them back and close the tab?".into(),
                 on_yes: Box::new(move |a| {
                     if let Some(i) = a.tab_index(id) {
@@ -1630,6 +1639,7 @@ impl App {
             return self.reload_table(id);
         }
         self.popup = Some(Popup::Confirm {
+            opened: None,
             text: format!("{n} pending change(s) are not saved to the database ({} submits them). Discard them and reload?", self.keys.label(Action::Submit)),
             on_yes: Box::new(move |a| a.reload_table(id)),
         });
@@ -1975,6 +1985,21 @@ impl App {
         self.run_stmts_checked(stmts, explain, confirmed, confirmed)
     }
 
+    /// on_yes of a confirm that runs statements: they run in the console that asked (tab id), shown again, never in whichever tab
+    /// is active when it is answered (that may be another source, whose own checks would be skipped). Nothing runs (and the status
+    /// says why) while it is busy, once it is closed or while it is in another workspace
+    fn in_console(id: u64, run: impl FnOnce(&mut App) + 'static) -> Box<dyn FnOnce(&mut App)> {
+        Box::new(move |a| match a.tab_index(id) {
+            Some(i) if matches!(&a.tabs[i].kind, TabKind::Console(c) if c.running) => a.status = "The console is busy: nothing ran. Run it again when it finishes.".into(),
+            Some(i) => {
+                a.activate(i);
+                run(a)
+            }
+            None if a.tab_mut(id).is_some() => a.status = "The console is in another workspace: nothing ran".into(),
+            None => a.status = "The console was closed: nothing ran".into(),
+        })
+    }
+
     /// unsafe_ok = dangerous statement confirmed, prod_ok = Production confirmation (rows to change) given
     fn run_stmts_checked(&mut self, stmts: Vec<String>, explain: bool, confirmed: bool, prod_ok: bool) {
         let analyze = explain && self.analyze_next;
@@ -1997,7 +2022,7 @@ impl App {
             && let Some((why, s)) = stmts.iter().find_map(|s| qurry_core::guard::unsafe_statement(s, kind).map(|w| (w, s.clone())))
         {
             let preview: String = s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect();
-            self.popup = Some(Popup::Confirm { text: format!("{why}:\n  {preview}\nRun it anyway?"), on_yes: Box::new(move |a| a.run_stmts_checked(stmts, explain, true, prod_ok)) });
+            self.popup = Some(Popup::Confirm { opened: None, text: format!("{why}:\n  {preview}\nRun it anyway?"), on_yes: Self::in_console(id, move |a| a.run_stmts_checked(stmts, explain, true, prod_ok)) });
             return;
         }
         // Production Data Source: count the rows to change, show it, and ask (counting is SELECT count(*) — changes nothing)
@@ -2040,9 +2065,10 @@ impl App {
                             })
                             .collect();
                         a.status.clear();
-                        a.popup = Some(Popup::Confirm {
+                        a.open_after_notices(Popup::Confirm {
+                            opened: None,
                             text: format!("Production data source \"{name}\" — this changes data:\n\n{}\n\nRun it?", lines.join("\n")),
-                            on_yes: Box::new(move |a| a.run_stmts_checked(stmts, explain, true, true)),
+                            on_yes: Self::in_console(id, move |a| a.run_stmts_checked(stmts, explain, true, true)),
                         });
                     },
                 );
@@ -2058,8 +2084,9 @@ impl App {
         };
         if !asks.is_empty() {
             self.popup = Some(Popup::Confirm {
+                opened: None,
                 text: explain_analyze_ask_text(&asks),
-                on_yes: Box::new(move |a| {
+                on_yes: Self::in_console(id, move |a| {
                     a.analyze_next = true;
                     a.run_stmts(stmts, explain, true);
                     a.analyze_next = false;
@@ -2482,6 +2509,7 @@ impl App {
         if n > 0 {
             let c = conn.to_string();
             self.popup = Some(Popup::Confirm {
+                opened: None,
                 text: format!("{n} console(s) on this data source have uncommitted changes. Roll them back and disconnect?"),
                 on_yes: Box::new(move |a| a.disconnect_now(&c)),
             });
@@ -2737,9 +2765,9 @@ impl App {
     }
 
     /// Add DB objects to the open palette (turns one Data Source's loading count into the number of DBs)
-    fn index_into_palette(&mut self, cfg: &ConnectionConfig, dbs: Vec<String>) {
+    pub(crate) fn index_into_palette(&mut self, cfg: &ConnectionConfig, dbs: Vec<String>) {
         // Search Everywhere also finds columns (the GUI's All / Symbols)
-        let columns = match &mut self.popup {
+        let columns = match self.popup_under() {
             Some(Popup::Palette(p)) => {
                 p.loading = (p.loading + dbs.len()).saturating_sub(1);
                 p.title == "Search Everywhere" && cfg.kind != DbKind::Redis
@@ -2798,6 +2826,34 @@ impl App {
         self.popup = Some(match self.popup.take() {
             Some(back) => Popup::Note { title, text, back: Box::new(back) },
             None => Popup::Message { title, text },
+        });
+    }
+
+    /// A popup that an async result opens (a confirmation after the row counts, a picker after a load). Under a notice it goes
+    /// below the notices (taking the place of what was there), so a notice such as a failed Commit is read first, not replaced.
+    /// A confirm comes up quiet (`opened`), and while the user works in another popup it waits (App::waiting) instead of replacing it
+    pub(crate) fn open_after_notices(&mut self, mut p: Popup) {
+        fn below(top: Popup, p: Popup) -> Popup {
+            match top {
+                Popup::Message { title, text } => Popup::Note { title, text, back: Box::new(p) },
+                Popup::Note { title, text, back } => Popup::Note { title, text, back: Box::new(below(*back, p)) },
+                _ => p,
+            }
+        }
+        if let Popup::Confirm { opened, .. } = &mut p {
+            *opened = Some(std::time::Instant::now());
+            let mut under = self.popup.as_ref();
+            while let Some(Popup::Note { back, .. }) = under {
+                under = Some(back);
+            }
+            if !matches!(under, None | Some(Popup::Message { .. })) {
+                self.status = "A confirmation is waiting: it opens when you close this popup".into();
+                return self.waiting.push(p);
+            }
+        }
+        self.popup = Some(match self.popup.take() {
+            Some(top) => below(top, p),
+            None => p,
         });
     }
 
@@ -2916,6 +2972,7 @@ impl App {
             Action::DeleteDataSource => {
                 if let Some(c) = sel.and_then(|n| self.conn(&n.conn).map(|c| c.config.clone())) {
                     self.popup = Some(Popup::Confirm {
+                        opened: None,
                         text: format!("Remove data source \"{}\"?", c.name),
                         on_yes: Box::new(move |a| {
                             let st = a.state.clone();
@@ -3164,7 +3221,7 @@ impl App {
             Action::InstallUpdate => {
                 let n = self.pending_tabs(None).len();
                 if n > 0 {
-                    self.popup = Some(Popup::Confirm { text: format!("{n} console(s) have uncommitted changes. Roll them back, update and restart?"), on_yes: Box::new(|a| a.install_update()) });
+                    self.popup = Some(Popup::Confirm { opened: None, text: format!("{n} console(s) have uncommitted changes. Roll them back, update and restart?"), on_yes: Box::new(|a| a.install_update()) });
                 } else {
                     self.install_update();
                 }
@@ -3172,7 +3229,7 @@ impl App {
             Action::Quit => {
                 let n = self.pending_tabs(None).len();
                 if n > 0 {
-                    self.popup = Some(Popup::Confirm { text: format!("{n} console(s) have uncommitted changes. Roll them back and quit?"), on_yes: Box::new(|a| a.quit = true) });
+                    self.popup = Some(Popup::Confirm { opened: None, text: format!("{n} console(s) have uncommitted changes. Roll them back and quit?"), on_yes: Box::new(|a| a.quit = true) });
                 } else {
                     self.quit = true;
                 }
@@ -3370,12 +3427,13 @@ impl App {
         use qurry_core::secrets::KeyLocation;
         let to_keychain = self.state.secret_key_location() == KeyLocation::File;
         let text = if to_keychain {
-            "The password key is in the config folder (secret.key).\n\nMove it into the system keychain? The GUI and the MCP server use the same key, so each asks for keychain access once (on macOS, again after updates while Qurry isn't code-signed).\n\nUpdate every Qurry app first (GUI, qurry-tui, qurry-mcp): older versions can't read the key there."
+            "The password key is in the config folder (secret.key).\n\nMove it into the system keychain?\n\nThe GUI and the MCP server use the same key, so each asks for keychain access once (on macOS, again after updates while Qurry isn't code-signed).\n\nUpdate every Qurry app first (GUI, qurry-tui, qurry-mcp): older versions can't read the key there."
         } else {
             "The password key is in the system keychain.\n\nMove it back to the config folder (no keychain prompts)?"
         };
         let st = self.state.clone();
         self.popup = Some(Popup::Confirm {
+            opened: None,
             text: text.into(),
             on_yes: Box::new(move |a| {
                 a.status = "Waiting for the system keychain…".into();

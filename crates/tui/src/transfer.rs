@@ -220,7 +220,7 @@ impl App {
             lines.join("\n")
         );
         let spec = ImportSpec { path, schema, table, create, columns };
-        self.popup = Some(Popup::Confirm { text, on_yes: Box::new(move |a| a.import_run(target, spec, file)) });
+        self.popup = Some(Popup::Confirm { opened: None, text, on_yes: Box::new(move |a| a.import_run(target, spec, file)) });
     }
 
     fn import_run(&mut self, target: String, spec: ImportSpec, file: String) {
@@ -312,6 +312,7 @@ impl App {
         self.input("Restore from backup file (.dump or .sql)", &format!("{}/Downloads/", home()), move |a, p| {
             let path = expand(&p);
             a.popup = Some(Popup::Confirm {
+                opened: None,
                 text: format!("Restore {path}\ninto {name} / {db}?\n\n{how}{}", if prod { "\n\n⚠ This is a Production data source." } else { "" }),
                 on_yes: Box::new(move |a| {
                     let label = format!("Restore into {db}");

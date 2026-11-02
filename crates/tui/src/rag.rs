@@ -162,6 +162,8 @@ impl App {
                 return;
             };
             let text: Vec<String> = d.columns.iter().filter(|c| !c.is_pk && ["char", "text", "string", "clob", "json"].iter().any(|t| c.data_type.to_lowercase().contains(t))).map(|c| c.name.clone()).collect();
+            // This comes back from a load: the input goes under a notice shown meanwhile (a failed Commit), not in its place
+            let shown = a.popup.take();
             a.input(format!("Columns of {table} to embed (comma-separated)"), &text.join(", "), move |a, cols| {
                 let text_columns: Vec<String> = cols.split(',').map(|c| c.trim().to_string()).filter(|c| !c.is_empty()).collect();
                 if text_columns.is_empty() {
@@ -171,6 +173,9 @@ impl App {
                 a.flow = Some(Flow::RagDest(Box::new(d)));
                 a.popup = Some(palette("Keep the vectors in", stores));
             });
+            if let Some(p) = std::mem::replace(&mut a.popup, shown) {
+                a.open_after_notices(p);
+            }
         });
     }
 

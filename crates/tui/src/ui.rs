@@ -916,18 +916,9 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             let inner = popup(f, r, format!(" Manage Shown Schemas — {name} "));
             f.render_widget(Paragraph::new(lines), inner);
         }
-        Popup::Confirm { text, .. } => draw_confirm(f, area, text),
-        Popup::AllowPlaintext { text, .. } => {
-            // Like Confirm, but only y allows (no Enter): the popup opened on its own
-            let mut lines = confirm_lines(text);
-            if let Some(l) = lines.last_mut() {
-                *l = key_hints(&[("y", "allow"), ("n / Esc", "cancel")]);
-            }
-            let w = 90u16.min(area.width.saturating_sub(4));
-            let r = centered(area, 90, wrapped_height(&lines, w.saturating_sub(2)) + 2);
-            let inner = popup(f, r, " Allow Unencrypted ");
-            f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
-        }
+        Popup::Confirm { text, .. } => app.hits.confirm_unseen = !draw_confirm(f, area, " Confirm ", text, key_hints(&[("y / Enter", "yes"), ("n / Esc", "no")])),
+        // Like Confirm, but only y allows (no Enter): the popup opened on its own
+        Popup::AllowPlaintext { text, .. } => app.hits.confirm_unseen = !draw_confirm(f, area, " Allow Unencrypted ", text, key_hints(&[("y", "allow"), ("n / Esc", "cancel")])),
         Popup::Input { title, body, input, complete, words, .. } => {
             // The title goes on the border; the body (answers, reasons) in a box below, wrapped, so it isn't cut off
             let body: Vec<Line> = body.lines().map(|l| Line::raw(disp(l))).collect();
@@ -993,24 +984,46 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
 }
 
 /// Confirm: multiple lines (reason · statement · question). Red border for production DB · dangerous statements; "→ N rows" stands out more the larger it is.
-/// The question and its keys stay at the bottom; in a window too short for the rest, blank lines go first and the lines
-/// above say how many are hidden and how many rows they would change
-fn draw_confirm(f: &mut Frame, area: Rect, text: &str) {
-    let danger = text.starts_with("Production") || text.ends_with("Run it anyway?") || text.ends_with("Run them anyway?");
+/// In a window too short for all of it, the popup takes the whole height; the first line, the questions (a line ending in "?" or
+/// with a "? " in it), the warnings (⚠) and the keys stay, and the details in between (statements, columns, tables) give way to a line saying how many are
+/// hidden and how many rows they would change. If even that doesn't fit, the keys line says to enlarge the window and the result is
+/// false: y / Enter don't answer a question that isn't on screen
+fn draw_confirm(f: &mut Frame, area: Rect, title: &'static str, text: &str, keys: Line<'static>) -> bool {
+    let danger = text.starts_with("Production")
+        || text.ends_with("Run it anyway?")
+        || text.ends_with("Run them anyway?")
+        || text.lines().any(|l| l.starts_with('⚠') && l.contains("Production"));
     let mut lines = confirm_lines(text);
-    let mut ask = lines.split_off(lines.len().saturating_sub(3));
+    let last = lines.len() - 1;
+    lines[last] = keys;
+    let keep: Vec<bool> = lines
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            let t = l.to_string();
+            i == 0 || i == last || t.starts_with('⚠') || (!t.starts_with(' ') && (t.trim_end().ends_with('?') || t.contains("? ")))
+        })
+        .collect();
     // Long statements wrap → count wrapped lines for the height (so the y/n hint below isn't cut)
     let w = 90u16.min(area.width.saturating_sub(4)).saturating_sub(2);
-    let want = wrapped_height(&lines, w) + wrapped_height(&ask, w) + 2;
-    let r = centered(area, 90, want);
+    let want = wrapped_height(&lines, w).saturating_add(2);
+    let mut r = centered(area, 90, want);
     if r.height < want {
-        ask.retain(|l| !l.to_string().is_empty());
+        r = Rect { y: area.y, height: area.height, ..r };
     }
-    let inner = if danger { popup_danger(f, r, " Confirm ") } else { popup(f, r, " Confirm ") };
+    let inner = if danger { popup_danger(f, r, title) } else { popup(f, r, title) };
+    let fits = wrapped_height(&cut_lines(lines.clone(), &keep, inner.width, inner.height), inner.width) <= inner.height;
+    if !fits {
+        let mut l = key_hints(&[("n / Esc", "no")]);
+        l.spans.insert(0, Span::styled("Enlarge the window to answer · ", Style::default().fg(WARN)));
+        lines[last] = l;
+    }
+    let ask = lines.split_off(last);
     let ah = wrapped_height(&ask, inner.width).min(inner.height);
     let [body, bottom] = Layout::vertical([Constraint::Min(0), Constraint::Length(ah)]).areas(inner);
-    f.render_widget(Paragraph::new(cut_lines(lines, body.width, body.height)).wrap(Wrap { trim: false }), body);
+    f.render_widget(Paragraph::new(cut_lines(lines, &keep[..last], body.width, body.height)).wrap(Wrap { trim: false }), body);
     f.render_widget(Paragraph::new(ask).wrap(Wrap { trim: false }), bottom);
+    fits
 }
 
 /// Data Source form. Only the chosen Tunnel's fields show. The size stays the same whatever the Tunnel and the message (a test
@@ -1175,7 +1188,7 @@ mod tests {
         let bar = g.hbar;
         assert!(bar.width > 0);
         // A confirm that arrives (or was open) when the window shrinks
-        h.app.popup = Some(crate::app::Popup::Confirm { text: "Run it?".into(), on_yes: Box::new(|a| a.status = "ran".into()) });
+        h.app.popup = Some(crate::app::Popup::Confirm { opened: None, text: "Run it?".into(), on_yes: Box::new(|a| a.status = "ran".into()) });
         assert!(h.screen(39, 30).contains("Terminal too small"));
         h.key("Enter");
         h.key("y");
@@ -1262,7 +1275,7 @@ mod tests {
     async fn production_confirm_keeps_its_question_in_small_windows() {
         let mut h = crate::testkit::Harness::new().await;
         let text = "Production data source \"[PROD] kr\" — this changes data:\n\n  update payment set amount = 0 where id = 4\n     → 1 row\n  delete from payment where created_at < now() - interval '1 year'\n     → 12,408 rows\n\nRun it?";
-        h.app.popup = Some(Popup::Confirm { text: text.into(), on_yes: Box::new(|a| a.status = "ran".into()) });
+        h.app.popup = Some(Popup::Confirm { opened: None, text: text.into(), on_yes: Box::new(|a| a.status = "ran".into()) });
         let s = h.screen(80, 24);
         assert!(s.contains("12,408 rows") && s.contains("Run it?") && !s.contains("hidden"), "{s}");
         // Every row that would change shows, as its own line or in the hidden total
@@ -1274,7 +1287,7 @@ mod tests {
         }
         // One statement at the minimum size: its row count shows
         let one = "Production data source \"[PROD] kr\" — this changes data:\n\n  update payment set amount = 0 where id = 4\n     → 1 row\n\nRun it?";
-        h.app.popup = Some(Popup::Confirm { text: one.into(), on_yes: Box::new(|a| a.status = "ran".into()) });
+        h.app.popup = Some(Popup::Confirm { opened: None, text: one.into(), on_yes: Box::new(|a| a.status = "ran".into()) });
         let (w, ht) = MIN_SIZE;
         let s = h.screen(w, ht);
         assert!(s.contains("1 row") && s.contains("Run it?"), "{s}");
@@ -1288,7 +1301,7 @@ mod tests {
         let mut h = crate::testkit::Harness::new().await;
         let lines: Vec<String> = (0..1000).map(|i| format!("  update payment set amount = 0 where id = {i}\n     → 1 row")).collect();
         let text = format!("Production data source \"[PROD] kr\" — this changes data:\n\n{}\n\nRun it?", lines.join("\n"));
-        h.app.popup = Some(Popup::Confirm { text, on_yes: Box::new(|_| {}) });
+        h.app.popup = Some(Popup::Confirm { opened: None, text, on_yes: Box::new(|_| {}) });
         for (w, ht) in [MIN_SIZE, (80, 24)] {
             let t = std::time::Instant::now();
             let s = h.screen(w, ht);

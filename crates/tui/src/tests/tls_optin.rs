@@ -1,6 +1,6 @@
 //! The TLS opt-in after a connect error that needs TLS: dev sources get a confirm popup (y turns on "Allow unencrypted" in the store, then
 //! reconnects or loads the tree again), Production gets only a status line pointing to the data source form. The popup opens on its own, so
-//! only a y pressed once it has been on screen for App::TLS_ASK_GRACE counts (never Enter)
+//! only a y pressed after App::TLS_ASK_GRACE without any other key counts (never Enter)
 use crate::app::{App, Focus, Popup, TabKind};
 use crate::testkit::Harness;
 use qurry_core::db::QueryResult;
@@ -205,6 +205,24 @@ async fn form_test_selects_allow_unencrypted() {
     assert!(!saved(&h).await.options.allow_plaintext, "nothing is saved before Enter");
 }
 
+/// The form of a source marked Production: the failed test says where the setting is and leaves the selection alone (as the GUI dialog)
+#[tokio::test]
+async fn form_test_on_production_selects_nothing() {
+    let mut h = lan(false).await;
+    let cfg = h.app.conn("test").unwrap().config.clone();
+    h.app.conn_form(Some(cfg));
+    let Some(Popup::ConnForm(f)) = &mut h.app.popup else { panic!("no form") };
+    let i = f.fields.iter().position(|x| x.label == "Production").unwrap();
+    f.fields[i].value = "on".into();
+    let sel = f.sel;
+    h.key("Ctrl+t");
+    h.settle().await;
+    let Some(Popup::ConnForm(f)) = &h.app.popup else { panic!("no form") };
+    let msg = f.message.clone().unwrap_or_default().1;
+    assert_eq!(f.sel, sel, "{msg}");
+    assert!(msg.ends_with("\nProduction data source: Qurry won't turn off encryption from here. If the server has no TLS and the network is trusted, turn on \"Allow unencrypted\" in this form."), "{msg}");
+}
+
 #[tokio::test]
 async fn production_gets_only_a_status_line() {
     let mut h = lan(true).await;
@@ -260,17 +278,83 @@ async fn only_a_y_after_the_popup_was_read_allows() {
     h.settle().await;
     assert!(matches!(h.app.popup, Some(Popup::AllowPlaintext { .. })), "Enter doesn't answer it");
     assert!(!saved(&h).await.options.allow_plaintext);
+    // That Enter started the grace again
+    h.key("y");
+    assert!(matches!(h.app.popup, Some(Popup::AllowPlaintext { .. })), "a y right after a key doesn't answer it");
+    read_it(&mut h);
     h.key("y");
     h.settle().await;
     assert!(saved(&h).await.options.allow_plaintext);
     assert_eq!(h.console_text(), "select 1", "no key went to the editor");
 }
 
+/// Typing that goes on into the popup (F5, then the next statement) never allows plaintext: the grace runs from the last key, so a y
+/// counts only after a pause, however long the burst was
+#[tokio::test]
+async fn a_y_at_the_end_of_a_burst_of_keys_doesnt_allow() {
+    let mut h = lan(false).await;
+    h.console_with("select 1", 0, 0);
+    h.key("F5");
+    h.settle().await;
+    // Each key comes a bit under the grace after the one before: the whole burst is far longer than the grace
+    let gap = App::TLS_ASK_GRACE * 3 / 4;
+    for k in "ect * from city".chars().map(|c| if c == ' ' { "Space".to_string() } else { c.to_string() }) {
+        let Some(Popup::AllowPlaintext { opened, .. }) = &mut h.app.popup else { panic!("popup gone before {k}: {}", h.app.status) };
+        *opened -= gap;
+        h.key(&k);
+    }
+    h.settle().await;
+    assert!(matches!(h.app.popup, Some(Popup::AllowPlaintext { .. })), "{}", h.app.status);
+    assert!(!saved(&h).await.options.allow_plaintext, "the y of \"city\" doesn't allow");
+    // The question at the minimum size: the warning and the keys show; after a pause y allows
+    let (w, ht) = crate::ui::MIN_SIZE;
+    let s = h.screen(w, ht);
+    assert!(s.contains("Allow unencrypted for") && s.contains("⚠ The password will be") && s.contains("y allow"), "{s}");
+    read_it(&mut h);
+    h.key("y");
+    h.settle().await;
+    assert!(saved(&h).await.options.allow_plaintext);
+}
+
+/// Esc taps a bit apart, as soon as the popup shows: the first one closes it (the grace only holds back y)
+#[tokio::test]
+async fn esc_closes_at_once() {
+    let mut h = lan(false).await;
+    h.console_with("select 1", 0, 0);
+    h.key("F5");
+    h.settle().await;
+    let Some(Popup::AllowPlaintext { opened, .. }) = &mut h.app.popup else { panic!("no popup: {}", h.app.status) };
+    *opened -= App::TLS_ASK_GRACE * 3 / 4;
+    h.key("Esc");
+    assert!(h.app.popup.is_none());
+    assert!(!saved(&h).await.options.allow_plaintext);
+}
+
+/// A notice over the popup (another console's warning) closed with Enter: the popup comes back quiet, so a y right after doesn't allow
+#[tokio::test]
+async fn a_y_right_after_closing_a_notice_over_it_doesnt_allow() {
+    let mut h = lan(false).await;
+    h.console_with("select 1", 0, 0);
+    h.key("F5");
+    h.settle().await;
+    read_it(&mut h);
+    h.app.notice("Ran, with a warning".into(), "…".into());
+    h.key("Enter");
+    h.key("y");
+    h.settle().await;
+    assert!(matches!(h.app.popup, Some(Popup::AllowPlaintext { .. })), "{}", h.app.status);
+    assert!(!saved(&h).await.options.allow_plaintext);
+    read_it(&mut h);
+    h.key("y");
+    h.settle().await;
+    assert!(saved(&h).await.options.allow_plaintext);
+}
+
 /// The error comes back from a background load: a popup that is already open (another confirm, a form being typed in) stays
 #[tokio::test]
 async fn an_open_popup_is_never_replaced() {
     let mut h = lan(false).await;
-    h.app.popup = Some(Popup::Confirm { text: "Production: this changes data. Run it?".into(), on_yes: Box::new(|a| a.status = "ran".into()) });
+    h.app.popup = Some(Popup::Confirm { opened: None, text: "Production: this changes data. Run it?".into(), on_yes: Box::new(|a| a.status = "ran".into()) });
     h.app.focus = Focus::Tree;
     h.app.reexpand("test");
     h.settle().await;

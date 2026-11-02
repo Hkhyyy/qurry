@@ -422,7 +422,7 @@ fn apply(app: &mut App) {
     match app.production_name(&d.conn) {
         Some(p) => {
             let text = format!("Production data source \"{p}\" — this changes the schema:\n\n{}\n\nRun it?", d.sql.as_ref().unwrap().iter().map(|s| format!("  {}", s.split_whitespace().collect::<Vec<_>>().join(" "))).collect::<Vec<_>>().join("\n"));
-            app.popup = Some(Popup::Confirm { text, on_yes: Box::new(run) });
+            app.popup = Some(Popup::Confirm { opened: None, text, on_yes: Box::new(run) });
         }
         None => run(app),
     }
@@ -643,6 +643,7 @@ impl App {
             sql.iter().map(|s| format!("  {}", s.split_whitespace().collect::<Vec<_>>().join(" "))).collect::<Vec<_>>().join("\n")
         );
         self.popup = Some(Popup::Confirm {
+            opened: None,
             text,
             on_yes: Box::new(move |a| {
                 let st = a.state.clone();
