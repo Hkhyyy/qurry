@@ -291,6 +291,13 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         on_yes: Box::new(|_| {}),
     });
     scenes.push(app_scene(h, "Copy related rows", "⌃k › Copy Related Rows To: FK 로 이어진 행 · 가린 개인정보 컬럼을 보여 주고 확인", 120, 22));
+    // Explain Analyze of several statements that need a look: each with its own reason, danger border
+    let asks: Vec<(String, String)> = ["select nextval('payment_id_seq')", "delete from payment"]
+        .iter()
+        .map(|s| (s.to_string(), qurry_core::guard::explain_analyze_ask(s, qurry_core::store::DbKind::Postgres).unwrap()))
+        .collect();
+    h.app.popup = Some(Popup::Confirm { text: crate::app::explain_analyze_ask_text(&asks), on_yes: Box::new(|_| {}) });
+    scenes.push(app_scene(h, "Explain Analyze confirm", "Explain Analyze of statements a rollback can't fully undo: each statement with its own reason", 120, 22));
     // TLS opt-in: a dev source's connect error that needs TLS (Production gets only a status line). It never replaces an open popup
     h.app.popup = None;
     h.app.offer_tls_opt_in("dev", &qurry_shared::errors::needs_tls_pg(), |_| {});

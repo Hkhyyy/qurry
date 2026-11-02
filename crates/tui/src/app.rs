@@ -761,6 +761,18 @@ fn color_of(c: &ConnectionView) -> Option<String> {
     c.config.color.clone()
 }
 
+/// The Explain Analyze ask for (statement preview, reason) pairs. Several: each statement with its own reason (as the GUI lists them)
+pub(crate) fn explain_analyze_ask_text(asks: &[(String, String)]) -> String {
+    match asks {
+        [(preview, why)] => format!("Explain Analyze really runs the statement ({why}):\n  {preview}\nRun it anyway?"),
+        _ => format!(
+            "Explain Analyze really runs the statements, and {} of them need a look:\n{}\nRun them anyway?",
+            asks.len(),
+            asks.iter().map(|(p, why)| format!("  {p}\n    {why}")).collect::<Vec<_>>().join("\n")
+        ),
+    }
+}
+
 impl App {
     pub fn new(state: Arc<AppState>, tx: UnboundedSender<Apply>) -> Self {
         let (user_keys, keys_err) = match state.store.keymap("tui") {
@@ -2045,17 +2057,8 @@ impl App {
             false => vec![],
         };
         if !asks.is_empty() {
-            // Several: each statement with its own reason (as the GUI lists them)
-            let text = match asks.as_slice() {
-                [(preview, why)] => format!("Explain Analyze really runs the statement ({why}):\n  {preview}\nRun it anyway?"),
-                _ => format!(
-                    "Explain Analyze really runs the statements, and {} of them need a look:\n{}\nRun them anyway?",
-                    asks.len(),
-                    asks.iter().map(|(p, why)| format!("  {p}\n    {why}")).collect::<Vec<_>>().join("\n")
-                ),
-            };
             self.popup = Some(Popup::Confirm {
-                text,
+                text: explain_analyze_ask_text(&asks),
                 on_yes: Box::new(move |a| {
                     a.analyze_next = true;
                     a.run_stmts(stmts, explain, true);

@@ -144,10 +144,11 @@ test("Explain Analyse of several statements names each with its own reason (as t
   await page.locator(".work-layer:visible .console-toolbar").getByText("Explain").click();
   await page.getByRole("menuitem", { name: "Explain Analyse" }).click();
   await expect(dialog(page)).toContainText("Explain Analyse really runs the statements, and 2 of them need a look. Run them anyway?");
-  const rows = dialog(page).locator(".ui-detail-text");
-  await expect(rows).toHaveCount(2);
-  await expect(rows.nth(0)).toContainText("a rollback can't undo what it does outside the transaction");
-  await expect(rows.nth(1)).toContainText("DELETE without WHERE changes every row");
+  // The SQL alone in the code; its reason a plain line under it
+  const rows = dialog(page).locator(".ui-detail-row");
+  await expect(rows.locator(".ui-detail-text")).toHaveText(["select nextval('orders_id_seq')", "delete from users"]);
+  await expect(rows.nth(0).locator(".ui-detail-note")).toContainText("a rollback can't undo what it does outside the transaction");
+  await expect(rows.nth(1).locator(".ui-detail-note")).toContainText("DELETE without WHERE changes every row");
   await dialog(page).getByRole("button", { name: "Cancel" }).click();
   await expect(resultTabs(page)).toHaveText(["Output"]);
 });

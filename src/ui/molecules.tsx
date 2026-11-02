@@ -263,11 +263,19 @@ export function ListItem({
   );
 }
 
-/** Detail row: code (statement · query) + value on the right (rows · pid · version). Value colored by tone */
-export function DetailRow({ children, value, tone }: { children: ReactNode; value?: ReactNode; tone?: "danger" | "warn" }) {
+/** Detail row: code (statement · query) + value on the right (rows · pid · version), a note in plain text under the code (why it
+ *  asks). Value colored by tone */
+export function DetailRow({ children, value, tone, note }: { children: ReactNode; value?: ReactNode; tone?: "danger" | "warn"; note?: ReactNode }) {
   return (
     <div className="ui-detail-row">
-      <code className="ui-detail-text">{children}</code>
+      {note === undefined ? (
+        <code className="ui-detail-text">{children}</code>
+      ) : (
+        <span className="ui-detail-main">
+          <code className="ui-detail-text">{children}</code>
+          <span className="ui-detail-note">{note}</span>
+        </span>
+      )}
       {value !== undefined && <span className={cx("ui-detail-value", tone && `tone-${tone}`)}>{value}</span>}
     </div>
   );

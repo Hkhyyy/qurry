@@ -996,7 +996,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
 /// The question and its keys stay at the bottom; in a window too short for the rest, blank lines go first and the lines
 /// above say how many are hidden and how many rows they would change
 fn draw_confirm(f: &mut Frame, area: Rect, text: &str) {
-    let danger = text.starts_with("Production") || text.ends_with("Run it anyway?");
+    let danger = text.starts_with("Production") || text.ends_with("Run it anyway?") || text.ends_with("Run them anyway?");
     let mut lines = confirm_lines(text);
     let mut ask = lines.split_off(lines.len().saturating_sub(3));
     // Long statements wrap → count wrapped lines for the height (so the y/n hint below isn't cut)

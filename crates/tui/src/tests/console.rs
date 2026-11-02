@@ -213,6 +213,18 @@ async fn explain_analyze_lists_each_statement_with_its_reason() {
     assert!(text.starts_with("Explain Analyze really runs the statements, and 2 of them need a look:"), "{text}");
     assert!(text.contains("  select nextval('s')\n    a rollback can't undo what it does outside the transaction"), "{text}");
     assert!(text.contains("  delete from audit\n    DELETE without WHERE changes every row, holding their locks"), "{text}");
+    // Drawn with the danger border, as the ask for one statement is
+    assert_eq!(confirm_border(&mut h), crate::kit::DANGER);
+}
+
+/// The colour of the Confirm popup's top border, just left of its title
+fn confirm_border(h: &mut Harness) -> ratatui::style::Color {
+    let (w, ht) = (120u16, 40u16);
+    let buf = h.buffer(w, ht);
+    let title: Vec<&str> = " Confirm ".split("").filter(|c| !c.is_empty()).collect();
+    let at = (0..ht).flat_map(|y| (1..w - title.len() as u16).map(move |x| (x, y))).find(|&(x, y)| title.iter().enumerate().all(|(i, c)| buf[(x + i as u16, y)].symbol() == *c));
+    let (x, y) = at.expect("no Confirm popup drawn");
+    buf[(x - 1, y)].fg
 }
 
 /// Explain Analyze of a SELECT runs in a rolled-back transaction too (a function it calls may write), without asking (a function's
