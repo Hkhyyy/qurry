@@ -138,6 +138,9 @@ test("dialog: after Allow the focus stays in the dialog and Escape still closes 
   await page.keyboard.press("Meta+;");
   await dialog(page).getByRole("button", { name: "Test Connection" }).click();
   await dialog(page).getByRole("button", { name: ALLOW }).click();
+  // While it tests again the focus is on Cancel Test (so Escape cancels the test), not on the page
+  await expect(dialog(page).getByRole("button", { name: "Cancel Test" })).toBeVisible();
+  expect(await page.evaluate(() => document.activeElement?.textContent)).toBe("Cancel Test");
   await expect(dialog(page).locator(".ui-notice")).toContainText("✓ PostgreSQL");
   await expect(dialog(page).getByRole("button", { name: "Test Connection" })).toBeFocused();
   await page.keyboard.press("Escape");

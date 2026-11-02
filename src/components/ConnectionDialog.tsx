@@ -50,16 +50,9 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   const [testing, setTesting] = useState<string | null>(null);
   const testingRef = useRef<string | null>(null);
   useEffect(() => () => void (testingRef.current && api.cancelTest(testingRef.current)), []);
-  // The Allow button under a failed test goes away when it tests again: focus lands on Test Connection once that test ends
-  // (the button is only back after the re-render), so Escape still closes the dialog
+  // The Allow button under a failed test goes away when it tests again: focus moves to Test Connection first (the same button
+  // becomes Cancel Test and back), so Escape cancels the test, then closes the dialog
   const testButton = useRef<HTMLButtonElement>(null);
-  const focusTestButton = useRef(false);
-  useEffect(() => {
-    if (!testing && focusTestButton.current) {
-      focusTestButton.current = false;
-      testButton.current?.focus();
-    }
-  }, [testing]);
   // Driver plugin: whether it is installed (null = built-in DB)
   const [driver, setDriver] = useState<boolean | null>(null);
   const [installing, setInstalling] = useState(false);
@@ -501,7 +494,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
           onAllow={async () => {
             const next = { ...cfg, options: { ...opt, allowPlaintext: true } };
             setCfg(next);
-            focusTestButton.current = true;
+            testButton.current?.focus();
             await runTest(next);
           }}
         />
