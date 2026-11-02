@@ -29,7 +29,8 @@ import { DEFAULT_FONT, editorFontSize, setEditorFontSize } from "./lib/prefs";
 import { bindings, eventSpec, formatSpec, hit, loadKeymap, onKeymapChange } from "./lib/shortcuts";
 import { invalidateCompletion } from "./lib/completion";
 import { useStatusWidgets } from "./lib/statusbar";
-import { shared, sharedReady, useSharedReady } from "./lib/shared";
+import { sharedReady, useSharedReady } from "./lib/shared";
+import { commitNoticeTitle } from "./lib/commitNotice";
 import { tableTabLabels } from "./lib/tabLabels";
 import { isDdl, isRead, rollbackUndoes } from "./lib/stmtKind";
 import type { BackupOptions, FtsRequest, UpdateChannel } from "./lib/api";
@@ -119,14 +120,6 @@ const isMac = navigator.platform.toLowerCase().includes("mac");
 /** Max rows kept in the result grid (same as the TUI). Beyond that, export to CSV */
 const MAX_ROWS = 100_000;
 const capMsg = (n: number) => `Showing the first ${n.toLocaleString()} rows — export to CSV for all of them`;
-/** Title of the notice for a failed Commit, decided in Rust like the TUI's (before the WASM has loaded: the generic one) */
-const commitNoticeTitle = (msg: string) => {
-  try {
-    return shared().commitFailedTitle(msg);
-  } catch {
-    return "Commit failed";
-  }
-};
 /** Explain Analyse of a write a rollback can't undo (rollbackUndoes): the question before, the note after (same words as the TUI) */
 const UNDONE_ASK = "a rollback can't undo what it does outside the transaction: sequence values, other servers, files, locks, or a COMMIT · MySQL DDL among several statements";
 const UNDONE_LOG = "what it did outside the transaction stays (sequence values, other servers, files, locks, or a COMMIT · MySQL DDL among several statements)";
