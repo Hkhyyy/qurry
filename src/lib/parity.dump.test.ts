@@ -33,6 +33,7 @@ import fuzzyCorpus from "../../crates/shared/tests/corpus/fuzzy.json";
 import sqlTs from "../../crates/shared/tests/goldens/ts/sql.json";
 import stmtRust from "../../crates/shared/tests/goldens/rust/statements.json";
 import resultTs from "../../crates/shared/tests/goldens/ts/results.json";
+import numberTs from "../../crates/shared/tests/goldens/ts/numbers.json";
 import tabTs from "../../crates/shared/tests/goldens/ts/tablabels.json";
 import keyTs from "../../crates/shared/tests/goldens/ts/rediskeys.json";
 import columnTs from "../../crates/shared/tests/goldens/ts/columns.json";
@@ -138,6 +139,21 @@ function resultGolden(): Golden {
   return out;
 }
 
+/**
+ * Chart outputs in goldens/ts are what the TS chart code (replaced by chart.rs, now called through WASM) wrote, frozen: the dump
+ * keeps them instead of writing chart.rs's answers as the expected ones. A corpus row added since has none (see chart.rs tests)
+ */
+const CHART_KEYS = ["numericColumns", "defaultAxes", "buildChart(bar)", "buildChart(pie)"];
+function frozenCharts(g: Golden): Golden {
+  for (const [id, o] of Object.entries(g))
+    for (const k of CHART_KEYS) {
+      const old = (resultTs as Golden)[id]?.[k];
+      if (old === undefined) delete o[k];
+      else o[k] = old;
+    }
+  return g;
+}
+
 function numberGolden(): Golden {
   const out: Golden = {};
   for (const t of numberCorpus.ticks) out[`ticks:${JSON.stringify(t)}`] = { niceTicks: niceTicks(t[0], t[1], t[2]) };
@@ -183,8 +199,9 @@ const GOLDENS: Record<string, () => Golden> = {
   statements: stmtGolden,
   // completion: the GUI runs qurry_shared::complete through WASM (src/lib/completion.test.ts and goldens/completion/ check both front ends)
   valuehints: hintGolden,
-  results: resultGolden,
-  numbers: numberGolden,
+  results: () => frozenCharts(resultGolden()),
+  // Chart only, so all frozen (numberGolden is the same through WASM: chart.rs checks it)
+  numbers: () => numberTs as Golden,
   tablabels: tabGolden,
   rediskeys: keyGolden,
   columns: columnGolden,
@@ -274,7 +291,13 @@ describe("WASM facades reproduce the goldens", () => {
   it("read / DDL checks: goldens/rust (D1: the GUI decides like the TUI, e.g. no Production confirmation for select 'delete')", () => {
     expect(stmtGolden()).toEqual(stmtRust);
   });
-  it("results: IN lists, Data Extractors, fractional seconds", () => expect(resultGolden()).toEqual(resultTs));
+  it("results: IN lists, Data Extractors, fractional seconds, charts", () => {
+    const got = resultGolden();
+    // A corpus row added after the chart moved to Rust has no TS chart output to compare with
+    for (const [id, o] of Object.entries(got)) for (const k of CHART_KEYS) if (!(k in ((resultTs as Golden)[id] ?? {}))) delete o[k];
+    expect(got).toEqual(resultTs);
+  });
+  it("chart axis numbers", () => expect(numberGolden()).toEqual(numberTs));
   it("table tab labels", () => expect(tabGolden()).toEqual(tabTs));
   it("Redis key folders", () => expect(keyGolden()).toEqual(keyTs));
   it("import auto-map", () => expect(columnGolden()).toEqual(columnTs));

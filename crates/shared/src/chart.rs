@@ -29,11 +29,13 @@ pub struct Options {
     /// A YEAR column is numeric by its type (GUI); otherwise its values decide (TUI)
     pub year_is_number: bool,
     pub order: Order,
+    /// X labels of float numbers as JavaScript writes them (2.0 → "2", 1e21 → "1e+21"); off: as the grid writes the cell ("2.0", "1e21")
+    pub js_labels: bool,
 }
 
 impl Options {
-    pub const GUI: Options = Options { year_is_number: true, order: Order::FirstSeen };
-    pub const TUI: Options = Options { year_is_number: false, order: Order::LargestFirst };
+    pub const GUI: Options = Options { year_is_number: true, order: Order::FirstSeen, js_labels: true };
+    pub const TUI: Options = Options { year_is_number: false, order: Order::LargestFirst, js_labels: false };
 }
 
 /// Initial axes: the X column, and Y (None = the row count)
@@ -124,12 +126,12 @@ pub fn default_axes(cols: &[Column], rows: &[Vec<Value>], opts: Options) -> Axes
     Axes { x, y: cands.iter().copied().find(|i| !id(i)).or(cands.first().copied()) }
 }
 
-/// X label of a cell, as the GUI prints it (null → "(null)", numbers as JavaScript writes them)
-fn label(v: Option<&Value>) -> String {
+/// X label of a cell (null → "(null)", float numbers per `opts.js_labels`)
+fn label(v: Option<&Value>, opts: Options) -> String {
     match v {
         None | Some(Value::Null) => "(null)".into(),
         Some(Value::String(s)) => s.clone(),
-        Some(Value::Number(n)) if n.is_f64() => js_number(n.as_f64().unwrap_or(f64::NAN)),
+        Some(Value::Number(n)) if n.is_f64() && opts.js_labels => js_number(n.as_f64().unwrap_or(f64::NAN)),
         Some(other) => other.to_string(),
     }
 }
@@ -139,7 +141,7 @@ pub fn aggregate(cols: &[Column], rows: &[Vec<Value>], x: usize, ys: &[Option<us
     let mut order: Vec<String> = vec![];
     let mut sums: HashMap<String, Vec<f64>> = HashMap::new();
     for row in rows {
-        let k = label(row.get(x));
+        let k = label(row.get(x), opts);
         let acc = sums.entry(k).or_insert_with_key(|k| {
             order.push(k.clone());
             vec![0.0; ys.len()]
@@ -207,10 +209,24 @@ pub fn nice_ticks(mut min: f64, mut max: f64, count: f64) -> Vec<f64> {
     let mut v = lo;
     while v <= hi + step / 2.0 {
         // 12 significant digits drop the float error the steps add up (0.30000000000000004 → 0.3); + 0.0 turns -0 into 0
-        out.push(format!("{v:.11e}").parse::<f64>().unwrap_or(v) + 0.0);
+        out.push(to_precision_12(v) + 0.0);
         v += step;
     }
     out
+}
+
+/// `+x.toPrecision(12)`: a tie rounds away from zero, as JavaScript does (Rust's `{:.11e}` rounds it to even: 1730000000005 → 1.73e12)
+fn to_precision_12(x: f64) -> f64 {
+    if !x.is_finite() || x == 0.0 {
+        return x;
+    }
+    // Exact digits past the 12th: a tie is a 5 followed only by zeros (an f64 that is one has few digits, so 25 more are enough)
+    let exact = format!("{:.36e}", x.abs());
+    let (mantissa, exp) = exact.split_once('e').unwrap_or((&exact, "0"));
+    let tail = &mantissa[13..];
+    let tie = tail.starts_with('5') && tail[1..].bytes().all(|b| b == b'0');
+    let y = if tie { x + x.signum() * 5.0 * 10f64.powi(exp.parse::<i32>().unwrap_or(0) - 12) } else { x };
+    format!("{y:.11e}").parse().unwrap_or(x)
 }
 
 /// Axis label: 1,200 · 15.3K · 1.2M · 2.5B · 0.25
@@ -294,14 +310,19 @@ mod tests {
         }
     }
 
-    /// The GUI's goldens (goldens/ts, written by the TS code this replaced) come out the same with Options::GUI
+    /// The GUI's goldens (goldens/ts, written by the TS code this replaced, frozen since: pnpm parity:dump keeps them) come out
+    /// the same with Options::GUI. A corpus row added after the move has no TS chart output and is skipped
     #[test]
     fn matches_the_gui_goldens() {
         let corpus: Vec<Value> = serde_json::from_str(include_str!("../tests/corpus/results.json")).unwrap();
         let ts = golden(include_str!("../tests/goldens/ts/results.json"));
         for e in &corpus {
             let id = e["id"].as_str().unwrap();
-            let g = &ts[id];
+            // A row added after the chart moved to Rust has a golden without chart keys; a row with no golden at all fails
+            let g = ts.get(id).unwrap_or_else(|| panic!("{id}: no entry in goldens/ts/results.json"));
+            if g.get("numericColumns").is_none() {
+                continue;
+            }
             let (c, r) = result(e);
             let names = |is: &[usize]| is.iter().map(|&i| c[i].name.clone()).collect::<Vec<_>>();
             assert_eq!(json!(names(&numeric_columns(&c, &r, Options::GUI))), g["numericColumns"], "{id}: numericColumns");
@@ -380,8 +401,9 @@ mod tests {
         assert_eq!(short_number(-1000.0), "-1,000");
         assert_eq!(short_number(f64::NAN), "NaN");
         assert_eq!(short_number(f64::INFINITY), "InfinityB");
-        assert_eq!(label(Some(&json!(1.0))), "1");
-        assert_eq!(label(Some(&json!(12345678901234567890u64))), "12345678901234567890");
+        assert_eq!(label(Some(&json!(1.0)), Options::GUI), "1");
+        assert_eq!(label(Some(&json!(1.0)), Options::TUI), "1.0", "as the TUI grid shows the cell");
+        assert_eq!(label(Some(&json!(12345678901234567890u64)), Options::GUI), "12345678901234567890");
         assert_eq!(js_number(1.5e-7), "1.5e-7");
     }
 }

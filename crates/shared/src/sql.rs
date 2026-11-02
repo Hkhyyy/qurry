@@ -28,6 +28,8 @@ pub fn quote_ident(kind: DbKind, s: &str) -> String {
         DbKind::Postgres => if simple(true) { s.into() } else { format!("\"{}\"", s.replace('"', "\"\"")) },
         // Drivers: standard quoting (SQL Server·Oracle·ClickHouse·SQLite·DuckDB all accept "…"). Only lowercase names stay bare so case isn't changed
         DbKind::Mongodb | DbKind::Qdrant | DbKind::Chroma | DbKind::Milvus => s.into(),
+        // ClickHouse reads \ as an escape inside "names" too (escapes_in), so it is doubled
+        DbKind::Clickhouse => if simple(true) { s.into() } else { format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\"\"")) },
         _ => if simple(true) { s.into() } else { format!("\"{}\"", s.replace('"', "\"\"")) },
     }
 }

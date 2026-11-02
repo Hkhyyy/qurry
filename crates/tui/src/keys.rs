@@ -9,16 +9,60 @@ use std::sync::LazyLock;
 
 pub use qurry_core::keymap::bindable;
 
-/// Rebindable commands (the table's TUI rows with default keys) in table order: the F1 window, --help, docs.
+/// The order the F1 window, --help and docs/shortcuts-tui.md list the rebindable commands in (scripts/gen-keymap-docs.py reads it here).
+/// The table can't hold it: commands both apps have sit in the GUI's order there. Every TUI row with default keys is here once (a test checks)
+const ORDER: [Action; 41] = [
+    Action::Quit,
+    Action::Help,
+    Action::Palette,
+    Action::SearchEverywhere,
+    Action::GoToObject,
+    Action::Ddl,
+    Action::RecentTabs,
+    Action::NewConsole,
+    Action::CloseTab,
+    Action::NextTab,
+    Action::PrevTab,
+    Action::ToggleExplorer,
+    Action::WsNew,
+    Action::WsRename,
+    Action::CycleFocus,
+    Action::ModifyTable,
+    Action::RenameObject,
+    Action::SplitRight,
+    Action::SplitDown,
+    Action::OtherSplit,
+    Action::SplitShrink,
+    Action::SplitGrow,
+    Action::ExplorerNarrower,
+    Action::ExplorerWider,
+    Action::Execute,
+    Action::Explain,
+    Action::Complete,
+    Action::Cancel,
+    Action::TxToggle,
+    Action::Commit,
+    Action::Rollback,
+    Action::ToggleOutput,
+    Action::PaneUp,
+    Action::PaneDown,
+    Action::PaneLeft,
+    Action::PaneRight,
+    Action::ShrinkEditor,
+    Action::GrowEditor,
+    Action::Submit,
+    Action::Find,
+    Action::Disconnect,
+];
+
+/// Rebindable commands (the table's TUI rows with default keys) in ORDER.
 /// Alt+1~9 are workspaces (input.rs, when the Alt+digit isn't in the keymap). Moving between panes is ⌃⌥ + arrows (⌥ + arrows is within a pane: ←/→ tabs)
 pub static DEFAULT_KEYS: LazyLock<Vec<(Action, &'static [String])>> = LazyLock::new(|| {
-    table::commands()
+    ORDER
         .iter()
-        .filter(|c| !c.tui_keys.is_empty())
-        .map(|c| {
-            let id = c.tui.as_deref().unwrap_or_default();
-            let a = crate::app::ACTIONS.iter().map(|x| x.0).find(|a| action_id(*a) == id);
-            (a.unwrap_or_else(|| panic!("keymap-table.json: tui id {id} is not an Action")), c.tui_keys.as_slice())
+        .map(|&a| {
+            let keys = table::tui_command(&action_id(a)).map(|c| c.tui_keys.as_slice()).filter(|k| !k.is_empty());
+            (a, keys.unwrap_or_else(|| panic!("keys.rs ORDER: {a:?} has no default keys in keymap-table.json")))
         })
         .collect()
 });
@@ -257,5 +301,14 @@ mod tests {
             }
         }
         assert_eq!(DEFAULT_KEYS.iter().find(|d| d.0 == Action::NewConsole).map(|d| d.1), Some(&["Ctrl+L".to_string()][..]));
+    }
+
+    #[test]
+    fn order_lists_every_table_command_with_keys_once() {
+        let mut want: Vec<&str> = table::commands().iter().filter(|c| !c.tui_keys.is_empty()).filter_map(|c| c.tui.as_deref()).collect();
+        let mut got: Vec<String> = ORDER.iter().map(|a| action_id(*a)).collect();
+        want.sort_unstable();
+        got.sort_unstable();
+        assert_eq!(got, want, "keys.rs ORDER lists each TUI row of keymap-table.json that has tuiKeys, once");
     }
 }
