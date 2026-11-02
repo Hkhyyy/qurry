@@ -943,6 +943,7 @@
       ]
     },
     "inList": "((1.5, NULL, '1,000'), (0.25, NULL, '2'), (1.5, NULL, ' 3 '), (2, NULL, ''))",
+    "inList(mysql)": "((1.5, NULL, '1,000'), (0.25, NULL, '2'), (1.5, NULL, ' 3 '), (2, NULL, ''))",
     "inList(column)": {
       "ratio": "(1.5, 0.25, 2)",
       "yr": "(NULL)",
