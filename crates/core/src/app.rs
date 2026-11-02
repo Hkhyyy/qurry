@@ -21,8 +21,8 @@ pub struct AppState {
     pub sessions: RwLock<HashMap<String, SessionEntry>>,
     /// Data source id (not `id::db`) → SSH / AWS SSM tunnel, shared by the pools of all its databases (they go to the same host:port)
     pub tunnels: RwLock<HashMap<String, crate::tunnel::Tunnel>>,
-    /// Data source id → held while its pool and tunnel are being opened, so callers arriving together open one (an SSM session takes seconds)
-    connecting: std::sync::Mutex<HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+    /// Data source id → its tunnel opening and its disconnect count (see Connecting)
+    connecting: std::sync::Mutex<HashMap<String, std::sync::Arc<Connecting>>>,
     /// Password store (encrypted file). Avoids keychain popups.
     pub secret_file: crate::secrets::SecretFile,
     /// Data Source id → last used time (Auto-disconnect)
@@ -164,8 +164,26 @@ async fn recover(state: &AppState, id: &str, tab: Option<&str>, lost_tx: bool, e
     ))
 }
 
+/// One data source's connects
+#[derive(Default)]
+struct Connecting {
+    /// Held while the shared tunnel opens and the first pool connects through it, so callers arriving together start one SSH / SSM
+    /// session. Then the time and message of its failure: the callers that waited return it instead of trying again one after
+    /// another (each try can take the whole timeout)
+    first: tokio::sync::Mutex<Option<(std::time::Instant, String)>>,
+    /// drop_pool counts up: a connect that started before keeps no pool or tunnel (its tunnel may be gone, its settings old)
+    generation: std::sync::atomic::AtomicU64,
+}
+
+impl AppState {
+    fn connecting(&self, base: &str) -> std::sync::Arc<Connecting> {
+        self.connecting.lock().unwrap().entry(base.to_string()).or_default().clone()
+    }
+}
+
 /// Close all DB pools, sessions and tunnels of the Data Source.
 pub async fn drop_pool(state: &AppState, id: &str) {
+    state.connecting(split_target(id).0).generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     state.sessions.write().await.retain(|_, e| !belongs(&e.conn_id, id));
     let removed: Vec<Pool> = {
         let mut pools = state.pools.write().await;
@@ -297,17 +315,6 @@ pub async fn ensure_pool(state: &AppState, id: &str) -> AppResult<Pool> {
     {
         return Ok(p);
     }
-    // One connect per data source at a time: the others wait, then use what it opened
-    let lock = state.connecting.lock().unwrap().entry(base.to_string()).or_default().clone();
-    let _connecting = lock.lock().await;
-    let alive = tunnel_alive(state, base).await;
-    if alive == Some(false) {
-        // Its pools would connect to a port nobody holds now (or someone else does): open the tunnel and the pools again
-        crate::log!("[qurry] the tunnel of {base} has stopped; reconnecting");
-        drop_pool(state, base).await;
-    } else if let Some(p) = state.pools.read().await.get(id) {
-        return Ok(p.clone());
-    }
     let mut cfg = state
         .store
         .get(base)?
@@ -318,26 +325,77 @@ pub async fn ensure_pool(state: &AppState, id: &str) -> AppResult<Pool> {
     }
     let password = state.saved_secret(&cfg.password_key(), cfg.password_saved)?;
     let ssh_secret = if cfg.active_ssh().is_some() { state.saved_secret(&store::ssh_secret_key(base), cfg.ssh_secret_saved)? } else { None };
-    // Another database of the same source may have opened the tunnel already (one SSM session and aws CLI per source, not per database)
-    let shared = if cfg.tunneled() { state.tunnels.read().await.get(base).map(|t| t.local_port) } else { None };
-    let tunnel = if shared.is_none() { open_tunnel(&cfg, ssh_secret.as_deref()).await? } else { None };
-    let pool = db::connect_via(&cfg, password.as_deref(), shared.or(tunnel.as_ref().map(|t| t.local_port))).await.map_err(|e| match e {
+    let c = state.connecting(base);
+    let generation = || c.generation.load(std::sync::atomic::Ordering::SeqCst);
+    if !cfg.tunneled() {
+        let g = generation();
+        let pool = connect_pool(&cfg, password.as_deref(), None).await?;
+        return keep_pool(state, &c, g, id, pool, None).await;
+    }
+    let asked = std::time::Instant::now();
+    let mut first = c.first.lock().await;
+    let open = state.tunnels.read().await.get(base).map(|t| (t.alive(), t.local_port));
+    if let Some((true, port)) = open {
+        // Another database of the source opened it: one SSM session and aws CLI per source, not per database
+        let g = generation();
+        drop(first);
+        if let Some(p) = state.pools.read().await.get(id) {
+            return Ok(p.clone());
+        }
+        let pool = connect_pool(&cfg, password.as_deref(), Some(port)).await?;
+        return keep_pool(state, &c, g, id, pool, None).await;
+    }
+    if open.is_some() {
+        // Its pools would connect to a port nobody holds now (or someone else does): open the tunnel and the pools again
+        crate::log!("[qurry] the tunnel of {base} has stopped; reconnecting");
+        drop_pool(state, base).await;
+    } else if let Some((_, e)) = first.as_ref().filter(|(at, _)| *at >= asked) {
+        return Err(AppError::Msg(e.clone()));
+    }
+    let g = generation();
+    let opened = async {
+        let t = open_tunnel(&cfg, ssh_secret.as_deref()).await?.ok_or_else(|| AppError::Msg("No tunnel is turned on".into()))?;
+        let pool = connect_pool(&cfg, password.as_deref(), Some(t.local_port)).await?;
+        Ok::<_, AppError>((pool, t))
+    };
+    match opened.await {
+        Ok((pool, t)) => {
+            *first = None;
+            keep_pool(state, &c, g, id, pool, Some(t)).await
+        }
+        Err(e) => {
+            *first = Some((std::time::Instant::now(), e.to_string()));
+            Err(e)
+        }
+    }
+}
+
+async fn connect_pool(cfg: &ConnectionConfig, password: Option<&str>, port: Option<u16>) -> AppResult<Pool> {
+    db::connect_via(cfg, password, port).await.map_err(|e| match e {
         // sqlx only says "pool timed out while waiting for an open connection"
         AppError::Db(sqlx::Error::PoolTimedOut) => AppError::Msg(format!(
             "Can't connect to {}:{} — the server didn't answer within 10s. Check that it's up (VPN / SSH tunnel), then run it again.",
             cfg.host, cfg.port
         )),
         e => e,
-    })?;
-    if let Some(t) = tunnel {
-        state.tunnels.write().await.insert(base.to_string(), t);
+    })
+}
+
+/// Keeps the new pool (and the tunnel it opened) unless the source was disconnected meanwhile (drop_pool): then the pool may point
+/// at a closed tunnel's port, which any program on this machine could take
+async fn keep_pool(state: &AppState, c: &Connecting, generation: u64, id: &str, pool: Pool, tunnel: Option<crate::tunnel::Tunnel>) -> AppResult<Pool> {
+    {
+        let mut pools = state.pools.write().await;
+        if c.generation.load(std::sync::atomic::Ordering::SeqCst) == generation {
+            if let Some(t) = tunnel {
+                state.tunnels.write().await.insert(split_target(id).0.to_string(), t);
+            }
+            pools.insert(id.to_string(), pool.clone());
+            return Ok(pool);
+        }
     }
-    state
-        .pools
-        .write()
-        .await
-        .insert(id.to_string(), pool.clone());
-    Ok(pool)
+    pool.close().await;
+    Err(AppError::Msg("The data source was disconnected while connecting. Run it again.".into()))
 }
 
 pub async fn ensure_session(state: &AppState, id: &str, tab_id: &str) -> AppResult<std::sync::Arc<tokio::sync::Mutex<Session>>> {
@@ -1102,6 +1160,92 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A server that accepts and never answers (a DB or SSH host behind a firewall that drops packets)
+    async fn silent_server() -> u16 {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((s, _)) = l.accept().await {
+                held.push(s);
+            }
+        });
+        port
+    }
+
+    fn silent_source(id: &str, port: u16, ssh: Option<serde_json::Value>) -> ConnectionConfig {
+        let mut c = serde_json::json!({ "id": id, "name": id, "kind": "postgres", "host": "127.0.0.1", "port": port, "user": "u", "database": "d" });
+        if let Some(ssh) = ssh {
+            c["ssh"] = ssh;
+        }
+        serde_json::from_value(c).unwrap()
+    }
+
+    /// The tree, autocomplete and restored tabs open a source and its databases together. When the server doesn't answer they
+    /// all fail after one timeout, not one after another (4 callers used to take 4 × 10s)
+    #[tokio::test]
+    async fn callers_of_an_unreachable_source_wait_one_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = AppState::new(Store::new(dir.path().to_path_buf()), crate::secrets::SecretFile::open(dir.path()).unwrap());
+        st.store.save(&silent_source("x", silent_server().await, None)).unwrap();
+        let start = std::time::Instant::now();
+        let r = futures::future::join_all(["x", "x::db1", "x", "x::db3"].map(|id| ensure_pool(&st, id))).await;
+        assert!(r.iter().all(|r| r.as_ref().err().is_some_and(|e| e.to_string().contains("didn't answer within 10s"))));
+        assert!(start.elapsed() < std::time::Duration::from_secs(15), "{:?}", start.elapsed());
+    }
+
+    /// Callers that waited for a tunnel that couldn't be opened get its error instead of opening another one in turn
+    #[tokio::test]
+    async fn callers_waiting_for_a_failed_tunnel_get_its_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = AppState::new(Store::new(dir.path().to_path_buf()), crate::secrets::SecretFile::open(dir.path()).unwrap());
+        let ssh = serde_json::json!({ "enabled": true, "host": "127.0.0.1", "port": silent_server().await, "user": "me" });
+        st.store.save(&silent_source("t", 5432, Some(ssh))).unwrap();
+        let start = std::time::Instant::now();
+        let r = futures::future::join_all(["t", "t::db1", "t", "t::db3"].map(|id| ensure_pool(&st, id))).await;
+        assert!(r.iter().all(|r| r.as_ref().err().is_some_and(|e| e.to_string().contains("SSH connect timeout"))), "{:?}", r.iter().map(|r| r.as_ref().err().map(|e| e.to_string())).collect::<Vec<_>>());
+        assert!(start.elapsed() < std::time::Duration::from_secs(20), "{:?}", start.elapsed());
+        // A later call tries again
+        let start = std::time::Instant::now();
+        assert!(ensure_pool(&st, "t").await.is_err());
+        assert!(start.elapsed() >= std::time::Duration::from_secs(10));
+    }
+
+    /// Disconnecting (or saving new settings) while a pool is still connecting: that pool isn't kept, since it may go through a
+    /// tunnel that was just closed. Run: QURRY_TEST_PG=127.0.0.1:55433:postgres:postgres cargo test -p qurry-core disconnect_while_connecting -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn disconnect_while_connecting_keeps_no_pool() {
+        let pg: Vec<String> = std::env::var("QURRY_TEST_PG").expect("QURRY_TEST_PG").split(':').map(String::from).collect();
+        let upstream = format!("{}:{}", pg[0], pg[1]);
+        // A slow link: each connection starts forwarding after 1s
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut a, _)) = l.accept().await {
+                let upstream = upstream.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    let mut b = tokio::net::TcpStream::connect(upstream).await.unwrap();
+                    let _ = tokio::io::copy_bidirectional(&mut a, &mut b).await;
+                });
+            }
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let st = AppState::new(Store::new(dir.path().to_path_buf()), crate::secrets::SecretFile::open(dir.path()).unwrap());
+        let mut c = silent_source("slow", port, None);
+        (c.user, c.database) = (pg[2].clone(), pg[3].clone());
+        st.store.save(&c).unwrap();
+        let (r, _) = tokio::join!(ensure_pool(&st, "slow"), async {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            drop_pool(&st, "slow").await;
+        });
+        let e = r.err().expect("the pool from before the disconnect is not used").to_string();
+        assert!(e.contains("disconnected while connecting"), "{e}");
+        assert!(st.pools.read().await.is_empty());
+        assert!(ensure_pool(&st, "slow").await.is_ok(), "the next call connects");
+    }
 
     /// Changing only the host and doing Test / Save does not send the saved password to the new server; it asks for it again (before connecting)
     #[tokio::test]
