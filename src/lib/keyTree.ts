@@ -1,27 +1,15 @@
+// Redis key folders: qurry_shared::keytree through WASM, as the TUI groups them. Folder names sort as JavaScript sorts strings
+// (UTF-16 order, D2 of the 0.3.0 architecture batch: the keyTree row of crates/shared/tests/DIVERGENCES.md)
+import { sharedOr, type SharedKeyNode } from "./shared";
+
 /** Folders from Redis keys split on ":" (like Medis). path = "dev:sessions", count = keys under it */
 export type KeyNode<T> = { kind: "folder"; name: string; path: string; count: number; children: KeyNode<T>[] } | { kind: "key"; item: T };
 
-/** Folders first (by name), then keys (in received order). Keys keep their full names */
+/** Folders first (by name), then keys (in received order). Keys keep their full names. Until the module is loaded: the keys without folders */
 export function keyTree<T>(items: T[], name: (t: T) => string): KeyNode<T>[] {
-  const level = (items: T[], depth: number, prefix: string): KeyNode<T>[] => {
-    const folders = new Map<string, T[]>();
-    const keys: KeyNode<T>[] = [];
-    for (const it of items) {
-      const parts = name(it).split(":");
-      if (parts.length > depth + 1) {
-        const seg = parts[depth];
-        if (!folders.has(seg)) folders.set(seg, []);
-        folders.get(seg)!.push(it);
-      } else keys.push({ kind: "key", item: it });
-    }
-    const out: KeyNode<T>[] = [...folders.keys()].sort().map((seg) => {
-      const path = prefix ? `${prefix}:${seg}` : seg;
-      const kids = folders.get(seg)!;
-      return { kind: "folder", name: seg, path, count: kids.length, children: level(kids, depth + 1, path) };
-    });
-    return out.concat(keys);
-  };
-  return level(items, 0, "");
+  const nodes = (v: SharedKeyNode[]): KeyNode<T>[] => v.map((n) => (n.kind === "key" ? { kind: "key", item: items[n.item] } : { ...n, children: nodes(n.children) }));
+  const tree = sharedOr<SharedKeyNode[] | null>(null, (s) => s.keyTree(items.map(name), { utf16Order: true }));
+  return tree ? nodes(tree) : items.map((item) => ({ kind: "key", item }));
 }
 
 /** One row on screen (key browser: only visible rows are drawn) */

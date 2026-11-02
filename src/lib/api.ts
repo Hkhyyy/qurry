@@ -427,14 +427,17 @@ export interface Dialect {
   monaco: string;
   /** Console statement splitting (semicolon-based if absent) */
   split?: (text: string) => { start: number; end: number }[];
+  /** The kind whose identifier and literal rules q and lit follow: the Data Extractors (qurry_shared::extract) quote with it. Drivers quote as PostgreSQL */
+  quoting: DbKind;
 }
-const PG: Dialect = { q: quoteIdent, lit: sqlLiteral, text: (e) => `${e}::text`, monaco: "pgsql" };
+const PG: Dialect = { q: quoteIdent, lit: sqlLiteral, text: (e) => `${e}::text`, monaco: "pgsql", quoting: "postgres" };
 const MY: Dialect = {
   q: (s) => (/^[A-Za-z_][A-Za-z0-9_]*$/.test(s) && !RESERVED.has(s.toLowerCase()) ? s : "`" + s.replace(/`/g, "``") + "`"),
   // In MySQL strings backslash is also an escape char
   lit: (v) => (v === null ? "NULL" : `'${String(v).replace(/\\/g, "\\\\").replace(/'/g, "''")}'`),
   text: (e) => `CAST(${e} AS CHAR)`,
   monaco: "mysql",
+  quoting: "mysql",
 };
 /** Redis: one line = one command (# comments) */
 const RD: Dialect = {
@@ -442,6 +445,7 @@ const RD: Dialect = {
   lit: (v) => (v === null ? '""' : JSON.stringify(String(v))),
   text: (e) => e,
   monaco: "redis",
+  quoting: "redis",
   split: (text) => {
     const out: { start: number; end: number }[] = [];
     let pos = 0;
@@ -455,13 +459,14 @@ const RD: Dialect = {
 };
 /** Driver DBs: standard SQL quoting, text conversion via CAST (no PG ::text) */
 const GEN: Dialect = { ...PG, text: (e) => `CAST(${e} AS VARCHAR(4000))`, monaco: "sql" };
-const MONGO: Dialect = { q: (s) => s, lit: sqlLiteral, text: (e) => e, monaco: "javascript", split: RD.split };
+const MONGO: Dialect = { q: (s) => s, lit: sqlLiteral, text: (e) => e, monaco: "javascript", split: RD.split, quoting: "mongodb" };
 /** One REST request = from a method line up to the next method line (including JSON body). Same rule as core's sql::split_rest */
 const REST: Dialect = {
   q: (s) => s,
   lit: sqlLiteral,
   text: (e) => e,
   monaco: "javascript",
+  quoting: "qdrant",
   split: (text) => {
     const out: { start: number; end: number }[] = [];
     let pos = 0;

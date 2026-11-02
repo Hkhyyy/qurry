@@ -5,7 +5,7 @@
  * Goldens map corpus id → function → output. Both dumps use the same keys and output shapes (segment text, not offsets).
  * A `‸` in a corpus text marks the cursor (removed before the call; UTF-16 offset here, byte offset in Rust).
  */
-import { describe, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { dialectOf, type Cell, type DbKind, type QueryResult } from "./api";
 import { buildChart, COUNT, defaultAxes, niceTicks, numericColumns, shortNumber } from "./chart";
 import { findTable, tablesInStatement } from "./completion";
@@ -32,6 +32,11 @@ import keyCorpus from "../../crates/shared/tests/corpus/rediskeys.json";
 import columnCorpus from "../../crates/shared/tests/corpus/columns.json";
 import specCorpus from "../../crates/shared/tests/corpus/keyspecs.json";
 import fuzzyCorpus from "../../crates/shared/tests/corpus/fuzzy.json";
+import resultTs from "../../crates/shared/tests/goldens/ts/results.json";
+import tabTs from "../../crates/shared/tests/goldens/ts/tablabels.json";
+import keyTs from "../../crates/shared/tests/goldens/ts/rediskeys.json";
+import columnTs from "../../crates/shared/tests/goldens/ts/columns.json";
+import fuzzyTs from "../../crates/shared/tests/goldens/ts/fuzzy.json";
 
 // completion.ts registers Monaco providers on import; only its pure helpers are dumped
 vi.mock("./monaco", () => ({ monaco: { languages: { registerCompletionItemProvider: () => ({}) } } }));
@@ -273,6 +278,15 @@ interface Fs {
   readFileSync(p: URL, enc: "utf8"): string;
   writeFileSync(p: URL, s: string): void;
 }
+
+// Runs with plain `pnpm test`: the WASM facades keep what the GUI did before they replaced its TypeScript copies (D2 options)
+describe("WASM facades reproduce goldens/ts", () => {
+  it("results: IN lists, Data Extractors, fractional seconds", () => expect(resultGolden()).toEqual(resultTs));
+  it("table tab labels", () => expect(tabGolden()).toEqual(tabTs));
+  it("Redis key folders", () => expect(keyGolden()).toEqual(keyTs));
+  it("import auto-map", () => expect(columnGolden()).toEqual(columnTs));
+  it("fuzzy scores", () => expect(fuzzyGolden()).toEqual(fuzzyTs));
+});
 
 describe.skipIf(!import.meta.env.PARITY_DUMP)("parity dump", () => {
   it("writes TS goldens (and DIVERGENCES.md when Rust goldens exist)", async () => {
