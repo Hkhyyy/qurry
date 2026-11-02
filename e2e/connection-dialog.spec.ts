@@ -68,6 +68,15 @@ test("AWS SSM: a long Test Connection error is scrolled into view in the fixed-s
       return !!n && !!b && n.y >= b.y && n.y + n.height <= b.y + b.height;
     }, { message: "the whole error, its last line included, is inside the dialog body" })
     .toBe(true);
+  // The body scrolled, but the tab strip stays pinned at its top: the labels are still shown, not only the active underline
+  expect(await body.evaluate((el) => el.scrollTop), "the body scrolled to show the error").toBeGreaterThan(0);
+  const tab = d.getByRole("tab", { name: /SSH\/SSL/ });
+  const [t, b] = [await tab.boundingBox(), await body.boundingBox()];
+  expect(t && b && t.y >= b.y && t.y + t.height <= b.y + b.height, "the SSH/SSL tab is inside the dialog body").toBe(true);
+  expect(await tab.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2));
+  }), "nothing covers the SSH/SSL tab").toBe(true);
 });
 
 test("AWS SSM: a Test Connection that keeps starting shows the elapsed time and can be cancelled", async ({ page }) => {
