@@ -154,9 +154,13 @@ export default function App() {
       .catch(() => {});
     return () => off?.();
   }, []);
-  // New version (checked at startup + every hour; failures are ignored silently)
+  // New version (checked at startup + every hour; failures, and a check that was skipped, are ignored silently and keep the badge)
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [updateOpen, setUpdateOpen] = useState(false);
+  // An offer that went away closes its window, so a later offer doesn't open it unasked
+  useEffect(() => {
+    if (!update) setUpdateOpen(false);
+  }, [update]);
   useEffect(() => {
     const check = () => {
       if (!updateCheckEnabled()) return;

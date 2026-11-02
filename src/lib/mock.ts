@@ -353,7 +353,11 @@ const handlers: Record<string, (a: any) => unknown> = {
     updateChannel = a.channel;
     return updateChecked ? updateInfo() : null;
   },
-  check_update: () => ((updateChecked = true), updateInfo()),
+  // window.__mockChecksOff: QURRY_NO_UPDATE_CHECK is set, so only a forced check (Check Now) asks
+  check_update: (a: any) => {
+    if ((window as any).__mockChecksOff && !a.force) throw "Update checks are off";
+    return (updateChecked = true), updateInfo();
+  },
 };
 /** window.__mockNoUpdate: the channel offers nothing newer (e.g. the TUI switched it back to stable) */
 function updateInfo() {
