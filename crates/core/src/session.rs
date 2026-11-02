@@ -57,6 +57,30 @@ pub fn strip_comments_lead(sql: &str) -> String {
     }
 }
 
+/// Whether a COMMIT / ROLLBACK / END / ABORT (s = strip_comments_lead(sql)) ends with AND CHAIN, which opens a new transaction
+/// right away: `commit and chain`, `rollback work and chain`, `end transaction /* x */ and chain` (not AND NO CHAIN)
+pub(crate) fn chains(s: &str) -> bool {
+    let mut rest = s;
+    let mut words = Vec::new();
+    while words.len() < 4 {
+        rest = rest.trim_start();
+        if let Some(r) = rest.strip_prefix("--").or_else(|| rest.strip_prefix('#')) {
+            rest = r.split_once('\n').map_or("", |x| x.1);
+        } else if let Some(r) = rest.strip_prefix("/*") {
+            rest = r.split_once("*/").map_or("", |x| x.1);
+        } else {
+            let n = rest.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(rest.len());
+            if n == 0 {
+                break;
+            }
+            words.push(&rest[..n]);
+            rest = &rest[n..];
+        }
+    }
+    let after = if matches!(words.get(1), Some(&"work" | &"transaction")) { 2 } else { 1 };
+    matches!(words.get(after..), Some(["and", "chain", ..]))
+}
+
 pub fn is_select_like(sql: &str) -> bool {
     let s = strip_comments_lead(sql);
     ["select", "with", "values", "table", "("].iter().any(|k| s.starts_with(k))
@@ -178,15 +202,14 @@ impl PgSession {
         }
     }
 
-    /// Sync the state when the user runs BEGIN / COMMIT / ROLLBACK directly
-    fn track_tx_keywords(&mut self, sql: &str) {
+    /// Sync the state when the user runs BEGIN / COMMIT / ROLLBACK directly (`ok`: it ran without error). One that ran with
+    /// AND CHAIN opens the next transaction at once; a failed COMMIT AND CHAIN leaves none open
+    fn track_tx_keywords(&mut self, sql: &str, ok: bool) {
         let s = strip_comments_lead(sql);
         if s.starts_with("begin") || s.starts_with("start transaction") {
             self.in_tx = true;
-        } else if s.starts_with("commit") || s.starts_with("rollback") || s.starts_with("end") || s.starts_with("abort") {
-            if !s.starts_with("rollback to") {
-                self.in_tx = false;
-            }
+        } else if ["commit", "rollback", "end", "abort"].iter().any(|k| s.starts_with(k)) && !s.starts_with("rollback to") {
+            self.in_tx = ok && chains(&s);
         }
     }
 
@@ -226,7 +249,7 @@ impl PgSession {
             }
         }
         let r = self.run_direct(sql, limit, start).await;
-        self.track_tx_keywords(sql);
+        self.track_tx_keywords(sql, r.is_ok());
         r
     }
 
@@ -603,6 +626,24 @@ mod tests {
         assert!(is_select_like("  -- c\n /* x */ SELECT 1"));
         assert!(is_select_like("with a as (select 1) select * from a"));
         assert!(!is_select_like("update t set x = 1"));
+    }
+
+    /// COMMIT / ROLLBACK … AND CHAIN keeps a transaction open (PostgreSQL and MySQL); AND NO CHAIN and the plain ones don't
+    #[test]
+    fn and_chain_keeps_the_transaction() {
+        let c = |q: &str| chains(&strip_comments_lead(q));
+        for q in [
+            "COMMIT AND CHAIN", "rollback and chain;", "commit work and chain", "ROLLBACK TRANSACTION AND CHAIN", "end and chain", "abort transaction and chain",
+            "-- x\n/* y */ commit and chain", "commit /* x */ and -- y\n chain", "commit\n\tand\nchain", "commit # x\n and chain",
+        ] {
+            assert!(c(q), "{q}");
+        }
+        for q in [
+            "commit", "rollback;", "commit work", "end transaction", "abort", "commit and no chain", "rollback work and no chain", "commit and", "commit chain",
+            "commit and chained", "commit; and chain", "commit /* and chain */", "-- and chain\ncommit", "commit prepared 'x'", "rollback to savepoint s",
+        ] {
+            assert!(!c(q), "{q}");
+        }
     }
 
     #[tokio::test]

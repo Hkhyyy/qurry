@@ -68,6 +68,11 @@ async fn q(st: &AppState, sql: &str) -> db::QueryResult {
     st.run_query(ID.into(), sql.into(), None, None).await.unwrap_or_else(|e| panic!("{sql}: {e}"))
 }
 
+/// Run `sql` in console tab `tab_id`
+async fn q_tab(st: &AppState, tab_id: &str, sql: &str) -> db::QueryResult {
+    st.run_query(ID.into(), sql.into(), None, Some(tab_id.into())).await.unwrap_or_else(|e| panic!("{sql}: {e}"))
+}
+
 async fn export(st: &AppState, sql: &str, format: Format, table: Option<(&str, &str)>) -> String {
     let table = table.map(|(s, t)| (s.to_string(), t.to_string()));
     let r = st.export(ID.into(), sql.into(), format, Dest::Clipboard, table, format!("{format:?}")).await.unwrap();
@@ -784,8 +789,9 @@ async fn mysql_explain_analyze_in_a_transaction_on_a_read_only_source() {
 
 /// Explain Analyse after `setup` left a row of `t` (count `count`) uncommitted in the console tab, run as the GUI and the TUI run it
 /// (AppState::explain_wrap around the statement): it uses a savepoint, so the row is still pending (seen in the tab, not on another
-/// connection) and the user's Roll back removes it. A BEGIN there would commit it on MySQL
-async fn explain_analyze_keeps_pending_work(st: &AppState, tab_id: &str, setup: &[&str], explain: &str, count: &str) {
+/// connection) and the user's `end` (ROLLBACK or COMMIT) removes or commits it. A BEGIN there would commit it on MySQL, and on
+/// PostgreSQL its closing ROLLBACK would throw it away
+async fn explain_analyze_keeps_pending_work(st: &AppState, tab_id: &str, setup: &[&str], explain: &str, count: &str, end: &str) {
     let tab = |sql: &str| {
         let sql = sql.to_string();
         async move { st.run_query(ID.into(), sql.clone(), None, Some(tab_id.into())).await.unwrap_or_else(|e| panic!("{sql}: {e}")) }
@@ -802,8 +808,8 @@ async fn explain_analyze_keeps_pending_work(st: &AppState, tab_id: &str, setup: 
     assert!(back.in_transaction, "{setup:?}: the pending row shows as uncommitted");
     assert_eq!(n(tab(count).await), "1", "{setup:?}: the tab still sees its pending row");
     assert_eq!(n(q(st, count).await), "0", "{setup:?}: Explain Analyse committed the pending row");
-    tab("ROLLBACK").await;
-    assert_eq!(n(q(st, count).await), "0", "{setup:?}");
+    tab(end).await;
+    assert_eq!(n(q(st, count).await), if end == "COMMIT" { "1" } else { "0" }, "{setup:?} {end}");
     st.close_session(tab_id.into()).await.unwrap();
 }
 
@@ -817,16 +823,26 @@ async fn mysql_explain_analyze_never_commits_pending_work() {
     let (explain, count) = ("EXPLAIN ANALYZE select * from t", "select count(*) from t");
     // autocommit=0 typed by hand, turned off where Qurry can't see it (a procedure, a dump's /*! */ header), Manual mode, and a
     // Manual-mode SELECT whose function writes
-    explain_analyze_keeps_pending_work(&st, "typed", &["SET autocommit = 0", "insert into t values (1)"], explain, count).await;
-    explain_analyze_keeps_pending_work(&st, "call", &["call off()", "insert into t values (1)"], explain, count).await;
-    explain_analyze_keeps_pending_work(&st, "dump", &["/*!40101 SET autocommit = 0 */", "insert into t values (1)"], explain, count).await;
+    explain_analyze_keeps_pending_work(&st, "typed", &["SET autocommit = 0", "insert into t values (1)"], explain, count, "ROLLBACK").await;
+    explain_analyze_keeps_pending_work(&st, "call", &["call off()", "insert into t values (1)"], explain, count, "ROLLBACK").await;
+    explain_analyze_keeps_pending_work(&st, "dump", &["/*!40101 SET autocommit = 0 */", "insert into t values (1)"], explain, count, "ROLLBACK").await;
     // Autocommit on, a transaction opened where Qurry's tracker can't see it: the server is asked
-    explain_analyze_keeps_pending_work(&st, "hidden", &["/*!40101 START TRANSACTION */", "insert into t values (1)"], explain, count).await;
-    explain_analyze_keeps_pending_work(&st, "hash", &["# note\nSTART TRANSACTION", "insert into t values (1)"], explain, count).await;
+    explain_analyze_keeps_pending_work(&st, "hidden", &["/*!40101 START TRANSACTION */", "insert into t values (1)"], explain, count, "ROLLBACK").await;
+    explain_analyze_keeps_pending_work(&st, "hash", &["# note\nSTART TRANSACTION", "insert into t values (1)"], explain, count, "ROLLBACK").await;
     st.set_tx_mode(ID.into(), "manual".into(), true).await.unwrap();
-    explain_analyze_keeps_pending_work(&st, "manual", &["insert into t values (1)"], explain, count).await;
+    explain_analyze_keeps_pending_work(&st, "manual", &["insert into t values (1)"], explain, count, "ROLLBACK").await;
     st.set_tx_mode(ID.into(), "manual-f".into(), true).await.unwrap();
-    explain_analyze_keeps_pending_work(&st, "manual-f", &["select w()"], explain, count).await;
+    explain_analyze_keeps_pending_work(&st, "manual-f", &["select w()"], explain, count, "ROLLBACK").await;
+    // COMMIT / ROLLBACK AND CHAIN open the next transaction at once: its row shows as pending, and the user's COMMIT keeps it
+    for (tab_id, chain) in [("chain-c", "COMMIT AND CHAIN"), ("chain-r", "rollback work and chain")] {
+        for s in ["BEGIN", chain] {
+            q_tab(&st, tab_id, s).await;
+        }
+        assert!(q_tab(&st, tab_id, "insert into t values (1)").await.in_transaction, "{chain}");
+        q_tab(&st, tab_id, "ROLLBACK").await;
+        st.close_session(tab_id.into()).await.unwrap();
+    }
+    explain_analyze_keeps_pending_work(&st, "chain", &["BEGIN", "COMMIT AND CHAIN", "insert into t values (1)"], explain, count, "COMMIT").await;
     // Autocommit on and nothing open: a transaction of its own
     assert_eq!(st.explain_wrap(ID.into(), "auto".into()).await.unwrap(), qurry_core::session::EXPLAIN_BEGIN);
     st.close_session("auto".into()).await.unwrap();
@@ -842,9 +858,14 @@ async fn pg_explain_analyze_never_commits_pending_work() {
         q(&st, s).await;
     }
     let (explain, count) = ("EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) select * from qm_explain_guard.t", "select count(*) from qm_explain_guard.t");
-    explain_analyze_keeps_pending_work(&st, "begin", &["BEGIN", "insert into qm_explain_guard.t values (1)"], explain, count).await;
+    explain_analyze_keeps_pending_work(&st, "begin", &["BEGIN", "insert into qm_explain_guard.t values (1)"], explain, count, "ROLLBACK").await;
     st.set_tx_mode(ID.into(), "manual".into(), true).await.unwrap();
-    explain_analyze_keeps_pending_work(&st, "manual", &["insert into qm_explain_guard.t values (1)"], explain, count).await;
+    // COMMIT / ROLLBACK AND CHAIN open the next transaction at once: Explain Analyse keeps its row, the user's COMMIT commits it
+    let ins = "insert into qm_explain_guard.t values (1)";
+    explain_analyze_keeps_pending_work(&st, "chain-r", &["BEGIN", "/* x */ ROLLBACK WORK AND CHAIN", ins], explain, count, "ROLLBACK").await;
+    explain_analyze_keeps_pending_work(&st, "chain-c", &["BEGIN", "COMMIT AND CHAIN", ins], explain, count, "COMMIT").await;
+    q(&st, "delete from qm_explain_guard.t").await;
+    explain_analyze_keeps_pending_work(&st, "manual", &["insert into qm_explain_guard.t values (1)"], explain, count, "ROLLBACK").await;
     assert_eq!(st.explain_wrap(ID.into(), "auto".into()).await.unwrap(), qurry_core::session::EXPLAIN_BEGIN);
     st.close_session("auto".into()).await.unwrap();
     q(&st, "drop schema qm_explain_guard cascade").await;

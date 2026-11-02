@@ -397,7 +397,9 @@ impl MySession {
             }
             self.in_tx = true;
         } else if s.starts_with("commit") || (s.starts_with("rollback") && !s.starts_with("rollback to")) {
-            self.in_tx = false;
+            // AND CHAIN opens the next transaction at once (also when none was open)
+            self.in_tx = crate::session::chains(&s);
+            self.changed = false;
         } else if self.asks(sql, &s) {
             self.follow_server(&s, None).await;
         } else if self.manual && opens_tx(&s) {
