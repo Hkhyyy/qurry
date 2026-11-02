@@ -81,6 +81,22 @@ export const EditDataSourceSsm: S = {
     await userEvent.click(within(canvasElement.ownerDocument.body).getByRole("tab", { name: /SSH\/SSL/ }));
   },
 };
+/** An SSM Test Connection that is still starting (the instance never answers): elapsed time and Cancel Test, which stops the session */
+export const EditDataSourceSsmTesting: S = {
+  name: "Data Source — AWS SSM test running",
+  render: () => (
+    <ConnectionDialog
+      edit={{ ...PROD, host: "orders.cluster-abc.ap-northeast-2.rds.amazonaws.com", ssm: { enabled: true, profile: "prod", region: "ap-northeast-2", target: "i-00000000000000000" } } as ConnectionView}
+      onClose={noop}
+      onSaved={noop}
+    />
+  ),
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    await userEvent.click(body.getByRole("tab", { name: /SSH\/SSL/ }));
+    await userEvent.click(body.getByRole("button", { name: "Test Connection" }));
+  },
+};
 
 export const TableNew: S = { name: "New Table", render: () => <TableDesigner target="dev" conn={DEV} schema="public" onDone={noop} onOpenConsole={noop} onClose={noop} /> };
 export const TableModify: S = { name: "Modify Table (⌘F6)", render: () => <TableDesigner target="dev" conn={DEV} schema="public" table="customers" onDone={noop} onOpenConsole={noop} onClose={noop} /> };

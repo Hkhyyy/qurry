@@ -181,9 +181,11 @@ export const api = {
   /** After a TLS connect error (wasm tlsOptIn): turn on "Allow unencrypted connection", keeping the saved password */
   allowPlaintext: (id: string) => invoke<ConnectionConfig>("allow_plaintext", { id }),
   deleteConnection: (id: string) => invoke<void>("delete_connection", { id }),
-  testConnection: (config: ConnectionConfig, password?: string, sshSecret?: string) =>
-    invoke<string>("test_connection", { config, password: password ?? null, sshSecret: sshSecret ?? null }),
-  testSsh: (config: ConnectionConfig, sshSecret?: string) => invoke<string>("test_ssh", { config, sshSecret: sshSecret ?? null }),
+  /** `testId`: cancelTest(testId) stops it (an AWS SSM session can take up to 30 s); it then fails with "Test cancelled" */
+  testConnection: (config: ConnectionConfig, password?: string, sshSecret?: string, testId?: string) =>
+    invoke<string>("test_connection", { config, password: password ?? null, sshSecret: sshSecret ?? null, testId: testId ?? null }),
+  testSsh: (config: ConnectionConfig, sshSecret?: string, testId?: string) => invoke<string>("test_ssh", { config, sshSecret: sshSecret ?? null, testId: testId ?? null }),
+  cancelTest: (testId: string) => invoke<void>("cancel_test", { testId }),
   connect: (id: string) => invoke<string>("connect", { id }),
   disconnect: (id: string) => invoke<void>("disconnect", { id }),
   runQuery: (id: string, sql: string, tabId?: string, limit = 500) => invoke<QueryResult>("run_query", { id, sql, limit, tabId: tabId ?? null }),

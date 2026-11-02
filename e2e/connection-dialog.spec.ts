@@ -48,3 +48,20 @@ test("SSH/SSL tab: Tunnel None / SSH / AWS SSM, test and save through SSM", asyn
   await expect(dialog(page).getByRole("textbox", { name: "AWS profile" })).toHaveValue("prod");
   await expect(dialog(page).getByRole("textbox", { name: "Instance id" })).toHaveValue("i-0123456789abcdef0");
 });
+
+test("AWS SSM: a Test Connection that keeps starting shows the elapsed time and can be cancelled", async ({ page }) => {
+  await openProps(page);
+  const d = dialog(page);
+  await d.getByRole("combobox", { name: "Tunnel" }).selectOption("ssm");
+  // The mock's instance that never connects (like a stopped one)
+  await d.getByRole("textbox", { name: "Instance id" }).fill("i-00000000000000000");
+  const box = await d.boundingBox();
+  await d.getByRole("button", { name: "Test Connection" }).click();
+  await expect(d.getByRole("status")).toContainText(/Testing… \d+\.\d s/);
+  await expect(d.getByRole("button", { name: "Test Connection" })).toHaveCount(0);
+  expect(await d.boundingBox(), "the dialog keeps its size while testing").toEqual(box);
+  await d.getByRole("button", { name: "Cancel Test" }).click();
+  await expect(d.getByText("Test cancelled")).toBeVisible();
+  await expect(d.getByRole("status")).toHaveCount(0);
+  await expect(d.getByRole("button", { name: "Test Connection" })).toBeEnabled();
+});

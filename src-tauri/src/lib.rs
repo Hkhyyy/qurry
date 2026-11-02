@@ -90,6 +90,7 @@ pub fn run() {
             commands::delete_connection,
             commands::test_connection,
             commands::test_ssh,
+            commands::cancel_test,
             commands::connect,
             commands::disconnect,
             commands::run_query,

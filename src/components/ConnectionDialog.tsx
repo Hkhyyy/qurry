@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Button, Checkbox, ColorPicker, EmptyState, FormGrid, FormSection, Hint, Modal, Notice, Select, Spacer, Tabs, Text, TextArea, TextInput } from "../ui";
 import { api, COLOR_PRESETS, ConnOptions, RedisMode, SslConfig, ConnectionConfig, ConnectionView, DbKind, DEFAULT_PORT, DRIVER_MISSING, isFileKind, KIND_LABEL, meta, SchemaInfo, SshConfig, SsmConfig, targetId } from "../lib/api";
+import { elapsedText } from "./RunningBar";
 
 interface Props {
   edit?: ConnectionView;
@@ -11,6 +12,23 @@ interface Props {
 
 const EMPTY_SSH: SshConfig = { enabled: false, host: "", port: 22, user: "", auth: "key", keyPath: "~/.ssh/id_ed25519" };
 const EMPTY_SSM: SsmConfig = { enabled: false, profile: "", region: "", target: "" };
+
+/** "Testing… 12.3 s" while a Test Connection runs (an AWS SSM session can take up to 30 s) */
+function TestElapsed() {
+  const [start] = useState(Date.now);
+  const [now, setNow] = useState(start);
+  useEffect(() => {
+    const h = setInterval(() => setNow(Date.now()), 100);
+    return () => clearInterval(h);
+  }, []);
+  return (
+    <span role="status">
+      <Text size="sm">
+        Testing… <b className="running-time">{elapsedText(now - start)}</b>
+      </Text>
+    </span>
+  );
+}
 
 export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   const [cfg, setCfg] = useState<ConnectionConfig>(
@@ -27,7 +45,10 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   const [password, setPassword] = useState<string | undefined>(undefined);
   const [sshSecret, setSshSecret] = useState<string | undefined>(undefined);
   const [test, setTest] = useState<{ ok: boolean; msg: string } | null>(null);
-  const [busy, setBusy] = useState(false);
+  // The running test's id (cancelTest stops it, and with it its SSH / SSM tunnel); closing the dialog stops it too
+  const [testing, setTesting] = useState<string | null>(null);
+  const testingRef = useRef<string | null>(null);
+  useEffect(() => () => void (testingRef.current && api.cancelTest(testingRef.current)), []);
   // Driver plugin: whether it is installed (null = built-in DB)
   const [driver, setDriver] = useState<boolean | null>(null);
   const [installing, setInstalling] = useState(false);
@@ -87,18 +108,22 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   const sshTest = tab === "ssh" && tunnel === "ssh";
 
   const runTest = async () => {
-    setBusy(true);
+    const id = crypto.randomUUID();
+    testingRef.current = id;
+    setTesting(id);
     setTest(null);
     try {
       // On the SSH tab, test only the SSH login; otherwise the DB connection through the tunnel (AWS SSM starts a session for it)
-      const v = sshTest ? await api.testSsh(cfg, sshSecret) : await api.testConnection(cfg, password, sshSecret);
+      const v = sshTest ? await api.testSsh(cfg, sshSecret, id) : await api.testConnection(cfg, password, sshSecret, id);
       setTest({ ok: true, msg: v });
     } catch (e) {
       setTest({ ok: false, msg: String(e) });
     } finally {
-      setBusy(false);
+      testingRef.current = null;
+      setTesting(null);
     }
   };
+  const cancelTest = () => void (testing && api.cancelTest(testing));
 
   const save = async () => {
     const name = cfg.name.trim() || `${cfg.user}@${cfg.host}`;
@@ -138,9 +163,8 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
       onClose={onClose}
       footer={
         <>
-          <Button onClick={runTest} disabled={busy}>
-            {busy ? "Testing…" : sshTest ? "Test SSH Connection" : "Test Connection"}
-          </Button>
+          {testing ? <Button onClick={cancelTest}>Cancel Test</Button> : <Button onClick={runTest}>{sshTest ? "Test SSH Connection" : "Test Connection"}</Button>}
+          {testing && <TestElapsed />}
           <Spacer />
           <Button onClick={onClose}>Cancel</Button>
           <Button variant="primary" onClick={save}>
