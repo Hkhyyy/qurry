@@ -5291,6 +5291,7 @@ dependencies = [
  "futures",
  "minisign-verify 0.2.5",
  "qurry-core",
+ "qurry-shared",
  "ratatui",
  "regex",
  "serde_json",

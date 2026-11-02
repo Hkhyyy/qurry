@@ -88,5 +88,10 @@
     "id": "loose-dates",
     "columns": [{ "name": "ts", "typeName": "timestamp" }],
     "rows": [["+2026-06-06 10:00:00"], ["abcd-ef-gh 10:00:00"], ["2026-06-06 10:00:00.5"]]
+  },
+  {
+    "id": "year-float-x",
+    "columns": [{ "name": "ratio", "typeName": "float8" }, { "name": "yr", "typeName": "year" }, { "name": "qty", "typeName": "text" }],
+    "rows": [[1.5, null, "1,000"], [0.25, null, "2"], [1.5, null, " 3 "], [2, null, ""]]
   }
 ]

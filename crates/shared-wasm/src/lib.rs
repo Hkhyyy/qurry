@@ -12,6 +12,8 @@ use qurry_shared::DbKind;
 use qurry_shared::complete::{self, Options};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
+use qurry_shared::chart::{self, Column};
+use serde_json::Value;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -46,6 +48,51 @@ pub fn unsafe_statement(sql: &str, kind: JsValue) -> Result<Option<String>, JsEr
 #[wasm_bindgen(js_name = tlsOptIn)]
 pub fn tls_opt_in(msg: &str) -> bool {
     qurry_shared::errors::tls_opt_in(msg)
+}
+
+fn from<T: serde::de::DeserializeOwned>(v: JsValue) -> Result<T, JsError> {
+    Ok(serde_wasm_bindgen::from_value(v)?)
+}
+
+fn to<T: serde::Serialize>(v: &T) -> Result<JsValue, JsError> {
+    Ok(serde_wasm_bindgen::to_value(v)?)
+}
+
+/// Chart (GUI options): columns that can be charted as numbers, as indexes
+#[wasm_bindgen(js_name = numericColumns)]
+pub fn numeric_columns(columns: JsValue, rows: JsValue) -> Result<JsValue, JsError> {
+    to(&chart::numeric_columns(&from::<Vec<Column>>(columns)?, &from::<Vec<Vec<Value>>>(rows)?, chart::Options::GUI))
+}
+
+/// Chart: initial axes { x, y } (y undefined = the row count)
+#[wasm_bindgen(js_name = defaultAxes)]
+pub fn default_axes(columns: JsValue, rows: JsValue) -> Result<JsValue, JsError> {
+    to(&chart::default_axes(&from::<Vec<Column>>(columns)?, &from::<Vec<Vec<Value>>>(rows)?, chart::Options::GUI))
+}
+
+/// Chart: Y summed per X value ({ labels, series }); a negative Y index is the row count
+#[wasm_bindgen]
+pub fn aggregate(columns: JsValue, rows: JsValue, x: usize, ys: JsValue) -> Result<JsValue, JsError> {
+    let ys: Vec<Option<usize>> = from::<Vec<i64>>(ys)?.into_iter().map(|y| usize::try_from(y).ok()).collect();
+    to(&chart::aggregate(&from::<Vec<Column>>(columns)?, &from::<Vec<Vec<Value>>>(rows)?, x, &ys, chart::Options::GUI))
+}
+
+/// Chart: pie slices of aggregate's first series, the smallest folded into "Other" past maxSlices
+#[wasm_bindgen]
+pub fn pie(data: JsValue, max_slices: usize) -> Result<JsValue, JsError> {
+    to(&chart::pie(&from(data)?, max_slices))
+}
+
+/// Chart: axis ticks in 1 · 2 · 5 × 10ⁿ steps (a plain array, not a Float64Array)
+#[wasm_bindgen(js_name = niceTicks)]
+pub fn nice_ticks(min: f64, max: f64, count: f64) -> Result<JsValue, JsError> {
+    to(&chart::nice_ticks(min, max, count))
+}
+
+/// Chart: axis label (1,200 · 15.3K · 1.2M)
+#[wasm_bindgen(js_name = shortNumber)]
+pub fn short_number(n: f64) -> String {
+    chart::short_number(n)
 }
 
 /// Statements split on `;`: [[start, end], …] in UTF-16 code units. `opts` is a SplitOptions object ({} = as the server reads them)

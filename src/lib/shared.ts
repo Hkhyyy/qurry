@@ -4,7 +4,7 @@
 import { useSyncExternalStore } from "react";
 import init, * as wasm from "../wasm/pkg/qurry_shared_wasm";
 import wasmUrl from "../wasm/pkg/qurry_shared_wasm_bg.wasm?url";
-import type { Cell, CompletionTable, DbKind } from "./api";
+import type { Cell, CompletionTable, DbKind, QueryResult } from "./api";
 import type { ExecPlan, ExecSettings } from "./execPlan";
 import type { Extractor } from "./extract";
 import type { Segment } from "./sqlSplit";
@@ -103,6 +103,14 @@ export interface ExtractRowsInput {
 /** qurry_shared::keytree::KeyNode: a key is its index in the names passed in */
 export type SharedKeyNode = { kind: "folder"; name: string; path: string; count: number; children: SharedKeyNode[] } | { kind: "key"; item: number };
 
+/** Chart data (crates/shared/src/chart.rs): one label per X value, one series per Y */
+export interface ChartData {
+  labels: string[];
+  series: { name: string; values: number[] }[];
+}
+
+type Columns = QueryResult["columns"];
+
 // Offsets are UTF-16 code units (JS string indices); the wrapper converts them. Statement checks are UI decisions only: the backend enforces read-only
 const api = {
   ping: (text: string): PingResponse => wasm.ping({ text }),
@@ -144,6 +152,14 @@ const api = {
   fuzzyScore: (query: string, text: string, wordStarts: boolean): number | undefined => wasm.fuzzyScore(query, text, wordStarts),
   keyTree: (names: string[], opts: KeyTreeOptions): SharedKeyNode[] => wasm.keyTree(names, opts),
   autoMap: (file: string[], table: string[] | null): string[] => wasm.autoMap(file, table),
+  numericColumns: (columns: Columns, rows: Cell[][]): number[] => wasm.numericColumns(columns, rows),
+  /** y undefined = the row count */
+  defaultAxes: (columns: Columns, rows: Cell[][]): { x: number; y?: number } => wasm.defaultAxes(columns, rows),
+  /** A negative Y is the row count */
+  aggregate: (columns: Columns, rows: Cell[][], x: number, ys: number[]): ChartData => wasm.aggregate(columns, rows, x, ys),
+  pie: (data: ChartData, maxSlices: number): ChartData => wasm.pie(data, maxSlices),
+  niceTicks: (min: number, max: number, count: number): number[] => wasm.niceTicks(min, max, count),
+  shortNumber: (n: number): string => wasm.shortNumber(n),
 };
 
 let ready = false;
