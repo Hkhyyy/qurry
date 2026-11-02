@@ -2,6 +2,7 @@
 //! Callers go through `dispatch!` on a `Pool`, which picks the impl at compile time (no `dyn`).
 //! An operation a kind doesn't implement falls back to the default, an "<op> isn't available for <kind>" error.
 //! The trait is grouped in sections (metadata first); each impl keeps the same sections in the same order.
+use crate::audit;
 use crate::db::QueryResult;
 use crate::ddl::TableDef;
 use crate::erd::Erd;
@@ -9,9 +10,10 @@ use crate::error::{AppError, AppResult};
 use crate::fake::TableShape;
 use crate::hints::{Hint, HintReq};
 use crate::meta::{CompletionTable, FtsHit, FtsRequest, IndexEntry, SchemaInfo, SchemaObjects, TableDetail};
+use crate::migrate::Model;
 use crate::session::Session;
 use crate::store::ConnectionConfig;
-use crate::transfer::Exporter;
+use crate::transfer::{Exporter, Tx};
 
 pub(crate) mod mysql;
 pub(crate) mod pg;
@@ -120,6 +122,33 @@ pub(crate) trait Backend {
     /// Statements in one transaction where the kind has them (see AppState::execute_batch). exact_one: each UPDATE/DELETE hits exactly
     /// 1 row; prepared: one statement per item, enforced by the server (MCP); snaps: the undo snapshot to take right before each statement
     async fn execute_batch(&self, statements: &[String], exact_one: bool, prepared: bool, snaps: &[Option<&str>]) -> AppResult<(u64, Snapshots)>;
+
+    // ───── Jobs: migrate.rs · transfer.rs · audit.rs ─────
+
+    /// Schema compare: the tables (columns, keys, foreign keys) and views of `schema`
+    async fn schema_model(&self, _schema: &str) -> AppResult<Model> {
+        unsupported("Schema compare", self)
+    }
+
+    /// One migration file: `stmts` in one transaction. A failing statement or COMMIT goes through `fail`
+    async fn apply_migration(&self, _stmts: &[&str], _fail: impl Fn(String) -> AppError) -> AppResult<()> {
+        unsupported("Running migrations", self)
+    }
+
+    /// Import: the transaction the rows go into
+    async fn import_tx(&self) -> AppResult<Tx> {
+        unsupported("Import", self)
+    }
+
+    /// Export: an approximate row count of `sql` for the progress bar (None: no estimate)
+    async fn estimate_rows(&self, _sql: &str) -> Option<u64> {
+        None
+    }
+
+    /// Undo: the columns of `table` as written in SQL (empty: no such table, or a kind that keeps no undo)
+    async fn table_columns(&self, _table: &str) -> AppResult<Vec<audit::Col>> {
+        Ok(vec![])
+    }
 }
 
 /// Each statement's undo snapshot result with the rows its statement changed (None: no snapshot for it)
@@ -141,6 +170,18 @@ macro_rules! dispatch {
     };
 }
 pub(crate) use dispatch;
+
+/// `apply_migration` for the SQL kinds: `stmts` in one transaction, a failing statement or COMMIT through `fail`
+async fn run_in_tx<DB: sqlx::Database>(pool: &sqlx::Pool<DB>, stmts: &[&str], fail: impl Fn(String) -> AppError) -> AppResult<()>
+where
+    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+{
+    let mut tx = pool.begin().await?;
+    for s in stmts {
+        sqlx::Executor::execute(&mut *tx, sqlx::raw_sql(s)).await.map_err(|e| fail(e.to_string()))?;
+    }
+    tx.commit().await.map_err(|e| fail(e.to_string()))
+}
 
 #[cfg(test)]
 mod tests {
@@ -201,6 +242,9 @@ mod tests {
             msg(b.erd(&["s".into()]).await),
             msg(b.table_def("s", "t").await),
             msg(b.table_shape("s", "t").await),
+            msg(b.schema_model("s").await),
+            msg(b.apply_migration(&["select 1"], AppError::Msg).await),
+            msg(b.import_tx().await),
         ];
         let want = [
             "Listing databases",
@@ -215,8 +259,13 @@ mod tests {
             "The diagram",
             "Modify Table",
             "Test data",
+            "Schema compare",
+            "Running migrations",
+            "Import",
         ]
         .map(|op| format!("{op} isn't available for the bare driver"));
         assert_eq!(got, want);
+        assert_eq!(b.estimate_rows("select 1").await, None);
+        assert!(b.table_columns("t").await.unwrap().is_empty(), "no columns: no undo is kept");
     }
 }

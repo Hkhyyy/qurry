@@ -1,6 +1,7 @@
 //! Data export (CSV · TSV · JSON · SQL INSERT · Markdown, file/clipboard) and import (CSV · TSV · JSON · Excel → table).
 //! Long-running work reports progress through a Job and can be cancelled
 use crate::app::{AppState, ensure_pool};
+use crate::backend::{Backend, dispatch};
 use crate::db::Pool;
 use crate::error::{AppError, AppResult};
 use crate::store::DbKind;
@@ -430,7 +431,8 @@ pub struct ImportSpec {
     pub columns: Vec<(usize, String)>,
 }
 
-enum Tx {
+/// The import's transaction (Backend::import_tx)
+pub(crate) enum Tx {
     Pg(sqlx::Transaction<'static, sqlx::Postgres>),
     My(sqlx::Transaction<'static, sqlx::MySql>),
 }
@@ -462,17 +464,6 @@ impl Tx {
         }
         Ok(())
     }
-}
-
-/// Approximate PG row count (EXPLAIN estimate). Only for the progress bar, so it may be off
-async fn estimate_rows(pool: &Pool, sql: &str) -> Option<u64> {
-    let Pool::Pg(p) = pool else { return None };
-    let head = sql.split_whitespace().next()?.to_ascii_lowercase();
-    if !["select", "with", "table", "values"].contains(&head.as_str()) {
-        return None;
-    }
-    let v: Value = sqlx::query_scalar(&format!("EXPLAIN (FORMAT JSON) {sql}")).fetch_one(p).await.ok()?;
-    v.get(0)?.get("Plan")?.get("Plan Rows")?.as_f64().map(|n| n as u64)
 }
 
 impl AppState {
@@ -510,7 +501,7 @@ impl AppState {
                 Some((_, t)) => q(&t),
                 None => "result".into(),
             };
-            if let Some(n) = estimate_rows(&pool, &sql).await {
+            if let Some(n) = dispatch!(pool, b => b.estimate_rows(&sql).await) {
                 job.total.store(n, Ordering::Relaxed);
             }
             let mut out = Exporter::create(Encoder::new(format, kind, table), &dest, job.clone()).await?;
@@ -552,12 +543,7 @@ impl AppState {
         } else {
             self.table_detail(id.to_string(), spec.schema.clone(), spec.table.clone()).await?.columns.into_iter().map(|c| (c.name, c.data_type)).collect()
         };
-        let mut tx = match pool {
-            Pool::Pg(p) => Tx::Pg(p.begin().await?),
-            Pool::My(p) => Tx::My(p.begin().await?),
-            Pool::Redis(..) => return Err(AppError::Msg("Import into Redis is not supported".into())),
-            Pool::Plugin(c) => return Err(AppError::Msg(format!("Import is not available for the {} driver yet", c.driver))),
-        };
+        let mut tx = dispatch!(pool, b => b.import_tx().await)?;
         if spec.create {
             let ty = if kind == DbKind::Mysql { "TEXT" } else { "text" };
             let cols: Vec<String> = spec.columns.iter().map(|(_, c)| format!("{} {ty}", q(c))).collect();

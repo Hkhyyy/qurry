@@ -359,6 +359,67 @@ async fn pg_tools() {
     q(&st, "drop schema qm_dst cascade").await;
 }
 
+/// Migrations, import, export progress and the undo of a delete on a table with a generated column, in the source's own
+/// database (the history table is per database), with the import into `schema`. Returns the export job's total, the progress bar's estimate
+async fn jobs(st: &Matrix, schema: &str) -> u64 {
+    let dir = st.dir.path().join("migrations");
+    std::fs::create_dir_all(&dir).unwrap();
+    let d = dir.to_string_lossy().to_string();
+    std::fs::write(dir.join("V1__items.sql"), "create table items (id int primary key, name varchar(20), total decimal(10,2), doubled int generated always as (id * 2) stored);").unwrap();
+    std::fs::write(dir.join("V2__seed.sql"), "insert into items (id, name, total) values (1, 'a', 1.50);").unwrap();
+    std::fs::write(dir.join("V3__bad.sql"), "insert into items (id, name, total) values (2, 'b', 2);\ninsert into no_such_table values (1);").unwrap();
+    let e = err(st.apply_migrations(ID.into(), d.clone()).await);
+    assert!(e.starts_with("V3 (V3__bad.sql) failed and was rolled back: ") && e.contains("no_such_table"), "{e}");
+    let status: Vec<(String, String)> = st.migration_status(ID.into(), d.clone()).await.unwrap().into_iter().map(|m| (m.version, m.status)).collect();
+    assert_eq!(status, [("1".into(), "applied".into()), ("2".into(), "applied".into()), ("3".into(), "pending".into())]);
+    assert_eq!(q(st, "select count(*) from items").await.rows[0][0], json!(1), "V3's insert was rolled back");
+    std::fs::remove_file(dir.join("V3__bad.sql")).unwrap();
+    assert_eq!(st.apply_migrations(ID.into(), d).await.unwrap(), Vec::<String>::new());
+
+    // Import: one transaction, numbers sent as text (PG casts them to the types of the columns it finds in `schema`)
+    let file = st.dir.path().join("items.csv");
+    std::fs::write(&file, "id,name,total\n2,b,2.25\n3,c,3\n").unwrap();
+    let spec = |table: &str| qurry_core::transfer::ImportSpec { path: file.to_string_lossy().into(), schema: schema.into(), table: table.into(), create: false, columns: vec![(0, "id".into()), (1, "name".into()), (2, "total".into())] };
+    assert_eq!(st.import(ID.into(), spec("items"), "ji".into()).await.unwrap(), 2);
+    let e = err(st.import(ID.into(), spec("items"), "ji".into()).await);
+    assert!(e.starts_with("Rows 1–2: "), "{e}");
+    assert_eq!(q(st, "select count(*) from items").await.rows[0][0], json!(3), "the duplicate batch inserted nothing");
+
+    // Export: a job registered beforehand keeps the progress total
+    let job = st.start_job("je");
+    let csv = st.export(ID.into(), "select id, name, total, doubled from items order by id".into(), Format::Csv, Dest::Clipboard, None, "je".into()).await.unwrap();
+    assert_eq!(csv.text.unwrap(), "id,name,total,doubled\n1,a,1.50,2\n2,b,2.25,4\n3,c,3.00,6\n");
+
+    // Audit: the undo of a delete inserts the rows back without the generated column
+    q(st, "delete from items where id = 3").await;
+    let u = st.audit_log(Some(ID.into()), String::new(), 1).remove(0).undo.unwrap_or_default();
+    let insert = u.lines().find(|l| l.starts_with("INSERT INTO")).unwrap_or_default();
+    assert!(insert.contains("total") && !insert.contains("doubled"), "{u}");
+    job.total.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[tokio::test]
+#[ignore]
+async fn pg_jobs() {
+    let Some(c) = pg_env() else { return };
+    let boot = state(&c, None).await;
+    q(&boot, "drop database if exists qm_jobs").await;
+    q(&boot, "create database qm_jobs").await;
+    let mut c = c;
+    c.database = "qm_jobs".into();
+    let st = state(&c, None).await;
+    assert!(jobs(&st, "public").await > 0, "EXPLAIN gives the export a row estimate");
+
+    // A deferred foreign key fails at COMMIT: reported like a failing statement, and the whole file is rolled back
+    let dir = st.dir.path().join("migrations");
+    std::fs::write(dir.join("V4__late.sql"), "create table parents (id int primary key);\ncreate table kids (id int primary key, parent int references parents deferrable initially deferred);\ninsert into kids values (1, 99);").unwrap();
+    let e = err(st.apply_migrations(ID.into(), dir.to_string_lossy().into()).await);
+    assert!(e.starts_with("V4 (V4__late.sql) failed and was rolled back: ") && e.contains("kids"), "{e}");
+    assert_eq!(q(&st, "select to_regclass('kids') is null").await.rows[0][0], json!(true), "V4's tables were rolled back");
+    drop(st);
+    q(&boot, "drop database qm_jobs with (force)").await;
+}
+
 // ───────── MySQL ─────────
 
 /// A fresh database `name` and a state whose source points at it
@@ -544,6 +605,20 @@ async fn mysql_tools() {
     q(&st, "drop database qm_dst").await;
 }
 
+#[tokio::test]
+#[ignore]
+async fn mysql_jobs() {
+    let Some(st) = my_state("qm_jobs").await else { return };
+    assert_eq!(jobs(&st, "").await, 0, "no row estimate on MySQL");
+    // Binary columns are snapshotted as HEX
+    q(&st, "create table blobs (id int primary key, b varbinary(4))").await;
+    q(&st, "insert into blobs values (1, x'00ff')").await;
+    q(&st, "update blobs set b = x'01' where id = 1").await;
+    let a = st.audit_log(Some(ID.into()), String::new(), 1).remove(0);
+    assert!(a.undo.as_deref().is_some_and(|u| u.contains("00FF")), "{a:?}");
+    q(&st, "drop database qm_jobs").await;
+}
+
 // ───────── Redis ─────────
 
 #[tokio::test]
@@ -598,6 +673,11 @@ async fn redis_metadata_and_tools() {
     assert_eq!(err(st.erd(ID.into(), vec!["db11".into()]).await), "Redis has no tables");
     assert_eq!(err(st.fake_preview(ID.into(), "db11".into(), "qm:h".into(), 3).await), "Redis has no tables");
     assert_eq!(err(st.compare_schemas(ID.into(), "db11".into(), ID.into(), "db11".into()).await), "Redis has no schema to compare");
+
+    let file = st.dir.path().join("keys.csv");
+    std::fs::write(&file, "k\nx\n").unwrap();
+    let spec = qurry_core::transfer::ImportSpec { path: file.to_string_lossy().into(), schema: String::new(), table: "t".into(), create: false, columns: vec![(0, "k".into())] };
+    assert_eq!(err(st.import(ID.into(), spec, "ji".into()).await), "Import into Redis is not supported");
 
     // Export runs the command
     assert_eq!(export(&st, "HGETALL qm:h", Format::Csv, None).await, "field,value\nf1,v1\n");
