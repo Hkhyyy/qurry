@@ -950,14 +950,19 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
 }
 
 /// Confirm: multiple lines (reason · statement · question). Red border for production DB · dangerous statements; "→ N rows" stands out more the larger it is.
-/// The question and its keys stay at the bottom; in a window too short for the rest, the lines above say how many are hidden
+/// The question and its keys stay at the bottom; in a window too short for the rest, blank lines go first and the lines
+/// above say how many are hidden and how many rows they would change
 fn draw_confirm(f: &mut Frame, area: Rect, text: &str) {
     let danger = text.starts_with("Production") || text.ends_with("Run it anyway?");
     let mut lines = confirm_lines(text);
-    let ask = lines.split_off(lines.len().saturating_sub(3));
+    let mut ask = lines.split_off(lines.len().saturating_sub(3));
     // Long statements wrap → count wrapped lines for the height (so the y/n hint below isn't cut)
     let w = 90u16.min(area.width.saturating_sub(4)).saturating_sub(2);
-    let r = centered(area, 90, wrapped_height(&lines, w) + wrapped_height(&ask, w) + 2);
+    let want = wrapped_height(&lines, w) + wrapped_height(&ask, w) + 2;
+    let r = centered(area, 90, want);
+    if r.height < want {
+        ask.retain(|l| !l.to_string().is_empty());
+    }
     let inner = if danger { popup_danger(f, r, " Confirm ") } else { popup(f, r, " Confirm ") };
     let ah = wrapped_height(&ask, inner.width).min(inner.height);
     let [body, bottom] = Layout::vertical([Constraint::Min(0), Constraint::Length(ah)]).areas(inner);
@@ -996,21 +1001,31 @@ fn draw_conn_form(f: &mut Frame, area: Rect, form: &crate::app::ConnForm) {
             Line::from(spans)
         })
         .collect();
-    let mut foot = vec![Line::raw("")];
-    if let Some((ok, m)) = &form.message {
-        foot.push(Line::styled(disp(m), Style::default().fg(if *ok { OK } else { DANGER })));
-    }
+    let msg = form.message.as_ref().map(|(ok, m)| (disp(m), Style::default().fg(if *ok { OK } else { DANGER })));
     let t = if form.edit.is_some() { " Data Source Properties " } else { " New Data Source " };
     let block = panel(t, true);
     let inner = block.inner(r);
-    // The full key hints when everything fits, else the short ones
-    foot.push(Line::styled(disp("↑↓/Tab move · type to edit · Space/←→ toggle · ⌃t test · ⌃s / Enter save · Esc cancel"), Style::default().fg(DIM)));
-    if wrapped_height(&fields, inner.width) + wrapped_height(&foot, inner.width) > inner.height {
-        foot.pop();
-        foot.push(Line::styled(disp("⌃t test · ⌃s save · Esc cancel"), Style::default().fg(DIM)));
+    let width = inner.width;
+    let fields_h = wrapped_height(&fields, width);
+    let msg_h = msg.as_ref().map_or(0, |(m, st)| wrapped_height(&[Line::styled(m.clone(), *st)], width));
+    // The full key hints when everything fits, else the short ones. The hints keep their row, then at least the focused field;
+    // the message gets what is left (cut with ⋯) and the blank line above it only when there's room
+    let mut hint = Line::styled(disp("↑↓/Tab move · type to edit · Space/←→ toggle · ⌃t test · ⌃s / Enter save · Esc cancel"), Style::default().fg(DIM));
+    if fields_h + 1 + msg_h + wrapped_height(std::slice::from_ref(&hint), width) > inner.height {
+        hint = Line::styled(disp("⌃t test · ⌃s save · Esc cancel"), Style::default().fg(DIM));
     }
-    // At least the focused field stays visible, even when a long message takes the rest
-    let fh = wrapped_height(&foot, inner.width).min(inner.height.saturating_sub(1));
+    let hint_h = wrapped_height(std::slice::from_ref(&hint), width).min(inner.height);
+    let room = inner.height - hint_h;
+    let gap = u16::from(fields_h + 1 + msg_h <= room);
+    let mut foot = vec![Line::raw(""); gap as usize];
+    if let Some((m, st)) = msg {
+        let rows = msg_h.min(room.saturating_sub(gap + 1));
+        if rows > 0 {
+            foot.push(Line::styled(fit_rows(&m, width, rows), st));
+        }
+    }
+    foot.push(hint);
+    let fh = wrapped_height(&foot, width).min(inner.height);
     let [body, foot_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(fh)]).areas(inner);
     // Scroll in wrapped rows: the focused field's last row at the bottom when it would be below
     let rows_to = |n: usize| wrapped_height(&fields[..n], body.width);
@@ -1019,6 +1034,26 @@ fn draw_conn_form(f: &mut Frame, area: Rect, form: &crate::app::ConnForm) {
     f.render_widget(block, r);
     f.render_widget(Paragraph::new(fields).wrap(Wrap { trim: false }).scroll((top, 0)), body);
     f.render_widget(Paragraph::new(foot).wrap(Wrap { trim: false }), foot_area);
+}
+
+/// Text cut to `rows` wrapped rows of `width`, ending in "⋯" when cut
+fn fit_rows(text: &str, width: u16, rows: u16) -> String {
+    let fits = |s: &str| wrapped_height(&[Line::raw(s.to_string())], width) <= rows;
+    if fits(text) {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    // The longest prefix (in chars) that fits with "⋯" after it
+    let (mut lo, mut hi) = (0, chars.len());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if fits(&format!("{}⋯", chars[..mid].iter().collect::<String>())) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    format!("{}⋯", chars[..lo].iter().collect::<String>().trim_end())
 }
 
 #[cfg(test)]
@@ -1165,6 +1200,7 @@ mod tests {
     }
 
     /// The Production confirm at the minimum size keeps its question and keys; the statements that don't fit are counted
+    /// with the rows they would change, so y is never an answer to an unseen row count
     #[tokio::test]
     async fn production_confirm_keeps_its_question_in_small_windows() {
         let mut h = crate::testkit::Harness::new().await;
@@ -1172,12 +1208,51 @@ mod tests {
         h.app.popup = Some(Popup::Confirm { text: text.into(), on_yes: Box::new(|a| a.status = "ran".into()) });
         let s = h.screen(80, 24);
         assert!(s.contains("12,408 rows") && s.contains("Run it?") && !s.contains("hidden"), "{s}");
+        // Every row that would change shows, as its own line or in the hidden total
+        for (w, ht) in [MIN_SIZE, (60, 12)] {
+            let s = h.screen(w, ht);
+            assert!(s.contains("Production data") && s.contains("Run it?") && s.contains("y / Enter"), "{w}×{ht}\n{s}");
+            let all = s.contains("→ 1 row") && s.contains("→ 12,408 rows");
+            assert!(all || s.contains("12,409 rows") || (s.contains("→ 1 row") && s.contains("hidden · 12,408 rows")), "{w}×{ht}\n{s}");
+        }
+        // One statement at the minimum size: its row count shows
+        let one = "Production data source \"[PROD] kr\" — this changes data:\n\n  update payment set amount = 0 where id = 4\n     → 1 row\n\nRun it?";
+        h.app.popup = Some(Popup::Confirm { text: one.into(), on_yes: Box::new(|a| a.status = "ran".into()) });
         let (w, ht) = MIN_SIZE;
         let s = h.screen(w, ht);
-        assert!(s.contains("Production data") && s.contains("more lines hidden"), "{s}");
-        assert!(s.contains("Run it?") && s.contains("y / Enter"), "{s}");
+        assert!(s.contains("1 row") && s.contains("Run it?"), "{s}");
         h.key("y");
         assert_eq!(h.app.status, "ran");
+    }
+
+    /// A confirm of 1000 statements draws in a few ms, cut or not (each line wraps once per frame)
+    #[tokio::test]
+    async fn big_confirm_draws_fast() {
+        let mut h = crate::testkit::Harness::new().await;
+        let lines: Vec<String> = (0..1000).map(|i| format!("  update payment set amount = 0 where id = {i}\n     → 1 row")).collect();
+        let text = format!("Production data source \"[PROD] kr\" — this changes data:\n\n{}\n\nRun it?", lines.join("\n"));
+        h.app.popup = Some(Popup::Confirm { text, on_yes: Box::new(|_| {}) });
+        for (w, ht) in [MIN_SIZE, (80, 24)] {
+            let t = std::time::Instant::now();
+            let s = h.screen(w, ht);
+            assert!(s.contains("lines hidden · ") && s.contains("Run it?"), "{w}×{ht}\n{s}");
+            // Debug build, other tests running: generous; the quadratic cut took seconds here
+            assert!(t.elapsed() < std::time::Duration::from_millis(500), "{w}×{ht}: {:?}", t.elapsed());
+        }
+    }
+
+    /// A long test message at the minimum size: the key hints and the focused field stay, the message ends in ⋯
+    #[tokio::test]
+    async fn conn_form_keeps_its_hints_under_a_long_message() {
+        let mut h = crate::testkit::Harness::new().await;
+        h.app.conn_form(None);
+        let Some(Popup::ConnForm(f)) = &mut h.app.popup else { unreachable!() };
+        f.message = Some((false, "Connection failed: could not connect to server: Connection refused. Is the server running on host db.example.com and accepting TCP/IP connections on port 5432?".into()));
+        let (w, ht) = MIN_SIZE;
+        let s = h.screen(w, ht);
+        assert!(s.contains("Esc cancel") && s.contains("Name ▏") && s.contains("Connection failed") && s.contains('⋯'), "{s}");
+        let s = h.screen(80, 24);
+        assert!(s.contains("Esc cancel") && s.contains("port 5432?") && !s.contains('⋯'), "{s}");
     }
 
     /// The startup color notices fit an 80-column status line whole, with a gap before the key hints
