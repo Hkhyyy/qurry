@@ -197,6 +197,16 @@ jobs:
             # The AppImage is itself the in-app update bundle
             cp "$b"/appimage/*.AppImage "out/Qurry_${V}_${A}.AppImage"
             cp "$b"/deb/*.deb "out/Qurry_${V}_${A}.deb"
+            if [[ "$V" == *-* ]]; then
+              # dpkg reads "-beta.N" as a Debian revision and sorts 0.3.1-beta.2 above 0.3.1, so the stable deb would be a downgrade.
+              # The package version of a beta is 0.3.1~beta.2 (sorts below 0.3.1); the file name keeps the release version
+              d=$(mktemp -d)
+              dpkg-deb -R "out/Qurry_${V}_${A}.deb" "$d"
+              sed -i 's/^\(Version: [0-9.]*\)-/\1~/' "$d/DEBIAN/control"
+              grep '^Version:' "$d/DEBIAN/control"
+              dpkg-deb -b --root-owner-group "$d" "out/Qurry_${V}_${A}.deb"
+              rm -rf "$d"
+            fi
           fi
           mkdir cli
           cp "target/$T/release/qurry-tui" "target/$T/release/qurry-mcp" cli/
@@ -354,7 +364,8 @@ jobs:
             mv notes.tmp release-notes.md
           else
             flags=(--latest)
-            # Apps from before 0.3.0 show only the "What's Changed" items in their update window: the macOS 13 warning must be one
+            # Apps from before 0.3.0 show only the "What's Changed" items in their update window: the macOS 13 warning must be one.
+            # On every stable release (they can be offered any of them); 0.3.0+ apps drop this item (update::changes in qurry-core)
             { printf "## What's Changed\n* [breaking] The GUI needs macOS 13 Ventura or later. On macOS 12 or older, don't update: keep Qurry 0.2.x\n\n"; cat release-notes.md; } > notes.tmp
             mv notes.tmp release-notes.md
           fi
@@ -368,9 +379,10 @@ jobs:
             "${flags[@]}"
           if [ "$CHANNEL" = beta ]; then
             # Apps from before 0.3.0 read only the newest 30 releases and skip pre-releases, so the newest stable release must stay
-            # among them: keep the newest 20 betas and none older than the newest stable release. Tags stay (beta.N counts them)
+            # among them: keep the newest 20 betas (newest first, so at most 20 come before it). A beta older than the newest stable
+            # release stays until then too: apps on it install driver plugins from its release. Tags stay (beta.N counts them)
             gh release list --limit 1000 --exclude-drafts --json tagName,isPrerelease --jq '.[] | "\(.isPrerelease) \(.tagName)"' |
-              awk '$1 == "false" { stable = 1; next } { n++; if (stable || n > 20) print $2 }' |
+              awk '$1 == "true" && ++n > 20 { print $2 }' |
               while read -r tag; do gh release delete "$tag" --yes; done
           fi
 

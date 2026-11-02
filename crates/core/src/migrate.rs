@@ -524,15 +524,13 @@ mod tests {
     use super::*;
 
     async fn state(kind: DbKind) -> Option<(AppState, String)> {
-        let (env, kind_s) = if kind == DbKind::Postgres { ("QURRY_TEST_PG", "postgres") } else { ("QURRY_TEST_MY", "mysql") };
-        let e = std::env::var(env).ok()?;
-        let p: Vec<&str> = e.split(':').collect();
+        let crate::testenv::Server { mut cfg, password } = crate::testenv::server(kind)?;
+        (cfg.id, cfg.name) = ("x".into(), "x".into());
+        let db = cfg.database.clone();
         let dir = std::env::temp_dir().join(format!("qurry-mig-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir)).unwrap();
-        let (user, pass, db) = if kind == DbKind::Mysql { (p[2], Some(p[3].to_string()), p[4]) } else { (p[2], None, p[3]) };
-        let cfg: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "x", "name": "x", "kind": kind_s, "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": user, "database": db })).unwrap();
-        st.save_connection(cfg, pass, None).await.unwrap();
-        Some((st, db.to_string()))
+        st.save_connection(cfg, password, None).await.unwrap();
+        Some((st, db))
     }
 
     /// Compare → run the generated SQL on the target → comparing again shows no differences

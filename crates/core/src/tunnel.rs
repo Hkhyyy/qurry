@@ -256,7 +256,7 @@ mod tests {
         let mut ssh = SshConfig { enabled: true, host: "localhost".into(), port: 2222, user: "root".into(), auth: SshAuth::Password, key_path: String::new() };
 
         // 0) Unknown server: show the fingerprint and stop → once the user trusts it, it passes from then on
-        let first = test_login(&ssh, Some("sshpw")).await.err().expect("unknown host must stop").to_string();
+        let first = test_login(&ssh, Some("sshpw")).await.expect_err("unknown host must stop").to_string();
         println!("{first}");
         assert!(first.contains(UNKNOWN_HOST) && first.contains("SHA256:"), "{first}");
         assert!(std::fs::read_to_string(&kh).unwrap().is_empty(), "not learned before the user trusts it");
@@ -369,14 +369,14 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn shared_ssh_tunnel_survives_a_failed_db_and_reopens_after_the_session_ends() {
-        let pg: Vec<String> = std::env::var("QURRY_TEST_PG").expect("QURRY_TEST_PG").split(':').map(String::from).collect();
-        let to: std::net::SocketAddr = format!("{}:{}", pg[0], pg[1]).parse().unwrap();
+        let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
+        let to: std::net::SocketAddr = format!("{}:{}", pg.host, pg.port).parse().unwrap();
         let kh = tempfile::NamedTempFile::new().unwrap();
         unsafe { std::env::set_var("QURRY_KNOWN_HOSTS", kh.path()) };
         let (port, logins, sessions) = sshd(to, kh.path()).await;
         let dir = tempfile::tempdir().unwrap();
         let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
-        let c: ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "ssh", "kind": "postgres", "host": "db.internal", "port": 5432, "user": pg[2], "database": pg[3],
+        let c: ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "ssh", "kind": "postgres", "host": "db.internal", "port": 5432, "user": &pg.user, "database": &pg.database,
             "ssh": { "enabled": true, "host": "127.0.0.1", "port": port, "user": "me", "auth": "password", "keyPath": "" } })).unwrap();
         let id = st.save_connection(c, None, Some("pw".into())).await.unwrap().id;
         let logins = || logins.load(std::sync::atomic::Ordering::SeqCst);

@@ -23,7 +23,7 @@ Both apps check GitHub for a newer release of their channel when they start and 
 - **TUI** — the status line shows `⬆ vX.Y.Z available`. Run **⌃k › Update Qurry & Restart** to download the release, verify it against the signed `SHA256SUMS`, replace `qurry-tui` and `qurry-mcp` in place and restart with your tabs. **⌃k › Check for Updates** checks now and lists what changed in each version since yours. From a shell, `qurry-tui --update` does the same. A TUI built from source (`target/release`) is not checked or replaced; update it with `git pull` and `cargo build`. A Homebrew install is updated with `brew upgrade qurry`; Homebrew only gets stable releases.
 - Turn the check off with `qurry-tui --no-update-check` or `QURRY_NO_UPDATE_CHECK=1`.
 
-Apps from before 0.3.0 don't know the channels and only see stable releases. They look for one among the 30 newest releases, so the release workflow keeps only the 20 newest betas (and none older than the newest stable release); the pages of older betas are deleted.
+Apps from before 0.3.0 don't know the channels and only see stable releases. They look for one among the 30 newest releases, so the release workflow keeps only the 20 newest betas; the pages of older betas are deleted. Driver plugins download from the release of the app's own version, so a beta whose page was deleted can no longer install drivers: it says so, and updating Qurry fixes it.
 
 ## macOS 12 and older
 
@@ -40,6 +40,8 @@ For maintainers. `.github/workflows/release.yml` builds, signs and publishes:
 - **Merge to `main`** → a beta pre-release `vX.Y.Z-beta.N`. `X.Y.Z` is the next stable version: the patch after the newest stable tag, or the version in `crates/core/Cargo.toml` when a PR raised it. `N` counts up for each merge.
 - **Version tag on `main`** → the stable release `vX.Y.Z`, marked latest, with notes since the previous stable release, and the Homebrew formula. Tag the commit of the beta you want to ship: `git tag vX.Y.Z <sha> && git push origin vX.Y.Z`. A tag that is not on `main`, or is lower than the newest stable release, is refused and the run says how to fix it (delete the tag with `git push --delete origin vX.Y.Z` and push the right one).
 - **Pull request changing the workflow** → builds only, nothing is published.
+
+Every stable release gets the macOS 13 warning at the top of its notes, because apps from before 0.3.0 show only the "What's Changed" items and can be offered any stable release; apps from 0.3.0 on leave that item out. The `.deb` of a beta has the package version `X.Y.Z~beta.N`, so `dpkg` and `apt` sort it below the stable `X.Y.Z`.
 
 Both channels get the same files, signatures, `SHA256SUMS` and build provenance attestations ([Safety](safety.md)).
 

@@ -605,22 +605,17 @@ mod tests {
 
     // ───────── Real server ─────────
 
-    async fn state(kind: DbKind, env: &str) -> Option<AppState> {
-        let e = std::env::var(env).ok()?;
-        let p: Vec<&str> = e.split(':').collect();
-        let (user, pass, db) = if kind == DbKind::Mysql { (p[2], Some(p[3].to_string()), p[4]) } else { (p[2], None, p[3]) };
-        let c = crate::store::ConnectionConfig {
-            id: "d".into(), name: "d".into(), kind, host: p[0].into(), port: p[1].parse().unwrap(), user: user.into(), database: db.into(),
-            color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
-        };
+    async fn state(kind: DbKind) -> Option<AppState> {
+        let crate::testenv::Server { cfg: mut c, password: pass } = crate::testenv::server(kind)?;
+        c.id = "d".into();
         let st = crate::open_state(Some(std::env::temp_dir().join(format!("qurry-ddl-{}", uuid::Uuid::new_v4())))).unwrap();
         st.save_connection(c, pass, None).await.unwrap();
         Some(st)
     }
 
     /// Re-reading a created table gives the same structure, and edits read back as is (FKs · indexes · defaults · comments · auto-increment)
-    async fn round_trip(kind: DbKind, env: &str, schema: &str) {
-        let Some(st) = state(kind, env).await else { return };
+    async fn round_trip(kind: DbKind, schema: &str) {
+        let Some(st) = state(kind).await else { return };
         let q = |s: &str| st.run_query("d".into(), s.into(), None, None);
         q("drop table if exists qd_items").await.unwrap();
         q("drop table if exists qd_members").await.unwrap();
@@ -686,14 +681,13 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_table_round_trip() {
-        round_trip(DbKind::Postgres, "QURRY_TEST_PG", "public").await;
+        round_trip(DbKind::Postgres, "public").await;
     }
 
     #[tokio::test]
     #[ignore]
     async fn mysql_table_round_trip() {
-        let Ok(e) = std::env::var("QURRY_TEST_MY") else { return };
-        let db = e.split(':').nth(4).unwrap().to_string();
-        round_trip(DbKind::Mysql, "QURRY_TEST_MY", &db).await;
+        let Some(s) = crate::testenv::my() else { return };
+        round_trip(DbKind::Mysql, &s.cfg.database).await;
     }
 }

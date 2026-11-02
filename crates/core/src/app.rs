@@ -1327,8 +1327,8 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn disconnect_while_connecting_keeps_no_pool() {
-        let pg: Vec<String> = std::env::var("QURRY_TEST_PG").expect("QURRY_TEST_PG").split(':').map(String::from).collect();
-        let upstream = format!("{}:{}", pg[0], pg[1]);
+        let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
+        let upstream = format!("{}:{}", pg.host, pg.port);
         // A slow link: each connection starts forwarding after 1s
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = l.local_addr().unwrap().port();
@@ -1345,7 +1345,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let st = AppState::new(Store::new(dir.path().to_path_buf()), crate::secrets::SecretFile::open(dir.path()).unwrap());
         let mut c = silent_source("slow", port, None);
-        (c.user, c.database) = (pg[2].clone(), pg[3].clone());
+        (c.user, c.database) = (pg.user.clone(), pg.database.clone());
         st.store.save(&c).unwrap();
         let (r, _) = tokio::join!(ensure_pool(&st, "slow"), async {
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
@@ -1757,14 +1757,8 @@ mod tests {
     async fn housekeeping_keepalive_and_auto_disconnect() {
         let dir = std::env::temp_dir().join(format!("dbtool-hk-{}", uuid::Uuid::new_v4()));
         let state = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
-        // QURRY_TEST_PG=host:port:user:db (default: local PostgreSQL as $USER)
-        let env = std::env::var("QURRY_TEST_PG").ok();
-        let part = |i: usize, d: String| env.as_ref().and_then(|e| e.split(':').nth(i).map(String::from)).unwrap_or(d);
-        let mut cfg = ConnectionConfig {
-            id: "hk".into(), name: "hk".into(), kind: crate::store::DbKind::Postgres, host: part(0, "localhost".into()), port: part(1, "5432".into()).parse().unwrap(),
-            user: part(2, std::env::var("USER").unwrap()), database: part(3, "postgres".into()), color: None, ssh: None, password_saved: false,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
-        };
+        let Some(crate::testenv::Server { mut cfg, .. }) = crate::testenv::pg() else { return };
+        cfg.id = "hk".into();
         cfg.options.keep_alive_secs = Some(1);
         cfg.options.auto_disconnect_secs = Some(2);
         state.store.save(&cfg).unwrap();

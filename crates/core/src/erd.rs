@@ -159,21 +159,18 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn mysql_erd_reads_tables_and_foreign_keys() {
-        let Ok(e) = std::env::var("QURRY_TEST_MY") else { return };
-        let p: Vec<&str> = e.split(':').collect();
+        let Some(crate::testenv::Server { mut cfg, password }) = crate::testenv::my() else { return };
+        cfg.id = "m".into();
+        let db = cfg.database.clone();
         let dir = std::env::temp_dir().join(format!("qurry-erd-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir)).unwrap();
-        let cfg = crate::store::ConnectionConfig {
-            id: "m".into(), name: "m".into(), kind: crate::store::DbKind::Mysql, host: p[0].into(), port: p[1].parse().unwrap(), user: p[2].into(), database: p[4].into(),
-            color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
-        };
-        st.save_connection(cfg, Some(p[3].into()), None).await.unwrap();
+        st.save_connection(cfg, password, None).await.unwrap();
         let q = |s: &str| st.run_query("m".into(), s.into(), None, None);
         q("drop table if exists erd_c, erd_b, erd_a").await.ok();
         q("create table erd_a (id int primary key)").await.unwrap();
         q("create table erd_b (id int, x int, a_id int, primary key (id, x), foreign key (a_id) references erd_a(id))").await.unwrap();
         q("create table erd_c (b_id int, b_x int, foreign key (b_id, b_x) references erd_b(id, x))").await.unwrap();
-        let erd = st.erd("m".into(), vec![p[4].into()]).await.unwrap();
+        let erd = st.erd("m".into(), vec![db]).await.unwrap();
         let c_rel = erd.relations.iter().find(|r| r.from_table == "erd_c").unwrap();
         assert_eq!((c_rel.from_columns.clone(), c_rel.to_columns.clone()), (vec!["b_id".to_string(), "b_x".to_string()], vec!["id".to_string(), "x".to_string()]));
         let b = erd.tables.iter().find(|t| t.name == "erd_b").unwrap();
@@ -184,15 +181,11 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_erd_reads_tables_and_foreign_keys() {
-        let Ok(e) = std::env::var("QURRY_TEST_PG") else { return };
-        let p: Vec<&str> = e.split(':').collect();
+        let Some(crate::testenv::Server { mut cfg, password }) = crate::testenv::pg() else { return };
+        cfg.id = "e".into();
         let dir = std::env::temp_dir().join(format!("qurry-erd-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir)).unwrap();
-        let cfg = crate::store::ConnectionConfig {
-            id: "e".into(), name: "e".into(), kind: crate::store::DbKind::Postgres, host: p[0].into(), port: p[1].parse().unwrap(), user: p[2].into(), database: p[3].into(),
-            color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
-        };
-        st.store.save(&cfg).unwrap();
+        st.save_connection(cfg, password, None).await.unwrap();
         let q = |s: &str| st.run_query("e".into(), s.into(), None, None);
         q("drop schema if exists qurry_erd cascade").await.ok();
         q("create schema qurry_erd").await.unwrap();

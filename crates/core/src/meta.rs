@@ -154,29 +154,13 @@ pub async fn full_text_search(pool: &Pool, r: &FtsRequest) -> AppResult<Vec<FtsH
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{ConnectionConfig, DbKind};
 
     #[tokio::test]
     #[ignore]
     /// Real DB: QURRY_TEST_PG=host:port:user:db cargo test -p qurry-core meta -- --ignored
     async fn pg_meta() {
-        let Ok(env) = std::env::var("QURRY_TEST_PG") else { return };
-        let s: Vec<&str> = env.split(':').collect();
-        let cfg = ConnectionConfig {
-            id: "t".into(),
-            name: "t".into(),
-            kind: DbKind::Postgres,
-            host: s[0].into(),
-            port: s[1].parse().unwrap(),
-            user: s[2].into(),
-            database: s[3].into(),
-            color: None,
-            ssh: None,
-            password_saved: false,
-            ssh_secret_saved: false,
-            scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
-        };
-        let pool = crate::db::connect(&cfg, None).await.unwrap();
+        let Some(s) = crate::testenv::pg() else { return };
+        let pool = crate::db::connect(&s.cfg, s.password.as_deref()).await.unwrap();
         let Pool::Pg(p) = &pool else { unreachable!() };
         sqlx::query("create schema if not exists dbtool_meta_test").execute(p).await.unwrap();
         sqlx::query("create table if not exists dbtool_meta_test.parent(id bigserial primary key, name text not null default 'x')").execute(p).await.unwrap();

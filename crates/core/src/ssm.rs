@@ -663,7 +663,7 @@ sys.exit(255)
     #[tokio::test]
     #[ignore]
     async fn ssm_tunnel_end_to_end() {
-        let pg: Vec<String> = std::env::var("QURRY_TEST_PG").expect("QURRY_TEST_PG").split(':').map(String::from).collect();
+        let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
         let fake = tempfile::tempdir().unwrap();
         fake_aws(fake.path(), "ok");
         // Only this test changes PATH (run it on its own): the fake comes first, like an aws in /opt/homebrew/bin would
@@ -671,7 +671,7 @@ sys.exit(255)
         unsafe { std::env::set_var("PATH", path) };
         let dir = tempfile::tempdir().unwrap();
         let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
-        let mut c: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "ssm", "kind": "postgres", "host": pg[0], "port": pg[1].parse::<u16>().unwrap(), "user": pg[2], "database": pg[3] })).unwrap();
+        let mut c: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "ssm", "kind": "postgres", "host": &pg.host, "port": pg.port, "user": &pg.user, "database": &pg.database })).unwrap();
         c.ssm = Some(cfg());
         let msg = st.test_connection(c.clone(), None, None).await.expect("test via ssm");
         assert!(msg.starts_with("PostgreSQL") && msg.contains("(via AWS SSM i-0123456789abcdef0)"), "{msg}");
@@ -681,7 +681,7 @@ sys.exit(255)
         let r = st.run_query(saved.id.clone(), "select count(*) from generate_series(1, 1000)".into(), Some(10), None).await.unwrap();
         assert_eq!(r.rows[0][0], serde_json::Value::from(1000));
         let argv = std::fs::read_to_string(fake.path().join("argv.json")).unwrap();
-        assert!(argv.contains(&format!("host={},portNumber={}", pg[0], pg[1])), "{argv}");
+        assert!(argv.contains(&format!("host={},portNumber={}", pg.host, pg.port)), "{argv}");
         // One SSM session for the source, however many databases are opened, also when they are opened at the same time
         for db in ["qurry_ssm_a", "qurry_ssm_b"] {
             let _ = st.run_query(saved.id.clone(), format!("create database {db}"), None, None).await;

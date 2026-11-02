@@ -2582,6 +2582,16 @@ mod tests {
         assert!(!s.contains("old"), "{s}");
     }
 
+    /// A check that finds nothing clears a ⬆ badge set on another channel (the GUI switched the shared channel), and names the channel
+    #[tokio::test]
+    async fn update_check_without_update_clears_the_badge() {
+        let mut h = Harness::new().await;
+        h.app.update = Some("9.0.1-beta.2".into());
+        h.app.update_checked(qurry_core::update::Channel::Stable, None);
+        assert_eq!(h.app.update, None);
+        assert_eq!(h.app.status, format!("You have the latest stable version ({}).", env!("CARGO_PKG_VERSION")));
+    }
+
     /// ⌃k › Update Channel…: opens on the saved channel; the pick is saved for the GUI too and the ⬆ badge follows it from the saved check (no request)
     #[tokio::test]
     async fn update_channel_is_picked_from_the_palette() {
