@@ -74,15 +74,15 @@ fn source_build_note(exe: &Path) -> Option<String> {
     from_source(exe).then(|| format!("This qurry-tui was built from source ({}). Update it with: git pull && cargo build --release -p qurry-tui -p qurry-mcp", exe.display()))
 }
 
-/// Download the latest release and swap it in place of the running executable. quiet = inside the TUI screen (prints nothing)
-pub async fn install(quiet: bool) -> std::io::Result<Outcome> {
+/// Download the newest release of the channel and swap it in place of the running executable. quiet = inside the TUI screen (prints nothing)
+pub async fn install(channel: update::Channel, quiet: bool) -> std::io::Result<Outcome> {
     let cur = env!("CARGO_PKG_VERSION");
     let exe = current_exe().ok_or_else(|| err("cannot find this executable"))?;
     if let Some(note) = source_build_note(&exe) {
         return Ok(Outcome::Skipped(note));
     }
     // Strip control characters from GitHub response text before printing it to the terminal
-    let mut rel = update::latest_release().await.map_err(err)?;
+    let mut rel = update::latest_release(channel).await.map_err(err)?;
     rel.version = rel.version.chars().filter(|c| !crate::ui::is_unsafe_char(*c)).collect();
     rel.url = rel.url.chars().filter(|c| !crate::ui::is_unsafe_char(*c)).collect();
     if !update::is_newer(cur, &rel.version) {
@@ -174,8 +174,8 @@ fn replace(exe: &Path, asset: &update::Asset, sums: &update::Asset, sums_sig: &u
     result
 }
 
-pub async fn run_update() -> std::io::Result<()> {
-    match install(false).await? {
+pub async fn run_update(channel: update::Channel) -> std::io::Result<()> {
+    match install(channel, false).await? {
         Outcome::UpToDate => println!("qurry-tui {} is up to date.", env!("CARGO_PKG_VERSION")),
         Outcome::Skipped(why) => println!("{why}"),
         Outcome::Installed { version, paths } => {

@@ -255,6 +255,8 @@ pub enum PAction {
     Run { stmts: Vec<String>, explain: bool },
     /// Change execution settings
     Exec(qurry_core::exec::ExecSettings),
+    /// Update channel picked
+    Channel(qurry_core::update::Channel),
 }
 #[derive(Clone)]
 pub struct IndexEntryLite {
@@ -407,6 +409,7 @@ pub enum Action {
     ManageSchemas,
     PasswordKey,
     CheckUpdate,
+    UpdateChannel,
     InstallUpdate,
     Help,
     Quit,
@@ -505,10 +508,18 @@ pub const ACTIONS: &[(Action, &str)] = &[
     (Action::TrustSshHost, ""),
     (Action::PasswordKey, ""),
     (Action::CheckUpdate, ""),
+    (Action::UpdateChannel, ""),
     (Action::InstallUpdate, ""),
     (Action::Help, ""),
     (Action::Quit, ""),
 ];
+
+fn channel_name(c: qurry_core::update::Channel) -> &'static str {
+    match c {
+        qurry_core::update::Channel::Stable => "Stable",
+        qurry_core::update::Channel::Beta => "Beta",
+    }
+}
 
 fn object_items(conn: &str, name: &str, db: &str, es: Vec<IndexEntry>, tag: &str) -> Vec<PItem> {
     es.into_iter()
@@ -2596,6 +2607,7 @@ impl App {
                     p.sel = p.items.iter().position(|i| i.hint == item.hint && i.label.chars().skip(2).eq(item.label.chars().skip(2))).unwrap_or(0);
                 }
             }
+            PAction::Channel(c) => self.set_update_channel(c),
             PAction::Object { conn, db, e } => {
                 let kind = match e.kind.as_str() {
                     "function" | "procedure" => "routine".to_string(),
@@ -2917,6 +2929,7 @@ impl App {
                 _ => self.status = "Select a PostgreSQL / MySQL data source in the explorer".into(),
             },
             Action::CheckUpdate => self.check_update(),
+            Action::UpdateChannel => self.palette_update_channel(),
             Action::PasswordKey => self.password_key(),
             Action::InstallUpdate => {
                 let n = self.pending_tabs(None).len();
@@ -3122,7 +3135,6 @@ impl App {
         }
     }
 
-    /// Check for a new version right now (⌃K › Check for Updates)
     /// Master key for the password file: config folder ↔ OS keychain (asks, then moves. Runs separately since a keychain popup may appear)
     fn password_key(&mut self) {
         use qurry_core::secrets::KeyLocation;
@@ -3148,18 +3160,52 @@ impl App {
         });
     }
 
+    /// Check for a new version right now (⌃K › Check for Updates)
     fn check_update(&mut self) {
         self.status = "Checking for updates…".into();
         let dir = self.state.store.dir();
+        let channel = self.state.store.update_channel();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let r = qurry_core::update::check(&dir, env!("CARGO_PKG_VERSION"), true).await;
+            let r = qurry_core::update::check(&dir, env!("CARGO_PKG_VERSION"), channel, true).await;
             let _ = tx.send(Box::new(move |a: &mut App| match r {
                 Ok(Some(r)) => a.show_update(r),
-                Ok(None) => a.status = format!("You have the latest version ({}).", env!("CARGO_PKG_VERSION")),
+                Ok(None) => a.status = format!("You have the latest {} version ({}).", channel_name(channel).to_lowercase(), env!("CARGO_PKG_VERSION")),
                 Err(e) => a.status = e.to_string(),
             }));
         });
+    }
+
+    /// ⌃K › Update Channel…: stable (version tags only) or beta (also every merge to main). Shared with the GUI
+    pub fn palette_update_channel(&mut self) {
+        use qurry_core::update::Channel;
+        let on = self.state.store.update_channel();
+        let channels = [(Channel::Stable, "releases only (default)"), (Channel::Beta, "also the pre-release built from every merge to main")];
+        // Opens on the saved channel, so Enter keeps it
+        let sel = channels.iter().position(|(c, _)| *c == on).unwrap_or(0);
+        let items = channels
+            .into_iter()
+            .map(|(c, hint)| PItem { label: format!("{} {}", if c == on { "●" } else { " " }, channel_name(c)), hint: hint.into(), action: PAction::Channel(c) })
+            .collect();
+        self.popup = Some(Popup::Palette(Palette { title: "Update Channel".into(), input: TextArea::default(), items, sel, loading: 0, cache: Default::default() }));
+    }
+
+    fn set_update_channel(&mut self, channel: qurry_core::update::Channel) {
+        self.status = match self.state.store.set_update_channel(channel) {
+            Ok(()) => {
+                // The ⬆ badge follows the new channel, from the saved check (both channels, no request) as in the GUI
+                let cur = env!("CARGO_PKG_VERSION");
+                let saved = if qurry_core::update::disabled() { None } else { qurry_core::update::cached(&self.state.store.dir(), cur, channel) };
+                self.update = saved.clone().flatten().map(|r| r.version);
+                let name = channel_name(channel);
+                match saved {
+                    Some(Some(r)) => format!("Update channel: {name} — Qurry {} is available — {} › Update Qurry & Restart", r.version, self.keys.label(Action::Palette)),
+                    Some(None) => format!("Update channel: {name} — you have the latest {} version ({cur})", name.to_lowercase()),
+                    None => format!("Update channel: {name} — {} › Check for Updates looks now", self.keys.label(Action::Palette)),
+                }
+            }
+            Err(e) => format!("Couldn't save the update channel: {e}"),
+        };
     }
 
     /// New version window: changes since the current version (per version) + how to update
@@ -3177,9 +3223,10 @@ impl App {
     /// Download the latest release, swap it in, and relaunch when done (open tabs are saved on quit)
     fn install_update(&mut self) {
         self.status = "Updating Qurry… (downloading)".into();
+        let channel = self.state.store.update_channel();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let r = crate::selfupdate::install(true).await;
+            let r = crate::selfupdate::install(channel, true).await;
             let _ = tx.send(Box::new(move |a: &mut App| match r {
                 Ok(crate::selfupdate::Outcome::Installed { version, .. }) => {
                     a.status = format!("Qurry {version} installed — restarting…");

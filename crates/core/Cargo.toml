@@ -23,6 +23,8 @@ csv = "1"
 calamine = { version = "=0.36.1", features = ["dates"] }
 regex = "1"
 minisign-verify = "0.2"
+# Order of releases and betas (0.3.1-beta.2 < 0.3.1), the same rules as the GUI updater
+semver = "1"
 # For keeping the password file's master key in the OS keychain (enabled in settings). Linux uses a pure-Rust Secret Service (no libdbus)
 keyring = { version = "3", features = ["apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust"] }
 sha2 = "0.10"

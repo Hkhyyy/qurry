@@ -682,19 +682,48 @@ pub async fn check_update(state: State<'_, AppState>, force: bool) -> AppResult<
     if (cfg!(debug_assertions) && !force) || (qurry_core::update::disabled() && !force) {
         return Ok(UpdateInfo { current, latest: None, changes: vec![] });
     }
-    let latest = qurry_core::update::check(&state.store.dir(), &current, force).await?;
+    let latest = qurry_core::update::check(&state.store.dir(), &current, state.store.update_channel(), force).await?;
     let changes = latest.as_ref().map(|r| r.changes_since(&current)).unwrap_or_default();
     Ok(UpdateInfo { current, latest, changes })
 }
 
+/// Update channel (Settings › Appearance › Updates; the TUI shares it)
+#[tauri::command]
+pub fn update_channel(state: State<'_, AppState>) -> qurry_core::update::Channel {
+    state.store.update_channel()
+}
+
+/// Saves the channel, then answers what it offers from the saved check only (no request): None if nothing was checked yet or checks are off
+#[tauri::command]
+pub fn set_update_channel(state: State<'_, AppState>, channel: qurry_core::update::Channel) -> AppResult<Option<UpdateInfo>> {
+    state.store.set_update_channel(channel)?;
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    if cfg!(debug_assertions) || qurry_core::update::disabled() {
+        return Ok(None);
+    }
+    Ok(qurry_core::update::cached(&state.store.dir(), &current, channel).map(|latest| {
+        let changes = latest.as_ref().map(|r| r.changes_since(&current)).unwrap_or_default();
+        UpdateInfo { current, latest, changes }
+    }))
+}
+
 /// Download the new version, replace the running app, and restart (Tauri updater: the release's latest.json + signature check).
+/// The release is the one the update channel offers, through its own latest.json (releases/latest in tauri.conf.json skips betas).
 /// Sends (bytes received, total bytes) via "update-progress" while downloading
 #[tauri::command]
-pub async fn install_update(app: tauri::AppHandle) -> AppResult<()> {
+pub async fn install_update(app: tauri::AppHandle, state: State<'_, AppState>) -> AppResult<()> {
     use tauri::Emitter;
     use tauri_plugin_updater::UpdaterExt;
     let msg = |e: tauri_plugin_updater::Error| crate::error::AppError::Msg(format!("Update failed: {e}"));
-    let Some(update) = app.updater().map_err(msg)?.check().await.map_err(msg)? else {
+    let current = env!("CARGO_PKG_VERSION");
+    let Some(release) = qurry_core::update::check(&state.store.dir(), current, state.store.update_channel(), false).await? else {
+        return Err(crate::error::AppError::Msg(format!("No update to install: {current} is the latest version on this update channel (Settings › Appearance › Updates).")));
+    };
+    // Built from the version, not taken from the API response: only this repo's release files
+    let endpoint = format!("https://github.com/{}/releases/download/v{}/latest.json", qurry_core::update::REPO, release.version)
+        .parse()
+        .map_err(|_| crate::error::AppError::Msg(format!("Update failed: bad release version {:?}", release.version)))?;
+    let Some(update) = app.updater_builder().endpoints(vec![endpoint]).map_err(msg)?.build().map_err(msg)?.check().await.map_err(msg)? else {
         return Err(crate::error::AppError::Msg("No update to install (the latest release has no in-app update for this platform — download it from the Release Page).".into()));
     };
     let mut got = 0u64;

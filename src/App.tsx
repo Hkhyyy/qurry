@@ -32,7 +32,7 @@ import { useStatusWidgets } from "./lib/statusbar";
 import { sharedReady, useSharedReady } from "./lib/shared";
 import { tableTabLabels } from "./lib/tabLabels";
 import { isDdl, isRead, rollbackUndoes } from "./lib/stmtKind";
-import type { BackupOptions, FtsRequest } from "./lib/api";
+import type { BackupOptions, FtsRequest, UpdateChannel } from "./lib/api";
 import { isRelation, NodeInfo, revealInTree, schemaChanged } from "./components/SchemaTree";
 import { leaf, leaves, MAX_PANES, Pane, prunePanes, splitPane } from "./lib/panes";
 import { connBg, connStripe, getThemePref, setThemePref, THEME_LABEL, ThemePref, useTheme } from "./lib/theme";
@@ -2593,6 +2593,7 @@ export default function App() {
             setSettingsOpen(false);
             setUpdateOpen(true);
           }}
+          onChannel={setUpdate}
         />
       )}
       {backupReq && <BackupDialog what={backupReq.db ?? backupReq.c.name} pg={backupReq.c.kind === "postgres"} onRun={startBackup} onClose={() => setBackupReq(null)} />}
@@ -2796,10 +2797,27 @@ function PasswordSettings() {
   );
 }
 
-function SettingsDialog({ onClose, onUpdate, initialPage = "appearance" }: { onClose: () => void; onUpdate: (u: UpdateInfo) => void; initialPage?: "appearance" | "keymap" }) {
+/** onChannel: the update the new channel offers (null: none), so the status bar button follows the channel */
+export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "appearance" }: { onClose: () => void; onUpdate: (u: UpdateInfo) => void; onChannel: (u: UpdateInfo | null) => void; initialPage?: "appearance" | "keymap" }) {
   const [page, setPage] = useState<"appearance" | "keymap" | "passwords">(initialPage);
   const [checkOnStart, setCheckOnStart] = useState(updateCheckEnabled());
   const [updMsg, setUpdMsg] = useState<string | null>(null);
+  const [channel, setChannel] = useState<UpdateChannel | null>(null);
+  const [chMsg, setChMsg] = useState<string | null>(null);
+  useEffect(() => {
+    api.updateChannel().then(setChannel, (e) => setChMsg(String(e)));
+  }, []);
+  const pickChannel = async (c: UpdateChannel) => {
+    setChannel(c);
+    try {
+      // Answered from the saved check (both channels), never a new request
+      const u = await api.setUpdateChannel(c);
+      onChannel(u?.latest ? u : null);
+      setChMsg(!u ? "Saved. Check Now looks for updates on this channel." : u.latest ? `Qurry ${u.latest.version} is available on this channel.` : `You have the latest ${c} version (${u.current}).`);
+    } catch (e) {
+      setChMsg(String(e));
+    }
+  };
   const checkNow = async () => {
     setUpdMsg("Checking…");
     try {
@@ -2869,6 +2887,14 @@ function SettingsDialog({ onClose, onUpdate, initialPage = "appearance" }: { onC
                 <Button size="sm" onClick={checkNow}>
                   Check Now
                 </Button>
+              </div>
+            </Field>
+            <Field label="Channel" hint={chMsg ?? "Stable gets the releases made from a version tag. Beta also gets the pre-release built from every merge to main. The terminal UI uses the same channel."}>
+              <div className="ui-row">
+                <Select value={channel ?? ""} disabled={!channel} onChange={(e) => pickChannel(e.target.value as UpdateChannel)}>
+                  <option value="stable">Stable</option>
+                  <option value="beta">Beta</option>
+                </Select>
               </div>
             </Field>
           </div>
