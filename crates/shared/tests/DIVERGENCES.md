@@ -9,17 +9,17 @@ Rules the TUI and the MCP server took with no option when the grid helpers moved
 
 | Corpus › function | Compared | Differ | TS only | Rust only |
 | --- | --- | --- | --- | --- |
-| sql › splitStatements | 46 | 2 | 0 | 3 |
-| sql › splitScript | 49 | 2 | 0 | 0 |
-| sql › planExecution(ask) | 15 | 0 | 0 | 0 |
-| sql › planExecution(smallest) | 15 | 0 | 0 | 0 |
-| sql › planExecution(whole) | 15 | 0 | 0 | 0 |
-| sql › planExecution(fromCaret) | 15 | 0 | 0 | 0 |
-| sql › planExecution(outside:whole) | 15 | 0 | 0 | 0 |
-| sql › planExecution(outside:below) | 15 | 0 | 0 | 0 |
-| sql › statementAt | 0 | 0 | 0 | 15 |
-| statements › isReadStmt | 37 | 0 | 0 | 0 |
-| statements › DDL_RE | 37 | 0 | 0 | 0 |
+| sql › splitStatements | 48 | 1 | 0 | 3 |
+| sql › splitScript | 51 | 1 | 0 | 0 |
+| sql › statementAt | 15 | 0 | 0 | 2 |
+| sql › planExecution(ask) | 17 | 0 | 0 | 0 |
+| sql › planExecution(smallest) | 17 | 0 | 0 | 0 |
+| sql › planExecution(whole) | 17 | 0 | 0 | 0 |
+| sql › planExecution(fromCaret) | 17 | 0 | 0 | 0 |
+| sql › planExecution(outside:whole) | 17 | 0 | 0 | 0 |
+| sql › planExecution(outside:below) | 17 | 0 | 0 | 0 |
+| statements › isReadStmt | 41 | 0 | 0 | 0 |
+| statements › DDL_RE | 41 | 0 | 0 | 0 |
 | valuehints › hintContext | 39 | 0 | 0 | 0 |
 | valuehints › hintInsert | 32 | 0 | 0 | 0 |
 | valuehints › hintable | 32 | 0 | 0 | 0 |
@@ -60,8 +60,6 @@ TS only / Rust only: inputs where only one side has that function (no counterpar
 | --- | --- | --- | --- | --- |
 | sql | ` dollar-inside-name ` | splitStatements | ` ["select foo$x$ from t; select 1"] ` | ` ["select foo$x$ from t"," select 1"] ` |
 | sql | ` dollar-inside-name ` | splitScript | ` ["select foo$x$ from t; select 1"] ` | ` ["select foo$x$ from t"," select 1"] ` |
-| sql | ` dashdash-no-space-mysql ` | splitStatements | ` ["select 1--1;\nselect 2"] ` | ` ["select 1--1","\nselect 2"] ` |
-| sql | ` dashdash-no-space-mysql ` | splitScript | ` ["select 1--1;\n","select 2"] ` | ` ["select 1--1","\nselect 2"] ` |
 | results | ` inlist-mix ` | inList | ` "(('010', 12345678901234567890, true, 1.50), ('a''b', -3, false, 'NaN'), ('x', 1e5, NULL, -0.5), ('y', '+4', true, '.5'))" ` | ` "(('010', 12345678901234567890, true, 1.50), ('a''b', -3, false, 'NaN'), ('x', 1e5, NULL, -0.5), ('y', +4, true, .5))" ` |
 | results | ` inlist-mix ` | inList(mysql) | ` "(('010', 12345678901234567890, true, 1.50), ('a''b', -3, false, 'NaN'), ('x', 1e5, NULL, -0.5), ('y', '+4', true, '.5'))" ` | ` "(('010', 12345678901234567890, true, 1.50), ('a''b', -3, false, 'NaN'), ('x', 1e5, NULL, -0.5), ('y', +4, true, .5))" ` |
 | results | ` inlist-mix ` | inList(column) | ` {"code":"('010', 'a''b', 'x', 'y')","flag":"(true, false)","n":"(12345678901234567890, -3, 1e5, '+4')","price":"(1.50, 'NaN', -0.5, '.5')"} ` | ` {"code":"('010', 'a''b', 'x', 'y')","flag":"(true, false)","n":"(12345678901234567890, -3, 1e5, +4)","price":"(1.50, 'NaN', -0.5, .5)"} ` |

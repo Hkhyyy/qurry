@@ -1,4 +1,4 @@
-import { editor, expect, openApp, openConsole, resultTabs, runAll, status, suggestions, test, typeSql } from "./app";
+import { dialog, editor, expect, openApp, openConsole, resultTabs, runAll, status, suggestions, test, typeSql } from "./app";
 
 test.beforeEach(async ({ page }) => {
   await openApp(page);
@@ -57,4 +57,18 @@ test("Explain Plan → plan tab with the node tree", async ({ page }) => {
   await expect(plan).toContainText("2 nodes worth a look");
   for (const op of ["Gather Merge", "Sort", "Seq Scan"]) await expect(plan).toContainText(op);
   await expect(editor(page)).toBeVisible();
+});
+
+// A rollback undoes a DELETE but not a sequence step: Explain Analyse asks first and doesn't claim nothing changed
+test("Explain Analyse asks before a write a rollback can't undo, and says what stays", async ({ page }) => {
+  await typeSql(page, "select nextval('orders_id_seq')");
+  await page.locator(".work-layer:visible .console-toolbar").getByText("Explain").click();
+  await page.getByRole("menuitem", { name: "Explain Analyse" }).click();
+  await expect(dialog(page).locator(".ui-modal-title")).toHaveText("[DEV] shop_app: Explain Analyse");
+  await expect(dialog(page)).toContainText("a rollback can't undo what it does outside the transaction: sequence values");
+  await dialog(page).getByRole("button", { name: "Run Anyway" }).click();
+  await resultTabs(page).first().click();
+  const output = page.locator(".work-layer:visible .output-log");
+  await expect(output).toContainText("rolled it back, but what it did outside the transaction stays (sequence values");
+  await expect(output).not.toContainText("nothing was changed");
 });

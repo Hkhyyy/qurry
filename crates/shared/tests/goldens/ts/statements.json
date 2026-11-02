@@ -139,6 +139,22 @@
     "isReadStmt": false,
     "DDL_RE": false
   },
+  "multi-do-body": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "multi-prepare": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "multi-call": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "multi-reads": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
   "redis-get": {
     "isReadStmt": false,
     "DDL_RE": false

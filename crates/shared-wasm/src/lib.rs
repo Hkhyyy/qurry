@@ -32,6 +32,12 @@ pub fn is_read(sql: &str, kind: JsValue) -> Result<bool, JsError> {
     Ok(qurry_shared::guard::is_read(sql, parse_kind(kind)?))
 }
 
+/// UI only: Explain Analyse's rollback undoes everything the statement does (not nextval, dblink_exec, INTO OUTFILE …)
+#[wasm_bindgen(js_name = rollbackUndoes)]
+pub fn rollback_undoes(sql: &str, kind: JsValue) -> Result<bool, JsError> {
+    Ok(qurry_shared::guard::rollback_undoes(sql, parse_kind(kind)?))
+}
+
 /// UI only, not a security check: the statement changes structure (reload the explorer tree)
 #[wasm_bindgen(js_name = isDdl)]
 pub fn is_ddl(sql: &str, kind: JsValue) -> Result<bool, JsError> {

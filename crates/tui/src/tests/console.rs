@@ -145,6 +145,33 @@ async fn explain_analyze_wraps_changes_in_a_rolled_back_transaction() {
     assert_eq!(*SEEN.lock().unwrap(), ["BEGIN", "EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) delete from t where a = 1", "ROLLBACK"]);
 }
 
+/// Explain Analyze of a write a rollback can't undo (nextval) asks first, and afterwards doesn't say nothing was changed
+#[tokio::test]
+async fn explain_analyze_asks_before_what_a_rollback_cant_undo() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn record(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.to_string());
+        fake(q)
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(record);
+    let sql = "select nextval('s')";
+    h.console_with(sql, 0, 0);
+    h.app.analyze_next = true;
+    h.app.run_stmts(vec![sql.into()], true, false);
+    h.app.analyze_next = false;
+    let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
+    assert!(text.contains("a rollback can't undo what it does outside the transaction: sequence values"), "{text}");
+    h.settle().await;
+    assert!(SEEN.lock().unwrap().is_empty(), "nothing runs before the answer");
+    h.key("y");
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["BEGIN", "EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) select nextval('s')", "ROLLBACK"]);
+    let out = h.console_output();
+    assert!(out.iter().any(|l| l.contains("rolled it back, but what it did outside the transaction stays")), "{out:?}");
+    assert!(!out.iter().any(|l| l.contains("nothing was changed")), "{out:?}");
+}
+
 /// ⌃Space lists columns after "alias." (from the loaded metadata); Enter replaces the typed prefix with the picked one
 #[tokio::test]
 async fn completion_popup_lists_and_inserts() {

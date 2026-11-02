@@ -4,12 +4,24 @@ import type { DbKind } from "./api";
 import { shared } from "./shared";
 
 /**
- * The statement doesn't change data. False while the WASM module isn't loaded, so a statement is then treated as a write:
+ * The statement doesn't change data (with several statements in the text, none does). False while the WASM module isn't loaded, so a statement is then treated as a write:
  * Production asks first and Explain Analyse rolls it back
  */
 export function isRead(kind: DbKind, sql: string): boolean {
   try {
     return shared().isRead(sql, kind);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Explain Analyse's rollback undoes everything the statement does: not for nextval / setval, dblink_exec, server files, locks or
+ * SELECT … INTO OUTFILE. False while the WASM module isn't loaded, so Explain Analyse then asks first
+ */
+export function rollbackUndoes(kind: DbKind, sql: string): boolean {
+  try {
+    return shared().rollbackUndoes(sql, kind);
   } catch {
     return false;
   }

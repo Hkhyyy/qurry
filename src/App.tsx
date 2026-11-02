@@ -31,7 +31,7 @@ import { invalidateCompletion } from "./lib/completion";
 import { useStatusWidgets } from "./lib/statusbar";
 import { useSharedReady } from "./lib/shared";
 import { tableTabLabels } from "./lib/tabLabels";
-import { isDdl, isRead } from "./lib/stmtKind";
+import { isDdl, isRead, rollbackUndoes } from "./lib/stmtKind";
 import type { BackupOptions, FtsRequest } from "./lib/api";
 import { isRelation, NodeInfo, revealInTree, schemaChanged } from "./components/SchemaTree";
 import { leaf, leaves, MAX_PANES, Pane, prunePanes, splitPane } from "./lib/panes";
@@ -119,6 +119,9 @@ const isMac = navigator.platform.toLowerCase().includes("mac");
 /** Max rows kept in the result grid (same as the TUI). Beyond that, export to CSV */
 const MAX_ROWS = 100_000;
 const capMsg = (n: number) => `Showing the first ${n.toLocaleString()} rows — export to CSV for all of them`;
+/** Explain Analyse of a write a rollback can't undo (rollbackUndoes): the question before, the note after (same words as the TUI) */
+const UNDONE_ASK = "a rollback can't undo what it does outside the transaction: sequence values, other servers, files, locks, or a COMMIT · MySQL DDL among several statements";
+const UNDONE_LOG = "what it did outside the transaction stays (sequence values, other servers, files, locks, or a COMMIT · MySQL DDL among several statements)";
 /** Shortcut shown in menus and Find Action (the first key) */
 const sk = (id: string) => {
   const b = bindings(id);
@@ -1273,6 +1276,12 @@ export default function App() {
         if (why && !(await ask(`${why}. Run it anyway?`, { title: c ? `${c.name}: dangerous statement` : "Dangerous statement", detail: [{ text: s.slice(0, 300), tone: "danger" }], okLabel: "Run Anyway", danger: true }))) return;
       }
     }
+    // Explain Analyse rolls a write back (below), but not what it does outside the transaction: ask first, as the TUI does
+    if (explain === "analyze") {
+      const kept = stmts.filter((s) => !isRead(kind, s) && !rollbackUndoes(kind, s));
+      const detail = kept.map((s) => ({ text: s.replace(/\s+/g, " ").slice(0, 300), tone: "danger" as const }));
+      if (kept.length && !(await ask(`Explain Analyse really runs the statement, and ${UNDONE_ASK}. Run it anyway?`, { title: c ? `${c.name}: Explain Analyse` : "Explain Analyse", detail, okLabel: "Run Anyway", danger: true }))) return;
+    }
     // Production: for data-changing statements, count the rows that will change, show it and ask (counted with SELECT count(*))
     if (c?.options?.confirmChanges && !explain) {
       // Same check as the TUI (core guard): a write keyword only inside a string or a comment (MySQL # too) doesn't make a read a write
@@ -1325,7 +1334,8 @@ export default function App() {
             await api.runQuery(tab.target, inTx0 ? "ROLLBACK TO SAVEPOINT qurry_explain" : "ROLLBACK", tabId).catch((e) => log(tabId, "error", `Roll back after Explain Analyse failed: ${String(e)}`));
           }
           r = { ...r, inTransaction: inTx0 };
-          log(tabId, "info", "Explain Analyse ran the statement in a transaction and rolled it back — nothing was changed");
+          if (rollbackUndoes(kind, sql0)) log(tabId, "info", "Explain Analyse ran the statement in a transaction and rolled it back — nothing was changed");
+          else log(tabId, "warn", `Explain Analyse ran the statement in a transaction and rolled it back, but ${UNDONE_LOG}`);
         } else {
           r = await api.runQuery(tab.target, sql, tabId);
         }

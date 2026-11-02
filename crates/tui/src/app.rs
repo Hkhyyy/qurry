@@ -1862,16 +1862,16 @@ impl App {
             }
         }
         // EXPLAIN ANALYZE actually runs the statement. PostgreSQL·MySQL run changing statements inside a transaction and roll back (below).
-        // Drivers may not support transactions, so ask
+        // Drivers may not support transactions, and a rollback doesn't undo everything (sequences, other servers, files), so ask
         let wraps = matches!(kind, DbKind::Postgres | DbKind::Mysql);
         if analyze
-            && !wraps
             && !confirmed
-            && let Some(s) = stmts.iter().find(|s| !qurry_core::guard::is_read(s, kind))
+            && let Some(s) = stmts.iter().find(|s| !qurry_core::guard::is_read(s, kind) && (!wraps || !qurry_core::guard::rollback_undoes(s, kind)))
         {
             let preview: String = s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(80).collect();
+            let why = if wraps { UNDONE_ASK } else { "it changes data" };
             self.popup = Some(Popup::Confirm {
-                text: format!("Explain Analyze really runs the statement (it changes data):\n  {preview}\nRun it anyway?"),
+                text: format!("Explain Analyze really runs the statement ({why}):\n  {preview}\nRun it anyway?"),
                 on_yes: Box::new(move |a| {
                     a.analyze_next = true;
                     a.run_stmts(stmts, explain, true);
@@ -1972,8 +1972,10 @@ impl App {
                             };
                             c.in_tx = res.in_transaction;
                             let warning = res.warning.clone();
-                            if dry {
+                            if dry && qurry_core::guard::rollback_undoes(&s, kind) {
                                 c.log(false, "Explain Analyze ran the statement in a transaction and rolled it back — nothing was changed".into());
+                            } else if dry {
+                                c.log(true, format!("Explain Analyze ran the statement in a transaction and rolled it back, but {UNDONE_LOG}"));
                             } else if !res.in_transaction && !qurry_core::guard::is_read(&s, kind) {
                                 committed += 1;
                             }
@@ -3322,6 +3324,10 @@ pub fn byte_offset(lines: &[String], row: usize, col: usize) -> usize {
     let line = lines.get(row).map(|s| s.as_str()).unwrap_or("");
     off + line.char_indices().nth(col).map(|(i, _)| i).unwrap_or(line.len())
 }
+
+/// Explain Analyze of a write a rollback can't undo (qurry_core::guard::rollback_undoes): the question before, the note after
+const UNDONE_ASK: &str = "a rollback can't undo what it does outside the transaction: sequence values, other servers, files, locks, or a COMMIT · MySQL DDL among several statements";
+const UNDONE_LOG: &str = "what it did outside the transaction stays (sequence values, other servers, files, locks, or a COMMIT · MySQL DDL among several statements)";
 
 /// The statements' text (the TUI doesn't highlight what runs, so the ranges aren't needed)
 fn sqls(v: Vec<qurry_core::exec::Stmt>) -> Vec<String> {

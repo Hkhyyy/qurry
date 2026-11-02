@@ -34,6 +34,10 @@
   { "id": "backslash-read", "dialect": "mysql", "sql": "select 'C:\\path', 'delete' as action" },
   { "id": "backslash-ansi-quotes", "dialect": "mysql", "sql": "with a as (select 'p\\' \"  ' as \"a\\\") delete from t -- \"" },
   { "id": "dblink-exec", "dialect": "postgres", "sql": "select dblink_exec('dbname=prod', 'delete from orders')" },
+  { "id": "multi-do-body", "dialect": "postgres", "sql": "select 1; do $$ begin delete from orders; end $$" },
+  { "id": "multi-prepare", "dialect": "mysql", "sql": "select 1; prepare s from 'delete from orders'; execute s" },
+  { "id": "multi-call", "dialect": "postgres", "sql": "select 1; call purge()" },
+  { "id": "multi-reads", "dialect": "postgres", "sql": "select 1; select 2; -- done" },
   { "id": "redis-get", "dialect": "redis", "sql": "GET a" },
   { "id": "redis-set", "dialect": "redis", "sql": "SET a 1" }
 ]
