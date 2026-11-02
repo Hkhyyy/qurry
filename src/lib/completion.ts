@@ -29,7 +29,17 @@ function load(connId: string): Promise<Completion> {
 
 export function bindModel(uri: string, connId: string) {
   modelConn.set(uri, connId);
-  if (!cache.has(connId)) load(connId).catch(() => {});
+  // A module that can't load is said when the console opens, not later as a dialog that takes the keys being typed
+  if (!cache.has(connId)) load(connId).catch(warnOff);
+}
+
+/** Once, where a GUI user sees it (the devtools console is not) */
+function warnOff(e: unknown) {
+  if (warned) return;
+  warned = true;
+  const why = `Console autocomplete runs in Qurry's shared WebAssembly module, which did not load (${e}). Restart Qurry; if it keeps happening, the system WebView is too old: update macOS (Safari) or webkit2gtk.`;
+  console.error(why);
+  void import("./dialogs").then((d) => d.notice(why, "Autocomplete is off"));
 }
 /** When the editor closes */
 export function unbindModel(uri: string) {
@@ -51,13 +61,7 @@ async function indexFor(connId: string | undefined): Promise<Completion | undefi
     await initShared();
     return (noConnection ??= shared().completionIndex([]));
   } catch (e) {
-    if (!warned) {
-      warned = true;
-      const why = `Console autocomplete runs in Qurry's shared WebAssembly module, which did not load (${e}). Restart Qurry; if it keeps happening, the system WebView is too old: update macOS (Safari) or webkit2gtk.`;
-      console.error(why);
-      // Once, where a GUI user sees it (the devtools console is not)
-      void import("./dialogs").then((d) => d.notice(why, "Autocomplete is off"));
-    }
+    warnOff(e);
     return undefined;
   }
 }

@@ -1,8 +1,19 @@
-import { dialog, expect, openApp, openConsole, resultTabs, status, test, typeSql, work } from "./app";
+import type { Page } from "@playwright/test";
+import { dialog, editor, expect, openApp, openConsole, resultTabs, status, test, treeNode, typeSql, work } from "./app";
 
 // ⌘↩ splits and plans the console in the shared WebAssembly module, which main.tsx loads without waiting
 // The module's fetch only, not the `?url` import Vite serves as a script
 const WASM = (url: URL) => url.pathname.endsWith("/qurry_shared_wasm_bg.wasm") && !url.search;
+
+/** openConsole without the module: opening a console says once that autocomplete is off, acknowledged before typing */
+async function openConsoleNoWasm(page: Page, conn = "[DEV] shop_app") {
+  await treeNode(page, conn).click();
+  await page.keyboard.press("Meta+Shift+L");
+  const notice = dialog(page).filter({ hasText: "Autocomplete is off" });
+  await notice.getByRole("button", { name: "OK" }).click();
+  await expect(notice).toHaveCount(0);
+  await editor(page).click();
+}
 
 test("⌘↩ while the WebAssembly module is still loading runs once it has loaded", async ({ page }) => {
   let release = () => {};
@@ -48,7 +59,7 @@ test("while the WebAssembly module loads, ⌘↩ shows it and runs once, the edi
 test("⌘↩ without the WebAssembly module says why and how to run anyway, in user words", async ({ page }) => {
   await page.route(WASM, (route) => route.abort());
   await openApp(page);
-  await openConsole(page, "[PROD] shop_app");
+  await openConsoleNoWasm(page, "[PROD] shop_app");
   await typeSql(page, "select 1");
   await page.keyboard.press("Meta+Enter");
   const output = page.locator(".work-layer:visible .output-log");
@@ -64,7 +75,7 @@ test("without the WebAssembly module a selection run as one statement still runs
   await page.route(WASM, (route) => route.abort());
   await page.addInitScript(() => localStorage.setItem("dbtool.execSettings", JSON.stringify({ inside: "ask", outside: "nothing", selection: "single" })));
   await openApp(page);
-  await openConsole(page);
+  await openConsoleNoWasm(page);
   await typeSql(page, "select * from users");
   await page.keyboard.press("Meta+A");
   await page.keyboard.press("Meta+Enter");
@@ -98,7 +109,7 @@ test("without the WebAssembly module, a DDL on Production may change the schema 
   await page.route(WASM, (route) => route.abort());
   await page.addInitScript(() => localStorage.setItem("dbtool.execSettings", JSON.stringify({ inside: "ask", outside: "nothing", selection: "single" })));
   await openApp(page);
-  await openConsole(page, "[PROD] shop_app");
+  await openConsoleNoWasm(page, "[PROD] shop_app");
   await typeSql(page, "alter table users add column x int");
   await page.keyboard.press("Meta+A");
   await page.keyboard.press("Meta+Enter");
