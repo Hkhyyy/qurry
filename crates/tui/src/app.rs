@@ -748,6 +748,15 @@ async fn console_query(st: &AppState, fake: Option<FakeDb>, target: &str, q: Str
     }
 }
 
+/// Explain Analyze's statements before and after the one it runs (AppState::explain_wrap); the test fake follows the tab's transaction
+async fn explain_wrap(st: &AppState, fake: Option<FakeDb>, target: &str, session: &str, in_tx: bool) -> Result<[&'static str; 2], String> {
+    use qurry_core::session::{EXPLAIN_BEGIN, EXPLAIN_SAVEPOINT};
+    match fake {
+        Some(_) => Ok(if in_tx { EXPLAIN_SAVEPOINT } else { EXPLAIN_BEGIN }),
+        None => st.explain_wrap(target.into(), session.into()).await.map_err(err),
+    }
+}
+
 fn color_of(c: &ConnectionView) -> Option<String> {
     c.config.color.clone()
 }
@@ -2085,21 +2094,27 @@ impl App {
                     } else {
                         s.clone()
                     };
-                    // Explain Analyze: run inside a transaction (a savepoint if one is already open) and always roll back. Reads too: a
-                    // function a SELECT calls may write
+                    // Explain Analyze: run inside a transaction (a savepoint if one may be open: AppState::explain_wrap) and always roll
+                    // back. Reads too: a function a SELECT calls may write
                     let dry = analyze && wraps;
+                    let mut wrap = qurry_core::session::EXPLAIN_BEGIN;
                     if dry {
-                        let begin = if in_tx0 { "SAVEPOINT qurry_explain" } else { "BEGIN" };
-                        if let Err(e) = console_query(&st, fake, &target, begin.into(), None, &session).await {
+                        let begun = match explain_wrap(&st, fake, &target, &session, in_tx0).await {
+                            Ok(w) => {
+                                wrap = w;
+                                console_query(&st, fake, &target, w[0].into(), None, &session).await
+                            }
+                            Err(e) => Err(e),
+                        };
+                        if let Err(e) = begun {
                             out.push((s, Err(e), false));
                             break;
                         }
                     }
                     let r = console_query(&st, fake, &target, q, Some(500), &session).await;
                     let r = if dry {
-                        let back = if in_tx0 { "ROLLBACK TO SAVEPOINT qurry_explain" } else { "ROLLBACK" };
-                        match console_query(&st, fake, &target, back.into(), None, &session).await {
-                            Ok(_) => r.map(|res| qurry_core::db::QueryResult { in_transaction: in_tx0, ..res }),
+                        match console_query(&st, fake, &target, wrap[1].into(), None, &session).await {
+                            Ok(back) => r.map(|res| qurry_core::db::QueryResult { in_transaction: back.in_transaction, ..res }),
                             Err(e) => Err(format!("Roll back after Explain Analyze failed: {e}")),
                         }
                     } else {

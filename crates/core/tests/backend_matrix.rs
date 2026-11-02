@@ -782,6 +782,71 @@ async fn mysql_explain_analyze_in_a_transaction_on_a_read_only_source() {
     explain_analyze_in_a_read_only_transaction(c, Some(pw), "EXPLAIN ANALYZE select 1").await;
 }
 
+/// Explain Analyse after `setup` left a row of `t` (count `count`) uncommitted in the console tab, run as the GUI and the TUI run it
+/// (AppState::explain_wrap around the statement): it uses a savepoint, so the row is still pending (seen in the tab, not on another
+/// connection) and the user's Roll back removes it. A BEGIN there would commit it on MySQL
+async fn explain_analyze_keeps_pending_work(st: &AppState, tab_id: &str, setup: &[&str], explain: &str, count: &str) {
+    let tab = |sql: &str| {
+        let sql = sql.to_string();
+        async move { st.run_query(ID.into(), sql.clone(), None, Some(tab_id.into())).await.unwrap_or_else(|e| panic!("{sql}: {e}")) }
+    };
+    let n = |r: db::QueryResult| r.rows[0][0].to_string().trim_matches('"').to_string();
+    for s in setup {
+        tab(s).await;
+    }
+    let wrap = st.explain_wrap(ID.into(), tab_id.into()).await.unwrap();
+    assert_eq!(wrap, qurry_core::session::EXPLAIN_SAVEPOINT, "{setup:?}");
+    tab(wrap[0]).await;
+    tab(explain).await;
+    let back = tab(wrap[1]).await;
+    assert!(back.in_transaction, "{setup:?}: the pending row shows as uncommitted");
+    assert_eq!(n(tab(count).await), "1", "{setup:?}: the tab still sees its pending row");
+    assert_eq!(n(q(st, count).await), "0", "{setup:?}: Explain Analyse committed the pending row");
+    tab("ROLLBACK").await;
+    assert_eq!(n(q(st, count).await), "0", "{setup:?}");
+    st.close_session(tab_id.into()).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore]
+async fn mysql_explain_analyze_never_commits_pending_work() {
+    let Some(st) = my_state("qm_explain_guard").await else { return };
+    q(&st, "create table t (a int) engine = innodb").await;
+    q(&st, "create procedure off() begin set autocommit = 0; end").await;
+    q(&st, "create function w() returns int deterministic modifies sql data begin insert into t values (77); return 1; end").await;
+    let (explain, count) = ("EXPLAIN ANALYZE select * from t", "select count(*) from t");
+    // autocommit=0 typed by hand, turned off where Qurry can't see it (a procedure, a dump's /*! */ header), Manual mode, and a
+    // Manual-mode SELECT whose function writes
+    explain_analyze_keeps_pending_work(&st, "typed", &["SET autocommit = 0", "insert into t values (1)"], explain, count).await;
+    explain_analyze_keeps_pending_work(&st, "call", &["call off()", "insert into t values (1)"], explain, count).await;
+    explain_analyze_keeps_pending_work(&st, "dump", &["/*!40101 SET autocommit = 0 */", "insert into t values (1)"], explain, count).await;
+    st.set_tx_mode(ID.into(), "manual".into(), true).await.unwrap();
+    explain_analyze_keeps_pending_work(&st, "manual", &["insert into t values (1)"], explain, count).await;
+    st.set_tx_mode(ID.into(), "manual-f".into(), true).await.unwrap();
+    explain_analyze_keeps_pending_work(&st, "manual-f", &["select w()"], explain, count).await;
+    // Autocommit on and nothing open: a transaction of its own
+    assert_eq!(st.explain_wrap(ID.into(), "auto".into()).await.unwrap(), qurry_core::session::EXPLAIN_BEGIN);
+    st.close_session("auto".into()).await.unwrap();
+    q(&st, "drop database qm_explain_guard").await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn pg_explain_analyze_never_commits_pending_work() {
+    let Some(c) = pg_env() else { return };
+    let st = state(&c, None).await;
+    for s in ["drop schema if exists qm_explain_guard cascade", "create schema qm_explain_guard", "create table qm_explain_guard.t (a int)"] {
+        q(&st, s).await;
+    }
+    let (explain, count) = ("EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) select * from qm_explain_guard.t", "select count(*) from qm_explain_guard.t");
+    explain_analyze_keeps_pending_work(&st, "begin", &["BEGIN", "insert into qm_explain_guard.t values (1)"], explain, count).await;
+    st.set_tx_mode(ID.into(), "manual".into(), true).await.unwrap();
+    explain_analyze_keeps_pending_work(&st, "manual", &["insert into qm_explain_guard.t values (1)"], explain, count).await;
+    assert_eq!(st.explain_wrap(ID.into(), "auto".into()).await.unwrap(), qurry_core::session::EXPLAIN_BEGIN);
+    st.close_session("auto".into()).await.unwrap();
+    q(&st, "drop schema qm_explain_guard cascade").await;
+}
+
 // ───────── Redis ─────────
 
 #[tokio::test]

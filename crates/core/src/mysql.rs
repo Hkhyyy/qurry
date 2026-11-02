@@ -321,6 +321,20 @@ impl MySession {
         }
     }
 
+    /// Whether a BEGIN now could commit pending work: a transaction is open, or the server has autocommit off (then one may be open
+    /// though Qurry didn't see it: autocommit turned off in a procedure, a /*! … */ comment or the server's default). Such a session
+    /// is followed as Manual from then on, so its changes show as pending and closing the tab turns autocommit back on
+    pub async fn tx_may_be_open(&mut self) -> AppResult<bool> {
+        if self.in_tx {
+            return Ok(true);
+        }
+        let on: i64 = sqlx::query_scalar("SELECT @@autocommit").fetch_one(&mut *self.conn).await.map_err(|e| {
+            AppError::Msg(format!("Explain Analyse didn't run the statement: it couldn't ask the server whether autocommit is on ({e}). Nothing was run or committed; try again, or Commit or Roll back first"))
+        })?;
+        self.manual |= on == 0;
+        Ok(on == 0)
+    }
+
     /// Whether to ask the server if the transaction is still open after `sql` (s = strip_comments_lead(sql)) ran or failed: one
     /// rule for both. In Auto with none open, only a CALL, EXECUTE or BEGIN NOT ATOMIC can leave one open
     fn asks(&self, sql: &str, s: &str) -> bool {
