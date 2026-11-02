@@ -358,6 +358,15 @@ impl AppState {
         if let Some(why) = crate::guard::read_only_violation(&sql, kind, true) {
             return Err(AppError::Msg(format!("{why} (start the MCP server with --allow-write to change data)")));
         }
+        // Redis has no SQL guard: refuse a write here too, before anything connects
+        if kind == store::DbKind::Redis {
+            let args = crate::redisdb::parse_command(&sql)?;
+            let cmd = String::from_utf8_lossy(&args[0]).to_uppercase();
+            let sub = args.get(1).map(|a| String::from_utf8_lossy(a).to_uppercase()).unwrap_or_default();
+            if !crate::redisdb::is_read_command(&cmd, &sub) {
+                return Err(AppError::Msg(format!("{cmd} is not a read-only command")));
+            }
+        }
         dispatch!(ensure_pool(self, &id).await?, b => b.run_read_only(&sql, limit).await)
     }
 
@@ -821,6 +830,10 @@ impl AppState {
     /// Redis reads among the items get the same size checks as run_read_only
     pub async fn execute_batch_prepared(&self, id: String, statements: Vec<String>) -> AppResult<BatchResult> {
         if self.kind_of(&id)? == store::DbKind::Redis {
+            // A read-only source refuses a write before the size checks connect
+            for st in &statements {
+                self.check_read_only(&id, st)?;
+            }
             let m = redis_pool(self, &id).await?;
             for st in &statements {
                 crate::redisdb::check_read(&m, st).await?;
@@ -1294,8 +1307,8 @@ mod tests {
 
     /// Every run path asks the guard before it reaches a backend: each source's server is a tripwire (a listener that counts any
     /// connection), and a statement the guard refuses comes back with the guard's error while nothing connected.
-    /// Redis has no SQL guard for MCP reads (its read check needs the server: redis_read_only_refuses_writes_before_running), so only
-    /// the read-only-source paths are checked for it
+    /// Redis has no SQL guard: its MCP read refuses a write command by name before connecting. (MCP CSV export of Redis commands is
+    /// refused by the backend for every command, so it isn't a guard path and isn't checked here)
     #[tokio::test]
     async fn guard_runs_before_the_backend_on_every_run_path() {
         use crate::store::DbKind;
@@ -1324,13 +1337,15 @@ mod tests {
             source(st.run_query(id.clone(), write.into(), None, None).await.unwrap_err().to_string());
             source(st.run_query(id.clone(), write.into(), None, Some("tab".into())).await.unwrap_err().to_string());
             source(err(st.execute_batch(id.clone(), vec![write.into()], false).await));
-            if kind != DbKind::Redis {
-                let why = crate::guard::read_only_violation(write, kind, true).expect("the guard refuses it");
-                let e = st.run_read_only(id.clone(), write.into(), 10).await.unwrap_err().to_string();
-                assert!(e.contains(&why) && e.contains("--allow-write"), "{kind:?}: {e}");
-                let e = st.export_csv_read_only(id.clone(), write.into(), dir.join("x.csv")).await.unwrap_err().to_string();
-                assert_eq!(e, why, "{kind:?}");
-                source(err(st.execute_batch_prepared(id.clone(), vec![write.into()]).await));
+            source(err(st.execute_batch_prepared(id.clone(), vec![write.into()]).await));
+            let e = st.run_read_only(id.clone(), write.into(), 10).await.unwrap_err().to_string();
+            match crate::guard::read_only_violation(write, kind, true) {
+                Some(why) => {
+                    assert!(e.contains(&why) && e.contains("--allow-write"), "{kind:?}: {e}");
+                    let e = st.export_csv_read_only(id.clone(), write.into(), dir.join("x.csv")).await.unwrap_err().to_string();
+                    assert_eq!(e, why, "{kind:?}");
+                }
+                None => assert_eq!(e, "DEL is not a read-only command", "{kind:?}"),
             }
             assert_eq!(hits.load(Ordering::SeqCst), 0, "{kind:?}: a refused statement reached the server");
         }

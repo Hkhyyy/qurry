@@ -298,28 +298,21 @@ impl Backend for MySqlPool {
     /// The prepared protocol (the server accepts only one statement), in a READ ONLY transaction with a time limit
     async fn run_read_only(&self, sql: &str, limit: usize) -> AppResult<QueryResult> {
         let mut conn = self.acquire().await?;
-        // Always reset the time limit, even on failure, so it does not stay on the pooled connection
-        let r = async {
-            conn.execute(READ_ONLY_TIMEOUT).await?;
-            conn.execute("START TRANSACTION READ ONLY").await?;
-            crate::mysql::run_read_only_on(&mut conn, sql, limit).await
-        }
-        .await;
-        let _ = conn.execute("ROLLBACK").await;
-        let _ = conn.execute("SET SESSION max_execution_time = 0").await;
+        let r = match start_read_only(&mut conn).await {
+            Ok(()) => crate::mysql::run_read_only_on(&mut conn, sql, limit).await,
+            Err(e) => Err(e),
+        };
+        end_read_only(&mut conn).await;
         r
     }
 
     async fn export_read_only(&self, sql: &str, out: &mut Exporter) -> AppResult<()> {
         let mut conn = self.acquire().await?;
-        let r = async {
-            conn.execute(READ_ONLY_TIMEOUT).await?;
-            conn.execute("START TRANSACTION READ ONLY").await?;
-            crate::mysql::export_on(&mut conn, sql, out, true).await
-        }
-        .await;
-        let _ = conn.execute("ROLLBACK").await;
-        let _ = conn.execute("SET SESSION max_execution_time = 0").await;
+        let r = match start_read_only(&mut conn).await {
+            Ok(()) => crate::mysql::export_on(&mut conn, sql, out, true).await,
+            Err(e) => Err(e),
+        };
+        end_read_only(&mut conn).await;
         r
     }
 
@@ -359,8 +352,18 @@ impl Backend for MySqlPool {
     }
 }
 
-/// MCP reads: 60 seconds
-const READ_ONLY_TIMEOUT: &str = "SET SESSION max_execution_time = 60000";
+/// MCP reads and MCP CSV exports: a READ ONLY transaction with a 60-second limit. end_read_only always follows, even when this fails
+async fn start_read_only(conn: &mut sqlx::MySqlConnection) -> AppResult<()> {
+    conn.execute("SET SESSION max_execution_time = 60000").await?;
+    conn.execute("START TRANSACTION READ ONLY").await?;
+    Ok(())
+}
+
+/// Roll back and reset the time limit, so it does not stay on the pooled connection
+async fn end_read_only(conn: &mut sqlx::MySqlConnection) {
+    let _ = conn.execute("ROLLBACK").await;
+    let _ = conn.execute("SET SESSION max_execution_time = 0").await;
+}
 
 /// Connect to `host`:`port`: the server, or the SSH tunnel's local port (db::connect_via)
 pub(crate) async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str, port: u16) -> AppResult<MySqlPool> {

@@ -1010,7 +1010,6 @@ mod tests {
         let _: () = redis::cmd("DEL").arg("qurry:big").arg("qurry:small").query_async(&mut c).await.unwrap();
     }
 
-    /// MCP read: whole keys (HGETALL, SMEMBERS, set ops, LRANGE 0 -1, XRANGE without COUNT) are read when small, refused when over 1,000 elements
     /// Redis has no SQL guard: the MCP read path and a read-only source refuse a write before it runs (the key stays as it was);
     /// CSV export of commands is refused in read-only mode. Own keys in db14, no FLUSHDB
     #[tokio::test]
@@ -1040,6 +1039,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// MCP read: whole keys (HGETALL, SMEMBERS, set ops, LRANGE 0 -1, XRANGE without COUNT) are read when small, refused when over 1,000 elements
     #[tokio::test]
     #[ignore]
     async fn redis_whole_key_reads_need_a_small_key() {

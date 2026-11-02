@@ -567,20 +567,14 @@ impl Backend for PgPool {
     }
 
     async fn run_read_only(&self, sql: &str, limit: usize) -> AppResult<QueryResult> {
-        let mut tx = self.begin().await?;
-        tx.execute("SET TRANSACTION READ ONLY").await?;
-        tx.execute(READ_ONLY_TIMEOUT).await?;
-        tx.execute(READ_ONLY_STRINGS).await?;
+        let mut tx = begin_read_only(self).await?;
         let r = crate::db::run_on(&mut tx, sql, limit).await;
         let _ = tx.rollback().await;
         r
     }
 
     async fn export_read_only(&self, sql: &str, out: &mut Exporter) -> AppResult<()> {
-        let mut tx = self.begin().await?;
-        tx.execute("SET TRANSACTION READ ONLY").await?;
-        tx.execute(READ_ONLY_TIMEOUT).await?;
-        tx.execute(READ_ONLY_STRINGS).await?;
+        let mut tx = begin_read_only(self).await?;
         let r = crate::db::export_pg_on(&mut tx, sql, out).await;
         let _ = tx.rollback().await;
         r
@@ -622,10 +616,15 @@ impl Backend for PgPool {
     }
 }
 
-/// Time limit for read-only (MCP) queries (so queries sent by others do not hold the server for long).
-/// MCP reads: 60 seconds, string parsing matches guard (even if the server or role sets standard_conforming_strings = off)
-const READ_ONLY_TIMEOUT: &str = "SET LOCAL statement_timeout = '60s'";
-const READ_ONLY_STRINGS: &str = "SET LOCAL standard_conforming_strings = on";
+/// The transaction MCP reads and MCP CSV exports run in (the caller rolls it back): READ ONLY, 60 seconds (so queries sent by others
+/// do not hold the server for long), string parsing that matches guard (even if the server or role sets standard_conforming_strings = off)
+async fn begin_read_only(pool: &PgPool) -> AppResult<sqlx::Transaction<'static, sqlx::Postgres>> {
+    let mut tx = pool.begin().await?;
+    tx.execute("SET TRANSACTION READ ONLY").await?;
+    tx.execute("SET LOCAL statement_timeout = '60s'").await?;
+    tx.execute("SET LOCAL standard_conforming_strings = on").await?;
+    Ok(tx)
+}
 
 /// Connect to `host`:`port`: the server, or the SSH tunnel's local port (db::connect_via)
 pub(crate) async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str, port: u16) -> AppResult<PgPool> {

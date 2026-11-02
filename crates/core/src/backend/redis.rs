@@ -88,14 +88,8 @@ impl Backend for Redis<'_> {
         crate::redisdb::export(self.conn, sql, out).await
     }
 
-    /// Read commands only (no CONFIG, KEYS), within the size limits (redisdb::check_read)
+    /// Within the size limits (redisdb::check_read). AppState::run_read_only has already refused anything but read commands (no CONFIG, KEYS)
     async fn run_read_only(&self, sql: &str, limit: usize) -> AppResult<QueryResult> {
-        let args = crate::redisdb::parse_command(sql)?;
-        let cmd = String::from_utf8_lossy(&args[0]).to_uppercase();
-        let sub = args.get(1).map(|a| String::from_utf8_lossy(a).to_uppercase()).unwrap_or_default();
-        if !crate::redisdb::is_read_command(&cmd, &sub) {
-            return Err(AppError::Msg(format!("{cmd} is not a read-only command")));
-        }
         crate::redisdb::check_read(self.conn, sql).await?;
         crate::redisdb::run(self.conn, sql, limit).await
     }
