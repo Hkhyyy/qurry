@@ -1,5 +1,8 @@
 //! MySQL: the metadata queries live in crate::mysql; the table tools' queries are here
 use super::Backend;
+use crate::audit;
+use crate::migrate::{self, Model, norm, qualify_refs};
+use crate::transfer::Tx;
 use crate::ddl::{ColumnDef, ForeignKeyDef, IndexDef, TableDef, action, lit};
 use crate::erd::{Columns, Erd, ErdColumn, ErdRelation, ErdTable};
 use crate::error::{AppError, AppResult};
@@ -249,5 +252,78 @@ impl Backend for MySqlPool {
             })
             .collect();
         Ok(TableShape { cols, fks: fks.into_iter().map(|x| x.1).collect() })
+    }
+
+    // ───── Jobs: migrate.rs · transfer.rs · audit.rs ─────
+
+    async fn schema_model(&self, db: &str) -> AppResult<Model> {
+        use sqlx::Row;
+        let objs: Vec<(String, String)> = sqlx::query_as("select cast(table_name as char), cast(table_type as char) from information_schema.tables where table_schema = ? order by 1")
+            .bind(db)
+            .fetch_all(self)
+            .await?;
+        let mut m = Model::default();
+        let q = |s: &str| crate::sql::quote_ident(DbKind::Mysql, s);
+        for (t, ty) in objs {
+            if ty == "VIEW" {
+                let def: Option<String> = sqlx::query_scalar("select cast(view_definition as char) from information_schema.views where table_schema = ? and table_name = ?").bind(db).bind(&t).fetch_one(self).await?;
+                m.views.insert(t, norm(def.unwrap_or_default().trim(), db, DbKind::Mysql));
+                continue;
+            }
+            let row = sqlx::query(&format!("SHOW CREATE TABLE {}.{}", q(db), q(&t))).fetch_one(self).await?;
+            let ddl: String = row.try_get::<String, _>(1).or_else(|_| row.try_get::<Vec<u8>, _>(1).map(|b| String::from_utf8_lossy(&b).into_owned()))?;
+            let mut tm = migrate::TableModel::default();
+            // CREATE TABLE `t` ( … ) ENGINE=… : lines inside the parentheses
+            for l in ddl.lines().skip(1) {
+                let l = l.trim().trim_end_matches(',');
+                if l.starts_with(')') {
+                    break;
+                }
+                let name_of = |s: &str| s.split('`').nth(1).unwrap_or("").to_string();
+                if l.starts_with('`') {
+                    tm.columns.push((name_of(l), migrate::Col { line: l.to_string(), ..Default::default() }));
+                } else if l.starts_with("PRIMARY KEY") {
+                    tm.keys.insert("PRIMARY".into(), l.to_string());
+                } else if l.starts_with("CONSTRAINT") && l.contains("FOREIGN KEY") {
+                    tm.fks.insert(name_of(l), qualify_refs(l, db).replace(&format!("`{db}`."), ""));
+                } else if !l.is_empty() {
+                    tm.keys.insert(name_of(l), l.to_string());
+                }
+            }
+            m.tables.insert(t, tm);
+        }
+        Ok(m)
+    }
+
+    /// DDL commits implicitly (only data statements are rolled back together)
+    async fn apply_migration(&self, stmts: &[&str], fail: impl Fn(String) -> AppError) -> AppResult<()> {
+        let mut tx = self.begin().await?;
+        for s in stmts {
+            sqlx::Executor::execute(&mut *tx, sqlx::raw_sql(s)).await.map_err(|e| fail(e.to_string()))?;
+        }
+        tx.commit().await.map_err(|e| fail(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn import_tx(&self) -> AppResult<Tx> {
+        Ok(Tx::My(self.begin().await?))
+    }
+
+    async fn table_columns(&self, table: &str) -> AppResult<Vec<audit::Col>> {
+        let parts = audit::my_name_parts(table);
+        let (schema, name) = match parts.as_slice() {
+            [s, n] => (Some(s.clone()), n.clone()),
+            _ => (None, parts.last().cloned().unwrap_or_default()),
+        };
+        let rows: Vec<(String, String, i64, i64)> = sqlx::query_as(
+            "SELECT CAST(COLUMN_NAME AS CHAR), CAST(DATA_TYPE AS CHAR), CAST(COLUMN_KEY = 'PRI' AS SIGNED), CAST(EXTRA LIKE '%GENERATED%' AS SIGNED) \
+             FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = COALESCE(?, DATABASE()) AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
+        )
+        .bind(schema)
+        .bind(name)
+        .fetch_all(self)
+        .await?;
+        let bin = |t: &str| t.contains("blob") || t.contains("binary") || t == "bit" || ["geometry", "point", "linestring", "polygon", "multipoint", "multilinestring", "multipolygon", "geometrycollection"].contains(&t);
+        Ok(rows.into_iter().map(|(name, t, pk, generated)| audit::Col { name, pk: pk != 0, generated: generated != 0, binary: bin(&t.to_lowercase()) }).collect())
     }
 }

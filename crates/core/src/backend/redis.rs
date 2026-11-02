@@ -5,7 +5,9 @@ use crate::error::{AppError, AppResult};
 use crate::fake::TableShape;
 use crate::hints::{Hint, HintReq};
 use crate::meta::{CompletionTable, FtsHit, FtsRequest, IndexEntry, SchemaInfo, SchemaObjects, TableDetail};
+use crate::migrate::Model;
 use crate::redisdb::RedisConn;
+use crate::transfer::Tx;
 
 /// The connection and the DB index the pool points to
 pub(crate) struct Redis<'a> {
@@ -63,5 +65,19 @@ impl Backend for Redis<'_> {
 
     async fn table_shape(&self, _schema: &str, _table: &str) -> AppResult<TableShape> {
         Err(AppError::Msg("Redis has no tables".into()))
+    }
+
+    // ───── Jobs: migrate.rs · transfer.rs · audit.rs ─────
+
+    async fn schema_model(&self, _schema: &str) -> AppResult<Model> {
+        Err(AppError::Msg("Redis has no schema to compare".into()))
+    }
+
+    async fn apply_migration(&self, _stmts: &[&str], _fail: impl Fn(String) -> AppError) -> AppResult<()> {
+        Err(AppError::Msg("Redis has no migrations".into()))
+    }
+
+    async fn import_tx(&self) -> AppResult<Tx> {
+        Err(AppError::Msg("Import into Redis is not supported".into()))
     }
 }

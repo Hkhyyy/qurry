@@ -1,5 +1,8 @@
 //! PostgreSQL: pg_catalog queries
 use super::Backend;
+use crate::audit;
+use crate::migrate::{self, Model, norm};
+use crate::transfer::Tx;
 use crate::ddl::{ColumnDef, ForeignKeyDef, IndexDef, TableDef, action};
 use crate::erd::{Columns, Erd, ErdColumn, ErdRelation, ErdTable};
 use crate::error::{AppError, AppResult};
@@ -525,5 +528,75 @@ impl Backend for PgPool {
             })
             .collect();
         Ok(TableShape { cols, fks: fks.into_iter().map(|(ref_table, cols, ref_cols)| Fk { cols, ref_table, ref_cols }).collect() })
+    }
+
+    // ───── Jobs: migrate.rs · transfer.rs · audit.rs ─────
+
+    async fn schema_model(&self, schema: &str) -> AppResult<Model> {
+        let tables: Vec<(String,)> = sqlx::query_as("select c.relname::text from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = $1 and c.relkind in ('r', 'p') and not c.relispartition order by 1")
+            .bind(schema)
+            .fetch_all(self)
+            .await?;
+        let mut m = Model::default();
+        for (t,) in tables {
+            let d = self.table_detail(schema, &t).await?;
+            let cons: Vec<&str> = d.constraints.iter().map(|c| c.name.as_str()).collect();
+            let mut tm = migrate::TableModel { columns: d.columns.iter().map(|c| (c.name.clone(), migrate::Col { ty: c.data_type.clone(), not_null: !c.nullable, default: c.default_value.as_deref().map(|x| norm(x, schema, DbKind::Postgres)), line: String::new() })).collect(), ..Default::default() };
+            for c in &d.constraints {
+                let def = norm(&c.definition, schema, DbKind::Postgres);
+                if c.kind == "f" {
+                    tm.fks.insert(c.name.clone(), def);
+                } else {
+                    tm.keys.insert(c.name.clone(), format!("CONSTRAINT {} {def}", crate::sql::quote_ident(DbKind::Postgres, &c.name)));
+                }
+            }
+            for i in d.indexes.iter().filter(|i| !cons.contains(&i.name.as_str())) {
+                tm.keys.insert(i.name.clone(), norm(&i.definition, schema, DbKind::Postgres));
+            }
+            m.tables.insert(t, tm);
+        }
+        let views: Vec<(String, String)> = sqlx::query_as("select c.relname::text, pg_get_viewdef(c.oid, true) from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = $1 and c.relkind = 'v' order by 1")
+            .bind(schema)
+            .fetch_all(self)
+            .await?;
+        for (v, def) in views {
+            m.views.insert(v, norm(def.trim().trim_end_matches(';'), schema, DbKind::Postgres));
+        }
+        Ok(m)
+    }
+
+    async fn apply_migration(&self, stmts: &[&str], fail: impl Fn(String) -> AppError) -> AppResult<()> {
+        let mut tx = self.begin().await?;
+        for s in stmts {
+            sqlx::Executor::execute(&mut *tx, sqlx::raw_sql(s)).await.map_err(|e| fail(e.to_string()))?;
+        }
+        tx.commit().await.map_err(|e| fail(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn import_tx(&self) -> AppResult<Tx> {
+        Ok(Tx::Pg(self.begin().await?))
+    }
+
+    /// The EXPLAIN estimate, so it may be off
+    async fn estimate_rows(&self, sql: &str) -> Option<u64> {
+        let head = sql.split_whitespace().next()?.to_ascii_lowercase();
+        if !["select", "with", "table", "values"].contains(&head.as_str()) {
+            return None;
+        }
+        let v: serde_json::Value = sqlx::query_scalar(&format!("EXPLAIN (FORMAT JSON) {sql}")).fetch_one(self).await.ok()?;
+        v.get(0)?.get("Plan")?.get("Plan Rows")?.as_f64().map(|n| n as u64)
+    }
+
+    async fn table_columns(&self, table: &str) -> AppResult<Vec<audit::Col>> {
+        let rows: Vec<(String, bool, bool)> = sqlx::query_as(
+            "SELECT a.attname::text, coalesce(a.attnum = ANY(i.indkey), false), a.attgenerated <> '' \
+             FROM pg_attribute a LEFT JOIN pg_index i ON i.indrelid = a.attrelid AND i.indisprimary \
+             WHERE a.attrelid = $1::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum",
+        )
+        .bind(table)
+        .fetch_all(self)
+        .await?;
+        Ok(rows.into_iter().map(|(name, pk, generated)| audit::Col { name, pk, generated, binary: false }).collect())
     }
 }

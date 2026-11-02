@@ -2,12 +2,15 @@
 //! Callers go through `dispatch!` on a `Pool`, which picks the impl at compile time (no `dyn`).
 //! An operation a kind doesn't implement falls back to the default, an "<op> isn't available for <kind>" error.
 //! The trait is grouped in sections (metadata first); each impl keeps the same sections in the same order.
+use crate::audit;
 use crate::ddl::TableDef;
 use crate::erd::Erd;
 use crate::error::{AppError, AppResult};
 use crate::fake::TableShape;
 use crate::hints::{Hint, HintReq};
 use crate::meta::{CompletionTable, FtsHit, FtsRequest, IndexEntry, SchemaInfo, SchemaObjects, TableDetail};
+use crate::migrate::Model;
+use crate::transfer::Tx;
 
 pub(crate) mod mysql;
 pub(crate) mod pg;
@@ -75,6 +78,33 @@ pub(crate) trait Backend {
     async fn table_shape(&self, _schema: &str, _table: &str) -> AppResult<TableShape> {
         unsupported("Test data", self)
     }
+
+    // ───── Jobs: migrate.rs · transfer.rs · audit.rs ─────
+
+    /// Schema compare: the tables (columns, keys, foreign keys) and views of `schema`
+    async fn schema_model(&self, _schema: &str) -> AppResult<Model> {
+        unsupported("Schema compare", self)
+    }
+
+    /// One migration file: `stmts` in one transaction. A failing statement or COMMIT goes through `fail`
+    async fn apply_migration(&self, _stmts: &[&str], _fail: impl Fn(String) -> AppError) -> AppResult<()> {
+        unsupported("Running migrations", self)
+    }
+
+    /// Import: the transaction the rows go into
+    async fn import_tx(&self) -> AppResult<Tx> {
+        unsupported("Import", self)
+    }
+
+    /// Export: an approximate row count of `sql` for the progress bar (None: no estimate)
+    async fn estimate_rows(&self, _sql: &str) -> Option<u64> {
+        None
+    }
+
+    /// Undo: the columns of `table` as written in SQL (empty: no such table, or a kind that keeps no undo)
+    async fn table_columns(&self, _table: &str) -> AppResult<Vec<audit::Col>> {
+        Ok(vec![])
+    }
 }
 
 /// `dispatch!(pool, b => b.op(..).await)`: run the expression with `b` bound to the `Backend` behind `pool`
@@ -135,6 +165,9 @@ mod tests {
             msg(b.erd(&["s".into()]).await),
             msg(b.table_def("s", "t").await),
             msg(b.table_shape("s", "t").await),
+            msg(b.schema_model("s").await),
+            msg(b.apply_migration(&["select 1"], AppError::Msg).await),
+            msg(b.import_tx().await),
         ];
         let want = [
             "Listing databases",
@@ -149,8 +182,13 @@ mod tests {
             "The diagram",
             "Modify Table",
             "Test data",
+            "Schema compare",
+            "Running migrations",
+            "Import",
         ]
         .map(|op| format!("{op} isn't available for the bare driver"));
         assert_eq!(got, want);
+        assert_eq!(b.estimate_rows("select 1").await, None);
+        assert!(b.table_columns("t").await.unwrap().is_empty(), "no columns: no undo is kept");
     }
 }
