@@ -648,16 +648,18 @@ mod tests {
     }
 
     /// Tests against a local PostgreSQL. Run with `cargo test -- --ignored`.
+    /// QURRY_TEST_PG=host:port:user:db, like the other tests (otherwise localhost:5432, QURRY_TEST_PG_HOST / _USER / _DB)
     fn local_cfg() -> ConnectionConfig {
+        let env = std::env::var("QURRY_TEST_PG").ok();
+        let part = |i: usize| env.as_ref().and_then(|e| e.split(':').nth(i).map(String::from));
         ConnectionConfig {
             id: "test".into(),
             name: "local".into(),
             kind: DbKind::Postgres,
-            host: std::env::var("QURRY_TEST_PG_HOST").unwrap_or_else(|_| "localhost".into()),
-            port: 5432,
-            user: std::env::var("QURRY_TEST_PG_USER")
-                .unwrap_or_else(|_| std::env::var("USER").unwrap()),
-            database: std::env::var("QURRY_TEST_PG_DB").unwrap_or_else(|_| "postgres".into()),
+            host: part(0).or_else(|| std::env::var("QURRY_TEST_PG_HOST").ok()).unwrap_or_else(|| "localhost".into()),
+            port: part(1).map(|p| p.parse().expect("QURRY_TEST_PG must be host:port:user:db")).unwrap_or(5432),
+            user: part(2).or_else(|| std::env::var("QURRY_TEST_PG_USER").ok()).unwrap_or_else(|| std::env::var("USER").unwrap()),
+            database: part(3).or_else(|| std::env::var("QURRY_TEST_PG_DB").ok()).unwrap_or_else(|| "postgres".into()),
             color: None,
             ssh: None,
             password_saved: false,
@@ -673,10 +675,6 @@ mod tests {
     #[ignore]
     async fn pg_remote_requires_tls() {
         let mut cfg = local_cfg();
-        if let Ok(e) = std::env::var("QURRY_TEST_PG") {
-            let p: Vec<&str> = e.split(':').collect();
-            (cfg.port, cfg.user, cfg.database) = (p[1].parse().unwrap(), p[2].into(), p[3].into());
-        }
         cfg.host = "127.1".into();
         assert!(!is_loopback(&cfg.host) && is_loopback("::ffff:127.0.0.1"));
         opt_in_then_connect(cfg, "pw").await;
