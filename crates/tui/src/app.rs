@@ -2334,7 +2334,7 @@ impl App {
             ssh: None,
             color: None,
             read_only: false,
-            options: Default::default(), ssl: None, redis: None,
+            options: Default::default(), ssl: None, redis: None, ssm: None,
         });
         let ssh = c.ssh.clone().unwrap_or(SshConfig { enabled: false, host: String::new(), port: 22, user: String::new(), auth: SshAuth::Key, key_path: "~/.ssh/id_ed25519".into() });
         let kind = serde_json::to_value(c.kind).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_else(|| "postgres".into());
@@ -2404,7 +2404,7 @@ impl App {
             ssh: None,
             color: None,
             read_only: false,
-            options: Default::default(), ssl: None, redis: None,
+            options: Default::default(), ssl: None, redis: None, ssm: None,
         });
         c.kind = serde_json::from_value(serde_json::Value::String(v("Type"))).unwrap_or(DbKind::Postgres);
         c.host = v("Host").trim().into();

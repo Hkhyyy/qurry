@@ -737,7 +737,7 @@ mod tests {
         let st = crate::open_state(Some(dir.clone())).unwrap();
         let cfg = crate::store::ConnectionConfig {
             id: "t".into(), name: "t".into(), kind: DbKind::Postgres, host: p[0].into(), port: p[1].parse().unwrap(), user: p[2].into(), database: p[3].into(),
-            color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+            color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         };
         st.store.save(&cfg).unwrap();
         let sql = |q: &str| st.run_query("t".into(), q.into(), None, None);
@@ -821,7 +821,7 @@ mod tests {
         let st = crate::open_state(Some(dir.clone())).unwrap();
         let cfg = crate::store::ConnectionConfig {
             id: "m".into(), name: "m".into(), kind: DbKind::Mysql, host: p[0].into(), port: p[1].parse().unwrap(), user: p[2].into(), database: p[4].into(),
-            color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+            color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         };
         st.save_connection(cfg, Some(p[3].into()), None).await.unwrap();
         let sql = |q: &str| st.run_query("m".into(), q.into(), None, None);

@@ -49,9 +49,9 @@ pub(crate) fn query_result(columns: Vec<ColumnInfo>, rows: Vec<Vec<Value>>, rows
 /// Max connections per DB (number of tabs + metadata queries such as the tree and autocomplete)
 pub const POOL_MAX: u32 = 32;
 
-/// Whether it is a server on this machine or goes through an SSH tunnel (no network in between to intercept)
+/// Whether it is a server on this machine or goes through an SSH / AWS SSM tunnel (encrypted to the tunnel's far end)
 pub fn is_local(cfg: &ConnectionConfig) -> bool {
-    cfg.active_ssh().is_some() || is_loopback(&cfg.host)
+    cfg.tunneled() || is_loopback(&cfg.host)
 }
 
 pub fn is_loopback(host: &str) -> bool {
@@ -92,7 +92,7 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>) -> AppResul
     connect_via(cfg, password, None).await
 }
 
-/// If `tunnel_port` is set, connect to the SSH tunnel's local port.
+/// If `tunnel_port` is set, connect to the tunnel's local port.
 pub async fn connect_via(cfg: &ConnectionConfig, password: Option<&str>, tunnel_port: Option<u16>) -> AppResult<Pool> {
     match cfg.kind {
         DbKind::Sqlite | DbKind::Mssql | DbKind::Clickhouse | DbKind::Duckdb | DbKind::Mongodb | DbKind::Oracle | DbKind::Qdrant | DbKind::Chroma | DbKind::Milvus => Ok(Pool::Plugin(crate::plugin::connect(cfg, password, tunnel_port).await?)),
@@ -645,6 +645,9 @@ mod tests {
             c.host = h.into();
             assert!(!is_local(&c), "{h}");
         }
+        // An AWS SSM tunnel is encrypted to the instance, like SSH
+        c.ssm = Some(crate::store::SsmConfig { enabled: true, target: "i-0123456789abcdef0".into(), ..Default::default() });
+        assert!(is_local(&c));
     }
 
     /// Tests against a local PostgreSQL. Run with `cargo test -- --ignored`.
@@ -662,7 +665,7 @@ mod tests {
             ssh: None,
             password_saved: false,
             ssh_secret_saved: false,
-            scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+            scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         }
     }
 

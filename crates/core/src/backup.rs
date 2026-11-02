@@ -35,7 +35,7 @@ pub struct RestoreOptions {
 }
 
 /// Folders where tools are likely to be (after PATH)
-fn tool_dirs() -> Vec<PathBuf> {
+pub(crate) fn tool_dirs() -> Vec<PathBuf> {
     // Tests against real servers can pin the client version (e.g. only /opt/homebrew/opt/libpq/bin)
     #[cfg(test)]
     if let Some(d) = std::env::var_os("QURRY_TEST_TOOL_DIRS") {
@@ -101,7 +101,7 @@ fn find_tool_where(name: &str, server_major: Option<u64>, ok: impl Fn(&[u64]) ->
     closest(found, server_major.map(|m| vec![m]).as_deref(), ok)
 }
 
-fn tool_paths(name: &str) -> Vec<PathBuf> {
+pub(crate) fn tool_paths(name: &str) -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = tool_dirs().into_iter().map(|d| d.join(name)).filter(|p| p.is_file()).collect();
     found.dedup();
     found

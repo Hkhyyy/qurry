@@ -724,7 +724,7 @@ mod tests {
         ConnectionConfig {
             id: "my".into(), name: "my".into(), kind: DbKind::Mysql, host: "127.0.0.1".into(), port: 13306, user: "root".into(),
             database: "shop".into(), color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(),
-            read_only: false, options: Default::default(), ssl: None, redis: None,
+            read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         }
     }
 

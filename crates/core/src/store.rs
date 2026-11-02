@@ -47,6 +47,9 @@ pub struct ConnectionConfig {
     /// Redis connection mode (Standalone / Sentinel / Cluster)
     #[serde(default)]
     pub redis: Option<RedisMode>,
+    /// AWS SSM Session Manager tunnel (the other choice next to SSH). Older apps ignore it
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssm: Option<SsmConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -181,6 +184,24 @@ pub struct SshConfig {
     pub key_path: String,
 }
 
+/// AWS SSM port forwarding: `aws ssm start-session` to the DB host/port through this instance. No AWS secrets here:
+/// the AWS CLI uses the user's own config, SSO login or environment
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SsmConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// AWS profile (empty = the CLI's default / AWS_PROFILE)
+    #[serde(default)]
+    pub profile: String,
+    /// AWS region (empty = the profile's / AWS_REGION)
+    #[serde(default)]
+    pub region: String,
+    /// Target instance id (i-… or a managed node mi-…)
+    #[serde(default)]
+    pub target: String,
+}
+
 fn default_ssh_port() -> u16 {
     22
 }
@@ -202,13 +223,22 @@ impl ConnectionConfig {
         self.ssh.as_ref().filter(|s| s.enabled && !s.host.is_empty())
     }
 
+    pub fn active_ssm(&self) -> Option<&SsmConfig> {
+        self.ssm.as_ref().filter(|s| s.enabled && !s.target.trim().is_empty())
+    }
+
+    /// Whether the connection goes through a tunnel (SSH or AWS SSM): the client connects to a port on this machine
+    pub fn tunneled(&self) -> bool {
+        self.active_ssh().is_some() || self.active_ssm().is_some()
+    }
+
     /// Whether this is the same SSH server, so the saved SSH secret may be sent
     pub fn same_ssh(&self, other: &ConnectionConfig) -> bool {
         let t = |c: &ConnectionConfig| c.ssh.as_ref().map(|s| (s.host.trim().to_lowercase(), s.port, s.user.trim().to_string()));
         t(self) == t(other)
     }
 
-    /// Whether self's (saved settings) password may be sent to other: same kind · server · user · SSH tunnel, and TLS not turned off.
+    /// Whether self's (saved settings) password may be sent to other: same kind · server · user · SSH / AWS SSM tunnel, and TLS not turned off.
     /// So an old password doesn't go to a new server when only the host is changed before Test, or a different server is imported with the same id
     /// Redis Sentinel · Cluster nodes are servers too. Turning SSL off, lowering verification, or changing the CA counts as a different server
     pub fn same_server(&self, other: &ConnectionConfig) -> bool {
@@ -218,7 +248,9 @@ impl ConnectionConfig {
                 let r = c.redis.clone().unwrap_or_default();
                 (c.redis_mode().to_string(), r.sentinel_master.trim().to_string(), r.nodes.split([',', ' ']).filter(|n| !n.is_empty()).map(|n| n.to_lowercase()).collect::<Vec<_>>())
             });
-            (c.kind, c.host.trim().to_lowercase(), c.port, c.user.trim().to_string(), c.active_ssh().map(|s| (s.host.trim().to_lowercase(), s.port)), redis)
+            // The SSM target (and the profile · region that pick the AWS account) is where the DB host is resolved, so part of the server
+            let ssm = c.active_ssm().map(|s| (s.profile.trim().to_string(), s.region.trim().to_lowercase(), s.target.trim().to_lowercase()));
+            (c.kind, c.host.trim().to_lowercase(), c.port, c.user.trim().to_string(), c.active_ssh().map(|s| (s.host.trim().to_lowercase(), s.port)), ssm, redis)
         };
         let rank = |c: &ConnectionConfig| match c.active_ssl().map(|s| s.mode()) {
             None => 0,
@@ -500,6 +532,9 @@ impl Store {
                     if e.active_ssh().map(|s| (&s.host, s.port)) != c.active_ssh().map(|s| (&s.host, s.port)) {
                         ch.push("changes the SSH tunnel".into());
                     }
+                    if e.active_ssm() != c.active_ssm() {
+                        ch.push("changes the AWS SSM tunnel".into());
+                    }
                     if script(e) != script(&c) {
                         ch.push("changes the startup script".into());
                     }
@@ -672,6 +707,33 @@ mod tests {
         assert!(!r.same_server(&moved));
     }
 
+    /// The AWS SSM target, profile and region pick where the DB host is resolved: changing them asks for the password again.
+    /// Old files (no ssm) load as before, and a source without SSM is written without the key (older apps read the same file)
+    #[test]
+    fn ssm_target_is_part_of_the_server() {
+        let old: ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "x", "name": "a", "kind": "postgres", "host": "db.internal", "port": 5432, "user": "app" })).unwrap();
+        assert_eq!(old.ssm, None);
+        assert!(!serde_json::to_string(&old).unwrap().contains("ssm"));
+        let a: ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "x", "name": "a", "kind": "postgres", "host": "db.internal", "port": 5432, "user": "app",
+            "ssm": { "enabled": true, "profile": "prod", "region": "ap-northeast-2", "target": "i-0123456789abcdef0" } })).unwrap();
+        assert!(a.tunneled() && a.active_ssh().is_none());
+        assert!(!old.same_server(&a), "turning SSM on moves the connection");
+        let mut b = a.clone();
+        b.ssm.as_mut().unwrap().target = " I-0123456789ABCDEF0 ".into();
+        assert!(a.same_server(&b));
+        let changes: [fn(&mut ConnectionConfig); 4] =
+            [|c| c.ssm.as_mut().unwrap().target = "i-0fffffffffffffff0".into(), |c| c.ssm.as_mut().unwrap().profile = "other".into(), |c| c.ssm.as_mut().unwrap().region = "us-east-1".into(), |c| c.ssm.as_mut().unwrap().enabled = false];
+        for f in changes {
+            let mut c = a.clone();
+            f(&mut c);
+            assert!(!a.same_server(&c), "{c:?}");
+        }
+        // Only the target: an empty instance id is no tunnel
+        let mut c = a.clone();
+        c.ssm.as_mut().unwrap().target = " ".into();
+        assert!(!c.tunneled());
+    }
+
     #[test]
     fn mcp_access_defaults() {
         let mut c: ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "a", "kind": "postgres", "host": "h", "port": 1, "user": "u" })).unwrap();
@@ -724,7 +786,7 @@ mod tests {
             ssh: None,
             password_saved: false,
             ssh_secret_saved: false,
-            scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+            scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         }
     }
 

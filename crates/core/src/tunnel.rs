@@ -1,4 +1,5 @@
 //! SSH tunnel: opens a local port and forwards incoming connections to the remote DB over SSH direct-tcpip channels.
+//! The AWS SSM tunnel (ssm.rs) gives the same Tunnel: a local port that lives until it is dropped.
 use crate::error::{AppError, AppResult};
 use crate::store::{SshAuth, SshConfig};
 use russh::client;
@@ -99,12 +100,27 @@ impl client::Handler for Client {
 
 pub struct Tunnel {
     pub local_port: u16,
-    task: JoinHandle<()>,
+    keep: Keep,
+}
+
+/// What forwards the port: the SSH accept loop, or the aws CLI process (killed when dropped)
+enum Keep {
+    Task(JoinHandle<()>),
+    #[allow(dead_code)] // held for its Drop
+    Process(crate::ssm::Process),
+}
+
+impl Tunnel {
+    pub(crate) fn process(local_port: u16, p: crate::ssm::Process) -> Self {
+        Self { local_port, keep: Keep::Process(p) }
+    }
 }
 
 impl Drop for Tunnel {
     fn drop(&mut self) {
-        self.task.abort();
+        if let Keep::Task(t) = &self.keep {
+            t.abort();
+        }
     }
 }
 
@@ -195,7 +211,7 @@ pub async fn open(ssh: &SshConfig, secret: Option<&str>, remote_host: &str, remo
             });
         }
     });
-    Ok(Tunnel { local_port, task })
+    Ok(Tunnel { local_port, keep: Keep::Task(task) })
 }
 
 #[cfg(test)]
@@ -226,7 +242,7 @@ mod tests {
         unsafe { std::env::set_var("QURRY_KNOWN_HOSTS", &kh) }; // Used only in a single test
         let cfg = ConnectionConfig {
             id: "t".into(), name: "t".into(), kind: DbKind::Postgres, host: "dbtool-pg".into(), port: 5432,
-            user: "postgres".into(), database: "postgres".into(), color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+            user: "postgres".into(), database: "postgres".into(), color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         };
         let mut ssh = SshConfig { enabled: true, host: "localhost".into(), port: 2222, user: "root".into(), auth: SshAuth::Password, key_path: String::new() };
 

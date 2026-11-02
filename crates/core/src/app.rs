@@ -1,4 +1,4 @@
-//! App state: Data Source pools, sessions, SSH tunnels, passwords. GUI (Tauri), TUI and MCP use the same methods.
+//! App state: Data Source pools, sessions, SSH / AWS SSM tunnels, passwords. GUI (Tauri), TUI and MCP use the same methods.
 use crate::db::{self, Pool, QueryResult};
 use crate::error::{AppError, AppResult};
 use crate::session::{self, Session};
@@ -18,7 +18,7 @@ pub struct AppState {
     pub pools: RwLock<HashMap<String, Pool>>,
     /// Console tab id → session
     pub sessions: RwLock<HashMap<String, SessionEntry>>,
-    /// Connection id → SSH tunnel (lives as long as the pool)
+    /// Connection id → SSH / AWS SSM tunnel (lives as long as the pool)
     pub tunnels: RwLock<HashMap<String, crate::tunnel::Tunnel>>,
     /// Password store (encrypted file). Avoids keychain popups.
     pub secret_file: crate::secrets::SecretFile,
@@ -176,20 +176,20 @@ pub async fn drop_pool(state: &AppState, id: &str) {
     state.last_ping.lock().unwrap().retain(|k, _| !belongs(k, id));
 }
 
-/// If SSH is configured, open the tunnel first, then connect.
+/// If an SSH or AWS SSM tunnel is configured, open it first, then connect through its local port.
 pub async fn connect_config(
     cfg: &ConnectionConfig,
     password: Option<&str>,
     ssh_secret: Option<&str>,
 ) -> AppResult<(Pool, Option<crate::tunnel::Tunnel>)> {
-    match cfg.active_ssh() {
-        Some(ssh) => {
-            let t = crate::tunnel::open(ssh, ssh_secret, &cfg.host, cfg.port).await?;
-            let pool = db::connect_via(cfg, password, Some(t.local_port)).await?;
-            Ok((pool, Some(t)))
-        }
-        None => Ok((db::connect(cfg, password).await?, None)),
-    }
+    let tunnel = match (cfg.active_ssh(), cfg.active_ssm()) {
+        (Some(_), Some(_)) => return Err(AppError::Msg("Both an SSH and an AWS SSM tunnel are turned on — choose one (GUI: SSH/SSL tab · TUI: Tunnel).".into())),
+        (Some(ssh), None) => Some(crate::tunnel::open(ssh, ssh_secret, &cfg.host, cfg.port).await?),
+        (None, Some(ssm)) => Some(crate::ssm::open(ssm, &cfg.host, cfg.port).await?),
+        (None, None) => None,
+    };
+    let pool = db::connect_via(cfg, password, tunnel.as_ref().map(|t| t.local_port)).await?;
+    Ok((pool, tunnel))
 }
 
 pub fn touch(state: &AppState, id: &str) {
@@ -331,7 +331,7 @@ pub async fn redis_pool(state: &AppState, id: &str) -> AppResult<crate::redisdb:
 }
 
 /// Time limit for read-only (MCP) queries (so queries sent by others do not hold the server for long)
-const SERVER_CHANGED: &str = "The server, port, user, type, SSH tunnel or Redis nodes changed, or SSL was turned off, its verification lowered or its CA file changed — enter the password again. The saved one is only sent to the server it was saved for.";
+const SERVER_CHANGED: &str = "The server, port, user, type, SSH / AWS SSM tunnel or Redis nodes changed, or SSL was turned off, its verification lowered or its CA file changed — enter the password again. The saved one is only sent to the server it was saved for.";
 const SSH_CHANGED: &str = "The SSH server changed — enter the SSH password / passphrase again. The saved one is only sent to the server it was saved for.";
 /// MCP reads: 60 seconds, string parsing matches guard (even if the server or role sets standard_conforming_strings = off)
 const READ_ONLY_TIMEOUT_PG: &str = "SET LOCAL statement_timeout = '60s'";
@@ -698,7 +698,11 @@ impl AppState {
         };
         pool.close().await;
         drop(tunnel);
-        let via = config.active_ssh().map(|s| format!("  (via SSH {}@{})", s.user, s.host)).unwrap_or_default();
+        let via = match (config.active_ssh(), config.active_ssm()) {
+            (Some(s), _) => format!("  (via SSH {}@{})", s.user, s.host),
+            (_, Some(s)) => format!("  (via AWS SSM {})", s.target.trim()),
+            _ => String::new(),
+        };
         version.map(|v| {
             let notes: Vec<String> = db::version_note(config.kind, &v).into_iter().chain(plain).collect();
             if notes.is_empty() { format!("{v}{via}") } else { format!("{v}{via}\n{}", notes.join("\n")) }
@@ -1219,7 +1223,7 @@ mod tests {
         let cfg = ConnectionConfig {
             id: "a".into(), name: "a".into(), kind: crate::store::DbKind::Postgres, host: "127.0.0.1".into(), port: 1,
             user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         };
         let saved = st.save_connection(cfg, Some("pw".into()), None).await.unwrap();
         let mut moved = saved.clone();
@@ -1251,7 +1255,7 @@ mod tests {
         let cfg = ConnectionConfig {
             id: String::new(), name: "trust".into(), kind: crate::store::DbKind::Postgres, host: "127.0.0.1".into(), port: 1,
             user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         };
         let saved = st.save_connection(cfg, None, None).await.unwrap();
         assert_eq!(saved.options.mcp.as_deref(), Some("off"));
@@ -1269,7 +1273,7 @@ mod tests {
         let mut cfg = ConnectionConfig {
             id: "prod".into(), name: "prod".into(), kind: crate::store::DbKind::Postgres, host: "db".into(), port: 5432,
             user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: true,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         };
         cfg.options.confirm_changes = true;
         st.store.save(&cfg).unwrap();
@@ -1293,7 +1297,7 @@ mod tests {
             id: id.into(), name: id.into(), kind: crate::store::DbKind::Postgres, host: "db".into(), port: 5432,
             user: "u".into(), database: "d".into(), color: None, password_saved: false,
             ssh: Some(crate::store::SshConfig { enabled: true, host: "127.0.0.1".into(), port: 1, user: "me".into(), auth: Default::default(), key_path: String::new() }),
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         };
         st.save_connection(mk("pw"), Some("secret".into()), None).await.unwrap();
         st.save_connection(mk("trust"), None, None).await.unwrap();
@@ -1326,7 +1330,7 @@ mod tests {
         let cfg = ConnectionConfig {
             id: "p".into(), name: "p".into(), kind: crate::store::DbKind::Postgres, host: "db".into(), port: 5432,
             user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         };
         st.save_connection(cfg, Some("pw".into()), None).await.unwrap();
         // Another app turns on Read-only
@@ -1353,7 +1357,7 @@ mod tests {
         let mk = |id: &str, kind| ConnectionConfig {
             id: id.into(), name: id.into(), kind, host: "db.example".into(), port: 5432,
             user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         };
         st.save_connection(mk("p", crate::store::DbKind::Postgres), Some("pw".into()), None).await.unwrap();
         // A pool that is open now (lazy: never connects)
@@ -1403,7 +1407,7 @@ mod tests {
         let cfg = ConnectionConfig {
             id: "r".into(), name: "r".into(), kind: crate::store::DbKind::Postgres, host: "db".into(), port: 5432,
             user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         };
         Store::new(dir.clone()).save(&cfg).unwrap();
         // Create the key before the threads open the file
@@ -1442,7 +1446,7 @@ mod tests {
         let cfg = ConnectionConfig {
             id: "m".into(), name: "m".into(), kind: crate::store::DbKind::Mysql, host: "db.example".into(), port: 3306,
             user: "u".into(), database: "d".into(), color: None, ssh: None, password_saved: false,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         };
         st.save_connection(cfg, Some("pw".into()), None).await.unwrap();
         let file = dir.join("import.json");
@@ -1474,7 +1478,7 @@ mod tests {
         let mut cfg = ConnectionConfig {
             id: "hk".into(), name: "hk".into(), kind: crate::store::DbKind::Postgres, host: "localhost".into(), port: 5432,
             user: std::env::var("USER").unwrap(), database: "postgres".into(), color: None, ssh: None, password_saved: false,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         };
         cfg.options.keep_alive_secs = Some(1);
         cfg.options.auto_disconnect_secs = Some(2);

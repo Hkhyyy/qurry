@@ -185,8 +185,8 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
     let ep = endpoint(cfg, &cfg.user, password)?;
     let db = db_index(&cfg.database);
     let mode = cfg.redis_mode();
-    if mode != "standalone" && cfg.active_ssh().is_some() {
-        return Err(AppError::Msg(format!("SSH tunnel is not supported with Redis {mode} (nodes announce their own addresses)")));
+    if mode != "standalone" && cfg.tunneled() {
+        return Err(AppError::Msg(format!("SSH / AWS SSM tunnels are not supported with Redis {mode} (nodes announce their own addresses)")));
     }
     let conn = match mode {
         "cluster" => {
@@ -903,7 +903,7 @@ mod tests {
         ConnectionConfig {
             id: "rd".into(), name: "rd".into(), kind: DbKind::Redis, host: host.into(), port: port.parse().expect("QURRY_TEST_REDIS port"), user: String::new(),
             database: db.into(), color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(),
-            read_only: false, options: Default::default(), ssl: None, redis: None,
+            read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         }
     }
 

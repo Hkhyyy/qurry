@@ -5138,6 +5138,7 @@ dependencies = [
  "dirs 6.0.0",
  "futures",
  "keyring",
+ "libc",
  "minisign-verify 0.2.5",
  "qurry-driver",
  "qurry-shared",
