@@ -379,10 +379,24 @@ fn innodb_tx_open(status: &str, id: i64) -> Option<bool> {
     status.split("---TRANSACTION ").skip(1).find(|t| t.contains(&me)).map(|t| !t.lines().next().unwrap_or("").contains("not started"))
 }
 
+/// Statements that change rows (s = strip_comments_lead(sql))
+fn changes_rows(s: &str) -> bool {
+    let first = s.split_whitespace().next().unwrap_or("");
+    ["insert", "update", "delete", "replace"].contains(&first) || s.starts_with("load data")
+}
+
 /// Statements that change or read rows and never commit the open transaction (s = strip_comments_lead(sql))
 fn is_dml(s: &str) -> bool {
     let first = s.split_whitespace().next().unwrap_or("");
-    ["insert", "update", "delete", "replace", "show", "explain", "describe", "desc"].contains(&first) || s.starts_with("load data")
+    changes_rows(s) || ["show", "explain", "describe", "desc"].contains(&first)
+}
+
+/// When the server can't say whether its transaction is open (MySQL 5.6 without the PROCESS privilege): the statements that, having
+/// run, committed it for sure — DDL but on temporary tables, LOCK TABLES, GRANT / REVOKE (s = strip_comments_lead(sql))
+fn committed_without_answer(s: &str) -> bool {
+    let mut w = s.split_whitespace();
+    let (first, second) = (w.next().unwrap_or(""), w.next().unwrap_or(""));
+    ["create", "alter", "drop", "rename", "truncate", "lock", "grant", "revoke"].contains(&first) && second != "temporary"
 }
 
 /// Dedicated connection for a console tab. MySQL has no protocol-level cursor, so "load more" re-queries with LIMIT/OFFSET.
@@ -391,6 +405,11 @@ pub struct MySession {
     pub id: i64,
     manual: bool,
     pub in_tx: bool,
+    /// The open transaction is known to be one on the server (BEGIN or a row change ran in it, or the server said so), not only
+    /// guessed after a SELECT or a failed statement in Manual mode
+    pub known: bool,
+    /// TiDB accepts setting session_track_gtids inside a transaction, so tx_open asks it differently
+    tidb: bool,
     /// (SELECT statement, next OFFSET)
     more: Option<(String, usize)>,
 }
@@ -398,8 +417,8 @@ pub struct MySession {
 impl MySession {
     pub async fn open(p: &MySqlPool) -> AppResult<Self> {
         let mut conn = p.acquire().await?;
-        let id: u64 = sqlx::query_scalar("select connection_id()").fetch_one(&mut *conn).await?;
-        Ok(Self { conn, id: id as i64, manual: false, in_tx: false, more: None })
+        let (id, version): (u64, String) = sqlx::query_as("select connection_id(), cast(@@version as char)").fetch_one(&mut *conn).await?;
+        Ok(Self { conn, id: id as i64, manual: false, in_tx: false, known: false, tidb: version.contains("TiDB"), more: None })
     }
 
     pub async fn ping(&mut self) {
@@ -464,25 +483,41 @@ impl MySession {
     /// session_track_gtids inside one (1766), and set to its own value it is a no-op. (Not the isolation level: setting it outside a
     /// transaction would undo a pending SET TRANSACTION ISOLATION LEVEL.) MariaDB has no session_track_gtids (1193) but has
     /// @@in_transaction. No privilege needed. MySQL 5.6 has neither: there InnoDB's live list of transactions answers (SHOW ENGINE
-    /// INNODB STATUS, with the PROCESS privilege; information_schema.innodb_trx is a cache that can be stale).
-    /// Without an answer the transaction counts as open: never claim changes are committed without knowing
-    async fn tx_open(&mut self) -> bool {
-        match self.conn.execute("SET @@SESSION.session_track_gtids = @@SESSION.session_track_gtids").await.map_err(AppError::from) {
-            Ok(_) => false,
-            Err(e) if error_number(&e) == Some(1193) => match sqlx::query_scalar::<_, u64>("SELECT @@in_transaction").fetch_one(&mut *self.conn).await.map_err(AppError::from) {
-                Ok(n) => n != 0,
-                Err(e) if error_number(&e) == Some(1193) => match self.conn.fetch_one("SHOW ENGINE INNODB STATUS").await.and_then(|r| r.try_get::<String, _>(2)) {
-                    Ok(status) => innodb_tx_open(&status, self.id).unwrap_or(true),
-                    Err(_) => true,
-                },
-                Err(_) => true,
-            },
-            Err(_) => true,
+    /// INNODB STATUS, with the PROCESS privilege; information_schema.innodb_trx is a cache that can be stale). TiDB accepts the SET
+    /// inside a transaction, but has a start timestamp only inside one (@@tidb_current_ts).
+    /// None = no answer: never claim changes are committed without knowing (follow_server)
+    async fn tx_open(&mut self) -> Option<bool> {
+        if self.tidb {
+            return sqlx::query_scalar::<_, i64>("SELECT @@tidb_current_ts <> 0").fetch_one(&mut *self.conn).await.ok().map(|n| n != 0);
         }
+        match self.conn.execute("SET @@SESSION.session_track_gtids = @@SESSION.session_track_gtids").await.map_err(AppError::from) {
+            Ok(_) => Some(false),
+            Err(e) if error_number(&e) == Some(1766) => Some(true),
+            Err(e) if error_number(&e) == Some(1193) => match sqlx::query_scalar::<_, u64>("SELECT @@in_transaction").fetch_one(&mut *self.conn).await.map_err(AppError::from) {
+                Ok(n) => Some(n != 0),
+                Err(e) if error_number(&e) == Some(1193) => match self.conn.fetch_one("SHOW ENGINE INNODB STATUS").await.and_then(|r| r.try_get::<String, _>(2)) {
+                    Ok(status) => innodb_tx_open(&status, self.id),
+                    Err(_) => None,
+                },
+                Err(_) => None,
+            },
+            Err(_) => None,
+        }
+    }
+
+    /// Follow the server's answer whether the transaction is still open after a statement. Without one it counts as open, unless the
+    /// statement committed it for sure (`committed`: committed_without_answer, or SET autocommit = 1 that turned Manual off)
+    async fn follow_server(&mut self, committed: bool) {
+        let open = self.tx_open().await;
+        self.known |= open == Some(true);
+        self.in_tx = open.unwrap_or(!committed);
     }
 
     pub async fn run(&mut self, sql: &str, limit: usize) -> AppResult<QueryResult> {
         self.more = None;
+        if !self.in_tx {
+            self.known = false;
+        }
         let mut r = match run_on(&mut self.conn, sql, limit).await {
             Ok(r) => r,
             Err(e) => {
@@ -492,7 +527,7 @@ impl MySession {
                 } else if (self.manual || self.in_tx) && asks_server(sql, &s) && error_number(&e).is_some() && !crate::app::is_conn_lost(&e) {
                     // Same rule as for one that ran: a DDL or SET PASSWORD that committed before failing, a COMMIT the server refused
                     // (rolled back) ended it, one that failed to parse (COMMIT TRANSACTION: 1064) didn't, a CALL may have opened one
-                    self.in_tx = self.tx_open().await;
+                    self.follow_server(false).await;
                 } else if self.manual && opens_tx(&s) && !s.starts_with("rollback") && error_number(&e) != Some(1064) {
                     // With autocommit=0 a statement that fails (but parsed) still leaves the transaction open: the row locks it took
                     // before a lock wait timeout, what a procedure changed before it failed
@@ -502,6 +537,7 @@ impl MySession {
             }
         };
         let s = strip_comments_lead(sql);
+        let was_manual = self.manual;
         if s.starts_with("set") && s.contains("autocommit") {
             // A typed SET autocommit: follow the server's mode (whether it committed is asked below)
             if let Ok(on) = sqlx::query_scalar::<_, i64>("SELECT @@autocommit").fetch_one(&mut *self.conn).await {
@@ -510,14 +546,16 @@ impl MySession {
         }
         if s.starts_with("begin") || s.starts_with("start transaction") {
             self.in_tx = true;
+            self.known = true;
         } else if s.starts_with("commit") || (s.starts_with("rollback") && !s.starts_with("rollback to")) {
             self.in_tx = false;
         } else if (self.manual || self.in_tx) && asks_server(sql, &s) {
-            self.in_tx = self.tx_open().await;
+            self.follow_server(committed_without_answer(&s) || (was_manual && !self.manual)).await;
         } else if self.manual && opens_tx(&s) {
             // With autocommit=0, any statement opens a transaction, not only a change: WITH … DELETE, SELECT … FOR UPDATE (its row locks),
             // SELECT f() where f writes. Like PostgreSQL's Manual mode, it stays open until Commit / Roll back
             self.in_tx = true;
+            self.known |= changes_rows(&s);
         }
         if r.truncated && is_select_like(sql) {
             self.more = Some((sql.trim().trim_end_matches(';').trim().to_string(), limit));
@@ -531,6 +569,9 @@ impl MySession {
     /// A change with its undo snapshot right before it, in one transaction (Session::run_with_snapshot)
     pub async fn run_with_snapshot(&mut self, snap: &str, sql: &str, limit: usize) -> (AppResult<QueryResult>, AppResult<QueryResult>) {
         self.more = None;
+        if !self.in_tx {
+            self.known = false;
+        }
         let own = !self.manual && !self.in_tx;
         let had_tx = self.in_tx;
         if own {
@@ -867,6 +908,18 @@ mod tests {
         assert_eq!(innodb_tx_open(status, 15), Some(false));
         assert_eq!(innodb_tx_open(status, 140), Some(false));
         assert_eq!(innodb_tx_open(status, 1), None);
+    }
+
+    /// Without the server's answer, only statements that always commit the open transaction close it: not those on temporary
+    /// tables, not SET or CALL
+    #[test]
+    fn committed_without_answer_is_ddl_lock_and_grants() {
+        for s in ["alter table t add column c int", "create  index i on t (a)", "drop table t", "truncate t", "rename table a to b", "lock tables t write", "grant select on d.* to u"] {
+            assert!(committed_without_answer(s), "{s}");
+        }
+        for s in ["create temporary table t (a int)", "drop\ntemporary table t", "set @x = 1", "call p()", "do 1", "unlock tables"] {
+            assert!(!committed_without_answer(s), "{s}");
+        }
     }
 
     /// docker run -d --name dbtool-mysql-test -e MYSQL_ROOT_PASSWORD=dbtool -e MYSQL_DATABASE=shop -p 13306:3306 mysql:8.4

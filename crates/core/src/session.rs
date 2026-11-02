@@ -479,6 +479,13 @@ impl Session {
             Session::Redis(_) | Session::Plugin(_) => false,
         }
     }
+    /// Whether the open transaction is known to be one on the server, not only guessed (MySession::known)
+    pub fn tx_known(&self) -> bool {
+        match self {
+            Session::My(s) => s.in_tx && s.known,
+            _ => self.in_tx(),
+        }
+    }
     /// On tab close: roll back the open transaction, reset session settings and return the connection to the pool
     pub async fn discard(&mut self) {
         match self {

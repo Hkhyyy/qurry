@@ -779,7 +779,7 @@ impl AppState {
             false => None,
         };
         let undo = watch && crate::audit::is_change(&sql, cfg.kind);
-        let (r, undo, in_tx) = self.run_with_undo(&id, cfg.kind, &sql, limit, tab, undo).await;
+        let (r, undo, in_tx, known) = self.run_with_undo(&id, cfg.kind, &sql, limit, tab, undo).await;
         let logged = match watch {
             true => {
                 let a = self.audit.after(started, &id, &cfg.name, cfg.kind, tab, &sql, &r, undo);
@@ -793,7 +793,8 @@ impl AppState {
             _ => true,
         };
         match r {
-            Err(e) if in_tx && cfg.kind == store::DbKind::Mysql && crate::mysql::ended_before_failing(&sql, &e, open) => Err(AppError::Msg(format!(
+            // Only when the transaction was one on the server (MySession::known): one guessed after a SELECT had no changes to save
+            Err(e) if known && cfg.kind == store::DbKind::Mysql && crate::mysql::ended_before_failing(&sql, &e, open) => Err(AppError::Msg(format!(
                 "{e} — {}, and Roll back can't undo them{}.",
                 match crate::mysql::ends_in_procedure(&sql) {
                     true => "the open transaction ended while it ran: the procedure committed or rolled back the changes made in it before, so check the data",
@@ -814,11 +815,11 @@ impl AppState {
     }
 
     /// Run in the console's session (or on the pool). undo = also keep undo SQL: the snapshot runs in the change's transaction (Session::run_with_snapshot).
-    /// → (result, undo SQL or why there is none, whether the console had a transaction open)
-    async fn run_with_undo(&self, id: &str, kind: store::DbKind, sql: &str, limit: usize, tab: Option<&str>, undo: bool) -> (AppResult<QueryResult>, Option<Result<String, String>>, bool) {
+    /// → (result, undo SQL or why there is none, whether the console had a transaction open, and whether it was known to (Session::tx_known))
+    async fn run_with_undo(&self, id: &str, kind: store::DbKind, sql: &str, limit: usize, tab: Option<&str>, undo: bool) -> (AppResult<QueryResult>, Option<Result<String, String>>, bool, bool) {
         let pool = match ensure_pool(self, id).await {
             Ok(p) => p,
-            Err(e) => return (Err(e), None, false),
+            Err(e) => return (Err(e), None, false, false),
         };
         let plan = match undo {
             true => Some(crate::audit::plan(&pool, sql, kind).await),
@@ -827,7 +828,7 @@ impl AppState {
         let sess = match tab {
             Some(t) => match ensure_session(self, id, t).await {
                 Ok(s) => Some(s),
-                Err(e) => return (Err(e), None, false),
+                Err(e) => return (Err(e), None, false, false),
             },
             None => None,
         };
@@ -843,11 +844,11 @@ impl AppState {
                     temp = s;
                     &mut temp
                 }
-                Err(e) => return (Err(e), None, false),
+                Err(e) => return (Err(e), None, false, false),
             },
-            None => return (pool.run_query(sql, limit).await, plan.and_then(|p| p.err()).map(Err), false),
+            None => return (pool.run_query(sql, limit).await, plan.and_then(|p| p.err()).map(Err), false, false),
         };
-        let in_tx = s.in_tx();
+        let (in_tx, known) = (s.in_tx(), s.tx_known());
         let (r, undo) = match plan {
             Some(Ok(p)) => {
                 let (snap, r) = s.run_with_snapshot(&p.snapshot, sql, limit).await;
@@ -859,7 +860,7 @@ impl AppState {
         if sess.is_none() {
             s.discard().await;
         }
-        (r, undo, in_tx)
+        (r, undo, in_tx, known)
     }
 
     /// Production audit log (newest first)

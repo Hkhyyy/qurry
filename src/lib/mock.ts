@@ -323,6 +323,8 @@ const handlers: Record<string, (a: any) => unknown> = {
     { id: "a5", ts: Date.now() - 2000, connId: "prod", connName: "[PROD] shop_app", sql: "COMMIT outcome unknown (connection lost)", inTx: false, error: "error communicating with database: Connection reset by peer (os error 54)", note: "The server may have committed before the connection was lost. Check the data before you run these changes again." },
     { id: "a4", ts: Date.now() - 5000, connId: "prod", connName: "[PROD] shop_app", sql: "update orders set status = 'refunded' where id = 7", inTx: false, started: true,
       note: "Running, or stopped before its result was recorded (Qurry quit, or couldn't write the log after it ran)" },
+    { id: "a6", ts: Date.now() - 20000, connId: "prod", connName: "[PROD] shop_app", sql: "ENDED (by CALL: committed or rolled back)", inTx: false,
+      note: "The procedure may have committed or rolled back the changes made before it in the transaction. Check the data before you run them again." },
     { id: "a3", ts: Date.now() - 30000, connId: "prod", connName: "[PROD] shop_app", sql: "COMMIT", inTx: false },
     { id: "a2", ts: Date.now() - 60000, connId: "prod", connName: "[PROD] shop_app", sql: "update users set user_name = 'kim' where id <= 3", rows: 3, inTx: true,
       undo: "-- Undo for: update users set user_name = 'kim' where id <= 3\n-- Saved just before it ran. Rows changed again since then are overwritten.\nUPDATE users AS qurry_t SET user_name = qurry_old.user_name\nFROM jsonb_populate_recordset(NULL::users, $qurry$[{\"id\":1,\"user_name\":\"user_1\"}]$qurry$) AS qurry_old\nWHERE qurry_t.id = qurry_old.id;\n" },

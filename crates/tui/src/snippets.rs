@@ -24,7 +24,7 @@ fn ago(ts: i64) -> String {
 /// What picking a Production log entry without undo SQL says: the error, but first what to do for a COMMIT of unknown outcome
 fn note(e: &qurry_core::audit::AuditEntry) -> String {
     match (&e.error, &e.note) {
-        (Some(err), Some(n)) if e.sql == qurry_core::audit::COMMIT_UNKNOWN => format!("{n} ({err})"),
+        (Some(err), Some(n)) if qurry_core::audit::outcome_unknown(&e.sql) => format!("{n} ({err})"),
         _ => e.error.clone().or(e.note.clone()).unwrap_or_else(|| "No undo for this statement".into()),
     }
 }
@@ -96,8 +96,8 @@ impl App {
                 let status = if e.started {
                     // Logged before it ran, no result: still running, or Qurry stopped — the outcome is unknown
                     "no result recorded".to_string()
-                } else if e.sql == qurry_core::audit::COMMIT_UNKNOWN {
-                    // A COMMIT cut off by a lost connection: it may have committed
+                } else if qurry_core::audit::outcome_unknown(&e.sql) {
+                    // A COMMIT cut off by a lost connection, a transaction a CALL ended: it may have committed
                     "outcome unknown".to_string()
                 } else if e.error.is_some() {
                     "failed".to_string()
