@@ -1,54 +1,27 @@
-//! Rebindable command shortcuts. Defaults in DEFAULT_KEYS, user settings in the "tui" section of keymap.json (only ones differing from defaults)
+//! Rebindable command shortcuts. Defaults and names come from the shared command table (qurry_core::keymap), user settings from the
+//! "tui" section of keymap.json (only ones differing from defaults)
 //! Key notation: "Ctrl+L", "Alt+Shift+X", "F5", "Ctrl+Enter", "Alt+\\" … (modifier order: Ctrl, Alt, Shift)
 use crate::app::Action;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use qurry_core::keymap::{self as table, Scope};
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
-pub const DEFAULT_KEYS: &[(Action, &[&str])] = &[
-    (Action::Quit, &["Ctrl+Q"]),
-    (Action::Help, &["F1"]),
-    (Action::Palette, &["Ctrl+K"]),
-    (Action::SearchEverywhere, &["Ctrl+P"]),
-    (Action::GoToObject, &["Ctrl+O"]),
-    (Action::Ddl, &["Ctrl+B"]),
-    (Action::RecentTabs, &["Ctrl+E"]),
-    (Action::NewConsole, &["Ctrl+L"]),
-    (Action::CloseTab, &["Ctrl+W"]),
-    (Action::NextTab, &["Alt+Right", "Ctrl+PgDn"]),
-    (Action::PrevTab, &["Alt+Left", "Ctrl+PgUp"]),
-    // Alt+1~9 are workspaces (input.rs, when the Alt+digit isn't in the keymap)
-    (Action::ToggleExplorer, &["Alt+0"]),
-    (Action::WsNew, &["Alt+N"]),
-    (Action::WsRename, &["Alt+Shift+N"]),
-    (Action::CycleFocus, &["F6"]),
-    (Action::ModifyTable, &["Ctrl+F6"]),
-    (Action::RenameObject, &["Shift+F6"]),
-    (Action::SplitRight, &["Alt+\\"]),
-    (Action::SplitDown, &["Alt+-"]),
-    (Action::OtherSplit, &["Alt+Tab"]),
-    (Action::SplitShrink, &["Alt+Shift+Left"]),
-    (Action::SplitGrow, &["Alt+Shift+Right"]),
-    (Action::ExplorerNarrower, &["Alt+["]),
-    (Action::ExplorerWider, &["Alt+]"]),
-    (Action::Execute, &["F5", "Ctrl+Enter", "Alt+Enter"]),
-    (Action::Explain, &["Alt+E"]),
-    (Action::Complete, &["Ctrl+Space"]),
-    (Action::Cancel, &["Ctrl+C"]),
-    (Action::TxToggle, &["Alt+T"]),
-    (Action::Commit, &["Alt+C"]),
-    (Action::Rollback, &["Alt+R"]),
-    (Action::ToggleOutput, &["Alt+O"]),
-    // Moving between panes is ⌃⌥ + arrows (⌥ + arrows is within a pane: ←/→ tabs)
-    (Action::PaneUp, &["Ctrl+Alt+Up"]),
-    (Action::PaneDown, &["Ctrl+Alt+Down"]),
-    (Action::PaneLeft, &["Ctrl+Alt+Left"]),
-    (Action::PaneRight, &["Ctrl+Alt+Right"]),
-    (Action::ShrinkEditor, &["Alt+Shift+Up"]),
-    (Action::GrowEditor, &["Alt+Shift+Down"]),
-    (Action::Submit, &["Ctrl+S"]),
-    (Action::Find, &["Ctrl+F"]),
-    (Action::Disconnect, &["Ctrl+F2"]),
-];
+pub use qurry_core::keymap::bindable;
+
+/// Rebindable commands (the table's TUI rows with default keys) in table order: the F1 window, --help, docs.
+/// Alt+1~9 are workspaces (input.rs, when the Alt+digit isn't in the keymap). Moving between panes is ⌃⌥ + arrows (⌥ + arrows is within a pane: ←/→ tabs)
+pub static DEFAULT_KEYS: LazyLock<Vec<(Action, &'static [String])>> = LazyLock::new(|| {
+    table::commands()
+        .iter()
+        .filter(|c| !c.tui_keys.is_empty())
+        .map(|c| {
+            let id = c.tui.as_deref().unwrap_or_default();
+            let a = crate::app::ACTIONS.iter().map(|x| x.0).find(|a| action_id(*a) == id);
+            (a.unwrap_or_else(|| panic!("keymap-table.json: tui id {id} is not an Action")), c.tui_keys.as_slice())
+        })
+        .collect()
+});
 
 /// Name written to keymap.json (the enum name as is)
 pub fn action_id(a: Action) -> String {
@@ -56,7 +29,7 @@ pub fn action_id(a: Action) -> String {
 }
 
 fn defaults(a: Action) -> Vec<String> {
-    DEFAULT_KEYS.iter().find(|d| d.0 == a).map(|d| d.1.iter().map(|s| s.to_string()).collect()).unwrap_or_default()
+    DEFAULT_KEYS.iter().find(|d| d.0 == a).map(|d| d.1.to_vec()).unwrap_or_default()
 }
 
 /// Key event → notation. None if not a rebindable key (e.g. a char without modifiers)
@@ -132,115 +105,7 @@ fn mac_glyphs() -> bool {
 /// Display notation: ⌃⌥⇧ symbols on macOS (same as the GUI; terminal Alt = Option), Ctrl+ / Alt+ / Shift+ elsewhere.
 /// Screen text is written with symbols ("⌃k"), and the storage format ("Alt+X") is accepted too
 pub fn disp(s: &str) -> String {
-    if mac_glyphs() {
-        disp_mac(s)
-    } else {
-        lower_unshifted(&glyph_words(s))
-    }
-}
-
-/// disp's macOS notation, on any host (the parity dump pins it)
-pub(crate) fn disp_mac(s: &str) -> String {
-    lower_unshifted(s).replace("Ctrl+", "⌃").replace("Alt+", "⌥").replace("Shift+", "⇧")
-}
-
-/// ⌃⌥⇧ symbols → Ctrl+ / Alt+ / Shift+ (non-macOS terminal screens). Combos containing ⌘ (⇧⌘A: Mac terminal keys) stay as is
-fn glyph_words(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(c) = rest.chars().next() {
-        let run: String = rest.chars().take_while(|c| "⌃⌥⇧⌘".contains(*c)).collect();
-        if run.is_empty() {
-            out.push(c);
-            rest = &rest[c.len_utf8()..];
-            continue;
-        }
-        rest = &rest[run.len()..];
-        if run.contains('⌘') {
-            out.push_str(&run);
-            continue;
-        }
-        for g in run.chars() {
-            out.push_str(match g {
-                '⌃' => "Ctrl+",
-                '⌥' => "Alt+",
-                _ => "Shift+",
-            });
-        }
-        // Only one + in ⌥+wheel
-        if let Some(r) = rest.strip_prefix('+') {
-            rest = r;
-        }
-    }
-    out
-}
-
-/// "Ctrl+K" → "Ctrl+k": a single letter with ⌃/⌥ and no Shift is shown lowercase (uppercase reads as a key needing Shift)
-pub(crate) fn lower_unshifted(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while !rest.is_empty() {
-        let at_word = out.chars().last().is_none_or(|c| !c.is_alphanumeric());
-        if at_word && (rest.starts_with("Ctrl+") || rest.starts_with("Alt+")) {
-            // Modifier group (Ctrl+Alt+Shift+ …)
-            let mut chain = 0;
-            let mut shift = false;
-            while let Some(m) = ["Ctrl+", "Alt+", "Shift+"].iter().find(|m| rest[chain..].starts_with(**m)) {
-                shift |= *m == "Shift+";
-                chain += m.len();
-            }
-            out.push_str(&rest[..chain]);
-            rest = &rest[chain..];
-            let key_len = rest.find(|c: char| !c.is_alphanumeric()).unwrap_or(rest.len());
-            let key = &rest[..key_len];
-            if key.len() == 1 && key.chars().all(|c| c.is_ascii_alphabetic()) && !shift {
-                out.push_str(&key.to_ascii_lowercase());
-            } else {
-                out.push_str(key);
-            }
-            rest = &rest[key_len..];
-            continue;
-        }
-        // Keys written with symbols (⌘C, ⌥⌘Y): modifier symbol group + one char
-        let glyphs: String = rest.chars().take_while(|c| "⌃⌥⇧⌘".contains(*c)).collect();
-        if !glyphs.is_empty() {
-            let after = &rest[glyphs.len()..];
-            let mut it = after.chars();
-            if let Some(k) = it.next().filter(|k| k.is_ascii_uppercase() && !it.next().is_some_and(|n| n.is_alphanumeric())) {
-                out.push_str(&glyphs);
-                out.push(if glyphs.contains('⇧') { k } else { k.to_ascii_lowercase() });
-                rest = &after[1..];
-                continue;
-            }
-        }
-        let c = rest.chars().next().unwrap();
-        out.push(c);
-        rest = &rest[c.len_utf8()..];
-    }
-    out
-}
-
-/// Whether usable as a command shortcut: only Ctrl/Alt combos or F keys (others clash with typing·movement keys)
-pub fn bindable(s: &str) -> bool {
-    s.starts_with("Ctrl+") || s.starts_with("Alt+") || s.trim_start_matches("Shift+").strip_prefix('F').is_some_and(|n| n.parse::<u8>().is_ok())
-}
-
-/// Normalize user-setting notation ("ctrl+l" → "Ctrl+L")
-fn normalize(s: &str) -> String {
-    let parts: Vec<&str> = s.split('+').collect();
-    // When the key itself is '+', like "Alt++"
-    let (mods, key) = if s.ends_with("++") { (&parts[..parts.len() - 2], "+") } else { (&parts[..parts.len() - 1], parts[parts.len() - 1]) };
-    let has = |m: &str| mods.iter().any(|x| x.eq_ignore_ascii_case(m));
-    let mut out = String::new();
-    for (m, name) in [("ctrl", "Ctrl+"), ("alt", "Alt+"), ("shift", "Shift+")] {
-        if has(m) {
-            out.push_str(name);
-        }
-    }
-    let named = ["Space", "Enter", "Tab", "Esc", "Backspace", "Delete", "Insert", "Home", "End", "PgUp", "PgDn", "Up", "Down", "Left", "Right"];
-    // Letters·F keys uppercase ("l" → "L", "f5" → "F5")
-    let key = named.iter().find(|n| n.eq_ignore_ascii_case(key)).map(|n| n.to_string()).unwrap_or_else(|| key.to_uppercase());
-    out + &key
+    table::disp(s, mac_glyphs())
 }
 
 pub struct Keymap {
@@ -251,9 +116,9 @@ impl Keymap {
     /// Overlay user settings on the defaults. Unknown action names are ignored
     pub fn new(user: &qurry_core::store::Keymap) -> Self {
         let mut map: HashMap<Action, Vec<String>> = DEFAULT_KEYS.iter().map(|(a, _)| (*a, defaults(*a))).collect();
-        for (a, _) in DEFAULT_KEYS {
+        for (a, _) in DEFAULT_KEYS.iter() {
             if let Some(v) = user.get(&action_id(*a)) {
-                map.insert(*a, v.iter().map(|s| normalize(s)).collect());
+                map.insert(*a, v.iter().map(|s| table::normalize(s)).collect());
             }
         }
         Keymap { map }
@@ -280,11 +145,11 @@ impl Keymap {
 
     /// Assign a key (add = add to existing keys). Removed from any other command using the same key → the commands it was removed from
     pub fn bind(&mut self, a: Action, key: String, add: bool) -> Option<Action> {
-        let mut taken = None;
-        for (other, v) in self.map.iter_mut() {
-            if *other != a && v.contains(&key) {
+        // One scope in the terminal: every command conflicts with every other
+        let taken = table::conflicts(&a, Scope::Global, &key, self.map.iter().map(|(o, v)| (*o, Scope::Global, v.as_slice())));
+        for o in &taken {
+            if let Some(v) = self.map.get_mut(o) {
                 v.retain(|x| x != &key);
-                taken = Some(*other);
             }
         }
         let v = self.map.entry(a).or_default();
@@ -294,7 +159,7 @@ impl Keymap {
         if !v.contains(&key) {
             v.push(key);
         }
-        taken
+        taken.into_iter().next()
     }
 
     pub fn reset(&mut self, a: Action) {
@@ -371,32 +236,18 @@ mod tests {
         assert!(km.overrides().is_empty());
     }
 
+    /// Every Action has a row in the shared table (its name on screen), and every TUI row is an Action
     #[test]
-    fn only_modified_or_function_keys_are_bindable() {
-        assert!(bindable("Ctrl+L") && bindable("Alt+\\") && bindable("F5") && bindable("Shift+F1"));
-        assert!(!bindable("L") && !bindable("Enter") && !bindable("Shift+Tab") && !bindable("Up"));
-    }
-
-    #[test]
-    fn every_default_is_bindable_and_unique() {
-        let mut seen = std::collections::HashSet::new();
-        for (a, keys) in DEFAULT_KEYS {
-            for k in *keys {
-                assert!(bindable(k), "{a:?} {k}");
-                assert!(seen.insert(*k), "duplicate default {k}");
-                assert_eq!(normalize(k), *k);
+    fn every_action_has_a_table_row() {
+        let ids: Vec<String> = crate::app::ACTIONS.iter().map(|(a, _)| action_id(*a)).collect();
+        for id in &ids {
+            assert!(table::tui_command(id).is_some(), "Action::{id} has no row in crates/shared/src/keymap-table.json: add one with \"tui\": \"{id}\"");
+        }
+        for c in table::commands() {
+            if let Some(id) = &c.tui {
+                assert!(ids.contains(id), "keymap-table.json row \"tui\": \"{id}\" is not an Action in the palette (app.rs ACTIONS): fix the name or add the Action");
             }
         }
-    }
-
-    /// Screen text uses symbols → words when not on macOS (only one + in ⌥+wheel)
-    #[test]
-    fn mac_notation_on_any_host() {
-        assert_eq!(disp_mac("Mod+K · Ctrl+K · Alt+Shift+X · ⌥+wheel"), "Mod+K · ⌃k · ⌥⇧X · ⌥+wheel");
-    }
-
-    #[test]
-    fn glyphs_become_words_off_macos() {
-        assert_eq!(lower_unshifted(&glyph_words("⌃k · ⌥⇧N · ⌥+wheel · ⇧Tab · ⇧⌘A")), "Ctrl+k · Alt+Shift+N · Alt+wheel · Shift+Tab · ⇧⌘A");
+        assert_eq!(DEFAULT_KEYS.iter().find(|d| d.0 == Action::NewConsole).map(|d| d.1), Some(&["Ctrl+L".to_string()][..]));
     }
 }

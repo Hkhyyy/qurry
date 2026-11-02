@@ -1,5 +1,5 @@
 //! TUI keymap (source for F1 help, `qurry-tui --help`, docs/shortcuts-tui.md).
-//! Rebindable command shortcuts are in DEFAULT_KEYS in keys.rs; only fixed per-screen keys live here
+//! Rebindable command shortcuts are in the shared command table (crates/shared/src/keymap-table.json, keys::DEFAULT_KEYS); only fixed per-screen keys live here
 pub const HELP: &[(&str, &[(&str, &str)])] = &[
     ("Database Explorer", &[
         ("↑ ↓  (j k)", "Move"),
@@ -124,7 +124,7 @@ pub fn text() -> String {
         s.push_str(&format!("  {:<30} {}\n", k, d));
     }
     s.push_str("\nCommands (change them with F1)\n");
-    for (a, keys) in crate::keys::DEFAULT_KEYS {
+    for (a, keys) in crate::keys::DEFAULT_KEYS.iter() {
         s.push_str(&format!("  {:<30} {}\n", crate::keys::disp(&keys.join(" / ")), crate::input::name_of(*a)));
     }
     for (title, rows) in HELP {
