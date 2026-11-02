@@ -350,10 +350,11 @@ fn asks_server(sql: &str, s: &str) -> bool {
     !is_select_like(sql) && !is_dml(s)
 }
 
-/// Whether MySQL committed the console's open transaction before `sql` failed with `e`: the session asked the server (asks_server)
-/// and none is open any more. Not when it ended otherwise: a deadlock or lock wait timeout rolls it back, a failed COMMIT / ROLLBACK
-/// doesn't commit, a lost connection rolls it back. open = the session still has the transaction open
-pub(crate) fn committed_before_failing(sql: &str, e: &AppError, open: bool) -> bool {
+/// Whether MySQL ended the console's open transaction before `sql` failed with `e`: the session asked the server (asks_server)
+/// and none is open any more. It committed it, unless `sql` runs other statements (ends_in_procedure). Not when it ended otherwise:
+/// a deadlock or lock wait timeout rolls it back, a failed COMMIT / ROLLBACK doesn't commit, a lost connection rolls it back.
+/// open = the session still has the transaction open
+pub(crate) fn ended_before_failing(sql: &str, e: &AppError, open: bool) -> bool {
     let s = strip_comments_lead(sql);
     !open
         && asks_server(sql, &s)
@@ -361,6 +362,21 @@ pub(crate) fn committed_before_failing(sql: &str, e: &AppError, open: bool) -> b
         && !s.starts_with("rollback")
         && !matches!(error_number(e), None | Some(1205 | 1213))
         && !crate::app::is_conn_lost(e)
+}
+
+/// Whether `sql` runs statements of its own that can COMMIT or ROLLBACK: a CALL, or EXECUTE of a prepared COMMIT / ROLLBACK. When
+/// the transaction ended with it, the server's answer can't tell whether it committed or rolled back
+pub(crate) fn ends_in_procedure(sql: &str) -> bool {
+    let s = strip_comments_lead(sql);
+    let first = s.split_whitespace().next().unwrap_or("");
+    ["call", "execute"].contains(&first)
+}
+
+/// Whether connection `id` has a transaction open, from SHOW ENGINE INNODB STATUS (MySQL 5.6): its entry in the list of transactions
+/// says "ACTIVE …" or "not started". None = not listed (the list can be cut short on a busy server)
+fn innodb_tx_open(status: &str, id: i64) -> Option<bool> {
+    let me = format!("MySQL thread id {id},");
+    status.split("---TRANSACTION ").skip(1).find(|t| t.contains(&me)).map(|t| !t.lines().next().unwrap_or("").contains("not started"))
 }
 
 /// Statements that change or read rows and never commit the open transaction (s = strip_comments_lead(sql))
@@ -447,12 +463,20 @@ impl MySession {
     /// Whether the server has a transaction open on this connection (asks_server), changing nothing: MySQL refuses to set
     /// session_track_gtids inside one (1766), and set to its own value it is a no-op. (Not the isolation level: setting it outside a
     /// transaction would undo a pending SET TRANSACTION ISOLATION LEVEL.) MariaDB has no session_track_gtids (1193) but has
-    /// @@in_transaction. No privilege needed. Without an answer the transaction counts as open: never claim changes are committed
-    /// without knowing
+    /// @@in_transaction. No privilege needed. MySQL 5.6 has neither: there InnoDB's live list of transactions answers (SHOW ENGINE
+    /// INNODB STATUS, with the PROCESS privilege; information_schema.innodb_trx is a cache that can be stale).
+    /// Without an answer the transaction counts as open: never claim changes are committed without knowing
     async fn tx_open(&mut self) -> bool {
         match self.conn.execute("SET @@SESSION.session_track_gtids = @@SESSION.session_track_gtids").await.map_err(AppError::from) {
             Ok(_) => false,
-            Err(e) if error_number(&e) == Some(1193) => !matches!(sqlx::query_scalar::<_, u64>("SELECT @@in_transaction").fetch_one(&mut *self.conn).await, Ok(0)),
+            Err(e) if error_number(&e) == Some(1193) => match sqlx::query_scalar::<_, u64>("SELECT @@in_transaction").fetch_one(&mut *self.conn).await.map_err(AppError::from) {
+                Ok(n) => n != 0,
+                Err(e) if error_number(&e) == Some(1193) => match self.conn.fetch_one("SHOW ENGINE INNODB STATUS").await.and_then(|r| r.try_get::<String, _>(2)) {
+                    Ok(status) => innodb_tx_open(&status, self.id).unwrap_or(true),
+                    Err(_) => true,
+                },
+                Err(_) => true,
+            },
             Err(_) => true,
         }
     }
@@ -817,6 +841,32 @@ mod tests {
         ] {
             assert!(a(q), "{q}");
         }
+    }
+
+    /// A CALL or EXECUTE can end the transaction either way (a procedure's ROLLBACK, a prepared COMMIT); other statements commit it
+    #[test]
+    fn call_and_execute_end_in_procedure() {
+        for q in ["call p()", "CALL s.p", "-- x\n call p()", "execute stmt", "EXECUTE s USING @a"] {
+            assert!(ends_in_procedure(q), "{q}");
+        }
+        for q in ["create table t (a int)", "set password = 'x'", "callx", "do 0", "deallocate prepare s", "prepare s from 'commit'"] {
+            assert!(!ends_in_procedure(q), "{q}");
+        }
+    }
+
+    /// MySQL 5.6: the session's entry in InnoDB's list of transactions (SHOW ENGINE INNODB STATUS, as 5.6.51 prints it)
+    #[test]
+    fn innodb_status_says_whether_the_transaction_is_open() {
+        let status = "------------\nTRANSACTIONS\n------------\nTrx id counter 2500\nLIST OF TRANSACTIONS FOR EACH SESSION:\n\
+            ---TRANSACTION 0, not started\nMySQL thread id 140, OS thread handle 0x7f, query id 9 172.17.0.1 root init\nSHOW ENGINE INNODB STATUS\n\
+            ---TRANSACTION 2486, ACTIVE 0 sec\n1 lock struct(s), heap size 360, 0 row lock(s), undo log entries 1\n\
+            MySQL thread id 14, OS thread handle 0x7f, query id 202 172.17.0.1 root init\n\
+            ---TRANSACTION 2499, not started\nMySQL thread id 15, OS thread handle 0x7f, query id 204 172.17.0.1 root\n\
+            --------\nFILE I/O\n--------\nMain thread process no. 1, id 140, state: sleeping\n";
+        assert_eq!(innodb_tx_open(status, 14), Some(true));
+        assert_eq!(innodb_tx_open(status, 15), Some(false));
+        assert_eq!(innodb_tx_open(status, 140), Some(false));
+        assert_eq!(innodb_tx_open(status, 1), None);
     }
 
     /// docker run -d --name dbtool-mysql-test -e MYSQL_ROOT_PASSWORD=dbtool -e MYSQL_DATABASE=shop -p 13306:3306 mysql:8.4

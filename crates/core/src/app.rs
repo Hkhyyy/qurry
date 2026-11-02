@@ -793,8 +793,12 @@ impl AppState {
             _ => true,
         };
         match r {
-            Err(e) if in_tx && cfg.kind == store::DbKind::Mysql && crate::mysql::committed_before_failing(&sql, &e, open) => Err(AppError::Msg(format!(
-                "{e} — MySQL committed the open transaction before running it: the changes made in it before are saved, and Roll back can't undo them{}.",
+            Err(e) if in_tx && cfg.kind == store::DbKind::Mysql && crate::mysql::ended_before_failing(&sql, &e, open) => Err(AppError::Msg(format!(
+                "{e} — {}, and Roll back can't undo them{}.",
+                match crate::mysql::ends_in_procedure(&sql) {
+                    true => "the open transaction ended while it ran: the procedure committed or rolled back the changes made in it before, so check the data",
+                    false => "MySQL committed the open transaction before running it: the changes made in it before are saved",
+                },
                 if watch { " (the Production log has their undo SQL where it could keep it)" } else { "" }
             ))),
             Err(e) => {
@@ -874,7 +878,7 @@ impl AppState {
 
     /// The console's transaction with logged changes ended without a COMMIT after `sql` ran (deadlock, failed COMMIT, lost connection):
     /// log that the server rolled it back, or that a COMMIT cut off by a lost connection has an unknown outcome (audit::ended_by).
-    /// On MySQL a statement that ran can also have committed it (DDL, LOCK TABLES, SET autocommit = 1, BEGIN …)
+    /// On MySQL a statement that ran can also have committed it (DDL, LOCK TABLES, SET autocommit = 1, BEGIN …), or a CALL ended it either way
     async fn audit_lost_tx(&self, id: &str, name: &str, kind: store::DbKind, tab: Option<&str>, sql: &str, r: &AppResult<QueryResult>) -> AppResult<()> {
         let Some(t) = tab else { return Ok(()) };
         let open = self.tx_state(t.into()).await;
@@ -882,10 +886,15 @@ impl AppState {
             let s = session::strip_comments_lead(sql);
             s.starts_with("begin") || s.starts_with("start transaction")
         };
+        // A CALL may have committed or rolled it back: the server's answer can't tell
+        let ended = match crate::mysql::ends_in_procedure(sql) {
+            true => crate::audit::ENDED_IN_PROCEDURE,
+            false => crate::audit::IMPLICIT_COMMIT,
+        };
         let word = match r {
-            Ok(_) if kind == store::DbKind::Mysql => (!open || begin()).then_some(crate::audit::IMPLICIT_COMMIT),
+            Ok(_) if kind == store::DbKind::Mysql => (!open || begin()).then_some(ended),
             Ok(_) => (!open).then_some(crate::audit::BY_SERVER),
-            Err(e) if kind == store::DbKind::Mysql && crate::mysql::committed_before_failing(sql, e, open) => Some(crate::audit::IMPLICIT_COMMIT),
+            Err(e) if kind == store::DbKind::Mysql && crate::mysql::ended_before_failing(sql, e, open) => Some(ended),
             Err(e) => crate::audit::ended_by(sql, e, open),
         };
         match word {

@@ -327,6 +327,8 @@ pub(crate) const BY_SERVER: &str = "ROLLBACK (by the server)";
 pub(crate) const DISCONNECTED: &str = "ROLLBACK (disconnected)";
 /// Log entry for a MySQL console transaction with logged changes that a statement committed (DDL, LOCK TABLES, SET autocommit = 1, BEGIN …)
 pub(crate) const IMPLICIT_COMMIT: &str = "COMMIT (implicit)";
+/// Log entry for a MySQL console transaction with logged changes that ended in a CALL (or EXECUTE): the procedure may have committed or rolled it back
+pub(crate) const ENDED_IN_PROCEDURE: &str = "ENDED (by CALL: committed or rolled back)";
 /// Log entry for a COMMIT cut off by a lost connection: the server may have committed before the connection went
 pub const COMMIT_UNKNOWN: &str = "COMMIT outcome unknown (connection lost)";
 /// What to do about it (the entry's note)
@@ -1712,6 +1714,44 @@ mod tests {
             assert_eq!(log(1), [IMPLICIT_COMMIT], "{stmt}");
             assert_eq!(followup_values(&st, s).await, format!("[[{}],[2],[3]]", 10 + i), "{stmt}");
         }
+        followup_drop(&st, DbKind::Mysql, s).await;
+    }
+
+    /// MySQL Manual: a CALL whose procedure rolls back (an EXIT HANDLER with ROLLBACK; RESIGNAL, or a plain ROLLBACK) or commits ends
+    /// the open transaction either way. The console shows none open, but neither the error nor the log claims the changes are saved
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_call_that_ends_the_transaction() {
+        let Some(st) = prod_state(DbKind::Mysql, "QURRY_TEST_MY").await else { return };
+        let s = "audit_followups_call";
+        followup_table(&st, DbKind::Mysql, s).await;
+        let run = |sql: String| st.run_query("d".into(), sql, None, Some("m".into()));
+        let log = |n: usize| st.audit_log(None, String::new(), n).into_iter().map(|e| e.sql).collect::<Vec<_>>();
+        // Created before the transaction (CREATE PROCEDURE commits it)
+        for p in [
+            format!("create procedure {s}.p() begin declare exit handler for sqlexception begin rollback; resignal; end; insert into {s}.nope values (1); end"),
+            format!("create procedure {s}.r() begin rollback; end"),
+            format!("create procedure {s}.c() begin commit; end"),
+        ] {
+            st.run_query("d".into(), p, None, None).await.unwrap();
+        }
+        st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
+        run(format!("update {s}.t set v = 50 where id = 2")).await.unwrap();
+        let e = run(format!("call {s}.p()")).await.unwrap_err().to_string();
+        assert!(e.contains("1146") && e.contains("committed or rolled back") && e.contains("check the data") && !e.contains("are saved"), "{e}");
+        assert!(!st.tx_state("m".into()).await);
+        assert_eq!(log(1), [ENDED_IN_PROCEDURE]);
+        assert_eq!(followup_values(&st, s).await, "[[1],[2],[3]]");
+        run(format!("update {s}.t set v = 60 where id = 3")).await.unwrap();
+        run(format!("call {s}.r()")).await.unwrap();
+        assert!(!st.tx_state("m".into()).await);
+        assert_eq!(log(1), [ENDED_IN_PROCEDURE]);
+        assert_eq!(followup_values(&st, s).await, "[[1],[2],[3]]");
+        run(format!("update {s}.t set v = 70 where id = 1")).await.unwrap();
+        run(format!("call {s}.c()")).await.unwrap();
+        assert!(!st.tx_state("m".into()).await);
+        assert_eq!(log(1), [ENDED_IN_PROCEDURE]);
+        assert_eq!(followup_values(&st, s).await, "[[70],[2],[3]]");
         followup_drop(&st, DbKind::Mysql, s).await;
     }
 
