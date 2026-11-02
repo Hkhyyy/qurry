@@ -297,6 +297,32 @@ pub struct ConnForm {
     pub message: Option<(bool, String)>,
 }
 
+impl ConnForm {
+    /// Indices of the fields shown: only the chosen tunnel's fields (the other tunnel's keep their values for switching back)
+    pub fn visible(&self) -> Vec<usize> {
+        let tunnel = self.fields.iter().find(|f| f.label == "Tunnel").map_or("none", |f| f.value.as_str());
+        (0..self.fields.len())
+            .filter(|&i| {
+                let l = self.fields[i].label;
+                if l.starts_with("SSH ") {
+                    tunnel == "ssh"
+                } else if l.starts_with("AWS ") || l == "SSM target" {
+                    tunnel == "aws ssm"
+                } else {
+                    true
+                }
+            })
+            .collect()
+    }
+
+    /// Moves the selection by `d` shown fields (wrapping around)
+    pub fn step(&mut self, d: isize) {
+        let v = self.visible();
+        let pos = v.iter().position(|&i| i == self.sel).unwrap_or(0) as isize;
+        self.sel = v[(pos + d).rem_euclid(v.len() as isize) as usize];
+    }
+}
+
 pub enum Popup {
     /// F1 keymap. The Commands section at the top is selectable (sel). record = waiting for a new key (true = add to existing keys)
     /// sel counts the top Commands and the fixed key list below as one sequence (only Commands can be changed)

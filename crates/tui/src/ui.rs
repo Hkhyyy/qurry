@@ -920,13 +920,29 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             f.render_widget(List::new(items).block(panel(hint, true)), list);
         }
         Popup::ConnForm(form) => {
-            let h = form.fields.len() as u16 + 6;
-            let r = centered(area, 72, h);
+            // The message (test results, errors) and the key hints stay at the bottom; the fields scroll around the selection
+            let mut foot: Vec<Line> = vec![];
+            if let Some((ok, m)) = &form.message {
+                foot.push(Line::styled(disp(m), Style::default().fg(if *ok { OK } else { DANGER })));
+            }
+            foot.push(Line::styled(disp("↑↓/Tab move · type to edit · Space/←→ toggle · ⌃t test · ⌃s / Enter save · Esc cancel"), Style::default().fg(DIM)));
+            let vis = form.visible();
+            let foot_h = wrapped_height(&foot, 72.min(area.width.saturating_sub(4)).saturating_sub(2));
+            let r = centered(area, 72, vis.len() as u16 + 1 + foot_h + 2);
             clear(f, r);
-            let mut lines: Vec<Line> = form
-                .fields
+            let block = panel(if form.edit.is_some() { " Data Source Properties " } else { " New Data Source " }, true);
+            let inner = block.inner(r);
+            f.render_widget(block, r);
+            let foot_h = foot_h.min(inner.height.saturating_sub(2));
+            let [rows, _, foot_r] = Layout::vertical([Constraint::Min(1), Constraint::Length(1), Constraint::Length(foot_h)]).areas(inner);
+            let h = rows.height as usize;
+            let pos = vis.iter().position(|&i| i == form.sel).unwrap_or(0);
+            let off = pos.saturating_sub(h.saturating_sub(1)).min(vis.len().saturating_sub(h));
+            let lines: Vec<Line> = vis
                 .iter()
-                .enumerate()
+                .skip(off)
+                .take(h)
+                .map(|&i| (i, &form.fields[i]))
                 .map(|(i, fl)| {
                     let shown = match fl.kind {
                         FieldKind::Secret if fl.value != "<saved>" => "•".repeat(fl.value.chars().count()),
@@ -949,13 +965,8 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                     Line::from(spans)
                 })
                 .collect();
-            lines.push(Line::raw(""));
-            if let Some((ok, m)) = &form.message {
-                lines.push(Line::styled(disp(m), Style::default().fg(if *ok { OK } else { DANGER })));
-            }
-            lines.push(Line::styled(disp("↑↓/Tab move · type to edit · Space/←→ toggle · ⌃t test · ⌃s / Enter save · Esc cancel"), Style::default().fg(DIM)));
-            let t = if form.edit.is_some() { " Data Source Properties " } else { " New Data Source " };
-            f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(panel(t, true)), r);
+            f.render_widget(Paragraph::new(lines), rows);
+            f.render_widget(Paragraph::new(foot).wrap(Wrap { trim: false }), foot_r);
         }
     }
 }

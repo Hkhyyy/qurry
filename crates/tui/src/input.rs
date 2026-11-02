@@ -1228,11 +1228,10 @@ fn popup_key(app: &mut App, k: KeyEvent) {
             app.popup = Some(Popup::Palette(p));
         }
         Popup::ConnForm(mut form) => {
-            let n = form.fields.len();
             match k.code {
                 KeyCode::Esc => return,
-                KeyCode::Down | KeyCode::Tab => form.sel = (form.sel + 1) % n,
-                KeyCode::Up | KeyCode::BackTab => form.sel = (form.sel + n - 1) % n,
+                KeyCode::Down | KeyCode::Tab => form.step(1),
+                KeyCode::Up | KeyCode::BackTab => form.step(-1),
                 // SSH unknown server: trust after confirming the fingerprint
                 KeyCode::Char('y') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                     let v = |l: &str| form.fields.iter().find(|f| f.label == l).map(|f| f.value.trim().to_string()).unwrap_or_default();
@@ -1973,6 +1972,45 @@ mod tests {
         let c = cfg_of(&h);
         assert!(c.active_ssh().is_some() && c.active_ssm().is_none());
         assert_eq!(c.ssm.unwrap().target, "i-0123456789abcdef0");
+    }
+
+    /// On an 80×24 terminal the form scrolls to the selected field, and the test message and key hints stay on screen.
+    /// Only the chosen tunnel's fields are shown and visited
+    #[tokio::test]
+    async fn conn_form_scrolls_and_keeps_the_message() {
+        let mut h = Harness::new().await;
+        let ssm = serde_json::from_value(serde_json::json!({ "id": "s", "name": "orders", "kind": "postgres", "host": "orders.internal", "port": 5432, "user": "app",
+            "ssm": { "enabled": true, "profile": "prod", "region": "ap-northeast-2", "target": "i-0123456789abcdef0" } })).unwrap();
+        h.app.conn_form(Some(ssm));
+        let tunnel = {
+            let Some(crate::app::Popup::ConnForm(f)) = &h.app.popup else { panic!() };
+            f.fields.iter().position(|x| x.label == "Tunnel").unwrap()
+        };
+        let Some(crate::app::Popup::ConnForm(f)) = &mut h.app.popup else { panic!() };
+        f.sel = tunnel;
+        h.key("Down");
+        h.key("Down");
+        h.key("Down");
+        let Some(crate::app::Popup::ConnForm(f)) = &mut h.app.popup else { panic!() };
+        assert_eq!(f.fields[f.sel].label, "SSM target", "the SSH fields are skipped");
+        f.message = Some((false, "✕ Your AWS SSO session has expired or you haven't signed in. Run: aws sso login --profile prod — then try again.".into()));
+        let s = h.screen(80, 24);
+        assert!(s.contains("SSM target") && s.contains("i-0123456789abcdef0"), "{s}");
+        assert!(s.contains("sso login --profile prod — then try again."), "{s}");
+        assert!(s.contains("Esc cancel"), "{s}");
+        assert!(!s.contains("SSH host"), "{s}");
+        // Back to the top: the first fields come into view again
+        let Some(crate::app::Popup::ConnForm(f)) = &mut h.app.popup else { panic!() };
+        f.sel = 0;
+        let s = h.screen(80, 24);
+        assert!(s.contains("Name") && s.contains("Esc cancel"), "{s}");
+        // Switching to SSH shows its fields instead
+        let Some(crate::app::Popup::ConnForm(f)) = &mut h.app.popup else { panic!() };
+        f.sel = tunnel;
+        h.key("Left");
+        h.key("Down");
+        let Some(crate::app::Popup::ConnForm(f)) = &h.app.popup else { panic!() };
+        assert_eq!(f.fields[f.sel].label, "SSH host");
     }
 
     /// Vacuum Progress only cancels: K (kill connection) doesn't even ask, and isn't in the hint line
