@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type BackupOptions, DataPreview, meta } from "../lib/api";
+import { useSharedReady } from "../lib/shared";
 import { autoMap, DataFormat, FORMATS, progressText } from "../lib/transfer";
 import { Button, Checkbox, Hint, IconButton, Modal, Notice, ProgressBar, RadioGroup, SectionTitle, Select, StatusItem, Table, Td, Text, TextInput, Th } from "../ui";
 
@@ -88,9 +89,11 @@ export function ImportDialog({ target, schema, table, onImport, onClose }: {
       setErr(String(e));
     }
   };
+  // autoMap runs in the WASM module (every column skipped until it has loaded): map again once it has
+  const wasmReady = useSharedReady();
   useEffect(() => {
     if (file) setMap(autoMap(file.pv.columns, create ? null : cols));
-  }, [file, cols]);
+  }, [file, cols, wasmReady]);
 
   const chosen = map.map((c, i) => [i, c.trim()] as [number, string]).filter(([, c]) => c);
   const ok = !!file && chosen.length > 0 && !!name.trim();
