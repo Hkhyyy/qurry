@@ -704,6 +704,16 @@ sys.exit(255)
         }
         assert_eq!(starts(), before + 1, "one new session");
         assert_eq!(st.tunnels.read().await.len(), 1);
+        // A missing database opened together with the default one fails alone, and the session stays for the next try
+        crate::app::drop_pool(&st, &saved.id).await;
+        gone(fake.path()).await;
+        let missing = format!("{}::qurry_ssm_no_such_db", saved.id);
+        let (bad, good) = tokio::join!(crate::app::ensure_pool(&st, &missing), crate::app::ensure_pool(&st, &saved.id));
+        let bad = bad.err().expect("missing db").to_string();
+        assert!(bad.contains("does not exist"), "{bad}");
+        assert!(good.expect("the default db connects").server_version().await.is_ok());
+        assert!(crate::app::ensure_pool(&st, &missing).await.is_err());
+        assert_eq!(starts(), before + 2, "one session for both, kept after the failed database");
         crate::app::drop_pool(&st, &saved.id).await;
         for db in ["qurry_ssm_a", "qurry_ssm_b"] {
             let _ = st.run_query(saved.id.clone(), format!("drop database if exists {db} with (force)"), None, None).await;

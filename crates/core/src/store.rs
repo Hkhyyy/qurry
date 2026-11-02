@@ -461,15 +461,21 @@ impl Store {
 
     /// Read · change · write under a file lock shared by GUI · TUI · MCP (so concurrent saves don't lose one side's change)
     fn update<T>(&self, f: impl FnOnce(&mut Vec<ConnectionConfig>) -> AppResult<T>) -> AppResult<T> {
+        self.locked(|mut all| {
+            let out = f(&mut all)?;
+            self.write(&all)?;
+            Ok(out)
+        })
+    }
+
+    /// The sources under the same lock, without writing: `f` never sees a save that is half done (its secrets set, the store not yet written)
+    pub fn locked<T>(&self, f: impl FnOnce(Vec<ConnectionConfig>) -> AppResult<T>) -> AppResult<T> {
         if let Some(dir) = self.path.parent() {
             crate::secrets::private_dir(dir)?;
         }
         let lock = fs::OpenOptions::new().create(true).truncate(false).write(true).open(self.path.with_extension("json.lock"))?;
         lock.lock()?;
-        let mut all = self.list()?;
-        let out = f(&mut all)?;
-        self.write(&all)?;
-        Ok(out)
+        f(self.list()?)
     }
 
     pub fn export_to(&self, path: &std::path::Path) -> AppResult<usize> {

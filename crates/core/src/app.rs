@@ -6,6 +6,7 @@ use crate::session::{self, Session};
 use crate::store::{self, ConnectionConfig, Store};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::atomic::Ordering::SeqCst;
 use tokio::sync::RwLock;
 
 pub struct SessionEntry {
@@ -81,15 +82,18 @@ impl AppState {
 
     /// Forgets DB passwords saved under `<id>#ssm` whose data source is gone: an older app that deletes an AWS SSM source removes
     /// only `<id>` and `<id>#ssh`. Only `#ssm` entries: older apps never write them, so a source an older app is saving right now
-    /// can't lose its password. Nothing is removed while connections.json can't be read
+    /// can't lose its password. Under the store lock, so a new source this version is saving (its `#ssm` set, connections.json
+    /// not written yet) isn't taken for a deleted one. Nothing is removed while connections.json can't be read
     pub fn forget_orphan_ssm_passwords(&self) -> AppResult<()> {
-        let ids: std::collections::HashSet<String> = self.store.list()?.into_iter().map(|c| c.id).collect();
-        for key in self.secret_file.names()? {
-            if key.ends_with("#ssm") && !ids.contains(store::secret_owner(&key)) {
-                self.secret_file.set(&key, None)?;
+        self.store.locked(|all| {
+            let ids: std::collections::HashSet<String> = all.into_iter().map(|c| c.id).collect();
+            for key in self.secret_file.names()? {
+                if key.ends_with("#ssm") && !ids.contains(store::secret_owner(&key)) {
+                    self.secret_file.set(&key, None)?;
+                }
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 }
 
@@ -180,15 +184,15 @@ async fn recover(state: &AppState, id: &str, tab: Option<&str>, lost_tx: bool, e
 /// One data source's connects
 #[derive(Default)]
 struct Connecting {
-    /// Held while the shared tunnel opens and the first pool connects through it, so callers arriving together start one SSH / SSM
-    /// session. Then the time and message of its failure: the callers that waited return it instead of trying again one after
-    /// another (each try can take the whole timeout)
-    first: tokio::sync::Mutex<Option<(std::time::Instant, String)>>,
+    /// Held while the shared tunnel opens, so callers arriving together start one SSH / SSM session. Then the time and message
+    /// of its failure (only the tunnel's: a database's own connect error stays with its caller)
+    failed: tokio::sync::Mutex<Option<(std::time::Instant, String)>>,
     /// drop_pool counts up: a connect that started before keeps no pool or tunnel (its tunnel may be gone, its settings old)
     generation: std::sync::atomic::AtomicU64,
 }
 
 impl AppState {
+    /// Created only for a source that exists (ensure_pool looks it up first) and removed when it is deleted
     fn connecting(&self, base: &str) -> std::sync::Arc<Connecting> {
         self.connecting.lock().unwrap().entry(base.to_string()).or_default().clone()
     }
@@ -196,7 +200,10 @@ impl AppState {
 
 /// Close all DB pools, sessions and tunnels of the Data Source.
 pub async fn drop_pool(state: &AppState, id: &str) {
-    state.connecting(split_target(id).0).generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    // No entry: no connect of it has started, so none to stop
+    if let Some(c) = state.connecting.lock().unwrap().get(split_target(id).0) {
+        c.generation.fetch_add(1, SeqCst);
+    }
     state.sessions.write().await.retain(|_, e| !belongs(&e.conn_id, id));
     let removed: Vec<Pool> = {
         let mut pools = state.pools.write().await;
@@ -339,49 +346,64 @@ pub async fn ensure_pool(state: &AppState, id: &str) -> AppResult<Pool> {
     let password = state.saved_secret(&cfg.password_key(), cfg.password_saved)?;
     let ssh_secret = if cfg.active_ssh().is_some() { state.saved_secret(&store::ssh_secret_key(base), cfg.ssh_secret_saved)? } else { None };
     let c = state.connecting(base);
-    let generation = || c.generation.load(std::sync::atomic::Ordering::SeqCst);
-    if !cfg.tunneled() {
-        let g = generation();
-        let pool = connect_pool(&cfg, password.as_deref(), None).await?;
-        return keep_pool(state, &c, g, id, pool, None).await;
-    }
-    let asked = std::time::Instant::now();
-    let mut first = c.first.lock().await;
-    let open = state.tunnels.read().await.get(base).map(|t| (t.alive(), t.local_port));
-    if let Some((true, port)) = open {
-        // Another database of the source opened it: one SSM session and aws CLI per source, not per database
-        let g = generation();
-        drop(first);
+    let (port, g) = if cfg.tunneled() {
+        let (port, g) = shared_tunnel(state, &c, base, &cfg, ssh_secret.as_deref()).await?;
+        // Another caller for the same database may have connected while this one waited for the tunnel
         if let Some(p) = state.pools.read().await.get(id) {
             return Ok(p.clone());
         }
-        let pool = connect_pool(&cfg, password.as_deref(), Some(port)).await?;
-        return keep_pool(state, &c, g, id, pool, None).await;
-    }
-    if open.is_some() {
-        // Its pools would connect to a port nobody holds now (or someone else does): open the tunnel and the pools again
-        crate::log!("[qurry] the tunnel of {base} has stopped; reconnecting");
-        drop_pool(state, base).await;
-    } else if let Some((_, e)) = first.as_ref().filter(|(at, _)| *at >= asked) {
-        return Err(AppError::Msg(e.clone()));
-    }
-    let g = generation();
-    let opened = async {
-        let t = open_tunnel(&cfg, ssh_secret.as_deref()).await?.ok_or_else(|| AppError::Msg("No tunnel is turned on".into()))?;
-        let pool = connect_pool(&cfg, password.as_deref(), Some(t.local_port)).await?;
-        Ok::<_, AppError>((pool, t))
+        (Some(port), g)
+    } else {
+        (None, c.generation.load(SeqCst))
     };
-    match opened.await {
-        Ok((pool, t)) => {
-            *first = None;
-            keep_pool(state, &c, g, id, pool, Some(t)).await
+    // Each database connects on its own: one that is missing or refused fails only for its caller, not for the whole source
+    let pool = connect_pool(&cfg, password.as_deref(), port).await?;
+    keep_pool(state, &c, g, id, pool).await
+}
+
+/// The local port of the source's tunnel, and the generation it belongs to. The first caller opens it: one SSH / SSM session
+/// per source, not per database. Callers that waited while it failed get its error instead of trying again one after
+/// another (each try can take the whole timeout)
+async fn shared_tunnel(state: &AppState, c: &Connecting, base: &str, cfg: &ConnectionConfig, ssh_secret: Option<&str>) -> AppResult<(u16, u64)> {
+    let asked = std::time::Instant::now();
+    let mut failed = c.failed.lock().await;
+    // Read before the tunnel: a disconnect after this also drops the pool that connects through it
+    let g = c.generation.load(SeqCst);
+    // Its own statement: the read lock must be released before drop_pool takes the write lock
+    let open = state.tunnels.read().await.get(base).map(|t| (t.alive(), t.local_port));
+    match open {
+        Some((true, port)) => return Ok((port, g)),
+        // Its pools would connect to a port nobody holds now (or someone else does): open the tunnel and the pools again
+        Some((false, _)) => {
+            crate::log!("[qurry] the tunnel of {base} has stopped; reconnecting");
+            drop_pool(state, base).await;
         }
-        Err(e) => {
-            *first = Some((std::time::Instant::now(), e.to_string()));
-            Err(e)
+        None => {
+            if let Some((_, e)) = failed.as_ref().filter(|(at, _)| *at >= asked) {
+                return Err(AppError::Msg(e.clone()));
+            }
         }
     }
+    let g = c.generation.load(SeqCst);
+    let t = match open_tunnel(cfg, ssh_secret).await.and_then(|t| t.ok_or_else(|| AppError::Msg("No tunnel is turned on".into()))) {
+        Ok(t) => t,
+        Err(e) => {
+            *failed = Some((std::time::Instant::now(), e.to_string()));
+            return Err(e);
+        }
+    };
+    *failed = None;
+    let port = t.local_port;
+    let mut tunnels = state.tunnels.write().await;
+    // Disconnected meanwhile (the settings may be old): the tunnel isn't kept
+    if c.generation.load(SeqCst) != g {
+        return Err(AppError::Msg(DISCONNECTED_WHILE_CONNECTING.into()));
+    }
+    tunnels.insert(base.to_string(), t);
+    Ok((port, g))
 }
+
+const DISCONNECTED_WHILE_CONNECTING: &str = "The data source was disconnected while connecting. Run it again.";
 
 async fn connect_pool(cfg: &ConnectionConfig, password: Option<&str>, port: Option<u16>) -> AppResult<Pool> {
     db::connect_via(cfg, password, port).await.map_err(|e| match e {
@@ -394,21 +416,18 @@ async fn connect_pool(cfg: &ConnectionConfig, password: Option<&str>, port: Opti
     })
 }
 
-/// Keeps the new pool (and the tunnel it opened) unless the source was disconnected meanwhile (drop_pool): then the pool may point
-/// at a closed tunnel's port, which any program on this machine could take
-async fn keep_pool(state: &AppState, c: &Connecting, generation: u64, id: &str, pool: Pool, tunnel: Option<crate::tunnel::Tunnel>) -> AppResult<Pool> {
+/// Keeps the new pool unless the source was disconnected meanwhile (drop_pool): then the pool may point at a closed tunnel's
+/// port, which any program on this machine could take
+async fn keep_pool(state: &AppState, c: &Connecting, generation: u64, id: &str, pool: Pool) -> AppResult<Pool> {
     {
         let mut pools = state.pools.write().await;
-        if c.generation.load(std::sync::atomic::Ordering::SeqCst) == generation {
-            if let Some(t) = tunnel {
-                state.tunnels.write().await.insert(split_target(id).0.to_string(), t);
-            }
+        if c.generation.load(SeqCst) == generation {
             pools.insert(id.to_string(), pool.clone());
             return Ok(pool);
         }
     }
     pool.close().await;
-    Err(AppError::Msg("The data source was disconnected while connecting. Run it again.".into()))
+    Err(AppError::Msg(DISCONNECTED_WHILE_CONNECTING.into()))
 }
 
 pub async fn ensure_session(state: &AppState, id: &str, tab_id: &str) -> AppResult<std::sync::Arc<tokio::sync::Mutex<Session>>> {
@@ -641,6 +660,7 @@ impl AppState {
         let forgot = store::password_keys(&id).iter().chain([&store::ssh_secret_key(&id)]).try_for_each(|k| self.set_secret(k, None));
         crate::search_cache::remove_conn(&self.store.dir(), &id);
         self.store.delete(&id)?;
+        self.connecting.lock().unwrap().remove(&id);
         forgot.map_err(|e| AppError::Msg(format!("The data source was removed, but its saved password couldn't be: {e}")))
     }
 
@@ -1366,6 +1386,32 @@ mod tests {
         drop(st);
         let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
         assert!(st.secret_file.contains(&format!("{kept}#ssm")).unwrap());
+    }
+
+    /// Another app starting while this one saves a new SSM source (its `#ssm` password set, connections.json not written yet)
+    /// waits for the save instead of taking the new source for a deleted one
+    #[test]
+    fn starting_during_a_save_keeps_the_new_ssm_password() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let cfg: ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "new", "name": "new", "kind": "postgres", "host": "localhost", "port": 5432, "user": "app",
+            "ssm": { "enabled": true, "target": "i-0123456789abcdef0" } })).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                st.store
+                    .save_with(cfg, |_, c| {
+                        st.set_secret(&c.password_key(), Some("pw"))?;
+                        tx.send(()).unwrap();
+                        std::thread::sleep(std::time::Duration::from_millis(300));
+                        Ok(())
+                    })
+                    .unwrap();
+            });
+            rx.recv().unwrap();
+            drop(crate::open_state(Some(dir.path().to_path_buf())).unwrap());
+        });
+        assert_eq!(st.secret("new#ssm").unwrap().as_deref(), Some("pw"));
     }
 
     /// The MCP server does not read passwords of Data Sources hidden from MCP. The app is unaffected
