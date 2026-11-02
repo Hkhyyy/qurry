@@ -297,24 +297,44 @@ pub struct ConnForm {
     pub fields: Vec<Field>,
     pub sel: usize,
     pub message: Option<(bool, String)>,
+    /// The Test Connection running now: when it started, and how to cancel it (dropping it stops its SSH / SSM tunnel)
+    pub testing: Option<(std::time::Instant, tokio::task::AbortHandle)>,
+}
+
+/// The Tunnel choice a form field belongs to (None: shown with every choice)
+fn tunnel_of(label: &str) -> Option<&'static str> {
+    if label.starts_with("SSH ") {
+        Some("ssh")
+    } else if label.starts_with("AWS ") || label == "SSM target" {
+        Some("aws ssm")
+    } else {
+        None
+    }
 }
 
 impl ConnForm {
+    pub fn value(&self, label: &str) -> &str {
+        self.fields.iter().find(|f| f.label == label).map_or("", |f| f.value.as_str())
+    }
+
     /// Indices of the fields shown: only the chosen tunnel's fields (the other tunnel's keep their values for switching back)
     pub fn visible(&self) -> Vec<usize> {
-        let tunnel = self.fields.iter().find(|f| f.label == "Tunnel").map_or("none", |f| f.value.as_str());
-        (0..self.fields.len())
-            .filter(|&i| {
-                let l = self.fields[i].label;
-                if l.starts_with("SSH ") {
-                    tunnel == "ssh"
-                } else if l.starts_with("AWS ") || l == "SSM target" {
-                    tunnel == "aws ssm"
-                } else {
-                    true
-                }
-            })
-            .collect()
+        let tunnel = self.value("Tunnel");
+        (0..self.fields.len()).filter(|&i| tunnel_of(self.fields[i].label).is_none_or(|t| t == tunnel)).collect()
+    }
+
+    /// The most fields any Tunnel choice shows: the popup keeps that height, so choosing another tunnel doesn't resize it
+    pub fn max_visible(&self) -> usize {
+        let count = |t: &str| self.fields.iter().filter(|f| tunnel_of(f.label) == Some(t)).count();
+        self.fields.len() - count("ssh").min(count("aws ssm"))
+    }
+
+    /// Cancels the running Test Connection (its tunnel and aws CLI stop with it)
+    pub fn cancel_test(&mut self) -> bool {
+        let Some((_, h)) = self.testing.take() else { return false };
+        h.abort();
+        self.message = Some((false, "Test cancelled".into()));
+        true
     }
 
     /// Moves the selection by `d` shown fields (wrapping around)
@@ -786,11 +806,17 @@ impl App {
     }
 
     pub fn spawn<T: Send + 'static>(&self, fut: impl Future<Output = T> + Send + 'static, apply: impl FnOnce(&mut App, T) + Send + 'static) {
+        self.spawn_abortable(fut, apply);
+    }
+
+    /// spawn that can be cancelled: abort() drops the future, and `apply` doesn't run
+    pub fn spawn_abortable<T: Send + 'static>(&self, fut: impl Future<Output = T> + Send + 'static, apply: impl FnOnce(&mut App, T) + Send + 'static) -> tokio::task::AbortHandle {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let v = fut.await;
             let _ = tx.send(Box::new(move |a: &mut App| apply(a, v)));
-        });
+        })
+        .abort_handle()
     }
 
     pub fn conn(&self, id: &str) -> Option<&ConnectionView> {
@@ -2435,6 +2461,7 @@ impl App {
             edit,
             sel: 0,
             message: None,
+            testing: None,
         }));
     }
 
@@ -3401,6 +3428,7 @@ impl App {
     /// If a tab is running, the elapsed time needs redrawing
     pub fn any_running(&self) -> bool {
         self.tabs.iter().any(|t| matches!(&t.kind, TabKind::Console(c) if c.running) || matches!(&t.kind, TabKind::Table(tt) if tt.running))
+            || matches!(&self.popup, Some(Popup::ConnForm(f)) if f.testing.is_some())
     }
 }
 

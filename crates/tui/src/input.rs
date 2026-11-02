@@ -1239,36 +1239,25 @@ fn popup_key(app: &mut App, k: KeyEvent) {
         }
         Popup::ConnForm(mut form) => {
             match k.code {
+                // Esc or ⌃t again while testing cancels the test (an SSM session can take up to 30s); otherwise Esc closes the form
+                KeyCode::Esc if form.cancel_test() => {}
+                KeyCode::Char('t') if k.modifiers.contains(KeyModifiers::CONTROL) && form.cancel_test() => {}
                 KeyCode::Esc => return,
                 KeyCode::Down | KeyCode::Tab => form.step(1),
                 KeyCode::Up | KeyCode::BackTab => form.step(-1),
-                // SSH unknown server: trust after confirming the fingerprint
+                // SSH unknown server: trust after confirming the fingerprint (only with the SSH tunnel: its fields are hidden otherwise)
                 KeyCode::Char('y') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                    let v = |l: &str| form.fields.iter().find(|f| f.label == l).map(|f| f.value.trim().to_string()).unwrap_or_default();
-                    let port = v("SSH port").parse().unwrap_or(22);
-                    form.message = Some(match app.state.trust_ssh_host(v("SSH host"), port) {
-                        Ok(m) => (true, format!("✓ {m} — press ⌃t to test again")),
-                        Err(e) => (false, format!("✕ {e}")),
+                    form.message = Some(if form.value("Tunnel") != "ssh" {
+                        (false, "⌃y trusts an SSH tunnel's server; set Tunnel to ssh first".into())
+                    } else {
+                        let port = form.value("SSH port").trim().parse().unwrap_or(22);
+                        match app.state.trust_ssh_host(form.value("SSH host").trim().to_string(), port) {
+                            Ok(m) => (true, format!("✓ {m} — press ⌃t to test again")),
+                            Err(e) => (false, format!("✕ {e}")),
+                        }
                     });
                 }
-                KeyCode::Char('t') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                    match App::form_config(&form) {
-                        Ok((cfg, pw, ssh)) => {
-                            let st = app.state.clone();
-                            form.message = Some((true, "Testing…".into()));
-                            app.spawn(async move { st.test_connection(cfg, pw, ssh).await.map_err(|e| e.to_string()) }, |a, r| {
-                                if let Some(Popup::ConnForm(f)) = &mut a.popup {
-                                    f.message = Some(match r {
-                                        Ok(v) => (true, format!("✓ {v}")),
-                                        Err(e) if e.contains(qurry_core::tunnel::UNKNOWN_HOST) => (false, format!("✕ {e} Press ⌃y to trust it.")),
-                                        Err(e) => (false, format!("✕ {e}")),
-                                    });
-                                }
-                            });
-                        }
-                        Err(e) => form.message = Some((false, e)),
-                    }
-                }
+                KeyCode::Char('t') if k.modifiers.contains(KeyModifiers::CONTROL) => test_form(app, &mut form),
                 KeyCode::Char('s') if k.modifiers.contains(KeyModifiers::CONTROL) => return save_form(app, form),
                 KeyCode::Enter => return save_form(app, form),
                 KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if !matches!(form.fields[form.sel].kind, FieldKind::Text | FieldKind::Secret) => {
@@ -1318,7 +1307,36 @@ fn popup_key(app: &mut App, k: KeyEvent) {
     }
 }
 
+/// ⌃t: Test Connection in the background. The form shows the elapsed time; Esc or ⌃t cancels it
+fn test_form(app: &mut App, form: &mut crate::app::ConnForm) {
+    let (cfg, pw, ssh) = match App::form_config(form) {
+        Ok(x) => x,
+        Err(e) => return form.message = Some((false, e)),
+    };
+    let st = app.state.clone();
+    let started = std::time::Instant::now();
+    form.message = None;
+    let h = app.spawn_abortable(async move { st.test_connection(cfg, pw, ssh).await.map_err(|e| e.to_string()) }, move |a, r| {
+        // Only the test still shown: not one that was cancelled or replaced
+        if let Some(Popup::ConnForm(f)) = &mut a.popup
+            && f.testing.as_ref().is_some_and(|t| t.0 == started)
+        {
+            f.testing = None;
+            f.message = Some(match r {
+                Ok(v) => (true, format!("✓ {v}")),
+                Err(e) if e.contains(qurry_core::tunnel::UNKNOWN_HOST) => (false, format!("✕ {e} Press ⌃y to trust it.")),
+                Err(e) => (false, format!("✕ {e}")),
+            });
+        }
+    });
+    form.testing = Some((started, h));
+}
+
 fn save_form(app: &mut App, mut form: crate::app::ConnForm) {
+    // A test still running is for the settings being saved now: stop it (and its tunnel)
+    if let Some((_, h)) = form.testing.take() {
+        h.abort();
+    }
     // What the form doesn't show (scope, startup script …) comes from the source as saved now, not as it was when the form opened
     if let Some(fresh) = form.edit.as_ref().and_then(|e| app.state.store.get(&e.id).ok().flatten()) {
         form.edit = Some(fresh);
@@ -2021,6 +2039,86 @@ mod tests {
         h.key("Down");
         let Some(crate::app::Popup::ConnForm(f)) = &h.app.popup else { panic!() };
         assert_eq!(f.fields[f.sel].label, "SSH host");
+    }
+
+    fn form(h: &mut Harness) -> &mut crate::app::ConnForm {
+        let Some(crate::app::Popup::ConnForm(f)) = &mut h.app.popup else { panic!("no form") };
+        f
+    }
+
+    /// The form doesn't move or resize when a test starts or fails, or when another Tunnel is chosen
+    #[tokio::test]
+    async fn conn_form_keeps_its_size() {
+        let mut h = Harness::new().await;
+        h.app.conn_form(None);
+        let frame = |h: &mut Harness| {
+            let s = h.screen(120, 40);
+            let rows: Vec<&str> = s.lines().collect();
+            let top = rows.iter().position(|l| l.contains("New Data Source")).expect("title");
+            let hint = rows.iter().position(|l| l.contains("Esc cancel")).expect("hint");
+            (top, hint)
+        };
+        let want = frame(&mut h);
+        for tunnel in ["ssh", "aws ssm", "none"] {
+            form(&mut h).fields.iter_mut().find(|x| x.label == "Tunnel").unwrap().value = tunnel.into();
+            assert_eq!(frame(&mut h), want, "{tunnel}");
+        }
+        form(&mut h).message = Some((false, "✕ i-0123456789abcdef0 is not connected to Session Manager: it is stopped, in another region than the one used, or its SSM agent is offline. Check the instance id and region.".into()));
+        assert_eq!(frame(&mut h), want, "a wrapped error");
+        form(&mut h).message = None;
+        assert_eq!(frame(&mut h), want);
+    }
+
+    /// ⌃t shows the elapsed time; ⌃t again or Esc cancels the test (it is dropped, and with it its tunnel) and keeps the form.
+    /// Pressing ⌃t twice never runs two tests
+    #[tokio::test]
+    async fn conn_form_test_shows_time_and_cancels() {
+        let mut h = Harness::new().await;
+        // A server that never answers: the test would take the whole timeout
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        h.app.conn_form(None);
+        form(&mut h).fields.iter_mut().find(|x| x.label == "Port").unwrap().value = port.to_string();
+        form(&mut h).fields.iter_mut().find(|x| x.label == "Host").unwrap().value = "127.0.0.1".into();
+        h.key("Ctrl+t");
+        assert!(form(&mut h).testing.is_some());
+        assert!(h.app.any_running(), "redrawn for the elapsed time");
+        let s = h.screen(120, 40);
+        assert!(s.contains("Testing… 0s · ⌃t / Esc cancel"), "{s}");
+        h.key("Ctrl+t");
+        assert!(form(&mut h).testing.is_none(), "the second ⌃t cancels instead of starting another test");
+        assert!(h.screen(120, 40).contains("Test cancelled"));
+        h.key("Ctrl+t");
+        h.key("Esc");
+        assert!(form(&mut h).testing.is_none(), "Esc cancels the test and keeps the form");
+        h.settle().await;
+        assert_eq!(form(&mut h).message.as_ref().map(|m| m.1.as_str()), Some("Test cancelled"), "a cancelled test reports nothing later");
+        h.key("Esc");
+        assert!(h.app.popup.is_none());
+        drop(l);
+    }
+
+    /// ⌃y trusts the SSH tunnel's host only while Tunnel is ssh (its fields are hidden otherwise)
+    #[tokio::test]
+    async fn conn_form_trust_key_only_with_ssh() {
+        let mut h = Harness::new().await;
+        h.app.conn_form(None);
+        form(&mut h).fields.iter_mut().find(|x| x.label == "Tunnel").unwrap().value = "aws ssm".into();
+        h.key("Ctrl+y");
+        let m = form(&mut h).message.clone().unwrap();
+        assert!(!m.0 && m.1.contains("set Tunnel to ssh first"), "{m:?}");
+    }
+
+    /// Empty AWS profile / region say what is used instead, like the GUI's placeholders
+    #[tokio::test]
+    async fn conn_form_says_what_empty_aws_fields_mean() {
+        let mut h = Harness::new().await;
+        h.app.conn_form(None);
+        form(&mut h).fields.iter_mut().find(|x| x.label == "Tunnel").unwrap().value = "aws ssm".into();
+        let s = h.screen(120, 40);
+        assert!(s.contains("(default profile)") && s.contains("(the profile's region)"), "{s}");
+        form(&mut h).fields.iter_mut().find(|x| x.label == "AWS region").unwrap().value = "us-east-1".into();
+        assert!(!h.screen(120, 40).contains("(the profile's region)"));
     }
 
     /// Vacuum Progress only cancels: K (kill connection) doesn't even ask, and isn't in the hint line
