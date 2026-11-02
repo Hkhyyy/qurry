@@ -350,33 +350,11 @@ fn asks_server(sql: &str, s: &str) -> bool {
     !is_select_like(sql) && !is_dml(s)
 }
 
-/// Whether MySQL ended the console's open transaction before `sql` failed with `e`: the session asked the server (asks_server)
-/// and none is open any more. It committed it, unless `sql` runs other statements (ends_in_procedure). Not when it ended otherwise:
-/// a deadlock or lock wait timeout rolls it back, a failed COMMIT / ROLLBACK doesn't commit, a lost connection rolls it back.
-/// open = the session still has the transaction open
-pub(crate) fn ended_before_failing(sql: &str, e: &AppError, open: bool) -> bool {
-    let s = strip_comments_lead(sql);
-    !open
-        && asks_server(sql, &s)
-        && !s.starts_with("commit")
-        && !s.starts_with("rollback")
-        && !matches!(error_number(e), None | Some(1205 | 1213))
-        && !crate::app::is_conn_lost(e)
-}
-
-/// Whether `sql` runs statements of its own that can COMMIT or ROLLBACK: a CALL, or EXECUTE of a prepared COMMIT / ROLLBACK. When
-/// the transaction ended with it, the server's answer can't tell whether it committed or rolled back
-pub(crate) fn ends_in_procedure(sql: &str) -> bool {
-    let s = strip_comments_lead(sql);
+/// Whether `s` (strip_comments_lead) runs statements of its own that can COMMIT or ROLLBACK: a CALL, or EXECUTE of a prepared
+/// COMMIT / ROLLBACK. When the transaction ended with it, the server's answer can't tell whether it committed or rolled back
+fn ends_in_procedure(s: &str) -> bool {
     let first = s.split_whitespace().next().unwrap_or("");
     ["call", "execute"].contains(&first)
-}
-
-/// Whether connection `id` has a transaction open, from SHOW ENGINE INNODB STATUS (MySQL 5.6): its entry in the list of transactions
-/// says "ACTIVE …" or "not started". None = not listed (the list can be cut short on a busy server)
-fn innodb_tx_open(status: &str, id: i64) -> Option<bool> {
-    let me = format!("MySQL thread id {id},");
-    status.split("---TRANSACTION ").skip(1).find(|t| t.contains(&me)).map(|t| !t.lines().next().unwrap_or("").contains("not started"))
 }
 
 /// Statements that change rows (s = strip_comments_lead(sql))
@@ -391,25 +369,20 @@ fn is_dml(s: &str) -> bool {
     changes_rows(s) || ["show", "explain", "describe", "desc"].contains(&first)
 }
 
-/// When the server can't say whether its transaction is open (MySQL 5.6 without the PROCESS privilege): the statements that, having
-/// run, committed it for sure — DDL but on temporary tables, LOCK TABLES, GRANT / REVOKE (s = strip_comments_lead(sql))
-fn committed_without_answer(s: &str) -> bool {
-    let mut w = s.split_whitespace();
-    let (first, second) = (w.next().unwrap_or(""), w.next().unwrap_or(""));
-    ["create", "alter", "drop", "rename", "truncate", "lock", "grant", "revoke"].contains(&first) && second != "temporary"
-}
-
 /// Dedicated connection for a console tab. MySQL has no protocol-level cursor, so "load more" re-queries with LIMIT/OFFSET.
 pub struct MySession {
     conn: PoolConnection<MySql>,
     pub id: i64,
     manual: bool,
     pub in_tx: bool,
-    /// The open transaction is known to be one on the server (BEGIN or a row change ran in it, or the server said so), not only
-    /// guessed after a SELECT or a failed statement in Manual mode
-    pub known: bool,
-    /// TiDB accepts setting session_track_gtids inside a transaction, so tx_open asks it differently
-    tidb: bool,
+    /// A change ran in the open transaction (audit::is_change, as the Production log has it): a transaction opened by BEGIN or
+    /// guessed after a SELECT in Manual mode has none, so ending it saves nothing
+    pub changed: bool,
+    /// How the last statement ended the open transaction, when it did by itself (audit::IMPLICIT_COMMIT or audit::ENDED_UNKNOWN):
+    /// not a COMMIT / ROLLBACK, a deadlock in a row change or a lost connection
+    pub ended: Option<&'static str>,
+    /// tx_open's answer can be trusted: it saw the transaction the session opened to check it (TiDB, Vitess accept the SET inside one)
+    probe: bool,
     /// (SELECT statement, next OFFSET)
     more: Option<(String, usize)>,
 }
@@ -417,8 +390,12 @@ pub struct MySession {
 impl MySession {
     pub async fn open(p: &MySqlPool) -> AppResult<Self> {
         let mut conn = p.acquire().await?;
-        let (id, version): (u64, String) = sqlx::query_as("select connection_id(), cast(@@version as char)").fetch_one(&mut *conn).await?;
-        Ok(Self { conn, id: id as i64, manual: false, in_tx: false, known: false, tidb: version.contains("TiDB"), more: None })
+        let id: u64 = sqlx::query_scalar("select connection_id()").fetch_one(&mut *conn).await?;
+        let mut s = Self { conn, id: id as i64, manual: false, in_tx: false, changed: false, ended: None, probe: true, more: None };
+        s.conn.execute("START TRANSACTION").await?;
+        s.probe = s.tx_open().await != Some(false);
+        s.conn.execute("ROLLBACK").await?;
+        Ok(s)
     }
 
     pub async fn ping(&mut self) {
@@ -482,52 +459,50 @@ impl MySession {
     /// Whether the server has a transaction open on this connection (asks_server), changing nothing: MySQL refuses to set
     /// session_track_gtids inside one (1766), and set to its own value it is a no-op. (Not the isolation level: setting it outside a
     /// transaction would undo a pending SET TRANSACTION ISOLATION LEVEL.) MariaDB has no session_track_gtids (1193) but has
-    /// @@in_transaction. No privilege needed. MySQL 5.6 has neither: there InnoDB's live list of transactions answers (SHOW ENGINE
-    /// INNODB STATUS, with the PROCESS privilege; information_schema.innodb_trx is a cache that can be stale). TiDB accepts the SET
-    /// inside a transaction, but has a start timestamp only inside one (@@tidb_current_ts).
-    /// None = no answer: never claim changes are committed without knowing (follow_server)
+    /// @@in_transaction. No privilege needed. None = no answer (MySQL 5.6, or a server that gets it wrong: `probe`)
     async fn tx_open(&mut self) -> Option<bool> {
-        if self.tidb {
-            return sqlx::query_scalar::<_, i64>("SELECT @@tidb_current_ts <> 0").fetch_one(&mut *self.conn).await.ok().map(|n| n != 0);
+        if !self.probe {
+            return None;
         }
         match self.conn.execute("SET @@SESSION.session_track_gtids = @@SESSION.session_track_gtids").await.map_err(AppError::from) {
             Ok(_) => Some(false),
             Err(e) if error_number(&e) == Some(1766) => Some(true),
-            Err(e) if error_number(&e) == Some(1193) => match sqlx::query_scalar::<_, u64>("SELECT @@in_transaction").fetch_one(&mut *self.conn).await.map_err(AppError::from) {
-                Ok(n) => Some(n != 0),
-                Err(e) if error_number(&e) == Some(1193) => match self.conn.fetch_one("SHOW ENGINE INNODB STATUS").await.and_then(|r| r.try_get::<String, _>(2)) {
-                    Ok(status) => innodb_tx_open(&status, self.id),
-                    Err(_) => None,
-                },
-                Err(_) => None,
-            },
+            Err(e) if error_number(&e) == Some(1193) => sqlx::query_scalar::<_, u64>("SELECT @@in_transaction").fetch_one(&mut *self.conn).await.ok().map(|n| n != 0),
             Err(_) => None,
         }
     }
 
-    /// Follow the server's answer whether the transaction is still open after a statement. Without one it counts as open, unless the
-    /// statement committed it for sure (`committed`: committed_without_answer, or SET autocommit = 1 that turned Manual off)
-    async fn follow_server(&mut self, committed: bool) {
-        let open = self.tx_open().await;
-        self.known |= open == Some(true);
-        self.in_tx = open.unwrap_or(!committed);
+    /// After `s` (strip_comments_lead) ran or failed with `err`: follow the server's answer whether the transaction is still open.
+    /// Without one it stays as it was (or opens in Manual), so Qurry never claims changes are committed without knowing. If the
+    /// statement ended it (not a COMMIT / ROLLBACK), `ended` says how: committed, unless it can also have rolled it back (a CALL or
+    /// EXECUTE; a deadlock or lock wait timeout: a DDL waiting for its metadata lock times out after the commit, a SET with a
+    /// SELECT … FOR UPDATE rolls it back)
+    async fn follow_server(&mut self, s: &str, err: Option<&AppError>) {
+        let was = self.in_tx;
+        let opened = self.manual && opens_tx(s) && err.is_none_or(|e| error_number(e) != Some(1064));
+        self.in_tx = self.tx_open().await.unwrap_or(was || opened);
+        if was && !self.in_tx && !s.starts_with("commit") && !s.starts_with("rollback") {
+            let either = ends_in_procedure(s) || err.is_some_and(|e| matches!(error_number(e), Some(1205 | 1213)));
+            self.ended = Some(if either { crate::audit::ENDED_UNKNOWN } else { crate::audit::IMPLICIT_COMMIT });
+        }
     }
 
     pub async fn run(&mut self, sql: &str, limit: usize) -> AppResult<QueryResult> {
         self.more = None;
+        self.ended = None;
         if !self.in_tx {
-            self.known = false;
+            self.changed = false;
         }
         let mut r = match run_on(&mut self.conn, sql, limit).await {
             Ok(r) => r,
             Err(e) => {
                 let s = strip_comments_lead(sql);
-                if self.tx_rolled_back(&e).await {
-                    self.in_tx = false;
-                } else if (self.manual || self.in_tx) && asks_server(sql, &s) && error_number(&e).is_some() && !crate::app::is_conn_lost(&e) {
+                if (self.manual || self.in_tx) && asks_server(sql, &s) && error_number(&e).is_some() && !crate::app::is_conn_lost(&e) {
                     // Same rule as for one that ran: a DDL or SET PASSWORD that committed before failing, a COMMIT the server refused
                     // (rolled back) ended it, one that failed to parse (COMMIT TRANSACTION: 1064) didn't, a CALL may have opened one
-                    self.follow_server(false).await;
+                    self.follow_server(&s, Some(&e)).await;
+                } else if self.tx_rolled_back(&e).await {
+                    self.in_tx = false;
                 } else if self.manual && opens_tx(&s) && !s.starts_with("rollback") && error_number(&e) != Some(1064) {
                     // With autocommit=0 a statement that fails (but parsed) still leaves the transaction open: the row locks it took
                     // before a lock wait timeout, what a procedure changed before it failed
@@ -537,7 +512,6 @@ impl MySession {
             }
         };
         let s = strip_comments_lead(sql);
-        let was_manual = self.manual;
         if s.starts_with("set") && s.contains("autocommit") {
             // A typed SET autocommit: follow the server's mode (whether it committed is asked below)
             if let Ok(on) = sqlx::query_scalar::<_, i64>("SELECT @@autocommit").fetch_one(&mut *self.conn).await {
@@ -545,18 +519,22 @@ impl MySession {
             }
         }
         if s.starts_with("begin") || s.starts_with("start transaction") {
+            // It committed the one that was open
+            if self.in_tx {
+                self.ended = Some(crate::audit::IMPLICIT_COMMIT);
+                self.changed = false;
+            }
             self.in_tx = true;
-            self.known = true;
         } else if s.starts_with("commit") || (s.starts_with("rollback") && !s.starts_with("rollback to")) {
             self.in_tx = false;
         } else if (self.manual || self.in_tx) && asks_server(sql, &s) {
-            self.follow_server(committed_without_answer(&s) || (was_manual && !self.manual)).await;
+            self.follow_server(&s, None).await;
         } else if self.manual && opens_tx(&s) {
             // With autocommit=0, any statement opens a transaction, not only a change: WITH … DELETE, SELECT … FOR UPDATE (its row locks),
             // SELECT f() where f writes. Like PostgreSQL's Manual mode, it stays open until Commit / Roll back
             self.in_tx = true;
-            self.known |= changes_rows(&s);
         }
+        self.changed |= self.in_tx && crate::audit::is_change(sql, crate::store::DbKind::Mysql);
         if r.truncated && is_select_like(sql) {
             self.more = Some((sql.trim().trim_end_matches(';').trim().to_string(), limit));
         } else {
@@ -570,7 +548,7 @@ impl MySession {
     pub async fn run_with_snapshot(&mut self, snap: &str, sql: &str, limit: usize) -> (AppResult<QueryResult>, AppResult<QueryResult>) {
         self.more = None;
         if !self.in_tx {
-            self.known = false;
+            self.changed = false;
         }
         let own = !self.manual && !self.in_tx;
         let had_tx = self.in_tx;
@@ -888,37 +866,10 @@ mod tests {
     #[test]
     fn call_and_execute_end_in_procedure() {
         for q in ["call p()", "CALL s.p", "-- x\n call p()", "execute stmt", "EXECUTE s USING @a"] {
-            assert!(ends_in_procedure(q), "{q}");
+            assert!(ends_in_procedure(&strip_comments_lead(q)), "{q}");
         }
         for q in ["create table t (a int)", "set password = 'x'", "callx", "do 0", "deallocate prepare s", "prepare s from 'commit'"] {
-            assert!(!ends_in_procedure(q), "{q}");
-        }
-    }
-
-    /// MySQL 5.6: the session's entry in InnoDB's list of transactions (SHOW ENGINE INNODB STATUS, as 5.6.51 prints it)
-    #[test]
-    fn innodb_status_says_whether_the_transaction_is_open() {
-        let status = "------------\nTRANSACTIONS\n------------\nTrx id counter 2500\nLIST OF TRANSACTIONS FOR EACH SESSION:\n\
-            ---TRANSACTION 0, not started\nMySQL thread id 140, OS thread handle 0x7f, query id 9 172.17.0.1 root init\nSHOW ENGINE INNODB STATUS\n\
-            ---TRANSACTION 2486, ACTIVE 0 sec\n1 lock struct(s), heap size 360, 0 row lock(s), undo log entries 1\n\
-            MySQL thread id 14, OS thread handle 0x7f, query id 202 172.17.0.1 root init\n\
-            ---TRANSACTION 2499, not started\nMySQL thread id 15, OS thread handle 0x7f, query id 204 172.17.0.1 root\n\
-            --------\nFILE I/O\n--------\nMain thread process no. 1, id 140, state: sleeping\n";
-        assert_eq!(innodb_tx_open(status, 14), Some(true));
-        assert_eq!(innodb_tx_open(status, 15), Some(false));
-        assert_eq!(innodb_tx_open(status, 140), Some(false));
-        assert_eq!(innodb_tx_open(status, 1), None);
-    }
-
-    /// Without the server's answer, only statements that always commit the open transaction close it: not those on temporary
-    /// tables, not SET or CALL
-    #[test]
-    fn committed_without_answer_is_ddl_lock_and_grants() {
-        for s in ["alter table t add column c int", "create  index i on t (a)", "drop table t", "truncate t", "rename table a to b", "lock tables t write", "grant select on d.* to u"] {
-            assert!(committed_without_answer(s), "{s}");
-        }
-        for s in ["create temporary table t (a int)", "drop\ntemporary table t", "set @x = 1", "call p()", "do 1", "unlock tables"] {
-            assert!(!committed_without_answer(s), "{s}");
+            assert!(!ends_in_procedure(&strip_comments_lead(q)), "{q}");
         }
     }
 

@@ -229,7 +229,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         entry("2", 12, "update payment set amount = 0 where id = 4", Some(1), true, true),
         entry("3", 10, "COMMIT", None, false, false),
         // A transaction a CALL ended (committed or rolled back: unknown)
-        qurry_core::audit::AuditEntry { note: Some(qurry_core::audit::ENDED_IN_PROCEDURE_NOTE.into()), ..entry("6", 6, qurry_core::audit::ENDED_IN_PROCEDURE, None, false, false) },
+        qurry_core::audit::AuditEntry { note: Some(qurry_core::audit::ENDED_UNKNOWN_NOTE.into()), ..entry("6", 6, qurry_core::audit::ENDED_UNKNOWN, None, false, false) },
         // Logged before it ran, no result yet (still running, or Qurry stopped)
         qurry_core::audit::AuditEntry { started: true, ..entry("4", 1, "update payment set status = 'refunded' where id = 7", None, false, false) },
         // A COMMIT cut off by a lost connection (it may have committed)

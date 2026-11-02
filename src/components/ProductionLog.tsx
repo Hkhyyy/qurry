@@ -4,17 +4,17 @@ import { Badge, Button, CodeBlock, List, ListItem, Modal, Notice, SearchField, S
 
 /** Log entry of a COMMIT cut off by a lost connection (crates/core audit::COMMIT_UNKNOWN) */
 export const COMMIT_UNKNOWN = "COMMIT outcome unknown (connection lost)";
-/** Log entry of a MySQL transaction a CALL ended, committed or rolled back (crates/core audit::ENDED_IN_PROCEDURE) */
-export const ENDED_IN_PROCEDURE = "ENDED (by CALL: committed or rolled back)";
+/** Log entry of a MySQL transaction a statement ended, committed or rolled back (crates/core audit::ENDED_UNKNOWN) */
+export const ENDED_UNKNOWN = "ENDED (committed or rolled back)";
 
 /** The changes may or may not be saved: the entry's note says what to do (crates/core audit::outcome_unknown) */
-const outcomeUnknown = (e: AuditEntry) => e.sql === COMMIT_UNKNOWN || e.sql === ENDED_IN_PROCEDURE;
+const outcomeUnknown = (e: AuditEntry) => e.sql === COMMIT_UNKNOWN || e.sql === ENDED_UNKNOWN;
 
 /** One-line summary: changed rows · error · uncommitted · no result recorded */
 export function auditStatus(e: AuditEntry): { text: string; tone: "neutral" | "warn" | "danger" | "accent" } {
   // Logged before it ran with no result: still running, or Qurry stopped — the outcome (even of a COMMIT) is unknown
   if (e.started) return { text: "no result recorded", tone: "warn" };
-  // A COMMIT cut off by a lost connection, a transaction a CALL ended: it may have committed
+  // A COMMIT cut off by a lost connection, a transaction a statement ended either way: it may have committed
   if (outcomeUnknown(e)) return { text: "outcome unknown", tone: "warn" };
   if (e.error) return { text: "failed", tone: "danger" };
   if (e.sql.startsWith("COMMIT")) return { text: "committed", tone: "accent" };

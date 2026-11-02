@@ -318,8 +318,8 @@ impl Audit {
             return Ok(());
         }
         let mut e = entry(conn_id, conn_name, word);
-        if word == ENDED_IN_PROCEDURE {
-            e.note = Some(ENDED_IN_PROCEDURE_NOTE.into());
+        if word == ENDED_UNKNOWN {
+            e.note = Some(ENDED_UNKNOWN_NOTE.into());
         }
         self.finish(vec![e])
     }
@@ -331,17 +331,18 @@ pub(crate) const BY_SERVER: &str = "ROLLBACK (by the server)";
 pub(crate) const DISCONNECTED: &str = "ROLLBACK (disconnected)";
 /// Log entry for a MySQL console transaction with logged changes that a statement committed (DDL, LOCK TABLES, SET autocommit = 1, BEGIN …)
 pub(crate) const IMPLICIT_COMMIT: &str = "COMMIT (implicit)";
-/// Log entry for a MySQL console transaction with logged changes that ended in a CALL (or EXECUTE): the procedure may have committed or rolled it back
-pub const ENDED_IN_PROCEDURE: &str = "ENDED (by CALL: committed or rolled back)";
+/// Log entry for a MySQL console transaction with logged changes that a statement ended either way: a CALL (or EXECUTE) whose
+/// procedure committed or rolled it back, a deadlock or lock wait timeout (after a DDL's commit, or rolling it back)
+pub const ENDED_UNKNOWN: &str = "ENDED (committed or rolled back)";
 /// What to do about it (the entry's note)
-pub const ENDED_IN_PROCEDURE_NOTE: &str = "The procedure may have committed or rolled back the changes made before it in the transaction. Check the data before you run them again.";
+pub const ENDED_UNKNOWN_NOTE: &str = "The transaction ended in the statement before this entry (a CALL, a deadlock or a lock wait timeout), and MySQL doesn't say whether it committed or rolled back the changes made before it. Check the data before you run them again.";
 /// Log entry for a COMMIT cut off by a lost connection: the server may have committed before the connection went
 pub const COMMIT_UNKNOWN: &str = "COMMIT outcome unknown (connection lost)";
 /// What to do about it (the entry's note)
 pub const COMMIT_UNKNOWN_NOTE: &str = "The server may have committed before the connection was lost. Check the data before you run these changes again.";
 /// Whether the log entry is one whose outcome is unknown (the changes may or may not be saved): its note says what to do
 pub fn outcome_unknown(sql: &str) -> bool {
-    sql == COMMIT_UNKNOWN || sql == ENDED_IN_PROCEDURE
+    sql == COMMIT_UNKNOWN || sql == ENDED_UNKNOWN
 }
 /// Title of the notice for the error of a failed Commit (the GUI has it through WASM)
 pub use qurry_shared::errors::commit_failed_title;
@@ -792,13 +793,13 @@ mod tests {
         std::fs::create_dir_all(&d).unwrap();
         let a = Audit::new(&d);
         let changed = Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: 1, truncated: false, elapsed_ms: 0, has_result_set: false, in_transaction: true, warning: None });
-        for word in [ENDED_IN_PROCEDURE, IMPLICIT_COMMIT] {
+        for word in [ENDED_UNKNOWN, IMPLICIT_COMMIT] {
             let started = a.before("c1", "[PROD] kr", DbKind::Mysql, Some("tab"), "update t set a = 1 where id = 1").unwrap();
             a.after(started, "c1", "[PROD] kr", DbKind::Mysql, Some("tab"), "update t set a = 1 where id = 1", &changed, None).unwrap();
             a.tx_closed("c1", "[PROD] kr", "tab", word).unwrap();
             let e = a.list(None, "", 1).remove(0);
             assert_eq!(e.sql, word);
-            assert_eq!((outcome_unknown(&e.sql), e.note.as_deref()), if word == ENDED_IN_PROCEDURE { (true, Some(ENDED_IN_PROCEDURE_NOTE)) } else { (false, None) });
+            assert_eq!((outcome_unknown(&e.sql), e.note.as_deref()), if word == ENDED_UNKNOWN { (true, Some(ENDED_UNKNOWN_NOTE)) } else { (false, None) });
         }
         assert!(outcome_unknown(COMMIT_UNKNOWN) && !outcome_unknown("COMMIT"));
     }
@@ -1581,7 +1582,8 @@ mod tests {
         let log = |n: usize| st.audit_log(None, String::new(), n).into_iter().map(|e| e.sql).collect::<Vec<_>>();
         st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
         run(format!("update {s}.t set v = 10 where id = 1")).await.unwrap();
-        run(format!("alter table {s}.t add column c int")).await.unwrap();
+        let w = run(format!("alter table {s}.t add column c int")).await.unwrap().warning.unwrap_or_default();
+        assert!(w.contains("committed the open transaction") && w.contains("saved"), "{w}");
         assert!(!st.tx_state("m".into()).await);
         assert_eq!(log(3), [IMPLICIT_COMMIT.to_string(), format!("alter table {s}.t add column c int"), format!("update {s}.t set v = 10 where id = 1")]);
         run(format!("update {s}.t set v = 20 where id = 2")).await.unwrap();
@@ -1745,8 +1747,37 @@ mod tests {
         followup_drop(&st, DbKind::Mysql, s).await;
     }
 
+    /// MySQL Manual: a DDL that times out on its metadata lock (1205: another console's transaction read the table) has already
+    /// committed the open transaction. The console shows none open, and neither the error nor the log says it was rolled back: the
+    /// error number can't tell (a deadlock in a SET does roll it back), so both say to check the data
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_ddl_lock_timeout_after_commit() {
+        let Some(st) = prod_state(DbKind::Mysql, "QURRY_TEST_MY").await else { return };
+        let s = "audit_followups_mdl";
+        followup_table(&st, DbKind::Mysql, s).await;
+        let run = |tab: &str, sql: String| st.run_query("d".into(), sql, None, Some(tab.into()));
+        let log = |n: usize| st.audit_log(None, String::new(), n).into_iter().map(|e| e.sql).collect::<Vec<_>>();
+        run("o", format!("create table {s}.u (a int)")).await.unwrap();
+        st.set_tx_mode("d".into(), "o".into(), true).await.unwrap();
+        run("o", format!("select * from {s}.u")).await.unwrap();
+        st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
+        run("m", "set lock_wait_timeout = 1".into()).await.unwrap();
+        run("m", format!("update {s}.t set v = 10 where id = 1")).await.unwrap();
+        let e = run("m", format!("alter table {s}.u add column c int")).await.unwrap_err().to_string();
+        assert!(e.contains("1205") && e.contains("committed or rolled back") && e.contains("check the data") && !e.contains("are saved"), "{e}");
+        assert!(!st.tx_state("m".into()).await);
+        assert_eq!(log(1), [ENDED_UNKNOWN]);
+        st.rollback_tx("m".into()).await.unwrap();
+        assert_eq!(log(1), [ENDED_UNKNOWN]);
+        st.rollback_tx("o".into()).await.unwrap();
+        assert_eq!(followup_values(&st, s).await, "[[10],[2],[3]]");
+        followup_drop(&st, DbKind::Mysql, s).await;
+    }
+
     /// MySQL Manual: a CALL whose procedure rolls back (an EXIT HANDLER with ROLLBACK; RESIGNAL, or a plain ROLLBACK) or commits ends
-    /// the open transaction either way. The console shows none open, but neither the error nor the log claims the changes are saved
+    /// the open transaction either way. The console shows none open, and the error (or the warning, when it ran) and the log say it
+    /// may have committed or rolled back the changes, not that they are saved
     #[tokio::test]
     #[ignore]
     async fn mysql_call_that_ends_the_transaction() {
@@ -1768,24 +1799,25 @@ mod tests {
         let e = run(format!("call {s}.p()")).await.unwrap_err().to_string();
         assert!(e.contains("1146") && e.contains("committed or rolled back") && e.contains("check the data") && !e.contains("are saved"), "{e}");
         assert!(!st.tx_state("m".into()).await);
-        assert_eq!(log(1), [ENDED_IN_PROCEDURE]);
+        assert_eq!(log(1), [ENDED_UNKNOWN]);
         assert_eq!(followup_values(&st, s).await, "[[1],[2],[3]]");
         run(format!("update {s}.t set v = 60 where id = 3")).await.unwrap();
-        run(format!("call {s}.r()")).await.unwrap();
+        let w = run(format!("call {s}.r()")).await.unwrap().warning.unwrap_or_default();
+        assert!(w.contains("committed or rolled back") && w.contains("check the data") && !w.contains("are saved"), "{w}");
         assert!(!st.tx_state("m".into()).await);
-        assert_eq!(log(1), [ENDED_IN_PROCEDURE]);
+        assert_eq!(log(1), [ENDED_UNKNOWN]);
         assert_eq!(followup_values(&st, s).await, "[[1],[2],[3]]");
         run(format!("update {s}.t set v = 70 where id = 1")).await.unwrap();
         run(format!("call {s}.c()")).await.unwrap();
         assert!(!st.tx_state("m".into()).await);
-        assert_eq!(log(1), [ENDED_IN_PROCEDURE]);
+        assert_eq!(log(1), [ENDED_UNKNOWN]);
         assert_eq!(followup_values(&st, s).await, "[[70],[2],[3]]");
         followup_drop(&st, DbKind::Mysql, s).await;
     }
 
-    /// MySQL Manual: SET, DO and SET NAMES leave the open transaction open, also on TiDB (which accepts the MySQL question inside a
-    /// transaction, so it is asked differently): the console still offers Commit / Roll back and the log doesn't record a commit.
-    /// QURRY_TEST_MY can point at TiDB (user root, empty password: host:port:root::db)
+    /// MySQL Manual: SET, DO and SET NAMES leave the open transaction open: the console still offers Commit / Roll back and the log
+    /// doesn't record a commit. Also on TiDB, which accepts the MySQL question inside a transaction: the session finds that out when it
+    /// opens and doesn't ask, so it keeps the transaction open. QURRY_TEST_MY can point at TiDB (user root, empty password: host:port:root::db)
     #[tokio::test]
     #[ignore]
     async fn mysql_set_keeps_the_transaction() {
@@ -1804,11 +1836,17 @@ mod tests {
             assert_eq!(log(1), ["ROLLBACK"], "{stmt}");
             assert_eq!(followup_values(&st, s).await, "[[1],[2],[3]]", "{stmt}");
         }
-        // DDL still commits it
+        // DDL still commits it. TiDB can't say so: the transaction stays shown open, and Commit closes it
         run(format!("update {s}.t set v = 20 where id = 2")).await.unwrap();
         run(format!("alter table {s}.t add column c int")).await.unwrap();
+        let version = st.run_query("d".into(), "select version()".into(), None, None).await.unwrap().rows[0][0].to_string();
+        if version.contains("TiDB") {
+            assert!(st.tx_state("m".into()).await);
+            st.commit_tx("m".into()).await.unwrap();
+        } else {
+            assert_eq!(log(1), [IMPLICIT_COMMIT]);
+        }
         assert!(!st.tx_state("m".into()).await);
-        assert_eq!(log(1), [IMPLICIT_COMMIT]);
         assert_eq!(followup_values(&st, s).await, "[[1],[20],[3]]");
         followup_drop(&st, DbKind::Mysql, s).await;
     }
@@ -1823,20 +1861,28 @@ mod tests {
         followup_table(&st, DbKind::Mysql, s).await;
         let run = |sql: String| st.run_query("d".into(), sql, None, Some("m".into()));
         st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
-        for (before, failing) in [
-            ("select 1".to_string(), "set sql_mod = ''".to_string()),
-            (format!("update {s}.missing set v = 1"), format!("alter table {s}.t add column v int")),
+        for (before, then, failing) in [
+            ("select 1".to_string(), None, "set sql_mod = ''".to_string()),
+            (format!("update {s}.missing set v = 1"), None, format!("alter table {s}.t add column v int")),
+            // The SELECT's read view is an open transaction on the server, which the SET after it asks about: still nothing changed
+            (format!("select * from {s}.t"), Some("set @qurry_note = 1"), format!("alter table {s}.t add column v int")),
         ] {
             run(before.clone()).await.ok();
+            if let Some(t) = then {
+                run(t.into()).await.unwrap();
+            }
             assert!(st.tx_state("m".into()).await, "{before}");
             let e = run(failing.clone()).await.unwrap_err().to_string();
             assert!(!e.contains("committed") && !e.contains("saved"), "{before} / {failing}: {e}");
             st.rollback_tx("m".into()).await.unwrap();
         }
-        // After a change it does (when the server answers: on MySQL 5.6 only with the PROCESS privilege)
-        run(format!("update {s}.t set v = 30 where id = 3")).await.unwrap();
-        let e = run(format!("alter table {s}.t add column v int")).await.unwrap_err().to_string();
-        assert!(e.contains("committed the open transaction"), "{e}");
+        // After a change it does (when the server answers), a change written as WITH … DELETE too
+        for change in [format!("update {s}.t set v = 30 where id = 3"), format!("with x as (select 2 as id) delete from {s}.t where id in (select id from x)")] {
+            run(change.clone()).await.unwrap();
+            let e = run(format!("alter table {s}.t add column v int")).await.unwrap_err().to_string();
+            assert!(e.contains("committed the open transaction") && e.contains("saved"), "{change}: {e}");
+        }
+        assert_eq!(followup_values(&st, s).await, "[[1],[30]]");
         followup_drop(&st, DbKind::Mysql, s).await;
     }
 

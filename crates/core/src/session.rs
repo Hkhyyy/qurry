@@ -479,11 +479,15 @@ impl Session {
             Session::Redis(_) | Session::Plugin(_) => false,
         }
     }
-    /// Whether the open transaction is known to be one on the server, not only guessed (MySession::known)
-    pub fn tx_known(&self) -> bool {
+    /// Whether a change ran in the open MySQL transaction (MySession::changed)
+    pub fn tx_changed(&self) -> bool {
+        matches!(self, Session::My(s) if s.in_tx && s.changed)
+    }
+    /// How the last statement ended the open MySQL transaction by itself (MySession::ended)
+    pub fn tx_ended(&self) -> Option<&'static str> {
         match self {
-            Session::My(s) => s.in_tx && s.known,
-            _ => self.in_tx(),
+            Session::My(s) => s.ended,
+            _ => None,
         }
     }
     /// On tab close: roll back the open transaction, reset session settings and return the connection to the pool

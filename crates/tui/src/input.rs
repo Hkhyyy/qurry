@@ -2098,14 +2098,14 @@ mod tests {
         // A transaction a CALL ended: of unknown outcome too, and ↩ shows what to do
         h.key("Esc");
         h.key("Esc");
-        let ended = qurry_core::audit::AuditEntry { rows: None, note: Some(qurry_core::audit::ENDED_IN_PROCEDURE_NOTE.into()), ..entry("e", qurry_core::audit::ENDED_IN_PROCEDURE, None) };
+        let ended = qurry_core::audit::AuditEntry { rows: None, note: Some(qurry_core::audit::ENDED_UNKNOWN_NOTE.into()), ..entry("e", qurry_core::audit::ENDED_UNKNOWN, None) };
         h.app.state.audit.add(ended).unwrap();
         h.app.run_action(Action::ProductionLog);
         let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no log") };
         assert!(p.items[0].hint.starts_with("outcome unknown"), "{}", p.items[0].hint);
         h.key("Enter");
         let Some(crate::app::Popup::Note { text, .. }) = &h.app.popup else { panic!("no note") };
-        assert_eq!(text, qurry_core::audit::ENDED_IN_PROCEDURE_NOTE);
+        assert_eq!(text, qurry_core::audit::ENDED_UNKNOWN_NOTE);
     }
 
     /// ⌃K › Copy Related Rows: condition → child steps → destination (only other Data Sources of the same type). Generate Test Data asks for the row count

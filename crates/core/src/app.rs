@@ -143,6 +143,17 @@ pub fn is_conn_lost(e: &AppError) -> bool {
     }
 }
 
+/// What a console statement saw of its session's transaction (AppState::run_with_undo)
+#[derive(Default)]
+struct TxSeen {
+    /// A transaction was open before it ran
+    open: bool,
+    /// A change had run in it (Session::tx_changed)
+    changed: bool,
+    /// How the statement ended it by itself (Session::tx_ended)
+    ended: Option<&'static str>,
+}
+
 /// If the connection was lost: drop the tab session (so the dead connection is not reused; the next run reconnects),
 /// and close the pool too if it does not respond (e.g. the SSH tunnel died). Never resend the same statement (the server may have already run it).
 /// tx = how the console's open transaction ended (audit::ended_by), None if none was open
@@ -779,47 +790,49 @@ impl AppState {
             false => None,
         };
         let undo = watch && crate::audit::is_change(&sql, cfg.kind);
-        let (r, undo, in_tx, known) = self.run_with_undo(&id, cfg.kind, &sql, limit, tab, undo).await;
+        let (r, undo, tx) = self.run_with_undo(&id, cfg.kind, &sql, limit, tab, undo).await;
         let logged = match watch {
             true => {
                 let a = self.audit.after(started, &id, &cfg.name, cfg.kind, tab, &sql, &r, undo);
-                a.and(self.audit_lost_tx(&id, &cfg.name, cfg.kind, tab, &sql, &r).await)
+                a.and(self.audit_lost_tx(&id, &cfg.name, tab, &sql, &r, tx.ended).await)
             }
             false => Ok(()),
         };
-        // Whether the console still has the transaction open after a failed statement (MySession asks the server after all but a SELECT or row change)
-        let open = match (&r, tab) {
-            (Err(_), Some(t)) if in_tx => self.tx_state(t.into()).await,
-            _ => true,
-        };
-        match r {
-            // Only when the transaction was one on the server (MySession::known): one guessed after a SELECT had no changes to save
-            Err(e) if known && cfg.kind == store::DbKind::Mysql && crate::mysql::ended_before_failing(&sql, &e, open) => Err(AppError::Msg(format!(
-                "{e} — {}, and Roll back can't undo them{}.",
-                match crate::mysql::ends_in_procedure(&sql) {
-                    true => "the open transaction ended while it ran: the procedure committed or rolled back the changes made in it before, so check the data",
-                    false => "MySQL committed the open transaction before running it: the changes made in it before are saved",
+        // The statement ended the open MySQL transaction by itself, whether it ran or failed: say what became of the changes in it
+        let ended = match tx.ended {
+            Some(w) if tx.changed => Some(format!(
+                "{}, and Roll back can't undo them{}",
+                match w {
+                    crate::audit::IMPLICIT_COMMIT => "MySQL committed the open transaction before running it: the changes made in it before are saved",
+                    _ => "the open transaction ended while it ran, and MySQL doesn't say whether it committed or rolled back the changes made in it before: check the data before you run them again",
                 },
                 if watch { " (the Production log has their undo SQL where it could keep it)" } else { "" }
-            ))),
-            Err(e) => {
-                let tx = if in_tx { crate::audit::ended_by(&sql, &e, true) } else { None };
-                Err(recover(self, &id, tab, tx, e).await)
-            }
+            )),
+            _ => None,
+        };
+        match r {
+            Err(e) => match ended {
+                Some(n) => Err(AppError::Msg(format!("{e} — {n}."))),
+                None => {
+                    let lost = if tx.open { crate::audit::ended_by(&sql, &e, true) } else { None };
+                    Err(recover(self, &id, tab, lost, e).await)
+                }
+            },
             // It ran (and may be committed): a log failure now is a warning, so nobody runs it again
             Ok(mut q) => {
-                q.warning = logged.err().map(|e| e.to_string());
+                let warnings: Vec<String> = ended.into_iter().chain(logged.err().map(|e| e.to_string())).collect();
+                q.warning = (!warnings.is_empty()).then(|| warnings.join(". "));
                 Ok(q)
             }
         }
     }
 
     /// Run in the console's session (or on the pool). undo = also keep undo SQL: the snapshot runs in the change's transaction (Session::run_with_snapshot).
-    /// → (result, undo SQL or why there is none, whether the console had a transaction open, and whether it was known to (Session::tx_known))
-    async fn run_with_undo(&self, id: &str, kind: store::DbKind, sql: &str, limit: usize, tab: Option<&str>, undo: bool) -> (AppResult<QueryResult>, Option<Result<String, String>>, bool, bool) {
+    /// → (result, undo SQL or why there is none, what happened to the console's transaction)
+    async fn run_with_undo(&self, id: &str, kind: store::DbKind, sql: &str, limit: usize, tab: Option<&str>, undo: bool) -> (AppResult<QueryResult>, Option<Result<String, String>>, TxSeen) {
         let pool = match ensure_pool(self, id).await {
             Ok(p) => p,
-            Err(e) => return (Err(e), None, false, false),
+            Err(e) => return (Err(e), None, TxSeen::default()),
         };
         let plan = match undo {
             true => Some(crate::audit::plan(&pool, sql, kind).await),
@@ -828,7 +841,7 @@ impl AppState {
         let sess = match tab {
             Some(t) => match ensure_session(self, id, t).await {
                 Ok(s) => Some(s),
-                Err(e) => return (Err(e), None, false, false),
+                Err(e) => return (Err(e), None, TxSeen::default()),
             },
             None => None,
         };
@@ -844,11 +857,11 @@ impl AppState {
                     temp = s;
                     &mut temp
                 }
-                Err(e) => return (Err(e), None, false, false),
+                Err(e) => return (Err(e), None, TxSeen::default()),
             },
-            None => return (pool.run_query(sql, limit).await, plan.and_then(|p| p.err()).map(Err), false, false),
+            None => return (pool.run_query(sql, limit).await, plan.and_then(|p| p.err()).map(Err), TxSeen::default()),
         };
-        let (in_tx, known) = (s.in_tx(), s.tx_known());
+        let (open, changed) = (s.in_tx(), s.tx_changed());
         let (r, undo) = match plan {
             Some(Ok(p)) => {
                 let (snap, r) = s.run_with_snapshot(&p.snapshot, sql, limit).await;
@@ -857,10 +870,11 @@ impl AppState {
             }
             other => (s.run(sql, limit).await, other.and_then(|p| p.err()).map(Err)),
         };
+        let ended = s.tx_ended();
         if sess.is_none() {
             s.discard().await;
         }
-        (r, undo, in_tx, known)
+        (r, undo, TxSeen { open, changed, ended })
     }
 
     /// Production audit log (newest first)
@@ -877,27 +891,16 @@ impl AppState {
         }
     }
 
-    /// The console's transaction with logged changes ended without a COMMIT after `sql` ran (deadlock, failed COMMIT, lost connection):
-    /// log that the server rolled it back, or that a COMMIT cut off by a lost connection has an unknown outcome (audit::ended_by).
-    /// On MySQL a statement that ran can also have committed it (DDL, LOCK TABLES, SET autocommit = 1, BEGIN …), or a CALL ended it either way
-    async fn audit_lost_tx(&self, id: &str, name: &str, kind: store::DbKind, tab: Option<&str>, sql: &str, r: &AppResult<QueryResult>) -> AppResult<()> {
+    /// The console's transaction with logged changes ended without a COMMIT after `sql` ran: as the MySQL session says the statement
+    /// ended it (`ended`: DDL, SET PASSWORD, BEGIN … committed it; a CALL, deadlock or lock wait timeout either way), else rolled back
+    /// by the server (deadlock, failed COMMIT, lost connection), or a COMMIT cut off by a lost connection has an unknown outcome (audit::ended_by)
+    async fn audit_lost_tx(&self, id: &str, name: &str, tab: Option<&str>, sql: &str, r: &AppResult<QueryResult>, ended: Option<&'static str>) -> AppResult<()> {
         let Some(t) = tab else { return Ok(()) };
         let open = self.tx_state(t.into()).await;
-        let begin = || {
-            let s = session::strip_comments_lead(sql);
-            s.starts_with("begin") || s.starts_with("start transaction")
-        };
-        // A CALL may have committed or rolled it back: the server's answer can't tell
-        let ended = match crate::mysql::ends_in_procedure(sql) {
-            true => crate::audit::ENDED_IN_PROCEDURE,
-            false => crate::audit::IMPLICIT_COMMIT,
-        };
-        let word = match r {
-            Ok(_) if kind == store::DbKind::Mysql => (!open || begin()).then_some(ended),
+        let word = ended.or(match r {
             Ok(_) => (!open).then_some(crate::audit::BY_SERVER),
-            Err(e) if kind == store::DbKind::Mysql && crate::mysql::ended_before_failing(sql, e, open) => Some(ended),
             Err(e) => crate::audit::ended_by(sql, e, open),
-        };
+        });
         match word {
             Some(w) => self.audit.tx_closed(id, name, t, w),
             None => Ok(()),
@@ -1006,7 +1009,7 @@ impl AppState {
         let logged = match &cfg {
             Some(c) => {
                 let a = self.audit.after(started, &conn, &c.name, c.kind, Some(&tab_id), "COMMIT", &r, None);
-                a.and(self.audit_lost_tx(&conn, &c.name, c.kind, Some(&tab_id), "COMMIT", &r).await)
+                a.and(self.audit_lost_tx(&conn, &c.name, Some(&tab_id), "COMMIT", &r, None).await)
             }
             None => Ok(()),
         };
