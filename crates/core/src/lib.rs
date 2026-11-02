@@ -41,6 +41,8 @@ pub mod search_cache;
 pub mod secrets;
 pub mod session;
 pub mod sql;
+#[cfg(test)]
+mod testenv;
 pub mod store;
 pub mod subset;
 pub mod transfer;

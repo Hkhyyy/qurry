@@ -479,14 +479,12 @@ pub fn check_exact_one(st: &str, n: u64, exact_one: bool) -> AppResult<()> {
 mod tests {
     use super::*;
     use crate::db::{connect, Pool};
-    use crate::store::{ConnectionConfig, DbKind};
 
-    /// Test DB: local PostgreSQL by default. Override with QURRY_TEST_PG=host:port:user:db (e.g. a container)
     /// MCP execute path: the server refuses two statements in one prepared item (nothing runs)
     #[tokio::test]
     #[ignore]
     async fn prepared_batch_refuses_multiple_statements() {
-        let p = pool().await;
+        let Some(p) = pool().await else { return };
         sqlx::raw_sql("drop table if exists qurry_prep; create table qurry_prep (a int)").execute(&p).await.unwrap();
         let e = p.execute_batch(&["insert into qurry_prep values (1); drop table qurry_prep".into()], false, true, &[]).await.unwrap_err().to_string();
         assert!(e.contains("multiple commands"), "{e}");
@@ -494,22 +492,18 @@ mod tests {
         sqlx::raw_sql("drop table qurry_prep").execute(&p).await.unwrap();
     }
 
-    async fn pool() -> PgPool {
-        let env = std::env::var("QURRY_TEST_PG").ok();
-        let part = |i: usize, d: String| env.as_ref().and_then(|e| e.split(':').nth(i).map(String::from)).unwrap_or(d);
-        let cfg = ConnectionConfig {
-            id: "t".into(), name: "t".into(), kind: DbKind::Postgres, host: part(0, "localhost".into()), port: part(1, "5432".into()).parse().unwrap(),
-            user: part(2, std::env::var("USER").unwrap()), database: part(3, String::new()), color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
-        };
-        let Pool::Pg(p) = connect(&cfg, None).await.unwrap() else { unreachable!() };
-        p
+    /// QURRY_TEST_PG=host:port:user:db[:password] (crate::testenv)
+    async fn pool() -> Option<PgPool> {
+        let s = crate::testenv::pg()?;
+        let Pool::Pg(p) = connect(&s.cfg, s.password.as_deref()).await.unwrap() else { unreachable!() };
+        Some(p)
     }
 
     /// In Auto mode, a cursor (SELECT) does not commit a transaction the user opened (a single SELECT used to finalize an UPDATE)
     #[tokio::test]
     #[ignore]
     async fn auto_mode_user_transaction_is_not_committed_by_select() {
-        let p = pool().await;
+        let Some(p) = pool().await else { return };
         sqlx::query("create table if not exists public.dbtool_tx_t(id int primary key, v text)").execute(&p).await.unwrap();
         sqlx::query("delete from public.dbtool_tx_t").execute(&p).await.unwrap();
         sqlx::query("insert into public.dbtool_tx_t values (1, 'a')").execute(&p).await.unwrap();
@@ -555,7 +549,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn fetch_after_idle_close() {
-        let p = pool().await;
+        let Some(p) = pool().await else { return };
         let mut s = PgSession::open(&p).await.unwrap();
         let r1 = s.run("select g from generate_series(1,1200) g order by g -- tail comment", 500).await.unwrap();
         assert_eq!((r1.rows.len(), r1.truncated), (500, true));
@@ -582,7 +576,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn cursor_paging_cancel_batch() {
-        let p = pool().await;
+        let Some(p) = pool().await else { return };
         let mut s = PgSession::open(&p).await.unwrap();
 
         // Cursor paging: 1200 rows → 500 + 500 + 200
@@ -697,19 +691,15 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_failed_snapshot_keeps_the_change() {
-        failed_snapshot_keeps_the_change(Pool::Pg(pool().await), "create schema if not exists audit_hardening_s", "drop schema audit_hardening_s cascade").await;
+        let Some(p) = pool().await else { return };
+        failed_snapshot_keeps_the_change(Pool::Pg(p), "create schema if not exists audit_hardening_s", "drop schema audit_hardening_s cascade").await;
     }
 
     /// QURRY_TEST_MY=host:port:user:password:db
     #[tokio::test]
     #[ignore]
     async fn mysql_failed_snapshot_keeps_the_change() {
-        let Ok(e) = std::env::var("QURRY_TEST_MY") else { return };
-        let p: Vec<&str> = e.split(':').collect();
-        let cfg = ConnectionConfig {
-            id: "t".into(), name: "t".into(), kind: DbKind::Mysql, host: p[0].into(), port: p[1].parse().unwrap(), user: p[2].into(), database: p[4].into(),
-            color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
-        };
-        failed_snapshot_keeps_the_change(connect(&cfg, Some(p[3])).await.unwrap(), "create database if not exists audit_hardening_s", "drop database audit_hardening_s").await;
+        let Some(s) = crate::testenv::my() else { return };
+        failed_snapshot_keeps_the_change(connect(&s.cfg, s.password.as_deref()).await.unwrap(), "create database if not exists audit_hardening_s", "drop database audit_hardening_s").await;
     }
 }

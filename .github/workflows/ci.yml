@@ -105,7 +105,6 @@ jobs:
           # Tests use USER as the PG user
           USER: postgres
           QURRY_TEST_PG: localhost:5432:postgres:postgres
-          QURRY_TEST_PG_USER: postgres
           QURRY_TEST_MY: localhost:13306:root:dbtool:shop
           QURRY_TEST_CH: localhost:18123:qurry:pw:default
           QURRY_TEST_MONGO: localhost:17017:qurry:pw:qurrytest
@@ -173,7 +172,6 @@ jobs:
         env:
           USER: postgres
           QURRY_TEST_PG: localhost:5432:postgres:postgres
-          QURRY_TEST_PG_USER: postgres
           QURRY_TEST_MY: localhost:13306:root:dbtool:shop
           QURRY_TEST_CH: localhost:18123:qurry:pw:default
           QURRY_TEST_MONGO: localhost:17017:qurry:pw:qurrytest

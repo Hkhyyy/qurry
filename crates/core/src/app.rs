@@ -1359,14 +1359,8 @@ mod tests {
     async fn housekeeping_keepalive_and_auto_disconnect() {
         let dir = std::env::temp_dir().join(format!("dbtool-hk-{}", uuid::Uuid::new_v4()));
         let state = AppState::new(Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
-        // QURRY_TEST_PG=host:port:user:db (default: local PostgreSQL as $USER)
-        let env = std::env::var("QURRY_TEST_PG").ok();
-        let part = |i: usize, d: String| env.as_ref().and_then(|e| e.split(':').nth(i).map(String::from)).unwrap_or(d);
-        let mut cfg = ConnectionConfig {
-            id: "hk".into(), name: "hk".into(), kind: crate::store::DbKind::Postgres, host: part(0, "localhost".into()), port: part(1, "5432".into()).parse().unwrap(),
-            user: part(2, std::env::var("USER").unwrap()), database: part(3, "postgres".into()), color: None, ssh: None, password_saved: false,
-            ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
-        };
+        let Some(crate::testenv::Server { mut cfg, .. }) = crate::testenv::pg() else { return };
+        cfg.id = "hk".into();
         cfg.options.keep_alive_secs = Some(1);
         cfg.options.auto_disconnect_secs = Some(2);
         state.store.save(&cfg).unwrap();

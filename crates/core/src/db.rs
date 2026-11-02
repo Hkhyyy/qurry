@@ -502,26 +502,6 @@ mod tests {
         }
     }
 
-    /// Tests against a local PostgreSQL. Run with `cargo test -- --ignored`.
-    /// QURRY_TEST_PG=host:port:user:db, like the other tests (otherwise localhost:5432, QURRY_TEST_PG_HOST / _USER / _DB)
-    fn local_cfg() -> ConnectionConfig {
-        let env = std::env::var("QURRY_TEST_PG").ok();
-        let part = |i: usize| env.as_ref().and_then(|e| e.split(':').nth(i).map(String::from));
-        ConnectionConfig {
-            id: "test".into(),
-            name: "local".into(),
-            kind: DbKind::Postgres,
-            host: part(0).or_else(|| std::env::var("QURRY_TEST_PG_HOST").ok()).unwrap_or_else(|| "localhost".into()),
-            port: part(1).map(|p| p.parse().expect("QURRY_TEST_PG must be host:port:user:db")).unwrap_or(5432),
-            user: part(2).or_else(|| std::env::var("QURRY_TEST_PG_USER").ok()).unwrap_or_else(|| std::env::var("USER").unwrap()),
-            database: part(3).or_else(|| std::env::var("QURRY_TEST_PG_DB").ok()).unwrap_or_else(|| "postgres".into()),
-            color: None,
-            ssh: None,
-            password_saved: false,
-            ssh_secret_saved: false,
-            scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
-        }
-    }
 
     /// A remote PostgreSQL without SSL settings must set up TLS: the local test server has no TLS, reached through an address that isn't loopback by name
     /// ("127.1" resolves to 127.0.0.1 but isn't an IP literal, so Qurry treats it as remote; ::ffff:127.0.0.1 now counts as this machine)
@@ -529,7 +509,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_remote_requires_tls() {
-        let mut cfg = local_cfg();
+        let Some(crate::testenv::Server { mut cfg, .. }) = crate::testenv::pg() else { return };
         cfg.host = "127.1".into();
         assert!(!is_loopback(&cfg.host) && is_loopback("::ffff:127.0.0.1"));
         opt_in_then_connect(cfg, "pw").await;
@@ -539,10 +519,8 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn mysql_remote_requires_tls() {
-        let e = std::env::var("QURRY_TEST_MY_NOTLS").expect("QURRY_TEST_MY_NOTLS");
-        let p: Vec<&str> = e.split(':').collect();
-        let cfg = ConnectionConfig { kind: DbKind::Mysql, host: "127.1".into(), port: p[1].parse().unwrap(), user: p[2].into(), database: p[4].into(), ..local_cfg() };
-        opt_in_then_connect(cfg, p[3]).await;
+        let s = crate::testenv::my_from("QURRY_TEST_MY_NOTLS").expect("QURRY_TEST_MY_NOTLS");
+        opt_in_then_connect(ConnectionConfig { host: "127.1".into(), ..s.cfg }, s.password.as_deref().unwrap_or_default()).await;
     }
 
     /// The TLS error is one the GUI offers "Allow unencrypted" for; after AppState::allow_plaintext the saved password connects
@@ -562,7 +540,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_connection_options_applied() {
-        let mut cfg = local_cfg();
+        let Some(crate::testenv::Server { mut cfg, .. }) = crate::testenv::pg() else { return };
         cfg.options.time_zone = Some("Asia/Seoul".into());
         cfg.options.isolation = Some("serializable".into());
         cfg.options.startup_script = "set application_name = 'dbtool_startup'; set search_path = pg_catalog".into();
@@ -579,7 +557,8 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_read_only_rejects_writes() {
-        let cfg = ConnectionConfig { read_only: true, ..local_cfg() };
+        let Some(s) = crate::testenv::pg() else { return };
+        let cfg = ConnectionConfig { read_only: true, ..s.cfg };
         let Pool::Pg(p) = connect(&cfg, None).await.expect("connect") else { unreachable!() };
         let ro: String = sqlx::query_scalar("show default_transaction_read_only").fetch_one(&p).await.unwrap();
         assert_eq!(ro, "on");
@@ -591,7 +570,8 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_end_to_end() {
-        let pool = connect(&local_cfg(), None).await.expect("connect");
+        let Some(s) = crate::testenv::pg() else { return };
+        let pool = connect(&s.cfg, s.password.as_deref()).await.expect("connect");
         assert!(
             pool.server_version()
                 .await
