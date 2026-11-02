@@ -343,6 +343,16 @@ fn click(app: &mut App, x: u16, y: u16) {
 }
 
 pub fn on_event(app: &mut App, ev: Event) {
+    // Under the 'terminal too small' message only the quit key acts (an unseen confirm could be answered, an unseen grid scrolled)
+    if app.too_small {
+        if let Event::Key(k) = ev
+            && k.kind != KeyEventKind::Release
+            && app.keys.lookup(&k) == Some(Action::Quit)
+        {
+            app.run_action(Action::Quit);
+        }
+        return;
+    }
     match ev {
         Event::Key(k) if k.kind != KeyEventKind::Release => on_key(app, k),
         Event::Paste(s) => paste(app, s),

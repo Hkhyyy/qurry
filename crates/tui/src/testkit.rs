@@ -197,11 +197,16 @@ impl Harness {
         }
     }
 
-    /// Draw the screen and return only the text (\n per line)
-    pub fn screen(&mut self, w: u16, h: u16) -> String {
+    /// Draw the screen (colors mapped to the app's color mode)
+    pub fn buffer(&mut self, w: u16, h: u16) -> ratatui::buffer::Buffer {
         let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
         term.draw(|f| crate::ui::draw(f, &mut self.app)).unwrap();
-        let buf = term.backend().buffer();
+        term.backend().buffer().clone()
+    }
+
+    /// Draw the screen and return only the text (\n per line)
+    pub fn screen(&mut self, w: u16, h: u16) -> String {
+        let buf = self.buffer(w, h);
         (0..h).map(|y| (0..w).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_string()).collect::<Vec<_>>().join("\n")
     }
 }

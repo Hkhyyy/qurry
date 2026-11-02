@@ -31,3 +31,10 @@ export const ScreenDbaStale = { ...by("Database Admin: refresh failed"), name: "
 export const ScreenDbaError = { ...by("Database Admin: report error"), name: "Screen · Database Admin: report error" };
 export const ScreenRedis ={ ...by("Redis"), name: "Screen · Redis" };
 export const ScreenMysqlBackupDefiners = { ...by("MySQL backup: DEFINER= question"), name: "Screen · MySQL backup: DEFINER= question" };
+export const ScreenTooSmall = { ...by("Terminal too small"), name: "Screen · Terminal too small" };
+// The explorer screen in each color mode the TUI picks from NO_COLOR · COLORTERM · TERM (crates/tui/src/theme.rs)
+export const ColorsTruecolor = { ...by("Colors: truecolor"), name: "Colors · truecolor" };
+export const Colors256 = { ...by("Colors: 256"), name: "Colors · 256" };
+export const Colors16 = { ...by("Colors: 16"), name: "Colors · 16" };
+export const ColorsNoColor = { ...by("Colors: NO_COLOR"), name: "Colors · NO_COLOR" };
+export const ColorsNoColorGrid = { ...by("Colors: NO_COLOR grid"), name: "Colors · NO_COLOR grid" };

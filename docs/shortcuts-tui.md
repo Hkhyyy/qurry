@@ -6,6 +6,7 @@ Keys are written as macOS shows them: `⌃` Control, `⌥` Option, `⇧` Shift. 
 
 Press **F1** inside `qurry-tui`, or run `qurry-tui --help`, to see the same list. In the F1 window the **Commands** at the top can be changed: select one, press Enter and then the new key (`a` adds a second key, `Del` resets it). The mouse works too: click to select, double-click to open or edit, scroll with the wheel.
 ⌃Enter is only distinguishable in terminals that support the kitty keyboard protocol (iTerm2, kitty, WezTerm, Ghostty). Elsewhere use F5 or ⌥Enter.
+In tmux, `⌃b` (Go to DDL) is the tmux prefix: press it twice, or see [TUI in your terminal](tui.md#tmux-and-other-multiplexers) for that and for ⌥ keys.
 
 **New to it? `⌃p` alone is enough to start.** It searches tables, columns, open tabs and actions (data sources you are not connected to are searched from the list saved the last time they were loaded). The status bar always shows the keys for what you are looking at (explorer, console, table, results, Redis), followed by the most useful global keys. The F1 window starts with the same short list. Keys are shown lowercase when Shift is not needed (`⌃k`); an uppercase letter means Shift (`D`, `⌥⇧X`).
 

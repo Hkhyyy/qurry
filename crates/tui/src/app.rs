@@ -657,6 +657,10 @@ pub struct App {
     pub ws_shared: Option<Vec<qurry_core::workspaces::WsInfo>>,
     /// The save file has synced with the shared list before (missing workspaces were deleted elsewhere)
     pub ws_synced: bool,
+    /// What the terminal can show (set from the environment at startup; drawing maps the frame to it)
+    pub color: crate::theme::ColorMode,
+    /// The last frame was the 'terminal too small' message: keys and clicks would act on a screen that isn't drawn
+    pub too_small: bool,
     /// Tests only (testkit): answers console statements and the Production row counts instead of the database
     #[cfg(test)]
     pub fake_db: Option<FakeDb>,
@@ -728,6 +732,8 @@ impl App {
             saved_ws: String::new(),
             ws_shared: None,
             ws_synced: false,
+            color: Default::default(),
+            too_small: false,
             #[cfg(test)]
             fake_db: None,
             next_id: 1,
