@@ -1,4 +1,16 @@
 {
+  "backslash-no-backslash-escapes": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
+  "backslash-read": {
+    "DDL_RE": false,
+    "isReadStmt": true
+  },
+  "backslash-scs-off": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
   "call": {
     "DDL_RE": false,
     "isReadStmt": false

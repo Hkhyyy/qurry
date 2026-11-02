@@ -119,6 +119,18 @@
     "isReadStmt": true,
     "DDL_RE": false
   },
+  "backslash-no-backslash-escapes": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "backslash-scs-off": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "backslash-read": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
   "redis-get": {
     "isReadStmt": false,
     "DDL_RE": false

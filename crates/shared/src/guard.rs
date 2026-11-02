@@ -26,11 +26,22 @@ struct Scan {
 }
 
 fn scan(sql: &str, kind: DbKind) -> Scan {
+    scan_as(sql, kind, false)
+}
+
+/// flip = read '…' with the other backslash rule a server setting can pick: MySQL NO_BACKSLASH_ESCAPES (\ is a plain char),
+/// PostgreSQL standard_conforming_strings = off (\ escapes in '…' too)
+fn scan_as(sql: &str, kind: DbKind, flip: bool) -> Scan {
     let b = sql.as_bytes();
     let n = b.len();
     let (mut toks, mut i, mut depth, mut exec_comment) = (Vec::new(), 0usize, 0i32, false);
     let my = kind == DbKind::Mysql;
     let backslash = crate::sql::backslash_escapes(kind);
+    let escapes = |q: u8| match (flip, kind) {
+        (true, DbKind::Mysql) => false,
+        (true, DbKind::Postgres) => q == b'\'',
+        _ => backslash && crate::sql::escapes_in(kind, q),
+    };
     while i < n {
         let c = b[i];
         let d = if i + 1 < n { b[i + 1] } else { 0 };
@@ -80,7 +91,7 @@ fn scan(sql: &str, kind: DbKind) -> Scan {
             let mut j = i + 1;
             while j < n {
                 // \ inside a MySQL backtick name is not an escape
-                if ((backslash && crate::sql::escapes_in(kind, c)) || e_string) && b[j] == b'\\' {
+                if (escapes(c) || e_string) && b[j] == b'\\' {
                     j += 2;
                     continue;
                 }
@@ -959,10 +970,15 @@ pub fn redis_mcp_write_violation(line: &str) -> Option<String> {
 }
 
 /// Whether the statement doesn't change data (for counting "already committed changes" in script failure notes)
+/// With a backslash the server's settings decide where strings end (MySQL NO_BACKSLASH_ESCAPES,
+/// PostgreSQL standard_conforming_strings), so the statement must be a read under both rules
 pub fn is_read(sql: &str, kind: DbKind) -> bool {
-    let sc = scan(sql, kind);
-    let first = sc.toks.iter().find(|t| t.word).map(|t| t.text.as_str()).unwrap_or("");
-    READ_WORDS.contains(&first) && !sc.toks.iter().any(|t| t.word && ["insert", "update", "delete", "merge"].contains(&t.text.as_str()))
+    let read = |sc: Scan| {
+        let first = sc.toks.iter().find(|t| t.word).map(|t| t.text.as_str()).unwrap_or("");
+        READ_WORDS.contains(&first) && !sc.toks.iter().any(|t| t.word && ["insert", "update", "delete", "merge"].contains(&t.text.as_str()))
+    };
+    let ambiguous = matches!(kind, DbKind::Mysql | DbKind::Postgres) && sql.contains('\\');
+    read(scan(sql, kind)) && (!ambiguous || read(scan_as(sql, kind, true)))
 }
 
 /// Whether the statement changes structure (the explorer tree is reloaded after running). Skips leading comments
@@ -1430,5 +1446,21 @@ mod tests {
         assert!(u("select * from t for update").is_none());
         assert!(unsafe_statement("FLUSHALL", DbKind::Redis).is_some());
         assert!(unsafe_statement("GET a", DbKind::Redis).is_none());
+    }
+
+    /// Where strings end depends on a server setting once there is a backslash: a read must be a read under both rules
+    #[test]
+    fn is_read_backslash_rules() {
+        // MySQL NO_BACKSLASH_ESCAPES: the string ends after x\ and the DELETE runs
+        assert!(!is_read("with a as (select 'x\\') delete from t -- ') select 1", Mysql));
+        // Also when the scanner sees the write in a # comment the server reads as code
+        assert!(!is_read("select 'a\\' , ' # ' delete from t -- '", Mysql));
+        // PostgreSQL standard_conforming_strings = off: \' escapes and the CTE's DELETE is code
+        assert!(!is_read("with a as (select 'x\\' as c, '), d as (delete from t returning 1) select 1 -- ' as e) select 1", Postgres));
+        // Reads stay reads
+        for s in ["select 'C:\\path', 'delete' as action", "select 'it\\'s'", "select 'delete' as action"] {
+            assert!(is_read(s, Mysql) && is_read(s, Postgres), "{s}");
+        }
+        assert!(is_read("# delete\nselect 1", Mysql));
     }
 }

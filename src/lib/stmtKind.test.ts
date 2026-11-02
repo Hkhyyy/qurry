@@ -12,6 +12,13 @@ describe("stmtKind (core guard through WASM)", () => {
     expect(isDdl("postgres", "# wipe\ntruncate t")).toBe(false);
   });
 
+  it("with a backslash in a string, a read must be a read under both of the server's string rules", () => {
+    // MySQL NO_BACKSLASH_ESCAPES / PostgreSQL standard_conforming_strings = off end the string early and run the DELETE
+    expect(isRead("mysql", "with a as (select 'x\\') delete from t -- ') select 1")).toBe(false);
+    expect(isRead("postgres", "with a as (select 'x\\' as c, '), d as (delete from t returning 1) select 1 -- ' as e) select 1")).toBe(false);
+    expect(isRead("mysql", "select 'C:\\path', 'delete' as action")).toBe(true);
+  });
+
   it("without the WASM module every statement is a write and not DDL (Production then asks)", async () => {
     vi.resetModules();
     const fresh = await import("./stmtKind");
