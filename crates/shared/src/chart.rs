@@ -318,7 +318,11 @@ mod tests {
         let ts = golden(include_str!("../tests/goldens/ts/results.json"));
         for e in &corpus {
             let id = e["id"].as_str().unwrap();
-            let Some(g) = ts.get(id).filter(|g| g.get("numericColumns").is_some()) else { continue };
+            // A row added after the chart moved to Rust has a golden without chart keys; a row with no golden at all fails
+            let g = ts.get(id).unwrap_or_else(|| panic!("{id}: no entry in goldens/ts/results.json"));
+            if g.get("numericColumns").is_none() {
+                continue;
+            }
             let (c, r) = result(e);
             let names = |is: &[usize]| is.iter().map(|&i| c[i].name.clone()).collect::<Vec<_>>();
             assert_eq!(json!(names(&numeric_columns(&c, &r, Options::GUI))), g["numericColumns"], "{id}: numericColumns");

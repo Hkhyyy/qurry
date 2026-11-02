@@ -15,3 +15,15 @@ describe("Dialect.lit without the WASM module", () => {
     expect(dialectOf("postgres").lit(null)).toBe("NULL");
   });
 });
+
+describe("Dialect.q", () => {
+  it("doubles \\ in ClickHouse names as qurry_shared::sql::quote_ident does (ClickHouse reads \\ as an escape in \"names\")", () => {
+    const name = 'id\\" OR 1=1 --';
+    expect(dialectOf("clickhouse").q(name)).toBe('"id\\\\"" OR 1=1 --"');
+    expect(dialectOf("clickhouse").q('id"')).toBe('"id"""');
+    expect(dialectOf("clickhouse").q("id")).toBe("id");
+    // Other kinds don't read \ as an escape in "names"
+    expect(dialectOf("postgres").q(name)).toBe('"id\\"" OR 1=1 --"');
+    expect(dialectOf("mssql").q(name)).toBe('"id\\"" OR 1=1 --"');
+  });
+});

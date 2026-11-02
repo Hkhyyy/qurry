@@ -67,6 +67,21 @@ describe("bindable / conflicts", () => {
     const mac = navigator.platform.toLowerCase().includes("mac");
     for (const spec of specs) expect([spec, fresh.formatSpec(spec)]).toEqual([spec, shared().formatSpec(spec, mac)]);
   });
+
+  it("before the WASM module has loaded, labels on the other platform match the module too", async () => {
+    const mac = navigator.platform.toLowerCase().includes("mac");
+    const platform = Object.getOwnPropertyDescriptor(navigator, "platform");
+    Object.defineProperty(navigator, "platform", { value: mac ? "Linux x86_64" : "MacIntel", configurable: true });
+    try {
+      vi.resetModules();
+      const fresh = await import("./shortcuts");
+      expect((await import("./shared")).sharedReady()).toBe(false);
+      for (const spec of specs) expect([spec, fresh.formatSpec(spec)]).toEqual([spec, shared().formatSpec(spec, !mac)]);
+    } finally {
+      if (platform) Object.defineProperty(navigator, "platform", platform);
+      else delete (navigator as { platform?: string }).platform;
+    }
+  });
 });
 
 describe("docs/shortcuts-gui.md", () => {

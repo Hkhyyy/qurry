@@ -199,6 +199,12 @@ impl<'a> Iterator for Tokens<'a> {
     }
 }
 
+/// The tab's DB as the schema its bare names live in: only in MySQL, where the schema is the DB. A PostgreSQL schema named
+/// after the database isn't on the default search_path, so its tables keep their schema
+fn db_schema(db: &str, mysql: bool) -> &str {
+    if mysql { db } else { "" }
+}
+
 /// The table a reference names: `schema.table`, or a bare name (in `public` or the tab's DB first, then any schema)
 fn find_table<'a>(m: &'a Meta, r: &str, db: &str) -> Option<&'a CompletionTable> {
     let r = r.to_lowercase();
@@ -237,6 +243,7 @@ pub struct Rest {
 
 /// `suggest` in two parts: (prefix length, the leading candidates, what the rest comes from). None = no rest (after a `.`, in quotes)
 pub fn suggest_lead(m: &Meta, text: &str, before: &str, db: &str, mysql: bool, o: Options) -> (usize, Vec<Item>, Option<Rest>) {
+    let db = db_schema(db, mysql);
     let all = &m.tables;
     let prefix: String = before.chars().rev().take_while(|c| is_word(*c)).collect::<Vec<_>>().into_iter().rev().collect();
     let head = &before[..before.len() - prefix.len()];
@@ -464,6 +471,7 @@ pub fn hintable(mode: HintMode, path: &[String], type_name: &str) -> bool {
 
 /// If the cursor is at a value · json key spot, that table · column (only for columns worth suggesting)
 pub fn hint_at(m: &Meta, text: &str, before: &str, db: &str, mysql: bool) -> Option<HintAt> {
+    let db = db_schema(db, mysql);
     let ctx = context(before, mysql)?;
     let refs = tables_in_statement(text);
     let candidates: Vec<&(String, Option<String>)> = match &ctx.r#ref {
@@ -676,6 +684,18 @@ mod tests {
         let all = Meta::new(vec![CompletionTable { schema: "shop".into(), name: "items".into(), columns: vec![] }]);
         let (_, v) = suggest(&all, "select * from it", "select * from it", "shop", true, TUI);
         assert_eq!(v[0].insert, "items");
+    }
+
+    #[test]
+    fn postgres_db_is_not_a_schema() {
+        // Database `app` with schemas `app` and `public`: bare names resolve on search_path ("$user", public), not in `app`
+        let t = |schema: &str, name: &str, col: &str| CompletionTable { schema: schema.into(), name: name.into(), columns: vec![(col.into(), "text".into())] };
+        let m = Meta::new(vec![t("app", "orders", "o"), t("app", "users", "a_only"), t("public", "users", "p_only")]);
+        let (_, v) = suggest(&m, "select * from ord", "select * from ord", "app", false, TUI);
+        assert_eq!(v.iter().find(|i| i.label == "orders").map(|i| i.insert.as_str()), Some("app.orders"));
+        let text = "select * from users u where u.";
+        let (_, v) = suggest(&m, text, text, "app", false, TUI);
+        assert!(v.iter().any(|i| i.label == "p_only") && !v.iter().any(|i| i.label == "a_only"), "{v:?}");
     }
 
     #[test]

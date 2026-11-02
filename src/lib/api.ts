@@ -481,6 +481,8 @@ const RD: Dialect = {
 /** Driver DBs: standard SQL quoting, text conversion via CAST (no PG ::text). Literals and the extractors as the driver's kind (no PG E'';
  *  ClickHouse doubles \ as MySQL does) */
 const GEN = Object.fromEntries(PLUGIN_KINDS.map((k) => [k, { ...PG, lit: literalOf(k), text: (e: string) => `CAST(${e} AS VARCHAR(4000))`, monaco: "sql", quoting: k }])) as Record<DbKind, Dialect>;
+/** ClickHouse reads \ as an escape inside "names" too, so it is doubled: the rule of qurry_shared::sql::quote_ident(Clickhouse) */
+GEN.clickhouse.q = (s) => (/^[a-z_][a-z0-9_]*$/.test(s) && !RESERVED.has(s) ? s : `"${s.replace(/\\/g, "\\\\").replace(/"/g, '""')}"`);
 const MONGO: Dialect = { q: (s) => s, lit: sqlLiteral, text: (e) => e, monaco: "javascript", split: RD.split, quoting: "mongodb" };
 /** One REST request = from a method line up to the next method line (including JSON body). Same rule as core's sql::split_rest */
 const REST: Dialect = {

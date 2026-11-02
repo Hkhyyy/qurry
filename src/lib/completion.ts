@@ -83,7 +83,7 @@ for (const lang of ["pgsql", "mysql"]) {
       const text = model.getValue();
       const caret = model.getOffsetAt(position);
       const range = (s: Suggestions) => new monaco.Range(position.lineNumber, s.startColumn, position.lineNumber, s.endColumn);
-      // The tab's DB (connId is "dataSource::db"): its tables are inserted bare, as those in public (MySQL: the schema is the DB)
+      // The tab's DB (connId is "dataSource::db"): in MySQL the schema is the DB, so its tables are inserted bare (complete.rs ignores it for PG)
       const db = connId?.split("::")[1] ?? "";
 
       // Value · json key: where status = '… / data->>'… / reasons @> '…

@@ -11,13 +11,24 @@ test("shortcuts work while the WebAssembly module loads, with ⌘⌥⌃⇧ label
     await gate;
     await route.continue();
   });
+  // The app's own instance of src/lib/shared.ts (Vite serves it at this path): which side drew the label
+  const ready = () => page.evaluate(() => import(/* @vite-ignore */ "/src/lib/shared.ts").then((m) => m.sharedReady() as boolean));
   await openApp(page);
-  await page.keyboard.press("Meta+Shift+Slash");
-  await expect(dialog(page).locator(".ui-modal-title")).toHaveText("Keymap Reference");
   const row = dialog(page).locator(".keymap-row", { hasText: "Go to Database Object" }).locator(".keymap-keys");
-  // Not the stored "Mod+O" while it loads
+  const open = async () => {
+    await page.keyboard.press("Meta+Shift+Slash");
+    await expect(dialog(page).locator(".ui-modal-title")).toHaveText("Keymap Reference");
+  };
+  await open();
+  // Drawn by the TS copy while it loads, not the stored "Mod+O"
+  expect(await ready()).toBe(false);
   await expect(row).toHaveText("⌘o");
   release();
+  await expect.poll(ready).toBe(true);
+  // Drawn by the module once it has loaded
+  await page.keyboard.press("Escape");
+  await expect(dialog(page)).toHaveCount(0);
+  await open();
   await expect(row).toHaveText("⌘o");
 });
 
