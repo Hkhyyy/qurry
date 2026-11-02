@@ -167,9 +167,9 @@ pub fn hintable(ctx: JsValue, type_name: &str) -> Result<bool, JsError> {
 
 /// Text inserted for a value at that spot (Monaco closes quotes itself, so none is added)
 #[wasm_bindgen(js_name = hintInsert)]
-pub fn hint_insert(value: &str, ctx: JsValue, type_name: &str) -> Result<String, JsError> {
+pub fn hint_insert(value: &str, ctx: JsValue, type_name: &str, mysql: bool) -> Result<String, JsError> {
     let c: complete::Ctx = serde_wasm_bindgen::from_value(ctx)?;
-    Ok(complete::hint_insert(value, c.mode, &c.path, type_name, c.quoted, false))
+    Ok(complete::hint_insert(value, c.mode, &c.path, type_name, c.quoted, false, mysql))
 }
 
 /// Text replacing the operator at a keys spot with no keys: ` @> '[{…}]'`

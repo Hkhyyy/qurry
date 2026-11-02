@@ -5,6 +5,7 @@
     { "schema": "billing", "name": "invoices", "columns": [["id", "int4"], ["amount", "numeric"]] },
     { "schema": "billing", "name": "users", "columns": [["id", "int4"], ["plan", "text"]] },
     { "schema": "sales", "name": "주문", "columns": [["번호", "int4"], ["상태", "text"]] },
+    { "schema": "public", "name": "sales", "columns": [["region", "text"]] },
     { "schema": "public", "name": "😀 emoji", "columns": [["값", "text"]] },
     { "schema": "shop", "name": "items", "columns": [["id", "int"], ["sku", "varchar(20)"], ["data", "json"]] }
   ],
@@ -27,6 +28,11 @@
     { "id": "korean-schema-columns", "text": "select * from sales.주문 where 상‸" },
     { "id": "korean-alias-dot", "text": "select 주.‸ from sales.주문 주" },
     { "id": "emoji-quoted-table", "text": "select e.‸ from \"😀 emoji\" e" },
+    { "id": "quoted-table-dot", "text": "select \"😀 emoji\".‸ from \"😀 emoji\"" },
+    { "id": "quoted-table-dot-no-from", "text": "select \"😀 emoji\".‸" },
+    { "id": "schema-named-like-table", "text": "select * from sales.‸" },
+    { "id": "schema-named-like-table-no-from", "text": "select sales.‸" },
+    { "id": "table-named-like-schema", "text": "select sales.‸ from sales" },
     { "id": "emoji-before-word", "text": "select '😀😀' as x, us‸ from users" },
     { "id": "mysql-db-schema", "mysql": true, "db": "shop", "text": "select * from it‸" },
     { "id": "quiet-space", "trigger": " ", "text": "select * from orders where ‸" },
@@ -40,6 +46,9 @@
     { "id": "hint-bytea-quoted", "text": "select * from orders where raw = 'us‸" },
     { "id": "hint-korean-value", "text": "select * from sales.주문 where 상태 = '완‸", "hints": { "values": [["완료😀", 5], ["완", 1], ["대기", 2]] } },
     { "id": "hint-mysql-keys", "mysql": true, "db": "shop", "text": "select * from items where data->>'$.‸", "hints": { "keys": [["sku", 4]] } },
+    { "id": "hint-backslash-bare", "text": "select * from orders where status = ‸", "hints": { "values": [["x\\' or 1=1 -- ", 1]] } },
+    { "id": "hint-mysql-backslash-bare", "mysql": true, "db": "shop", "text": "select * from items where sku = ‸", "hints": { "values": [["x\\' or 1=1 -- ", 1]] } },
+    { "id": "hint-mysql-backslash-quoted", "mysql": true, "db": "shop", "text": "select * from items where sku = '‸", "hints": { "values": [["a\\b's", 1]] } },
     { "id": "hint-mysql-no-pairs", "mysql": true, "db": "shop", "text": "select * from items where data @> '‸" }
   ]
 }

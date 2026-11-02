@@ -115,7 +115,7 @@ fn hint_golden() -> Golden {
         let op = (!c.op.is_empty()).then(|| c.op.clone());
         o.insert("hintContext".into(), json!({ "ref": c.r#ref, "column": c.column, "path": c.path, "mode": mode, "quoted": c.quoted, "typed": c.typed, "op": op }));
         // hint_items builds the inserted text (typed left empty: its prefix filter isn't part of hintInsert; a ' after the cursor, so no closing quote is added)
-        let h = HintAt { schema: String::new(), table: String::new(), column: c.column.clone(), type_name: ty.into(), path: c.path.clone(), mode: c.mode, quoted: c.quoted, typed: String::new(), op: c.op.clone() };
+        let h = HintAt { schema: String::new(), table: String::new(), column: c.column.clone(), type_name: ty.into(), path: c.path.clone(), mode: c.mode, quoted: c.quoted, typed: String::new(), op: c.op.clone(), mysql };
         let hints = [Hint { value: value.into(), count: 1 }];
         o.insert("hintInsert".into(), complete::hint_items(&h, &hints, Some('\''), false, Options::TUI)[0].insert.clone().into());
         // hint_at decides hintable: a one-table statement whose only column is the hinted one

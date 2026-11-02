@@ -79,12 +79,13 @@ function stmtGolden(): Golden {
 function hintGolden(): Golden {
   const out: Golden = {};
   for (const e of hintCorpus) {
-    const ctx = hintContext(e.before, "mysql" in e && !!e.mysql);
+    const mysql = "mysql" in e && !!e.mysql;
+    const ctx = hintContext(e.before, mysql);
     const o: Record<string, unknown> = {
       hintContext: ctx && { ref: ctx.ref ?? null, column: ctx.column, path: ctx.path, mode: ctx.mode, quoted: ctx.quoted, typed: ctx.typed, op: ctx.op ?? null },
     };
     if (ctx) {
-      o.hintInsert = hintInsert(e.value, ctx, e.typeName);
+      o.hintInsert = hintInsert(e.value, ctx, e.typeName, mysql);
       o.hintable = hintable(ctx, e.typeName);
       if (ctx.mode === "keys") o.pairsForKeys = pairsForKeys(e.value, ctx);
     }

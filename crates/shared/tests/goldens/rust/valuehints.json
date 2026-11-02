@@ -342,7 +342,7 @@
       "ref": null,
       "typed": ""
     },
-    "hintInsert": "a\\b",
+    "hintInsert": "a\\\\b",
     "hintable": true
   },
   "mysql-value": {

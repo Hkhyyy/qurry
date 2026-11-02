@@ -37,7 +37,12 @@ export function unbindModel(uri: string) {
 }
 /** Drop metadata of a Data Source (and its DBs): on disconnect and refresh */
 export function invalidateCompletion(connId: string) {
-  for (const k of [...cache.keys()]) if (k === connId || k.startsWith(connId + "::")) cache.delete(k);
+  for (const [k, p] of [...cache]) {
+    if (k !== connId && !k.startsWith(connId + "::")) continue;
+    cache.delete(k);
+    // Free its WASM memory now: linear memory never shrinks, so waiting for GC raises the peak for good
+    p.then((c) => c.free(), () => {});
+  }
 }
 
 async function indexFor(connId: string | undefined): Promise<Completion | undefined> {

@@ -16,9 +16,9 @@ export function hintContext(before: string, mysql = false): HintContext | null {
   return c ? { ...c, op: c.op || undefined } : null;
 }
 
-/** Text to insert: inside quotes, only double '; outside, numeric · boolean column values as is, the rest '…' */
-export function hintInsert(value: string, ctx: HintContext, typeName: string): string {
-  return shared().hintInsert(value, ctx, typeName);
+/** Text to insert: inside quotes, only double ' (and \ on MySQL); outside, numeric · boolean column values as is, the rest '…' */
+export function hintInsert(value: string, ctx: HintContext, typeName: string, mysql = false): string {
+  return shared().hintInsert(value, ctx, typeName, mysql);
 }
 
 /** For keys spots with no keys (arrays of objects): text replacing it, operator included, with `@> '[{…}]'` */

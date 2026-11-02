@@ -241,18 +241,25 @@ pub fn suggest_lead(m: &Meta, text: &str, before: &str, db: &str, mysql: bool, o
     };
 
     if let Some(h) = head.strip_suffix('.') {
-        let q: String = h.chars().rev().take_while(|c| is_word(*c) || *c == '"').collect::<Vec<_>>().into_iter().rev().collect();
-        let q = q.replace('"', "").to_lowercase();
+        // The qualifier: a quoted name back to its opening quote (it may hold spaces, hyphens, emoji), else the word before the dot
+        let start = match h.strip_suffix('"') {
+            Some(inner) => inner.rfind('"').unwrap_or(h.len()),
+            None => h.trim_end_matches(is_word).len(),
+        };
+        let q = h[start..].trim_matches('"').to_lowercase();
         if q.is_empty() {
             return (n, vec![], None);
         }
+        // A schema of that name wins where a table name goes (`from sales.`) and over a table the statement doesn't name
+        let schema = m.lower.iter().any(|(ls, _)| *ls == q);
+        let at_ref = h[..start].trim_end().rsplit(|c: char| !is_word(c)).next().is_some_and(|w| ["from", "join", "update", "into"].iter().any(|k| w.eq_ignore_ascii_case(k)));
         // alias. or table. → columns
         let refs = tables_in_statement(text);
         let hit = refs
             .iter()
             .find(|(_, a)| a.as_ref().is_some_and(|a| a.to_lowercase() == q))
             .or_else(|| refs.iter().find(|(r, _)| r.rsplit('.').next().unwrap_or(r).to_lowercase() == q));
-        let t = hit.and_then(|(r, _)| find_table(m, r, db)).or_else(|| find_table(m, &q, db));
+        let t = if schema && at_ref { None } else { hit.and_then(|(r, _)| find_table(m, r, db)).or_else(|| if schema { None } else { find_table(m, &q, db) }) };
         if let Some(t) = t {
             let items = t.columns.iter().filter(|(c, _)| matches(c)).map(|(c, ty)| Item { label: c.clone(), detail: ty.clone(), insert: c.clone(), kind: ItemKind::Column }).collect();
             return (n, items, None);
@@ -340,6 +347,8 @@ pub struct HintAt {
     pub typed: String,
     /// keys: from the operator to the cursor (`->> '` + typed) — for replacing with an @> condition
     pub op: String,
+    /// MySQL reads a backslash in a string literal as an escape
+    pub mysql: bool,
 }
 
 /// values = column values, keys = json keys, pairs = @> conditions for frequent `key: value` pairs (PostgreSQL)
@@ -459,13 +468,13 @@ pub fn hint_at(m: &Meta, text: &str, before: &str, db: &str, mysql: bool) -> Opt
     };
     let lc = ctx.column.to_lowercase();
     let (t, (col, ty)) = named.iter().filter_map(|(r, _)| find_table(m, r, db)).find_map(|t| t.columns.iter().find(|(c, _)| c.to_lowercase() == lc).map(|c| (t, c)))?;
-    hintable(ctx.mode, &ctx.path, ty).then(|| HintAt { schema: t.schema.clone(), table: t.name.clone(), column: col.clone(), type_name: ty.clone(), path: ctx.path, mode: ctx.mode, quoted: ctx.quoted, typed: ctx.typed, op: ctx.op })
+    hintable(ctx.mode, &ctx.path, ty).then(|| HintAt { schema: t.schema.clone(), table: t.name.clone(), column: col.clone(), type_name: ty.clone(), path: ctx.path, mode: ctx.mode, quoted: ctx.quoted, typed: ctx.typed, op: ctx.op, mysql })
 }
 
-/// Text to insert for a value: inside quotes only doubled ' (and the closing quote when `close`); outside, numeric · boolean
-/// column values as they are, the rest '…'
-pub fn hint_insert(value: &str, mode: HintMode, path: &[String], type_name: &str, quoted: bool, close: bool) -> String {
-    let esc = value.replace('\'', "''");
+/// Text to insert for a value: inside quotes only doubled ' (and doubled \ on MySQL, where it escapes) plus the closing quote
+/// when `close`; outside, numeric · boolean column values as they are, the rest '…'
+pub fn hint_insert(value: &str, mode: HintMode, path: &[String], type_name: &str, quoted: bool, close: bool, mysql: bool) -> String {
+    let esc = if mysql { value.replace('\\', "\\\\") } else { value.to_string() }.replace('\'', "''");
     let bare = mode == HintMode::Values && path.is_empty() && ["int", "numeric", "decimal", "float", "double", "real", "serial", "bool", "bit", "money"].iter().any(|k| type_name.to_lowercase().contains(k));
     if quoted {
         if close { format!("{esc}'") } else { esc }
@@ -507,7 +516,7 @@ pub fn hint_items(h: &HintAt, hints: &[Hint], after: Option<char>, as_pairs: boo
             if as_pairs {
                 return Item { label: format!("@> '{}'", x.value), detail: rows(x.count), insert: pairs_insert(&x.value, &h.op), kind: ItemKind::Value };
             }
-            let insert = hint_insert(&x.value, h.mode, &h.path, &h.type_name, h.quoted, close);
+            let insert = hint_insert(&x.value, h.mode, &h.path, &h.type_name, h.quoted, close, h.mysql);
             Item { label: x.value.clone(), detail: format!("{}{}", rows(x.count), if h.mode == HintMode::Keys { " · key" } else { "" }), insert, kind: ItemKind::Value }
         })
         .collect()
@@ -633,6 +642,9 @@ mod tests {
         assert_eq!(hint_items(&h, &hs(&["paid"]), Some('\''), false, TUI)[0].insert, "paid", "closing quote already there");
         let h = hint_at(&m, "select * from orders where status = ", "select * from orders where status = ", "app", false).unwrap();
         assert_eq!(hint_items(&h, &hs(&["paid"]), None, false, TUI)[0].insert, "'paid'");
+        assert_eq!(hint_items(&h, &hs(&[r"x\' or 1=1 -- "]), None, false, TUI)[0].insert, r"'x\'' or 1=1 -- '", "a backslash is plain text on PostgreSQL");
+        let my = hint_at(&m, "select * from orders where status = ", "select * from orders where status = ", "app", true).unwrap();
+        assert_eq!(hint_items(&my, &hs(&[r"x\' or 1=1 -- "]), None, false, TUI)[0].insert, r"'x\\'' or 1=1 -- '", "MySQL: the value stays one literal");
         let h = hint_at(&m, "select * from orders where id = ", "select * from orders where id = ", "app", false).unwrap();
         assert_eq!(hint_items(&h, &hs(&["7"]), None, false, TUI)[0].insert, "7");
         let h = hint_at(&m, "select * from orders where data ->> ", "select * from orders where data ->> ", "app", false).unwrap();

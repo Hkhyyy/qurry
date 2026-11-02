@@ -52,6 +52,8 @@ export interface HintAt {
   quoted: boolean;
   typed: string;
   op: string;
+  /** MySQL: a backslash in a value is doubled when inserted */
+  mysql: boolean;
 }
 
 /** One connection's completion metadata, indexed once (CompletionIndex in crates/shared-wasm). Carets are UTF-16 offsets into `text` */
@@ -59,6 +61,8 @@ export interface Completion {
   suggest(text: string, caret: number, db: string, mysql: boolean): Suggestions;
   hintAt(text: string, caret: number, db: string, mysql: boolean): HintAt | undefined;
   hintItems(text: string, caret: number, hint: HintAt, hints: { value: string; count: number }[], asPairs: boolean): Suggestions;
+  /** Release the WASM memory now (not when GC finalizes it). Calls after this find no candidates */
+  free(): void;
 }
 
 /** Rust reads a missing op as "", but not an op set to undefined */
@@ -67,19 +71,26 @@ const wire = (ctx: HintContext) => ({ ...ctx, op: ctx.op ?? "" });
 const api = {
   ping: (text: string): PingResponse => ping({ text }),
   completionIndex: (tables: CompletionTable[]): Completion => {
-    const idx = new CompletionIndex(JSON.stringify(tables));
+    let idx: CompletionIndex | undefined = new CompletionIndex(JSON.stringify(tables));
+    // A request can still hold this index after free() (it awaited the backend for hints)
+    const none: Suggestions = { startColumn: 1, endColumn: 1, items: [] };
     return {
       suggest(text, caret, db, mysql) {
+        if (!idx) return none;
         const s = idx.suggest(text, caret, db, mysql);
         return { startColumn: s.startColumn, endColumn: s.endColumn, items: s.lead.concat(s.rest) };
       },
-      hintAt: (text, caret, db, mysql) => idx.hintAt(text, caret, db, mysql),
-      hintItems: (text, caret, hint, hints, asPairs) => idx.hintItems(text, caret, hint, hints, asPairs),
+      hintAt: (text, caret, db, mysql) => idx?.hintAt(text, caret, db, mysql),
+      hintItems: (text, caret, hint, hints, asPairs) => idx?.hintItems(text, caret, hint, hints, asPairs) ?? none,
+      free() {
+        idx?.free();
+        idx = undefined;
+      },
     };
   },
   hintContext: (before: string, mysql: boolean): HintContext | undefined => hintContext(before, mysql),
   hintable: (ctx: HintContext, typeName: string): boolean => hintable(wire(ctx), typeName),
-  hintInsert: (value: string, ctx: HintContext, typeName: string): string => hintInsert(value, wire(ctx), typeName),
+  hintInsert: (value: string, ctx: HintContext, typeName: string, mysql: boolean): string => hintInsert(value, wire(ctx), typeName, mysql),
   pairsInsert,
 };
 

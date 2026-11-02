@@ -332,7 +332,7 @@
       "typed": "",
       "op": null
     },
-    "hintInsert": "a\\b",
+    "hintInsert": "a\\\\b",
     "hintable": true
   },
   "mysql-pairs": {
