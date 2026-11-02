@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { QueryResult, Dialect, DbKind } from "../lib/api";
 import { splitScript } from "../lib/sqlSplit";
@@ -110,6 +110,13 @@ export function ConsolePane(p: Props) {
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const [chooser, setChooser] = useState<{ options: { label: string; stmts: string[]; ranges: { start: number; end: number }[] }[]; idx: number; req: RunRequest } | null>(null);
   const [api, setApi] = useState<EditorApi | null>(null);
+  /** A ⌘↩ waiting for the WebAssembly module (null once it ran or was cancelled) */
+  const pending = useRef<{ explain?: "plan" | "analyze" } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const cancelPending = () => {
+    pending.current = null;
+    setLoading(false);
+  };
 
   const setSettings = (s: ExecSettings) => {
     setSettingsState(s);
@@ -126,10 +133,25 @@ export function ConsolePane(p: Props) {
     // Splitting and planning run in the shared WebAssembly module; a selection run as one statement doesn't need it
     const single = !!req.selection?.text.trim() && settings.selection === "single";
     if (single || sharedReady()) return run(req);
-    // Still loading at startup: run once it is there. Failed (main.tsx logs why): say what the user can do
+    // Still loading at startup: show it like a run, and once it is there run the editor as it is then (one pending run, the last press's mode)
+    const waiting = pending.current;
+    pending.current = { explain: req.explain };
+    if (waiting) return;
+    setLoading(true);
+    const done = () => {
+      const last = pending.current;
+      pending.current = null;
+      setLoading(false);
+      return last;
+    };
+    // Failed (main.tsx logs why): say what the user can do
     initShared().then(
-      () => run(req),
+      () => {
+        const last = done();
+        if (last) api?.run(last.explain);
+      },
       () =>
+        done() &&
         p.onError(
           "Couldn't split the console into statements: Qurry couldn't load its WebAssembly module, usually because the system WebView is too old (update macOS, or webkit2gtk on Linux). Until then, select the statement and set Query Execution Settings › For selection execute › Exactly as a single statement.",
         ),
@@ -180,7 +202,7 @@ export function ConsolePane(p: Props) {
     <div className="console-pane">
       {/* ── Console toolbar (DataGrip) ── */}
       <Toolbar className="console-toolbar" onMouseDown={(e) => e.stopPropagation()}>
-        <IconButton tone="ok" title={`Execute (${isMac ? "⌘↩" : "Ctrl+Enter"})`} onClick={() => api?.run()} disabled={p.running}>▶</IconButton>
+        <IconButton tone="ok" title={`Execute (${isMac ? "⌘↩" : "Ctrl+Enter"})`} onClick={() => api?.run()} disabled={p.running || loading}>▶</IconButton>
         <ToolButton
           title="Explain Plan"
           onClick={(e) =>
@@ -326,7 +348,7 @@ export function ConsolePane(p: Props) {
               )}
             </div>
             <div className="result-area">
-              <RunningBar running={p.running} onCancel={p.onCancel} />
+              {loading ? <RunningBar running label="Loading the statement splitter" onCancel={cancelPending} /> : <RunningBar running={p.running} onCancel={p.onCancel} />}
               {shown === "output" && (
                 <div className="output-log">
                   {p.output.length === 0 && <EmptyState>Execute a statement ({isMac ? "⌘↩" : "Ctrl+Enter"}) to see the output.</EmptyState>}

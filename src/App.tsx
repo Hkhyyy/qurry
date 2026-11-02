@@ -2262,7 +2262,7 @@ export default function App() {
                     schemaSwitchDisabled={conns.find((x) => x.id === t.connId)?.options?.switchSchema === "disable"}
                     registerApi={(id, a) => editorApis.current.set(id, a)}
                     onClearOutput={() => patch(t.id, { output: [] })}
-                    onError={(m) => (log(t.id, "error", m), patch(t.id, { activeResult: "output" }), setStatus("Query failed"))}
+                    onError={(m) => (log(t.id, "error", m), patch(t.id, { activeResult: "output" }), setStatus("Not run: the statement splitter couldn't load (see Output)"))}
                   />
                 </div>
               );
