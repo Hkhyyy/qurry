@@ -2,7 +2,7 @@
 //! For tables, read the structure (TableDef), compare it with the on-screen edits, and build ALTER statements. Creating is CREATE without before.
 //! Statements are previewed, then run (PG in one transaction — DDL can be rolled back too. MySQL applies each statement immediately)
 use crate::app::{AppState, ensure_pool};
-use crate::db::Pool;
+use crate::backend::{Backend, dispatch};
 use crate::error::{AppError, AppResult};
 use crate::store::DbKind;
 use serde::{Deserialize, Serialize};
@@ -100,7 +100,7 @@ fn rel(kind: DbKind, schema: &str, name: &str) -> String {
     crate::fake::qualified(kind, schema, name)
 }
 
-fn lit(kind: DbKind, s: &str) -> String {
+pub(crate) fn lit(kind: DbKind, s: &str) -> String {
     crate::transfer::sql_literal(kind, &serde_json::Value::String(s.into()))
 }
 
@@ -410,9 +410,10 @@ pub fn rename_sql(kind: DbKind, what: &str, schema: &str, old: &str, new: &str) 
     })
 }
 
-// ───────── Reading the current structure ─────────
+// ───────── Reading the current structure (crate::backend) ─────────
 
-fn action(c: &str) -> String {
+/// Foreign key ON DELETE / ON UPDATE action, from PG's code letter or MySQL's rule
+pub(crate) fn action(c: &str) -> String {
     match c {
         "r" | "RESTRICT" => "RESTRICT",
         "c" | "CASCADE" => "CASCADE",
@@ -423,154 +424,10 @@ fn action(c: &str) -> String {
     .into()
 }
 
-async fn load(pool: &Pool, schema: &str, table: &str) -> AppResult<TableDef> {
-    let mut t = TableDef { schema: schema.into(), name: table.into(), ..Default::default() };
-    match pool {
-        Pool::Pg(p) => {
-            const REL: &str = "(SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = $2)";
-            let cols: Vec<(String, String, bool, Option<String>, bool, Option<String>)> = sqlx::query_as(&format!(
-                "SELECT a.attname::text, format_type(a.atttypid, a.atttypmod), NOT a.attnotnull, pg_get_expr(d.adbin, d.adrelid), a.attidentity <> '', col_description(a.attrelid, a.attnum) \
-                 FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum \
-                 WHERE a.attrelid = {REL} AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum"
-            ))
-            .bind(schema)
-            .bind(table)
-            .fetch_all(p)
-            .await?;
-            if cols.is_empty() {
-                return Err(AppError::Msg(format!("Couldn't find table {schema}.{table}")));
-            }
-            t.columns = cols.into_iter().map(|(name, data_type, nullable, default, auto_increment, comment)| ColumnDef { orig: Some(name.clone()), name, data_type, nullable, default, auto_increment, comment }).collect();
-            t.comment = sqlx::query_scalar::<_, Option<String>>(&format!("SELECT obj_description({REL}, 'pg_class')")).bind(schema).bind(table).fetch_one(p).await?;
-            let pk: Option<(String, Vec<String>)> = sqlx::query_as(&format!(
-                "SELECT c.conname::text, array(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(n, o) JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.n ORDER BY k.o) \
-                 FROM pg_constraint c WHERE c.conrelid = {REL} AND c.contype = 'p'"
-            ))
-            .bind(schema)
-            .bind(table)
-            .fetch_optional(p)
-            .await?;
-            if let Some((name, cols)) = pk {
-                t.primary_key_name = Some(name);
-                t.primary_key = cols;
-            }
-            // Indexes (excluding PK). Ones used by UNIQUE constraints are constraint. Expression · predicate indexes only keep the definition text
-            let idx: Vec<(String, bool, bool, Vec<String>, bool, String)> = sqlx::query_as(&format!(
-                "SELECT i.relname::text, ix.indisunique, EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conindid = ix.indexrelid AND c.contype = 'u'), \
-                        array(SELECT a.attname::text FROM unnest(ix.indkey) WITH ORDINALITY k(n, o) JOIN pg_attribute a ON a.attrelid = ix.indrelid AND a.attnum = k.n ORDER BY k.o), \
-                        ix.indexprs IS NOT NULL OR ix.indpred IS NOT NULL, pg_get_indexdef(ix.indexrelid) \
-                 FROM pg_index ix JOIN pg_class i ON i.oid = ix.indexrelid WHERE ix.indrelid = {REL} AND NOT ix.indisprimary ORDER BY i.relname"
-            ))
-            .bind(schema)
-            .bind(table)
-            .fetch_all(p)
-            .await?;
-            t.indexes = idx
-                .into_iter()
-                .map(|(name, unique, constraint, columns, complex, def)| IndexDef { orig: Some(name.clone()), name, columns: if complex { vec![] } else { columns }, unique, constraint, definition: complex.then_some(def) })
-                .collect();
-            let fks: Vec<(String, Vec<String>, String, String, Vec<String>, String, String)> = sqlx::query_as(&format!(
-                "SELECT c.conname::text, \
-                   array(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(n, o) JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.n ORDER BY k.o), \
-                   rn.nspname::text, rc.relname::text, \
-                   array(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(n, o) JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.n ORDER BY k.o), \
-                   c.confdeltype::text, c.confupdtype::text \
-                 FROM pg_constraint c JOIN pg_class rc ON rc.oid = c.confrelid JOIN pg_namespace rn ON rn.oid = rc.relnamespace \
-                 WHERE c.conrelid = {REL} AND c.contype = 'f' ORDER BY c.conname"
-            ))
-            .bind(schema)
-            .bind(table)
-            .fetch_all(p)
-            .await?;
-            t.foreign_keys = fks
-                .into_iter()
-                .map(|(name, columns, ref_schema, ref_table, ref_columns, del, upd)| ForeignKeyDef { orig: Some(name.clone()), name, columns, ref_schema, ref_table, ref_columns, on_delete: action(&del), on_update: action(&upd) })
-                .collect();
-        }
-        Pool::My(p) => {
-            let cols: Vec<(String, String, String, Option<String>, String, String)> = sqlx::query_as(
-                "SELECT CAST(COLUMN_NAME AS CHAR), CAST(COLUMN_TYPE AS CHAR), CAST(IS_NULLABLE AS CHAR), CAST(COLUMN_DEFAULT AS CHAR), CAST(EXTRA AS CHAR), CAST(COLUMN_COMMENT AS CHAR) \
-                 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
-            )
-            .bind(schema)
-            .bind(table)
-            .fetch_all(p)
-            .await?;
-            if cols.is_empty() {
-                return Err(AppError::Msg(format!("Couldn't find table {schema}.{table}")));
-            }
-            t.columns = cols
-                .into_iter()
-                .map(|(name, data_type, nullable, default, extra, comment)| {
-                    let extra = extra.to_lowercase();
-                    // Defaults in information_schema are unquoted: wrap as text unless it is an expression
-                    let numeric = ["int", "decimal", "float", "double", "bit", "year"].iter().any(|n| data_type.to_lowercase().starts_with(n));
-                    let expr = extra.contains("default_generated") || default.as_deref().is_some_and(|d| d.to_uppercase().starts_with("CURRENT_TIMESTAMP"));
-                    let default = default.map(|d| if numeric || expr { d } else { lit(DbKind::Mysql, &d) });
-                    ColumnDef { orig: Some(name.clone()), name, data_type, nullable: nullable == "YES", default, auto_increment: extra.contains("auto_increment"), comment: Some(comment).filter(|c| !c.is_empty()) }
-                })
-                .collect();
-            t.comment = sqlx::query_scalar::<_, Option<String>>("SELECT CAST(TABLE_COMMENT AS CHAR) FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?")
-                .bind(schema)
-                .bind(table)
-                .fetch_one(p)
-                .await?
-                .filter(|c| !c.is_empty());
-            let stats: Vec<(String, i64, Option<String>, i64)> = sqlx::query_as(
-                "SELECT CAST(INDEX_NAME AS CHAR), CAST(NON_UNIQUE AS SIGNED), CAST(COLUMN_NAME AS CHAR), CAST(SEQ_IN_INDEX AS SIGNED) FROM information_schema.STATISTICS \
-                 WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY INDEX_NAME, SEQ_IN_INDEX",
-            )
-            .bind(schema)
-            .bind(table)
-            .fetch_all(p)
-            .await?;
-            for (name, non_unique, col, _) in stats {
-                if name == "PRIMARY" {
-                    t.primary_key.extend(col);
-                    t.primary_key_name = Some(name);
-                    continue;
-                }
-                match t.indexes.iter_mut().find(|i| i.name == name) {
-                    Some(i) => match col {
-                        Some(c) => i.columns.push(c),
-                        None => i.definition = Some(format!("{name} (expression)")),
-                    },
-                    None => t.indexes.push(IndexDef { orig: Some(name.clone()), definition: col.is_none().then(|| format!("{name} (expression)")), columns: col.into_iter().collect(), name, unique: non_unique == 0, constraint: false }),
-                }
-            }
-            let fks: Vec<(String, String, String, String, String, String, String)> = sqlx::query_as(
-                "SELECT CAST(k.CONSTRAINT_NAME AS CHAR), CAST(k.COLUMN_NAME AS CHAR), CAST(k.REFERENCED_TABLE_SCHEMA AS CHAR), CAST(k.REFERENCED_TABLE_NAME AS CHAR), \
-                        CAST(k.REFERENCED_COLUMN_NAME AS CHAR), CAST(r.DELETE_RULE AS CHAR), CAST(r.UPDATE_RULE AS CHAR) \
-                 FROM information_schema.KEY_COLUMN_USAGE k JOIN information_schema.REFERENTIAL_CONSTRAINTS r \
-                   ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME AND r.TABLE_NAME = k.TABLE_NAME \
-                 WHERE k.TABLE_SCHEMA = ? AND k.TABLE_NAME = ? AND k.REFERENCED_TABLE_NAME IS NOT NULL ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION",
-            )
-            .bind(schema)
-            .bind(table)
-            .fetch_all(p)
-            .await?;
-            for (name, col, rs, rt, rc, del, upd) in fks {
-                match t.foreign_keys.iter_mut().find(|f| f.name == name) {
-                    Some(f) => {
-                        f.columns.push(col);
-                        f.ref_columns.push(rc);
-                    }
-                    None => t.foreign_keys.push(ForeignKeyDef { orig: Some(name.clone()), name, columns: vec![col], ref_schema: rs, ref_table: rt, ref_columns: vec![rc], on_delete: action(&del), on_update: action(&upd) }),
-                }
-            }
-            // Indexes used by FKs (made by MySQL under the FK name) are handled with the FK
-            let fk_names: Vec<String> = t.foreign_keys.iter().map(|f| f.name.clone()).collect();
-            t.indexes.retain(|i| !fk_names.contains(&i.name));
-        }
-        _ => return Err(AppError::Msg("Modifying tables works for PostgreSQL and MySQL".into())),
-    }
-    Ok(t)
-}
-
 impl AppState {
     /// Modify Table…: current structure
     pub async fn table_def(&self, id: String, schema: String, table: String) -> AppResult<TableDef> {
-        load(&ensure_pool(self, &id).await?, &schema, &table).await
+        dispatch!(ensure_pool(self, &id).await?, b => b.table_def(&schema, &table).await)
     }
 
     /// Preview: ALTER if there is a before, otherwise CREATE
