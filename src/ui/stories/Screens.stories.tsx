@@ -97,6 +97,22 @@ export const EditDataSourceSsmTesting: S = {
     await userEvent.click(body.getByRole("button", { name: "Test Connection" }));
   },
 };
+/** A failed SSM Test Connection with a long message (no Session Manager plugin): the body scrolls so its last line, what to do, shows */
+export const EditDataSourceSsmError: S = {
+  name: "Data Source — AWS SSM test error",
+  render: () => (
+    <ConnectionDialog
+      edit={{ ...PROD, host: "orders.cluster-abc.ap-northeast-2.rds.amazonaws.com", ssm: { enabled: true, profile: "prod", region: "ap-northeast-2", target: "i-0000000000000dead" } } as ConnectionView}
+      onClose={noop}
+      onSaved={noop}
+    />
+  ),
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    await userEvent.click(body.getByRole("tab", { name: /SSH\/SSL/ }));
+    await userEvent.click(body.getByRole("button", { name: "Test Connection" }));
+  },
+};
 
 export const TableNew: S = { name: "New Table", render: () => <TableDesigner target="dev" conn={DEV} schema="public" onDone={noop} onOpenConsole={noop} onClose={noop} /> };
 export const TableModify: S = { name: "Modify Table (⌘F6)", render: () => <TableDesigner target="dev" conn={DEV} schema="public" table="customers" onDone={noop} onOpenConsole={noop} onClose={noop} /> };

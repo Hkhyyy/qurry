@@ -49,6 +49,27 @@ test("SSH/SSL tab: Tunnel None / SSH / AWS SSM, test and save through SSM", asyn
   await expect(dialog(page).getByRole("textbox", { name: "Instance id" })).toHaveValue("i-0123456789abcdef0");
 });
 
+test("AWS SSM: a long Test Connection error is scrolled into view in the fixed-size dialog", async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 700 });
+  await openProps(page);
+  const d = dialog(page);
+  await d.getByRole("combobox", { name: "Tunnel" }).selectOption("ssm");
+  // The mock's instance whose test fails with the missing-plugin message
+  await d.getByRole("textbox", { name: "Instance id" }).fill("i-0000000000000dead");
+  const box = await d.boundingBox();
+  await d.getByRole("button", { name: "Test Connection" }).click();
+  const notice = d.locator(".ui-notice.tone-danger");
+  await expect(notice).toContainText("session-manager-working-with-install-plugin.html), then try again.");
+  expect(await d.boundingBox(), "the dialog keeps its size").toEqual(box);
+  const body = d.locator(".ui-modal-body");
+  await expect
+    .poll(async () => {
+      const [n, b] = [await notice.boundingBox(), await body.boundingBox()];
+      return !!n && !!b && n.y >= b.y && n.y + n.height <= b.y + b.height;
+    }, { message: "the whole error, its last line included, is inside the dialog body" })
+    .toBe(true);
+});
+
 test("AWS SSM: a Test Connection that keeps starting shows the elapsed time and can be cancelled", async ({ page }) => {
   await openProps(page);
   const d = dialog(page);
