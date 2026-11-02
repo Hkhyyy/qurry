@@ -139,16 +139,16 @@ fn hint_golden() -> Golden {
         };
         let op = (!c.op.is_empty()).then(|| c.op.clone());
         o.insert("hintContext".into(), json!({ "ref": c.r#ref, "column": c.column, "path": c.path, "mode": mode, "quoted": c.quoted, "typed": c.typed, "op": op }));
-        // hint_items builds the inserted text (typed left empty: its prefix filter isn't part of hintInsert)
+        // hint_items builds the inserted text (typed left empty: its prefix filter isn't part of hintInsert; a ' after the cursor, so no closing quote is added)
         let h = HintAt { schema: String::new(), table: String::new(), column: c.column.clone(), type_name: ty.into(), path: c.path.clone(), mode: c.mode, quoted: c.quoted, typed: String::new(), op: c.op.clone() };
         let hints = [Hint { value: value.into(), count: 1 }];
-        o.insert("hintInsert".into(), complete::hint_items(&h, &hints, false, false, Options::TUI)[0].insert.clone().into());
+        o.insert("hintInsert".into(), complete::hint_items(&h, &hints, Some('\''), false, Options::TUI)[0].insert.clone().into());
         // hint_at decides hintable: a one-table statement whose only column is the hinted one
         let name = c.r#ref.clone().unwrap_or_else(|| "t".into());
         let m = Meta::new(vec![CompletionTable { schema: "public".into(), name: name.clone(), columns: vec![(c.column.clone(), ty.into())] }]);
         o.insert("hintable".into(), complete::hint_at(&m, &format!("select * from \"{name}\""), before, "", mysql).is_some().into());
         if c.mode == HintMode::Keys {
-            o.insert("pairsForKeys".into(), complete::hint_items(&h, &hints, false, true, Options::TUI)[0].insert.clone().into());
+            o.insert("pairsForKeys".into(), complete::hint_items(&h, &hints, Some('\''), true, Options::TUI)[0].insert.clone().into());
         }
         out.insert(st(&e["id"]).into(), o.into());
     }

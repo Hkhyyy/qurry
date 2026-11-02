@@ -35,22 +35,28 @@ pub struct Options {
     /// Inside the quotes of a value spot that has no value suggestions (bytea, a column the statement's tables lack …): no
     /// candidates at all, since keywords and tables don't fit inside a string
     pub quiet_in_value_quotes: bool,
+    /// After a value typed inside quotes, add the closing quote when none follows the cursor. Off: Monaco closes quotes as they are typed
+    pub close_quotes: bool,
 }
 
 impl Options {
     /// Monaco (src/lib/completion.ts)
-    pub const GUI: Options = Options { editor_filters: true, keywords_on_empty: true, quiet_in_value_quotes: true };
+    pub const GUI: Options = Options { editor_filters: true, keywords_on_empty: true, quiet_in_value_quotes: true, close_quotes: false };
     /// The terminal console's own popup
-    pub const TUI: Options = Options { editor_filters: false, keywords_on_empty: false, quiet_in_value_quotes: false };
+    pub const TUI: Options = Options { editor_filters: false, keywords_on_empty: false, quiet_in_value_quotes: false, close_quotes: true };
 }
 
-/// Autocomplete metadata: lowercase names and a per-name index are built once on load (not rebuilt on every key)
+/// Autocomplete metadata: lowercase names, a per-name index and the sorted orders are built once on load (not on every key)
 pub struct Meta {
     pub tables: Vec<CompletionTable>,
     /// (schema, table) lowercase
     lower: Vec<(String, String)>,
     /// Lowercase table name → positions in tables
     by_name: HashMap<String, Vec<usize>>,
+    /// Positions in tables, by table name (ties in metadata order)
+    by_label: Vec<usize>,
+    /// Distinct schemas, sorted
+    schemas: Vec<String>,
 }
 
 impl Meta {
@@ -60,7 +66,12 @@ impl Meta {
         for (i, (_, n)) in lower.iter().enumerate() {
             by_name.entry(n.clone()).or_default().push(i);
         }
-        Meta { tables, lower, by_name }
+        let mut by_label: Vec<usize> = (0..tables.len()).collect();
+        by_label.sort_by(|&a, &b| tables[a].name.cmp(&tables[b].name));
+        let mut schemas: Vec<String> = tables.iter().map(|t| t.schema.clone()).collect();
+        schemas.sort();
+        schemas.dedup();
+        Meta { tables, lower, by_name, by_label, schemas }
     }
 }
 
@@ -79,7 +90,7 @@ pub enum ItemKind {
     Value,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Item {
     pub label: String,
     pub detail: String,
@@ -90,6 +101,13 @@ pub struct Item {
 fn keywords() -> impl Iterator<Item = &'static str> {
     KEYWORDS.split_whitespace()
 }
+
+/// Keywords by label (the GUI's order)
+static SORTED_KEYWORDS: std::sync::LazyLock<Vec<&'static str>> = std::sync::LazyLock::new(|| {
+    let mut v: Vec<&str> = keywords().collect();
+    v.sort();
+    v
+});
 
 /// Identifier characters: letters and digits of any script (Korean …) and `_`
 pub fn is_word(c: char) -> bool {
@@ -183,7 +201,7 @@ pub fn suggest(m: &Meta, text: &str, before: &str, db: &str, mysql: bool, o: Opt
     }
     // Drop candidates identical to the fully typed word so Enter goes to a newline
     let starts = |lower: &str| o.editor_filters || p.is_empty() || (lower.starts_with(&p) && lower != p);
-    let matches = |label: &str| starts(&label.to_lowercase());
+    let matches = |label: &str| o.editor_filters || p.is_empty() || starts(&label.to_lowercase());
     let sorted = |mut v: Vec<Item>| {
         if o.editor_filters {
             v.sort_by(|a, b| a.label.cmp(&b.label));
@@ -229,26 +247,15 @@ pub fn suggest(m: &Meta, text: &str, before: &str, db: &str, mysql: bool, o: Opt
         }
     }
     let mut items = sorted(columns);
-    let mut tables: Vec<Item> = all
-        .iter()
-        .zip(&m.lower)
-        .filter(|(_, (_, ln))| starts(ln))
-        .map(|(t, _)| Item {
-            label: t.name.clone(),
-            detail: t.schema.clone(),
-            insert: if t.schema == "public" || t.schema == db { t.name.clone() } else { format!("{}.{}", t.schema, t.name) },
-            kind: ItemKind::Table,
-        })
-        .collect();
-    tables.sort_by(|a, b| a.label.cmp(&b.label));
-    items.extend(tables);
-    let mut schemas: Vec<&str> = all.iter().map(|t| t.schema.as_str()).filter(|s| matches(s)).collect();
-    schemas.sort();
-    schemas.dedup();
-    items.extend(schemas.into_iter().map(|s| Item { label: s.into(), detail: "schema".into(), insert: s.into(), kind: ItemKind::Schema }));
+    items.extend(m.by_label.iter().filter(|&&i| starts(&m.lower[i].1)).map(|&i| {
+        let t = &all[i];
+        let insert = if t.schema == "public" || t.schema == db { t.name.clone() } else { format!("{}.{}", t.schema, t.name) };
+        Item { label: t.name.clone(), detail: t.schema.clone(), insert, kind: ItemKind::Table }
+    }));
+    items.extend(m.schemas.iter().filter(|s| matches(s)).map(|s| Item { label: s.clone(), detail: "schema".into(), insert: s.clone(), kind: ItemKind::Schema }));
     if !p.is_empty() || o.keywords_on_empty {
-        let kws = keywords().filter(|k| matches(k)).map(|k| Item { label: k.into(), detail: "keyword".into(), insert: k.into(), kind: ItemKind::Keyword }).collect();
-        items.extend(sorted(kws));
+        let kws: Vec<&str> = if o.editor_filters { SORTED_KEYWORDS.clone() } else { keywords().filter(|k| matches(k)).collect() };
+        items.extend(kws.into_iter().map(|k| Item { label: k.into(), detail: "keyword".into(), insert: k.into(), kind: ItemKind::Keyword }));
     }
     (n, items)
 }
@@ -283,7 +290,7 @@ pub enum HintMode {
 }
 
 /// A value spot read from the text before the cursor alone (no metadata yet)
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Ctx {
     /// Alias or table (if absent, the column is looked up among the statement's tables)
@@ -292,7 +299,10 @@ pub struct Ctx {
     pub path: Vec<String>,
     pub mode: HintMode,
     pub quoted: bool,
+    #[serde(default)]
     pub typed: String,
+    /// keys: from the operator to the cursor (`->> '` + typed); empty otherwise
+    #[serde(default)]
     pub op: String,
 }
 
@@ -423,10 +433,11 @@ fn rows(n: i64) -> String {
     format!("{}{grouped} row{}", if n < 0 { "-" } else { "" }, if n == 1 { "" } else { "s" })
 }
 
-/// Fetched values → candidates (filtered by typed text unless the editor filters). close = whether to close the quote (when no ' follows the cursor).
+/// Fetched values → candidates (filtered by typed text unless the editor filters). `after` = the character after the cursor (a ' there is the closing quote).
 /// as_pairs = a keys spot with no keys (array of objects), so @> conditions were fetched → replace including the operator (prefix = op length)
-pub fn hint_items(h: &HintAt, hints: &[Hint], close: bool, as_pairs: bool, o: Options) -> Vec<Item> {
+pub fn hint_items(h: &HintAt, hints: &[Hint], after: Option<char>, as_pairs: bool, o: Options) -> Vec<Item> {
     let p = h.typed.to_lowercase();
+    let close = o.close_quotes && h.quoted && after != Some('\'');
     hints
         .iter()
         .filter(|x| as_pairs || o.editor_filters || p.is_empty() || (x.value.to_lowercase().starts_with(&p) && x.value.to_lowercase() != p))
@@ -553,17 +564,18 @@ mod tests {
         let m = hmeta();
         let hs = |v: &[&str]| v.iter().map(|x| Hint { value: x.to_string(), count: 2 }).collect::<Vec<_>>();
         let h = hint_at(&m, "select * from orders where status = 'p", "select * from orders where status = 'p", "app", false).unwrap();
-        let v = hint_items(&h, &hs(&["paid", "pa'y", "ready"]), true, false, TUI);
+        let v = hint_items(&h, &hs(&["paid", "pa'y", "ready"]), None, false, TUI);
         assert_eq!(v.iter().map(|i| i.insert.as_str()).collect::<Vec<_>>(), ["paid'", "pa''y'"]);
-        assert_eq!(hint_items(&h, &hs(&["paid", "pa'y", "ready"]), false, false, Options::GUI).len(), 3, "Monaco filters");
-        assert_eq!(hint_items(&h, &hs(&["paid"]), false, false, TUI)[0].insert, "paid", "closing quote already there");
+        let v = hint_items(&h, &hs(&["paid", "pa'y", "ready"]), None, false, Options::GUI);
+        assert_eq!(v.iter().map(|i| i.insert.as_str()).collect::<Vec<_>>(), ["paid", "pa''y", "ready"], "Monaco filters and closes quotes");
+        assert_eq!(hint_items(&h, &hs(&["paid"]), Some('\''), false, TUI)[0].insert, "paid", "closing quote already there");
         let h = hint_at(&m, "select * from orders where status = ", "select * from orders where status = ", "app", false).unwrap();
-        assert_eq!(hint_items(&h, &hs(&["paid"]), false, false, TUI)[0].insert, "'paid'");
+        assert_eq!(hint_items(&h, &hs(&["paid"]), None, false, TUI)[0].insert, "'paid'");
         let h = hint_at(&m, "select * from orders where id = ", "select * from orders where id = ", "app", false).unwrap();
-        assert_eq!(hint_items(&h, &hs(&["7"]), false, false, TUI)[0].insert, "7");
+        assert_eq!(hint_items(&h, &hs(&["7"]), None, false, TUI)[0].insert, "7");
         let h = hint_at(&m, "select * from orders where data ->> ", "select * from orders where data ->> ", "app", false).unwrap();
-        assert_eq!(hint_items(&h, &hs(&["kind"]), false, false, TUI)[0].insert, "'kind'");
-        let v = hint_items(&h, &hs(&[r#"[{"code": "x"}]"#]), false, true, TUI);
+        assert_eq!(hint_items(&h, &hs(&["kind"]), None, false, TUI)[0].insert, "'kind'");
+        let v = hint_items(&h, &hs(&[r#"[{"code": "x"}]"#]), None, true, TUI);
         assert_eq!((v[0].insert.as_str(), v[0].label.as_str()), (r#" @> '[{"code": "x"}]'"#, r#"@> '[{"code": "x"}]'"#));
     }
 
@@ -611,7 +623,7 @@ mod tests {
                 let as_pairs = got.0 == HintMode::Pairs && h.mode == HintMode::Keys;
                 let prefix = if as_pairs { h.op.chars().count() } else { h.typed.chars().count() };
                 let hint = json!({ "schema": h.schema, "table": h.table, "column": h.column, "path": h.path, "asked": asked });
-                json!({ "hint": hint, "prefix": prefix, "items": items(hint_items(&h, &got.1, h.quoted && after != Some('\''), as_pairs, TUI)) })
+                json!({ "hint": hint, "prefix": prefix, "items": items(hint_items(&h, &got.1, after, as_pairs, TUI)) })
             } else {
                 let (prefix, v) = suggest(&m, &text, before, &db, mysql, TUI);
                 json!({ "prefix": prefix, "items": items(v) })

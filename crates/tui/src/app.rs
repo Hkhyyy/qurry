@@ -3255,7 +3255,7 @@ impl App {
             match want {
                 (mode, Some(hints)) => {
                     let as_pairs = mode == HintMode::Pairs && h.mode == HintMode::Keys;
-                    let items = complete::hint_items(&h, &hints, h.quoted && after != Some('\''), as_pairs, Options::TUI);
+                    let items = complete::hint_items(&h, &hints, after, as_pairs, Options::TUI);
                     let prefix = if as_pairs { h.op.chars().count() } else { h.typed.chars().count() };
                     c.complete = if items.is_empty() { None } else { Some(Completion { items, sel: 0, prefix }) };
                 }
