@@ -48,7 +48,10 @@ async function indexFor(connId: string | undefined): Promise<Completion | undefi
   } catch (e) {
     if (!warned) {
       warned = true;
-      console.error(`Console autocomplete is off: it runs in Qurry's shared WebAssembly module, which did not load (${e}). Restart Qurry; if it keeps happening, the system WebView is too old: update macOS (Safari) or webkit2gtk.`);
+      const why = `Console autocomplete runs in Qurry's shared WebAssembly module, which did not load (${e}). Restart Qurry; if it keeps happening, the system WebView is too old: update macOS (Safari) or webkit2gtk.`;
+      console.error(why);
+      // Once, where a GUI user sees it (the devtools console is not)
+      void import("./dialogs").then((d) => d.notice(why, "Autocomplete is off"));
     }
     return undefined;
   }
@@ -74,7 +77,9 @@ for (const lang of ["pgsql", "mysql"]) {
       // db "": bare names only for tables in public (other schemas, MySQL DBs included, are inserted as schema.table)
 
       // Value · json key: where status = '… / data->>'… / reasons @> '…
-      const hint = connId ? idx.hintAt(text, caret, "", mysql) : undefined;
+      // The line alone tells whether this is a value spot, so the whole script crosses into WASM only there (and for suggest)
+      const before = model.getLineContent(position.lineNumber).slice(0, position.column - 1);
+      const hint = connId && shared().hintContext(before, mysql) ? idx.hintAt(text, caret, "", mysql) : undefined;
       if (hint && connId) {
         const ask = (mode: "values" | "keys" | "pairs") => meta.hints(connId, { schema: hint.schema, table: hint.table, column: hint.column, path: hint.path, keys: mode === "keys", pairs: mode === "pairs" }).catch(() => []);
         let hints = await ask(hint.mode);
