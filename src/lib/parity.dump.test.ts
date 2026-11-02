@@ -14,7 +14,7 @@ import { fuzzyScore } from "./fuzzy";
 import { inList } from "./inList";
 import { keyTree, type KeyNode } from "./keyTree";
 import { formatSpec, keyLabel } from "./shortcuts";
-import { splitScript, splitStatements, type Segment } from "./sqlSplit";
+import { splitScript, splitStatements, statementAt, type Segment } from "./sqlSplit";
 import { isDdl, isRead } from "./stmtKind";
 import { tableTabLabels, type TableTabKey } from "./tabLabels";
 import { fracWidth, isTimeType, padFrac } from "./timeFrac";
@@ -70,6 +70,7 @@ function sqlGolden(): Golden {
     if (kind !== "redis") o.splitStatements = slices(text, splitStatements(text, kind));
     o.splitScript = slices(text, consoleSplit(kind)(text));
     if (at >= 0) {
+      if (kind !== "redis") o.statementAt = statementAt(text, at, kind);
       for (const [name, s] of Object.entries(PLANS)) o[`planExecution(${name})`] = plan(planExecution(text, at, consoleSplit(kind)(text), s, kind));
     }
     out[e.id] = o;

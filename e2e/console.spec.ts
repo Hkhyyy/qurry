@@ -1,4 +1,4 @@
-import { editor, expect, openApp, openConsole, resultTabs, runAll, status, suggestions, test, typeSql } from "./app";
+import { dialog, editor, expect, openApp, openConsole, resultTabs, runAll, status, suggestions, test, typeSql, work } from "./app";
 
 test.beforeEach(async ({ page }) => {
   await openApp(page);
@@ -32,6 +32,7 @@ test.describe("completion", () => {
 test("run one statement → one result tab", async ({ page }) => {
   await typeSql(page, "select * from users");
   await page.keyboard.press("Meta+Enter");
+  await expect(work(page).locator(".exec-highlight")).not.toHaveCount(0);
   await expect(resultTabs(page)).toHaveText(["Output", /^users/]);
   await expect(resultTabs(page).nth(1)).toHaveAttribute("aria-selected", "true");
   await expect(status(page)).toHaveText("1 statement executed");
@@ -57,4 +58,29 @@ test("Explain Plan → plan tab with the node tree", async ({ page }) => {
   await expect(plan).toContainText("2 nodes worth a look");
   for (const op of ["Gather Merge", "Sort", "Seq Scan"]) await expect(plan).toContainText(op);
   await expect(editor(page)).toBeVisible();
+});
+
+// A rollback undoes a DELETE but not a sequence step: Explain Analyse asks first and doesn't claim nothing changed
+test("Explain Analyse asks before a write a rollback can't undo, and says what stays", async ({ page }) => {
+  await typeSql(page, "select nextval('orders_id_seq')");
+  await page.locator(".work-layer:visible .console-toolbar").getByText("Explain").click();
+  await page.getByRole("menuitem", { name: "Explain Analyse" }).click();
+  await expect(dialog(page).locator(".ui-modal-title")).toHaveText("[DEV] shop_app: Explain Analyse");
+  await expect(dialog(page)).toContainText("a rollback can't undo what it does outside the transaction: sequence values");
+  await dialog(page).getByRole("button", { name: "Run Anyway" }).click();
+  await resultTabs(page).first().click();
+  const output = page.locator(".work-layer:visible .output-log");
+  await expect(output).toContainText("rolled it back, but what it did outside the transaction stays (sequence values");
+  await expect(output).not.toContainText("nothing was changed");
+});
+
+test("MySQL: `--` greys out as a comment only where the server reads one (`select 1--1` runs `1 - -1`)", async ({ page }) => {
+  await openConsole(page, "[MySQL] shop");
+  const italic = () =>
+    editor(page).locator(".view-line span span").evaluateAll((els) => els.filter((e) => getComputedStyle(e).fontStyle === "italic").map((e) => e.textContent).join("").replace(/\u00a0/g, " "));
+  await typeSql(page, "select 1--1; delete from orders");
+  await expect(editor(page).locator(".view-line")).toContainText("delete from orders");
+  expect(await italic()).toBe("");
+  await typeSql(page, "select 1 -- note");
+  await expect.poll(italic).toBe("-- note");
 });

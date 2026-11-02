@@ -143,17 +143,13 @@ pub fn split_statements(text: &str, kind: DbKind) -> Vec<(usize, usize)> {
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SplitOptions {
-    /// MySQL `--` starts a comment even without a space after it (`select 1--1`)
-    pub mysql_dash_comment: bool,
     /// `$tag$` opens a dollar quote right after a name character too (`foo$x$`)
     pub dollar_after_name: bool,
 }
 
-impl SplitOptions {
-    /// `--` at b[i] starts a line comment (MySQL needs a space or control char after it unless mysql_dash_comment)
-    fn dash_comment(self, b: &[u8], i: usize, e: usize, kind: DbKind) -> bool {
-        b[i] == b'-' && i + 1 < e && b[i + 1] == b'-' && (kind != DbKind::Mysql || self.mysql_dash_comment || i + 2 >= e || b[i + 2].is_ascii_whitespace() || b[i + 2].is_ascii_control())
-    }
+/// `--` at b[i] starts a line comment (MySQL needs a space or control char after it: `select 1--1` is arithmetic)
+fn dash_comment(b: &[u8], i: usize, e: usize, kind: DbKind) -> bool {
+    b[i] == b'-' && i + 1 < e && b[i + 1] == b'-' && (kind != DbKind::Mysql || i + 2 >= e || b[i + 2].is_ascii_whitespace() || b[i + 2].is_ascii_control())
 }
 
 /// split_statements with the given editor rules
@@ -180,7 +176,7 @@ pub fn split_statements_with(text: &str, kind: DbKind, opts: SplitOptions) -> Ve
     while i < n {
         let c = b[i];
         let d = if i + 1 < n { b[i + 1] } else { 0 };
-        if opts.dash_comment(b, i, n, kind) {
+        if dash_comment(b, i, n, kind) {
             i = text[i..].find('\n').map(|j| i + j + 1).unwrap_or(n);
             continue;
         }
@@ -352,7 +348,7 @@ fn script_cuts(text: &str, s: usize, e: usize, kind: DbKind, opts: SplitOptions)
             continue;
         }
         // Comments (line end / block) — same rules as split_statements
-        if opts.dash_comment(b, i, e, kind) || (c == b'#' && hash_comment(kind, d)) {
+        if dash_comment(b, i, e, kind) || (c == b'#' && hash_comment(kind, d)) {
             i = text[i..e].find('\n').map(|j| i + j).unwrap_or(e);
             continue;
         }
@@ -553,11 +549,9 @@ mod tests {
     #[test]
     fn split_options_keep_the_gui_rules() {
         let parts = |t: &str, k, o| split_script_with(t, k, o).into_iter().map(|(a, b)| t[a..b].to_string()).collect::<Vec<_>>();
-        let dash = SplitOptions { mysql_dash_comment: true, ..Default::default() };
-        assert_eq!(parts("select 1--1;\nselect 2", DbKind::Mysql, dash), ["select 1--1;\n", "select 2"]);
-        assert_eq!(split_statements_with("select 1--1;\nselect 2", DbKind::Mysql, dash).len(), 1);
-        assert_eq!(split_statements("select 1--1;\nselect 2", DbKind::Mysql).len(), 2);
-        let dollar = SplitOptions { dollar_after_name: true, ..Default::default() };
+        // MySQL `--` with no space after it is no editor rule: `select 1--1; delete …` runs the DELETE, so the console splits it off
+        assert_eq!(parts("select 1--1;\nselect 2", DbKind::Mysql, SplitOptions::default()), ["select 1--1", "\nselect 2"]);
+        let dollar = SplitOptions { dollar_after_name: true };
         assert_eq!(split_statements_with("select foo$x$ from t; select 1", DbKind::Postgres, dollar).len(), 1);
         assert_eq!(split_statements("select foo$x$ from t; select 1", DbKind::Postgres).len(), 2);
     }

@@ -45,6 +45,8 @@
   { "id": "cursor-end", "dialect": "postgres", "text": "select 1;\nselect 2;\n\n‸" },
   { "id": "cursor-in-comment-gap", "dialect": "postgres", "text": "select 1;\n-- note ‸\nselect 2;" },
   { "id": "cursor-no-semicolon", "dialect": "postgres", "text": "select 1\nselect ‸2\nselect 3" },
+  { "id": "note-line-if", "dialect": "postgres", "text": "If you need all users:\nselect * from users‸" },
+  { "id": "note-line-exec-mysql", "dialect": "mysql", "text": "Exec this after the deploy\nselect 1‸" },
   { "id": "redis-lines", "dialect": "redis", "text": "GET a\n# comment\n\nSET b 1‸\n// note\nHSET h f \"v;w\"" },
   { "id": "redis-blank-cursor", "dialect": "redis", "text": "GET a\n‸\nGET b" },
   { "id": "redis-crlf", "dialect": "redis", "text": "GET a\r\nGET 키😀\r\n" }

@@ -342,6 +342,31 @@ const DUCKDB_EXTERNAL_FUNCS: &[&str] = &[
     "read_xlsx", "sniff_csv", "glob", "iceberg_scan", "delta_scan", "getenv", "query_table",
 ];
 
+/// SQL Server runs a whole batch and needs no `;` between statements: the first bare word after the first word (at `fi`) that starts
+/// another statement. CASE … END and OFFSET … ROWS FETCH NEXT are part of a SELECT. (Non-reserved words like RECEIVE or DISABLE are left
+/// to the driver, which runs reads in a transaction it always rolls back)
+fn mssql_next_statement(toks: &[Tok], fi: usize) -> Option<&Tok> {
+    let mut case_depth = 0i32;
+    let mut prev = "";
+    toks.iter().skip(fi + 1).filter(|t| t.word && !t.quoted).find(|t| {
+        let w = t.text.as_str();
+        let hit = match w {
+            "case" => {
+                case_depth += 1;
+                false
+            }
+            "end" if case_depth > 0 => {
+                case_depth -= 1;
+                false
+            }
+            "fetch" => !matches!(prev, "row" | "rows"),
+            _ => MSSQL_STATEMENT_WORDS.contains(&w),
+        };
+        prev = w;
+        hit
+    })
+}
+
 /// Whether it may run as read-only. strict = MCP (also blocks side-effect functions). Returns the reason when blocked
 pub fn read_only_violation(sql: &str, kind: DbKind, strict: bool) -> Option<String> {
     if kind == DbKind::Redis {
@@ -382,28 +407,7 @@ pub fn read_only_violation(sql: &str, kind: DbKind, strict: bool) -> Option<Stri
         if sc.toks.get(fi).is_some_and(|t| t.quoted) {
             return Some("Read-only mode: a statement can't start with a [name] (SQL Server runs it as a procedure)".into());
         }
-        // CASE … END and OFFSET … ROWS FETCH NEXT are part of a SELECT. (Non-reserved words like RECEIVE or DISABLE are left to the
-        // driver, which runs reads in a transaction it always rolls back)
-        let mut case_depth = 0i32;
-        let mut prev = "";
-        let starts = sc.toks.iter().skip(fi + 1).filter(|t| bare(t)).find(|t| {
-            let w = t.text.as_str();
-            let hit = match w {
-                "case" => {
-                    case_depth += 1;
-                    false
-                }
-                "end" if case_depth > 0 => {
-                    case_depth -= 1;
-                    false
-                }
-                "fetch" => !matches!(prev, "row" | "rows"),
-                _ => MSSQL_STATEMENT_WORDS.contains(&w),
-            };
-            prev = w;
-            hit
-        });
-        if let Some(t) = starts {
+        if let Some(t) = mssql_next_statement(&sc.toks, fi) {
             return Some(format!("Read-only mode: '{}' starts another statement (SQL Server runs the whole batch; write [{}] for a column)", t.text, t.text));
         }
     }
@@ -985,26 +989,82 @@ pub fn redis_mcp_write_violation(line: &str) -> Option<String> {
 /// Whether the statement doesn't change data (Production confirmation, Explain Analyse rollback, the Production log, and
 /// counting "already committed changes" in script failure notes). A call to a side-effect function (dblink_exec, setval, nextval …) is not a read,
 /// nor is SELECT … INTO (a new table in PostgreSQL · SQL Server, a file on the MySQL server, or variables).
+/// Text with several statements (a selection run as one statement) is a read only if every statement is: `select 1; do $$ … $$` is not.
 /// With a backslash the server's settings decide where strings end (MySQL NO_BACKSLASH_ESCAPES and ANSI_QUOTES,
 /// PostgreSQL standard_conforming_strings), so the statement must be a read under every rule
 pub fn is_read(sql: &str, kind: DbKind) -> bool {
-    let read = |sc: Scan| {
-        let first = sc.toks.iter().find(|t| t.word).map(|t| t.text.as_str()).unwrap_or("");
-        let call = |i: usize| sc.toks.get(i + 1).is_some_and(|n| n.text == "(");
-        READ_WORDS.contains(&first)
-            && !sc.toks.iter().enumerate().any(|(i, t)| {
-                let w = t.text.as_str();
-                t.word
-                    && (["insert", "update", "delete", "merge"].contains(&w)
-                        || (!t.quoted && w == "into")
-                        || (call(i) && (SIDE_EFFECT_FUNCS.contains(&w) || WRITE_FUNCS.contains(&w))))
-            })
-    };
+    let pieces = statements(sql, kind);
+    // Each statement as the server splits them, and the whole text read at once (where another quote rule ends the strings)
+    let read = |sc: Scan| read_one(sc, kind);
+    !pieces.is_empty() && pieces.iter().all(|p| every_reading(p, kind, read)) && every_reading(sql, kind, read)
+}
+
+/// The statements in the text as the server splits them, without the ones that are only comments
+fn statements(sql: &str, kind: DbKind) -> Vec<&str> {
+    crate::sql::split_statements(sql, kind).into_iter().map(|(a, b)| &sql[a..b]).filter(|p| scan(p, kind).toks.iter().any(|t| t.word)).collect()
+}
+
+fn read_one(sc: Scan, kind: DbKind) -> bool {
+    let call = |i: usize| sc.toks.get(i + 1).is_some_and(|n| n.text == "(");
+    // The first word of each statement in this reading: under another quote rule a `;` can end a string early and start one
+    let mut firsts = vec![];
+    let mut next = true;
+    for t in &sc.toks {
+        if !t.word && t.text == ";" {
+            next = true;
+        } else if next && t.word {
+            firsts.push(t.text.as_str());
+            next = false;
+        }
+    }
+    // SQL Server also starts a statement without `;` (`select 1 exec purge`)
+    let chained = kind == DbKind::Mssql && sc.toks.iter().position(|t| t.word).is_some_and(|fi| mssql_next_statement(&sc.toks, fi).is_some());
+    !firsts.is_empty()
+        && !chained
+        && firsts.iter().all(|w| READ_WORDS.contains(w))
+        && !sc.toks.iter().enumerate().any(|(i, t)| {
+            let w = t.text.as_str();
+            t.word
+                && (["insert", "update", "delete", "merge"].contains(&w)
+                    || (!t.quoted && w == "into")
+                    || (call(i) && (SIDE_EFFECT_FUNCS.contains(&w) || WRITE_FUNCS.contains(&w))))
+        })
+}
+
+/// `f` holds for the text under every way the server may read its quotes once there is a backslash (see is_read)
+fn every_reading(sql: &str, kind: DbKind, f: impl Fn(Scan) -> bool) -> bool {
     let backslash = matches!(kind, DbKind::Mysql | DbKind::Postgres) && sql.contains('\\');
     let ansi = backslash && kind == DbKind::Mysql && sql.contains('"');
-    read(scan(sql, kind))
-        && (!backslash || read(scan_as(sql, kind, Quotes::OtherBackslash)))
-        && (!ansi || read(scan_as(sql, kind, Quotes::Ansi)))
+    f(scan(sql, kind)) && (!backslash || f(scan_as(sql, kind, Quotes::OtherBackslash))) && (!ansi || f(scan_as(sql, kind, Quotes::Ansi)))
+}
+
+/// Calls whose effect a ROLLBACK doesn't undo (a narrower question than SIDE_EFFECT_FUNCS: set_config, pg_advisory_xact_lock and
+/// lo_import are undone; sleeping and reading files change nothing)
+const ROLLBACK_SURVIVES: &[&str] = &[
+    // PostgreSQL: sequences · other sessions · server files and config · other servers · session locks · WAL, statistics and replication
+    "nextval", "setval", "pg_terminate_backend", "pg_cancel_backend", "pg_reload_conf", "pg_rotate_logfile", "pg_file_write", "lo_export",
+    "dblink", "dblink_exec", "dblink_connect", "dblink_connect_u", "dblink_send_query", "pg_advisory_lock", "pg_try_advisory_lock",
+    "pg_switch_wal", "pg_create_restore_point", "pg_promote", "pg_stat_reset", "pg_stat_reset_shared", "pg_stat_reset_single_table_counters",
+    "pg_stat_reset_single_function_counters", "pg_stat_reset_slru", "pg_stat_reset_replication_slot", "pg_stat_reset_subscription_stats",
+    "pg_drop_replication_slot", "pg_create_logical_replication_slot", "pg_create_physical_replication_slot", "pg_logical_emit_message",
+    "pg_replication_origin_create", "pg_replication_origin_drop", "pg_replication_slot_advance",
+    // run SQL given as a string (the name checks can't see inside it)
+    "query_to_xml", "query_to_xmlschema", "query_to_xml_and_xmlschema", "ts_stat",
+    // MySQL: session locks
+    "get_lock", "release_lock", "release_all_locks",
+];
+
+/// Whether rolling back the transaction Explain Analyse wraps a write in undoes all it did. Not for calls whose effects live outside
+/// the transaction (nextval and setval, dblink_exec, server files, advisory locks, other sessions …) nor SELECT … INTO OUTFILE / DUMPFILE:
+/// the GUI and the TUI ask before running those and say afterwards that the rollback didn't undo them. Nor for text with several
+/// statements (a selection run as one statement): only the first is explained, and a COMMIT or a MySQL DDL among the others ends the transaction
+pub fn rollback_undoes(sql: &str, kind: DbKind) -> bool {
+    statements(sql, kind).len() <= 1
+        && every_reading(sql, kind, |sc| {
+            let call = |i: usize| sc.toks.get(i + 1).is_some_and(|n| n.text == "(");
+            !sc.toks.iter().enumerate().any(|(i, t)| t.word && call(i) && ROLLBACK_SURVIVES.contains(&t.text.as_str()))
+                && !sc.toks.windows(2).any(|w| w[0].word && !w[0].quoted && w[0].text == "into" && w[1].word && !w[1].quoted && ["outfile", "dumpfile"].contains(&w[1].text.as_str()))
+        })
 }
 
 /// Whether the statement changes structure (the explorer tree is reloaded after running). Skips leading comments
@@ -1522,5 +1582,72 @@ mod tests {
         // The word in a string, a comment or a quoted name is not INTO
         assert!(is_read("select 'into' as x, \"into\" from t -- into", Postgres));
         assert!(is_read("select `into` from t", Mysql));
+    }
+
+    /// Text with several statements (a selection run as one statement) is a read only if every statement is
+    #[test]
+    fn is_read_multi_statement() {
+        for s in [
+            "select 1; do $$ begin delete from orders; end $$",
+            "select 1; call purge()",
+            "select 1; create table x (a int)",
+            "select 1; copy orders from program 'true'",
+            "select 1;\nvacuum",
+        ] {
+            assert!(!is_read(s, Postgres), "{s}");
+        }
+        for s in ["select 1; prepare s from 'delete from orders'; execute s", "select 1; call purge()", "show tables; do sleep(1)"] {
+            assert!(!is_read(s, Mysql), "{s}");
+        }
+        // Under NO_BACKSLASH_ESCAPES the string ends after x\ and CALL is a statement of its own
+        assert!(!is_read("select 'x\\'; call purge(); -- '", Mysql));
+        // Reads stay reads
+        for s in ["select 1; select 2;", "select 1; -- done", "select ';'; select 2", "select 1;\n\n(select 2)"] {
+            assert!(is_read(s, Postgres), "{s}");
+        }
+        assert!(is_read("show tables; select 1 # x; delete", Mysql));
+        // SQL Server starts another statement without `;`
+        for s in ["select 1 exec dbo.purge_orders", "select 1 drop table t", "select 1\ntruncate table dbo.t", "select 1 exec purge", "with x as (select 1 a) select a from x set nocount on"] {
+            assert!(!is_read(s, DbKind::Mssql), "{s}");
+        }
+        for s in ["select case when a = 1 then 1 end from t", "select a from t order by a offset 0 rows fetch next 5 rows only", "select [set], [exec] from t", "select 1; select 2"] {
+            assert!(is_read(s, DbKind::Mssql), "{s}");
+        }
+        assert!(!is_read("", Postgres) && !is_read(" -- only a note", Postgres));
+    }
+
+    /// Explain Analyse's rollback undoes table writes, not sequences, other servers, files or session locks
+    #[test]
+    fn rollback_undoes_only_what_the_transaction_holds() {
+        for s in ["delete from t", "update t set a = 1", "insert into t values (1)", "select * into newtab from t", "select lo_unlink(1)", "select 'nextval(1)', nextval from t"] {
+            assert!(rollback_undoes(s, Postgres), "{s}");
+        }
+        // Undone by the rollback, or changing nothing
+        for s in ["select pg_sleep(1)", "select set_config('x.y', '1', false)", "select pg_advisory_xact_lock(1)", "select * from pg_read_file('f')"] {
+            assert!(rollback_undoes(s, Postgres), "{s}");
+        }
+        assert!(rollback_undoes("select sleep(1)", Mysql));
+        assert!(!rollback_undoes("select get_lock('x', 1)", Mysql));
+        for s in [
+            "select pg_advisory_lock(1)",
+            "select pg_terminate_backend(42)",
+            "select query_to_xml('delete from t', true, true, '')",
+            "select nextval('s')",
+            "select setval('s', 1)",
+            "insert into t values (nextval('s'))",
+            "select dblink_exec('dbname=x', 'delete from t')",
+            "select 1; select pg_advisory_lock(1)",
+        ] {
+            assert!(!rollback_undoes(s, Postgres), "{s}");
+        }
+        assert!(!rollback_undoes("select * from t into outfile '/tmp/x'", Mysql));
+        assert!(!rollback_undoes("select 1 into dumpfile '/tmp/x'", Mysql));
+        assert!(rollback_undoes("delete from t where a = 'into outfile'", Mysql));
+        // Under NO_BACKSLASH_ESCAPES the string ends after x\ and get_lock() is a call
+        assert!(!rollback_undoes("select 'x\\', get_lock('a', 1) -- '", Mysql));
+        // Only the first of several statements is explained; the others run as they are (COMMIT, MySQL DDL commit)
+        assert!(!rollback_undoes("delete from t; commit", Postgres));
+        assert!(!rollback_undoes("delete from t; create table x (a int)", Mysql));
+        assert!(rollback_undoes("delete from t; -- done", Postgres));
     }
 }

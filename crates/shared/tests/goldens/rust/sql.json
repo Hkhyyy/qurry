@@ -1176,6 +1176,84 @@
       "select 1\nselect 2\n\nselect * from users where id = 3"
     ]
   },
+  "note-line-exec-mysql": {
+    "planExecution(ask)": {
+      "run": [
+        "select 1"
+      ]
+    },
+    "planExecution(fromCaret)": {
+      "run": [
+        "select 1"
+      ]
+    },
+    "planExecution(outside:below)": {
+      "run": [
+        "select 1"
+      ]
+    },
+    "planExecution(outside:whole)": {
+      "run": [
+        "select 1"
+      ]
+    },
+    "planExecution(smallest)": {
+      "run": [
+        "select 1"
+      ]
+    },
+    "planExecution(whole)": {
+      "run": [
+        "select 1"
+      ]
+    },
+    "splitScript": [
+      "Exec this after the deploy\nselect 1"
+    ],
+    "splitStatements": [
+      "Exec this after the deploy\nselect 1"
+    ],
+    "statementAt": "Exec this after the deploy\nselect 1"
+  },
+  "note-line-if": {
+    "planExecution(ask)": {
+      "run": [
+        "select * from users"
+      ]
+    },
+    "planExecution(fromCaret)": {
+      "run": [
+        "select * from users"
+      ]
+    },
+    "planExecution(outside:below)": {
+      "run": [
+        "select * from users"
+      ]
+    },
+    "planExecution(outside:whole)": {
+      "run": [
+        "select * from users"
+      ]
+    },
+    "planExecution(smallest)": {
+      "run": [
+        "select * from users"
+      ]
+    },
+    "planExecution(whole)": {
+      "run": [
+        "select * from users"
+      ]
+    },
+    "splitScript": [
+      "If you need all users:\nselect * from users"
+    ],
+    "splitStatements": [
+      "If you need all users:\nselect * from users"
+    ],
+    "statementAt": "If you need all users:\nselect * from users"
+  },
   "pg-backslash-plain-string": {
     "splitScript": [
       "select 'a\\'",

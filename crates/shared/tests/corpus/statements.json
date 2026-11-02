@@ -34,6 +34,13 @@
   { "id": "backslash-read", "dialect": "mysql", "sql": "select 'C:\\path', 'delete' as action" },
   { "id": "backslash-ansi-quotes", "dialect": "mysql", "sql": "with a as (select 'p\\' \"  ' as \"a\\\") delete from t -- \"" },
   { "id": "dblink-exec", "dialect": "postgres", "sql": "select dblink_exec('dbname=prod', 'delete from orders')" },
+  { "id": "multi-do-body", "dialect": "postgres", "sql": "select 1; do $$ begin delete from orders; end $$" },
+  { "id": "multi-prepare", "dialect": "mysql", "sql": "select 1; prepare s from 'delete from orders'; execute s" },
+  { "id": "multi-call", "dialect": "postgres", "sql": "select 1; call purge()" },
+  { "id": "multi-reads", "dialect": "postgres", "sql": "select 1; select 2; -- done" },
+  { "id": "mssql-chained-exec", "dialect": "mssql", "sql": "select 1 exec purge" },
+  { "id": "mssql-chained-drop", "dialect": "mssql", "sql": "select 1\ndrop table t" },
+  { "id": "mssql-case-end", "dialect": "mssql", "sql": "select case when a = 1 then 1 end from t" },
   { "id": "redis-get", "dialect": "redis", "sql": "GET a" },
   { "id": "redis-set", "dialect": "redis", "sql": "SET a 1" }
 ]
