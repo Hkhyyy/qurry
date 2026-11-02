@@ -1128,7 +1128,7 @@
   "hint-backslash-bare": {
     "hintRequests": [{"schema":"public","table":"orders","column":"status","path":[],"keys":false,"pairs":false}],
     "suggestions": [
-      {"label":"x\\' or 1=1 -- ","description":"1 row","kind":"Value","insertText":"'x\\'' or 1=1 -- '","range":[1,37,1,37]}
+      {"label":"x\\' or 1=1 -- ","description":"1 row","kind":"Value","insertText":"E'x\\\\'' or 1=1 -- '","range":[1,37,1,37]}
     ]
   },
   "hint-mysql-backslash-bare": {

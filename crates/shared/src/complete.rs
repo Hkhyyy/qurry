@@ -484,7 +484,8 @@ pub fn hint_at(m: &Meta, text: &str, before: &str, db: &str, mysql: bool) -> Opt
 }
 
 /// Text to insert for a value: inside quotes only doubled ' (and doubled \ on MySQL, where it escapes) plus the closing quote
-/// when `close`; outside, a number or true/false in a numeric · boolean column as it is, the rest '…'.
+/// when `close`; outside, a number or true/false in a numeric · boolean column as it is, the rest as sql::literal writes it
+/// (PostgreSQL E'…' for a backslash, so standard_conforming_strings = off can't end the string early).
 /// Bare needs both: the type is one by its name (a domain such as realm_name is not real), and the value itself is a plain literal
 /// (a value is data from the DB, so anything else would be SQL typed into the statement)
 pub fn hint_insert(value: &str, mode: HintMode, path: &[String], type_name: &str, quoted: bool, close: bool, mysql: bool) -> String {
@@ -496,7 +497,7 @@ pub fn hint_insert(value: &str, mode: HintMode, path: &[String], type_name: &str
     } else if bare {
         value.to_string()
     } else {
-        format!("'{esc}'")
+        crate::sql::literal(if mysql { crate::DbKind::Mysql } else { crate::DbKind::Postgres }, Some(value))
     }
 }
 
@@ -657,7 +658,8 @@ mod tests {
         assert_eq!(hint_items(&h, &hs(&["paid"]), Some('\''), false, TUI)[0].insert, "paid", "closing quote already there");
         let h = hint_at(&m, "select * from orders where status = ", "select * from orders where status = ", "app", false).unwrap();
         assert_eq!(hint_items(&h, &hs(&["paid"]), None, false, TUI)[0].insert, "'paid'");
-        assert_eq!(hint_items(&h, &hs(&[r"x\' or 1=1 -- "]), None, false, TUI)[0].insert, r"'x\'' or 1=1 -- '", "a backslash is plain text on PostgreSQL");
+        // A backslash makes it E'…' (sql::literal): with standard_conforming_strings = off, '\'' would end the string early
+        assert_eq!(hint_items(&h, &hs(&[r"x\' or 1=1 -- "]), None, false, TUI)[0].insert, r"E'x\\'' or 1=1 -- '", "PostgreSQL: the value stays one literal");
         let my = hint_at(&m, "select * from orders where status = ", "select * from orders where status = ", "app", true).unwrap();
         assert_eq!(hint_items(&my, &hs(&[r"x\' or 1=1 -- "]), None, false, TUI)[0].insert, r"'x\\'' or 1=1 -- '", "MySQL: the value stays one literal");
         let h = hint_at(&m, "select * from orders where id = ", "select * from orders where id = ", "app", false).unwrap();
