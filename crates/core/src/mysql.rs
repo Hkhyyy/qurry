@@ -703,7 +703,13 @@ pub async fn full_text_search(p: &MySqlPool, r: &FtsRequest) -> AppResult<Vec<Ft
     for (schema, table, conds) in tables.into_iter().filter(|t| !t.2.is_empty()) {
         let where_clause = conds.join(" OR ");
         let sql = format!("select * from {}.{} where {where_clause} limit {}", ident(&schema), ident(&table), r.limit.max(1));
-        match run_on(&mut conn, &sql, r.limit.max(1)).await {
+        // READ ONLY and rolled back: a view or function with side effects (an INSERT in a stored function) is refused, not committed
+        let res = match conn.execute("START TRANSACTION READ ONLY").await {
+            Ok(_) => run_on(&mut conn, &sql, r.limit.max(1)).await,
+            Err(e) => Err(e.into()),
+        };
+        let _ = conn.execute("ROLLBACK").await;
+        match res {
             Ok(result) if !result.rows.is_empty() => hits.push(FtsHit { schema, table, where_clause, result }),
             Ok(_) => {}
             Err(e) => crate::log!("[qurry] fts {schema}.{table}: {e}"),

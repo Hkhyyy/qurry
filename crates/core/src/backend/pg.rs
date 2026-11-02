@@ -328,6 +328,8 @@ impl Backend for PgPool {
             let sql = format!("select * from {}.{} where {where_clause} limit {}", ident(&schema), ident(&table), r.limit.max(1));
             // Per-statement timeout so one slow table doesn't stall everything
             let mut tx = self.begin().await?;
+            // READ ONLY: a function with side effects called from a view is refused, not just rolled back (nextval, dblink)
+            sqlx::query("set transaction read only").execute(&mut *tx).await?;
             sqlx::query("set local statement_timeout = '15s'").execute(&mut *tx).await?;
             let res = crate::db::run_on(&mut *tx, &sql, r.limit.max(1)).await;
             let _ = tx.rollback().await;
