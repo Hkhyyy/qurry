@@ -209,6 +209,37 @@ async fn explain_analyze_wraps_reads_and_asks_before_unknown_functions() {
     assert!(!out[before..].iter().any(|l| l.contains("rolled it back")), "{out:?}");
 }
 
+/// Explain Analyze of a SELECT inside an open transaction on a read-only Data Source: the savepoint it wraps the statement in
+/// passes the read-only check (the fake refuses what core's check_read_only refuses), so the plan runs
+#[tokio::test]
+async fn explain_analyze_in_a_transaction_on_a_read_only_source_runs() {
+    static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    fn read_only(q: &str) -> Result<QueryResult, String> {
+        SEEN.lock().unwrap().push(q.to_string());
+        match qurry_core::guard::read_only_violation(q, qurry_core::store::DbKind::Postgres, false) {
+            Some(why) => Err(why),
+            None => fake(q).map(|r| QueryResult { in_transaction: true, ..r }),
+        }
+    }
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(read_only);
+    let sql = "select * from orders";
+    h.console_with(sql, 0, 0);
+    if let TabKind::Console(c) = &mut h.app.tabs[h.app.active].kind {
+        c.in_tx = true;
+    }
+    h.app.analyze_next = true;
+    h.app.run_stmts(vec![sql.into()], true, false);
+    h.app.analyze_next = false;
+    assert!(h.app.popup.is_none(), "a plain read doesn't ask");
+    h.settle().await;
+    assert_eq!(*SEEN.lock().unwrap(), ["SAVEPOINT qurry_explain", "EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) select * from orders", "ROLLBACK TO SAVEPOINT qurry_explain"]);
+    let out = h.console_output();
+    assert!(!out.iter().any(|l| l.contains("Read-only mode")), "{out:?}");
+    let TabKind::Console(c) = &h.app.tabs[h.app.active].kind else { panic!() };
+    assert!(c.in_tx, "still in the transaction the user opened");
+}
+
 /// ⌃Space lists columns after "alias." (from the loaded metadata); Enter replaces the typed prefix with the picked one
 #[tokio::test]
 async fn completion_popup_lists_and_inserts() {

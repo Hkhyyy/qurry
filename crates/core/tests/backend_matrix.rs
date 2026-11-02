@@ -750,6 +750,38 @@ async fn mysql_explain_analyze_rolls_back_what_a_selected_function_writes() {
     q(&st, "drop database qm_guard_ea").await;
 }
 
+/// Explain Analyse of a SELECT inside a transaction the user opened, as the GUI and the TUI send it on a read-only Data Source:
+/// the savepoint around it passes the read-only check, so the plan runs and the transaction stays open
+async fn explain_analyze_in_a_read_only_transaction(mut c: ConnectionConfig, password: Option<String>, explain: &str) {
+    c.read_only = true;
+    let st = state(&c, password).await;
+    let tab = |sql: &str| {
+        let sql = sql.to_string();
+        let st = &st;
+        async move { st.run_query(ID.into(), sql.clone(), None, Some("ea-ro".into())).await.unwrap_or_else(|e| panic!("{sql}: {e}")) }
+    };
+    tab("BEGIN").await;
+    tab("SAVEPOINT qurry_explain").await;
+    assert!(!tab(explain).await.rows.is_empty(), "{explain}");
+    assert!(tab("ROLLBACK TO SAVEPOINT qurry_explain").await.in_transaction);
+    tab("ROLLBACK").await;
+    st.close_session("ea-ro".into()).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore]
+async fn pg_explain_analyze_in_a_transaction_on_a_read_only_source() {
+    let Some(c) = pg_env() else { return };
+    explain_analyze_in_a_read_only_transaction(c, None, "EXPLAIN (FORMAT JSON, ANALYZE, BUFFERS) select 1").await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn mysql_explain_analyze_in_a_transaction_on_a_read_only_source() {
+    let Some((c, pw)) = my_env() else { return };
+    explain_analyze_in_a_read_only_transaction(c, Some(pw), "EXPLAIN ANALYZE select 1").await;
+}
+
 // ───────── Redis ─────────
 
 #[tokio::test]

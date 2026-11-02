@@ -1276,7 +1276,7 @@ export default function App() {
     const c = conns.find((x) => x.id === tab.connId);
     const kind = c?.kind ?? "postgres";
     // Confirm dangerous statements (UPDATE/DELETE without WHERE, DROP, TRUNCATE — same rules as the core guard). Not for Explain:
-    // Explain Analyse asks its own question below (one dialog, as in the TUI)
+    // Explain Analyse asks its own question below, with this reason when there is one (one dialog, as in the TUI)
     if (!explain) {
       for (const s of stmts) {
         const why = await api.unsafeReason(kind, s).catch(() => null);
