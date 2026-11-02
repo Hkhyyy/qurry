@@ -155,6 +155,18 @@
     "isReadStmt": true,
     "DDL_RE": false
   },
+  "mssql-chained-exec": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "mssql-chained-drop": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "mssql-case-end": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
   "redis-get": {
     "isReadStmt": false,
     "DDL_RE": false

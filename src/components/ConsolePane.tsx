@@ -113,6 +113,8 @@ interface Props {
   onClearOutput: () => void;
   /** The run couldn't start (the statement splitter failed): show why in Output */
   onError: (message: string) => void;
+  /** A ⌘↩ started or stopped waiting for the module (the status bar's Run · Cancel follow it) */
+  onLoadingChange: () => void;
 }
 
 export function ConsolePane(p: Props) {
@@ -122,7 +124,11 @@ export function ConsolePane(p: Props) {
   const [api, setApi] = useState<EditorApi | null>(null);
   /** A ⌘↩ waiting for the WebAssembly module, as the editor was at the press (null once it ran or was cancelled) */
   const pending = useRef<RunRequest | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoadingState] = useState(false);
+  const setLoading = (on: boolean) => {
+    setLoadingState(on);
+    p.onLoadingChange();
+  };
   const cancelPending = () => {
     pending.current = null;
     setLoading(false);

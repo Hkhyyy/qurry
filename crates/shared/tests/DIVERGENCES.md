@@ -18,8 +18,8 @@ Rules the TUI and the MCP server took with no option when the grid helpers moved
 | sql › planExecution(fromCaret) | 17 | 0 | 0 | 0 |
 | sql › planExecution(outside:whole) | 17 | 0 | 0 | 0 |
 | sql › planExecution(outside:below) | 17 | 0 | 0 | 0 |
-| statements › isReadStmt | 41 | 0 | 0 | 0 |
-| statements › DDL_RE | 41 | 0 | 0 | 0 |
+| statements › isReadStmt | 44 | 0 | 0 | 0 |
+| statements › DDL_RE | 44 | 0 | 0 | 0 |
 | valuehints › hintContext | 39 | 0 | 0 | 0 |
 | valuehints › hintInsert | 32 | 0 | 0 | 0 |
 | valuehints › hintable | 32 | 0 | 0 | 0 |

@@ -78,8 +78,16 @@ test("a ⌘↩ waiting for the module runs the text it was pressed on, not an ed
   await typeSql(page, "select * from users");
   await page.keyboard.press("Meta+Enter");
   await typeSql(page, "delete from users where id = 5");
+  // The run flash would mark the DELETE now in the editor, not what ran: record whether it ever shows
+  await page.evaluate(() => {
+    const w = window as unknown as { flashed: boolean };
+    w.flashed = false;
+    new MutationObserver(() => (w.flashed ||= !!document.querySelector(".exec-highlight"))).observe(document.body, { subtree: true, childList: true, attributes: true });
+  });
   await release();
   await expect(resultTabs(page)).toHaveText(["Output", /^users/]);
+  await page.waitForTimeout(300);
+  expect(await page.evaluate(() => (window as unknown as { flashed: boolean }).flashed)).toBe(false);
   await resultTabs(page).first().click();
   await expect(work(page).locator(".output-log .ol.sql")).toHaveCount(1);
   await expect(work(page).locator(".output-log .ol.sql")).toContainText("select * from users");
@@ -93,9 +101,13 @@ test("the toolbar's Cancel cancels a ⌘↩ waiting for the module", async ({ pa
   await page.keyboard.press("Meta+Enter");
   const stop = work(page).getByTitle(/^Cancel Running Statements/);
   await expect(stop).toBeEnabled();
+  // The status bar's Run · Cancel say the same
+  await expect(page.locator(".statusbar").getByTitle("Cancel Running Statements")).toBeEnabled();
+  await expect(page.locator(".statusbar").getByTitle(/^Execute/)).toBeDisabled();
   await stop.click();
   await expect(work(page).locator(".running-bar")).toHaveCount(0);
   await expect(stop).toBeDisabled();
+  await expect(page.locator(".statusbar").getByTitle("Cancel Running Statements")).toBeDisabled();
   await release();
   await page.waitForTimeout(500);
   await expect(work(page).locator(".output-log .ol.sql")).toHaveCount(0);

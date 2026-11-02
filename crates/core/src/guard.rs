@@ -152,6 +152,19 @@ mod tests {
         sqlx::raw_sql("drop schema run4_guard_fixes_rb cascade").execute(&mut c).await.unwrap();
         assert_eq!(n, 2, "the rollback didn't undo the DELETE");
         assert!(called && last == 5, "the rollback undid nextval / setval");
+        // set_config and a transaction-level advisory lock are undone; a session-level advisory lock stays
+        let undone = "select set_config('run4_guard_fixes.x', '1', false), pg_advisory_xact_lock(4101)";
+        let stays = "select pg_advisory_lock(4102)";
+        assert!(rollback_undoes(undone, DbKind::Postgres) && !rollback_undoes(stays, DbKind::Postgres));
+        let locks = "select count(*) from pg_locks where locktype = 'advisory' and pid = pg_backend_pid()";
+        sqlx::raw_sql(&format!("begin; {undone}; rollback")).execute(&mut c).await.unwrap();
+        let (setting,): (Option<String>,) = sqlx::query_as("select nullif(current_setting('run4_guard_fixes.x', true), '')").fetch_one(&mut c).await.unwrap();
+        let (held,): (i64,) = sqlx::query_as(locks).fetch_one(&mut c).await.unwrap();
+        assert!(setting.is_none() && held == 0, "the rollback didn't undo set_config / pg_advisory_xact_lock");
+        sqlx::raw_sql(&format!("begin; {stays}; rollback")).execute(&mut c).await.unwrap();
+        let (held,): (i64,) = sqlx::query_as(locks).fetch_one(&mut c).await.unwrap();
+        sqlx::raw_sql("select pg_advisory_unlock_all()").execute(&mut c).await.unwrap();
+        assert_eq!(held, 1, "the rollback released pg_advisory_lock");
     }
 
     /// Of several statements Explain Analyse explains the first and runs the rest; a COMMIT (PostgreSQL) or DDL (MySQL's implicit

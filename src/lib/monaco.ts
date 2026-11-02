@@ -3,12 +3,25 @@ import * as monaco from "monaco-editor/editor/editor.api";
 import "monaco-editor/editor/editor.main";
 import "monaco-editor/languages/definitions/pgsql/register";
 import "monaco-editor/languages/definitions/mysql/register";
+import { language as mysqlLanguage } from "monaco-editor/languages/definitions/mysql/mysql";
 import "monaco-editor/languages/definitions/redis/register";
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
 import { loader } from "@monaco-editor/react";
 
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 loader.config({ monaco });
+
+/**
+ * MySQL reads `--` as a comment only when a space, a control character or the line end follows (`select 1--1` is 1 - -1), and so does
+ * the console's split (qurry_shared::sql dash_comment). The built-in grammar greys out every `--…`, so `select 1--1; delete …` looked like
+ * one statement with a comment while ⌘↩ ran the DELETE: colour it the way it runs
+ */
+const comments = [
+  [/--(?:[\x00-\x20\x7f].*|$)/, "comment"],
+  [/#+.*/, "comment"],
+  [/\/\*/, { token: "comment.quote", next: "@comment" }],
+];
+monaco.languages.setMonarchTokensProvider("mysql", { ...mysqlLanguage, tokenizer: { ...mysqlLanguage.tokenizer, comments } } as monaco.languages.IMonarchLanguage);
 
 monaco.editor.defineTheme("dbtool-dark", {
   base: "vs-dark",

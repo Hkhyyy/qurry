@@ -201,7 +201,7 @@ export const ConsoleSplitterFailed: S = {
         dbList={[]} schemaList={[]} running={false} loadingMore={false} results={[]} activeResult="output"
         output={[{ ts: "10:24:01", text: SPLITTER_FAILED, level: "error" }]} txManual={false} inTx={false}
         onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onExport={noop} onHistory={noop}
-        onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop}
+        onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop} onLoadingChange={noop}
       />
     </Frame>
   ),
