@@ -1031,7 +1031,7 @@ mod tests {
         assert_eq!(e, "CSV export of Redis commands is not available in read-only mode");
         let e = st.run_query("rdro::db14".into(), "SET qurry:guard:k after".into(), None, Some("tab".into())).await.unwrap_err().to_string();
         assert_eq!(e, "Data source \"rdro\" is read-only: SET changes data");
-        let e = st.execute_batch_prepared("rdro::db14".into(), vec!["DEL qurry:guard:k".into()]).await.err().expect("refused").to_string();
+        let e = st.execute_batch_prepared("rdro::db14".into(), vec!["DEL qurry:guard:k".into()]).await.expect_err("refused").to_string();
         assert_eq!(e, "Data source \"rdro\" is read-only: DEL changes data");
         assert_eq!(value().await, "before");
         assert_eq!(st.run_read_only("rd::db14".into(), "GET qurry:guard:k".into(), 10).await.unwrap().rows[0][0], "before");
