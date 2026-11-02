@@ -350,11 +350,11 @@ fn asks_server(sql: &str, s: &str) -> bool {
     !is_select_like(sql) && !is_dml(s)
 }
 
-/// A plain BEGIN (s = strip_comments_lead(sql)): `begin` or `begin work`, optionally with `;`. Not a MariaDB compound statement
-/// (BEGIN NOT ATOMIC … END), which doesn't commit the open transaction
+/// A plain BEGIN (s = strip_comments_lead(sql)), whatever follows it (`work`, `;`, a trailing comment the splitter left in). Not a
+/// MariaDB compound statement, which at top level is only BEGIN NOT ATOMIC … END and doesn't commit the open transaction
 fn is_begin(s: &str) -> bool {
-    let w: Vec<&str> = s.trim_end().trim_end_matches(';').split_whitespace().collect();
-    w == ["begin"] || w == ["begin", "work"]
+    let word = |t: &str| t.split(|c: char| !c.is_alphanumeric() && c != '_').next().unwrap_or("").to_string();
+    s.strip_prefix("begin").is_some_and(|rest| word(rest).is_empty() && word(&strip_comments_lead(rest)) != "not")
 }
 
 /// Whether `s` (strip_comments_lead) runs statements of its own that can COMMIT or ROLLBACK: a CALL, EXECUTE of a prepared
@@ -894,10 +894,11 @@ mod tests {
     /// Only a plain BEGIN commits the open transaction and opens one; a MariaDB compound statement asks the server
     #[test]
     fn plain_begin_only() {
-        for q in ["begin", "BEGIN;", "-- x\nbegin work", "begin  work ;"] {
+        for q in ["begin", "BEGIN;", "-- x\nbegin work", "begin  work ;", "begin -- x", "BEGIN /* x */", "begin /* x */ work", "begin work -- go", "begin; -- note", "begin\n# x", "begin/* x */"] {
             assert!(is_begin(&strip_comments_lead(q)), "{q}");
+            assert!(!ends_in_procedure(&strip_comments_lead(q)), "{q}");
         }
-        for q in ["begin not atomic select 1; end", "BEGIN NOT ATOMIC\n  UPDATE t SET v = 1;\nEND", "beginx", "begin work x"] {
+        for q in ["begin not atomic select 1; end", "BEGIN NOT ATOMIC\n  UPDATE t SET v = 1;\nEND", "begin /* x */ not atomic select 1; end", "beginx", "begin_x"] {
             assert!(!is_begin(&strip_comments_lead(q)), "{q}");
         }
     }

@@ -12,13 +12,15 @@ const TX_END = /^(COMMIT|ROLLBACK|ENDED)\b/;
 
 /**
  * Result word decided in Rust like the TUI's. Without the WASM module (not loaded yet, or it failed) never less than what keeps the
- * log safe to read: no result recorded, a transaction end as logged (it may be of unknown outcome: a warning), failed
+ * log safe to read, in Rust's order: no result recorded, a transaction end of unknown outcome as logged (it carries a note), failed,
+ * any other transaction end as logged (a warning)
  */
 const statusWord = (e: AuditEntry) => {
   try {
     return shared().auditStatus(!!e.started, e.sql, !!e.error);
   } catch {
-    return e.started ? "no result recorded" : TX_END.test(e.sql) ? e.sql : e.error ? "failed" : undefined;
+    const end = TX_END.test(e.sql);
+    return e.started ? "no result recorded" : end && e.note ? e.sql : e.error ? "failed" : end ? e.sql : undefined;
   }
 };
 

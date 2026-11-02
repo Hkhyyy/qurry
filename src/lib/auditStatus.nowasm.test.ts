@@ -23,9 +23,14 @@ describe("auditStatus without the WASM module", () => {
 
   it("shows a transaction end as logged, as a warning (it may be of unknown outcome)", () => {
     const unknown = word("COMMIT_UNKNOWN");
-    expect(auditStatus(entry({ sql: unknown, error: "connection reset by peer" }))).toEqual({ text: unknown, tone: "warn" });
-    expect(auditStatus(entry({ sql: word("ENDED_UNKNOWN") })).tone).toBe("warn");
+    // Unknown-outcome entries always carry a note (what to do)
+    expect(auditStatus(entry({ sql: unknown, error: "connection reset by peer", note: "check" }))).toEqual({ text: unknown, tone: "warn" });
+    expect(auditStatus(entry({ sql: word("ENDED_UNKNOWN"), note: "check" })).tone).toBe("warn");
     expect(auditStatus(entry({ sql: "ROLLBACK (by the server)" }))).toEqual({ text: "ROLLBACK (by the server)", tone: "warn" });
+  });
+
+  it("shows a COMMIT the server refused as failed, not as a transaction end", () => {
+    expect(auditStatus(entry({ sql: "COMMIT", error: "could not serialize access" }))).toEqual({ text: "failed", tone: "danger" });
   });
 
   it("shows rows as before", () => {

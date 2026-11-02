@@ -1599,6 +1599,13 @@ mod tests {
         run("begin".into()).await.unwrap();
         assert!(st.tx_state("m".into()).await);
         assert_eq!(log(1), [IMPLICIT_COMMIT]);
+        // A trailing comment keeps it a BEGIN (the splitter leaves a same-line comment in the statement)
+        for begin in ["begin -- next batch", "begin /* x */ work"] {
+            run(format!("update {s}.t set v = 20 where id = 2")).await.unwrap();
+            run(begin.into()).await.unwrap();
+            assert!(st.tx_state("m".into()).await, "{begin}");
+            assert_eq!(log(2), [IMPLICIT_COMMIT.to_string(), format!("update {s}.t set v = 20 where id = 2")], "{begin}");
+        }
         run(format!("update {s}.t set v = 30 where id = 3")).await.unwrap();
         run("set autocommit = 1".into()).await.unwrap();
         assert!(!st.tx_state("m".into()).await);
