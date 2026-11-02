@@ -1350,6 +1350,7 @@ fn test_form(app: &mut App, form: &mut crate::app::ConnForm) {
     };
     let st = app.state.clone();
     let started = std::time::Instant::now();
+    let production = cfg.options.confirm_changes;
     form.message = None;
     let h = app.spawn_abortable(async move { st.test_connection(cfg, pw, ssh).await.map_err(|e| e.to_string()) }, move |a, r| {
         // Only the test still shown: not one that was cancelled or replaced
@@ -1360,6 +1361,11 @@ fn test_form(app: &mut App, form: &mut crate::app::ConnForm) {
             f.message = Some(match r {
                 Ok(v) => (true, format!("✓ {v}")),
                 Err(e) if e.contains(qurry_core::tunnel::UNKNOWN_HOST) => (false, format!("✕ {e} Press ⌃y to trust it.")),
+                // Production: never a one-key path to plaintext (the GUI dialog shows no button either), only where the setting is
+                Err(e) if production && qurry_shared::errors::tls_opt_in(&e) => (
+                    false,
+                    format!("✕ {e}\nProduction data source: Qurry won't turn off encryption from here. If the server has no TLS and the network is trusted, turn on \"Allow unencrypted\" in this form."),
+                ),
                 // The GUI dialog's Allow button, as a field to turn on: select it (the form only changes when Space is pressed)
                 Err(e) if qurry_shared::errors::tls_opt_in(&e) => {
                     if let Some(i) = f.fields.iter().position(|x| x.label == "Allow unencrypted") {

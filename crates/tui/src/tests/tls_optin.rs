@@ -205,6 +205,24 @@ async fn form_test_selects_allow_unencrypted() {
     assert!(!saved(&h).await.options.allow_plaintext, "nothing is saved before Enter");
 }
 
+/// The form of a source marked Production: the failed test says where the setting is and leaves the selection alone (as the GUI dialog)
+#[tokio::test]
+async fn form_test_on_production_selects_nothing() {
+    let mut h = lan(false).await;
+    let cfg = h.app.conn("test").unwrap().config.clone();
+    h.app.conn_form(Some(cfg));
+    let Some(Popup::ConnForm(f)) = &mut h.app.popup else { panic!("no form") };
+    let i = f.fields.iter().position(|x| x.label == "Production").unwrap();
+    f.fields[i].value = "on".into();
+    let sel = f.sel;
+    h.key("Ctrl+t");
+    h.settle().await;
+    let Some(Popup::ConnForm(f)) = &h.app.popup else { panic!("no form") };
+    let msg = f.message.clone().unwrap_or_default().1;
+    assert_eq!(f.sel, sel, "{msg}");
+    assert!(msg.ends_with("\nProduction data source: Qurry won't turn off encryption from here. If the server has no TLS and the network is trusted, turn on \"Allow unencrypted\" in this form."), "{msg}");
+}
+
 #[tokio::test]
 async fn production_gets_only_a_status_line() {
     let mut h = lan(true).await;
