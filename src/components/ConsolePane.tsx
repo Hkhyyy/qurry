@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { QueryResult, Dialect } from "../lib/api";
+import { QueryResult, Dialect, DbKind } from "../lib/api";
 import { splitScript } from "../lib/sqlSplit";
 import { DEFAULT_EXEC, ExecSettings, planExecution } from "../lib/execPlan";
+import { initShared, sharedReady } from "../lib/shared";
 import { ConsoleEditor, EditorApi, RunRequest } from "./ConsoleEditor";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { ResultGrid } from "./ResultGrid";
@@ -60,11 +61,23 @@ export interface OutputLine {
   level: "sql" | "info" | "warn" | "error";
 }
 
+/** The editor's API plus the ⌘↩ waiting for the WebAssembly module, which ⌘F2 cancels like a run */
+export interface ConsoleApi extends EditorApi {
+  loading: () => boolean;
+  cancelPending: () => void;
+}
+
+/** Output when the module failed to load, so ⌘↩ couldn't plan the console */
+export const SPLITTER_FAILED =
+  "Couldn't split the console into statements: Qurry couldn't load its WebAssembly module, usually because the system WebView is too old (update macOS, or webkit2gtk on Linux). Until then, select the statement and set Query Execution Settings › For selection execute › Exactly as a single statement.";
+
 interface Props {
   tabId: string;
   target: string;
   initialSql: string;
   connName: string;
+  /** The data source's kind: how its statements are split and planned */
+  kind?: DbKind;
   dialect?: Dialect;
   database: string;
   schema: string;
@@ -96,8 +109,10 @@ interface Props {
   onSwitchSchema: (schema: string) => void;
   /** Data Source Options → Switch schema: Disable */
   schemaSwitchDisabled?: boolean;
-  registerApi: (tabId: string, api: EditorApi) => void;
+  registerApi: (tabId: string, api: ConsoleApi) => void;
   onClearOutput: () => void;
+  /** The run couldn't start (the statement splitter failed): show why in Output */
+  onError: (message: string) => void;
 }
 
 export function ConsolePane(p: Props) {
@@ -105,6 +120,13 @@ export function ConsolePane(p: Props) {
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const [chooser, setChooser] = useState<{ options: { label: string; stmts: string[]; ranges: { start: number; end: number }[] }[]; idx: number; req: RunRequest } | null>(null);
   const [api, setApi] = useState<EditorApi | null>(null);
+  /** A ⌘↩ waiting for the WebAssembly module (null once it ran or was cancelled) */
+  const pending = useRef<{ explain?: "plan" | "analyze" } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const cancelPending = () => {
+    pending.current = null;
+    setLoading(false);
+  };
 
   const setSettings = (s: ExecSettings) => {
     setSettingsState(s);
@@ -116,8 +138,32 @@ export function ConsolePane(p: Props) {
   };
 
   /** ⌘↩ execution rules (DataGrip Query Execution settings) */
-  const splitFn = p.dialect?.split ?? ((t: string) => splitScript(t, p.dialect?.monaco === "mysql"));
+  const splitFn = p.dialect?.split ?? ((t: string) => splitScript(t, p.kind));
   const onRun = (req: RunRequest) => {
+    // Splitting and planning run in the shared WebAssembly module; a selection run as one statement doesn't need it
+    const single = !!req.selection?.text.trim() && settings.selection === "single";
+    if (single || sharedReady()) return run(req);
+    // Still loading at startup: show it like a run, and once it is there run the editor as it is then (one pending run, the last press's mode)
+    const waiting = pending.current;
+    pending.current = { explain: req.explain };
+    if (waiting) return;
+    setLoading(true);
+    const done = () => {
+      const last = pending.current;
+      pending.current = null;
+      setLoading(false);
+      return last;
+    };
+    // Failed (main.tsx logs why): say what the user can do
+    initShared().then(
+      () => {
+        const last = done();
+        if (last) api?.run(last.explain);
+      },
+      () => done() && p.onError(SPLITTER_FAILED),
+    );
+  };
+  const run = (req: RunRequest) => {
     const { text, offset, selection } = req;
     if (selection && selection.text.trim()) {
       if (settings.selection === "single") {
@@ -128,7 +174,7 @@ export function ConsolePane(p: Props) {
       req.highlight(segs.map((s) => ({ start: selection.start + s.start, end: selection.start + s.end })));
       return p.onExecute(segs.map((s) => selection.text.slice(s.start, s.end).trim()), req.explain);
     }
-    const plan = planExecution(text, offset, splitFn(text), settings);
+    const plan = planExecution(text, offset, splitFn(text), settings, p.kind);
     if (!plan) return;
     if ("run" in plan) {
       req.highlight(plan.run.map((x) => ({ start: x.start, end: x.end })));
@@ -162,7 +208,7 @@ export function ConsolePane(p: Props) {
     <div className="console-pane">
       {/* ── Console toolbar (DataGrip) ── */}
       <Toolbar className="console-toolbar" onMouseDown={(e) => e.stopPropagation()}>
-        <IconButton tone="ok" title={`Execute (${isMac ? "⌘↩" : "Ctrl+Enter"})`} onClick={() => api?.run()} disabled={p.running}>▶</IconButton>
+        <IconButton tone="ok" title={`Execute (${isMac ? "⌘↩" : "Ctrl+Enter"})`} onClick={() => api?.run()} disabled={p.running || loading}>▶</IconButton>
         <ToolButton
           title="Explain Plan"
           onClick={(e) =>
@@ -244,7 +290,7 @@ export function ConsolePane(p: Props) {
               onRun={onRun}
               registerApi={(id, a) => {
                 setApi(a);
-                p.registerApi(id, a);
+                p.registerApi(id, { ...a, loading: () => pending.current !== null, cancelPending });
               }}
             />
             {chooser && (
@@ -308,7 +354,7 @@ export function ConsolePane(p: Props) {
               )}
             </div>
             <div className="result-area">
-              <RunningBar running={p.running} onCancel={p.onCancel} />
+              {loading ? <RunningBar running label="Loading the statement splitter" onCancel={cancelPending} /> : <RunningBar running={p.running} onCancel={p.onCancel} />}
               {shown === "output" && (
                 <div className="output-log">
                   {p.output.length === 0 && <EmptyState>Execute a statement ({isMac ? "⌘↩" : "Ctrl+Enter"}) to see the output.</EmptyState>}

@@ -73,7 +73,7 @@ pub fn to_json(app: &App) -> Value {
 /// Restore the saved workspaces and tabs (version 1 = a single workspace). Tabs of removed Data Sources are dropped
 pub fn restore(app: &mut App, v: &Value) {
     if let Some(e) = v.get("exec") {
-        app.exec = crate::exec::ExecSettings::from_json(e);
+        app.exec = qurry_core::exec::ExecSettings::from_json(e);
     }
     let list: Vec<Value> = match v.get("workspaces").and_then(Value::as_array) {
         Some(l) if !l.is_empty() => l.clone(),

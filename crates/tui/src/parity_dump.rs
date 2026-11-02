@@ -3,7 +3,7 @@
 //! `pnpm parity:dump` then compares both sides into crates/shared/tests/DIVERGENCES.md. A `‸` in a corpus text marks the cursor (byte offset here).
 use crate::app::{Tab, TabKind, TableTab};
 use crate::complete::{self, HintAt, HintMode, Meta};
-use crate::exec::{self, ExecSettings, Inside, Outside, Plan};
+use qurry_core::exec::{self, ExecSettings, Inside, Outside, Plan};
 use crate::grid::{self, Grid};
 use crate::tree::{self, Node, NodeKind};
 use qurry_core::db::{ColumnInfo, QueryResult};
@@ -59,10 +59,11 @@ fn slices(text: &str, segs: &[(usize, usize)]) -> Value {
 }
 
 fn plan(p: Plan) -> Value {
+    let sqls = |v: Vec<exec::Stmt>| v.into_iter().map(|s| s.sql).collect::<Vec<_>>();
     match p {
         Plan::Nothing => Value::Null,
-        Plan::Run(v) => json!({ "run": v }),
-        Plan::Ask(opts) => json!({ "ask": opts.into_iter().map(|(label, stmts)| json!({ "label": label, "stmts": stmts })).collect::<Vec<_>>() }),
+        Plan::Run(v) => json!({ "run": sqls(v) }),
+        Plan::Ask(opts) => json!({ "ask": opts.into_iter().map(|(label, stmts)| json!({ "label": label, "stmts": sqls(stmts) })).collect::<Vec<_>>() }),
     }
 }
 

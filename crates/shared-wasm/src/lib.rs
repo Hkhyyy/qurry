@@ -7,7 +7,9 @@
 //! which statements a run counts as reads. They are not a security boundary. Enforcement (read-only Data Sources,
 //! MCP read-only and execute) still runs in the backend, through qurry_core::guard, on every statement it receives.
 
+use qurry_shared::exec::{self, ExecSettings, Plan};
 use qurry_shared::DbKind;
+use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -44,18 +46,64 @@ pub fn tls_opt_in(msg: &str) -> bool {
     qurry_shared::errors::tls_opt_in(msg)
 }
 
-/// Statements split on `;` as the server reads them: [[start, end], …] in UTF-16 code units
+/// Statements split on `;`: [[start, end], …] in UTF-16 code units. `opts` is a SplitOptions object ({} = as the server reads them)
 #[wasm_bindgen(js_name = splitStatements)]
-pub fn split_statements(text: &str, kind: JsValue) -> Result<JsValue, JsError> {
-    let r = utf16_ranges(text, &qurry_shared::sql::split_statements(text, parse_kind(kind)?));
+pub fn split_statements(text: &str, kind: JsValue, opts: JsValue) -> Result<JsValue, JsError> {
+    let r = utf16_ranges(text, &qurry_shared::sql::split_statements_with(text, parse_kind(kind)?, serde_wasm_bindgen::from_value(opts)?));
     Ok(serde_wasm_bindgen::to_value(&r)?)
 }
 
 /// Editor statements (also split at statement keywords on new lines without `;`): [[start, end], …] in UTF-16 code units
 #[wasm_bindgen(js_name = splitScript)]
-pub fn split_script(text: &str, kind: JsValue) -> Result<JsValue, JsError> {
-    let r = utf16_ranges(text, &qurry_shared::sql::split_script(text, parse_kind(kind)?));
+pub fn split_script(text: &str, kind: JsValue, opts: JsValue) -> Result<JsValue, JsError> {
+    let r = utf16_ranges(text, &qurry_shared::sql::split_script_with(text, parse_kind(kind)?, serde_wasm_bindgen::from_value(opts)?));
     Ok(serde_wasm_bindgen::to_value(&r)?)
+}
+
+/// A statement range as the GUI holds it (UTF-16 code units)
+#[derive(Deserialize)]
+struct Segment {
+    start: usize,
+    end: usize,
+}
+
+#[derive(Serialize)]
+struct JsStmt {
+    start: usize,
+    end: usize,
+    sql: String,
+}
+
+#[derive(Serialize)]
+struct JsChoice {
+    label: String,
+    stmts: Vec<JsStmt>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+enum JsPlan {
+    Run(Vec<JsStmt>),
+    Ask(Vec<JsChoice>),
+}
+
+/// What to run from the caret (qurry_shared::exec::plan_in) over `segs` (the console's statements, UTF-16 ranges in order) with the
+/// Query Execution settings ({inside, outside, selection}; unknown values fall back to the defaults): {run} | {ask} | undefined
+#[wasm_bindgen(js_name = planExecution)]
+pub fn plan_execution(text: &str, offset: usize, segs: JsValue, kind: JsValue, settings: JsValue) -> Result<JsValue, JsError> {
+    let segs: Vec<Segment> = serde_wasm_bindgen::from_value(segs)?;
+    let segs = byte_ranges(text, &segs.iter().map(|s| (s.start, s.end)).collect::<Vec<_>>());
+    let settings = ExecSettings::from_json(&serde_wasm_bindgen::from_value(settings)?);
+    let js = |v: Vec<exec::Stmt>| {
+        let r = utf16_ranges(text, &v.iter().map(|s| (s.start, s.end)).collect::<Vec<_>>());
+        v.into_iter().zip(r).map(|(s, [start, end])| JsStmt { start, end, sql: s.sql }).collect()
+    };
+    let plan = match exec::plan_in(text, byte_offset(text, offset), &segs, parse_kind(kind)?, settings) {
+        Plan::Nothing => None,
+        Plan::Run(v) => Some(JsPlan::Run(js(v))),
+        Plan::Ask(opts) => Some(JsPlan::Ask(opts.into_iter().map(|(label, v)| JsChoice { label, stmts: js(v) }).collect())),
+    };
+    Ok(serde_wasm_bindgen::to_value(&plan)?)
 }
 
 /// Statement at the caret (a UTF-16 offset, as in a JS string), trimmed; undefined if the text has none
@@ -76,6 +124,26 @@ fn utf16_ranges(text: &str, ranges: &[(usize, usize)]) -> Vec<[usize; 2]> {
         units
     };
     ranges.iter().map(|&(s, e)| [at(s), at(e)]).collect()
+}
+
+/// UTF-16 ranges → byte ranges (each end as byte_offset reads it). One pass while they come in order, like utf16_ranges
+fn byte_ranges(text: &str, ranges: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    let mut it = text.char_indices().peekable();
+    let mut units = 0;
+    let mut at = |u: usize| {
+        if u < units {
+            (it, units) = (text.char_indices().peekable(), 0);
+        }
+        while let Some(&(_, c)) = it.peek() {
+            if units >= u {
+                break;
+            }
+            units += c.len_utf16();
+            it.next();
+        }
+        it.peek().map_or(text.len(), |&(b, _)| b)
+    };
+    ranges.iter().map(|&(s, e)| (at(s), at(e))).collect()
 }
 
 /// UTF-16 offset → byte offset (inside a surrogate pair: the end of that char; past the end: the text's length)
@@ -111,5 +179,9 @@ mod tests {
         // Inside the surrogate pair of 😀 (units 11 and 12): the end of 😀
         let emoji = t.find('😀').unwrap();
         assert_eq!(byte_offset(t, 12), emoji + '😀'.len_utf8());
+        // byte_ranges reads every offset as byte_offset does, in order or not
+        let offs = [0, 9, 11, 12, 13, 15, caret, 10_000, 3];
+        let pairs: Vec<(usize, usize)> = offs.windows(2).map(|w| (w[0], w[1])).collect();
+        assert_eq!(byte_ranges(t, &pairs), pairs.iter().map(|&(a, b)| (byte_offset(t, a), byte_offset(t, b))).collect::<Vec<_>>());
     }
 }

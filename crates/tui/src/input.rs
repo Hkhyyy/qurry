@@ -1468,7 +1468,7 @@ mod tests {
     #[tokio::test]
     async fn execute_smallest_runs_caret_statement() {
         let mut h = Harness::new().await;
-        h.app.exec.inside = crate::exec::Inside::Smallest;
+        h.app.exec.inside = qurry_core::exec::Inside::Smallest;
         h.console_with("BEGIN;\nGRANT a TO x;\n\nGRANT b TO x;\nCOMMIT;", 1, 2);
         h.key("F5");
         assert!(h.app.popup.is_none());

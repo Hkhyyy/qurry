@@ -5,6 +5,7 @@ import "../../lib/monaco";
 import App from "../../App";
 import { dialectOf, type ConnectionView, type QueryResult } from "../../lib/api";
 import { ConnectionDialog } from "../../components/ConnectionDialog";
+import { ConsolePane, SPLITTER_FAILED } from "../../components/ConsolePane";
 import { CopyRowsDialog, GenerateDataDialog } from "../../components/DataTools";
 import { DbaReport } from "../../components/DbaReport";
 import { ErdView } from "../../components/ErdView";
@@ -18,6 +19,7 @@ import { RagView } from "../../components/RagView";
 import { RedisBrowser } from "../../components/RedisBrowser";
 import { ResultChart } from "../../components/ResultChart";
 import { ResultGrid } from "../../components/ResultGrid";
+import { RunningBar } from "../../components/RunningBar";
 import { SearchEverywhere } from "../../components/SearchEverywhere";
 import { Switcher } from "../../components/Switcher";
 import { BackupDialog, ExportDialog, ImportDialog } from "../../components/Transfer";
@@ -180,6 +182,30 @@ export const DbaStale: S = {
 };
 export const Migrate: S = { name: "Compare & Migrate", render: () => <Frame h={600}><MigrateView conns={CONNS} initialConnId="dev" onOpenConsole={noop} onStatus={noop} /></Frame> };
 export const Rag: S = { name: "AI Search (RAG)", render: () => <Frame h={600}><RagView conns={CONNS} runJob={async (_l, run) => run("job")} onStatus={noop} /></Frame> };
+/** ⌘↩ at startup while the WebAssembly module loads: shown like a run, Cancel (or ⌘F2) drops it */
+export const ConsoleSplitterLoading: S = {
+  name: "Console — loading the statement splitter",
+  render: () => (
+    <div style={{ width: 760, border: "1px solid var(--ui-border)" }}>
+      <RunningBar running label="Loading the statement splitter" onCancel={noop} />
+    </div>
+  ),
+};
+/** The module failed to load: the run didn't start and Output says what to do (status bar: "Not run: …") */
+export const ConsoleSplitterFailed: S = {
+  name: "Console — statement splitter couldn't load",
+  render: () => (
+    <Frame h={420}>
+      <ConsolePane
+        tabId="story" target="dev" initialSql={"select * from customers;\nselect 1;"} connName="[DEV] shop_app" kind="postgres" dialect={dialectOf("postgres")} database="shop_app" schema="public"
+        dbList={[]} schemaList={[]} running={false} loadingMore={false} results={[]} activeResult="output"
+        output={[{ ts: "10:24:01", text: SPLITTER_FAILED, level: "error" }]} txManual={false} inTx={false}
+        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onExport={noop} onHistory={noop}
+        onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop}
+      />
+    </Frame>
+  ),
+};
 export const Redis: S = {
   name: "Redis Browser",
   render: () => (
