@@ -1,0 +1,285 @@
+{
+ "request": "Architecture restructure batch, run 5 (merged runs 5+7): core Backend trait for connect/run and jobs, run-4 review findings, finishing audit-followups (held three times), the one-click TLS opt-in UI, TUI color modes (#60), beta/stable releases with an update channel (#58), repo security/contributing docs (#70), macOS 13 minimum (D7), and a new AWS SSM Session Manager tunnel. Decisions: D1 GUI Production confirmation uses the core guard; D2 other GUI/TUI differences are kept behind named options; D5 no TLS one-click for Production (core refuses too); D7 bundle.macOS.minimumSystemVersion = 13.0. The App.tsx / TUI app.rs splits happen in the NEXT run: write new UI in the current files (App.tsx, components, crates/tui/src/app.rs) in small self-contained functions/components so the later move is easy. Every new GUI or TUI UI gets Storybook coverage (GUI stories in src/ui/stories, TUI scenes in src/ui/stories/tui-snapshots.json via the kit_snapshots test).",
+ "base": "feature/architecture",
+ "batch": "feature/architecture",
+ "pr": false,
+ "parallel": 4,
+ "sharedDbs": "PostgreSQL 16 with pgvector at 127.0.0.1:55433 (user postgres, trust auth; QURRY_TEST_PG=127.0.0.1:55433:postgres:postgres), MySQL 8.4 at 127.0.0.1:13306 (root / dbtool, database shop; QURRY_TEST_MY=127.0.0.1:13306:root:dbtool:shop), Redis 7 at 127.0.0.1:16379 (QURRY_TEST_REDIS=127.0.0.1:16379; tests that FLUSHDB must use a db number no other item uses). A mysql client is available by running the mysql:8.4 image as a --rm container named qurry-demo-<x>. Extra servers (e.g. MySQL 5.7, MariaDB) may be started only as qurry-demo-<x> on free ports and must be removed when done. Do not leave dev servers (vite, storybook, preview) or containers running when you finish.",
+ "title": "[feat] One shared Rust core for GUI and TUI (WASM), split App.tsx and the TUI app, common driver interface, beta/stable releases",
+ "items": [
+  {
+   "slug": "audit-followups",
+   "owner": "qurry-security",
+   "branch": "fix/audit-followups",
+   "userVisible": true,
+   "runtime": false,
+   "breaks": "Nobody; Production log entries and the transaction state shown become accurate.",
+   "task": "STATE (2026-11-02): all five findings below are already fixed in commits 6e8607f, 461a7d0, 318bc9f, 102daa9 on fix/audit-followups (pushed). CONTINUE that branch: merge the current feature/architecture into it, re-run the verify list, fix only what fails or what review finds. CONTINUE the existing branch fix/audit-followups (held back three times). First merge the current feature/architecture into it. Fix the open findings from run 4 (full text in .claude/handover/open-findings.md (Run 4 section), item audit-followups): (1) HIGH MariaDB `BEGIN NOT ATOMIC ... END` is logged as COMMIT (implicit) while the transaction stays open: only a bare `begin` / `begin work` (optional `;`) is BEGIN; anything else starting with begin goes through the ask-the-server rule; ignored MariaDB test (qurry-demo-mariadb on a free port, removed afterwards). (2) MEDIUM GUI ProductionLog loses its safety words when the shared WASM is not loaded: keep a minimal fallback (started -> 'no result recorded' warn, error -> 'failed' danger, unknown commit -> warn) and a vitest with shared() uninitialized. (3) LOW the new ignored MySQL tests fail on MySQL 5.7 / MariaDB (CI older-servers job runs `cargo test -p qurry-core --lib -- --ignored`): skip the WITH ... DELETE cases and the 4031 assertion below 8.0 / 8.0.24; prove by running them against a qurry-demo-my57 container. (4) LOW TUI failed-Commit notice overwrites an open popup: show it only when none is open, else chain it with the existing back mechanism. (5) LOW the ask-the-server condition is written twice in mysql.rs: one helper used by both paths. KISS: the smallest correct rule. Note: item core-backend-connect-run runs in parallel and moves MySQL connect code; it was told to leave MySession::run's body in mysql.rs.",
+   "files": [
+    "crates/core/src/mysql.rs",
+    "crates/core/src/app.rs",
+    "crates/core/src/audit.rs",
+    "src/components/ProductionLog.tsx",
+    "crates/tui/src/app.rs",
+    "docs/safety.md",
+    "docs/ko/safety.md"
+   ],
+   "verify": [
+    "cargo test -p qurry-core and the ignored audit/mysql tests on shared PG 16 and MySQL 8.4 (serially), plus on MySQL 5.7 and MariaDB qurry-demo containers",
+    "cargo test -p qurry-tui -p qurry-mcp",
+    "npx tsc --noEmit -p . && npx vitest run"
+   ]
+  },
+  {
+   "slug": "run4-guard-fixes",
+   "owner": "qurry-security",
+   "branch": "fix/run4-guard-fixes",
+   "userVisible": true,
+   "runtime": false,
+   "breaks": "GUI Production users: a multi-statement selection hiding a write is asked about again (as before run 4). Explain Analyse on statements a rollback cannot undo says so. List under Behavior changes.",
+   "task": "STATE (2026-11-02): fix/run4-guard-fixes (pushed) has one unverified [wip] commit 9dfd17c with partial work on (a)-(c). CONTINUE that branch: review the wip diff, finish, verify, and replace the wip commit with proper commits (reset --soft and recommit is fine; it is not merged anywhere). Fix the run-4 review findings of item shared-stmt-kind-exec (full text in .claude/handover/open-findings.md (Run 4 section)). MEDIUM: (a) crates/shared/src/guard.rs is_read accepts a multi-statement chunk, so a write in a DO body or PREPARE string escapes the GUI Production confirmation: split with sql::split_statements(sql, kind) and require every piece to be a read; unit rows + Production e2e rows. (b) Explain Analyse says 'nothing was changed' for writes a rollback can't undo (nextval, setval, dblink_exec, INTO OUTFILE): one core/shared answer 'a rollback can undo this', used by GUI (App.tsx dry/log message) and TUI (app.rs Explain Analyse) the same way; message says side effects are not undone, or ask first; docs en+ko. (c) crates/shared/src/exec.rs: IF/ELSE/WHILE/EXEC start a statement only for T-SQL dialects, not PG/MySQL; corpus row for a PG note line starting with 'If'. LOWs from the same item, fix if small: the deferred ⌘↩ while WASM loads must run the request captured at the press, be cancelled by the toolbar Cancel, on unmount, and skipped if a run started; mysqlDashComment must not decide what runs in MySQL consoles (split like MySQL/TUI); plan_selection exported to WASM so the GUI drops its own copy; keep a statementAt facade so the deleted sqlSplit test returns. Do not touch completion, extract or chart code (other item).",
+   "files": [
+    "crates/shared/src/guard.rs",
+    "crates/shared/src/exec.rs",
+    "crates/shared/src/sql.rs",
+    "crates/shared-wasm/src/lib.rs",
+    "src/lib/stmtKind.ts",
+    "src/lib/sqlSplit.ts",
+    "src/lib/execPlan.ts",
+    "src/components/ConsolePane.tsx",
+    "src/App.tsx",
+    "crates/tui/src/app.rs",
+    "e2e/production.spec.ts",
+    "docs/safety.md",
+    "docs/ko/safety.md",
+    "crates/shared/tests/DIVERGENCES.md"
+   ],
+   "verify": [
+    "cargo test -p qurry-shared -p qurry-core -p qurry-tui and the ignored guard tests on shared PG/MySQL",
+    "npx tsc --noEmit -p . && npx vitest run",
+    "npx playwright test --workers=1 e2e/production.spec.ts e2e/wasm.spec.ts e2e/console*.spec.ts (chromium and webkit)",
+    "parity goldens regenerate with only the intended rows changed"
+   ]
+  },
+  {
+   "slug": "run4-ui-fixes",
+   "owner": "implementer",
+   "branch": "fix/run4-ui-fixes",
+   "userVisible": true,
+   "runtime": false,
+   "breaks": "Nobody; completion inserts correct values and aliases, and copied PostgreSQL SQL matches the grid's own filters.",
+   "task": "STATE (2026-11-02): fix/run4-ui-fixes (pushed) already has c86e02e (completion a+b, tab DB, dedup), 8d711d0 (one PG literal rule, ClickHouse ident), a67085f (chart lows), 4600a2a (value hint corpus), plus an unverified [wip] 72f8ad7 (keymap order/labels, SearchEverywhere/Transfer after WASM, thousands). CONTINUE that branch: finish and verify the wip part, replace the wip commit with proper commits. Fix the run-4 review findings of items shared-completion, shared-grid-format, shared-chart and shared-keymap (full text in .claude/handover/open-findings.md (Run 4 section)). MEDIUM: (a) crates/shared/src/complete.rs hint_insert: insert bare only if the value parses as a numeric/boolean literal and the type matches on word boundaries; otherwise quote; golden for a domain type 'realm_name' with a quote in the value. (b) GUI resolves aliases and value spots against the whole script: narrow to the caret's statement (shared statement_at) for alias/ref resolution in CompletionIndex, same as the TUI; corpus case with two statements reusing an alias. (c) PG copy output now uses E'' while the grid's Dialect.lit still uses the old rule: one PG literal rule for copy formats, filters and edit SQL (the shared sql::literal), noted in the PR. LOWs, fix if small: GUI passes the tab's DB to suggest/hintAt; factor the duplicated alias lookup and REF_KEYWORDS; ClickHouse quote_ident escapes backslashes; thousands formatting gets a golden and a GUI facade or is dropped from scope explicitly; SearchEverywhere/Transfer re-run when WASM becomes ready; parity:dump must not regenerate GUI chart goldens from Rust (freeze them); nice_ticks rounds ties up as JS did; TUI bar labels for float X use the grid's cell text (D2 option); GUI shortcut labels have a small TS fallback when WASM fails; TUI F1/--help keeps the previous command order; Keymap Reference derives its description from the table. Do not touch guard.rs, exec.rs, sqlSplit/execPlan/ConsolePane run logic (other item).",
+   "files": [
+    "crates/shared/src/complete.rs",
+    "crates/shared/src/extract.rs",
+    "crates/shared/src/sql.rs",
+    "crates/shared/src/format.rs",
+    "crates/shared/src/chart.rs",
+    "crates/shared/src/keymap.rs",
+    "crates/shared-wasm/src/lib.rs",
+    "src/lib/completion.ts",
+    "src/lib/api.ts",
+    "src/lib/shortcuts.ts",
+    "src/lib/keymap.ts",
+    "src/components/SearchEverywhere.tsx",
+    "src/components/Transfer.tsx",
+    "src/lib/parity.dump.test.ts",
+    "crates/tui/src/datatools.rs",
+    "crates/tui/src/keys.rs",
+    "crates/shared/tests/DIVERGENCES.md"
+   ],
+   "verify": [
+    "cargo test -p qurry-shared -p qurry-core -p qurry-tui -p qurry-mcp",
+    "npx tsc --noEmit -p . && npx vitest run",
+    "npx playwright test --workers=1 console/completion, grid/copy, chart and keymap specs (chromium and webkit)",
+    "cargo test -p qurry-tui kit_snapshots -- --ignored then git diff --exit-code src/ui/stories/tui-snapshots.json; python3 scripts/gen-keymap-docs.py && git diff --exit-code docs/"
+   ]
+  },
+  {
+   "slug": "core-backend-connect-run",
+   "owner": "qurry-security",
+   "branch": "feature/core-backend-connect-run",
+   "userVisible": false,
+   "runtime": false,
+   "breaks": "Nobody (a move, not new logic).",
+   "task": "STATE (2026-11-02): feature/core-backend-connect-run (pushed) has e70fbbb (the guard-before-backend tripwire tests) and an unfinished [wip] 4cdb2c0. CONTINUE that branch: finish the move, verify, replace the wip commit with proper commits. Move connect_via (db.rs, TLS/plaintext handling), server_version/close/export/run_query/ping (db.rs), sessions (session.rs: PgSession, the generic Session, cancel, execute_batch*), mysql.rs connect, the redisdb dispatch, and app.rs's Pool matches (plaintext_note, ensure_session, run paths around the read_only_violation calls) behind the Backend trait added in run 4 (crates/core/src/backend). New impl sections only, separate from the metadata section. Error texts and guard call order are unchanged; this is a move, not new logic. Leave MySession::run's body (statement/transaction tracking) in mysql.rs as is: audit-followups edits it in parallel. Tests first: backend_matrix; the existing read-only tests (pg_read_only_rejects_writes, MCP execute tests, app.rs tests); a test that the guard runs before the backend on every run path (a fake backend that panics if called for a violating statement). Print the Pool:: match count before and after.",
+   "files": [
+    "crates/core/src/backend/mod.rs",
+    "crates/core/src/backend/pg.rs",
+    "crates/core/src/backend/mysql.rs",
+    "crates/core/src/backend/redis.rs",
+    "crates/core/src/backend/plugin.rs",
+    "crates/core/src/db.rs",
+    "crates/core/src/session.rs",
+    "crates/core/src/mysql.rs",
+    "crates/core/src/redisdb.rs",
+    "crates/core/src/app.rs"
+   ],
+   "verify": [
+    "cargo test -p qurry-core -p qurry-tui -p qurry-mcp",
+    "every ignored test including the TLS ones and backend_matrix against the shared servers",
+    "cargo build -p qurry; cargo clippy (no new warnings)"
+   ]
+  },
+  {
+   "slug": "core-backend-jobs",
+   "owner": "implementer",
+   "branch": "feature/core-backend-jobs",
+   "userVisible": false,
+   "runtime": false,
+   "breaks": "Nobody (a move).",
+   "task": "Move the Pool matches in migrate.rs, transfer.rs and audit.rs behind the Backend trait (crates/core/src/backend), in new impl sections separate from metadata and connect/run (item core-backend-connect-run runs in parallel; conflicts are adjacent insertions, keep both). backup.rs has no Pool match and is not touched. In audit.rs only move the match dispatch; audit-followups edits audit tests in parallel. Tests first: backend_matrix export/migrate/audit cases. Print the Pool:: match count before and after.",
+   "files": [
+    "crates/core/src/migrate.rs",
+    "crates/core/src/transfer.rs",
+    "crates/core/src/audit.rs",
+    "crates/core/src/backend/pg.rs",
+    "crates/core/src/backend/mysql.rs",
+    "crates/core/src/backend/mod.rs"
+   ],
+   "verify": [
+    "cargo test -p qurry-core -p qurry-tui -p qurry-mcp",
+    "cargo test -p qurry-core --test backend_matrix -- --ignored and the ignored migrate/transfer/audit tests on the shared servers",
+    "cargo clippy (no new warnings)"
+   ]
+  },
+  {
+   "slug": "tls-optin-ui",
+   "owner": "qurry-ui",
+   "branch": "feature/tls-optin-ui",
+   "userVisible": true,
+   "runtime": true,
+   "breaks": "Users who connect to a remote PG/MySQL without TLS see a new button or popup in place of a bare error. Nothing changes for anyone else. If turned on by mistake, turn it off in the data source form (Options ▸ Allow unencrypted connection).",
+   "task": "Core support exists from run 3 (tls_opt_in check, allow_plaintext, Production refused in core). Storybook first: a molecule TlsOptIn in src/ui/molecules.tsx with stories for dev (button) and Production (no button; explains where the setting is). GUI, following the DRIVER_MISSING pattern (SchemaTree.tsx Status, ConnectionDialog.tsx): when a tree load error satisfies tls_opt_in (wasm) and the source isn't Production, show 'Allow unencrypted for this data source' with the detail 'The password will be sent unencrypted to <host>. Use only on a network you trust.'; click calls api.allowPlaintext(id) then retry. The same component under a console/table connection error: retry only reconnects and says 'Connected. Run again.', never re-runs the statement. In ConnectionDialog a failed Test Connection with this error offers a button that ticks the form's Allow unencrypted checkbox (unsaved form state, no store write). TUI: a tree load error (next to the plugin::MISSING popup) or a run error opens Popup::Confirm with the same wording; yes calls allow_plaintext, re-expands or reconnects, updates the status line. Production: a status message pointing to the data source form, no confirm. Write the new code as self-contained components/functions (the App.tsx / app.rs split comes next run). Mock: a 'LAN dev' source failing with NEEDS_TLS until allow_plaintext. Docs: data-sources.md, safety.md and docs/ko. Tests first: Playwright (button on dev mock, absent on Production mock, one allow_plaintext call, tree loads, console doesn't re-run, dialog Test ticks the checkbox); TUI harness with an injected error; ignored real-server end-to-end through AppState against qurry-demo-pg at '127.1'; a kit snapshot scene for the popup.",
+   "files": [
+    "src/ui/molecules.tsx",
+    "src/ui/stories/Molecules.stories.tsx",
+    "src/components/SchemaTree.tsx",
+    "src/components/ConnectionDialog.tsx",
+    "src/App.tsx",
+    "src/lib/mock.ts",
+    "e2e/tls-optin.spec.ts",
+    "crates/tui/src/app.rs",
+    "crates/tui/src/tests",
+    "src/ui/stories/tui-snapshots.json",
+    "docs/data-sources.md",
+    "docs/safety.md",
+    "docs/ko/data-sources.md",
+    "docs/ko/safety.md"
+   ],
+   "verify": [
+    "npx playwright test --workers=1 e2e/tls-optin.spec.ts (chromium and webkit), npx vitest run, npx tsc --noEmit -p .",
+    "cargo test -p qurry-core -p qurry-tui and the ignored TLS tests on the shared servers",
+    "pnpm build-storybook succeeds; cargo test -p qurry-tui kit_snapshots -- --ignored shows only the new scene",
+    "manual tmux check of the TUI popup with a scratch --config-dir"
+   ]
+  },
+  {
+   "slug": "tui-color-modes",
+   "owner": "qurry-ui",
+   "branch": "feature/tui-color-modes",
+   "userVisible": true,
+   "runtime": true,
+   "breaks": "Users with NO_COLOR set get a monochrome TUI (that is what NO_COLOR asks for); 256/16-color terminals get a readable palette instead of wrong colors. Recovery: unset NO_COLOR.",
+   "task": "GitHub issue #60 (read it with gh issue view 60). TUI: honor NO_COLOR (no colors, keep bold/reverse so selection and focus stay visible); detect truecolor vs 256 vs 16 colors (COLORTERM, TERM) and map the theme to the nearest palette; a small-terminal layout (below a minimum size show a clear 'terminal too small' message instead of panicking or overlapping). tmux ⌃b keeps its key: document alternatives only. One place decides the color mode (KISS); no new settings unless needed. Storybook: TUI kit snapshot scenes for truecolor, 256, 16 and NO_COLOR (src/ui/stories/tui-snapshots.json and the TUI stories render them). Docs en+ko (TUI guide). Tests first: unit tests for mode detection from env, palette mapping, the too-small message; snapshot scenes.",
+   "files": [
+    "crates/tui/src/theme.rs",
+    "crates/tui/src/main.rs",
+    "crates/tui/src/ui.rs",
+    "crates/tui/src/app.rs",
+    "src/ui/stories/tui-snapshots.json",
+    "src/ui/stories",
+    "docs/tui.md",
+    "docs/ko/tui.md"
+   ],
+   "verify": [
+    "cargo test -p qurry-tui; cargo test -p qurry-tui kit_snapshots -- --ignored shows only the new scenes",
+    "pnpm build-storybook succeeds",
+    "manual tmux checks with TERM=xterm-256color, TERM=xterm (16), NO_COLOR=1 and an 60x15 window, scratch --config-dir"
+   ]
+  },
+  {
+   "slug": "release-channels",
+   "owner": "implementer",
+   "branch": "feature/release-channels",
+   "userVisible": true,
+   "runtime": true,
+   "breaks": "Maintainers: a merge to main now publishes a beta pre-release; stable releases come only from a version tag. App users: default channel is stable, so nobody gets betas unless they opt in. macOS 12 and older can no longer install new versions (D7); they keep the last installed version. List under Behavior changes.",
+   "task": "GitHub issue #58 (gh issue view 58). release.yml: a main merge builds and publishes a beta pre-release (vX.Y.Z-beta.N or the scheme the issue asks for), a pushed vX.Y.Z tag publishes stable; keep pinned SHAs, signing, SHA256SUMS and attestations; PR builds still only build. The updater (crates/core/src/update.rs and the GUI/TUI update check) gets an update-channel setting, default stable, beta opt-in; stable never offers a pre-release; beta offers the newest of both. GUI Settings gets the channel select and the TUI settings the same option; Storybook story for the GUI setting and a TUI snapshot scene. CHANGELOG.md (Keep a Changelog) with this batch's entries so far under Unreleased. D7: src-tauri/tauri.conf.json bundle.macOS.minimumSystemVersion = 13.0, documented in docs/getting-started.md and docs/ko. Tests first: unit tests for channel selection over a fixture release list; the release.yml logic checked with actionlint if available and a dry read of the version step.",
+   "files": [
+    ".github/workflows/release.yml",
+    "crates/core/src/update.rs",
+    "crates/core/src/store.rs",
+    "src-tauri/tauri.conf.json",
+    "src-tauri/src",
+    "src/App.tsx",
+    "src/ui/stories",
+    "crates/tui/src/app.rs",
+    "CHANGELOG.md",
+    "docs/getting-started.md",
+    "docs/ko/getting-started.md",
+    "docs/updates.md",
+    "docs/ko/updates.md"
+   ],
+   "verify": [
+    "cargo test -p qurry-core -p qurry-tui",
+    "npx tsc --noEmit -p . && npx vitest run; Playwright settings spec (chromium)",
+    "pnpm build-storybook succeeds; TUI snapshot only the new scene",
+    "actionlint .github/workflows/release.yml if installed; cargo build -p qurry"
+   ]
+  },
+  {
+   "slug": "repo-docs",
+   "owner": "implementer",
+   "branch": "feature/repo-docs",
+   "userVisible": false,
+   "runtime": false,
+   "breaks": "Nobody (docs only).",
+   "task": "GitHub issue #70 (gh issue view 70). Add SECURITY.md (how to report, supported versions = latest stable), CONTRIBUTING.md (setup incl. D6: rustup target add wasm32-unknown-unknown and the pinned wasm-bindgen-cli version from Cargo.lock, pnpm wasm before tsc, how to run tests incl. real-server ignored tests with qurry-demo containers, Storybook, commit style [feat]/[fix], English in repo, docs/ko kept in sync), .github issue templates (bug, feature) and a PR template, and an MCP threat-model doc (docs/mcp-security.md + docs/ko): what an AI client can reach per access level, read-only enforcement, Production off by default, --allow-write, prompt injection via data, what Qurry does not protect against. Write from the actual code, not assumptions.",
+   "files": [
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    ".github/ISSUE_TEMPLATE",
+    ".github/pull_request_template.md",
+    "docs/mcp-security.md",
+    "docs/ko/mcp-security.md",
+    "README.md"
+   ],
+   "verify": [
+    "every command in CONTRIBUTING.md run once in the worktree and works",
+    "links in the new docs resolve"
+   ]
+  },
+  {
+   "slug": "aws-ssm-tunnel",
+   "owner": "qurry-security",
+   "branch": "feature/aws-ssm-tunnel",
+   "userVisible": true,
+   "runtime": true,
+   "breaks": "Nobody; a new tunnel option. Users need AWS CLI v2 and the Session Manager plugin (brew install --cask session-manager-plugin) only if they use it.",
+   "task": "Add AWS SSM Session Manager as a third tunnel option next to SSH (data source form: None / SSH / AWS SSM). Fields: AWS profile, region, target instance id (plus the remote host/port = the data source host/port). Core: spawn `aws ssm start-session --target <id> --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters host=<db host>,portNumber=<db port>,localPortNumber=<free port> [--profile] [--region]` via tokio::process with kill_on_drop, wait until the local port accepts (with a timeout), connect through 127.0.0.1:<port>, kill on drop (same lifecycle as the SSH Tunnel struct). Qurry stores no AWS secrets: it uses the user's AWS config/SSO. Clear messages: aws CLI not found (install link), session-manager-plugin missing, SSO token expired ('Run: aws sso login --profile <p>'), access denied / target not connected; never echo env or credentials. Validate profile/region/instance id characters before passing them (no shell; args as a vector). Works in GUI (form tab with test), TUI (form fields) and MCP (through core). store.rs: serde-default fields so old connections.json load and older apps keep working; same_ssh/password-reuse rules treat the SSM target as part of the server identity. Storybook first: the SSM tab in the ConnectionDialog stories; TUI form snapshot scene. Docs en+ko (data-sources). Tests first with a fake `aws` script on PATH (scratch dir) that prints the real CLI's messages and listens on the port: success, CLI missing, plugin missing, SSO expired, process exits early, timeout; the process is gone after drop. Real AWS verification is done by the user later: say so in the report.",
+   "files": [
+    "crates/core/src/tunnel.rs",
+    "crates/core/src/ssm.rs",
+    "crates/core/src/store.rs",
+    "crates/core/src/db.rs",
+    "crates/core/src/app.rs",
+    "src/components/ConnectionDialog.tsx",
+    "src/lib/api.ts",
+    "src/lib/mock.ts",
+    "src/ui/stories",
+    "crates/tui/src/app.rs",
+    "src/ui/stories/tui-snapshots.json",
+    "docs/data-sources.md",
+    "docs/ko/data-sources.md"
+   ],
+   "verify": [
+    "cargo test -p qurry-core -p qurry-tui -p qurry-mcp incl. the fake-aws tests",
+    "ignored end-to-end: fake aws forwarding to the shared qurry-demo-pg, connect and run a query through AppState",
+    "npx tsc --noEmit -p . && npx vitest run; Playwright connection-dialog spec with the SSM tab (chromium and webkit)",
+    "pnpm build-storybook succeeds; TUI snapshot only the new scene"
+   ]
+  }
+ ],
+ "repo": "<absolute path of your main checkout>"
+}

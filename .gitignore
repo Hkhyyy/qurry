@@ -48,6 +48,8 @@ secrets.json
 # ── Claude / AI agent local files (the team's agent definitions are shared) ──
 .claude/*
 !.claude/agents/
+!.claude/workflows/
+!.claude/handover/
 CLAUDE.md
 CLAUDE.local.md
 **/CLAUDE.md
