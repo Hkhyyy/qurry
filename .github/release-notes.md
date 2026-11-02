@@ -12,7 +12,7 @@ A free DataGrip alternative for PostgreSQL, MySQL/MariaDB and Redis (Standalone 
 Use any of them on its own or together. When used together they share data sources and passwords. **The TUI works without the GUI** — add and edit connections inside it with `n` / `e`.
 
 ### Install
-**GUI (macOS)** — open the DMG and drag `Qurry.app` into Applications.
+**GUI (macOS 13 Ventura or later)** — open the DMG and drag `Qurry.app` into Applications. On macOS 12 or older, keep Qurry 0.2.x (the last version that runs there); the TUI and MCP server still run.
 The app is not code-signed yet, so the first launch shows an "unidentified developer" / "damaged" warning. Either run
 ```bash
 xattr -dr com.apple.quarantine /Applications/Qurry.app
