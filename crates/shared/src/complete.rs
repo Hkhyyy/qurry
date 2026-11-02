@@ -5,7 +5,7 @@
 //!
 //! Where the two front ends complete differently, they say so with [`Options`] (Options::GUI, Options::TUI).
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A table (or view) with its columns (name, type), as the backend reads them for autocomplete
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,65 +115,73 @@ pub fn is_word(c: char) -> bool {
 }
 
 /// Find `from|join|update|into <ref> [as] [alias]`
-pub fn tables_in_statement(text: &str) -> Vec<(String, Option<String>)> {
-    let toks: Vec<String> = tokenize(text);
+fn tables_in_statement(text: &str) -> Vec<(String, Option<String>)> {
+    let mut toks = Tokens { text, at: 0 };
     let mut out = vec![];
-    for (i, t) in toks.iter().enumerate() {
-        if !["from", "join", "update", "into"].contains(&t.to_lowercase().as_str()) {
+    while let Some(t) = toks.next() {
+        if !["from", "join", "update", "into"].iter().any(|k| t.eq_ignore_ascii_case(k)) {
             continue;
         }
-        let Some(r) = toks.get(i + 1).filter(|r| r.chars().next().is_some_and(|c| is_word(c) || c == '"')) else { continue };
-        let mut j = i + 2;
-        if toks.get(j).is_some_and(|t| t.eq_ignore_ascii_case("as")) {
-            j += 1;
+        // Look ahead without consuming (the ref and alias are still visited as tokens)
+        let mut ahead = toks.clone();
+        let Some(r) = ahead.next().filter(|r| r.chars().next().is_some_and(|c| is_word(c) || c == '"')) else { continue };
+        let mut a = ahead.next();
+        if a.is_some_and(|t| t.eq_ignore_ascii_case("as")) {
+            a = ahead.next();
         }
-        let alias = toks.get(j).filter(|a| a.chars().all(is_word) && !keywords().any(|k| k.eq_ignore_ascii_case(a))).cloned();
+        let alias = a.filter(|a| a.chars().all(is_word) && !keywords().any(|k| k.eq_ignore_ascii_case(a))).map(str::to_string);
         out.push((r.replace('"', ""), alias));
     }
     out
 }
 
-/// Split into words (including `schema.table`, `"quoted"`) and symbols
-fn tokenize(text: &str) -> Vec<String> {
-    let cs: Vec<char> = text.chars().collect();
-    let mut out = vec![];
-    let mut i = 0;
-    while i < cs.len() {
-        let c = cs[i];
+/// Words (including `schema.table`, `"quoted"`) and symbols, as slices of the text; whitespace is skipped
+#[derive(Clone)]
+struct Tokens<'a> {
+    text: &'a str,
+    /// Byte offset where the next token search starts
+    at: usize,
+}
+
+impl<'a> Iterator for Tokens<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<&'a str> {
+        let s = self.text;
+        let ch = |i: usize| s[i..].chars().next();
+        let mut i = self.at;
+        while let Some(c) = ch(i).filter(|c| c.is_whitespace()) {
+            i += c.len_utf8();
+        }
+        let start = i;
+        let c = ch(i)?;
         if is_word(c) || c == '"' {
-            let start = i;
             loop {
-                if i < cs.len() && cs[i] == '"' {
-                    i += 1;
-                    while i < cs.len() && cs[i] != '"' {
-                        i += 1;
-                    }
-                    i = (i + 1).min(cs.len());
+                if s[i..].starts_with('"') {
+                    // To the closing quote, or the end of the text
+                    i = s[i + 1..].find('"').map_or(s.len(), |e| i + e + 2);
                 } else {
-                    while i < cs.len() && is_word(cs[i]) {
-                        i += 1;
+                    while let Some(c) = ch(i).filter(|c| is_word(*c)) {
+                        i += c.len_utf8();
                     }
                 }
                 // schema.table is one token
-                if i + 1 < cs.len() && cs[i] == '.' && (is_word(cs[i + 1]) || cs[i + 1] == '"') {
+                if s[i..].starts_with('.') && ch(i + 1).is_some_and(|c| is_word(c) || c == '"') {
                     i += 1;
                     continue;
                 }
                 break;
             }
-            out.push(cs[start..i].iter().collect());
         } else {
-            if !c.is_whitespace() {
-                out.push(c.to_string());
-            }
-            i += 1;
+            i += c.len_utf8();
         }
+        self.at = i;
+        Some(&s[start..i])
     }
-    out
 }
 
 /// The table a reference names: `schema.table`, or a bare name (in `public` or the tab's DB first, then any schema)
-pub fn find_table<'a>(m: &'a Meta, r: &str, db: &str) -> Option<&'a CompletionTable> {
+fn find_table<'a>(m: &'a Meta, r: &str, db: &str) -> Option<&'a CompletionTable> {
     let r = r.to_lowercase();
     let (schema, name) = match r.split_once('.') {
         Some((s, n)) => (Some(s), n),
@@ -237,10 +245,12 @@ pub fn suggest(m: &Meta, text: &str, before: &str, db: &str, mysql: bool, o: Opt
     }
 
     let mut columns: Vec<Item> = vec![];
+    // Labels already in `columns`: the GUI passes the whole script, which can name thousands of columns
+    let mut seen: HashSet<&str> = HashSet::new();
     for (r, _) in tables_in_statement(text) {
         if let Some(t) = find_table(m, &r, db) {
             for (c, ty) in &t.columns {
-                if matches(c) && !columns.iter().any(|i| &i.label == c) {
+                if matches(c) && seen.insert(c) {
                     columns.push(Item { label: c.clone(), detail: format!("{ty} · {}", t.name), insert: c.clone(), kind: ItemKind::Column });
                 }
             }
@@ -589,6 +599,80 @@ mod tests {
         let all = Meta::new(vec![CompletionTable { schema: "shop".into(), name: "items".into(), columns: vec![] }]);
         let (_, v) = suggest(&all, "select * from it", "select * from it", "shop", true, TUI);
         assert_eq!(v[0].insert, "items");
+    }
+
+    #[test]
+    fn tables_in_statement_reads_refs_and_aliases() {
+        type Refs<'a> = &'a [(&'a str, Option<&'a str>)];
+        let cases: [(&str, Refs); 16] = [
+            ("select * from users u join orders o on o.user_id = u.id", &[("users", Some("u")), ("orders", Some("o"))]),
+            ("select * from billing.invoices as i where i.", &[("billing.invoices", Some("i"))]),
+            (r#"update "public"."users" set email = null"#, &[("public.users", None)]),
+            ("insert into orders (id) values (1)", &[("orders", None)]),
+            ("select * from 주문 where 상태 = 'a'", &[("주문", None)]),
+            ("select * from users where id = 1", &[("users", None)]),
+            ("select * from users left join orders on true", &[("users", None), ("orders", None)]),
+            ("delete from users u where u.id = 1", &[("users", Some("u"))]),
+            ("select * from (select 1) as sub", &[]),
+            (r#"select * from "My Table" t"#, &[("My Table", Some("t"))]),
+            ("select * from users\n join orders o2 using (id)", &[("users", None), ("orders", Some("o2"))]),
+            ("select * from users a, orders b", &[("users", Some("a"))]),
+            ("select * from orders 주 where 주.status = 'x'", &[("orders", Some("주"))]),
+            ("select 'from users x' from orders", &[("users", Some("x")), ("orders", None)]),
+            ("SELECT * FROM Users AS U JOIN Orders O ON TRUE", &[("Users", Some("U")), ("Orders", Some("O"))]),
+            // An unclosed quote runs to the end; emoji and a ref at the very end
+            ("select 😀 from \"un closed", &[("un closed", None)]),
+        ];
+        for (text, want) in cases {
+            let want: Vec<(String, Option<String>)> = want.iter().map(|(r, a)| (r.to_string(), a.map(str::to_string))).collect();
+            assert_eq!(tables_in_statement(text), want, "{text}");
+        }
+    }
+
+    #[test]
+    fn find_table_by_ref() {
+        let t = |s: &str, n: &str| CompletionTable { schema: s.into(), name: n.into(), columns: vec![] };
+        let m = Meta::new(vec![t("public", "users"), t("public", "orders"), t("billing", "invoices"), t("billing", "users"), t("sales", "주문"), t("public", "My Table")]);
+        let cases = [
+            ("users", Some("public.users")),
+            ("USERS", Some("public.users")),
+            ("billing.users", Some("billing.users")),
+            ("BILLING.INVOICES", Some("billing.invoices")),
+            ("invoices", Some("billing.invoices")),
+            ("public.invoices", None),
+            ("nope", None),
+            ("sales.주문", Some("sales.주문")),
+            ("주문", Some("sales.주문")),
+            ("My Table", Some("public.My Table")),
+            ("a.b.c", None),
+        ];
+        for (r, want) in cases {
+            assert_eq!(find_table(&m, r, "").map(|t| format!("{}.{}", t.schema, t.name)).as_deref(), want, "{r}");
+        }
+    }
+
+    /// A long console (the GUI passes the whole script): 300 statements over tables with 20 distinct columns each, ~6k columns.
+    /// Timing only means something in a release build: `cargo test --release -p qurry-shared long_script -- --ignored`
+    #[test]
+    #[ignore = "timing: run with --release"]
+    fn long_script_suggest_is_fast() {
+        let tables: Vec<CompletionTable> = (0..2000)
+            .map(|i| CompletionTable { schema: format!("s{i}"), name: format!("t{i}"), columns: (0..20).map(|c| (format!("c{i}_{c}"), "text".into())).collect() })
+            .collect();
+        let m = Meta::new(tables);
+        let mut text: String = (0..300).map(|i| format!("select * from s{i}.t{i} where id = 1;\n")).collect();
+        text.push_str("select ");
+        let mut times: Vec<std::time::Duration> = (0..50)
+            .map(|_| {
+                let t = std::time::Instant::now();
+                let (_, v) = suggest(&m, &text, "select ", "", false, Options::GUI);
+                assert_eq!(v.iter().filter(|i| i.kind == ItemKind::Column).count(), 6000);
+                t.elapsed()
+            })
+            .collect();
+        times.sort();
+        let p95 = times[times.len() * 95 / 100];
+        assert!(p95 < std::time::Duration::from_millis(5), "p95 {p95:?}");
     }
 
     /// The TUI's completion over tests/corpus/suggest.json (`‸` = cursor), as its update_completion builds it, compared with
