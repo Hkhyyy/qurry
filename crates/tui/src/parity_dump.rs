@@ -2,7 +2,7 @@
 //! and writes crates/shared/tests/goldens/rust/*.json — same ids, keys (the GUI function names) and output shapes as src/lib/parity.dump.test.ts.
 //! `pnpm parity:dump` then compares both sides into crates/shared/tests/DIVERGENCES.md. A `‸` in a corpus text marks the cursor (byte offset here).
 use crate::app::{Tab, TabKind, TableTab};
-use crate::complete::{self, HintAt, HintMode, Meta};
+use qurry_core::complete::{self, HintAt, HintMode, Meta, Options};
 use qurry_core::exec::{self, ExecSettings, Inside, Outside, Plan};
 use crate::grid::{self, Grid};
 use crate::tree::{self, Node, NodeKind};
@@ -97,31 +97,6 @@ fn stmt_golden() -> Golden {
         .collect()
 }
 
-fn completion_golden() -> Golden {
-    let c = corpus("completion");
-    let tables = arr(&c["tables"])
-        .iter()
-        .map(|t| CompletionTable { schema: st(&t["schema"]).into(), name: st(&t["name"]).into(), columns: arr(&t["columns"]).iter().map(|p| (st(&p[0]).into(), st(&p[1]).into())).collect() })
-        .collect();
-    let m = Meta::new(tables);
-    let found = |r: &str| Value::from(complete::find_table(&m, r, "").map(|t| format!("{}.{}", t.schema, t.name)));
-    let mut out = Golden::new();
-    for e in arr(&c["cases"]) {
-        let refs = complete::tables_in_statement(st(&e["text"]));
-        out.insert(
-            st(&e["id"]).into(),
-            json!({
-                "tablesInStatement": refs.iter().map(|(r, a)| json!({ "ref": r, "alias": a })).collect::<Vec<_>>(),
-                "findTable": refs.iter().map(|(r, _)| found(r)).collect::<Vec<_>>(),
-            }),
-        );
-    }
-    for r in arr(&c["refs"]) {
-        out.insert(format!("ref:{}", st(r)), json!({ "findTable": found(st(r)) }));
-    }
-    out
-}
-
 fn hint_golden() -> Golden {
     let mut out = Golden::new();
     for e in arr(&corpus("valuehints")) {
@@ -140,16 +115,16 @@ fn hint_golden() -> Golden {
         };
         let op = (!c.op.is_empty()).then(|| c.op.clone());
         o.insert("hintContext".into(), json!({ "ref": c.r#ref, "column": c.column, "path": c.path, "mode": mode, "quoted": c.quoted, "typed": c.typed, "op": op }));
-        // hint_items builds the inserted text (typed left empty: its prefix filter isn't part of hintInsert)
-        let h = HintAt { schema: String::new(), table: String::new(), column: c.column.clone(), type_name: ty.into(), path: c.path.clone(), mode: c.mode, quoted: c.quoted, typed: String::new(), op: c.op.clone() };
+        // hint_items builds the inserted text (typed left empty: its prefix filter isn't part of hintInsert; a ' after the cursor, so no closing quote is added)
+        let h = HintAt { schema: String::new(), table: String::new(), column: c.column.clone(), type_name: ty.into(), path: c.path.clone(), mode: c.mode, quoted: c.quoted, typed: String::new(), op: c.op.clone(), mysql };
         let hints = [Hint { value: value.into(), count: 1 }];
-        o.insert("hintInsert".into(), complete::hint_items(&h, &hints, false, false)[0].insert.clone().into());
+        o.insert("hintInsert".into(), complete::hint_items(&h, &hints, Some('\''), false, Options::TUI)[0].insert.clone().into());
         // hint_at decides hintable: a one-table statement whose only column is the hinted one
         let name = c.r#ref.clone().unwrap_or_else(|| "t".into());
         let m = Meta::new(vec![CompletionTable { schema: "public".into(), name: name.clone(), columns: vec![(c.column.clone(), ty.into())] }]);
         o.insert("hintable".into(), complete::hint_at(&m, &format!("select * from \"{name}\""), before, "", mysql).is_some().into());
         if c.mode == HintMode::Keys {
-            o.insert("pairsForKeys".into(), complete::hint_items(&h, &hints, false, true)[0].insert.clone().into());
+            o.insert("pairsForKeys".into(), complete::hint_items(&h, &hints, Some('\''), true, Options::TUI)[0].insert.clone().into());
         }
         out.insert(st(&e["id"]).into(), o.into());
     }
@@ -298,7 +273,6 @@ async fn parity_dump() {
     let goldens = [
         ("sql", sql_golden()),
         ("statements", stmt_golden()),
-        ("completion", completion_golden()),
         ("valuehints", hint_golden()),
         ("results", result_golden()),
         ("tablabels", tab_golden(&mut h)),

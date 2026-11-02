@@ -44,6 +44,8 @@ pub mod transfer;
 pub mod tunnel;
 pub mod update;
 pub mod workspaces;
+/// Console autocompletion rules (one copy, also the GUI's through WASM)
+pub use qurry_shared::complete;
 
 /// Same config folder as the Tauri app (shares the Data Source list·encrypted passwords)
 /// macOS: ~/Library/Application Support/com.hyunkyo.dbtool

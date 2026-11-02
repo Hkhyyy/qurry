@@ -154,7 +154,7 @@ async fn completion_popup_lists_and_inserts() {
     h.console_with(sql, 0, 9);
     let t = |n: &str, cols: &[&str]| CompletionTable { schema: "public".into(), name: n.into(), columns: cols.iter().map(|c| (c.to_string(), "text".to_string())).collect() };
     let target = h.app.tabs[h.app.active].target.clone();
-    h.app.completion.insert(target, std::sync::Arc::new(crate::complete::Meta::new(vec![t("users", &["id", "user_name", "email"]), t("orders", &["id", "total"])])));
+    h.app.completion.insert(target, std::sync::Arc::new(qurry_core::complete::Meta::new(vec![t("users", &["id", "user_name", "email"]), t("orders", &["id", "total"])])));
     h.key("Ctrl+Space");
     let items = |h: &Harness| console(h).complete.as_ref().map(|c| c.items.iter().map(|i| i.label.clone()).collect::<Vec<_>>()).unwrap_or_default();
     assert_eq!(items(&h), ["id", "user_name", "email"]);

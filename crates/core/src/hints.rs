@@ -5,7 +5,7 @@ use crate::db::{self, Pool};
 use crate::error::AppResult;
 use crate::sql::quote_ident;
 use crate::store::DbKind;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
@@ -37,11 +37,8 @@ pub struct HintReq {
     pub pairs: bool,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct Hint {
-    pub value: String,
-    pub count: i64,
-}
+/// A suggested value with its row count: defined in qurry_shared::complete, which turns these into candidates
+pub use qurry_shared::complete::Hint;
 
 type Cache = HashMap<String, (Instant, Vec<Hint>)>;
 static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(Default::default);

@@ -1,6 +1,5 @@
 //! Qurry TUI — DataGrip-style terminal client. Uses the same engine (qurry-core)·same Data Sources as the GUI.
 mod app;
-mod complete;
 mod datatools;
 mod designer;
 mod dba;

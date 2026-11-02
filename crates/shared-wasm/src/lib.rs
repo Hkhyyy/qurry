@@ -1,7 +1,7 @@
 //! Thin wasm-bindgen layer over `qurry-shared`: each function takes and returns plain JS values
 //! (converted with serde-wasm-bindgen). Built by `pnpm wasm` into `src/wasm/pkg`.
 //! No logic here except offsets: Rust works in UTF-8 byte offsets, JS strings in UTF-16 code units, so ranges and
-//! caret positions are converted at this boundary. `kind` is a DbKind as stored in connections.json ("postgres", "mysql" …).
+//! caret positions (and CompletionIndex's Monaco columns) are converted at this boundary. `kind` is a DbKind as stored in connections.json ("postgres", "mysql" …).
 //!
 //! The statement checks here (is_read, is_ddl, unsafe_statement) are for UI decisions only: badges, confirm dialogs,
 //! which statements a run counts as reads. They are not a security boundary. Enforcement (read-only Data Sources,
@@ -9,7 +9,9 @@
 
 use qurry_shared::exec::{self, ExecSettings, Plan};
 use qurry_shared::DbKind;
+use qurry_shared::complete::{self, Options};
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -112,6 +114,157 @@ pub fn statement_at(text: &str, offset: usize, kind: JsValue) -> Result<Option<S
     Ok(qurry_shared::sql::statement_at(text, byte_offset(text, offset), parse_kind(kind)?))
 }
 
+/// One connection's completion metadata, indexed once when it loads (src/lib/completion.ts keeps one per connection).
+/// Answers synchronously for Monaco: Options::GUI rules, ranges as 1-based UTF-16 columns on the caret's line
+#[wasm_bindgen]
+pub struct CompletionIndex {
+    meta: complete::Meta,
+    /// The last columns of the statement's tables and their JS array, and the same for the candidates after them (tables,
+    /// schemas, keywords, by what they come from). Both stay the same while typing (Monaco filters them), so thousands of
+    /// candidates are built and cross the boundary once instead of on every key
+    lead: Memo<Vec<complete::Item>>,
+    rest: Memo<complete::Rest>,
+}
+
+type Memo<K> = RefCell<Option<(K, JsValue)>>;
+
+/// The JS value for `key`: the last one when the key is the same, else `make`'s (kept for next time)
+fn reuse<K: PartialEq>(memo: &Memo<K>, key: K, make: impl FnOnce(&K) -> Result<JsValue, JsError>) -> Result<JsValue, JsError> {
+    let mut memo = memo.borrow_mut();
+    if let Some((prev, js)) = &*memo
+        && *prev == key
+    {
+        return Ok(js.clone());
+    }
+    let js = make(&key)?;
+    *memo = Some((key, js.clone()));
+    Ok(js)
+}
+
+/// suggest's answer: the range on the caret's line, then the candidates as `lead` (columns) + `rest`, each reused while unchanged
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SuggestJs {
+    start_column: usize,
+    end_column: usize,
+    #[serde(with = "serde_wasm_bindgen::preserve")]
+    lead: JsValue,
+    #[serde(with = "serde_wasm_bindgen::preserve")]
+    rest: JsValue,
+}
+
+/// Candidates and the range they replace on the caret's line
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Suggestions {
+    start_column: usize,
+    end_column: usize,
+    items: Vec<complete::Item>,
+}
+
+#[wasm_bindgen]
+impl CompletionIndex {
+    /// `tables_json`: the completion_meta result ([{schema, name, columns: [[name, type], …]}, …]) as JSON
+    #[wasm_bindgen(constructor)]
+    pub fn new(tables_json: &str) -> Result<CompletionIndex, JsError> {
+        let tables = serde_json::from_str(tables_json).map_err(|e| JsError::new(&format!("Completion metadata is not in the expected shape ({e})")))?;
+        Ok(CompletionIndex { meta: complete::Meta::new(tables), lead: RefCell::new(None), rest: RefCell::new(None) })
+    }
+
+    /// Candidates at the caret (a UTF-16 offset into `text`), replacing the word before it. `db` is the tab's DB ("" for none).
+    /// {startColumn, endColumn, lead, rest}: the candidates are lead then rest (either may be the same array as last time; don't change them)
+    pub fn suggest(&self, text: &str, caret: usize, db: &str, mysql: bool) -> Result<JsValue, JsError> {
+        let (s, rest) = suggestions(&self.meta, text, caret, db, mysql);
+        let lead = reuse(&self.lead, s.items, |items| Ok(serde_wasm_bindgen::to_value(items)?))?;
+        let rest = match rest {
+            None => serde_wasm_bindgen::to_value(&Vec::<complete::Item>::new())?,
+            Some(r) => reuse(&self.rest, r, |r| Ok(serde_wasm_bindgen::to_value(&complete::rest_items(&self.meta, r, Options::GUI))?))?,
+        };
+        Ok(serde_wasm_bindgen::to_value(&SuggestJs { start_column: s.start_column, end_column: s.end_column, lead, rest })?)
+    }
+
+    /// The value · json key spot at the caret (what to ask meta.hints for), or undefined
+    #[wasm_bindgen(js_name = hintAt)]
+    pub fn hint_at(&self, text: &str, caret: usize, db: &str, mysql: bool) -> Result<JsValue, JsError> {
+        let at = Caret::new(text, caret);
+        Ok(serde_wasm_bindgen::to_value(&complete::hint_at(&self.meta, text, at.before, db, mysql))?)
+    }
+
+    /// What meta.hints returned for `hint` → candidates. as_pairs = keys were asked, none came, so these are @> conditions
+    /// replacing the operator (and a closing quote right after the caret)
+    #[wasm_bindgen(js_name = hintItems)]
+    pub fn hint_items(&self, text: &str, caret: usize, hint: JsValue, hints: JsValue, as_pairs: bool) -> Result<JsValue, JsError> {
+        let (h, hints) = (serde_wasm_bindgen::from_value(hint)?, serde_wasm_bindgen::from_value::<Vec<complete::Hint>>(hints)?);
+        Ok(serde_wasm_bindgen::to_value(&hint_suggestions(text, caret, &h, &hints, as_pairs))?)
+    }
+}
+
+/// The value spot the text before the cursor ends in ({ref, column, path, mode, quoted, typed, op}), or undefined
+#[wasm_bindgen(js_name = hintContext)]
+pub fn hint_context(before: &str, mysql: bool) -> Result<JsValue, JsError> {
+    Ok(serde_wasm_bindgen::to_value(&complete::context(before, mysql))?)
+}
+
+/// Whether a column of this type gets value suggestions at that spot
+#[wasm_bindgen]
+pub fn hintable(ctx: JsValue, type_name: &str) -> Result<bool, JsError> {
+    let c: complete::Ctx = serde_wasm_bindgen::from_value(ctx)?;
+    Ok(complete::hintable(c.mode, &c.path, type_name))
+}
+
+/// Text inserted for a value at that spot (Monaco closes quotes itself, so none is added)
+#[wasm_bindgen(js_name = hintInsert)]
+pub fn hint_insert(value: &str, ctx: JsValue, type_name: &str, mysql: bool) -> Result<String, JsError> {
+    let c: complete::Ctx = serde_wasm_bindgen::from_value(ctx)?;
+    Ok(complete::hint_insert(value, c.mode, &c.path, type_name, c.quoted, false, mysql))
+}
+
+/// Text replacing the operator at a keys spot with no keys: ` @> '[{…}]'`
+#[wasm_bindgen(js_name = pairsInsert)]
+pub fn pairs_insert(value: &str, op: &str) -> String {
+    complete::pairs_insert(value, op)
+}
+
+/// The range and the leading candidates (the statement's columns), and what the rest comes from
+fn suggestions(m: &complete::Meta, text: &str, caret: usize, db: &str, mysql: bool) -> (Suggestions, Option<complete::Rest>) {
+    let at = Caret::new(text, caret);
+    let (n, items, rest) = complete::suggest_lead(m, text, at.before, db, mysql, Options::GUI);
+    let end = at.column();
+    (Suggestions { start_column: end - utf16_tail(at.before, n), end_column: end, items }, rest)
+}
+
+fn hint_suggestions(text: &str, caret: usize, h: &complete::HintAt, hints: &[complete::Hint], as_pairs: bool) -> Suggestions {
+    let at = Caret::new(text, caret);
+    let items = complete::hint_items(h, hints, at.after, as_pairs, Options::GUI);
+    let col = at.column();
+    let (start_column, end_column) = if as_pairs { (col - h.op.encode_utf16().count(), col + usize::from(at.after == Some('\''))) } else { (col - h.typed.encode_utf16().count(), col) };
+    Suggestions { start_column, end_column, items }
+}
+
+/// The caret's line up to the caret, and the character after it
+struct Caret<'a> {
+    before: &'a str,
+    after: Option<char>,
+}
+
+impl<'a> Caret<'a> {
+    fn new(text: &'a str, utf16: usize) -> Self {
+        let b = byte_offset(text, utf16);
+        let start = text[..b].rfind('\n').map_or(0, |i| i + 1);
+        Caret { before: &text[start..b], after: text[b..].chars().next() }
+    }
+
+    /// Monaco column of the caret (1-based, UTF-16)
+    fn column(&self) -> usize {
+        self.before.encode_utf16().count() + 1
+    }
+}
+
+/// UTF-16 length of the last `chars` characters of `s`
+fn utf16_tail(s: &str, chars: usize) -> usize {
+    s.chars().rev().take(chars).map(char::len_utf16).sum()
+}
+
 /// Byte ranges → UTF-16 ranges. split_* returns them in order, on char boundaries, so one pass over the text converts them all
 fn utf16_ranges(text: &str, ranges: &[(usize, usize)]) -> Vec<[usize; 2]> {
     let (mut byte, mut units) = (0, 0);
@@ -183,5 +336,52 @@ mod tests {
         let offs = [0, 9, 11, 12, 13, 15, caret, 10_000, 3];
         let pairs: Vec<(usize, usize)> = offs.windows(2).map(|w| (w[0], w[1])).collect();
         assert_eq!(byte_ranges(t, &pairs), pairs.iter().map(|&(a, b)| (byte_offset(t, a), byte_offset(t, b))).collect::<Vec<_>>());
+    }
+
+    fn index() -> complete::Meta {
+        let t = |s: &str, n: &str, cols: &[(&str, &str)]| complete::CompletionTable { schema: s.into(), name: n.into(), columns: cols.iter().map(|(c, ty)| (c.to_string(), ty.to_string())).collect() };
+        complete::Meta::new(vec![t("sales", "주문", &[("번호", "int4"), ("상태", "text")]), t("public", "😀 emoji", &[("값", "text")]), t("public", "orders", &[("reasons", "jsonb")])])
+    }
+
+    /// JS offset of the ‸ in `s`, and `s` without it
+    fn caret(s: &str) -> (String, usize) {
+        let at = s.find('‸').unwrap();
+        (s.replacen('‸', "", 1), s[..at].encode_utf16().count())
+    }
+
+    /// Monaco columns count UTF-16 units: 😀 is two, 한 one; the range is the word before the caret on the caret's line
+    #[test]
+    fn suggest_ranges_are_utf16_columns() {
+        let m = index();
+        let (t, c) = caret("select '😀😀' as x,\n  '😀' || 상‸ from sales.주문");
+        let (s, _) = suggestions(&m, &t, c, "", false);
+        assert_eq!((s.start_column, s.end_column), (11, 12), "line 2: two spaces, '😀' (4 units), ' || ' (4), then 상 at column 11");
+        assert!(s.items.iter().any(|i| i.label == "상태"));
+        let (t, c) = caret("select e.‸ from \"😀 emoji\" e");
+        let (s, _) = suggestions(&m, &t, c, "", false);
+        assert_eq!(((s.start_column, s.end_column), s.items[0].label.as_str()), ((10, 10), "값"));
+        let (t, c) = caret("select 주.번‸ from sales.주문 주");
+        let (s, _) = suggestions(&m, &t, c, "", false);
+        assert_eq!(((s.start_column, s.end_column), s.items.len()), ((10, 11), 2));
+    }
+
+    #[test]
+    fn hint_ranges_are_utf16_columns() {
+        let m = index();
+        let (t, c) = caret("select '😀' a from sales.주문 where 상태 = '완‸'");
+        let at = Caret::new(&t, c);
+        let h = complete::hint_at(&m, &t, at.before, "", false).unwrap();
+        let hints = [complete::Hint { value: "완료😀".into(), count: 1 }];
+        let s = hint_suggestions(&t, c, &h, &hints, false);
+        // 'select ' 7 + '😀' 4 + ' a from sales.주문 where 상태 = ' 28 + ' 1 = 40 units before 완
+        assert_eq!((s.start_column, s.end_column, s.items[0].insert.as_str()), (41, 42, "완료😀"));
+        // @> instead of keys: the operator and the auto-closed quote are replaced too
+        let (t, c) = caret("select '😀' from orders where reasons ->> '‸'");
+        let at = Caret::new(&t, c);
+        let h = complete::hint_at(&m, &t, at.before, "", false).unwrap();
+        let s = hint_suggestions(&t, c, &h, &[complete::Hint { value: r#"[{"k": "v"}]"#.into(), count: 2 }], true);
+        let units: Vec<u16> = t.encode_utf16().collect();
+        assert_eq!(String::from_utf16(&units[s.start_column - 1..s.end_column - 1]).unwrap(), " ->> ''");
+        assert_eq!(s.items[0].insert, r#" @> '[{"k": "v"}]'"#);
     }
 }

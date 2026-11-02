@@ -1,0 +1,329 @@
+{
+  "alias-dot": {
+    "prefix": 0,
+    "items": [
+      {"detail":"int8","insert":"id","kind":"Column","label":"id"},
+      {"detail":"varchar","insert":"user_name","kind":"Column","label":"user_name"},
+      {"detail":"text","insert":"email","kind":"Column","label":"email"}
+    ]
+  },
+  "alias-dot-prefix": {
+    "prefix": 2,
+    "items": [
+      {"detail":"varchar","insert":"user_name","kind":"Column","label":"user_name"}
+    ]
+  },
+  "columns-of-statement": {
+    "prefix": 1,
+    "items": [
+      {"detail":"varchar · users","insert":"user_name","kind":"Column","label":"user_name"},
+      {"detail":"public","insert":"users","kind":"Table","label":"users"},
+      {"detail":"billing","insert":"billing.users","kind":"Table","label":"users"},
+      {"detail":"keyword","insert":"using","kind":"Keyword","label":"using"},
+      {"detail":"keyword","insert":"union","kind":"Keyword","label":"union"},
+      {"detail":"keyword","insert":"update","kind":"Keyword","label":"update"}
+    ]
+  },
+  "emoji-before-word": {
+    "prefix": 2,
+    "items": [
+      {"detail":"varchar · users","insert":"user_name","kind":"Column","label":"user_name"},
+      {"detail":"public","insert":"users","kind":"Table","label":"users"},
+      {"detail":"billing","insert":"billing.users","kind":"Table","label":"users"},
+      {"detail":"keyword","insert":"using","kind":"Keyword","label":"using"}
+    ]
+  },
+  "emoji-quoted-table": {
+    "prefix": 0,
+    "items": [
+      {"detail":"text","insert":"값","kind":"Column","label":"값"}
+    ]
+  },
+  "empty-prefix": {
+    "prefix": 0,
+    "items": [
+      {"detail":"billing","insert":"billing.invoices","kind":"Table","label":"invoices"},
+      {"detail":"shop","insert":"shop.items","kind":"Table","label":"items"},
+      {"detail":"public","insert":"orders","kind":"Table","label":"orders"},
+      {"detail":"public","insert":"sales","kind":"Table","label":"sales"},
+      {"detail":"public","insert":"users","kind":"Table","label":"users"},
+      {"detail":"billing","insert":"billing.users","kind":"Table","label":"users"},
+      {"detail":"sales","insert":"sales.주문","kind":"Table","label":"주문"},
+      {"detail":"public","insert":"😀 emoji","kind":"Table","label":"😀 emoji"},
+      {"detail":"schema","insert":"billing","kind":"Schema","label":"billing"},
+      {"detail":"schema","insert":"public","kind":"Schema","label":"public"},
+      {"detail":"schema","insert":"sales","kind":"Schema","label":"sales"},
+      {"detail":"schema","insert":"shop","kind":"Schema","label":"shop"}
+    ]
+  },
+  "hint-backslash-bare": {
+    "hint": {"asked":["values"],"column":"status","path":[],"schema":"public","table":"orders"},
+    "prefix": 0,
+    "items": [
+      {"detail":"1 row","insert":"'x\\'' or 1=1 -- '","kind":"Value","label":"x\\' or 1=1 -- "}
+    ]
+  },
+  "hint-bytea-quoted": {
+    "prefix": 2,
+    "items": [
+      {"detail":"int8 · orders","insert":"user_id","kind":"Column","label":"user_id"},
+      {"detail":"public","insert":"users","kind":"Table","label":"users"},
+      {"detail":"billing","insert":"billing.users","kind":"Table","label":"users"},
+      {"detail":"keyword","insert":"using","kind":"Keyword","label":"using"}
+    ]
+  },
+  "hint-keys-quoted": {
+    "hint": {"asked":["keys"],"column":"data","path":[],"schema":"public","table":"orders"},
+    "prefix": 0,
+    "items": [
+      {"detail":"30 rows · key","insert":"kind'","kind":"Value","label":"kind"},
+      {"detail":"30 rows · key","insert":"meta'","kind":"Value","label":"meta"}
+    ]
+  },
+  "hint-keys-to-pairs": {
+    "hint": {"asked":["keys","pairs"],"column":"reasons","path":[],"schema":"public","table":"orders"},
+    "prefix": 5,
+    "items": [
+      {"detail":"30 rows","insert":" @> '[{\"code\": \"overpay\"}]'","kind":"Value","label":"@> '[{\"code\": \"overpay\"}]'"},
+      {"detail":"1 row","insert":" @> '[{\"code\": \"it''s\"}]'","kind":"Value","label":"@> '[{\"code\": \"it's\"}]'"}
+    ]
+  },
+  "hint-korean-value": {
+    "hint": {"asked":["values"],"column":"상태","path":[],"schema":"sales","table":"주문"},
+    "prefix": 1,
+    "items": [
+      {"detail":"5 rows","insert":"완료😀'","kind":"Value","label":"완료😀"}
+    ]
+  },
+  "hint-mysql-backslash-bare": {
+    "hint": {"asked":["values"],"column":"sku","path":[],"schema":"shop","table":"items"},
+    "prefix": 0,
+    "items": [
+      {"detail":"1 row","insert":"'x\\\\'' or 1=1 -- '","kind":"Value","label":"x\\' or 1=1 -- "}
+    ]
+  },
+  "hint-mysql-backslash-quoted": {
+    "hint": {"asked":["values"],"column":"sku","path":[],"schema":"shop","table":"items"},
+    "prefix": 0,
+    "items": [
+      {"detail":"1 row","insert":"a\\\\b''s'","kind":"Value","label":"a\\b's"}
+    ]
+  },
+  "hint-mysql-keys": {
+    "hint": {"asked":["keys"],"column":"data","path":[],"schema":"shop","table":"items"},
+    "prefix": 0,
+    "items": [
+      {"detail":"4 rows · key","insert":"sku'","kind":"Value","label":"sku"}
+    ]
+  },
+  "hint-mysql-no-pairs": {
+    "prefix": 0,
+    "items": [
+      {"detail":"int · items","insert":"id","kind":"Column","label":"id"},
+      {"detail":"varchar(20) · items","insert":"sku","kind":"Column","label":"sku"},
+      {"detail":"json · items","insert":"data","kind":"Column","label":"data"},
+      {"detail":"billing","insert":"billing.invoices","kind":"Table","label":"invoices"},
+      {"detail":"shop","insert":"items","kind":"Table","label":"items"},
+      {"detail":"public","insert":"orders","kind":"Table","label":"orders"},
+      {"detail":"public","insert":"sales","kind":"Table","label":"sales"},
+      {"detail":"public","insert":"users","kind":"Table","label":"users"},
+      {"detail":"billing","insert":"billing.users","kind":"Table","label":"users"},
+      {"detail":"sales","insert":"sales.주문","kind":"Table","label":"주문"},
+      {"detail":"public","insert":"😀 emoji","kind":"Table","label":"😀 emoji"},
+      {"detail":"schema","insert":"billing","kind":"Schema","label":"billing"},
+      {"detail":"schema","insert":"public","kind":"Schema","label":"public"},
+      {"detail":"schema","insert":"sales","kind":"Schema","label":"sales"},
+      {"detail":"schema","insert":"shop","kind":"Schema","label":"shop"}
+    ]
+  },
+  "hint-number-bare": {
+    "hint": {"asked":["values"],"column":"id","path":[],"schema":"public","table":"orders"},
+    "prefix": 0,
+    "items": [
+      {"detail":"3 rows","insert":"7","kind":"Value","label":"7"}
+    ]
+  },
+  "hint-pairs": {
+    "hint": {"asked":["pairs"],"column":"reasons","path":[],"schema":"public","table":"orders"},
+    "prefix": 0,
+    "items": [
+      {"detail":"30 rows","insert":"[{\"code\": \"overpay\"}]","kind":"Value","label":"[{\"code\": \"overpay\"}]"}
+    ]
+  },
+  "hint-values-bare": {
+    "hint": {"asked":["values"],"column":"status","path":[],"schema":"public","table":"orders"},
+    "prefix": 0,
+    "items": [
+      {"detail":"1,234 rows","insert":"'ready'","kind":"Value","label":"ready"}
+    ]
+  },
+  "hint-values-quoted": {
+    "hint": {"asked":["values"],"column":"status","path":[],"schema":"public","table":"orders"},
+    "prefix": 0,
+    "items": [
+      {"detail":"20 rows","insert":"ready'","kind":"Value","label":"ready"},
+      {"detail":"10 rows","insert":"paid'","kind":"Value","label":"paid"},
+      {"detail":"1 row","insert":"it''s late'","kind":"Value","label":"it's late"}
+    ]
+  },
+  "hint-values-typed-closed": {
+    "hint": {"asked":["values"],"column":"status","path":[],"schema":"public","table":"orders"},
+    "prefix": 2,
+    "items": [
+      {"detail":"10 rows","insert":"paid","kind":"Value","label":"paid"}
+    ]
+  },
+  "keyword": {
+    "prefix": 3,
+    "items": [
+      {"detail":"keyword","insert":"select","kind":"Keyword","label":"select"}
+    ]
+  },
+  "korean-alias-dot": {
+    "prefix": 0,
+    "items": [
+      {"detail":"int4","insert":"번호","kind":"Column","label":"번호"},
+      {"detail":"text","insert":"상태","kind":"Column","label":"상태"}
+    ]
+  },
+  "korean-prefix": {
+    "prefix": 1,
+    "items": [
+      {"detail":"sales","insert":"sales.주문","kind":"Table","label":"주문"}
+    ]
+  },
+  "korean-schema-columns": {
+    "prefix": 1,
+    "items": [
+      {"detail":"text · 주문","insert":"상태","kind":"Column","label":"상태"}
+    ]
+  },
+  "multiline": {
+    "prefix": 2,
+    "items": [
+      {"detail":"varchar","insert":"status","kind":"Column","label":"status"}
+    ]
+  },
+  "mysql-db-schema": {
+    "prefix": 2,
+    "items": [
+      {"detail":"shop","insert":"items","kind":"Table","label":"items"}
+    ]
+  },
+  "newline-join-using": {
+    "prefix": 0,
+    "items": [
+      {"detail":"int8","insert":"id","kind":"Column","label":"id"},
+      {"detail":"int8","insert":"user_id","kind":"Column","label":"user_id"},
+      {"detail":"varchar","insert":"status","kind":"Column","label":"status"},
+      {"detail":"jsonb","insert":"data","kind":"Column","label":"data"},
+      {"detail":"bytea","insert":"raw","kind":"Column","label":"raw"},
+      {"detail":"jsonb","insert":"reasons","kind":"Column","label":"reasons"}
+    ]
+  },
+  "other-schema-insert": {
+    "prefix": 3,
+    "items": [
+      {"detail":"billing","insert":"billing.invoices","kind":"Table","label":"invoices"}
+    ]
+  },
+  "prefix-u": {
+    "prefix": 1,
+    "items": [
+      {"detail":"public","insert":"users","kind":"Table","label":"users"},
+      {"detail":"billing","insert":"billing.users","kind":"Table","label":"users"},
+      {"detail":"keyword","insert":"using","kind":"Keyword","label":"using"},
+      {"detail":"keyword","insert":"union","kind":"Keyword","label":"union"},
+      {"detail":"keyword","insert":"update","kind":"Keyword","label":"update"}
+    ]
+  },
+  "quiet-space": {
+    "prefix": 0,
+    "items": [
+      {"detail":"int8 · orders","insert":"id","kind":"Column","label":"id"},
+      {"detail":"int8 · orders","insert":"user_id","kind":"Column","label":"user_id"},
+      {"detail":"varchar · orders","insert":"status","kind":"Column","label":"status"},
+      {"detail":"jsonb · orders","insert":"data","kind":"Column","label":"data"},
+      {"detail":"bytea · orders","insert":"raw","kind":"Column","label":"raw"},
+      {"detail":"jsonb · orders","insert":"reasons","kind":"Column","label":"reasons"},
+      {"detail":"billing","insert":"billing.invoices","kind":"Table","label":"invoices"},
+      {"detail":"shop","insert":"shop.items","kind":"Table","label":"items"},
+      {"detail":"public","insert":"orders","kind":"Table","label":"orders"},
+      {"detail":"public","insert":"sales","kind":"Table","label":"sales"},
+      {"detail":"public","insert":"users","kind":"Table","label":"users"},
+      {"detail":"billing","insert":"billing.users","kind":"Table","label":"users"},
+      {"detail":"sales","insert":"sales.주문","kind":"Table","label":"주문"},
+      {"detail":"public","insert":"😀 emoji","kind":"Table","label":"😀 emoji"},
+      {"detail":"schema","insert":"billing","kind":"Schema","label":"billing"},
+      {"detail":"schema","insert":"public","kind":"Schema","label":"public"},
+      {"detail":"schema","insert":"sales","kind":"Schema","label":"sales"},
+      {"detail":"schema","insert":"shop","kind":"Schema","label":"shop"}
+    ]
+  },
+  "quoted-table-dot": {
+    "prefix": 0,
+    "items": [
+      {"detail":"text","insert":"값","kind":"Column","label":"값"}
+    ]
+  },
+  "quoted-table-dot-no-from": {
+    "prefix": 0,
+    "items": [
+      {"detail":"text","insert":"값","kind":"Column","label":"값"}
+    ]
+  },
+  "schema-dot": {
+    "prefix": 0,
+    "items": [
+      {"detail":"2 cols","insert":"invoices","kind":"Table","label":"invoices"},
+      {"detail":"2 cols","insert":"users","kind":"Table","label":"users"}
+    ]
+  },
+  "schema-dot-prefix": {
+    "prefix": 3,
+    "items": [
+      {"detail":"2 cols","insert":"invoices","kind":"Table","label":"invoices"}
+    ]
+  },
+  "schema-named-like-table": {
+    "prefix": 0,
+    "items": [
+      {"detail":"2 cols","insert":"주문","kind":"Table","label":"주문"}
+    ]
+  },
+  "schema-named-like-table-no-from": {
+    "prefix": 0,
+    "items": [
+      {"detail":"2 cols","insert":"주문","kind":"Table","label":"주문"}
+    ]
+  },
+  "table-dot": {
+    "prefix": 0,
+    "items": [
+      {"detail":"int8","insert":"id","kind":"Column","label":"id"},
+      {"detail":"int8","insert":"user_id","kind":"Column","label":"user_id"},
+      {"detail":"varchar","insert":"status","kind":"Column","label":"status"},
+      {"detail":"jsonb","insert":"data","kind":"Column","label":"data"},
+      {"detail":"bytea","insert":"raw","kind":"Column","label":"raw"},
+      {"detail":"jsonb","insert":"reasons","kind":"Column","label":"reasons"}
+    ]
+  },
+  "table-dot-no-from": {
+    "prefix": 0,
+    "items": [
+      {"detail":"int8","insert":"id","kind":"Column","label":"id"},
+      {"detail":"varchar","insert":"user_name","kind":"Column","label":"user_name"},
+      {"detail":"text","insert":"email","kind":"Column","label":"email"}
+    ]
+  },
+  "table-named-like-schema": {
+    "prefix": 0,
+    "items": [
+      {"detail":"text","insert":"region","kind":"Column","label":"region"}
+    ]
+  },
+  "typed-word": {
+    "prefix": 5,
+    "items": []
+  }
+}
