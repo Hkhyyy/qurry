@@ -7,6 +7,7 @@ Everything Qurry does, chapter by chapter. Start with **Getting started** if you
 | Chapter | What's in it |
 |---|---|
 | [Getting started](getting-started.md) | Install, updates, your first data source and query (GUI and TUI), where settings are kept |
+| [Updates](updates.md) | Stable and beta update channels, in-app updates, macOS 12, how releases are made |
 | [Data sources](data-sources.md) | Supported databases, SSH / SSL and connection options, Production mode, drivers |
 | [Workspaces](workspaces.md) | Separate sets of tabs and data sources, each with its own explorer |
 | [Database tools](database-tools.md) | Admin reports (sessions, locks, slow queries, sizes, vacuum, privileges), diagrams, compare & migrate, backup & restore, creating and modifying tables / views / schemas, import (CSV / JSON / Excel), test data, copying related rows with masking, charts, history & snippets, explain plans |

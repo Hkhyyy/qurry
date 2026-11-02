@@ -25,7 +25,7 @@ All three share the same data sources and passwords, so a connection created in 
 brew install hkhyyy/qurry/qurry      # TUI + MCP (macOS, Linux)
 ```
 
-The desktop app (macOS `.dmg`, Linux `.AppImage` / `.deb`) and the TUI archives are on the [Releases](https://github.com/Hkhyyy/qurry/releases) page. Both apps tell you when a new version is out and update themselves. Details, including the first-launch warning on macOS: [Getting started](docs/getting-started.md).
+The desktop app (macOS 13+ `.dmg`, Linux `.AppImage` / `.deb`) and the TUI archives are on the [Releases](https://github.com/Hkhyyy/qurry/releases) page. Both apps tell you when a new version is out and update themselves. Details, including the first-launch warning on macOS: [Getting started](docs/getting-started.md).
 
 ## User guide
 
