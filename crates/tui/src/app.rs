@@ -870,7 +870,12 @@ impl App {
         let Some(c) = self.conn(conn).map(|c| c.config.clone()) else { return };
         // Short enough for the status line next to the key hints on a 120-column terminal
         if c.options.confirm_changes {
-            self.status = "Production: turn on \"Allow unencrypted\" in its form (e) yourself".into();
+            self.status = "Production: trusted network only — explorer: e › \"Allow unencrypted\"".into();
+            return;
+        }
+        // This comes back from a background load: never replace a popup the user is reading (a y meant for it would allow plaintext)
+        if self.popup.is_some() {
+            self.status = format!("\"{}\": the server has no TLS — expand or run again to allow unencrypted", c.name);
             return;
         }
         self.popup = Some(Popup::Confirm {

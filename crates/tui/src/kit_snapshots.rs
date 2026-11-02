@@ -267,7 +267,8 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         on_yes: Box::new(|_| {}),
     });
     scenes.push(app_scene(h, "Copy related rows", "⌃k › Copy Related Rows To: FK 로 이어진 행 · 가린 개인정보 컬럼을 보여 주고 확인", 120, 22));
-    // TLS opt-in: a dev source's connect error that needs TLS (Production gets only a status line)
+    // TLS opt-in: a dev source's connect error that needs TLS (Production gets only a status line). It never replaces an open popup
+    h.app.popup = None;
     h.app.offer_tls_opt_in("dev", &qurry_shared::errors::needs_tls_pg(), |_| {});
     scenes.push(app_scene(h, "Allow unencrypted", "TLS 가 없는 원격 서버에 연결 실패: 개발 Data Source 는 이 Data Source 만 암호화 없이 허용할지 묻는다 (운영은 상태 줄 안내만)", 120, 22));
     h.app.popup = None;

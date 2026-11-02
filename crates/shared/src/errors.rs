@@ -11,9 +11,11 @@ pub fn needs_tls_pg() -> String {
     NEEDS_TLS.replace(" without TLS 1.2", "")
 }
 
-/// The connect error is one where turning on "Allow unencrypted connection" for the source is the way forward
+/// The connect error is one where turning on "Allow unencrypted connection" for the source is the way forward. Only the core's own error, which
+/// starts with the text: a server error that only quotes it (RAISE EXCEPTION, a cast error echoing a value) must not offer to turn off TLS
 pub fn tls_opt_in(msg: &str) -> bool {
-    msg.contains(NEEDS_TLS) || msg.contains(DROPPED_TLS) || msg.contains(&needs_tls_pg())
+    let m = msg.trim_start();
+    m.starts_with(NEEDS_TLS) || m.starts_with(DROPPED_TLS) || m.starts_with(&needs_tls_pg())
 }
 
 #[cfg(test)]
@@ -28,6 +30,10 @@ mod tests {
         assert!(!needs_tls_pg().contains("TLS 1.2") && needs_tls_pg().contains("didn't send the password"));
         for m in ["", "error communicating with database: Connection refused", "password authentication failed for user \"u\"", "TLS handshake failed"] {
             assert!(!tls_opt_in(m), "{m}");
+        }
+        // A server error quoting the text (RAISE EXCEPTION, a cast error echoing a row value) isn't the core's connect error
+        for m in [format!("error returned from database: {NEEDS_TLS}"), format!("ERROR: {}", needs_tls_pg()), format!("invalid input syntax for type integer: \"{DROPPED_TLS}\"")] {
+            assert!(!tls_opt_in(&m), "{m}");
         }
     }
 }
