@@ -129,3 +129,29 @@ test("dialog: for Production it points at this dialog's Options tab, not at ⌘;
   await expect(box).toContainText("turn on Options ▸ Allow unencrypted connection.");
   await expect(box).not.toContainText("⌘;");
 });
+
+test("dialog: after Allow the focus stays in the dialog and Escape still closes it", async ({ page }) => {
+  await openApp(page);
+  await treeNode(page, "LAN dev").click();
+  await page.keyboard.press("Meta+;");
+  await dialog(page).getByRole("button", { name: "Test Connection" }).click();
+  await dialog(page).getByRole("button", { name: ALLOW }).click();
+  await expect(dialog(page).locator(".ui-notice")).toContainText("✓ PostgreSQL");
+  await expect(dialog(page).getByRole("button", { name: "Test Connection" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog(page)).toHaveCount(0);
+});
+
+test("table tab: Enter on the button reloads the table and the keys stay in its grid", async ({ page }) => {
+  const tab = { kind: "table", title: "users", connId: "lan", group: 0, sql: "", where: "", orderBy: "", edit: { schema: "public", table: "users" } };
+  const ws = { version: 2, shared: true, current: "ws1", workspaces: [{ id: "ws1", name: "Default", connIds: ["lan"], tabs: [tab] }] };
+  await page.addInitScript((w) => localStorage.setItem("mock-ws", w), JSON.stringify(ws));
+  await openApp(page);
+  const button = work(page).getByRole("button", { name: ALLOW });
+  await expect(button).toBeVisible();
+  await button.focus();
+  await page.keyboard.press("Enter");
+  await expect(work(page).locator(".grid-overlay")).toHaveCount(0);
+  expect((await calls(page)).allow).toBe(1);
+  await expect(work(page).locator(".grid-scroll")).toBeFocused();
+});

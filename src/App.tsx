@@ -1273,6 +1273,8 @@ export default function App() {
     }
     refresh();
   };
+  /** The table tab's grid takes the keys (the error and its button are about to go away) */
+  const focusTableGrid = (tabId: string) => document.querySelector<HTMLElement>(`.work-layer[data-tab="${tabId}"] .grid-scroll`)?.focus();
   /** Result tab title: leading comment of the query → table name → Result N (DataGrip) */
   const resultTitle = (sql: string, n: number) => {
     const c = /^\s*(?:--\s*(.+)|\/\*\s*([\s\S]*?)\*\/)/.exec(sql);
@@ -2398,14 +2400,14 @@ export default function App() {
           {gTabs
             .filter((t) => t.kind === "table")
             .map((t) => (
-              <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
+              <div key={t.id} className="work-layer" data-tab={t.id} style={{ display: t.id === ga?.id ? "block" : "none" }}>
                 <TableEditor
                   title={t.title}
                   where={t.where}
                   orderBy={t.orderBy}
                   running={t.running}
                   error={t.error}
-                  errorAction={<TlsFix conn={conns.find((x) => x.id === t.connId)} msg={t.error} then={() => reconnectAfterTls(t.connId)} />}
+                  errorAction={<TlsFix conn={conns.find((x) => x.id === t.connId)} msg={t.error} then={() => (focusTableGrid(t.id), reconnectAfterTls(t.connId))} />}
                   result={t.result}
                   query={t.lastSql}
                   edit={t.edit && t.lastSql === t.tableSql ? t.edit : undefined}

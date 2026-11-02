@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Button, Checkbox, ColorPicker, EmptyState, FormGrid, FormSection, Hint, Modal, Notice, Select, Spacer, Tabs, Text, TextArea, TextInput, TlsOptIn } from "../ui";
 import { needsTlsOptIn } from "./TlsFix";
@@ -27,6 +27,8 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
   const [password, setPassword] = useState<string | undefined>(undefined);
   const [sshSecret, setSshSecret] = useState<string | undefined>(undefined);
   const [test, setTest] = useState<{ ok: boolean; msg: string } | null>(null);
+  // The Allow button under a failed test goes away when it tests again: focus lands here so Escape still closes the dialog
+  const testButton = useRef<HTMLButtonElement>(null);
   const [busy, setBusy] = useState(false);
   // Driver plugin: whether it is installed (null = built-in DB)
   const [driver, setDriver] = useState<boolean | null>(null);
@@ -122,7 +124,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
       onClose={onClose}
       footer={
         <>
-          <Button onClick={() => runTest()} disabled={busy}>
+          <Button ref={testButton} onClick={() => runTest()} disabled={busy}>
             {busy ? "Testing…" : tab === "ssh" ? "Test SSH Connection" : "Test Connection"}
           </Button>
           <Spacer />
@@ -412,10 +414,11 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
           host={cfg.host}
           production={!!opt.confirmChanges}
           inDialog
-          onAllow={() => {
+          onAllow={async () => {
             const next = { ...cfg, options: { ...opt, allowPlaintext: true } };
             setCfg(next);
-            return runTest(next);
+            await runTest(next);
+            testButton.current?.focus();
           }}
         />
       )}
