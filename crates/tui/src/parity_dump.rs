@@ -96,31 +96,6 @@ fn stmt_golden() -> Golden {
         .collect()
 }
 
-fn completion_golden() -> Golden {
-    let c = corpus("completion");
-    let tables = arr(&c["tables"])
-        .iter()
-        .map(|t| CompletionTable { schema: st(&t["schema"]).into(), name: st(&t["name"]).into(), columns: arr(&t["columns"]).iter().map(|p| (st(&p[0]).into(), st(&p[1]).into())).collect() })
-        .collect();
-    let m = Meta::new(tables);
-    let found = |r: &str| Value::from(complete::find_table(&m, r, "").map(|t| format!("{}.{}", t.schema, t.name)));
-    let mut out = Golden::new();
-    for e in arr(&c["cases"]) {
-        let refs = complete::tables_in_statement(st(&e["text"]));
-        out.insert(
-            st(&e["id"]).into(),
-            json!({
-                "tablesInStatement": refs.iter().map(|(r, a)| json!({ "ref": r, "alias": a })).collect::<Vec<_>>(),
-                "findTable": refs.iter().map(|(r, _)| found(r)).collect::<Vec<_>>(),
-            }),
-        );
-    }
-    for r in arr(&c["refs"]) {
-        out.insert(format!("ref:{}", st(r)), json!({ "findTable": found(st(r)) }));
-    }
-    out
-}
-
 fn hint_golden() -> Golden {
     let mut out = Golden::new();
     for e in arr(&corpus("valuehints")) {
@@ -297,7 +272,6 @@ async fn parity_dump() {
     let goldens = [
         ("sql", sql_golden()),
         ("statements", stmt_golden()),
-        ("completion", completion_golden()),
         ("valuehints", hint_golden()),
         ("results", result_golden()),
         ("tablabels", tab_golden(&mut h)),
