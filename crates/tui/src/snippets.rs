@@ -122,11 +122,8 @@ impl App {
     pub fn open_undo(&mut self, conn: String, db: Option<String>, undo: Option<String>, note: String, log: Option<Popup>) {
         let Some(undo) = undo else {
             // A popup, not the status bar: that cuts a long note off (a COMMIT of unknown outcome says what to check)
-            let title = "Production log".to_string();
-            self.popup = Some(match log {
-                Some(back) => Popup::Note { title, text: note, back: Box::new(back) },
-                None => Popup::Message { title, text: note },
-            });
+            self.popup = log;
+            self.notice("Production log".into(), note);
             return;
         };
         if self.conn(&conn).is_none() {

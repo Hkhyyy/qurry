@@ -2156,9 +2156,10 @@ impl App {
                                 c.log(true, e.clone());
                                 c.show_output = true;
                             }
-                            // A failed COMMIT gets a notice to acknowledge, as in the GUI (not saved, or outcome unknown)
+                            // A failed COMMIT gets a notice to acknowledge, as in the GUI (not saved, or outcome unknown). A slow one
+                            // can return while another popup is open: the notice goes over it
                             if commit {
-                                a.popup = Some(Popup::Message { title: qurry_core::audit::commit_failed_title(&e).into(), text: e.clone() });
+                                a.notice(qurry_core::audit::commit_failed_title(&e).into(), e.clone());
                             }
                             a.status = e;
                             a.sync_tx(id);
@@ -2578,6 +2579,15 @@ impl App {
             *cache = Some((q, p.items.len(), v.into_iter().take(300).map(|x| x.1).collect()));
         }
         cache.as_ref().map(|c| c.2.iter().map(|&i| &p.items[i]).collect()).unwrap_or_default()
+    }
+
+    /// A notice to acknowledge. Over a popup that is open (the palette, a confirmation, the Production Log) it doesn't replace it:
+    /// closing the notice goes back there, as it was
+    pub fn notice(&mut self, title: String, text: String) {
+        self.popup = Some(match self.popup.take() {
+            Some(back) => Popup::Note { title, text, back: Box::new(back) },
+            None => Popup::Message { title, text },
+        });
     }
 
     pub fn run_palette(&mut self, item: PItem, ddl: bool) {

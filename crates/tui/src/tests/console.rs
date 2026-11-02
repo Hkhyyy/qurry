@@ -212,4 +212,13 @@ async fn failed_commit_is_in_output() {
     h.app.tx(crate::app::Action::Rollback);
     h.settle().await;
     assert!(h.app.popup.is_none());
+    // A popup opened while the COMMIT was running (a confirmation here) stays: the notice goes over it, and Esc goes back to it
+    h.app.tx(crate::app::Action::Commit);
+    h.app.popup = Some(crate::app::Popup::Confirm { text: "Roll back and close the tab?".into(), on_yes: Box::new(|_| {}) });
+    h.settle().await;
+    let Some(crate::app::Popup::Note { title, back, .. }) = &h.app.popup else { panic!("no notice over the confirmation") };
+    assert_eq!(title, "Commit failed");
+    assert!(matches!(**back, crate::app::Popup::Confirm { .. }));
+    h.key("Esc");
+    assert!(matches!(h.app.popup, Some(crate::app::Popup::Confirm { .. })));
 }
