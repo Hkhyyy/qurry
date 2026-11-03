@@ -3,7 +3,8 @@ import { userEvent, within } from "storybook/test";
 // Fake backend (same as the app's ?mock): returns fixed data for the commands screens call
 import "../../lib/mock";
 import "../../lib/monaco";
-import App, { SettingsDialog } from "../../App";
+import App from "../../App";
+import { SettingsDialog } from "../../features/settings/SettingsDialog";
 import { dialectOf, type ConnectionView, type QueryResult } from "../../lib/api";
 import { ConnectionDialog } from "../../components/ConnectionDialog";
 import { ConsolePane, SPLITTER_FAILED } from "../../components/ConsolePane";

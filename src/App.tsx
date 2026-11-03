@@ -2,10 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ask, askText, notice } from "./lib/dialogs";
 import { listen } from "@tauri-apps/api/event";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { analyzePlan, api, auditLog, backup, ConnectionView, ddl, previewImpact, dialectOf, meta, VECTOR_KINDS, QueryResult, redisDb, removedDespite, secretKey, setUpdateCheckEnabled, targetId, UpdateInfo, updateCheckEnabled } from "./lib/api";
+import { analyzePlan, api, auditLog, backup, ConnectionView, ddl, previewImpact, dialectOf, meta, VECTOR_KINDS, QueryResult, redisDb, removedDespite, targetId, UpdateInfo, updateCheckEnabled } from "./lib/api";
 import { RedisBrowser } from "./components/RedisBrowser";
 import { KeymapDialog } from "./components/KeymapDialog";
-import { KeymapEditor } from "./components/KeymapEditor";
 import { UpdateDialog } from "./components/UpdateDialog";
 import { ContextMenu, Explorer, MenuItem } from "./components/Explorer";
 import { ConnectionDialog } from "./components/ConnectionDialog";
@@ -22,102 +21,32 @@ import { RagView } from "./components/RagView";
 import { WorkspaceBar, WorkspaceInfo } from "./components/WorkspaceBar";
 import { forgetConsoleModel } from "./lib/monaco";
 import { TextDialog } from "./components/TextDialog";
-import { Badge, Button, Checkbox, CodeBlock, ConfirmHost, Field, IconButton, List, ListItem, Modal, Overlay, Select, Spacer, StatusItem, TabItem, TabStrip, Text, ToolButton, Toolbar, ToolbarSep } from "./ui";
+import { Badge, CodeBlock, ConfirmHost, Overlay, Spacer, TabItem, TabStrip, Text, ToolButton, Toolbar, ToolbarSep } from "./ui";
 import { RecentFiles, Switcher, SwitchItem } from "./components/Switcher";
 import { ActionItem, DbObject, invalidateSearchIndex, SearchEverywhere, SeTab } from "./components/SearchEverywhere";
 import { FindPanel, FindRun, FtsScope, FullTextSearchDialog } from "./components/FullTextSearch";
 import { DEFAULT_FONT, editorFontSize, setEditorFontSize } from "./lib/prefs";
 import { bindings, eventSpec, formatSpec, hit, loadKeymap, onKeymapChange } from "./lib/shortcuts";
 import { invalidateCompletion } from "./lib/completion";
-import { useStatusWidgets } from "./lib/statusbar";
 import { useSharedReady } from "./lib/shared";
 import { commitNoticeTitle } from "./lib/commitNotice";
 import { tableTabLabels } from "./lib/tabLabels";
 import { explainAnalyzeAsk, explainAnalyzeNote, isDdl, isRead } from "./lib/stmtKind";
-import type { BackupOptions, DbKind, FtsRequest, UpdateChannel } from "./lib/api";
+import type { BackupOptions, DbKind, FtsRequest } from "./lib/api";
 import { isRelation, NodeInfo, revealInTree, schemaChanged } from "./components/SchemaTree";
 import { leaf, leaves, MAX_PANES, Pane, prunePanes, splitPane } from "./lib/panes";
 import { connBg, connStripe, getThemePref, setThemePref, THEME_LABEL, ThemePref, useTheme } from "./lib/theme";
-import { BackupDialog, ExportDialog, ImportDialog, TransferBar, type TransferJob } from "./components/Transfer";
+import { BackupDialog, ExportDialog, ImportDialog, type TransferJob } from "./components/Transfer";
 import { DbaReport } from "./components/DbaReport";
 import { ErdView } from "./components/ErdView";
 import { MigrateView } from "./components/MigrateView";
 import type { DataFormat } from "./lib/transfer";
+import { emptyLayout, Group, snapKey, Tab, TAB_LIMIT, TabSnapshot, WsLayout } from "./features/tabs/types";
+import { isMac, sk } from "./features/shortcuts/labels";
+import { offered, SettingsDialog, upToDate } from "./features/settings/SettingsDialog";
+import { StatusBar } from "./features/settings/StatusBar";
 import "./App.css";
 
-/** Pane id (0~3). The pane layout is a Pane tree */
-type Group = number;
-
-/** One workspace's tabs and split view (kept while it is not the current one) */
-interface WsLayout {
-  tabs: Tab[];
-  panes: Pane;
-  activeIds: (string | null)[];
-  focused: Group;
-  mru: string[];
-}
-const emptyLayout = (): WsLayout => ({ tabs: [], panes: leaf(0), activeIds: [null, null, null, null], focused: 0, mru: [] });
-
-interface Tab {
-  id: string;
-  /** console: SQL console / table: table data editor / ddl: read-only DDL */
-  kind: "console" | "table" | "ddl" | "redis" | "dba" | "erd" | "migrate" | "rag";
-  group: Group;
-  connId: string;
-  /** Connected DB (if none, the Data Source's default DB) */
-  database?: string;
-  /** Backend connection target id (connId or connId::database) */
-  target: string;
-  title: string;
-  sql: string;
-  running: boolean;
-  result: QueryResult | null;
-  error: string | null;
-  lastSql: string | null;
-  loadingMore: boolean;
-  where: string;
-  orderBy: string;
-  /** Console's current schema (search_path) */
-  schema?: string;
-  tableSql?: string;
-  edit?: EditTarget;
-  /** Console: result tabs, Output log, transaction */
-  results: ResultEntry[];
-  activeResult: string;
-  output: OutputLine[];
-  txManual: boolean;
-  inTx: boolean;
-  /** Result tab with an open server cursor (target for loading more) */
-  cursorEntry?: string;
-  /** Pin Tab */
-  pinned?: boolean;
-  /** Redis browser: key to select first */
-  redisKey?: string;
-  /** dba: report being viewed (sessions, slow_queries, …) */
-  dbaReport?: string;
-  /** erd: schemas to draw */
-  erdSchemas?: string[];
-  /** Tab restored on relaunch: not loaded yet (loads when first shown) */
-  stale?: boolean;
-}
-
-/** Closed tabs / recent files (Reopen Closed Tab, ⌘e Recent Files) */
-interface TabSnapshot {
-  key: string;
-  kind: Tab["kind"];
-  title: string;
-  connId: string;
-  database?: string;
-  sql: string;
-  edit?: EditTarget;
-  where: string;
-  orderBy: string;
-}
-const TAB_LIMIT = 10; // DataGrip default Tab limit
-const snapKey = (t: { kind: string; connId: string; database?: string; title: string; edit?: EditTarget }) =>
-  `${t.kind}|${t.connId}|${t.database ?? ""}|${t.edit ? t.edit.schema + "." + t.edit.table : t.title}`;
-
-const isMac = navigator.platform.toLowerCase().includes("mac");
 /** Max rows kept in the result grid (same as the TUI). Beyond that, export to CSV */
 const MAX_ROWS = 100_000;
 const capMsg = (n: number) => `Showing the first ${n.toLocaleString()} rows — export to CSV for all of them`;
@@ -134,11 +63,6 @@ async function askExplainAnalyze(name: string | undefined, kind: DbKind, stmts: 
   const text = one ? `Explain Analyse really runs the statement, and ${asks[0].why}. Run it anyway?` : `Explain Analyse really runs the statements, and ${asks.length} of them need a look. Run them anyway?`;
   return ask(text, { title: name ? `${name}: Explain Analyse` : "Explain Analyse", detail, okLabel: "Run Anyway", danger: true });
 }
-/** Shortcut shown in menus and Find Action (the first key) */
-const sk = (id: string) => {
-  const b = bindings(id);
-  return b.length ? formatSpec(b[0]) : undefined;
-};
 const last = <T,>(a: T[]): T | undefined => a[a.length - 1];
 /** A tab's database by name: its own, else the connection's default (a tab on the default keeps none) */
 const tabDatabase = (t: { database?: string }, c?: ConnectionView) => t.database || c?.database || (c?.kind === "mysql" ? "" : "postgres");
@@ -2806,192 +2730,6 @@ export default function App() {
           }}
         />
       )}
-    </div>
-  );
-}
-
-/** Settings › Appearance */
-/** Settings › Passwords: whether to keep the password file's master key in a file or the OS keychain */
-function PasswordSettings() {
-  const [loc, setLoc] = useState<"file" | "keychain" | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
-  useEffect(() => {
-    secretKey.location().then(setLoc, (e) => setMsg(String(e)));
-  }, []);
-  const move = async (keychain: boolean) => {
-    setMsg(keychain ? "Waiting for the system keychain…" : "Moving the key back to the file…");
-    try {
-      setLoc(await secretKey.move(keychain));
-      setMsg(null);
-    } catch (e) {
-      setMsg(String(e));
-    }
-  };
-  return (
-    <div className="settings-form">
-      <Field label="Key" hint={msg ?? "Saved passwords are encrypted in secrets.json. Its key is in the config folder (secret.key) or in the system keychain. The terminal UI and the MCP server use the same key, so they ask for keychain access too."}>
-        <div className="ui-row">
-          <Select value={loc ?? ""} disabled={!loc} onChange={(e) => move(e.target.value === "keychain")}>
-            <option value="file">In the config folder (no prompts)</option>
-            <option value="keychain">In the system keychain</option>
-          </Select>
-        </div>
-      </Field>
-      <Text tone="muted">Before moving it to the keychain, update every Qurry app you use (Qurry, qurry-tui, qurry-mcp — e.g. brew upgrade qurry): older versions can't read the key there and stop with "secret.key is corrupted".</Text>
-      {isMac && <Text tone="muted">macOS asks once per app (Qurry, qurry-tui, qurry-mcp) to allow keychain access, and again after each update while Qurry isn't code-signed.</Text>}
-    </div>
-  );
-}
-
-/** The update a check offers, or null: a check that finds nothing clears the status bar button (the TUI may have switched the shared channel) */
-const offered = (u: UpdateInfo) => (u.latest ? u : null);
-const upToDate = (u: UpdateInfo) => `You have the latest ${u.channel} version (${u.current}).`;
-
-/** onChannel: the update the new channel (or a check that finds nothing) offers (null: none), so the status bar button follows the channel */
-export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "appearance" }: { onClose: () => void; onUpdate: (u: UpdateInfo) => void; onChannel: (u: UpdateInfo | null) => void; initialPage?: "appearance" | "keymap" }) {
-  const [page, setPage] = useState<"appearance" | "keymap" | "passwords">(initialPage);
-  const [checkOnStart, setCheckOnStart] = useState(updateCheckEnabled());
-  const [updMsg, setUpdMsg] = useState<string | null>(null);
-  const [channel, setChannel] = useState<UpdateChannel | null>(null);
-  const [chMsg, setChMsg] = useState<string | null>(null);
-  useEffect(() => {
-    api.updateChannel().then(setChannel, (e) => setChMsg(String(e)));
-  }, []);
-  const pickChannel = async (c: UpdateChannel) => {
-    const was = channel;
-    setChannel(c);
-    // A Check Now answer was for the channel before
-    setUpdMsg(null);
-    try {
-      // Answered from the saved check (both channels), never a new request
-      const u = await api.setUpdateChannel(c);
-      onChannel(u && offered(u));
-      setChMsg(!u ? "Saved. Check Now looks for updates on this channel." : u.latest ? `Qurry ${u.latest.version} is available on this channel.` : upToDate(u));
-    } catch (e) {
-      // Not saved: the select shows the channel still in use
-      setChannel(was);
-      setChMsg(String(e));
-    }
-  };
-  const checkNow = async () => {
-    setUpdMsg("Checking…");
-    try {
-      const u = await api.checkUpdate(true);
-      if (u.latest) onUpdate(u);
-      else {
-        onChannel(null);
-        setUpdMsg(upToDate(u));
-      }
-    } catch (e) {
-      setUpdMsg(String(e));
-    }
-  };
-  const [pref, setPref] = useState<ThemePref>(getThemePref());
-  const theme = useTheme();
-  const pick = (p: ThemePref) => {
-    setPref(p);
-    setThemePref(p);
-  };
-  const sync = pref === "system";
-  return (
-    <Modal
-      title="Settings"
-      size="xl"
-      fixed
-      className="settings"
-      onClose={onClose}
-      footer={
-        <>
-          {page === "appearance" && <span className="ui-modal-foot-hint">Quick switch theme: {sk("theme")}</span>}
-          <Button variant="primary" onClick={onClose}>
-            OK
-          </Button>
-        </>
-      }
-    >
-      <div className="settings-body">
-        <List className="settings-nav">
-          <ListItem title="Appearance" selected={page === "appearance"} onClick={() => setPage("appearance")} />
-          <ListItem title="Keymap" selected={page === "keymap"} onClick={() => setPage("keymap")} />
-          <ListItem title="Passwords" selected={page === "passwords"} onClick={() => setPage("passwords")} />
-        </List>
-        {page === "keymap" && <KeymapEditor />}
-        {page === "passwords" && <PasswordSettings />}
-        {page === "appearance" && (
-          <div className="settings-form">
-            <Field label="Theme">
-              <div className="ui-row">
-                <Select value={sync ? theme : pref} disabled={sync} onChange={(e) => pick(e.target.value as ThemePref)}>
-                  <option value="dark">Dark</option>
-                  <option value="light">Light</option>
-                  <option value="hc">High contrast</option>
-                </Select>
-                <Checkbox checked={sync} onChange={(v) => pick(v ? "system" : theme)}>
-                  Sync with OS
-                </Checkbox>
-              </div>
-            </Field>
-            <Field label="Updates" hint={updMsg ?? undefined}>
-              <div className="ui-row">
-                <Checkbox
-                  checked={checkOnStart}
-                  onChange={(v) => {
-                    setCheckOnStart(v);
-                    setUpdateCheckEnabled(v);
-                  }}
-                >
-                  Check for updates automatically
-                </Checkbox>
-                <Button size="sm" onClick={checkNow}>
-                  Check Now
-                </Button>
-              </div>
-            </Field>
-            <Field label="Channel" hint={chMsg ?? "Stable gets the releases made from a version tag. Beta also gets the pre-release built from every merge to main. The terminal UI uses the same channel."}>
-              <div className="ui-row">
-                <Select value={channel ?? ""} disabled={!channel} onChange={(e) => pickChannel(e.target.value as UpdateChannel)}>
-                  <option value="stable">Stable</option>
-                  <option value="beta">Beta</option>
-                </Select>
-              </div>
-            </Field>
-          </div>
-        )}
-      </div>
-    </Modal>
-  );
-}
-
-function StatusBar({ run, onSettings, settingsKey, onKeymap, status, readOnly, update, onUpdate, jobs }: { run: { canRun: boolean; running: boolean; onRun: () => void; onCancel: () => void }; onSettings: () => void; settingsKey?: string; onKeymap: () => void; status: string; readOnly: boolean; update?: string; onUpdate: () => void; jobs: TransferJob[] }) {
-  const w = useStatusWidgets();
-  return (
-    <div className="statusbar">
-      <IconButton size="sm" tone="ok" disabled={!run.canRun} onClick={run.onRun} title={`Execute (${isMac ? "⌘↩" : "Ctrl+Enter"})`}>
-        ▶
-      </IconButton>
-      <IconButton size="sm" tone="danger" disabled={!run.running} onClick={run.onCancel} title="Cancel Running Statements">
-        ■
-      </IconButton>
-      <Text truncate className="sb-text">
-        {status}
-      </Text>
-      <Spacer />
-      <TransferBar jobs={jobs} />
-      {update && (
-        <StatusItem accent title="A new version is available" onClick={onUpdate}>
-          ⬆ v{update} available
-        </StatusItem>
-      )}
-      {w.aggregate && <StatusItem title="Aggregate of selected cells">{w.aggregate}</StatusItem>}
-      {readOnly && <StatusItem title="Data source is read-only">🔒 Read-only</StatusItem>}
-      {w.caret && <StatusItem title="Line:Column">{w.caret}</StatusItem>}
-      <StatusItem>UTF-8</StatusItem>
-      <IconButton size="sm" title={settingsKey ? `Settings (${settingsKey})` : "Settings"} onClick={onSettings}>
-        ⚙
-      </IconButton>
-      <IconButton size="sm" title={`Keymap Reference (${isMac ? "⇧⌘/" : "Ctrl+Shift+/"})`} onClick={onKeymap}>
-        ⌨
-      </IconButton>
     </div>
   );
 }
