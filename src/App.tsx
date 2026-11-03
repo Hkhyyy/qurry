@@ -18,8 +18,7 @@ import { EditTarget } from "./components/ResultGrid";
 import { TableEditor } from "./components/TableEditor";
 import { TlsFix } from "./components/TlsFix";
 import { RagView } from "./components/RagView";
-import { WorkspaceBar, WorkspaceInfo } from "./components/WorkspaceBar";
-import { forgetConsoleModel } from "./lib/monaco";
+import { WorkspaceBar } from "./components/WorkspaceBar";
 import { TextDialog } from "./components/TextDialog";
 import { Badge, CodeBlock, ConfirmHost, Overlay, Spacer, TabItem, TabStrip, Text, ToolButton, Toolbar, ToolbarSep } from "./ui";
 import { RecentFiles, Switcher, SwitchItem } from "./components/Switcher";
@@ -34,20 +33,21 @@ import { tableTabLabels } from "./lib/tabLabels";
 import { explainAnalyzeAsk, explainAnalyzeNote, isDdl, isRead } from "./lib/stmtKind";
 import type { BackupOptions, DbKind, FtsRequest } from "./lib/api";
 import { isRelation, NodeInfo, revealInTree, schemaChanged } from "./components/SchemaTree";
-import { leaf, leaves, MAX_PANES, Pane, prunePanes, splitPane } from "./lib/panes";
+import { leaf, leaves, MAX_PANES, Pane, splitPane } from "./lib/panes";
 import { connBg, connStripe, getThemePref, setThemePref, THEME_LABEL, ThemePref, useTheme } from "./lib/theme";
 import { BackupDialog, ExportDialog, ImportDialog, type TransferJob } from "./components/Transfer";
 import { DbaReport } from "./components/DbaReport";
 import { ErdView } from "./components/ErdView";
 import { MigrateView } from "./components/MigrateView";
 import type { DataFormat } from "./lib/transfer";
-import { emptyLayout, Group, snapKey, Tab, TAB_LIMIT, TabSnapshot, WsLayout } from "./features/tabs/types";
+import { Group, snapKey, Tab, TAB_LIMIT, TabSnapshot } from "./features/tabs/types";
 import { isMac, sk } from "./features/shortcuts/labels";
 import { offered, SettingsDialog, upToDate } from "./features/settings/SettingsDialog";
 import { StatusBar } from "./features/settings/StatusBar";
 import { editorApis, liveSql, setActiveIds, setFocused, setPanes, setTabs, useTabsStore } from "./features/tabs/store";
 import { allTabs, buildTab, closeTabs, moveTo, patch, remember, settle, sqlOf, togglePin, updTab } from "./features/tabs/ops";
-import { setCurWs, setWorkspaces, stash, useWorkspacesStore } from "./features/workspaces/store";
+import { setWorkspaces, stash, useWorkspacesStore } from "./features/workspaces/store";
+import { useWorkspaces } from "./features/workspaces/useWorkspaces";
 import "./App.css";
 
 /** Max rows kept in the result grid (same as the TUI). Beyond that, export to CSV */
@@ -266,54 +266,6 @@ export default function App() {
     return tab;
   };
 
-  // ───────── Restoring on relaunch (workspace-gui.json) ─────────
-  const restored = useRef(false);
-  const savedWs = useRef("");
-  /** What to save: tabs (console SQL, table WHERE/ORDER BY, DDL, Redis, DBA report, diagram schemas), splits, the tab shown in each pane, and focus */
-  const wsJson = () => {
-    const ser = (l: WsLayout) => ({
-      tabs: l.tabs.map((t) => ({
-        kind: t.kind,
-        title: t.title,
-        connId: t.connId,
-        database: t.database,
-        group: t.group,
-        sql: t.kind === "console" || t.kind === "ddl" ? sqlOf(t) : "",
-        where: t.where,
-        orderBy: t.orderBy,
-        edit: t.edit ? { schema: t.edit.schema, table: t.edit.table } : undefined,
-        pinned: t.pinned,
-        redisKey: t.redisKey,
-        dbaReport: t.dbaReport,
-        erdSchemas: t.erdSchemas,
-      })),
-      panes: l.panes,
-      activeIds: l.activeIds.map((id) => l.tabs.findIndex((t) => t.id === id)),
-      focused: l.focused,
-    });
-    const live: WsLayout = { tabs: useTabsStore.getState().tabs, panes: useTabsStore.getState().panes, activeIds: useTabsStore.getState().activeIds, focused: useTabsStore.getState().focused, mru: [] };
-    return JSON.stringify({
-      version: 2,
-      // The workspace list has been synced with the file shared with the TUI (missing ones were deleted on the other side)
-      shared: true,
-      current: useWorkspacesStore.getState().curWs,
-      workspaces: useWorkspacesStore.getState().workspaces.map((w) => ({ id: w.id, name: w.name, connIds: w.connIds, ...ser(w.id === useWorkspacesStore.getState().curWs ? live : stash.get(w.id) ?? emptyLayout()) })),
-    });
-  };
-  /** Before closing the app or relaunching for an update: ask about uncommitted changes and save the open tabs */
-  const readyToQuit = async () => {
-    const n = allTabs().filter((t) => t.inTx).length;
-    if (n && !(await ask(`${n} console(s) have uncommitted changes. Quit and roll them back?`, { okLabel: "Quit and Roll Back", danger: true }))) return false;
-    saveWs();
-    return true;
-  };
-  const saveWs = () => {
-    if (!restored.current) return;
-    const j = wsJson();
-    if (j === savedWs.current) return;
-    savedWs.current = j;
-    api.saveWorkspace(JSON.parse(j)).catch(() => {});
-  };
   /** When a restored tab is first shown: tables load their data, consoles set their transaction mode (Redis views load themselves) */
   const loadStale = async (t: Tab) => {
     patch(t.id, { stale: false });
@@ -343,239 +295,7 @@ export default function App() {
       if (t.kind === "table" && back.includes(t.connId) && t.error && !t.running && !t.stale) loadTable(t);
     }
   }, [conns]);
-  /** One saved workspace → tabs and split view (tabs load when selected) */
-  const buildLayout = (ws: any): WsLayout => {
-    if (!ws || !Array.isArray(ws.tabs)) return emptyLayout();
-    const okPane = (p: any): boolean => p && (p.t === "leaf" ? Number.isInteger(p.g) && p.g >= 0 && p.g < MAX_PANES : p.t === "split" && okPane(p.a) && okPane(p.b));
-    const pane0: Pane = okPane(ws.panes) ? ws.panes : leaf(0);
-    const ls0 = leaves(pane0);
-    const built: (Tab | null)[] = ws.tabs.map((x: any) => {
-      const c = conns.find((cc) => cc.id === x.connId);
-      // Also restore DBA report, diagram, compare and RAG tabs (they load themselves when first shown)
-      if (!c || !["console", "table", "ddl", "redis", "dba", "erd", "migrate", "rag"].includes(x.kind)) return null;
-      const group = ls0.includes(x.group) ? x.group : ls0[0];
-      let tableSql: string | undefined;
-      if (x.kind === "table" && x.edit) {
-        const { q } = dialectOf(c.kind);
-        tableSql = `SELECT * FROM ${q(x.edit.schema)}.${q(x.edit.table)}${x.where ? ` WHERE ${x.where}` : ""}${x.orderBy ? ` ORDER BY ${x.orderBy}` : ""};`;
-      }
-      const t = buildTab(c, x.kind, { sql: x.kind === "table" ? tableSql : x.sql, database: x.database, tableSql, edit: x.edit ? { ...x.edit, pk: [] } : undefined, where: x.where, orderBy: x.orderBy }, group, x.title);
-      return { ...t, pinned: x.pinned, redisKey: x.redisKey, dbaReport: x.dbaReport, erdSchemas: x.erdSchemas, stale: x.kind !== "ddl" };
-    });
-    const ts = built.filter((t): t is Tab => !!t);
-    if (!ts.length) return emptyLayout();
-    const pane = prunePanes(pane0, new Set(ts.map((t) => t.group)));
-    const ls = leaves(pane);
-    const act = [0, 1, 2, 3].map((g) => {
-      if (!ls.includes(g)) return null;
-      const want = built[ws.activeIds?.[g]];
-      return want && want.group === g ? want.id : ts.find((t) => t.group === g)?.id ?? null;
-    });
-    return { tabs: ts, panes: pane, activeIds: act, focused: ls.includes(ws.focused) ? ws.focused : ls[0], mru: act.filter((x): x is string => !!x) };
-  };
-  /** Show this tab and split view. Only the tab shown in each pane is loaded (the rest when selected) */
-  const showLayout = (l: WsLayout) => {
-    setTabs(l.tabs);
-    setPanes(l.panes);
-    setActiveIds(l.activeIds);
-    setFocused(l.focused);
-    useTabsStore.setState({ mru: l.mru });
-    for (const id of l.activeIds) {
-      const t = l.tabs.find((x) => x.id === id);
-      if (t?.stale) loadStale(t);
-    }
-  };
-  /** Restore saved tabs and workspaces. Returns whether the list has been synced with the shared workspace list */
-  const restoreWs = (data: any): boolean => {
-    // version 1 (before workspaces) = a single workspace
-    const list: any[] | null = Array.isArray(data?.workspaces) ? data.workspaces : Array.isArray(data?.tabs) ? [{ id: "ws1", name: "Default", ...data }] : null;
-    if (!list?.length) return false;
-    // Saved file without explorer lists (before 0.2.0 and 0.2.0): the first workspace gets all Data Sources
-    const hasLists = list.some((w) => Array.isArray(w.connIds));
-    const infos: WorkspaceInfo[] = list.map((w, i) => ({
-      id: typeof w.id === "string" && w.id ? w.id : `ws${i + 1}`,
-      name: typeof w.name === "string" && w.name.trim() ? w.name : `Workspace ${i + 1}`,
-      connIds: hasLists ? (Array.isArray(w.connIds) ? w.connIds.filter((x: unknown) => typeof x === "string") : []) : i === 0 ? conns.map((c) => c.id) : [],
-    }));
-    const cur = infos.find((w) => w.id === data.current)?.id ?? infos[0].id;
-    stash.clear();
-    list.forEach((w, i) => {
-      const l = buildLayout(w);
-      if (infos[i].id === cur) showLayout(l);
-      else stash.set(infos[i].id, l);
-    });
-    setWorkspaces(infos);
-    setCurWs(cur);
-    return data?.shared === true;
-  };
-
-  // ── The workspace list (name · Data Sources) is shared with the TUI: send only what changed, and pull in what the other side changed ──
-  /** List last synced with the shared file (null = not yet) */
-  const sharedPrev = useRef<WorkspaceInfo[] | null>(null);
-  const sameWs = (a: WorkspaceInfo[], b: WorkspaceInfo[]) => JSON.stringify(a.map((w) => [w.id, w.name, w.connIds])) === JSON.stringify(b.map((w) => [w.id, w.name, w.connIds]));
-  const wsTabs = (id: string) => (id === useWorkspacesStore.getState().curWs ? useTabsStore.getState().tabs : stash.get(id)?.tabs ?? []);
-  /** Apply the shared list to the UI. Close the tabs of workspaces deleted on the other side (keep them if a console has uncommitted changes — they come back on the next sync) */
-  const applyShared = (list: WorkspaceInfo[]) => {
-    const cur = useWorkspacesStore.getState().workspaces;
-    const gone = cur.filter((w) => !list.some((x) => x.id === w.id));
-    const keep = gone.filter((w) => wsTabs(w.id).some((t) => t.inTx));
-    const next = [...list.map((w) => ({ id: w.id, name: w.name, connIds: w.connIds })), ...keep];
-    if (!next.length) return;
-    const closing = new Map(gone.filter((x) => !keep.includes(x)).map((w) => [w.id, wsTabs(w.id)]));
-    setWorkspaces(next);
-    if (!next.some((w) => w.id === useWorkspacesStore.getState().curWs)) switchWs(next[0].id, true);
-    for (const [id, ts] of closing) {
-      stash.delete(id);
-      for (const t of ts) {
-        forgetConsoleModel(t.id);
-        editorApis.delete(t.id);
-        liveSql.delete(t.id);
-        api.closeSession(t.id).catch(() => {});
-      }
-    }
-    if (keep.length) setStatus(`Kept workspace ${keep.map((w) => `"${w.name}"`).join(", ")} — it was deleted elsewhere but has uncommitted changes`);
-  };
-  /** At first launch: match this app's list to the shared list (the first time, pair up ones with the same name) */
-  const adoptShared = async (synced: boolean) => {
-    const a = await api.adoptWorkspaces(useWorkspacesStore.getState().workspaces, synced);
-    for (const [from, to] of a.renamed) {
-      const l = stash.get(from);
-      if (l) {
-        stash.delete(from);
-        stash.set(to, l);
-      }
-      if (useWorkspacesStore.getState().curWs === from) {
-        setCurWs(to);
-      }
-      setWorkspaces((l) => l.map((w) => (w.id === from ? { ...w, id: to } : w)));
-    }
-    applyShared(a.list);
-    sharedPrev.current = a.list;
-  };
-  // When changed in this app, write only the changes to the shared file
-  useEffect(() => {
-    const prev = sharedPrev.current;
-    if (!prev || sameWs(prev, workspaces)) return;
-    const sent = workspaces;
-    sharedPrev.current = sent;
-    api
-      .syncWorkspaces(prev, sent)
-      .then((list) => {
-        // If it changed again meanwhile, leave it to the next sync
-        if (useWorkspacesStore.getState().workspaces !== sent) return;
-        sharedPrev.current = list;
-        if (!sameWs(list, sent)) applyShared(list);
-      })
-      .catch((e) => setStatus(`Workspaces: ${String(e)}`));
-  }, [workspaces]);
-  // Changes from the other side (TUI): when the window regains focus · every few seconds
-  useEffect(() => {
-    const pull = () => {
-      const prev = sharedPrev.current;
-      if (!prev || !sameWs(useWorkspacesStore.getState().workspaces, prev)) return;
-      api
-        .sharedWorkspaces()
-        .then((list) => {
-          if (!list?.length || sharedPrev.current !== prev || sameWs(list, prev)) return;
-          sharedPrev.current = list;
-          applyShared(list);
-        })
-        .catch(() => {});
-    };
-    const h = setInterval(pull, 3000);
-    window.addEventListener("focus", pull);
-    return () => {
-      clearInterval(h);
-      window.removeEventListener("focus", pull);
-    };
-  }, []);
-  /** Switch to another workspace: keep the current one as is (console sessions and transactions too). discard = don't keep the current one (when deleting) */
-  const switchWs = (id: string, discard = false) => {
-    const from = useWorkspacesStore.getState().curWs;
-    if (id === from || !useWorkspacesStore.getState().workspaces.some((w) => w.id === id)) return;
-    const target = stash.get(id) ?? emptyLayout();
-    stash.delete(id);
-    if (!discard) stash.set(from, { tabs: useTabsStore.getState().tabs, panes: useTabsStore.getState().panes, activeIds: useTabsStore.getState().activeIds, focused: useTabsStore.getState().focused, mru: useTabsStore.getState().mru });
-    showLayout(target);
-    setCurWs(id);
-  };
-  const newWs = async () => {
-    const name = (await askText("Workspace name", `Workspace ${useWorkspacesStore.getState().workspaces.length + 1}`));
-    if (!name?.trim()) return;
-    const w = { id: crypto.randomUUID(), name: name.trim(), connIds: [] };
-    setWorkspaces((l) => [...l, w]);
-    switchWs(w.id);
-  };
-  const renameWs = async (id: string) => {
-    const w = useWorkspacesStore.getState().workspaces.find((x) => x.id === id);
-    const name = w && (await askText("Rename workspace", w.name));
-    if (name?.trim()) setWorkspaces((l) => l.map((x) => (x.id === id ? { ...x, name: name.trim() } : x)));
-  };
-  /** Close a workspace and its tabs (uncommitted changes are rolled back) */
-  const deleteWs = async (id: string) => {
-    const list = useWorkspacesStore.getState().workspaces;
-    const w = list.find((x) => x.id === id);
-    if (!w || list.length < 2) return;
-    const ts = id === useWorkspacesStore.getState().curWs ? useTabsStore.getState().tabs : stash.get(id)?.tabs ?? [];
-    const dirty = ts.filter((t) => t.inTx).length;
-    if (!(await ask(`Delete the workspace "${w.name}"${ts.length ? ` and close its ${ts.length} tab(s)` : ""}?${dirty ? `\n\n${dirty} console(s) have uncommitted changes — they are rolled back.` : ""}`, { okLabel: "Delete", danger: true }))) return;
-    if (id === useWorkspacesStore.getState().curWs) switchWs(list.find((x) => x.id !== id)!.id, true);
-    stash.delete(id);
-    for (const t of ts) {
-      forgetConsoleModel(t.id);
-      editorApis.delete(t.id);
-      liveSql.delete(t.id);
-      api.closeSession(t.id).catch(() => {});
-    }
-    setWorkspaces((l) => l.filter((x) => x.id !== id));
-  };
-  /** Move a tab to another workspace (session kept). Goes at the end of that workspace's first pane */
-  const moveToWs = (t: Tab, id: string) => {
-    const target = stash.get(id) ?? emptyLayout();
-    const g = leaves(target.panes)[0];
-    stash.set(id, { ...target, tabs: [...target.tabs, { ...t, group: g }], activeIds: target.activeIds.map((x, i) => (i === g ? t.id : x)), mru: [t.id, ...target.mru] });
-    useTabsStore.setState({ mru: useTabsStore.getState().mru.filter((x) => x !== t.id) });
-    setTabs((ts) => {
-      const rest = ts.filter((x) => x.id !== t.id);
-      settle(rest, useTabsStore.getState().panes);
-      return rest;
-    });
-    setStatus(`Moved "${t.title}" to ${useWorkspacesStore.getState().workspaces.find((w) => w.id === id)?.name}`);
-  };
-  useEffect(() => {
-    if (restored.current || !conns.length) return;
-    restored.current = true;
-    api
-      .loadWorkspace()
-      .then(restoreWs)
-      .catch(() => false)
-      .then((synced) => adoptShared(synced))
-      .catch((e) => setStatus(`Workspaces: ${String(e)}`))
-      .finally(() => setWsReady(true));
-  }, [conns]);
-  // Data Sources in no workspace (just created, or created in the TUI) → into the current workspace
-  const [wsReady, setWsReady] = useState(false);
-  useEffect(() => {
-    if (!wsReady) return;
-    const known = new Set(useWorkspacesStore.getState().workspaces.flatMap((w) => w.connIds));
-    const orphans = conns.map((c) => c.id).filter((id) => !known.has(id));
-    if (orphans.length) setWorkspaces((l) => l.map((w) => (w.id === useWorkspacesStore.getState().curWs ? { ...w, connIds: [...w.connIds, ...orphans] } : w)));
-  }, [conns, wsReady]);
-  /** Add or remove a Data Source in the workspace explorer (the Data Source itself is untouched) */
-  const setInWs = (wsId: string, connId: string, on: boolean) =>
-    setWorkspaces((l) => l.map((w) => (w.id !== wsId ? w : { ...w, connIds: on ? [...w.connIds.filter((x) => x !== connId), connId] : w.connIds.filter((x) => x !== connId) })));
-  /** Workspaces whose explorer has been shown (once shown, hide instead of unmounting to keep the expanded state) */
-  const [shownWs, setShownWs] = useState<string[]>([]);
-  useEffect(() => setShownWs((l) => (l.includes(curWs) ? l : [...l, curWs])), [curWs]);
-  // Save on change (console SQL is not state, so it is also checked periodically)
-  useEffect(() => {
-    const h = setTimeout(saveWs, 800);
-    return () => clearTimeout(h);
-  }, [tabs, panes, activeIds, focused, workspaces, curWs]);
-  useEffect(() => {
-    const h = setInterval(saveWs, 5000);
-    return () => clearInterval(h);
-  }, []);
+  const { readyToQuit, switchWs, newWs, renameWs, deleteWs, moveToWs, setInWs, shownWs } = useWorkspaces({ conns, setStatus, loadStale });
 
   const openConsole = (c: ConnectionView, db?: string, sql?: string) => addTab(c, "console", { database: db, sql });
 
