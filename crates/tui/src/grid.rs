@@ -74,18 +74,22 @@ fn json_line(raw: &str, text: &str, lead: usize) -> Line<'static> {
         if s > at {
             out.push(Span::raw(piece(at, s)));
         }
-        let color = match kind {
-            JsonKind::Key => crate::kit::JSON_KEY,
-            JsonKind::String => crate::kit::JSON_STRING,
-            JsonKind::Number => crate::kit::NUMBER,
-            JsonKind::Keyword => crate::kit::JSON_KEYWORD,
-            JsonKind::Punct => crate::kit::JSON_PUNCT,
-        };
-        out.push(Span::styled(piece(s, e), Style::default().fg(color)));
+        out.push(Span::styled(piece(s, e), Style::default().fg(json_color(kind))));
         at = e;
     }
     out.push(Span::raw(piece(at, chars.len())));
     Line::from(out)
+}
+
+/// Color of a piece of JSON (GUI --ui-json-*, dark values), in the grid and the value panel
+fn json_color(kind: JsonKind) -> Color {
+    match kind {
+        JsonKind::Key => crate::kit::JSON_KEY,
+        JsonKind::String => crate::kit::JSON_STRING,
+        JsonKind::Number => crate::kit::NUMBER,
+        JsonKind::Keyword => crate::kit::JSON_KEYWORD,
+        JsonKind::Punct => crate::kit::JSON_PUNCT,
+    }
 }
 
 /// Max rows kept in the result grid. Beyond that, export to CSV
@@ -610,43 +614,41 @@ impl Grid {
             (Some(_), None) => vec![Line::styled("<null>", Style::default().fg(crate::kit::DIM).add_modifier(Modifier::ITALIC))],
             (Some(c), Some(v)) => {
                 let p = qurry_shared::value::panel_text(&c.type_name, &v);
-                p.text.lines().map(|l| if p.json { panel_json_line(l) } else { Line::raw(l.to_string()) }).collect()
+                if p.json { json_lines(&p.text) } else { p.text.lines().map(|l| Line::raw(l.to_string())).collect() }
             }
         };
         f.render_widget(ratatui::widgets::Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false }).block(block), area);
     }
 }
 
-/// One line of pretty-printed JSON, coloured as the GUI's JSON (Monaco): keys, strings, numbers, true / false / null
-fn panel_json_line(line: &str) -> Line<'static> {
-    const KEY: Color = Color::Rgb(199, 125, 187);
-    let mut spans = vec![];
-    let mut rest = line;
-    while let Some(ch) = rest.chars().next() {
-        let (len, style) = match ch {
-            '"' => {
-                let (mut end, mut esc) = (rest.len(), false);
-                for (i, c) in rest.char_indices().skip(1) {
-                    if esc {
-                        esc = false;
-                    } else if c == '\\' {
-                        esc = true;
-                    } else if c == '"' {
-                        end = i + 1;
-                        break;
-                    }
-                }
-                let key = rest[end..].trim_start().starts_with(':');
-                (end, Style::default().fg(if key { KEY } else { crate::kit::OK }))
+/// Pretty-printed JSON in colors, line by line (the value panel): one json_spans pass over the whole text, as the grid's
+/// tokenizer reads it, so a key is a key whichever line it is on
+fn json_lines(text: &str) -> Vec<Line<'static>> {
+    let spans = json_spans(text, usize::MAX);
+    let (mut i, mut start, mut out) = (0, 0, vec![]);
+    for line in text.split('\n') {
+        let end = start + line.len();
+        let (mut parts, mut at) = (vec![], start);
+        // Pieces on this line; one that goes on past it (an unclosed string) is cut here and continues on the next
+        while let Some(&(s, e, kind)) = spans.get(i).filter(|p| p.0 < end) {
+            let (s, cut) = (s.max(start), e.min(end));
+            if s > at {
+                parts.push(Span::raw(text[at..s].to_string()));
             }
-            '-' | '0'..='9' => (rest.find(|c: char| !(c.is_ascii_alphanumeric() || "+-.".contains(c))).unwrap_or(rest.len()), Style::default().fg(crate::kit::NUMBER)),
-            c if c.is_ascii_alphabetic() => (rest.find(|c: char| !c.is_ascii_alphabetic()).unwrap_or(rest.len()), Style::default().fg(crate::kit::C_KEYWORD)),
-            c => (c.len_utf8(), Style::default()),
-        };
-        spans.push(Span::styled(rest[..len].to_string(), style));
-        rest = &rest[len..];
+            parts.push(Span::styled(text[s..cut].to_string(), Style::default().fg(json_color(kind))));
+            at = cut;
+            if e > end {
+                break;
+            }
+            i += 1;
+        }
+        if at < end {
+            parts.push(Span::raw(text[at..end].to_string()));
+        }
+        out.push(Line::from(parts));
+        start = end + 1;
     }
-    Line::from(spans)
+    out
 }
 
 #[cfg(test)]
@@ -719,6 +721,27 @@ mod tests {
         assert!(colors(&buf, 2, "{", row0.len()).iter().all(|c| c.1 == Color::Reset));
         let c16 = [JSON_KEY, JSON_STRING, NUMBER, JSON_KEYWORD, JSON_PUNCT].map(|c| ColorMode::Ansi16.color(c, false));
         assert_eq!(c16, [Color::LightMagenta, Color::LightGreen, Color::LightCyan, Color::LightRed, Color::DarkGray]);
+    }
+
+    /// The value panel colors pretty-printed JSON with the grid's tokenizer and palette: a key is a key on its own line, and a
+    /// piece that runs past a line (an unclosed string in a broken value) goes on in color on the next one
+    #[test]
+    fn value_panel_json_uses_the_grid_colors() {
+        use crate::kit::{JSON_KEY, JSON_KEYWORD, JSON_PUNCT, JSON_STRING, NUMBER};
+        let runs = |text: &str| -> Vec<Vec<(String, Color)>> { json_lines(text).iter().map(|l| l.spans.iter().map(|s| (s.content.to_string(), s.style.fg.unwrap_or(Color::Reset))).collect()).collect() };
+        let r = |s: &str, c: Color| (s.to_string(), c);
+        assert_eq!(
+            runs("{\n  \"a\": [\n    1\n  ],\n  \"b\": null\n}"),
+            [
+                vec![r("{", JSON_PUNCT)],
+                vec![r("  ", Color::Reset), r("\"a\"", JSON_KEY), r(":", JSON_PUNCT), r(" ", Color::Reset), r("[", JSON_PUNCT)],
+                vec![r("    ", Color::Reset), r("1", NUMBER)],
+                vec![r("  ", Color::Reset), r("]", JSON_PUNCT), r(",", JSON_PUNCT)],
+                vec![r("  ", Color::Reset), r("\"b\"", JSON_KEY), r(":", JSON_PUNCT), r(" ", Color::Reset), r("null", JSON_KEYWORD)],
+                vec![r("}", JSON_PUNCT)],
+            ]
+        );
+        assert_eq!(runs("[\"a\nb\"]"), [vec![r("[", JSON_PUNCT), r("\"a", JSON_STRING)], vec![r("b\"", JSON_STRING), r("]", JSON_PUNCT)]]);
     }
 
     #[test]

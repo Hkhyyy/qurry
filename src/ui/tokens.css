@@ -66,7 +66,7 @@
   --ui-json-string: #067d17;
 }
 :root[data-theme="hc"] {
-  --ui-json-key: #f0a8ff;
+  --ui-json-key: #f5a8f0; /* = the Value Editor's Monaco hc theme (lib/monaco.ts) */
   --ui-json-string: #8df08d;
   --ui-json-number: #6fe8f5;
   --ui-json-keyword: #ffb86c;

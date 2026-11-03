@@ -1,12 +1,8 @@
 //! The result grid's Value Editor panel (GUI) and value panel (TUI): which values it shows as JSON, how, and what an edit writes back.
 //! JSON is laid out again token by token, never parsed into numbers and printed: a jsonb bigint or 0.10 stays as the database sent it.
 
+use crate::format::is_json_type;
 use serde::Serialize;
-
-/// json / jsonb columns (PostgreSQL json · jsonb, MySQL JSON)
-pub fn is_json_type(type_name: &str) -> bool {
-    type_name.eq_ignore_ascii_case("json") || type_name.eq_ignore_ascii_case("jsonb")
-}
 
 fn valid_json(text: &str) -> Result<(), String> {
     serde_json::from_str::<serde::de::IgnoredAny>(text).map(|_| ()).map_err(|e| format!("Invalid JSON: {e}"))
