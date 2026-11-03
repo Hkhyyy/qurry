@@ -7,6 +7,7 @@ import { DateTimePicker, isTemporal } from "./DateTimePicker";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, raw } from "../lib/extract";
 import { sharedReady, useSharedReady } from "../lib/shared";
+import { DEFAULTS, useFonts } from "../lib/prefs";
 import { ResultChart } from "./ResultChart";
 import { Button, CellEditor, CodeBlock, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, TextArea, ToolButton, Toolbar, ToolbarSep } from "../ui";
 import {
@@ -180,17 +181,20 @@ export function ResultGrid(p: Props) {
     return () => clearInterval(t);
   }, [interval, p.running, pendingCount]);
 
+  // Character widths below are for the default grid font size (12px)
+  const em = useFonts().grid.size / DEFAULTS.grid.size;
+  const rownumW = Math.max(ROWNUM_W, Math.round(ROWNUM_W * em));
   const widths = useMemo(
     () =>
       cols.map((col, ci) => {
-        const head = col.name.length * 7.6 + col.typeName.length * 6.2 + 48 + (edit?.pk.includes(col.name) ? 16 : 0);
+        const head = col.name.length * 7.6 * em + col.typeName.length * 6.2 + 48 + (edit?.pk.includes(col.name) ? 16 : 0);
         let len = 0;
         for (const row of result.rows.slice(0, 200)) len = Math.max(len, display(row[ci]).length);
-        return Math.min(Math.max(head, len * 7.3 + 20, 64), 420);
+        return Math.min(Math.max(head, len * 7.3 * em + 20, 64), 420 * em);
       }),
-    [cols, firstRow, edit],
+    [cols, firstRow, edit, em],
   );
-  const total = ROWNUM_W + widths.reduce((a, b) => a + b, 0);
+  const total = rownumW + widths.reduce((a, b) => a + b, 0);
   // Time columns: align fractional-second digits within the column (values unchanged)
   const wasmReady = useSharedReady();
   const fracW = useMemo(() => cols.map((c, ci) => (isTimeType(c.typeName) ? fracWidth(result.rows.map((r) => r[ci])) : 0)), [cols, result.rows, wasmReady]);
@@ -198,10 +202,10 @@ export function ResultGrid(p: Props) {
 
   const virt = useVirtualizer({ count: rowCount, getScrollElement: () => scrollRef.current, estimateSize: () => ROW_H, overscan: 20 });
   // Horizontally, render only visible columns too (tables with many columns). Blank cells fill the width on both sides
-  const colVirt = useVirtualizer({ horizontal: true, count: cols.length, getScrollElement: () => scrollRef.current, estimateSize: (i) => widths[i] ?? 64, paddingStart: ROWNUM_W, overscan: 4 });
+  const colVirt = useVirtualizer({ horizontal: true, count: cols.length, getScrollElement: () => scrollRef.current, estimateSize: (i) => widths[i] ?? 64, paddingStart: rownumW, overscan: 4 });
   useEffect(() => colVirt.measure(), [widths]);
   const colItems = colVirt.getVirtualItems();
-  const padL = colItems.length ? colItems[0].start - ROWNUM_W : 0;
+  const padL = colItems.length ? colItems[0].start - rownumW : 0;
   const padR = colItems.length ? colVirt.getTotalSize() - colItems[colItems.length - 1].end : 0;
   const spacer = (w: number) => (w > 0 ? <div style={{ flex: "none", width: w }} /> : null);
   const items = virt.getVirtualItems();
@@ -698,7 +702,7 @@ export function ResultGrid(p: Props) {
         <GridHead body={scrollRef}>
           <GridHeaderRow width={total} height={HEADER_H}>
             <RowNumberCell
-              width={ROWNUM_W}
+              width={rownumW}
               title="Select all (⌘a)"
               onMouseDown={() => {
                 setSelA({ r: 0, c: 0 });
@@ -759,7 +763,7 @@ export function ResultGrid(p: Props) {
               return (
                 <GridRow key={vi.key} top={vi.start} height={ROW_H} width={total} odd={d % 2 === 1} added={isNew} deleted={isDel}>
                   <RowNumberCell
-                    width={ROWNUM_W}
+                    width={rownumW}
                     selected={!!rect && rect.r0 <= d && d <= rect.r1}
                     onMouseDown={(e) => {
                       // Gutter number click = select the row

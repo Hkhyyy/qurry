@@ -201,7 +201,7 @@ a { color: var(--c-548af7); cursor: pointer; }
 .plan-tools.ui-toolbar { height: 30px; border-bottom: 1px solid var(--border); }
 .running-time { font-variant-numeric: tabular-nums; }
 .grid-scroll { position: absolute; inset: 0; overflow: auto; overscroll-behavior: none; outline: none; }
-.grid-scroll, .grid-head { font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; }
+.grid-scroll, .grid-head { font-family: var(--grid-font-family); font-size: var(--grid-font-size); }
 
 .hint { color: var(--muted); font-size: 12px; margin: 10px 0 0 102px; }
 .test-err { background: rgba(247,84,100,.12); color: var(--danger); }
@@ -331,7 +331,7 @@ input:disabled, select:disabled { opacity: .45; }
 .grid-overlay { position: absolute; left: 0; right: 0; top: 64px; text-align: center; padding: 16px; }
 pre.grid-overlay { text-align: left; background: var(--bg); }
 .grid-scroll.transposed { overflow: auto; }
-.grid-scroll.transposed table { border-collapse: collapse; font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; }
+.grid-scroll.transposed table { border-collapse: collapse; }
 .grid-scroll.transposed th { position: sticky; left: 0; background: var(--panel); text-align: left; padding: 0 10px; border-right: 1px solid var(--border); white-space: nowrap; }
 .grid-scroll.transposed td { padding: 0 10px; height: 24px; border-right: 1px solid var(--c-2c2e33); border-bottom: 1px solid var(--c-26282b); white-space: nowrap; max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
 .grid-scroll.transposed td.null { color: var(--c-6f737a); font-style: italic; }
@@ -413,6 +413,7 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .settings-nav { flex: none; width: 150px; border-right: 1px solid var(--ui-border); padding-right: var(--ui-sp-3); }
 .settings-form { flex: 1; min-width: 0; }
 .settings-form .ui-field { grid-template-columns: 80px 1fr; }
+.settings-font .ui-field-hint { min-height: 2lh; }
 
 /* Search Everywhere (⇧⇧ / ⌘O / ⇧⌘A) */
 .ui-popover.search-everywhere { top: 12%; width: 720px; max-width: calc(100vw - 32px); max-height: 70vh; }

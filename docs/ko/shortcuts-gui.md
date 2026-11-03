@@ -42,7 +42,7 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `⇧⌘F` | Find tool window (Full-text Search results) |
 | `⇧⎋` | Hide active tool window |
 | `⇧⌘F12` | Maximize editor (also: double-click a tab) |
-| `⌘,` | Settings (theme) |
+| `⌘,` | Settings (theme, fonts) |
 | `` ⌃` `` | Quick switch theme (Dark / Light / High contrast / Sync with OS) |
 | `⌃⇧.` | Editor font size bigger |
 | `⌃⇧,` | Editor font size smaller |

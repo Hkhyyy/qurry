@@ -2,7 +2,7 @@
 
 [English](../tui.md) | 한국어
 
-`qurry-tui` 는 돌고 있는 터미널에 맞춥니다: 색을 몇 개 쓸 수 있는지, 창이 얼마나 큰지, tmux 나 터미널이 가져가는 키가 무엇인지. Qurry 에서 따로 설정할 것은 없고, 모두 환경을 따릅니다.
+`qurry-tui` 는 돌고 있는 터미널에 맞춥니다: 색을 몇 개 쓸 수 있는지, 창이 얼마나 큰지, tmux 나 터미널이 가져가는 키가 무엇인지. Qurry 에서 따로 설정할 것은 없고, 글꼴까지 모두 환경을 따릅니다.
 
 ## 색
 
@@ -28,6 +28,18 @@ TUI 는 시작할 때 아래 환경 변수로 색 모드를 하나 고릅니다 
 - **범위 안의 셀 커서**: 반전을 쓰는 모드 (16색, `NO_COLOR`) 에서는 범위가 반전되고, 커서는 그 안에서 반전되지 않은 한 칸입니다 (스프레드시트처럼).
 
 `qurry-tui --help` 에도 같은 규칙이 나옵니다.
+
+## 글꼴
+
+TUI 의 글자는 터미널이 그리므로 글꼴과 크기는 터미널의 것을 씁니다: Qurry 에는 TUI 글꼴 설정이 없습니다 (GUI 는 [Settings › Appearance](settings.md#appearance)). 고정폭 글꼴을 고르세요. TUI 는 글자를 칸 단위로 배치하고 테두리를 선 문자 (box-drawing) 로 그립니다. 대부분의 터미널에서 `⌘+` / `⌘-` 로 지금 창의 크기를 바꿀 수 있습니다.
+
+| 터미널 | 글꼴 바꾸는 곳 |
+|---|---|
+| Terminal.app | *Settings › Profiles › Text › Font › Change…* (프로필마다) |
+| iTerm2 | *Settings › Profiles › Text › Font* (프로필마다) |
+| Ghostty | `~/.config/ghostty/config` 에 `font-family = "JetBrains Mono"`, `font-size = 13`. `⇧⌘,` 로 다시 읽기 |
+| WezTerm | `~/.wezterm.lua` 에 `config.font = wezterm.font("JetBrains Mono")`, `config.font_size = 13.0`. 저장하면 적용 |
+| Alacritty | `~/.config/alacritty/alacritty.toml` 의 `[font]` 에 `normal = { family = "JetBrains Mono" }`, `size = 13.0`. 저장하면 적용 |
 
 ## 작은 창
 

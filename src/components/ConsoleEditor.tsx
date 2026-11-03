@@ -4,7 +4,7 @@ import { format as formatSql } from "sql-formatter";
 import { monaco } from "../lib/monaco";
 import { bindModel, unbindModel } from "../lib/completion";
 import { monacoTheme, useTheme } from "../lib/theme";
-import { editorFontSize } from "../lib/prefs";
+import { font, fontStack } from "../lib/prefs";
 import { setStatusWidget } from "../lib/statusbar";
 import { bindings, onKeymapChange } from "../lib/shortcuts";
 
@@ -77,8 +77,8 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
       onChange={(v) => onChange(v ?? "")}
       options={{
         minimap: { enabled: false },
-        fontSize: editorFontSize(),
-        fontFamily: "'JetBrains Mono', Menlo, monospace",
+        fontSize: font("editor").size,
+        fontFamily: fontStack(font("editor").family),
         automaticLayout: true,
         scrollBeyondLastLine: false,
         renderLineHighlight: "all",

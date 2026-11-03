@@ -42,7 +42,7 @@ Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…
 | `⇧⌘F` | Find tool window (Full-text Search results) |
 | `⇧⎋` | Hide active tool window |
 | `⇧⌘F12` | Maximize editor (also: double-click a tab) |
-| `⌘,` | Settings (theme) |
+| `⌘,` | Settings (theme, fonts) |
 | `` ⌃` `` | Quick switch theme (Dark / Light / High contrast / Sync with OS) |
 | `⌃⇧.` | Editor font size bigger |
 | `⌃⇧,` | Editor font size smaller |
