@@ -111,8 +111,8 @@ impl App {
         self.restored_tab(conn, db, title, TabKind::Table(tt))
     }
 
-    pub fn restore_text(&mut self, conn: &str, db: String, title: String, text: &str) -> Option<u64> {
-        self.restored_tab(conn, db, title, TabKind::Text(TextTab { text: text.into(), scroll: 0 }))
+    pub fn restore_text(&mut self, conn: &str, db: String, title: String, text: &str, kind: &str) -> Option<u64> {
+        self.restored_tab(conn, db, title, TabKind::Text(TextTab { text: text.into(), kind: kind.into(), scroll: 0 }))
     }
 
     pub fn restore_dba(&mut self, conn: &str, db: String, title: String, report: &str) -> Option<u64> {

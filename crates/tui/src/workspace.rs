@@ -32,7 +32,7 @@ fn ws_json(id: &str, name: &str, conns: &[String], tabs: &[Tab], panes: &Pane, a
             let kind = match &t.kind {
                 TabKind::Console(c) => json!({ "console": c.editor.lines().join("\n") }),
                 TabKind::Table(tt) => json!({ "table": { "schema": tt.schema, "name": tt.table, "kind": tt.kind, "where": tt.where_, "order": tt.order } }),
-                TabKind::Text(x) => json!({ "text": x.text }),
+                TabKind::Text(x) => json!({ "text": x.text, "obj": x.kind }),
                 TabKind::Dba(d) => json!({ "dba": d.report }),
                 TabKind::Redis(r) => json!({ "redis": r.pattern }),
             };
@@ -133,7 +133,7 @@ fn restore_one(app: &mut App, v: &Value, show: bool) {
             let g = |k: &str| x.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
             app.restore_table(&conn, s("db"), g("schema"), g("name"), g("kind"), g("where"), g("order"))
         } else if let Some(text) = k.get("text").and_then(Value::as_str) {
-            app.restore_text(&conn, s("db"), s("title"), text)
+            app.restore_text(&conn, s("db"), s("title"), text, k.get("obj").and_then(Value::as_str).unwrap_or_default())
         } else if let Some(r) = k.get("dba").and_then(Value::as_str) {
             app.restore_dba(&conn, s("db"), s("title"), r)
         } else if let Some(p) = k.get("redis").and_then(Value::as_str) {

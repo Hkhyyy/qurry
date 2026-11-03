@@ -149,12 +149,13 @@ impl App {
         let st = self.state.clone();
         let (conn, db2) = (conn.to_string(), db.clone());
         let title = format!("{name} [DDL]");
+        let obj = kind.clone();
         self.spawn(async move { st.object_ddl(target, schema, name, kind).await.map_err(err) }, move |a, r| match r {
             Ok(text) => {
                 if let Some(i) = a.tabs.iter().position(|t| t.title == title && t.conn == conn) {
                     a.activate(i);
                 } else {
-                    a.push_tab(&conn, db2, title, TabKind::Text(TextTab { text, scroll: 0 }));
+                    a.push_tab(&conn, db2, title, TabKind::Text(TextTab { text, kind: obj, scroll: 0 }));
                 }
             }
             Err(e) => a.status = format!("DDL failed: {e}"),

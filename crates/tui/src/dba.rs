@@ -300,7 +300,7 @@ impl App {
                     a.status = format!("{} tables, {} foreign keys", e.tables.len(), e.relations.len());
                     let text = format!("{}\n── Mermaid (y copies the whole text; paste into docs, issues, mermaid.live) ──\n\n{}", e.text(), e.mermaid());
                     let title = format!("Diagram: {}", if schemas.len() == 1 { schemas[0].clone() } else { format!("{} schemas", schemas.len()) });
-                    a.push_tab(&conn, db, title, TabKind::Text(crate::app::TextTab { text, scroll: 0 }));
+                    a.push_tab(&conn, db, title, TabKind::Text(crate::app::TextTab { text, kind: String::new(), scroll: 0 }));
                 }
                 Err(e) => a.status = format!("Diagram: {e}"),
             },

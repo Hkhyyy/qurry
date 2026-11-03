@@ -126,6 +126,8 @@ pub struct TableTab {
 
 pub struct TextTab {
     pub text: String,
+    /// DDL: tree kind of the object (for the tab glyph); empty for other text (diagram)
+    pub kind: String,
     pub scroll: u16,
 }
 

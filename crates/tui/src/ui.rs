@@ -194,13 +194,8 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
             NodeKind::Db => ("⛁", C_DB),
             NodeKind::Schema => ("◇", Color::Gray),
             NodeKind::Group => ("▤", ACCENT),
-            NodeKind::Object(k) => match k.as_str() {
-                "table" | "partitioned" | "foreign" => ("▦", Color::Gray),
-                "view" | "matview" => ("◫", C_VIEW),
-                "sequence" => ("#", C_SEQUENCE),
-                "key" => ("●", type_color(&n.hint)),
-                _ => ("ƒ", C_ROUTINE),
-            },
+            NodeKind::Object(k) if k == "key" => ("●", type_color(&n.hint)),
+            NodeKind::Object(k) => object_glyph(k).unwrap_or(("ƒ", C_ROUTINE)),
             NodeKind::Column { pk, .. } => (if *pk { "⚿" } else { "·" }, if *pk { Color::Yellow } else { DIM }),
             NodeKind::Info => ("", DANGER),
         };
@@ -317,6 +312,29 @@ fn draw_panes(f: &mut Frame, app: &mut App, p: &crate::panes::Pane, area: Rect, 
 }
 
 /// One pane: tab bar + visible tab. g = None means an unsplit screen (all tabs)
+/// Explorer tree object kind → glyph and color (the tree, and the tabs that show the object)
+fn object_glyph(kind: &str) -> Option<(&'static str, Color)> {
+    Some(match kind {
+        "table" | "partitioned" | "foreign" => ("▦", Color::Gray),
+        "view" | "matview" => ("◫", C_VIEW),
+        "sequence" => ("#", C_SEQUENCE),
+        "routine" | "function" | "procedure" => ("ƒ", C_ROUTINE),
+        _ => return None,
+    })
+}
+
+/// Tab bar glyph (like the GUI's tabIcon): a table or DDL tab shows its object's tree glyph, plain text (diagram, DDL of
+/// another kind) ≡. Uncolored: it takes the tab's own colors, so it reads on a Data Source color and in 16 colors / NO_COLOR
+fn tab_glyph(kind: &TabKind) -> &'static str {
+    match kind {
+        TabKind::Console(_) => "❯",
+        TabKind::Table(t) => object_glyph(&t.kind).map_or("▦", |g| g.0),
+        TabKind::Text(t) => object_glyph(&t.kind).map_or("≡", |g| g.0),
+        TabKind::Dba(_) => "◔",
+        TabKind::Redis(_) => "◆",
+    }
+}
+
 fn draw_group(f: &mut Frame, app: &mut App, g: Option<usize>, area: Rect, focused: bool) {
     use unicode_width::UnicodeWidthStr;
     let [bar, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(3)]).areas(area);
@@ -348,16 +366,9 @@ fn draw_group(f: &mut Frame, app: &mut App, g: Option<usize>, area: Rect, focuse
         .iter()
         .map(|&i| {
             let t = &app.tabs[i];
-            let icon = match t.kind {
-                TabKind::Console(_) => "⌘ ",
-                TabKind::Table(_) => "▦ ",
-                TabKind::Text(_) => "ƒ ",
-                TabKind::Dba(_) => "◉ ",
-                TabKind::Redis(_) => "◆ ",
-            };
             let dirty = matches!(&t.kind, TabKind::Table(tt) if tt.grid.as_ref().map(|g| g.dirty()).unwrap_or(false));
             let c = app.conn_color(&t.conn).and_then(|c| hex(&c));
-            let l = Line::from(vec![Span::raw(icon), Span::raw(app.tab_label(t)), Span::raw(if dirty { " *" } else { "" })]);
+            let l = Line::from(vec![Span::raw(format!("{} ", tab_glyph(&t.kind))), Span::raw(app.tab_label(t)), Span::raw(if dirty { " *" } else { "" })]);
             let mut st = Style::default();
             if let Some(c) = c {
                 st = st.bg(c);
