@@ -479,14 +479,14 @@ impl MySession {
         Some(crate::session::More { sql, fetched, tx: self.manual || self.in_tx, schema: None })
     }
 
-    /// The session's current database (USE)
+    /// The session's current database (USE): "" when none is selected, None when it can't be read
     pub async fn database(&mut self) -> Option<String> {
-        sqlx::query_scalar::<_, Option<String>>("select cast(database() as char)").fetch_one(&mut *self.conn).await.ok().flatten()
+        sqlx::query_scalar::<_, Option<String>>("select cast(database() as char)").fetch_one(&mut *self.conn).await.ok().map(Option::unwrap_or_default)
     }
 
     /// Open `m` on this new session after the rows its old session read, in the database it ran in (Session::reopen)
     pub async fn reopen(&mut self, m: &crate::session::More, limit: usize) -> AppResult<QueryResult> {
-        if let Some(db) = &m.schema {
+        if let Some(db) = m.schema.as_ref().filter(|d| !d.is_empty()) {
             self.conn.execute(format!("USE {}", qurry_shared::sql::quote_ident(crate::store::DbKind::Mysql, db)).as_str()).await?;
         }
         self.more = Some((m.sql.clone(), m.fetched));

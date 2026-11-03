@@ -52,7 +52,7 @@ pub struct More {
     pub fetched: usize,
     /// Read in the user's transaction (Manual, or BEGIN in Auto): it ended with the old session, so the rows may not line up
     pub tx: bool,
-    /// The console's schema it ran in: PostgreSQL search_path, MySQL database()
+    /// The console's schema it ran in: PostgreSQL search_path, MySQL database() ("" when none is selected). None: it couldn't be read
     pub schema: Option<String>,
 }
 
@@ -340,7 +340,7 @@ impl PgSession {
     /// Open `m` on this new session after the rows its old session read, and fetch the next `limit` rows (Session::reopen)
     async fn reopen(&mut self, m: &More, limit: usize) -> AppResult<QueryResult> {
         if let Some(path) = &m.schema {
-            sqlx::query("select pg_catalog.set_config('search_path', $1, false)").bind(path).execute(&mut *self.conn).await?;
+            sqlx::query("select pg_catalog.set_config('search_path', $1, false)").bind(path).persistent(false).execute(&mut *self.conn).await?;
         }
         (self.cursor_sql, self.fetched) = (m.sql.clone(), m.fetched);
         self.columns.clear();
