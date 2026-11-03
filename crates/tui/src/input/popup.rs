@@ -618,7 +618,8 @@ mod tests {
         assert!(s.contains("NULL          Left") && s.contains("changed — default Right"), "{s}");
         // A change made elsewhere (the GUI) shows when the palette opens
         h.key("Esc");
-        h.app.state.store.set_grid_align(&Alignments::from([(ValueClass::Number, Align::Center)])).unwrap();
+        h.app.state.store.set_grid_align(ValueClass::Null, Align::Right).unwrap();
+        h.app.state.store.set_grid_align(ValueClass::Number, Align::Center).unwrap();
         h.app.palette_grid_align(ValueClass::Number);
         assert_eq!(h.app.align, Alignments::from([(ValueClass::Number, Align::Center)]));
         // Number back to Right, its default: the override is removed

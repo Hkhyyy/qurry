@@ -36,17 +36,17 @@ export async function loadGridAlign() {
 
 export const alignOf = (cls: ValueClass, o: Alignments = overrides): Align => sharedOr<Align>("left", (s) => s.alignOf(cls, o));
 
-/** Change one class and save. Picking the default drops the override (so a later default applies). Rolls back if saving fails */
+/**
+ * Change one class and save. The core applies it to what settings.json holds now (the TUI may have changed it since) and drops
+ * the override when it is the default; what it saved replaces ours. Rolls back if saving fails
+ */
 export async function setGridAlign(cls: ValueClass, a: Align) {
   const prev = overrides;
-  const next = { ...overrides };
-  // Without the module the default isn't known: keep the pick rather than drop it
-  if (sharedReady() && a === alignOf(cls, {})) delete next[cls];
-  else next[cls] = a;
-  overrides = next;
+  overrides = { ...overrides, [cls]: a };
   emit();
   try {
-    await api.setGridAlign(next);
+    overrides = await api.setGridAlign(cls, a);
+    emit();
   } catch (e) {
     overrides = prev;
     emit();

@@ -420,8 +420,12 @@ const handlers: Record<string, (a: any) => unknown> = {
   grid_align: () => gridAlign,
   set_grid_align: (a: any) => {
     if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
-    gridAlign = a.overrides;
-    return null;
+    // As the core: the default (numbers and NULL on the right) drops the override
+    const next: Record<string, string> = { ...gridAlign };
+    if (a.align === (a.class === "number" || a.class === "null" ? "right" : "left")) delete next[a.class];
+    else next[a.class] = a.align;
+    gridAlign = next;
+    return next;
   },
   // window.__mockChannelSaveFails: the settings file can't be written
   set_update_channel: (a: any) => {

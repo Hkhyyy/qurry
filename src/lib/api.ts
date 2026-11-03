@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { sharedOr, type Alignments } from "./shared";
+import { sharedOr, type Align, type Alignments, type ValueClass } from "./shared";
 import type { DataFormat } from "./transfer";
 
 export type DbKind = "postgres" | "mysql" | "redis" | "sqlite" | "duckdb" | "mssql" | "clickhouse" | "mongodb" | "oracle" | "qdrant" | "chroma" | "milvus";
@@ -168,7 +168,7 @@ export const api = {
   setUpdateChannel: (channel: UpdateChannel) => invoke<UpdateInfo | null>("set_update_channel", { channel }),
   /** Grid alignment per value class: only the classes the user changed. Kept in the config folder, shared with the TUI */
   gridAlign: () => invoke<Alignments>("grid_align"),
-  setGridAlign: (overrides: Alignments) => invoke<void>("set_grid_align", { overrides }),
+  setGridAlign: (cls: ValueClass, align: Align) => invoke<Alignments>("set_grid_align", { class: cls, align }),
   /** Download the new version, swap it in, and restart the app (progress via the "update-progress" event) */
   installUpdate: () => invoke<void>("install_update"),
   /** Open tabs·splits (restored on restart) */

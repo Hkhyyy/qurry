@@ -734,8 +734,8 @@ pub fn grid_align(state: State<'_, AppState>) -> qurry_core::format::Alignments 
 }
 
 #[tauri::command]
-pub fn set_grid_align(state: State<'_, AppState>, overrides: qurry_core::format::Alignments) -> AppResult<()> {
-    Ok(state.store.set_grid_align(&overrides)?)
+pub fn set_grid_align(state: State<'_, AppState>, class: qurry_core::format::ValueClass, align: qurry_core::format::Align) -> AppResult<qurry_core::format::Alignments> {
+    state.store.set_grid_align(class, align)
 }
 
 /// Saves the channel, then answers what it offers from the saved check only (no request): None if nothing was checked yet or checks are off

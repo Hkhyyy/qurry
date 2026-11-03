@@ -250,17 +250,20 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     scenes.push(app_scene(h, "Grid alignment", "Numbers and NULL on the right by default (a NULL stays in line with the numbers); text, dates, booleans and JSON on the left", 120, 22));
     {
         use qurry_core::format::{Align, ValueClass};
-        h.app.align = [(ValueClass::Null, Align::Left), (ValueClass::Boolean, Align::Center)].into();
+        h.app.state.store.set_grid_align(ValueClass::Null, Align::Left).unwrap();
+        h.app.align = h.app.state.store.set_grid_align(ValueClass::Boolean, Align::Center).unwrap();
     }
     scenes.push(app_scene(h, "Grid alignment: changed", "settings.json \"gridAlign\": { \"null\": \"left\", \"boolean\": \"center\" } (GUI Settings › Appearance › Alignment); the other classes keep their default", 120, 22));
-    h.app.state.store.set_grid_align(&h.app.align.clone()).unwrap();
     h.app.palette_grid_align(qurry_core::format::ValueClass::Null);
     scenes.push(app_scene(h, "Grid alignment palette", "⌃k › Grid Alignment…: where each kind of value sits, shared with the GUI; Enter picks Left / Center / Right", 120, 22));
     h.key("Enter");
     scenes.push(app_scene(h, "Grid alignment: pick", "⌃k › Grid Alignment… › NULL: opens on where it sits now (Enter keeps it)", 120, 22));
     h.app.popup = None;
-    h.app.state.store.set_grid_align(&Default::default()).unwrap();
-    h.app.align = Default::default();
+    {
+        use qurry_core::format::{Align, ValueClass};
+        h.app.state.store.set_grid_align(ValueClass::Null, Align::Right).unwrap();
+        h.app.align = h.app.state.store.set_grid_align(ValueClass::Boolean, Align::Left).unwrap();
+    }
     h.app.close_tab_now(h.app.active);
     // Production log
     let entry = |id: &str, ago: i64, sql: &str, rows: Option<u64>, undo: bool, in_tx: bool| qurry_core::audit::AuditEntry {

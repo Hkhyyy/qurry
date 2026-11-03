@@ -709,8 +709,17 @@ impl Store {
         self.settings().get("gridAlign").map(crate::format::alignments).unwrap_or_default()
     }
 
-    pub fn set_grid_align(&self, overrides: &crate::format::Alignments) -> AppResult<()> {
-        self.set_setting("gridAlign", serde_json::to_value(overrides)?)
+    /// Change one class, on what the file holds now (the GUI and the TUI may both have changed it); its default drops the override,
+    /// so a later default applies. Returns what is saved
+    pub fn set_grid_align(&self, class: crate::format::ValueClass, align: crate::format::Align) -> AppResult<crate::format::Alignments> {
+        let mut next = self.grid_align();
+        if align == class.default_align() {
+            next.remove(&class);
+        } else {
+            next.insert(class, align);
+        }
+        self.set_setting("gridAlign", serde_json::to_value(&next)?)?;
+        Ok(next)
     }
 
     /// Change one key of settings.json, keeping the others
@@ -768,7 +777,8 @@ mod tests {
         assert_eq!(saved, serde_json::json!({ "updateChannel": "beta", "later": 1 }));
     }
 
-    /// Grid alignment: defaults until a class is changed, other settings kept, a value this version doesn't know skipped
+    /// Grid alignment: defaults until a class is changed, other settings kept, a value this version doesn't know skipped; a change
+    /// keeps what another app saved meanwhile, and the default drops the override
     #[test]
     fn grid_align_setting() {
         use crate::format::{Align, Alignments, ValueClass};
@@ -776,9 +786,15 @@ mod tests {
         let store = Store::new(dir.path().join("cfg"));
         assert!(store.grid_align().is_empty());
         store.set_update_channel(crate::update::Channel::Beta).unwrap();
-        store.set_grid_align(&Alignments::from([(ValueClass::Null, Align::Left)])).unwrap();
+        assert_eq!(store.set_grid_align(ValueClass::Null, Align::Left).unwrap(), Alignments::from([(ValueClass::Null, Align::Left)]));
         assert_eq!(store.grid_align(), Alignments::from([(ValueClass::Null, Align::Left)]));
         assert_eq!(store.update_channel(), crate::update::Channel::Beta);
+        // Another app (the TUI) changed Boolean meanwhile: changing Number keeps it
+        let other = Store::new(dir.path().join("cfg"));
+        other.set_grid_align(ValueClass::Boolean, Align::Center).unwrap();
+        let both = Alignments::from([(ValueClass::Null, Align::Left), (ValueClass::Boolean, Align::Center), (ValueClass::Number, Align::Center)]);
+        assert_eq!(store.set_grid_align(ValueClass::Number, Align::Center).unwrap(), both);
+        assert_eq!(store.set_grid_align(ValueClass::Number, Align::Right).unwrap(), Alignments::from([(ValueClass::Null, Align::Left), (ValueClass::Boolean, Align::Center)]));
         let path = dir.path().join("cfg/settings.json");
         fs::write(&path, r#"{"gridAlign": {"null": "left", "number": "justify"}}"#).unwrap();
         assert_eq!(store.grid_align(), Alignments::from([(ValueClass::Null, Align::Left)]));

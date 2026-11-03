@@ -398,16 +398,10 @@ impl App {
         self.popup = Some(Popup::Palette(Palette { title: format!("{} Alignment", class_name(class)), input: TextArea::default(), items, sel, loading: 0, cache: Default::default() }));
     }
 
-    /// Save one class's alignment for the GUI and the TUI. The default drops the override, as in the GUI (a later default then applies)
+    /// Save one class's alignment for the GUI and the TUI (the core drops the override when it is the default)
     fn set_grid_align(&mut self, class: ValueClass, a: Align) {
-        let mut next = self.state.store.grid_align();
-        if a == class.default_align() {
-            next.remove(&class);
-        } else {
-            next.insert(class, a);
-        }
-        self.status = match self.state.store.set_grid_align(&next) {
-            Ok(()) => {
+        self.status = match self.state.store.set_grid_align(class, a) {
+            Ok(next) => {
                 self.align = next;
                 format!("Grid alignment: {} on the {} — saved for the GUI too", class_name(class), align_name(a).to_lowercase())
             }

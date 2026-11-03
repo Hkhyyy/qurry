@@ -7,9 +7,14 @@ const saved = vi.hoisted(() => ({ overrides: {} as Record<string, string>, fail:
 vi.mock("./api", () => ({
   api: {
     gridAlign: async () => saved.overrides,
-    setGridAlign: async (o: Record<string, string>) => {
+    // As the core does: re-read the file, change the one class (its default drops it), return what is saved now
+    setGridAlign: async (cls: string, a: string) => {
       if (saved.fail) throw "Couldn't save the settings: permission denied";
-      saved.overrides = o;
+      const next = { ...saved.overrides };
+      if (a === (cls === "number" || cls === "null" ? "right" : "left")) delete next[cls];
+      else next[cls] = a;
+      saved.overrides = next;
+      return next;
     },
   },
 }));
@@ -59,16 +64,21 @@ describe("grid alignment", () => {
     expect(alignOf("boolean")).toBe("left");
   });
 
+  it("a change saved by another app (the TUI) while the GUI is open is kept, and shows after the next save", async () => {
+    saved.overrides = { null: "left" };
+    await setGridAlign("number", "center");
+    expect(saved.overrides).toEqual({ null: "left", number: "center" });
+    expect(alignOf("null")).toBe("left");
+  });
+
   it("a save that fails rolls the setting back and says why", async () => {
     saved.fail = true;
     await expect(setGridAlign("null", "left")).rejects.toMatch("permission denied");
     expect(alignOf("null")).toBe("right");
   });
 
-  it("without WebAssembly cells get no alignment (the stylesheet keeps numbers on the right), and a pick is kept, not dropped as a default", async () => {
+  it("without WebAssembly cells get no alignment (the stylesheet keeps numbers on the right)", () => {
     wasm.refused = true;
     expect(alignTable({ null: "left" })).toEqual({});
-    await setGridAlign("null", "left");
-    expect(saved.overrides).toEqual({ null: "left" });
   });
 });
