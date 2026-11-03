@@ -7,6 +7,7 @@ import { FindPanel, FindRun, FtsScope, FullTextSearchDialog } from "../../compon
 import { isRelation, NodeInfo, revealInTree } from "../../components/SchemaTree";
 import { ActionItem, DbObject, SearchEverywhere, SeTab } from "../../components/SearchEverywhere";
 import { RecentFiles, Switcher, SwitchItem } from "../../components/Switcher";
+import { tabIcon } from "../../ui/icons";
 import type { useConnActions } from "../conns/useConnActions";
 import type { useConsole } from "../console/useConsole";
 import { setDialog, setHistoryFor, setHistoryTab, setKeymapOpen, setProdLog, setSchemeOpen, setSettingsOpen } from "../dialogs/store";
@@ -47,7 +48,10 @@ export function useSearch({
   // ───────── Switcher / Recent Files / Maximize ─────────
   const [switcher, setSwitcher] = useState<{ items: SwitchItem[]; start: number } | null>(null);
   const [recentOpen, setRecentOpen] = useState(false);
-  const kindIcon = (k: Tab["kind"]) => (k === "table" ? "▦" : k === "ddl" ? "ƒ" : k === "redis" ? "◆" : "⌘");
+  const kindIcon = (t: { kind: string; objKind?: string }) => {
+    const I = tabIcon(t.kind, t.objKind);
+    return <I />;
+  };
   const hintOf = (connId: string, db?: string) => {
     const c = conns.find((x) => x.id === connId);
     return c ? c.name + (db ? ` · ${db}` : "") : "";
@@ -56,14 +60,14 @@ export function useSearch({
     const ts = useTabsStore.getState().tabs;
     const ordered = [...useTabsStore.getState().mru.map((id) => ts.find((t) => t.id === id)).filter((t): t is Tab => !!t), ...ts.filter((t) => !useTabsStore.getState().mru.includes(t.id))];
     if (!ordered.length) return;
-    const items = ordered.map((t) => ({ key: t.id, icon: kindIcon(t.kind), title: labelOf(t), hint: hintOf(t.connId, t.database), color: conns.find((c) => c.id === t.connId)?.color }));
+    const items = ordered.map((t) => ({ key: t.id, icon: kindIcon(t), title: labelOf(t), hint: hintOf(t.connId, t.database), color: conns.find((c) => c.id === t.connId)?.color }));
     setSwitcher({ items, start: back ? items.length - 1 : 1 });
   };
   const recentItems = (): SwitchItem[] => {
     const openKeys = new Map(useTabsStore.getState().tabs.map((t) => [snapKey(t), t] as const));
     return useTabsStore.getState().recent
       .filter((r) => conns.some((c) => c.id === r.connId))
-      .map((r) => ({ key: r.key, icon: kindIcon(r.kind), title: r.title, hint: hintOf(r.connId, r.database), open: openKeys.has(r.key), color: conns.find((c) => c.id === r.connId)?.color }));
+      .map((r) => ({ key: r.key, icon: kindIcon(r), title: r.title, hint: hintOf(r.connId, r.database), open: openKeys.has(r.key), color: conns.find((c) => c.id === r.connId)?.color }));
   };
 
   // ───────── Search Everywhere (⇧⇧) / Go to Database Object (⌘o) / Find Action (⇧⌘A) ─────────
@@ -117,12 +121,12 @@ export function useSearch({
       const t = useTabsStore.getState().tabs.find((x) => x.id === id);
       if (t) {
         seen.add(snapKey(t));
-        items.push({ key: snapKey(t), icon: kindIcon(t.kind), title: t.title, hint: hintOf(t.connId, t.database), open: true });
+        items.push({ key: snapKey(t), icon: kindIcon(t), title: t.title, hint: hintOf(t.connId, t.database), open: true });
       }
     }
     for (const r of useTabsStore.getState().recent)
       if (!seen.has(r.key) && conns.some((c) => c.id === r.connId))
-        items.push({ key: r.key, icon: kindIcon(r.kind), title: r.title, hint: hintOf(r.connId, r.database), open: openKeys.has(r.key) });
+        items.push({ key: r.key, icon: kindIcon(r), title: r.title, hint: hintOf(r.connId, r.database), open: openKeys.has(r.key) });
     return items;
   };
   const seActions = (): ActionItem[] => {

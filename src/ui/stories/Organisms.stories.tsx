@@ -38,6 +38,7 @@ import {
   ToolbarSep,
 } from "..";
 import { connTabVars, type Theme } from "../../lib/theme";
+import { tabIcon } from "../icons";
 
 /** Organisms: blocks made of molecules — toolbar · dialog · confirm dialog · menu · popover · list · table · form */
 const meta: Meta = { title: "GUI/3 Organisms" };
@@ -292,22 +293,25 @@ export const ConfirmChoice: S = {
 };
 
 // ───────── Editor tab bar: the active tab in each theme, split panes, many tabs ─────────
-type DemoTab = { label: string; icon: string; kind: string; color?: string };
+/** kind / obj: tab kind and the object kind it shows (the icon comes from tabIcon, as in the app) */
+type DemoTab = { label: string; kind: string; obj?: string; color?: string };
 const PROD = "#6e2a2a";
 const DEV = "#5f5b24";
 const MYSQL = "#22524f";
 const LEFT: DemoTab[] = [
-  { label: "users", icon: "▦", kind: "table", color: DEV },
-  { label: "orders", icon: "▦", kind: "table", color: DEV },
-  { label: "console [PROD] shop_app", icon: "⌘", kind: "console", color: PROD },
-  { label: "Sessions", icon: "◉", kind: "dba" },
-  { label: "public.payments", icon: "▦", kind: "table", color: MYSQL },
+  { label: "users", kind: "table", obj: "table", color: DEV },
+  { label: "active_users", kind: "table", obj: "view", color: DEV },
+  { label: "console [PROD] shop_app", kind: "console", color: PROD },
+  { label: "active_users [DDL]", kind: "ddl", obj: "view", color: PROD },
+  { label: "Sessions", kind: "dba" },
+  { label: "public.payments", kind: "table", obj: "table", color: MYSQL },
 ];
 const RIGHT: DemoTab[] = [
-  { label: "console [DEV] shop_app", icon: "⌘", kind: "console", color: DEV },
-  { label: "customers", icon: "▦", kind: "table" },
+  { label: "console [DEV] shop_app", kind: "console", color: DEV },
+  { label: "refresh_stats [DDL]", kind: "ddl", obj: "routine", color: DEV },
+  { label: "customers", kind: "table", obj: "table" },
 ];
-const MANY: DemoTab[] = Array.from({ length: 16 }, (_, i) => (i % 3 === 0 ? { label: `console ${i + 1}`, icon: "⌘", kind: "console", color: [PROD, DEV, MYSQL][(i / 3) % 3] } : { label: `table_${i + 1}`, icon: "▦", kind: "table" }));
+const MANY: DemoTab[] = Array.from({ length: 16 }, (_, i) => (i % 3 === 0 ? { label: `console ${i + 1}`, kind: "console", color: [PROD, DEV, MYSQL][(i / 3) % 3] } : { label: `table_${i + 1}`, kind: "table", obj: "table" }));
 
 /** One editor group as the app draws it (useEditorGroups): tab strip over the work area. Click a tab or a pane to activate / focus it */
 function DemoGroup({ tabs, theme, state, onFocus }: { tabs: DemoTab[]; theme: Theme; state?: "focused" | "unfocused"; onFocus?: () => void }) {
@@ -315,9 +319,10 @@ function DemoGroup({ tabs, theme, state, onFocus }: { tabs: DemoTab[]; theme: Th
   return (
     <div className={"panel editor-group" + (state ? " " + state : "")} style={{ flex: 1, minWidth: 0 }} onMouseDownCapture={onFocus}>
       <TabStrip className="tabs" activeKey={String(active)} overflow={tabs.map((t, i) => ({ key: String(i), label: t.label, active: i === active, onSelect: () => setActive(i) }))}>
-        {tabs.map((t, i) => (
-          <TabItem key={i} icon={t.icon} iconClass={t.kind} label={t.label} active={i === active} onClose={() => {}} onMouseDown={() => setActive(i)} style={connTabVars(t.color, theme)} />
-        ))}
+        {tabs.map((t, i) => {
+          const Icon = tabIcon(t.kind, t.obj);
+          return <TabItem key={i} icon={<Icon />} label={t.label} active={i === active} onClose={() => {}} onMouseDown={() => setActive(i)} style={connTabVars(t.color, theme)} />;
+        })}
       </TabStrip>
       <div className="work-area" style={{ height: 56, boxShadow: tabs[active].color ? `inset 0 2px 0 ${tabs[active].color}` : undefined }} />
     </div>

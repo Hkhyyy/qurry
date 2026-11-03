@@ -128,6 +128,76 @@ export const IndexIcon = () => (
   </S>
 );
 
+/* ── Tab icons for what has no tree node (same 16px style) ── */
+/** Query console: terminal prompt */
+export const ConsoleIcon = () => (
+  <S>
+    <rect x="2" y="3" width="12" height="10" rx="1.2" stroke="var(--ui-icon)" strokeWidth="1.1" />
+    <path d="M4.8 6.3 6.8 8l-2 1.7M8.2 10.2h3" stroke="var(--ui-icon-db)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+  </S>
+);
+
+/** SQL text (DDL of an object without its own icon, SQL Generator) */
+export const DdlIcon = () => (
+  <S>
+    <path d="M4 2.5h5.5L12.5 5.5v8H4Z" stroke="var(--ui-icon)" strokeWidth="1.1" strokeLinejoin="round" />
+    <path d="M6 7.5h4.5M6 9.7h4.5M6 11.9h3" stroke="var(--ui-icon-db)" strokeWidth="1" strokeLinecap="round" />
+  </S>
+);
+
+/** DBA report */
+export const ReportIcon = () => (
+  <S>
+    <path d="M2.5 13.5h11" stroke="var(--ui-icon)" strokeWidth="1.1" strokeLinecap="round" />
+    <path d="M4.5 11V8M8 11V4.5M11.5 11V6.5" stroke="var(--ui-icon-db)" strokeWidth="1.8" strokeLinecap="round" />
+  </S>
+);
+
+/** ER diagram: two tables and a relation */
+export const DiagramIcon = () => (
+  <S>
+    <rect x="1.8" y="2.5" width="5.4" height="4.5" rx=".8" stroke="var(--ui-icon)" strokeWidth="1.1" />
+    <rect x="8.8" y="9" width="5.4" height="4.5" rx=".8" stroke="var(--ui-icon)" strokeWidth="1.1" />
+    <path d="M4.5 7v4.2h4.3" stroke="var(--ui-icon-db)" strokeWidth="1.1" strokeLinejoin="round" />
+  </S>
+);
+
+/** Schema compare / migration */
+export const MigrateIcon = () => (
+  <S>
+    <path d="M2.5 5.5h10M10 3l2.5 2.5L10 8M13.5 10.5h-10M6 8l-2.5 2.5L6 13" stroke="var(--ui-icon-db)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+  </S>
+);
+
+/** RAG (ask the schema) */
+export const RagIcon = () => (
+  <S>
+    <path d="M7 2.5c.4 2.6 1.4 3.6 4 4-2.6.4-3.6 1.4-4 4-.4-2.6-1.4-3.6-4-4 2.6-.4 3.6-1.4 4-4Z" fill="var(--ui-icon-db)" />
+    <path d="M12 9.5c.2 1.2.7 1.7 1.9 1.9-1.2.2-1.7.7-1.9 1.9-.2-1.2-.7-1.7-1.9-1.9 1.2-.2 1.7-.7 1.9-1.9Z" fill="var(--ui-icon)" />
+  </S>
+);
+
+type Icon = React.FC;
+/** Explorer tree object kind → its icon (the tree, Search Everywhere and the tabs that show the object) */
+const OBJECT_ICON: Record<string, Icon> = {
+  schema: SchemaIcon,
+  table: TableIcon,
+  partitioned: TableIcon,
+  foreign: TableIcon,
+  view: ViewIcon,
+  matview: ViewIcon,
+  sequence: SequenceIcon,
+  routine: RoutineIcon,
+  function: RoutineIcon,
+  procedure: RoutineIcon,
+  column: ColumnIcon,
+};
+export const objectIcon = (kind?: string): Icon | undefined => (kind ? OBJECT_ICON[kind] : undefined);
+
+const TAB_ICON: Record<string, Icon> = { console: ConsoleIcon, table: TableIcon, ddl: DdlIcon, redis: RedisIcon, dba: ReportIcon, erd: DiagramIcon, migrate: MigrateIcon, rag: RagIcon };
+/** Tab kind (+ the object kind a table or DDL tab shows) → its icon: the tab bar, Switcher, Recent Files and Search Everywhere */
+export const tabIcon = (kind: string, obj?: string): Icon => ((kind === "table" || kind === "ddl") && objectIcon(obj)) || TAB_ICON[kind] || DdlIcon;
+
 /* ── Grid toolbar icons (16px line icons) ── */
 const L = ({ d, children }: { d?: string; children?: React.ReactNode }) => (
   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>

@@ -15,6 +15,7 @@ import { RedisBrowser } from "../../components/RedisBrowser";
 import { TableEditor } from "../../components/TableEditor";
 import { TlsFix } from "../../components/TlsFix";
 import { Spacer, TabItem, TabStrip, Text, ToolButton, Toolbar } from "../../ui";
+import { tabIcon } from "../../ui/icons";
 import type { useConsole } from "../console/useConsole";
 import type { useExplorer } from "../explorer/useExplorer";
 import type { useJobs } from "../jobs/useJobs";
@@ -112,8 +113,8 @@ export function useEditorGroups({
     const open = useTabsStore.getState().tabs.find((t) => snapKey(t) === snap.key);
     if (open) return activate(open);
     if (snap.kind === "table" && snap.edit) {
-      openTableTab(c, snap.edit.schema, snap.edit.table, snap.database, undefined, snap.where, snap.orderBy);
-    } else addTab(c, snap.kind, { title: snap.title, sql: snap.sql, database: snap.database });
+      openTableTab(c, snap.edit.schema, snap.edit.table, snap.database, undefined, snap.where, snap.orderBy, snap.objKind);
+    } else addTab(c, snap.kind, { title: snap.title, sql: snap.sql, database: snap.database, objKind: snap.objKind });
   };
   const reopenClosed = () => {
     const [snap, ...rest] = useTabsStore.getState().closedStack;
@@ -128,8 +129,8 @@ export function useEditorGroups({
     const r = splitPane(useTabsStore.getState().panes, t.group, dir);
     if (!r) return setStatus(`Up to ${MAX_PANES} panes`);
     setPanes(r.pane);
-    if (t.kind === "table" && t.edit) openTableTab(c, t.edit.schema, t.edit.table, t.database, r.g, t.where, t.orderBy);
-    else addTab(c, t.kind, { title: t.kind === "console" ? `${t.title} (copy)` : t.title, sql: sqlOf(t), database: t.database, group: r.g });
+    if (t.kind === "table" && t.edit) openTableTab(c, t.edit.schema, t.edit.table, t.database, r.g, t.where, t.orderBy, t.objKind);
+    else addTab(c, t.kind, { title: t.kind === "console" ? `${t.title} (copy)` : t.title, sql: sqlOf(t), database: t.database, group: r.g, objKind: t.objKind });
   };
 
   const openTabMenu = (e: React.MouseEvent, t: Tab) => {
@@ -167,7 +168,7 @@ export function useEditorGroups({
       ...(split
         ? ([
             { label: "Move To Next Group", action: () => moveTo(t.id, other) },
-            { label: "Open In Next Group", action: () => { const cc = c; if (!cc) return; if (t.kind === "table" && t.edit) openTableTab(cc, t.edit.schema, t.edit.table, t.database, other, t.where, t.orderBy); else addTab(cc, t.kind, { title: t.title, sql: sqlOf(t), database: t.database, group: other }); } },
+            { label: "Open In Next Group", action: () => { const cc = c; if (!cc) return; if (t.kind === "table" && t.edit) openTableTab(cc, t.edit.schema, t.edit.table, t.database, other, t.where, t.orderBy, t.objKind); else addTab(cc, t.kind, { title: t.title, sql: sqlOf(t), database: t.database, group: other, objKind: t.objKind }); } },
             { label: "Unsplit All", action: unsplit },
           ] as MenuItem[])
         : []),
@@ -239,12 +240,12 @@ export function useEditorGroups({
         >
           {gTabs.map((t) => {
             const color = conns.find((c) => c.id === t.connId)?.color;
+            const Icon = tabIcon(t.kind, t.objKind);
             return (
               <TabItem
                 key={t.id}
                 label={labelOf(t)}
-                icon={t.kind === "table" ? "▦" : t.kind === "ddl" ? "ƒ" : t.kind === "redis" ? "◆" : t.kind === "dba" ? "◉" : t.kind === "erd" ? "⧉" : t.kind === "migrate" ? "⇄" : t.kind === "rag" ? "✦" : "⌘"}
-                iconClass={t.kind}
+                icon={<Icon />}
                 active={t.id === ga?.id}
                 pinned={t.pinned}
                 onPin={() => togglePin(t)}

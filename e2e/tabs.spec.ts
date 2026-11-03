@@ -127,3 +127,30 @@ for (const theme of ["dark", "light", "hc"]) {
     }
   });
 }
+
+test("DDL tabs show their object's tree icon: a view's differs from a function's (#83)", async ({ page }) => {
+  const iconOf = (l: Locator) => l.locator("svg").first().evaluate((s) => s.outerHTML);
+  const tabIconOf = (name: RegExp) => iconOf(page.getByRole("tab", { name }).locator(".tab-icon"));
+  // [DEV] shop_app's public schema (the MySQL source has the same groups further down)
+  const node = (name: string) => treeItem(page, name).first();
+  const open = async (name: string) => {
+    await node(name).click();
+    await page.keyboard.press("ArrowRight");
+    await expect(node(name)).toHaveAttribute("aria-expanded", "true");
+  };
+  await open("views 1");
+  await node("v_active_users").click();
+  await page.keyboard.press("Meta+B");
+  await expect(page.getByRole("tab", { name: /v_active_users \[DDL\]/ })).toBeVisible();
+  await open("routines 1");
+  await node("calc_fee(amount numeric) numeric").dblclick();
+  await expect(page.getByRole("tab", { name: /calc_fee \[DDL\]/ })).toBeVisible();
+
+  const [view, fn] = [await tabIconOf(/v_active_users \[DDL\]/), await tabIconOf(/calc_fee \[DDL\]/)];
+  expect(view).not.toEqual(fn);
+  expect(view).toEqual(await iconOf(node("v_active_users").locator(".node-icon")));
+  expect(fn).toEqual(await iconOf(node("calc_fee(amount numeric) numeric").locator(".node-icon")));
+  // The same icon in Recent Files (⌘E)
+  await page.keyboard.press("Meta+E");
+  expect(await iconOf(page.getByRole("option", { name: /v_active_users \[DDL\]/ }).locator(".ui-list-icon"))).toEqual(view);
+});

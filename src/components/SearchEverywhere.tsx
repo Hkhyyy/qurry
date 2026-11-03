@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ConnectionView, dbVisible, meta, targetId } from "../lib/api";
 import { fuzzyScore } from "../lib/fuzzy";
 import { useSharedReady } from "../lib/shared";
-import { ColumnIcon, RoutineIcon, SchemaIcon, SequenceIcon, TableIcon, ViewIcon } from "../ui/icons";
+import { objectIcon } from "../ui/icons";
 import { Kbd, KeyHints, List, ListGroup, ListItem, Notice, Overlay, Popover, Row, SearchField, Select, Spacer, Tabs } from "../ui";
 
 export type SeTab = "all" | "database" | "files" | "symbols" | "actions";
@@ -29,7 +29,7 @@ export interface DbObject {
 }
 export interface FileItem {
   key: string;
-  icon: string;
+  icon: React.ReactNode;
   title: string;
   hint: string;
   open: boolean;
@@ -92,18 +92,6 @@ function columnsOf(c: ConnectionView, db: string): Promise<DbObject[]> {
     );
   return colCache.get(key)!;
 }
-
-const KIND_ICON: Record<string, React.ReactNode> = {
-  schema: <SchemaIcon />,
-  table: <TableIcon />,
-  foreign: <TableIcon />,
-  view: <ViewIcon />,
-  matview: <ViewIcon />,
-  sequence: <SequenceIcon />,
-  function: <RoutineIcon />,
-  procedure: <RoutineIcon />,
-  column: <ColumnIcon />,
-};
 
 interface Props {
   initialTab: SeTab;
@@ -279,11 +267,12 @@ export function SearchEverywhere(p: Props) {
     if (r.t === "action") return <ListItem {...common} icon="⚡" title={r.a.name} dim={r.a.disabled} hint={r.a.group} trailing={r.a.shortcut && <Kbd>{r.a.shortcut}</Kbd>} />;
     if (r.t === "file") return <ListItem {...common} icon={r.f.icon} title={r.f.title} dim={!r.f.open} trailing={r.f.hint} />;
     const o = r.o;
+    const Icon = objectIcon(o.kind);
     const where = o.kind === "schema" ? "" : o.kind === "column" ? `${o.schema}.${o.table}` : o.schema;
     return (
       <ListItem
         {...common}
-        icon={KIND_ICON[o.kind] ?? "•"}
+        icon={Icon ? <Icon /> : "•"}
         title={o.name}
         hint={o.kind === "column" ? `${o.type} · ${where}` : where}
         trailing={
