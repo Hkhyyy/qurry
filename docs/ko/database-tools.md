@@ -11,7 +11,7 @@ GUI: Data Source 우클릭 › **Tools** › Sessions & Locks, Slow Queries, …
 | 묶음 | 리포트 |
 |---|---|
 | 활동 | **Sessions** (누가 누구를 막는지, 쿼리 · 트랜잭션이 얼마나 됐는지, 3초마다 새로 고침) · **Lock Waits** — 우클릭 / `c` 쿼리 취소, `K` 세션 종료 |
-| 성능 | **Slow Queries** — 총 시간 기준 상위 100개 (`pg_stat_statements` / `performance_schema`), 콘솔에서 열거나 EXPLAIN (값 자리에 `$1` / `?` / `(...)` 가 들어간 문장이라 PostgreSQL 16+ 는 `EXPLAIN (GENERIC_PLAN)`, 그 밖에는 값을 먼저 채워야 함) |
+| 성능 | **Slow Queries** — 총 시간 기준 상위 100개 (`pg_stat_statements` / `performance_schema`), 콘솔에서 열거나 EXPLAIN (값 자리에 `$1` / `?` / `(...)` 가 들어간 문장이라 PostgreSQL 16+ 는 `EXPLAIN (GENERIC_PLAN)`, 그 밖에는 값을 먼저 채워야 함). `pg_stat_statements` 가 없으면 무엇이 빠졌는지 알려 줌: 라이브러리가 이미 미리 로드된 서버(RDS / Aurora 는 보통 그렇다)는 `CREATE EXTENSION pg_stat_statements;` 만 (superuser — RDS / Aurora 는 `rds_superuser`, Cloud SQL 은 `cloudsqlsuperuser`), 아니면 먼저 `shared_preload_libraries` 에 넣고 재시작 (RDS / Aurora / Cloud SQL 은 파라미터 그룹 / 데이터베이스 플래그를 바꾼 뒤 재부팅), 확장이 아직 없으면 그다음 생성 |
 | 용량 | **Table Sizes** · **Table Bloat** · **Index Bloat** (지운 행이 차지한 공간, 통계로 어림 — PostgreSQL) · **Table Fragmentation** (MySQL) · **Unused Indexes** (언제부터 센 스캔 수인지 함께) · **Duplicate Indexes** · **Foreign Keys Without an Index** — DROP / CREATE INDEX, VACUUM FULL, REINDEX, OPTIMIZE TABLE 생성 |
 | 유지보수 | **Vacuum & Dead Rows** · **Vacuum Progress** (지금 도는 VACUUM, VACUUM FULL / autovacuum: 단계, 스캔한 비율 — 취소 가능) · **Transaction ID Age** (wraparound) — VACUUM ANALYZE 생성 (PostgreSQL) |
 | 서버 | **Server Overview** (가동 시간, 연결 수, 캐시 적중률) · **Replication** 지연 · **Settings** |
