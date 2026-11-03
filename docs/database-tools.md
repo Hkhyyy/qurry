@@ -2,7 +2,7 @@
 
 English | [한국어](ko/database-tools.md)
 
-Admin reports, diagrams, schema and data comparison, migrations, backups, importing files, test data, copying related rows, charts, query history and explain plans.
+Admin reports, table structure, diagrams, schema and data comparison, migrations, backups, importing files, test data, copying related rows, charts, query history and explain plans.
 
 ## Database admin (PostgreSQL, MySQL, MariaDB)
 
@@ -37,6 +37,13 @@ GUI — right-click a data source › Tools › Compare & Migrate; TUI — `⌃k
 Right-click a database › Tools › Back Up Database… / Restore Database… (TUI: `⌃k`). Runs `pg_dump` / `pg_restore` / `psql` or `mysqldump` / `mysql` from this computer (Homebrew `libpq`, `mysql-client`, `mariadb`, Postgres.app and the usual Linux paths are found too, and MariaDB's own `mariadb-dump` / `mariadb` names; the dump client closest to the server version is used — for MySQL / MariaDB one of the same kind, and if only an older or other-kind client is found and it fails, the message says what to install. A MySQL restore uses the newest `mysql` of the server's kind that can switch its shell commands off: `--system-command=OFF`, MariaDB `--sandbox`). SSH tunnels are used, progress shows in the status bar and can be cancelled. Backup files and temporary dumps are readable only by you, and passwords go to the tools in a private file for that one server. Restoring a `.sql` file runs only SQL: psql and mysql client commands in the file (running programs, writing files, connecting elsewhere) are switched off — this needs psql 17.6 / 16.10 / 15.14 / 14.19 / 13.22 or newer, so an older psql doesn't restore `.sql` files (custom-format backups go through `pg_restore` and aren't affected — except when the closest `pg_restore` is 17 or newer and the server is older: it would send settings that server doesn't know, so the backup is replayed through psql instead). Dumps that switch databases with `\connect` (`pg_dump -C`, `pg_dumpall`) stop with a message — restore those with psql yourself.
 
 MySQL backups leave out `SET @@GLOBAL.GTID_PURGED` (`--set-gtid-purged=OFF`, mysqldump 5.6.9 and newer), so a dump of a GTID server (RDS and others) restores into another server, and an 8.0+ `mysqldump` skips column statistics for a 5.7 or MariaDB server (`--column-statistics=0`). **Leave out DEFINER= clauses** in the backup dialog (TUI: y at the question after the file path) writes routines, views, triggers and events without their `DEFINER=` user, so restoring them on a managed service without SUPER works (they then belong to the user who restores). It applies to **Data only** too: a data-only dump still has the routines, triggers and events (not the views). A MySQL restore isn't atomic: statements run one by one, so if one fails, what ran before it stays (PostgreSQL restores run in one transaction).
+
+## Table structure (DDL tab)
+
+**Go to DDL** (`⌘b`, TUI `⌃b`) on a table opens its SQL. The tab's **SQL | Structure** switch (TUI: `v`) shows the same table as read-only tables instead: columns (name, type, nullable, default, comment, the primary key marked), keys and constraints, indexes with their columns, foreign keys both ways (what the table references and which tables reference it, with ON UPDATE / ON DELETE), triggers, and table options with the comment (PostgreSQL: owner, tablespace, storage parameters, partition key, parent; MySQL: engine, charset, collation, row format, auto increment). New DDL tabs open in the view you used last; SQL is the default.
+- PostgreSQL and MySQL fill every section. Other data sources (driver plugins) show columns, keys and indexes, and say "Not available for this data source" for the rest.
+- If loading fails, the view says why: **Retry** (TUI `r`), or **Show SQL** (TUI `v`) — the SQL view still has the full DDL.
+- Editing is done in **Modify Table…** (below), not in this view.
 
 ## Create and modify objects (PostgreSQL, MySQL)
 
