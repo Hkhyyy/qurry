@@ -184,6 +184,8 @@ pub fn run() {
             commands::check_update,
             commands::update_channel,
             commands::set_update_channel,
+            commands::grid_align,
+            commands::set_grid_align,
             commands::install_update,
         ])
         .build(app_context())

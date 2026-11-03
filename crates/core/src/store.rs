@@ -701,8 +701,22 @@ impl Store {
     }
 
     pub fn set_update_channel(&self, channel: crate::update::Channel) -> AppResult<()> {
+        self.set_setting("updateChannel", serde_json::to_value(channel)?)
+    }
+
+    /// Grid alignment per value class: only the classes the user changed (GUI Settings › Appearance › Alignment; the TUI reads it)
+    pub fn grid_align(&self) -> crate::format::Alignments {
+        self.settings().get("gridAlign").map(crate::format::alignments).unwrap_or_default()
+    }
+
+    pub fn set_grid_align(&self, overrides: &crate::format::Alignments) -> AppResult<()> {
+        self.set_setting("gridAlign", serde_json::to_value(overrides)?)
+    }
+
+    /// Change one key of settings.json, keeping the others
+    fn set_setting(&self, key: &str, value: serde_json::Value) -> AppResult<()> {
         let mut all = self.settings();
-        all.insert("updateChannel".into(), serde_json::to_value(channel)?);
+        all.insert(key.into(), value);
         if let Some(dir) = self.path.parent() {
             fs::create_dir_all(dir)?;
         }
@@ -752,6 +766,22 @@ mod tests {
         store.set_update_channel(Channel::Beta).unwrap();
         let saved: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved, serde_json::json!({ "updateChannel": "beta", "later": 1 }));
+    }
+
+    /// Grid alignment: defaults until a class is changed, other settings kept, a value this version doesn't know skipped
+    #[test]
+    fn grid_align_setting() {
+        use crate::format::{Align, Alignments, ValueClass};
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("cfg"));
+        assert!(store.grid_align().is_empty());
+        store.set_update_channel(crate::update::Channel::Beta).unwrap();
+        store.set_grid_align(&Alignments::from([(ValueClass::Null, Align::Left)])).unwrap();
+        assert_eq!(store.grid_align(), Alignments::from([(ValueClass::Null, Align::Left)]));
+        assert_eq!(store.update_channel(), crate::update::Channel::Beta);
+        let path = dir.path().join("cfg/settings.json");
+        fs::write(&path, r#"{"gridAlign": {"null": "left", "number": "justify"}}"#).unwrap();
+        assert_eq!(store.grid_align(), Alignments::from([(ValueClass::Null, Align::Left)]));
     }
 
     #[test]
