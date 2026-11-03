@@ -281,6 +281,8 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
   const moreRowsFailed = (e: unknown) => sharedOr(String(e), (s) => s.moreRowsFailed(String(e)));
   const fetchMoreEntry = async (tabId: string, entryId: string) => {
     const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId);
+    // A run in the tab is replacing the results: a load-more now would be answered for the old one (the new grid asks for its own)
+    if (tab?.running) return;
     if (!tab || tab.cursorEntry !== entryId) {
       // The server cursor is open only on the last result
       updTab(tabId, (t) => ({ ...t, results: t.results.map((r) => (r.id === entryId && r.result ? { ...r, result: { ...r.result, truncated: false } } : r)) }));
@@ -365,6 +367,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
   };
 
   const fetchMore = async (tab: Tab) => {
+    if (useTabsStore.getState().tabs.find((t) => t.id === tab.id)?.running) return;
     const shown = tab.result?.rows.length ?? 0;
     if (shown >= MAX_ROWS) return setStatus(capMsg(shown));
     // The result asked for: a run meanwhile (reload, filter) replaced it, and the answer for the old one is dropped

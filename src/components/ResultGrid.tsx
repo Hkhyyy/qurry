@@ -208,8 +208,8 @@ export function ResultGrid(p: Props) {
   const lastItem = items[items.length - 1];
   useEffect(() => {
     // After a failed load the reason stays in the grid: no retry on every scroll (running the query again starts over)
-    if (lastItem && result.truncated && !result.moreError && !loadingMore && lastItem.index >= baseCount - 30) p.onFetchMore();
-  }, [lastItem?.index, result.truncated, result.moreError, loadingMore, baseCount]);
+    if (lastItem && result.truncated && !result.moreError && !loadingMore && !p.running && lastItem.index >= baseCount - 30) p.onFetchMore();
+  }, [lastItem?.index, result.truncated, result.moreError, loadingMore, p.running, baseCount]);
 
   // ─── Selection ───
   const rect = selA && selB ? { r0: Math.min(selA.r, selB.r), r1: Math.max(selA.r, selB.r), c0: Math.min(selA.c, selB.c), c1: Math.max(selA.c, selB.c) } : null;
