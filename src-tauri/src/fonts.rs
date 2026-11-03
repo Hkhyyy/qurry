@@ -3,7 +3,6 @@
 
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::sync::OnceLock;
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct FontFamily {
@@ -78,12 +77,11 @@ fn list() -> Vec<FontFamily> {
     Vec::new()
 }
 
-static FAMILIES: OnceLock<Vec<FontFamily>> = OnceLock::new();
-
-/// Installed font families, sorted, each flagged monospaced. Listed once per session, on a blocking thread
+/// Installed font families, sorted, each flagged monospaced. Listed afresh on each call (on a blocking thread),
+/// so a font installed while the app runs shows up the next time the picker opens
 #[tauri::command]
 pub async fn font_families() -> Vec<FontFamily> {
-    tauri::async_runtime::spawn_blocking(|| FAMILIES.get_or_init(list).clone()).await.unwrap_or_default()
+    tauri::async_runtime::spawn_blocking(list).await.unwrap_or_default()
 }
 
 #[cfg(test)]

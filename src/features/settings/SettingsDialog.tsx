@@ -11,14 +11,14 @@ import { FontPicker } from "./FontPicker";
 import { isMac, sk } from "../shortcuts/labels";
 
 /** Settings › Appearance › Editor / Grid font: a family picked from the installed ones (FontPicker) and a size. Applied as you pick */
-function FontField({ target, label, hint, installed }: { target: FontTarget; label: string; hint?: string; installed: FontFamily[] | null }) {
+function FontField({ target, label, hint, installed, onOpen }: { target: FontTarget; label: string; hint?: string; installed: FontFamily[] | null; onOpen: () => void }) {
   const { family, size } = useFonts()[target];
   const [min, max] = SIZES[target];
   return (
     // group: a <label> would turn a click in the font list into a click on the picker field
     <Field group label={label} hint={hint}>
       <div className="ui-row">
-        <FontPicker label={`${label} family`} value={family} installed={installed} onPick={(f) => setFont(target, { family: f })} />
+        <FontPicker label={`${label} family`} value={family} installed={installed} onOpen={onOpen} onPick={(f) => setFont(target, { family: f })} />
         <Select aria-label={`${label} size`} value={size} onChange={(e) => setFont(target, { size: Number(e.target.value) })}>
           {Array.from({ length: max - min + 1 }, (_, i) => min + i).map((n) => (
             <option key={n} value={n}>
@@ -158,10 +158,12 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
     setThemePref(p);
   };
   const sync = pref === "system";
-  // Listed once per session by the app; empty if it can't (the pickers then offer the default and the saved family)
+  // Listed when Settings opens and again each time a picker opens (a font installed meanwhile shows up); empty if it can't
+  // (the pickers then offer the default and the saved family)
   const [fonts, setFonts] = useState<FontFamily[] | null>(null);
+  const loadFonts = () => api.fontFamilies().then(setFonts, () => setFonts((f) => f ?? []));
   useEffect(() => {
-    api.fontFamilies().then(setFonts, () => setFonts([]));
+    loadFonts();
   }, []);
   const fontKeys = [sk("font.bigger"), sk("font.smaller")].filter(Boolean).join(" / ");
   return (
@@ -202,8 +204,8 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
                 </Checkbox>
               </div>
             </Field>
-            <FontField target="editor" label="Editor font" hint={fontKeys && `Size also with ${fontKeys} in the editor.`} installed={fonts} />
-            <FontField target="grid" label="Grid font" installed={fonts} />
+            <FontField target="editor" label="Editor font" hint={fontKeys && `Size also with ${fontKeys} in the editor.`} installed={fonts} onOpen={loadFonts} />
+            <FontField target="grid" label="Grid font" installed={fonts} onOpen={loadFonts} />
             <GridAlignField />
             <Field label="Updates" hint={updMsg ?? undefined}>
               <div className="ui-row">
