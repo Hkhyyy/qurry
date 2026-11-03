@@ -430,6 +430,7 @@ mod tests {
             ("grid.revert", "Revert"),
             ("grid.export", "ExportCsv"),
             ("grid.copyInList", "CopyInList"),
+            ("grid.valueEditor", "ValueEditor"),
             ("grid.submit", "Submit"),
         ];
         for (gui, tui) in pairs {

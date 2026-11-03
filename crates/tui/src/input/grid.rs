@@ -101,11 +101,17 @@ pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
                         return;
                     }
                     let name = g.result.columns[c].name.clone();
+                    let ty = g.result.columns[c].type_name.clone();
                     let cur = g.value(r, c).unwrap_or_default();
-                    app.input(format!("{name} (row {})", r + 1), &cur, move |a, s| {
+                    app.input(format!("{name} (row {})", r + 1), &cur.clone(), move |a, s| {
+                        // Same rule as the GUI's Value Editor: a json / jsonb column refuses text that isn't JSON
+                        let v = match qurry_shared::value::value_to_apply(&ty, &cur, &s) {
+                            Ok(v) => v,
+                            Err(e) => return a.status = format!("{name} not changed: {e}"),
+                        };
                         if let Some(TabKind::Table(tt)) = a.tab_mut(id).map(|t| &mut t.kind) {
                             if let Some(g) = &mut tt.grid {
-                                g.set_value(r, c, s);
+                                g.set_value(r, c, v);
                             }
                         }
                     });
@@ -216,6 +222,57 @@ mod tests {
         h.mouse("up", x, y0 as u16 + 2);
         h.key("Y");
         assert_eq!(h.app.status, "Copied 3 values as an IN list: ('1.2.3.4', '5.6.7.8', '9.9.9.9')");
+    }
+
+    /// A table whose second column is jsonb, its cursor on that column's first cell
+    fn jsonb_table(h: &mut Harness) -> u64 {
+        let id = h.table_tab("payments", &["id", "data"], &[&["1", r#"{"kind": "card", "n": 12345678901234567890}"#], &["2", "[1, 2]"]], &["id"]);
+        if let Some(TabKind::Table(t)) = h.app.tab_mut(id).map(|t| &mut t.kind) {
+            t.grid.as_mut().unwrap().result.columns[1].type_name = "jsonb".into();
+        }
+        h.key("Right");
+        id
+    }
+
+    /// v: the value panel sits beside the grid (both titles on one line) and follows the cursor, JSON pretty-printed as the GUI shows it;
+    /// ⌃w from the grid closes the panel first, then the tab (as the GUI's ⌘w)
+    #[tokio::test]
+    async fn value_panel_follows_the_cursor_beside_the_grid() {
+        let mut h = Harness::new().await;
+        let id = jsonb_table(&mut h);
+        h.key("v");
+        let s = h.screen(120, 24);
+        assert!(s.lines().any(|l| l.contains("public.payments") && l.contains("data : jsonb")), "{s}");
+        assert!(s.contains(r#"  "kind": "card","#) && s.contains(r#"  "n": 12345678901234567890"#), "{s}");
+        h.key("Down");
+        let s = h.screen(120, 24);
+        assert!(s.contains("│  1,") && !s.contains(r#"│  "kind""#), "{s}");
+        // ↑↓ still move the grid's cursor
+        assert_eq!(h.table(id).grid.as_ref().unwrap().row, 1);
+        h.key("Ctrl+W");
+        assert!(!h.app.value_panel);
+        assert!(h.app.tab_mut(id).is_some());
+        assert!(!h.screen(120, 24).contains("data : jsonb"));
+        h.key("Ctrl+W");
+        assert!(h.app.tab_mut(id).is_none());
+    }
+
+    /// Enter on a jsonb cell: text that isn't JSON is refused with the reason (the GUI's Value Editor rule), JSON is written
+    #[tokio::test]
+    async fn json_column_edit_refuses_invalid_json() {
+        let mut h = Harness::new().await;
+        let id = jsonb_table(&mut h);
+        let edit = |h: &mut Harness, text: &str| {
+            h.key("Enter");
+            let Some(crate::app::Popup::Input { input, .. }) = &mut h.app.popup else { panic!("no input") };
+            *input = tui_textarea::TextArea::from([text]);
+            h.key("Enter");
+        };
+        edit(&mut h, "{oops");
+        assert!(h.app.status.starts_with("data not changed: Invalid JSON"), "{}", h.app.status);
+        assert!(h.table(id).grid.as_ref().unwrap().edits.is_empty());
+        edit(&mut h, r#"{"kind":"bank"}"#);
+        assert_eq!(h.table(id).grid.as_ref().unwrap().value(0, 1).as_deref(), Some(r#"{"kind":"bank"}"#));
     }
 
     /// ⌃K › Database Admin…: picking a report opens a DBA tab (reuses that tab for the same connection target)

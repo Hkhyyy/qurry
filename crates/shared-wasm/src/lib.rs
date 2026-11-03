@@ -390,6 +390,24 @@ pub fn pad_frac(s: &str, width: usize) -> String {
     qurry_shared::format::pad_frac(s, width)
 }
 
+/// The Value Editor panel's text for a cell: { json, text } (qurry_shared::value::panel_text)
+#[wasm_bindgen(js_name = panelText)]
+pub fn panel_text(type_name: &str, value: &str) -> Result<JsValue, JsError> {
+    to(&qurry_shared::value::panel_text(type_name, value))
+}
+
+/// The panel's "{ }" toggle: valid JSON between pretty and one line, undefined for anything else
+#[wasm_bindgen(js_name = toggleJsonLayout)]
+pub fn toggle_json_layout(text: &str) -> Option<String> {
+    qurry_shared::value::toggle_layout(text)
+}
+
+/// What a panel edit writes to the cell: { Ok: text } or { Err: why it can't be applied }
+#[wasm_bindgen(js_name = valueToApply)]
+pub fn value_to_apply(type_name: &str, original: &str, edited: &str) -> Result<JsValue, JsError> {
+    to(&qurry_shared::value::value_to_apply(type_name, original, edited))
+}
+
 /// Value class of a grid cell ("string", "number", "dateTime", "boolean", "null", "jsonBinary")
 #[wasm_bindgen(js_name = valueClass)]
 pub fn value_class(type_name: &str, value: JsValue) -> Result<JsValue, JsError> {

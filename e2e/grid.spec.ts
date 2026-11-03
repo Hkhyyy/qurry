@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { dialog, expect, menuItem, openApp, test, treeItem, work } from "./app";
+import { dialog, expect, menuItem, openApp, openConsole, runAll, test, treeItem, typeSql, work } from "./app";
 
 const clipboard = (page: Page) => page.evaluate(() => navigator.clipboard.readText());
 /** The mock's created_at alternates no fraction / .5 / .125 */
@@ -220,4 +220,147 @@ test("grid keys work in Transpose and Chart too (find, back to Table)", async ({
   });
   await page.keyboard.press("Meta+KeyR");
   await expect.poll(() => page.evaluate(() => (window as any).__calls)).toContain("run_query");
+});
+
+// ─── Value Editor panel (⇧↩): beside the grid, follows the current cell, the grid keeps the keys ───
+test.describe("Value Editor panel", () => {
+  const cell = (page: Page, name: string) => work(page).getByRole("gridcell", { name, exact: true });
+  const panel = (page: Page) => work(page).locator(".value-panel");
+  const text = (page: Page) => panel(page).locator("textarea.ve-text");
+  const gridScroll = (page: Page) => work(page).locator(".grid-scroll");
+  const pending = (page: Page) => work(page).locator(".tb-info");
+  /** payments.data (jsonb) of row 1, as PostgreSQL sends it */
+  const DATA_1 = '{"kind": "card", "meta": {"src": "web", "ip": "10.0.0.1"}, "items": [0, 1]}';
+
+  test("↓ with the panel open moves the cell cursor and the panel follows", async ({ page }) => {
+    await cell(page, "user_1").click();
+    await page.keyboard.press("Shift+Enter");
+    await expect(panel(page).locator(".ve-title")).toHaveText("user_name : varchar");
+    await expect(text(page)).toHaveValue("user_1");
+    await expect(text(page)).toBeFocused();
+    // ⎋ goes back to the grid, the panel stays
+    await page.keyboard.press("Escape");
+    await expect(gridScroll(page)).toBeFocused();
+    await expect(panel(page)).toBeVisible();
+    await page.keyboard.press("ArrowDown");
+    await expect(cell(page, "user_2")).toHaveClass(/\bactive\b/);
+    await expect(text(page)).toHaveValue("user_2");
+    await page.keyboard.press("ArrowRight");
+    await expect(panel(page).locator(".ve-title")).toHaveText("amount : numeric");
+  });
+
+  test("⇧↩ on another cell focuses the panel on that cell", async ({ page }) => {
+    await cell(page, "user_1").click();
+    await page.keyboard.press("Shift+Enter");
+    await cell(page, "user_3").click();
+    await expect(gridScroll(page)).toBeFocused();
+    await expect(text(page)).toHaveValue("user_3");
+    await page.keyboard.press("Shift+Enter");
+    await expect(text(page)).toBeFocused();
+    await expect(text(page)).toHaveValue("user_3");
+  });
+
+  test("the panel sits beside the grid and narrows it, never over it", async ({ page }) => {
+    const before = (await work(page).locator(".grid-body").boundingBox())!;
+    await cell(page, "user_1").click();
+    await page.keyboard.press("Shift+Enter");
+    const grid = (await work(page).locator(".grid-body").boundingBox())!;
+    const side = (await panel(page).boundingBox())!;
+    expect(grid.width).toBeLessThan(before.width - 100);
+    expect(grid.x + grid.width).toBeLessThanOrEqual(side.x + 1);
+    // Same top and bottom as the grid (below the toolbar), up to the wrap's right edge
+    expect(Math.abs(side.y - grid.y)).toBeLessThanOrEqual(1);
+    expect(Math.abs(side.y + side.height - (grid.y + grid.height))).toBeLessThanOrEqual(1);
+    expect(Math.abs(side.x + side.width - (before.x + before.width))).toBeLessThanOrEqual(1);
+  });
+
+  test("⌘↩ applies and returns to the grid; leaving the cell applies too", async ({ page }) => {
+    await cell(page, "user_1").click();
+    await page.keyboard.press("Shift+Enter");
+    await text(page).fill("kim");
+    await page.keyboard.press("Meta+Enter");
+    await expect(cell(page, "kim")).toBeVisible();
+    await expect(pending(page)).toContainText("1 pending");
+    await expect(gridScroll(page)).toBeFocused();
+    await expect(panel(page)).toBeVisible();
+    // An edit not applied yet goes in when the selection moves on (DataGrip)
+    await page.keyboard.press("ArrowDown");
+    await text(page).fill("lee");
+    await cell(page, "user_3").click();
+    await expect(cell(page, "lee")).toBeVisible();
+    await expect(pending(page)).toContainText("2 pending");
+    await expect(text(page)).toHaveValue("user_3");
+  });
+
+  test("⌘w closes the panel first (back on the same cell), then the tab", async ({ page }) => {
+    await cell(page, "user_2").click();
+    await page.keyboard.press("Shift+Enter");
+    await page.keyboard.press("Meta+KeyW");
+    await expect(panel(page)).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: /users/ })).toHaveCount(1);
+    await expect(gridScroll(page)).toBeFocused();
+    await expect(cell(page, "user_2")).toHaveClass(/\bactive\b/);
+    await page.keyboard.press("Meta+KeyW");
+    await expect(page.getByRole("tab", { name: /users/ })).toHaveCount(0);
+  });
+
+  test("⇧⎋ closes the panel, from the panel or from its grid", async ({ page }) => {
+    await cell(page, "user_1").click();
+    await page.keyboard.press("Shift+Enter");
+    await expect(text(page)).toBeFocused();
+    await page.keyboard.press("Shift+Escape");
+    await expect(panel(page)).toHaveCount(0);
+    await expect(gridScroll(page)).toBeFocused();
+    await page.keyboard.press("Shift+Enter");
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Shift+Escape");
+    await expect(panel(page)).toHaveCount(0);
+  });
+
+  test("a jsonb cell opens pretty-printed and highlighted, and an edit goes back on one line", async ({ page }) => {
+    await treeItem(page, "payments").first().dblclick();
+    await cell(page, DATA_1).click();
+    await page.keyboard.press("Shift+Enter");
+    const ed = panel(page).locator(".monaco-editor");
+    await expect(ed).toBeVisible();
+    await expect(panel(page).locator(".ve-title")).toHaveText("data : jsonb");
+    await expect(ed.locator(".view-line")).toHaveCount(11);
+    // Monaco's JSON tokens: keys, strings, numbers and delimiters each get their own colour class
+    const classes = await ed.locator(".view-line span span").evaluateAll((els) => new Set(els.map((e) => e.className)).size);
+    expect(classes).toBeGreaterThanOrEqual(3);
+    // Line 2 is `  "kind": "card",`: replace card with bank in the pretty layout
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("End");
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("ArrowLeft");
+    for (let i = 0; i < 4; i++) await page.keyboard.press("Backspace");
+    await page.keyboard.type("bank");
+    await page.keyboard.press("Meta+Enter");
+    await expect(cell(page, '{"kind":"bank","meta":{"src":"web","ip":"10.0.0.1"},"items":[0,1]}')).toBeVisible();
+    await expect(pending(page)).toContainText("1 pending");
+  });
+
+  test("invalid JSON in a jsonb column is refused with the reason", async ({ page }) => {
+    await treeItem(page, "payments").first().dblclick();
+    await cell(page, DATA_1).click();
+    await page.keyboard.press("Shift+Enter");
+    await expect(panel(page).locator(".monaco-editor")).toBeVisible();
+    await page.keyboard.press("Meta+A");
+    await page.keyboard.press("Backspace");
+    await page.keyboard.type("x");
+    await page.keyboard.press("Meta+Enter");
+    await expect(panel(page).locator(".ve-error")).toContainText("Invalid JSON");
+    await expect(pending(page)).not.toContainText("pending");
+    await expect(cell(page, DATA_1)).toBeVisible();
+  });
+
+  test("console results are view-only in the panel", async ({ page }) => {
+    await openConsole(page);
+    await typeSql(page, "select * from users");
+    await runAll(page);
+    await cell(page, "user_1").click();
+    await page.keyboard.press("Shift+Enter");
+    await expect(text(page)).toHaveAttribute("readonly", "");
+    await expect(panel(page).locator(".ve-foot")).toContainText("Read-only");
+  });
 });

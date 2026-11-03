@@ -42,6 +42,7 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::SetNull, hint: "", run: set_null },
     ActionDef { action: Action::ExportCsv, hint: "", run: |app| app.export_start() },
     ActionDef { action: Action::CopyInList, hint: "", run: copy_in_list },
+    ActionDef { action: Action::ValueEditor, hint: "", run: toggle_value_panel },
     ActionDef { action: Action::FindSimilar, hint: "", run: |app| app.find_similar() },
     ActionDef { action: Action::RagSearch, hint: "", run: |app| app.rag_search_start() },
     ActionDef { action: Action::RagBuild, hint: "", run: |app| app.rag_build_start() },
@@ -86,7 +87,7 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::Disconnect, hint: "", run: disconnect },
     ActionDef { action: Action::Refresh, hint: "", run: refresh },
     ActionDef { action: Action::ManageSchemas, hint: "", run: manage_schemas },
-    ActionDef { action: Action::CloseTab, hint: "", run: |app| app.close_tab(app.active) },
+    ActionDef { action: Action::CloseTab, hint: "", run: close_tab },
     ActionDef { action: Action::NextTab, hint: "", run: |app| app.cycle_tab(1) },
     ActionDef { action: Action::PrevTab, hint: "", run: |app| app.cycle_tab(-1) },
     ActionDef { action: Action::ToggleExplorer, hint: "", run: toggle_explorer },
@@ -259,6 +260,24 @@ fn set_null(app: &mut App) {
             g.edits.insert((g.row, g.col), None);
         }
     }
+}
+
+/// v in a result or table grid: the value panel beside it, on or off
+fn toggle_value_panel(app: &mut App) {
+    if matches!(app.tabs.get(app.active).map(|t| &t.kind), Some(TabKind::Table(_) | TabKind::Console(_))) && app.grid_mut().is_some() {
+        app.value_panel = !app.value_panel;
+    } else {
+        app.status = "Open a result or table to see a value in the value panel".into();
+    }
+}
+
+/// ⌃w: from a grid with the value panel open, closes the panel first (as the GUI's ⌘w), then the tab
+fn close_tab(app: &mut App) {
+    if app.value_panel && app.focus == Focus::Grid && matches!(app.tabs.get(app.active).map(|t| &t.kind), Some(TabKind::Table(_) | TabKind::Console(_))) {
+        app.value_panel = false;
+        return;
+    }
+    app.close_tab(app.active)
 }
 
 fn copy_in_list(app: &mut App) {

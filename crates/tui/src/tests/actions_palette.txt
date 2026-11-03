@@ -20,6 +20,7 @@ DeleteRow	Delete Row	d / Delete (grid)
 SetNull	Set NULL	n (grid)
 ExportCsv	Export Data… (CSV, TSV, JSON, SQL INSERT, Markdown)	x (grid)
 CopyInList	Copy Column as IN List  ('a', 'b', …)	Y (grid)
+ValueEditor	Value Panel (the current cell's whole value, beside the grid)	v (grid)
 FindSimilar	Find Similar Rows (pgvector, by the vector column)	—
 RagSearch	AI Search (RAG)… — ask a table in plain words	—
 RagBuild	Build RAG Index… (embed the rows)	—

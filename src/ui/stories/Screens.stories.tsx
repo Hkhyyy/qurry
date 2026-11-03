@@ -183,6 +183,20 @@ export const GridShort: S = {
   ),
 };
 
+/** Value Editor panel (⇧↩): beside the grid, not over it; follows the current cell (↑↓ keep moving the grid), jsonb pretty-printed and highlighted */
+export const GridValuePanel: S = {
+  name: "Result Grid — Value Editor panel (⇧↩)",
+  render: () => (
+    <div style={{ position: "relative", height: 420, border: "1px solid var(--ui-border)" }}>
+      <ResultGrid result={mixed} edit={{ schema: "public", table: "payment_check", pk: ["card_brand"] }} running={false} loadingMore={false} query="select * from payment_check" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    await userEvent.click(within(canvasElement).getAllByRole("gridcell", { name: '{"pg":"toss","n":0}' })[0]);
+    await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+  },
+};
+
 export const History: S = { name: "Query History", render: () => <HistoryDialog connId="dev" title="[DEV] shop_app Query History" onPick={noop} onClose={noop} /> };
 export const Search: S = {
   name: "Search Everywhere (⇧⇧)",

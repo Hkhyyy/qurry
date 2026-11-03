@@ -90,6 +90,7 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | — | New Data Source… |
 | — | Refresh |
 | — | Query History… (shared with the GUI) |
+| — | Value Panel (the current cell's whole value, beside the grid) |
 | — | Explain Analyze (runs the statement: real times and row counts) |
 | — | Query Execution Settings (what ⌃Enter runs) |
 | — | Clear Console (delete all text) |
@@ -160,6 +161,7 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 
 | Key | Action |
 |---|---|
+| `v` | Value Panel (the current cell's whole value, beside the grid) |
 | `⌃z` | Revert Changes |
 | `a / Insert` | Add Row |
 | `d / Delete` | Delete Row |

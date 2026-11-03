@@ -2,6 +2,7 @@ import { setStatusWidget } from "../lib/statusbar";
 import { fracWidth, isTimeType, padFrac } from "../lib/timeFrac";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { Cell, Dialect, dialectOf, QueryResult } from "../lib/api";
 import { DateTimePicker, isTemporal } from "./DateTimePicker";
 import { ContextMenu, MenuItem } from "./Explorer";
@@ -11,8 +12,10 @@ import { DEFAULTS, useFonts } from "../lib/prefs";
 import { alignTable, CELL_KIND, cellClasses, useGridAlign } from "../lib/gridAlign";
 
 import { cmd, commandsFor, eventSpec, hit, keyTitle, runKey } from "../lib/shortcuts";
+import { draftAt, draftToApply, leftDraft, panelText, registerValuePanel, toggleJsonLayout, type PanelDraft } from "../lib/valuePanel";
 import { ResultChart } from "./ResultChart";
-import { Button, CellEditor, CodeBlock, cx, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, TextArea, ToolButton, Toolbar, ToolbarSep } from "../ui";
+import { ValuePanel } from "./ValuePanel";
+import { Button, CellEditor, CodeBlock, cx, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, ToolButton, Toolbar, ToolbarSep } from "../ui";
 import {
   IcChart, IcClock, IcExport, IcGear, IcMinus, IcPlus, IcPreview, IcReload, IcRevert, IcSearch, IcStop, IcSubmit, IcTranspose, IcView,
 } from "../ui/icons";
@@ -103,7 +106,11 @@ export function ResultGrid(p: Props) {
   /** View as › Chart */
   const [chart, setChart] = useState(false);
   const [interval, setIntervalSec] = useState(0);
-  const [valueEditor, setValueEditor] = useState<{ r: number; c: number; text: string } | null>(null);
+  /** Value Editor side panel: open, a request to focus it (⇧↩), the edit typed there, why its last apply was refused */
+  const [panel, setPanel] = useState(false);
+  const [panelFocus, setPanelFocus] = useState(0);
+  const [draft, setDraft] = useState<PanelDraft | null>(null);
+  const [panelError, setPanelError] = useState<string | null>(null);
   const [showQuery, setShowQuery] = useState(false);
   const dragging = useRef(false);
 
@@ -171,6 +178,8 @@ export function ResultGrid(p: Props) {
     setChanges({});
     setDeleted(new Set());
     setAdded([]);
+    setDraft(null);
+    setPanelError(null);
   }, [cols, firstRow]);
 
   // Auto refresh (Update Interval)
@@ -288,6 +297,50 @@ export function ResultGrid(p: Props) {
     if (r < baseCount && !editableValue(v, cols[c].typeName)) return;
     setEditing({ r, c, value: v === null || v === DEFAULT_TOKEN ? "" : String(v) });
   };
+  // ─── Value Editor panel (follows the current cell) ───
+  const panelCell = active && active.r < rowCount ? active : null;
+  const panelReadOnly = (r: number, c: number) => !canEdit || deleted.has(r) || (r < baseCount && !editableValue(valueAt(r, c), cols[c].typeName));
+  const panelShown = panelCell ? panelText(cols[panelCell.c].typeName, raw(valueAt(panelCell.r, panelCell.c))) : { json: false, text: "" };
+  /** Write a draft to its cell; the reason when a json / jsonb column refuses it */
+  const writeDraft = (d: PanelDraft): string | null => {
+    const res = draftToApply(d, cols[d.c].typeName, raw(valueAt(d.r, d.c)));
+    if (res && "error" in res) return res.error;
+    if (res) setCell(d.r, d.c, res.text);
+    return null;
+  };
+  // The selection left the drafted cell: apply the edit there (DataGrip applies on leaving); one that can't be applied is dropped, saying why
+  useEffect(() => {
+    const d = leftDraft(draft, panelCell);
+    if (!d) return setPanelError(null);
+    const err = writeDraft(d);
+    setDraft(null);
+    setPanelError(err && `${cols[d.c].name} not changed: ${err}`);
+  }, [panelCell?.r, panelCell?.c]);
+  const focusGrid = () => (scrollRef.current ?? wrapRef.current)?.focus();
+  const openPanel = () => {
+    setPanel(true);
+    setPanelFocus((n) => n + 1);
+  };
+  const applyPanel = () => {
+    const err = draft ? writeDraft(draft) : null;
+    setPanelError(err);
+    if (err) return;
+    setDraft(null);
+    focusGrid();
+  };
+  /** × / ⌘w / ⇧⎋: apply the edit, close, back to the grid on the same cell. A refused edit keeps the panel open with the reason */
+  const closePanel = () => {
+    const err = draft ? writeDraft(draft) : null;
+    setPanelError(err);
+    if (err) return;
+    setDraft(null);
+    setPanel(false);
+    focusGrid();
+  };
+  const closePanelRef = useRef(closePanel);
+  closePanelRef.current = closePanel;
+  useEffect(() => (panel && wrapRef.current ? registerValuePanel(wrapRef.current, () => closePanelRef.current()) : undefined), [panel]);
+
   // Status bar Aggregator: Count / Sum / Avg / Min / Max when 2+ cells are selected
   useEffect(() => {
     if (!rect || (rect.r0 === rect.r1 && rect.c0 === rect.c1)) return setStatusWidget("aggregate", undefined);
@@ -465,7 +518,7 @@ export function ResultGrid(p: Props) {
   // ─── Keyboard (DataGrip grid keymap) ───
   const onKeyDown = (e: React.KeyboardEvent) => {
     // On .grid-wrap, so the keys work in Chart and Transpose too; the find bar's and filter fields' own typing stays theirs
-    if (editing || valueEditor || (e.target as HTMLElement).closest("input, textarea, select")) return;
+    if (editing || (e.target as HTMLElement).closest("input, textarea, select")) return;
     const mod = isMac ? e.metaKey : e.ctrlKey;
     const k = e.key.toLowerCase();
     const stop = () => {
@@ -523,7 +576,7 @@ export function ResultGrid(p: Props) {
     const items: MenuItem[] = [
       ...(p.rowActions?.length ? ([...p.rowActions.map((a) => ({ label: a.label, danger: a.danger, action: () => a.run(rowObj) })), { separator: true }] as MenuItem[]) : []),
       ...(canEdit ? ([{ label: "Edit", shortcut: "↩", action: () => startEdit(r, c) }] as MenuItem[]) : []),
-      { label: "Open in Value Editor", ...cmd("grid.valueEditor"), action: () => setValueEditor({ r, c, text: raw(v) }) },
+      { label: "Open in Value Editor", ...cmd("grid.valueEditor"), action: openPanel },
       ...(canEdit
         ? ([
             { label: "Revert Selected", ...cmd("grid.revert"), action: revertSelected },
@@ -711,174 +764,193 @@ export function ResultGrid(p: Props) {
         </div>
       )}
 
-      {/* Column header above the scroller (not sticky inside it), so it can't drift off the toolbar while rows scroll */}
-      {!chart && !transposed && (
-        <GridHead body={scrollRef}>
-          <GridHeaderRow width={total} height={HEADER_H}>
-            <RowNumberCell
-              width={rownumW}
-              title="Select all (⌘a)"
-              onMouseDown={() => {
-                setSelA({ r: 0, c: 0 });
-                setSelB({ r: rowCount - 1, c: cols.length - 1 });
-              }}
-            />
-            {spacer(padL)}
-            {colItems.map(({ index: i }) => {
-              const c = cols[i];
-              const idx = sorts.findIndex((x) => x.col === i);
-              const key = sorts[idx];
-              return (
-                <GridHeaderCell
-                  key={i}
-                  name={c.name}
-                  type={c.typeName}
-                  pk={edit?.pk.includes(c.name)}
-                  width={widths[i]}
-                  colSelected={!!rect && rect.c0 <= i && i <= rect.c1}
-                  sort={key ? { dir: key.dir, order: sorts.length > 1 ? idx + 1 : undefined } : undefined}
-                  onMouseDown={(e) => {
-                    // Header click = select the whole column (DataGrip)
-                    if (e.shiftKey && selA) setSelB({ r: rowCount - 1, c: i });
-                    else {
-                      setSelA({ r: 0, c: i });
-                      setSelB({ r: rowCount - 1, c: i });
-                    }
-                  }}
-                  onSortClick={(e) => clickSort(i, e.altKey)}
-                />
-              );
-            })}
-            {spacer(padR)}
-          </GridHeaderRow>
-        </GridHead>
-      )}
-      {chart ? (
-        <ResultChart result={result} />
-      ) : transposed ? (
-        <TransposedView cols={cols} rows={Array.from({ length: Math.min(rowCount, 300) }, (_, d) => cols.map((_, c) => valueAt(dataIndex(d), c)))} />
-      ) : (
-        <div
-          className="grid-scroll"
-          ref={scrollRef}
-          tabIndex={0}
-          onMouseUp={() => (dragging.current = false)}
-          onMouseLeave={() => (dragging.current = false)}
-        >
-          <div style={{ width: total, height: virt.getTotalSize(), position: "relative" }}>
-            {items.map((vi) => {
-              const d = vi.index;
-              const r = dataIndex(d);
-              const row = rowAt(r);
-              if (!row) return null;
-              const isNew = r >= baseCount;
-              const isDel = deleted.has(r);
-              return (
-                <GridRow key={vi.key} top={vi.start} height={ROW_H} width={total} odd={d % 2 === 1} added={isNew} deleted={isDel}>
+      {/* The grid and, to its right, the Value Editor panel (DataGrip): the grid narrows, the splitter's place is remembered */}
+      <PanelGroup direction="horizontal" autoSaveId="dbtool-value-panel" className="grid-split">
+        <Panel id="grid" order={1} minSize={25}>
+          <div className="grid-body">
+            {/* Column header above the scroller (not sticky inside it), so it can't drift off the toolbar while rows scroll */}
+            {!chart && !transposed && (
+              <GridHead body={scrollRef}>
+                <GridHeaderRow width={total} height={HEADER_H}>
                   <RowNumberCell
                     width={rownumW}
-                    selected={!!rect && rect.r0 <= d && d <= rect.r1}
-                    onMouseDown={(e) => {
-                      // Gutter number click = select the row
-                      if (e.shiftKey && selA) setSelB({ r: d, c: cols.length - 1 });
-                      else {
-                        setSelA({ r: d, c: 0 });
-                        setSelB({ r: d, c: cols.length - 1 });
-                      }
+                    title="Select all (⌘a)"
+                    onMouseDown={() => {
+                      setSelA({ r: 0, c: 0 });
+                      setSelB({ r: rowCount - 1, c: cols.length - 1 });
                     }}
-                  >
-                    {isNew ? "+" : d + 1}
-                  </RowNumberCell>
+                  />
                   {spacer(padL)}
-                  {colItems.map(({ index: ci }) => {
-                    const val = valueAt(r, ci);
-                    const changed = !isNew && changes[r] && ci in changes[r];
-                    if (editing && editing.r === r && editing.c === ci) {
-                      const temporal = isTemporal(cols[ci].typeName);
-                      return (
-                        <CellEditor
-                          key={ci}
-                          width={widths[ci]}
-                          value={editing.value}
-                          onChange={(v) => setEditing({ ...editing, value: v })}
-                          onBlurOut={commitEdit}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === "Tab") {
-                              e.preventDefault();
-                              commitEdit();
-                              if (e.key === "Tab") selectCell({ r: d, c: Math.min(ci + 1, cols.length - 1) }, false);
-                            } else if (e.key === "Escape") {
-                              setEditing(null);
-                              scrollRef.current?.focus();
-                            }
-                            e.stopPropagation();
-                          }}
-                          more={temporal ? { title: "Choose date/time", onClick: () => setEditing({ ...editing, picker: !editing.picker }) } : undefined}
-                        >
-                          {temporal && editing.picker && (
-                            <DateTimePicker value={editing.value} typeName={cols[ci].typeName} onChange={(v) => setEditing((ed) => (ed ? { ...ed, value: v } : ed))} />
-                          )}
-                        </CellEditor>
-                      );
-                    }
-                    const cls = classOf[ci](val);
+                  {colItems.map(({ index: i }) => {
+                    const c = cols[i];
+                    const idx = sorts.findIndex((x) => x.col === i);
+                    const key = sorts[idx];
                     return (
-                      <GridCell
-                        key={ci}
-                        width={widths[ci]}
-                        kind={CELL_KIND[cls]}
-                        align={aligns[cls]}
-                        selected={inSel(d, ci)}
-                        active={selB?.r === d && selB?.c === ci}
-                        changed={!!changed}
-                        match={isMatch(d, ci)}
+                      <GridHeaderCell
+                        key={i}
+                        name={c.name}
+                        type={c.typeName}
+                        pk={edit?.pk.includes(c.name)}
+                        width={widths[i]}
+                        colSelected={!!rect && rect.c0 <= i && i <= rect.c1}
+                        sort={key ? { dir: key.dir, order: sorts.length > 1 ? idx + 1 : undefined } : undefined}
                         onMouseDown={(e) => {
-                          if (e.button !== 0) return;
-                          dragging.current = true;
-                          selectCell({ r: d, c: ci }, e.shiftKey);
+                          // Header click = select the whole column (DataGrip)
+                          if (e.shiftKey && selA) setSelB({ r: rowCount - 1, c: i });
+                          else {
+                            setSelA({ r: 0, c: i });
+                            setSelB({ r: rowCount - 1, c: i });
+                          }
                         }}
-                        onMouseEnter={() => {
-                          if (dragging.current) setSelB({ r: d, c: ci });
-                        }}
-                        onDoubleClick={() => startEdit(r, ci)}
-                        onContextMenu={(e) => openCellMenu(e, d, ci)}
-                      >
-                        {shown(val, ci)}
-                      </GridCell>
+                        onSortClick={(e) => clickSort(i, e.altKey)}
+                      />
                     );
                   })}
                   {spacer(padR)}
-                </GridRow>
-              );
-            })}
+                </GridHeaderRow>
+              </GridHead>
+            )}
+            {chart ? (
+              <ResultChart result={result} />
+            ) : transposed ? (
+              <TransposedView cols={cols} rows={Array.from({ length: Math.min(rowCount, 300) }, (_, d) => cols.map((_, c) => valueAt(dataIndex(d), c)))} />
+            ) : (
+              <div
+                className="grid-scroll"
+                ref={scrollRef}
+                tabIndex={0}
+                onMouseUp={() => (dragging.current = false)}
+                onMouseLeave={() => (dragging.current = false)}
+              >
+                <div style={{ width: total, height: virt.getTotalSize(), position: "relative" }}>
+                  {items.map((vi) => {
+                    const d = vi.index;
+                    const r = dataIndex(d);
+                    const row = rowAt(r);
+                    if (!row) return null;
+                    const isNew = r >= baseCount;
+                    const isDel = deleted.has(r);
+                    return (
+                      <GridRow key={vi.key} top={vi.start} height={ROW_H} width={total} odd={d % 2 === 1} added={isNew} deleted={isDel}>
+                        <RowNumberCell
+                          width={rownumW}
+                          selected={!!rect && rect.r0 <= d && d <= rect.r1}
+                          onMouseDown={(e) => {
+                            // Gutter number click = select the row
+                            if (e.shiftKey && selA) setSelB({ r: d, c: cols.length - 1 });
+                            else {
+                              setSelA({ r: d, c: 0 });
+                              setSelB({ r: d, c: cols.length - 1 });
+                            }
+                          }}
+                        >
+                          {isNew ? "+" : d + 1}
+                        </RowNumberCell>
+                        {spacer(padL)}
+                        {colItems.map(({ index: ci }) => {
+                          const val = valueAt(r, ci);
+                          const changed = !isNew && changes[r] && ci in changes[r];
+                          if (editing && editing.r === r && editing.c === ci) {
+                            const temporal = isTemporal(cols[ci].typeName);
+                            return (
+                              <CellEditor
+                                key={ci}
+                                width={widths[ci]}
+                                value={editing.value}
+                                onChange={(v) => setEditing({ ...editing, value: v })}
+                                onBlurOut={commitEdit}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" || e.key === "Tab") {
+                                    e.preventDefault();
+                                    commitEdit();
+                                    if (e.key === "Tab") selectCell({ r: d, c: Math.min(ci + 1, cols.length - 1) }, false);
+                                  } else if (e.key === "Escape") {
+                                    setEditing(null);
+                                    scrollRef.current?.focus();
+                                  }
+                                  e.stopPropagation();
+                                }}
+                                more={temporal ? { title: "Choose date/time", onClick: () => setEditing({ ...editing, picker: !editing.picker }) } : undefined}
+                              >
+                                {temporal && editing.picker && (
+                                  <DateTimePicker value={editing.value} typeName={cols[ci].typeName} onChange={(v) => setEditing((ed) => (ed ? { ...ed, value: v } : ed))} />
+                                )}
+                              </CellEditor>
+                            );
+                          }
+                          const cls = classOf[ci](val);
+                          return (
+                            <GridCell
+                              key={ci}
+                              width={widths[ci]}
+                              kind={CELL_KIND[cls]}
+                              align={aligns[cls]}
+                              selected={inSel(d, ci)}
+                              active={selB?.r === d && selB?.c === ci}
+                              changed={!!changed}
+                              match={isMatch(d, ci)}
+                              onMouseDown={(e) => {
+                                if (e.button !== 0) return;
+                                dragging.current = true;
+                                selectCell({ r: d, c: ci }, e.shiftKey);
+                              }}
+                              onMouseEnter={() => {
+                                if (dragging.current) setSelB({ r: d, c: ci });
+                              }}
+                              onDoubleClick={() => startEdit(r, ci)}
+                              onContextMenu={(e) => openCellMenu(e, d, ci)}
+                            >
+                              {shown(val, ci)}
+                            </GridCell>
+                          );
+                        })}
+                        {spacer(padR)}
+                      </GridRow>
+                    );
+                  })}
+                </div>
+                {loadingMore && <div className="grid-loading">Loading more…</div>}
+                {!loadingMore && result.moreError && (
+                  <div className="grid-loading grid-more-error" role="alert">
+                    {result.moreError}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
-          {loadingMore && <div className="grid-loading">Loading more…</div>}
-          {!loadingMore && result.moreError && (
-            <div className="grid-loading grid-more-error" role="alert">
-              {result.moreError}
-            </div>
-          )}
-        </div>
-      )}
+        </Panel>
+        {panel && !chart && (
+          <>
+            <PanelResizeHandle className="resize-h" />
+            <Panel id="value" order={2} defaultSize={35} minSize={15}>
+              <ValuePanel
+                title={panelCell ? `${cols[panelCell.c].name} : ${cols[panelCell.c].typeName.toLowerCase()}` : undefined}
+                text={draftAt(draft, panelCell) ? draft.text : panelShown.text}
+                json={panelShown.json}
+                isNull={!!panelCell && valueAt(panelCell.r, panelCell.c) === null}
+                readOnly={!panelCell || panelReadOnly(panelCell.r, panelCell.c)}
+                error={panelError}
+                focusSeq={panelFocus}
+                onChange={(text) => {
+                  if (!panelCell) return;
+                  setPanelError(null);
+                  setDraft({ ...panelCell, text, base: panelShown.text, editable: !panelReadOnly(panelCell.r, panelCell.c) });
+                }}
+                onToggleLayout={() => {
+                  if (!panelCell) return;
+                  const text = toggleJsonLayout(draftAt(draft, panelCell) ? draft.text : panelShown.text);
+                  setDraft({ ...panelCell, text, base: panelShown.text, editable: !panelReadOnly(panelCell.r, panelCell.c) });
+                }}
+                onApply={applyPanel}
+                onBack={focusGrid}
+                onClose={closePanel}
+              />
+            </Panel>
+          </>
+        )}
+      </PanelGroup>
 
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
-
-      {valueEditor && (
-        <ValueEditor
-          title={`${cols[valueEditor.c].name} : ${cols[valueEditor.c].typeName.toLowerCase()}`}
-          text={valueEditor.text}
-          readOnly={!canEdit || deleted.has(valueEditor.r)}
-          onApply={(t) => {
-            setCell(valueEditor.r, valueEditor.c, t);
-            setValueEditor(null);
-            scrollRef.current?.focus();
-          }}
-          onClose={() => {
-            setValueEditor(null);
-            scrollRef.current?.focus();
-          }}
-        />
-      )}
 
       {showQuery && p.query && (
         <Modal
@@ -952,50 +1024,6 @@ function TransposedView({ cols, rows }: { cols: QueryResult["columns"]; rows: Ce
           })}
         </tbody>
       </table>
-    </div>
-  );
-}
-
-/** Value editor (⇧↩): ⌘↩ confirm, ⎋ cancel, Toggle Soft-Wrap, Toggle Formatting(JSON) */
-function ValueEditor({ title, text, readOnly, onApply, onClose }: { title: string; text: string; readOnly: boolean; onApply: (t: string) => void; onClose: () => void }) {
-  const [value, setValue] = useState(text);
-  const [wrap, setWrap] = useState(true);
-  const format = () => {
-    try {
-      const j = JSON.parse(value);
-      setValue(value.includes("\n") ? JSON.stringify(j) : JSON.stringify(j, null, 2));
-    } catch {
-      /* Not JSON: leave as is */
-    }
-  };
-  return (
-    <div className="value-editor">
-      <div className="ve-head">
-        <span className="ve-title">{title}</span>
-        <Spacer />
-        <ToolButton active={wrap} title="Toggle Soft-Wrap" onClick={() => setWrap((w) => !w)}>Wrap</ToolButton>
-        <ToolButton title="Toggle Formatting (JSON)" onClick={format}>{"{ }"}</ToolButton>
-        <IconButton title="Close (⎋)" onClick={onClose}>×</IconButton>
-      </div>
-      <TextArea
-        autoFocus
-        readOnly={readOnly}
-        className={"ve-text" + (wrap ? "" : " nowrap")}
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          const mod = isMac ? e.metaKey : e.ctrlKey;
-          if (mod && e.key === "Enter") {
-            e.preventDefault();
-            if (!readOnly) onApply(value);
-          } else if (e.key === "Escape") {
-            e.preventDefault();
-            onClose();
-          }
-          e.stopPropagation();
-        }}
-      />
-      <div className="ve-foot muted">{readOnly ? "Read-only" : `${isMac ? "⌘↩" : "Ctrl+Enter"} to apply · ⎋ to cancel`}</div>
     </div>
   );
 }

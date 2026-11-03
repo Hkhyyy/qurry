@@ -558,6 +558,55 @@ impl Grid {
             self.hbar = track;
         }
     }
+
+    /// The value panel (v) in `area` beside the grid: the current cell's whole value, follows the cursor. JSON (a json / jsonb column, or
+    /// a JSON object or array) pretty-printed and coloured as the GUI's Value Editor shows it (qurry_shared::value). `close` = its keys
+    pub fn render_value_panel(&self, f: &mut Frame, area: Rect, close: String) {
+        let col = self.result.columns.get(self.col);
+        let title = col.map(|c| format!(" {} : {} ", c.name, c.type_name.to_lowercase())).unwrap_or_else(|| " Value ".into());
+        let block = Block::default().borders(Borders::ALL).title(title).title_bottom(Line::styled(close, Style::default().fg(crate::kit::DIM))).border_style(Style::default().fg(Color::DarkGray));
+        let lines: Vec<Line> = match (col, self.value(self.row, self.col)) {
+            (None, _) => vec![],
+            (Some(_), None) => vec![Line::styled("<null>", Style::default().fg(crate::kit::DIM).add_modifier(Modifier::ITALIC))],
+            (Some(c), Some(v)) => {
+                let p = qurry_shared::value::panel_text(&c.type_name, &v);
+                p.text.lines().map(|l| if p.json { json_line(l) } else { Line::raw(l.to_string()) }).collect()
+            }
+        };
+        f.render_widget(ratatui::widgets::Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false }).block(block), area);
+    }
+}
+
+/// One line of pretty-printed JSON, coloured as the GUI's JSON (Monaco): keys, strings, numbers, true / false / null
+fn json_line(line: &str) -> Line<'static> {
+    const KEY: Color = Color::Rgb(199, 125, 187);
+    let mut spans = vec![];
+    let mut rest = line;
+    while let Some(ch) = rest.chars().next() {
+        let (len, style) = match ch {
+            '"' => {
+                let (mut end, mut esc) = (rest.len(), false);
+                for (i, c) in rest.char_indices().skip(1) {
+                    if esc {
+                        esc = false;
+                    } else if c == '\\' {
+                        esc = true;
+                    } else if c == '"' {
+                        end = i + 1;
+                        break;
+                    }
+                }
+                let key = rest[end..].trim_start().starts_with(':');
+                (end, Style::default().fg(if key { KEY } else { crate::kit::OK }))
+            }
+            '-' | '0'..='9' => (rest.find(|c: char| !(c.is_ascii_alphanumeric() || "+-.".contains(c))).unwrap_or(rest.len()), Style::default().fg(crate::kit::NUMBER)),
+            c if c.is_ascii_alphabetic() => (rest.find(|c: char| !c.is_ascii_alphabetic()).unwrap_or(rest.len()), Style::default().fg(crate::kit::C_KEYWORD)),
+            c => (c.len_utf8(), Style::default()),
+        };
+        spans.push(Span::styled(rest[..len].to_string(), style));
+        rest = &rest[len..];
+    }
+    Line::from(spans)
 }
 
 #[cfg(test)]
