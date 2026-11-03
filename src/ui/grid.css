@@ -1,8 +1,14 @@
 /* Result grid cells (ui/grid.tsx). Values are tokens · theme colors */
-.grid-header { position: sticky; top: 0; z-index: 2; display: flex; background: var(--panel); border-bottom: 1px solid var(--border); }
+/* Header outside the scroller, scrolled sideways only (scrollLeft follows the body). ::after leaves room for the body's
+   vertical scrollbar, so the header can scroll as far right as the body */
+.grid-head { flex: none; display: flex; overflow: hidden; }
+.grid-head::after { content: ""; flex: none; width: 24px; }
+.grid-header { flex: none; display: flex; background: var(--panel); border-bottom: 1px solid var(--border); }
 .grid-row { position: absolute; left: 0; display: flex; }
 .grid-row.odd { background: var(--c-222326); }
-.cell { flex: none; padding: 0 8px; line-height: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-right: 1px solid var(--c-2c2e33); }
+/* overflow: clip, not hidden: a hidden cell is a scroll container, and Chromium then stops the wheel at a cell whose text
+   overflows instead of scrolling the grid (hidden stays as the fallback for engines without clip) */
+.cell { flex: none; padding: 0 8px; line-height: 24px; white-space: nowrap; overflow: hidden; overflow: clip; text-overflow: ellipsis; border-right: 1px solid var(--c-2c2e33); }
 .cell.head { display: flex; align-items: center; gap: 6px; line-height: 26px; font-family: -apple-system, sans-serif; }
 .col-name { font-weight: 600; flex: none; }
 .col-type { overflow: hidden; text-overflow: ellipsis; }

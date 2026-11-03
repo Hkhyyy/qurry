@@ -8,7 +8,7 @@ import { ContextMenu, MenuItem } from "./Explorer";
 import { DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, raw } from "../lib/extract";
 import { sharedReady, useSharedReady } from "../lib/shared";
 import { ResultChart } from "./ResultChart";
-import { Button, CellEditor, CodeBlock, GridCell, GridHeaderCell, GridHeaderRow, GridRow, IconButton, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, TextArea, ToolButton, Toolbar, ToolbarSep } from "../ui";
+import { Button, CellEditor, CodeBlock, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, TextArea, ToolButton, Toolbar, ToolbarSep } from "../ui";
 import {
   IcChart, IcClock, IcExport, IcGear, IcMinus, IcPlus, IcPreview, IcReload, IcRevert, IcSearch, IcStop, IcSubmit, IcTranspose, IcView,
 } from "../ui/icons";
@@ -692,6 +692,48 @@ export function ResultGrid(p: Props) {
         </div>
       )}
 
+      {/* Column header above the scroller (not sticky inside it), so it can't drift off the toolbar while rows scroll */}
+      {!chart && !transposed && (
+        <GridHead body={scrollRef}>
+          <GridHeaderRow width={total} height={HEADER_H}>
+            <RowNumberCell
+              width={ROWNUM_W}
+              title="Select all (⌘a)"
+              onMouseDown={() => {
+                setSelA({ r: 0, c: 0 });
+                setSelB({ r: rowCount - 1, c: cols.length - 1 });
+              }}
+            />
+            {spacer(padL)}
+            {colItems.map(({ index: i }) => {
+              const c = cols[i];
+              const idx = sorts.findIndex((x) => x.col === i);
+              const key = sorts[idx];
+              return (
+                <GridHeaderCell
+                  key={i}
+                  name={c.name}
+                  type={c.typeName}
+                  pk={edit?.pk.includes(c.name)}
+                  width={widths[i]}
+                  colSelected={!!rect && rect.c0 <= i && i <= rect.c1}
+                  sort={key ? { dir: key.dir, order: sorts.length > 1 ? idx + 1 : undefined } : undefined}
+                  onMouseDown={(e) => {
+                    // Header click = select the whole column (DataGrip)
+                    if (e.shiftKey && selA) setSelB({ r: rowCount - 1, c: i });
+                    else {
+                      setSelA({ r: 0, c: i });
+                      setSelB({ r: rowCount - 1, c: i });
+                    }
+                  }}
+                  onSortClick={(e) => clickSort(i, e.altKey)}
+                />
+              );
+            })}
+            {spacer(padR)}
+          </GridHeaderRow>
+        </GridHead>
+      )}
       {chart ? (
         <ResultChart result={result} />
       ) : transposed ? (
@@ -705,44 +747,7 @@ export function ResultGrid(p: Props) {
           onMouseUp={() => (dragging.current = false)}
           onMouseLeave={() => (dragging.current = false)}
         >
-          <div style={{ width: total, height: virt.getTotalSize() + HEADER_H, position: "relative" }}>
-            <GridHeaderRow width={total} height={HEADER_H}>
-              <RowNumberCell
-                width={ROWNUM_W}
-                title="Select all (⌘a)"
-                onMouseDown={() => {
-                  setSelA({ r: 0, c: 0 });
-                  setSelB({ r: rowCount - 1, c: cols.length - 1 });
-                }}
-              />
-              {spacer(padL)}
-              {colItems.map(({ index: i }) => {
-                const c = cols[i];
-                const idx = sorts.findIndex((x) => x.col === i);
-                const key = sorts[idx];
-                return (
-                  <GridHeaderCell
-                    key={i}
-                    name={c.name}
-                    type={c.typeName}
-                    pk={edit?.pk.includes(c.name)}
-                    width={widths[i]}
-                    colSelected={!!rect && rect.c0 <= i && i <= rect.c1}
-                    sort={key ? { dir: key.dir, order: sorts.length > 1 ? idx + 1 : undefined } : undefined}
-                    onMouseDown={(e) => {
-                      // Header click = select the whole column (DataGrip)
-                      if (e.shiftKey && selA) setSelB({ r: rowCount - 1, c: i });
-                      else {
-                        setSelA({ r: 0, c: i });
-                        setSelB({ r: rowCount - 1, c: i });
-                      }
-                    }}
-                    onSortClick={(e) => clickSort(i, e.altKey)}
-                  />
-                );
-              })}
-              {spacer(padR)}
-            </GridHeaderRow>
+          <div style={{ width: total, height: virt.getTotalSize(), position: "relative" }}>
             {items.map((vi) => {
               const d = vi.index;
               const r = dataIndex(d);
@@ -751,7 +756,7 @@ export function ResultGrid(p: Props) {
               const isNew = r >= baseCount;
               const isDel = deleted.has(r);
               return (
-                <GridRow key={vi.key} top={HEADER_H + vi.start} height={ROW_H} width={total} odd={d % 2 === 1} added={isNew} deleted={isDel}>
+                <GridRow key={vi.key} top={vi.start} height={ROW_H} width={total} odd={d % 2 === 1} added={isNew} deleted={isDel}>
                   <RowNumberCell
                     width={ROWNUM_W}
                     selected={!!rect && rect.r0 <= d && d <= rect.r1}

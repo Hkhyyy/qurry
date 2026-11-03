@@ -2,13 +2,46 @@
  * Cell pieces of the result grid (ResultGrid): header row · header cell · row · row number · data cell · edit cell.
  * Virtual scrolling, selection and edit state live in ResultGrid; only the look is defined here. Spec: README.md
  */
-import { CSSProperties, FocusEvent, KeyboardEvent, MouseEvent, ReactNode } from "react";
+import { CSSProperties, FocusEvent, KeyboardEvent, MouseEvent, ReactNode, RefObject, useEffect, useRef } from "react";
 import { cx } from "./cx";
 import "./grid.css";
 
 type Mouse = (e: MouseEvent) => void;
 
-/** Top header row (sticks while scrolling) */
+/**
+ * Header strip above the grid's scroller (body). It sits outside the scroller, so vertical scrolling can't move it (a sticky
+ * header inside the scroller could lag WKWebView's async scrolling and show rows above it); it only follows the body's
+ * scrollLeft. Wheel over it scrolls the body; a click keeps the focus on the body, so keyboard navigation keeps working.
+ */
+export function GridHead({ body, children }: { body: RefObject<HTMLElement | null>; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  // After commit (not a layout effect): the body may come after the head, and its ref is attached later in the same commit
+  useEffect(() => {
+    const el = body.current;
+    if (!el) return;
+    const sync = () => {
+      if (ref.current) ref.current.scrollLeft = el.scrollLeft;
+    };
+    sync();
+    el.addEventListener("scroll", sync, { passive: true });
+    return () => el.removeEventListener("scroll", sync);
+  }, [body]);
+  return (
+    <div
+      ref={ref}
+      className="grid-head"
+      onWheel={(e) => body.current?.scrollBy(e.deltaX, e.deltaY)}
+      onMouseDownCapture={(e) => {
+        e.preventDefault();
+        body.current?.focus({ preventScroll: true });
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** Header row (inside GridHead) */
 export const GridHeaderRow = ({ width, height, children }: { width: number; height: number; children: ReactNode }) => (
   <div className="grid-header" style={{ width, height }} role="row">
     {children}
