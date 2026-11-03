@@ -109,3 +109,17 @@ test("a load-more that fails keeps its reason in the grid and the result unfinis
   await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
   await expect(work(page).locator(".tb-info").first()).toHaveText("620 rows");
 });
+
+test("rows that arrive after the table tab ran again are dropped, not appended to the new result", async ({ page }) => {
+  await page.evaluate(() => ((window as any).__mockFetchMoreDelay = 1000));
+  const scroll = work(page).locator(".grid-scroll").first();
+  await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await expect(work(page).locator(".grid-loading")).toHaveText("Loading more…");
+  await scroll.focus();
+  await page.keyboard.press("Meta+R");
+  // A load-more of the new result (if its grid asks right away) fails at once, so only the old answer could add rows
+  await page.evaluate(() => Object.assign(window as any, { __mockFetchMoreDelay: undefined, __mockFetchMoreError: "stop" }));
+  await page.waitForTimeout(1300);
+  await expect(work(page).locator(".tb-info").first()).toHaveText("500+ rows");
+  await expect(work(page).locator(".grid-loading:not(.grid-more-error)")).toHaveCount(0);
+});

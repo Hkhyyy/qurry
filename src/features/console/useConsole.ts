@@ -289,19 +289,21 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     const shown = tab.results.find((x) => x.id === entryId)?.result?.rows.length ?? 0;
     if (shown >= MAX_ROWS) return setStatus(capMsg(shown));
     updTab(tabId, (t) => ({ ...t, loadingMore: true }));
+    // A run in the tab meanwhile has a result of its own (its cursorEntry): this answer is for the old one, so it is dropped
+    const answer = (f: (t: Tab) => Tab) => updTab(tabId, (t) => (t.cursorEntry === entryId ? f({ ...t, loadingMore: false }) : { ...t, loadingMore: false }));
     try {
       const r = await api.fetchMore(tabId);
-      updTab(tabId, (t) => ({
+      answer((t) => ({
         ...t,
-        loadingMore: false,
         cursorEntry: r.truncated ? entryId : undefined,
         results: t.results.map((x) => (x.id === entryId && x.result ? { ...x, result: { ...x.result, rows: [...x.result.rows, ...r.rows], truncated: r.truncated } } : x)),
       }));
     } catch (e) {
       // The result isn't complete: keep its "+" and say in the grid why no more rows came
       const moreError = moreRowsFailed(e);
-      updTab(tabId, (t) => ({ ...t, loadingMore: false, cursorEntry: undefined, results: t.results.map((x) => (x.id === entryId && x.result ? { ...x, result: { ...x.result, moreError } } : x)) }));
-      setStatus(moreError);
+      const current = useTabsStore.getState().tabs.find((t) => t.id === tabId)?.cursorEntry === entryId;
+      answer((t) => ({ ...t, cursorEntry: undefined, results: t.results.map((x) => (x.id === entryId && x.result ? { ...x, result: { ...x.result, moreError } } : x)) }));
+      if (current) setStatus(moreError);
     }
   };
 
@@ -365,17 +367,20 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
   const fetchMore = async (tab: Tab) => {
     const shown = tab.result?.rows.length ?? 0;
     if (shown >= MAX_ROWS) return setStatus(capMsg(shown));
+    // The result asked for: a run meanwhile (reload, filter) replaced it, and the answer for the old one is dropped
+    const sent = useTabsStore.getState().tabs.find((t) => t.id === tab.id)?.result;
+    const answer = (f: (r: QueryResult) => QueryResult, status: string) => {
+      const current = useTabsStore.getState().tabs.find((t) => t.id === tab.id)?.result === sent;
+      setTabs((ts) => ts.map((t) => (t.id !== tab.id ? t : t.result && t.result === sent ? { ...t, loadingMore: false, result: f(t.result) } : { ...t, loadingMore: false })));
+      if (current) setStatus(status);
+    };
     patch(tab.id, { loadingMore: true });
     try {
       const r = await api.fetchMore(tab.id);
-      setTabs((ts) =>
-        ts.map((t) => (t.id === tab.id && t.result ? { ...t, loadingMore: false, result: { ...t.result, rows: [...t.result.rows, ...r.rows], truncated: r.truncated } } : t)),
-      );
-      setStatus(`${(tab.result?.rows.length ?? 0) + r.rows.length}${r.truncated ? "+" : ""} rows retrieved`);
+      answer((x) => ({ ...x, rows: [...x.rows, ...r.rows], truncated: r.truncated }), `${(sent?.rows.length ?? 0) + r.rows.length}${r.truncated ? "+" : ""} rows retrieved`);
     } catch (e) {
       const moreError = moreRowsFailed(e);
-      setTabs((ts) => ts.map((t) => (t.id === tab.id && t.result ? { ...t, loadingMore: false, result: { ...t.result, moreError } } : t)));
-      setStatus(moreError);
+      answer((x) => ({ ...x, moreError }), moreError);
     }
   };
 

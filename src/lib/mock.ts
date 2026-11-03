@@ -220,7 +220,9 @@ const handlers: Record<string, (a: any) => unknown> = {
     const g = globalThis as any;
     g.__mockFetchMoreCalls = (g.__mockFetchMoreCalls ?? 0) + 1;
     if (g.__mockFetchMoreError) throw g.__mockFetchMoreError;
-    return { ...result, rows: result.rows.slice(0, 120).map((r) => [Number(r[0]) + 500, ...r.slice(1)]), truncated: false };
+    const more = { ...result, rows: result.rows.slice(0, 120).map((r) => [Number(r[0]) + 500, ...r.slice(1)]), truncated: false };
+    // __mockFetchMoreDelay (ms): an answer that arrives after the tab ran again
+    return g.__mockFetchMoreDelay ? new Promise((ok) => setTimeout(() => ok(more), g.__mockFetchMoreDelay)) : more;
   },
   cancel_query: () => true,
   close_session: () => null,
