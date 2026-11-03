@@ -95,3 +95,68 @@ test("header click selects the column and keeps the keyboard on the grid", async
   expect(cell.y).toBeGreaterThanOrEqual(head.y + head.height);
   expect(cell.y + cell.height).toBeLessThanOrEqual(body.y + body.height);
 });
+
+// The issue's case: a result panel a few rows high (classic scroll bars), where rows showed in a strip between the toolbar and
+// the header. Besides the geometry, what is painted there must not be a row: the scroller clips its rows (contain: paint)
+const SHORT = { width: 760, height: 400 };
+
+/** Points across the header strip and its top edge where a row is what's painted (hit testing follows painting and clipping) */
+const rowsOverHeader = (page: Page) =>
+  work(page)
+    .locator(".grid-head")
+    .evaluate((head) => {
+      const b = head.getBoundingClientRect();
+      const out: string[] = [];
+      for (const y of [b.top, b.top + b.height / 2, b.bottom - 1])
+        for (let i = 0; i < 8; i++) {
+          const x = b.left + 4 + (i * (b.width - 8)) / 7;
+          if (document.elementFromPoint(x, y)?.closest(".grid-row")) out.push(`${Math.round(x)},${Math.round(y)}`);
+        }
+      return out;
+    });
+
+/** Toolbar (or the find bar) bottom = header top, and no row painted over the header, at each scroll position */
+async function expectNoStrip(page: Page) {
+  const toolbarToHead = () =>
+    work(page)
+      .locator(".grid-head")
+      .evaluate((head) => head.getBoundingClientRect().top - head.previousElementSibling!.getBoundingClientRect().bottom);
+  for (const [top, left] of [[0, 0], [2000, 0], [2000, 400], [0, 1e6], [37, 123]]) {
+    await scrollBody(page, top, left);
+    await expectAligned(page);
+    expect(await toolbarToHead()).toBe(0);
+    expect(await rowsOverHeader(page)).toEqual([]);
+  }
+  // The panel really is short and narrow: the body scrolled both ways
+  const g = await geometry(page);
+  expect([g.bodyTop, g.bodyLeft]).toEqual([37, 123]);
+}
+
+test("short panel: no row shows between the toolbar and the header after scrolling (table data editor and console result)", async ({ page }) => {
+  await page.setViewportSize(SHORT);
+  await openApp(page);
+  await treeItem(page, "users").first().dblclick();
+  await expect(work(page).getByRole("gridcell", { name: "user_1", exact: true })).toBeVisible();
+  await expectNoStrip(page);
+
+  await openConsole(page);
+  await typeSql(page, "select * from wide_demo");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Meta+Enter");
+  await expect(work(page).getByRole("columnheader", { name: /^column_1 / })).toBeVisible();
+  await expectNoStrip(page);
+});
+
+test("transposed view: the column names stay on the left edge, the cells inside the scroller", async ({ page }) => {
+  await page.setViewportSize(SHORT);
+  await openApp(page);
+  await treeItem(page, "users").first().dblclick();
+  await work(page).locator('[title="View as"]').click();
+  await page.getByRole("menuitem", { name: /Transpose$/ }).click();
+  const scroll = work(page).locator(".grid-scroll.transposed");
+  await scroll.evaluate((el) => el.scrollTo(300, 0));
+  await expect.poll(() => scroll.evaluate((el) => el.scrollLeft)).toBe(300);
+  const edge = await scroll.evaluate((el) => el.querySelectorAll("th")[2].getBoundingClientRect().left - el.getBoundingClientRect().left);
+  expect(edge).toBe(0);
+  expect(await scroll.evaluate((el) => getComputedStyle(el).contain)).toContain("paint");
+});
