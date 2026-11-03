@@ -32,6 +32,8 @@ pub struct AppState {
     pub last_ping: std::sync::Mutex<HashMap<String, std::time::Instant>>,
     /// Tab id → Manual mode (keep the same mode when reconnecting opens a new session)
     pub tab_manual: std::sync::Mutex<HashMap<String, bool>>,
+    /// Tab id → (connection id, its result with more rows to load): outlives the tab session, so loading more can reopen it on a new one
+    more: std::sync::Mutex<HashMap<String, (String, session::More)>>,
     /// Query history and snippets (shared by GUI and TUI)
     pub history: crate::history::History,
     /// Production audit log (changes to Production Data Sources · undo SQL)
@@ -101,7 +103,7 @@ impl AppState {
     pub fn new(store: Store, secret_file: crate::secrets::SecretFile) -> Self {
         let history = crate::history::History::new(&store.dir());
         let audit = crate::audit::Audit::new(&store.dir());
-        Self { history, audit, store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), connecting: Default::default(), secret_file, last_used: Default::default(), last_ping: Default::default(), tab_manual: Default::default(), jobs: Default::default(), mcp: false }
+        Self { history, audit, store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), connecting: Default::default(), secret_file, last_used: Default::default(), last_ping: Default::default(), tab_manual: Default::default(), more: Default::default(), jobs: Default::default(), mcp: false }
     }
 }
 
@@ -172,6 +174,20 @@ struct TxSeen {
     changed: bool,
     /// How the statement ended it by itself (Session::tx_ended)
     ended: Option<&'static str>,
+}
+
+/// Why a result whose session was closed isn't reopened on a new one (AppState::fetch_more): None if it may be.
+/// manual = the tab is in Manual mode now (the new session would read it in a transaction of its own)
+fn reopen_refused(m: &session::More, kind: store::DbKind, manual: bool) -> Option<String> {
+    use session::RECONNECTED;
+    if m.tx || manual {
+        return Some(format!("{RECONNECTED}, and it was read in a transaction (Manual mode or BEGIN) that ended with the old connection, so the next rows might not line up. Run the query again to load more rows."));
+    }
+    // Loading more runs the statement again: only a plain read, which nobody is asked about (Production confirmation, dangerous statements)
+    if !crate::guard::is_read(&m.sql, kind) || crate::guard::unsafe_statement(&m.sql, kind).is_some() {
+        return Some(format!("{RECONNECTED}, and loading more would run the statement again, but it isn't a plain read. Run it again yourself to load more rows."));
+    }
+    None
 }
 
 /// If the connection was lost: drop the tab session (so the dead connection is not reused; the next run reconnects),
@@ -878,8 +894,15 @@ impl AppState {
             other => (s.run(sql, limit).await, other.and_then(|p| p.err()).map(Err)),
         };
         let ended = s.tx_ended();
-        if sess.is_none() {
-            s.discard().await;
+        match tab {
+            Some(t) if sess.is_some() => {
+                let more = match r.is_ok() {
+                    true => s.more(true).await,
+                    false => None,
+                };
+                self.keep_more(t, id, more);
+            }
+            _ => s.discard().await,
         }
         (r, undo, TxSeen { open, changed, ended })
     }
@@ -914,17 +937,54 @@ impl AppState {
         }
     }
 
+    /// The tab's result with more rows (run_with_undo · fetch_more): kept while it has more, forgotten when it ends or another statement ran
+    fn keep_more(&self, tab: &str, conn_id: &str, more: Option<session::More>) {
+        let mut all = self.more.lock().unwrap();
+        match more {
+            Some(m) => all.insert(tab.to_string(), (conn_id.to_string(), m)),
+            None => all.remove(tab),
+        };
+    }
+
+    /// Load the next rows of the tab's result. When its session was closed (drop_pool: settings saved, Disconnect, the idle drop),
+    /// reopen the statement on a new session after the rows already read, unless that could give rows that don't line up or
+    /// run something again (reopen_refused)
     pub async fn fetch_more(&self, tab_id: String, limit: Option<usize>) -> AppResult<QueryResult> {
-        if let Some(e) = self.sessions.read().await.get(&tab_id) {
-            touch(self, &e.conn_id);
-        }
+        let limit = limit.unwrap_or(500);
         let entry = self.sessions.read().await.get(&tab_id).map(|e| (e.session.clone(), e.conn_id.clone()));
-        let (sess, conn_id) = entry.ok_or_else(|| AppError::Msg("Session closed".into()))?;
-        let (r, in_tx) = {
+        let (sess, conn_id, old) = match entry {
+            Some((s, c)) => (s, c, None),
+            None => {
+                let kept = self.more.lock().unwrap().get(&tab_id).cloned();
+                let (conn_id, m) = kept.ok_or_else(|| AppError::Msg("Session closed".into()))?;
+                // The guard first: nothing reaches the server for a statement it refuses
+                self.check_read_only(&conn_id, &m.sql)?;
+                let manual = self.tab_manual.lock().unwrap().get(&tab_id).copied().unwrap_or(false);
+                if let Some(why) = reopen_refused(&m, self.source(&conn_id)?.kind, manual) {
+                    return Err(AppError::Msg(why));
+                }
+                (ensure_session(self, &conn_id, &tab_id).await?, conn_id, Some(m))
+            }
+        };
+        touch(self, &conn_id);
+        let (r, in_tx, more) = {
             let mut s = sess.lock().await;
             let in_tx = s.in_tx();
-            (s.fetch(limit.unwrap_or(500)).await, in_tx)
+            let r = match &old {
+                Some(m) => s.reopen(m, limit).await,
+                None => s.fetch(limit).await,
+            };
+            let more = match r.is_ok() {
+                true => s.more(false).await,
+                false => None,
+            };
+            (r, in_tx, more)
         };
+        if r.is_ok() {
+            // Same statement, same schema: only the rows read move on
+            let schema = old.or_else(|| self.more.lock().unwrap().get(&tab_id).map(|e| e.1.clone())).and_then(|m| m.schema);
+            self.keep_more(&tab_id, &conn_id, more.map(|m| session::More { schema, ..m }));
+        }
         match r {
             Err(e) => {
                 let tx = (in_tx && is_conn_lost(&e)).then_some(crate::audit::BY_SERVER);
@@ -1039,6 +1099,7 @@ impl AppState {
 
     pub async fn close_session(&self, tab_id: String) -> AppResult<()> {
         self.tab_manual.lock().unwrap().remove(&tab_id);
+        self.more.lock().unwrap().remove(&tab_id);
         // Cancel a running query first (otherwise the connection and cleanup stay tied up until it ends)
         let busy = self.sessions.read().await.get(&tab_id).is_some_and(|e| e.session.try_lock().is_err());
         if busy {
@@ -1799,6 +1860,11 @@ mod tests {
             if kind == DbKind::Redis {
                 source(st.redis_exec_line(id.clone(), write.into()).await.unwrap_err().to_string());
                 source(st.redis_exec(id.clone(), vec!["DEL".into(), "k".into()]).await.unwrap_err().to_string());
+            } else {
+                // Loading more of a result whose session was closed runs its statement again on a new one
+                let m = session::More { sql: write.into(), fetched: 500, tx: false, schema: None };
+                st.more.lock().unwrap().insert("more".into(), (id.clone(), m));
+                source(st.fetch_more("more".into(), None).await.unwrap_err().to_string());
             }
             let e = st.run_read_only(id.clone(), write.into(), 10).await.unwrap_err().to_string();
             match crate::guard::read_only_violation(write, kind, true) {
@@ -1813,6 +1879,30 @@ mod tests {
         }
         assert!(st.pools.read().await.is_empty() && st.sessions.read().await.is_empty());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Loading more after a reconnect runs the statement again: only a plain read outside a transaction
+    #[test]
+    fn reopen_only_plain_reads_outside_a_transaction() {
+        use crate::store::DbKind::{Mysql, Postgres};
+        let m = |sql: &str, tx: bool| session::More { sql: sql.into(), fetched: 500, tx, schema: None };
+        for (sql, kind) in [("select * from t order by id", Postgres), ("with a as (select 1) select * from a", Postgres), ("table t", Postgres), ("select * from t", Mysql)] {
+            assert_eq!(reopen_refused(&m(sql, false), kind, false), None, "{sql}");
+        }
+        let tx = reopen_refused(&m("select * from t", true), Postgres, false).unwrap();
+        assert!(tx.contains("transaction (Manual mode or BEGIN)") && tx.contains("Run the query again"), "{tx}");
+        assert_eq!(reopen_refused(&m("select * from t", false), Postgres, true), Some(tx), "the tab is in Manual mode now");
+        for (sql, kind) in [
+            ("select nextval('s'), g from generate_series(1, 1000) g", Postgres),
+            ("select pg_sleep(1), * from t", Postgres),
+            ("with d as (delete from t returning *) select * from d", Postgres),
+            ("select * from t for update", Postgres),
+            ("select sleep(1), t.* from t", Mysql),
+            ("select get_lock('x', 1), t.* from t", Mysql),
+        ] {
+            let e = reopen_refused(&m(sql, false), kind, false).unwrap_or_else(|| panic!("{sql}"));
+            assert!(e.contains("isn't a plain read") && e.contains("Run it again"), "{sql}: {e}");
+        }
     }
 
     /// Auto-disconnect: close pools and sessions after the idle time. keep-alive keeps the session alive.
@@ -1835,5 +1925,92 @@ mod tests {
         assert_eq!(housekeeping(&state).await, vec!["hk".to_string()]);
         assert!(state.pools.read().await.is_empty() && state.sessions.read().await.is_empty());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Load more after the data source reconnected (#80): saving its settings, Disconnect and the idle drop close the tab sessions
+    /// (drop_pool), and fetch_more reopens the result on a new one after the rows already read. Real servers:
+    /// QURRY_TEST_PG=127.0.0.1:55433:postgres:postgres QURRY_TEST_MY=127.0.0.1:13306:root:dbtool:shop cargo test -p qurry-core fetch_more_after -- --ignored
+    async fn fetch_more_after_reconnect(kind: crate::store::DbKind) {
+        let Some(crate::testenv::Server { mut cfg, password }) = crate::testenv::server(kind) else { return };
+        (cfg.id, cfg.name) = ("d".into(), "reconnect".into());
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        st.save_connection(cfg.clone(), password.clone(), None).await.unwrap();
+        let q = |s: &str, tab: &str| st.run_query("d".into(), s.into(), Some(500), Some(tab.into()));
+        let my = kind == crate::store::DbKind::Mysql;
+        q(if my { "create database if not exists fetch_more_reconnect" } else { "create schema if not exists fetch_more_reconnect" }, "setup").await.unwrap();
+        q("drop table if exists fetch_more_reconnect.t", "setup").await.unwrap();
+        q("create table fetch_more_reconnect.t (n int primary key)", "setup").await.unwrap();
+        let fill = match my {
+            true => "insert into fetch_more_reconnect.t with recursive g(n) as (select 1 union all select n + 1 from g where n < 600) select n from g union all select n + 600 from g",
+            false => "insert into fetch_more_reconnect.t select g from generate_series(1, 1200) g",
+        };
+        q(fill, "setup").await.unwrap();
+        st.close_session("setup".into()).await.unwrap();
+        let first = |r: &QueryResult| r.rows[0][0].as_i64().or_else(|| r.rows[0][0].as_str().and_then(|s| s.parse().ok()));
+        // The table only by its name: the console's schema (search_path · USE) is set on the new session too
+        let schema = if my { "use fetch_more_reconnect" } else { "set search_path to fetch_more_reconnect, public" };
+        let select = "select n from t order by n";
+        let full = "select n from fetch_more_reconnect.t order by n";
+
+        // Saving the settings: rows 1001 … after 500 + 500 were read
+        q(schema, "a").await.unwrap();
+        let r = q(select, "a").await.unwrap();
+        assert_eq!((r.rows.len(), r.truncated), (500, true));
+        let r = st.fetch_more("a".into(), Some(500)).await.unwrap();
+        assert_eq!((first(&r), r.truncated), (Some(501), true));
+        st.save_connection(cfg.clone(), None, None).await.unwrap();
+        assert!(st.sessions.read().await.get("a").is_none(), "saving closed the tab session");
+        let r = st.fetch_more("a".into(), Some(500)).await.unwrap();
+        assert_eq!((r.rows.len(), first(&r), r.truncated), (200, Some(1001), false));
+        st.disconnect("d".into()).await.unwrap();
+        let e = st.fetch_more("a".into(), Some(500)).await.unwrap_err().to_string();
+        assert_eq!(e, "Session closed", "a finished result isn't reopened");
+
+        // Disconnect: rows 501 …, and the reopened result goes on after a second disconnect
+        q(schema, "b").await.unwrap();
+        q(select, "b").await.unwrap();
+        st.disconnect("d".into()).await.unwrap();
+        let r = st.fetch_more("b".into(), Some(500)).await.unwrap();
+        assert_eq!((r.rows.len(), first(&r), r.truncated), (500, Some(501), true));
+        st.disconnect("d".into()).await.unwrap();
+        let r = st.fetch_more("b".into(), Some(500)).await.unwrap();
+        assert_eq!((r.rows.len(), first(&r), r.truncated), (200, Some(1001), false));
+
+        // A result read in a Manual-mode transaction: not reopened (its transaction ended with the old connection)
+        st.set_tx_mode("d".into(), "m".into(), true).await.unwrap();
+        assert!(q(full, "m").await.unwrap().truncated);
+        st.disconnect("d".into()).await.unwrap();
+        let e = st.fetch_more("m".into(), Some(500)).await.unwrap_err().to_string();
+        assert!(e.contains("transaction (Manual mode or BEGIN)") && e.contains("Run the query again"), "{e}");
+        assert!(st.sessions.read().await.get("m").is_none(), "refused before opening a session");
+
+        // A statement that isn't a plain read: not run again behind the user's back
+        let sleep = if my { "select n, sleep(0) from fetch_more_reconnect.t order by n" } else { "select n, pg_sleep(0) from fetch_more_reconnect.t order by n" };
+        assert!(q(sleep, "w").await.unwrap().truncated);
+        st.disconnect("d".into()).await.unwrap();
+        let e = st.fetch_more("w".into(), Some(500)).await.unwrap_err().to_string();
+        assert!(e.contains("isn't a plain read") && e.contains("Run it again"), "{e}");
+        assert!(st.sessions.read().await.get("w").is_none(), "refused before opening a session");
+
+        // A closed tab forgets its result
+        q(full, "c").await.unwrap();
+        st.close_session("c".into()).await.unwrap();
+        st.disconnect("d".into()).await.unwrap();
+        assert_eq!(st.fetch_more("c".into(), Some(500)).await.unwrap_err().to_string(), "Session closed");
+
+        q(if my { "drop database fetch_more_reconnect" } else { "drop schema fetch_more_reconnect cascade" }, "setup").await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn fetch_more_after_reconnect_pg() {
+        fetch_more_after_reconnect(crate::store::DbKind::Postgres).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn fetch_more_after_reconnect_mysql() {
+        fetch_more_after_reconnect(crate::store::DbKind::Mysql).await;
     }
 }

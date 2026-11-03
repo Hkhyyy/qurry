@@ -40,6 +40,22 @@ pub struct PgSession {
     fetched: usize,
 }
 
+/// Why loading more needs a new session: saving the source's settings, Disconnect and the idle drop close the tab sessions (app::drop_pool)
+pub const RECONNECTED: &str = "The data source reconnected since this result was read (settings saved, disconnected or idle)";
+
+/// A result with more rows to load, kept outside its session so loading more can reopen it on a new one after the session was
+/// closed (AppState::fetch_more)
+#[derive(Clone, Debug)]
+pub struct More {
+    pub sql: String,
+    /// Rows read so far (the OFFSET to reopen at)
+    pub fetched: usize,
+    /// Read in the user's transaction (Manual, or BEGIN in Auto): it ended with the old session, so the rows may not line up
+    pub tx: bool,
+    /// The console's schema it ran in: PostgreSQL search_path, MySQL database()
+    pub schema: Option<String>,
+}
+
 /// In Auto mode, a cursor whose result was not fully read is closed after this long unused.
 /// While the cursor is open, the transaction is open too (idle in transaction) and blocks VACUUM/DDL
 pub const CURSOR_IDLE: std::time::Duration = std::time::Duration::from_secs(60);
@@ -311,16 +327,40 @@ impl PgSession {
         (shot, r)
     }
 
+    /// The cursor's statement again, after the rows already read (without ORDER BY, the DB decides the order)
+    fn after_fetched(&self) -> String {
+        format!("SELECT * FROM (\n{}\n) AS qurry_page OFFSET {}", strip_trailing_semicolon(&self.cursor_sql), self.fetched)
+    }
+
+    /// The result that has more rows to load (More::schema is left to Session::more)
+    fn more(&self) -> Option<More> {
+        (self.cursor_open || self.idle_closed).then(|| More { sql: self.cursor_sql.clone(), fetched: self.fetched, tx: self.user_tx(), schema: None })
+    }
+
+    /// Open `m` on this new session after the rows its old session read, and fetch the next `limit` rows (Session::reopen)
+    async fn reopen(&mut self, m: &More, limit: usize) -> AppResult<QueryResult> {
+        if let Some(path) = &m.schema {
+            sqlx::query("select pg_catalog.set_config('search_path', $1, false)").bind(path).execute(&mut *self.conn).await?;
+        }
+        (self.cursor_sql, self.fetched) = (m.sql.clone(), m.fetched);
+        self.columns.clear();
+        if let Err(e) = self.declare(&self.after_fetched()).await {
+            self.rollback().await;
+            return Err(e.into());
+        }
+        self.fetch(limit).await
+    }
+
     /// Fetch the next `limit` rows from the open cursor.
-    /// If the cursor was closed for being unused, reopen the same statement after the rows already read (OFFSET) (without ORDER BY, the DB decides the order)
+    /// If the cursor was closed for being unused, reopen the same statement after the rows already read (OFFSET)
     pub async fn fetch(&mut self, limit: usize) -> AppResult<QueryResult> {
-        if !self.cursor_open && self.idle_closed {
-            let q = format!("SELECT * FROM (\n{}\n) AS qurry_page OFFSET {}", strip_trailing_semicolon(&self.cursor_sql), self.fetched);
-            if let Err(e) = self.declare(&q).await {
-                self.rollback().await;
-                self.idle_closed = false;
-                return Err(AppError::Msg(format!("The result was closed after {} s without use, and reopening it failed ({e}). Run the query again to load more rows.", CURSOR_IDLE.as_secs())));
-            }
+        if !self.cursor_open
+            && self.idle_closed
+            && let Err(e) = self.declare(&self.after_fetched()).await
+        {
+            self.rollback().await;
+            self.idle_closed = false;
+            return Err(AppError::Msg(format!("The result was closed after {} s without use, and reopening it failed ({e}). Run the query again to load more rows.", CURSOR_IDLE.as_secs())));
         }
         if !self.cursor_open {
             return Err(AppError::Msg("No more rows".into()));
@@ -464,6 +504,32 @@ impl Session {
             Session::My(s) => s.fetch(limit).await,
             Session::Redis(_) | Session::Plugin(_) => Err(AppError::Msg("No more rows".into())),
         }
+    }
+    /// The current result if it has more rows to load. schema: also read the console's schema (search_path · database()), which
+    /// costs a round trip, so only once per result
+    pub async fn more(&mut self, schema: bool) -> Option<More> {
+        let mut m = match self {
+            Session::Pg(s) => s.more(),
+            Session::My(s) => s.more(),
+            Session::Redis(_) | Session::Plugin(_) => None,
+        }?;
+        if schema && !m.tx {
+            m.schema = match self {
+                Session::Pg(s) => sqlx::query_scalar("select current_setting('search_path')").persistent(false).fetch_one(&mut *s.conn).await.ok(),
+                Session::My(s) => s.database().await,
+                _ => None,
+            };
+        }
+        Some(m)
+    }
+    /// Open a result whose session was closed (Session::more of it) on this new session, after the rows already read
+    pub async fn reopen(&mut self, m: &More, limit: usize) -> AppResult<QueryResult> {
+        let r = match self {
+            Session::Pg(s) => s.reopen(m, limit).await,
+            Session::My(s) => s.reopen(m, limit).await,
+            Session::Redis(_) | Session::Plugin(_) => Err(AppError::Msg("No more rows".into())),
+        };
+        r.map_err(|e| AppError::Msg(format!("{RECONNECTED}, and reopening the result on the new connection failed ({e}). Run the query again to load more rows.")))
     }
     pub async fn set_manual(&mut self, manual: bool) -> AppResult<()> {
         match self {

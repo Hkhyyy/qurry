@@ -473,6 +473,26 @@ impl MySession {
         (shot, r)
     }
 
+    /// The result that has more rows to load (More::schema is left to Session::more)
+    pub fn more(&self) -> Option<crate::session::More> {
+        let (sql, fetched) = self.more.clone()?;
+        Some(crate::session::More { sql, fetched, tx: self.manual || self.in_tx, schema: None })
+    }
+
+    /// The session's current database (USE)
+    pub async fn database(&mut self) -> Option<String> {
+        sqlx::query_scalar::<_, Option<String>>("select cast(database() as char)").fetch_one(&mut *self.conn).await.ok().flatten()
+    }
+
+    /// Open `m` on this new session after the rows its old session read, in the database it ran in (Session::reopen)
+    pub async fn reopen(&mut self, m: &crate::session::More, limit: usize) -> AppResult<QueryResult> {
+        if let Some(db) = &m.schema {
+            self.conn.execute(format!("USE {}", qurry_shared::sql::quote_ident(crate::store::DbKind::Mysql, db)).as_str()).await?;
+        }
+        self.more = Some((m.sql.clone(), m.fetched));
+        self.fetch(limit).await
+    }
+
     pub async fn fetch(&mut self, limit: usize) -> AppResult<QueryResult> {
         let Some((sql, offset)) = self.more.clone() else { return Err(AppError::Msg("No more rows".into())) };
         let paged = format!("SELECT * FROM ({sql}) AS dbtool_page LIMIT {limit} OFFSET {offset}");
