@@ -65,7 +65,7 @@ export const FullApp: S = { name: "App (whole window)", render: () => <div style
 
 /** Settings › Appearance: theme, editor and grid fonts, the automatic update check and the update channel (stable or beta, shared with the TUI) */
 export const Settings: S = { name: "Settings — Appearance & updates", render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} /> };
-/** Editor / Grid font: installed monospace fonts are suggested (each field shows its font), sizes in px; a family that isn't installed says so and how to recover (the fallback is the default monospace). Clear the grid field afterwards: the choice is saved like in the app */
+/** Editor / Grid font: installed monospace fonts are suggested (each field shows its font), sizes in px; a family that isn't installed says so and how to recover (the fallback is the default monospace). The choice is saved like in the app; preview.tsx resets it before every story */
 export const SettingsFonts: S = {
   name: "Settings — Fonts (font not installed)",
   render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} />,
