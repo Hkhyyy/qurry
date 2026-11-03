@@ -21,6 +21,11 @@ let current: Theme = resolve();
 function apply() {
   current = resolve();
   document.documentElement.dataset.theme = current;
+  // The native title bar follows the window theme, which follows the OS unless set (white over a dark app)
+  const native = pref === "system" ? null : current === "light" ? "light" : "dark";
+  import("@tauri-apps/api/window")
+    .then(({ getCurrentWindow }) => getCurrentWindow().setTheme(native))
+    .catch(() => {});
   subs.forEach((f) => f());
 }
 media.addEventListener("change", () => pref === "system" && apply());
