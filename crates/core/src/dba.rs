@@ -701,6 +701,22 @@ mod tests {
         assert!(r.rows.iter().any(|x| crate::db::cell_text(&x[0]).starts_with("uptime") && !crate::db::cell_text(&x[1]).is_empty()), "{:?}", r.rows);
     }
 
+    /// Users & Roles with a role valid until infinity (rdsadmin on RDS) shows "infinity" instead of panicking (#84)
+    #[tokio::test]
+    #[ignore]
+    async fn pg_roles_report_with_infinity_role() {
+        let Some(st) = state(DbKind::Postgres).await else { return };
+        let q = |s: &str| st.run_query("d".into(), s.into(), None, None);
+        q("drop role if exists qurry_inf_role").await.ok();
+        q("create role qurry_inf_role login valid until 'infinity'").await.unwrap();
+        let r = st.dba_report("d".into(), "roles".into()).await;
+        q("drop role qurry_inf_role").await.ok();
+        let r = r.unwrap();
+        let col = |n: &str| r.columns.iter().position(|c| c.name == n).unwrap();
+        let row = r.rows.iter().find(|x| crate::db::cell_text(&x[col("role")]) == "qurry_inf_role").expect("role in report");
+        assert_eq!(crate::db::cell_text(&row[col("valid_until")]), "infinity");
+    }
+
     /// Explain from Slow Queries: a generic plan on PG16+, otherwise a note to fill in the parameters
     #[tokio::test]
     #[ignore]
