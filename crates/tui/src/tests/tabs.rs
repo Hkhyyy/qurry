@@ -84,3 +84,69 @@ async fn palette_lists_actions_and_runs_one() {
     assert!(h.app.popup.is_none());
     assert_eq!(h.app.panes.leaves().len(), 2);
 }
+
+/// 16 colors: the focused pane's active tab of a [PROD] Data Source is its own red in reverse video, not the plain
+/// selection, so the tab you work in still looks like production; a tab without a color uses the selection
+#[tokio::test]
+async fn active_tab_keeps_the_data_source_color_in_16_colors() {
+    use ratatui::style::{Color, Modifier};
+    let mut h = Harness::new().await;
+    let cfg = serde_json::from_value(serde_json::json!({ "id": "prod", "name": "[PROD] kr", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "shop", "color": "#6e2a2a" })).unwrap();
+    h.app.state.save_connection(cfg, None, None).await.unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    for t in ["payment", "contract"] {
+        let id = h.table_tab(t, &["id"], &[&["1"]], &["id"]);
+        h.app.tabs.iter_mut().find(|t| t.id == id).unwrap().conn = "prod".into();
+    }
+    h.table_tab("plain", &["id"], &[&["1"]], &["id"]);
+    h.app.color = crate::theme::ColorMode::Ansi16;
+    // The first cell of a tab's label in the tab bar
+    let label = |h: &mut Harness, name: &str| {
+        let buf = h.buffer(120, 20);
+        let y = (0..20).find(|&y| (0..120).map(|x| buf[(x, y)].symbol()).collect::<String>().contains("▦ payment")).unwrap();
+        let row: String = (0..120).map(|x| buf[(x, y)].symbol()).collect();
+        let x = row[..row.find(name).unwrap()].chars().count() as u16;
+        buf[(x, y)].clone()
+    };
+    h.app.activate(1);
+    let (on, off) = (label(&mut h, "contract"), label(&mut h, "payment"));
+    assert_eq!((on.bg, on.modifier.contains(Modifier::REVERSED | Modifier::BOLD)), (Color::Red, true));
+    assert_eq!((off.bg, off.modifier.contains(Modifier::REVERSED)), (Color::Red, false));
+    h.app.activate(2);
+    let plain = label(&mut h, "plain");
+    assert_eq!((plain.bg, plain.modifier.contains(Modifier::REVERSED)), (Color::Reset, true));
+}
+
+/// The tab bar shows what each tab holds, with the explorer tree's glyph for objects and ≡ (text) after it on a DDL tab: a view's DDL ◫≡, a function's ƒ≡ (#83)
+#[tokio::test]
+async fn tab_bar_glyphs_follow_the_tree() {
+    use crate::app::{TabKind, TextTab};
+    let mut h = Harness::new().await;
+    h.console_tab();
+    h.table_tab("orders", &["id"], &[], &[]);
+    let ddl = |text: &str, kind: &str| TabKind::Text(TextTab { text: text.into(), kind: kind.into(), ..Default::default() });
+    h.app.push_tab("test", "postgres".into(), "v_users [DDL]".into(), ddl("CREATE VIEW", "view"));
+    h.app.push_tab("test", "postgres".into(), "calc [DDL]".into(), ddl("CREATE FUNCTION", "routine"));
+    h.app.push_tab("test", "postgres".into(), "Diagram: public".into(), ddl("erd", ""));
+    let bar = h.screen(160, 20).lines().find(|l| l.contains("orders")).unwrap().to_string();
+    for want in ["❯ console", "▦ orders", "◫≡ v_users [DDL]", "ƒ≡ calc [DDL]", "≡ Diagram: public"] {
+        assert!(bar.contains(want), "{want:?} not in {bar:?}");
+    }
+}
+
+/// Recent Tabs and Search Everywhere put the same glyph before each tab row as the tab bar (#83)
+#[tokio::test]
+async fn tab_lists_show_the_tab_glyph() {
+    use crate::app::{TabKind, TextTab};
+    let mut h = Harness::new().await;
+    h.table_tab("orders", &["id"], &[], &[]);
+    h.app.push_tab("test", "postgres".into(), "v_users [DDL]".into(), TabKind::Text(TextTab { text: "CREATE VIEW".into(), kind: "view".into(), ..Default::default() }));
+    h.app.palette_tabs();
+    let s = h.screen(140, 30);
+    assert!(s.contains("▦ orders") && s.contains("◫≡ v_users [DDL]"), "{s}");
+    h.app.popup = None;
+    h.app.palette_everywhere();
+    let s = h.screen(140, 30);
+    assert!(s.contains("▦ orders") && s.contains("◫≡ v_users [DDL]"), "{s}");
+}

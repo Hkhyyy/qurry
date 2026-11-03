@@ -635,6 +635,11 @@ pub async fn table_detail(state: State<'_, AppState>, id: String, schema: String
     state.table_detail(id, schema, table).await
 }
 
+#[tauri::command]
+pub async fn table_structure(state: State<'_, AppState>, id: String, schema: String, table: String) -> AppResult<crate::meta::TableStructure> {
+    state.table_structure(id, schema, table).await
+}
+
 /// pgvector: SQL that finds rows close to this row
 #[tauri::command]
 pub async fn similar_rows_sql(state: State<'_, AppState>, id: String, schema: String, table: String, column: String, pk: Vec<(String, Option<String>)>) -> AppResult<String> {
@@ -725,6 +730,17 @@ pub async fn check_update(state: State<'_, AppState>, force: bool) -> AppResult<
 #[tauri::command]
 pub fn update_channel(state: State<'_, AppState>) -> qurry_core::update::Channel {
     state.store.update_channel()
+}
+
+/// Grid alignment overrides per value class (Settings › Appearance › Alignment; the TUI reads them)
+#[tauri::command]
+pub fn grid_align(state: State<'_, AppState>) -> qurry_core::format::Alignments {
+    state.store.grid_align()
+}
+
+#[tauri::command]
+pub fn set_grid_align(state: State<'_, AppState>, class: qurry_core::format::ValueClass, align: qurry_core::format::Align) -> AppResult<qurry_core::format::Alignments> {
+    state.store.set_grid_align(class, align)
 }
 
 /// Saves the channel, then answers what it offers from the saved check only (no request): None if nothing was checked yet or checks are off

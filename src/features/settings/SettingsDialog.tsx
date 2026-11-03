@@ -1,12 +1,82 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
+import { alignOf, setGridAlign, useGridAlign, VALUE_CLASSES } from "../../lib/gridAlign";
+import { useSharedReady, type Align } from "../../lib/shared";
 import { api, secretKey, setUpdateCheckEnabled, UpdateInfo, updateCheckEnabled } from "../../lib/api";
 import type { UpdateChannel } from "../../lib/api";
 import { KeymapEditor } from "../../components/KeymapEditor";
-import { Button, Checkbox, Field, List, ListItem, Modal, Select, Text } from "../../ui";
+import { Button, Checkbox, cx, Field, List, ListItem, Modal, Select, Text, TextInput } from "../../ui";
 import { getThemePref, setThemePref, ThemePref, useTheme } from "../../lib/theme";
+import { fontInstalled, fontStack, FontTarget, KNOWN_MONO, setFont, SIZES, useFonts } from "../../lib/prefs";
 import { isMac, sk } from "../shortcuts/labels";
 
-/** Settings › Appearance */
+/** Settings › Appearance › Editor / Grid font: a family (the installed fonts of KNOWN_MONO are suggested, any other can be typed; shown in itself) and a size. Applied as you type */
+function FontField({ target, label, hint }: { target: FontTarget; label: string; hint?: string }) {
+  const { family, size } = useFonts()[target];
+  const [min, max] = SIZES[target];
+  const name = family.trim();
+  const missing = name !== "" && !fontInstalled(name);
+  // The hint is always there with two lines reserved (.settings-font), so the warning coming and going as you type doesn't move the fields below
+  return (
+    <Field className="settings-font" label={label} hint={<>{missing ? `"${name}" isn't installed, so the default monospace font is used. Pick a font from the list, or clear the field for the default.` : hint}</>}>
+      <div className="ui-row">
+        <TextInput grow list="settings-fonts" aria-label={`${label} family`} placeholder="Default monospace" spellCheck={false} value={family} style={{ fontFamily: fontStack(family) }} onChange={(e) => setFont(target, { family: e.target.value })} />
+        <Select aria-label={`${label} size`} value={size} onChange={(e) => setFont(target, { size: Number(e.target.value) })}>
+          {Array.from({ length: max - min + 1 }, (_, i) => min + i).map((n) => (
+            <option key={n} value={n}>
+              {n} px
+            </option>
+          ))}
+        </Select>
+      </div>
+    </Field>
+  );
+}
+
+/** Settings › Appearance › Alignment: where grid cells sit, per value class (shared with the TUI through settings.json) */
+export function GridAlignField() {
+  const overrides = useGridAlign();
+  // The classes and their defaults come from the WASM module: without it (a WebView that refused WebAssembly) nothing can be picked
+  const ready = useSharedReady();
+  const [err, setErr] = useState<string | null>(null);
+  return (
+    <Field
+      label="Alignment"
+      group
+      error={err ?? undefined}
+      hint={
+        ready
+          ? "Where cells sit in result grids, by the kind of value; the TUI uses the same setting. NULL is on the right by default, in line with numbers: set NULL to Left to have it where it was before 0.3.0."
+          : "Alignment needs WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk. Until then numbers are on the right and everything else on the left."
+      }
+    >
+      <div className="align-grid">
+        {VALUE_CLASSES.map(({ cls, label }) => (
+          <Fragment key={cls}>
+            <label htmlFor={`align-${cls}`} className={cx("align-label", cls in overrides && "custom")}>
+              {label}
+            </label>
+            <Select
+              id={`align-${cls}`}
+              aria-label={`${label} alignment`}
+              disabled={!ready}
+              value={ready ? alignOf(cls, overrides) : ""}
+              onChange={(e) => {
+                setErr(null);
+                setGridAlign(cls, e.target.value as Align).catch((x) => setErr(`Couldn't save the alignment (${x}). It is back to what it was.`));
+              }}
+            >
+              {!ready && <option value="">—</option>}
+              <option value="left">Left</option>
+              <option value="center">Center</option>
+              <option value="right">Right</option>
+            </Select>
+          </Fragment>
+        ))}
+      </div>
+    </Field>
+  );
+}
+
 /** Settings › Passwords: whether to keep the password file's master key in a file or the OS keychain */
 function PasswordSettings() {
   const [loc, setLoc] = useState<"file" | "keychain" | null>(null);
@@ -89,6 +159,8 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
     setThemePref(p);
   };
   const sync = pref === "system";
+  const fonts = useMemo(() => KNOWN_MONO.filter(fontInstalled), []);
+  const fontKeys = [sk("font.bigger"), sk("font.smaller")].filter(Boolean).join(" / ");
   return (
     <Modal
       title="Settings"
@@ -127,6 +199,14 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
                 </Checkbox>
               </div>
             </Field>
+            <FontField target="editor" label="Editor font" hint={fontKeys && `Size also with ${fontKeys} in the editor.`} />
+            <FontField target="grid" label="Grid font" />
+            <datalist id="settings-fonts">
+              {fonts.map((f) => (
+                <option key={f} value={f} />
+              ))}
+            </datalist>
+            <GridAlignField />
             <Field label="Updates" hint={updMsg ?? undefined}>
               <div className="ui-row">
                 <Checkbox

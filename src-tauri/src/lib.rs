@@ -146,6 +146,7 @@ pub fn run() {
             commands::list_schemas,
             commands::list_objects,
             commands::table_detail,
+            commands::table_structure,
             commands::similar_rows_sql,
             commands::rag_indexes,
             commands::rag_save,
@@ -184,6 +185,8 @@ pub fn run() {
             commands::check_update,
             commands::update_channel,
             commands::set_update_channel,
+            commands::grid_align,
+            commands::set_grid_align,
             commands::install_update,
         ])
         .build(app_context())

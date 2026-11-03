@@ -1,16 +1,16 @@
 import { IconButton, Spacer, StatusItem, Text } from "../../ui";
 import { useStatusWidgets } from "../../lib/statusbar";
 import { TransferBar, type TransferJob } from "../../components/Transfer";
-import { isMac } from "../shortcuts/labels";
+import { keyTitle } from "../../lib/shortcuts";
 
 function StatusBar({ run, onSettings, settingsKey, onKeymap, status, readOnly, update, onUpdate, jobs }: { run: { canRun: boolean; running: boolean; onRun: () => void; onCancel: () => void }; onSettings: () => void; settingsKey?: string; onKeymap: () => void; status: string; readOnly: boolean; update?: string; onUpdate: () => void; jobs: TransferJob[] }) {
   const w = useStatusWidgets();
   return (
     <div className="statusbar">
-      <IconButton size="sm" tone="ok" disabled={!run.canRun} onClick={run.onRun} title={`Execute (${isMac ? "⌘↩" : "Ctrl+Enter"})`}>
+      <IconButton size="sm" tone="ok" disabled={!run.canRun} onClick={run.onRun} title={keyTitle("Execute", "editor.run")}>
         ▶
       </IconButton>
-      <IconButton size="sm" tone="danger" disabled={!run.running} onClick={run.onCancel} title="Cancel Running Statements">
+      <IconButton size="sm" tone="danger" disabled={!run.running} onClick={run.onCancel} title={keyTitle("Cancel Running Statements", "editor.cancel")}>
         ■
       </IconButton>
       <Text truncate className="sb-text">
@@ -30,7 +30,7 @@ function StatusBar({ run, onSettings, settingsKey, onKeymap, status, readOnly, u
       <IconButton size="sm" title={settingsKey ? `Settings (${settingsKey})` : "Settings"} onClick={onSettings}>
         ⚙
       </IconButton>
-      <IconButton size="sm" title={`Keymap Reference (${isMac ? "⇧⌘/" : "Ctrl+Shift+/"})`} onClick={onKeymap}>
+      <IconButton size="sm" title={keyTitle("Keymap Reference", "keymap")} onClick={onKeymap}>
         ⌨
       </IconButton>
     </div>

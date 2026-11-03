@@ -482,15 +482,35 @@ fn my_errno(e: &AppError) -> Option<u16> {
     }
 }
 
-/// If the feature is off, what needs to be enabled
-fn explain(report: &str, kind: DbKind, e: AppError) -> AppError {
+/// What Slow Queries needs when pg_stat_statements is missing, from the server's shared_preload_libraries (None: not readable).
+/// Managed servers (RDS, Aurora) usually preload it already, so only the extension is missing
+fn pg_stat_statements_hint(preload: Option<&str>) -> String {
+    const CREATE: &str = "CREATE EXTENSION pg_stat_statements; in this database";
+    const PRIV: &str = "(as a superuser; rds_superuser on RDS / Aurora, cloudsqlsuperuser on Cloud SQL)";
+    const LOAD: &str = "add pg_stat_statements to shared_preload_libraries and restart the server (on RDS / Aurora / Cloud SQL: in the parameter group / database flags, then reboot)";
+    match preload.map(|l| l.split(',').any(|x| x.trim().trim_matches('"') == "pg_stat_statements")) {
+        Some(true) => format!("pg_stat_statements is preloaded but not enabled in this database: run {CREATE} {PRIV}."),
+        Some(false) => format!("pg_stat_statements is not enabled: {LOAD}, then {CREATE} if it isn't there yet {PRIV}."),
+        None => format!("pg_stat_statements is not enabled. If it is not in shared_preload_libraries, {LOAD}. Then {CREATE} if it isn't there yet {PRIV}."),
+    }
+}
+
+/// A Slow Queries error that comes from pg_stat_statements missing (not a time limit or a lost connection)
+fn pg_stat_statements_missing(report: &str, kind: DbKind, e: &AppError) -> bool {
+    report == "slow_queries" && kind == DbKind::Postgres && !is_timeout(e) && e.to_string().to_lowercase().contains("pg_stat_statements")
+}
+
+/// If the feature is off, what needs to be enabled (`preload`: PostgreSQL's shared_preload_libraries, if read)
+fn explain(report: &str, kind: DbKind, e: AppError, preload: Option<&str>) -> AppError {
     let m = e.to_string();
     let lower = m.to_lowercase();
     let timeout = format!("The report ran into its time limit ({REPORT_TIMEOUT_S} s, or a stricter one set on the server). The server may be busy or the statistics very large: try again later.");
+    let pss;
     let hint = if is_timeout(&e) {
         Some(timeout.as_str())
-    } else if report == "slow_queries" && kind == DbKind::Postgres && lower.contains("pg_stat_statements") {
-        Some("pg_stat_statements is not enabled. Add it to shared_preload_libraries (restart), then run: CREATE EXTENSION pg_stat_statements;")
+    } else if pg_stat_statements_missing(report, kind, &e) {
+        pss = pg_stat_statements_hint(preload);
+        Some(pss.as_str())
     } else if lower.contains("denied") || lower.contains("permission") {
         Some("You don't have the privilege to read this (ask for pg_monitor / PROCESS / performance_schema access).")
     } else if kind == DbKind::Mysql && (lower.contains("performance_schema") || lower.contains("sys.")) {
@@ -527,7 +547,13 @@ impl AppState {
                 warning: None,
             }),
             Ok(r) => Ok(r),
-            Err(e) => Err(explain(&report, kind, e)),
+            Err(e) => {
+                let preload = match pg_stat_statements_missing(&report, kind, &e) {
+                    true => pool.run_query("SELECT current_setting('shared_preload_libraries')", 1).await.ok().and_then(|r| r.rows.first().map(|x| crate::db::cell_text(&x[0]))),
+                    false => None,
+                };
+                Err(explain(&report, kind, e, preload.as_deref()))
+            }
         }
     }
 
@@ -634,8 +660,36 @@ mod tests {
     /// MariaDB: performance_schema is off by default and some MySQL tables don't exist there at all — the hint says so
     #[test]
     fn performance_schema_hint_covers_mariadb() {
-        let e = explain("settings", DbKind::Mysql, AppError::Msg("Table 'performance_schema.global_variables' doesn't exist".into())).to_string();
+        let e = explain("settings", DbKind::Mysql, AppError::Msg("Table 'performance_schema.global_variables' doesn't exist".into()), None).to_string();
         assert!(e.contains("not available") && e.contains("MariaDB"), "{e}");
+    }
+
+    /// pg_stat_statements missing: only CREATE EXTENSION when the library is preloaded, else preload + restart first (#85)
+    #[test]
+    fn pg_stat_statements_hint_follows_shared_preload_libraries() {
+        for loaded in ["pg_stat_statements", "rdsutils, pg_stat_statements", "auto_explain,\"pg_stat_statements\""] {
+            let h = pg_stat_statements_hint(Some(loaded));
+            assert!(h.contains("CREATE EXTENSION pg_stat_statements;") && !h.contains("restart") && h.contains("rds_superuser") && h.contains("cloudsqlsuperuser"), "{loaded}: {h}");
+        }
+        for not in ["", "rdsutils", "pg_stat_statements_ext"] {
+            let h = pg_stat_statements_hint(Some(not));
+            // The extension may already exist (only the library is missing): CREATE EXTENSION only if it isn't there yet
+            assert!(h.contains("shared_preload_libraries") && h.contains("parameter group") && h.contains("CREATE EXTENSION") && h.contains("isn't there yet"), "{not}: {h}");
+        }
+        // Setting not readable (needs pg_read_all_settings): both steps, the first one conditional
+        let h = pg_stat_statements_hint(None);
+        assert!(h.contains("If ") && h.contains("parameter group") && h.contains("CREATE EXTENSION"), "{h}");
+    }
+
+    /// shared_preload_libraries is read only for a Slow Queries error about pg_stat_statements, not for every failure
+    #[test]
+    fn pg_stat_statements_missing_only_for_its_error() {
+        let e = |m: &str| AppError::Msg(m.into());
+        let missing = e("relation \"pg_stat_statements\" does not exist");
+        assert!(pg_stat_statements_missing("slow_queries", DbKind::Postgres, &missing));
+        assert!(!pg_stat_statements_missing("slow_queries", DbKind::Mysql, &missing));
+        assert!(!pg_stat_statements_missing("sessions", DbKind::Postgres, &missing));
+        assert!(!pg_stat_statements_missing("slow_queries", DbKind::Postgres, &e("connection reset by peer")));
     }
 
     /// pg_blocking_pids() is costly: only sessions in a lock wait get it
@@ -701,6 +755,22 @@ mod tests {
         assert!(r.rows.iter().any(|x| crate::db::cell_text(&x[0]).starts_with("uptime") && !crate::db::cell_text(&x[1]).is_empty()), "{:?}", r.rows);
     }
 
+    /// Users & Roles with a role valid until infinity (rdsadmin on RDS) shows "infinity" instead of panicking (#84)
+    #[tokio::test]
+    #[ignore]
+    async fn pg_roles_report_with_infinity_role() {
+        let Some(st) = state(DbKind::Postgres).await else { return };
+        let q = |s: &str| st.run_query("d".into(), s.into(), None, None);
+        q("drop role if exists qurry_inf_role").await.ok();
+        q("create role qurry_inf_role login valid until 'infinity'").await.unwrap();
+        let r = st.dba_report("d".into(), "roles".into()).await;
+        q("drop role qurry_inf_role").await.ok();
+        let r = r.unwrap();
+        let col = |n: &str| r.columns.iter().position(|c| c.name == n).unwrap();
+        let row = r.rows.iter().find(|x| crate::db::cell_text(&x[col("role")]) == "qurry_inf_role").expect("role in report");
+        assert_eq!(crate::db::cell_text(&row[col("valid_until")]), "infinity");
+    }
+
     /// Explain from Slow Queries: a generic plan on PG16+, otherwise a note to fill in the parameters
     #[tokio::test]
     #[ignore]
@@ -720,6 +790,28 @@ mod tests {
         }
     }
 
+    /// Slow Queries without pg_stat_statements says what this server needs: CREATE EXTENSION when the library is preloaded,
+    /// else preload + restart first (#85). The shared test PG preloads nothing; a server started with
+    /// -c shared_preload_libraries=pg_stat_statements checks the other case
+    #[tokio::test]
+    #[ignore]
+    async fn pg_slow_queries_say_what_is_missing() {
+        let Some(st) = state(DbKind::Postgres).await else { return };
+        let q = |s: &str| st.run_query("d".into(), s.into(), None, None);
+        let cell = |r: QueryResult| crate::db::cell_text(&r.rows[0][0]);
+        // The extension is put back afterwards if the server had it
+        let had = cell(q("select count(*) from pg_extension where extname = 'pg_stat_statements'").await.unwrap()) != "0";
+        q("drop extension if exists pg_stat_statements").await.unwrap();
+        let preload = cell(q("select current_setting('shared_preload_libraries')").await.unwrap());
+        let e = st.dba_report("d".into(), "slow_queries".into()).await.unwrap_err().to_string();
+        if had {
+            q("create extension pg_stat_statements").await.unwrap();
+        }
+        assert!(e.contains("CREATE EXTENSION pg_stat_statements;"), "{e}");
+        let loaded = preload.contains("pg_stat_statements");
+        assert_eq!(e.contains("restart") && e.contains("parameter group"), !loaded, "{preload}: {e}");
+    }
+
     /// Report queries stop at the time limit, which applies to that query only
     async fn report_time_limit(kind: DbKind, sleep: &str) {
         let Some(st) = state(kind).await else { return };
@@ -733,7 +825,7 @@ mod tests {
         // A time limit ends the search for a working query: the next one would hide it
         let e = run_first(&pool, kind, &[sleep, "SELECT 1"], 1).await.expect_err("time limit");
         assert!(is_timeout(&e), "{e}");
-        assert!(explain("x", kind, e).to_string().contains("time limit"));
+        assert!(explain("x", kind, e, None).to_string().contains("time limit"));
     }
 
     /// The report limit only tightens: a stricter session limit (here from the startup script; a role or global setting works the same) stays

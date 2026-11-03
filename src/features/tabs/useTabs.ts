@@ -21,7 +21,7 @@ export function useTabs({ setStatus, loadStale }: { setStatus: (s: string) => vo
   const addTab = (
     c: ConnectionView,
     kind: Tab["kind"],
-    opts: { title?: string; sql?: string; database?: string; tableSql?: string; edit?: EditTarget; group?: Group; where?: string; orderBy?: string },
+    opts: { title?: string; sql?: string; database?: string; tableSql?: string; edit?: EditTarget; group?: Group; where?: string; orderBy?: string; objKind?: string },
   ) => {
     const database = opts.database && opts.database !== (c.database || "postgres") ? opts.database : undefined;
     const base = database ? `${c.name}/${database}` : c.name;

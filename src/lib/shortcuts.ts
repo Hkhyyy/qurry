@@ -7,9 +7,10 @@ import { initShared, shared, sharedReady } from "./shared";
  * rows with a "gui" id); user settings go in "gui" of keymap.json in the config folder (only those differing from defaults).
  * Key notation: "Mod+Shift+L" — Mod = ⌘ on macOS / Ctrl elsewhere, Ctrl = ⌃ on macOS. Modifier order: Mod, Ctrl, Alt, Shift.
  * Key names follow the physical key (e.code), so they're the same with Korean input active.
- * scope: global = anywhere, tree = Database Explorer, editor = query console. Overlaps within the same scope (or between global and another scope) are conflicts
+ * scope: global = anywhere, tree = Database Explorer, editor = query console, grid = data grid. Overlaps within the same scope (or between global and
+ * another scope) are conflicts. Every action a menu, context menu, toolbar or Find Action runs has a command here, with or without a default key
  */
-export type Scope = "global" | "tree" | "editor";
+export type Scope = "global" | "tree" | "editor" | "grid";
 export interface Shortcut {
   id: string;
   title: string;
@@ -30,7 +31,7 @@ interface Row {
 // Imported as JSON, not through WASM: keys work while the module loads (or if the WebView refuses it)
 export const SHORTCUTS: Shortcut[] = (TABLE as Row[]).flatMap((r) => (r.gui ? [{ id: r.gui, title: r.title, desc: r.guiDesc ?? r.title, scope: r.scope ?? "global", keys: r.guiKeys ?? [] }] : []));
 
-export const SCOPE_LABEL: Record<Scope, string> = { global: "Global", tree: "Database Explorer", editor: "Query Console" };
+export const SCOPE_LABEL: Record<Scope, string> = { global: "Global", tree: "Database Explorer", editor: "Query Console", grid: "Data Grid" };
 
 const isMac = navigator.platform.toLowerCase().includes("mac");
 const byId = new Map(SHORTCUTS.map((s) => [s.id, s]));
@@ -95,6 +96,13 @@ export function bindable(spec: string): boolean {
   return /^(Mod|Ctrl|Alt)\+/.test(spec) || /(^|\+)F\d{1,2}$/.test(spec);
 }
 
+/** Keys that can be bound in a scope: in the tree and the grid also Delete / Insert / Backspace (any modifiers) and ⇧↩ — not letters, which
+ *  type into speed search or the cell there (qurry_shared::keymap::bindable_in) */
+export function bindableIn(spec: string, scope: Scope): boolean {
+  if (scope === "global" || scope === "editor") return bindable(spec);
+  return bindable(spec) || /(^|\+)(Delete|Insert|Backspace)$/.test(spec) || spec === "Shift+Enter";
+}
+
 // ───────── User settings ─────────
 
 let user: Record<string, string[]> = {};
@@ -118,6 +126,47 @@ export function hit(spec: string | null, id: string): boolean {
   return spec !== null && bindings(id).includes(spec);
 }
 
+/** A menu entry's / Find Action item's command: spread into it ({ label, ...cmd("tab.pin"), action }) for its id and current (first) shortcut */
+export function cmd(id: string): { id: string; shortcut?: string } {
+  const k = bindings(id)[0];
+  return { id, shortcut: k === undefined ? undefined : formatSpec(k) };
+}
+
+/** A toolbar button's tooltip: "Execute (⌘↩)", or the title alone while the command has no key */
+export function keyTitle(title: string, id: string): string {
+  const k = cmd(id).shortcut;
+  return k ? `${title} (${k})` : title;
+}
+
+/** The commands of a scope this key event is bound to (for key handlers that run a menu's or Find Action's item by its id) */
+export function commandsFor(spec: string | null, scope: Scope): string[] {
+  return spec === null ? [] : SHORTCUTS.filter((s) => s.scope === scope && bindings(s.id).includes(spec)).map((s) => s.id);
+}
+
+type Runnable = { id?: string; disabled?: boolean; action?: () => void; run?: () => void; submenu?: Runnable[] };
+
+/** Runs the enabled menu entry or Find Action item with this command id (submenus too): how a key runs what a menu shows.
+ *  false when the list has no such enabled entry */
+export function runById(items: readonly object[], id: string): boolean {
+  for (const it of items as Runnable[]) {
+    if (it.submenu && runById(it.submenu, id)) return true;
+    if (it.id === id && !it.disabled) {
+      (it.action ?? it.run)?.();
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Runs the first command of `scope` bound to this key whose entry in `items()` is enabled (the list is built only when the key is
+ *  a command key there). Whether one ran */
+export function runKey(spec: string | null, scope: Scope, items: () => readonly object[]): boolean {
+  const ids = commandsFor(spec, scope);
+  if (!ids.length) return false;
+  const list = items();
+  return ids.some((id) => runById(list, id));
+}
+
 export function onKeymapChange(fn: () => void): () => void {
   listeners.add(fn);
   return () => listeners.delete(fn);
@@ -128,16 +177,20 @@ function changed() {
   invoke("save_keymap", { map: user }).catch((e) => console.error("save keymap:", e));
 }
 
-export async function loadKeymap() {
+/** Loads the "gui" section of keymap.json. If the file doesn't load, the defaults apply and the file stays as it is (saving refuses to
+ *  overwrite it): returns what to tell the user, null when it loaded */
+export async function loadKeymap(): Promise<string | null> {
+  let err: string | null = null;
   try {
     user = await invoke<Record<string, string[]>>("load_keymap");
   } catch (e) {
-    console.error("load keymap:", e);
     user = {};
+    err = `keymap.json ignored (${e}) — default shortcuts in use; fix or delete keymap.json in the config folder and restart`;
   }
   for (const fn of listeners) fn();
   // Labels again once the WASM module that draws them has loaded
   if (!sharedReady()) initShared().then(() => listeners.forEach((fn) => fn()), () => {});
+  return err;
 }
 
 /** Other commands using the same key (with overlapping scope) */

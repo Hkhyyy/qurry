@@ -2,6 +2,7 @@ import { api, ConnectionView, targetId } from "../../lib/api";
 import { ask } from "../../lib/dialogs";
 import { forgetConsoleModel } from "../../lib/monaco";
 import { leaves, Pane, prunePanes } from "../../lib/panes";
+import { ddlView } from "../../lib/structure";
 import type { EditTarget } from "../../components/ResultGrid";
 import { stash } from "../workspaces/store";
 import { editorApis, liveSql, setActiveIds, setFocused, setPanes, setTabs, useTabsStore } from "./store";
@@ -38,17 +39,18 @@ const snapshot = (t: Tab): TabSnapshot => ({
   edit: t.edit,
   where: t.where,
   orderBy: t.orderBy,
+  objKind: t.objKind,
 });
 const remember = (t: Tab) => {
   const snap = snapshot(t);
   useTabsStore.setState({ recent: [snap, ...useTabsStore.getState().recent.filter((r) => r.key !== snap.key)].slice(0, 50) });
 };
 
-/** One tab (state only; does not open or run anything) */
+/** One tab (state only; does not open or run anything). A table's DDL tab opens in the last chosen view and keeps its own from then on */
 const buildTab = (
   c: ConnectionView,
   kind: Tab["kind"],
-  opts: { sql?: string; database?: string; tableSql?: string; edit?: EditTarget; where?: string; orderBy?: string },
+  opts: { sql?: string; database?: string; tableSql?: string; edit?: EditTarget; where?: string; orderBy?: string; objKind?: string },
   group: Group,
   title: string,
 ): Tab => {
@@ -71,6 +73,8 @@ const buildTab = (
     orderBy: opts.orderBy ?? "",
     tableSql: opts.tableSql,
     edit: opts.edit,
+    ddlView: kind === "ddl" && opts.edit ? ddlView() : undefined,
+    objKind: opts.objKind,
     results: [],
     activeResult: "output",
     output: [],

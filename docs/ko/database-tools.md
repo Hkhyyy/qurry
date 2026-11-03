@@ -2,7 +2,7 @@
 
 [English](../database-tools.md) | 한국어
 
-관리 리포트, 다이어그램, 스키마 · 데이터 비교, 마이그레이션, 백업, 파일 가져오기, 테스트 데이터, 관련 행 복사, 차트, 쿼리 히스토리, 실행 계획입니다.
+관리 리포트, 테이블 구조, 다이어그램, 스키마 · 데이터 비교, 마이그레이션, 백업, 파일 가져오기, 테스트 데이터, 관련 행 복사, 차트, 쿼리 히스토리, 실행 계획입니다.
 
 ## 데이터베이스 관리 (PostgreSQL, MySQL, MariaDB)
 
@@ -11,7 +11,7 @@ GUI: Data Source 우클릭 › **Tools** › Sessions & Locks, Slow Queries, …
 | 묶음 | 리포트 |
 |---|---|
 | 활동 | **Sessions** (누가 누구를 막는지, 쿼리 · 트랜잭션이 얼마나 됐는지, 3초마다 새로 고침) · **Lock Waits** — 우클릭 / `c` 쿼리 취소, `K` 세션 종료 |
-| 성능 | **Slow Queries** — 총 시간 기준 상위 100개 (`pg_stat_statements` / `performance_schema`), 콘솔에서 열거나 EXPLAIN (값 자리에 `$1` / `?` / `(...)` 가 들어간 문장이라 PostgreSQL 16+ 는 `EXPLAIN (GENERIC_PLAN)`, 그 밖에는 값을 먼저 채워야 함) |
+| 성능 | **Slow Queries** — 총 시간 기준 상위 100개 (`pg_stat_statements` / `performance_schema`), 콘솔에서 열거나 EXPLAIN (값 자리에 `$1` / `?` / `(...)` 가 들어간 문장이라 PostgreSQL 16+ 는 `EXPLAIN (GENERIC_PLAN)`, 그 밖에는 값을 먼저 채워야 함). `pg_stat_statements` 가 없으면 무엇이 빠졌는지 알려 줌: 라이브러리가 이미 미리 로드된 서버(RDS / Aurora 는 보통 그렇다)는 `CREATE EXTENSION pg_stat_statements;` 만 (superuser — RDS / Aurora 는 `rds_superuser`, Cloud SQL 은 `cloudsqlsuperuser`), 아니면 먼저 `shared_preload_libraries` 에 넣고 재시작 (RDS / Aurora / Cloud SQL 은 파라미터 그룹 / 데이터베이스 플래그를 바꾼 뒤 재부팅), 확장이 아직 없으면 그다음 생성 |
 | 용량 | **Table Sizes** · **Table Bloat** · **Index Bloat** (지운 행이 차지한 공간, 통계로 어림 — PostgreSQL) · **Table Fragmentation** (MySQL) · **Unused Indexes** (언제부터 센 스캔 수인지 함께) · **Duplicate Indexes** · **Foreign Keys Without an Index** — DROP / CREATE INDEX, VACUUM FULL, REINDEX, OPTIMIZE TABLE 생성 |
 | 유지보수 | **Vacuum & Dead Rows** · **Vacuum Progress** (지금 도는 VACUUM, VACUUM FULL / autovacuum: 단계, 스캔한 비율 — 취소 가능) · **Transaction ID Age** (wraparound) — VACUUM ANALYZE 생성 (PostgreSQL) |
 | 서버 | **Server Overview** (가동 시간, 연결 수, 캐시 적중률) · **Replication** 지연 · **Settings** |
@@ -37,6 +37,14 @@ GUI — Data Source 우클릭 › Tools › Compare & Migrate · TUI — `⌃k` 
 데이터베이스 우클릭 › Tools › Back Up Database… / Restore Database… (TUI: `⌃k`). 이 컴퓨터의 `pg_dump` / `pg_restore` / `psql` 또는 `mysqldump` / `mysql` 을 실행합니다 (Homebrew `libpq`, `mysql-client`, `mariadb`, Postgres.app, 리눅스의 흔한 위치와 MariaDB 자체 이름인 `mariadb-dump` / `mariadb` 도 찾습니다. 덤프 도구는 서버 버전에 가장 가까운 것을 씁니다 — MySQL / MariaDB 는 같은 종류 중에서 고르고, 더 예전이거나 다른 종류의 클라이언트밖에 없어서 실패하면 무엇을 설치할지 알려 줍니다. MySQL 복원은 서버와 같은 종류의 `mysql` 중 셸 명령을 끌 수 있는 (`--system-command=OFF`, MariaDB 는 `--sandbox`) 가장 새 버전을 씁니다). SSH 터널을 쓰고, 진행 상황은 상태 표시줄에 나오며 취소할 수 있습니다. 백업 파일과 임시 덤프는 본인만 읽을 수 있고, 비밀번호는 그 서버에만 맞는 개인 파일로 도구에 넘깁니다. `.sql` 파일을 복원할 때는 SQL 만 실행합니다: 파일 안의 psql · mysql 클라이언트 명령 (프로그램 실행, 파일 쓰기, 다른 곳에 접속) 은 꺼 둡니다 — psql 17.6 / 16.10 / 15.14 / 14.19 / 13.22 이상이 필요해서, 그보다 예전 psql 로는 `.sql` 파일을 복원하지 않습니다 (커스텀 형식 백업은 `pg_restore` 로 복원하므로 상관없습니다 — 다만 가장 가까운 `pg_restore` 가 17 이상이고 서버가 그보다 예전이면, 서버가 모르는 설정을 보내므로 psql 로 대신 복원합니다). `\connect` 로 데이터베이스를 바꾸는 덤프 (`pg_dump -C`, `pg_dumpall`) 는 안내와 함께 멈추니, psql 로 직접 복원하세요.
 
 MySQL 백업에는 `SET @@GLOBAL.GTID_PURGED` 를 넣지 않아서 (`--set-gtid-purged=OFF`, mysqldump 5.6.9 이상) GTID 서버 (RDS 등) 의 덤프를 다른 서버에 복원할 수 있고, 8.0 이상 `mysqldump` 로 5.7 · MariaDB 서버를 백업할 때는 컬럼 통계를 건너뜁니다 (`--column-statistics=0`). 백업 대화상자의 **Leave out DEFINER= clauses** 를 켜면 (TUI 는 파일 경로 다음 질문에 y) 루틴 · 뷰 · 트리거 · 이벤트를 `DEFINER=` 사용자 없이 써서, SUPER 가 없는 관리형 서비스에도 복원됩니다 (복원한 사용자의 것이 됩니다). **Data only** 에도 적용됩니다: 데이터만 받은 덤프에도 루틴 · 트리거 · 이벤트는 들어갑니다 (뷰는 빠집니다). MySQL 복원은 원자적이지 않습니다: 문장을 하나씩 실행하므로 하나가 실패해도 그 전에 실행된 것은 남습니다 (PostgreSQL 복원은 한 트랜잭션입니다).
+
+## 테이블 구조 (DDL 탭)
+
+테이블에서 **Go to DDL** (`⌘b`, TUI `⌃b`) 을 하면 SQL 이 열립니다. 탭의 **SQL | Structure** 전환 (포커스가 있으면 `← →`, TUI: `v`) 은 같은 테이블을 읽기 전용 표로 보여 줍니다: 컬럼 (이름, 타입, NULL 허용, 기본값, 설명, PK 표시), 키와 제약, 인덱스와 그 컬럼, 양쪽 방향의 외래 키 (이 테이블이 참조하는 것과 이 테이블을 참조하는 테이블, ON UPDATE / ON DELETE 포함), 트리거, 테이블 옵션과 설명 (PostgreSQL: owner, tablespace, storage parameter, partition key, parent; MySQL: engine, charset, collation, row format). 새 DDL 탭은 마지막에 쓴 보기로 열리고 (기본은 SQL), 그 뒤로는 탭마다 자기 보기를 유지합니다. **Reload** (TUI `r`) 는 구조를 다시 읽습니다 (예: Modify Table… 다음).
+- PostgreSQL 과 MySQL 은 모든 칸을 채웁니다. 다른 Data Source (드라이버 플러그인) 는 컬럼 · 키 · 인덱스를 보여 주고, 나머지는 "Not available for this data source" 라고 알려 줍니다.
+- MySQL 은 계정에 권한이 있는 참조 테이블과 트리거만 보여 주므로, MySQL 에서 Referenced by 나 Triggers 가 비어 있으면 "None" 대신 "None visible to this account" 라고 표시합니다.
+- 불러오기에 실패하면 이유를 보여 줍니다: **Retry** (TUI `r`), 또는 **Show SQL** (TUI `v`) — SQL 보기에는 전체 DDL 이 그대로 있습니다.
+- 고치는 것은 이 보기가 아니라 **Modify Table…** (아래) 에서 합니다.
 
 ## 객체 만들기 · 고치기 (PostgreSQL, MySQL)
 

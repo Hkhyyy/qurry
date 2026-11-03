@@ -1,4 +1,25 @@
 use super::*;
+use qurry_core::format::{align, Align, ValueClass};
+
+/// The GUI's names (Settings › Appearance › Alignment, src/lib/gridAlign.ts VALUE_CLASSES)
+fn class_name(c: ValueClass) -> &'static str {
+    match c {
+        ValueClass::String => "String",
+        ValueClass::Number => "Number",
+        ValueClass::DateTime => "Date / time",
+        ValueClass::Boolean => "Boolean",
+        ValueClass::Null => "NULL",
+        ValueClass::JsonBinary => "JSON / binary",
+    }
+}
+
+fn align_name(a: Align) -> &'static str {
+    match a {
+        Align::Left => "Left",
+        Align::Center => "Center",
+        Align::Right => "Right",
+    }
+}
 
 fn channel_name(c: qurry_core::update::Channel) -> &'static str {
     match c {
@@ -37,7 +58,7 @@ impl App {
         let items = ACTIONS
             .iter()
             .filter(|d| d.action != Action::Palette)
-            .map(|d| PItem { label: title(d.action).to_string(), hint: if d.hint.is_empty() { self.keys.label(d.action) } else { d.hint.to_string() }, action: PAction::Act(d.action) })
+            .map(|d| PItem { label: title(d.action).to_string(), hint: self.keys.hint(d.action, d.hint), action: PAction::Act(d.action) })
             .collect();
         self.popup = Some(Popup::Palette(Palette { title: "Actions".into(), input: TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
     }
@@ -54,7 +75,7 @@ impl App {
     pub fn palette_everywhere(&mut self) {
         let mut items: Vec<PItem> = self.mru.iter().filter_map(|id| self.tabs.iter().find(|t| t.id == *id)).map(|t| PItem { label: self.tab_label(t), hint: format!("tab · {}", t.db), action: PAction::Tab(t.id) }).collect();
         items.extend(ACTIONS.iter().filter(|d| d.action != Action::SearchEverywhere).map(|d| {
-            let key = if d.hint.is_empty() { self.keys.label(d.action) } else { d.hint.to_string() };
+            let key = self.keys.hint(d.action, d.hint);
             PItem { label: title(d.action).to_string(), hint: format!("action · {key}"), action: PAction::Act(d.action) }
         }));
         self.palette_objects("Search Everywhere", items);
@@ -231,6 +252,11 @@ impl App {
                 }
             }
             PAction::Channel(c) => self.set_update_channel(c),
+            PAction::AlignClass(c) => self.palette_align_of(c),
+            PAction::Align(c, a) => {
+                self.set_grid_align(c, a);
+                self.palette_grid_align(c);
+            }
             PAction::Object { conn, db, e } => {
                 let kind = match e.kind.as_str() {
                     "function" | "procedure" => "routine".to_string(),
@@ -342,6 +368,44 @@ impl App {
                 }
             }
             Err(e) => format!("Couldn't save the update channel: {e}"),
+        };
+    }
+
+    /// ⌃K › Grid Alignment…: one row per value class with where it sits (the GUI's Settings › Appearance › Alignment, shared through
+    /// settings.json). Reads the file again, so a change made in the GUI since the TUI started shows here and in the grids
+    pub fn palette_grid_align(&mut self, sel: ValueClass) {
+        self.align = self.state.store.grid_align();
+        let items = ValueClass::ALL
+            .iter()
+            .map(|&c| {
+                let (a, def) = (align(c, &self.align), c.default_align());
+                let hint = if a == def { "default".to_string() } else { format!("changed — default {}", align_name(def)) };
+                PItem { label: format!("{:<14}{:<6}", class_name(c), align_name(a)), hint, action: PAction::AlignClass(c) }
+            })
+            .collect();
+        let sel = ValueClass::ALL.iter().position(|&c| c == sel).unwrap_or(0);
+        self.popup = Some(Popup::Palette(Palette { title: "Grid Alignment".into(), input: TextArea::default(), items, sel, loading: 0, cache: Default::default() }));
+    }
+
+    /// Left / Center / Right for one value class, opened on where it sits now (Enter keeps it)
+    fn palette_align_of(&mut self, class: ValueClass) {
+        let on = align(class, &self.align);
+        let items = [Align::Left, Align::Center, Align::Right]
+            .into_iter()
+            .map(|a| PItem { label: format!("{} {}", if a == on { "●" } else { " " }, align_name(a)), hint: if a == class.default_align() { "default".into() } else { String::new() }, action: PAction::Align(class, a) })
+            .collect();
+        let sel = [Align::Left, Align::Center, Align::Right].iter().position(|&a| a == on).unwrap_or(0);
+        self.popup = Some(Popup::Palette(Palette { title: format!("{} Alignment", class_name(class)), input: TextArea::default(), items, sel, loading: 0, cache: Default::default() }));
+    }
+
+    /// Save one class's alignment for the GUI and the TUI (the core drops the override when it is the default)
+    fn set_grid_align(&mut self, class: ValueClass, a: Align) {
+        self.status = match self.state.store.set_grid_align(class, a) {
+            Ok(next) => {
+                self.align = next;
+                format!("Grid alignment: {} on the {} — saved for the GUI too", class_name(class), align_name(a).to_lowercase())
+            }
+            Err(e) => format!("Couldn't save the grid alignment: {e}"),
         };
     }
 

@@ -7,6 +7,7 @@ Everything Qurry does, chapter by chapter. Start with **Getting started** if you
 | Chapter | What's in it |
 |---|---|
 | [Getting started](getting-started.md) | Install, updates, your first data source and query (GUI and TUI), where settings are kept |
+| [Settings](settings.md) | Theme, editor and grid fonts, alignment of values in result grids (NULL, numbers, …), updates, keymap, where the password key is kept, what the TUI shares |
 | [Updates](updates.md) | Stable and beta update channels, in-app updates, macOS 12, how releases are made |
 | [Data sources](data-sources.md) | Supported databases, SSH / SSL and connection options, Production mode, drivers |
 | [Workspaces](workspaces.md) | Separate sets of tabs and data sources, each with its own explorer |
@@ -17,5 +18,5 @@ Everything Qurry does, chapter by chapter. Start with **Getting started** if you
 | [Safety](safety.md) | Read-only data sources, transactions, confirmations, the production log and undo SQL, and how releases are signed |
 | [GUI keyboard shortcuts](shortcuts-gui.md) | Every GUI shortcut (also in the app: `⇧⌘/`) |
 | [TUI keyboard shortcuts](shortcuts-tui.md) | Every TUI key (also in the app: `F1`) |
-| [TUI in your terminal](tui.md) | Colors (NO_COLOR, 256 and 16-color terminals), small windows, tmux and ⌥ keys |
+| [TUI in your terminal](tui.md) | Colors (NO_COLOR, 256 and 16-color terminals), fonts, small windows, tmux and ⌥ keys |
 | [Development](development.md) | Building from source, code layout, tests |

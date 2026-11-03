@@ -3,7 +3,8 @@ import { api, backup, ConnectionView, ddl, dialectOf, meta, redisDb, targetId, V
 import type { BackupOptions } from "../../lib/api";
 import { ask, askText, notice } from "../../lib/dialogs";
 import { invalidateCompletion } from "../../lib/completion";
-import { bindings, formatSpec } from "../../lib/shortcuts";
+import { hasStructure } from "../../lib/structure";
+import { bindings, cmd, formatSpec } from "../../lib/shortcuts";
 import type { MenuItem } from "../../components/Explorer";
 import type { NewKind } from "../../components/ObjectEditors";
 import type { EditTarget } from "../../components/ResultGrid";
@@ -36,15 +37,15 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
   const workspaces = useWorkspacesStore((s) => s.workspaces);
   const curWs = useWorkspacesStore((s) => s.curWs);
   const backupReq = useDialogsStore((s) => s.backupReq);
-  const openTable = async (c: ConnectionView, schema: string, table: string, db?: string) => {
+  const openTable = async (c: ConnectionView, schema: string, table: string, db?: string, objKind?: string) => {
     const target = targetId(c.id, db && db !== (c.database || "postgres") ? db : undefined);
     const existing = useTabsStore.getState().tabs.find((t) => t.kind === "table" && t.target === target && t.edit?.schema === schema && t.edit?.table === table);
     if (existing) return activate(existing);
-    return openTableTab(c, schema, table, db);
+    return openTableTab(c, schema, table, db, undefined, "", "", objKind);
   };
 
   /** Open a new table data tab (when duplicated by split, a separate tab with independent filter and sort) */
-  const openTableTab = async (c: ConnectionView, schema: string, table: string, db?: string, group?: Group, where = "", orderBy = "") => {
+  const openTableTab = async (c: ConnectionView, schema: string, table: string, db?: string, group?: Group, where = "", orderBy = "", objKind?: string) => {
     const target = targetId(c.id, db && db !== (c.database || "postgres") ? db : undefined);
     const { q } = dialectOf(c.kind);
     let sql = `SELECT * FROM ${q(schema)}.${q(table)}`;
@@ -58,7 +59,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
     } catch {
       /* Read-only if the metadata lookup fails */
     }
-    const tab = addTab(c, "table", { title: table, sql, database: db, tableSql: sql, edit, group, where, orderBy });
+    const tab = addTab(c, "table", { title: table, sql, database: db, tableSql: sql, edit, group, where, orderBy, objKind });
     run(tab, sql);
   };
 
@@ -71,7 +72,8 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
     try {
       setStatus(`Loading DDL of ${info.schema}.${info.name}…`);
       const ddl = await meta.ddl(target, info.schema, info.name, info.kind);
-      addTab(info.conn, "ddl", { title, sql: ddl, database: info.db });
+      // A table also gets the Structure view, opened in the last choice
+      addTab(info.conn, "ddl", { title, sql: ddl, database: info.db, edit: hasStructure(info.kind) ? { schema: info.schema, table: info.name, pk: [] } : undefined, objKind: info.kind });
       setStatus("Ready");
     } catch (e) {
       setStatus(`DDL failed: ${String(e)}`);
@@ -194,12 +196,13 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
       if (info.kind === "key") return openRedis(info.conn, info.db, info.name);
       if (info.kind === "conn" || info.kind === "db") return openRedis(info.conn, info.db);
     }
-    if (isRelation(info.kind) && info.schema && info.name) openTable(info.conn, info.schema, info.name, info.db);
+    if (isRelation(info.kind) && info.schema && info.name) openTable(info.conn, info.schema, info.name, info.db, info.kind);
     else if (info.kind === "routine" || info.kind === "sequence") openDdl(info);
   };
 
   // ───────── Database Explorer actions (DataGrip keymap) ─────────
-  const K = { modify: sk("tree.modify"), rename: sk("tree.rename"), edit: sk("tree.editData"), props: sk("tree.properties"), refresh: sk("tree.refresh"), deact: sk("tree.disconnect"), jump: sk("tree.jumpConsole"), ddl: sk("tree.ddl"), gen: sk("tree.sqlGen"), ddlClip: sk("tree.ddlCopy"), ddlCons: sk("tree.ddlConsole"), ref: sk("tree.copyRef"), doc: sk("tree.quickDoc"), drop: sk("tree.remove"), dup: sk("tree.duplicate"), console: sk("console.new"), force: bindings("tree.refresh")[1] ? formatSpec(bindings("tree.refresh")[1]) : undefined, newK: sk("tree.newDs") };
+  // Force Refresh's line shows the second Refresh key (⌥⇧⌘R) until Force Refresh gets a key of its own
+  const forceKey = sk("tree.forceRefresh") ?? (bindings("tree.refresh")[1] ? formatSpec(bindings("tree.refresh")[1]) : undefined);
   // ───────── Backup / restore ─────────
   const dbTarget = (c: ConnectionView, db?: string) => targetId(c.id, db && db !== (c.database || "postgres") ? db : undefined);
   const startBackup = async (o: Omit<BackupOptions, "schemas">) => {
@@ -246,7 +249,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
     if (!info.schema || !info.name) return;
     try {
       const ddl = await ddlText(info);
-      addTab(info.conn, "ddl", { title: `SQL Generator: ${info.name}`, sql: ddl, database: info.db });
+      addTab(info.conn, "ddl", { title: `SQL Generator: ${info.name}`, sql: ddl, database: info.db, objKind: info.kind });
     } catch (e) {
       setStatus(String(e));
     }
@@ -268,7 +271,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
       x: x ?? (el ? el.left + 40 : 300),
       y: y ?? (el ? el.bottom : 200),
       items: [
-        { label: "New Query Console", shortcut: K.console, action: () => openConsole(info.conn, info.db) },
+        { label: "New Query Console", ...cmd("console.new"), action: () => openConsole(info.conn, info.db) },
         ...(consoles.length ? ([{ separator: true }] as MenuItem[]) : []),
         ...consoles.map((t) => ({ label: t.title, action: () => activate(t) })),
       ],
@@ -329,57 +332,57 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
     const objects: MenuItem[] = canDdl(c)
       ? [
           { separator: true },
-          { label: "Table…", action: () => newObject(info, "table") },
-          { label: "View…", action: () => newObject(info, "view") },
-          ...(pg ? ([{ label: "Materialized View…", action: () => newObject(info, "matview") }, { label: "Sequence…", action: () => newObject(info, "sequence") }] as MenuItem[]) : []),
-          ...(pg && info.kind !== "schema" && !info.name ? ([{ label: "Schema…", action: () => newObject(info, "schema") }] as MenuItem[]) : []),
-          ...(info.kind === "conn" || info.kind === "db" ? ([{ label: "Database…", action: () => newObject(info, "database") }] as MenuItem[]) : []),
+          { label: "Table…", ...cmd("tree.newTable"), action: () => newObject(info, "table") },
+          { label: "View…", ...cmd("tree.newView"), action: () => newObject(info, "view") },
+          ...(pg ? ([{ label: "Materialized View…", ...cmd("tree.newMatview"), action: () => newObject(info, "matview") }, { label: "Sequence…", ...cmd("tree.newSequence"), action: () => newObject(info, "sequence") }] as MenuItem[]) : []),
+          ...(pg && info.kind !== "schema" && !info.name ? ([{ label: "Schema…", ...cmd("tree.newSchema"), action: () => newObject(info, "schema") }] as MenuItem[]) : []),
+          ...(info.kind === "conn" || info.kind === "db" ? ([{ label: "Database…", ...cmd("tree.newDatabase"), action: () => newObject(info, "database") }] as MenuItem[]) : []),
         ]
       : [];
     const items: MenuItem[] = [
-      { label: "New", submenu: [{ label: "Query Console", shortcut: K.console, action: () => openConsole(c, info.db) }, ...objects, { separator: true }, { label: "Data Source…", action: () => setDialog({}) }] },
+      { label: "New", submenu: [{ label: "Query Console", ...cmd("console.new"), action: () => openConsole(c, info.db) }, ...objects, { separator: true }, { label: "Data Source…", ...cmd("tree.newDs"), action: () => setDialog({}) }] },
     ];
-    if (canDdl(c) && (info.kind === "table" || info.kind === "partitioned")) items.push({ label: "Modify Table…", shortcut: K.modify, action: () => modifyTable(info) });
+    if (canDdl(c) && (info.kind === "table" || info.kind === "partitioned")) items.push({ label: "Modify Table…", ...cmd("tree.modify"), action: () => modifyTable(info) });
     if (canDdl(c) && (["table", "partitioned", "view", "matview", "sequence"].includes(info.kind) || (pg && (info.kind === "schema" || info.kind === "db"))))
-      items.push({ label: "Rename…", shortcut: K.rename, action: () => renameNode(info) });
-    if (rel) items.push({ label: "Edit Data", shortcut: K.edit, action: () => activateNode(info) });
-    if (info.kind === "conn") items.push({ label: "Properties", shortcut: K.props, action: () => setDialog({ edit: c }) });
+      items.push({ label: "Rename…", ...cmd("tree.rename"), action: () => renameNode(info) });
+    if (rel) items.push({ label: "Edit Data", ...cmd("tree.editData"), action: () => activateNode(info) });
+    if (info.kind === "conn") items.push({ label: "Properties", ...cmd("tree.properties"), action: () => setDialog({ edit: c }) });
     items.push({ separator: true });
     items.push({
       label: "Copy/Paste",
       submenu: [
-        { label: "Copy Reference", shortcut: K.ref, action: () => navigator.clipboard.writeText(fqn(info)) },
-        ...(info.kind === "conn" ? ([{ label: "Duplicate", shortcut: K.dup, action: () => duplicateConn(c) }] as MenuItem[]) : []),
+        { label: "Copy Reference", ...cmd("tree.copyRef"), action: () => navigator.clipboard.writeText(fqn(info)) },
+        ...(info.kind === "conn" ? ([{ label: "Duplicate", ...cmd("tree.duplicate"), action: () => duplicateConn(c) }] as MenuItem[]) : []),
       ],
     });
-    items.push({ label: "Refresh", shortcut: K.refresh, action: () => info.refresh?.() });
-    if (info.kind === "conn" && c.connected) items.push({ label: "Deactivate", shortcut: K.deact, action: () => deactivate(c) });
-    items.push({ label: "Quick Documentation", shortcut: K.doc, action: () => showQuickDoc(info) });
+    items.push({ label: "Refresh", ...cmd("tree.refresh"), action: () => info.refresh?.() });
+    if (info.kind === "conn" && c.connected) items.push({ label: "Deactivate", ...cmd("tree.disconnect"), action: () => deactivate(c) });
+    items.push({ label: "Quick Documentation", ...cmd("tree.quickDoc"), action: () => showQuickDoc(info) });
     items.push({ separator: true });
     items.push({
       label: "Navigation",
       submenu: [
-        ...(isObj ? ([{ label: "Go to DDL", shortcut: K.ddl, action: () => openDdl(info) }] as MenuItem[]) : []),
-        { label: "Jump to Query Console…", shortcut: K.jump, action: () => jumpToConsole(info) },
+        ...(isObj ? ([{ label: "Go to DDL", ...cmd("tree.ddl"), action: () => openDdl(info) }] as MenuItem[]) : []),
+        { label: "Jump to Query Console…", ...cmd("tree.jumpConsole"), action: () => jumpToConsole(info) },
       ],
     });
-    if (info.kind === "table" && c.kind !== "redis" && c.kind !== "mongodb" && !VECTOR_KINDS.includes(c.kind)) items.push({ label: "AI Search (RAG) — Index This Table…", action: () => openRag(c, info.db, info.schema, info.name) });
+    if (info.kind === "table" && c.kind !== "redis" && c.kind !== "mongodb" && !VECTOR_KINDS.includes(c.kind)) items.push({ label: "AI Search (RAG) — Index This Table…", ...cmd("tree.rag"), action: () => openRag(c, info.db, info.schema, info.name) });
     if (isObj)
       items.push({
         label: "SQL Scripts",
         submenu: [
-          { label: "SQL Generator…", shortcut: K.gen, action: () => sqlGenerator(info) },
-          { label: "Generate DDL to Clipboard", shortcut: K.ddlClip, action: () => ddlToClipboard(info) },
-          { label: "Generate DDL to Query Console", shortcut: K.ddlCons, action: () => ddlToConsole(info) },
+          { label: "SQL Generator…", ...cmd("tree.sqlGen"), action: () => sqlGenerator(info) },
+          { label: "Generate DDL to Clipboard", ...cmd("tree.ddlCopy"), action: () => ddlToClipboard(info) },
+          { label: "Generate DDL to Query Console", ...cmd("tree.ddlConsole"), action: () => ddlToConsole(info) },
           ...(rel
             ? ([
                 { separator: true },
-                { label: "SELECT Statement", action: () => generate(info, "select") },
+                { label: "SELECT Statement", ...cmd("tree.genSelect"), action: () => generate(info, "select") },
                 ...(info.kind === "table" || info.kind === "partitioned"
                   ? ([
-                      { label: "INSERT Statement", action: () => generate(info, "insert") },
-                      { label: "UPDATE Statement", action: () => generate(info, "update") },
-                      { label: "DELETE Statement", action: () => generate(info, "delete") },
+                      { label: "INSERT Statement", ...cmd("tree.genInsert"), action: () => generate(info, "insert") },
+                      { label: "UPDATE Statement", ...cmd("tree.genUpdate"), action: () => generate(info, "update") },
+                      { label: "DELETE Statement", ...cmd("tree.genDelete"), action: () => generate(info, "delete") },
                     ] as MenuItem[])
                   : []),
               ] as MenuItem[])
@@ -390,57 +393,57 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
       items.push({
         label: "Object Actions",
         submenu: [
-          ...(info.kind === "table" || info.kind === "partitioned" ? ([{ label: "Truncate…", danger: true, action: () => dangerous(info, "TRUNCATE") }] as MenuItem[]) : []),
-          { label: "Drop…", shortcut: K.drop, danger: true, action: () => dangerous(info, "DROP") },
+          ...(info.kind === "table" || info.kind === "partitioned" ? ([{ label: "Truncate…", ...cmd("tree.truncate"), danger: true, action: () => dangerous(info, "TRUNCATE") }] as MenuItem[]) : []),
+          { label: "Drop…", ...cmd("tree.remove"), danger: true, action: () => dangerous(info, "DROP") },
         ],
       });
     if (rel)
       items.push({
         label: "Import/Export",
         submenu: [
-          { label: "Export Data…", action: () => exportTable(info) },
+          { label: "Export Data…", ...cmd("tree.export"), action: () => exportTable(info) },
           ...(info.kind === "table" || info.kind === "partitioned"
             ? ([
-                { label: "Import Data from File…", action: () => setImportReq({ target: nodeTarget(info), schema: info.schema!, table: info.name }) },
-                { label: "Generate Test Data…", action: () => setGenReq({ target: nodeTarget(info), schema: info.schema ?? "", table: info.name!, conn: c }) },
-                ...(c.kind === "postgres" || c.kind === "mysql" ? ([{ label: "Copy Related Rows To…", action: () => setCopyReq({ target: nodeTarget(info), schema: info.schema ?? "", table: info.name!, conn: c }) }] as MenuItem[]) : []),
+                { label: "Import Data from File…", ...cmd("tree.import"), action: () => setImportReq({ target: nodeTarget(info), schema: info.schema!, table: info.name }) },
+                { label: "Generate Test Data…", ...cmd("tree.genTestData"), action: () => setGenReq({ target: nodeTarget(info), schema: info.schema ?? "", table: info.name!, conn: c }) },
+                ...(c.kind === "postgres" || c.kind === "mysql" ? ([{ label: "Copy Related Rows To…", ...cmd("tree.copyRelated"), action: () => setCopyReq({ target: nodeTarget(info), schema: info.schema ?? "", table: info.name!, conn: c }) }] as MenuItem[]) : []),
               ] as MenuItem[])
             : []),
         ],
       });
     if (c.kind !== "redis" && (info.kind === "schema" || info.kind === "db" || (info.kind === "conn" && c.kind === "mysql")))
-      items.push({ label: "Diagrams", submenu: [{ label: "Show Diagram (ERD)", action: () => openErd(c, info.db, info.kind === "schema" && info.schema ? [info.schema] : c.kind === "mysql" ? [info.db ?? c.database] : undefined) }] });
+      items.push({ label: "Diagrams", submenu: [{ label: "Show Diagram (ERD)", ...cmd("tree.erd"), action: () => openErd(c, info.db, info.kind === "schema" && info.schema ? [info.schema] : c.kind === "mysql" ? [info.db ?? c.database] : undefined) }] });
     if (info.kind === "schema" && info.schema && c.kind !== "redis")
-      items.push({ label: "Import/Export", submenu: [{ label: "Import Data into New Table…", action: () => setImportReq({ target: nodeTarget(info), schema: info.schema!, refresh: info.refresh }) }] });
+      items.push({ label: "Import/Export", submenu: [{ label: "Import Data into New Table…", ...cmd("tree.importNewTable"), action: () => setImportReq({ target: nodeTarget(info), schema: info.schema!, refresh: info.refresh }) }] });
     items.push({
       label: "Tools",
       submenu: [
-        { label: "Manage Shown Schemas…", action: () => document.querySelector<HTMLElement>(".ws-explorer.on .tree-node.conn.selected .scope-badge, .ws-explorer.on .tree-node.selected .scope-badge")?.click() },
+        { label: "Manage Shown Schemas…", ...cmd("tree.manageSchemas"), action: () => document.querySelector<HTMLElement>(".ws-explorer.on .tree-node.conn.selected .scope-badge, .ws-explorer.on .tree-node.selected .scope-badge")?.click() },
         ...(c.kind !== "redis" && (info.kind === "conn" || info.kind === "db")
           ? ([
               { separator: true },
-              { label: "Sessions & Locks", action: () => openDba(c, info.db, "sessions", "Sessions") },
-              { label: "Slow Queries", action: () => openDba(c, info.db, "slow_queries", "Slow Queries (Top 100)") },
-              { label: "Table Sizes & Indexes", action: () => openDba(c, info.db, "table_sizes", "Table Sizes") },
-              { label: "Server Overview", action: () => openDba(c, info.db, "server", "Server Overview") },
-              { label: "Users & Privileges", action: () => openDba(c, info.db, "roles", "Users & Roles") },
+              { label: "Sessions & Locks", ...cmd("tree.dbaSessions"), action: () => openDba(c, info.db, "sessions", "Sessions") },
+              { label: "Slow Queries", ...cmd("tree.dbaSlow"), action: () => openDba(c, info.db, "slow_queries", "Slow Queries (Top 100)") },
+              { label: "Table Sizes & Indexes", ...cmd("tree.dbaSizes"), action: () => openDba(c, info.db, "table_sizes", "Table Sizes") },
+              { label: "Server Overview", ...cmd("tree.dbaServer"), action: () => openDba(c, info.db, "server", "Server Overview") },
+              { label: "Users & Privileges", ...cmd("tree.dbaRoles"), action: () => openDba(c, info.db, "roles", "Users & Roles") },
               { separator: true },
-              { label: "Compare & Migrate (schemas, data, migration files)…", action: () => openMigrate(c, info.db) },
-              { label: "AI Search (RAG)…", action: () => openRag(c, info.db) },
+              { label: "Compare & Migrate (schemas, data, migration files)…", ...cmd("tree.migrate"), action: () => openMigrate(c, info.db) },
+              { label: "AI Search (RAG)…", ...cmd("tree.ragSearch"), action: () => openRag(c, info.db) },
               { separator: true },
-              { label: "Back Up Database…", action: () => setBackupReq({ c, db: info.db }) },
-              { label: "Restore Database…", action: () => startRestore(c, info.db) },
+              { label: "Back Up Database…", ...cmd("tree.backup"), action: () => setBackupReq({ c, db: info.db }) },
+              { label: "Restore Database…", ...cmd("tree.restore"), action: () => startRestore(c, info.db) },
             ] as MenuItem[])
           : []),
       ],
     });
     if (info.kind === "conn") {
-      items.push({ label: "Diagnostics", submenu: [{ label: "Force Refresh", shortcut: K.force, action: () => (invalidateSearchIndex(c.id), invalidateCompletion(c.id), info.refresh?.()) }] });
+      items.push({ label: "Diagnostics", submenu: [{ label: "Force Refresh", ...cmd("tree.forceRefresh"), shortcut: forceKey, action: () => (invalidateSearchIndex(c.id), invalidateCompletion(c.id), info.refresh?.()) }] });
       items.push({ separator: true });
       const others = workspaces.filter((w) => w.id !== curWs && !w.connIds.includes(c.id));
       if (others.length) items.push({ label: "Add to Workspace", submenu: others.map((w) => ({ label: w.name, action: () => setInWs(w.id, c.id, true) })) });
-      items.push({ label: "Remove from This Workspace", action: () => setInWs(curWs, c.id, false) });
-      items.push({ label: "Remove Data Source", shortcut: K.drop, danger: true, action: () => removeConn(c) });
+      items.push({ label: "Remove from This Workspace", ...cmd("tree.removeFromWs"), action: () => setInWs(curWs, c.id, false) });
+      items.push({ label: "Remove Data Source", ...cmd("tree.remove"), danger: true, action: () => removeConn(c) });
     }
     return items;
   };

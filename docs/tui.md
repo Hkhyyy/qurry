@@ -2,7 +2,7 @@
 
 English | [한국어](ko/tui.md)
 
-`qurry-tui` adapts to the terminal it runs in: how many colors it has, how big the window is, and what tmux or the terminal keeps for itself. Nothing here needs a setting in Qurry; it all follows the environment.
+`qurry-tui` adapts to the terminal it runs in: how many colors it has, how big the window is, and what tmux or the terminal keeps for itself. Nothing here needs a setting in Qurry; it all follows the environment, down to the font.
 
 ## Colors
 
@@ -26,8 +26,21 @@ Some things never depend on color:
 
 - **Unsaved grid changes**: next to the row number `+` marks an added row, `-` a deleted one (also struck through), `~` a row with edited cells; edited cells are bold.
 - **The cell cursor inside a range**: with reverse video (16 colors, `NO_COLOR`) the range is reversed and the cursor is the one cell in it left plain, as in a spreadsheet.
+- **The active tab**: bold. With 16 colors or `NO_COLOR` the focused pane's tab is in reverse video (its Data Source color inverted, so a production tab stays red) and, in split panes, the other panes' visible tab is underlined.
 
 `qurry-tui --help` lists the same rules.
+
+## Fonts
+
+The terminal draws the TUI's text, so its font and size are the terminal's: Qurry has no font setting there (the GUI's are in [Settings › Appearance](settings.md#appearance)). Pick a monospace font; the TUI lays out text in cells and draws borders with box-drawing characters. In most terminals `⌘+` / `⌘-` change the size of the window you are in.
+
+| Terminal | Where to set the font |
+|---|---|
+| Terminal.app | *Settings › Profiles › Text › Font › Change…* (per profile) |
+| iTerm2 | *Settings › Profiles › Text › Font* (per profile) |
+| Ghostty | `font-family = "JetBrains Mono"` and `font-size = 13` in `~/.config/ghostty/config`; reload with `⇧⌘,` |
+| WezTerm | `config.font = wezterm.font("JetBrains Mono")` and `config.font_size = 13.0` in `~/.wezterm.lua`; applied when you save |
+| Alacritty | `[font]` with `normal = { family = "JetBrains Mono" }` and `size = 13.0` in `~/.config/alacritty/alacritty.toml`; applied when you save |
 
 ## Small windows
 

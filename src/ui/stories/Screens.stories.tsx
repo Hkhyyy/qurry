@@ -23,10 +23,12 @@ import { ResultChart } from "../../components/ResultChart";
 import { ResultGrid } from "../../components/ResultGrid";
 import { RunningBar } from "../../components/RunningBar";
 import { SearchEverywhere } from "../../components/SearchEverywhere";
+import { TableStructureView } from "../../components/TableStructure";
 import { Switcher } from "../../components/Switcher";
 import { BackupDialog, ExportDialog, ImportDialog } from "../../components/Transfer";
 import { UpdateDialog } from "../../components/UpdateDialog";
 import { WorkspaceBar } from "../../components/WorkspaceBar";
+import { ConsoleIcon, ReportIcon, TabIcon, TableIcon } from "../icons";
 
 /** Screens: real screen components with fake data (same data as the app's ?mock). Buttons are clickable */
 const meta: Meta = { title: "GUI/5 Screens", parameters: { layout: "fullscreen" } };
@@ -63,8 +65,21 @@ const Frame = ({ children, h = 560 }: { children: React.ReactNode; h?: number })
 /** Whole app (explorer · tabs · console). Right-click the explorer, ⇧⌘A for Find Action, ⌘↩ in the console to run */
 export const FullApp: S = { name: "App (whole window)", render: () => <div style={{ height: "100vh" }}><App /></div> };
 
-/** Settings › Appearance: theme, the automatic update check and the update channel (stable or beta, shared with the TUI) */
+/** Settings › Appearance: theme, editor and grid fonts, grid alignment per value class, the automatic update check and the update channel (alignment and channel shared with the TUI) */
 export const Settings: S = { name: "Settings — Appearance & updates", render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} /> };
+/** Editor / Grid font: installed monospace fonts are suggested (each field shows its font), sizes in px; a family that isn't installed says so and how to recover (the fallback is the default monospace). The choice is saved like in the app; preview.tsx resets it before every story */
+export const SettingsFonts: S = {
+  name: "Settings — Fonts (font not installed)",
+  render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} />,
+  play: async ({ canvasElement }) => {
+    const field = within(canvasElement.ownerDocument.body).getByRole("combobox", { name: "Grid font family" });
+    await userEvent.clear(field);
+    await userEvent.type(field, "No Such Mono");
+  },
+};
+
+/** Settings › Keymap: every menu, toolbar and Find Action command by scope (Global, Database Explorer, Query Console, Data Grid), "none" where it has no key yet */
+export const SettingsKeymap: S = { name: "Settings — Keymap", render: () => <SettingsDialog initialPage="keymap" onClose={noop} onUpdate={noop} onChannel={noop} /> };
 
 export const NewDataSource: S = { name: "Data Source — new", render: () => <ConnectionDialog onClose={noop} onSaved={noop} /> };
 export const EditDataSource: S = { name: "Data Source — edit (SSH)", render: () => <ConnectionDialog edit={{ ...PROD, ssh: { enabled: true, host: "bastion.example.com", port: 22, user: "ec2-user", auth: "key", keyPath: "~/.ssh/id_ed25519" } } as ConnectionView} onClose={noop} onSaved={noop} /> };
@@ -134,6 +149,40 @@ export const Grid: S = {
   ),
 };
 
+/** Every value class with NULLs, in a panel two rows high: the header stays under the toolbar while scrolling (#82), NULL sits on the right (#75) */
+const mixed: QueryResult = {
+  columns: [
+    { name: "card_brand", typeName: "TEXT" },
+    { name: "amount", typeName: "NUMERIC" },
+    { name: "refunded", typeName: "BOOL" },
+    { name: "paid_at", typeName: "TIMESTAMPTZ" },
+    { name: "meta", typeName: "JSONB" },
+    { name: "receipt", typeName: "BYTEA" },
+    ...Array.from({ length: 8 }, (_, i) => ({ name: `extra_${i + 1}`, typeName: "INT4" })),
+  ],
+  rows: Array.from({ length: 40 }, (_, i) => [
+    i % 4 === 3 ? null : ["VISA", "MASTER", "AMEX"][i % 3],
+    i % 3 === 1 ? null : (129000 * (i + 1)).toFixed(2),
+    i % 5 === 4 ? null : i % 2 === 0,
+    i % 6 === 5 ? null : `2026-10-28 09:${String(i).padStart(2, "0")}:00 +09:00`,
+    i % 2 ? null : `{"pg":"toss","n":${i}}`,
+    i % 3 ? null : "0xDEADBEEF",
+    ...Array.from({ length: 8 }, (_, j) => ((i + j) % 4 === 0 ? null : i * 10 + j)),
+  ]),
+  rowsAffected: 0,
+  truncated: false,
+  elapsedMs: 4,
+  hasResultSet: true,
+};
+export const GridShort: S = {
+  name: "Result Grid — short panel, every value class",
+  render: () => (
+    <div style={{ position: "relative", height: 140, border: "1px solid var(--ui-border)" }}>
+      <ResultGrid result={mixed} running={false} loadingMore={false} query="select * from payment_check" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
+    </div>
+  ),
+};
+
 export const History: S = { name: "Query History", render: () => <HistoryDialog connId="dev" title="[DEV] shop_app Query History" onPick={noop} onClose={noop} /> };
 export const Search: S = {
   name: "Search Everywhere (⇧⇧)",
@@ -143,7 +192,7 @@ export const Search: S = {
         initialTab="all"
         conns={CONNS}
         contextConnId="dev"
-        files={[{ key: "f1", icon: "⌘", title: "console [DEV] shop_app", hint: "[DEV] shop_app", open: true }]}
+        files={[{ key: "f1", icon: <ConsoleIcon />, title: "console [DEV] shop_app", hint: "[DEV] shop_app", open: true }]}
         actions={[{ name: "Production Log…", group: "Run", run: noop }, { name: "Generate Test Data…", group: "Data", run: noop }]}
         onClose={noop}
         onSelectInTree={noop}
@@ -161,9 +210,10 @@ export const SwitcherStory: S = {
   render: () => (
     <Switcher
       items={[
-        { key: "a", icon: "⌘", title: "console [DEV] shop_app", hint: "[DEV] shop_app", open: true, color: "#5f5b24" },
-        { key: "b", icon: "▦", title: "users", hint: "[PROD] shop_app · public", open: true, color: "#6e2a2a" },
-        { key: "c", icon: "⧉", title: "Sessions & Locks", hint: "[PROD] shop_app", open: true },
+        { key: "a", icon: <ConsoleIcon />, title: "console [DEV] shop_app", hint: "[DEV] shop_app", open: true, color: "#5f5b24" },
+        { key: "b", icon: <TableIcon />, title: "users", hint: "[PROD] shop_app · public", open: true, color: "#6e2a2a" },
+        { key: "d", icon: <TabIcon kind="ddl" obj="view" />, title: "active_users [DDL]", hint: "[PROD] shop_app", open: true, color: "#6e2a2a" },
+        { key: "c", icon: <ReportIcon />, title: "Sessions & Locks", hint: "[PROD] shop_app", open: true },
       ]}
       start={1}
       onPick={noop}
@@ -187,6 +237,20 @@ export const Update: S = {
   ),
 };
 
+/** DDL tab → Structure (the toolbar's SQL | Structure switch picks it). Read-only sections from the table's metadata */
+export const DdlStructure: S = { name: "DDL — Structure", render: () => <Frame h={720}><TableStructureView target="dev" schema="public" table="users" visible onShowSql={noop} /></Frame> };
+export const DdlStructureBasics: S = {
+  name: "DDL — Structure (source reports only the basics)",
+  render: () => <Frame h={720}><TableStructureView target="dev" schema="billing" table="invoices" visible onShowSql={noop} /></Frame>,
+};
+export const DdlStructureError: S = {
+  name: "DDL — Structure (load failed)",
+  beforeEach: () => {
+    (globalThis as any).__mockStructureFail = "connection reset by peer";
+    return () => delete (globalThis as any).__mockStructureFail;
+  },
+  render: () => <Frame h={240}><TableStructureView target="dev" schema="public" table="users" visible onShowSql={noop} /></Frame>,
+};
 export const Diagram: S = { name: "Diagram (ERD)", render: () => <Frame h={600}><ErdView target="dev" schemas={["public"]} visible onOpenTable={noop} onStatus={noop} /></Frame> };
 export const Dba: S = {
   name: "Database Admin",

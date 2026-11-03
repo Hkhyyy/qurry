@@ -296,3 +296,7 @@ div.ui-text.ui-ellipsis, span.ui-text.ui-ellipsis { display: block; }
 .ui-tab-strip-scroll::-webkit-scrollbar { display: none; }
 .ui-tab-strip-more { position: relative; flex: none; display: flex; align-items: center; padding: 0 var(--ui-sp-1); border-left: 1px solid var(--ui-border); }
 .ui-tab-strip-more .ui-menu.dropdown { max-height: 60vh; overflow-y: auto; }
+
+/* DDL tab of an object: its icon + a small page mark in the lower right corner (TabIcon) */
+.ui-ddl-mark { position: relative; display: inline-flex; }
+.ui-ddl-mark > svg:last-child { position: absolute; right: -3px; bottom: -2px; }

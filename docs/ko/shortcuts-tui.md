@@ -4,7 +4,7 @@
 
 키는 macOS 에 보이는 대로 씁니다: `⌃` Control, `⌥` Option, `⇧` Shift. Linux 에서는 `⌃` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요 (그곳 TUI 화면도 그렇게 보입니다).
 
-`qurry-tui` 안에서 **F1** 을 누르거나 `qurry-tui --help` 를 실행하면 같은 목록이 나옵니다. F1 창 위쪽의 **Commands** 는 바꿀 수 있습니다: 하나를 고르고 Enter, 그다음 새 키 (`a` 두 번째 키 추가, `Del` 기본값으로). 마우스도 됩니다: 클릭으로 고르기, 더블클릭으로 열기 · 편집, 휠로 스크롤.
+`qurry-tui` 안에서 **F1** 을 누르거나 `qurry-tui --help` 를 실행하면 같은 목록이 나옵니다. F1 창 위쪽의 **Commands** 는 바꿀 수 있습니다: 하나를 고르고 Enter, 그다음 새 키 (`a` 두 번째 키 추가, `Del` 기본값으로). `⌃k` 팔레트의 모든 명령이 기본 키가 없는 것까지 있고, 이어서 Database Explorer 와 데이터 그리드의 한 글자 명령 (`n` New Data Source, `a` Add Row …) 이 나옵니다. 이것도 같은 방법으로 바꿀 수 있고, 그 창에서만 동작하며 글자 하나여도 됩니다. 마우스도 됩니다: 클릭으로 고르기, 더블클릭으로 열기 · 편집, 휠로 스크롤.
 ⌃Enter 는 kitty 키보드 프로토콜을 지원하는 터미널 (iTerm2, kitty, WezTerm, Ghostty) 에서만 구분됩니다. 다른 곳에서는 F5 나 ⌥Enter 를 쓰세요.
 tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 그것과 ⌥ 키는 [터미널에서 쓰는 TUI](tui.md#tmux-와-다른-멀티플렉서) 를 보세요.
 
@@ -22,6 +22,15 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | `s` (탐색기) | 보일 데이터베이스 · 스키마 고르기 |
 | `Esc` | 뒤로 (탐색기로, 또는 결과에서 편집기로) |
 | `⌃q` | 종료 |
+
+### 바꿀 수 없는 키
+
+명령 다음에 나오는 화면별 키 표는 바꿀 수 없습니다: 이동 · 열기 · 편집 · 복사 · 필터 · 정렬을 할 뿐 명령을 실행하지 않으므로, 탐색기나 그리드 키로도 가져갈 수 없습니다.
+
+- 이동: 화살표, `j k h l`, `g G`, Page Up / Down, Home / End; `Enter` / `F2` 열기 · 편집, `Esc` / `Tab` 돌아가기.
+- 탐색기의 `/` 필터, `y` 이름 복사, `F4` 콘솔 열기; 그리드의 `y` 복사, `s` 정렬, `w` / `/` / `o` WHERE · ORDER BY 편집, `r` 다시 읽기.
+- `⌥1…9` 워크스페이스 전환 (그 키를 가진 명령이 없을 때), 편집기의 `⌃u` / `⌃r` 실행 취소 · 다시 실행, 찾기 막대의 키.
+- 팝업, Data Source 양식, Redis 브라우저, Database Admin 탭 안의 키는 그 화면에서 동작합니다. F1 창의 키도 그렇습니다.
 
 아래 전체 표의 설명은 앱 화면 (F1) 에 나오는 문구 그대로 영어로 둡니다.
 
@@ -73,6 +82,91 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | `⌃f` | Find / Replace in Editor (regex) |
 | `⌃F2` | Disconnect |
 
+## Commands without a default key (give them one in the F1 window)
+
+| Key | Action |
+|---|---|
+| — | Data Source Properties… |
+| — | New Data Source… |
+| — | Refresh |
+| — | Query History… (shared with the GUI) |
+| — | Explain Analyze (runs the statement: real times and row counts) |
+| — | Query Execution Settings (what ⌃Enter runs) |
+| — | Clear Console (delete all text) |
+| — | Edit Data (open table) |
+| — | Revert Changes |
+| — | Add Row |
+| — | Delete Row |
+| — | Set NULL |
+| — | Export Data… (CSV, TSV, JSON, SQL INSERT, Markdown) |
+| — | Copy Column as IN List  ('a', 'b', …) |
+| — | Find Similar Rows (pgvector, by the vector column) |
+| — | AI Search (RAG)… — ask a table in plain words |
+| — | Build RAG Index… (embed the rows) |
+| — | New RAG Index from the Selected Table… |
+| — | Set OpenAI API Key (RAG)… |
+| — | Switch Workspace… |
+| — | Delete Workspace… |
+| — | Move Tab to Workspace… |
+| — | Add Data Source to This Workspace… |
+| — | Move Data Source to Another Workspace… |
+| — | Remove Data Source from This Workspace |
+| — | Production Log… (changes run on Production data sources, undo SQL) |
+| — | Snippets… |
+| — | Save Query as Snippet… |
+| — | Show Diagram (ERD): foreign keys of a schema, as text + Mermaid |
+| — | Compare Schemas… (DDL to make one schema look like another) |
+| — | Compare Table Data… (sync SQL by primary key) |
+| — | Run Migrations… (folder of V1__name.sql files) |
+| — | Back Up Database… (pg_dump / mysqldump) |
+| — | Restore Database… (from a .dump / .sql backup) |
+| — | Database Admin… (sessions & locks, slow queries, sizes, indexes, vacuum, server, privileges) |
+| — | Import Data from File… (CSV, TSV, JSON, Excel) |
+| — | Generate Test Data… (fill the selected table with realistic rows) |
+| — | New Table… (columns, keys, indexes, foreign keys — SQL shown before it runs) |
+| — | New View… |
+| — | New Schema… (PostgreSQL) |
+| — | New Database… |
+| — | New Sequence… (PostgreSQL) |
+| — | Chart Result (bars: sum of a number column by the first text column) |
+| — | Copy Related Rows To… (rows + foreign-key related rows into another data source, personal data masked) |
+| — | Cancel Export/Import |
+| — | Remove Data Source |
+| — | Connect |
+| — | Manage Shown Schemas… (databases · schemas in the explorer) |
+| — | Unsplit All |
+| — | Trust SSH Host Key (after checking its fingerprint) |
+| — | Password Key… (keep it in the config folder or the system keychain) |
+| — | Grid Alignment… (where cells sit per kind of value: NULL, numbers, text …; shared with the GUI) |
+| — | Check for Updates |
+| — | Update Channel… (stable releases only, or beta: also every merge to main) |
+| — | Update Qurry & Restart (download the latest release) |
+
+## Database Explorer keys (when the explorer has focus; change them in the F1 window)
+
+| Key | Action |
+|---|---|
+| `?` | Keymap |
+| `e` | Data Source Properties… |
+| `n` | New Data Source… |
+| `r` | Refresh |
+| `X` | Disconnect |
+| `w` | Move Data Source to Another Workspace… |
+| `D` | Remove Data Source |
+| `c` | Connect |
+| `s` | Manage Shown Schemas… (databases · schemas in the explorer) |
+
+## Data grid keys (when a grid has focus; change them in the F1 window)
+
+| Key | Action |
+|---|---|
+| `⌃z` | Revert Changes |
+| `a / Insert` | Add Row |
+| `d / Delete` | Delete Row |
+| `n` | Set NULL |
+| `x` | Export Data… (CSV, TSV, JSON, SQL INSERT, Markdown) |
+| `Y` | Copy Column as IN List  ('a', 'b', …) |
+
 ## Database Explorer
 
 | Key | Action |
@@ -82,14 +176,9 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | `Enter / double-click` | Expand / collapse (connects) · open table data · open a Redis key · show DDL of routines |
 | `F4 / ⌃↓` | Open a query console for the data source / database (Redis: the key browser) |
 | `/` | Filter loaded nodes (/ again edits it · empty or Esc clears) |
-| `n / e / D` | New / edit / remove data source |
-| `w` | Move the data source to another workspace (⌥1…9 switches · ⌥n new · ⌥⇧N rename) |
-| `c / X` | Connect / disconnect |
-| `r / F5` | Refresh |
-| `s` | Manage shown databases and schemas (Space check · Enter apply · shared with the GUI) |
+| `F5` | Refresh (the run key refreshes in the explorer) |
 | `y  ⌘c` | Copy name (OSC 52 clipboard) |
 | `PgUp / PgDn · Home / End` | Page · first / last node |
-| `?` | Keymap (same as F1) |
 | `Tab / Esc` | Go to the open tab |
 
 ## Query console
@@ -123,16 +212,10 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | `Home / End` | First / last column |
 | `⇧↑↓←→ / drag` | Select a range of cells (Esc clears) · scroll sideways: wheel over the header row, ⌥+wheel, or drag the bar on the bottom border |
 | `Enter / F2` | Edit cell (table data) |
-| `n` | Set NULL (table data) |
-| `a / Insert` | Add row (table data) |
-| `d / Delete` | Mark row deleted, again = undo (table data) |
-| `⌃z` | Revert pending changes (table data) |
 | `s` | Sort by the selected column: ▲ → ▼ → off (table data: ORDER BY · results: loaded rows) |
 | `w or / · o` | Edit WHERE · ORDER BY (table data) |
 | `r` | Reload (table data) |
-| `x` | Export data (CSV, TSV, JSON, SQL INSERT, Markdown → file or clipboard) |
 | `y  ⌘c` | Copy cell value (a selected range: as TSV, pastes into spreadsheets as cells) |
-| `Y` | Copy as an IN list: ('a', 'b', …) — the selected range, or the whole column |
 | `⌘v` | Paste into cells from the selected one (tabs / lines fill several; extra lines add rows; table data) |
 | `Esc` | Back (query results: to the editor) |
 
@@ -141,7 +224,9 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | Key | Action |
 |---|---|
 | `↑ ↓  (j k) · PgUp / PgDn` | Scroll |
-| `y  ⌘c` | Copy the text |
+| `v` | Table DDL: switch between SQL and Structure (columns, keys, indexes, foreign keys, triggers, options); kept for new DDL tabs |
+| `r` | Reload the Structure view |
+| `y  ⌘c` | Copy the text (a table's DDL: the SQL, in either view) |
 | `Esc` | Back to the explorer |
 
 ## Database Admin tab (⌃k › Database Admin…)
@@ -188,7 +273,7 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 
 | Key | Action |
 |---|---|
-| `⌃b` | Go to DDL (in Search Everywhere / Go to Database Object) |
+| `Go to DDL key` | DDL of the selected object (in Search Everywhere / Go to Database Object) |
 | `type` | Filter (palettes) |
 | `↑ ↓ / PgUp PgDn` | Move / scroll |
 | `Enter` | Run / confirm |

@@ -4,6 +4,7 @@ import { ColorSwatches } from "./ConnectionDialog";
 import { collapseTree, NodeInfo, SchemaTree, TreeSelection } from "./SchemaTree";
 import { IcCollapseAll, IcMoreV, IcPlus, IcReload } from "../ui/icons";
 import { IconButton, Menu as UiMenu, MenuEntry, SearchField, Text } from "../ui";
+import { cmd, eventSpec, keyTitle, runKey } from "../lib/shortcuts";
 
 export type MenuItem = MenuEntry;
 
@@ -83,9 +84,18 @@ export function Explorer(p: Props) {
     el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     el.scrollIntoView({ block: "nearest" });
   };
+  /** The header's ⋮ menu */
+  const moreItems = (): MenuEntry[] => [
+    { label: `${showSystem ? "✓ " : "　"}Show System Schemas`, ...cmd("tree.showSystem"), action: () => setShowSystem((v) => !v) },
+    { separator: true },
+    { label: "Export Data Sources…", ...cmd("ds.export"), action: p.onExport },
+    { label: "Import Data Sources…", ...cmd("ds.import"), action: p.onImport },
+  ];
   const onTreeKey = (e: React.KeyboardEvent) => {
     // A control inside the tree (Allow unencrypted, Install driver, an input) keeps its own keys: Enter presses the button
     if ((e.target as HTMLElement).closest("button, input, select, textarea")) return;
+    // The header's commands (the node menu's commands run from the global key handler)
+    if (runKey(eventSpec(e.nativeEvent), "tree", () => [{ label: "Collapse All", ...cmd("tree.collapseAll"), action: collapseTree }, ...moreItems()])) return e.preventDefault();
     const list = rows();
     const cur = list.findIndex((el) => el.classList.contains("selected"));
     const el = list[cur];
@@ -160,7 +170,7 @@ export function Explorer(p: Props) {
             <UiMenu
               onClose={() => setAddMenu(false)}
               items={[
-                { label: "New Data Source…", action: p.onAdd },
+                { label: "New Data Source…", ...cmd("tree.newDs"), action: p.onAdd },
                 { separator: true },
                 { heading: "Add to this workspace:" },
                 ...(p.others ?? []).map((c) => ({ label: c.name, action: () => p.onAddExisting?.(c.id) })),
@@ -168,10 +178,10 @@ export function Explorer(p: Props) {
             />
           )}
         </span>
-        <IconButton size="sm" title="Refresh (⌥⌘y)" onClick={p.onRefresh}>
+        <IconButton size="sm" title={keyTitle("Refresh", "refresh")} onClick={p.onRefresh}>
           <IcReload />
         </IconButton>
-        <IconButton size="sm" title="Collapse All" onClick={collapseTree}>
+        <IconButton size="sm" title={keyTitle("Collapse All", "tree.collapseAll")} onClick={collapseTree}>
           <IcCollapseAll />
         </IconButton>
         <span className="menu-anchor">
@@ -185,12 +195,7 @@ export function Explorer(p: Props) {
           {more && (
             <UiMenu
               onClose={() => setMore(false)}
-              items={[
-                { label: `${showSystem ? "✓ " : "　"}Show System Schemas`, action: () => setShowSystem((v) => !v) },
-                { separator: true },
-                { label: "Export Data Sources…", action: p.onExport },
-                { label: "Import Data Sources…", action: p.onImport },
-              ]}
+              items={moreItems()}
             />
           )}
         </span>

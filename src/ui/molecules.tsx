@@ -2,23 +2,27 @@
  * Molecules: a row · cell made of a few atoms — list row, detail row, menu item, form field, tab, hint, section title.
  * Spec in README.md
  */
-import { HTMLAttributes, InputHTMLAttributes, MouseEvent, ReactNode, useEffect, useState } from "react";
+import { HTMLAttributes, InputHTMLAttributes, KeyboardEvent, MouseEvent, ReactNode, useEffect, useState } from "react";
 import { Avatar, Button, Kbd, Radio, Swatch, Text, TextInput } from "./atoms";
 import { cx } from "./cx";
 import { Chevron } from "./icons";
 
 // ───────── Form ─────────
-/** Label + field on one line. Hint · error below the field */
-export function Field({ label, hint, error, children, className }: { label: ReactNode; hint?: ReactNode; error?: ReactNode; children: ReactNode; className?: string }) {
+/**
+ * Label + field on one line. Hint · error below the field.
+ * group = several controls with their own labels: a div (role group), so a click on the field's label doesn't land in the first control
+ */
+export function Field({ label, hint, error, children, className, group }: { label: ReactNode; hint?: ReactNode; error?: ReactNode; children: ReactNode; className?: string; group?: boolean }) {
+  const Tag = group ? "div" : "label";
   return (
-    <label className={cx("ui-field", className)}>
+    <Tag className={cx("ui-field", className)} role={group ? "group" : undefined} aria-label={group && typeof label === "string" ? label : undefined}>
       <span className="ui-field-label" title={typeof label === "string" ? label : undefined}>
         {label}
       </span>
       {children}
       {hint && <span className="ui-field-hint">{hint}</span>}
       {error && <span className="ui-field-error">{error}</span>}
-    </label>
+    </Tag>
   );
 }
 /** One of several (radio). Short description (hint) per option */
@@ -105,9 +109,18 @@ export function SearchField({ busy, bare, className, ...rest }: InputHTMLAttribu
 }
 
 // ───────── Tabs · titles ─────────
-export function Tabs<T extends string>({ items, value, onChange, size }: { items: { id: T; label: ReactNode }[]; value: T; onChange: (id: T) => void; size?: "sm" }) {
+export function Tabs<T extends string>({ items, value, onChange, size, label }: { items: { id: T; label: ReactNode }[]; value: T; onChange: (id: T) => void; size?: "sm"; label?: string }) {
+  // ←/→ (and Home/End) select the previous/next tab and move focus with it, as in the ARIA tab pattern
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const i = items.findIndex((t) => t.id === value);
+    const n = { ArrowLeft: i - 1, ArrowRight: i + 1, Home: 0, End: items.length - 1 }[e.key];
+    if (n === undefined || n < 0 || n >= items.length || n === i) return;
+    e.preventDefault();
+    onChange(items[n].id);
+    e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')[n]?.focus();
+  };
   return (
-    <div className={cx("ui-tabs", size === "sm" && "size-sm")} role="tablist">
+    <div className={cx("ui-tabs", size === "sm" && "size-sm")} role="tablist" aria-label={label} onKeyDown={onKeyDown}>
       {items.map((t) => (
         <button key={t.id} type="button" role="tab" aria-selected={value === t.id} className={cx("ui-tab", value === t.id && "active")} onClick={() => onChange(t.id)}>
           {t.label}
@@ -437,7 +450,10 @@ export function TabItem({
   return (
     <div className={cx(base, active && "active", className)} role="tab" aria-selected={active} {...rest}>
       {icon && <span className={cx("tab-icon", iconClass)}>{icon}</span>}
-      <span className="tab-label">{label}</span>
+      {/* data-text: App.css reserves the bold width so a tab doesn't widen when it becomes active */}
+      <span className="tab-label" data-text={typeof label === "string" ? label : undefined}>
+        {label}
+      </span>
       {pinned ? (
         <span className="tab-pin" title="Unpin Tab" onMouseDown={stop} onClick={(e) => (stop(e), onPin?.())}>
           📌

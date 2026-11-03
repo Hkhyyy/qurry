@@ -390,6 +390,18 @@ pub fn pad_frac(s: &str, width: usize) -> String {
     qurry_shared::format::pad_frac(s, width)
 }
 
+/// Value class of a grid cell ("string", "number", "dateTime", "boolean", "null", "jsonBinary")
+#[wasm_bindgen(js_name = valueClass)]
+pub fn value_class(type_name: &str, value: JsValue) -> Result<JsValue, JsError> {
+    to(&qurry_shared::format::value_class(type_name, &from(value)?))
+}
+
+/// Alignment of a value class ("left", "right", "center") given the saved overrides ({ null: "left", … })
+#[wasm_bindgen(js_name = alignOf)]
+pub fn align_of(class: JsValue, overrides: JsValue) -> Result<JsValue, JsError> {
+    to(&qurry_shared::format::align(from(class)?, &qurry_shared::format::alignments(&from(overrides)?)))
+}
+
 /// [{id, db, schema, table}, …] → a label per tab (schema.table or db.schema.table), null where the name is unique
 #[wasm_bindgen(js_name = tableTabLabels)]
 pub fn table_tab_labels(tabs: JsValue) -> Result<JsValue, JsError> {
@@ -456,6 +468,12 @@ pub fn format_spec(spec: &str, mac: bool) -> String {
 #[wasm_bindgen]
 pub fn bindable(spec: &str) -> bool {
     qurry_shared::keymap::bindable(spec)
+}
+
+/// Whether a spec can be a GUI key in `scope` ("global" / "tree" / "editor" / "grid")
+#[wasm_bindgen(js_name = bindableIn)]
+pub fn bindable_in(spec: &str, scope: JsValue) -> Result<bool, JsError> {
+    Ok(qurry_shared::keymap::bindable_in(spec, serde_wasm_bindgen::from_value(scope)?))
 }
 
 #[derive(serde::Deserialize)]

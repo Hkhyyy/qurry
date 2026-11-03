@@ -45,6 +45,7 @@ const wide = {
 };
 let flakyLoads = 0;
 let updateChannel = "stable";
+let gridAlign = {};
 /** Whether check_update ran (the real app then has a saved check that a channel switch answers from) */
 let updateChecked = false;
 /** Test Connections waiting for cancel_test, by test id */
@@ -119,6 +120,46 @@ const handlers: Record<string, (a: any) => unknown> = {
       { name: "users_contract_fk", kind: "f", definition: "FOREIGN KEY (contract_id) REFERENCES contracts(id)" },
     ],
   }),
+  // DDL tab → Structure: every section filled. billing.* answers like a driver plugin (only columns · keys · indexes, no index
+  // columns); window.__mockStructureFail (a message) makes it fail; window.__mockStructureCalls counts the loads
+  table_structure: (a: any) => {
+    (globalThis as any).__mockStructureCalls = ((globalThis as any).__mockStructureCalls ?? 0) + 1;
+    const fail = (globalThis as any).__mockStructureFail;
+    if (fail) throw fail;
+    const columns = [
+      { name: "id", dataType: "bigint", nullable: false, defaultValue: "nextval('users_id_seq'::regclass)", comment: null, isPk: true },
+      { name: "user_name", dataType: "character varying(50)", nullable: false, defaultValue: null, comment: "이름", isPk: false },
+      { name: "email", dataType: "text", nullable: true, defaultValue: "concat('user-', currval('users_id_seq'::regclass), '@', current_setting('app.mail_domain'))", comment: "Login and receipts; unique when set", isPk: false },
+      { name: "contract_id", dataType: "bigint", nullable: true, defaultValue: null, comment: null, isPk: false },
+      { name: "created_at", dataType: "timestamp with time zone", nullable: false, defaultValue: "now()", comment: null, isPk: false },
+    ];
+    const t = `${a.schema}.${a.table}`;
+    const basics = {
+      columns,
+      indexes: [
+        { name: `${a.table}_pkey`, definition: `CREATE UNIQUE INDEX ${a.table}_pkey ON ${t} USING btree (id)`, isUnique: true, isPrimary: true, columns: ["id"] },
+        { name: `${a.table}_email_key`, definition: `CREATE UNIQUE INDEX ${a.table}_email_key ON ${t} USING btree (lower(email))`, isUnique: true, isPrimary: false, columns: ["lower(email)"] },
+        { name: `${a.table}_name_created`, definition: `CREATE INDEX ${a.table}_name_created ON ${t} USING btree (user_name, created_at DESC)`, isUnique: false, isPrimary: false, columns: ["user_name", "created_at"] },
+      ],
+      constraints: [
+        { name: `${a.table}_pkey`, kind: "p", definition: "PRIMARY KEY (id)" },
+        { name: `${a.table}_contract_fk`, kind: "f", definition: "FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE SET NULL" },
+        { name: `${a.table}_email_key`, kind: "u", definition: "UNIQUE (email)" },
+        { name: `${a.table}_name_check`, kind: "c", definition: "CHECK (length(user_name) > 0)" },
+      ],
+    };
+    if (a.schema === "billing") return { ...basics, indexes: basics.indexes.map((i) => ({ ...i, columns: [] })), foreignKeys: null, referencedBy: null, triggers: null, options: null, comment: null, onlyVisible: false };
+    const fk = (name: string, schema: string, table: string, columns: string[], refTable: string, onDelete: string) => ({ name, schema, table, columns, refSchema: "public", refTable, refColumns: ["id"], onUpdate: "NO ACTION", onDelete });
+    return {
+      ...basics,
+      foreignKeys: [fk(`${a.table}_contract_fk`, a.schema, a.table, ["contract_id"], "contracts", "SET NULL")],
+      referencedBy: [fk("orders_user_fk", "public", "orders", ["user_id"], a.table, "CASCADE"), fk("payments_user_fk", "public", "payments", ["user_id"], a.table, "RESTRICT")],
+      triggers: [{ name: `${a.table}_touch`, timing: "BEFORE", events: "INSERT OR UPDATE", definition: `CREATE TRIGGER ${a.table}_touch BEFORE INSERT OR UPDATE ON ${t} FOR EACH ROW EXECUTE FUNCTION touch_updated_at()` }],
+      options: [["Owner", "app"], ["Tablespace", "pg_default"], ["Storage parameters", "fillfactor=90"]],
+      comment: "Members of the shop",
+      onlyVisible: false,
+    };
+  },
   // MySQL: the schema is the database (shop is the data source's default)
   completion_meta: (a: any) => a.id.split("::")[0] === "my" ? [{ schema: "shop", name: "orders", columns: [["id", "bigint"], ["status", "varchar"]] }] : [
     { schema: "public", name: "users", columns: [["id", "bigint"], ["user_name", "varchar"]] },
@@ -424,6 +465,16 @@ const handlers: Record<string, (a: any) => unknown> = {
   save_keymap: () => null,
   install_update: () => new Promise((_, rej) => setTimeout(() => rej("Update failed: mock"), 800)),
   update_channel: () => updateChannel,
+  grid_align: () => gridAlign,
+  set_grid_align: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
+    // As the core: the default (numbers and NULL on the right) drops the override
+    const next: Record<string, string> = { ...gridAlign };
+    if (a.align === (a.class === "number" || a.class === "null" ? "right" : "left")) delete next[a.class];
+    else next[a.class] = a.align;
+    gridAlign = next;
+    return next;
+  },
   // window.__mockChannelSaveFails: the settings file can't be written
   set_update_channel: (a: any) => {
     if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";

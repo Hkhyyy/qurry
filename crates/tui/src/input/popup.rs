@@ -14,14 +14,27 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
             let message = if k.code == KeyCode::Esc {
                 None
             } else {
-                let a = crate::keys::DEFAULT_KEYS[sel].0;
-                match crate::keys::spec(&k).filter(|s| crate::keys::bindable(s)) {
-                    None => Some(format!("{} can't be a command key — use a {} combination or an F key", crate::keys::spec(&k).map(|s| crate::keys::disp(&s)).unwrap_or_else(|| "That key".into()), if cfg!(target_os = "macos") { "⌃/⌥" } else { "Ctrl/Alt" })),
+                let s = crate::keys::COMMANDS[sel].0;
+                let spec = crate::keys::spec(&k);
+                match spec.clone().filter(|x| crate::keys::bindable_for(s, x)) {
+                    None => {
+                        let key = spec.map(|x| if s.pane == Scope::Global { crate::keys::disp(&x) } else { crate::keys::pane_disp(&x) }).unwrap_or_else(|| "That key".into());
+                        let mods = if cfg!(target_os = "macos") { "⌃/⌥" } else { "Ctrl/Alt" };
+                        Some(if s.pane == Scope::Global {
+                            format!("{key} can't be a command key — use a {mods} combination or an F key")
+                        } else {
+                            format!("{key} can't be a key in the {} — use a letter, a {mods} combination or an F key (arrows, Enter, Tab and the moving and copying letters stay fixed)", crate::keys::pane_name(s.pane))
+                        })
+                    }
+                    Some(key) if app.keys.reserved(s, &key).is_some() => {
+                        let a = app.keys.reserved(s, &key).unwrap();
+                        Some(format!("{} is the key of {} — pick another key, so the keymap stays reachable", crate::keys::pane_disp(&key), crate::app::title(a)))
+                    }
                     Some(key) => {
-                        let taken = app.keys.bind(a, key.clone(), add);
-                        let mut m = format!("{} → {}", crate::app::title(a), app.keys.label(a));
+                        let taken = app.keys.bind(s, key.clone(), add);
+                        let mut m = format!("{} → {}", crate::app::title(s.action), app.keys.slot_label(s));
                         if let Some(t) = taken {
-                            m += &format!(" · removed {key} from {}", crate::app::title(t));
+                            m += &format!(" · removed {key} from {}", crate::app::title(t.action));
                         }
                         if let Err(e) = app.save_keys() {
                             m = format!("Save failed: {e}");
@@ -30,11 +43,11 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                     }
                 }
             };
-            sel = sel.min(crate::keys::DEFAULT_KEYS.len() - 1);
+            sel = sel.min(crate::keys::COMMANDS.len() - 1);
             app.popup = Some(Popup::Help { sel, scroll, record: None, message });
         }
         Popup::Help { sel, scroll, message, .. } => {
-            let n = crate::keys::DEFAULT_KEYS.len();
+            let n = crate::keys::COMMANDS.len();
             let last = n + crate::help::HELP.iter().map(|s| s.1.len()).sum::<usize>() - 1;
             let (mut sel, mut record) = (sel, None);
             let mut message = message;
@@ -51,10 +64,10 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                 KeyCode::Char('a') if sel < n => record = Some(true),
                 KeyCode::Enter | KeyCode::Char('a') | KeyCode::Delete | KeyCode::Backspace if sel >= n => message = fixed(),
                 KeyCode::Delete | KeyCode::Backspace => {
-                    let a = crate::keys::DEFAULT_KEYS[sel].0;
-                    app.keys.reset(a);
+                    let s = crate::keys::COMMANDS[sel].0;
+                    app.keys.reset(s);
                     message = Some(match app.save_keys() {
-                        Ok(()) => format!("{} reset to {}", crate::app::title(a), app.keys.label(a)),
+                        Ok(()) => format!("{} reset to {}", crate::app::title(s.action), app.keys.slot_label(s)),
                         Err(e) => format!("Save failed: {e}"),
                     });
                 }
@@ -184,7 +197,8 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                         return app.run_palette(it, false);
                     }
                 }
-                KeyCode::Char('b') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                // The Go to DDL key (⌃b): DDL of the selected object
+                _ if app.keys.lookup(&k) == Some(Action::Ddl) => {
                     if let Some(it) = App::palette_matches(&p).get(p.sel).map(|x| (*x).clone()) {
                         app.popup = Some(Popup::Palette(p));
                         return app.run_palette(it, true);
@@ -589,6 +603,45 @@ mod tests {
         h.key("Enter");
         assert_eq!(h.app.update.as_deref(), Some("99.0.0-beta.1"));
         assert!(h.app.status.contains("Qurry 99.0.0-beta.1 is available"), "{}", h.app.status);
+    }
+
+    /// ⌃k › Grid Alignment…: a row per value class, Enter picks Left / Center / Right; saved to settings.json for the GUI and applied
+    /// to the grids at once. Opening it reads the file again (the GUI may have changed it), and the default drops the override
+    #[tokio::test]
+    async fn grid_alignment_is_picked_from_the_palette() {
+        use qurry_core::format::{Align, Alignments, ValueClass};
+        let mut h = Harness::new().await;
+        h.app.palette_grid_align(ValueClass::String);
+        let s = h.screen(120, 30);
+        assert!(s.contains("Grid Alignment") && s.contains("NULL          Right") && s.contains("String        Left"), "{s}");
+        // NULL is the fifth row; it opens on Right (the default), Up twice = Left
+        for k in ["Down", "Down", "Down", "Down", "Enter"] {
+            h.key(k);
+        }
+        let s = h.screen(120, 30);
+        assert!(s.contains("NULL Alignment") && s.contains("● Right"), "{s}");
+        h.key("Up");
+        h.key("Up");
+        h.key("Enter");
+        let left = Alignments::from([(ValueClass::Null, Align::Left)]);
+        assert_eq!(h.app.state.store.grid_align(), left);
+        assert_eq!(h.app.align, left);
+        assert!(h.app.status.starts_with("Grid alignment: NULL on the left"), "{}", h.app.status);
+        // Back on the class list, at NULL, marked changed
+        let s = h.screen(120, 30);
+        assert!(s.contains("NULL          Left") && s.contains("changed — default Right"), "{s}");
+        // A change made elsewhere (the GUI) shows when the palette opens
+        h.key("Esc");
+        h.app.state.store.set_grid_align(ValueClass::Null, Align::Right).unwrap();
+        h.app.state.store.set_grid_align(ValueClass::Number, Align::Center).unwrap();
+        h.app.palette_grid_align(ValueClass::Number);
+        assert_eq!(h.app.align, Alignments::from([(ValueClass::Number, Align::Center)]));
+        // Number back to Right, its default: the override is removed
+        h.key("Enter");
+        h.key("Down");
+        h.key("Enter");
+        assert!(h.app.state.store.grid_align().is_empty());
+        assert!(h.app.align.is_empty());
     }
 
     /// The new-version notice shows how to update right inside the TUI

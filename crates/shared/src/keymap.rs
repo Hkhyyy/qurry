@@ -6,7 +6,10 @@
 //! keymap.json stores user keys under those ids ("gui" / "tui" sections), so an id never changes. A command both apps have is one row.
 //! `title` is the command's name on screen (`tuiTitle` when the TUI names it differently; `guiDesc` its line in the GUI Keymap
 //! Reference and docs/shortcuts-gui.md when that says more than the title), `scope` where a GUI key works,
-//! `guiKeys` the GUI defaults ("Mod+Shift+L"), `tuiKeys` the TUI defaults ("Ctrl+L").
+//! `guiKeys` the GUI defaults ("Mod+Shift+L"), `tuiKeys` the TUI defaults ("Ctrl+L", anywhere in the TUI).
+//! `tuiPaneKeys` are TUI keys that work only in one pane (`tuiPane`: tree = Database Explorer, grid = data grid), like the
+//! explorer's "n" (New Data Source): keymap.json stores them under "<pane>.<Action>" ("tree.NewDataSource"), apart from the Action's own keys.
+//! Every action a menu, context menu, toolbar or the palette / Find Action runs has a row, with or without default keys.
 //! Row order is the GUI keymap editor's (per scope); the TUI F1 window and --help keep their own order (ORDER in crates/tui/src/keys.rs).
 //!
 //! Spec notation: modifiers then the key, joined by "+": "Mod+Alt+O", "Ctrl+Shift+K", "F5", "Alt+\\".
@@ -14,14 +17,28 @@
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 
-/// Where a GUI key works. Global overlaps every scope; tree (Database Explorer) and editor (query console) only themselves
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Where a key works. Global overlaps every scope; tree (Database Explorer), editor (query console) and grid (data grid) only themselves.
+/// A GUI row has one scope; in the TUI a row's tuiKeys are global and its tuiPaneKeys work in its tuiPane (tree or grid)
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Scope {
     #[default]
     Global,
     Tree,
     Editor,
+    Grid,
+}
+
+impl Scope {
+    /// Its name in the table and in keymap.json ids ("tree")
+    pub fn name(self) -> &'static str {
+        match self {
+            Scope::Global => "global",
+            Scope::Tree => "tree",
+            Scope::Editor => "editor",
+            Scope::Grid => "grid",
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -38,6 +55,9 @@ pub struct Command {
     pub gui_keys: Vec<String>,
     #[serde(default)]
     pub tui_keys: Vec<String>,
+    pub tui_pane: Option<Scope>,
+    #[serde(default)]
+    pub tui_pane_keys: Vec<String>,
 }
 
 static TABLE: LazyLock<Vec<Command>> = LazyLock::new(|| {
@@ -76,6 +96,26 @@ pub fn conflicts<'a, K: PartialEq>(me: &K, scope: Scope, spec: &str, bound: impl
 pub fn bindable(spec: &str) -> bool {
     let f_key = spec.rsplit('+').next().and_then(|k| k.strip_prefix('F')).is_some_and(|n| (1..=2).contains(&n.len()) && n.bytes().all(|b| b.is_ascii_digit()));
     spec.starts_with("Mod+") || spec.starts_with("Ctrl+") || spec.starts_with("Alt+") || f_key
+}
+
+/// Whether a spec can be a key of a command that works only in the tree or the grid: a command shortcut, Delete / Insert / Backspace
+/// (with or without modifiers) or ⇧Enter, and with `letters` (the TUI, whose panes have single-key commands) also one character with or
+/// without ⇧ ("N", "Shift+D", "?"). The GUI's tree types into speed search and its grid into the cell, so letters stay theirs there.
+/// Navigation keys (arrows, Enter, Tab, Esc, Home / End, pages, Space) always stay the pane's own
+pub fn pane_bindable(spec: &str, letters: bool) -> bool {
+    let (mods, key) = match spec.strip_suffix("++") {
+        Some(m) => (m, "+"),
+        None => spec.rsplit_once('+').unwrap_or(("", spec)),
+    };
+    bindable(spec) || matches!(key, "Delete" | "Insert" | "Backspace") || spec == "Shift+Enter" || (letters && (mods.is_empty() || mods == "Shift") && key.chars().count() == 1)
+}
+
+/// Whether a spec can be a GUI key in `scope` (what the keymap editor records)
+pub fn bindable_in(spec: &str, scope: Scope) -> bool {
+    match scope {
+        Scope::Tree | Scope::Grid => pane_bindable(spec, false),
+        Scope::Global | Scope::Editor => bindable(spec),
+    }
 }
 
 /// Normalize a hand-written TUI spec ("ctrl+l" → "Ctrl+L", "shift+f1" → "Shift+F1")
@@ -252,6 +292,24 @@ mod tests {
     }
 
     #[test]
+    fn pane_keys() {
+        // Both apps: command shortcuts, Delete / Insert / Backspace, ⇧Enter
+        for s in ["Mod+K", "F2", "Delete", "Mod+Backspace", "Insert", "Shift+Enter"] {
+            assert!(pane_bindable(s, false) && pane_bindable(s, true), "{s}");
+        }
+        // TUI only: one character, with or without ⇧
+        for s in ["N", "Shift+D", "?", "/", "Alt++"] {
+            assert!(pane_bindable(s, true), "{s}");
+        }
+        assert!(!pane_bindable("N", false) && !pane_bindable("Shift+D", false));
+        // Navigation keys stay the pane's own
+        for s in ["Enter", "Up", "Shift+Down", "Tab", "Shift+Tab", "Esc", "Home", "PgDn", "Space"] {
+            assert!(!pane_bindable(s, true), "{s}");
+        }
+        assert!(bindable_in("Delete", Scope::Tree) && !bindable_in("Delete", Scope::Global) && !bindable_in("Shift+Enter", Scope::Editor));
+    }
+
+    #[test]
     fn hand_written_specs_normalize() {
         assert_eq!(normalize("ctrl+l"), "Ctrl+L");
         assert_eq!(normalize("shift+f1"), "Shift+F1");
@@ -275,13 +333,13 @@ mod tests {
         let (mut gui, mut tui) = (HashSet::new(), HashSet::new());
         let mut gui_keys: Vec<(Scope, &str)> = Vec::new();
         let mut tui_keys = HashSet::new();
+        let mut pane_keys = HashSet::new();
         for c in commands() {
             assert!(c.gui.is_some() || c.tui.is_some(), "{}: a row needs a gui or tui id", c.title);
             if let Some(id) = &c.gui {
                 assert!(gui.insert(id), "duplicate gui id {id}");
                 for k in &c.gui_keys {
-                    // tree.remove's Delete is the one default that can't be recorded (Reset brings it back)
-                    assert!(bindable(k) || k == "Delete", "{id}: {k} can't be recorded as a shortcut");
+                    assert!(bindable_in(k, c.scope), "{id}: {k} can't be recorded as a shortcut in {:?}", c.scope);
                     assert!(!gui_keys.iter().any(|(s, x)| x == k && scopes_overlap(*s, c.scope)), "{id}: default {k} is taken");
                     gui_keys.push((c.scope, k));
                 }
@@ -295,9 +353,22 @@ mod tests {
                     assert_eq!(&normalize(k), k, "{id}: write {k} in normalized form");
                     assert!(tui_keys.insert(k), "{id}: default {k} is taken");
                 }
+                assert_eq!(c.tui_pane.is_some(), !c.tui_pane_keys.is_empty(), "{id}: tuiPane and tuiPaneKeys go together");
+                if let Some(pane) = c.tui_pane {
+                    assert!(matches!(pane, Scope::Tree | Scope::Grid), "{id}: tuiPane is tree or grid");
+                }
+                for k in &c.tui_pane_keys {
+                    assert!(pane_bindable(k, true), "{id}: {k} can't be a pane key");
+                    assert_eq!(&normalize(k), k, "{id}: write {k} in normalized form");
+                    assert!(pane_keys.insert((c.tui_pane, k)), "{id}: default pane key {k} is taken");
+                }
             } else {
-                assert!(c.tui_keys.is_empty() && c.tui_title.is_none(), "{}: TUI keys or title without a tui id", c.title);
+                assert!(c.tui_keys.is_empty() && c.tui_title.is_none() && c.tui_pane.is_none(), "{}: TUI keys or title without a tui id", c.title);
             }
+        }
+        // Global keys are looked up first: a pane key that is also one would never reach its pane
+        for (_, k) in &pane_keys {
+            assert!(!tui_keys.contains(k), "pane key {k} is also a global TUI default");
         }
         assert_eq!(tui_command("NewConsole").and_then(|c| c.gui.as_deref()), Some("console.new"));
     }
@@ -325,6 +396,41 @@ mod tests {
             ("editor.run", "Execute"),
             ("editor.cancel", "Cancel"),
             ("editor.history", "QueryHistory"),
+            ("ws.new", "WsNew"),
+            ("ws.rename", "WsRename"),
+            ("ws.delete", "WsDelete"),
+            ("split.right", "SplitRight"),
+            ("split.down", "SplitDown"),
+            ("unsplit", "Unsplit"),
+            ("editor.explain", "Explain"),
+            ("editor.explainAnalyze", "ExplainAnalyze"),
+            ("tx.commit", "Commit"),
+            ("tx.rollback", "Rollback"),
+            ("snippets", "Snippets"),
+            ("snippet.save", "SaveSnippet"),
+            ("prodLog", "ProductionLog"),
+            ("tree.erd", "ShowDiagram"),
+            ("tree.backup", "BackupDb"),
+            ("tree.restore", "RestoreDb"),
+            ("tree.import", "ImportData"),
+            ("tree.genTestData", "GenerateTestData"),
+            ("tree.newTable", "NewTable"),
+            ("tree.newView", "NewView"),
+            ("tree.newSchema", "NewSchema"),
+            ("tree.newDatabase", "NewDatabase"),
+            ("tree.newSequence", "NewSequence"),
+            ("tree.copyRelated", "CopyRelatedRows"),
+            ("tree.manageSchemas", "ManageSchemas"),
+            ("tree.ragSearch", "RagSearch"),
+            ("tree.rag", "RagNew"),
+            ("tree.removeFromWs", "WsRemoveConn"),
+            ("grid.setNull", "SetNull"),
+            ("grid.addRow", "AddRow"),
+            ("grid.deleteRows", "DeleteRow"),
+            ("grid.revert", "Revert"),
+            ("grid.export", "ExportCsv"),
+            ("grid.copyInList", "CopyInList"),
+            ("grid.submit", "Submit"),
         ];
         for (gui, tui) in pairs {
             assert_eq!(tui_command(tui).and_then(|c| c.gui.as_deref()), Some(gui), "{tui} should share a row with {gui}");

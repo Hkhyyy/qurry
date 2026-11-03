@@ -1,7 +1,8 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useState } from "react";
 import { Badge, Checkbox, ColorPicker, DetailRow, EmptyState, Field, FormSection, Hint, Kbd, KeyHints, ListItem, MenuItem, MenuLabel, MenuSeparator, Notice, RadioGroup, RailItem, SearchField, SectionTitle, Select, StatusItem, TabItem, Tabs, Text, TextInput, TlsOptIn, TreeRow } from "..";
-import { DatabaseIcon, FolderIcon, PgIcon, SchemaIcon, TableIcon } from "../icons";
+import { connTabVars } from "../../lib/theme";
+import { ConsoleIcon, DatabaseIcon, FolderIcon, PgIcon, ReportIcon, SchemaIcon, TabIcon, TableIcon } from "../icons";
 
 /** Molecules: a row · cell made of a few atoms */
 const meta: Meta = { title: "GUI/2 Molecules" };
@@ -116,9 +117,9 @@ export const ListItems: S = {
   name: "ListItem",
   render: () => (
     <Frame>
-      <ListItem icon="▦" title="users" hint="public" trailing="[PROD] kr · kr" color="#6e2a2a" selected />
+      <ListItem icon={<TableIcon />} title="users" hint="public" trailing="[PROD] kr · kr" color="#6e2a2a" selected />
       <ListItem icon="⚡" title="New Query Console" hint="Tool Windows" trailing={<Kbd>⇧⌘L</Kbd>} />
-      <ListItem icon="⌘" title="console_2 [DEV] shop" hint="closed tab" dim color="#2f5634" />
+      <ListItem icon={<ConsoleIcon />} title="console_2 [DEV] shop" hint="closed tab" dim color="#2f5634" />
       <ListItem mono title="select * from users where id = 42" trailing="2026. 10. 28. 오후 3:43" />
       <ListItem leading={<Checkbox checked onChange={() => {}} />} title={<><Text tone="accent">add column</Text> users.email</>} />
       <ListItem leading={<Checkbox checked={false} onChange={() => {}} />} title={<><Text tone="danger">drop table</Text> old_stuff</>} />
@@ -217,9 +218,32 @@ export const TabItems: S = {
   render: () => (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", height: 36, background: "var(--ui-surface)" }}>
-        <TabItem icon="⌘" label="console [PROD] kr" active onClose={() => {}} style={{ background: "color-mix(in srgb, #6e2a2a 35%, var(--panel))", boxShadow: "inset 0 2px 0 #c46a6a" }} />
-        <TabItem icon="▦" iconClass="table" label="users" onClose={() => {}} />
-        <TabItem icon="◉" label="Sessions" pinned onPin={() => {}} />
+        <TabItem icon={<ConsoleIcon />} label="console [PROD] kr" active onClose={() => {}} style={connTabVars("#6e2a2a", "dark")} />
+        <TabItem icon={<TableIcon />} label="users" onClose={() => {}} />
+        <TabItem icon={<ReportIcon />} label="Sessions" pinned onPin={() => {}} />
+      </div>
+      {/* Every tab kind, and a DDL tab per object kind (TabIcon: the explorer tree's icons, a DDL mark on DDL tabs) */}
+      <div style={{ display: "flex", flexWrap: "wrap", background: "var(--ui-surface)" }}>
+        {(
+          [
+            ["console", undefined, "console"],
+            ["table", "table", "users"],
+            ["table", "view", "active_users"],
+            ["ddl", "table", "users [DDL]"],
+            ["ddl", "view", "active_users [DDL]"],
+            ["ddl", "matview", "daily_sales [DDL]"],
+            ["ddl", "routine", "refresh_stats [DDL]"],
+            ["ddl", "sequence", "users_id_seq [DDL]"],
+            ["ddl", undefined, "SQL (no object kind)"],
+            ["redis", undefined, "cache"],
+            ["dba", undefined, "Sessions"],
+            ["erd", undefined, "Diagram: public"],
+            ["migrate", undefined, "Compare"],
+            ["rag", undefined, "Ask"],
+          ] as const
+        ).map(([kind, obj, label]) => (
+          <TabItem key={label} icon={<TabIcon kind={kind} obj={obj} />} label={label} style={{ height: 32 }} />
+        ))}
       </div>
       <div style={{ display: "flex", height: 30, background: "var(--ui-surface)" }}>
         <TabItem variant="result" label="Output" />

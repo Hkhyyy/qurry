@@ -36,6 +36,20 @@ describe("tab operations", () => {
     expect(stash.get("ws2")!.tabs[0].inTx).toBe(true);
   });
 
+  it("a table's DDL tab gets its own view when built (the last choice), so another tab's switch doesn't change it", () => {
+    const store = new Map<string, string>([["qurry.ddlView", "structure"]]);
+    vi.stubGlobal("localStorage", { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => store.set(k, v) });
+    const edit = { schema: "public", table: "users", pk: [] };
+    const restored = buildTab(conn, "ddl", { sql: "CREATE TABLE users ();", edit }, 0, "users [DDL]");
+    store.set("qurry.ddlView", "sql");
+    expect(restored.ddlView).toBe("structure");
+    expect(buildTab(conn, "ddl", { sql: "CREATE TABLE users ();", edit }, 0, "users [DDL]").ddlView).toBe("sql");
+    // A view's DDL or a console has no Structure view
+    expect(buildTab(conn, "ddl", { sql: "CREATE VIEW v AS SELECT 1;" }, 0, "v [DDL]").ddlView).toBeUndefined();
+    expect(tab("c").ddlView).toBeUndefined();
+    vi.unstubAllGlobals();
+  });
+
   it("togglePin keeps pinned tabs first", () => {
     const ts = [tab("a"), tab("b"), tab("c")];
     setTabs(ts);

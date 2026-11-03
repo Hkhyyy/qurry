@@ -2,6 +2,7 @@ import type { QueryResult } from "../../lib/api";
 import type { OutputLine, ResultEntry } from "../../components/ConsolePane";
 import type { EditTarget } from "../../components/ResultGrid";
 import { leaf, type Pane } from "../../lib/panes";
+import type { DdlView } from "../../lib/structure";
 
 /** Pane id (0~3). The pane layout is a Pane tree */
 type Group = number;
@@ -49,12 +50,16 @@ interface Tab {
   cursorEntry?: string;
   /** Pin Tab */
   pinned?: boolean;
+  /** Table / DDL tab: tree kind of the object it shows (view, routine, …) for the tab icon */
+  objKind?: string;
   /** Redis browser: key to select first */
   redisKey?: string;
   /** dba: report being viewed (sessions, slow_queries, …) */
   dbaReport?: string;
   /** erd: schemas to draw */
   erdSchemas?: string[];
+  /** ddl of a table (edit set): SQL text or Structure; set when built from the last choice (lib/structure ddlView) */
+  ddlView?: DdlView;
   /** Tab restored on relaunch: not loaded yet (loads when first shown) */
   stale?: boolean;
 }
@@ -70,6 +75,7 @@ interface TabSnapshot {
   edit?: EditTarget;
   where: string;
   orderBy: string;
+  objKind?: string;
 }
 const TAB_LIMIT = 10; // DataGrip default Tab limit
 const snapKey = (t: { kind: string; connId: string; database?: string; title: string; edit?: EditTarget }) =>

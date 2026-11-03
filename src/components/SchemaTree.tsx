@@ -8,7 +8,7 @@ import { TYPE_COLOR } from "./RedisBrowser";
 import { keyTree, type KeyNode } from "../lib/keyTree";
 import { useSharedReady } from "../lib/shared";
 import { TlsFix } from "./TlsFix";
-import { ColumnIcon, DatabaseIcon, FkIcon, FolderIcon, IndexIcon, KeyIcon, MySqlIcon, PgIcon, RedisIcon, RoutineIcon, SchemaIcon, SequenceIcon, TableIcon, ViewIcon } from "../ui/icons";
+import { ColumnIcon, DatabaseIcon, FkIcon, FolderIcon, IndexIcon, KeyIcon, MySqlIcon, objectIcon, PgIcon, RedisIcon, RoutineIcon, SchemaIcon, TableIcon } from "../ui/icons";
 
 /** What a tree node points to. The context menu and shortcuts (F4, ⌘b, ⌘⇧L) act on this. */
 export interface NodeInfo {
@@ -488,13 +488,14 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
                 refresh: () => (isRel ? loadDetail(s.name, r.name, true) : loadObjects(s.name, true)),
                 refreshParent: () => loadObjects(s.name, true),
               };
+              const Icon = objectIcon(r.kind) ?? TableIcon;
               return (
                 <div key={tk}>
                   <Row
                     depth={depth}
                     open={tOpen}
                     leaf={!isRel}
-                    icon={r.kind === "key" ? <span className="rd-dot" style={{ background: TYPE_COLOR[r.comment ?? ""] ?? "#777" }} title={r.comment ?? ""}>{({ string: "T", hash: "H", list: "L", set: "S", zset: "Z", stream: "X" } as Record<string, string>)[r.comment ?? ""] ?? "?"}</span> : r.kind === "sequence" ? <SequenceIcon /> : r.kind === "view" || r.kind === "matview" ? <ViewIcon /> : <TableIcon />}
+                    icon={r.kind === "key" ? <span className="rd-dot" style={{ background: TYPE_COLOR[r.comment ?? ""] ?? "#777" }} title={r.comment ?? ""}>{({ string: "T", hash: "H", list: "L", set: "S", zset: "Z", stream: "X" } as Record<string, string>)[r.comment ?? ""] ?? "?"}</span> : <Icon />}
                     label={r.name}
                     title={r.kind === "key" ? `${r.name} (${r.comment})` : r.comment ? `${r.name} — ${r.comment}` : r.name}
                     onToggle={isRel ? () => toggle(tk, () => loadDetail(s.name, r.name)) : undefined}

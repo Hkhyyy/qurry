@@ -2,6 +2,7 @@
 use crate::app::{Action, App, Drag, DropTarget, FieldKind, Focus, Popup, SplitDir, TabKind};
 use crate::tree::NodeKind;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
+use qurry_core::keymap::Scope;
 use ratatui::layout::Rect;
 use std::time::Instant;
 
@@ -361,10 +362,10 @@ mod tests {
         use crate::app::Action;
         use crate::keys::disp;
         let mut h = Harness::new().await;
-        h.app.keys.bind(Action::ToggleOutput, "Alt+P".into(), false);
-        h.app.keys.bind(Action::Submit, "Ctrl+G".into(), false);
-        h.app.keys.bind(Action::Execute, "F9".into(), false);
-        h.app.keys.bind(Action::Commit, "Alt+M".into(), false);
+        h.app.keys.bind(crate::keys::Slot::global(Action::ToggleOutput), "Alt+P".into(), false);
+        h.app.keys.bind(crate::keys::Slot::global(Action::Submit), "Ctrl+G".into(), false);
+        h.app.keys.bind(crate::keys::Slot::global(Action::Execute), "F9".into(), false);
+        h.app.keys.bind(crate::keys::Slot::global(Action::Commit), "Alt+M".into(), false);
         h.console_tab();
         let s = h.screen(160, 30);
         assert!(s.contains(&disp("Alt+P: result")), "{s}");

@@ -1,7 +1,8 @@
 //! The command list: every rebindable command fires through its default key, and the palette list and the --help / F1 order
 //! stay as they are (goldens next to this file; run with QURRY_TUI_BLESS=1 to rewrite them after an intended change)
 use crate::app::{Action, Focus, PAction, Popup, TabKind, ACTIONS};
-use crate::keys::{action_id, DEFAULT_KEYS, FORCE_MAC_GLYPHS};
+use crate::keys::{action_id, Slot, COMMANDS, FORCE_MAC_GLYPHS};
+use qurry_core::keymap::Scope;
 use crate::testkit::Harness;
 
 /// Compares with a golden file in src/tests/, or rewrites it with QURRY_TUI_BLESS=1
@@ -26,20 +27,26 @@ async fn every_action_has_one_def_and_fires_through_its_default_keys() {
         assert_eq!(n, 1, "Action::{v} has {n} ActionDefs: give it exactly one in ACTIONS (crates/tui/src/app/actions.rs)");
     }
     assert_eq!(ACTIONS.len(), variants.len(), "ACTIONS has a row for an Action that isn't in the enum");
-    for (a, keys) in DEFAULT_KEYS.iter() {
+    for (s, keys) in COMMANDS.iter() {
         for key in keys.iter() {
             let mut h = Harness::new().await;
-            h.console_tab();
+            // Keys anywhere from a console, pane keys from their pane
+            match s.pane {
+                Scope::Tree => h.app.focus = Focus::Tree,
+                Scope::Grid => drop(h.table_tab("t", &["id"], &[&["1"]], &["id"])),
+                _ => drop(h.console_tab()),
+            }
             h.key(&typed(key));
-            assert_eq!(h.app.ran.first(), Some(a), "{key} should run {a:?}");
+            assert_eq!(h.app.ran.first(), Some(&s.action), "{key} should run {:?} ({:?})", s.action, s.pane);
         }
     }
 }
 
-/// The key the terminal sends for a DEFAULT_KEYS spec: the table writes letters uppercase ("Alt+N"), without Shift it's the lowercase one
+/// The key the terminal sends for a COMMANDS spec: the table writes letters uppercase ("Alt+N"), without Shift it's the lowercase one
 fn typed(key: &str) -> String {
     match key.rsplit_once('+') {
         Some((m, l)) if !m.contains("Shift") && l.len() == 1 => format!("{m}+{}", l.to_ascii_lowercase()),
+        None if key.len() == 1 => key.to_ascii_lowercase(),
         _ => key.to_string(),
     }
 }
@@ -60,7 +67,7 @@ async fn default_keys_apply_their_command() {
         (Action::GrowEditor, |h| h.app.console_pct > 42),
     ];
     for (a, applied) in cases {
-        let key = DEFAULT_KEYS.iter().find(|d| d.0 == a).and_then(|d| d.1.first()).unwrap_or_else(|| panic!("{a:?} has no default key"));
+        let key = COMMANDS.iter().find(|d| d.0 == Slot::global(a)).and_then(|d| d.1.first()).unwrap_or_else(|| panic!("{a:?} has no default key"));
         let mut h = Harness::new().await;
         h.console_tab();
         h.key(&typed(key));
@@ -80,7 +87,7 @@ async fn palette_list_is_unchanged() {
     golden("actions_palette.txt", &list);
 }
 
-/// --help (and the F1 window, drawn from the same DEFAULT_KEYS) lists the commands in keys::ORDER with the same names
+/// --help (and the F1 window, drawn from the same COMMANDS) lists the commands in keys::ORDER with the same names
 #[test]
 fn help_text_is_unchanged() {
     FORCE_MAC_GLYPHS.set(true);

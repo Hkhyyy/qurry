@@ -7,7 +7,7 @@ import { migrateOldHistory } from "./components/HistoryDialog";
 import { WorkspaceBar } from "./components/WorkspaceBar";
 import { Badge, Text, Toolbar, ToolbarSep } from "./ui";
 import { invalidateSearchIndex } from "./components/SearchEverywhere";
-import { DEFAULT_FONT, editorFontSize, setEditorFontSize } from "./lib/prefs";
+import { DEFAULT_FONT, font, setFont } from "./lib/prefs";
 import { loadKeymap, onKeymapChange } from "./lib/shortcuts";
 import { invalidateCompletion } from "./lib/completion";
 import { useSharedReady } from "./lib/shared";
@@ -40,7 +40,6 @@ export default function App() {
   const [keymapVer, setKeymapVer] = useState(0);
   useEffect(() => {
     const off = onKeymapChange(() => setKeymapVer((n) => n + 1));
-    void loadKeymap();
     return () => void off();
   }, []);
   // On window close, ask if there are uncommitted changes (closing rolls them back)
@@ -83,6 +82,8 @@ export default function App() {
   const workspaces = useWorkspacesStore((s) => s.workspaces);
   const curWs = useWorkspacesStore((s) => s.curWs);
   const [status, setStatus] = useState("Ready");
+  // A keymap.json that doesn't load: the default keys work, the status bar says how to get the saved ones back
+  useEffect(() => void loadKeymap().then((err) => err && setStatus(err)), []);
   const [treeSel, setTreeSel] = useState<NodeInfo | null>(null);
   const [tabMenu, setTabMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
 
@@ -214,8 +215,7 @@ export default function App() {
   };
 
   // ── Editor font size ──
-  const [, setFontTick] = useState(editorFontSize());
-  const bumpFont = (d: number) => setFontTick(setEditorFontSize(d === 0 ? DEFAULT_FONT : editorFontSize() + d));
+  const bumpFont = (d: number) => void setFont("editor", { size: d === 0 ? DEFAULT_FONT : font("editor").size + d });
   const search = useSearch({ ...app, ...groups, setExplorerHidden, toggleExplorer, bumpFont });
   const { findOpen } = search;
 

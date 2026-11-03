@@ -2,7 +2,8 @@ import { SHORTCUTS } from "./shortcuts";
 
 /** GUI shortcut list (source for Help › Keymap Reference and docs/shortcuts-gui.md). [macOS key, description] for fixed keys (other OS notation via toOther);
  *  [null, command id] for rebindable shortcuts (lib/shortcuts.ts): the description is the command table's (guiDesc, else title), the screen
- *  shows the current keys, the docs the defaults from the table */
+ *  shows the current keys, the docs the defaults from the table. The last section (OTHER_ACTIONS) lists every command not listed here,
+ *  mostly menu and Find Action commands without a default key (scripts/gen-keymap-docs.py builds the same list) */
 export type KeyRow = [mac: string, desc: string] | [mac: null, id: string];
 export interface KeySection {
   title: string;
@@ -28,16 +29,24 @@ export const KEYMAP: KeySection[] = [
     title: "In search results (Search Everywhere / Go to)",
     rows: [
       ["↩", "Select in Database Explorer"],
-      ["⌘↓", "Edit data (open table)"],
-      ["⌘b", "Go to DDL"],
-      ["F1", "Quick documentation"],
-      ["⌥F1", "Select in Database Explorer"],
+      [null, "tree.editData"],
+      [null, "tree.ddl"],
+      [null, "tree.quickDoc"],
+      [null, "selectIn"],
     ],
   },
   {
     title: "Tool windows & appearance",
     rows: [
-      ["⌘1…⌘9", "Switch to workspace 1…9"],
+      [null, "ws.1"],
+      [null, "ws.2"],
+      [null, "ws.3"],
+      [null, "ws.4"],
+      [null, "ws.5"],
+      [null, "ws.6"],
+      [null, "ws.7"],
+      [null, "ws.8"],
+      [null, "ws.9"],
       [null, "explorer"],
       [null, "find.window"],
       ["⇧⎋", "Hide active tool window"],
@@ -56,7 +65,7 @@ export const KEYMAP: KeySection[] = [
       [null, "tab.reopen"],
       [null, "tab.next"],
       [null, "tab.prev"],
-      ["⇧F6", "Rename console"],
+      [null, "console.rename"],
       [null, "split.other"],
       ["right-click tab", "Pin, Split Right/Down (up to 4 panes), Move to Next Group, Close others…"],
       ["drag tab", "Reorder, or drop on a pane's right/bottom edge to split it (up to 4)"],
@@ -114,19 +123,20 @@ export const KEYMAP: KeySection[] = [
     title: "Data grid (results & table editor)",
     rows: [
       ["↩ / F2", "Edit cell"],
-      ["⇧↩", "Open value editor"],
-      ["⌥⌘n", "Set NULL"],
-      ["⌥⌘d", "Set DEFAULT"],
-      ["⌘n", "Add row"],
-      ["⌘d", "Clone row"],
-      ["⌘⌫", "Delete rows"],
-      ["⌥⌘z", "Revert selected changes"],
-      ["⌘↩", "Submit changes"],
+      [null, "grid.valueEditor"],
+      [null, "grid.setNull"],
+      [null, "grid.setDefault"],
+      [null, "grid.addRow"],
+      [null, "grid.cloneRow"],
+      [null, "grid.deleteRows"],
+      [null, "grid.revert"],
+      [null, "grid.submit"],
       ["⌘c / ⌘v", "Copy (with chosen extractor; CSV / TSV copy values only — right-click › Copy with Headers adds the column names) / paste"],
       ["⌘a", "Select all"],
-      ["⌘f", "Find in grid"],
-      ["⌘r", "Reload"],
-      ["⌘F2", "Cancel"],
+      [null, "grid.find"],
+      [null, "grid.reload"],
+      [null, "grid.cancel"],
+      [null, "grid.ddl"],
       ["click header · ⌥ click", "Sort · add to multi-column sort"],
     ],
   },
@@ -140,6 +150,11 @@ export const KEYMAP: KeySection[] = [
     ],
   },
 ];
+
+/** Title of the last section: the commands no section above lists */
+export const OTHER_ACTIONS = "Other actions (menus, toolbars, Find Action — give them a key in Settings › Keymap)";
+const listed = new Set(KEYMAP.flatMap((s) => s.rows.flatMap((r) => (r[0] === null ? [r[1]] : []))));
+KEYMAP.push({ title: OTHER_ACTIONS, rows: SHORTCUTS.filter((s) => !listed.has(s.id)).map((s): KeyRow => [null, s.id]) });
 
 const descs = new Map(SHORTCUTS.map((s) => [s.id, s.desc]));
 /** The row's description */

@@ -7,12 +7,13 @@ import { FindPanel, FindRun, FtsScope, FullTextSearchDialog } from "../../compon
 import { isRelation, NodeInfo, revealInTree } from "../../components/SchemaTree";
 import { ActionItem, DbObject, SearchEverywhere, SeTab } from "../../components/SearchEverywhere";
 import { RecentFiles, Switcher, SwitchItem } from "../../components/Switcher";
+import { TabIcon } from "../../ui/icons";
 import type { useConnActions } from "../conns/useConnActions";
 import type { useConsole } from "../console/useConsole";
 import { setDialog, setHistoryFor, setHistoryTab, setKeymapOpen, setProdLog, setSchemeOpen, setSettingsOpen } from "../dialogs/store";
 import type { useEditorGroups } from "../editorGroups/useEditorGroups";
 import type { useExplorer } from "../explorer/useExplorer";
-import { sk } from "../shortcuts/labels";
+import { cmd } from "../../lib/shortcuts";
 import { closeTabs } from "../tabs/ops";
 import { editorApis, useTabsStore } from "../tabs/store";
 import { snapKey, Tab } from "../tabs/types";
@@ -39,7 +40,7 @@ type Deps = {
 
 /** Switcher (⌃⇥), Recent Files (⌘e), Search Everywhere (⇧⇧) with Go to … and Find Action, Full-text Search and its Find tool window */
 export function useSearch({
-  conns, setStatus, treeSel, active, labelOf, setMaximized, setExplorerHidden, toggleExplorer, bumpFont, openConsole, activate, newWs, switchWs, exportConns, importConns, cancelRun, canCancel, txEnd, setTxMode, reopen, reopenClosed, splitClone, unsplit, refreshAll, activateNode, openDdl, showQuickDoc, openTableTab,
+  conns, setStatus, treeSel, active, labelOf, setMaximized, setExplorerHidden, toggleExplorer, bumpFont, openConsole, activate, newWs, renameWs, deleteWs, switchWs, exportConns, importConns, cancelRun, canCancel, txEnd, setTxMode, reopen, reopenClosed, splitClone, unsplit, refreshAll, activateNode, openDdl, showQuickDoc, openTableTab,
 }: Deps) {
   const workspaces = useWorkspacesStore((s) => s.workspaces);
   const curWs = useWorkspacesStore((s) => s.curWs);
@@ -47,7 +48,7 @@ export function useSearch({
   // ───────── Switcher / Recent Files / Maximize ─────────
   const [switcher, setSwitcher] = useState<{ items: SwitchItem[]; start: number } | null>(null);
   const [recentOpen, setRecentOpen] = useState(false);
-  const kindIcon = (k: Tab["kind"]) => (k === "table" ? "▦" : k === "ddl" ? "ƒ" : k === "redis" ? "◆" : "⌘");
+  const kindIcon = (t: { kind: string; objKind?: string }) => <TabIcon kind={t.kind} obj={t.objKind} />;
   const hintOf = (connId: string, db?: string) => {
     const c = conns.find((x) => x.id === connId);
     return c ? c.name + (db ? ` · ${db}` : "") : "";
@@ -56,14 +57,14 @@ export function useSearch({
     const ts = useTabsStore.getState().tabs;
     const ordered = [...useTabsStore.getState().mru.map((id) => ts.find((t) => t.id === id)).filter((t): t is Tab => !!t), ...ts.filter((t) => !useTabsStore.getState().mru.includes(t.id))];
     if (!ordered.length) return;
-    const items = ordered.map((t) => ({ key: t.id, icon: kindIcon(t.kind), title: labelOf(t), hint: hintOf(t.connId, t.database), color: conns.find((c) => c.id === t.connId)?.color }));
+    const items = ordered.map((t) => ({ key: t.id, icon: kindIcon(t), title: labelOf(t), hint: hintOf(t.connId, t.database), color: conns.find((c) => c.id === t.connId)?.color }));
     setSwitcher({ items, start: back ? items.length - 1 : 1 });
   };
   const recentItems = (): SwitchItem[] => {
     const openKeys = new Map(useTabsStore.getState().tabs.map((t) => [snapKey(t), t] as const));
     return useTabsStore.getState().recent
       .filter((r) => conns.some((c) => c.id === r.connId))
-      .map((r) => ({ key: r.key, icon: kindIcon(r.kind), title: r.title, hint: hintOf(r.connId, r.database), open: openKeys.has(r.key), color: conns.find((c) => c.id === r.connId)?.color }));
+      .map((r) => ({ key: r.key, icon: kindIcon(r), title: r.title, hint: hintOf(r.connId, r.database), open: openKeys.has(r.key), color: conns.find((c) => c.id === r.connId)?.color }));
   };
 
   // ───────── Search Everywhere (⇧⇧) / Go to Database Object (⌘o) / Find Action (⇧⌘A) ─────────
@@ -117,46 +118,50 @@ export function useSearch({
       const t = useTabsStore.getState().tabs.find((x) => x.id === id);
       if (t) {
         seen.add(snapKey(t));
-        items.push({ key: snapKey(t), icon: kindIcon(t.kind), title: t.title, hint: hintOf(t.connId, t.database), open: true });
+        items.push({ key: snapKey(t), icon: kindIcon(t), title: t.title, hint: hintOf(t.connId, t.database), open: true });
       }
     }
     for (const r of useTabsStore.getState().recent)
       if (!seen.has(r.key) && conns.some((c) => c.id === r.connId))
-        items.push({ key: r.key, icon: kindIcon(r.kind), title: r.title, hint: hintOf(r.connId, r.database), open: openKeys.has(r.key) });
+        items.push({ key: r.key, icon: kindIcon(r), title: r.title, hint: hintOf(r.connId, r.database), open: openKeys.has(r.key) });
     return items;
   };
+  /** Find Action's list. An item with a command id (cmd) is what that command's key runs too, for global commands (useGlobalShortcuts) */
   const seActions = (): ActionItem[] => {
     const t = active;
     const c = treeSel?.conn ?? conns.find((x) => x.id === t?.connId);
     return [
-      { name: "New Query Console", shortcut: sk("console.new"), group: "File", run: () => c && openConsole(c, treeSel?.db ?? t?.database), disabled: !c },
-      { name: "New Data Source…", group: "File", run: () => setDialog({}) },
-      { name: "New Workspace…", group: "Window", run: () => newWs() },
-      ...workspaces.map((w, i) => ({ name: `Workspace: ${w.name}`, shortcut: i < 9 ? sk(`ws.${i + 1}`) : undefined, group: "Window", run: () => switchWs(w.id), disabled: w.id === curWs })),
-      { name: "Data Source Properties", shortcut: sk("tree.properties"), group: "File", run: () => c && setDialog({ edit: c }), disabled: !c },
-      { name: "Export Data Sources…", group: "File", run: () => exportConns() },
-      { name: "Import Data Sources…", group: "File", run: () => importConns() },
-      { name: "Settings…", shortcut: sk("settings"), group: "File", run: () => setSettingsOpen("appearance") },
-      { name: "Keymap Reference", shortcut: sk("keymap"), group: "Help", run: () => setKeymapOpen(true) },
-      { name: "Edit Keymap…", group: "Help", run: () => setSettingsOpen("keymap") },
-      { name: "Theme: Dark", group: "Appearance", run: () => setThemePref("dark") },
-      { name: "Theme: Light", group: "Appearance", run: () => setThemePref("light") },
-      { name: "Theme: High contrast", group: "Appearance", run: () => setThemePref("hc") },
-      { name: "Theme: Sync with OS", group: "Appearance", run: () => setThemePref("system") },
-      { name: "Quick Switch Theme…", shortcut: sk("theme"), group: "Appearance", run: () => setSchemeOpen(true) },
-      { name: "Execute", shortcut: sk("editor.run"), group: "Run", run: () => t && editorApis.get(t.id)?.run(), disabled: t?.kind !== "console" },
-      { name: "Explain Plan", group: "Run", run: () => t && editorApis.get(t.id)?.run("plan"), disabled: t?.kind !== "console" },
-      { name: "Explain Analyse", group: "Run", run: () => t && editorApis.get(t.id)?.run("analyze"), disabled: t?.kind !== "console" },
-      { name: "Cancel Running Statements", shortcut: sk("editor.cancel"), group: "Run", run: () => t && cancelRun(t), disabled: !canCancel(t) },
-      { name: "Commit", group: "Transaction", run: () => t && txEnd(t, "commit"), disabled: !t?.inTx },
-      { name: "Roll Back", group: "Transaction", run: () => t && txEnd(t, "rollback"), disabled: !t?.inTx },
-      { name: "Transaction Mode: Manual", group: "Transaction", run: () => t && setTxMode(t, true), disabled: t?.kind !== "console" },
-      { name: "Transaction Mode: Auto", group: "Transaction", run: () => t && setTxMode(t, false), disabled: t?.kind !== "console" },
-      { name: "Browse Query History…", shortcut: sk("editor.history"), group: "Run", run: () => t && (setHistoryTab("history"), setHistoryFor(t.id)), disabled: t?.kind !== "console" },
-      { name: "Snippets…", group: "Run", run: () => t && (setHistoryTab("snippets"), setHistoryFor(t.id)), disabled: t?.kind !== "console" },
-      { name: "Production Log…", group: "Run", run: () => setProdLog({ connId: null }) },
+      { name: "New Query Console", ...cmd("console.new"), group: "File", run: () => c && openConsole(c, treeSel?.db ?? t?.database), disabled: !c },
+      { name: "New Data Source…", ...cmd("tree.newDs"), group: "File", run: () => setDialog({}) },
+      { name: "New Workspace…", ...cmd("ws.new"), group: "Window", run: () => newWs() },
+      { name: "Rename Workspace…", ...cmd("ws.rename"), group: "Window", run: () => renameWs(curWs) },
+      { name: "Delete Workspace…", ...cmd("ws.delete"), group: "Window", run: () => deleteWs(curWs), disabled: workspaces.length < 2 },
+      ...workspaces.map((w, i) => ({ name: `Workspace: ${w.name}`, ...(i < 9 ? cmd(`ws.${i + 1}`) : {}), group: "Window", run: () => switchWs(w.id), disabled: w.id === curWs })),
+      { name: "Data Source Properties", ...cmd("tree.properties"), group: "File", run: () => c && setDialog({ edit: c }), disabled: !c },
+      { name: "Export Data Sources…", ...cmd("ds.export"), group: "File", run: () => exportConns() },
+      { name: "Import Data Sources…", ...cmd("ds.import"), group: "File", run: () => importConns() },
+      { name: "Settings…", ...cmd("settings"), group: "File", run: () => setSettingsOpen("appearance") },
+      { name: "Keymap Reference", ...cmd("keymap"), group: "Help", run: () => setKeymapOpen(true) },
+      { name: "Edit Keymap…", ...cmd("keymap.edit"), group: "Help", run: () => setSettingsOpen("keymap") },
+      { name: "Theme: Dark", ...cmd("theme.dark"), group: "Appearance", run: () => setThemePref("dark") },
+      { name: "Theme: Light", ...cmd("theme.light"), group: "Appearance", run: () => setThemePref("light") },
+      { name: "Theme: High contrast", ...cmd("theme.hc"), group: "Appearance", run: () => setThemePref("hc") },
+      { name: "Theme: Sync with OS", ...cmd("theme.system"), group: "Appearance", run: () => setThemePref("system") },
+      { name: "Quick Switch Theme…", ...cmd("theme"), group: "Appearance", run: () => setSchemeOpen(true) },
+      { name: "Execute", ...cmd("editor.run"), group: "Run", run: () => t && editorApis.get(t.id)?.run(), disabled: t?.kind !== "console" },
+      { name: "Explain Plan", ...cmd("editor.explain"), group: "Run", run: () => t && editorApis.get(t.id)?.run("plan"), disabled: t?.kind !== "console" },
+      { name: "Explain Analyse", ...cmd("editor.explainAnalyze"), group: "Run", run: () => t && editorApis.get(t.id)?.run("analyze"), disabled: t?.kind !== "console" },
+      { name: "Cancel Running Statements", ...cmd("editor.cancel"), group: "Run", run: () => t && cancelRun(t), disabled: !canCancel(t) },
+      { name: "Commit", ...cmd("tx.commit"), group: "Transaction", run: () => t && txEnd(t, "commit"), disabled: !t?.inTx },
+      { name: "Roll Back", ...cmd("tx.rollback"), group: "Transaction", run: () => t && txEnd(t, "rollback"), disabled: !t?.inTx },
+      { name: "Transaction Mode: Manual", ...cmd("tx.manual"), group: "Transaction", run: () => t && setTxMode(t, true), disabled: t?.kind !== "console" },
+      { name: "Transaction Mode: Auto", ...cmd("tx.auto"), group: "Transaction", run: () => t && setTxMode(t, false), disabled: t?.kind !== "console" },
+      { name: "Browse Query History…", ...cmd("editor.history"), group: "Run", run: () => t && (setHistoryTab("history"), setHistoryFor(t.id)), disabled: t?.kind !== "console" },
+      { name: "Snippets…", ...cmd("snippets"), group: "Run", run: () => t && (setHistoryTab("snippets"), setHistoryFor(t.id)), disabled: t?.kind !== "console" },
+      { name: "Production Log…", ...cmd("prodLog"), group: "Run", run: () => setProdLog({ connId: null }) },
       {
         name: "Save Query as Snippet…",
+        ...cmd("snippet.save"),
         group: "Run",
         run: async () => {
           const c = t && conns.find((x) => x.id === t.connId);
@@ -165,25 +170,37 @@ export function useSearch({
         },
         disabled: t?.kind !== "console",
       },
-      { name: "Go to Database Object…", shortcut: sk("goto.object"), group: "Navigate", run: () => setTimeout(() => setSe("database")) },
-      { name: "Go to Symbol…", shortcut: sk("goto.symbol"), group: "Navigate", run: () => setTimeout(() => setSe("symbols")) },
-      { name: "Go to File…", shortcut: sk("goto.file"), group: "Navigate", run: () => setTimeout(() => setSe("files")) },
-      { name: "Full-text Search…", shortcut: sk("fts"), group: "Navigate", run: () => openFts() },
-      { name: "Recent Files", shortcut: sk("recent"), group: "Navigate", run: () => setRecentOpen(true) },
+      { name: "Go to Database Object…", ...cmd("goto.object"), group: "Navigate", run: () => setTimeout(() => setSe("database")) },
+      { name: "Go to Symbol…", ...cmd("goto.symbol"), group: "Navigate", run: () => setTimeout(() => setSe("symbols")) },
+      { name: "Go to File…", ...cmd("goto.file"), group: "Navigate", run: () => setTimeout(() => setSe("files")) },
+      { name: "Full-text Search…", ...cmd("fts"), group: "Navigate", run: () => openFts() },
+      { name: "Recent Files", ...cmd("recent"), group: "Navigate", run: () => setRecentOpen(true) },
       { name: "Switcher", shortcut: "⌃⇥", group: "Navigate", run: () => openSwitcher(false) },
-      { name: "Reopen Closed Tab", shortcut: sk("tab.reopen"), group: "Window", run: reopenClosed },
-      { name: "Close Tab", shortcut: sk("tab.close"), group: "Window", run: () => t && closeTabs([t.id]), disabled: !t },
-      { name: "Close All Tabs", group: "Window", run: () => closeTabs(useTabsStore.getState().tabs.map((x) => x.id)) },
-      { name: "Split Right", group: "Window", run: () => t && splitClone(t, "right"), disabled: !t },
-      { name: "Split Down", group: "Window", run: () => t && splitClone(t, "down"), disabled: !t },
-      { name: "Unsplit All", group: "Window", run: unsplit, disabled: !split },
-      { name: "Maximize Editor", shortcut: sk("maximize"), group: "Window", run: () => setMaximized((m) => !m) },
-      { name: "Database Explorer", shortcut: sk("explorer"), group: "Tool Windows", run: () => toggleExplorer() },
-      { name: "Find (Full-text Search results)", shortcut: sk("find.window"), group: "Tool Windows", run: () => setFindOpen((o) => !o) },
-      { name: "Refresh", shortcut: sk("refresh"), group: "Database", run: () => refreshAll() },
-      { name: "Increase Editor Font Size", shortcut: sk("font.bigger"), group: "Editor", run: () => bumpFont(1) },
-      { name: "Decrease Editor Font Size", shortcut: sk("font.smaller"), group: "Editor", run: () => bumpFont(-1) },
-      { name: "Reset Editor Font Size", group: "Editor", run: () => bumpFont(0) },
+      {
+        name: "Select in Database Explorer",
+        ...cmd("selectIn"),
+        group: "Navigate",
+        run: () => {
+          if (!t?.edit) return;
+          setExplorerHidden(false);
+          setMaximized(false);
+          revealInTree({ connId: t.connId, db: t.database || conns.find((x) => x.id === t.connId)?.database, schema: t.edit.schema, name: t.edit.table, kind: "table" });
+        },
+        disabled: !t?.edit,
+      },
+      { name: "Reopen Closed Tab", ...cmd("tab.reopen"), group: "Window", run: reopenClosed },
+      { name: "Close Tab", ...cmd("tab.close"), group: "Window", run: () => t && closeTabs([t.id]), disabled: !t },
+      { name: "Close All Tabs", ...cmd("tab.closeAll"), group: "Window", run: () => closeTabs(useTabsStore.getState().tabs.map((x) => x.id)) },
+      { name: "Split Right", ...cmd("split.right"), group: "Window", run: () => t && splitClone(t, "right"), disabled: !t },
+      { name: "Split Down", ...cmd("split.down"), group: "Window", run: () => t && splitClone(t, "down"), disabled: !t },
+      { name: "Unsplit All", ...cmd("unsplit"), group: "Window", run: unsplit, disabled: !split },
+      { name: "Maximize Editor", ...cmd("maximize"), group: "Window", run: () => setMaximized((m) => !m) },
+      { name: "Database Explorer", ...cmd("explorer"), group: "Tool Windows", run: () => toggleExplorer() },
+      { name: "Find (Full-text Search results)", ...cmd("find.window"), group: "Tool Windows", run: () => setFindOpen((o) => !o) },
+      { name: "Refresh", ...cmd("refresh"), group: "Database", run: () => refreshAll() },
+      { name: "Increase Editor Font Size", ...cmd("font.bigger"), group: "Editor", run: () => bumpFont(1) },
+      { name: "Decrease Editor Font Size", ...cmd("font.smaller"), group: "Editor", run: () => bumpFont(-1) },
+      { name: "Reset Editor Font Size", ...cmd("font.reset"), group: "Editor", run: () => bumpFont(0) },
     ];
   };
 
@@ -193,6 +210,8 @@ export function useSearch({
 
   return {
     openSwitcher, setRecentOpen, setSe, findOpen, setFindOpen, openFts,
+    /** Find Action's list, built now: the global key handler runs a command's item by its id */
+    paletteActions: seActions,
     /** Mounted where App had it: before the dialogs (overlays stack in mount order) */
     switcherPopup: (
       <>

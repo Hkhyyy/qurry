@@ -226,6 +226,45 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.app.chart_result();
     scenes.push(app_scene(h, "Chart", "⌃k › Chart Result: 첫 글 컬럼별 수 컬럼의 합 (가로 막대)", 120, 26));
     h.app.popup = None;
+    // Grid alignment (GUI Settings › Appearance › Alignment, read from settings.json)
+    let id = h.console_with("select * from payment_check;", 1, 10);
+    let res = qurry_core::db::QueryResult {
+        columns: [("card_brand", "TEXT"), ("amount", "NUMERIC"), ("refunded", "BOOL"), ("paid_at", "TIMESTAMPTZ"), ("meta", "JSONB")].iter().map(|(n, t)| qurry_core::db::ColumnInfo { name: n.to_string(), type_name: t.to_string() }).collect(),
+        rows: vec![
+            vec![json!("VISA"), json!("129000"), json!(false), json!("2026-10-28 09:12:00 +09:00"), json!("{\"pg\":\"toss\"}")],
+            vec![json!("MASTER"), Value::Null, json!(true), json!("2026-10-28 09:40:00 +09:00"), Value::Null],
+            vec![Value::Null, json!("1200000"), Value::Null, Value::Null, json!("{}")],
+        ],
+        rows_affected: 0,
+        truncated: false,
+        elapsed_ms: 4,
+        has_result_set: true,
+        in_transaction: false,
+        warning: None,
+    };
+    if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
+        c.result_title = "Result 1: select * from payment_check".into();
+        c.grid = Some(crate::grid::Grid::new(res));
+        c.show_output = false;
+    }
+    scenes.push(app_scene(h, "Grid alignment", "Numbers and NULL on the right by default (a NULL stays in line with the numbers); text, dates, booleans and JSON on the left", 120, 22));
+    {
+        use qurry_core::format::{Align, ValueClass};
+        h.app.state.store.set_grid_align(ValueClass::Null, Align::Left).unwrap();
+        h.app.align = h.app.state.store.set_grid_align(ValueClass::Boolean, Align::Center).unwrap();
+    }
+    scenes.push(app_scene(h, "Grid alignment: changed", "settings.json \"gridAlign\": { \"null\": \"left\", \"boolean\": \"center\" } (GUI Settings › Appearance › Alignment); the other classes keep their default", 120, 22));
+    h.app.palette_grid_align(qurry_core::format::ValueClass::Null);
+    scenes.push(app_scene(h, "Grid alignment palette", "⌃k › Grid Alignment…: where each kind of value sits, shared with the GUI; Enter picks Left / Center / Right", 120, 22));
+    h.key("Enter");
+    scenes.push(app_scene(h, "Grid alignment: pick", "⌃k › Grid Alignment… › NULL: opens on where it sits now (Enter keeps it)", 120, 22));
+    h.app.popup = None;
+    {
+        use qurry_core::format::{Align, ValueClass};
+        h.app.state.store.set_grid_align(ValueClass::Null, Align::Right).unwrap();
+        h.app.align = h.app.state.store.set_grid_align(ValueClass::Boolean, Align::Left).unwrap();
+    }
+    h.app.close_tab_now(h.app.active);
     // Production log
     let entry = |id: &str, ago: i64, sql: &str, rows: Option<u64>, undo: bool, in_tx: bool| qurry_core::audit::AuditEntry {
         id: id.into(),
@@ -332,6 +371,13 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     for _ in 0..2 {
         h.app.close_tab_now(h.app.active);
     }
+    // DDL → Structure (v)
+    let text = "CREATE TABLE public.users (\n    id bigint NOT NULL\n);".to_string();
+    let t = crate::app::TextTab { text, table: Some(("public".into(), "users".into())), structure_view: true, structure: Some(Ok(crate::structure::sample())), ..Default::default() };
+    h.app.push_tab("prod", "rentalpay".into(), "users [DDL]".into(), crate::app::TabKind::Text(t));
+    h.app.focus = crate::app::Focus::Grid;
+    scenes.push(app_scene(h, "DDL: Structure", "A table's DDL tab, v: columns, keys, indexes, foreign keys both ways, triggers (not reported by this source), options and comment; v again for the SQL", 120, 40));
+    h.app.close_tab_now(h.app.active);
     // Redis
     h.redis_tab(&["session:9f2c", "session:a771", "user:41", "user:41:cart", "queue:mail", "rank:daily"]);
     scenes.push(app_scene(h, "Redis", "Redis 키 브라우저: 키 · 타입 · TTL", 120, 22));
@@ -412,6 +458,10 @@ async fn all_scenes() -> Vec<Value> {
     h.app.popup = None;
     h.app.popup = Some(Popup::Help { sel: 0, scroll: 0, record: None, message: None });
     scenes.push(app_scene(&mut h, "Keymap (F1)", "F1: 처음 쓸 키 → 바꿀 수 있는 명령 → 고정 키", 120, 30));
+    // Recording a key for the explorer's c (Connect): pane keys follow every command, then the fixed keys
+    let sel = crate::keys::COMMANDS.iter().position(|(s, _)| *s == crate::keys::Slot { action: crate::app::Action::Connect, pane: qurry_core::keymap::Scope::Tree }).unwrap();
+    h.app.popup = Some(Popup::Help { sel, scroll: 0, record: Some(false), message: None });
+    scenes.push(app_scene(&mut h, "Keymap (F1): explorer keys", "Every command can get a key, those without a default show —; the explorer's and the grid's letter commands are rebindable too (here: recording a new key for c Connect)", 120, 30));
     h.app.popup = None;
     screens(&mut h, &mut scenes);
     // MySQL backup: after the path, the DEFINER= question (question on the border, answers and reason in the box below)
@@ -440,7 +490,55 @@ async fn all_scenes() -> Vec<Value> {
     h.app.palette_update_channel();
     scenes.push(app_scene(&mut h, "Update channel", "⌃k › Update Channel…: stable (version tags only, the default) or beta (also every merge to main), shared with the GUI", 120, 22));
     h.app.popup = None;
+    tab_bars(&mut scenes).await;
     scenes
+}
+
+/// Split panes with many tabs of two Data Sources in each color mode: the focused (left) pane's active [PROD] tab next to an inactive [DEV] one, the other pane's active [DEV] tab next to an inactive [PROD] one.
+/// Tab glyphs follow the tree: a view's data and DDL ◫, a function's DDL ƒ
+async fn tab_bars(scenes: &mut Vec<Value>) {
+    use crate::theme::ColorMode;
+    let mut h = Harness::new().await;
+    for c in [conn("prod", "[PROD] rentalpay", "#6e2a2a", true), conn("dev", "[DEV] rentalpay", "#2f5634", false)] {
+        h.app.state.save_connection(c, None, None).await.unwrap();
+    }
+    h.app.reload_conns();
+    h.settle().await;
+    fn tab(h: &mut Harness, name: &str, conn: &str) -> u64 {
+        let id = h.table_tab(name, &["id"], &[&["1"]], &["id"]);
+        h.app.tabs.iter_mut().find(|t| t.id == id).unwrap().conn = conn.into();
+        id
+    }
+    fn ddl(h: &mut Harness, name: &str, conn: &str, kind: &str) {
+        h.app.push_tab(conn, "rentalpay".into(), format!("{name} [DDL]"), crate::app::TabKind::Text(crate::app::TextTab { text: String::new(), kind: kind.into(), ..Default::default() }));
+    }
+    let users = tab(&mut h, "users", "prod");
+    let orders = tab(&mut h, "v_orders", "dev");
+    if let Some(crate::app::TabKind::Table(t)) = h.app.tabs.iter_mut().find(|t| t.id == orders).map(|t| &mut t.kind) {
+        t.kind = "view".into();
+    }
+    for (name, conn) in [("adjust", "dev"), ("payment", "prod")] {
+        tab(&mut h, name, conn);
+    }
+    // The active tab when splitting moves to the new pane
+    ddl(&mut h, "v_orders", "prod", "view");
+    h.app.run_action(crate::app::Action::SplitRight);
+    let role = tab(&mut h, "admin_role", "dev");
+    ddl(&mut h, "calc_fee", "prod", "routine");
+    for id in [role, users] {
+        let i = h.app.tab_index(id).unwrap();
+        h.app.activate(i);
+    }
+    h.app.focus = crate::app::Focus::Grid;
+    h.app.status.clear();
+    for (mode, name, desc) in [
+        (ColorMode::TrueColor, "Tab bar: truecolor", "Active tab: bold on a lighter Data Source color (or the selection color) in the focused pane, underlined on its own color in the other pane"),
+        (ColorMode::Ansi16, "Tab bar: 16 colors", "TERM=xterm: the focused pane's tab in reverse video + bold, keeping its Data Source color (a lighter hue is often the same terminal color); the other pane's bold + underlined"),
+        (ColorMode::NoColor, "Tab bar: NO_COLOR", "NO_COLOR=1: the focused pane's tab in reverse video + bold, the other pane's bold + underlined"),
+    ] {
+        h.app.color = mode;
+        scenes.push(app_scene(&mut h, name, desc, 120, 10));
+    }
 }
 
 fn json_path() -> std::path::PathBuf {

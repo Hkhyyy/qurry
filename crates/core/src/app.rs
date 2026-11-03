@@ -1382,6 +1382,10 @@ impl AppState {
         crate::meta::table_detail(&ensure_pool(self, &id).await?, &schema, &table).await
     }
 
+    pub async fn table_structure(&self, id: String, schema: String, table: String) -> AppResult<crate::meta::TableStructure> {
+        crate::meta::table_structure(&ensure_pool(self, &id).await?, &schema, &table).await
+    }
+
     /// pgvector: SQL that finds rows close to this row (using the vector index's distance operator). pk = (column, value)
     pub async fn similar_rows_sql(&self, id: String, schema: String, table: String, column: String, pk: Vec<(String, Option<String>)>) -> AppResult<String> {
         if pk.is_empty() {

@@ -8,7 +8,7 @@ use crate::erd::{Columns, Erd, ErdColumn, ErdRelation, ErdTable};
 use crate::error::{AppError, AppResult};
 use crate::fake::{Col, Fk, TableShape, qualified, quoted_literals, type_args};
 use crate::hints::{Hint, HintReq};
-use crate::meta::{CompletionTable, FtsHit, FtsRequest, IndexEntry, SchemaInfo, SchemaObjects, TableDetail};
+use crate::meta::{CompletionTable, FtsHit, FtsRequest, IndexEntry, SchemaInfo, SchemaObjects, TableDetail, TableStructure};
 use crate::migrate::{self, Model, norm, qualify_refs};
 use crate::session::Session;
 use crate::store::{ConnectionConfig, DbKind};
@@ -40,6 +40,10 @@ impl Backend for MySqlPool {
 
     async fn table_detail(&self, schema: &str, table: &str) -> AppResult<TableDetail> {
         crate::mysql::table_detail(self, schema, table).await
+    }
+
+    async fn table_structure(&self, schema: &str, table: &str) -> AppResult<TableStructure> {
+        crate::mysql::table_structure(self, schema, table).await
     }
 
     async fn object_ddl(&self, schema: &str, name: &str, kind: &str) -> AppResult<String> {

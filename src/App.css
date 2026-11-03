@@ -184,9 +184,17 @@ a { color: var(--c-548af7); cursor: pointer; }
 .dot-on { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-left: auto; flex: none; }
 
 .tabs { height: 32px; flex: none; border-bottom: 1px solid var(--border); }
-.tab { display: flex; align-items: center; gap: 8px; padding: 0 10px 0 14px; color: var(--muted); cursor: default; white-space: nowrap; border-bottom: 2px solid transparent; }
+/* Editor tabs. Active: the editor's background (or the full Data Source tint), bold, a bar along the bottom — accent in the
+   focused pane, gray in the other split panes. Inactive tabs keep the Data Source stripe and a fainter tint (--conn-* from connTabVars) */
+.tab { display: flex; align-items: center; gap: 8px; padding: 0 10px 0 14px; color: var(--muted); cursor: default; white-space: nowrap; border-bottom: 2px solid transparent; background: color-mix(in srgb, var(--conn-bg, transparent) 45%, transparent); box-shadow: inset 0 2px 0 var(--conn-stripe, transparent); }
 .tab:hover { color: var(--text); }
-.tab.active { color: var(--text); border-bottom-color: var(--accent); }
+.tab.active { color: var(--text); border-bottom-color: var(--accent); background: var(--conn-bg, var(--bg)); }
+.editor-group.unfocused .tab.active { border-bottom-color: var(--c-6f737a); }
+/* High contrast: side lines only, so they don't cover the Data Source stripe or the bar (:where keeps .drop-before winning) */
+:where(:root[data-theme="hc"]) .tab.active { box-shadow: inset 1px 0 0 var(--text), inset -1px 0 0 var(--text), inset 0 2px 0 var(--conn-stripe, transparent); }
+.tab .tab-label { display: inline-flex; flex-direction: column; }
+.tab .tab-label::after { content: attr(data-text); height: 0; overflow: hidden; visibility: hidden; font-weight: 600; }
+.tab.active .tab-label { font-weight: 600; }
 .tab-close { opacity: .5; padding: 0 2px; }
 .tab-close:hover { opacity: 1; }
 /* Separator between tabs (so tabs with the same Data Source color don't look merged) */
@@ -200,8 +208,9 @@ a { color: var(--c-548af7); cursor: pointer; }
 .plan-table { user-select: text; }
 .plan-tools.ui-toolbar { height: 30px; border-bottom: 1px solid var(--border); }
 .running-time { font-variant-numeric: tabular-nums; }
-.grid-scroll { position: absolute; inset: 0; overflow: auto; overscroll-behavior: none; outline: none; }
-.grid-scroll, .grid-head { font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; }
+/* contain: paint: rows (absolutely positioned) can never paint outside the scroller, e.g. into the header strip above it (#82) */
+.grid-scroll { position: absolute; inset: 0; overflow: auto; overscroll-behavior: none; outline: none; contain: paint; }
+.grid-scroll, .grid-head { font-family: var(--grid-font-family); font-size: var(--grid-font-size); }
 
 .hint { color: var(--muted); font-size: 12px; margin: 10px 0 0 102px; }
 .test-err { background: rgba(247,84,100,.12); color: var(--danger); }
@@ -230,6 +239,7 @@ button.small { padding: 1px 8px; font-size: 12px; font-weight: 400; }
 .tree-status.err { color: var(--danger); white-space: normal; padding-right: 10px; width: 0; min-width: 100%; box-sizing: border-box; } /* wraps at the tree's width instead of widening it */
 
 .grid-wrap { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.grid-wrap:focus { outline: none; }
 .grid-wrap .grid-scroll { position: relative; inset: auto; flex: 1; min-height: 0; }
 .grid-toolbar { flex: none; height: 30px; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-bottom: 1px solid var(--border); background: var(--panel); font-size: 12px; }
 .grid-toolbar .sep { width: 1px; height: 16px; background: var(--border); margin: 0 2px; }
@@ -246,8 +256,7 @@ input:disabled, select:disabled { opacity: .45; }
 
 .work-area { flex: 1; min-height: 0; position: relative; background: var(--bg); }
 .work-layer { position: absolute; inset: 0; }
-.tab-icon { font-size: 11px; color: var(--muted); }
-.tab-icon.table { color: var(--c-548af7); }
+.tab-icon { width: 16px; height: 16px; flex: none; display: flex; align-items: center; justify-content: center; }
 .table-editor { position: absolute; inset: 0; display: flex; flex-direction: column; }
 .filter-bar { flex: none; height: 34px; display: flex; align-items: center; gap: 6px; padding: 0 8px; background: var(--panel); border-bottom: 1px solid var(--border); font-size: 12px; }
 .filter-bar .sep { width: 1px; height: 16px; background: var(--border); }
@@ -259,7 +268,6 @@ input:disabled, select:disabled { opacity: .45; }
 .table-body { flex: 1; min-height: 0; position: relative; }
 
 .editor-group.focused .tabs { box-shadow: inset 0 -1px 0 var(--accent); }
-.tab-icon.ddl { color: var(--c-56a8f5); font-style: italic; }
 .grid-toolbar, .filter-bar { white-space: nowrap; overflow: hidden; }
 .grid-toolbar button, .filter-bar button { flex: none; }
 .grid-toolbar .muted { overflow: hidden; text-overflow: ellipsis; }
@@ -331,11 +339,14 @@ input:disabled, select:disabled { opacity: .45; }
 .grid-overlay { position: absolute; left: 0; right: 0; top: 64px; text-align: center; padding: 16px; }
 pre.grid-overlay { text-align: left; background: var(--bg); }
 .grid-scroll.transposed { overflow: auto; }
-.grid-scroll.transposed table { border-collapse: collapse; font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; }
+.grid-scroll.transposed table { border-collapse: collapse; }
 .grid-scroll.transposed th { position: sticky; left: 0; background: var(--panel); text-align: left; padding: 0 10px; border-right: 1px solid var(--border); white-space: nowrap; }
 .grid-scroll.transposed td { padding: 0 10px; height: 24px; border-right: 1px solid var(--c-2c2e33); border-bottom: 1px solid var(--c-26282b); white-space: nowrap; max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
 .grid-scroll.transposed td.null { color: var(--c-6f737a); font-style: italic; }
 .grid-scroll.transposed td.num { color: var(--c-2aacb8); text-align: right; }
+.grid-scroll.transposed td.al-left { text-align: left; }
+.grid-scroll.transposed td.al-right { text-align: right; }
+.grid-scroll.transposed td.al-center { text-align: center; }
 .value-editor { position: absolute; top: 32px; right: 0; bottom: 0; width: 40%; min-width: 320px; z-index: 40; display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--border); box-shadow: -6px 0 18px rgba(0,0,0,.35); }
 .ve-head { height: 32px; display: flex; align-items: center; gap: 4px; padding: 0 8px; border-bottom: 1px solid var(--border); }
 .ve-title { font-weight: 600; font-size: 12px; }
@@ -351,6 +362,20 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .qd-body { border: none; border-radius: 0; color: var(--c-cf8e6d); }
 .ddl-layer { flex-direction: column; }
 .ddl-editor { flex: 1; min-height: 0; position: relative; }
+/* DDL → Structure: sections of small tables, scrolling in the same box as the SQL editor */
+.ddl-structure { flex: 1; min-height: 0; overflow: auto; padding: var(--ui-sp-3) var(--ui-sp-5) var(--ui-sp-6); }
+.ddl-section + .ddl-section { margin-top: var(--ui-sp-4); }
+.ddl-section > .ui-section-title { padding-left: 0; }
+.ddl-section > .ui-hint { padding: 0 0 var(--ui-sp-2); }
+.ddl-section .ui-table td { vertical-align: top; white-space: nowrap; }
+/* The last column (definition · comment) takes the rest and wraps; names and kinds stay on one line */
+.ddl-section .ui-table td:last-child { width: 100%; white-space: normal; overflow-wrap: anywhere; }
+/* Columns: a long default (a jsonb literal, a CASE) wraps too, sharing the width with the comment so the comment stays in view */
+.ddl-section .ui-table td.ddl-wrap { min-width: 12ch; white-space: normal; overflow-wrap: anywhere; }
+.ddl-section .ui-table:has(td.ddl-wrap) td:last-child { width: auto; }
+.ddl-count { margin-left: var(--ui-sp-2); font-weight: 400; }
+.ddl-pk { display: inline-flex; vertical-align: -3px; margin-left: var(--ui-sp-2); }
+.ddl-structure-error { max-width: 720px; }
 
 /* ── Console ── */
 .console-pane { position: absolute; inset: 0; display: flex; flex-direction: column; }
@@ -411,8 +436,13 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .ui-modal.settings { width: 640px; }
 .settings-body { display: flex; gap: var(--ui-sp-5); min-height: 180px; }
 .settings-nav { flex: none; width: 150px; border-right: 1px solid var(--ui-border); padding-right: var(--ui-sp-3); }
-.settings-form { flex: 1; min-width: 0; }
+.settings-form { flex: 1; min-width: 0; overflow: auto; }
 .settings-form .ui-field { grid-template-columns: 80px 1fr; }
+.settings-font .ui-field-hint { min-height: 2lh; }
+/* Settings › Appearance › Alignment: one row per value class; a changed class in the keymap editor's "custom" color */
+.align-grid { display: grid; grid-template-columns: 110px 120px; gap: var(--ui-sp-2) var(--ui-sp-3); align-items: center; }
+.align-label { font-size: var(--ui-fs-sm); }
+.align-label.custom { color: var(--ok); }
 
 /* Search Everywhere (⇧⇧ / ⌘O / ⇧⌘A) */
 .ui-popover.search-everywhere { top: 12%; width: 720px; max-width: calc(100vw - 32px); max-height: 70vh; }

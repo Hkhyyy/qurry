@@ -60,6 +60,8 @@ impl Harness {
             "Tab" => KeyCode::Tab,
             "Esc" => KeyCode::Esc,
             "Backspace" => KeyCode::Backspace,
+            "Delete" => KeyCode::Delete,
+            "Insert" => KeyCode::Insert,
             "Up" => KeyCode::Up,
             "Down" => KeyCode::Down,
             "Left" => KeyCode::Left,

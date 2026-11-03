@@ -41,9 +41,17 @@ export const ScreenCopyRows80 = { ...by("Copy related rows: 80×24"), name: "Sma
 export const ScreenConfirmTooSmall = { ...by("Confirm: too small to answer"), name: "Small · Confirm too small to answer" };
 export const ScreenDataSourceForm80 = { ...by("Data source form: 80×24"), name: "Small · Data source form (80×24)" };
 export const ScreenUpdateChannel = { ...by("Update channel"), name: "Screen · Update channel" };
+export const ScreenGridAlign = { ...by("Grid alignment"), name: "Screen · Grid alignment" };
+export const ScreenGridAlignChanged = { ...by("Grid alignment: changed"), name: "Screen · Grid alignment: changed" };
+export const ScreenGridAlignPalette = { ...by("Grid alignment palette"), name: "Screen · Grid alignment palette" };
+export const ScreenGridAlignPick = { ...by("Grid alignment: pick"), name: "Screen · Grid alignment: pick" };
 // The explorer screen in each color mode the TUI picks from NO_COLOR · COLORTERM · TERM (crates/tui/src/theme.rs)
 export const ColorsTruecolor = { ...by("Colors: truecolor"), name: "Colors · truecolor" };
 export const Colors256 = { ...by("Colors: 256"), name: "Colors · 256" };
 export const Colors16 = { ...by("Colors: 16"), name: "Colors · 16" };
 export const ColorsNoColor = { ...by("Colors: NO_COLOR"), name: "Colors · NO_COLOR" };
 export const ColorsNoColorGrid = { ...by("Colors: NO_COLOR grid"), name: "Colors · NO_COLOR grid" };
+// Split panes with many tabs: the visible tab of the focused pane and of the other pane in each color mode
+export const TabBarTruecolor = { ...by("Tab bar: truecolor"), name: "Tab bar · truecolor" };
+export const TabBar16 = { ...by("Tab bar: 16 colors"), name: "Tab bar · 16 colors" };
+export const TabBarNoColor = { ...by("Tab bar: NO_COLOR"), name: "Tab bar · NO_COLOR" };

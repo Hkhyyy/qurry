@@ -2,6 +2,7 @@
 use crate::keys::disp;
 use crate::app::{App, Drag, DropTarget, FieldKind, Focus, Popup, SplitDir, TabKind, WARNING};
 use crate::tree::NodeKind;
+use qurry_core::keymap::Scope;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Tabs, Wrap};
 use serde_json::Value;
@@ -194,13 +195,8 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
             NodeKind::Db => ("⛁", C_DB),
             NodeKind::Schema => ("◇", Color::Gray),
             NodeKind::Group => ("▤", ACCENT),
-            NodeKind::Object(k) => match k.as_str() {
-                "table" | "partitioned" | "foreign" => ("▦", Color::Gray),
-                "view" | "matview" => ("◫", C_VIEW),
-                "sequence" => ("#", C_SEQUENCE),
-                "key" => ("●", type_color(&n.hint)),
-                _ => ("ƒ", C_ROUTINE),
-            },
+            NodeKind::Object(k) if k == "key" => ("●", type_color(&n.hint)),
+            NodeKind::Object(k) => object_glyph(k).unwrap_or(("ƒ", C_ROUTINE)),
             NodeKind::Column { pk, .. } => (if *pk { "⚿" } else { "·" }, if *pk { Color::Yellow } else { DIM }),
             NodeKind::Info => ("", DANGER),
         };
@@ -316,19 +312,43 @@ fn draw_panes(f: &mut Frame, app: &mut App, p: &crate::panes::Pane, area: Rect, 
     }
 }
 
+/// Explorer tree object kind → glyph and color (the tree, and the tabs that show the object)
+fn object_glyph(kind: &str) -> Option<(&'static str, Color)> {
+    Some(match kind {
+        "table" | "partitioned" | "foreign" => ("▦", Color::Gray),
+        "view" | "matview" => ("◫", C_VIEW),
+        "sequence" => ("#", C_SEQUENCE),
+        "routine" | "function" | "procedure" => ("ƒ", C_ROUTINE),
+        _ => return None,
+    })
+}
+
+/// Tab glyph (like the GUI's TabIcon) for the tab bar, Recent Tabs and Search Everywhere: a table tab shows its object's
+/// tree glyph, a DDL tab that glyph + ≡ (text), other text (diagram) ≡. Uncolored in the tab bar: it takes the tab's own
+/// colors, so it reads on a Data Source color and in 16 colors / NO_COLOR
+fn tab_glyph(kind: &TabKind) -> String {
+    match kind {
+        TabKind::Console(_) => "❯".into(),
+        TabKind::Table(t) => object_glyph(&t.kind).map_or("▦", |g| g.0).into(),
+        TabKind::Text(t) => object_glyph(&t.kind).map_or("≡".into(), |g| format!("{}≡", g.0)),
+        TabKind::Dba(_) => "◔".into(),
+        TabKind::Redis(_) => "◆".into(),
+    }
+}
+
 /// One pane: tab bar + visible tab. g = None means an unsplit screen (all tabs)
 fn draw_group(f: &mut Frame, app: &mut App, g: Option<usize>, area: Rect, focused: bool) {
     use unicode_width::UnicodeWidthStr;
     let [bar, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(3)]).areas(area);
     let idx: Vec<usize> = (0..app.tabs.len()).filter(|&i| g.is_none_or(|g| app.tabs[i].group == g)).collect();
     let shown = if focused { app.active } else { g.and_then(|g| app.group_tab(g)).unwrap_or(app.active) };
-    // Tab width: the Tabs widget draws " title " + "│". " " + icon(2) + title + " *"? + " "
+    // Tab width: the Tabs widget draws " title " + "│". " " + glyph + " " + title + " *"? + " "
     let widths: Vec<u16> = idx
         .iter()
         .map(|&i| {
             let t = &app.tabs[i];
             let dirty = matches!(&t.kind, TabKind::Table(tt) if tt.grid.as_ref().map(|g| g.dirty()).unwrap_or(false));
-            1 + 2 + app.tab_label(t).width() as u16 + if dirty { 2 } else { 0 } + 1
+            1 + tab_glyph(&t.kind).width() as u16 + 1 + app.tab_label(t).width() as u16 + if dirty { 2 } else { 0 } + 1
         })
         .collect();
     let sel = idx.iter().position(|&i| i == shown).unwrap_or(0);
@@ -348,26 +368,30 @@ fn draw_group(f: &mut Frame, app: &mut App, g: Option<usize>, area: Rect, focuse
         .iter()
         .map(|&i| {
             let t = &app.tabs[i];
-            let icon = match t.kind {
-                TabKind::Console(_) => "⌘ ",
-                TabKind::Table(_) => "▦ ",
-                TabKind::Text(_) => "ƒ ",
-                TabKind::Dba(_) => "◉ ",
-                TabKind::Redis(_) => "◆ ",
-            };
             let dirty = matches!(&t.kind, TabKind::Table(tt) if tt.grid.as_ref().map(|g| g.dirty()).unwrap_or(false));
             let c = app.conn_color(&t.conn).and_then(|c| hex(&c));
-            let l = Line::from(vec![Span::raw(icon), Span::raw(app.tab_label(t)), Span::raw(if dirty { " *" } else { "" })]);
+            let l = Line::from(vec![Span::raw(format!("{} ", tab_glyph(&t.kind))), Span::raw(app.tab_label(t)), Span::raw(if dirty { " *" } else { "" })]);
             let mut st = Style::default();
             if let Some(c) = c {
                 st = st.bg(c);
             }
             if i == shown {
                 st = st.add_modifier(Modifier::BOLD);
-                let bg = if focused { c.map(lighten).unwrap_or(SEL) } else { c.unwrap_or(SEL_BLUR) };
-                st = st.fg(on(bg)).bg(bg);
-                if !focused {
-                    st = st.add_modifier(Modifier::UNDERLINED);
+                if app.color.reverses_selection() {
+                    // 16 colors / NO_COLOR: a lighter hue of the Data Source color is often the same terminal color, so the
+                    // focused pane's tab is drawn in reverse video — its own color inverted, so a [PROD] tab stays red (SEL
+                    // when it has none) — and the others' underlined on their own color
+                    st = match (focused, c) {
+                        (true, Some(_)) => st.add_modifier(Modifier::REVERSED),
+                        (true, None) => st.bg(SEL),
+                        (false, _) => st.add_modifier(Modifier::UNDERLINED),
+                    };
+                } else {
+                    let bg = if focused { c.map(lighten).unwrap_or(SEL) } else { c.unwrap_or(SEL_BLUR) };
+                    st = st.fg(on(bg)).bg(bg);
+                    if !focused {
+                        st = st.add_modifier(Modifier::UNDERLINED);
+                    }
                 }
             }
             l.style(st)
@@ -382,6 +406,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
     // Unfocused panes are drawn like Tree focus (dimmed border·cursor)
     let focus = if focused { app.focus } else { Focus::Tree };
     let color = app.color;
+    let align = app.align.clone();
     let ro = app.tabs.get(idx).and_then(|t| app.conn(&t.conn)).map(|c| c.config.read_only).unwrap_or(false);
     let pct = app.console_pct;
     // Rebindable commands are shown with their first key in the current keymap
@@ -457,7 +482,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 f.render_widget(p, res);
             } else if let Some(g) = &mut c.grid {
                 let t = format!(" {} — {}{} rows ({k_out}: output) ", c.result_title, g.rows(), if g.result.truncated { "+" } else { "" });
-                g.render(f, res, t, focus == Focus::Grid, color);
+                g.render(f, res, t, focus == Focus::Grid, color, &align);
             }
             if let (Some((x, y)), Some(cmp)) = (caret, &c.complete) {
                 draw_completion(f, cmp, x, y);
@@ -495,18 +520,27 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 let pend = if g.dirty() { format!(" · {} pending ({k_submit} submit, {} revert)", g.edits.len() + g.deleted.len() + g.added, disp("⌃z")) } else { String::new() };
                 let rows = if tt.error.is_some() && !g.dirty() { "query failed — no rows".to_string() } else { format!("{}{} rows", g.rows(), if g.result.truncated { "+" } else { "" }) };
                 let t = format!(" {}.{} — {rows}{}{}{} ", tt.schema, tt.table, if tt.pk.is_empty() { " · no PK (read-only)" } else { "" }, if ro { " · read-only" } else { "" }, pend);
-                g.render(f, grid, t, focus == Focus::Grid, color);
+                g.render(f, grid, t, focus == Focus::Grid, color, &align);
             } else {
                 let msg = if tt.error.is_some() { String::new() } else { format!("Loading… {}", took.as_deref().unwrap_or("")) };
                 f.render_widget(Paragraph::new(msg).block(panel(format!(" {}.{} ", tt.schema, tt.table), focused)), grid);
             }
         }
         TabKind::Text(t) => {
+            // A table's DDL: v switches to the Structure view (sections as tables)
+            let view = match (&t.table, t.structure_view) {
+                (Some(_), true) => "Structure · v SQL · ",
+                (Some(_), false) => "v Structure · ",
+                (None, _) => "",
+            };
+            let text = crate::structure::body(t, body.width.saturating_sub(2) as usize);
             // Don't scroll past the end (so the last line sits at the bottom)
-            let lines = t.text.lines().count() as u16;
-            t.scroll = t.scroll.min(lines.saturating_sub(body.height.saturating_sub(2)));
-            let p = Paragraph::new(t.text.as_str()).scroll((t.scroll, 0)).block(panel(format!(" {title} — {lines} lines · ↑↓ PgUp/PgDn wheel scroll · y copies all "), focus != Focus::Tree));
+            let lines = text.lines.len() as u16;
+            let scroll = t.scroll.min(lines.saturating_sub(body.height.saturating_sub(2)));
+            let copies = if t.table.is_some() { "y copies the SQL" } else { "y copies all" };
+            let p = Paragraph::new(text).scroll((scroll, 0)).block(panel(format!(" {title} — {view}{lines} lines · ↑↓ PgUp/PgDn scroll · {copies} "), focus != Focus::Tree));
             f.render_widget(p, body);
+            t.scroll = scroll;
             if focused {
                 app.hits.text = body;
             }
@@ -528,10 +562,10 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                     let age = d.loaded.map(|t| format!(" from {} s ago", t.elapsed().as_secs())).unwrap_or_default();
                     let text = format!(" Refresh failed, showing data{age}: {}", e.lines().next().unwrap_or(""));
                     f.render_widget(Paragraph::new(text).style(Style::default().fg(WARN)).wrap(Wrap { trim: false }), msg);
-                    g.render(f, rest, title, focus == Focus::Grid, color);
+                    g.render(f, rest, title, focus == Focus::Grid, color, &align);
                     area = rest;
                 }
-                (Some(g), None) => g.render(f, grid, title, focus == Focus::Grid, color),
+                (Some(g), None) => g.render(f, grid, title, focus == Focus::Grid, color, &align),
                 (None, None) => f.render_widget(Paragraph::new("Loading…").block(panel(title, focus == Focus::Grid)), grid),
             }
             if focused {
@@ -582,7 +616,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                     let ttl = if d.ttl >= 0 { format!("TTL {}s", d.ttl / 1000) } else { "no TTL".into() };
                     let title = format!(" {} {key} · {} · {} {} ", d.ty.to_uppercase(), ttl, d.length, if d.ty == "string" { "bytes" } else { "items" });
                     match &mut r.value {
-                        Some(g) => g.render(f, right, title, vf, color),
+                        Some(g) => g.render(f, right, title, vf, color, &align),
                         None => {
                             f.render_widget(Paragraph::new(r.text.as_deref().unwrap_or_default()).wrap(Wrap { trim: false }).block(panel(title, vf)), right);
                         }
@@ -651,9 +685,12 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
     let key = |a: A| app.keys.keys(a).first().map(|k| disp(k));
     let fixed = |k: &str, l: &'static str| Some((disp(k), l));
     let cmd = |a: A, l: &'static str| key(a).map(|k| (k, l));
+    // Pane keys (rebindable: F1 › Database Explorer keys / Data grid keys)
+    let pane = |pane: Scope, a: A, l: &'static str| app.keys.slot_keys(crate::keys::Slot { action: a, pane }).first().map(|k| (crate::keys::pane_disp(k), l));
+    let (tree, grid) = (|a, l| pane(Scope::Tree, a, l), |a, l| pane(Scope::Grid, a, l));
     let (ctx, glob) = match app.focus {
         Focus::Tree => (
-            vec![fixed("Enter", "open"), fixed("F4", "console"), fixed("s", "schemas"), fixed("/", "filter"), fixed("n", "new"), fixed("e", "edit"), fixed("w", "workspace"), fixed("r", "refresh"), cmd(A::Ddl, "DDL")],
+            vec![fixed("Enter", "open"), fixed("F4", "console"), tree(A::ManageSchemas, "schemas"), fixed("/", "filter"), tree(A::NewDataSource, "new"), tree(A::EditDataSource, "edit"), tree(A::WsMoveConn, "workspace"), tree(A::Refresh, "refresh"), cmd(A::Ddl, "DDL")],
             vec![cmd(A::SearchEverywhere, "search"), cmd(A::Palette, "actions"), cmd(A::Help, "keys")],
         ),
         Focus::Editor => (
@@ -663,10 +700,12 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
         Focus::Grid => (
             match app.tabs.get(app.active).map(|t| &t.kind) {
                 Some(TabKind::Table(_)) => vec![
-                    fixed("Enter", "edit"), fixed("a", "add"), fixed("d", "delete"), fixed("n", "NULL"), cmd(A::Submit, "submit"), fixed("⌃z", "revert"), fixed("w", "where"), fixed("o", "order"), fixed("s", "sort"), fixed("x", "export"),
+                    fixed("Enter", "edit"), grid(A::AddRow, "add"), grid(A::DeleteRow, "delete"), grid(A::SetNull, "NULL"), cmd(A::Submit, "submit"), grid(A::Revert, "revert"), fixed("w", "where"), fixed("o", "order"), fixed("s", "sort"), grid(A::ExportCsv, "export"),
                 ],
                 Some(TabKind::Redis(r)) if r.focus_value => vec![fixed("e", "edit"), fixed("a", "add"), fixed("x", "delete"), fixed("Esc", "keys")],
                 Some(TabKind::Redis(_)) => vec![fixed("Enter", "value"), fixed("/", "pattern"), fixed("a", "add"), fixed("D", "del key"), fixed("t", "TTL"), fixed("R", "rename"), fixed(":", "command")],
+                Some(TabKind::Text(t)) if t.structure_view => vec![fixed("v", "SQL"), fixed("r", "reload"), fixed("y", "copy"), fixed("Esc", "explorer")],
+                Some(TabKind::Text(t)) if t.table.is_some() => vec![fixed("v", "structure"), fixed("y", "copy"), fixed("Esc", "explorer")],
                 Some(TabKind::Text(_)) => vec![fixed("y", "copy"), fixed("Esc", "explorer")],
                 Some(TabKind::Dba(d)) => {
                     let has = |t: Option<bool>| d.info.as_ref().is_some_and(|i| i.actions.iter().any(|a| matches!(a, qurry_core::dba::Action::Kill { terminate, .. } if t.is_none_or(|t| *terminate == t))));
@@ -681,7 +720,7 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
                     v.extend([fixed("Enter", "query→console"), fixed("g", "SQL"), fixed("y", "copy")]);
                     v
                 }
-                _ => vec![fixed("s", "sort"), fixed("y", "copy"), fixed("x", "export"), fixed("Esc", "editor")],
+                _ => vec![fixed("s", "sort"), fixed("y", "copy"), grid(A::ExportCsv, "export"), fixed("Esc", "editor")],
             },
             vec![cmd(A::NewConsole, "console"), cmd(A::RecentTabs, "tabs"), cmd(A::SearchEverywhere, "search"), cmd(A::Palette, "actions")],
         ),
@@ -818,16 +857,24 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             }
             lines.push(Line::raw(""));
             lines.push(section("Commands — ↑↓ select · Enter change · a add key · Del reset to default"));
-            let top = lines.len();
-            for (i, (a, _)) in crate::keys::DEFAULT_KEYS.iter().enumerate() {
-                let custom = app.keys.is_custom(*a);
-                let keys = if i == *sel && record.is_some() { "press a key… (Esc cancels)".to_string() } else { app.keys.label(*a) };
-                lines.push(key_row(&keys, crate::app::title(*a), 30, custom, i == *sel));
+            // Every command (with a default key first), then the keys that work only in the explorer or the grid
+            let mut sel_line = 0;
+            let mut pane = Scope::Global;
+            for (i, (s, _)) in crate::keys::COMMANDS.iter().enumerate() {
+                if s.pane != pane {
+                    pane = s.pane;
+                    lines.push(Line::raw(""));
+                    lines.push(section(if pane == Scope::Tree { "Database Explorer keys (when the explorer has focus)" } else { "Data grid keys (when a grid has focus)" }));
+                }
+                if i == *sel {
+                    sel_line = lines.len();
+                }
+                let keys = if i == *sel && record.is_some() { "press a key… (Esc cancels)".to_string() } else { app.keys.slot_label(*s) };
+                lines.push(key_row(&keys, crate::app::title(s.action), 30, app.keys.is_custom(*s), i == *sel));
             }
             lines.push(Line::raw(""));
             // Fixed key list: selectable continuing from the number after Commands (not rebindable)
-            let mut i = crate::keys::DEFAULT_KEYS.len();
-            let mut sel_line = top + *sel;
+            let mut i = crate::keys::COMMANDS.len();
             for (title, rows) in crate::help::HELP {
                 lines.push(section(disp(title)));
                 for (k, d) in *rows {
@@ -971,7 +1018,12 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                 .take(h)
                 .map(|(i, it)| {
                     // Key labels inside names·hints follow the screen rules too ("Ctrl+Z (grid)" → ⌃z)
-                    ListItem::new(Row::new(disp(&it.label)).hint(format!(" {}", disp(&it.hint))).selected(i == sel, true).line())
+                    let mut row = Row::new(disp(&it.label));
+                    // Tab rows (Recent Tabs, Search Everywhere): the tab bar's glyph
+                    if let Some(t) = match it.action { crate::app::PAction::Tab(id) => app.tabs.iter().find(|t| t.id == id), _ => None } {
+                        row = row.lead(icon(&tab_glyph(&t.kind), Color::Gray));
+                    }
+                    ListItem::new(row.hint(format!(" {}", disp(&it.hint))).selected(i == sel, true).line())
                 })
                 .collect();
             p.sel = sel;

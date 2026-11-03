@@ -25,8 +25,10 @@ import {
   Select,
   SectionTitle,
   Spacer,
+  TabItem,
   Table,
   Tabs,
+  TabStrip,
   Td,
   Text,
   TextInput,
@@ -35,6 +37,8 @@ import {
   Toolbar,
   ToolbarSep,
 } from "..";
+import { connTabVars, type Theme } from "../../lib/theme";
+import { TabIcon } from "../icons";
 
 /** Organisms: blocks made of molecules — toolbar · dialog · confirm dialog · menu · popover · list · table · form */
 const meta: Meta = { title: "GUI/3 Organisms" };
@@ -287,3 +291,65 @@ export const ConfirmChoice: S = {
   parameters: { layout: "fullscreen" },
   render: () => <OpenConfirm title="Switch to Auto" message="This console has uncommitted changes." okLabel="Commit and Switch" cancelLabel="Stay in Manual" />,
 };
+
+// ───────── Editor tab bar: the active tab in each theme, split panes, many tabs ─────────
+/** kind / obj: tab kind and the object kind it shows (the icon comes from TabIcon, as in the app) */
+type DemoTab = { label: string; kind: string; obj?: string; color?: string };
+const PROD = "#6e2a2a";
+const DEV = "#5f5b24";
+const MYSQL = "#22524f";
+const LEFT: DemoTab[] = [
+  { label: "users", kind: "table", obj: "table", color: DEV },
+  { label: "active_users", kind: "table", obj: "view", color: DEV },
+  { label: "console [PROD] shop_app", kind: "console", color: PROD },
+  { label: "active_users [DDL]", kind: "ddl", obj: "view", color: PROD },
+  { label: "Sessions", kind: "dba" },
+  { label: "public.payments", kind: "table", obj: "table", color: MYSQL },
+];
+const RIGHT: DemoTab[] = [
+  { label: "console [DEV] shop_app", kind: "console", color: DEV },
+  { label: "refresh_stats [DDL]", kind: "ddl", obj: "routine", color: DEV },
+  { label: "customers", kind: "table", obj: "table" },
+];
+const MANY: DemoTab[] = Array.from({ length: 16 }, (_, i) => (i % 3 === 0 ? { label: `console ${i + 1}`, kind: "console", color: [PROD, DEV, MYSQL][(i / 3) % 3] } : { label: `table_${i + 1}`, kind: "table", obj: "table" }));
+
+/** One editor group as the app draws it (useEditorGroups): tab strip over the work area. Click a tab or a pane to activate / focus it */
+function DemoGroup({ tabs, theme, state, onFocus }: { tabs: DemoTab[]; theme: Theme; state?: "focused" | "unfocused"; onFocus?: () => void }) {
+  const [active, setActive] = useState(tabs.length >> 1);
+  return (
+    <div className={"panel editor-group" + (state ? " " + state : "")} style={{ flex: 1, minWidth: 0 }} onMouseDownCapture={onFocus}>
+      <TabStrip className="tabs" activeKey={String(active)} overflow={tabs.map((t, i) => ({ key: String(i), label: t.label, active: i === active, onSelect: () => setActive(i) }))}>
+        {tabs.map((t, i) => (
+          <TabItem key={i} icon={<TabIcon kind={t.kind} obj={t.obj} />} label={t.label} active={i === active} onClose={() => {}} onMouseDown={() => setActive(i)} style={connTabVars(t.color, theme)} />
+        ))}
+      </TabStrip>
+      <div className="work-area" style={{ height: 56, boxShadow: tabs[active].color ? `inset 0 2px 0 ${tabs[active].color}` : undefined }} />
+    </div>
+  );
+}
+
+function TabBars({ theme }: { theme: Theme }) {
+  const [focused, setFocused] = useState(0);
+  const state = (g: number) => (focused === g ? "focused" : "unfocused");
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16, width: 900 }}>
+      <Text tone="muted">One pane</Text>
+      <div style={{ display: "flex", border: "1px solid var(--ui-border)" }}>
+        <DemoGroup tabs={LEFT} theme={theme} />
+      </div>
+      <Text tone="muted">Split: the focused pane's active tab has the accent bar, the other pane's a gray one</Text>
+      <div style={{ display: "flex", gap: 1, background: "var(--ui-border)", border: "1px solid var(--ui-border)" }}>
+        <DemoGroup tabs={LEFT} theme={theme} state={state(0)} onFocus={() => setFocused(0)} />
+        <DemoGroup tabs={RIGHT} theme={theme} state={state(1)} onFocus={() => setFocused(1)} />
+      </div>
+      <Text tone="muted">Many tabs: the strip scrolls to the active tab; ▾ lists them all</Text>
+      <div style={{ display: "flex", width: 640, border: "1px solid var(--ui-border)" }}>
+        <DemoGroup tabs={MANY} theme={theme} />
+      </div>
+    </div>
+  );
+}
+
+export const TabBarDark: S = { name: "Tab bar — dark", globals: { theme: "dark" }, render: () => <TabBars theme="dark" /> };
+export const TabBarLight: S = { name: "Tab bar — light", globals: { theme: "light" }, render: () => <TabBars theme="light" /> };
+export const TabBarHc: S = { name: "Tab bar — high contrast", globals: { theme: "hc" }, render: () => <TabBars theme="hc" /> };

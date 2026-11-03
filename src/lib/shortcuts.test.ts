@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { KEYMAP, rowDesc } from "./keymap";
 import { shared } from "./shared";
-import { bindable, bindings, conflicts, keyLabel, SHORTCUTS } from "./shortcuts";
+import { bindable, bindableIn, bindings, conflicts, keyLabel, Scope, SHORTCUTS } from "./shortcuts";
 
 describe("keyLabel", () => {
   it("⌘/⌃/⌥ + letter without Shift is lowercase (uppercase = a key that needs Shift)", () => {
@@ -48,6 +48,9 @@ describe("bindable / conflicts", () => {
 
   it("answer as qurry_shared::keymap does (through WASM)", () => {
     for (const spec of specs) expect([spec, bindable(spec)]).toEqual([spec, shared().bindable(spec)]);
+    const scopes: Scope[] = ["global", "tree", "editor", "grid"];
+    for (const spec of [...specs, "Delete", "Mod+Backspace", "Insert", "Shift+Enter", "Shift+Delete", "N"])
+      for (const scope of scopes) expect([spec, scope, bindableIn(spec, scope)]).toEqual([spec, scope, shared().bindableIn(spec, scope)]);
     for (const s of SHORTCUTS)
       for (const spec of specs) {
         const wasm = shared().keyConflicts(s.id, s.scope, spec, SHORTCUTS.map((x) => ({ id: x.id, scope: x.scope, keys: bindings(x.id) })));
@@ -62,7 +65,7 @@ describe("bindable / conflicts", () => {
     expect(fresh.bindable("Mod+K")).toBe(true);
     expect(fresh.bindable("K")).toBe(false);
     expect(fresh.conflicts("tree.duplicate", "Mod+D").map((s) => s.id)).toEqual([]);
-    expect(fresh.conflicts("goto.file", "Mod+D").map((s) => s.id)).toEqual(["tree.duplicate", "editor.duplicate"]);
+    expect(fresh.conflicts("goto.file", "Mod+D").map((s) => s.id)).toEqual(["tree.duplicate", "editor.duplicate", "grid.cloneRow"]);
     // Labels as the module draws them, not the stored "Mod+O"
     const mac = navigator.platform.toLowerCase().includes("mac");
     for (const spec of specs) expect([spec, fresh.formatSpec(spec)]).toEqual([spec, shared().formatSpec(spec, mac)]);
@@ -93,9 +96,37 @@ describe("docs/shortcuts-gui.md", () => {
     for (const text of Object.values(docs)) {
       for (const row of KEYMAP.flatMap((s) => s.rows)) {
         if (row[0] !== null) continue;
-        const keys = SHORTCUTS.find((s) => s.id === row[1])!.keys.map((k) => shared().formatSpec(k, true)).join(" / ");
+        const keys = SHORTCUTS.find((s) => s.id === row[1])!.keys.map((k) => shared().formatSpec(k, true)).join(" / ") || "—";
         expect(text).toContain(`| ${cell(esc(keys))} | ${esc(keyLabel(rowDesc(row)))} |`);
       }
     }
+  });
+});
+
+describe("command ids", () => {
+  it("every id the GUI runs or labels is a row of the table, and every GUI row is run from a key handler, menu, toolbar or Find Action", () => {
+    // keymap.ts only lists rows for the Keymap Reference, so it doesn't count as running them
+    const files = import.meta.glob<string>(["../**/*.{ts,tsx}", "!../**/*.test.ts", "!./keymap.ts", "!./shortcuts.ts", "!../ui/stories/**"], { query: "?raw", import: "default", eager: true });
+    const ids = new Set(SHORTCUTS.map((s) => s.id));
+    const used = new Set<string>();
+    const patterns = [
+      // cmd("tab.pin"), hit(spec, "grid.find"), is("tab.prev"), keysOf("editor.run"), sk("theme"), bindings("tree.refresh")
+      /\b(?:cmd|hit|is|keysOf|sk|bindings)\((?:spec, )?"([\w.]+)"\)/g,
+      /\bkeyTitle\("[^"]*", "([\w.]+)"\)/g,
+      // The console editor's Monaco actions: act("dbtool.reformat", "Reformat Code", "editor.reformat", …)
+      /\bact\("[^"]*", "[^"]*", "([\w.]+)"/g,
+      // The global key handler's table: "tree.ddl": () => …, refresh: () => …, "tab.next": tabStep
+      /^\s+"?([\w.]+)"?: (?:\(\) =>|tabStep)/gm,
+      // FIXED keys: ["switcher", (e) => …]
+      /^\s+\["([\w.]+)", \(e\) =>/gm,
+    ];
+    for (const text of Object.values(files)) {
+      for (const re of patterns) for (const m of text.matchAll(re)) used.add(m[1]);
+      // ⌘1~9: built as `ws.${n}`
+      if (text.includes("`ws.${")) for (let n = 1; n <= 9; n++) used.add(`ws.${n}`);
+    }
+    const commandLike = [...used].filter((id) => id.includes(".") || ids.has(id));
+    expect(commandLike.filter((id) => !ids.has(id) && !["toolwindow.hide", "switcher"].includes(id))).toEqual([]);
+    expect(SHORTCUTS.map((s) => s.id).filter((id) => !used.has(id))).toEqual([]);
   });
 });

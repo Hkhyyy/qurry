@@ -3,7 +3,7 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { api, ConnectionView, dialectOf, meta, targetId } from "../../lib/api";
 import { askText } from "../../lib/dialogs";
 import { leaf, leaves, MAX_PANES, Pane, splitPane } from "../../lib/panes";
-import { connBg, connStripe, type Theme } from "../../lib/theme";
+import { connTabVars, type Theme } from "../../lib/theme";
 import { ConsoleEditor } from "../../components/ConsoleEditor";
 import { ConsolePane } from "../../components/ConsolePane";
 import { DbaReport } from "../../components/DbaReport";
@@ -14,10 +14,15 @@ import { RagView } from "../../components/RagView";
 import { RedisBrowser } from "../../components/RedisBrowser";
 import { TableEditor } from "../../components/TableEditor";
 import { TlsFix } from "../../components/TlsFix";
-import { Spacer, TabItem, TabStrip, Text, ToolButton, Toolbar } from "../../ui";
+import { Spacer, TabItem, Tabs, TabStrip, Text, ToolbarSep, ToolButton, Toolbar } from "../../ui";
+import { TableStructureView } from "../../components/TableStructure";
+import { setDdlView, type DdlView } from "../../lib/structure";
+import { TabIcon } from "../../ui/icons";
+import type { NodeInfo } from "../../components/SchemaTree";
 import type { useConsole } from "../console/useConsole";
 import type { useExplorer } from "../explorer/useExplorer";
 import type { useJobs } from "../jobs/useJobs";
+import { cmd, keyTitle } from "../../lib/shortcuts";
 import { isMac, sk } from "../shortcuts/labels";
 import { closeTabs, moveTo, patch, settle, sqlOf, togglePin } from "../tabs/ops";
 import { editorApis, liveSql, setActiveIds, setFocused, setPanes, setTabs, useTabsStore } from "../tabs/store";
@@ -64,6 +69,9 @@ export function useEditorGroups({
       return next;
     });
   };
+
+  /** DDL tab → Structure: Reload remounts the tab's view (a new key), which loads it again */
+  const [structureRev, setStructureRev] = useState<Record<string, number>>({});
 
   // ───────── Tab drag and drop (DataGrip: reorder / move to another group / drag to an edge to split) ─────────
   const [dragId, setDragId] = useState<string | null>(null);
@@ -112,8 +120,8 @@ export function useEditorGroups({
     const open = useTabsStore.getState().tabs.find((t) => snapKey(t) === snap.key);
     if (open) return activate(open);
     if (snap.kind === "table" && snap.edit) {
-      openTableTab(c, snap.edit.schema, snap.edit.table, snap.database, undefined, snap.where, snap.orderBy);
-    } else addTab(c, snap.kind, { title: snap.title, sql: snap.sql, database: snap.database });
+      openTableTab(c, snap.edit.schema, snap.edit.table, snap.database, undefined, snap.where, snap.orderBy, snap.objKind);
+    } else addTab(c, snap.kind, { title: snap.title, sql: snap.sql, database: snap.database, edit: snap.edit, objKind: snap.objKind });
   };
   const reopenClosed = () => {
     const [snap, ...rest] = useTabsStore.getState().closedStack;
@@ -128,14 +136,50 @@ export function useEditorGroups({
     const r = splitPane(useTabsStore.getState().panes, t.group, dir);
     if (!r) return setStatus(`Up to ${MAX_PANES} panes`);
     setPanes(r.pane);
-    if (t.kind === "table" && t.edit) openTableTab(c, t.edit.schema, t.edit.table, t.database, r.g, t.where, t.orderBy);
-    else addTab(c, t.kind, { title: t.kind === "console" ? `${t.title} (copy)` : t.title, sql: sqlOf(t), database: t.database, group: r.g });
+    if (t.kind === "table" && t.edit) openTableTab(c, t.edit.schema, t.edit.table, t.database, r.g, t.where, t.orderBy, t.objKind);
+    else addTab(c, t.kind, { title: t.kind === "console" ? `${t.title} (copy)` : t.title, sql: sqlOf(t), database: t.database, edit: t.edit, group: r.g, objKind: t.objKind });
   };
 
-  const openTabMenu = (e: React.MouseEvent, t: Tab) => {
-    e.preventDefault();
-    e.stopPropagation();
-    activate(t);
+  /** The tab's context menu. The global key handler runs a command's entry for the active tab by its id */
+  // ── DDL tab toolbar (its commands' keys act on the active DDL tab) ──
+  const pickDdlView = (t: Tab, v: DdlView) => {
+    patch(t.id, { ddlView: v });
+    setDdlView(v);
+  };
+  const reloadStructure = (t: Tab) => setStructureRev((r) => ({ ...r, [t.id]: (r[t.id] ?? 0) + 1 }));
+  const copyDdl = (t: Tab) => {
+    navigator.clipboard.writeText(t.sql);
+    setStatus("Copied to clipboard");
+  };
+  const saveDdl = async (t: Tab) => {
+    try {
+      const path = await api.saveTextFile(`${t.title.replace(/^SQL Generator: | \[DDL\]$/g, "")}.sql`, t.sql);
+      if (path) setStatus(`Saved ${path}`);
+    } catch (e) {
+      setStatus(String(e));
+    }
+  };
+  const runDdl = (t: Tab) => {
+    const c = conns.find((x) => x.id === t.connId);
+    if (c) openConsole(c, t.database, t.sql);
+  };
+  const ddlCommands = (t: Tab): MenuItem[] =>
+    t.kind !== "ddl"
+      ? []
+      : [
+          ...(t.edit
+            ? ([
+                { label: "SQL", ...cmd("ddl.sql"), action: () => pickDdlView(t, "sql") },
+                { label: "Structure", ...cmd("ddl.structure"), action: () => pickDdlView(t, "structure") },
+                { label: "Reload", ...cmd("ddl.reload"), action: () => reloadStructure(t), disabled: (t.ddlView ?? "sql") !== "structure" },
+              ] as MenuItem[])
+            : []),
+          { label: "Copy", ...cmd("ddl.copy"), action: () => copyDdl(t) },
+          { label: "Save to File", ...cmd("ddl.save"), action: () => void saveDdl(t) },
+          { label: "Run in Console", ...cmd("ddl.run"), action: () => runDdl(t) },
+        ];
+
+  const tabMenu = (t: Tab): MenuItem[] => {
     const sameGroup = tabs.filter((x) => x.group === t.group);
     const idx = sameGroup.findIndex((x) => x.id === t.id);
     const ls = leaves(panes);
@@ -143,32 +187,32 @@ export function useEditorGroups({
     const canSplit = ls.length < MAX_PANES;
     const c = conns.find((x) => x.id === t.connId);
     const items: MenuItem[] = [
-      { label: "Close", shortcut: sk("tab.close"), action: () => closeTabs([t.id]) },
-      { label: "Close Other Tabs", action: () => closeTabs(sameGroup.filter((x) => x.id !== t.id && !x.pinned).map((x) => x.id)) },
-      { label: "Close All but Pinned", action: () => closeTabs(sameGroup.filter((x) => !x.pinned).map((x) => x.id)) },
-      { label: "Close Tabs to the Left", action: () => closeTabs(sameGroup.slice(0, idx).filter((x) => !x.pinned).map((x) => x.id)), disabled: idx === 0 },
-      { label: "Close Tabs to the Right", action: () => closeTabs(sameGroup.slice(idx + 1).filter((x) => !x.pinned).map((x) => x.id)), disabled: idx === sameGroup.length - 1 },
-      { label: "Close All Tabs", action: () => closeTabs(sameGroup.map((x) => x.id)) },
-      { label: "Reopen Closed Tab", action: reopenClosed, disabled: useTabsStore.getState().closedStack.length === 0 },
+      { label: "Close", ...cmd("tab.close"), action: () => closeTabs([t.id]) },
+      { label: "Close Other Tabs", ...cmd("tab.closeOthers"), action: () => closeTabs(sameGroup.filter((x) => x.id !== t.id && !x.pinned).map((x) => x.id)) },
+      { label: "Close All but Pinned", ...cmd("tab.closeAllButPinned"), action: () => closeTabs(sameGroup.filter((x) => !x.pinned).map((x) => x.id)) },
+      { label: "Close Tabs to the Left", ...cmd("tab.closeLeft"), action: () => closeTabs(sameGroup.slice(0, idx).filter((x) => !x.pinned).map((x) => x.id)), disabled: idx === 0 },
+      { label: "Close Tabs to the Right", ...cmd("tab.closeRight"), action: () => closeTabs(sameGroup.slice(idx + 1).filter((x) => !x.pinned).map((x) => x.id)), disabled: idx === sameGroup.length - 1 },
+      { label: "Close All Tabs", ...cmd("tab.closeAll"), action: () => closeTabs(sameGroup.map((x) => x.id)) },
+      { label: "Reopen Closed Tab", ...cmd("tab.reopen"), action: reopenClosed, disabled: useTabsStore.getState().closedStack.length === 0 },
       { separator: true },
-      { label: t.pinned ? "Unpin Tab" : "Pin Tab", action: () => togglePin(t) },
+      { label: t.pinned ? "Unpin Tab" : "Pin Tab", ...cmd("tab.pin"), action: () => togglePin(t) },
       {
         label: "Copy Path/Reference…",
         submenu: [
-          { label: "Copy Reference", action: () => navigator.clipboard.writeText(t.edit ? `${t.edit.schema}.${t.edit.table}` : t.title) },
-          ...(c ? ([{ label: "Copy Data Source Name", action: () => navigator.clipboard.writeText(c.name) }] as MenuItem[]) : []),
+          { label: "Copy Reference", ...cmd("tab.copyRef"), action: () => navigator.clipboard.writeText(t.edit ? `${t.edit.schema}.${t.edit.table}` : t.title) },
+          ...(c ? ([{ label: "Copy Data Source Name", ...cmd("tab.copyConnName"), action: () => navigator.clipboard.writeText(c.name) }] as MenuItem[]) : []),
         ],
       },
       { separator: true },
-      { label: "Split Right", action: () => splitClone(t, "right"), disabled: !canSplit },
-      { label: "Split Down", action: () => splitClone(t, "down"), disabled: !canSplit },
-      { label: "Split and Move Right", action: () => splitAndMove(t, "right"), disabled: !canSplit || sameGroup.length < 2 },
-      { label: "Split and Move Down", action: () => splitAndMove(t, "down"), disabled: !canSplit || sameGroup.length < 2 },
+      { label: "Split Right", ...cmd("split.right"), action: () => splitClone(t, "right"), disabled: !canSplit },
+      { label: "Split Down", ...cmd("split.down"), action: () => splitClone(t, "down"), disabled: !canSplit },
+      { label: "Split and Move Right", ...cmd("split.moveRight"), action: () => splitAndMove(t, "right"), disabled: !canSplit || sameGroup.length < 2 },
+      { label: "Split and Move Down", ...cmd("split.moveDown"), action: () => splitAndMove(t, "down"), disabled: !canSplit || sameGroup.length < 2 },
       ...(split
         ? ([
-            { label: "Move To Next Group", action: () => moveTo(t.id, other) },
-            { label: "Open In Next Group", action: () => { const cc = c; if (!cc) return; if (t.kind === "table" && t.edit) openTableTab(cc, t.edit.schema, t.edit.table, t.database, other, t.where, t.orderBy); else addTab(cc, t.kind, { title: t.title, sql: sqlOf(t), database: t.database, group: other }); } },
-            { label: "Unsplit All", action: unsplit },
+            { label: "Move To Next Group", ...cmd("tab.moveNext"), action: () => moveTo(t.id, other) },
+            { label: "Open In Next Group", ...cmd("tab.openNext"), action: () => { const cc = c; if (!cc) return; if (t.kind === "table" && t.edit) openTableTab(cc, t.edit.schema, t.edit.table, t.database, other, t.where, t.orderBy, t.objKind); else addTab(cc, t.kind, { title: t.title, sql: sqlOf(t), database: t.database, edit: t.edit, group: other, objKind: t.objKind }); } },
+            { label: "Unsplit All", ...cmd("unsplit"), action: unsplit },
           ] as MenuItem[])
         : []),
       { separator: true },
@@ -179,6 +223,7 @@ export function useEditorGroups({
           ...(workspaces.length > 1 ? ([{ separator: true }] as MenuItem[]) : []),
           {
             label: "New Workspace…",
+            ...cmd("tab.moveToNewWs"),
             action: async () => {
               const name = (await askText("Workspace name", `Workspace ${useWorkspacesStore.getState().workspaces.length + 1}`));
               if (!name?.trim()) return;
@@ -193,10 +238,17 @@ export function useEditorGroups({
     if (t.kind === "console" && c)
       items.push(
         { separator: true },
-        { label: "Duplicate", action: () => addTab(c, "console", { title: `${t.title} (copy)`, sql: sqlOf(t), database: t.database, group: t.group }) },
-        { label: "Rename File…", shortcut: "⇧F6", action: () => renameConsole(t) },
+        { label: "Duplicate", ...cmd("tab.duplicate"), action: () => addTab(c, "console", { title: `${t.title} (copy)`, sql: sqlOf(t), database: t.database, group: t.group }) },
+        { label: "Rename File…", ...cmd("console.rename"), action: () => renameConsole(t) },
       );
-    setTabMenu({ x: e.clientX, y: e.clientY, items });
+    return items;
+  };
+
+  const openTabMenu = (e: React.MouseEvent, t: Tab) => {
+    e.preventDefault();
+    e.stopPropagation();
+    activate(t);
+    setTabMenu({ x: e.clientX, y: e.clientY, items: tabMenu(t) });
   };
 
   const renameConsole = async (t: Tab) => {
@@ -221,7 +273,7 @@ export function useEditorGroups({
     const ga = groupActive(g);
     const gConn = conns.find((c) => c.id === ga?.connId);
     return (
-      <div className={"panel editor-group" + (split && focused === g ? " focused" : "")} onMouseDownCapture={() => setFocused(g)}>
+      <div className={"panel editor-group" + (split ? (focused === g ? " focused" : " unfocused") : "")} onMouseDownCapture={() => setFocused(g)}>
         <TabStrip
           activeKey={ga?.id}
           overflow={gTabs.map((t) => ({ key: t.id, label: labelOf(t), active: t.id === ga?.id, onSelect: () => activate(t) }))}
@@ -243,8 +295,7 @@ export function useEditorGroups({
               <TabItem
                 key={t.id}
                 label={labelOf(t)}
-                icon={t.kind === "table" ? "▦" : t.kind === "ddl" ? "ƒ" : t.kind === "redis" ? "◆" : t.kind === "dba" ? "◉" : t.kind === "erd" ? "⧉" : t.kind === "migrate" ? "⇄" : t.kind === "rag" ? "✦" : "⌘"}
-                iconClass={t.kind}
+                icon={<TabIcon kind={t.kind} obj={t.objKind} />}
                 active={t.id === ga?.id}
                 pinned={t.pinned}
                 onPin={() => togglePin(t)}
@@ -255,7 +306,7 @@ export function useEditorGroups({
                   else closeTabs([t.id]);
                 }}
                 className={(t.id === dragId ? "dragging" : "") + (dropHint?.zone === "tabs" && dropHint.g === g && dropHint.beforeId === t.id ? " drop-before" : "")}
-                style={color ? { background: connBg(color, theme), boxShadow: `inset 0 2px 0 ${connStripe(color, theme)}` } : undefined}
+                style={connTabVars(color, theme)}
                 draggable
                 onDragStart={(e) => {
                   e.dataTransfer.setData("text/plain", t.id);
@@ -485,7 +536,7 @@ export function useEditorGroups({
                   onExportCsv={() => exportCsv(t)}
                   onDdl={() => {
                     const c = conns.find((x) => x.id === t.connId);
-                    if (c && t.edit) openDdl({ kind: "table", conn: c, db: t.database, schema: t.edit.schema, name: t.edit.table });
+                    if (c && t.edit) openDdl({ kind: (t.objKind ?? "table") as NodeInfo["kind"], conn: c, db: t.database, schema: t.edit.schema, name: t.edit.table });
                   }}
                   onCopyQueryToConsole={(sql) => { const c = conns.find((x) => x.id === t.connId); if (c) openConsole(c, t.database, sql); }}
                   onFindSimilar={
@@ -509,28 +560,25 @@ export function useEditorGroups({
           {/* DDL (read-only) */}
           {gTabs
             .filter((t) => t.kind === "ddl")
-            .map((t) => (
+            .map((t) => {
+              // A table's DDL also has the Structure view (openDdl sets edit for tables, buildTab its view)
+              const view = t.ddlView ?? "sql";
+              const pick = (v: DdlView) => pickDdlView(t, v);
+              return (
               <div key={t.id} className="work-layer ddl-layer" style={{ display: t.id === ga?.id ? "flex" : "none" }}>
                 <Toolbar>
                   <span className="tb-info" style={{ marginLeft: 0 }}>{t.title.startsWith("SQL Generator") ? "SQL Generator" : "DDL"} · read-only</span>
+                  {t.edit && <ToolbarSep />}
+                  {t.edit && <Tabs size="sm" label="DDL view" items={[{ id: "sql", label: "SQL" }, { id: "structure", label: "Structure" }]} value={view} onChange={pick} />}
+                  {view === "structure" && <ToolButton title={keyTitle("Reload the structure", "ddl.reload")} onClick={() => reloadStructure(t)}>Reload</ToolButton>}
                   <Spacer />
-                  <ToolButton title="Copy to Clipboard" onClick={() => { navigator.clipboard.writeText(t.sql); setStatus("Copied to clipboard"); }}>Copy</ToolButton>
-                  <ToolButton
-                    title="Save to File"
-                    onClick={async () => {
-                      try {
-                        const path = await api.saveTextFile(`${t.title.replace(/^SQL Generator: | \[DDL\]$/g, "")}.sql`, t.sql);
-                        if (path) setStatus(`Saved ${path}`);
-                      } catch (e) {
-                        setStatus(String(e));
-                      }
-                    }}
-                  >
-                    Save to File
-                  </ToolButton>
-                  <ToolButton title="Run in a console" onClick={() => { const c = conns.find((x) => x.id === t.connId); if (c) openConsole(c, t.database, t.sql); }}>Run in Console</ToolButton>
+                  <ToolButton title={keyTitle("Copy to Clipboard", "ddl.copy")} onClick={() => copyDdl(t)}>Copy</ToolButton>
+                  <ToolButton title={keyTitle("Save to File", "ddl.save")} onClick={() => void saveDdl(t)}>Save to File</ToolButton>
+                  <ToolButton title={keyTitle("Run in a console", "ddl.run")} onClick={() => runDdl(t)}>Run in Console</ToolButton>
                 </Toolbar>
-                <div className="ddl-editor">
+                {/* Stays mounted (loads once per tab, on first show; a restored or background tab doesn't connect) */}
+                {t.edit && <TableStructureView key={structureRev[t.id] ?? 0} target={t.target} schema={t.edit.schema} table={t.edit.table} visible={view === "structure" && t.id === ga?.id} onShowSql={() => pick("sql")} />}
+                <div className="ddl-editor" style={{ display: view === "sql" ? undefined : "none" }}>
                 <ConsoleEditor
                   tabId={t.id}
                   connId={t.target}
@@ -544,10 +592,11 @@ export function useEditorGroups({
                 />
                 </div>
               </div>
-            ))}
+              );
+            })}
         </div>
       </div>
     );
   };
-  return { renderPanes, splitClone, unsplit, reopen, reopenClosed, renameConsole };
+  return { renderPanes, splitClone, unsplit, reopen, reopenClosed, renameConsole, tabMenu, ddlCommands };
 }

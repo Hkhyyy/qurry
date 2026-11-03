@@ -49,7 +49,7 @@
 
 | 조각 | 규칙 |
 |---|---|
-| `Field` · `RadioGroup` · `FormSection` · `Hint` · `ColorPicker` | 라벨 + 칸 (힌트 · 오류는 아래) / 선택지마다 설명 / 구역 제목 / 작은 회색 설명 / 색 고르기 |
+| `Field` · `RadioGroup` · `FormSection` · `Hint` · `ColorPicker` | 라벨 + 칸 (힌트 · 오류는 아래; `group` = 제 라벨이 있는 칸 여럿: `<div>` 라서 라벨을 눌러도 첫 칸으로 가지 않음) / 선택지마다 설명 / 구역 제목 / 작은 회색 설명 / 색 고르기 |
 | `SearchField` | ⌕ + 입력 (+ 불러오는 중 ◌). `bare` = 팝오버 머리처럼 테두리 없이 크게 |
 | `Tabs` · `SectionTitle` · `KeyHints` | 구역 바꾸기 (`size` sm) / 목록 · 창 안의 작은 제목 / "↩ Open · ⇥ Next tab" |
 | `Notice` · `EmptyState` | 안내 · 경고 · 오류 한 덩어리 / 비어 있을 때 |
@@ -70,7 +70,7 @@
 | `List` · `ListGroup` · `DetailList` | 목록 (`boxed`, 비면 `empty`) / 목록 안 묶음 제목 / 상세 목록 |
 | `Table` · `Th` · `Td` | 작은 표 (`num` · `mono` · `muted`) |
 | `FormGrid` | 긴 설정 창: `<label>` + 칸, 줄 전체는 `FormSection` |
-| `GridHead` · `GridHeaderRow` · `GridHeaderCell` · `GridRow` · `RowNumberCell` · `GridCell` · `CellEditor` | 결과 표 칸 (상태: 선택 · 커서 · 바뀜 · 찾기 · 추가 · 지움 · null · 숫자). 가상 스크롤 · 선택은 ResultGrid. `GridHead`: header strip above the scroller (not sticky inside it), follows its scrollLeft |
+| `GridHead` · `GridHeaderRow` · `GridHeaderCell` · `GridRow` · `RowNumberCell` · `GridCell` · `CellEditor` | 결과 표 칸 (상태: 선택 · 커서 · 바뀜 · 찾기 · 추가 · 지움 · null · 숫자). 가상 스크롤 · 선택은 ResultGrid. `GridHead`: header strip above the scroller (not sticky inside it), follows its scrollLeft. `GridCell` `align`: left · right · center per value class (`lib/gridAlign.ts`, Settings › Appearance › Alignment) |
 
 아이콘 (`icons.tsx`) 은 DB 종류별 고유색을 쓴다. 테마를 따라야 하는 것 (펼침 화살표) 은 `currentColor`.
 

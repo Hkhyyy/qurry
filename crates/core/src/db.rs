@@ -304,7 +304,7 @@ pub(crate) fn int_value(v: i64) -> Value {
 }
 
 pub(crate) fn pg_value(row: &PgRow, i: usize) -> Value {
-    use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+    use chrono::NaiveTime;
     let raw = match row.try_get_raw(i) {
         Ok(r) => r,
         Err(_) => return Value::Null,
@@ -336,17 +336,11 @@ pub(crate) fn pg_value(row: &PgRow, i: usize) -> Value {
             .map(Value::from),
         "UUID" => get!(uuid::Uuid).map(|u| Value::from(u.to_string())),
         "JSON" | "JSONB" => get!(Value).map(|j| Value::from(j.to_string())),
-        "TIMESTAMP" => {
-            get!(NaiveDateTime).map(|t| Value::from(t.format("%Y-%m-%d %H:%M:%S%.f").to_string()))
+        "TIMESTAMP" | "TIMESTAMPTZ" | "DATE" => raw.as_bytes().ok().and_then(|b| pg_datetime(&ty, b)).map(Value::from),
+        "TIMESTAMP[]" | "TIMESTAMPTZ[]" | "DATE[]" => {
+            let elem = ty.trim_end_matches("[]");
+            raw.as_bytes().ok().and_then(|b| pg_array(b, &|e| pg_datetime(elem, e))).map(Value::from)
         }
-        "TIMESTAMPTZ" => get!(DateTime<Utc>).map(|t| {
-            Value::from(
-                t.with_timezone(&Local)
-                    .format("%Y-%m-%d %H:%M:%S%.f %:z")
-                    .to_string(),
-            )
-        }),
-        "DATE" => get!(NaiveDate).map(|d| Value::from(d.to_string())),
         "TIME" => get!(NaiveTime).map(|t| Value::from(t.to_string())),
         "BYTEA" => get!(Vec<u8>).map(|b| {
             let hex: String = b.iter().take(64).map(|x| format!("{x:02X}")).collect();
@@ -361,6 +355,62 @@ pub(crate) fn pg_value(row: &PgRow, i: usize) -> Value {
         let bytes = raw.as_bytes().ok();
         bytes.and_then(|b| decode_pgvector(&ty, b)).map(Value::from).unwrap_or_else(|| fallback(bytes, &ty))
     })
+}
+
+/// PostgreSQL timestamp / timestamptz / date (binary) → text. Decoded here, not with sqlx's chrono types, which panic on
+/// infinity (i64::MAX / i64::MIN microseconds, i32::MAX / i32::MIN days) and past chrono's range. Shows infinity / -infinity
+/// as psql does; None for anything chrono can't hold
+fn pg_datetime(ty: &str, b: &[u8]) -> Option<String> {
+    use chrono::{Local, NaiveDate, NaiveTime, TimeDelta};
+    let epoch = NaiveDate::from_ymd_opt(2000, 1, 1)?;
+    match ty {
+        "TIMESTAMP" | "TIMESTAMPTZ" => match i64::from_be_bytes(b.try_into().ok()?) {
+            i64::MAX => Some("infinity".into()),
+            i64::MIN => Some("-infinity".into()),
+            us => {
+                let t = epoch.and_time(NaiveTime::MIN).checked_add_signed(TimeDelta::microseconds(us))?;
+                Some(match ty {
+                    "TIMESTAMP" => t.format("%Y-%m-%d %H:%M:%S%.f").to_string(),
+                    _ => t.and_utc().with_timezone(&Local).format("%Y-%m-%d %H:%M:%S%.f %:z").to_string(),
+                })
+            }
+        },
+        "DATE" => match i32::from_be_bytes(b.try_into().ok()?) {
+            i32::MAX => Some("infinity".into()),
+            i32::MIN => Some("-infinity".into()),
+            days => Some(epoch.checked_add_signed(TimeDelta::try_days(days.into())?)?.to_string()),
+        },
+        _ => None,
+    }
+}
+
+/// PostgreSQL array of dates / times (binary) → the same text as PG's output, e.g. {infinity,NULL,"2024-01-02 00:00:00"}, each element through `elem`.
+/// Format: ndim(i32) has_null(i32) elem_oid(u32) [len(i32) lbound(i32)] × ndim, then each element as len(i32, -1 = NULL) + bytes
+fn pg_array(b: &[u8], elem: &dyn Fn(&[u8]) -> Option<String>) -> Option<String> {
+    let i32_at = |i: usize| -> Option<i32> { Some(i32::from_be_bytes(b.get(i..i + 4)?.try_into().ok()?)) };
+    let ndim = usize::try_from(i32_at(0)?).ok()?;
+    if ndim == 0 {
+        return Some("{}".into());
+    }
+    let dims: Vec<usize> = (0..ndim).map(|d| i32_at(12 + d * 8).and_then(|n| usize::try_from(n).ok())).collect::<Option<_>>()?;
+    let mut pos = 12 + ndim * 8;
+    let mut items = Vec::new();
+    for _ in 0..dims.iter().try_fold(1usize, |a, &n| a.checked_mul(n))? {
+        let len = i32_at(pos)?;
+        pos += 4;
+        if len < 0 {
+            items.push("NULL".to_string());
+            continue;
+        }
+        let s = elem(b.get(pos..pos + len as usize)?)?;
+        pos += len as usize;
+        items.push(if s.contains(' ') { format!("\"{s}\"") } else { s });
+    }
+    // Group the flat elements by each dimension, innermost first
+    for &n in dims.iter().rev() {
+        items = items.chunks(n.max(1)).map(|c| format!("{{{}}}", c.join(","))).collect();
+    }
+    items.pop()
 }
 
 /// pgvector binary → the same text as PG's text output: vector/halfvec "[1,0.5]", sparsevec "{1:0.5,3:1}/5"
@@ -568,6 +618,68 @@ mod tests {
         let err = sqlx::query("create temp table ro_probe(x int)").execute(&p).await;
         assert!(err.is_err(), "write must be rejected");
         assert!(format!("{}", err.unwrap_err()).contains("read-only"));
+    }
+
+    /// infinity sentinels show as text; values past chrono's range give None (shown as <TYPE>), never a panic (#84)
+    #[test]
+    fn pg_datetime_infinity_and_range() {
+        let ts = |v: i64| v.to_be_bytes().to_vec();
+        let d = |v: i32| v.to_be_bytes().to_vec();
+        for ty in ["TIMESTAMP", "TIMESTAMPTZ"] {
+            assert_eq!(pg_datetime(ty, &ts(i64::MAX)).as_deref(), Some("infinity"));
+            assert_eq!(pg_datetime(ty, &ts(i64::MIN)).as_deref(), Some("-infinity"));
+            assert_eq!(pg_datetime(ty, &ts(i64::MAX - 1)), None);
+        }
+        assert_eq!(pg_datetime("TIMESTAMP", &ts(86_400_000_000 + 1_500_000)).as_deref(), Some("2000-01-02 00:00:01.500"));
+        assert_eq!(pg_datetime("DATE", &d(i32::MAX)).as_deref(), Some("infinity"));
+        assert_eq!(pg_datetime("DATE", &d(i32::MIN)).as_deref(), Some("-infinity"));
+        assert_eq!(pg_datetime("DATE", &d(-1)).as_deref(), Some("1999-12-31"));
+        assert_eq!(pg_datetime("DATE", &d(i32::MAX - 1)), None);
+        assert_eq!(pg_datetime("DATE", &[0, 1]), None, "short value");
+        // date[] [[infinity, NULL], [2000-01-01, -infinity]]: ndim, has_null, elem oid, (len, lbound) per dimension, elements
+        let mut b = [2, 1, 1082, 2, 1, 2, 1].iter().flat_map(|v: &i32| v.to_be_bytes()).collect::<Vec<u8>>();
+        for e in [Some(i32::MAX), None, Some(0), Some(i32::MIN)] {
+            match e {
+                Some(v) => b.extend([4i32.to_be_bytes(), v.to_be_bytes()].concat()),
+                None => b.extend((-1i32).to_be_bytes()),
+            }
+        }
+        let date = |e: &[u8]| pg_datetime("DATE", e);
+        assert_eq!(pg_array(&b, &date).as_deref(), Some("{{infinity,NULL},{2000-01-01,-infinity}}"));
+        assert_eq!(pg_array(&[0; 12], &date).as_deref(), Some("{}"), "empty array");
+        assert_eq!(pg_array(&b[..b.len() - 2], &date), None, "cut short");
+        let huge = [3, 0, 1082, i32::MAX, 1, i32::MAX, 1, i32::MAX, 1].iter().flat_map(|v: &i32| v.to_be_bytes()).collect::<Vec<u8>>();
+        assert_eq!(pg_array(&huge, &date), None, "dimensions whose product overflows");
+    }
+
+    /// PostgreSQL's infinity / -infinity in timestamp, timestamptz and date (also in arrays, next to NULLs) show as text; sqlx's chrono decode panicked on them (#84)
+    #[tokio::test]
+    #[ignore]
+    async fn pg_infinity_dates() {
+        let Some(s) = crate::testenv::pg() else { return };
+        let pool = connect(&s.cfg, s.password.as_deref()).await.expect("connect");
+        let r = pool
+            .run_query(
+                "select 'infinity'::timestamp, '-infinity'::timestamp, 'infinity'::timestamptz, '-infinity'::timestamptz, \
+                 'infinity'::date, '-infinity'::date, null::timestamptz, '2024-01-02'::date",
+                10,
+            )
+            .await
+            .unwrap();
+        let text = |v: &[&str]| v.iter().map(|s| Value::from(*s)).collect::<Vec<_>>();
+        assert_eq!(r.rows[0][..6], text(&["infinity", "-infinity", "infinity", "-infinity", "infinity", "-infinity"]));
+        assert_eq!(r.rows[0][6], Value::Null);
+        assert_eq!(r.rows[0][7], Value::from("2024-01-02"));
+        let a = pool
+            .run_query(
+                "select array['infinity', null, '-infinity', '2024-01-02 03:04:05']::timestamp[], array['-infinity', null]::timestamptz[], \
+                 array['infinity', '2024-01-02', null]::date[], null::date[]",
+                10,
+            )
+            .await
+            .unwrap();
+        assert_eq!(a.rows[0][..3], text(&["{infinity,NULL,-infinity,\"2024-01-02 03:04:05\"}", "{-infinity,NULL}", "{infinity,2024-01-02,NULL}"]));
+        assert_eq!(a.rows[0][3], Value::Null);
     }
 
     #[tokio::test]

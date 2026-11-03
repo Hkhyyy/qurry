@@ -124,9 +124,18 @@ pub struct TableTab {
     pub error: Option<String>,
 }
 
+#[derive(Default)]
 pub struct TextTab {
     pub text: String,
+    /// DDL: tree kind of the object (for the tab glyph); empty for other text (diagram)
+    pub kind: String,
     pub scroll: u16,
+    /// A table's DDL: (schema, table), which gives it the Structure view (v)
+    pub table: Option<(String, String)>,
+    /// Showing the Structure view instead of the SQL
+    pub structure_view: bool,
+    /// The loaded structure, or why it failed (None: not loaded yet)
+    pub structure: Option<Result<qurry_core::meta::TableStructure, String>>,
 }
 
 /// DBA reports (sessions·locks, slow queries, size·indexes, maintenance, server, privileges). Sessions·locks reload every 3 seconds
@@ -272,6 +281,10 @@ pub enum PAction {
     Exec(qurry_core::exec::ExecSettings),
     /// Update channel picked
     Channel(qurry_core::update::Channel),
+    /// Grid alignment: a value class picked (→ pick where it sits)
+    AlignClass(qurry_core::format::ValueClass),
+    /// Grid alignment: where a value class sits, picked
+    Align(qurry_core::format::ValueClass, qurry_core::format::Align),
 }
 #[derive(Clone)]
 pub struct IndexEntryLite {
@@ -476,6 +489,7 @@ pub enum Action {
     ExplorerWider,
     ManageSchemas,
     PasswordKey,
+    GridAlign,
     CheckUpdate,
     UpdateChannel,
     InstallUpdate,
@@ -600,6 +614,8 @@ pub struct App {
     next_id: u64,
     /// What ⌃Enter runs (Query Execution Settings, saved in the workspace)
     pub exec: qurry_core::exec::ExecSettings,
+    /// DDL tabs of tables open in the Structure view (the last choice of v, saved in the workspace)
+    pub ddl_structure: bool,
     /// Workspaces and the current one (the current one's tabs are the tabs · panes … above)
     pub workspaces: Vec<Workspace>,
     pub cur_ws: usize,
@@ -612,6 +628,8 @@ pub struct App {
     pub ws_synced: bool,
     /// What the terminal can show (set from the environment at startup; drawing maps the frame to it)
     pub color: crate::theme::ColorMode,
+    /// Grid alignment per value class, shared with the GUI's Settings › Appearance › Alignment (settings.json, read at startup and by ⌃k › Grid Alignment…)
+    pub align: qurry_core::format::Alignments,
     /// The last frame was the 'terminal too small' message: keys and clicks would act on a screen that isn't drawn
     pub too_small: bool,
     /// Tests only (testkit): answers console statements and the Production row counts instead of the database
@@ -642,9 +660,12 @@ impl App {
     pub fn new(state: Arc<AppState>, tx: UnboundedSender<Apply>) -> Self {
         let (user_keys, keys_err) = match state.store.keymap("tui") {
             Ok(k) => (k, None),
-            Err(e) => (Default::default(), Some(format!("keymap.json ignored: {e}"))),
+            // The file stays as it is (saving a key refuses to overwrite it): say how to get the user's keys back
+            Err(e) => (Default::default(), Some(format!("keymap.json ignored ({e}) — default keys in use; fix or delete {} and restart", state.store.dir().join("keymap.json").display()))),
         };
+        let align = state.store.grid_align();
         let mut a = App {
+            align,
             hits: Hits::default(),
             state,
             tx,
@@ -689,6 +710,7 @@ impl App {
             ran: vec![],
             next_id: 1,
             exec: Default::default(),
+            ddl_structure: false,
             workspaces: vec![Workspace { id: uuid::Uuid::new_v4().to_string(), name: "Default".into(), conns: vec![], saved: None }],
             cur_ws: 0,
         };
