@@ -5,6 +5,12 @@
 //! The GUI also gets these checks as WASM (qurry-shared-wasm), for UI decisions only (badges, confirm dialogs, which statement
 //! is a read). Enforcement never trusts that copy: read-only Data Sources and MCP run these checks in the backend on every statement.
 use crate::kind::DbKind;
+use regex::Regex;
+use std::sync::LazyLock;
+
+/// db.collection.method(args) or db.getCollection("name").method(args), read as the MongoDB driver reads it
+static MONGO_CALL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?s)^db\.(?:getCollection\(\s*["']([^"']+)["']\s*\)|([A-Za-z_][\w.-]*?))\.(\w+)\((.*)\)$"#).unwrap());
 
 /// Words (lowercased) and symbols outside strings and comments. depth = parenthesis depth
 #[derive(Debug, Clone, PartialEq)]
@@ -731,8 +737,7 @@ fn mongo_unsafe(sql: &str) -> Option<String> {
         }
     }
     // Read the filter like the driver does: missing, null, {} or {/* comment */} all match every document
-    let re = regex::Regex::new(r#"(?s)^db\.(?:getCollection\(\s*["']([^"']+)["']\s*\)|([A-Za-z_][\w.-]*?))\.(\w+)\((.*)\)$"#).unwrap();
-    if let Some(c) = re.captures(sql.trim().trim_end_matches(';').trim()) {
+    if let Some(c) = MONGO_CALL.captures(sql.trim().trim_end_matches(';').trim()) {
         let m = c[3].to_lowercase();
         if ["deletemany", "updatemany", "remove", "replaceone", "deleteone", "updateone"].contains(&m.as_str()) {
             let filter = mongo_args(&c[4]).and_then(|a| a.into_iter().next());
@@ -870,8 +875,7 @@ pub fn mcp_execute_violation(sql: &str, kind: DbKind) -> Option<String> {
 fn mongo_mcp_write_violation(sql: &str) -> Option<String> {
     let refuse = |why: &str| Some(format!("{why} — over MCP only insert, and update / delete with a filter, are allowed; ask the user to run it in Qurry"));
     let t = sql.trim().trim_end_matches(';').trim();
-    let re = regex::Regex::new(r#"(?s)^db\.(?:getCollection\(\s*["']([^"']+)["']\s*\)|([A-Za-z_][\w.-]*?))\.(\w+)\((.*)\)$"#).unwrap();
-    let Some(c) = re.captures(t) else { return refuse("only db.collection.method(…)") };
+    let Some(c) = MONGO_CALL.captures(t) else { return refuse("only db.collection.method(…)") };
     let method = &c[3];
     let args = mongo_args(&c[4]);
     let Some(args) = args else { return refuse("can't read the arguments") };
@@ -889,12 +893,12 @@ fn mongo_mcp_write_violation(sql: &str) -> Option<String> {
 
 /// The arguments of a MongoDB shell call, read like the driver (shell helpers → extended JSON, then JSON5)
 fn mongo_args(s: &str) -> Option<Vec<serde_json::Value>> {
-    let re_oid = regex::Regex::new(r#"ObjectId\(\s*["']([0-9a-fA-F]{24})["']\s*\)"#).unwrap();
-    let re_date = regex::Regex::new(r#"(?:ISODate|new Date)\(\s*["']([^"']+)["']\s*\)"#).unwrap();
-    let re_long = regex::Regex::new(r#"Number(?:Long|Int)\(\s*["']?(-?\d+)["']?\s*\)"#).unwrap();
-    let s = re_oid.replace_all(s, r#"{"$$oid": "$1"}"#);
-    let s = re_date.replace_all(&s, r#"{"$$date": "$1"}"#);
-    let s = re_long.replace_all(&s, "$1");
+    static OID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"ObjectId\(\s*["']([0-9a-fA-F]{24})["']\s*\)"#).unwrap());
+    static DATE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?:ISODate|new Date)\(\s*["']([^"']+)["']\s*\)"#).unwrap());
+    static LONG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"Number(?:Long|Int)\(\s*["']?(-?\d+)["']?\s*\)"#).unwrap());
+    let s = OID.replace_all(s, r#"{"$$oid": "$1"}"#);
+    let s = DATE.replace_all(&s, r#"{"$$date": "$1"}"#);
+    let s = LONG.replace_all(&s, "$1");
     json5::from_str::<serde_json::Value>(&format!("[{s}]")).ok()?.as_array().cloned()
 }
 
@@ -931,6 +935,7 @@ fn rest_mcp_write_violation(sql: &str, kind: DbKind) -> Option<String> {
     let seg: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     let body: serde_json::Value = json5::from_str(format!("{inline}\n{rest}").trim()).unwrap_or(serde_json::Value::Null);
     let ids = |k: &str| body.get(k).and_then(|v| v.as_array()).is_some_and(|a| !a.is_empty());
+    static IDS_IN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*\w+\s+in\s*\[[^\]]+\]\s*$").unwrap());
     let ok = match kind {
         // PUT /collections/c/points (upsert), POST /collections/c/points/delete {points: [ids]}
         DbKind::Qdrant => matches!((method.as_str(), seg.as_slice()), ("PUT", ["collections", _, "points"])) || (method == "POST" && matches!(seg.as_slice(), ["collections", _, "points", "delete"]) && ids("points") && body.get("filter").is_none()),
@@ -946,7 +951,7 @@ fn rest_mcp_write_violation(sql: &str, kind: DbKind) -> Option<String> {
         // POST /entities/insert | upsert, /entities/delete {filter: "id in [..]"}
         DbKind::Milvus => match seg.as_slice() {
             [.., "entities", "insert" | "upsert"] => true,
-            [.., "entities", "delete"] => body.get("filter").and_then(|f| f.as_str()).is_some_and(|f| regex::Regex::new(r"^\s*\w+\s+in\s*\[[^\]]+\]\s*$").unwrap().is_match(f)),
+            [.., "entities", "delete"] => body.get("filter").and_then(|f| f.as_str()).is_some_and(|f| IDS_IN.is_match(f)),
             _ => false,
         },
         _ => false,
@@ -1176,6 +1181,22 @@ mod tests {
     }
     use super::*;
     use DbKind::{Chroma, Milvus, Mongodb, Mysql, Postgres, Qdrant};
+
+    /// The MongoDB driver reads commands with Unicode \w \s (drivers/mongodb): the guard must too, or it stops warning about
+    /// commands the driver runs. Fails if shared's regex loses Unicode classes or case folding (regex-lite, a feature cut)
+    #[test]
+    fn regex_stays_unicode() {
+        assert!(regex::Regex::new(r"^\w+$").unwrap().is_match("users_한"));
+        assert!(regex::Regex::new(r"^\s$").unwrap().is_match("\u{3000}"));
+        assert!(regex::Regex::new(r"(?i)^like$").unwrap().is_match("li\u{212A}e")); // Kelvin sign folds to k
+        for q in ["db.users_한.deleteMany({})", "db.getCollection(\u{3000}\"users\").deleteMany({})", "db.getCollection(\u{a0}\"users\").updateMany({}, {$set: {a: 1}})"] {
+            assert!(unsafe_statement(q, Mongodb).is_some_and(|w| w.contains("empty filter")), "{q:?}");
+        }
+        assert_eq!(mcp_execute_violation("db.users_한.deleteMany({a: 1})", Mongodb), None);
+        assert_eq!(unsafe_statement("db.users.deleteMany({_id: ObjectId(\u{3000}\"5f1d7f0b2c3e4a5b6c7d8e9f\")})", Mongodb), None);
+        // Value hints on non-ASCII columns
+        assert!(crate::complete::context("select * from t where 상태 = '", false).is_some());
+    }
 
     #[test]
     fn read_only_rest_and_mongo() {

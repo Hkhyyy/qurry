@@ -3,10 +3,9 @@
 // 2. when the .wasm cannot load, the app still renders (so the in-app updater can still deliver a fix).
 // Exits non-zero on failure. Prints the init time and the .wasm transfer size as JSON.
 //
-// Playwright is not a project dependency:  npm i --no-save --prefix scripts/perf playwright && npx --prefix scripts/perf playwright install chromium webkit
-// Server (free port):  pnpm build && pnpm preview --port 14251 --strictPort
+// Server (free port):  scripts/perf/size.sh && npx vite preview --port 14251 --strictPort
 // Run:  node scripts/perf/wasm-smoke.mjs [chromium|webkit] [preview url]
-import { chromium, webkit } from "playwright";
+import { chromium, webkit } from "@playwright/test";
 
 const [engine = "chromium", url = "http://localhost:14251"] = process.argv.slice(2);
 const browser = await { chromium, webkit }[engine].launch();

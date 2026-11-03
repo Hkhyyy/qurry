@@ -9,6 +9,8 @@ publish = false
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-regex = "1"
+# Without the \p{…} tables and the literal / one-pass engines: a third smaller WASM, same speed. Keep Unicode \w \s \d and
+# case folding: the guard must read Mongo commands as the driver does (guard::tests::regex_stays_unicode). Not regex-lite (ASCII only)
+regex = { version = "1", default-features = false, features = ["std", "unicode-perl", "unicode-case", "perf-backtrack", "perf-dfa"] }
 # reads MongoDB shell arguments the way the driver does (guard)
 json5 = "1"
