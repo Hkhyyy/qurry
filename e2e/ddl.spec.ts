@@ -142,6 +142,34 @@ test("Reload is in both views, in the same place, and reloads what the tab shows
   expect(await ddlLoads(page)).toBe(ddl0 + 1);
 });
 
+test("DDL tabs saved before they kept their object: a table's reloads in both views, a view's says to reopen it", async ({ page }) => {
+  await openDdl(page, "users");
+  await treeItem(page, "views 1").first().click();
+  await page.keyboard.press("ArrowRight");
+  await openDdl(page, "v_active_users");
+  await page.waitForTimeout(800);
+  // As the previous build saved them: no ddlOf (a table's DDL tab still has edit)
+  await page.evaluate(() => {
+    const ws = JSON.parse(localStorage.getItem("mock-ws")!);
+    for (const w of ws.workspaces) for (const t of w.tabs) delete t.ddlOf;
+    localStorage.setItem("mock-ws", JSON.stringify(ws));
+  });
+  await page.reload();
+  await expect(treeItem(page, "users").first()).toBeVisible();
+  await page.getByRole("tab", { name: /users \[DDL\]/ }).click();
+  await views(page).getByRole("tab", { name: "SQL" }).click();
+  const ddl0 = await ddlLoads(page);
+  await reload(page).click();
+  await expect.poll(() => ddlLoads(page)).toBe(ddl0 + 1);
+  await views(page).getByRole("tab", { name: "Structure" }).click();
+  await expect(section(page, "Columns 5")).toBeVisible();
+  const st0 = await loads(page);
+  await reload(page).click();
+  await expect.poll(() => loads(page)).toBe(st0 + 1);
+  await page.getByRole("tab", { name: /v_active_users \[DDL\]/ }).click();
+  await expect(work(page).getByRole("button", { name: "Reopen the DDL to reload" })).toBeDisabled();
+});
+
 test("a view's DDL tab reloads its DDL", async ({ page }) => {
   await treeItem(page, "views 1").first().click();
   await page.keyboard.press("ArrowRight");

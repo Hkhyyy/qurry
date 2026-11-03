@@ -29,6 +29,8 @@ const updTab = (id: string, fn: (t: Tab) => Tab) => {
   if (!updStashed(id, fn)) setTabs((ts) => ts.map((t) => (t.id === id ? fn(t) : t)));
 };
 const sqlOf = (t: Tab) => liveSql.get(t.id) ?? t.sql;
+/** DDL tab: the object Reload fetches (a table's DDL tab saved before tabs kept ddlOf still has its edit) */
+const ddlObject = (t: Tab): DdlOf | undefined => t.ddlOf ?? (t.edit && { schema: t.edit.schema, name: t.edit.table });
 const snapshot = (t: Tab): TabSnapshot => ({
   key: snapKey(t),
   kind: t.kind,
@@ -138,4 +140,4 @@ const togglePin = (t: Tab) => {
   });
 };
 
-export { allTabs, buildTab, closeTabs, moveTo, patch, remember, settle, snapshot, sqlOf, togglePin, updStashed, updTab };
+export { allTabs, buildTab, closeTabs, ddlObject, moveTo, patch, remember, settle, snapshot, sqlOf, togglePin, updStashed, updTab };

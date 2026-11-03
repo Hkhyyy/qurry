@@ -174,3 +174,14 @@ async fn r_reloads_the_ddl_or_the_structure() {
     assert!(t.structure.is_none(), "the structure is loaded again");
     assert!(h.app.status.is_empty(), "not the DDL: {}", h.app.status);
 }
+
+/// r on a DDL tab that doesn't know its object (saved by an older build) says how to get one that does
+#[tokio::test]
+async fn r_on_a_ddl_without_its_object_says_to_reopen() {
+    use crate::app::{Focus, TabKind, TextTab};
+    let mut h = Harness::new().await;
+    h.app.push_tab("test", "postgres".into(), "v [DDL]".into(), TabKind::Text(TextTab { text: "CREATE VIEW v AS SELECT 1;".into(), kind: "view".into(), ..Default::default() }));
+    h.app.focus = Focus::Grid;
+    h.key("r");
+    assert_eq!(h.app.status, "Reopen the DDL to reload");
+}

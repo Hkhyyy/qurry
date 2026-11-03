@@ -24,7 +24,7 @@ import type { useExplorer } from "../explorer/useExplorer";
 import type { useJobs } from "../jobs/useJobs";
 import { cmd, keyTitle } from "../../lib/shortcuts";
 import { isMac, sk } from "../shortcuts/labels";
-import { closeTabs, moveTo, patch, settle, sqlOf, togglePin } from "../tabs/ops";
+import { closeTabs, ddlObject, moveTo, patch, settle, sqlOf, togglePin } from "../tabs/ops";
 import { editorApis, liveSql, setActiveIds, setFocused, setPanes, setTabs, useTabsStore } from "../tabs/store";
 import { Group, snapKey, Tab, TabSnapshot } from "../tabs/types";
 import type { useTabs } from "../tabs/useTabs";
@@ -149,10 +149,11 @@ export function useEditorGroups({
   /** Reload what the tab shows: the structure (a remount loads it again) or the DDL text */
   const reloadDdl = async (t: Tab) => {
     if ((t.ddlView ?? "sql") === "structure") return setStructureRev((r) => ({ ...r, [t.id]: (r[t.id] ?? 0) + 1 }));
-    if (!t.ddlOf) return;
+    const of = ddlObject(t);
+    if (!of) return;
     try {
-      setStatus(`Loading DDL of ${t.ddlOf.schema}.${t.ddlOf.name}…`);
-      patch(t.id, { sql: await meta.ddl(t.target, t.ddlOf.schema, t.ddlOf.name, t.objKind ?? "table") });
+      setStatus(`Loading DDL of ${of.schema}.${of.name}…`);
+      patch(t.id, { sql: await meta.ddl(t.target, of.schema, of.name, t.objKind ?? "table") });
       setStatus("Ready");
     } catch (e) {
       setStatus(`DDL failed: ${String(e)}`);
@@ -184,7 +185,7 @@ export function useEditorGroups({
                 { label: "Structure", ...cmd("ddl.structure"), action: () => pickDdlView(t, "structure") },
               ] as MenuItem[])
             : []),
-          { label: "Reload", ...cmd("ddl.reload"), action: () => void reloadDdl(t), disabled: !t.ddlOf },
+          { label: "Reload", ...cmd("ddl.reload"), action: () => void reloadDdl(t), disabled: !ddlObject(t) },
           { label: "Copy", ...cmd("ddl.copy"), action: () => copyDdl(t) },
           { label: "Save to File", ...cmd("ddl.save"), action: () => void saveDdl(t) },
           { label: "Run in Console", ...cmd("ddl.run"), action: () => runDdl(t) },
@@ -581,7 +582,7 @@ export function useEditorGroups({
                   <span className="tb-info" style={{ marginLeft: 0 }}>{t.title.startsWith("SQL Generator") ? "SQL Generator" : "DDL"} · read-only</span>
                   {t.edit && <ToolbarSep />}
                   {t.edit && <Tabs size="sm" label="DDL view" items={[{ id: "sql", label: "SQL" }, { id: "structure", label: "Structure" }]} value={view} onChange={pick} />}
-                  <IconButton title={keyTitle("Reload", "ddl.reload")} onClick={() => void reloadDdl(t)} disabled={!t.ddlOf}><IcReload /></IconButton>
+                  <IconButton title={ddlObject(t) ? keyTitle("Reload", "ddl.reload") : "Reopen the DDL to reload"} onClick={() => void reloadDdl(t)} disabled={!ddlObject(t)}><IcReload /></IconButton>
                   <Spacer />
                   <ToolButton title={keyTitle("Copy to Clipboard", "ddl.copy")} onClick={() => copyDdl(t)}>Copy</ToolButton>
                   <ToolButton title={keyTitle("Save to File", "ddl.save")} onClick={() => void saveDdl(t)}>Save to File</ToolButton>

@@ -208,7 +208,13 @@ impl App {
         if tt.structure_view {
             return self.load_structure(id);
         }
-        let Some((schema, name)) = tt.ddl_of.clone() else { return };
+        // A DDL tab (kind set) saved by an older build doesn't know its object; other text (diagram) has nothing to reload
+        let Some((schema, name)) = tt.ddl_of.clone() else {
+            if !tt.kind.is_empty() {
+                self.status = "Reopen the DDL to reload".into();
+            }
+            return;
+        };
         let (kind, st) = (tt.kind.clone(), self.state.clone());
         self.status = format!("Loading DDL of {schema}.{name}…");
         self.spawn(async move { st.object_ddl(target, schema, name, kind).await.map_err(err) }, move |a, r| match r {
