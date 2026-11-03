@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ask, askText, notice } from "./lib/dialogs";
 import { listen } from "@tauri-apps/api/event";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { api, backup, ConnectionView, ddl, dialectOf, meta, VECTOR_KINDS, redisDb, removedDespite, targetId, updateCheckEnabled } from "./lib/api";
+import { api, backup, ConnectionView, ddl, dialectOf, meta, VECTOR_KINDS, redisDb, targetId, updateCheckEnabled } from "./lib/api";
 import { RedisBrowser } from "./components/RedisBrowser";
 import { KeymapDialog } from "./components/KeymapDialog";
 import { UpdateDialog } from "./components/UpdateDialog";
@@ -33,11 +33,10 @@ import type { BackupOptions, FtsRequest } from "./lib/api";
 import { isRelation, NodeInfo, revealInTree, schemaChanged } from "./components/SchemaTree";
 import { leaf, leaves, MAX_PANES, Pane, splitPane } from "./lib/panes";
 import { connBg, connStripe, getThemePref, setThemePref, THEME_LABEL, ThemePref, useTheme } from "./lib/theme";
-import { BackupDialog, ExportDialog, ImportDialog, type TransferJob } from "./components/Transfer";
+import { BackupDialog, ExportDialog, ImportDialog } from "./components/Transfer";
 import { DbaReport } from "./components/DbaReport";
 import { ErdView } from "./components/ErdView";
 import { MigrateView } from "./components/MigrateView";
-import type { DataFormat } from "./lib/transfer";
 import { Group, snapKey, Tab, TabSnapshot } from "./features/tabs/types";
 import { isMac, sk } from "./features/shortcuts/labels";
 import { offered, SettingsDialog, upToDate } from "./features/settings/SettingsDialog";
@@ -48,6 +47,8 @@ import { setWorkspaces, stash, useWorkspacesStore } from "./features/workspaces/
 import { useWorkspaces } from "./features/workspaces/useWorkspaces";
 import { useConsole } from "./features/console/useConsole";
 import { useTabs } from "./features/tabs/useTabs";
+import { useJobs } from "./features/jobs/useJobs";
+import { useConnActions } from "./features/conns/useConnActions";
 import { setBackupReq, setCopyReq, setDialog, setExportReq, setGenReq, setHistoryFor, setHistoryTab, setImportReq, setKeymapOpen, setObjEdit, setProdLog, setQuickDoc, setSchemeOpen, setSettingsOpen, setUpdate, setUpdateOpen, useDialogsStore } from "./features/dialogs/store";
 import "./App.css";
 
@@ -284,55 +285,13 @@ export default function App() {
     }
   };
 
-  // ───────── Data export / import (choose format → progress bar at the bottom) ─────────
   const exportReq = useDialogsStore((s) => s.exportReq);
   const importReq = useDialogsStore((s) => s.importReq);
   const genReq = useDialogsStore((s) => s.genReq);
   const objEdit = useDialogsStore((s) => s.objEdit);
   const copyReq = useDialogsStore((s) => s.copyReq);
-  const [jobs, setJobs] = useState<TransferJob[]>([]);
-  useEffect(() => {
-    let off: (() => void) | undefined;
-    listen<[string, number, number, number]>("transfer-progress", ({ payload: [id, rows, done, total] }) =>
-      setJobs((js) => js.map((j) => (j.id === id ? { ...j, rows, done, total } : j))),
-    )
-      .then((u) => (off = u))
-      .catch(() => {});
-    return () => off?.();
-  }, []);
-  /** Put a task on the progress bar and run it. Remove it when done (silently if cancelled) */
-  const runJob = async <T,>(label: string, run: (job: string) => Promise<T>): Promise<T | undefined> => {
-    const id = crypto.randomUUID();
-    setJobs((js) => [...js, { id, label, rows: 0, done: 0, total: 0 }]);
-    try {
-      return await run(id);
-    } catch (e) {
-      setStatus(String(e) === "Cancelled" ? `${label}: cancelled` : `${label}: ${String(e)}`);
-    } finally {
-      setJobs((js) => js.filter((j) => j.id !== id));
-    }
-  };
-  const startExport = async (format: DataFormat, clipboard: boolean) => {
-    const r0 = exportReq;
-    setExportReq(null);
-    if (!r0) return;
-    const label = `Export ${r0.name}`;
-    const r = await runJob(label, (job) => api.exportData(r0.target, r0.sql, format, clipboard, r0.name, r0.table, job));
-    if (!r) return;
-    if (r.text !== null) {
-      await navigator.clipboard.writeText(r.text);
-      setStatus(`Copied ${r.rows} rows to the clipboard`);
-    } else setStatus(`Exported ${r.rows} rows to ${r.path}`);
-  };
-  const startImport = async (table: string, create: boolean, columns: [number, string][], label: string) => {
-    const r0 = importReq;
-    setImportReq(null);
-    if (!r0) return;
-    const n = await runJob(`Import ${label}`, (job) => api.importData(r0.target, { path: "", schema: r0.schema, table, create, columns }, job));
-    if (n === undefined) return;
-    setStatus(`Imported ${n} rows into ${r0.schema}.${table}`);
-    if (create) r0.refresh?.();
-  };
+  const { jobs, runJob, startExport, startImport, exportCsv } = useJobs({ setStatus });
+  const { setColor, setScope, exportConns, importConns, removeConn } = useConnActions({ refresh, setStatus });
   const exportTable = (info: NodeInfo) => {
     if (!info.schema || !info.name) return;
     const { q } = dialectOf(info.conn.kind);
@@ -1172,60 +1131,6 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey, true);
     // keymapVer: menus opened from keys (⇧⌘F10 …) show the current shortcut labels
   }, [conns, keymapVer]);
-
-  // ───────── Misc ─────────
-  // Only that part: the list may be stale (another app changed the source since), so the backend changes it in the saved one
-  const setColor = async (c: ConnectionView, color: string | null) => {
-    await api.setConnectionColor(c.id, color);
-    refresh();
-  };
-
-  const setScope = async (c: ConnectionView, scope: NonNullable<ConnectionView["scope"]>) => {
-    await api.setConnectionScope(c.id, scope);
-    refresh();
-  };
-
-  const exportConns = async () => {
-    try {
-      const r = await api.exportConnections();
-      if (r) setStatus(`Exported ${r[0]} data sources (passwords excluded) to ${r[1]}`);
-    } catch (e) {
-      setStatus(String(e));
-    }
-  };
-
-  const importConns = async () => {
-    try {
-      // A file from someone else can turn off Read-only or add SQL to run on connect → show what changes and confirm
-      const preview = await api.pickImportFile();
-      if (!preview) return;
-      if (!preview.length) return setStatus("Nothing to import");
-      if (!(await ask(`Import these data sources?\n\n${preview.join("\n")}`))) return;
-      const r = await api.importPicked();
-      setStatus(`Imported: ${r.added} added, ${r.updated} updated (re-enter passwords)`);
-      refresh();
-    } catch (e) {
-      setStatus(String(e));
-    }
-  };
-
-  const exportCsv = (tab: Tab | null) => {
-    if (!tab?.lastSql) return;
-    setExportReq({ target: tab.target, sql: tab.lastSql, name: tab.kind === "table" ? tab.title : "result", table: tab.edit ? [tab.edit.schema, tab.edit.table] : null });
-  };
-
-  const removeConn = async (c: ConnectionView) => {
-    if (!(await ask(`Delete data source "${c.name}"?`, { okLabel: "Delete", danger: true }))) return;
-    try {
-      await api.deleteConnection(c.id);
-    } catch (e) {
-      setStatus(String(e));
-      // Removed even if its saved password couldn't be (damaged secrets file): the message says so. Any other error kept it, and its tabs stay
-      if (!removedDespite(e)) return;
-    }
-    closeTabs(useTabsStore.getState().tabs.filter((t) => t.connId === c.id).map((t) => t.id));
-    refresh();
-  };
 
   // ───────── Editor group rendering ─────────
   /** Split tree: branches lay out side by side (horizontal/vertical), leaves are panes. Only the outermost ratio is saved */
