@@ -124,9 +124,16 @@ pub struct TableTab {
     pub error: Option<String>,
 }
 
+#[derive(Default)]
 pub struct TextTab {
     pub text: String,
     pub scroll: u16,
+    /// A table's DDL: (schema, table), which gives it the Structure view (v)
+    pub table: Option<(String, String)>,
+    /// Showing the Structure view instead of the SQL
+    pub structure_view: bool,
+    /// The loaded structure, or why it failed (None: not loaded yet)
+    pub structure: Option<Result<qurry_core::meta::TableStructure, String>>,
 }
 
 /// DBA reports (sessions·locks, slow queries, size·indexes, maintenance, server, privileges). Sessions·locks reload every 3 seconds
@@ -600,6 +607,8 @@ pub struct App {
     next_id: u64,
     /// What ⌃Enter runs (Query Execution Settings, saved in the workspace)
     pub exec: qurry_core::exec::ExecSettings,
+    /// DDL tabs of tables open in the Structure view (the last choice of v, saved in the workspace)
+    pub ddl_structure: bool,
     /// Workspaces and the current one (the current one's tabs are the tabs · panes … above)
     pub workspaces: Vec<Workspace>,
     pub cur_ws: usize,
@@ -689,6 +698,7 @@ impl App {
             ran: vec![],
             next_id: 1,
             exec: Default::default(),
+            ddl_structure: false,
             workspaces: vec![Workspace { id: uuid::Uuid::new_v4().to_string(), name: "Default".into(), conns: vec![], saved: None }],
             cur_ws: 0,
         };

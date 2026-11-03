@@ -22,6 +22,7 @@ mod parity_dump;
 #[cfg(test)]
 mod tests;
 mod scope;
+mod structure;
 mod selfupdate;
 mod snippets;
 mod theme;

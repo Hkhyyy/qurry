@@ -136,6 +136,28 @@ fn hidden_marker(n: usize, counts: &[Option<Option<u64>>]) -> Line<'static> {
     Line::styled(text, if known.is_empty() && unknown == 0 { Style::default().fg(WARN) } else { count_style(if unknown > 0 { None } else { Some(total) }) })
 }
 
+/// Small read-only table as lines (the GUI's ui Table; DDL → Structure): indented two cells, columns padded to their widest cell
+/// (display width) with two cells between them, the header dim. Line breaks in a cell become spaces; the panel cuts long lines
+pub fn table_lines(head: &[&str], rows: &[Vec<String>]) -> Vec<Line<'static>> {
+    use unicode_width::UnicodeWidthStr;
+    let rows: Vec<Vec<String>> = rows.iter().map(|r| r.iter().map(|c| c.replace(['\r', '\n', '\t'], " ")).collect()).collect();
+    let widths: Vec<usize> = (0..head.len()).map(|i| rows.iter().map(|r| r[i].width()).chain([head[i].width()]).max().unwrap_or(0)).collect();
+    let line = |cells: Vec<&str>| {
+        let last = cells.len() - 1;
+        let mut s = "  ".to_string();
+        for (i, c) in cells.into_iter().enumerate() {
+            s += c;
+            if i < last {
+                s += &" ".repeat(widths[i] - c.width() + 2);
+            }
+        }
+        s
+    };
+    let mut out = vec![Line::styled(line(head.to_vec()), Style::default().fg(DIM))];
+    out.extend(rows.iter().map(|r| Line::raw(line(r.iter().map(String::as_str).collect()))));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

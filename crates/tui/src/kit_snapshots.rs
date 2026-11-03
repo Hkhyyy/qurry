@@ -332,6 +332,13 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     for _ in 0..2 {
         h.app.close_tab_now(h.app.active);
     }
+    // DDL → Structure (v)
+    let text = "CREATE TABLE public.users (\n    id bigint NOT NULL\n);".to_string();
+    let t = crate::app::TextTab { text, table: Some(("public".into(), "users".into())), structure_view: true, structure: Some(Ok(crate::structure::sample())), ..Default::default() };
+    h.app.push_tab("prod", "rentalpay".into(), "users [DDL]".into(), crate::app::TabKind::Text(t));
+    h.app.focus = crate::app::Focus::Grid;
+    scenes.push(app_scene(h, "DDL: Structure", "A table's DDL tab, v: columns, keys, indexes, foreign keys both ways, triggers (not reported by this source), options and comment; v again for the SQL", 120, 40));
+    h.app.close_tab_now(h.app.active);
     // Redis
     h.redis_tab(&["session:9f2c", "session:a771", "user:41", "user:41:cart", "queue:mail", "rank:daily"]);
     scenes.push(app_scene(h, "Redis", "Redis 키 브라우저: 키 · 타입 · TTL", 120, 22));
