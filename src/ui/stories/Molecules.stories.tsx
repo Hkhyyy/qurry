@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useState } from "react";
 import { Badge, Checkbox, ColorPicker, DetailRow, EmptyState, Field, FormSection, Hint, Kbd, KeyHints, ListItem, MenuItem, MenuLabel, MenuSeparator, Notice, RadioGroup, RailItem, SearchField, SectionTitle, Select, StatusItem, TabItem, Tabs, Text, TextInput, TlsOptIn, TreeRow } from "..";
+import { connTabVars } from "../../lib/theme";
 import { DatabaseIcon, FolderIcon, PgIcon, SchemaIcon, TableIcon } from "../icons";
 
 /** Molecules: a row · cell made of a few atoms */
@@ -217,7 +218,7 @@ export const TabItems: S = {
   render: () => (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", height: 36, background: "var(--ui-surface)" }}>
-        <TabItem icon="⌘" label="console [PROD] kr" active onClose={() => {}} style={{ background: "color-mix(in srgb, #6e2a2a 35%, var(--panel))", boxShadow: "inset 0 2px 0 #c46a6a" }} />
+        <TabItem icon="⌘" label="console [PROD] kr" active onClose={() => {}} style={connTabVars("#6e2a2a", "dark")} />
         <TabItem icon="▦" iconClass="table" label="users" onClose={() => {}} />
         <TabItem icon="◉" label="Sessions" pinned onPin={() => {}} />
       </div>
