@@ -1,4 +1,4 @@
-import type { Locator } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { dialog, expect, menuItem, openApp, openBothUsers, tabStrips, test, treeItem } from "./app";
 
 test.beforeEach(async ({ page }) => openApp(page));
@@ -83,6 +83,32 @@ const tabStyle = (tab: Locator) =>
     };
   });
 
+/** Painted colors down the middle column of a tab: its top two and bottom two pixel rows, and what they should be (stripe, bar) */
+async function tabPaint(page: Page, tab: Locator) {
+  const box = (await tab.boundingBox())!;
+  const png = (await page.screenshot({ clip: box })).toString("base64");
+  const [stripe, bar] = await tab.evaluate((e) => [getComputedStyle(e).getPropertyValue("--conn-stripe"), getComputedStyle(e).borderBottomColor]);
+  return page.evaluate(
+    async ([src, colors]) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${src}`;
+      await img.decode();
+      const ctx = Object.assign(document.createElement("canvas"), { width: img.width, height: img.height }).getContext("2d", { willReadFrequently: true })!;
+      const px = (x: number, y: number) => ctx.getImageData(x, y, 1, 1).data.slice(0, 3).join(",");
+      // The expected colors painted the same way, so color-mix() results compare as pixels
+      const want = colors.map((c) => {
+        ctx.fillStyle = c;
+        ctx.fillRect(0, 0, 1, 1);
+        return px(0, 0);
+      });
+      ctx.drawImage(img, 0, 0);
+      const x = Math.floor(img.width / 2);
+      return { rows: [0, 1, img.height - 2, img.height - 1].map((y) => px(x, y)), want: [want[0], want[0], want[1], want[1]] };
+    },
+    [png, [stripe, bar]] as const,
+  );
+}
+
 for (const theme of ["dark", "light", "hc"]) {
   test(`the active tab stands out (${theme}): bold, own background, accent bar; gray bar in the other split pane`, async ({ page }) => {
     await page.evaluate((t) => localStorage.setItem("dbtool.theme", t), theme);
@@ -98,8 +124,8 @@ for (const theme of ["dark", "light", "hc"]) {
     expect(on.bg).not.toBe(off.bg);
     expect(on.bar).toBe(on.accent);
     expect(off.bar).toBe("rgba(0, 0, 0, 0)");
-    // Both tabs are of [DEV] shop_app: the inactive one keeps the same Data Source stripe
-    expect(off.stripe).toBe(on.stripe);
+    // Both tabs are of [DEV] shop_app: the inactive one keeps the same Data Source stripe (hc adds side lines to the active one)
+    expect(on.stripe).toContain(off.stripe);
     expect(on.stripe).toContain("inset");
     // Becoming active (bold) doesn't change a tab's width
     await users.click();
@@ -117,5 +143,10 @@ for (const theme of ["dark", "light", "hc"]) {
     expect(focusedTab.bar).toBe(focusedTab.accent);
     expect(otherTab.bar).toBe(otherTab.dim);
     expect(otherTab.weight).toBe("600");
+    // Painted, not just styled: nothing (like hc's outline) covers the full 2px stripe and bar of either active tab
+    for (const tab of [left.locator(".tab.active"), right.locator(".tab.active")]) {
+      const { rows, want } = await tabPaint(page, tab);
+      expect(rows).toEqual(want);
+    }
   });
 }

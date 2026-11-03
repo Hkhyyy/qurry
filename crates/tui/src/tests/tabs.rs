@@ -84,3 +84,36 @@ async fn palette_lists_actions_and_runs_one() {
     assert!(h.app.popup.is_none());
     assert_eq!(h.app.panes.leaves().len(), 2);
 }
+
+/// 16 colors: the focused pane's active tab of a [PROD] Data Source is its own red in reverse video, not the plain
+/// selection, so the tab you work in still looks like production; a tab without a color uses the selection
+#[tokio::test]
+async fn active_tab_keeps_the_data_source_color_in_16_colors() {
+    use ratatui::style::{Color, Modifier};
+    let mut h = Harness::new().await;
+    let cfg = serde_json::from_value(serde_json::json!({ "id": "prod", "name": "[PROD] kr", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "shop", "color": "#6e2a2a" })).unwrap();
+    h.app.state.save_connection(cfg, None, None).await.unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    for t in ["payment", "contract"] {
+        let id = h.table_tab(t, &["id"], &[&["1"]], &["id"]);
+        h.app.tabs.iter_mut().find(|t| t.id == id).unwrap().conn = "prod".into();
+    }
+    h.table_tab("plain", &["id"], &[&["1"]], &["id"]);
+    h.app.color = crate::theme::ColorMode::Ansi16;
+    // The first cell of a tab's label in the tab bar
+    let label = |h: &mut Harness, name: &str| {
+        let buf = h.buffer(120, 20);
+        let y = (0..20).find(|&y| (0..120).map(|x| buf[(x, y)].symbol()).collect::<String>().contains("▦ payment")).unwrap();
+        let row: String = (0..120).map(|x| buf[(x, y)].symbol()).collect();
+        let x = row[..row.find(name).unwrap()].chars().count() as u16;
+        buf[(x, y)].clone()
+    };
+    h.app.activate(1);
+    let (on, off) = (label(&mut h, "contract"), label(&mut h, "payment"));
+    assert_eq!((on.bg, on.modifier.contains(Modifier::REVERSED | Modifier::BOLD)), (Color::Red, true));
+    assert_eq!((off.bg, off.modifier.contains(Modifier::REVERSED)), (Color::Red, false));
+    h.app.activate(2);
+    let plain = label(&mut h, "plain");
+    assert_eq!((plain.bg, plain.modifier.contains(Modifier::REVERSED)), (Color::Reset, true));
+}

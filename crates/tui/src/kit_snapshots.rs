@@ -458,7 +458,7 @@ async fn tab_bars(scenes: &mut Vec<Value>) {
         h.app.tabs.iter_mut().find(|t| t.id == id).unwrap().conn = conn.into();
         id
     }
-    let users = tab(&mut h, "users", "dev");
+    let users = tab(&mut h, "users", "prod");
     for (name, conn) in [("payment", "prod"), ("contract", "prod"), ("orders", "test"), ("adjust", "dev")] {
         tab(&mut h, name, conn);
     }
@@ -473,7 +473,7 @@ async fn tab_bars(scenes: &mut Vec<Value>) {
     h.app.status.clear();
     for (mode, name, desc) in [
         (ColorMode::TrueColor, "Tab bar: truecolor", "Active tab: bold on a lighter Data Source color (or the selection color) in the focused pane, underlined on its own color in the other pane"),
-        (ColorMode::Ansi16, "Tab bar: 16 colors", "TERM=xterm: the focused pane's tab in reverse video + bold (a lighter hue is often the same terminal color); the other pane's bold + underlined"),
+        (ColorMode::Ansi16, "Tab bar: 16 colors", "TERM=xterm: the focused pane's tab in reverse video + bold, keeping its Data Source color (a lighter hue is often the same terminal color); the other pane's bold + underlined"),
         (ColorMode::NoColor, "Tab bar: NO_COLOR", "NO_COLOR=1: the focused pane's tab in reverse video + bold, the other pane's bold + underlined"),
     ] {
         h.app.color = mode;

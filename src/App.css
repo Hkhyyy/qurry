@@ -190,7 +190,8 @@ a { color: var(--c-548af7); cursor: pointer; }
 .tab:hover { color: var(--text); }
 .tab.active { color: var(--text); border-bottom-color: var(--accent); background: var(--conn-bg, var(--bg)); }
 .editor-group.unfocused .tab.active { border-bottom-color: var(--c-6f737a); }
-:root[data-theme="hc"] .tab.active { outline: 1px solid var(--text); outline-offset: -1px; }
+/* High contrast: side lines only, so they don't cover the Data Source stripe or the bar (:where keeps .drop-before winning) */
+:where(:root[data-theme="hc"]) .tab.active { box-shadow: inset 1px 0 0 var(--text), inset -1px 0 0 var(--text), inset 0 2px 0 var(--conn-stripe, transparent); }
 .tab .tab-label { display: inline-flex; flex-direction: column; }
 .tab .tab-label::after { content: attr(data-text); height: 0; overflow: hidden; visibility: hidden; font-weight: 600; }
 .tab.active .tab-label { font-weight: 600; }
