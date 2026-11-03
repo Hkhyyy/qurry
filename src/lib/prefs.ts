@@ -18,9 +18,9 @@ const KEYS: Record<FontTarget, { family: string; size: string }> = {
   grid: { family: "dbtool.gridFontFamily", size: "dbtool.gridFontSize" },
 };
 
-/** CSS font-family for a chosen family: quoted (quotes and other CSS syntax dropped) before the monospace fallback */
+/** CSS font-family for a chosen family: quoted (quotes, commas and other CSS syntax dropped, so a pasted "A, B" stays one family) before the monospace fallback */
 export const fontStack = (family: string) => {
-  const f = family.replace(/["\\;{}]/g, "").trim();
+  const f = family.replace(/["\\;{},]/g, "").trim();
   return f ? `"${f}", ${MONO}` : MONO;
 };
 
@@ -72,15 +72,23 @@ export function useFonts(): Record<FontTarget, Font> {
   );
 }
 
-/** Whether a font is installed: text in it measures differently from every generic fallback. Canvas missing: assume it is */
+/** Whether a font is installed: text in it measures differently from every generic fallback.
+ * Measured on a hidden element, the way the page renders it: in WKWebView (Tauri on macOS) a canvas only sees system fonts, not user-installed ones */
 export function fontInstalled(family: string): boolean {
-  const ctx = document.createElement("canvas").getContext("2d");
-  if (!ctx) return true;
+  const head = fontStack(family).split(",")[0];
+  const span = document.createElement("span");
+  span.textContent = "mmmmmmmmmlli1WQ@#";
+  span.style.cssText = "position:absolute;left:-9999px;top:0;visibility:hidden;white-space:nowrap;font-size:48px";
+  document.body.appendChild(span);
   const width = (f: string) => {
-    ctx.font = `48px ${f}`;
-    return ctx.measureText("mmmmmmmmmlli1WQ@#").width;
+    span.style.fontFamily = f;
+    return span.getBoundingClientRect().width;
   };
-  return ["monospace", "serif", "sans-serif"].some((g) => width(`${fontStack(family).split(",")[0]}, ${g}`) !== width(g));
+  try {
+    return ["monospace", "serif", "sans-serif"].some((g) => width(`${head}, ${g}`) !== width(g));
+  } finally {
+    span.remove();
+  }
 }
 
 /** Monospace fonts offered in Settings (only the installed ones are listed; any other family can be typed) */

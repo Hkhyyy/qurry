@@ -63,4 +63,13 @@ test("Settings › font that isn't installed: falls back to monospace and says h
   await field(page, "Grid font family").fill("");
   await expect(dialog(page).getByText("isn't installed")).toHaveCount(0);
   expect(await dialog(page).boundingBox()).toEqual(box);
+  // A pasted stack is one family name, which isn't installed either: the warning says so instead of silently using the default
+  await field(page, "Grid font family").fill(`${FONT}, monospace`);
+  await expect(dialog(page).getByText(`"${FONT}, monospace" isn't installed`)).toBeVisible();
+  await field(page, "Grid font family").fill("");
+});
+
+test("Settings › font list: suggests the installed monospace fonts", async ({ page }) => {
+  await page.keyboard.press("Meta+Comma");
+  await expect(page.locator(`#settings-fonts option[value="${FONT}"]`)).toHaveCount(1);
 });

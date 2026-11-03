@@ -81,4 +81,8 @@ describe("fontStack", () => {
     const { fontStack, MONO } = await load();
     expect(fontStack('x"; color: red')).toBe(`"x color: red", ${MONO}`);
   });
+  it("keeps a pasted stack one family, so the installed check names the font that is applied", async () => {
+    const { fontStack, MONO } = await load();
+    expect(fontStack("Fira Code, monospace")).toBe(`"Fira Code monospace", ${MONO}`);
+  });
 });
