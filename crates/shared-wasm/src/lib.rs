@@ -452,6 +452,12 @@ pub fn bindable(spec: &str) -> bool {
     qurry_shared::keymap::bindable(spec)
 }
 
+/// Whether a spec can be a GUI key in `scope` ("global" / "tree" / "editor" / "grid")
+#[wasm_bindgen(js_name = bindableIn)]
+pub fn bindable_in(spec: &str, scope: JsValue) -> Result<bool, JsError> {
+    Ok(qurry_shared::keymap::bindable_in(spec, serde_wasm_bindgen::from_value(scope)?))
+}
+
 #[derive(serde::Deserialize)]
 struct Bound {
     id: String,
