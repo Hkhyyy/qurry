@@ -12,9 +12,9 @@ const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLow
  * Settings › Editor / Grid font family, like DataGrip's font combo box: a drop-down of the installed families with a search field
  * and "Monospaced only" (DataGrip's "Show only monospaced fonts"; on by default). Typing on the closed field opens it with that text;
  * ↑↓ PgUp PgDn move, ↩ picks (applied live), ⎋ closes. The field shows the family in itself; a saved family that isn't installed
- * says so and renders with the default. The drop-down is the ui kit's PopupList (as ComboBox's), here with a search box on top
+ * says so and renders with the default. Opening it calls onOpen (Settings lists the installed fonts again). The drop-down is the ui kit's PopupList (as ComboBox's), here with a search box on top
  */
-export function FontPicker({ label, value, installed, onPick }: { label: string; value: string; installed: FontFamily[] | null; onPick: (family: string) => void }) {
+export function FontPicker({ label, value, installed, onOpen, onPick }: { label: string; value: string; installed: FontFamily[] | null; onOpen: () => void; onPick: (family: string) => void }) {
   const [query, setQuery] = useState<string | null>(null);
   const [monoOnly, setMonoOnly] = useState(true);
   const [active, setActive] = useState(0);
@@ -31,6 +31,10 @@ export function FontPicker({ label, value, installed, onPick }: { label: string;
     onPick(family);
     close(true);
   };
+
+  useEffect(() => {
+    if (open) onOpen();
+  }, [open]);
 
   // The current family is highlighted when the list opens or its rows change
   useEffect(() => {
