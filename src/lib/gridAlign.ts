@@ -1,6 +1,7 @@
 // Grid cell alignment per value class (Settings › Appearance › Alignment). The class rule and the defaults are qurry_shared::format
 // through WASM, the TUI grid's rule; the classes the user changed are kept in settings.json, which the TUI reads too.
-// Until the module is loaded cells keep their kind's look (number / NULL colors) and sit on the left
+// Until the module is loaded (or when the WebView refuses WebAssembly) cells get no alignment class: the stylesheet's fallback
+// keeps numbers on the right and the rest on the left, as before this setting, and Settings can't change it
 import { useSyncExternalStore } from "react";
 import { api, type Cell } from "./api";
 import { DEFAULT_TOKEN } from "./extract";
@@ -39,7 +40,8 @@ export const alignOf = (cls: ValueClass, o: Alignments = overrides): Align => sh
 export async function setGridAlign(cls: ValueClass, a: Align) {
   const prev = overrides;
   const next = { ...overrides };
-  if (a === alignOf(cls, {})) delete next[cls];
+  // Without the module the default isn't known: keep the pick rather than drop it
+  if (sharedReady() && a === alignOf(cls, {})) delete next[cls];
   else next[cls] = a;
   overrides = next;
   emit();
@@ -60,8 +62,8 @@ export function useGridAlign(): Alignments {
   );
 }
 
-/** Alignment of every class under `o`, for a grid render */
-export const alignTable = (o: Alignments) => Object.fromEntries(VALUE_CLASSES.map(({ cls }) => [cls, alignOf(cls, o)])) as Record<ValueClass, Align>;
+/** Alignment of every class under `o`, for a grid render; empty without the module (cells keep the stylesheet's alignment) */
+export const alignTable = (o: Alignments): Alignments => (sharedReady() ? Object.fromEntries(VALUE_CLASSES.map(({ cls }) => [cls, alignOf(cls, o)])) : {});
 
 /**
  * Class of a column's cells. The shared rule reads only the value's kind (null, number, boolean, text), not its content,

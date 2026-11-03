@@ -49,7 +49,7 @@
 
 | 조각 | 규칙 |
 |---|---|
-| `Field` · `RadioGroup` · `FormSection` · `Hint` · `ColorPicker` | 라벨 + 칸 (힌트 · 오류는 아래) / 선택지마다 설명 / 구역 제목 / 작은 회색 설명 / 색 고르기 |
+| `Field` · `RadioGroup` · `FormSection` · `Hint` · `ColorPicker` | 라벨 + 칸 (힌트 · 오류는 아래; `group` = 제 라벨이 있는 칸 여럿: `<div>` 라서 라벨을 눌러도 첫 칸으로 가지 않음) / 선택지마다 설명 / 구역 제목 / 작은 회색 설명 / 색 고르기 |
 | `SearchField` | ⌕ + 입력 (+ 불러오는 중 ◌). `bare` = 팝오버 머리처럼 테두리 없이 크게 |
 | `Tabs` · `SectionTitle` · `KeyHints` | 구역 바꾸기 (`size` sm) / 목록 · 창 안의 작은 제목 / "↩ Open · ⇥ Next tab" |
 | `Notice` · `EmptyState` | 안내 · 경고 · 오류 한 덩어리 / 비어 있을 때 |

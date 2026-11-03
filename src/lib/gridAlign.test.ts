@@ -14,12 +14,20 @@ vi.mock("./api", () => ({
   },
 }));
 
+// A WebView that refuses WebAssembly: the module never loads
+const wasm = vi.hoisted(() => ({ refused: false }));
+vi.mock("./shared", async (orig) => {
+  const real = await orig<typeof import("./shared")>();
+  return { ...real, sharedReady: () => !wasm.refused && real.sharedReady(), sharedOr: <T,>(fb: T, f: Parameters<typeof real.sharedOr<T>>[1]) => (wasm.refused ? fb : real.sharedOr(fb, f)) };
+});
+
 const { alignOf, alignTable, cellClasses, loadGridAlign, setGridAlign } = await import("./gridAlign");
 
 describe("grid alignment", () => {
   beforeEach(async () => {
     saved.overrides = {};
     saved.fail = false;
+    wasm.refused = false;
     await loadGridAlign();
   });
 
@@ -55,5 +63,12 @@ describe("grid alignment", () => {
     saved.fail = true;
     await expect(setGridAlign("null", "left")).rejects.toMatch("permission denied");
     expect(alignOf("null")).toBe("right");
+  });
+
+  it("without WebAssembly cells get no alignment (the stylesheet keeps numbers on the right), and a pick is kept, not dropped as a default", async () => {
+    wasm.refused = true;
+    expect(alignTable({ null: "left" })).toEqual({});
+    await setGridAlign("null", "left");
+    expect(saved.overrides).toEqual({ null: "left" });
   });
 });

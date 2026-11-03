@@ -924,7 +924,7 @@ function TransposedView({ cols, rows }: { cols: QueryResult["columns"]; rows: Ce
                 {rows.map((r, ri) => {
                   const cls = classOf(r[ci]);
                   return (
-                    <td key={ri} className={cx(CELL_KIND[cls], `al-${aligns[cls]}`)}>
+                    <td key={ri} className={cx(CELL_KIND[cls], aligns[cls] && `al-${aligns[cls]}`)}>
                       {fracW[ci] && typeof r[ci] === "string" ? padFrac(r[ci] as string, fracW[ci]) : display(r[ci])}
                     </td>
                   );

@@ -335,7 +335,8 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .grid-scroll.transposed th { position: sticky; left: 0; background: var(--panel); text-align: left; padding: 0 10px; border-right: 1px solid var(--border); white-space: nowrap; }
 .grid-scroll.transposed td { padding: 0 10px; height: 24px; border-right: 1px solid var(--c-2c2e33); border-bottom: 1px solid var(--c-26282b); white-space: nowrap; max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
 .grid-scroll.transposed td.null { color: var(--c-6f737a); font-style: italic; }
-.grid-scroll.transposed td.num { color: var(--c-2aacb8); }
+.grid-scroll.transposed td.num { color: var(--c-2aacb8); text-align: right; }
+.grid-scroll.transposed td.al-left { text-align: left; }
 .grid-scroll.transposed td.al-right { text-align: right; }
 .grid-scroll.transposed td.al-center { text-align: center; }
 .value-editor { position: absolute; top: 32px; right: 0; bottom: 0; width: 40%; min-width: 320px; z-index: 40; display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--border); box-shadow: -6px 0 18px rgba(0,0,0,.35); }

@@ -97,7 +97,9 @@ test("header click selects the column and keeps the keyboard on the grid", async
 });
 
 // The issue's case: a result panel a few rows high (classic scroll bars), where rows showed in a strip between the toolbar and
-// the header. Besides the geometry, what is painted there must not be a row: the scroller clips its rows (contain: paint)
+// the header. Besides the geometry, what is painted there must not be a row: the scroller clips its rows (contain: paint).
+// The headless browsers here clip the rows even without it (overflow: auto already does where painting is right), so the
+// geometry and hit tests below hold either way: the contain: paint check on each scroller is what guards the fix
 const SHORT = { width: 760, height: 400 };
 
 /** Points across the header strip and its top edge where a row is what's painted (hit testing follows painting and clipping) */
@@ -130,6 +132,7 @@ async function expectNoStrip(page: Page) {
   // The panel really is short and narrow: the body scrolled both ways
   const g = await geometry(page);
   expect([g.bodyTop, g.bodyLeft]).toEqual([37, 123]);
+  expect(await work(page).locator(".grid-scroll").evaluate((el) => getComputedStyle(el).contain)).toContain("paint");
 }
 
 test("short panel: no row shows between the toolbar and the header after scrolling (table data editor and console result)", async ({ page }) => {
