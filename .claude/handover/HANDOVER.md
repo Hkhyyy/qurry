@@ -49,6 +49,12 @@ After run 4, two commits were added on top: one shares `.claude/agents`, and the
 
 Not started: core-backend-jobs, tls-optin-ui, tui-color-modes, release-channels, repo-docs, aws-ssm-tunnel.
 
+**Hotfix on main to pick up (0.2.14).** PR #74 (`hotfix/hotfix_titlebar_theme`) makes the macOS title bar follow the app theme: `src/lib/theme.ts` sets the window theme, and `src-tauri/capabilities/default.json` adds `core:window:allow-set-theme`. Once it is merged, merge `origin/main` into `feature/architecture` before run 6's integration. The batch doesn't touch those two files, so the merge should be clean. Keep the behavior through the GUI split (item 17 and later):
+- Dark and High contrast set the window theme to `dark`, Light sets it to `light`, and Sync with OS sets `null`.
+- `src/lib/theme.test.ts` must keep passing.
+
+Also check that the PR's version bump starts from the latest tag (v0.2.14 or later) and goes to 0.3.0.
+
 ## 2. Remaining runs
 
 The user merged the original runs 5+7 and 6+8, so **two runs are left**.
