@@ -75,7 +75,8 @@ export function cellClasses(typeName: string): (v: Cell) => ValueClass {
     const kind = v === null || v === DEFAULT_TOKEN ? "null" : typeof v;
     const hit = memo.get(kind);
     if (hit) return hit;
-    const c = sharedOr<ValueClass>(kind === "null" || kind === "number" ? kind : "string", (s) => s.valueClass(typeName, kind === "null" ? null : v));
+    // A stand-in of the same kind: a large text never has to be copied into WASM memory
+    const c = sharedOr<ValueClass>(kind === "null" || kind === "number" ? kind : "string", (s) => s.valueClass(typeName, kind === "null" ? null : kind === "string" ? "" : v));
     if (sharedReady()) memo.set(kind, c);
     return c;
   };
