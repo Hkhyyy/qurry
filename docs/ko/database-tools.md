@@ -40,7 +40,7 @@ MySQL 백업에는 `SET @@GLOBAL.GTID_PURGED` 를 넣지 않아서 (`--set-gtid-
 
 ## 테이블 구조 (DDL 탭)
 
-테이블에서 **Go to DDL** (`⌘b`, TUI `⌃b`) 을 하면 SQL 이 열립니다. 탭의 **SQL | Structure** 전환 (TUI: `v`) 은 같은 테이블을 읽기 전용 표로 보여 줍니다: 컬럼 (이름, 타입, NULL 허용, 기본값, 설명, PK 표시), 키와 제약, 인덱스와 그 컬럼, 양쪽 방향의 외래 키 (이 테이블이 참조하는 것과 이 테이블을 참조하는 테이블, ON UPDATE / ON DELETE 포함), 트리거, 테이블 옵션과 설명 (PostgreSQL: owner, tablespace, storage parameter, partition key, parent; MySQL: engine, charset, collation, row format, auto increment). 새 DDL 탭은 마지막에 쓴 보기로 열립니다. 기본은 SQL 입니다.
+테이블에서 **Go to DDL** (`⌘b`, TUI `⌃b`) 을 하면 SQL 이 열립니다. 탭의 **SQL | Structure** 전환 (포커스가 있으면 `← →`, TUI: `v`) 은 같은 테이블을 읽기 전용 표로 보여 줍니다: 컬럼 (이름, 타입, NULL 허용, 기본값, 설명, PK 표시), 키와 제약, 인덱스와 그 컬럼, 양쪽 방향의 외래 키 (이 테이블이 참조하는 것과 이 테이블을 참조하는 테이블, ON UPDATE / ON DELETE 포함), 트리거, 테이블 옵션과 설명 (PostgreSQL: owner, tablespace, storage parameter, partition key, parent; MySQL: engine, charset, collation, row format). 새 DDL 탭은 마지막에 쓴 보기로 열립니다. 기본은 SQL 입니다.
 - PostgreSQL 과 MySQL 은 모든 칸을 채웁니다. 다른 Data Source (드라이버 플러그인) 는 컬럼 · 키 · 인덱스를 보여 주고, 나머지는 "Not available for this data source" 라고 알려 줍니다.
 - 불러오기에 실패하면 이유를 보여 줍니다: **Retry** (TUI `r`), 또는 **Show SQL** (TUI `v`) — SQL 보기에는 전체 DDL 이 그대로 있습니다.
 - 고치는 것은 이 보기가 아니라 **Modify Table…** (아래) 에서 합니다.

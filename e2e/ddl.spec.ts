@@ -1,4 +1,4 @@
-import { expand, expect, openApp, tabStrips, test, treeItem, work } from "./app";
+import { expand, expect, openApp, openConsole, tabStrips, test, treeItem, work } from "./app";
 
 test.beforeEach(async ({ page }) => openApp(page));
 
@@ -9,6 +9,7 @@ const openDdl = async (page: import("@playwright/test").Page, name: string, nth 
 };
 const views = (page: import("@playwright/test").Page) => work(page).getByRole("tablist", { name: "DDL view" });
 const section = (page: import("@playwright/test").Page, name: string) => work(page).getByRole("region", { name });
+const loads = (page: import("@playwright/test").Page) => page.evaluate(() => (window as any).__mockStructureCalls ?? 0);
 
 test("a table's DDL opens as SQL; Structure shows every section, and the choice is remembered", async ({ page }) => {
   await openDdl(page, "users");
@@ -57,6 +58,47 @@ test("a source that reports only the basics says which sections aren't available
   await expect(section(page, "Columns 5")).toBeVisible();
   for (const s of ["Foreign keys", "Referenced by", "Triggers", "Options and comment"])
     await expect(section(page, s)).toContainText("Not available for this data source");
+  // No index columns reported: no empty Columns column
+  await expect(section(page, "Indexes 3").getByRole("columnheader")).toHaveText(["Name", "Kind", "Definition"]);
+});
+
+test("Structure loads once, when first shown: not for restored or background tabs, not again on each switch", async ({ page }) => {
+  await openDdl(page, "users");
+  await views(page).getByRole("tab", { name: "Structure" }).click();
+  await expect(section(page, "Columns 5")).toBeVisible();
+  await openDdl(page, "contracts");
+  await expect(section(page, "Columns 5")).toBeVisible();
+  expect(await loads(page)).toBe(2);
+  // SQL and back (keyboard: ← → on the switch) keeps what was loaded
+  await views(page).getByRole("tab", { name: "Structure" }).focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(views(page).getByRole("tab", { name: "SQL" })).toHaveAttribute("aria-selected", "true");
+  await expect(views(page).getByRole("tab", { name: "SQL" })).toBeFocused();
+  await expect(work(page).locator(".monaco-editor")).toBeVisible();
+  await page.keyboard.press("ArrowRight");
+  await expect(section(page, "Columns 5")).toBeVisible();
+  expect(await loads(page)).toBe(2);
+  // Relaunch with a console in front: the DDL tabs come back in Structure but don't connect until shown
+  await openConsole(page);
+  await page.waitForTimeout(800);
+  await page.reload();
+  await expect(treeItem(page, "users").first()).toBeVisible();
+  await page.waitForTimeout(500);
+  expect(await loads(page)).toBe(0);
+  await page.getByRole("tab", { name: /contracts \[DDL\]/ }).click();
+  await expect(section(page, "Columns 5")).toBeVisible();
+  expect(await loads(page)).toBe(1);
+});
+
+test("a long default wraps so the comment stays in view", async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 800 });
+  await openDdl(page, "users");
+  await views(page).getByRole("tab", { name: "Structure" }).click();
+  const cols = section(page, "Columns 5");
+  await expect(cols.getByRole("row", { name: /email/ })).toContainText("current_setting('app.mail_domain')");
+  const box = await work(page).locator(".ddl-structure").evaluate((e) => ({ scroll: e.scrollWidth, client: e.clientWidth }));
+  expect(box.scroll).toBeLessThanOrEqual(box.client);
+  await expect(cols.getByRole("row", { name: /email/ }).getByText("Login and receipts")).toBeInViewport();
 });
 
 test("a failed load says how to get back to the SQL", async ({ page }) => {

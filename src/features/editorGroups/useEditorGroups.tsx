@@ -541,7 +541,8 @@ export function useEditorGroups({
                   </ToolButton>
                   <ToolButton title="Run in a console" onClick={() => { const c = conns.find((x) => x.id === t.connId); if (c) openConsole(c, t.database, t.sql); }}>Run in Console</ToolButton>
                 </Toolbar>
-                {view === "structure" && t.edit && <TableStructureView target={t.target} schema={t.edit.schema} table={t.edit.table} onShowSql={() => pick("sql")} />}
+                {/* Stays mounted (loads once per tab, on first show; a restored or background tab doesn't connect) */}
+                {t.edit && <TableStructureView target={t.target} schema={t.edit.schema} table={t.edit.table} visible={view === "structure" && t.id === ga?.id} onShowSql={() => pick("sql")} />}
                 <div className="ddl-editor" style={{ display: view === "sql" ? undefined : "none" }}>
                 <ConsoleEditor
                   tabId={t.id}

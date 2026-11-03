@@ -112,15 +112,16 @@ const handlers: Record<string, (a: any) => unknown> = {
       { name: "users_contract_fk", kind: "f", definition: "FOREIGN KEY (contract_id) REFERENCES contracts(id)" },
     ],
   }),
-  // DDL tab → Structure: every section filled. billing.* answers like a driver plugin (only columns · keys · indexes);
-  // window.__mockStructureFail (a message) makes it fail
+  // DDL tab → Structure: every section filled. billing.* answers like a driver plugin (only columns · keys · indexes, no index
+  // columns); window.__mockStructureFail (a message) makes it fail; window.__mockStructureCalls counts the loads
   table_structure: (a: any) => {
+    (globalThis as any).__mockStructureCalls = ((globalThis as any).__mockStructureCalls ?? 0) + 1;
     const fail = (globalThis as any).__mockStructureFail;
     if (fail) throw fail;
     const columns = [
       { name: "id", dataType: "bigint", nullable: false, defaultValue: "nextval('users_id_seq'::regclass)", comment: null, isPk: true },
       { name: "user_name", dataType: "character varying(50)", nullable: false, defaultValue: null, comment: "이름", isPk: false },
-      { name: "email", dataType: "text", nullable: true, defaultValue: null, comment: "Login and receipts; unique when set", isPk: false },
+      { name: "email", dataType: "text", nullable: true, defaultValue: "concat('user-', currval('users_id_seq'::regclass), '@', current_setting('app.mail_domain'))", comment: "Login and receipts; unique when set", isPk: false },
       { name: "contract_id", dataType: "bigint", nullable: true, defaultValue: null, comment: null, isPk: false },
       { name: "created_at", dataType: "timestamp with time zone", nullable: false, defaultValue: "now()", comment: null, isPk: false },
     ];
@@ -139,7 +140,7 @@ const handlers: Record<string, (a: any) => unknown> = {
         { name: `${a.table}_name_check`, kind: "c", definition: "CHECK (length(user_name) > 0)" },
       ],
     };
-    if (a.schema === "billing") return { ...basics, foreignKeys: null, referencedBy: null, triggers: null, options: null, comment: null };
+    if (a.schema === "billing") return { ...basics, indexes: basics.indexes.map((i) => ({ ...i, columns: [] })), foreignKeys: null, referencedBy: null, triggers: null, options: null, comment: null };
     const fk = (name: string, schema: string, table: string, columns: string[], refTable: string, onDelete: string) => ({ name, schema, table, columns, refSchema: "public", refTable, refColumns: ["id"], onUpdate: "NO ACTION", onDelete });
     return {
       ...basics,

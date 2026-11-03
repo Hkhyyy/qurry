@@ -357,6 +357,9 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .ddl-section .ui-table td { vertical-align: top; white-space: nowrap; }
 /* The last column (definition · comment) takes the rest and wraps; names and kinds stay on one line */
 .ddl-section .ui-table td:last-child { width: 100%; white-space: normal; overflow-wrap: anywhere; }
+/* Columns: a long default (a jsonb literal, a CASE) wraps too, sharing the width with the comment so the comment stays in view */
+.ddl-section .ui-table td.ddl-wrap { min-width: 12ch; white-space: normal; overflow-wrap: anywhere; }
+.ddl-section .ui-table:has(td.ddl-wrap) td:last-child { width: auto; }
 .ddl-count { margin-left: var(--ui-sp-2); font-weight: 400; }
 .ddl-pk { display: inline-flex; vertical-align: -3px; margin-left: var(--ui-sp-2); }
 .ddl-structure-error { max-width: 720px; }

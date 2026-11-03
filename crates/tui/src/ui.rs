@@ -508,11 +508,12 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 (Some(_), false) => "v Structure · ",
                 (None, _) => "",
             };
-            let text = crate::structure::body(t);
+            let text = crate::structure::body(t, body.width.saturating_sub(2) as usize);
             // Don't scroll past the end (so the last line sits at the bottom)
             let lines = text.lines.len() as u16;
             let scroll = t.scroll.min(lines.saturating_sub(body.height.saturating_sub(2)));
-            let p = Paragraph::new(text).scroll((scroll, 0)).block(panel(format!(" {title} — {view}{lines} lines · ↑↓ PgUp/PgDn wheel scroll · y copies all "), focus != Focus::Tree));
+            let copies = if t.table.is_some() { "y copies the SQL" } else { "y copies all" };
+            let p = Paragraph::new(text).scroll((scroll, 0)).block(panel(format!(" {title} — {view}{lines} lines · ↑↓ PgUp/PgDn scroll · {copies} "), focus != Focus::Tree));
             f.render_widget(p, body);
             t.scroll = scroll;
             if focused {

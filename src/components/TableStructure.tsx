@@ -1,24 +1,35 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { meta, type ForeignKeyMeta, type TableStructure } from "../lib/api";
 import { constraintLabel, fkSide } from "../lib/structure";
 import { Button, Hint, Notice, Row, SectionTitle, Table, Td, Text, Th } from "../ui";
 import { KeyIcon } from "../ui/icons";
 
-/** DDL tab → Structure: a read-only view of a table in sections (DataGrip's object editor, without the editing) */
-export function TableStructureView({ target, schema, table, onShowSql }: { target: string; schema: string; table: string; onShowSql: () => void }) {
+/** DDL tab → Structure: a read-only view of a table in sections (DataGrip's object editor, without the editing).
+ *  Kept mounted while hidden: it loads when first visible and keeps what it loaded (Retry reloads) */
+export function TableStructureView({ target, schema, table, visible, onShowSql }: { target: string; schema: string; table: string; visible: boolean; onShowSql: () => void }) {
   const [state, setState] = useState<{ s?: TableStructure; err?: string }>({});
+  const seq = useRef(0);
   const load = useCallback(() => {
+    // Only the latest request lands (a Retry while one is still running)
+    const n = ++seq.current;
     setState({});
     meta.structure(target, schema, table).then(
-      (s) => setState({ s }),
-      (e) => setState({ err: String(e) }),
+      (s) => n === seq.current && setState({ s }),
+      (e) => n === seq.current && setState({ err: String(e) }),
     );
   }, [target, schema, table]);
-  useEffect(load, [load]);
+  const loaded = useRef(false);
+  useEffect(() => {
+    if (visible && !loaded.current) {
+      loaded.current = true;
+      load();
+    }
+  }, [visible, load]);
 
+  const style = { display: visible ? undefined : "none" };
   if (state.err)
     return (
-      <div className="ddl-structure">
+      <div className="ddl-structure" style={style}>
         <Notice tone="danger" className="ddl-structure-error">
           <div role="alert">
             Couldn't load the structure of {schema}.{table}: {state.err}
@@ -34,7 +45,7 @@ export function TableStructureView({ target, schema, table, onShowSql }: { targe
   const s = state.s;
   if (!s)
     return (
-      <div className="ddl-structure">
+      <div className="ddl-structure" style={style}>
         <Text tone="muted">Loading the structure of {schema}.{table}…</Text>
       </div>
     );
@@ -48,8 +59,10 @@ export function TableStructureView({ target, schema, table, onShowSql }: { targe
         <Td>{f.onDelete}</Td>
       </tr>
     ));
+  // Driver plugins may not report index columns: then no empty Columns column
+  const indexCols = s.indexes.some((i) => i.columns.length);
   return (
-    <div className="ddl-structure">
+    <div className="ddl-structure" style={style}>
       <Section title="Columns" count={s.columns.length} head={["Name", "Type", "Nullable", "Default", "Comment"]}>
         {s.columns.map((c) => (
           <tr key={c.name}>
@@ -63,7 +76,7 @@ export function TableStructureView({ target, schema, table, onShowSql }: { targe
             </Td>
             <Td mono>{c.dataType}</Td>
             <Td muted={!c.nullable}>{c.nullable ? "yes" : "no"}</Td>
-            <Td mono>{c.defaultValue}</Td>
+            <Td mono className="ddl-wrap">{c.defaultValue}</Td>
             <Td>{c.comment}</Td>
           </tr>
         ))}
@@ -77,11 +90,11 @@ export function TableStructureView({ target, schema, table, onShowSql }: { targe
           </tr>
         ))}
       </Section>
-      <Section title="Indexes" count={s.indexes.length} head={["Name", "Columns", "Kind", "Definition"]}>
+      <Section title="Indexes" count={s.indexes.length} head={indexCols ? ["Name", "Columns", "Kind", "Definition"] : ["Name", "Kind", "Definition"]}>
         {s.indexes.map((i) => (
           <tr key={i.name}>
             <Td mono>{i.name}</Td>
-            <Td mono>{i.columns.join(", ")}</Td>
+            {indexCols && <Td mono>{i.columns.join(", ")}</Td>}
             <Td>{i.isPrimary ? "Primary" : i.isUnique ? "Unique" : ""}</Td>
             <Td mono muted>{i.definition}</Td>
           </tr>

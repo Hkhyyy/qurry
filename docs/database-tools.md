@@ -40,7 +40,7 @@ MySQL backups leave out `SET @@GLOBAL.GTID_PURGED` (`--set-gtid-purged=OFF`, mys
 
 ## Table structure (DDL tab)
 
-**Go to DDL** (`⌘b`, TUI `⌃b`) on a table opens its SQL. The tab's **SQL | Structure** switch (TUI: `v`) shows the same table as read-only tables instead: columns (name, type, nullable, default, comment, the primary key marked), keys and constraints, indexes with their columns, foreign keys both ways (what the table references and which tables reference it, with ON UPDATE / ON DELETE), triggers, and table options with the comment (PostgreSQL: owner, tablespace, storage parameters, partition key, parent; MySQL: engine, charset, collation, row format, auto increment). New DDL tabs open in the view you used last; SQL is the default.
+**Go to DDL** (`⌘b`, TUI `⌃b`) on a table opens its SQL. The tab's **SQL | Structure** switch (`← →` once it has focus; TUI: `v`) shows the same table as read-only tables instead: columns (name, type, nullable, default, comment, the primary key marked), keys and constraints, indexes with their columns, foreign keys both ways (what the table references and which tables reference it, with ON UPDATE / ON DELETE), triggers, and table options with the comment (PostgreSQL: owner, tablespace, storage parameters, partition key, parent; MySQL: engine, charset, collation, row format). New DDL tabs open in the view you used last; SQL is the default.
 - PostgreSQL and MySQL fill every section. Other data sources (driver plugins) show columns, keys and indexes, and say "Not available for this data source" for the rest.
 - If loading fails, the view says why: **Retry** (TUI `r`), or **Show SQL** (TUI `v`) — the SQL view still has the full DDL.
 - Editing is done in **Modify Table…** (below), not in this view.

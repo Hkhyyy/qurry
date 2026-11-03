@@ -2,7 +2,7 @@
  * Molecules: a row · cell made of a few atoms — list row, detail row, menu item, form field, tab, hint, section title.
  * Spec in README.md
  */
-import { HTMLAttributes, InputHTMLAttributes, MouseEvent, ReactNode, useEffect, useState } from "react";
+import { HTMLAttributes, InputHTMLAttributes, KeyboardEvent, MouseEvent, ReactNode, useEffect, useState } from "react";
 import { Avatar, Button, Kbd, Radio, Swatch, Text, TextInput } from "./atoms";
 import { cx } from "./cx";
 import { Chevron } from "./icons";
@@ -106,8 +106,17 @@ export function SearchField({ busy, bare, className, ...rest }: InputHTMLAttribu
 
 // ───────── Tabs · titles ─────────
 export function Tabs<T extends string>({ items, value, onChange, size, label }: { items: { id: T; label: ReactNode }[]; value: T; onChange: (id: T) => void; size?: "sm"; label?: string }) {
+  // ←/→ (and Home/End) select the previous/next tab and move focus with it, as in the ARIA tab pattern
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const i = items.findIndex((t) => t.id === value);
+    const n = { ArrowLeft: i - 1, ArrowRight: i + 1, Home: 0, End: items.length - 1 }[e.key];
+    if (n === undefined || n < 0 || n >= items.length || n === i) return;
+    e.preventDefault();
+    onChange(items[n].id);
+    e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')[n]?.focus();
+  };
   return (
-    <div className={cx("ui-tabs", size === "sm" && "size-sm")} role="tablist" aria-label={label}>
+    <div className={cx("ui-tabs", size === "sm" && "size-sm")} role="tablist" aria-label={label} onKeyDown={onKeyDown}>
       {items.map((t) => (
         <button key={t.id} type="button" role="tab" aria-selected={value === t.id} className={cx("ui-tab", value === t.id && "active")} onClick={() => onChange(t.id)}>
           {t.label}

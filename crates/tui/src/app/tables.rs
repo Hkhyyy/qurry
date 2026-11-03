@@ -149,29 +149,22 @@ impl App {
         let st = self.state.clone();
         let (conn, db2) = (conn.to_string(), db.clone());
         let title = format!("{name} [DDL]");
-        // A table also gets the Structure view (v), loaded with the SQL
+        // A table also gets the Structure view (v), loaded only when it is shown
         let table = matches!(kind.as_str(), "table" | "partitioned").then(|| (schema.clone(), name.clone()));
-        let (t2, s2, n2) = (target.clone(), schema.clone(), name.clone());
-        let want = table.is_some();
-        self.spawn(
-            async move {
-                let (ddl, structure) = tokio::join!(st.object_ddl(target, schema, name, kind), async {
-                    if want { Some(st.table_structure(t2, s2, n2).await.map_err(err)) } else { None }
-                });
-                ddl.map_err(err).map(|d| (d, structure))
-            },
-            move |a, r| match r {
-                Ok((text, structure)) => {
-                    if let Some(i) = a.tabs.iter().position(|t| t.title == title && t.conn == conn) {
-                        a.activate(i);
-                    } else {
-                        let structure_view = table.is_some() && a.ddl_structure;
-                        a.push_tab(&conn, db2, title, TabKind::Text(TextTab { text, table, structure_view, structure, ..Default::default() }));
+        self.spawn(async move { st.object_ddl(target, schema, name, kind).await.map_err(err) }, move |a, r| match r {
+            Ok(text) => {
+                if let Some(i) = a.tabs.iter().position(|t| t.title == title && t.conn == conn) {
+                    a.activate(i);
+                } else {
+                    let structure_view = table.is_some() && a.ddl_structure;
+                    let id = a.push_tab(&conn, db2, title, TabKind::Text(TextTab { text, table, structure_view, ..Default::default() }));
+                    if structure_view {
+                        a.load_structure(id);
                     }
                 }
-                Err(e) => a.status = format!("DDL failed: {e}"),
-            },
-        );
+            }
+            Err(e) => a.status = format!("DDL failed: {e}"),
+        });
     }
 
     /// DDL tab of a table: switch between the SQL and the Structure view (v); the choice is kept for the next DDL tab

@@ -189,10 +189,10 @@ export const Update: S = {
 };
 
 /** DDL tab → Structure (the toolbar's SQL | Structure switch picks it). Read-only sections from the table's metadata */
-export const DdlStructure: S = { name: "DDL — Structure", render: () => <Frame h={720}><TableStructureView target="dev" schema="public" table="users" onShowSql={noop} /></Frame> };
+export const DdlStructure: S = { name: "DDL — Structure", render: () => <Frame h={720}><TableStructureView target="dev" schema="public" table="users" visible onShowSql={noop} /></Frame> };
 export const DdlStructureBasics: S = {
   name: "DDL — Structure (source reports only the basics)",
-  render: () => <Frame h={720}><TableStructureView target="dev" schema="billing" table="invoices" onShowSql={noop} /></Frame>,
+  render: () => <Frame h={720}><TableStructureView target="dev" schema="billing" table="invoices" visible onShowSql={noop} /></Frame>,
 };
 export const DdlStructureError: S = {
   name: "DDL — Structure (load failed)",
@@ -200,7 +200,7 @@ export const DdlStructureError: S = {
     (globalThis as any).__mockStructureFail = "connection reset by peer";
     return () => delete (globalThis as any).__mockStructureFail;
   },
-  render: () => <Frame h={240}><TableStructureView target="dev" schema="public" table="users" onShowSql={noop} /></Frame>,
+  render: () => <Frame h={240}><TableStructureView target="dev" schema="public" table="users" visible onShowSql={noop} /></Frame>,
 };
 export const Diagram: S = { name: "Diagram (ERD)", render: () => <Frame h={600}><ErdView target="dev" schemas={["public"]} visible onOpenTable={noop} onStatus={noop} /></Frame> };
 export const Dba: S = {
