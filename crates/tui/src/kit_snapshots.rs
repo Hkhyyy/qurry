@@ -248,6 +248,18 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         c.show_output = false;
     }
     scenes.push(app_scene(h, "Grid alignment", "Numbers and NULL on the right by default (a NULL stays in line with the numbers); text, dates, booleans and JSON on the left", 120, 22));
+    // Value panel (v): the cell's whole value beside the grid, jsonb pretty-printed and coloured (the GUI's Value Editor panel)
+    h.app.focus = crate::app::Focus::Grid;
+    if let Some(g) = h.app.grid_mut() {
+        g.col = 4;
+    }
+    h.app.value_panel = true;
+    scenes.push(app_scene(h, "Value panel", "v in a grid: the current cell's whole value beside the grid (follows the cursor), JSON pretty-printed; v / ⌃w close it", 120, 22));
+    h.app.value_panel = false;
+    if let Some(g) = h.app.grid_mut() {
+        (g.col, g.col_off) = (0, 0);
+    }
+    h.app.focus = crate::app::Focus::Editor;
     {
         use qurry_core::format::{Align, ValueClass};
         h.app.state.store.set_grid_align(ValueClass::Null, Align::Left).unwrap();
@@ -264,6 +276,34 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         h.app.state.store.set_grid_align(ValueClass::Null, Align::Right).unwrap();
         h.app.align = h.app.state.store.set_grid_align(ValueClass::Boolean, Align::Left).unwrap();
     }
+    h.app.close_tab_now(h.app.active);
+    // JSON colors (the GUI's tokenizer, qurry_shared::format::json_spans): one line per cell, only what fits is read
+    let id = h.console_with("select id, payload from webhook_event;", 1, 10);
+    let big = format!("{{\"items\":[{}]}}", (0..3000).map(|i| format!("{{\"sku\":\"A-{i}\",\"qty\":{i}}}")).collect::<Vec<_>>().join(","));
+    let res = qurry_core::db::QueryResult {
+        columns: [("id", "INT8"), ("payload", "JSONB"), ("raw", "JSON"), ("sig", "BYTEA")].iter().map(|(n, t)| qurry_core::db::ColumnInfo { name: n.to_string(), type_name: t.to_string() }).collect(),
+        rows: vec![
+            vec![json!(1), json!("{\"type\":\"payment.paid\",\"amount\":129000,\"live\":true,\"meta\":{\"pg\":\"toss\",\"coupon\":null}}"), json!("{\n  \"ok\": true\n}"), json!("0x7B22")],
+            vec![json!(2), json!("{\"type\":\"refund\",\"memo\":\"고객 요청 🙏\",\"lines\":[1,2.5,-3e2]}"), json!("[\"a\", \"b\"]"), Value::Null],
+            vec![json!(3), json!(big), json!("{\"broken\": tru"), Value::Null],
+            vec![json!(4), Value::Null, json!("42"), Value::Null],
+        ],
+        rows_affected: 0,
+        truncated: false,
+        elapsed_ms: 6,
+        has_result_set: true,
+        in_transaction: false,
+        warning: None,
+    };
+    if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
+        c.result_title = "Result 1: select id, payload from webhook_event".into();
+        c.grid = Some(crate::grid::Grid::new(res));
+        c.show_output = false;
+    }
+    scenes.push(app_scene(h, "Grid: JSON", "json / jsonb cells in colors (keys · strings · numbers · true/false/null · punctuation), still one line; a large value reads only what fits; binary (bytea) stays plain", 120, 22));
+    h.app.color = crate::theme::ColorMode::Ansi16;
+    scenes.push(app_scene(h, "Grid: JSON, 16 colors", "TERM=xterm: the JSON colors by hue (NO_COLOR: no colors)", 120, 22));
+    h.app.color = crate::theme::ColorMode::TrueColor;
     h.app.close_tab_now(h.app.active);
     // Production log
     let entry = |id: &str, ago: i64, sql: &str, rows: Option<u64>, undo: bool, in_tx: bool| qurry_core::audit::AuditEntry {
@@ -373,7 +413,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     }
     // DDL → Structure (v)
     let text = "CREATE TABLE public.users (\n    id bigint NOT NULL\n);".to_string();
-    let t = crate::app::TextTab { text, table: Some(("public".into(), "users".into())), structure_view: true, structure: Some(Ok(crate::structure::sample())), ..Default::default() };
+    let t = crate::app::TextTab { text, ddl_of: Some(("public".into(), "users".into())), kind: "table".into(), structure_view: true, structure: Some(Ok(crate::structure::sample())), ..Default::default() };
     h.app.push_tab("prod", "rentalpay".into(), "users [DDL]".into(), crate::app::TabKind::Text(t));
     h.app.focus = crate::app::Focus::Grid;
     scenes.push(app_scene(h, "DDL: Structure", "A table's DDL tab, v: columns, keys, indexes, foreign keys both ways, triggers (not reported by this source), options and comment; v again for the SQL", 120, 40));

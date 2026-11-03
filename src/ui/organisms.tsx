@@ -2,10 +2,11 @@
  * Organisms: chunks assembled from molecules — toolbars, dialogs, confirm boxes, menus, popovers, lists, tables, form grids.
  * Spec in README.md
  */
-import { CSSProperties, HTMLAttributes, KeyboardEvent, ReactNode, Ref, TdHTMLAttributes, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Button, IconButton, Spacer } from "./atoms";
+import { Children, CSSProperties, FocusEvent, HTMLAttributes, InputHTMLAttributes, KeyboardEvent, ReactNode, Ref, RefObject, TdHTMLAttributes, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Button, IconButton, Spacer, TextInput } from "./atoms";
 import { cx } from "./cx";
-import { DetailRow, EmptyState, MenuItem, MenuLabel, MenuSeparator, SectionTitle } from "./molecules";
+import { DetailRow, EmptyState, ListItem, MenuItem, MenuLabel, MenuSeparator, SectionTitle } from "./molecules";
+import { listKey, matchOptions, placePopup } from "./popup";
 
 // ───────── Toolbar ─────────
 export function Toolbar({ children, className, ...rest }: HTMLAttributes<HTMLDivElement>) {
@@ -107,6 +108,126 @@ export function List({ children, empty, boxed, className, listRef, style }: { ch
 }
 /** Group heading inside a list (Actions · Files · Database) */
 export const ListGroup = SectionTitle;
+
+/**
+ * List popup under a field — the one drop-down list of the combo boxes (FontPicker, ComboBox). Fixed right under `anchor` and
+ * left-aligned to it, above it when there's no room below, always inside the window; at least as wide as the field. The rows
+ * (ListItems) are the owner's, and so are the keys (`listKey`); the highlighted row (`active`) stays in view. Clicks keep the focus
+ * where it is (the field, or a search box in `head`); scrolling anything else closes it, since it would be left behind.
+ * `height` fixes the height (so it doesn't jump while filtering); without it, it fits the rows up to a maximum
+ */
+export function PopupList({ anchor, active, onClose, head, foot, empty, height, minWidth = 0, className, children, onKeyDown, onBlur }: {
+  anchor: RefObject<HTMLElement | null>;
+  active: number;
+  onClose: () => void;
+  head?: ReactNode;
+  foot?: ReactNode;
+  empty?: ReactNode;
+  height?: number;
+  minWidth?: number;
+  className?: string;
+  children?: ReactNode;
+  onKeyDown?: (e: KeyboardEvent<HTMLDivElement>) => void;
+  onBlur?: (e: FocusEvent<HTMLDivElement>) => void;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  const [at, setAt] = useState<{ left: number; top: number; width: number }>();
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  const rows = Children.count(children);
+  // Placed before it's painted, again when the rows change its height
+  useLayoutEffect(() => {
+    const r = anchor.current!.getBoundingClientRect();
+    const width = Math.max(r.width, minWidth);
+    setAt({ ...placePopup(r, { width, height: box.current!.offsetHeight }, { width: window.innerWidth, height: window.innerHeight }), width });
+  }, [rows]);
+  useLayoutEffect(() => {
+    const row = list.current?.children[active];
+    if (!row) return;
+    // By hand: scrollIntoView would also scroll the form under the popup
+    const l = list.current!.getBoundingClientRect();
+    const r = row.getBoundingClientRect();
+    if (r.top < l.top) list.current!.scrollTop -= l.top - r.top;
+    else if (r.bottom > l.bottom) list.current!.scrollTop += r.bottom - l.bottom;
+  }, [active, rows]);
+  useEffect(() => {
+    const onScroll = (e: Event) => !box.current?.contains(e.target as Node) && closeRef.current();
+    window.addEventListener("scroll", onScroll, true);
+    return () => window.removeEventListener("scroll", onScroll, true);
+  }, []);
+  return (
+    <div
+      ref={box}
+      className={cx("ui-popup-list", className)}
+      style={{ ...at, height, maxHeight: height }}
+      onKeyDown={onKeyDown}
+      onBlur={onBlur}
+      onMouseDownCapture={(e) => (e.target as HTMLElement).tagName !== "INPUT" && e.preventDefault()}
+    >
+      {head && <div className="ui-popup-head">{head}</div>}
+      <List listRef={list} empty={empty}>
+        {children}
+      </List>
+      {foot && <div className="ui-popup-foot">{foot}</div>}
+    </div>
+  );
+}
+
+/**
+ * Free-text field with suggestions (DataGrip's column type field): typing filters `options` (exact, then prefix, then contains; no
+ * popup when nothing matches), ↓ or a click lists them all. ↑↓ PgUp PgDn move, ↩ or ⇥ takes the highlighted one, ⎋ closes the list
+ * only (not the dialog), a click picks. Anything typed is kept as it is
+ */
+export function ComboBox({ value, options, onChange, onKeyDown, onBlur, onClick, ...rest }: Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange"> & { value: string; options: string[]; onChange: (v: string) => void; full?: boolean; grow?: boolean }) {
+  const [query, setQuery] = useState<string | null>(null);
+  const [active, setActive] = useState(0);
+  const input = useRef<HTMLInputElement>(null);
+  const rows = query === null ? [] : matchOptions(options, query);
+  const open = rows.length > 0;
+  // What's typed with the best match highlighted, or all of them with the current value highlighted
+  const show = (q: string, current = value) => {
+    setQuery(q);
+    setActive(q ? 0 : Math.max(0, options.indexOf(current)));
+  };
+  const pick = (v: string) => {
+    onChange(v);
+    setQuery(null);
+  };
+  return (
+    <>
+      <TextInput
+        ref={input}
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded={open}
+        value={value}
+        onChange={(e) => (onChange(e.target.value), show(e.target.value, e.target.value))}
+        onClick={(e) => (!open && show(""), onClick?.(e))}
+        onBlur={(e) => (setQuery(null), onBlur?.(e))}
+        onKeyDown={(e) => {
+          const k = open ? listKey(e.key, active, rows.length) : e.key === "ArrowDown" ? 0 : null;
+          if (open && e.key === "Tab") pick(rows[active]);
+          else if (k === null) return onKeyDown?.(e);
+          else if (!open) show("");
+          else if (k === "pick") pick(rows[active]);
+          else if (k === "close") setQuery(null);
+          else setActive(k);
+          // Tab moves on to the next field; the rest are the list's, not the dialog's
+          if (e.key !== "Tab") e.preventDefault();
+        }}
+        {...rest}
+      />
+      {open && (
+        <PopupList anchor={input} active={active} minWidth={160} onClose={() => setQuery(null)}>
+          {rows.map((o, i) => (
+            <ListItem key={o} title={o} selected={i === active} onMouseEnter={() => setActive(i)} onClick={() => pick(o)} />
+          ))}
+        </PopupList>
+      )}
+    </>
+  );
+}
 
 /** Detail list (statement · row count in confirm boxes, query · pid in sessions …) */
 export function DetailList({ items }: { items: { text: ReactNode; value?: ReactNode; tone?: "danger" | "warn"; note?: ReactNode }[] }) {

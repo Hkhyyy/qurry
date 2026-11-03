@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConnectionView } from "../../lib/api";
 import { leaf, type Pane } from "../../lib/panes";
 import { stash } from "../workspaces/store";
-import { buildTab, closeTabs, moveTo, patch, settle, togglePin, updTab } from "./ops";
+import { buildTab, closeTabs, ddlObject, moveTo, patch, settle, togglePin, updTab } from "./ops";
 import { liveSql, setTabs, useTabsStore } from "./store";
 import { emptyLayout, type Group } from "./types";
 
@@ -105,5 +105,13 @@ describe("pane operations", () => {
     expect(useTabsStore.getState().closedStack.map((s) => [s.title, s.sql])).toEqual([["b", "select 2"]]);
     expect(liveSql.has(ts[1].id)).toBe(false);
     expect(closed).toEqual([ts[1].id]);
+  });
+});
+
+describe("ddlObject", () => {
+  it("is the saved object, or a table's from a tab saved before DDL tabs kept it; none for an old view tab", () => {
+    expect(ddlObject(buildTab(conn, "ddl", { ddlOf: { schema: "public", name: "v" }, objKind: "view" }, 0, "v [DDL]"))).toEqual({ schema: "public", name: "v" });
+    expect(ddlObject(buildTab(conn, "ddl", { edit: { schema: "public", table: "users", pk: [] } }, 0, "users [DDL]"))).toEqual({ schema: "public", name: "users" });
+    expect(ddlObject(buildTab(conn, "ddl", { objKind: "view" }, 0, "v [DDL]"))).toBeUndefined();
   });
 });

@@ -50,10 +50,24 @@
   /* Tree icon strokes (gray strokes like DataGrip New UI, blue for DBs) */
   --ui-icon: #ced0d6;
   --ui-icon-db: #548af7;
+
+  /* JSON cells in the result grid (DataGrip's JSON colors); the TUI uses the dark values (kit/atoms.rs) */
+  --ui-json-key: var(--c-c77dbb);
+  --ui-json-string: #6aab73;
+  --ui-json-number: var(--c-2aacb8);
+  --ui-json-keyword: var(--c-cf8e6d);
+  --ui-json-punct: var(--muted);
 }
 :root[data-theme="light"] {
   --ui-icon: #6c707e;
   --ui-icon-db: #3574f0;
   --ui-shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.12);
   --ui-shadow-modal: 0 12px 40px rgba(0, 0, 0, 0.18);
+  --ui-json-string: #067d17;
+}
+:root[data-theme="hc"] {
+  --ui-json-key: #f5a8f0; /* = the Value Editor's Monaco hc theme (lib/monaco.ts) */
+  --ui-json-string: #8df08d;
+  --ui-json-number: #6fe8f5;
+  --ui-json-keyword: #ffb86c;
 }

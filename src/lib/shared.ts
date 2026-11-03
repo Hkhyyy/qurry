@@ -125,6 +125,8 @@ const api = {
   moreRowsFailed: (msg: string): string => wasm.moreRowsFailed(msg),
   /** Result word of a Production log entry ("outcome unknown", "failed", "committed" …), or undefined when its rows say it */
   auditStatus: (started: boolean, sql: string, failed: boolean): string | undefined => wasm.auditStatus(started, sql, failed),
+  /** The data source form's hint for a local Host with AWS SSM, or undefined (qurry_shared::errors::ssm_local_host, the TUI's words) */
+  ssmLocalHost: (host: string): string | undefined => wasm.ssmLocalHost(host),
   /** The connect error is one where "Allow unencrypted connection" for the source is the way forward (qurry_shared::errors::tls_opt_in) */
   tlsOptIn: (msg: string): boolean => wasm.tlsOptIn(msg),
   isRead: (sql: string, kind: DbKind): boolean => wasm.isRead(sql, kind),
@@ -163,7 +165,16 @@ const api = {
   fracWidth: (values: string[]): number => wasm.fracWidth(values),
   padFrac: (s: string, width: number): string => wasm.padFrac(s, width),
   valueClass: (typeName: string, value: Cell): ValueClass => wasm.valueClass(typeName, value),
+  /** The Value Editor panel's text for a cell: JSON (json / jsonb, or a JSON object or array) pretty-printed (qurry_shared::value) */
+  panelText: (typeName: string, value: string): { json: boolean; text: string } => wasm.panelText(typeName, value),
+  /** The panel's "{ }" toggle: valid JSON between pretty and one line, undefined for anything else */
+  toggleJsonLayout: (text: string): string | undefined => wasm.toggleJsonLayout(text),
+  /** What a panel edit writes to the cell, or why a json / jsonb column refuses it */
+  valueToApply: (typeName: string, original: string, edited: string): { Ok: string } | { Err: string } => wasm.valueToApply(typeName, original, edited),
   alignOf: (cls: ValueClass, overrides: Alignments): Align => wasm.alignOf(cls, overrides),
+  isJsonType: (typeName: string): boolean => wasm.isJsonType(typeName),
+  /** [start, end, kind, …]: UTF-16 ranges, kind an index of qurry_shared::format::JsonKind */
+  jsonSpans: (text: string, maxChars: number): Uint32Array => wasm.jsonSpans(text, maxChars),
   /** A label per tab, undefined where the table name is unique */
   tableTabLabels: (tabs: TableTabKey[]): (string | undefined)[] => wasm.tableTabLabels(tabs),
   isNumericType: (typeName: string): boolean => wasm.isNumericType(typeName),

@@ -17,6 +17,11 @@ interface WsLayout {
 }
 const emptyLayout = (): WsLayout => ({ tabs: [], panes: leaf(0), activeIds: [null, null, null, null], focused: 0, mru: [] });
 
+interface DdlOf {
+  schema: string;
+  name: string;
+}
+
 interface Tab {
   id: string;
   /** console: SQL console / table: table data editor / ddl: read-only DDL */
@@ -52,6 +57,8 @@ interface Tab {
   pinned?: boolean;
   /** Table / DDL tab: tree kind of the object it shows (view, routine, …) for the tab icon */
   objKind?: string;
+  /** DDL tab: the object it shows (Reload fetches its DDL again) */
+  ddlOf?: DdlOf;
   /** Redis browser: key to select first */
   redisKey?: string;
   /** dba: report being viewed (sessions, slow_queries, …) */
@@ -76,10 +83,11 @@ interface TabSnapshot {
   where: string;
   orderBy: string;
   objKind?: string;
+  ddlOf?: DdlOf;
 }
 const TAB_LIMIT = 10; // DataGrip default Tab limit
 const snapKey = (t: { kind: string; connId: string; database?: string; title: string; edit?: EditTarget }) =>
   `${t.kind}|${t.connId}|${t.database ?? ""}|${t.edit ? t.edit.schema + "." + t.edit.table : t.title}`;
 
-export type { Group, WsLayout, Tab, TabSnapshot };
+export type { Group, WsLayout, Tab, TabSnapshot, DdlOf };
 export { emptyLayout, TAB_LIMIT, snapKey };

@@ -72,6 +72,8 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
     <Editor
       path={`console-${tabId}.sql`}
       defaultValue={initialSql}
+      // Read-only (DDL): the text follows initialSql, so a reload shows the new text
+      value={readOnly ? initialSql : undefined}
       defaultLanguage={language}
       theme={monacoTheme(theme)}
       onChange={(v) => onChange(v ?? "")}

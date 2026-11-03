@@ -19,9 +19,9 @@ GUI **Settings** (`⌘,`) 에는 **Appearance**, **Keymap**, **Passwords** 세 �
 
 글꼴은 바꾸는 즉시 열려 있는 모든 콘솔과 그리드에 적용됩니다.
 
-**글꼴 이름**: 목록에는 이 컴퓨터에 설치된 고정폭 글꼴 (JetBrains Mono, Menlo, Fira Code, D2Coding, Cascadia Code 같은 흔한 것들) 이 나옵니다. 그 밖에 설치된 글꼴은 이름을 직접 입력하면 됩니다. 입력란의 글자는 고른 글꼴로 보입니다. 비워 두면 기본 글꼴 (JetBrains Mono, 없으면 Menlo) 입니다.
+**글꼴 이름**: 이 컴퓨터에 설치된 글꼴 목록에서 고릅니다. **Monospaced only** (기본으로 켜짐) 는 고정폭이 아닌 글꼴을 숨깁니다. 끄면 설치된 어떤 글꼴이든 고를 수 있습니다. 입력하면 목록을 검색하고 (닫힌 입력란에서 입력해도 열립니다), `↑` `↓` 로 움직이고, `↩` 로 고르고, `⎋` 로 목록을 닫습니다. 입력란의 글자는 고른 글꼴로 보입니다. 목록 맨 위의 **Default monospace** 는 JetBrains Mono, 없으면 Menlo 입니다.
 
-설치되지 않은 글꼴 (오타, 또는 그 뒤에 지운 글꼴) 이어도 화면이 깨지지 않습니다: Qurry 는 기본 고정폭 글꼴을 쓰고, Settings 에 `"<이름>" isn't installed, so the default monospace font is used.` 라고 알려 줍니다. 목록에서 글꼴을 고르거나 입력란을 비우면 기본으로 돌아갑니다.
+저장된 글꼴이 설치되어 있지 않아도 (그 뒤에 지웠거나 다른 컴퓨터에서 고른 글꼴) 화면이 깨지지 않습니다: Qurry 는 기본 고정폭 글꼴을 쓰고, 입력란과 목록 맨 위에 `<이름> (not installed)` 로 보여 줍니다. 다른 글꼴을 고르면 바뀝니다.
 
 테마와 글꼴은 이 컴퓨터의 GUI 가 따로 보관합니다 (설정 폴더가 아님). 그래서 TUI 에는 영향이 없습니다.
 
@@ -39,6 +39,8 @@ GUI **Settings** (`⌘,`) 에는 **Appearance**, **Keymap**, **Passwords** 세 �
 | JSON / binary | `json` / `jsonb`, `bytea`, `blob`, `binary` / `varbinary` | Left |
 
 숫자 컬럼의 `NULL` 이 위아래 숫자와 줄이 맞도록 `NULL` 의 기본값은 오른쪽입니다. 0.3.0 전에는 왼쪽이었습니다. 예전처럼 쓰려면 **NULL** 을 **Left** 로 바꾸세요.
+
+JSON 칸 (`json`, `jsonb` 와 다른 드라이버의 JSON 타입) 은 DataGrip 처럼 색으로 구분됩니다: 키, 문자열, 숫자, `true` / `false` / `null`, 구두점. 한 줄로 보이는 것은 같습니다. 바이너리 칸은 색이 없습니다. TUI 도 터미널 색으로 똑같이 칠하고, `NO_COLOR` 에서는 칠하지 않습니다.
 
 TUI 결과 표도 같은 종류와 같은 설정을 씁니다. TUI 에서는 **⌃k › Grid Alignment…** 에서 바꿉니다 (종류를 고른 뒤 Left, Center, Right). TUI 는 켤 때와 **⌃k › Grid Alignment…** 를 열 때 `settings.json` 을 읽으므로, GUI 에서 정렬을 바꾼 뒤에는 그 명령을 열거나 TUI 를 다시 켜면 반영됩니다. `settings.json` 에는 바꾼 종류만 저장됩니다 (예: `"gridAlign": { "null": "left" }`). 기본값으로 되돌린 종류는 지워집니다.
 

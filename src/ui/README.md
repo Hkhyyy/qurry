@@ -25,6 +25,7 @@
 | 선 | `--ui-border` · `--ui-border-strong` | #393b40 · #4e5157 | 구역 · 입력칸 테두리 |
 | 글자 | `--ui-text` · `--ui-text-muted` · `--ui-text-on-accent` | #dfe1e5 · #868a91 · #fff | 본문 · 설명 · 강조색 위 |
 | 색 | `--ui-accent` · `--ui-danger` · `--ui-warn` · `--ui-ok` | #3574f0 · #f75464 · #e5a64b · #5fb865 | 주 버튼 · 위험 · 주의 · 성공 |
+| JSON | `--ui-json-key` · `-string` · `-number` · `-keyword` · `-punct` | #c77dbb · #6aab73 · #2aacb8 · #cf8e6d · #868a91 | JSON cells in result grids (the TUI uses the same values) |
 | 간격 | `--ui-sp-1` … `--ui-sp-6` | 2 · 4 · 8 · 12 · 16 · 24px | padding · gap · margin 은 이 값만 |
 | 둥글기 | `--ui-radius-sm` / `-md` / `-lg` | 4 · 6 · 10px | 버튼 / 메뉴 · 목록 / 대화상자 |
 | 글자 크기 | `--ui-fs-xs` / `-sm` / `-md` / `-lg` | 11 · 12 · 13 · 14px | 배지 / 보조 / 본문 / 제목 |
@@ -43,7 +44,7 @@
 | `Button` | `variant`: default · primary (창마다 하나, 맨 오른쪽) · danger · ghost · link. `size`: md 26px · sm 22px. 글자는 동사 |
 | `IconButton` · `ToolButton` | 아이콘만 (title 필수, `tone` ok · danger, `active`) / 도구 막대 글자 버튼 (`active` · `accent`) |
 | `Badge` · `Avatar` · `Swatch` · `ProgressBar` | 개수 · 상태 (`tone`, 정해진 색은 `color`) / 이니셜 사각형 / 색 견본 / 진행 막대 (`pct` null = 모름) |
-| `TextInput` · `Select` · `TextArea` · `Checkbox` · `Radio` | 입력 (`full` · `grow`) / 고르기 / 여러 줄 (고정폭) / 체크 (`indeterminate`) / 하나 고르기 |
+| `TextInput` · `Select` · `TextArea` · `Checkbox` · `Radio` | 입력 (`full` · `grow`) / 고르기 / 여러 줄 (고정폭) / 체크 (`indeterminate`) / 하나 고르기. 글 칸은 모두 자동 고침 · 대문자 · 맞춤법 · 글쓰기 제안이 꺼져 있다 (`textAssistOff`; 이름 · 타입 · 호스트를 쓰는 칸). 주석처럼 글을 쓰는 칸만 `prose` (맞춤법만 켬) |
 
 ## GUI 분자 (`molecules.tsx`)
 
@@ -68,9 +69,10 @@
 | `confirm()` · `ConfirmHost` | 앱 안의 확인 창. `detail` = DetailList, `danger` 면 빨간 버튼 + 기본 포커스 Cancel. 버튼은 동작 이름 (Delete · Run …) |
 | `Menu` | 우클릭 (`at`) · 드롭다운. 항목: 동작 · 구분선 · 설명 줄 (`heading`) · 하위 메뉴. 바깥 클릭 · ⎋ 로 닫힘 |
 | `List` · `ListGroup` · `DetailList` | 목록 (`boxed`, 비면 `empty`) / 목록 안 묶음 제목 / 상세 목록 |
+| `PopupList` · `ComboBox` | 칸 바로 아래 뜨는 목록 하나 (칸 왼쪽에 맞춤, 아래 자리가 없으면 위로, 창 안에; 바깥 스크롤이면 닫힘; 키는 `listKey`: ↑↓ PgUp PgDn · ↩ · ⎋) / 자유 입력 + 제안 (타입 칸: 치면 거르고 — 같음 · 앞 · 포함 순, 맞는 게 없으면 안 뜸 — ↩ · ⇥ 고름, ⎋ 는 목록만 닫음). 고르기만 하는 쪽은 FontPicker (검색 칸 + PopupList). 맨 `<datalist>` 는 쓰지 않는다 (WKWebView 가 엉뚱한 곳에 그림) |
 | `Table` · `Th` · `Td` | 작은 표 (`num` · `mono` · `muted`) |
 | `FormGrid` | 긴 설정 창: `<label>` + 칸, 줄 전체는 `FormSection` |
-| `GridHead` · `GridHeaderRow` · `GridHeaderCell` · `GridRow` · `RowNumberCell` · `GridCell` · `CellEditor` | 결과 표 칸 (상태: 선택 · 커서 · 바뀜 · 찾기 · 추가 · 지움 · null · 숫자). 가상 스크롤 · 선택은 ResultGrid. `GridHead`: header strip above the scroller (not sticky inside it), follows its scrollLeft. `GridCell` `align`: left · right · center per value class (`lib/gridAlign.ts`, Settings › Appearance › Alignment) |
+| `GridHead` · `GridHeaderRow` · `GridHeaderCell` · `GridRow` · `RowNumberCell` · `GridCell` · `JsonText` · `CellEditor` | 결과 표 칸 (상태: 선택 · 커서 · 바뀜 · 찾기 · 추가 · 지움 · null · 숫자). 가상 스크롤 · 선택은 ResultGrid. `GridHead`: header strip above the scroller (not sticky inside it), follows its scrollLeft. `GridCell` `align`: left · right · center per value class (`lib/gridAlign.ts`, Settings › Appearance › Alignment). `JsonText`: a JSON cell's text in colors (`--ui-json-*`; pieces from `lib/jsonSpans.ts`) |
 
 아이콘 (`icons.tsx`) 은 DB 종류별 고유색을 쓴다. 테마를 따라야 하는 것 (펼침 화살표) 은 `currentColor`.
 

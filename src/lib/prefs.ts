@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import type { FontFamily } from "./api";
 import { monaco } from "./monaco";
 
 /** Settings › Appearance fonts for the editor (Monaco; size also ⌃⇧. / ⌃⇧,) and the result grid. Works even if browser storage is blocked */
@@ -72,28 +73,22 @@ export function useFonts(): Record<FontTarget, Font> {
   );
 }
 
-/** Whether a font is installed: text in it measures differently from every generic fallback.
- * Measured on a hidden element, the way the page renders it: in WKWebView (Tauri on macOS) a canvas only sees system fonts, not user-installed ones */
-export function fontInstalled(family: string): boolean {
-  const head = fontStack(family).split(",")[0];
-  const span = document.createElement("span");
-  span.textContent = "mmmmmmmmmlli1WQ@#";
-  span.style.cssText = "position:absolute;left:-9999px;top:0;visibility:hidden;white-space:nowrap;font-size:48px";
-  document.body.appendChild(span);
-  const width = (f: string) => {
-    span.style.fontFamily = f;
-    return span.getBoundingClientRect().width;
-  };
-  try {
-    return ["monospace", "serif", "sans-serif"].some((g) => width(`${head}, ${g}`) !== width(g));
-  } finally {
-    span.remove();
-  }
-}
+/** One row of the font picker: family "" = the default stack; missing = saved but not among the installed families */
+export type FontOption = { family: string; missing?: boolean };
+export const DEFAULT_FONT_LABEL = "Default monospace";
 
-/** Monospace fonts offered in Settings (only the installed ones are listed; any other family can be typed) */
-export const KNOWN_MONO = [
-  "Andale Mono", "Cascadia Code", "Cascadia Mono", "Consolas", "Courier New", "D2Coding", "DejaVu Sans Mono", "Fira Code", "Fira Mono",
-  "Hack", "IBM Plex Mono", "Inconsolata", "Iosevka", "JetBrains Mono", "Liberation Mono", "Menlo", "Monaco", "Noto Sans Mono",
-  "PT Mono", "Roboto Mono", "SF Mono", "Source Code Pro", "Ubuntu Mono", "Victor Mono",
-];
+/** Font picker rows: the default, the saved family if it isn't installed (so it still shows, marked), then the installed families
+ * (monospaced only with monoOnly — the current one stays either way), all matching query. installed null or empty (still loading,
+ * or the OS can't list them): nothing is marked missing */
+export function fontOptions(installed: FontFamily[] | null, current: string, monoOnly: boolean, query: string): FontOption[] {
+  const cur = current.trim().toLowerCase();
+  const isCur = (name: string) => name.toLowerCase() === cur;
+  const known = !!installed?.length;
+  const rows: FontOption[] = [
+    { family: "" },
+    ...(cur && !installed?.some((f) => isCur(f.name)) ? [{ family: current.trim(), missing: known }] : []),
+    ...(installed ?? []).filter((f) => !monoOnly || f.mono || isCur(f.name)).map((f) => ({ family: f.name })),
+  ];
+  const q = query.trim().toLowerCase();
+  return q ? rows.filter((r) => (r.family || DEFAULT_FONT_LABEL).toLowerCase().includes(q)) : rows;
+}

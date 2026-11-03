@@ -3,7 +3,7 @@ import { leaves } from "../../lib/panes";
 import type { EditTarget } from "../../components/ResultGrid";
 import { buildTab, closeTabs, remember } from "./ops";
 import { setActiveIds, setFocused, setTabs, useTabsStore } from "./store";
-import { Group, Tab, TAB_LIMIT } from "./types";
+import { DdlOf, Group, Tab, TAB_LIMIT } from "./types";
 
 /** Showing a tab, and opening new ones (in the focused pane unless told otherwise) */
 export function useTabs({ setStatus, loadStale }: { setStatus: (s: string) => void; loadStale: (t: Tab) => void }) {
@@ -21,7 +21,7 @@ export function useTabs({ setStatus, loadStale }: { setStatus: (s: string) => vo
   const addTab = (
     c: ConnectionView,
     kind: Tab["kind"],
-    opts: { title?: string; sql?: string; database?: string; tableSql?: string; edit?: EditTarget; group?: Group; where?: string; orderBy?: string; objKind?: string },
+    opts: { title?: string; sql?: string; database?: string; tableSql?: string; edit?: EditTarget; group?: Group; where?: string; orderBy?: string; objKind?: string; ddlOf?: DdlOf },
   ) => {
     const database = opts.database && opts.database !== (c.database || "postgres") ? opts.database : undefined;
     const base = database ? `${c.name}/${database}` : c.name;

@@ -81,8 +81,48 @@ describe("fontStack", () => {
     const { fontStack, MONO } = await load();
     expect(fontStack('x"; color: red')).toBe(`"x color: red", ${MONO}`);
   });
-  it("keeps a pasted stack one family, so the installed check names the font that is applied", async () => {
+  it("keeps a stack saved by an earlier version (typed in) one family, so the picker shows it as not installed", async () => {
     const { fontStack, MONO } = await load();
     expect(fontStack("Fira Code, monospace")).toBe(`"Fira Code monospace", ${MONO}`);
+  });
+});
+
+describe("fontOptions (Settings font picker rows)", () => {
+  const installed = [
+    { name: "Courier New", mono: true },
+    { name: "Helvetica", mono: false },
+    { name: "Menlo", mono: true },
+  ];
+  const names = (rows: { family: string }[]) => rows.map((r) => r.family);
+
+  it("lists the default, then the installed families; monospaced only when asked", async () => {
+    const { fontOptions } = await load();
+    expect(names(fontOptions(installed, "", false, ""))).toEqual(["", "Courier New", "Helvetica", "Menlo"]);
+    expect(names(fontOptions(installed, "", true, ""))).toEqual(["", "Courier New", "Menlo"]);
+  });
+
+  it("keeps the chosen family even when it is proportional and only monospaced are shown", async () => {
+    const { fontOptions } = await load();
+    expect(names(fontOptions(installed, "Helvetica", true, ""))).toEqual(["", "Courier New", "Helvetica", "Menlo"]);
+    // Same family in another case (CSS matches family names case-insensitively): installed, not a missing row
+    expect(fontOptions(installed, "menlo", true, "")).toEqual([{ family: "" }, { family: "Courier New" }, { family: "Menlo" }]);
+  });
+
+  it("puts a saved family that isn't installed on top, marked", async () => {
+    const { fontOptions } = await load();
+    expect(fontOptions(installed, " No Such Mono ", true, "").slice(0, 3)).toEqual([{ family: "" }, { family: "No Such Mono", missing: true }, { family: "Courier New" }]);
+  });
+
+  it("marks nothing missing while the list is loading or the OS can't list fonts", async () => {
+    const { fontOptions } = await load();
+    expect(fontOptions(null, "Hack", true, "")).toEqual([{ family: "" }, { family: "Hack", missing: false }]);
+    expect(fontOptions([], "Hack", true, "")).toEqual([{ family: "" }, { family: "Hack", missing: false }]);
+  });
+
+  it("filters by a case-insensitive part of the name (the default row by its label)", async () => {
+    const { fontOptions } = await load();
+    expect(names(fontOptions(installed, "Gone", false, "NE"))).toEqual(["Gone", "Courier New"]);
+    expect(names(fontOptions(installed, "", false, "MEN"))).toEqual(["Menlo"]);
+    expect(names(fontOptions(installed, "", false, "default"))).toEqual([""]);
   });
 });

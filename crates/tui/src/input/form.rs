@@ -202,6 +202,27 @@ mod tests {
         assert_eq!(f.fields[f.sel].label, "SSH host");
     }
 
+    /// AWS SSM with a local Host: the form says Host and Port are the database as seen from the instance, without refusing it
+    #[tokio::test]
+    async fn conn_form_hints_a_local_host_with_ssm() {
+        let mut h = Harness::new().await;
+        h.app.conn_form(None);
+        let set = |h: &mut Harness, label: &str, v: &str| form(h).fields.iter_mut().find(|x| x.label == label).unwrap().value = v.into();
+        let hint = "With AWS SSM, 127.0.0.1 is the instance itself";
+        set(&mut h, "Host", "127.0.0.1");
+        assert!(!h.screen(120, 40).contains(hint), "not without SSM");
+        set(&mut h, "Tunnel", "aws ssm");
+        let s = h.screen(120, 40);
+        assert!(s.contains(hint) && s.contains("as seen from the instance"), "{s}");
+        set(&mut h, "Host", "mydb.abc.ap-northeast-2.rds.amazonaws.com");
+        assert!(!h.screen(120, 40).contains("is the instance itself"));
+        // A test's result takes the message's place
+        set(&mut h, "Host", "localhost");
+        form(&mut h).message = Some((false, "✕ failed".into()));
+        let s = h.screen(120, 40);
+        assert!(s.contains("✕ failed") && !s.contains("is the instance itself"), "{s}");
+    }
+
     fn form(h: &mut Harness) -> &mut crate::app::ConnForm {
         let Some(crate::app::Popup::ConnForm(f)) = &mut h.app.popup else { panic!("no form") };
         f

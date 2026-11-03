@@ -413,6 +413,10 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
     let k = |a: crate::app::Action| app.keys.keys(a).first().map(|s| disp(s)).unwrap_or_else(|| "—".into());
     use crate::app::Action as A;
     let (k_out, k_run, k_commit, k_rollback, k_cancel, k_submit) = (k(A::ToggleOutput), k(A::Execute), k(A::Commit), k(A::Rollback), k(A::Cancel), k(A::Submit));
+    // The value panel beside result and table grids, and its keys (v toggles it, ⌃w closes it from the grid)
+    let value_panel = app.value_panel;
+    let value_keys = app.keys.slot_keys(crate::keys::Slot { action: A::ValueEditor, pane: Scope::Grid }).first().map(|k| crate::keys::pane_disp(k));
+    let value_keys = format!(" {} / {} close ", value_keys.unwrap_or_else(|| "—".into()), k(A::CloseTab));
     let finding = focused && matches!(app.popup, Some(Popup::Find(_)));
     // How long run · load has been going (redrawn every 0.5s)
     let took = app.run_elapsed(idx).map(|d| crate::app::elapsed_text(d.as_millis() as u64));
@@ -482,7 +486,11 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 f.render_widget(p, res);
             } else if let Some(g) = &mut c.grid {
                 let t = format!(" {} — {}{} rows ({k_out}: output) ", c.result_title, g.rows(), if g.result.truncated { "+" } else { "" });
+                let (res, side) = value_split(res, value_panel);
                 g.render(f, res, t, focus == Focus::Grid, color, &align);
+                if let Some(side) = side {
+                    g.render_value_panel(f, side, value_keys);
+                }
             }
             if let (Some((x, y)), Some(cmp)) = (caret, &c.complete) {
                 draw_completion(f, cmp, x, y);
@@ -520,7 +528,11 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 let pend = if g.dirty() { format!(" · {} pending ({k_submit} submit, {} revert)", g.edits.len() + g.deleted.len() + g.added, disp("⌃z")) } else { String::new() };
                 let rows = if tt.error.is_some() && !g.dirty() { "query failed — no rows".to_string() } else { format!("{}{} rows", g.rows(), if g.result.truncated { "+" } else { "" }) };
                 let t = format!(" {}.{} — {rows}{}{}{} ", tt.schema, tt.table, if tt.pk.is_empty() { " · no PK (read-only)" } else { "" }, if ro { " · read-only" } else { "" }, pend);
+                let (grid, side) = value_split(grid, value_panel);
                 g.render(f, grid, t, focus == Focus::Grid, color, &align);
+                if let Some(side) = side {
+                    g.render_value_panel(f, side, value_keys);
+                }
             } else {
                 let msg = if tt.error.is_some() { String::new() } else { format!("Loading… {}", took.as_deref().unwrap_or("")) };
                 f.render_widget(Paragraph::new(msg).block(panel(format!(" {}.{} ", tt.schema, tt.table), focused)), grid);
@@ -528,16 +540,16 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
         }
         TabKind::Text(t) => {
             // A table's DDL: v switches to the Structure view (sections as tables)
-            let view = match (&t.table, t.structure_view) {
-                (Some(_), true) => "Structure · v SQL · ",
-                (Some(_), false) => "v Structure · ",
-                (None, _) => "",
+            let view = match (t.has_structure(), t.structure_view) {
+                (true, true) => "Structure · v SQL · ",
+                (true, false) => "v Structure · ",
+                (false, _) => "",
             };
             let text = crate::structure::body(t, body.width.saturating_sub(2) as usize);
             // Don't scroll past the end (so the last line sits at the bottom)
             let lines = text.lines.len() as u16;
             let scroll = t.scroll.min(lines.saturating_sub(body.height.saturating_sub(2)));
-            let copies = if t.table.is_some() { "y copies the SQL" } else { "y copies all" };
+            let copies = if t.has_structure() { "y copies the SQL" } else { "y copies all" };
             let p = Paragraph::new(text).scroll((scroll, 0)).block(panel(format!(" {title} — {view}{lines} lines · ↑↓ PgUp/PgDn scroll · {copies} "), focus != Focus::Tree));
             f.render_widget(p, body);
             t.scroll = scroll;
@@ -631,6 +643,15 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
 /// Console cursor cell mark (invisible since underline isn't turned on)
 const CARET_MARK: Color = Color::Rgb(1, 2, 3);
 
+/// A grid's area and, with the value panel on and room for both, the panel's on its right (40%; the grid keeps at least 30 columns)
+fn value_split(area: Rect, on: bool) -> (Rect, Option<Rect>) {
+    if !on || area.width < 60 {
+        return (area, None);
+    }
+    let [grid, panel] = Layout::horizontal([Constraint::Min(30), Constraint::Percentage(40)]).areas(area);
+    (grid, Some(panel))
+}
+
 fn find_caret(f: &mut Frame, area: Rect) -> Option<(u16, u16)> {
     let buf = f.buffer_mut();
     for y in area.top()..area.bottom() {
@@ -700,12 +721,13 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
         Focus::Grid => (
             match app.tabs.get(app.active).map(|t| &t.kind) {
                 Some(TabKind::Table(_)) => vec![
-                    fixed("Enter", "edit"), grid(A::AddRow, "add"), grid(A::DeleteRow, "delete"), grid(A::SetNull, "NULL"), cmd(A::Submit, "submit"), grid(A::Revert, "revert"), fixed("w", "where"), fixed("o", "order"), fixed("s", "sort"), grid(A::ExportCsv, "export"),
+                    fixed("Enter", "edit"), grid(A::ValueEditor, "value"), grid(A::AddRow, "add"), grid(A::DeleteRow, "delete"), grid(A::SetNull, "NULL"), cmd(A::Submit, "submit"), grid(A::Revert, "revert"), fixed("w", "where"), fixed("o", "order"), fixed("s", "sort"), grid(A::ExportCsv, "export"),
                 ],
                 Some(TabKind::Redis(r)) if r.focus_value => vec![fixed("e", "edit"), fixed("a", "add"), fixed("x", "delete"), fixed("Esc", "keys")],
                 Some(TabKind::Redis(_)) => vec![fixed("Enter", "value"), fixed("/", "pattern"), fixed("a", "add"), fixed("D", "del key"), fixed("t", "TTL"), fixed("R", "rename"), fixed(":", "command")],
                 Some(TabKind::Text(t)) if t.structure_view => vec![fixed("v", "SQL"), fixed("r", "reload"), fixed("y", "copy"), fixed("Esc", "explorer")],
-                Some(TabKind::Text(t)) if t.table.is_some() => vec![fixed("v", "structure"), fixed("y", "copy"), fixed("Esc", "explorer")],
+                Some(TabKind::Text(t)) if t.has_structure() => vec![fixed("v", "structure"), fixed("r", "reload"), fixed("y", "copy"), fixed("Esc", "explorer")],
+                Some(TabKind::Text(t)) if t.ddl_of.is_some() => vec![fixed("r", "reload"), fixed("y", "copy"), fixed("Esc", "explorer")],
                 Some(TabKind::Text(_)) => vec![fixed("y", "copy"), fixed("Esc", "explorer")],
                 Some(TabKind::Dba(d)) => {
                     let has = |t: Option<bool>| d.info.as_ref().is_some_and(|i| i.actions.iter().any(|a| matches!(a, qurry_core::dba::Action::Kill { terminate, .. } if t.is_none_or(|t| *terminate == t))));
@@ -720,7 +742,7 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
                     v.extend([fixed("Enter", "query→console"), fixed("g", "SQL"), fixed("y", "copy")]);
                     v
                 }
-                _ => vec![fixed("s", "sort"), fixed("y", "copy"), grid(A::ExportCsv, "export"), fixed("Esc", "editor")],
+                _ => vec![fixed("s", "sort"), fixed("y", "copy"), grid(A::ValueEditor, "value"), grid(A::ExportCsv, "export"), fixed("Esc", "editor")],
             },
             vec![cmd(A::NewConsole, "console"), cmd(A::RecentTabs, "tabs"), cmd(A::SearchEverywhere, "search"), cmd(A::Palette, "actions")],
         ),
@@ -830,7 +852,11 @@ fn conn_form_message(form: &crate::app::ConnForm) -> Vec<Line<'static>> {
     let (ok, m) = match (&form.testing, &form.message) {
         (Some((started, _)), _) => (true, format!("Testing… {}s · ⌃t / Esc cancel", started.elapsed().as_secs())),
         (None, Some((ok, m))) => (*ok, disp(m)),
-        (None, None) => return vec![],
+        // A local Host with AWS SSM is the instance itself: a hint, not an error (a database on the instance is fine)
+        (None, None) => {
+            let hint = Some(form.value("Host")).filter(|_| form.value("Tunnel") == "aws ssm").and_then(qurry_shared::errors::ssm_local_host);
+            return hint.map(|h| vec![Line::styled(h, Style::default().fg(WARN))]).unwrap_or_default();
+        }
     };
     // One row per line of it (a TLS error is followed by its hint)
     m.lines().map(|l| Line::styled(l.to_string(), Style::default().fg(if ok { OK } else { DANGER }))).collect()

@@ -88,6 +88,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | — | New Data Source… |
 | — | Refresh |
 | — | Query History… (shared with the GUI) |
+| — | Value Panel (the current cell's whole value, beside the grid) |
 | — | Explain Analyze (runs the statement: real times and row counts) |
 | — | Query Execution Settings (what ⌃Enter runs) |
 | — | Clear Console (delete all text) |
@@ -158,6 +159,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 
 | Key | Action |
 |---|---|
+| `v` | Value Panel (the current cell's whole value, beside the grid) |
 | `⌃z` | Revert Changes |
 | `a / Insert` | Add Row |
 | `d / Delete` | Delete Row |
@@ -223,7 +225,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 |---|---|
 | `↑ ↓  (j k) · PgUp / PgDn` | Scroll |
 | `v` | Table DDL: switch between SQL and Structure (columns, keys, indexes, foreign keys, triggers, options); kept for new DDL tabs |
-| `r` | Reload the Structure view |
+| `r` | Reload what the tab shows (the DDL, or the Structure view) |
 | `y  ⌘c` | Copy the text (a table's DDL: the SQL, in either view) |
 | `Esc` | Back to the explorer |
 

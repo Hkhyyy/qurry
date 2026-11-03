@@ -130,12 +130,19 @@ pub struct TextTab {
     /// DDL: tree kind of the object (for the tab glyph); empty for other text (diagram)
     pub kind: String,
     pub scroll: u16,
-    /// A table's DDL: (schema, table), which gives it the Structure view (v)
-    pub table: Option<(String, String)>,
+    /// DDL: the object (schema, name), which r fetches again; a table's also has the Structure view (v)
+    pub ddl_of: Option<(String, String)>,
     /// Showing the Structure view instead of the SQL
     pub structure_view: bool,
     /// The loaded structure, or why it failed (None: not loaded yet)
     pub structure: Option<Result<qurry_core::meta::TableStructure, String>>,
+}
+
+impl TextTab {
+    /// A table's DDL: has the Structure view (v)
+    pub fn has_structure(&self) -> bool {
+        self.ddl_of.is_some() && crate::structure::has_structure(&self.kind)
+    }
 }
 
 /// DBA reports (sessions·locks, slow queries, size·indexes, maintenance, server, privileges). Sessions·locks reload every 3 seconds
@@ -430,6 +437,7 @@ pub enum Action {
     SetNull,
     ExportCsv,
     CopyInList,
+    ValueEditor,
     FindSimilar,
     RagSearch,
     RagBuild,
@@ -594,6 +602,8 @@ pub struct App {
     pub group_active: [Option<u64>; crate::panes::MAX],
     /// Share of the console taken by the editor (%)
     pub console_pct: u16,
+    /// The value panel beside result and table grids (v in the grid, as the GUI's Value Editor panel): the current cell's whole value
+    pub value_panel: bool,
     /// Database Explorer width (None = auto, fit to screen width)
     pub explorer_w: Option<u16>,
     /// What is being dragged and the current position
@@ -687,6 +697,7 @@ impl App {
             panes: crate::panes::Pane::Leaf(0),
             group_active: [None; crate::panes::MAX],
             console_pct: 42,
+            value_panel: false,
             explorer_w: None,
             drag: None,
             drag_pos: (0, 0),

@@ -1,6 +1,7 @@
 import { useEffect, useRef, type Dispatch, type SetStateAction } from "react";
 import type { ConnectionView } from "../../lib/api";
 import { leaves } from "../../lib/panes";
+import { closeFocusedValuePanel } from "../../lib/valuePanel";
 import { eventSpec, hit, runKey } from "../../lib/shortcuts";
 import type { NodeInfo } from "../../components/SchemaTree";
 import type { useConnActions } from "../conns/useConnActions";
@@ -82,7 +83,7 @@ export function useGlobalShortcuts({
       /** Console (editor-scope) commands handled here: the console's editor or its tab has the keys (a clicked tab leaves the focus on
        *  the page), not a result grid or the tree */
       const ae = document.activeElement as HTMLElement | null;
-      const inConsole = !ae || ae === document.body || !!ae.closest?.(".monaco-editor, .editor-group > .tabs");
+      const inConsole = !ae || ae === document.body || (!!ae.closest?.(".monaco-editor, .editor-group > .tabs") && !ae.closest?.(".grid-wrap"));
       const inInput = ["INPUT", "TEXTAREA", "SELECT"].includes((document.activeElement as HTMLElement | null)?.tagName ?? "");
       /** Tree commands: a node is selected and the explorer (not one of its fields) has the keys */
       const node = inTree && treeSel && !inInput ? treeSel : null;
@@ -115,6 +116,7 @@ export function useGlobalShortcuts({
         "find.window": () => void (e.preventDefault(), L.setFindOpen((o) => !o)),
         // ⇧⎋ Hide Active Tool Window
         "toolwindow.hide": () => {
+          if (closeFocusedValuePanel()) return void e.preventDefault();
           const ae = document.activeElement;
           if (ae?.closest?.("[data-toolwindow=find]")) return void (e.preventDefault(), L.setFindOpen(false));
           if (ae?.closest?.("[data-tree]")) return void (e.preventDefault(), L.toggleExplorer());
@@ -175,7 +177,9 @@ export function useGlobalShortcuts({
           e.preventDefault();
           renameConsole(active);
         },
+        // The focused grid's Value Editor panel closes first (focus in the grid or the panel), then the tab
         "tab.close": () => {
+          if (closeFocusedValuePanel()) return void e.preventDefault();
           if (!active) return false;
           e.preventDefault();
           closeTabs([active.id]);

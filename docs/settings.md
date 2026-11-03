@@ -19,9 +19,9 @@ GUI **Settings** (`⌘,`) has three pages: **Appearance**, **Keymap** and **Pass
 
 Font changes apply at once, to every open console and grid.
 
-**Font family**: the list suggests the monospace fonts installed on this computer (JetBrains Mono, Menlo, Fira Code, D2Coding, Cascadia Code and other common ones); any other installed font can be typed in. Each field shows its text in the chosen font. Leave the field empty for the default (JetBrains Mono, or Menlo when it isn't installed).
+**Font family**: pick it from the list of fonts installed on this computer. **Monospaced only** (on by default) hides proportional fonts; turn it off to pick any installed font. Type to search the list (typing on the closed field opens it), `↑` `↓` to move, `↩` to pick, `⎋` to close the list. The field shows the chosen font in itself. **Default monospace**, at the top of the list, is JetBrains Mono, or Menlo when it isn't installed.
 
-A font that isn't installed (a typo, or a font removed since) never breaks the screen: Qurry falls back to the default monospace font, and Settings says `"<name>" isn't installed, so the default monospace font is used.` Pick a font from the list, or clear the field to go back to the default.
+A saved font that isn't installed (removed since, or chosen on another computer) never breaks the screen: Qurry falls back to the default monospace font, and the field and the top of the list show it as `<name> (not installed)`. Pick another font to replace it.
 
 The theme and fonts are kept by the GUI on this computer (not in the config folder), so they don't affect the TUI.
 
@@ -39,6 +39,8 @@ Each cell is aligned by the kind of value it holds. Pick **Left**, **Center** or
 | JSON / binary | `json` / `jsonb`, `bytea`, `blob`, `binary` / `varbinary` | Left |
 
 `NULL` is on the right by default so that a `NULL` in a numeric column lines up with the numbers above and below it. Before 0.3.0 it was on the left: to get that back, set **NULL** to **Left**.
+
+JSON cells (`json`, `jsonb` and the other drivers' JSON types) are colored like DataGrip's: keys, strings, numbers, `true` / `false` / `null` and punctuation, still on one line. Binary cells stay plain. The TUI colors them the same way in the terminal's colors, and not at all with `NO_COLOR`.
 
 The TUI result grid uses the same kinds and the same setting: change it there with **⌃k › Grid Alignment…** (pick a kind, then Left, Center or Right). The TUI reads `settings.json` when it starts and again when you open **⌃k › Grid Alignment…**, so after changing the alignment in the GUI, open that command (or restart the TUI) to see it. In `settings.json` only the kinds you changed are written, for example `"gridAlign": { "null": "left" }`; a kind you set back to its default is removed.
 

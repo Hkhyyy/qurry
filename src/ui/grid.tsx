@@ -3,6 +3,7 @@
  * Virtual scrolling, selection and edit state live in ResultGrid; only the look is defined here. Spec: README.md
  */
 import { CSSProperties, FocusEvent, KeyboardEvent, MouseEvent, ReactNode, RefObject, useEffect, useRef } from "react";
+import { textAssistOff } from "./atoms";
 import { cx } from "./cx";
 import "./grid.css";
 
@@ -147,6 +148,32 @@ export function GridCell({
   );
 }
 
+/** A JSON cell's text in colors (inside GridCell, still one line): `spans` are [start, end, kind] UTF-16 ranges in order, kind
+ *  key · string · number · keyword · punct. Punctuation is the color of the span around the colored part (half the elements
+ *  of a span each); text after the last piece (where it stops being JSON) stays plain */
+export function JsonText({ text, spans }: { text: string; spans: [number, number, string][] }) {
+  const end = spans.length ? spans[spans.length - 1][1] : 0;
+  const out: ReactNode[] = [];
+  let at = 0;
+  for (const [s, e, kind] of spans) {
+    if (kind === "punct") continue;
+    if (s > at) out.push(text.slice(at, s));
+    out.push(
+      <span key={s} className={`json-${kind}`}>
+        {text.slice(s, e)}
+      </span>,
+    );
+    at = e;
+  }
+  if (end > at) out.push(text.slice(at, end));
+  return (
+    <>
+      {end > 0 && <span className="json-punct">{out}</span>}
+      {text.slice(end)}
+    </>
+  );
+}
+
 /** Cell editing: input (+ date picker button · picker panel). onBlurOut when focus leaves the cell */
 export function CellEditor({
   width,
@@ -176,7 +203,7 @@ export function CellEditor({
         if (!e.currentTarget.contains(e.relatedTarget as Node)) onBlurOut();
       }}
     >
-      <input autoFocus className="cell-input" value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={onKeyDown} />
+      <input autoFocus className="cell-input" {...textAssistOff()} value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={onKeyDown} />
       {more && (
         <button className="cell-more" title={more.title} onMouseDown={(e) => e.preventDefault()} onClick={more.onClick}>
           …

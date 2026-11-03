@@ -62,6 +62,12 @@ pub fn tls_opt_in(msg: &str) -> bool {
     qurry_shared::errors::tls_opt_in(msg)
 }
 
+/// The data source form's hint for a local Host with AWS SSM (the instance itself), or undefined (the TUI's words)
+#[wasm_bindgen(js_name = ssmLocalHost)]
+pub fn ssm_local_host(host: &str) -> Option<String> {
+    qurry_shared::errors::ssm_local_host(host)
+}
+
 /// The result grid's line when loading more rows failed (the TUI's words)
 #[wasm_bindgen(js_name = moreRowsFailed)]
 pub fn more_rows_failed(msg: &str) -> String {
@@ -390,10 +396,43 @@ pub fn pad_frac(s: &str, width: usize) -> String {
     qurry_shared::format::pad_frac(s, width)
 }
 
+/// The Value Editor panel's text for a cell: { json, text } (qurry_shared::value::panel_text)
+#[wasm_bindgen(js_name = panelText)]
+pub fn panel_text(type_name: &str, value: &str) -> Result<JsValue, JsError> {
+    to(&qurry_shared::value::panel_text(type_name, value))
+}
+
+/// The panel's "{ }" toggle: valid JSON between pretty and one line, undefined for anything else
+#[wasm_bindgen(js_name = toggleJsonLayout)]
+pub fn toggle_json_layout(text: &str) -> Option<String> {
+    qurry_shared::value::toggle_layout(text)
+}
+
+/// What a panel edit writes to the cell: { Ok: text } or { Err: why it can't be applied }
+#[wasm_bindgen(js_name = valueToApply)]
+pub fn value_to_apply(type_name: &str, original: &str, edited: &str) -> Result<JsValue, JsError> {
+    to(&qurry_shared::value::value_to_apply(type_name, original, edited))
+}
+
 /// Value class of a grid cell ("string", "number", "dateTime", "boolean", "null", "jsonBinary")
 #[wasm_bindgen(js_name = valueClass)]
 pub fn value_class(type_name: &str, value: JsValue) -> Result<JsValue, JsError> {
     to(&qurry_shared::format::value_class(type_name, &from(value)?))
+}
+
+/// JSON column (json, jsonb …): its text cells are colored
+#[wasm_bindgen(js_name = isJsonType)]
+pub fn is_json_type(type_name: &str) -> bool {
+    qurry_shared::format::is_json_type(type_name)
+}
+
+/// Colored pieces of a JSON cell's first `max_chars` characters, flat for speed: [start, end, kind, …] in UTF-16 units,
+/// kind as the index of qurry_shared::format::JsonKind
+#[wasm_bindgen(js_name = jsonSpans)]
+pub fn json_spans(text: &str, max_chars: usize) -> Vec<u32> {
+    let spans = qurry_shared::format::json_spans(text, max_chars);
+    let r = utf16_ranges(text, &spans.iter().map(|&(s, e, _)| (s, e)).collect::<Vec<_>>());
+    r.into_iter().zip(spans).flat_map(|([s, e], (_, _, k))| [s as u32, e as u32, k as u32]).collect()
 }
 
 /// Alignment of a value class ("left", "right", "center") given the saved overrides ({ null: "left", … })
@@ -540,6 +579,15 @@ fn byte_offset(text: &str, utf16: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_spans_cross_as_utf16() {
+        let t = "{\"😀\":\"한\",\"n\":1}";
+        let units: Vec<u16> = t.encode_utf16().collect();
+        let got: Vec<(String, u32)> = json_spans(t, 100).chunks(3).map(|c| (String::from_utf16(&units[c[0] as usize..c[1] as usize]).unwrap(), c[2])).collect();
+        let want = [("{", 4), ("\"😀\"", 0), (":", 4), ("\"한\"", 1), (",", 4), ("\"n\"", 0), (":", 4), ("1", 2), ("}", 4)];
+        assert_eq!(got, want.map(|(s, k)| (s.to_string(), k)));
+    }
 
     #[test]
     fn offsets_cross_as_utf16() {

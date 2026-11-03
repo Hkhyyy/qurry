@@ -73,7 +73,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
       setStatus(`Loading DDL of ${info.schema}.${info.name}…`);
       const ddl = await meta.ddl(target, info.schema, info.name, info.kind);
       // A table also gets the Structure view, opened in the last choice
-      addTab(info.conn, "ddl", { title, sql: ddl, database: info.db, edit: hasStructure(info.kind) ? { schema: info.schema, table: info.name, pk: [] } : undefined, objKind: info.kind });
+      addTab(info.conn, "ddl", { title, sql: ddl, database: info.db, edit: hasStructure(info.kind) ? { schema: info.schema, table: info.name, pk: [] } : undefined, objKind: info.kind, ddlOf: { schema: info.schema, name: info.name } });
       setStatus("Ready");
     } catch (e) {
       setStatus(`DDL failed: ${String(e)}`);
@@ -249,7 +249,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
     if (!info.schema || !info.name) return;
     try {
       const ddl = await ddlText(info);
-      addTab(info.conn, "ddl", { title: `SQL Generator: ${info.name}`, sql: ddl, database: info.db, objKind: info.kind });
+      addTab(info.conn, "ddl", { title: `SQL Generator: ${info.name}`, sql: ddl, database: info.db, objKind: info.kind, ddlOf: { schema: info.schema, name: info.name } });
     } catch (e) {
       setStatus(String(e));
     }

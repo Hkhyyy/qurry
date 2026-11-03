@@ -5112,6 +5112,8 @@ version = "0.3.0"
 dependencies = [
  "flate2",
  "libc",
+ "objc2-core-foundation",
+ "objc2-core-text",
  "qurry-core",
  "serde",
  "serde_json",

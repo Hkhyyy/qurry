@@ -1,6 +1,8 @@
 //! AWS SSM Session Manager tunnel: runs `aws ssm start-session` with the AWS-StartPortForwardingSessionToRemoteHost document on a free
-//! local port, waits until the plugin says it opened that port, and stops the CLI (and the Session Manager plugin it starts) when the
-//! Tunnel is dropped, and when the app exits, panics or is told to stop (kill_all: these processes would otherwise keep the port open).
+//! local port, waits until the plugin says it opened that port, and when the Tunnel is dropped, and when the app exits, panics or is
+//! told to stop (kill_all), ends the session on the AWS side (`aws ssm terminate-session`: a stopped CLI or plugin leaves it open on
+//! the instance, whose agent stops opening new ones after a dozen) and stops the CLI and the Session Manager plugin it started (they
+//! would otherwise keep the port open).
 //! Qurry stores no AWS secrets: the AWS CLI uses the user's own config, SSO login or environment. Arguments go as a vector (no shell)
 //! and are checked first, so a data source can't add CLI options or document parameters.
 use crate::error::{AppError, AppResult};
@@ -9,7 +11,8 @@ use crate::tunnel::Tunnel;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::{Child, Command};
@@ -24,22 +27,114 @@ const TAIL: usize = 4096;
 /// How long the CLI and the plugin get to end the session on the AWS side before they are killed
 const GRACE: Duration = Duration::from_millis(1500);
 
-/// Process groups of the running CLIs (each is its group's leader), for kill_all
-static GROUPS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+/// How long the app waits in all for `aws ssm terminate-session` when it exits (kill_all); slower ones finish on their own
+const TERMINATE_ON_EXIT: Duration = Duration::from_secs(2);
 
-/// The running `aws ssm start-session`. Dropping it stops the CLI and everything it started
+/// The CLI's line with the session's id, before the plugin starts
+const STARTING: &str = "Starting session with SessionId:";
+/// The plugin's line when the instance couldn't connect to host:portNumber (it then closes the local connection)
+const UNREACHABLE: &str = "Connection to destination port failed";
+
+/// Process groups of the running CLIs (each is its group's leader) and how to end their sessions, for kill_all
+static GROUPS: Mutex<Vec<(u32, Ender)>> = Mutex::new(Vec::new());
+
+/// What the CLI and the plugin said that Qurry acts on
+#[derive(Default)]
+pub(crate) struct Heard {
+    /// The session's id, for terminate-session
+    id: OnceLock<String>,
+    /// How many connections the instance couldn't forward to the database
+    unreachable: AtomicUsize,
+}
+
+impl Heard {
+    fn line(&self, line: &str) {
+        if let Some(id) = line.trim().strip_prefix(STARTING).map(str::trim) {
+            // Passed as an argument: an id that could pass an option is not used
+            if !id.is_empty() && id.len() <= 128 && !id.starts_with('-') && id.chars().all(|c| c.is_ascii_alphanumeric() || "-_.@+=,:".contains(c)) {
+                let _ = self.id.set(id.to_string());
+            }
+        }
+        if line.contains(UNREACHABLE) {
+            self.unreachable.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
+/// Taken before connecting through an SSM tunnel, to tell afterwards whether the instance couldn't reach the database meanwhile
+pub(crate) struct Mark(Arc<Heard>, usize);
+
+/// A connect through the tunnel failed. When the plugin said the instance couldn't reach host:port, say that: the driver only saw
+/// the connection closed (PostgreSQL: "unexpected response from SSLRequest: 0x00")
+pub(crate) async fn connect_error(mark: Option<Mark>, host: &str, port: u16, e: AppError) -> AppError {
+    let Some(Mark(heard, before)) = mark else { return e };
+    // The server answered: the instance reached it
+    if matches!(e, AppError::Db(sqlx::Error::Database(_))) {
+        return e;
+    }
+    // The plugin says it about when it closes the connection: give its line a moment to arrive
+    for _ in 0..20 {
+        if heard.unreachable.load(Ordering::SeqCst) > before {
+            return AppError::Msg(qurry_shared::errors::ssm_unreachable(host, port));
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    e
+}
+
+/// Ends a session on the AWS side with the CLI that started it (same PATH, profile and region)
+#[derive(Clone)]
+struct Ender {
+    aws: PathBuf,
+    path: Option<OsString>,
+    /// --profile / --region, as checked by args()
+    account: Vec<String>,
+    heard: Arc<Heard>,
+}
+
+impl Ender {
+    /// Starts `aws ssm terminate-session`, once the CLI has said the session's id. In its own process group: it is never stopped
+    /// (a slow SSO or assume-role sign-in would leave the session open), not by Qurry and not by the terminal's ⌃C or the app exiting
+    fn start(&self) -> Option<std::process::Child> {
+        let id = self.heard.id.get()?;
+        let mut cmd = std::process::Command::new(&self.aws);
+        cmd.args(["ssm", "terminate-session", "--session-id", id]).args(&self.account).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        if let Some(p) = &self.path {
+            cmd.env("PATH", p);
+        }
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+        cmd.spawn().ok()
+    }
+}
+
+/// Waits for the commands until `end` at most; those still running are left to finish
+fn finish(cmds: Vec<std::process::Child>, end: Instant) {
+    for mut c in cmds {
+        while matches!(c.try_wait(), Ok(None)) && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+/// The running `aws ssm start-session`. Dropping it ends the session and stops the CLI and everything it started
 pub struct Process {
     /// The CLI's pid (its process group) and the CLI itself, until the group is stopped
     child: Mutex<Option<(u32, Child)>>,
+    ender: Ender,
 }
 
 impl Process {
-    fn new(child: Child) -> Self {
+    fn new(child: Child, ender: Ender) -> Self {
         let child = child.id().map(|pid| {
-            GROUPS.lock().unwrap().push(pid);
+            GROUPS.lock().unwrap().push((pid, ender.clone()));
             (pid, child)
         });
-        Self { child: Mutex::new(child) }
+        Self { child: Mutex::new(child), ender }
+    }
+
+    pub(crate) fn mark(&self) -> Mark {
+        Mark(self.ender.heard.clone(), self.ender.heard.unreachable.load(Ordering::SeqCst))
     }
 
     /// The CLI is still running (it exits when the session ends: idle timeout, network, session terminated).
@@ -52,7 +147,7 @@ impl Process {
         }
         let pid = *pid;
         g.take();
-        stop_group(pid, None);
+        close(pid, None, &self.ender);
         false
     }
 
@@ -64,17 +159,25 @@ impl Process {
 impl Drop for Process {
     fn drop(&mut self) {
         if let Some((pid, child)) = self.child.lock().unwrap().take() {
-            stop_group(pid, Some(child));
+            close(pid, Some(child), &self.ender);
         }
     }
 }
 
-/// Forgets the group and stops what is left of it. The CLI runs session-manager-plugin as its own child, which holds the port and
-/// the session, so the whole group is stopped: SIGTERM first so they can end the session, SIGKILL after GRACE (without holding up
-/// the caller). A group is only signalled while it has members: a pgid can't be reused until its last member is gone, but after
-/// that the number may belong to another program's group. `child` is the CLI when it hasn't been reaped yet
-fn stop_group(pid: u32, child: Option<Child>) {
-    GROUPS.lock().unwrap_or_else(|e| e.into_inner()).retain(|p| *p != pid);
+/// The one way a session ends, once (kill_all may have ended it already: then the group is no longer in GROUPS). Forgets the
+/// group, starts terminate-session on the AWS side and stops what is left of the group, both at once (the port is free at once;
+/// the AWS call doesn't need the CLI or the plugin). The CLI runs session-manager-plugin as its own child, which holds the port,
+/// so the whole group is stopped: SIGTERM first, SIGKILL after GRACE (without holding up the caller). A group is only signalled
+/// while it has members: a pgid can't be reused until its last member is gone, but after that the number may belong to another
+/// program's group. `child` is the CLI when it hasn't been reaped yet
+fn close(pid: u32, child: Option<Child>, ender: &Ender) {
+    {
+        let mut groups = GROUPS.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(i) = groups.iter().position(|(p, _)| *p == pid) else { return };
+        groups.remove(i);
+    }
+    let ending = ender.start();
+    let ender = ender.clone();
     #[cfg(unix)]
     {
         let mut child = child;
@@ -84,18 +187,39 @@ fn stop_group(pid: u32, child: Option<Child>) {
             }
         };
         reap();
-        if group_alive(pid) {
+        let alive = group_alive(pid);
+        if alive {
             signal_group(pid, libc::SIGTERM);
-            std::thread::spawn(move || {
-                if !wait_group(pid, GRACE, reap) {
-                    signal_group(pid, libc::SIGKILL);
-                }
-            });
         }
+        std::thread::spawn(move || {
+            if alive && !wait_group(pid, GRACE, reap) {
+                signal_group(pid, libc::SIGKILL);
+            }
+            reap_or_end(ending, &ender);
+        });
     }
     // Elsewhere kill_on_drop stops the CLI only
     #[cfg(not(unix))]
-    drop((pid, child));
+    {
+        drop(child);
+        std::thread::spawn(move || reap_or_end(ending, &ender));
+    }
+}
+
+/// After the group stopped: reaps the terminate-session that was started, or starts it when the id line was still in the pipe
+/// when the Tunnel closed (the readers read what is left once the group is gone)
+fn reap_or_end(ending: Option<std::process::Child>, ender: &Ender) {
+    let mut ending = ending;
+    for _ in 0..20 {
+        if ending.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        ending = ender.start();
+    }
+    if let Some(mut c) = ending {
+        let _ = c.wait();
+    }
 }
 
 #[cfg(unix)]
@@ -124,11 +248,18 @@ fn wait_group(pid: u32, within: Duration, mut reap: impl FnMut()) -> bool {
     }
 }
 
-/// Stops every running SSM CLI and plugin now. For exit paths where the Tunnels are never dropped: the GUI quitting (the process
-/// exits without dropping its state), a panic (abort), a signal, or the TUI relaunching itself after an update
+/// Ends every SSM session and stops its CLI and plugin now. For exit paths where the Tunnels are never dropped: the GUI quitting
+/// (the process exits without dropping its state), a panic (abort), a signal, or the TUI relaunching itself after an update. The
+/// sessions are terminated at the same time, within TERMINATE_ON_EXIT in all, so quitting stays quick
 pub fn kill_all() {
-    let groups = std::mem::take(&mut *GROUPS.lock().unwrap_or_else(|e| e.into_inner()));
-    stop_now(&groups);
+    end_now(std::mem::take(&mut *GROUPS.lock().unwrap_or_else(|e| e.into_inner())));
+}
+
+fn end_now(groups: Vec<(u32, Ender)>) {
+    let end = Instant::now() + TERMINATE_ON_EXIT;
+    let ending = groups.iter().filter_map(|(_, e)| e.start()).collect();
+    stop_now(&groups.iter().map(|(p, _)| *p).collect::<Vec<_>>());
+    finish(ending, end);
 }
 
 /// SIGTERM, a short grace (the app is exiting), then SIGKILL
@@ -191,6 +322,7 @@ async fn open_in(dirs: &[PathBuf], ssm: &SsmConfig, host: &str, port: u16, timeo
 async fn open_with(aws: &Path, path: Option<OsString>, ssm: &SsmConfig, host: &str, port: u16, timeout: Duration) -> AppResult<Tunnel> {
     let local = free_port()?;
     let mut cmd = Command::new(aws);
+    let ender = Ender { aws: aws.to_path_buf(), path: path.clone(), account: account(ssm), heard: Arc::default() };
     cmd.args(args(ssm, host, port, local)?).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     if let Some(p) = path {
         cmd.env("PATH", p);
@@ -203,8 +335,9 @@ async fn open_with(aws: &Path, path: Option<OsString>, ssm: &SsmConfig, host: &s
     })?;
     // Read the output for as long as the CLI runs (the plugin writes a line per connection; a full pipe would stop it)
     let tail = Arc::new(Mutex::new(String::new()));
-    let readers = [drain(child.stdout.take(), tail.clone()), drain(child.stderr.take(), tail.clone())];
-    let child = Process::new(child);
+    let heard = ender.heard.clone();
+    let readers = [drain(child.stdout.take(), tail.clone(), heard.clone()), drain(child.stderr.take(), tail.clone(), heard)];
+    let child = Process::new(child, ender);
     // The plugin prints this once it listens on the port. Until then the port is free (free_port let it go), and another
     // program on this machine could have taken it: a successful connect alone doesn't say the plugin is behind it
     let opened = format!("Port {local} opened for sessionId");
@@ -222,7 +355,16 @@ async fn open_with(aws: &Path, path: Option<OsString>, ssm: &SsmConfig, host: &s
         }
         if Instant::now() >= deadline {
             let out = tail.lock().unwrap().clone();
-            let last = last_line(&out).map(|l| format!(" Last output: {l}")).unwrap_or_default();
+            let last = last_line(&out);
+            // The CLI started the session, but the plugin's data channel to the agent never opened
+            if last.as_deref().is_some_and(|l| l.starts_with(STARTING)) {
+                return Err(AppError::Msg(format!(
+                    "The AWS SSM session to {} started, but its data channel didn't open within {}s. Check the instance's SSM agent: it may have too many open sessions (they time out on their own).",
+                    ssm.target.trim(),
+                    timeout.as_secs()
+                )));
+            }
+            let last = last.map(|l| format!(" Last output: {l}")).unwrap_or_default();
             return Err(AppError::Msg(format!(
                 "The AWS SSM session to {} didn't open local port {local} within {}s. Check that the instance is running and connected to Session Manager, and that the region is right.{last}",
                 ssm.target.trim(),
@@ -237,14 +379,16 @@ fn free_port() -> AppResult<u16> {
     Ok(std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?.port())
 }
 
-fn drain(r: Option<impl AsyncRead + Unpin + Send + 'static>, tail: Arc<Mutex<String>>) -> tokio::task::JoinHandle<()> {
+fn drain(r: Option<impl AsyncRead + Unpin + Send + 'static>, tail: Arc<Mutex<String>>, heard: Arc<Heard>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let Some(r) = r else { return };
         let mut r = BufReader::new(r);
         let mut line = Vec::new();
         while r.read_until(b'\n', &mut line).await.is_ok_and(|n| n > 0) {
+            let text = String::from_utf8_lossy(&line);
+            heard.line(&text);
             let mut t = tail.lock().unwrap();
-            t.push_str(&String::from_utf8_lossy(&line));
+            t.push_str(&text);
             if t.len() > TAIL {
                 let cut = t.len() - TAIL;
                 let cut = (cut..t.len()).find(|i| t.is_char_boundary(*i)).unwrap_or(t.len());
@@ -278,12 +422,19 @@ fn args(ssm: &SsmConfig, host: &str, port: u16, local: u16) -> AppResult<Vec<Str
     }
     let mut a: Vec<String> = ["ssm", "start-session", "--target", target, "--document-name", "AWS-StartPortForwardingSessionToRemoteHost", "--parameters"].map(String::from).into();
     a.push(format!("host={host},portNumber={port},localPortNumber={local}"));
-    for (flag, v) in [("--profile", profile), ("--region", region)] {
+    a.extend(account(ssm));
+    Ok(a)
+}
+
+/// --profile / --region when set (args() checks them)
+fn account(ssm: &SsmConfig) -> Vec<String> {
+    let mut a = Vec::new();
+    for (flag, v) in [("--profile", ssm.profile.trim()), ("--region", ssm.region.trim())] {
         if !v.is_empty() {
             a.extend([flag.to_string(), v.to_string()]);
         }
     }
-    Ok(a)
+    a
 }
 
 fn last_line(out: &str) -> Option<String> {
@@ -329,8 +480,9 @@ pub(crate) mod tests {
 
     /// A fake `aws` that prints what the real CLI prints. "ok" starts a fake plugin (a child, like the real CLI) that listens on
     /// localPortNumber and forwards to host:portNumber; it writes its argv and the pids next to itself, and a line per start to
-    /// `starts`. "silent" is "ok" with a plugin that never says it opened the port; "onpath" is "ok" when session-manager-plugin is
-/// on its PATH and "plugin" (the real CLI's message) when it isn't
+    /// `starts`. "silent" is "ok" with a plugin that never says it opened the port; "stuck" starts the session but no plugin (the
+    /// data channel never opens); "onpath" is "ok" when session-manager-plugin is on its PATH and "plugin" (the real CLI's message)
+    /// when it isn't. `ssm terminate-session` writes its argv as a line of `terminated`, and then hangs if `terminate-hangs` exists
     const FAKE: &str = r#"#!/usr/bin/env python3
 import json, os, socket, subprocess, sys, threading, time
 MODE = "@MODE@"
@@ -363,11 +515,23 @@ if sys.argv[1:2] == ["--plugin"]:
         try:
             u = socket.create_connection((host, port))
         except OSError:
+            print("Connection to destination port failed, check SSM Agent logs.", flush=True)
             c.close()
             continue
         threading.Thread(target=pipe, args=(c, u), daemon=True).start()
         threading.Thread(target=pipe, args=(u, c), daemon=True).start()
 args = sys.argv[1:]
+if args[:2] == ["ssm", "terminate-session"]:
+    with open(os.path.join(HERE, "terminated"), "a") as f:
+        f.write(json.dumps(args) + "\n")
+    if os.path.exists(os.path.join(HERE, "terminate-hangs")):
+        with open(os.path.join(HERE, "terminate-pid"), "w") as f:
+            f.write(f"{os.getpid()}")
+        time.sleep(3600)
+    with open(os.path.join(HERE, "terminate-pid"), "w") as f:
+        f.write(f"{os.getpid()}")
+    print(json.dumps({"SessionId": args[3]}))
+    sys.exit(0)
 with open(os.path.join(HERE, "pids"), "w") as f:
     f.write(f"{os.getpid()}")
 if MODE == "onpath":
@@ -387,7 +551,9 @@ if MODE in ("ok", "silent"):
     with open(os.path.join(HERE, "pids"), "w") as f:
         f.write(f"{os.getpid()} {p.pid}")
     sys.exit(p.wait())
-if MODE == "hang":
+if MODE == "stuck":
+    print("\nStarting session with SessionId: qurry-test-0123456789abcdef", flush=True)
+if MODE in ("hang", "stuck"):
     time.sleep(3600)
 if MODE == "plugin":
     sys.stderr.write("\nSessionManagerPlugin is not found. Please refer to SessionManager Documentation here: http://docs.aws.amazon.com/console/systems-manager/session-manager-plugin-not-found\n")
@@ -475,6 +641,164 @@ sys.exit(255)
         drop(t);
         gone(dir.path()).await;
         assert!(tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_err(), "the port is closed with the plugin");
+        assert_eq!(terminated(dir.path()).await, [TERMINATED], "the session is ended on the AWS side");
+    }
+
+    /// terminate-session with the session id the CLI printed, and the data source's profile and region
+    const TERMINATED: [&str; 8] = ["ssm", "terminate-session", "--session-id", "qurry-test-0123456789abcdef", "--profile", "dev", "--region", "ap-northeast-2"];
+
+    /// The terminate-session calls of the fake, once at least one has been written (or after 5s)
+    async fn terminated(dir: &Path) -> Vec<Vec<String>> {
+        for _ in 0..50 {
+            if let Some(s) = std::fs::read_to_string(dir.join("terminated")).ok().filter(|s| s.ends_with('\n')) {
+                return s.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        Vec::new()
+    }
+
+    /// A group of its own with only a `sleep` in it (reaped when it ends), registered like a CLI, and how to end its session
+    /// through the fake aws in `dir`. Needs no local port
+    fn sleeping_group(dir: &Path) -> (u32, Ender) {
+        let mut cmd = std::process::Command::new("sleep");
+        cmd.arg("60");
+        std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+        let mut c = cmd.spawn().unwrap();
+        let pid = c.id();
+        std::thread::spawn(move || c.wait());
+        let ender = Ender { aws: fake_aws(dir, "ok"), path: None, account: account(&cfg()), heard: Arc::default() };
+        GROUPS.lock().unwrap().push((pid, ender.clone()));
+        (pid, ender)
+    }
+
+    fn take_group(pid: u32) -> Vec<(u32, Ender)> {
+        let mut g = GROUPS.lock().unwrap();
+        let (mine, rest) = std::mem::take(&mut *g).into_iter().partition(|(p, _)| *p == pid);
+        *g = rest;
+        mine
+    }
+
+    const STARTED: &str = "Starting session with SessionId: qurry-test-0123456789abcdef\n";
+
+    /// After kill_all a Tunnel dropped later (its state outlived the exit path) ends nothing a second time
+    #[tokio::test]
+    async fn a_close_after_kill_all_does_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (pid, ender) = sleeping_group(dir.path());
+        ender.heard.line(STARTED);
+        end_now(take_group(pid));
+        assert_eq!(terminated(dir.path()).await, [TERMINATED]);
+        close(pid, None, &ender);
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        assert_eq!(terminated(dir.path()).await.len(), 1, "no second terminate-session");
+    }
+
+    /// Dropped before the CLI's id line was read: the session is still ended once the line arrives (the readers drain the pipe
+    /// after the group is gone)
+    #[tokio::test]
+    async fn a_close_before_the_id_was_read_still_terminates() {
+        let dir = tempfile::tempdir().unwrap();
+        let (pid, ender) = sleeping_group(dir.path());
+        close(pid, None, &ender);
+        assert!(!dir.path().join("terminated").exists());
+        ender.heard.line(STARTED);
+        assert_eq!(terminated(dir.path()).await, [TERMINATED]);
+        assert!(!in_groups(pid));
+    }
+
+    /// On quit kill_all waits at most TERMINATE_ON_EXIT, and a terminate-session still running (a slow SSO sign-in) is left to
+    /// finish in its own process group instead of being killed
+    #[tokio::test]
+    async fn kill_all_leaves_a_slow_terminate_running() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("terminate-hangs"), "").unwrap();
+        let (pid, ender) = sleeping_group(dir.path());
+        ender.heard.line(STARTED);
+        let start = Instant::now();
+        end_now(take_group(pid));
+        let took = start.elapsed();
+        assert!(took >= TERMINATE_ON_EXIT - Duration::from_millis(100) && took < TERMINATE_ON_EXIT + Duration::from_secs(1), "{took:?}");
+        assert_eq!(terminated(dir.path()).await, [TERMINATED]);
+        let t: libc::pid_t = std::fs::read_to_string(dir.path().join("terminate-pid")).unwrap().parse().unwrap();
+        let (running, group) = unsafe { (libc::kill(t, 0) == 0, libc::getpgid(t)) };
+        unsafe { libc::kill(t, libc::SIGKILL) };
+        assert!(running, "the slow terminate-session was killed");
+        assert_eq!(group, t, "in its own process group");
+        assert!(unsafe { libc::killpg(pid as libc::pid_t, 0) } != 0, "the CLI's group is stopped");
+    }
+
+    /// Disconnecting the data source (drop_pool) ends the session on the AWS side
+    #[tokio::test]
+    async fn disconnect_terminates_the_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let (fake, t) = fake_tunnel().await;
+        st.tunnels.write().await.insert("src".into(), t);
+        st.disconnect("src".into()).await.unwrap();
+        gone(fake.path()).await;
+        assert_eq!(terminated(fake.path()).await, [TERMINATED]);
+    }
+
+    /// Quitting doesn't wait long for AWS: kill_all ends the sessions together, within TERMINATE_ON_EXIT, and stops the groups
+    #[tokio::test]
+    async fn kill_all_is_quick_when_terminate_hangs() {
+        let (dir, t) = open_fake("ok", "127.0.0.1", 9, Duration::from_secs(10)).await;
+        let t = t.expect("tunnel");
+        std::fs::write(dir.path().join("terminate-hangs"), "").unwrap();
+        let cli = cli_pid(dir.path());
+        // Only this test's group: kill_all would stop the other tests' tunnels too
+        let mine: Vec<_> = {
+            let mut g = GROUPS.lock().unwrap();
+            let (mine, rest) = std::mem::take(&mut *g).into_iter().partition(|(p, _)| *p == cli);
+            *g = rest;
+            mine
+        };
+        assert_eq!(mine.len(), 1);
+        let start = Instant::now();
+        end_now(mine);
+        let took = start.elapsed();
+        assert!(took >= TERMINATE_ON_EXIT - Duration::from_millis(100) && took < TERMINATE_ON_EXIT + Duration::from_secs(1), "{took:?}");
+        gone(dir.path()).await;
+        assert_eq!(terminated(dir.path()).await, [TERMINATED]);
+        // Left running by kill_all
+        let pid: libc::pid_t = std::fs::read_to_string(dir.path().join("terminate-pid")).unwrap().parse().unwrap();
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+        std::mem::forget(t);
+    }
+
+    /// The instance couldn't reach host:port (General tab pointing at a local port): the plugin says so and closes the connection,
+    /// and the connect error says what Host and Port mean with SSM instead of the driver's "unexpected response from SSLRequest: 0x00"
+    #[tokio::test]
+    async fn an_unreachable_database_says_what_host_and_port_are() {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let (_dir, t) = open_fake("ok", "127.0.0.1", closed, Duration::from_secs(10)).await;
+        let t = t.expect("tunnel");
+        let c: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "a", "kind": "postgres", "host": "127.0.0.1", "port": closed, "user": "u" })).unwrap();
+        let mark = t.ssm_mark();
+        let e = crate::db::connect_via(&c, None, Some(t.local_port)).await.err().expect("nothing behind it");
+        let raw = e.to_string();
+        let e = connect_error(mark, &c.host, c.port, e).await.to_string();
+        assert_eq!(e, qurry_shared::errors::ssm_unreachable("127.0.0.1", closed), "driver said: {raw}");
+        // Not said for a failure after an earlier one (the count moved before the mark), nor without SSM
+        let mark = t.ssm_mark();
+        let e = connect_error(mark, &c.host, c.port, AppError::Msg("password authentication failed".into())).await.to_string();
+        assert_eq!(e, "password authentication failed");
+        assert_eq!(connect_error(None, "h", 1, AppError::Msg("x".into())).await.to_string(), "x");
+    }
+
+    /// The session started but the plugin never opened the port (the instance's agent has too many sessions): the error says so,
+    /// and the session is ended on the AWS side
+    #[tokio::test]
+    async fn a_session_stuck_at_starting_says_so_and_is_terminated() {
+        let (dir, t) = open_fake("stuck", "db.internal", 5432, Duration::from_secs(2)).await;
+        let e = t.err().unwrap().to_string();
+        assert_eq!(
+            e,
+            "The AWS SSM session to i-0123456789abcdef0 started, but its data channel didn't open within 2s. Check the instance's SSM agent: it may have too many open sessions (they time out on their own)."
+        );
+        gone(dir.path()).await;
+        assert_eq!(terminated(dir.path()).await, [TERMINATED]);
     }
 
     /// Something listening on the port is not enough: the plugin has to say it opened it (another local program could hold it)
@@ -482,8 +806,9 @@ sys.exit(255)
     async fn waits_for_the_plugin_to_open_the_port() {
         let (dir, t) = open_fake("silent", "127.0.0.1", 9, Duration::from_secs(3)).await;
         let e = t.err().expect("not ready without the plugin's line").to_string();
-        assert!(e.contains("didn't open local port"), "{e}");
+        assert!(e.contains("didn't open local port") && e.contains("Last output: Waiting for connections"), "{e}");
         gone(dir.path()).await;
+        assert_eq!(terminated(dir.path()).await, [TERMINATED], "a failed start ends its session too");
     }
 
     /// A tunnel whose CLI has exited says so (ensure_pool then opens it again), and stop_now (kill_all) stops a CLI and its plugin
@@ -512,7 +837,7 @@ sys.exit(255)
     }
 
     fn in_groups(pid: u32) -> bool {
-        GROUPS.lock().unwrap().contains(&pid)
+        GROUPS.lock().unwrap().iter().any(|(p, _)| *p == pid)
     }
 
     /// A CLI that exited (here: a failed start) is forgotten, so kill_all never signals its pid, which may be reused by then
@@ -522,6 +847,7 @@ sys.exit(255)
             let (dir, t) = open_fake(mode, "db.internal", 5432, Duration::from_secs(10)).await;
             assert!(t.is_err(), "{mode}");
             assert!(!in_groups(cli_pid(dir.path())), "{mode}: the exited CLI's pid is still kept for kill_all");
+            assert!(!dir.path().join("terminated").exists(), "{mode}: no session, nothing to terminate");
         }
     }
 

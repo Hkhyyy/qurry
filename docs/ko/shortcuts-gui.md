@@ -58,7 +58,7 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `⌘9` | Workspace 9 |
 | `⌘0` | Database Explorer (focus / hide) |
 | `⇧⌘F` | Find tool window (Full-text Search results) |
-| `⇧⎋` | Hide active tool window |
+| `⇧⎋` | Hide active tool window (in a grid: its Value Editor panel) |
 | `⇧⌘F12` | Maximize editor (also: double-click a tab) |
 | `⌘,` | Settings (theme, fonts) |
 | `` ⌃` `` | Quick switch theme (Dark / Light / High contrast / Sync with OS) |
@@ -69,7 +69,7 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 
 | macOS | Action |
 |---|---|
-| `⌘w` | Close tab (middle-click also closes) |
+| `⌘w` | Close tab (middle-click also closes); from a grid with the Value Editor open, closes the panel first |
 | `⌥ + click ×` | Close other tabs |
 | `⇧⌘T` | Reopen closed tab |
 | `⇧⌘]` | Next tab |
@@ -133,6 +133,7 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 |---|---|
 | `↩ / F2` | Edit cell |
 | `⇧↩` | Open in Value Editor |
+| `⌘↩ · ⎋` | In the Value Editor panel: apply the value · back to the grid (it follows the current cell) |
 | `⌥⌘n` | Set NULL |
 | `⌥⌘d` | Set DEFAULT |
 | `⌘n` | Add Row |
@@ -202,7 +203,7 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `—` | Duplicate Console |
 | `—` | DDL: Show SQL |
 | `—` | DDL: Show Structure |
-| `—` | DDL: Reload Structure |
+| `—` | DDL: Reload |
 | `—` | DDL: Copy to Clipboard |
 | `—` | DDL: Save to File |
 | `—` | DDL: Run in Console |

@@ -5,6 +5,7 @@ import "../../lib/mock";
 import "../../lib/monaco";
 import App from "../../App";
 import { SettingsDialog } from "../../features/settings/SettingsDialog";
+import { setFont } from "../../lib/prefs";
 import { dialectOf, type ConnectionView, type QueryResult } from "../../lib/api";
 import { ConnectionDialog } from "../../components/ConnectionDialog";
 import { ConsolePane, SPLITTER_FAILED } from "../../components/ConsolePane";
@@ -67,14 +68,16 @@ export const FullApp: S = { name: "App (whole window)", render: () => <div style
 
 /** Settings › Appearance: theme, editor and grid fonts, grid alignment per value class, the automatic update check and the update channel (alignment and channel shared with the TUI) */
 export const Settings: S = { name: "Settings — Appearance & updates", render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} /> };
-/** Editor / Grid font: installed monospace fonts are suggested (each field shows its font), sizes in px; a family that isn't installed says so and how to recover (the fallback is the default monospace). The choice is saved like in the app; preview.tsx resets it before every story */
+/** Editor / Grid font: each family is picked from a drop-down of the installed fonts (search, "Monospaced only" on by default, the default
+ * entry first), sizes in px. A saved family that isn't installed stays on top of the list marked "(not installed)" and renders with the
+ * default monospace. The choice is saved like in the app; preview.tsx resets it before every story. The drop-down is the ui kit's
+ * PopupList in select mode (search box on top, fixed height), the same list as ComboBox's (GUI/3 Organisms › List popup) */
 export const SettingsFonts: S = {
   name: "Settings — Fonts (font not installed)",
   render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} />,
   play: async ({ canvasElement }) => {
-    const field = within(canvasElement.ownerDocument.body).getByRole("combobox", { name: "Grid font family" });
-    await userEvent.clear(field);
-    await userEvent.type(field, "No Such Mono");
+    setFont("grid", { family: "No Such Mono" });
+    await userEvent.click(await within(canvasElement.ownerDocument.body).findByRole("combobox", { name: "Grid font family" }));
   },
 };
 
@@ -132,6 +135,17 @@ export const EditDataSourceSsmError: S = {
 
 export const TableNew: S = { name: "New Table", render: () => <TableDesigner target="dev" conn={DEV} schema="public" onDone={noop} onOpenConsole={noop} onClose={noop} /> };
 export const TableModify: S = { name: "Modify Table (⌘F6)", render: () => <TableDesigner target="dev" conn={DEV} schema="public" table="customers" onDone={noop} onOpenConsole={noop} onClose={noop} /> };
+/** A column's type is a ComboBox: the suggestions for the data source's database open right under the field (typing "int" here
+ * filters them, prefix matches first); any other type can be typed. ⎋ closes the list, not the dialog */
+export const TableModifyTypes: S = {
+  name: "Modify Table — column type suggestions",
+  render: () => <TableDesigner target="dev" conn={DEV} schema="public" table="customers" onDone={noop} onOpenConsole={noop} onClose={noop} />,
+  play: async ({ canvasElement }) => {
+    const field = await within(canvasElement.ownerDocument.body).findByRole("combobox", { name: "Type of org_id" });
+    await userEvent.clear(field);
+    await userEvent.type(field, "int");
+  },
+};
 export const NewView: S = { name: "New View", render: () => <NewObjectDialog kind="view" target="dev" conn={DEV} schema="public" onDone={noop} onOpenConsole={noop} onClose={noop} /> };
 export const NewDatabase: S = { name: "New Database", render: () => <NewObjectDialog kind="database" target="dev" conn={DEV} schema="public" onDone={noop} onOpenConsole={noop} onClose={noop} /> };
 
@@ -181,6 +195,20 @@ export const GridShort: S = {
       <ResultGrid result={mixed} running={false} loadingMore={false} query="select * from payment_check" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
     </div>
   ),
+};
+
+/** Value Editor panel (⇧↩): beside the grid, not over it; follows the current cell (↑↓ keep moving the grid), jsonb pretty-printed and highlighted */
+export const GridValuePanel: S = {
+  name: "Result Grid — Value Editor panel (⇧↩)",
+  render: () => (
+    <div style={{ position: "relative", height: 420, border: "1px solid var(--ui-border)" }}>
+      <ResultGrid result={mixed} edit={{ schema: "public", table: "payment_check", pk: ["card_brand"] }} running={false} loadingMore={false} query="select * from payment_check" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    await userEvent.click(within(canvasElement).getAllByRole("gridcell", { name: '{"pg":"toss","n":0}' })[0]);
+    await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+  },
 };
 
 export const History: S = { name: "Query History", render: () => <HistoryDialog connId="dev" title="[DEV] shop_app Query History" onPick={noop} onClose={noop} /> };

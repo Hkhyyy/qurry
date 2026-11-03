@@ -385,7 +385,7 @@ const CHECKS: Record<string, Check> = {
   "grid.valueEditor": async (page, key) => {
     await usersGrid(page);
     await page.keyboard.press(key);
-    await expect(work(page).locator(".value-editor .ve-title")).toContainText("user_name : ");
+    await expect(work(page).locator(".value-panel .ve-title")).toContainText("user_name : ");
   },
   "grid.setNull": pending,
   "grid.setDefault": pending,

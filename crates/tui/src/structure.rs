@@ -94,9 +94,14 @@ fn side(f: &ForeignKeyMeta, from: bool) -> String {
     if from { format!("{}.{} ({})", f.schema, f.table, f.columns.join(", ")) } else { format!("{}.{} ({})", f.ref_schema, f.ref_table, f.ref_columns.join(", ")) }
 }
 
+/// Tree kinds whose DDL tab has the Structure view
+pub fn has_structure(kind: &str) -> bool {
+    matches!(kind, "table" | "partitioned")
+}
+
 /// What a text tab shows in `width` cells: a table's Structure view when switched to it, else the text
 pub fn body(t: &crate::app::TextTab, width: usize) -> Text<'_> {
-    match &t.table {
+    match &t.ddl_of {
         Some((s, n)) if t.structure_view => lines(s, n, t.structure.as_ref(), width).into(),
         _ => t.text.as_str().into(),
     }
@@ -140,8 +145,8 @@ mod tests {
 
     fn ddl_tab(h: &mut Harness, structure: Option<Result<qurry_core::meta::TableStructure, String>>) {
         let text = "CREATE TABLE public.users (\n    id bigint NOT NULL\n);".to_string();
-        let table = Some(("public".to_string(), "users".to_string()));
-        h.app.push_tab("test", "postgres".into(), "users [DDL]".into(), TabKind::Text(TextTab { text, table, structure, ..Default::default() }));
+        let ddl_of = Some(("public".to_string(), "users".to_string()));
+        h.app.push_tab("test", "postgres".into(), "users [DDL]".into(), TabKind::Text(TextTab { text, kind: "table".into(), ddl_of, structure, ..Default::default() }));
         h.app.focus = Focus::Grid;
     }
 
