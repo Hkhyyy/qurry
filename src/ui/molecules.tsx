@@ -105,9 +105,9 @@ export function SearchField({ busy, bare, className, ...rest }: InputHTMLAttribu
 }
 
 // ───────── Tabs · titles ─────────
-export function Tabs<T extends string>({ items, value, onChange, size }: { items: { id: T; label: ReactNode }[]; value: T; onChange: (id: T) => void; size?: "sm" }) {
+export function Tabs<T extends string>({ items, value, onChange, size, label }: { items: { id: T; label: ReactNode }[]; value: T; onChange: (id: T) => void; size?: "sm"; label?: string }) {
   return (
-    <div className={cx("ui-tabs", size === "sm" && "size-sm")} role="tablist">
+    <div className={cx("ui-tabs", size === "sm" && "size-sm")} role="tablist" aria-label={label}>
       {items.map((t) => (
         <button key={t.id} type="button" role="tab" aria-selected={value === t.id} className={cx("ui-tab", value === t.id && "active")} onClick={() => onChange(t.id)}>
           {t.label}

@@ -23,6 +23,7 @@ import { ResultChart } from "../../components/ResultChart";
 import { ResultGrid } from "../../components/ResultGrid";
 import { RunningBar } from "../../components/RunningBar";
 import { SearchEverywhere } from "../../components/SearchEverywhere";
+import { TableStructureView } from "../../components/TableStructure";
 import { Switcher } from "../../components/Switcher";
 import { BackupDialog, ExportDialog, ImportDialog } from "../../components/Transfer";
 import { UpdateDialog } from "../../components/UpdateDialog";
@@ -187,6 +188,20 @@ export const Update: S = {
   ),
 };
 
+/** DDL tab → Structure (the toolbar's SQL | Structure switch picks it). Read-only sections from the table's metadata */
+export const DdlStructure: S = { name: "DDL — Structure", render: () => <Frame h={720}><TableStructureView target="dev" schema="public" table="users" onShowSql={noop} /></Frame> };
+export const DdlStructureBasics: S = {
+  name: "DDL — Structure (source reports only the basics)",
+  render: () => <Frame h={720}><TableStructureView target="dev" schema="billing" table="invoices" onShowSql={noop} /></Frame>,
+};
+export const DdlStructureError: S = {
+  name: "DDL — Structure (load failed)",
+  beforeEach: () => {
+    (globalThis as any).__mockStructureFail = "connection reset by peer";
+    return () => delete (globalThis as any).__mockStructureFail;
+  },
+  render: () => <Frame h={240}><TableStructureView target="dev" schema="public" table="users" onShowSql={noop} /></Frame>,
+};
 export const Diagram: S = { name: "Diagram (ERD)", render: () => <Frame h={600}><ErdView target="dev" schemas={["public"]} visible onOpenTable={noop} onStatus={noop} /></Frame> };
 export const Dba: S = {
   name: "Database Admin",

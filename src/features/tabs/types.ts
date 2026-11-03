@@ -2,6 +2,7 @@ import type { QueryResult } from "../../lib/api";
 import type { OutputLine, ResultEntry } from "../../components/ConsolePane";
 import type { EditTarget } from "../../components/ResultGrid";
 import { leaf, type Pane } from "../../lib/panes";
+import type { DdlView } from "../../lib/structure";
 
 /** Pane id (0~3). The pane layout is a Pane tree */
 type Group = number;
@@ -55,6 +56,8 @@ interface Tab {
   dbaReport?: string;
   /** erd: schemas to draw */
   erdSchemas?: string[];
+  /** ddl of a table (edit set): SQL text or Structure; unset = the last choice (lib/structure ddlView) */
+  ddlView?: DdlView;
   /** Tab restored on relaunch: not loaded yet (loads when first shown) */
   stale?: boolean;
 }

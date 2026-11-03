@@ -349,6 +349,17 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .qd-body { border: none; border-radius: 0; color: var(--c-cf8e6d); }
 .ddl-layer { flex-direction: column; }
 .ddl-editor { flex: 1; min-height: 0; position: relative; }
+/* DDL → Structure: sections of small tables, scrolling in the same box as the SQL editor */
+.ddl-structure { flex: 1; min-height: 0; overflow: auto; padding: var(--ui-sp-3) var(--ui-sp-5) var(--ui-sp-6); }
+.ddl-section + .ddl-section { margin-top: var(--ui-sp-4); }
+.ddl-section > .ui-section-title { padding-left: 0; }
+.ddl-section > .ui-hint { padding: 0 0 var(--ui-sp-2); }
+.ddl-section .ui-table td { vertical-align: top; white-space: nowrap; }
+/* The last column (definition · comment) takes the rest and wraps; names and kinds stay on one line */
+.ddl-section .ui-table td:last-child { width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.ddl-count { margin-left: var(--ui-sp-2); font-weight: 400; }
+.ddl-pk { display: inline-flex; vertical-align: -3px; margin-left: var(--ui-sp-2); }
+.ddl-structure-error { max-width: 720px; }
 
 /* ── Console ── */
 .console-pane { position: absolute; inset: 0; display: flex; flex-direction: column; }

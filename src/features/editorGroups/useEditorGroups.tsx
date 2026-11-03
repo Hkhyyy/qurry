@@ -14,7 +14,9 @@ import { RagView } from "../../components/RagView";
 import { RedisBrowser } from "../../components/RedisBrowser";
 import { TableEditor } from "../../components/TableEditor";
 import { TlsFix } from "../../components/TlsFix";
-import { Spacer, TabItem, TabStrip, Text, ToolButton, Toolbar } from "../../ui";
+import { Spacer, TabItem, Tabs, TabStrip, Text, ToolbarSep, ToolButton, Toolbar } from "../../ui";
+import { TableStructureView } from "../../components/TableStructure";
+import { ddlView, setDdlView, type DdlView } from "../../lib/structure";
 import type { useConsole } from "../console/useConsole";
 import type { useExplorer } from "../explorer/useExplorer";
 import type { useJobs } from "../jobs/useJobs";
@@ -113,7 +115,7 @@ export function useEditorGroups({
     if (open) return activate(open);
     if (snap.kind === "table" && snap.edit) {
       openTableTab(c, snap.edit.schema, snap.edit.table, snap.database, undefined, snap.where, snap.orderBy);
-    } else addTab(c, snap.kind, { title: snap.title, sql: snap.sql, database: snap.database });
+    } else addTab(c, snap.kind, { title: snap.title, sql: snap.sql, database: snap.database, edit: snap.edit });
   };
   const reopenClosed = () => {
     const [snap, ...rest] = useTabsStore.getState().closedStack;
@@ -129,7 +131,7 @@ export function useEditorGroups({
     if (!r) return setStatus(`Up to ${MAX_PANES} panes`);
     setPanes(r.pane);
     if (t.kind === "table" && t.edit) openTableTab(c, t.edit.schema, t.edit.table, t.database, r.g, t.where, t.orderBy);
-    else addTab(c, t.kind, { title: t.kind === "console" ? `${t.title} (copy)` : t.title, sql: sqlOf(t), database: t.database, group: r.g });
+    else addTab(c, t.kind, { title: t.kind === "console" ? `${t.title} (copy)` : t.title, sql: sqlOf(t), database: t.database, edit: t.edit, group: r.g });
   };
 
   const openTabMenu = (e: React.MouseEvent, t: Tab) => {
@@ -167,7 +169,7 @@ export function useEditorGroups({
       ...(split
         ? ([
             { label: "Move To Next Group", action: () => moveTo(t.id, other) },
-            { label: "Open In Next Group", action: () => { const cc = c; if (!cc) return; if (t.kind === "table" && t.edit) openTableTab(cc, t.edit.schema, t.edit.table, t.database, other, t.where, t.orderBy); else addTab(cc, t.kind, { title: t.title, sql: sqlOf(t), database: t.database, group: other }); } },
+            { label: "Open In Next Group", action: () => { const cc = c; if (!cc) return; if (t.kind === "table" && t.edit) openTableTab(cc, t.edit.schema, t.edit.table, t.database, other, t.where, t.orderBy); else addTab(cc, t.kind, { title: t.title, sql: sqlOf(t), database: t.database, edit: t.edit, group: other }); } },
             { label: "Unsplit All", action: unsplit },
           ] as MenuItem[])
         : []),
@@ -509,10 +511,19 @@ export function useEditorGroups({
           {/* DDL (read-only) */}
           {gTabs
             .filter((t) => t.kind === "ddl")
-            .map((t) => (
+            .map((t) => {
+              // A table's DDL also has the Structure view (openDdl sets edit for tables)
+              const view = t.edit ? (t.ddlView ?? ddlView()) : "sql";
+              const pick = (v: DdlView) => {
+                patch(t.id, { ddlView: v });
+                setDdlView(v);
+              };
+              return (
               <div key={t.id} className="work-layer ddl-layer" style={{ display: t.id === ga?.id ? "flex" : "none" }}>
                 <Toolbar>
                   <span className="tb-info" style={{ marginLeft: 0 }}>{t.title.startsWith("SQL Generator") ? "SQL Generator" : "DDL"} · read-only</span>
+                  {t.edit && <ToolbarSep />}
+                  {t.edit && <Tabs size="sm" label="DDL view" items={[{ id: "sql", label: "SQL" }, { id: "structure", label: "Structure" }]} value={view} onChange={pick} />}
                   <Spacer />
                   <ToolButton title="Copy to Clipboard" onClick={() => { navigator.clipboard.writeText(t.sql); setStatus("Copied to clipboard"); }}>Copy</ToolButton>
                   <ToolButton
@@ -530,7 +541,8 @@ export function useEditorGroups({
                   </ToolButton>
                   <ToolButton title="Run in a console" onClick={() => { const c = conns.find((x) => x.id === t.connId); if (c) openConsole(c, t.database, t.sql); }}>Run in Console</ToolButton>
                 </Toolbar>
-                <div className="ddl-editor">
+                {view === "structure" && t.edit && <TableStructureView target={t.target} schema={t.edit.schema} table={t.edit.table} onShowSql={() => pick("sql")} />}
+                <div className="ddl-editor" style={{ display: view === "sql" ? undefined : "none" }}>
                 <ConsoleEditor
                   tabId={t.id}
                   connId={t.target}
@@ -544,7 +556,8 @@ export function useEditorGroups({
                 />
                 </div>
               </div>
-            ))}
+              );
+            })}
         </div>
       </div>
     );
