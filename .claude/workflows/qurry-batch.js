@@ -1,11 +1,11 @@
 export const meta = {
   name: 'qurry-batch',
   description: 'Qurry team harness: lead plans the batch, specialists build each item on its own branch, cross-review with adversarial checks, fix rounds, lead integrates and opens one PR',
-  whenToUse: 'A batch of Qurry work (features, bugs, review findings) that should end as one verified PR. args: { request, repo, base?, batch?, pr?, items?, title?, parallel?, fixRounds?, sharedDbs?, targetDir? }',
+  whenToUse: 'A batch of Qurry work (features, bugs, review findings) that should end as one verified PR. args: { request, repo, (items[].lenses?, items[].small?), base?, batch?, pr?, items?, title?, parallel?, fixRounds?, sharedDbs?, targetDir? }',
   phases: [
     { title: 'Plan', detail: 'qurry-lead splits the request into work items with owners and checks' },
     { title: 'Build', detail: 'each item on its own branch, in its own worktree, by its owner' },
-    { title: 'Review', detail: 'security / UI / perf lenses on each branch, findings challenged by a skeptic' },
+    { title: 'Review', detail: 'one reviewer per item (owner lens + correctness), medium/high findings challenged by a skeptic' },
     { title: 'Fix', detail: 'owner fixes confirmed findings, then re-review (max 2 rounds)' },
     { title: 'Integrate', detail: 'qurry-lead merges the branches, runs full verification, opens the PR' },
   ],
@@ -125,15 +125,27 @@ const keepBranch = (branch) =>
   `Before you finish, make sure ${branch} points at your last commit: if \`git rev-parse ${branch}\` differs from \`git rev-parse HEAD\` and \`git merge-base --is-ancestor ${branch} HEAD\` succeeds, run \`git branch -f ${branch} HEAD\`; if the branch is not an ancestor, stop and say so in the report. Then run \`git checkout --detach\` so the branch is free for other worktrees.`
 // Reviewers and skeptics read a branch in their own worktree, detached, so the branch stays free for its fixer
 const readBranch = (branch) => `Start: \`git fetch origin -q; git checkout --detach ${branch}\` in your own worktree (your starting directory); never check out a branch by name. `
-const lensesFor = (it) => [
+// One reviewer per item (token budget): the owner's specialty plus correctness and design.
+// it.lenses (e.g. ['security', 'ui']) asks for more on a big or risky item.
+const BASE_FOCUS = 'correctness: does it do what the task asked, edge cases, tests that actually prove it, regressions in nearby behavior; design — YAGNI, KISS, DRY'
+const LENSES = {
+  security: { key: 'security', type: 'qurry-security', focus: 'security and data safety (credentials, what reaches a database or an AI tool, injection, temp files), who this breaks after an update; and ' + BASE_FOCUS },
+  ui: { key: 'ui', type: 'qurry-ui', focus: 'UI/UX and GUI–TUI parity, Storybook updated, themes, keyboard flow, error/empty/loading states; and ' + BASE_FOCUS },
+  perf: { key: 'perf', type: 'qurry-perf', focus: 'performance and resources (blocking in async, leaks, unbounded growth, per-frame cost, large data); and ' + BASE_FOCUS },
+  correctness: { key: 'correctness', type: 'general-purpose', focus: BASE_FOCUS },
+}
+const OWNER_LENS = { 'qurry-security': 'security', 'qurry-ui': 'ui', 'qurry-perf': 'perf', implementer: 'correctness' }
+const lensesFor = (it) => (it.lenses?.length ? it.lenses : [OWNER_LENS[it.owner] || 'correctness']).map((k) => LENSES[k] || LENSES.correctness)
+
+// Resume support: items whose round-1 review ran under the older four-lens rule keep it for round 1 (cache hits)
+const legacyLensesFor = (it) => [
   { key: 'security', type: 'qurry-security', focus: 'security and data safety (credentials, what reaches a database or an AI tool, injection, temp files), and who this breaks after an update' },
   ...(it.userVisible ? [{ key: 'ui', type: 'qurry-ui', focus: 'UI/UX and GUI–TUI parity, Storybook updated, themes, keyboard flow, error/empty/loading states' }] : []),
   ...(it.runtime ? [{ key: 'perf', type: 'qurry-perf', focus: 'performance and resources (blocking in async, leaks, unbounded growth, per-frame cost, large data)' }] : []),
   { key: 'correctness', type: 'general-purpose', focus: 'correctness: does it do what the task asked, edge cases, tests that actually prove it, regressions in nearby behavior; and design — YAGNI (speculative options/abstractions), KISS (needless complexity), DRY (duplicated logic or rules that should have one home)' },
 ]
-
 const review = async (it, round) => {
-  const lenses = lensesFor(it)
+  const lenses = round === 1 && (A.legacyR1 || []).includes(it.slug) ? legacyLensesFor(it) : lensesFor(it)
   const found = (
     await parallel(
       lenses.map((l) => () =>
@@ -154,6 +166,8 @@ const review = async (it, round) => {
   const lows = found.filter((f) => f.severity === 'low')
   const serious = found.filter((f) => f.severity !== 'low')
   if (!serious.length) return { confirmed: [], lows }
+  // small items: no skeptic, the fixer judges each finding
+  if (it.small) return { confirmed: [], lows: found }
   const judged = await parallel(
     serious.map((f) => () =>
       agent(
@@ -211,6 +225,8 @@ const reviewAndFix = async (built, it) => {
       )
       fixes.push(fixed)
       round++
+      // small items: one fix pass, no re-review
+      if (it.small) { open = []; lows = []; break }
       ;({ confirmed: open, lows } = await review(it, round))
     }
     if (open.length) log(`${it.slug}: ${open.length} finding(s) still open after ${MAX_FIX_ROUNDS} fix round(s)`)
