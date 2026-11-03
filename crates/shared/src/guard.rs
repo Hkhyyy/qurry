@@ -1177,6 +1177,22 @@ mod tests {
     use super::*;
     use DbKind::{Chroma, Milvus, Mongodb, Mysql, Postgres, Qdrant};
 
+    /// The MongoDB driver reads commands with Unicode \w \s (drivers/mongodb): the guard must too, or it stops warning about
+    /// commands the driver runs. Fails if shared's regex loses Unicode classes or case folding (regex-lite, a feature cut)
+    #[test]
+    fn regex_stays_unicode() {
+        assert!(regex::Regex::new(r"^\w+$").unwrap().is_match("users_한"));
+        assert!(regex::Regex::new(r"^\s$").unwrap().is_match("\u{3000}"));
+        assert!(regex::Regex::new(r"(?i)^like$").unwrap().is_match("li\u{212A}e")); // Kelvin sign folds to k
+        for q in ["db.users_한.deleteMany({})", "db.getCollection(\u{3000}\"users\").deleteMany({})", "db.getCollection(\u{a0}\"users\").updateMany({}, {$set: {a: 1}})"] {
+            assert!(unsafe_statement(q, Mongodb).is_some_and(|w| w.contains("empty filter")), "{q:?}");
+        }
+        assert_eq!(mcp_execute_violation("db.users_한.deleteMany({a: 1})", Mongodb), None);
+        assert_eq!(unsafe_statement("db.users.deleteMany({_id: ObjectId(\u{3000}\"5f1d7f0b2c3e4a5b6c7d8e9f\")})", Mongodb), None);
+        // Value hints on non-ASCII columns
+        assert!(crate::complete::context("select * from t where 상태 = '", false).is_some());
+    }
+
     #[test]
     fn read_only_rest_and_mongo() {
         let ok = |s: &str, k| read_only_violation(s, k, false).is_none();
