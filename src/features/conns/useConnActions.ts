@@ -1,10 +1,12 @@
+import { invalidateCompletion } from "../../lib/completion";
+import { invalidateSearchIndex } from "../../components/SearchEverywhere";
 import { api, ConnectionView, removedDespite } from "../../lib/api";
 import { ask } from "../../lib/dialogs";
 import { closeTabs } from "../tabs/ops";
 import { useTabsStore } from "../tabs/store";
 
 /** Data Source actions: color, shown schemas, export / import of the list, remove */
-export function useConnActions({ refresh, setStatus }: { refresh: () => Promise<void>; setStatus: (s: string) => void }) {
+export function useConnActions({ conns, refresh, setStatus }: { conns: ConnectionView[]; refresh: () => Promise<void>; setStatus: (s: string) => void }) {
   // Only that part: the list may be stale (another app changed the source since), so the backend changes it in the saved one
   const setColor = async (c: ConnectionView, color: string | null) => {
     await api.setConnectionColor(c.id, color);
@@ -52,5 +54,12 @@ export function useConnActions({ refresh, setStatus }: { refresh: () => Promise<
     closeTabs(useTabsStore.getState().tabs.filter((t) => t.connId === c.id).map((t) => t.id));
     refresh();
   };
-  return { setColor, setScope, exportConns, importConns, removeConn };
+
+  /** Refresh (⌥⌘y, Find Action): Data Source list + search and autocomplete caches */
+  const refreshAll = () => {
+    invalidateSearchIndex();
+    for (const c of conns) invalidateCompletion(c.id);
+    refresh();
+  };
+  return { setColor, setScope, exportConns, importConns, removeConn, refreshAll };
 }

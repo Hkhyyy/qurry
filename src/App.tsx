@@ -210,21 +210,26 @@ export default function App() {
   );
   const labelOf = (t: Tab) => tabLabels.get(t.id) ?? t.title;
 
-  const { dbCache, schemaCache, loadDbList, loadSchemaList, switchDatabase, switchSchema, run, log, reconnectAfterTls, focusTableGrid, executeConsole, fetchMoreEntry, setTxMode, txEnd, applyTableFilter, fetchMore, cancel, setPendingRuns, canCancel, cancelRun, submitEdits, loadStale } = useConsole({ conns, setStatus, refresh });
-  const { activate, addTab, openConsole } = useTabs({ setStatus, loadStale });
-  const { readyToQuit, switchWs, newWs, renameWs, deleteWs, moveToWs, setInWs, shownWs } = useWorkspaces({ conns, setStatus, loadStale });
+  const cons = useConsole({ conns, setStatus, refresh });
+  const { dbCache, schemaCache, loadDbList, loadSchemaList, switchDatabase, switchSchema, run, log, reconnectAfterTls, focusTableGrid, executeConsole, fetchMoreEntry, setTxMode, txEnd, applyTableFilter, fetchMore, cancel, setPendingRuns, canCancel, cancelRun, submitEdits, loadStale } = cons;
+  const tabOps = useTabs({ setStatus, loadStale });
+  const { activate, addTab, openConsole } = tabOps;
+  const ws = useWorkspaces({ conns, setStatus, loadStale });
+  const { readyToQuit, switchWs, newWs, renameWs, deleteWs, moveToWs, setInWs, shownWs } = ws;
 
   const exportReq = useDialogsStore((s) => s.exportReq);
   const importReq = useDialogsStore((s) => s.importReq);
   const genReq = useDialogsStore((s) => s.genReq);
   const objEdit = useDialogsStore((s) => s.objEdit);
   const copyReq = useDialogsStore((s) => s.copyReq);
-  const { jobs, runJob, startExport, startImport, exportCsv } = useJobs({ setStatus });
-  const { setColor, setScope, exportConns, importConns, removeConn } = useConnActions({ refresh, setStatus });
-  const { openTable, openTableTab, openDdl, ragInit, activateNode, showQuickDoc, jumpToConsole, deactivate, duplicateConn, canDdl, modifyTable, renameNode, buildMenu, sqlGenerator, ddlToClipboard, ddlToConsole, dangerous, startBackup } = useExplorer({ setStatus, refresh, activate, addTab, openConsole, run, runJob, removeConn, setInWs, setTabMenu });
+  const transfer = useJobs({ setStatus });
+  const { jobs, runJob, startExport, startImport, exportCsv } = transfer;
+  const connActions = useConnActions({ conns, refresh, setStatus });
+  const { setColor, setScope, exportConns, importConns, removeConn, refreshAll } = connActions;
+  const ex = useExplorer({ setStatus, refresh, activate, addTab, openConsole, run, runJob, removeConn, setInWs, setTabMenu });
+  const { openTable, openTableTab, openDdl, ragInit, activateNode, showQuickDoc, jumpToConsole, deactivate, duplicateConn, canDdl, modifyTable, renameNode, buildMenu, sqlGenerator, ddlToClipboard, ddlToConsole, dangerous, startBackup } = ex;
   const quickDoc = useDialogsStore((s) => s.quickDoc);
   const backupReq = useDialogsStore((s) => s.backupReq);
-
 
   /** Split the pane holding the tab and move the tab to the new pane (Split and Move Right / Down) */
   const splitAndMove = (t: Tab, dir: "right" | "down") => {
@@ -369,13 +374,6 @@ export default function App() {
         { label: "Rename File…", shortcut: "⇧F6", action: () => renameConsole(t) },
       );
     setTabMenu({ x: e.clientX, y: e.clientY, items });
-  };
-
-  /** Refresh (⌥⌘y, Find Action): Data Source list + search and autocomplete caches */
-  const refreshAll = () => {
-    invalidateSearchIndex();
-    for (const c of conns) invalidateCompletion(c.id);
-    refresh();
   };
 
   const renameConsole = async (t: Tab) => {
