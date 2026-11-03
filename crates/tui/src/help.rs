@@ -125,7 +125,7 @@ pub fn text() -> String {
     }
     s.push_str("\nCommands (change them with F1)\n");
     for (a, keys) in crate::keys::DEFAULT_KEYS.iter() {
-        s.push_str(&format!("  {:<30} {}\n", crate::keys::disp(&keys.join(" / ")), crate::input::name_of(*a)));
+        s.push_str(&format!("  {:<30} {}\n", crate::keys::disp(&keys.join(" / ")), crate::app::title(*a)));
     }
     for (title, rows) in HELP {
         s.push_str(&format!("\n{title}\n"));

@@ -56,7 +56,7 @@ const ORDER: [Action; 41] = [
 ];
 
 /// Rebindable commands (the table's TUI rows with default keys) in ORDER.
-/// Alt+1~9 are workspaces (input.rs, when the Alt+digit isn't in the keymap). Moving between panes is ⌃⌥ + arrows (⌥ + arrows is within a pane: ←/→ tabs)
+/// Alt+1~9 are workspaces (input/mod.rs, when the Alt+digit isn't in the keymap). Moving between panes is ⌃⌥ + arrows (⌥ + arrows is within a pane: ←/→ tabs)
 pub static DEFAULT_KEYS: LazyLock<Vec<(Action, &'static [String])>> = LazyLock::new(|| {
     ORDER
         .iter()
@@ -154,6 +154,8 @@ pub fn disp(s: &str) -> String {
 
 pub struct Keymap {
     map: HashMap<Action, Vec<String>>,
+    /// Key spec → command, rebuilt whenever map changes. A key two commands have goes to the first in ORDER
+    by_key: HashMap<String, Action>,
 }
 
 impl Keymap {
@@ -165,12 +167,23 @@ impl Keymap {
                 map.insert(*a, v.iter().map(|s| table::normalize(s)).collect());
             }
         }
-        Keymap { map }
+        let mut km = Keymap { map, by_key: HashMap::new() };
+        km.index();
+        km
+    }
+
+    fn index(&mut self) {
+        let Keymap { map, by_key } = self;
+        by_key.clear();
+        for (a, _) in DEFAULT_KEYS.iter() {
+            for k in map.get(a).into_iter().flatten() {
+                by_key.entry(k.clone()).or_insert(*a);
+            }
+        }
     }
 
     pub fn lookup(&self, k: &KeyEvent) -> Option<Action> {
-        let s = spec(k)?;
-        DEFAULT_KEYS.iter().map(|d| d.0).find(|a| self.map.get(a).is_some_and(|v| v.contains(&s)))
+        self.by_key.get(&spec(k)?).copied()
     }
 
     pub fn keys(&self, a: Action) -> &[String] {
@@ -203,11 +216,13 @@ impl Keymap {
         if !v.contains(&key) {
             v.push(key);
         }
+        self.index();
         taken.into_iter().next()
     }
 
     pub fn reset(&mut self, a: Action) {
         self.map.insert(a, defaults(a));
+        self.index();
     }
 
     /// What to write to keymap.json: only commands differing from defaults
@@ -280,24 +295,17 @@ mod tests {
         assert!(km.overrides().is_empty());
     }
 
-    /// Every Action has a row in the shared table (its name on screen), and every TUI row is an Action
+    /// Every Action has a row in the shared table (its name on screen), and every TUI row is an Action (that every Action has one
+    /// ActionDef is checked in tests/actions.rs)
     #[test]
     fn every_action_has_a_table_row() {
-        let ids: Vec<String> = crate::app::ACTIONS.iter().map(|(a, _)| action_id(*a)).collect();
-        // ACTIONS lists every variant of the enum (read from app.rs: the enum has no variant list of its own)
-        let src = include_str!("app.rs");
-        let body = src.split("pub enum Action {").nth(1).and_then(|s| s.split("\n}").next()).expect("pub enum Action in app.rs");
-        let mut variants: Vec<&str> = body.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with("//")).map(|l| l.trim_end_matches(',')).collect();
-        let mut listed: Vec<&str> = ids.iter().map(String::as_str).collect();
-        variants.sort_unstable();
-        listed.sort_unstable();
-        assert_eq!(variants, listed, "every Action variant goes in app.rs ACTIONS exactly once");
+        let ids: Vec<String> = crate::app::ACTIONS.iter().map(|d| action_id(d.action)).collect();
         for id in &ids {
             assert!(table::tui_command(id).is_some(), "Action::{id} has no row in crates/shared/src/keymap-table.json: add one with \"tui\": \"{id}\"");
         }
         for c in table::commands() {
             if let Some(id) = &c.tui {
-                assert!(ids.contains(id), "keymap-table.json row \"tui\": \"{id}\" is not an Action in the palette (app.rs ACTIONS): fix the name or add the Action");
+                assert!(ids.contains(id), "keymap-table.json row \"tui\": \"{id}\" is not an Action in the palette (app/actions.rs ACTIONS): fix the name or add the Action");
             }
         }
         assert_eq!(DEFAULT_KEYS.iter().find(|d| d.0 == Action::NewConsole).map(|d| d.1), Some(&["Ctrl+L".to_string()][..]));
