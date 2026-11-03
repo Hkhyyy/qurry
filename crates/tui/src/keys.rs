@@ -56,7 +56,7 @@ const ORDER: [Action; 41] = [
 ];
 
 /// Rebindable commands (the table's TUI rows with default keys) in ORDER.
-/// Alt+1~9 are workspaces (input.rs, when the Alt+digit isn't in the keymap). Moving between panes is ⌃⌥ + arrows (⌥ + arrows is within a pane: ←/→ tabs)
+/// Alt+1~9 are workspaces (input/mod.rs, when the Alt+digit isn't in the keymap). Moving between panes is ⌃⌥ + arrows (⌥ + arrows is within a pane: ←/→ tabs)
 pub static DEFAULT_KEYS: LazyLock<Vec<(Action, &'static [String])>> = LazyLock::new(|| {
     ORDER
         .iter()
