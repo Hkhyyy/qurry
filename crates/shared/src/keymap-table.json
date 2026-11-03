@@ -76,7 +76,7 @@
   {"gui": "tab.duplicate", "title": "Duplicate Console", "scope": "global"},
   {"gui": "ddl.sql", "title": "DDL: Show SQL", "scope": "global"},
   {"gui": "ddl.structure", "title": "DDL: Show Structure", "scope": "global"},
-  {"gui": "ddl.reload", "title": "DDL: Reload Structure", "scope": "global"},
+  {"gui": "ddl.reload", "title": "DDL: Reload", "scope": "global"},
   {"gui": "ddl.copy", "title": "DDL: Copy to Clipboard", "scope": "global"},
   {"gui": "ddl.save", "title": "DDL: Save to File", "scope": "global"},
   {"gui": "ddl.run", "title": "DDL: Run in Console", "scope": "global"},

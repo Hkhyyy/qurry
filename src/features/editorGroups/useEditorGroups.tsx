@@ -14,10 +14,10 @@ import { RagView } from "../../components/RagView";
 import { RedisBrowser } from "../../components/RedisBrowser";
 import { TableEditor } from "../../components/TableEditor";
 import { TlsFix } from "../../components/TlsFix";
-import { Spacer, TabItem, Tabs, TabStrip, Text, ToolbarSep, ToolButton, Toolbar } from "../../ui";
+import { IconButton, Spacer, TabItem, Tabs, TabStrip, Text, ToolbarSep, ToolButton, Toolbar } from "../../ui";
 import { TableStructureView } from "../../components/TableStructure";
 import { setDdlView, type DdlView } from "../../lib/structure";
-import { TabIcon } from "../../ui/icons";
+import { IcReload, TabIcon } from "../../ui/icons";
 import type { NodeInfo } from "../../components/SchemaTree";
 import type { useConsole } from "../console/useConsole";
 import type { useExplorer } from "../explorer/useExplorer";
@@ -121,7 +121,7 @@ export function useEditorGroups({
     if (open) return activate(open);
     if (snap.kind === "table" && snap.edit) {
       openTableTab(c, snap.edit.schema, snap.edit.table, snap.database, undefined, snap.where, snap.orderBy, snap.objKind);
-    } else addTab(c, snap.kind, { title: snap.title, sql: snap.sql, database: snap.database, edit: snap.edit, objKind: snap.objKind });
+    } else addTab(c, snap.kind, { title: snap.title, sql: snap.sql, database: snap.database, edit: snap.edit, objKind: snap.objKind, ddlOf: snap.ddlOf });
   };
   const reopenClosed = () => {
     const [snap, ...rest] = useTabsStore.getState().closedStack;
@@ -146,7 +146,18 @@ export function useEditorGroups({
     patch(t.id, { ddlView: v });
     setDdlView(v);
   };
-  const reloadStructure = (t: Tab) => setStructureRev((r) => ({ ...r, [t.id]: (r[t.id] ?? 0) + 1 }));
+  /** Reload what the tab shows: the structure (a remount loads it again) or the DDL text */
+  const reloadDdl = async (t: Tab) => {
+    if ((t.ddlView ?? "sql") === "structure") return setStructureRev((r) => ({ ...r, [t.id]: (r[t.id] ?? 0) + 1 }));
+    if (!t.ddlOf) return;
+    try {
+      setStatus(`Loading DDL of ${t.ddlOf.schema}.${t.ddlOf.name}…`);
+      patch(t.id, { sql: await meta.ddl(t.target, t.ddlOf.schema, t.ddlOf.name, t.objKind ?? "table") });
+      setStatus("Ready");
+    } catch (e) {
+      setStatus(`DDL failed: ${String(e)}`);
+    }
+  };
   const copyDdl = (t: Tab) => {
     navigator.clipboard.writeText(t.sql);
     setStatus("Copied to clipboard");
@@ -171,9 +182,9 @@ export function useEditorGroups({
             ? ([
                 { label: "SQL", ...cmd("ddl.sql"), action: () => pickDdlView(t, "sql") },
                 { label: "Structure", ...cmd("ddl.structure"), action: () => pickDdlView(t, "structure") },
-                { label: "Reload", ...cmd("ddl.reload"), action: () => reloadStructure(t), disabled: (t.ddlView ?? "sql") !== "structure" },
               ] as MenuItem[])
             : []),
+          { label: "Reload", ...cmd("ddl.reload"), action: () => void reloadDdl(t), disabled: !t.ddlOf },
           { label: "Copy", ...cmd("ddl.copy"), action: () => copyDdl(t) },
           { label: "Save to File", ...cmd("ddl.save"), action: () => void saveDdl(t) },
           { label: "Run in Console", ...cmd("ddl.run"), action: () => runDdl(t) },
@@ -570,7 +581,7 @@ export function useEditorGroups({
                   <span className="tb-info" style={{ marginLeft: 0 }}>{t.title.startsWith("SQL Generator") ? "SQL Generator" : "DDL"} · read-only</span>
                   {t.edit && <ToolbarSep />}
                   {t.edit && <Tabs size="sm" label="DDL view" items={[{ id: "sql", label: "SQL" }, { id: "structure", label: "Structure" }]} value={view} onChange={pick} />}
-                  {view === "structure" && <ToolButton title={keyTitle("Reload the structure", "ddl.reload")} onClick={() => reloadStructure(t)}>Reload</ToolButton>}
+                  <IconButton title={keyTitle("Reload", "ddl.reload")} onClick={() => void reloadDdl(t)} disabled={!t.ddlOf}><IcReload /></IconButton>
                   <Spacer />
                   <ToolButton title={keyTitle("Copy to Clipboard", "ddl.copy")} onClick={() => copyDdl(t)}>Copy</ToolButton>
                   <ToolButton title={keyTitle("Save to File", "ddl.save")} onClick={() => void saveDdl(t)}>Save to File</ToolButton>

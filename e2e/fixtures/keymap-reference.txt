@@ -146,7 +146,7 @@ click header · ⌥ click	Sort · add to multi-column sort
 —	Duplicate Console
 —	DDL: Show SQL
 —	DDL: Show Structure
-—	DDL: Reload Structure
+—	DDL: Reload
 —	DDL: Copy to Clipboard
 —	DDL: Save to File
 —	DDL: Run in Console

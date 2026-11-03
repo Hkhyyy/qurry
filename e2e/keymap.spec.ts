@@ -122,15 +122,19 @@ test("console keys (Browse Query History) act only in the console, not in its re
   await expect(dialog(page)).toContainText("Query History");
 });
 
-test("a key given to a DDL tab toolbar command runs it on the active DDL tab (Show Structure, Reload Structure)", async ({ page }) => {
+test("a key given to a DDL tab toolbar command runs it on the active DDL tab (Show Structure, Reload)", async ({ page }) => {
   await openApp(page);
   await bind(page, "Global", "DDL: Show Structure", "Meta+KeyJ", "⌘j");
-  await bind(page, "Global", "DDL: Reload Structure", "Meta+KeyK", "⌘k");
+  await bind(page, "Global", "DDL: Reload", "Meta+KeyK", "⌘k");
   await treeItem(page, "users").first().click();
   await page.keyboard.press("Meta+KeyB");
   await expect.poll(() => tabStrips(page)).toEqual(["users [DDL]"]);
   const views = work(page).getByRole("tablist", { name: "DDL view" });
   await expect(views.getByRole("tab", { name: "SQL" })).toHaveAttribute("aria-selected", "true");
+  // In SQL it reloads the DDL text; the toolbar button's tooltip shows the key
+  await expect(work(page).getByRole("button", { name: /^Reload/ })).toHaveAttribute("title", /⌘K/i);
+  await page.keyboard.press("Meta+KeyK");
+  await expect.poll(() => page.evaluate(() => (window as any).__mockDdlCalls ?? 0)).toBe(2);
   await page.keyboard.press("Meta+KeyJ");
   await expect(views.getByRole("tab", { name: "Structure" })).toHaveAttribute("aria-selected", "true");
   await expect.poll(() => page.evaluate(() => (window as any).__mockStructureCalls ?? 0)).toBe(1);

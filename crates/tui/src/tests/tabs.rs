@@ -150,3 +150,27 @@ async fn tab_lists_show_the_tab_glyph() {
     let s = h.screen(140, 30);
     assert!(s.contains("▦ orders") && s.contains("◫≡ v_users [DDL]"), "{s}");
 }
+
+/// DDL tab, r: reloads what it shows — the DDL text in the SQL view (any object, a view here), the structure in a table's Structure view
+#[tokio::test]
+async fn r_reloads_the_ddl_or_the_structure() {
+    use crate::app::{Focus, TabKind, TextTab};
+    let mut h = Harness::new().await;
+    let view = TextTab { text: "CREATE VIEW public.v AS SELECT 1;".into(), kind: "view".into(), ddl_of: Some(("public".into(), "v".into())), ..Default::default() };
+    h.app.push_tab("test", "postgres".into(), "v [DDL]".into(), TabKind::Text(view));
+    h.app.focus = Focus::Grid;
+    assert!(h.screen(120, 30).contains("r reload"));
+    h.key("r");
+    assert_eq!(h.app.status, "Loading DDL of public.v…");
+    // No such connection here: the fetch fails, which shows it asked the database again
+    h.settle().await;
+    assert!(h.app.status.starts_with("DDL failed"), "{}", h.app.status);
+
+    let table = TextTab { text: "CREATE TABLE public.users ();".into(), kind: "table".into(), ddl_of: Some(("public".into(), "users".into())), structure_view: true, structure: Some(Ok(crate::structure::sample())), ..Default::default() };
+    let id = h.app.push_tab("test", "postgres".into(), "users [DDL]".into(), TabKind::Text(table));
+    h.app.status.clear();
+    h.key("r");
+    let TabKind::Text(t) = &h.app.tab_mut(id).unwrap().kind else { panic!() };
+    assert!(t.structure.is_none(), "the structure is loaded again");
+    assert!(h.app.status.is_empty(), "not the DDL: {}", h.app.status);
+}

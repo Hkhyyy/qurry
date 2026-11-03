@@ -223,7 +223,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 |---|---|
 | `↑ ↓  (j k) · PgUp / PgDn` | Scroll |
 | `v` | Table DDL: switch between SQL and Structure (columns, keys, indexes, foreign keys, triggers, options); kept for new DDL tabs |
-| `r` | Reload the Structure view |
+| `r` | Reload what the tab shows (the DDL, or the Structure view) |
 | `y  ⌘c` | Copy the text (a table's DDL: the SQL, in either view) |
 | `Esc` | Back to the explorer |
 

@@ -6,7 +6,7 @@ import { ddlView } from "../../lib/structure";
 import type { EditTarget } from "../../components/ResultGrid";
 import { stash } from "../workspaces/store";
 import { editorApis, liveSql, setActiveIds, setFocused, setPanes, setTabs, useTabsStore } from "./store";
-import { Group, snapKey, Tab, TabSnapshot } from "./types";
+import { DdlOf, Group, snapKey, Tab, TabSnapshot } from "./types";
 
 // ───────── Tab and pane operations on the tabs store (and on the workspaces stash, for tabs in another workspace) ─────────
 const last = <T,>(a: T[]): T | undefined => a[a.length - 1];
@@ -40,6 +40,7 @@ const snapshot = (t: Tab): TabSnapshot => ({
   where: t.where,
   orderBy: t.orderBy,
   objKind: t.objKind,
+  ddlOf: t.ddlOf,
 });
 const remember = (t: Tab) => {
   const snap = snapshot(t);
@@ -50,7 +51,7 @@ const remember = (t: Tab) => {
 const buildTab = (
   c: ConnectionView,
   kind: Tab["kind"],
-  opts: { sql?: string; database?: string; tableSql?: string; edit?: EditTarget; where?: string; orderBy?: string; objKind?: string },
+  opts: { sql?: string; database?: string; tableSql?: string; edit?: EditTarget; where?: string; orderBy?: string; objKind?: string; ddlOf?: DdlOf },
   group: Group,
   title: string,
 ): Tab => {
@@ -75,6 +76,7 @@ const buildTab = (
     edit: opts.edit,
     ddlView: kind === "ddl" && opts.edit ? ddlView() : undefined,
     objKind: opts.objKind,
+    ddlOf: opts.ddlOf,
     results: [],
     activeResult: "output",
     output: [],

@@ -47,7 +47,7 @@ pub const HELP: &[(&str, &[(&str, &str)])] = &[
     ("DDL / routine view", &[
         ("↑ ↓  (j k) · PgUp / PgDn", "Scroll"),
         ("v", "Table DDL: switch between SQL and Structure (columns, keys, indexes, foreign keys, triggers, options); kept for new DDL tabs"),
-        ("r", "Reload the Structure view"),
+        ("r", "Reload what the tab shows (the DDL, or the Structure view)"),
         ("y  ⌘C", "Copy the text (a table's DDL: the SQL, in either view)"),
         ("Esc", "Back to the explorer"),
     ]),

@@ -202,7 +202,7 @@ Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…
 | `—` | Duplicate Console |
 | `—` | DDL: Show SQL |
 | `—` | DDL: Show Structure |
-| `—` | DDL: Reload Structure |
+| `—` | DDL: Reload |
 | `—` | DDL: Copy to Clipboard |
 | `—` | DDL: Save to File |
 | `—` | DDL: Run in Console |
