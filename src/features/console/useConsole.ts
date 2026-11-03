@@ -5,6 +5,7 @@ import { pushHistory } from "../../components/HistoryDialog";
 import type { OutputLine, ResultEntry } from "../../components/ConsolePane";
 import { schemaChanged } from "../../components/SchemaTree";
 import { commitNoticeTitle } from "../../lib/commitNotice";
+import { sharedOr } from "../../lib/shared";
 import { explainAnalyzeAsk, explainAnalyzeNote, isDdl, isRead } from "../../lib/stmtKind";
 import { patch, updTab } from "../tabs/ops";
 import { editorApis, setTabs, useTabsStore } from "../tabs/store";
@@ -276,6 +277,8 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     refresh();
   };
 
+  /** The grid's line for a failed load-more (the TUI's words: qurry_shared::errors::more_rows_failed) */
+  const moreRowsFailed = (e: unknown) => sharedOr(String(e), (s) => s.moreRowsFailed(String(e)));
   const fetchMoreEntry = async (tabId: string, entryId: string) => {
     const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId);
     if (!tab || tab.cursorEntry !== entryId) {
@@ -295,8 +298,10 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
         results: t.results.map((x) => (x.id === entryId && x.result ? { ...x, result: { ...x.result, rows: [...x.result.rows, ...r.rows], truncated: r.truncated } } : x)),
       }));
     } catch (e) {
-      updTab(tabId, (t) => ({ ...t, loadingMore: false, cursorEntry: undefined }));
-      setStatus(String(e));
+      // The result isn't complete: keep its "+" and say in the grid why no more rows came
+      const moreError = moreRowsFailed(e);
+      updTab(tabId, (t) => ({ ...t, loadingMore: false, cursorEntry: undefined, results: t.results.map((x) => (x.id === entryId && x.result ? { ...x, result: { ...x.result, moreError } } : x)) }));
+      setStatus(moreError);
     }
   };
 
@@ -368,8 +373,9 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
       );
       setStatus(`${(tab.result?.rows.length ?? 0) + r.rows.length}${r.truncated ? "+" : ""} rows retrieved`);
     } catch (e) {
-      setTabs((ts) => ts.map((t) => (t.id === tab.id && t.result ? { ...t, loadingMore: false, result: { ...t.result, truncated: false } } : t)));
-      setStatus(String(e));
+      const moreError = moreRowsFailed(e);
+      setTabs((ts) => ts.map((t) => (t.id === tab.id && t.result ? { ...t, loadingMore: false, result: { ...t.result, moreError } } : t)));
+      setStatus(moreError);
     }
   };
 

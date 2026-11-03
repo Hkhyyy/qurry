@@ -114,6 +114,8 @@ export interface QueryResult {
   inTransaction?: boolean;
   /** It ran, but something after it failed (e.g. the Production log couldn't record the result): show it, don't run it again */
   warning?: string;
+  /** GUI only: loading more rows failed, and why (the grid shows it, and stops loading more until the query runs again) */
+  moreError?: string;
 }
 
 /** Statements run in one transaction: rows changed; warning = committed, but the Production log couldn't record the result */

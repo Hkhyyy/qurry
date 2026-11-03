@@ -115,6 +115,8 @@ const api = {
   ping: (text: string): PingResponse => wasm.ping({ text }),
   /** Title of the notice for a failed Commit's error: "Commit outcome unknown" when the connection was lost during it */
   commitFailedTitle: (msg: string): string => wasm.commitFailedTitle(msg),
+  /** The result grid's line when loading more rows failed (qurry_shared::errors::more_rows_failed, the TUI's words) */
+  moreRowsFailed: (msg: string): string => wasm.moreRowsFailed(msg),
   /** Result word of a Production log entry ("outcome unknown", "failed", "committed" …), or undefined when its rows say it */
   auditStatus: (started: boolean, sql: string, failed: boolean): string | undefined => wasm.auditStatus(started, sql, failed),
   /** The connect error is one where "Allow unencrypted connection" for the source is the way forward (qurry_shared::errors::tls_opt_in) */

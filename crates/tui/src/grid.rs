@@ -15,6 +15,8 @@ pub struct Grid {
     /// Server cursor session (console) — scrolling to the end loads more
     pub more_session: Option<String>,
     pub loading_more: bool,
+    /// Loading more failed, and why (qurry_shared::errors::more_rows_failed): shown at the grid's bottom edge, no more loads until it runs again
+    pub more_error: Option<String>,
     /// Edits: (row, col) → new value (None = NULL)
     pub edits: BTreeMap<(usize, usize), Option<String>>,
     pub deleted: BTreeSet<usize>,
@@ -83,7 +85,7 @@ fn cmp_cell(a: Option<&Value>, b: Option<&Value>, desc: bool) -> std::cmp::Order
 
 impl Grid {
     pub fn new(result: QueryResult) -> Self {
-        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, orig: vec![] };
+        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, more_error: None, edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, orig: vec![] };
         g.compute_widths();
         g
     }
@@ -327,7 +329,7 @@ impl Grid {
 
     /// When near the end, time to load more (only up to MAX_ROWS: beyond that, export to CSV)
     pub fn wants_more(&self) -> bool {
-        self.result.truncated && self.more_session.is_some() && !self.loading_more && self.row + 5 >= self.rows() && self.rows() < MAX_ROWS
+        self.result.truncated && self.more_session.is_some() && !self.loading_more && self.more_error.is_none() && self.row + 5 >= self.rows() && self.rows() < MAX_ROWS
     }
 
     /// Text of a cell to draw: built only up to the width (max chars) (so large text·jsonb isn't copied whole every frame)
@@ -351,6 +353,10 @@ impl Grid {
             // Thick when focused, like kit::panel: focus shows without colors too (NO_COLOR)
             .border_type(if focused { ratatui::widgets::BorderType::Thick } else { ratatui::widgets::BorderType::Plain })
             .border_style(if focused { Style::default().fg(Color::Cyan) } else { Style::default().fg(Color::DarkGray) });
+        let block = match &self.more_error {
+            Some(e) => block.title_bottom(Line::styled(format!(" ✗ {} ", e.lines().next().unwrap_or_default()), Style::default().fg(crate::kit::DANGER))),
+            None => block,
+        };
         let inner = block.inner(area);
         f.render_widget(block, area);
         if inner.height < 2 || self.cols() == 0 {

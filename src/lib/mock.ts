@@ -215,7 +215,13 @@ const handlers: Record<string, (a: any) => unknown> = {
     if (c) c.scope = a.scope;
     return c;
   },
-  fetch_more: () => ({ ...result, rows: result.rows.slice(0, 120).map((r) => [Number(r[0]) + 500, ...r.slice(1)]), truncated: false }),
+  // e2e sets __mockFetchMoreError for a load-more the core refuses or that fails (e.g. after the data source reconnected)
+  fetch_more: () => {
+    const g = globalThis as any;
+    g.__mockFetchMoreCalls = (g.__mockFetchMoreCalls ?? 0) + 1;
+    if (g.__mockFetchMoreError) throw g.__mockFetchMoreError;
+    return { ...result, rows: result.rows.slice(0, 120).map((r) => [Number(r[0]) + 500, ...r.slice(1)]), truncated: false };
+  },
   cancel_query: () => true,
   close_session: () => null,
   execute_batch: (a: any) => ({ rows: a.statements.length }),

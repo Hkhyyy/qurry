@@ -207,8 +207,9 @@ export function ResultGrid(p: Props) {
   const items = virt.getVirtualItems();
   const lastItem = items[items.length - 1];
   useEffect(() => {
-    if (lastItem && result.truncated && !loadingMore && lastItem.index >= baseCount - 30) p.onFetchMore();
-  }, [lastItem?.index, result.truncated, loadingMore, baseCount]);
+    // After a failed load the reason stays in the grid: no retry on every scroll (running the query again starts over)
+    if (lastItem && result.truncated && !result.moreError && !loadingMore && lastItem.index >= baseCount - 30) p.onFetchMore();
+  }, [lastItem?.index, result.truncated, result.moreError, loadingMore, baseCount]);
 
   // ─── Selection ───
   const rect = selA && selB ? { r0: Math.min(selA.r, selB.r), r1: Math.max(selA.r, selB.r), c0: Math.min(selA.c, selB.c), c1: Math.max(selA.c, selB.c) } : null;
@@ -828,6 +829,11 @@ export function ResultGrid(p: Props) {
             })}
           </div>
           {loadingMore && <div className="grid-loading">Loading more…</div>}
+          {!loadingMore && result.moreError && (
+            <div className="grid-loading grid-more-error" role="alert">
+              {result.moreError}
+            </div>
+          )}
         </div>
       )}
 

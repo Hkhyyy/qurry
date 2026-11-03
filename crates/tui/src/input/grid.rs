@@ -429,4 +429,28 @@ mod tests {
         let Some(crate::migrate::Flow::CopyTarget(b)) = &h.app.flow else { panic!("no flow") };
         assert_eq!((b.2.filter.as_str(), b.2.depth, b.2.mask), ("id = 1", 1, true));
     }
+
+    /// Loading more that fails (#80) keeps the result unfinished ("+") and says why at the grid's edge, the GUI's words; scrolling
+    /// on doesn't ask again
+    #[tokio::test]
+    async fn a_failed_load_more_stays_in_the_grid() {
+        let mut h = Harness::new().await;
+        let id = h.table_tab("users", &["id"], &[&["1"], &["2"]], &["id"]);
+        {
+            let TabKind::Table(tt) = &mut h.app.tabs[h.app.active].kind else { unreachable!() };
+            let g = tt.grid.as_mut().unwrap();
+            (g.result.truncated, g.more_session) = (true, Some(tt.session.clone()));
+        }
+        h.key("Down");
+        assert!(h.table(id).grid.as_ref().unwrap().loading_more);
+        h.settle().await;
+        let g = h.table(id).grid.as_ref().unwrap();
+        let why = qurry_shared::errors::more_rows_failed("Session closed");
+        assert_eq!((g.more_error.as_deref(), g.result.truncated, g.loading_more), (Some(why.as_str()), true, false));
+        assert!(h.screen(120, 30).contains(&format!("✗ {why}")), "{}", h.screen(120, 30));
+        assert!(h.screen(120, 30).contains("2+ rows"));
+        h.key("Up");
+        h.key("Down");
+        assert!(!h.table(id).grid.as_ref().unwrap().loading_more, "not asked again");
+    }
 }

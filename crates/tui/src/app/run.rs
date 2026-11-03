@@ -431,8 +431,10 @@ impl App {
                     };
                 }
                 Err(e) => {
-                    g.result.truncated = false;
-                    a.status = e;
+                    // The result isn't complete: keep its "+" and say at the grid's edge why no more rows came
+                    let why = qurry_shared::errors::more_rows_failed(&e);
+                    g.more_error = Some(why.clone());
+                    a.status = why;
                 }
             }
         });

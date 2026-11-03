@@ -62,6 +62,12 @@ pub fn tls_opt_in(msg: &str) -> bool {
     qurry_shared::errors::tls_opt_in(msg)
 }
 
+/// The result grid's line when loading more rows failed (the TUI's words)
+#[wasm_bindgen(js_name = moreRowsFailed)]
+pub fn more_rows_failed(msg: &str) -> String {
+    qurry_shared::errors::more_rows_failed(msg)
+}
+
 /// Title of the notice for a failed Commit: "Commit outcome unknown" when the connection was lost during it, else "Commit failed"
 #[wasm_bindgen(js_name = commitFailedTitle)]
 pub fn commit_failed_title(msg: &str) -> String {

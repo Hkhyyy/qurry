@@ -86,3 +86,26 @@ test("a WebView that refuses WebAssembly: multi-cell copy says why nothing was c
   await page.keyboard.press("Meta+C");
   await expect(page.locator(".statusbar")).toContainText("Copy formats need WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk");
 });
+
+test("a load-more that fails keeps its reason in the grid and the result unfinished (#80)", async ({ page }) => {
+  const why =
+    "The data source reconnected since this result was read (settings saved, disconnected or idle), and loading more would run the statement again, but it isn't a plain read. Run it again yourself to load more rows.";
+  await page.evaluate((w) => ((window as any).__mockFetchMoreError = w), why);
+  const scroll = work(page).locator(".grid-scroll").first();
+  await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  // The TUI's words (qurry_shared::errors::more_rows_failed), in the grid, not only in the status bar
+  await expect(work(page).locator(".grid-more-error")).toHaveText(`Couldn't load more rows: ${why}`);
+  await expect(work(page).locator(".tb-info").first()).toHaveText("500+ rows");
+  // Scrolling on doesn't ask again
+  await scroll.evaluate((el) => (el.scrollTop = 0));
+  await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await page.waitForTimeout(300);
+  expect(await page.evaluate(() => (window as any).__mockFetchMoreCalls)).toBe(1);
+  // Running it again (⌘R) starts over: the line goes away and loading more works again
+  await page.evaluate(() => ((window as any).__mockFetchMoreError = undefined));
+  await scroll.focus();
+  await page.keyboard.press("Meta+R");
+  await expect(work(page).locator(".grid-more-error")).toHaveCount(0);
+  await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await expect(work(page).locator(".tb-info").first()).toHaveText("620 rows");
+});
