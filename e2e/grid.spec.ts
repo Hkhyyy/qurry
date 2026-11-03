@@ -368,7 +368,8 @@ test.describe("Value Editor panel", () => {
     await treeItem(page, "payments").first().dblclick();
     await cell(page, DATA_1).click();
     await page.keyboard.press("Shift+Enter");
-    await expect(panel(page).locator(".monaco-editor")).toBeVisible();
+    // ⇧↩ puts the caret in Monaco once it has mounted: wait for that, not just for the editor to show
+    await expect(panel(page).locator(".monaco-editor textarea")).toBeFocused();
     await page.keyboard.press("Meta+A");
     await page.keyboard.press("Backspace");
     await page.keyboard.type("x");

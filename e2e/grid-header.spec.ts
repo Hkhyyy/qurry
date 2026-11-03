@@ -117,12 +117,12 @@ const rowsOverHeader = (page: Page) =>
       return out;
     });
 
-/** Toolbar (or the find bar) bottom = header top, and no row painted over the header, at each scroll position */
+/** Toolbar (or the find bar, the last thing above the grid / Value Editor split) bottom = header top, and no row painted over the header, at each scroll position */
 async function expectNoStrip(page: Page) {
   const toolbarToHead = () =>
     work(page)
       .locator(".grid-head")
-      .evaluate((head) => head.getBoundingClientRect().top - head.previousElementSibling!.getBoundingClientRect().bottom);
+      .evaluate((head) => head.getBoundingClientRect().top - head.closest(".grid-split")!.previousElementSibling!.getBoundingClientRect().bottom);
   for (const [top, left] of [[0, 0], [2000, 0], [2000, 400], [0, 1e6], [37, 123]]) {
     await scrollBody(page, top, left);
     await expectAligned(page);
