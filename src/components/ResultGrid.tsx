@@ -9,10 +9,11 @@ import { DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, raw } from "../
 import { sharedReady, useSharedReady } from "../lib/shared";
 import { DEFAULTS, useFonts } from "../lib/prefs";
 import { alignTable, CELL_KIND, cellClasses, useGridAlign } from "../lib/gridAlign";
+import { isJsonType, jsonCell } from "../lib/jsonSpans";
 
 import { cmd, commandsFor, eventSpec, hit, keyTitle, runKey } from "../lib/shortcuts";
 import { ResultChart } from "./ResultChart";
-import { Button, CellEditor, CodeBlock, cx, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, TextArea, ToolButton, Toolbar, ToolbarSep } from "../ui";
+import { Button, CellEditor, CodeBlock, cx, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, JsonText, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, TextArea, ToolButton, Toolbar, ToolbarSep } from "../ui";
 import {
   IcChart, IcClock, IcExport, IcGear, IcMinus, IcPlus, IcPreview, IcReload, IcRevert, IcSearch, IcStop, IcSubmit, IcTranspose, IcView,
 } from "../ui/icons";
@@ -207,6 +208,8 @@ export function ResultGrid(p: Props) {
   const classOf = useMemo(() => cols.map((c) => cellClasses(c.typeName)), [cols, wasmReady]);
   const alignOverrides = useGridAlign();
   const aligns = useMemo(() => alignTable(alignOverrides), [alignOverrides, wasmReady]);
+  // JSON columns color their text cells (lib/jsonSpans.ts, the TUI grid's tokenizer)
+  const jsonCol = useMemo(() => cols.map((c) => isJsonType(c.typeName)), [cols, wasmReady]);
 
   const virt = useVirtualizer({ count: rowCount, getScrollElement: () => scrollRef.current, estimateSize: () => ROW_H, overscan: 20 });
   // Horizontally, render only visible columns too (tables with many columns). Blank cells fill the width on both sides
@@ -843,7 +846,7 @@ export function ResultGrid(p: Props) {
                         onDoubleClick={() => startEdit(r, ci)}
                         onContextMenu={(e) => openCellMenu(e, d, ci)}
                       >
-                        {shown(val, ci)}
+                        {cls === "jsonBinary" && jsonCol[ci] ? <JsonText {...jsonCell(String(val))} /> : shown(val, ci)}
                       </GridCell>
                     );
                   })}

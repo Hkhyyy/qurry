@@ -1,5 +1,6 @@
 //! Display formatting shared by the result grids: fractional seconds aligned within a time column, digit grouping,
-//! the value class of a cell and its alignment (Settings › Appearance › Alignment in grid; overrides kept in settings.json).
+//! the value class of a cell and its alignment (Settings › Appearance › Alignment in grid; overrides kept in settings.json),
+//! the colors of a JSON cell.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -127,6 +128,90 @@ pub fn cell_class(column: ValueClass, value: &Value) -> ValueClass {
     }
 }
 
+/// A JSON column (json, jsonb, MySQL / Oracle / ClickHouse JSON): its text cells are colored. Binary types share its value class, not its colors
+pub fn is_json_type(type_name: &str) -> bool {
+    type_class(type_name) == ValueClass::JsonBinary && type_name.to_uppercase().contains("JSON")
+}
+
+/// What a piece of a JSON cell is, for its color (DataGrip's JSON colors; true, false and null are keywords).
+/// The GUI gets it as an index in this order (src/lib/jsonSpans.ts)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum JsonKind {
+    Key,
+    String,
+    Number,
+    Keyword,
+    Punct,
+}
+
+/// Colored pieces of the first `max_chars` characters of a JSON text: byte ranges in order, the whitespace between them left out.
+/// Reads tokens, not a whole document, so a value cut anywhere (what a cell shows of a large jsonb) still colors what is there;
+/// from the first thing that isn't JSON on, the rest is plain
+pub fn json_spans(text: &str, max_chars: usize) -> Vec<(usize, usize, JsonKind)> {
+    let text = text.char_indices().nth(max_chars).map_or(text, |(b, _)| &text[..b]);
+    let b = text.as_bytes();
+    let mut out = Vec::new();
+    // Open brackets, and whether the next string in the innermost object is a key
+    let (mut open, mut key) = (Vec::new(), false);
+    let mut i = 0;
+    while i < b.len() {
+        let start = i;
+        i += 1;
+        let kind = match b[start] {
+            b' ' | b'\t' | b'\n' | b'\r' => continue,
+            c @ (b'{' | b'[') => {
+                open.push(c);
+                key = c == b'{';
+                JsonKind::Punct
+            }
+            c @ (b'}' | b']') => {
+                if open.pop() != Some(if c == b'}' { b'{' } else { b'[' }) {
+                    break;
+                }
+                JsonKind::Punct
+            }
+            b':' => {
+                key = false;
+                JsonKind::Punct
+            }
+            b',' => {
+                key = open.last() == Some(&b'{');
+                JsonKind::Punct
+            }
+            b'"' => {
+                // '"' and '\' never occur inside a multi-byte character, so stepping bytes is safe; a cut string ends at the cut
+                while i < b.len() && b[i] != b'"' {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+                i = (i + 1).min(b.len());
+                if key { JsonKind::Key } else { JsonKind::String }
+            }
+            b'-' | b'0'..=b'9' => {
+                while i < b.len() && matches!(b[i], b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-') {
+                    i += 1;
+                }
+                JsonKind::Number
+            }
+            b'a'..=b'z' => {
+                while i < b.len() && b[i].is_ascii_lowercase() {
+                    i += 1;
+                }
+                // A keyword cut at the end counts too
+                let w = &text[start..i];
+                let words = ["true", "false", "null"];
+                if !(words.contains(&w) || (i == b.len() && words.iter().any(|k| k.starts_with(w)))) {
+                    break;
+                }
+                JsonKind::Keyword
+            }
+            _ => break,
+        };
+        out.push((start, i, kind));
+    }
+    out
+}
+
 /// The classes the user changed (settings.json "gridAlign"); a class not in it keeps its default
 pub type Alignments = BTreeMap<ValueClass, Align>;
 
@@ -204,6 +289,35 @@ mod tests {
         assert_eq!(a, Alignments::from([(ValueClass::Number, Align::Center), (ValueClass::Boolean, Align::Right)]));
         assert!(alignments(&serde_json::json!("left")).is_empty());
         assert_eq!(serde_json::to_value(&a).unwrap(), serde_json::json!({ "number": "center", "boolean": "right" }));
+    }
+
+    #[test]
+    fn json_types_are_json_columns_only() {
+        for t in ["json", "jsonb", "JSON", "JSONB", "Nullable(JSON)"] {
+            assert!(is_json_type(t), "{t}");
+        }
+        // Binary shares the value class; arrays of JSON are text
+        for t in ["bytea", "LONGBLOB", "varbinary(16)", "_jsonb", "jsonb[]", "text", ""] {
+            assert!(!is_json_type(t), "{t}");
+        }
+    }
+
+    #[test]
+    fn json_spans_never_panic_and_stay_in_order_on_any_cut() {
+        // Every prefix and every max_chars of texts with multi-byte characters, escapes and broken JSON (the cases are in goldens/jsonspans.json)
+        for text in ["{\"이름\":\"🎉\\\"x\",\"n\":[-1.5e3,true,null]}", "[\"a\\", "{\"a\":1}}]x", "\u{feff}{}", "\"\\🎉\""] {
+            for (cut, _) in text.char_indices().chain([(text.len(), ' ')]) {
+                let t = &text[..cut];
+                for max in 0..=t.chars().count() + 1 {
+                    let mut at = 0;
+                    for (s, e, _) in json_spans(t, max) {
+                        assert!(at <= s && s < e && e <= t.len() && t.is_char_boundary(s) && t.is_char_boundary(e), "{t:?} max {max}");
+                        assert!(t[..e].chars().count() <= max, "{t:?} max {max}");
+                        at = e;
+                    }
+                }
+            }
+        }
     }
 
     #[test]

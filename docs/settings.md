@@ -40,6 +40,8 @@ Each cell is aligned by the kind of value it holds. Pick **Left**, **Center** or
 
 `NULL` is on the right by default so that a `NULL` in a numeric column lines up with the numbers above and below it. Before 0.3.0 it was on the left: to get that back, set **NULL** to **Left**.
 
+JSON cells (`json`, `jsonb` and the other drivers' JSON types) are colored like DataGrip's: keys, strings, numbers, `true` / `false` / `null` and punctuation, still on one line. Binary cells stay plain. The TUI colors them the same way in the terminal's colors, and not at all with `NO_COLOR`.
+
 The TUI result grid uses the same kinds and the same setting: change it there with **⌃k › Grid Alignment…** (pick a kind, then Left, Center or Right). The TUI reads `settings.json` when it starts and again when you open **⌃k › Grid Alignment…**, so after changing the alignment in the GUI, open that command (or restart the TUI) to see it. In `settings.json` only the kinds you changed are written, for example `"gridAlign": { "null": "left" }`; a kind you set back to its default is removed.
 
 ## Keymap

@@ -176,6 +176,17 @@ fn value_classes_match_the_golden() {
     }
 }
 
+/// JSON colors of a grid cell: one golden for the TUI (here) and the GUI (src/lib/jsonSpans.test.ts, through WASM), as text pieces
+/// so byte (Rust) and UTF-16 (GUI) offsets compare alike
+#[test]
+fn json_spans_match_the_golden() {
+    for e in read("goldens/jsonspans.json").as_array().unwrap() {
+        let text = e["text"].as_str().unwrap();
+        let got: Vec<Value> = format::json_spans(text, e["max"].as_u64().unwrap() as usize).into_iter().map(|(s, end, k)| json!([&text[s..end], k])).collect();
+        assert_eq!(json!(got), e["spans"], "{}", e["id"]);
+    }
+}
+
 #[test]
 fn fuzzy_reproduces_both_goldens() {
     for (golden, opts) in [("rust", fuzzy::Options::default()), ("ts", fuzzy::Options { word_starts: true })] {

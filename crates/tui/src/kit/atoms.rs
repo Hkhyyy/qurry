@@ -24,6 +24,11 @@ pub const NUMBER: Color = Color::Rgb(42, 172, 184);
 pub const GRID_LINE: Color = Color::Rgb(96, 99, 106);
 pub const CELL_EDITED: Color = Color::Rgb(36, 52, 84);
 pub const CELL_RANGE: Color = Color::Rgb(38, 40, 46);
+/// JSON cells (GUI --ui-json-*, dark values; numbers are NUMBER)
+pub const JSON_KEY: Color = Color::Rgb(199, 125, 187);
+pub const JSON_STRING: Color = Color::Rgb(106, 171, 115);
+pub const JSON_KEYWORD: Color = Color::Rgb(207, 142, 109);
+pub const JSON_PUNCT: Color = Color::Rgb(134, 138, 145);
 // Tree · autocomplete icon colors
 pub const C_DB: Color = Color::Rgb(111, 179, 210);
 pub const C_VIEW: Color = Color::Rgb(127, 176, 110);

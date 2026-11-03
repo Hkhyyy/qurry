@@ -1,8 +1,9 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { ReactNode, useRef } from "react";
-import { CellEditor, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, RowNumberCell } from "..";
+import { CellEditor, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, JsonText, RowNumberCell } from "..";
 import type { Cell } from "../../lib/api";
 import { alignTable, CELL_KIND, cellClasses } from "../../lib/gridAlign";
+import { jsonCell } from "../../lib/jsonSpans";
 import type { Alignments } from "../../lib/shared";
 
 /** Result grid cells (pieces used by ResultGrid): header strip · header row · header cell · row · row number · data cell · edit cell */
@@ -178,3 +179,50 @@ function Aligned({ overrides }: { overrides: Alignments }) {
 export const Alignment: StoryObj = { render: () => <Aligned overrides={{}} /> };
 /** settings.json "gridAlign": { "null": "left", "number": "center" }: only the changed classes move */
 export const AlignmentChanged: StoryObj = { name: "Alignment (changed)", render: () => <Aligned overrides={{ null: "left", number: "center" }} /> };
+
+/** json / jsonb cells: keys, strings, numbers, true/false/null and punctuation in color, still one line (no pretty-printing).
+ *  A large value renders only what a column can show; from the first thing that isn't JSON on, the rest is plain */
+const JSON_ROWS: (string | null)[] = [
+  '{"type":"payment.paid","amount":129000,"live":true,"meta":{"pg":"toss","coupon":null}}',
+  '{"type":"refund","memo":"고객 요청 🙏","lines":[1,2.5,-3e2]}',
+  JSON.stringify({ items: Array.from({ length: 3000 }, (_, i) => ({ sku: `A-${i}`, qty: i })) }),
+  '{"broken": oops, "rest": 1}',
+  null,
+];
+const JW = 360;
+const JSON_W = W[0] + W[1] + JW;
+
+export const JsonColumn: StoryObj = {
+  name: "JSON column",
+  render: () => (
+    <Frame
+      width={JSON_W}
+      height={ROW * JSON_ROWS.length}
+      header={
+        <GridHeaderRow width={JSON_W} height={26}>
+          <RowNumberCell width={W[0]} />
+          <GridHeaderCell name="id" type="int8" width={W[1]} />
+          <GridHeaderCell name="payload" type="jsonb" width={JW} />
+        </GridHeaderRow>
+      }
+    >
+      {JSON_ROWS.map((v, r) => (
+        <GridRow key={r} top={ROW * r} height={ROW} width={JSON_W} odd={r % 2 === 1}>
+          <RowNumberCell width={W[0]}>{r + 1}</RowNumberCell>
+          <GridCell width={W[1]} kind="num" align="right">
+            {r + 1}
+          </GridCell>
+          {v === null ? (
+            <GridCell width={JW} kind="null">
+              &lt;null&gt;
+            </GridCell>
+          ) : (
+            <GridCell width={JW} selected={r === 1} active={r === 1}>
+              <JsonText {...jsonCell(v)} />
+            </GridCell>
+          )}
+        </GridRow>
+      ))}
+    </Frame>
+  ),
+};

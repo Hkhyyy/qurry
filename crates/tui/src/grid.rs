@@ -56,6 +56,38 @@ fn pad(text: String, w: usize, a: Align) -> String {
     }
 }
 
+/// A JSON cell in colors (qurry_core::format::json_spans, the GUI's tokenizer): `text` is the cell as drawn, `lead` spaces of
+/// alignment and then the start of `raw` as Grid::shown writes it (↵ → for newline and tab: one char for one, so pieces line up)
+fn json_line(raw: &str, text: &str, lead: usize) -> Line<'static> {
+    let chars: Vec<char> = text[lead..].chars().collect();
+    let piece = |a: usize, b: usize| chars[a..b].iter().collect::<String>();
+    let mut out = vec![Span::raw(text[..lead].to_string())];
+    // Byte offsets in `raw` → char indexes, walking forward (the pieces come in order)
+    let (mut byte, mut ch, mut at) = (0, 0, 0);
+    let mut to_char = |b: usize| {
+        ch += raw[byte..b].chars().count();
+        byte = b;
+        ch
+    };
+    for (s, e, kind) in json_spans(raw, chars.len()) {
+        let (s, e) = (to_char(s), to_char(e));
+        if s > at {
+            out.push(Span::raw(piece(at, s)));
+        }
+        let color = match kind {
+            JsonKind::Key => crate::kit::JSON_KEY,
+            JsonKind::String => crate::kit::JSON_STRING,
+            JsonKind::Number => crate::kit::NUMBER,
+            JsonKind::Keyword => crate::kit::JSON_KEYWORD,
+            JsonKind::Punct => crate::kit::JSON_PUNCT,
+        };
+        out.push(Span::styled(piece(s, e), Style::default().fg(color)));
+        at = e;
+    }
+    out.push(Span::raw(piece(at, chars.len())));
+    Line::from(out)
+}
+
 /// Max rows kept in the result grid. Beyond that, export to CSV
 pub const MAX_ROWS: usize = 100_000;
 
@@ -67,7 +99,7 @@ pub fn cell_text(v: &Value) -> String {
     }
 }
 pub(crate) use qurry_core::format::{is_time_type, pad_frac};
-use qurry_core::format::{align, cell_class, type_class, Align, Alignments, ValueClass};
+use qurry_core::format::{align, cell_class, is_json_type, json_spans, type_class, Align, Alignments, JsonKind, ValueClass};
 use qurry_core::extract::{self, Format, Rows};
 use qurry_core::store::DbKind;
 
@@ -463,6 +495,7 @@ impl Grid {
         )
         .style(Style::default().bg(crate::kit::SURFACE));
         let tclass: Vec<ValueClass> = cols.iter().map(|&c| type_class(&self.result.columns[c].type_name)).collect();
+        let tjson: Vec<bool> = cols.iter().map(|&c| is_json_type(&self.result.columns[c].type_name)).collect();
         let sel = self.sel_rect();
         let end = (self.row_off + body_h).min(self.rows());
         let rows: Vec<Row> = (self.row_off..end)
@@ -481,7 +514,7 @@ impl Grid {
                     (' ', Color::DarkGray)
                 };
                 let num = Cell::from(format!("{:>w$}{mark}", r + 1, w = num_w as usize - 1)).style(Style::default().fg(num_c));
-                Row::new(std::iter::once(num).chain(cols.iter().zip(&shown_w).zip(&tclass).map(|((&c, &w), &tc)| {
+                Row::new(std::iter::once(num).chain(cols.iter().zip(&shown_w).zip(&tclass).zip(&tjson).map(|(((&c, &w), &tc), &json)| {
                     let edited = self.edits.contains_key(&(r, c));
                     let v = self.shown(r, c, self.widths[c] as usize + 1);
                     let text = match &v {
@@ -490,7 +523,14 @@ impl Grid {
                         Some(s) => s.clone(),
                     };
                     let class = self.class(r, c, tc);
+                    let shown_len = text.len();
                     let text = pad(text, w as usize, align(class, aligns));
+                    // JSON in colors unless the row's changes color the cell (edited · deleted · added)
+                    let raw = self.result.rows.get(r).and_then(|row| row.get(c)).and_then(Value::as_str).filter(|_| json && class == ValueClass::JsonBinary && !edited && !deleted && !added);
+                    let line = match raw {
+                        Some(raw) => json_line(raw, &text, text.len() - shown_len),
+                        None => Line::from(text),
+                    };
                     let mut st = match class {
                         ValueClass::Null => Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
                         ValueClass::Number => Style::default().fg(crate::kit::NUMBER),
@@ -516,7 +556,7 @@ impl Grid {
                     } else if r == self.row {
                         st = st.bg(crate::kit::CELL_RANGE);
                     }
-                    Cell::from(text).style(st)
+                    Cell::from(line).style(st)
                 })))
             })
             .collect();
@@ -581,6 +621,55 @@ mod tests {
         assert_eq!(g.shown(2, 0, 100), None);
         assert_eq!(g.shown(0, 1, 100).unwrap(), "03:19:15", "not a time column");
         assert_eq!(g.result.rows[0][0], json!("2026-06-06 03:19:15 +09:00"), "value unchanged");
+    }
+
+    /// JSON columns color keys, strings, numbers, keywords and punctuation (the GUI's tokenizer); binary columns of the same
+    /// value class and changed cells don't; a newline drawn as ↵ keeps the pieces in line; NO_COLOR has no colors
+    #[test]
+    fn json_cells_are_colored() {
+        use crate::kit::{JSON_KEY, JSON_KEYWORD, JSON_PUNCT, JSON_STRING, NUMBER};
+        use crate::theme::ColorMode;
+        let ty = |n: &str, t: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: t.into() };
+        let rows = vec![
+            vec![json!("{\"이름\":\"김\",\"n\":-1,\"ok\":true}"), json!("0x7B22"), json!("{\"e\":1}")],
+            vec![json!("{\n\"a\":[null]}"), Value::Null, json!("{\"e\":1}")],
+        ];
+        let mut g = Grid::new(QueryResult { columns: vec![ty("meta", "JSONB"), ty("bin", "BYTEA"), ty("edited", "JSON")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None });
+        g.set_value(0, 2, "{\"e\":2}".into());
+        (g.row, g.col) = (1, 1);
+        let draw = |g: &mut Grid, mode: ColorMode| {
+            let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 6)).unwrap();
+            term.draw(|f| g.render(f, f.area(), "r".into(), true, mode, &Alignments::new())).unwrap();
+            let mut buf = term.backend().buffer().clone();
+            mode.apply(&mut buf);
+            buf
+        };
+        // Colors of the cells from the first `from` on row y, one per symbol (the second half of a wide char skipped)
+        let colors = |buf: &ratatui::buffer::Buffer, y: u16, from: &str, n: usize| -> Vec<(String, Color)> {
+            let mut row = vec![];
+            let mut x = 0;
+            while x < 80 {
+                row.push(&buf[(x, y)]);
+                x += buf[(x, y)].symbol().width().max(1) as u16;
+            }
+            let at = row.iter().position(|c| c.symbol() == from).unwrap_or_else(|| panic!("no {from} on row {y}"));
+            row[at..at + n].iter().map(|c| (c.symbol().to_string(), c.fg)).collect()
+        };
+        let buf = draw(&mut g, ColorMode::TrueColor);
+        let want = |s: &str, c: Color| s.chars().map(|ch| (ch.to_string(), c)).collect::<Vec<_>>();
+        let row0 = [want("{", JSON_PUNCT), want("\"이름\"", JSON_KEY), want(":", JSON_PUNCT), want("\"김\"", JSON_STRING), want(",", JSON_PUNCT), want("\"n\"", JSON_KEY), want(":", JSON_PUNCT), want("-1", NUMBER), want(",", JSON_PUNCT), want("\"ok\"", JSON_KEY), want(":", JSON_PUNCT), want("true", JSON_KEYWORD), want("}", JSON_PUNCT)].concat();
+        assert_eq!(colors(&buf, 2, "{", row0.len()), row0);
+        let row1 = [want("{", JSON_PUNCT), want("↵", Color::Reset), want("\"a\"", JSON_KEY), want(":[", JSON_PUNCT), want("null", JSON_KEYWORD), want("]}", JSON_PUNCT)].concat();
+        assert_eq!(colors(&buf, 3, "{", row1.len()), row1);
+        // Binary: plain; the edited cell: bold yellow as any edit
+        assert_eq!(colors(&buf, 2, "0", 6), want("0x7B22", Color::Reset));
+        let yellow: String = (0..80).map(|x| &buf[(x, 2)]).filter(|c| c.fg == Color::Yellow).map(|c| c.symbol()).collect();
+        assert_eq!(yellow.trim_end(), "1~{\"e\":2}", "row mark and the edited cell");
+        // NO_COLOR: no colors at all; 16 colors: the five kinds stay apart
+        let buf = draw(&mut g, ColorMode::NoColor);
+        assert!(colors(&buf, 2, "{", row0.len()).iter().all(|c| c.1 == Color::Reset));
+        let c16 = [JSON_KEY, JSON_STRING, NUMBER, JSON_KEYWORD, JSON_PUNCT].map(|c| ColorMode::Ansi16.color(c, false));
+        assert_eq!(c16, [Color::LightMagenta, Color::LightGreen, Color::LightCyan, Color::LightRed, Color::DarkGray]);
     }
 
     #[test]

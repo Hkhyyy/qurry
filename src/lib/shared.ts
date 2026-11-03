@@ -166,6 +166,9 @@ const api = {
   padFrac: (s: string, width: number): string => wasm.padFrac(s, width),
   valueClass: (typeName: string, value: Cell): ValueClass => wasm.valueClass(typeName, value),
   alignOf: (cls: ValueClass, overrides: Alignments): Align => wasm.alignOf(cls, overrides),
+  isJsonType: (typeName: string): boolean => wasm.isJsonType(typeName),
+  /** [start, end, kind, …]: UTF-16 ranges, kind an index of qurry_shared::format::JsonKind */
+  jsonSpans: (text: string, maxChars: number): Uint32Array => wasm.jsonSpans(text, maxChars),
   /** A label per tab, undefined where the table name is unique */
   tableTabLabels: (tabs: TableTabKey[]): (string | undefined)[] => wasm.tableTabLabels(tabs),
   isNumericType: (typeName: string): boolean => wasm.isNumericType(typeName),

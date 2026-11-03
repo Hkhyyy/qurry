@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { dialog, expect, menuItem, openApp, test, treeItem, work } from "./app";
+import { dialog, expect, menuItem, openApp, openConsole, test, treeItem, typeSql, work } from "./app";
 
 const clipboard = (page: Page) => page.evaluate(() => navigator.clipboard.readText());
 /** The mock's created_at alternates no fraction / .5 / .125 */
@@ -221,3 +221,27 @@ test("grid keys work in Transpose and Chart too (find, back to Table)", async ({
   await page.keyboard.press("Meta+KeyR");
   await expect.poll(() => page.evaluate(() => (window as any).__calls)).toContain("run_query");
 });
+
+for (const theme of ["dark", "light", "hc"]) {
+  test(`jsonb cells color keys, strings, numbers, keywords and punctuation apart (${theme}); a large value renders only what fits`, async ({ page }) => {
+    await page.evaluate((t) => (document.documentElement.dataset.theme = t), theme);
+    await openConsole(page);
+    await typeSql(page, "select * from json_demo");
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Meta+Enter");
+    const cell = work(page).getByRole("gridcell").filter({ hasText: '"type":"payment.paid"' }).first();
+    await expect(cell).toBeVisible();
+    const colors = await cell.evaluate((el) => {
+      const of = (k: string) => getComputedStyle(el.querySelector(`.json-${k}`)!).color;
+      return { key: of("key"), string: of("string"), number: of("number"), keyword: of("keyword"), punct: of("punct"), text: getComputedStyle(el).color, height: el.getBoundingClientRect().height };
+    });
+    const kinds = [colors.key, colors.string, colors.number, colors.keyword, colors.punct];
+    expect(new Set(kinds).size, JSON.stringify(colors)).toBe(5);
+    expect(kinds.slice(0, 4)).not.toContain(colors.text);
+    // Still one line (no pretty-printing): a cell is as tall as its row
+    expect(colors.height).toBe(24);
+    // Row 3 holds ~100 KB: its cell renders the first 200 characters (lib/jsonSpans.ts JSON_CAP), colored
+    const big = work(page).getByRole("gridcell").filter({ hasText: '{"items":[' }).first();
+    expect(await big.evaluate((el) => [el.textContent!.length, el.querySelectorAll("span").length > 10])).toEqual([200, true]);
+  });
+}
