@@ -437,7 +437,10 @@ export function TabItem({
   return (
     <div className={cx(base, active && "active", className)} role="tab" aria-selected={active} {...rest}>
       {icon && <span className={cx("tab-icon", iconClass)}>{icon}</span>}
-      <span className="tab-label">{label}</span>
+      {/* data-text: App.css reserves the bold width so a tab doesn't widen when it becomes active */}
+      <span className="tab-label" data-text={typeof label === "string" ? label : undefined}>
+        {label}
+      </span>
       {pinned ? (
         <span className="tab-pin" title="Unpin Tab" onMouseDown={stop} onClick={(e) => (stop(e), onPin?.())}>
           📌

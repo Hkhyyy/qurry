@@ -3,7 +3,7 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { api, ConnectionView, dialectOf, meta, targetId } from "../../lib/api";
 import { askText } from "../../lib/dialogs";
 import { leaf, leaves, MAX_PANES, Pane, splitPane } from "../../lib/panes";
-import { connBg, connStripe, type Theme } from "../../lib/theme";
+import { connTabVars, type Theme } from "../../lib/theme";
 import { ConsoleEditor } from "../../components/ConsoleEditor";
 import { ConsolePane } from "../../components/ConsolePane";
 import { DbaReport } from "../../components/DbaReport";
@@ -221,7 +221,7 @@ export function useEditorGroups({
     const ga = groupActive(g);
     const gConn = conns.find((c) => c.id === ga?.connId);
     return (
-      <div className={"panel editor-group" + (split && focused === g ? " focused" : "")} onMouseDownCapture={() => setFocused(g)}>
+      <div className={"panel editor-group" + (split ? (focused === g ? " focused" : " unfocused") : "")} onMouseDownCapture={() => setFocused(g)}>
         <TabStrip
           activeKey={ga?.id}
           overflow={gTabs.map((t) => ({ key: t.id, label: labelOf(t), active: t.id === ga?.id, onSelect: () => activate(t) }))}
@@ -255,7 +255,7 @@ export function useEditorGroups({
                   else closeTabs([t.id]);
                 }}
                 className={(t.id === dragId ? "dragging" : "") + (dropHint?.zone === "tabs" && dropHint.g === g && dropHint.beforeId === t.id ? " drop-before" : "")}
-                style={color ? { background: connBg(color, theme), boxShadow: `inset 0 2px 0 ${connStripe(color, theme)}` } : undefined}
+                style={connTabVars(color, theme)}
                 draggable
                 onDragStart={(e) => {
                   e.dataTransfer.setData("text/plain", t.id);
