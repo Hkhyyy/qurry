@@ -27,8 +27,7 @@ const TAIL: usize = 4096;
 /// How long the CLI and the plugin get to end the session on the AWS side before they are killed
 const GRACE: Duration = Duration::from_millis(1500);
 
-/// How long `aws ssm terminate-session` may take when a Tunnel closes (in the background), and in all when the app exits (kill_all)
-const TERMINATE: Duration = Duration::from_secs(5);
+/// How long the app waits in all for `aws ssm terminate-session` when it exits (kill_all); slower ones finish on their own
 const TERMINATE_ON_EXIT: Duration = Duration::from_secs(2);
 
 /// The CLI's line with the session's id, before the plugin starts
@@ -94,7 +93,8 @@ struct Ender {
 }
 
 impl Ender {
-    /// Starts `aws ssm terminate-session`, once the CLI has said the session's id
+    /// Starts `aws ssm terminate-session`, once the CLI has said the session's id. In its own process group: it is never stopped
+    /// (a slow SSO or assume-role sign-in would leave the session open), not by Qurry and not by the terminal's ⌃C or the app exiting
     fn start(&self) -> Option<std::process::Child> {
         let id = self.heard.id.get()?;
         let mut cmd = std::process::Command::new(&self.aws);
@@ -102,19 +102,17 @@ impl Ender {
         if let Some(p) = &self.path {
             cmd.env("PATH", p);
         }
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
         cmd.spawn().ok()
     }
 }
 
-/// Waits for the commands until `end`, then kills those still running
+/// Waits for the commands until `end` at most; those still running are left to finish
 fn finish(cmds: Vec<std::process::Child>, end: Instant) {
     for mut c in cmds {
         while matches!(c.try_wait(), Ok(None)) && Instant::now() < end {
             std::thread::sleep(Duration::from_millis(50));
-        }
-        if matches!(c.try_wait(), Ok(None)) {
-            let _ = c.kill();
-            let _ = c.wait();
         }
     }
 }
@@ -166,22 +164,20 @@ impl Drop for Process {
     }
 }
 
-/// The one way a session ends: terminate-session on the AWS side (in the background, up to TERMINATE) and, at the same time, the
-/// group stopped as below (the port is free at once; the AWS call doesn't need the CLI or the plugin)
+/// The one way a session ends, once (kill_all may have ended it already: then the group is no longer in GROUPS). Forgets the
+/// group, starts terminate-session on the AWS side and stops what is left of the group, both at once (the port is free at once;
+/// the AWS call doesn't need the CLI or the plugin). The CLI runs session-manager-plugin as its own child, which holds the port,
+/// so the whole group is stopped: SIGTERM first, SIGKILL after GRACE (without holding up the caller). A group is only signalled
+/// while it has members: a pgid can't be reused until its last member is gone, but after that the number may belong to another
+/// program's group. `child` is the CLI when it hasn't been reaped yet
 fn close(pid: u32, child: Option<Child>, ender: &Ender) {
-    let ending = ender.start();
-    stop_group(pid, child);
-    if let Some(c) = ending {
-        std::thread::spawn(move || finish(vec![c], Instant::now() + TERMINATE));
+    {
+        let mut groups = GROUPS.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(i) = groups.iter().position(|(p, _)| *p == pid) else { return };
+        groups.remove(i);
     }
-}
-
-/// Forgets the group and stops what is left of it. The CLI runs session-manager-plugin as its own child, which holds the port and
-/// the session, so the whole group is stopped: SIGTERM first so they can end the session, SIGKILL after GRACE (without holding up
-/// the caller). A group is only signalled while it has members: a pgid can't be reused until its last member is gone, but after
-/// that the number may belong to another program's group. `child` is the CLI when it hasn't been reaped yet
-fn stop_group(pid: u32, child: Option<Child>) {
-    GROUPS.lock().unwrap_or_else(|e| e.into_inner()).retain(|(p, _)| *p != pid);
+    let ending = ender.start();
+    let ender = ender.clone();
     #[cfg(unix)]
     {
         let mut child = child;
@@ -191,18 +187,39 @@ fn stop_group(pid: u32, child: Option<Child>) {
             }
         };
         reap();
-        if group_alive(pid) {
+        let alive = group_alive(pid);
+        if alive {
             signal_group(pid, libc::SIGTERM);
-            std::thread::spawn(move || {
-                if !wait_group(pid, GRACE, reap) {
-                    signal_group(pid, libc::SIGKILL);
-                }
-            });
         }
+        std::thread::spawn(move || {
+            if alive && !wait_group(pid, GRACE, reap) {
+                signal_group(pid, libc::SIGKILL);
+            }
+            reap_or_end(ending, &ender);
+        });
     }
     // Elsewhere kill_on_drop stops the CLI only
     #[cfg(not(unix))]
-    drop((pid, child));
+    {
+        drop(child);
+        std::thread::spawn(move || reap_or_end(ending, &ender));
+    }
+}
+
+/// After the group stopped: reaps the terminate-session that was started, or starts it when the id line was still in the pipe
+/// when the Tunnel closed (the readers read what is left once the group is gone)
+fn reap_or_end(ending: Option<std::process::Child>, ender: &Ender) {
+    let mut ending = ending;
+    for _ in 0..20 {
+        if ending.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        ending = ender.start();
+    }
+    if let Some(mut c) = ending {
+        let _ = c.wait();
+    }
 }
 
 #[cfg(unix)]
@@ -508,7 +525,11 @@ if args[:2] == ["ssm", "terminate-session"]:
     with open(os.path.join(HERE, "terminated"), "a") as f:
         f.write(json.dumps(args) + "\n")
     if os.path.exists(os.path.join(HERE, "terminate-hangs")):
+        with open(os.path.join(HERE, "terminate-pid"), "w") as f:
+            f.write(f"{os.getpid()}")
         time.sleep(3600)
+    with open(os.path.join(HERE, "terminate-pid"), "w") as f:
+        f.write(f"{os.getpid()}")
     print(json.dumps({"SessionId": args[3]}))
     sys.exit(0)
 with open(os.path.join(HERE, "pids"), "w") as f:
@@ -637,6 +658,76 @@ sys.exit(255)
         Vec::new()
     }
 
+    /// A group of its own with only a `sleep` in it (reaped when it ends), registered like a CLI, and how to end its session
+    /// through the fake aws in `dir`. Needs no local port
+    fn sleeping_group(dir: &Path) -> (u32, Ender) {
+        let mut cmd = std::process::Command::new("sleep");
+        cmd.arg("60");
+        std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+        let mut c = cmd.spawn().unwrap();
+        let pid = c.id();
+        std::thread::spawn(move || c.wait());
+        let ender = Ender { aws: fake_aws(dir, "ok"), path: None, account: account(&cfg()), heard: Arc::default() };
+        GROUPS.lock().unwrap().push((pid, ender.clone()));
+        (pid, ender)
+    }
+
+    fn take_group(pid: u32) -> Vec<(u32, Ender)> {
+        let mut g = GROUPS.lock().unwrap();
+        let (mine, rest) = std::mem::take(&mut *g).into_iter().partition(|(p, _)| *p == pid);
+        *g = rest;
+        mine
+    }
+
+    const STARTED: &str = "Starting session with SessionId: qurry-test-0123456789abcdef\n";
+
+    /// After kill_all a Tunnel dropped later (its state outlived the exit path) ends nothing a second time
+    #[tokio::test]
+    async fn a_close_after_kill_all_does_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (pid, ender) = sleeping_group(dir.path());
+        ender.heard.line(STARTED);
+        end_now(take_group(pid));
+        assert_eq!(terminated(dir.path()).await, [TERMINATED]);
+        close(pid, None, &ender);
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        assert_eq!(terminated(dir.path()).await.len(), 1, "no second terminate-session");
+    }
+
+    /// Dropped before the CLI's id line was read: the session is still ended once the line arrives (the readers drain the pipe
+    /// after the group is gone)
+    #[tokio::test]
+    async fn a_close_before_the_id_was_read_still_terminates() {
+        let dir = tempfile::tempdir().unwrap();
+        let (pid, ender) = sleeping_group(dir.path());
+        close(pid, None, &ender);
+        assert!(!dir.path().join("terminated").exists());
+        ender.heard.line(STARTED);
+        assert_eq!(terminated(dir.path()).await, [TERMINATED]);
+        assert!(!in_groups(pid));
+    }
+
+    /// On quit kill_all waits at most TERMINATE_ON_EXIT, and a terminate-session still running (a slow SSO sign-in) is left to
+    /// finish in its own process group instead of being killed
+    #[tokio::test]
+    async fn kill_all_leaves_a_slow_terminate_running() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("terminate-hangs"), "").unwrap();
+        let (pid, ender) = sleeping_group(dir.path());
+        ender.heard.line(STARTED);
+        let start = Instant::now();
+        end_now(take_group(pid));
+        let took = start.elapsed();
+        assert!(took >= TERMINATE_ON_EXIT - Duration::from_millis(100) && took < TERMINATE_ON_EXIT + Duration::from_secs(1), "{took:?}");
+        assert_eq!(terminated(dir.path()).await, [TERMINATED]);
+        let t: libc::pid_t = std::fs::read_to_string(dir.path().join("terminate-pid")).unwrap().parse().unwrap();
+        let (running, group) = unsafe { (libc::kill(t, 0) == 0, libc::getpgid(t)) };
+        unsafe { libc::kill(t, libc::SIGKILL) };
+        assert!(running, "the slow terminate-session was killed");
+        assert_eq!(group, t, "in its own process group");
+        assert!(unsafe { libc::killpg(pid as libc::pid_t, 0) } != 0, "the CLI's group is stopped");
+    }
+
     /// Disconnecting the data source (drop_pool) ends the session on the AWS side
     #[tokio::test]
     async fn disconnect_terminates_the_session() {
@@ -670,6 +761,9 @@ sys.exit(255)
         assert!(took >= TERMINATE_ON_EXIT - Duration::from_millis(100) && took < TERMINATE_ON_EXIT + Duration::from_secs(1), "{took:?}");
         gone(dir.path()).await;
         assert_eq!(terminated(dir.path()).await, [TERMINATED]);
+        // Left running by kill_all
+        let pid: libc::pid_t = std::fs::read_to_string(dir.path().join("terminate-pid")).unwrap().parse().unwrap();
+        unsafe { libc::kill(pid, libc::SIGKILL) };
         std::mem::forget(t);
     }
 

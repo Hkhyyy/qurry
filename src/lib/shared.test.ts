@@ -18,7 +18,8 @@ describe("shared wasm", () => {
 
   it("hints a local Host with AWS SSM (the instance itself) in the TUI's words", () => {
     expect(shared().ssmLocalHost(" localhost ")).toContain("With AWS SSM, localhost is the instance itself: Host and Port are the database as seen from the instance");
-    expect(shared().ssmLocalHost("::1")).toContain("::1 is the instance itself");
+    expect(shared().ssmLocalHost("127.0.0.1")).toContain("127.0.0.1 is the instance itself");
+    expect(shared().ssmLocalHost("::1")).toBeUndefined();
     expect(shared().ssmLocalHost("mydb.abc.ap-northeast-2.rds.amazonaws.com")).toBeUndefined();
   });
 

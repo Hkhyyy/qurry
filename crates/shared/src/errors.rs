@@ -40,10 +40,10 @@ pub fn ssm_unreachable(host: &str, port: u16) -> String {
 }
 
 /// The data source form's hint when AWS SSM is on and Host is this machine's name (GUI and TUI). Not an error: a database on the
-/// instance itself is reached this way
+/// instance itself is reached this way. Not for ::1, which the tunnel doesn't take (a host name or IPv4 address only)
 pub fn ssm_local_host(host: &str) -> Option<String> {
     let h = host.trim();
-    ["localhost", "127.0.0.1", "::1"]
+    ["localhost", "127.0.0.1"]
         .iter()
         .any(|l| h.eq_ignore_ascii_case(l))
         .then(|| format!("With AWS SSM, {h} is the instance itself: Host and Port {SSM_HOST_PORT}. Keep it if the database runs on the instance."))
@@ -84,11 +84,12 @@ mod tests {
     fn ssm_texts() {
         let e = ssm_unreachable("127.0.0.1", 55433);
         assert!(e.contains("couldn't reach 127.0.0.1:55433") && e.contains("General tab") && e.contains("as seen from the instance"), "{e}");
-        for h in ["localhost", " LocalHost ", "127.0.0.1", "::1"] {
+        for h in ["localhost", " LocalHost ", "127.0.0.1"] {
             let hint = ssm_local_host(h).unwrap_or_else(|| panic!("{h}"));
             assert!(hint.contains(h.trim()) && hint.contains("as seen from the instance"), "{hint}");
         }
-        for h in ["", "db.internal", "mydb.abc.ap-northeast-2.rds.amazonaws.com", "10.0.1.5", "127.0.0.2", "localhost.example.com"] {
+        // ::1 can't be passed to the instance (the host must be a name or IPv4): not hinted as something to keep
+        for h in ["", "::1", "db.internal", "mydb.abc.ap-northeast-2.rds.amazonaws.com", "10.0.1.5", "127.0.0.2", "localhost.example.com"] {
             assert_eq!(ssm_local_host(h), None, "{h}");
         }
     }
