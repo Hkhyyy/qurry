@@ -51,6 +51,7 @@ export const Fields: S = {
   },
 };
 
+/** SearchField is a TextInput: no autocorrect or spell check (see GUI/1 Atoms › Inputs) */
 export const SearchAndTabs: S = {
   name: "SearchField · Tabs · SectionTitle",
   render: function Render() {

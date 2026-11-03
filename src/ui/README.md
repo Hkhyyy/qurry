@@ -43,7 +43,7 @@
 | `Button` | `variant`: default · primary (창마다 하나, 맨 오른쪽) · danger · ghost · link. `size`: md 26px · sm 22px. 글자는 동사 |
 | `IconButton` · `ToolButton` | 아이콘만 (title 필수, `tone` ok · danger, `active`) / 도구 막대 글자 버튼 (`active` · `accent`) |
 | `Badge` · `Avatar` · `Swatch` · `ProgressBar` | 개수 · 상태 (`tone`, 정해진 색은 `color`) / 이니셜 사각형 / 색 견본 / 진행 막대 (`pct` null = 모름) |
-| `TextInput` · `Select` · `TextArea` · `Checkbox` · `Radio` | 입력 (`full` · `grow`) / 고르기 / 여러 줄 (고정폭) / 체크 (`indeterminate`) / 하나 고르기. |
+| `TextInput` · `Select` · `TextArea` · `Checkbox` · `Radio` | 입력 (`full` · `grow`) / 고르기 / 여러 줄 (고정폭) / 체크 (`indeterminate`) / 하나 고르기. 글 칸은 모두 자동 고침 · 대문자 · 맞춤법 · 글쓰기 제안이 꺼져 있다 (`textAssistOff`; 이름 · 타입 · 호스트를 쓰는 칸). 주석처럼 글을 쓰는 칸만 `prose` (맞춤법만 켬) |
 
 ## GUI 분자 (`molecules.tsx`)
 

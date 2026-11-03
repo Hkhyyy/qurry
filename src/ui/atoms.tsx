@@ -133,14 +133,19 @@ export function Badge({ children, tone = "neutral", color, title, onClick, class
 
 // ───────── Inputs ─────────
 /** Single-line input. full = 100% width, grow = take the remaining width inside a Row */
-export const TextInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement> & { full?: boolean; grow?: boolean }>(function TextInput({ className, full, grow, ...rest }, ref) {
-  return <input ref={ref} className={cx("ui-input", full && "full", grow && "grow", className)} {...rest} />;
+/**
+ * Every ui-kit text field types identifiers (names, types, hosts, filters), not prose: WebKit's autocorrect, capitalisation, spelling
+ * and writing suggestions under the field are off. `prose` (comments) turns spell check back on
+ */
+export const textAssistOff = (prose?: boolean) => ({ autoComplete: "off", autoCorrect: "off", autoCapitalize: "off", spellCheck: !!prose, writingsuggestions: "false" });
+export const TextInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement> & { full?: boolean; grow?: boolean; prose?: boolean }>(function TextInput({ className, full, grow, prose, ...rest }, ref) {
+  return <input ref={ref} className={cx("ui-input", full && "full", grow && "grow", className)} {...textAssistOff(prose)} {...rest} />;
 });
 export function Select({ className, full, ...rest }: SelectHTMLAttributes<HTMLSelectElement> & { full?: boolean }) {
   return <select className={cx("ui-select", full && "full", className)} {...rest} />;
 }
-export const TextArea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement> & { mono?: boolean }>(function TextArea({ className, mono = true, ...rest }, ref) {
-  return <textarea ref={ref} className={cx("ui-textarea", !mono && "sans", className)} {...rest} />;
+export const TextArea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement> & { mono?: boolean; prose?: boolean }>(function TextArea({ className, mono = true, prose, ...rest }, ref) {
+  return <textarea ref={ref} className={cx("ui-textarea", !mono && "sans", className)} {...textAssistOff(prose)} {...rest} />;
 });
 /** Checkbox. indeterminate = partial (some of the children) */
 export function Checkbox({ checked, onChange, children, disabled, title, indeterminate }: { checked: boolean; onChange: (v: boolean) => void; children?: ReactNode; disabled?: boolean; title?: string; indeterminate?: boolean }) {

@@ -3,6 +3,7 @@
  * Virtual scrolling, selection and edit state live in ResultGrid; only the look is defined here. Spec: README.md
  */
 import { CSSProperties, FocusEvent, KeyboardEvent, MouseEvent, ReactNode, RefObject, useEffect, useRef } from "react";
+import { textAssistOff } from "./atoms";
 import { cx } from "./cx";
 import "./grid.css";
 
@@ -176,7 +177,7 @@ export function CellEditor({
         if (!e.currentTarget.contains(e.relatedTarget as Node)) onBlurOut();
       }}
     >
-      <input autoFocus className="cell-input" value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={onKeyDown} />
+      <input autoFocus className="cell-input" {...textAssistOff()} value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={onKeyDown} />
       {more && (
         <button className="cell-more" title={more.title} onMouseDown={(e) => e.preventDefault()} onClick={more.onClick}>
           …

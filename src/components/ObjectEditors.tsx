@@ -106,7 +106,7 @@ export function TableDesigner({ target, conn, schema, table, onDone, onOpenConso
           <TextInput autoFocus={!table} value={def.name} placeholder="new_table" onChange={(e) => set({ name: e.target.value })} />
         </Field>
         <Field label="Comment">
-          <TextInput full value={def.comment ?? ""} onChange={(e) => set({ comment: e.target.value })} />
+          <TextInput full prose value={def.comment ?? ""} onChange={(e) => set({ comment: e.target.value })} />
         </Field>
       </div>
       <Tabs
@@ -155,7 +155,7 @@ export function TableDesigner({ target, conn, schema, table, onDone, onOpenConso
                     <Checkbox checked={def.primaryKey.includes(c.name)} onChange={(v) => togglePk(c.name, v)} />
                   </Td>
                   <Td>
-                    <TextInput value={c.comment ?? ""} onChange={(e) => setCol(i, { comment: e.target.value || null })} />
+                    <TextInput prose value={c.comment ?? ""} onChange={(e) => setCol(i, { comment: e.target.value || null })} />
                   </Td>
                   <Td>
                     <IconButton size="sm" tone="danger" title="Remove column" onClick={() => set({ columns: def.columns.filter((_, j) => j !== i), primaryKey: def.primaryKey.filter((x) => x !== c.name) })}>
