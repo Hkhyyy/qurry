@@ -15,7 +15,8 @@ Qurry 가 하는 모든 것을 장별로 정리했습니다. 처음이라면 **�
 | [MCP 서버](mcp.md) | Claude Code 같은 AI 도구가 데이터베이스를 둘러보고 조회하게 하기 (기본 읽기 전용) |
 | [MCP 위협 모델](mcp-security.md) | MCP 설정마다 AI 클라이언트가 닿는 것, 읽기 전용을 지키는 방법, 프롬프트 인젝션, Qurry 가 막지 못하는 것 |
 | [안전장치](safety.md) | 읽기 전용 Data Source, 트랜잭션, 확인 창, 운영 작업 기록 · 되돌리기 SQL, 릴리스 서명 |
+| [설정](settings.md) | 테마, 편집기 · 그리드 글꼴, 키맵, 비밀번호 키를 두는 곳 |
 | [GUI 단축키](shortcuts-gui.md) | GUI 단축키 전체 (앱에서도: `⇧⌘/`) |
 | [TUI 단축키](shortcuts-tui.md) | TUI 키 전체 (앱에서도: `F1`) |
-| [터미널에서 쓰는 TUI](tui.md) | 색 (NO_COLOR, 256색 · 16색 터미널), 작은 창, tmux 와 ⌥ 키 |
+| [터미널에서 쓰는 TUI](tui.md) | 색 (NO_COLOR, 256색 · 16색 터미널), 글꼴, 작은 창, tmux 와 ⌥ 키 |
 | [개발](development.md) | 소스에서 빌드, 코드 구조, 테스트 |
