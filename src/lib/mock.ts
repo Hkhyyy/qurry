@@ -55,6 +55,13 @@ const jsonDemo = {
   ]),
   truncated: false,
 };
+/** `select … from payments`: a jsonb column as PostgreSQL sends it (one line, spaces after : and ,), a NULL and a text column holding JSON */
+const payments = {
+  ...result,
+  columns: [{ name: "id", typeName: "INT8" }, { name: "status", typeName: "VARCHAR" }, { name: "data", typeName: "JSONB" }, { name: "note", typeName: "TEXT" }],
+  rows: Array.from({ length: 40 }, (_, i) => [i + 1, i % 2 ? "paid" : "ready", i === 2 ? null : `{"kind": "card", "meta": {"src": "web", "ip": "10.0.0.${i + 1}"}, "items": [${i}, ${i + 1}]}`, i % 4 ? "plain note" : "[1, 2]"]),
+  truncated: false,
+};
 let flakyLoads = 0;
 let updateChannel = "stable";
 let gridAlign = {};
@@ -212,8 +219,10 @@ const handlers: Record<string, (a: any) => unknown> = {
         ? { ...result, columns: [], rows: [], rowsAffected: 3, truncated: false, hasResultSet: false, inTransaction: (globalThis as any).__mockManual === true }
         : /\bwide_demo\b/i.test(a.sql)
           ? { ...wide, inTransaction: (globalThis as any).__mockManual === true }
-        : /\bjson_demo\b/i.test(a.sql)
+          : /\bjson_demo\b/i.test(a.sql)
           ? { ...jsonDemo, inTransaction: (globalThis as any).__mockManual === true }
+          : /\bpayments\b/i.test(a.sql)
+          ? { ...payments, inTransaction: (globalThis as any).__mockManual === true }
           : { ...result, inTransaction: (globalThis as any).__mockManual === true }),
   set_tx_mode: (a: any) => { (globalThis as any).__mockManual = a.manual; return null; },
   // e2e sets __mockCommitError for a COMMIT that fails (e.g. the connection lost while committing)

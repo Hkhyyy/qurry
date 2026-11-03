@@ -49,7 +49,7 @@ export const KEYMAP: KeySection[] = [
       [null, "ws.9"],
       [null, "explorer"],
       [null, "find.window"],
-      ["⇧⎋", "Hide active tool window"],
+      ["⇧⎋", "Hide active tool window (in a grid: its Value Editor panel)"],
       [null, "maximize"],
       [null, "settings"],
       [null, "theme"],
@@ -124,6 +124,7 @@ export const KEYMAP: KeySection[] = [
     rows: [
       ["↩ / F2", "Edit cell"],
       [null, "grid.valueEditor"],
+      ["⌘↩ · ⎋", "In the Value Editor panel: apply the value · back to the grid (it follows the current cell)"],
       [null, "grid.setNull"],
       [null, "grid.setDefault"],
       [null, "grid.addRow"],

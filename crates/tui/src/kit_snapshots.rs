@@ -248,6 +248,18 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         c.show_output = false;
     }
     scenes.push(app_scene(h, "Grid alignment", "Numbers and NULL on the right by default (a NULL stays in line with the numbers); text, dates, booleans and JSON on the left", 120, 22));
+    // Value panel (v): the cell's whole value beside the grid, jsonb pretty-printed and coloured (the GUI's Value Editor panel)
+    h.app.focus = crate::app::Focus::Grid;
+    if let Some(g) = h.app.grid_mut() {
+        g.col = 4;
+    }
+    h.app.value_panel = true;
+    scenes.push(app_scene(h, "Value panel", "v in a grid: the current cell's whole value beside the grid (follows the cursor), JSON pretty-printed; v / ⌃w close it", 120, 22));
+    h.app.value_panel = false;
+    if let Some(g) = h.app.grid_mut() {
+        (g.col, g.col_off) = (0, 0);
+    }
+    h.app.focus = crate::app::Focus::Editor;
     {
         use qurry_core::format::{Align, ValueClass};
         h.app.state.store.set_grid_align(ValueClass::Null, Align::Left).unwrap();

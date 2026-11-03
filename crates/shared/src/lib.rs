@@ -18,6 +18,7 @@ pub mod kind;
 pub mod labels;
 pub mod redis_cmd;
 pub mod sql;
+pub mod value;
 
 pub use kind::DbKind;
 

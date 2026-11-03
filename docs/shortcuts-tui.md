@@ -88,6 +88,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | — | New Data Source… |
 | — | Refresh |
 | — | Query History… (shared with the GUI) |
+| — | Value Panel (the current cell's whole value, beside the grid) |
 | — | Explain Analyze (runs the statement: real times and row counts) |
 | — | Query Execution Settings (what ⌃Enter runs) |
 | — | Clear Console (delete all text) |
@@ -158,6 +159,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 
 | Key | Action |
 |---|---|
+| `v` | Value Panel (the current cell's whole value, beside the grid) |
 | `⌃z` | Revert Changes |
 | `a / Insert` | Add Row |
 | `d / Delete` | Delete Row |

@@ -66,6 +66,7 @@ Database Explorer keys (change them with F1)
   s                              Manage Shown Schemas… (databases · schemas in the explorer)
 
 Data grid keys (change them with F1)
+  v                              Value Panel (the current cell's whole value, beside the grid)
   ⌃z                             Revert Changes
   a / Insert                     Add Row
   d / Delete                     Delete Row

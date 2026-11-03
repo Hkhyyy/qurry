@@ -165,6 +165,12 @@ const api = {
   fracWidth: (values: string[]): number => wasm.fracWidth(values),
   padFrac: (s: string, width: number): string => wasm.padFrac(s, width),
   valueClass: (typeName: string, value: Cell): ValueClass => wasm.valueClass(typeName, value),
+  /** The Value Editor panel's text for a cell: JSON (json / jsonb, or a JSON object or array) pretty-printed (qurry_shared::value) */
+  panelText: (typeName: string, value: string): { json: boolean; text: string } => wasm.panelText(typeName, value),
+  /** The panel's "{ }" toggle: valid JSON between pretty and one line, undefined for anything else */
+  toggleJsonLayout: (text: string): string | undefined => wasm.toggleJsonLayout(text),
+  /** What a panel edit writes to the cell, or why a json / jsonb column refuses it */
+  valueToApply: (typeName: string, original: string, edited: string): { Ok: string } | { Err: string } => wasm.valueToApply(typeName, original, edited),
   alignOf: (cls: ValueClass, overrides: Alignments): Align => wasm.alignOf(cls, overrides),
   isJsonType: (typeName: string): boolean => wasm.isJsonType(typeName),
   /** [start, end, kind, …]: UTF-16 ranges, kind an index of qurry_shared::format::JsonKind */

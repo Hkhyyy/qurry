@@ -437,6 +437,7 @@ pub enum Action {
     SetNull,
     ExportCsv,
     CopyInList,
+    ValueEditor,
     FindSimilar,
     RagSearch,
     RagBuild,
@@ -601,6 +602,8 @@ pub struct App {
     pub group_active: [Option<u64>; crate::panes::MAX],
     /// Share of the console taken by the editor (%)
     pub console_pct: u16,
+    /// The value panel beside result and table grids (v in the grid, as the GUI's Value Editor panel): the current cell's whole value
+    pub value_panel: bool,
     /// Database Explorer width (None = auto, fit to screen width)
     pub explorer_w: Option<u16>,
     /// What is being dragged and the current position
@@ -694,6 +697,7 @@ impl App {
             panes: crate::panes::Pane::Leaf(0),
             group_active: [None; crate::panes::MAX],
             console_pct: 42,
+            value_panel: false,
             explorer_w: None,
             drag: None,
             drag_pos: (0, 0),

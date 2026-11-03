@@ -7,7 +7,7 @@ import { initShared, sharedReady } from "../lib/shared";
 import { cmd, eventSpec, keyTitle, runKey } from "../lib/shortcuts";
 import { ConsoleEditor, EditorApi, RunRequest } from "./ConsoleEditor";
 import { ContextMenu, MenuItem } from "./Explorer";
-import { ResultGrid } from "./ResultGrid";
+import { CONSOLE_READ_ONLY, ResultGrid } from "./ResultGrid";
 import { RunningBar } from "./RunningBar";
 import { planText } from "../lib/planText";
 import { IcClock, IcGear, IcReload, IcStop } from "../ui/icons";
@@ -397,6 +397,7 @@ export function ConsolePane(p: Props) {
               {active?.kind === "result" && active.result && (
                 <ResultGrid
                   result={active.result}
+                  readOnlyReason={CONSOLE_READ_ONLY}
                   running={p.running}
                   loadingMore={p.loadingMore}
                   query={active.sql}
