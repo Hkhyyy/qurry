@@ -12,8 +12,11 @@ What changed in each Qurry version, for people who use it. The format follows [K
 - **AWS SSM tunnel**: connect through Session Manager port forwarding (GUI **SSH/SSL › Tunnel › AWS SSM**, TUI `Tunnel` › `aws ssm`) with your AWS profile, region and instance id. Qurry runs the AWS CLI v2 and its Session Manager plugin and stores no AWS secrets. Update every Qurry app on the computer first: older ones don't know the tunnel ([Data sources](docs/data-sources.md)).
 - [SECURITY.md](SECURITY.md) (report a vulnerability privately through GitHub), [CONTRIBUTING.md](CONTRIBUTING.md) (toolchain, tests, commit and language rules, issue and pull request templates) and the [MCP threat model](docs/mcp-security.md): what an AI client reaches for each MCP setting, how read-only is enforced, and what Qurry does not protect against.
 - This changelog.
+- **Alignment in result grids**: GUI **Settings › Appearance › Alignment** sets Left, Center or Right for each kind of value (string, number, date / time, boolean, NULL, JSON / binary). The TUI grid uses the same kinds and reads the same setting from `settings.json` at start (#75, [Settings](docs/settings.md)).
 
 ### Changed
+
+- **`NULL` is right-aligned** in result grids (GUI and TUI), so a `NULL` in a numeric column lines up with its numbers. To have it on the left as before, set **Settings › Appearance › Alignment › NULL** to **Left**. Numbers the driver sends as text (`numeric`, large `bigint`) are now right-aligned in the GUI too, as the TUI did (#75).
 
 - **Releases**: a merge to `main` now publishes a beta pre-release (`vX.Y.Z-beta.N`). Stable releases come only from a version tag on `main`, and only they update Homebrew. Only the 20 newest betas keep their release page: an older beta can't install driver plugins any more and says to update Qurry. A beta `.deb` has the package version `X.Y.Z~beta.N`, so `apt` takes the stable `X.Y.Z` as an upgrade.
 - **macOS 13 Ventura or later** is needed for the GUI. On macOS 12 or older keep Qurry 0.2.x; the TUI and the MCP server still run there ([what to do if an update already went through](docs/updates.md#macos-12-and-older)).
@@ -28,6 +31,7 @@ What changed in each Qurry version, for people who use it. The format follows [K
 
 ### Fixed
 
+- GUI result grid, table data editor and transposed view: rows no longer show through a strip between the toolbar and the column header in a short result panel on macOS (#82).
 - PostgreSQL nested comments and MySQL `#` comments split the way the server reads them, so a commented-out statement never runs.
 - Full-text search runs each table's `SELECT` in a READ ONLY transaction on PostgreSQL and MySQL, so a view whose function writes (an `INSERT`, `nextval`) is refused instead of committed.
 - Console completion: quoted names with spaces before the dot, `from sales.` with a table named `sales`, Korean identifiers, and long scripts stay fast.
