@@ -34,6 +34,24 @@ pub fn my_from(var: &str) -> Option<Server> {
     std::env::var(var).ok().map(|e| parse_my(var, &e))
 }
 
+/// One MySQL connection to the test server, made the way the app connects (crate::db::connect): TLS when the server's TLS works
+/// with rustls, plaintext only because the server is on this machine. A bare sqlx URL insists on TLS once the server offers it,
+/// and MySQL 5.7's TLS doesn't agree with rustls (HandshakeFailure)
+pub async fn my_conn(s: &Server) -> sqlx::MySqlConnection {
+    match crate::db::connect(&s.cfg, s.password.as_deref()).await.expect("connect to QURRY_TEST_MY") {
+        crate::db::Pool::My(p) => p.acquire().await.expect("a MySQL connection").detach(),
+        _ => unreachable!(),
+    }
+}
+
+/// Whether the server is MySQL older than `min` (MariaDB counts its versions differently and is never older here):
+/// for tests whose statements need a newer MySQL than the one under test (the compat job runs 5.7)
+pub async fn mysql_older_than(c: &mut sqlx::MySqlConnection, min: [u32; 3]) -> bool {
+    let v: String = sqlx::query_scalar("SELECT VERSION()").fetch_one(c).await.expect("SELECT VERSION()");
+    let nums: Vec<u32> = v.split(['.', '-']).take(3).map(|n| n.parse().unwrap_or(0)).collect();
+    !v.to_lowercase().contains("mariadb") && nums.as_slice() < min.as_slice()
+}
+
 /// A QURRY_TEST_PG line (also a server that isn't there, for tests that fail before connecting)
 pub fn parse_pg(e: &str) -> Server {
     let p: Vec<&str> = e.splitn(5, ':').collect();

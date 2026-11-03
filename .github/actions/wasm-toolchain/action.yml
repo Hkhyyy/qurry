@@ -1,0 +1,38 @@
+# What `pnpm wasm` (scripts/wasm.sh) needs to build the GUI's shared WASM (crates/shared-wasm): the wasm32 Rust target,
+# wasm-bindgen-cli at the exact version of the wasm-bindgen crate, and wasm-opt for the shipped module.
+# Used by the web and e2e jobs of ci.yml. release.yml sets these up itself: its toolchain step also adds the platform target,
+# with the Rust cache in between.
+name: WASM toolchain
+description: Rust wasm32 target, wasm-bindgen-cli at the crate's pinned version (cached) and wasm-opt (binaryen)
+
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      with:
+        targets: wasm32-unknown-unknown
+
+    - name: wasm-bindgen version
+      id: wb
+      shell: bash
+      # Cache per runner image (ImageOS: ubuntu22, ubuntu24, macos14, …): a binary built on a newer image may not run on an older one
+      run: |
+        v=$(sed -n 's/^wasm-bindgen = "=\(.*\)"/\1/p' crates/shared-wasm/Cargo.toml)
+        echo "version=$v" >> "$GITHUB_OUTPUT"
+        echo "key=wasm-bindgen-cli-$ImageOS-$(uname -m)-$v" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      id: wb-cache
+      with:
+        path: ~/.cargo/bin/wasm-bindgen
+        key: ${{ steps.wb.outputs.key }}
+
+    - name: Install wasm-bindgen-cli
+      if: steps.wb-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: cargo install wasm-bindgen-cli --version "${{ steps.wb.outputs.version }}" --locked
+
+    # wasm-opt -Oz for the shipped module (scripts/wasm.sh runs it when it is on PATH). Needs Node (actions/setup-node first)
+    - name: Install wasm-opt (binaryen)
+      shell: bash
+      run: npm install -g binaryen@132.0.0

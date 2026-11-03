@@ -1374,9 +1374,14 @@ mod tests {
         let e = r.unwrap_err().to_string();
         assert!(e.starts_with("Not run: ") && !e.contains("lost"), "{e}");
         assert!(!st.tx_state("c".into()).await);
-        let pid = st.sessions.read().await.get("c").unwrap().pid;
-        let open = st.run_query("d".into(), format!("select count(*) from information_schema.innodb_trx where trx_mysql_thread_id = {pid}"), None, None).await.unwrap();
-        assert_eq!(serde_json::to_string(&open.rows).unwrap(), "[[0]]");
+        // The row lock the snapshot took is gone: another connection gets it at once. (Not information_schema.innodb_trx: InnoDB
+        // refreshes it only after 100 ms without a read, server-wide, so while other tests read it, it still lists a transaction
+        // that already rolled back)
+        let mut probe = crate::testenv::my_conn(&crate::testenv::my().unwrap()).await;
+        sqlx::raw_sql("set session innodb_lock_wait_timeout = 1; begin").execute(&mut probe).await.unwrap();
+        let free = sqlx::raw_sql(&format!("select id from {s}.t where id = 2 for update")).execute(&mut probe).await;
+        sqlx::raw_sql("rollback").execute(&mut probe).await.unwrap();
+        assert!(free.is_ok(), "row 2 is still locked: {free:?}");
         st.rollback_tx("o".into()).await.unwrap();
         followup_drop(&st, DbKind::Mysql, s).await;
     }
