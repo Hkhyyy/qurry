@@ -106,12 +106,12 @@ pub struct Tunnel {
 /// What forwards the port: the SSH accept loop and its session, or the aws CLI process (killed when dropped)
 enum Keep {
     Ssh(JoinHandle<()>, Arc<client::Handle<Client>>),
-    Process(crate::ssm::Process),
+    Process(Box<crate::ssm::Process>),
 }
 
 impl Tunnel {
     pub(crate) fn process(local_port: u16, p: crate::ssm::Process) -> Self {
-        Self { local_port, keep: Keep::Process(p) }
+        Self { local_port, keep: Keep::Process(Box::new(p)) }
     }
 
     /// Still forwarding: the SSH accept loop runs and its session is open (the accept loop outlives a session that keepalive,
@@ -120,6 +120,14 @@ impl Tunnel {
         match &self.keep {
             Keep::Ssh(t, session) => !t.is_finished() && !session.is_closed(),
             Keep::Process(p) => p.alive(),
+        }
+    }
+
+    /// AWS SSM: taken before connecting through it, to tell whether the instance couldn't reach the database (ssm::connect_error)
+    pub(crate) fn ssm_mark(&self) -> Option<crate::ssm::Mark> {
+        match &self.keep {
+            Keep::Ssh(..) => None,
+            Keep::Process(p) => Some(p.mark()),
         }
     }
 }

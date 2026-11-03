@@ -125,6 +125,8 @@ const api = {
   moreRowsFailed: (msg: string): string => wasm.moreRowsFailed(msg),
   /** Result word of a Production log entry ("outcome unknown", "failed", "committed" …), or undefined when its rows say it */
   auditStatus: (started: boolean, sql: string, failed: boolean): string | undefined => wasm.auditStatus(started, sql, failed),
+  /** The data source form's hint for a local Host with AWS SSM, or undefined (qurry_shared::errors::ssm_local_host, the TUI's words) */
+  ssmLocalHost: (host: string): string | undefined => wasm.ssmLocalHost(host),
   /** The connect error is one where "Allow unencrypted connection" for the source is the way forward (qurry_shared::errors::tls_opt_in) */
   tlsOptIn: (msg: string): boolean => wasm.tlsOptIn(msg),
   isRead: (sql: string, kind: DbKind): boolean => wasm.isRead(sql, kind),

@@ -306,8 +306,11 @@ pub async fn connect_config(
     ssh_secret: Option<&str>,
 ) -> AppResult<(Pool, Option<crate::tunnel::Tunnel>)> {
     let tunnel = open_tunnel(cfg, ssh_secret).await?;
-    let pool = db::connect_via(cfg, password, tunnel.as_ref().map(|t| t.local_port)).await?;
-    Ok((pool, tunnel))
+    let mark = tunnel.as_ref().and_then(|t| t.ssm_mark());
+    match db::connect_via(cfg, password, tunnel.as_ref().map(|t| t.local_port)).await {
+        Ok(pool) => Ok((pool, tunnel)),
+        Err(e) => Err(crate::ssm::connect_error(mark, &cfg.host, cfg.port, e).await),
+    }
 }
 
 async fn open_tunnel(cfg: &ConnectionConfig, ssh_secret: Option<&str>) -> AppResult<Option<crate::tunnel::Tunnel>> {
@@ -438,8 +441,12 @@ pub async fn ensure_pool(state: &AppState, id: &str) -> AppResult<Pool> {
     } else {
         (None, c.generation.load(SeqCst))
     };
+    let mark = state.tunnels.read().await.get(base).and_then(|t| t.ssm_mark());
     // Each database connects on its own: one that is missing or refused fails only for its caller, not for the whole source
-    let pool = connect_pool(&cfg, password.as_deref(), port).await?;
+    let pool = match connect_pool(&cfg, password.as_deref(), port).await {
+        Ok(p) => p,
+        Err(e) => return Err(crate::ssm::connect_error(mark, &cfg.host, cfg.port, e).await),
+    };
     keep_pool(state, &c, g, id, port, pool).await
 }
 
