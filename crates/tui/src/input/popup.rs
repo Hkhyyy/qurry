@@ -3,7 +3,7 @@ use super::*;
 /// A yes pressed during a quiet confirm's pause (TLS_ASK_GRACE) doesn't count: say so instead of ignoring it
 const TOO_SOON: &str = "Wait a moment, then answer (n / Esc cancels)";
 
-fn popup_key(app: &mut App, k: KeyEvent) {
+pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
     if matches!(app.popup, Some(Popup::Find(_))) {
         return crate::find::key(app, k);
     }

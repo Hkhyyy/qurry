@@ -14,6 +14,16 @@ mod popup;
 mod redis;
 mod tree;
 
+pub use clipboard::copy;
+use editor::editor_key;
+use form::{save_form, test_form};
+use grid::{grid_key, nav};
+pub use mouse::drop_target;
+use mouse::{hscroll_at, mouse_down, mouse_drag, mouse_up, over_hbar, scroll_at};
+use popup::popup_key;
+use redis::redis_key;
+use tree::tree_key;
+
 pub fn on_event(app: &mut App, ev: Event) {
     // Under the 'terminal too small' message only the quit key acts (an unseen confirm could be answered, an unseen grid scrolled),
     // and only when nothing needs an answer first (the message says what waits for a larger window)

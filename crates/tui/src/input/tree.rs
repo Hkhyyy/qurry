@@ -1,6 +1,6 @@
 use super::*;
 
-fn tree_key(app: &mut App, k: KeyEvent) {
+pub(super) fn tree_key(app: &mut App, k: KeyEvent) {
     let Some(k) = plain(k) else { return };
     let n = app.tree.visible().len();
     // Typing a speed search

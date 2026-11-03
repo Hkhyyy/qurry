@@ -1,6 +1,6 @@
 use super::*;
 
-fn editor_key(app: &mut App, k: KeyEvent) {
+pub(super) fn editor_key(app: &mut App, k: KeyEvent) {
     let Some(TabKind::Console(c)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind) else {
         app.focus = Focus::Grid;
         return grid_key(app, k);

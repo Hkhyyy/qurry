@@ -1,7 +1,7 @@
 use super::*;
 
 /// ⌃t: Test Connection in the background. The form shows the elapsed time; Esc or ⌃t cancels it
-fn test_form(app: &mut App, form: &mut crate::app::ConnForm) {
+pub(super) fn test_form(app: &mut App, form: &mut crate::app::ConnForm) {
     let (cfg, pw, ssh) = match App::form_config(form) {
         Ok(x) => x,
         Err(e) => return form.message = Some((false, e)),
@@ -38,7 +38,7 @@ fn test_form(app: &mut App, form: &mut crate::app::ConnForm) {
     form.testing = Some((started, h));
 }
 
-fn save_form(app: &mut App, mut form: crate::app::ConnForm) {
+pub(super) fn save_form(app: &mut App, mut form: crate::app::ConnForm) {
     // A test still running is for the settings being saved now: stop it (and its tunnel)
     if let Some((_, h)) = form.testing.take() {
         h.abort();

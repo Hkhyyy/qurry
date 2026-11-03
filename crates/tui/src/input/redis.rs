@@ -1,6 +1,6 @@
 use super::*;
 
-fn redis_key(app: &mut App, id: u64, k: KeyEvent) {
+pub(super) fn redis_key(app: &mut App, id: u64, k: KeyEvent) {
     let Some(TabKind::Redis(r)) = app.tab_mut(id).map(|t| &mut t.kind) else { return };
     let cur_key = r.detail.as_ref().map(|d| d.0.clone());
     let cur_ty = r.detail.as_ref().map(|d| d.1.ty.clone()).unwrap_or_default();

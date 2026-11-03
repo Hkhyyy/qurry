@@ -5,7 +5,7 @@ fn inside(r: Rect, x: u16, y: u16) -> bool {
 }
 
 /// Mouse wheel: scroll the area under the pointer
-fn scroll_at(app: &mut App, x: u16, y: u16, d: isize) {
+pub(super) fn scroll_at(app: &mut App, x: u16, y: u16, d: isize) {
     if app.popup.is_some() {
         return;
     }
@@ -44,7 +44,7 @@ fn scroll_at(app: &mut App, x: u16, y: u16, d: isize) {
 }
 
 /// Horizontal scroll (trackpad left/right·Shift+wheel): shifts the tree sideways, moves the grid by columns
-fn hscroll_at(app: &mut App, x: u16, y: u16, d: isize) {
+pub(super) fn hscroll_at(app: &mut App, x: u16, y: u16, d: isize) {
     if app.popup.is_some() {
         return;
     }
@@ -58,7 +58,7 @@ fn hscroll_at(app: &mut App, x: u16, y: u16, d: isize) {
 }
 
 /// Whether the pointer is over the grid header or the horizontal scrollbar
-fn over_hbar(app: &mut App, x: u16, y: u16) -> bool {
+pub(super) fn over_hbar(app: &mut App, x: u16, y: u16) -> bool {
     app.popup.is_none() && app.grid_mut().is_some_and(|g| inside(g.header, x, y) || inside(g.hbar, x, y))
 }
 
@@ -87,7 +87,7 @@ pub fn drop_target(app: &App, id: u64, x: u16, y: u16) -> Option<DropTarget> {
     None
 }
 
-fn mouse_down(app: &mut App, x: u16, y: u16) {
+pub(super) fn mouse_down(app: &mut App, x: u16, y: u16) {
     if app.popup.is_none() {
         if let Some(&(i, _)) = app.hits.workspaces.iter().find(|w| inside(w.1, x, y)) {
             return app.ws_switch(i);
@@ -138,7 +138,7 @@ fn mouse_down(app: &mut App, x: u16, y: u16) {
     click(app, x, y);
 }
 
-fn mouse_drag(app: &mut App, x: u16, y: u16) {
+pub(super) fn mouse_drag(app: &mut App, x: u16, y: u16) {
     match app.drag {
         Some(Drag::Console) => {
             let c = app.hits.console;
@@ -220,7 +220,7 @@ fn editor_pos(app: &App, x: u16, y: u16) -> Option<(usize, usize)> {
     Some((r, n))
 }
 
-fn mouse_up(app: &mut App, x: u16, y: u16) {
+pub(super) fn mouse_up(app: &mut App, x: u16, y: u16) {
     if let Some(Drag::Tab { id, moved: true }) = app.drag {
         app.status.clear();
         if let Some(t) = drop_target(app, id, x, y) {

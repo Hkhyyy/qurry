@@ -1,6 +1,6 @@
 use super::*;
 
-fn grid_key(app: &mut App, k: KeyEvent) {
+pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
     // Esc: if there's a selection, clear just that first
     if k.code == KeyCode::Esc {
         if let Some(g) = app.grid_mut().filter(|g| g.anchor.is_some()) {
@@ -119,7 +119,7 @@ fn grid_key(app: &mut App, k: KeyEvent) {
 }
 
 /// Grid navigation
-fn nav(app: &mut App, k: KeyEvent) {
+pub(super) fn nav(app: &mut App, k: KeyEvent) {
     let Some(g) = app.grid_mut() else { return };
     let page = g.page as isize;
     let shift = k.modifiers.contains(KeyModifiers::SHIFT);
