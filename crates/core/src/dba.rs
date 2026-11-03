@@ -812,12 +812,14 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn mysql_kill_falls_back_to_rds_kill() {
-        let Some((c, pass)) = cfg(DbKind::Mysql) else { return };
-        let root = sqlx::mysql::MySqlPoolOptions::new().max_connections(1).connect(&format!("mysql://{}:{}@{}:{}/{}", c.user, pass.clone().unwrap(), c.host, c.port, c.database)).await.unwrap();
-        let victim = sqlx::mysql::MySqlPoolOptions::new().max_connections(1).connect(&format!("mysql://{}:{}@{}:{}/{}", c.user, pass.unwrap(), c.host, c.port, c.database)).await.unwrap();
-        let vid: u64 = sqlx::query_scalar("SELECT CONNECTION_ID()").fetch_one(&victim).await.unwrap();
-        let mariadb = sqlx::query_scalar::<_, String>("SELECT VERSION()").fetch_one(&root).await.unwrap().to_lowercase().contains("mariadb");
-        sqlx::raw_sql("DROP USER IF EXISTS 'qurry_dba_kill'@'%'; CREATE USER 'qurry_dba_kill'@'%' IDENTIFIED BY 'pw'").execute(&root).await.unwrap();
+        let Some(server) = crate::testenv::my() else { return };
+        // Connected the way the app connects (testenv::my_conn: MySQL 5.7's TLS doesn't agree with rustls)
+        let mut root = crate::testenv::my_conn(&server).await;
+        let mut victim = crate::testenv::my_conn(&server).await;
+        let c = crate::store::ConnectionConfig { id: "d".into(), ..server.cfg };
+        let vid: u64 = sqlx::query_scalar("SELECT CONNECTION_ID()").fetch_one(&mut victim).await.unwrap();
+        let mariadb = sqlx::query_scalar::<_, String>("SELECT VERSION()").fetch_one(&mut root).await.unwrap().to_lowercase().contains("mariadb");
+        sqlx::raw_sql("DROP USER IF EXISTS 'qurry_dba_kill'@'%'; CREATE USER 'qurry_dba_kill'@'%' IDENTIFIED BY 'pw'").execute(&mut root).await.unwrap();
         let dir = std::env::temp_dir().join(format!("qurry-dba-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir)).unwrap();
         st.save_connection(crate::store::ConnectionConfig { user: "qurry_dba_kill".into(), database: String::new(), ..c }, Some("pw".into()), None).await.unwrap();
@@ -830,17 +832,17 @@ mod tests {
                  CREATE OR REPLACE PROCEDURE mysql.rds_kill_query(IN thread BIGINT) SQL SECURITY DEFINER KILL QUERY thread;
                  GRANT EXECUTE ON PROCEDURE mysql.rds_kill TO 'qurry_dba_kill'@'%'; GRANT EXECUTE ON PROCEDURE mysql.rds_kill_query TO 'qurry_dba_kill'@'%'",
             )
-            .execute(&root)
+            .execute(&mut root)
             .await
             .unwrap();
             assert!(st.kill_session("d".into(), vid as i64, false).await.unwrap());
             assert!(st.kill_session("d".into(), vid as i64, true).await.unwrap());
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE ID = ?").bind(vid).fetch_one(&root).await.unwrap();
+            let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE ID = ?").bind(vid).fetch_one(&mut root).await.unwrap();
             assert_eq!(left, 0, "victim connection was killed");
-            sqlx::raw_sql("DROP PROCEDURE mysql.rds_kill; DROP PROCEDURE mysql.rds_kill_query").execute(&root).await.ok();
+            sqlx::raw_sql("DROP PROCEDURE mysql.rds_kill; DROP PROCEDURE mysql.rds_kill_query").execute(&mut root).await.ok();
         }
-        sqlx::raw_sql("DROP USER IF EXISTS 'qurry_dba_kill'@'%'").execute(&root).await.ok();
+        sqlx::raw_sql("DROP USER IF EXISTS 'qurry_dba_kill'@'%'").execute(&mut root).await.ok();
     }
 
     /// PROD safeguard: count the rows to change in advance (without changing them)

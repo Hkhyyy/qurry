@@ -36,10 +36,11 @@ mod tests {
         assert!(!is_read(my, DbKind::Mysql) && !is_read(pg, DbKind::Postgres) && !is_read(ansi, DbKind::Mysql));
         let fixture = "create table stmt_kind_exec.t (a int); insert into stmt_kind_exec.t values (1), (2), (3)";
         let count = "select count(*) from stmt_kind_exec.t";
-        if let Ok(e) = std::env::var("QURRY_TEST_MY") {
-            let p: Vec<&str> = e.split(':').collect();
-            let mut c = sqlx::MySqlConnection::connect(&format!("mysql://{}:{}@{}:{}/{}", p[2], p[3], p[0], p[1], p[4])).await.unwrap();
-            for (mode, sql) in [("NO_BACKSLASH_ESCAPES", my), ("ANSI_QUOTES", ansi)] {
+        if let Some(s) = crate::testenv::my() {
+            let mut c = crate::testenv::my_conn(&s).await;
+            // WITH … DELETE is MySQL 8.0 syntax: an older server refuses the statement, so there is nothing that deletes to show
+            let modes = if crate::testenv::mysql_older_than(&mut c, [8, 0, 0]).await { vec![] } else { vec![("NO_BACKSLASH_ESCAPES", my), ("ANSI_QUOTES", ansi)] };
+            for (mode, sql) in modes {
                 sqlx::raw_sql("set session sql_mode = default; drop database if exists stmt_kind_exec; create database stmt_kind_exec").execute(&mut c).await.unwrap();
                 sqlx::raw_sql(fixture).execute(&mut c).await.unwrap();
                 sqlx::raw_sql(&format!("set session sql_mode = '{mode}'")).execute(&mut c).await.unwrap();
@@ -112,9 +113,8 @@ mod tests {
             sqlx::raw_sql("drop schema run4_guard_fixes cascade").execute(&mut c).await.unwrap();
             assert_eq!(n, 0, "PostgreSQL didn't run the DO body");
         }
-        if let Ok(e) = std::env::var("QURRY_TEST_MY") {
-            let p: Vec<&str> = e.split(':').collect();
-            let mut c = sqlx::MySqlConnection::connect(&format!("mysql://{}:{}@{}:{}/{}", p[2], p[3], p[0], p[1], p[4])).await.unwrap();
+        if let Some(s) = crate::testenv::my() {
+            let mut c = crate::testenv::my_conn(&s).await;
             sqlx::raw_sql("drop database if exists run4_guard_fixes; create database run4_guard_fixes").execute(&mut c).await.unwrap();
             sqlx::raw_sql(fixture).execute(&mut c).await.unwrap();
             sqlx::raw_sql(my).execute(&mut c).await.unwrap();
@@ -189,9 +189,12 @@ mod tests {
             sqlx::raw_sql("drop schema run4_guard_fixes_multi cascade").execute(&mut c).await.unwrap();
             assert_eq!(n, 0, "PostgreSQL: the COMMIT didn't keep the DELETE");
         }
-        if let Ok(e) = std::env::var("QURRY_TEST_MY") {
-            let p: Vec<&str> = e.split(':').collect();
-            let mut c = sqlx::MySqlConnection::connect(&format!("mysql://{}:{}@{}:{}/{}", p[2], p[3], p[0], p[1], p[4])).await.unwrap();
+        if let Some(s) = crate::testenv::my() {
+            let mut c = crate::testenv::my_conn(&s).await;
+            // EXPLAIN ANALYZE is MySQL 8.0.18+: an older server refuses the statement before running any of it
+            if crate::testenv::mysql_older_than(&mut c, [8, 0, 18]).await {
+                return;
+            }
             sqlx::raw_sql("drop database if exists run4_guard_fixes_multi; create database run4_guard_fixes_multi").execute(&mut c).await.unwrap();
             sqlx::raw_sql(fixture).execute(&mut c).await.unwrap();
             sqlx::raw_sql(&format!("begin; explain analyze {my}")).execute(&mut c).await.unwrap();
