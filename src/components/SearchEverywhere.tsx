@@ -2,8 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ConnectionView, dbVisible, meta, targetId } from "../lib/api";
 import { fuzzyScore } from "../lib/fuzzy";
 import { useSharedReady } from "../lib/shared";
+import { cmd, eventSpec, hit } from "../lib/shortcuts";
 import { ColumnIcon, RoutineIcon, SchemaIcon, SequenceIcon, TableIcon, ViewIcon } from "../ui/icons";
 import { Kbd, KeyHints, List, ListGroup, ListItem, Notice, Overlay, Popover, Row, SearchField, Select, Spacer, Tabs } from "../ui";
+
+/** First key of a command, for the key hints */
+const sk = (id: string) => cmd(id).shortcut;
 
 export type SeTab = "all" | "database" | "files" | "symbols" | "actions";
 const TABS: { id: SeTab; label: string }[] = [
@@ -35,6 +39,8 @@ export interface FileItem {
   open: boolean;
 }
 export interface ActionItem {
+  /** The keymap command it runs (lib/shortcuts.ts): its key runs it too */
+  id?: string;
   name: string;
   shortcut?: string;
   group?: string;
@@ -262,15 +268,17 @@ export function SearchEverywhere(p: Props) {
     };
     if (e.key === "Escape") return go(p.onClose);
     if (e.key === "Tab") return go(() => setTab(TABS[(TABS.findIndex((t) => t.id === tab) + (e.shiftKey ? -1 : 1) + TABS.length) % TABS.length].id));
+    // The Database Explorer's keys act on the selected result (DataGrip): Edit Data, Go to DDL, Quick Documentation, Select In
+    const spec = eventSpec(e);
+    if (hit(spec, "tree.editData")) return go(() => run(cur, "data"));
+    if (hit(spec, "tree.ddl")) return go(() => run(cur, "ddl"));
+    if (hit(spec, "selectIn")) return go(() => run(cur, "select"));
+    if (hit(spec, "tree.quickDoc")) return go(() => run(cur, "doc"));
     if (e.key === "ArrowDown" && !mod) return go(() => setSel((x) => Math.min(x + 1, rows.length - 1)));
     if (e.key === "ArrowUp") return go(() => setSel((x) => Math.max(x - 1, 0)));
     if (e.key === "PageDown") return go(() => setSel((x) => Math.min(x + 10, rows.length - 1)));
     if (e.key === "PageUp") return go(() => setSel((x) => Math.max(x - 10, 0)));
-    if (e.key === "ArrowDown" && mod) return go(() => run(cur, "data"));
     if (e.key === "Enter") return go(() => run(cur));
-    if (mod && e.key.toLowerCase() === "b") return go(() => run(cur, "ddl"));
-    if (e.key === "F1" && e.altKey) return go(() => run(cur, "select"));
-    if (e.key === "F1") return go(() => run(cur, "doc"));
   };
 
   /** One result row: icon · name · description ……… right side (shortcut · location) */
@@ -323,7 +331,7 @@ export function SearchEverywhere(p: Props) {
           <KeyHints
             items={
               cur?.t === "db"
-                ? [["↩", "Select in Database Explorer"], ["⌘↓", "Edit Data"], ["⌘b", "Go to DDL"], ["F1", "Quick Documentation"], ["⇥", "Next tab"]]
+                ? ([["↩", "Select in Database Explorer"], [sk("tree.editData"), "Edit Data"], [sk("tree.ddl"), "Go to DDL"], [sk("tree.quickDoc"), "Quick Documentation"], ["⇥", "Next tab"]].filter((h): h is [string, string] => !!h[0]))
                 : [["↩", "Open"], ["⇥", "Next tab"], ["⇧⇧", "Search Everywhere"]]
             }
           />

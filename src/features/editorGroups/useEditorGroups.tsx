@@ -18,6 +18,7 @@ import { Spacer, TabItem, TabStrip, Text, ToolButton, Toolbar } from "../../ui";
 import type { useConsole } from "../console/useConsole";
 import type { useExplorer } from "../explorer/useExplorer";
 import type { useJobs } from "../jobs/useJobs";
+import { cmd } from "../../lib/shortcuts";
 import { isMac, sk } from "../shortcuts/labels";
 import { closeTabs, moveTo, patch, settle, sqlOf, togglePin } from "../tabs/ops";
 import { editorApis, liveSql, setActiveIds, setFocused, setPanes, setTabs, useTabsStore } from "../tabs/store";
@@ -132,10 +133,8 @@ export function useEditorGroups({
     else addTab(c, t.kind, { title: t.kind === "console" ? `${t.title} (copy)` : t.title, sql: sqlOf(t), database: t.database, group: r.g });
   };
 
-  const openTabMenu = (e: React.MouseEvent, t: Tab) => {
-    e.preventDefault();
-    e.stopPropagation();
-    activate(t);
+  /** The tab's context menu. The global key handler runs a command's entry for the active tab by its id */
+  const tabMenu = (t: Tab): MenuItem[] => {
     const sameGroup = tabs.filter((x) => x.group === t.group);
     const idx = sameGroup.findIndex((x) => x.id === t.id);
     const ls = leaves(panes);
@@ -143,32 +142,32 @@ export function useEditorGroups({
     const canSplit = ls.length < MAX_PANES;
     const c = conns.find((x) => x.id === t.connId);
     const items: MenuItem[] = [
-      { label: "Close", shortcut: sk("tab.close"), action: () => closeTabs([t.id]) },
-      { label: "Close Other Tabs", action: () => closeTabs(sameGroup.filter((x) => x.id !== t.id && !x.pinned).map((x) => x.id)) },
-      { label: "Close All but Pinned", action: () => closeTabs(sameGroup.filter((x) => !x.pinned).map((x) => x.id)) },
-      { label: "Close Tabs to the Left", action: () => closeTabs(sameGroup.slice(0, idx).filter((x) => !x.pinned).map((x) => x.id)), disabled: idx === 0 },
-      { label: "Close Tabs to the Right", action: () => closeTabs(sameGroup.slice(idx + 1).filter((x) => !x.pinned).map((x) => x.id)), disabled: idx === sameGroup.length - 1 },
-      { label: "Close All Tabs", action: () => closeTabs(sameGroup.map((x) => x.id)) },
-      { label: "Reopen Closed Tab", action: reopenClosed, disabled: useTabsStore.getState().closedStack.length === 0 },
+      { label: "Close", ...cmd("tab.close"), action: () => closeTabs([t.id]) },
+      { label: "Close Other Tabs", ...cmd("tab.closeOthers"), action: () => closeTabs(sameGroup.filter((x) => x.id !== t.id && !x.pinned).map((x) => x.id)) },
+      { label: "Close All but Pinned", ...cmd("tab.closeAllButPinned"), action: () => closeTabs(sameGroup.filter((x) => !x.pinned).map((x) => x.id)) },
+      { label: "Close Tabs to the Left", ...cmd("tab.closeLeft"), action: () => closeTabs(sameGroup.slice(0, idx).filter((x) => !x.pinned).map((x) => x.id)), disabled: idx === 0 },
+      { label: "Close Tabs to the Right", ...cmd("tab.closeRight"), action: () => closeTabs(sameGroup.slice(idx + 1).filter((x) => !x.pinned).map((x) => x.id)), disabled: idx === sameGroup.length - 1 },
+      { label: "Close All Tabs", ...cmd("tab.closeAll"), action: () => closeTabs(sameGroup.map((x) => x.id)) },
+      { label: "Reopen Closed Tab", ...cmd("tab.reopen"), action: reopenClosed, disabled: useTabsStore.getState().closedStack.length === 0 },
       { separator: true },
-      { label: t.pinned ? "Unpin Tab" : "Pin Tab", action: () => togglePin(t) },
+      { label: t.pinned ? "Unpin Tab" : "Pin Tab", ...cmd("tab.pin"), action: () => togglePin(t) },
       {
         label: "Copy Path/Reference…",
         submenu: [
-          { label: "Copy Reference", action: () => navigator.clipboard.writeText(t.edit ? `${t.edit.schema}.${t.edit.table}` : t.title) },
-          ...(c ? ([{ label: "Copy Data Source Name", action: () => navigator.clipboard.writeText(c.name) }] as MenuItem[]) : []),
+          { label: "Copy Reference", ...cmd("tab.copyRef"), action: () => navigator.clipboard.writeText(t.edit ? `${t.edit.schema}.${t.edit.table}` : t.title) },
+          ...(c ? ([{ label: "Copy Data Source Name", ...cmd("tab.copyConnName"), action: () => navigator.clipboard.writeText(c.name) }] as MenuItem[]) : []),
         ],
       },
       { separator: true },
-      { label: "Split Right", action: () => splitClone(t, "right"), disabled: !canSplit },
-      { label: "Split Down", action: () => splitClone(t, "down"), disabled: !canSplit },
-      { label: "Split and Move Right", action: () => splitAndMove(t, "right"), disabled: !canSplit || sameGroup.length < 2 },
-      { label: "Split and Move Down", action: () => splitAndMove(t, "down"), disabled: !canSplit || sameGroup.length < 2 },
+      { label: "Split Right", ...cmd("split.right"), action: () => splitClone(t, "right"), disabled: !canSplit },
+      { label: "Split Down", ...cmd("split.down"), action: () => splitClone(t, "down"), disabled: !canSplit },
+      { label: "Split and Move Right", ...cmd("split.moveRight"), action: () => splitAndMove(t, "right"), disabled: !canSplit || sameGroup.length < 2 },
+      { label: "Split and Move Down", ...cmd("split.moveDown"), action: () => splitAndMove(t, "down"), disabled: !canSplit || sameGroup.length < 2 },
       ...(split
         ? ([
-            { label: "Move To Next Group", action: () => moveTo(t.id, other) },
-            { label: "Open In Next Group", action: () => { const cc = c; if (!cc) return; if (t.kind === "table" && t.edit) openTableTab(cc, t.edit.schema, t.edit.table, t.database, other, t.where, t.orderBy); else addTab(cc, t.kind, { title: t.title, sql: sqlOf(t), database: t.database, group: other }); } },
-            { label: "Unsplit All", action: unsplit },
+            { label: "Move To Next Group", ...cmd("tab.moveNext"), action: () => moveTo(t.id, other) },
+            { label: "Open In Next Group", ...cmd("tab.openNext"), action: () => { const cc = c; if (!cc) return; if (t.kind === "table" && t.edit) openTableTab(cc, t.edit.schema, t.edit.table, t.database, other, t.where, t.orderBy); else addTab(cc, t.kind, { title: t.title, sql: sqlOf(t), database: t.database, group: other }); } },
+            { label: "Unsplit All", ...cmd("unsplit"), action: unsplit },
           ] as MenuItem[])
         : []),
       { separator: true },
@@ -179,6 +178,7 @@ export function useEditorGroups({
           ...(workspaces.length > 1 ? ([{ separator: true }] as MenuItem[]) : []),
           {
             label: "New Workspace…",
+            ...cmd("tab.moveToNewWs"),
             action: async () => {
               const name = (await askText("Workspace name", `Workspace ${useWorkspacesStore.getState().workspaces.length + 1}`));
               if (!name?.trim()) return;
@@ -193,10 +193,17 @@ export function useEditorGroups({
     if (t.kind === "console" && c)
       items.push(
         { separator: true },
-        { label: "Duplicate", action: () => addTab(c, "console", { title: `${t.title} (copy)`, sql: sqlOf(t), database: t.database, group: t.group }) },
-        { label: "Rename File…", shortcut: "⇧F6", action: () => renameConsole(t) },
+        { label: "Duplicate", ...cmd("tab.duplicate"), action: () => addTab(c, "console", { title: `${t.title} (copy)`, sql: sqlOf(t), database: t.database, group: t.group }) },
+        { label: "Rename File…", ...cmd("console.rename"), action: () => renameConsole(t) },
       );
-    setTabMenu({ x: e.clientX, y: e.clientY, items });
+    return items;
+  };
+
+  const openTabMenu = (e: React.MouseEvent, t: Tab) => {
+    e.preventDefault();
+    e.stopPropagation();
+    activate(t);
+    setTabMenu({ x: e.clientX, y: e.clientY, items: tabMenu(t) });
   };
 
   const renameConsole = async (t: Tab) => {
@@ -549,5 +556,5 @@ export function useEditorGroups({
       </div>
     );
   };
-  return { renderPanes, splitClone, unsplit, reopen, reopenClosed, renameConsole };
+  return { renderPanes, splitClone, unsplit, reopen, reopenClosed, renameConsole, tabMenu };
 }

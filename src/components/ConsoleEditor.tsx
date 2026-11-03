@@ -138,8 +138,8 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
           registered.forEach((d) => d.dispose());
           registered = [];
           registered.push(ed.addAction({ id: "dbtool.run", label: "Execute", keybindings: keysOf("editor.run"), contextMenuGroupId: "navigation", contextMenuOrder: 0, run: () => run() }));
-          registered.push(ed.addAction({ id: "dbtool.explain", label: "Explain Plan", contextMenuGroupId: "navigation", contextMenuOrder: 1, run: () => run("plan") }));
-          registered.push(ed.addAction({ id: "dbtool.explainAnalyse", label: "Explain Analyse", contextMenuGroupId: "navigation", contextMenuOrder: 2, run: () => run("analyze") }));
+          registered.push(ed.addAction({ id: "dbtool.explain", label: "Explain Plan", keybindings: keysOf("editor.explain"), contextMenuGroupId: "navigation", contextMenuOrder: 1, run: () => run("plan") }));
+          registered.push(ed.addAction({ id: "dbtool.explainAnalyse", label: "Explain Analyse", keybindings: keysOf("editor.explainAnalyze"), contextMenuGroupId: "navigation", contextMenuOrder: 2, run: () => run("analyze") }));
           act("dbtool.reformat", "Reformat Code", "editor.reformat", () => {
             const m = ed.getModel();
             if (!m) return;

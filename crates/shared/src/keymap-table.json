@@ -106,6 +106,7 @@
   {"gui": "result.pin", "title": "Pin / Unpin Result Tab", "scope": "editor"},
   {"gui": "result.close", "title": "Close Result Tab", "scope": "editor"},
   {"gui": "result.closeUnpinned", "title": "Close All Unpinned Result Tabs", "scope": "editor"},
+  {"gui": "output.clear", "title": "Clear Output", "scope": "editor"},
   {"gui": "editor.reformat", "title": "Reformat Code", "guiDesc": "Reformat code", "scope": "editor", "guiKeys": ["Mod+Alt+L"]},
   {"gui": "editor.blockComment", "title": "Comment with Block Comment", "guiDesc": "Block comment", "scope": "editor", "guiKeys": ["Mod+Alt+/"]},
   {"gui": "editor.duplicate", "title": "Duplicate Line or Selection", "guiDesc": "Duplicate line", "scope": "editor", "guiKeys": ["Mod+D"]},

@@ -174,8 +174,9 @@ const api = {
   shortNumber: (n: number): string => wasm.shortNumber(n),
   keyLabel: (s: string): string => wasm.keyLabel(s),
   formatSpec: (spec: string, mac: boolean): string => wasm.formatSpec(spec, mac),
-  // bindable and keyConflicts: shortcuts.ts has TS copies (the keymap editor works without the module); these check them in tests
+  // bindable, bindableIn and keyConflicts: shortcuts.ts has TS copies (the keymap editor works without the module); these check them in tests
   bindable: (spec: string): boolean => wasm.bindable(spec),
+  bindableIn: (spec: string, scope: string): boolean => wasm.bindableIn(spec, scope),
   /** Ids of the other commands using `spec` in a scope overlapping `scope` */
   keyConflicts: (id: string, scope: string, spec: string, bound: { id: string; scope: string; keys: string[] }[]): string[] => wasm.keyConflicts(id, scope, spec, bound),
 };

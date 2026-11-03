@@ -10,12 +10,20 @@
 ⇧⌘/	Keymap Reference (this window)
 ## In search results (Search Everywhere / Go to)
 ↩	Select in Database Explorer
-⌘↓	Edit data (open table)
+⌘↓ / F4	Edit data (table) / open console (data source; Redis: key browser)
 ⌘b	Go to DDL
 F1	Quick documentation
-⌥F1	Select in Database Explorer
+⌥F1	Select in Database Explorer (the open table; in search results the selected object)
 ## Tool windows & appearance
-⌘1…⌘9	Switch to workspace 1…9
+⌘1	Workspace 1
+⌘2	Workspace 2
+⌘3	Workspace 3
+⌘4	Workspace 4
+⌘5	Workspace 5
+⌘6	Workspace 6
+⌘7	Workspace 7
+⌘8	Workspace 8
+⌘9	Workspace 9
 ⌘0	Database Explorer (focus / hide)
 ⇧⌘F	Find tool window (Full-text Search results)
 ⇧⎋	Hide active tool window
@@ -30,7 +38,7 @@ F1	Quick documentation
 ⇧⌘T	Reopen closed tab
 ⇧⌘]	Next tab
 ⇧⌘[	Previous tab
-⇧F6	Rename console
+⇧F6	Rename console (same as Rename File… in the tab menu)
 ⌥⇥ / ⌥⇧⇥	Go to the next split (⇧ previous)
 right-click tab	Pin, Split Right/Down (up to 4 panes), Move to Next Group, Close others…
 drag tab	Reorder, or drop on a pane's right/bottom edge to split it (up to 4)
@@ -76,22 +84,111 @@ type letters	Speed search in the tree
 ⌘r	Replace in editor ($1 groups with regex)
 ## Data grid (results & table editor)
 ↩ / F2	Edit cell
-⇧↩	Open value editor
+⇧↩	Open in Value Editor
 ⌥⌘n	Set NULL
 ⌥⌘d	Set DEFAULT
-⌘n	Add row
-⌘d	Clone row
-⌘⌫	Delete rows
-⌥⌘z	Revert selected changes
-⌘↩	Submit changes
+⌘n	Add Row
+⌘d	Clone Row
+⌘⌫	Delete Row
+⌥⌘z	Revert Selected
+⌘↩	Submit Changes
 ⌘c / ⌘v	Copy (with chosen extractor; CSV / TSV copy values only — right-click › Copy with Headers adds the column names) / paste
 ⌘a	Select all
-⌘f	Find in grid
-⌘r	Reload
-⌘F2	Cancel
+⌘f	Find on Current Page
+⌘r	Reload Page
+⌘F2	Cancel Running Statements
+⌘b	Go to DDL
 click header · ⌥ click	Sort · add to multi-column sort
 ## Query history & Redis browser
 ⌦ / ⌘⌫	Delete the selected history entry
 ⌘r	Redis: scan keys again
 ⌘s	Redis: save the value being edited
 ⌃l	Redis terminal: clear
+## Other actions (menus, toolbars, Find Action — give them a key in Settings › Keymap)
+—	Edit Keymap…
+—	Export Data Sources…
+—	Import Data Sources…
+—	Theme: Dark
+—	Theme: Light
+—	Theme: High Contrast
+—	Theme: Sync with OS
+—	Reset Editor Font Size
+—	Force Refresh
+—	Collapse All
+—	Show System Schemas
+—	New Materialized View…
+—	Generate SELECT Statement
+—	Generate INSERT Statement
+—	Generate UPDATE Statement
+—	Generate DELETE Statement
+—	Truncate…
+—	Export Table Data…
+—	Import Data into New Table…
+—	Sessions & Locks
+—	Slow Queries
+—	Table Sizes & Indexes
+—	Server Overview
+—	Users & Privileges
+—	Compare & Migrate…
+—	Close Other Tabs
+—	Close All but Pinned
+—	Close Tabs to the Left
+—	Close Tabs to the Right
+—	Close All Tabs
+—	Pin / Unpin Tab
+—	Copy Tab Reference
+—	Copy Data Source Name
+—	Split and Move Right
+—	Split and Move Down
+—	Move Tab to Next Group
+—	Open Tab in Next Group
+—	Move Tab to New Workspace…
+—	Duplicate Console
+—	New Workspace…
+—	Rename Workspace…
+—	Split Right
+—	Split Down
+—	Explain Plan
+—	Transaction Mode: Manual
+—	Transaction Mode: Auto
+—	Pin / Unpin Result Tab
+—	Close Result Tab
+—	Close All Unpinned Result Tabs
+—	Clear Output
+—	Generate UUID
+—	Copy with Headers
+—	Preview Pending Changes
+—	View as Table
+—	View as Transposed Table
+—	View as Chart
+—	Show Filter
+—	Sort via ORDER BY
+—	Reset View
+—	View Query
+—	Copy Query to Console
+—	Copy Query to Clipboard
+—	Commit
+—	Roll Back
+—	Explain Analyse
+—	Export Data…
+—	Copy as IN List
+—	AI Search (RAG)…
+—	AI Search (RAG) — Index This Table…
+—	Delete Workspace…
+—	Remove Data Source from This Workspace
+—	Production Log…
+—	Snippets…
+—	Save Query as Snippet…
+—	Show Diagram (ERD)
+—	Back Up Database…
+—	Restore Database…
+—	Import Data from File…
+—	Generate Test Data…
+—	New Table…
+—	New View…
+—	New Schema…
+—	New Database…
+—	New Sequence…
+—	Copy Related Rows To…
+—	Manage Shown Schemas…
+—	Unsplit All

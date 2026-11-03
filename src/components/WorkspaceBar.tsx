@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { cmd, keyTitle } from "../lib/shortcuts";
 import { initials } from "../lib/workspace";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { IconButton, RailItem } from "../ui";
@@ -40,14 +41,14 @@ export function WorkspaceBar(p: {
               x: e.clientX,
               y: e.clientY,
               items: [
-                { label: "Rename…", action: () => p.onRename(w.id) },
-                { label: "Delete Workspace…", danger: true, action: () => p.onDelete(w.id), disabled: p.list.length < 2 },
+                { label: "Rename…", ...cmd("ws.rename"), action: () => p.onRename(w.id) },
+                { label: "Delete Workspace…", ...cmd("ws.delete"), danger: true, action: () => p.onDelete(w.id), disabled: p.list.length < 2 },
               ],
             });
           }}
         />
       ))}
-      <IconButton className="ws-add" title="New Workspace" onClick={p.onNew}>
+      <IconButton className="ws-add" title={keyTitle("New Workspace", "ws.new")} onClick={p.onNew}>
         {/* The '+' glyph isn't centered because of the font baseline */}
         <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
           <path d="M6 1v10M1 6h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />

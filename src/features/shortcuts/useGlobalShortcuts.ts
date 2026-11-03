@@ -1,7 +1,7 @@
 import { useEffect, useRef, type Dispatch, type SetStateAction } from "react";
 import type { ConnectionView } from "../../lib/api";
 import { leaves } from "../../lib/panes";
-import { eventSpec, hit } from "../../lib/shortcuts";
+import { eventSpec, hit, runKey } from "../../lib/shortcuts";
 import type { NodeInfo } from "../../components/SchemaTree";
 import type { useConnActions } from "../conns/useConnActions";
 import type { useConsole } from "../console/useConsole";
@@ -35,23 +35,23 @@ type Deps = {
   ReturnType<typeof useEditorGroups> &
   ReturnType<typeof useSearch>;
 
-/** Keys outside the keymap table (fixed, as in DataGrip), under the ids the handler below knows them by */
+/** Keys outside the keymap table, under the ids the handler below knows them by. They stay fixed: ⇧⎋ is Escape (which always closes),
+ *  the Switcher opens on ⌃⇥ and picks when ⌃ is released (a hold-and-release, not a key combination) */
 const FIXED = new Map<string, (e: KeyboardEvent) => boolean>([
   // ⇧⎋ Hide Active Tool Window
   ["toolwindow.hide", (e) => e.shiftKey && e.key === "Escape"],
-  // ⇧F6 Rename File… of a console tab
-  ["console.rename", (e) => e.key === "F6" && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey],
   // ⌃⇥ / ⌃⇧⇥ Switcher
   ["switcher", (e) => e.ctrlKey && !e.metaKey && e.key === "Tab"],
 ]);
 
-/** The app-wide key handler: command shortcuts of the keymap (lib/shortcuts.ts) and the fixed keys (⇧⇧, ⇧⎋, ⌃⇥, ⇧F6) */
+/** The app-wide key handler: command shortcuts of the keymap (lib/shortcuts.ts) and the fixed keys (⇧⇧, ⇧⎋, ⌃⇥). Commands without a
+ *  handler here run the entry with their id in Find Action's list or the active tab's menu (global), or in the selected node's menu (tree) */
 export function useGlobalShortcuts({
-  conns, keymapVer, treeSel, active, focused, tabs, split, toggleExplorer, bumpFont, setMaximized, openFts, setSe, setFindOpen, findOpen, openSwitcher, setRecentOpen, switchWs, activate, openConsole, jumpToConsole, activateNode, deactivate, sqlGenerator, ddlToClipboard, ddlToConsole, showQuickDoc, canDdl, modifyTable, renameNode, duplicateConn, removeConn, dangerous, openDdl, applyTableFilter, refreshAll, canCancel, cancelRun, renameConsole, reopenClosed,
+  conns, keymapVer, treeSel, active, focused, tabs, split, toggleExplorer, bumpFont, setMaximized, openFts, setSe, setFindOpen, findOpen, openSwitcher, setRecentOpen, switchWs, activate, openConsole, jumpToConsole, activateNode, deactivate, sqlGenerator, ddlToClipboard, ddlToConsole, showQuickDoc, canDdl, modifyTable, renameNode, duplicateConn, removeConn, dangerous, openDdl, applyTableFilter, refreshAll, canCancel, cancelRun, renameConsole, reopenClosed, buildMenu, paletteActions, tabMenu,
 }: Deps) {
   // The key handler is registered only once, so pass the latest functions via a ref
-  const latest = useRef({ toggleExplorer, openFts, bumpFont, setSe, setFindOpen, findOpen, switchWs });
-  latest.current = { toggleExplorer, openFts, bumpFont, setSe, setFindOpen, findOpen, switchWs };
+  const latest = useRef({ toggleExplorer, openFts, bumpFont, setSe, setFindOpen, findOpen, switchWs, buildMenu, paletteActions, tabMenu });
+  latest.current = { toggleExplorer, openFts, bumpFont, setSe, setFindOpen, findOpen, switchWs, buildMenu, paletteActions, tabMenu };
   const lastShift = useRef(0);
 
   // ───────── Shortcuts (DataGrip keymap) ─────────
@@ -222,6 +222,11 @@ export function useGlobalShortcuts({
         },
       };
       for (const [id, run] of Object.entries(actions)) if ((FIXED.get(id)?.(e) ?? is(id)) && run() !== false) return;
+      // Commands without a handler above: the menu or Find Action entry with their id
+      if ((node && runKey(spec, "tree", () => L.buildMenu(node))) || runKey(spec, "global", () => [...L.paletteActions(), ...(active ? L.tabMenu(active) : [])])) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
