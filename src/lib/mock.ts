@@ -36,6 +36,13 @@ const result = {
   elapsedMs: 12,
   hasResultSet: true,
 };
+/** `select … from wide_demo`: many columns and rows (scroll both ways) */
+const wide = {
+  ...result,
+  columns: Array.from({ length: 30 }, (_, c) => ({ name: `column_${c + 1}`, typeName: c % 2 ? "VARCHAR" : "INT8" })),
+  rows: Array.from({ length: 500 }, (_, r) => Array.from({ length: 30 }, (_, c) => (c % 2 ? `value ${r + 1}.${c + 1}` : r * 30 + c))),
+  truncated: false,
+};
 let flakyLoads = 0;
 let updateChannel = "stable";
 /** Whether check_update ran (the real app then has a saved check that a channel switch answers from) */
@@ -150,7 +157,9 @@ const handlers: Record<string, (a: any) => unknown> = {
       ? { ...result, columns: [{ name: "QUERY PLAN", typeName: "JSON" }], rows: [[JSON.stringify([{ Plan: { "Node Type": "Hash Join", "Join Type": "Inner", "Startup Cost": 1.5, "Total Cost": 45.2, "Plan Rows": 120, "Plan Width": 64, "Hash Cond": "(u.contract_id = c.id)", Plans: [{ "Node Type": "Seq Scan", "Relation Name": "users", Schema: "public", Alias: "u", "Startup Cost": 0, "Total Cost": 22.1, "Plan Rows": 1200, "Plan Width": 40 }, { "Node Type": "Hash", "Startup Cost": 1.2, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24, Plans: [{ "Node Type": "Index Scan", "Relation Name": "contracts", "Index Name": "contracts_pkey", "Startup Cost": 0.1, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24 }] }] } }])]], truncated: false }
       : /^\s*(insert|update|delete)/i.test(a.sql)
         ? { ...result, columns: [], rows: [], rowsAffected: 3, truncated: false, hasResultSet: false, inTransaction: (globalThis as any).__mockManual === true }
-        : { ...result, inTransaction: (globalThis as any).__mockManual === true }),
+        : /\bwide_demo\b/i.test(a.sql)
+          ? { ...wide, inTransaction: (globalThis as any).__mockManual === true }
+          : { ...result, inTransaction: (globalThis as any).__mockManual === true }),
   set_tx_mode: (a: any) => { (globalThis as any).__mockManual = a.manual; return null; },
   // e2e sets __mockCommitError for a COMMIT that fails (e.g. the connection lost while committing)
   commit_tx: () => {
