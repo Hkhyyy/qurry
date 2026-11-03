@@ -444,7 +444,7 @@ async fn all_scenes() -> Vec<Value> {
     scenes
 }
 
-/// Split panes with many tabs of two Data Sources in each color mode: the visible tab of the focused (left) pane and of the other pane
+/// Split panes with many tabs of two Data Sources in each color mode: the focused (left) pane's active [PROD] tab next to an inactive [DEV] one, the other pane's active [DEV] tab next to an inactive [PROD] one
 async fn tab_bars(scenes: &mut Vec<Value>) {
     use crate::theme::ColorMode;
     let mut h = Harness::new().await;
@@ -459,13 +459,13 @@ async fn tab_bars(scenes: &mut Vec<Value>) {
         id
     }
     let users = tab(&mut h, "users", "prod");
-    for (name, conn) in [("payment", "prod"), ("contract", "prod"), ("orders", "test"), ("adjust", "dev")] {
+    for (name, conn) in [("adjust", "dev"), ("payment", "prod"), ("contract", "prod"), ("orders", "dev")] {
         tab(&mut h, name, conn);
     }
-    let bank = tab(&mut h, "bank_info", "prod");
+    tab(&mut h, "bank_info", "prod");
     h.app.run_action(crate::app::Action::SplitRight);
-    tab(&mut h, "admin_role", "test");
-    for id in [bank, users] {
+    let role = tab(&mut h, "admin_role", "dev");
+    for id in [role, users] {
         let i = h.app.tab_index(id).unwrap();
         h.app.activate(i);
     }
