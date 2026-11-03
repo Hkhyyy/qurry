@@ -63,7 +63,7 @@ pub fn cell_text(v: &Value) -> String {
     }
 }
 pub(crate) use qurry_core::format::{is_time_type, pad_frac};
-use qurry_core::format::{align, value_class, Align, Alignments, ValueClass};
+use qurry_core::format::{align, cell_class, type_class, Align, Alignments, ValueClass};
 use qurry_core::extract::{self, Format, Rows};
 use qurry_core::store::DbKind;
 
@@ -355,16 +355,15 @@ impl Grid {
         }
     }
 
-    /// Value class of a cell with edits applied (the shared rule reads only the value's kind, so an edit is any text)
-    fn class(&self, r: usize, c: usize) -> ValueClass {
-        let t = &self.result.columns[c].type_name;
+    /// Value class of a cell with edits applied, `column` = its column's type_class (the shared rule reads only the value's kind, so an edit is any text)
+    fn class(&self, r: usize, c: usize, column: ValueClass) -> ValueClass {
         match self.edits.get(&(r, c)) {
-            Some(e) => value_class(t, &e.as_ref().map_or(Value::Null, |_| Value::String(String::new()))),
-            None => value_class(t, self.result.rows.get(r).and_then(|row| row.get(c)).unwrap_or(&Value::Null)),
+            Some(e) => cell_class(column, &e.as_ref().map_or(Value::Null, |_| Value::String(String::new()))),
+            None => cell_class(column, self.result.rows.get(r).and_then(|row| row.get(c)).unwrap_or(&Value::Null)),
         }
     }
 
-    /// `aligns` = the GUI's Settings › Appearance › Alignment (settings.json, read at startup)
+    /// `aligns` = App::align (settings.json "gridAlign", shared with the GUI)
     pub fn render(&mut self, f: &mut Frame, area: Rect, title: String, focused: bool, color: crate::theme::ColorMode, aligns: &Alignments) {
         let block = Block::default()
             .borders(Borders::ALL)
@@ -453,6 +452,7 @@ impl Grid {
             })),
         )
         .style(Style::default().bg(crate::kit::SURFACE));
+        let tclass: Vec<ValueClass> = cols.iter().map(|&c| type_class(&self.result.columns[c].type_name)).collect();
         let sel = self.sel_rect();
         let end = (self.row_off + body_h).min(self.rows());
         let rows: Vec<Row> = (self.row_off..end)
@@ -471,7 +471,7 @@ impl Grid {
                     (' ', Color::DarkGray)
                 };
                 let num = Cell::from(format!("{:>w$}{mark}", r + 1, w = num_w as usize - 1)).style(Style::default().fg(num_c));
-                Row::new(std::iter::once(num).chain(cols.iter().zip(&shown_w).map(|(&c, &w)| {
+                Row::new(std::iter::once(num).chain(cols.iter().zip(&shown_w).zip(&tclass).map(|((&c, &w), &tc)| {
                     let edited = self.edits.contains_key(&(r, c));
                     let v = self.shown(r, c, self.widths[c] as usize + 1);
                     let text = match &v {
@@ -479,7 +479,7 @@ impl Grid {
                         None => "<null>".to_string(),
                         Some(s) => s.clone(),
                     };
-                    let class = self.class(r, c);
+                    let class = self.class(r, c, tc);
                     let text = pad(text, w as usize, align(class, aligns));
                     let mut st = match class {
                         ValueClass::Null => Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),

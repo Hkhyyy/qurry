@@ -96,7 +96,9 @@ pub fn type_class(type_name: &str) -> ValueClass {
     // numeric(8,2) → NUMERIC; "timestamp with time zone" and "bigint unsigned" keep their words
     let name = t.split('(').next().unwrap_or_default().trim();
     let has = |words: &[&str]| words.iter().any(|w| name.contains(w));
-    if has(&["JSON", "BYTEA", "BLOB", "BINARY"]) || name == "RAW" || name == "IMAGE" {
+    // Oracle's BINARY_FLOAT / BINARY_DOUBLE (and PL/SQL BINARY_INTEGER) are numbers, not binary
+    let binary = has(&["BINARY"]) && !name.starts_with("BINARY_");
+    if has(&["JSON", "BYTEA", "BLOB"]) || binary || name == "RAW" || name == "IMAGE" {
         ValueClass::JsonBinary
     } else if has(&["DATE", "TIME", "INTERVAL"]) {
         ValueClass::DateTime
@@ -112,11 +114,16 @@ pub fn type_class(type_name: &str) -> ValueClass {
 /// Class of one cell: NULL, then the value's own kind (a JSON number or boolean, whatever the column says), then the column's type.
 /// Only the value's kind matters, not its content, so a caller may ask once per column and kind
 pub fn value_class(type_name: &str, value: &Value) -> ValueClass {
+    cell_class(type_class(type_name), value)
+}
+
+/// `value_class` with the column's `type_class` already worked out (the TUI grid works it out once per column, not per cell)
+pub fn cell_class(column: ValueClass, value: &Value) -> ValueClass {
     match value {
         Value::Null => ValueClass::Null,
         Value::Bool(_) => ValueClass::Boolean,
         Value::Number(_) => ValueClass::Number,
-        _ => type_class(type_name),
+        _ => column,
     }
 }
 
@@ -155,7 +162,7 @@ mod tests {
         use ValueClass::*;
         let cases = [
             ("int4", Number), ("INT8", Number), ("bigint unsigned", Number), ("numeric(8,2)", Number), ("DOUBLE PRECISION", Number), ("float8", Number),
-            ("money", Number), ("oid", Number), ("NUMBER", Number), ("UInt64", Number), ("Nullable(Int32)", Number), ("Decimal(10, 2)", Number), ("serial", Number),
+            ("money", Number), ("oid", Number), ("NUMBER", Number), ("BINARY_DOUBLE", Number), ("BINARY_FLOAT", Number), ("BINARY_INTEGER", Number), ("UInt64", Number), ("Nullable(Int32)", Number), ("Decimal(10, 2)", Number), ("serial", Number),
             ("timestamptz", DateTime), ("timestamp with time zone", DateTime), ("DATE", DateTime), ("DateTime64(3)", DateTime), ("interval", DateTime), ("timetz", DateTime),
             ("bool", Boolean), ("BOOLEAN", Boolean),
             ("jsonb", JsonBinary), ("JSON", JsonBinary), ("bytea", JsonBinary), ("LONGBLOB", JsonBinary), ("varbinary(16)", JsonBinary), ("RAW", JsonBinary),

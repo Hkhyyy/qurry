@@ -1,6 +1,8 @@
 [
   { "type": "int4", "value": 42, "class": "number", "align": "right" },
   { "type": "INT8", "value": "12345678901234567", "class": "number", "align": "right" },
+  { "type": "BINARY_DOUBLE", "value": "1.5", "class": "number", "align": "right" },
+  { "type": "BINARY_FLOAT", "value": "2.25", "class": "number", "align": "right" },
   { "type": "NUMERIC", "value": "-1.50", "class": "number", "align": "right" },
   { "type": "numeric(8,2)", "value": null, "class": "null", "align": "right" },
   { "type": "bigint unsigned", "value": 7, "class": "number", "align": "right" },
