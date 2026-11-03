@@ -38,7 +38,7 @@ import {
   ToolbarSep,
 } from "..";
 import { connTabVars, type Theme } from "../../lib/theme";
-import { tabIcon } from "../icons";
+import { TabIcon } from "../icons";
 
 /** Organisms: blocks made of molecules — toolbar · dialog · confirm dialog · menu · popover · list · table · form */
 const meta: Meta = { title: "GUI/3 Organisms" };
@@ -293,7 +293,7 @@ export const ConfirmChoice: S = {
 };
 
 // ───────── Editor tab bar: the active tab in each theme, split panes, many tabs ─────────
-/** kind / obj: tab kind and the object kind it shows (the icon comes from tabIcon, as in the app) */
+/** kind / obj: tab kind and the object kind it shows (the icon comes from TabIcon, as in the app) */
 type DemoTab = { label: string; kind: string; obj?: string; color?: string };
 const PROD = "#6e2a2a";
 const DEV = "#5f5b24";
@@ -319,10 +319,9 @@ function DemoGroup({ tabs, theme, state, onFocus }: { tabs: DemoTab[]; theme: Th
   return (
     <div className={"panel editor-group" + (state ? " " + state : "")} style={{ flex: 1, minWidth: 0 }} onMouseDownCapture={onFocus}>
       <TabStrip className="tabs" activeKey={String(active)} overflow={tabs.map((t, i) => ({ key: String(i), label: t.label, active: i === active, onSelect: () => setActive(i) }))}>
-        {tabs.map((t, i) => {
-          const Icon = tabIcon(t.kind, t.obj);
-          return <TabItem key={i} icon={<Icon />} label={t.label} active={i === active} onClose={() => {}} onMouseDown={() => setActive(i)} style={connTabVars(t.color, theme)} />;
-        })}
+        {tabs.map((t, i) => (
+          <TabItem key={i} icon={<TabIcon kind={t.kind} obj={t.obj} />} label={t.label} active={i === active} onClose={() => {}} onMouseDown={() => setActive(i)} style={connTabVars(t.color, theme)} />
+        ))}
       </TabStrip>
       <div className="work-area" style={{ height: 56, boxShadow: tabs[active].color ? `inset 0 2px 0 ${tabs[active].color}` : undefined }} />
     </div>

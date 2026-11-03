@@ -7,7 +7,7 @@ import { FindPanel, FindRun, FtsScope, FullTextSearchDialog } from "../../compon
 import { isRelation, NodeInfo, revealInTree } from "../../components/SchemaTree";
 import { ActionItem, DbObject, SearchEverywhere, SeTab } from "../../components/SearchEverywhere";
 import { RecentFiles, Switcher, SwitchItem } from "../../components/Switcher";
-import { tabIcon } from "../../ui/icons";
+import { TabIcon } from "../../ui/icons";
 import type { useConnActions } from "../conns/useConnActions";
 import type { useConsole } from "../console/useConsole";
 import { setDialog, setHistoryFor, setHistoryTab, setKeymapOpen, setProdLog, setSchemeOpen, setSettingsOpen } from "../dialogs/store";
@@ -48,10 +48,7 @@ export function useSearch({
   // ───────── Switcher / Recent Files / Maximize ─────────
   const [switcher, setSwitcher] = useState<{ items: SwitchItem[]; start: number } | null>(null);
   const [recentOpen, setRecentOpen] = useState(false);
-  const kindIcon = (t: { kind: string; objKind?: string }) => {
-    const I = tabIcon(t.kind, t.objKind);
-    return <I />;
-  };
+  const kindIcon = (t: { kind: string; objKind?: string }) => <TabIcon kind={t.kind} obj={t.objKind} />;
   const hintOf = (connId: string, db?: string) => {
     const c = conns.find((x) => x.id === connId);
     return c ? c.name + (db ? ` · ${db}` : "") : "";

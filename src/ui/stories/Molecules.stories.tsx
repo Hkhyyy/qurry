@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useState } from "react";
 import { Badge, Checkbox, ColorPicker, DetailRow, EmptyState, Field, FormSection, Hint, Kbd, KeyHints, ListItem, MenuItem, MenuLabel, MenuSeparator, Notice, RadioGroup, RailItem, SearchField, SectionTitle, Select, StatusItem, TabItem, Tabs, Text, TextInput, TlsOptIn, TreeRow } from "..";
 import { connTabVars } from "../../lib/theme";
-import { ConsoleIcon, DatabaseIcon, FolderIcon, PgIcon, ReportIcon, SchemaIcon, TableIcon, tabIcon } from "../icons";
+import { ConsoleIcon, DatabaseIcon, FolderIcon, PgIcon, ReportIcon, SchemaIcon, TabIcon, TableIcon } from "../icons";
 
 /** Molecules: a row · cell made of a few atoms */
 const meta: Meta = { title: "GUI/2 Molecules" };
@@ -222,7 +222,7 @@ export const TabItems: S = {
         <TabItem icon={<TableIcon />} label="users" onClose={() => {}} />
         <TabItem icon={<ReportIcon />} label="Sessions" pinned onPin={() => {}} />
       </div>
-      {/* Every tab kind, and a DDL tab per object kind (tabIcon: the explorer tree's icons) */}
+      {/* Every tab kind, and a DDL tab per object kind (TabIcon: the explorer tree's icons, a DDL mark on DDL tabs) */}
       <div style={{ display: "flex", flexWrap: "wrap", background: "var(--ui-surface)" }}>
         {(
           [
@@ -241,10 +241,9 @@ export const TabItems: S = {
             ["migrate", undefined, "Compare"],
             ["rag", undefined, "Ask"],
           ] as const
-        ).map(([kind, obj, label]) => {
-          const Icon = tabIcon(kind, obj);
-          return <TabItem key={label} icon={<Icon />} label={label} style={{ height: 32 }} />;
-        })}
+        ).map(([kind, obj, label]) => (
+          <TabItem key={label} icon={<TabIcon kind={kind} obj={obj} />} label={label} style={{ height: 32 }} />
+        ))}
       </div>
       <div style={{ display: "flex", height: 30, background: "var(--ui-surface)" }}>
         <TabItem variant="result" label="Output" />

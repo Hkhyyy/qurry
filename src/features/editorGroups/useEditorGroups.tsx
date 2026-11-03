@@ -15,7 +15,8 @@ import { RedisBrowser } from "../../components/RedisBrowser";
 import { TableEditor } from "../../components/TableEditor";
 import { TlsFix } from "../../components/TlsFix";
 import { Spacer, TabItem, TabStrip, Text, ToolButton, Toolbar } from "../../ui";
-import { tabIcon } from "../../ui/icons";
+import { TabIcon } from "../../ui/icons";
+import type { NodeInfo } from "../../components/SchemaTree";
 import type { useConsole } from "../console/useConsole";
 import type { useExplorer } from "../explorer/useExplorer";
 import type { useJobs } from "../jobs/useJobs";
@@ -240,12 +241,11 @@ export function useEditorGroups({
         >
           {gTabs.map((t) => {
             const color = conns.find((c) => c.id === t.connId)?.color;
-            const Icon = tabIcon(t.kind, t.objKind);
             return (
               <TabItem
                 key={t.id}
                 label={labelOf(t)}
-                icon={<Icon />}
+                icon={<TabIcon kind={t.kind} obj={t.objKind} />}
                 active={t.id === ga?.id}
                 pinned={t.pinned}
                 onPin={() => togglePin(t)}
@@ -486,7 +486,7 @@ export function useEditorGroups({
                   onExportCsv={() => exportCsv(t)}
                   onDdl={() => {
                     const c = conns.find((x) => x.id === t.connId);
-                    if (c && t.edit) openDdl({ kind: "table", conn: c, db: t.database, schema: t.edit.schema, name: t.edit.table });
+                    if (c && t.edit) openDdl({ kind: (t.objKind ?? "table") as NodeInfo["kind"], conn: c, db: t.database, schema: t.edit.schema, name: t.edit.table });
                   }}
                   onCopyQueryToConsole={(sql) => { const c = conns.find((x) => x.id === t.connId); if (c) openConsole(c, t.database, sql); }}
                   onFindSimilar={

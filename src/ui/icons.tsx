@@ -197,6 +197,20 @@ export const objectIcon = (kind?: string): Icon | undefined => (kind ? OBJECT_IC
 const TAB_ICON: Record<string, Icon> = { console: ConsoleIcon, table: TableIcon, ddl: DdlIcon, redis: RedisIcon, dba: ReportIcon, erd: DiagramIcon, migrate: MigrateIcon, rag: RagIcon };
 /** Tab kind (+ the object kind a table or DDL tab shows) → its icon: the tab bar, Switcher, Recent Files and Search Everywhere */
 export const tabIcon = (kind: string, obj?: string): Icon => ((kind === "table" || kind === "ddl") && objectIcon(obj)) || TAB_ICON[kind] || DdlIcon;
+/** A tab's icon as drawn: an object's DDL tab adds a small page mark in the corner, so it doesn't look like the object's data tab */
+export const TabIcon = ({ kind, obj }: { kind: string; obj?: string }) => {
+  const I = tabIcon(kind, obj);
+  if (kind !== "ddl" || I === DdlIcon) return <I />;
+  return (
+    <span className="ui-ddl-mark">
+      <I />
+      <svg width="8" height="9" viewBox="0 0 8 9" aria-hidden>
+        <path d="M.5.5h4.5l2.5 2.5v5.5h-7Z" fill="var(--ui-surface)" stroke="var(--ui-icon-db)" strokeLinejoin="round" />
+        <path d="M2 4.5h3.5M2 6.5h2.5" stroke="var(--ui-icon-db)" strokeWidth=".9" strokeLinecap="round" />
+      </svg>
+    </span>
+  );
+};
 
 /* ── Grid toolbar icons (16px line icons) ── */
 const L = ({ d, children }: { d?: string; children?: React.ReactNode }) => (

@@ -1,5 +1,7 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { ColumnIcon, ConsoleIcon, DdlIcon, DiagramIcon, MigrateIcon, objectIcon, RagIcon, RedisIcon, ReportIcon, RoutineIcon, SchemaIcon, SequenceIcon, TableIcon, tabIcon, ViewIcon } from "./icons";
+import { ColumnIcon, ConsoleIcon, DdlIcon, DiagramIcon, MigrateIcon, objectIcon, RagIcon, RedisIcon, ReportIcon, RoutineIcon, SchemaIcon, SequenceIcon, TableIcon, TabIcon, tabIcon, ViewIcon } from "./icons";
 
 describe("objectIcon: explorer tree object kind → its icon", () => {
   it.each([
@@ -48,4 +50,17 @@ describe("tabIcon: what the tab shows → its icon", () => {
   it("unknown tab kinds fall back to the DDL (SQL text) icon", () => expect(tabIcon("nope")).toBe(DdlIcon));
 
   it("the object kind only refines table and DDL tabs", () => expect(tabIcon("console", "view")).toBe(ConsoleIcon));
+});
+
+describe("TabIcon: the icon as drawn, with a DDL mark on an object's DDL tab", () => {
+  const html = (kind: string, obj?: string) => renderToStaticMarkup(createElement(TabIcon, { kind, obj }));
+  const mark = 'class="ui-ddl-mark"';
+  it("a view's DDL tab: the view icon plus the mark; its data tab: the view icon alone", () => {
+    expect(html("ddl", "view")).toContain(renderToStaticMarkup(createElement(ViewIcon)));
+    expect(html("ddl", "view")).toContain(mark);
+    expect(html("table", "view")).toBe(renderToStaticMarkup(createElement(ViewIcon)));
+  });
+  it("no mark where the icon already says DDL, nor on other tabs", () => {
+    for (const [k, o] of [["ddl", undefined], ["ddl", "trigger"], ["console", undefined], ["table", "table"]]) expect(html(k!, o)).not.toContain(mark);
+  });
 });

@@ -148,9 +148,29 @@ test("DDL tabs show their object's tree icon: a view's differs from a function's
 
   const [view, fn] = [await tabIconOf(/v_active_users \[DDL\]/), await tabIconOf(/calc_fee \[DDL\]/)];
   expect(view).not.toEqual(fn);
+  // DDL tabs carry the DDL mark; a data tab of the same view does not
+  await expect(page.getByRole("tab", { name: /\[DDL\]/ }).locator(".ui-ddl-mark")).toHaveCount(2);
+  await node("v_active_users").dblclick();
+  await expect(page.getByRole("tab", { name: /^v_active_users(?! \[DDL\])/ }).locator(".ui-ddl-mark")).toHaveCount(0);
+  expect(await tabIconOf(/^v_active_users(?! \[DDL\])/)).toEqual(view);
   expect(view).toEqual(await iconOf(node("v_active_users").locator(".node-icon")));
   expect(fn).toEqual(await iconOf(node("calc_fee(amount numeric) numeric").locator(".node-icon")));
   // The same icon in Recent Files (⌘E)
   await page.keyboard.press("Meta+E");
-  expect(await iconOf(page.getByRole("option", { name: /v_active_users \[DDL\]/ }).locator(".ui-list-icon"))).toEqual(view);
+  const recent = page.getByRole("option", { name: /v_active_users \[DDL\]/ }).locator(".ui-list-icon");
+  expect(await iconOf(recent)).toEqual(view);
+  await expect(recent.locator(".ui-ddl-mark")).toHaveCount(1);
+});
+
+test("Go to DDL from a view's data tab opens the view's DDL, with the view icon (#83)", async ({ page }) => {
+  const node = treeItem(page, "v_active_users").first();
+  await treeItem(page, "views 1").first().click();
+  await page.keyboard.press("ArrowRight");
+  await node.dblclick();
+  await expect(page.getByRole("tab", { name: /^v_active_users/ })).toBeVisible();
+  await page.locator(".work-layer:visible").getByTitle("Go to DDL").click();
+  const ddl = page.getByRole("tab", { name: /v_active_users \[DDL\]/ });
+  await expect(ddl.locator(".ui-ddl-mark")).toHaveCount(1);
+  const svg = (l: Locator) => l.locator("svg").first().evaluate((s) => s.outerHTML);
+  expect(await svg(ddl.locator(".tab-icon"))).toEqual(await svg(node.locator(".node-icon")));
 });
