@@ -591,6 +591,44 @@ mod tests {
         assert!(h.app.status.contains("Qurry 99.0.0-beta.1 is available"), "{}", h.app.status);
     }
 
+    /// ⌃k › Grid Alignment…: a row per value class, Enter picks Left / Center / Right; saved to settings.json for the GUI and applied
+    /// to the grids at once. Opening it reads the file again (the GUI may have changed it), and the default drops the override
+    #[tokio::test]
+    async fn grid_alignment_is_picked_from_the_palette() {
+        use qurry_core::format::{Align, Alignments, ValueClass};
+        let mut h = Harness::new().await;
+        h.app.palette_grid_align(ValueClass::String);
+        let s = h.screen(120, 30);
+        assert!(s.contains("Grid Alignment") && s.contains("NULL          Right") && s.contains("String        Left"), "{s}");
+        // NULL is the fifth row; it opens on Right (the default), Up twice = Left
+        for k in ["Down", "Down", "Down", "Down", "Enter"] {
+            h.key(k);
+        }
+        let s = h.screen(120, 30);
+        assert!(s.contains("NULL Alignment") && s.contains("● Right"), "{s}");
+        h.key("Up");
+        h.key("Up");
+        h.key("Enter");
+        let left = Alignments::from([(ValueClass::Null, Align::Left)]);
+        assert_eq!(h.app.state.store.grid_align(), left);
+        assert_eq!(h.app.align, left);
+        assert!(h.app.status.starts_with("Grid alignment: NULL on the left"), "{}", h.app.status);
+        // Back on the class list, at NULL, marked changed
+        let s = h.screen(120, 30);
+        assert!(s.contains("NULL          Left") && s.contains("changed — default Right"), "{s}");
+        // A change made elsewhere (the GUI) shows when the palette opens
+        h.key("Esc");
+        h.app.state.store.set_grid_align(&Alignments::from([(ValueClass::Number, Align::Center)])).unwrap();
+        h.app.palette_grid_align(ValueClass::Number);
+        assert_eq!(h.app.align, Alignments::from([(ValueClass::Number, Align::Center)]));
+        // Number back to Right, its default: the override is removed
+        h.key("Enter");
+        h.key("Down");
+        h.key("Enter");
+        assert!(h.app.state.store.grid_align().is_empty());
+        assert!(h.app.align.is_empty());
+    }
+
     /// The new-version notice shows how to update right inside the TUI
     #[tokio::test]
     async fn update_badge_points_to_in_app_update() {

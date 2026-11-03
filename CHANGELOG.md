@@ -12,7 +12,7 @@ What changed in each Qurry version, for people who use it. The format follows [K
 - **AWS SSM tunnel**: connect through Session Manager port forwarding (GUI **SSH/SSL › Tunnel › AWS SSM**, TUI `Tunnel` › `aws ssm`) with your AWS profile, region and instance id. Qurry runs the AWS CLI v2 and its Session Manager plugin and stores no AWS secrets. Update every Qurry app on the computer first: older ones don't know the tunnel ([Data sources](docs/data-sources.md)).
 - [SECURITY.md](SECURITY.md) (report a vulnerability privately through GitHub), [CONTRIBUTING.md](CONTRIBUTING.md) (toolchain, tests, commit and language rules, issue and pull request templates) and the [MCP threat model](docs/mcp-security.md): what an AI client reaches for each MCP setting, how read-only is enforced, and what Qurry does not protect against.
 - This changelog.
-- **Alignment in result grids**: GUI **Settings › Appearance › Alignment** sets Left, Center or Right for each kind of value (string, number, date / time, boolean, NULL, JSON / binary). The TUI grid uses the same kinds and reads the same setting from `settings.json` at start (#75, [Settings](docs/settings.md)).
+- **Alignment in result grids**: GUI **Settings › Appearance › Alignment** sets Left, Center or Right for each kind of value (string, number, date / time, boolean, NULL, JSON / binary). The TUI grid uses the same kinds and the same setting (`settings.json`), changed there with **⌃k › Grid Alignment…** (#75, [Settings](docs/settings.md)).
 
 ### Changed
 

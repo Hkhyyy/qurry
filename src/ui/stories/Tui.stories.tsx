@@ -41,6 +41,10 @@ export const ScreenCopyRows80 = { ...by("Copy related rows: 80×24"), name: "Sma
 export const ScreenConfirmTooSmall = { ...by("Confirm: too small to answer"), name: "Small · Confirm too small to answer" };
 export const ScreenDataSourceForm80 = { ...by("Data source form: 80×24"), name: "Small · Data source form (80×24)" };
 export const ScreenUpdateChannel = { ...by("Update channel"), name: "Screen · Update channel" };
+export const ScreenGridAlign = { ...by("Grid alignment"), name: "Screen · Grid alignment" };
+export const ScreenGridAlignChanged = { ...by("Grid alignment: changed"), name: "Screen · Grid alignment: changed" };
+export const ScreenGridAlignPalette = { ...by("Grid alignment palette"), name: "Screen · Grid alignment palette" };
+export const ScreenGridAlignPick = { ...by("Grid alignment: pick"), name: "Screen · Grid alignment: pick" };
 // The explorer screen in each color mode the TUI picks from NO_COLOR · COLORTERM · TERM (crates/tui/src/theme.rs)
 export const ColorsTruecolor = { ...by("Colors: truecolor"), name: "Colors · truecolor" };
 export const Colors256 = { ...by("Colors: 256"), name: "Colors · 256" };

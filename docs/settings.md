@@ -9,7 +9,7 @@ GUI **Settings** (`⌘,`) has three pages: **Appearance**, **Keymap** and **Pass
 | Setting | What it does | Shared with the TUI |
 |---|---|---|
 | Theme | Dark, Light or High contrast, or **Sync with OS**. Quick switch: `` ⌃` `` | No (the TUI follows the terminal's colors) |
-| Alignment | Where cells sit in result grids, per kind of value (below) | Yes |
+| Alignment | Where cells sit in result grids, per kind of value (below) | Yes (TUI **⌃k › Grid Alignment…**) |
 | Updates | Check for a new version when the app starts; **Check Now** | — |
 | Channel | Stable or beta releases ([Updates](updates.md)) | Yes |
 
@@ -20,7 +20,7 @@ Each cell is aligned by the kind of value it holds. Pick **Left**, **Center** or
 | Kind | Which values | Default |
 |---|---|---|
 | String | text, `uuid`, enums, arrays, ranges, and types Qurry doesn't know | Left |
-| Number | integer, `numeric` / `decimal`, floating point, `money`, `oid` (also when the driver sends them as text) | Right |
+| Number | integer, `numeric` / `decimal`, floating point (also Oracle `BINARY_FLOAT` / `BINARY_DOUBLE`), `money`, `oid` (also when the driver sends them as text) | Right |
 | Date / time | `date`, `time`, `timestamp`, `interval`, `datetime` | Left |
 | Boolean | `bool` / `boolean` | Left |
 | NULL | `<null>` (and `<default>` in a row you are adding) | Right |
@@ -28,7 +28,7 @@ Each cell is aligned by the kind of value it holds. Pick **Left**, **Center** or
 
 `NULL` is on the right by default so that a `NULL` in a numeric column lines up with the numbers above and below it. Before 0.3.0 it was on the left: to get that back, set **NULL** to **Left**.
 
-The TUI result grid uses the same kinds and the same setting. It reads `settings.json` when it starts, so restart the TUI after changing the alignment in the GUI. In `settings.json` only the kinds you changed are written, for example `"gridAlign": { "null": "left" }`; a kind you set back to its default is removed.
+The TUI result grid uses the same kinds and the same setting: change it there with **⌃k › Grid Alignment…** (pick a kind, then Left, Center or Right). The TUI reads `settings.json` when it starts and again when you open **⌃k › Grid Alignment…**, so after changing the alignment in the GUI, open that command (or restart the TUI) to see it. In `settings.json` only the kinds you changed are written, for example `"gridAlign": { "null": "left" }`; a kind you set back to its default is removed.
 
 ## Keymap
 

@@ -253,6 +253,13 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         h.app.align = [(ValueClass::Null, Align::Left), (ValueClass::Boolean, Align::Center)].into();
     }
     scenes.push(app_scene(h, "Grid alignment: changed", "settings.json \"gridAlign\": { \"null\": \"left\", \"boolean\": \"center\" } (GUI Settings › Appearance › Alignment); the other classes keep their default", 120, 22));
+    h.app.state.store.set_grid_align(&h.app.align.clone()).unwrap();
+    h.app.palette_grid_align(qurry_core::format::ValueClass::Null);
+    scenes.push(app_scene(h, "Grid alignment palette", "⌃k › Grid Alignment…: where each kind of value sits, shared with the GUI; Enter picks Left / Center / Right", 120, 22));
+    h.key("Enter");
+    scenes.push(app_scene(h, "Grid alignment: pick", "⌃k › Grid Alignment… › NULL: opens on where it sits now (Enter keeps it)", 120, 22));
+    h.app.popup = None;
+    h.app.state.store.set_grid_align(&Default::default()).unwrap();
     h.app.align = Default::default();
     h.app.close_tab_now(h.app.active);
     // Production log
