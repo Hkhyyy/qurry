@@ -38,15 +38,16 @@ import { DbaReport } from "./components/DbaReport";
 import { ErdView } from "./components/ErdView";
 import { MigrateView } from "./components/MigrateView";
 import type { DataFormat } from "./lib/transfer";
-import { Group, snapKey, Tab, TAB_LIMIT, TabSnapshot } from "./features/tabs/types";
+import { Group, snapKey, Tab, TabSnapshot } from "./features/tabs/types";
 import { isMac, sk } from "./features/shortcuts/labels";
 import { offered, SettingsDialog, upToDate } from "./features/settings/SettingsDialog";
 import { StatusBar } from "./features/settings/StatusBar";
 import { editorApis, liveSql, setActiveIds, setFocused, setPanes, setTabs, useTabsStore } from "./features/tabs/store";
-import { allTabs, buildTab, closeTabs, moveTo, patch, remember, settle, sqlOf, togglePin, updTab } from "./features/tabs/ops";
+import { allTabs, closeTabs, moveTo, patch, settle, sqlOf, togglePin, updTab } from "./features/tabs/ops";
 import { setWorkspaces, stash, useWorkspacesStore } from "./features/workspaces/store";
 import { useWorkspaces } from "./features/workspaces/useWorkspaces";
 import { useConsole } from "./features/console/useConsole";
+import { useTabs } from "./features/tabs/useTabs";
 import { setBackupReq, setCopyReq, setDialog, setExportReq, setGenReq, setHistoryFor, setHistoryTab, setImportReq, setKeymapOpen, setObjEdit, setProdLog, setQuickDoc, setSchemeOpen, setSettingsOpen, setUpdate, setUpdateOpen, useDialogsStore } from "./features/dialogs/store";
 import "./App.css";
 
@@ -207,52 +208,10 @@ export default function App() {
     [tabs, conns, wasmReady],
   );
   const labelOf = (t: Tab) => tabLabels.get(t.id) ?? t.title;
-  const activate = (t: Tab) => {
-    const cur = useTabsStore.getState().tabs.find((x) => x.id === t.id);
-    if (cur?.stale) loadStale(cur);
-    setFocused(t.group);
-    setActiveIds((a) => a.map((x, g) => (g === t.group ? t.id : x)));
-    useTabsStore.setState({ mru: [t.id, ...useTabsStore.getState().mru.filter((x) => x !== t.id)] });
-    remember(t);
-  };
-
-  // ───────── Opening tabs ─────────
-  const addTab = (
-    c: ConnectionView,
-    kind: Tab["kind"],
-    opts: { title?: string; sql?: string; database?: string; tableSql?: string; edit?: EditTarget; group?: Group; where?: string; orderBy?: string },
-  ) => {
-    const database = opts.database && opts.database !== (c.database || "postgres") ? opts.database : undefined;
-    const base = database ? `${c.name}/${database}` : c.name;
-    const n = useTabsStore.getState().tabs.filter((t) => t.kind === "console" && t.connId === c.id && t.database === database).length;
-    const ls = leaves(useTabsStore.getState().panes);
-    const group: Group = opts.group ?? (ls.includes(focused) ? focused : ls[0]);
-    // If the name already starts with brackets like [DEV], don't wrap it again ("console [[DEV] shop]" → "console [DEV] shop")
-    const where = base.startsWith("[") ? base : `[${base}]`;
-    const tab = buildTab(c, kind, opts, group, opts.title ?? (n === 0 ? `console ${where}` : `console_${n + 1} ${where}`));
-    // Transaction control: if Manual is the default, open the session as Manual too
-    if (tab.txManual) api.setTxMode(tab.target, tab.id, true).catch((e) => setStatus(String(e)));
-    setTabs((ts) => [...ts, tab]);
-    activate(tab);
-    // Tab limit: when unpinned tabs exceed 10, close the least recently used first (DataGrip)
-    setTimeout(() => {
-      const inGroup = useTabsStore.getState().tabs.filter((t) => t.group === group && !t.pinned && t.id !== tab.id);
-      const over = inGroup.length + 1 - TAB_LIMIT;
-      if (over > 0) {
-        const byAge = [...inGroup].sort((a, b) => {
-          const ia = useTabsStore.getState().mru.indexOf(a.id), ib = useTabsStore.getState().mru.indexOf(b.id);
-          return (ib < 0 ? -1 : ib) - (ia < 0 ? -1 : ia);
-        });
-        closeTabs(byAge.slice(0, over).map((t) => t.id));
-      }
-    });
-    return tab;
-  };
 
   const { dbCache, schemaCache, loadDbList, loadSchemaList, switchDatabase, switchSchema, run, log, reconnectAfterTls, focusTableGrid, executeConsole, fetchMoreEntry, setTxMode, txEnd, applyTableFilter, fetchMore, cancel, setPendingRuns, canCancel, cancelRun, submitEdits, loadStale } = useConsole({ conns, setStatus, refresh });
+  const { activate, addTab, openConsole } = useTabs({ setStatus, loadStale });
   const { readyToQuit, switchWs, newWs, renameWs, deleteWs, moveToWs, setInWs, shownWs } = useWorkspaces({ conns, setStatus, loadStale });
-
-  const openConsole = (c: ConnectionView, db?: string, sql?: string) => addTab(c, "console", { database: db, sql });
 
   const openTable = async (c: ConnectionView, schema: string, table: string, db?: string) => {
     const target = targetId(c.id, db && db !== (c.database || "postgres") ? db : undefined);
