@@ -364,3 +364,46 @@ for (const r of ROWS)
       await openApp(page);
       await CHECKS[r.id](page, press(spec));
     });
+
+// The fixed keys outside the table (as in DataGrip)
+test.describe("fixed keys", () => {
+  test.beforeEach(async ({ page }) => openApp(page));
+
+  test("⇧⇧ opens Search Everywhere on All", async ({ page }) => {
+    await page.keyboard.press("Shift");
+    await page.keyboard.press("Shift");
+    await expect(seTab(page)).toHaveText("All");
+  });
+
+  test("⇧⎋ hides the Find tool window, or the explorer, whichever has the focus", async ({ page }) => {
+    await page.keyboard.press("Meta+Shift+KeyF");
+    await page.locator("[data-toolwindow=find]").focus();
+    await page.keyboard.press("Shift+Escape");
+    await expect(page.locator("[data-toolwindow=find]")).toHaveCount(0);
+    await users(page).click();
+    await page.keyboard.press("Shift+Escape");
+    await expect(page.locator(".ws-explorer.on")).toHaveCount(0);
+  });
+
+  test("⌃⇥ opens the Switcher on the tab used before, and releasing ⌃ shows it; ⌃⇧⇥ too", async ({ page }) => {
+    await twoTabs(page);
+    for (const key of ["Tab", "Shift+Tab"]) {
+      await expect(selectedTab(page)).toContainText("contracts");
+      await page.keyboard.down("Control");
+      await page.keyboard.press(key);
+      await expect(popoverTitle(page)).toHaveText("Switcher");
+      await page.keyboard.up("Control");
+      await expect(popoverTitle(page)).toHaveCount(0);
+      await expect(selectedTab(page)).toContainText("users");
+      await page.getByRole("tab", { name: /contracts/ }).click();
+    }
+  });
+
+  test("⇧F6 on a console tab renames it", async ({ page }) => {
+    await openConsole(page);
+    await page.getByRole("tab", { name: /console/ }).click();
+    await page.keyboard.press("Shift+F6");
+    await expect(dialog(page)).toContainText("Rename console");
+    await expect(dialog(page).getByRole("textbox")).toHaveValue("console [DEV] shop_app");
+  });
+});
