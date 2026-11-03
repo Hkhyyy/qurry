@@ -98,7 +98,7 @@ export function SearchField({ busy, bare, className, ...rest }: InputHTMLAttribu
   return (
     <div className={cx("ui-search", bare && "bare", className)}>
       <span className="ui-search-glass">⌕</span>
-      <TextInput spellCheck={false} {...rest} />
+      <TextInput {...rest} />
       {busy && (
         <span className="ui-search-busy" title="Loading…">
           ◌

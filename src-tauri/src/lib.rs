@@ -1,6 +1,7 @@
 #[cfg(target_os = "macos")]
 mod bundle;
 mod commands;
+mod fonts;
 // The engine is qurry-core (shared with TUI and MCP)
 pub use qurry_core::{app, db, error, meta, redisdb, secrets, store};
 
@@ -187,6 +188,7 @@ pub fn run() {
             commands::set_update_channel,
             commands::grid_align,
             commands::set_grid_align,
+            fonts::font_families,
             commands::install_update,
         ])
         .build(app_context())

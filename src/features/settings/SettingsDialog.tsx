@@ -1,25 +1,24 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { alignOf, setGridAlign, useGridAlign, VALUE_CLASSES } from "../../lib/gridAlign";
 import { useSharedReady, type Align } from "../../lib/shared";
 import { api, secretKey, setUpdateCheckEnabled, UpdateInfo, updateCheckEnabled } from "../../lib/api";
-import type { UpdateChannel } from "../../lib/api";
+import type { FontFamily, UpdateChannel } from "../../lib/api";
 import { KeymapEditor } from "../../components/KeymapEditor";
-import { Button, Checkbox, cx, Field, List, ListItem, Modal, Select, Text, TextInput } from "../../ui";
+import { Button, Checkbox, cx, Field, List, ListItem, Modal, Select, Text } from "../../ui";
 import { getThemePref, setThemePref, ThemePref, useTheme } from "../../lib/theme";
-import { fontInstalled, fontStack, FontTarget, KNOWN_MONO, setFont, SIZES, useFonts } from "../../lib/prefs";
+import { FontTarget, setFont, SIZES, useFonts } from "../../lib/prefs";
+import { FontPicker } from "./FontPicker";
 import { isMac, sk } from "../shortcuts/labels";
 
-/** Settings › Appearance › Editor / Grid font: a family (the installed fonts of KNOWN_MONO are suggested, any other can be typed; shown in itself) and a size. Applied as you type */
-function FontField({ target, label, hint }: { target: FontTarget; label: string; hint?: string }) {
+/** Settings › Appearance › Editor / Grid font: a family picked from the installed ones (FontPicker) and a size. Applied as you pick */
+function FontField({ target, label, hint, installed }: { target: FontTarget; label: string; hint?: string; installed: FontFamily[] | null }) {
   const { family, size } = useFonts()[target];
   const [min, max] = SIZES[target];
-  const name = family.trim();
-  const missing = name !== "" && !fontInstalled(name);
-  // The hint is always there with two lines reserved (.settings-font), so the warning coming and going as you type doesn't move the fields below
   return (
-    <Field className="settings-font" label={label} hint={<>{missing ? `"${name}" isn't installed, so the default monospace font is used. Pick a font from the list, or clear the field for the default.` : hint}</>}>
+    // group: a <label> would turn a click in the font list into a click on the picker field
+    <Field group label={label} hint={hint}>
       <div className="ui-row">
-        <TextInput grow list="settings-fonts" aria-label={`${label} family`} placeholder="Default monospace" spellCheck={false} value={family} style={{ fontFamily: fontStack(family) }} onChange={(e) => setFont(target, { family: e.target.value })} />
+        <FontPicker label={`${label} family`} value={family} installed={installed} onPick={(f) => setFont(target, { family: f })} />
         <Select aria-label={`${label} size`} value={size} onChange={(e) => setFont(target, { size: Number(e.target.value) })}>
           {Array.from({ length: max - min + 1 }, (_, i) => min + i).map((n) => (
             <option key={n} value={n}>
@@ -159,7 +158,11 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
     setThemePref(p);
   };
   const sync = pref === "system";
-  const fonts = useMemo(() => KNOWN_MONO.filter(fontInstalled), []);
+  // Listed once per session by the app; empty if it can't (the pickers then offer the default and the saved family)
+  const [fonts, setFonts] = useState<FontFamily[] | null>(null);
+  useEffect(() => {
+    api.fontFamilies().then(setFonts, () => setFonts([]));
+  }, []);
   const fontKeys = [sk("font.bigger"), sk("font.smaller")].filter(Boolean).join(" / ");
   return (
     <Modal
@@ -199,13 +202,8 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
                 </Checkbox>
               </div>
             </Field>
-            <FontField target="editor" label="Editor font" hint={fontKeys && `Size also with ${fontKeys} in the editor.`} />
-            <FontField target="grid" label="Grid font" />
-            <datalist id="settings-fonts">
-              {fonts.map((f) => (
-                <option key={f} value={f} />
-              ))}
-            </datalist>
+            <FontField target="editor" label="Editor font" hint={fontKeys && `Size also with ${fontKeys} in the editor.`} installed={fonts} />
+            <FontField target="grid" label="Grid font" installed={fonts} />
             <GridAlignField />
             <Field label="Updates" hint={updMsg ?? undefined}>
               <div className="ui-row">
