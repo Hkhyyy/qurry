@@ -118,11 +118,14 @@ pub struct TableStructure {
     /// (name, value): engine, owner, tablespace, partition key…
     pub options: Option<Vec<(String, String)>>,
     pub comment: Option<String>,
+    /// Referenced by and Triggers list only what this account has privileges on (MySQL), so empty doesn't mean there are none
+    #[serde(default)]
+    pub only_visible: bool,
 }
 
 impl From<TableDetail> for TableStructure {
     fn from(detail: TableDetail) -> Self {
-        TableStructure { detail, foreign_keys: None, referenced_by: None, triggers: None, options: None, comment: None }
+        TableStructure { detail, foreign_keys: None, referenced_by: None, triggers: None, options: None, comment: None, only_visible: false }
     }
 }
 
@@ -328,6 +331,9 @@ mod tests {
         let opts = pin.options.unwrap();
         assert!(opts.iter().any(|(k, v)| k == "Storage parameters" && v == "fillfactor=70"), "{opts:?}");
         assert!(opts.iter().any(|(k, _)| k == "Owner"), "{opts:?}");
+        // A table in the default tablespace is stored in the database's, which isn't always pg_default
+        let (db_space,): (String,) = sqlx::query_as("select spcname::text from pg_tablespace where oid = (select dattablespace from pg_database where datname = current_database())").fetch_one(p).await.unwrap();
+        assert!(opts.contains(&("Tablespace".to_string(), db_space)), "{opts:?}");
         sqlx::query("drop schema qurry_ddl_structure cascade").execute(p).await.unwrap();
     }
 
@@ -383,5 +389,43 @@ mod tests {
         assert_eq!(s.detail.indexes.iter().find(|i| i.name == "child_note_id").unwrap().columns, ["note", "id"]);
         assert!(s.foreign_keys.unwrap().iter().all(|f| f.columns.len() == 1));
         sqlx::raw_sql("drop database qurry_ddl_structure").execute(p).await.unwrap();
+    }
+
+    /// Real DB: an account with SELECT on one database only doesn't see the cascading key from another database nor the
+    /// trigger (MySQL lists only what it has privileges on), so the structure says its lists are only what's visible
+    #[tokio::test]
+    #[ignore]
+    async fn my_table_structure_limited_account() {
+        let Some(s) = crate::testenv::my() else { return };
+        let pool = crate::db::connect(&s.cfg, s.password.as_deref()).await.unwrap();
+        let Pool::My(p) = &pool else { unreachable!() };
+        let setup = [
+            "drop user if exists 'qurry_ddlsv_ro'@'%'",
+            "drop database if exists qurry_ddlsv_a",
+            "drop database if exists qurry_ddlsv_b",
+            "create database qurry_ddlsv_a",
+            "create database qurry_ddlsv_b",
+            "create table qurry_ddlsv_a.parent(id int primary key)",
+            "create table qurry_ddlsv_b.child(id int primary key, pid int, foreign key (pid) references qurry_ddlsv_a.parent(id) on delete cascade)",
+            "create trigger qurry_ddlsv_a.parent_del before delete on qurry_ddlsv_a.parent for each row set @n = 1",
+            "create user 'qurry_ddlsv_ro'@'%' identified by 'ro_pw_1'",
+            "grant select on qurry_ddlsv_a.* to 'qurry_ddlsv_ro'@'%'",
+        ];
+        for q in setup {
+            sqlx::raw_sql(q).execute(p).await.unwrap_or_else(|e| panic!("{q}: {e}"));
+        }
+        let full = table_structure(&pool, "qurry_ddlsv_a", "parent").await.unwrap();
+        assert_eq!((full.referenced_by.as_ref().unwrap().len(), full.triggers.as_ref().unwrap().len()), (1, 1));
+        let mut cfg = s.cfg.clone();
+        cfg.user = "qurry_ddlsv_ro".into();
+        cfg.database = "qurry_ddlsv_a".into();
+        let ro = crate::db::connect(&cfg, Some("ro_pw_1")).await.unwrap();
+        let seen = table_structure(&ro, "qurry_ddlsv_a", "parent").await;
+        for q in ["drop user 'qurry_ddlsv_ro'@'%'", "drop database qurry_ddlsv_b", "drop database qurry_ddlsv_a"] {
+            sqlx::raw_sql(q).execute(p).await.unwrap();
+        }
+        let seen = seen.unwrap();
+        assert!(seen.referenced_by.unwrap().is_empty() && seen.triggers.unwrap().is_empty());
+        assert!(seen.only_visible && full.only_visible);
     }
 }

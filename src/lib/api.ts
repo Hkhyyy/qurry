@@ -242,6 +242,8 @@ export interface TableStructure extends TableDetail {
   triggers: TriggerMeta[] | null;
   options: [string, string][] | null;
   comment: string | null;
+  /** Referenced by and Triggers list only what this account has privileges on (MySQL), so empty doesn't mean there are none */
+  onlyVisible: boolean;
 }
 /** One row of the workspace list (shared by GUI · TUI) */
 export interface WsInfo { id: string; name: string; connIds: string[] }

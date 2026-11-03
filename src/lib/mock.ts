@@ -140,7 +140,7 @@ const handlers: Record<string, (a: any) => unknown> = {
         { name: `${a.table}_name_check`, kind: "c", definition: "CHECK (length(user_name) > 0)" },
       ],
     };
-    if (a.schema === "billing") return { ...basics, indexes: basics.indexes.map((i) => ({ ...i, columns: [] })), foreignKeys: null, referencedBy: null, triggers: null, options: null, comment: null };
+    if (a.schema === "billing") return { ...basics, indexes: basics.indexes.map((i) => ({ ...i, columns: [] })), foreignKeys: null, referencedBy: null, triggers: null, options: null, comment: null, onlyVisible: false };
     const fk = (name: string, schema: string, table: string, columns: string[], refTable: string, onDelete: string) => ({ name, schema, table, columns, refSchema: "public", refTable, refColumns: ["id"], onUpdate: "NO ACTION", onDelete });
     return {
       ...basics,
@@ -149,6 +149,7 @@ const handlers: Record<string, (a: any) => unknown> = {
       triggers: [{ name: `${a.table}_touch`, timing: "BEFORE", events: "INSERT OR UPDATE", definition: `CREATE TRIGGER ${a.table}_touch BEFORE INSERT OR UPDATE ON ${t} FOR EACH ROW EXECUTE FUNCTION touch_updated_at()` }],
       options: [["Owner", "app"], ["Tablespace", "pg_default"], ["Storage parameters", "fillfactor=90"]],
       comment: "Members of the shop",
+      onlyVisible: false,
     };
   },
   // MySQL: the schema is the database (shop is the data source's default)

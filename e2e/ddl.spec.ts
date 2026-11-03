@@ -90,6 +90,29 @@ test("Structure loads once, when first shown: not for restored or background tab
   expect(await loads(page)).toBe(1);
 });
 
+test("restored DDL tabs keep their own view when another tab switches; Reload loads the structure again", async ({ page }) => {
+  await openDdl(page, "users");
+  await views(page).getByRole("tab", { name: "Structure" }).click();
+  await openDdl(page, "contracts");
+  await expect(section(page, "Columns 5")).toBeVisible();
+  await page.waitForTimeout(800);
+  await page.reload();
+  await expect(treeItem(page, "users").first()).toBeVisible();
+  // Both come back in Structure (the last choice); switching one to SQL leaves the other alone
+  await page.getByRole("tab", { name: /users \[DDL\]/ }).click();
+  await views(page).getByRole("tab", { name: "SQL" }).click();
+  await page.getByRole("tab", { name: /contracts \[DDL\]/ }).click();
+  await expect(views(page).getByRole("tab", { name: "Structure" })).toHaveAttribute("aria-selected", "true");
+  await expect(section(page, "Columns 5")).toBeVisible();
+  // Reload: only in Structure, and it asks the database again
+  const before = await loads(page);
+  await work(page).getByRole("button", { name: "Reload" }).click();
+  await expect(section(page, "Columns 5")).toBeVisible();
+  expect(await loads(page)).toBe(before + 1);
+  await views(page).getByRole("tab", { name: "SQL" }).click();
+  await expect(work(page).getByRole("button", { name: "Reload" })).toHaveCount(0);
+});
+
 test("a long default wraps so the comment stays in view", async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 800 });
   await openDdl(page, "users");

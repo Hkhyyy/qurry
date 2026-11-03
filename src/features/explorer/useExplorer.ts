@@ -3,7 +3,7 @@ import { api, backup, ConnectionView, ddl, dialectOf, meta, redisDb, targetId, V
 import type { BackupOptions } from "../../lib/api";
 import { ask, askText, notice } from "../../lib/dialogs";
 import { invalidateCompletion } from "../../lib/completion";
-import { ddlView, hasStructure } from "../../lib/structure";
+import { hasStructure } from "../../lib/structure";
 import { bindings, formatSpec } from "../../lib/shortcuts";
 import type { MenuItem } from "../../components/Explorer";
 import type { NewKind } from "../../components/ObjectEditors";
@@ -73,8 +73,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
       setStatus(`Loading DDL of ${info.schema}.${info.name}…`);
       const ddl = await meta.ddl(target, info.schema, info.name, info.kind);
       // A table also gets the Structure view, opened in the last choice
-      const tab = addTab(info.conn, "ddl", { title, sql: ddl, database: info.db, edit: hasStructure(info.kind) ? { schema: info.schema, table: info.name, pk: [] } : undefined });
-      if (tab.edit) patch(tab.id, { ddlView: ddlView() });
+      addTab(info.conn, "ddl", { title, sql: ddl, database: info.db, edit: hasStructure(info.kind) ? { schema: info.schema, table: info.name, pk: [] } : undefined });
       setStatus("Ready");
     } catch (e) {
       setStatus(`DDL failed: ${String(e)}`);

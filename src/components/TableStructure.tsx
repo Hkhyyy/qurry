@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { meta, type ForeignKeyMeta, type TableStructure } from "../lib/api";
-import { constraintLabel, fkSide } from "../lib/structure";
+import { constraintLabel, fkSide, noneNote } from "../lib/structure";
 import { Button, Hint, Notice, Row, SectionTitle, Table, Td, Text, Th } from "../ui";
 import { KeyIcon } from "../ui/icons";
 
@@ -103,10 +103,10 @@ export function TableStructureView({ target, schema, table, visible, onShowSql }
       <Section title="Foreign keys" count={s.foreignKeys?.length} head={["Name", "Columns", "References", "On update", "On delete"]}>
         {s.foreignKeys && fkRows(s.foreignKeys, false)}
       </Section>
-      <Section title="Referenced by" count={s.referencedBy?.length} head={["Name", "From", "Columns", "On update", "On delete"]}>
+      <Section title="Referenced by" count={s.referencedBy?.length} none={noneNote(s.onlyVisible)} head={["Name", "From", "Columns", "On update", "On delete"]}>
         {s.referencedBy && fkRows(s.referencedBy, true)}
       </Section>
-      <Section title="Triggers" count={s.triggers?.length} head={["Name", "Timing", "Events", "Definition"]}>
+      <Section title="Triggers" count={s.triggers?.length} none={noneNote(s.onlyVisible)} head={["Name", "Timing", "Events", "Definition"]}>
         {s.triggers?.map((t) => (
           <tr key={t.name}>
             <Td mono>{t.name}</Td>
@@ -128,8 +128,8 @@ export function TableStructureView({ target, schema, table, visible, onShowSql }
   );
 }
 
-/** One section: a title with the row count and a table; "None" when empty, a note when the source doesn't report it (count undefined) */
-function Section({ title, count, head, available = count !== undefined, children }: { title: string; count?: number; head: string[]; available?: boolean; children: ReactNode }) {
+/** One section: a title with the row count and a table; `none` when empty, a note when the source doesn't report it (count undefined) */
+function Section({ title, count, head, available = count !== undefined, none = "None", children }: { title: string; count?: number; head: string[]; available?: boolean; none?: string; children: ReactNode }) {
   const label = count === undefined ? title : `${title} ${count}`;
   const empty = !available || (Array.isArray(children) && children.length === 0) || !children;
   return (
@@ -141,7 +141,7 @@ function Section({ title, count, head, available = count !== undefined, children
       {!available ? (
         <Hint>Not available for this data source</Hint>
       ) : empty ? (
-        <Hint>None</Hint>
+        <Hint>{none}</Hint>
       ) : (
         <Table>
           <thead>

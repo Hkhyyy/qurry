@@ -56,7 +56,7 @@ interface Tab {
   dbaReport?: string;
   /** erd: schemas to draw */
   erdSchemas?: string[];
-  /** ddl of a table (edit set): SQL text or Structure; unset = the last choice (lib/structure ddlView) */
+  /** ddl of a table (edit set): SQL text or Structure; set when built from the last choice (lib/structure ddlView) */
   ddlView?: DdlView;
   /** Tab restored on relaunch: not loaded yet (loads when first shown) */
   stale?: boolean;

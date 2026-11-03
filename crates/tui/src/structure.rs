@@ -20,7 +20,7 @@ fn sections(s: &TableStructure, width: usize) -> Vec<Line<'static>> {
     let d = &s.detail;
     let mut out = vec![];
     let cols = d.columns.iter().map(|c| vec![if c.is_pk { format!("{} (PK)", c.name) } else { c.name.clone() }, c.data_type.clone(), yes(c.nullable), c.default_value.clone().unwrap_or_default(), c.comment.clone().unwrap_or_default()]);
-    section(&mut out, "Columns", Some(cols.collect()), &["Name", "Type", "Nullable", "Default", "Comment"], width);
+    section(&mut out, "Columns", Some(cols.collect()), &["Name", "Type", "Nullable", "Default", "Comment"], width, NONE);
     let label = |k: &str| match k {
         "p" => "Primary key".to_string(),
         "f" => "Foreign key".into(),
@@ -29,7 +29,7 @@ fn sections(s: &TableStructure, width: usize) -> Vec<Line<'static>> {
         k => k.into(),
     };
     let cons = d.constraints.iter().map(|c| vec![c.name.clone(), label(&c.kind), c.definition.clone()]);
-    section(&mut out, "Keys and constraints", Some(cons.collect()), &["Name", "Kind", "Definition"], width);
+    section(&mut out, "Keys and constraints", Some(cons.collect()), &["Name", "Kind", "Definition"], width, NONE);
     // No Columns column when the source doesn't report index columns (driver plugins may leave them out)
     let with_cols = d.indexes.iter().any(|i| !i.columns.is_empty());
     let idx = d.indexes.iter().map(|i| {
@@ -37,45 +37,52 @@ fn sections(s: &TableStructure, width: usize) -> Vec<Line<'static>> {
         if with_cols { vec![i.name.clone(), i.columns.join(", "), kind, i.definition.clone()] } else { vec![i.name.clone(), kind, i.definition.clone()] }
     });
     let head: &[&str] = if with_cols { &["Name", "Columns", "Kind", "Definition"] } else { &["Name", "Kind", "Definition"] };
-    section(&mut out, "Indexes", Some(idx.collect()), head, width);
+    section(&mut out, "Indexes", Some(idx.collect()), head, width, NONE);
+    // MySQL lists only the referencing tables and triggers this account has privileges on: empty isn't a definite None
+    let hidden = if s.only_visible { "None visible to this account (MySQL lists only what it has privileges on)" } else { NONE };
     let out_fk = |f: &ForeignKeyMeta| vec![f.name.clone(), f.columns.join(", "), side(f, false), f.on_update.clone(), f.on_delete.clone()];
-    section(&mut out, "Foreign keys", s.foreign_keys.as_ref().map(|l| l.iter().map(out_fk).collect()), &["Name", "Columns", "References", "On update", "On delete"], width);
+    section(&mut out, "Foreign keys", s.foreign_keys.as_ref().map(|l| l.iter().map(out_fk).collect()), &["Name", "Columns", "References", "On update", "On delete"], width, NONE);
     let in_fk = |f: &ForeignKeyMeta| vec![f.name.clone(), side(f, true), f.ref_columns.join(", "), f.on_update.clone(), f.on_delete.clone()];
-    section(&mut out, "Referenced by", s.referenced_by.as_ref().map(|l| l.iter().map(in_fk).collect()), &["Name", "From", "Columns", "On update", "On delete"], width);
+    section(&mut out, "Referenced by", s.referenced_by.as_ref().map(|l| l.iter().map(in_fk).collect()), &["Name", "From", "Columns", "On update", "On delete"], width, hidden);
     let trg = s.triggers.as_ref().map(|l| l.iter().map(|t| vec![t.name.clone(), t.timing.clone(), t.events.clone(), t.definition.clone()]).collect());
-    section(&mut out, "Triggers", trg, &["Name", "Timing", "Events", "Definition"], width);
+    section(&mut out, "Triggers", trg, &["Name", "Timing", "Events", "Definition"], width, hidden);
     let opts = s.options.as_ref().map(|o| o.iter().map(|(k, v)| vec![k.clone(), v.clone()]).chain(s.comment.iter().map(|c| vec!["Comment".into(), c.clone()])).collect::<Vec<_>>());
     // No count: options are name · value pairs, not things in the table
     out.push(crate::kit::section("Options and comment"));
     match opts {
-        Some(rows) if !rows.is_empty() => out.extend(table_lines(&["Option", "Value"], &rows, width)),
-        rows => out.push(note(rows.is_some())),
+        Some(rows) if !rows.is_empty() => out.extend(table_lines(&["Option", "Value"], &rows, width, None)),
+        Some(_) => out.push(note(NONE)),
+        None => out.push(note(UNAVAILABLE)),
     }
     out
 }
 
-/// A titled section with its row count: the table, "None", or "Not available" when the source doesn't report it (rows None)
-fn section(out: &mut Vec<Line<'static>>, title: &str, rows: Option<Vec<Vec<String>>>, head: &[&str], width: usize) {
+const NONE: &str = "None";
+const UNAVAILABLE: &str = "Not available for this data source";
+
+/// A titled section with its row count: the table, `none` when empty, or "Not available" when the source doesn't report it (rows None)
+fn section(out: &mut Vec<Line<'static>>, title: &str, rows: Option<Vec<Vec<String>>>, head: &[&str], width: usize, none: &str) {
     match rows {
         Some(rows) => {
             out.push(crate::kit::section(format!("{title} {}", rows.len())));
             if rows.is_empty() {
-                out.push(note(true));
+                out.push(note(none));
             } else {
-                out.extend(table_lines(head, &rows, width));
+                // A long column default wraps under its column, as in the GUI
+                out.extend(table_lines(head, &rows, width, head.iter().position(|h| *h == "Default")));
             }
         }
         None => {
             out.push(crate::kit::section(title));
-            out.push(note(false));
+            out.push(note(UNAVAILABLE));
         }
     }
     out.push(Line::from(""));
 }
 
-/// The line under an empty section: None, or not available for this kind of data source
-fn note(available: bool) -> Line<'static> {
-    Line::styled(if available { "  None" } else { "  Not available for this data source" }, Style::default().fg(DIM))
+/// The dim line under an empty section
+fn note(text: &str) -> Line<'static> {
+    Line::styled(format!("  {text}"), Style::default().fg(DIM))
 }
 
 fn yes(b: bool) -> String {
@@ -122,6 +129,7 @@ pub fn sample() -> TableStructure {
         triggers: None,
         options: Some(vec![("Owner".into(), "app".into()), ("Tablespace".into(), "pg_default".into())]),
         comment: Some("Members of the shop".into()),
+        only_visible: false,
     }
 }
 
@@ -174,6 +182,44 @@ mod tests {
         }
         h.key("y");
         assert_eq!(h.app.status, "Copied 3 lines");
+    }
+
+    /// A long default (the GUI mock's) wraps under Default at 120 columns: all of it shows and Comment stays a column
+    #[tokio::test]
+    async fn a_long_default_wraps_and_the_comment_stays_beside_it() {
+        let mut h = Harness::new().await;
+        let mut st = super::sample();
+        let long = "concat('user-', currval('users_id_seq'::regclass), '@', current_setting('app.mail_domain'))";
+        st.detail.columns[2].default_value = Some(long.into());
+        st.detail.columns[2].comment = Some("Login and receipts; unique when set".into());
+        ddl_tab(&mut h, Some(Ok(st)));
+        h.key("v");
+        let s = h.screen(120, 40);
+        let head = s.lines().find(|l| l.contains("Nullable")).unwrap();
+        assert!(head.contains("Default") && head.contains("Comment"), "{s}");
+        assert!(s.lines().any(|l| l.contains("user_name") && l.contains("이 름")), "{s}");
+        assert!(s.lines().any(|l| l.contains("contract_id") && l.contains("concat(") && l.contains("Login and")), "{s}");
+        // Every piece of the default is on screen, under its column
+        let col = unicode_width::UnicodeWidthStr::width(&head[..head.find("Default").unwrap()]);
+        let default: String = s.lines().skip_while(|l| !l.contains("contract_id")).take_while(|l| !l.trim().is_empty() && !l.contains("Keys and")).map(|l| l.chars().skip(col).take(20).collect::<String>().replace(' ', "")).collect();
+        assert!(default.contains(&long.replace(' ', "")), "{s}");
+    }
+
+    /// MySQL lists only the referencing tables and triggers the account has privileges on: an empty list doesn't say None
+    #[tokio::test]
+    async fn empty_mysql_lists_say_they_are_only_what_the_account_sees() {
+        let mut h = Harness::new().await;
+        let mut st = super::sample();
+        (st.referenced_by, st.triggers, st.only_visible) = (Some(vec![]), Some(vec![]), true);
+        st.foreign_keys = Some(vec![]);
+        ddl_tab(&mut h, Some(Ok(st)));
+        h.key("v");
+        let s = h.screen(140, 50);
+        let under = |title: &str| s.lines().skip_while(|l| !l.contains(title)).nth(1).unwrap().to_string();
+        for title in ["Referenced by 0", "Triggers 0"] {
+            assert!(under(title).contains("None visible to this account (MySQL lists only what it has privileges on)"), "{s}");
+        }
+        assert!(under("Foreign keys 0").contains("None") && !under("Foreign keys 0").contains("visible"), "{s}");
     }
 
     /// A driver plugin that doesn't report index columns: no empty Columns column

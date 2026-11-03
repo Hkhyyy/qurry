@@ -244,19 +244,22 @@ impl Backend for PgPool {
                     (select string_agg(pn.nspname || '.' || p.relname || coalesce(' ' || pg_get_expr(c.relpartbound, c.oid), ''), ', ') \
                        from pg_inherits i join pg_class p on p.oid = i.inhparent join pg_namespace pn on pn.oid = p.relnamespace where i.inhrelid = c.oid), \
                     obj_description(c.oid, 'pg_class') \
-             from pg_class c left join pg_tablespace ts on ts.oid = c.reltablespace where c.oid = {REL_OID}"
+             from pg_class c \
+             left join pg_tablespace ts on ts.oid = coalesce(nullif(c.reltablespace, 0), (select dattablespace from pg_database where datname = current_database())) \
+             where c.oid = {REL_OID}"
         ))
         .bind(schema)
         .bind(table)
         .fetch_one(self)
         .await?;
+        // reltablespace 0 is the database's default tablespace (not always pg_default)
         let mut options = vec![("Owner".to_string(), owner), ("Tablespace".to_string(), space)];
         for (k, v) in [("Storage parameters", params), ("Partition key", partkey), ("Parent", parent)] {
             if let Some(v) = v.filter(|v| !v.is_empty()) {
                 options.push((k.into(), v));
             }
         }
-        Ok(TableStructure { detail, foreign_keys: Some(foreign_keys), referenced_by: Some(referenced_by), triggers: Some(triggers), options: Some(options), comment })
+        Ok(TableStructure { detail, foreign_keys: Some(foreign_keys), referenced_by: Some(referenced_by), triggers: Some(triggers), options: Some(options), comment, only_visible: false })
     }
 
     async fn object_ddl(&self, schema: &str, name: &str, kind: &str) -> AppResult<String> {

@@ -664,7 +664,7 @@ pub async fn table_structure(p: &MySqlPool, schema: &str, table: &str) -> AppRes
         .into_iter()
         .filter_map(|(k, v)| v.map(|v| (k.to_string(), v)))
         .collect();
-    Ok(TableStructure { detail, foreign_keys: Some(foreign_keys), referenced_by: Some(referenced_by), triggers: Some(triggers), options: Some(options), comment })
+    Ok(TableStructure { detail, foreign_keys: Some(foreign_keys), referenced_by: Some(referenced_by), triggers: Some(triggers), options: Some(options), comment, only_visible: true })
 }
 
 pub async fn object_ddl(p: &MySqlPool, schema: &str, name: &str, kind: &str) -> AppResult<String> {

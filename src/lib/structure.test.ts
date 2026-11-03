@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { constraintLabel, ddlView, fkSide, hasStructure, setDdlView } from "./structure";
+import { constraintLabel, ddlView, fkSide, hasStructure, noneNote, setDdlView } from "./structure";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -39,5 +39,12 @@ describe("structure labels", () => {
     const fk = { name: "f", schema: "public", table: "orders", columns: ["user_id", "shop_id"], refSchema: "public", refTable: "users", refColumns: ["id", "shop_id"], onUpdate: "NO ACTION", onDelete: "CASCADE" };
     expect(fkSide(fk, "from")).toBe("public.orders (user_id, shop_id)");
     expect(fkSide(fk, "to")).toBe("public.users (id, shop_id)");
+  });
+});
+
+describe("empty Referenced by / Triggers", () => {
+  it("is None, or on MySQL only what this account can see", () => {
+    expect(noneNote(false)).toBe("None");
+    expect(noneNote(true)).toBe("None visible to this account (MySQL lists only what it has privileges on)");
   });
 });
