@@ -1,4 +1,9 @@
-//! Display formatting shared by the result grids: fractional seconds aligned within a time column, digit grouping.
+//! Display formatting shared by the result grids: fractional seconds aligned within a time column, digit grouping,
+//! the value class of a cell and its alignment (Settings › Appearance › Alignment in grid; overrides kept in settings.json).
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::BTreeMap;
 
 /// Columns whose fractional seconds are aligned: time types except INTERVAL
 pub fn is_time_type(type_name: &str) -> bool {
@@ -43,6 +48,91 @@ pub fn thousands(n: u64) -> String {
     n.to_string().as_bytes().rchunks(3).rev().map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join(",")
 }
 
+/// What kind of value a grid cell holds, for its alignment (and the GUI's number / NULL colors)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ValueClass {
+    String,
+    Number,
+    DateTime,
+    Boolean,
+    Null,
+    JsonBinary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Align {
+    Left,
+    Right,
+    Center,
+}
+
+impl ValueClass {
+    pub const ALL: [ValueClass; 6] = [ValueClass::String, ValueClass::Number, ValueClass::DateTime, ValueClass::Boolean, ValueClass::Null, ValueClass::JsonBinary];
+
+    /// Numbers and NULL on the right (a NULL in a numeric column stays in line with its numbers), everything else on the left
+    pub fn default_align(self) -> Align {
+        match self {
+            ValueClass::Number | ValueClass::Null => Align::Right,
+            _ => Align::Left,
+        }
+    }
+}
+
+/// Class of a column from its type name (PostgreSQL, MySQL, SQLite, SQL Server, Oracle, ClickHouse …); arrays and unknown types are strings
+pub fn type_class(type_name: &str) -> ValueClass {
+    let mut t = type_name.trim().to_uppercase();
+    // ClickHouse wrappers: Nullable(Int32) is an Int32
+    for w in ["NULLABLE(", "LOWCARDINALITY("] {
+        if let Some(inner) = t.strip_prefix(w) {
+            t = inner.trim_end_matches(')').to_string();
+        }
+    }
+    // Arrays, ranges and containers show as text: _int4, int4[], int4range, Array(Int32), Map(String, Int32), Tuple(…)
+    if t.starts_with('_') || t.contains('[') || t.contains("RANGE") || ["ARRAY(", "MAP(", "TUPLE("].iter().any(|p| t.starts_with(p)) {
+        return ValueClass::String;
+    }
+    // numeric(8,2) → NUMERIC; "timestamp with time zone" and "bigint unsigned" keep their words
+    let name = t.split('(').next().unwrap_or_default().trim();
+    let has = |words: &[&str]| words.iter().any(|w| name.contains(w));
+    if has(&["JSON", "BYTEA", "BLOB", "BINARY"]) || name == "RAW" || name == "IMAGE" {
+        ValueClass::JsonBinary
+    } else if has(&["DATE", "TIME", "INTERVAL"]) {
+        ValueClass::DateTime
+    } else if has(&["BOOL"]) {
+        ValueClass::Boolean
+    } else if (has(&["INT"]) && !has(&["POINT"])) || has(&["SERIAL", "NUMERIC", "DECIMAL", "FLOAT", "DOUBLE", "REAL", "MONEY", "OID", "NUMBER"]) || name == "DEC" {
+        ValueClass::Number
+    } else {
+        ValueClass::String
+    }
+}
+
+/// Class of one cell: NULL, then the value's own kind (a JSON number or boolean, whatever the column says), then the column's type.
+/// Only the value's kind matters, not its content, so a caller may ask once per column and kind
+pub fn value_class(type_name: &str, value: &Value) -> ValueClass {
+    match value {
+        Value::Null => ValueClass::Null,
+        Value::Bool(_) => ValueClass::Boolean,
+        Value::Number(_) => ValueClass::Number,
+        _ => type_class(type_name),
+    }
+}
+
+/// The classes the user changed (settings.json "gridAlign"); a class not in it keeps its default
+pub type Alignments = BTreeMap<ValueClass, Align>;
+
+/// Reads saved overrides, skipping entries this version doesn't know (a class or alignment added later), so the rest still apply
+pub fn alignments(v: &Value) -> Alignments {
+    let Some(m) = v.as_object() else { return Alignments::new() };
+    m.iter().filter_map(|(k, a)| Some((serde_json::from_value(Value::from(k.as_str())).ok()?, serde_json::from_value(a.clone()).ok()?))).collect()
+}
+
+pub fn align(class: ValueClass, overrides: &Alignments) -> Align {
+    overrides.get(&class).copied().unwrap_or(class.default_align())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -58,6 +148,55 @@ mod tests {
         assert_eq!(pad_frac("abcd-ef-gh 10:00:00", 3), "abcd-ef-gh 10:00:00");
         assert_eq!(frac_width(["03:19:15.5", "x", "09:38:06.521101"]), 6);
         assert!(is_time_type("timestamp with time zone") && !is_time_type("interval"));
+    }
+
+    #[test]
+    fn type_classes() {
+        use ValueClass::*;
+        let cases = [
+            ("int4", Number), ("INT8", Number), ("bigint unsigned", Number), ("numeric(8,2)", Number), ("DOUBLE PRECISION", Number), ("float8", Number),
+            ("money", Number), ("oid", Number), ("NUMBER", Number), ("UInt64", Number), ("Nullable(Int32)", Number), ("Decimal(10, 2)", Number), ("serial", Number),
+            ("timestamptz", DateTime), ("timestamp with time zone", DateTime), ("DATE", DateTime), ("DateTime64(3)", DateTime), ("interval", DateTime), ("timetz", DateTime),
+            ("bool", Boolean), ("BOOLEAN", Boolean),
+            ("jsonb", JsonBinary), ("JSON", JsonBinary), ("bytea", JsonBinary), ("LONGBLOB", JsonBinary), ("varbinary(16)", JsonBinary), ("RAW", JsonBinary),
+            ("text", String), ("varchar(60)", String), ("uuid", String), ("order_status", String), ("", String),
+            // Arrays and containers of numbers are text; POINT is not an INT
+            ("_int4", String), ("int4[]", String), ("Array(Int32)", String), ("Map(String, Int32)", String), ("int4range", String), ("tstzrange", String), ("point", String), ("vector", String),
+        ];
+        for (t, want) in cases {
+            assert_eq!(type_class(t), want, "{t}");
+        }
+    }
+
+    #[test]
+    fn value_class_reads_null_and_json_kind_first() {
+        use serde_json::json;
+        assert_eq!(value_class("int4", &Value::Null), ValueClass::Null);
+        assert_eq!(value_class("text", &Value::Null), ValueClass::Null);
+        // NUMERIC and big INT8 arrive as text, a typeless SQLite expression as a number
+        assert_eq!(value_class("NUMERIC", &json!("12.50")), ValueClass::Number);
+        assert_eq!(value_class("", &json!(3)), ValueClass::Number);
+        assert_eq!(value_class("", &json!(true)), ValueClass::Boolean);
+        assert_eq!(value_class("jsonb", &json!("{\"k\":1}")), ValueClass::JsonBinary);
+    }
+
+    #[test]
+    fn defaults_put_numbers_and_null_on_the_right() {
+        let none = Alignments::new();
+        let got: Vec<Align> = ValueClass::ALL.iter().map(|&c| align(c, &none)).collect();
+        assert_eq!(got, [Align::Left, Align::Right, Align::Left, Align::Left, Align::Right, Align::Left]);
+        // NULL back on the left, as before this setting existed
+        let back = alignments(&serde_json::json!({ "null": "left" }));
+        assert_eq!(align(ValueClass::Null, &back), Align::Left);
+        assert_eq!(align(ValueClass::Number, &back), Align::Right);
+    }
+
+    #[test]
+    fn saved_alignments_skip_what_this_version_does_not_know() {
+        let a = alignments(&serde_json::json!({ "number": "center", "uuid": "left", "string": "justify", "boolean": "right" }));
+        assert_eq!(a, Alignments::from([(ValueClass::Number, Align::Center), (ValueClass::Boolean, Align::Right)]));
+        assert!(alignments(&serde_json::json!("left")).is_empty());
+        assert_eq!(serde_json::to_value(&a).unwrap(), serde_json::json!({ "number": "center", "boolean": "right" }));
     }
 
     #[test]
