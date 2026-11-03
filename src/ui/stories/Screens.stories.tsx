@@ -63,7 +63,7 @@ const Frame = ({ children, h = 560 }: { children: React.ReactNode; h?: number })
 /** Whole app (explorer · tabs · console). Right-click the explorer, ⇧⌘A for Find Action, ⌘↩ in the console to run */
 export const FullApp: S = { name: "App (whole window)", render: () => <div style={{ height: "100vh" }}><App /></div> };
 
-/** Settings › Appearance: theme, the automatic update check and the update channel (stable or beta, shared with the TUI) */
+/** Settings › Appearance: theme, grid alignment per value class, the automatic update check and the update channel (alignment and channel shared with the TUI) */
 export const Settings: S = { name: "Settings — Appearance & updates", render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} /> };
 
 export const NewDataSource: S = { name: "Data Source — new", render: () => <ConnectionDialog onClose={noop} onSaved={noop} /> };
@@ -131,6 +131,40 @@ export const Grid: S = {
     <Frame>
       <ResultGrid result={sales} running={false} loadingMore={false} query="select region, month, orders, revenue from sales" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
     </Frame>
+  ),
+};
+
+/** Every value class with NULLs, in a panel two rows high: the header stays under the toolbar while scrolling (#82), NULL sits on the right (#75) */
+const mixed: QueryResult = {
+  columns: [
+    { name: "card_brand", typeName: "TEXT" },
+    { name: "amount", typeName: "NUMERIC" },
+    { name: "refunded", typeName: "BOOL" },
+    { name: "paid_at", typeName: "TIMESTAMPTZ" },
+    { name: "meta", typeName: "JSONB" },
+    { name: "receipt", typeName: "BYTEA" },
+    ...Array.from({ length: 8 }, (_, i) => ({ name: `extra_${i + 1}`, typeName: "INT4" })),
+  ],
+  rows: Array.from({ length: 40 }, (_, i) => [
+    i % 4 === 3 ? null : ["VISA", "MASTER", "AMEX"][i % 3],
+    i % 3 === 1 ? null : (129000 * (i + 1)).toFixed(2),
+    i % 5 === 4 ? null : i % 2 === 0,
+    i % 6 === 5 ? null : `2026-10-28 09:${String(i).padStart(2, "0")}:00 +09:00`,
+    i % 2 ? null : `{"pg":"toss","n":${i}}`,
+    i % 3 ? null : "0xDEADBEEF",
+    ...Array.from({ length: 8 }, (_, j) => ((i + j) % 4 === 0 ? null : i * 10 + j)),
+  ]),
+  rowsAffected: 0,
+  truncated: false,
+  elapsedMs: 4,
+  hasResultSet: true,
+};
+export const GridShort: S = {
+  name: "Result Grid — short panel, every value class",
+  render: () => (
+    <div style={{ position: "relative", height: 140, border: "1px solid var(--ui-border)" }}>
+      <ResultGrid result={mixed} running={false} loadingMore={false} query="select * from payment_check" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
+    </div>
   ),
 };
 

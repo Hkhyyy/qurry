@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { expect, menuItem, openApp, test, treeItem, work } from "./app";
+import { dialog, expect, menuItem, openApp, test, treeItem, work } from "./app";
 
 const clipboard = (page: Page) => page.evaluate(() => navigator.clipboard.readText());
 /** The mock's created_at alternates no fraction / .5 / .125 */
@@ -85,4 +85,35 @@ test("a WebView that refuses WebAssembly: multi-cell copy says why nothing was c
   await selectRows12(page);
   await page.keyboard.press("Meta+C");
   await expect(page.locator(".statusbar")).toContainText("Copy formats need WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk");
+});
+
+/** text-align of the first three data cells of a column */
+const aligns = (page: Page, col: number) =>
+  work(page)
+    .locator(".grid-row")
+    .evaluateAll((rows, c) => rows.slice(0, 3).map((r) => getComputedStyle(r.querySelectorAll(".cell:not(.rownum)")[c]).textAlign), col);
+
+test("NULL is right-aligned by default; Settings › Appearance › Alignment puts it back on the left (#75)", async ({ page }) => {
+  // memo (TEXT): "note", <null>, <null>; amount (NUMERIC, arrives as text): a number
+  await expect.poll(() => aligns(page, 4)).toEqual(["left", "right", "right"]);
+  await expect.poll(() => aligns(page, 2)).toEqual(["right", "right", "right"]);
+  await page.keyboard.press("Meta+Comma");
+  const nul = dialog(page).getByRole("combobox", { name: "NULL alignment" });
+  await expect(nul).toHaveValue("right");
+  await nul.selectOption("left");
+  await page.keyboard.press("Escape");
+  await expect.poll(() => aligns(page, 4)).toEqual(["left", "left", "left"]);
+  await expect.poll(() => aligns(page, 2)).toEqual(["right", "right", "right"]);
+  // Saved (the mock's settings.json) and marked as changed
+  await page.keyboard.press("Meta+Comma");
+  await expect(dialog(page).getByRole("combobox", { name: "NULL alignment" })).toHaveValue("left");
+  await expect(dialog(page).locator(".align-label.custom")).toHaveText(["NULL"]);
+});
+
+test("Settings › Appearance › Alignment that can't be saved goes back and says so", async ({ page }) => {
+  await page.evaluate(() => ((window as any).__mockChannelSaveFails = true));
+  await page.keyboard.press("Meta+Comma");
+  await dialog(page).getByRole("combobox", { name: "NULL alignment" }).selectOption("left");
+  await expect(dialog(page).getByText(/Couldn't save the alignment \(.*permission denied\)\. It is back to what it was\./)).toBeVisible();
+  await expect(dialog(page).getByRole("combobox", { name: "NULL alignment" })).toHaveValue("right");
 });
