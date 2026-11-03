@@ -19,9 +19,9 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                     None => Some(format!("{} can't be a command key — use a {} combination or an F key", crate::keys::spec(&k).map(|s| crate::keys::disp(&s)).unwrap_or_else(|| "That key".into()), if cfg!(target_os = "macos") { "⌃/⌥" } else { "Ctrl/Alt" })),
                     Some(key) => {
                         let taken = app.keys.bind(a, key.clone(), add);
-                        let mut m = format!("{} → {}", name_of(a), app.keys.label(a));
+                        let mut m = format!("{} → {}", crate::app::title(a), app.keys.label(a));
                         if let Some(t) = taken {
-                            m += &format!(" · removed {key} from {}", name_of(t));
+                            m += &format!(" · removed {key} from {}", crate::app::title(t));
                         }
                         if let Err(e) = app.save_keys() {
                             m = format!("Save failed: {e}");
@@ -54,7 +54,7 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                     let a = crate::keys::DEFAULT_KEYS[sel].0;
                     app.keys.reset(a);
                     message = Some(match app.save_keys() {
-                        Ok(()) => format!("{} reset to {}", name_of(a), app.keys.label(a)),
+                        Ok(()) => format!("{} reset to {}", crate::app::title(a), app.keys.label(a)),
                         Err(e) => format!("Save failed: {e}"),
                     });
                 }

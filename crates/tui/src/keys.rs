@@ -280,24 +280,17 @@ mod tests {
         assert!(km.overrides().is_empty());
     }
 
-    /// Every Action has a row in the shared table (its name on screen), and every TUI row is an Action
+    /// Every Action has a row in the shared table (its name on screen), and every TUI row is an Action (that every Action has one
+    /// ActionDef is checked in tests/actions.rs)
     #[test]
     fn every_action_has_a_table_row() {
-        let ids: Vec<String> = crate::app::ACTIONS.iter().map(|(a, _)| action_id(*a)).collect();
-        // ACTIONS lists every variant of the enum (read from app.rs: the enum has no variant list of its own)
-        let src = include_str!("app/mod.rs");
-        let body = src.split("pub enum Action {").nth(1).and_then(|s| s.split("\n}").next()).expect("pub enum Action in app.rs");
-        let mut variants: Vec<&str> = body.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with("//")).map(|l| l.trim_end_matches(',')).collect();
-        let mut listed: Vec<&str> = ids.iter().map(String::as_str).collect();
-        variants.sort_unstable();
-        listed.sort_unstable();
-        assert_eq!(variants, listed, "every Action variant goes in app.rs ACTIONS exactly once");
+        let ids: Vec<String> = crate::app::ACTIONS.iter().map(|d| action_id(d.action)).collect();
         for id in &ids {
             assert!(table::tui_command(id).is_some(), "Action::{id} has no row in crates/shared/src/keymap-table.json: add one with \"tui\": \"{id}\"");
         }
         for c in table::commands() {
             if let Some(id) = &c.tui {
-                assert!(ids.contains(id), "keymap-table.json row \"tui\": \"{id}\" is not an Action in the palette (app.rs ACTIONS): fix the name or add the Action");
+                assert!(ids.contains(id), "keymap-table.json row \"tui\": \"{id}\" is not an Action in the palette (app/actions.rs ACTIONS): fix the name or add the Action");
             }
         }
         assert_eq!(DEFAULT_KEYS.iter().find(|d| d.0 == Action::NewConsole).map(|d| d.1), Some(&["Ctrl+L".to_string()][..]));

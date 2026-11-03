@@ -822,7 +822,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             for (i, (a, _)) in crate::keys::DEFAULT_KEYS.iter().enumerate() {
                 let custom = app.keys.is_custom(*a);
                 let keys = if i == *sel && record.is_some() { "press a key… (Esc cancels)".to_string() } else { app.keys.label(*a) };
-                lines.push(key_row(&keys, crate::input::name_of(*a), 30, custom, i == *sel));
+                lines.push(key_row(&keys, crate::app::title(*a), 30, custom, i == *sel));
             }
             lines.push(Line::raw(""));
             // Fixed key list: selectable continuing from the number after Commands (not rebindable)

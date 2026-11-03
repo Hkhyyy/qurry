@@ -71,6 +71,6 @@ mod tests {
         h.key("Y");
         assert_eq!(h.app.status, "Copied 2 values as an IN list: ('1.2.3.4', '5.6.7.8')");
         // From ⌃K too
-        assert!(crate::app::ACTIONS.iter().any(|a| a.0 == Action::CopyInList));
+        assert!(crate::app::ACTIONS.iter().any(|a| a.action == Action::CopyInList));
     }
 }

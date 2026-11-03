@@ -1,7 +1,7 @@
 //! The command list: every rebindable command fires through its default key, and the palette list and the --help / F1 order
 //! stay as they are (goldens next to this file; run with QURRY_TUI_BLESS=1 to rewrite them after an intended change)
-use crate::app::{PAction, Popup, TabKind};
-use crate::keys::{DEFAULT_KEYS, FORCE_MAC_GLYPHS};
+use crate::app::{PAction, Popup, TabKind, ACTIONS};
+use crate::keys::{action_id, DEFAULT_KEYS, FORCE_MAC_GLYPHS};
 use crate::testkit::Harness;
 
 /// Compares with a golden file in src/tests/, or rewrites it with QURRY_TUI_BLESS=1
@@ -14,9 +14,18 @@ fn golden(file: &str, got: &str) {
     assert!(got == want, "{file} changed (if that's intended, run the test with QURRY_TUI_BLESS=1 and commit the file):\n{got}");
 }
 
-/// Each default key of each rebindable command runs that command (from a fresh console, so no popup or earlier command is in the way)
+/// Every Action variant has exactly one ActionDef (variants read from app/mod.rs: the enum has no variant list of its own), and each
+/// default key of each rebindable command runs that command (from a fresh console, so no popup or earlier command is in the way)
 #[tokio::test]
-async fn every_command_fires_through_its_default_keys() {
+async fn every_action_has_one_def_and_fires_through_its_default_keys() {
+    let src = include_str!("../app/mod.rs");
+    let body = src.split("pub enum Action {").nth(1).and_then(|s| s.split("\n}").next()).expect("pub enum Action in app/mod.rs");
+    let variants: Vec<&str> = body.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with("//")).map(|l| l.trim_end_matches(',')).collect();
+    for v in &variants {
+        let n = ACTIONS.iter().filter(|d| action_id(d.action) == *v).count();
+        assert_eq!(n, 1, "Action::{v} has {n} ActionDefs: give it exactly one in ACTIONS (crates/tui/src/app/actions.rs)");
+    }
+    assert_eq!(ACTIONS.len(), variants.len(), "ACTIONS has a row for an Action that isn't in the enum");
     for (a, keys) in DEFAULT_KEYS.iter() {
         for key in keys.iter() {
             let mut h = Harness::new().await;
