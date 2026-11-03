@@ -35,6 +35,16 @@ type Deps = {
   ReturnType<typeof useEditorGroups> &
   ReturnType<typeof useSearch>;
 
+/** Keys outside the keymap table (fixed, as in DataGrip), under the ids the handler below knows them by */
+const FIXED = new Map<string, (e: KeyboardEvent) => boolean>([
+  // ⇧⎋ Hide Active Tool Window
+  ["toolwindow.hide", (e) => e.shiftKey && e.key === "Escape"],
+  // ⇧F6 Rename File… of a console tab
+  ["console.rename", (e) => e.key === "F6" && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey],
+  // ⌃⇥ / ⌃⇧⇥ Switcher
+  ["switcher", (e) => e.ctrlKey && !e.metaKey && e.key === "Tab"],
+]);
+
 /** The app-wide key handler: command shortcuts of the keymap (lib/shortcuts.ts) and the fixed keys (⇧⇧, ⇧⎋, ⌃⇥, ⇧F6) */
 export function useGlobalShortcuts({
   conns, keymapVer, treeSel, active, focused, tabs, split, toggleExplorer, bumpFont, setMaximized, openFts, setSe, setFindOpen, findOpen, openSwitcher, setRecentOpen, switchWs, activate, openConsole, jumpToConsole, activateNode, deactivate, sqlGenerator, ddlToClipboard, ddlToConsole, showQuickDoc, canDdl, modifyTable, renameNode, duplicateConn, removeConn, dangerous, openDdl, applyTableFilter, refreshAll, canCancel, cancelRun, renameConsole, reopenClosed,
@@ -68,153 +78,150 @@ export function useGlobalShortcuts({
       // Command shortcuts are in lib/shortcuts.ts (changed in Settings › Keymap)
       const spec = eventSpec(e);
       const is = (id: string) => hit(spec, id);
-      if (is("goto.object")) return e.preventDefault(), L.setSe("database");
-      if (is("goto.symbol")) return e.preventDefault(), L.setSe("symbols");
-      if (is("goto.file")) return e.preventDefault(), L.setSe("files");
-      if (is("find.action")) return e.preventDefault(), L.setSe("actions");
-      if (is("fts")) return e.preventDefault(), void L.openFts();
-      if (is("explorer")) return e.preventDefault(), L.toggleExplorer();
-      // ⌘1~9: workspaces (explorer is ⌘0)
-      for (let n = 1; n <= 9; n++) if (is(`ws.${n}`)) return e.preventDefault(), void (useWorkspacesStore.getState().workspaces[n - 1] && L.switchWs(useWorkspacesStore.getState().workspaces[n - 1].id));
-      if (is("find.window")) return e.preventDefault(), L.setFindOpen((o) => !o);
-      // ⇧⎋ Hide Active Tool Window
-      if (e.shiftKey && e.key === "Escape") {
-        const ae = document.activeElement;
-        if (ae?.closest?.("[data-toolwindow=find]")) return e.preventDefault(), L.setFindOpen(false);
-        if (ae?.closest?.("[data-tree]")) return e.preventDefault(), L.toggleExplorer();
-      }
-      if (is("font.bigger")) return e.preventDefault(), L.bumpFont(1);
-      if (is("font.smaller")) return e.preventDefault(), L.bumpFont(-1);
       const inTree = (document.activeElement as HTMLElement | null)?.closest?.("[data-tree]");
       const inInput = ["INPUT", "TEXTAREA", "SELECT"].includes((document.activeElement as HTMLElement | null)?.tagName ?? "");
-      if (is("console.new")) {
-        e.preventDefault();
-        const conn = treeSel?.conn ?? conns.find((c) => c.id === active?.connId);
-        if (conn) openConsole(conn, treeSel?.db ?? active?.database);
-        return;
-      }
-      if (inTree && treeSel && !inInput) {
-        const act = (fn: () => void) => {
-          e.preventDefault();
-          e.stopPropagation();
-          fn();
-        };
-        // Edit Data (default console for a data source)
-        if (is("tree.editData"))
-          return act(() => ((treeSel.kind === "conn" || treeSel.kind === "db") && treeSel.conn.kind !== "redis" ? jumpToConsole(treeSel) : activateNode(treeSel)));
-        if (is("tree.properties") && treeSel.kind === "conn") return act(() => setDialog({ edit: treeSel.conn }));
-        if (is("tree.refresh")) return act(() => treeSel.refresh?.());
-        if (is("tree.disconnect") && treeSel.conn.connected) return act(() => deactivate(treeSel.conn));
-        if (is("tree.jumpConsole")) return act(() => jumpToConsole(treeSel));
-        if (is("tree.sqlGen") && treeSel.name) return act(() => sqlGenerator(treeSel));
-        if (is("tree.ddlCopy") && treeSel.name) return act(() => ddlToClipboard(treeSel));
-        if (is("tree.ddlConsole") && treeSel.name) return act(() => ddlToConsole(treeSel));
-        if (is("tree.quickDoc")) return act(() => showQuickDoc(treeSel));
-        if (is("tree.modify") && (treeSel.kind === "table" || treeSel.kind === "partitioned") && canDdl(treeSel.conn)) return act(() => modifyTable(treeSel));
-        if (is("tree.rename")) return act(() => renameNode(treeSel));
-        if (is("tree.newDs")) return act(() => setDialog({}));
-        if (is("tree.duplicate") && treeSel.kind === "conn") return act(() => duplicateConn(treeSel.conn));
-        if (is("tree.remove"))
-          return act(() => (treeSel.kind === "conn" ? removeConn(treeSel.conn) : treeSel.name ? dangerous(treeSel, "DROP") : undefined));
-      }
-      if (is("tree.ddl") && inTree && treeSel && treeSel.name) {
-        e.preventDefault();
-        openDdl(treeSel);
-        return;
-      }
-      if (is("tree.copyRef") && inTree && treeSel) {
-        e.preventDefault();
-        navigator.clipboard.writeText(treeSel.name ? `${treeSel.schema}.${treeSel.name}` : treeSel.schema ?? treeSel.db ?? treeSel.conn.name);
-        return;
-      }
-      if (is("refresh")) {
-        e.preventDefault();
-        if (inTree && treeSel?.refresh) treeSel.refresh();
-        else if (active?.kind === "table") applyTableFilter(active, active.where, active.orderBy);
-        else refreshAll();
-        return;
-      }
-      if (is("editor.history") && active?.kind === "console") {
-        e.preventDefault();
-        setHistoryTab("history");
-        setHistoryFor(active.id);
-        return;
-      }
-      if (is("editor.cancel") && !inTree && active && canCancel(active)) {
-        e.preventDefault();
-        cancelRun(active);
-        return;
-      }
-      // ⇧F6 = rename console (same as Rename File… in the tab menu)
-      if (e.key === "F6" && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && active?.kind === "console") {
-        e.preventDefault();
-        renameConsole(active);
-        return;
-      }
-      if (is("tab.close") && active) {
-        e.preventDefault();
-        closeTabs([active.id]);
-        return;
-      }
-      // ⌃⇥ / ⌃⇧⇥: Switcher (most recently used order)
-      if (e.ctrlKey && !e.metaKey && e.key === "Tab") {
+      /** Tree commands: a node is selected and the explorer (not one of its fields) has the keys */
+      const node = inTree && treeSel && !inInput ? treeSel : null;
+      const act = (fn: () => void) => {
         e.preventDefault();
         e.stopPropagation();
-        openSwitcher(e.shiftKey);
-        return;
-      }
-      if (is("keymap")) {
-        e.preventDefault();
-        setKeymapOpen(true);
-        return;
-      }
-      if (is("settings")) {
-        e.preventDefault();
-        setSettingsOpen("appearance");
-        return;
-      }
-      if (is("theme")) {
-        e.preventDefault();
-        setSchemeOpen(true);
-        return;
-      }
-      if (is("recent")) {
-        e.preventDefault();
-        e.stopPropagation();
-        setRecentOpen(true);
-        return;
-      }
-      if ((is("tab.next") || is("tab.prev")) && active) {
+        fn();
+      };
+      const tabStep = () => {
+        if (!active) return false;
         e.preventDefault();
         const g = tabs.filter((t) => t.group === active.group);
         const i = g.findIndex((t) => t.id === active.id);
         const n = g[(i + (is("tab.prev") ? -1 : 1) + g.length) % g.length];
         if (n) activate(n);
-        return;
-      }
-      if (is("tab.reopen")) {
-        e.preventDefault();
-        reopenClosed();
-        return;
-      }
-      if (is("maximize")) {
-        e.preventDefault();
-        setMaximized((m) => !m);
-        return;
-      }
-      // Move between split editor groups (Goto Next Splitter)
-      if (is("split.other") && keyState.current.split) {
-        e.preventDefault();
-        // Next pane (previous with ⇧)
-        const ls = leaves(useTabsStore.getState().panes);
-        const g: Group = ls[(ls.indexOf(keyState.current.focused) + (e.shiftKey ? -1 : 1) + ls.length) % ls.length];
-        const id = useTabsStore.getState().activeIds[g];
-        const t = tabs.find((x) => x.id === id);
-        if (t) activate(t);
-        return;
-      }
-      // Ignore F4 / Enter pressed in an input field
-      if (inInput) return;
+      };
+      // ⌘1~9: workspaces (explorer is ⌘0)
+      const workspaceKeys = Object.fromEntries(
+        [1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`ws.${n}`, () => void (e.preventDefault(), useWorkspacesStore.getState().workspaces[n - 1] && L.switchWs(useWorkspacesStore.getState().workspaces[n - 1].id))]),
+      );
+      // Action id → what it does, tried in this order: the first one whose key this is, and that doesn't answer false, has the key
+      const actions: Record<string, () => void | false> = {
+        "goto.object": () => void (e.preventDefault(), L.setSe("database")),
+        "goto.symbol": () => void (e.preventDefault(), L.setSe("symbols")),
+        "goto.file": () => void (e.preventDefault(), L.setSe("files")),
+        "find.action": () => void (e.preventDefault(), L.setSe("actions")),
+        fts: () => void (e.preventDefault(), L.openFts()),
+        explorer: () => void (e.preventDefault(), L.toggleExplorer()),
+        ...workspaceKeys,
+        "find.window": () => void (e.preventDefault(), L.setFindOpen((o) => !o)),
+        // ⇧⎋ Hide Active Tool Window
+        "toolwindow.hide": () => {
+          const ae = document.activeElement;
+          if (ae?.closest?.("[data-toolwindow=find]")) return void (e.preventDefault(), L.setFindOpen(false));
+          if (ae?.closest?.("[data-tree]")) return void (e.preventDefault(), L.toggleExplorer());
+          return false;
+        },
+        "font.bigger": () => void (e.preventDefault(), L.bumpFont(1)),
+        "font.smaller": () => void (e.preventDefault(), L.bumpFont(-1)),
+        "console.new": () => {
+          e.preventDefault();
+          const conn = treeSel?.conn ?? conns.find((c) => c.id === active?.connId);
+          if (conn) openConsole(conn, treeSel?.db ?? active?.database);
+        },
+        // Edit Data (default console for a data source)
+        "tree.editData": () => (node ? act(() => ((node.kind === "conn" || node.kind === "db") && node.conn.kind !== "redis" ? jumpToConsole(node) : activateNode(node))) : false),
+        "tree.properties": () => (node && node.kind === "conn" ? act(() => setDialog({ edit: node.conn })) : false),
+        "tree.refresh": () => (node ? act(() => node.refresh?.()) : false),
+        "tree.disconnect": () => (node && node.conn.connected ? act(() => deactivate(node.conn)) : false),
+        "tree.jumpConsole": () => (node ? act(() => jumpToConsole(node)) : false),
+        "tree.sqlGen": () => (node && node.name ? act(() => sqlGenerator(node)) : false),
+        "tree.ddlCopy": () => (node && node.name ? act(() => ddlToClipboard(node)) : false),
+        "tree.ddlConsole": () => (node && node.name ? act(() => ddlToConsole(node)) : false),
+        "tree.quickDoc": () => (node ? act(() => showQuickDoc(node)) : false),
+        "tree.modify": () => (node && (node.kind === "table" || node.kind === "partitioned") && canDdl(node.conn) ? act(() => modifyTable(node)) : false),
+        "tree.rename": () => (node ? act(() => renameNode(node)) : false),
+        "tree.newDs": () => (node ? act(() => setDialog({})) : false),
+        "tree.duplicate": () => (node && node.kind === "conn" ? act(() => duplicateConn(node.conn)) : false),
+        "tree.remove": () => (node ? act(() => (node.kind === "conn" ? removeConn(node.conn) : node.name ? dangerous(node, "DROP") : undefined)) : false),
+        "tree.ddl": () => {
+          if (!(inTree && treeSel && treeSel.name)) return false;
+          e.preventDefault();
+          openDdl(treeSel);
+        },
+        "tree.copyRef": () => {
+          if (!(inTree && treeSel)) return false;
+          e.preventDefault();
+          navigator.clipboard.writeText(treeSel.name ? `${treeSel.schema}.${treeSel.name}` : treeSel.schema ?? treeSel.db ?? treeSel.conn.name);
+        },
+        refresh: () => {
+          e.preventDefault();
+          if (inTree && treeSel?.refresh) treeSel.refresh();
+          else if (active?.kind === "table") applyTableFilter(active, active.where, active.orderBy);
+          else refreshAll();
+        },
+        "editor.history": () => {
+          if (active?.kind !== "console") return false;
+          e.preventDefault();
+          setHistoryTab("history");
+          setHistoryFor(active.id);
+        },
+        "editor.cancel": () => {
+          if (!(!inTree && active && canCancel(active))) return false;
+          e.preventDefault();
+          cancelRun(active);
+        },
+        // ⇧F6 = rename console (same as Rename File… in the tab menu)
+        "console.rename": () => {
+          if (active?.kind !== "console") return false;
+          e.preventDefault();
+          renameConsole(active);
+        },
+        "tab.close": () => {
+          if (!active) return false;
+          e.preventDefault();
+          closeTabs([active.id]);
+        },
+        // ⌃⇥ / ⌃⇧⇥: Switcher (most recently used order)
+        switcher: () => {
+          e.preventDefault();
+          e.stopPropagation();
+          openSwitcher(e.shiftKey);
+        },
+        keymap: () => {
+          e.preventDefault();
+          setKeymapOpen(true);
+        },
+        settings: () => {
+          e.preventDefault();
+          setSettingsOpen("appearance");
+        },
+        theme: () => {
+          e.preventDefault();
+          setSchemeOpen(true);
+        },
+        recent: () => {
+          e.preventDefault();
+          e.stopPropagation();
+          setRecentOpen(true);
+        },
+        "tab.next": tabStep,
+        "tab.prev": tabStep,
+        "tab.reopen": () => {
+          e.preventDefault();
+          reopenClosed();
+        },
+        maximize: () => {
+          e.preventDefault();
+          setMaximized((m) => !m);
+        },
+        // Move between split editor groups (Goto Next Splitter)
+        "split.other": () => {
+          if (!keyState.current.split) return false;
+          e.preventDefault();
+          // Next pane (previous with ⇧)
+          const ls = leaves(useTabsStore.getState().panes);
+          const g: Group = ls[(ls.indexOf(keyState.current.focused) + (e.shiftKey ? -1 : 1) + ls.length) % ls.length];
+          const id = useTabsStore.getState().activeIds[g];
+          const t = tabs.find((x) => x.id === id);
+          if (t) activate(t);
+        },
+      };
+      for (const [id, run] of Object.entries(actions)) if ((FIXED.get(id)?.(e) ?? is(id)) && run() !== false) return;
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
