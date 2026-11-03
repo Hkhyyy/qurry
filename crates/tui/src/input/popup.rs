@@ -1,0 +1,613 @@
+use super::*;
+
+/// A yes pressed during a quiet confirm's pause (TLS_ASK_GRACE) doesn't count: say so instead of ignoring it
+const TOO_SOON: &str = "Wait a moment, then answer (n / Esc cancels)";
+
+fn popup_key(app: &mut App, k: KeyEvent) {
+    if matches!(app.popup, Some(Popup::Find(_))) {
+        return crate::find::key(app, k);
+    }
+    let popup = app.popup.take().unwrap();
+    match popup {
+        Popup::Help { mut sel, scroll, record: Some(add), .. } => {
+            // Recording a new key: Esc = cancel
+            let message = if k.code == KeyCode::Esc {
+                None
+            } else {
+                let a = crate::keys::DEFAULT_KEYS[sel].0;
+                match crate::keys::spec(&k).filter(|s| crate::keys::bindable(s)) {
+                    None => Some(format!("{} can't be a command key — use a {} combination or an F key", crate::keys::spec(&k).map(|s| crate::keys::disp(&s)).unwrap_or_else(|| "That key".into()), if cfg!(target_os = "macos") { "⌃/⌥" } else { "Ctrl/Alt" })),
+                    Some(key) => {
+                        let taken = app.keys.bind(a, key.clone(), add);
+                        let mut m = format!("{} → {}", name_of(a), app.keys.label(a));
+                        if let Some(t) = taken {
+                            m += &format!(" · removed {key} from {}", name_of(t));
+                        }
+                        if let Err(e) = app.save_keys() {
+                            m = format!("Save failed: {e}");
+                        }
+                        Some(m)
+                    }
+                }
+            };
+            sel = sel.min(crate::keys::DEFAULT_KEYS.len() - 1);
+            app.popup = Some(Popup::Help { sel, scroll, record: None, message });
+        }
+        Popup::Help { sel, scroll, message, .. } => {
+            let n = crate::keys::DEFAULT_KEYS.len();
+            let last = n + crate::help::HELP.iter().map(|s| s.1.len()).sum::<usize>() - 1;
+            let (mut sel, mut record) = (sel, None);
+            let mut message = message;
+            let fixed = || Some("Fixed key — only the Commands at the top can be changed".to_string());
+            match k.code {
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::F(1) => return,
+                KeyCode::Down | KeyCode::Char('j') => sel = (sel + 1).min(last),
+                KeyCode::Up | KeyCode::Char('k') => sel = sel.saturating_sub(1),
+                KeyCode::PageDown | KeyCode::Char(' ') => sel = (sel + 15).min(last),
+                KeyCode::PageUp => sel = sel.saturating_sub(15),
+                KeyCode::Home | KeyCode::Char('g') => sel = 0,
+                KeyCode::End | KeyCode::Char('G') => sel = last,
+                KeyCode::Enter if sel < n => record = Some(false),
+                KeyCode::Char('a') if sel < n => record = Some(true),
+                KeyCode::Enter | KeyCode::Char('a') | KeyCode::Delete | KeyCode::Backspace if sel >= n => message = fixed(),
+                KeyCode::Delete | KeyCode::Backspace => {
+                    let a = crate::keys::DEFAULT_KEYS[sel].0;
+                    app.keys.reset(a);
+                    message = Some(match app.save_keys() {
+                        Ok(()) => format!("{} reset to {}", name_of(a), app.keys.label(a)),
+                        Err(e) => format!("Save failed: {e}"),
+                    });
+                }
+                _ => {}
+            }
+            app.popup = Some(Popup::Help { sel, scroll, record, message });
+        }
+        Popup::Message { .. } => {
+            if !matches!(k.code, KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::F(1)) {
+                app.popup = Some(popup);
+            }
+        }
+        // Closing it goes back to what it was opened from. A question under it comes up quiet, so a second press meant for the
+        // notice (or typing that goes on) doesn't answer it
+        Popup::Note { title, text, back } => {
+            app.popup = match k.code {
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::F(1) => Some(match *back {
+                    Popup::Confirm { text, on_yes, .. } => Popup::Confirm { text, on_yes, opened: Some(Instant::now()) },
+                    Popup::AllowPlaintext { text, on_yes, .. } => Popup::AllowPlaintext { text, on_yes, opened: Instant::now() },
+                    back => back,
+                }),
+                _ => Some(Popup::Note { title, text, back }),
+            };
+        }
+        // n / Esc always cancel. A confirm that came up on its own (`opened`) takes y / Enter only after a pause, like AllowPlaintext below
+        Popup::Confirm { text, on_yes, opened } => match k.code {
+            KeyCode::Char('n') | KeyCode::Esc => {}
+            _ if opened.is_some_and(|t| t.elapsed() < App::TLS_ASK_GRACE) => {
+                if matches!(k.code, KeyCode::Char('y' | 'Y') | KeyCode::Enter) {
+                    app.status = TOO_SOON.into();
+                }
+                app.popup = Some(Popup::Confirm { text, on_yes, opened: Some(Instant::now()) })
+            }
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter if app.hits.confirm_unseen => {
+                app.status = "The window is too small to show the whole question: enlarge it, then answer (n / Esc cancels)".into();
+                app.popup = Some(Popup::Confirm { text, on_yes, opened });
+            }
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => on_yes(app),
+            _ => app.popup = Some(Popup::Confirm { text, on_yes, opened: opened.map(|_| Instant::now()) }),
+        },
+        // Only a y after a pause counts: every other key (and any key inside the grace) starts the grace again, so typing that
+        // goes on into the popup never allows plaintext. n / Esc cancel at once
+        Popup::AllowPlaintext { text, on_yes, opened } => match k.code {
+            KeyCode::Char('n') | KeyCode::Esc => {}
+            _ if opened.elapsed() < App::TLS_ASK_GRACE => {
+                if matches!(k.code, KeyCode::Char('y' | 'Y')) {
+                    app.status = TOO_SOON.into();
+                }
+                app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened: Instant::now() })
+            }
+            KeyCode::Char('y') | KeyCode::Char('Y') if app.hits.confirm_unseen => {
+                app.status = "The window is too small to show the whole question: enlarge it, then answer (n / Esc cancels)".into();
+                app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened });
+            }
+            KeyCode::Char('y') | KeyCode::Char('Y') => on_yes(app),
+            _ => app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened: Instant::now() }),
+        },
+        Popup::Input { title, body, mut input, on_ok, words, mut complete } => {
+            // If the autocomplete list is open: ↑↓ select · Tab/Enter insert · Esc close
+            if let Some((items, sel, prefix)) = &mut complete {
+                match k.code {
+                    KeyCode::Up => *sel = sel.saturating_sub(1),
+                    KeyCode::Down => *sel = (*sel + 1).min(items.len() - 1),
+                    KeyCode::Tab | KeyCode::Enter => {
+                        for _ in 0..*prefix {
+                            input.delete_char();
+                        }
+                        input.insert_str(&items[*sel]);
+                        complete = None;
+                    }
+                    KeyCode::Esc => complete = None,
+                    _ => complete = None,
+                }
+                if complete.is_some() || matches!(k.code, KeyCode::Tab | KeyCode::Enter | KeyCode::Esc) {
+                    app.popup = Some(Popup::Input { title, body, input, on_ok, words, complete });
+                    return;
+                }
+            }
+            match k.code {
+                KeyCode::Esc => {}
+                KeyCode::Enter => on_ok(app, input.lines().join("")),
+                _ => {
+                    // Tab·⌃Space = open the list for the current word (single-line input, so no Tab character is inserted)
+                    let force = k.code == KeyCode::Tab || (k.code == KeyCode::Char(' ') && k.modifiers.contains(KeyModifiers::CONTROL)) || k.code == KeyCode::Null;
+                    if !force {
+                        input.input(k);
+                    }
+                    complete = input_complete(&input, &words, force);
+                    app.popup = Some(Popup::Input { title, body, input, on_ok, words, complete });
+                }
+            }
+        }
+        // Handled separately above
+        Popup::Find(bar) => app.popup = Some(Popup::Find(bar)),
+        Popup::Scope(mut e) => {
+            match k.code {
+                KeyCode::Esc => return,
+                KeyCode::Enter => return app.apply_scope(e),
+                KeyCode::Down | KeyCode::Char('j') => e.move_by(1),
+                KeyCode::Up | KeyCode::Char('k') => e.move_by(-1),
+                KeyCode::PageDown => e.move_by(15),
+                KeyCode::PageUp => e.move_by(-15),
+                KeyCode::Char(' ') => e.toggle(),
+                KeyCode::Left | KeyCode::Char('h') => e.collapse(),
+                KeyCode::Right | KeyCode::Char('l') => {
+                    if let Some(db) = e.expand() {
+                        app.popup = Some(Popup::Scope(e));
+                        return app.load_scope_schemas(db);
+                    }
+                }
+                _ => {}
+            }
+            app.popup = Some(Popup::Scope(e));
+        }
+        Popup::Palette(mut p) => {
+            let n = App::palette_matches(&p).len();
+            match k.code {
+                KeyCode::Esc => return,
+                KeyCode::Down => p.sel = (p.sel + 1).min(n.saturating_sub(1)),
+                KeyCode::Up => p.sel = p.sel.saturating_sub(1),
+                KeyCode::PageDown => p.sel = (p.sel + 15).min(n.saturating_sub(1)),
+                KeyCode::PageUp => p.sel = p.sel.saturating_sub(15),
+                KeyCode::Enter => {
+                    if let Some(it) = App::palette_matches(&p).get(p.sel).map(|x| (*x).clone()) {
+                        // Shown while it runs, as on a click: an item can come back to it (Production Log's note)
+                        app.popup = Some(Popup::Palette(p));
+                        return app.run_palette(it, false);
+                    }
+                }
+                KeyCode::Char('b') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if let Some(it) = App::palette_matches(&p).get(p.sel).map(|x| (*x).clone()) {
+                        app.popup = Some(Popup::Palette(p));
+                        return app.run_palette(it, true);
+                    }
+                }
+                _ => {
+                    if p.input.input(k) {
+                        p.sel = 0;
+                    }
+                }
+            }
+            app.popup = Some(Popup::Palette(p));
+        }
+        Popup::ConnForm(mut form) => {
+            match k.code {
+                // Esc or ⌃t again while testing cancels the test (an SSM session can take up to 30s); otherwise Esc closes the form
+                KeyCode::Esc if form.cancel_test() => {}
+                KeyCode::Char('t') if k.modifiers.contains(KeyModifiers::CONTROL) && form.cancel_test() => {}
+                KeyCode::Esc => return,
+                KeyCode::Down | KeyCode::Tab => form.step(1),
+                KeyCode::Up | KeyCode::BackTab => form.step(-1),
+                // SSH unknown server: trust after confirming the fingerprint (only with the SSH tunnel: its fields are hidden otherwise)
+                KeyCode::Char('y') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                    form.message = Some(if form.value("Tunnel") != "ssh" {
+                        (false, "⌃y trusts an SSH tunnel's server; set Tunnel to ssh first".into())
+                    } else {
+                        let port = form.value("SSH port").trim().parse().unwrap_or(22);
+                        match app.state.trust_ssh_host(form.value("SSH host").trim().to_string(), port) {
+                            Ok(m) => (true, format!("✓ {m} — press ⌃t to test again")),
+                            Err(e) => (false, format!("✕ {e}")),
+                        }
+                    });
+                }
+                KeyCode::Char('t') if k.modifiers.contains(KeyModifiers::CONTROL) => test_form(app, &mut form),
+                KeyCode::Char('s') if k.modifiers.contains(KeyModifiers::CONTROL) => return save_form(app, form),
+                KeyCode::Enter => return save_form(app, form),
+                KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if !matches!(form.fields[form.sel].kind, FieldKind::Text | FieldKind::Secret) => {
+                    // A running test and the last message are for the other tunnel (⌃y would act on the SSH server): drop both
+                    if form.fields[form.sel].label == "Tunnel" {
+                        if let Some((_, h)) = form.testing.take() {
+                            h.abort();
+                        }
+                        form.message = None;
+                    }
+                    let f = &mut form.fields[form.sel];
+                    match &f.kind {
+                        FieldKind::Toggle => f.value = if f.value == "on" { "off".into() } else { "on".into() },
+                        FieldKind::Choice(opts) => {
+                            let i = opts.iter().position(|o| *o == f.value).unwrap_or(0);
+                            let j = if k.code == KeyCode::Left { (i + opts.len() - 1) % opts.len() } else { (i + 1) % opts.len() };
+                            f.value = opts[j].to_string();
+                            // Changing the DB type also changes the default port
+                            if f.label == "Type" {
+                                const PORTS: &[(&str, &str)] = &[("postgres", "5432"), ("mysql", "3306"), ("redis", "6379"), ("sqlite", "0"), ("duckdb", "0"), ("mssql", "1433"), ("clickhouse", "8123"), ("mongodb", "27017"), ("oracle", "1521"), ("qdrant", "6333"), ("chroma", "8000"), ("milvus", "19530")];
+                                let port = PORTS.iter().find(|x| x.0 == f.value).map(|x| x.1).unwrap_or("5432");
+                                if let Some(p) = form.fields.iter_mut().find(|x| x.label == "Port") {
+                                    // Keep a manually changed port; replace it if it was another type's default port
+                                    if p.value.is_empty() || PORTS.iter().any(|x| x.1 == p.value) {
+                                        p.value = port.into();
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                KeyCode::Backspace => {
+                    let f = &mut form.fields[form.sel];
+                    if f.value == "<saved>" {
+                        f.value.clear();
+                    } else {
+                        f.value.pop();
+                    }
+                }
+                KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => {
+                    let f = &mut form.fields[form.sel];
+                    if matches!(f.kind, FieldKind::Text | FieldKind::Secret) {
+                        if f.value == "<saved>" {
+                            f.value.clear();
+                        }
+                        f.value.push(c);
+                    }
+                }
+                _ => {}
+            }
+            app.popup = Some(Popup::ConnForm(form));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testkit::Harness;
+
+    /// Column·keyword autocomplete in the WHERE input
+    #[tokio::test]
+    async fn where_input_completes_columns_and_keywords() {
+        let mut h = Harness::new().await;
+        let id = h.table_tab("bank_info", &["bank_code", "bank_name"], &[&["002", "산업"]], &["bank_code"]);
+        h.key("w");
+        h.type_str("ban");
+        let s = h.screen(120, 30);
+        assert!(s.contains("bank_code") && s.contains("bank_name"), "{s}");
+        h.key("Tab");
+        h.type_str(" = '002' an");
+        h.key("Tab");
+        h.key("Enter");
+        assert_eq!(h.table(id).where_, "bank_code = '002' AND");
+    }
+
+    /// Manage Shown Schemas: Space to toggle, Enter to save (the Data Source's scope, shared with the GUI). Esc doesn't save
+    #[tokio::test]
+    async fn manage_shown_schemas_saves_scope() {
+        use qurry_core::store::{ConnectionConfig, DbKind};
+        let mut h = Harness::new().await;
+        let cfg = ConnectionConfig {
+            id: "c1".into(), name: "pg".into(), kind: DbKind::Postgres, host: "localhost".into(), port: 5432, user: "postgres".into(), database: "postgres".into(),
+            scope: Default::default(), password_saved: false, ssh_secret_saved: false, ssh: None, color: None, read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+        };
+        h.app.state.store.save(&cfg).unwrap();
+        h.app.reload_conns();
+        h.settle().await;
+        let dbs = || vec!["app".to_string(), "postgres".to_string(), "shop".to_string()];
+
+        h.app.open_scope("c1", dbs(), None);
+        assert!(h.screen(120, 30).contains("Manage Shown Schemas"));
+        // Lines: All databases · Default database · app · postgres · shop
+        h.key("Space"); // turn off All databases
+        for _ in 0..4 {
+            h.key("Down");
+        }
+        h.key("Space"); // shop
+        h.key("Esc");
+        assert!(h.app.popup.is_none());
+        assert_eq!(h.app.state.store.get("c1").unwrap().unwrap().scope.databases, None);
+
+        h.app.open_scope("c1", dbs(), None);
+        h.key("Space");
+        for _ in 0..4 {
+            h.key("Down");
+        }
+        h.key("Space");
+        h.key("Enter");
+        assert!(h.app.popup.is_none());
+        assert_eq!(h.app.state.store.get("c1").unwrap().unwrap().scope.databases, Some(vec!["shop".to_string()]));
+        // The tree uses the new scope right away too
+        assert_eq!(h.app.conn("c1").unwrap().config.scope.databases, Some(vec!["shop".to_string()]));
+
+        // Don't revert settings changed elsewhere meanwhile (GUI·MCP) to old values (e.g. read-only turned on)
+        let mut changed = h.app.state.store.get("c1").unwrap().unwrap();
+        changed.read_only = true;
+        changed.host = "db.internal".into();
+        h.app.state.store.save(&changed).unwrap();
+        h.app.open_scope("c1", dbs(), None);
+        h.key("Down");
+        h.key("Space"); // turn on Default database
+        h.key("Enter");
+        let saved = h.app.state.store.get("c1").unwrap().unwrap();
+        assert!(saved.read_only, "read_only reverted");
+        assert_eq!(saved.host, "db.internal");
+        assert_eq!(saved.scope.databases, Some(vec!["shop".to_string(), "@default".to_string()]));
+    }
+
+    /// Export (x): format → file/clipboard → path (extension follows the format)
+    #[tokio::test]
+    async fn export_asks_format_then_destination() {
+        let mut h = Harness::new().await;
+        h.table_tab("users", &["id"], &[&["1"]], &["id"]);
+        h.key("x");
+        let labels = |h: &Harness| match &h.app.popup {
+            Some(crate::app::Popup::Palette(p)) => p.items.iter().map(|i| i.label.clone()).collect::<Vec<_>>(),
+            _ => panic!("no chooser"),
+        };
+        assert_eq!(labels(&h), ["CSV", "TSV", "JSON", "SQL INSERT", "Markdown"]);
+        h.key("Down");
+        h.key("Down");
+        h.key("Enter");
+        assert_eq!(labels(&h), ["File…", "Clipboard"]);
+        h.key("Enter");
+        let Some(crate::app::Popup::Input { title, input, .. }) = &h.app.popup else { panic!("no path input") };
+        assert_eq!(title, "Export JSON to file");
+        assert!(input.lines()[0].ends_with("/Downloads/users.json"), "{:?}", input.lines());
+    }
+
+    /// Import: read the file, match columns by name, show what goes in, and ask
+    #[tokio::test]
+    async fn import_maps_file_columns_by_name() {
+        let mut h = Harness::new().await;
+        let path = std::env::temp_dir().join(format!("qurry-tui-import-{}.csv", uuid::Uuid::new_v4()));
+        std::fs::write(&path, "ID,Name,extra\n1,a,x\n").unwrap();
+        h.table_tab("users", &["id", "name"], &[&["1", "a"]], &["id"]);
+        h.app.run_action(crate::app::Action::ImportData);
+        let Some(crate::app::Popup::Input { input, .. }) = &mut h.app.popup else { panic!("no path input") };
+        *input = tui_textarea::TextArea::from([path.display().to_string()]);
+        h.key("Enter");
+        h.settle().await;
+        let Some(crate::app::Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm") };
+        assert!(text.contains("into public.users"), "{text}");
+        assert!(text.contains("ID → id") && text.contains("Name → name") && text.contains("extra → (skip)"), "{text}");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    /// A name with a newline (PostgreSQL quoted identifier, Redis key) stays on the input's border: it can't open an explanation box of its own
+    #[tokio::test]
+    async fn input_title_newline_does_not_make_a_body() {
+        let mut h = Harness::new().await;
+        h.app.input("Generate test data into public.orders\nThis is a scratch copy, safe to fill", "", |_, _| {});
+        let screen = h.screen(120, 24);
+        let row = screen.lines().find(|l| l.contains("Generate test data into public.orders")).expect(&screen);
+        assert!(row.contains("safe to fill") && row.contains("(Enter / Esc)"), "{screen}");
+        assert_eq!(screen.matches("safe to fill").count(), 1, "{screen}");
+    }
+
+    /// A notice (a failed Commit) shown while a connection test runs: the result goes to the form under it, not lost with
+    /// 'Testing…' left on after Esc
+    #[tokio::test]
+    async fn async_result_reaches_the_popup_under_a_notice() {
+        use qurry_core::store::{ConnectionConfig, DbKind};
+        let mut h = Harness::new().await;
+        let cfg = ConnectionConfig {
+            id: "c1".into(), name: "pg".into(), kind: DbKind::Postgres, host: "qurry.invalid".into(), port: 1, user: "postgres".into(), database: "postgres".into(),
+            scope: Default::default(), password_saved: false, ssh_secret_saved: false, ssh: None, color: None, read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
+        };
+        h.app.conn_form(Some(cfg));
+        h.key("Ctrl+t");
+        h.app.notice("Commit outcome unknown".into(), "Check the data".into());
+        let testing = |h: &mut Harness| matches!(h.app.popup_under(), Some(crate::app::Popup::ConnForm(f)) if f.testing.is_some());
+        for _ in 0..100 {
+            if !testing(&mut h) {
+                break;
+            }
+            h.settle().await;
+        }
+        assert!(matches!(h.app.popup, Some(crate::app::Popup::Note { .. })));
+        h.key("Esc");
+        let Some(crate::app::Popup::ConnForm(f)) = &h.app.popup else { panic!("no form") };
+        let m = &f.message.as_ref().unwrap().1;
+        assert!(m.starts_with('✕'), "{m}");
+    }
+
+    /// Popups that open later (a run's warning, Submit, an update) stack over a notice instead of replacing it: Esc goes back to it
+    #[tokio::test]
+    async fn later_popup_keeps_the_notice() {
+        let mut h = Harness::new().await;
+        h.app.notice("Commit outcome unknown".into(), "Check the data".into());
+        h.app.warn_ran(Some("The Production log couldn't record it".into()));
+        let Some(crate::app::Popup::Note { title, .. }) = &h.app.popup else { panic!("no warning") };
+        assert_eq!(title, "Ran, with a warning");
+        h.key("Esc");
+        let Some(crate::app::Popup::Message { title, .. }) = &h.app.popup else { panic!("notice lost") };
+        assert_eq!(title, "Commit outcome unknown");
+        h.key("Esc");
+        assert!(h.app.popup.is_none());
+    }
+
+    /// ⌃K › Production Log: log of production operations. If there's undo SQL, open it in a new console (you run it yourself), otherwise just the reason
+    #[tokio::test]
+    async fn production_log_opens_undo_in_new_console() {
+        let mut h = Harness::new().await;
+        let cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+            "id": "p", "name": "PROD", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "d"
+        })).unwrap();
+        h.app.state.store.save(&cfg).unwrap();
+        h.app.reload_conns();
+        h.settle().await;
+        let entry = |id: &str, sql: &str, undo: Option<&str>| qurry_core::audit::AuditEntry {
+            id: id.into(), ts: 1, conn_id: "p".into(), conn_name: "PROD".into(), database: None, sql: sql.into(), rows: Some(2), error: None, in_tx: false,
+            undo: undo.map(String::from), note: undo.is_none().then(|| "More than 1000 rows change: no undo kept".into()),
+            started: false,
+        };
+        // Logged before it ran with no result: its outcome is unknown, so it says so (not a row count, not "committed")
+        h.app.state.audit.add(qurry_core::audit::AuditEntry { rows: None, started: true, ..entry("c", "COMMIT", None) }).unwrap();
+        h.app.state.audit.add(entry("a", "delete from big", None)).unwrap();
+        h.app.state.audit.add(entry("b", "update t set a = 1 where id = 2", Some("UPDATE t SET a = 0 WHERE id = 2;"))).unwrap();
+        h.console_tab();
+        let tabs = h.app.tabs.len();
+        h.app.run_action(Action::ProductionLog);
+        let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no log") };
+        assert_eq!(p.items[0].label, "update t set a = 1 where id = 2");
+        assert!(p.items[0].hint.starts_with("↶ undo · 2 row(s)") && p.items[0].hint.ends_with("PROD"), "{}", p.items[0].hint);
+        assert!(p.items[2].hint.starts_with("no result recorded"), "{}", p.items[2].hint);
+        h.key("Enter");
+        assert_eq!(h.app.tabs.len(), tabs + 1);
+        assert_eq!(h.console_text(), "UPDATE t SET a = 0 WHERE id = 2;");
+        h.app.run_action(Action::ProductionLog);
+        h.key("Down");
+        h.key("Enter");
+        assert_eq!(h.app.tabs.len(), tabs + 1);
+        // Without undo SQL, its note in a popup (the status bar would cut a long one off)
+        let Some(crate::app::Popup::Note { text, .. }) = &h.app.popup else { panic!("no note") };
+        assert!(text.contains("no undo kept"), "{text}");
+        // The log stays in view behind it, and Esc goes back to it with the same entry and filter
+        assert!(h.screen(100, 30).contains("update t set a = 1 where id = 2"));
+        h.key("Esc");
+        let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("log closed") };
+        assert!(p.title.starts_with("Production Log") && p.sel == 1, "{}", p.sel);
+        h.type_str("big");
+        h.key("Enter");
+        h.key("Esc");
+        let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("log closed") };
+        assert_eq!((p.input.lines().join(""), crate::app::App::palette_matches(p)[p.sel].label.as_str()), ("big".to_string(), "delete from big"));
+        h.key("Esc");
+        assert!(h.app.popup.is_none());
+        let unknown = qurry_core::audit::AuditEntry {
+            rows: None, error: Some("Connection reset by peer (os error 54)".into()), note: Some(qurry_core::audit::COMMIT_UNKNOWN_NOTE.into()),
+            ..entry("d", qurry_core::audit::COMMIT_UNKNOWN, None)
+        };
+        h.app.state.audit.add(unknown).unwrap();
+        h.app.run_action(Action::ProductionLog);
+        h.key("Enter");
+        let Some(crate::app::Popup::Note { text, .. }) = &h.app.popup else { panic!("no note") };
+        assert!(text.contains(qurry_core::audit::COMMIT_UNKNOWN_NOTE) && text.contains("os error 54"), "{text}");
+        // The whole note shows, wrapped, in a narrow terminal too
+        let screen = h.screen(50, 20);
+        assert!(screen.contains("Check the data before") && screen.contains("os error 54"), "{screen}");
+        // A transaction a CALL ended: of unknown outcome too, and ↩ shows what to do
+        h.key("Esc");
+        h.key("Esc");
+        let ended = qurry_core::audit::AuditEntry { rows: None, note: Some(qurry_core::audit::ENDED_UNKNOWN_NOTE.into()), ..entry("e", qurry_core::audit::ENDED_UNKNOWN, None) };
+        h.app.state.audit.add(ended).unwrap();
+        h.app.run_action(Action::ProductionLog);
+        let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no log") };
+        assert!(p.items[0].hint.starts_with("outcome unknown"), "{}", p.items[0].hint);
+        h.key("Enter");
+        let Some(crate::app::Popup::Note { text, .. }) = &h.app.popup else { panic!("no note") };
+        assert_eq!(text, qurry_core::audit::ENDED_UNKNOWN_NOTE);
+        // A transaction a statement or the server ended says how, as in the GUI
+        h.key("Esc");
+        h.key("Esc");
+        for (id, sql) in [("i", "COMMIT (implicit)"), ("s", "ROLLBACK (by the server)")] {
+            h.app.state.audit.add(qurry_core::audit::AuditEntry { rows: None, ..entry(id, sql, None) }).unwrap();
+        }
+        h.app.run_action(Action::ProductionLog);
+        let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no log") };
+        assert!(p.items[0].hint.starts_with("rolled back") && p.items[1].hint.starts_with("committed"), "{} | {}", p.items[0].hint, p.items[1].hint);
+    }
+
+    /// When Check for Updates finds a new version: show the changes since the current version, per version, and how to update
+    #[tokio::test]
+    async fn update_found_shows_changes() {
+        use qurry_core::update::{Release, VersionNotes};
+        let mut h = Harness::new().await;
+        let r = Release {
+            version: "9.0.1".into(), url: "u".into(), notes: String::new(), assets: vec![],
+            history: vec![
+                VersionNotes { version: "9.0.1".into(), changes: vec!["[fix] b (#2)".into()] },
+                VersionNotes { version: "9.0.0".into(), changes: vec!["[feat] a (#1)".into()] },
+                VersionNotes { version: "0.0.1".into(), changes: vec!["old".into()] },
+            ],
+            prerelease: false,
+        };
+        h.app.show_update(r);
+        assert_eq!(h.app.update.as_deref(), Some("9.0.1"));
+        let s = h.screen(120, 30);
+        for want in ["Qurry 9.0.1 is available", "• [fix] b (#2)", "• [feat] a (#1)", "Update Qurry & Restart"] {
+            assert!(s.contains(want), "{want:?} in {s}");
+        }
+        assert!(!s.contains("old"), "{s}");
+    }
+
+    /// A check that finds nothing clears a ⬆ badge set on another channel (the GUI switched the shared channel), and names the channel
+    #[tokio::test]
+    async fn update_check_without_update_clears_the_badge() {
+        let mut h = Harness::new().await;
+        h.app.update = Some("9.0.1-beta.2".into());
+        h.app.update_checked(qurry_core::update::Channel::Stable, None);
+        assert_eq!(h.app.update, None);
+        assert_eq!(h.app.status, format!("You have the latest stable version ({}).", env!("CARGO_PKG_VERSION")));
+    }
+
+    /// ⌃k › Update Channel…: opens on the saved channel; the pick is saved for the GUI too and the ⬆ badge follows it from the saved check (no request)
+    #[tokio::test]
+    async fn update_channel_is_picked_from_the_palette() {
+        use qurry_core::update::Channel;
+        let mut h = Harness::new().await;
+        h.app.update = Some("9.0.1".into());
+        h.app.palette_update_channel();
+        let s = h.screen(120, 30);
+        assert!(s.contains("Update Channel") && s.contains("● Stable") && s.contains("  Beta"), "{s}");
+        h.key("Down");
+        h.key("Enter");
+        assert_eq!(h.app.state.store.update_channel(), Channel::Beta);
+        // Nothing checked yet: no badge, and how to check
+        assert_eq!(h.app.update, None);
+        assert!(h.app.status.starts_with("Update channel: Beta") && h.app.status.ends_with("Check for Updates looks now"), "{}", h.app.status);
+        // Reopened on Beta: Enter keeps it
+        h.app.palette_update_channel();
+        assert!(h.screen(120, 30).contains("● Beta"));
+        h.key("Enter");
+        assert_eq!(h.app.state.store.update_channel(), Channel::Beta);
+        // A saved check (any age) answers for either channel
+        let rel = |v: &str| serde_json::json!({"version": v, "url": "u", "notes": "", "assets": [], "prerelease": v.contains('-')});
+        std::fs::write(h.app.state.store.dir().join("update-releases.json"), serde_json::json!({"checked_at": 0, "latest": {"stable": null, "beta": rel("99.0.0-beta.1")}}).to_string()).unwrap();
+        h.app.palette_update_channel();
+        h.key("Up");
+        h.key("Enter");
+        assert_eq!(h.app.update, None);
+        assert!(h.app.status.starts_with("Update channel: Stable — you have the latest stable version"), "{}", h.app.status);
+        h.app.palette_update_channel();
+        h.key("Down");
+        h.key("Enter");
+        assert_eq!(h.app.update.as_deref(), Some("99.0.0-beta.1"));
+        assert!(h.app.status.contains("Qurry 99.0.0-beta.1 is available"), "{}", h.app.status);
+    }
+
+    /// The new-version notice shows how to update right inside the TUI
+    #[tokio::test]
+    async fn update_badge_points_to_in_app_update() {
+        let mut h = Harness::new().await;
+        h.app.update = Some("9.9.9".into());
+        let s = h.screen(160, 30);
+        let want = format!("v9.9.9 available — {} › Update Qurry & Restart", crate::keys::disp("Ctrl+K"));
+        assert!(s.contains(&want), "{s}");
+    }
+
+    /// qurry-tui built from source (cargo test too) isn't replaced; it says to rebuild
+    #[tokio::test]
+    async fn in_app_update_skips_source_builds() {
+        let mut h = Harness::new().await;
+        h.app.run_action(crate::app::Action::InstallUpdate);
+        h.settle().await;
+        assert!(h.app.status.contains("built from source"), "{}", h.app.status);
+        assert!(!h.app.quit && !h.app.restart);
+    }
+}
