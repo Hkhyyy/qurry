@@ -2035,7 +2035,11 @@ mod tests {
         q("drop table if exists fetch_more_reconnect.t", "setup").await.unwrap();
         q("create table fetch_more_reconnect.t (n int primary key)", "setup").await.unwrap();
         let fill = match my {
-            true => "insert into fetch_more_reconnect.t with recursive g(n) as (select 1 union all select n + 1 from g where n < 600) select n from g union all select n + 600 from g",
+            // No WITH RECURSIVE: the older-servers CI job runs this on MySQL 5.7
+            true => "insert into fetch_more_reconnect.t select a.d * 100 + b.d * 10 + c.d + 1 from \
+                     (select 0 d union all select 1 union all select 2 union all select 3 union all select 4 union all select 5 union all select 6 union all select 7 union all select 8 union all select 9 union all select 10 union all select 11) a, \
+                     (select 0 d union all select 1 union all select 2 union all select 3 union all select 4 union all select 5 union all select 6 union all select 7 union all select 8 union all select 9) b, \
+                     (select 0 d union all select 1 union all select 2 union all select 3 union all select 4 union all select 5 union all select 6 union all select 7 union all select 8 union all select 9) c",
             false => "insert into fetch_more_reconnect.t select g from generate_series(1, 1200) g",
         };
         q(fill, "setup").await.unwrap();
