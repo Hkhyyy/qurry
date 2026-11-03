@@ -5,7 +5,7 @@ use crate::db::{int_value, query_result, ColumnInfo, QueryResult};
 use crate::error::{AppError, AppResult};
 use crate::meta::{
     ColumnMeta, CompletionTable, ConstraintMeta, FtsHit, FtsRequest, IndexEntry, IndexMeta, RelationInfo, RoutineInfo, SchemaInfo,
-    SchemaObjects, TableDetail,
+    SchemaObjects, TableDetail, TableStructure, ForeignKeyMeta, TriggerMeta,
 };
 use crate::session::{is_select_like, strip_comments_lead};
 use futures::TryStreamExt;
@@ -544,7 +544,7 @@ pub async fn table_detail(p: &MySqlPool, schema: &str, table: &str) -> AppResult
         .map(|(name, data_type, nullable, default_value, comment, key)| ColumnMeta { name, data_type, nullable: nullable == "YES", default_value, comment, is_pk: key == "PRI" })
         .collect();
     let idx: Vec<(String, i64, String)> = sqlx::query_as(
-        "select cast(index_name as char), cast(non_unique as signed), cast(group_concat(column_name order by seq_in_index separator ', ') as char) \
+        "select cast(index_name as char), cast(non_unique as signed), cast(group_concat(column_name order by seq_in_index separator '\\t') as char) \
          from information_schema.statistics where table_schema = ? and table_name = ? group by index_name, non_unique order by index_name",
     )
     .bind(schema)
@@ -555,11 +555,13 @@ pub async fn table_detail(p: &MySqlPool, schema: &str, table: &str) -> AppResult
         .into_iter()
         .map(|(name, non_unique, cols)| {
             let primary = name == "PRIMARY";
+            let columns: Vec<String> = cols.split('\t').map(String::from).collect();
             IndexMeta {
-                definition: format!("{} {} ({cols})", if primary { "PRIMARY KEY" } else if non_unique == 0 { "UNIQUE INDEX" } else { "INDEX" }, ident(&name)),
+                definition: format!("{} {} ({})", if primary { "PRIMARY KEY" } else if non_unique == 0 { "UNIQUE INDEX" } else { "INDEX" }, ident(&name), columns.join(", ")),
                 is_unique: non_unique == 0,
                 is_primary: primary,
                 name,
+                columns,
             }
         })
         .collect();
@@ -589,6 +591,76 @@ pub async fn table_detail(p: &MySqlPool, schema: &str, table: &str) -> AppResult
         })
         .collect();
     Ok(TableDetail { columns, indexes, constraints })
+}
+
+/// The Structure view: table_detail plus foreign keys both ways, triggers and table options
+pub async fn table_structure(p: &MySqlPool, schema: &str, table: &str) -> AppResult<TableStructure> {
+    let detail = table_detail(p, schema, table).await?;
+    // Foreign keys of this table and those pointing at it (a self-reference is both)
+    type Fk = (String, String, String, String, String, String, String, String, String);
+    let fks: Vec<Fk> = sqlx::query_as(
+        "select cast(k.constraint_name as char), cast(k.table_schema as char), cast(k.table_name as char), \
+           cast(group_concat(k.column_name order by k.ordinal_position separator '\\t') as char), \
+           cast(k.referenced_table_schema as char), cast(k.referenced_table_name as char), \
+           cast(group_concat(k.referenced_column_name order by k.ordinal_position separator '\\t') as char), \
+           cast(r.update_rule as char), cast(r.delete_rule as char) \
+         from information_schema.key_column_usage k \
+         join information_schema.referential_constraints r on r.constraint_schema = k.constraint_schema and r.constraint_name = k.constraint_name and r.table_name = k.table_name \
+         where k.referenced_table_name is not null and ((k.table_schema = ? and k.table_name = ?) or (k.referenced_table_schema = ? and k.referenced_table_name = ?)) \
+         group by k.constraint_schema, k.constraint_name, k.table_schema, k.table_name, k.referenced_table_schema, k.referenced_table_name, r.update_rule, r.delete_rule \
+         order by 2, 3, 1",
+    )
+    .bind(schema)
+    .bind(table)
+    .bind(schema)
+    .bind(table)
+    .fetch_all(p)
+    .await?;
+    let split = |s: String| s.split('\t').map(String::from).collect::<Vec<_>>();
+    let (mut foreign_keys, mut referenced_by) = (vec![], vec![]);
+    for (name, schema_, table_, columns, ref_schema, ref_table, ref_columns, on_update, on_delete) in fks {
+        let fk = ForeignKeyMeta { name, schema: schema_, table: table_, columns: split(columns), ref_schema, ref_table, ref_columns: split(ref_columns), on_update, on_delete };
+        if (fk.ref_schema.as_str(), fk.ref_table.as_str()) == (schema, table) {
+            referenced_by.push(fk.clone());
+        }
+        if (fk.schema.as_str(), fk.table.as_str()) == (schema, table) {
+            foreign_keys.push(fk);
+        }
+    }
+    let trg: Vec<(String, String, String, String)> = sqlx::query_as(
+        "select cast(trigger_name as char), cast(action_timing as char), cast(event_manipulation as char), cast(action_statement as char) \
+         from information_schema.triggers where event_object_schema = ? and event_object_table = ? order by action_timing, event_manipulation, action_order",
+    )
+    .bind(schema)
+    .bind(table)
+    .fetch_all(p)
+    .await?;
+    let triggers = trg
+        .into_iter()
+        .map(|(name, timing, events, body)| TriggerMeta {
+            definition: format!("CREATE TRIGGER {} {timing} {events} ON {} FOR EACH ROW {body}", ident(&name), ident(table)),
+            name,
+            timing,
+            events,
+        })
+        .collect();
+    type S = Option<String>;
+    let (engine, row_format, collation, charset, auto_inc, create_opts, comment): (S, S, S, S, S, S, S) = sqlx::query_as(
+        "select cast(t.engine as char), cast(t.row_format as char), cast(t.table_collation as char), cast(c.character_set_name as char), \
+           cast(t.auto_increment as char), cast(nullif(t.create_options, '') as char), cast(nullif(t.table_comment, '') as char) \
+         from information_schema.tables t \
+         left join information_schema.collation_character_set_applicability c on c.collation_name = t.table_collation \
+         where t.table_schema = ? and t.table_name = ?",
+    )
+    .bind(schema)
+    .bind(table)
+    .fetch_one(p)
+    .await?;
+    let options = [("Engine", engine), ("Charset", charset), ("Collation", collation), ("Row format", row_format), ("Auto increment", auto_inc), ("Options", create_opts)]
+        .into_iter()
+        .filter_map(|(k, v)| v.map(|v| (k.to_string(), v)))
+        .collect();
+    Ok(TableStructure { detail, foreign_keys: Some(foreign_keys), referenced_by: Some(referenced_by), triggers: Some(triggers), options: Some(options), comment })
 }
 
 pub async fn object_ddl(p: &MySqlPool, schema: &str, name: &str, kind: &str) -> AppResult<String> {

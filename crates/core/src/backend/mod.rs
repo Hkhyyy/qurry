@@ -9,7 +9,7 @@ use crate::erd::Erd;
 use crate::error::{AppError, AppResult};
 use crate::fake::TableShape;
 use crate::hints::{Hint, HintReq};
-use crate::meta::{CompletionTable, FtsHit, FtsRequest, IndexEntry, SchemaInfo, SchemaObjects, TableDetail};
+use crate::meta::{CompletionTable, FtsHit, FtsRequest, IndexEntry, SchemaInfo, SchemaObjects, TableDetail, TableStructure};
 use crate::migrate::Model;
 use crate::session::Session;
 use crate::store::ConnectionConfig;
@@ -45,6 +45,11 @@ pub(crate) trait Backend {
 
     async fn table_detail(&self, _schema: &str, _table: &str) -> AppResult<TableDetail> {
         unsupported("Table details", self)
+    }
+
+    /// The Structure view: table_detail, with the sections this kind doesn't report left None
+    async fn table_structure(&self, schema: &str, table: &str) -> AppResult<TableStructure> {
+        Ok(self.table_detail(schema, table).await?.into())
     }
 
     /// kind: table|partitioned|foreign|view|matview|sequence|routine (Redis: key)
@@ -234,6 +239,7 @@ mod tests {
             msg(b.list_schemas().await),
             msg(b.list_objects("s").await),
             msg(b.table_detail("s", "t").await),
+            msg(b.table_structure("s", "t").await),
             msg(b.object_ddl("s", "t", "table").await),
             msg(b.completion_meta().await),
             msg(b.object_index().await),
@@ -250,6 +256,7 @@ mod tests {
             "Listing databases",
             "Listing schemas",
             "Listing objects",
+            "Table details",
             "Table details",
             "DDL",
             "Autocomplete",

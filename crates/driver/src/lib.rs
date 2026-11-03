@@ -10,7 +10,7 @@
 //! | databases | – | `["db", …]` |
 //! | schemas | `{database}` | `[{name, isSystem}]` |
 //! | objects | `{schema}` | `{relations: [{name, kind, comment, rowEstimate}], routines: []}` |
-//! | tableDetail | `{schema, table}` | `{columns: [{name, dataType, nullable, defaultValue, comment, isPk}], indexes: [{name, definition, isUnique, isPrimary}], constraints: [{name, kind, definition}]}` |
+//! | tableDetail | `{schema, table}` | `{columns: [{name, dataType, nullable, defaultValue, comment, isPk}], indexes: [{name, definition, isUnique, isPrimary, columns?}], constraints: [{name, kind, definition}]}` |
 //! | ddl | `{schema, name, kind}` | `"CREATE …"` |
 #[cfg(feature = "rest")]
 pub mod rest;

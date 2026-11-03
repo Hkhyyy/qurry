@@ -635,6 +635,11 @@ pub async fn table_detail(state: State<'_, AppState>, id: String, schema: String
     state.table_detail(id, schema, table).await
 }
 
+#[tauri::command]
+pub async fn table_structure(state: State<'_, AppState>, id: String, schema: String, table: String) -> AppResult<crate::meta::TableStructure> {
+    state.table_structure(id, schema, table).await
+}
+
 /// pgvector: SQL that finds rows close to this row
 #[tauri::command]
 pub async fn similar_rows_sql(state: State<'_, AppState>, id: String, schema: String, table: String, column: String, pk: Vec<(String, Option<String>)>) -> AppResult<String> {
