@@ -6,7 +6,7 @@ import { ddlView } from "../../lib/structure";
 import type { EditTarget } from "../../components/ResultGrid";
 import { stash } from "../workspaces/store";
 import { editorApis, liveSql, setActiveIds, setFocused, setPanes, setTabs, useTabsStore } from "./store";
-import { Group, snapKey, Tab, TabSnapshot } from "./types";
+import { DdlOf, Group, snapKey, Tab, TabSnapshot } from "./types";
 
 // ───────── Tab and pane operations on the tabs store (and on the workspaces stash, for tabs in another workspace) ─────────
 const last = <T,>(a: T[]): T | undefined => a[a.length - 1];
@@ -29,6 +29,8 @@ const updTab = (id: string, fn: (t: Tab) => Tab) => {
   if (!updStashed(id, fn)) setTabs((ts) => ts.map((t) => (t.id === id ? fn(t) : t)));
 };
 const sqlOf = (t: Tab) => liveSql.get(t.id) ?? t.sql;
+/** DDL tab: the object Reload fetches (a table's DDL tab saved before tabs kept ddlOf still has its edit) */
+const ddlObject = (t: Tab): DdlOf | undefined => t.ddlOf ?? (t.edit && { schema: t.edit.schema, name: t.edit.table });
 const snapshot = (t: Tab): TabSnapshot => ({
   key: snapKey(t),
   kind: t.kind,
@@ -40,6 +42,7 @@ const snapshot = (t: Tab): TabSnapshot => ({
   where: t.where,
   orderBy: t.orderBy,
   objKind: t.objKind,
+  ddlOf: t.ddlOf,
 });
 const remember = (t: Tab) => {
   const snap = snapshot(t);
@@ -50,7 +53,7 @@ const remember = (t: Tab) => {
 const buildTab = (
   c: ConnectionView,
   kind: Tab["kind"],
-  opts: { sql?: string; database?: string; tableSql?: string; edit?: EditTarget; where?: string; orderBy?: string; objKind?: string },
+  opts: { sql?: string; database?: string; tableSql?: string; edit?: EditTarget; where?: string; orderBy?: string; objKind?: string; ddlOf?: DdlOf },
   group: Group,
   title: string,
 ): Tab => {
@@ -75,6 +78,7 @@ const buildTab = (
     edit: opts.edit,
     ddlView: kind === "ddl" && opts.edit ? ddlView() : undefined,
     objKind: opts.objKind,
+    ddlOf: opts.ddlOf,
     results: [],
     activeResult: "output",
     output: [],
@@ -136,4 +140,4 @@ const togglePin = (t: Tab) => {
   });
 };
 
-export { allTabs, buildTab, closeTabs, moveTo, patch, remember, settle, snapshot, sqlOf, togglePin, updStashed, updTab };
+export { allTabs, buildTab, closeTabs, ddlObject, moveTo, patch, remember, settle, snapshot, sqlOf, togglePin, updStashed, updTab };

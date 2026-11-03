@@ -130,12 +130,19 @@ pub struct TextTab {
     /// DDL: tree kind of the object (for the tab glyph); empty for other text (diagram)
     pub kind: String,
     pub scroll: u16,
-    /// A table's DDL: (schema, table), which gives it the Structure view (v)
-    pub table: Option<(String, String)>,
+    /// DDL: the object (schema, name), which r fetches again; a table's also has the Structure view (v)
+    pub ddl_of: Option<(String, String)>,
     /// Showing the Structure view instead of the SQL
     pub structure_view: bool,
     /// The loaded structure, or why it failed (None: not loaded yet)
     pub structure: Option<Result<qurry_core::meta::TableStructure, String>>,
+}
+
+impl TextTab {
+    /// A table's DDL: has the Structure view (v)
+    pub fn has_structure(&self) -> bool {
+        self.ddl_of.is_some() && crate::structure::has_structure(&self.kind)
+    }
 }
 
 /// DBA reports (sessions·locks, slow queries, size·indexes, maintenance, server, privileges). Sessions·locks reload every 3 seconds

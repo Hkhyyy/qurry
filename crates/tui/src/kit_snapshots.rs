@@ -373,7 +373,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     }
     // DDL → Structure (v)
     let text = "CREATE TABLE public.users (\n    id bigint NOT NULL\n);".to_string();
-    let t = crate::app::TextTab { text, table: Some(("public".into(), "users".into())), structure_view: true, structure: Some(Ok(crate::structure::sample())), ..Default::default() };
+    let t = crate::app::TextTab { text, ddl_of: Some(("public".into(), "users".into())), kind: "table".into(), structure_view: true, structure: Some(Ok(crate::structure::sample())), ..Default::default() };
     h.app.push_tab("prod", "rentalpay".into(), "users [DDL]".into(), crate::app::TabKind::Text(t));
     h.app.focus = crate::app::Focus::Grid;
     scenes.push(app_scene(h, "DDL: Structure", "A table's DDL tab, v: columns, keys, indexes, foreign keys both ways, triggers (not reported by this source), options and comment; v again for the SQL", 120, 40));

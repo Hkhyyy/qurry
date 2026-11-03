@@ -57,7 +57,7 @@ pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
                 copy(app, &s)
             }
             KeyCode::Char('v') => app.toggle_structure(id),
-            KeyCode::Char('r') if tt.structure_view => app.load_structure(id),
+            KeyCode::Char('r') => app.reload_ddl(id),
             KeyCode::Esc => app.focus = Focus::Tree,
             _ => {}
         },

@@ -10,6 +10,11 @@ const openDdl = async (page: import("@playwright/test").Page, name: string, nth 
 const views = (page: import("@playwright/test").Page) => work(page).getByRole("tablist", { name: "DDL view" });
 const section = (page: import("@playwright/test").Page, name: string) => work(page).getByRole("region", { name });
 const loads = (page: import("@playwright/test").Page) => page.evaluate(() => (window as any).__mockStructureCalls ?? 0);
+const ddlLoads = (page: import("@playwright/test").Page) => page.evaluate(() => (window as any).__mockDdlCalls ?? 0);
+const reload = (page: import("@playwright/test").Page) => work(page).getByRole("button", { name: /^Reload/ });
+/** x of each toolbar control (buttons and the view switch), left to right */
+const toolbarXs = (page: import("@playwright/test").Page) =>
+  work(page).getByRole("toolbar").first().locator("button, [role=tab]").evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().x)));
 
 test("a table's DDL opens as SQL; Structure shows every section, and the choice is remembered", async ({ page }) => {
   await openDdl(page, "users");
@@ -104,13 +109,76 @@ test("restored DDL tabs keep their own view when another tab switches; Reload lo
   await page.getByRole("tab", { name: /contracts \[DDL\]/ }).click();
   await expect(views(page).getByRole("tab", { name: "Structure" })).toHaveAttribute("aria-selected", "true");
   await expect(section(page, "Columns 5")).toBeVisible();
-  // Reload: only in Structure, and it asks the database again
+  // Reload asks the database for the structure again
   const before = await loads(page);
-  await work(page).getByRole("button", { name: "Reload" }).click();
+  await reload(page).click();
   await expect(section(page, "Columns 5")).toBeVisible();
   expect(await loads(page)).toBe(before + 1);
+});
+
+test("Reload is in both views, in the same place, and reloads what the tab shows", async ({ page }) => {
+  await openDdl(page, "users");
+  await expect(views(page).getByRole("tab", { name: "SQL" })).toHaveAttribute("aria-selected", "true");
+  await expect(reload(page)).toBeVisible();
+  // An icon button like the grid's, named by its tooltip
+  await expect(reload(page)).toHaveAttribute("title", /^Reload/);
+  await expect(reload(page).locator("svg")).toHaveCount(1);
+  const xs = await toolbarXs(page);
+  // SQL: the DDL text is fetched again (and shown); the structure isn't touched
+  const [ddl0, st0] = [await ddlLoads(page), await loads(page)];
+  await page.evaluate(() => ((window as any).__mockDdlExtra = "-- reloaded\n"));
+  await reload(page).click();
+  await expect.poll(() => ddlLoads(page)).toBe(ddl0 + 1);
+  await expect(work(page).locator(".monaco-editor")).toContainText("-- reloaded");
+  expect(await loads(page)).toBe(st0);
+  // Structure: the structure is fetched again, not the DDL; nothing in the toolbar moves
+  await views(page).getByRole("tab", { name: "Structure" }).click();
+  await expect(section(page, "Columns 5")).toBeVisible();
+  expect(await toolbarXs(page)).toEqual(xs);
+  const st1 = await loads(page);
+  await reload(page).click();
+  await expect.poll(() => loads(page)).toBe(st1 + 1);
+  await expect(section(page, "Columns 5")).toBeVisible();
+  expect(await ddlLoads(page)).toBe(ddl0 + 1);
+});
+
+test("DDL tabs saved before they kept their object: a table's reloads in both views, a view's says to reopen it", async ({ page }) => {
+  await openDdl(page, "users");
+  await treeItem(page, "views 1").first().click();
+  await page.keyboard.press("ArrowRight");
+  await openDdl(page, "v_active_users");
+  await page.waitForTimeout(800);
+  // As the previous build saved them: no ddlOf (a table's DDL tab still has edit)
+  await page.evaluate(() => {
+    const ws = JSON.parse(localStorage.getItem("mock-ws")!);
+    for (const w of ws.workspaces) for (const t of w.tabs) delete t.ddlOf;
+    localStorage.setItem("mock-ws", JSON.stringify(ws));
+  });
+  await page.reload();
+  await expect(treeItem(page, "users").first()).toBeVisible();
+  await page.getByRole("tab", { name: /users \[DDL\]/ }).click();
   await views(page).getByRole("tab", { name: "SQL" }).click();
-  await expect(work(page).getByRole("button", { name: "Reload" })).toHaveCount(0);
+  const ddl0 = await ddlLoads(page);
+  await reload(page).click();
+  await expect.poll(() => ddlLoads(page)).toBe(ddl0 + 1);
+  await views(page).getByRole("tab", { name: "Structure" }).click();
+  await expect(section(page, "Columns 5")).toBeVisible();
+  const st0 = await loads(page);
+  await reload(page).click();
+  await expect.poll(() => loads(page)).toBe(st0 + 1);
+  await page.getByRole("tab", { name: /v_active_users \[DDL\]/ }).click();
+  await expect(work(page).getByRole("button", { name: "Reopen the DDL to reload" })).toBeDisabled();
+});
+
+test("a view's DDL tab reloads its DDL", async ({ page }) => {
+  await treeItem(page, "views 1").first().click();
+  await page.keyboard.press("ArrowRight");
+  await openDdl(page, "v_active_users");
+  const before = await ddlLoads(page);
+  await page.evaluate(() => ((window as any).__mockDdlExtra = "-- view reloaded\n"));
+  await reload(page).click();
+  await expect.poll(() => ddlLoads(page)).toBe(before + 1);
+  await expect(work(page).locator(".monaco-editor")).toContainText("-- view reloaded");
 });
 
 test("a long default wraps so the comment stays in view", async ({ page }) => {

@@ -149,16 +149,17 @@ impl App {
         let st = self.state.clone();
         let (conn, db2) = (conn.to_string(), db.clone());
         let title = format!("{name} [DDL]");
-        // A table also gets the Structure view (v), loaded only when it is shown
-        let table = matches!(kind.as_str(), "table" | "partitioned").then(|| (schema.clone(), name.clone()));
+        let ddl_of = Some((schema.clone(), name.clone()));
         let obj = kind.clone();
         self.spawn(async move { st.object_ddl(target, schema, name, kind).await.map_err(err) }, move |a, r| match r {
             Ok(text) => {
                 if let Some(i) = a.tabs.iter().position(|t| t.title == title && t.conn == conn) {
                     a.activate(i);
                 } else {
-                    let structure_view = table.is_some() && a.ddl_structure;
-                    let id = a.push_tab(&conn, db2, title, TabKind::Text(TextTab { text, kind: obj, table, structure_view, ..Default::default() }));
+                    // A table also gets the Structure view (v), loaded only when it is shown
+                    let tt = TextTab { text, kind: obj, ddl_of, ..Default::default() };
+                    let structure_view = tt.has_structure() && a.ddl_structure;
+                    let id = a.push_tab(&conn, db2, title, TabKind::Text(TextTab { structure_view, ..tt }));
                     if structure_view {
                         a.load_structure(id);
                     }
@@ -171,7 +172,7 @@ impl App {
     /// DDL tab of a table: switch between the SQL and the Structure view (v); the choice is kept for the next DDL tab
     pub fn toggle_structure(&mut self, id: u64) {
         let Some(TabKind::Text(t)) = self.tab_mut(id).map(|t| &mut t.kind) else { return };
-        if t.table.is_none() {
+        if !t.has_structure() {
             self.status = "Only a table's DDL has a Structure view".into();
             return;
         }
@@ -189,13 +190,41 @@ impl App {
         let Some(t) = self.tab_mut(id) else { return };
         let target = t.target.clone();
         let TabKind::Text(tt) = &mut t.kind else { return };
-        let Some((schema, table)) = tt.table.clone() else { return };
+        let Some((schema, table)) = tt.ddl_of.clone().filter(|_| tt.has_structure()) else { return };
         tt.structure = None;
         let st = self.state.clone();
         self.spawn(async move { st.table_structure(target, schema, table).await.map_err(err) }, move |a, r| {
             if let Some(TabKind::Text(tt)) = a.tab_mut(id).map(|t| &mut t.kind) {
                 tt.structure = Some(r);
             }
+        });
+    }
+
+    /// DDL tab, r: reload what it shows (the Structure view, or the DDL text)
+    pub fn reload_ddl(&mut self, id: u64) {
+        let Some(t) = self.tab_mut(id) else { return };
+        let target = t.target.clone();
+        let TabKind::Text(tt) = &t.kind else { return };
+        if tt.structure_view {
+            return self.load_structure(id);
+        }
+        // A DDL tab (kind set) saved by an older build doesn't know its object; other text (diagram) has nothing to reload
+        let Some((schema, name)) = tt.ddl_of.clone() else {
+            if !tt.kind.is_empty() {
+                self.status = "Reopen the DDL to reload".into();
+            }
+            return;
+        };
+        let (kind, st) = (tt.kind.clone(), self.state.clone());
+        self.status = format!("Loading DDL of {schema}.{name}…");
+        self.spawn(async move { st.object_ddl(target, schema, name, kind).await.map_err(err) }, move |a, r| match r {
+            Ok(text) => {
+                if let Some(TabKind::Text(tt)) = a.tab_mut(id).map(|t| &mut t.kind) {
+                    tt.text = text;
+                }
+                a.status = "Ready".into();
+            }
+            Err(e) => a.status = format!("DDL failed: {e}"),
         });
     }
 

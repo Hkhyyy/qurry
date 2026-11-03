@@ -202,7 +202,7 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `—` | Duplicate Console |
 | `—` | DDL: Show SQL |
 | `—` | DDL: Show Structure |
-| `—` | DDL: Reload Structure |
+| `—` | DDL: Reload |
 | `—` | DDL: Copy to Clipboard |
 | `—` | DDL: Save to File |
 | `—` | DDL: Run in Console |

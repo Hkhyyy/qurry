@@ -528,16 +528,16 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
         }
         TabKind::Text(t) => {
             // A table's DDL: v switches to the Structure view (sections as tables)
-            let view = match (&t.table, t.structure_view) {
-                (Some(_), true) => "Structure · v SQL · ",
-                (Some(_), false) => "v Structure · ",
-                (None, _) => "",
+            let view = match (t.has_structure(), t.structure_view) {
+                (true, true) => "Structure · v SQL · ",
+                (true, false) => "v Structure · ",
+                (false, _) => "",
             };
             let text = crate::structure::body(t, body.width.saturating_sub(2) as usize);
             // Don't scroll past the end (so the last line sits at the bottom)
             let lines = text.lines.len() as u16;
             let scroll = t.scroll.min(lines.saturating_sub(body.height.saturating_sub(2)));
-            let copies = if t.table.is_some() { "y copies the SQL" } else { "y copies all" };
+            let copies = if t.has_structure() { "y copies the SQL" } else { "y copies all" };
             let p = Paragraph::new(text).scroll((scroll, 0)).block(panel(format!(" {title} — {view}{lines} lines · ↑↓ PgUp/PgDn scroll · {copies} "), focus != Focus::Tree));
             f.render_widget(p, body);
             t.scroll = scroll;
@@ -705,7 +705,8 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
                 Some(TabKind::Redis(r)) if r.focus_value => vec![fixed("e", "edit"), fixed("a", "add"), fixed("x", "delete"), fixed("Esc", "keys")],
                 Some(TabKind::Redis(_)) => vec![fixed("Enter", "value"), fixed("/", "pattern"), fixed("a", "add"), fixed("D", "del key"), fixed("t", "TTL"), fixed("R", "rename"), fixed(":", "command")],
                 Some(TabKind::Text(t)) if t.structure_view => vec![fixed("v", "SQL"), fixed("r", "reload"), fixed("y", "copy"), fixed("Esc", "explorer")],
-                Some(TabKind::Text(t)) if t.table.is_some() => vec![fixed("v", "structure"), fixed("y", "copy"), fixed("Esc", "explorer")],
+                Some(TabKind::Text(t)) if t.has_structure() => vec![fixed("v", "structure"), fixed("r", "reload"), fixed("y", "copy"), fixed("Esc", "explorer")],
+                Some(TabKind::Text(t)) if t.ddl_of.is_some() => vec![fixed("r", "reload"), fixed("y", "copy"), fixed("Esc", "explorer")],
                 Some(TabKind::Text(_)) => vec![fixed("y", "copy"), fixed("Esc", "explorer")],
                 Some(TabKind::Dba(d)) => {
                     let has = |t: Option<bool>| d.info.as_ref().is_some_and(|i| i.actions.iter().any(|a| matches!(a, qurry_core::dba::Action::Kill { terminate, .. } if t.is_none_or(|t| *terminate == t))));
