@@ -1,12 +1,34 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, secretKey, setUpdateCheckEnabled, UpdateInfo, updateCheckEnabled } from "../../lib/api";
 import type { UpdateChannel } from "../../lib/api";
 import { KeymapEditor } from "../../components/KeymapEditor";
-import { Button, Checkbox, Field, List, ListItem, Modal, Select, Text } from "../../ui";
+import { Button, Checkbox, Field, List, ListItem, Modal, Select, Text, TextInput } from "../../ui";
 import { getThemePref, setThemePref, ThemePref, useTheme } from "../../lib/theme";
+import { fontInstalled, fontStack, FontTarget, KNOWN_MONO, setFont, SIZES, useFonts } from "../../lib/prefs";
 import { isMac, sk } from "../shortcuts/labels";
 
-/** Settings › Appearance */
+/** Settings › Appearance › Editor / Grid font: a family (the installed fonts of KNOWN_MONO are suggested, any other can be typed; shown in itself) and a size. Applied as you type */
+function FontField({ target, label, hint }: { target: FontTarget; label: string; hint?: string }) {
+  const { family, size } = useFonts()[target];
+  const [min, max] = SIZES[target];
+  const name = family.trim();
+  const missing = name !== "" && !fontInstalled(name);
+  return (
+    <Field label={label} hint={missing ? `"${name}" isn't installed, so the default monospace font is used. Pick a font from the list, or clear the field for the default.` : hint}>
+      <div className="ui-row">
+        <TextInput grow list="settings-fonts" aria-label={`${label} family`} placeholder="Default monospace" spellCheck={false} value={family} style={{ fontFamily: fontStack(family) }} onChange={(e) => setFont(target, { family: e.target.value })} />
+        <Select aria-label={`${label} size`} value={size} onChange={(e) => setFont(target, { size: Number(e.target.value) })}>
+          {Array.from({ length: max - min + 1 }, (_, i) => min + i).map((n) => (
+            <option key={n} value={n}>
+              {n} px
+            </option>
+          ))}
+        </Select>
+      </div>
+    </Field>
+  );
+}
+
 /** Settings › Passwords: whether to keep the password file's master key in a file or the OS keychain */
 function PasswordSettings() {
   const [loc, setLoc] = useState<"file" | "keychain" | null>(null);
@@ -89,6 +111,8 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
     setThemePref(p);
   };
   const sync = pref === "system";
+  const fonts = useMemo(() => KNOWN_MONO.filter(fontInstalled), []);
+  const fontKeys = [sk("font.bigger"), sk("font.smaller")].filter(Boolean).join(" / ");
   return (
     <Modal
       title="Settings"
@@ -127,6 +151,13 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
                 </Checkbox>
               </div>
             </Field>
+            <FontField target="editor" label="Editor font" hint={fontKeys && `Size also with ${fontKeys} in the editor.`} />
+            <FontField target="grid" label="Grid font" />
+            <datalist id="settings-fonts">
+              {fonts.map((f) => (
+                <option key={f} value={f} />
+              ))}
+            </datalist>
             <Field label="Updates" hint={updMsg ?? undefined}>
               <div className="ui-row">
                 <Checkbox

@@ -7,7 +7,7 @@ import { migrateOldHistory } from "./components/HistoryDialog";
 import { WorkspaceBar } from "./components/WorkspaceBar";
 import { Badge, Text, Toolbar, ToolbarSep } from "./ui";
 import { invalidateSearchIndex } from "./components/SearchEverywhere";
-import { DEFAULT_FONT, editorFontSize, setEditorFontSize } from "./lib/prefs";
+import { DEFAULT_FONT, font, setFont } from "./lib/prefs";
 import { loadKeymap, onKeymapChange } from "./lib/shortcuts";
 import { invalidateCompletion } from "./lib/completion";
 import { useSharedReady } from "./lib/shared";
@@ -214,8 +214,7 @@ export default function App() {
   };
 
   // ── Editor font size ──
-  const [, setFontTick] = useState(editorFontSize());
-  const bumpFont = (d: number) => setFontTick(setEditorFontSize(d === 0 ? DEFAULT_FONT : editorFontSize() + d));
+  const bumpFont = (d: number) => void setFont("editor", { size: d === 0 ? DEFAULT_FONT : font("editor").size + d });
   const search = useSearch({ ...app, ...groups, setExplorerHidden, toggleExplorer, bumpFont });
   const { findOpen } = search;
 

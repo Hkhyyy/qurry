@@ -200,7 +200,7 @@ a { color: var(--c-548af7); cursor: pointer; }
 .plan-table { user-select: text; }
 .plan-tools.ui-toolbar { height: 30px; border-bottom: 1px solid var(--border); }
 .running-time { font-variant-numeric: tabular-nums; }
-.grid-scroll { position: absolute; inset: 0; overflow: auto; outline: none; font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; }
+.grid-scroll { position: absolute; inset: 0; overflow: auto; outline: none; font-family: var(--grid-font-family); font-size: var(--grid-font-size); }
 
 .hint { color: var(--muted); font-size: 12px; margin: 10px 0 0 102px; }
 .test-err { background: rgba(247,84,100,.12); color: var(--danger); }
@@ -329,7 +329,7 @@ input:disabled, select:disabled { opacity: .45; }
 .grid-overlay { position: absolute; left: 0; right: 0; top: 64px; text-align: center; padding: 16px; }
 pre.grid-overlay { text-align: left; background: var(--bg); }
 .grid-scroll.transposed { overflow: auto; }
-.grid-scroll.transposed table { border-collapse: collapse; font-family: "JetBrains Mono", Menlo, monospace; font-size: 12px; }
+.grid-scroll.transposed table { border-collapse: collapse; }
 .grid-scroll.transposed th { position: sticky; left: 0; background: var(--panel); text-align: left; padding: 0 10px; border-right: 1px solid var(--border); white-space: nowrap; }
 .grid-scroll.transposed td { padding: 0 10px; height: 24px; border-right: 1px solid var(--c-2c2e33); border-bottom: 1px solid var(--c-26282b); white-space: nowrap; max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
 .grid-scroll.transposed td.null { color: var(--c-6f737a); font-style: italic; }

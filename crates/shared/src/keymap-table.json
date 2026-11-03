@@ -11,7 +11,7 @@
   {"gui": "explorer", "tui": "ToggleExplorer", "title": "Database Explorer (focus / hide)", "tuiTitle": "Database Explorer", "scope": "global", "guiKeys": ["Mod+0"], "tuiKeys": ["Alt+0"]},
   {"gui": "find.window", "title": "Find Tool Window", "guiDesc": "Find tool window (Full-text Search results)", "scope": "global", "guiKeys": ["Mod+Shift+F"]},
   {"gui": "maximize", "title": "Maximize Editor", "guiDesc": "Maximize editor (also: double-click a tab)", "scope": "global", "guiKeys": ["Mod+Shift+F12"]},
-  {"gui": "settings", "title": "Settings", "guiDesc": "Settings (theme)", "scope": "global", "guiKeys": ["Mod+,"]},
+  {"gui": "settings", "title": "Settings", "guiDesc": "Settings (theme, fonts)", "scope": "global", "guiKeys": ["Mod+,"]},
   {"gui": "theme", "title": "Quick Switch Theme", "guiDesc": "Quick switch theme (Dark / Light / High contrast / Sync with OS)", "scope": "global", "guiKeys": ["Ctrl+`"]},
   {"gui": "font.bigger", "title": "Increase Editor Font Size", "guiDesc": "Editor font size bigger", "scope": "global", "guiKeys": ["Ctrl+Shift+."]},
   {"gui": "font.smaller", "title": "Decrease Editor Font Size", "guiDesc": "Editor font size smaller", "scope": "global", "guiKeys": ["Ctrl+Shift+,"]},
