@@ -9,7 +9,7 @@ import { UpdateDialog } from "./components/UpdateDialog";
 import { ContextMenu, Explorer, MenuItem } from "./components/Explorer";
 import { ConnectionDialog } from "./components/ConnectionDialog";
 import { ConsoleEditor } from "./components/ConsoleEditor";
-import { ConsoleApi, ConsolePane, OutputLine, ResultEntry } from "./components/ConsolePane";
+import { ConsolePane, OutputLine, ResultEntry } from "./components/ConsolePane";
 import { HistoryDialog, migrateOldHistory, pushHistory, saveSnippet } from "./components/HistoryDialog";
 import { ProductionLog } from "./components/ProductionLog";
 import { CopyRowsDialog, GenerateDataDialog } from "./components/DataTools";
@@ -45,6 +45,8 @@ import { emptyLayout, Group, snapKey, Tab, TAB_LIMIT, TabSnapshot, WsLayout } fr
 import { isMac, sk } from "./features/shortcuts/labels";
 import { offered, SettingsDialog, upToDate } from "./features/settings/SettingsDialog";
 import { StatusBar } from "./features/settings/StatusBar";
+import { editorApis, liveSql, setActiveIds, setFocused, setPanes, setTabs, useTabsStore } from "./features/tabs/store";
+import { setCurWs, setWorkspaces, stash, useWorkspacesStore } from "./features/workspaces/store";
 import "./App.css";
 
 /** Max rows kept in the result grid (same as the TUI). Beyond that, export to CSV */
@@ -112,38 +114,21 @@ export default function App() {
     return () => clearInterval(t);
   }, []);
   const [conns, setConns] = useState<ConnectionView[]>([]);
-  const [tabs, setTabs] = useState<Tab[]>([]);
-  /** Tab shown in each pane */
-  const [activeIds, setActiveIds] = useState<(string | null)[]>([null, null, null, null]);
-  const activeIdsRef = useRef(activeIds);
-  activeIdsRef.current = activeIds;
-  // Split view (up to 4 panes)
-  const [panes, setPanes] = useState<Pane>(leaf(0));
-  const panesRef = useRef(panes);
-  panesRef.current = panes;
+  const tabs = useTabsStore((s) => s.tabs);
+  const activeIds = useTabsStore((s) => s.activeIds);
+  const panes = useTabsStore((s) => s.panes);
   const split = panes.t === "split";
-  const [focused, setFocused] = useState<Group>(0);
-  const focusedRef = useRef(focused);
-  focusedRef.current = focused;
-  // ───────── Workspaces (like Orca): each has its own tabs and split view. The current one is the state above, the rest are in stash (tab objects, console sessions, transactions as is) ─────────
-  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([{ id: "ws1", name: "Default", connIds: [] }]);
-  const workspacesRef = useRef(workspaces);
-  workspacesRef.current = workspaces;
-  const [curWs, setCurWs] = useState("ws1");
-  const curWsRef = useRef(curWs);
-  curWsRef.current = curWs;
-  const stash = useRef(new Map<string, WsLayout>());
+  const focused = useTabsStore((s) => s.focused);
+  const workspaces = useWorkspacesStore((s) => s.workspaces);
+  const curWs = useWorkspacesStore((s) => s.curWs);
   const [dialog, setDialog] = useState<{ edit?: ConnectionView } | null>(null);
   const [status, setStatus] = useState("Ready");
   const [treeSel, setTreeSel] = useState<NodeInfo | null>(null);
   const [tabMenu, setTabMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
-  const editorApis = useRef(new Map<string, ConsoleApi>());
   const [historyFor, setHistoryFor] = useState<string | null>(null);
   const [historyTab, setHistoryTab] = useState<"history" | "snippets">("history");
   /** Production operation log window (connId null = all Data Sources) */
   const [prodLog, setProdLog] = useState<{ connId: string | null } | null>(null);
-  const tabsRef = useRef(tabs);
-  tabsRef.current = tabs;
 
   // Called on every query run, so only update state when something actually changed (avoids redrawing the whole tree and re-registering shortcut handlers)
   const connsJson = useRef("");
@@ -241,7 +226,7 @@ export default function App() {
   const labelOf = (t: Tab) => tabLabels.get(t.id) ?? t.title;
   /** If the tab is in another workspace, change it there (so query results that finished meanwhile are not lost) */
   const updStashed = (id: string, fn: (t: Tab) => Tab) => {
-    for (const w of stash.current.values()) {
+    for (const w of stash.values()) {
       if (w.tabs.some((t) => t.id === id)) {
         w.tabs = w.tabs.map((t) => (t.id === id ? fn(t) : t));
         return true;
@@ -250,16 +235,11 @@ export default function App() {
     return false;
   };
   /** Tabs of all workspaces */
-  const allTabs = () => [...tabsRef.current, ...[...stash.current.values()].flatMap((w) => w.tabs)];
+  const allTabs = () => [...useTabsStore.getState().tabs, ...[...stash.values()].flatMap((w) => w.tabs)];
   const patch = (id: string, p: Partial<Tab>) => {
     if (!updStashed(id, (t) => ({ ...t, ...p }))) setTabs((ts) => ts.map((t) => (t.id === id ? { ...t, ...p } : t)));
   };
-  const mru = useRef<string[]>([]);
-  const recent = useRef<TabSnapshot[]>([]);
-  const closedStack = useRef<TabSnapshot[]>([]);
-  // SQL typed in the console is kept here, not in state (setTabs) → the whole app does not redraw on every keystroke
-  const liveSql = useRef(new Map<string, string>());
-  const sqlOf = (t: Tab) => liveSql.current.get(t.id) ?? t.sql;
+  const sqlOf = (t: Tab) => liveSql.get(t.id) ?? t.sql;
   const snapshot = (t: Tab): TabSnapshot => ({
     key: snapKey(t),
     kind: t.kind,
@@ -273,14 +253,14 @@ export default function App() {
   });
   const remember = (t: Tab) => {
     const snap = snapshot(t);
-    recent.current = [snap, ...recent.current.filter((r) => r.key !== snap.key)].slice(0, 50);
+    useTabsStore.setState({ recent: [snap, ...useTabsStore.getState().recent.filter((r) => r.key !== snap.key)].slice(0, 50) });
   };
   const activate = (t: Tab) => {
-    const cur = tabsRef.current.find((x) => x.id === t.id);
+    const cur = useTabsStore.getState().tabs.find((x) => x.id === t.id);
     if (cur?.stale) loadStale(cur);
     setFocused(t.group);
     setActiveIds((a) => a.map((x, g) => (g === t.group ? t.id : x)));
-    mru.current = [t.id, ...mru.current.filter((x) => x !== t.id)];
+    useTabsStore.setState({ mru: [t.id, ...useTabsStore.getState().mru.filter((x) => x !== t.id)] });
     remember(t);
   };
 
@@ -292,8 +272,8 @@ export default function App() {
   ) => {
     const database = opts.database && opts.database !== (c.database || "postgres") ? opts.database : undefined;
     const base = database ? `${c.name}/${database}` : c.name;
-    const n = tabsRef.current.filter((t) => t.kind === "console" && t.connId === c.id && t.database === database).length;
-    const ls = leaves(panesRef.current);
+    const n = useTabsStore.getState().tabs.filter((t) => t.kind === "console" && t.connId === c.id && t.database === database).length;
+    const ls = leaves(useTabsStore.getState().panes);
     const group: Group = opts.group ?? (ls.includes(focused) ? focused : ls[0]);
     // If the name already starts with brackets like [DEV], don't wrap it again ("console [[DEV] shop]" → "console [DEV] shop")
     const where = base.startsWith("[") ? base : `[${base}]`;
@@ -304,11 +284,11 @@ export default function App() {
     activate(tab);
     // Tab limit: when unpinned tabs exceed 10, close the least recently used first (DataGrip)
     setTimeout(() => {
-      const inGroup = tabsRef.current.filter((t) => t.group === group && !t.pinned && t.id !== tab.id);
+      const inGroup = useTabsStore.getState().tabs.filter((t) => t.group === group && !t.pinned && t.id !== tab.id);
       const over = inGroup.length + 1 - TAB_LIMIT;
       if (over > 0) {
         const byAge = [...inGroup].sort((a, b) => {
-          const ia = mru.current.indexOf(a.id), ib = mru.current.indexOf(b.id);
+          const ia = useTabsStore.getState().mru.indexOf(a.id), ib = useTabsStore.getState().mru.indexOf(b.id);
           return (ib < 0 ? -1 : ib) - (ia < 0 ? -1 : ia);
         });
         closeTabs(byAge.slice(0, over).map((t) => t.id));
@@ -377,13 +357,13 @@ export default function App() {
       activeIds: l.activeIds.map((id) => l.tabs.findIndex((t) => t.id === id)),
       focused: l.focused,
     });
-    const live: WsLayout = { tabs: tabsRef.current, panes: panesRef.current, activeIds: activeIdsRef.current, focused: focusedRef.current, mru: [] };
+    const live: WsLayout = { tabs: useTabsStore.getState().tabs, panes: useTabsStore.getState().panes, activeIds: useTabsStore.getState().activeIds, focused: useTabsStore.getState().focused, mru: [] };
     return JSON.stringify({
       version: 2,
       // The workspace list has been synced with the file shared with the TUI (missing ones were deleted on the other side)
       shared: true,
-      current: curWsRef.current,
-      workspaces: workspacesRef.current.map((w) => ({ id: w.id, name: w.name, connIds: w.connIds, ...ser(w.id === curWsRef.current ? live : stash.current.get(w.id) ?? emptyLayout()) })),
+      current: useWorkspacesStore.getState().curWs,
+      workspaces: useWorkspacesStore.getState().workspaces.map((w) => ({ id: w.id, name: w.name, connIds: w.connIds, ...ser(w.id === useWorkspacesStore.getState().curWs ? live : stash.get(w.id) ?? emptyLayout()) })),
     });
   };
   /** Before closing the app or relaunching for an update: ask about uncommitted changes and save the open tabs */
@@ -425,7 +405,7 @@ export default function App() {
     const back = [...now].filter((id) => !wasConnected.current.has(id));
     wasConnected.current = now;
     if (!back.length) return;
-    for (const t of tabsRef.current) {
+    for (const t of useTabsStore.getState().tabs) {
       if (t.kind === "table" && back.includes(t.connId) && t.error && !t.running && !t.stale) loadTable(t);
     }
   }, [conns]);
@@ -465,7 +445,7 @@ export default function App() {
     setPanes(l.panes);
     setActiveIds(l.activeIds);
     setFocused(l.focused);
-    mru.current = l.mru;
+    useTabsStore.setState({ mru: l.mru });
     for (const id of l.activeIds) {
       const t = l.tabs.find((x) => x.id === id);
       if (t?.stale) loadStale(t);
@@ -484,16 +464,14 @@ export default function App() {
       connIds: hasLists ? (Array.isArray(w.connIds) ? w.connIds.filter((x: unknown) => typeof x === "string") : []) : i === 0 ? conns.map((c) => c.id) : [],
     }));
     const cur = infos.find((w) => w.id === data.current)?.id ?? infos[0].id;
-    stash.current.clear();
+    stash.clear();
     list.forEach((w, i) => {
       const l = buildLayout(w);
       if (infos[i].id === cur) showLayout(l);
-      else stash.current.set(infos[i].id, l);
+      else stash.set(infos[i].id, l);
     });
     setWorkspaces(infos);
-    workspacesRef.current = infos;
     setCurWs(cur);
-    curWsRef.current = cur;
     return data?.shared === true;
   };
 
@@ -501,24 +479,23 @@ export default function App() {
   /** List last synced with the shared file (null = not yet) */
   const sharedPrev = useRef<WorkspaceInfo[] | null>(null);
   const sameWs = (a: WorkspaceInfo[], b: WorkspaceInfo[]) => JSON.stringify(a.map((w) => [w.id, w.name, w.connIds])) === JSON.stringify(b.map((w) => [w.id, w.name, w.connIds]));
-  const wsTabs = (id: string) => (id === curWsRef.current ? tabsRef.current : stash.current.get(id)?.tabs ?? []);
+  const wsTabs = (id: string) => (id === useWorkspacesStore.getState().curWs ? useTabsStore.getState().tabs : stash.get(id)?.tabs ?? []);
   /** Apply the shared list to the UI. Close the tabs of workspaces deleted on the other side (keep them if a console has uncommitted changes — they come back on the next sync) */
   const applyShared = (list: WorkspaceInfo[]) => {
-    const cur = workspacesRef.current;
+    const cur = useWorkspacesStore.getState().workspaces;
     const gone = cur.filter((w) => !list.some((x) => x.id === w.id));
     const keep = gone.filter((w) => wsTabs(w.id).some((t) => t.inTx));
     const next = [...list.map((w) => ({ id: w.id, name: w.name, connIds: w.connIds })), ...keep];
     if (!next.length) return;
     const closing = new Map(gone.filter((x) => !keep.includes(x)).map((w) => [w.id, wsTabs(w.id)]));
-    workspacesRef.current = next;
     setWorkspaces(next);
-    if (!next.some((w) => w.id === curWsRef.current)) switchWs(next[0].id, true);
+    if (!next.some((w) => w.id === useWorkspacesStore.getState().curWs)) switchWs(next[0].id, true);
     for (const [id, ts] of closing) {
-      stash.current.delete(id);
+      stash.delete(id);
       for (const t of ts) {
         forgetConsoleModel(t.id);
-        editorApis.current.delete(t.id);
-        liveSql.current.delete(t.id);
+        editorApis.delete(t.id);
+        liveSql.delete(t.id);
         api.closeSession(t.id).catch(() => {});
       }
     }
@@ -526,18 +503,17 @@ export default function App() {
   };
   /** At first launch: match this app's list to the shared list (the first time, pair up ones with the same name) */
   const adoptShared = async (synced: boolean) => {
-    const a = await api.adoptWorkspaces(workspacesRef.current, synced);
+    const a = await api.adoptWorkspaces(useWorkspacesStore.getState().workspaces, synced);
     for (const [from, to] of a.renamed) {
-      const l = stash.current.get(from);
+      const l = stash.get(from);
       if (l) {
-        stash.current.delete(from);
-        stash.current.set(to, l);
+        stash.delete(from);
+        stash.set(to, l);
       }
-      if (curWsRef.current === from) {
-        curWsRef.current = to;
+      if (useWorkspacesStore.getState().curWs === from) {
         setCurWs(to);
       }
-      workspacesRef.current = workspacesRef.current.map((w) => (w.id === from ? { ...w, id: to } : w));
+      setWorkspaces((l) => l.map((w) => (w.id === from ? { ...w, id: to } : w)));
     }
     applyShared(a.list);
     sharedPrev.current = a.list;
@@ -552,7 +528,7 @@ export default function App() {
       .syncWorkspaces(prev, sent)
       .then((list) => {
         // If it changed again meanwhile, leave it to the next sync
-        if (workspacesRef.current !== sent) return;
+        if (useWorkspacesStore.getState().workspaces !== sent) return;
         sharedPrev.current = list;
         if (!sameWs(list, sent)) applyShared(list);
       })
@@ -562,7 +538,7 @@ export default function App() {
   useEffect(() => {
     const pull = () => {
       const prev = sharedPrev.current;
-      if (!prev || !sameWs(workspacesRef.current, prev)) return;
+      if (!prev || !sameWs(useWorkspacesStore.getState().workspaces, prev)) return;
       api
         .sharedWorkspaces()
         .then((list) => {
@@ -581,60 +557,56 @@ export default function App() {
   }, []);
   /** Switch to another workspace: keep the current one as is (console sessions and transactions too). discard = don't keep the current one (when deleting) */
   const switchWs = (id: string, discard = false) => {
-    const from = curWsRef.current;
-    if (id === from || !workspacesRef.current.some((w) => w.id === id)) return;
-    const target = stash.current.get(id) ?? emptyLayout();
-    stash.current.delete(id);
-    if (!discard) stash.current.set(from, { tabs: tabsRef.current, panes: panesRef.current, activeIds: activeIdsRef.current, focused: focusedRef.current, mru: mru.current });
-    tabsRef.current = target.tabs;
-    curWsRef.current = id;
+    const from = useWorkspacesStore.getState().curWs;
+    if (id === from || !useWorkspacesStore.getState().workspaces.some((w) => w.id === id)) return;
+    const target = stash.get(id) ?? emptyLayout();
+    stash.delete(id);
+    if (!discard) stash.set(from, { tabs: useTabsStore.getState().tabs, panes: useTabsStore.getState().panes, activeIds: useTabsStore.getState().activeIds, focused: useTabsStore.getState().focused, mru: useTabsStore.getState().mru });
     showLayout(target);
     setCurWs(id);
   };
   const newWs = async () => {
-    const name = (await askText("Workspace name", `Workspace ${workspacesRef.current.length + 1}`));
+    const name = (await askText("Workspace name", `Workspace ${useWorkspacesStore.getState().workspaces.length + 1}`));
     if (!name?.trim()) return;
     const w = { id: crypto.randomUUID(), name: name.trim(), connIds: [] };
     setWorkspaces((l) => [...l, w]);
-    workspacesRef.current = [...workspacesRef.current, w];
     switchWs(w.id);
   };
   const renameWs = async (id: string) => {
-    const w = workspacesRef.current.find((x) => x.id === id);
+    const w = useWorkspacesStore.getState().workspaces.find((x) => x.id === id);
     const name = w && (await askText("Rename workspace", w.name));
     if (name?.trim()) setWorkspaces((l) => l.map((x) => (x.id === id ? { ...x, name: name.trim() } : x)));
   };
   /** Close a workspace and its tabs (uncommitted changes are rolled back) */
   const deleteWs = async (id: string) => {
-    const list = workspacesRef.current;
+    const list = useWorkspacesStore.getState().workspaces;
     const w = list.find((x) => x.id === id);
     if (!w || list.length < 2) return;
-    const ts = id === curWsRef.current ? tabsRef.current : stash.current.get(id)?.tabs ?? [];
+    const ts = id === useWorkspacesStore.getState().curWs ? useTabsStore.getState().tabs : stash.get(id)?.tabs ?? [];
     const dirty = ts.filter((t) => t.inTx).length;
     if (!(await ask(`Delete the workspace "${w.name}"${ts.length ? ` and close its ${ts.length} tab(s)` : ""}?${dirty ? `\n\n${dirty} console(s) have uncommitted changes — they are rolled back.` : ""}`, { okLabel: "Delete", danger: true }))) return;
-    if (id === curWsRef.current) switchWs(list.find((x) => x.id !== id)!.id, true);
-    stash.current.delete(id);
+    if (id === useWorkspacesStore.getState().curWs) switchWs(list.find((x) => x.id !== id)!.id, true);
+    stash.delete(id);
     for (const t of ts) {
       forgetConsoleModel(t.id);
-      editorApis.current.delete(t.id);
-      liveSql.current.delete(t.id);
+      editorApis.delete(t.id);
+      liveSql.delete(t.id);
       api.closeSession(t.id).catch(() => {});
     }
     setWorkspaces((l) => l.filter((x) => x.id !== id));
-    workspacesRef.current = workspacesRef.current.filter((x) => x.id !== id);
   };
   /** Move a tab to another workspace (session kept). Goes at the end of that workspace's first pane */
   const moveToWs = (t: Tab, id: string) => {
-    const target = stash.current.get(id) ?? emptyLayout();
+    const target = stash.get(id) ?? emptyLayout();
     const g = leaves(target.panes)[0];
-    stash.current.set(id, { ...target, tabs: [...target.tabs, { ...t, group: g }], activeIds: target.activeIds.map((x, i) => (i === g ? t.id : x)), mru: [t.id, ...target.mru] });
-    mru.current = mru.current.filter((x) => x !== t.id);
+    stash.set(id, { ...target, tabs: [...target.tabs, { ...t, group: g }], activeIds: target.activeIds.map((x, i) => (i === g ? t.id : x)), mru: [t.id, ...target.mru] });
+    useTabsStore.setState({ mru: useTabsStore.getState().mru.filter((x) => x !== t.id) });
     setTabs((ts) => {
       const rest = ts.filter((x) => x.id !== t.id);
-      settle(rest, panesRef.current);
+      settle(rest, useTabsStore.getState().panes);
       return rest;
     });
-    setStatus(`Moved "${t.title}" to ${workspacesRef.current.find((w) => w.id === id)?.name}`);
+    setStatus(`Moved "${t.title}" to ${useWorkspacesStore.getState().workspaces.find((w) => w.id === id)?.name}`);
   };
   useEffect(() => {
     if (restored.current || !conns.length) return;
@@ -651,9 +623,9 @@ export default function App() {
   const [wsReady, setWsReady] = useState(false);
   useEffect(() => {
     if (!wsReady) return;
-    const known = new Set(workspacesRef.current.flatMap((w) => w.connIds));
+    const known = new Set(useWorkspacesStore.getState().workspaces.flatMap((w) => w.connIds));
     const orphans = conns.map((c) => c.id).filter((id) => !known.has(id));
-    if (orphans.length) setWorkspaces((l) => l.map((w) => (w.id === curWsRef.current ? { ...w, connIds: [...w.connIds, ...orphans] } : w)));
+    if (orphans.length) setWorkspaces((l) => l.map((w) => (w.id === useWorkspacesStore.getState().curWs ? { ...w, connIds: [...w.connIds, ...orphans] } : w)));
   }, [conns, wsReady]);
   /** Add or remove a Data Source in the workspace explorer (the Data Source itself is untouched) */
   const setInWs = (wsId: string, connId: string, on: boolean) =>
@@ -675,7 +647,7 @@ export default function App() {
 
   const openTable = async (c: ConnectionView, schema: string, table: string, db?: string) => {
     const target = targetId(c.id, db && db !== (c.database || "postgres") ? db : undefined);
-    const existing = tabsRef.current.find((t) => t.kind === "table" && t.target === target && t.edit?.schema === schema && t.edit?.table === table);
+    const existing = useTabsStore.getState().tabs.find((t) => t.kind === "table" && t.target === target && t.edit?.schema === schema && t.edit?.table === table);
     if (existing) return activate(existing);
     return openTableTab(c, schema, table, db);
   };
@@ -703,7 +675,7 @@ export default function App() {
     if (!info.schema || !info.name) return;
     const target = targetId(info.conn.id, info.db && info.db !== (info.conn.database || "postgres") ? info.db : undefined);
     const title = `${info.name} [DDL]`;
-    const existing = tabsRef.current.find((t) => t.kind === "ddl" && t.target === target && t.title === title);
+    const existing = useTabsStore.getState().tabs.find((t) => t.kind === "ddl" && t.target === target && t.title === title);
     if (existing) return activate(existing);
     try {
       setStatus(`Loading DDL of ${info.schema}.${info.name}…`);
@@ -822,7 +794,7 @@ export default function App() {
   const openRedis = (c: ConnectionView, db?: string, key?: string) => {
     const database = redisDb(db ?? c.database);
     const target = targetId(c.id, database);
-    const existing = tabsRef.current.find((t) => t.kind === "redis" && t.target === target);
+    const existing = useTabsStore.getState().tabs.find((t) => t.kind === "redis" && t.target === target);
     if (existing) {
       if (key) patch(existing.id, { redisKey: key });
       return activate(existing);
@@ -835,7 +807,7 @@ export default function App() {
   const openDba = (c: ConnectionView, db?: string, report = "sessions", title = "Sessions") => {
     const database = db && db !== (c.database || "postgres") ? db : undefined;
     const target = targetId(c.id, database);
-    const existing = tabsRef.current.find((t) => t.kind === "dba" && t.target === target);
+    const existing = useTabsStore.getState().tabs.find((t) => t.kind === "dba" && t.target === target);
     if (existing) {
       patch(existing.id, { dbaReport: report, title: `${title} — ${c.name}` });
       return activate(existing);
@@ -854,7 +826,7 @@ export default function App() {
       list = all.filter((x) => !x.isSystem).map((x) => x.name);
     }
     const title = `Diagram: ${list.length === 1 ? list[0] : `${list.length} schemas`} — ${c.name}`;
-    const existing = tabsRef.current.find((t) => t.kind === "erd" && t.target === target && (t.erdSchemas ?? []).join(",") === list!.join(","));
+    const existing = useTabsStore.getState().tabs.find((t) => t.kind === "erd" && t.target === target && (t.erdSchemas ?? []).join(",") === list!.join(","));
     if (existing) return activate(existing);
     const tab = addTab(c, "erd", { title, database: db });
     patch(tab.id, { erdSchemas: list });
@@ -862,7 +834,7 @@ export default function App() {
 
   /** Compare & Migrate tab (only one) */
   const openMigrate = (c: ConnectionView, db?: string) => {
-    const existing = tabsRef.current.find((t) => t.kind === "migrate");
+    const existing = useTabsStore.getState().tabs.find((t) => t.kind === "migrate");
     if (existing) return activate(existing);
     addTab(c, "migrate", { title: "Compare & Migrate", database: db });
   };
@@ -872,7 +844,7 @@ export default function App() {
   const openRag = (c: ConnectionView, db?: string, schema?: string, table?: string) => {
     // When n changes, redraw the tab to open the new index form for that table
     setRagInit((x) => ({ n: (x?.n ?? 0) + 1, connId: c.id, db, schema, table }));
-    const existing = tabsRef.current.find((t) => t.kind === "rag");
+    const existing = useTabsStore.getState().tabs.find((t) => t.kind === "rag");
     if (existing) return activate(existing);
     addTab(c, "rag", { title: "AI Search (RAG)", database: db });
   };
@@ -953,7 +925,7 @@ export default function App() {
   };
   /** Jump to Query Console…: this data source's consoles + New Query Console */
   const jumpToConsole = (info: NodeInfo, x?: number, y?: number) => {
-    const consoles = tabsRef.current.filter((t) => t.kind === "console" && t.connId === info.conn.id);
+    const consoles = useTabsStore.getState().tabs.filter((t) => t.kind === "console" && t.connId === info.conn.id);
     const el = document.querySelector(".ws-explorer.on .tree-node.selected")?.getBoundingClientRect();
     setTabMenu({
       x: x ?? (el ? el.left + 40 : 300),
@@ -1226,7 +1198,7 @@ export default function App() {
     return f ? f[1].replace(/"/g, "") : `Result ${n}`;
   };
   const executeConsole = async (tabId: string, stmts: string[], explain?: "plan" | "analyze") => {
-    const tab = tabsRef.current.find((t) => t.id === tabId);
+    const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId);
     if (!tab || !stmts.length) return;
     const c = conns.find((x) => x.id === tab.connId);
     const kind = c?.kind ?? "postgres";
@@ -1283,7 +1255,7 @@ export default function App() {
       // Explain Analyse actually runs the statement → run it in a transaction and always roll back (a savepoint when one may be
       // open, so nothing pending is committed: core's explain_wrap, the TUI's rule). Reads too: a function a SELECT calls may write
       const dry = explain === "analyze" && wraps;
-      const inTx0 = !!tabsRef.current.find((t) => t.id === tabId)?.inTx;
+      const inTx0 = !!useTabsStore.getState().tabs.find((t) => t.id === tabId)?.inTx;
       try {
         let r: QueryResult;
         if (dry) {
@@ -1357,7 +1329,7 @@ export default function App() {
   };
 
   const fetchMoreEntry = async (tabId: string, entryId: string) => {
-    const tab = tabsRef.current.find((t) => t.id === tabId);
+    const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId);
     if (!tab || tab.cursorEntry !== entryId) {
       // The server cursor is open only on the last result
       updTab(tabId, (t) => ({ ...t, results: t.results.map((r) => (r.id === entryId && r.result ? { ...r, result: { ...r.result, truncated: false } } : r)) }));
@@ -1465,9 +1437,9 @@ export default function App() {
   // Renders the status bar again when a ⌘↩ starts or stops waiting for the module (the wait lives in ConsolePane)
   const [, setPendingRuns] = useState(0);
   /** ⌘F2: cancel the running statement, or the ⌘↩ still waiting for the WebAssembly module */
-  const canCancel = (t?: Tab | null) => !!t && (t.running || !!editorApis.current.get(t.id)?.loading());
+  const canCancel = (t?: Tab | null) => !!t && (t.running || !!editorApis.get(t.id)?.loading());
   const cancelRun = (t: Tab) => {
-    const ed = editorApis.current.get(t.id);
+    const ed = editorApis.get(t.id);
     if (ed?.loading()) ed.cancelPending();
     else cancel(t);
   };
@@ -1486,19 +1458,19 @@ export default function App() {
   const closeTabs = async (ids: string[]) => {
     if (!ids.length) return;
     // Closing rolls back → ask if there are uncommitted changes
-    const pending = tabsRef.current.filter((t) => ids.includes(t.id) && t.inTx);
+    const pending = useTabsStore.getState().tabs.filter((t) => ids.includes(t.id) && t.inTx);
     if (pending.length && !(await ask(`${pending.length === 1 ? `"${pending[0].title}" has` : `${pending.length} consoles have`} uncommitted changes. Roll them back and close?`, { okLabel: "Roll Back and Close", danger: true }))) return;
-    for (const t of tabsRef.current.filter((x) => ids.includes(x.id))) closedStack.current = [snapshot(t), ...closedStack.current].slice(0, 30);
-    mru.current = mru.current.filter((x) => !ids.includes(x));
+    for (const t of useTabsStore.getState().tabs.filter((x) => ids.includes(x.id))) useTabsStore.setState({ closedStack: [snapshot(t), ...useTabsStore.getState().closedStack].slice(0, 30) });
+    useTabsStore.setState({ mru: useTabsStore.getState().mru.filter((x) => !ids.includes(x)) });
     for (const id of ids) {
       forgetConsoleModel(id);
-      editorApis.current.delete(id);
-      liveSql.current.delete(id);
+      editorApis.delete(id);
+      liveSql.delete(id);
       api.closeSession(id).catch(() => {});
     }
     setTabs((ts) => {
       const rest = ts.filter((t) => !ids.includes(t.id));
-      settle(rest, panesRef.current);
+      settle(rest, useTabsStore.getState().panes);
       return rest;
     });
   };
@@ -1513,7 +1485,7 @@ export default function App() {
         if (!ls.includes(g)) return null;
         if (show?.g === g) return show.id;
         if (cur && next.some((t) => t.id === cur && t.group === g)) return cur;
-        return mru.current.find((id) => next.some((t) => t.id === id && t.group === g)) ?? last(next.filter((t) => t.group === g))?.id ?? null;
+        return useTabsStore.getState().mru.find((id) => next.some((t) => t.id === id && t.group === g)) ?? last(next.filter((t) => t.group === g))?.id ?? null;
       }),
     );
     setFocused((f) => (show && ls.includes(show.g) ? show.g : ls.includes(f) ? f : ls[0]));
@@ -1523,13 +1495,13 @@ export default function App() {
   const moveTo = (id: string, g: Group) =>
     setTabs((ts) => {
       const next = ts.map((t) => (t.id === id ? { ...t, group: g } : t));
-      settle(next, panesRef.current, { g, id });
+      settle(next, useTabsStore.getState().panes, { g, id });
       return next;
     });
 
   /** Split the pane holding the tab and move the tab to the new pane (Split and Move Right / Down) */
   const splitAndMove = (t: Tab, dir: "right" | "down") => {
-    const r = splitPane(panesRef.current, t.group, dir);
+    const r = splitPane(useTabsStore.getState().panes, t.group, dir);
     if (!r) return setStatus(`Up to ${MAX_PANES} panes`);
     setTabs((ts) => {
       const next = ts.map((x) => (x.id === t.id ? { ...x, group: r.g } : x));
@@ -1544,7 +1516,7 @@ export default function App() {
 
   const dropTab = (id: string, g: Group, beforeId: string | null, dir?: "right" | "down") => {
     // Dropped on an edge: split that pane into a new one
-    let pane = panesRef.current;
+    let pane = useTabsStore.getState().panes;
     if (dir) {
       const r = splitPane(pane, g, dir);
       if (!r) return setStatus(`Up to ${MAX_PANES} panes`);
@@ -1582,14 +1554,15 @@ export default function App() {
   const reopen = (snap: TabSnapshot) => {
     const c = conns.find((x) => x.id === snap.connId);
     if (!c) return;
-    const open = tabsRef.current.find((t) => snapKey(t) === snap.key);
+    const open = useTabsStore.getState().tabs.find((t) => snapKey(t) === snap.key);
     if (open) return activate(open);
     if (snap.kind === "table" && snap.edit) {
       openTableTab(c, snap.edit.schema, snap.edit.table, snap.database, undefined, snap.where, snap.orderBy);
     } else addTab(c, snap.kind, { title: snap.title, sql: snap.sql, database: snap.database });
   };
   const reopenClosed = () => {
-    const snap = closedStack.current.shift();
+    const [snap, ...rest] = useTabsStore.getState().closedStack;
+    useTabsStore.setState({ closedStack: rest });
     if (snap) reopen(snap);
   };
 
@@ -1597,7 +1570,7 @@ export default function App() {
   const splitClone = (t: Tab, dir: "right" | "down") => {
     const c = conns.find((x) => x.id === t.connId);
     if (!c) return;
-    const r = splitPane(panesRef.current, t.group, dir);
+    const r = splitPane(useTabsStore.getState().panes, t.group, dir);
     if (!r) return setStatus(`Up to ${MAX_PANES} panes`);
     setPanes(r.pane);
     if (t.kind === "table" && t.edit) openTableTab(c, t.edit.schema, t.edit.table, t.database, r.g, t.where, t.orderBy);
@@ -1629,7 +1602,7 @@ export default function App() {
       { label: "Close Tabs to the Left", action: () => closeTabs(sameGroup.slice(0, idx).filter((x) => !x.pinned).map((x) => x.id)), disabled: idx === 0 },
       { label: "Close Tabs to the Right", action: () => closeTabs(sameGroup.slice(idx + 1).filter((x) => !x.pinned).map((x) => x.id)), disabled: idx === sameGroup.length - 1 },
       { label: "Close All Tabs", action: () => closeTabs(sameGroup.map((x) => x.id)) },
-      { label: "Reopen Closed Tab", action: reopenClosed, disabled: closedStack.current.length === 0 },
+      { label: "Reopen Closed Tab", action: reopenClosed, disabled: useTabsStore.getState().closedStack.length === 0 },
       { separator: true },
       { label: t.pinned ? "Unpin Tab" : "Pin Tab", action: () => togglePin(t) },
       {
@@ -1660,11 +1633,10 @@ export default function App() {
           {
             label: "New Workspace…",
             action: async () => {
-              const name = (await askText("Workspace name", `Workspace ${workspacesRef.current.length + 1}`));
+              const name = (await askText("Workspace name", `Workspace ${useWorkspacesStore.getState().workspaces.length + 1}`));
               if (!name?.trim()) return;
               const w = { id: crypto.randomUUID(), name: name.trim(), connIds: [] };
               setWorkspaces((l) => [...l, w]);
-              workspacesRef.current = [...workspacesRef.current, w];
               moveToWs(t, w.id);
             },
           },
@@ -1702,15 +1674,15 @@ export default function App() {
     return c ? c.name + (db ? ` · ${db}` : "") : "";
   };
   const openSwitcher = (back: boolean) => {
-    const ts = tabsRef.current;
-    const ordered = [...mru.current.map((id) => ts.find((t) => t.id === id)).filter((t): t is Tab => !!t), ...ts.filter((t) => !mru.current.includes(t.id))];
+    const ts = useTabsStore.getState().tabs;
+    const ordered = [...useTabsStore.getState().mru.map((id) => ts.find((t) => t.id === id)).filter((t): t is Tab => !!t), ...ts.filter((t) => !useTabsStore.getState().mru.includes(t.id))];
     if (!ordered.length) return;
     const items = ordered.map((t) => ({ key: t.id, icon: kindIcon(t.kind), title: labelOf(t), hint: hintOf(t.connId, t.database), color: conns.find((c) => c.id === t.connId)?.color }));
     setSwitcher({ items, start: back ? items.length - 1 : 1 });
   };
   const recentItems = (): SwitchItem[] => {
-    const openKeys = new Map(tabsRef.current.map((t) => [snapKey(t), t] as const));
-    return recent.current
+    const openKeys = new Map(useTabsStore.getState().tabs.map((t) => [snapKey(t), t] as const));
+    return useTabsStore.getState().recent
       .filter((r) => conns.some((c) => c.id === r.connId))
       .map((r) => ({ key: r.key, icon: kindIcon(r.kind), title: r.title, hint: hintOf(r.connId, r.database), open: openKeys.has(r.key), color: conns.find((c) => c.id === r.connId)?.color }));
   };
@@ -1775,17 +1747,17 @@ export default function App() {
     return { kind, conn, db: o.db, schema: o.schema, name: o.kind === "schema" ? undefined : o.name };
   };
   const seFiles = () => {
-    const openKeys = new Map(tabsRef.current.map((t) => [snapKey(t), t] as const));
+    const openKeys = new Map(useTabsStore.getState().tabs.map((t) => [snapKey(t), t] as const));
     const seen = new Set<string>();
     const items = [];
-    for (const id of mru.current) {
-      const t = tabsRef.current.find((x) => x.id === id);
+    for (const id of useTabsStore.getState().mru) {
+      const t = useTabsStore.getState().tabs.find((x) => x.id === id);
       if (t) {
         seen.add(snapKey(t));
         items.push({ key: snapKey(t), icon: kindIcon(t.kind), title: t.title, hint: hintOf(t.connId, t.database), open: true });
       }
     }
-    for (const r of recent.current)
+    for (const r of useTabsStore.getState().recent)
       if (!seen.has(r.key) && conns.some((c) => c.id === r.connId))
         items.push({ key: r.key, icon: kindIcon(r.kind), title: r.title, hint: hintOf(r.connId, r.database), open: openKeys.has(r.key) });
     return items;
@@ -1809,9 +1781,9 @@ export default function App() {
       { name: "Theme: High contrast", group: "Appearance", run: () => setThemePref("hc") },
       { name: "Theme: Sync with OS", group: "Appearance", run: () => setThemePref("system") },
       { name: "Quick Switch Theme…", shortcut: sk("theme"), group: "Appearance", run: () => setSchemeOpen(true) },
-      { name: "Execute", shortcut: sk("editor.run"), group: "Run", run: () => t && editorApis.current.get(t.id)?.run(), disabled: t?.kind !== "console" },
-      { name: "Explain Plan", group: "Run", run: () => t && editorApis.current.get(t.id)?.run("plan"), disabled: t?.kind !== "console" },
-      { name: "Explain Analyse", group: "Run", run: () => t && editorApis.current.get(t.id)?.run("analyze"), disabled: t?.kind !== "console" },
+      { name: "Execute", shortcut: sk("editor.run"), group: "Run", run: () => t && editorApis.get(t.id)?.run(), disabled: t?.kind !== "console" },
+      { name: "Explain Plan", group: "Run", run: () => t && editorApis.get(t.id)?.run("plan"), disabled: t?.kind !== "console" },
+      { name: "Explain Analyse", group: "Run", run: () => t && editorApis.get(t.id)?.run("analyze"), disabled: t?.kind !== "console" },
       { name: "Cancel Running Statements", shortcut: sk("editor.cancel"), group: "Run", run: () => t && cancelRun(t), disabled: !canCancel(t) },
       { name: "Commit", group: "Transaction", run: () => t && txEnd(t, "commit"), disabled: !t?.inTx },
       { name: "Roll Back", group: "Transaction", run: () => t && txEnd(t, "rollback"), disabled: !t?.inTx },
@@ -1825,7 +1797,7 @@ export default function App() {
         group: "Run",
         run: async () => {
           const c = t && conns.find((x) => x.id === t.connId);
-          const sql = t && editorApis.current.get(t.id)?.text();
+          const sql = t && editorApis.get(t.id)?.text();
           if (c && sql && (await saveSnippet(sql, c.id, c.name))) setStatus("Snippet saved (⌘k › Snippets…)");
         },
         disabled: t?.kind !== "console",
@@ -1838,7 +1810,7 @@ export default function App() {
       { name: "Switcher", shortcut: "⌃⇥", group: "Navigate", run: () => openSwitcher(false) },
       { name: "Reopen Closed Tab", shortcut: sk("tab.reopen"), group: "Window", run: reopenClosed },
       { name: "Close Tab", shortcut: sk("tab.close"), group: "Window", run: () => t && closeTabs([t.id]), disabled: !t },
-      { name: "Close All Tabs", group: "Window", run: () => closeTabs(tabsRef.current.map((x) => x.id)) },
+      { name: "Close All Tabs", group: "Window", run: () => closeTabs(useTabsStore.getState().tabs.map((x) => x.id)) },
       { name: "Split Right", group: "Window", run: () => t && splitClone(t, "right"), disabled: !t },
       { name: "Split Down", group: "Window", run: () => t && splitClone(t, "down"), disabled: !t },
       { name: "Unsplit All", group: "Window", run: unsplit, disabled: !split },
@@ -1888,7 +1860,7 @@ export default function App() {
       if (is("fts")) return e.preventDefault(), void L.openFts();
       if (is("explorer")) return e.preventDefault(), L.toggleExplorer();
       // ⌘1~9: workspaces (explorer is ⌘0)
-      for (let n = 1; n <= 9; n++) if (is(`ws.${n}`)) return e.preventDefault(), void (workspacesRef.current[n - 1] && L.switchWs(workspacesRef.current[n - 1].id));
+      for (let n = 1; n <= 9; n++) if (is(`ws.${n}`)) return e.preventDefault(), void (useWorkspacesStore.getState().workspaces[n - 1] && L.switchWs(useWorkspacesStore.getState().workspaces[n - 1].id));
       if (is("find.window")) return e.preventDefault(), L.setFindOpen((o) => !o);
       // ⇧⎋ Hide Active Tool Window
       if (e.shiftKey && e.key === "Escape") {
@@ -2019,9 +1991,9 @@ export default function App() {
       if (is("split.other") && keyState.current.split) {
         e.preventDefault();
         // Next pane (previous with ⇧)
-        const ls = leaves(panesRef.current);
+        const ls = leaves(useTabsStore.getState().panes);
         const g: Group = ls[(ls.indexOf(keyState.current.focused) + (e.shiftKey ? -1 : 1) + ls.length) % ls.length];
-        const id = activeIdsRef.current[g];
+        const id = useTabsStore.getState().activeIds[g];
         const t = tabs.find((x) => x.id === id);
         if (t) activate(t);
         return;
@@ -2084,7 +2056,7 @@ export default function App() {
       // Removed even if its saved password couldn't be (damaged secrets file): the message says so. Any other error kept it, and its tabs stay
       if (!removedDespite(e)) return;
     }
-    closeTabs(tabsRef.current.filter((t) => t.connId === c.id).map((t) => t.id));
+    closeTabs(useTabsStore.getState().tabs.filter((t) => t.connId === c.id).map((t) => t.id));
     refresh();
   };
 
@@ -2238,7 +2210,7 @@ export default function App() {
                     output={t.output}
                     txManual={t.txManual}
                     inTx={t.inTx}
-                    onChange={(sql) => liveSql.current.set(t.id, sql)}
+                    onChange={(sql) => liveSql.set(t.id, sql)}
                     onExecute={(stmts, explain) => executeConsole(t.id, stmts, explain)}
                     onCancel={() => cancel(t)}
                     onSetActiveResult={(id) => patch(t.id, { activeResult: id })}
@@ -2257,9 +2229,9 @@ export default function App() {
                     onSwitchDb={(db) => switchDatabase(t, db)}
                     onSwitchSchema={(sc) => switchSchema(t, sc)}
                     schemaSwitchDisabled={conns.find((x) => x.id === t.connId)?.options?.switchSchema === "disable"}
-                    registerApi={(id, a) => editorApis.current.set(id, a)}
+                    registerApi={(id, a) => editorApis.set(id, a)}
                     onClearOutput={() => patch(t.id, { output: [] })}
-                    errorAction={<TlsFix conn={c} msg={t.output[t.output.length - 1]?.level === "error" ? t.output[t.output.length - 1].text : null} then={() => (editorApis.current.get(t.id)?.focus(), reconnectAfterTls(t.connId, t.id))} />}
+                    errorAction={<TlsFix conn={c} msg={t.output[t.output.length - 1]?.level === "error" ? t.output[t.output.length - 1].text : null} then={() => (editorApis.get(t.id)?.focus(), reconnectAfterTls(t.connId, t.id))} />}
                     onError={(m) => (log(t.id, "error", m), patch(t.id, { activeResult: "output" }), setStatus("Not run: the statement splitter couldn't load (see Output)"))}
                     onLoadingChange={() => setPendingRuns((n) => n + 1)}
                   />
@@ -2459,7 +2431,7 @@ export default function App() {
         <WorkspaceBar
           list={workspaces}
           current={curWs}
-          counts={Object.fromEntries(workspaces.map((w) => [w.id, w.id === curWs ? tabs.length : stash.current.get(w.id)?.tabs.length ?? 0]))}
+          counts={Object.fromEntries(workspaces.map((w) => [w.id, w.id === curWs ? tabs.length : stash.get(w.id)?.tabs.length ?? 0]))}
           shortcut={(n) => (isMac ? `⌘${n}` : `Ctrl+${n}`)}
           onSwitch={switchWs}
           onNew={newWs}
@@ -2532,7 +2504,7 @@ export default function App() {
           onClose={() => setSwitcher(null)}
           onPick={(id) => {
             setSwitcher(null);
-            const t = tabsRef.current.find((x) => x.id === id);
+            const t = useTabsStore.getState().tabs.find((x) => x.id === id);
             if (t) activate(t);
           }}
         />
@@ -2644,8 +2616,8 @@ export default function App() {
             if (n) showQuickDoc(n);
           }}
           onOpenFile={(key) => {
-            const snap = recent.current.find((r) => r.key === key);
-            const open = tabsRef.current.find((t) => snapKey(t) === key);
+            const snap = useTabsStore.getState().recent.find((r) => r.key === key);
+            const open = useTabsStore.getState().tabs.find((t) => snapKey(t) === key);
             if (open) activate(open);
             else if (snap) reopen(snap);
           }}
@@ -2658,13 +2630,13 @@ export default function App() {
           onClose={() => setRecentOpen(false)}
           onPick={(key) => {
             setRecentOpen(false);
-            const snap = recent.current.find((r) => r.key === key);
+            const snap = useTabsStore.getState().recent.find((r) => r.key === key);
             if (snap) reopen(snap);
           }}
         />
       )}
       <StatusBar
-        run={{ canRun: !!active && active.kind === "console" && !canCancel(active), running: canCancel(active), onRun: () => active && editorApis.current.get(active.id)?.run(), onCancel: () => active && cancelRun(active) }}
+        run={{ canRun: !!active && active.kind === "console" && !canCancel(active), running: canCancel(active), onRun: () => active && editorApis.get(active.id)?.run(), onCancel: () => active && cancelRun(active) }}
         onSettings={() => setSettingsOpen("appearance")}
         settingsKey={sk("settings")}
         onKeymap={() => setKeymapOpen(true)}
@@ -2681,7 +2653,7 @@ export default function App() {
             title={`${c.name} Query History`}
             initialTab={historyTab}
             onPick={(sql) => {
-              editorApis.current.get(t.id)?.insert(sql);
+              editorApis.get(t.id)?.insert(sql);
               setHistoryFor(null);
             }}
             onClose={() => setHistoryFor(null)}
