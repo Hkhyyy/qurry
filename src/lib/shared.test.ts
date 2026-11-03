@@ -12,6 +12,10 @@ describe("shared wasm", () => {
     expect(shared().commitFailedTitle("Session closed")).toBe("Commit failed");
   });
 
+  it("words a failed load-more as the TUI does", () => {
+    expect(shared().moreRowsFailed("Session closed")).toBe("Couldn't load more rows: Session closed");
+  });
+
   it("a freed completion index finds nothing instead of throwing (a request may still hold it)", () => {
     const idx = shared().completionIndex([{ schema: "public", name: "users", columns: [["id", "int8"]] }]);
     const text = "select * from users where status = ";

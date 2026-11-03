@@ -235,6 +235,7 @@ button.small { padding: 1px 8px; font-size: 12px; font-weight: 400; }
 .grid-toolbar .sep { width: 1px; height: 16px; background: var(--border); margin: 0 2px; }
 .grid-toolbar .muted { margin-left: 8px; }
 .grid-loading { position: sticky; left: 0; bottom: 0; padding: 4px 12px; color: var(--muted); background: var(--panel); font-size: 12px; }
+.grid-more-error { color: var(--danger); white-space: normal; user-select: text; }
 .sql-preview { max-height: 360px; color: var(--c-cf8e6d); }
 input:disabled, select:disabled { opacity: .45; }
 .ssh-badge { flex: none; font-size: 9px; font-weight: 700; padding: 0 4px; border-radius: 3px; border: 1px solid var(--c-8a8d93); color: var(--c-c9ccd1); }

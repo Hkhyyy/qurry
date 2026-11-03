@@ -306,6 +306,8 @@ const SIDE_EFFECT_FUNCS: &[&str] = &[
     "pg_drop_replication_slot", "pg_create_logical_replication_slot", "pg_create_physical_replication_slot", "pg_logical_emit_message",
     "pg_replication_origin_create", "pg_replication_origin_drop", "pg_log_backend_memory_contexts", "pg_replication_slot_advance",
     "dblink_connect_u", "setval",
+    // sends a message to other sessions' LISTEN on commit
+    "pg_notify",
     // run SQL given as a string (the name checks can't see inside it)
     "query_to_xml", "query_to_xmlschema", "query_to_xml_and_xmlschema", "cursor_to_xml", "cursor_to_xmlschema", "ts_stat",
     // MySQL: reading server files · delays · locks
@@ -1040,6 +1042,15 @@ fn read_one(sc: Scan, kind: DbKind) -> bool {
         })
 }
 
+/// Whether a read locks the rows it returns: FOR UPDATE / FOR NO KEY UPDATE / FOR SHARE / FOR KEY SHARE, MySQL LOCK IN SHARE MODE.
+/// Running it again (loading more after a reconnect) would take those locks again; under every quote reading, like is_read
+pub fn locks_rows(sql: &str, kind: DbKind) -> bool {
+    !every_reading(sql, kind, |sc| {
+        let words: Vec<&str> = sc.toks.iter().filter(|t| t.word && !t.quoted).map(|t| t.text.as_str()).collect();
+        !words.windows(2).any(|w| matches!(w, ["for", "update" | "share" | "no" | "key"] | ["lock", "in"]))
+    })
+}
+
 /// `f` holds for the text under every way the server may read its quotes once there is a backslash (see is_read)
 fn every_reading(sql: &str, kind: DbKind, f: impl Fn(Scan) -> bool) -> bool {
     let backslash = matches!(kind, DbKind::Mysql | DbKind::Postgres) && sql.contains('\\');
@@ -1639,6 +1650,34 @@ mod tests {
             assert!(!is_read(s, Postgres), "{s}");
         }
         assert!(is_read("select nextval from t", Postgres));
+        // NOTIFY reaches other sessions
+        assert!(!is_read("select pg_notify('jobs', 'x')", Postgres));
+        assert!(is_read("select pg_notify from t", Postgres));
+    }
+
+    /// Reads that lock their rows (loading more after a reconnect won't run them again)
+    #[test]
+    fn locks_rows_finds_the_locking_clauses() {
+        for (s, kind) in [
+            ("select * from t for update", Postgres),
+            ("select * from t for no key update", Postgres),
+            ("select * from t for share", Postgres),
+            ("select * from t for key share of t skip locked", Postgres),
+            ("select * from t FOR SHARE", Mysql),
+            ("select * from t lock in share mode", Mysql),
+        ] {
+            assert!(locks_rows(s, kind), "{s}");
+        }
+        for (s, kind) in [
+            ("select * from t order by id", Postgres),
+            ("select 'for share', \"for\" from t -- for update", Postgres),
+            ("select `lock`, `in` from t", Mysql),
+            ("select substring(a for 2) from t", Postgres),
+        ] {
+            assert!(!locks_rows(s, kind), "{s}");
+        }
+        // A backslash: the clause outside a string under another quote rule counts
+        assert!(locks_rows(r"select 'a\' for share --'", Postgres));
     }
 
     /// SELECT … INTO creates a table (PostgreSQL · SQL Server) or writes a file on the MySQL server: not a read

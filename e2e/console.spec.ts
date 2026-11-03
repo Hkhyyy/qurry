@@ -123,3 +123,13 @@ test("MySQL: `--` greys out as a comment only where the server reads one (`selec
   await typeSql(page, "select 1 -- note");
   await expect.poll(italic).toBe("-- note");
 });
+
+test("a console result whose load-more fails keeps the reason in its grid (#80)", async ({ page }) => {
+  await page.evaluate(() => ((window as any).__mockFetchMoreError = "Session closed"));
+  await typeSql(page, "select * from users");
+  await page.keyboard.press("Meta+Enter");
+  await expect(work(page).locator(".tb-info").first()).toHaveText("500+ rows");
+  await work(page).locator(".grid-scroll").first().evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await expect(work(page).locator(".grid-more-error")).toHaveText("Couldn't load more rows: Session closed");
+  await expect(work(page).locator(".tb-info").first()).toHaveText("500+ rows");
+});

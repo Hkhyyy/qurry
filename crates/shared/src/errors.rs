@@ -26,9 +26,19 @@ pub fn commit_failed_title(msg: &str) -> &'static str {
     if msg.contains(COMMIT_UNKNOWN_ERR) { "Commit outcome unknown" } else { "Commit failed" }
 }
 
+/// The line the result grid keeps when loading more rows failed (GUI and TUI): the result isn't complete, so it says why it stopped
+pub fn more_rows_failed(msg: &str) -> String {
+    format!("Couldn't load more rows: {}", msg.trim())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn more_rows_failed_keeps_the_reason() {
+        assert_eq!(more_rows_failed("Session closed\n"), "Couldn't load more rows: Session closed");
+    }
 
     #[test]
     fn commit_failed_title_says_when_the_outcome_is_unknown() {

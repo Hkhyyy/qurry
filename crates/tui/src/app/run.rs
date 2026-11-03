@@ -400,9 +400,10 @@ impl App {
     pub fn fetch_more(&mut self) {
         let Some(t) = self.tabs.get_mut(self.active) else { return };
         let id = t.id;
+        // A run in the tab is replacing the result: a load-more now would be answered for the old one
         let g = match &mut t.kind {
-            TabKind::Console(c) => c.grid.as_mut(),
-            TabKind::Table(tt) => tt.grid.as_mut(),
+            TabKind::Console(c) if !c.running => c.grid.as_mut(),
+            TabKind::Table(tt) if !tt.running => tt.grid.as_mut(),
             _ => None,
         };
         let Some(g) = g else { return };
@@ -410,6 +411,7 @@ impl App {
             return;
         }
         g.loading_more = true;
+        let sent = g.id;
         let session = g.more_session.clone().unwrap();
         let st = self.state.clone();
         self.spawn(async move { st.fetch_more(session, Some(500)).await.map_err(err) }, move |a, r| {
@@ -419,7 +421,8 @@ impl App {
                 TabKind::Table(tt) => tt.grid.as_mut(),
                 _ => None,
             };
-            let Some(g) = g else { return };
+            // The tab ran again meanwhile: the answer is for the grid it replaced
+            let Some(g) = g.filter(|g| g.id == sent) else { return };
             g.loading_more = false;
             match r {
                 Ok(more) => {
@@ -431,8 +434,10 @@ impl App {
                     };
                 }
                 Err(e) => {
-                    g.result.truncated = false;
-                    a.status = e;
+                    // The result isn't complete: keep its "+" and say at the grid's edge why no more rows came
+                    let why = qurry_shared::errors::more_rows_failed(&e);
+                    g.more_error = Some(why.clone());
+                    a.status = why;
                 }
             }
         });

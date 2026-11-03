@@ -5,6 +5,7 @@ import { pushHistory } from "../../components/HistoryDialog";
 import type { OutputLine, ResultEntry } from "../../components/ConsolePane";
 import { schemaChanged } from "../../components/SchemaTree";
 import { commitNoticeTitle } from "../../lib/commitNotice";
+import { sharedOr } from "../../lib/shared";
 import { explainAnalyzeAsk, explainAnalyzeNote, isDdl, isRead } from "../../lib/stmtKind";
 import { patch, updTab } from "../tabs/ops";
 import { editorApis, setTabs, useTabsStore } from "../tabs/store";
@@ -276,8 +277,12 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     refresh();
   };
 
+  /** The grid's line for a failed load-more (the TUI's words: qurry_shared::errors::more_rows_failed) */
+  const moreRowsFailed = (e: unknown) => sharedOr(String(e), (s) => s.moreRowsFailed(String(e)));
   const fetchMoreEntry = async (tabId: string, entryId: string) => {
     const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId);
+    // A run in the tab is replacing the results: a load-more now would be answered for the old one (the new grid asks for its own)
+    if (tab?.running) return;
     if (!tab || tab.cursorEntry !== entryId) {
       // The server cursor is open only on the last result
       updTab(tabId, (t) => ({ ...t, results: t.results.map((r) => (r.id === entryId && r.result ? { ...r, result: { ...r.result, truncated: false } } : r)) }));
@@ -286,17 +291,21 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     const shown = tab.results.find((x) => x.id === entryId)?.result?.rows.length ?? 0;
     if (shown >= MAX_ROWS) return setStatus(capMsg(shown));
     updTab(tabId, (t) => ({ ...t, loadingMore: true }));
+    // A run in the tab meanwhile has a result of its own (its cursorEntry): this answer is for the old one, so it is dropped
+    const answer = (f: (t: Tab) => Tab) => updTab(tabId, (t) => (t.cursorEntry === entryId ? f({ ...t, loadingMore: false }) : { ...t, loadingMore: false }));
     try {
       const r = await api.fetchMore(tabId);
-      updTab(tabId, (t) => ({
+      answer((t) => ({
         ...t,
-        loadingMore: false,
         cursorEntry: r.truncated ? entryId : undefined,
         results: t.results.map((x) => (x.id === entryId && x.result ? { ...x, result: { ...x.result, rows: [...x.result.rows, ...r.rows], truncated: r.truncated } } : x)),
       }));
     } catch (e) {
-      updTab(tabId, (t) => ({ ...t, loadingMore: false, cursorEntry: undefined }));
-      setStatus(String(e));
+      // The result isn't complete: keep its "+" and say in the grid why no more rows came
+      const moreError = moreRowsFailed(e);
+      const current = useTabsStore.getState().tabs.find((t) => t.id === tabId)?.cursorEntry === entryId;
+      answer((t) => ({ ...t, cursorEntry: undefined, results: t.results.map((x) => (x.id === entryId && x.result ? { ...x, result: { ...x.result, moreError } } : x)) }));
+      if (current) setStatus(moreError);
     }
   };
 
@@ -358,18 +367,23 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
   };
 
   const fetchMore = async (tab: Tab) => {
+    if (useTabsStore.getState().tabs.find((t) => t.id === tab.id)?.running) return;
     const shown = tab.result?.rows.length ?? 0;
     if (shown >= MAX_ROWS) return setStatus(capMsg(shown));
+    // The result asked for: a run meanwhile (reload, filter) replaced it, and the answer for the old one is dropped
+    const sent = useTabsStore.getState().tabs.find((t) => t.id === tab.id)?.result;
+    const answer = (f: (r: QueryResult) => QueryResult, status: string) => {
+      const current = useTabsStore.getState().tabs.find((t) => t.id === tab.id)?.result === sent;
+      setTabs((ts) => ts.map((t) => (t.id !== tab.id ? t : t.result && t.result === sent ? { ...t, loadingMore: false, result: f(t.result) } : { ...t, loadingMore: false })));
+      if (current) setStatus(status);
+    };
     patch(tab.id, { loadingMore: true });
     try {
       const r = await api.fetchMore(tab.id);
-      setTabs((ts) =>
-        ts.map((t) => (t.id === tab.id && t.result ? { ...t, loadingMore: false, result: { ...t.result, rows: [...t.result.rows, ...r.rows], truncated: r.truncated } } : t)),
-      );
-      setStatus(`${(tab.result?.rows.length ?? 0) + r.rows.length}${r.truncated ? "+" : ""} rows retrieved`);
+      answer((x) => ({ ...x, rows: [...x.rows, ...r.rows], truncated: r.truncated }), `${(sent?.rows.length ?? 0) + r.rows.length}${r.truncated ? "+" : ""} rows retrieved`);
     } catch (e) {
-      setTabs((ts) => ts.map((t) => (t.id === tab.id && t.result ? { ...t, loadingMore: false, result: { ...t.result, truncated: false } } : t)));
-      setStatus(String(e));
+      const moreError = moreRowsFailed(e);
+      answer((x) => ({ ...x, moreError }), moreError);
     }
   };
 
