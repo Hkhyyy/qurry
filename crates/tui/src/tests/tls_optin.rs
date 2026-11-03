@@ -45,6 +45,9 @@ async fn no_tls_server() -> u16 {
     let port = l.local_addr().unwrap().port();
     tokio::spawn(async move {
         while let Ok((mut s, _)) = l.accept().await {
+            // As a real PostgreSQL does: without it Linux holds each small reply for the client's delayed ACK (~40 ms a round trip), and the
+            // reconnect after y outlasts Harness::settle
+            let _ = s.set_nodelay(true);
             let ready = ready.clone();
             tokio::spawn(async move {
                 // Startup: the TLS request (N), then the plain-text startup message (no password asked)
