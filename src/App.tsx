@@ -2,31 +2,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { api, ConnectionView, updateCheckEnabled } from "./lib/api";
-import { KeymapDialog } from "./components/KeymapDialog";
-import { UpdateDialog } from "./components/UpdateDialog";
 import { ContextMenu, Explorer, MenuItem } from "./components/Explorer";
-import { ConnectionDialog } from "./components/ConnectionDialog";
-import { HistoryDialog, migrateOldHistory } from "./components/HistoryDialog";
-import { ProductionLog } from "./components/ProductionLog";
-import { CopyRowsDialog, GenerateDataDialog } from "./components/DataTools";
-import { NewObjectDialog, TableDesigner } from "./components/ObjectEditors";
+import { migrateOldHistory } from "./components/HistoryDialog";
 import { WorkspaceBar } from "./components/WorkspaceBar";
-import { TextDialog } from "./components/TextDialog";
-import { Badge, CodeBlock, ConfirmHost, Overlay, Text, Toolbar, ToolbarSep } from "./ui";
-import { RecentFiles } from "./components/Switcher";
+import { Badge, Text, Toolbar, ToolbarSep } from "./ui";
 import { invalidateSearchIndex } from "./components/SearchEverywhere";
 import { DEFAULT_FONT, editorFontSize, setEditorFontSize } from "./lib/prefs";
 import { eventSpec, hit, loadKeymap, onKeymapChange } from "./lib/shortcuts";
 import { invalidateCompletion } from "./lib/completion";
 import { useSharedReady } from "./lib/shared";
 import { tableTabLabels } from "./lib/tabLabels";
-import { NodeInfo, schemaChanged } from "./components/SchemaTree";
+import { NodeInfo } from "./components/SchemaTree";
 import { leaves } from "./lib/panes";
-import { getThemePref, setThemePref, THEME_LABEL, ThemePref, useTheme } from "./lib/theme";
-import { BackupDialog, ExportDialog, ImportDialog } from "./components/Transfer";
+import { useTheme } from "./lib/theme";
 import { Group, Tab } from "./features/tabs/types";
 import { isMac, sk } from "./features/shortcuts/labels";
-import { offered, SettingsDialog, upToDate } from "./features/settings/SettingsDialog";
+import { offered, upToDate } from "./features/settings/SettingsDialog";
 import { StatusBar } from "./features/settings/StatusBar";
 import { editorApis, useTabsStore } from "./features/tabs/store";
 import { closeTabs } from "./features/tabs/ops";
@@ -39,7 +30,8 @@ import { useConnActions } from "./features/conns/useConnActions";
 import { useExplorer } from "./features/explorer/useExplorer";
 import { useEditorGroups } from "./features/editorGroups/useEditorGroups";
 import { useSearch } from "./features/search/useSearch";
-import { setBackupReq, setCopyReq, setDialog, setExportReq, setGenReq, setHistoryFor, setHistoryTab, setImportReq, setKeymapOpen, setObjEdit, setProdLog, setQuickDoc, setSchemeOpen, setSettingsOpen, setUpdate, setUpdateOpen, useDialogsStore } from "./features/dialogs/store";
+import { Dialogs, TopDialogs } from "./features/dialogs/Dialogs";
+import { setDialog, setHistoryFor, setHistoryTab, setKeymapOpen, setSchemeOpen, setSettingsOpen, setUpdate, setUpdateOpen, useDialogsStore } from "./features/dialogs/store";
 import "./App.css";
 
 export default function App() {
@@ -51,9 +43,6 @@ export default function App() {
     void loadKeymap();
     return () => void off();
   }, []);
-  const settingsOpen = useDialogsStore((s) => s.settingsOpen);
-  const schemeOpen = useDialogsStore((s) => s.schemeOpen);
-  const keymapOpen = useDialogsStore((s) => s.keymapOpen);
   // On window close, ask if there are uncommitted changes (closing rolls them back)
   useEffect(() => {
     let off: (() => void) | undefined;
@@ -69,7 +58,6 @@ export default function App() {
   }, []);
   // New version (checked at startup + every hour; failures, and a check that was skipped, are ignored silently and keep the badge)
   const update = useDialogsStore((s) => s.update);
-  const updateOpen = useDialogsStore((s) => s.updateOpen);
   // An offer that went away closes its window, so a later offer doesn't open it unasked
   useEffect(() => {
     if (!update) setUpdateOpen(false);
@@ -94,13 +82,9 @@ export default function App() {
   const focused = useTabsStore((s) => s.focused);
   const workspaces = useWorkspacesStore((s) => s.workspaces);
   const curWs = useWorkspacesStore((s) => s.curWs);
-  const dialog = useDialogsStore((s) => s.dialog);
   const [status, setStatus] = useState("Ready");
   const [treeSel, setTreeSel] = useState<NodeInfo | null>(null);
   const [tabMenu, setTabMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
-  const historyFor = useDialogsStore((s) => s.historyFor);
-  const historyTab = useDialogsStore((s) => s.historyTab);
-  const prodLog = useDialogsStore((s) => s.prodLog);
 
   // Called on every query run, so only update state when something actually changed (avoids redrawing the whole tree and re-registering shortcut handlers)
   const connsJson = useRef("");
@@ -204,19 +188,12 @@ export default function App() {
   const ws = useWorkspaces({ conns, setStatus, loadStale });
   const { readyToQuit, switchWs, newWs, renameWs, deleteWs, setInWs, shownWs } = ws;
 
-  const exportReq = useDialogsStore((s) => s.exportReq);
-  const importReq = useDialogsStore((s) => s.importReq);
-  const genReq = useDialogsStore((s) => s.genReq);
-  const objEdit = useDialogsStore((s) => s.objEdit);
-  const copyReq = useDialogsStore((s) => s.copyReq);
   const transfer = useJobs({ setStatus });
   const { jobs, runJob, startExport, startImport } = transfer;
   const connActions = useConnActions({ conns, refresh, setStatus });
   const { setColor, setScope, exportConns, importConns, removeConn, refreshAll } = connActions;
   const ex = useExplorer({ setStatus, refresh, activate, addTab, openConsole, run, runJob, removeConn, setInWs, setTabMenu });
   const { openDdl, activateNode, showQuickDoc, jumpToConsole, deactivate, duplicateConn, canDdl, modifyTable, renameNode, buildMenu, sqlGenerator, ddlToClipboard, ddlToConsole, dangerous, startBackup } = ex;
-  const quickDoc = useDialogsStore((s) => s.quickDoc);
-  const backupReq = useDialogsStore((s) => s.backupReq);
 
   const [maximized, setMaximized] = useState(false);
   const app = { conns, theme, setStatus, refresh, treeSel, active, groupActive, labelOf, setTabMenu, setMaximized, ...cons, ...tabOps, ...ws, ...transfer, ...connActions, ...ex };
@@ -501,87 +478,7 @@ export default function App() {
       </div>
 
       {search.switcherPopup}
-      {schemeOpen && (
-        <RecentFiles
-          title="Theme"
-          start={["dark", "light", "hc", "system"].indexOf(getThemePref())}
-          items={[
-            { key: "dark", icon: getThemePref() === "dark" ? "●" : "", title: "Dark", hint: "" },
-            { key: "light", icon: getThemePref() === "light" ? "●" : "", title: "Light", hint: "" },
-            { key: "hc", icon: getThemePref() === "hc" ? "●" : "", title: "High contrast", hint: "" },
-            { key: "system", icon: getThemePref() === "system" ? "●" : "", title: "Sync with OS", hint: `currently ${THEME_LABEL[theme]}` },
-          ]}
-          onClose={() => setSchemeOpen(false)}
-          onPick={(k) => {
-            setSchemeOpen(false);
-            setThemePref(k as ThemePref);
-          }}
-        />
-      )}
-      {settingsOpen && (
-        <SettingsDialog
-          initialPage={settingsOpen}
-          onClose={() => setSettingsOpen(false)}
-          onUpdate={(u) => {
-            setUpdate(u);
-            setSettingsOpen(false);
-            setUpdateOpen(true);
-          }}
-          onChannel={setUpdate}
-        />
-      )}
-      {backupReq && <BackupDialog what={backupReq.db ?? backupReq.c.name} pg={backupReq.c.kind === "postgres"} onRun={startBackup} onClose={() => setBackupReq(null)} />}
-      {exportReq && <ExportDialog what={exportReq.name} onExport={startExport} onClose={() => setExportReq(null)} />}
-      {objEdit &&
-        (() => {
-          const done = (msg: string) => {
-            setStatus(msg);
-            setObjEdit(null);
-            objEdit.refresh?.();
-            schemaChanged(objEdit.conn.id, objEdit.db ?? (objEdit.conn.database || (objEdit.conn.kind === "postgres" ? "postgres" : "")));
-          };
-          const toConsole = (sql: string) => {
-            openConsole(objEdit.conn, objEdit.db, sql);
-            setObjEdit(null);
-          };
-          return objEdit.newKind ? (
-            <NewObjectDialog kind={objEdit.newKind} target={objEdit.target} conn={objEdit.conn} schema={objEdit.schema} onDone={done} onOpenConsole={toConsole} onClose={() => setObjEdit(null)} />
-          ) : (
-            <TableDesigner target={objEdit.target} conn={objEdit.conn} schema={objEdit.schema} table={objEdit.table} onDone={done} onOpenConsole={toConsole} onClose={() => setObjEdit(null)} />
-          );
-        })()}
-      {copyReq && (
-        <CopyRowsDialog
-          source={copyReq.target}
-          schema={copyReq.schema}
-          table={copyReq.table}
-          conn={copyReq.conn}
-          conns={conns}
-          onDone={(msg) => {
-            setStatus(msg);
-            setCopyReq(null);
-          }}
-          onClose={() => setCopyReq(null)}
-        />
-      )}
-      {genReq && (
-        <GenerateDataDialog
-          target={genReq.target}
-          schema={genReq.schema}
-          table={genReq.table}
-          production={genReq.conn.options?.confirmChanges ? genReq.conn.name : undefined}
-          onDone={(n) => {
-            setStatus(`${n.toLocaleString("en-US")} test row${n === 1 ? "" : "s"} inserted into ${genReq.schema ? `${genReq.schema}.` : ""}${genReq.table}`);
-            setGenReq(null);
-          }}
-          onClose={() => setGenReq(null)}
-        />
-      )}
-      {importReq && <ImportDialog target={importReq.target} schema={importReq.schema} table={importReq.table} onImport={startImport} onClose={() => setImportReq(null)} />}
-      <TextDialog />
-      <ConfirmHost />
-      {updateOpen && update?.latest && <UpdateDialog info={update} onClose={() => setUpdateOpen(false)} beforeInstall={readyToQuit} />}
-      {keymapOpen && <KeymapDialog onClose={() => setKeymapOpen(false)} onEdit={() => (setKeymapOpen(false), setSettingsOpen("keymap"))} />}
+      <Dialogs conns={conns} setStatus={setStatus} openConsole={openConsole} startBackup={startBackup} startExport={startExport} startImport={startImport} readyToQuit={readyToQuit} />
       {search.popups}
       <StatusBar
         run={{ canRun: !!active && active.kind === "console" && !canCancel(active), running: canCancel(active), onRun: () => active && editorApis.get(active.id)?.run(), onCancel: () => active && cancelRun(active) }}
@@ -592,64 +489,7 @@ export default function App() {
 
       {tabMenu && <ContextMenu menu={tabMenu} onClose={() => setTabMenu(null)} />}
 
-      {historyFor && (() => {
-        const t = tabs.find((x) => x.id === historyFor);
-        const c = conns.find((x) => x.id === t?.connId);
-        return t && c ? (
-          <HistoryDialog
-            connId={c.id}
-            title={`${c.name} Query History`}
-            initialTab={historyTab}
-            onPick={(sql) => {
-              editorApis.get(t.id)?.insert(sql);
-              setHistoryFor(null);
-            }}
-            onClose={() => setHistoryFor(null)}
-          />
-        ) : null;
-      })()}
-
-      {prodLog && (
-        <ProductionLog
-          connId={prodLog.connId}
-          onOpenUndo={(e) => {
-            const [base, db] = e.connId.split("::");
-            const c = conns.find((x) => x.id === base);
-            if (!c) return setStatus(`Data source "${e.connName}" no longer exists`);
-            openConsole(c, db || undefined, e.undo);
-            setProdLog(null);
-          }}
-          onClose={() => setProdLog(null)}
-        />
-      )}
-
-      {quickDoc && (
-        <Overlay variant="light" onClose={() => setQuickDoc(null)} onKeyDown={(e) => e.key === "Escape" && setQuickDoc(null)}>
-          <div className="quick-doc" onMouseDown={(e) => e.stopPropagation()} tabIndex={-1} ref={(el) => el?.focus()} onKeyDown={(e) => e.key === "Escape" && setQuickDoc(null)}>
-            <div className="qd-title">{quickDoc.title}</div>
-            <CodeBlock className="qd-body">{quickDoc.text}</CodeBlock>
-          </div>
-        </Overlay>
-      )}
-
-      {dialog && (
-        <ConnectionDialog
-          edit={dialog.edit}
-          onClose={() => setDialog(null)}
-          onSaved={async (saved) => {
-            setDialog(null);
-            await refresh();
-            try {
-              setStatus(`Connecting to ${saved.name}…`);
-              const v = await api.connect(saved.id);
-              setStatus(`Connected: ${v.split(" on ")[0]}`);
-            } catch (e) {
-              setStatus(`Connection failed: ${String(e)}`);
-            }
-            refresh();
-          }}
-        />
-      )}
+      <TopDialogs conns={conns} setStatus={setStatus} refresh={refresh} openConsole={openConsole} />
     </div>
   );
 }
