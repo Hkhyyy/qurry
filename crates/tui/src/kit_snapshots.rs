@@ -412,6 +412,10 @@ async fn all_scenes() -> Vec<Value> {
     h.app.popup = None;
     h.app.popup = Some(Popup::Help { sel: 0, scroll: 0, record: None, message: None });
     scenes.push(app_scene(&mut h, "Keymap (F1)", "F1: 처음 쓸 키 → 바꿀 수 있는 명령 → 고정 키", 120, 30));
+    // Recording a key for the explorer's c (Connect): pane keys follow every command, then the fixed keys
+    let sel = crate::keys::COMMANDS.iter().position(|(s, _)| *s == crate::keys::Slot { action: crate::app::Action::Connect, pane: qurry_core::keymap::Scope::Tree }).unwrap();
+    h.app.popup = Some(Popup::Help { sel, scroll: 0, record: Some(false), message: None });
+    scenes.push(app_scene(&mut h, "Keymap (F1): explorer keys", "Every command can get a key, those without a default show —; the explorer's and the grid's letter commands are rebindable too (here: recording a new key for c Connect)", 120, 30));
     h.app.popup = None;
     screens(&mut h, &mut scenes);
     // MySQL backup: after the path, the DEFINER= question (question on the border, answers and reason in the box below)

@@ -8,6 +8,15 @@ pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
             return;
         }
     }
+    // The grid's commands (n set NULL, a add row …: pane keys, F1 › Data grid keys), in table data and query results
+    let grid = match app.tabs.get(app.active).map(|t| &t.kind) {
+        Some(TabKind::Table(_)) => true,
+        Some(TabKind::Console(c)) => !c.show_output && c.grid.is_some(),
+        _ => false,
+    };
+    if grid && let Some(a) = app.keys.lookup_in(Scope::Grid, &k) {
+        return app.run_action(a);
+    }
     let Some(k) = plain(k) else { return };
     let Some(t) = app.tabs.get_mut(app.active) else {
         app.focus = Focus::Tree;
@@ -27,7 +36,11 @@ pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
             _ => {
                 // Moving selects a new row (instead of the vanished session)
                 d.gone = None;
-                nav(app, k)
+                // The report's own letters first, then the grid's commands (Y IN list, x export)
+                match app.keys.lookup_in(Scope::Grid, &k) {
+                    Some(a) => app.run_action(a),
+                    None => nav(app, k),
+                }
             }
         },
         TabKind::Text(tt) => match k.code {
@@ -94,13 +107,8 @@ pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
                         }
                     });
                 }
-                KeyCode::Char('n') => app.run_action(Action::SetNull),
-                KeyCode::Char('a') | KeyCode::Insert => app.run_action(Action::AddRow),
-                KeyCode::Char('d') | KeyCode::Delete => app.run_action(Action::DeleteRow),
-                KeyCode::Char('z') if k.modifiers.contains(KeyModifiers::CONTROL) => app.run_action(Action::Revert),
                 KeyCode::Char('r') => app.reload_table_checked(id),
                 KeyCode::Char('s') => app.sort_table(id),
-                KeyCode::Char('x') => app.run_action(Action::ExportCsv),
                 KeyCode::Char('/') => {
                     let w = tt.where_.clone();
                     let words = app.table_words(id, false);
@@ -151,8 +159,6 @@ pub(super) fn nav(app: &mut App, k: KeyEvent) {
             app.status = format!("Copied {nr} row{} × {nc} column{}", if nr == 1 { "" } else { "s" }, if nc == 1 { "" } else { "s" });
             return;
         }
-        KeyCode::Char('Y') => return app.run_action(Action::CopyInList),
-        KeyCode::Char('x') => return app.run_action(Action::ExportCsv),
         KeyCode::Char('s') => {
             g.toggle_local_sort();
             if g.result.truncated {

@@ -642,7 +642,8 @@ impl App {
     pub fn new(state: Arc<AppState>, tx: UnboundedSender<Apply>) -> Self {
         let (user_keys, keys_err) = match state.store.keymap("tui") {
             Ok(k) => (k, None),
-            Err(e) => (Default::default(), Some(format!("keymap.json ignored: {e}"))),
+            // The file stays as it is (saving a key refuses to overwrite it): say how to get the user's keys back
+            Err(e) => (Default::default(), Some(format!("keymap.json ignored ({e}) — default keys in use; fix or delete {} and restart", state.store.dir().join("keymap.json").display()))),
         };
         let mut a = App {
             hits: Hits::default(),

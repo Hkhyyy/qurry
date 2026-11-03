@@ -1,6 +1,7 @@
 //! Rebindable command shortcuts. Defaults and names come from the shared command table (qurry_core::keymap), user settings from the
-//! "tui" section of keymap.json (only ones differing from defaults)
-//! Key notation: "Ctrl+L", "Alt+Shift+X", "F5", "Ctrl+Enter", "Alt+\\" … (modifier order: Ctrl, Alt, Shift)
+//! "tui" section of keymap.json (only ones differing from defaults). Every Action can have keys that work anywhere; some also have keys
+//! that work only in the Database Explorer or the data grid (the table's tuiPaneKeys: "n" New Data Source in the explorer)
+//! Key notation: "Ctrl+L", "Alt+Shift+X", "F5", "Ctrl+Enter", "Alt+\\", pane keys also "N", "Shift+D", "?" … (modifier order: Ctrl, Alt, Shift)
 use crate::app::Action;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use qurry_core::keymap::{self as table, Scope};
@@ -9,7 +10,43 @@ use std::sync::LazyLock;
 
 pub use qurry_core::keymap::bindable;
 
-/// The order the F1 window, --help and docs/shortcuts-tui.md list the rebindable commands in (scripts/gen-keymap-docs.py reads it here).
+/// One line of the F1 window: an Action's keys anywhere (pane = Global) or its keys in one pane (Tree / Grid)
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Slot {
+    pub action: Action,
+    pub pane: Scope,
+}
+
+impl Slot {
+    pub fn global(action: Action) -> Self {
+        Slot { action, pane: Scope::Global }
+    }
+
+    /// Its name in keymap.json: the Action's name, "<pane>.<Action>" for pane keys ("tree.NewDataSource")
+    pub fn id(self) -> String {
+        match self.pane {
+            Scope::Global => action_id(self.action),
+            p => format!("{}.{}", p.name(), action_id(self.action)),
+        }
+    }
+}
+
+/// The pane a pane key works in, as the F1 window and the palette name it
+pub fn pane_name(pane: Scope) -> &'static str {
+    if pane == Scope::Tree { "explorer" } else { "grid" }
+}
+
+/// Pane keys that stay fixed: they move, copy, filter, sort or edit and run no command (input/tree.rs, input/grid.rs). A pane key can't take them
+pub fn fixed_in(pane: Scope, spec: &str) -> bool {
+    let fixed: &[&str] = match pane {
+        Scope::Tree => &["J", "K", "H", "L", "Y", "/", "F4"],
+        Scope::Grid => &["J", "K", "H", "L", "G", "Shift+G", "Y", "S", "W", "O", "R", "/", "F2"],
+        _ => &[],
+    };
+    fixed.contains(&spec)
+}
+
+/// The order the F1 window, --help and docs/shortcuts-tui.md list the commands with default keys in (scripts/gen-keymap-docs.py reads it here).
 /// The table can't hold it: commands both apps have sit in the GUI's order there. Every TUI row with default keys is here once (a test checks)
 const ORDER: [Action; 41] = [
     Action::Quit,
@@ -55,16 +92,24 @@ const ORDER: [Action; 41] = [
     Action::Disconnect,
 ];
 
-/// Rebindable commands (the table's TUI rows with default keys) in ORDER.
+/// Every rebindable line of the F1 window with its default keys: the commands with default keys in ORDER, then the other commands (no
+/// default key, table order), then the Database Explorer's and the data grid's pane keys.
 /// Alt+1~9 are workspaces (input/mod.rs, when the Alt+digit isn't in the keymap). Moving between panes is ⌃⌥ + arrows (⌥ + arrows is within a pane: ←/→ tabs)
-pub static DEFAULT_KEYS: LazyLock<Vec<(Action, &'static [String])>> = LazyLock::new(|| {
-    ORDER
+pub static COMMANDS: LazyLock<Vec<(Slot, &'static [String])>> = LazyLock::new(|| {
+    let action = |id: &str| crate::app::ACTIONS.iter().map(|d| d.action).find(|a| action_id(*a) == id);
+    let mut v: Vec<(Slot, &'static [String])> = ORDER
         .iter()
         .map(|&a| {
             let keys = table::tui_command(&action_id(a)).map(|c| c.tui_keys.as_slice()).filter(|k| !k.is_empty());
-            (a, keys.unwrap_or_else(|| panic!("keys.rs ORDER: {a:?} has no default keys in keymap-table.json")))
+            (Slot::global(a), keys.unwrap_or_else(|| panic!("keys.rs ORDER: {a:?} has no default keys in keymap-table.json")))
         })
-        .collect()
+        .collect();
+    let rows = || table::commands().iter().filter_map(|c| Some((c, action(c.tui.as_deref()?)?)));
+    v.extend(rows().filter(|(c, _)| c.tui_keys.is_empty()).map(|(c, a)| (Slot::global(a), c.tui_keys.as_slice())));
+    for pane in [Scope::Tree, Scope::Grid] {
+        v.extend(rows().filter(|(c, _)| c.tui_pane == Some(pane)).map(|(c, a)| (Slot { action: a, pane }, c.tui_pane_keys.as_slice())));
+    }
+    v
 });
 
 /// Name written to keymap.json (the enum name as is)
@@ -72,8 +117,22 @@ pub fn action_id(a: Action) -> String {
     format!("{a:?}")
 }
 
-fn defaults(a: Action) -> Vec<String> {
-    DEFAULT_KEYS.iter().find(|d| d.0 == a).map(|d| d.1.to_vec()).unwrap_or_default()
+fn defaults(s: Slot) -> Vec<String> {
+    COMMANDS.iter().find(|d| d.0 == s).map(|d| d.1.to_vec()).unwrap_or_default()
+}
+
+/// Whether `spec` can be recorded for `slot` (the F1 window): a command shortcut anywhere; in a pane also one character, Delete / Insert,
+/// unless the pane keeps that key for moving or copying
+pub fn bindable_for(slot: Slot, spec: &str) -> bool {
+    if slot.pane == Scope::Global { bindable(spec) } else { table::pane_bindable(spec, true) && !fixed_in(slot.pane, spec) }
+}
+
+/// A pane key as typed: "N" is the n key, "Shift+N" is N (the notation writes letters uppercase)
+pub fn pane_disp(spec: &str) -> String {
+    match spec.strip_prefix("Shift+").unwrap_or(spec) {
+        k if k.len() == 1 && k.chars().all(|c| c.is_ascii_alphabetic()) => if spec.starts_with("Shift+") { k.to_string() } else { k.to_ascii_lowercase() },
+        _ => disp(spec),
+    }
 }
 
 /// Key event → notation. None if not a rebindable key (e.g. a char without modifiers)
@@ -153,20 +212,18 @@ pub fn disp(s: &str) -> String {
 }
 
 pub struct Keymap {
-    map: HashMap<Action, Vec<String>>,
-    /// Key spec → command, rebuilt whenever map changes. A key two commands have goes to the first in ORDER
-    by_key: HashMap<String, Action>,
+    map: HashMap<Slot, Vec<String>>,
+    /// (pane, key spec) → command, rebuilt whenever map changes. A key two commands have goes to the first in COMMANDS
+    by_key: HashMap<(Scope, String), Action>,
 }
 
 impl Keymap {
-    /// Overlay user settings on the defaults. Unknown action names are ignored
+    /// Overlay user settings on the defaults. Unknown names are ignored
     pub fn new(user: &qurry_core::store::Keymap) -> Self {
-        let mut map: HashMap<Action, Vec<String>> = DEFAULT_KEYS.iter().map(|(a, _)| (*a, defaults(*a))).collect();
-        for (a, _) in DEFAULT_KEYS.iter() {
-            if let Some(v) = user.get(&action_id(*a)) {
-                map.insert(*a, v.iter().map(|s| table::normalize(s)).collect());
-            }
-        }
+        let map = COMMANDS
+            .iter()
+            .map(|(s, keys)| (*s, user.get(&s.id()).map_or_else(|| keys.to_vec(), |v| v.iter().map(|k| table::normalize(k)).collect())))
+            .collect();
         let mut km = Keymap { map, by_key: HashMap::new() };
         km.index();
         km
@@ -175,41 +232,82 @@ impl Keymap {
     fn index(&mut self) {
         let Keymap { map, by_key } = self;
         by_key.clear();
-        for (a, _) in DEFAULT_KEYS.iter() {
-            for k in map.get(a).into_iter().flatten() {
-                by_key.entry(k.clone()).or_insert(*a);
+        for (s, _) in COMMANDS.iter() {
+            for k in map.get(s).into_iter().flatten() {
+                by_key.entry((s.pane, k.clone())).or_insert(s.action);
             }
         }
     }
 
+    /// The command a key runs anywhere
     pub fn lookup(&self, k: &KeyEvent) -> Option<Action> {
-        self.by_key.get(&spec(k)?).copied()
+        self.lookup_in(Scope::Global, k)
     }
 
+    /// The command a key runs in a pane (Scope::Tree / Scope::Grid) by its pane keys. ⌘ combos are never pane keys (the terminal reports
+    /// them without ⌘: ⌘C would read as c)
+    pub fn lookup_in(&self, pane: Scope, k: &KeyEvent) -> Option<Action> {
+        if pane != Scope::Global && k.modifiers.contains(KeyModifiers::SUPER) {
+            return None;
+        }
+        self.by_key.get(&(pane, spec(k)?)).copied()
+    }
+
+    /// An Action's keys anywhere
     pub fn keys(&self, a: Action) -> &[String] {
-        self.map.get(&a).map(|v| v.as_slice()).unwrap_or(&[])
+        self.slot_keys(Slot::global(a))
+    }
+
+    pub fn slot_keys(&self, s: Slot) -> &[String] {
+        self.map.get(&s).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
     /// For display ("F5 / Ctrl+Enter")
     pub fn label(&self, a: Action) -> String {
-        let k = self.keys(a);
-        if k.is_empty() { "—".into() } else { disp(&k.join(" / ")) }
+        self.slot_label(Slot::global(a))
     }
 
-    pub fn is_custom(&self, a: Action) -> bool {
-        self.keys(a) != defaults(a).as_slice()
+    /// For display; pane keys as typed ("n", "D")
+    pub fn slot_label(&self, s: Slot) -> String {
+        let k = self.slot_keys(s);
+        if k.is_empty() {
+            "—".into()
+        } else if s.pane == Scope::Global {
+            disp(&k.join(" / "))
+        } else {
+            k.iter().map(|k| pane_disp(k)).collect::<Vec<_>>().join(" / ")
+        }
     }
 
-    /// Assign a key (add = add to existing keys). Removed from any other command using the same key → the commands it was removed from
-    pub fn bind(&mut self, a: Action, key: String, add: bool) -> Option<Action> {
-        // One scope in the terminal: every command conflicts with every other
-        let taken = table::conflicts(&a, Scope::Global, &key, self.map.iter().map(|(o, v)| (*o, Scope::Global, v.as_slice())));
+    /// The palette's key column: the keys anywhere, else the pane keys ("n (explorer)"), else `fixed` (keys of the screen that run
+    /// it without being a command key), else —
+    pub fn hint(&self, a: Action, fixed: &str) -> String {
+        if !self.keys(a).is_empty() {
+            return self.label(a);
+        }
+        for pane in [Scope::Tree, Scope::Grid] {
+            let s = Slot { action: a, pane };
+            if !self.slot_keys(s).is_empty() {
+                return format!("{} ({})", self.slot_label(s), pane_name(pane));
+            }
+        }
+        if fixed.is_empty() { "—".into() } else { fixed.into() }
+    }
+
+    pub fn is_custom(&self, s: Slot) -> bool {
+        self.slot_keys(s) != defaults(s).as_slice()
+    }
+
+    /// Assign a key (add = add to existing keys). Removed from any other line using the same key where both work (a key anywhere
+    /// overlaps every pane) → the line it was removed from
+    pub fn bind(&mut self, s: Slot, key: String, add: bool) -> Option<Slot> {
+        let taken = table::conflicts(&s, s.pane, &key, self.map.iter().map(|(o, v)| (*o, o.pane, v.as_slice())));
         for o in &taken {
             if let Some(v) = self.map.get_mut(o) {
                 v.retain(|x| x != &key);
             }
         }
-        let v = self.map.entry(a).or_default();
+        let v = self.map.entry(s).or_default();
         if !add {
             v.clear();
         }
@@ -220,14 +318,14 @@ impl Keymap {
         taken.into_iter().next()
     }
 
-    pub fn reset(&mut self, a: Action) {
-        self.map.insert(a, defaults(a));
+    pub fn reset(&mut self, s: Slot) {
+        self.map.insert(s, defaults(s));
         self.index();
     }
 
-    /// What to write to keymap.json: only commands differing from defaults
+    /// What to write to keymap.json: only lines differing from defaults
     pub fn overrides(&self) -> qurry_core::store::Keymap {
-        DEFAULT_KEYS.iter().filter(|(a, _)| self.is_custom(*a)).map(|(a, _)| (action_id(*a), self.keys(*a).to_vec())).collect()
+        COMMANDS.iter().filter(|(s, _)| self.is_custom(*s)).map(|(s, _)| (s.id(), self.slot_keys(*s).to_vec())).collect()
     }
 }
 
@@ -275,7 +373,7 @@ mod tests {
         assert!(km.overrides().is_empty());
 
         // Taking a key another command used removes it from that command
-        assert_eq!(km.bind(Action::NewConsole, "Ctrl+K".into(), false), Some(Action::Palette));
+        assert_eq!(km.bind(Slot::global(Action::NewConsole), "Ctrl+K".into(), false), Some(Slot::global(Action::Palette)));
         assert_eq!(km.lookup(&ev(KeyCode::Char('k'), KeyModifiers::CONTROL)), Some(Action::NewConsole));
         assert_eq!(km.lookup(&ev(KeyCode::Char('l'), KeyModifiers::CONTROL)), None);
         assert_eq!(km.label(Action::Palette), "—");
@@ -290,9 +388,35 @@ mod tests {
         assert_eq!(km2.lookup(&ev(KeyCode::Char('k'), KeyModifiers::CONTROL)), Some(Action::NewConsole));
         assert_eq!(km2.keys(Action::Help), ["Shift+F1"]);
 
-        km.reset(Action::Palette);
-        km.reset(Action::NewConsole);
+        km.reset(Slot::global(Action::Palette));
+        km.reset(Slot::global(Action::NewConsole));
         assert!(km.overrides().is_empty());
+    }
+
+    /// Pane keys work in their pane only, are saved under "<pane>.<Action>", and a key anywhere takes the same key from a pane
+    #[test]
+    fn pane_keys_and_overrides() {
+        let mut km = Keymap::new(&Default::default());
+        let n = ev(KeyCode::Char('n'), KeyModifiers::NONE);
+        assert_eq!(km.lookup_in(Scope::Tree, &n), Some(Action::NewDataSource));
+        assert_eq!(km.lookup_in(Scope::Grid, &n), Some(Action::SetNull));
+        assert_eq!(km.lookup(&n), None);
+        // ⌘C reaches the terminal as c: never a pane key (c is Connect in the explorer)
+        assert_eq!(km.lookup_in(Scope::Tree, &ev(KeyCode::Char('c'), KeyModifiers::SUPER)), None);
+        let tree = |a| Slot { action: a, pane: Scope::Tree };
+        assert_eq!(km.slot_label(tree(Action::DeleteDataSource)), "D");
+        assert_eq!(km.hint(Action::NewDataSource, ""), "n (explorer)");
+        assert_eq!(km.hint(Action::Disconnect, ""), disp("Ctrl+F2"));
+        // Rebinding a pane key: the old one stops, the new one is saved apart from the Action's own keys
+        assert_eq!(km.bind(tree(Action::NewDataSource), "Shift+N".into(), false), None);
+        assert_eq!(km.lookup_in(Scope::Tree, &n), None);
+        let big_n = ev(KeyCode::Char('N'), KeyModifiers::SHIFT);
+        assert_eq!(km.lookup_in(Scope::Tree, &big_n), Some(Action::NewDataSource));
+        assert_eq!(km.overrides().get("tree.NewDataSource"), Some(&vec!["Shift+N".to_string()]));
+        assert_eq!(Keymap::new(&km.overrides()).lookup_in(Scope::Tree, &big_n), Some(Action::NewDataSource));
+        // A key anywhere overlaps the panes
+        assert_eq!(km.bind(Slot::global(Action::ClearConsole), "Ctrl+Z".into(), false), Some(Slot { action: Action::Revert, pane: Scope::Grid }));
+        assert!(bindable_for(tree(Action::Connect), "Shift+C") && !bindable_for(tree(Action::Connect), "J") && !bindable_for(Slot::global(Action::Connect), "C"));
     }
 
     /// Every Action has a row in the shared table (its name on screen), and every TUI row is an Action (that every Action has one
@@ -308,7 +432,11 @@ mod tests {
                 assert!(ids.contains(id), "keymap-table.json row \"tui\": \"{id}\" is not an Action in the palette (app/actions.rs ACTIONS): fix the name or add the Action");
             }
         }
-        assert_eq!(DEFAULT_KEYS.iter().find(|d| d.0 == Action::NewConsole).map(|d| d.1), Some(&["Ctrl+L".to_string()][..]));
+        assert_eq!(COMMANDS.iter().find(|d| d.0 == Slot::global(Action::NewConsole)).map(|d| d.1), Some(&["Ctrl+L".to_string()][..]));
+        // Every Action is in the F1 window once with its keys anywhere: rebindable, with or without a default key
+        for d in crate::app::ACTIONS {
+            assert_eq!(COMMANDS.iter().filter(|c| c.0 == Slot::global(d.action)).count(), 1, "{:?}", d.action);
+        }
     }
 
     #[test]
