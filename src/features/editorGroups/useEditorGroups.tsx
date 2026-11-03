@@ -22,7 +22,7 @@ import type { NodeInfo } from "../../components/SchemaTree";
 import type { useConsole } from "../console/useConsole";
 import type { useExplorer } from "../explorer/useExplorer";
 import type { useJobs } from "../jobs/useJobs";
-import { cmd } from "../../lib/shortcuts";
+import { cmd, keyTitle } from "../../lib/shortcuts";
 import { isMac, sk } from "../shortcuts/labels";
 import { closeTabs, moveTo, patch, settle, sqlOf, togglePin } from "../tabs/ops";
 import { editorApis, liveSql, setActiveIds, setFocused, setPanes, setTabs, useTabsStore } from "../tabs/store";
@@ -141,6 +141,44 @@ export function useEditorGroups({
   };
 
   /** The tab's context menu. The global key handler runs a command's entry for the active tab by its id */
+  // ── DDL tab toolbar (its commands' keys act on the active DDL tab) ──
+  const pickDdlView = (t: Tab, v: DdlView) => {
+    patch(t.id, { ddlView: v });
+    setDdlView(v);
+  };
+  const reloadStructure = (t: Tab) => setStructureRev((r) => ({ ...r, [t.id]: (r[t.id] ?? 0) + 1 }));
+  const copyDdl = (t: Tab) => {
+    navigator.clipboard.writeText(t.sql);
+    setStatus("Copied to clipboard");
+  };
+  const saveDdl = async (t: Tab) => {
+    try {
+      const path = await api.saveTextFile(`${t.title.replace(/^SQL Generator: | \[DDL\]$/g, "")}.sql`, t.sql);
+      if (path) setStatus(`Saved ${path}`);
+    } catch (e) {
+      setStatus(String(e));
+    }
+  };
+  const runDdl = (t: Tab) => {
+    const c = conns.find((x) => x.id === t.connId);
+    if (c) openConsole(c, t.database, t.sql);
+  };
+  const ddlCommands = (t: Tab): MenuItem[] =>
+    t.kind !== "ddl"
+      ? []
+      : [
+          ...(t.edit
+            ? ([
+                { label: "SQL", ...cmd("ddl.sql"), action: () => pickDdlView(t, "sql") },
+                { label: "Structure", ...cmd("ddl.structure"), action: () => pickDdlView(t, "structure") },
+                { label: "Reload", ...cmd("ddl.reload"), action: () => reloadStructure(t), disabled: (t.ddlView ?? "sql") !== "structure" },
+              ] as MenuItem[])
+            : []),
+          { label: "Copy", ...cmd("ddl.copy"), action: () => copyDdl(t) },
+          { label: "Save to File", ...cmd("ddl.save"), action: () => void saveDdl(t) },
+          { label: "Run in Console", ...cmd("ddl.run"), action: () => runDdl(t) },
+        ];
+
   const tabMenu = (t: Tab): MenuItem[] => {
     const sameGroup = tabs.filter((x) => x.group === t.group);
     const idx = sameGroup.findIndex((x) => x.id === t.id);
@@ -525,33 +563,18 @@ export function useEditorGroups({
             .map((t) => {
               // A table's DDL also has the Structure view (openDdl sets edit for tables, buildTab its view)
               const view = t.ddlView ?? "sql";
-              const pick = (v: DdlView) => {
-                patch(t.id, { ddlView: v });
-                setDdlView(v);
-              };
+              const pick = (v: DdlView) => pickDdlView(t, v);
               return (
               <div key={t.id} className="work-layer ddl-layer" style={{ display: t.id === ga?.id ? "flex" : "none" }}>
                 <Toolbar>
                   <span className="tb-info" style={{ marginLeft: 0 }}>{t.title.startsWith("SQL Generator") ? "SQL Generator" : "DDL"} · read-only</span>
                   {t.edit && <ToolbarSep />}
                   {t.edit && <Tabs size="sm" label="DDL view" items={[{ id: "sql", label: "SQL" }, { id: "structure", label: "Structure" }]} value={view} onChange={pick} />}
-                  {view === "structure" && <ToolButton title="Reload the structure" onClick={() => setStructureRev((r) => ({ ...r, [t.id]: (r[t.id] ?? 0) + 1 }))}>Reload</ToolButton>}
+                  {view === "structure" && <ToolButton title={keyTitle("Reload the structure", "ddl.reload")} onClick={() => reloadStructure(t)}>Reload</ToolButton>}
                   <Spacer />
-                  <ToolButton title="Copy to Clipboard" onClick={() => { navigator.clipboard.writeText(t.sql); setStatus("Copied to clipboard"); }}>Copy</ToolButton>
-                  <ToolButton
-                    title="Save to File"
-                    onClick={async () => {
-                      try {
-                        const path = await api.saveTextFile(`${t.title.replace(/^SQL Generator: | \[DDL\]$/g, "")}.sql`, t.sql);
-                        if (path) setStatus(`Saved ${path}`);
-                      } catch (e) {
-                        setStatus(String(e));
-                      }
-                    }}
-                  >
-                    Save to File
-                  </ToolButton>
-                  <ToolButton title="Run in a console" onClick={() => { const c = conns.find((x) => x.id === t.connId); if (c) openConsole(c, t.database, t.sql); }}>Run in Console</ToolButton>
+                  <ToolButton title={keyTitle("Copy to Clipboard", "ddl.copy")} onClick={() => copyDdl(t)}>Copy</ToolButton>
+                  <ToolButton title={keyTitle("Save to File", "ddl.save")} onClick={() => void saveDdl(t)}>Save to File</ToolButton>
+                  <ToolButton title={keyTitle("Run in a console", "ddl.run")} onClick={() => runDdl(t)}>Run in Console</ToolButton>
                 </Toolbar>
                 {/* Stays mounted (loads once per tab, on first show; a restored or background tab doesn't connect) */}
                 {t.edit && <TableStructureView key={structureRev[t.id] ?? 0} target={t.target} schema={t.edit.schema} table={t.edit.table} visible={view === "structure" && t.id === ga?.id} onShowSql={() => pick("sql")} />}
@@ -575,5 +598,5 @@ export function useEditorGroups({
       </div>
     );
   };
-  return { renderPanes, splitClone, unsplit, reopen, reopenClosed, renameConsole, tabMenu };
+  return { renderPanes, splitClone, unsplit, reopen, reopenClosed, renameConsole, tabMenu, ddlCommands };
 }

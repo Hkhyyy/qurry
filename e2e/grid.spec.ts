@@ -177,6 +177,7 @@ test("Settings › Alignment: clicking a kind's name focuses its own select, not
   await expect(dialog(page).getByRole("combobox", { name: "NULL alignment" })).toBeFocused();
   await dialog(page).getByText("Alignment", { exact: true }).click();
   await expect(dialog(page).getByRole("combobox", { name: "String alignment" })).not.toBeFocused();
+});
 
 test("⌘f opens and focuses the find bar, pressed again it stays open (the toolbar button toggles)", async ({ page }) => {
   await work(page).getByRole("gridcell", { name: "user_1", exact: true }).click();

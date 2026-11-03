@@ -47,11 +47,11 @@ const FIXED = new Map<string, (e: KeyboardEvent) => boolean>([
 /** The app-wide key handler: command shortcuts of the keymap (lib/shortcuts.ts) and the fixed keys (⇧⇧, ⇧⎋, ⌃⇥). Commands without a
  *  handler here run the entry with their id in Find Action's list or the active tab's menu (global), or in the selected node's menu (tree) */
 export function useGlobalShortcuts({
-  conns, keymapVer, treeSel, active, focused, tabs, split, toggleExplorer, bumpFont, setMaximized, openFts, setSe, setFindOpen, findOpen, openSwitcher, setRecentOpen, switchWs, activate, openConsole, jumpToConsole, activateNode, deactivate, sqlGenerator, ddlToClipboard, ddlToConsole, showQuickDoc, canDdl, modifyTable, renameNode, duplicateConn, removeConn, dangerous, openDdl, applyTableFilter, refreshAll, canCancel, cancelRun, renameConsole, reopenClosed, buildMenu, paletteActions, tabMenu,
+  conns, keymapVer, treeSel, active, focused, tabs, split, toggleExplorer, bumpFont, setMaximized, openFts, setSe, setFindOpen, findOpen, openSwitcher, setRecentOpen, switchWs, activate, openConsole, jumpToConsole, activateNode, deactivate, sqlGenerator, ddlToClipboard, ddlToConsole, showQuickDoc, canDdl, modifyTable, renameNode, duplicateConn, removeConn, dangerous, openDdl, applyTableFilter, refreshAll, canCancel, cancelRun, renameConsole, reopenClosed, buildMenu, paletteActions, tabMenu, ddlCommands,
 }: Deps) {
   // The key handler is registered only once, so pass the latest functions via a ref
-  const latest = useRef({ toggleExplorer, openFts, bumpFont, setSe, setFindOpen, findOpen, switchWs, buildMenu, paletteActions, tabMenu });
-  latest.current = { toggleExplorer, openFts, bumpFont, setSe, setFindOpen, findOpen, switchWs, buildMenu, paletteActions, tabMenu };
+  const latest = useRef({ toggleExplorer, openFts, bumpFont, setSe, setFindOpen, findOpen, switchWs, buildMenu, paletteActions, tabMenu, ddlCommands });
+  latest.current = { toggleExplorer, openFts, bumpFont, setSe, setFindOpen, findOpen, switchWs, buildMenu, paletteActions, tabMenu, ddlCommands };
   const lastShift = useRef(0);
 
   // ───────── Shortcuts (DataGrip keymap) ─────────
@@ -227,7 +227,7 @@ export function useGlobalShortcuts({
       };
       for (const [id, run] of Object.entries(actions)) if ((FIXED.get(id)?.(e) ?? is(id)) && run() !== false) return;
       // Commands without a handler above: the menu or Find Action entry with their id
-      if ((node && runKey(spec, "tree", () => L.buildMenu(node))) || runKey(spec, "global", () => [...L.paletteActions(), ...(active ? L.tabMenu(active) : [])])) {
+      if ((node && runKey(spec, "tree", () => L.buildMenu(node))) || runKey(spec, "global", () => [...L.paletteActions(), ...(active ? [...L.tabMenu(active), ...L.ddlCommands(active)] : [])])) {
         e.preventDefault();
         e.stopPropagation();
       }
