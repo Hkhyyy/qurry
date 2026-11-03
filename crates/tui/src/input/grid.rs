@@ -453,4 +453,37 @@ mod tests {
         h.key("Down");
         assert!(!h.table(id).grid.as_ref().unwrap().loading_more, "not asked again");
     }
+
+    /// A load-more answer that arrives after the tab ran again belongs to the grid it replaced: dropped
+    #[tokio::test]
+    async fn a_load_more_answer_for_a_replaced_grid_is_dropped() {
+        let mut h = Harness::new().await;
+        let id = h.table_tab("users", &["id"], &[&["1"], &["2"]], &["id"]);
+        let fresh = || {
+            let mut g = crate::grid::Grid::new(qurry_core::db::QueryResult { columns: vec![qurry_core::db::ColumnInfo { name: "id".into(), type_name: "text".into() }], rows: vec![vec!["9".into()]], rows_affected: 0, truncated: true, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None });
+            g.more_session = Some("s".into());
+            g
+        };
+        {
+            let TabKind::Table(tt) = &mut h.app.tabs[h.app.active].kind else { unreachable!() };
+            tt.grid = Some(fresh());
+        }
+        h.key("Down");
+        assert!(h.table(id).grid.as_ref().unwrap().loading_more);
+        // The tab ran again before the answer came
+        {
+            let TabKind::Table(tt) = &mut h.app.tabs[h.app.active].kind else { unreachable!() };
+            tt.grid = Some(fresh());
+        }
+        h.settle().await;
+        let g = h.table(id).grid.as_ref().unwrap();
+        assert_eq!((g.more_error.as_deref(), g.rows(), g.result.truncated), (None, 1, true), "the new grid is untouched");
+        // While the tab runs, no load-more is asked
+        {
+            let TabKind::Table(tt) = &mut h.app.tabs[h.app.active].kind else { unreachable!() };
+            tt.running = true;
+        }
+        h.app.fetch_more();
+        assert!(!h.table(id).grid.as_ref().unwrap().loading_more);
+    }
 }

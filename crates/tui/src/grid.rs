@@ -17,6 +17,8 @@ pub struct Grid {
     pub loading_more: bool,
     /// Loading more failed, and why (qurry_shared::errors::more_rows_failed): shown at the grid's bottom edge, no more loads until it runs again
     pub more_error: Option<String>,
+    /// Tells grids apart: a load-more answer only goes to the grid it was asked for (a run replaces the grid)
+    pub id: u64,
     /// Edits: (row, col) → new value (None = NULL)
     pub edits: BTreeMap<(usize, usize), Option<String>>,
     pub deleted: BTreeSet<usize>,
@@ -83,9 +85,11 @@ fn cmp_cell(a: Option<&Value>, b: Option<&Value>, desc: bool) -> std::cmp::Order
     }
 }
 
+static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 impl Grid {
     pub fn new(result: QueryResult) -> Self {
-        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, more_error: None, edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, orig: vec![] };
+        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, more_error: None, id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed), edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, orig: vec![] };
         g.compute_widths();
         g
     }
