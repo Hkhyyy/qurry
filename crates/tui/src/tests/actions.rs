@@ -1,6 +1,6 @@
 //! The command list: every rebindable command fires through its default key, and the palette list and the --help / F1 order
 //! stay as they are (goldens next to this file; run with QURRY_TUI_BLESS=1 to rewrite them after an intended change)
-use crate::app::{PAction, Popup, TabKind, ACTIONS};
+use crate::app::{Action, Focus, PAction, Popup, TabKind, ACTIONS};
 use crate::keys::{action_id, DEFAULT_KEYS, FORCE_MAC_GLYPHS};
 use crate::testkit::Harness;
 
@@ -30,14 +30,41 @@ async fn every_action_has_one_def_and_fires_through_its_default_keys() {
         for key in keys.iter() {
             let mut h = Harness::new().await;
             h.console_tab();
-            // The table writes letters uppercase ("Alt+N"); without Shift the terminal sends the lowercase one
-            let typed = match key.rsplit_once('+') {
-                Some((m, l)) if !m.contains("Shift") && l.len() == 1 => format!("{m}+{}", l.to_ascii_lowercase()),
-                _ => key.clone(),
-            };
-            h.key(&typed);
+            h.key(&typed(key));
             assert_eq!(h.app.ran.first(), Some(a), "{key} should run {a:?}");
         }
+    }
+}
+
+/// The key the terminal sends for a DEFAULT_KEYS spec: the table writes letters uppercase ("Alt+N"), without Shift it's the lowercase one
+fn typed(key: &str) -> String {
+    match key.rsplit_once('+') {
+        Some((m, l)) if !m.contains("Shift") && l.len() == 1 => format!("{m}+{}", l.to_ascii_lowercase()),
+        _ => key.to_string(),
+    }
+}
+
+/// `ran` is recorded before the ActionDef runs, so the test above can't tell a row pointing at the wrong function: a few commands'
+/// default keys checked by the state they leave (the other commands are covered by the flow tests next to their code)
+#[tokio::test]
+async fn default_keys_apply_their_command() {
+    type Applied = fn(&Harness) -> bool;
+    let cases: [(Action, Applied); 7] = [
+        (Action::ToggleOutput, |h| matches!(&h.app.tabs[h.app.active].kind, TabKind::Console(c) if !c.show_output)),
+        (Action::Help, |h| matches!(h.app.popup, Some(Popup::Help { .. }))),
+        (Action::Palette, |h| matches!(h.app.popup, Some(Popup::Palette(_)))),
+        (Action::Find, |h| matches!(h.app.popup, Some(Popup::Find(_)))),
+        (Action::ToggleExplorer, |h| h.app.focus == Focus::Tree),
+        // A pair that differs only in its argument (42 = the starting split)
+        (Action::ShrinkEditor, |h| h.app.console_pct < 42),
+        (Action::GrowEditor, |h| h.app.console_pct > 42),
+    ];
+    for (a, applied) in cases {
+        let key = DEFAULT_KEYS.iter().find(|d| d.0 == a).and_then(|d| d.1.first()).unwrap_or_else(|| panic!("{a:?} has no default key"));
+        let mut h = Harness::new().await;
+        h.console_tab();
+        h.key(&typed(key));
+        assert!(applied(&h), "{key} ran {a:?} but didn't apply it");
     }
 }
 
@@ -72,7 +99,8 @@ async fn key_dispatch_bench() {
     let id = h.console_tab();
     let shown = |h: &Harness| matches!(&h.app.tabs[h.app.tab_index(id).unwrap()].kind, TabKind::Console(c) if c.show_output);
     let before = shown(&h);
-    for key in ["Alt+O", "Ctrl+Alt+Right", "F12"] {
+    // Lowercase: "Alt+O" is the Shift form, bound to nothing
+    for key in ["Alt+o", "Ctrl+Alt+Right", "F12"] {
         let t = std::time::Instant::now();
         for _ in 0..N {
             h.key(key);
@@ -82,5 +110,5 @@ async fn key_dispatch_bench() {
     }
     // Every key applied: 10k output toggles end where they started, each one counted
     assert_eq!(shown(&h), before);
-    assert_eq!(h.app.ran.iter().filter(|a| **a == crate::app::Action::ToggleOutput).count(), N as usize);
+    assert_eq!(h.app.ran.iter().filter(|a| **a == Action::ToggleOutput).count(), N as usize);
 }
