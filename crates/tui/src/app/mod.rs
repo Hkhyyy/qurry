@@ -272,6 +272,10 @@ pub enum PAction {
     Exec(qurry_core::exec::ExecSettings),
     /// Update channel picked
     Channel(qurry_core::update::Channel),
+    /// Grid alignment: a value class picked (→ pick where it sits)
+    AlignClass(qurry_core::format::ValueClass),
+    /// Grid alignment: where a value class sits, picked
+    Align(qurry_core::format::ValueClass, qurry_core::format::Align),
 }
 #[derive(Clone)]
 pub struct IndexEntryLite {
@@ -476,6 +480,7 @@ pub enum Action {
     ExplorerWider,
     ManageSchemas,
     PasswordKey,
+    GridAlign,
     CheckUpdate,
     UpdateChannel,
     InstallUpdate,
@@ -612,6 +617,8 @@ pub struct App {
     pub ws_synced: bool,
     /// What the terminal can show (set from the environment at startup; drawing maps the frame to it)
     pub color: crate::theme::ColorMode,
+    /// Grid alignment per value class, shared with the GUI's Settings › Appearance › Alignment (settings.json, read at startup and by ⌃k › Grid Alignment…)
+    pub align: qurry_core::format::Alignments,
     /// The last frame was the 'terminal too small' message: keys and clicks would act on a screen that isn't drawn
     pub too_small: bool,
     /// Tests only (testkit): answers console statements and the Production row counts instead of the database
@@ -644,7 +651,9 @@ impl App {
             Ok(k) => (k, None),
             Err(e) => (Default::default(), Some(format!("keymap.json ignored: {e}"))),
         };
+        let align = state.store.grid_align();
         let mut a = App {
+            align,
             hits: Hits::default(),
             state,
             tx,

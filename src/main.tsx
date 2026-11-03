@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import "./lib/monaco";
 import "./lib/completion";
 import { initShared } from "./lib/shared";
+import { loadGridAlign } from "./lib/gridAlign";
 import App from "./App";
 
 async function boot() {
@@ -12,6 +13,7 @@ async function boot() {
   initShared().catch((e) =>
     console.error(`Qurry could not load its shared WebAssembly module (${e}). If the WebView refused to create a WebAssembly object, the system WebView is too old: update macOS (Safari) or webkit2gtk.`),
   );
+  loadGridAlign();
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
       <App />

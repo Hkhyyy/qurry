@@ -46,6 +46,16 @@ pub struct Grid {
     orig: Vec<usize>,
 }
 
+/// Text placed in a cell `w` columns wide (display width, so wide characters line up too); text wider than the cell is left as is
+fn pad(text: String, w: usize, a: Align) -> String {
+    let gap = w.saturating_sub(text.width());
+    match a {
+        Align::Left => text,
+        Align::Right => format!("{}{text}", " ".repeat(gap)),
+        Align::Center => format!("{}{text}", " ".repeat(gap / 2)),
+    }
+}
+
 /// Max rows kept in the result grid. Beyond that, export to CSV
 pub const MAX_ROWS: usize = 100_000;
 
@@ -57,6 +67,7 @@ pub fn cell_text(v: &Value) -> String {
     }
 }
 pub(crate) use qurry_core::format::{is_time_type, pad_frac};
+use qurry_core::format::{align, cell_class, type_class, Align, Alignments, ValueClass};
 use qurry_core::extract::{self, Format, Rows};
 use qurry_core::store::DbKind;
 
@@ -350,7 +361,16 @@ impl Grid {
         }
     }
 
-    pub fn render(&mut self, f: &mut Frame, area: Rect, title: String, focused: bool, color: crate::theme::ColorMode) {
+    /// Value class of a cell with edits applied, `column` = its column's type_class (the shared rule reads only the value's kind, so an edit is any text)
+    fn class(&self, r: usize, c: usize, column: ValueClass) -> ValueClass {
+        match self.edits.get(&(r, c)) {
+            Some(e) => cell_class(column, &e.as_ref().map_or(Value::Null, |_| Value::String(String::new()))),
+            None => cell_class(column, self.result.rows.get(r).and_then(|row| row.get(c)).unwrap_or(&Value::Null)),
+        }
+    }
+
+    /// `aligns` = App::align (settings.json "gridAlign", shared with the GUI)
+    pub fn render(&mut self, f: &mut Frame, area: Rect, title: String, focused: bool, color: crate::theme::ColorMode, aligns: &Alignments) {
         let block = Block::default()
             .borders(Borders::ALL)
             .title(title)
@@ -442,15 +462,7 @@ impl Grid {
             })),
         )
         .style(Style::default().bg(crate::kit::SURFACE));
-        let numeric: Vec<bool> = self
-            .result
-            .columns
-            .iter()
-            .map(|c| {
-                let t = c.type_name.to_uppercase();
-                ["INT", "NUMERIC", "DECIMAL", "FLOAT", "DOUBLE", "REAL", "SERIAL", "OID"].iter().any(|k| t.contains(k))
-            })
-            .collect();
+        let tclass: Vec<ValueClass> = cols.iter().map(|&c| type_class(&self.result.columns[c].type_name)).collect();
         let sel = self.sel_rect();
         let end = (self.row_off + body_h).min(self.rows());
         let rows: Vec<Row> = (self.row_off..end)
@@ -469,7 +481,7 @@ impl Grid {
                     (' ', Color::DarkGray)
                 };
                 let num = Cell::from(format!("{:>w$}{mark}", r + 1, w = num_w as usize - 1)).style(Style::default().fg(num_c));
-                Row::new(std::iter::once(num).chain(cols.iter().map(|&c| {
+                Row::new(std::iter::once(num).chain(cols.iter().zip(&shown_w).zip(&tclass).map(|((&c, &w), &tc)| {
                     let edited = self.edits.contains_key(&(r, c));
                     let v = self.shown(r, c, self.widths[c] as usize + 1);
                     let text = match &v {
@@ -477,9 +489,13 @@ impl Grid {
                         None => "<null>".to_string(),
                         Some(s) => s.clone(),
                     };
-                    let w = self.widths[c] as usize;
-                    let text = if numeric[c] && v.is_some() { format!("{text:>w$}") } else { text };
-                    let mut st = if v.is_none() { Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC) } else if numeric[c] { Style::default().fg(crate::kit::NUMBER) } else { Style::default() };
+                    let class = self.class(r, c, tc);
+                    let text = pad(text, w as usize, align(class, aligns));
+                    let mut st = match class {
+                        ValueClass::Null => Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                        ValueClass::Number => Style::default().fg(crate::kit::NUMBER),
+                        _ => Style::default(),
+                    };
                     if edited {
                         st = st.fg(Color::Yellow).add_modifier(Modifier::BOLD);
                     }
@@ -633,7 +649,7 @@ mod tests {
         let mut g = Grid::new(QueryResult { columns: cols, rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None });
         let draw = |g: &mut Grid, focused: bool| {
             let mut term = Terminal::new(ratatui::backend::TestBackend::new(40, 6)).unwrap();
-            term.draw(|f| g.render(f, f.area(), "t".into(), focused, Default::default())).unwrap();
+            term.draw(|f| g.render(f, f.area(), "t".into(), focused, Default::default(), &Default::default())).unwrap();
             let buf = term.backend().buffer().clone();
             (buf[(0, 0)].symbol().to_string(), (0..40).map(|x| buf[(x, 5)].symbol()).collect::<String>())
         };
@@ -656,7 +672,7 @@ mod tests {
     fn draw_in(g: &mut Grid, mode: crate::theme::ColorMode) -> (Vec<String>, ratatui::buffer::Buffer) {
         let mut term = Terminal::new(ratatui::backend::TestBackend::new(40, 8)).unwrap();
         term.draw(|f| {
-            g.render(f, f.area(), "t".into(), true, mode);
+            g.render(f, f.area(), "t".into(), true, mode, &Default::default());
             mode.apply(f.buffer_mut());
         })
         .unwrap();
@@ -718,5 +734,45 @@ mod tests {
         g.anchor = None;
         let (lines, buf) = draw_in(&mut g, ColorMode::NoColor);
         assert!(look(cell_of(&lines, &buf, "r1c1")).1);
+    }
+
+    /// Cells sit where Settings › Appearance › Alignment says (qurry_shared::format, the GUI's rule): by default numbers and NULL
+    /// on the right, so a NULL lines up with the numbers above it; an override moves only its own class
+    #[test]
+    fn cells_follow_the_alignment_setting() {
+        use qurry_core::format::{Align, Alignments, ValueClass};
+        let col = |n: &str, t: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: t.into() };
+        let rows = vec![vec![json!("abc"), json!(12345), json!(true)], vec![Value::Null, Value::Null, json!(false)], vec![json!("하나"), json!("7.5"), Value::Null]];
+        let mut g = Grid::new(QueryResult { columns: vec![col("name", "TEXT"), col("qty_total", "NUMERIC"), col("flag", "BOOL")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None });
+        // Each body cell's text with its padding: (leading spaces, text) per row of a column
+        let cells = |g: &mut Grid, a: &Alignments, c: usize| -> Vec<(usize, String)> {
+            let mut term = Terminal::new(ratatui::backend::TestBackend::new(60, 8)).unwrap();
+            term.draw(|f| g.render(f, f.area(), "t".into(), true, Default::default(), a)).unwrap();
+            let buf = term.backend().buffer().clone();
+            let &(_, x0, x1) = g.col_x.iter().find(|x| x.0 == c).unwrap();
+            (0..3)
+                .map(|r| {
+                    let s: String = (x0..x1).map(|x| buf[(x, g.body.y + r)].symbol().to_string()).collect();
+                    (s.len() - s.trim_start().len(), s.trim().to_string())
+                })
+                .collect()
+        };
+        let w = |g: &Grid, c: usize| g.widths[c] as usize;
+        let none = Alignments::new();
+        // Number column: values and NULL end at the column's right edge
+        let qty = cells(&mut g, &none, 1);
+        assert_eq!(qty.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>(), ["12345", "<null>", "7.5"]);
+        assert!(qty.iter().all(|(lead, t)| lead + t.len() == w(&g, 1)), "{qty:?}");
+        // Text column: text on the left, NULL on the right; wide characters count as two columns
+        let name = cells(&mut g, &none, 0);
+        assert_eq!((name[0].0, name[2].0), (0, 0));
+        assert_eq!(name[1].0 + "<null>".len(), w(&g, 0), "{name:?}");
+        // NULL back on the left (as before 0.3.0), numbers in the center: booleans stay where they were
+        let back = Alignments::from([(ValueClass::Null, Align::Left), (ValueClass::Number, Align::Center)]);
+        assert_eq!(cells(&mut g, &back, 0)[1].0, 0);
+        let qty = cells(&mut g, &back, 1);
+        assert_eq!(qty[1].0, 0, "NULL on the left");
+        assert_eq!(qty[0].0, (w(&g, 1) - 5) / 2, "centered: {qty:?}");
+        assert_eq!(cells(&mut g, &back, 2).iter().map(|x| x.0).collect::<Vec<_>>(), [0, 0, 0]);
     }
 }

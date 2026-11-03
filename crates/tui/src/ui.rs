@@ -393,6 +393,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
     // Unfocused panes are drawn like Tree focus (dimmed border·cursor)
     let focus = if focused { app.focus } else { Focus::Tree };
     let color = app.color;
+    let align = app.align.clone();
     let ro = app.tabs.get(idx).and_then(|t| app.conn(&t.conn)).map(|c| c.config.read_only).unwrap_or(false);
     let pct = app.console_pct;
     // Rebindable commands are shown with their first key in the current keymap
@@ -468,7 +469,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 f.render_widget(p, res);
             } else if let Some(g) = &mut c.grid {
                 let t = format!(" {} — {}{} rows ({k_out}: output) ", c.result_title, g.rows(), if g.result.truncated { "+" } else { "" });
-                g.render(f, res, t, focus == Focus::Grid, color);
+                g.render(f, res, t, focus == Focus::Grid, color, &align);
             }
             if let (Some((x, y)), Some(cmp)) = (caret, &c.complete) {
                 draw_completion(f, cmp, x, y);
@@ -506,7 +507,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 let pend = if g.dirty() { format!(" · {} pending ({k_submit} submit, {} revert)", g.edits.len() + g.deleted.len() + g.added, disp("⌃z")) } else { String::new() };
                 let rows = if tt.error.is_some() && !g.dirty() { "query failed — no rows".to_string() } else { format!("{}{} rows", g.rows(), if g.result.truncated { "+" } else { "" }) };
                 let t = format!(" {}.{} — {rows}{}{}{} ", tt.schema, tt.table, if tt.pk.is_empty() { " · no PK (read-only)" } else { "" }, if ro { " · read-only" } else { "" }, pend);
-                g.render(f, grid, t, focus == Focus::Grid, color);
+                g.render(f, grid, t, focus == Focus::Grid, color, &align);
             } else {
                 let msg = if tt.error.is_some() { String::new() } else { format!("Loading… {}", took.as_deref().unwrap_or("")) };
                 f.render_widget(Paragraph::new(msg).block(panel(format!(" {}.{} ", tt.schema, tt.table), focused)), grid);
@@ -539,10 +540,10 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                     let age = d.loaded.map(|t| format!(" from {} s ago", t.elapsed().as_secs())).unwrap_or_default();
                     let text = format!(" Refresh failed, showing data{age}: {}", e.lines().next().unwrap_or(""));
                     f.render_widget(Paragraph::new(text).style(Style::default().fg(WARN)).wrap(Wrap { trim: false }), msg);
-                    g.render(f, rest, title, focus == Focus::Grid, color);
+                    g.render(f, rest, title, focus == Focus::Grid, color, &align);
                     area = rest;
                 }
-                (Some(g), None) => g.render(f, grid, title, focus == Focus::Grid, color),
+                (Some(g), None) => g.render(f, grid, title, focus == Focus::Grid, color, &align),
                 (None, None) => f.render_widget(Paragraph::new("Loading…").block(panel(title, focus == Focus::Grid)), grid),
             }
             if focused {
@@ -593,7 +594,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                     let ttl = if d.ttl >= 0 { format!("TTL {}s", d.ttl / 1000) } else { "no TTL".into() };
                     let title = format!(" {} {key} · {} · {} {} ", d.ty.to_uppercase(), ttl, d.length, if d.ty == "string" { "bytes" } else { "items" });
                     match &mut r.value {
-                        Some(g) => g.render(f, right, title, vf, color),
+                        Some(g) => g.render(f, right, title, vf, color, &align),
                         None => {
                             f.render_widget(Paragraph::new(r.text.as_deref().unwrap_or_default()).wrap(Wrap { trim: false }).block(panel(title, vf)), right);
                         }

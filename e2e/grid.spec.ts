@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { expect, menuItem, openApp, test, treeItem, work } from "./app";
+import { dialog, expect, menuItem, openApp, test, treeItem, work } from "./app";
 
 const clipboard = (page: Page) => page.evaluate(() => navigator.clipboard.readText());
 /** The mock's created_at alternates no fraction / .5 / .125 */
@@ -122,4 +122,59 @@ test("rows that arrive after the table tab ran again are dropped, not appended t
   await page.waitForTimeout(1300);
   await expect(work(page).locator(".tb-info").first()).toHaveText("500+ rows");
   await expect(work(page).locator(".grid-loading:not(.grid-more-error)")).toHaveCount(0);
+});
+
+/** text-align of the first three data cells of a column */
+const aligns = (page: Page, col: number) =>
+  work(page)
+    .locator(".grid-row")
+    .evaluateAll((rows, c) => rows.slice(0, 3).map((r) => getComputedStyle(r.querySelectorAll(".cell:not(.rownum)")[c]).textAlign), col);
+
+test("NULL is right-aligned by default; Settings › Appearance › Alignment puts it back on the left (#75)", async ({ page }) => {
+  // memo (TEXT): "note", <null>, <null>; amount (NUMERIC, arrives as text): a number
+  await expect.poll(() => aligns(page, 4)).toEqual(["left", "right", "right"]);
+  await expect.poll(() => aligns(page, 2)).toEqual(["right", "right", "right"]);
+  await page.keyboard.press("Meta+Comma");
+  const nul = dialog(page).getByRole("combobox", { name: "NULL alignment" });
+  await expect(nul).toHaveValue("right");
+  await nul.selectOption("left");
+  await page.keyboard.press("Escape");
+  await expect.poll(() => aligns(page, 4)).toEqual(["left", "left", "left"]);
+  await expect.poll(() => aligns(page, 2)).toEqual(["right", "right", "right"]);
+  // Saved (the mock's settings.json) and marked as changed
+  await page.keyboard.press("Meta+Comma");
+  await expect(dialog(page).getByRole("combobox", { name: "NULL alignment" })).toHaveValue("left");
+  await expect(dialog(page).locator(".align-label.custom")).toHaveText(["NULL"]);
+});
+
+test("Settings › Appearance › Alignment that can't be saved goes back and says so", async ({ page }) => {
+  await page.evaluate(() => ((window as any).__mockChannelSaveFails = true));
+  await page.keyboard.press("Meta+Comma");
+  await dialog(page).getByRole("combobox", { name: "NULL alignment" }).selectOption("left");
+  await expect(dialog(page).getByText(/Couldn't save the alignment \(.*permission denied\)\. It is back to what it was\./)).toBeVisible();
+  await expect(dialog(page).getByRole("combobox", { name: "NULL alignment" })).toHaveValue("right");
+});
+
+test("a WebView that refuses WebAssembly: numbers stay on the right and Settings › Alignment says why it can't be changed", async ({ page }) => {
+  await page.route((u) => u.pathname.endsWith(".wasm") && !u.search, (r) => r.abort());
+  await openApp(page);
+  await treeItem(page, "users").first().dblclick();
+  await expect(work(page).getByRole("gridcell", { name: "user_1", exact: true })).toBeVisible();
+  // id (JSON numbers) on the right as before the setting; user_name and memo (with its NULLs) where text starts (no al-* class)
+  await expect.poll(() => aligns(page, 0)).toEqual(["right", "right", "right"]);
+  await expect.poll(() => aligns(page, 1)).toEqual(["start", "start", "start"]);
+  await expect.poll(() => aligns(page, 4)).toEqual(["start", "start", "start"]);
+  await page.keyboard.press("Meta+Comma");
+  const nul = dialog(page).getByRole("combobox", { name: "NULL alignment" });
+  await expect(nul).toBeDisabled();
+  await expect(nul).toHaveValue("");
+  await expect(dialog(page).getByText("Alignment needs WebAssembly, which this WebView refused")).toBeVisible();
+});
+
+test("Settings › Alignment: clicking a kind's name focuses its own select, not the first one", async ({ page }) => {
+  await page.keyboard.press("Meta+Comma");
+  await dialog(page).locator(".align-label", { hasText: "NULL" }).click();
+  await expect(dialog(page).getByRole("combobox", { name: "NULL alignment" })).toBeFocused();
+  await dialog(page).getByText("Alignment", { exact: true }).click();
+  await expect(dialog(page).getByRole("combobox", { name: "String alignment" })).not.toBeFocused();
 });

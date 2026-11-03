@@ -727,6 +727,17 @@ pub fn update_channel(state: State<'_, AppState>) -> qurry_core::update::Channel
     state.store.update_channel()
 }
 
+/// Grid alignment overrides per value class (Settings › Appearance › Alignment; the TUI reads them)
+#[tauri::command]
+pub fn grid_align(state: State<'_, AppState>) -> qurry_core::format::Alignments {
+    state.store.grid_align()
+}
+
+#[tauri::command]
+pub fn set_grid_align(state: State<'_, AppState>, class: qurry_core::format::ValueClass, align: qurry_core::format::Align) -> AppResult<qurry_core::format::Alignments> {
+    state.store.set_grid_align(class, align)
+}
+
 /// Saves the channel, then answers what it offers from the saved check only (no request): None if nothing was checked yet or checks are off
 #[tauri::command]
 pub fn set_update_channel(state: State<'_, AppState>, channel: qurry_core::update::Channel) -> AppResult<Option<UpdateInfo>> {

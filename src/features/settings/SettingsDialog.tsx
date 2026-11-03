@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
+import { alignOf, setGridAlign, useGridAlign, VALUE_CLASSES } from "../../lib/gridAlign";
+import { useSharedReady, type Align } from "../../lib/shared";
 import { api, secretKey, setUpdateCheckEnabled, UpdateInfo, updateCheckEnabled } from "../../lib/api";
 import type { UpdateChannel } from "../../lib/api";
 import { KeymapEditor } from "../../components/KeymapEditor";
-import { Button, Checkbox, Field, List, ListItem, Modal, Select, Text, TextInput } from "../../ui";
+import { Button, Checkbox, cx, Field, List, ListItem, Modal, Select, Text, TextInput } from "../../ui";
 import { getThemePref, setThemePref, ThemePref, useTheme } from "../../lib/theme";
 import { fontInstalled, fontStack, FontTarget, KNOWN_MONO, setFont, SIZES, useFonts } from "../../lib/prefs";
 import { isMac, sk } from "../shortcuts/labels";
@@ -25,6 +27,51 @@ function FontField({ target, label, hint }: { target: FontTarget; label: string;
             </option>
           ))}
         </Select>
+      </div>
+    </Field>
+  );
+}
+
+/** Settings › Appearance › Alignment: where grid cells sit, per value class (shared with the TUI through settings.json) */
+export function GridAlignField() {
+  const overrides = useGridAlign();
+  // The classes and their defaults come from the WASM module: without it (a WebView that refused WebAssembly) nothing can be picked
+  const ready = useSharedReady();
+  const [err, setErr] = useState<string | null>(null);
+  return (
+    <Field
+      label="Alignment"
+      group
+      error={err ?? undefined}
+      hint={
+        ready
+          ? "Where cells sit in result grids, by the kind of value; the TUI uses the same setting. NULL is on the right by default, in line with numbers: set NULL to Left to have it where it was before 0.3.0."
+          : "Alignment needs WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk. Until then numbers are on the right and everything else on the left."
+      }
+    >
+      <div className="align-grid">
+        {VALUE_CLASSES.map(({ cls, label }) => (
+          <Fragment key={cls}>
+            <label htmlFor={`align-${cls}`} className={cx("align-label", cls in overrides && "custom")}>
+              {label}
+            </label>
+            <Select
+              id={`align-${cls}`}
+              aria-label={`${label} alignment`}
+              disabled={!ready}
+              value={ready ? alignOf(cls, overrides) : ""}
+              onChange={(e) => {
+                setErr(null);
+                setGridAlign(cls, e.target.value as Align).catch((x) => setErr(`Couldn't save the alignment (${x}). It is back to what it was.`));
+              }}
+            >
+              {!ready && <option value="">—</option>}
+              <option value="left">Left</option>
+              <option value="center">Center</option>
+              <option value="right">Right</option>
+            </Select>
+          </Fragment>
+        ))}
       </div>
     </Field>
   );
@@ -159,6 +206,7 @@ export function SettingsDialog({ onClose, onUpdate, onChannel, initialPage = "ap
                 <option key={f} value={f} />
               ))}
             </datalist>
+            <GridAlignField />
             <Field label="Updates" hint={updMsg ?? undefined}>
               <div className="ui-row">
                 <Checkbox

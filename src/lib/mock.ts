@@ -45,6 +45,7 @@ const wide = {
 };
 let flakyLoads = 0;
 let updateChannel = "stable";
+let gridAlign = {};
 /** Whether check_update ran (the real app then has a saved check that a channel switch answers from) */
 let updateChecked = false;
 /** Test Connections waiting for cancel_test, by test id */
@@ -424,6 +425,16 @@ const handlers: Record<string, (a: any) => unknown> = {
   save_keymap: () => null,
   install_update: () => new Promise((_, rej) => setTimeout(() => rej("Update failed: mock"), 800)),
   update_channel: () => updateChannel,
+  grid_align: () => gridAlign,
+  set_grid_align: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
+    // As the core: the default (numbers and NULL on the right) drops the override
+    const next: Record<string, string> = { ...gridAlign };
+    if (a.align === (a.class === "number" || a.class === "null" ? "right" : "left")) delete next[a.class];
+    else next[a.class] = a.align;
+    gridAlign = next;
+    return next;
+  },
   // window.__mockChannelSaveFails: the settings file can't be written
   set_update_channel: (a: any) => {
     if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";

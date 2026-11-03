@@ -8,17 +8,21 @@ import { cx } from "./cx";
 import { Chevron } from "./icons";
 
 // ───────── Form ─────────
-/** Label + field on one line. Hint · error below the field */
-export function Field({ label, hint, error, children, className }: { label: ReactNode; hint?: ReactNode; error?: ReactNode; children: ReactNode; className?: string }) {
+/**
+ * Label + field on one line. Hint · error below the field.
+ * group = several controls with their own labels: a div (role group), so a click on the field's label doesn't land in the first control
+ */
+export function Field({ label, hint, error, children, className, group }: { label: ReactNode; hint?: ReactNode; error?: ReactNode; children: ReactNode; className?: string; group?: boolean }) {
+  const Tag = group ? "div" : "label";
   return (
-    <label className={cx("ui-field", className)}>
+    <Tag className={cx("ui-field", className)} role={group ? "group" : undefined} aria-label={group && typeof label === "string" ? label : undefined}>
       <span className="ui-field-label" title={typeof label === "string" ? label : undefined}>
         {label}
       </span>
       {children}
       {hint && <span className="ui-field-hint">{hint}</span>}
       {error && <span className="ui-field-error">{error}</span>}
-    </label>
+    </Tag>
   );
 }
 /** One of several (radio). Short description (hint) per option */

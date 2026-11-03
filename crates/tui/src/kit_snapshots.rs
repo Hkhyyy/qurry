@@ -226,6 +226,45 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.app.chart_result();
     scenes.push(app_scene(h, "Chart", "⌃k › Chart Result: 첫 글 컬럼별 수 컬럼의 합 (가로 막대)", 120, 26));
     h.app.popup = None;
+    // Grid alignment (GUI Settings › Appearance › Alignment, read from settings.json)
+    let id = h.console_with("select * from payment_check;", 1, 10);
+    let res = qurry_core::db::QueryResult {
+        columns: [("card_brand", "TEXT"), ("amount", "NUMERIC"), ("refunded", "BOOL"), ("paid_at", "TIMESTAMPTZ"), ("meta", "JSONB")].iter().map(|(n, t)| qurry_core::db::ColumnInfo { name: n.to_string(), type_name: t.to_string() }).collect(),
+        rows: vec![
+            vec![json!("VISA"), json!("129000"), json!(false), json!("2026-10-28 09:12:00 +09:00"), json!("{\"pg\":\"toss\"}")],
+            vec![json!("MASTER"), Value::Null, json!(true), json!("2026-10-28 09:40:00 +09:00"), Value::Null],
+            vec![Value::Null, json!("1200000"), Value::Null, Value::Null, json!("{}")],
+        ],
+        rows_affected: 0,
+        truncated: false,
+        elapsed_ms: 4,
+        has_result_set: true,
+        in_transaction: false,
+        warning: None,
+    };
+    if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
+        c.result_title = "Result 1: select * from payment_check".into();
+        c.grid = Some(crate::grid::Grid::new(res));
+        c.show_output = false;
+    }
+    scenes.push(app_scene(h, "Grid alignment", "Numbers and NULL on the right by default (a NULL stays in line with the numbers); text, dates, booleans and JSON on the left", 120, 22));
+    {
+        use qurry_core::format::{Align, ValueClass};
+        h.app.state.store.set_grid_align(ValueClass::Null, Align::Left).unwrap();
+        h.app.align = h.app.state.store.set_grid_align(ValueClass::Boolean, Align::Center).unwrap();
+    }
+    scenes.push(app_scene(h, "Grid alignment: changed", "settings.json \"gridAlign\": { \"null\": \"left\", \"boolean\": \"center\" } (GUI Settings › Appearance › Alignment); the other classes keep their default", 120, 22));
+    h.app.palette_grid_align(qurry_core::format::ValueClass::Null);
+    scenes.push(app_scene(h, "Grid alignment palette", "⌃k › Grid Alignment…: where each kind of value sits, shared with the GUI; Enter picks Left / Center / Right", 120, 22));
+    h.key("Enter");
+    scenes.push(app_scene(h, "Grid alignment: pick", "⌃k › Grid Alignment… › NULL: opens on where it sits now (Enter keeps it)", 120, 22));
+    h.app.popup = None;
+    {
+        use qurry_core::format::{Align, ValueClass};
+        h.app.state.store.set_grid_align(ValueClass::Null, Align::Right).unwrap();
+        h.app.align = h.app.state.store.set_grid_align(ValueClass::Boolean, Align::Left).unwrap();
+    }
+    h.app.close_tab_now(h.app.active);
     // Production log
     let entry = |id: &str, ago: i64, sql: &str, rows: Option<u64>, undo: bool, in_tx: bool| qurry_core::audit::AuditEntry {
         id: id.into(),

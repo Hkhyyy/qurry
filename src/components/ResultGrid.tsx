@@ -8,8 +8,9 @@ import { ContextMenu, MenuItem } from "./Explorer";
 import { DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, raw } from "../lib/extract";
 import { sharedReady, useSharedReady } from "../lib/shared";
 import { DEFAULTS, useFonts } from "../lib/prefs";
+import { alignTable, CELL_KIND, cellClasses, useGridAlign } from "../lib/gridAlign";
 import { ResultChart } from "./ResultChart";
-import { Button, CellEditor, CodeBlock, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, TextArea, ToolButton, Toolbar, ToolbarSep } from "../ui";
+import { Button, CellEditor, CodeBlock, cx, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, TextArea, ToolButton, Toolbar, ToolbarSep } from "../ui";
 import {
   IcChart, IcClock, IcExport, IcGear, IcMinus, IcPlus, IcPreview, IcReload, IcRevert, IcSearch, IcStop, IcSubmit, IcTranspose, IcView,
 } from "../ui/icons";
@@ -199,6 +200,10 @@ export function ResultGrid(p: Props) {
   const wasmReady = useSharedReady();
   const fracW = useMemo(() => cols.map((c, ci) => (isTimeType(c.typeName) ? fracWidth(result.rows.map((r) => r[ci])) : 0)), [cols, result.rows, wasmReady]);
   const shown = (v: Cell, ci: number) => (fracW[ci] && typeof v === "string" ? padFrac(v, fracW[ci]) : display(v));
+  // Value class of each cell and where it sits (Settings › Appearance › Alignment; the TUI grid's rule)
+  const classOf = useMemo(() => cols.map((c) => cellClasses(c.typeName)), [cols, wasmReady]);
+  const alignOverrides = useGridAlign();
+  const aligns = useMemo(() => alignTable(alignOverrides), [alignOverrides, wasmReady]);
 
   const virt = useVirtualizer({ count: rowCount, getScrollElement: () => scrollRef.current, estimateSize: () => ROW_H, overscan: 20 });
   // Horizontally, render only visible columns too (tables with many columns). Blank cells fill the width on both sides
@@ -808,11 +813,13 @@ export function ResultGrid(p: Props) {
                         </CellEditor>
                       );
                     }
+                    const cls = classOf[ci](val);
                     return (
                       <GridCell
                         key={ci}
                         width={widths[ci]}
-                        kind={val === null || val === DEFAULT_TOKEN ? "null" : typeof val === "number" ? "num" : undefined}
+                        kind={CELL_KIND[cls]}
+                        align={aligns[cls]}
                         selected={inSel(d, ci)}
                         active={selB?.r === d && selB?.c === ci}
                         changed={!!changed}
@@ -910,24 +917,31 @@ export function ResultGrid(p: Props) {
 
 /** View as | Transpose: swap rows and columns */
 function TransposedView({ cols, rows }: { cols: QueryResult["columns"]; rows: Cell[][] }) {
-  useSharedReady(); // time fractions come from the WASM module: render again once it has loaded
+  useSharedReady(); // time fractions and value classes come from the WASM module: render again once it has loaded
   const fracW = cols.map((c, ci) => (isTimeType(c.typeName) ? fracWidth(rows.map((r) => r[ci])) : 0));
+  const aligns = alignTable(useGridAlign());
   return (
     <div className="grid-scroll transposed">
       <table>
         <tbody>
-          {cols.map((c, ci) => (
-            <tr key={ci}>
-              <th>
-                <span className="col-name">{c.name}</span> <span className="col-type">{c.typeName.toLowerCase()}</span>
-              </th>
-              {rows.map((r, ri) => (
-                <td key={ri} className={r[ci] === null ? "null" : typeof r[ci] === "number" ? "num" : ""}>
-                  {fracW[ci] && typeof r[ci] === "string" ? padFrac(r[ci] as string, fracW[ci]) : display(r[ci])}
-                </td>
-              ))}
-            </tr>
-          ))}
+          {cols.map((c, ci) => {
+            const classOf = cellClasses(c.typeName);
+            return (
+              <tr key={ci}>
+                <th>
+                  <span className="col-name">{c.name}</span> <span className="col-type">{c.typeName.toLowerCase()}</span>
+                </th>
+                {rows.map((r, ri) => {
+                  const cls = classOf(r[ci]);
+                  return (
+                    <td key={ri} className={cx(CELL_KIND[cls], aligns[cls] && `al-${aligns[cls]}`)}>
+                      {fracW[ci] && typeof r[ci] === "string" ? padFrac(r[ci] as string, fracW[ci]) : display(r[ci])}
+                    </td>
+                  );
+                })}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

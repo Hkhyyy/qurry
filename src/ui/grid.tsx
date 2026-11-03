@@ -100,11 +100,12 @@ export const RowNumberCell = ({ children, width, selected, title, onMouseDown }:
   </div>
 );
 
-/** Data cell. kind = null (<null> · italic) · num (right-aligned · number color) */
+/** Data cell. kind = null (<null> · italic) · num (number color); align = Settings › Appearance › Alignment for its value class */
 export function GridCell({
   children,
   width,
   kind,
+  align,
   selected,
   active,
   changed,
@@ -117,6 +118,7 @@ export function GridCell({
   children: ReactNode;
   width: number;
   kind?: "null" | "num";
+  align?: "left" | "right" | "center";
   selected?: boolean;
   /** Cell with the cursor */
   active?: boolean;
@@ -131,7 +133,7 @@ export function GridCell({
 }) {
   return (
     <div
-      className={cx("cell", kind, selected && "sel", active && "active", changed && "changed", match && "match")}
+      className={cx("cell", kind, align && `al-${align}`, selected && "sel", active && "active", changed && "changed", match && "match")}
       style={{ width }}
       role="gridcell"
       aria-selected={selected}
