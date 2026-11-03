@@ -715,6 +715,9 @@ pub struct App {
     /// Tests only (testkit): answers console statements and the Production row counts instead of the database
     #[cfg(test)]
     pub fake_db: Option<FakeDb>,
+    /// Tests only: every command run_action ran, in order (tests/actions.rs checks keys reach the right one)
+    #[cfg(test)]
+    pub ran: Vec<Action>,
 }
 
 /// Tests only (testkit): stands in for the database, answering each query by its text
@@ -780,6 +783,8 @@ impl App {
             too_small: false,
             #[cfg(test)]
             fake_db: None,
+            #[cfg(test)]
+            ran: vec![],
             next_id: 1,
             exec: Default::default(),
             workspaces: vec![Workspace { id: uuid::Uuid::new_v4().to_string(), name: "Default".into(), conns: vec![], saved: None }],
@@ -817,6 +822,8 @@ impl App {
     }
 
     pub fn run_action(&mut self, a: Action) {
+        #[cfg(test)]
+        self.ran.push(a);
         let sel = self.tree.selected();
         let tab_conn = self.tabs.get(self.active).map(|t| (t.conn.clone(), t.db.clone()));
         match a {
