@@ -7,7 +7,7 @@ import { DateTimePicker, isTemporal } from "./DateTimePicker";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, raw } from "../lib/extract";
 import { sharedReady, useSharedReady } from "../lib/shared";
-import { cmd, eventSpec, hit, keyTitle, runKey } from "../lib/shortcuts";
+import { cmd, commandsFor, eventSpec, hit, keyTitle, runKey } from "../lib/shortcuts";
 import { ResultChart } from "./ResultChart";
 import { Button, CellEditor, CodeBlock, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, TextArea, ToolButton, Toolbar, ToolbarSep } from "../ui";
 import {
@@ -80,6 +80,7 @@ export function ResultGrid(p: Props) {
   const lit = (c: Cell) => (c === DEFAULT_TOKEN ? "DEFAULT" : sqlLiteral(c));
   const cols = result.columns;
   const scrollRef = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
   const [sorts, setSorts] = useState<SortKey[]>([]);
   const [selA, setSelA] = useState<Pos | null>(null);
   const [selB, setSelB] = useState<Pos | null>(null);
@@ -452,26 +453,30 @@ export function ResultGrid(p: Props) {
 
   // ─── Keyboard (DataGrip grid keymap) ───
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (editing || valueEditor) return;
+    // On .grid-wrap, so the keys work in Chart and Transpose too; the find bar's and filter fields' own typing stays theirs
+    if (editing || valueEditor || (e.target as HTMLElement).closest("input, textarea, select")) return;
     const mod = isMac ? e.metaKey : e.ctrlKey;
     const k = e.key.toLowerCase();
     const stop = () => {
       e.preventDefault();
       e.stopPropagation();
     };
-    if (mod && k === "a") {
+    // Chart and Transpose have no cell selection: only the grid commands below
+    const cells = !chart && !transposed;
+    if (cells && mod && k === "a") {
       setSelA({ r: 0, c: 0 });
       setSelB({ r: rowCount - 1, c: cols.length - 1 });
       return stop();
     }
-    if (mod && k === "c" && !e.shiftKey) return copySelection(false), stop();
-    if (mod && k === "v") return paste(), stop();
+    if (cells && mod && k === "c" && !e.shiftKey) return copySelection(false), stop();
+    if (cells && mod && k === "v") return paste(), stop();
     // Grid commands (Settings › Keymap › Data Grid): what the toolbar, its menus and the cell menu show. While running, the global
     // shortcut (editor.cancel) already cancelled when it has the same key (so it is not called twice)
     const spec = eventSpec(e.nativeEvent);
     if (e.defaultPrevented && hit(spec, "grid.cancel")) return stop();
-    if (runKey(spec, "grid", () => [...toolbarCommands(), ...(selB ? cellItems(selB.r, selB.c) : [])])) return stop();
-    if (!selB) return;
+    // A grid command's key is the grid's even when the command is disabled now (⌘r while running must not reload the WebView)
+    if (commandsFor(spec, "grid").length) return runKey(spec, "grid", () => [...toolbarCommands(), ...(selB && cells ? cellItems(selB.r, selB.c) : [])]), stop();
+    if (!selB || !cells) return;
     if ((e.key === "Enter" || e.key === "F2") && canEdit && active) return startEdit(active.r, active.c), stop();
     if (e.key === "Escape") {
       setFindOpen(false);
@@ -575,9 +580,10 @@ export function ResultGrid(p: Props) {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     setMenu({ x: r.left, y: r.bottom + 2, items });
   };
+  /** The find bar, opened and focused (its key, DataGrip); the toolbar button toggles it */
   const openFind = () => {
-    setFindOpen((f) => !f);
-    setTimeout(() => document.querySelector<HTMLInputElement>(".grid-find input")?.focus());
+    setFindOpen(true);
+    setTimeout(() => wrapRef.current?.querySelector<HTMLInputElement>(".grid-find input")?.focus());
   };
   const viewItems = (): MenuItem[] => [
     { label: (!transposed && !chart ? "✓ " : "　") + "Table", ...cmd("grid.viewTable"), action: () => (setTransposed(false), setChart(false)) },
@@ -612,7 +618,7 @@ export function ResultGrid(p: Props) {
   const rowsLabel = `${baseCount}${result.truncated ? "+" : ""} row${baseCount === 1 ? "" : "s"}`;
 
   return (
-    <div className="grid-wrap">
+    <div className="grid-wrap" ref={wrapRef} tabIndex={-1} onKeyDown={onKeyDown}>
       {/* ── DataGrip grid toolbar ── */}
       <Toolbar onMouseDown={(e) => e.stopPropagation()}>
         <IconButton title={keyTitle("Reload Page", "grid.reload")} onClick={p.onReload} disabled={p.running}><IcReload /></IconButton>
@@ -648,7 +654,7 @@ export function ResultGrid(p: Props) {
         {p.onDdl && <ToolButton title={keyTitle("Go to DDL", "grid.ddl")} onClick={p.onDdl}>DDL</ToolButton>}
         <IconButton active={findOpen}
           title={keyTitle("Find on Current Page", "grid.find")}
-          onClick={openFind}
+          onClick={() => (findOpen ? setFindOpen(false) : openFind())}
         >
           <IcSearch />
         </IconButton>
@@ -745,7 +751,6 @@ export function ResultGrid(p: Props) {
           className="grid-scroll"
           ref={scrollRef}
           tabIndex={0}
-          onKeyDown={onKeyDown}
           onMouseUp={() => (dragging.current = false)}
           onMouseLeave={() => (dragging.current = false)}
         >

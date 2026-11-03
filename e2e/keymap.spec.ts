@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { dialog, expect, openApp, tabStrips, test, treeItem, work } from "./app";
+import { dialog, editor, expect, openApp, openConsole, tabStrips, test, treeItem, typeSql, work } from "./app";
 
 // The command table is imported as JSON, the key labels are drawn by the shared WebAssembly module (main.tsx loads it without waiting),
 // and by a small TS copy of its rule until then
@@ -48,13 +48,13 @@ test("the keymap editor records shortcuts when the WebAssembly module fails to l
 
 // Every menu, toolbar and Find Action command is in Settings › Keymap, the ones without a default key too: a key given to one runs it
 // where its section says (Global: anywhere; Database Explorer: on the selected node; Data Grid: in the focused grid)
-async function bind(page: Page, section: string, title: string, key: string, label: string) {
+async function bind(page: Page, section: string, title: string, key: string, label: string, had = "none") {
   await page.keyboard.press("Meta+Comma");
   await dialog(page).locator(".settings-nav").getByText("Keymap", { exact: true }).click();
   const exact = (s: string) => new RegExp(`^${s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
   const scope = dialog(page).locator(".keymap-section", { has: page.locator(".keymap-title", { hasText: exact(section) }) });
   const row = scope.locator(".keymap-edit-row", { has: page.locator(".keymap-desc", { hasText: exact(title) }) });
-  await expect(row.locator(".keymap-chips")).toHaveText("none");
+  await expect(row.locator(".keymap-chips")).toHaveText(had);
   await row.getByRole("button", { name: "Change" }).click();
   await page.keyboard.press(key);
   await expect(row.locator(".keymap-chip")).toHaveText([`${label}×`]);
@@ -95,4 +95,29 @@ test("a key given to a grid toolbar command runs it in the focused grid", async 
   await work(page).getByRole("gridcell", { name: "user_1", exact: true }).click();
   await page.keyboard.press("Meta+KeyJ");
   await expect(work(page).locator(".grid-scroll.transposed")).toBeVisible();
+});
+
+test("in search results only command shortcuts act: Backspace given to Go to DDL still edits the search text", async ({ page }) => {
+  await openApp(page);
+  await bind(page, "Database Explorer", "Go to DDL", "Backspace", "⌫", "⌘b×");
+  await page.keyboard.press("Meta+KeyO");
+  await page.keyboard.type("users");
+  await page.keyboard.press("Backspace");
+  await expect(page.locator(".search-everywhere input")).toHaveValue("user");
+  await page.keyboard.press("Escape");
+  // No DDL tab opened (one empty strip)
+  await expect.poll(() => tabStrips(page)).toEqual([""]);
+});
+
+test("console keys (Browse Query History) act only in the console, not in its result grid", async ({ page }) => {
+  await openApp(page);
+  await openConsole(page);
+  await typeSql(page, "select 1 as a;");
+  await page.keyboard.press("Meta+Enter");
+  await work(page).getByRole("gridcell", { name: "1", exact: true }).click();
+  await page.keyboard.press("Meta+Alt+KeyE");
+  await expect(dialog(page)).toHaveCount(0);
+  await editor(page).click();
+  await page.keyboard.press("Meta+Alt+KeyE");
+  await expect(dialog(page)).toContainText("Query History");
 });

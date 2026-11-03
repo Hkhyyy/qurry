@@ -79,6 +79,10 @@ export function useGlobalShortcuts({
       const spec = eventSpec(e);
       const is = (id: string) => hit(spec, id);
       const inTree = (document.activeElement as HTMLElement | null)?.closest?.("[data-tree]");
+      /** Console (editor-scope) commands handled here: the console's editor or its tab has the keys (a clicked tab leaves the focus on
+       *  the page), not a result grid or the tree */
+      const ae = document.activeElement as HTMLElement | null;
+      const inConsole = !ae || ae === document.body || !!ae.closest?.(".monaco-editor, .editor-group > .tabs");
       const inInput = ["INPUT", "TEXTAREA", "SELECT"].includes((document.activeElement as HTMLElement | null)?.tagName ?? "");
       /** Tree commands: a node is selected and the explorer (not one of its fields) has the keys */
       const node = inTree && treeSel && !inInput ? treeSel : null;
@@ -155,7 +159,7 @@ export function useGlobalShortcuts({
           else refreshAll();
         },
         "editor.history": () => {
-          if (active?.kind !== "console") return false;
+          if (active?.kind !== "console" || !inConsole) return false;
           e.preventDefault();
           setHistoryTab("history");
           setHistoryFor(active.id);
@@ -167,7 +171,7 @@ export function useGlobalShortcuts({
         },
         // ⇧F6 = rename console (same as Rename File… in the tab menu)
         "console.rename": () => {
-          if (active?.kind !== "console") return false;
+          if (active?.kind !== "console" || !inConsole) return false;
           e.preventDefault();
           renameConsole(active);
         },

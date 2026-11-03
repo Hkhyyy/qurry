@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ConnectionView, dbVisible, meta, targetId } from "../lib/api";
 import { fuzzyScore } from "../lib/fuzzy";
 import { useSharedReady } from "../lib/shared";
-import { cmd, eventSpec, hit } from "../lib/shortcuts";
+import { bindable, cmd, eventSpec, hit } from "../lib/shortcuts";
 import { ColumnIcon, RoutineIcon, SchemaIcon, SequenceIcon, TableIcon, ViewIcon } from "../ui/icons";
 import { Kbd, KeyHints, List, ListGroup, ListItem, Notice, Overlay, Popover, Row, SearchField, Select, Spacer, Tabs } from "../ui";
 
@@ -268,8 +268,10 @@ export function SearchEverywhere(p: Props) {
     };
     if (e.key === "Escape") return go(p.onClose);
     if (e.key === "Tab") return go(() => setTab(TABS[(TABS.findIndex((t) => t.id === tab) + (e.shiftKey ? -1 : 1) + TABS.length) % TABS.length].id));
-    // The Database Explorer's keys act on the selected result (DataGrip): Edit Data, Go to DDL, Quick Documentation, Select In
-    const spec = eventSpec(e);
+    // The Database Explorer's keys act on the selected result (DataGrip): Edit Data, Go to DDL, Quick Documentation, Select In.
+    // Only command shortcuts (a modifier or an F key): Backspace, Delete, Insert or ⇧↩ given to a tree command stay the search field's
+    const s = eventSpec(e);
+    const spec = s && bindable(s) ? s : null;
     if (hit(spec, "tree.editData")) return go(() => run(cur, "data"));
     if (hit(spec, "tree.ddl")) return go(() => run(cur, "ddl"));
     if (hit(spec, "selectIn")) return go(() => run(cur, "select"));
