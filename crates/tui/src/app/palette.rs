@@ -58,7 +58,7 @@ impl App {
         let items = ACTIONS
             .iter()
             .filter(|d| d.action != Action::Palette)
-            .map(|d| PItem { label: title(d.action).to_string(), hint: if d.hint.is_empty() { self.keys.label(d.action) } else { d.hint.to_string() }, action: PAction::Act(d.action) })
+            .map(|d| PItem { label: title(d.action).to_string(), hint: self.keys.hint(d.action, d.hint), action: PAction::Act(d.action) })
             .collect();
         self.popup = Some(Popup::Palette(Palette { title: "Actions".into(), input: TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
     }
@@ -75,7 +75,7 @@ impl App {
     pub fn palette_everywhere(&mut self) {
         let mut items: Vec<PItem> = self.mru.iter().filter_map(|id| self.tabs.iter().find(|t| t.id == *id)).map(|t| PItem { label: self.tab_label(t), hint: format!("tab · {}", t.db), action: PAction::Tab(t.id) }).collect();
         items.extend(ACTIONS.iter().filter(|d| d.action != Action::SearchEverywhere).map(|d| {
-            let key = if d.hint.is_empty() { self.keys.label(d.action) } else { d.hint.to_string() };
+            let key = self.keys.hint(d.action, d.hint);
             PItem { label: title(d.action).to_string(), hint: format!("action · {key}"), action: PAction::Act(d.action) }
         }));
         self.palette_objects("Search Everywhere", items);

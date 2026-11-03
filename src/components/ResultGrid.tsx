@@ -9,6 +9,8 @@ import { DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, raw } from "../
 import { sharedReady, useSharedReady } from "../lib/shared";
 import { DEFAULTS, useFonts } from "../lib/prefs";
 import { alignTable, CELL_KIND, cellClasses, useGridAlign } from "../lib/gridAlign";
+
+import { cmd, commandsFor, eventSpec, hit, keyTitle, runKey } from "../lib/shortcuts";
 import { ResultChart } from "./ResultChart";
 import { Button, CellEditor, CodeBlock, cx, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, TextArea, ToolButton, Toolbar, ToolbarSep } from "../ui";
 import {
@@ -81,6 +83,7 @@ export function ResultGrid(p: Props) {
   const lit = (c: Cell) => (c === DEFAULT_TOKEN ? "DEFAULT" : sqlLiteral(c));
   const cols = result.columns;
   const scrollRef = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
   const [sorts, setSorts] = useState<SortKey[]>([]);
   const [selA, setSelA] = useState<Pos | null>(null);
   const [selB, setSelB] = useState<Pos | null>(null);
@@ -461,40 +464,30 @@ export function ResultGrid(p: Props) {
 
   // ─── Keyboard (DataGrip grid keymap) ───
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (editing || valueEditor) return;
+    // On .grid-wrap, so the keys work in Chart and Transpose too; the find bar's and filter fields' own typing stays theirs
+    if (editing || valueEditor || (e.target as HTMLElement).closest("input, textarea, select")) return;
     const mod = isMac ? e.metaKey : e.ctrlKey;
     const k = e.key.toLowerCase();
     const stop = () => {
       e.preventDefault();
       e.stopPropagation();
     };
-    if (mod && k === "a") {
+    // Chart and Transpose have no cell selection: only the grid commands below
+    const cells = !chart && !transposed;
+    if (cells && mod && k === "a") {
       setSelA({ r: 0, c: 0 });
       setSelB({ r: rowCount - 1, c: cols.length - 1 });
       return stop();
     }
-    if (mod && k === "c" && !e.shiftKey) return copySelection(false), stop();
-    if (mod && k === "v") return paste(), stop();
-    if (mod && k === "f") {
-      setFindOpen(true);
-      setTimeout(() => document.querySelector<HTMLInputElement>(".grid-find input")?.focus());
-      return stop();
-    }
-    if (mod && k === "r") return p.onReload(), stop();
-    // While running, the global shortcut (editor.cancel) already cancelled (so it is not called twice)
-    if (mod && e.key === "F2") return e.defaultPrevented || p.onCancel(), stop();
-    if (mod && e.altKey && e.code === "KeyN") return setNull(), stop();
-    if (mod && e.altKey && e.code === "KeyD") return setDefault(), stop();
-    if (mod && e.altKey && e.code === "KeyZ") return revertSelected(), stop();
-    if (mod && k === "n") return addRow(), stop();
-    if (mod && k === "d") return cloneRow(), stop();
-    if (mod && e.key === "Backspace") return deleteRows(), stop();
-    if (mod && e.key === "Enter") return submit(), stop();
-    if (e.shiftKey && e.key === "Enter" && active) {
-      setValueEditor({ r: active.r, c: active.c, text: raw(valueAt(active.r, active.c)) });
-      return stop();
-    }
-    if (!selB) return;
+    if (cells && mod && k === "c" && !e.shiftKey) return copySelection(false), stop();
+    if (cells && mod && k === "v") return paste(), stop();
+    // Grid commands (Settings › Keymap › Data Grid): what the toolbar, its menus and the cell menu show. While running, the global
+    // shortcut (editor.cancel) already cancelled when it has the same key (so it is not called twice)
+    const spec = eventSpec(e.nativeEvent);
+    if (e.defaultPrevented && hit(spec, "grid.cancel")) return stop();
+    // A grid command's key is the grid's even when the command is disabled now (⌘r while running must not reload the WebView)
+    if (commandsFor(spec, "grid").length) return runKey(spec, "grid", () => [...toolbarCommands(), ...(selB && cells ? cellItems(selB.r, selB.c) : [])]), stop();
+    if (!selB || !cells) return;
     if ((e.key === "Enter" || e.key === "F2") && canEdit && active) return startEdit(active.r, active.c), stop();
     if (e.key === "Escape") {
       setFindOpen(false);
@@ -519,42 +512,39 @@ export function ResultGrid(p: Props) {
   };
 
   // ─── Cell context menu ───
-  const openCellMenu = (e: React.MouseEvent, d: number, c: number) => {
-    e.preventDefault();
-    if (!inSel(d, c)) selectCell({ r: d, c }, false);
+  /** The cell menu of display row d, column c. Grid command keys run its entries for the selected cell */
+  const cellItems = (d: number, c: number): MenuItem[] => {
     const r = dataIndex(d);
     const v = valueAt(r, c);
-    const k = isMac
-      ? { vedit: "⇧↩", nul: "⌥⌘n", def: "⌥⌘d", copy: "⌘c", paste: "⌘v", del: "⌘⌫", clone: "⌘d", revert: "⌥⌘z", rec: "⇧⌘↩" }
-      : { vedit: "Shift+Enter", nul: "Ctrl+Alt+n", def: "Ctrl+Alt+d", copy: "Ctrl+c", paste: "Ctrl+v", del: "Ctrl+Backspace", clone: "Ctrl+d", revert: "Ctrl+Alt+z", rec: "Ctrl+Shift+Enter" };
+    const k = isMac ? { copy: "⌘c", paste: "⌘v" } : { copy: "Ctrl+c", paste: "Ctrl+v" };
     const name = quoteIdent(cols[c].name);
     // Row values at the moment the menu opened (the chosen row stays even if auto refresh reorders rows — so the wrong session is not killed)
     const rowObj = Object.fromEntries(cols.map((col, i) => [col.name, valueAt(r, i)]));
     const items: MenuItem[] = [
       ...(p.rowActions?.length ? ([...p.rowActions.map((a) => ({ label: a.label, danger: a.danger, action: () => a.run(rowObj) })), { separator: true }] as MenuItem[]) : []),
       ...(canEdit ? ([{ label: "Edit", shortcut: "↩", action: () => startEdit(r, c) }] as MenuItem[]) : []),
-      { label: "Open in Value Editor", shortcut: k.vedit, action: () => setValueEditor({ r, c, text: raw(v) }) },
+      { label: "Open in Value Editor", ...cmd("grid.valueEditor"), action: () => setValueEditor({ r, c, text: raw(v) }) },
       ...(canEdit
         ? ([
-            { label: "Revert Selected", shortcut: k.revert, action: revertSelected },
+            { label: "Revert Selected", ...cmd("grid.revert"), action: revertSelected },
             { separator: true },
-            { label: "Set DEFAULT", shortcut: k.def, action: setDefault },
-            { label: "NULL", shortcut: k.nul, action: setNull },
-            { label: "Generate UUID", action: genUuid },
+            { label: "Set DEFAULT", ...cmd("grid.setDefault"), action: setDefault },
+            { label: "NULL", ...cmd("grid.setNull"), action: setNull },
+            { label: "Generate UUID", ...cmd("grid.genUuid"), action: genUuid },
           ] as MenuItem[])
         : []),
       { separator: true },
       { label: "Copy", shortcut: k.copy, action: () => copySelection(false) },
-      { label: "Copy with Headers", action: () => copySelection(true), disabled: extractor !== "CSV" && extractor !== "TSV" },
-      { label: "Copy as IN List  ('a', 'b', …)", action: copyInList },
+      { label: "Copy with Headers", ...cmd("grid.copyHeaders"), action: () => copySelection(true), disabled: extractor !== "CSV" && extractor !== "TSV" },
+      { label: "Copy as IN List  ('a', 'b', …)", ...cmd("grid.copyInList"), action: copyInList },
       { label: "Change Data Extractor", submenu: EXTRACTORS.map((x) => ({ label: (x === extractor ? "✓ " : "　") + x, action: () => setExtractor(x) })) },
       ...(canEdit ? ([{ label: "Paste", shortcut: k.paste, action: paste }] as MenuItem[]) : []),
       ...(canEdit
         ? ([
             { separator: true },
-            { label: "Add Row", action: addRow },
-            { label: "Delete Row", shortcut: k.del, action: deleteRows },
-            { label: "Clone Row", shortcut: k.clone, action: cloneRow },
+            { label: "Add Row", ...cmd("grid.addRow"), action: addRow },
+            { label: "Delete Row", ...cmd("grid.deleteRows"), action: deleteRows },
+            { label: "Clone Row", ...cmd("grid.cloneRow"), action: cloneRow },
           ] as MenuItem[])
         : []),
       ...(p.onFindSimilar && p.edit?.pk.length
@@ -584,10 +574,15 @@ export function ResultGrid(p: Props) {
           ] as MenuItem[])
         : []),
       { separator: true },
-      { label: "Export Data…", action: p.onExport },
-      ...(p.onDdl ? ([{ label: "Go To DDL", shortcut: isMac ? "⌘b" : "Ctrl+b", action: p.onDdl }] as MenuItem[]) : []),
+      { label: "Export Data…", ...cmd("grid.export"), action: p.onExport },
+      ...(p.onDdl ? ([{ label: "Go To DDL", ...cmd("grid.ddl"), action: p.onDdl }] as MenuItem[]) : []),
     ];
-    setMenu({ x: e.clientX, y: e.clientY, items });
+    return items;
+  };
+  const openCellMenu = (e: React.MouseEvent, d: number, c: number) => {
+    e.preventDefault();
+    if (!inSel(d, c)) selectCell({ r: d, c }, false);
+    setMenu({ x: e.clientX, y: e.clientY, items: cellItems(d, c) });
   };
 
   // ─── Toolbar dropdowns ───
@@ -596,15 +591,48 @@ export function ResultGrid(p: Props) {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     setMenu({ x: r.left, y: r.bottom + 2, items });
   };
-  const k = isMac ? { reload: "⌘r", cancel: "⌘F2", add: "⌘n", del: "⌘⌫", revert: "⌥⌘z", submit: "⌘↩", find: "⌘f" } : { reload: "Ctrl+r", cancel: "Ctrl+F2", add: "Ctrl+n", del: "Ctrl+Backspace", revert: "Ctrl+Alt+z", submit: "Ctrl+Enter", find: "Ctrl+f" };
+  /** The find bar, opened and focused (its key, DataGrip); the toolbar button toggles it */
+  const openFind = () => {
+    setFindOpen(true);
+    setTimeout(() => wrapRef.current?.querySelector<HTMLInputElement>(".grid-find input")?.focus());
+  };
+  const viewItems = (): MenuItem[] => [
+    { label: (!transposed && !chart ? "✓ " : "　") + "Table", ...cmd("grid.viewTable"), action: () => (setTransposed(false), setChart(false)) },
+    { label: (transposed ? "✓ " : "　") + "Transpose", ...cmd("grid.viewTranspose"), action: () => (setTransposed(true), setChart(false)) },
+    { label: (chart ? "✓ " : "　") + "Chart", ...cmd("grid.viewChart"), action: () => (setChart(true), setTransposed(false)) },
+  ];
+  const optionItems = (): MenuItem[] => [
+    ...(p.filterBar ? ([{ label: (showFilter ? "✓ " : "　") + "Show Filter", ...cmd("grid.showFilter"), action: () => setShowFilter((v) => !v) }] as MenuItem[]) : []),
+    ...(p.onServerSort ? ([{ label: (sortViaOrderBy ? "✓ " : "　") + "Sort via ORDER BY", ...cmd("grid.sortOrderBy"), action: () => { setSorts([]); setSortViaOrderBy((v) => !v); } }] as MenuItem[]) : []),
+    { label: "Reset View", ...cmd("grid.resetView"), action: () => { setSorts([]); setTransposed(false); setChart(false); if (serverSort) p.onServerSort!(""); } },
+    { separator: true },
+    { label: "View Query", ...cmd("grid.viewQuery"), action: () => setShowQuery(true), disabled: !p.query },
+    ...(p.onCopyQueryToConsole ? ([{ label: "Copy Query to Console", ...cmd("grid.queryToConsole"), action: () => p.query && p.onCopyQueryToConsole!(p.query), disabled: !p.query }] as MenuItem[]) : []),
+    { label: "Copy Query to Clipboard", ...cmd("grid.copyQuery"), action: () => p.query && navigator.clipboard.writeText(p.query), disabled: !p.query },
+  ];
+  /** What the toolbar's buttons and menus run, for their command keys (the buttons are drawn below with the same conditions) */
+  const toolbarCommands = (): MenuItem[] => [
+    { label: "Reload Page", ...cmd("grid.reload"), action: p.onReload, disabled: p.running },
+    { label: "Cancel Running Statements", ...cmd("grid.cancel"), action: p.onCancel, disabled: !p.running },
+    { label: "Add Row", ...cmd("grid.addRow"), action: addRow, disabled: !canEdit },
+    { label: "Delete Row", ...cmd("grid.deleteRows"), action: deleteRows, disabled: !canEdit || !rect },
+    { label: "Revert Selected", ...cmd("grid.revert"), action: revertSelected, disabled: !pendingCount },
+    { label: "Preview Pending Changes", ...cmd("grid.preview"), action: () => setPreview({ sql: buildStatements(), readOnly: true }), disabled: !pendingCount },
+    { label: "Submit", ...cmd("grid.submit"), action: submit, disabled: !pendingCount },
+    ...(p.onDdl ? ([{ label: "Go to DDL", ...cmd("grid.ddl"), action: p.onDdl }] as MenuItem[]) : []),
+    { label: "Find on Current Page", ...cmd("grid.find"), action: openFind },
+    { label: "Export Data…", ...cmd("grid.export"), action: p.onExport },
+    ...viewItems(),
+    ...optionItems(),
+  ];
 
   const rowsLabel = `${baseCount}${result.truncated ? "+" : ""} row${baseCount === 1 ? "" : "s"}`;
 
   return (
-    <div className="grid-wrap">
+    <div className="grid-wrap" ref={wrapRef} tabIndex={-1} onKeyDown={onKeyDown}>
       {/* ── DataGrip grid toolbar ── */}
       <Toolbar onMouseDown={(e) => e.stopPropagation()}>
-        <IconButton title={`Reload Page (${k.reload})`} onClick={p.onReload} disabled={p.running}><IcReload /></IconButton>
+        <IconButton title={keyTitle("Reload Page", "grid.reload")} onClick={p.onReload} disabled={p.running}><IcReload /></IconButton>
         <IconButton active={!!interval}
           title="Update Interval"
           onClick={(e) =>
@@ -615,13 +643,13 @@ export function ResultGrid(p: Props) {
         >
           <IcClock />
         </IconButton>
-        <IconButton tone="danger" title={`Cancel Running Statements (${k.cancel})`} onClick={p.onCancel} disabled={!p.running}><IcStop /></IconButton>
+        <IconButton tone="danger" title={keyTitle("Cancel Running Statements", "grid.cancel")} onClick={p.onCancel} disabled={!p.running}><IcStop /></IconButton>
         <ToolbarSep />
-        <IconButton title={`Add Row (${k.add})`} onClick={addRow} disabled={!canEdit}><IcPlus /></IconButton>
-        <IconButton title={`Delete Row (${k.del})`} onClick={deleteRows} disabled={!canEdit || !rect}><IcMinus /></IconButton>
-        <IconButton title={`Revert Selected (${k.revert})`} onClick={revertSelected} disabled={!pendingCount}><IcRevert /></IconButton>
-        <IconButton title="Preview Pending Changes" onClick={() => setPreview({ sql: buildStatements(), readOnly: true })} disabled={!pendingCount}><IcPreview /></IconButton>
-        <IconButton active={false} className={pendingCount ? "accent" : undefined} title={`Submit (${k.submit})`} onClick={submit} disabled={!pendingCount}><IcSubmit /></IconButton>
+        <IconButton title={keyTitle("Add Row", "grid.addRow")} onClick={addRow} disabled={!canEdit}><IcPlus /></IconButton>
+        <IconButton title={keyTitle("Delete Row", "grid.deleteRows")} onClick={deleteRows} disabled={!canEdit || !rect}><IcMinus /></IconButton>
+        <IconButton title={keyTitle("Revert Selected", "grid.revert")} onClick={revertSelected} disabled={!pendingCount}><IcRevert /></IconButton>
+        <IconButton title={keyTitle("Preview Pending Changes", "grid.preview")} onClick={() => setPreview({ sql: buildStatements(), readOnly: true })} disabled={!pendingCount}><IcPreview /></IconButton>
+        <IconButton active={false} className={pendingCount ? "accent" : undefined} title={keyTitle("Submit", "grid.submit")} onClick={submit} disabled={!pendingCount}><IcSubmit /></IconButton>
         <ToolbarSep />
         <ToolButton
           title="Transaction mode"
@@ -634,13 +662,10 @@ export function ResultGrid(p: Props) {
         >
           Tx: Auto ▾
         </ToolButton>
-        {p.onDdl && <ToolButton title="Go to DDL" onClick={p.onDdl}>DDL</ToolButton>}
+        {p.onDdl && <ToolButton title={keyTitle("Go to DDL", "grid.ddl")} onClick={p.onDdl}>DDL</ToolButton>}
         <IconButton active={findOpen}
-          title={`Find on Current Page (${k.find})`}
-          onClick={() => {
-            setFindOpen((f) => !f);
-            setTimeout(() => document.querySelector<HTMLInputElement>(".grid-find input")?.focus());
-          }}
+          title={keyTitle("Find on Current Page", "grid.find")}
+          onClick={() => (findOpen ? setFindOpen(false) : openFind())}
         >
           <IcSearch />
         </IconButton>
@@ -649,32 +674,16 @@ export function ResultGrid(p: Props) {
         <ToolButton title="Data Extractor (copy format)" onClick={(e) => dropdown(e, EXTRACTORS.map((x) => ({ label: (x === extractor ? "✓ " : "　") + x, action: () => setExtractor(x) })))}>
           {extractor} ▾
         </ToolButton>
-        <IconButton title="Export Data…" onClick={p.onExport}><IcExport /></IconButton>
+        <IconButton title={keyTitle("Export Data…", "grid.export")} onClick={p.onExport}><IcExport /></IconButton>
         <IconButton active={transposed || chart}
           title="View as"
-          onClick={(e) =>
-            dropdown(e, [
-              { label: (!transposed && !chart ? "✓ " : "　") + "Table", action: () => (setTransposed(false), setChart(false)) },
-              { label: (transposed ? "✓ " : "　") + "Transpose", action: () => (setTransposed(true), setChart(false)) },
-              { label: (chart ? "✓ " : "　") + "Chart", action: () => (setChart(true), setTransposed(false)) },
-            ])
-          }
+          onClick={(e) => dropdown(e, viewItems())}
         >
           {chart ? <IcChart /> : transposed ? <IcTranspose /> : <IcView />}
         </IconButton>
         <IconButton
           title="Show Options Menu"
-          onClick={(e) =>
-            dropdown(e, [
-              ...(p.filterBar ? ([{ label: (showFilter ? "✓ " : "　") + "Show Filter", action: () => setShowFilter((v) => !v) }] as MenuItem[]) : []),
-              ...(p.onServerSort ? ([{ label: (sortViaOrderBy ? "✓ " : "　") + "Sort via ORDER BY", action: () => { setSorts([]); setSortViaOrderBy((v) => !v); } }] as MenuItem[]) : []),
-              { label: "Reset View", action: () => { setSorts([]); setTransposed(false); setChart(false); if (serverSort) p.onServerSort!(""); } },
-              { separator: true },
-              { label: "View Query", action: () => setShowQuery(true), disabled: !p.query },
-              ...(p.onCopyQueryToConsole ? ([{ label: "Copy Query to Console", action: () => p.query && p.onCopyQueryToConsole!(p.query), disabled: !p.query }] as MenuItem[]) : []),
-              { label: "Copy Query to Clipboard", action: () => p.query && navigator.clipboard.writeText(p.query), disabled: !p.query },
-            ])
-          }
+          onClick={(e) => dropdown(e, optionItems())}
         >
           <IcGear />
         </IconButton>
@@ -753,7 +762,6 @@ export function ResultGrid(p: Props) {
           className="grid-scroll"
           ref={scrollRef}
           tabIndex={0}
-          onKeyDown={onKeyDown}
           onMouseUp={() => (dragging.current = false)}
           onMouseLeave={() => (dragging.current = false)}
         >

@@ -177,4 +177,46 @@ test("Settings › Alignment: clicking a kind's name focuses its own select, not
   await expect(dialog(page).getByRole("combobox", { name: "NULL alignment" })).toBeFocused();
   await dialog(page).getByText("Alignment", { exact: true }).click();
   await expect(dialog(page).getByRole("combobox", { name: "String alignment" })).not.toBeFocused();
+
+test("⌘f opens and focuses the find bar, pressed again it stays open (the toolbar button toggles)", async ({ page }) => {
+  await work(page).getByRole("gridcell", { name: "user_1", exact: true }).click();
+  const find = work(page).locator(".grid-find input");
+  await page.keyboard.press("Meta+KeyF");
+  await expect(find).toBeFocused();
+  await work(page).getByRole("gridcell", { name: "user_2", exact: true }).click();
+  await page.keyboard.press("Meta+KeyF");
+  await expect(find).toBeFocused();
+  await work(page).getByRole("button", { name: /^Find on Current Page/ }).click();
+  await expect(find).toHaveCount(0);
+});
+
+test("a grid key whose command is disabled now still belongs to the grid (⌘r while reloading doesn't reach the WebView)", async ({ page }) => {
+  await work(page).locator(".dg-filter-field input").first().fill("pg_sleep(3) is not null");
+  await page.keyboard.press("Enter");
+  await work(page).getByRole("gridcell", { name: "user_1", exact: true }).click();
+  await expect(work(page).getByRole("button", { name: /^Reload Page/ })).toBeDisabled();
+  // Read after the event has gone through the app's handlers (the grid stops it, so a bubbling listener never sees it)
+  await page.evaluate(() => window.addEventListener("keydown", (e) => e.code === "KeyR" && setTimeout(() => ((window as any).__reloadKey = e.defaultPrevented)), true));
+  await page.keyboard.press("Meta+KeyR");
+  await expect.poll(() => page.evaluate(() => (window as any).__reloadKey)).toBe(true);
+});
+
+test("grid keys work in Transpose and Chart too (find, back to Table)", async ({ page }) => {
+  await work(page).getByRole("button", { name: "View as" }).click();
+  await menuItem(page, "Transpose").click();
+  await work(page).locator(".grid-scroll.transposed").click();
+  await page.keyboard.press("Meta+KeyF");
+  await expect(work(page).locator(".grid-find input")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await work(page).getByRole("button", { name: "View as" }).click();
+  await menuItem(page, "Chart").click();
+  await work(page).locator(".grid-wrap").click({ position: { x: 300, y: 300 } });
+  await page.evaluate(() => {
+    const w = window as any;
+    const orig = w.__TAURI_INTERNALS__.invoke;
+    w.__calls = [];
+    w.__TAURI_INTERNALS__.invoke = (cmd: string, args: unknown) => (w.__calls.push(cmd), orig(cmd, args));
+  });
+  await page.keyboard.press("Meta+KeyR");
+  await expect.poll(() => page.evaluate(() => (window as any).__calls)).toContain("run_query");
 });

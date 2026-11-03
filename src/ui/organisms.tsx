@@ -139,7 +139,8 @@ export const Td = ({ children, num, mono, muted, className, ...rest }: TdHTMLAtt
 
 // ───────── Menu ─────────
 export type MenuEntry =
-  | { label: string; action: () => void; shortcut?: string; danger?: boolean; disabled?: boolean }
+  /** id: the keymap command it runs (lib/shortcuts.ts), so its key runs it from the keyboard too */
+  | { label: string; action: () => void; shortcut?: string; danger?: boolean; disabled?: boolean; id?: string }
   | { separator: true }
   /** Non-clickable description line */
   | { heading: string }

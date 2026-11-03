@@ -1,6 +1,10 @@
 use super::*;
 
 pub(super) fn tree_key(app: &mut App, k: KeyEvent) {
+    // The explorer's commands (n new data source, c connect …: pane keys, F1 › Database Explorer keys)
+    if let Some(a) = app.keys.lookup_in(Scope::Tree, &k) {
+        return app.run_action(a);
+    }
     let Some(k) = plain(k) else { return };
     let n = app.tree.visible().len();
     // Typing a speed search
@@ -68,16 +72,6 @@ pub(super) fn tree_key(app: &mut App, k: KeyEvent) {
                 app.activate_node(&nd, true)
             }
         }
-        KeyCode::Char('n') => app.run_action(Action::NewDataSource),
-        KeyCode::Char('e') => app.run_action(Action::EditDataSource),
-        // Move the selected Data Source to another workspace
-        KeyCode::Char('w') => app.ws_move_conn_pick(),
-        KeyCode::Char('D') => app.run_action(Action::DeleteDataSource),
-        KeyCode::Char('c') => app.run_action(Action::Connect),
-        KeyCode::Char('X') => app.run_action(Action::Disconnect),
-        KeyCode::Char('r') => app.run_action(Action::Refresh),
-        KeyCode::Char('s') => app.run_action(Action::ManageSchemas),
-        KeyCode::Char('?') => app.run_action(Action::Help),
         KeyCode::Char('y') => {
             if let Some(nd) = sel {
                 let r = match (&nd.schema, &nd.name) {

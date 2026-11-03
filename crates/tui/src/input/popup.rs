@@ -14,14 +14,27 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
             let message = if k.code == KeyCode::Esc {
                 None
             } else {
-                let a = crate::keys::DEFAULT_KEYS[sel].0;
-                match crate::keys::spec(&k).filter(|s| crate::keys::bindable(s)) {
-                    None => Some(format!("{} can't be a command key — use a {} combination or an F key", crate::keys::spec(&k).map(|s| crate::keys::disp(&s)).unwrap_or_else(|| "That key".into()), if cfg!(target_os = "macos") { "⌃/⌥" } else { "Ctrl/Alt" })),
+                let s = crate::keys::COMMANDS[sel].0;
+                let spec = crate::keys::spec(&k);
+                match spec.clone().filter(|x| crate::keys::bindable_for(s, x)) {
+                    None => {
+                        let key = spec.map(|x| if s.pane == Scope::Global { crate::keys::disp(&x) } else { crate::keys::pane_disp(&x) }).unwrap_or_else(|| "That key".into());
+                        let mods = if cfg!(target_os = "macos") { "⌃/⌥" } else { "Ctrl/Alt" };
+                        Some(if s.pane == Scope::Global {
+                            format!("{key} can't be a command key — use a {mods} combination or an F key")
+                        } else {
+                            format!("{key} can't be a key in the {} — use a letter, a {mods} combination or an F key (arrows, Enter, Tab and the moving and copying letters stay fixed)", crate::keys::pane_name(s.pane))
+                        })
+                    }
+                    Some(key) if app.keys.reserved(s, &key).is_some() => {
+                        let a = app.keys.reserved(s, &key).unwrap();
+                        Some(format!("{} is the key of {} — pick another key, so the keymap stays reachable", crate::keys::pane_disp(&key), crate::app::title(a)))
+                    }
                     Some(key) => {
-                        let taken = app.keys.bind(a, key.clone(), add);
-                        let mut m = format!("{} → {}", crate::app::title(a), app.keys.label(a));
+                        let taken = app.keys.bind(s, key.clone(), add);
+                        let mut m = format!("{} → {}", crate::app::title(s.action), app.keys.slot_label(s));
                         if let Some(t) = taken {
-                            m += &format!(" · removed {key} from {}", crate::app::title(t));
+                            m += &format!(" · removed {key} from {}", crate::app::title(t.action));
                         }
                         if let Err(e) = app.save_keys() {
                             m = format!("Save failed: {e}");
@@ -30,11 +43,11 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                     }
                 }
             };
-            sel = sel.min(crate::keys::DEFAULT_KEYS.len() - 1);
+            sel = sel.min(crate::keys::COMMANDS.len() - 1);
             app.popup = Some(Popup::Help { sel, scroll, record: None, message });
         }
         Popup::Help { sel, scroll, message, .. } => {
-            let n = crate::keys::DEFAULT_KEYS.len();
+            let n = crate::keys::COMMANDS.len();
             let last = n + crate::help::HELP.iter().map(|s| s.1.len()).sum::<usize>() - 1;
             let (mut sel, mut record) = (sel, None);
             let mut message = message;
@@ -51,10 +64,10 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                 KeyCode::Char('a') if sel < n => record = Some(true),
                 KeyCode::Enter | KeyCode::Char('a') | KeyCode::Delete | KeyCode::Backspace if sel >= n => message = fixed(),
                 KeyCode::Delete | KeyCode::Backspace => {
-                    let a = crate::keys::DEFAULT_KEYS[sel].0;
-                    app.keys.reset(a);
+                    let s = crate::keys::COMMANDS[sel].0;
+                    app.keys.reset(s);
                     message = Some(match app.save_keys() {
-                        Ok(()) => format!("{} reset to {}", crate::app::title(a), app.keys.label(a)),
+                        Ok(()) => format!("{} reset to {}", crate::app::title(s.action), app.keys.slot_label(s)),
                         Err(e) => format!("Save failed: {e}"),
                     });
                 }
@@ -184,7 +197,8 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                         return app.run_palette(it, false);
                     }
                 }
-                KeyCode::Char('b') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                // The Go to DDL key (⌃b): DDL of the selected object
+                _ if app.keys.lookup(&k) == Some(Action::Ddl) => {
                     if let Some(it) = App::palette_matches(&p).get(p.sel).map(|x| (*x).clone()) {
                         app.popup = Some(Popup::Palette(p));
                         return app.run_palette(it, true);

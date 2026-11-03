@@ -40,7 +40,6 @@ export default function App() {
   const [keymapVer, setKeymapVer] = useState(0);
   useEffect(() => {
     const off = onKeymapChange(() => setKeymapVer((n) => n + 1));
-    void loadKeymap();
     return () => void off();
   }, []);
   // On window close, ask if there are uncommitted changes (closing rolls them back)
@@ -83,6 +82,8 @@ export default function App() {
   const workspaces = useWorkspacesStore((s) => s.workspaces);
   const curWs = useWorkspacesStore((s) => s.curWs);
   const [status, setStatus] = useState("Ready");
+  // A keymap.json that doesn't load: the default keys work, the status bar says how to get the saved ones back
+  useEffect(() => void loadKeymap().then((err) => err && setStatus(err)), []);
   const [treeSel, setTreeSel] = useState<NodeInfo | null>(null);
   const [tabMenu, setTabMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
 

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { Page } from "@playwright/test";
-import { dialog, editor, expect, menuItem, openApp, openConsole, resultTabs, status, tabStrips, test, treeItem, typeSql } from "./app";
+import { dialog, editor, expect, menuItem, openApp, openConsole, resultTabs, status, tabStrips, test, treeItem, typeSql, work } from "./app";
 
 // Every default GUI shortcut of the command table (crates/shared/src/keymap-table.json), pressed in its scope, with its effect checked.
 // A new row needs a check here: the first test fails until it has one
@@ -63,6 +63,19 @@ async function threeTabs(page: Page) {
 const fontSize = (page: Page) => page.evaluate(() => localStorage.getItem("dbtool.editorFontSize"));
 
 type Check = (page: Page, key: string) => Promise<void>;
+const gridCell = (page: Page, name: string) => work(page).getByRole("gridcell", { name, exact: true });
+const gridInfo = (page: Page) => work(page).locator(".tb-info");
+/** The users table open, its user_1 cell focused */
+async function usersGrid(page: Page) {
+  await users(page).dblclick();
+  await gridCell(page, "user_1").click();
+}
+/** A grid edit (Set NULL / DEFAULT, add, clone, delete row) leaves one change pending */
+const pending: Check = async (page, key) => {
+  await usersGrid(page);
+  await page.keyboard.press(key);
+  await expect(gridInfo(page)).toContainText("1 pending");
+};
 const searchEverywhere = (tab: string): Check => async (page, key) => {
   await page.keyboard.press(key);
   await expect(seTab(page)).toHaveText(tab);
@@ -267,7 +280,7 @@ const CHECKS: Record<string, Check> = {
   "editor.cancel": async (page, key) => {
     await consoleWith(page, "select pg_sleep(3);");
     await page.keyboard.press("Meta+Enter");
-    await expect(page.locator(".statusbar [title='Cancel Running Statements']")).toBeEnabled();
+    await expect(page.locator(".statusbar [title^='Cancel Running Statements']")).toBeEnabled();
     await page.keyboard.press(key);
     await expect(status(page)).toHaveText("Cancel requested");
   },
@@ -353,6 +366,72 @@ const CHECKS: Record<string, Check> = {
     await page.keyboard.press(key);
     await expect(page.locator(".find-widget.replaceToggled")).toBeVisible();
   },
+  "console.rename": async (page, key) => {
+    await openConsole(page);
+    await page.getByRole("tab", { name: /console/ }).click();
+    await page.keyboard.press(key);
+    await expect(dialog(page)).toContainText("Rename console");
+    await expect(dialog(page).getByRole("textbox")).toHaveValue("console [DEV] shop_app");
+  },
+  "selectIn": async (page, key) => {
+    await users(page).dblclick();
+    await conn(page).click();
+    await expect(users(page)).toHaveAttribute("aria-selected", "false");
+    await gridCell(page, "user_1").click();
+    await page.keyboard.press(key);
+    await expect(users(page)).toHaveAttribute("aria-selected", "true");
+  },
+  // ── Data grid (the users table: editable, row 1 focused) ──
+  "grid.valueEditor": async (page, key) => {
+    await usersGrid(page);
+    await page.keyboard.press(key);
+    await expect(work(page).locator(".value-editor .ve-title")).toContainText("user_name : ");
+  },
+  "grid.setNull": pending,
+  "grid.setDefault": pending,
+  "grid.addRow": pending,
+  "grid.cloneRow": pending,
+  "grid.deleteRows": pending,
+  "grid.revert": async (page, key) => {
+    await usersGrid(page);
+    await page.keyboard.press("Meta+Alt+KeyN");
+    await expect(gridInfo(page)).toContainText("1 pending");
+    await page.keyboard.press(key);
+    await expect(gridInfo(page)).not.toContainText("pending");
+  },
+  "grid.submit": async (page, key) => {
+    await usersGrid(page);
+    await page.keyboard.press("Meta+Alt+KeyN");
+    const calls = await spyCalls(page);
+    await page.keyboard.press(key);
+    await expect.poll(calls).toContain("execute_batch");
+  },
+  "grid.reload": async (page, key) => {
+    await usersGrid(page);
+    const calls = await spyCalls(page);
+    await page.keyboard.press(key);
+    await expect.poll(calls).toContain("run_query");
+  },
+  "grid.cancel": async (page, key) => {
+    // The users table while a filtered reload still runs (the mock sleeps on pg_sleep)
+    await usersGrid(page);
+    await work(page).locator(".dg-filter-field input").first().fill("pg_sleep(3) is not null");
+    await page.keyboard.press("Enter");
+    await gridCell(page, "user_1").click();
+    const calls = await spyCalls(page);
+    await page.keyboard.press(key);
+    await expect.poll(calls).toContain("cancel_query");
+  },
+  "grid.find": async (page, key) => {
+    await usersGrid(page);
+    await page.keyboard.press(key);
+    await expect(work(page).locator(".grid-find input")).toBeFocused();
+  },
+  "grid.ddl": async (page, key) => {
+    await usersGrid(page);
+    await page.keyboard.press(key);
+    await expect.poll(() => tabStrips(page)).toEqual(["users | users [DDL]"]);
+  },
 };
 // ⌘1~⌘9: nine saved workspaces, each key switches to its own
 for (let n = 1; n <= 9; n++)
@@ -362,8 +441,8 @@ for (let n = 1; n <= 9; n++)
   };
 const NINE = JSON.stringify({ version: 2, shared: true, current: "w5", workspaces: [1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => ({ id: `w${n}`, name: `W${n}`, connIds: n === 5 ? ["dev"] : [], tabs: [], panes: { t: "leaf", g: 0 }, activeIds: [-1, -1, -1, -1], focused: 0 })) });
 
-test("every default GUI shortcut has a check", () => {
-  expect(Object.keys(CHECKS).sort()).toEqual(ROWS.map((r) => r.id).sort());
+test("every default GUI shortcut has a check (commands without a default key: e2e/keymap.spec.ts binds a few)", () => {
+  expect(Object.keys(CHECKS).sort()).toEqual(ROWS.filter((r) => r.keys.length).map((r) => r.id).sort());
 });
 
 for (const r of ROWS)
@@ -406,13 +485,5 @@ test.describe("fixed keys", () => {
       await expect(selectedTab(page)).toContainText("users");
       await page.getByRole("tab", { name: /contracts/ }).click();
     }
-  });
-
-  test("⇧F6 on a console tab renames it", async ({ page }) => {
-    await openConsole(page);
-    await page.getByRole("tab", { name: /console/ }).click();
-    await page.keyboard.press("Shift+F6");
-    await expect(dialog(page)).toContainText("Rename console");
-    await expect(dialog(page).getByRole("textbox")).toHaveValue("console [DEV] shop_app");
   });
 });

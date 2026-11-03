@@ -4,6 +4,7 @@ import { QueryResult, Dialect, DbKind } from "../lib/api";
 import { splitScript } from "../lib/sqlSplit";
 import { DEFAULT_EXEC, ExecSettings, planExecution, planSelection } from "../lib/execPlan";
 import { initShared, sharedReady } from "../lib/shared";
+import { cmd, eventSpec, keyTitle, runKey } from "../lib/shortcuts";
 import { ConsoleEditor, EditorApi, RunRequest } from "./ConsoleEditor";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { ResultGrid } from "./ResultGrid";
@@ -11,8 +12,6 @@ import { RunningBar } from "./RunningBar";
 import { planText } from "../lib/planText";
 import { IcClock, IcGear, IcReload, IcStop } from "../ui/icons";
 import { EmptyState, IconButton, Select, Spacer, TabItem, TabStrip, Table, Td, Th, ToolButton, Toolbar, ToolbarSep } from "../ui";
-
-const isMac = navigator.platform.toLowerCase().includes("mac");
 
 const SETTINGS_KEY = "dbtool.execSettings";
 export function loadExecSettings(): ExecSettings {
@@ -219,26 +218,40 @@ export function ConsolePane(p: Props) {
   const radio = <T extends string>(cur: T, val: T, label: string, set: (v: T) => void): MenuItem => ({ label: (cur === val ? "● " : "　") + label, action: () => set(val) });
 
   const active = p.results.find((r) => r.id === p.activeResult);
+  /** A result tab's context menu; its commands' keys act on the shown result tab (and Clear All's on the output) */
+  const resultMenu = (r: { id: string; pinned?: boolean }): MenuItem[] => [
+    { label: r.pinned ? "Unpin Tab" : "Pin Tab", ...cmd("result.pin"), action: () => p.onPin(r.id, !r.pinned) },
+    { label: "Close", ...cmd("result.close"), action: () => p.onCloseResult(r.id) },
+    { label: "Close All Unpinned", ...cmd("result.closeUnpinned"), action: () => p.results.filter((x) => !x.pinned).forEach((x) => p.onCloseResult(x.id)) },
+  ];
   // If the selected result tab is gone (cleared by a rerun), show Output — instead of an empty pane
   const shown = active ? p.activeResult : "output";
 
   return (
-    <div className="console-pane">
+    <div
+      className="console-pane"
+      onKeyDown={(e) => {
+        if (runKey(eventSpec(e.nativeEvent), "editor", () => [...(active ? resultMenu(active) : []), { label: "Clear All", ...cmd("output.clear"), action: p.onClearOutput }])) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }}
+    >
       {/* ── Console toolbar (DataGrip) ── */}
       <Toolbar className="console-toolbar" onMouseDown={(e) => e.stopPropagation()}>
-        <IconButton tone="ok" title={`Execute (${isMac ? "⌘↩" : "Ctrl+Enter"})`} onClick={() => api?.run()} disabled={p.running || loading}>▶</IconButton>
+        <IconButton tone="ok" title={keyTitle("Execute", "editor.run")} onClick={() => api?.run()} disabled={p.running || loading}>▶</IconButton>
         <ToolButton
           title="Explain Plan"
           onClick={(e) =>
             dropdown(e, [
-              { label: "Explain Plan", action: () => api?.run("plan") },
-              { label: "Explain Analyse", action: () => api?.run("analyze") },
+              { label: "Explain Plan", ...cmd("editor.explain"), action: () => api?.run("plan") },
+              { label: "Explain Analyse", ...cmd("editor.explainAnalyze"), action: () => api?.run("analyze") },
             ])
           }
         >
           Explain ▾
         </ToolButton>
-        <IconButton title={`Browse Query History (${isMac ? "⌥⌘e" : "Ctrl+Alt+e"})`} onClick={p.onHistory}><IcClock /></IconButton>
+        <IconButton title={keyTitle("Browse Query History", "editor.history")} onClick={p.onHistory}><IcClock /></IconButton>
         <IconButton
           title="Query Execution Settings"
           onClick={(e) =>
@@ -268,8 +281,8 @@ export function ConsolePane(p: Props) {
           title="Transaction Mode"
           onClick={(e) =>
             dropdown(e, [
-              { label: (!p.txManual ? "● " : "　") + "Auto", action: () => p.onTxMode(false) },
-              { label: (p.txManual ? "● " : "　") + "Manual", action: () => p.onTxMode(true) },
+              { label: (!p.txManual ? "● " : "　") + "Auto", ...cmd("tx.auto"), action: () => p.onTxMode(false) },
+              { label: (p.txManual ? "● " : "　") + "Manual", ...cmd("tx.manual"), action: () => p.onTxMode(true) },
             ])
           }
         >
@@ -277,11 +290,11 @@ export function ConsolePane(p: Props) {
         </ToolButton>
         {p.txManual && (
           <>
-            <ToolButton accent={p.inTx} title="Commit" onClick={p.onCommit} disabled={!p.inTx}>✓ Commit</ToolButton>
-            <ToolButton title="Roll back" onClick={p.onRollback} disabled={!p.inTx}>↶ Roll back</ToolButton>
+            <ToolButton accent={p.inTx} title={keyTitle("Commit", "tx.commit")} onClick={p.onCommit} disabled={!p.inTx}>✓ Commit</ToolButton>
+            <ToolButton title={keyTitle("Roll back", "tx.rollback")} onClick={p.onRollback} disabled={!p.inTx}>↶ Roll back</ToolButton>
           </>
         )}
-        <IconButton tone="danger" title={`Cancel Running Statements (${isMac ? "⌘F2" : "Ctrl+F2"})`} onClick={loading ? cancelPending : p.onCancel} disabled={!p.running && !loading}><IcStop /></IconButton>
+        <IconButton tone="danger" title={keyTitle("Cancel Running Statements", "editor.cancel")} onClick={loading ? cancelPending : p.onCancel} disabled={!p.running && !loading}><IcStop /></IconButton>
         <Spacer />
         <span className="cb-ds">{p.connName}</span>
         <Select className="cb-sel" value={p.database} onFocus={p.onLoadDbs} onMouseDown={p.onLoadDbs} onChange={(e) => p.onSwitchDb(e.target.value)} title="Database">
@@ -357,11 +370,7 @@ export function ConsolePane(p: Props) {
                     setMenu({
                       x: e.clientX,
                       y: e.clientY,
-                      items: [
-                        { label: r.pinned ? "Unpin Tab" : "Pin Tab", action: () => p.onPin(r.id, !r.pinned) },
-                        { label: "Close", action: () => p.onCloseResult(r.id) },
-                        { label: "Close All Unpinned", action: () => p.results.filter((x) => !x.pinned).forEach((x) => p.onCloseResult(x.id)) },
-                      ],
+                      items: resultMenu(r),
                     });
                   }}
                   title={r.sql}
@@ -369,14 +378,14 @@ export function ConsolePane(p: Props) {
               ))}
               </TabStrip>
               {shown === "output" && (
-                <IconButton title="Clear All" onClick={p.onClearOutput}><IcReload /></IconButton>
+                <IconButton title={keyTitle("Clear All", "output.clear")} onClick={p.onClearOutput}><IcReload /></IconButton>
               )}
             </div>
             <div className="result-area">
               {loading ? <RunningBar running label="Loading the statement splitter" onCancel={cancelPending} /> : <RunningBar running={p.running} onCancel={p.onCancel} />}
               {shown === "output" && (
                 <div className="output-log">
-                  {p.output.length === 0 && <EmptyState>Execute a statement ({isMac ? "⌘↩" : "Ctrl+Enter"}) to see the output.</EmptyState>}
+                  {p.output.length === 0 && <EmptyState>Execute a statement{cmd("editor.run").shortcut ? ` (${cmd("editor.run").shortcut})` : ""} to see the output.</EmptyState>}
                   {p.output.map((l, i) => (
                     <div key={i} className={"ol " + l.level}>
                       <span className="ts">[{l.ts}]</span> {l.text}

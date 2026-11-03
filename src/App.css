@@ -239,6 +239,7 @@ button.small { padding: 1px 8px; font-size: 12px; font-weight: 400; }
 .tree-status.err { color: var(--danger); white-space: normal; padding-right: 10px; width: 0; min-width: 100%; box-sizing: border-box; } /* wraps at the tree's width instead of widening it */
 
 .grid-wrap { position: absolute; inset: 0; display: flex; flex-direction: column; }
+.grid-wrap:focus { outline: none; }
 .grid-wrap .grid-scroll { position: relative; inset: auto; flex: 1; min-height: 0; }
 .grid-toolbar { flex: none; height: 30px; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-bottom: 1px solid var(--border); background: var(--panel); font-size: 12px; }
 .grid-toolbar .sep { width: 1px; height: 16px; background: var(--border); margin: 0 2px; }

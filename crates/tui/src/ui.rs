@@ -2,6 +2,7 @@
 use crate::keys::disp;
 use crate::app::{App, Drag, DropTarget, FieldKind, Focus, Popup, SplitDir, TabKind, WARNING};
 use crate::tree::NodeKind;
+use qurry_core::keymap::Scope;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Tabs, Wrap};
 use serde_json::Value;
@@ -684,9 +685,12 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
     let key = |a: A| app.keys.keys(a).first().map(|k| disp(k));
     let fixed = |k: &str, l: &'static str| Some((disp(k), l));
     let cmd = |a: A, l: &'static str| key(a).map(|k| (k, l));
+    // Pane keys (rebindable: F1 › Database Explorer keys / Data grid keys)
+    let pane = |pane: Scope, a: A, l: &'static str| app.keys.slot_keys(crate::keys::Slot { action: a, pane }).first().map(|k| (crate::keys::pane_disp(k), l));
+    let (tree, grid) = (|a, l| pane(Scope::Tree, a, l), |a, l| pane(Scope::Grid, a, l));
     let (ctx, glob) = match app.focus {
         Focus::Tree => (
-            vec![fixed("Enter", "open"), fixed("F4", "console"), fixed("s", "schemas"), fixed("/", "filter"), fixed("n", "new"), fixed("e", "edit"), fixed("w", "workspace"), fixed("r", "refresh"), cmd(A::Ddl, "DDL")],
+            vec![fixed("Enter", "open"), fixed("F4", "console"), tree(A::ManageSchemas, "schemas"), fixed("/", "filter"), tree(A::NewDataSource, "new"), tree(A::EditDataSource, "edit"), tree(A::WsMoveConn, "workspace"), tree(A::Refresh, "refresh"), cmd(A::Ddl, "DDL")],
             vec![cmd(A::SearchEverywhere, "search"), cmd(A::Palette, "actions"), cmd(A::Help, "keys")],
         ),
         Focus::Editor => (
@@ -696,7 +700,7 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
         Focus::Grid => (
             match app.tabs.get(app.active).map(|t| &t.kind) {
                 Some(TabKind::Table(_)) => vec![
-                    fixed("Enter", "edit"), fixed("a", "add"), fixed("d", "delete"), fixed("n", "NULL"), cmd(A::Submit, "submit"), fixed("⌃z", "revert"), fixed("w", "where"), fixed("o", "order"), fixed("s", "sort"), fixed("x", "export"),
+                    fixed("Enter", "edit"), grid(A::AddRow, "add"), grid(A::DeleteRow, "delete"), grid(A::SetNull, "NULL"), cmd(A::Submit, "submit"), grid(A::Revert, "revert"), fixed("w", "where"), fixed("o", "order"), fixed("s", "sort"), grid(A::ExportCsv, "export"),
                 ],
                 Some(TabKind::Redis(r)) if r.focus_value => vec![fixed("e", "edit"), fixed("a", "add"), fixed("x", "delete"), fixed("Esc", "keys")],
                 Some(TabKind::Redis(_)) => vec![fixed("Enter", "value"), fixed("/", "pattern"), fixed("a", "add"), fixed("D", "del key"), fixed("t", "TTL"), fixed("R", "rename"), fixed(":", "command")],
@@ -716,7 +720,7 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
                     v.extend([fixed("Enter", "query→console"), fixed("g", "SQL"), fixed("y", "copy")]);
                     v
                 }
-                _ => vec![fixed("s", "sort"), fixed("y", "copy"), fixed("x", "export"), fixed("Esc", "editor")],
+                _ => vec![fixed("s", "sort"), fixed("y", "copy"), grid(A::ExportCsv, "export"), fixed("Esc", "editor")],
             },
             vec![cmd(A::NewConsole, "console"), cmd(A::RecentTabs, "tabs"), cmd(A::SearchEverywhere, "search"), cmd(A::Palette, "actions")],
         ),
@@ -853,16 +857,24 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             }
             lines.push(Line::raw(""));
             lines.push(section("Commands — ↑↓ select · Enter change · a add key · Del reset to default"));
-            let top = lines.len();
-            for (i, (a, _)) in crate::keys::DEFAULT_KEYS.iter().enumerate() {
-                let custom = app.keys.is_custom(*a);
-                let keys = if i == *sel && record.is_some() { "press a key… (Esc cancels)".to_string() } else { app.keys.label(*a) };
-                lines.push(key_row(&keys, crate::app::title(*a), 30, custom, i == *sel));
+            // Every command (with a default key first), then the keys that work only in the explorer or the grid
+            let mut sel_line = 0;
+            let mut pane = Scope::Global;
+            for (i, (s, _)) in crate::keys::COMMANDS.iter().enumerate() {
+                if s.pane != pane {
+                    pane = s.pane;
+                    lines.push(Line::raw(""));
+                    lines.push(section(if pane == Scope::Tree { "Database Explorer keys (when the explorer has focus)" } else { "Data grid keys (when a grid has focus)" }));
+                }
+                if i == *sel {
+                    sel_line = lines.len();
+                }
+                let keys = if i == *sel && record.is_some() { "press a key… (Esc cancels)".to_string() } else { app.keys.slot_label(*s) };
+                lines.push(key_row(&keys, crate::app::title(s.action), 30, app.keys.is_custom(*s), i == *sel));
             }
             lines.push(Line::raw(""));
             // Fixed key list: selectable continuing from the number after Commands (not rebindable)
-            let mut i = crate::keys::DEFAULT_KEYS.len();
-            let mut sel_line = top + *sel;
+            let mut i = crate::keys::COMMANDS.len();
             for (title, rows) in crate::help::HELP {
                 lines.push(section(disp(title)));
                 for (k, d) in *rows {
