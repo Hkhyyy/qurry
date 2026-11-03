@@ -194,16 +194,22 @@ struct Kept {
 fn reopen_refused(k: &Kept, now: &ConnectionConfig, manual: bool) -> Option<String> {
     use session::RECONNECTED;
     let (m, kind) = (&k.more, now.kind);
+    // What a new connection runs before the statement (backend after_connect): it can change what the rows say
+    let setup = |c: &ConnectionConfig| (c.options.startup_script.trim().to_string(), c.options.time_zone.as_deref().map(str::trim).unwrap_or_default().to_string(), c.options.isolation.clone());
     let why = if m.tx || manual {
         "it was read in a transaction (Manual mode or BEGIN) that ended with the old connection, so the next rows might not line up"
     } else if !k.cfg.same_server(now) || k.cfg.database != now.database {
         "the data source's server or database changed since"
+    } else if setup(&k.cfg) != setup(now) {
+        "the data source's startup script, time zone or isolation level changed since"
     } else if m.schema.is_none() {
         "Qurry couldn't read which schema it ran in"
     // Loading more runs the statement again: only a plain read, which nobody is asked about (Production confirmation, dangerous
     // statements), that takes no row locks
-    } else if !crate::guard::is_read(&m.sql, kind) || crate::guard::unsafe_statement(&m.sql, kind).is_some() || crate::guard::locks_rows(&m.sql, kind) {
+    } else if !crate::guard::is_read(&m.sql, kind) || crate::guard::unsafe_statement(&m.sql, kind).is_some() {
         return Some(format!("{RECONNECTED}, and loading more would run the statement again, but it isn't a plain read. Run it again yourself to load more rows."));
+    } else if crate::guard::locks_rows(&m.sql, kind) {
+        return Some(format!("{RECONNECTED}, and loading more would run the statement again, but it locks rows (FOR UPDATE, FOR SHARE, LOCK IN SHARE MODE …). Run it again yourself to load more rows."));
     } else {
         return None;
     };
@@ -981,11 +987,13 @@ impl AppState {
     pub async fn fetch_more(&self, tab_id: String, limit: Option<usize>) -> AppResult<QueryResult> {
         let limit = limit.unwrap_or(500);
         let closed = || AppError::Msg("Session closed".into());
+        // The result this load-more is for, read before it waits for anything: a run queued ahead of it has a result of its own
+        let issued = self.more.lock().unwrap().get(&tab_id).cloned();
         let entry = self.sessions.read().await.get(&tab_id).map(|e| (e.session.clone(), e.conn_id.clone()));
         let (sess, conn_id, old) = match entry {
             Some((s, c)) => (s, c, None),
             None => {
-                let k = self.more.lock().unwrap().get(&tab_id).cloned().ok_or_else(closed)?;
+                let k = issued.clone().ok_or_else(closed)?;
                 // The guard first: nothing reaches the server for a statement it refuses
                 self.check_read_only(&k.conn_id, &k.more.sql)?;
                 let manual = self.tab_manual.lock().unwrap().get(&tab_id).copied().unwrap_or(false);
@@ -998,27 +1006,45 @@ impl AppState {
         touch(self, &conn_id);
         let (r, in_tx) = {
             let mut s = sess.lock().await;
-            // A run in the tab may have taken the session first (its result isn't this one), or a disconnect closed it
-            if let Some(k) = &old {
-                let same_run = self.more.lock().unwrap().get(&tab_id).is_some_and(|x| x.run == k.run);
-                let same_session = self.sessions.read().await.get(&tab_id).is_some_and(|e| std::sync::Arc::ptr_eq(&e.session, &sess));
-                if !same_run || !same_session {
-                    return Err(closed());
-                }
+            // A run that took the session first replaced the result: never move the new result's cursor for the old one
+            let now = self.more.lock().unwrap().get(&tab_id).map(|k| k.run);
+            if now != issued.as_ref().map(|k| k.run) {
+                return Err(closed());
             }
+            let reopen = match &old {
+                // A disconnect may have closed the session meanwhile; another load-more may have reopened the result already (go on from its cursor)
+                Some(k) => {
+                    if !self.sessions.read().await.get(&tab_id).is_some_and(|e| std::sync::Arc::ptr_eq(&e.session, &sess)) {
+                        return Err(closed());
+                    }
+                    s.more(false).await.is_none().then_some(k)
+                }
+                None => None,
+            };
             let in_tx = s.in_tx();
-            let r = match &old {
+            let r = match reopen {
                 Some(k) => s.reopen(&k.more, limit).await,
                 None => s.fetch(limit).await,
             };
-            // Same statement, schema and run: only the rows read move on (under the session's lock, like run_with_undo's)
-            if r.is_ok() {
-                let more = s.more(false).await;
-                let mut all = self.more.lock().unwrap();
-                match (more, all.get_mut(&tab_id)) {
-                    (Some(m), Some(k)) => k.more.fetched = m.fetched,
-                    _ => drop(all.remove(&tab_id)),
+            match &r {
+                // Same statement, schema and run: only the rows read move on (under the session's lock, like run_with_undo's)
+                Ok(_) => {
+                    let more = s.more(false).await;
+                    let mut all = self.more.lock().unwrap();
+                    match (more, all.get_mut(&tab_id)) {
+                        (Some(m), Some(k)) => k.more.fetched = m.fetched,
+                        _ => drop(all.remove(&tab_id)),
+                    }
                 }
+                // The new session has nothing to load from: drop it, so trying again reopens it again (and says why if it fails)
+                Err(_) if reopen.is_some() => {
+                    s.discard().await;
+                    let mut all = self.sessions.write().await;
+                    if all.get(&tab_id).is_some_and(|e| std::sync::Arc::ptr_eq(&e.session, &sess)) {
+                        all.remove(&tab_id);
+                    }
+                }
+                Err(_) => {}
             }
             (r, in_tx)
         };
@@ -1941,21 +1967,34 @@ mod tests {
         let mut nos = k("select * from t", Postgres, false);
         nos.more.schema = None;
         assert!(reopen_refused(&nos, &src(Postgres), false).unwrap().contains("couldn't read which schema it ran in"));
+        // What a new connection runs first changed: the rows could say something else (a tenant variable, another time zone)
+        let mut set = src(Postgres);
+        set.options.startup_script = "set qurry.tenant = 'a'".into();
+        let ka = Kept { cfg: set.clone(), ..k("select * from t", Postgres, false) };
+        assert_eq!(reopen_refused(&ka, &ConnectionConfig { options: store::ConnOptions { startup_script: " set qurry.tenant = 'a'\n".into(), ..set.options.clone() }, ..set.clone() }, false), None, "only spaces around it");
+        let setup = "The data source reconnected since this result was read (settings saved, disconnected or idle), and the data source's startup script, time zone or isolation level changed since. Run the query again to load more rows.";
+        for opts in [
+            store::ConnOptions { startup_script: "set qurry.tenant = 'b'".into(), ..set.options.clone() },
+            store::ConnOptions { time_zone: Some("Asia/Seoul".into()), ..set.options.clone() },
+            store::ConnOptions { isolation: Some("serializable".into()), ..set.options.clone() },
+        ] {
+            assert_eq!(reopen_refused(&ka, &ConnectionConfig { options: opts, ..set.clone() }, false).as_deref(), Some(setup));
+        }
         for (sql, kind) in [
             ("select nextval('s'), g from generate_series(1, 1000) g", Postgres),
             ("select pg_sleep(1), * from t", Postgres),
             ("with d as (delete from t returning *) select * from d", Postgres),
             ("select * from t for update", Postgres),
-            ("select * from t for share", Postgres),
-            ("select * from t for key share", Postgres),
             ("select pg_notify('c', 'x'), * from t", Postgres),
             ("select sleep(1), t.* from t", Mysql),
             ("select get_lock('x', 1), t.* from t", Mysql),
-            ("select * from t lock in share mode", Mysql),
-            ("select * from t for share", Mysql),
         ] {
             let e = refused(sql, kind, false, false).unwrap_or_else(|| panic!("{sql}"));
             assert!(e.contains("isn't a plain read") && e.contains("Run it again"), "{sql}: {e}");
+        }
+        for (sql, kind) in [("select * from t for share", Postgres), ("select * from t for key share", Postgres), ("select * from t lock in share mode", Mysql), ("select * from t for share", Mysql)] {
+            let e = refused(sql, kind, false, false).unwrap_or_else(|| panic!("{sql}"));
+            assert!(e.contains("it locks rows") && e.contains("Run it again"), "{sql}: {e}");
         }
     }
 
@@ -2053,7 +2092,21 @@ mod tests {
         let e = st.fetch_more("e".into(), Some(500)).await.unwrap_err().to_string();
         assert!(e.contains("server or database changed since") && e.contains("Run the query again"), "{e}");
         assert!(st.sessions.read().await.get("e").is_none() && st.pools.read().await.is_empty(), "nothing connected");
+        let script = ConnectionConfig { options: store::ConnOptions { startup_script: "select 1".into(), ..cfg.options.clone() }, ..cfg.clone() };
+        st.save_connection(script, None, None).await.unwrap();
+        let e = st.fetch_more("e".into(), Some(500)).await.unwrap_err().to_string();
+        assert!(e.contains("startup script, time zone or isolation level changed since"), "{e}");
         st.save_connection(cfg.clone(), None, None).await.unwrap();
+
+        // A reopen that fails: trying again says why again (not "No more rows")
+        q("create table fetch_more_reconnect.gone as select n from fetch_more_reconnect.t", "setup").await.unwrap();
+        assert!(q("select n from fetch_more_reconnect.gone order by n", "g").await.unwrap().truncated);
+        st.disconnect("d".into()).await.unwrap();
+        q("drop table fetch_more_reconnect.gone", "setup").await.unwrap();
+        for _ in 0..2 {
+            let e = st.fetch_more("g".into(), Some(500)).await.unwrap_err().to_string();
+            assert!(e.contains("reopening the result on the new connection failed"), "{e}");
+        }
 
         // A closed tab forgets its result
         q(full, "c").await.unwrap();
@@ -2074,6 +2127,37 @@ mod tests {
     #[ignore]
     async fn fetch_more_after_reconnect_mysql() {
         fetch_more_after_reconnect(crate::store::DbKind::Mysql).await;
+    }
+
+    /// A load-more queued behind a run in the same tab was asked for the old result: it must not move the new result's cursor
+    /// (the GUI drops its answer, so the new result would skip 500 rows). And two load-mores reopening one result at once go on
+    /// one after the other. QURRY_TEST_PG=127.0.0.1:55433:postgres:postgres cargo test -p qurry-core fetch_more_queued -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn fetch_more_queued_behind_a_run_or_a_reopen() {
+        let Some(crate::testenv::Server { cfg, password }) = crate::testenv::pg() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        st.save_connection(ConnectionConfig { id: "q".into(), name: "q".into(), ..cfg }, password, None).await.unwrap();
+        let first = |r: &QueryResult| r.rows[0][0].as_i64();
+        let run = |sql: &'static str| st.run_query("q".into(), sql.into(), Some(500), Some("t".into()));
+        let later = |ms| tokio::time::sleep(std::time::Duration::from_millis(ms));
+        assert_eq!(first(&run("select g from generate_series(1, 2000) g order by g").await.unwrap()), Some(1));
+        // The run holds the session for 0.5 s; the load-more asked meanwhile waits for it
+        let slow = "select g + 10000 from generate_series(1, 2000) g, (select pg_sleep(0.5)) s order by 1";
+        let (ran, queued) = tokio::join!(run(slow), async { later(100).await; st.fetch_more("t".into(), Some(500)).await });
+        assert_eq!(first(&ran.unwrap()), Some(10001));
+        assert_eq!(queued.unwrap_err().to_string(), "Session closed");
+        assert_eq!(first(&st.fetch_more("t".into(), Some(500)).await.unwrap()), Some(10501), "the new result's rows are contiguous");
+
+        // Two load-mores after a reconnect: one reopens, the other goes on from its cursor
+        run("select g from generate_series(1, 2000) g order by g").await.unwrap();
+        st.disconnect("q".into()).await.unwrap();
+        let (a, b) = tokio::join!(st.fetch_more("t".into(), Some(500)), st.fetch_more("t".into(), Some(500)));
+        let mut got = vec![first(&a.unwrap()), first(&b.unwrap())];
+        got.sort();
+        assert_eq!(got, vec![Some(501), Some(1001)]);
+        assert_eq!(first(&st.fetch_more("t".into(), Some(500)).await.unwrap()), Some(1501));
     }
 
     /// A load-more reopening its result and a new run in the same tab, both opening the tab's session at once (slow connects
