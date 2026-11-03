@@ -62,6 +62,12 @@ pub fn tls_opt_in(msg: &str) -> bool {
     qurry_shared::errors::tls_opt_in(msg)
 }
 
+/// The data source form's hint for a local Host with AWS SSM (the instance itself), or undefined (the TUI's words)
+#[wasm_bindgen(js_name = ssmLocalHost)]
+pub fn ssm_local_host(host: &str) -> Option<String> {
+    qurry_shared::errors::ssm_local_host(host)
+}
+
 /// The result grid's line when loading more rows failed (the TUI's words)
 #[wasm_bindgen(js_name = moreRowsFailed)]
 pub fn more_rows_failed(msg: &str) -> String {

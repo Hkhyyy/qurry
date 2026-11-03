@@ -31,6 +31,24 @@ pub fn more_rows_failed(msg: &str) -> String {
     format!("Couldn't load more rows: {}", msg.trim())
 }
 
+/// With AWS SSM the instance connects to Host:Port, so they are the database as seen from it
+const SSM_HOST_PORT: &str = "are the database as seen from the instance (e.g. an RDS endpoint and 5432), not a local port";
+
+/// The connect error when the AWS SSM instance couldn't reach the database (the plugin said "Connection to destination port failed")
+pub fn ssm_unreachable(host: &str, port: u16) -> String {
+    format!("AWS SSM: the instance couldn't reach {host}:{port}. With AWS SSM, Host and Port on the General tab (TUI: the data source's host/port) {SSM_HOST_PORT}.")
+}
+
+/// The data source form's hint when AWS SSM is on and Host is this machine's name (GUI and TUI). Not an error: a database on the
+/// instance itself is reached this way
+pub fn ssm_local_host(host: &str) -> Option<String> {
+    let h = host.trim();
+    ["localhost", "127.0.0.1", "::1"]
+        .iter()
+        .any(|l| h.eq_ignore_ascii_case(l))
+        .then(|| format!("With AWS SSM, {h} is the instance itself: Host and Port {SSM_HOST_PORT}. Keep it if the database runs on the instance."))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,6 +77,19 @@ mod tests {
         // A server error quoting the text (RAISE EXCEPTION, a cast error echoing a row value) isn't the core's connect error
         for m in [format!("error returned from database: {NEEDS_TLS}"), format!("ERROR: {}", needs_tls_pg()), format!("invalid input syntax for type integer: \"{DROPPED_TLS}\"")] {
             assert!(!tls_opt_in(&m), "{m}");
+        }
+    }
+
+    #[test]
+    fn ssm_texts() {
+        let e = ssm_unreachable("127.0.0.1", 55433);
+        assert!(e.contains("couldn't reach 127.0.0.1:55433") && e.contains("General tab") && e.contains("as seen from the instance"), "{e}");
+        for h in ["localhost", " LocalHost ", "127.0.0.1", "::1"] {
+            let hint = ssm_local_host(h).unwrap_or_else(|| panic!("{h}"));
+            assert!(hint.contains(h.trim()) && hint.contains("as seen from the instance"), "{hint}");
+        }
+        for h in ["", "db.internal", "mydb.abc.ap-northeast-2.rds.amazonaws.com", "10.0.1.5", "127.0.0.2", "localhost.example.com"] {
+            assert_eq!(ssm_local_host(h), None, "{h}");
         }
     }
 }

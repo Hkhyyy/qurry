@@ -4,6 +4,7 @@ import { Button, Checkbox, ColorPicker, EmptyState, FormGrid, FormSection, Hint,
 import { needsTlsOptIn } from "./TlsFix";
 import { api, COLOR_PRESETS, ConnOptions, RedisMode, SslConfig, ConnectionConfig, ConnectionView, DbKind, DEFAULT_PORT, DRIVER_MISSING, isFileKind, KIND_LABEL, meta, SchemaInfo, SshConfig, SsmConfig, targetId } from "../lib/api";
 import { elapsedText } from "./RunningBar";
+import { sharedOr, useSharedReady } from "../lib/shared";
 
 interface Props {
   edit?: ConnectionView;
@@ -156,6 +157,9 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
     if (typeof p === "string") setSsh("keyPath", p);
   };
 
+  useSharedReady();
+  // With AWS SSM a local Host is the instance itself: said, not refused (a database on the instance is fine)
+  const ssmLocalHost = tunnel === "ssm" ? sharedOr(undefined, (s) => s.ssmLocalHost(cfg.host)) : undefined;
   const tabHint =
     tab === "options"
       ? "Changes apply on the next connection (the data source is reconnected on OK)."
@@ -256,6 +260,12 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
                 <Text tone="muted">Port</Text>
                 {port(cfg.port, (n) => set("port", n), 0)}
               </div>
+              {ssmLocalHost && (
+                <>
+                  <span />
+                  <Text tone="warn">{ssmLocalHost}</Text>
+                </>
+              )}
               <label>User</label>
               <TextInput value={cfg.user} placeholder={cfg.kind === "redis" ? "(optional, ACL user)" : cfg.kind === "milvus" ? "(optional — empty: the password is an API key)" : ""} onChange={(e) => set("user", e.target.value)} />
               <label>{cfg.kind === "qdrant" || cfg.kind === "chroma" ? "API key" : "Password"}</label>

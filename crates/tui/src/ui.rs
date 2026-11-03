@@ -830,7 +830,11 @@ fn conn_form_message(form: &crate::app::ConnForm) -> Vec<Line<'static>> {
     let (ok, m) = match (&form.testing, &form.message) {
         (Some((started, _)), _) => (true, format!("Testing… {}s · ⌃t / Esc cancel", started.elapsed().as_secs())),
         (None, Some((ok, m))) => (*ok, disp(m)),
-        (None, None) => return vec![],
+        // A local Host with AWS SSM is the instance itself: a hint, not an error (a database on the instance is fine)
+        (None, None) => {
+            let hint = Some(form.value("Host")).filter(|_| form.value("Tunnel") == "aws ssm").and_then(qurry_shared::errors::ssm_local_host);
+            return hint.map(|h| vec![Line::styled(h, Style::default().fg(WARN))]).unwrap_or_default();
+        }
     };
     // One row per line of it (a TLS error is followed by its hint)
     m.lines().map(|l| Line::styled(l.to_string(), Style::default().fg(if ok { OK } else { DANGER }))).collect()

@@ -49,6 +49,31 @@ test("SSH/SSL tab: Tunnel None / SSH / AWS SSM, test and save through SSM", asyn
   await expect(dialog(page).getByRole("textbox", { name: "Instance id" })).toHaveValue("i-0123456789abcdef0");
 });
 
+test("AWS SSM: a local Host gets a hint on the General tab, not an error", async ({ page }) => {
+  await openProps(page);
+  const d = dialog(page);
+  await d.getByRole("combobox", { name: "Tunnel" }).selectOption("ssm");
+  await d.getByRole("tab", { name: "General" }).click();
+  const host = d.locator(".ui-row").filter({ hasText: "Port" }).getByRole("textbox").first();
+  const hint = d.getByText("is the instance itself");
+  await host.fill("127.0.0.1");
+  await expect(hint).toHaveText("With AWS SSM, 127.0.0.1 is the instance itself: Host and Port are the database as seen from the instance (e.g. an RDS endpoint and 5432), not a local port. Keep it if the database runs on the instance.");
+  await host.fill("orders.cluster-abc.ap-northeast-2.rds.amazonaws.com");
+  await expect(hint).toHaveCount(0);
+  await host.fill("localhost");
+  await expect(hint).toBeVisible();
+  // Only with SSM, and it doesn't block saving
+  await d.getByRole("tab", { name: /SSH\/SSL/ }).click();
+  await d.getByRole("combobox", { name: "Tunnel" }).selectOption("none");
+  await d.getByRole("tab", { name: "General" }).click();
+  await expect(hint).toHaveCount(0);
+  await d.getByRole("tab", { name: /SSH\/SSL/ }).click();
+  await d.getByRole("combobox", { name: "Tunnel" }).selectOption("ssm");
+  await d.getByRole("textbox", { name: "Instance id" }).fill("i-0123456789abcdef0");
+  await d.getByRole("button", { name: "OK" }).click();
+  await expect(dialog(page)).toHaveCount(0);
+});
+
 test("AWS SSM: a long Test Connection error is scrolled into view in the fixed-size dialog", async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 700 });
   await openProps(page);
