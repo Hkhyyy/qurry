@@ -43,7 +43,7 @@
 | `Button` | `variant`: default · primary (창마다 하나, 맨 오른쪽) · danger · ghost · link. `size`: md 26px · sm 22px. 글자는 동사 |
 | `IconButton` · `ToolButton` | 아이콘만 (title 필수, `tone` ok · danger, `active`) / 도구 막대 글자 버튼 (`active` · `accent`) |
 | `Badge` · `Avatar` · `Swatch` · `ProgressBar` | 개수 · 상태 (`tone`, 정해진 색은 `color`) / 이니셜 사각형 / 색 견본 / 진행 막대 (`pct` null = 모름) |
-| `TextInput` · `Select` · `TextArea` · `Checkbox` · `Radio` | 입력 (`full` · `grow`) / 고르기 / 여러 줄 (고정폭) / 체크 (`indeterminate`) / 하나 고르기 |
+| `TextInput` · `Select` · `TextArea` · `Checkbox` · `Radio` | 입력 (`full` · `grow`) / 고르기 / 여러 줄 (고정폭) / 체크 (`indeterminate`) / 하나 고르기. |
 
 ## GUI 분자 (`molecules.tsx`)
 
@@ -68,6 +68,7 @@
 | `confirm()` · `ConfirmHost` | 앱 안의 확인 창. `detail` = DetailList, `danger` 면 빨간 버튼 + 기본 포커스 Cancel. 버튼은 동작 이름 (Delete · Run …) |
 | `Menu` | 우클릭 (`at`) · 드롭다운. 항목: 동작 · 구분선 · 설명 줄 (`heading`) · 하위 메뉴. 바깥 클릭 · ⎋ 로 닫힘 |
 | `List` · `ListGroup` · `DetailList` | 목록 (`boxed`, 비면 `empty`) / 목록 안 묶음 제목 / 상세 목록 |
+| `PopupList` · `ComboBox` | 칸 바로 아래 뜨는 목록 하나 (칸 왼쪽에 맞춤, 아래 자리가 없으면 위로, 창 안에; 바깥 스크롤이면 닫힘; 키는 `listKey`: ↑↓ PgUp PgDn · ↩ · ⎋) / 자유 입력 + 제안 (타입 칸: 치면 거르고 — 같음 · 앞 · 포함 순, 맞는 게 없으면 안 뜸 — ↩ · ⇥ 고름, ⎋ 는 목록만 닫음). 고르기만 하는 쪽은 FontPicker (검색 칸 + PopupList). 맨 `<datalist>` 는 쓰지 않는다 (WKWebView 가 엉뚱한 곳에 그림) |
 | `Table` · `Th` · `Td` | 작은 표 (`num` · `mono` · `muted`) |
 | `FormGrid` | 긴 설정 창: `<label>` + 칸, 줄 전체는 `FormSection` |
 | `GridHead` · `GridHeaderRow` · `GridHeaderCell` · `GridRow` · `RowNumberCell` · `GridCell` · `CellEditor` | 결과 표 칸 (상태: 선택 · 커서 · 바뀜 · 찾기 · 추가 · 지움 · null · 숫자). 가상 스크롤 · 선택은 ResultGrid. `GridHead`: header strip above the scroller (not sticky inside it), follows its scrollLeft. `GridCell` `align`: left · right · center per value class (`lib/gridAlign.ts`, Settings › Appearance › Alignment) |

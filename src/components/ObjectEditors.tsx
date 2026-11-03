@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { ColumnDef, ConnectionView, ddl, ForeignKeyDef, IndexDef, NewObject, TableDef } from "../lib/api";
 import { ask, notice } from "../lib/dialogs";
-import { Button, Checkbox, CodeBlock, Field, Hint, IconButton, Modal, Notice, SectionTitle, Select, Table, Tabs, Td, Text, TextArea, TextInput, Th } from "../ui";
+import { Button, Checkbox, CodeBlock, ComboBox, Field, Hint, IconButton, Modal, Notice, SectionTitle, Select, Table, Tabs, Td, Text, TextArea, TextInput, Th } from "../ui";
 
-/** Autocomplete for the type field */
+/** Suggestions for the type field (any other type can be typed) */
 const TYPES: Record<string, string[]> = {
   postgres: ["integer", "bigint", "smallint", "numeric(10,2)", "real", "double precision", "boolean", "text", "varchar(255)", "char(1)", "date", "timestamp", "timestamptz", "time", "interval", "uuid", "json", "jsonb", "bytea", "inet", "text[]"],
   mysql: ["int", "bigint", "smallint", "tinyint(1)", "decimal(10,2)", "float", "double", "varchar(255)", "char(1)", "text", "longtext", "date", "datetime", "timestamp", "time", "json", "blob", "enum('a','b')"],
@@ -101,11 +101,6 @@ export function TableDesigner({ target, conn, schema, table, onDone, onOpenConso
         </>
       }
     >
-      <datalist id="ddl-types">
-        {types.map((t) => (
-          <option key={t} value={t} />
-        ))}
-      </datalist>
       <div className="designer-head">
         <Field label="Name">
           <TextInput autoFocus={!table} value={def.name} placeholder="new_table" onChange={(e) => set({ name: e.target.value })} />
@@ -145,7 +140,7 @@ export function TableDesigner({ target, conn, schema, table, onDone, onOpenConso
                     <TextInput value={c.name} placeholder="column" onChange={(e) => setCol(i, { name: e.target.value })} />
                   </Td>
                   <Td>
-                    <TextInput list="ddl-types" value={c.dataType} placeholder="type" onChange={(e) => setCol(i, { dataType: e.target.value })} />
+                    <ComboBox value={c.dataType} options={types} placeholder="type" aria-label={`Type of ${c.name || "column"}`} onChange={(v) => setCol(i, { dataType: v })} />
                   </Td>
                   <Td>
                     <Checkbox checked={!c.nullable} onChange={(v) => setCol(i, { nullable: !v })} />
