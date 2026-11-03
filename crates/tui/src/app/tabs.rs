@@ -137,7 +137,7 @@ impl App {
     }
 
     /// Console tabs with uncommitted changes
-    fn pending_tabs(&self, conn: Option<&str>) -> Vec<u64> {
+    pub(super) fn pending_tabs(&self, conn: Option<&str>) -> Vec<u64> {
         let saved = self.workspaces.iter().filter_map(|w| w.saved.as_ref()).flat_map(|s| s.tabs.iter());
         self.tabs.iter().chain(saved).filter(|t| conn.is_none_or(|c| t.conn == c) && matches!(&t.kind, TabKind::Console(c) if c.in_tx)).map(|t| t.id).collect()
     }
@@ -268,7 +268,7 @@ impl App {
     }
 
     /// Rows near the table tab's current row (pgvector): the cursor column if it's a vector, otherwise the first vector column. SQL into a new console
-    fn find_similar(&mut self) {
+    pub(super) fn find_similar(&mut self) {
         let Some(Tab { kind: TabKind::Table(tt), conn, db, target, .. }) = self.tabs.get(self.active) else {
             self.status = "Open a table with a vector column first".into();
             return;

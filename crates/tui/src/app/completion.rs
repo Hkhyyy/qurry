@@ -27,7 +27,7 @@ impl App {
 
     /// Recompute candidates at the cursor position. explicit = Ctrl+Space (otherwise '.' typed·typing with the list open)
     /// Manage Shown Schemas: read the DB list and open the window (db = expand that DB if opened from a DB row)
-    fn manage_schemas(&mut self, conn: &str, db: Option<String>) {
+    pub(super) fn manage_schemas(&mut self, conn: &str, db: Option<String>) {
         self.status = "Loading databases…".into();
         let st = self.state.clone();
         let id = conn.to_string();

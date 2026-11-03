@@ -25,6 +25,9 @@ mod splits;
 mod tables;
 mod tabs;
 
+#[cfg(test)]
+pub(crate) use run::explain_analyze_ask_text;
+
 pub type Apply = Box<dyn FnOnce(&mut App) + Send>;
 
 #[derive(Clone, Copy, PartialEq, Debug)]

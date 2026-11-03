@@ -108,7 +108,7 @@ impl App {
     }
 
     /// Reload table tabs still sitting on a failed query (with no unsaved edits)
-    fn retry_failed_tables(&mut self, conn: &str) {
+    pub(super) fn retry_failed_tables(&mut self, conn: &str) {
         let ids: Vec<u64> = self
             .tabs
             .iter()

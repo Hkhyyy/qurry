@@ -12,7 +12,7 @@ impl App {
     }
 
     /// Next/previous tab (within the focused pane)
-    fn cycle_tab(&mut self, d: isize) {
+    pub(super) fn cycle_tab(&mut self, d: isize) {
         let g = self.focused_group();
         let idx: Vec<usize> = (0..self.tabs.len()).filter(|&i| self.tabs[i].group == g).collect();
         let Some(p) = idx.iter().position(|&i| i == self.active) else { return };
@@ -21,7 +21,7 @@ impl App {
     }
 
     /// Split the focused pane (up to 4 panes): move the current tab into the new pane (right/below)
-    fn split_focused(&mut self, dir: SplitDir) {
+    pub(super) fn split_focused(&mut self, dir: SplitDir) {
         let Some(cur) = self.tabs.get(self.active).map(|t| t.id) else {
             self.status = "Open a tab to split".into();
             return;
@@ -59,7 +59,7 @@ impl App {
     /// Adjust the console editor/result ratio
     /// To the adjacent pane: axis = Down means up(back)/down, Right means left(back)/right.
     /// Based on the last drawn pane positions, the nearest overlapping pane in that direction
-    fn focus_pane(&mut self, axis: SplitDir, back: bool) {
+    pub(super) fn focus_pane(&mut self, axis: SplitDir, back: bool) {
         let cur = self.focused_group();
         // (pane, left, right, top, bottom)
         let rect = |&(g, bar, body): &(usize, ratatui::layout::Rect, ratatui::layout::Rect)| (g, bar.x, bar.x + bar.width, bar.y, body.y + body.height);

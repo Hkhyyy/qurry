@@ -288,7 +288,7 @@ impl App {
     }
 
     /// Check for a new version right now (⌃K › Check for Updates)
-    fn check_update(&mut self) {
+    pub(super) fn check_update(&mut self) {
         self.status = "Checking for updates…".into();
         let dir = self.state.store.dir();
         let channel = self.state.store.update_channel();
@@ -358,7 +358,7 @@ impl App {
     }
 
     /// Download the latest release, swap it in, and relaunch when done (open tabs are saved on quit)
-    fn install_update(&mut self) {
+    pub(super) fn install_update(&mut self) {
         self.status = "Updating Qurry… (downloading)".into();
         let channel = self.state.store.update_channel();
         let tx = self.tx.clone();

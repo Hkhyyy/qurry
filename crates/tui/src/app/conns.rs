@@ -52,7 +52,7 @@ impl App {
 
     /// After the TLS opt-in under a run error: only reconnect. A console never runs the statement again (it may write); a table tab reloads
     /// once connected, as after any failed connection (reload_conns)
-    fn reconnect_after_tls(&mut self, conn: String, console: Option<u64>) {
+    pub(super) fn reconnect_after_tls(&mut self, conn: String, console: Option<u64>) {
         let st = self.state.clone();
         self.status = format!("Connecting to \"{}\"…", self.conn(&conn).map(|c| c.config.name.as_str()).unwrap_or(&conn));
         let id = conn.clone();
@@ -275,7 +275,7 @@ impl App {
     }
 
     /// Master key for the password file: config folder ↔ OS keychain (asks, then moves. Runs separately since a keychain popup may appear)
-    fn password_key(&mut self) {
+    pub(super) fn password_key(&mut self) {
         use qurry_core::secrets::KeyLocation;
         let to_keychain = self.state.secret_key_location() == KeyLocation::File;
         let text = if to_keychain {
