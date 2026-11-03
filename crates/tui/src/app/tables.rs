@@ -151,13 +151,14 @@ impl App {
         let title = format!("{name} [DDL]");
         // A table also gets the Structure view (v), loaded only when it is shown
         let table = matches!(kind.as_str(), "table" | "partitioned").then(|| (schema.clone(), name.clone()));
+        let obj = kind.clone();
         self.spawn(async move { st.object_ddl(target, schema, name, kind).await.map_err(err) }, move |a, r| match r {
             Ok(text) => {
                 if let Some(i) = a.tabs.iter().position(|t| t.title == title && t.conn == conn) {
                     a.activate(i);
                 } else {
                     let structure_view = table.is_some() && a.ddl_structure;
-                    let id = a.push_tab(&conn, db2, title, TabKind::Text(TextTab { text, table, structure_view, ..Default::default() }));
+                    let id = a.push_tab(&conn, db2, title, TabKind::Text(TextTab { text, kind: obj, table, structure_view, ..Default::default() }));
                     if structure_view {
                         a.load_structure(id);
                     }

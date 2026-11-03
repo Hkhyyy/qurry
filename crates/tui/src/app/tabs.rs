@@ -115,10 +115,10 @@ impl App {
         self.restored_tab(conn, db, title, TabKind::Table(tt))
     }
 
-    /// table: a table's DDL (its Structure view opens in the last choice and loads when first shown)
-    pub fn restore_text(&mut self, conn: &str, db: String, title: String, text: &str, table: Option<(String, String)>) -> Option<u64> {
+    /// kind: the object's tree kind (tab glyph); table: a table's DDL (its Structure view opens in the last choice and loads when first shown)
+    pub fn restore_text(&mut self, conn: &str, db: String, title: String, text: &str, kind: &str, table: Option<(String, String)>) -> Option<u64> {
         let structure_view = table.is_some() && self.ddl_structure;
-        self.restored_tab(conn, db, title, TabKind::Text(TextTab { text: text.into(), table, structure_view, ..Default::default() }))
+        self.restored_tab(conn, db, title, TabKind::Text(TextTab { text: text.into(), kind: kind.into(), table, structure_view, ..Default::default() }))
     }
 
     pub fn restore_dba(&mut self, conn: &str, db: String, title: String, report: &str) -> Option<u64> {

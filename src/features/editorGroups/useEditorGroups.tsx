@@ -17,6 +17,8 @@ import { TlsFix } from "../../components/TlsFix";
 import { Spacer, TabItem, Tabs, TabStrip, Text, ToolbarSep, ToolButton, Toolbar } from "../../ui";
 import { TableStructureView } from "../../components/TableStructure";
 import { setDdlView, type DdlView } from "../../lib/structure";
+import { TabIcon } from "../../ui/icons";
+import type { NodeInfo } from "../../components/SchemaTree";
 import type { useConsole } from "../console/useConsole";
 import type { useExplorer } from "../explorer/useExplorer";
 import type { useJobs } from "../jobs/useJobs";
@@ -117,8 +119,8 @@ export function useEditorGroups({
     const open = useTabsStore.getState().tabs.find((t) => snapKey(t) === snap.key);
     if (open) return activate(open);
     if (snap.kind === "table" && snap.edit) {
-      openTableTab(c, snap.edit.schema, snap.edit.table, snap.database, undefined, snap.where, snap.orderBy);
-    } else addTab(c, snap.kind, { title: snap.title, sql: snap.sql, database: snap.database, edit: snap.edit });
+      openTableTab(c, snap.edit.schema, snap.edit.table, snap.database, undefined, snap.where, snap.orderBy, snap.objKind);
+    } else addTab(c, snap.kind, { title: snap.title, sql: snap.sql, database: snap.database, edit: snap.edit, objKind: snap.objKind });
   };
   const reopenClosed = () => {
     const [snap, ...rest] = useTabsStore.getState().closedStack;
@@ -133,8 +135,8 @@ export function useEditorGroups({
     const r = splitPane(useTabsStore.getState().panes, t.group, dir);
     if (!r) return setStatus(`Up to ${MAX_PANES} panes`);
     setPanes(r.pane);
-    if (t.kind === "table" && t.edit) openTableTab(c, t.edit.schema, t.edit.table, t.database, r.g, t.where, t.orderBy);
-    else addTab(c, t.kind, { title: t.kind === "console" ? `${t.title} (copy)` : t.title, sql: sqlOf(t), database: t.database, edit: t.edit, group: r.g });
+    if (t.kind === "table" && t.edit) openTableTab(c, t.edit.schema, t.edit.table, t.database, r.g, t.where, t.orderBy, t.objKind);
+    else addTab(c, t.kind, { title: t.kind === "console" ? `${t.title} (copy)` : t.title, sql: sqlOf(t), database: t.database, edit: t.edit, group: r.g, objKind: t.objKind });
   };
 
   const openTabMenu = (e: React.MouseEvent, t: Tab) => {
@@ -172,7 +174,7 @@ export function useEditorGroups({
       ...(split
         ? ([
             { label: "Move To Next Group", action: () => moveTo(t.id, other) },
-            { label: "Open In Next Group", action: () => { const cc = c; if (!cc) return; if (t.kind === "table" && t.edit) openTableTab(cc, t.edit.schema, t.edit.table, t.database, other, t.where, t.orderBy); else addTab(cc, t.kind, { title: t.title, sql: sqlOf(t), database: t.database, edit: t.edit, group: other }); } },
+            { label: "Open In Next Group", action: () => { const cc = c; if (!cc) return; if (t.kind === "table" && t.edit) openTableTab(cc, t.edit.schema, t.edit.table, t.database, other, t.where, t.orderBy, t.objKind); else addTab(cc, t.kind, { title: t.title, sql: sqlOf(t), database: t.database, edit: t.edit, group: other, objKind: t.objKind }); } },
             { label: "Unsplit All", action: unsplit },
           ] as MenuItem[])
         : []),
@@ -248,8 +250,7 @@ export function useEditorGroups({
               <TabItem
                 key={t.id}
                 label={labelOf(t)}
-                icon={t.kind === "table" ? "▦" : t.kind === "ddl" ? "ƒ" : t.kind === "redis" ? "◆" : t.kind === "dba" ? "◉" : t.kind === "erd" ? "⧉" : t.kind === "migrate" ? "⇄" : t.kind === "rag" ? "✦" : "⌘"}
-                iconClass={t.kind}
+                icon={<TabIcon kind={t.kind} obj={t.objKind} />}
                 active={t.id === ga?.id}
                 pinned={t.pinned}
                 onPin={() => togglePin(t)}
@@ -490,7 +491,7 @@ export function useEditorGroups({
                   onExportCsv={() => exportCsv(t)}
                   onDdl={() => {
                     const c = conns.find((x) => x.id === t.connId);
-                    if (c && t.edit) openDdl({ kind: "table", conn: c, db: t.database, schema: t.edit.schema, name: t.edit.table });
+                    if (c && t.edit) openDdl({ kind: (t.objKind ?? "table") as NodeInfo["kind"], conn: c, db: t.database, schema: t.edit.schema, name: t.edit.table });
                   }}
                   onCopyQueryToConsole={(sql) => { const c = conns.find((x) => x.id === t.connId); if (c) openConsole(c, t.database, sql); }}
                   onFindSimilar={

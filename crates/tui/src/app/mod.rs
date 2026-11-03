@@ -127,6 +127,8 @@ pub struct TableTab {
 #[derive(Default)]
 pub struct TextTab {
     pub text: String,
+    /// DDL: tree kind of the object (for the tab glyph); empty for other text (diagram)
+    pub kind: String,
     pub scroll: u16,
     /// A table's DDL: (schema, table), which gives it the Structure view (v)
     pub table: Option<(String, String)>,

@@ -24,6 +24,7 @@ const wsJson = () => {
       redisKey: t.redisKey,
       dbaReport: t.dbaReport,
       erdSchemas: t.erdSchemas,
+      objKind: t.objKind,
     })),
     panes: l.panes,
     activeIds: l.activeIds.map((id) => l.tabs.findIndex((t) => t.id === id)),
@@ -54,7 +55,7 @@ const buildLayout = (ws: any, conns: ConnectionView[]): WsLayout => {
       const { q } = dialectOf(c.kind);
       tableSql = `SELECT * FROM ${q(x.edit.schema)}.${q(x.edit.table)}${x.where ? ` WHERE ${x.where}` : ""}${x.orderBy ? ` ORDER BY ${x.orderBy}` : ""};`;
     }
-    const t = buildTab(c, x.kind, { sql: x.kind === "table" ? tableSql : x.sql, database: x.database, tableSql, edit: x.edit ? { ...x.edit, pk: [] } : undefined, where: x.where, orderBy: x.orderBy }, group, x.title);
+    const t = buildTab(c, x.kind, { sql: x.kind === "table" ? tableSql : x.sql, database: x.database, tableSql, edit: x.edit ? { ...x.edit, pk: [] } : undefined, where: x.where, orderBy: x.orderBy, objKind: typeof x.objKind === "string" ? x.objKind : undefined }, group, x.title);
     return { ...t, pinned: x.pinned, redisKey: x.redisKey, dbaReport: x.dbaReport, erdSchemas: x.erdSchemas, stale: x.kind !== "ddl" };
   });
   const ts = built.filter((t): t is Tab => !!t);

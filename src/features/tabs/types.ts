@@ -50,6 +50,8 @@ interface Tab {
   cursorEntry?: string;
   /** Pin Tab */
   pinned?: boolean;
+  /** Table / DDL tab: tree kind of the object it shows (view, routine, …) for the tab icon */
+  objKind?: string;
   /** Redis browser: key to select first */
   redisKey?: string;
   /** dba: report being viewed (sessions, slow_queries, …) */
@@ -73,6 +75,7 @@ interface TabSnapshot {
   edit?: EditTarget;
   where: string;
   orderBy: string;
+  objKind?: string;
 }
 const TAB_LIMIT = 10; // DataGrip default Tab limit
 const snapKey = (t: { kind: string; connId: string; database?: string; title: string; edit?: EditTarget }) =>

@@ -28,6 +28,7 @@ import { Switcher } from "../../components/Switcher";
 import { BackupDialog, ExportDialog, ImportDialog } from "../../components/Transfer";
 import { UpdateDialog } from "../../components/UpdateDialog";
 import { WorkspaceBar } from "../../components/WorkspaceBar";
+import { ConsoleIcon, ReportIcon, TabIcon, TableIcon } from "../icons";
 
 /** Screens: real screen components with fake data (same data as the app's ?mock). Buttons are clickable */
 const meta: Meta = { title: "GUI/5 Screens", parameters: { layout: "fullscreen" } };
@@ -188,7 +189,7 @@ export const Search: S = {
         initialTab="all"
         conns={CONNS}
         contextConnId="dev"
-        files={[{ key: "f1", icon: "⌘", title: "console [DEV] shop_app", hint: "[DEV] shop_app", open: true }]}
+        files={[{ key: "f1", icon: <ConsoleIcon />, title: "console [DEV] shop_app", hint: "[DEV] shop_app", open: true }]}
         actions={[{ name: "Production Log…", group: "Run", run: noop }, { name: "Generate Test Data…", group: "Data", run: noop }]}
         onClose={noop}
         onSelectInTree={noop}
@@ -206,9 +207,10 @@ export const SwitcherStory: S = {
   render: () => (
     <Switcher
       items={[
-        { key: "a", icon: "⌘", title: "console [DEV] shop_app", hint: "[DEV] shop_app", open: true, color: "#5f5b24" },
-        { key: "b", icon: "▦", title: "users", hint: "[PROD] shop_app · public", open: true, color: "#6e2a2a" },
-        { key: "c", icon: "⧉", title: "Sessions & Locks", hint: "[PROD] shop_app", open: true },
+        { key: "a", icon: <ConsoleIcon />, title: "console [DEV] shop_app", hint: "[DEV] shop_app", open: true, color: "#5f5b24" },
+        { key: "b", icon: <TableIcon />, title: "users", hint: "[PROD] shop_app · public", open: true, color: "#6e2a2a" },
+        { key: "d", icon: <TabIcon kind="ddl" obj="view" />, title: "active_users [DDL]", hint: "[PROD] shop_app", open: true, color: "#6e2a2a" },
+        { key: "c", icon: <ReportIcon />, title: "Sessions & Locks", hint: "[PROD] shop_app", open: true },
       ]}
       start={1}
       onPick={noop}

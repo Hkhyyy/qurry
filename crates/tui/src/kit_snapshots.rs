@@ -490,7 +490,8 @@ async fn all_scenes() -> Vec<Value> {
     scenes
 }
 
-/// Split panes with many tabs of two Data Sources in each color mode: the focused (left) pane's active [PROD] tab next to an inactive [DEV] one, the other pane's active [DEV] tab next to an inactive [PROD] one
+/// Split panes with many tabs of two Data Sources in each color mode: the focused (left) pane's active [PROD] tab next to an inactive [DEV] one, the other pane's active [DEV] tab next to an inactive [PROD] one.
+/// Tab glyphs follow the tree: a view's data and DDL ◫, a function's DDL ƒ
 async fn tab_bars(scenes: &mut Vec<Value>) {
     use crate::theme::ColorMode;
     let mut h = Harness::new().await;
@@ -504,13 +505,22 @@ async fn tab_bars(scenes: &mut Vec<Value>) {
         h.app.tabs.iter_mut().find(|t| t.id == id).unwrap().conn = conn.into();
         id
     }
+    fn ddl(h: &mut Harness, name: &str, conn: &str, kind: &str) {
+        h.app.push_tab(conn, "rentalpay".into(), format!("{name} [DDL]"), crate::app::TabKind::Text(crate::app::TextTab { text: String::new(), kind: kind.into(), ..Default::default() }));
+    }
     let users = tab(&mut h, "users", "prod");
-    for (name, conn) in [("adjust", "dev"), ("payment", "prod"), ("contract", "prod"), ("orders", "dev")] {
+    let orders = tab(&mut h, "v_orders", "dev");
+    if let Some(crate::app::TabKind::Table(t)) = h.app.tabs.iter_mut().find(|t| t.id == orders).map(|t| &mut t.kind) {
+        t.kind = "view".into();
+    }
+    for (name, conn) in [("adjust", "dev"), ("payment", "prod")] {
         tab(&mut h, name, conn);
     }
-    tab(&mut h, "bank_info", "prod");
+    // The active tab when splitting moves to the new pane
+    ddl(&mut h, "v_orders", "prod", "view");
     h.app.run_action(crate::app::Action::SplitRight);
     let role = tab(&mut h, "admin_role", "dev");
+    ddl(&mut h, "calc_fee", "prod", "routine");
     for id in [role, users] {
         let i = h.app.tab_index(id).unwrap();
         h.app.activate(i);

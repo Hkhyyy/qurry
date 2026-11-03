@@ -37,15 +37,15 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
   const workspaces = useWorkspacesStore((s) => s.workspaces);
   const curWs = useWorkspacesStore((s) => s.curWs);
   const backupReq = useDialogsStore((s) => s.backupReq);
-  const openTable = async (c: ConnectionView, schema: string, table: string, db?: string) => {
+  const openTable = async (c: ConnectionView, schema: string, table: string, db?: string, objKind?: string) => {
     const target = targetId(c.id, db && db !== (c.database || "postgres") ? db : undefined);
     const existing = useTabsStore.getState().tabs.find((t) => t.kind === "table" && t.target === target && t.edit?.schema === schema && t.edit?.table === table);
     if (existing) return activate(existing);
-    return openTableTab(c, schema, table, db);
+    return openTableTab(c, schema, table, db, undefined, "", "", objKind);
   };
 
   /** Open a new table data tab (when duplicated by split, a separate tab with independent filter and sort) */
-  const openTableTab = async (c: ConnectionView, schema: string, table: string, db?: string, group?: Group, where = "", orderBy = "") => {
+  const openTableTab = async (c: ConnectionView, schema: string, table: string, db?: string, group?: Group, where = "", orderBy = "", objKind?: string) => {
     const target = targetId(c.id, db && db !== (c.database || "postgres") ? db : undefined);
     const { q } = dialectOf(c.kind);
     let sql = `SELECT * FROM ${q(schema)}.${q(table)}`;
@@ -59,7 +59,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
     } catch {
       /* Read-only if the metadata lookup fails */
     }
-    const tab = addTab(c, "table", { title: table, sql, database: db, tableSql: sql, edit, group, where, orderBy });
+    const tab = addTab(c, "table", { title: table, sql, database: db, tableSql: sql, edit, group, where, orderBy, objKind });
     run(tab, sql);
   };
 
@@ -73,7 +73,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
       setStatus(`Loading DDL of ${info.schema}.${info.name}…`);
       const ddl = await meta.ddl(target, info.schema, info.name, info.kind);
       // A table also gets the Structure view, opened in the last choice
-      addTab(info.conn, "ddl", { title, sql: ddl, database: info.db, edit: hasStructure(info.kind) ? { schema: info.schema, table: info.name, pk: [] } : undefined });
+      addTab(info.conn, "ddl", { title, sql: ddl, database: info.db, edit: hasStructure(info.kind) ? { schema: info.schema, table: info.name, pk: [] } : undefined, objKind: info.kind });
       setStatus("Ready");
     } catch (e) {
       setStatus(`DDL failed: ${String(e)}`);
@@ -196,7 +196,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
       if (info.kind === "key") return openRedis(info.conn, info.db, info.name);
       if (info.kind === "conn" || info.kind === "db") return openRedis(info.conn, info.db);
     }
-    if (isRelation(info.kind) && info.schema && info.name) openTable(info.conn, info.schema, info.name, info.db);
+    if (isRelation(info.kind) && info.schema && info.name) openTable(info.conn, info.schema, info.name, info.db, info.kind);
     else if (info.kind === "routine" || info.kind === "sequence") openDdl(info);
   };
 
@@ -248,7 +248,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
     if (!info.schema || !info.name) return;
     try {
       const ddl = await ddlText(info);
-      addTab(info.conn, "ddl", { title: `SQL Generator: ${info.name}`, sql: ddl, database: info.db });
+      addTab(info.conn, "ddl", { title: `SQL Generator: ${info.name}`, sql: ddl, database: info.db, objKind: info.kind });
     } catch (e) {
       setStatus(String(e));
     }

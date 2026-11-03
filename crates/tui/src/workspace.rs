@@ -33,8 +33,8 @@ fn ws_json(id: &str, name: &str, conns: &[String], tabs: &[Tab], panes: &Pane, a
                 TabKind::Console(c) => json!({ "console": c.editor.lines().join("\n") }),
                 TabKind::Table(tt) => json!({ "table": { "schema": tt.schema, "name": tt.table, "kind": tt.kind, "where": tt.where_, "order": tt.order } }),
                 TabKind::Text(x) => match &x.table {
-                    Some((schema, name)) => json!({ "text": x.text, "ddlOf": { "schema": schema, "name": name } }),
-                    None => json!({ "text": x.text }),
+                    Some((schema, name)) => json!({ "text": x.text, "obj": x.kind, "ddlOf": { "schema": schema, "name": name } }),
+                    None => json!({ "text": x.text, "obj": x.kind }),
                 },
                 TabKind::Dba(d) => json!({ "dba": d.report }),
                 TabKind::Redis(r) => json!({ "redis": r.pattern }),
@@ -138,7 +138,7 @@ fn restore_one(app: &mut App, v: &Value, show: bool) {
             app.restore_table(&conn, s("db"), g("schema"), g("name"), g("kind"), g("where"), g("order"))
         } else if let Some(text) = k.get("text").and_then(Value::as_str) {
             let table = k.get("ddlOf").map(|x| (x.get("schema").and_then(Value::as_str).unwrap_or_default().to_string(), x.get("name").and_then(Value::as_str).unwrap_or_default().to_string()));
-            app.restore_text(&conn, s("db"), s("title"), text, table)
+            app.restore_text(&conn, s("db"), s("title"), text, k.get("obj").and_then(Value::as_str).unwrap_or_default(), table)
         } else if let Some(r) = k.get("dba").and_then(Value::as_str) {
             app.restore_dba(&conn, s("db"), s("title"), r)
         } else if let Some(p) = k.get("redis").and_then(Value::as_str) {
@@ -837,13 +837,13 @@ mod tests {
         assert_eq!(h.app.workspaces[1].conns, ["test"]);
     }
 
-    /// A table's DDL tab comes back with its Structure view (in the last choice), loaded when first shown
+    /// A table's DDL tab comes back with its Structure view (in the last choice), loaded when first shown, and its object kind (tab glyph)
     #[tokio::test]
     async fn ddl_structure_view_survives_a_relaunch() {
         use crate::app::{TabKind, TextTab};
         let mut h = harness().await;
         let table = Some(("public".to_string(), "users".to_string()));
-        h.app.push_tab("test", "postgres".into(), "users [DDL]".into(), TabKind::Text(TextTab { text: "CREATE TABLE public.users ();".into(), table, ..Default::default() }));
+        h.app.push_tab("test", "postgres".into(), "users [DDL]".into(), TabKind::Text(TextTab { text: "CREATE TABLE public.users ();".into(), kind: "table".into(), table, ..Default::default() }));
         h.app.ddl_structure = true;
         let v = super::to_json(&h.app);
         assert_eq!(v["ddlView"], "structure");
@@ -853,7 +853,7 @@ mod tests {
         let i = h2.app.tabs.iter().position(|t| t.title == "users [DDL]").unwrap();
         h2.app.activate(i);
         let TabKind::Text(t) = &h2.app.tabs[i].kind else { panic!() };
-        assert_eq!((t.table.clone(), t.structure_view), (Some(("public".to_string(), "users".to_string())), true));
+        assert_eq!((t.table.clone(), t.structure_view, t.kind.as_str()), (Some(("public".to_string(), "users".to_string())), true, "table"));
         // Loading on showing (the test Data Source has no server; a_failed_structure… covers the failure)
         let s = h2.screen(140, 20);
         assert!(s.contains("Loading the structure of public.users…"), "{s}");

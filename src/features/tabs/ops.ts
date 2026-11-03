@@ -39,6 +39,7 @@ const snapshot = (t: Tab): TabSnapshot => ({
   edit: t.edit,
   where: t.where,
   orderBy: t.orderBy,
+  objKind: t.objKind,
 });
 const remember = (t: Tab) => {
   const snap = snapshot(t);
@@ -49,7 +50,7 @@ const remember = (t: Tab) => {
 const buildTab = (
   c: ConnectionView,
   kind: Tab["kind"],
-  opts: { sql?: string; database?: string; tableSql?: string; edit?: EditTarget; where?: string; orderBy?: string },
+  opts: { sql?: string; database?: string; tableSql?: string; edit?: EditTarget; where?: string; orderBy?: string; objKind?: string },
   group: Group,
   title: string,
 ): Tab => {
@@ -73,6 +74,7 @@ const buildTab = (
     tableSql: opts.tableSql,
     edit: opts.edit,
     ddlView: kind === "ddl" && opts.edit ? ddlView() : undefined,
+    objKind: opts.objKind,
     results: [],
     activeResult: "output",
     output: [],

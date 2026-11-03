@@ -3,7 +3,7 @@ import { List, ListItem, Overlay, Popover, TextInput } from "../ui";
 
 export interface SwitchItem {
   key: string;
-  icon: string;
+  icon: React.ReactNode;
   title: string;
   hint: string;
   open?: boolean;
