@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ask, askText, notice } from "./lib/dialogs";
 import { listen } from "@tauri-apps/api/event";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { analyzePlan, api, auditLog, backup, ConnectionView, ddl, previewImpact, dialectOf, meta, VECTOR_KINDS, QueryResult, redisDb, removedDespite, targetId, UpdateInfo, updateCheckEnabled } from "./lib/api";
+import { analyzePlan, api, auditLog, backup, ConnectionView, ddl, previewImpact, dialectOf, meta, VECTOR_KINDS, QueryResult, redisDb, removedDespite, targetId, updateCheckEnabled } from "./lib/api";
 import { RedisBrowser } from "./components/RedisBrowser";
 import { KeymapDialog } from "./components/KeymapDialog";
 import { UpdateDialog } from "./components/UpdateDialog";
@@ -48,6 +48,7 @@ import { editorApis, liveSql, setActiveIds, setFocused, setPanes, setTabs, useTa
 import { allTabs, buildTab, closeTabs, moveTo, patch, remember, settle, sqlOf, togglePin, updTab } from "./features/tabs/ops";
 import { setWorkspaces, stash, useWorkspacesStore } from "./features/workspaces/store";
 import { useWorkspaces } from "./features/workspaces/useWorkspaces";
+import { setBackupReq, setCopyReq, setDialog, setExportReq, setGenReq, setHistoryFor, setHistoryTab, setImportReq, setKeymapOpen, setObjEdit, setProdLog, setQuickDoc, setSchemeOpen, setSettingsOpen, setUpdate, setUpdateOpen, useDialogsStore } from "./features/dialogs/store";
 import "./App.css";
 
 /** Max rows kept in the result grid (same as the TUI). Beyond that, export to CSV */
@@ -78,9 +79,9 @@ export default function App() {
     void loadKeymap();
     return () => void off();
   }, []);
-  const [settingsOpen, setSettingsOpen] = useState<false | "appearance" | "keymap">(false);
-  const [schemeOpen, setSchemeOpen] = useState(false);
-  const [keymapOpen, setKeymapOpen] = useState(false);
+  const settingsOpen = useDialogsStore((s) => s.settingsOpen);
+  const schemeOpen = useDialogsStore((s) => s.schemeOpen);
+  const keymapOpen = useDialogsStore((s) => s.keymapOpen);
   // On window close, ask if there are uncommitted changes (closing rolls them back)
   useEffect(() => {
     let off: (() => void) | undefined;
@@ -95,8 +96,8 @@ export default function App() {
     return () => off?.();
   }, []);
   // New version (checked at startup + every hour; failures, and a check that was skipped, are ignored silently and keep the badge)
-  const [update, setUpdate] = useState<UpdateInfo | null>(null);
-  const [updateOpen, setUpdateOpen] = useState(false);
+  const update = useDialogsStore((s) => s.update);
+  const updateOpen = useDialogsStore((s) => s.updateOpen);
   // An offer that went away closes its window, so a later offer doesn't open it unasked
   useEffect(() => {
     if (!update) setUpdateOpen(false);
@@ -121,14 +122,13 @@ export default function App() {
   const focused = useTabsStore((s) => s.focused);
   const workspaces = useWorkspacesStore((s) => s.workspaces);
   const curWs = useWorkspacesStore((s) => s.curWs);
-  const [dialog, setDialog] = useState<{ edit?: ConnectionView } | null>(null);
+  const dialog = useDialogsStore((s) => s.dialog);
   const [status, setStatus] = useState("Ready");
   const [treeSel, setTreeSel] = useState<NodeInfo | null>(null);
   const [tabMenu, setTabMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
-  const [historyFor, setHistoryFor] = useState<string | null>(null);
-  const [historyTab, setHistoryTab] = useState<"history" | "snippets">("history");
-  /** Production operation log window (connId null = all Data Sources) */
-  const [prodLog, setProdLog] = useState<{ connId: string | null } | null>(null);
+  const historyFor = useDialogsStore((s) => s.historyFor);
+  const historyTab = useDialogsStore((s) => s.historyTab);
+  const prodLog = useDialogsStore((s) => s.prodLog);
 
   // Called on every query run, so only update state when something actually changed (avoids redrawing the whole tree and re-registering shortcut handlers)
   const connsJson = useRef("");
@@ -371,14 +371,11 @@ export default function App() {
   };
 
   // ───────── Data export / import (choose format → progress bar at the bottom) ─────────
-  const [exportReq, setExportReq] = useState<{ target: string; sql: string; name: string; table: [string, string] | null } | null>(null);
-  const [importReq, setImportReq] = useState<{ target: string; schema: string; table?: string; refresh?: () => void } | null>(null);
-  /** Generate test data window */
-  const [genReq, setGenReq] = useState<{ target: string; schema: string; table: string; conn: ConnectionView } | null>(null);
-  /** Create / modify objects (New ▸ · Modify Table…) */
-  const [objEdit, setObjEdit] = useState<{ target: string; conn: ConnectionView; db?: string; schema: string; table?: string; newKind?: NewKind; refresh?: () => void } | null>(null);
-  /** Copy a subset of production data window */
-  const [copyReq, setCopyReq] = useState<{ target: string; schema: string; table: string; conn: ConnectionView } | null>(null);
+  const exportReq = useDialogsStore((s) => s.exportReq);
+  const importReq = useDialogsStore((s) => s.importReq);
+  const genReq = useDialogsStore((s) => s.genReq);
+  const objEdit = useDialogsStore((s) => s.objEdit);
+  const copyReq = useDialogsStore((s) => s.copyReq);
   const [jobs, setJobs] = useState<TransferJob[]>([]);
   useEffect(() => {
     let off: (() => void) | undefined;
@@ -515,9 +512,9 @@ export default function App() {
 
   // ───────── Database Explorer actions (DataGrip keymap) ─────────
   const K = { modify: sk("tree.modify"), rename: sk("tree.rename"), edit: sk("tree.editData"), props: sk("tree.properties"), refresh: sk("tree.refresh"), deact: sk("tree.disconnect"), jump: sk("tree.jumpConsole"), ddl: sk("tree.ddl"), gen: sk("tree.sqlGen"), ddlClip: sk("tree.ddlCopy"), ddlCons: sk("tree.ddlConsole"), ref: sk("tree.copyRef"), doc: sk("tree.quickDoc"), drop: sk("tree.remove"), dup: sk("tree.duplicate"), console: sk("console.new"), force: bindings("tree.refresh")[1] ? formatSpec(bindings("tree.refresh")[1]) : undefined, newK: sk("tree.newDs") };
-  const [quickDoc, setQuickDoc] = useState<{ title: string; text: string } | null>(null);
+  const quickDoc = useDialogsStore((s) => s.quickDoc);
   // ───────── Backup / restore ─────────
-  const [backupReq, setBackupReq] = useState<{ c: ConnectionView; db?: string } | null>(null);
+  const backupReq = useDialogsStore((s) => s.backupReq);
   const dbTarget = (c: ConnectionView, db?: string) => targetId(c.id, db && db !== (c.database || "postgres") ? db : undefined);
   const startBackup = async (o: Omit<BackupOptions, "schemas">) => {
     const r0 = backupReq;
