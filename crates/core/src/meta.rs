@@ -337,13 +337,15 @@ mod tests {
     async fn my_table_structure() {
         let Some(s) = crate::testenv::my() else { return };
         let pool = crate::db::connect(&s.cfg, s.password.as_deref()).await.unwrap();
+        let (s_cfg, s_pw) = (s.cfg.clone(), s.password.clone().unwrap_or_default());
         let Pool::My(p) = &pool else { unreachable!() };
         for q in [
             "drop database if exists qurry_ddl_structure",
             "create database qurry_ddl_structure",
-            "create table qurry_ddl_structure.parent(id int primary key, code varchar(20) unique) engine=InnoDB comment='Parents'",
+            "create table qurry_ddl_structure.parent(id int primary key auto_increment, code varchar(20) unique) engine=InnoDB comment='Parents'",
+            "insert into qurry_ddl_structure.parent(code) values ('a'), ('b')",
             "create table qurry_ddl_structure.child(id int primary key, parent_id int, note varchar(40), boss int, \
-               index child_note_id (note, id), foreign key fk_parent (parent_id) references qurry_ddl_structure.parent(id) on delete cascade, \
+               index child_note_id (note, id), index mx (note, (upper(note)), id), index fx ((lower(note))), foreign key fk_parent (parent_id) references qurry_ddl_structure.parent(id) on delete cascade, \
                constraint fk_boss foreign key (boss) references qurry_ddl_structure.child(id))",
             "create trigger qurry_ddl_structure.child_touch before insert on qurry_ddl_structure.child for each row set new.note = coalesce(new.note, '-')",
         ] {
@@ -357,6 +359,11 @@ mod tests {
         assert_eq!(s.referenced_by.as_ref().unwrap().iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["fk_boss"]);
         let ix = s.detail.indexes.iter().find(|i| i.name == "child_note_id").unwrap();
         assert_eq!(ix.columns, ["note", "id"]);
+        // Functional key parts come as their expression; an index of expressions only doesn't fail the whole call
+        let ix = |n: &str| s.detail.indexes.iter().find(|i| i.name == n).unwrap();
+        assert_eq!(ix("mx").columns, ["note", "(upper(`note`))", "id"]);
+        assert_eq!(ix("mx").definition, "INDEX `mx` (note, (upper(`note`)), id)");
+        assert_eq!(ix("fx").columns, ["(lower(`note`))"]);
         let tr = s.triggers.as_ref().unwrap();
         assert_eq!(tr.iter().map(|t| (t.name.as_str(), t.timing.as_str(), t.events.as_str())).collect::<Vec<_>>(), [("child_touch", "BEFORE", "INSERT")]);
         assert!(tr[0].definition.contains("coalesce"), "{}", tr[0].definition);
@@ -365,6 +372,16 @@ mod tests {
         assert_eq!(pin.comment.as_deref(), Some("Parents"));
         let opts = pin.options.unwrap();
         assert!(opts.iter().any(|(k, v)| k == "Engine" && v == "InnoDB"), "{opts:?}");
+        // information_schema's cached AUTO_INCREMENT would lag SHOW CREATE TABLE, so it isn't shown
+        assert!(!opts.iter().any(|(k, _)| k.contains("increment")), "{opts:?}");
+        // A server whose sql_mode has NO_BACKSLASH_ESCAPES: multi-column keys still split into columns
+        let opts = sqlx::mysql::MySqlConnectOptions::new().host(&s_cfg.host).port(s_cfg.port).username(&s_cfg.user).password(&s_pw).database("qurry_ddl_structure");
+        let raw = sqlx::mysql::MySqlPoolOptions::new().max_connections(1).connect_with(opts).await.unwrap();
+        // (one connection, so the session setting holds for the calls below)
+        sqlx::raw_sql("set session sql_mode = concat(@@sql_mode, ',NO_BACKSLASH_ESCAPES')").execute(&raw).await.unwrap();
+        let s = crate::mysql::table_structure(&raw, "qurry_ddl_structure", "child").await.unwrap();
+        assert_eq!(s.detail.indexes.iter().find(|i| i.name == "child_note_id").unwrap().columns, ["note", "id"]);
+        assert!(s.foreign_keys.unwrap().iter().all(|f| f.columns.len() == 1));
         sqlx::raw_sql("drop database qurry_ddl_structure").execute(p).await.unwrap();
     }
 }
