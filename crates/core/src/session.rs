@@ -586,15 +586,15 @@ mod tests {
     #[ignore]
     async fn auto_mode_user_transaction_is_not_committed_by_select() {
         let Some(p) = pool().await else { return };
-        sqlx::query("create table if not exists public.dbtool_tx_t(id int primary key, v text)").execute(&p).await.unwrap();
-        sqlx::query("delete from public.dbtool_tx_t").execute(&p).await.unwrap();
-        sqlx::query("insert into public.dbtool_tx_t values (1, 'a')").execute(&p).await.unwrap();
-        let seen = || async { sqlx::query_scalar::<_, String>("select v from public.dbtool_tx_t where id = 1").fetch_one(&p).await.unwrap() };
+        sqlx::query("create table if not exists public.dbtool_tx_auto_t(id int primary key, v text)").execute(&p).await.unwrap();
+        sqlx::query("delete from public.dbtool_tx_auto_t").execute(&p).await.unwrap();
+        sqlx::query("insert into public.dbtool_tx_auto_t values (1, 'a')").execute(&p).await.unwrap();
+        let seen = || async { sqlx::query_scalar::<_, String>("select v from public.dbtool_tx_auto_t where id = 1").fetch_one(&p).await.unwrap() };
         let mut s = PgSession::open(&p).await.unwrap();
         s.run("begin", 500).await.unwrap();
-        s.run("update public.dbtool_tx_t set v = 'changed' where id = 1", 500).await.unwrap();
+        s.run("update public.dbtool_tx_auto_t set v = 'changed' where id = 1", 500).await.unwrap();
         // A fully read SELECT, a multi-page SELECT and a failing SELECT all leave the transaction alone
-        let r = s.run("select * from public.dbtool_tx_t", 500).await.unwrap();
+        let r = s.run("select * from public.dbtool_tx_auto_t", 500).await.unwrap();
         assert!(r.in_transaction);
         s.run("select g from generate_series(1, 1200) g", 500).await.unwrap();
         assert!(s.run("select * from no_such_table_xyz", 500).await.is_err());
@@ -604,21 +604,21 @@ mod tests {
         assert_eq!(seen().await, "a", "rolled back");
         // With uncommitted changes in Manual, switching to Auto is not allowed
         s.set_manual(true).await.unwrap();
-        s.run("update public.dbtool_tx_t set v = 'm' where id = 1", 500).await.unwrap();
+        s.run("update public.dbtool_tx_auto_t set v = 'm' where id = 1", 500).await.unwrap();
         assert!(s.set_manual(false).await.is_err());
         s.rollback_tx().await.unwrap();
         s.set_manual(false).await.unwrap();
         assert_eq!(seen().await, "a");
         // Saving table edits: UPDATE/DELETE hitting 0 or multiple rows rolls back everything
-        let none = p.execute_batch(&["insert into public.dbtool_tx_t values (2, 'b')".into(), "update public.dbtool_tx_t set v = 'x' where id = 99".into()], true, false, &[]).await;
+        let none = p.execute_batch(&["insert into public.dbtool_tx_auto_t values (2, 'b')".into(), "update public.dbtool_tx_auto_t set v = 'x' where id = 99".into()], true, false, &[]).await;
         assert!(none.is_err());
-        let many = p.execute_batch(&["update public.dbtool_tx_t set v = 'x' where id > 0".into()], true, false, &[]).await;
+        let many = p.execute_batch(&["update public.dbtool_tx_auto_t set v = 'x' where id > 0".into()], true, false, &[]).await;
         assert!(many.is_ok(), "one row matches");
-        sqlx::query("insert into public.dbtool_tx_t values (3, 'c')").execute(&p).await.unwrap();
-        assert!(p.execute_batch(&["delete from public.dbtool_tx_t where id > 0".into()], true, false, &[]).await.is_err());
-        let n: i64 = sqlx::query_scalar("select count(*) from public.dbtool_tx_t").fetch_one(&p).await.unwrap();
+        sqlx::query("insert into public.dbtool_tx_auto_t values (3, 'c')").execute(&p).await.unwrap();
+        assert!(p.execute_batch(&["delete from public.dbtool_tx_auto_t where id > 0".into()], true, false, &[]).await.is_err());
+        let n: i64 = sqlx::query_scalar("select count(*) from public.dbtool_tx_auto_t").fetch_one(&p).await.unwrap();
         assert_eq!(n, 2, "row 2 insert was rolled back, rows 1 and 3 remain");
-        sqlx::query("drop table public.dbtool_tx_t").execute(&p).await.unwrap();
+        sqlx::query("drop table public.dbtool_tx_auto_t").execute(&p).await.unwrap();
     }
 
     #[test]
@@ -724,29 +724,29 @@ mod tests {
         assert_eq!(s.run("select 2", 500).await.unwrap().rows[0][0], Value::from(2));
 
         // Tx: Manual — invisible to other connections before commit, gone after Roll back
-        sqlx::query("create table if not exists public.dbtool_tx_t(id int primary key)").execute(&p).await.unwrap();
-        sqlx::query("truncate public.dbtool_tx_t").execute(&p).await.unwrap();
+        sqlx::query("create table if not exists public.dbtool_tx_manual_t(id int primary key)").execute(&p).await.unwrap();
+        sqlx::query("truncate public.dbtool_tx_manual_t").execute(&p).await.unwrap();
         s.set_manual(true).await.unwrap();
-        let ins = s.run("insert into public.dbtool_tx_t values (1)", 500).await.unwrap();
+        let ins = s.run("insert into public.dbtool_tx_manual_t values (1)", 500).await.unwrap();
         assert!(ins.in_transaction);
-        let seen: i64 = sqlx::query_scalar("select count(*) from public.dbtool_tx_t").fetch_one(&p).await.unwrap();
+        let seen: i64 = sqlx::query_scalar("select count(*) from public.dbtool_tx_manual_t").fetch_one(&p).await.unwrap();
         assert_eq!(seen, 0, "uncommitted row must not be visible");
         // Inside a Manual transaction, SELECT (cursor) sees its own changes too
-        let mine = s.run("select count(*) from public.dbtool_tx_t", 500).await.unwrap();
+        let mine = s.run("select count(*) from public.dbtool_tx_manual_t", 500).await.unwrap();
         assert_eq!(mine.rows[0][0], Value::from(1));
         s.rollback_tx().await.unwrap();
-        let after_rb = s.run("select count(*) from public.dbtool_tx_t", 500).await.unwrap();
+        let after_rb = s.run("select count(*) from public.dbtool_tx_manual_t", 500).await.unwrap();
         assert_eq!(after_rb.rows[0][0], Value::from(0));
-        s.run("insert into public.dbtool_tx_t values (2)", 500).await.unwrap();
+        s.run("insert into public.dbtool_tx_manual_t values (2)", 500).await.unwrap();
         s.commit().await.unwrap();
-        let committed: i64 = sqlx::query_scalar("select count(*) from public.dbtool_tx_t").fetch_one(&p).await.unwrap();
+        let committed: i64 = sqlx::query_scalar("select count(*) from public.dbtool_tx_manual_t").fetch_one(&p).await.unwrap();
         assert_eq!(committed, 1);
         // Statements DECLARE cannot take do not break the manual transaction either
-        let w = s.run("with x as (delete from public.dbtool_tx_t where id = 2 returning id) select count(*) from x", 500).await.unwrap();
+        let w = s.run("with x as (delete from public.dbtool_tx_manual_t where id = 2 returning id) select count(*) from x", 500).await.unwrap();
         assert_eq!(w.rows[0][0], Value::from(1));
         s.rollback_tx().await.unwrap();
         s.set_manual(false).await.unwrap();
-        sqlx::query("drop table public.dbtool_tx_t").execute(&p).await.unwrap();
+        sqlx::query("drop table public.dbtool_tx_manual_t").execute(&p).await.unwrap();
 
         // Batch edit: roll back everything on failure
         sqlx::query("create table if not exists public.dbtool_batch_t(id int primary key, name text)").execute(&p).await.unwrap();
