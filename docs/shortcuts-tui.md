@@ -139,7 +139,9 @@ In tmux, `⌃b` (Go to DDL) is the tmux prefix: press it twice, or see [TUI in y
 | Key | Action |
 |---|---|
 | `↑ ↓  (j k) · PgUp / PgDn` | Scroll |
-| `y  ⌘c` | Copy the text |
+| `v` | Table DDL: switch between SQL and Structure (columns, keys, indexes, foreign keys, triggers, options); kept for new DDL tabs |
+| `r` | Reload the Structure view |
+| `y  ⌘c` | Copy the text (a table's DDL: the SQL, in either view) |
 | `Esc` | Back to the explorer |
 
 ## Database Admin tab (⌃k › Database Admin…)

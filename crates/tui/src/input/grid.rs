@@ -38,10 +38,13 @@ pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
             KeyCode::Home | KeyCode::Char('g') => tt.scroll = 0,
             // Up to the last line that fits the screen (trimmed when drawing)
             KeyCode::End | KeyCode::Char('G') => tt.scroll = u16::MAX,
+            // The SQL in either view (as the GUI's Copy)
             KeyCode::Char('y') => {
                 let s = tt.text.clone();
                 copy(app, &s)
             }
+            KeyCode::Char('v') => app.toggle_structure(id),
+            KeyCode::Char('r') if tt.structure_view => app.load_structure(id),
             KeyCode::Esc => app.focus = Focus::Tree,
             _ => {}
         },

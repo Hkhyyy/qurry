@@ -146,6 +146,7 @@ pub fn run() {
             commands::list_schemas,
             commands::list_objects,
             commands::table_detail,
+            commands::table_structure,
             commands::similar_rows_sql,
             commands::rag_indexes,
             commands::rag_save,

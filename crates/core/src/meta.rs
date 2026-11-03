@@ -56,6 +56,9 @@ pub struct IndexMeta {
     pub definition: String,
     pub is_unique: bool,
     pub is_primary: bool,
+    /// Key columns (or expressions) in index order; empty when the source doesn't say
+    #[serde(default)]
+    pub columns: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -75,6 +78,57 @@ pub struct TableDetail {
     pub constraints: Vec<ConstraintMeta>,
 }
 
+/// One foreign key, either direction: `schema.table(columns)` references `ref_schema.ref_table(ref_columns)`
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForeignKeyMeta {
+    pub name: String,
+    pub schema: String,
+    pub table: String,
+    pub columns: Vec<String>,
+    pub ref_schema: String,
+    pub ref_table: String,
+    pub ref_columns: Vec<String>,
+    /// NO ACTION | RESTRICT | CASCADE | SET NULL | SET DEFAULT
+    pub on_update: String,
+    pub on_delete: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TriggerMeta {
+    pub name: String,
+    /// BEFORE | AFTER | INSTEAD OF
+    pub timing: String,
+    /// INSERT · UPDATE · DELETE · TRUNCATE joined with " OR "
+    pub events: String,
+    pub definition: String,
+}
+
+/// The DDL tab's Structure view of a table: table_detail plus the sections it doesn't carry.
+/// A section that is None isn't available for that kind of data source (the view says so)
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableStructure {
+    #[serde(flatten)]
+    pub detail: TableDetail,
+    pub foreign_keys: Option<Vec<ForeignKeyMeta>>,
+    pub referenced_by: Option<Vec<ForeignKeyMeta>>,
+    pub triggers: Option<Vec<TriggerMeta>>,
+    /// (name, value): engine, owner, tablespace, partition key…
+    pub options: Option<Vec<(String, String)>>,
+    pub comment: Option<String>,
+    /// Referenced by and Triggers list only what this account has privileges on (MySQL), so empty doesn't mean there are none
+    #[serde(default)]
+    pub only_visible: bool,
+}
+
+impl From<TableDetail> for TableStructure {
+    fn from(detail: TableDetail) -> Self {
+        TableStructure { detail, foreign_keys: None, referenced_by: None, triggers: None, options: None, comment: None, only_visible: false }
+    }
+}
+
 /// Autocomplete metadata row: defined in qurry_shared::complete (the GUI's WASM and the TUI complete from it)
 pub use qurry_shared::complete::CompletionTable;
 
@@ -92,6 +146,10 @@ pub async fn list_objects(pool: &Pool, schema: &str) -> AppResult<SchemaObjects>
 
 pub async fn table_detail(pool: &Pool, schema: &str, table: &str) -> AppResult<TableDetail> {
     dispatch!(pool, b => b.table_detail(schema, table).await)
+}
+
+pub async fn table_structure(pool: &Pool, schema: &str, table: &str) -> AppResult<TableStructure> {
+    dispatch!(pool, b => b.table_structure(schema, table).await)
 }
 
 /// Builds object DDL like DataGrip's "Go to DDL". kind: table|partitioned|foreign|view|matview|sequence|routine
@@ -227,5 +285,147 @@ mod tests {
         let comp = completion_meta(&pool).await.unwrap();
         assert!(comp.iter().any(|t| t.schema == "dbtool_meta_test" && t.name == "child" && t.columns.len() == 3));
         sqlx::query("drop schema dbtool_meta_test cascade").execute(p).await.unwrap();
+    }
+
+    /// Real DB: QURRY_TEST_PG=… cargo test -p qurry-core table_structure -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn pg_table_structure() {
+        let Some(s) = crate::testenv::pg() else { return };
+        let pool = crate::db::connect(&s.cfg, s.password.as_deref()).await.unwrap();
+        let Pool::Pg(p) = &pool else { unreachable!() };
+        sqlx::raw_sql(
+            "drop schema if exists qurry_ddl_structure cascade; create schema qurry_ddl_structure; set search_path = qurry_ddl_structure;
+             create table parent(id int primary key, code text unique) with (fillfactor = 70);
+             create table child(id int primary key, parent_id int references parent(id) on delete cascade, note text, boss int references child(id));
+             create index child_note_id on child(note, lower(note), id);
+             comment on table child is 'Child rows';
+             create function touch() returns trigger language plpgsql as 'begin return new; end';
+             create trigger child_touch before insert or update on child for each row execute function touch();",
+        )
+        .execute(p)
+        .await
+        .unwrap();
+        let s = table_structure(&pool, "qurry_ddl_structure", "child").await.unwrap();
+        // Outgoing: to parent and to itself
+        let fks = s.foreign_keys.as_ref().unwrap();
+        let fk = fks.iter().find(|f| f.ref_table == "parent").unwrap();
+        assert_eq!((fk.table.as_str(), fk.columns.clone(), fk.ref_columns.clone(), fk.on_delete.as_str(), fk.on_update.as_str()), ("child", vec!["parent_id".to_string()], vec!["id".to_string()], "CASCADE", "NO ACTION"));
+        assert!(fks.iter().any(|f| f.ref_table == "child" && f.columns == ["boss"]));
+        // Incoming: only the self-reference points at child
+        let inc = s.referenced_by.as_ref().unwrap();
+        assert_eq!(inc.iter().map(|f| (f.table.as_str(), f.columns.join(","))).collect::<Vec<_>>(), [("child", "boss".to_string())]);
+        let pin = table_structure(&pool, "qurry_ddl_structure", "parent").await.unwrap();
+        let inc = pin.referenced_by.unwrap();
+        assert_eq!(inc.iter().map(|f| (f.schema.as_str(), f.table.as_str(), f.columns.join(","), f.ref_columns.join(","))).collect::<Vec<_>>(), [("qurry_ddl_structure", "child", "parent_id".into(), "id".into())]);
+        assert!(pin.foreign_keys.unwrap().is_empty());
+        // Index columns in order, expressions included
+        let ix = s.detail.indexes.iter().find(|i| i.name == "child_note_id").unwrap();
+        assert_eq!(ix.columns, ["note", "lower(note)", "id"]);
+        // Triggers
+        let tr = s.triggers.as_ref().unwrap();
+        assert_eq!(tr.iter().map(|t| (t.name.as_str(), t.timing.as_str(), t.events.as_str())).collect::<Vec<_>>(), [("child_touch", "BEFORE", "INSERT OR UPDATE")]);
+        assert!(tr[0].definition.contains("EXECUTE FUNCTION"), "{}", tr[0].definition);
+        // Options and comment
+        assert_eq!(s.comment.as_deref(), Some("Child rows"));
+        let opts = pin.options.unwrap();
+        assert!(opts.iter().any(|(k, v)| k == "Storage parameters" && v == "fillfactor=70"), "{opts:?}");
+        assert!(opts.iter().any(|(k, _)| k == "Owner"), "{opts:?}");
+        // A table in the default tablespace is stored in the database's, which isn't always pg_default
+        let (db_space,): (String,) = sqlx::query_as("select spcname::text from pg_tablespace where oid = (select dattablespace from pg_database where datname = current_database())").fetch_one(p).await.unwrap();
+        assert!(opts.contains(&("Tablespace".to_string(), db_space)), "{opts:?}");
+        sqlx::query("drop schema qurry_ddl_structure cascade").execute(p).await.unwrap();
+    }
+
+    /// Real DB: QURRY_TEST_MY=… cargo test -p qurry-core table_structure -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn my_table_structure() {
+        let Some(s) = crate::testenv::my() else { return };
+        let pool = crate::db::connect(&s.cfg, s.password.as_deref()).await.unwrap();
+        let (s_cfg, s_pw) = (s.cfg.clone(), s.password.clone().unwrap_or_default());
+        let Pool::My(p) = &pool else { unreachable!() };
+        for q in [
+            "drop database if exists qurry_ddl_structure",
+            "create database qurry_ddl_structure",
+            "create table qurry_ddl_structure.parent(id int primary key auto_increment, code varchar(20) unique) engine=InnoDB comment='Parents'",
+            "insert into qurry_ddl_structure.parent(code) values ('a'), ('b')",
+            "create table qurry_ddl_structure.child(id int primary key, parent_id int, note varchar(40), boss int, \
+               index child_note_id (note, id), index mx (note, (upper(note)), id), index fx ((lower(note))), foreign key fk_parent (parent_id) references qurry_ddl_structure.parent(id) on delete cascade, \
+               constraint fk_boss foreign key (boss) references qurry_ddl_structure.child(id))",
+            "create trigger qurry_ddl_structure.child_touch before insert on qurry_ddl_structure.child for each row set new.note = coalesce(new.note, '-')",
+        ] {
+            sqlx::raw_sql(q).execute(p).await.unwrap_or_else(|e| panic!("{q}: {e}"));
+        }
+        let s = table_structure(&pool, "qurry_ddl_structure", "child").await.unwrap();
+        let fks = s.foreign_keys.as_ref().unwrap();
+        let fk = fks.iter().find(|f| f.ref_table == "parent").unwrap();
+        assert_eq!((fk.columns.clone(), fk.ref_columns.clone(), fk.on_delete.as_str()), (vec!["parent_id".to_string()], vec!["id".to_string()], "CASCADE"));
+        assert!(fks.iter().any(|f| f.name == "fk_boss" && f.ref_table == "child"));
+        assert_eq!(s.referenced_by.as_ref().unwrap().iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["fk_boss"]);
+        let ix = s.detail.indexes.iter().find(|i| i.name == "child_note_id").unwrap();
+        assert_eq!(ix.columns, ["note", "id"]);
+        // Functional key parts come as their expression; an index of expressions only doesn't fail the whole call
+        let ix = |n: &str| s.detail.indexes.iter().find(|i| i.name == n).unwrap();
+        assert_eq!(ix("mx").columns, ["note", "(upper(`note`))", "id"]);
+        assert_eq!(ix("mx").definition, "INDEX `mx` (note, (upper(`note`)), id)");
+        assert_eq!(ix("fx").columns, ["(lower(`note`))"]);
+        let tr = s.triggers.as_ref().unwrap();
+        assert_eq!(tr.iter().map(|t| (t.name.as_str(), t.timing.as_str(), t.events.as_str())).collect::<Vec<_>>(), [("child_touch", "BEFORE", "INSERT")]);
+        assert!(tr[0].definition.contains("coalesce"), "{}", tr[0].definition);
+        let pin = table_structure(&pool, "qurry_ddl_structure", "parent").await.unwrap();
+        assert_eq!(pin.referenced_by.unwrap().iter().map(|f| (f.table.as_str(), f.columns.join(","))).collect::<Vec<_>>(), [("child", "parent_id".to_string())]);
+        assert_eq!(pin.comment.as_deref(), Some("Parents"));
+        let opts = pin.options.unwrap();
+        assert!(opts.iter().any(|(k, v)| k == "Engine" && v == "InnoDB"), "{opts:?}");
+        // information_schema's cached AUTO_INCREMENT would lag SHOW CREATE TABLE, so it isn't shown
+        assert!(!opts.iter().any(|(k, _)| k.contains("increment")), "{opts:?}");
+        // A server whose sql_mode has NO_BACKSLASH_ESCAPES: multi-column keys still split into columns
+        let opts = sqlx::mysql::MySqlConnectOptions::new().host(&s_cfg.host).port(s_cfg.port).username(&s_cfg.user).password(&s_pw).database("qurry_ddl_structure");
+        let raw = sqlx::mysql::MySqlPoolOptions::new().max_connections(1).connect_with(opts).await.unwrap();
+        // (one connection, so the session setting holds for the calls below)
+        sqlx::raw_sql("set session sql_mode = concat(@@sql_mode, ',NO_BACKSLASH_ESCAPES')").execute(&raw).await.unwrap();
+        let s = crate::mysql::table_structure(&raw, "qurry_ddl_structure", "child").await.unwrap();
+        assert_eq!(s.detail.indexes.iter().find(|i| i.name == "child_note_id").unwrap().columns, ["note", "id"]);
+        assert!(s.foreign_keys.unwrap().iter().all(|f| f.columns.len() == 1));
+        sqlx::raw_sql("drop database qurry_ddl_structure").execute(p).await.unwrap();
+    }
+
+    /// Real DB: an account with SELECT on one database only doesn't see the cascading key from another database nor the
+    /// trigger (MySQL lists only what it has privileges on), so the structure says its lists are only what's visible
+    #[tokio::test]
+    #[ignore]
+    async fn my_table_structure_limited_account() {
+        let Some(s) = crate::testenv::my() else { return };
+        let pool = crate::db::connect(&s.cfg, s.password.as_deref()).await.unwrap();
+        let Pool::My(p) = &pool else { unreachable!() };
+        let setup = [
+            "drop user if exists 'qurry_ddlsv_ro'@'%'",
+            "drop database if exists qurry_ddlsv_a",
+            "drop database if exists qurry_ddlsv_b",
+            "create database qurry_ddlsv_a",
+            "create database qurry_ddlsv_b",
+            "create table qurry_ddlsv_a.parent(id int primary key)",
+            "create table qurry_ddlsv_b.child(id int primary key, pid int, foreign key (pid) references qurry_ddlsv_a.parent(id) on delete cascade)",
+            "create trigger qurry_ddlsv_a.parent_del before delete on qurry_ddlsv_a.parent for each row set @n = 1",
+            "create user 'qurry_ddlsv_ro'@'%' identified by 'ro_pw_1'",
+            "grant select on qurry_ddlsv_a.* to 'qurry_ddlsv_ro'@'%'",
+        ];
+        for q in setup {
+            sqlx::raw_sql(q).execute(p).await.unwrap_or_else(|e| panic!("{q}: {e}"));
+        }
+        let full = table_structure(&pool, "qurry_ddlsv_a", "parent").await.unwrap();
+        assert_eq!((full.referenced_by.as_ref().unwrap().len(), full.triggers.as_ref().unwrap().len()), (1, 1));
+        let mut cfg = s.cfg.clone();
+        cfg.user = "qurry_ddlsv_ro".into();
+        cfg.database = "qurry_ddlsv_a".into();
+        let ro = crate::db::connect(&cfg, Some("ro_pw_1")).await.unwrap();
+        let seen = table_structure(&ro, "qurry_ddlsv_a", "parent").await;
+        for q in ["drop user 'qurry_ddlsv_ro'@'%'", "drop database qurry_ddlsv_b", "drop database qurry_ddlsv_a"] {
+            sqlx::raw_sql(q).execute(p).await.unwrap();
+        }
+        let seen = seen.unwrap();
+        assert!(seen.referenced_by.unwrap().is_empty() && seen.triggers.unwrap().is_empty());
+        assert!(seen.only_visible && full.only_visible);
     }
 }

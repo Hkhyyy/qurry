@@ -234,9 +234,22 @@ export interface RelationInfo { name: string; kind: "table" | "partitioned" | "v
 export interface RoutineInfo { name: string; args: string; returns: string | null; kind: string }
 export interface SchemaObjects { relations: RelationInfo[]; routines: RoutineInfo[] }
 export interface ColumnMeta { name: string; dataType: string; nullable: boolean; defaultValue: string | null; comment: string | null; isPk: boolean }
-export interface IndexMeta { name: string; definition: string; isUnique: boolean; isPrimary: boolean }
+export interface IndexMeta { name: string; definition: string; isUnique: boolean; isPrimary: boolean; columns: string[] }
 export interface ConstraintMeta { name: string; kind: "p" | "f" | "u" | "c"; definition: string }
 export interface TableDetail { columns: ColumnMeta[]; indexes: IndexMeta[]; constraints: ConstraintMeta[] }
+/** One foreign key, either direction: schema.table(columns) references refSchema.refTable(refColumns) */
+export interface ForeignKeyMeta { name: string; schema: string; table: string; columns: string[]; refSchema: string; refTable: string; refColumns: string[]; onUpdate: string; onDelete: string }
+export interface TriggerMeta { name: string; timing: string; events: string; definition: string }
+/** The DDL tab's Structure view. A null section isn't available for that kind of data source */
+export interface TableStructure extends TableDetail {
+  foreignKeys: ForeignKeyMeta[] | null;
+  referencedBy: ForeignKeyMeta[] | null;
+  triggers: TriggerMeta[] | null;
+  options: [string, string][] | null;
+  comment: string | null;
+  /** Referenced by and Triggers list only what this account has privileges on (MySQL), so empty doesn't mean there are none */
+  onlyVisible: boolean;
+}
 /** One row of the workspace list (shared by GUI · TUI) */
 export interface WsInfo { id: string; name: string; connIds: string[] }
 export interface CompletionTable { schema: string; name: string; columns: [string, string][] }
@@ -370,6 +383,7 @@ export const meta = {
   schemas: (id: string) => invoke<SchemaInfo[]>("list_schemas", { id }),
   objects: (id: string, schema: string) => invoke<SchemaObjects>("list_objects", { id, schema }),
   table: (id: string, schema: string, table: string) => invoke<TableDetail>("table_detail", { id, schema, table }),
+  structure: (id: string, schema: string, table: string) => invoke<TableStructure>("table_structure", { id, schema, table }),
   /** pgvector: SQL finding rows near this row (pk = [column, value]) */
   similarRowsSql: (id: string, schema: string, table: string, column: string, pk: [string, string | null][]) => invoke<string>("similar_rows_sql", { id, schema, table, column, pk }),
   completion: (id: string) => invoke<CompletionTable[]>("completion_meta", { id }),

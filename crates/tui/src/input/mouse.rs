@@ -398,7 +398,7 @@ mod tests {
     async fn text_tab_scrolls_with_the_wheel() {
         let mut h = Harness::new().await;
         let text = (1..=200).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
-        h.app.push_tab("test", "postgres".into(), "Diagram: public".into(), TabKind::Text(crate::app::TextTab { text, scroll: 0 }));
+        h.app.push_tab("test", "postgres".into(), "Diagram: public".into(), TabKind::Text(crate::app::TextTab { text, ..Default::default() }));
         h.app.focus = Focus::Tree;
         let screen = h.screen(100, 30);
         assert!(screen.contains("y copies all"), "{screen}");

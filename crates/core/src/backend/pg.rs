@@ -8,7 +8,7 @@ use crate::erd::{Columns, Erd, ErdColumn, ErdRelation, ErdTable};
 use crate::error::{AppError, AppResult};
 use crate::fake::{Col, Fk, TableShape, quoted_literals, type_args};
 use crate::hints::{Hint, HintReq};
-use crate::meta::{ColumnMeta, CompletionTable, ConstraintMeta, FtsHit, FtsRequest, IndexEntry, IndexMeta, RelationInfo, RoutineInfo, SchemaInfo, SchemaObjects, TableDetail};
+use crate::meta::{ColumnMeta, CompletionTable, ConstraintMeta, ForeignKeyMeta, FtsHit, FtsRequest, IndexEntry, IndexMeta, RelationInfo, RoutineInfo, SchemaInfo, SchemaObjects, TableDetail, TableStructure, TriggerMeta};
 use crate::migrate::{self, Model, norm};
 use crate::session::{PgSession, Session, check_exact_one, pg_snapshot};
 use crate::store::{ConnectionConfig, DbKind};
@@ -153,8 +153,9 @@ impl Backend for PgPool {
         .bind(table)
         .fetch_all(self)
         .await?;
-        let idx: Vec<(String, String, bool, bool)> = sqlx::query_as(&format!(
-            "select i.relname::text, pg_get_indexdef(ix.indexrelid), ix.indisunique, ix.indisprimary \
+        let idx: Vec<(String, String, bool, bool, Vec<String>)> = sqlx::query_as(&format!(
+            "select i.relname::text, pg_get_indexdef(ix.indexrelid), ix.indisunique, ix.indisprimary, \
+                    array(select pg_get_indexdef(ix.indexrelid, k, true) from generate_series(1, ix.indnkeyatts) k order by k) \
              from pg_index ix join pg_class i on i.oid = ix.indexrelid \
              where ix.indrelid = {REL_OID} order by ix.indisprimary desc, i.relname"
         ))
@@ -184,10 +185,81 @@ impl Backend for PgPool {
                 .collect(),
             indexes: idx
                 .into_iter()
-                .map(|(name, definition, is_unique, is_primary)| IndexMeta { name, definition, is_unique, is_primary })
+                .map(|(name, definition, is_unique, is_primary, columns)| IndexMeta { name, definition, is_unique, is_primary, columns })
                 .collect(),
             constraints: cons.into_iter().map(|(name, kind, definition)| ConstraintMeta { name, kind, definition }).collect(),
         })
+    }
+
+    async fn table_structure(&self, schema: &str, table: &str) -> AppResult<TableStructure> {
+        let detail = self.table_detail(schema, table).await?;
+        // Foreign keys of this table and those pointing at it (a self-reference is both). conparentid = 0: not the copies on partitions
+        let cols = |key: &str, rel: &str| format!("array(select a.attname::text from unnest(c.{key}) with ordinality k(n, i) join pg_attribute a on a.attrelid = c.{rel} and a.attnum = k.n order by k.i)");
+        type Fk = (String, String, String, Vec<String>, String, String, Vec<String>, String, String);
+        let fks: Vec<Fk> = sqlx::query_as(&format!(
+            "select c.conname::text, sn.nspname::text, s.relname::text, {}, tn.nspname::text, t.relname::text, {}, c.confupdtype::text, c.confdeltype::text \
+             from pg_constraint c \
+             join pg_class s on s.oid = c.conrelid join pg_namespace sn on sn.oid = s.relnamespace \
+             join pg_class t on t.oid = c.confrelid join pg_namespace tn on tn.oid = t.relnamespace \
+             where c.contype = 'f' and c.conparentid = 0 and (c.conrelid = {REL_OID} or c.confrelid = {REL_OID}) \
+             order by sn.nspname, s.relname, c.conname",
+            cols("conkey", "conrelid"),
+            cols("confkey", "confrelid")
+        ))
+        .bind(schema)
+        .bind(table)
+        .fetch_all(self)
+        .await?;
+        let (mut foreign_keys, mut referenced_by) = (vec![], vec![]);
+        for (name, schema_, table_, columns, ref_schema, ref_table, ref_columns, upd, del) in fks {
+            let fk = ForeignKeyMeta { name, schema: schema_, table: table_, columns, ref_schema, ref_table, ref_columns, on_update: action(&upd), on_delete: action(&del) };
+            if (fk.ref_schema.as_str(), fk.ref_table.as_str()) == (schema, table) {
+                referenced_by.push(fk.clone());
+            }
+            if (fk.schema.as_str(), fk.table.as_str()) == (schema, table) {
+                foreign_keys.push(fk);
+            }
+        }
+        let trg: Vec<(String, i32, String)> = sqlx::query_as(&format!(
+            "select t.tgname::text, t.tgtype::int4, pg_get_triggerdef(t.oid, true) from pg_trigger t \
+             where t.tgrelid = {REL_OID} and not t.tgisinternal order by t.tgname"
+        ))
+        .bind(schema)
+        .bind(table)
+        .fetch_all(self)
+        .await?;
+        // tgtype bits (pg_trigger.h): 2 BEFORE · 64 INSTEAD · 4 INSERT · 8 DELETE · 16 UPDATE · 32 TRUNCATE
+        let triggers = trg
+            .into_iter()
+            .map(|(name, ty, definition)| TriggerMeta {
+                name,
+                timing: if ty & 2 != 0 { "BEFORE" } else if ty & 64 != 0 { "INSTEAD OF" } else { "AFTER" }.into(),
+                events: [(4, "INSERT"), (16, "UPDATE"), (8, "DELETE"), (32, "TRUNCATE")].iter().filter(|(b, _)| ty & b != 0).map(|(_, e)| *e).collect::<Vec<_>>().join(" OR "),
+                definition,
+            })
+            .collect();
+        let (owner, space, params, partkey, parent, comment): (String, String, Option<String>, Option<String>, Option<String>, Option<String>) = sqlx::query_as(&format!(
+            "select pg_get_userbyid(c.relowner)::text, coalesce(ts.spcname::text, 'pg_default'), array_to_string(c.reloptions, ', '), \
+                    case when c.relkind = 'p' then pg_get_partkeydef(c.oid) end, \
+                    (select string_agg(pn.nspname || '.' || p.relname || coalesce(' ' || pg_get_expr(c.relpartbound, c.oid), ''), ', ') \
+                       from pg_inherits i join pg_class p on p.oid = i.inhparent join pg_namespace pn on pn.oid = p.relnamespace where i.inhrelid = c.oid), \
+                    obj_description(c.oid, 'pg_class') \
+             from pg_class c \
+             left join pg_tablespace ts on ts.oid = coalesce(nullif(c.reltablespace, 0), (select dattablespace from pg_database where datname = current_database())) \
+             where c.oid = {REL_OID}"
+        ))
+        .bind(schema)
+        .bind(table)
+        .fetch_one(self)
+        .await?;
+        // reltablespace 0 is the database's default tablespace (not always pg_default)
+        let mut options = vec![("Owner".to_string(), owner), ("Tablespace".to_string(), space)];
+        for (k, v) in [("Storage parameters", params), ("Partition key", partkey), ("Parent", parent)] {
+            if let Some(v) = v.filter(|v| !v.is_empty()) {
+                options.push((k.into(), v));
+            }
+        }
+        Ok(TableStructure { detail, foreign_keys: Some(foreign_keys), referenced_by: Some(referenced_by), triggers: Some(triggers), options: Some(options), comment, only_visible: false })
     }
 
     async fn object_ddl(&self, schema: &str, name: &str, kind: &str) -> AppResult<String> {

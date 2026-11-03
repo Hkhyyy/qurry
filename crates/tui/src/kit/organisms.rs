@@ -136,9 +136,100 @@ fn hidden_marker(n: usize, counts: &[Option<Option<u64>>]) -> Line<'static> {
     Line::styled(text, if known.is_empty() && unknown == 0 { Style::default().fg(WARN) } else { count_style(if unknown > 0 { None } else { Some(total) }) })
 }
 
+/// Small read-only table as lines (the GUI's ui Table; DDL → Structure): indented two cells, columns padded to their widest cell
+/// (display width) with two cells between them, the header dim. Line breaks in a cell become spaces. The last cell (definition,
+/// comment) wraps within `width` onto lines indented to its column, as the GUI wraps it; when less than 10 cells are left
+/// for it, it starts on the next line, indented four. `wrap` names one more column that wraps under itself when the row is too
+/// wide (Default, the GUI's ddl-wrap): at least 12 cells, leaving the last column 10 to 20
+pub fn table_lines(head: &[&str], rows: &[Vec<String>], width: usize, wrap_col: Option<usize>) -> Vec<Line<'static>> {
+    use unicode_width::UnicodeWidthStr;
+    let rows: Vec<Vec<String>> = rows.iter().map(|r| r.iter().map(|c| c.replace(['\r', '\n', '\t'], " ")).collect()).collect();
+    let mut widths: Vec<usize> = (0..head.len()).map(|i| rows.iter().map(|r| r[i].width()).chain([head[i].width()]).max().unwrap_or(0)).collect();
+    let last = head.len() - 1;
+    if let Some(w) = wrap_col {
+        let others = 2 + (0..last).filter(|&i| i != w).map(|i| widths[i] + 2).sum::<usize>() + 2;
+        widths[w] = widths[w].min(width.saturating_sub(others + widths[last].clamp(10, 20)).max(12));
+    }
+    let line = |cells: Vec<&str>, style: Style| {
+        // The cells before the last, each as the lines it takes in its column
+        let cols: Vec<Vec<String>> = cells[..last].iter().enumerate().map(|(i, c)| if c.width() > widths[i] { wrap(c, widths[i], widths[i]) } else { vec![c.to_string()] }).collect();
+        let prefix = |k: usize| {
+            let mut s = "  ".to_string();
+            for (i, parts) in cols.iter().enumerate() {
+                let p = parts.get(k).map_or("", String::as_str);
+                s += p;
+                s += &" ".repeat(widths[i].saturating_sub(p.width()) + 2);
+            }
+            s
+        };
+        let n = cols.iter().map(Vec::len).max().unwrap_or(1);
+        let indent = prefix(0).width();
+        let room = width.saturating_sub(indent);
+        let text = |s: String| Line::styled(s.trim_end().to_string(), style);
+        if room >= 10 || cells[last].is_empty() {
+            let parts = wrap(cells[last], room, room);
+            (0..n.max(parts.len())).map(|k| text(prefix(k) + parts.get(k).map_or("", String::as_str))).collect()
+        } else {
+            let parts = wrap(cells[last], 0, width.saturating_sub(4));
+            (0..n).map(|k| text(prefix(k))).chain(parts.into_iter().skip(1).map(|p| text(" ".repeat(4) + &p))).collect::<Vec<_>>()
+        }
+    };
+    let mut out = line(head.to_vec(), Style::default().fg(DIM));
+    out.extend(rows.iter().flat_map(|r| line(r.iter().map(String::as_str).collect(), Style::default())));
+    out
+}
+
+/// Wrap text at spaces (a word longer than a line is split): the first line holds `first` cells (0: starts empty), the rest `rest`
+fn wrap(s: &str, first: usize, rest: usize) -> Vec<String> {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+    if s.is_empty() {
+        return vec![String::new()];
+    }
+    let rest = rest.max(1);
+    let (mut out, mut max) = if first == 0 { (vec![String::new()], rest) } else { (vec![], first) };
+    let mut cur = String::new();
+    for word in s.split_inclusive(' ') {
+        if !cur.is_empty() && cur.width() + word.trim_end().width() > max {
+            out.push(std::mem::take(&mut cur).trim_end().to_string());
+            max = rest;
+        }
+        for ch in word.chars() {
+            if ch != ' ' && !cur.is_empty() && cur.width() + ch.width().unwrap_or(0) > max {
+                out.push(std::mem::take(&mut cur));
+                max = rest;
+            }
+            cur.push(ch);
+        }
+    }
+    out.push(cur.trim_end().to_string());
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn table_lines_wrap_the_last_cell_under_its_column() {
+        let rows = vec![vec!["fk".to_string(), "FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE SET NULL".to_string()]];
+        let text: Vec<String> = table_lines(&["Name", "Definition"], &rows, 40, None).iter().map(|l| l.to_string()).collect();
+        assert_eq!(text, ["  Name  Definition", "  fk    FOREIGN KEY (contract_id)", "        REFERENCES contracts(id) ON", "        DELETE SET NULL"]);
+        assert!(text.iter().all(|l| l.len() <= 40));
+        // Too little room left: the cell starts on the next line; a word longer than a line is split
+        let rows = vec![vec!["a_very_long_index_name_here".to_string(), "x".repeat(30)]];
+        let text: Vec<String> = table_lines(&["Name", "Def"], &rows, 40, None).iter().map(|l| l.to_string()).collect();
+        assert_eq!(text[2..], ["  a_very_long_index_name_here".to_string(), format!("    {}", "x".repeat(30))]);
+        assert_eq!(wrap(&"y".repeat(10), 4, 4), ["yyyy", "yyyy", "yy"]);
+    }
+
+    #[test]
+    fn table_lines_wrap_the_named_column_and_keep_the_last_beside_it() {
+        let rows = vec![vec!["email".to_string(), "concat('user-', currval('seq'), '@', domain())".to_string(), "Login".to_string()]];
+        let text: Vec<String> = table_lines(&["Name", "Default", "Comment"], &rows, 40, Some(1)).iter().map(|l| l.to_string()).collect();
+        assert_eq!(text, ["  Name   Default              Comment", "  email  concat('user-',      Login", "         currval('seq'),", "         '@', domain())"]);
+        // It fits: nothing changes
+        assert_eq!(table_lines(&["Name", "Default", "Comment"], &rows, 80, Some(1)).len(), 2);
+    }
 
     #[test]
     fn cut_lines_says_how_many_are_hidden() {
