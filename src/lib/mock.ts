@@ -43,6 +43,18 @@ const wide = {
   rows: Array.from({ length: 500 }, (_, r) => Array.from({ length: 30 }, (_, c) => (c % 2 ? `value ${r + 1}.${c + 1}` : r * 30 + c))),
   truncated: false,
 };
+/** `select … from json_demo`: a jsonb column (colored cells); row 3 holds a ~100 KB value */
+const jsonDemo = {
+  ...result,
+  columns: [{ name: "id", typeName: "INT8" }, { name: "payload", typeName: "JSONB" }],
+  rows: Array.from({ length: 50 }, (_, i) => [
+    i + 1,
+    i === 2
+      ? JSON.stringify({ items: Array.from({ length: 4000 }, (_, k) => ({ sku: `A-${k}`, qty: k })) })
+      : JSON.stringify({ type: "payment.paid", amount: 1000 * i, live: i % 2 === 0, memo: "고객 요청 🙏", meta: { pg: "toss", coupon: null } }),
+  ]),
+  truncated: false,
+};
 let flakyLoads = 0;
 let updateChannel = "stable";
 let gridAlign = {};
@@ -200,6 +212,8 @@ const handlers: Record<string, (a: any) => unknown> = {
         ? { ...result, columns: [], rows: [], rowsAffected: 3, truncated: false, hasResultSet: false, inTransaction: (globalThis as any).__mockManual === true }
         : /\bwide_demo\b/i.test(a.sql)
           ? { ...wide, inTransaction: (globalThis as any).__mockManual === true }
+        : /\bjson_demo\b/i.test(a.sql)
+          ? { ...jsonDemo, inTransaction: (globalThis as any).__mockManual === true }
           : { ...result, inTransaction: (globalThis as any).__mockManual === true }),
   set_tx_mode: (a: any) => { (globalThis as any).__mockManual = a.manual; return null; },
   // e2e sets __mockCommitError for a COMMIT that fails (e.g. the connection lost while committing)

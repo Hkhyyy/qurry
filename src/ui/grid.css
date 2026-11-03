@@ -16,6 +16,11 @@
 .cell.rownum { color: var(--muted); text-align: right; background: var(--panel-2); position: sticky; left: 0; z-index: 1; }
 .cell.null { color: var(--c-6f737a); font-style: italic; }
 .cell.num { color: var(--c-2aacb8); text-align: right; }
+.cell .json-key { color: var(--ui-json-key); }
+.cell .json-string { color: var(--ui-json-string); }
+.cell .json-number { color: var(--ui-json-number); }
+.cell .json-keyword { color: var(--ui-json-keyword); }
+.cell .json-punct { color: var(--ui-json-punct); }
 /* Settings › Appearance › Alignment, per value class (lib/gridAlign.ts); without WebAssembly no al-* class is set and .num stays right */
 .cell.al-left { text-align: left; }
 .cell.al-right { text-align: right; }
@@ -23,6 +28,7 @@
 .cell.sel { outline: 1px solid var(--accent); outline-offset: -1px; background: var(--sel); }
 .grid-row.added .cell:not(.rownum) { background: rgba(95,184,101,.12); }
 .grid-row.deleted .cell:not(.rownum) { text-decoration: line-through; color: var(--danger); background: rgba(247,84,100,.08); }
+.grid-row.deleted .cell span { color: inherit; }
 .cell.changed { background: rgba(53,116,240,.22); }
 .cell-input { flex: none; height: 24px; border-radius: 0; border: 1px solid var(--accent); padding: 0 7px; font: inherit; background: var(--c-1b2840); }
 .pk-mark { font-size: 10px; }

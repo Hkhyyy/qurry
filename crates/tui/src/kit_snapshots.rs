@@ -265,6 +265,34 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         h.app.align = h.app.state.store.set_grid_align(ValueClass::Boolean, Align::Left).unwrap();
     }
     h.app.close_tab_now(h.app.active);
+    // JSON colors (the GUI's tokenizer, qurry_shared::format::json_spans): one line per cell, only what fits is read
+    let id = h.console_with("select id, payload from webhook_event;", 1, 10);
+    let big = format!("{{\"items\":[{}]}}", (0..3000).map(|i| format!("{{\"sku\":\"A-{i}\",\"qty\":{i}}}")).collect::<Vec<_>>().join(","));
+    let res = qurry_core::db::QueryResult {
+        columns: [("id", "INT8"), ("payload", "JSONB"), ("raw", "JSON"), ("sig", "BYTEA")].iter().map(|(n, t)| qurry_core::db::ColumnInfo { name: n.to_string(), type_name: t.to_string() }).collect(),
+        rows: vec![
+            vec![json!(1), json!("{\"type\":\"payment.paid\",\"amount\":129000,\"live\":true,\"meta\":{\"pg\":\"toss\",\"coupon\":null}}"), json!("{\n  \"ok\": true\n}"), json!("0x7B22")],
+            vec![json!(2), json!("{\"type\":\"refund\",\"memo\":\"고객 요청 🙏\",\"lines\":[1,2.5,-3e2]}"), json!("[\"a\", \"b\"]"), Value::Null],
+            vec![json!(3), json!(big), json!("{\"broken\": tru"), Value::Null],
+            vec![json!(4), Value::Null, json!("42"), Value::Null],
+        ],
+        rows_affected: 0,
+        truncated: false,
+        elapsed_ms: 6,
+        has_result_set: true,
+        in_transaction: false,
+        warning: None,
+    };
+    if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
+        c.result_title = "Result 1: select id, payload from webhook_event".into();
+        c.grid = Some(crate::grid::Grid::new(res));
+        c.show_output = false;
+    }
+    scenes.push(app_scene(h, "Grid: JSON", "json / jsonb cells in colors (keys · strings · numbers · true/false/null · punctuation), still one line; a large value reads only what fits; binary (bytea) stays plain", 120, 22));
+    h.app.color = crate::theme::ColorMode::Ansi16;
+    scenes.push(app_scene(h, "Grid: JSON, 16 colors", "TERM=xterm: the JSON colors by hue (NO_COLOR: no colors)", 120, 22));
+    h.app.color = crate::theme::ColorMode::TrueColor;
+    h.app.close_tab_now(h.app.active);
     // Production log
     let entry = |id: &str, ago: i64, sql: &str, rows: Option<u64>, undo: bool, in_tx: bool| qurry_core::audit::AuditEntry {
         id: id.into(),

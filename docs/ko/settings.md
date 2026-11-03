@@ -40,6 +40,8 @@ GUI **Settings** (`⌘,`) 에는 **Appearance**, **Keymap**, **Passwords** 세 �
 
 숫자 컬럼의 `NULL` 이 위아래 숫자와 줄이 맞도록 `NULL` 의 기본값은 오른쪽입니다. 0.3.0 전에는 왼쪽이었습니다. 예전처럼 쓰려면 **NULL** 을 **Left** 로 바꾸세요.
 
+JSON 칸 (`json`, `jsonb` 와 다른 드라이버의 JSON 타입) 은 DataGrip 처럼 색으로 구분됩니다: 키, 문자열, 숫자, `true` / `false` / `null`, 구두점. 한 줄로 보이는 것은 같습니다. 바이너리 칸은 색이 없습니다. TUI 도 터미널 색으로 똑같이 칠하고, `NO_COLOR` 에서는 칠하지 않습니다.
+
 TUI 결과 표도 같은 종류와 같은 설정을 씁니다. TUI 에서는 **⌃k › Grid Alignment…** 에서 바꿉니다 (종류를 고른 뒤 Left, Center, Right). TUI 는 켤 때와 **⌃k › Grid Alignment…** 를 열 때 `settings.json` 을 읽으므로, GUI 에서 정렬을 바꾼 뒤에는 그 명령을 열거나 TUI 를 다시 켜면 반영됩니다. `settings.json` 에는 바꾼 종류만 저장됩니다 (예: `"gridAlign": { "null": "left" }`). 기본값으로 되돌린 종류는 지워집니다.
 
 ## Keymap
