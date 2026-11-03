@@ -104,7 +104,7 @@ test("restored DDL tabs keep their own view when another tab switches; Reload lo
   await page.reload();
   await expect(treeItem(page, "users").first()).toBeVisible();
   // Both come back in Structure (the last choice); switching one to SQL leaves the other alone
-  await page.getByRole("tab", { name: /users \[DDL\]/ }).click();
+  await page.getByRole("tab", { name: /^users \[DDL\]/ }).click();
   await views(page).getByRole("tab", { name: "SQL" }).click();
   await page.getByRole("tab", { name: /contracts \[DDL\]/ }).click();
   await expect(views(page).getByRole("tab", { name: "Structure" })).toHaveAttribute("aria-selected", "true");
@@ -156,7 +156,7 @@ test("DDL tabs saved before they kept their object: a table's reloads in both vi
   });
   await page.reload();
   await expect(treeItem(page, "users").first()).toBeVisible();
-  await page.getByRole("tab", { name: /users \[DDL\]/ }).click();
+  await page.getByRole("tab", { name: /^users \[DDL\]/ }).click();
   await views(page).getByRole("tab", { name: "SQL" }).click();
   const ddl0 = await ddlLoads(page);
   await reload(page).click();
