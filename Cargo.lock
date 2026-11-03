@@ -5108,7 +5108,7 @@ dependencies = [
 
 [[package]]
 name = "qurry"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "flate2",
  "libc",
@@ -5128,7 +5128,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "aes-gcm 0.10.3",
  "base64 0.22.1",
@@ -5160,7 +5160,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-driver"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "json5",
  "serde",
@@ -5170,7 +5170,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-driver-chroma"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "qurry-driver",
  "serde_json",
@@ -5178,7 +5178,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-driver-clickhouse"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "qurry-driver",
  "serde_json",
@@ -5187,7 +5187,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-driver-duckdb"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "duckdb",
  "qurry-driver",
@@ -5196,7 +5196,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-driver-milvus"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "qurry-driver",
  "serde_json",
@@ -5204,7 +5204,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-driver-mongodb"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "json5",
  "mongodb",
@@ -5216,7 +5216,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-driver-mssql"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "futures-util",
@@ -5229,7 +5229,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-driver-oracle"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "oracle",
  "qurry-driver",
@@ -5238,7 +5238,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-driver-qdrant"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "qurry-driver",
  "serde_json",
@@ -5246,7 +5246,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-driver-sqlite"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "qurry-driver",
  "rusqlite",
@@ -5255,7 +5255,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-mcp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "qurry-core",
  "serde",
@@ -5286,7 +5286,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-tui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "crossterm",
