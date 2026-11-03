@@ -33,7 +33,7 @@
   --ui-font-mono: "JetBrains Mono", Menlo, monospace;
   /* Result grid font: Settings › Appearance › Grid font sets both (src/lib/prefs.ts) */
   --grid-font-family: var(--ui-font-mono);
-  --grid-font-size: 12px;
+  --grid-font-size: 12px; /* until prefs.ts sets it: keep equal to DEFAULTS.grid.size */
 
   --ui-h-sm: 22px;
   --ui-h-md: 26px;

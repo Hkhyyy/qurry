@@ -9,7 +9,7 @@ export type Font = { family: string; size: number };
 /** Same stack as --ui-font-mono (tokens.css): the fallback after any chosen family */
 export const MONO = `"JetBrains Mono", Menlo, monospace`;
 export const DEFAULT_FONT = 13;
-const DEFAULTS: Record<FontTarget, Font> = { editor: { family: "", size: DEFAULT_FONT }, grid: { family: "", size: 12 } };
+export const DEFAULTS: Record<FontTarget, Font> = { editor: { family: "", size: DEFAULT_FONT }, grid: { family: "", size: 12 } };
 /** Grid rows are 24px high (ResultGrid ROW_H): larger text would be cut */
 export const SIZES: Record<FontTarget, [number, number]> = { editor: [8, 32], grid: [9, 16] };
 // The editor size key predates the rest: kept so the size saved by earlier versions stays

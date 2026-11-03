@@ -7,7 +7,7 @@ import { DateTimePicker, isTemporal } from "./DateTimePicker";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, raw } from "../lib/extract";
 import { sharedReady, useSharedReady } from "../lib/shared";
-import { useFonts } from "../lib/prefs";
+import { DEFAULTS, useFonts } from "../lib/prefs";
 import { ResultChart } from "./ResultChart";
 import { Button, CellEditor, CodeBlock, GridCell, GridHeaderCell, GridHeaderRow, GridRow, IconButton, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, TextArea, ToolButton, Toolbar, ToolbarSep } from "../ui";
 import {
@@ -181,8 +181,8 @@ export function ResultGrid(p: Props) {
     return () => clearInterval(t);
   }, [interval, p.running, pendingCount]);
 
-  // Character widths below are for the 12px default grid font
-  const em = useFonts().grid.size / 12;
+  // Character widths below are for the default grid font size (12px)
+  const em = useFonts().grid.size / DEFAULTS.grid.size;
   const rownumW = Math.max(ROWNUM_W, Math.round(ROWNUM_W * em));
   const widths = useMemo(
     () =>
