@@ -31,6 +31,9 @@ export interface EditTarget {
   pk: string[];
 }
 
+/** Console results have no table to write to (editing them is a later batch) */
+export const CONSOLE_READ_ONLY = "Console results are read-only. Open the table to edit its rows.";
+
 let lastExtractor: Extractor = "CSV"; // The last chosen extractor is the default for new tabs (DataGrip)
 
 interface Props {
@@ -39,6 +42,8 @@ interface Props {
   edit?: EditTarget;
   /** Read-only data source: editing disabled */
   readOnly?: boolean;
+  /** Why rows can't be edited here, on the greyed-out edit buttons (console results: CONSOLE_READ_ONLY) */
+  readOnlyReason?: string;
   /** SQL dialect (identifier quoting, literals) */
   dialect?: Dialect;
   running: boolean;
@@ -679,6 +684,11 @@ export function ResultGrid(p: Props) {
     ...optionItems(),
   ];
 
+  /** An edit button's tooltip and description: the command, and why it's greyed out when the grid says so */
+  const editButton = (title: string, id: string) => ({
+    title: p.readOnlyReason ? `${keyTitle(title, id)} — ${p.readOnlyReason}` : keyTitle(title, id),
+    "aria-description": p.readOnlyReason,
+  });
   const rowsLabel = `${baseCount}${result.truncated ? "+" : ""} row${baseCount === 1 ? "" : "s"}`;
 
   return (
@@ -698,11 +708,11 @@ export function ResultGrid(p: Props) {
         </IconButton>
         <IconButton tone="danger" title={keyTitle("Cancel Running Statements", "grid.cancel")} onClick={p.onCancel} disabled={!p.running}><IcStop /></IconButton>
         <ToolbarSep />
-        <IconButton title={keyTitle("Add Row", "grid.addRow")} onClick={addRow} disabled={!canEdit}><IcPlus /></IconButton>
-        <IconButton title={keyTitle("Delete Row", "grid.deleteRows")} onClick={deleteRows} disabled={!canEdit || !rect}><IcMinus /></IconButton>
-        <IconButton title={keyTitle("Revert Selected", "grid.revert")} onClick={revertSelected} disabled={!pendingCount}><IcRevert /></IconButton>
-        <IconButton title={keyTitle("Preview Pending Changes", "grid.preview")} onClick={() => setPreview({ sql: buildStatements(), readOnly: true })} disabled={!pendingCount}><IcPreview /></IconButton>
-        <IconButton active={false} className={pendingCount ? "accent" : undefined} title={keyTitle("Submit", "grid.submit")} onClick={submit} disabled={!pendingCount}><IcSubmit /></IconButton>
+        <IconButton {...editButton("Add Row", "grid.addRow")} onClick={addRow} disabled={!canEdit}><IcPlus /></IconButton>
+        <IconButton {...editButton("Delete Row", "grid.deleteRows")} onClick={deleteRows} disabled={!canEdit || !rect}><IcMinus /></IconButton>
+        <IconButton {...editButton("Revert Selected", "grid.revert")} onClick={revertSelected} disabled={!pendingCount}><IcRevert /></IconButton>
+        <IconButton {...editButton("Preview Pending Changes", "grid.preview")} onClick={() => setPreview({ sql: buildStatements(), readOnly: true })} disabled={!pendingCount}><IcPreview /></IconButton>
+        <IconButton active={false} className={pendingCount ? "accent" : undefined} {...editButton("Submit", "grid.submit")} onClick={submit} disabled={!pendingCount}><IcSubmit /></IconButton>
         <ToolbarSep />
         <ToolButton
           title="Transaction mode"

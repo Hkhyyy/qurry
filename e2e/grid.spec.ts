@@ -364,3 +364,14 @@ test.describe("Value Editor panel", () => {
     await expect(panel(page).locator(".ve-foot")).toContainText("Read-only");
   });
 });
+
+test("console results say why their edit buttons are greyed out", async ({ page }) => {
+  await openConsole(page);
+  await typeSql(page, "select * from users");
+  await runAll(page);
+  const del = work(page).getByRole("button", { name: /^Delete Row/ });
+  await expect(del).toBeDisabled();
+  await del.hover({ force: true });
+  await expect(del).toHaveAttribute("title", /Console results are read-only\. Open the table to edit its rows\.$/);
+  await expect(del).toHaveAttribute("aria-description", "Console results are read-only. Open the table to edit its rows.");
+});
