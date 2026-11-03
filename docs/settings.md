@@ -19,9 +19,9 @@ GUI **Settings** (`⌘,`) has three pages: **Appearance**, **Keymap** and **Pass
 
 Font changes apply at once, to every open console and grid.
 
-**Font family**: the list suggests the monospace fonts installed on this computer (JetBrains Mono, Menlo, Fira Code, D2Coding, Cascadia Code and other common ones); any other installed font can be typed in. Each field shows its text in the chosen font. Leave the field empty for the default (JetBrains Mono, or Menlo when it isn't installed).
+**Font family**: pick it from the list of fonts installed on this computer. **Monospaced only** (on by default) hides proportional fonts; turn it off to pick any installed font. Type to search the list (typing on the closed field opens it), `↑` `↓` to move, `↩` to pick, `⎋` to close the list. The field shows the chosen font in itself. **Default monospace**, at the top of the list, is JetBrains Mono, or Menlo when it isn't installed.
 
-A font that isn't installed (a typo, or a font removed since) never breaks the screen: Qurry falls back to the default monospace font, and Settings says `"<name>" isn't installed, so the default monospace font is used.` Pick a font from the list, or clear the field to go back to the default.
+A saved font that isn't installed (removed since, or chosen on another computer) never breaks the screen: Qurry falls back to the default monospace font, and the field and the top of the list show it as `<name> (not installed)`. Pick another font to replace it.
 
 The theme and fonts are kept by the GUI on this computer (not in the config folder), so they don't affect the TUI.
 

@@ -465,6 +465,15 @@ const handlers: Record<string, (a: any) => unknown> = {
   save_keymap: () => null,
   install_update: () => new Promise((_, rej) => setTimeout(() => rej("Update failed: mock"), 800)),
   update_channel: () => updateChannel,
+  // Fonts that ship with macOS (the specs run as on macOS), one of them proportional
+  font_families: () => [
+    { name: "Andale Mono", mono: true },
+    { name: "Courier New", mono: true },
+    { name: "Helvetica", mono: false },
+    { name: "Menlo", mono: true },
+    { name: "Monaco", mono: true },
+    { name: "PT Mono", mono: true },
+  ],
   grid_align: () => gridAlign,
   set_grid_align: (a: any) => {
     if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";

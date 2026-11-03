@@ -163,7 +163,12 @@ export const setUpdateCheckEnabled = (on: boolean) => {
 /** stable: releases from a version tag only; beta: also the pre-release built from every merge to main. Kept in the config folder, shared with the TUI */
 export type UpdateChannel = "stable" | "beta";
 
+/** An installed font family (Settings › Appearance fonts); mono: every face is monospaced */
+export type FontFamily = { name: string; mono: boolean };
+
 export const api = {
+  /** Installed font families, sorted (listed once per session; empty where the OS isn't supported) */
+  fontFamilies: () => invoke<FontFamily[]>("font_families"),
   checkUpdate: (force = false) => invoke<UpdateInfo>("check_update", { force }),
   updateChannel: () => invoke<UpdateChannel>("update_channel"),
   /** Saves the channel; what it offers from the saved check (no request), null if nothing was checked yet */

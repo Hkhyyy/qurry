@@ -5,6 +5,7 @@ import "../../lib/mock";
 import "../../lib/monaco";
 import App from "../../App";
 import { SettingsDialog } from "../../features/settings/SettingsDialog";
+import { setFont } from "../../lib/prefs";
 import { dialectOf, type ConnectionView, type QueryResult } from "../../lib/api";
 import { ConnectionDialog } from "../../components/ConnectionDialog";
 import { ConsolePane, SPLITTER_FAILED } from "../../components/ConsolePane";
@@ -67,14 +68,15 @@ export const FullApp: S = { name: "App (whole window)", render: () => <div style
 
 /** Settings › Appearance: theme, editor and grid fonts, grid alignment per value class, the automatic update check and the update channel (alignment and channel shared with the TUI) */
 export const Settings: S = { name: "Settings — Appearance & updates", render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} /> };
-/** Editor / Grid font: installed monospace fonts are suggested (each field shows its font), sizes in px; a family that isn't installed says so and how to recover (the fallback is the default monospace). The choice is saved like in the app; preview.tsx resets it before every story */
+/** Editor / Grid font: each family is picked from a drop-down of the installed fonts (search, "Monospaced only" on by default, the default
+ * entry first), sizes in px. A saved family that isn't installed stays on top of the list marked "(not installed)" and renders with the
+ * default monospace. The choice is saved like in the app; preview.tsx resets it before every story */
 export const SettingsFonts: S = {
   name: "Settings — Fonts (font not installed)",
   render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} />,
   play: async ({ canvasElement }) => {
-    const field = within(canvasElement.ownerDocument.body).getByRole("combobox", { name: "Grid font family" });
-    await userEvent.clear(field);
-    await userEvent.type(field, "No Such Mono");
+    setFont("grid", { family: "No Such Mono" });
+    await userEvent.click(await within(canvasElement.ownerDocument.body).findByRole("combobox", { name: "Grid font family" }));
   },
 };
 
