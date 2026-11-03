@@ -311,7 +311,6 @@ fn draw_panes(f: &mut Frame, app: &mut App, p: &crate::panes::Pane, area: Rect, 
     }
 }
 
-/// One pane: tab bar + visible tab. g = None means an unsplit screen (all tabs)
 /// Explorer tree object kind → glyph and color (the tree, and the tabs that show the object)
 fn object_glyph(kind: &str) -> Option<(&'static str, Color)> {
     Some(match kind {
@@ -323,30 +322,32 @@ fn object_glyph(kind: &str) -> Option<(&'static str, Color)> {
     })
 }
 
-/// Tab bar glyph (like the GUI's tabIcon): a table or DDL tab shows its object's tree glyph, plain text (diagram, DDL of
-/// another kind) ≡. Uncolored: it takes the tab's own colors, so it reads on a Data Source color and in 16 colors / NO_COLOR
-fn tab_glyph(kind: &TabKind) -> &'static str {
+/// Tab glyph (like the GUI's TabIcon) for the tab bar, Recent Tabs and Search Everywhere: a table tab shows its object's
+/// tree glyph, a DDL tab that glyph + ≡ (text), other text (diagram) ≡. Uncolored in the tab bar: it takes the tab's own
+/// colors, so it reads on a Data Source color and in 16 colors / NO_COLOR
+fn tab_glyph(kind: &TabKind) -> String {
     match kind {
-        TabKind::Console(_) => "❯",
-        TabKind::Table(t) => object_glyph(&t.kind).map_or("▦", |g| g.0),
-        TabKind::Text(t) => object_glyph(&t.kind).map_or("≡", |g| g.0),
-        TabKind::Dba(_) => "◔",
-        TabKind::Redis(_) => "◆",
+        TabKind::Console(_) => "❯".into(),
+        TabKind::Table(t) => object_glyph(&t.kind).map_or("▦", |g| g.0).into(),
+        TabKind::Text(t) => object_glyph(&t.kind).map_or("≡".into(), |g| format!("{}≡", g.0)),
+        TabKind::Dba(_) => "◔".into(),
+        TabKind::Redis(_) => "◆".into(),
     }
 }
 
+/// One pane: tab bar + visible tab. g = None means an unsplit screen (all tabs)
 fn draw_group(f: &mut Frame, app: &mut App, g: Option<usize>, area: Rect, focused: bool) {
     use unicode_width::UnicodeWidthStr;
     let [bar, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(3)]).areas(area);
     let idx: Vec<usize> = (0..app.tabs.len()).filter(|&i| g.is_none_or(|g| app.tabs[i].group == g)).collect();
     let shown = if focused { app.active } else { g.and_then(|g| app.group_tab(g)).unwrap_or(app.active) };
-    // Tab width: the Tabs widget draws " title " + "│". " " + icon(2) + title + " *"? + " "
+    // Tab width: the Tabs widget draws " title " + "│". " " + glyph + " " + title + " *"? + " "
     let widths: Vec<u16> = idx
         .iter()
         .map(|&i| {
             let t = &app.tabs[i];
             let dirty = matches!(&t.kind, TabKind::Table(tt) if tt.grid.as_ref().map(|g| g.dirty()).unwrap_or(false));
-            1 + 2 + app.tab_label(t).width() as u16 + if dirty { 2 } else { 0 } + 1
+            1 + tab_glyph(&t.kind).width() as u16 + 1 + app.tab_label(t).width() as u16 + if dirty { 2 } else { 0 } + 1
         })
         .collect();
     let sel = idx.iter().position(|&i| i == shown).unwrap_or(0);
@@ -993,7 +994,12 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                 .take(h)
                 .map(|(i, it)| {
                     // Key labels inside names·hints follow the screen rules too ("Ctrl+Z (grid)" → ⌃z)
-                    ListItem::new(Row::new(disp(&it.label)).hint(format!(" {}", disp(&it.hint))).selected(i == sel, true).line())
+                    let mut row = Row::new(disp(&it.label));
+                    // Tab rows (Recent Tabs, Search Everywhere): the tab bar's glyph
+                    if let Some(t) = match it.action { crate::app::PAction::Tab(id) => app.tabs.iter().find(|t| t.id == id), _ => None } {
+                        row = row.lead(icon(&tab_glyph(&t.kind), Color::Gray));
+                    }
+                    ListItem::new(row.hint(format!(" {}", disp(&it.hint))).selected(i == sel, true).line())
                 })
                 .collect();
             p.sel = sel;

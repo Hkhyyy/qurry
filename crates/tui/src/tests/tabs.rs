@@ -118,7 +118,7 @@ async fn active_tab_keeps_the_data_source_color_in_16_colors() {
     assert_eq!((plain.bg, plain.modifier.contains(Modifier::REVERSED)), (Color::Reset, true));
 }
 
-/// The tab bar shows what each tab holds, with the explorer tree's glyph for objects: a view's DDL ◫, a function's ƒ (#83)
+/// The tab bar shows what each tab holds, with the explorer tree's glyph for objects and ≡ (text) after it on a DDL tab: a view's DDL ◫≡, a function's ƒ≡ (#83)
 #[tokio::test]
 async fn tab_bar_glyphs_follow_the_tree() {
     use crate::app::{TabKind, TextTab};
@@ -130,7 +130,23 @@ async fn tab_bar_glyphs_follow_the_tree() {
     h.app.push_tab("test", "postgres".into(), "calc [DDL]".into(), ddl("CREATE FUNCTION", "routine"));
     h.app.push_tab("test", "postgres".into(), "Diagram: public".into(), ddl("erd", ""));
     let bar = h.screen(160, 20).lines().find(|l| l.contains("orders")).unwrap().to_string();
-    for want in ["❯ console", "▦ orders", "◫ v_users [DDL]", "ƒ calc [DDL]", "≡ Diagram: public"] {
+    for want in ["❯ console", "▦ orders", "◫≡ v_users [DDL]", "ƒ≡ calc [DDL]", "≡ Diagram: public"] {
         assert!(bar.contains(want), "{want:?} not in {bar:?}");
     }
+}
+
+/// Recent Tabs and Search Everywhere put the same glyph before each tab row as the tab bar (#83)
+#[tokio::test]
+async fn tab_lists_show_the_tab_glyph() {
+    use crate::app::{TabKind, TextTab};
+    let mut h = Harness::new().await;
+    h.table_tab("orders", &["id"], &[], &[]);
+    h.app.push_tab("test", "postgres".into(), "v_users [DDL]".into(), TabKind::Text(TextTab { text: "CREATE VIEW".into(), kind: "view".into(), scroll: 0 }));
+    h.app.palette_tabs();
+    let s = h.screen(140, 30);
+    assert!(s.contains("▦ orders") && s.contains("◫≡ v_users [DDL]"), "{s}");
+    h.app.popup = None;
+    h.app.palette_everywhere();
+    let s = h.screen(140, 30);
+    assert!(s.contains("▦ orders") && s.contains("◫≡ v_users [DDL]"), "{s}");
 }
