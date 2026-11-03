@@ -916,6 +916,7 @@ mod tests {
         let url = format!("postgres://{}@{}:{}/{}", c.user, c.host, c.port, c.database);
         let a = sqlx::postgres::PgPoolOptions::new().max_connections(1).connect(&url).await.unwrap();
         let b = sqlx::postgres::PgPoolOptions::new().max_connections(1).connect(&url).await.unwrap();
+        let waiting: i32 = sqlx::query_scalar("select pg_backend_pid()").fetch_one(&b).await.unwrap();
         sqlx::raw_sql("drop table if exists qurry_dba_lock; create table qurry_dba_lock (id int primary key); insert into qurry_dba_lock values (1)").execute(&a).await.unwrap();
         let mut ta = a.begin().await.unwrap();
         let holder: i32 = sqlx::query_scalar("select pg_backend_pid()").fetch_one(&mut *ta).await.unwrap();
@@ -929,8 +930,16 @@ mod tests {
         let _ = blocked;
         let holder_row = s.rows.iter().find(|r| crate::db::cell_text(&r[col("pid")]) == holder.to_string()).unwrap();
         assert_eq!(crate::db::cell_text(&holder_row[col("blocking")]), "1");
+        // The report is server-wide: tests running at the same time (audit, session) hold and wait for locks of their own
         let l = st.dba_report("d".into(), "locks".into()).await.unwrap();
-        assert_eq!(l.rows.len(), 1);
+        let lc = |n: &str| l.columns.iter().position(|c| c.name == n).unwrap();
+        let ours: Vec<(String, String)> = l
+            .rows
+            .iter()
+            .map(|r| (crate::db::cell_text(&r[lc("pid")]), crate::db::cell_text(&r[lc("waiting_pid")])))
+            .filter(|(p, w)| *p == holder.to_string() || *w == waiting.to_string())
+            .collect();
+        assert_eq!(ours, [(holder.to_string(), waiting.to_string())], "{:?}", l.rows);
 
         assert!(st.kill_session("d".into(), holder as i64, true).await.unwrap());
         let r = tokio::time::timeout(std::time::Duration::from_secs(5), waiter).await.expect("waiter finished").unwrap();
