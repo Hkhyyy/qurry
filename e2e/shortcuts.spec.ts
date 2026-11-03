@@ -52,6 +52,14 @@ async function twoTabs(page: Page) {
   await treeItem(page, "contracts").first().dblclick();
   await expect.poll(() => tabStrips(page)).toEqual(["users | contracts"]);
 }
+/** users | contracts | payments, the middle one active: the next and the previous tab differ */
+async function threeTabs(page: Page) {
+  await twoTabs(page);
+  await treeItem(page, "payments").first().dblclick();
+  await expect.poll(() => tabStrips(page)).toEqual(["users | contracts | payments"]);
+  await page.getByRole("tab", { name: /contracts/ }).click();
+  await expect(selectedTab(page)).toContainText("contracts");
+}
 const fontSize = (page: Page) => page.evaluate(() => localStorage.getItem("dbtool.editorFontSize"));
 
 type Check = (page: Page, key: string) => Promise<void>;
@@ -142,12 +150,12 @@ const CHECKS: Record<string, Check> = {
     await expect.poll(() => tabStrips(page)).toEqual(["users | contracts"]);
   },
   "tab.next": async (page, key) => {
-    await twoTabs(page);
+    await threeTabs(page);
     await page.keyboard.press(key);
-    await expect(selectedTab(page)).toContainText("users");
+    await expect(selectedTab(page)).toContainText("payments");
   },
   "tab.prev": async (page, key) => {
-    await twoTabs(page);
+    await threeTabs(page);
     await page.keyboard.press(key);
     await expect(selectedTab(page)).toContainText("users");
   },
@@ -230,9 +238,10 @@ const CHECKS: Record<string, Check> = {
   },
   "tree.refresh": async (page, key) => {
     await users(page).click();
+    // A table node reloads its columns · keys · indexes (nothing in the background sends this)
     const calls = await spyCalls(page);
     await page.keyboard.press(key);
-    await expect.poll(calls).not.toEqual([]);
+    await expect.poll(calls).toContain("table_detail");
   },
   "tree.disconnect": async (page, key) => {
     await conn(page).click();
