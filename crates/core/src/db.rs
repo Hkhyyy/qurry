@@ -395,7 +395,7 @@ fn pg_array(b: &[u8], elem: &dyn Fn(&[u8]) -> Option<String>) -> Option<String> 
     let dims: Vec<usize> = (0..ndim).map(|d| i32_at(12 + d * 8).and_then(|n| usize::try_from(n).ok())).collect::<Option<_>>()?;
     let mut pos = 12 + ndim * 8;
     let mut items = Vec::new();
-    for _ in 0..dims.iter().product::<usize>() {
+    for _ in 0..dims.iter().try_fold(1usize, |a, &n| a.checked_mul(n))? {
         let len = i32_at(pos)?;
         pos += 4;
         if len < 0 {
@@ -648,6 +648,8 @@ mod tests {
         assert_eq!(pg_array(&b, &date).as_deref(), Some("{{infinity,NULL},{2000-01-01,-infinity}}"));
         assert_eq!(pg_array(&[0; 12], &date).as_deref(), Some("{}"), "empty array");
         assert_eq!(pg_array(&b[..b.len() - 2], &date), None, "cut short");
+        let huge = [3, 0, 1082, i32::MAX, 1, i32::MAX, 1, i32::MAX, 1].iter().flat_map(|v: &i32| v.to_be_bytes()).collect::<Vec<u8>>();
+        assert_eq!(pg_array(&huge, &date), None, "dimensions whose product overflows");
     }
 
     /// PostgreSQL's infinity / -infinity in timestamp, timestamptz and date (also in arrays, next to NULLs) show as text; sqlx's chrono decode panicked on them (#84)
