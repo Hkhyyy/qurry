@@ -167,7 +167,7 @@ export type UpdateChannel = "stable" | "beta";
 export type FontFamily = { name: string; mono: boolean };
 
 export const api = {
-  /** Installed font families, sorted (listed once per session; empty where the OS isn't supported) */
+  /** Installed font families, sorted (listed afresh on each call; empty where the OS isn't supported) */
   fontFamilies: () => invoke<FontFamily[]>("font_families"),
   checkUpdate: (force = false) => invoke<UpdateInfo>("check_update", { force }),
   updateChannel: () => invoke<UpdateChannel>("update_channel"),
