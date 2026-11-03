@@ -364,10 +364,16 @@ fn draw_group(f: &mut Frame, app: &mut App, g: Option<usize>, area: Rect, focuse
             }
             if i == shown {
                 st = st.add_modifier(Modifier::BOLD);
-                let bg = if focused { c.map(lighten).unwrap_or(SEL) } else { c.unwrap_or(SEL_BLUR) };
-                st = st.fg(on(bg)).bg(bg);
-                if !focused {
-                    st = st.add_modifier(Modifier::UNDERLINED);
+                if app.color.reverses_selection() {
+                    // 16 colors / NO_COLOR: a lighter hue of the Data Source color is often the same terminal color, so the
+                    // focused pane's tab is drawn in reverse video (SEL maps to it) and the others' underlined on their own color
+                    st = if focused { st.bg(SEL) } else { st.add_modifier(Modifier::UNDERLINED) };
+                } else {
+                    let bg = if focused { c.map(lighten).unwrap_or(SEL) } else { c.unwrap_or(SEL_BLUR) };
+                    st = st.fg(on(bg)).bg(bg);
+                    if !focused {
+                        st = st.add_modifier(Modifier::UNDERLINED);
+                    }
                 }
             }
             l.style(st)

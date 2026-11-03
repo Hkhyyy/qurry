@@ -440,7 +440,45 @@ async fn all_scenes() -> Vec<Value> {
     h.app.palette_update_channel();
     scenes.push(app_scene(&mut h, "Update channel", "⌃k › Update Channel…: stable (version tags only, the default) or beta (also every merge to main), shared with the GUI", 120, 22));
     h.app.popup = None;
+    tab_bars(&mut scenes).await;
     scenes
+}
+
+/// Split panes with many tabs of two Data Sources in each color mode: the visible tab of the focused (left) pane and of the other pane
+async fn tab_bars(scenes: &mut Vec<Value>) {
+    use crate::theme::ColorMode;
+    let mut h = Harness::new().await;
+    for c in [conn("prod", "[PROD] rentalpay", "#6e2a2a", true), conn("dev", "[DEV] rentalpay", "#2f5634", false)] {
+        h.app.state.save_connection(c, None, None).await.unwrap();
+    }
+    h.app.reload_conns();
+    h.settle().await;
+    fn tab(h: &mut Harness, name: &str, conn: &str) -> u64 {
+        let id = h.table_tab(name, &["id"], &[&["1"]], &["id"]);
+        h.app.tabs.iter_mut().find(|t| t.id == id).unwrap().conn = conn.into();
+        id
+    }
+    let users = tab(&mut h, "users", "dev");
+    for (name, conn) in [("payment", "prod"), ("contract", "prod"), ("orders", "test"), ("adjust", "dev")] {
+        tab(&mut h, name, conn);
+    }
+    let bank = tab(&mut h, "bank_info", "prod");
+    h.app.run_action(crate::app::Action::SplitRight);
+    tab(&mut h, "admin_role", "test");
+    for id in [bank, users] {
+        let i = h.app.tab_index(id).unwrap();
+        h.app.activate(i);
+    }
+    h.app.focus = crate::app::Focus::Grid;
+    h.app.status.clear();
+    for (mode, name, desc) in [
+        (ColorMode::TrueColor, "Tab bar: truecolor", "Active tab: bold on a lighter Data Source color (or the selection color) in the focused pane, underlined on its own color in the other pane"),
+        (ColorMode::Ansi16, "Tab bar: 16 colors", "TERM=xterm: the focused pane's tab in reverse video + bold (a lighter hue is often the same terminal color); the other pane's bold + underlined"),
+        (ColorMode::NoColor, "Tab bar: NO_COLOR", "NO_COLOR=1: the focused pane's tab in reverse video + bold, the other pane's bold + underlined"),
+    ] {
+        h.app.color = mode;
+        scenes.push(app_scene(&mut h, name, desc, 120, 10));
+    }
 }
 
 fn json_path() -> std::path::PathBuf {
