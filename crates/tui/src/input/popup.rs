@@ -26,6 +26,10 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                             format!("{key} can't be a key in the {} — use a letter, a {mods} combination or an F key (arrows, Enter, Tab and the moving and copying letters stay fixed)", crate::keys::pane_name(s.pane))
                         })
                     }
+                    Some(key) if app.keys.reserved(s, &key).is_some() => {
+                        let a = app.keys.reserved(s, &key).unwrap();
+                        Some(format!("{} is the key of {} — pick another key, so the keymap stays reachable", crate::keys::pane_disp(&key), crate::app::title(a)))
+                    }
                     Some(key) => {
                         let taken = app.keys.bind(s, key.clone(), add);
                         let mut m = format!("{} → {}", crate::app::title(s.action), app.keys.slot_label(s));

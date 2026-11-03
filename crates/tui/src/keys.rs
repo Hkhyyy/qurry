@@ -298,6 +298,15 @@ impl Keymap {
         self.slot_keys(s) != defaults(s).as_slice()
     }
 
+    /// The Keymap window's or the palette's command whose key this is, when a pane key may not take it: a pane key with a modifier or an
+    /// F key takes it from the commands anywhere, and F1 (or ⌃k) gone would leave no way back into the F1 window
+    pub fn reserved(&self, s: Slot, key: &str) -> Option<Action> {
+        if s.pane == Scope::Global {
+            return None;
+        }
+        [Action::Help, Action::Palette].into_iter().find(|&a| a != s.action && COMMANDS.iter().any(|(o, _)| o.action == a && self.slot_keys(*o).iter().any(|k| k == key)))
+    }
+
     /// Assign a key (add = add to existing keys). Removed from any other line using the same key where both work (a key anywhere
     /// overlaps every pane) → the line it was removed from
     pub fn bind(&mut self, s: Slot, key: String, add: bool) -> Option<Slot> {

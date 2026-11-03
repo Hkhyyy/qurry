@@ -139,3 +139,29 @@ async fn broken_keymap_file_says_how_to_recover() {
     assert!(next.save_keys().is_err());
     assert!(std::fs::read_to_string(&path).unwrap().contains("Ctrl+J"));
 }
+
+/// A pane key can't take the Keymap window's or the palette's key (F1, ⌃k, ?): F1 gone anywhere would leave no way back into F1
+#[tokio::test]
+async fn pane_key_cannot_take_the_keymap_or_palette_key() {
+    let mut h = Harness::new().await;
+    h.key("F1");
+    let at = COMMANDS.iter().position(|(s, _)| *s == Slot { action: Action::Connect, pane: Scope::Tree }).unwrap();
+    for _ in 0..at {
+        h.key("Down");
+    }
+    for (key, owner) in [("F1", "Keymap"), ("Ctrl+K", "Actions Palette"), ("?", "Keymap")] {
+        h.key("Enter");
+        h.key(key);
+        let m = message(&h).unwrap();
+        assert!(m.contains(&format!("is the key of {owner}")), "{key}: {m}");
+    }
+    assert_eq!(h.app.keys.keys(Action::Help), ["F1"]);
+    assert_eq!(h.app.keys.keys(Action::Palette), ["Ctrl+K"]);
+    assert_eq!(h.app.keys.slot_keys(Slot { action: Action::Connect, pane: Scope::Tree }), ["C"]);
+    // The F1 window still opens from F1 after closing it
+    h.key("Esc");
+    h.key("Esc");
+    assert!(h.app.popup.is_none());
+    h.key("F1");
+    assert!(matches!(h.app.popup, Some(Popup::Help { .. })));
+}
