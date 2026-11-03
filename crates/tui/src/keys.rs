@@ -154,6 +154,8 @@ pub fn disp(s: &str) -> String {
 
 pub struct Keymap {
     map: HashMap<Action, Vec<String>>,
+    /// Key spec → command, rebuilt whenever map changes. A key two commands have goes to the first in ORDER
+    by_key: HashMap<String, Action>,
 }
 
 impl Keymap {
@@ -165,12 +167,23 @@ impl Keymap {
                 map.insert(*a, v.iter().map(|s| table::normalize(s)).collect());
             }
         }
-        Keymap { map }
+        let mut km = Keymap { map, by_key: HashMap::new() };
+        km.index();
+        km
+    }
+
+    fn index(&mut self) {
+        let Keymap { map, by_key } = self;
+        by_key.clear();
+        for (a, _) in DEFAULT_KEYS.iter() {
+            for k in map.get(a).into_iter().flatten() {
+                by_key.entry(k.clone()).or_insert(*a);
+            }
+        }
     }
 
     pub fn lookup(&self, k: &KeyEvent) -> Option<Action> {
-        let s = spec(k)?;
-        DEFAULT_KEYS.iter().map(|d| d.0).find(|a| self.map.get(a).is_some_and(|v| v.contains(&s)))
+        self.by_key.get(&spec(k)?).copied()
     }
 
     pub fn keys(&self, a: Action) -> &[String] {
@@ -203,11 +216,13 @@ impl Keymap {
         if !v.contains(&key) {
             v.push(key);
         }
+        self.index();
         taken.into_iter().next()
     }
 
     pub fn reset(&mut self, a: Action) {
         self.map.insert(a, defaults(a));
+        self.index();
     }
 
     /// What to write to keymap.json: only commands differing from defaults
