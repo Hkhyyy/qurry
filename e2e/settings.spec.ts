@@ -56,13 +56,22 @@ test("Settings › Editor font: applies to open editors; ⌃⇧. still changes t
 
 test("Settings › font that isn't installed: falls back to monospace and says how to recover", async ({ page }) => {
   await page.keyboard.press("Meta+Comma");
+  const updates = dialog(page).getByText("Check for updates automatically");
+  const y = async () => (await updates.boundingBox())?.y;
+  const top = await y();
   await field(page, "Grid font family").fill("No Such Mono");
   await expect(dialog(page).getByText(`"No Such Mono" isn't installed, so the default monospace font is used. Pick a font from the list, or clear the field for the default.`)).toBeVisible();
-  // The dialog keeps its size
+  // The dialog keeps its size, and the fields below the font fields stay put while the warning comes and goes
   const box = await dialog(page).boundingBox();
+  expect(await y()).toBe(top);
+  await field(page, "Editor font family").fill("No Such Mono");
+  await expect(dialog(page).getByText("isn't installed")).toHaveCount(2);
+  expect(await y()).toBe(top);
+  await field(page, "Editor font family").fill("");
   await field(page, "Grid font family").fill("");
   await expect(dialog(page).getByText("isn't installed")).toHaveCount(0);
   expect(await dialog(page).boundingBox()).toEqual(box);
+  expect(await y()).toBe(top);
   // A pasted stack is one family name, which isn't installed either: the warning says so instead of silently using the default
   await field(page, "Grid font family").fill(`${FONT}, monospace`);
   await expect(dialog(page).getByText(`"${FONT}, monospace" isn't installed`)).toBeVisible();

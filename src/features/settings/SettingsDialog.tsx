@@ -13,8 +13,9 @@ function FontField({ target, label, hint }: { target: FontTarget; label: string;
   const [min, max] = SIZES[target];
   const name = family.trim();
   const missing = name !== "" && !fontInstalled(name);
+  // The hint is always there with two lines reserved (.settings-font), so the warning coming and going as you type doesn't move the fields below
   return (
-    <Field label={label} hint={missing ? `"${name}" isn't installed, so the default monospace font is used. Pick a font from the list, or clear the field for the default.` : hint}>
+    <Field className="settings-font" label={label} hint={<>{missing ? `"${name}" isn't installed, so the default monospace font is used. Pick a font from the list, or clear the field for the default.` : hint}</>}>
       <div className="ui-row">
         <TextInput grow list="settings-fonts" aria-label={`${label} family`} placeholder="Default monospace" spellCheck={false} value={family} style={{ fontFamily: fontStack(family) }} onChange={(e) => setFont(target, { family: e.target.value })} />
         <Select aria-label={`${label} size`} value={size} onChange={(e) => setFont(target, { size: Number(e.target.value) })}>

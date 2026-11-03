@@ -411,6 +411,7 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .settings-nav { flex: none; width: 150px; border-right: 1px solid var(--ui-border); padding-right: var(--ui-sp-3); }
 .settings-form { flex: 1; min-width: 0; }
 .settings-form .ui-field { grid-template-columns: 80px 1fr; }
+.settings-font .ui-field-hint { min-height: 2lh; }
 
 /* Search Everywhere (⇧⇧ / ⌘O / ⇧⌘A) */
 .ui-popover.search-everywhere { top: 12%; width: 720px; max-width: calc(100vw - 32px); max-height: 70vh; }
