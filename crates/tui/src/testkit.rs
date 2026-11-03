@@ -21,8 +21,10 @@ impl Drop for TempDir {
 }
 
 impl Harness {
-    /// Launch with an empty config folder (inside a tokio runtime: uses background tasks)
+    /// Launch with an empty config folder (inside a tokio runtime: uses background tasks). Keys show as ⌃⌥⇧ on every OS, so the screens
+    /// tests read don't depend on the host (keys::disp's Ctrl+ notation is tested on its own)
     pub async fn new() -> Self {
+        crate::keys::FORCE_MAC_GLYPHS.set(true);
         let dir = std::env::temp_dir().join(format!("qurry-tui-test-{}", uuid::Uuid::new_v4()));
         let state = Arc::new(qurry_core::open_state(Some(dir.clone())).unwrap());
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();

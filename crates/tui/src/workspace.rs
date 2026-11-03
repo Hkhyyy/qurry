@@ -818,12 +818,10 @@ mod tests {
         h.type_str("Ops");
         h.key("Enter");
         assert_eq!(h.app.workspaces[1].name, "Ops");
-        // macOS shows ⌥ / ⌃ instead of Alt+ / Ctrl+ (the workspace bar hints used to print them as is)
-        if cfg!(target_os = "macos") {
-            let scr = h.screen(140, 30);
-            assert!(scr.contains("⌥1…9"), "{scr}");
-            assert!(!scr.contains("Alt+") && !scr.contains("Ctrl+"), "{scr}");
-        }
+        // ⌥ / ⌃ instead of Alt+ / Ctrl+ (the workspace bar hints used to print them as is; the harness draws the macOS notation)
+        let scr = h.screen(140, 30);
+        assert!(scr.contains("⌥1…9"), "{scr}");
+        assert!(!scr.contains("Alt+") && !scr.contains("Ctrl+"), "{scr}");
         // Explorer w: move test from Default to Ops
         h.key("Alt+1");
         h.app.focus = crate::app::Focus::Tree;
