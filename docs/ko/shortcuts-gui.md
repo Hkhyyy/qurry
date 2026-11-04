@@ -17,6 +17,10 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 - 대화상자 안의 키는 그 대화상자에서 동작합니다: 쿼리 기록, Redis 브라우저와 터미널, Data Source 양식. 마우스 동작 (`⌥` 클릭, 끌기) 도 그대로입니다.
 - 데이터로 만든 메뉴 항목은 명령이 아니라 선택지입니다: 이름으로 고르는 데이터 소스 · 워크스페이스 · 콘솔, 열의 필터 값, Data Extractor, 자동 새로 고침 간격, Query Execution Settings 의 선택지.
 
+### Database Explorer 에서 여러 노드
+
+`⌘` 클릭은 노드를 선택에 더하거나 빼고, `⇧` 클릭은 마지막으로 누른 노드부터 보이는 노드를 고릅니다. 그냥 클릭하거나 화살표 키를 누르면 다시 한 노드만 고릅니다. 그러면 Go to DDL 과 Edit Data (하나마다 탭), Copy Name 과 Copy Reference (한 줄에 하나), Drop… 과 Refresh 가 우클릭 메뉴나 그 키로 고른 노드 모두에 실행됩니다. Drop… 은 모든 문장을 보여 주며 한 번만 묻고 (운영 Data Source 는 운영 확인 창), 한 데이터베이스의 객체여야 합니다. 한 노드에만 되는 명령은 흐리게 보이고, 툴팁이 한 노드로 돌아가는 법을 알려 줍니다.
+
 <!-- keymap:gui:start -->
 
 ## Search & Navigation
@@ -90,6 +94,7 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `⌥⌘g` | SQL Generator |
 | `⌥⇧⌘G` | Copy DDL to clipboard |
 | `⌥⇧⌘B` | Open DDL in console |
+| `⌘c` | Copy name (several selected nodes: one per line) |
 | `⌥⇧⌘C` | Copy reference |
 | `F1` | Quick documentation |
 | `⌘F6` | Modify table (columns, keys, indexes, foreign keys) |
@@ -102,6 +107,8 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `⌘F2` | Disconnect |
 | `⌦ / ⌘⌫` | Remove data source / drop object (asks first) |
 | `type letters` | Speed search in the tree |
+| `⌘-click` | Add a node to the selection or remove it (Go to DDL, Edit Data, copy, Drop…, Refresh run for every selected node) |
+| `⇧-click` | Select the visible nodes from the last clicked one; a plain click or an arrow key selects one node again |
 
 ## Query console
 

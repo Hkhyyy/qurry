@@ -32,6 +32,10 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 - `⌥1…9` switch workspaces (unless a command has that key), `⌃u` / `⌃r` undo and redo in the editor, the find bar's own keys.
 - Keys inside a popup, the data source form, the Redis browser and the Database Admin tab act on that screen; the F1 window's own keys too.
 
+### Several nodes in the explorer
+
+`m` marks the node under the cursor or unmarks it (the GUI's `⌘`-click); moving keeps the marks, `Esc` clears them. Go to DDL (`⌃b`) and `F4` (a tab each), `y` (one name per line), `Delete` (Drop…) and refresh then act on every marked node. Drop… asks once, listing every statement (red on a Production data source, as for one object), and needs objects of one database. A command that doesn't fit every marked node says so in the status line, with how to unmark.
+
 <!-- keymap:tui:start -->
 
 ## Commands (default keys — change them in the F1 window)
@@ -132,6 +136,8 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | — | Cancel Export/Import |
 | — | Remove Data Source |
 | — | Connect |
+| — | Mark / Unmark Node (Go to DDL, open, copy, drop and refresh act on every marked node; Esc clears) |
+| — | Drop… (the selected object, or the marked objects of one database: one confirmation) |
 | — | Manage Shown Schemas… (databases · schemas in the explorer) |
 | — | Unsplit All |
 | — | Trust SSH Host Key (after checking its fingerprint) |
@@ -153,6 +159,8 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | `w` | Move Data Source to Another Workspace… |
 | `D` | Remove Data Source |
 | `c` | Connect |
+| `m` | Mark / Unmark Node (Go to DDL, open, copy, drop and refresh act on every marked node; Esc clears) |
+| `Delete` | Drop… (the selected object, or the marked objects of one database: one confirmation) |
 | `s` | Manage Shown Schemas… (databases · schemas in the explorer) |
 
 ## Data grid keys (when a grid has focus; change them in the F1 window)
@@ -177,9 +185,9 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | `F4 / ⌃↓` | Open a query console for the data source / database (Redis: the key browser) |
 | `/` | Filter loaded nodes (/ again edits it · empty or Esc clears) |
 | `F5` | Refresh (the run key refreshes in the explorer) |
-| `y  ⌘c` | Copy name (OSC 52 clipboard) |
+| `y  ⌘c` | Copy name (OSC 52 clipboard; marked nodes: one per line) |
 | `PgUp / PgDn · Home / End` | Page · first / last node |
-| `Tab / Esc` | Go to the open tab |
+| `Tab / Esc` | Go to the open tab (Esc clears the marks first) |
 
 ## Query console
 
