@@ -197,6 +197,16 @@ export const GridShort: S = {
   ),
 };
 
+/** Loading more rows (infinite scroll, #94): the indeterminate progress bar at the bottom of the view, in the one row's room an unfinished result keeps under its rows, so nothing moves when it comes and goes */
+export const GridLoadingMore: S = {
+  name: "Result Grid — loading more rows",
+  render: () => (
+    <div style={{ position: "relative", height: 260, border: "1px solid var(--ui-border)" }}>
+      <ResultGrid result={{ ...mixed, truncated: true }} running={false} loadingMore query="select * from payment_check" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
+    </div>
+  ),
+};
+
 /** Value Editor panel (⇧↩): beside the grid, not over it; follows the current cell (↑↓ keep moving the grid), jsonb pretty-printed and highlighted */
 export const GridValuePanel: S = {
   name: "Result Grid — Value Editor panel (⇧↩)",

@@ -114,14 +114,46 @@ test("rows that arrive after the table tab ran again are dropped, not appended t
   await page.evaluate(() => ((window as any).__mockFetchMoreDelay = 1000));
   const scroll = work(page).locator(".grid-scroll").first();
   await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
-  await expect(work(page).locator(".grid-loading")).toHaveText("Loading more…");
+  await expect(work(page).getByRole("progressbar", { name: "Loading more rows" })).toBeVisible();
   await scroll.focus();
   await page.keyboard.press("Meta+R");
   // A load-more of the new result (if its grid asks right away) fails at once, so only the old answer could add rows
   await page.evaluate(() => Object.assign(window as any, { __mockFetchMoreDelay: undefined, __mockFetchMoreError: "stop" }));
   await page.waitForTimeout(1300);
   await expect(work(page).locator(".tb-info").first()).toHaveText("500+ rows");
-  await expect(work(page).locator(".grid-loading:not(.grid-more-error)")).toHaveCount(0);
+  await expect(work(page).getByRole("progressbar", { name: "Loading more rows" })).toHaveCount(0);
+});
+
+test("loading more shows a progress bar at the bottom of the rows; the scroll position and the rows stay put (#94)", async ({ page }) => {
+  await page.evaluate(() => ((window as any).__mockFetchMoreDelay = 1000));
+  const scroll = work(page).locator(".grid-scroll").first();
+  const bar = work(page).getByRole("progressbar", { name: "Loading more rows" });
+  const at = () => scroll.evaluate((el) => ({ top: el.scrollTop, height: el.scrollHeight, client: el.clientHeight }));
+  // While more can come, one row's room waits under the 500 rows of 24 px, so the bar adds nothing when it shows
+  const idle = await at();
+  expect(idle.height).toBe(501 * 24);
+  // Near the end (it asks 30 rows ahead): the bar sits at the bottom of the view
+  await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight - el.clientHeight - 20 * 24));
+  await expect(bar).toBeVisible();
+  const near = (await bar.boundingBox())!;
+  const view = (await scroll.boundingBox())!;
+  expect(view.y + idle.client - (near.y + near.height)).toBeLessThan(24);
+  await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  const loading = await at();
+  expect(loading.height).toBe(idle.height);
+  expect(loading.top).toBe(loading.height - loading.client);
+  // In that room at the bottom of the view, under the last row (not over it)
+  const sb = (await scroll.boundingBox())!;
+  const bb = (await bar.boundingBox())!;
+  const last = (await work(page).getByRole("rowheader", { name: "500", exact: true }).boundingBox())!;
+  expect(bb.y + bb.height).toBeLessThanOrEqual(sb.y + loading.client);
+  expect(bb.y).toBeGreaterThanOrEqual(last.y + last.height);
+  // The rows come in: the bar goes away, the view stays where it was and the rows below are added
+  await expect(bar).toHaveCount(0);
+  await expect(work(page).locator(".tb-info").first()).toHaveText("620 rows");
+  const after = await at();
+  expect(after.top).toBe(loading.top);
+  expect(after.height).toBe(620 * 24);
 });
 
 /** text-align of the first three data cells of a column */

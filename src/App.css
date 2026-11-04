@@ -245,6 +245,9 @@ button.small { padding: 1px 8px; font-size: 12px; font-weight: 400; }
 .grid-toolbar .sep { width: 1px; height: 16px; background: var(--border); margin: 0 2px; }
 .grid-toolbar .muted { margin-left: 8px; }
 .grid-loading { position: sticky; left: 0; bottom: 0; padding: 4px 12px; color: var(--muted); background: var(--panel); font-size: 12px; }
+/* Loading more: kept at the bottom of the view (over the rows above), at the end in its own room under the last row; above the sticky row numbers */
+.grid-more-progress { position: sticky; left: 0; bottom: 0; z-index: 2; display: flex; align-items: center; box-sizing: border-box; padding: 0 12px; pointer-events: none; }
+.grid-more-progress.on { background: var(--panel); border-top: 1px solid var(--border); }
 .grid-more-error { color: var(--danger); white-space: normal; user-select: text; }
 .sql-preview { max-height: 360px; color: var(--c-cf8e6d); }
 input:disabled, select:disabled { opacity: .45; }
