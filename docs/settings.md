@@ -23,7 +23,9 @@ Font changes apply at once, to every open console and grid.
 
 A saved font that isn't installed (removed since, or chosen on another computer) never breaks the screen: Qurry falls back to the default monospace font, and the field and the top of the list show it as `<name> (not installed)`. Pick another font to replace it.
 
-The theme and fonts are kept by the GUI on this computer (not in the config folder), so they don't affect the TUI.
+**Add Font File…** (at the bottom of the list; not in DataGrip) uses a font without installing it on the computer: pick a `.ttf`, `.otf`, `.woff` or `.woff2` file of up to 20 MB, and Qurry copies it into the `fonts` folder inside the config folder and picks it for that field. The copy is named after the file (letters, digits, `-` and `_` kept, anything else becomes a space); if a font of that name was already added, the new one gets ` 2`, ` 3`… instead of replacing it. A file that isn't really a font (Qurry checks its first bytes, not its extension) is refused with the reason. Added fonts are listed in both fields right after **Default monospace**, marked `custom`, whether or not **Monospaced only** is on; one with the name of an installed font replaces it in the list. The `−` button on its row removes it (after asking): the copy is deleted, the file you added it from is kept, and a field set to it goes back to **Default monospace**. Added fonts are loaded each time Qurry starts. The TUI uses the terminal's font, so added fonts don't apply there.
+
+The theme and fonts are kept by the GUI on this computer (not in the config folder; only added font files are copied into its `fonts` folder), so they don't affect the TUI.
 
 ### Alignment in result grids
 
