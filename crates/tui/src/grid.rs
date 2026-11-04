@@ -496,13 +496,9 @@ impl Grid {
             // Thick when focused, like kit::panel: focus shows without colors too (NO_COLOR)
             .border_type(if focused { ratatui::widgets::BorderType::Thick } else { ratatui::widgets::BorderType::Plain })
             .border_style(if focused { Style::default().fg(Color::Cyan) } else { Style::default().fg(Color::DarkGray) });
-        // The bottom edge says why no more rows came, or that more are on the way (words, so it reads without colors too); right-aligned,
-        // in at most half the edge, so the horizontal scrollbar keeps the rest
-        let msg = match &self.more_error {
-            Some(e) => Some(Span::styled(format!(" ✗ {} ", e.lines().next().unwrap_or_default()), Style::default().fg(crate::kit::DANGER))),
-            None if self.loading_more => Some(crate::kit::muted(" ↓ Loading more rows… ")),
-            None => None,
-        };
+        // The bottom edge says why no more rows came (the status line says it too, and shows a load in flight); right-aligned, in at most
+        // half the edge, so the horizontal scrollbar keeps the rest
+        let msg = self.more_error.as_ref().map(|e| Span::styled(format!(" ✗ {} ", e.lines().next().unwrap_or_default()), Style::default().fg(crate::kit::DANGER)));
         let msg = msg.map(|mut m| {
             let room = (area.width.saturating_sub(2) / 2) as usize;
             if m.content.width() > room {

@@ -185,7 +185,14 @@ export default function App() {
   const labelOf = (t: Tab) => tabLabels.get(t.id) ?? t.title;
 
   const cons = useConsole({ conns, setStatus, refresh });
-  const { run, canCancel, cancelRun, loadStale } = cons;
+  const { run, canCancel, busyLabel, cancelRun, loadStale } = cons;
+  // When each busy tab started (kept across tab switches, so the status bar's elapsed time goes on); dropped once it is idle
+  const busySince = useRef(new Map<string, number>()).current;
+  for (const t of tabs) {
+    if (!busyLabel(t)) busySince.delete(t.id);
+    else if (!busySince.has(t.id)) busySince.set(t.id, Date.now());
+  }
+  const activeBusy = active && busyLabel(active);
   const tabOps = useTabs({ setStatus, loadStale });
   const { activate, addTab, openConsole } = tabOps;
   const ws = useWorkspaces({ conns, setStatus, loadStale });
@@ -308,7 +315,7 @@ export default function App() {
       {search.popups}
       <StatusBar
         run={{ canRun: !!active && active.kind === "console" && !canCancel(active), running: canCancel(active), onRun: () => active && editorApis.get(active.id)?.run(), onCancel: () => active && cancelRun(active) }}
-        status={status} readOnly={!!activeConn?.readOnly} update={update?.latest?.version} onUpdate={() => setUpdateOpen(true)} jobs={jobs} />
+        status={status} busy={activeBusy ? { label: activeBusy, since: busySince.get(active.id) ?? Date.now() } : undefined} readOnly={!!activeConn?.readOnly} update={update?.latest?.version} onUpdate={() => setUpdateOpen(true)} jobs={jobs} />
 
       {tabMenu && <ContextMenu menu={tabMenu} onClose={() => setTabMenu(null)} />}
 

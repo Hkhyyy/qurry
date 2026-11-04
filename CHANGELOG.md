@@ -25,7 +25,7 @@ What changed in each Qurry version, for people who use it. The format follows [K
 - **Settings and Keymap Reference buttons** moved from the right end of the status bar to the bottom of the workspace rail on the far left; the workspace list scrolls above them. ⌘, and ⇧⌘/ still work. In maximized mode (tool windows hidden) there are no mouse buttons for them: use ⌘, / ⇧⌘/ or the Help menu (#97).
 - **TUI Auto theme follows `COLORFGBG`**: on a terminal that reports a light background the TUI now draws its light palette. To keep the dark colors, pick **⌃k › Theme… › Dark** (#90).
 - Console line numbers move to the right to make room for the gutter marks (#98).
-- Loading more rows shows a progress bar under the last row of the grid (TUI: "Loading more rows…" on the grid's bottom edge) (#94).
+- The running indicator moved from a card over the result to the status bar; ■ cancels runs and load-more (the card's Cancel button is gone). Loading more rows shows there too, as a run does ("Loading more rows…" with the elapsed time), so nothing covers the grid's rows; a load-more that fails says why beside the row count with **Run again**. TUI: the status line shows a moving bar, what runs or loads and the elapsed time, and the Cancel key stops a load-more too (#94).
 - Release builds are faster: e2e runs one job per browser with two Playwright workers, and the release builds the CLI in its own job (#88).
 - [SECURITY.md](SECURITY.md) describes the release signing key: where it lives, how it is rotated through a bridge release, and what happens when it is lost or leaked (#91).
 

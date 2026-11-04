@@ -214,7 +214,8 @@ a { color: var(--c-548af7); cursor: pointer; }
 .ol.on { background: var(--ui-selected); }
 
 .result-area { flex: 1; min-height: 0; position: relative; background: var(--bg); }
-.running-bar { position: absolute; z-index: 5; top: 8px; right: 12px; display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); white-space: nowrap; }
+/* A run or load-more of the focused tab, in the status bar where its text is */
+.running-bar { display: inline-flex; align-items: center; gap: 8px; margin-left: 6px; min-width: 0; white-space: nowrap; }
 .plan-table { user-select: text; }
 .plan-tools.ui-toolbar { height: 30px; border-bottom: 1px solid var(--border); }
 .running-time { font-variant-numeric: tabular-nums; }
@@ -255,10 +256,8 @@ button.small { padding: 1px 8px; font-size: 12px; font-weight: 400; }
 .grid-toolbar .sep { width: 1px; height: 16px; background: var(--border); margin: 0 2px; }
 .grid-toolbar .muted { margin-left: 8px; }
 .grid-loading { position: sticky; left: 0; bottom: 0; padding: 4px 12px; color: var(--muted); background: var(--panel); font-size: 12px; }
-/* Loading more: only in its own room under the last row, never over rows (the cursor stays visible); kept in view when scrolled sideways */
-.grid-more-progress { position: sticky; left: 0; z-index: 2; display: flex; align-items: center; box-sizing: border-box; padding: 0 12px; pointer-events: none; }
-.grid-more-progress.on { background: var(--panel); border-top: 1px solid var(--border); }
-.grid-more-error { color: var(--danger); white-space: normal; user-select: text; }
+/* A failed load-more beside the row count: it covers no row */
+.grid-more-error { margin-left: 8px; min-width: 0; color: var(--danger); user-select: text; }
 .sql-preview { max-height: 360px; color: var(--c-cf8e6d); }
 input:disabled, select:disabled { opacity: .45; }
 .ssh-badge { flex: none; font-size: 9px; font-weight: 700; padding: 0 4px; border-radius: 3px; border: 1px solid var(--c-8a8d93); color: var(--c-c9ccd1); }

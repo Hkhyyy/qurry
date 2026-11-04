@@ -541,7 +541,6 @@ export function useEditorGroups({
             .map((t) => (
               <div key={t.id} className="work-layer" data-tab={t.id} style={{ display: t.id === ga?.id ? "block" : "none" }}>
                 <TableEditor
-                  title={t.title}
                   where={t.where}
                   orderBy={t.orderBy}
                   running={t.running}

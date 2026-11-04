@@ -75,3 +75,14 @@ export const resultTabs = (page: Page) => page.locator(".work-layer:visible .res
 export const dialog = (page: Page) => page.getByRole("dialog");
 export const menuItem = (page: Page, name: string | RegExp) => page.getByRole("menuitem", { name });
 export const status = (page: Page) => page.locator(".statusbar .sb-text");
+
+/** Counts cancel_query calls from now on (the status bar shows a run instead of its text, so a cancel is seen reaching the backend) */
+export async function spyCancels(page: Page) {
+  await page.evaluate(() => {
+    const w = window as any;
+    const orig = w.__TAURI_INTERNALS__.invoke;
+    w.__cancels = 0;
+    w.__TAURI_INTERNALS__.invoke = (cmd: string, args: any) => (cmd === "cancel_query" && w.__cancels++, orig(cmd, args));
+  });
+  return () => page.evaluate(() => (window as any).__cancels as number);
+}

@@ -3,7 +3,6 @@ import { Cell, Dialect, QueryResult } from "../lib/api";
 import { filterSuggestions } from "../lib/completion";
 import type { CompletionItem } from "../lib/shared";
 import { EditTarget, ResultGrid } from "./ResultGrid";
-import { RunningBar } from "./RunningBar";
 import { ColumnIcon, IcFilter, IcOrder, SchemaIcon, TableIcon } from "../ui/icons";
 import { IconButton, ListItem, listKey, Notice, PopupList, TextInput } from "../ui";
 
@@ -18,7 +17,6 @@ export interface FilterCompletion {
 
 /** DataGrip table data editor: grid toolbar + WHERE / ORDER BY bar + grid */
 interface Props {
-  title: string;
   where: string;
   orderBy: string;
   running: boolean;
@@ -98,7 +96,6 @@ export function TableEditor(p: Props) {
           onFindSimilar={p.onFindSimilar}
           filterBar={filterBar}
         />
-        <RunningBar running={p.running} label={`Loading ${p.title}`} onCancel={p.onCancel} />
         {p.error && (
           <Notice tone="danger" className="grid-overlay">
             {p.error}

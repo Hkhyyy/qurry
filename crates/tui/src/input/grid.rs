@@ -648,8 +648,8 @@ mod tests {
         assert_eq!((b.2.filter.as_str(), b.2.depth, b.2.mask), ("id = 1", 1, true));
     }
 
-    /// Loading more that fails (#80) keeps the result unfinished ("+") and says why at the grid's edge, the GUI's words; scrolling
-    /// on doesn't ask again
+    /// Loading more shows in the status line as a run does (bar, words, elapsed time; the Cancel key stops it). When it fails (#80)
+    /// the result stays unfinished ("+") and the status line and the grid's edge say why, the GUI's words; scrolling on doesn't ask again
     #[tokio::test]
     async fn a_failed_load_more_stays_in_the_grid() {
         let mut h = Harness::new().await;
@@ -661,25 +661,26 @@ mod tests {
         }
         h.key("Down");
         assert!(h.table(id).grid.as_ref().unwrap().loading_more);
-        // While it loads, the bottom edge says so, in words that read without colors too
-        assert!(h.screen(120, 30).contains("↓ Loading more rows…"), "{}", h.screen(120, 30));
-        h.app.color = crate::theme::ColorMode::NoColor;
-        assert!(h.screen(120, 30).contains("↓ Loading more rows…"));
-        h.app.color = crate::theme::ColorMode::TrueColor;
+        // While it loads, the status line says so (words, so it reads without colors too); nothing on the grid
+        let screen = h.screen(120, 30);
+        let status = screen.lines().last().unwrap();
+        assert!(status.contains("▏ Loading more rows… 0.0 s · ⌃c cancel"), "{status}");
+        assert!(!screen.lines().any(|l| l.contains("Loading more") && l.contains('┗')), "{screen}");
         h.settle().await;
         let g = h.table(id).grid.as_ref().unwrap();
         let why = qurry_shared::errors::more_rows_failed("Session closed");
         assert_eq!((g.more_error.as_deref(), g.result.truncated, g.loading_more), (Some(why.as_str()), true, false));
         assert!(h.screen(120, 30).contains(&format!("✗ {why}")), "{}", h.screen(120, 30));
         assert!(h.screen(120, 30).contains("2+ rows"));
+        assert_eq!(h.app.status, why);
         h.key("Up");
         h.key("Down");
         assert!(!h.table(id).grid.as_ref().unwrap().loading_more, "not asked again");
     }
 
-    /// On a result wider than the grid, the bottom edge's words stay whole beside the horizontal scrollbar (they share that edge)
+    /// On a result wider than the grid, a failed load-more's words on the bottom edge stay whole beside the horizontal scrollbar
     #[tokio::test]
-    async fn the_load_more_words_stay_beside_the_horizontal_scrollbar() {
+    async fn the_load_more_error_stays_beside_the_horizontal_scrollbar() {
         let mut h = Harness::new().await;
         let cols: Vec<String> = (0..40).map(|i| format!("column_{i}")).collect();
         let cols: Vec<&str> = cols.iter().map(String::as_str).collect();
@@ -692,9 +693,6 @@ mod tests {
         }
         h.key("Down");
         assert!(h.table(id).grid.as_ref().unwrap().loading_more);
-        let screen = h.screen(120, 30);
-        let edge = screen.lines().find(|l| l.contains("Loading more")).unwrap_or_else(|| panic!("{screen}"));
-        assert!(edge.contains("↓ Loading more rows…") && edge.contains('█'), "{edge}");
         h.settle().await;
         let screen = h.screen(120, 30);
         let edge = screen.lines().find(|l| l.contains('✗')).unwrap_or_else(|| panic!("{screen}"));

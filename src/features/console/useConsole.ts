@@ -405,8 +405,20 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
 
   // Renders the status bar again when a ⌘↩ starts or stops waiting for the module (the wait lives in ConsolePane)
   const [, setPendingRuns] = useState(0);
-  /** ⌘F2: cancel the running statement, or the ⌘↩ still waiting for the WebAssembly module */
-  const canCancel = (t?: Tab | null) => !!t && (t.running || !!editorApis.get(t.id)?.loading());
+  /** ⌘F2 and the status bar's ■: cancel the running statement or load-more (it reads on the tab's session, so the same cancel
+   * stops it), or the ⌘↩ still waiting for the WebAssembly module */
+  const canCancel = (t?: Tab | null) => !!t && (t.running || t.loadingMore || !!editorApis.get(t.id)?.loading());
+  /** What the status bar says while a console or table tab is busy (its RunningBar), or undefined */
+  const busyLabel = (t: Tab) =>
+    t.kind !== "console" && t.kind !== "table"
+      ? undefined
+      : editorApis.get(t.id)?.loading()
+        ? "Loading the statement splitter"
+        : t.running
+          ? t.kind === "console" ? "Executing" : `Loading ${t.title}`
+          : t.loadingMore
+            ? "Loading more rows"
+            : undefined;
   const cancelRun = (t: Tab) => {
     const ed = editorApis.get(t.id);
     if (ed?.loading()) ed.cancelPending();
@@ -430,5 +442,5 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     // The reload replaces the status line right away, and a table tab has no Output: tell them in a dialog (as the TUI does)
     if (r.warning) void notice(r.warning, "Submitted, with a warning");
   };
-  return { dbCache, schemaCache, loadDbList, loadSchemaList, switchDatabase, switchSchema, run, log, reconnectAfterTls, focusTableGrid, executeConsole, fetchMoreEntry, setTxMode, txEnd, applyTableFilter, fetchMore, cancel, setPendingRuns, canCancel, cancelRun, submitEdits, loadStale };
+  return { dbCache, schemaCache, loadDbList, loadSchemaList, switchDatabase, switchSchema, run, log, reconnectAfterTls, focusTableGrid, executeConsole, fetchMoreEntry, setTxMode, txEnd, applyTableFilter, fetchMore, cancel, setPendingRuns, canCancel, busyLabel, cancelRun, submitEdits, loadStale };
 }

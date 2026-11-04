@@ -487,7 +487,7 @@ impl App {
                     };
                 }
                 Err(e) => {
-                    // The result isn't complete: keep its "+" and say at the grid's edge why no more rows came
+                    // The result isn't complete: keep its "+" and say why no more rows came (status line, and the grid's bottom edge)
                     let why = qurry_shared::errors::more_rows_failed(&e);
                     g.more_error = Some(why.clone());
                     a.status = why;
@@ -498,9 +498,13 @@ impl App {
 
     pub fn cancel(&mut self) {
         let Some(t) = self.tabs.get(self.active) else { return };
+        // A run or a load-more (it reads on the tab's session too)
+        if t.busy().is_none() {
+            return;
+        }
         let session = match &t.kind {
-            TabKind::Console(c) if c.running => c.session.clone(),
-            TabKind::Table(tt) if tt.running => tt.session.clone(),
+            TabKind::Console(c) => c.session.clone(),
+            TabKind::Table(tt) => tt.session.clone(),
             _ => return,
         };
         let st = self.state.clone();

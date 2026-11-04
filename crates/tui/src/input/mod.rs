@@ -467,7 +467,7 @@ mod tests {
     }
 
     /// Text tabs (diagram·DDL): wheel scrolls, not past the end, g/G for start·end
-    /// Console title bar while running: elapsed time · [■ Cancel ⌃c], clicking sends a cancel
+    /// While running: the status line shows the bar, "Executing…" and the elapsed time; the console title a [■ Cancel ⌃c] that sends a cancel
     #[tokio::test]
     async fn running_console_shows_time_and_a_cancel_button() {
         let mut h = Harness::new().await;
@@ -476,7 +476,8 @@ mod tests {
             c.running = true;
         }
         let screen = h.screen(140, 30);
-        assert!(screen.contains("running 0.0 s · [■ Cancel"), "{screen}");
+        assert!(screen.contains("Tx: Auto · [■ Cancel"), "{screen}");
+        assert!(screen.lines().last().unwrap().contains("▏ Executing… 0.0 s · ⌃c cancel"), "{screen}");
         let r = h.app.hits.cancel;
         assert!(r.width > 8, "{r:?}");
         let row = screen.lines().nth(r.y as usize).unwrap();

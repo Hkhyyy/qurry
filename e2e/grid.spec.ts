@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { dialog, expect, menuItem, openApp, openConsole, runAll, test, treeItem, typeSql, work } from "./app";
+import { dialog, expect, menuItem, openApp, openConsole, runAll, spyCancels, test, treeItem, typeSql, work } from "./app";
 
 const clipboard = (page: Page) => page.evaluate(() => navigator.clipboard.readText());
 /** The mock's created_at alternates no fraction / .5 / .125 */
@@ -93,7 +93,7 @@ test("a load-more that fails keeps its reason in the grid and the result unfinis
   await page.evaluate((w) => ((window as any).__mockFetchMoreError = w), why);
   const scroll = work(page).locator(".grid-scroll").first();
   await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
-  // The TUI's words (qurry_shared::errors::more_rows_failed), in the grid, not only in the status bar
+  // The TUI's words (qurry_shared::errors::more_rows_failed), beside the row count (not over the rows), not only in the status bar
   await expect(work(page).locator(".grid-more-error")).toHaveText(`Couldn't load more rows: ${why}`);
   await expect(work(page).locator(".tb-info").first()).toHaveText("500+ rows");
   // Scrolling on doesn't ask again
@@ -101,10 +101,9 @@ test("a load-more that fails keeps its reason in the grid and the result unfinis
   await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
   await page.waitForTimeout(300);
   expect(await page.evaluate(() => (window as any).__mockFetchMoreCalls)).toBe(1);
-  // Running it again (⌘R) starts over: the line goes away and loading more works again
+  // Run again starts over: the line goes away and loading more works again
   await page.evaluate(() => ((window as any).__mockFetchMoreError = undefined));
-  await scroll.focus();
-  await page.keyboard.press("Meta+R");
+  await work(page).getByRole("button", { name: "Run again" }).click();
   await expect(work(page).locator(".grid-more-error")).toHaveCount(0);
   await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
   await expect(work(page).locator(".tb-info").first()).toHaveText("620 rows");
@@ -114,43 +113,42 @@ test("rows that arrive after the table tab ran again are dropped, not appended t
   await page.evaluate(() => ((window as any).__mockFetchMoreDelay = 1000));
   const scroll = work(page).locator(".grid-scroll").first();
   await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
-  await expect(work(page).getByRole("progressbar", { name: "Loading more rows" })).toBeVisible();
+  await expect(page.locator(".statusbar").getByRole("progressbar", { name: "Loading more rows" })).toBeVisible();
   await scroll.focus();
   await page.keyboard.press("Meta+R");
   // A load-more of the new result (if its grid asks right away) fails at once, so only the old answer could add rows
   await page.evaluate(() => Object.assign(window as any, { __mockFetchMoreDelay: undefined, __mockFetchMoreError: "stop" }));
   await page.waitForTimeout(1300);
   await expect(work(page).locator(".tb-info").first()).toHaveText("500+ rows");
-  await expect(work(page).getByRole("progressbar", { name: "Loading more rows" })).toHaveCount(0);
+  await expect(page.getByRole("progressbar", { name: "Loading more rows" })).toHaveCount(0);
 });
 
-test("loading more shows a progress bar at the bottom of the rows; the scroll position and the rows stay put (#94)", async ({ page }) => {
+test("loading more shows in the status bar as a run does, ■ cancels it; the grid gets nothing under its rows and stays put (#94)", async ({ page }) => {
   await page.evaluate(() => ((window as any).__mockFetchMoreDelay = 1000));
   const scroll = work(page).locator(".grid-scroll").first();
-  const bar = work(page).getByRole("progressbar", { name: "Loading more rows" });
-  const at = () => scroll.evaluate((el) => ({ top: el.scrollTop, height: el.scrollHeight, client: el.clientHeight }));
-  // While more can come, one row's room waits under the 500 rows of 24 px, so the bar adds nothing when it shows
-  const idle = await at();
-  expect(idle.height).toBe(501 * 24);
-  // Near the end (it asks 30 rows ahead): the bar waits in its room under the last row, below the view, so it covers no row
-  await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight - el.clientHeight - 20 * 24));
-  await expect(bar).toBeAttached();
-  const near = (await bar.boundingBox())!;
-  const view = (await scroll.boundingBox())!;
-  expect(near.y).toBeGreaterThanOrEqual(view.y + idle.client);
+  const status = page.locator(".statusbar");
+  const stop = status.getByTitle("Cancel Running Statements");
+  const at = () => scroll.evaluate((el) => ({ top: el.scrollTop, height: el.scrollHeight }));
+  // No room kept under the 500 rows of 24 px
+  expect((await at()).height).toBe(500 * 24);
+  await expect(stop).toBeDisabled();
+  const cancels = await spyCancels(page);
   await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
   const loading = await at();
-  expect(loading.height).toBe(idle.height);
-  expect(loading.top).toBe(loading.height - loading.client);
-  // In that room at the bottom of the view, under the last row (not over it)
-  const sb = (await scroll.boundingBox())!;
-  const bb = (await bar.boundingBox())!;
-  const last = (await work(page).getByRole("rowheader", { name: "500", exact: true }).boundingBox())!;
-  expect(bb.y + bb.height).toBeLessThanOrEqual(sb.y + loading.client);
-  expect(bb.y).toBeGreaterThanOrEqual(last.y + last.height);
-  // The rows come in: the bar goes away, the view stays where it was and the rows below are added
-  await expect(bar).toHaveCount(0);
+  // The status bar's running indicator, in the status text's place: bar, words and elapsed time
+  await expect(status.locator(".running-bar")).toContainText(/Loading more rows… \d+\.\d s/);
+  await expect(status.getByRole("progressbar", { name: "Loading more rows" })).toBeVisible();
+  await expect(work(page).getByRole("progressbar")).toHaveCount(0);
+  expect(loading.height).toBe(500 * 24);
+  // ■ is the cancel (the load reads on the tab's session, so the running statement's cancel stops it)
+  await expect(stop).toBeEnabled();
+  await stop.click();
+  await expect.poll(cancels).toBe(1);
+  // The rows come in (the mock ignores the cancel): the indicator goes, the status text is back, the view stays where it was
   await expect(work(page).locator(".tb-info").first()).toHaveText("620 rows");
+  await expect(status.locator(".running-bar")).toHaveCount(0);
+  await expect(status.locator(".sb-text")).toHaveText("620 rows retrieved");
+  await expect(stop).toBeDisabled();
   const after = await at();
   expect(after.top).toBe(loading.top);
   expect(after.height).toBe(620 * 24);
@@ -159,16 +157,18 @@ test("loading more shows a progress bar at the bottom of the rows; the scroll po
 test("loading more never covers the current cell when ↓ moves to the end of the view (#94)", async ({ page }) => {
   await page.evaluate(() => ((window as any).__mockFetchMoreDelay = 3000));
   const scroll = work(page).locator(".grid-scroll").first();
-  const bar = work(page).getByRole("progressbar", { name: "Loading more rows" });
+  const bar = page.locator(".statusbar").getByRole("progressbar", { name: "Loading more rows" });
   // The view's last row near 440, the cursor near it: ↓ scrolls on until the load starts (30 rows before the end)
   await scroll.evaluate((el) => (el.scrollTop = 440 * 24 - el.clientHeight));
   await work(page).getByRole("gridcell", { name: "user_436", exact: true }).click();
   for (let i = 0; i < 40 && !(await bar.count()); i++) await page.keyboard.press("ArrowDown");
-  await expect(bar).toBeAttached();
-  // The bar is below the cell under the cursor, not over it
+  await expect(bar).toBeVisible();
+  // Nothing is drawn over the grid, and the cell under the cursor is inside the view
+  await expect(work(page).getByRole("progressbar")).toHaveCount(0);
   const active = (await work(page).locator(".cell.active").boundingBox())!;
-  const bb = (await bar.boundingBox())!;
-  expect(bb.y).toBeGreaterThanOrEqual(active.y + active.height);
+  const view = (await scroll.boundingBox())!;
+  const client = await scroll.evaluate((el) => el.clientHeight);
+  expect(active.y + active.height).toBeLessThanOrEqual(view.y + client);
 });
 
 /** text-align of the first three data cells of a column */

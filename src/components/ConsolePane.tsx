@@ -10,7 +10,6 @@ import type { MarkStmt } from "../lib/stmtMark";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { CONSOLE_IN_TX, CONSOLE_READ_ONLY, ResultGrid } from "./ResultGrid";
 import { ask } from "../lib/dialogs";
-import { RunningBar } from "./RunningBar";
 import { planText } from "../lib/planText";
 import { IcClock, IcGear, IcReload, IcStop } from "../ui/icons";
 import { EmptyState, IconButton, Select, Spacer, TabItem, TabStrip, Table, Td, Th, ToolButton, Toolbar, ToolbarSep } from "../ui";
@@ -345,7 +344,7 @@ export function ConsolePane(p: Props) {
             <ToolButton title={keyTitle("Roll back", "tx.rollback")} onClick={p.onRollback} disabled={!p.inTx}>↶ Roll back</ToolButton>
           </>
         )}
-        <IconButton tone="danger" title={keyTitle("Cancel Running Statements", "editor.cancel")} onClick={loading ? cancelPending : p.onCancel} disabled={!p.running && !loading}><IcStop /></IconButton>
+        <IconButton tone="danger" title={keyTitle("Cancel Running Statements", "editor.cancel")} onClick={loading ? cancelPending : p.onCancel} disabled={!p.running && !p.loadingMore && !loading}><IcStop /></IconButton>
         <Spacer />
         <span className="cb-ds">{p.connName}</span>
         <Select className="cb-sel" value={p.database} onFocus={p.onLoadDbs} onMouseDown={p.onLoadDbs} onChange={(e) => p.onSwitchDb(e.target.value)} title="Database">
@@ -437,7 +436,6 @@ export function ConsolePane(p: Props) {
               )}
             </div>
             <div className="result-area">
-              {loading ? <RunningBar running label="Loading the statement splitter" onCancel={cancelPending} /> : <RunningBar running={p.running} onCancel={p.onCancel} />}
               {shown === "output" && (
                 <div
                   className="output-log"

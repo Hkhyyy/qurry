@@ -24,7 +24,6 @@ import { RagView } from "../../components/RagView";
 import { RedisBrowser } from "../../components/RedisBrowser";
 import { ResultChart } from "../../components/ResultChart";
 import { ResultGrid } from "../../components/ResultGrid";
-import { RunningBar } from "../../components/RunningBar";
 import { SearchEverywhere } from "../../components/SearchEverywhere";
 import { TableEditor } from "../../components/TableEditor";
 import { TableStructureView } from "../../components/TableStructure";
@@ -207,7 +206,6 @@ export const TableFilterCompletion: S = {
   render: () => (
     <Frame h={360}>
       <TableEditor
-        title="users"
         where=""
         orderBy=""
         running={false}
@@ -276,12 +274,24 @@ export const GridShort: S = {
   ),
 };
 
-/** Loading more rows (infinite scroll, #94): the indeterminate progress bar under the last row, in the one row's room an unfinished result keeps under its rows, so nothing moves when it comes and goes */
+/** Loading more rows (infinite scroll, #94): nothing on the grid (no row is covered); the status bar shows it as it shows a run, ■ cancels */
 export const GridLoadingMore: S = {
   name: "Result Grid — loading more rows",
   render: () => (
+    <div style={{ display: "flex", flexDirection: "column", height: 284, border: "1px solid var(--ui-border)" }}>
+      <div style={{ position: "relative", flex: 1 }}>
+        <ResultGrid result={{ ...mixed, truncated: true }} running={false} loadingMore query="select * from payment_check" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
+      </div>
+      <StatusBar run={{ canRun: false, running: true, onRun: noop, onCancel: noop }} status="" busy={{ label: "Loading more rows", since: Date.now() - 1200 }} readOnly={false} onUpdate={noop} jobs={[]} />
+    </div>
+  ),
+};
+/** A load-more that failed (#80): the reason beside the row count (not over the rows), and Run again */
+export const GridLoadMoreFailed: S = {
+  name: "Result Grid — load more failed",
+  render: () => (
     <div style={{ position: "relative", height: 260, border: "1px solid var(--ui-border)" }}>
-      <ResultGrid result={{ ...mixed, truncated: true }} running={false} loadingMore query="select * from payment_check" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
+      <ResultGrid result={{ ...mixed, truncated: true, moreError: "Couldn't load more rows: Session closed" }} running={false} loadingMore={false} query="select * from payment_check" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
     </div>
   ),
 };
@@ -461,12 +471,12 @@ export const DbaStale: S = {
 };
 export const Migrate: S = { name: "Compare & Migrate", render: () => <Frame h={600}><MigrateView conns={CONNS} initialConnId="dev" onOpenConsole={noop} onStatus={noop} /></Frame> };
 export const Rag: S = { name: "AI Search (RAG)", render: () => <Frame h={600}><RagView conns={CONNS} runJob={async (_l, run) => run("job")} onStatus={noop} /></Frame> };
-/** ⌘↩ at startup while the WebAssembly module loads: shown like a run, Cancel (or ⌘F2) drops it */
+/** ⌘↩ at startup while the WebAssembly module loads: shown like a run in the status bar, ■ (or ⌘F2) drops it */
 export const ConsoleSplitterLoading: S = {
   name: "Console — loading the statement splitter",
   render: () => (
     <div style={{ width: 760, border: "1px solid var(--ui-border)" }}>
-      <RunningBar running label="Loading the statement splitter" onCancel={noop} />
+      <StatusBar run={{ canRun: false, running: true, onRun: noop, onCancel: noop }} status="" busy={{ label: "Loading the statement splitter", since: Date.now() }} readOnly={false} onUpdate={noop} jobs={[]} />
     </div>
   ),
 };
@@ -627,12 +637,15 @@ export const Workspaces: S = { name: "Workspace rail", render: () => <Rail n={2}
 export const WorkspacesMany: S = { name: "Workspace rail — 30 workspaces (list scrolls, footer stays)", render: () => <Rail n={30} /> };
 export const WorkspacesLight: S = { name: "Workspace rail — light", globals: { theme: "light" }, render: () => <Rail n={30} /> };
 export const WorkspacesHc: S = { name: "Workspace rail — high contrast", globals: { theme: "hc" }, render: () => <Rail n={30} /> };
-/** Status bar: run · cancel, status text, transfers, update badge, read-only, caret, encoding (Settings and Keymap moved to the workspace rail) */
+/** Status bar: run · cancel, status text, transfers, update badge, read-only, caret, encoding (Settings and Keymap moved to the workspace rail).
+ * While the focused tab runs or loads more rows, the running indicator (bar · what · elapsed) takes the status text's place; ■ cancels it */
 export const StatusBarStory: S = {
   name: "Status bar",
   render: () => (
-    <div style={{ display: "flex", flexDirection: "column" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <StatusBar run={{ canRun: true, running: false, onRun: noop, onCancel: noop }} status="1 statement executed in 12 ms" readOnly update="0.3.1" onUpdate={noop} jobs={[]} />
+      <StatusBar run={{ canRun: false, running: true, onRun: noop, onCancel: noop }} status="" busy={{ label: "Executing", since: Date.now() - 3400 }} readOnly={false} onUpdate={noop} jobs={[]} />
+      <StatusBar run={{ canRun: false, running: true, onRun: noop, onCancel: noop }} status="" busy={{ label: "Loading more rows", since: Date.now() - 800 }} readOnly={false} onUpdate={noop} jobs={[]} />
     </div>
   ),
 };

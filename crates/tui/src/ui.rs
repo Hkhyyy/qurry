@@ -427,8 +427,8 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
     let value_keys = app.keys.slot_keys(crate::keys::Slot { action: A::ValueEditor, pane: Scope::Grid }).first().map(|k| crate::keys::pane_disp(k));
     let value_keys = format!(" {} / {} close ", value_keys.unwrap_or_else(|| "—".into()), k(A::CloseTab));
     let finding = focused && matches!(app.popup, Some(Popup::Find(_)));
-    // How long run · load has been going (redrawn every 0.5s)
-    let took = app.run_elapsed(idx).map(|d| crate::app::elapsed_text(d.as_millis() as u64));
+    // A run or a load-more in flight: the console's [■ Cancel] button (the status line says what and for how long)
+    let busy = app.tabs[idx].busy().is_some();
     let tab = &mut app.tabs[idx];
     let db = tab.db.clone();
     let title = tab.title.clone();
@@ -446,7 +446,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 " {db} · Tx: {}{}{}{} ",
                 if c.tx_manual { "Manual" } else { "Auto" },
                 if c.in_tx { format!(" (pending — {k_commit} commit / {k_rollback} rollback)") } else { String::new() },
-                if c.running { format!(" · running {} · [■ Cancel {k_cancel}]", took.as_deref().unwrap_or("")) } else { String::new() },
+                if busy { format!(" · [■ Cancel {k_cancel}]") } else { String::new() },
                 if ro { " · read-only" } else { "" }
             );
             let editing = focus == Focus::Editor;
@@ -454,7 +454,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 c.complete = None;
             }
             // [■ Cancel] spot (the title starts right after the top-left corner)
-            app.hits.cancel = match (c.running, title.find("[■ Cancel")) {
+            app.hits.cancel = match (busy, title.find("[■ Cancel")) {
                 (true, Some(at)) => {
                     use unicode_width::UnicodeWidthStr;
                     let x = ed.x + 1 + title[..at].width() as u16;
@@ -548,7 +548,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                     g.render_value_panel(f, side, value_keys);
                 }
             } else {
-                let msg = if tt.error.is_some() { String::new() } else { format!("Loading… {}", took.as_deref().unwrap_or("")) };
+                let msg = if tt.error.is_some() { "" } else { "Loading…" };
                 f.render_widget(Paragraph::new(msg).block(panel(format!(" {}.{} ", tt.schema, tt.table), focused)), grid);
             }
         }
@@ -815,14 +815,23 @@ fn hint_line(mut ctx: Vec<(String, &'static str)>, glob: Vec<(String, &'static s
     Line::from(spans)
 }
 
-fn draw_status(f: &mut Frame, app: &App, area: Rect) {
+fn draw_status(f: &mut Frame, app: &mut App, area: Rect) {
     // The new-version notice stays visible in front of the status text
     let badge = app.update.as_ref().map(|v| format!(" ⬆ v{v} available — {} › Update Qurry & Restart ", app.keys.label(crate::app::Action::Palette)));
     let bw = badge.as_ref().map(|b| b.chars().count() as u16).unwrap_or(0);
     // If width is short, shrink the right-side hints (so the update notice·status text isn't cut)
     let (ctx, glob) = status_hints(app);
-    // While export·import runs, a progress bar instead of status text (stop with ⌃K › Cancel Export/Import)
-    let status = if app.jobs.is_empty() { disp(&app.status) } else { app.jobs.iter().map(|(_, label, j)| job_line(label, j.progress())).collect::<Vec<_>>().join("  ·  ") };
+    // While the active tab runs or loads more rows: a moving bar, what it does and for how long (as the GUI's status bar), cancel
+    // with the Cancel key. While export·import runs, a progress bar (stop with ⌃K › Cancel Export/Import). Else the status text
+    let busy = app.tabs.get(app.active).and_then(|t| t.busy()).map(|what| {
+        let ms = app.run_elapsed(app.active).unwrap_or_default().as_millis() as u64;
+        format!("▕{}▏ {what}… {} · {} cancel", bounce(ms), crate::app::elapsed_text(ms), app.keys.label(crate::app::Action::Cancel))
+    });
+    let status = match busy {
+        Some(b) => b,
+        None if app.jobs.is_empty() => disp(&app.status),
+        None => app.jobs.iter().map(|(_, label, j)| job_line(label, j.progress())).collect::<Vec<_>>().join("  ·  "),
+    };
     // Status text claims up to half the screen width first (so error·result messages aren't cut)
     let sw = (status.chars().count() as u16 + 2).clamp(12, area.width / 2);
     let hints = hint_line(ctx, glob, area.width.saturating_sub(bw + sw) as usize);
@@ -858,10 +867,16 @@ fn job_line(label: &str, (rows, done, total): (u64, u64, u64)) -> String {
         let pct = (done * 100 / total).min(99) as usize;
         ("█".repeat(pct * W / 100) + &"░".repeat(W - pct * W / 100), format!(" · {pct}%"))
     } else {
-        let t = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0) / 250) as usize % (W - 2);
-        ("░".repeat(t) + "███" + &"░".repeat(W - 3 - t), String::new())
+        (bounce(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)), String::new())
     };
     format!("{label} ▕{bar}▏ {n}{pct}")
+}
+
+/// A 10-cell bar whose end is unknown: a block moving along it, one cell per 250 ms
+fn bounce(ms: u64) -> String {
+    const W: usize = 10;
+    let t = (ms / 250) as usize % (W - 2);
+    "░".repeat(t) + "███" + &"░".repeat(W - 3 - t)
 }
 
 /// Shown next to the data source form's SSL mode: Require encrypts but doesn't stop someone in the middle

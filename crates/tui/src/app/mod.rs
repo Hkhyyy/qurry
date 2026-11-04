@@ -357,6 +357,22 @@ pub struct Tab {
     pub stale: bool,
 }
 
+impl Tab {
+    /// What a run or a load-more in flight says in the status line (as the GUI's RunningBar), or None when the tab isn't busy
+    pub fn busy(&self) -> Option<String> {
+        let (running, grid, what) = match &self.kind {
+            TabKind::Console(c) => (c.running, c.grid.as_ref(), "Executing".to_string()),
+            TabKind::Table(tt) => (tt.running, tt.grid.as_ref(), format!("Loading {}.{}", tt.schema, tt.table)),
+            _ => return None,
+        };
+        if running {
+            Some(what)
+        } else {
+            grid.is_some_and(|g| g.loading_more).then(|| "Loading more rows".into())
+        }
+    }
+}
+
 // ───────── Popups ─────────
 
 #[derive(Clone)]
@@ -899,24 +915,19 @@ pub fn elapsed_text(ms: u64) -> String {
 }
 
 impl App {
-    /// Elapsed time if this tab is running · loading (since first seen)
+    /// Elapsed time if this tab is running · loading more (since first seen)
     pub fn run_elapsed(&mut self, idx: usize) -> Option<std::time::Duration> {
         let t = self.tabs.get(idx)?;
-        let running = match &t.kind {
-            TabKind::Console(c) => c.running,
-            TabKind::Table(tt) => tt.running,
-            _ => false,
-        };
-        if !running {
+        if t.busy().is_none() {
             self.run_since.remove(&t.id);
             return None;
         }
         Some(self.run_since.entry(t.id).or_insert_with(std::time::Instant::now).elapsed())
     }
 
-    /// If a tab is running, the elapsed time needs redrawing
+    /// If a tab is running or loading more, the elapsed time needs redrawing
     pub fn any_running(&self) -> bool {
-        self.tabs.iter().any(|t| matches!(&t.kind, TabKind::Console(c) if c.running) || matches!(&t.kind, TabKind::Table(tt) if tt.running))
+        self.tabs.iter().any(|t| t.busy().is_some())
             || matches!(&self.popup, Some(Popup::ConnForm(f)) if f.testing.is_some())
     }
 }

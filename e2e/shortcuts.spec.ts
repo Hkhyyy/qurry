@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { Page } from "@playwright/test";
-import { dialog, editor, expect, menuItem, openApp, openConsole, resultTabs, status, tabStrips, test, treeItem, typeSql, work } from "./app";
+import { dialog, editor, expect, menuItem, openApp, openConsole, resultTabs, spyCancels, status, tabStrips, test, treeItem, typeSql, work } from "./app";
 
 // Every default GUI shortcut of the command table (crates/shared/src/keymap-table.json), pressed in its scope, with its effect checked.
 // A new row needs a check here: the first test fails until it has one
@@ -286,8 +286,9 @@ const CHECKS: Record<string, Check> = {
     await consoleWith(page, "select pg_sleep(3);");
     await page.keyboard.press("Meta+Enter");
     await expect(page.locator(".statusbar [title^='Cancel Running Statements']")).toBeEnabled();
+    const cancels = await spyCancels(page);
     await page.keyboard.press(key);
-    await expect(status(page)).toHaveText("Cancel requested");
+    await expect.poll(cancels).toBe(1);
   },
   "editor.history": async (page, key) => {
     await openConsole(page);

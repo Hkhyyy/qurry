@@ -1,4 +1,4 @@
-import { dialog, editor, expect, openApp, openConsole, resultTabs, runAll, status, suggestions, test, typeSql, work } from "./app";
+import { dialog, editor, expect, openApp, openConsole, resultTabs, runAll, spyCancels, status, suggestions, test, treeItem, typeSql, work } from "./app";
 
 test.beforeEach(async ({ page }) => {
   await openApp(page);
@@ -138,6 +138,28 @@ test("MySQL: `--` greys out as a comment only where the server reads one (`selec
   await expect.poll(italic).toBe("-- note");
 });
 
+test("a run shows in the status bar (bar · Executing… · elapsed) for the focused tab only; ■ cancels it", async ({ page }) => {
+  const bar = page.locator(".statusbar .running-bar");
+  const stop = page.locator(".statusbar").getByTitle("Cancel Running Statements");
+  await typeSql(page, "select pg_sleep(3)");
+  await page.keyboard.press("Meta+Enter");
+  await expect(bar).toContainText(/^Executing… \d+\.\d s$/);
+  await expect(work(page).locator(".running-bar")).toHaveCount(0);
+  await expect(stop).toBeEnabled();
+  // Another tab that isn't running: its status text and a disabled ■
+  await treeItem(page, "users").first().dblclick();
+  await expect(work(page).getByRole("gridcell", { name: "user_1", exact: true })).toBeVisible();
+  await expect(bar).toHaveCount(0);
+  await expect(status(page)).toBeVisible();
+  await expect(stop).toBeDisabled();
+  // Back on the console: its indicator again, the time going on from the run's start
+  await page.locator("[role=tab].tab", { hasText: "console" }).first().click();
+  await expect(bar).toContainText(/^Executing… (?:[1-9]|\d{2,})\.\d s$/);
+  const cancels = await spyCancels(page);
+  await stop.click();
+  await expect.poll(cancels).toBe(1);
+});
+
 test("a console result whose load-more fails keeps the reason in its grid (#80)", async ({ page }) => {
   await page.evaluate(() => ((window as any).__mockFetchMoreError = "Session closed"));
   await typeSql(page, "select * from users");
@@ -145,6 +167,7 @@ test("a console result whose load-more fails keeps the reason in its grid (#80)"
   await expect(work(page).locator(".tb-info").first()).toHaveText("500+ rows");
   await work(page).locator(".grid-scroll").first().evaluate((el) => (el.scrollTop = el.scrollHeight));
   await expect(work(page).locator(".grid-more-error")).toHaveText("Couldn't load more rows: Session closed");
+  await expect(work(page).getByRole("button", { name: "Run again" })).toBeVisible();
   await expect(work(page).locator(".tb-info").first()).toHaveText("500+ rows");
 });
 

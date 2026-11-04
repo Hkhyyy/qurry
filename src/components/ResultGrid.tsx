@@ -17,7 +17,7 @@ import { cmd, commandsFor, eventSpec, hit, keyTitle, runKey } from "../lib/short
 import { draftAt, draftToApply, leftDraft, panelText, registerValuePanel, toggleJsonLayout, type PanelDraft } from "../lib/valuePanel";
 import { ResultChart } from "./ResultChart";
 import { ValuePanel } from "./ValuePanel";
-import { Button, CellEditor, CodeBlock, cx, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, JsonText, Modal, Notice, ProgressBar, RowNumberCell, SearchField, Spacer, Text, ToolButton, Toolbar, ToolbarSep } from "../ui";
+import { Button, CellEditor, CodeBlock, cx, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, JsonText, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, ToolButton, Toolbar, ToolbarSep } from "../ui";
 import {
   IcChart, IcClock, IcExport, IcGear, IcMinus, IcPlus, IcPreview, IcReload, IcRevert, IcSearch, IcStop, IcSubmit, IcTranspose, IcView,
 } from "../ui/icons";
@@ -687,7 +687,7 @@ export function ResultGrid(p: Props) {
   /** What the toolbar's buttons and menus run, for their command keys (the buttons are drawn below with the same conditions) */
   const toolbarCommands = (): MenuItem[] => [
     { label: "Reload Page", ...cmd("grid.reload"), action: p.onReload, disabled: p.running },
-    { label: "Cancel Running Statements", ...cmd("grid.cancel"), action: p.onCancel, disabled: !p.running },
+    { label: "Cancel Running Statements", ...cmd("grid.cancel"), action: p.onCancel, disabled: !p.running && !loadingMore },
     { label: "Add Row", ...cmd("grid.addRow"), action: addRow, disabled: !canEdit },
     { label: "Delete Row", ...cmd("grid.deleteRows"), action: deleteRows, disabled: !canEdit || !hasSel },
     { label: "Revert Selected", ...cmd("grid.revert"), action: revertSelected, disabled: !pendingCount },
@@ -723,7 +723,7 @@ export function ResultGrid(p: Props) {
         >
           <IcClock />
         </IconButton>
-        <IconButton tone="danger" title={keyTitle("Cancel Running Statements", "grid.cancel")} onClick={p.onCancel} disabled={!p.running}><IcStop /></IconButton>
+        <IconButton tone="danger" title={keyTitle("Cancel Running Statements", "grid.cancel")} onClick={p.onCancel} disabled={!p.running && !loadingMore}><IcStop /></IconButton>
         <ToolbarSep />
         <IconButton {...editButton("Add Row", "grid.addRow")} onClick={addRow} disabled={!canEdit}><IcPlus /></IconButton>
         <IconButton {...editButton("Delete Row", "grid.deleteRows")} onClick={deleteRows} disabled={!canEdit || !hasSel}><IcMinus /></IconButton>
@@ -750,6 +750,13 @@ export function ResultGrid(p: Props) {
           <IcSearch />
         </IconButton>
         <span className="tb-info">{rowsLabel}{pendingCount ? ` · ${pendingCount} pending` : ""}</span>
+        {/* A failed load-more: why no more rows came (the status bar says it too), and running the statement again starts over */}
+        {!loadingMore && result.moreError && (
+          <>
+            <Text truncate className="grid-more-error">{result.moreError}</Text>
+            <Button size="sm" onClick={p.onReload} disabled={p.running}>Run again</Button>
+          </>
+        )}
         <Spacer />
         <ToolButton title="Data Extractor (copy format)" onClick={(e) => dropdown(e, EXTRACTORS.map((x) => ({ label: (x === extractor ? "✓ " : "　") + x, action: () => setExtractor(x) })))}>
           {extractor} ▾
@@ -921,17 +928,6 @@ export function ResultGrid(p: Props) {
                     );
                   })}
                 </div>
-                {/* One row's room under the rows while more can come, so the progress bar's coming and going moves nothing */}
-                {result.truncated && !result.moreError && (
-                  <div className={cx("grid-more-progress", loadingMore && "on")} style={{ height: ROW_H }}>
-                    {loadingMore && <ProgressBar pct={null} width={140} label="Loading more rows" />}
-                  </div>
-                )}
-                {!loadingMore && result.moreError && (
-                  <div className="grid-loading grid-more-error" role="alert">
-                    {result.moreError}
-                  </div>
-                )}
               </div>
             )}
           </div>
