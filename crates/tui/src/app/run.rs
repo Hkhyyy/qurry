@@ -1,5 +1,11 @@
 use super::*;
 
+/// Each planned statement's editor rows (first, last): `text` is what was planned, its first line on editor row `row0`
+fn stmt_rows(stmts: &[qurry_core::exec::Stmt], text: &str, row0: usize) -> Vec<(usize, usize)> {
+    let row = |at: usize| row0 + text[..at.min(text.len())].matches('\n').count();
+    stmts.iter().map(|s| (row(s.start), row(s.end))).collect()
+}
+
 /// Runs a console query on the session, or asks the test stand-in when there is one
 async fn console_query(st: &AppState, fake: Option<FakeDb>, target: &str, q: String, limit: Option<usize>, session: &str) -> Result<QueryResult, String> {
     match fake {
@@ -74,19 +80,25 @@ impl App {
             return;
         }
         if let Some(((r0, c0), (r1, c1))) = c.editor.selection_range() {
-            let stmts = sqls(qurry_core::exec::plan_selection(&selected_text(c.editor.lines(), r0, c0, r1, c1), kind, self.exec));
+            let sel = selected_text(c.editor.lines(), r0, c0, r1, c1);
+            let stmts = qurry_core::exec::plan_selection(&sel, kind, self.exec);
             if !stmts.is_empty() {
-                self.run_stmts(stmts, explain, confirmed);
+                let rows = stmt_rows(&stmts, &sel, r0.min(r1));
+                self.run_marked(sqls(stmts), rows, explain, confirmed);
             }
             return;
         }
         let (row, col) = c.editor.cursor();
-        let plan = qurry_core::exec::plan(&c.editor.lines().join("\n"), byte_offset(c.editor.lines(), row, col), kind, self.exec);
+        let text = c.editor.lines().join("\n");
+        let plan = qurry_core::exec::plan(&text, byte_offset(c.editor.lines(), row, col), kind, self.exec);
         match plan {
             qurry_core::exec::Plan::Nothing => {}
-            qurry_core::exec::Plan::Run(stmts) => self.run_stmts(sqls(stmts), explain, confirmed),
+            qurry_core::exec::Plan::Run(stmts) => {
+                let rows = stmt_rows(&stmts, &text, 0);
+                self.run_marked(sqls(stmts), rows, explain, confirmed)
+            }
             qurry_core::exec::Plan::Ask(opts) => {
-                let items = opts.into_iter().map(|(label, stmts)| PItem { label, hint: String::new(), action: PAction::Run { stmts: sqls(stmts), explain } }).collect();
+                let items = opts.into_iter().map(|(label, stmts)| PItem { label, hint: String::new(), action: PAction::Run { rows: stmt_rows(&stmts, &text, 0), stmts: sqls(stmts), explain } }).collect();
                 self.popup = Some(Popup::Palette(Palette { title: "Execute".into(), input: TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
             }
         }
@@ -116,6 +128,16 @@ impl App {
         return self.fake_db;
         #[cfg(not(test))]
         None
+    }
+
+    /// Runs statements planned over the console's text, each on its editor rows (first, last): they get gutter marks as they run
+    pub fn run_marked(&mut self, stmts: Vec<String>, rows: Vec<(usize, usize)>, explain: bool, confirmed: bool) {
+        if let Some(TabKind::Console(c)) = self.tabs.get_mut(self.active).map(|t| &mut t.kind)
+            && !c.running
+        {
+            c.marks.start(c.editor.lines(), &rows);
+        }
+        self.run_stmts(stmts, explain, confirmed)
     }
 
     /// confirmed = whether a dangerous statement (UPDATE/DELETE without WHERE, DROP, TRUNCATE) was confirmed
@@ -246,8 +268,16 @@ impl App {
         self.spawn(
             async move {
                 let mut out = vec![];
-                for s in stmts2 {
-                    // Put the running statement in Output right away (on one line, truncated if too long)
+                // A statement's gutter mark, set as it starts and finishes
+                let mark = |i: usize, state: MarkState| {
+                    let _ = tx.send(Box::new(move |a: &mut App| {
+                        if let Some(TabKind::Console(c)) = a.tab_mut(id).map(|t| &mut t.kind) {
+                            c.marks.set(c.editor.lines(), i, state);
+                        }
+                    }));
+                };
+                for (i, s) in stmts2.into_iter().enumerate() {
+                    // Put the running statement in Output right away (on one line, truncated if too long), and its gutter mark
                     let echo: String = s.replace('\n', " ").chars().take(300).collect();
                     let line = format!("{echo_name}> {echo}{}", if s.chars().count() > 300 { "…" } else { "" });
                     let _ = tx.send(Box::new(move |a: &mut App| {
@@ -255,6 +285,7 @@ impl App {
                             c.log(false, line);
                         }
                     }));
+                    mark(i, MarkState::Running);
                     let q = if explain {
                         let bare = s.trim_end_matches(';');
                         match (kind, analyze) {
@@ -284,6 +315,7 @@ impl App {
                             Err(e) => Err(e),
                         };
                         if let Err(e) = begun {
+                            mark(i, MarkState::Err);
                             out.push((s, Err(e), false));
                             break;
                         }
@@ -298,6 +330,7 @@ impl App {
                         r
                     };
                     let stop = r.is_err();
+                    mark(i, if stop { MarkState::Err } else { MarkState::Ok });
                     out.push((s, r, dry));
                     if stop {
                         break;

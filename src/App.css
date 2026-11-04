@@ -202,6 +202,16 @@ a { color: var(--c-548af7); cursor: pointer; }
 .editor-area { flex: 1; min-height: 0; position: relative; background: var(--bg); }
 .editor-host { position: absolute; inset: 0; }
 .exec-highlight { background: rgba(53,116,240,.25); }
+/* Gutter marks of executed statements (DataGrip): done ✓, failed ✗, running (spinning arc); the icon is a mask so it takes the theme's color.
+   Monaco puts the classes of all marks on a line on one element, so the later rule wins: failed over running over done (shownMark) */
+.stmt-mark { cursor: pointer; }
+.stmt-mark::before { content: ""; position: absolute; inset: 0; margin: auto; width: 12px; height: 12px; background: var(--ui-ok); -webkit-mask: var(--mark) center / contain no-repeat; mask: var(--mark) center / contain no-repeat; }
+.stmt-mark.ok { --mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 8.5 6.5 12 13 4.5'/%3E%3C/svg%3E"); }
+.stmt-mark.running::before { background: var(--ui-accent); animation: spin 1s linear infinite; }
+.stmt-mark.running { --mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M8 2.5a5.5 5.5 0 1 1-5.5 5.5'/%3E%3C/svg%3E"); }
+.stmt-mark.error::before { background: var(--ui-danger); animation: none; }
+.stmt-mark.error { --mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M4 4l8 8M12 4l-8 8'/%3E%3C/svg%3E"); }
+.ol.on { background: var(--ui-selected); }
 
 .result-area { flex: 1; min-height: 0; position: relative; background: var(--bg); }
 .running-bar { position: absolute; z-index: 5; top: 8px; right: 12px; display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); white-space: nowrap; }

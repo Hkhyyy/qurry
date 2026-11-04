@@ -3,6 +3,7 @@ import { analyzePlan, api, auditLog, ConnectionView, dialectOf, DbKind, meta, pr
 import { ask, notice } from "../../lib/dialogs";
 import { pushHistory } from "../../components/HistoryDialog";
 import type { OutputLine, ResultEntry } from "../../components/ConsolePane";
+import type { MarkStmt } from "../../lib/stmtMark";
 import { schemaChanged } from "../../components/SchemaTree";
 import { commitNoticeTitle } from "../../lib/commitNotice";
 import { sharedOr } from "../../lib/shared";
@@ -120,7 +121,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     const p2 = (n: number) => String(n).padStart(2, "0");
     return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
   };
-  const log = (id: string, level: OutputLine["level"], text: string) => updTab(id, (t) => ({ ...t, output: [...t.output.slice(-999), { ts: nowTs(), text, level }] }));
+  const log = (id: string, level: OutputLine["level"], text: string, stmt?: string) => updTab(id, (t) => ({ ...t, output: [...t.output.slice(-999), { ts: nowTs(), text, level, stmt }] }));
   /**
    * After "Allow unencrypted" under a console's or table tab's connect error: only reconnect. A console never runs the statement again (it may write);
    * a table tab reloads once connected, as after any failed connection
@@ -146,7 +147,8 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     const f = /\bfrom\s+((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))?)/i.exec(sql);
     return f ? f[1].replace(/"/g, "") : `Result ${n}`;
   };
-  const executeConsole = async (tabId: string, stmts: string[], explain?: "plan" | "analyze") => {
+  /** `mark`: the gutter marks of the statements (running, then done or failed; none for those after a failure) */
+  const executeConsole = async (tabId: string, stmts: string[], explain?: "plan" | "analyze", mark?: MarkStmt) => {
     const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId);
     if (!tab || !stmts.length) return;
     const c = conns.find((x) => x.id === tab.connId);
@@ -196,11 +198,15 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     let committed = 0;
     // Statements that ran but whose result the Production log couldn't record (a warning, not a failure: running them again would repeat them)
     let warned = 0;
-    for (const sql0 of stmts) {
+    for (const [i, sql0] of stmts.entries()) {
       const isMy = c?.kind === "mysql";
       const bare = sql0.replace(/;\s*$/, "");
       const sql = !explain ? sql0 : isMy ? `EXPLAIN ${explain === "analyze" ? "ANALYZE " : ""}${bare}` : `EXPLAIN (FORMAT JSON${explain === "analyze" ? ", ANALYZE, BUFFERS" : ""}) ${bare}`;
-      log(tabId, "sql", `${c?.name ?? ""}> ${sql0}`);
+      const out = crypto.randomUUID();
+      const ts = nowTs();
+      log(tabId, "sql", `${c?.name ?? ""}> ${sql0}`, out);
+      mark?.(i, { state: "running", out, ts });
+      const ok = (text: string) => (log(tabId, "info", text), mark?.(i, { state: "ok", out, ts, text }));
       // Explain Analyse actually runs the statement → run it in a transaction and always roll back (a savepoint when one may be
       // open, so nothing pending is committed: core's explain_wrap, the TUI's rule). Reads too: a function a SELECT calls may write
       const dry = explain === "analyze" && wraps;
@@ -242,14 +248,14 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
           const entry: ResultEntry = { id: crypto.randomUUID(), title: resultTitle(sql0, ++n), sql: sql0, kind: "plan", result: null, plan: plan ?? undefined, planJson: pretty, pinned: false };
           updTab(tabId, (t) => ({ ...t, results: [...t.results, entry] }));
           lastActive = entry.id;
-          log(tabId, "info", `Plan retrieved in ${r.elapsedMs} ms`);
+          ok(`Plan retrieved in ${r.elapsedMs} ms`);
         } else if (r.hasResultSet) {
           const entry: ResultEntry = { id: crypto.randomUUID(), title: resultTitle(sql0, ++n), sql: sql0, kind: "result", result: r, pinned: false };
           updTab(tabId, (t) => ({ ...t, results: [...t.results, entry], cursorEntry: r.truncated ? entry.id : t.cursorEntry }));
           lastActive = entry.id;
-          log(tabId, "info", `${r.rows.length}${r.truncated ? "+" : ""} row${r.rows.length === 1 ? "" : "s"} retrieved starting from 1 in ${r.elapsedMs} ms`);
+          ok(`${r.rows.length}${r.truncated ? "+" : ""} row${r.rows.length === 1 ? "" : "s"} retrieved starting from 1 in ${r.elapsedMs} ms`);
         } else {
-          log(tabId, "info", `${r.rowsAffected} row${r.rowsAffected === 1 ? "" : "s"} affected in ${r.elapsedMs} ms`);
+          ok(`${r.rowsAffected} row${r.rowsAffected === 1 ? "" : "s"} affected in ${r.elapsedMs} ms`);
           // Production: notify if an undo SQL was recorded (production operation log)
           if (c?.options?.confirmChanges && r.rowsAffected > 0 && !dry) {
             const last = (await auditLog(tab.connId, "", 1).catch(() => []))[0];
@@ -258,6 +264,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
         }
       } catch (e) {
         log(tabId, "error", String(e));
+        mark?.(i, { state: "error", out, ts, text: String(e) });
         if (committed > 0) log(tabId, "error", `Note: ${committed} earlier statement${committed > 1 ? "s" : ""} of this run ${committed > 1 ? "were" : "was"} already committed (Auto mode) and ${committed > 1 ? "were" : "was"} not rolled back`);
         // Even on error a transaction may be open (e.g. first statement fails in Manual) → sync the Commit/Roll back buttons
         syncTx(tabId);

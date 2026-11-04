@@ -6,6 +6,7 @@ mod confirm;
 mod console;
 mod explorer;
 mod keymap;
+mod marks;
 mod notices;
 mod perf;
 mod tabs;

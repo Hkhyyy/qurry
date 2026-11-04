@@ -43,6 +43,7 @@ Some things never depend on color:
 - **Unsaved grid changes**: next to the row number `+` marks an added row, `-` a deleted one (also struck through), `~` a row with edited cells; edited cells are bold.
 - **The cell cursor inside a range**: with reverse video (16 colors, `NO_COLOR`) the range is reversed and the cursor is the one cell in it left plain, as in a spreadsheet.
 - **The active tab**: bold. With 16 colors or `NO_COLOR` the focused pane's tab is in reverse video (its Data Source color inverted, so a production tab stays red) and, in split panes, the other panes' visible tab is underlined.
+- **Statements that ran in a console**: `✓` done, `✗` failed, `…` running, in the line-number column on the statement's first line.
 
 `qurry-tui --help` lists the same rules.
 

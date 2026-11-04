@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import { useEffect, useState } from "react";
 import { expect, fireEvent, userEvent, waitFor, within } from "storybook/test";
 // Fake backend (same as the app's ?mock): returns fixed data for the commands screens call
 import "../../lib/mock";
@@ -8,7 +9,8 @@ import { SettingsDialog } from "../../features/settings/SettingsDialog";
 import { setFont } from "../../lib/prefs";
 import { dialectOf, type ConnectionView, type QueryResult } from "../../lib/api";
 import { ConnectionDialog } from "../../components/ConnectionDialog";
-import { ConsolePane, SPLITTER_FAILED } from "../../components/ConsolePane";
+import { ConsolePane, SPLITTER_FAILED, type OutputLine } from "../../components/ConsolePane";
+import type { StmtMark } from "../../lib/stmtMark";
 import { CopyRowsDialog, GenerateDataDialog } from "../../components/DataTools";
 import { DbaReport } from "../../components/DbaReport";
 import { ErdView } from "../../components/ErdView";
@@ -528,6 +530,45 @@ export const ConsoleReadOnlyResult: S = {
     );
   },
 };
+/** A console after its runs: each executed statement is marked on its first line (✓ done, ✗ failed, spinning while it runs; all three
+ * shown together here). Hover a mark for when it ran and its result or error; click it for its line in Output */
+function ConsoleMarks() {
+  const [output, setOutput] = useState<OutputLine[]>([]);
+  const [active, setActive] = useState("output");
+  // The story runs the whole console once (the user's Query Execution setting would ask which statement); the setting is put back right away
+  const [saved] = useState(() => {
+    const v = localStorage.getItem("dbtool.execSettings");
+    localStorage.setItem("dbtool.execSettings", JSON.stringify({ inside: "whole" }));
+    return v;
+  });
+  useEffect(() => {
+    if (saved === null) localStorage.removeItem("dbtool.execSettings");
+    else localStorage.setItem("dbtool.execSettings", saved);
+  }, [saved]);
+  const runs: [StmtMark["state"], string][] = [["ok", "1 row retrieved starting from 1 in 4 ms"], ["error", 'ERROR: column "status" of relation "payment" does not exist'], ["running", ""]];
+  return (
+    <Frame h={420}>
+      <ConsolePane
+        tabId="story-marks" target="dev" initialSql={"select 1;\nupdate payment\n   set status = 'paid'\n where id = 42;\nselect pg_sleep(5);"} connName="[DEV] shop_app" kind="postgres" dialect={dialectOf("postgres")} database="shop_app" schema="public"
+        dbList={[]} schemaList={[]} running loadingMore={false} results={[]} activeResult={active}
+        output={output} txManual={false} inTx={false}
+        onChange={noop}
+        onExecute={(stmts, _explain, mark) => {
+          const ts = "2026-11-04 10:24:01";
+          setOutput(stmts.flatMap((s, i) => {
+            const [state, text] = runs[i];
+            mark?.(i, { state, out: `o${i}`, ts, text });
+            return [{ ts, text: `[DEV] shop_app> ${s}`, level: "sql" as const, stmt: `o${i}` }, ...(text ? [{ ts, text, level: state === "ok" ? ("info" as const) : ("error" as const) }] : [])];
+          }));
+        }}
+        onCancel={noop} onSetActiveResult={setActive} onPin={noop} onCloseResult={noop} onFetchMore={noop} onExport={noop} onHistory={noop}
+        onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop}
+        registerApi={(_id, a) => setTimeout(() => a.run())} onClearOutput={noop} onError={noop} onLoadingChange={noop}
+      />
+    </Frame>
+  );
+}
+export const ConsoleGutterMarks: S = { name: "Console — gutter marks", render: () => <ConsoleMarks /> };
 export const Redis: S = {
   name: "Redis Browser",
   render: () => (

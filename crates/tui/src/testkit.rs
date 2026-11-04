@@ -41,6 +41,13 @@ impl Harness {
         }
     }
 
+    /// Apply the next background task result; false when none arrives (as settle, one at a time)
+    pub async fn step(&mut self) -> bool {
+        let Ok(Some(a)) = tokio::time::timeout(std::time::Duration::from_millis(100), self.rx.recv()).await else { return false };
+        a(&mut self.app);
+        true
+    }
+
     /// One key: "a", "Ctrl+A", "Alt+Shift+Left", "Enter", "Tab", "Esc", "Down", "PgDn", "F1" …
     pub fn key(&mut self, spec: &str) {
         let mut m = KeyModifiers::NONE;
