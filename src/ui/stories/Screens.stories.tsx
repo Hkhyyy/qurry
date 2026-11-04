@@ -561,7 +561,7 @@ function ConsoleMarks() {
             return [{ ts, text: `[DEV] shop_app> ${s}`, level: "sql" as const, stmt: `o${i}` }, ...(text ? [{ ts, text, level: state === "ok" ? ("info" as const) : ("error" as const) }] : [])];
           }));
         }}
-        onCancel={noop} onSetActiveResult={setActive} onPin={noop} onCloseResult={noop} onFetchMore={noop} onExport={noop} onHistory={noop}
+        onCancel={noop} onSetActiveResult={setActive} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
         onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop}
         registerApi={(_id, a) => setTimeout(() => a.run())} onClearOutput={noop} onError={noop} onLoadingChange={noop}
       />

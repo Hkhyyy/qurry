@@ -8,7 +8,7 @@ fn fake(q: &str) -> Result<QueryResult, String> {
     if q.contains("boom") {
         return Err("ERROR: relation \"boom\" does not exist".into());
     }
-    Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 7, has_result_set: false, in_transaction: false, warning: None })
+    Ok(QueryResult { columns: vec![], rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 7, has_result_set: false, in_transaction: false, warning: None, editable: None })
 }
 
 /// The focused console editor's lines as drawn, from the line-number column on ("✓1 select 1;")
