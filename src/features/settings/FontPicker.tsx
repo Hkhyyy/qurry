@@ -15,7 +15,8 @@ const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLow
  * ↑↓ PgUp PgDn move, ↩ picks (applied live), ⎋ closes. The field shows the family in itself; a saved family that isn't installed
  * says so and renders with the default. Opening it calls onOpen (Settings lists the installed fonts again). The drop-down is the ui kit's PopupList (as ComboBox's), here with a search box on top
  * Not in DataGrip: "Add Font File…" under the list copies a font file into Qurry and picks it; added fonts are listed first, marked
- * "custom", each with a remove button (asks first; a picker set to it goes back to the default)
+ * "custom", each with a remove button (asks first; a picker set to it goes back to the default unless a font of that name is installed). A file that can't be
+ * loaded as a font is removed again with a notice
  */
 export function FontPicker({ label, value, installed, onOpen, onPick }: { label: string; value: string; installed: FontFamily[] | null; onOpen: () => void; onPick: (family: string) => void }) {
   const [query, setQuery] = useState<string | null>(null);
@@ -51,7 +52,7 @@ export function FontPicker({ label, value, installed, onOpen, onPick }: { label:
     const ok = await ask(`Remove the font file "${f.name}" from Qurry? The copy in Qurry's fonts folder is deleted; the file you added it from is kept.`, { title: "Remove Font File", okLabel: "Remove", danger: true });
     if (ok) {
       try {
-        await removeCustomFont(f);
+        await removeCustomFont(f, installed);
       } catch (e) {
         await notice(String(e), "Remove Font File");
       }

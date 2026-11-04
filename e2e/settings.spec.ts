@@ -184,3 +184,18 @@ test("Settings › Add Font File…: a file that isn't a font is refused with th
   await expect(settingsField(page, "Grid font family")).toHaveText(/^Default monospace/);
   await expect(settingsField(page, "Grid font family")).toBeFocused();
 });
+
+test("Settings › Add Font File…: a font file that can't be loaded (damaged) is removed again with the reason, nothing is picked", async ({ page }) => {
+  await page.evaluate(() => ((window as any).__mockFontBroken = true));
+  await page.keyboard.press("Meta+Comma");
+  await field(page, "Grid font family").click();
+  await fontList(page).getByRole("button", { name: "Add Font File…" }).click();
+  const notice = box(page, "Add Font File");
+  await expect(notice).toContainText("Fira Code couldn't be loaded as a font");
+  await notice.getByRole("button", { name: "OK" }).click();
+  await expect(notice).toHaveCount(0);
+  await expect(settingsField(page, "Grid font family")).toHaveText(/^Default monospace/);
+  await expect(settingsField(page, "Grid font family")).toBeFocused();
+  await settingsField(page, "Grid font family").click();
+  await expect(fontList(page).getByText("custom")).toHaveCount(0);
+});

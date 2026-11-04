@@ -102,16 +102,26 @@ let loading: Promise<void> = Promise.resolve();
 /** List the added font files and register each new one with FontFace; a removed one is unregistered, so a font still set to it falls
  *  back to the default like one that isn't installed. At startup and after adding or removing one; one run at a time */
 export const loadCustomFonts = () => (loading = loading.then(registerCustomFonts, registerCustomFonts));
-/** "Add Font File…" (the backend opens the file dialog and copies the font): the added font, registered; null if cancelled */
+/** "Add Font File…" (the backend opens the file dialog and copies the font): the added font, registered; null if cancelled.
+ *  A file the WebView can't load as a font (truncated, or a format it doesn't take) is removed again and throws the reason */
 export async function addCustomFont(): Promise<CustomFont | null> {
   const f = await api.addFontFile();
-  if (f) await loadCustomFonts();
+  if (!f) return null;
+  await loadCustomFonts();
+  if (!faces.has(f.file)) {
+    await api.removeFontFile(f.file);
+    await loadCustomFonts();
+    throw `${f.name} couldn't be loaded as a font (the file may be damaged or incomplete)`;
+  }
   return f;
 }
-/** Deletes an added font file; an editor or grid font set to it goes back to the default */
-export async function removeCustomFont(f: CustomFont) {
+/** Deletes an added font file; an editor or grid font set to it goes back to the default, unless the OS lists a font of that name
+ *  (installed), which renders again once the added one is gone */
+export async function removeCustomFont(f: CustomFont, installed: FontFamily[] | null) {
   await api.removeFontFile(f.file);
-  for (const t of ["editor", "grid"] as const) if (fonts[t].family.trim().toLowerCase() === f.name.toLowerCase()) setFont(t, { family: "" });
+  const name = f.name.toLowerCase();
+  if (!installed?.some((i) => i.name.toLowerCase() === name))
+    for (const t of ["editor", "grid"] as const) if (fonts[t].family.trim().toLowerCase() === name) setFont(t, { family: "" });
   await loadCustomFonts();
 }
 /** The added font files (re-renders when they change) */
@@ -126,15 +136,14 @@ export const DEFAULT_FONT_LABEL = "Default monospace";
 /** Font picker rows: the default, the saved family if it is neither installed nor added (so it still shows, marked), the added font
  * files (whatever monoOnly says: they were added on purpose; an installed family of the same name is left out, since the added one is
  * what renders), then the installed families (monospaced only with monoOnly — the current one stays either way), all matching query.
- * installed null or empty (still loading, or the OS can't list them) and nothing added: nothing is marked missing */
+ * installed null or empty (still loading, or the OS can't list them): nothing is marked missing */
 export function fontOptions(installed: FontFamily[] | null, custom: CustomFont[], current: string, monoOnly: boolean, query: string): FontOption[] {
   const cur = current.trim().toLowerCase();
   const isCur = (name: string) => name.toLowerCase() === cur;
   const isCustom = (name: string) => custom.some((c) => c.name.toLowerCase() === name.toLowerCase());
-  const known = !!installed?.length || custom.length > 0;
   const rows: FontOption[] = [
     { family: "" },
-    ...(cur && !installed?.some((f) => isCur(f.name)) && !isCustom(cur) ? [{ family: current.trim(), missing: known }] : []),
+    ...(cur && !installed?.some((f) => isCur(f.name)) && !isCustom(cur) ? [{ family: current.trim(), missing: !!installed?.length }] : []),
     ...custom.map((c) => ({ family: c.name, custom: true })),
     ...(installed ?? []).filter((f) => !isCustom(f.name) && (!monoOnly || f.mono || isCur(f.name))).map((f) => ({ family: f.name })),
   ];

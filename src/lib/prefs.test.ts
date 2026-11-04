@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const updateOptions = vi.fn();
 vi.mock("./monaco", () => ({ monaco: { editor: { getEditors: () => [{ updateOptions }], remeasureFonts: () => {} } } }));
-const api = vi.hoisted(() => ({ customFonts: vi.fn(), fontFile: vi.fn(async () => new ArrayBuffer(4)), removeFontFile: vi.fn() }));
+const api = vi.hoisted(() => ({ customFonts: vi.fn(), fontFile: vi.fn(async () => new ArrayBuffer(4)), removeFontFile: vi.fn(), addFontFile: vi.fn() }));
 vi.mock("./api", () => ({ api }));
 
 let store: Record<string, string>;
@@ -145,15 +145,18 @@ describe("fontOptions with added font files", () => {
     expect(fontOptions(installed, custom, "", false, "").map((r) => r.family)).toEqual(["", "hack", "Inter Display", "Helvetica"]);
   });
 
-  it("an added font set as the family is not a missing row; one removed meanwhile is, even when the OS lists no fonts", async () => {
+  it("an added font set as the family is not a missing row; another family is marked missing only when the OS lists fonts", async () => {
     const { fontOptions } = await load();
     expect(fontOptions([], custom, "inter display", true, "")).toEqual([{ family: "" }, { family: "hack", custom: true }, { family: "Inter Display", custom: true }]);
-    expect(fontOptions([], custom, "Gone", true, "")[1]).toEqual({ family: "Gone", missing: true });
+    expect(fontOptions(installed, custom, "Gone", true, "")[1]).toEqual({ family: "Gone", missing: true });
+    // Still loading, or the OS can't list fonts (Windows): an installed choice like Consolas isn't flagged because a font was added
+    expect(fontOptions(null, custom, "Consolas", true, "")[1]).toEqual({ family: "Consolas", missing: false });
+    expect(fontOptions([], custom, "Consolas", true, "")[1]).toEqual({ family: "Consolas", missing: false });
   });
 });
 
 describe("added font files", () => {
-  const files = [{ name: "Fira Code", file: "Fira Code.ttf" }];
+  const files: { name: string; file: string }[] = [];
   const added = new Set<string>();
   const load2 = async () => {
     const p = await load();
@@ -166,13 +169,17 @@ describe("added font files", () => {
           public family: string,
           public bytes: ArrayBuffer,
         ) {}
-        load = async () => this;
+        load = async () => {
+          if (this.family === "Broken") throw new Error("invalid font data");
+          return this;
+        };
       },
     );
     return p;
   };
   beforeEach(() => {
     added.clear();
+    files.splice(0, files.length, { name: "Fira Code", file: "Fira Code.ttf" });
     api.customFonts.mockImplementation(async () => [...files]);
     api.removeFontFile.mockImplementation(async (file: string) => void files.splice(files.findIndex((f) => f.file === file), 1));
   });
@@ -184,9 +191,31 @@ describe("added font files", () => {
     expect(api.fontFile).toHaveBeenCalledWith("Fira Code.ttf");
     p.setFont("editor", { family: "fira code" });
     p.setFont("grid", { family: "Menlo" });
-    await p.removeCustomFont(files[0]);
+    await p.removeCustomFont(files[0], [{ name: "Menlo", mono: true }]);
     expect([...added]).toEqual([]);
     expect(p.font("editor").family).toBe("");
     expect(p.font("grid").family).toBe("Menlo");
+  });
+
+  it("removing an added font named like an installed one keeps a field set to it (the installed font renders again)", async () => {
+    const p = await load2();
+    await p.loadCustomFonts();
+    p.setFont("editor", { family: "Fira Code" });
+    await p.removeCustomFont(files[0], [{ name: "fira code", mono: true }]);
+    expect([...added]).toEqual([]);
+    expect(p.font("editor").family).toBe("Fira Code");
+  });
+
+  it("an added file that can't be loaded as a font is removed again and throws the reason", async () => {
+    const p = await load2();
+    api.addFontFile.mockImplementation(async () => {
+      const f = { name: "Broken", file: "Broken.ttf" };
+      files.push(f);
+      return f;
+    });
+    await expect(p.addCustomFont()).rejects.toBe("Broken couldn't be loaded as a font (the file may be damaged or incomplete)");
+    expect(api.removeFontFile).toHaveBeenLastCalledWith("Broken.ttf");
+    expect(files.map((f) => f.name)).toEqual(["Fira Code"]);
+    expect([...added]).toEqual(["Fira Code"]);
   });
 });

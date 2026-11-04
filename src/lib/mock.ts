@@ -519,7 +519,8 @@ const handlers: Record<string, (a: any) => unknown> = {
     if (!customFonts.some((f) => f.file === a.file)) throw `No added font file named ${a.file}`;
     customFonts = customFonts.filter((f) => f.file !== a.file);
   },
-  font_file: () => fetch(fontBytesUrl).then((r) => r.arrayBuffer()),
+  // window.__mockFontBroken: the file passes the magic-byte check but isn't a loadable font (truncated)
+  font_file: () => ((window as any).__mockFontBroken ? new Uint8Array([0, 1, 0, 0]).buffer : fetch(fontBytesUrl).then((r) => r.arrayBuffer())),
   grid_align: () => gridAlign,
   set_grid_align: (a: any) => {
     if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
