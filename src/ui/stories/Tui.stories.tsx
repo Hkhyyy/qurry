@@ -4,7 +4,7 @@ import { Scene, TuiScreen } from "./TuiScreen";
 
 /**
  * TUI. Drawn exactly as the real TUI code (crates/tui/src/kit — atoms · molecules · organisms) renders to a virtual terminal.
- * Redraw with `pnpm tui-snapshots` after changes. The theme uses terminal colors, so it's unaffected by the Theme above
+ * Redraw with `pnpm tui-snapshots` after changes. Scenes use terminal colors, so they are unaffected by the Theme above (the Light · stories are the TUI's own light theme)
  */
 const scenes = (data as { scenes: Scene[] }).scenes;
 const by = (name: string): StoryObj<{ scene: Scene }> => ({ name, args: { scene: scenes.find((s) => s.name === name)! } });
@@ -41,6 +41,8 @@ export const ScreenCopyRows80 = { ...by("Copy related rows: 80×24"), name: "Sma
 export const ScreenConfirmTooSmall = { ...by("Confirm: too small to answer"), name: "Small · Confirm too small to answer" };
 export const ScreenDataSourceForm80 = { ...by("Data source form: 80×24"), name: "Small · Data source form (80×24)" };
 export const ScreenUpdateChannel = { ...by("Update channel"), name: "Screen · Update channel" };
+export const ScreenTheme = { ...by("Theme"), name: "Screen · Theme" };
+export const ScreenThemeAutoLight = { ...by("Theme: Auto on a light terminal"), name: "Screen · Theme: Auto on a light terminal" };
 export const ScreenGridAlign = { ...by("Grid alignment"), name: "Screen · Grid alignment" };
 export const ScreenGridAlignChanged = { ...by("Grid alignment: changed"), name: "Screen · Grid alignment: changed" };
 export const ScreenGridAlignPalette = { ...by("Grid alignment palette"), name: "Screen · Grid alignment palette" };
@@ -55,3 +57,12 @@ export const ColorsNoColorGrid = { ...by("Colors: NO_COLOR grid"), name: "Colors
 export const TabBarTruecolor = { ...by("Tab bar: truecolor"), name: "Tab bar · truecolor" };
 export const TabBar16 = { ...by("Tab bar: 16 colors"), name: "Tab bar · 16 colors" };
 export const TabBarNoColor = { ...by("Tab bar: NO_COLOR"), name: "Tab bar · NO_COLOR" };
+// The light theme (⌃k › Theme… › Light, or Auto when COLORFGBG says the terminal background is light), on a light terminal
+export const LightTruecolor = { ...by("Light: truecolor"), name: "Light · truecolor" };
+export const Light256 = { ...by("Light: 256"), name: "Light · 256" };
+export const Light16 = { ...by("Light: 16"), name: "Light · 16" };
+export const LightNoColor = { ...by("Light: NO_COLOR"), name: "Light · NO_COLOR" };
+export const LightGridEdits = { ...by("Light: grid edits"), name: "Light · grid edits" };
+export const LightGridJson = { ...by("Light: grid JSON"), name: "Light · grid JSON" };
+export const LightProductionConfirm = { ...by("Light: production confirm"), name: "Light · Production confirm" };
+export const LightTabBar = { ...by("Tab bar: light"), name: "Light · tab bar" };

@@ -7,9 +7,11 @@ export interface Scene {
   w: number;
   h: number;
   rows: Run[][];
+  /** Drawn in the light theme: shown on a light terminal */
+  light?: boolean;
 }
 
-const FG = "#abb2bf";
+const DARK_FG = "#abb2bf";
 
 /**
  * Terminals give each char a fixed cell, but in web fonts symbols (⛁ ◧ ▦ ▾ ⌥ …) are drawn with other fonts and differ in width → lines shift.
@@ -33,9 +35,12 @@ function cells(t: string) {
   if (ascii) out.push(ascii);
   return out;
 }
-const BG = "#1e1f22";
+const DARK_BG = "#1e1f22";
+/** The terminal's own colors for light scenes (kit_snapshots.rs css(): a common light terminal palette) */
+const LIGHT = { bg: "#ffffff", fg: "#383a42", border: "#d4d6dc" };
 
 export function TuiScreen({ scene }: { scene: Scene }) {
+  const [BG, FG, border] = scene.light ? [LIGHT.bg, LIGHT.fg, LIGHT.border] : [DARK_BG, DARK_FG, "#393b40"];
   return (
     <div>
       <div style={{ marginBottom: 8, color: "var(--ui-text-muted)" }}>{scene.desc}</div>
@@ -48,7 +53,7 @@ export function TuiScreen({ scene }: { scene: Scene }) {
           color: FG,
           font: "13px/1.25 'JetBrains Mono', Menlo, monospace",
           borderRadius: 6,
-          boxShadow: "0 0 0 1px #393b40",
+          boxShadow: `0 0 0 1px ${border}`,
           // So two-cell Korean chars take exactly two cells
           fontVariantLigatures: "none",
         }}
