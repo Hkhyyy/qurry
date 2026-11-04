@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dbShown, defaultDbOf, type ConnectionView } from "./api";
+import { dbChoices, dbShown, defaultDbOf, type ConnectionView } from "./api";
 
 const conn = (c: Partial<ConnectionView>) => ({ id: "c", name: "c", kind: "postgres", database: "", ...c }) as ConnectionView;
 const shown = (c: ConnectionView, dbs: string[]) => dbs.filter((d) => dbShown(c, d, defaultDbOf(c)));
@@ -19,5 +19,15 @@ describe("dbShown", () => {
   });
   it("one fixed database: only the default", () => {
     expect(shown(conn({ database: "shop", options: { singleDb: true } as ConnectionView["options"] }), ["postgres", "shop", "billing"])).toEqual(["shop"]);
+  });
+});
+
+// The console's and the Database Admin report's database pickers: every database of the server (Manage Shown Schemas only filters
+// the explorer), the current one first, the rest in the server's order
+describe("dbChoices", () => {
+  it("current first, then the others once", () => {
+    expect(dbChoices("shop", ["postgres", "shop", "billing"])).toEqual(["shop", "postgres", "billing"]);
+    expect(dbChoices("gone", ["postgres", "shop"])).toEqual(["gone", "postgres", "shop"]);
+    expect(dbChoices("", ["", "mysql", "shop"])).toEqual(["", "mysql", "shop"]);
   });
 });

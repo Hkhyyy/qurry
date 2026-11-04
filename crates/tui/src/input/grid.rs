@@ -500,7 +500,8 @@ mod tests {
         assert!(matches!(&h.app.popup, Some(crate::app::Popup::Confirm { text, .. }) if text.contains("Cancel the query of session 77")));
     }
 
-    /// d: the DBA tab's database chooser lists the shown databases (scope, MySQL system schemas hidden), picking one reruns the report
+    /// d: the DBA tab's database chooser lists every database of the server, the current one first (as the GUI's console and report
+    /// pickers; Manage Shown Schemas only filters the explorer), picking one reruns the report
     /// there and keeps auto-refresh (core: a database it can't connect to says so). One fixed database doesn't change
     #[tokio::test]
     async fn dba_database_picker() {
@@ -521,8 +522,10 @@ mod tests {
             _ => panic!("no chooser"),
         };
         h.app.dba_db_choices(id, ["postgres", "shop", "billing", "analytics"].map(String::from).to_vec());
-        assert_eq!(picker(&h), (vec![("shop".into(), "current".into()), ("billing".into(), String::new())], 0));
+        let none = String::new;
+        assert_eq!(picker(&h), (vec![("shop".into(), "current".into()), ("postgres".into(), none()), ("billing".into(), none()), ("analytics".into(), none())], 0));
         assert!(h.screen(120, 24).contains("Run the report on which database?"));
+        h.key("Down");
         h.key("Down");
         h.key("Enter");
         let t = &h.app.tabs[h.app.active];
@@ -532,16 +535,16 @@ mod tests {
         let s = h.screen(240, 24);
         assert!(s.contains(" billing — 0 rows") && s.contains("d database"), "{s}");
 
-        // MySQL without a default schema: all schemas first, system schemas hidden
+        // MySQL without a default schema: all schemas first, then every schema
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Mysql).into_iter().find(|r| r.id == "slow_queries");
         let d = crate::app::DbaTab { report: "slow_queries".into(), info, gone: None, grid: None, loaded: None, error: None, running: false, run: 0, auto: true };
         let my = h.app.push_tab("c2", String::new(), "Slow Queries".into(), TabKind::Dba(d));
         h.app.dba_db_choices(my, ["mysql", "shop", "sys"].map(String::from).to_vec());
-        assert_eq!(picker(&h), (vec![("(all schemas)".into(), "current".into()), ("shop".into(), String::new())], 0));
+        assert_eq!(picker(&h), (vec![("(all schemas)".into(), "current".into()), ("mysql".into(), none()), ("shop".into(), none()), ("sys".into(), none())], 0));
         h.key("Esc");
         assert!(h.screen(160, 24).contains(" (all schemas) — 0 rows"));
 
-        // A current database the scope hides comes first, so Enter keeps it
+        // The current database comes first, so Enter keeps it
         h.app.activate(h.app.tab_index(id).unwrap());
         if let Some(t) = h.app.tab_mut(id) {
             t.db = "analytics".into();

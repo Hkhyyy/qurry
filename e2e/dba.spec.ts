@@ -1,4 +1,4 @@
-import { expect, menuItem, openApp, test, treeNode } from "./app";
+import { expect, menuItem, openApp, openConsole, test, treeNode } from "./app";
 import type { Page } from "@playwright/test";
 
 // Mock: the "roles" report is denied, "table_sizes" takes 2 s to load
@@ -35,9 +35,9 @@ test("the report runs on the picked database: the source's default from the data
   const db = page.locator(".work-layer:visible .dba-db");
   await expect(db).toHaveValue("shop_app");
   await expect(page.locator(".dba-grid")).toContainText("182 MB");
-  // The explorer's databases (the mock's postgres, shop_app, shop_app_test)
+  // Every database of the server, the current one first (the mock's postgres, shop_app, shop_app_test)
   await db.focus();
-  await expect(db.locator("option")).toHaveText(["postgres", "shop_app", "shop_app_test"]);
+  await expect(db.locator("option")).toHaveText(["shop_app", "postgres", "shop_app_test"]);
   await db.selectOption("shop_app_test");
   await expect(page.locator(".dba-grid")).toContainText("2 MB");
   await expect(page.locator(".dba-grid")).not.toContainText("182 MB");
@@ -73,7 +73,7 @@ test("the picker lists through the report's database, and says what to do when i
   const db = page.locator(".work-layer:visible .dba-db");
   await expect(db).toHaveValue("shop_app_test");
   await db.focus();
-  await expect(db.locator("option")).toHaveText(["postgres", "shop_app", "shop_app_test"]);
+  await expect(db.locator("option")).toHaveText(["shop_app_test", "postgres", "shop_app"]);
 
   await openReport(page, "[DEV] shop_app", "Sessions & Locks");
   await expect(db).toHaveValue("shop_app");
@@ -89,7 +89,43 @@ test("the database picker lists once the report is shown: its first click opens 
   await openReport(page, "[DEV] shop_app", "Sessions & Locks");
   const db = page.locator(".work-layer:visible .dba-db");
   await expect(db).toHaveValue("shop_app");
-  await expect(db.locator("option")).toHaveText(["postgres", "shop_app", "shop_app_test"]);
+  await expect(db.locator("option")).toHaveText(["shop_app", "postgres", "shop_app_test"]);
   await db.click();
-  await expect(db.locator("option")).toHaveText(["postgres", "shop_app", "shop_app_test"]);
+  await expect(db.locator("option")).toHaveText(["shop_app", "postgres", "shop_app_test"]);
+});
+
+// Manage Shown Schemas only filters the explorer: the picker still lists the default database it hides, after picking another one too
+test("the picker lists every database, also the ones Manage Shown Schemas hides", async ({ page }) => {
+  await openApp(page);
+  await page.locator(".ws-explorer.on .scope-badge").first().click();
+  const popup = page.locator(".scope-popup");
+  const box = (name: string | RegExp) => popup.getByRole("treeitem", { name }).getByRole("checkbox");
+  await box("All databases").click();
+  await box(/^shop_app_test/).click();
+  await page.keyboard.press("Enter");
+  await expect(treeNode(page, "[DEV] shop_app")).toContainText("1 of 3");
+
+  await openReport(page, "[DEV] shop_app", "Table Sizes & Indexes");
+  const db = page.locator(".work-layer:visible .dba-db");
+  await expect(db).toHaveValue("shop_app");
+  await expect(db.locator("option")).toHaveText(["shop_app", "postgres", "shop_app_test"]);
+  await db.selectOption("shop_app_test");
+  await db.focus();
+  await expect(db.locator("option")).toHaveText(["shop_app_test", "postgres", "shop_app"]);
+  await db.selectOption("shop_app");
+  await expect(page.locator(".dba-grid")).toContainText("182 MB");
+});
+
+test("the console's and the report's database pickers list the same databases", async ({ page }) => {
+  await openApp(page);
+  await openConsole(page);
+  const consoleDb = page.locator(".work-layer:visible .cb-sel").first();
+  await consoleDb.focus();
+  await expect(consoleDb.locator("option")).toHaveText(["shop_app", "postgres", "shop_app_test"]);
+  const listed = await consoleDb.locator("option").allTextContents();
+
+  await openReport(page, "[DEV] shop_app", "Table Sizes & Indexes");
+  const db = page.locator(".work-layer:visible .dba-db");
+  await db.focus();
+  await expect(db.locator("option")).toHaveText(listed);
 });

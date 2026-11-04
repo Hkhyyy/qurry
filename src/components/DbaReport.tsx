@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ask } from "../lib/dialogs";
-import { Cell, dba, DbaReportInfo, Dialect, QueryResult } from "../lib/api";
+import { Cell, dba, dbChoices, DbaReportInfo, Dialect, QueryResult } from "../lib/api";
 import { ResultGrid } from "./ResultGrid";
 import { sharedOr } from "../lib/shared";
 import { Button, Notice, Select, Text, Toolbar } from "../ui";
@@ -19,7 +19,7 @@ export function DbaReport(p: {
   visible: boolean;
   /** The database the report runs on ("" = MySQL without a default schema: all schemas) */
   database: string;
-  /** The others it can run on, in the explorer's order (loaded when the picker is first used) */
+  /** The others it can run on: every database of the server, as the console lists them (loaded once the report is shown) */
   loadDbs: () => Promise<string[]>;
   /** The data source has one fixed database: shown, not changeable */
   fixedDb: boolean;
@@ -152,7 +152,7 @@ export function DbaReport(p: {
           ))}
         </Select>
         <Select className="dba-db" value={p.database} onFocus={loadDbs} onMouseDown={loadDbs} onChange={(e) => p.onDatabase(e.target.value)} disabled={p.fixedDb} title={p.fixedDb ? "This data source has one database" : dbsError ?? "Database the report runs on"}>
-          {(dbs.includes(p.database) ? dbs : [p.database, ...dbs]).map((d) => (
+          {dbChoices(p.database, dbs).map((d) => (
             <option key={d} value={d}>{d || "(all schemas)"}</option>
           ))}
           {dbsError && <option disabled>{dbsError}</option>}

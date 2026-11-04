@@ -519,7 +519,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     // d: the database the report runs on (the grid's title names it)
     let id = h.app.tabs[h.app.active].id;
     h.app.dba_db_choices(id, ["postgres", "rentalpay", "rentalpay_archive"].map(String::from).to_vec());
-    scenes.push(app_scene(h, "Database Admin: database", "d: the shown databases, the current one selected; picking one reruns the report there", 120, 22));
+    scenes.push(app_scene(h, "Database Admin: database", "d: every database of the server, the current one first and selected; picking one reruns the report there", 120, 22));
     h.app.popup = None;
     for _ in 0..2 {
         h.app.close_tab_now(h.app.active);

@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { QueryResult, Dialect, DbKind } from "../lib/api";
+import { QueryResult, Dialect, DbKind, dbChoices } from "../lib/api";
 import { splitScript } from "../lib/sqlSplit";
 import { DEFAULT_EXEC, ExecSettings, planExecution, planSelection } from "../lib/execPlan";
 import { initShared, sharedReady } from "../lib/shared";
@@ -359,7 +359,7 @@ export function ConsolePane(p: Props) {
         <Spacer />
         <span className="cb-ds">{p.connName}</span>
         <Select className="cb-sel" value={p.database} onFocus={p.onLoadDbs} onMouseDown={p.onLoadDbs} onChange={(e) => p.onSwitchDb(e.target.value)} title="Database">
-          {[...new Set([p.database, ...p.dbList])].map((d) => (
+          {dbChoices(p.database, p.dbList).map((d) => (
             <option key={d} value={d}>{d}</option>
           ))}
         </Select>

@@ -307,7 +307,7 @@ impl App {
         );
     }
 
-    /// d: run the report on another database, listed as the explorer lists them (one fixed database can't change)
+    /// d: run the report on another database of the server (one fixed database can't change)
     pub fn dba_pick_db(&mut self) {
         let Some(t) = self.tabs.get(self.active) else { return };
         let (id, target) = (t.id, t.target.clone());
@@ -324,24 +324,21 @@ impl App {
         });
     }
 
-    /// The database chooser of a DBA tab: the shown databases (scope, system ones hidden), the current one selected
-    pub(crate) fn dba_db_choices(&mut self, id: u64, dbs: Vec<String>) {
+    /// The database chooser of a DBA tab: every database of the server (Manage Shown Schemas only filters the explorer), the current
+    /// one first and selected (Enter keeps it), the rest in the server's order: the GUI's dbChoices, as its console and report pickers
+    pub(crate) fn dba_db_choices(&mut self, id: u64, mut dbs: Vec<String>) {
         let Some(t) = self.tabs.iter().find(|t| t.id == id) else { return };
         let Some(cfg) = self.conn(&t.conn).map(|c| c.config.clone()) else { return };
-        let def = sql::default_db(&cfg);
-        let mut dbs = qurry_core::app::visible_dbs(&cfg, dbs, &def);
-        // MySQL without a default schema: back to all schemas. The current one first when the scope hides it (Enter keeps it)
-        if def.is_empty() {
+        // MySQL without a default schema: back to all schemas
+        if sql::default_db(&cfg).is_empty() {
             dbs.insert(0, String::new());
         }
-        if !dbs.contains(&t.db) {
-            dbs.insert(0, t.db.clone());
-        }
-        let sel = dbs.iter().position(|d| *d == t.db).unwrap_or(0);
+        dbs.retain(|d| *d != t.db);
+        dbs.insert(0, t.db.clone());
         let items = dbs.into_iter().map(|d| PItem { label: db_label(&d).into(), hint: if d == t.db { "current".into() } else { String::new() }, action: PAction::Pick(d) }).collect();
         self.status.clear();
         self.flow = Some(crate::migrate::Flow::DbaDb(id));
-        self.open_after_notices(Popup::Palette(Palette { title: "Run the report on which database?".into(), input: TextArea::default(), items, sel, loading: 0, cache: Default::default() }));
+        self.open_after_notices(Popup::Palette(Palette { title: "Run the report on which database?".into(), input: TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
     }
 
     /// The picked database: the tab runs its report there from now on (auto-refresh included)
