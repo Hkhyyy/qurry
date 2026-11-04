@@ -189,6 +189,10 @@ pub fn run() {
             commands::grid_align,
             commands::set_grid_align,
             fonts::font_families,
+            fonts::custom_fonts,
+            fonts::add_font_file,
+            fonts::remove_font_file,
+            fonts::font_file,
             commands::install_update,
         ])
         .build(app_context())
