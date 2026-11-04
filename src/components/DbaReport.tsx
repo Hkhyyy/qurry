@@ -42,7 +42,10 @@ export function DbaReport(p: {
   const loadDbs = () => {
     if (dbsAsked.current) return;
     dbsAsked.current = true;
-    p.loadDbs().then(setDbs, (e) => setDbsError(sharedOr(String(e), (s) => s.dbListFailed(String(e)))));
+    p.loadDbs().then(setDbs, (e) => {
+      dbsAsked.current = false;
+      setDbsError(sharedOr(String(e), (s) => s.dbListFailed(String(e))));
+    });
   };
   const seq = useRef(0);
   /** A load is running (the auto-refresh tick waits for it) */
@@ -52,6 +55,14 @@ export function DbaReport(p: {
   useEffect(() => {
     if (p.visible) setSeen(true);
   }, [p.visible]);
+  // The picker's list loads once the report is shown (and again for another target), so its first click opens the whole list;
+  // focus / mousedown only ask again when that failed
+  useEffect(() => {
+    if (!seen) return;
+    dbsAsked.current = false;
+    setDbsError(null);
+    loadDbs();
+  }, [seen, p.target]);
   const info = list.find((r) => r.id === p.report);
 
   useEffect(() => {

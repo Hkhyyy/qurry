@@ -51,6 +51,17 @@ test.describe("completion", () => {
   });
 });
 
+test("the database select lists its databases once the console is shown: its first click opens the whole list", async ({ page }) => {
+  // The mock lists late, as a server does: a list asked for only on the first click would open with the current database alone
+  await page.evaluate(() => ((window as any).__mockDbListDelay = 200));
+  await openConsole(page, "[MySQL] shop");
+  const db = work(page).getByTitle("Database", { exact: true });
+  await expect(db).toHaveValue("shop");
+  await expect(db.locator("option")).toHaveText(["shop", "information_schema", "mysql", "sys"]);
+  await db.click();
+  await expect(db.locator("option")).toHaveText(["shop", "information_schema", "mysql", "sys"]);
+});
+
 test("run one statement → one result tab", async ({ page }) => {
   await typeSql(page, "select * from users");
   await page.keyboard.press("Meta+Enter");

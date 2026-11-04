@@ -81,3 +81,15 @@ test("the picker lists through the report's database, and says what to do when i
   await expect(db.locator("option")).toHaveText(["shop_app", /^Couldn't list the databases: permission denied for database "shop_app"[\s\S]*Data Source Properties › General › Database/]);
   await expect(db.locator("option").nth(1)).toBeDisabled();
 });
+
+test("the database picker lists once the report is shown: its first click opens the whole list", async ({ page }) => {
+  await openApp(page);
+  // Listing takes a while (as on a server): asked for only on the first click, the list would open with the current database alone
+  await page.evaluate(() => ((window as any).__mockDbListDelay = 200));
+  await openReport(page, "[DEV] shop_app", "Sessions & Locks");
+  const db = page.locator(".work-layer:visible .dba-db");
+  await expect(db).toHaveValue("shop_app");
+  await expect(db.locator("option")).toHaveText(["postgres", "shop_app", "shop_app_test"]);
+  await db.click();
+  await expect(db.locator("option")).toHaveText(["postgres", "shop_app", "shop_app_test"]);
+});

@@ -185,7 +185,16 @@ export default function App() {
   const labelOf = (t: Tab) => tabLabels.get(t.id) ?? t.title;
 
   const cons = useConsole({ conns, setStatus, refresh });
-  const { run, canCancel, busyLabel, cancelRun, loadStale } = cons;
+  const { run, canCancel, busyLabel, cancelRun, loadStale, loadDbList, loadSchemaList } = cons;
+  // The database (and schema) selects of the shown consoles and Redis browsers list as soon as they are shown, so their first click
+  // opens the whole list (the caches keep them; focus / mousedown ask again only when the list isn't there)
+  const listed = leaves(panes).flatMap((g) => groupActive(g) ?? []).filter((t) => t.kind === "console" || t.kind === "redis");
+  useEffect(() => {
+    for (const t of listed) {
+      loadDbList(t.connId);
+      if (t.kind === "console") loadSchemaList(t.target);
+    }
+  }, [listed.map((t) => `${t.kind}:${t.target}`).join("\n")]);
   // When each busy tab started (kept across tab switches, so the status bar's elapsed time goes on); dropped once it is idle
   const busySince = useRef(new Map<string, number>()).current;
   for (const t of tabs) {
