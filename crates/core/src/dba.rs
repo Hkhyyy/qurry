@@ -817,7 +817,8 @@ mod tests {
         let listed = (st.list_databases("nc".into()).await.is_err(), st.list_databases("nc::postgres".into()).await.map(|d| d.contains(&"qurry_dba_other".to_string())));
         let refused = st.dba_report("nc".into(), "table_sizes".into()).await.unwrap_err().to_string();
         let one = st.dba_report("one".into(), "table_sizes".into()).await.unwrap_err().to_string();
-        let bad = st.dba_report("bad::postgres".into(), "sessions".into()).await.unwrap_err().to_string();
+        // A server with trust auth (CI) lets a wrong password in: then there is no error to check
+        let bad = st.dba_report("bad::postgres".into(), "sessions".into()).await.err().map(|e| e.to_string());
         for id in ["d", "nc", "one", "bad"] {
             st.disconnect(id.into()).await.ok();
         }
@@ -828,7 +829,7 @@ mod tests {
         assert_eq!((listed.0, listed.1.ok()), (true, Some(true)));
         assert!(refused.starts_with("Couldn't connect to database qurry_dba_other. Pick another database"), "{refused}");
         assert!(one.starts_with("Couldn't connect to database qurry_dba_other.\n("), "{one}");
-        assert!(!bad.contains("Couldn't connect to database"), "{bad}");
+        assert!(bad.as_ref().is_none_or(|b| !b.contains("Couldn't connect to database")), "{bad:?}");
     }
 
     /// Server Overview works without performance_schema (MariaDB has no performance_schema.global_status)
