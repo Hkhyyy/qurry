@@ -86,7 +86,10 @@ export interface ExtractOptions {
 
 /** qurry_shared::format::ValueClass: what a grid cell holds, for its alignment */
 export type ValueClass = "string" | "number" | "dateTime" | "boolean" | "null" | "jsonBinary";
-export type Align = "left" | "right" | "center";
+/** qurry_shared::format::Align: "column" (NULL only) = where its column's type sits */
+export type Align = "left" | "right" | "center" | "column";
+/** Where a cell sits: "column" resolved to its column's */
+export type CellAlign = Exclude<Align, "column">;
 /** qurry_shared::format::Alignments: only the classes the user changed */
 export type Alignments = Partial<Record<ValueClass, Align>>;
 
@@ -172,6 +175,8 @@ const api = {
   /** What a panel edit writes to the cell, or why a json / jsonb column refuses it */
   valueToApply: (typeName: string, original: string, edited: string): { Ok: string } | { Err: string } => wasm.valueToApply(typeName, original, edited),
   alignOf: (cls: ValueClass, overrides: Alignments): Align => wasm.alignOf(cls, overrides),
+  /** Where a cell of `cls` sits in a column of `typeName` */
+  cellAlign: (typeName: string, cls: ValueClass, overrides: Alignments): CellAlign => wasm.cellAlign(typeName, cls, overrides),
   isJsonType: (typeName: string): boolean => wasm.isJsonType(typeName),
   /** [start, end, kind, …]: UTF-16 ranges, kind an index of qurry_shared::format::JsonKind */
   jsonSpans: (text: string, maxChars: number): Uint32Array => wasm.jsonSpans(text, maxChars),

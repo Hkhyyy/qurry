@@ -143,7 +143,6 @@ const CW = 108;
 const AW = W[0] + CW * CLASSES.length;
 
 function Aligned({ overrides }: { overrides: Alignments }) {
-  const al = alignTable(overrides);
   return (
     <Frame
       width={AW}
@@ -164,7 +163,7 @@ function Aligned({ overrides }: { overrides: Alignments }) {
             const v = c.vals[r];
             const cls = cellClasses(c.type)(v);
             return (
-              <GridCell key={c.name} width={CW} kind={CELL_KIND[cls]} align={al[cls]}>
+              <GridCell key={c.name} width={CW} kind={CELL_KIND[cls]} align={alignTable(overrides, c.type)[cls]}>
                 {v === null ? "<null>" : String(v)}
               </GridCell>
             );
@@ -175,10 +174,10 @@ function Aligned({ overrides }: { overrides: Alignments }) {
   );
 }
 
-/** By default numbers and NULL sit on the right (a NULL stays in line with the numbers above it), everything else on the left */
+/** By default numbers sit on the right, everything else on the left, and a NULL where its column's type sits (in line with the values above it) */
 export const Alignment: StoryObj = { render: () => <Aligned overrides={{}} /> };
-/** settings.json "gridAlign": { "null": "left", "number": "center" }: only the changed classes move */
-export const AlignmentChanged: StoryObj = { name: "Alignment (changed)", render: () => <Aligned overrides={{ null: "left", number: "center" }} /> };
+/** settings.json "gridAlign": { "null": "right", "number": "center" }: only the changed classes move (NULL on the right in every column, as in 0.3.0) */
+export const AlignmentChanged: StoryObj = { name: "Alignment (changed)", render: () => <Aligned overrides={{ null: "right", number: "center" }} /> };
 
 /** json / jsonb cells: keys, strings, numbers, true/false/null and punctuation in color, still one line (no pretty-printing).
  *  A large value renders only what a column can show; from the first thing that isn't JSON on, the rest is plain */

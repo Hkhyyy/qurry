@@ -130,20 +130,25 @@ const aligns = (page: Page, col: number) =>
     .locator(".grid-row")
     .evaluateAll((rows, c) => rows.slice(0, 3).map((r) => getComputedStyle(r.querySelectorAll(".cell:not(.rownum)")[c]).textAlign), col);
 
-test("NULL is right-aligned by default; Settings › Appearance › Alignment puts it back on the left (#75)", async ({ page }) => {
+test("NULL sits where its column's type does by default; Settings › Appearance › Alignment puts it on the right, kept after a reload (#75, #95)", async ({ page }) => {
   // memo (TEXT): "note", <null>, <null>; amount (NUMERIC, arrives as text): a number
-  await expect.poll(() => aligns(page, 4)).toEqual(["left", "right", "right"]);
+  await expect.poll(() => aligns(page, 4)).toEqual(["left", "left", "left"]);
   await expect.poll(() => aligns(page, 2)).toEqual(["right", "right", "right"]);
   await page.keyboard.press("Meta+Comma");
   const nul = dialog(page).getByRole("combobox", { name: "NULL alignment" });
-  await expect(nul).toHaveValue("right");
-  await nul.selectOption("left");
+  await expect(nul).toHaveValue("column");
+  await expect(nul.locator("option")).toHaveText(["Column type", "Left", "Center", "Right"]);
+  await expect(dialog(page).getByRole("combobox", { name: "String alignment" }).locator("option")).toHaveText(["Left", "Center", "Right"]);
+  await nul.selectOption("right");
   await page.keyboard.press("Escape");
-  await expect.poll(() => aligns(page, 4)).toEqual(["left", "left", "left"]);
+  await expect.poll(() => aligns(page, 4)).toEqual(["left", "right", "right"]);
   await expect.poll(() => aligns(page, 2)).toEqual(["right", "right", "right"]);
-  // Saved (the mock's settings.json) and marked as changed
+  // Saved (the mock's settings.json): after a reload the grid and Settings still have it, marked as changed
+  await page.reload();
+  await treeItem(page, "users").first().dblclick();
+  await expect.poll(() => aligns(page, 4)).toEqual(["left", "right", "right"]);
   await page.keyboard.press("Meta+Comma");
-  await expect(dialog(page).getByRole("combobox", { name: "NULL alignment" })).toHaveValue("left");
+  await expect(dialog(page).getByRole("combobox", { name: "NULL alignment" })).toHaveValue("right");
   await expect(dialog(page).locator(".align-label.custom")).toHaveText(["NULL"]);
 });
 
@@ -152,7 +157,7 @@ test("Settings › Appearance › Alignment that can't be saved goes back and sa
   await page.keyboard.press("Meta+Comma");
   await dialog(page).getByRole("combobox", { name: "NULL alignment" }).selectOption("left");
   await expect(dialog(page).getByText(/Couldn't save the alignment \(.*permission denied\)\. It is back to what it was\./)).toBeVisible();
-  await expect(dialog(page).getByRole("combobox", { name: "NULL alignment" })).toHaveValue("right");
+  await expect(dialog(page).getByRole("combobox", { name: "NULL alignment" })).toHaveValue("column");
 });
 
 test("a WebView that refuses WebAssembly: numbers stay on the right and Settings › Alignment says why it can't be changed", async ({ page }) => {

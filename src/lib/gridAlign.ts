@@ -5,7 +5,7 @@
 import { useSyncExternalStore } from "react";
 import { api, type Cell } from "./api";
 import { DEFAULT_TOKEN } from "./extract";
-import { sharedOr, sharedReady, type Align, type Alignments, type ValueClass } from "./shared";
+import { sharedOr, sharedReady, type Align, type Alignments, type CellAlign, type ValueClass } from "./shared";
 
 /** Settings rows, in the order the dialog shows them */
 export const VALUE_CLASSES: { cls: ValueClass; label: string }[] = [
@@ -62,8 +62,12 @@ export function useGridAlign(): Alignments {
   );
 }
 
-/** Alignment of every class under `o`, for a grid render; empty without the module (cells keep the stylesheet's alignment) */
-export const alignTable = (o: Alignments): Alignments => (sharedReady() ? Object.fromEntries(VALUE_CLASSES.map(({ cls }) => [cls, alignOf(cls, o)])) : {});
+/**
+ * Where each class's cells sit in a column of `typeName` under `o` (a NULL on "Column type" where the column's type sits), for a
+ * grid render; empty without the module (cells keep the stylesheet's alignment)
+ */
+export const alignTable = (o: Alignments, typeName: string): Partial<Record<ValueClass, CellAlign>> =>
+  sharedReady() ? Object.fromEntries(VALUE_CLASSES.map(({ cls }) => [cls, sharedOr<CellAlign>("left", (s) => s.cellAlign(typeName, cls, o))])) : {};
 
 /**
  * Class of a column's cells. The shared rule reads only the value's kind (null, number, boolean, text), not its content,

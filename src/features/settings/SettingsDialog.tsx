@@ -44,7 +44,7 @@ export function GridAlignField() {
       error={err ?? undefined}
       hint={
         ready
-          ? "Where cells sit in result grids, by the kind of value; the TUI uses the same setting. NULL is on the right by default, in line with numbers: set NULL to Left to have it where it was before 0.3.0."
+          ? "Where cells sit in result grids, by the kind of value; the TUI uses the same setting. NULL sits where its column's type does by default (Column type: left in text, right in numbers); set NULL to Right to keep the 0.3.0 look."
           : "Alignment needs WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk. Until then numbers are on the right and everything else on the left."
       }
     >
@@ -65,6 +65,7 @@ export function GridAlignField() {
               }}
             >
               {!ready && <option value="">—</option>}
+              {cls === "null" && <option value="column">Column type</option>}
               <option value="left">Left</option>
               <option value="center">Center</option>
               <option value="right">Right</option>
