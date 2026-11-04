@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { userEvent, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 // Fake backend (same as the app's ?mock): returns fixed data for the commands screens call
 import "../../lib/mock";
 import "../../lib/monaco";
@@ -78,6 +78,21 @@ export const SettingsFonts: S = {
   play: async ({ canvasElement }) => {
     setFont("grid", { family: "No Such Mono" });
     await userEvent.click(await within(canvasElement.ownerDocument.body).findByRole("combobox", { name: "Grid font family" }));
+  },
+};
+/** "Add Font File…" under the list (not in DataGrip) copies a .ttf / .otf / .woff / .woff2 into Qurry's fonts folder and picks it (the
+ * mock adds "Fira Code"). Added fonts come first, marked "custom", whatever "Monospaced only" says; − removes one (asks first; a picker
+ * set to it goes back to the default). Here a font is added from the grid font picker, which is then opened again */
+export const SettingsFontsCustom: S = {
+  name: "Settings — Fonts (added font file)",
+  render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} />,
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    const field = await body.findByRole("combobox", { name: "Grid font family" });
+    await userEvent.click(field);
+    await userEvent.click(await body.findByRole("button", { name: "Add Font File…" }));
+    await waitFor(() => expect(field.textContent).toMatch(/Fira Code/));
+    await userEvent.click(field);
   },
 };
 
