@@ -187,6 +187,8 @@ test("Output follows new lines at the bottom, keeps the position when scrolled u
   const output = work(page).locator(".output-log");
   const lines = output.locator(".ol");
   const fromBottom = () => output.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+  // Scrolls as the wheel does (a scroll event the pane reads), without waiting on wheel delivery, which a busy runner can drop
+  const scrollBy = (dy: number) => output.evaluate((el, d) => el.scrollBy(0, d), dy);
   await runAll(page);
   await expect(status(page)).toHaveText("30 statements executed");
   const perRun = await lines.count();
@@ -200,23 +202,20 @@ test("Output follows new lines at the bottom, keeps the position when scrolled u
   expect(await fromBottom()).toBeLessThanOrEqual(4);
 
   // Scrolled up: more lines arrive below, the view stays put
-  await output.hover();
-  await page.mouse.wheel(0, -200);
+  await scrollBy(-200);
   await expect.poll(fromBottom).toBeGreaterThan(100);
   const top = await output.evaluate((el) => el.scrollTop);
   await run();
   expect(await output.evaluate((el) => el.scrollTop)).toBe(top);
 
   // Back at the bottom: follows again
-  await output.hover();
-  await page.mouse.wheel(0, 100_000);
+  await scrollBy(100_000);
   await expect.poll(fromBottom).toBeLessThanOrEqual(4);
   await run();
   expect(await fromBottom()).toBeLessThanOrEqual(4);
 
   // Scrolled up, then Clear All: the next run follows
-  await output.hover();
-  await page.mouse.wheel(0, -200);
+  await scrollBy(-200);
   await expect.poll(fromBottom).toBeGreaterThan(100);
   await work(page).getByTitle(/^Clear All/).click();
   await expect(lines).toHaveCount(0);
