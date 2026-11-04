@@ -344,3 +344,21 @@ async fn failed_commit_is_in_output() {
     h.key("Esc");
     assert!(matches!(h.app.popup, Some(crate::app::Popup::Confirm { .. })));
 }
+
+/// Output shows its newest line on the bottom row even when long lines wrap onto several rows (#92)
+#[tokio::test]
+async fn output_shows_the_last_wrapped_line() {
+    let mut h = Harness::new().await;
+    h.console_tab();
+    if let TabKind::Console(c) = &mut h.app.tabs[h.app.active].kind {
+        for i in 0..20 {
+            c.log(false, format!("[DEV] shop> update orders set note = '{}' where id = {i}", "x".repeat(150)));
+        }
+        c.log(true, format!("ERROR: {} newest-line-end", "y".repeat(150)));
+    }
+    let s = h.screen(80, 20);
+    let rows: Vec<&str> = s.lines().collect();
+    let last = rows.iter().position(|r| r.contains("newest-line-end")).unwrap_or_else(|| panic!("newest line cut off:\n{s}"));
+    assert!(rows[last + 1].contains('└') || rows[last + 1].contains('╰'), "newest line is not on the bottom row:\n{s}");
+    assert!(rows.iter().any(|r| r.contains("│ERROR:")), "its start shows too:\n{s}");
+}
