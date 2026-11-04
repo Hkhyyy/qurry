@@ -164,14 +164,10 @@ jobs:
 
       - name: Set version in manifests
         run: |
-          for f in crates/core/Cargo.toml crates/tui/Cargo.toml crates/mcp/Cargo.toml crates/driver/Cargo.toml src-tauri/Cargo.toml drivers/*/Cargo.toml; do
-            perl -0pi -e 's/^version = "[^"]*"/version = "$ENV{V}"/m' "$f"
-          done
+          scripts/set-version.sh "$V"
           for f in package.json src-tauri/tauri.conf.json; do
             perl -0pi -e 's/"version": "[^"]*"/"version": "$ENV{V}"/' "$f"
           done
-          # Sync only the workspace versions in Cargo.lock (external deps stay as locked → --locked build below)
-          cargo update --workspace
           git diff --stat
 
       - name: Install frontend dependencies
@@ -246,11 +242,7 @@ jobs:
           key: cli-${{ matrix.target }}
 
       - name: Set version in manifests
-        run: |
-          for f in crates/core/Cargo.toml crates/tui/Cargo.toml crates/mcp/Cargo.toml crates/driver/Cargo.toml src-tauri/Cargo.toml drivers/*/Cargo.toml; do
-            perl -0pi -e 's/^version = "[^"]*"/version = "$ENV{V}"/m' "$f"
-          done
-          cargo update --workspace
+        run: scripts/set-version.sh "$V"
 
       - name: Build TUI and MCP
         run: cargo build --release --locked --target "$T" -p qurry-tui -p qurry-mcp
@@ -307,11 +299,7 @@ jobs:
           key: drivers-${{ matrix.target }}
 
       - name: Set version in manifests
-        run: |
-          for f in crates/core/Cargo.toml crates/tui/Cargo.toml crates/mcp/Cargo.toml crates/driver/Cargo.toml src-tauri/Cargo.toml drivers/*/Cargo.toml; do
-            perl -0pi -e 's/^version = "[^"]*"/version = "$ENV{V}"/m' "$f"
-          done
-          cargo update --workspace
+        run: scripts/set-version.sh "$V"
 
       - name: Build drivers
         run: |
