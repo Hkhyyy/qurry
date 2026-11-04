@@ -185,3 +185,29 @@ test("Manage Shown Schemas: unchecking one schema under All schemas keeps the ot
   await expect(box("All schemas")).toBeChecked();
   await expect(box("billing")).toBeChecked();
 });
+
+test("Manage Shown Schemas: unchecking one database under All databases hides only that one; checking it again turns All back on", async ({ page }) => {
+  const badge = page.locator(".ws-explorer.on .scope-badge").first();
+  await badge.click();
+  const popup = page.locator(".scope-popup");
+  const box = (name: string | RegExp) => popup.getByRole("treeitem", { name, exact: true }).getByRole("checkbox");
+  await expect(box("All databases")).toBeChecked();
+  await box("shop_app_test").click();
+  await expect(box("All databases")).not.toBeChecked();
+  await expect(box("shop_app_test")).not.toBeChecked();
+  await expect(box("postgres")).toBeChecked();
+  await expect(box(/^shop_app \(Default database\)/)).toBeChecked();
+  await page.keyboard.press("Enter");
+  const db = (name: string) => page.locator(".ws-explorer.on").getByRole("treeitem", { name: new RegExp(`^${name}( \\d+ of \\d+)?$`) });
+  await expect(db("shop_app_test")).toHaveCount(0);
+  await expect(db("postgres")).toBeVisible();
+  await expect(db("shop_app")).toBeVisible();
+  await expect(badge).toHaveText("2 of 3");
+
+  await badge.click();
+  await box("shop_app_test").click();
+  await expect(box("All databases")).toBeChecked();
+  await page.keyboard.press("Enter");
+  await expect(db("shop_app_test")).toBeVisible();
+  await expect(badge).toHaveText("3");
+});
