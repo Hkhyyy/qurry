@@ -2,7 +2,7 @@
 
 [English](../tui.md) | 한국어
 
-`qurry-tui` 는 돌고 있는 터미널에 맞춥니다: 색을 몇 개 쓸 수 있는지, 창이 얼마나 큰지, tmux 나 터미널이 가져가는 키가 무엇인지. Qurry 에서 따로 설정할 것은 없고, 글꼴까지 모두 환경을 따릅니다.
+`qurry-tui` 는 돌고 있는 터미널에 맞춥니다: 색을 몇 개 쓸 수 있는지, 배경이 밝은지, 창이 얼마나 큰지, tmux 나 터미널이 가져가는 키가 무엇인지. 글꼴까지 모두 환경을 따르고, 설정은 터미널이 배경색을 알려 주지 않을 때 고르는 테마 하나뿐입니다.
 
 ## 색
 
@@ -21,6 +21,22 @@ TUI 는 시작할 때 아래 환경 변수로 색 모드를 하나 고릅니다 
 - `16 colors: try COLORTERM=truecolor` — 터미널이 24비트 색을 보여 준다면 시작 전에 `export COLORTERM=truecolor`. 요즘 터미널 (iTerm2, kitty, WezTerm, Ghostty, Alacritty, Windows Terminal) 은 스스로 설정하지만, `ssh`, `sudo`, `tmux` / `screen` 안에서는 자주 빠집니다.
 
 `ssh` 나 `sudo` 로 (그리고 아래 `tmux` 안에서) 실행하면 보통 `COLORTERM` 이 전달되지 않아 24비트 터미널에서도 256색이나 16색이 됩니다: 접속한 쪽에서 `export COLORTERM=truecolor` 를 하거나, `~/.ssh/config` 의 `SendEnv COLORTERM` 과 서버 `sshd_config` 의 `AcceptEnv COLORTERM` 으로 넘기세요 (sudo 는 `sudo --preserve-env=COLORTERM`).
+
+### 밝은 테마, 어두운 테마
+
+TUI 에는 어두운 팔레트 (어두운 터미널 배경용) 와 밝은 팔레트가 있습니다. **⌃k › Theme…** 에서 고릅니다:
+
+| 테마 | 팔레트 |
+|---|---|
+| **Auto** (기본) | `COLORFGBG` 가 배경이 흰색이라고 하면 (마지막 숫자가 `7` 이나 `15`, 예: `COLORFGBG=0;15`) 밝게, 그 밖에는 (`COLORFGBG` 가 없을 때도) 어둡게 |
+| **Dark** | 항상 어둡게 |
+| **Light** | 항상 밝게 |
+
+밝은 팔레트는 GUI 밝은 테마의 색을 씁니다: Data Source 색은 같은 색조의 옅은 색이 되고 (활성 탭이 더 진합니다), 선택·고친 셀·배지는 서로 구분되고, JSON 셀은 GUI 의 밝은 JSON 색을, 운영은 계속 빨간색을 씁니다. 위의 모든 색 모드에서 동작합니다: 256색은 가장 가까운 팔레트 색으로, 16색은 (밝은 색이 아닌) 보통 터미널 색으로, `NO_COLOR` 는 어두운 테마와 같은 규칙의 흑백 그대로입니다.
+
+iTerm2, rxvt, Konsole 같은 터미널은 배경색에 맞춰 `COLORFGBG` 를 설정하지만, 많은 터미널 (kitty, WezTerm, Ghostty, Alacritty) 은 설정하지 않으므로 밝은 배경이라면 직접 **Light** 를 고르세요. 테마는 [설정 폴더](getting-started.md#설정이-저장되는-곳)의 `settings.json` 에 `"tuiTheme"` 으로 저장됩니다 (GUI 테마 설정은 따로입니다).
+
+Auto 가 밝은 팔레트를 골랐으면 시작할 때 상태 줄에 `Light palette — ⌃k › Theme… › Dark to undo` 가 나옵니다. 예전 색을 그대로 쓰려면 **⌃k › Theme… › Dark** 를 고르세요.
 
 색과 상관없이 보이는 것:
 
