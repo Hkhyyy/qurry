@@ -202,6 +202,8 @@
   {"tui": "CancelTransfer", "title": "Cancel Export/Import"},
   {"tui": "DeleteDataSource", "title": "Remove Data Source", "tuiPane": "tree", "tuiPaneKeys": ["Shift+D"]},
   {"tui": "Connect", "title": "Connect", "tuiPane": "tree", "tuiPaneKeys": ["C"]},
+  {"tui": "MarkNode", "title": "Mark / Unmark Node", "tuiTitle": "Mark / Unmark Node (Go to DDL, open, copy, drop and refresh act on every marked node; Esc clears)", "tuiPane": "tree", "tuiPaneKeys": ["M"]},
+  {"tui": "DropObject", "title": "Drop…", "tuiTitle": "Drop… (the selected object, or the marked objects of one database: one confirmation)", "tuiPane": "tree", "tuiPaneKeys": ["Delete"]},
   {"gui": "tree.manageSchemas", "tui": "ManageSchemas", "title": "Manage Shown Schemas…", "tuiTitle": "Manage Shown Schemas… (databases · schemas in the explorer)", "scope": "tree", "tuiPane": "tree", "tuiPaneKeys": ["S"]},
   {"gui": "unsplit", "tui": "Unsplit", "title": "Unsplit All", "scope": "global"},
   {"tui": "TrustSshHost", "title": "Trust SSH Host Key (after checking its fingerprint)"},

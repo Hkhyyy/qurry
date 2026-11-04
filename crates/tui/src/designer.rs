@@ -632,7 +632,7 @@ impl App {
     }
 
     /// Show the generated SQL (red window on Production), run it, then reload the tree
-    fn confirm_ddl(&mut self, target: String, conn: String, db: Option<String>, sql: Vec<String>, done: String) {
+    pub(crate) fn confirm_ddl(&mut self, target: String, conn: String, db: Option<String>, sql: Vec<String>, done: String) {
         let prod = self.production_name(&conn);
         let text = format!(
             "{}\n\n{}\n\nRun it?",

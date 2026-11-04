@@ -413,6 +413,8 @@ pub enum Action {
     Connect,
     Disconnect,
     Refresh,
+    MarkNode,
+    DropObject,
     Execute,
     Explain,
     ExplainAnalyze,
