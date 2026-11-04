@@ -475,7 +475,7 @@ export const ConsoleLongOutput: S = {
           { ts: "10:24:02", text: "ERROR: value too long for type character varying(255)", level: "error" },
         ]}
         txManual={false} inTx={false}
-        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onExport={noop} onHistory={noop}
+        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
         onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop} onLoadingChange={noop}
       />
     </Frame>

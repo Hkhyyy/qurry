@@ -1046,7 +1046,7 @@ mod tests {
         assert_eq!(cells(&mut g, &back, 2).iter().map(|x| x.0).collect::<Vec<_>>(), [0, 0, 0]);
         // Columns without a type name (SQLite `sum(x)`, MongoDB): a NULL follows the values, so it lines up with numbers
         let rows = vec![vec![json!("a"), Value::Null], vec![Value::Null, json!(12345)], vec![json!("b"), json!(7)]];
-        let mut g = Grid::new(QueryResult { columns: vec![col("g", ""), col("sum(x)", "")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None });
+        let mut g = Grid::new(QueryResult { columns: vec![col("g", ""), col("sum(x)", "")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None });
         let sum = cells(&mut g, &none, 1);
         assert!(sum.iter().all(|(lead, t)| lead + t.len() == w(&g, 1)), "{sum:?}");
         assert_eq!(cells(&mut g, &none, 0).iter().map(|x| x.0).collect::<Vec<_>>(), [0, 0, 0]);
