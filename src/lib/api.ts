@@ -605,8 +605,8 @@ const MY_SYS = ["information_schema", "performance_schema", "mysql", "sys"];
 export const dbShown = (c: ConnectionView, d: string, defaultDb: string, showSystem = false) =>
   c.options?.singleDb ? d === defaultDb : (c.kind !== "mysql" || showSystem || !MY_SYS.includes(d) || d === defaultDb) && dbVisible(c.scope, d, defaultDb);
 
-/** A database picker's list (console, Database Admin report): the current database first, then every database of the server in its order */
-export const dbChoices = (current: string, dbs: string[]) => [...new Set([current, ...dbs])];
+/** A database or schema picker's list (console, Redis browser, Database Admin report): the current one first, then every one of the server in its order */
+export const currentFirst = (current: string, dbs: string[]) => [...new Set([current, ...dbs])];
 
 export function schemaVisible(scope: Scope | undefined, db: string, schema: string, isSystem: boolean, showSystem: boolean) {
   const s = scope?.schemas?.[db];

@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { QueryResult, Dialect, DbKind, dbChoices } from "../lib/api";
+import { QueryResult, Dialect, DbKind, currentFirst } from "../lib/api";
 import { splitScript } from "../lib/sqlSplit";
 import { DEFAULT_EXEC, ExecSettings, planExecution, planSelection } from "../lib/execPlan";
 import { initShared, sharedReady } from "../lib/shared";
@@ -359,12 +359,12 @@ export function ConsolePane(p: Props) {
         <Spacer />
         <span className="cb-ds">{p.connName}</span>
         <Select className="cb-sel" value={p.database} onFocus={p.onLoadDbs} onMouseDown={p.onLoadDbs} onChange={(e) => p.onSwitchDb(e.target.value)} title="Database">
-          {dbChoices(p.database, p.dbList).map((d) => (
+          {currentFirst(p.database, p.dbList).map((d) => (
             <option key={d} value={d}>{d}</option>
           ))}
         </Select>
         <Select className="cb-sel" value={p.schema} onFocus={p.onLoadSchemas} onMouseDown={p.onLoadSchemas} onChange={(e) => p.onSwitchSchema(e.target.value)} disabled={p.schemaSwitchDisabled} title={p.schemaSwitchDisabled ? "Schema switching is disabled for this data source" : "Switch current schema"}>
-          {[...new Set([p.schema, ...p.schemaList])].map((x) => (
+          {currentFirst(p.schema, p.schemaList).map((x) => (
             <option key={x} value={x}>{x}</option>
           ))}
         </Select>

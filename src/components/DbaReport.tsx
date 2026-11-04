@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ask } from "../lib/dialogs";
-import { Cell, dba, dbChoices, DbaReportInfo, Dialect, QueryResult } from "../lib/api";
+import { Cell, dba, currentFirst, DbaReportInfo, Dialect, QueryResult } from "../lib/api";
 import { ResultGrid } from "./ResultGrid";
 import { sharedOr } from "../lib/shared";
 import { Button, Notice, Select, Text, Toolbar } from "../ui";
@@ -152,7 +152,7 @@ export function DbaReport(p: {
           ))}
         </Select>
         <Select className="dba-db" value={p.database} onFocus={loadDbs} onMouseDown={loadDbs} onChange={(e) => p.onDatabase(e.target.value)} disabled={p.fixedDb} title={p.fixedDb ? "This data source has one database" : dbsError ?? "Database the report runs on"}>
-          {dbChoices(p.database, dbs).map((d) => (
+          {currentFirst(p.database, dbs).map((d) => (
             <option key={d} value={d}>{d || "(all schemas)"}</option>
           ))}
           {dbsError && <option disabled>{dbsError}</option>}

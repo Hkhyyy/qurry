@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dbChoices, dbShown, defaultDbOf, type ConnectionView } from "./api";
+import { currentFirst, dbShown, defaultDbOf, type ConnectionView } from "./api";
 
 const conn = (c: Partial<ConnectionView>) => ({ id: "c", name: "c", kind: "postgres", database: "", ...c }) as ConnectionView;
 const shown = (c: ConnectionView, dbs: string[]) => dbs.filter((d) => dbShown(c, d, defaultDbOf(c)));
@@ -22,12 +22,12 @@ describe("dbShown", () => {
   });
 });
 
-// The console's and the Database Admin report's database pickers: every database of the server (Manage Shown Schemas only filters
+// The database / schema pickers (console, Redis browser, Database Admin report): every one of the server (Manage Shown Schemas only filters
 // the explorer), the current one first, the rest in the server's order
-describe("dbChoices", () => {
+describe("currentFirst", () => {
   it("current first, then the others once", () => {
-    expect(dbChoices("shop", ["postgres", "shop", "billing"])).toEqual(["shop", "postgres", "billing"]);
-    expect(dbChoices("gone", ["postgres", "shop"])).toEqual(["gone", "postgres", "shop"]);
-    expect(dbChoices("", ["", "mysql", "shop"])).toEqual(["", "mysql", "shop"]);
+    expect(currentFirst("shop", ["postgres", "shop", "billing"])).toEqual(["shop", "postgres", "billing"]);
+    expect(currentFirst("gone", ["postgres", "shop"])).toEqual(["gone", "postgres", "shop"]);
+    expect(currentFirst("", ["", "mysql", "shop"])).toEqual(["", "mysql", "shop"]);
   });
 });
