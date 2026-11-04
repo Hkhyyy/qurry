@@ -68,10 +68,10 @@ async function indexFor(connId: string | undefined): Promise<Completion | undefi
 }
 
 /** A table tab's WHERE / ORDER BY field: the console's candidates for its text as `SELECT * FROM schema.table WHERE <text>`
- * (`ORDER BY`), from the same index as the console of `target` (no connection, no index: nothing) */
-export async function filterSuggestions(target: string, f: { schema: string; table: string; orderBy: boolean; text: string; caret: number; db: string; mysql: boolean }): Promise<FilterSuggestions> {
+ * (`ORDER BY`), from the same index as the console of `target` (no connection, no index: nothing); `explicit` when asked for (⌃Space) */
+export async function filterSuggestions(target: string, f: { schema: string; table: string; orderBy: boolean; text: string; caret: number; db: string; mysql: boolean; explicit: boolean }): Promise<FilterSuggestions> {
   const idx = await indexFor(target);
-  return idx?.suggestFilter(f.schema, f.table, f.orderBy, f.text, f.caret, f.db, f.mysql) ?? { from: f.caret, items: [] };
+  return idx?.suggestFilter(f.schema, f.table, f.orderBy, f.text, f.caret, f.db, f.mysql, f.explicit) ?? { from: f.caret, items: [] };
 }
 
 /** Order as the shared rules return it (Monaco sorts by sortText when nothing is typed) */

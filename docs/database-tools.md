@@ -88,7 +88,7 @@ Completion also suggests what is actually in the table: after `status = '`, `sta
 
 ## Completion in the table filter
 
-A table tab's **WHERE** and **ORDER BY** fields (TUI: `w` or `/` · `o`) complete like the console: the field reads as `SELECT * FROM schema.table WHERE …` (or `ORDER BY …`), so the table's columns come first, then other tables and keywords (`ASC` / `DESC` after a column in ORDER BY). The list opens while you type a word or after a `.`, not inside a string or a number, and closes once the word is a whole keyword or column, so `↩` after `is null` applies the filter. With the list open: `↑` `↓` `PgUp` `PgDn` move, `↩` / `⇥` insert, `⎋` closes the list. With it closed, `⌃Space` (TUI also `⇥`) opens it again for the word at the caret, `↩` applies the filter and `⎋` puts the field back as it was. Column values are not suggested here.
+A table tab's **WHERE** and **ORDER BY** fields (TUI: `w` or `/` · `o`) complete like the console: the field reads as `SELECT * FROM schema.table WHERE …` (or `ORDER BY …`), so the table's columns come first, then other tables and keywords (`ASC` / `DESC` after a column in ORDER BY). The list opens while you type a word or after a `.`, not inside a string or a number, and closes once the word is a whole keyword or column, so `↩` after `is null` applies the filter. With the list open: `↑` `↓` `PgUp` `PgDn` move, `↩` / `⇥` insert, `⎋` closes the list. With it closed, `⌃Space` (TUI also `⇥`) asks for the list at the caret, even after a space or a whole word: at an empty spot the table's columns come first, then keywords. `↩` applies the filter and `⎋` puts the field back as it was. Column values are not suggested here.
 
 ## Query history & snippets
 

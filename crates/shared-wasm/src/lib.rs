@@ -293,13 +293,13 @@ impl CompletionIndex {
         Ok(serde_wasm_bindgen::to_value(&SuggestJs { start_column: s.start_column, end_column: s.end_column, lead, rest })?)
     }
 
-    /// Candidates in a table tab's WHERE / ORDER BY field (complete::suggest_filter) at `caret`, a UTF-16 offset into `field`.
-    /// {from, items}: the word they replace starts at `from` (UTF-16) and ends at the caret
+    /// Candidates in a table tab's WHERE / ORDER BY field (complete::suggest_filter) at `caret`, a UTF-16 offset into `field`;
+    /// `explicit` when asked for (⌃Space) rather than typed. {from, items}: the word they replace starts at `from` (UTF-16) and ends at the caret
     #[wasm_bindgen(js_name = suggestFilter)]
     #[allow(clippy::too_many_arguments)]
-    pub fn suggest_filter(&self, schema: &str, table: &str, order_by: bool, field: &str, caret: usize, db: &str, mysql: bool) -> Result<JsValue, JsError> {
+    pub fn suggest_filter(&self, schema: &str, table: &str, order_by: bool, field: &str, caret: usize, db: &str, mysql: bool, explicit: bool) -> Result<JsValue, JsError> {
         let b = byte_offset(field, caret);
-        let (n, items) = complete::suggest_filter(&self.meta, schema, table, order_by, field, b, db, mysql);
+        let (n, items) = complete::suggest_filter(&self.meta, schema, table, order_by, field, b, db, mysql, explicit);
         Ok(serde_wasm_bindgen::to_value(&FilterSuggestions { from: caret - utf16_tail(&field[..b], n), items })?)
     }
 

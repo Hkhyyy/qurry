@@ -39,16 +39,18 @@ describe("shared wasm", () => {
       { schema: "public", name: "orders", columns: [["user_id", "int8"]] },
     ]);
     const labels = (s: { items: { label: string }[] }) => s.items.map((i) => i.label);
-    const w = idx.suggestFilter("public", "users", false, "us", 2, "", false);
+    const w = idx.suggestFilter("public", "users", false, "us", 2, "", false, false);
     expect(w.from).toBe(0);
     expect(labels(w)).toEqual(["user_name", "users", "using"]);
     // The caret mid-text, after a surrogate pair and Hangul: `from` is in UTF-16 units of the field
     const text = "'😀' = 이름 and id > 1";
     const caret = text.indexOf("이름") + 1;
-    const mid = idx.suggestFilter("public", "users", false, text, caret, "", false);
+    const mid = idx.suggestFilter("public", "users", false, text, caret, "", false, false);
     expect([mid.from, labels(mid)]).toEqual([text.indexOf("이름"), ["이름"]]);
-    expect(labels(idx.suggestFilter("public", "users", true, "id de", 5, "", false))).toEqual(["delete", "desc"]);
-    expect(idx.suggestFilter("public", "users", false, "user_name like 'us", 18, "", false).items).toEqual([]);
+    expect(labels(idx.suggestFilter("public", "users", true, "id de", 5, "", false, false))).toEqual(["delete", "desc"]);
+    expect(idx.suggestFilter("public", "users", false, "user_name like 'us", 18, "", false, false).items).toEqual([]);
+    // ⌃Space at an empty word lists the table's columns first
+    expect(labels(idx.suggestFilter("public", "users", false, "", 0, "", false, true)).slice(0, 3)).toEqual(["id", "user_name", "이름"]);
     idx.free();
   });
 

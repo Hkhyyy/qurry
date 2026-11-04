@@ -77,8 +77,8 @@ export interface Completion {
   suggest(text: string, caret: number, db: string, mysql: boolean): Suggestions;
   hintAt(text: string, caret: number, db: string, mysql: boolean): HintAt | undefined;
   hintItems(text: string, caret: number, hint: HintAt, hints: { value: string; count: number }[], asPairs: boolean): Suggestions;
-  /** A table tab's WHERE / ORDER BY field (qurry_shared::complete::suggest_filter): the word from `from` to `caret` is replaced */
-  suggestFilter(schema: string, table: string, orderBy: boolean, field: string, caret: number, db: string, mysql: boolean): FilterSuggestions;
+  /** A table tab's WHERE / ORDER BY field (qurry_shared::complete::suggest_filter), `explicit` when asked for (⌃Space): the word from `from` to `caret` is replaced */
+  suggestFilter(schema: string, table: string, orderBy: boolean, field: string, caret: number, db: string, mysql: boolean, explicit: boolean): FilterSuggestions;
   /** Release the WASM memory now (not when GC finalizes it). Calls after this find no candidates */
   free(): void;
 }
@@ -159,7 +159,7 @@ const api = {
       },
       hintAt: (text, caret, db, mysql) => idx?.hintAt(text, caret, db, mysql),
       hintItems: (text, caret, hint, hints, asPairs) => idx?.hintItems(text, caret, hint, hints, asPairs) ?? none,
-      suggestFilter: (schema, table, orderBy, field, caret, db, mysql) => idx?.suggestFilter(schema, table, orderBy, field, caret, db, mysql) ?? { from: caret, items: [] },
+      suggestFilter: (schema, table, orderBy, field, caret, db, mysql, explicit) => idx?.suggestFilter(schema, table, orderBy, field, caret, db, mysql, explicit) ?? { from: caret, items: [] },
       free() {
         idx?.free();
         idx = undefined;

@@ -135,11 +135,11 @@ function FilterField(p: { icon: ReactNode; kw: "WHERE" | "ORDER BY"; value: stri
     asked.current++;
     setList(null);
   };
-  const ask = async (text: string, caret: number) => {
+  const ask = async (text: string, caret: number, explicit = false) => {
     const c = p.completion;
     if (!c) return;
     const n = ++asked.current;
-    const s = await filterSuggestions(c.target, { schema: c.schema, table: c.table, orderBy: p.kw === "ORDER BY", text, caret, db: c.db, mysql: c.mysql });
+    const s = await filterSuggestions(c.target, { schema: c.schema, table: c.table, orderBy: p.kw === "ORDER BY", text, caret, db: c.db, mysql: c.mysql, explicit });
     if (n !== asked.current) return;
     setList(s.items.length ? { ...s, caret } : null);
     setActive(0);
@@ -179,7 +179,7 @@ function FilterField(p: { icon: ReactNode; kw: "WHERE" | "ORDER BY"; value: stri
             if (e.key === " " && e.ctrlKey) {
               e.preventDefault();
               const el = e.target as HTMLInputElement;
-              void ask(el.value, el.selectionStart ?? el.value.length);
+              void ask(el.value, el.selectionStart ?? el.value.length, true);
               return;
             }
             if (open) {

@@ -153,12 +153,34 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
     }
 }
 
-/// A table filter input's candidates at the cursor (complete::suggest_filter), or None
-fn filter_complete(input: &tui_textarea::TextArea, f: &crate::app::FilterSource) -> Option<crate::app::Completion> {
+/// A table filter input's candidates at the cursor (complete::suggest_filter; `explicit` when asked for with ⇥ / ⌃Space), or None
+fn filter_complete(input: &tui_textarea::TextArea, f: &crate::app::FilterSource, explicit: bool) -> Option<crate::app::Completion> {
     let line = input.lines().first()?;
     let caret = line.char_indices().nth(input.cursor().1).map_or(line.len(), |(i, _)| i);
-    let (prefix, items) = qurry_core::complete::suggest_filter(&f.meta, &f.schema, &f.table, f.order_by, line, caret, &f.db, f.mysql);
+    let (prefix, items) = qurry_core::complete::suggest_filter(&f.meta, &f.schema, &f.table, f.order_by, line, caret, &f.db, f.mysql, explicit);
     (!items.is_empty()).then_some(crate::app::Completion { items, sel: 0, prefix })
+}
+
+/// What a key does to an open autocomplete list (the console's, a table filter's)
+enum ListKey {
+    Moved,
+    Pick,
+    Close,
+}
+
+/// The autocomplete list's keys: ↑↓ PgUp PgDn move the selection, ↩ / ⇥ pick, ⎋ closes; None for any other key
+fn list_key(cmp: &mut crate::app::Completion, code: KeyCode) -> Option<ListKey> {
+    let n = cmp.items.len();
+    match code {
+        KeyCode::Up => cmp.sel = (cmp.sel + n - 1) % n,
+        KeyCode::Down => cmp.sel = (cmp.sel + 1) % n,
+        KeyCode::PageUp => cmp.sel = cmp.sel.saturating_sub(10),
+        KeyCode::PageDown => cmp.sel = (cmp.sel + 10).min(n - 1),
+        KeyCode::Enter | KeyCode::Tab => return Some(ListKey::Pick),
+        KeyCode::Esc => return Some(ListKey::Close),
+        _ => return None,
+    }
+    Some(ListKey::Moved)
 }
 
 /// For screens with single-letter commands (a add row, d delete …): ⌘←/→ are Home/End (terminals may send them as ⌃A/⌃E), ⌘C is y (copy),

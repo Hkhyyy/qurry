@@ -81,6 +81,22 @@ test("⎋ closes the list first, ⌃Space reopens it, then ⎋ resets the field"
   await expect(where).not.toBeFocused();
 });
 
+test("⌃Space lists where typing doesn't: the table's columns first at an empty spot, then keywords", async ({ page }) => {
+  const where = field(page, "WHERE");
+  await where.click();
+  await page.keyboard.press("Control+Space");
+  await expect(rows(page).first()).toHaveText("id");
+  await expect(rows(page).filter({ hasText: /^and$/ })).toHaveCount(1);
+  await page.keyboard.press("Enter");
+  await where.pressSequentially(" > 1 and ");
+  await expect(list(page)).toHaveCount(0);
+  await page.keyboard.press("Control+Space");
+  await expect(rows(page).first()).toHaveText("id");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await expect(where).toHaveValue(/^id > 1 and \w+$/);
+});
+
 test("a whole keyword or column closes the list, so ↩ applies (`is null` doesn't become `is nulls`)", async ({ page }) => {
   const where = field(page, "WHERE");
   await where.click();

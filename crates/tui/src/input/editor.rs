@@ -7,15 +7,11 @@ pub(super) fn editor_key(app: &mut App, k: KeyEvent) {
     };
     // While the autocomplete list is open
     if let Some(cmp) = &mut c.complete {
-        let n = cmp.items.len();
-        match k.code {
-            KeyCode::Up => return cmp.sel = (cmp.sel + n - 1) % n,
-            KeyCode::Down => return cmp.sel = (cmp.sel + 1) % n,
-            KeyCode::PageUp => return cmp.sel = cmp.sel.saturating_sub(10),
-            KeyCode::PageDown => return cmp.sel = (cmp.sel + 10).min(n - 1),
-            KeyCode::Enter | KeyCode::Tab => return app.accept_completion(),
-            KeyCode::Esc => return c.complete = None,
-            _ => {}
+        match list_key(cmp, k.code) {
+            Some(ListKey::Moved) => return,
+            Some(ListKey::Pick) => return app.accept_completion(),
+            Some(ListKey::Close) => return c.complete = None,
+            None => {}
         }
     }
     let open = c.complete.is_some();

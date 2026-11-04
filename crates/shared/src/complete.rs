@@ -348,27 +348,32 @@ pub fn filter_query(schema: &str, table: &str, order_by: bool, field: &str) -> (
 
 /// Completion in a table tab's WHERE / ORDER BY field (the GUI's filter bar, the TUI's w / o input): the field completes as
 /// [`filter_query`] with the caret (a byte offset in `field`) mapped into it, so the rules are the console's and the table's
-/// columns come first. A list without an editor to filter it, so the TUI console's [`Options`]. Candidates only while typing a
-/// word (not a number) or right after a `.`, never inside a string literal, and none once the word is a whole keyword or column of
-/// the table: there ↩ applies the filter rather than picking a longer word (`is null` must not become `is nulls`).
+/// columns come first. A list without an editor to filter it, so the TUI console's [`Options`]. Never inside a string literal.
+/// While typing (`explicit` off): candidates only while typing a word (not a number) or right after a `.`, and none once the word
+/// is a whole keyword or column of the table: there ↩ applies the filter rather than picking a longer word (`is null` must not
+/// become `is nulls`). Asked for (⌃Space, the TUI's ⇥): the console's candidates at any spot, keywords too at an empty word.
 /// Returns (length of the word before the caret to replace, in chars; candidates)
 #[allow(clippy::too_many_arguments)]
-pub fn suggest_filter(m: &Meta, schema: &str, table: &str, order_by: bool, field: &str, caret: usize, db: &str, mysql: bool) -> (usize, Vec<Item>) {
+pub fn suggest_filter(m: &Meta, schema: &str, table: &str, order_by: bool, field: &str, caret: usize, db: &str, mysql: bool, explicit: bool) -> (usize, Vec<Item>) {
     let before = &field[..caret];
-    let head = before.trim_end_matches(is_word);
-    let typed = &before[head.len()..];
-    let word = !typed.is_empty() && !typed.starts_with(|c: char| c.is_ascii_digit());
-    let in_string = before.matches('\'').count() % 2 == 1;
-    if in_string || !(word || head.ends_with('.')) {
+    if before.matches('\'').count() % 2 == 1 {
         return (0, vec![]);
     }
-    let named = if schema.is_empty() { table.to_string() } else { format!("{schema}.{table}") };
-    let column = || find_table(m, &named, db_schema(db, mysql)).is_some_and(|t| t.columns.iter().any(|(c, _)| c.eq_ignore_ascii_case(typed)));
-    if is_keyword(typed) || column() {
-        return (0, vec![]);
+    if !explicit {
+        let head = before.trim_end_matches(is_word);
+        let typed = &before[head.len()..];
+        let word = !typed.is_empty() && !typed.starts_with(|c: char| c.is_ascii_digit());
+        if !(word || head.ends_with('.')) {
+            return (0, vec![]);
+        }
+        let named = if schema.is_empty() { table.to_string() } else { format!("{schema}.{table}") };
+        let column = || find_table(m, &named, db_schema(db, mysql)).is_some_and(|t| t.columns.iter().any(|(c, _)| c.eq_ignore_ascii_case(typed)));
+        if is_keyword(typed) || column() {
+            return (0, vec![]);
+        }
     }
     let (text, at) = filter_query(schema, table, order_by, field);
-    suggest(m, &text, &text[..at + caret], db, mysql, Options::TUI)
+    suggest(m, &text, &text[..at + caret], db, mysql, Options { keywords_on_empty: explicit, ..Options::TUI })
 }
 
 /// A candidate (lowercase) for the typed word `p` (lowercase): all when the editor filters or nothing is typed, else those that
@@ -660,7 +665,7 @@ mod tests {
     fn filter_field_completes_as_its_query() {
         let m = meta();
         let f = |order: bool, field: &str, caret: usize| {
-            let (n, v) = suggest_filter(&m, "public", "users", order, field, caret, "", false);
+            let (n, v) = suggest_filter(&m, "public", "users", order, field, caret, "", false, false);
             (n, v.into_iter().map(|i| i.label).collect::<Vec<_>>())
         };
         // Only the filtered table's columns, not other tables' (orders.user_id)
@@ -681,10 +686,26 @@ mod tests {
         assert_eq!(f(false, "user", 4).1[0], "user_name");
     }
 
+    /// Asked for (⌃Space, ⇥): the table's columns first at an empty word, then the console's rest with keywords; longer words at a whole one
+    #[test]
+    fn filter_field_lists_when_asked() {
+        let m = meta();
+        let ask = |field: &str| suggest_filter(&m, "public", "users", false, field, field.len(), "", false, true);
+        for field in ["", "id = 1 and "] {
+            let (n, v) = ask(field);
+            assert_eq!((n, &labels(&v)[..3]), (0, &["id", "user_name", "email"][..]), "{field:?}");
+            assert!(v.iter().any(|i| i.kind == ItemKind::Keyword && i.label == "and"), "{field:?}");
+        }
+        assert_eq!(labels(&ask("user").1)[0], "user_name");
+        assert_eq!(labels(&ask("us").1)[0], "user_name");
+        // Not inside a string literal, asked or not
+        assert!(ask("email like 'us").1.is_empty());
+    }
+
     #[test]
     fn filter_field_in_mysql_finds_its_table_in_the_db() {
         let m = Meta::new(vec![CompletionTable { schema: "shop".into(), name: "orders".into(), columns: vec![("status".into(), "varchar".into())] }]);
-        assert_eq!(suggest_filter(&m, "shop", "orders", false, "st", 2, "shop", true).1[0].label, "status");
+        assert_eq!(suggest_filter(&m, "shop", "orders", false, "st", 2, "shop", true, false).1[0].label, "status");
     }
 
     fn hmeta() -> Meta {

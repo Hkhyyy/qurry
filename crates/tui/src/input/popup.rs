@@ -127,28 +127,22 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
         },
         Popup::Input { title, body, mut input, on_ok, filter, mut complete } => {
             // The open list (a table filter's completion) takes the console's list keys: ↑↓ PgUp PgDn move, ↩ / ⇥ pick, ⎋ closes it
-            if let Some(cmp) = &mut complete {
-                let n = cmp.items.len();
-                let mut done = true;
-                match k.code {
-                    KeyCode::Up => cmp.sel = (cmp.sel + n - 1) % n,
-                    KeyCode::Down => cmp.sel = (cmp.sel + 1) % n,
-                    KeyCode::PageUp => cmp.sel = cmp.sel.saturating_sub(10),
-                    KeyCode::PageDown => cmp.sel = (cmp.sel + 10).min(n - 1),
-                    KeyCode::Enter | KeyCode::Tab => {
+            if let Some(cmp) = &mut complete
+                && let Some(key) = list_key(cmp, k.code)
+            {
+                match key {
+                    ListKey::Pick => {
                         for _ in 0..cmp.prefix {
                             input.delete_char();
                         }
                         input.insert_str(&cmp.items[cmp.sel].insert);
                         complete = None;
                     }
-                    KeyCode::Esc => complete = None,
-                    _ => done = false,
+                    ListKey::Close => complete = None,
+                    ListKey::Moved => {}
                 }
-                if done {
-                    app.popup = Some(Popup::Input { title, body, input, on_ok, filter, complete });
-                    return;
-                }
+                app.popup = Some(Popup::Input { title, body, input, on_ok, filter, complete });
+                return;
             }
             match k.code {
                 KeyCode::Esc => {}
@@ -163,7 +157,7 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
                     if !ask {
                         input.input(k);
                     }
-                    complete = filter.as_ref().filter(|_| ask || typed || refilter).and_then(|f| filter_complete(&input, f));
+                    complete = filter.as_ref().filter(|_| ask || typed || refilter).and_then(|f| filter_complete(&input, f, ask));
                     app.popup = Some(Popup::Input { title, body, input, on_ok, filter, complete });
                 }
             }
@@ -344,6 +338,26 @@ mod tests {
         h.key("Esc");
         assert!(h.app.popup.is_none());
         assert_eq!(h.table(id).order, "bank_code desc");
+    }
+
+    /// ⇥ asks for the list where typing doesn't open it: at an empty word the table's columns come first, then keywords
+    #[tokio::test]
+    async fn where_input_tab_lists_at_an_empty_word() {
+        let mut h = Harness::new().await;
+        let id = h.table_tab("bank_info", &["bank_code", "bank_name"], &[&["002", "산업"]], &["bank_code"]);
+        h.key("w");
+        h.key("Tab");
+        let Some(crate::app::Popup::Input { complete: Some(c), .. }) = &h.app.popup else { panic!("⇥ opens the list") };
+        assert_eq!(c.items.iter().take(2).map(|i| i.label.as_str()).collect::<Vec<_>>(), ["bank_code", "bank_name"]);
+        assert!(c.items.iter().any(|i| i.label == "and"), "keywords after the columns");
+        h.key("Tab");
+        h.type_str(" = '002' and ");
+        assert!(!h.screen(120, 30).contains(" 1/"), "typing a space opens nothing");
+        h.key("Tab");
+        h.key("Down");
+        h.key("Enter");
+        h.key("Enter");
+        assert_eq!(h.table(id).where_, "bank_code = '002' and bank_name");
     }
 
     /// Manage Shown Schemas: Space to toggle, Enter to save (the Data Source's scope, shared with the GUI). Esc doesn't save
