@@ -52,8 +52,9 @@ pub fn auto_light(var: impl Fn(&str) -> Option<String>) -> bool {
 }
 
 /// The light palette: each dark token of kit/atoms.rs and its light value (GUI tokens.css light theme where it has one).
-/// C_SEQUENCE has WARN's value, so WARN's entry covers it
-const LIGHT: [(Color, Color); 21] = [
+/// C_SEQUENCE has WARN's value, so WARN's entry covers it. The Redis key types are darker than the GUI's (which keeps one set):
+/// 3:1 as icons on the Data Source tints and white badge text on them
+const LIGHT: [(Color, Color); 27] = [
     (ACCENT, Color::Rgb(0x35, 0x74, 0xf0)),
     (SEL, Color::Rgb(0xd5, 0xe1, 0xff)),
     (SEL_BLUR, Color::Rgb(0xd0, 0xd3, 0xda)),
@@ -75,12 +76,25 @@ const LIGHT: [(Color, Color); 21] = [
     (C_VIEW, Color::Rgb(0x4a, 0x8a, 0x35)),
     (C_ROUTINE, Color::Rgb(0x25, 0x63, 0xc9)),
     (C_KEYWORD, Color::Rgb(0xb3, 0x5a, 0x00)),
+    (R_STRING, Color::Rgb(0x4c, 0x7e, 0x80)),
+    (R_HASH, Color::Rgb(0x90, 0x66, 0xa2)),
+    (R_LIST, Color::Rgb(0x51, 0x79, 0xa4)),
+    (R_SET, Color::Rgb(0x9e, 0x6a, 0x3a)),
+    (R_ZSET, Color::Rgb(0xb9, 0x58, 0x55)),
+    (R_STREAM, Color::Rgb(0x48, 0x83, 0x54)),
 ];
 
-/// One color in the light palette. Tokens take their light value; other dark backgrounds (Data Source colors and their lighter
-/// variant on the active tab) keep their hue with the lightness turned over, so a Data Source tint stays a tint and the active tab
-/// the stronger one. Named text colors meant for a dark background get a dark counterpart
+/// One color in the light palette (truecolor). Tokens take their light value; other dark backgrounds (Data Source colors and
+/// their lighter variant on the active tab) keep their hue with the lightness turned over, so a Data Source tint stays a tint and
+/// the active tab the stronger one. Named text colors meant for a dark background get a dark counterpart
 pub fn to_light(c: Color, bg: bool) -> Color {
+    light_in(c, bg, ColorMode::TrueColor)
+}
+
+/// `to_light` before the frame goes to `mode`. In truecolor a Data Source tint then goes 70% of the way to white: a pale tint on
+/// which the light text and icon colors keep 3:1 (WARN on the red one is the closest). The 256 and 16 palettes have no pale
+/// hues to land on (it would turn gray and lose the Production cue), so there it stays as turned over
+fn light_in(c: Color, bg: bool, mode: ColorMode) -> Color {
     if let Some(&(_, l)) = LIGHT.iter().find(|t| t.0 == c) {
         return l;
     }
@@ -88,7 +102,8 @@ pub fn to_light(c: Color, bg: bool) -> Color {
         (Color::Rgb(r, g, b), true) if luma(r, g, b) < 128.0 => {
             // HSL lightness L → 1 − L with hue and saturation kept: every channel moves by 255 − max − min
             let shift = 255 - r.max(g).max(b) as i16 - r.min(g).min(b) as i16;
-            let m = |v: u8| (v as i16 + shift).clamp(0, 255) as u8;
+            let pale = if mode == ColorMode::TrueColor { 0.3 } else { 1.0 };
+            let m = |v: u8| (255.0 - pale * (255 - (v as i16 + shift).clamp(0, 255)) as f32).round() as u8;
             Color::Rgb(m(r), m(g), m(b))
         }
         (Color::White, false) => Color::Black,
@@ -99,9 +114,9 @@ pub fn to_light(c: Color, bg: bool) -> Color {
     }
 }
 
-/// A cell's [fg, bg, underline] in the light palette. Black / White text was picked for its background (kit::on): pick again for the new one
-fn light_cell([fg, bg, ul]: [Color; 3]) -> [Color; 3] {
-    let bg = to_light(bg, true);
+/// A cell's [fg, bg, underline] in the light palette for `mode`. Black / White text was picked for its background (kit::on): pick again for the new one
+fn light_cell([fg, bg, ul]: [Color; 3], mode: ColorMode) -> [Color; 3] {
+    let bg = light_in(bg, true, mode);
     let fg = match (fg, bg) {
         (Color::Black | Color::White, Color::Rgb(..)) => on(bg),
         _ => to_light(fg, false),
@@ -196,7 +211,7 @@ impl ColorMode {
             let [fg, bg, ul] = match last {
                 Some((k, v)) if k == key => v,
                 _ => {
-                    let v = self.map_colors(if light { light_cell(key) } else { key }, &mut seen, light);
+                    let v = self.map_colors(if light { light_cell(key, self) } else { key }, &mut seen, light);
                     last = Some((key, v));
                     v
                 }
@@ -564,17 +579,47 @@ mod tests {
             let c = tc(Style::default().fg(on(bg)).bg(bg));
             assert!(contrast(c.fg, c.bg) >= 4.0, "{bg:?}: {c:?}");
         }
-        // Production row: a light tint of the same red with the terminal's dark text; the active tab's lighter variant becomes the
-        // stronger red, its text picked again for it
+        // Production row: a light tint of the same red
         let prod = hex("#6e2a2a").unwrap();
-        let row = tc(Style::default().bg(prod)).bg;
-        let Color::Rgb(r, g, b) = row else { panic!() };
-        assert!(r > g && g == b && contrast(Color::Rgb(0, 0, 0), row) >= 7.0, "{row:?}");
-        let tab = tc(Style::default().fg(on(lighten(prod))).bg(lighten(prod)));
-        assert!(contrast(tab.bg, white) > contrast(row, white), "the active tab stands out more than the row");
-        assert!(contrast(tab.fg, tab.bg) >= 4.5, "{tab:?}");
+        let Color::Rgb(r, g, b) = tc(Style::default().bg(prod)).bg else { panic!() };
+        assert!(r > g && g == b, "{:?}", (r, g, b));
         // Dark Data Source colors as text (the tree's connection dot) stay as they are: dark already
         assert_eq!(tc(Style::default().fg(prod)).fg, prod);
+    }
+
+    /// Every Data Source color the app offers, as a light tint: what the tree draws on it reads (4.5:1 text, 3:1 dim text and
+    /// icons), and the active tab's stronger tint has its text picked again for it
+    #[test]
+    fn light_data_source_tints_keep_text_and_icons_readable() {
+        let white = Color::Rgb(255, 255, 255);
+        // A common light terminal's dark gray (DIM stays the terminal's own: kit_snapshots draws light scenes with this one)
+        let dim = Color::Rgb(0x6e, 0x6e, 0x6e);
+        let icons = [ACCENT, OK, WARN, DANGER, NUMBER, C_DB, C_VIEW, C_SEQUENCE, C_ROUTINE, C_KEYWORD, Color::Gray, Color::Yellow, R_STRING, R_HASH, R_LIST, R_SET, R_ZSET, R_STREAM];
+        let at = |st: Style| {
+            let c = cell_in(ColorMode::TrueColor, true, st);
+            (c.fg, c.bg)
+        };
+        for (name, h) in crate::ui::COLOR_PRESETS {
+            let c = hex(h).unwrap();
+            let row = at(Style::default().bg(c)).1;
+            assert!(contrast(Color::Black, row) >= 4.5 && contrast(dim, row) >= 3.0, "{name}: text on {row:?}");
+            for t in icons.into_iter().chain([c]) {
+                let (fg, bg) = at(Style::default().fg(t).bg(c));
+                assert!(contrast(fg, bg) >= 3.0, "{name}: {t:?} as {fg:?} on {bg:?}: {}", contrast(fg, bg));
+            }
+            let (fg, tab) = at(Style::default().fg(on(lighten(c))).bg(lighten(c)));
+            assert!(contrast(fg, tab) >= 4.5, "{name}: tab text {fg:?} on {tab:?}");
+            assert!(contrast(tab, white) > contrast(row, white), "{name}: the active tab stands out more than the row");
+            // 256 colors keep the stronger tint, so the row keeps its hue there (the cube has no pale hues)
+            let Color::Indexed(i) = cell_in(ColorMode::Ansi256, true, Style::default().bg(c)).bg else { panic!() };
+            let (r, g, b) = rgb256(i);
+            assert!(*name == "gray" || r.max(g).max(b) - r.min(g).min(b) >= 40, "{name}: 256 row {:?}", (r, g, b));
+        }
+        // Redis key type badges: white text on the light palette's darker type colors
+        for t in [R_STRING, R_HASH, R_LIST, R_SET, R_ZSET, R_STREAM] {
+            let c = cell_in(ColorMode::TrueColor, true, Style::default().fg(on(t)).bg(t));
+            assert!(contrast(c.fg, c.bg) >= 4.5, "{t:?}: {c:?}");
+        }
     }
 
     #[test]

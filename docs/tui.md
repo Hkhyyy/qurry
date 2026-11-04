@@ -32,7 +32,7 @@ The TUI has a dark palette (made for a dark terminal background) and a light one
 | **Dark** | Always dark |
 | **Light** | Always light |
 
-The light palette takes the GUI's light theme colors: Data Source colors become light tints of the same hue (the active tab is the stronger one), selections, edited cells and badges stay apart from each other, JSON cells use the GUI's light JSON colors, and production keeps its red. It works in every color mode above: 256 colors map it to the nearest palette colors, 16 colors use the normal (not the bright) terminal colors, and `NO_COLOR` stays monochrome with the same rules as in the dark theme.
+The light palette takes the GUI's light theme colors: Data Source colors become pale tints of the same hue, so icons and dim text on them stay readable (the active tab is the stronger one; 256 and 16 colors, which have no pale hues, keep a stronger tint so the hue survives), selections, edited cells and badges stay apart from each other, JSON cells use the GUI's light JSON colors, and production keeps its red. It works in every color mode above: 256 colors map it to the nearest palette colors, 16 colors use the normal (not the bright) terminal colors, and `NO_COLOR` stays monochrome with the same rules as in the dark theme.
 
 Terminals such as iTerm2, rxvt and Konsole set `COLORFGBG` from their background color; many others (kitty, WezTerm, Ghostty, Alacritty) don't, so on a light background there pick **Light** yourself. The theme is saved in `settings.json` in the [config folder](getting-started.md#where-qurry-keeps-your-settings) under `"tuiTheme"` (the GUI has its own theme setting).
 

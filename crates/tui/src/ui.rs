@@ -32,12 +32,12 @@ pub fn color_name(c: Option<&str>) -> &'static str {
 /// Bright color used for highlighting, like the active tab
 pub fn type_color(t: &str) -> Color {
     match t {
-        "string" => Color::Rgb(95, 158, 160),
-        "hash" => Color::Rgb(176, 124, 198),
-        "list" => Color::Rgb(106, 159, 216),
-        "set" => Color::Rgb(208, 139, 76),
-        "zset" => Color::Rgb(201, 96, 92),
-        "stream" => Color::Rgb(90, 164, 105),
+        "string" => R_STRING,
+        "hash" => R_HASH,
+        "list" => R_LIST,
+        "set" => R_SET,
+        "zset" => R_ZSET,
+        "stream" => R_STREAM,
         _ => Color::Gray,
     }
 }
