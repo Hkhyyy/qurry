@@ -245,7 +245,11 @@ impl Grid {
     /// Range as IN-list text and value count. One column gives ('a', 'b'), several give row tuples (('a', 1), …). Duplicates·NULL are dropped.
     /// Numeric columns keep number text bare (numeric·bigint arrive as text); NaN and the like are quoted. Strings as `kind` reads them
     fn in_list_of(&self, (r0, c0, r1, c1): (usize, usize, usize, usize), kind: DbKind) -> (String, usize) {
-        let rows: Vec<Vec<Value>> = (r0..=r1.min(self.rows().saturating_sub(1))).map(|r| (c0..=c1).map(|c| self.cell(r, c)).collect()).collect();
+        self.in_list_rows(r0..=r1, (c0, c1), kind)
+    }
+
+    fn in_list_rows(&self, rows: impl Iterator<Item = usize>, (c0, c1): (usize, usize), kind: DbKind) -> (String, usize) {
+        let rows: Vec<Vec<Value>> = rows.filter(|&r| r < self.rows()).map(|r| (c0..=c1).map(|c| self.cell(r, c)).collect()).collect();
         let types: Vec<String> = (c0..=c1).map(|c| self.result.columns.get(c).map(|x| x.type_name.clone()).unwrap_or_default()).collect();
         extract::in_list(&rows, &types, kind, extract::Options::default())
     }
@@ -255,8 +259,12 @@ impl Grid {
         self.in_list_of((0, c, self.rows().saturating_sub(1), c), kind)
     }
 
-    /// Selected range, or the whole current column if none, as an IN list
+    /// The current column of the marked rows (in grid order), else the selected range, else the whole current column, as an IN list
+    /// (the GUI's Copy as IN List of ⌘-clicked rows lists only their cells)
     pub fn in_list(&self, kind: DbKind) -> (String, usize) {
+        if !self.marked.is_empty() {
+            return self.in_list_rows(self.marked.iter().copied(), (self.col, self.col), kind);
+        }
         match self.sel_rect() {
             Some(r) => self.in_list_of(r, kind),
             None => self.column_in_list(self.col, kind),

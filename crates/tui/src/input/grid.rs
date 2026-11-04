@@ -263,6 +263,26 @@ mod tests {
         assert_eq!(h.app.status, "No rows marked");
     }
 
+    /// Y with marked rows lists the current column of those rows only, in grid order (the GUI's ⌘-clicked rows + Copy as IN List);
+    /// with nothing marked: the whole current column
+    #[tokio::test]
+    async fn marked_rows_copy_as_in_list() {
+        let mut h = Harness::new().await;
+        h.table_tab("logs", &["ip", "n"], &[&["a", "1"], &["b", "2"], &["c", "3"], &["d", "4"], &["e", "5"]], &["n"]);
+        for _ in 0..4 {
+            h.key("Down");
+        }
+        h.key("m");
+        h.key("g");
+        h.key("m");
+        h.key("Down");
+        h.key("Y");
+        assert_eq!(h.app.status, "Copied 2 values as an IN list: ('a', 'e')");
+        h.key("Esc");
+        h.key("Y");
+        assert_eq!(h.app.status, "Copied 5 values as an IN list: ('a', 'b', 'c', 'd', 'e')");
+    }
+
     /// Marked rows that were just added go away on d, edits of the added rows below them move up with them
     #[tokio::test]
     async fn deleting_marked_added_rows_removes_them() {
