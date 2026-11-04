@@ -134,6 +134,8 @@ export const KEYMAP: KeySection[] = [
       [null, "grid.submit"],
       ["⌘c / ⌘v", "Copy (with chosen extractor; CSV / TSV copy values only — right-click › Copy with Headers adds the column names) / paste"],
       ["⌘a", "Select all"],
+      ["⌘ click", "Add a cell to the selection or take it out (on a row number: the row · on a column header: the column); copy and the edits act on every range"],
+      ["⇧ click · click", "Extend the last range · select just that cell (starts over)"],
       [null, "grid.find"],
       [null, "grid.reload"],
       [null, "grid.cancel"],

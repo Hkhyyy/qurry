@@ -169,6 +169,7 @@
   {"gui": "grid.setNull", "tui": "SetNull", "title": "Set NULL", "scope": "grid", "guiKeys": ["Mod+Alt+N"], "tuiPane": "grid", "tuiPaneKeys": ["N"]},
   {"gui": "grid.export", "tui": "ExportCsv", "title": "Export Data…", "tuiTitle": "Export Data… (CSV, TSV, JSON, SQL INSERT, Markdown)", "scope": "grid", "tuiPane": "grid", "tuiPaneKeys": ["X"]},
   {"gui": "grid.copyInList", "tui": "CopyInList", "title": "Copy as IN List", "tuiTitle": "Copy Column as IN List  ('a', 'b', …)", "scope": "grid", "tuiPane": "grid", "tuiPaneKeys": ["Shift+Y"]},
+  {"tui": "MarkRow", "title": "Mark Row (add the row to the selection or take it out: y copies, d deletes the marked rows)", "tuiPane": "grid", "tuiPaneKeys": ["M"]},
   {"tui": "FindSimilar", "title": "Find Similar Rows (pgvector, by the vector column)"},
   {"gui": "tree.ragSearch", "tui": "RagSearch", "title": "AI Search (RAG)…", "tuiTitle": "AI Search (RAG)… — ask a table in plain words", "scope": "tree"},
   {"tui": "RagBuild", "title": "Build RAG Index… (embed the rows)"},

@@ -452,3 +452,92 @@ test("console results say why their edit buttons are greyed out", async ({ page 
   await expect(del).toHaveAttribute("title", /Console results are read-only\. Open the table to edit its rows\.$/);
   await expect(del).toHaveAttribute("aria-description", "Console results are read-only. Open the table to edit its rows.");
 });
+
+test.describe("multi-range selection (⌘-click)", () => {
+  const cell = (page: Page, name: string) => work(page).getByRole("gridcell", { name, exact: true });
+  const rowNum = (page: Page, n: number) => work(page).getByRole("rowheader", { name: String(n), exact: true });
+  const selected = (page: Page) => work(page).locator('[role=gridcell][aria-selected="true"]').allTextContents();
+  const ROW1 = `1,user_1,0.00,${T1},note`;
+  const ROW5 = `5,user_5,4938.00,${T2},`;
+
+  test("⌘-click rows 5 and 1: ⌘C copies both rows in grid order", async ({ page }) => {
+    await rowNum(page, 5).click({ modifiers: ["Meta"] });
+    await rowNum(page, 1).click({ modifiers: ["Meta"] });
+    await expect(rowNum(page, 1)).toHaveClass(/row-sel/);
+    await expect(rowNum(page, 3)).not.toHaveClass(/row-sel/);
+    await page.keyboard.press("Meta+C");
+    await expect.poll(() => clipboard(page)).toBe(`${ROW1}\n${ROW5}`);
+  });
+
+  test("⌘⌫ marks every selected row for deletion", async ({ page }) => {
+    await rowNum(page, 1).click();
+    await rowNum(page, 5).click({ modifiers: ["Meta"] });
+    await page.keyboard.press("Meta+Backspace");
+    await expect(work(page).locator(".grid-row.deleted .rownum")).toHaveText(["1", "5"]);
+    await expect(work(page).locator(".tb-info")).toContainText("2 pending");
+  });
+
+  test("⇧-click extends the last range, a plain click starts over, ↓ collapses to one cell", async ({ page }) => {
+    await cell(page, "user_1").click();
+    await cell(page, "user_5").click({ modifiers: ["Meta"] });
+    await cell(page, "user_7").click({ modifiers: ["Shift"] });
+    await expect.poll(() => selected(page)).toEqual(["user_1", "user_5", "user_6", "user_7"]);
+    await page.keyboard.press("Meta+C");
+    await expect.poll(() => clipboard(page)).toBe("user_1\nuser_5\nuser_6\nuser_7");
+    await cell(page, "user_2").click();
+    await expect.poll(() => selected(page)).toEqual(["user_2"]);
+    await cell(page, "user_4").click({ modifiers: ["Meta"] });
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(() => selected(page)).toEqual(["user_5"]);
+  });
+
+  test("⌘-click on a selected cell takes it out; copy takes what is left", async ({ page }) => {
+    await cell(page, "user_1").click();
+    await cell(page, "user_3").click({ modifiers: ["Meta"] });
+    await cell(page, "user_1").click({ modifiers: ["Meta"] });
+    await expect.poll(() => selected(page)).toEqual(["user_3"]);
+    await page.keyboard.press("Meta+C");
+    await expect.poll(() => clipboard(page)).toBe("user_3");
+  });
+
+  test("ranges in different columns copy as the union of columns, other cells empty", async ({ page }) => {
+    await cell(page, "user_1").click();
+    await cell(page, "1234.50").click({ modifiers: ["Meta"] });
+    await page.keyboard.press("Meta+C");
+    await expect.poll(() => clipboard(page)).toBe("user_1,\n,1234.50");
+  });
+
+  test("ranges in different columns: SQL Updates and Where Clause leave the unselected cells out, never NULL", async ({ page }) => {
+    const button = work(page).locator('[title="Data Extractor (copy format)"]');
+    for (const [extractor, text] of [
+      ["SQL Updates", "UPDATE public.users SET user_name = 'user_1' WHERE id = '1';\nUPDATE public.users SET amount = '1234.50' WHERE id = '2';"],
+      ["Where Clause", "(user_name = 'user_1') OR\n(amount = '1234.50')"],
+    ]) {
+      await button.click();
+      await menuItem(page, new RegExp(`^(✓ |\\s*)${extractor}$`)).click();
+      await cell(page, "user_1").click();
+      await cell(page, "1234.50").click({ modifiers: ["Meta"] });
+      await page.keyboard.press("Meta+C");
+      await expect.poll(() => clipboard(page)).toBe(text);
+    }
+  });
+
+  test("the Value Editor follows the last clicked cell", async ({ page }) => {
+    const panel = work(page).locator(".value-panel");
+    await cell(page, "user_1").click();
+    await page.keyboard.press("Shift+Enter");
+    await cell(page, "2469.00").click({ modifiers: ["Meta"] });
+    await expect(panel.locator(".ve-title")).toHaveText("amount : numeric");
+    await expect(panel.locator("textarea.ve-text")).toHaveValue("2469.00");
+    await cell(page, "user_4").click({ modifiers: ["Meta"] });
+    await expect(panel.locator(".ve-title")).toHaveText("user_name : varchar");
+    await expect(panel.locator("textarea.ve-text")).toHaveValue("user_4");
+  });
+
+  test("paste into several ranges says how to get back to one", async ({ page }) => {
+    await cell(page, "user_1").click();
+    await cell(page, "user_3").click({ modifiers: ["Meta"] });
+    await page.keyboard.press("Meta+V");
+    await expect(page.locator(".statusbar")).toContainText("Paste needs one selected range: click a cell to select just it (⌘-click adds cells to the selection)");
+  });
+});

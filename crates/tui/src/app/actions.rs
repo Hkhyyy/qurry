@@ -42,6 +42,7 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::SetNull, hint: "", run: set_null },
     ActionDef { action: Action::ExportCsv, hint: "", run: |app| app.export_start() },
     ActionDef { action: Action::CopyInList, hint: "", run: copy_in_list },
+    ActionDef { action: Action::MarkRow, hint: "", run: mark_row },
     ActionDef { action: Action::ValueEditor, hint: "", run: toggle_value_panel },
     ActionDef { action: Action::FindSimilar, hint: "", run: |app| app.find_similar() },
     ActionDef { action: Action::RagSearch, hint: "", run: |app| app.rag_search_start() },
@@ -241,17 +242,25 @@ fn add_row(app: &mut App) {
 fn delete_row(app: &mut App) {
     if let Some(Tab { kind: TabKind::Table(tt), .. }) = app.tabs.get_mut(app.active) {
         if let Some(g) = &mut tt.grid {
-            let r = g.row;
-            if g.is_added(r) {
-                g.result.rows.remove(r);
-                g.added -= 1;
-                g.edits.retain(|(rr, _), _| *rr != r);
-                g.row = g.row.min(g.rows().saturating_sub(1));
-            } else if !g.deleted.remove(&r) {
-                g.deleted.insert(r);
-            }
+            g.delete_rows();
         }
     }
+}
+
+/// m in a result or table grid: the current row into the selection or out of it (the GUI's ⌘-click on a row number)
+fn mark_row(app: &mut App) {
+    let table = match app.tabs.get(app.active).map(|t| &t.kind) {
+        Some(TabKind::Table(_)) => true,
+        Some(TabKind::Console(_)) => false,
+        _ => return,
+    };
+    let Some(g) = app.grid_mut() else { return };
+    g.toggle_mark();
+    let n = g.marked.len();
+    app.status = match n {
+        0 => "No rows marked".into(),
+        _ => format!("{n} row{} marked: y copies{} · Esc clears", if n == 1 { "" } else { "s" }, if table { ", d deletes them" } else { " them" }),
+    };
 }
 
 fn set_null(app: &mut App) {

@@ -1,10 +1,11 @@
 use super::*;
 
 pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
-    // Esc: if there's a selection, clear just that first
+    // Esc: if there's a selection (a range, marked rows), clear just that first
     if k.code == KeyCode::Esc {
-        if let Some(g) = app.grid_mut().filter(|g| g.anchor.is_some()) {
+        if let Some(g) = app.grid_mut().filter(|g| g.anchor.is_some() || !g.marked.is_empty()) {
             g.anchor = None;
+            g.marked.clear();
             return;
         }
     }
@@ -157,14 +158,14 @@ pub(super) fn nav(app: &mut App, k: KeyEvent) {
         KeyCode::Char('g') => g.row = 0,
         KeyCode::Char('G') => g.row = g.rows().saturating_sub(1),
         KeyCode::Char('y') => {
-            // TSV if a range is selected (pastes into cells in a sheet), otherwise the current cell
-            let Some((r0, c0, r1, c1)) = g.sel_rect() else {
+            // TSV if a range or rows are selected (pastes into cells in a sheet), otherwise the current cell
+            let Some((rows, cols)) = g.selection() else {
                 let v = g.value(g.row, g.col).unwrap_or_else(|| "NULL".into());
                 return copy(app, &v);
             };
             let text = g.selection_tsv();
             copy(app, &text);
-            let (nr, nc) = (r1 - r0 + 1, c1 - c0 + 1);
+            let (nr, nc) = (rows.len(), cols.len());
             app.status = format!("Copied {nr} row{} × {nc} column{}", if nr == 1 { "" } else { "s" }, if nc == 1 { "" } else { "s" });
             return;
         }
@@ -222,6 +223,67 @@ mod tests {
         h.mouse("up", x, y0 as u16 + 2);
         h.key("Y");
         assert_eq!(h.app.status, "Copied 3 values as an IN list: ('1.2.3.4', '5.6.7.8', '9.9.9.9')");
+    }
+
+    /// m marks rows (the GUI's ⌘-click on a row number) and moving keeps them: y copies the marked rows in grid order, d deletes them
+    /// all (again: back), m on a marked row takes it out, Esc clears the marks
+    #[tokio::test]
+    async fn marked_rows_copy_and_delete() {
+        let mut h = Harness::new().await;
+        let id = h.table_tab("logs", &["ip", "n"], &[&["a", "1"], &["b", "2"], &["c", "3"], &["d", "4"], &["e", "5"]], &["n"]);
+        fn grid(h: &Harness, id: u64) -> &crate::grid::Grid {
+            h.table(id).grid.as_ref().unwrap()
+        }
+        for _ in 0..4 {
+            h.key("Down");
+        }
+        h.key("m");
+        assert_eq!(h.app.status, "1 row marked: y copies, d deletes them · Esc clears");
+        h.key("g");
+        h.key("m");
+        h.key("Down");
+        assert_eq!(grid(&h, id).marked, [0, 4].into());
+        assert_eq!(grid(&h, id).selection_tsv(), "a\t1\ne\t5");
+        h.key("y");
+        assert_eq!(h.app.status, "Copied 2 rows × 2 columns");
+        // the cursor's row (2) is not marked: d leaves it alone
+        h.key("d");
+        assert_eq!(grid(&h, id).deleted, [0, 4].into());
+        h.key("d");
+        assert!(grid(&h, id).deleted.is_empty());
+        // A range and marked rows copy together: the union of their columns, cells outside both empty
+        h.key("Shift+Down");
+        assert_eq!(grid(&h, id).selection_tsv(), "a\t1\nb\t\nc\t\ne\t5");
+        h.key("Esc");
+        assert!(grid(&h, id).marked.is_empty() && grid(&h, id).anchor.is_none());
+        assert_eq!(h.app.focus, crate::app::Focus::Grid);
+        h.key("m");
+        h.key("m");
+        assert!(grid(&h, id).marked.is_empty());
+        assert_eq!(h.app.status, "No rows marked");
+    }
+
+    /// Marked rows that were just added go away on d, edits of the added rows below them move up with them
+    #[tokio::test]
+    async fn deleting_marked_added_rows_removes_them() {
+        let mut h = Harness::new().await;
+        let id = h.table_tab("logs", &["ip"], &[&["a"]], &["ip"]);
+        for v in ["x", "y", "z"] {
+            h.key("a");
+            if let Some(TabKind::Table(t)) = h.app.tab_mut(id).map(|t| &mut t.kind) {
+                let g = t.grid.as_mut().unwrap();
+                g.set_value(g.row, 0, v.into());
+            }
+        }
+        h.key("m");
+        h.key("Up");
+        h.key("Up");
+        h.key("m");
+        h.key("d");
+        let g = h.table(id).grid.as_ref().unwrap();
+        assert_eq!((g.added, g.rows()), (1, 2));
+        assert_eq!(g.value(1, 0).as_deref(), Some("y"));
+        assert!(g.marked.is_empty());
     }
 
     /// A table whose second column is jsonb, its cursor on that column's first cell

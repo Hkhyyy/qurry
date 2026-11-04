@@ -22,6 +22,7 @@ export const ScreenDataSourceForm = { ...by("Data source form"), name: "Screen �
 export const ScreenKeymap = { ...by("Keymap (F1)"), name: "Screen · Keymap (F1)" };
 export const ScreenWorkspaces = { ...by("Workspaces"), name: "Screen · Workspaces" };
 export const ScreenConsole = { ...by("Console & result"), name: "Screen · Console & result" };
+export const ScreenGridMarked = { ...by("Grid: marked rows"), name: "Screen · Grid: marked rows (m)" };
 export const ScreenChart = { ...by("Chart"), name: "Screen · Chart" };
 export const ScreenGridLoadingMore = { ...by("Grid: loading more"), name: "Screen · Grid: loading more" };
 export const ScreenGridLoadingMoreNoColor = { ...by("Grid: loading more, NO_COLOR"), name: "Screen · Grid: loading more, NO_COLOR" };
