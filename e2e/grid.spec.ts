@@ -455,6 +455,21 @@ test.describe("multi-range selection (⌘-click)", () => {
     await expect.poll(() => clipboard(page)).toBe("user_1,\n,1234.50");
   });
 
+  test("ranges in different columns: SQL Updates and Where Clause leave the unselected cells out, never NULL", async ({ page }) => {
+    const button = work(page).locator('[title="Data Extractor (copy format)"]');
+    for (const [extractor, text] of [
+      ["SQL Updates", "UPDATE public.users SET user_name = 'user_1' WHERE id = '1';\nUPDATE public.users SET amount = '1234.50' WHERE id = '2';"],
+      ["Where Clause", "(user_name = 'user_1') OR\n(amount = '1234.50')"],
+    ]) {
+      await button.click();
+      await menuItem(page, new RegExp(`^(✓ |\\s*)${extractor}$`)).click();
+      await cell(page, "user_1").click();
+      await cell(page, "1234.50").click({ modifiers: ["Meta"] });
+      await page.keyboard.press("Meta+C");
+      await expect.poll(() => clipboard(page)).toBe(text);
+    }
+  });
+
   test("the Value Editor follows the last clicked cell", async ({ page }) => {
     const panel = work(page).locator(".value-panel");
     await cell(page, "user_1").click();

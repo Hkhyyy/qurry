@@ -59,17 +59,18 @@ export const selRows = (sel: Selection | null) => spanUnion(sel, "r0", "r1");
 /** Columns any range touches, in grid order */
 export const selCols = (sel: Selection | null) => spanUnion(sel, "c0", "c1");
 
-/** Every selected cell once, row by row in grid order */
-export function forEachCell(sel: Selection | null, fn: (r: number, c: number) => void) {
+/** Every selected cell once, row by row in grid order; stops when `fn` returns false */
+export function forEachCell(sel: Selection | null, fn: (r: number, c: number) => void | false) {
   const cols = selCols(sel);
-  for (const r of selRows(sel)) for (const c of cols) if (contains(sel, r, c)) fn(r, c);
+  for (const r of selRows(sel)) for (const c of cols) if (contains(sel, r, c) && fn(r, c) === false) return;
 }
 
 /**
  * What copy and the Data Extractor write: rows in grid order, columns in grid order. Ranges with different columns share one table
- * of the union of their columns; a cell no range holds is left empty (null: an empty CSV / TSV field, skipped by the IN list).
+ * of the union of their columns; a cell no range holds is `hole`, never a NULL (extract.HOLE_TOKEN): CSV, TSV and Markdown write an
+ * empty field, SQL Inserts, SQL Updates, Where Clause and JSON leave that column out of that row, SQL IN List lists each selected cell.
  */
-export function copyTable<T>(sel: Selection | null, value: (r: number, c: number) => T): { rows: number[]; cols: number[]; vals: (T | null)[][] } {
+export function copyTable<T>(sel: Selection | null, value: (r: number, c: number) => T, hole: T): { rows: number[]; cols: number[]; vals: T[][] } {
   const rows = selRows(sel), cols = selCols(sel);
-  return { rows, cols, vals: rows.map((r) => cols.map((c) => (contains(sel, r, c) ? value(r, c) : null))) };
+  return { rows, cols, vals: rows.map((r) => cols.map((c) => (contains(sel, r, c) ? value(r, c) : hole))) };
 }

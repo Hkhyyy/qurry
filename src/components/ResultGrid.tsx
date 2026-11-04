@@ -6,7 +6,7 @@ import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { Cell, Dialect, dialectOf, QueryResult } from "../lib/api";
 import { DateTimePicker, isTemporal } from "./DateTimePicker";
 import { ContextMenu, MenuItem } from "./Explorer";
-import { DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, raw } from "../lib/extract";
+import { DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, HOLE_TOKEN, raw } from "../lib/extract";
 import { sharedReady, useSharedReady } from "../lib/shared";
 import { DEFAULTS, useFonts } from "../lib/prefs";
 import { alignTable, CELL_KIND, cellClasses, useGridAlign } from "../lib/gridAlign";
@@ -249,7 +249,7 @@ export function ResultGrid(p: Props) {
   /** Data rows of every selected range, in grid order (the row-level edits: Delete Row, Revert Selected) */
   const selRows = (): number[] => rowsOf(sel).map(dataIndex);
   /** Every selected cell once, in data coordinates: the one path the cell edits (Set NULL, Revert Selected, …) take */
-  const forSelected = (fn: (r: number, c: number) => void) => forEachCell(sel, (d, c) => fn(dataIndex(d), c));
+  const forSelected = (fn: (r: number, c: number) => void | false) => forEachCell(sel, (d, c) => fn(dataIndex(d), c));
   const selectCell = (pos: Pos, ext: boolean) => setSel((s) => (ext ? extend(s, pos) : single(pos)));
   /** A mouse click: ⇧ extends the last range to b, ⌘ adds a..b (a cell, a row, a column) or takes it out, a plain click starts over (DataGrip) */
   const clickSel = (e: React.MouseEvent, a: Pos, b: Pos = a) => setSel((s) => (e.shiftKey ? extend(s, b) : (isMac ? e.metaKey : e.ctrlKey) ? toggle(s, a, b) : single(a, b)));
@@ -358,7 +358,7 @@ export function ResultGrid(p: Props) {
     if (!hasSel || isSingle(sel)) return setStatusWidget("aggregate", undefined);
     let count = 0, nums = 0, sum = 0, min = Infinity, max = -Infinity;
     forSelected((r, c) => {
-      if (count >= 200000) return;
+      if (count >= 200000) return false;
       const v = valueAt(r, c);
       if (v === null) return;
       count++;
@@ -481,7 +481,7 @@ export function ResultGrid(p: Props) {
   /** header = a column-name line at the top of CSV · TSV (Copy is values only — DataGrip; Copy with Headers includes it) */
   /** The cells of `s` in a format: rows and columns in grid order, the union of the ranges' columns (gridSelection.copyTable) */
   const extract = (s: Selection, fmt: Extractor, header = true): string => {
-    const t = copyTable(s, (d, c) => valueAt(dataIndex(d), c));
+    const t = copyTable<Cell>(s, (d, c) => valueAt(dataIndex(d), c), HOLE_TOKEN);
     const rows = t.rows.map(dataIndex);
     // Key values are read only for SQL Updates (as before: other formats never touch the key columns)
     const keys = fmt === "SQL Updates" ? rows.map((r) => pkIdx.map((k): [string, Cell] => [cols[k].name, valueAt(r, k)])) : [];

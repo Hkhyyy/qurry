@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { dialectOf } from "./api";
+import { extractRows, HOLE_TOKEN } from "./extract";
 import { contains, copyTable, extend, forEachCell, isSingle, selCols, selRows, single, toggle, type Selection } from "./gridSelection";
 
 const cells = (sel: Selection | null) => {
   const out: string[] = [];
-  forEachCell(sel, (r, c) => out.push(`${r},${c}`));
+  forEachCell(sel, (r, c) => void out.push(`${r},${c}`));
   return out;
 };
 
@@ -65,7 +67,7 @@ describe("grid selection", () => {
   it("copies rows and columns in grid order, whatever order they were clicked in", () => {
     let sel = single({ r: 4, c: 0 }, { r: 4, c: 1 });
     sel = toggle(sel, { r: 0, c: 0 }, { r: 0, c: 1 });
-    const t = copyTable(sel, (r, c) => `${r}:${c}`);
+    const t = copyTable(sel, (r, c) => `${r}:${c}`, "-");
     expect(t.rows).toEqual([0, 4]);
     expect(t.cols).toEqual([0, 1]);
     expect(t.vals).toEqual([["0:0", "0:1"], ["4:0", "4:1"]]);
@@ -75,9 +77,28 @@ describe("grid selection", () => {
     let sel = single({ r: 0, c: 2 });
     sel = toggle(sel, { r: 1, c: 0 });
     sel = toggle(sel, { r: 1, c: 3 });
-    const t = copyTable(sel, (r, c) => `${r}:${c}`);
+    const t = copyTable(sel, (r, c) => `${r}:${c}`, "-");
     expect(t.cols).toEqual([0, 2, 3]);
-    expect(t.vals).toEqual([[null, "0:2", null], ["1:0", null, "1:3"]]);
+    expect(t.vals).toEqual([["-", "0:2", "-"], ["1:0", "-", "1:3"]]);
+  });
+
+  it("cells outside every range are left out of the SQL formats, not written as NULL", () => {
+    // user_name of row 0, then ⌘-click amount of row 1
+    const grid = [["user_1", "1234.50"], ["user_2", "2469.00"]];
+    const t = copyTable(toggle(single({ r: 0, c: 0 }), { r: 1, c: 1 }), (r, c) => grid[r][c], HOLE_TOKEN);
+    const x = { names: ["user_name", "amount"], types: ["text", "numeric"], vals: t.vals, keys: t.rows.map((r) => [["id", r + 1] as [string, number]]), tableRef: "t", header: false, dialect: dialectOf("postgres") };
+    expect(extractRows("SQL Updates", x)).toBe("UPDATE t SET user_name = 'user_1' WHERE id = '1';\nUPDATE t SET amount = '2469.00' WHERE id = '2';");
+    expect(extractRows("Where Clause", x)).toBe("(user_name = 'user_1') OR\n(amount = '2469.00')");
+    expect(extractRows("SQL Inserts", x)).toBe("INSERT INTO t (user_name) VALUES ('user_1');\nINSERT INTO t (amount) VALUES ('2469.00');");
+    expect(extractRows("SQL IN List", x)).toBe("('user_1', 2469.00)");
+    expect(JSON.parse(extractRows("JSON", x))).toEqual([{ user_name: "user_1" }, { amount: "2469.00" }]);
+    expect(extractRows("CSV", x)).toBe("user_1,\n,2469.00");
+  });
+
+  it("forEachCell stops when the callback returns false", () => {
+    const seen: string[] = [];
+    forEachCell(single({ r: 0, c: 0 }, { r: 9, c: 9 }), (r, c) => (seen.push(`${r},${c}`), seen.length < 3 ? undefined : false));
+    expect(seen).toEqual(["0,0", "0,1", "0,2"]);
   });
 
   it("overlapping ranges list each cell once", () => {
