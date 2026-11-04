@@ -22,6 +22,7 @@ export const ScreenDataSourceForm = { ...by("Data source form"), name: "Screen �
 export const ScreenKeymap = { ...by("Keymap (F1)"), name: "Screen · Keymap (F1)" };
 export const ScreenWorkspaces = { ...by("Workspaces"), name: "Screen · Workspaces" };
 export const ScreenConsole = { ...by("Console & result"), name: "Screen · Console & result" };
+export const ScreenGridMarked = { ...by("Grid: marked rows"), name: "Screen · Grid: marked rows (m)" };
 export const ScreenChart = { ...by("Chart"), name: "Screen · Chart" };
 export const ScreenProductionLog = { ...by("Production log"), name: "Screen · Production log" };
 export const ScreenProductionLogNote = { ...by("Production log · note"), name: "Screen · Production log · note" };

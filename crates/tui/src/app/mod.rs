@@ -437,6 +437,7 @@ pub enum Action {
     SetNull,
     ExportCsv,
     CopyInList,
+    MarkRow,
     ValueEditor,
     FindSimilar,
     RagSearch,

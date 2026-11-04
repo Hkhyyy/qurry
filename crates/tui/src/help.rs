@@ -40,7 +40,7 @@ pub const HELP: &[(&str, &[(&str, &str)])] = &[
         ("s", "Sort by the selected column: ▲ → ▼ → off (table data: ORDER BY · results: loaded rows)"),
         ("w or / · o", "Edit WHERE · ORDER BY (table data)"),
         ("r", "Reload (table data)"),
-        ("y  ⌘C", "Copy cell value (a selected range: as TSV, pastes into spreadsheets as cells)"),
+        ("y  ⌘C", "Copy cell value (a selected range or marked rows: as TSV, pastes into spreadsheets as cells)"),
         ("⌘V", "Paste into cells from the selected one (tabs / lines fill several; extra lines add rows; table data)"),
         ("Esc", "Back (query results: to the editor)"),
     ]),
