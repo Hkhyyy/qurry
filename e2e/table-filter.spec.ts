@@ -62,7 +62,7 @@ test("ORDER BY: columns, then ASC / DESC after a column; ⇥ and a click pick, t
   expect(await order.evaluate((e: HTMLInputElement) => e.selectionStart)).toBe(7);
 });
 
-test("⎋ closes the list first, then resets the field", async ({ page }) => {
+test("⎋ closes the list first, ⌃Space reopens it, then ⎋ resets the field", async ({ page }) => {
   const where = field(page, "WHERE");
   await where.click();
   await where.pressSequentially("id > 1 and us");
@@ -70,6 +70,12 @@ test("⎋ closes the list first, then resets the field", async ({ page }) => {
   await page.keyboard.press("Escape");
   await expect(list(page)).toHaveCount(0);
   await expect(where).toHaveValue("id > 1 and us");
+  // ⌃Space asks again at the caret (as in the console); ⎋ closes it again
+  await page.keyboard.press("Control+Space");
+  await expect(rows(page).first()).toHaveText("user_name");
+  await expect(where).toHaveValue("id > 1 and us");
+  await page.keyboard.press("Escape");
+  await expect(list(page)).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(where).toHaveValue("");
   await expect(where).not.toBeFocused();

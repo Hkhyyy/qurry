@@ -175,6 +175,13 @@ function FilterField(p: { icon: ReactNode; kw: "WHERE" | "ORDER BY"; value: stri
           onMouseDown={close}
           onKeyDown={(e) => {
             e.stopPropagation();
+            // ⌃Space asks at the caret, as in the console (reopens the list after ⎋)
+            if (e.key === " " && e.ctrlKey) {
+              e.preventDefault();
+              const el = e.target as HTMLInputElement;
+              void ask(el.value, el.selectionStart ?? el.value.length);
+              return;
+            }
             if (open) {
               const k = e.key === "Tab" ? "pick" : listKey(e.key, active, list.items.length);
               if (k === "pick") pick(list.items[active]);
