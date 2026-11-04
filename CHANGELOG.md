@@ -34,6 +34,7 @@ What changed in each Qurry version, for people who use it. The format follows [K
 - The database pickers of consoles, Redis browsers and Database Admin reports (and the console's schema picker) list their databases as soon as the tab is shown: the first click used to open a list with only the current database, the rest arriving too late.
 - Console completion no longer offers column values in a JOIN's `ON` condition (`on m.admin_user_idx = `), where the other side is usually a column: the statement's columns complete there; a `WHERE` after the join still suggests values.
 - Console Output keeps its newest line in view while following: new lines, long wrapped lines (TUI) and a pane made shorter or narrower (#92).
+- **Manage Shown Schemas**: with **All schemas** on, unchecking one schema used to do nothing until All was unchecked first. Now All turns off and the other listed schemas stay checked; checking every schema again turns All back on (GUI and TUI, as in DataGrip).
 
 ## [0.3.0] - 2026-11-04
 

@@ -121,7 +121,15 @@ impl ScopeEditor {
             Row::Schema { db, name, .. } => (db, name),
         };
         let mut cur = self.sch_list(&db);
-        flip(&mut cur, &x);
+        if x == SCOPE_ALL || x == SCOPE_DEFAULT {
+            flip(&mut cur, &x);
+        } else {
+            let listed: Vec<String> = match self.loaded.get(&db) {
+                Some(Ok(list)) => list.iter().map(|s| s.name.clone()).collect(),
+                _ => vec![],
+            };
+            cur = toggle_schema(cur, &x, &listed);
+        }
         if cur.is_empty() {
             self.schemas.remove(&db);
         } else {
@@ -166,6 +174,27 @@ impl ScopeEditor {
             schemas: self.schemas.iter().filter(|(_, v)| !all(v)).map(|(k, v)| (k.clone(), v.clone())).collect(),
         }
     }
+}
+
+/// One click on a schema line (DataGrip rules, same as the GUI's src/lib/schemaScope.ts): with All on, unchecking a
+/// schema keeps the other listed ones checked (Default schema as it was); checking the last unchecked one turns All back on
+fn toggle_schema(mut cur: Vec<String>, name: &str, listed: &[String]) -> Vec<String> {
+    if cur.iter().any(|x| x == SCOPE_ALL) {
+        cur.retain(|x| x == SCOPE_DEFAULT);
+        cur.extend(listed.iter().filter(|x| *x != name).cloned());
+        return cur;
+    }
+    if let Some(i) = cur.iter().position(|x| x == name) {
+        cur.remove(i);
+    } else {
+        cur.push(name.to_string());
+    }
+    let has_default = cur.iter().any(|x| x == SCOPE_DEFAULT);
+    if listed.iter().all(|s| cur.contains(s) || (s == "public" && has_default)) {
+        cur.retain(|x| x == SCOPE_DEFAULT);
+        cur.push(SCOPE_ALL.into());
+    }
+    cur
 }
 
 #[cfg(test)]
@@ -235,11 +264,12 @@ mod tests {
         );
         // With no filter, All schemas is checked
         assert_eq!(e.check(&Row::AllSchemas("shop".into())), Check::On);
-        // Same order as the GUI: turn on sales and turn off All schemas (turning everything off goes back to "all")
-        select(&mut e, Row::Schema { db: "shop".into(), name: "sales".into(), system: false });
+        // Same as the GUI: unchecking the other schemas under All schemas leaves only sales
+        select(&mut e, Row::Schema { db: "shop".into(), name: "pg_catalog".into(), system: true });
         e.toggle();
-        select(&mut e, Row::AllSchemas("shop".into()));
+        select(&mut e, Row::Schema { db: "shop".into(), name: "public".into(), system: false });
         e.toggle();
+        assert_eq!(e.check(&Row::AllSchemas("shop".into())), Check::Off);
         assert_eq!(e.check(&Row::Schema { db: "shop".into(), name: "public".into(), system: false }), Check::Off);
         assert_eq!(e.scope().schemas.get("shop"), Some(&vec!["sales".to_string()]));
         // On a schema line, ← goes to the DB, and another ← collapses it
@@ -263,6 +293,31 @@ mod tests {
         assert_eq!(e.check(&Row::Schema { db: "shop".into(), name: "public".into(), system: false }), Check::On);
         assert_eq!(e.check(&Row::Schema { db: "shop".into(), name: "sales".into(), system: false }), Check::Off);
         assert_eq!(e.scope(), scope);
+    }
+
+    /// DataGrip rules: with All schemas on, unchecking one schema turns All off and keeps the others checked
+    /// (Default schema as it was); checking the last unchecked one turns All back on
+    #[test]
+    fn unchecking_a_schema_under_all_keeps_the_others() {
+        let mut e = editor(Scope::default());
+        select(&mut e, Row::Db("shop".into()));
+        e.expand();
+        e.set_schemas("shop", Ok(sch(&[("public", false), ("sales", false), ("pg_catalog", true)])));
+        select(&mut e, Row::DefaultSchema("shop".into()));
+        e.toggle();
+        let s = |name: &str| Row::Schema { db: "shop".into(), name: name.into(), system: name == "pg_catalog" };
+        select(&mut e, s("sales"));
+        e.toggle();
+        assert_eq!(e.check(&Row::AllSchemas("shop".into())), Check::Off);
+        assert_eq!(e.check(&Row::DefaultSchema("shop".into())), Check::On);
+        assert_eq!(e.check(&s("sales")), Check::Off);
+        assert_eq!(e.check(&s("public")), Check::On);
+        assert_eq!(e.check(&s("pg_catalog")), Check::On);
+        assert_eq!(e.scope().schemas.get("shop"), Some(&vec![SCOPE_DEFAULT.to_string(), "public".into(), "pg_catalog".into()]));
+        // Checking it again: every schema is checked, so All comes back (not the long list)
+        e.toggle();
+        assert_eq!(e.check(&Row::AllSchemas("shop".into())), Check::On);
+        assert_eq!(e.scope().schemas.get("shop"), Some(&vec![SCOPE_DEFAULT.to_string(), SCOPE_ALL.to_string()]));
     }
 
     /// On failure, show the error on that line

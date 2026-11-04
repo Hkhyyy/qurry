@@ -169,3 +169,19 @@ test("⌦ on a range of Redis keys asks no Drop… (DROP isn't a Redis command)"
   await expect(status(page)).toHaveText(/^Works on one node/);
   await expect(dialog(page)).toHaveCount(0);
 });
+
+test("Manage Shown Schemas: unchecking one schema under All schemas keeps the others; checking it again turns All back on", async ({ page }) => {
+  await page.locator(".ws-explorer.on .scope-badge", { hasText: / of 3$/ }).first().click();
+  const popup = page.locator(".scope-popup");
+  const box = (name: string | RegExp) => popup.getByRole("treeitem", { name, exact: true }).getByRole("checkbox");
+  await expect(box("All schemas")).toBeChecked();
+  await box("billing").click();
+  await expect(box("All schemas")).not.toBeChecked();
+  await expect(box("billing")).not.toBeChecked();
+  await expect(box(/^pg_catalog/)).toBeChecked();
+  await expect(box("public (Default schema)")).toBeChecked();
+  await expect(box("Default schema (public)")).not.toBeChecked();
+  await box("billing").click();
+  await expect(box("All schemas")).toBeChecked();
+  await expect(box("billing")).toBeChecked();
+});

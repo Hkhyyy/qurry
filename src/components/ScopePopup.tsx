@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ConnectionView, meta, Scope, SCOPE_ALL, SCOPE_DEFAULT, SchemaInfo, targetId } from "../lib/api";
+import { toggleSchema } from "../lib/schemaScope";
 import { Badge, Checkbox, Hint, IconButton, Notice, Spacer, Text, Toolbar, TreeRow } from "../ui";
 
 /**
@@ -94,8 +95,8 @@ export function ScopePopup({ conn, dbs, defaultDb, focusDb, x, y, onApply, onClo
       return { ...s, schemas: all };
     });
   const toggleSch = (db: string, name: string) => {
-    const cur = schList(db);
-    setSch(db, cur.includes(name) ? cur.filter((x) => x !== name) : [...cur, name]);
+    const sch = schemas[db];
+    setSch(db, toggleSchema(schList(db), name, Array.isArray(sch) ? sch.map((s) => s.name) : []));
   };
   const schChecked = (db: string, name: string) => {
     const cur = schList(db);
