@@ -59,6 +59,8 @@ pub const EDIT_NO_TABLE: &str = "Read-only: the result doesn't come from a table
 pub const EDIT_MANY_TABLES: &str = "Read-only: the columns come from more than one table.";
 /// MySQL: the select list didn't line up with the table's columns
 pub const EDIT_UNMATCHED: &str = "Read-only: Qurry couldn't match the result's columns to the table's.";
+/// FOR UPDATE / FOR SHARE / LOCK IN SHARE MODE: the console's transaction holds the row locks the edits would wait on
+pub const EDIT_LOCKS: &str = "Read-only: the statement locks its rows, and edits are saved on another connection.";
 /// Driver plugins don't say where a result column comes from
 pub const EDIT_DRIVER: &str = "Read-only: console results can be edited on PostgreSQL and MySQL only.";
 
@@ -89,6 +91,12 @@ pub fn edit_no_pk(table: &str) -> String {
 
 pub fn edit_missing_pk(pk: &[String]) -> String {
     format!("Read-only: the result doesn't include the primary key ({}).", pk.join(", "))
+}
+
+/// A temporary table lives in the console's session only: edits saved on another connection would miss it (PostgreSQL) or change
+/// the base table it shadows (MySQL)
+pub fn edit_temporary(table: &str) -> String {
+    format!("Read-only: {table} is a temporary table (edits are saved on another connection).")
 }
 
 /// what: "view", "materialized view", "foreign table" …

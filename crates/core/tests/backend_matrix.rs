@@ -982,6 +982,8 @@ async fn console_edit_cases(st: &AppState, s: &str, count: &str) {
         (format!("select id, name, name as again from {s}.items"), ro(e::edit_duplicate("name"))),
         (format!("select * from {s}.nokey"), ro(e::edit_no_pk(&format!("{s}.nokey")))),
         (format!("select * from (select * from {s}.items) x"), ro(e::EDIT_NOT_PLAIN.into())),
+        // A locking read: in Auto mode the cursor's transaction keeps the row locks the edits (another connection) would wait on
+        (format!("select * from {s}.items for update"), ro(e::EDIT_LOCKS.into())),
         ("select 1 as id".to_string(), ro(e::EDIT_NO_TABLE.into())),
     ];
     for (sql, want) in cases {
@@ -1054,6 +1056,9 @@ async fn pg_console_result_edit_target() {
     q_tab(&st, "edit-pg", &format!("set search_path = {s}")).await;
     let r = q_tab(&st, "edit-pg", "select \"Note\", \"Id\" from \"Mixed\"").await;
     assert!(matches!(&r.editable, Some(Editable::Table(t)) if t.schema == s && t.table == "Mixed" && t.pk == ["Id"] && t.columns == ["Note", "Id"]), "{r:?}");
+    // A temporary table lives in the console's session: edits saved on another connection can't reach it
+    q_tab(&st, "edit-pg", "create temporary table tmp_items (id int primary key, name text)").await;
+    assert_eq!(q_tab(&st, "edit-pg", "select * from tmp_items").await.editable, Some(Editable::ReadOnly(e::edit_temporary("tmp_items"))));
     st.close_session("edit-pg".into()).await.unwrap();
     q(&st, &format!("drop schema {s} cascade")).await;
 }
@@ -1082,7 +1087,15 @@ async fn mysql_console_result_edit_target() {
     let r = q_tab(&st, "edit-my", "select id, current_date as d from items").await;
     assert_eq!(r.editable, Some(Editable::ReadOnly(e::edit_computed("d"))));
     q_tab(&st, "edit-my", "create temporary table tmp (id int primary key)").await;
-    assert_eq!(q_tab(&st, "edit-my", "select * from tmp").await.editable, None);
+    assert_eq!(q_tab(&st, "edit-my", "select * from tmp").await.editable, Some(Editable::ReadOnly(e::edit_temporary(&format!("{s}.tmp")))));
+    // A temporary table shadowing a base table of the same name: the console reads the temporary one, while edits (saved on
+    // another connection) would change the base table
+    q_tab(&st, "edit-my", "create temporary table items (id int primary key, name varchar(20), qty int)").await;
+    q_tab(&st, "edit-my", "insert into items values (1, 'temp', 9)").await;
+    let r = q_tab(&st, "edit-my", "select * from items").await;
+    assert_eq!(r.rows[0][1], json!("temp"));
+    assert_eq!(r.editable, Some(Editable::ReadOnly(e::edit_temporary(&format!("{s}.items")))));
+    assert_eq!(q_tab(&st, "edit-my", &format!("select * from {s}.items")).await.editable, Some(Editable::ReadOnly(e::edit_temporary(&format!("{s}.items")))));
     st.close_session("edit-my".into()).await.unwrap();
     q(&st, &format!("drop database {s}")).await;
 }

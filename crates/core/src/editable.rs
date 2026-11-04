@@ -25,14 +25,7 @@ pub(crate) async fn check(pool: &Pool, s: &mut Session, sql: &str, columns: &[Co
     let names: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
     match (pool, s) {
         (Pool::Pg(p), Session::Pg(ps)) => bounded(pg(p, &ps.origins, &names)).await,
-        (Pool::My(p), Session::My(ms)) => {
-            // The table is in the console's database unless the statement names one (USE changes it per session)
-            let db = match &shape.schema {
-                Some(d) => d.clone(),
-                None => ms.database().await.filter(|d| !d.is_empty())?,
-            };
-            bounded(mysql(p, &db, shape, &names)).await
-        }
+        (Pool::My(p), Session::My(ms)) => bounded(mysql(p, ms, shape, &names)).await,
         _ => None,
     }
 }
@@ -42,8 +35,8 @@ async fn bounded(f: impl Future<Output = Option<Editable>>) -> Option<Editable> 
     tokio::time::timeout(std::time::Duration::from_secs(3), f).await.ok().flatten()
 }
 
-/// The table's schema, name, relkind, column numbers and names (table order), primary key columns
-const PG_TABLE: &str = "select n.nspname::text, c.relname::text, c.relkind::text, \
+/// The table's schema, name, relkind, persistence, column numbers and names (table order), primary key columns
+const PG_TABLE: &str = "select n.nspname::text, c.relname::text, c.relkind::text, c.relpersistence::text, \
        array(select a.attnum from pg_catalog.pg_attribute a where a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped order by a.attnum), \
        array(select a.attname::text from pg_catalog.pg_attribute a where a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped order by a.attnum), \
        array(select a.attname::text from pg_catalog.pg_constraint k join pg_catalog.pg_attribute a on a.attrelid = k.conrelid and a.attnum = any(k.conkey) \
@@ -62,8 +55,12 @@ async fn pg(p: &sqlx::PgPool, origins: &[Option<(u32, i16)>], names: &[String]) 
     if origins.iter().flatten().any(|o| o.0 != oid) {
         return Some(Editable::ReadOnly(e::EDIT_MANY_TABLES.into()));
     }
-    type Row = (String, String, String, Vec<i16>, Vec<String>, Vec<String>);
-    let (schema, table, relkind, nums, cols, pk): Row = sqlx::query_as(PG_TABLE).bind(sqlx::postgres::types::Oid(oid)).persistent(false).fetch_optional(p).await.ok()??;
+    type Row = (String, String, String, String, Vec<i16>, Vec<String>, Vec<String>);
+    let (schema, table, relkind, persistence, nums, cols, pk): Row = sqlx::query_as(PG_TABLE).bind(sqlx::postgres::types::Oid(oid)).persistent(false).fetch_optional(p).await.ok()??;
+    // A temporary table exists in the console's session only: the edits, saved on another connection, can't reach it
+    if persistence == "t" {
+        return Some(Editable::ReadOnly(e::edit_temporary(&table)));
+    }
     let not_table = match relkind.as_str() {
         "r" | "p" => None,
         "v" => Some("view"),
@@ -78,18 +75,28 @@ async fn pg(p: &sqlx::PgPool, origins: &[Option<(u32, i16)>], names: &[String]) 
 
 /// MySQL: sqlx doesn't pass on the column definitions' original table and column, so the select list is lined up with the table's
 /// columns (result_edit::mysql_sources)
-async fn mysql(p: &sqlx::MySqlPool, db: &str, shape: OneTable, names: &[String]) -> Option<Editable> {
+async fn mysql(p: &sqlx::MySqlPool, ms: &mut crate::mysql::MySession, shape: OneTable, names: &[String]) -> Option<Editable> {
+    // The table is in the console's database unless the statement names one (USE changes it per session)
+    let db = match &shape.schema {
+        Some(d) => d.clone(),
+        None => ms.database().await.filter(|d| !d.is_empty())?,
+    };
+    // A temporary table (asked on the console's session, the only one that sees it) may hide a base table of the same name:
+    // the edits, saved on another connection, would change that base table's rows
+    if ms.is_temporary(&db, &shape.table).await? {
+        return Some(Editable::ReadOnly(e::edit_temporary(&format!("{db}.{}", shape.table))));
+    }
     let rows: Vec<(String, String, String, String, String)> = sqlx::query_as(
         "select cast(t.table_schema as char), cast(t.table_name as char), cast(t.table_type as char), cast(c.column_name as char), cast(c.column_key as char) \
          from information_schema.tables t join information_schema.columns c on c.table_schema = t.table_schema and c.table_name = t.table_name \
          where t.table_schema = ? and t.table_name = ? order by c.ordinal_position",
     )
-    .bind(db)
+    .bind(&db)
     .bind(&shape.table)
     .fetch_all(p)
     .await
     .ok()?;
-    // Not found: a temporary table (not in information_schema), or dropped since
+    // Not found: dropped since (a temporary table was caught before)
     let first = rows.first()?;
     let not_table = match first.2.as_str() {
         "BASE TABLE" => None,

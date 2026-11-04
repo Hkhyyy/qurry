@@ -1,5 +1,5 @@
 use super::*;
-use qurry_core::editable::Editable;
+use qurry_core::editable::{EditTarget, Editable};
 use qurry_shared::errors;
 
 impl App {
@@ -235,20 +235,20 @@ impl App {
 
     /// Where the active grid's edits go: a table tab's table, or the table a console result comes from (QueryResult::editable).
     /// Err: why the grid can't be edited ("" when the tab has no editable grid at all)
-    pub(crate) fn edit_to(&self) -> Result<EditTo, String> {
+    pub(crate) fn edit_to(&self) -> Result<EditTarget, String> {
         let none = || String::new();
         let t = self.tabs.get(self.active).ok_or_else(none)?;
         match &t.kind {
             TabKind::Table(tt) => {
                 let g = tt.grid.as_ref().ok_or_else(none)?;
-                Ok(EditTo { schema: tt.schema.clone(), table: tt.table.clone(), pk: tt.pk.clone(), columns: g.result.columns.iter().map(|c| c.name.clone()).collect() })
+                Ok(EditTarget { schema: tt.schema.clone(), table: tt.table.clone(), pk: tt.pk.clone(), columns: g.result.columns.iter().map(|c| c.name.clone()).collect() })
             }
             TabKind::Console(c) => {
                 let g = c.grid.as_ref().filter(|_| !c.show_output).ok_or_else(none)?;
                 match &g.result.editable {
                     // Edits save in a transaction of their own (execute_batch): not while the console's transaction is open
                     Some(Editable::Table(_)) if c.tx_manual || c.in_tx => Err(errors::CONSOLE_IN_TX.into()),
-                    Some(Editable::Table(e)) => Ok(EditTo { schema: e.schema.clone(), table: e.table.clone(), pk: e.pk.clone(), columns: e.columns.clone() }),
+                    Some(Editable::Table(e)) => Ok(e.clone()),
                     Some(Editable::ReadOnly(why)) => Err(why.clone()),
                     None => Err(errors::CONSOLE_READ_ONLY.into()),
                 }
@@ -392,12 +392,4 @@ impl App {
             Err(e) => a.notice("Submit failed".into(), e),
         });
     }
-}
-
-/// Where a grid's edits go (App::edit_to): result column i is the table's column `columns[i]`
-pub(crate) struct EditTo {
-    pub schema: String,
-    pub table: String,
-    pub pk: Vec<String>,
-    pub columns: Vec<String>,
 }

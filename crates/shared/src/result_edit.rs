@@ -87,6 +87,9 @@ pub fn one_table_select(sql: &str, kind: DbKind) -> Result<OneTable, String> {
             "having" => return Err(e::edit_combined("HAVING")),
             "join" | "straight_join" => return Err(e::EDIT_MANY_TABLES.into()),
             "into" => return Err(e::EDIT_NOT_PLAIN.into()),
+            // FOR UPDATE / SHARE / NO KEY UPDATE / KEY SHARE, MySQL LOCK IN SHARE MODE: in Auto mode the cursor's transaction keeps
+            // the row locks while the result is open, and the edits, saved on another connection, would wait on them
+            "for" | "lock" => return Err(e::EDIT_LOCKS.into()),
             "distinct" | "distinctrow" if i == 1 => return Err(e::edit_combined("DISTINCT")),
             _ => {}
         }
@@ -164,6 +167,11 @@ fn item(it: &[Tok], sql: &str, kind: DbKind) -> Item {
         i += 1;
     }
     let col = name(&it[i - 1], sql, kind);
+    // A string right after the word is a literal with a prefix, not an alias: N'…' / n'…' (national), _utf8mb4'…' or
+    // _utf8mb4 '…' (charset introducer, a space allowed)
+    if i == 1 && it.get(1).is_some_and(|a| a.text == "'" && (a.start == it[0].end || it[0].text.starts_with('_'))) {
+        return Item::Other;
+    }
     let alias_at = if is(i, "as") { i + 1 } else { i };
     match it.get(alias_at) {
         None if alias_at == i => Item::Column { name: col, alias: None },
@@ -250,7 +258,7 @@ mod tests {
         assert_eq!(r.schema.as_deref(), Some("public"));
         assert_eq!(r.table, "users");
         assert_eq!(r.items, vec![col("id"), Item::Column { name: "Name".into(), alias: Some("n".into()) }, Item::Column { name: "email".into(), alias: Some("e".into()) }]);
-        let r = ok("select `Id`, t.* , shop.t.name from shop.`My T` as t for update", MY);
+        let r = ok("select `Id`, t.* , shop.t.name from shop.`My T` as t limit 10", MY);
         assert_eq!((r.schema.as_deref(), r.table.as_str()), (Some("shop"), "My T"));
         assert_eq!(r.items, vec![col("Id"), Item::All, col("name")]);
         // -- comment and /* */ before it, a trailing comment after the ;
@@ -299,6 +307,13 @@ mod tests {
         assert_eq!(why("select id from t partition (p0)", MY), e::EDIT_NOT_PLAIN);
         // Words inside strings or quotes don't count
         one_table_select("select id, \"group\" from t where note = 'a join b union c'", PG).unwrap();
+        // Locking reads: in Auto mode the cursor's transaction holds the locks while edits save on another connection
+        for q in ["select * from t for update", "select * from t where id = 1 for share", "select * from t for no key update", "select * from t for key share", "select * from t a for update of a nowait"] {
+            assert_eq!(why(q, PG), e::EDIT_LOCKS, "{q}");
+        }
+        for q in ["select * from t lock in share mode", "select * from t where id > 0 for share", "select * from t for update skip locked"] {
+            assert_eq!(why(q, MY), e::EDIT_LOCKS, "{q}");
+        }
     }
 
     fn table(cols: &[&str], pk: &[&str]) -> TableInfo {
@@ -348,6 +363,13 @@ mod tests {
         assert_eq!(mysql_sources(&q("select nope from users"), &s(&["nope"]), &t), Err(e::EDIT_UNMATCHED.into()));
         assert_eq!(mysql_sources(&q("select id from users"), &s(&["id", "x"]), &t), Err(e::EDIT_UNMATCHED.into()));
         assert_eq!(mysql_sources(&q("select id as a from users"), &s(&["b"]), &t), Err(e::EDIT_UNMATCHED.into()));
+        // A string right after a word is a literal with a prefix (N'…' national, _utf8mb4'…' charset), not a column with an alias
+        let col_n = Item::Column { name: "n".into(), alias: Some("zzz".into()) };
+        assert_eq!(q("select id, N'zzz' from users"), vec![col("id"), Item::Other]);
+        assert_eq!(q("select id, n'zzz' from users"), vec![col("id"), Item::Other]);
+        assert_eq!(q("select id, _utf8mb4'zzz' from users"), vec![col("id"), Item::Other]);
+        assert_eq!(q("select id, _utf8mb4 'zzz' from users"), vec![col("id"), Item::Other]);
+        assert_eq!(q("select id, n 'zzz' from users"), vec![col("id"), col_n]);
     }
 
     #[test]
