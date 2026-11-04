@@ -189,6 +189,7 @@ export const MenuItems: S = {
       <MenuItem label="New Query Console" shortcut="⇧⌘L" />
       <MenuItem label="Diagrams" hasSubmenu />
       <MenuItem label="Disabled" disabled />
+      <MenuItem label="Rename…" shortcut="⇧F6" disabled title="Works on one node: click a node without ⌘ or ⇧ to select only it" />
       <MenuSeparator />
       <MenuLabel>Add to this workspace:</MenuLabel>
       <MenuItem label="Remove Data Source" danger />
@@ -207,6 +208,8 @@ export const TreeRows: S = {
       <TreeRow depth={3} open icon={<FolderIcon />} label="tables" sub="9" />
       <TreeRow depth={4} icon={<TableIcon />} label="users" selected />
       <TreeRow depth={4} icon={<TableIcon />} label="orders" sub="주문" />
+      {/* Several selected (⌘-click / ⇧-click): each selected row has the selection color */}
+      <TreeRow depth={4} icon={<TableIcon />} label="payments" selected />
       <TreeRow depth={0} leaf leading={<Checkbox checked onChange={() => {}} />} label="All schemas" />
       <TreeRow depth={1} leaf icon={<Badge color="#5f9ea0">STRING</Badge>} iconClass="rd-type" label="session:abc" trailing="59m 0s" />
     </Frame>
