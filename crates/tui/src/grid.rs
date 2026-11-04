@@ -104,7 +104,7 @@ pub fn cell_text(v: &Value) -> String {
     }
 }
 pub(crate) use qurry_core::format::{is_time_type, pad_frac};
-use qurry_core::format::{cell_align, cell_class, is_json_type, json_spans, type_class, Align, Alignments, JsonKind, ValueClass};
+use qurry_core::format::{cell_align, cell_class, column_class, is_json_type, json_spans, type_class, Align, Alignments, JsonKind, ValueClass};
 use qurry_core::extract::{self, Format, Rows};
 use qurry_core::store::DbKind;
 
@@ -500,6 +500,8 @@ impl Grid {
         )
         .style(Style::default().bg(crate::kit::SURFACE));
         let tclass: Vec<ValueClass> = cols.iter().map(|&c| type_class(&self.result.columns[c].type_name)).collect();
+        // What a NULL on "Column type" follows (an untyped column goes by its values)
+        let nclass: Vec<ValueClass> = cols.iter().map(|&c| column_class(&self.result.columns[c].type_name, self.result.rows.iter().filter_map(|row| row.get(c)))).collect();
         let tjson: Vec<bool> = cols.iter().map(|&c| is_json_type(&self.result.columns[c].type_name)).collect();
         let sel = self.sel_rect();
         let end = (self.row_off + body_h).min(self.rows());
@@ -519,7 +521,7 @@ impl Grid {
                     (' ', Color::DarkGray)
                 };
                 let num = Cell::from(format!("{:>w$}{mark}", r + 1, w = num_w as usize - 1)).style(Style::default().fg(num_c));
-                Row::new(std::iter::once(num).chain(cols.iter().zip(&shown_w).zip(&tclass).zip(&tjson).map(|(((&c, &w), &tc), &json)| {
+                Row::new(std::iter::once(num).chain(cols.iter().zip(&shown_w).zip(&tclass).zip(&nclass).zip(&tjson).map(|((((&c, &w), &tc), &nc), &json)| {
                     let edited = self.edits.contains_key(&(r, c));
                     let v = self.shown(r, c, self.widths[c] as usize + 1);
                     let text = match &v {
@@ -529,7 +531,7 @@ impl Grid {
                     };
                     let class = self.class(r, c, tc);
                     let shown_len = text.len();
-                    let text = pad(text, w as usize, cell_align(tc, class, aligns));
+                    let text = pad(text, w as usize, cell_align(nc, class, aligns));
                     // JSON in colors unless the row's changes color the cell (edited · deleted · added)
                     let raw = self.result.rows.get(r).and_then(|row| row.get(c)).and_then(Value::as_str).filter(|_| json && class == ValueClass::JsonBinary && !edited && !deleted && !added);
                     let line = match raw {
@@ -940,5 +942,11 @@ mod tests {
         assert_eq!(qty[1].0, 0, "NULL on the left");
         assert_eq!(qty[0].0, (w(&g, 1) - 5) / 2, "centered: {qty:?}");
         assert_eq!(cells(&mut g, &back, 2).iter().map(|x| x.0).collect::<Vec<_>>(), [0, 0, 0]);
+        // Columns without a type name (SQLite `sum(x)`, MongoDB): a NULL follows the values, so it lines up with numbers
+        let rows = vec![vec![json!("a"), Value::Null], vec![Value::Null, json!(12345)], vec![json!("b"), json!(7)]];
+        let mut g = Grid::new(QueryResult { columns: vec![col("g", ""), col("sum(x)", "")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None });
+        let sum = cells(&mut g, &none, 1);
+        assert!(sum.iter().all(|(lead, t)| lead + t.len() == w(&g, 1)), "{sum:?}");
+        assert_eq!(cells(&mut g, &none, 0).iter().map(|x| x.0).collect::<Vec<_>>(), [0, 0, 0]);
     }
 }

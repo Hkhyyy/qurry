@@ -241,7 +241,16 @@ pub fn align(class: ValueClass, overrides: &Alignments) -> Align {
     overrides.get(&class).copied().unwrap_or(class.default_align())
 }
 
-/// Where a cell of `class` sits in a column of `column` (its `type_class`): its class's setting, or for a NULL on "Column type"
+/// The class a NULL on "Column type" follows: the column's `type_class`, or for a column without a type name (SQLite expressions,
+/// MongoDB) the class of its first non-null value; with none, Number, so such a NULL stays on the right as in 0.3.0
+pub fn column_class<'a>(type_name: &str, mut values: impl Iterator<Item = &'a Value>) -> ValueClass {
+    if !type_name.trim().is_empty() {
+        return type_class(type_name);
+    }
+    values.find(|v| !v.is_null()).map_or(ValueClass::Number, |v| cell_class(ValueClass::String, v))
+}
+
+/// Where a cell of `class` sits in a column of `column` (its `column_class`): its class's setting, or for a NULL on "Column type"
 /// the column's (a `type_class` is never NULL, so this never returns `Align::Column`)
 pub fn cell_align(column: ValueClass, class: ValueClass, overrides: &Alignments) -> Align {
     match align(class, overrides) {
@@ -314,6 +323,16 @@ mod tests {
         let right = alignments(&serde_json::json!({ "null": "right" }));
         assert_eq!(types.map(|t| null_in(t, &right)), [Align::Right; 5]);
         assert_eq!(cell_align(ValueClass::String, ValueClass::Number, &left), Align::Right);
+        // A column without a type name (SQLite expression, MongoDB): a NULL follows the column's first non-null value
+        use serde_json::json;
+        let untyped = |vals: &[Value], o: &Alignments| cell_align(column_class("", vals.iter()), ValueClass::Null, o);
+        assert_eq!(untyped(&[Value::Null, json!(3), json!("a")], &none), Align::Right);
+        assert_eq!(untyped(&[json!("a"), json!(3)], &none), Align::Left);
+        assert_eq!(untyped(&[json!(true)], &none), Align::Left);
+        assert_eq!(untyped(&[Value::Null], &none), Align::Right);
+        assert_eq!(untyped(&[json!(3)], &left), Align::Left);
+        // A typed column goes by its type, whatever its values
+        assert_eq!(column_class("text", [json!(3)].iter()), ValueClass::String);
     }
 
     #[test]

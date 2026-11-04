@@ -175,8 +175,8 @@ const api = {
   /** What a panel edit writes to the cell, or why a json / jsonb column refuses it */
   valueToApply: (typeName: string, original: string, edited: string): { Ok: string } | { Err: string } => wasm.valueToApply(typeName, original, edited),
   alignOf: (cls: ValueClass, overrides: Alignments): Align => wasm.alignOf(cls, overrides),
-  /** Where a cell of `cls` sits in a column of `typeName` */
-  cellAlign: (typeName: string, cls: ValueClass, overrides: Alignments): CellAlign => wasm.cellAlign(typeName, cls, overrides),
+  /** Where a cell of `cls` sits in a column of `typeName` whose first non-null value is `first` (an untyped column goes by it) */
+  cellAlign: (typeName: string, first: Cell, cls: ValueClass, overrides: Alignments): CellAlign => wasm.cellAlign(typeName, first, cls, overrides),
   isJsonType: (typeName: string): boolean => wasm.isJsonType(typeName),
   /** [start, end, kind, …]: UTF-16 ranges, kind an index of qurry_shared::format::JsonKind */
   jsonSpans: (text: string, maxChars: number): Uint32Array => wasm.jsonSpans(text, maxChars),

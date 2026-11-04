@@ -40,7 +40,8 @@ describe("grid alignment", () => {
   it("classes and default alignments match the shared golden (the TUI's rule)", () => {
     for (const e of golden) {
       const cls = cellClasses(e.type)(e.value as Cell);
-      expect({ cls, align: alignTable({}, e.type)[cls] }, `${e.type} ${JSON.stringify(e.value)}`).toEqual({ cls: e.class, align: e.align });
+      const column = ("column" in e ? (e.column as Cell[]) : [e.value as Cell]).map((v) => [v]);
+      expect({ cls, align: alignTable({}, e.type, column)[cls] }, `${e.type} ${JSON.stringify(e.value)}`).toEqual({ cls: e.class, align: e.align });
     }
   });
 
@@ -55,6 +56,9 @@ describe("grid alignment", () => {
     expect(alignTable({}, "text")).toEqual({ string: "left", number: "right", dateTime: "left", boolean: "left", null: "left", jsonBinary: "left" });
     // It follows the column's class as the user set it
     expect(nullIn("numeric", { number: "center" })).toBe("center");
+    // A column without a type name (SQLite expression, MongoDB) goes by its first non-null value
+    expect(alignTable({}, "", [[null], [12], [7]]).null).toBe("right");
+    expect(alignTable({}, "", [[null], ["a long text"]]).null).toBe("left");
     await setGridAlign("null", "right");
     expect(saved.overrides).toEqual({ null: "right" });
     expect(["text", "int4", "bool"].map((t) => nullIn(t, saved.overrides))).toEqual(["right", "right", "right"]);

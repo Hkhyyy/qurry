@@ -221,7 +221,7 @@ export function ResultGrid(p: Props) {
   // Value class of each cell and where it sits (Settings › Appearance › Alignment; the TUI grid's rule)
   const classOf = useMemo(() => cols.map((c) => cellClasses(c.typeName)), [cols, wasmReady]);
   const alignOverrides = useGridAlign();
-  const aligns = useMemo(() => cols.map((c) => alignTable(alignOverrides, c.typeName)), [cols, alignOverrides, wasmReady]);
+  const aligns = useMemo(() => cols.map((c, ci) => alignTable(alignOverrides, c.typeName, result.rows, ci)), [cols, result.rows, alignOverrides, wasmReady]);
   // JSON columns color their text cells (lib/jsonSpans.ts, the TUI grid's tokenizer)
   const jsonCol = useMemo(() => cols.map((c) => isJsonType(c.typeName)), [cols, wasmReady]);
 
@@ -1019,7 +1019,7 @@ function TransposedView({ cols, rows }: { cols: QueryResult["columns"]; rows: Ce
         <tbody>
           {cols.map((c, ci) => {
             const classOf = cellClasses(c.typeName);
-            const aligns = alignTable(overrides, c.typeName);
+            const aligns = alignTable(overrides, c.typeName, rows, ci);
             return (
               <tr key={ci}>
                 <th>

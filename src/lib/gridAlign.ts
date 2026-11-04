@@ -63,11 +63,17 @@ export function useGridAlign(): Alignments {
 }
 
 /**
- * Where each class's cells sit in a column of `typeName` under `o` (a NULL on "Column type" where the column's type sits), for a
- * grid render; empty without the module (cells keep the stylesheet's alignment)
+ * Where each class's cells sit in column `ci` of `rows`, of type `typeName`, under `o` (a NULL on "Column type" where the column's
+ * type sits; a column without a type name goes by its first non-null value), for a grid render; empty without the module (cells
+ * keep the stylesheet's alignment)
  */
-export const alignTable = (o: Alignments, typeName: string): Partial<Record<ValueClass, CellAlign>> =>
-  sharedReady() ? Object.fromEntries(VALUE_CLASSES.map(({ cls }) => [cls, sharedOr<CellAlign>("left", (s) => s.cellAlign(typeName, cls, o))])) : {};
+export function alignTable(o: Alignments, typeName: string, rows: Cell[][] = [], ci = 0): Partial<Record<ValueClass, CellAlign>> {
+  if (!sharedReady()) return {};
+  const v = rows.find((r) => r[ci] !== null && r[ci] !== DEFAULT_TOKEN)?.[ci] ?? null;
+  // Only the value's kind matters: a stand-in for text, so a large one is not copied into WASM memory
+  const first = typeof v === "string" ? "" : v;
+  return Object.fromEntries(VALUE_CLASSES.map(({ cls }) => [cls, sharedOr<CellAlign>("left", (s) => s.cellAlign(typeName, first, cls, o))]));
+}
 
 /**
  * Class of a column's cells. The shared rule reads only the value's kind (null, number, boolean, text), not its content,
