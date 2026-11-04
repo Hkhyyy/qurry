@@ -156,6 +156,18 @@ export const CopyRows: S = { name: "Copy Related Rows", render: () => <CopyRowsD
 
 /** The table tab's WHERE field completes like the console (the field as `SELECT * FROM public.users WHERE …`): the table's columns
  * first, then tables and keywords; ↑↓ PgUp PgDn move, ↩ / ⇥ pick, ⎋ closes the list, then resets the field */
+/** The mock's public.users columns (what the WHERE field completes against) */
+const users: QueryResult = {
+  columns: [
+    { name: "id", typeName: "INT8" },
+    { name: "user_name", typeName: "VARCHAR" },
+  ],
+  rows: Array.from({ length: 12 }, (_, i) => [i + 1, `user_${i + 1}`]),
+  rowsAffected: 0,
+  truncated: false,
+  elapsedMs: 8,
+  hasResultSet: true,
+};
 export const TableFilterCompletion: S = {
   name: "Table data — WHERE completion",
   render: () => (
@@ -166,7 +178,7 @@ export const TableFilterCompletion: S = {
         orderBy=""
         running={false}
         error={null}
-        result={sales}
+        result={users}
         query="SELECT * FROM public.users"
         loadingMore={false}
         completion={{ target: "dev", schema: "public", table: "users", db: "shop_app", mysql: false }}
