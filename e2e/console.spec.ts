@@ -175,4 +175,11 @@ test("Output follows new lines at the bottom, keeps the position when scrolled u
   await run();
   expect(await output.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
   expect(await fromBottom()).toBeLessThanOrEqual(4);
+
+  // The pane gets shorter after the run (window resized): the newest line stays in view
+  const height = await output.evaluate((el) => el.clientHeight);
+  const vp = page.viewportSize()!;
+  await page.setViewportSize({ width: vp.width, height: vp.height - 150 });
+  await expect.poll(() => output.evaluate((el) => el.clientHeight)).toBeLessThan(height);
+  await expect.poll(fromBottom).toBeLessThanOrEqual(4);
 });

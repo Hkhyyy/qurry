@@ -237,6 +237,16 @@ export function ConsolePane(p: Props) {
     if (p.output.length === 0) follow.current = true;
     if (el && follow.current) el.scrollTop = el.scrollHeight;
   }, [p.output, p.errorAction, shown]);
+  // A shorter or narrower log (divider dragged, window resized) fires no scroll: keep the newest line in view while following
+  useLayoutEffect(() => {
+    const el = outputLog.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      if (follow.current) el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [shown]);
 
   return (
     <div
