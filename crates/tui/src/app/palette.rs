@@ -1,4 +1,5 @@
 use super::*;
+use crate::theme::Theme;
 use qurry_core::format::{align, Align, ValueClass};
 
 /// The GUI's names (Settings › Appearance › Alignment, src/lib/gridAlign.ts VALUE_CLASSES)
@@ -258,6 +259,7 @@ impl App {
                 self.set_grid_align(c, a);
                 self.palette_grid_align(c);
             }
+            PAction::Theme(t) => self.set_theme(t),
             PAction::Object { conn, db, e } => {
                 let kind = match e.kind.as_str() {
                     "function" | "procedure" => "routine".to_string(),
@@ -417,6 +419,44 @@ impl App {
             }
             Err(e) => format!("Couldn't save the grid alignment: {e}"),
         };
+    }
+
+    /// ⌃K › Theme…: Auto (light on a light terminal background, from COLORFGBG), Dark or Light. Opened on the current one (Enter keeps it)
+    pub fn palette_theme(&mut self) {
+        let auto = if self.auto_light { "light now" } else { "dark now" };
+        let items = Theme::ALL
+            .into_iter()
+            .map(|t| {
+                let hint = match t {
+                    Theme::Auto => format!("follows the terminal background (COLORFGBG): {auto}"),
+                    Theme::Dark => "for a dark terminal background".into(),
+                    Theme::Light => "for a light terminal background".into(),
+                };
+                PItem { label: format!("{} {}", if t == self.theme { "●" } else { " " }, t.name()), hint, action: PAction::Theme(t) }
+            })
+            .collect();
+        let sel = Theme::ALL.iter().position(|&t| t == self.theme).unwrap_or(0);
+        self.popup = Some(Popup::Palette(Palette { title: "Theme".into(), input: TextArea::default(), items, sel, loading: 0, cache: Default::default() }));
+    }
+
+    /// Switch to a theme now and save it in settings.json (a failed save still switches, for this session)
+    fn set_theme(&mut self, t: Theme) {
+        self.theme = t;
+        let colors = if t.light(self.auto_light) { "light" } else { "dark" };
+        self.status = match self.state.store.set_tui_theme(&t.name().to_lowercase()) {
+            Ok(()) => format!("Theme: {} — {colors} colors", t.name()),
+            Err(e) => format!("Couldn't save the theme: {e} — {} for this session only", t.name()),
+        };
+    }
+
+    /// Status line text at startup: one notice, so it fits the status text's half of an 80-cell line. Auto picking the light
+    /// palette comes first, since the colors changed by themselves (NO_COLOR draws no palette, so nothing changed there);
+    /// otherwise how to get more colors
+    pub fn startup_notice(&self) -> Option<String> {
+        if self.theme == Theme::Auto && self.auto_light && self.color != crate::theme::ColorMode::NoColor {
+            return Some(format!("Light palette — {} › Theme… › Dark to undo", self.keys.label(Action::Palette)));
+        }
+        self.color.notice().map(String::from)
     }
 
     /// New version window: changes since the current version (per version) + how to update

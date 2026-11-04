@@ -12,8 +12,30 @@ use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 use serde_json::{json, Value};
 
-/// Terminal color → CSS (a common dark terminal palette)
-fn css(c: Color) -> Value {
+/// Terminal color → CSS (a common dark terminal palette, or a common light one for scenes in the light theme)
+fn css(c: Color, light: bool) -> Value {
+    if light {
+        let s = match c {
+            Color::Black => "#383a42",
+            Color::Red => "#e45649",
+            Color::Green => "#50a14f",
+            Color::Yellow => "#c18401",
+            Color::Blue => "#4078f2",
+            Color::Magenta => "#a626a4",
+            Color::Cyan => "#0184bc",
+            Color::Gray => "#dcdcdc",
+            Color::DarkGray => "#6e6e6e",
+            Color::White => "#f2f2f2",
+            Color::LightRed => "#ca1243",
+            Color::LightGreen => "#3d8c3c",
+            Color::LightYellow => "#986801",
+            Color::LightBlue => "#2f5fd0",
+            Color::LightMagenta => "#8e2a8c",
+            Color::LightCyan => "#0b7aa3",
+            _ => return css(c, false),
+        };
+        return json!(s);
+    }
     let s = match c {
         Color::Reset => return Value::Null,
         Color::Rgb(r, g, b) => return json!(format!("#{r:02x}{g:02x}{b:02x}")),
@@ -46,7 +68,7 @@ fn css(c: Color) -> Value {
 /// Buffer → per line, runs of [text, fg, bg, bold, underline, italic, strikethrough, wide] (same styles are merged), plus [reverse, dim]
 /// at the end only when one of them is on (NO_COLOR draws with them).
 /// Wide (two-cell) characters (Korean) get their own run (wide = true) — so the web draws them exactly two cells wide. The following cell is skipped
-fn dump(buf: &Buffer) -> Value {
+fn dump(buf: &Buffer, light: bool) -> Value {
     use unicode_width::UnicodeWidthStr;
     let a = buf.area;
     let mut rows = vec![];
@@ -56,7 +78,7 @@ fn dump(buf: &Buffer) -> Value {
         while x < a.right() {
             let c = &buf[(x, y)];
             let w = c.symbol().width().max(1) as u16;
-            let (fg, bg, m) = (css(c.fg), css(c.bg), c.modifier.bits());
+            let (fg, bg, m) = (css(c.fg, light), css(c.bg, light), c.modifier.bits());
             let wide = w > 1;
             match runs.last_mut() {
                 Some(r) if !wide && !r.4 && r.1 == fg && r.2 == bg && r.3 == m => r.0.push_str(c.symbol()),
@@ -84,18 +106,23 @@ fn dump(buf: &Buffer) -> Value {
 fn scene(name: &str, desc: &str, w: u16, h: u16, draw: impl FnOnce(&mut Frame)) -> Value {
     let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
     term.draw(draw).unwrap();
-    let mut v = dump(term.backend().buffer());
+    let mut v = dump(term.backend().buffer(), false);
     v["name"] = json!(name);
     v["desc"] = json!(desc);
     v
 }
 
+/// The app's screen; in the light theme it is marked light (Storybook draws it on a light terminal)
 fn app_scene(h: &mut Harness, name: &str, desc: &str, w: u16, ht: u16) -> Value {
     let mut term = Terminal::new(TestBackend::new(w, ht)).unwrap();
     term.draw(|f| crate::ui::draw(f, &mut h.app)).unwrap();
-    let mut v = dump(term.backend().buffer());
+    let light = h.app.theme.light(h.app.auto_light);
+    let mut v = dump(term.backend().buffer(), light);
     v["name"] = json!(name);
     v["desc"] = json!(desc);
+    if light {
+        v["light"] = json!(true);
+    }
     v
 }
 
@@ -327,6 +354,9 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.app.color = crate::theme::ColorMode::Ansi16;
     scenes.push(app_scene(h, "Grid: JSON, 16 colors", "TERM=xterm: the JSON colors by hue (NO_COLOR: no colors)", 120, 22));
     h.app.color = crate::theme::ColorMode::TrueColor;
+    h.app.theme = crate::theme::Theme::Light;
+    scenes.push(app_scene(h, "Light: grid JSON", "Theme Light: the JSON colors of the GUI's light theme", 120, 22));
+    h.app.theme = crate::theme::Theme::Auto;
     h.app.close_tab_now(h.app.active);
     // Production log
     let entry = |id: &str, ago: i64, sql: &str, rows: Option<u64>, undo: bool, in_tx: bool| qurry_core::audit::AuditEntry {
@@ -474,6 +504,18 @@ async fn all_scenes() -> Vec<Value> {
         h.app.color = mode;
         scenes.push(app_scene(&mut h, name, desc, 120, 22));
     }
+    // The light theme (⌃k › Theme…, or Auto on a terminal whose COLORFGBG says its background is light) in each color mode
+    h.app.theme = crate::theme::Theme::Light;
+    for (mode, name, desc) in [
+        (ColorMode::TrueColor, "Light: truecolor", "Theme Light (or Auto with COLORFGBG=0;15): the light palette's 24-bit colors; a Data Source color becomes a light tint of its hue"),
+        (ColorMode::Ansi256, "Light: 256", "Theme Light, TERM=xterm-256color: the light palette mapped to the nearest of the xterm 256 palette"),
+        (ColorMode::Ansi16, "Light: 16", "Theme Light, TERM=xterm: light surfaces, text in the normal (darker) of the 16 colors"),
+        (ColorMode::NoColor, "Light: NO_COLOR", "Theme Light, NO_COLOR=1: the same monochrome rules as in the dark theme"),
+    ] {
+        h.app.color = mode;
+        scenes.push(app_scene(&mut h, name, desc, 120, 22));
+    }
+    h.app.theme = crate::theme::Theme::Auto;
     // Still NO_COLOR: what doesn't depend on color in the grid
     let (focus, g) = (h.app.focus, h.app.grid_mut().unwrap());
     let at = (g.row, g.col);
@@ -483,6 +525,9 @@ async fn all_scenes() -> Vec<Value> {
     (g.row, g.col) = (1, 2);
     h.app.focus = crate::app::Focus::Grid;
     scenes.push(app_scene(&mut h, "Colors: NO_COLOR grid", "NO_COLOR=1: unsaved changes by the row number (~ edited · - deleted · + added) and bold cells; the cursor is the plain cell in the reversed range", 120, 22));
+    (h.app.color, h.app.theme) = (ColorMode::TrueColor, crate::theme::Theme::Light);
+    scenes.push(app_scene(&mut h, "Light: grid edits", "Theme Light: an edited cell, a deleted row and a range with the cursor in it", 120, 22));
+    (h.app.color, h.app.theme) = (ColorMode::NoColor, crate::theme::Theme::Auto);
     let g = h.app.grid_mut().unwrap();
     g.edits.clear();
     g.deleted.clear();
@@ -523,6 +568,9 @@ async fn all_scenes() -> Vec<Value> {
         on_yes: Box::new(|_| {}),
     });
     scenes.push(app_scene(&mut h, "Production confirm", "운영 Data Source 에서 바꾸는 문장: 바뀔 행 수를 보여 주고 묻는다", 120, 22));
+    h.app.theme = crate::theme::Theme::Light;
+    scenes.push(app_scene(&mut h, "Light: production confirm", "Theme Light: the Production question, the red row and the PROD badge on a light terminal", 120, 22));
+    h.app.theme = crate::theme::Theme::Auto;
     scenes.push(app_scene(&mut h, "Terminal too small: question waiting", "Below 40×10 with a dialog open, ⌃q doesn't quit: the message says to make the window larger to answer it", 36, 9));
     scenes.push(app_scene(&mut h, "Production confirm: minimum size", "At 40×10 the question and its keys stay; the statements that don't fit are counted", 40, 10));
     // Question first, warnings after the details: the columns / tables in between give way, the ⚠ lines stay
@@ -586,6 +634,12 @@ async fn all_scenes() -> Vec<Value> {
     scenes.push(app_scene(&mut h, "Workspaces", "워크스페이스가 둘 이상이면 위쪽 띠 (⌥1…9 · 눌러서 바꾸기)", 120, 22));
     h.app.palette_update_channel();
     scenes.push(app_scene(&mut h, "Update channel", "⌃k › Update Channel…: stable (version tags only, the default) or beta (also every merge to main), shared with the GUI", 120, 22));
+    h.app.palette_theme();
+    scenes.push(app_scene(&mut h, "Theme", "⌃k › Theme…: Auto (the default) follows the terminal background from COLORFGBG; Dark or Light whatever the terminal says", 120, 22));
+    h.app.auto_light = true;
+    h.app.palette_theme();
+    scenes.push(app_scene(&mut h, "Theme: Auto on a light terminal", "COLORFGBG=0;15: Auto draws the light palette (Dark brings the old colors back)", 120, 22));
+    h.app.auto_light = false;
     h.app.popup = None;
     tab_bars(&mut scenes).await;
     scenes
@@ -636,6 +690,8 @@ async fn tab_bars(scenes: &mut Vec<Value>) {
         h.app.color = mode;
         scenes.push(app_scene(&mut h, name, desc, 120, 10));
     }
+    (h.app.color, h.app.theme) = (ColorMode::TrueColor, crate::theme::Theme::Light);
+    scenes.push(app_scene(&mut h, "Tab bar: light", "Theme Light: Data Source colors as light tints; the focused pane's active tab in the stronger hue", 120, 10));
 }
 
 fn json_path() -> std::path::PathBuf {
