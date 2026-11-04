@@ -24,6 +24,7 @@ import { ResultChart } from "../../components/ResultChart";
 import { ResultGrid } from "../../components/ResultGrid";
 import { RunningBar } from "../../components/RunningBar";
 import { SearchEverywhere } from "../../components/SearchEverywhere";
+import { TableEditor } from "../../components/TableEditor";
 import { TableStructureView } from "../../components/TableStructure";
 import { Switcher } from "../../components/Switcher";
 import { BackupDialog, ExportDialog, ImportDialog } from "../../components/Transfer";
@@ -152,6 +153,38 @@ export const NewDatabase: S = { name: "New Database", render: () => <NewObjectDi
 export const ProdLog: S = { name: "Production Log", render: () => <ProductionLog connId={null} onOpenUndo={noop} onClose={noop} /> };
 export const GenerateData: S = { name: "Generate Test Data", render: () => <GenerateDataDialog target="dev" schema="public" table="orders" onDone={noop} onClose={noop} /> };
 export const CopyRows: S = { name: "Copy Related Rows", render: () => <CopyRowsDialog source="prod" schema="public" table="users" conn={PROD} conns={CONNS} onDone={noop} onClose={noop} /> };
+
+/** The table tab's WHERE field completes like the console (the field as `SELECT * FROM public.users WHERE …`): the table's columns
+ * first, then tables and keywords; ↑↓ PgUp PgDn move, ↩ / ⇥ pick, ⎋ closes the list, then resets the field */
+export const TableFilterCompletion: S = {
+  name: "Table data — WHERE completion",
+  render: () => (
+    <Frame h={360}>
+      <TableEditor
+        title="users"
+        where=""
+        orderBy=""
+        running={false}
+        error={null}
+        result={sales}
+        query="SELECT * FROM public.users"
+        loadingMore={false}
+        completion={{ target: "dev", schema: "public", table: "users", db: "shop_app", mysql: false }}
+        onApply={noop}
+        onCancel={noop}
+        onFetchMore={noop}
+        onSubmit={async () => {}}
+        onExportCsv={noop}
+        onDdl={noop}
+        onCopyQueryToConsole={noop}
+      />
+    </Frame>
+  ),
+  play: async ({ canvasElement }) => {
+    const field = await within(canvasElement).findByRole("combobox", { name: "WHERE" });
+    await userEvent.type(field, "id > 1 and u");
+  },
+};
 
 export const Chart: S = { name: "Result Chart", render: () => <Frame><ResultChart result={sales} /></Frame> };
 export const Grid: S = {
