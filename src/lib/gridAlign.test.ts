@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import golden from "../../crates/shared/tests/goldens/valueclass.json";
 import type { Cell } from "./api";
+import type { Alignments } from "./shared";
 import { DEFAULT_TOKEN } from "./extract";
 
 const saved = vi.hoisted(() => ({ overrides: {} as Record<string, string>, fail: false }));
@@ -11,7 +12,7 @@ vi.mock("./api", () => ({
     setGridAlign: async (cls: string, a: string) => {
       if (saved.fail) throw "Couldn't save the settings: permission denied";
       const next = { ...saved.overrides };
-      if (a === (cls === "number" || cls === "null" ? "right" : "left")) delete next[cls];
+      if (a === (cls === "number" ? "right" : cls === "null" ? "column" : "left")) delete next[cls];
       else next[cls] = a;
       saved.overrides = next;
       return next;
@@ -39,7 +40,8 @@ describe("grid alignment", () => {
   it("classes and default alignments match the shared golden (the TUI's rule)", () => {
     for (const e of golden) {
       const cls = cellClasses(e.type)(e.value as Cell);
-      expect({ cls, align: alignOf(cls, {}) }, `${e.type} ${JSON.stringify(e.value)}`).toEqual({ cls: e.class, align: e.align });
+      const column = ("column" in e ? (e.column as Cell[]) : [e.value as Cell]).map((v) => [v]);
+      expect({ cls, align: alignTable({}, e.type, column)[cls] }, `${e.type} ${JSON.stringify(e.value)}`).toEqual({ cls: e.class, align: e.align });
     }
   });
 
@@ -47,21 +49,33 @@ describe("grid alignment", () => {
     expect(cellClasses("int4")(DEFAULT_TOKEN)).toBe("null");
   });
 
-  it("NULL is on the right by default; setting it back to Left is saved, picking the default again drops the override", async () => {
-    expect(alignTable({})).toEqual({ string: "left", number: "right", dateTime: "left", boolean: "left", null: "right", jsonBinary: "left" });
+  it("NULL sits where its column's type does by default; Left / Right are saved, picking the default again drops the override", async () => {
+    expect(alignOf("null")).toBe("column");
+    const nullIn = (t: string, o: Alignments = {}) => alignTable(o, t).null;
+    expect(["text", "int4", "timestamptz", "bool", "jsonb"].map((t) => nullIn(t))).toEqual(["left", "right", "left", "left", "left"]);
+    expect(alignTable({}, "text")).toEqual({ string: "left", number: "right", dateTime: "left", boolean: "left", null: "left", jsonBinary: "left" });
+    // It follows the column's class as the user set it
+    expect(nullIn("numeric", { number: "center" })).toBe("center");
+    // A column without a type name (SQLite expression, MongoDB) goes by its first non-null value
+    expect(alignTable({}, "", [[null], [12], [7]]).null).toBe("right");
+    expect(alignTable({}, "", [[null], ["a long text"]]).null).toBe("left");
+    await setGridAlign("null", "right");
+    expect(saved.overrides).toEqual({ null: "right" });
+    expect(["text", "int4", "bool"].map((t) => nullIn(t, saved.overrides))).toEqual(["right", "right", "right"]);
     await setGridAlign("null", "left");
     expect(saved.overrides).toEqual({ null: "left" });
     expect(alignOf("null")).toBe("left");
     await setGridAlign("number", "center");
-    await setGridAlign("null", "right");
+    await setGridAlign("null", "column");
     expect(saved.overrides).toEqual({ number: "center" });
   });
 
   it("reads what was saved (also by another app) at start, skipping values this version doesn't know", async () => {
-    saved.overrides = { null: "left", boolean: "justify" };
+    saved.overrides = { null: "left", boolean: "justify", string: "column" };
     await loadGridAlign();
     expect(alignOf("null")).toBe("left");
     expect(alignOf("boolean")).toBe("left");
+    expect(alignOf("string")).toBe("left");
   });
 
   it("a change saved by another app (the TUI) while the GUI is open is kept, and shows after the next save", async () => {
@@ -74,11 +88,11 @@ describe("grid alignment", () => {
   it("a save that fails rolls the setting back and says why", async () => {
     saved.fail = true;
     await expect(setGridAlign("null", "left")).rejects.toMatch("permission denied");
-    expect(alignOf("null")).toBe("right");
+    expect(alignOf("null")).toBe("column");
   });
 
   it("without WebAssembly cells get no alignment (the stylesheet keeps numbers on the right)", () => {
     wasm.refused = true;
-    expect(alignTable({ null: "left" })).toEqual({});
+    expect(alignTable({ null: "left" }, "text")).toEqual({});
   });
 });

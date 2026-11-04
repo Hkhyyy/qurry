@@ -221,7 +221,7 @@ export function ResultGrid(p: Props) {
   // Value class of each cell and where it sits (Settings › Appearance › Alignment; the TUI grid's rule)
   const classOf = useMemo(() => cols.map((c) => cellClasses(c.typeName)), [cols, wasmReady]);
   const alignOverrides = useGridAlign();
-  const aligns = useMemo(() => alignTable(alignOverrides), [alignOverrides, wasmReady]);
+  const aligns = useMemo(() => cols.map((c, ci) => alignTable(alignOverrides, c.typeName, result.rows, ci)), [cols, result.rows, alignOverrides, wasmReady]);
   // JSON columns color their text cells (lib/jsonSpans.ts, the TUI grid's tokenizer)
   const jsonCol = useMemo(() => cols.map((c) => isJsonType(c.typeName)), [cols, wasmReady]);
 
@@ -897,7 +897,7 @@ export function ResultGrid(p: Props) {
                               key={ci}
                               width={widths[ci]}
                               kind={CELL_KIND[cls]}
-                              align={aligns[cls]}
+                              align={aligns[ci][cls]}
                               selected={inSel(d, ci)}
                               active={selB?.r === d && selB?.c === ci}
                               changed={!!changed}
@@ -1012,13 +1012,14 @@ export function ResultGrid(p: Props) {
 function TransposedView({ cols, rows }: { cols: QueryResult["columns"]; rows: Cell[][] }) {
   useSharedReady(); // time fractions and value classes come from the WASM module: render again once it has loaded
   const fracW = cols.map((c, ci) => (isTimeType(c.typeName) ? fracWidth(rows.map((r) => r[ci])) : 0));
-  const aligns = alignTable(useGridAlign());
+  const overrides = useGridAlign();
   return (
     <div className="grid-scroll transposed">
       <table>
         <tbody>
           {cols.map((c, ci) => {
             const classOf = cellClasses(c.typeName);
+            const aligns = alignTable(overrides, c.typeName, rows, ci);
             return (
               <tr key={ci}>
                 <th>

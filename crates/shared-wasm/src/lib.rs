@@ -435,10 +435,19 @@ pub fn json_spans(text: &str, max_chars: usize) -> Vec<u32> {
     r.into_iter().zip(spans).flat_map(|([s, e], (_, _, k))| [s as u32, e as u32, k as u32]).collect()
 }
 
-/// Alignment of a value class ("left", "right", "center") given the saved overrides ({ null: "left", … })
+/// Alignment setting of a value class ("left", "right", "center"; NULL also "column") given the saved overrides ({ null: "left", … })
 #[wasm_bindgen(js_name = alignOf)]
 pub fn align_of(class: JsValue, overrides: JsValue) -> Result<JsValue, JsError> {
     to(&qurry_shared::format::align(from(class)?, &qurry_shared::format::alignments(&from(overrides)?)))
+}
+
+/// Where a cell of a value class sits in a column of `type_name` ("left", "right", "center"): a NULL on "column" takes the column's.
+/// `first` = the column's first non-null value or null (an untyped column goes by it; a stand-in of the same kind will do)
+#[wasm_bindgen(js_name = cellAlign)]
+pub fn cell_align(type_name: &str, first: JsValue, class: JsValue, overrides: JsValue) -> Result<JsValue, JsError> {
+    let o = qurry_shared::format::alignments(&from(overrides)?);
+    let first: Value = from(first)?;
+    to(&qurry_shared::format::cell_align(qurry_shared::format::column_class(type_name, std::iter::once(&first)), from(class)?, &o))
 }
 
 /// [{id, db, schema, table}, …] → a label per tab (schema.table or db.schema.table), null where the name is unique
