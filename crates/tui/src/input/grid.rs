@@ -459,7 +459,8 @@ mod tests {
         let t = &h.app.tabs[h.app.active];
         assert_eq!((t.db.as_str(), t.target.as_str()), ("billing", "c1::billing"));
         assert!(matches!(&t.kind, TabKind::Dba(d) if d.auto && d.running && d.run == 1 && d.grid.is_none()));
-        let s = h.screen(160, 24);
+        // The hint comes last, so a narrow terminal drops it before c / K / a
+        let s = h.screen(240, 24);
         assert!(s.contains(" billing — 0 rows") && s.contains("d database"), "{s}");
 
         // MySQL without a default schema: all schemas first, system schemas hidden
@@ -471,13 +472,44 @@ mod tests {
         h.key("Esc");
         assert!(h.screen(160, 24).contains(" (all schemas) — 0 rows"));
 
+        // A current database the scope hides comes first, so Enter keeps it
+        h.app.activate(h.app.tab_index(id).unwrap());
+        if let Some(t) = h.app.tab_mut(id) {
+            t.db = "analytics".into();
+        }
+        h.app.dba_db_choices(id, ["shop", "billing", "analytics"].map(String::from).to_vec());
+        assert_eq!(picker(&h).0.iter().map(|(l, _)| l.as_str()).collect::<Vec<_>>(), ["analytics", "shop", "billing"]);
+        h.key("Esc");
+
+        // The databases can't be listed (the server hangs up): the status says how to get out
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((s, _)) = l.accept().await {
+                drop(s);
+            }
+        });
+        save(&mut h, serde_json::json!({ "id": "c1", "name": "pg", "kind": "postgres", "host": "127.0.0.1", "port": port, "user": "u", "database": "shop", "scope": { "databases": ["shop", "billing"] } }));
+        h.settle().await;
+        h.app.activate(h.app.tab_index(id).unwrap());
+        h.app.focus = crate::app::Focus::Grid;
+        h.key("d");
+        for _ in 0..50 {
+            h.settle().await;
+            if h.app.status.starts_with("Couldn't") {
+                break;
+            }
+        }
+        assert!(h.app.popup.is_none());
+        assert!(h.app.status.starts_with("Couldn't list the databases: ") && h.app.status.ends_with("TUI: the data source form's Database field)."), "{}", h.app.status);
+
         save(&mut h, serde_json::json!({ "id": "c1", "name": "pg", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "shop", "options": { "singleDb": true } }));
         h.settle().await;
         h.app.activate(h.app.tab_index(id).unwrap());
         h.app.focus = crate::app::Focus::Grid;
         h.key("d");
         assert!(h.app.popup.is_none());
-        assert_eq!(h.app.status, "This data source has one database: billing");
+        assert_eq!(h.app.status, "This data source has one database: analytics");
     }
 
     /// Slow Queries: g lists Explain in Console, which opens a console with the EXPLAIN (a normalized statement gets a note to fill in the values first)

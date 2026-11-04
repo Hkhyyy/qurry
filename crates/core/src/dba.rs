@@ -560,12 +560,18 @@ impl AppState {
         }
     }
 
-    /// The report's database refused or failed the connection (missing, no CONNECT privilege …): name it, so another one can be picked
+    /// The server turned down the report's database (it doesn't exist, or no CONNECT privilege): name it, so another one can be
+    /// picked (not on a one-database source). Server down, sign-in, SSH and TLS errors stay as they are
     fn connect_failed(&self, id: &str, e: AppError) -> AppError {
+        let db_refused = match &e {
+            AppError::Db(sqlx::Error::Database(d)) => matches!(d.code().as_deref(), Some("3D000" | "42501")) || matches!(my_errno(&e), Some(1049 | 1044)),
+            _ => false,
+        };
         let (base, db) = crate::app::split_target(id);
-        let db = db.map(str::to_string).or_else(|| self.store.get(base).ok().flatten().map(|c| crate::sql::default_db(&c))).unwrap_or_default();
-        match db.is_empty() {
-            true => e,
+        let cfg = self.store.get(base).ok().flatten();
+        let Some(db) = db.map(str::to_string).or_else(|| cfg.as_ref().map(crate::sql::default_db)).filter(|d| db_refused && !d.is_empty()) else { return e };
+        match cfg.is_some_and(|c| c.options.single_db) {
+            true => AppError::Msg(format!("Couldn't connect to database {db}.\n({e})")),
             false => AppError::Msg(format!("Couldn't connect to database {db}. Pick another database for this report (GUI: the database list in its toolbar · TUI: d).\n({e})")),
         }
     }
@@ -720,9 +726,9 @@ mod tests {
         Some((c, password))
     }
 
-    /// A report whose database can't be connected names it and points at the database picker
+    /// A connect failure that isn't about the database (here the server hangs up) stays as it is: no "pick another database"
     #[tokio::test]
-    async fn report_names_the_database_it_cannot_connect_to() {
+    async fn report_keeps_a_server_connect_error() {
         // A server that hangs up on every connection
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = l.local_addr().unwrap().port();
@@ -736,9 +742,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("qurry-dba-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir)).unwrap();
         st.save_connection(c, None, None).await.unwrap();
-        for (target, db) in [("d", "shop"), ("d::billing", "billing")] {
+        for target in ["d", "d::billing"] {
             let e = st.dba_report(target.into(), "table_sizes".into()).await.unwrap_err().to_string();
-            assert!(e.starts_with(&format!("Couldn't connect to database {db}. Pick another database")), "{e}");
+            assert!(!e.contains("Couldn't connect to database") && !e.contains("Pick another"), "{e}");
         }
     }
 
@@ -796,10 +802,32 @@ mod tests {
         // Sessions is server-wide: it runs on either database
         st.dba_report("d::qurry_dba_other".into(), "sessions".into()).await.unwrap();
         let missing = st.dba_report("d::qurry_dba_missing".into(), "table_sizes".into()).await.unwrap_err().to_string();
-        st.disconnect("d".into()).await.ok();
+        // An account without CONNECT on the source's default database: listing through that database fails, through another works
+        // (the pickers list through the report's own database); the report names the refused database. Wrong password: unchanged
+        q("d", "drop role if exists qurry_dba_nc").await.ok();
+        q("d", "create role qurry_dba_nc login password 'nc'").await.unwrap();
+        q("d", "revoke connect on database qurry_dba_other from public").await.unwrap();
+        let (base, _) = cfg(DbKind::Postgres).unwrap();
+        for (id, one, pass) in [("nc", false, "nc"), ("one", true, "nc"), ("bad", false, "wrong")] {
+            let mut c = base.clone();
+            (c.id, c.user, c.database, c.options.single_db) = (id.into(), "qurry_dba_nc".into(), "qurry_dba_other".into(), one);
+            st.save_connection(c, Some(pass.into()), None).await.unwrap();
+        }
+        let listed = (st.list_databases("nc".into()).await.is_err(), st.list_databases("nc::postgres".into()).await.map(|d| d.contains(&"qurry_dba_other".to_string())));
+        let refused = st.dba_report("nc".into(), "table_sizes".into()).await.unwrap_err().to_string();
+        let one = st.dba_report("one".into(), "table_sizes".into()).await.unwrap_err().to_string();
+        let bad = st.dba_report("bad::postgres".into(), "sessions".into()).await.unwrap_err().to_string();
+        for id in ["d", "nc", "one", "bad"] {
+            st.disconnect(id.into()).await.ok();
+        }
         q("d", "drop database qurry_dba_other with (force)").await.ok();
+        q("d", "drop role qurry_dba_nc").await.ok();
         assert!(other.contains(&"qurry_only_here".to_string()) && !default.contains(&"qurry_only_here".to_string()), "{other:?} / {default:?}");
         assert!(missing.starts_with("Couldn't connect to database qurry_dba_missing. Pick another database"), "{missing}");
+        assert_eq!((listed.0, listed.1.ok()), (true, Some(true)));
+        assert!(refused.starts_with("Couldn't connect to database qurry_dba_other. Pick another database"), "{refused}");
+        assert!(one.starts_with("Couldn't connect to database qurry_dba_other.\n("), "{one}");
+        assert!(!bad.contains("Couldn't connect to database"), "{bad}");
     }
 
     /// Server Overview works without performance_schema (MariaDB has no performance_schema.global_status)

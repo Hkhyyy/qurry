@@ -8,7 +8,7 @@
 
 GUI: Data Source 우클릭 › **Tools** › Sessions & Locks, Slow Queries, … — TUI: `⌃k` › **Database Admin…**
 
-리포트는 데이터베이스 하나에서 돌고, 그 데이터베이스가 리포트 선택 옆에 보입니다 (TUI: 그리드 제목). 데이터베이스에서 열면 그 데이터베이스, Data Source 에서 열면 그 Data Source 의 기본 데이터베이스입니다 (비어 있으면 `postgres`). 거기서 다른 것을 고르면 (TUI: `d`) 그 데이터베이스에서 리포트를 다시 돌리고, 자동 새로 고침도 고른 데이터베이스에서 계속됩니다. 목록은 탐색기와 같습니다 (Manage Shown Schemas 적용). MySQL 은 스키마를 보여 주고, 기본 스키마가 없는 Data Source 는 *(all schemas)* 도 있습니다. 데이터베이스 하나로 고정한 Data Source 는 그 하나만 보여 주고 바꿀 수 없습니다. Sessions, Lock Waits, Users & Roles 는 어느 데이터베이스를 골라도 서버 전체를 보여 줍니다. 고른 데이터베이스에 연결할 수 없으면 리포트가 그렇다고 알려 주니 다른 것을 고르세요.
+리포트는 데이터베이스 하나에서 돌고, 그 데이터베이스가 리포트 선택 옆에 보입니다 (TUI: 그리드 제목). 데이터베이스에서 열면 그 데이터베이스, Data Source 에서 열면 그 Data Source 의 기본 데이터베이스입니다 (비어 있으면 `postgres`). 거기서 다른 것을 고르면 (TUI: `d`) 그 데이터베이스에서 리포트를 다시 돌리고, 자동 새로 고침도 고른 데이터베이스에서 계속됩니다. 목록은 탐색기와 같습니다 (Manage Shown Schemas 적용). MySQL 은 스키마를 보여 주고, 기본 스키마가 없는 Data Source 는 *(all schemas)* 도 있습니다. 데이터베이스 하나로 고정한 Data Source 는 그 하나만 보여 주고 바꿀 수 없습니다. Sessions, Lock Waits, Users & Roles 는 어느 데이터베이스를 골라도 서버 전체를 보여 줍니다. 서버가 고른 데이터베이스를 거절하면 (없거나, 계정에 CONNECT 권한이 없음) 리포트가 그렇다고 알려 주니 다른 것을 고르세요. 목록은 리포트의 데이터베이스를 통해 읽습니다. 그것도 안 되면 (Data Source 에서 열었는데 계정이 기본 데이터베이스에 연결할 수 없을 때) 선택기가 그렇다고 알려 줍니다: Data Source Properties › General › Database (TUI: Data Source 양식의 Database 칸) 에 연결할 수 있는 기본 데이터베이스를 넣으세요.
 
 | 묶음 | 리포트 |
 |---|---|

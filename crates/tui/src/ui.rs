@@ -731,7 +731,7 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
                 Some(TabKind::Text(_)) => vec![fixed("y", "copy"), fixed("Esc", "explorer")],
                 Some(TabKind::Dba(d)) => {
                     let has = |t: Option<bool>| d.info.as_ref().is_some_and(|i| i.actions.iter().any(|a| matches!(a, qurry_core::dba::Action::Kill { terminate, .. } if t.is_none_or(|t| *terminate == t))));
-                    let mut v = vec![fixed("r", "refresh"), fixed("p", "reports"), fixed("d", "database")];
+                    let mut v = vec![fixed("r", "refresh"), fixed("p", "reports")];
                     if has(None) {
                         v.push(fixed("c", "cancel query"));
                         if has(Some(true)) {
@@ -739,7 +739,7 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
                         }
                         v.push(fixed("a", "auto"));
                     }
-                    v.extend([fixed("Enter", "query→console"), fixed("g", "SQL"), fixed("y", "copy")]);
+                    v.extend([fixed("Enter", "query→console"), fixed("g", "SQL"), fixed("y", "copy"), fixed("d", "database")]);
                     v
                 }
                 _ => vec![fixed("s", "sort"), fixed("y", "copy"), grid(A::ValueEditor, "value"), grid(A::ExportCsv, "export"), fixed("Esc", "editor")],

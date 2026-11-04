@@ -282,7 +282,7 @@ export const DdlStructureError: S = {
 };
 export const Diagram: S = { name: "Diagram (ERD)", render: () => <Frame h={600}><ErdView target="dev" schemas={["public"]} visible onOpenTable={noop} onStatus={noop} /></Frame> };
 /** The toolbar's database picker: [PROD] shop_app's shown databases, preselected on its default */
-const dbaDb = { database: "shop_app", dbList: ["postgres", "shop_app", "shop_app_test"], fixedDb: false, onLoadDbs: noop, onDatabase: noop };
+const dbaDb = { database: "shop_app", loadDbs: async () => ["postgres", "shop_app", "shop_app_test"], fixedDb: false, onDatabase: noop };
 /** Picking a database reruns the report there (the mock's Table Sizes names the database it ran on) */
 function DbaPicker() {
   const [db, setDb] = useState("shop_app");
@@ -318,12 +318,14 @@ export const DbaDatabase: S = {
   name: "Database Admin: database picker",
   render: () => (
     <Frame h={600}>
-      <div style={{ display: "grid", gridTemplateRows: "1fr 1fr 1fr", height: "100%" }}>
+      <div style={{ display: "grid", gridTemplateRows: "1fr 1fr 1fr 1fr", height: "100%" }}>
         <DbaPicker />
         {/* MySQL without a default schema: all schemas, or one picked */}
-        <DbaReport target="my" connName="[MySQL] shop" report="slow_queries" readOnly={false} dialect={dialectOf("mysql")} visible database="" dbList={["", "shop", "shop_archive"]} fixedDb={false} onLoadDbs={noop} onDatabase={noop} onReport={noop} onOpenConsole={noop} onStatus={noop} />
+        <DbaReport target="my" connName="[MySQL] shop" report="slow_queries" readOnly={false} dialect={dialectOf("mysql")} visible database="" loadDbs={async () => ["", "shop", "shop_archive"]} fixedDb={false} onDatabase={noop} onReport={noop} onOpenConsole={noop} onStatus={noop} />
+        {/* The account can't connect to the default database, so the list can't be read: open the picker for the way out */}
+        <DbaReport target="prod" connName="[PROD] shop_app" report="sessions" readOnly={false} dialect={dialectOf("postgres")} visible database="shop_app" loadDbs={() => Promise.reject('permission denied for database "shop_app"')} fixedDb={false} onDatabase={noop} onReport={noop} onOpenConsole={noop} onStatus={noop} />
         {/* One fixed database: shown, read-only */}
-        <DbaReport target="prod" connName="[PROD] shop_app" report="sessions" readOnly={false} dialect={dialectOf("postgres")} visible database="shop_app" dbList={[]} fixedDb onLoadDbs={noop} onDatabase={noop} onReport={noop} onOpenConsole={noop} onStatus={noop} />
+        <DbaReport target="prod" connName="[PROD] shop_app" report="sessions" readOnly={false} dialect={dialectOf("postgres")} visible database="shop_app" loadDbs={async () => []} fixedDb onDatabase={noop} onReport={noop} onOpenConsole={noop} onStatus={noop} />
       </div>
     </Frame>
   ),

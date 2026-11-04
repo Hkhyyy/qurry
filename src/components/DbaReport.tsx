@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ask } from "../lib/dialogs";
 import { Cell, dba, DbaReportInfo, Dialect, QueryResult } from "../lib/api";
 import { ResultGrid } from "./ResultGrid";
+import { sharedOr } from "../lib/shared";
 import { Button, Notice, Select, Text, Toolbar } from "../ui";
 
 const empty: QueryResult = { columns: [], rows: [], rowsAffected: 0, truncated: false, elapsedMs: 0, hasResultSet: true };
@@ -16,12 +17,12 @@ export function DbaReport(p: {
   readOnly: boolean;
   dialect: Dialect;
   visible: boolean;
-  /** The database the report runs on ("" = MySQL without a default schema: all schemas) and the others it can run on */
+  /** The database the report runs on ("" = MySQL without a default schema: all schemas) */
   database: string;
-  dbList: string[];
+  /** The others it can run on, in the explorer's order (loaded when the picker is first used) */
+  loadDbs: () => Promise<string[]>;
   /** The data source has one fixed database: shown, not changeable */
   fixedDb: boolean;
-  onLoadDbs: () => void;
   onDatabase: (db: string) => void;
   onReport: (id: string, title: string) => void;
   onOpenConsole: (sql: string) => void;
@@ -34,6 +35,15 @@ export function DbaReport(p: {
   const [loadedAt, setLoadedAt] = useState("");
   const [running, setRunning] = useState(false);
   const [auto, setAuto] = useState(true);
+  const [dbs, setDbs] = useState<string[]>([]);
+  /** Listing the databases failed: said in the picker, with the way out */
+  const [dbsError, setDbsError] = useState<string | null>(null);
+  const dbsAsked = useRef(false);
+  const loadDbs = () => {
+    if (dbsAsked.current) return;
+    dbsAsked.current = true;
+    p.loadDbs().then(setDbs, (e) => setDbsError(sharedOr(String(e), (s) => s.dbListFailed(String(e)))));
+  };
   const seq = useRef(0);
   /** A load is running (the auto-refresh tick waits for it) */
   const inFlight = useRef(false);
@@ -130,10 +140,11 @@ export function DbaReport(p: {
             </optgroup>
           ))}
         </Select>
-        <Select className="dba-db" value={p.database} onFocus={p.onLoadDbs} onMouseDown={p.onLoadDbs} onChange={(e) => p.onDatabase(e.target.value)} disabled={p.fixedDb} title={p.fixedDb ? "This data source has one database" : "Database the report runs on"}>
-          {[...new Set([p.database, ...p.dbList])].map((d) => (
+        <Select className="dba-db" value={p.database} onFocus={loadDbs} onMouseDown={loadDbs} onChange={(e) => p.onDatabase(e.target.value)} disabled={p.fixedDb} title={p.fixedDb ? "This data source has one database" : dbsError ?? "Database the report runs on"}>
+          {(dbs.includes(p.database) ? dbs : [p.database, ...dbs]).map((d) => (
             <option key={d} value={d}>{d || "(all schemas)"}</option>
           ))}
+          {dbsError && <option disabled>{dbsError}</option>}
         </Select>
         <Button onClick={load} disabled={running}>
           {running ? "Loading…" : "Refresh"}

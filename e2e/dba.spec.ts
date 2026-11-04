@@ -32,12 +32,12 @@ const targets = (page: Page) => page.evaluate(() => ((window as any).__mockDbaTa
 test("the report runs on the picked database: the source's default from the data source, the node's from a database", async ({ page }) => {
   await openApp(page);
   await openReport(page, "[DEV] shop_app", "Table Sizes & Indexes");
-  const db = page.locator(".dba-db");
+  const db = page.locator(".work-layer:visible .dba-db");
   await expect(db).toHaveValue("shop_app");
   await expect(page.locator(".dba-grid")).toContainText("182 MB");
   // The explorer's databases (the mock's postgres, shop_app, shop_app_test)
   await db.focus();
-  await expect(db.locator("option")).toHaveText(["shop_app", "postgres", "shop_app_test"]);
+  await expect(db.locator("option")).toHaveText(["postgres", "shop_app", "shop_app_test"]);
   await db.selectOption("shop_app_test");
   await expect(page.locator(".dba-grid")).toContainText("2 MB");
   await expect(page.locator(".dba-grid")).not.toContainText("182 MB");
@@ -51,7 +51,7 @@ test("the report runs on the picked database: the source's default from the data
 test("auto-refresh keeps the picked database", async ({ page }) => {
   await openApp(page);
   await openReport(page, "[DEV] shop_app", "Sessions & Locks");
-  const db = page.locator(".dba-db");
+  const db = page.locator(".work-layer:visible .dba-db");
   await expect(db).toHaveValue("shop_app");
   await db.focus();
   await db.selectOption("shop_app_test");
@@ -62,4 +62,22 @@ test("auto-refresh keeps the picked database", async ({ page }) => {
   expect((await targets(page)).slice(n - 1)).toEqual(Array((await targets(page)).length - n + 1).fill("dev::shop_app_test"));
   await expect(db).toHaveValue("shop_app_test");
   await expect(page.locator(".dba-auto input")).toBeChecked();
+});
+
+// The account can't connect to the source's default database: the picker lists through the report's own database, and when that
+// is the default one too it says how to get out (a default database the account can connect to)
+test("the picker lists through the report's database, and says what to do when it can't list", async ({ page }) => {
+  await openApp(page);
+  await page.evaluate(() => ((window as any).__mockDbListFail = true));
+  await openReport(page, "shop_app_test", "Slow Queries");
+  const db = page.locator(".work-layer:visible .dba-db");
+  await expect(db).toHaveValue("shop_app_test");
+  await db.focus();
+  await expect(db.locator("option")).toHaveText(["postgres", "shop_app", "shop_app_test"]);
+
+  await openReport(page, "[DEV] shop_app", "Sessions & Locks");
+  await expect(db).toHaveValue("shop_app");
+  await db.focus();
+  await expect(db.locator("option")).toHaveText(["shop_app", /^Couldn't list the databases: permission denied for database "shop_app"[\s\S]*Data Source Properties › General › Database/]);
+  await expect(db.locator("option").nth(1)).toBeDisabled();
 });

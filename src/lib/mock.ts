@@ -82,7 +82,8 @@ const testsRunning: Record<string, () => void> = {};
 const handlers: Record<string, (a: any) => unknown> = {
   // A copy, as from the backend: state that holds the last list must see a change (Allow unencrypted, connect) as a new list
   list_connections: () => structuredClone(conns),
-  list_databases: (a: any) => (lanCheck(a.id), a.id === "lan" ? ["lan_app"] : a.id === "rd" ? ["db0", "db3"] : a.id === "my" ? ["information_schema", "mysql", "shop", "sys"] : ["postgres", "shop_app", "shop_app_test"]),
+  // window.__mockDbListFail: the account can't connect to a source's default database, so listing through the source itself fails
+  list_databases: (a: any) => (lanCheck(a.id), (globalThis as any).__mockDbListFail && !String(a.id).includes("::") && (() => { throw `permission denied for database "${conns.find((c) => c.id === a.id)?.database}"`; })(), a.id === "lan" ? ["lan_app"] : a.id === "rd" ? ["db0", "db3"] : a.id === "my" ? ["information_schema", "mysql", "shop", "sys"] : ["postgres", "shop_app", "shop_app_test"]),
   redis_scan: (a: any) => ({
     cursor: "0",
     keys: [

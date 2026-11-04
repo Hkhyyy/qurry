@@ -310,16 +310,17 @@ impl App {
     /// d: run the report on another database, listed as the explorer lists them (one fixed database can't change)
     pub fn dba_pick_db(&mut self) {
         let Some(t) = self.tabs.get(self.active) else { return };
-        let (id, conn) = (t.id, t.conn.clone());
-        if self.conn(&conn).is_some_and(|c| c.config.options.single_db) {
+        let (id, target) = (t.id, t.target.clone());
+        if self.conn(&t.conn).is_some_and(|c| c.config.options.single_db) {
             self.status = format!("This data source has one database: {}", db_label(&t.db));
             return;
         }
         let st = self.state.clone();
         self.status = "Reading databases…".into();
-        self.spawn(async move { st.list_databases(conn).await.map_err(|e| e.to_string()) }, move |a, r| match r {
+        // Through the report's own database: the account may not be able to connect to the source's default one
+        self.spawn(async move { st.list_databases(target).await.map_err(|e| e.to_string()) }, move |a, r| match r {
             Ok(dbs) => a.dba_db_choices(id, dbs),
-            Err(e) => a.status = format!("Databases: {e}"),
+            Err(e) => a.status = qurry_shared::errors::db_list_failed(&e).replace('\n', " "),
         });
     }
 
@@ -329,9 +330,12 @@ impl App {
         let Some(cfg) = self.conn(&t.conn).map(|c| c.config.clone()) else { return };
         let def = sql::default_db(&cfg);
         let mut dbs = qurry_core::app::visible_dbs(&cfg, dbs, &def);
-        // MySQL without a default schema: back to all schemas
+        // MySQL without a default schema: back to all schemas. The current one first when the scope hides it (Enter keeps it)
         if def.is_empty() {
             dbs.insert(0, String::new());
+        }
+        if !dbs.contains(&t.db) {
+            dbs.insert(0, t.db.clone());
         }
         let sel = dbs.iter().position(|d| *d == t.db).unwrap_or(0);
         let items = dbs.into_iter().map(|d| PItem { label: db_label(&d).into(), hint: if d == t.db { "current".into() } else { String::new() }, action: PAction::Pick(d) }).collect();

@@ -497,10 +497,10 @@ export function useEditorGroups({
                     dialect={dialectOf(c?.kind ?? "postgres")}
                     visible={t.id === ga?.id}
                     database={t.database ?? def}
-                    // As the explorer lists them; MySQL without a default schema can go back to all schemas
-                    dbList={[...(def ? [] : [""]), ...(dbCache[t.connId] ?? []).filter((d) => c && dbShown(c, d, def))]}
+                    // As the explorer lists them, through the report's own database (the account may not connect to the default one);
+                    // MySQL without a default schema can go back to all schemas
+                    loadDbs={() => meta.databases(t.target).then((ds) => [...(def ? [] : [""]), ...ds.filter((d) => c && dbShown(c, d, def))])}
                     fixedDb={!!c?.options?.singleDb}
-                    onLoadDbs={() => loadDbList(t.connId)}
                     onDatabase={(db) => c && patch(t.id, { database: db !== def ? db : undefined, target: targetId(c.id, db !== def ? db : undefined) })}
                     onReport={(id, title) => c && patch(t.id, { dbaReport: id, title: `${title} — ${c.name}` })}
                     onOpenConsole={(sql) => c && openConsole(c, t.database, sql)}
