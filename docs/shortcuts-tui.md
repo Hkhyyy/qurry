@@ -34,7 +34,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 
 ### Several nodes in the explorer
 
-`m` marks the node under the cursor or unmarks it (the GUI's `⌘`-click); moving keeps the marks, `Esc` clears them. Go to DDL (`⌃b`) and `F4` (a tab each), `y` (one `schema.name` per line, the GUI's Copy Reference), `Delete` (Drop…) and refresh then act on every marked node on screen; marks in collapsed or filtered-out folders show as "(N hidden)" in the explorer title. Drop… asks once, listing every statement (red on a Production data source, as for one object), and needs tables, views or sequences of one database: views go first, then the tables in one statement, as in the GUI. A command that doesn't fit every marked node says so in the status line, with how to unmark.
+`m` marks the node under the cursor or unmarks it (the GUI's `⌘`-click); moving keeps the marks, `Esc` clears them. Go to DDL (`⌃b`) and `F4` (a tab each), `y` (one `schema.name` per line, the GUI's Copy Reference), `Delete` (Drop…) and refresh then act on every marked node on screen; marks in collapsed or filtered-out folders show as "(N hidden)" in the explorer title. Drop… asks once, listing every statement (red on a Production data source, as for one object), and needs tables, views or sequences of one database. The statements come in the GUI's order (what depends on an object goes first; one statement per kind on PostgreSQL, in one transaction; one per object on MySQL, run one by one), and a failure names what was applied and what didn't run. After a failure the explorer reloads too and the marks are cleared. A command that doesn't fit every marked node says so in the status line, with how to unmark.
 
 <!-- keymap:tui:start -->
 
