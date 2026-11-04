@@ -533,7 +533,10 @@ impl AppState {
         if list.is_empty() {
             return Err(AppError::Msg(format!("{} is not available for this database", (d.info)().title)));
         }
-        let pool = ensure_pool(self, &id).await?;
+        let pool = match ensure_pool(self, &id).await {
+            Ok(p) => p,
+            Err(e) => return Err(self.connect_failed(&id, e)),
+        };
         match run_first(&pool, kind, list, REPORT_TIMEOUT_S).await {
             // An empty SHOW … result has no columns either (servers without replication, etc.)
             Ok(r) if !r.has_result_set || r.columns.is_empty() => Ok(QueryResult {
@@ -554,6 +557,16 @@ impl AppState {
                 };
                 Err(explain(&report, kind, e, preload.as_deref()))
             }
+        }
+    }
+
+    /// The report's database refused or failed the connection (missing, no CONNECT privilege …): name it, so another one can be picked
+    fn connect_failed(&self, id: &str, e: AppError) -> AppError {
+        let (base, db) = crate::app::split_target(id);
+        let db = db.map(str::to_string).or_else(|| self.store.get(base).ok().flatten().map(|c| crate::sql::default_db(&c))).unwrap_or_default();
+        match db.is_empty() {
+            true => e,
+            false => AppError::Msg(format!("Couldn't connect to database {db}. Pick another database for this report (GUI: the database list in its toolbar · TUI: d).\n({e})")),
         }
     }
 
@@ -707,6 +720,28 @@ mod tests {
         Some((c, password))
     }
 
+    /// A report whose database can't be connected names it and points at the database picker
+    #[tokio::test]
+    async fn report_names_the_database_it_cannot_connect_to() {
+        // A server that hangs up on every connection
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((s, _)) = l.accept().await {
+                drop(s);
+            }
+        });
+        let mut c = crate::testenv::parse_pg(&format!("127.0.0.1:{port}:nobody:shop")).cfg;
+        c.id = "d".into();
+        let dir = std::env::temp_dir().join(format!("qurry-dba-{}", uuid::Uuid::new_v4()));
+        let st = crate::open_state(Some(dir)).unwrap();
+        st.save_connection(c, None, None).await.unwrap();
+        for (target, db) in [("d", "shop"), ("d::billing", "billing")] {
+            let e = st.dba_report(target.into(), "table_sizes".into()).await.unwrap_err().to_string();
+            assert!(e.starts_with(&format!("Couldn't connect to database {db}. Pick another database")), "{e}");
+        }
+    }
+
     async fn state(kind: DbKind) -> Option<AppState> {
         state_with(kind, "").await
     }
@@ -744,6 +779,27 @@ mod tests {
     #[ignore]
     async fn mysql_reports_run() {
         all_reports_run(DbKind::Mysql).await;
+    }
+
+    /// Table Sizes follows the target's database: a table of a second database shows there, not on the source's default one (#99)
+    #[tokio::test]
+    #[ignore]
+    async fn pg_table_sizes_follow_the_database() {
+        let Some(st) = state(DbKind::Postgres).await else { return };
+        let q = |t: &str, s: &str| st.run_query(t.into(), s.into(), None, None);
+        q("d", "drop database if exists qurry_dba_other").await.ok();
+        q("d", "create database qurry_dba_other").await.unwrap();
+        q("d::qurry_dba_other", "create table qurry_only_here (id int)").await.unwrap();
+        let tables = |r: QueryResult| r.rows.iter().map(|x| crate::db::cell_text(&x[1])).collect::<Vec<_>>();
+        let other = tables(st.dba_report("d::qurry_dba_other".into(), "table_sizes".into()).await.unwrap());
+        let default = tables(st.dba_report("d".into(), "table_sizes".into()).await.unwrap());
+        // Sessions is server-wide: it runs on either database
+        st.dba_report("d::qurry_dba_other".into(), "sessions".into()).await.unwrap();
+        let missing = st.dba_report("d::qurry_dba_missing".into(), "table_sizes".into()).await.unwrap_err().to_string();
+        st.disconnect("d".into()).await.ok();
+        q("d", "drop database qurry_dba_other with (force)").await.ok();
+        assert!(other.contains(&"qurry_only_here".to_string()) && !default.contains(&"qurry_only_here".to_string()), "{other:?} / {default:?}");
+        assert!(missing.starts_with("Couldn't connect to database qurry_dba_missing. Pick another database"), "{missing}");
     }
 
     /// Server Overview works without performance_schema (MariaDB has no performance_schema.global_status)
