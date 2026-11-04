@@ -132,12 +132,12 @@ test("loading more shows a progress bar at the bottom of the rows; the scroll po
   // While more can come, one row's room waits under the 500 rows of 24 px, so the bar adds nothing when it shows
   const idle = await at();
   expect(idle.height).toBe(501 * 24);
-  // Near the end (it asks 30 rows ahead): the bar sits at the bottom of the view
+  // Near the end (it asks 30 rows ahead): the bar waits in its room under the last row, below the view, so it covers no row
   await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight - el.clientHeight - 20 * 24));
-  await expect(bar).toBeVisible();
+  await expect(bar).toBeAttached();
   const near = (await bar.boundingBox())!;
   const view = (await scroll.boundingBox())!;
-  expect(view.y + idle.client - (near.y + near.height)).toBeLessThan(24);
+  expect(near.y).toBeGreaterThanOrEqual(view.y + idle.client);
   await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
   const loading = await at();
   expect(loading.height).toBe(idle.height);
@@ -154,6 +154,21 @@ test("loading more shows a progress bar at the bottom of the rows; the scroll po
   const after = await at();
   expect(after.top).toBe(loading.top);
   expect(after.height).toBe(620 * 24);
+});
+
+test("loading more never covers the current cell when ↓ moves to the end of the view (#94)", async ({ page }) => {
+  await page.evaluate(() => ((window as any).__mockFetchMoreDelay = 3000));
+  const scroll = work(page).locator(".grid-scroll").first();
+  const bar = work(page).getByRole("progressbar", { name: "Loading more rows" });
+  // The view's last row near 440, the cursor near it: ↓ scrolls on until the load starts (30 rows before the end)
+  await scroll.evaluate((el) => (el.scrollTop = 440 * 24 - el.clientHeight));
+  await work(page).getByRole("gridcell", { name: "user_436", exact: true }).click();
+  for (let i = 0; i < 40 && !(await bar.count()); i++) await page.keyboard.press("ArrowDown");
+  await expect(bar).toBeAttached();
+  // The bar is below the cell under the cursor, not over it
+  const active = (await work(page).locator(".cell.active").boundingBox())!;
+  const bb = (await bar.boundingBox())!;
+  expect(bb.y).toBeGreaterThanOrEqual(active.y + active.height);
 });
 
 /** text-align of the first three data cells of a column */

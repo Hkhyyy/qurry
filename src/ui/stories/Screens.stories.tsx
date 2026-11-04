@@ -197,7 +197,7 @@ export const GridShort: S = {
   ),
 };
 
-/** Loading more rows (infinite scroll, #94): the indeterminate progress bar at the bottom of the view, in the one row's room an unfinished result keeps under its rows, so nothing moves when it comes and goes */
+/** Loading more rows (infinite scroll, #94): the indeterminate progress bar under the last row, in the one row's room an unfinished result keeps under its rows, so nothing moves when it comes and goes */
 export const GridLoadingMore: S = {
   name: "Result Grid — loading more rows",
   render: () => (
