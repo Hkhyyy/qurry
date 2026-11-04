@@ -213,6 +213,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         has_result_set: true,
         in_transaction: false,
         warning: None,
+        editable: None,
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         c.result_title = "Result 1: select card_brand, count(*) as payments,".into();
@@ -241,6 +242,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         has_result_set: true,
         in_transaction: false,
         warning: None,
+        editable: None,
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         c.result_title = "Result 1: select * from payment_check".into();
@@ -294,6 +296,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         has_result_set: true,
         in_transaction: false,
         warning: None,
+        editable: None,
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         c.result_title = "Result 1: select id, payload from webhook_event".into();
@@ -397,6 +400,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         has_result_set: true,
         in_transaction: false,
         warning: None,
+        editable: None,
     };
     let timeout = "The report ran into its time limit (30 s, or a stricter one set on the server). The server may be busy or the statistics very large: try again later.\n(error returned from database: canceling statement due to statement timeout)";
     let info = |kind, id| qurry_core::dba::reports(kind).into_iter().find(|r| r.id == id);

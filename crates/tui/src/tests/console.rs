@@ -17,6 +17,7 @@ fn fake(q: &str) -> Result<QueryResult, String> {
         has_result_set: select,
         in_transaction: false,
         warning: None,
+        editable: None,
     })
 }
 
@@ -119,7 +120,7 @@ async fn production_confirm_shows_counted_rows() {
             return fake(q);
         }
         let n: serde_json::Value = if q.contains("id = 4") { 1.into() } else { "12408".into() };
-        Ok(QueryResult { columns: vec![ColumnInfo { name: "count".into(), type_name: "int8".into() }], rows: vec![vec![n]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None })
+        Ok(QueryResult { columns: vec![ColumnInfo { name: "count".into(), type_name: "int8".into() }], rows: vec![vec![n]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: None })
     }
     let mut h = Harness::new().await;
     let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({

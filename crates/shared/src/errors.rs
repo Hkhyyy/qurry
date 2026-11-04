@@ -49,6 +49,47 @@ pub fn ssm_local_host(host: &str) -> Option<String> {
         .then(|| format!("With AWS SSM, {h} is the instance itself: Host and Port {SSM_HOST_PORT}. Keep it if the database runs on the instance."))
 }
 
+// Why a console result can't be edited (result_edit), on its greyed-out edit buttons (GUI) and status line (TUI)
+
+/// Not a single plain SELECT … FROM one table (a CTE, a subquery or function in FROM, SELECT INTO, more than one statement)
+pub const EDIT_NOT_PLAIN: &str = "Read-only: only the result of a plain SELECT from one table can be edited.";
+/// SELECT without FROM
+pub const EDIT_NO_TABLE: &str = "Read-only: the result doesn't come from a table.";
+/// A join or FROM a, b
+pub const EDIT_MANY_TABLES: &str = "Read-only: the columns come from more than one table.";
+/// MySQL: the select list didn't line up with the table's columns
+pub const EDIT_UNMATCHED: &str = "Read-only: Qurry couldn't match the result's columns to the table's.";
+/// Driver plugins don't say where a result column comes from
+pub const EDIT_DRIVER: &str = "Read-only: console results can be edited on PostgreSQL and MySQL only.";
+
+/// GROUP BY, HAVING, DISTINCT, UNION …: one result row isn't one table row
+pub fn edit_combined(what: &str) -> String {
+    format!("Read-only: the result uses {what}, so its rows aren't rows of the table.")
+}
+
+/// A result column that isn't read straight from the table (an expression, an aggregate, a cast)
+pub fn edit_computed(column: &str) -> String {
+    format!("Read-only: {column} is computed, not a column of the table.")
+}
+
+/// The same result name twice, or the same table column under two names
+pub fn edit_duplicate(column: &str) -> String {
+    format!("Read-only: the result has {column} more than once.")
+}
+
+pub fn edit_no_pk(table: &str) -> String {
+    format!("Read-only: {table} has no primary key.")
+}
+
+pub fn edit_missing_pk(pk: &[String]) -> String {
+    format!("Read-only: the result doesn't include the primary key ({}).", pk.join(", "))
+}
+
+/// what: "view", "materialized view", "foreign table" …
+pub fn edit_not_table(table: &str, what: &str) -> String {
+    format!("Read-only: {table} is a {what}, not a table.")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

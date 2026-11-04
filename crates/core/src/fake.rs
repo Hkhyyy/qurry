@@ -502,6 +502,7 @@ impl AppState {
             has_result_set: true,
             in_transaction: false,
             warning: None,
+            editable: None,
         };
         Ok(FakePreview { plan, result, warnings: p.warnings })
     }

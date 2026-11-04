@@ -948,3 +948,141 @@ async fn redis_metadata_and_tools() {
     assert_eq!((a.sql.as_str(), a.error.is_none(), a.undo.is_none()), ("SET qm:s bye", true, true), "{a:?}");
     q(&st, "FLUSHDB").await;
 }
+
+// ───────── Console results: can their rows be edited (#86) ─────────
+
+/// Each statement's edit target (in table `s.<table>`, pk, the table column of each result column) or its read-only reason,
+/// run in a console tab. `count` is the server's name for count(*)
+async fn console_edit_cases(st: &AppState, s: &str, count: &str) {
+    use qurry_core::editable::{EditTarget, Editable};
+    use qurry_shared::errors as e;
+    let v = |x: &[&str]| x.iter().map(|c| c.to_string()).collect::<Vec<_>>();
+    let edit = |table: &str, pk: &[&str], cols: &[&str]| Some(Editable::Table(EditTarget { schema: s.into(), table: table.into(), pk: v(pk), columns: v(cols) }));
+    let ro = |why: String| Some(Editable::ReadOnly(why));
+    let cases = [
+        (format!("select * from {s}.items"), edit("items", &["id"], &["id", "name", "qty"])),
+        (format!("select name, id from {s}.items where qty > 0 order by id"), edit("items", &["id"], &["name", "id"])),
+        (format!("select i.id as item_id, i.name n from {s}.items i limit 2"), edit("items", &["id"], &["id", "name"])),
+        (format!("select * from {s}.pairs"), edit("pairs", &["a", "b"], &["a", "b", "note"])),
+        // No rows: still editable (rows can be added)
+        (format!("select * from {s}.items where qty < 0"), edit("items", &["id"], &["id", "name", "qty"])),
+        (format!("select i.id, i.name from {s}.items i join {s}.pairs p on p.a = i.id"), ro(e::EDIT_MANY_TABLES.into())),
+        // A self-join: one table, but the columns of two different rows
+        (format!("select a.id, b.name from {s}.items a join {s}.items b on b.id = a.qty"), ro(e::EDIT_MANY_TABLES.into())),
+        (format!("select * from {s}.items, {s}.pairs"), ro(e::EDIT_MANY_TABLES.into())),
+        (format!("select count(*) from {s}.items"), ro(e::edit_computed(count))),
+        (format!("select name, max(id) from {s}.items group by name"), ro(e::edit_combined("GROUP BY"))),
+        (format!("select distinct id, name from {s}.items"), ro(e::edit_combined("DISTINCT"))),
+        (format!("select id from {s}.items union select a from {s}.pairs"), ro(e::edit_combined("UNION"))),
+        (format!("select id, upper(name) as name from {s}.items"), ro(e::edit_computed("name"))),
+        (format!("select name, qty from {s}.items"), ro(e::edit_missing_pk(&v(&["id"])))),
+        (format!("select a, note from {s}.pairs"), ro(e::edit_missing_pk(&v(&["a", "b"])))),
+        (format!("select * from {s}.v_items"), ro(e::edit_not_table(&format!("{s}.v_items"), "view"))),
+        (format!("select id, id from {s}.items"), ro(e::edit_duplicate("id"))),
+        (format!("select id, name, name as again from {s}.items"), ro(e::edit_duplicate("name"))),
+        (format!("select * from {s}.nokey"), ro(e::edit_no_pk(&format!("{s}.nokey")))),
+        (format!("select * from (select * from {s}.items) x"), ro(e::EDIT_NOT_PLAIN.into())),
+        ("select 1 as id".to_string(), ro(e::EDIT_NO_TABLE.into())),
+    ];
+    for (sql, want) in cases {
+        let r = q_tab(st, "edit-tab", &sql).await;
+        assert_eq!(r.editable, want, "{sql}");
+    }
+    // Statements without a result set say nothing
+    let r = q_tab(st, "edit-tab", &format!("update {s}.items set qty = qty where id = 1")).await;
+    assert_eq!(r.editable, None);
+    // The lookups don't touch the console's cursor: the rest of the rows still load
+    let r = st.run_query(ID.into(), format!("select * from {s}.items order by id"), Some(1), Some("edit-tab".into())).await.unwrap();
+    assert!(r.truncated && matches!(r.editable, Some(Editable::Table(_))), "{r:?}");
+    let more = st.fetch_more("edit-tab".into(), Some(10)).await.unwrap();
+    assert_eq!(more.rows.len(), 2);
+    // ... nor its Manual transaction: the pending change is still there to roll back
+    st.set_tx_mode(ID.into(), "edit-tab".into(), true).await.unwrap();
+    q_tab(st, "edit-tab", &format!("update {s}.items set qty = 99 where id = 1")).await;
+    let r = q_tab(st, "edit-tab", &format!("select id, qty from {s}.items where id = 1")).await;
+    assert!(matches!(r.editable, Some(Editable::Table(_))) && r.in_transaction && r.rows[0][1] == json!(99), "{r:?}");
+    st.rollback_tx("edit-tab".into()).await.unwrap();
+    st.set_tx_mode(ID.into(), "edit-tab".into(), false).await.unwrap();
+    st.close_session("edit-tab".into()).await.unwrap();
+    assert_eq!(q(st, &format!("select qty from {s}.items where id = 1")).await.rows[0][0], json!(1));
+    // Not a console (no tab), and MCP's read-only runs: not checked
+    assert_eq!(q(st, &format!("select * from {s}.items")).await.editable, None);
+    assert_eq!(st.run_read_only(ID.into(), format!("select * from {s}.items"), 10).await.unwrap().editable, None);
+}
+
+#[tokio::test]
+#[ignore]
+async fn pg_console_result_edit_target() {
+    let Some(c) = pg_env() else { return };
+    let st = state(&c, None).await;
+    let s = "qm_edit";
+    for sql in [
+        format!("drop schema if exists {s} cascade"),
+        format!("create schema {s}"),
+        format!("create table {s}.items (id int primary key, name text, qty int)"),
+        format!("create table {s}.pairs (a int, b int, note text, primary key (a, b))"),
+        format!("create table {s}.nokey (x int, y text)"),
+        format!("create view {s}.v_items as select id, name from {s}.items"),
+        format!("insert into {s}.items values (1, 'a', 1), (2, 'b', 2), (3, 'c', 3)"),
+        format!("insert into {s}.pairs values (1, 1, 'x')"),
+    ] {
+        q(&st, &sql).await;
+    }
+    console_edit_cases(&st, s, "count").await;
+    // PostgreSQL only: a system column, a cast, a materialized view, a partitioned table
+    use qurry_core::editable::Editable;
+    use qurry_shared::errors as e;
+    for sql in [
+        format!("create materialized view {s}.m_items as select * from {s}.items"),
+        format!("create table {s}.parts (id int, at date, primary key (id, at)) partition by range (at)"),
+        format!("create table {s}.parts_1 partition of {s}.parts for values from ('2020-01-01') to ('2030-01-01')"),
+    ] {
+        q(&st, &sql).await;
+    }
+    let cases = [
+        (format!("select ctid, * from {s}.items"), Editable::ReadOnly(e::edit_computed("ctid"))),
+        (format!("select id, name::varchar from {s}.items"), Editable::ReadOnly(e::edit_computed("name"))),
+        (format!("select * from {s}.m_items"), Editable::ReadOnly(e::edit_not_table(&format!("{s}.m_items"), "materialized view"))),
+    ];
+    for (sql, want) in cases {
+        assert_eq!(q_tab(&st, "edit-pg", &sql).await.editable, Some(want), "{sql}");
+    }
+    let r = q_tab(&st, "edit-pg", &format!("select * from {s}.parts")).await;
+    assert!(matches!(&r.editable, Some(Editable::Table(t)) if t.table == "parts" && t.pk == ["id", "at"]), "{r:?}");
+    // Mixed-case names keep their case; the search path finds the table
+    q(&st, &format!("create table {s}.\"Mixed\" (\"Id\" int primary key, \"Note\" text)")).await;
+    q_tab(&st, "edit-pg", &format!("set search_path = {s}")).await;
+    let r = q_tab(&st, "edit-pg", "select \"Note\", \"Id\" from \"Mixed\"").await;
+    assert!(matches!(&r.editable, Some(Editable::Table(t)) if t.schema == s && t.table == "Mixed" && t.pk == ["Id"] && t.columns == ["Note", "Id"]), "{r:?}");
+    st.close_session("edit-pg".into()).await.unwrap();
+    q(&st, &format!("drop schema {s} cascade")).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn mysql_console_result_edit_target() {
+    let s = "qm_edit";
+    let Some(st) = my_state(s).await else { return };
+    for sql in [
+        format!("create table {s}.items (id int primary key, name varchar(20), qty int)"),
+        format!("create table {s}.pairs (a int, b int, note varchar(20), primary key (a, b))"),
+        format!("create table {s}.nokey (x int, y varchar(20))"),
+        format!("create view {s}.v_items as select id, name from {s}.items"),
+        format!("insert into {s}.items values (1, 'a', 1), (2, 'b', 2), (3, 'c', 3)"),
+        format!("insert into {s}.pairs values (1, 1, 'x')"),
+    ] {
+        q(&st, &sql).await;
+    }
+    console_edit_cases(&st, s, "count(*)").await;
+    // MySQL only: the console's database (no schema in the statement), names in other case, a bare value word, a temporary table
+    use qurry_core::editable::Editable;
+    use qurry_shared::errors as e;
+    let r = q_tab(&st, "edit-my", "select NAME, Id from items").await;
+    assert!(matches!(&r.editable, Some(Editable::Table(t)) if t.schema == s && t.table == "items" && t.columns == ["name", "id"]), "{r:?}");
+    let r = q_tab(&st, "edit-my", "select id, current_date as d from items").await;
+    assert_eq!(r.editable, Some(Editable::ReadOnly(e::edit_computed("d"))));
+    q_tab(&st, "edit-my", "create temporary table tmp (id int primary key)").await;
+    assert_eq!(q_tab(&st, "edit-my", "select * from tmp").await.editable, None);
+    st.close_session("edit-my".into()).await.unwrap();
+    q(&st, &format!("drop database {s}")).await;
+}

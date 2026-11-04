@@ -116,6 +116,18 @@ export interface QueryResult {
   warning?: string;
   /** GUI only: loading more rows failed, and why (the grid shows it, and stops loading more until the query runs again) */
   moreError?: string;
+  /** A console SELECT's result whose rows can be edited like a table tab's: in this table (not sent on load more) */
+  edit?: ResultEditTarget;
+  /** A console result whose rows can't be edited, and why (instead of `edit`). Neither: not checked */
+  readOnlyReason?: string;
+}
+
+/** Where a console result's edits go: result column i is the table's column `columns[i]`; `pk` is the table's primary key */
+export interface ResultEditTarget {
+  schema: string;
+  table: string;
+  pk: string[];
+  columns: string[];
 }
 
 /** Statements run in one transaction: rows changed; warning = committed, but the Production log couldn't record the result */

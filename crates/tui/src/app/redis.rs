@@ -20,6 +20,7 @@ pub fn redis_grid(d: &KeyDetail) -> Option<Grid> {
         has_result_set: true,
         in_transaction: false,
         warning: None,
+        editable: None,
     };
     Some(Grid::new(result))
 }
