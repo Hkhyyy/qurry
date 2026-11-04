@@ -463,6 +463,19 @@ async fn all_scenes() -> Vec<Value> {
     (g.row, g.col) = at;
     h.app.focus = focus;
     h.app.color = ColorMode::TrueColor;
+    // Marked rows (m): rows 1 and 4 selected whole, the cursor on row 3
+    h.app.focus = crate::app::Focus::Grid;
+    h.key("m");
+    for _ in 0..3 {
+        h.key("Down");
+    }
+    h.key("m");
+    h.key("Up");
+    scenes.push(app_scene(&mut h, "Grid: marked rows", "m adds the current row to the selection or takes it out (the GUI's ⌘-click on a row number): marked rows look selected, their numbers reversed; y copies and d deletes them all, Esc clears them", 120, 22));
+    h.key("Esc");
+    let g = h.app.grid_mut().unwrap();
+    (g.row, g.col) = at;
+    h.app.focus = focus;
     scenes.push(app_scene(&mut h, "Terminal too small", "Below 40×10 the layout isn't drawn: the size, the size needed and how to quit", 36, 9));
     h.app.popup = Some(Popup::Confirm {
         opened: None,

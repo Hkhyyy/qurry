@@ -42,6 +42,8 @@ pub struct Grid {
     pub sort: Option<(usize, bool)>,
     /// Start cell (row, col) of a range selection. The end is the current cell
     pub anchor: Option<(usize, usize)>,
+    /// Rows added to the selection one by one (m: the GUI's ⌘-click on a row number). Moving keeps them, Esc clears them
+    pub marked: BTreeSet<usize>,
     /// Original position of each row while sorted on screen (restored when sorting is cleared)
     orig: Vec<usize>,
 }
@@ -136,7 +138,7 @@ static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 
 impl Grid {
     pub fn new(result: QueryResult) -> Self {
-        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, more_error: None, id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed), edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, orig: vec![] };
+        let mut g = Grid { result, row: 0, col: 0, row_off: 0, col_off: 0, more_session: None, loading_more: false, more_error: None, id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed), edits: BTreeMap::new(), deleted: BTreeSet::new(), added: 0, widths: vec![], frac: vec![], page: 10, body: Rect::default(), col_x: vec![], hbar: Rect::default(), header: Rect::default(), max_off: usize::MAX, sort: None, anchor: None, marked: BTreeSet::new(), orig: vec![] };
         g.compute_widths();
         g
     }
@@ -204,6 +206,8 @@ impl Grid {
     }
 
     fn apply_local_sort(&mut self) {
+        // Marks are row positions: they would point at other rows once sorted
+        self.marked.clear();
         let mut rows: Vec<(usize, Vec<Value>)> = std::mem::take(&mut self.orig).into_iter().zip(std::mem::take(&mut self.result.rows)).collect();
         match self.sort {
             Some((c, desc)) => rows.sort_by(|a, b| {
@@ -272,11 +276,75 @@ impl Grid {
         self.anchor = Some(anchor);
     }
 
-    /// Selected range as TSV (values only, NULL as empty): pastes into a sheet as cells
+    /// m: the current row into the marked rows, or out of them
+    pub fn toggle_mark(&mut self) {
+        if !self.marked.remove(&self.row) && self.row < self.rows() {
+            self.marked.insert(self.row);
+        }
+    }
+
+    /// Whether (r, c) is selected: in the range, or in a marked row
+    fn selected(&self, r: usize, c: usize) -> bool {
+        self.marked.contains(&r) || self.sel_rect().is_some_and(|(r0, c0, r1, c1)| r >= r0 && r <= r1 && c >= c0 && c <= c1)
+    }
+
+    /// Rows and columns the selection (marked rows and the range) touches, in grid order. None when nothing is selected
+    pub fn selection(&self) -> Option<(Vec<usize>, Vec<usize>)> {
+        let rect = self.sel_rect();
+        if rect.is_none() && self.marked.is_empty() {
+            return None;
+        }
+        let mut rows = self.marked.clone();
+        let cols: Vec<usize> = match rect {
+            Some((r0, c0, r1, c1)) if self.marked.is_empty() => {
+                rows.extend(r0..=r1);
+                (c0..=c1).collect()
+            }
+            Some((r0, _, r1, _)) => {
+                rows.extend(r0..=r1);
+                (0..self.cols()).collect()
+            }
+            None => (0..self.cols()).collect(),
+        };
+        Some((rows.into_iter().collect(), cols))
+    }
+
+    /// The selection as TSV (values only, NULL as empty): pastes into a sheet as cells. Same rule as the GUI's copy (gridSelection.ts
+    /// copyTable): rows and columns in grid order, the union of their columns, a cell outside the selection empty. Nothing selected: the current cell
     pub fn selection_tsv(&self) -> String {
-        let (r0, c0, r1, c1) = self.sel_rect().unwrap_or((self.row, self.col, self.row, self.col));
-        let vals = (r0..=r1).map(|r| (c0..=c1).map(|c| self.value(r, c).map_or(Value::Null, Value::String)).collect()).collect();
+        let Some((rows, cols)) = self.selection() else {
+            let vals = vec![vec![self.value(self.row, self.col).map_or(Value::Null, Value::String)]];
+            return extract::rows(Format::Tsv, &Rows { vals, ..Default::default() }, DbKind::Postgres, extract::Options::default());
+        };
+        let cell = |r: usize, c: usize| if self.selected(r, c) { self.value(r, c).map_or(Value::Null, Value::String) } else { Value::Null };
+        let vals = rows.iter().map(|&r| cols.iter().map(|&c| cell(r, c)).collect()).collect();
         extract::rows(Format::Tsv, &Rows { vals, ..Default::default() }, DbKind::Postgres, extract::Options::default())
+    }
+
+    /// d: the selected rows (marked rows and the range's), or else the current row, deleted; when all of them are deleted already, back.
+    /// Added rows go away instead
+    pub fn delete_rows(&mut self) {
+        let rows = self.selection().map_or(vec![self.row], |(rows, _)| rows);
+        let base = self.rows() - self.added;
+        let (new, old): (Vec<usize>, Vec<usize>) = rows.into_iter().filter(|&r| r < self.rows()).partition(|&r| r >= base);
+        if old.iter().all(|r| self.deleted.contains(r)) {
+            for r in &old {
+                self.deleted.remove(r);
+            }
+        } else {
+            self.deleted.extend(old);
+        }
+        for &r in new.iter().rev() {
+            self.result.rows.remove(r);
+            self.added -= 1;
+            // Edits of the added rows below move up with them
+            self.edits = std::mem::take(&mut self.edits).into_iter().filter(|((er, _), _)| *er != r).map(|((er, c), v)| ((if er > r { er - 1 } else { er }, c), v)).collect();
+        }
+        if !new.is_empty() {
+            self.marked.retain(|&r| r < base);
+            self.anchor = None;
+            self.row = self.row.min(self.rows().saturating_sub(1));
+        }
     }
 
     pub fn dirty(&self) -> bool {
@@ -287,6 +355,7 @@ impl Grid {
         self.edits.clear();
         self.deleted.clear();
         let n = self.result.rows.len() - self.added;
+        self.marked.retain(|&r| r < n);
         self.result.rows.truncate(n);
         self.added = 0;
         self.row = self.row.min(n.saturating_sub(1));
@@ -517,7 +586,9 @@ impl Grid {
                 } else {
                     (' ', Color::DarkGray)
                 };
-                let num = Cell::from(format!("{:>w$}{mark}", r + 1, w = num_w as usize - 1)).style(Style::default().fg(num_c));
+                // A marked row's number in reverse video (shows without colors too)
+                let num_st = Style::default().fg(num_c);
+                let num = Cell::from(format!("{:>w$}{mark}", r + 1, w = num_w as usize - 1)).style(if self.marked.contains(&r) { num_st.add_modifier(Modifier::REVERSED) } else { num_st });
                 Row::new(std::iter::once(num).chain(cols.iter().zip(&shown_w).zip(&tclass).zip(&tjson).map(|(((&c, &w), &tc), &json)| {
                     let edited = self.edits.contains_key(&(r, c));
                     let v = self.shown(r, c, self.widths[c] as usize + 1);
@@ -549,10 +620,10 @@ impl Grid {
                     if added {
                         st = st.fg(crate::kit::OK);
                     }
-                    let in_sel = sel.is_some_and(|(r0, c0, r1, c1)| r >= r0 && r <= r1 && c >= c0 && c <= c1);
+                    let in_sel = self.selected(r, c);
                     let cursor = r == self.row && c == self.col;
-                    // Where the range and the cursor are both reverse video, the cursor is the one cell of the range left plain (like a spreadsheet)
-                    let hole = cursor && color.reverses_selection() && sel.is_some_and(|(r0, c0, r1, c1)| r0 != r1 || c0 != c1);
+                    // Where the selection and the cursor are both reverse video, the cursor is the one cell of it left plain (like a spreadsheet)
+                    let hole = cursor && in_sel && color.reverses_selection() && (!self.marked.is_empty() || sel.is_some_and(|(r0, c0, r1, c1)| r0 != r1 || c0 != c1));
                     if cursor && !hole {
                         st = st.bg(crate::kit::selected(focused));
                     } else if in_sel && !cursor {

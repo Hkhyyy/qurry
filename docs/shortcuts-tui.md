@@ -99,6 +99,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | — | Set NULL |
 | — | Export Data… (CSV, TSV, JSON, SQL INSERT, Markdown) |
 | — | Copy Column as IN List  ('a', 'b', …) |
+| — | Mark Row (add the row to the selection or take it out: y copies, d deletes the marked rows) |
 | — | Find Similar Rows (pgvector, by the vector column) |
 | — | AI Search (RAG)… — ask a table in plain words |
 | — | Build RAG Index… (embed the rows) |
@@ -166,6 +167,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | `n` | Set NULL |
 | `x` | Export Data… (CSV, TSV, JSON, SQL INSERT, Markdown) |
 | `Y` | Copy Column as IN List  ('a', 'b', …) |
+| `m` | Mark Row (add the row to the selection or take it out: y copies, d deletes the marked rows) |
 
 ## Database Explorer
 
@@ -215,7 +217,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | `s` | Sort by the selected column: ▲ → ▼ → off (table data: ORDER BY · results: loaded rows) |
 | `w or / · o` | Edit WHERE · ORDER BY (table data) |
 | `r` | Reload (table data) |
-| `y  ⌘c` | Copy cell value (a selected range: as TSV, pastes into spreadsheets as cells) |
+| `y  ⌘c` | Copy cell value (a selected range or marked rows: as TSV, pastes into spreadsheets as cells) |
 | `⌘v` | Paste into cells from the selected one (tabs / lines fill several; extra lines add rows; table data) |
 | `Esc` | Back (query results: to the editor) |
 
