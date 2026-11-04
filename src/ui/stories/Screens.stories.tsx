@@ -29,6 +29,7 @@ import { Switcher } from "../../components/Switcher";
 import { BackupDialog, ExportDialog, ImportDialog } from "../../components/Transfer";
 import { UpdateDialog } from "../../components/UpdateDialog";
 import { WorkspaceBar } from "../../components/WorkspaceBar";
+import { StatusBar } from "../../features/settings/StatusBar";
 import { ConsoleIcon, ReportIcon, TabIcon, TableIcon } from "../icons";
 
 /** Screens: real screen components with fake data (same data as the app's ?mock). Buttons are clickable */
@@ -372,23 +373,37 @@ export const Redis: S = {
     </Frame>
   ),
 };
-export const Workspaces: S = {
-  name: "Workspace rail",
-  render: () => (
-    <div style={{ width: 64, height: 300, background: "var(--ui-surface-2)" }}>
+const WS_NAMES = ["Default", "Reports", "Billing", "Analytics", "Ops", "Support", "Growth", "Search", "Mobile", "Payments"];
+/** The rail at a fixed window height: n workspaces, the 2nd current. Keymap and Settings stay at the bottom while the list scrolls */
+const Rail = ({ n, h = 420 }: { n: number; h?: number }) => {
+  const list = Array.from({ length: n }, (_, i) => ({ id: `w${i}`, name: i < WS_NAMES.length ? WS_NAMES[i] : `Workspace ${i + 1}`, connIds: [] }));
+  return (
+    <div style={{ height: h, display: "flex", border: "1px solid var(--ui-border)", width: "fit-content" }}>
       <WorkspaceBar
-        list={[
-          { id: "a", name: "Default", connIds: [] },
-          { id: "b", name: "Reports", connIds: [] },
-        ]}
-        current="a"
-        counts={{ a: 3, b: 1 }}
+        list={list}
+        current="w1"
+        counts={Object.fromEntries(list.map((w, i) => [w.id, i % 4]))}
         shortcut={(n) => `⌘${n}`}
         onSwitch={noop}
         onNew={noop}
         onRename={noop}
         onDelete={noop}
+        onKeymap={noop}
+        onSettings={noop}
       />
+    </div>
+  );
+};
+export const Workspaces: S = { name: "Workspace rail", render: () => <Rail n={2} /> };
+export const WorkspacesMany: S = { name: "Workspace rail — 30 workspaces (list scrolls, footer stays)", render: () => <Rail n={30} /> };
+export const WorkspacesLight: S = { name: "Workspace rail — light", globals: { theme: "light" }, render: () => <Rail n={30} /> };
+export const WorkspacesHc: S = { name: "Workspace rail — high contrast", globals: { theme: "hc" }, render: () => <Rail n={30} /> };
+/** Status bar: run · cancel, status text, transfers, update badge, read-only, caret, encoding (Settings and Keymap moved to the workspace rail) */
+export const StatusBarStory: S = {
+  name: "Status bar",
+  render: () => (
+    <div style={{ display: "flex", flexDirection: "column" }}>
+      <StatusBar run={{ canRun: true, running: false, onRun: noop, onCancel: noop }} status="1 statement executed in 12 ms" readOnly update="0.3.1" onUpdate={noop} jobs={[]} />
     </div>
   ),
 };

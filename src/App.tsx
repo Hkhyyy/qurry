@@ -16,7 +16,7 @@ import { NodeInfo } from "./components/SchemaTree";
 import { leaves } from "./lib/panes";
 import { useTheme } from "./lib/theme";
 import { Group, Tab } from "./features/tabs/types";
-import { isMac, sk } from "./features/shortcuts/labels";
+import { isMac } from "./features/shortcuts/labels";
 import { offered, upToDate } from "./features/settings/SettingsDialog";
 import { StatusBar } from "./features/settings/StatusBar";
 import { editorApis, useTabsStore } from "./features/tabs/store";
@@ -248,6 +248,8 @@ export default function App() {
           onNew={newWs}
           onRename={renameWs}
           onDelete={deleteWs}
+          onKeymap={() => setKeymapOpen(true)}
+          onSettings={() => setSettingsOpen("appearance")}
         />
       )}
       <PanelGroup direction="vertical" className="main" autoSaveId="dbtool-v">
@@ -302,9 +304,6 @@ export default function App() {
       {search.popups}
       <StatusBar
         run={{ canRun: !!active && active.kind === "console" && !canCancel(active), running: canCancel(active), onRun: () => active && editorApis.get(active.id)?.run(), onCancel: () => active && cancelRun(active) }}
-        onSettings={() => setSettingsOpen("appearance")}
-        settingsKey={sk("settings")}
-        onKeymap={() => setKeymapOpen(true)}
         status={status} readOnly={!!activeConn?.readOnly} update={update?.latest?.version} onUpdate={() => setUpdateOpen(true)} jobs={jobs} />
 
       {tabMenu && <ContextMenu menu={tabMenu} onClose={() => setTabMenu(null)} />}
