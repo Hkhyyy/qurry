@@ -153,28 +153,12 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
     }
 }
 
-/// Filter candidates by the word before the cursor (ignoring case·quotes, skipping ones already fully typed, up to 8)
-fn input_complete(input: &tui_textarea::TextArea, words: &[String], force: bool) -> Option<(Vec<String>, usize, usize)> {
-    if words.is_empty() {
-        return None;
-    }
-    let (row, col) = input.cursor();
-    let before: Vec<char> = input.lines().get(row)?.chars().take(col).collect();
-    let n = before.iter().rev().take_while(|c| c.is_alphanumeric() || **c == '_' || **c == '"' || **c == '`').count();
-    if n == 0 && !force {
-        return None;
-    }
-    let p: String = before[before.len() - n..].iter().collect::<String>().trim_start_matches(['"', '`']).to_lowercase();
-    let items: Vec<String> = words
-        .iter()
-        .filter(|w| {
-            let w = w.trim_matches(['"', '`']).to_lowercase();
-            w.starts_with(&p) && w != p
-        })
-        .take(8)
-        .cloned()
-        .collect();
-    (!items.is_empty()).then_some((items, 0, n))
+/// A table filter input's candidates at the cursor (complete::suggest_filter), or None
+fn filter_complete(input: &tui_textarea::TextArea, f: &crate::app::FilterSource) -> Option<crate::app::Completion> {
+    let line = input.lines().first()?;
+    let caret = line.char_indices().nth(input.cursor().1).map_or(line.len(), |(i, _)| i);
+    let (prefix, items) = qurry_core::complete::suggest_filter(&f.meta, &f.schema, &f.table, f.order_by, line, caret, &f.db, f.mysql);
+    (!items.is_empty()).then_some(crate::app::Completion { items, sel: 0, prefix })
 }
 
 /// For screens with single-letter commands (a add row, d delete …): ⌘←/→ are Home/End (terminals may send them as ⌃A/⌃E), ⌘C is y (copy),

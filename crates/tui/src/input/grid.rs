@@ -74,26 +74,8 @@ pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
         }
         TabKind::Table(tt) => {
             match k.code {
-                KeyCode::Char('w') => {
-                    let w = tt.where_.clone();
-                    let words = app.table_words(id, false);
-                    app.input_words("WHERE", &w, words, move |a, s| {
-                        if let Some(TabKind::Table(tt)) = a.tab_mut(id).map(|t| &mut t.kind) {
-                            tt.where_ = s;
-                        }
-                        a.reload_table_checked(id);
-                    });
-                }
-                KeyCode::Char('o') => {
-                    let o = tt.order.clone();
-                    let words = app.table_words(id, true);
-                    app.input_words("ORDER BY", &o, words, move |a, s| {
-                        if let Some(TabKind::Table(tt)) = a.tab_mut(id).map(|t| &mut t.kind) {
-                            tt.order = s;
-                        }
-                        a.reload_table_checked(id);
-                    });
-                }
+                KeyCode::Char('w') => app.input_filter(id, false),
+                KeyCode::Char('o') => app.input_filter(id, true),
                 KeyCode::Enter | KeyCode::F(2) => {
                     let Some(g) = &tt.grid else { return };
                     let (r, c) = (g.row, g.col);
@@ -118,16 +100,7 @@ pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
                 }
                 KeyCode::Char('r') => app.reload_table_checked(id),
                 KeyCode::Char('s') => app.sort_table(id),
-                KeyCode::Char('/') => {
-                    let w = tt.where_.clone();
-                    let words = app.table_words(id, false);
-                    app.input_words("WHERE", &w, words, move |a, s| {
-                        if let Some(TabKind::Table(tt)) = a.tab_mut(id).map(|t| &mut t.kind) {
-                            tt.where_ = s;
-                        }
-                        a.reload_table_checked(id);
-                    });
-                }
+                KeyCode::Char('/') => app.input_filter(id, false),
                 KeyCode::Esc => app.focus = Focus::Tree,
                 _ => nav(app, k),
             }

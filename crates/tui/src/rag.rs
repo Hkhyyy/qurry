@@ -196,7 +196,7 @@ impl App {
                     Err(e) => e.to_string(),
                 };
             }),
-            words: vec![],
+            filter: None,
             complete: None,
         });
     }
