@@ -73,10 +73,12 @@ function useReveal(fn: (t: RevealTarget) => void) {
 
 export const isRelation = (k: NodeInfo["kind"]) => ["table", "view", "matview", "foreign", "partitioned"].includes(k);
 
-/** Tree selection state (DataGrip: click = select, ▸ / double-click = expand) */
-export const TreeSelection = createContext<{ sel: string | null; setSel: (id: string, info?: NodeInfo) => void }>({
-  sel: null,
-  setSel: () => {},
+/** Tree selection state (DataGrip: click = select one, ⌘-click / ⇧-click = several, ▸ / double-click = expand).
+ *  infos: what each selectable row on screen points to (rows add themselves), so the explorer can act on several */
+export const TreeSelection = createContext<{ ids: string[]; select: (id: string, info?: NodeInfo, e?: React.MouseEvent) => void; infos: Map<string, NodeInfo> }>({
+  ids: [],
+  select: () => {},
+  infos: new Map(),
 });
 
 interface Props {
@@ -104,8 +106,12 @@ const REL_GROUPS: { kind: RelationInfo["kind"][]; label: string; icon: string }[
 
 function useSelectable(info?: NodeInfo) {
   const id = useId();
-  const { sel, setSel } = useContext(TreeSelection);
-  return { selected: sel === id, select: () => setSel(id, info) };
+  const { ids, select, infos } = useContext(TreeSelection);
+  useEffect(() => {
+    if (info) infos.set(id, info);
+    return () => void infos.delete(id);
+  });
+  return { id, selected: ids.includes(id), select: (e?: React.MouseEvent) => select(id, info, e) };
 }
 
 function Row({ depth, open, onToggle, icon, iconClass, label, sub, title, onDoubleClick, onMenu, leaf, info, style, className, badge }: {
@@ -113,7 +119,7 @@ function Row({ depth, open, onToggle, icon, iconClass, label, sub, title, onDoub
   title?: string; onDoubleClick?: () => void; onMenu?: (e: React.MouseEvent, info: NodeInfo) => void; leaf?: boolean;
   info?: NodeInfo; style?: React.CSSProperties; className?: string; badge?: React.ReactNode;
 }) {
-  const { selected, select } = useSelectable(info);
+  const { id, selected, select } = useSelectable(info);
   return (
     <TreeRow
       depth={depth}
@@ -129,12 +135,14 @@ function Row({ depth, open, onToggle, icon, iconClass, label, sub, title, onDoub
       className={className}
       style={style}
       dataNode={info ? nodeKey(info.conn.id, info.kind === "conn" ? undefined : info.db, info.schema, info.name) : undefined}
+      id={info ? id : undefined}
       onSelect={select}
       onToggle={onToggle}
       onDoubleClick={onDoubleClick}
       onContextMenu={(e) => {
         e.preventDefault();
-        select();
+        // A right-click on a node of the selection keeps the selection (the menu acts on all of it)
+        if (!selected) select();
         if (info && onMenu) onMenu(e, info);
       }}
     />

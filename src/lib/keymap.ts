@@ -81,6 +81,7 @@ export const KEYMAP: KeySection[] = [
       [null, "tree.sqlGen"],
       [null, "tree.ddlCopy"],
       [null, "tree.ddlConsole"],
+      [null, "tree.copyName"],
       [null, "tree.copyRef"],
       [null, "tree.quickDoc"],
       [null, "tree.modify"],
@@ -93,6 +94,8 @@ export const KEYMAP: KeySection[] = [
       [null, "tree.disconnect"],
       [null, "tree.remove"],
       ["type letters", "Speed search in the tree"],
+      ["⌘-click", "Add a node to the selection or remove it (Go to DDL, Edit Data, copy, Drop…, Refresh run for every selected node)"],
+      ["⇧-click", "Select the visible nodes from the last clicked one; a plain click or an arrow key selects one node again"],
     ],
   },
   {

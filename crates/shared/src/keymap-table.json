@@ -30,6 +30,7 @@
   {"gui": "tree.sqlGen", "title": "SQL Generator", "scope": "tree", "guiKeys": ["Mod+Alt+G"]},
   {"gui": "tree.ddlCopy", "title": "Copy DDL to Clipboard", "guiDesc": "Copy DDL to clipboard", "scope": "tree", "guiKeys": ["Mod+Alt+Shift+G"]},
   {"gui": "tree.ddlConsole", "title": "Open DDL in Console", "guiDesc": "Open DDL in console", "scope": "tree", "guiKeys": ["Mod+Alt+Shift+B"]},
+  {"gui": "tree.copyName", "title": "Copy Name", "guiDesc": "Copy name (several selected nodes: one per line)", "scope": "tree", "guiKeys": ["Mod+C"]},
   {"gui": "tree.copyRef", "title": "Copy Reference", "guiDesc": "Copy reference", "scope": "tree", "guiKeys": ["Mod+Alt+Shift+C"]},
   {"gui": "tree.quickDoc", "title": "Quick Documentation", "guiDesc": "Quick documentation", "scope": "tree", "guiKeys": ["F1"]},
   {"gui": "tree.modify", "tui": "ModifyTable", "title": "Modify Table", "guiDesc": "Modify table (columns, keys, indexes, foreign keys)", "tuiTitle": "Modify Table… (change columns, keys, indexes, foreign keys → ALTER)", "scope": "tree", "guiKeys": ["Mod+F6"], "tuiKeys": ["Ctrl+F6"]},

@@ -2,13 +2,14 @@ import { useEffect, useRef, type Dispatch, type SetStateAction } from "react";
 import type { ConnectionView } from "../../lib/api";
 import { leaves } from "../../lib/panes";
 import { closeFocusedValuePanel } from "../../lib/valuePanel";
-import { eventSpec, hit, runKey } from "../../lib/shortcuts";
+import { commandsFor, eventSpec, hit, runKey } from "../../lib/shortcuts";
 import type { NodeInfo } from "../../components/SchemaTree";
 import type { useConnActions } from "../conns/useConnActions";
 import type { useConsole } from "../console/useConsole";
 import { setDialog, setHistoryFor, setHistoryTab, setKeymapOpen, setSchemeOpen, setSettingsOpen } from "../dialogs/store";
 import type { useEditorGroups } from "../editorGroups/useEditorGroups";
 import type { useExplorer } from "../explorer/useExplorer";
+import { ONE_NODE } from "../explorer/selection";
 import type { useSearch } from "../search/useSearch";
 import { closeTabs } from "../tabs/ops";
 import { useTabsStore } from "../tabs/store";
@@ -21,6 +22,8 @@ type Deps = {
   conns: ConnectionView[];
   keymapVer: number;
   treeSel: NodeInfo | null;
+  treeSelAll: NodeInfo[];
+  setStatus: (s: string) => void;
   active: Tab | null;
   focused: Group;
   tabs: Tab[];
@@ -48,7 +51,7 @@ const FIXED = new Map<string, (e: KeyboardEvent) => boolean>([
 /** The app-wide key handler: command shortcuts of the keymap (lib/shortcuts.ts) and the fixed keys (⇧⇧, ⇧⎋, ⌃⇥). Commands without a
  *  handler here run the entry with their id in Find Action's list or the active tab's menu (global), or in the selected node's menu (tree) */
 export function useGlobalShortcuts({
-  conns, keymapVer, treeSel, active, focused, tabs, split, toggleExplorer, bumpFont, setMaximized, openFts, setSe, setFindOpen, findOpen, openSwitcher, setRecentOpen, switchWs, activate, openConsole, jumpToConsole, activateNode, deactivate, sqlGenerator, ddlToClipboard, ddlToConsole, showQuickDoc, canDdl, modifyTable, renameNode, duplicateConn, removeConn, dangerous, openDdl, applyTableFilter, refreshAll, canCancel, cancelRun, renameConsole, reopenClosed, buildMenu, paletteActions, tabMenu, ddlCommands,
+  conns, keymapVer, treeSel, treeSelAll, setStatus, active, focused, tabs, split, toggleExplorer, bumpFont, setMaximized, openFts, setSe, setFindOpen, findOpen, openSwitcher, setRecentOpen, switchWs, activate, openConsole, jumpToConsole, activateNode, deactivate, sqlGenerator, ddlToClipboard, ddlToConsole, showQuickDoc, canDdl, modifyTable, renameNode, duplicateConn, removeConn, dangerous, openDdl, applyTableFilter, refreshAll, canCancel, cancelRun, renameConsole, reopenClosed, buildMenu, paletteActions, tabMenu, ddlCommands,
 }: Deps) {
   // The key handler is registered only once, so pass the latest functions via a ref
   const latest = useRef({ toggleExplorer, openFts, bumpFont, setSe, setFindOpen, findOpen, switchWs, buildMenu, paletteActions, tabMenu, ddlCommands });
@@ -56,13 +59,13 @@ export function useGlobalShortcuts({
   const lastShift = useRef(0);
 
   // ───────── Shortcuts (DataGrip keymap) ─────────
-  const keyState = useRef({ treeSel, active, focused, tabs, split });
-  keyState.current = { treeSel, active, focused, tabs, split };
+  const keyState = useRef({ treeSel, treeSelAll, active, focused, tabs, split });
+  keyState.current = { treeSel, treeSelAll, active, focused, tabs, split };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // If the Switcher / Recent Files popup is open, the popup handles keys
       if (document.querySelector(".switcher, .search-everywhere, .modal.fts, .modal.keymap, .keymap-recording")) return;
-      const { treeSel, active, tabs } = keyState.current;
+      const { treeSel, treeSelAll, active, tabs } = keyState.current;
       const L = latest.current;
       // ⇧⇧: Search Everywhere
       if (e.key === "Shift") {
@@ -85,8 +88,10 @@ export function useGlobalShortcuts({
       const ae = document.activeElement as HTMLElement | null;
       const inConsole = !ae || ae === document.body || (!!ae.closest?.(".monaco-editor, .editor-group > .tabs") && !ae.closest?.(".grid-wrap"));
       const inInput = ["INPUT", "TEXTAREA", "SELECT"].includes((document.activeElement as HTMLElement | null)?.tagName ?? "");
-      /** Tree commands: a node is selected and the explorer (not one of its fields) has the keys */
-      const node = inTree && treeSel && !inInput ? treeSel : null;
+      /** Several nodes selected: the explorer's commands run from the selection's menu (for all of them, or greyed out) */
+      const many = inTree && treeSel && !inInput && treeSelAll.length > 1 ? treeSelAll : null;
+      /** Tree commands: one node is selected and the explorer (not one of its fields) has the keys */
+      const node = inTree && treeSel && !inInput && !many ? treeSel : null;
       const act = (fn: () => void) => {
         e.preventDefault();
         e.stopPropagation();
@@ -143,20 +148,21 @@ export function useGlobalShortcuts({
         "tree.rename": () => (node ? act(() => renameNode(node)) : false),
         "tree.newDs": () => (node ? act(() => setDialog({})) : false),
         "tree.duplicate": () => (node && node.kind === "conn" ? act(() => duplicateConn(node.conn)) : false),
-        "tree.remove": () => (node ? act(() => (node.kind === "conn" ? removeConn(node.conn) : node.name ? dangerous(node, "DROP") : undefined)) : false),
+        "tree.remove": () => (node ? act(() => (node.kind === "conn" ? removeConn(node.conn) : node.name ? dangerous([node], "DROP") : undefined)) : false),
         "tree.ddl": () => {
-          if (!(inTree && treeSel && treeSel.name)) return false;
+          if (!node?.name) return false;
           e.preventDefault();
-          openDdl(treeSel);
+          openDdl(node);
         },
         "tree.copyRef": () => {
-          if (!(inTree && treeSel)) return false;
+          if (!node) return false;
           e.preventDefault();
-          navigator.clipboard.writeText(treeSel.name ? `${treeSel.schema}.${treeSel.name}` : treeSel.schema ?? treeSel.db ?? treeSel.conn.name);
+          navigator.clipboard.writeText(node.name ? `${node.schema}.${node.name}` : node.schema ?? node.db ?? node.conn.name);
         },
         refresh: () => {
           e.preventDefault();
-          if (inTree && treeSel?.refresh) treeSel.refresh();
+          if (many) many.forEach((n) => n.refresh?.());
+          else if (inTree && treeSel?.refresh) treeSel.refresh();
           else if (active?.kind === "table") applyTableFilter(active, active.where, active.orderBy);
           else refreshAll();
         },
@@ -230,6 +236,12 @@ export function useGlobalShortcuts({
         },
       };
       for (const [id, run] of Object.entries(actions)) if ((FIXED.get(id)?.(e) ?? is(id)) && run() !== false) return;
+      if (many && commandsFor(spec, "tree").length) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!runKey(spec, "tree", () => L.buildMenu(treeSel!, many))) setStatus(ONE_NODE);
+        return;
+      }
       // Commands without a handler above: the menu or Find Action entry with their id
       if ((node && runKey(spec, "tree", () => L.buildMenu(node))) || runKey(spec, "global", () => [...L.paletteActions(), ...(active ? [...L.tabMenu(active), ...L.ddlCommands(active)] : [])])) {
         e.preventDefault();

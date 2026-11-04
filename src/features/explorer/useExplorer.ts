@@ -6,6 +6,7 @@ import { invalidateCompletion } from "../../lib/completion";
 import { hasStructure } from "../../lib/structure";
 import { bindings, cmd, formatSpec } from "../../lib/shortcuts";
 import type { MenuItem } from "../../components/Explorer";
+import { forSelection } from "./selection";
 import type { NewKind } from "../../components/ObjectEditors";
 import type { EditTarget } from "../../components/ResultGrid";
 import { invalidateSearchIndex } from "../../components/SearchEverywhere";
@@ -115,17 +116,27 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
     setExportReq({ target: nodeTarget(info), sql: `SELECT * FROM ${q(info.schema)}.${q(info.name)}`, name: info.name, table: [info.schema, info.name] });
   };
 
-  const dangerous = async (info: NodeInfo, verb: "TRUNCATE" | "DROP") => {
-    if (!info.schema || !info.name) return;
-    const target = targetId(info.conn.id, info.db && info.db !== (info.conn.database || "postgres") ? info.db : undefined);
-    const kw = verb === "DROP" ? (info.kind === "view" ? "VIEW" : info.kind === "matview" ? "MATERIALIZED VIEW" : info.kind === "sequence" ? "SEQUENCE" : "TABLE") : "TABLE";
-    const { q } = dialectOf(info.conn.kind);
-    const sql = `${verb} ${verb === "DROP" ? kw + " " : ""}${q(info.schema)}.${q(info.name)};`;
-    if (!(await ask("Execute this statement?", { title: info.conn.name, detail: [{ text: sql }], okLabel: "Execute" }))) return;
+  /** Truncate… / Drop… of one or several objects of one database: one confirmation lists every statement (the Production one on a
+   *  Production source), then one batch runs them, through the read-only check and the Production log like any other change */
+  const dangerous = async (infos: NodeInfo[], verb: "TRUNCATE" | "DROP") => {
+    const objs = infos.filter((i) => i.schema && i.name);
+    if (!objs.length) return;
+    const c = objs[0].conn;
+    const { q } = dialectOf(c.kind);
+    const kw = (i: NodeInfo) => (i.kind === "view" ? "VIEW" : i.kind === "matview" ? "MATERIALIZED VIEW" : i.kind === "sequence" ? "SEQUENCE" : "TABLE");
+    const sqls = objs.map((i) => `${verb} ${verb === "DROP" ? kw(i) + " " : ""}${q(i.schema!)}.${q(i.name!)};`);
+    const prod = !!c.options?.confirmChanges;
+    const question = prod
+      ? verb === "DROP" ? "This changes the schema of a Production data source." : "This deletes every row of a table in a Production data source."
+      : sqls.length === 1 ? "Execute this statement?" : `Execute these ${sqls.length} statements?`;
+    const detail = sqls.map((text) => ({ text, value: verb === "DROP" ? "schema change" : "all rows", tone: "danger" as const }));
+    if (!(await ask(question, { title: prod ? `Production: ${c.name}` : c.name, detail, okLabel: "Execute", danger: true }))) return;
     try {
-      const r = await api.executeBatch(target, [sql]);
-      setStatus(`Executed: ${sql}${r.warning ? ` · Warning: ${r.warning}` : ""}`);
-      (verb === "DROP" ? info.refreshParent ?? info.refresh : info.refresh)?.();
+      const r = await api.executeBatch(nodeTarget(objs[0]), sqls);
+      setStatus(`Executed: ${sqls.length === 1 ? sqls[0] : `${sqls.length} statements`}${r.warning ? ` · Warning: ${r.warning}` : ""}`);
+      // Each schema's list reloads once
+      const reload = new Map(objs.map((i) => [`${i.db}.${i.schema}${verb === "DROP" ? "" : `.${i.name}`}`, verb === "DROP" ? i.refreshParent ?? i.refresh : i.refresh]));
+      for (const fn of reload.values()) fn?.();
     } catch (e) {
       setStatus(String(e));
     }
@@ -227,6 +238,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
   };
   const nodeTarget = (info: NodeInfo) => targetId(info.conn.id, info.db && info.db !== (info.conn.database || "postgres") ? info.db : undefined);
   const fqn = (info: NodeInfo) => [info.db, info.schema, info.name].filter(Boolean).join(".") || info.conn.name;
+  const nodeName = (info: NodeInfo) => (info.kind === "conn" ? info.conn.name : info.name ?? info.schema ?? info.db ?? info.conn.name);
   const ddlText = (info: NodeInfo) => meta.ddl(nodeTarget(info), info.schema!, info.name!, info.kind);
 
   const ddlToClipboard = async (info: NodeInfo) => {
@@ -323,8 +335,27 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
     }
   };
 
-  /** DataGrip tree context menu (structure from docs 1.11) */
-  const buildMenu = (info: NodeInfo): MenuItem[] => {
+  /** Commands that run for every selected node when several are: id → what runs, undefined when not every node can.
+   *  Drop… needs objects of one database (one confirmation, one batch) */
+  const multiActions = (all: NodeInfo[]): Record<string, (() => void) | undefined> => {
+    const every = (ok: (i: NodeInfo) => boolean, run: () => void) => (all.every(ok) ? run : undefined);
+    const oneDb = all.every((i) => i.conn.id === all[0].conn.id && nodeTarget(i) === nodeTarget(all[0]));
+    return {
+      "tree.editData": every((i) => isRelation(i.kind), () => all.forEach(activateNode)),
+      "tree.ddl": every((i) => !!i.name, () => all.forEach(openDdl)),
+      "tree.copyName": () => void navigator.clipboard.writeText(all.map(nodeName).join("\n")),
+      "tree.copyRef": () => void navigator.clipboard.writeText(all.map(fqn).join("\n")),
+      "tree.refresh": () => all.forEach((i) => i.refresh?.()),
+      "tree.remove": every((i) => oneDb && !!i.name && i.kind !== "routine", () => dangerous(all, "DROP")),
+    };
+  };
+
+  /** DataGrip tree context menu (structure from docs 1.11). all = the selected nodes: when several, only the commands for several run */
+  const buildMenu = (info: NodeInfo, all: NodeInfo[] = [info]): MenuItem[] => {
+    const items = nodeMenu(info);
+    return all.length > 1 ? forSelection(items, multiActions(all)) : items;
+  };
+  const nodeMenu = (info: NodeInfo): MenuItem[] => {
     const c = info.conn;
     const isObj = !!info.name;
     const rel = isRelation(info.kind);
@@ -351,6 +382,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
     items.push({
       label: "Copy/Paste",
       submenu: [
+        { label: "Copy Name", ...cmd("tree.copyName"), action: () => navigator.clipboard.writeText(nodeName(info)) },
         { label: "Copy Reference", ...cmd("tree.copyRef"), action: () => navigator.clipboard.writeText(fqn(info)) },
         ...(info.kind === "conn" ? ([{ label: "Duplicate", ...cmd("tree.duplicate"), action: () => duplicateConn(c) }] as MenuItem[]) : []),
       ],
@@ -393,8 +425,8 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
       items.push({
         label: "Object Actions",
         submenu: [
-          ...(info.kind === "table" || info.kind === "partitioned" ? ([{ label: "Truncate…", ...cmd("tree.truncate"), danger: true, action: () => dangerous(info, "TRUNCATE") }] as MenuItem[]) : []),
-          { label: "Drop…", ...cmd("tree.remove"), danger: true, action: () => dangerous(info, "DROP") },
+          ...(info.kind === "table" || info.kind === "partitioned" ? ([{ label: "Truncate…", ...cmd("tree.truncate"), danger: true, action: () => dangerous([info], "TRUNCATE") }] as MenuItem[]) : []),
+          { label: "Drop…", ...cmd("tree.remove"), danger: true, action: () => dangerous([info], "DROP") },
         ],
       });
     if (rel)

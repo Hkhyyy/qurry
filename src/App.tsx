@@ -85,6 +85,8 @@ export default function App() {
   // A keymap.json that doesn't load: the default keys work, the status bar says how to get the saved ones back
   useEffect(() => void loadKeymap().then((err) => err && setStatus(err)), []);
   const [treeSel, setTreeSel] = useState<NodeInfo | null>(null);
+  // Every selected node (⌘-click / ⇧-click): the explorer's commands for several run on these
+  const [treeSelAll, setTreeSelAll] = useState<NodeInfo[]>([]);
   const [tabMenu, setTabMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
 
   // Called on every query run, so only update state when something actually changed (avoids redrawing the whole tree and re-registering shortcut handlers)
@@ -197,7 +199,7 @@ export default function App() {
   const { activateNode, buildMenu, startBackup } = ex;
 
   const [maximized, setMaximized] = useState(false);
-  const app = { conns, theme, setStatus, refresh, treeSel, active, groupActive, labelOf, setTabMenu, setMaximized, ...cons, ...tabOps, ...ws, ...transfer, ...connActions, ...ex };
+  const app = { conns, theme, setStatus, refresh, treeSel, treeSelAll, active, groupActive, labelOf, setTabMenu, setMaximized, ...cons, ...tabOps, ...ws, ...transfer, ...connActions, ...ex };
   const groups = useEditorGroups(app);
   const { renderPanes } = groups;
 
@@ -269,7 +271,7 @@ export default function App() {
                     onRefresh={refresh}
                     onExport={exportConns}
                     onImport={importConns}
-                    onSelect={setTreeSel}
+                    onSelect={(info, all) => (setTreeSel(info), setTreeSelAll(all))}
                     onActivate={activateNode}
                     buildMenu={buildMenu}
                     onSetColor={setColor}
