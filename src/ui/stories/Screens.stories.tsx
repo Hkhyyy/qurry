@@ -211,6 +211,28 @@ export const GridValuePanel: S = {
   },
 };
 
+/** Selection as a list of ranges (DataGrip): a 3×2 range, then ⌘-click row 5 and one cell of row 8; copy and the edits take every range */
+export const GridMultiSelect: S = {
+  name: "Result Grid — multi-range selection (⌘-click)",
+  render: () => (
+    <div style={{ position: "relative", height: 320, border: "1px solid var(--ui-border)" }}>
+      <ResultGrid result={mixed} edit={{ schema: "public", table: "payment_check", pk: ["card_brand"] }} running={false} loadingMore={false} query="select * from payment_check" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    // One user session, so the held ⇧ / ⌘ reach the clicks
+    const user = userEvent.setup();
+    await user.click(c.getAllByRole("gridcell", { name: "VISA" })[0]);
+    await user.keyboard("{Shift>}");
+    await user.click(c.getByRole("gridcell", { name: "387000.00" }));
+    await user.keyboard("{/Shift}{Meta>}");
+    await user.click(c.getByRole("rowheader", { name: "5" }));
+    await user.click(c.getByRole("gridcell", { name: "2026-10-28 09:07:00 +09:00" }));
+    await user.keyboard("{/Meta}");
+  },
+};
+
 export const History: S = { name: "Query History", render: () => <HistoryDialog connId="dev" title="[DEV] shop_app Query History" onPick={noop} onClose={noop} /> };
 export const Search: S = {
   name: "Search Everywhere (⇧⇧)",
