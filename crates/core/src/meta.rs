@@ -345,17 +345,26 @@ mod tests {
         let pool = crate::db::connect(&s.cfg, s.password.as_deref()).await.unwrap();
         let (s_cfg, s_pw) = (s.cfg.clone(), s.password.clone().unwrap_or_default());
         let Pool::My(p) = &pool else { unreachable!() };
+        // Functional key parts need MySQL 8.0.13+ (the compat job runs 5.7)
+        let version: String = sqlx::query_scalar("select version()").fetch_one(p).await.unwrap();
+        let num = |i: usize| version.split(|c: char| !c.is_ascii_digit()).nth(i).and_then(|n| n.parse::<u32>().ok()).unwrap_or(0);
+        let functional = !version.to_lowercase().contains("mariadb") && (num(0), num(1), num(2)) >= (8, 0, 13);
         for q in [
             "drop database if exists qurry_ddl_structure",
             "create database qurry_ddl_structure",
             "create table qurry_ddl_structure.parent(id int primary key auto_increment, code varchar(20) unique) engine=InnoDB comment='Parents'",
             "insert into qurry_ddl_structure.parent(code) values ('a'), ('b')",
             "create table qurry_ddl_structure.child(id int primary key, parent_id int, note varchar(40), boss int, \
-               index child_note_id (note, id), index mx (note, (upper(note)), id), index fx ((lower(note))), foreign key fk_parent (parent_id) references qurry_ddl_structure.parent(id) on delete cascade, \
+               index child_note_id (note, id), foreign key fk_parent (parent_id) references qurry_ddl_structure.parent(id) on delete cascade, \
                constraint fk_boss foreign key (boss) references qurry_ddl_structure.child(id))",
             "create trigger qurry_ddl_structure.child_touch before insert on qurry_ddl_structure.child for each row set new.note = coalesce(new.note, '-')",
         ] {
             sqlx::raw_sql(q).execute(p).await.unwrap_or_else(|e| panic!("{q}: {e}"));
+        }
+        if functional {
+            for q in ["create index mx on qurry_ddl_structure.child(note, (upper(note)), id)", "create index fx on qurry_ddl_structure.child((lower(note)))"] {
+                sqlx::raw_sql(q).execute(p).await.unwrap_or_else(|e| panic!("{q}: {e}"));
+            }
         }
         let s = table_structure(&pool, "qurry_ddl_structure", "child").await.unwrap();
         let fks = s.foreign_keys.as_ref().unwrap();
@@ -366,10 +375,12 @@ mod tests {
         let ix = s.detail.indexes.iter().find(|i| i.name == "child_note_id").unwrap();
         assert_eq!(ix.columns, ["note", "id"]);
         // Functional key parts come as their expression; an index of expressions only doesn't fail the whole call
-        let ix = |n: &str| s.detail.indexes.iter().find(|i| i.name == n).unwrap();
-        assert_eq!(ix("mx").columns, ["note", "(upper(`note`))", "id"]);
-        assert_eq!(ix("mx").definition, "INDEX `mx` (note, (upper(`note`)), id)");
-        assert_eq!(ix("fx").columns, ["(lower(`note`))"]);
+        if functional {
+            let ix = |n: &str| s.detail.indexes.iter().find(|i| i.name == n).unwrap();
+            assert_eq!(ix("mx").columns, ["note", "(upper(`note`))", "id"]);
+            assert_eq!(ix("mx").definition, "INDEX `mx` (note, (upper(`note`)), id)");
+            assert_eq!(ix("fx").columns, ["(lower(`note`))"]);
+        }
         let tr = s.triggers.as_ref().unwrap();
         assert_eq!(tr.iter().map(|t| (t.name.as_str(), t.timing.as_str(), t.events.as_str())).collect::<Vec<_>>(), [("child_touch", "BEFORE", "INSERT")]);
         assert!(tr[0].definition.contains("coalesce"), "{}", tr[0].definition);
@@ -381,7 +392,9 @@ mod tests {
         // information_schema's cached AUTO_INCREMENT would lag SHOW CREATE TABLE, so it isn't shown
         assert!(!opts.iter().any(|(k, _)| k.contains("increment")), "{opts:?}");
         // A server whose sql_mode has NO_BACKSLASH_ESCAPES: multi-column keys still split into columns
-        let opts = sqlx::mysql::MySqlConnectOptions::new().host(&s_cfg.host).port(s_cfg.port).username(&s_cfg.user).password(&s_pw).database("qurry_ddl_structure");
+        let opts = sqlx::mysql::MySqlConnectOptions::new().host(&s_cfg.host).port(s_cfg.port).username(&s_cfg.user).password(&s_pw).database("qurry_ddl_structure")
+            // A local test server; MySQL 5.7 offers only TLS versions rustls refuses
+            .ssl_mode(sqlx::mysql::MySqlSslMode::Disabled);
         let raw = sqlx::mysql::MySqlPoolOptions::new().max_connections(1).connect_with(opts).await.unwrap();
         // (one connection, so the session setting holds for the calls below)
         sqlx::raw_sql("set session sql_mode = concat(@@sql_mode, ',NO_BACKSLASH_ESCAPES')").execute(&raw).await.unwrap();

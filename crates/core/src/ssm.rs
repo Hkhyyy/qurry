@@ -780,7 +780,18 @@ sys.exit(255)
         let raw = e.to_string();
         let e = connect_error(mark, &c.host, c.port, e).await.to_string();
         assert_eq!(e, qurry_shared::errors::ssm_unreachable("127.0.0.1", closed), "driver said: {raw}");
-        // Not said for a failure after an earlier one (the count moved before the mark), nor without SSM
+        // Not said for a failure after an earlier one (the count moved before the mark), nor without SSM.
+        // The driver may have opened more than one connection: let their late lines arrive before taking the mark
+        let heard = || t.ssm_mark().unwrap().1;
+        let mut last = heard();
+        for _ in 0..20 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let now = heard();
+            if now == last {
+                break;
+            }
+            last = now;
+        }
         let mark = t.ssm_mark();
         let e = connect_error(mark, &c.host, c.port, AppError::Msg("password authentication failed".into())).await.to_string();
         assert_eq!(e, "password authentication failed");
