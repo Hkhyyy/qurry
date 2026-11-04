@@ -95,3 +95,19 @@ test("two statements on one line: the mark shows the failed one, and a click sel
   await editor(page).locator(".stmt-mark").click();
   await expect(work(page).locator(".output-log .ol.on")).toHaveText(/> select \* from no_such_table;?$/);
 });
+
+test("a new run clears the marks of earlier runs: the gutter shows only the latest run", async ({ page }) => {
+  await typeSql(page, "select * from orders;\nselect * from users;");
+  await runAll(page);
+  await expect(editor(page).locator(".stmt-mark.ok")).toHaveCount(2);
+  // Only the 2nd statement (a selection of its line runs as is)
+  await page.keyboard.press("Meta+ArrowDown");
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Shift+End");
+  await page.keyboard.press("Meta+Enter");
+  await expect(marks(page)).toHaveCount(1);
+  expect(await lineOf(page, "ok")).toBe(2);
+  // Its mark still opens its Output line
+  await editor(page).locator(".stmt-mark.ok").click();
+  await expect(work(page).locator(".output-log .ol.on")).toHaveText(/> select \* from users;?$/);
+});

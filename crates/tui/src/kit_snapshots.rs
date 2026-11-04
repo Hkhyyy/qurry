@@ -309,16 +309,15 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.key("a");
     scenes.push(app_scene(h, "Console result: read-only", "An edit key on a result Qurry can't tie to one table row: the status line says why (here a join)", 120, 22));
     h.app.focus = crate::app::Focus::Editor;
-    // Gutter marks: ✓ done, ✗ failed (an earlier run that stopped there), … running now
+    // Gutter marks: ✓ done, ✗ failed, … running (all three in one run here, as in the GUI story)
     let id = h.console_with("select 1;\nupdate payment\n   set status = 'paid'\n where id = 42;\nselect pg_sleep(5);", 4, 0);
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         use crate::app::MarkState;
         let lines = c.editor.lines().to_vec();
-        c.marks.start(&lines, &[(0, 0), (1, 3)]);
+        c.marks.start(&lines, &[(0, 0), (1, 3), (4, 4)]);
         c.marks.set(&lines, 0, MarkState::Ok);
         c.marks.set(&lines, 1, MarkState::Err);
-        c.marks.start(&lines, &[(4, 4)]);
-        c.marks.set(&lines, 0, MarkState::Running);
+        c.marks.set(&lines, 2, MarkState::Running);
         for (e, l) in [(false, "> select 1"), (false, "0 row(s) retrieved in 3 ms"), (false, "> update payment set status = 'paid' where id = 42"), (true, "ERROR: column \"status\" of relation \"payment\" does not exist"), (false, "> select pg_sleep(5)")] {
             c.log(e, l.into());
         }

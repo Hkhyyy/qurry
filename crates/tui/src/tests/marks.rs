@@ -116,8 +116,28 @@ fn marks_follow_edits() {
     let c = lines("select 1;\n\n\nselect\n  22;\nselect 3;");
     m.follow(&c);
     assert_eq!((m.at(0), m.at(3), m.at(5)), (Some(MarkState::Ok), None, Some(MarkState::Err)));
-    // A new run of the whole text replaces the earlier marks as each statement starts
-    m.start(&c, &[(0, 0), (3, 4), (5, 5)]);
+    // A new run clears every earlier mark once its first statement starts, not before (it may still be cancelled)
+    m.start(&c, &[(0, 0)]);
+    assert_eq!((m.at(0), m.at(5)), (Some(MarkState::Ok), Some(MarkState::Err)));
     m.set(&c, 0, MarkState::Running);
-    assert_eq!((m.at(0), m.at(5)), (Some(MarkState::Running), Some(MarkState::Err)));
+    assert_eq!((m.at(0), m.at(5)), (Some(MarkState::Running), None));
+}
+
+/// The gutter shows only the latest run: running one statement again drops the marks of the others from earlier runs
+#[tokio::test]
+async fn a_new_run_clears_the_marks_of_earlier_runs() {
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(fake);
+    h.app.exec.inside = qurry_core::exec::Inside::Whole;
+    h.console_with("select * from orders;\nselect * from users;", 0, 0);
+    h.key("F5");
+    h.settle().await;
+    assert_eq!(editor_lines(&mut h), ["✓1 select * from orders;", "✓2 select * from users;"]);
+    // Only the 2nd (a selection of its line)
+    h.key("Down");
+    h.key("Home");
+    h.key("Shift+End");
+    h.key("F5");
+    h.settle().await;
+    assert_eq!(editor_lines(&mut h), [" 1 select * from orders;", "✓2 select * from users;"]);
 }

@@ -129,7 +129,8 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
           setTimeout(() => deco.clear(), 700);
         };
         // ── Gutter marks (DataGrip): each run statement's range is tracked through edits (decorations), its mark sits on its first line.
-        // Editing its text drops it; a statement that starts running replaces the marks it overlaps. `m` is unset until it starts
+        // Editing its text drops it; once a statement of a run starts, the marks of earlier runs go (the gutter shows the latest run only).
+        // `m` is unset until it starts
         type Mark = { id: string; text: string; m?: StmtMark };
         let marks: Mark[] = [];
         const glyphs = ed.createDecorationsCollection();
@@ -166,8 +167,7 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
             const x = run[i];
             // Dropped meanwhile (its text was edited), or the editor is gone
             if (!x || !marks.includes(x) || !ed.getModel()) return;
-            const r = rangeOf(x);
-            if (s.state === "running" && r) drop(marks.filter((o) => o !== x && o.m && monaco.Range.areIntersecting(r, rangeOf(o) ?? r)));
+            drop(marks.filter((o) => !run.includes(o)));
             x.m = s;
             drawMarks();
           };

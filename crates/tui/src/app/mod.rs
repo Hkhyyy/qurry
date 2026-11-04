@@ -121,11 +121,14 @@ impl Marks {
         self.lines = now.to_vec();
     }
 
-    /// Statement i of the latest run is running, done or failed. Once it runs, it replaces the earlier marks it overlaps
+    /// Statement i of the latest run is running, done or failed. Once one runs, the marks of earlier runs go: the gutter shows
+    /// only the latest run (not when it starts, which may still be cancelled)
     pub fn set(&mut self, now: &[String], i: usize, state: MarkState) {
         self.follow(now);
-        let Some((a, b)) = self.list.iter().find(|m| m.stmt == Some(i)).map(|m| m.rows) else { return };
-        self.list.retain(|m| m.stmt == Some(i) || m.state.is_none() || m.rows.1 < a || m.rows.0 > b);
+        if !self.list.iter().any(|m| m.stmt == Some(i)) {
+            return;
+        }
+        self.list.retain(|m| m.stmt.is_some());
         if let Some(m) = self.list.iter_mut().find(|m| m.stmt == Some(i)) {
             m.state = Some(state);
         }
