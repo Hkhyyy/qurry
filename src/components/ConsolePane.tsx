@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useRef, useState } from "react";
+import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { QueryResult, Dialect, DbKind } from "../lib/api";
 import { splitScript } from "../lib/sqlSplit";
@@ -226,6 +226,17 @@ export function ConsolePane(p: Props) {
   ];
   // If the selected result tab is gone (cleared by a rerun), show Output — instead of an empty pane
   const shown = active ? p.activeResult : "output";
+  // Output follows new lines while scrolled to the bottom; scrolled up, it keeps the position. Clear All and coming back to Output follow again.
+  const outputLog = useRef<HTMLDivElement>(null);
+  const follow = useRef(true);
+  useLayoutEffect(() => {
+    follow.current = true;
+  }, [shown]);
+  useLayoutEffect(() => {
+    const el = outputLog.current;
+    if (p.output.length === 0) follow.current = true;
+    if (el && follow.current) el.scrollTop = el.scrollHeight;
+  }, [p.output, p.errorAction, shown]);
 
   return (
     <div
@@ -384,7 +395,14 @@ export function ConsolePane(p: Props) {
             <div className="result-area">
               {loading ? <RunningBar running label="Loading the statement splitter" onCancel={cancelPending} /> : <RunningBar running={p.running} onCancel={p.onCancel} />}
               {shown === "output" && (
-                <div className="output-log">
+                <div
+                  className="output-log"
+                  ref={outputLog}
+                  onScroll={(e) => {
+                    const el = e.currentTarget;
+                    follow.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 4;
+                  }}
+                >
                   {p.output.length === 0 && <EmptyState>Execute a statement{cmd("editor.run").shortcut ? ` (${cmd("editor.run").shortcut})` : ""} to see the output.</EmptyState>}
                   {p.output.map((l, i) => (
                     <div key={i} className={"ol " + l.level}>

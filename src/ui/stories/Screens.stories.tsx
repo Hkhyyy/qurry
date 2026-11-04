@@ -349,6 +349,29 @@ export const ConsoleSplitterFailed: S = {
     </Frame>
   ),
 };
+/** A script's Output longer than the pane: it follows the newest line while scrolled to the bottom; scrolled up, it stays put */
+export const ConsoleLongOutput: S = {
+  name: "Console — long Output",
+  render: () => (
+    <Frame h={420}>
+      <ConsolePane
+        tabId="story" target="dev" initialSql={"update orders set status = 'paid' where id = 1;"} connName="[DEV] shop_app" kind="postgres" dialect={dialectOf("postgres")} database="shop_app" schema="public"
+        dbList={[]} schemaList={[]} running={false} loadingMore={false} results={[]} activeResult="output"
+        output={[
+          ...Array.from({ length: 40 }, (_, i) => [
+            { ts: "10:24:01", text: `[DEV] shop_app> update orders set status = 'paid' where id = ${i + 1}`, level: "sql" as const },
+            { ts: "10:24:01", text: "1 row affected in 2 ms", level: "info" as const },
+          ]).flat(),
+          { ts: "10:24:02", text: `[DEV] shop_app> insert into order_audit (order_id, payload) values (41, '{${Array.from({ length: 12 }, (_, k) => `"field_${k + 1}": "value ${k + 1}"`).join(", ")}}')`, level: "sql" },
+          { ts: "10:24:02", text: "ERROR: value too long for type character varying(255)", level: "error" },
+        ]}
+        txManual={false} inTx={false}
+        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onExport={noop} onHistory={noop}
+        onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop} onLoadingChange={noop}
+      />
+    </Frame>
+  ),
+};
 export const Redis: S = {
   name: "Redis Browser",
   render: () => (

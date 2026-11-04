@@ -133,3 +133,46 @@ test("a console result whose load-more fails keeps the reason in its grid (#80)"
   await expect(work(page).locator(".grid-more-error")).toHaveText("Couldn't load more rows: Session closed");
   await expect(work(page).locator(".tb-info").first()).toHaveText("500+ rows");
 });
+
+test("Output follows new lines at the bottom, keeps the position when scrolled up, and Clear All follows again (#92)", async ({ page }) => {
+  await typeSql(page, Array.from({ length: 30 }, (_, i) => `update orders set status = 'ready' where id = ${i};`).join("\n"));
+  const output = work(page).locator(".output-log");
+  const lines = output.locator(".ol");
+  const fromBottom = () => output.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+  await runAll(page);
+  await expect(status(page)).toHaveText("30 statements executed");
+  const perRun = await lines.count();
+  const run = async () => {
+    const before = await lines.count();
+    await editor(page).click();
+    await runAll(page);
+    await expect.poll(() => lines.count()).toBe(before + perRun);
+  };
+  expect(await output.evaluate((el) => el.scrollHeight > el.clientHeight * 2)).toBe(true);
+  expect(await fromBottom()).toBeLessThanOrEqual(4);
+
+  // Scrolled up: more lines arrive below, the view stays put
+  await output.hover();
+  await page.mouse.wheel(0, -200);
+  await expect.poll(fromBottom).toBeGreaterThan(100);
+  const top = await output.evaluate((el) => el.scrollTop);
+  await run();
+  expect(await output.evaluate((el) => el.scrollTop)).toBe(top);
+
+  // Back at the bottom: follows again
+  await output.hover();
+  await page.mouse.wheel(0, 100_000);
+  await expect.poll(fromBottom).toBeLessThanOrEqual(4);
+  await run();
+  expect(await fromBottom()).toBeLessThanOrEqual(4);
+
+  // Scrolled up, then Clear All: the next run follows
+  await output.hover();
+  await page.mouse.wheel(0, -200);
+  await expect.poll(fromBottom).toBeGreaterThan(100);
+  await work(page).getByTitle(/^Clear All/).click();
+  await expect(lines).toHaveCount(0);
+  await run();
+  expect(await output.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+  expect(await fromBottom()).toBeLessThanOrEqual(4);
+});
