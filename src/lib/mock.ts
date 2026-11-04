@@ -1,4 +1,6 @@
 /** For development: opening in a browser with ?mock uses fake data instead of the Tauri backend (for checking screens). */
+// A real font file for the added custom fonts (FontFace has to load something): Monaco's icon font (by path: the package exports only .js)
+import fontBytesUrl from "/node_modules/monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon.ttf?url";
 const conns = [
   { id: "dev", name: "[DEV] shop_app", kind: "postgres", host: "dev-db.example.com", port: 5432, user: "app", database: "shop_app", color: "#5f5b24", hasPassword: true, connected: true },
   { id: "prod", name: "[PROD] shop_app", kind: "postgres", host: "prod-db", port: 5432, user: "app", database: "shop_app", color: "#6e2a2a", hasPassword: true, connected: false, options: { confirmChanges: true },
@@ -64,6 +66,8 @@ const payments = {
 };
 let flakyLoads = 0;
 let updateChannel = "stable";
+/** Font files added in Settings: each "Add Font File…" adds "Fira Code" (then "Fira Code 2"…, as the backend names a taken name) */
+let customFonts: { name: string; file: string }[] = [];
 /** settings.json "gridAlign" (kept across a reload, as the file is) */
 let gridAlign = JSON.parse(localStorage.getItem("mock-gridAlign") ?? "{}");
 /** Whether check_update ran (the real app then has a saved check that a channel switch answers from) */
@@ -502,6 +506,22 @@ const handlers: Record<string, (a: any) => unknown> = {
     { name: "Monaco", mono: true },
     { name: "PT Mono", mono: true },
   ],
+  custom_fonts: () => structuredClone(customFonts),
+  add_font_file: () => {
+    // window.__mockFontAddFails: the picked file isn't a font
+    if ((window as any).__mockFontAddFails) throw "notes.ttf isn't a font file (TrueType, OpenType, WOFF or WOFF2)";
+    let name = "Fira Code";
+    for (let n = 2; customFonts.some((f) => f.name === name); n++) name = `Fira Code ${n}`;
+    const f = { name, file: `${name}.ttf` };
+    customFonts = [...customFonts, f].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+    return f;
+  },
+  remove_font_file: (a: any) => {
+    if (!customFonts.some((f) => f.file === a.file)) throw `No added font file named ${a.file}`;
+    customFonts = customFonts.filter((f) => f.file !== a.file);
+  },
+  // window.__mockFontBroken: the file passes the magic-byte check but isn't a loadable font (truncated)
+  font_file: () => ((window as any).__mockFontBroken ? new Uint8Array([0, 1, 0, 0]).buffer : fetch(fontBytesUrl).then((r) => r.arrayBuffer())),
   grid_align: () => gridAlign,
   set_grid_align: (a: any) => {
     if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";

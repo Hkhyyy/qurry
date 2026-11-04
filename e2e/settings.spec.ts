@@ -116,3 +116,86 @@ test("Settings › saved font that isn't installed: still loads, on top of the l
   await expect(dialog(page).getByText("(not installed)")).toHaveCount(0);
   await expect.poll(() => style(cell(page), "fontFamily")).toContain("Menlo");
 });
+
+/** A confirm or notice box over Settings, by its text */
+const box = (page: Page, text: string) => page.getByRole("dialog").filter({ hasText: text });
+const settingsField = (page: Page, name: string) => page.locator(".settings").getByRole("combobox", { name });
+
+test("Settings › Add Font File…: registered and picked, listed as custom in the other picker, removing it sets both back to the default", async ({ page }) => {
+  // The mock adds "Fira Code" (Monaco's icon font as its bytes)
+  const registered = () => page.evaluate(() => [...document.fonts].filter((f) => f.family.replace(/"/g, "") === "Fira Code" && f.status === "loaded").length);
+  await openConsole(page);
+  const lines = editor(page).locator(".view-lines");
+  const before = await style(lines, "fontFamily");
+  await page.keyboard.press("Meta+Comma");
+  await field(page, "Editor font family").click();
+  await fontList(page).getByRole("button", { name: "Add Font File…" }).click();
+  await expect(fontList(page)).toHaveCount(0);
+  await expect(field(page, "Editor font family")).toHaveText(/^Fira Code/);
+  await expect(field(page, "Editor font family")).toBeFocused();
+  await expect.poll(registered).toBe(1);
+  await expect.poll(() => style(lines, "fontFamily")).toMatch(/^"?Fira Code"?, /);
+  await page.keyboard.press("Escape");
+
+  // In the grid picker: first after the default, marked custom, with Monospaced only on (it was added on purpose)
+  await treeItem(page, "users").first().dblclick();
+  await expect(cell(page)).toBeVisible();
+  const gridBefore = await style(cell(page), "fontFamily");
+  await page.keyboard.press("Meta+Comma");
+  await field(page, "Grid font family").click();
+  await expect(fontList(page).getByRole("option").nth(1)).toHaveText("Fira Codecustom");
+  await fontList(page).getByRole("option").nth(1).click();
+  await expect.poll(() => style(cell(page), "fontFamily")).toMatch(/^"?Fira Code"?, /);
+
+  // Remove: asks first (Cancel keeps it)
+  await field(page, "Grid font family").click();
+  await fontList(page).getByRole("button", { name: "Remove font file Fira Code" }).click();
+  const ask = box(page, "Remove Font File");
+  await expect(ask).toContainText('Remove the font file "Fira Code" from Qurry?');
+  await ask.getByRole("button", { name: "Cancel" }).click();
+  await expect(ask).toHaveCount(0);
+  await expect(settingsField(page, "Grid font family")).toHaveText(/^Fira Code/);
+  await settingsField(page, "Grid font family").click();
+  await fontList(page).getByRole("button", { name: "Remove font file Fira Code" }).click();
+  await ask.getByRole("button", { name: "Remove" }).click();
+  await expect(ask).toHaveCount(0);
+  await expect(settingsField(page, "Grid font family")).toHaveText(/^Default monospace/);
+  await expect(settingsField(page, "Editor font family")).toHaveText(/^Default monospace/);
+  await expect(settingsField(page, "Grid font family")).toBeFocused();
+  await expect.poll(registered).toBe(0);
+  await expect.poll(() => style(cell(page), "fontFamily")).toBe(gridBefore);
+  await settingsField(page, "Grid font family").click();
+  await expect(fontList(page).getByText("custom")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+  await page.getByRole("tab", { name: /^console / }).click();
+  await expect.poll(() => style(editor(page).locator(".view-lines"), "fontFamily")).toBe(before);
+});
+
+test("Settings › Add Font File…: a file that isn't a font is refused with the reason, nothing changes", async ({ page }) => {
+  await page.evaluate(() => ((window as any).__mockFontAddFails = true));
+  await page.keyboard.press("Meta+Comma");
+  await field(page, "Grid font family").click();
+  await fontList(page).getByRole("button", { name: "Add Font File…" }).click();
+  const notice = box(page, "Add Font File");
+  await expect(notice).toContainText("notes.ttf isn't a font file (TrueType, OpenType, WOFF or WOFF2)");
+  await notice.getByRole("button", { name: "OK" }).click();
+  await expect(notice).toHaveCount(0);
+  await expect(settingsField(page, "Grid font family")).toHaveText(/^Default monospace/);
+  await expect(settingsField(page, "Grid font family")).toBeFocused();
+});
+
+test("Settings › Add Font File…: a font file that can't be loaded (damaged) is removed again with the reason, nothing is picked", async ({ page }) => {
+  await page.evaluate(() => ((window as any).__mockFontBroken = true));
+  await page.keyboard.press("Meta+Comma");
+  await field(page, "Grid font family").click();
+  await fontList(page).getByRole("button", { name: "Add Font File…" }).click();
+  const notice = box(page, "Add Font File");
+  await expect(notice).toContainText("Fira Code couldn't be loaded as a font");
+  await notice.getByRole("button", { name: "OK" }).click();
+  await expect(notice).toHaveCount(0);
+  await expect(settingsField(page, "Grid font family")).toHaveText(/^Default monospace/);
+  await expect(settingsField(page, "Grid font family")).toBeFocused();
+  await settingsField(page, "Grid font family").click();
+  await expect(fontList(page).getByText("custom")).toHaveCount(0);
+});

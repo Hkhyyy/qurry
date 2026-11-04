@@ -165,10 +165,18 @@ export type UpdateChannel = "stable" | "beta";
 
 /** An installed font family (Settings › Appearance fonts); mono: every face is monospaced */
 export type FontFamily = { name: string; mono: boolean };
+/** A font file added in Settings (copied into the config folder's fonts/), registered with FontFace as the family `name` */
+export type CustomFont = { name: string; file: string };
 
 export const api = {
   /** Installed font families, sorted (listed afresh on each call; empty where the OS isn't supported) */
   fontFamilies: () => invoke<FontFamily[]>("font_families"),
+  customFonts: () => invoke<CustomFont[]>("custom_fonts"),
+  /** Opens the file dialog and copies the picked font into the fonts folder; null if cancelled */
+  addFontFile: () => invoke<CustomFont | null>("add_font_file"),
+  /** Deletes the copy in the fonts folder */
+  removeFontFile: (file: string) => invoke<void>("remove_font_file", { file }),
+  fontFile: (file: string) => invoke<ArrayBuffer>("font_file", { file }),
   checkUpdate: (force = false) => invoke<UpdateInfo>("check_update", { force }),
   updateChannel: () => invoke<UpdateChannel>("update_channel"),
   /** Saves the channel; what it offers from the saved check (no request), null if nothing was checked yet */
