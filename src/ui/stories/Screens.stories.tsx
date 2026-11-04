@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { userEvent, within } from "storybook/test";
+import { userEvent, waitFor, within } from "storybook/test";
 // Fake backend (same as the app's ?mock): returns fixed data for the commands screens call
 import "../../lib/mock";
 import "../../lib/monaco";
@@ -365,11 +365,58 @@ export const ConsoleSplitterFailed: S = {
         tabId="story" target="dev" initialSql={"select * from customers;\nselect 1;"} connName="[DEV] shop_app" kind="postgres" dialect={dialectOf("postgres")} database="shop_app" schema="public"
         dbList={[]} schemaList={[]} running={false} loadingMore={false} results={[]} activeResult="output"
         output={[{ ts: "10:24:01", text: SPLITTER_FAILED, level: "error" }]} txManual={false} inTx={false}
-        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onExport={noop} onHistory={noop}
+        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
         onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop} onLoadingChange={noop}
       />
     </Frame>
   ),
+};
+/** A console result from one table with its primary key (QueryResult.edit): editable as in a table tab, here with one pending edit */
+const consoleUsers: QueryResult = {
+  columns: [{ name: "id", typeName: "INT8" }, { name: "name", typeName: "VARCHAR" }, { name: "email", typeName: "TEXT" }],
+  rows: [[1, "kim", "kim@example.com"], [2, "lee", null], [3, "park", "park@example.com"]],
+  rowsAffected: 0, truncated: false, elapsedMs: 4, hasResultSet: true,
+  edit: { schema: "public", table: "users", pk: ["id"], columns: ["id", "user_name", "email"] },
+};
+const consoleProps = {
+  tabId: "story", target: "dev", connName: "[DEV] shop_app", kind: "postgres" as const, dialect: dialectOf("postgres"), database: "shop_app", schema: "public",
+  dbList: [], schemaList: [], running: false, loadingMore: false, output: [], txManual: false, inTx: false,
+  onChange: noop, onExecute: noop, onCancel: noop, onSetActiveResult: noop, onPin: noop, onCloseResult: noop, onFetchMore: noop, onSubmit: async () => {}, onExport: noop, onHistory: noop,
+  onTxMode: noop, onCommit: noop, onRollback: noop, onLoadDbs: noop, onLoadSchemas: noop, onSwitchDb: noop, onSwitchSchema: noop, registerApi: noop, onClearOutput: noop, onError: noop, onLoadingChange: noop,
+};
+export const ConsoleEditableResult: S = {
+  name: "Console — editable result (pending edit)",
+  render: () => (
+    <Frame h={420}>
+      <ConsolePane {...consoleProps} initialSql="select id, user_name as name, email from users;" activeResult="r1"
+        results={[{ id: "r1", title: "Result 1", sql: "select id, user_name as name, email from users", kind: "result", result: consoleUsers, pinned: false }]} />
+    </Frame>
+  ),
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    // After the editor took focus on mount: edit in the cell's own input
+    await waitFor(() => {
+      if (!canvasElement.querySelector(".monaco-editor .view-lines")) throw new Error("editor not mounted yet");
+    });
+    await userEvent.dblClick(await c.findByText("lee"));
+    const input = await c.findByDisplayValue("lee");
+    await userEvent.clear(input);
+    await userEvent.type(input, "Lee{Enter}");
+  },
+};
+/** A join: read-only, the greyed-out edit buttons say why (QueryResult.readOnlyReason) */
+export const ConsoleReadOnlyResult: S = {
+  name: "Console — read-only result (reason)",
+  render: () => {
+    const { edit: _, ...joined } = consoleUsers;
+    const sql = "select u.id, u.name, o.total from users u join orders o on o.user_id = u.id";
+    return (
+      <Frame h={420}>
+        <ConsolePane {...consoleProps} initialSql={sql + ";"} activeResult="r1"
+          results={[{ id: "r1", title: "Result 1", sql, kind: "result", result: { ...joined, readOnlyReason: "Read-only: the columns come from more than one table." }, pinned: false }]} />
+      </Frame>
+    );
+  },
 };
 export const Redis: S = {
   name: "Redis Browser",

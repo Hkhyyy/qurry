@@ -345,3 +345,99 @@ async fn failed_commit_is_in_output() {
     h.key("Esc");
     assert!(matches!(h.app.popup, Some(crate::app::Popup::Confirm { .. })));
 }
+
+/// `select … from users` comes back editable (the backend's edit target, with an alias), a join with its reason, anything else unchecked
+fn users(q: &str) -> Result<QueryResult, String> {
+    use qurry_core::editable::{EditTarget, Editable};
+    let col = |n: &str| ColumnInfo { name: n.into(), type_name: "text".into() };
+    let editable = if q.contains("join") {
+        Some(Editable::ReadOnly("Read-only: the columns come from more than one table.".into()))
+    } else if q.contains("users") {
+        Some(Editable::Table(EditTarget { schema: "public".into(), table: "users".into(), pk: vec!["id".into()], columns: vec!["id".into(), "user_name".into()] }))
+    } else {
+        None
+    };
+    Ok(QueryResult { columns: vec![col("id"), col("name")], rows: vec![vec!["1".into(), "kim".into()], vec!["2".into(), "lee".into()]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable })
+}
+
+/// A Production console whose result is shown, with the grid focused
+async fn prod_console(sql: &str) -> Harness {
+    let mut h = Harness::new().await;
+    let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+        "id": "p", "name": "PROD", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "d"
+    }))
+    .unwrap();
+    cfg.options.confirm_changes = true;
+    h.app.state.store.save(&cfg).unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    h.app.fake_db = Some(users);
+    let id = h.app.restore_console("p", "d".into(), "console".into(), sql).unwrap();
+    let i = h.app.tab_index(id).unwrap();
+    h.app.activate(i);
+    h.key("F5");
+    h.settle().await;
+    h.app.focus = crate::app::Focus::Grid;
+    h
+}
+
+/// A console result from one table with its key edits as a table tab does: ↩ edits a cell, Submit builds the SQL with the table's
+/// column names (the result has an alias) and asks first on Production
+#[tokio::test]
+async fn console_result_edits_and_submits_like_a_table() {
+    let mut h = prod_console("select id, user_name as name from users").await;
+    assert!(console(&h).grid.is_some(), "{}", h.app.status);
+    h.key("Down");
+    h.key("Right");
+    h.key("Enter");
+    for _ in 0..3 {
+        h.key("Backspace");
+    }
+    h.type_str("LEE");
+    h.key("Enter");
+    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 1);
+    h.key("a");
+    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 2);
+    h.key("Ctrl+S");
+    let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no Production confirm: {}", h.app.status) };
+    assert_eq!(text, "Production data source \"PROD\" — save 2 change(s)?\n\n  UPDATE public.users SET user_name = 'LEE' WHERE id = '2'\n  INSERT INTO public.users DEFAULT VALUES");
+}
+
+/// Edit keys on a console result that can't be edited say why in the status line: the backend's reason, the generic text when it
+/// didn't check, the transaction rule in Manual mode
+#[tokio::test]
+async fn console_result_read_only_says_why() {
+    let mut h = prod_console("select u.id, u.name from users u join orders o on o.uid = u.id").await;
+    h.key("Enter");
+    assert_eq!(h.app.status, "Read-only: the columns come from more than one table.");
+    assert!(h.app.popup.is_none());
+    let mut h = prod_console("select 1 as id, 'x' as name").await;
+    h.key("a");
+    assert_eq!(h.app.status, qurry_shared::errors::CONSOLE_READ_ONLY);
+    let mut h = prod_console("select id, user_name as name from users").await;
+    if let TabKind::Console(c) = &mut h.app.tabs[h.app.active].kind {
+        c.tx_manual = true;
+    }
+    h.key("a");
+    assert_eq!(h.app.status, qurry_shared::errors::CONSOLE_IN_TX);
+    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 0);
+}
+
+/// Running again with pending edits asks first: no keeps them, yes drops them and runs
+#[tokio::test]
+async fn console_rerun_with_pending_edits_asks_first() {
+    let mut h = prod_console("select id, user_name as name from users").await;
+    h.key("a");
+    h.app.focus = crate::app::Focus::Editor;
+    h.key("F5");
+    let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirm: {}", h.app.status) };
+    assert_eq!(text, "1 pending change(s) are not saved to the database (⌃s submits them). Discard them and run the statement?");
+    h.key("n");
+    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 1);
+    let before = h.console_output().len();
+    h.key("F5");
+    h.key("y");
+    h.settle().await;
+    assert!(h.console_output().len() > before, "it ran");
+    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 0);
+}

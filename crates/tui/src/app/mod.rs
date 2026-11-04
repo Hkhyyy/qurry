@@ -44,6 +44,8 @@ pub struct Console {
     pub session: String,
     pub grid: Option<Grid>,
     pub result_title: String,
+    /// The statement the grid shows the result of (run again after its edits are submitted)
+    pub result_sql: String,
     pub output: Vec<(bool, String)>,
     pub show_output: bool,
     pub running: bool,

@@ -485,7 +485,8 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                     .block(panel(format!(" Output ({k_out}: result) "), focus == Focus::Grid));
                 f.render_widget(p, res);
             } else if let Some(g) = &mut c.grid {
-                let t = format!(" {} — {}{} rows ({k_out}: output) ", c.result_title, g.rows(), if g.result.truncated { "+" } else { "" });
+                let pend = if g.dirty() { format!(" · {} pending ({k_submit} submit, {} revert)", g.pending(), disp("⌃z")) } else { String::new() };
+                let t = format!(" {} — {}{} rows{pend} ({k_out}: output) ", c.result_title, g.rows(), if g.result.truncated { "+" } else { "" });
                 let (res, side) = value_split(res, value_panel);
                 g.render(f, res, t, focus == Focus::Grid, color, &align);
                 if let Some(side) = side {
@@ -525,7 +526,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 grid
             };
             if let Some(g) = &mut tt.grid {
-                let pend = if g.dirty() { format!(" · {} pending ({k_submit} submit, {} revert)", g.edits.len() + g.deleted.len() + g.added, disp("⌃z")) } else { String::new() };
+                let pend = if g.dirty() { format!(" · {} pending ({k_submit} submit, {} revert)", g.pending(), disp("⌃z")) } else { String::new() };
                 let rows = if tt.error.is_some() && !g.dirty() { "query failed — no rows".to_string() } else { format!("{}{} rows", g.rows(), if g.result.truncated { "+" } else { "" }) };
                 let t = format!(" {}.{} — {rows}{}{}{} ", tt.schema, tt.table, if tt.pk.is_empty() { " · no PK (read-only)" } else { "" }, if ro { " · read-only" } else { "" }, pend);
                 let (grid, side) = value_split(grid, value_panel);

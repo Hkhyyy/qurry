@@ -359,6 +359,11 @@ impl Grid {
         !self.edits.is_empty() || !self.deleted.is_empty() || self.added > 0
     }
 
+    /// Pending edits: changed cells, deleted rows, added rows (0 when clean)
+    pub fn pending(&self) -> usize {
+        if self.dirty() { self.edits.len() + self.deleted.len() + self.added } else { 0 }
+    }
+
     pub fn revert(&mut self) {
         self.edits.clear();
         self.deleted.clear();

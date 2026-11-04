@@ -7,7 +7,8 @@ import { initShared, sharedReady } from "../lib/shared";
 import { cmd, eventSpec, keyTitle, runKey } from "../lib/shortcuts";
 import { ConsoleEditor, EditorApi, RunRequest } from "./ConsoleEditor";
 import { ContextMenu, MenuItem } from "./Explorer";
-import { CONSOLE_READ_ONLY, ResultGrid } from "./ResultGrid";
+import { CONSOLE_IN_TX, CONSOLE_READ_ONLY, ResultGrid } from "./ResultGrid";
+import { ask } from "../lib/dialogs";
 import { RunningBar } from "./RunningBar";
 import { planText } from "../lib/planText";
 import { IcClock, IcGear, IcReload, IcStop } from "../ui/icons";
@@ -89,6 +90,8 @@ interface Props {
   output: OutputLine[];
   txManual: boolean;
   inTx: boolean;
+  /** Read-only data source: its results can't be edited */
+  readOnly?: boolean;
   onChange: (sql: string) => void;
   /** Actual execution: list of statements */
   onExecute: (statements: string[], explain?: "plan" | "analyze") => void;
@@ -97,6 +100,8 @@ interface Props {
   onPin: (id: string, pinned: boolean) => void;
   onCloseResult: (id: string) => void;
   onFetchMore: (entryId: string) => void;
+  /** Save a result's grid edits (the table tab's path), then run its statement again */
+  onSubmit: (entryId: string, statements: string[]) => Promise<void>;
   onExport: (sql: string) => void;
   onHistory: () => void;
   onTxMode: (manual: boolean) => void;
@@ -136,6 +141,24 @@ export function ConsolePane(p: Props) {
   };
   // A closed console never runs what was waiting
   useEffect(() => () => void (pending.current = null), []);
+  /** Pending edits in the shown result's grid: a run, or showing another result tab, would drop them */
+  const edits = useRef(0);
+  const dropEdits = async () => {
+    const n = edits.current;
+    if (!n) return true;
+    const ok = await ask(`${n} pending change${n === 1 ? " is" : "s are"} not saved to the database. Discard ${n === 1 ? "it" : "them"}?`, { title: "Pending changes", okLabel: "Discard", danger: true });
+    if (ok) edits.current = 0;
+    return ok;
+  };
+  const execute = async (stmts: string[], explain?: "plan" | "analyze") => {
+    if (await dropEdits()) p.onExecute(stmts, explain);
+  };
+  const showResult = async (id: string) => {
+    if (id === p.activeResult || (await dropEdits())) p.onSetActiveResult(id);
+  };
+  const closeResult = async (id: string) => {
+    if (id !== p.activeResult || (await dropEdits())) p.onCloseResult(id);
+  };
 
   const setSettings = (s: ExecSettings) => {
     setSettingsState(s);
@@ -187,13 +210,13 @@ export function ConsolePane(p: Props) {
       const stmts = settings.selection === "single" && !sharedReady() ? [{ start: 0, end: sel.length, sql: sel.trim() }] : planSelection(sel, splitFn(sel), settings);
       if (!stmts.length) return;
       req.highlight(stmts.map((s) => ({ start: selection.start + s.start, end: selection.start + s.end })));
-      return p.onExecute(stmts.map((s) => s.sql), req.explain);
+      return void execute(stmts.map((s) => s.sql), req.explain);
     }
     const plan = planExecution(text, offset, splitFn(text), settings, p.kind);
     if (!plan) return;
     if ("run" in plan) {
       req.highlight(plan.run.map((x) => ({ start: x.start, end: x.end })));
-      return p.onExecute(plan.run.map((x) => x.sql), req.explain);
+      return void execute(plan.run.map((x) => x.sql), req.explain);
     }
     // Ask what to execute: Statements popup
     setChooser({ options: plan.ask.map((o) => ({ label: o.label, stmts: o.stmts.map((x) => x.sql), ranges: o.stmts })), idx: 0, req });
@@ -205,7 +228,7 @@ export function ConsolePane(p: Props) {
     if (!chooser) return;
     const o = chooser.options[i];
     chooser.req.highlight(o.ranges);
-    p.onExecute(o.stmts, chooser.req.explain);
+    void execute(o.stmts, chooser.req.explain);
     setChooser(null);
     api?.focus();
   };
@@ -221,8 +244,8 @@ export function ConsolePane(p: Props) {
   /** A result tab's context menu; its commands' keys act on the shown result tab (and Clear All's on the output) */
   const resultMenu = (r: { id: string; pinned?: boolean }): MenuItem[] => [
     { label: r.pinned ? "Unpin Tab" : "Pin Tab", ...cmd("result.pin"), action: () => p.onPin(r.id, !r.pinned) },
-    { label: "Close", ...cmd("result.close"), action: () => p.onCloseResult(r.id) },
-    { label: "Close All Unpinned", ...cmd("result.closeUnpinned"), action: () => p.results.filter((x) => !x.pinned).forEach((x) => p.onCloseResult(x.id)) },
+    { label: "Close", ...cmd("result.close"), action: () => void closeResult(r.id) },
+    { label: "Close All Unpinned", ...cmd("result.closeUnpinned"), action: () => void dropEdits().then((ok) => ok && p.results.filter((x) => !x.pinned).forEach((x) => p.onCloseResult(x.id))) },
   ];
   // If the selected result tab is gone (cleared by a rerun), show Output — instead of an empty pane
   const shown = active ? p.activeResult : "output";
@@ -351,10 +374,10 @@ export function ConsolePane(p: Props) {
             <div className="result-tabs">
               <TabStrip
                 activeKey={shown}
-                overflow={[{ key: "output", label: "Output", active: shown === "output", onSelect: () => p.onSetActiveResult("output") }, ...p.results.map((r) => ({ key: r.id, label: (r.kind === "plan" ? "Plan: " : "") + r.title, active: shown === r.id, onSelect: () => p.onSetActiveResult(r.id) }))]}
+                overflow={[{ key: "output", label: "Output", active: shown === "output", onSelect: () => void showResult("output") }, ...p.results.map((r) => ({ key: r.id, label: (r.kind === "plan" ? "Plan: " : "") + r.title, active: shown === r.id, onSelect: () => void showResult(r.id) }))]}
                 style={{ flex: 1, minWidth: 0 }}
               >
-              <TabItem variant="result" label="Output" active={shown === "output"} onClick={() => p.onSetActiveResult("output")} />
+              <TabItem variant="result" label="Output" active={shown === "output"} onClick={() => void showResult("output")} />
               {p.results.map((r) => (
                 <TabItem
                   key={r.id}
@@ -363,8 +386,8 @@ export function ConsolePane(p: Props) {
                   active={shown === r.id}
                   pinned={r.pinned}
                   onPin={() => p.onPin(r.id, false)}
-                  onClose={() => p.onCloseResult(r.id)}
-                  onClick={() => p.onSetActiveResult(r.id)}
+                  onClose={() => void closeResult(r.id)}
+                  onClick={() => void showResult(r.id)}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     setMenu({
@@ -397,13 +420,17 @@ export function ConsolePane(p: Props) {
               {active?.kind === "result" && active.result && (
                 <ResultGrid
                   result={active.result}
-                  readOnlyReason={CONSOLE_READ_ONLY}
+                  // One table with its key (the backend says so); in a transaction the edits would save outside it
+                  edit={p.txManual || p.inTx ? undefined : active.result.edit}
+                  readOnly={p.readOnly}
+                  readOnlyReason={!active.result.edit ? (active.result.readOnlyReason ?? CONSOLE_READ_ONLY) : p.readOnly ? "Data source is read-only" : CONSOLE_IN_TX}
+                  onPendingChange={(n) => (edits.current = n)}
                   running={p.running}
                   loadingMore={p.loadingMore}
                   query={active.sql}
                   onFetchMore={() => p.onFetchMore(active.id)}
-                  onSubmit={async () => {}}
-                  onReload={() => p.onExecute([active.sql])}
+                  onSubmit={(st) => p.onSubmit(active.id, st)}
+                  onReload={() => void execute([active.sql])}
                   onCancel={p.onCancel}
                   onExport={() => p.onExport(active.sql)}
                   dialect={p.dialect}

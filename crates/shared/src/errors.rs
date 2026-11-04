@@ -62,6 +62,12 @@ pub const EDIT_UNMATCHED: &str = "Read-only: Qurry couldn't match the result's c
 /// Driver plugins don't say where a result column comes from
 pub const EDIT_DRIVER: &str = "Read-only: console results can be edited on PostgreSQL and MySQL only.";
 
+/// A console result the backend didn't check (src/components/ResultGrid.tsx CONSOLE_READ_ONLY has the same text)
+pub const CONSOLE_READ_ONLY: &str = "Console results are read-only. Open the table to edit its rows.";
+/// A console in Manual mode or with an open transaction: grid edits save in a transaction of their own (executeBatch), so they'd
+/// commit outside it and wait on its row locks (ResultGrid.tsx CONSOLE_IN_TX)
+pub const CONSOLE_IN_TX: &str = "Read-only in a transaction: edits are saved in a transaction of their own. Commit or roll back and switch to Tx: Auto to edit these rows.";
+
 /// GROUP BY, HAVING, DISTINCT, UNION …: one result row isn't one table row
 pub fn edit_combined(what: &str) -> String {
     format!("Read-only: the result uses {what}, so its rows aren't rows of the table.")
@@ -93,6 +99,14 @@ pub fn edit_not_table(table: &str, what: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn console_texts_match_the_gui() {
+        let gui = include_str!("../../../src/components/ResultGrid.tsx");
+        for t in [CONSOLE_READ_ONLY, CONSOLE_IN_TX] {
+            assert!(gui.contains(&format!("\"{t}\"")), "ResultGrid.tsx lacks: {t}");
+        }
+    }
 
     #[test]
     fn more_rows_failed_keeps_the_reason() {

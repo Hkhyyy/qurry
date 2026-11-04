@@ -31,10 +31,14 @@ export interface EditTarget {
   schema: string;
   table: string;
   pk: string[];
+  /** The table column of each result column, when the names differ (a console result with aliases: QueryResult.edit) */
+  columns?: string[];
 }
 
-/** Console results have no table to write to (editing them is a later batch) */
+/** A console result the backend didn't check (qurry_shared::errors::CONSOLE_READ_ONLY, the TUI's text) */
 export const CONSOLE_READ_ONLY = "Console results are read-only. Open the table to edit its rows.";
+/** A console result in Manual mode or an open transaction (qurry_shared::errors::CONSOLE_IN_TX): edits save in a transaction of their own */
+export const CONSOLE_IN_TX = "Read-only in a transaction: edits are saved in a transaction of their own. Commit or roll back and switch to Tx: Auto to edit these rows.";
 
 let lastExtractor: Extractor = "CSV"; // The last chosen extractor is the default for new tabs (DataGrip)
 
@@ -44,8 +48,10 @@ interface Props {
   edit?: EditTarget;
   /** Read-only data source: editing disabled */
   readOnly?: boolean;
-  /** Why rows can't be edited here, on the greyed-out edit buttons (console results: CONSOLE_READ_ONLY) */
+  /** Why rows can't be edited here, on the greyed-out edit buttons (console results: the backend's reason, or CONSOLE_READ_ONLY) */
   readOnlyReason?: string;
+  /** The number of pending edits changed (a console asks before a rerun drops them) */
+  onPendingChange?: (n: number) => void;
   /** SQL dialect (identifier quoting, literals) */
   dialect?: Dialect;
   running: boolean;
@@ -125,7 +131,9 @@ export function ResultGrid(p: Props) {
     setExtractorState(x);
   };
 
-  const pkIdx = useMemo(() => (edit ? edit.pk.map((k) => cols.findIndex((c) => c.name === k)) : []), [edit, cols]);
+  /** The table column of result column i: what the generated SQL names */
+  const tcol = (i: number) => edit?.columns?.[i] ?? cols[i].name;
+  const pkIdx = useMemo(() => (edit ? edit.pk.map((k) => (edit.columns ? edit.columns.indexOf(k) : cols.findIndex((c) => c.name === k))) : []), [edit, cols]);
   const canEdit = !p.readOnly && !!edit && edit.pk.length > 0 && pkIdx.every((i) => i >= 0);
   const baseCount = result.rows.length;
   const rowCount = baseCount + added.length;
@@ -189,6 +197,8 @@ export function ResultGrid(p: Props) {
 
   // Auto refresh (Update Interval)
   const pendingCount = Object.keys(changes).length + deleted.size + added.length;
+  useEffect(() => void p.onPendingChange?.(pendingCount), [pendingCount]);
+  useEffect(() => () => void p.onPendingChange?.(0), []);
   useEffect(() => {
     if (!interval) return;
     const t = setInterval(() => {
@@ -205,12 +215,12 @@ export function ResultGrid(p: Props) {
   const widths = useMemo(
     () =>
       cols.map((col, ci) => {
-        const head = col.name.length * 7.6 * em + col.typeName.length * 6.2 + 48 + (edit?.pk.includes(col.name) ? 16 : 0);
+        const head = col.name.length * 7.6 * em + col.typeName.length * 6.2 + 48 + (pkIdx.includes(ci) ? 16 : 0);
         let len = 0;
         for (const row of result.rows.slice(0, 200)) len = Math.max(len, display(row[ci]).length);
         return Math.min(Math.max(head, len * 7.3 * em + 20, 64), 420 * em);
       }),
-    [cols, firstRow, edit, em],
+    [cols, firstRow, pkIdx, em],
   );
   const total = rownumW + widths.reduce((a, b) => a + b, 0);
   // Time columns: align fractional-second digits within the column (values unchanged)
@@ -436,13 +446,13 @@ export function ResultGrid(p: Props) {
   const tableRef = edit ? `${quoteIdent(edit.schema)}.${quoteIdent(edit.table)}` : "MY_TABLE";
   const buildStatements = (): string[] => {
     if (!edit) return [];
-    const where = (r: number) => pkIdx.map((i) => `${quoteIdent(cols[i].name)} = ${sqlLiteral(result.rows[r][i])}`).join(" AND ");
+    const where = (r: number) => pkIdx.map((i) => `${quoteIdent(tcol(i))} = ${sqlLiteral(result.rows[r][i])}`).join(" AND ");
     const out: string[] = [];
     for (const r of [...deleted].sort((a, b) => a - b)) out.push(`DELETE FROM ${tableRef} WHERE ${where(r)};`);
     for (const [rs, ch] of Object.entries(changes)) {
       const r = Number(rs);
       if (deleted.has(r)) continue;
-      const sets = Object.entries(ch).map(([c, v]) => `${quoteIdent(cols[Number(c)].name)} = ${lit(v)}`).join(", ");
+      const sets = Object.entries(ch).map(([c, v]) => `${quoteIdent(tcol(Number(c)))} = ${lit(v)}`).join(", ");
       out.push(`UPDATE ${tableRef} SET ${sets} WHERE ${where(r)};`);
     }
     for (const row of added) {
@@ -450,7 +460,7 @@ export function ResultGrid(p: Props) {
       out.push(
         idx.length === 0
           ? `INSERT INTO ${tableRef} DEFAULT VALUES;`
-          : `INSERT INTO ${tableRef} (${idx.map((i) => quoteIdent(cols[i].name)).join(", ")}) VALUES (${idx.map((i) => lit(row[i])).join(", ")});`,
+          : `INSERT INTO ${tableRef} (${idx.map((i) => quoteIdent(tcol(i))).join(", ")}) VALUES (${idx.map((i) => lit(row[i])).join(", ")});`,
       );
     }
     return out;
@@ -691,9 +701,10 @@ export function ResultGrid(p: Props) {
   ];
 
   /** An edit button's tooltip and description: the command, and why it's greyed out when the grid says so */
+  const reason = canEdit ? undefined : p.readOnlyReason;
   const editButton = (title: string, id: string) => ({
-    title: p.readOnlyReason ? `${keyTitle(title, id)} — ${p.readOnlyReason}` : keyTitle(title, id),
-    "aria-description": p.readOnlyReason,
+    title: reason ? `${keyTitle(title, id)} — ${reason}` : keyTitle(title, id),
+    "aria-description": reason,
   });
   const rowsLabel = `${baseCount}${result.truncated ? "+" : ""} row${baseCount === 1 ? "" : "s"}`;
 
@@ -803,7 +814,7 @@ export function ResultGrid(p: Props) {
                         key={i}
                         name={c.name}
                         type={c.typeName}
-                        pk={edit?.pk.includes(c.name)}
+                        pk={pkIdx.includes(i)}
                         width={widths[i]}
                         colSelected={selColSet.has(i)}
                         sort={key ? { dir: key.dir, order: sorts.length > 1 ? idx + 1 : undefined } : undefined}

@@ -231,29 +231,25 @@ fn revert(app: &mut App) {
     }
 }
 
+// Table data and console results from one table with its key (App::edit_grid; otherwise the status line says why)
 fn add_row(app: &mut App) {
-    if let Some(Tab { kind: TabKind::Table(tt), .. }) = app.tabs.get_mut(app.active) {
-        if let Some(g) = &mut tt.grid {
-            g.add_row();
-        }
+    if let Some(g) = app.edit_grid() {
+        g.add_row();
     }
 }
 
 fn delete_row(app: &mut App) {
-    if let Some(Tab { kind: TabKind::Table(tt), .. }) = app.tabs.get_mut(app.active) {
-        if let Some(g) = &mut tt.grid {
-            g.delete_rows();
-        }
+    if let Some(g) = app.edit_grid() {
+        g.delete_rows();
     }
 }
 
 /// m in a result or table grid: the current row into the selection or out of it (the GUI's ⌘-click on a row number)
 fn mark_row(app: &mut App) {
-    let table = match app.tabs.get(app.active).map(|t| &t.kind) {
-        Some(TabKind::Table(_)) => true,
-        Some(TabKind::Console(_)) => false,
-        _ => return,
-    };
+    if !matches!(app.tabs.get(app.active).map(|t| &t.kind), Some(TabKind::Table(_) | TabKind::Console(_))) {
+        return;
+    }
+    let table = app.edit_to().is_ok();
     let Some(g) = app.grid_mut() else { return };
     g.toggle_mark();
     let n = g.marked.len();
@@ -264,10 +260,8 @@ fn mark_row(app: &mut App) {
 }
 
 fn set_null(app: &mut App) {
-    if let Some(Tab { kind: TabKind::Table(tt), .. }) = app.tabs.get_mut(app.active) {
-        if let Some(g) = &mut tt.grid {
-            g.edits.insert((g.row, g.col), None);
-        }
+    if let Some(g) = app.edit_grid() {
+        g.edits.insert((g.row, g.col), None);
     }
 }
 

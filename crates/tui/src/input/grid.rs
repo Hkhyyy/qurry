@@ -71,7 +71,10 @@ pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
             if c.show_output || c.grid.is_none() {
                 return;
             }
-            nav(app, k);
+            match k.code {
+                KeyCode::Enter | KeyCode::F(2) => edit_cell(app, id),
+                _ => nav(app, k),
+            }
         }
         TabKind::Table(tt) => {
             match k.code {
@@ -95,28 +98,7 @@ pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
                         a.reload_table_checked(id);
                     });
                 }
-                KeyCode::Enter | KeyCode::F(2) => {
-                    let Some(g) = &tt.grid else { return };
-                    let (r, c) = (g.row, g.col);
-                    if g.cols() == 0 {
-                        return;
-                    }
-                    let name = g.result.columns[c].name.clone();
-                    let ty = g.result.columns[c].type_name.clone();
-                    let cur = g.value(r, c).unwrap_or_default();
-                    app.input(format!("{name} (row {})", r + 1), &cur.clone(), move |a, s| {
-                        // Same rule as the GUI's Value Editor: a json / jsonb column refuses text that isn't JSON
-                        let v = match qurry_shared::value::value_to_apply(&ty, &cur, &s) {
-                            Ok(v) => v,
-                            Err(e) => return a.status = format!("{name} not changed: {e}"),
-                        };
-                        if let Some(TabKind::Table(tt)) = a.tab_mut(id).map(|t| &mut t.kind) {
-                            if let Some(g) = &mut tt.grid {
-                                g.set_value(r, c, v);
-                            }
-                        }
-                    });
-                }
+                KeyCode::Enter | KeyCode::F(2) => edit_cell(app, id),
                 KeyCode::Char('r') => app.reload_table_checked(id),
                 KeyCode::Char('s') => app.sort_table(id),
                 KeyCode::Char('/') => {
@@ -134,6 +116,34 @@ pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
             }
         }
     }
+}
+
+/// ↩ / F2: edit the current cell of tab `id`'s grid (table data, or a console result that can be edited)
+fn edit_cell(app: &mut App, id: u64) {
+    let Some(g) = app.edit_grid() else { return };
+    let (r, c, gid) = (g.row, g.col, g.id);
+    if g.cols() == 0 {
+        return;
+    }
+    let name = g.result.columns[c].name.clone();
+    let ty = g.result.columns[c].type_name.clone();
+    let cur = g.value(r, c).unwrap_or_default();
+    app.input(format!("{name} (row {})", r + 1), &cur.clone(), move |a, s| {
+        // Same rule as the GUI's Value Editor: a json / jsonb column refuses text that isn't JSON
+        let v = match qurry_shared::value::value_to_apply(&ty, &cur, &s) {
+            Ok(v) => v,
+            Err(e) => return a.status = format!("{name} not changed: {e}"),
+        };
+        // Into the grid it was asked for (a console run meanwhile replaced it: dropped)
+        let grid = match a.tab_mut(id).map(|t| &mut t.kind) {
+            Some(TabKind::Table(tt)) => tt.grid.as_mut(),
+            Some(TabKind::Console(c)) => c.grid.as_mut(),
+            _ => None,
+        };
+        if let Some(g) = grid.filter(|g| g.id == gid) {
+            g.set_value(r, c, v);
+        }
+    });
 }
 
 /// Grid navigation

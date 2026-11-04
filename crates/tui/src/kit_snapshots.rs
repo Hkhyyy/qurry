@@ -227,6 +227,38 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.app.chart_result();
     scenes.push(app_scene(h, "Chart", "⌃k › Chart Result: 첫 글 컬럼별 수 컬럼의 합 (가로 막대)", 120, 26));
     h.app.popup = None;
+    // Console result from one table with its key: edited like a table tab (one pending change), then one it can't edit and why
+    let id = h.console_with("select id, user_name as name, email from users;", 0, 10);
+    let users = |editable| qurry_core::db::QueryResult {
+        columns: [("id", "INT8"), ("name", "VARCHAR"), ("email", "TEXT")].iter().map(|(n, t)| qurry_core::db::ColumnInfo { name: n.to_string(), type_name: t.to_string() }).collect(),
+        rows: [(1, "kim", "kim@example.com"), (2, "lee", "lee@example.com"), (3, "park", "park@example.com")].iter().map(|(i, n, e)| vec![json!(i), json!(n), json!(e)]).collect(),
+        rows_affected: 0,
+        truncated: false,
+        elapsed_ms: 3,
+        has_result_set: true,
+        in_transaction: false,
+        warning: None,
+        editable: Some(editable),
+    };
+    let target = qurry_core::editable::EditTarget { schema: "public".into(), table: "users".into(), pk: vec!["id".into()], columns: vec!["id".into(), "user_name".into(), "email".into()] };
+    if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
+        c.result_title = "Result 1: select id, user_name as name, email".into();
+        let mut g = crate::grid::Grid::new(users(qurry_core::editable::Editable::Table(target)));
+        g.set_value(1, 1, "Lee".into());
+        (g.row, g.col) = (1, 1);
+        c.grid = Some(g);
+        c.show_output = false;
+    }
+    h.app.focus = crate::app::Focus::Grid;
+    h.app.status = "3 row(s) retrieved in 3 ms".into();
+    scenes.push(app_scene(h, "Console result: editable", "A console result from one table with its primary key edits like a table tab: ↩ edit, a add, d delete, ⌃s submit (Production asks first), ⌃z revert", 120, 22));
+    if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
+        c.result_title = "Result 1: select u.id, u.name, o.email from".into();
+        c.grid = Some(crate::grid::Grid::new(users(qurry_core::editable::Editable::ReadOnly("Read-only: the columns come from more than one table.".into()))));
+    }
+    h.key("a");
+    scenes.push(app_scene(h, "Console result: read-only", "An edit key on a result Qurry can't tie to one table row: the status line says why (here a join)", 120, 22));
+    h.app.focus = crate::app::Focus::Editor;
     // Grid alignment (GUI Settings › Appearance › Alignment, read from settings.json)
     let id = h.console_with("select * from payment_check;", 1, 10);
     let res = qurry_core::db::QueryResult {
