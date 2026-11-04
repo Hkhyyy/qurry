@@ -3,7 +3,7 @@
 // Only the value · json key lookups (meta.hints) wait on the backend.
 import { monaco } from "./monaco";
 import { CompletionTable, meta } from "./api";
-import { initShared, shared, type Completion, type CompletionItem, type Suggestions } from "./shared";
+import { initShared, shared, type Completion, type CompletionItem, type FilterSuggestions, type Suggestions } from "./shared";
 
 /** Console (model URI) → its target (connection id, or "dataSource::db") and database name; target → its completion index */
 const modelConn = new Map<string, { connId: string; db: string }>();
@@ -65,6 +65,13 @@ async function indexFor(connId: string | undefined): Promise<Completion | undefi
     warnOff(e);
     return undefined;
   }
+}
+
+/** A table tab's WHERE / ORDER BY field: the console's candidates for its text as `SELECT * FROM schema.table WHERE <text>`
+ * (`ORDER BY`), from the same index as the console of `target` (no connection, no index: nothing) */
+export async function filterSuggestions(target: string, f: { schema: string; table: string; orderBy: boolean; text: string; caret: number; db: string; mysql: boolean }): Promise<FilterSuggestions> {
+  const idx = await indexFor(target);
+  return idx?.suggestFilter(f.schema, f.table, f.orderBy, f.text, f.caret, f.db, f.mysql) ?? { from: f.caret, items: [] };
 }
 
 /** Order as the shared rules return it (Monaco sorts by sortText when nothing is typed) */

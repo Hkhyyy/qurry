@@ -33,6 +33,25 @@ describe("shared wasm", () => {
     idx.free();
   });
 
+  it("completes a table tab's filter field as its query, with UTF-16 carets", () => {
+    const idx = shared().completionIndex([
+      { schema: "public", name: "users", columns: [["id", "int8"], ["user_name", "text"], ["이름", "text"]] },
+      { schema: "public", name: "orders", columns: [["user_id", "int8"]] },
+    ]);
+    const labels = (s: { items: { label: string }[] }) => s.items.map((i) => i.label);
+    const w = idx.suggestFilter("public", "users", false, "us", 2, "", false);
+    expect(w.from).toBe(0);
+    expect(labels(w)).toEqual(["user_name", "users", "using"]);
+    // The caret mid-text, after a surrogate pair and Hangul: `from` is in UTF-16 units of the field
+    const text = "'😀' = 이름 and id > 1";
+    const caret = text.indexOf("이름") + 1;
+    const mid = idx.suggestFilter("public", "users", false, text, caret, "", false);
+    expect([mid.from, labels(mid)]).toEqual([text.indexOf("이름"), ["이름"]]);
+    expect(labels(idx.suggestFilter("public", "users", true, "id de", 5, "", false))).toEqual(["delete", "desc"]);
+    expect(idx.suggestFilter("public", "users", false, "user_name like 'us", 18, "", false).items).toEqual([]);
+    idx.free();
+  });
+
   it("throws before init, saying how to fix it", async () => {
     vi.resetModules();
     const fresh = await import("./shared");
