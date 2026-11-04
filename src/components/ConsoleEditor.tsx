@@ -7,14 +7,15 @@ import { monacoTheme, useTheme } from "../lib/theme";
 import { font, fontStack } from "../lib/prefs";
 import { setStatusWidget } from "../lib/statusbar";
 import { bindings, onKeymapChange } from "../lib/shortcuts";
+import { markHover, type MarkStmt, type StmtMark } from "../lib/stmtMark";
 
 /** Run request: passes editor content·caret·selection; the console decides what actually runs (DataGrip run rules) */
 export interface RunRequest {
   text: string;
   offset: number;
   selection: { text: string; start: number; end: number } | null;
-  /** Briefly highlight the range to run in the editor (not once the text changed after the press) */
-  highlight: (ranges: { start: number; end: number }[]) => void;
+  /** Briefly highlight the ranges about to run and keep them for their gutter marks; gives how to mark them (nothing once the text changed after the press) */
+  begin: (ranges: { start: number; end: number }[]) => MarkStmt | undefined;
   /** Explain Plan / Explain Analyse */
   explain?: "plan" | "analyze";
 }
@@ -36,6 +37,8 @@ interface Props {
   language: string;
   onChange: (sql: string) => void;
   onRun: (req: RunRequest) => void;
+  /** A statement's gutter mark was clicked: its Output line */
+  onMarkClick?: (out: string) => void;
   registerApi: (tabId: string, api: EditorApi) => void;
   readOnly?: boolean;
 }
@@ -59,7 +62,7 @@ function monacoKey(spec: string): number | null {
 }
 const keysOf = (id: string) => bindings(id).map(monacoKey).filter((n): n is number => n !== null);
 
-export function ConsoleEditor({ tabId, connId, database, initialSql, language, onChange, onRun, registerApi, readOnly }: Props) {
+export function ConsoleEditor({ tabId, connId, database, initialSql, language, onChange, onRun, onMarkClick, registerApi, readOnly }: Props) {
   const modelUri = useRef<string | null>(null);
   useEffect(() => {
     if (modelUri.current) bindModel(modelUri.current, connId, database);
@@ -67,6 +70,8 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
   const theme = useTheme();
   const onRunRef = useRef(onRun);
   onRunRef.current = onRun;
+  const onMarkRef = useRef(onMarkClick);
+  onMarkRef.current = onMarkClick;
 
   return (
     <Editor
@@ -87,6 +92,8 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
         tabSize: 2,
         fixedOverflowWidgets: true,
         readOnly,
+        // Gutter marks of executed statements (consoles only)
+        glyphMargin: !readOnly,
         // Use textarea input instead of Chromium's EditContext (to match WebKit/Tauri behavior)
         editContext: false,
         quickSuggestions: { other: true, strings: false, comments: false },
@@ -121,6 +128,67 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
           );
           setTimeout(() => deco.clear(), 700);
         };
+        // ── Gutter marks (DataGrip): each run statement's range is tracked through edits (decorations), its mark sits on its first line.
+        // Editing its text drops it; a statement that starts running replaces the marks it overlaps. `m` is unset until it starts
+        type Mark = { id: string; text: string; m?: StmtMark };
+        let marks: Mark[] = [];
+        const glyphs = ed.createDecorationsCollection();
+        const rangeOf = (x: Mark) => ed.getModel()?.getDecorationRange(x.id) ?? null;
+        const drop = (gone: Mark[]) => {
+          ed.getModel()?.deltaDecorations(gone.map((x) => x.id), []);
+          marks = marks.filter((x) => !gone.includes(x));
+        };
+        const drawMarks = () =>
+          glyphs.set(
+            marks.flatMap((x) => {
+              const r = rangeOf(x);
+              if (!x.m || !r) return [];
+              return [{ range: new monaco.Range(r.startLineNumber, 1, r.startLineNumber, 1), options: { glyphMarginClassName: `stmt-mark ${x.m.state}`, glyphMarginHoverMessage: { value: markHover(x.m) } } }];
+            }),
+          );
+        const begin = (ranges: { start: number; end: number }[]): MarkStmt | undefined => {
+          const m = ed.getModel();
+          if (!m) return;
+          highlight(ranges);
+          // Statements of an earlier press that never started (cancelled, or after an error) aren't kept
+          drop(marks.filter((x) => !x.m));
+          const ids = m.deltaDecorations(
+            [],
+            ranges.map((r) => {
+              const s = m.getPositionAt(r.start);
+              const e = m.getPositionAt(r.end);
+              return { range: new monaco.Range(s.lineNumber, s.column, e.lineNumber, e.column), options: { stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges } };
+            }),
+          );
+          const run: Mark[] = ids.map((id) => ({ id, text: m.getValueInRange(m.getDecorationRange(id)!) }));
+          marks.push(...run);
+          return (i, s) => {
+            const x = run[i];
+            // Dropped meanwhile (its text was edited), or the editor is gone
+            if (!x || !marks.includes(x) || !ed.getModel()) return;
+            const r = rangeOf(x);
+            if (s.state === "running" && r) drop(marks.filter((o) => o !== x && o.m && monaco.Range.areIntersecting(r, rangeOf(o) ?? r)));
+            x.m = s;
+            drawMarks();
+          };
+        };
+        ed.onDidChangeModelContent(() => {
+          const m = ed.getModel();
+          if (!m || !marks.length) return;
+          drop(
+            marks.filter((x) => {
+              const r = rangeOf(x);
+              return !r || m.getValueInRange(r) !== x.text;
+            }),
+          );
+          drawMarks();
+        });
+        ed.onMouseDown((e) => {
+          if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) return;
+          const line = e.target.position?.lineNumber;
+          const x = marks.find((x) => x.m && rangeOf(x)?.startLineNumber === line);
+          if (x?.m) onMarkRef.current?.(x.m.out);
+        });
         const run = (explain?: "plan" | "analyze") => {
           const m = ed.getModel();
           if (!m) return;
@@ -129,8 +197,8 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
             sel && !sel.isEmpty() ? { text: m.getValueInRange(sel), start: m.getOffsetAt(sel.getStartPosition()), end: m.getOffsetAt(sel.getEndPosition()) } : null;
           // The offsets are into the text at the press: after an edit (a run waiting for the module, the Statements chooser) they'd mark other text
           const version = m.getAlternativeVersionId();
-          const mark = (ranges: { start: number; end: number }[]) => ed.getModel() === m && m.getAlternativeVersionId() === version && highlight(ranges);
-          onRunRef.current({ text: m.getValue(), offset: m.getOffsetAt(ed.getPosition()!), selection, highlight: mark, explain });
+          const begun = (ranges: { start: number; end: number }[]) => (ed.getModel() === m && m.getAlternativeVersionId() === version ? begin(ranges) : undefined);
+          onRunRef.current({ text: m.getValue(), offset: m.getOffsetAt(ed.getPosition()!), selection, begin: begun, explain });
         };
         // ── DataGrip editor keymap (keys are editor.* in lib/shortcuts; re-registered on change) ──
         let registered: monaco.IDisposable[] = [];

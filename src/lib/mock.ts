@@ -212,8 +212,9 @@ const handlers: Record<string, (a: any) => unknown> = {
       : a.req.column === "status" ? [{ value: "ready", count: 20 }, { value: "paid", count: 10 }, { value: "it's late", count: 1 }]
       : a.req.column === "amount" ? [{ value: "1000", count: 7 }, { value: "2500", count: 3 }]
       : [{ value: "k0", count: 15 }, { value: "k1", count: 15 }],
+  // A statement on no_such_table fails (console gutter marks)
   run_query: (a: any) =>
-    (String(a.id).startsWith("lan") && (tls.runs++, lanCheck(a.id)), /^EXPLAIN/i.test(a.sql)
+    /\bno_such_table\b/i.test(a.sql) ? Promise.reject(`ERROR: relation "no_such_table" does not exist`) : (String(a.id).startsWith("lan") && (tls.runs++, lanCheck(a.id)), /^EXPLAIN/i.test(a.sql)
       ? { ...result, columns: [{ name: "QUERY PLAN", typeName: "JSON" }], rows: [[JSON.stringify([{ Plan: { "Node Type": "Hash Join", "Join Type": "Inner", "Startup Cost": 1.5, "Total Cost": 45.2, "Plan Rows": 120, "Plan Width": 64, "Hash Cond": "(u.contract_id = c.id)", Plans: [{ "Node Type": "Seq Scan", "Relation Name": "users", Schema: "public", Alias: "u", "Startup Cost": 0, "Total Cost": 22.1, "Plan Rows": 1200, "Plan Width": 40 }, { "Node Type": "Hash", "Startup Cost": 1.2, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24, Plans: [{ "Node Type": "Index Scan", "Relation Name": "contracts", "Index Name": "contracts_pkey", "Startup Cost": 0.1, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24 }] }] } }])]], truncated: false }
       : /^\s*(insert|update|delete)/i.test(a.sql)
         ? { ...result, columns: [], rows: [], rowsAffected: 3, truncated: false, hasResultSet: false, inTransaction: (globalThis as any).__mockManual === true }

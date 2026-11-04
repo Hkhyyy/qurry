@@ -226,6 +226,26 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.app.chart_result();
     scenes.push(app_scene(h, "Chart", "⌃k › Chart Result: 첫 글 컬럼별 수 컬럼의 합 (가로 막대)", 120, 26));
     h.app.popup = None;
+    // Gutter marks: ✓ done, ✗ failed (an earlier run that stopped there), … running now
+    let id = h.console_with("select 1;\nupdate payment\n   set status = 'paid'\n where id = 42;\nselect pg_sleep(5);", 4, 0);
+    if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
+        use crate::app::MarkState;
+        let lines = c.editor.lines().to_vec();
+        c.marks.start(&lines, &[(0, 0), (1, 3)]);
+        c.marks.set(&lines, 0, MarkState::Ok);
+        c.marks.set(&lines, 1, MarkState::Err);
+        c.marks.start(&lines, &[(4, 4)]);
+        c.marks.set(&lines, 0, MarkState::Running);
+        for (e, l) in [(false, "> select 1"), (false, "0 row(s) retrieved in 3 ms"), (false, "> update payment set status = 'paid' where id = 42"), (true, "ERROR: column \"status\" of relation \"payment\" does not exist"), (false, "> select pg_sleep(5)")] {
+            c.log(e, l.into());
+        }
+        c.running = true;
+    }
+    h.app.status = "Executing…".into();
+    scenes.push(app_scene(h, "Console gutter marks", "Run statements are marked on their first line: ✓ done, ✗ failed, … running (click: Output)", 120, 26));
+    if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
+        c.running = false;
+    }
     // Grid alignment (GUI Settings › Appearance › Alignment, read from settings.json)
     let id = h.console_with("select * from payment_check;", 1, 10);
     let res = qurry_core::db::QueryResult {

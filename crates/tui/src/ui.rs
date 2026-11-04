@@ -462,6 +462,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             f.render_widget(&c.editor, ed);
             // tui-textarea doesn't expose its scroll position → use the cursor cell just drawn
             let drawn = find_caret(f, ed);
+            draw_marks(f, c, ed, drawn);
             let caret = if editing && c.complete.is_some() { drawn } else { None };
             if focused {
                 app.hits.caret = drawn.map(|(x, y)| (x, y, c.editor.cursor().0, c.editor.cursor().1));
@@ -662,6 +663,30 @@ fn find_caret(f: &mut Frame, area: Rect) -> Option<(u16, u16)> {
         }
     }
     None
+}
+
+/// Gutter marks (✓ done, ✗ failed, … running) in the blank first cell of the line-number column, on each run statement's first line.
+/// Rows on screen are counted from the cursor cell just drawn; a row whose line number isn't drawn there (scrolled sideways) gets none
+fn draw_marks(f: &mut Frame, c: &crate::app::Console, ed: Rect, caret: Option<(u16, u16)>) {
+    use crate::app::MarkState;
+    let digits = c.editor.lines().len().to_string().len();
+    let Some((_, cy)) = caret.filter(|_| ed.width as usize > digits + 4) else { return };
+    let top = c.editor.cursor().0 as i64 - (cy as i64 - ed.y as i64 - 1);
+    let buf = f.buffer_mut();
+    for y in ed.y + 1..ed.bottom().saturating_sub(1) {
+        let row = top + (y - ed.y - 1) as i64;
+        let Some(state) = (row >= 0).then(|| c.marks.at(row as usize)).flatten() else { continue };
+        let num = format!(" {:>digits$} ", row + 1);
+        if (0..num.len() as u16).any(|i| buf[(ed.x + 1 + i, y)].symbol() != &num[i as usize..i as usize + 1]) {
+            continue;
+        }
+        let color = match state {
+            MarkState::Running => ACCENT,
+            MarkState::Ok => OK,
+            MarkState::Err => DANGER,
+        };
+        buf[(ed.x + 1, y)].set_char(state.symbol()).set_fg(color);
+    }
 }
 
 /// Autocomplete list: below the cursor (above if there is no room)

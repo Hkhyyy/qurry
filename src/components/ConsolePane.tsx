@@ -6,6 +6,7 @@ import { DEFAULT_EXEC, ExecSettings, planExecution, planSelection } from "../lib
 import { initShared, sharedReady } from "../lib/shared";
 import { cmd, eventSpec, keyTitle, runKey } from "../lib/shortcuts";
 import { ConsoleEditor, EditorApi, RunRequest } from "./ConsoleEditor";
+import type { MarkStmt } from "../lib/stmtMark";
 import { ContextMenu, MenuItem } from "./Explorer";
 import { CONSOLE_READ_ONLY, ResultGrid } from "./ResultGrid";
 import { RunningBar } from "./RunningBar";
@@ -58,6 +59,8 @@ export interface OutputLine {
   ts: string;
   text: string;
   level: "sql" | "info" | "warn" | "error";
+  /** The echo line of a run statement: the id its gutter mark points to */
+  stmt?: string;
 }
 
 /** The editor's API plus the ⌘↩ waiting for the WebAssembly module, which ⌘F2 cancels like a run */
@@ -91,7 +94,7 @@ interface Props {
   inTx: boolean;
   onChange: (sql: string) => void;
   /** Actual execution: list of statements */
-  onExecute: (statements: string[], explain?: "plan" | "analyze") => void;
+  onExecute: (statements: string[], explain?: "plan" | "analyze", mark?: MarkStmt) => void;
   onCancel: () => void;
   onSetActiveResult: (id: string) => void;
   onPin: (id: string, pinned: boolean) => void;
@@ -123,6 +126,10 @@ export function ConsolePane(p: Props) {
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const [chooser, setChooser] = useState<{ options: { label: string; stmts: string[]; ranges: { start: number; end: number }[] }[]; idx: number; req: RunRequest } | null>(null);
   const [api, setApi] = useState<EditorApi | null>(null);
+  /** The Output line of the gutter mark last clicked: selected, and scrolled to on each click */
+  const [markedOut, setMarkedOut] = useState<{ out: string } | null>(null);
+  const outputRef = useRef<HTMLDivElement>(null);
+  useEffect(() => outputRef.current?.querySelector(".ol.on")?.scrollIntoView({ block: "nearest" }), [markedOut]);
   /** A ⌘↩ waiting for the WebAssembly module, as the editor was at the press (null once it ran or was cancelled) */
   const pending = useRef<RunRequest | null>(null);
   const [loading, setLoadingState] = useState(false);
@@ -186,14 +193,14 @@ export function ConsolePane(p: Props) {
       // As one statement without the module too (the way to run while it failed to load)
       const stmts = settings.selection === "single" && !sharedReady() ? [{ start: 0, end: sel.length, sql: sel.trim() }] : planSelection(sel, splitFn(sel), settings);
       if (!stmts.length) return;
-      req.highlight(stmts.map((s) => ({ start: selection.start + s.start, end: selection.start + s.end })));
-      return p.onExecute(stmts.map((s) => s.sql), req.explain);
+      const mark = req.begin(stmts.map((s) => ({ start: selection.start + s.start, end: selection.start + s.end })));
+      return p.onExecute(stmts.map((s) => s.sql), req.explain, mark);
     }
     const plan = planExecution(text, offset, splitFn(text), settings, p.kind);
     if (!plan) return;
     if ("run" in plan) {
-      req.highlight(plan.run.map((x) => ({ start: x.start, end: x.end })));
-      return p.onExecute(plan.run.map((x) => x.sql), req.explain);
+      const mark = req.begin(plan.run.map((x) => ({ start: x.start, end: x.end })));
+      return p.onExecute(plan.run.map((x) => x.sql), req.explain, mark);
     }
     // Ask what to execute: Statements popup
     setChooser({ options: plan.ask.map((o) => ({ label: o.label, stmts: o.stmts.map((x) => x.sql), ranges: o.stmts })), idx: 0, req });
@@ -204,8 +211,7 @@ export function ConsolePane(p: Props) {
   const pickChoice = (i: number) => {
     if (!chooser) return;
     const o = chooser.options[i];
-    chooser.req.highlight(o.ranges);
-    p.onExecute(o.stmts, chooser.req.explain);
+    p.onExecute(o.stmts, chooser.req.explain, chooser.req.begin(o.ranges));
     setChooser(null);
     api?.focus();
   };
@@ -320,6 +326,10 @@ export function ConsolePane(p: Props) {
               language={p.dialect?.monaco ?? "pgsql"}
               onChange={p.onChange}
               onRun={onRun}
+              onMarkClick={(out) => {
+                p.onSetActiveResult("output");
+                setMarkedOut({ out });
+              }}
               registerApi={(id, a) => {
                 setApi(a);
                 p.registerApi(id, { ...a, loading: () => pending.current !== null, cancelPending });
@@ -384,10 +394,10 @@ export function ConsolePane(p: Props) {
             <div className="result-area">
               {loading ? <RunningBar running label="Loading the statement splitter" onCancel={cancelPending} /> : <RunningBar running={p.running} onCancel={p.onCancel} />}
               {shown === "output" && (
-                <div className="output-log">
+                <div className="output-log" ref={outputRef}>
                   {p.output.length === 0 && <EmptyState>Execute a statement{cmd("editor.run").shortcut ? ` (${cmd("editor.run").shortcut})` : ""} to see the output.</EmptyState>}
                   {p.output.map((l, i) => (
-                    <div key={i} className={"ol " + l.level}>
+                    <div key={i} className={"ol " + l.level + (l.stmt && l.stmt === markedOut?.out ? " on" : "")}>
                       <span className="ts">[{l.ts}]</span> {l.text}
                     </div>
                   ))}

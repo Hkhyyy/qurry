@@ -418,7 +418,7 @@ export function useEditorGroups({
                     txManual={t.txManual}
                     inTx={t.inTx}
                     onChange={(sql) => liveSql.set(t.id, sql)}
-                    onExecute={(stmts, explain) => executeConsole(t.id, stmts, explain)}
+                    onExecute={(stmts, explain, mark) => executeConsole(t.id, stmts, explain, mark)}
                     onCancel={() => cancel(t)}
                     onSetActiveResult={(id) => patch(t.id, { activeResult: id })}
                     onPin={(id, pinned) => setTabs((ts) => ts.map((x) => (x.id === t.id ? { ...x, results: x.results.map((r) => (r.id === id ? { ...r, pinned } : r)) } : x)))}

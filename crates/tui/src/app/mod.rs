@@ -51,6 +51,88 @@ pub struct Console {
     pub in_tx: bool,
     /// Open autocomplete list
     pub complete: Option<Completion>,
+    /// Gutter marks of the statements runs executed
+    pub marks: Marks,
+}
+
+/// How a run statement's gutter mark shows it (DataGrip): … running, ✓ done, ✗ failed (symbols, so NO_COLOR reads them too)
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum MarkState {
+    Running,
+    Ok,
+    Err,
+}
+
+impl MarkState {
+    pub fn symbol(self) -> char {
+        match self {
+            MarkState::Running => '…',
+            MarkState::Ok => '✓',
+            MarkState::Err => '✗',
+        }
+    }
+}
+
+/// A run statement's editor rows (first, last) and its state (None until it starts). `stmt`: its index in the latest run
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Mark {
+    pub rows: (usize, usize),
+    pub state: Option<MarkState>,
+    stmt: Option<usize>,
+}
+
+/// The console's gutter marks and the editor lines their rows refer to. Edits move them along (`follow`): marks below the changed
+/// lines shift, marks on them are dropped (their statement was edited)
+#[derive(Default)]
+pub struct Marks {
+    list: Vec<Mark>,
+    lines: Vec<String>,
+}
+
+impl Marks {
+    /// Follow the edits from the lines the marks refer to, to `now`
+    pub fn follow(&mut self, now: &[String]) {
+        if self.list.is_empty() || self.lines == now {
+            return;
+        }
+        let old = &self.lines;
+        let same = old.iter().zip(now).take_while(|(a, b)| a == b).count();
+        let tail = old[same..].iter().rev().zip(now[same..].iter().rev()).take_while(|(a, b)| a == b).count();
+        let (changed_end, added) = (old.len() - tail, now.len() as isize - old.len() as isize);
+        self.list.retain_mut(|m| match m.rows {
+            (_, last) if last < same => true,
+            (first, last) if first >= changed_end => {
+                m.rows = ((first as isize + added) as usize, (last as isize + added) as usize);
+                true
+            }
+            _ => false,
+        });
+        self.lines = now.to_vec();
+    }
+
+    /// A run is about to start over the statements on these rows of `now` (in order): they are marked as they run
+    pub fn start(&mut self, now: &[String], rows: &[(usize, usize)]) {
+        self.follow(now);
+        self.list.retain(|m| m.state.is_some());
+        self.list.iter_mut().for_each(|m| m.stmt = None);
+        self.list.extend(rows.iter().enumerate().map(|(i, &rows)| Mark { rows, state: None, stmt: Some(i) }));
+        self.lines = now.to_vec();
+    }
+
+    /// Statement i of the latest run is running, done or failed. Once it runs, it replaces the earlier marks it overlaps
+    pub fn set(&mut self, now: &[String], i: usize, state: MarkState) {
+        self.follow(now);
+        let Some((a, b)) = self.list.iter().find(|m| m.stmt == Some(i)).map(|m| m.rows) else { return };
+        self.list.retain(|m| m.stmt == Some(i) || m.state.is_none() || m.rows.1 < a || m.rows.0 > b);
+        if let Some(m) = self.list.iter_mut().find(|m| m.stmt == Some(i)) {
+            m.state = Some(state);
+        }
+    }
+
+    /// The mark drawn on an editor row (a statement's first)
+    pub fn at(&self, row: usize) -> Option<MarkState> {
+        self.list.iter().filter(|m| m.rows.0 == row).find_map(|m| m.state)
+    }
 }
 
 /// Max lines kept in the console Output log (same as the GUI)
@@ -283,7 +365,7 @@ pub enum PAction {
     Object { conn: String, db: String, e: IndexEntryLite },
     Tab(u64),
     /// Statements picked in the execution picker popup
-    Run { stmts: Vec<String>, explain: bool },
+    Run { stmts: Vec<String>, rows: Vec<(usize, usize)>, explain: bool },
     /// Change execution settings
     Exec(qurry_core::exec::ExecSettings),
     /// Update channel picked
