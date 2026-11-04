@@ -402,8 +402,9 @@ test.describe("Value Editor panel", () => {
     await expect(panel(page).locator(".ve-title")).toHaveText("data : jsonb");
     await expect(ed.locator(".view-line")).toHaveCount(11);
     // Monaco's JSON tokens: keys, strings, numbers and delimiters each get their own colour class
-    const classes = await ed.locator(".view-line span span").evaluateAll((els) => new Set(els.map((e) => e.className)).size);
-    expect(classes).toBeGreaterThanOrEqual(3);
+    // (Monaco tokenizes after it draws the text, so this waits for the colours rather than reading them once)
+    const classes = () => ed.locator(".view-line span span").evaluateAll((els) => new Set(els.map((e) => e.className)).size);
+    await expect.poll(classes).toBeGreaterThanOrEqual(3);
     // Line 2 is `  "kind": "card",`: replace card with bank in the pretty layout
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("End");

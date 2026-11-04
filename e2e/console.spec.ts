@@ -183,7 +183,12 @@ test("a console result whose load-more fails keeps the reason in its grid (#80)"
 });
 
 test("Output follows new lines at the bottom, keeps the position when scrolled up, and Clear All follows again (#92)", async ({ page }) => {
-  await typeSql(page, Array.from({ length: 30 }, (_, i) => `update orders set status = 'ready' where id = ${i};`).join("\n"));
+  // Five runs of 30 statements and their Output: a busy runner takes most of the default 30 s for that alone
+  test.slow();
+  // Inserted at once: typing 30 lines key by key takes much of the test's time on a busy runner
+  await editor(page).click();
+  await page.keyboard.press("Meta+A");
+  await page.keyboard.insertText(Array.from({ length: 30 }, (_, i) => `update orders set status = 'ready' where id = ${i};`).join("\n"));
   const output = work(page).locator(".output-log");
   const lines = output.locator(".ol");
   const fromBottom = () => output.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
