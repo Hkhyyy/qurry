@@ -413,8 +413,10 @@ impl Grid {
             // Thick when focused, like kit::panel: focus shows without colors too (NO_COLOR)
             .border_type(if focused { ratatui::widgets::BorderType::Thick } else { ratatui::widgets::BorderType::Plain })
             .border_style(if focused { Style::default().fg(Color::Cyan) } else { Style::default().fg(Color::DarkGray) });
+        // The bottom edge says why no more rows came, or that more are on the way (words, so it reads without colors too)
         let block = match &self.more_error {
             Some(e) => block.title_bottom(Line::styled(format!(" ✗ {} ", e.lines().next().unwrap_or_default()), Style::default().fg(crate::kit::DANGER))),
+            None if self.loading_more => block.title_bottom(Line::from(crate::kit::muted(" ↓ Loading more rows… "))),
             None => block,
         };
         let inner = block.inner(area);

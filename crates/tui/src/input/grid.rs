@@ -509,6 +509,11 @@ mod tests {
         }
         h.key("Down");
         assert!(h.table(id).grid.as_ref().unwrap().loading_more);
+        // While it loads, the bottom edge says so, in words that read without colors too
+        assert!(h.screen(120, 30).contains("↓ Loading more rows…"), "{}", h.screen(120, 30));
+        h.app.color = crate::theme::ColorMode::NoColor;
+        assert!(h.screen(120, 30).contains("↓ Loading more rows…"));
+        h.app.color = crate::theme::ColorMode::TrueColor;
         h.settle().await;
         let g = h.table(id).grid.as_ref().unwrap();
         let why = qurry_shared::errors::more_rows_failed("Session closed");

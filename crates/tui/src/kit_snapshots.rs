@@ -226,6 +226,17 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.app.chart_result();
     scenes.push(app_scene(h, "Chart", "⌃k › Chart Result: 첫 글 컬럼별 수 컬럼의 합 (가로 막대)", 120, 26));
     h.app.popup = None;
+    // Loading more (scrolled near the end of an unfinished result): said at the grid's bottom edge, where a failure is shown
+    if let Some(g) = h.app.grid_mut() {
+        (g.result.truncated, g.loading_more) = (true, true);
+    }
+    scenes.push(app_scene(h, "Grid: loading more", "Scrolled near the end of an unfinished result: the grid's bottom edge says more rows are loading (a failure is shown in the same place)", 120, 26));
+    h.app.color = crate::theme::ColorMode::NoColor;
+    scenes.push(app_scene(h, "Grid: loading more, NO_COLOR", "NO_COLOR=1: the same words, dimmed", 120, 26));
+    h.app.color = crate::theme::ColorMode::TrueColor;
+    if let Some(g) = h.app.grid_mut() {
+        (g.result.truncated, g.loading_more) = (false, false);
+    }
     // Grid alignment (GUI Settings › Appearance › Alignment, read from settings.json)
     let id = h.console_with("select * from payment_check;", 1, 10);
     let res = qurry_core::db::QueryResult {
