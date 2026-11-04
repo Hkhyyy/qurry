@@ -652,6 +652,8 @@ impl App {
                     Ok(warning) => {
                         // Schemas · tables reload under that DB; a new DB reloads the Data Source
                         a.schema_changed(&conn, &db);
+                        // Marks on dropped or renamed nodes would point at nothing (the GUI's selection loses them as their rows go)
+                        a.tree.marked.clear();
                         if let Some(n) = a.tree.roots.iter().find(|n| n.conn == conn).cloned() {
                             a.refresh_node(&n);
                         }

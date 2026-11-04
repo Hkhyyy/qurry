@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MenuEntry } from "../../ui";
-import { clickSelect, forSelection, NO_SEL, NOT_ALL, ONE_NODE } from "./selection";
+import { clickSelect, forSelection, NO_SEL, NOT_ALL, ONE_NODE, withoutNode } from "./selection";
 
 const vis = ["conn", "db", "orders", "users", "items", "v_sales"];
 
@@ -33,6 +33,17 @@ describe("tree selection", () => {
 
   it("⇧-click with an anchor no longer on screen selects one node", () => {
     expect(clickSelect({ ids: ["gone"], anchor: "gone", lead: "gone" }, "users", "range", vis).ids).toEqual(["users"]);
+  });
+
+  it("a node that leaves the screen leaves the selection; the lead and anchor move to the last remaining node", () => {
+    const s = { ids: ["orders", "users", "items"], anchor: "orders", lead: "items" };
+    expect(withoutNode(s, "users")).toEqual({ ids: ["orders", "items"], anchor: "orders", lead: "items" });
+    expect(withoutNode(s, "items")).toEqual({ ids: ["orders", "users"], anchor: "orders", lead: "users" });
+    expect(withoutNode(withoutNode(s, "orders"), "items")).toEqual({ ids: ["users"], anchor: "users", lead: "users" });
+    // Every node gone (Collapse All): nothing is selected, so nothing acts
+    expect(["orders", "users", "items"].reduce(withoutNode, s)).toEqual(NO_SEL);
+    // A row that wasn't selected changes nothing
+    expect(withoutNode(s, "v_sales")).toEqual(s);
   });
 });
 

@@ -154,11 +154,6 @@ export function useGlobalShortcuts({
           e.preventDefault();
           openDdl(node);
         },
-        "tree.copyRef": () => {
-          if (!node) return false;
-          e.preventDefault();
-          navigator.clipboard.writeText(node.name ? `${node.schema}.${node.name}` : node.schema ?? node.db ?? node.conn.name);
-        },
         refresh: () => {
           e.preventDefault();
           if (many) many.forEach((n) => n.refresh?.());

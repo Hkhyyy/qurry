@@ -117,14 +117,20 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
   };
 
   /** Truncate… / Drop… of one or several objects of one database: one confirmation lists every statement (the Production one on a
-   *  Production source), then one batch runs them, through the read-only check and the Production log like any other change */
+   *  Production source), then they run like the object editors' DDL (ddl.run: one transaction on PostgreSQL, one at a time on MySQL,
+   *  whose DDL can't roll back), through the read-only check and the Production log. Drop's statements come from the backend in an
+   *  order that runs (views before the tables they read, the tables in one statement) */
   const dangerous = async (infos: NodeInfo[], verb: "TRUNCATE" | "DROP") => {
     const objs = infos.filter((i) => i.schema && i.name);
     if (!objs.length) return;
     const c = objs[0].conn;
     const { q } = dialectOf(c.kind);
-    const kw = (i: NodeInfo) => (i.kind === "view" ? "VIEW" : i.kind === "matview" ? "MATERIALIZED VIEW" : i.kind === "sequence" ? "SEQUENCE" : "TABLE");
-    const sqls = objs.map((i) => `${verb} ${verb === "DROP" ? kw(i) + " " : ""}${q(i.schema!)}.${q(i.name!)};`);
+    let sqls: string[];
+    try {
+      sqls = verb === "DROP" ? await ddl.drop(c.id, objs.map((i) => ({ kind: i.kind, schema: i.schema!, name: i.name! }))) : objs.map((i) => `TRUNCATE ${q(i.schema!)}.${q(i.name!)};`);
+    } catch (e) {
+      return setStatus(String(e));
+    }
     const prod = !!c.options?.confirmChanges;
     const question = prod
       ? verb === "DROP" ? "This changes the schema of a Production data source." : "This deletes every row of a table in a Production data source."
@@ -132,14 +138,16 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
     const detail = sqls.map((text) => ({ text, value: verb === "DROP" ? "schema change" : "all rows", tone: "danger" as const }));
     if (!(await ask(question, { title: prod ? `Production: ${c.name}` : c.name, detail, okLabel: "Execute", danger: true }))) return;
     try {
-      const r = await api.executeBatch(nodeTarget(objs[0]), sqls);
-      setStatus(`Executed: ${sqls.length === 1 ? sqls[0] : `${sqls.length} statements`}${r.warning ? ` · Warning: ${r.warning}` : ""}`);
-      // Each schema's list reloads once
-      const reload = new Map(objs.map((i) => [`${i.db}.${i.schema}${verb === "DROP" ? "" : `.${i.name}`}`, verb === "DROP" ? i.refreshParent ?? i.refresh : i.refresh]));
-      for (const fn of reload.values()) fn?.();
+      // Ran, but the Production log couldn't record it: not a failure (running it again would repeat it)
+      const warning = await ddl.run(nodeTarget(objs[0]), sqls);
+      setStatus(`Executed: ${sqls.length === 1 ? sqls[0] : `${sqls.length} statements`}`);
+      if (warning) void notice(warning, "Ran, with a warning");
     } catch (e) {
       setStatus(String(e));
     }
+    // Each schema's list reloads once, also after a failure (on MySQL the first statements may have run)
+    const reload = new Map(objs.map((i) => [`${i.db}.${i.schema}${verb === "DROP" ? "" : `.${i.name}`}`, verb === "DROP" ? i.refreshParent ?? i.refresh : i.refresh]));
+    for (const fn of reload.values()) fn?.();
   };
 
   /** Redis browser tab (Medis style) */
@@ -238,6 +246,8 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
   };
   const nodeTarget = (info: NodeInfo) => targetId(info.conn.id, info.db && info.db !== (info.conn.database || "postgres") ? info.db : undefined);
   const fqn = (info: NodeInfo) => [info.db, info.schema, info.name].filter(Boolean).join(".") || info.conn.name;
+  /** Copy Reference (menu and key, one node or several): schema.name, which a console on that database reads (the TUI's y too) */
+  const reference = (info: NodeInfo) => [info.schema, info.name].filter(Boolean).join(".") || info.db || info.conn.name;
   const nodeName = (info: NodeInfo) => (info.kind === "conn" ? info.conn.name : info.name ?? info.schema ?? info.db ?? info.conn.name);
   const ddlText = (info: NodeInfo) => meta.ddl(nodeTarget(info), info.schema!, info.name!, info.kind);
 
@@ -344,7 +354,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
       "tree.editData": every((i) => isRelation(i.kind), () => all.forEach(activateNode)),
       "tree.ddl": every((i) => !!i.name, () => all.forEach(openDdl)),
       "tree.copyName": () => void navigator.clipboard.writeText(all.map(nodeName).join("\n")),
-      "tree.copyRef": () => void navigator.clipboard.writeText(all.map(fqn).join("\n")),
+      "tree.copyRef": () => void navigator.clipboard.writeText(all.map(reference).join("\n")),
       "tree.refresh": () => all.forEach((i) => i.refresh?.()),
       "tree.remove": every((i) => oneDb && !!i.name && i.kind !== "routine", () => dangerous(all, "DROP")),
     };
@@ -383,7 +393,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
       label: "Copy/Paste",
       submenu: [
         { label: "Copy Name", ...cmd("tree.copyName"), action: () => navigator.clipboard.writeText(nodeName(info)) },
-        { label: "Copy Reference", ...cmd("tree.copyRef"), action: () => navigator.clipboard.writeText(fqn(info)) },
+        { label: "Copy Reference", ...cmd("tree.copyRef"), action: () => navigator.clipboard.writeText(reference(info)) },
         ...(info.kind === "conn" ? ([{ label: "Duplicate", ...cmd("tree.duplicate"), action: () => duplicateConn(c) }] as MenuItem[]) : []),
       ],
     });

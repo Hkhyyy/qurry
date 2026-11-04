@@ -34,7 +34,7 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 
 ### 탐색기에서 여러 노드
 
-`m` 은 커서의 노드를 표시하거나 표시를 지웁니다 (GUI 의 `⌘` 클릭). 커서를 옮겨도 표시는 남고, `Esc` 로 모두 지웁니다. 그러면 Go to DDL (`⌃b`) 과 `F4` (하나마다 탭), `y` (한 줄에 이름 하나), `Delete` (Drop…), 새로 고침이 표시한 노드 모두에 동작합니다. Drop… 은 모든 문장을 보여 주며 한 번만 묻고 (운영 Data Source 는 한 객체일 때처럼 빨간 창), 한 데이터베이스의 객체여야 합니다. 표시한 노드 중 맞지 않는 것이 있으면 상태 줄이 그렇다고, 표시를 지우는 법과 함께 알려 줍니다.
+`m` 은 커서의 노드를 표시하거나 표시를 지웁니다 (GUI 의 `⌘` 클릭). 커서를 옮겨도 표시는 남고, `Esc` 로 모두 지웁니다. 그러면 Go to DDL (`⌃b`) 과 `F4` (하나마다 탭), `y` (한 줄에 `schema.name` 하나, GUI 의 Copy Reference), `Delete` (Drop…), 새로 고침이 화면에 보이는 표시한 노드 모두에 동작합니다. 접힌 폴더나 필터로 가려진 표시는 탐색기 제목에 "(N hidden)" 으로 따로 셉니다. Drop… 은 모든 문장을 보여 주며 한 번만 묻고 (운영 Data Source 는 한 객체일 때처럼 빨간 창), 한 데이터베이스의 테이블·뷰·시퀀스여야 합니다. GUI 처럼 뷰를 먼저, 그다음 테이블을 한 문장으로 지웁니다. 표시한 노드 중 맞지 않는 것이 있으면 상태 줄이 그렇다고, 표시를 지우는 법과 함께 알려 줍니다.
 
 아래 전체 표의 설명은 앱 화면 (F1) 에 나오는 문구 그대로 영어로 둡니다.
 
@@ -187,7 +187,7 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | `F4 / ⌃↓` | Open a query console for the data source / database (Redis: the key browser) |
 | `/` | Filter loaded nodes (/ again edits it · empty or Esc clears) |
 | `F5` | Refresh (the run key refreshes in the explorer) |
-| `y  ⌘c` | Copy name (OSC 52 clipboard; marked nodes: one per line) |
+| `y  ⌘c` | Copy reference: schema.name, as the GUI's Copy Reference (OSC 52 clipboard; marked nodes: one per line) |
 | `PgUp / PgDn · Home / End` | Page · first / last node |
 | `Tab / Esc` | Go to the open tab (Esc clears the marks first) |
 

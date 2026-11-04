@@ -212,6 +212,11 @@ const CHECKS: Record<string, Check> = {
     await expect.poll(() => tabStrips(page)).toEqual(["console [DEV] shop_app"]);
     await expect.poll(() => editorText(page)).toContain("CREATE TABLE");
   },
+  "tree.copyName": async (page, key) => {
+    await users(page).click();
+    await page.keyboard.press(key);
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("users");
+  },
   "tree.copyRef": async (page, key) => {
     await users(page).click();
     await page.keyboard.press(key);

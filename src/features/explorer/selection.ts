@@ -25,6 +25,14 @@ export function clickSelect(s: TreeSel, id: string, how: ClickHow, visible: stri
   return { ids: [id], anchor: id, lead: id };
 }
 
+/** The selection once node `id` has left the screen (collapsed, filtered out, dropped): the keys then act on the rest, which you see.
+ *  The lead moves to the last remaining node; a range then starts from it */
+export function withoutNode(s: TreeSel, id: string): TreeSel {
+  const ids = s.ids.filter((x) => x !== id);
+  const lead = s.lead === id ? ids[ids.length - 1] ?? null : s.lead;
+  return { ids, anchor: s.anchor === id ? lead : s.anchor, lead };
+}
+
 /** Tooltip of a command that works on one node while several are selected: also how to get back to one */
 export const ONE_NODE = "Works on one node: click a node without ⌘ or ⇧ to select only it";
 /** Tooltip of a several-node command that doesn't fit every selected node */

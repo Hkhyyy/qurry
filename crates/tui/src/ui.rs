@@ -172,8 +172,13 @@ fn draw_workspaces(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Tree;
-    // The mark count first: the explorer is narrow
-    let marked = if app.tree.marked.is_empty() { String::new() } else { format!("{} marked · ", app.tree.marked.len()) };
+    // The mark count first: the explorer is narrow. Commands act on the marked nodes on screen; marks in collapsed or filtered-out
+    // folders are counted apart
+    let marked = match (app.tree.marked.len(), app.tree.targets().len()) {
+        (0, _) => String::new(),
+        (n, on) if on < n => format!("{on} marked ({} hidden) · ", n - on),
+        (n, _) => format!("{n} marked · "),
+    };
     let title = if app.tree.filter.is_empty() { format!(" {marked}Database Explorer ") } else { format!(" {marked}Database Explorer — /{} (Esc clears) ", app.tree.filter) };
     let b = panel(title, focused);
     let inner = b.inner(area);

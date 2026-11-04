@@ -123,16 +123,16 @@ async fn marked_nodes_act_together() {
     h.key("m");
     assert!(h.app.status.starts_with("Only data sources"), "{}", h.app.status);
     assert_eq!(labels(&h), ["orders", "users"]);
-    // Delete: one confirmation lists both statements
+    // Delete: one confirmation, the tables in one statement (the server orders them by their foreign keys)
     h.key("Delete");
     let Some(crate::app::Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirmation") };
-    assert!(text.starts_with("Run this?") && text.contains("DROP TABLE public.orders;") && text.contains("DROP TABLE public.users;"), "{text}");
+    assert!(text.starts_with("Run this?") && text.contains("DROP TABLE public.orders, public.users;"), "{text}");
     h.key("n");
     // A Production source: the Production confirmation (red), the same as for one object
     h.app.conns[0].config.options.confirm_changes = true;
     h.key("Delete");
     let Some(crate::app::Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirmation") };
-    assert!(text.starts_with("Production data source \"local pg\"") && text.contains("DROP TABLE public.orders;") && text.contains("DROP TABLE public.users;"), "{text}");
+    assert!(text.starts_with("Production data source \"local pg\"") && text.contains("DROP TABLE public.orders, public.users;"), "{text}");
     h.key("n");
     assert_eq!(labels(&h), ["orders", "users"]);
     // F4: a table tab each
@@ -149,4 +149,47 @@ async fn marked_nodes_act_together() {
     h.key("Esc");
     assert!(h.app.tree.marked.is_empty());
     assert_eq!((h.app.focus, labels(&h)), (Focus::Tree, vec!["local pg".to_string()]));
+}
+
+/// Drop… of a table and a view over it: the view's statement first, whatever the tree order; marks in a collapsed folder are counted
+/// apart in the title, as the commands skip them
+#[tokio::test]
+async fn drop_runs_views_first_and_hidden_marks_show() {
+    let mut h = explorer().await;
+    let mut view = h.app.tree.children["pg|shop|public|g:tables"][1].clone();
+    (view.key, view.label, view.name, view.kind) = ("pg|shop|public|g:views|o:v_users".into(), "v_users".into(), Some("v_users".into()), NodeKind::Object("view".into()));
+    let mut group = h.app.tree.children["pg|shop|public"][0].clone();
+    (group.key, group.label) = ("pg|shop|public|g:views".into(), "views".into());
+    h.app.tree.children.get_mut("pg|shop|public").unwrap().push(group);
+    h.app.tree.children.insert("pg|shop|public|g:views".into(), vec![view]);
+    for k in ["pg", "pg|shop", "pg|shop|public", "pg|shop|public|g:tables", "pg|shop|public|g:views"] {
+        h.app.tree.expanded.insert(k.into());
+    }
+    for k in ["pg|shop|public|g:tables|o:users", "pg|shop|public|g:views|o:v_users"] {
+        assert!(h.app.tree.select_key(k));
+        h.key("m");
+    }
+    h.key("Delete");
+    let Some(crate::app::Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no confirmation") };
+    assert!(text.contains("  DROP VIEW public.v_users;\n  DROP TABLE public.users;"), "{text}");
+    h.key("n");
+    h.app.tree.expanded.remove("pg|shop|public|g:views");
+    let s = h.screen(120, 12);
+    assert!(s.contains("┏ 1 marked (1 hidden) · Data"), "{s}");
+}
+
+/// A Redis key is not a table: Delete doesn't offer DROP TABLE for it
+#[tokio::test]
+async fn delete_on_a_redis_key_offers_no_drop() {
+    let mut h = explorer().await;
+    let mut key = h.app.tree.children["pg|shop|public|g:tables"][0].clone();
+    key.kind = NodeKind::Object("key".into());
+    h.app.tree.children.insert("pg|shop|public|g:tables".into(), vec![key]);
+    for k in ["pg", "pg|shop", "pg|shop|public", "pg|shop|public|g:tables"] {
+        h.app.tree.expanded.insert(k.into());
+    }
+    assert!(h.app.tree.select_key("pg|shop|public|g:tables|o:orders"));
+    h.key("Delete");
+    assert!(h.app.popup.is_none());
+    assert_eq!(h.app.status, "Drop: select a table, view or sequence in the explorer");
 }

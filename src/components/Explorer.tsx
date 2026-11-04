@@ -4,8 +4,8 @@ import { ColorSwatches } from "./ConnectionDialog";
 import { collapseTree, NodeInfo, SchemaTree, TreeSelection } from "./SchemaTree";
 import { IcCollapseAll, IcMoreV, IcPlus, IcReload } from "../ui/icons";
 import { IconButton, Menu as UiMenu, MenuEntry, SearchField, Text } from "../ui";
-import { cmd, eventSpec, keyTitle, runKey } from "../lib/shortcuts";
-import { clickSelect, NO_SEL, type ClickHow, type TreeSel } from "../features/explorer/selection";
+import { cmd, eventSpec, keyTitle, runById, runKey } from "../lib/shortcuts";
+import { clickSelect, NO_SEL, ONE_NODE, withoutNode, type ClickHow, type TreeSel } from "../features/explorer/selection";
 
 export type MenuItem = MenuEntry;
 
@@ -23,6 +23,8 @@ interface Props {
   /** info: the node the keys act on (the last clicked); all: every selected node */
   onSelect: (info: NodeInfo | null, all: NodeInfo[]) => void;
   onActivate: (info: NodeInfo) => void;
+  /** A line for the status bar (a key that doesn't work on the selected nodes) */
+  onStatus: (text: string) => void;
   /** The node's context menu; with several selected nodes (all), for all of them */
   buildMenu: (info: NodeInfo, all?: NodeInfo[]) => MenuItem[];
   onSetColor: (c: ConnectionView, color: string | null) => void;
@@ -140,7 +142,11 @@ export function Explorer(p: Props) {
       }
       e.preventDefault();
     } else if (e.key === "Enter" && el) {
-      el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      const all = selected(selRef.current);
+      // Several nodes (DataGrip opens each): Edit Data for all of them, when each is a table or view
+      if (all.length > 1) {
+        if (!runById(p.buildMenu(infos.get(selRef.current.lead ?? "") ?? all[0], all), "tree.editData")) p.onStatus(ONE_NODE);
+      } else el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
       setSpeed("");
       e.preventDefault();
     } else if (e.key === "Escape") {
@@ -158,6 +164,19 @@ export function Explorer(p: Props) {
   };
 
   const selected = (s: TreeSel) => s.ids.flatMap((id) => infos.get(id) ?? []);
+  // Read by rows as they unmount (their effect keeps the first render's gone)
+  const onSelect = useRef(p.onSelect);
+  onSelect.current = p.onSelect;
+  const publish = (next: TreeSel) => {
+    selRef.current = next;
+    setSel(next);
+    const lead = next.ids.includes(next.lead ?? "") ? next.lead : next.ids[next.ids.length - 1];
+    onSelect.current((lead && infos.get(lead)) || null, selected(next));
+  };
+  /** A selected row left the screen: the keys act only on the rows still shown (as the context menu does) */
+  const gone = (id: string) => {
+    if (selRef.current.ids.includes(id)) publish(withoutNode(selRef.current, id));
+  };
   const select = (id: string, info?: NodeInfo, e?: React.MouseEvent) => {
     const cur = selRef.current;
     // The right button (⌃-click on macOS) on a selected node keeps the selection: its menu acts on all of it
@@ -165,11 +184,7 @@ export function Explorer(p: Props) {
     const how: ClickHow = !info || !e ? "one" : (isMac ? e.metaKey : e.ctrlKey) ? "toggle" : e.shiftKey ? "range" : "one";
     // The selectable rows on screen, top to bottom (folders and columns have no id)
     const visible = rows().flatMap((el) => (el.id ? [el.id] : []));
-    const next = clickSelect(cur, id, how, visible);
-    selRef.current = next;
-    setSel(next);
-    const lead = next.ids.includes(next.lead ?? "") ? next.lead : next.ids[next.ids.length - 1];
-    p.onSelect((lead && infos.get(lead)) || null, selected(next));
+    publish(clickSelect(cur, id, how, visible));
   };
 
   return (
@@ -223,7 +238,7 @@ export function Explorer(p: Props) {
       <div className="tree-filter">
         <SearchField placeholder="Filter tables, views, routines (expanded schemas)" value={filter} onChange={(e) => setFilter(e.target.value)} />
       </div>
-      <TreeSelection.Provider value={{ ids: sel.ids, select, infos }}>
+      <TreeSelection.Provider value={{ ids: sel.ids, select, infos, gone }}>
         <div className="tree" tabIndex={0} data-tree="1" ref={treeRef} onKeyDown={onTreeKey} onBlur={() => setSpeed("")}>
           {speed && <div className="speed-search">Search for: <b>{speed}</b></div>}
           {p.connections.length === 0 && (

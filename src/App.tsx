@@ -273,6 +273,7 @@ export default function App() {
                     onImport={importConns}
                     onSelect={(info, all) => (setTreeSel(info), setTreeSelAll(all))}
                     onActivate={activateNode}
+                    onStatus={setStatus}
                     buildMenu={buildMenu}
                     onSetColor={setColor}
                     onScopeChange={setScope}

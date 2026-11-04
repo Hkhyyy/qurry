@@ -19,7 +19,7 @@ Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…
 
 ### Several nodes in the Database Explorer
 
-`⌘`-click adds a node to the selection or removes it, `⇧`-click selects the visible nodes from the last clicked one; a plain click or an arrow key selects one node again. Go to DDL and Edit Data (a tab each), Copy Name and Copy Reference (one per line), Drop… and Refresh then run for every selected node, from the context menu or their keys. Drop… asks once, listing every statement (on a Production data source, the Production confirmation), and needs objects of one database. Commands that work on one node are greyed out; their tooltip says how to get back to one.
+`⌘`-click adds a node to the selection or removes it, `⇧`-click selects the visible nodes from the last clicked one; a plain click or an arrow key selects one node again. Go to DDL and Edit Data (a tab each, `↩` too), Copy Name and Copy Reference (one per line; a reference is `schema.name`), Drop… and Refresh then run for every selected node, from the context menu or their keys. Drop… asks once, listing every statement (on a Production data source, the Production confirmation), and needs objects of one database: views go first, then the tables in one statement, so objects that depend on each other drop together. On MySQL, whose DDL can't be rolled back, the statements run one by one and a failure says how many were already applied. Commands that work on one node are greyed out; their tooltip says how to get back to one. A selected node that leaves the screen (collapsed, filtered out, dropped) leaves the selection.
 
 <!-- keymap:gui:start -->
 

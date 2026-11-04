@@ -34,7 +34,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 
 ### Several nodes in the explorer
 
-`m` marks the node under the cursor or unmarks it (the GUI's `⌘`-click); moving keeps the marks, `Esc` clears them. Go to DDL (`⌃b`) and `F4` (a tab each), `y` (one name per line), `Delete` (Drop…) and refresh then act on every marked node. Drop… asks once, listing every statement (red on a Production data source, as for one object), and needs objects of one database. A command that doesn't fit every marked node says so in the status line, with how to unmark.
+`m` marks the node under the cursor or unmarks it (the GUI's `⌘`-click); moving keeps the marks, `Esc` clears them. Go to DDL (`⌃b`) and `F4` (a tab each), `y` (one `schema.name` per line, the GUI's Copy Reference), `Delete` (Drop…) and refresh then act on every marked node on screen; marks in collapsed or filtered-out folders show as "(N hidden)" in the explorer title. Drop… asks once, listing every statement (red on a Production data source, as for one object), and needs tables, views or sequences of one database: views go first, then the tables in one statement, as in the GUI. A command that doesn't fit every marked node says so in the status line, with how to unmark.
 
 <!-- keymap:tui:start -->
 
@@ -185,7 +185,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | `F4 / ⌃↓` | Open a query console for the data source / database (Redis: the key browser) |
 | `/` | Filter loaded nodes (/ again edits it · empty or Esc clears) |
 | `F5` | Refresh (the run key refreshes in the explorer) |
-| `y  ⌘c` | Copy name (OSC 52 clipboard; marked nodes: one per line) |
+| `y  ⌘c` | Copy reference: schema.name, as the GUI's Copy Reference (OSC 52 clipboard; marked nodes: one per line) |
 | `PgUp / PgDn · Home / End` | Page · first / last node |
 | `Tab / Esc` | Go to the open tab (Esc clears the marks first) |
 

@@ -1,4 +1,5 @@
 use super::*;
+use qurry_core::ddl::{DropTarget, drop_sql};
 
 impl App {
     // ───────── Data Sources ─────────
@@ -388,9 +389,11 @@ impl App {
     }
 
     /// Drop…: the cursor's object, or the marked objects of one database. One confirmation lists every statement (red on Production)
-    /// and they run like the designer's DDL: one transaction on PostgreSQL, through the read-only check and the Production log
+    /// and they run like the designer's DDL: one transaction on PostgreSQL, one at a time on MySQL, through the read-only check and the
+    /// Production log. The statements come from core (the GUI's too), in an order that runs: views before the tables they read
     pub fn drop_objects(&mut self) {
-        let droppable = |n: &Node| matches!(&n.kind, NodeKind::Object(k) if k != "function" && k != "procedure");
+        // Not a routine, nor a Redis key (DROP isn't a Redis command)
+        let droppable = |n: &Node| n.is_relation() || matches!(&n.kind, NodeKind::Object(k) if k == "sequence");
         let Some(ns) = self.tree_targets("Drop", droppable) else {
             if self.tree.marked.is_empty() {
                 self.status = "Drop: select a table, view or sequence in the explorer".into();
@@ -402,19 +405,21 @@ impl App {
             self.status = format!("Drop works on the objects of one database at a time — {} unmarks one, Esc clears the marks", self.mark_key());
             return;
         }
-        let kind = self.kind_of(&ns[0].conn);
-        let stmts = ns
+        let objects: Vec<DropTarget> = ns
             .iter()
-            .map(|n| {
-                let kw = match &n.kind {
-                    NodeKind::Object(k) if k == "view" => "VIEW",
-                    NodeKind::Object(k) if k == "matview" => "MATERIALIZED VIEW",
-                    NodeKind::Object(k) if k == "sequence" => "SEQUENCE",
-                    _ => "TABLE",
-                };
-                format!("DROP {kw} {}.{};", sql::quote_ident(kind, n.schema.as_deref().unwrap_or_default()), sql::quote_ident(kind, n.name.as_deref().unwrap_or_default()))
+            .map(|n| DropTarget {
+                kind: match &n.kind {
+                    NodeKind::Object(k) => k.clone(),
+                    _ => unreachable!("droppable"),
+                },
+                schema: n.schema.clone().unwrap_or_default(),
+                name: n.name.clone().unwrap_or_default(),
             })
-            .collect::<Vec<_>>();
+            .collect();
+        let stmts = match drop_sql(self.kind_of(&ns[0].conn), &objects) {
+            Ok(s) => s,
+            Err(e) => return self.status = e.to_string(),
+        };
         let done = if ns.len() == 1 { format!("Dropped {}", ns[0].label) } else { format!("Dropped {} objects", ns.len()) };
         self.confirm_ddl(target, ns[0].conn.clone(), ns[0].db.clone(), stmts, done);
     }

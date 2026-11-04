@@ -50,6 +50,7 @@ drag tab	Reorder, or drop on a pane's right/bottom edge to split it (up to 4)
 ⌥⌘g	SQL Generator
 ⌥⇧⌘G	Copy DDL to clipboard
 ⌥⇧⌘B	Open DDL in console
+⌘c	Copy name (several selected nodes: one per line)
 ⌥⇧⌘C	Copy reference
 F1	Quick documentation
 ⌘F6	Modify table (columns, keys, indexes, foreign keys)
@@ -62,6 +63,8 @@ F1	Quick documentation
 ⌘F2	Disconnect
 ⌦ / ⌘⌫	Remove data source / drop object (asks first)
 type letters	Speed search in the tree
+⌘-click	Add a node to the selection or remove it (Go to DDL, Edit Data, copy, Drop…, Refresh run for every selected node)
+⇧-click	Select the visible nodes from the last clicked one; a plain click or an arrow key selects one node again
 ## Query console
 ⌘↩	Execute: asks what to run when there are several statements (⚙ Query Execution Settings), or the selection
 ⌘F2	Cancel running statement
