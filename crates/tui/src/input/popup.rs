@@ -296,7 +296,7 @@ mod tests {
     use super::*;
     use crate::testkit::Harness;
 
-    /// The WHERE input completes like the console (the table's columns first, then keywords), in the console's list
+    /// The WHERE input completes like the console (the table's columns, then keywords), in the console's list
     #[tokio::test]
     async fn where_input_completes_columns_and_keywords() {
         let mut h = Harness::new().await;
@@ -304,7 +304,8 @@ mod tests {
         h.key("w");
         h.type_str("ban");
         let s = h.screen(120, 30);
-        assert!(s.contains("bank_code") && s.contains("bank_name") && s.contains(" 1/3 "), "{s}");
+        // Only the table's columns: not the table itself (bank_info) or other tables and schemas
+        assert!(s.contains("bank_code") && s.contains("bank_name") && s.contains(" 1/2 "), "{s}");
         h.key("Down");
         h.key("Tab");
         // Not in a string literal

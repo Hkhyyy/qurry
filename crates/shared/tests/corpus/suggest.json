@@ -51,6 +51,8 @@
     { "id": "hint-mysql-backslash-quoted", "mysql": true, "db": "shop", "text": "select * from items where sku = '‸", "hints": { "values": [["a\\b's", 1]] } },
     { "id": "hint-mysql-no-pairs", "mysql": true, "db": "shop", "text": "select * from items where data @> '‸" },
     { "id": "hint-domain-type-quoted", "text": "update sales set realm = ‸", "hints": { "values": [["x' or true; delete from realm_users; --", 1], ["7", 1]] } },
+    { "id": "join-on-no-hints", "text": "select * from orders as o\nleft join users as u on o.user_id = ‸", "hints": { "values": [["10", 3]] } },
+    { "id": "join-on-then-where-hints", "text": "select * from orders o join users u on u.id = o.user_id\nwhere o.status = '‸", "hints": { "values": [["paid", 10]] } },
     { "id": "alias-reused-dot", "text": "select * from orders o;\nselect o.‸ from users o" },
     { "id": "alias-reused-hint", "text": "select * from users o;\nselect * from orders o where o.status = '‸", "hints": { "values": [["paid", 10]] } }
   ]

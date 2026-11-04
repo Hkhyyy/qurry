@@ -12,7 +12,7 @@ What changed in each Qurry version, for people who use it. The format follows [K
 - **Multi-select in the result grid**: ⌘-click adds a cell, a row (row number) or a column (header) to the selection, ⇧-click extends the last range; copy, the Data Extractor, Delete Row, Revert Selected and Set NULL act on every range. TUI: `m` marks the current row, `y` / `d` / `Y` act on the marked rows (#96).
 - **Multi-select in the Database Explorer**: ⌘-click and ⇧-click select several nodes; Go to DDL, Edit Data, Copy Name / Reference, Refresh and **Drop…** (one confirmation, the Production one on Production sources) act on all of them. TUI: `m` marks nodes, Delete drops the marked objects. On MySQL, Drop… of several objects runs one statement per object, dependents first (a table before the tables it references), and a failure reports what was applied, what failed and what didn't run (#96, [Shortcuts](docs/shortcuts-gui.md)).
 - **Console gutter marks**: each statement that ran is marked on its first line: ✓ done, ✗ failed, a spinner (TUI `…`) while it runs. Hover shows when it ran and its result or error; a click shows its line in Output; editing the statement drops its mark (#98).
-- **Completion in the table filter**: a table tab's WHERE / ORDER BY field completes like the console (columns first, then keywords), as you type or with ⌃Space (TUI ⇥) (#93).
+- **Completion in the table filter**: a table tab's WHERE / ORDER BY field completes like the console with the table's columns, keywords and functions (no other tables or schemas), as you type or with ⌃Space (TUI ⇥) (#93).
 - **TUI light theme**: a light palette for light terminals and **⌃k › Theme…** (Auto, Dark, Light, saved in `settings.json`). Auto follows `COLORFGBG` and says at startup how to get the dark colors back (#90, [TUI in your terminal](docs/tui.md)).
 - **Database Admin reports: pick the database** in the report toolbar (TUI: `d`) to rerun the report on it; the list is the explorer's. A connect error names the database and suggests picking another one only when the server refuses that database (#99, [Database tools](docs/database-tools.md)).
 - **Add Font File…** in GUI **Settings › Editor / Grid font**: pick a `.ttf`, `.otf`, `.woff` or `.woff2` (up to 20 MB); Qurry copies it into its config folder and lists it as an added font you can remove. The TUI keeps the terminal's font (#87, [Settings](docs/settings.md)).
@@ -31,6 +31,7 @@ What changed in each Qurry version, for people who use it. The format follows [K
 
 ### Fixed
 
+- Console completion no longer offers column values in a JOIN's `ON` condition (`on m.admin_user_idx = `), where the other side is usually a column: the statement's columns complete there; a `WHERE` after the join still suggests values.
 - Console Output keeps its newest line in view while following: new lines, long wrapped lines (TUI) and a pane made shorter or narrower (#92).
 
 ## [0.3.0] - 2026-11-04

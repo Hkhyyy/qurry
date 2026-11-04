@@ -27,7 +27,8 @@ test("WHERE: typing a word lists the table's columns first; ↩ picks one, ↩ w
   await where.click();
   await where.pressSequentially("us");
   await expect(rows(page).first()).toHaveText("user_name");
-  await expect(rows(page)).toContainText(["user_name", "users", "using"]);
+  // The field belongs to the table: its columns and keywords, no table or schema names (users, public)
+  await expect(rows(page)).toHaveText(["user_name", "using"]);
   // Under the field, left-aligned to it
   const [f, l] = [await where.boundingBox(), await list(page).boundingBox()];
   expect(Math.abs(l!.x - f!.x)).toBeLessThanOrEqual(1);
@@ -107,4 +108,19 @@ test("a whole keyword or column closes the list, so ↩ applies (`is null` doesn
   const sqls = await spyQueries(page);
   await page.keyboard.press("Enter");
   await expect.poll(sqls).toEqual([expect.stringContaining("WHERE user_name is null")]);
+});
+
+test("other tables and schemas are never listed, typed or asked with ⌃Space", async ({ page }) => {
+  const where = field(page, "WHERE");
+  await where.click();
+  await where.pressSequentially("orde");
+  await expect(rows(page)).toHaveText(["order"]);
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Control+Space");
+  await expect(rows(page)).toHaveText(["order"]);
+  await page.keyboard.press("Escape");
+  await where.fill("");
+  await page.keyboard.press("Control+Space");
+  await expect(rows(page).first()).toHaveText("id");
+  await expect(rows(page).filter({ hasText: /^(orders|users|public)$/ })).toHaveCount(0);
 });

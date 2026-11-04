@@ -28,6 +28,20 @@ test.describe("completion", () => {
     await expect(suggestions(page)).toHaveText([/^ready\s*20 rows$/, /^paid\s*10 rows$/, /^it's late\s*1 row$/]);
   });
 
+  test("in a JOIN's ON condition `=` lists columns, not values; the WHERE after it lists values", async ({ page }) => {
+    await typeSql(page, "select * from orders o left join users u on o.amount = ");
+    await page.waitForTimeout(300);
+    await expect(suggestions(page)).toHaveCount(0);
+    await page.keyboard.press("Control+Space");
+    await expect(suggestions(page).first()).toBeVisible();
+    const labels = await suggestions(page).locator(".label-name").allInnerTexts();
+    expect(labels).toEqual(expect.arrayContaining(["amount", "user_name"]));
+    expect(labels).not.toContain("1000");
+    await page.keyboard.press("Escape");
+    await page.keyboard.type("u.id where o.amount = ");
+    await expect(suggestions(page)).toHaveText([/^1000\s*7 rows$/, /^2500\s*3 rows$/]);
+  });
+
   test("MySQL console on the data source's default database inserts its tables bare, as the TUI does", async ({ page }) => {
     await openConsole(page, "[MySQL] shop");
     await typeSql(page, "select * from ord");

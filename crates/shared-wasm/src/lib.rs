@@ -313,7 +313,7 @@ impl CompletionIndex {
     #[wasm_bindgen(js_name = hintAt)]
     pub fn hint_at(&self, text: &str, caret: usize, db: &str, mysql: bool) -> Result<JsValue, JsError> {
         let at = Caret::new(text, caret);
-        Ok(serde_wasm_bindgen::to_value(&complete::hint_at(&self.meta, &at.statement(text, mysql), at.before, db, mysql))?)
+        Ok(serde_wasm_bindgen::to_value(&complete::hint_at(&self.meta, &at.statement(text, mysql), at.head(text, mysql), db, mysql))?)
     }
 
     /// What meta.hints returned for `hint` → candidates. as_pairs = keys were asked, none came, so these are @> conditions
@@ -385,6 +385,11 @@ impl<'a> Caret<'a> {
     /// The statement the caret is in (as the TUI passes it): an alias of another statement in the console doesn't resolve here
     fn statement(&self, text: &str, mysql: bool) -> String {
         qurry_shared::sql::statement_at(text, self.at, if mysql { DbKind::Mysql } else { DbKind::Postgres }).unwrap_or_default()
+    }
+
+    /// The caret's statement up to the caret (what hint_at reads the clause from)
+    fn head<'t>(&self, text: &'t str, mysql: bool) -> &'t str {
+        qurry_shared::sql::statement_head(text, self.at, if mysql { DbKind::Mysql } else { DbKind::Postgres })
     }
 
     /// Monaco column of the caret (1-based, UTF-16)

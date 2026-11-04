@@ -461,9 +461,17 @@ fn script_cuts(text: &str, s: usize, e: usize, kind: DbKind, opts: SplitOptions)
 
 /// Statement at the caret position (bytes). Between statements, the one just before
 pub fn statement_at(text: &str, offset: usize, kind: DbKind) -> Option<String> {
+    statement_span(text, offset, kind).map(|(s, e)| text[s..e].trim().to_string())
+}
+
+/// The statement at the caret (as [`statement_at`] picks it) from its start up to the caret; "" before its start
+pub fn statement_head(text: &str, offset: usize, kind: DbKind) -> &str {
+    statement_span(text, offset, kind).and_then(|(s, _)| text.get(s..offset)).unwrap_or("")
+}
+
+fn statement_span(text: &str, offset: usize, kind: DbKind) -> Option<(usize, usize)> {
     let segs = split_script(text, kind);
-    let pick = segs.iter().find(|(s, e)| offset >= *s && offset <= e + 1).or_else(|| segs.iter().rev().find(|(_, e)| *e < offset)).or(segs.first())?;
-    Some(text[pick.0..pick.1].trim().to_string())
+    segs.iter().find(|(s, e)| offset >= *s && offset <= e + 1).or_else(|| segs.iter().rev().find(|(_, e)| *e < offset)).or(segs.first()).copied()
 }
 
 #[cfg(test)]
