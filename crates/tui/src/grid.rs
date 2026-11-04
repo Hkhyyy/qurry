@@ -413,10 +413,26 @@ impl Grid {
             // Thick when focused, like kit::panel: focus shows without colors too (NO_COLOR)
             .border_type(if focused { ratatui::widgets::BorderType::Thick } else { ratatui::widgets::BorderType::Plain })
             .border_style(if focused { Style::default().fg(Color::Cyan) } else { Style::default().fg(Color::DarkGray) });
-        // The bottom edge says why no more rows came, or that more are on the way (words, so it reads without colors too)
-        let block = match &self.more_error {
-            Some(e) => block.title_bottom(Line::styled(format!(" ✗ {} ", e.lines().next().unwrap_or_default()), Style::default().fg(crate::kit::DANGER))),
-            None if self.loading_more => block.title_bottom(Line::from(crate::kit::muted(" ↓ Loading more rows… "))),
+        // The bottom edge says why no more rows came, or that more are on the way (words, so it reads without colors too); right-aligned,
+        // in at most half the edge, so the horizontal scrollbar keeps the rest
+        let msg = match &self.more_error {
+            Some(e) => Some(Span::styled(format!(" ✗ {} ", e.lines().next().unwrap_or_default()), Style::default().fg(crate::kit::DANGER))),
+            None if self.loading_more => Some(crate::kit::muted(" ↓ Loading more rows… ")),
+            None => None,
+        };
+        let msg = msg.map(|mut m| {
+            let room = (area.width.saturating_sub(2) / 2) as usize;
+            if m.content.width() > room {
+                use unicode_width::UnicodeWidthChar;
+                let mut w = 1;
+                let cut: String = m.content.chars().take_while(|c| { w += c.width().unwrap_or(0); w <= room }).collect();
+                m.content = format!("{cut}…").into();
+            }
+            Line::from(m).right_aligned()
+        });
+        let msg_w = msg.as_ref().map_or(0, |m| m.width() as u16);
+        let block = match msg {
+            Some(m) => block.title_bottom(m),
             None => block,
         };
         let inner = block.inner(area);
@@ -592,7 +608,7 @@ impl Grid {
         // Horizontal scrollbar: visible range in bold on the bottom border (click or drag to move); a block on the focused, already thick border
         self.hbar = Rect::default();
         if self.col_off > 0 || self.col_off + full < self.cols() {
-            let track = Rect { x: inner.x, y: area.bottom().saturating_sub(1), width: inner.width, height: 1 };
+            let track = Rect { x: inner.x, y: area.bottom().saturating_sub(1), width: inner.width - msg_w, height: 1 };
             let n = self.cols() as u32;
             let tw = track.width as u32;
             let start = (self.col_off as u32 * tw / n) as u16;

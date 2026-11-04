@@ -525,6 +525,31 @@ mod tests {
         assert!(!h.table(id).grid.as_ref().unwrap().loading_more, "not asked again");
     }
 
+    /// On a result wider than the grid, the bottom edge's words stay whole beside the horizontal scrollbar (they share that edge)
+    #[tokio::test]
+    async fn the_load_more_words_stay_beside_the_horizontal_scrollbar() {
+        let mut h = Harness::new().await;
+        let cols: Vec<String> = (0..40).map(|i| format!("column_{i}")).collect();
+        let cols: Vec<&str> = cols.iter().map(String::as_str).collect();
+        let row = vec!["value"; 40];
+        let id = h.table_tab("wide", &cols, &[&row, &row], &["column_0"]);
+        {
+            let TabKind::Table(tt) = &mut h.app.tabs[h.app.active].kind else { unreachable!() };
+            let g = tt.grid.as_mut().unwrap();
+            (g.result.truncated, g.more_session) = (true, Some(tt.session.clone()));
+        }
+        h.key("Down");
+        assert!(h.table(id).grid.as_ref().unwrap().loading_more);
+        let screen = h.screen(120, 30);
+        let edge = screen.lines().find(|l| l.contains("Loading more")).unwrap_or_else(|| panic!("{screen}"));
+        assert!(edge.contains("↓ Loading more rows…") && edge.contains('█'), "{edge}");
+        h.settle().await;
+        let screen = h.screen(120, 30);
+        let edge = screen.lines().find(|l| l.contains('✗')).unwrap_or_else(|| panic!("{screen}"));
+        let why = qurry_shared::errors::more_rows_failed("Session closed");
+        assert!(edge.contains(&format!("✗ {why}")) && edge.contains('█'), "{edge}");
+    }
+
     /// A load-more answer that arrives after the tab ran again belongs to the grid it replaced: dropped
     #[tokio::test]
     async fn a_load_more_answer_for_a_replaced_grid_is_dropped() {
