@@ -1001,7 +1001,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
         Popup::Confirm { text, .. } => app.hits.confirm_unseen = !draw_confirm(f, area, " Confirm ", text, key_hints(&[("y / Enter", "yes"), ("n / Esc", "no")])),
         // Like Confirm, but only y allows (no Enter): the popup opened on its own
         Popup::AllowPlaintext { text, .. } => app.hits.confirm_unseen = !draw_confirm(f, area, " Allow Unencrypted ", text, key_hints(&[("y", "allow"), ("n / Esc", "cancel")])),
-        Popup::Input { title, body, input, complete, words, .. } => {
+        Popup::Input { title, body, input, complete, filter, .. } => {
             // The title goes on the border; the body (answers, reasons) in a box below, wrapped, so it isn't cut off
             let body: Vec<Line> = body.lines().map(|l| Line::raw(disp(l))).collect();
             let bh = if body.is_empty() { 0 } else { wrapped_height(&body, 90u16.min(area.width.saturating_sub(4)).saturating_sub(2)) + 2 };
@@ -1015,21 +1015,12 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                 f.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }).block(b), br);
             }
             clear(f, r);
-            let hint = if words.is_empty() { "Enter / Esc" } else { "Enter / Esc · Tab complete" };
+            let hint = if filter.is_none() { "Enter / Esc" } else { "Enter / Esc · Tab complete" };
             input.set_block(panel(format!(" {} ({hint}) ", disp(title)), true));
             f.render_widget(&*input, r);
-            // Autocomplete list: right below the input, near the cursor
-            if let Some((items, sel, _)) = complete {
-                let w = items.iter().map(|s| s.chars().count()).max().unwrap_or(0) as u16 + 4;
-                let x = (r.x + 1 + input.cursor().1 as u16).min(r.right().saturating_sub(w));
-                let lr = Rect { x, y: r.bottom(), width: w.min(r.width), height: (items.len() as u16 + 2).min(area.bottom().saturating_sub(r.bottom())) };
-                let rows: Vec<ListItem> = items
-                    .iter()
-                    .enumerate()
-                    .map(|(i, s)| ListItem::new(format!(" {s}")).style(if i == *sel { Style::default().bg(SEL) } else { Style::default() }))
-                    .collect();
-                clear(f, lr);
-                f.render_widget(List::new(rows).block(panel("", true)).style(Style::default().bg(POPUP_BG)), lr);
+            // The console's completion list, right under the input at the word being completed
+            if let Some(cmp) = complete {
+                draw_completion(f, cmp, r.x + 1 + input.cursor().1 as u16, r.bottom() - 1);
             }
         }
         Popup::Palette(p) => {

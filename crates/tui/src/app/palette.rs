@@ -282,7 +282,10 @@ impl App {
     }
 
     pub fn input(&mut self, title: impl Into<String>, init: &str, on_ok: impl FnOnce(&mut App, String) + 'static) {
-        self.input_words(title, init, vec![], on_ok);
+        let mut t = TextArea::new(vec![init.to_string()]);
+        t.move_cursor(tui_textarea::CursorMove::End);
+        t.set_cursor_line_style(ratatui::style::Style::default());
+        self.popup = Some(Popup::Input { title: title.into(), body: String::new(), input: t, on_ok: Box::new(on_ok), filter: None, complete: None });
     }
 
     /// Input with an explanation box under it (answers, reasons); the title stays one line on the border
@@ -293,25 +296,29 @@ impl App {
         }
     }
 
-    /// Single-line input with autocomplete (typed word filters words, ⌃Space / Tab opens it right away)
-    pub fn input_words(&mut self, title: impl Into<String>, init: &str, words: Vec<String>, on_ok: impl FnOnce(&mut App, String) + 'static) {
-        let mut t = TextArea::new(vec![init.to_string()]);
-        t.move_cursor(tui_textarea::CursorMove::End);
-        t.set_cursor_line_style(ratatui::style::Style::default());
-        self.popup = Some(Popup::Input { title: title.into(), body: String::new(), input: t, on_ok: Box::new(on_ok), words, complete: None });
-    }
-
-    /// Autocomplete candidates for the table tab's WHERE / ORDER BY: columns + common keywords
-    pub fn table_words(&self, id: u64, order: bool) -> Vec<String> {
-        let Some(t) = self.tabs.iter().find(|t| t.id == id) else { return vec![] };
-        let kind = self.kind_of(&t.conn);
-        let mut w: Vec<String> = match &t.kind {
-            TabKind::Table(tt) => tt.grid.as_ref().map(|g| g.result.columns.iter().map(|c| sql::quote_ident(kind, &c.name)).collect()).unwrap_or_default(),
-            _ => vec![],
-        };
-        let kw: &[&str] = if order { &["ASC", "DESC", "NULLS FIRST", "NULLS LAST"] } else { &["AND", "OR", "NOT", "IS NULL", "IS NOT NULL", "IN", "LIKE", "ILIKE", "BETWEEN", "TRUE", "FALSE", "NOW()"] };
-        w.extend(kw.iter().map(|s| s.to_string()));
-        w
+    /// A table tab's WHERE (or ORDER BY) input, completing like the console (complete::suggest_filter); ↩ sets it and reloads
+    pub fn input_filter(&mut self, id: u64, order_by: bool) {
+        let Some(t) = self.tabs.iter().find(|t| t.id == id) else { return };
+        let TabKind::Table(tt) = &t.kind else { return };
+        let (target, db, mysql) = (t.target.clone(), t.db.clone(), self.kind_of(&t.conn) == DbKind::Mysql);
+        let init = if order_by { tt.order.clone() } else { tt.where_.clone() };
+        let meta = self.completion.get(&target).cloned().unwrap_or_else(|| {
+            let columns = tt.grid.as_ref().map(|g| g.result.columns.iter().map(|c| (c.name.clone(), c.type_name.clone())).collect()).unwrap_or_default();
+            Arc::new(complete::Meta::new(vec![complete::CompletionTable { schema: tt.schema.clone(), name: tt.table.clone(), columns }]))
+        });
+        let (schema, table) = (tt.schema.clone(), tt.table.clone());
+        if !self.completion.contains_key(&target) {
+            self.load_completion(target);
+        }
+        self.input(if order_by { "ORDER BY" } else { "WHERE" }, &init, move |a, s| {
+            if let Some(TabKind::Table(tt)) = a.tab_mut(id).map(|t| &mut t.kind) {
+                if order_by { tt.order = s } else { tt.where_ = s }
+            }
+            a.reload_table_checked(id);
+        });
+        if let Some(Popup::Input { filter, .. }) = &mut self.popup {
+            *filter = Some(FilterSource { meta, schema, table, order_by, db, mysql });
+        }
     }
 
     /// Check for a new version right now (⌃K › Check for Updates)

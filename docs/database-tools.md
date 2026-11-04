@@ -86,6 +86,10 @@ GUI: in a result, View as (the eye icon) › **Chart**: bar, line or pie. Pick X
 
 Completion also suggests what is actually in the table: after `status = '`, `status in ('paid', '` or `name like '` it lists the column's values, and after `data->>'` / `data->'meta'->>'` (MySQL `data->>'$.meta.`) the keys inside the json, most common first with their row counts. Typing the quote opens the list (`⌃Space` without a quote — numbers go in bare, text gets quoted). Only the first 5,000 rows (2,000 for json keys) are read, in a read-only transaction with a 3-second limit, and the answer is reused for 2 minutes. Binary columns and whole json values are not suggested.
 
+## Completion in the table filter
+
+A table tab's **WHERE** and **ORDER BY** fields (TUI: `w` or `/` · `o`) complete like the console: the field reads as `SELECT * FROM schema.table WHERE …` (or `ORDER BY …`), so the table's columns come first, then other tables and keywords (`ASC` / `DESC` after a column in ORDER BY). The list opens while you type a word or after a `.`, not inside a string or a number, and closes once the word is a whole keyword or column, so `↩` after `is null` applies the filter. With the list open: `↑` `↓` `PgUp` `PgDn` move, `↩` / `⇥` insert, `⎋` closes the list. With it closed, `⌃Space` (TUI also `⇥`) asks for the list at the caret, even after a space or a whole word: at an empty spot the table's columns come first, then keywords. `↩` applies the filter and `⎋` puts the field back as it was. Column values are not suggested here.
+
 ## Query history & snippets
 
 Query history and snippets are kept in the config folder and shared by the GUI and the TUI (passwords in `PASSWORD '…'` / `IDENTIFIED BY '…'` are masked). GUI: `⌥⌘e` (History / Snippets tabs, Save as Snippet) · TUI: `⌃k` › Query History…, Snippets…, Save Query as Snippet….

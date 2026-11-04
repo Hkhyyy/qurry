@@ -153,28 +153,34 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
     }
 }
 
-/// Filter candidates by the word before the cursor (ignoring case·quotes, skipping ones already fully typed, up to 8)
-fn input_complete(input: &tui_textarea::TextArea, words: &[String], force: bool) -> Option<(Vec<String>, usize, usize)> {
-    if words.is_empty() {
-        return None;
+/// A table filter input's candidates at the cursor (complete::suggest_filter; `explicit` when asked for with ⇥ / ⌃Space), or None
+fn filter_complete(input: &tui_textarea::TextArea, f: &crate::app::FilterSource, explicit: bool) -> Option<crate::app::Completion> {
+    let line = input.lines().first()?;
+    let caret = line.char_indices().nth(input.cursor().1).map_or(line.len(), |(i, _)| i);
+    let (prefix, items) = qurry_core::complete::suggest_filter(&f.meta, &f.schema, &f.table, f.order_by, line, caret, &f.db, f.mysql, explicit);
+    (!items.is_empty()).then_some(crate::app::Completion { items, sel: 0, prefix })
+}
+
+/// What a key does to an open autocomplete list (the console's, a table filter's)
+enum ListKey {
+    Moved,
+    Pick,
+    Close,
+}
+
+/// The autocomplete list's keys: ↑↓ PgUp PgDn move the selection, ↩ / ⇥ pick, ⎋ closes; None for any other key
+fn list_key(cmp: &mut crate::app::Completion, code: KeyCode) -> Option<ListKey> {
+    let n = cmp.items.len();
+    match code {
+        KeyCode::Up => cmp.sel = (cmp.sel + n - 1) % n,
+        KeyCode::Down => cmp.sel = (cmp.sel + 1) % n,
+        KeyCode::PageUp => cmp.sel = cmp.sel.saturating_sub(10),
+        KeyCode::PageDown => cmp.sel = (cmp.sel + 10).min(n - 1),
+        KeyCode::Enter | KeyCode::Tab => return Some(ListKey::Pick),
+        KeyCode::Esc => return Some(ListKey::Close),
+        _ => return None,
     }
-    let (row, col) = input.cursor();
-    let before: Vec<char> = input.lines().get(row)?.chars().take(col).collect();
-    let n = before.iter().rev().take_while(|c| c.is_alphanumeric() || **c == '_' || **c == '"' || **c == '`').count();
-    if n == 0 && !force {
-        return None;
-    }
-    let p: String = before[before.len() - n..].iter().collect::<String>().trim_start_matches(['"', '`']).to_lowercase();
-    let items: Vec<String> = words
-        .iter()
-        .filter(|w| {
-            let w = w.trim_matches(['"', '`']).to_lowercase();
-            w.starts_with(&p) && w != p
-        })
-        .take(8)
-        .cloned()
-        .collect();
-    (!items.is_empty()).then_some((items, 0, n))
+    Some(ListKey::Moved)
 }
 
 /// For screens with single-letter commands (a add row, d delete …): ⌘←/→ are Home/End (terminals may send them as ⌃A/⌃E), ⌘C is y (copy),

@@ -75,6 +75,17 @@ pub struct Completion {
     pub prefix: usize,
 }
 
+/// What a table tab's WHERE / ORDER BY input completes against (complete::suggest_filter): the console's metadata of the tab's
+/// target, or only the tab's own columns while that loads
+pub struct FilterSource {
+    pub meta: Arc<complete::Meta>,
+    pub schema: String,
+    pub table: String,
+    pub order_by: bool,
+    pub db: String,
+    pub mysql: bool,
+}
+
 /// Editor split (the GUI's Split Right / Split Down). Each pane (group) has its own tab bar
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SplitDir {
@@ -387,9 +398,9 @@ pub enum Popup {
     Message { title: String, text: String },
     /// A Message over another popup (Production Log's note over the log): closing it goes back there, as it was
     Note { title: String, text: String, back: Box<Popup> },
-    /// Single-line input. words = autocomplete candidates (columns·keywords for table WHERE/ORDER BY), complete = open list (candidates, selection, prefix length to replace)
+    /// Single-line input. filter = a table tab's WHERE / ORDER BY completes like the console, complete = its open list
     /// body = app-written explanation shown in a box under the input (never interpolated names, so a name can't pose as it)
-    Input { title: String, body: String, input: TextArea<'static>, on_ok: Box<dyn FnOnce(&mut App, String)>, words: Vec<String>, complete: Option<(Vec<String>, usize, usize)> },
+    Input { title: String, body: String, input: TextArea<'static>, on_ok: Box<dyn FnOnce(&mut App, String)>, filter: Option<FilterSource>, complete: Option<Completion> },
     /// `opened` is set when the confirm comes up on its own (open_after_notices, or a notice over it closing): then, as for
     /// AllowPlaintext, y / Enter count only after TLS_ASK_GRACE without any key, so typing meant for the editor or a form never answers it
     Confirm { text: String, on_yes: Box<dyn FnOnce(&mut App)>, opened: Option<std::time::Instant> },

@@ -125,38 +125,40 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
             KeyCode::Char('y') | KeyCode::Char('Y') => on_yes(app),
             _ => app.popup = Some(Popup::AllowPlaintext { text, on_yes, opened: Instant::now() }),
         },
-        Popup::Input { title, body, mut input, on_ok, words, mut complete } => {
-            // If the autocomplete list is open: ↑↓ select · Tab/Enter insert · Esc close
-            if let Some((items, sel, prefix)) = &mut complete {
-                match k.code {
-                    KeyCode::Up => *sel = sel.saturating_sub(1),
-                    KeyCode::Down => *sel = (*sel + 1).min(items.len() - 1),
-                    KeyCode::Tab | KeyCode::Enter => {
-                        for _ in 0..*prefix {
+        Popup::Input { title, body, mut input, on_ok, filter, mut complete } => {
+            // The open list (a table filter's completion) takes the console's list keys: ↑↓ PgUp PgDn move, ↩ / ⇥ pick, ⎋ closes it
+            if let Some(cmp) = &mut complete
+                && let Some(key) = list_key(cmp, k.code)
+            {
+                match key {
+                    ListKey::Pick => {
+                        for _ in 0..cmp.prefix {
                             input.delete_char();
                         }
-                        input.insert_str(&items[*sel]);
+                        input.insert_str(&cmp.items[cmp.sel].insert);
                         complete = None;
                     }
-                    KeyCode::Esc => complete = None,
-                    _ => complete = None,
+                    ListKey::Close => complete = None,
+                    ListKey::Moved => {}
                 }
-                if complete.is_some() || matches!(k.code, KeyCode::Tab | KeyCode::Enter | KeyCode::Esc) {
-                    app.popup = Some(Popup::Input { title, body, input, on_ok, words, complete });
-                    return;
-                }
+                app.popup = Some(Popup::Input { title, body, input, on_ok, filter, complete });
+                return;
             }
             match k.code {
                 KeyCode::Esc => {}
                 KeyCode::Enter => on_ok(app, input.lines().join("")),
                 _ => {
-                    // Tab·⌃Space = open the list for the current word (single-line input, so no Tab character is inserted)
-                    let force = k.code == KeyCode::Tab || (k.code == KeyCode::Char(' ') && k.modifiers.contains(KeyModifiers::CONTROL)) || k.code == KeyCode::Null;
-                    if !force {
+                    // Typing a word or '.' opens the list, deleting re-filters an open one, ⇥ / ⌃Space ask at the cursor (a
+                    // single-line input inserts no tab); other keys close it
+                    let ask = k.code == KeyCode::Tab || (k.code == KeyCode::Char(' ') && k.modifiers.contains(KeyModifiers::CONTROL)) || k.code == KeyCode::Null;
+                    let plain = !k.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+                    let typed = plain && matches!(k.code, KeyCode::Char(c) if c.is_alphanumeric() || c == '_' || c == '.' || c == '\'' || c == ' ');
+                    let refilter = complete.is_some() && k.code == KeyCode::Backspace;
+                    if !ask {
                         input.input(k);
                     }
-                    complete = input_complete(&input, &words, force);
-                    app.popup = Some(Popup::Input { title, body, input, on_ok, words, complete });
+                    complete = filter.as_ref().filter(|_| ask || typed || refilter).and_then(|f| filter_complete(&input, f, ask));
+                    app.popup = Some(Popup::Input { title, body, input, on_ok, filter, complete });
                 }
             }
         }
@@ -294,7 +296,7 @@ mod tests {
     use super::*;
     use crate::testkit::Harness;
 
-    /// Column·keyword autocomplete in the WHERE input
+    /// The WHERE input completes like the console (the table's columns first, then keywords), in the console's list
     #[tokio::test]
     async fn where_input_completes_columns_and_keywords() {
         let mut h = Harness::new().await;
@@ -302,12 +304,60 @@ mod tests {
         h.key("w");
         h.type_str("ban");
         let s = h.screen(120, 30);
-        assert!(s.contains("bank_code") && s.contains("bank_name"), "{s}");
+        assert!(s.contains("bank_code") && s.contains("bank_name") && s.contains(" 1/3 "), "{s}");
+        h.key("Down");
         h.key("Tab");
-        h.type_str(" = '002' an");
-        h.key("Tab");
+        // Not in a string literal
+        h.type_str(" = '00");
+        assert!(!h.screen(120, 30).contains(" 1/"), "list inside a string");
+        h.type_str("2' an");
         h.key("Enter");
-        assert_eq!(h.table(id).where_, "bank_code = '002' AND");
+        h.key("Enter");
+        assert_eq!(h.table(id).where_, "bank_name = '002' and");
+    }
+
+    /// ORDER BY: a column, then ASC / DESC; ⎋ closes the list first, the input only on the second ⎋; a whole word leaves ↩ to apply
+    #[tokio::test]
+    async fn order_input_completes_and_esc_closes_the_list_first() {
+        let mut h = Harness::new().await;
+        let id = h.table_tab("bank_info", &["bank_code", "bank_name"], &[&["002", "산업"]], &["bank_code"]);
+        h.key("o");
+        h.type_str("bank_c");
+        h.key("Enter");
+        h.type_str(" de");
+        let s = h.screen(120, 30);
+        assert!(s.contains("desc") && s.contains("delete"), "{s}");
+        h.key("Esc");
+        assert!(matches!(&h.app.popup, Some(crate::app::Popup::Input { complete: None, .. })), "first ⎋ closes only the list");
+        h.type_str("sc");
+        assert!(!h.screen(120, 30).contains(" 1/"), "desc is a whole keyword: no list");
+        h.key("Enter");
+        assert!(h.app.popup.is_none());
+        assert_eq!(h.table(id).order, "bank_code desc");
+        h.key("o");
+        h.key("Esc");
+        assert!(h.app.popup.is_none());
+        assert_eq!(h.table(id).order, "bank_code desc");
+    }
+
+    /// ⇥ asks for the list where typing doesn't open it: at an empty word the table's columns come first, then keywords
+    #[tokio::test]
+    async fn where_input_tab_lists_at_an_empty_word() {
+        let mut h = Harness::new().await;
+        let id = h.table_tab("bank_info", &["bank_code", "bank_name"], &[&["002", "산업"]], &["bank_code"]);
+        h.key("w");
+        h.key("Tab");
+        let Some(crate::app::Popup::Input { complete: Some(c), .. }) = &h.app.popup else { panic!("⇥ opens the list") };
+        assert_eq!(c.items.iter().take(2).map(|i| i.label.as_str()).collect::<Vec<_>>(), ["bank_code", "bank_name"]);
+        assert!(c.items.iter().any(|i| i.label == "and"), "keywords after the columns");
+        h.key("Tab");
+        h.type_str(" = '002' and ");
+        assert!(!h.screen(120, 30).contains(" 1/"), "typing a space opens nothing");
+        h.key("Tab");
+        h.key("Down");
+        h.key("Enter");
+        h.key("Enter");
+        assert_eq!(h.table(id).where_, "bank_code = '002' and bank_name");
     }
 
     /// Manage Shown Schemas: Space to toggle, Enter to save (the Data Source's scope, shared with the GUI). Esc doesn't save

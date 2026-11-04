@@ -264,6 +264,13 @@ struct Suggestions {
     items: Vec<complete::Item>,
 }
 
+/// suggestFilter's answer
+#[derive(Serialize)]
+struct FilterSuggestions {
+    from: usize,
+    items: Vec<complete::Item>,
+}
+
 #[wasm_bindgen]
 impl CompletionIndex {
     /// `tables_json`: the completion_meta result ([{schema, name, columns: [[name, type], …]}, …]) as JSON
@@ -284,6 +291,16 @@ impl CompletionIndex {
             Some(r) => reuse(&self.rest, r, |r| Ok(serde_wasm_bindgen::to_value(&complete::rest_items(&self.meta, r, Options::GUI))?))?,
         };
         Ok(serde_wasm_bindgen::to_value(&SuggestJs { start_column: s.start_column, end_column: s.end_column, lead, rest })?)
+    }
+
+    /// Candidates in a table tab's WHERE / ORDER BY field (complete::suggest_filter) at `caret`, a UTF-16 offset into `field`;
+    /// `explicit` when asked for (⌃Space) rather than typed. {from, items}: the word they replace starts at `from` (UTF-16) and ends at the caret
+    #[wasm_bindgen(js_name = suggestFilter)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn suggest_filter(&self, schema: &str, table: &str, order_by: bool, field: &str, caret: usize, db: &str, mysql: bool, explicit: bool) -> Result<JsValue, JsError> {
+        let b = byte_offset(field, caret);
+        let (n, items) = complete::suggest_filter(&self.meta, schema, table, order_by, field, b, db, mysql, explicit);
+        Ok(serde_wasm_bindgen::to_value(&FilterSuggestions { from: caret - utf16_tail(&field[..b], n), items })?)
     }
 
     /// The value · json key spot at the caret (what to ask meta.hints for), or undefined

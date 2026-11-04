@@ -429,6 +429,14 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.app.focus = crate::app::Focus::Grid;
     scenes.push(app_scene(h, "DDL: Structure", "A table's DDL tab, v: columns, keys, indexes, foreign keys both ways, triggers (not reported by this source), options and comment; v again for the SQL", 120, 40));
     h.app.close_tab_now(h.app.active);
+    // Table filter completion (w)
+    let id = h.table_tab("payment", &["id", "user_id", "amount", "card_brand", "created_at"], &[&["1", "41", "129000", "VISA", "2026-10-28 09:12"], &["2", "7", "59000", "MASTER", "2026-10-28 09:40"]], &["id"]);
+    h.app.focus = crate::app::Focus::Grid;
+    h.app.input_filter(id, false);
+    h.type_str("user_id = 41 and ca");
+    scenes.push(app_scene(h, "Table filter completion", "w / o on a table tab: the WHERE / ORDER BY input completes like the console (the table's columns first, then keywords); ↑↓ PgUp PgDn move, Enter / Tab pick, Esc closes the list first", 120, 22));
+    h.app.popup = None;
+    h.app.close_tab_now(h.app.active);
     // Redis
     h.redis_tab(&["session:9f2c", "session:a771", "user:41", "user:41:cart", "queue:mail", "rank:daily"]);
     scenes.push(app_scene(h, "Redis", "Redis 키 브라우저: 키 · 타입 · TTL", 120, 22));
