@@ -129,7 +129,9 @@ export function ConsolePane(p: Props) {
   /** The Output line of the gutter mark last clicked: selected, and scrolled to on each click */
   const [markedOut, setMarkedOut] = useState<{ out: string } | null>(null);
   const outputRef = useRef<HTMLDivElement>(null);
-  useEffect(() => outputRef.current?.querySelector(".ol.on")?.scrollIntoView({ block: "nearest" }), [markedOut]);
+  useEffect(() => {
+    outputRef.current?.querySelector(".ol.on")?.scrollIntoView({ block: "nearest" });
+  }, [markedOut]);
   /** A ⌘↩ waiting for the WebAssembly module, as the editor was at the press (null once it ran or was cancelled) */
   const pending = useRef<RunRequest | null>(null);
   const [loading, setLoadingState] = useState(false);

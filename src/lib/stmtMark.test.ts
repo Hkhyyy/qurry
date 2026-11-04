@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { markHover } from "./stmtMark";
+import { markHover, shownMark, type StmtMark } from "./stmtMark";
 
 describe("markHover", () => {
   it("says when it ran and its result, or since when it runs", () => {
@@ -8,5 +8,16 @@ describe("markHover", () => {
   });
   it("shows an error as plain text, not Markdown", () => {
     expect(markHover({ state: "error", out: "a", ts: "t", text: 'ERROR: relation "a_b" does not exist <x>' })).toBe('Failed t  \nERROR: relation "a\\_b" does not exist \\<x\\>');
+  });
+});
+
+describe("shownMark", () => {
+  const m = (state: StmtMark["state"]): StmtMark => ({ state, out: state, ts: "t" });
+  it("prefers failed, then running, then done", () => {
+    expect(shownMark([m("ok"), m("error")])?.out).toBe("error");
+    expect(shownMark([m("running"), m("error")])?.out).toBe("error");
+    expect(shownMark([m("ok"), m("running")])?.out).toBe("running");
+    expect(shownMark([m("ok")])?.out).toBe("ok");
+    expect(shownMark([])).toBeUndefined();
   });
 });

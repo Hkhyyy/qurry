@@ -47,6 +47,28 @@ async fn marks_stop_at_the_failed_statement() {
     assert!(matches!(&h.app.tabs[h.app.active].kind, TabKind::Console(c) if c.show_output));
 }
 
+/// Each statement's mark changes as it finishes, not when the whole run ends
+#[tokio::test]
+async fn marks_change_as_each_statement_finishes() {
+    let mut h = Harness::new().await;
+    h.app.fake_db = Some(fake);
+    h.app.exec.inside = qurry_core::exec::Inside::Whole;
+    h.console_with("select 1;\nselect 2;", 0, 0);
+    h.key("F5");
+    // The screens between background results, each once
+    let mut seen = vec![editor_lines(&mut h)];
+    while h.step().await {
+        let now = editor_lines(&mut h);
+        if seen.last() != Some(&now) {
+            seen.push(now);
+        }
+    }
+    assert_eq!(
+        seen,
+        [[" 1 select 1;", " 2 select 2;"], ["…1 select 1;", " 2 select 2;"], ["✓1 select 1;", " 2 select 2;"], ["✓1 select 1;", "…2 select 2;"], ["✓1 select 1;", "✓2 select 2;"]]
+    );
+}
+
 /// A selection's statements are marked on their own rows
 #[tokio::test]
 async fn selection_marks_its_own_rows() {

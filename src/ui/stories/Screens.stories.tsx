@@ -362,7 +362,10 @@ function ConsoleMarks() {
     localStorage.setItem("dbtool.execSettings", JSON.stringify({ inside: "whole" }));
     return v;
   });
-  useEffect(() => (saved === null ? localStorage.removeItem("dbtool.execSettings") : localStorage.setItem("dbtool.execSettings", saved)), [saved]);
+  useEffect(() => {
+    if (saved === null) localStorage.removeItem("dbtool.execSettings");
+    else localStorage.setItem("dbtool.execSettings", saved);
+  }, [saved]);
   const runs: [StmtMark["state"], string][] = [["ok", "1 row retrieved starting from 1 in 4 ms"], ["error", 'ERROR: column "status" of relation "payment" does not exist'], ["running", ""]];
   return (
     <Frame h={420}>

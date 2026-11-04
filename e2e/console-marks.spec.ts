@@ -14,6 +14,10 @@ const lineOf = async (page: Parameters<typeof editor>[0], cls: string) => {
 };
 
 test.beforeEach(async ({ page }) => {
+  // Any uncaught error fails the test (a crash leaves a white screen that later steps may not notice)
+  page.on("pageerror", (e) => {
+    throw e;
+  });
   await openApp(page);
   await openConsole(page);
 });
@@ -40,6 +44,9 @@ test("a run stops at the failed statement: ✓ on the 1st, ✗ on the 2nd, none 
   await expect(work(page).locator(".output-log")).toHaveCount(0);
   await editor(page).locator(".stmt-mark.ok").click();
   await expect(work(page).locator(".output-log .ol.on")).toHaveText(/> select 1;?$/);
+  // A second click (another mark) moves the selection
+  await editor(page).locator(".stmt-mark.error").click();
+  await expect(work(page).locator(".output-log .ol.on")).toHaveText(/> select \* from no_such_table;?$/);
 
   // A new line above: the marks follow their statements
   await editor(page).locator(".view-lines").click();
@@ -69,4 +76,22 @@ test("a running statement shows a spinner until it is done", async ({ page }) =>
   await expect(editor(page).locator(".stmt-mark.running")).toHaveCount(1);
   await expect(editor(page).locator(".stmt-mark.ok")).toHaveCount(1, { timeout: 5000 });
   await expect(marks(page)).toHaveCount(1);
+});
+
+test("two statements on one line: the mark shows the failed one, and a click selects its Output line", async ({ page }) => {
+  await typeSql(page, "select 1; select * from no_such_table;");
+  await runAll(page);
+  await expect(marks(page)).toHaveCount(1);
+  const color = (sel: string) => editor(page).locator(sel).evaluate((e) => getComputedStyle(e, "::before").backgroundColor);
+  const danger = await page.evaluate(() => {
+    const d = document.createElement("div");
+    d.style.color = "var(--ui-danger)";
+    document.body.append(d);
+    const c = getComputedStyle(d).color;
+    d.remove();
+    return c;
+  });
+  expect(await color(".stmt-mark")).toBe(danger);
+  await editor(page).locator(".stmt-mark").click();
+  await expect(work(page).locator(".output-log .ol.on")).toHaveText(/> select \* from no_such_table;?$/);
 });

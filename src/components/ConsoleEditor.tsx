@@ -7,7 +7,7 @@ import { monacoTheme, useTheme } from "../lib/theme";
 import { font, fontStack } from "../lib/prefs";
 import { setStatusWidget } from "../lib/statusbar";
 import { bindings, onKeymapChange } from "../lib/shortcuts";
-import { markHover, type MarkStmt, type StmtMark } from "../lib/stmtMark";
+import { markHover, shownMark, type MarkStmt, type StmtMark } from "../lib/stmtMark";
 
 /** Run request: passes editor content·caret·selection; the console decides what actually runs (DataGrip run rules) */
 export interface RunRequest {
@@ -186,8 +186,8 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
         ed.onMouseDown((e) => {
           if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) return;
           const line = e.target.position?.lineNumber;
-          const x = marks.find((x) => x.m && rangeOf(x)?.startLineNumber === line);
-          if (x?.m) onMarkRef.current?.(x.m.out);
+          const m = shownMark(marks.flatMap((x) => (x.m && rangeOf(x)?.startLineNumber === line ? [x.m] : [])));
+          if (m) onMarkRef.current?.(m.out);
         });
         const run = (explain?: "plan" | "analyze") => {
           const m = ed.getModel();

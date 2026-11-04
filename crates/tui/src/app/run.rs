@@ -249,6 +249,14 @@ impl App {
         self.spawn(
             async move {
                 let mut out = vec![];
+                // A statement's gutter mark, set as it starts and finishes
+                let mark = |i: usize, state: MarkState| {
+                    let _ = tx.send(Box::new(move |a: &mut App| {
+                        if let Some(TabKind::Console(c)) = a.tab_mut(id).map(|t| &mut t.kind) {
+                            c.marks.set(c.editor.lines(), i, state);
+                        }
+                    }));
+                };
                 for (i, s) in stmts2.into_iter().enumerate() {
                     // Put the running statement in Output right away (on one line, truncated if too long), and its gutter mark
                     let echo: String = s.replace('\n', " ").chars().take(300).collect();
@@ -256,9 +264,9 @@ impl App {
                     let _ = tx.send(Box::new(move |a: &mut App| {
                         if let Some(TabKind::Console(c)) = a.tab_mut(id).map(|t| &mut t.kind) {
                             c.log(false, line);
-                            c.marks.set(c.editor.lines(), i, MarkState::Running);
                         }
                     }));
+                    mark(i, MarkState::Running);
                     let q = if explain {
                         let bare = s.trim_end_matches(';');
                         match (kind, analyze) {
@@ -288,6 +296,7 @@ impl App {
                             Err(e) => Err(e),
                         };
                         if let Err(e) = begun {
+                            mark(i, MarkState::Err);
                             out.push((s, Err(e), false));
                             break;
                         }
@@ -302,6 +311,7 @@ impl App {
                         r
                     };
                     let stop = r.is_err();
+                    mark(i, if stop { MarkState::Err } else { MarkState::Ok });
                     out.push((s, r, dry));
                     if stop {
                         break;
@@ -325,7 +335,6 @@ impl App {
                     if r.is_ok() {
                         let _ = hist.history.add(&hist_conn, Some(&hist_db), &s);
                     }
-                    c.marks.set(c.editor.lines(), i, if r.is_ok() { MarkState::Ok } else { MarkState::Err });
                     match r {
                         Ok(res) => {
                             // PG execution plan: indented operations · share (%) · warnings table

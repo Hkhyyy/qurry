@@ -10,6 +10,9 @@ export interface StmtMark {
 /** Sets the gutter mark of the i-th statement of a run */
 export type MarkStmt = (i: number, m: StmtMark) => void;
 
+/** The mark a line with several shows (and a click on it opens): failed, then running, then done. App.css orders its rules the same way */
+export const shownMark = (ms: StmtMark[]) => ["error", "running", "ok"].map((st) => ms.find((m) => m.state === st)).find(Boolean);
+
 const escapeMd = (s: string) => s.replace(/[\\`*_{}[\]()#+\-.!|<>]/g, "\\$&");
 /** A mark's hover (Markdown): when it ran, and its result (rows, duration) or its error */
 export const markHover = (m: StmtMark) => (m.state === "running" ? `Running since ${m.ts}` : `${m.state === "ok" ? "Executed" : "Failed"} ${m.ts}  \n${escapeMd(m.text ?? "")}`);
