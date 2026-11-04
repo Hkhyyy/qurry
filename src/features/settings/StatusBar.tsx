@@ -3,7 +3,7 @@ import { useStatusWidgets } from "../../lib/statusbar";
 import { TransferBar, type TransferJob } from "../../components/Transfer";
 import { keyTitle } from "../../lib/shortcuts";
 
-function StatusBar({ run, onSettings, settingsKey, onKeymap, status, readOnly, update, onUpdate, jobs }: { run: { canRun: boolean; running: boolean; onRun: () => void; onCancel: () => void }; onSettings: () => void; settingsKey?: string; onKeymap: () => void; status: string; readOnly: boolean; update?: string; onUpdate: () => void; jobs: TransferJob[] }) {
+function StatusBar({ run, status, readOnly, update, onUpdate, jobs }: { run: { canRun: boolean; running: boolean; onRun: () => void; onCancel: () => void }; status: string; readOnly: boolean; update?: string; onUpdate: () => void; jobs: TransferJob[] }) {
   const w = useStatusWidgets();
   return (
     <div className="statusbar">
@@ -27,12 +27,6 @@ function StatusBar({ run, onSettings, settingsKey, onKeymap, status, readOnly, u
       {readOnly && <StatusItem title="Data source is read-only">🔒 Read-only</StatusItem>}
       {w.caret && <StatusItem title="Line:Column">{w.caret}</StatusItem>}
       <StatusItem>UTF-8</StatusItem>
-      <IconButton size="sm" title={settingsKey ? `Settings (${settingsKey})` : "Settings"} onClick={onSettings}>
-        ⚙
-      </IconButton>
-      <IconButton size="sm" title={keyTitle("Keymap Reference", "keymap")} onClick={onKeymap}>
-        ⌨
-      </IconButton>
     </div>
   );
 }

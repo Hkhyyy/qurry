@@ -2,7 +2,7 @@
 
 [English](../shortcuts-gui.md) | 한국어
 
-앱 안에서도 같은 목록을 **Help › Keymap Reference**, 도구 막대의 ⌨ 버튼, `⇧⌘/` 로 찾아볼 수 있습니다. **Find Action** (`⇧⌘A`) 은 모든 명령을 단축키와 함께 보여 줍니다.
+앱 안에서도 같은 목록을 **Help › Keymap Reference**, 맨 왼쪽 워크스페이스 막대 아래의 ⌨ 버튼, `⇧⌘/` 로 찾아볼 수 있습니다. **Find Action** (`⇧⌘A`) 은 모든 명령을 단축키와 함께 보여 줍니다.
 Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 
 명령 단축키는 **Settings › Keymap** (또는 Keymap Reference 의 **Edit Keymap…**) 에서 바꿀 수 있습니다: *Change* 를 누르고 새 키를 누르세요. 메뉴 · 우클릭 메뉴 · 도구 막대 · Find Action 에서 실행할 수 있는 동작은 모두 여기 있습니다 — 기본 키가 없는 것도 (아래 마지막 표) 있어서 무엇이든 키를 줄 수 있습니다. 키는 그 구역이 말하는 곳에서 동작합니다: 어디서나 (Global), Database Explorer, 쿼리 콘솔, 데이터 그리드. Database Explorer 와 데이터 그리드에서는 Delete · Insert · Backspace 도 키가 될 수 있습니다. 아래 표는 기본값입니다. 설명은 앱 화면에 나오는 문구 그대로 영어로 둡니다.

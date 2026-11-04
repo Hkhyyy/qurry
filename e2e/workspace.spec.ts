@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { expect, openApp, tabStrips, test } from "./app";
+import { dialog, expect, openApp, tabStrips, test } from "./app";
 
 // Captured from the app as it saves today: two workspaces, same-name tables, a console with SQL, a right split
 const fixture = readFileSync(new URL("fixtures/workspace-gui.json", import.meta.url), "utf8");
@@ -36,4 +36,46 @@ test("tab labels catch up once WebAssembly loads after the tabs restored", async
   await expect.poll(() => tabStrips(page)).toEqual(["users | users | console [DEV] shop_app", "users"]);
   release();
   await expect.poll(() => tabStrips(page)).toEqual(["public.users | shop_app.billing.users | console [DEV] shop_app", "shop_app.billing.users"]);
+});
+
+test("the rail's footer opens Keymap Reference and Settings; the status bar no longer has them", async ({ page }) => {
+  await openApp(page);
+  const foot = page.locator(".ws-bar .ws-foot");
+  await foot.getByRole("button", { name: /^Keymap Reference/ }).click();
+  await expect(dialog(page).locator(".ui-modal-title")).toHaveText("Keymap Reference");
+  await page.keyboard.press("Escape");
+  await expect(dialog(page)).toHaveCount(0);
+  await foot.getByRole("button", { name: /^Settings/ }).click();
+  await expect(dialog(page).locator(".ui-modal-title")).toHaveText("Settings");
+  await page.keyboard.press("Escape");
+  await expect(dialog(page)).toHaveCount(0);
+  await expect(page.locator(".statusbar").getByRole("button", { name: /Settings|Keymap/ })).toHaveCount(0);
+  // The update badge stays in the status bar
+  await expect(page.locator(".statusbar")).toContainText("available");
+});
+
+test("with many workspaces the list scrolls and the footer stays at the bottom", async ({ page }) => {
+  const many = {
+    version: 2,
+    shared: true,
+    current: "w30",
+    workspaces: Array.from({ length: 30 }, (_, i) => ({ id: `w${i + 1}`, name: `Workspace ${i + 1}`, connIds: ["dev"], tabs: [], panes: { t: "leaf", g: 0 }, activeIds: [-1, -1, -1, -1], focused: 0 })),
+  };
+  await page.addInitScript((ws) => localStorage.setItem("mock-ws", ws), JSON.stringify(many));
+  await openApp(page);
+  const list = page.locator(".ws-bar .ws-list");
+  const foot = page.locator(".ws-bar .ws-foot");
+  await expect(list.getByRole("button", { name: /Workspace \d+$/ })).toHaveCount(30);
+  expect(await list.evaluate((e) => e.scrollHeight > e.clientHeight)).toBe(true);
+  // The current workspace (the last one) is scrolled into view
+  await expect(list.getByRole("button", { name: /Workspace 30$/ })).toBeInViewport();
+  const bottom = async () => (await foot.boundingBox())!.y + (await foot.boundingBox())!.height;
+  const barBottom = (await page.locator(".ws-bar").boundingBox())!;
+  expect(Math.round(await bottom())).toBe(Math.round(barBottom.y + barBottom.height));
+  await list.evaluate((e) => (e.scrollTop = 0));
+  await expect(list.getByRole("button", { name: /Workspace 1$/ })).toBeInViewport();
+  expect(Math.round(await bottom())).toBe(Math.round(barBottom.y + barBottom.height));
+  await expect(foot.getByRole("button", { name: /^Settings/ })).toBeInViewport();
+  await foot.getByRole("button", { name: /^Settings/ }).click();
+  await expect(dialog(page).locator(".ui-modal-title")).toHaveText("Settings");
 });

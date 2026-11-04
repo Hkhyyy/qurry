@@ -2,7 +2,7 @@
 
 English | [한국어](ko/shortcuts-gui.md)
 
-Inside the app the same list is searchable via **Help › Keymap Reference**, the ⌨ toolbar button, or `⇧⌘/`. **Find Action** (`⇧⌘A`) lists every command together with its shortcut.
+Inside the app the same list is searchable via **Help › Keymap Reference**, the ⌨ button at the bottom of the workspace rail (far left), or `⇧⌘/`. **Find Action** (`⇧⌘A`) lists every command together with its shortcut.
 On Windows/Linux read `⌘` as `Ctrl` and `⌥` as `Alt`.
 
 Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…** in the Keymap Reference): click *Change* and press the new keys. Every action you can reach from a menu, a context menu, a toolbar or Find Action is listed there — the ones without a default key too (the last table below), so any of them can get one. A key works where its section says: anywhere (Global), in the Database Explorer, in the query console or in a data grid. In the Database Explorer and the data grid a key can also be Delete, Insert or Backspace. The tables below show the defaults.
