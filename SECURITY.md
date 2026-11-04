@@ -47,8 +47,11 @@ An installed version trusts only the public key it was built with, so changing t
 
 1. Make a new key pair: `pnpm tauri signer generate -w <file>`, with a password. Back it up offline.
 2. In a pull request, put the new public key in both places above. Re-sign the test signature in `sums_must_be_signed_with_the_update_key` (a signature of `hello\n`) with the new key (`pnpm tauri signer sign -f <file> <hello file>`, then use the `.sig` contents) so the test passes.
-3. Merge it and release it as a stable version while the secrets still hold the **old** key. This bridge release is signed with the old key, so every installed version accepts it, and it trusts the new key from then on.
-4. Give users time to update to the bridge release. Then replace both secrets with the new key. Every release after that (beta and stable) is signed with the new key.
+3. Merge the pull request and release it as a stable version while the secrets still hold the **old** key. Don't merge anything else to `main` until step 5: every merge publishes a beta, and a beta built from here on (the merge's own beta too) has the new public key but is signed with the old one (see below). This bridge release is signed with the old key, so every installed version accepts it, and it trusts the new key from then on.
+4. Give users time to update to the bridge release, but keep it short: the bridge release can't install driver plugins (below).
+5. Replace both secrets with the new key and release the next stable version right away. Every release after that (beta and stable) is signed with the new key.
+
+The bridge release trusts only the new key, but its own `SHA256SUMS.sig` is signed with the old one. A driver plugin is downloaded from the release of the running version and checked against that signature, so on the bridge release (and on any beta built between steps 3 and 5) installing a driver plugin fails with "SHA256SUMS signature check failed". Drivers installed before keep working. Users on the bridge release update to the release from step 5 to install drivers; the GUI's in-app update and `qurry-tui --update` accept it.
 
 Versions older than the bridge release can't verify releases signed with the new key, so their in-app update and `qurry-tui --update` fail at the signature check. Users still on them reinstall as described below.
 
@@ -56,14 +59,21 @@ Versions older than the bridge release can't verify releases signed with the new
 
 Installed versions can't accept anything signed with another key, so there is no in-app path to a new key. Make a new key pair, put it in both secrets and both public key places (as in steps 1 and 2 above), and release. Users of every earlier version must reinstall once from the [Releases](https://github.com/Hkhyyy/qurry/releases) page (GUI: the DMG, AppImage or deb; TUI and MCP: `brew upgrade qurry` or the `qurry-cli_…` archive); their data sources, passwords and settings are kept. After that, updates work as before.
 
-Tell them in the release notes of that release and of the stable releases after it, at the top of `.github/release-notes.md`: say that in-app updates from older versions fail with a signature error because the signing key changed, that this is expected and not an attack, and link the download page. Users on an old version only see this if they open the release page, so also pin an issue or discussion with the same text.
+Tell them in the update window, which shows only the items under `## What's Changed` in the release notes (GUI, TUI and versions before 0.3.0 alike): an old version shows it when it finds the update, before the install fails at the signature check. Put this at the very top of `.github/release-notes.md`, and keep it for the releases after it while old versions are still in use:
+
+```markdown
+## What's Changed
+* [breaking] The update signing key changed. Updating from an older version fails with a signature error; that is expected, not an attack. Download Qurry again from https://github.com/Hkhyyy/qurry/releases (your data sources, passwords and settings are kept)
+```
+
+Text elsewhere in the notes only shows on the release page. Also pin an issue or discussion with the same text.
 
 ### If the private key leaks
 
 A leaked key lets whoever holds it sign updates that every installed version accepts, if they can also get them served from this repository's releases.
 
 1. Contain: check the repository and the maintainer's GitHub account for releases, tags, workflow changes, secrets and access tokens you didn't make. Delete those releases and revoke those tokens.
-2. Rotate right away, as in "Rotating the key", without waiting between steps 3 and 4: the bridge release is still signed with the leaked key (the only key installed versions accept), and the secrets are replaced with the new key as soon as it is published. Then destroy every copy of the leaked key.
-3. Tell users: publish a [security advisory](https://github.com/Hkhyyy/qurry/security/advisories) that says which releases may be affected, asks everyone to update to the bridge release now (or reinstall from the Releases page), and explains how to check a download against its build provenance attestation (`gh attestation verify <file> --repo Hkhyyy/qurry`). Put the same notice at the top of the release notes.
+2. Rotate right away, as in "Rotating the key", skipping the wait in step 4: the bridge release is still signed with the leaked key (the only key installed versions accept), and the secrets are replaced with the new key as soon as it is published. Then destroy every copy of the leaked key.
+3. Tell users: publish a [security advisory](https://github.com/Hkhyyy/qurry/security/advisories) that says which releases may be affected, asks everyone to update to the bridge release now (or reinstall from the Releases page), and explains how to check a download against its build provenance attestation (`gh attestation verify <file> --repo Hkhyyy/qurry`). Put the same notice in the update window too, as a `## What's Changed` item at the top of `.github/release-notes.md` (as in "If the private key is lost").
 
 Versions older than the bridge release keep trusting the leaked key until they update, so the advisory should say this plainly.
