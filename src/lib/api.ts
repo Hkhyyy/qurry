@@ -598,7 +598,7 @@ export function dbVisible(scope: Scope | undefined, db: string, defaultDb: strin
 }
 
 /** The database a target without "::db" connects to (PostgreSQL: postgres when blank; MySQL: none, all schemas) */
-export const defaultDbOf = (c: ConnectionView) => c.database || (c.kind === "postgres" ? "postgres" : "");
+export const defaultDbOf = (c: Pick<ConnectionView, "database" | "kind">) => c.database || (c.kind === "postgres" ? "postgres" : "");
 
 const MY_SYS = ["information_schema", "performance_schema", "mysql", "sys"];
 /** A database the explorer lists: one fixed database, or the shown-database scope (MySQL system schemas only with showSystem) */
