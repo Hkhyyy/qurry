@@ -119,7 +119,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
   /** Truncate… / Drop… of one or several objects of one database: one confirmation lists every statement (the Production one on a
    *  Production source), then they run like the object editors' DDL (ddl.run: one transaction on PostgreSQL, one at a time on MySQL,
    *  whose DDL can't roll back), through the read-only check and the Production log. Drop's statements come from the backend in an
-   *  order that runs (views before the tables they read, the tables in one statement) */
+   *  order that runs (an object before what it depends on; one statement per kind on PostgreSQL, one per object on MySQL) */
   const dangerous = async (infos: NodeInfo[], verb: "TRUNCATE" | "DROP") => {
     const objs = infos.filter((i) => i.schema && i.name);
     if (!objs.length) return;
@@ -127,7 +127,7 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
     const { q } = dialectOf(c.kind);
     let sqls: string[];
     try {
-      sqls = verb === "DROP" ? await ddl.drop(c.id, objs.map((i) => ({ kind: i.kind, schema: i.schema!, name: i.name! }))) : objs.map((i) => `TRUNCATE ${q(i.schema!)}.${q(i.name!)};`);
+      sqls = verb === "DROP" ? await ddl.drop(nodeTarget(objs[0]), objs.map((i) => ({ kind: i.kind, schema: i.schema!, name: i.name! }))) : objs.map((i) => `TRUNCATE ${q(i.schema!)}.${q(i.name!)};`);
     } catch (e) {
       return setStatus(String(e));
     }
@@ -356,7 +356,8 @@ export function useExplorer({ setStatus, refresh, setTabMenu, activate, addTab, 
       "tree.copyName": () => void navigator.clipboard.writeText(all.map(nodeName).join("\n")),
       "tree.copyRef": () => void navigator.clipboard.writeText(all.map(reference).join("\n")),
       "tree.refresh": () => all.forEach((i) => i.refresh?.()),
-      "tree.remove": every((i) => oneDb && !!i.name && i.kind !== "routine", () => dangerous(all, "DROP")),
+      // Not a routine, nor a Redis key (DROP isn't a Redis command)
+      "tree.remove": every((i) => oneDb && !!i.name && i.kind !== "routine" && i.kind !== "key", () => dangerous(all, "DROP")),
     };
   };
 

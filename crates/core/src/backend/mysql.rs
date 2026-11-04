@@ -265,6 +265,20 @@ impl Backend for MySqlPool {
         Ok(TableShape { cols, fks: fks.into_iter().map(|x| x.1).collect() })
     }
 
+    /// Foreign keys: MySQL 5.7 can't drop a referenced table even with the table referencing it in the same statement
+    async fn drop_deps(&self, schemas: &[String]) -> AppResult<Vec<[String; 4]>> {
+        let sql = format!(
+            "SELECT DISTINCT CAST(TABLE_SCHEMA AS CHAR), CAST(TABLE_NAME AS CHAR), CAST(REFERENCED_TABLE_SCHEMA AS CHAR), CAST(REFERENCED_TABLE_NAME AS CHAR) \
+             FROM information_schema.KEY_COLUMN_USAGE WHERE REFERENCED_TABLE_NAME IS NOT NULL AND TABLE_SCHEMA IN ({})",
+            vec!["?"; schemas.len()].join(", ")
+        );
+        let mut q = sqlx::query_as::<_, (String, String, String, String)>(&sql);
+        for s in schemas {
+            q = q.bind(s.clone());
+        }
+        Ok(q.fetch_all(self).await?.into_iter().map(|(a, b, c, d)| [a, b, c, d]).collect())
+    }
+
     // ───── Connection: db.rs · app.rs ─────
 
     async fn server_version(&self) -> AppResult<String> {

@@ -1,5 +1,5 @@
 use super::*;
-use qurry_core::ddl::{DropTarget, drop_sql};
+use qurry_core::ddl::DropTarget;
 
 impl App {
     // ───────── Data Sources ─────────
@@ -416,11 +416,15 @@ impl App {
                 name: n.name.clone().unwrap_or_default(),
             })
             .collect();
-        let stmts = match drop_sql(self.kind_of(&ns[0].conn), &objects) {
-            Ok(s) => s,
-            Err(e) => return self.status = e.to_string(),
-        };
         let done = if ns.len() == 1 { format!("Dropped {}", ns[0].label) } else { format!("Dropped {} objects", ns.len()) };
-        self.confirm_ddl(target, ns[0].conn.clone(), ns[0].db.clone(), stmts, done);
+        let (st, id, conn, db) = (self.state.clone(), target.clone(), ns[0].conn.clone(), ns[0].db.clone());
+        // The database says which objects depend on which (the order the statements run in)
+        self.spawn(async move { st.drop_ddl(id, objects).await }, move |a, r| match r {
+            Ok(stmts) => {
+                let p = a.ddl_confirm(target, conn, db, stmts, done);
+                a.open_after_notices(p);
+            }
+            Err(e) => a.status = e.to_string(),
+        });
     }
 }

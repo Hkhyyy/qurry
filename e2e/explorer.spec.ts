@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { dialog, editor, expect, menuItem, openApp, tabStrips, test, treeItem } from "./app";
+import { dialog, editor, expect, menuItem, openApp, status, tabStrips, test, treeItem } from "./app";
 
 test.beforeEach(async ({ page }) => openApp(page));
 
@@ -139,7 +139,8 @@ test("on a Production data source, the Drop… of several objects is the Product
   await treeItem(page, "users").nth(1).click({ modifiers: ["Meta"] });
   await page.keyboard.press("Delete");
   await expect(dialog(page).locator(".ui-modal-title")).toHaveText("Production: [MySQL] shop");
-  await expect(dialog(page).locator(".ui-detail-text")).toHaveText(["DROP TABLE shop.contracts, shop.users;"]);
+  // MySQL: one statement per table (its DDL can't roll back; a failure names what was dropped)
+  await expect(dialog(page).locator(".ui-detail-text")).toHaveText(["DROP TABLE shop.contracts;", "DROP TABLE shop.users;"]);
 });
 
 test("rows that leave the screen leave the selection: after Collapse All the keys act on nothing hidden", async ({ page }) => {
@@ -157,4 +158,14 @@ test("Enter with several tables opens a tab for each", async ({ page }) => {
   await treeItem(page, "users").first().click({ modifiers: ["Meta"] });
   await page.keyboard.press("Enter");
   await expect.poll(() => tabStrips(page)).toEqual(["contracts | users"]);
+});
+
+test("⌦ on a range of Redis keys asks no Drop… (DROP isn't a Redis command)", async ({ page }) => {
+  // [Redis] cache's db0 lists its keys (session and user are folders)
+  await treeItem(page, "X events").click();
+  await treeItem(page, "S tags").click({ modifiers: ["Shift"] });
+  await expect(selectedRows(page)).toHaveCount(3);
+  await page.keyboard.press("Delete");
+  await expect(status(page)).toHaveText(/^Works on one node/);
+  await expect(dialog(page)).toHaveCount(0);
 });

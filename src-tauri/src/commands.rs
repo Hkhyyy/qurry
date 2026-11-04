@@ -502,10 +502,10 @@ pub fn rename_ddl(state: State<'_, AppState>, id: String, what: String, schema: 
     state.rename_ddl(id, what, schema, old, new)
 }
 
-/// Drop… of the selected objects of one database (views first, then tables, then sequences)
+/// Drop… of the selected objects of one database, id its target (views first, then tables, then sequences; dependents first)
 #[tauri::command]
-pub fn drop_ddl(state: State<'_, AppState>, id: String, objects: Vec<qurry_core::ddl::DropTarget>) -> AppResult<Vec<String>> {
-    state.drop_ddl(id, objects)
+pub async fn drop_ddl(state: State<'_, AppState>, id: String, objects: Vec<qurry_core::ddl::DropTarget>) -> AppResult<Vec<String>> {
+    state.drop_ddl(id, objects).await
 }
 
 /// Run the generated DDL (PG: one transaction)

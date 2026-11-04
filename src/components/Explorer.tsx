@@ -20,6 +20,8 @@ interface Props {
   onRefresh: () => void;
   onExport: () => void;
   onImport: () => void;
+  /** The workspace shown: only its explorer tells onSelect (each workspace keeps its own explorer, hidden ones mounted) */
+  shown: boolean;
   /** info: the node the keys act on (the last clicked); all: every selected node */
   onSelect: (info: NodeInfo | null, all: NodeInfo[]) => void;
   onActivate: (info: NodeInfo) => void;
@@ -167,11 +169,21 @@ export function Explorer(p: Props) {
   // Read by rows as they unmount (their effect keeps the first render's gone)
   const onSelect = useRef(p.onSelect);
   onSelect.current = p.onSelect;
+  const shown = useRef(p.shown);
+  shown.current = p.shown;
+  const tell = (s: TreeSel) => {
+    const lead = s.ids.includes(s.lead ?? "") ? s.lead : s.ids[s.ids.length - 1];
+    onSelect.current((lead && infos.get(lead)) || null, selected(s));
+  };
+  // A hidden workspace's rows still unmount (a data source removed, a refresh): its selection mustn't replace the shown one's.
+  // Shown again, its own selection is what the keys act on
+  useEffect(() => {
+    if (p.shown) tell(selRef.current);
+  }, [p.shown]);
   const publish = (next: TreeSel) => {
     selRef.current = next;
     setSel(next);
-    const lead = next.ids.includes(next.lead ?? "") ? next.lead : next.ids[next.ids.length - 1];
-    onSelect.current((lead && infos.get(lead)) || null, selected(next));
+    if (shown.current) tell(next);
   };
   /** A selected row left the screen: the keys act only on the rows still shown (as the context menu does) */
   const gone = (id: string) => {

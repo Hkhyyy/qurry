@@ -271,6 +271,7 @@ export default function App() {
                     onRefresh={refresh}
                     onExport={exportConns}
                     onImport={importConns}
+                    shown={w.id === curWs}
                     onSelect={(info, all) => (setTreeSel(info), setTreeSelAll(all))}
                     onActivate={activateNode}
                     onStatus={setStatus}

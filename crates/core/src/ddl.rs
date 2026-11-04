@@ -418,23 +418,46 @@ pub struct DropTarget {
     pub name: String,
 }
 
-/// Drop… of objects of one database (the GUI's selection, the TUI's marks): one statement per kind, views first, then materialized
-/// views, tables and sequences, so a view goes before the tables it reads; within one statement the server works out the order
-/// (a foreign key between two of the tables). A sequence a dropped table owns goes with the table, hence IF EXISTS then
-pub fn drop_sql(kind: DbKind, objects: &[DropTarget]) -> AppResult<Vec<String>> {
+/// Drop… of objects of one database (the GUI's selection, the TUI's marks): views first, then materialized views, tables and
+/// sequences, so a view goes before the tables it reads. `deps`: (i, j) when objects[i] has to go before objects[j], which it
+/// depends on (drop_deps); the rest keep the selection's order. PostgreSQL runs them in one transaction, so objects of one kind in
+/// a row share a statement and the server works out their order (a foreign key between two tables). Elsewhere each object is its
+/// own statement: MySQL's DDL can't roll back, and one statement over several tables stops partway on 5.7, so a failure names
+/// exactly what was dropped (run_ddl). A sequence a dropped table owns goes with the table, hence IF EXISTS then
+pub fn drop_sql(kind: DbKind, objects: &[DropTarget], deps: &[(usize, usize)]) -> AppResult<Vec<String>> {
     const ORDER: [(&[&str], &str); 5] =
         [(&["view"], "VIEW"), (&["matview"], "MATERIALIZED VIEW"), (&["table", "partitioned"], "TABLE"), (&["foreign"], "FOREIGN TABLE"), (&["sequence"], "SEQUENCE")];
-    if let Some(o) = objects.iter().find(|o| !ORDER.iter().any(|(ks, _)| ks.contains(&o.kind.as_str()))) {
+    let tier = |o: &DropTarget| ORDER.iter().position(|(ks, _)| ks.contains(&o.kind.as_str()));
+    if let Some(o) = objects.iter().find(|o| tier(o).is_none()) {
         return Err(AppError::Msg(format!("Drop… works on tables, views and sequences, not on a {} ({})", o.kind, o.name)));
     }
+    let mut dependents = vec![vec![]; objects.len()];
+    for &(d, of) in deps.iter().filter(|(d, of)| d != of) {
+        dependents[of].push(d);
+    }
+    let mut left: Vec<usize> = (0..objects.len()).collect();
+    left.sort_by_key(|&i| tier(&objects[i]));
+    let (mut order, mut gone) = (vec![], vec![false; objects.len()]);
+    while !left.is_empty() {
+        // The first one nothing left depends on (a cycle: the first one, and the server says why it can't)
+        let free = left.iter().position(|&i| dependents[i].iter().all(|&d| gone[d])).unwrap_or(0);
+        let i = left.remove(free);
+        gone[i] = true;
+        order.push(i);
+    }
     let tables = objects.iter().any(|o| ["table", "partitioned", "foreign"].contains(&o.kind.as_str()));
-    Ok(ORDER
-        .iter()
-        .filter_map(|(ks, kw)| {
-            let names: Vec<String> = objects.iter().filter(|o| ks.contains(&o.kind.as_str())).map(|o| rel(kind, &o.schema, &o.name)).collect();
-            let if_exists = if *kw == "SEQUENCE" && tables { "IF EXISTS " } else { "" };
-            (!names.is_empty()).then(|| format!("DROP {kw} {if_exists}{};", names.join(", ")))
-        })
+    let mut stmts: Vec<(&str, Vec<String>)> = vec![];
+    for o in order.iter().map(|&i| &objects[i]) {
+        let kw = ORDER[tier(o).unwrap_or_default()].1;
+        let name = rel(kind, &o.schema, &o.name);
+        match stmts.last_mut() {
+            Some((k, names)) if *k == kw && kind == DbKind::Postgres => names.push(name),
+            _ => stmts.push((kw, vec![name])),
+        }
+    }
+    Ok(stmts
+        .into_iter()
+        .map(|(kw, names)| format!("DROP {kw} {}{};", if kw == "SEQUENCE" && tables { "IF EXISTS " } else { "" }, names.join(", ")))
         .collect())
 }
 
@@ -475,12 +498,31 @@ impl AppState {
         rename_sql(self.kind_of(&id)?, &what, &schema, &old, &new)
     }
 
-    pub fn drop_ddl(&self, id: String, objects: Vec<DropTarget>) -> AppResult<Vec<String>> {
-        drop_sql(self.kind_of(&id)?, &objects)
+    /// id: the objects' database (the target), whose catalog says which of them depend on which
+    pub async fn drop_ddl(&self, id: String, objects: Vec<DropTarget>) -> AppResult<Vec<String>> {
+        let kind = self.kind_of(&id)?;
+        let mut deps = vec![];
+        // Only where one statement per kind can't drop them (Backend::drop_deps): otherwise no round trip to the server
+        let n = |ks: &[&str]| objects.iter().filter(|o| ks.contains(&o.kind.as_str())).count();
+        let ask = match kind {
+            DbKind::Postgres => n(&["view"]) > 0 && n(&["matview"]) > 0,
+            DbKind::Mysql => n(&["table"]) > 1,
+            _ => false,
+        };
+        if ask {
+            let mut schemas: Vec<String> = objects.iter().map(|o| o.schema.clone()).collect();
+            schemas.sort();
+            schemas.dedup();
+            let at = |s: &str, n: &str| objects.iter().position(|o| o.schema == s && o.name == n);
+            for [s, n, of_s, of_n] in dispatch!(ensure_pool(self, &id).await?, b => b.drop_deps(&schemas).await)? {
+                deps.extend(at(&s, &n).zip(at(&of_s, &of_n)));
+            }
+        }
+        drop_sql(kind, &objects, &deps)
     }
 
     /// Run the generated DDL: PG in one transaction (nothing changes on failure). CREATE / DROP DATABASE run one by one outside a transaction.
-    /// MySQL applies DDL immediately, so one by one (on failure, report that earlier ones were already applied).
+    /// MySQL applies DDL immediately, so one by one (on failure of one of several, the error lists what was applied and what wasn't run).
     /// → a warning when it ran but the Production log couldn't record it (don't run it again)
     pub async fn run_ddl(&self, id: String, statements: Vec<String>) -> AppResult<Option<String>> {
         let kind = self.kind_of(&id)?;
@@ -495,9 +537,20 @@ impl AppState {
         for (i, s) in statements.iter().enumerate() {
             match self.run_query(id.clone(), s.clone(), Some(1), None).await {
                 Ok(q) => warning = warning.or(q.warning),
-                Err(e) if i > 0 => {
-                    let w = warning.map(|w| format!("\nWarning: {w}")).unwrap_or_default();
-                    return Err(AppError::Msg(format!("{e}\n(The first {i} statement(s) were already applied){w}")));
+                Err(e) if statements.len() > 1 => {
+                    let list = |ss: &[String]| ss.iter().map(|s| format!("{};", s.split_whitespace().collect::<Vec<_>>().join(" ").trim_end_matches(';'))).collect::<Vec<_>>().join(" ");
+                    let mut msg = format!("{e}\n");
+                    if i > 0 {
+                        msg += &format!("Applied: {}\n", list(&statements[..i]));
+                    }
+                    msg += &format!("Failed: {}", list(&statements[i..=i]));
+                    if i + 1 < statements.len() {
+                        msg += &format!("\nNot run: {}", list(&statements[i + 1..]));
+                    }
+                    if let Some(w) = warning {
+                        msg += &format!("\nWarning: {w}");
+                    }
+                    return Err(AppError::Msg(msg));
                 }
                 Err(e) => return Err(e),
             }
@@ -628,7 +681,7 @@ mod tests {
     fn drop_order() {
         let sel = [obj("table", "public", "accounts"), obj("sequence", "public", "s"), obj("table", "public", "Users"), obj("matview", "public", "m"), obj("view", "public", "v_users"), obj("foreign", "public", "f")];
         assert_eq!(
-            drop_sql(DbKind::Postgres, &sel).unwrap(),
+            drop_sql(DbKind::Postgres, &sel, &[]).unwrap(),
             vec![
                 "DROP VIEW public.v_users;",
                 "DROP MATERIALIZED VIEW public.m;",
@@ -638,9 +691,23 @@ mod tests {
             ]
         );
         // One object: the statement it always was
-        assert_eq!(drop_sql(DbKind::Postgres, &[obj("sequence", "public", "s")]).unwrap(), vec!["DROP SEQUENCE public.s;"]);
-        assert_eq!(drop_sql(DbKind::Mysql, &[obj("table", "shop", "b"), obj("view", "shop", "v")]).unwrap(), vec!["DROP VIEW shop.v;", "DROP TABLE shop.b;"]);
-        assert!(drop_sql(DbKind::Postgres, &[obj("table", "public", "a"), obj("key", "0", "k")]).unwrap_err().to_string().contains("not on a key"));
+        assert_eq!(drop_sql(DbKind::Postgres, &[obj("sequence", "public", "s")], &[]).unwrap(), vec!["DROP SEQUENCE public.s;"]);
+        assert!(drop_sql(DbKind::Postgres, &[obj("table", "public", "a"), obj("key", "0", "k")], &[]).unwrap_err().to_string().contains("not on a key"));
+    }
+
+    /// What an object depends on goes after it: a materialized view over a view, a view over that materialized view
+    /// (PostgreSQL); a table referenced by a foreign key, each MySQL object in its own statement
+    #[test]
+    fn drop_dependents_first() {
+        let pg = [obj("view", "public", "v"), obj("view", "public", "top"), obj("matview", "public", "m"), obj("view", "public", "other")];
+        // m reads v, top reads m
+        assert_eq!(drop_sql(DbKind::Postgres, &pg, &[(2, 0), (1, 2)]).unwrap(), vec!["DROP VIEW public.top, public.other;", "DROP MATERIALIZED VIEW public.m;", "DROP VIEW public.v;"]);
+        let my = [obj("table", "shop", "accounts"), obj("view", "shop", "v"), obj("table", "shop", "users"), obj("table", "shop", "z")];
+        // users references accounts
+        assert_eq!(drop_sql(DbKind::Mysql, &my, &[(2, 0)]).unwrap(), vec!["DROP VIEW shop.v;", "DROP TABLE shop.users;", "DROP TABLE shop.accounts;", "DROP TABLE shop.z;"]);
+        // A cycle, or a table that references itself: the selection's order, and the server says what's wrong
+        assert_eq!(drop_sql(DbKind::Mysql, &my[..1], &[(0, 0)]).unwrap(), vec!["DROP TABLE shop.accounts;"]);
+        assert_eq!(drop_sql(DbKind::Mysql, &[obj("table", "s", "a"), obj("table", "s", "b")], &[(0, 1), (1, 0)]).unwrap(), vec!["DROP TABLE s.a;", "DROP TABLE s.b;"]);
     }
 
     #[test]
@@ -740,7 +807,8 @@ mod tests {
         round_trip(DbKind::Postgres, "public").await;
     }
 
-    /// Drop… of a view over a table, and of two tables joined by a foreign key, in the order the explorer lists them: one batch
+    /// Drop… of a view over a table, a materialized view over that view, and two tables joined by a foreign key, in the order the
+    /// explorer lists them: one batch
     #[tokio::test]
     #[ignore]
     async fn pg_drop_dependent_objects() {
@@ -751,8 +819,11 @@ mod tests {
         q("create table qd_drop.accounts (id int primary key)").await.unwrap();
         q("create table qd_drop.users (id int primary key, a int references qd_drop.accounts)").await.unwrap();
         q("create view qd_drop.v_users as select * from qd_drop.users").await.unwrap();
-        let sel = [obj("table", "qd_drop", "accounts"), obj("table", "qd_drop", "users"), obj("view", "qd_drop", "v_users")];
-        st.run_ddl("d".into(), drop_sql(DbKind::Postgres, &sel).unwrap()).await.unwrap();
+        q("create materialized view qd_drop.m as select * from qd_drop.v_users").await.unwrap();
+        let sel = [obj("table", "qd_drop", "accounts"), obj("table", "qd_drop", "users"), obj("view", "qd_drop", "v_users"), obj("matview", "qd_drop", "m")];
+        let sql = st.drop_ddl("d".into(), sel.to_vec()).await.unwrap();
+        assert_eq!(sql, vec!["DROP MATERIALIZED VIEW qd_drop.m;", "DROP VIEW qd_drop.v_users;", "DROP TABLE qd_drop.accounts, qd_drop.users;"]);
+        st.run_ddl("d".into(), sql).await.unwrap();
         let left = q("select count(*) from pg_class where relnamespace = 'qd_drop'::regnamespace").await.unwrap();
         assert_eq!(left.rows[0][0], serde_json::json!(0));
         q("drop schema qd_drop").await.unwrap();
@@ -775,14 +846,44 @@ mod tests {
         q("create table qd_drop.c (id int primary key, b int, foreign key (b) references qd_drop.b (id)) engine=innodb").await.unwrap();
         q("create view qd_drop.v as select * from qd_drop.b").await.unwrap();
         // c (not dropped) still references b
-        let sql = drop_sql(DbKind::Mysql, &[obj("table", "qd_drop", "b"), obj("view", "qd_drop", "v")]).unwrap();
+        let sql = st.drop_ddl("d".into(), vec![obj("table", "qd_drop", "b"), obj("view", "qd_drop", "v")]).await.unwrap();
         let err = st.run_ddl("d".into(), sql).await.unwrap_err().to_string();
-        assert!(err.contains("The first 1 statement(s) were already applied"), "{err}");
+        assert!(err.ends_with("Applied: DROP VIEW qd_drop.v;\nFailed: DROP TABLE qd_drop.b;"), "{err}");
         let log = st.audit_log(None, "qd_drop".into(), 10);
         let entry = |s: &str| log.iter().find(|e| e.sql.starts_with(s)).unwrap_or_else(|| panic!("{s} not logged: {log:?}"));
         assert_eq!(entry("DROP VIEW").error, None);
         assert!(entry("DROP TABLE").error.as_deref().is_some_and(|e| !e.starts_with("Rolled back")), "{log:?}");
         q("drop database qd_drop").await.unwrap();
+    }
+
+    /// Drop… of several MySQL tables: those referenced by another selected table go after it (MySQL 5.7 can't drop them in one
+    /// statement, and drops some before it fails); a failure names what was dropped and what wasn't
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_drop_tables_in_fk_order() {
+        let Some(st) = state(DbKind::Mysql).await else { return };
+        let q = |s: &str| st.run_query("d".into(), s.into(), None, None);
+        let left = || async {
+            let r = q("select cast(table_name as char) from information_schema.tables where table_schema = 'qd_fk' order by table_name").await.unwrap();
+            r.rows.iter().map(|r| r[0].as_str().unwrap().to_string()).collect::<Vec<_>>().join(" ")
+        };
+        q("drop database if exists qd_fk").await.unwrap();
+        q("create database qd_fk").await.unwrap();
+        for t in ["accounts (id int primary key)", "users (id int primary key, a int, foreign key (a) references qd_fk.accounts (id))", "z (id int primary key)", "x (id int primary key)", "keep (id int primary key, x int, foreign key (x) references qd_fk.x (id))"] {
+            q(&format!("create table qd_fk.{t} engine=innodb")).await.unwrap();
+        }
+        let drop = |sel: Vec<DropTarget>| async { st.run_ddl("d".into(), st.drop_ddl("d".into(), sel).await.unwrap()).await };
+        // The parent selected first, in the explorer's order
+        drop(vec![obj("table", "qd_fk", "accounts"), obj("table", "qd_fk", "users"), obj("table", "qd_fk", "z")]).await.unwrap();
+        assert_eq!(left().await, "keep x");
+        // x is still referenced by keep (not selected): z2 goes, x fails, the rest isn't run, and the error says so
+        q("create table qd_fk.z2 (id int primary key) engine=innodb").await.unwrap();
+        q("create table qd_fk.a (id int primary key) engine=innodb").await.unwrap();
+        q("create table qd_fk.b (id int primary key, a int, foreign key (a) references qd_fk.a (id)) engine=innodb").await.unwrap();
+        let err = drop(vec![obj("table", "qd_fk", "z2"), obj("table", "qd_fk", "x"), obj("table", "qd_fk", "a"), obj("table", "qd_fk", "b")]).await.unwrap_err().to_string();
+        assert_eq!(left().await, "a b keep x");
+        assert!(err.contains("Applied: DROP TABLE qd_fk.z2;") && err.contains("Failed: DROP TABLE qd_fk.x;") && err.contains("Not run: DROP TABLE qd_fk.b; DROP TABLE qd_fk.a;"), "{err}");
+        q("drop database qd_fk").await.unwrap();
     }
 
     #[tokio::test]

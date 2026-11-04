@@ -467,6 +467,7 @@ async fn all_scenes() -> Vec<Value> {
     }
     scenes.push(app_scene(&mut h, "Explorer: marked nodes", "m marks nodes (the GUI's ⌘-click): Go to DDL, F4, y, Delete and refresh act on every marked node; m unmarks, Esc clears", 120, 22));
     h.app.run_action(crate::app::Action::DropObject);
+    h.settle().await;
     scenes.push(app_scene(&mut h, "Explorer: drop marked objects", "Delete on marked objects of one database: one confirmation lists every statement (red on a Production source, as for one object)", 120, 22));
     h.app.popup = None;
     h.app.tree.marked.clear();

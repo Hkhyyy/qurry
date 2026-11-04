@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import type { Page } from "@playwright/test";
 import { expect, openApp, tabStrips, test } from "./app";
 
 // Captured from the app as it saves today: two workspaces, same-name tables, a console with SQL, a right split
@@ -36,4 +37,27 @@ test("tab labels catch up once WebAssembly loads after the tabs restored", async
   await expect.poll(() => tabStrips(page)).toEqual(["users | users | console [DEV] shop_app", "users"]);
   release();
   await expect.poll(() => tabStrips(page)).toEqual(["public.users | shop_app.billing.users | console [DEV] shop_app", "shop_app.billing.users"]);
+});
+
+// ── Each workspace keeps its own explorer, the hidden ones mounted ──
+const tree = (page: Page) => page.locator(".ws-explorer.on");
+const row = (page: Page, name: string) => tree(page).getByRole("treeitem", { name, exact: true });
+
+test("the keys act on the shown workspace's selection, not a hidden one's", async ({ page }) => {
+  await page.addInitScript((ws) => localStorage.setItem("mock-ws", ws), fixture);
+  await openApp(page);
+  // Reports: [MySQL] shop's contracts selected
+  await page.getByRole("button", { name: /Reports$/ }).click();
+  await row(page, "contracts").click();
+  await expect(tree(page).locator(".tree-node.selected")).toHaveCount(1);
+  // Default has nothing selected: ⌦ in its explorer asks nothing (not a Drop… of the hidden workspace's contracts)
+  await page.getByRole("button", { name: /Default$/ }).click();
+  await tree(page).locator(".tree").focus();
+  await page.keyboard.press("Delete");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  // Back in Reports, its own selection is what ⌦ drops
+  await page.getByRole("button", { name: /Reports$/ }).click();
+  await tree(page).locator(".tree").focus();
+  await page.keyboard.press("Delete");
+  await expect(page.getByRole("dialog").locator(".ui-detail-text")).toHaveText(["DROP TABLE shop.contracts;"]);
 });
