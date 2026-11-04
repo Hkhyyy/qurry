@@ -181,9 +181,6 @@ jobs:
         # Update bundles are built below and signed in the Sign step of publish (no signing key here)
         run: pnpm tauri build --target "$T" --bundles ${{ matrix.bundles }} --config '{"bundle":{"createUpdaterArtifacts":false}}' -- --locked
 
-      - name: Build TUI and MCP
-        run: cargo build --release --locked --target "$T" -p qurry-tui -p qurry-mcp
-
       - name: Package
         run: |
           # out/ (dist/ is the frontend build output)
@@ -208,17 +205,6 @@ jobs:
               rm -rf "$d"
             fi
           fi
-          mkdir cli
-          cp "target/$T/release/qurry-tui" "target/$T/release/qurry-mcp" cli/
-          if [ "$T" = aarch64-apple-darwin ]; then
-            # Old names dbtool-tui · dbtool-mcp (same binaries) + dbtool-cli_ bundle: so 0.1.x installs can update
-            cp cli/qurry-tui cli/dbtool-tui
-            cp cli/qurry-mcp cli/dbtool-mcp
-            tar -czf "out/qurry-cli_${V}_${T}.tar.gz" -C cli qurry-tui qurry-mcp dbtool-tui dbtool-mcp
-            cp "out/qurry-cli_${V}_${T}.tar.gz" "out/dbtool-cli_${V}_${T}.tar.gz"
-          else
-            tar -czf "out/qurry-cli_${V}_${T}.tar.gz" -C cli qurry-tui qurry-mcp
-          fi
           ls -la out
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -228,8 +214,10 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  # DB driver plugins: built alongside the app (building them separately is a few minutes faster on macOS).
-  # Not bundled in the app; downloaded from this release when a connection is created (verified via the SHA256SUMS signature)
+  # CLI (qurry-tui, qurry-mcp) and DB driver plugins: built alongside the app, which takes longest.
+  # Not in the build job: there the Tauri CLI sets MACOSX_DEPLOYMENT_TARGET for the GUI, so on macOS the CLI build after it
+  #   recompiled every C-built dependency (ring, aws-lc-sys) and all that depends on them, adding ~4 minutes to the slowest job.
+  # Driver plugins are not bundled in the app; downloaded from this release when a connection is created (verified via the SHA256SUMS signature)
   drivers:
     needs: version
     strategy:
@@ -255,7 +243,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          key: drivers-${{ matrix.target }}
+          key: cli-drivers-${{ matrix.target }}
 
       - name: Set version in manifests
         run: |
@@ -270,12 +258,27 @@ jobs:
           for d in $DRIVERS; do args="$args -p qurry-driver-$d"; done
           cargo build --release --locked --target "$T" $args
 
+      # A cargo run of its own (not with the drivers): features are unified per run, so the CLI builds exactly as on its own
+      - name: Build TUI and MCP
+        run: cargo build --release --locked --target "$T" -p qurry-tui -p qurry-mcp
+
       - name: Package
         run: |
           mkdir out
           for d in $DRIVERS; do
             tar -czf "out/qurry-driver-${d}_${V}_${T}.tar.gz" -C "target/$T/release" "qurry-driver-$d"
           done
+          mkdir cli
+          cp "target/$T/release/qurry-tui" "target/$T/release/qurry-mcp" cli/
+          if [ "$T" = aarch64-apple-darwin ]; then
+            # Old names dbtool-tui · dbtool-mcp (same binaries) + dbtool-cli_ bundle: so 0.1.x installs can update
+            cp cli/qurry-tui cli/dbtool-tui
+            cp cli/qurry-mcp cli/dbtool-mcp
+            tar -czf "out/qurry-cli_${V}_${T}.tar.gz" -C cli qurry-tui qurry-mcp dbtool-tui dbtool-mcp
+            cp "out/qurry-cli_${V}_${T}.tar.gz" "out/dbtool-cli_${V}_${T}.tar.gz"
+          else
+            tar -czf "out/qurry-cli_${V}_${T}.tar.gz" -C cli qurry-tui qurry-mcp
+          fi
           ls -la out
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
