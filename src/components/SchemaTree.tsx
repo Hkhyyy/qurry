@@ -1,6 +1,6 @@
 import { connBg, connStripe, useTheme } from "../lib/theme";
 import { createContext, useContext, useEffect, useId, useRef, useState } from "react";
-import { api, ConnectionView, DbKind, DRIVER_MISSING, KIND_LABEL, redisDb, dbVisible, meta, RelationInfo, RoutineInfo, SchemaInfo, schemaVisible, Scope, TableDetail, targetId } from "../lib/api";
+import { api, ConnectionView, DbKind, DRIVER_MISSING, KIND_LABEL, redisDb, dbShown, meta, RelationInfo, RoutineInfo, SchemaInfo, schemaVisible, Scope, TableDetail, targetId } from "../lib/api";
 import { ScopePopup } from "./ScopePopup";
 import { Button, Notice, TreeRow } from "../ui";
 import { invalidateCompletion } from "../lib/completion";
@@ -200,9 +200,7 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
   const defaultDb = conn.kind === "redis" ? redisDb(conn.database) : conn.kind === "sqlite" || conn.kind === "duckdb" ? "main" : conn.database || (conn.kind === "postgres" ? "postgres" : "");
 
   // Single database mode: only the default DB
-  const MY_SYS = ["information_schema", "performance_schema", "mysql", "sys"];
-  const dbShown = (d: string) =>
-    conn.options?.singleDb ? d === defaultDb : (conn.kind !== "mysql" || showSystem || !MY_SYS.includes(d) || d === defaultDb) && dbVisible(conn.scope, d, defaultDb);
+  const shown = (d: string) => dbShown(conn, d, defaultDb, showSystem);
   const loadDbs = (force = false) => {
     if (dbs?.state === "ok" && !force) return;
     setDbs({ state: "loading" });
@@ -273,7 +271,7 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
                   setPopup({ x: e.clientX, y: e.clientY + 10 });
                 }}
               >
-                {dbs.data.filter((d) => dbShown(d)).length}
+                {dbs.data.filter(shown).length}
                 {conn.scope?.databases?.length ? ` of ${dbs.data.length}` : ""}
               </span>
             )}
@@ -286,7 +284,7 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
         <div key={gen}>
           <Status depth={1} load={dbs} kind={conn.kind} conn={conn} onRetry={() => loadDbs(true)} onConnsChanged={onConnsChanged} />
           {dbs?.state === "ok" &&
-            dbs.data.filter((db) => dbShown(db)).map((db) => {
+            dbs.data.filter(shown).map((db) => {
               const dOpen = openDbs.has(db);
               return (
                 <div key={db}>

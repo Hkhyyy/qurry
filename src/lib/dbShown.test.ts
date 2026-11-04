@@ -1,0 +1,23 @@
+import { describe, expect, it } from "vitest";
+import { dbShown, defaultDbOf, type ConnectionView } from "./api";
+
+const conn = (c: Partial<ConnectionView>) => ({ id: "c", name: "c", kind: "postgres", database: "", ...c }) as ConnectionView;
+const shown = (c: ConnectionView, dbs: string[]) => dbs.filter((d) => dbShown(c, d, defaultDbOf(c)));
+
+// The databases the explorer and the DBA report's database picker list
+describe("dbShown", () => {
+  it("PostgreSQL: all, or the shown-database scope; the default is postgres when blank", () => {
+    expect(defaultDbOf(conn({}))).toBe("postgres");
+    expect(shown(conn({}), ["postgres", "shop", "billing"])).toEqual(["postgres", "shop", "billing"]);
+    expect(shown(conn({ database: "shop", scope: { databases: ["billing", "@default"] } }), ["postgres", "shop", "billing"])).toEqual(["shop", "billing"]);
+  });
+  it("MySQL: system schemas hidden, no default schema when blank", () => {
+    const my = conn({ kind: "mysql" });
+    expect(defaultDbOf(my)).toBe("");
+    expect(shown(my, ["information_schema", "mysql", "shop", "sys"])).toEqual(["shop"]);
+    expect(["mysql", "shop"].filter((d) => dbShown(my, d, "", true))).toEqual(["mysql", "shop"]);
+  });
+  it("one fixed database: only the default", () => {
+    expect(shown(conn({ database: "shop", options: { singleDb: true } as ConnectionView["options"] }), ["postgres", "shop", "billing"])).toEqual(["shop"]);
+  });
+});

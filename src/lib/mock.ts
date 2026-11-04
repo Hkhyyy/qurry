@@ -22,6 +22,16 @@ const tls = ((globalThis as any).__mockTls = { allow: 0, runs: 0, saves: 0 });
 const lanCheck = (id: unknown) => {
   if (String(id).split("::")[0] === "lan" && !lan.options.allowPlaintext) throw NEEDS_TLS;
 };
+/** Table Sizes of a report target: the default database's tables are big, the others' small */
+const tableSizes = (id: string) => {
+  const [base, db] = id.split("::");
+  const big = !db || db === conns.find((c) => c.id === base)?.database;
+  return {
+    columns: ["schema", "table", "total", "data", "indexes"].map((name) => ({ name, typeName: "TEXT" })),
+    rows: big ? [["public", "orders", "182 MB", "120 MB", "62 MB"], ["public", "order_items", "41 MB", "30 MB", "11 MB"]] : [["public", "orders", "2 MB", "1 MB", "1 MB"]],
+    rowsAffected: 0, truncated: false, elapsedMs: 5, hasResultSet: true,
+  };
+};
 const result = {
   columns: [
     { name: "id", typeName: "INT8" },
@@ -325,10 +335,12 @@ const handlers: Record<string, (a: any) => unknown> = {
     { id: "roles", title: "Users & Roles", group: "Security", help: "Login roles and their powers. superuser / createrole are the dangerous ones.", actions: [] },
   ]),
   // Story targets: "busy" runs past the report time limit, "flaky" loads once and then its refreshes do, "maria" has no performance_schema.
-  // Any target: "roles" is denied (app isn't a superuser), "table_sizes" takes 2 s (so a switch shows its loading state)
+  // Any target: "roles" is denied (app isn't a superuser), "table_sizes" takes 2 s (so a switch shows its loading state) and its sizes
+  // depend on the database it ran on. window.__mockDbaTargets lists the targets the reports ran on
   dba_report: (a: any) =>
+    (((globalThis as any).__mockDbaTargets ??= []).push(a.id),
     a.report === "table_sizes"
-      ? new Promise((ok) => setTimeout(() => ok(handlers.dba_report({ ...a, report: "sessions" })), 2000))
+      ? new Promise((ok) => setTimeout(() => ok(tableSizes(a.id)), 2000))
       : a.report === "roles"
       ? Promise.reject("permission denied for table pg_authid")
       : a.id === "busy" || (a.id === "flaky" && flakyLoads++ > 0)
@@ -362,7 +374,7 @@ const handlers: Record<string, (a: any) => unknown> = {
             [4201, "dev", "shop_app", "idle", 0, "", null, "SELECT 1"],
           ],
           rowsAffected: 0, truncated: false, elapsedMs: 3, hasResultSet: true,
-        },
+        }),
   kill_session: () => true,
   erd: () => {
     const c = (name: string, dataType: string, pk = false, nullable = true) => ({ name, dataType, pk, nullable: pk ? false : nullable });

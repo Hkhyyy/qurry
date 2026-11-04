@@ -564,7 +564,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             let state = if d.running { " · loading…" } else if live && d.auto { " · auto 3s" } else { "" };
             let text = d.info.as_ref().map(|i| i.help).unwrap_or("");
             f.render_widget(Paragraph::new(Line::from(vec![Span::styled(format!(" {}{state} ", d.info.as_ref().map(|i| i.title).unwrap_or("")), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)), Span::styled(text, Style::default().fg(DIM))])), help);
-            let title = format!(" {db} — {} rows ", d.grid.as_ref().map(|g| g.rows()).unwrap_or(0));
+            let title = format!(" {} — {} rows ", crate::dba::db_label(&db), d.grid.as_ref().map(|g| g.rows()).unwrap_or(0));
             // Where the grid is drawn (mouse hits): below the message when a refresh failed
             let mut area = grid;
             match (&mut d.grid, &d.error) {
@@ -731,7 +731,7 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
                 Some(TabKind::Text(_)) => vec![fixed("y", "copy"), fixed("Esc", "explorer")],
                 Some(TabKind::Dba(d)) => {
                     let has = |t: Option<bool>| d.info.as_ref().is_some_and(|i| i.actions.iter().any(|a| matches!(a, qurry_core::dba::Action::Kill { terminate, .. } if t.is_none_or(|t| *terminate == t))));
-                    let mut v = vec![fixed("r", "refresh"), fixed("p", "reports")];
+                    let mut v = vec![fixed("r", "refresh"), fixed("p", "reports"), fixed("d", "database")];
                     if has(None) {
                         v.push(fixed("c", "cancel query"));
                         if has(Some(true)) {

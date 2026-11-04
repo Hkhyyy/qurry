@@ -1,4 +1,4 @@
-//! DBA report tab (⌃K › Database Admin…): sessions and locks reload every 3 seconds; c cancel query · K kill session · Enter query to console · g generate SQL
+//! DBA report tab (⌃K › Database Admin…): sessions and locks reload every 3 seconds; c cancel query · K kill session · Enter query to console · g generate SQL · d database
 use crate::app::{App, DbaTab, Focus, PAction, PItem, Palette, Popup, Tab, TabKind};
 use crate::grid::Grid;
 use crate::tree::NodeKind;
@@ -307,6 +307,53 @@ impl App {
         );
     }
 
+    /// d: run the report on another database, listed as the explorer lists them (one fixed database can't change)
+    pub fn dba_pick_db(&mut self) {
+        let Some(t) = self.tabs.get(self.active) else { return };
+        let (id, conn) = (t.id, t.conn.clone());
+        if self.conn(&conn).is_some_and(|c| c.config.options.single_db) {
+            self.status = format!("This data source has one database: {}", db_label(&t.db));
+            return;
+        }
+        let st = self.state.clone();
+        self.status = "Reading databases…".into();
+        self.spawn(async move { st.list_databases(conn).await.map_err(|e| e.to_string()) }, move |a, r| match r {
+            Ok(dbs) => a.dba_db_choices(id, dbs),
+            Err(e) => a.status = format!("Databases: {e}"),
+        });
+    }
+
+    /// The database chooser of a DBA tab: the shown databases (scope, system ones hidden), the current one selected
+    pub(crate) fn dba_db_choices(&mut self, id: u64, dbs: Vec<String>) {
+        let Some(t) = self.tabs.iter().find(|t| t.id == id) else { return };
+        let Some(cfg) = self.conn(&t.conn).map(|c| c.config.clone()) else { return };
+        let def = sql::default_db(&cfg);
+        let mut dbs = qurry_core::app::visible_dbs(&cfg, dbs, &def);
+        // MySQL without a default schema: back to all schemas
+        if def.is_empty() {
+            dbs.insert(0, String::new());
+        }
+        let sel = dbs.iter().position(|d| *d == t.db).unwrap_or(0);
+        let items = dbs.into_iter().map(|d| PItem { label: db_label(&d).into(), hint: if d == t.db { "current".into() } else { String::new() }, action: PAction::Pick(d) }).collect();
+        self.status.clear();
+        self.flow = Some(crate::migrate::Flow::DbaDb(id));
+        self.open_after_notices(Popup::Palette(Palette { title: "Run the report on which database?".into(), input: TextArea::default(), items, sel, loading: 0, cache: Default::default() }));
+    }
+
+    /// The picked database: the tab runs its report there from now on (auto-refresh included)
+    pub fn dba_switch_db(&mut self, id: u64, db: String) {
+        let Some(t) = self.tab_mut(id).filter(|t| t.db != db) else { return };
+        t.target = sql::target_id(&t.conn, Some(&db));
+        t.db = db;
+        if let TabKind::Dba(d) = &mut t.kind {
+            d.grid = None;
+            d.loaded = None;
+            d.gone = None;
+            d.error = None;
+        }
+        self.dba_reload(id);
+    }
+
     /// a: toggle auto reload
     pub fn dba_toggle_auto(&mut self) {
         if let Some(Tab { kind: TabKind::Dba(d), .. }) = self.tabs.get_mut(self.active) {
@@ -314,4 +361,9 @@ impl App {
             self.status = format!("Auto-refresh {}", if d.auto { "on (3s)" } else { "off" });
         }
     }
+}
+
+/// How a report's database reads in the title and the picker ("" = MySQL without a default schema)
+pub(crate) fn db_label(db: &str) -> &str {
+    if db.is_empty() { "(all schemas)" } else { db }
 }

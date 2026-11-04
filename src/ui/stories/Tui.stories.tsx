@@ -30,6 +30,7 @@ export const ScreenGenerateData = { ...by("Generate test data"), name: "Screen �
 export const ScreenCopyRows = { ...by("Copy related rows"), name: "Screen · Copy related rows" };
 export const ScreenDbaStale = { ...by("Database Admin: refresh failed"), name: "Screen · Database Admin: refresh failed" };
 export const ScreenDbaError = { ...by("Database Admin: report error"), name: "Screen · Database Admin: report error" };
+export const ScreenDbaDatabase = { ...by("Database Admin: database"), name: "Screen · Database Admin: database" };
 export const ScreenRedis ={ ...by("Redis"), name: "Screen · Redis" };
 export const ScreenMysqlBackupDefiners = { ...by("MySQL backup: DEFINER= question"), name: "Screen · MySQL backup: DEFINER= question" };
 export const ScreenTooSmall = { ...by("Terminal too small"), name: "Screen · Terminal too small" };

@@ -239,6 +239,7 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | `c · K` | Cancel the query · terminate the session of the selected row (asks first) |
 | `Enter · g` | Open the row's query in a console · generate SQL from the row (DROP INDEX, VACUUM, REVOKE…) |
 | `p` | Pick another report |
+| `d` | Run the report on another database (MySQL: schema); the grid's title names it |
 
 ## Redis browser (Medis style)
 

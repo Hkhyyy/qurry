@@ -8,6 +8,8 @@ Admin reports, table structure, diagrams, schema and data comparison, migrations
 
 GUI: right-click a data source › **Tools** › Sessions & Locks, Slow Queries, … — TUI: `⌃k` › **Database Admin…**
 
+The report runs on one database, shown next to the report select (TUI: in the grid's title). Opened from a database it's that one; opened from the data source it's the source's default database (`postgres` when none is set). Pick another there (TUI: `d`) to rerun the report on it; auto-refresh stays on that database. The list is the explorer's (Manage Shown Schemas applies); for MySQL it lists schemas, with *(all schemas)* when the source has no default one, and a source set to one database shows it without a choice. Sessions, Lock Waits and Users & Roles show the whole server whichever database is picked; if the picked database can't be connected to, the report says so — pick another one.
+
 | Group | Reports |
 |---|---|
 | Activity | **Sessions** (who blocks whom, query / transaction age; refreshes every 3 s) · **Lock Waits** — right-click / `c` cancel the query, `K` terminate the session |

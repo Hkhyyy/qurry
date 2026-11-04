@@ -16,6 +16,13 @@ export function DbaReport(p: {
   readOnly: boolean;
   dialect: Dialect;
   visible: boolean;
+  /** The database the report runs on ("" = MySQL without a default schema: all schemas) and the others it can run on */
+  database: string;
+  dbList: string[];
+  /** The data source has one fixed database: shown, not changeable */
+  fixedDb: boolean;
+  onLoadDbs: () => void;
+  onDatabase: (db: string) => void;
   onReport: (id: string, title: string) => void;
   onOpenConsole: (sql: string) => void;
   onStatus: (s: string) => void;
@@ -112,7 +119,7 @@ export function DbaReport(p: {
   return (
     <div className="dba">
       <Toolbar className="dba-bar">
-        <Select value={p.report} onChange={(e) => p.onReport(e.target.value, list.find((r) => r.id === e.target.value)?.title ?? e.target.value)}>
+        <Select className="dba-report" value={p.report} onChange={(e) => p.onReport(e.target.value, list.find((r) => r.id === e.target.value)?.title ?? e.target.value)}>
           {groups.map(([g, rs]) => (
             <optgroup key={g} label={g}>
               {rs.map((r) => (
@@ -121,6 +128,11 @@ export function DbaReport(p: {
                 </option>
               ))}
             </optgroup>
+          ))}
+        </Select>
+        <Select className="dba-db" value={p.database} onFocus={p.onLoadDbs} onMouseDown={p.onLoadDbs} onChange={(e) => p.onDatabase(e.target.value)} disabled={p.fixedDb} title={p.fixedDb ? "This data source has one database" : "Database the report runs on"}>
+          {[...new Set([p.database, ...p.dbList])].map((d) => (
+            <option key={d} value={d}>{d || "(all schemas)"}</option>
           ))}
         </Select>
         <Button onClick={load} disabled={running}>
