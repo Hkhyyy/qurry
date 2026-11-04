@@ -607,7 +607,8 @@ html, body, #root, * { overscroll-behavior: none; }
 /* DBA reports */
 .dba { display: flex; flex-direction: column; height: 100%; }
 .dba-bar { gap: var(--ui-sp-3); }
-.dba-bar select { min-width: 220px; }
+.dba-bar .dba-report { min-width: 220px; }
+.dba-bar .dba-db { min-width: 140px; max-width: 240px; }
 .dba-auto { display: flex; gap: 4px; align-items: center; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .dba-help { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dba-hint { font-size: 11px; padding: 2px 10px; }

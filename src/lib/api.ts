@@ -597,6 +597,14 @@ export function dbVisible(scope: Scope | undefined, db: string, defaultDb: strin
   return d.includes(SCOPE_ALL) || d.includes(db) || (d.includes(SCOPE_DEFAULT) && db === defaultDb);
 }
 
+/** The database a target without "::db" connects to (PostgreSQL: postgres when blank; MySQL: none, all schemas) */
+export const defaultDbOf = (c: ConnectionView) => c.database || (c.kind === "postgres" ? "postgres" : "");
+
+const MY_SYS = ["information_schema", "performance_schema", "mysql", "sys"];
+/** A database the explorer lists: one fixed database, or the shown-database scope (MySQL system schemas only with showSystem) */
+export const dbShown = (c: ConnectionView, d: string, defaultDb: string, showSystem = false) =>
+  c.options?.singleDb ? d === defaultDb : (c.kind !== "mysql" || showSystem || !MY_SYS.includes(d) || d === defaultDb) && dbVisible(c.scope, d, defaultDb);
+
 export function schemaVisible(scope: Scope | undefined, db: string, schema: string, isSystem: boolean, showSystem: boolean) {
   const s = scope?.schemas?.[db];
   if (!s || s.length === 0 || s.includes(SCOPE_ALL)) return showSystem || !isSystem;

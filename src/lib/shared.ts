@@ -134,6 +134,8 @@ const api = {
   commitFailedTitle: (msg: string): string => wasm.commitFailedTitle(msg),
   /** The result grid's line when loading more rows failed (qurry_shared::errors::more_rows_failed, the TUI's words) */
   moreRowsFailed: (msg: string): string => wasm.moreRowsFailed(msg),
+  /** The DBA report's database picker when the databases can't be listed (qurry_shared::errors::db_list_failed, the TUI's words) */
+  dbListFailed: (msg: string): string => wasm.dbListFailed(msg),
   /** Result word of a Production log entry ("outcome unknown", "failed", "committed" …), or undefined when its rows say it */
   auditStatus: (started: boolean, sql: string, failed: boolean): string | undefined => wasm.auditStatus(started, sql, failed),
   /** The data source form's hint for a local Host with AWS SSM, or undefined (qurry_shared::errors::ssm_local_host, the TUI's words) */

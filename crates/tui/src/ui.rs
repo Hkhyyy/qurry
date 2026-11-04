@@ -578,7 +578,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             let state = if d.running { " · loading…" } else if live && d.auto { " · auto 3s" } else { "" };
             let text = d.info.as_ref().map(|i| i.help).unwrap_or("");
             f.render_widget(Paragraph::new(Line::from(vec![Span::styled(format!(" {}{state} ", d.info.as_ref().map(|i| i.title).unwrap_or("")), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)), Span::styled(text, Style::default().fg(DIM))])), help);
-            let title = format!(" {db} — {} rows ", d.grid.as_ref().map(|g| g.rows()).unwrap_or(0));
+            let title = format!(" {} — {} rows ", crate::dba::db_label(&db), d.grid.as_ref().map(|g| g.rows()).unwrap_or(0));
             // Where the grid is drawn (mouse hits): below the message when a refresh failed
             let mut area = grid;
             match (&mut d.grid, &d.error) {
@@ -777,7 +777,7 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
                         }
                         v.push(fixed("a", "auto"));
                     }
-                    v.extend([fixed("Enter", "query→console"), fixed("g", "SQL"), fixed("y", "copy")]);
+                    v.extend([fixed("Enter", "query→console"), fixed("g", "SQL"), fixed("y", "copy"), fixed("d", "database")]);
                     v
                 }
                 _ => vec![fixed("s", "sort"), fixed("y", "copy"), grid(A::ValueEditor, "value"), grid(A::ExportCsv, "export"), fixed("Esc", "editor")],

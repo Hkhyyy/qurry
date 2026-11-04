@@ -31,6 +31,12 @@ pub fn more_rows_failed(msg: &str) -> String {
     format!("Couldn't load more rows: {}", msg.trim())
 }
 
+/// The DBA report's database picker couldn't list the databases (GUI and TUI): it lists through the report's database, or the
+/// source's default one, so the way out is a default database the account can connect to
+pub fn db_list_failed(msg: &str) -> String {
+    format!("Couldn't list the databases: {}\nSet a default database you can connect to (GUI: Data Source Properties › General › Database · TUI: the data source form's Database field).", msg.trim())
+}
+
 /// With AWS SSM the instance connects to Host:Port, so they are the database as seen from it
 const SSM_HOST_PORT: &str = "are the database as seen from the instance (e.g. an RDS endpoint and 5432), not a local port";
 

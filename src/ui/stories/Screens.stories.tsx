@@ -391,11 +391,20 @@ export const DdlStructureError: S = {
   render: () => <Frame h={240}><TableStructureView target="dev" schema="public" table="users" visible onShowSql={noop} /></Frame>,
 };
 export const Diagram: S = { name: "Diagram (ERD)", render: () => <Frame h={600}><ErdView target="dev" schemas={["public"]} visible onOpenTable={noop} onStatus={noop} /></Frame> };
+/** The toolbar's database picker: [PROD] shop_app's shown databases, preselected on its default */
+const dbaDb = { database: "shop_app", loadDbs: async () => ["postgres", "shop_app", "shop_app_test"], fixedDb: false, onDatabase: noop };
+/** Picking a database reruns the report there (the mock's Table Sizes names the database it ran on) */
+function DbaPicker() {
+  const [db, setDb] = useState("shop_app");
+  return (
+    <DbaReport target={db === "shop_app" ? "prod" : `prod::${db}`} connName="[PROD] shop_app" report="table_sizes" readOnly={false} dialect={dialectOf("postgres")} visible {...dbaDb} database={db} onDatabase={setDb} onReport={noop} onOpenConsole={noop} onStatus={noop} />
+  );
+}
 export const Dba: S = {
   name: "Database Admin",
   render: () => (
     <Frame h={600}>
-      <DbaReport target="prod" connName="[PROD] shop_app" report="sessions" readOnly={false} dialect={dialectOf("postgres")} visible onReport={noop} onOpenConsole={noop} onStatus={noop} />
+      <DbaReport target="prod" connName="[PROD] shop_app" report="sessions" readOnly={false} dialect={dialectOf("postgres")} visible {...dbaDb} onReport={noop} onOpenConsole={noop} onStatus={noop} />
     </Frame>
   ),
 };
@@ -403,7 +412,7 @@ export const DbaSlowQueries: S = {
   name: "Database Admin: Slow Queries",
   render: () => (
     <Frame h={600}>
-      <DbaReport target="prod" connName="[PROD] shop_app" report="slow_queries" readOnly={false} dialect={dialectOf("postgres")} visible onReport={noop} onOpenConsole={noop} onStatus={noop} />
+      <DbaReport target="prod" connName="[PROD] shop_app" report="slow_queries" readOnly={false} dialect={dialectOf("postgres")} visible {...dbaDb} onReport={noop} onOpenConsole={noop} onStatus={noop} />
     </Frame>
   ),
 };
@@ -411,7 +420,23 @@ export const DbaUnusedIndexes: S = {
   name: "Database Admin: Unused Indexes",
   render: () => (
     <Frame h={600}>
-      <DbaReport target="prod" connName="[PROD] shop_app" report="unused_indexes" readOnly={false} dialect={dialectOf("postgres")} visible onReport={noop} onOpenConsole={noop} onStatus={noop} />
+      <DbaReport target="prod" connName="[PROD] shop_app" report="unused_indexes" readOnly={false} dialect={dialectOf("postgres")} visible {...dbaDb} onReport={noop} onOpenConsole={noop} onStatus={noop} />
+    </Frame>
+  ),
+};
+export const DbaDatabase: S = {
+  name: "Database Admin: database picker",
+  render: () => (
+    <Frame h={600}>
+      <div style={{ display: "grid", gridTemplateRows: "1fr 1fr 1fr 1fr", height: "100%" }}>
+        <DbaPicker />
+        {/* MySQL without a default schema: all schemas, or one picked */}
+        <DbaReport target="my" connName="[MySQL] shop" report="slow_queries" readOnly={false} dialect={dialectOf("mysql")} visible database="" loadDbs={async () => ["", "shop", "shop_archive"]} fixedDb={false} onDatabase={noop} onReport={noop} onOpenConsole={noop} onStatus={noop} />
+        {/* The account can't connect to the default database, so the list can't be read: open the picker for the way out */}
+        <DbaReport target="prod" connName="[PROD] shop_app" report="sessions" readOnly={false} dialect={dialectOf("postgres")} visible database="shop_app" loadDbs={() => Promise.reject('permission denied for database "shop_app"')} fixedDb={false} onDatabase={noop} onReport={noop} onOpenConsole={noop} onStatus={noop} />
+        {/* One fixed database: shown, read-only */}
+        <DbaReport target="prod" connName="[PROD] shop_app" report="sessions" readOnly={false} dialect={dialectOf("postgres")} visible database="shop_app" loadDbs={async () => []} fixedDb onDatabase={noop} onReport={noop} onOpenConsole={noop} onStatus={noop} />
+      </div>
     </Frame>
   ),
 };
@@ -420,8 +445,8 @@ export const DbaError: S = {
   render: () => (
     <Frame h={600}>
       <div style={{ display: "grid", gridTemplateRows: "1fr 1fr", height: "100%" }}>
-        <DbaReport target="busy" connName="[PROD] shop_app" report="sessions" readOnly={false} dialect={dialectOf("postgres")} visible onReport={noop} onOpenConsole={noop} onStatus={noop} />
-        <DbaReport target="maria" connName="[MariaDB] shop" report="slow_queries" readOnly={false} dialect={dialectOf("mysql")} visible onReport={noop} onOpenConsole={noop} onStatus={noop} />
+        <DbaReport target="busy" connName="[PROD] shop_app" report="sessions" readOnly={false} dialect={dialectOf("postgres")} visible {...dbaDb} onReport={noop} onOpenConsole={noop} onStatus={noop} />
+        <DbaReport target="maria" connName="[MariaDB] shop" report="slow_queries" readOnly={false} dialect={dialectOf("mysql")} visible {...dbaDb} onReport={noop} onOpenConsole={noop} onStatus={noop} />
       </div>
     </Frame>
   ),
@@ -430,7 +455,7 @@ export const DbaStale: S = {
   name: "Database Admin: refresh failed",
   render: () => (
     <Frame h={600}>
-      <DbaReport target="flaky" connName="[PROD] shop_app" report="sessions" readOnly={false} dialect={dialectOf("postgres")} visible onReport={noop} onOpenConsole={noop} onStatus={noop} />
+      <DbaReport target="flaky" connName="[PROD] shop_app" report="sessions" readOnly={false} dialect={dialectOf("postgres")} visible {...dbaDb} onReport={noop} onOpenConsole={noop} onStatus={noop} />
     </Frame>
   ),
 };

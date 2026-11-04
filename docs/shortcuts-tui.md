@@ -248,6 +248,7 @@ The per-screen keys in the tables after the commands stay fixed: they move, open
 | `c · K` | Cancel the query · terminate the session of the selected row (asks first) |
 | `Enter · g` | Open the row's query in a console · generate SQL from the row (DROP INDEX, VACUUM, REVOKE…) |
 | `p` | Pick another report |
+| `d` | Run the report on another database (MySQL: schema); the grid's title names it |
 
 ## Redis browser (Medis style)
 

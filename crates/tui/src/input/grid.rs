@@ -33,6 +33,7 @@ pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
             KeyCode::Enter => app.dba_actions(true),
             KeyCode::Char('g') => app.dba_actions(false),
             KeyCode::Char('p') => app.dba_palette(),
+            KeyCode::Char('d') => app.dba_pick_db(),
             KeyCode::Esc => app.focus = Focus::Tree,
             _ => {
                 // Moving selects a new row (instead of the vanished session)
@@ -497,6 +498,87 @@ mod tests {
         assert!(s.contains("cancel query") && !s.contains("terminate"), "{s}");
         h.key("c");
         assert!(matches!(&h.app.popup, Some(crate::app::Popup::Confirm { text, .. }) if text.contains("Cancel the query of session 77")));
+    }
+
+    /// d: the DBA tab's database chooser lists the shown databases (scope, MySQL system schemas hidden), picking one reruns the report
+    /// there and keeps auto-refresh (core: a database it can't connect to says so). One fixed database doesn't change
+    #[tokio::test]
+    async fn dba_database_picker() {
+        let mut h = Harness::new().await;
+        let save = |h: &mut Harness, v: serde_json::Value| {
+            h.app.state.store.save(&serde_json::from_value(v).unwrap()).unwrap();
+            h.app.reload_conns();
+        };
+        save(&mut h, serde_json::json!({ "id": "c1", "name": "pg", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "shop", "scope": { "databases": ["shop", "billing"] } }));
+        save(&mut h, serde_json::json!({ "id": "c2", "name": "my", "kind": "mysql", "host": "127.0.0.1", "port": 1, "user": "u", "database": "" }));
+        h.settle().await;
+        let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
+        let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: None, loaded: None, error: None, running: false, run: 0, auto: true };
+        let id = h.app.push_tab("c1", "shop".into(), "Sessions".into(), TabKind::Dba(d));
+        h.app.focus = crate::app::Focus::Grid;
+        let picker = |h: &Harness| match &h.app.popup {
+            Some(crate::app::Popup::Palette(p)) => (p.items.iter().map(|i| (i.label.clone(), i.hint.clone())).collect::<Vec<_>>(), p.sel),
+            _ => panic!("no chooser"),
+        };
+        h.app.dba_db_choices(id, ["postgres", "shop", "billing", "analytics"].map(String::from).to_vec());
+        assert_eq!(picker(&h), (vec![("shop".into(), "current".into()), ("billing".into(), String::new())], 0));
+        assert!(h.screen(120, 24).contains("Run the report on which database?"));
+        h.key("Down");
+        h.key("Enter");
+        let t = &h.app.tabs[h.app.active];
+        assert_eq!((t.db.as_str(), t.target.as_str()), ("billing", "c1::billing"));
+        assert!(matches!(&t.kind, TabKind::Dba(d) if d.auto && d.running && d.run == 1 && d.grid.is_none()));
+        // The hint comes last, so a narrow terminal drops it before c / K / a
+        let s = h.screen(240, 24);
+        assert!(s.contains(" billing — 0 rows") && s.contains("d database"), "{s}");
+
+        // MySQL without a default schema: all schemas first, system schemas hidden
+        let info = qurry_core::dba::reports(qurry_core::store::DbKind::Mysql).into_iter().find(|r| r.id == "slow_queries");
+        let d = crate::app::DbaTab { report: "slow_queries".into(), info, gone: None, grid: None, loaded: None, error: None, running: false, run: 0, auto: true };
+        let my = h.app.push_tab("c2", String::new(), "Slow Queries".into(), TabKind::Dba(d));
+        h.app.dba_db_choices(my, ["mysql", "shop", "sys"].map(String::from).to_vec());
+        assert_eq!(picker(&h), (vec![("(all schemas)".into(), "current".into()), ("shop".into(), String::new())], 0));
+        h.key("Esc");
+        assert!(h.screen(160, 24).contains(" (all schemas) — 0 rows"));
+
+        // A current database the scope hides comes first, so Enter keeps it
+        h.app.activate(h.app.tab_index(id).unwrap());
+        if let Some(t) = h.app.tab_mut(id) {
+            t.db = "analytics".into();
+        }
+        h.app.dba_db_choices(id, ["shop", "billing", "analytics"].map(String::from).to_vec());
+        assert_eq!(picker(&h).0.iter().map(|(l, _)| l.as_str()).collect::<Vec<_>>(), ["analytics", "shop", "billing"]);
+        h.key("Esc");
+
+        // The databases can't be listed (the server hangs up): the status says how to get out
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((s, _)) = l.accept().await {
+                drop(s);
+            }
+        });
+        save(&mut h, serde_json::json!({ "id": "c1", "name": "pg", "kind": "postgres", "host": "127.0.0.1", "port": port, "user": "u", "database": "shop", "scope": { "databases": ["shop", "billing"] } }));
+        h.settle().await;
+        h.app.activate(h.app.tab_index(id).unwrap());
+        h.app.focus = crate::app::Focus::Grid;
+        h.key("d");
+        for _ in 0..50 {
+            h.settle().await;
+            if h.app.status.starts_with("Couldn't") {
+                break;
+            }
+        }
+        assert!(h.app.popup.is_none());
+        assert!(h.app.status.starts_with("Couldn't list the databases: ") && h.app.status.ends_with("TUI: the data source form's Database field)."), "{}", h.app.status);
+
+        save(&mut h, serde_json::json!({ "id": "c1", "name": "pg", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "shop", "options": { "singleDb": true } }));
+        h.settle().await;
+        h.app.activate(h.app.tab_index(id).unwrap());
+        h.app.focus = crate::app::Focus::Grid;
+        h.key("d");
+        assert!(h.app.popup.is_none());
+        assert_eq!(h.app.status, "This data source has one database: analytics");
     }
 
     /// Slow Queries: g lists Explain in Console, which opens a console with the EXPLAIN (a normalized statement gets a note to fill in the values first)

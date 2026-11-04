@@ -68,6 +68,12 @@ pub fn ssm_local_host(host: &str) -> Option<String> {
     qurry_shared::errors::ssm_local_host(host)
 }
 
+/// The DBA report's database picker when the databases can't be listed (the TUI's words)
+#[wasm_bindgen(js_name = dbListFailed)]
+pub fn db_list_failed(msg: &str) -> String {
+    qurry_shared::errors::db_list_failed(msg)
+}
+
 /// The result grid's line when loading more rows failed (the TUI's words)
 #[wasm_bindgen(js_name = moreRowsFailed)]
 pub fn more_rows_failed(msg: &str) -> String {

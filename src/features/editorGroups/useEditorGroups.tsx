@@ -1,6 +1,6 @@
 import { useState, type Dispatch, type SetStateAction } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { api, ConnectionView, dialectOf, meta, targetId } from "../../lib/api";
+import { api, ConnectionView, dbShown, defaultDbOf, dialectOf, meta, targetId } from "../../lib/api";
 import { askText } from "../../lib/dialogs";
 import { leaf, leaves, MAX_PANES, Pane, splitPane } from "../../lib/panes";
 import { connTabVars, type Theme } from "../../lib/theme";
@@ -491,6 +491,7 @@ export function useEditorGroups({
             .filter((t) => t.kind === "dba")
             .map((t) => {
               const c = conns.find((x) => x.id === t.connId);
+              const def = c ? defaultDbOf(c) : "";
               return (
                 <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
                   <DbaReport
@@ -500,6 +501,12 @@ export function useEditorGroups({
                     readOnly={!!c?.readOnly}
                     dialect={dialectOf(c?.kind ?? "postgres")}
                     visible={t.id === ga?.id}
+                    database={t.database ?? def}
+                    // As the explorer lists them, through the report's own database (the account may not connect to the default one);
+                    // MySQL without a default schema can go back to all schemas
+                    loadDbs={() => meta.databases(t.target).then((ds) => [...(def ? [] : [""]), ...ds.filter((d) => c && dbShown(c, d, def))])}
+                    fixedDb={!!c?.options?.singleDb}
+                    onDatabase={(db) => c && patch(t.id, { database: db !== def ? db : undefined, target: targetId(c.id, db !== def ? db : undefined) })}
                     onReport={(id, title) => c && patch(t.id, { dbaReport: id, title: `${title} — ${c.name}` })}
                     onOpenConsole={(sql) => c && openConsole(c, t.database, sql)}
                     onStatus={setStatus}

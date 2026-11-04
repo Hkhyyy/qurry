@@ -517,6 +517,11 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     let d = crate::app::DbaTab { report: "slow_queries".into(), info: info(qurry_core::store::DbKind::Mysql, "slow_queries"), grid: None, loaded: None, error: Some(maria.into()), running: false, run: 0, auto: true, gone: None };
     h.app.push_tab("prod", "rentalpay".into(), "Slow Queries".into(), crate::app::TabKind::Dba(d));
     scenes.push(app_scene(h, "Database Admin: report error", "A report the server can't run: what to turn on, then the server's error", 120, 22));
+    // d: the database the report runs on (the grid's title names it)
+    let id = h.app.tabs[h.app.active].id;
+    h.app.dba_db_choices(id, ["postgres", "rentalpay", "rentalpay_archive"].map(String::from).to_vec());
+    scenes.push(app_scene(h, "Database Admin: database", "d: the shown databases, the current one selected; picking one reruns the report there", 120, 22));
+    h.app.popup = None;
     for _ in 0..2 {
         h.app.close_tab_now(h.app.active);
     }
