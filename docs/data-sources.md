@@ -8,7 +8,7 @@ The databases Qurry works with, how to connect to them (SSH, AWS SSM, SSL, optio
 
 | Database | Features |
 |---|---|
-| PostgreSQL | Explorer tree (databases, schemas, tables, views, sequences, routines), query console (server-side cursor paging, cancel, manual transactions), data editing, explain plan, DDL, full-text search |
+| PostgreSQL | Explorer tree (databases, schemas, tables, views, sequences, routines), query console (server-side cursor paging, cancel, manual transactions), data editing, explain plan, DDL, full-text search. `infinity` / `-infinity` dates and timestamps show as such, and arrays of them show their values |
 | MySQL / MariaDB | Same as above. A MySQL database is its own schema, so tables appear directly under the database |
 | Redis | Medis-style browser (key list with type and TTL, per-type value editor), redis-cli style terminal, **Standalone / Sentinel / Cluster** |
 
@@ -38,6 +38,8 @@ Nothing extra is installed up front. Pick one of these types for a data source a
 The data source test shows the server version and warns when it is older than the versions Qurry is tested with (PostgreSQL 12, MySQL 5.7, MariaDB 10.5, SQL Server 2017, MongoDB 5, ClickHouse 22, Oracle 19c — CI runs against these). Read-only data sources are enforced for drivers too: MongoDB runs only `find` / `aggregate` (without `$out` / `$merge`) / `count` / `distinct`, vector databases only `GET` and search requests.
 
 Each data source can have a color that tints its tree and marks its tabs (handy for telling production apart). Besides the presets, the rainbow swatch opens the system color picker — on macOS its eyedropper picks any pixel on screen, e.g. the color you used in DataGrip — or type a hex value next to it. The TUI cycles through the presets and keeps a custom color as is.
+
+The active tab stands out: it takes the editor's background (a colored data source's tab its full color), bold text and an accent bar (gray in a split pane that doesn't have focus); the other tabs keep the stripe and a fainter tint. Tabs, the Switcher, Recent Files and Search Everywhere show the same icon as the object's row in the explorer, and a DDL tab adds a small DDL mark to its object's icon (a DDL tab saved by an older version shows the generic DDL icon until it is reopened). The TUI uses the tree's glyphs in the tab bar, Recent Tabs (`⌃e`) and the `⌃p` search, with `≡` after a DDL tab's glyph; for how its active tab looks, see [TUI in your terminal](tui.md#colors).
 
 ---
 

@@ -40,7 +40,7 @@ MySQL 백업에는 `SET @@GLOBAL.GTID_PURGED` 를 넣지 않아서 (`--set-gtid-
 
 ## 테이블 구조 (DDL 탭)
 
-테이블에서 **Go to DDL** (`⌘b`, TUI `⌃b`) 을 하면 SQL 이 열립니다. 탭의 **SQL | Structure** 전환 (포커스가 있으면 `← →`, TUI: `v`) 은 같은 테이블을 읽기 전용 표로 보여 줍니다: 컬럼 (이름, 타입, NULL 허용, 기본값, 설명, PK 표시), 키와 제약, 인덱스와 그 컬럼, 양쪽 방향의 외래 키 (이 테이블이 참조하는 것과 이 테이블을 참조하는 테이블, ON UPDATE / ON DELETE 포함), 트리거, 테이블 옵션과 설명 (PostgreSQL: owner, tablespace, storage parameter, partition key, parent; MySQL: engine, charset, collation, row format). 새 DDL 탭은 마지막에 쓴 보기로 열리고 (기본은 SQL), 그 뒤로는 탭마다 자기 보기를 유지합니다. 툴바의 **Reload** 아이콘 (TUI `r`) 은 탭이 보여 주는 것을 다시 읽습니다 (예: Modify Table… 다음): SQL 보기에서는 DDL (뷰, 함수 등 모든 객체), Structure 보기에서는 구조.
+테이블에서 **Go to DDL** (`⌘b`, TUI `⌃b`) 을 하면 SQL 이 열립니다. 탭의 **SQL | Structure** 전환 (포커스가 있으면 `← →`, TUI: `v`) 은 같은 테이블을 읽기 전용 표로 보여 줍니다: 컬럼 (이름, 타입, NULL 허용, 기본값, 설명, PK 표시), 키와 제약, 인덱스와 그 컬럼, 양쪽 방향의 외래 키 (이 테이블이 참조하는 것과 이 테이블을 참조하는 테이블, ON UPDATE / ON DELETE 포함), 트리거, 테이블 옵션과 설명 (PostgreSQL: owner, tablespace, storage parameter, partition key, parent; MySQL: engine, charset, collation, row format). 새 DDL 탭은 마지막에 쓴 보기로 열리고 (기본은 SQL), 그 뒤로는 탭마다 자기 보기를 유지합니다. 툴바의 **Reload** 아이콘 (TUI `r`) 은 탭이 보여 주는 것을 다시 읽습니다 (예: Modify Table… 다음): SQL 보기에서는 DDL (뷰, 함수 등 모든 객체), Structure 보기에서는 구조. 예전 버전이 저장한 DDL 탭 가운데 어느 객체인지 모르는 탭은 다시 읽을 수 없습니다: 아이콘이 흐리게 바뀌고 "Reopen the DDL to reload" 라고 나옵니다 (TUI: `r` 을 누르면 상태 줄에 나옴).
 - PostgreSQL 과 MySQL 은 모든 칸을 채웁니다. 다른 Data Source (드라이버 플러그인) 는 컬럼 · 키 · 인덱스를 보여 주고, 나머지는 "Not available for this data source" 라고 알려 줍니다.
 - MySQL 은 계정에 권한이 있는 참조 테이블과 트리거만 보여 주므로, MySQL 에서 Referenced by 나 Triggers 가 비어 있으면 "None" 대신 "None visible to this account" 라고 표시합니다.
 - 불러오기에 실패하면 이유를 보여 줍니다: **Retry** (TUI `r`), 또는 **Show SQL** (TUI `v`) — SQL 보기에는 전체 DDL 이 그대로 있습니다.
@@ -49,7 +49,7 @@ MySQL 백업에는 `SET @@GLOBAL.GTID_PURGED` 를 넣지 않아서 (`--set-gtid-
 ## 객체 만들기 · 고치기 (PostgreSQL, MySQL)
 
 DataGrip 처럼: 우클릭 › **New ▸** Table… / View… / Materialized View… / Sequence… / Schema… / Database…, 테이블 › **Modify Table…** (`⌘F6`), **Rename…** (`⇧F6`). TUI: `⌃k` › New Table… / Modify Table… (`⌃F6`) / New View… / New Schema… / New Database… / New Sequence… / Rename… (`⇧F6`).
-- 테이블 디자이너는 컬럼 (이름, 타입, NOT NULL, 기본값, 자동 번호 / identity, PK, 설명), 인덱스, 외래 키 (ON DELETE / ON UPDATE) 를 고칩니다. 고치는 동안 실행될 SQL 이 바로 보입니다: 새 테이블은 `CREATE TABLE`, 바꾸면 `ALTER` 문장들. 이름을 바꾼 컬럼은 키 · 인덱스 · 외래 키가 그대로 따라갑니다.
+- 테이블 디자이너는 컬럼 (이름, 타입, NOT NULL, 기본값, 자동 번호 / identity, PK, 설명), 인덱스, 외래 키 (ON DELETE / ON UPDATE) 를 고칩니다. 고치는 동안 실행될 SQL 이 바로 보입니다: 새 테이블은 `CREATE TABLE`, 바꾸면 `ALTER` 문장들. 이름을 바꾼 컬럼은 키 · 인덱스 · 외래 키가 그대로 따라갑니다. 컬럼 타입 칸은 Data Source 의 타입을 칸 바로 아래 목록으로 추천합니다: 입력하면 걸러지고 (정확히 같은 것, 그 글자로 시작하는 것, 그 글자가 들어간 것 순), `↑` `↓` / Page Up / Page Down 으로 움직이고, `↩` 나 `⇥` 로 고르고, `⎋` 로 닫습니다. 목록에 없는 타입도 그대로 쳐 넣으면 됩니다.
 - TUI 에서는 한 줄을 SQL 처럼 씁니다: 컬럼 `email varchar(100) not null default 'x' auto pk comment 'login'`, 인덱스 `users_email_idx (email) unique`, 외래 키 `orders_user_fk (user_id) -> users (id) on delete cascade`. 키: `a` 컬럼 · `i` 인덱스 · `f` 외래 키 · `↩` 고치기 · `d` 지우기 · `p` PK · `n` 이름 · `c` 설명 · `F5` 실행 · `o` 콘솔로 열기.
 - PostgreSQL 은 한 트랜잭션으로 실행하고 (한 문장이라도 실패하면 아무것도 안 바뀜), MySQL 은 문장마다 바로 반영됩니다. Production Data Source 는 먼저 묻고, 운영 작업 기록에 남습니다. **Open in Console** 은 실행하는 대신 SQL 을 콘솔에 넣습니다.
 

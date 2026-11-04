@@ -8,7 +8,7 @@ Qurry 가 다루는 데이터베이스, 연결 방법 (SSH, AWS SSM, SSL, 옵션
 
 | 데이터베이스 | 기능 |
 |---|---|
-| PostgreSQL | 탐색기 트리 (데이터베이스, 스키마, 테이블, 뷰, 시퀀스, 루틴), 쿼리 콘솔 (서버 커서로 나눠 받기, 취소, 수동 트랜잭션), 데이터 편집, 실행 계획, DDL, 전체 텍스트 검색 |
+| PostgreSQL | 탐색기 트리 (데이터베이스, 스키마, 테이블, 뷰, 시퀀스, 루틴), 쿼리 콘솔 (서버 커서로 나눠 받기, 취소, 수동 트랜잭션), 데이터 편집, 실행 계획, DDL, 전체 텍스트 검색. `infinity` / `-infinity` 날짜 · 타임스탬프는 그대로 `infinity` / `-infinity` 로, 그 배열은 값으로 보여 줍니다 |
 | MySQL / MariaDB | 위와 같음. MySQL 은 데이터베이스가 곧 스키마라서 테이블이 데이터베이스 바로 아래에 보입니다 |
 | Redis | Medis 같은 브라우저 (타입 · TTL 이 붙은 키 목록, 타입별 값 편집기), redis-cli 같은 터미널, **Standalone / Sentinel / Cluster** |
 
@@ -38,6 +38,8 @@ Qurry 가 다루는 데이터베이스, 연결 방법 (SSH, AWS SSM, SSL, 옵션
 연결 시험은 서버 버전을 보여 주고, Qurry 가 시험하는 버전 (PostgreSQL 12, MySQL 5.7, MariaDB 10.5, SQL Server 2017, MongoDB 5, ClickHouse 22, Oracle 19c — CI 가 이 버전들로 돕니다) 보다 낮으면 경고합니다. 읽기 전용 Data Source 는 드라이버에서도 지켜집니다: MongoDB 는 `find` / `aggregate` (`$out` / `$merge` 없이) / `count` / `distinct` 만, 벡터 DB 는 `GET` 과 검색 요청만 실행합니다.
 
 Data Source 마다 색을 정하면 트리 배경과 탭에 표시됩니다 (운영 DB 를 구분하기 좋습니다). 정해진 색 말고도 무지개 칸을 누르면 시스템 색 고르개가 열립니다 — macOS 는 스포이드로 화면의 아무 픽셀이나 찍을 수 있어서 DataGrip 에서 쓰던 색을 그대로 가져올 수 있습니다. 옆 칸에 hex 를 직접 쳐도 됩니다. TUI 는 정해진 색을 돌려 고르고, 직접 고른 색은 그대로 둡니다.
+
+활성 탭은 눈에 띕니다: 편집기 배경 (색을 정한 Data Source 의 탭은 그 색 그대로), 굵은 글자, 강조 막대 (창을 나눴을 때 포커스가 없는 창에서는 회색). 다른 탭은 줄무늬와 더 옅은 색을 유지합니다. 탭, Switcher, Recent Files, Search Everywhere 는 탐색기에서 그 객체 줄과 같은 아이콘을 쓰고, DDL 탭은 객체 아이콘에 작은 DDL 표시를 붙입니다 (예전 버전이 저장한 DDL 탭은 다시 열 때까지 일반 DDL 아이콘). TUI 는 탭 줄, Recent Tabs (`⌃e`), `⌃p` 검색에서 트리의 글리프를 쓰고, DDL 탭은 글리프 뒤에 `≡` 를 붙입니다. TUI 활성 탭의 모양은 [터미널에서 쓰는 TUI](tui.md#색) 를 보세요.
 
 ---
 
