@@ -406,12 +406,20 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
     else cancel(t);
   };
 
-  const submitEdits = async (tab: Tab, statements: string[]) => {
+  /** Save a grid's edits, for a table tab and a console result alike. then = show the saved rows (run the grid's statement again) */
+  const submitEdits = async (tab: Tab, statements: string[], then = () => void (tab.lastSql && run(tab, tab.lastSql))) => {
+    // Production asks first, listing the statements (each changes exactly one row: exactOne below)
+    const c = conns.find((x) => x.id === tab.connId);
+    if (c?.options?.confirmChanges) {
+      const detail = statements.map((s) => ({ text: s.replace(/\s+/g, " ").slice(0, 300), value: /^\s*insert/i.test(s) ? "new row" : "1 row", tone: "warn" as const }));
+      const n = statements.length;
+      if (!(await ask(`Save ${n} change${n === 1 ? "" : "s"} to this data source?`, { title: `Production: ${c.name}`, detail, okLabel: "Save", danger: true }))) return;
+    }
     // Save only if each UPDATE/DELETE affects exactly 1 row (otherwise roll back everything)
     const r = await api.executeBatch(tab.target, statements, true);
     // A warning means it was saved (only the Production log couldn't record it): reload as on success, so it isn't submitted twice
     setStatus(`Submitted ${statements.length} statements, ${r.rows} rows affected${r.warning ? ` · Warning: ${r.warning}` : ""}`);
-    if (tab.lastSql) run(tab, tab.lastSql);
+    then();
     // The reload replaces the status line right away, and a table tab has no Output: tell them in a dialog (as the TUI does)
     if (r.warning) void notice(r.warning, "Submitted, with a warning");
   };

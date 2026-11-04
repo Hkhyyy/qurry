@@ -426,6 +426,11 @@ export function useEditorGroups({
                       setTabs((ts) => ts.map((x) => (x.id === t.id ? { ...x, results: x.results.filter((r) => r.id !== id), activeResult: x.activeResult === id ? "output" : x.activeResult } : x)))
                     }
                     onFetchMore={(entryId) => fetchMoreEntry(t.id, entryId)}
+                    readOnly={!!c?.readOnly}
+                    onSubmit={(entryId, st) => submitEdits(t, st, () => {
+                      const e = t.results.find((r) => r.id === entryId);
+                      if (e) void executeConsole(t.id, [e.sql]);
+                    })}
                     onExport={(sql) => exportCsv({ ...t, lastSql: sql })}
                     onHistory={() => (setHistoryTab("history"), setHistoryFor(t.id))}
                     onTxMode={(manual) => setTxMode(t, manual)}

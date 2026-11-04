@@ -41,10 +41,14 @@ pub struct QueryResult {
     /// It ran, but something after it failed (e.g. its result couldn't be written to the Production log): show it, don't offer to run it again
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
+    /// A console SELECT's result: the table its rows can be edited in (`edit`), or why they can't (`readOnlyReason`).
+    /// None: not checked (not a console run, no result set, or the check couldn't tell)
+    #[serde(flatten)]
+    pub editable: Option<crate::editable::Editable>,
 }
 
 pub(crate) fn query_result(columns: Vec<ColumnInfo>, rows: Vec<Vec<Value>>, rows_affected: u64, truncated: bool, start: Instant, has_result_set: bool) -> QueryResult {
-    QueryResult { columns, rows, rows_affected, truncated, elapsed_ms: start.elapsed().as_millis() as u64, has_result_set, in_transaction: false, warning: None }
+    QueryResult { columns, rows, rows_affected, truncated, elapsed_ms: start.elapsed().as_millis() as u64, has_result_set, in_transaction: false, warning: None, editable: None }
 }
 
 /// Max connections per DB (number of tabs + metadata queries such as the tree and autocomplete)
@@ -230,6 +234,7 @@ pub(crate) async fn run_pg_on(conn: &mut sqlx::PgConnection, sql: &str, limit: u
         has_result_set,
         in_transaction: false,
         warning: None,
+        editable: None,
     })
 }
 
@@ -252,7 +257,7 @@ pub async fn run_on(conn: &mut sqlx::PgConnection, sql: &str, limit: usize) -> A
             rows.push((0..row.len()).map(|i| pg_value(&row, i)).collect());
         }
     }
-    Ok(QueryResult { columns, rows, rows_affected: 0, truncated, elapsed_ms: start.elapsed().as_millis() as u64, has_result_set: true, in_transaction: false, warning: None })
+    Ok(QueryResult { columns, rows, rows_affected: 0, truncated, elapsed_ms: start.elapsed().as_millis() as u64, has_result_set: true, in_transaction: false, warning: None, editable: None })
 }
 
 /// Export on an already acquired connection (possibly a read-only transaction)
@@ -282,6 +287,11 @@ pub(crate) fn cell_text(v: &Value) -> String {
         Value::String(s) => s.clone(),
         other => other.to_string(),
     }
+}
+
+/// Where each column comes from: (table OID, attribute number), None for a computed one
+pub(crate) fn pg_origins(cols: &[sqlx::postgres::PgColumn]) -> Vec<Option<(u32, i16)>> {
+    cols.iter().map(|c| c.relation_id().zip(c.relation_attribute_no()).map(|(o, a)| (o.0, a))).collect()
 }
 
 pub(crate) fn pg_columns(row: &PgRow) -> Vec<ColumnInfo> {

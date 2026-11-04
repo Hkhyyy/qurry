@@ -1,4 +1,6 @@
 use super::*;
+use qurry_core::editable::{EditTarget, Editable};
+use qurry_shared::errors;
 
 impl App {
     pub fn open_table(&mut self, conn: &str, db: String, schema: String, table: String, kind: String) {
@@ -12,17 +14,18 @@ impl App {
     /// Before reloading: if there are unsaved edits, ask whether to discard them (a plain reload would silently drop them)
     pub fn reload_table_checked(&mut self, id: u64) {
         let n = match self.tab_mut(id).map(|t| &t.kind) {
-            Some(TabKind::Table(tt)) => tt.grid.as_ref().filter(|g| g.dirty()).map(|g| g.edits.len() + g.deleted.len() + g.added).unwrap_or(0),
+            Some(TabKind::Table(tt)) => tt.grid.as_ref().map_or(0, |g| g.pending()),
             _ => 0,
         };
         if n == 0 {
             return self.reload_table(id);
         }
-        self.popup = Some(Popup::Confirm {
-            opened: None,
-            text: format!("{n} pending change(s) are not saved to the database ({} submits them). Discard them and reload?", self.keys.label(Action::Submit)),
-            on_yes: Box::new(move |a| a.reload_table(id)),
-        });
+        self.popup = Some(Popup::Confirm { opened: None, text: self.pending_text(n, "reload"), on_yes: Box::new(move |a| a.reload_table(id)) });
+    }
+
+    /// The question before a reload or a run drops a grid's pending edits
+    pub(super) fn pending_text(&self, n: usize, then: &str) -> String {
+        format!("{n} pending change(s) are not saved to the database ({} submits them). Discard them and {then}?", self.keys.label(Action::Submit))
     }
 
     pub fn reload_table(&mut self, id: u64) {
@@ -93,7 +96,7 @@ impl App {
                                 Some(g) => g.result.columns.clone(),
                                 None => cols.into_iter().map(|(name, type_name)| qurry_core::db::ColumnInfo { name, type_name }).collect(),
                             };
-                            let empty = qurry_core::db::QueryResult { columns, rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None };
+                            let empty = qurry_core::db::QueryResult { columns, rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None };
                             tt.grid = Some(Grid::new(empty));
                         }
                         tt.error = Some(e.clone());
@@ -230,37 +233,86 @@ impl App {
 
     // ───────── Table editing ─────────
 
+    /// Where the active grid's edits go: a table tab's table, or the table a console result comes from (QueryResult::editable).
+    /// Err: why the grid can't be edited ("" when the tab has no editable grid at all)
+    pub(crate) fn edit_to(&self) -> Result<EditTarget, String> {
+        let none = || String::new();
+        let t = self.tabs.get(self.active).ok_or_else(none)?;
+        match &t.kind {
+            TabKind::Table(tt) => {
+                let g = tt.grid.as_ref().ok_or_else(none)?;
+                Ok(EditTarget { schema: tt.schema.clone(), table: tt.table.clone(), pk: tt.pk.clone(), columns: g.result.columns.iter().map(|c| c.name.clone()).collect() })
+            }
+            TabKind::Console(c) => {
+                let g = c.grid.as_ref().filter(|_| !c.show_output).ok_or_else(none)?;
+                match &g.result.editable {
+                    // Edits save in a transaction of their own (execute_batch): not while the console's transaction is open
+                    Some(Editable::Table(_)) if c.tx_manual || c.in_tx => Err(errors::CONSOLE_IN_TX.into()),
+                    Some(Editable::Table(e)) => Ok(e.clone()),
+                    Some(Editable::ReadOnly(why)) => Err(why.clone()),
+                    None => Err(errors::CONSOLE_READ_ONLY.into()),
+                }
+            }
+            _ => Err(none()),
+        }
+    }
+
+    /// The active grid when its rows can be edited; otherwise the status line says why
+    pub(crate) fn edit_grid(&mut self) -> Option<&mut Grid> {
+        match self.edit_to() {
+            Ok(_) => self.grid_mut(),
+            Err(why) => {
+                if !why.is_empty() {
+                    self.status = why;
+                }
+                None
+            }
+        }
+    }
+
     pub fn submit(&mut self) {
         let Some(t) = self.tabs.get(self.active) else { return };
         let kind = self.kind_of(&t.conn);
-        let ro = self.conn(&t.conn).map(|c| c.config.read_only).unwrap_or(false);
+        let conn = self.conn(&t.conn);
+        let ro = conn.map(|c| c.config.read_only).unwrap_or(false);
+        let prod = conn.filter(|c| c.config.options.confirm_changes).map(|c| c.config.name.clone());
         let (id, target) = (t.id, t.target.clone());
-        let TabKind::Table(tt) = &t.kind else { return };
-        let Some(g) = &tt.grid else { return };
+        let Some(g) = (match &t.kind {
+            TabKind::Table(tt) => tt.grid.as_ref(),
+            TabKind::Console(c) => c.grid.as_ref(),
+            _ => None,
+        }) else {
+            return;
+        };
         if !g.dirty() {
             self.status = "No pending changes".into();
             return;
         }
+        let to = match self.edit_to() {
+            Ok(to) => to,
+            Err(why) => return self.status = why,
+        };
         if ro {
             self.status = "Data source is read-only".into();
             return;
         }
         let q = |s: &str| sql::quote_ident(kind, s);
-        let table = format!("{}.{}", q(&tt.schema), q(&tt.table));
-        let cols = &g.result.columns;
-        let pk_idx: Vec<usize> = tt.pk.iter().filter_map(|p| cols.iter().position(|c| &c.name == p)).collect();
+        let table = format!("{}.{}", q(&to.schema), q(&to.table));
+        // The table column of each result column (a console result's aliases): what the SQL names
+        let col = |i: usize| q(&to.columns[i]);
+        let pk_idx: Vec<usize> = to.pk.iter().filter_map(|p| to.columns.iter().position(|c| c == p)).collect();
         let where_of = |r: usize| -> Option<String> {
-            if pk_idx.is_empty() || pk_idx.len() != tt.pk.len() {
+            if pk_idx.is_empty() || pk_idx.len() != to.pk.len() {
                 return None;
             }
-            Some(pk_idx.iter().map(|&i| format!("{} = {}", q(&cols[i].name), sql::literal(kind, raw_text(&g.result.rows[r][i]).as_deref()))).collect::<Vec<_>>().join(" AND "))
+            Some(pk_idx.iter().map(|&i| format!("{} = {}", col(i), sql::literal(kind, raw_text(&g.result.rows[r][i]).as_deref()))).collect::<Vec<_>>().join(" AND "))
         };
         let mut stmts = vec![];
         let base = g.rows() - g.added;
         let mut rows_with_edits: Vec<usize> = g.edits.keys().map(|(r, _)| *r).collect();
         rows_with_edits.dedup();
         for r in rows_with_edits.iter().copied().filter(|r| *r < base && !g.deleted.contains(r)) {
-            let sets: Vec<String> = g.edits.iter().filter(|((rr, _), _)| *rr == r).map(|((_, c), v)| format!("{} = {}", q(&cols[*c].name), sql::literal(kind, v.as_deref()))).collect();
+            let sets: Vec<String> = g.edits.iter().filter(|((rr, _), _)| *rr == r).map(|((_, c), v)| format!("{} = {}", col(*c), sql::literal(kind, v.as_deref()))).collect();
             match where_of(r) {
                 Some(w) => stmts.push(format!("UPDATE {table} SET {} WHERE {w}", sets.join(", "))),
                 None => {
@@ -294,18 +346,43 @@ impl App {
             } else {
                 stmts.push(format!(
                     "INSERT INTO {table} ({}) VALUES ({})",
-                    set.iter().map(|(c, _)| q(&cols[*c].name)).collect::<Vec<_>>().join(", "),
+                    set.iter().map(|(c, _)| col(*c)).collect::<Vec<_>>().join(", "),
                     set.iter().map(|(_, v)| sql::literal(kind, v.as_deref())).collect::<Vec<_>>().join(", ")
                 ));
             }
         }
+        // Production asks first, listing the statements (each changes exactly one row: execute_batch's exact_one)
+        let gid = g.id;
+        match prod {
+            Some(name) => {
+                let lines: Vec<String> = stmts.iter().map(|s| format!("  {}", s.chars().take(100).collect::<String>())).collect();
+                self.popup = Some(Popup::Confirm {
+                    opened: None,
+                    text: format!("Production data source \"{name}\" — save {} change(s)?\n\n{}", stmts.len(), lines.join("\n")),
+                    on_yes: Box::new(move |a| a.submit_stmts(id, gid, target, stmts)),
+                });
+            }
+            None => self.submit_stmts(id, gid, target, stmts),
+        }
+    }
+
+    /// Save the statements Submit built for grid `gid` of tab `id`, then show the saved rows (reload the table, run the console's statement again)
+    fn submit_stmts(&mut self, id: u64, gid: u64, target: String, stmts: Vec<String>) {
         let n = stmts.len();
         let st = self.state.clone();
         self.status = format!("Submitting {n} statement(s)…");
         self.spawn(async move { st.execute_batch(target, stmts, true).await.map_err(err) }, move |a, r| match r {
             Ok(r) => {
                 a.status = format!("{n} statement(s) submitted, {} row(s) affected", r.rows);
-                a.reload_table(id);
+                match a.tab_mut(id).map(|t| &t.kind) {
+                    Some(TabKind::Table(_)) => a.reload_table(id),
+                    // The console still shows that result: run its statement again (a newer result stays as it is)
+                    Some(TabKind::Console(c)) if c.grid.as_ref().is_some_and(|g| g.id == gid) => {
+                        let sql = c.result_sql.clone();
+                        Self::in_console(id, move |a| a.run_stmts(vec![sql], false, false))(a);
+                    }
+                    _ => {}
+                }
                 // Saved, but its result couldn't be logged: not a failure (submitting again would save it twice)
                 if let Some(w) = r.warning {
                     a.status.push_str(" · Warning: the Production log couldn't record it");

@@ -431,9 +431,9 @@ test.describe("Value Editor panel", () => {
     await expect(cell(page, DATA_1)).toBeVisible();
   });
 
-  test("console results are view-only in the panel", async ({ page }) => {
+  test("console results the backend didn't tie to a table are view-only in the panel", async ({ page }) => {
     await openConsole(page);
-    await typeSql(page, "select * from users");
+    await typeSql(page, "select * from users where id > 0");
     await runAll(page);
     await cell(page, "user_1").click();
     await page.keyboard.press("Shift+Enter");
@@ -442,9 +442,9 @@ test.describe("Value Editor panel", () => {
   });
 });
 
-test("console results say why their edit buttons are greyed out", async ({ page }) => {
+test("console results the backend didn't check say why their edit buttons are greyed out", async ({ page }) => {
   await openConsole(page);
-  await typeSql(page, "select * from users");
+  await typeSql(page, "select * from users where id > 0");
   await runAll(page);
   const del = work(page).getByRole("button", { name: /^Delete Row/ });
   await expect(del).toBeDisabled();

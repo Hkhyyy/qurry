@@ -246,7 +246,11 @@ impl Grid {
     /// Range as IN-list text and value count. One column gives ('a', 'b'), several give row tuples (('a', 1), …). Duplicates·NULL are dropped.
     /// Numeric columns keep number text bare (numeric·bigint arrive as text); NaN and the like are quoted. Strings as `kind` reads them
     fn in_list_of(&self, (r0, c0, r1, c1): (usize, usize, usize, usize), kind: DbKind) -> (String, usize) {
-        let rows: Vec<Vec<Value>> = (r0..=r1.min(self.rows().saturating_sub(1))).map(|r| (c0..=c1).map(|c| self.cell(r, c)).collect()).collect();
+        self.in_list_rows(r0..=r1, (c0, c1), kind)
+    }
+
+    fn in_list_rows(&self, rows: impl Iterator<Item = usize>, (c0, c1): (usize, usize), kind: DbKind) -> (String, usize) {
+        let rows: Vec<Vec<Value>> = rows.filter(|&r| r < self.rows()).map(|r| (c0..=c1).map(|c| self.cell(r, c)).collect()).collect();
         let types: Vec<String> = (c0..=c1).map(|c| self.result.columns.get(c).map(|x| x.type_name.clone()).unwrap_or_default()).collect();
         extract::in_list(&rows, &types, kind, extract::Options::default())
     }
@@ -256,8 +260,12 @@ impl Grid {
         self.in_list_of((0, c, self.rows().saturating_sub(1), c), kind)
     }
 
-    /// Selected range, or the whole current column if none, as an IN list
+    /// The current column of the marked rows (in grid order), else the selected range, else the whole current column, as an IN list
+    /// (the GUI's Copy as IN List of ⌘-clicked rows lists only their cells)
     pub fn in_list(&self, kind: DbKind) -> (String, usize) {
+        if !self.marked.is_empty() {
+            return self.in_list_rows(self.marked.iter().copied(), (self.col, self.col), kind);
+        }
         match self.sel_rect() {
             Some(r) => self.in_list_of(r, kind),
             None => self.column_in_list(self.col, kind),
@@ -350,6 +358,11 @@ impl Grid {
 
     pub fn dirty(&self) -> bool {
         !self.edits.is_empty() || !self.deleted.is_empty() || self.added > 0
+    }
+
+    /// Pending edits: changed cells, deleted rows, added rows (0 when clean)
+    pub fn pending(&self) -> usize {
+        if self.dirty() { self.edits.len() + self.deleted.len() + self.added } else { 0 }
     }
 
     pub fn revert(&mut self) {
@@ -758,7 +771,7 @@ mod tests {
         assert_eq!(pad_frac("hello", 6), "hello");
         let col = |n: &str, t: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: t.into() };
         let rows = vec![vec![json!("2026-06-06 03:19:15 +09:00"), json!("03:19:15")], vec![json!("2026-06-08 09:38:06.521101 +09:00"), json!("09:38:06.5")], vec![Value::Null, Value::Null]];
-        let g = Grid::new(QueryResult { columns: vec![col("at", "TIMESTAMPTZ"), col("note", "TEXT")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None });
+        let g = Grid::new(QueryResult { columns: vec![col("at", "TIMESTAMPTZ"), col("note", "TEXT")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None });
         assert_eq!(g.shown(0, 0, 100).unwrap(), "2026-06-06 03:19:15.000000 +09:00");
         assert_eq!(g.shown(1, 0, 100).unwrap(), "2026-06-08 09:38:06.521101 +09:00");
         assert_eq!(g.shown(2, 0, 100), None);
@@ -777,7 +790,7 @@ mod tests {
             vec![json!("{\"이름\":\"김\",\"n\":-1,\"ok\":true}"), json!("0x7B22"), json!("{\"e\":1}")],
             vec![json!("{\n\"a\":[null]}"), Value::Null, json!("{\"e\":1}")],
         ];
-        let mut g = Grid::new(QueryResult { columns: vec![ty("meta", "JSONB"), ty("bin", "BYTEA"), ty("edited", "JSON")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None });
+        let mut g = Grid::new(QueryResult { columns: vec![ty("meta", "JSONB"), ty("bin", "BYTEA"), ty("edited", "JSON")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None });
         g.set_value(0, 2, "{\"e\":2}".into());
         (g.row, g.col) = (1, 1);
         let draw = |g: &mut Grid, mode: ColorMode| {
@@ -840,14 +853,14 @@ mod tests {
     fn local_sort_cycles_and_restores() {
         let col = |n: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: String::new() };
         let rows = vec![vec![json!(10)], vec![Value::Null], vec![json!("9")], vec![json!(100)]];
-        let mut g = Grid::new(QueryResult { columns: vec![col("a")], rows, rows_affected: 0, truncated: true, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None });
+        let mut g = Grid::new(QueryResult { columns: vec![col("a")], rows, rows_affected: 0, truncated: true, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None });
         let vals = |g: &Grid| g.result.rows.iter().map(|r| cell_text(&r[0])).collect::<Vec<_>>();
         g.toggle_local_sort();
         assert_eq!(vals(&g), ["9", "10", "100", "<null>"]);
         g.toggle_local_sort();
         assert_eq!(vals(&g), ["100", "10", "9", "<null>"]);
         // Rows loaded while sorted are sorted too
-        g.append(QueryResult { columns: vec![], rows: vec![vec![json!(50)]], rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None });
+        g.append(QueryResult { columns: vec![], rows: vec![vec![json!(50)]], rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None });
         assert_eq!(vals(&g), ["100", "50", "10", "9", "<null>"]);
         g.toggle_local_sort();
         assert_eq!(g.sort, None);
@@ -858,19 +871,19 @@ mod tests {
     fn column_as_in_list() {
         let col = |n: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: String::new() };
         let rows = vec![vec![json!("1.2.3.4"), json!(1)], vec![json!("it's"), json!(2)], vec![Value::Null, json!(2)], vec![json!("1.2.3.4"), Value::Null]];
-        let g = Grid::new(QueryResult { columns: vec![col("ip"), col("n")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None });
+        let g = Grid::new(QueryResult { columns: vec![col("ip"), col("n")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None });
         assert_eq!(g.column_in_list(0, DbKind::Postgres), ("('1.2.3.4', 'it''s')".to_string(), 2));
         assert_eq!(g.column_in_list(1, DbKind::Postgres), ("(1, 2)".to_string(), 2));
         // numeric·bigint arrive as text but go unquoted based on column type. Number-like values in text columns (010) are quoted
         let ty = |n: &str, t: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: t.into() };
         let rows = vec![vec![json!("1234.50"), json!("010"), json!("NaN")]];
-        let g = Grid::new(QueryResult { columns: vec![ty("a", "NUMERIC"), ty("b", "VARCHAR"), ty("c", "NUMERIC")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None });
+        let g = Grid::new(QueryResult { columns: vec![ty("a", "NUMERIC"), ty("b", "VARCHAR"), ty("c", "NUMERIC")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None });
         assert_eq!(g.column_in_list(0, DbKind::Postgres).0, "(1234.50)");
         assert_eq!(g.column_in_list(1, DbKind::Postgres).0, "('010')");
         assert_eq!(g.column_in_list(2, DbKind::Postgres).0, "('NaN')");
         // Strings as the tab's kind reads them: MySQL doubles a backslash, PostgreSQL writes E''
         let rows = vec![vec![json!(r"a\b")]];
-        let g = Grid::new(QueryResult { columns: vec![ty("s", "TEXT")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None });
+        let g = Grid::new(QueryResult { columns: vec![ty("s", "TEXT")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None });
         assert_eq!(g.column_in_list(0, DbKind::Mysql).0, r"('a\\b')");
         assert_eq!(g.column_in_list(0, DbKind::Postgres).0, r"(E'a\\b')");
     }
@@ -879,7 +892,7 @@ mod tests {
     fn range_selection_copies_tsv_and_in_list() {
         let ty = |n: &str, t: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: t.into() };
         let rows = vec![vec![json!("1.2.3.4"), json!(1)], vec![json!("5.6.7.8"), json!(2)], vec![json!("9.9.9.9"), json!(3)]];
-        let mut g = Grid::new(QueryResult { columns: vec![ty("ip", "TEXT"), ty("n", "INT4")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None });
+        let mut g = Grid::new(QueryResult { columns: vec![ty("ip", "TEXT"), ty("n", "INT4")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None });
         assert_eq!(g.sel_rect(), None);
         g.extend(1, 0);
         assert_eq!(g.sel_rect(), Some((0, 0, 1, 0)));
@@ -899,7 +912,7 @@ mod tests {
         let col = |n: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: String::new() };
         let cols: Vec<_> = (0..12).map(|i| col(&format!("column_{i}"))).collect();
         let rows = vec![(0..12).map(|i| json!(i)).collect()];
-        let mut g = Grid::new(QueryResult { columns: cols, rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None });
+        let mut g = Grid::new(QueryResult { columns: cols, rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None });
         let draw = |g: &mut Grid, focused: bool| {
             let mut term = Terminal::new(ratatui::backend::TestBackend::new(40, 6)).unwrap();
             term.draw(|f| g.render(f, f.area(), "t".into(), focused, Default::default(), &Default::default())).unwrap();
@@ -918,7 +931,7 @@ mod tests {
     fn grid3() -> Grid {
         let col = |n: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: String::new() };
         let rows = (0..3).map(|r| (0..3).map(|c| json!(format!("r{r}c{c}"))).collect()).collect();
-        Grid::new(QueryResult { columns: vec![col("a"), col("b"), col("c")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None })
+        Grid::new(QueryResult { columns: vec![col("a"), col("b"), col("c")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None })
     }
 
     /// Draw focused in a color mode: the screen's lines and its buffer
@@ -996,7 +1009,7 @@ mod tests {
         use qurry_core::format::{Align, Alignments, ValueClass};
         let col = |n: &str, t: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: t.into() };
         let rows = vec![vec![json!("abc"), json!(12345), json!(true)], vec![Value::Null, Value::Null, json!(false)], vec![json!("하나"), json!("7.5"), Value::Null]];
-        let mut g = Grid::new(QueryResult { columns: vec![col("name", "TEXT"), col("qty_total", "NUMERIC"), col("flag", "BOOL")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None });
+        let mut g = Grid::new(QueryResult { columns: vec![col("name", "TEXT"), col("qty_total", "NUMERIC"), col("flag", "BOOL")], rows, rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None });
         // Each body cell's text with its padding: (leading spaces, text) per row of a column
         let cells = |g: &mut Grid, a: &Alignments, c: usize| -> Vec<(usize, String)> {
             let mut term = Terminal::new(ratatui::backend::TestBackend::new(60, 8)).unwrap();

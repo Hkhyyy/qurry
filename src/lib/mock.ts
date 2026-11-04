@@ -64,6 +64,13 @@ const payments = {
   rows: Array.from({ length: 40 }, (_, i) => [i + 1, i % 2 ? "paid" : "ready", i === 2 ? null : `{"kind": "card", "meta": {"src": "web", "ip": "10.0.0.${i + 1}"}, "items": [${i}, ${i + 1}]}`, i % 4 ? "plain note" : "[1, 2]"]),
   truncated: false,
 };
+/** A console result's edit target or why it has none, as the backend says (#86): `select * from users` is one table with its key, a join isn't */
+const consoleEdit = (sql: string) =>
+  /\bjoin\b/i.test(sql)
+    ? { readOnlyReason: "Read-only: the columns come from more than one table." }
+    : /^\s*select\s+\*\s+from\s+(public\.)?users\s*;?\s*$/i.test(sql)
+      ? { edit: { schema: "public", table: "users", pk: ["id"], columns: result.columns.map((c) => c.name) } }
+      : {};
 let flakyLoads = 0;
 let updateChannel = "stable";
 /** Font files added in Settings: each "Add Font File…" adds "Fira Code" (then "Fira Code 2"…, as the backend names a taken name) */
@@ -228,7 +235,7 @@ const handlers: Record<string, (a: any) => unknown> = {
           ? { ...jsonDemo, inTransaction: (globalThis as any).__mockManual === true }
           : /\bpayments\b/i.test(a.sql)
           ? { ...payments, inTransaction: (globalThis as any).__mockManual === true }
-          : { ...result, inTransaction: (globalThis as any).__mockManual === true }),
+          : { ...result, ...consoleEdit(a.sql), inTransaction: (globalThis as any).__mockManual === true }),
   set_tx_mode: (a: any) => { (globalThis as any).__mockManual = a.manual; return null; },
   // e2e sets __mockCommitError for a COMMIT that fails (e.g. the connection lost while committing)
   commit_tx: () => {

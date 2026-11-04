@@ -141,6 +141,7 @@ fn result_of(e: &Value) -> QueryResult {
         has_result_set: true,
         in_transaction: false,
         warning: None,
+        editable: None,
     }
 }
 

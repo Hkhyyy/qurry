@@ -71,34 +71,16 @@ pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
             if c.show_output || c.grid.is_none() {
                 return;
             }
-            nav(app, k);
+            match k.code {
+                KeyCode::Enter | KeyCode::F(2) => edit_cell(app, id),
+                _ => nav(app, k),
+            }
         }
-        TabKind::Table(tt) => {
+        TabKind::Table(_) => {
             match k.code {
                 KeyCode::Char('w') => app.input_filter(id, false),
                 KeyCode::Char('o') => app.input_filter(id, true),
-                KeyCode::Enter | KeyCode::F(2) => {
-                    let Some(g) = &tt.grid else { return };
-                    let (r, c) = (g.row, g.col);
-                    if g.cols() == 0 {
-                        return;
-                    }
-                    let name = g.result.columns[c].name.clone();
-                    let ty = g.result.columns[c].type_name.clone();
-                    let cur = g.value(r, c).unwrap_or_default();
-                    app.input(format!("{name} (row {})", r + 1), &cur.clone(), move |a, s| {
-                        // Same rule as the GUI's Value Editor: a json / jsonb column refuses text that isn't JSON
-                        let v = match qurry_shared::value::value_to_apply(&ty, &cur, &s) {
-                            Ok(v) => v,
-                            Err(e) => return a.status = format!("{name} not changed: {e}"),
-                        };
-                        if let Some(TabKind::Table(tt)) = a.tab_mut(id).map(|t| &mut t.kind) {
-                            if let Some(g) = &mut tt.grid {
-                                g.set_value(r, c, v);
-                            }
-                        }
-                    });
-                }
+                KeyCode::Enter | KeyCode::F(2) => edit_cell(app, id),
                 KeyCode::Char('r') => app.reload_table_checked(id),
                 KeyCode::Char('s') => app.sort_table(id),
                 KeyCode::Char('/') => app.input_filter(id, false),
@@ -107,6 +89,34 @@ pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
             }
         }
     }
+}
+
+/// ↩ / F2: edit the current cell of tab `id`'s grid (table data, or a console result that can be edited)
+fn edit_cell(app: &mut App, id: u64) {
+    let Some(g) = app.edit_grid() else { return };
+    let (r, c, gid) = (g.row, g.col, g.id);
+    if g.cols() == 0 {
+        return;
+    }
+    let name = g.result.columns[c].name.clone();
+    let ty = g.result.columns[c].type_name.clone();
+    let cur = g.value(r, c).unwrap_or_default();
+    app.input(format!("{name} (row {})", r + 1), &cur.clone(), move |a, s| {
+        // Same rule as the GUI's Value Editor: a json / jsonb column refuses text that isn't JSON
+        let v = match qurry_shared::value::value_to_apply(&ty, &cur, &s) {
+            Ok(v) => v,
+            Err(e) => return a.status = format!("{name} not changed: {e}"),
+        };
+        // Into the grid it was asked for (a console run meanwhile replaced it: dropped)
+        let grid = match a.tab_mut(id).map(|t| &mut t.kind) {
+            Some(TabKind::Table(tt)) => tt.grid.as_mut(),
+            Some(TabKind::Console(c)) => c.grid.as_mut(),
+            _ => None,
+        };
+        if let Some(g) = grid.filter(|g| g.id == gid) {
+            g.set_value(r, c, v);
+        }
+    });
 }
 
 /// Grid navigation
@@ -236,6 +246,26 @@ mod tests {
         assert_eq!(h.app.status, "No rows marked");
     }
 
+    /// Y with marked rows lists the current column of those rows only, in grid order (the GUI's ⌘-clicked rows + Copy as IN List);
+    /// with nothing marked: the whole current column
+    #[tokio::test]
+    async fn marked_rows_copy_as_in_list() {
+        let mut h = Harness::new().await;
+        h.table_tab("logs", &["ip", "n"], &[&["a", "1"], &["b", "2"], &["c", "3"], &["d", "4"], &["e", "5"]], &["n"]);
+        for _ in 0..4 {
+            h.key("Down");
+        }
+        h.key("m");
+        h.key("g");
+        h.key("m");
+        h.key("Down");
+        h.key("Y");
+        assert_eq!(h.app.status, "Copied 2 values as an IN list: ('a', 'e')");
+        h.key("Esc");
+        h.key("Y");
+        assert_eq!(h.app.status, "Copied 5 values as an IN list: ('a', 'b', 'c', 'd', 'e')");
+    }
+
     /// Marked rows that were just added go away on d, edits of the added rows below them move up with them
     #[tokio::test]
     async fn deleting_marked_added_rows_removes_them() {
@@ -353,6 +383,7 @@ mod tests {
             has_result_set: true,
             in_transaction: false,
             warning: None,
+            editable: None,
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
         let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res("pid", 4123))), loaded: None, error: None, running: true, run: 0, auto: true };
@@ -391,6 +422,7 @@ mod tests {
             has_result_set: true,
             in_transaction: false,
             warning: None,
+            editable: None,
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
         let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res(&[10, 20, 30]))), loaded: None, error: None, running: false, run: 0, auto: true };
@@ -422,6 +454,7 @@ mod tests {
             has_result_set: true,
             in_transaction: false,
             warning: None,
+            editable: None,
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
         let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: None, loaded: None, error: None, running: false, run: 0, auto: true };
@@ -453,6 +486,7 @@ mod tests {
             has_result_set: true,
             in_transaction: false,
             warning: None,
+            editable: None,
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "vacuum_progress");
         let d = crate::app::DbaTab { report: "vacuum_progress".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res)), loaded: None, error: None, running: false, run: 0, auto: true };
@@ -483,6 +517,7 @@ mod tests {
             has_result_set: true,
             in_transaction: false,
             warning: None,
+            editable: None,
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Mysql).into_iter().find(|r| r.id == "slow_queries");
         let d = crate::app::DbaTab { report: "slow_queries".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res)), loaded: None, error: None, running: false, run: 0, auto: true };
@@ -591,7 +626,7 @@ mod tests {
         let mut h = Harness::new().await;
         let id = h.table_tab("users", &["id"], &[&["1"], &["2"]], &["id"]);
         let fresh = || {
-            let mut g = crate::grid::Grid::new(qurry_core::db::QueryResult { columns: vec![qurry_core::db::ColumnInfo { name: "id".into(), type_name: "text".into() }], rows: vec![vec!["9".into()]], rows_affected: 0, truncated: true, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None });
+            let mut g = crate::grid::Grid::new(qurry_core::db::QueryResult { columns: vec![qurry_core::db::ColumnInfo { name: "id".into(), type_name: "text".into() }], rows: vec![vec!["9".into()]], rows_affected: 0, truncated: true, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None });
             g.more_session = Some("s".into());
             g
         };

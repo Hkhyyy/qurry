@@ -545,6 +545,7 @@ impl AppState {
                 has_result_set: true,
                 in_transaction: false,
                 warning: None,
+                editable: None,
             }),
             Ok(r) => Ok(r),
             Err(e) => {

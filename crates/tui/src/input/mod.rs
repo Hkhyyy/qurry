@@ -99,9 +99,9 @@ fn paste(app: &mut App, s: String) {
             Some(TabKind::Console(c)) if app.focus == Focus::Editor => {
                 c.editor.insert_str(s);
             }
-            // Table data: fill from the current cell (⌘V)
-            Some(TabKind::Table(tt)) if app.focus == Focus::Grid => {
-                if let Some(g) = tt.grid.as_mut().filter(|g| g.cols() > 0) {
+            // Table data, an editable console result: fill from the current cell (⌘V)
+            Some(TabKind::Table(_) | TabKind::Console(_)) if app.focus == Focus::Grid => {
+                if let Some(g) = app.edit_grid().filter(|g| g.cols() > 0) {
                     g.paste(&s);
                 }
             }

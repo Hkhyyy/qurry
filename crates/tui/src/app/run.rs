@@ -32,8 +32,27 @@ pub(crate) fn explain_analyze_ask_text(asks: &[(String, String)]) -> String {
 impl App {
     // ───────── Execution ─────────
 
+    /// A console grid with pending edits asks first: the new result replaces it (as a table tab's reload does)
     pub fn execute(&mut self, explain: bool) {
-        self.execute_checked(explain, false)
+        let Some(t) = self.tabs.get(self.active) else { return };
+        let id = t.id;
+        let n = match &t.kind {
+            TabKind::Console(c) if !c.running => c.grid.as_ref().map_or(0, |g| g.pending()),
+            _ => 0,
+        };
+        if n == 0 {
+            return self.execute_checked(explain, false);
+        }
+        self.popup = Some(Popup::Confirm {
+            opened: None,
+            text: self.pending_text(n, "run the statement"),
+            on_yes: Self::in_console(id, move |a| {
+                if let Some(g) = a.grid_mut() {
+                    g.revert();
+                }
+                a.execute_checked(explain, false)
+            }),
+        });
     }
 
     /// What to run follows the execution settings (self.exec). If it needs asking, open the picker (DataGrip)
@@ -107,7 +126,7 @@ impl App {
     /// on_yes of a confirm that runs statements: they run in the console that asked (tab id), shown again, never in whichever tab
     /// is active when it is answered (that may be another source, whose own checks would be skipped). Nothing runs (and the status
     /// says why) while it is busy, once it is closed or while it is in another workspace
-    fn in_console(id: u64, run: impl FnOnce(&mut App) + 'static) -> Box<dyn FnOnce(&mut App)> {
+    pub(super) fn in_console(id: u64, run: impl FnOnce(&mut App) + 'static) -> Box<dyn FnOnce(&mut App)> {
         Box::new(move |a| match a.tab_index(id) {
             Some(i) if matches!(&a.tabs[i].kind, TabKind::Console(c) if c.running) => a.status = "The console is busy: nothing ran. Run it again when it finishes.".into(),
             Some(i) => {
@@ -327,6 +346,7 @@ impl App {
                                 c.log(false, msg.clone());
                                 status = msg;
                                 c.result_title = format!("Result {}: {}", i + 1, s.split_whitespace().take(6).collect::<Vec<_>>().join(" "));
+                                c.result_sql = s.clone();
                                 let mut g = Grid::new(res);
                                 g.more_session = Some(c.session.clone());
                                 c.grid = Some(g);
