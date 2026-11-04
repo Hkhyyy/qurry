@@ -722,6 +722,15 @@ impl Store {
         Ok(next)
     }
 
+    /// The TUI's color theme ("auto" · "dark" · "light"; the GUI keeps its own). None when unset or not text
+    pub fn tui_theme(&self) -> Option<String> {
+        self.settings().remove("tuiTheme").and_then(|v| v.as_str().map(String::from))
+    }
+
+    pub fn set_tui_theme(&self, theme: &str) -> AppResult<()> {
+        self.set_setting("tuiTheme", theme.into())
+    }
+
     /// Change one key of settings.json, keeping the others
     fn set_setting(&self, key: &str, value: serde_json::Value) -> AppResult<()> {
         let mut all = self.settings();

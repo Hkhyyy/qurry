@@ -112,6 +112,7 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::TrustSshHost, hint: "", run: trust_ssh_host },
     ActionDef { action: Action::PasswordKey, hint: "", run: |app| app.password_key() },
     ActionDef { action: Action::GridAlign, hint: "", run: |app| app.palette_grid_align(qurry_core::format::ValueClass::String) },
+    ActionDef { action: Action::Theme, hint: "", run: |app| app.palette_theme() },
     ActionDef { action: Action::CheckUpdate, hint: "", run: |app| app.check_update() },
     ActionDef { action: Action::UpdateChannel, hint: "", run: |app| app.palette_update_channel() },
     ActionDef { action: Action::InstallUpdate, hint: "", run: install_update },

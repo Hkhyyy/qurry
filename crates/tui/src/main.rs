@@ -42,7 +42,7 @@ async fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!(
-            "qurry-tui {} [--config-dir DIR] [--no-update-check]\n       qurry-tui --update     download and install the newest release of the update channel (stable, or beta: ⌃k › Update Channel…)\n\nTerminal UI for Qurry (PostgreSQL / MySQL / Redis). Shares data sources with the Qurry app.\nA new version is checked every hour (off: --no-update-check or QURRY_NO_UPDATE_CHECK=1).\nColors follow the terminal: COLORTERM=truecolor for 24-bit, TERM=…-256color for 256, otherwise 16; NO_COLOR=1 turns them off.\nPress F1 inside for this keymap.\n{}",
+            "qurry-tui {} [--config-dir DIR] [--no-update-check]\n       qurry-tui --update     download and install the newest release of the update channel (stable, or beta: ⌃k › Update Channel…)\n\nTerminal UI for Qurry (PostgreSQL / MySQL / Redis). Shares data sources with the Qurry app.\nA new version is checked every hour (off: --no-update-check or QURRY_NO_UPDATE_CHECK=1).\nColors follow the terminal: COLORTERM=truecolor for 24-bit, TERM=…-256color for 256, otherwise 16; NO_COLOR=1 turns them off. Light colors when COLORFGBG says the background is light (⌃k › Theme… picks Auto, Dark or Light).\nPress F1 inside for this keymap.\n{}",
             env!("CARGO_PKG_VERSION"),
             help::text()
         );
@@ -105,8 +105,11 @@ async fn run(term: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: Arc<
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<app::Apply>();
     let mut app = app::App::new(state.clone(), tx.clone());
     app.color = theme::ColorMode::from_env();
-    if let Some(n) = app.color.notice() {
-        app.status = n.into();
+    app.auto_light = theme::auto_light(|k| std::env::var(k).ok());
+    // The light palette notice first: Auto turns it on by itself, so that one needs saying the most
+    let notices: Vec<String> = app.theme_notice().into_iter().chain(app.color.notice().map(String::from)).collect();
+    if !notices.is_empty() {
+        app.status = notices.join(" · ");
     }
     // Check for a new version (at launch + hourly, in the background). Failures are silently ignored
     if let Some(dir) = update_dir {

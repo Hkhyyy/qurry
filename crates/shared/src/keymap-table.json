@@ -207,6 +207,7 @@
   {"tui": "TrustSshHost", "title": "Trust SSH Host Key (after checking its fingerprint)"},
   {"tui": "PasswordKey", "title": "Password Key… (keep it in the config folder or the system keychain)"},
   {"tui": "GridAlign", "title": "Grid Alignment… (where cells sit per kind of value: NULL, numbers, text …; shared with the GUI)"},
+  {"tui": "Theme", "title": "Theme… (Auto follows the terminal background, or Dark / Light)"},
   {"tui": "CheckUpdate", "title": "Check for Updates"},
   {"tui": "UpdateChannel", "title": "Update Channel… (stable releases only, or beta: also every merge to main)"},
   {"tui": "InstallUpdate", "title": "Update Qurry & Restart (download the latest release)"}

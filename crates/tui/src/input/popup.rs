@@ -605,6 +605,40 @@ mod tests {
         assert!(h.app.status.contains("Qurry 99.0.0-beta.1 is available"), "{}", h.app.status);
     }
 
+    /// ⌃k › Theme…: opens on the current theme, says what Auto picks here; the pick switches the colors at once and is saved
+    /// in settings.json (read again at the next start). Auto on a light terminal says at startup how to get the dark colors back
+    #[tokio::test]
+    async fn theme_is_picked_from_the_palette() {
+        use crate::theme::Theme;
+        let mut h = Harness::new().await;
+        h.app.auto_light = true;
+        assert_eq!(h.app.theme, Theme::Auto);
+        let status_bg = |h: &mut Harness| h.buffer(120, 30)[(0, 29)].bg;
+        let light_bg = status_bg(&mut h);
+        assert!(h.app.theme_notice().unwrap().contains("⌃k › Theme… › Dark"), "{:?}", h.app.theme_notice());
+        h.app.palette_theme();
+        let s = h.screen(120, 30);
+        assert!(s.contains("● Auto") && s.contains("COLORFGBG): light now") && s.contains("  Dark") && s.contains("  Light"), "{s}");
+        h.key("Down");
+        h.key("Enter");
+        assert_eq!((h.app.theme, h.app.state.store.tui_theme().as_deref()), (Theme::Dark, Some("dark")));
+        assert_eq!(h.app.status, "Theme: Dark — dark colors");
+        assert_eq!(h.app.theme_notice(), None, "picked by hand: nothing to say at startup");
+        assert_eq!(status_bg(&mut h), crate::kit::SURFACE);
+        assert_ne!(light_bg, crate::kit::SURFACE);
+        // Reopened on Dark: Enter keeps it; Light on a dark terminal
+        h.app.auto_light = false;
+        h.app.palette_theme();
+        assert!(h.screen(120, 30).contains("● Dark"));
+        h.key("Down");
+        h.key("Enter");
+        assert_eq!((h.app.theme, h.app.state.store.tui_theme().as_deref()), (Theme::Light, Some("light")));
+        assert_eq!(status_bg(&mut h), light_bg);
+        // The next start reads it
+        let next = crate::app::App::new(h.app.state.clone(), h.app.tx.clone());
+        assert_eq!(next.theme, Theme::Light);
+    }
+
     /// ⌃k › Grid Alignment…: a row per value class, Enter picks Left / Center / Right; saved to settings.json for the GUI and applied
     /// to the grids at once. Opening it reads the file again (the GUI may have changed it), and the default drops the override
     #[tokio::test]
