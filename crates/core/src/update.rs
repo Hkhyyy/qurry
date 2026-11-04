@@ -315,6 +315,24 @@ mod tests {
         assert_eq!(changes(notes), ["[fix] real (#9)"]);
     }
 
+    /// The signing key notice SECURITY.md tells the maintainer to put at the top of .github/release-notes.md shows in the update window,
+    /// as release.yml assembles the notes (stable: its macOS 13 block before the file; beta: a quote before it; generated notes after)
+    #[test]
+    fn security_md_key_notice_shows_in_update_window() {
+        let doc = include_str!("../../../SECURITY.md");
+        let block = doc.split("```markdown\n").nth(1).and_then(|s| s.split("```").next()).expect("notice block in SECURITY.md");
+        let file = format!("{block}\n## Qurry 1.0.0\n\n### Install\n* not this\n");
+        let generated = "## What's Changed\n* [fix] real by @u in https://github.com/Hkhyyy/qurry/pull/9";
+        let stable = format!("## What's Changed\n* {MACOS13_ITEM} Ventura or later.\n\n{file}{generated}");
+        let beta = format!("> **Beta** built from a merge to main.\n\n{file}{generated}");
+        for notes in [stable, beta] {
+            let c = changes(&notes);
+            assert_eq!(c.len(), 2, "{c:?}");
+            assert!(c[0].starts_with("[breaking] The update signing key changed."), "{c:?}");
+            assert_eq!(c[1], "[fix] real (#9)");
+        }
+    }
+
     /// Release list → latest + changes per version, only those newer than the current version (newest first)
     #[test]
     fn changes_since_current_version() {
