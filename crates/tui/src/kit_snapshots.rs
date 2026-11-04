@@ -226,6 +226,18 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.app.chart_result();
     scenes.push(app_scene(h, "Chart", "⌃k › Chart Result: 첫 글 컬럼별 수 컬럼의 합 (가로 막대)", 120, 26));
     h.app.popup = None;
+    // Long Output log: the newest line sits on the bottom row, a long wrapped one included
+    let id = h.console_with("update payment set memo = 'migrated' where id = 1;", 0, 0);
+    if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
+        for i in 1..=40 {
+            c.log(false, format!("rentalpay> update payment set memo = 'migrated' where id = {i}"));
+            c.log(false, "1 row(s) affected in 2 ms".into());
+        }
+        c.log(false, format!("rentalpay> insert into payment_audit (payment_id, memo, payload) values (41, 'migrated', '{{{}}}')", (1..=12).map(|k| format!("\"field_{k}\": \"value {k}\"")).collect::<Vec<_>>().join(", ")));
+        c.log(true, "ERROR: value too long for type character varying(255)".into());
+    }
+    scenes.push(app_scene(h, "Console: long Output", "A script's Output longer than the pane: the newest line sits on the bottom row, wrapped long lines included", 120, 22));
+    h.app.close_tab_now(h.app.active);
     // Grid alignment (GUI Settings › Appearance › Alignment, read from settings.json)
     let id = h.console_with("select * from payment_check;", 1, 10);
     let res = qurry_core::db::QueryResult {

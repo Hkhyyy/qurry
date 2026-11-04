@@ -480,10 +480,13 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                     .rev()
                     .map(|(e, s)| Line::styled(s.clone(), Style::default().fg(if *e { DANGER } else if s.starts_with(WARNING) { WARN } else if s.contains("> ") { ACCENT } else { Color::Gray })))
                     .collect();
+                let block = panel(format!(" Output ({k_out}: result) "), focus == Focus::Grid);
+                let inner = block.inner(res);
                 let p = Paragraph::new(if lines.is_empty() { vec![Line::styled(format!("Execute a statement ({k_run}) to see the output."), Style::default().fg(DIM))] } else { lines })
-                    .wrap(Wrap { trim: false })
-                    .block(panel(format!(" Output ({k_out}: result) "), focus == Focus::Grid));
-                f.render_widget(p, res);
+                    .wrap(Wrap { trim: false });
+                // A long line wraps onto several rows: scroll so the newest line ends on the bottom row
+                let rows = p.line_count(inner.width).min(u16::MAX as usize) as u16;
+                f.render_widget(p.scroll((rows.saturating_sub(inner.height), 0)).block(block), res);
             } else if let Some(g) = &mut c.grid {
                 let t = format!(" {} — {}{} rows ({k_out}: output) ", c.result_title, g.rows(), if g.result.truncated { "+" } else { "" });
                 let (res, side) = value_split(res, value_panel);
