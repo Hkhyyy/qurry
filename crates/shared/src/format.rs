@@ -67,16 +67,27 @@ pub enum Align {
     Left,
     Right,
     Center,
+    /// NULL only: where its column's type would sit (a NULL in a text column on the left, in a number column on the right)
+    Column,
 }
 
 impl ValueClass {
     pub const ALL: [ValueClass; 6] = [ValueClass::String, ValueClass::Number, ValueClass::DateTime, ValueClass::Boolean, ValueClass::Null, ValueClass::JsonBinary];
 
-    /// Numbers and NULL on the right (a NULL in a numeric column stays in line with its numbers), everything else on the left
+    /// Numbers on the right, NULL where its column's type sits (in line with the values above it), everything else on the left
     pub fn default_align(self) -> Align {
         match self {
-            ValueClass::Number | ValueClass::Null => Align::Right,
+            ValueClass::Number => Align::Right,
+            ValueClass::Null => Align::Column,
             _ => Align::Left,
+        }
+    }
+
+    /// What Settings offers for this class: "Column type" for NULL only
+    pub fn aligns(self) -> &'static [Align] {
+        match self {
+            ValueClass::Null => &[Align::Column, Align::Left, Align::Center, Align::Right],
+            _ => &[Align::Left, Align::Center, Align::Right],
         }
     }
 }
@@ -215,14 +226,28 @@ pub fn json_spans(text: &str, max_chars: usize) -> Vec<(usize, usize, JsonKind)>
 /// The classes the user changed (settings.json "gridAlign"); a class not in it keeps its default
 pub type Alignments = BTreeMap<ValueClass, Align>;
 
-/// Reads saved overrides, skipping entries this version doesn't know (a class or alignment added later), so the rest still apply
+/// Reads saved overrides, skipping entries this version doesn't know (a class or alignment added later) or that the class doesn't
+/// offer ("column" outside NULL), so the rest still apply
 pub fn alignments(v: &Value) -> Alignments {
     let Some(m) = v.as_object() else { return Alignments::new() };
-    m.iter().filter_map(|(k, a)| Some((serde_json::from_value(Value::from(k.as_str())).ok()?, serde_json::from_value(a.clone()).ok()?))).collect()
+    m.iter()
+        .filter_map(|(k, a)| Some((serde_json::from_value::<ValueClass>(Value::from(k.as_str())).ok()?, serde_json::from_value(a.clone()).ok()?)))
+        .filter(|(c, a)| c.aligns().contains(a))
+        .collect()
 }
 
+/// The class's setting (Settings › Appearance › Alignment shows it); NULL's may be `Align::Column`, which `cell_align` resolves
 pub fn align(class: ValueClass, overrides: &Alignments) -> Align {
     overrides.get(&class).copied().unwrap_or(class.default_align())
+}
+
+/// Where a cell of `class` sits in a column of `column` (its `type_class`): its class's setting, or for a NULL on "Column type"
+/// the column's (a `type_class` is never NULL, so this never returns `Align::Column`)
+pub fn cell_align(column: ValueClass, class: ValueClass, overrides: &Alignments) -> Align {
+    match align(class, overrides) {
+        Align::Column => align(column, overrides),
+        a => a,
+    }
 }
 
 #[cfg(test)]
@@ -273,14 +298,22 @@ mod tests {
     }
 
     #[test]
-    fn defaults_put_numbers_and_null_on_the_right() {
+    fn defaults_put_numbers_on_the_right_and_null_where_its_column_sits() {
         let none = Alignments::new();
         let got: Vec<Align> = ValueClass::ALL.iter().map(|&c| align(c, &none)).collect();
-        assert_eq!(got, [Align::Left, Align::Right, Align::Left, Align::Left, Align::Right, Align::Left]);
-        // NULL back on the left, as before this setting existed
-        let back = alignments(&serde_json::json!({ "null": "left" }));
-        assert_eq!(align(ValueClass::Null, &back), Align::Left);
-        assert_eq!(align(ValueClass::Number, &back), Align::Right);
+        assert_eq!(got, [Align::Left, Align::Right, Align::Left, Align::Left, Align::Column, Align::Left]);
+        let null_in = |t: &str, o: &Alignments| cell_align(type_class(t), value_class(t, &Value::Null), o);
+        let types = ["text", "int4", "timestamptz", "bool", "jsonb"];
+        assert_eq!(types.map(|t| null_in(t, &none)), [Align::Left, Align::Right, Align::Left, Align::Left, Align::Left]);
+        // It follows the column's class as the user set it
+        let number_centered = alignments(&serde_json::json!({ "number": "center" }));
+        assert_eq!(null_in("int4", &number_centered), Align::Center);
+        // NULL saved as Left or Right (0.3.0 and later) stays there in every column
+        let left = alignments(&serde_json::json!({ "null": "left" }));
+        assert_eq!(types.map(|t| null_in(t, &left)), [Align::Left; 5]);
+        let right = alignments(&serde_json::json!({ "null": "right" }));
+        assert_eq!(types.map(|t| null_in(t, &right)), [Align::Right; 5]);
+        assert_eq!(cell_align(ValueClass::String, ValueClass::Number, &left), Align::Right);
     }
 
     #[test]
@@ -288,6 +321,9 @@ mod tests {
         let a = alignments(&serde_json::json!({ "number": "center", "uuid": "left", "string": "justify", "boolean": "right" }));
         assert_eq!(a, Alignments::from([(ValueClass::Number, Align::Center), (ValueClass::Boolean, Align::Right)]));
         assert!(alignments(&serde_json::json!("left")).is_empty());
+        // "column" is a NULL choice only
+        let c = alignments(&serde_json::json!({ "null": "column", "string": "column" }));
+        assert_eq!(c, Alignments::from([(ValueClass::Null, Align::Column)]));
         assert_eq!(serde_json::to_value(&a).unwrap(), serde_json::json!({ "number": "center", "boolean": "right" }));
     }
 

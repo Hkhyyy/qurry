@@ -50,7 +50,8 @@ pub struct Grid {
 fn pad(text: String, w: usize, a: Align) -> String {
     let gap = w.saturating_sub(text.width());
     match a {
-        Align::Left => text,
+        // Column never reaches a cell (cell_align resolves it)
+        Align::Left | Align::Column => text,
         Align::Right => format!("{}{text}", " ".repeat(gap)),
         Align::Center => format!("{}{text}", " ".repeat(gap / 2)),
     }
@@ -103,7 +104,7 @@ pub fn cell_text(v: &Value) -> String {
     }
 }
 pub(crate) use qurry_core::format::{is_time_type, pad_frac};
-use qurry_core::format::{align, cell_class, is_json_type, json_spans, type_class, Align, Alignments, JsonKind, ValueClass};
+use qurry_core::format::{cell_align, cell_class, is_json_type, json_spans, type_class, Align, Alignments, JsonKind, ValueClass};
 use qurry_core::extract::{self, Format, Rows};
 use qurry_core::store::DbKind;
 
@@ -528,7 +529,7 @@ impl Grid {
                     };
                     let class = self.class(r, c, tc);
                     let shown_len = text.len();
-                    let text = pad(text, w as usize, align(class, aligns));
+                    let text = pad(text, w as usize, cell_align(tc, class, aligns));
                     // JSON in colors unless the row's changes color the cell (edited · deleted · added)
                     let raw = self.result.rows.get(r).and_then(|row| row.get(c)).and_then(Value::as_str).filter(|_| json && class == ValueClass::JsonBinary && !edited && !deleted && !added);
                     let line = match raw {
@@ -897,8 +898,8 @@ mod tests {
         assert!(look(cell_of(&lines, &buf, "r1c1")).1);
     }
 
-    /// Cells sit where Settings › Appearance › Alignment says (qurry_shared::format, the GUI's rule): by default numbers and NULL
-    /// on the right, so a NULL lines up with the numbers above it; an override moves only its own class
+    /// Cells sit where Settings › Appearance › Alignment says (qurry_shared::format, the GUI's rule): by default numbers on the
+    /// right and a NULL where its column's type sits, so it lines up with the values above it; an override moves only its own class
     #[test]
     fn cells_follow_the_alignment_setting() {
         use qurry_core::format::{Align, Alignments, ValueClass};
@@ -924,11 +925,15 @@ mod tests {
         let qty = cells(&mut g, &none, 1);
         assert_eq!(qty.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>(), ["12345", "<null>", "7.5"]);
         assert!(qty.iter().all(|(lead, t)| lead + t.len() == w(&g, 1)), "{qty:?}");
-        // Text column: text on the left, NULL on the right; wide characters count as two columns
-        let name = cells(&mut g, &none, 0);
+        // Text and boolean columns: values and NULL on the left
+        assert_eq!(cells(&mut g, &none, 0).iter().map(|x| x.0).collect::<Vec<_>>(), [0, 0, 0]);
+        assert_eq!(cells(&mut g, &none, 2).iter().map(|x| x.0).collect::<Vec<_>>(), [0, 0, 0]);
+        // NULL on the right (as in 0.3.0): in the text column too; wide characters count as two columns
+        let right = Alignments::from([(ValueClass::Null, Align::Right)]);
+        let name = cells(&mut g, &right, 0);
         assert_eq!((name[0].0, name[2].0), (0, 0));
         assert_eq!(name[1].0 + "<null>".len(), w(&g, 0), "{name:?}");
-        // NULL back on the left (as before 0.3.0), numbers in the center: booleans stay where they were
+        // NULL on the left, numbers in the center: booleans stay where they were
         let back = Alignments::from([(ValueClass::Null, Align::Left), (ValueClass::Number, Align::Center)]);
         assert_eq!(cells(&mut g, &back, 0)[1].0, 0);
         let qty = cells(&mut g, &back, 1);

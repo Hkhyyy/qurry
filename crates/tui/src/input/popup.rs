@@ -605,23 +605,23 @@ mod tests {
         assert!(h.app.status.contains("Qurry 99.0.0-beta.1 is available"), "{}", h.app.status);
     }
 
-    /// ⌃k › Grid Alignment…: a row per value class, Enter picks Left / Center / Right; saved to settings.json for the GUI and applied
-    /// to the grids at once. Opening it reads the file again (the GUI may have changed it), and the default drops the override
+    /// ⌃k › Grid Alignment…: a row per value class, Enter picks Left / Center / Right (NULL also Column type, its default); saved to
+    /// settings.json for the GUI and applied to the grids at once. Opening it reads the file again (the GUI may have changed it), and
+    /// the default drops the override
     #[tokio::test]
     async fn grid_alignment_is_picked_from_the_palette() {
         use qurry_core::format::{Align, Alignments, ValueClass};
         let mut h = Harness::new().await;
         h.app.palette_grid_align(ValueClass::String);
         let s = h.screen(120, 30);
-        assert!(s.contains("Grid Alignment") && s.contains("NULL          Right") && s.contains("String        Left"), "{s}");
-        // NULL is the fifth row; it opens on Right (the default), Up twice = Left
+        assert!(s.contains("Grid Alignment") && s.contains("NULL          Column type") && s.contains("String        Left"), "{s}");
+        // NULL is the fifth row; it opens on Column type (the default, first), Down = Left
         for k in ["Down", "Down", "Down", "Down", "Enter"] {
             h.key(k);
         }
         let s = h.screen(120, 30);
-        assert!(s.contains("NULL Alignment") && s.contains("● Right"), "{s}");
-        h.key("Up");
-        h.key("Up");
+        assert!(s.contains("NULL Alignment") && s.contains("● Column type") && s.contains("  Left") && s.contains("  Center") && s.contains("  Right"), "{s}");
+        h.key("Down");
         h.key("Enter");
         let left = Alignments::from([(ValueClass::Null, Align::Left)]);
         assert_eq!(h.app.state.store.grid_align(), left);
@@ -629,10 +629,27 @@ mod tests {
         assert!(h.app.status.starts_with("Grid alignment: NULL on the left"), "{}", h.app.status);
         // Back on the class list, at NULL, marked changed
         let s = h.screen(120, 30);
-        assert!(s.contains("NULL          Left") && s.contains("changed — default Right"), "{s}");
+        assert!(s.contains("NULL          Left") && s.contains("changed — default Column type"), "{s}");
+        // Right (0.3.0's look) is saved too: it is no longer the default
+        h.key("Enter");
+        for k in ["Down", "Down", "Enter"] {
+            h.key(k);
+        }
+        assert_eq!(h.app.state.store.grid_align(), Alignments::from([(ValueClass::Null, Align::Right)]));
+        // Column type again: the override is removed
+        h.key("Enter");
+        for k in ["Up", "Up", "Up", "Enter"] {
+            h.key(k);
+        }
+        assert!(h.app.state.store.grid_align().is_empty());
+        assert!(h.app.status.starts_with("Grid alignment: NULL where its column's type sits"), "{}", h.app.status);
+        // Other classes offer no Column type
+        h.key("Up");
+        h.key("Enter");
+        let s = h.screen(120, 30);
+        assert!(s.contains("Boolean Alignment") && !s.contains("Column type"), "{s}");
         // A change made elsewhere (the GUI) shows when the palette opens
         h.key("Esc");
-        h.app.state.store.set_grid_align(ValueClass::Null, Align::Right).unwrap();
         h.app.state.store.set_grid_align(ValueClass::Number, Align::Center).unwrap();
         h.app.palette_grid_align(ValueClass::Number);
         assert_eq!(h.app.align, Alignments::from([(ValueClass::Number, Align::Center)]));

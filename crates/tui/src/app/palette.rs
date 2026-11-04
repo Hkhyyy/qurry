@@ -18,6 +18,7 @@ fn align_name(a: Align) -> &'static str {
         Align::Left => "Left",
         Align::Center => "Center",
         Align::Right => "Right",
+        Align::Column => "Column type",
     }
 }
 
@@ -380,21 +381,22 @@ impl App {
             .map(|&c| {
                 let (a, def) = (align(c, &self.align), c.default_align());
                 let hint = if a == def { "default".to_string() } else { format!("changed — default {}", align_name(def)) };
-                PItem { label: format!("{:<14}{:<6}", class_name(c), align_name(a)), hint, action: PAction::AlignClass(c) }
+                PItem { label: format!("{:<14}{:<12}", class_name(c), align_name(a)), hint, action: PAction::AlignClass(c) }
             })
             .collect();
         let sel = ValueClass::ALL.iter().position(|&c| c == sel).unwrap_or(0);
         self.popup = Some(Popup::Palette(Palette { title: "Grid Alignment".into(), input: TextArea::default(), items, sel, loading: 0, cache: Default::default() }));
     }
 
-    /// Left / Center / Right for one value class, opened on where it sits now (Enter keeps it)
+    /// Left / Center / Right (NULL also Column type) for one value class, opened on where it sits now (Enter keeps it)
     fn palette_align_of(&mut self, class: ValueClass) {
         let on = align(class, &self.align);
-        let items = [Align::Left, Align::Center, Align::Right]
-            .into_iter()
-            .map(|a| PItem { label: format!("{} {}", if a == on { "●" } else { " " }, align_name(a)), hint: if a == class.default_align() { "default".into() } else { String::new() }, action: PAction::Align(class, a) })
+        let items = class
+            .aligns()
+            .iter()
+            .map(|&a| PItem { label: format!("{} {}", if a == on { "●" } else { " " }, align_name(a)), hint: if a == class.default_align() { "default".into() } else { String::new() }, action: PAction::Align(class, a) })
             .collect();
-        let sel = [Align::Left, Align::Center, Align::Right].iter().position(|&a| a == on).unwrap_or(0);
+        let sel = class.aligns().iter().position(|&a| a == on).unwrap_or(0);
         self.popup = Some(Popup::Palette(Palette { title: format!("{} Alignment", class_name(class)), input: TextArea::default(), items, sel, loading: 0, cache: Default::default() }));
     }
 
@@ -403,7 +405,8 @@ impl App {
         self.status = match self.state.store.set_grid_align(class, a) {
             Ok(next) => {
                 self.align = next;
-                format!("Grid alignment: {} on the {} — saved for the GUI too", class_name(class), align_name(a).to_lowercase())
+                let to = if a == Align::Column { "where its column's type sits".to_string() } else { format!("on the {}", align_name(a).to_lowercase()) };
+                format!("Grid alignment: {} {to} — saved for the GUI too", class_name(class))
             }
             Err(e) => format!("Couldn't save the grid alignment: {e}"),
         };

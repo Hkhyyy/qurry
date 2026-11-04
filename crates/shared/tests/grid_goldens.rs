@@ -166,12 +166,13 @@ fn rules_the_tui_and_mcp_changed_to() {
     assert_eq!(automap::auto_map(&["a\u{feff}".into(), "a\u{85}".into()], Some(&cols)), ["a", ""]);
 }
 
-/// Value class and default alignment of a grid cell: one golden, the same for the TUI (here) and the GUI (src/lib/align.test.ts, through WASM)
+/// Value class and default alignment of a grid cell: one golden, the same for the TUI (here) and the GUI (src/lib/gridAlign.test.ts, through WASM)
 #[test]
 fn value_classes_match_the_golden() {
     for e in read("goldens/valueclass.json").as_array().unwrap() {
-        let class = format::value_class(e["type"].as_str().unwrap(), &e["value"]);
-        let got = json!({ "class": class, "align": format::align(class, &format::Alignments::new()) });
+        let t = e["type"].as_str().unwrap();
+        let class = format::value_class(t, &e["value"]);
+        let got = json!({ "class": class, "align": format::cell_align(format::type_class(t), class, &format::Alignments::new()) });
         assert_eq!(got, json!({ "class": e["class"], "align": e["align"] }), "{e}");
     }
 }
