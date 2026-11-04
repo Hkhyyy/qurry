@@ -1,4 +1,5 @@
-import { dialog, editor, expect, menuItem, openApp, tabStrips, test, treeItem } from "./app";
+import type { Page } from "@playwright/test";
+import { dialog, editor, expect, menuItem, openApp, status, tabStrips, test, treeItem } from "./app";
 
 test.beforeEach(async ({ page }) => openApp(page));
 
@@ -96,4 +97,75 @@ test("Enter in the Rename… name field doesn't also answer the confirmation tha
   await dialog(page).getByRole("button", { name: "Cancel" }).click();
   await expect(dialog(page)).toHaveCount(0);
   await expect(treeItem(page, "users").first()).toBeVisible();
+});
+
+// ── Several nodes (⌘-click, ⇧-click) ──
+const selectedRows = (page: Page) => page.locator(".ws-explorer.on .tree-node.selected");
+
+test("⌘-click two tables: one Drop… confirmation, single-node commands greyed out with a tooltip", async ({ page }) => {
+  await treeItem(page, "contracts").first().click();
+  await treeItem(page, "users").first().click({ modifiers: ["Meta"] });
+  await expect(selectedRows(page)).toHaveCount(2);
+  await treeItem(page, "users").first().click({ button: "right" });
+  await expect(menuItem(page, /^Modify Table…/)).toHaveAttribute("aria-disabled", "true");
+  await expect(menuItem(page, /^Modify Table…/)).toHaveAttribute("title", /^Works on one node/);
+  await menuItem(page, "Object Actions ▸").hover();
+  await menuItem(page, /^Drop…/).click();
+  await expect(dialog(page).locator(".ui-modal-title")).toHaveText("[DEV] shop_app");
+  await expect(dialog(page).locator(".ui-detail-text")).toHaveText(["DROP TABLE public.contracts, public.users;"]);
+  await dialog(page).getByRole("button", { name: "Cancel" }).click();
+  // ⌥⇧⌘C copies schema.name for each, as for one node
+  await treeItem(page, "users").first().click({ button: "right" });
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Meta+Alt+Shift+C");
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("public.contracts\npublic.users");
+});
+
+test("⇧-click selects the range; ⌦ drops the view before the tables it reads", async ({ page }) => {
+  // [DEV] shop_app's views folder (the one of [MySQL] shop follows)
+  await treeItem(page, "views 1").first().click();
+  await page.keyboard.press("ArrowRight");
+  await treeItem(page, "contracts").first().click();
+  await treeItem(page, "v_active_users").click({ modifiers: ["Shift"] });
+  await expect(selectedRows(page)).toHaveCount(4);
+  await page.keyboard.press("Delete");
+  await expect(dialog(page)).toContainText("Execute these 2 statements?");
+  await expect(dialog(page).locator(".ui-detail-text")).toHaveText(["DROP VIEW public.v_active_users;", "DROP TABLE public.contracts, public.payments, public.users;"]);
+});
+
+test("on a Production data source, the Drop… of several objects is the Production confirmation", async ({ page }) => {
+  // [MySQL] shop (Production) lists its tables after [DEV] shop_app's
+  await treeItem(page, "contracts").nth(1).click();
+  await treeItem(page, "users").nth(1).click({ modifiers: ["Meta"] });
+  await page.keyboard.press("Delete");
+  await expect(dialog(page).locator(".ui-modal-title")).toHaveText("Production: [MySQL] shop");
+  // MySQL: one statement per table (its DDL can't roll back; a failure names what was dropped)
+  await expect(dialog(page).locator(".ui-detail-text")).toHaveText(["DROP TABLE shop.contracts;", "DROP TABLE shop.users;"]);
+});
+
+test("rows that leave the screen leave the selection: after Collapse All the keys act on nothing hidden", async ({ page }) => {
+  await treeItem(page, "contracts").first().click();
+  await treeItem(page, "users").first().click({ modifiers: ["Meta"] });
+  await page.locator(".ws-explorer.on .panel-header").getByTitle(/^Collapse All/).click();
+  await expect(selectedRows(page)).toHaveCount(0);
+  await page.locator(".ws-explorer.on .tree").focus();
+  await page.keyboard.press("Delete");
+  await expect(dialog(page)).toHaveCount(0);
+});
+
+test("Enter with several tables opens a tab for each", async ({ page }) => {
+  await treeItem(page, "contracts").first().click();
+  await treeItem(page, "users").first().click({ modifiers: ["Meta"] });
+  await page.keyboard.press("Enter");
+  await expect.poll(() => tabStrips(page)).toEqual(["contracts | users"]);
+});
+
+test("⌦ on a range of Redis keys asks no Drop… (DROP isn't a Redis command)", async ({ page }) => {
+  // [Redis] cache's db0 lists its keys (session and user are folders)
+  await treeItem(page, "X events").click();
+  await treeItem(page, "S tags").click({ modifiers: ["Shift"] });
+  await expect(selectedRows(page)).toHaveCount(3);
+  await page.keyboard.press("Delete");
+  await expect(status(page)).toHaveText(/^Works on one node/);
+  await expect(dialog(page)).toHaveCount(0);
 });

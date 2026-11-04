@@ -11,9 +11,9 @@ pub const HELP: &[(&str, &[(&str, &str)])] = &[
         ("F4 / ⌃↓", "Open a query console for the data source / database (Redis: the key browser)"),
         ("/", "Filter loaded nodes (/ again edits it · empty or Esc clears)"),
         ("F5", "Refresh (the run key refreshes in the explorer)"),
-        ("y  ⌘C", "Copy name (OSC 52 clipboard)"),
+        ("y  ⌘C", "Copy reference: schema.name, as the GUI's Copy Reference (OSC 52 clipboard; marked nodes: one per line)"),
         ("PgUp / PgDn · Home / End", "Page · first / last node"),
-        ("Tab / Esc", "Go to the open tab"),
+        ("Tab / Esc", "Go to the open tab (Esc clears the marks first)"),
     ]),
     ("Query console", &[
         ("completion list", "Opens as you type (or ⌃Space) · ↑↓ choose · Enter/Tab insert · Esc close"),

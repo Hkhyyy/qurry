@@ -17,6 +17,10 @@ Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…
 - Keys inside a dialog act on that dialog: query history, the Redis browser and terminal, the data source form. Mouse gestures (`⌥` click, drag) stay too.
 - Menu entries made from your data are choices, not commands: a data source, workspace or console by name, a column's filter values, a data extractor, an auto-refresh interval, the Query Execution Settings options.
 
+### Several nodes in the Database Explorer
+
+`⌘`-click adds a node to the selection or removes it, `⇧`-click selects the visible nodes from the last clicked one; a plain click or an arrow key selects one node again. Go to DDL and Edit Data (a tab each, `↩` too), Copy Name and Copy Reference (one per line; a reference is `schema.name`), Drop… and Refresh then run for every selected node, from the context menu or their keys. Drop… asks once, listing every statement (on a Production data source, the Production confirmation), and needs objects of one database. An object goes before what it depends on: views first, then materialized views, tables and sequences, and a materialized view before a view it reads. On PostgreSQL they run in one transaction, the objects of one kind in one statement, so nothing is dropped if one can't be. On MySQL, whose DDL can't be rolled back, each object has its own statement, a table before the selected tables its foreign keys reference, and they run one by one: a failure names the statements that were applied, the one that failed and the ones that didn't run. Commands that work on one node are greyed out; their tooltip says how to get back to one. A selected node that leaves the screen (collapsed, filtered out, dropped) leaves the selection.
+
 <!-- keymap:gui:start -->
 
 ## Search & Navigation
@@ -90,6 +94,7 @@ Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…
 | `⌥⌘g` | SQL Generator |
 | `⌥⇧⌘G` | Copy DDL to clipboard |
 | `⌥⇧⌘B` | Open DDL in console |
+| `⌘c` | Copy name (several selected nodes: one per line) |
 | `⌥⇧⌘C` | Copy reference |
 | `F1` | Quick documentation |
 | `⌘F6` | Modify table (columns, keys, indexes, foreign keys) |
@@ -102,6 +107,8 @@ Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…
 | `⌘F2` | Disconnect |
 | `⌦ / ⌘⌫` | Remove data source / drop object (asks first) |
 | `type letters` | Speed search in the tree |
+| `⌘-click` | Add a node to the selection or remove it (Go to DDL, Edit Data, copy, Drop…, Refresh run for every selected node) |
+| `⇧-click` | Select the visible nodes from the last clicked one; a plain click or an arrow key selects one node again |
 
 ## Query console
 

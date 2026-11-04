@@ -30,12 +30,8 @@ pub(super) fn tree_key(app: &mut App, k: KeyEvent) {
     }
     let sel = app.tree.selected();
     match k.code {
-        // Ctrl+↓ (⌘↓ Edit Data / Jump to Source)
-        KeyCode::Down if k.modifiers.contains(KeyModifiers::CONTROL) => {
-            if let Some(nd) = sel {
-                app.activate_node(&nd, true)
-            }
-        }
+        // Ctrl+↓ (⌘↓ Edit Data / Jump to Source): the marked nodes too
+        KeyCode::Down if k.modifiers.contains(KeyModifiers::CONTROL) => app.run_action(Action::EditData),
         KeyCode::Down | KeyCode::Char('j') => app.tree.sel = (app.tree.sel + 1).min(n.saturating_sub(1)),
         KeyCode::Up | KeyCode::Char('k') => app.tree.sel = app.tree.sel.saturating_sub(1),
         KeyCode::PageDown => app.tree.sel = (app.tree.sel + 20).min(n.saturating_sub(1)),
@@ -67,20 +63,26 @@ pub(super) fn tree_key(app: &mut App, k: KeyEvent) {
                 app.activate_node(&nd, false)
             }
         }
-        KeyCode::F(4) => {
-            if let Some(nd) = sel {
-                app.activate_node(&nd, true)
-            }
-        }
+        KeyCode::F(4) => app.run_action(Action::EditData),
+        // The marked nodes: one per line
         KeyCode::Char('y') => {
-            if let Some(nd) = sel {
-                let r = match (&nd.schema, &nd.name) {
+            let names: Vec<String> = app
+                .tree
+                .targets()
+                .iter()
+                .map(|nd| match (&nd.schema, &nd.name) {
                     (Some(s), Some(n)) if !matches!(nd.kind, NodeKind::Column { .. }) => format!("{s}.{n}"),
                     (_, Some(n)) => n.clone(),
                     _ => nd.label.clone(),
-                };
-                copy(app, &r);
+                })
+                .collect();
+            if !names.is_empty() {
+                copy(app, &names.join("\n"));
             }
+        }
+        KeyCode::Esc if !app.tree.marked.is_empty() => {
+            app.tree.marked.clear();
+            app.status = "Marks cleared".into();
         }
         KeyCode::Tab | KeyCode::Esc => {
             if !app.tabs.is_empty() {

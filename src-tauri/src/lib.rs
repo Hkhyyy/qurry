@@ -120,6 +120,7 @@ pub fn run() {
             commands::table_ddl,
             commands::new_object_ddl,
             commands::rename_ddl,
+            commands::drop_ddl,
             commands::run_ddl,
             commands::history_add,
             commands::history_list,

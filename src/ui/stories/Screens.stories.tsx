@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, waitFor, within } from "storybook/test";
+import { expect, fireEvent, userEvent, waitFor, within } from "storybook/test";
 // Fake backend (same as the app's ?mock): returns fixed data for the commands screens call
 import "../../lib/mock";
 import "../../lib/monaco";
@@ -66,6 +66,22 @@ const Frame = ({ children, h = 560 }: { children: React.ReactNode; h?: number })
 
 /** Whole app (explorer · tabs · console). Right-click the explorer, ⇧⌘A for Find Action, ⌘↩ in the console to run */
 export const FullApp: S = { name: "App (whole window)", render: () => <div style={{ height: "100vh" }}><App /></div> };
+
+/** Database Explorer, several nodes: ⌘-click two tables, then right-click one. Go to DDL, Edit Data, Copy Name / Reference, Drop… and
+ *  Refresh run for both; the commands for one node are greyed out (their tooltip: click a node without ⌘ or ⇧). ⇧-click selects a range */
+export const ExplorerSeveral: S = {
+  name: "Database Explorer — several selected",
+  render: () => <div style={{ height: "100vh" }}><App /></div>,
+  play: async ({ canvasElement }) => {
+    const row = (name: string) => canvasElement.querySelector<HTMLElement>(`.ws-explorer.on [data-node="dev|shop_app|public|${name}"]`)!;
+    await waitFor(() => expect(row("users")).toBeTruthy(), { timeout: 5000 });
+    await userEvent.click(row("contracts"));
+    // ⌘-click (⌃-click off macOS)
+    fireEvent.mouseDown(row("users"), navigator.platform.includes("Mac") ? { metaKey: true } : { ctrlKey: true });
+    const r = row("users").getBoundingClientRect();
+    fireEvent.contextMenu(row("users"), { clientX: r.left + 120, clientY: r.bottom });
+  },
+};
 
 /** Settings › Appearance: theme, editor and grid fonts, grid alignment per value class, the automatic update check and the update channel (alignment and channel shared with the TUI) */
 export const Settings: S = { name: "Settings — Appearance & updates", render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} /> };

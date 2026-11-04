@@ -450,6 +450,15 @@ const handlers: Record<string, (a: any) => unknown> = {
     return [o.kind === "database" ? `CREATE DATABASE ${o.name}` : o.kind === "schema" ? `CREATE SCHEMA ${o.name}` : o.kind === "view" ? `CREATE ${o.materialized ? "MATERIALIZED " : ""}VIEW ${o.schema}.${o.name} AS\n${o.query}` : `CREATE SEQUENCE ${o.schema}.${o.name}`];
   },
   rename_ddl: (a: any) => `ALTER TABLE ${a.schema}.${a.old} RENAME TO ${a.new}`,
+  // The order of crates/core ddl::drop_sql (no quoting, no IF EXISTS, no dependencies): one statement per kind on PostgreSQL,
+  // one per object elsewhere
+  drop_ddl: (a: any) => {
+    const pg = conns.find((c) => c.id === a.id.split("::")[0])?.kind === "postgres";
+    return ([["view", "VIEW"], ["matview", "MATERIALIZED VIEW"], ["table", "TABLE"], ["partitioned", "TABLE"], ["foreign", "FOREIGN TABLE"], ["sequence", "SEQUENCE"]] as const).flatMap(([k, kw]) => {
+      const names = a.objects.filter((o: any) => o.kind === k).map((o: any) => `${o.schema}.${o.name}`);
+      return (pg && names.length ? [names] : names.map((n: string) => [n])).map((ns: string[]) => `DROP ${kw} ${ns.join(", ")};`);
+    });
+  },
   // e2e sets __mockDdlWarning for "ran, but the Production log couldn't record it"
   run_ddl: () => new Promise((ok) => setTimeout(() => ok((globalThis as any).__mockDdlWarning ?? null), 300)),
   subset_preview: () => ({

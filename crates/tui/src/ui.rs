@@ -172,7 +172,14 @@ fn draw_workspaces(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Tree;
-    let title = if app.tree.filter.is_empty() { " Database Explorer ".to_string() } else { format!(" Database Explorer — /{} (Esc clears) ", app.tree.filter) };
+    // The mark count first: the explorer is narrow. Commands act on the marked nodes on screen; marks in collapsed or filtered-out
+    // folders are counted apart
+    let marked = match (app.tree.marked.len(), app.tree.targets().len()) {
+        (0, _) => String::new(),
+        (n, on) if on < n => format!("{on} marked ({} hidden) · ", n - on),
+        (n, _) => format!("{n} marked · "),
+    };
+    let title = if app.tree.filter.is_empty() { format!(" {marked}Database Explorer ") } else { format!(" {marked}Database Explorer — /{} (Esc clears) ", app.tree.filter) };
     let b = panel(title, focused);
     let inner = b.inner(area);
     f.render_widget(b, area);
@@ -206,6 +213,8 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
             .hint(if loading { "loading…".to_string() } else { n.hint.clone() })
             // Like the GUI, color everything under a Data Source (the selected line wins)
             .bg(conn_color)
+            // Marked rows: the selection color without focus (the cursor's row keeps the focused one)
+            .selected(app.tree.marked.contains(&n.key), false)
             .selected(i == app.tree.sel, focused);
         if !glyph.is_empty() {
             row = row.lead(icon(glyph, icolor));

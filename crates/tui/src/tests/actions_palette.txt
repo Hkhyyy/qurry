@@ -65,6 +65,8 @@ DeleteDataSource	Remove Data Source	D (explorer)
 Connect	Connect	c (explorer)
 Disconnect	Disconnect	⌃F2
 Refresh	Refresh	r (explorer)
+MarkNode	Mark / Unmark Node (Go to DDL, open, copy, drop and refresh act on every marked node; Esc clears)	m (explorer)
+DropObject	Drop… (the selected object, or the marked objects of one database: one confirmation)	Delete (explorer)
 ManageSchemas	Manage Shown Schemas… (databases · schemas in the explorer)	s (explorer)
 CloseTab	Close Tab	⌃w
 NextTab	Next Tab	⌥Right / ⌃PgDn

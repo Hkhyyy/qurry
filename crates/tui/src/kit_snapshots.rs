@@ -186,7 +186,7 @@ async fn explorer(h: &mut Harness) {
     h.app.tree.children.insert("prod|rentalpay".into(), vec![node("prod|rentalpay|public", "public", "", NodeKind::Schema, p)]);
     h.app.tree.children.insert("prod|rentalpay|public".into(), vec![node("prod|rentalpay|public|g", "tables", "66", NodeKind::Group, p)]);
     let tables = [("adjust", "정산 테이블 (주문 단위 정산)"), ("adjust_status_log", "정산 상태 로그"), ("admin_auth", "관리자 OTP 인증"), ("admin_role", ""), ("bank_info", "은행 정보 테이블"), ("contract", "월세 계약 테이블"), ("payment", "결제 카드 정보")];
-    h.app.tree.children.insert("prod|rentalpay|public|g".into(), tables.iter().map(|(t, c)| Node { expandable: true, ..node(&format!("prod|rentalpay|public|g|{t}"), t, c, NodeKind::Object("table".into()), p) }).collect());
+    h.app.tree.children.insert("prod|rentalpay|public|g".into(), tables.iter().map(|(t, c)| Node { expandable: true, name: Some(t.to_string()), ..node(&format!("prod|rentalpay|public|g|{t}"), t, c, NodeKind::Object("table".into()), p) }).collect());
     for k in ["prod", "prod|rentalpay", "prod|rentalpay|public", "prod|rentalpay|public|g"] {
         h.app.tree.expanded.insert(k.into());
     }
@@ -484,6 +484,19 @@ async fn all_scenes() -> Vec<Value> {
     (g.row, g.col) = at;
     h.app.focus = focus;
     scenes.push(app_scene(&mut h, "Terminal too small", "Below 40×10 the layout isn't drawn: the size, the size needed and how to quit", 36, 9));
+    // Marked nodes (m, the GUI's ⌘-click), then Delete on them: one confirmation for all, the Production one on a Production source
+    for t in ["adjust", "contract", "payment"] {
+        h.app.tree.select_key(&format!("prod|rentalpay|public|g|{t}"));
+        h.app.run_action(crate::app::Action::MarkNode);
+    }
+    scenes.push(app_scene(&mut h, "Explorer: marked nodes", "m marks nodes (the GUI's ⌘-click): Go to DDL, F4, y, Delete and refresh act on every marked node; m unmarks, Esc clears", 120, 22));
+    h.app.run_action(crate::app::Action::DropObject);
+    h.settle().await;
+    scenes.push(app_scene(&mut h, "Explorer: drop marked objects", "Delete on marked objects of one database: one confirmation lists every statement (red on a Production source, as for one object)", 120, 22));
+    h.app.popup = None;
+    h.app.tree.marked.clear();
+    h.app.tree.sel = 5;
+    h.app.status = "4 rows retrieved in 12 ms".into();
     h.app.popup = Some(Popup::Confirm {
         opened: None,
         text: "Production data source \"[PROD] rentalpay\" — this changes data:\n\n  update payment set amount = 0 where id = 4\n     → 1 row\n  delete from payment where created_at < now() - interval '1 year'\n     → 12,408 rows\n\nRun it?".into(),

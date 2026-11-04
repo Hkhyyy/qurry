@@ -63,6 +63,8 @@ Database Explorer keys (change them with F1)
   w                              Move Data Source to Another Workspace…
   D                              Remove Data Source
   c                              Connect
+  m                              Mark / Unmark Node (Go to DDL, open, copy, drop and refresh act on every marked node; Esc clears)
+  Delete                         Drop… (the selected object, or the marked objects of one database: one confirmation)
   s                              Manage Shown Schemas… (databases · schemas in the explorer)
 
 Data grid keys (change them with F1)
@@ -82,9 +84,9 @@ Database Explorer
   F4 / ⌃↓                        Open a query console for the data source / database (Redis: the key browser)
   /                              Filter loaded nodes (/ again edits it · empty or Esc clears)
   F5                             Refresh (the run key refreshes in the explorer)
-  y  ⌘c                          Copy name (OSC 52 clipboard)
+  y  ⌘c                          Copy reference: schema.name, as the GUI's Copy Reference (OSC 52 clipboard; marked nodes: one per line)
   PgUp / PgDn · Home / End       Page · first / last node
-  Tab / Esc                      Go to the open tab
+  Tab / Esc                      Go to the open tab (Esc clears the marks first)
 
 Query console
   completion list                Opens as you type (or ⌃Space) · ↑↓ choose · Enter/Tab insert · Esc close

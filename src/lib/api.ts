@@ -301,6 +301,8 @@ export const ddl = {
   table: (id: string, before: TableDef | null, after: TableDef) => invoke<string[]>("table_ddl", { id, before, after }),
   newObject: (id: string, object: NewObject) => invoke<string[]>("new_object_ddl", { id, object }),
   rename: (id: string, what: string, schema: string, old: string, newName: string) => invoke<string>("rename_ddl", { id, what, schema, old, new: newName }),
+  /** Drop… of objects of one database, in an order that runs: views, then tables (one statement), then sequences */
+  drop: (id: string, objects: { kind: string; schema: string; name: string }[]) => invoke<string[]>("drop_ddl", { id, objects }),
   /** A warning when it ran but the Production log couldn't record it */
   run: (id: string, statements: string[]) => invoke<string | null>("run_ddl", { id, statements }),
 };

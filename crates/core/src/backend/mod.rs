@@ -87,6 +87,12 @@ pub(crate) trait Backend {
         unsupported("Test data", self)
     }
 
+    /// Drop…: [schema, name, of_schema, of_name] for each object in `schemas` that has to be dropped before the object it depends on
+    /// because one statement can't drop both (a MySQL foreign key, a PostgreSQL materialized view over a view). None known: none
+    async fn drop_deps(&self, _schemas: &[String]) -> AppResult<Vec<[String; 4]>> {
+        Ok(vec![])
+    }
+
     // ───── Connection: db.rs · app.rs ─────
 
     async fn server_version(&self) -> AppResult<String>;

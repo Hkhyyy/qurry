@@ -87,6 +87,8 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::Connect, hint: "", run: connect },
     ActionDef { action: Action::Disconnect, hint: "", run: disconnect },
     ActionDef { action: Action::Refresh, hint: "", run: refresh },
+    ActionDef { action: Action::MarkNode, hint: "", run: |app| app.mark_node() },
+    ActionDef { action: Action::DropObject, hint: "", run: |app| app.drop_objects() },
     ActionDef { action: Action::ManageSchemas, hint: "", run: manage_schemas },
     ActionDef { action: Action::CloseTab, hint: "", run: close_tab },
     ActionDef { action: Action::NextTab, hint: "", run: |app| app.cycle_tab(1) },
@@ -171,7 +173,11 @@ fn disconnect(app: &mut App) {
 
 fn refresh(app: &mut App) {
     match (app.focus, app.tree.selected()) {
-        (Focus::Tree, Some(n)) => app.refresh_node(&n),
+        (Focus::Tree, Some(_)) => {
+            for n in app.tree.targets() {
+                app.refresh_node(&n)
+            }
+        }
         _ => {
             if let Some(t) = app.tabs.get(app.active) {
                 let id = t.id;
@@ -209,7 +215,7 @@ fn ddl(app: &mut App) {
         app.status = "Go to DDL: select an object in the explorer or open a table".into();
         return;
     }
-    if let Some(n) = app.tree.selected().filter(|n| matches!(n.kind, NodeKind::Object(_))) {
+    for n in app.tree_targets("Go to DDL", |n| matches!(n.kind, NodeKind::Object(_))).unwrap_or_default() {
         let k = match &n.kind {
             NodeKind::Object(k) if k == "function" || k == "procedure" => "routine".to_string(),
             NodeKind::Object(k) => k.clone(),
@@ -219,8 +225,10 @@ fn ddl(app: &mut App) {
     }
 }
 
+/// F4 / ⌃↓: the cursor's node, or every marked object (a table tab each)
 fn edit_data(app: &mut App) {
-    if let Some(n) = app.tree.selected() {
+    let marks = !app.tree.marked.is_empty();
+    for n in app.tree_targets("Open", |n| !marks || matches!(n.kind, NodeKind::Object(_))).unwrap_or_default() {
         app.activate_node(&n, true)
     }
 }
