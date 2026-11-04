@@ -208,6 +208,21 @@ test("Output follows new lines at the bottom, keeps the position when scrolled u
   await run();
   expect(await output.evaluate((el) => el.scrollTop)).toBe(top);
 
+  // Back at the bottom, then scrolled up while lines arrive before that scroll's event does (it comes a frame later, later still on a
+  // busy machine): the view stays put, the lines don't pull it back down
+  await scrollBy(100_000);
+  await expect.poll(fromBottom).toBeLessThanOrEqual(4);
+  await output.evaluate((el) => {
+    const w = window as any;
+    w.__holdScroll = (e: Event) => e.target === el && e.stopImmediatePropagation();
+    document.addEventListener("scroll", w.__holdScroll, true);
+    el.scrollBy(0, -200);
+  });
+  const held = await output.evaluate((el) => el.scrollTop);
+  await run();
+  expect(await output.evaluate((el) => el.scrollTop)).toBe(held);
+  await page.evaluate(() => document.removeEventListener("scroll", (window as any).__holdScroll, true));
+
   // Back at the bottom: follows again
   await scrollBy(100_000);
   await expect.poll(fromBottom).toBeLessThanOrEqual(4);

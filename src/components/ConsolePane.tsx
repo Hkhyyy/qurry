@@ -258,21 +258,32 @@ export function ConsolePane(p: Props) {
   const shown = active ? p.activeResult : "output";
   // Output follows new lines while scrolled to the bottom; scrolled up, it keeps the position. Clear All and coming back to Output follow again.
   const follow = useRef(true);
+  /** Where following last put the scroll position: a scroll away from it whose scroll event hasn't come yet (it comes a frame later)
+   * still means the user scrolled up, so lines arriving in between don't pull the view back down */
+  const followedTop = useRef(0);
+  const keepFollowing = (el: HTMLElement) => {
+    if (follow.current && el.scrollTop < followedTop.current - 4 && el.scrollHeight - el.scrollTop - el.clientHeight > 4) follow.current = false;
+    if (!follow.current) return;
+    el.scrollTop = el.scrollHeight;
+    followedTop.current = el.scrollTop;
+  };
   useLayoutEffect(() => {
     follow.current = true;
+    followedTop.current = 0;
   }, [shown]);
   useLayoutEffect(() => {
     const el = outputRef.current;
-    if (p.output.length === 0) follow.current = true;
-    if (el && follow.current) el.scrollTop = el.scrollHeight;
+    if (p.output.length === 0) {
+      follow.current = true;
+      followedTop.current = 0;
+    }
+    if (el) keepFollowing(el);
   }, [p.output, p.errorAction, shown]);
   // A shorter or narrower log (divider dragged, window resized) fires no scroll: keep the newest line in view while following
   useLayoutEffect(() => {
     const el = outputRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => {
-      if (follow.current) el.scrollTop = el.scrollHeight;
-    });
+    const ro = new ResizeObserver(() => keepFollowing(el));
     ro.observe(el);
     return () => ro.disconnect();
   }, [shown]);
@@ -443,6 +454,7 @@ export function ConsolePane(p: Props) {
                   onScroll={(e) => {
                     const el = e.currentTarget;
                     follow.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 4;
+                    if (follow.current) followedTop.current = el.scrollTop;
                   }}
                 >
                   {p.output.length === 0 && <EmptyState>Execute a statement{cmd("editor.run").shortcut ? ` (${cmd("editor.run").shortcut})` : ""} to see the output.</EmptyState>}
