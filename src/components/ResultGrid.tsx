@@ -16,7 +16,7 @@ import { cmd, commandsFor, eventSpec, hit, keyTitle, runKey } from "../lib/short
 import { draftAt, draftToApply, leftDraft, panelText, registerValuePanel, toggleJsonLayout, type PanelDraft } from "../lib/valuePanel";
 import { ResultChart } from "./ResultChart";
 import { ValuePanel } from "./ValuePanel";
-import { Button, CellEditor, CodeBlock, cx, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, JsonText, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, ToolButton, Toolbar, ToolbarSep } from "../ui";
+import { Button, CellEditor, CodeBlock, cx, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, JsonText, Modal, Notice, ProgressBar, RowNumberCell, SearchField, Spacer, Text, ToolButton, Toolbar, ToolbarSep } from "../ui";
 import {
   IcChart, IcClock, IcExport, IcGear, IcMinus, IcPlus, IcPreview, IcReload, IcRevert, IcSearch, IcStop, IcSubmit, IcTranspose, IcView,
 } from "../ui/icons";
@@ -922,7 +922,12 @@ export function ResultGrid(p: Props) {
                     );
                   })}
                 </div>
-                {loadingMore && <div className="grid-loading">Loading more…</div>}
+                {/* One row's room under the rows while more can come, so the progress bar's coming and going moves nothing */}
+                {result.truncated && !result.moreError && (
+                  <div className={cx("grid-more-progress", loadingMore && "on")} style={{ height: ROW_H }}>
+                    {loadingMore && <ProgressBar pct={null} width={140} label="Loading more rows" />}
+                  </div>
+                )}
                 {!loadingMore && result.moreError && (
                   <div className="grid-loading grid-more-error" role="alert">
                     {result.moreError}
