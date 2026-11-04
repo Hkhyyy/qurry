@@ -78,7 +78,7 @@ impl App {
             move |a, items| {
                 a.status.clear();
                 a.flow = Some(flow);
-                a.popup = Some(Popup::Palette(Palette { title, input: TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
+                a.open_after_notices(Popup::Palette(Palette { title, input: TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
             },
         );
     }
@@ -195,11 +195,12 @@ impl App {
                     let pending = list.iter().filter(|m| m.status == "pending").count();
                     let text = format!("{}\n\n{}", if lines.is_empty() { "No V*__*.sql files in this folder".into() } else { lines.join("\n") }, if pending > 0 { format!("Apply {pending} pending migration(s)?") } else { "Nothing to apply.".into() });
                     if pending == 0 {
-                        a.popup = Some(Popup::Message { title: "Migrations".into(), text });
+                        a.open_after_notices(Popup::Message { title: "Migrations".into(), text });
                         return;
                     }
                     let st = a.state.clone();
-                    a.popup = Some(Popup::Confirm {
+                    a.open_after_notices(Popup::Confirm {
+                        opened: None,
                         text,
                         on_yes: Box::new(move |a| {
                             a.status = "Applying migrations…".into();

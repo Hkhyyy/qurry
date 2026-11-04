@@ -1,0 +1,9 @@
+[
+  { "id": "medis-example", "keys": ["token", "dev:sessions:{2}", "prod:x", "dev:admin:{1}", "dev:sessions:{1}"] },
+  { "id": "empty-segments", "keys": ["a:", ":a", "a::b", "::", "a"] },
+  { "id": "deep", "keys": ["a:b:c:d", "a:b:c:e", "a:b:x", "a:y"] },
+  { "id": "case-order", "keys": ["b:x", "B:x", "a:x", "_:x", "1:x"] },
+  { "id": "korean-emoji", "keys": ["사용자:1", "사용자:2", "😀:x", "！:x", "키"] },
+  { "id": "no-colons", "keys": ["c", "a", "b"] },
+  { "id": "none", "keys": [] }
+]

@@ -1,4 +1,5 @@
 //! SSH tunnel: opens a local port and forwards incoming connections to the remote DB over SSH direct-tcpip channels.
+//! The AWS SSM tunnel (ssm.rs) gives the same Tunnel: a local port that lives until it is dropped.
 use crate::error::{AppError, AppResult};
 use crate::store::{SshAuth, SshConfig};
 use russh::client;
@@ -99,12 +100,43 @@ impl client::Handler for Client {
 
 pub struct Tunnel {
     pub local_port: u16,
-    task: JoinHandle<()>,
+    keep: Keep,
+}
+
+/// What forwards the port: the SSH accept loop and its session, or the aws CLI process (killed when dropped)
+enum Keep {
+    Ssh(JoinHandle<()>, Arc<client::Handle<Client>>),
+    Process(Box<crate::ssm::Process>),
+}
+
+impl Tunnel {
+    pub(crate) fn process(local_port: u16, p: crate::ssm::Process) -> Self {
+        Self { local_port, keep: Keep::Process(Box::new(p)) }
+    }
+
+    /// Still forwarding: the SSH accept loop runs and its session is open (the accept loop outlives a session that keepalive,
+    /// sleep or a network change ended), or the aws CLI hasn't exited (SSM idle timeout, network, session ended)
+    pub fn alive(&self) -> bool {
+        match &self.keep {
+            Keep::Ssh(t, session) => !t.is_finished() && !session.is_closed(),
+            Keep::Process(p) => p.alive(),
+        }
+    }
+
+    /// AWS SSM: taken before connecting through it, to tell whether the instance couldn't reach the database (ssm::connect_error)
+    pub(crate) fn ssm_mark(&self) -> Option<crate::ssm::Mark> {
+        match &self.keep {
+            Keep::Ssh(..) => None,
+            Keep::Process(p) => Some(p.mark()),
+        }
+    }
 }
 
 impl Drop for Tunnel {
     fn drop(&mut self) {
-        self.task.abort();
+        if let Keep::Ssh(t, _) = &self.keep {
+            t.abort();
+        }
     }
 }
 
@@ -179,10 +211,11 @@ pub async fn open(ssh: &SshConfig, secret: Option<&str>, remote_host: &str, remo
     let local_port = listener.local_addr()?.port();
     let session = Arc::new(session);
     let (rhost, rport) = (remote_host.to_string(), remote_port);
+    let forward = session.clone();
     let task = tokio::spawn(async move {
         loop {
             let Ok((mut tcp, peer)) = listener.accept().await else { break };
-            let session = session.clone();
+            let session = forward.clone();
             let rhost = rhost.clone();
             tokio::spawn(async move {
                 match session.channel_open_direct_tcpip(rhost, rport as u32, peer.ip().to_string(), peer.port() as u32).await {
@@ -195,7 +228,7 @@ pub async fn open(ssh: &SshConfig, secret: Option<&str>, remote_host: &str, remo
             });
         }
     });
-    Ok(Tunnel { local_port, task })
+    Ok(Tunnel { local_port, keep: Keep::Ssh(task, session) })
 }
 
 #[cfg(test)]
@@ -226,12 +259,12 @@ mod tests {
         unsafe { std::env::set_var("QURRY_KNOWN_HOSTS", &kh) }; // Used only in a single test
         let cfg = ConnectionConfig {
             id: "t".into(), name: "t".into(), kind: DbKind::Postgres, host: "dbtool-pg".into(), port: 5432,
-            user: "postgres".into(), database: "postgres".into(), color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+            user: "postgres".into(), database: "postgres".into(), color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         };
         let mut ssh = SshConfig { enabled: true, host: "localhost".into(), port: 2222, user: "root".into(), auth: SshAuth::Password, key_path: String::new() };
 
         // 0) Unknown server: show the fingerprint and stop → once the user trusts it, it passes from then on
-        let first = test_login(&ssh, Some("sshpw")).await.err().expect("unknown host must stop").to_string();
+        let first = test_login(&ssh, Some("sshpw")).await.expect_err("unknown host must stop").to_string();
         println!("{first}");
         assert!(first.contains(UNKNOWN_HOST) && first.contains("SHA256:"), "{first}");
         assert!(std::fs::read_to_string(&kh).unwrap().is_empty(), "not learned before the user trusts it");
@@ -276,5 +309,115 @@ mod tests {
         println!("changed host key: {:?}", mitm.as_ref().err().map(|e| e.to_string()));
         assert!(mitm.is_err());
         let _ = std::fs::remove_file(&kh);
+    }
+
+    /// An SSH server in this process: password "pw", direct-tcpip forwarded to `to`. Counts logins
+    struct Sshd {
+        to: std::net::SocketAddr,
+        logins: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl russh::server::Handler for Sshd {
+        type Error = russh::Error;
+
+        async fn auth_password(&mut self, _user: &str, password: &str) -> Result<russh::server::Auth, Self::Error> {
+            if password != "pw" {
+                return Ok(russh::server::Auth::reject());
+            }
+            self.logins.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(russh::server::Auth::Accept)
+        }
+
+        async fn channel_open_direct_tcpip(
+            &mut self,
+            channel: russh::Channel<russh::server::Msg>,
+            _host: &str,
+            _port: u32,
+            _from: &str,
+            _from_port: u32,
+            reply: russh::server::ChannelOpenHandle,
+            _session: &mut russh::server::Session,
+        ) -> Result<(), Self::Error> {
+            reply.accept().await;
+            let to = self.to;
+            tokio::spawn(async move {
+                if let Ok(mut tcp) = tokio::net::TcpStream::connect(to).await {
+                    let _ = tokio::io::copy_bidirectional(&mut tcp, &mut channel.into_stream()).await;
+                }
+            });
+            Ok(())
+        }
+    }
+
+    /// Port, login count, and the running sessions
+    async fn sshd(to: std::net::SocketAddr, known_hosts: &std::path::Path) -> (u16, Arc<std::sync::atomic::AtomicUsize>, Arc<Mutex<Vec<russh::server::Handle>>>) {
+        let key = russh::keys::PrivateKey::from(russh::keys::ssh_key::private::Ed25519Keypair::from_seed(&[7; 32]));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        russh::keys::known_hosts::learn_known_hosts_path("127.0.0.1", port, key.public_key(), known_hosts).unwrap();
+        let config = Arc::new(russh::server::Config { keys: vec![key], auth_rejection_time: std::time::Duration::ZERO, ..Default::default() });
+        let logins = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let sessions = Arc::new(Mutex::new(Vec::new()));
+        let (l, s) = (logins.clone(), sessions.clone());
+        tokio::spawn(async move {
+            while let Ok((tcp, _)) = listener.accept().await {
+                if let Ok(running) = russh::server::run_stream(config.clone(), tcp, Sshd { to, logins: l.clone() }).await {
+                    s.lock().unwrap().push(running.handle());
+                    tokio::spawn(running);
+                }
+            }
+        });
+        (port, logins, sessions)
+    }
+
+    /// The SSH tunnel is shared by the databases of a source. A database that fails (missing) fails alone. When the SSH session
+    /// ends (sleep, network change) while the accept loop still runs, the tunnel counts as stopped and the next database opens
+    /// a new one instead of connecting through the dead session.
+    /// Run on its own (it sets QURRY_KNOWN_HOSTS): QURRY_TEST_PG=127.0.0.1:55433:postgres:postgres cargo test -p qurry-core shared_ssh_tunnel -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn shared_ssh_tunnel_survives_a_failed_db_and_reopens_after_the_session_ends() {
+        let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
+        let to: std::net::SocketAddr = format!("{}:{}", pg.host, pg.port).parse().unwrap();
+        let kh = tempfile::NamedTempFile::new().unwrap();
+        unsafe { std::env::set_var("QURRY_KNOWN_HOSTS", kh.path()) };
+        let (port, logins, sessions) = sshd(to, kh.path()).await;
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let c: ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "ssh", "kind": "postgres", "host": "db.internal", "port": 5432, "user": &pg.user, "database": &pg.database,
+            "ssh": { "enabled": true, "host": "127.0.0.1", "port": port, "user": "me", "auth": "password", "keyPath": "" } })).unwrap();
+        let id = st.save_connection(c, None, Some("pw".into())).await.unwrap().id;
+        let logins = || logins.load(std::sync::atomic::Ordering::SeqCst);
+
+        // A missing database opened together with the default one: only it fails, through the one SSH session
+        let missing = format!("{id}::qurry_ssh_no_such_db");
+        let (bad, good) = tokio::join!(crate::app::ensure_pool(&st, &missing), crate::app::ensure_pool(&st, &id));
+        let bad = bad.err().expect("missing db").to_string();
+        assert!(bad.contains("does not exist"), "{bad}");
+        assert!(good.expect("the default db connects").server_version().await.is_ok());
+        assert_eq!(logins(), 1);
+        assert!(crate::app::ensure_pool(&st, &missing).await.is_err());
+        assert_eq!(logins(), 1, "the tunnel stayed open for the next try");
+
+        // The session ends (as when keepalive gives up); the accept loop doesn't notice
+        let ended: Vec<_> = sessions.lock().unwrap().drain(..).collect();
+        for s in ended {
+            let _ = s.disconnect(russh::Disconnect::ByApplication, String::new(), "en".into()).await;
+        }
+        let alive = || async { st.tunnels.read().await.get(&id).unwrap().alive() };
+        for _ in 0..50 {
+            if !alive().await {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert!(!alive().await, "a closed session is a stopped tunnel");
+        let other = tokio::time::timeout(std::time::Duration::from_secs(20), crate::app::ensure_pool(&st, &format!("{id}::template1")))
+            .await
+            .expect("reopening doesn't hang")
+            .expect("another db reopens the tunnel");
+        assert!(other.server_version().await.is_ok());
+        assert_eq!(logins(), 2);
+        st.disconnect(id).await.unwrap();
     }
 }

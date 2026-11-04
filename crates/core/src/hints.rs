@@ -1,11 +1,11 @@
 //! Value suggestions for console autocomplete: `where status = '` → values actually in that column, `data->>'` → keys inside the jsonb
 //! Reads only the first rows of the table (SAMPLE), most frequent first. READ ONLY transaction + short time limit; results are cached briefly
 use crate::app::{AppState, ensure_pool};
-use crate::db::{self, Pool};
+use crate::backend::{Backend, dispatch};
 use crate::error::AppResult;
 use crate::sql::quote_ident;
 use crate::store::DbKind;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 /// Rows scanned to count values (from the start of the table)
 const SAMPLE: usize = 5000;
 /// Rows scanned to count jsonb keys
-const KEY_SAMPLE: usize = 2000;
-const MAX_HINTS: usize = 100;
+pub(crate) const KEY_SAMPLE: usize = 2000;
+pub(crate) const MAX_HINTS: usize = 100;
 /// Max length of a single value (long text · json is not suggested)
 const MAX_LEN: usize = 200;
 const CACHE_FOR: Duration = Duration::from_secs(120);
@@ -37,11 +37,8 @@ pub struct HintReq {
     pub pairs: bool,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct Hint {
-    pub value: String,
-    pub count: i64,
-}
+/// A suggested value with its row count: defined in qurry_shared::complete, which turns these into candidates
+pub use qurry_shared::complete::Hint;
 
 type Cache = HashMap<String, (Instant, Vec<Hint>)>;
 static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(Default::default);
@@ -121,7 +118,7 @@ pub fn pairs_sql(r: &HintReq) -> String {
     )
 }
 
-fn pairs(rows: &[Vec<Value>]) -> Vec<Hint> {
+pub(crate) fn pairs(rows: &[Vec<Value>]) -> Vec<Hint> {
     rows.iter()
         .filter_map(|r| {
             let value = match r.first()? {
@@ -136,7 +133,7 @@ fn pairs(rows: &[Vec<Value>]) -> Vec<Hint> {
 }
 
 /// Count MySQL JSON_KEYS results (`["a", "b"]` per row)
-fn count_keys(rows: &[Vec<Value>]) -> Vec<Hint> {
+pub(crate) fn count_keys(rows: &[Vec<Value>]) -> Vec<Hint> {
     let mut n: HashMap<String, i64> = HashMap::new();
     for r in rows {
         let Some(Value::String(s)) = r.first() else { continue };
@@ -155,44 +152,13 @@ fn count_keys(rows: &[Vec<Value>]) -> Vec<Hint> {
 impl AppState {
     /// Column value · json key suggestions (PostgreSQL · MySQL; empty list otherwise)
     pub async fn column_hints(&self, id: String, req: HintReq) -> AppResult<Vec<Hint>> {
-        use sqlx::Executor;
         let key = format!("{id}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}{}", req.schema, req.table, req.column, req.path.join("\u{2}"), req.keys, req.pairs);
         if let Some((at, v)) = CACHE.lock().unwrap().get(&key)
             && at.elapsed() < CACHE_FOR
         {
             return Ok(v.clone());
         }
-        let hints = match ensure_pool(self, &id).await? {
-            Pool::Pg(p) => {
-                let sql = if req.pairs {
-                    pairs_sql(&req)
-                } else if req.keys {
-                    keys_sql(DbKind::Postgres, &req)
-                } else {
-                    values_sql(DbKind::Postgres, &req)
-                };
-                let mut tx = p.begin().await?;
-                tx.execute("SET TRANSACTION READ ONLY").await?;
-                tx.execute("SET LOCAL statement_timeout = '3s'").await?;
-                let r = db::run_on(&mut tx, &sql, MAX_HINTS).await;
-                let _ = tx.rollback().await;
-                pairs(&r?.rows)
-            }
-            // MySQL has JSON_CONTAINS separately, so there are no @> conditions
-            Pool::My(_) if req.pairs => vec![],
-            Pool::My(p) => {
-                let mut conn = p.acquire().await?;
-                conn.execute("START TRANSACTION READ ONLY").await?;
-                let r = if req.keys {
-                    crate::mysql::run_on(&mut conn, &keys_sql(DbKind::Mysql, &req), KEY_SAMPLE).await.map(|r| count_keys(&r.rows))
-                } else {
-                    crate::mysql::run_on(&mut conn, &values_sql(DbKind::Mysql, &req), MAX_HINTS).await.map(|r| pairs(&r.rows))
-                };
-                let _ = conn.execute("ROLLBACK").await;
-                r?
-            }
-            Pool::Redis(..) | Pool::Plugin(_) => vec![],
-        };
+        let hints = dispatch!(ensure_pool(self, &id).await?, b => b.column_hints(&req).await)?;
         let mut c = CACHE.lock().unwrap();
         c.retain(|_, (at, _)| at.elapsed() < CACHE_FOR);
         c.insert(key, (Instant::now(), hints.clone()));
@@ -232,9 +198,8 @@ mod tests {
     #[ignore]
     async fn pg_values_and_keys() {
         use sqlx::Executor;
-        let env = std::env::var("QURRY_TEST_PG").unwrap();
-        let s: Vec<&str> = env.split(':').collect();
-        let p = sqlx::PgPool::connect(&format!("postgres://{}@{}:{}/{}", s[2], s[0], s[1], s[3])).await.unwrap();
+        let Some(s) = crate::testenv::pg() else { return };
+        let crate::db::Pool::Pg(p) = crate::db::connect(&s.cfg, s.password.as_deref()).await.unwrap() else { unreachable!() };
         p.execute("drop table if exists public.hint_t; create table public.hint_t (id int, status text, data jsonb); \
                    insert into public.hint_t select g, case when g % 3 = 0 then 'paid' else 'ready' end, jsonb_build_object('kind', 'k' || (g % 2), 'meta', jsonb_build_object('src', 'web')) from generate_series(1, 30) g")
             .await
@@ -242,7 +207,7 @@ mod tests {
         let rq = |column: &str, path: &[&str], keys: bool| HintReq { schema: "public".into(), table: "hint_t".into(), column: column.into(), path: path.iter().map(|s| s.to_string()).collect(), keys, pairs: false };
         let run = |sql: String| {
             let p = p.clone();
-            async move { pairs(&db::run_on(&mut p.acquire().await.unwrap(), &sql, 100).await.unwrap().rows) }
+            async move { pairs(&crate::db::run_on(&mut p.acquire().await.unwrap(), &sql, 100).await.unwrap().rows) }
         };
         assert_eq!(run(values_sql(DbKind::Postgres, &rq("status", &[], false))).await, vec![Hint { value: "ready".into(), count: 20 }, Hint { value: "paid".into(), count: 10 }]);
         assert_eq!(run(keys_sql(DbKind::Postgres, &rq("data", &[], true))).await.iter().map(|h| h.value.as_str()).collect::<Vec<_>>(), ["kind", "meta"]);
@@ -280,10 +245,9 @@ mod tests {
     #[ignore]
     async fn mysql_values_and_keys() {
         use sqlx::Executor;
-        let env = std::env::var("QURRY_TEST_MY").unwrap();
-        let s: Vec<&str> = env.split(':').collect();
-        let db = s[4].to_string();
-        let p = sqlx::MySqlPool::connect(&format!("mysql://{}:{}@{}:{}/{db}?ssl-mode=disabled", s[2], s[3], s[0], s[1])).await.unwrap();
+        let Some(s) = crate::testenv::my() else { return };
+        let db = s.cfg.database.clone();
+        let crate::db::Pool::My(p) = crate::db::connect(&s.cfg, s.password.as_deref()).await.unwrap() else { unreachable!() };
         p.execute("drop table if exists hint_t").await.unwrap();
         p.execute("create table hint_t (id int, status varchar(20), data json)").await.unwrap();
         for g in 1..=30 {

@@ -1,0 +1,182 @@
+{
+  "select": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
+  "select-upper": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
+  "with-select": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
+  "with-delete": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "explain-analyze-delete": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "show": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
+  "desc": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
+  "table": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
+  "values": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
+  "select-for-update": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "word-in-string": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
+  "word-in-quoted-ident": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "word-in-comment": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
+  "word-in-block-comment": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
+  "underscore-name": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
+  "update": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "insert": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "call": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "set": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "leading-line-comment-create": {
+    "isReadStmt": false,
+    "DDL_RE": true
+  },
+  "leading-block-comment-drop": {
+    "isReadStmt": false,
+    "DDL_RE": true
+  },
+  "nested-comment-alter": {
+    "isReadStmt": false,
+    "DDL_RE": true
+  },
+  "hash-comment-truncate": {
+    "isReadStmt": false,
+    "DDL_RE": true
+  },
+  "comment-on": {
+    "isReadStmt": false,
+    "DDL_RE": true
+  },
+  "grant": {
+    "isReadStmt": false,
+    "DDL_RE": true
+  },
+  "rename-mysql": {
+    "isReadStmt": false,
+    "DDL_RE": true
+  },
+  "create-index-upper": {
+    "isReadStmt": false,
+    "DDL_RE": true
+  },
+  "korean-table": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
+  "korean-ddl": {
+    "isReadStmt": false,
+    "DDL_RE": true
+  },
+  "paren-select": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
+  "backslash-no-backslash-escapes": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "backslash-scs-off": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "backslash-read": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
+  "backslash-ansi-quotes": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "dblink-exec": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "multi-do-body": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "multi-prepare": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "multi-call": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "multi-reads": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
+  "mssql-chained-exec": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "mssql-chained-drop": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "mssql-case-end": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
+  "mssql-open-close-columns": {
+    "isReadStmt": true,
+    "DDL_RE": false
+  },
+  "redis-get": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  },
+  "redis-set": {
+    "isReadStmt": false,
+    "DDL_RE": false
+  }
+}

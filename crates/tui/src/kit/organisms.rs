@@ -2,7 +2,7 @@
 use super::atoms::*;
 use super::molecules::*;
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, BorderType, Borders};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 
 /// Panel border (bold · accent color when focused)
 pub fn panel(title: impl Into<Line<'static>>, focused: bool) -> Block<'static> {
@@ -43,15 +43,7 @@ pub fn confirm_lines(text: &str) -> Vec<Line<'static>> {
     let mut lines: Vec<Line> = text
         .lines()
         .map(|l| match l.trim_start().strip_prefix("→ ") {
-            Some(v) => {
-                let n: Option<u64> = v.split_whitespace().next().and_then(|x| x.replace(',', "").parse().ok());
-                let c = match n {
-                    Some(0) => DIM,
-                    Some(n) if n < 100 => WARN,
-                    _ => DANGER,
-                };
-                Line::from(vec![Span::raw(l[..l.len() - v.len()].to_string()), Span::styled(v.to_string(), Style::default().fg(c).add_modifier(Modifier::BOLD))])
-            }
+            Some(v) => Line::from(vec![Span::raw(l[..l.len() - v.len()].to_string()), Span::styled(v.to_string(), count_style(row_count(v)))]),
             None => Line::raw(l.to_string()),
         })
         .collect();
@@ -60,10 +52,157 @@ pub fn confirm_lines(text: &str) -> Vec<Line<'static>> {
     lines
 }
 
-/// How many lines it becomes when wrapped (Wrap) — for sizing the popup (if short, the hints below get cut)
+/// The N of "→ N rows" (None when it isn't a number: "schema change", "can't count")
+fn row_count(v: &str) -> Option<u64> {
+    v.split_whitespace().next().and_then(|x| x.replace(',', "").parse().ok())
+}
+
+/// "→ N rows": 0 dimmed · 1~99 WARN · 100+ or unknown DANGER
+fn count_style(n: Option<u64>) -> Style {
+    let c = match n {
+        Some(0) => DIM,
+        Some(n) if n < 100 => WARN,
+        _ => DANGER,
+    };
+    Style::default().fg(c).add_modifier(Modifier::BOLD)
+}
+
+/// How many lines it becomes when wrapped (Wrap, by word as Paragraph wraps it) — for sizing the popup (if short, the hints below get cut).
+/// Saturates at u16::MAX: text too tall to count is too tall, never small
 pub fn wrapped_height(lines: &[Line], width: u16) -> u16 {
-    let w = width.max(1) as usize;
-    lines.iter().map(|l| l.width().max(1).div_ceil(w)).sum::<usize>() as u16
+    Paragraph::new(lines.to_vec()).wrap(Wrap { trim: false }).line_count(width.max(1)).min(u16::MAX as usize) as u16
+}
+
+/// Lines cut to `height` rows of `width` (wrapped): blank lines go first, then the lines not marked `keep` give way, from the
+/// last, to one saying how many are hidden and what their "→ N rows" add up to, so a confirm never hides what it would change.
+/// The marker stands where the first hidden line was. Wraps each line once: a confirm of thousands of statements draws in a frame.
+/// The result can still be taller than `height` when the kept lines alone don't fit (the caller checks)
+pub fn cut_lines(lines: Vec<Line<'static>>, keep: &[bool], width: u16, height: u16) -> Vec<Line<'static>> {
+    let rows = |l: &Line| wrapped_height(std::slice::from_ref(l), width);
+    let mut rows_of: Vec<u16> = lines.iter().map(rows).collect();
+    if rows_of.iter().fold(0u16, |a, r| a.saturating_add(*r)) <= height {
+        return lines;
+    }
+    let (lines, keep): (Vec<_>, Vec<bool>) = lines.into_iter().zip(keep.iter().copied()).filter(|(l, _)| !l.to_string().trim().is_empty()).unzip();
+    rows_of = lines.iter().map(rows).collect();
+    let free: Vec<usize> = (0..lines.len()).filter(|&i| !keep[i]).collect();
+    if free.is_empty() || rows_of.iter().fold(0u16, |a, r| a.saturating_add(*r)) <= height {
+        return lines;
+    }
+    // The most free lines (from the top) that fit next to the kept ones and a one-row marker; then fewer while the marker wraps
+    let mut used: u16 = rows_of.iter().zip(&keep).filter(|(_, k)| **k).fold(0u16, |a, (r, _)| a.saturating_add(*r));
+    let mut n = 0;
+    while used.saturating_add(rows_of[free[n]]) < height {
+        used += rows_of[free[n]];
+        n += 1;
+    }
+    let counts: Vec<Option<Option<u64>>> = free.iter().map(|&i| lines[i].to_string().trim_start().strip_prefix("→ ").map(row_count)).collect();
+    let marker = loop {
+        let marker = hidden_marker(free.len() - n, &counts[n..]);
+        if n == 0 || used.saturating_add(rows(&marker)) <= height {
+            break marker;
+        }
+        n -= 1;
+        used -= rows_of[free[n]];
+    };
+    let mut shown = keep;
+    for &i in &free[..n] {
+        shown[i] = true;
+    }
+    let mut out = Vec::with_capacity(shown.iter().filter(|s| **s).count() + 1);
+    for (i, l) in lines.into_iter().enumerate() {
+        if i == free[n] {
+            out.push(marker.clone());
+        }
+        if shown[i] {
+            out.push(l);
+        }
+    }
+    out
+}
+
+/// "⋯ 4 lines hidden · 12,408 rows · 1 not counted": the hidden lines and the row counts among them
+fn hidden_marker(n: usize, counts: &[Option<Option<u64>>]) -> Line<'static> {
+    let mut text = format!("⋯ {n} lines hidden");
+    let known: Vec<u64> = counts.iter().flatten().flatten().copied().collect();
+    let total: u64 = known.iter().sum();
+    if !known.is_empty() {
+        text += &format!(" · {} row{}", crate::transfer::thousands(total), if total == 1 { "" } else { "s" });
+    }
+    let unknown = counts.iter().flatten().filter(|c| c.is_none()).count();
+    if unknown > 0 {
+        text += &format!(" · {unknown} not counted");
+    }
+    Line::styled(text, if known.is_empty() && unknown == 0 { Style::default().fg(WARN) } else { count_style(if unknown > 0 { None } else { Some(total) }) })
+}
+
+/// Small read-only table as lines (the GUI's ui Table; DDL → Structure): indented two cells, columns padded to their widest cell
+/// (display width) with two cells between them, the header dim. Line breaks in a cell become spaces. The last cell (definition,
+/// comment) wraps within `width` onto lines indented to its column, as the GUI wraps it; when less than 10 cells are left
+/// for it, it starts on the next line, indented four. `wrap` names one more column that wraps under itself when the row is too
+/// wide (Default, the GUI's ddl-wrap): at least 12 cells, leaving the last column 10 to 20
+pub fn table_lines(head: &[&str], rows: &[Vec<String>], width: usize, wrap_col: Option<usize>) -> Vec<Line<'static>> {
+    use unicode_width::UnicodeWidthStr;
+    let rows: Vec<Vec<String>> = rows.iter().map(|r| r.iter().map(|c| c.replace(['\r', '\n', '\t'], " ")).collect()).collect();
+    let mut widths: Vec<usize> = (0..head.len()).map(|i| rows.iter().map(|r| r[i].width()).chain([head[i].width()]).max().unwrap_or(0)).collect();
+    let last = head.len() - 1;
+    if let Some(w) = wrap_col {
+        let others = 2 + (0..last).filter(|&i| i != w).map(|i| widths[i] + 2).sum::<usize>() + 2;
+        widths[w] = widths[w].min(width.saturating_sub(others + widths[last].clamp(10, 20)).max(12));
+    }
+    let line = |cells: Vec<&str>, style: Style| {
+        // The cells before the last, each as the lines it takes in its column
+        let cols: Vec<Vec<String>> = cells[..last].iter().enumerate().map(|(i, c)| if c.width() > widths[i] { wrap(c, widths[i], widths[i]) } else { vec![c.to_string()] }).collect();
+        let prefix = |k: usize| {
+            let mut s = "  ".to_string();
+            for (i, parts) in cols.iter().enumerate() {
+                let p = parts.get(k).map_or("", String::as_str);
+                s += p;
+                s += &" ".repeat(widths[i].saturating_sub(p.width()) + 2);
+            }
+            s
+        };
+        let n = cols.iter().map(Vec::len).max().unwrap_or(1);
+        let indent = prefix(0).width();
+        let room = width.saturating_sub(indent);
+        let text = |s: String| Line::styled(s.trim_end().to_string(), style);
+        if room >= 10 || cells[last].is_empty() {
+            let parts = wrap(cells[last], room, room);
+            (0..n.max(parts.len())).map(|k| text(prefix(k) + parts.get(k).map_or("", String::as_str))).collect()
+        } else {
+            let parts = wrap(cells[last], 0, width.saturating_sub(4));
+            (0..n).map(|k| text(prefix(k))).chain(parts.into_iter().skip(1).map(|p| text(" ".repeat(4) + &p))).collect::<Vec<_>>()
+        }
+    };
+    let mut out = line(head.to_vec(), Style::default().fg(DIM));
+    out.extend(rows.iter().flat_map(|r| line(r.iter().map(String::as_str).collect(), Style::default())));
+    out
+}
+
+/// Wrap text at spaces (a word longer than a line is split): the first line holds `first` cells (0: starts empty), the rest `rest`
+fn wrap(s: &str, first: usize, rest: usize) -> Vec<String> {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+    if s.is_empty() {
+        return vec![String::new()];
+    }
+    let rest = rest.max(1);
+    let (mut out, mut max) = if first == 0 { (vec![String::new()], rest) } else { (vec![], first) };
+    let mut cur = String::new();
+    for word in s.split_inclusive(' ') {
+        if !cur.is_empty() && cur.width() + word.trim_end().width() > max {
+            out.push(std::mem::take(&mut cur).trim_end().to_string());
+            max = rest;
+        }
+        for ch in word.chars() {
+            if ch != ' ' && !cur.is_empty() && cur.width() + ch.width().unwrap_or(0) > max {
+                out.push(std::mem::take(&mut cur));
+                max = rest;
+            }
+            cur.push(ch);
+        }
+    }
+    out.push(cur.trim_end().to_string());
+    out
 }
 
 #[cfg(test)]
@@ -71,9 +210,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn table_lines_wrap_the_last_cell_under_its_column() {
+        let rows = vec![vec!["fk".to_string(), "FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE SET NULL".to_string()]];
+        let text: Vec<String> = table_lines(&["Name", "Definition"], &rows, 40, None).iter().map(|l| l.to_string()).collect();
+        assert_eq!(text, ["  Name  Definition", "  fk    FOREIGN KEY (contract_id)", "        REFERENCES contracts(id) ON", "        DELETE SET NULL"]);
+        assert!(text.iter().all(|l| l.len() <= 40));
+        // Too little room left: the cell starts on the next line; a word longer than a line is split
+        let rows = vec![vec!["a_very_long_index_name_here".to_string(), "x".repeat(30)]];
+        let text: Vec<String> = table_lines(&["Name", "Def"], &rows, 40, None).iter().map(|l| l.to_string()).collect();
+        assert_eq!(text[2..], ["  a_very_long_index_name_here".to_string(), format!("    {}", "x".repeat(30))]);
+        assert_eq!(wrap(&"y".repeat(10), 4, 4), ["yyyy", "yyyy", "yy"]);
+    }
+
+    #[test]
+    fn table_lines_wrap_the_named_column_and_keep_the_last_beside_it() {
+        let rows = vec![vec!["email".to_string(), "concat('user-', currval('seq'), '@', domain())".to_string(), "Login".to_string()]];
+        let text: Vec<String> = table_lines(&["Name", "Default", "Comment"], &rows, 40, Some(1)).iter().map(|l| l.to_string()).collect();
+        assert_eq!(text, ["  Name   Default              Comment", "  email  concat('user-',      Login", "         currval('seq'),", "         '@', domain())"]);
+        // It fits: nothing changes
+        assert_eq!(table_lines(&["Name", "Default", "Comment"], &rows, 80, Some(1)).len(), 2);
+    }
+
+    #[test]
+    fn cut_lines_says_how_many_are_hidden() {
+        let lines: Vec<Line<'static>> = ["one", "two", "three", "four"].into_iter().map(Line::raw).collect();
+        assert_eq!(cut_lines(lines.clone(), &[false; 4], 30, 4).len(), 4);
+        let cut: Vec<String> = cut_lines(lines, &[false; 4], 30, 3).iter().map(|l| l.to_string()).collect();
+        assert_eq!(cut, ["one", "two", "⋯ 2 lines hidden"]);
+    }
+
+    #[test]
+    fn cut_lines_drops_blank_lines_first_and_adds_up_hidden_rows() {
+        let lines: Vec<Line<'static>> = ["head", "", "a", "  → 1 row", "b", "  → 12,408 rows", "c", "  → schema change", ""].into_iter().map(Line::raw).collect();
+        let cut: Vec<String> = cut_lines(lines.clone(), &[false; 9], 60, 7).iter().map(|l| l.to_string()).collect();
+        assert_eq!(cut, ["head", "a", "  → 1 row", "b", "  → 12,408 rows", "c", "  → schema change"]);
+        let cut: Vec<String> = cut_lines(lines, &[false; 9], 60, 3).iter().map(|l| l.to_string()).collect();
+        assert_eq!(cut, ["head", "a", "⋯ 5 lines hidden · 12,409 rows · 1 not counted"]);
+    }
+
+    #[test]
     fn wrapped_height_counts_folded_lines() {
         let lines = vec![Line::raw("a".repeat(10)), Line::raw(""), Line::raw("b".repeat(25))];
         // 10 cells wide: 1 + 1 + 3
         assert_eq!(wrapped_height(&lines, 10), 5);
+    }
+
+    #[test]
+    fn wrapped_height_wraps_by_word() {
+        // 20 cells fit 2 rows of 10 by count, but no two words share a row
+        let lines = vec![Line::raw("aaaaaa bbbbbb cccccc")];
+        assert_eq!(wrapped_height(&lines, 10), 3);
     }
 }

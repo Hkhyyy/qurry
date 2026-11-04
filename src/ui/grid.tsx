@@ -2,13 +2,47 @@
  * Cell pieces of the result grid (ResultGrid): header row · header cell · row · row number · data cell · edit cell.
  * Virtual scrolling, selection and edit state live in ResultGrid; only the look is defined here. Spec: README.md
  */
-import { CSSProperties, FocusEvent, KeyboardEvent, MouseEvent, ReactNode } from "react";
+import { CSSProperties, FocusEvent, KeyboardEvent, MouseEvent, ReactNode, RefObject, useEffect, useRef } from "react";
+import { textAssistOff } from "./atoms";
 import { cx } from "./cx";
 import "./grid.css";
 
 type Mouse = (e: MouseEvent) => void;
 
-/** Top header row (sticks while scrolling) */
+/**
+ * Header strip above the grid's scroller (body). It sits outside the scroller, so vertical scrolling can't move it (a sticky
+ * header inside the scroller could lag WKWebView's async scrolling and show rows above it); it only follows the body's
+ * scrollLeft. Wheel over it scrolls the body; a click keeps the focus on the body, so keyboard navigation keeps working.
+ */
+export function GridHead({ body, children }: { body: RefObject<HTMLElement | null>; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  // After commit (not a layout effect): the body may come after the head, and its ref is attached later in the same commit
+  useEffect(() => {
+    const el = body.current;
+    if (!el) return;
+    const sync = () => {
+      if (ref.current) ref.current.scrollLeft = el.scrollLeft;
+    };
+    sync();
+    el.addEventListener("scroll", sync, { passive: true });
+    return () => el.removeEventListener("scroll", sync);
+  }, [body]);
+  return (
+    <div
+      ref={ref}
+      className="grid-head"
+      onWheel={(e) => body.current?.scrollBy(e.deltaX, e.deltaY)}
+      onMouseDownCapture={(e) => {
+        e.preventDefault();
+        body.current?.focus({ preventScroll: true });
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** Header row (inside GridHead) */
 export const GridHeaderRow = ({ width, height, children }: { width: number; height: number; children: ReactNode }) => (
   <div className="grid-header" style={{ width, height }} role="row">
     {children}
@@ -67,11 +101,12 @@ export const RowNumberCell = ({ children, width, selected, title, onMouseDown }:
   </div>
 );
 
-/** Data cell. kind = null (<null> · italic) · num (right-aligned · number color) */
+/** Data cell. kind = null (<null> · italic) · num (number color); align = Settings › Appearance › Alignment for its value class */
 export function GridCell({
   children,
   width,
   kind,
+  align,
   selected,
   active,
   changed,
@@ -84,6 +119,7 @@ export function GridCell({
   children: ReactNode;
   width: number;
   kind?: "null" | "num";
+  align?: "left" | "right" | "center";
   selected?: boolean;
   /** Cell with the cursor */
   active?: boolean;
@@ -98,7 +134,7 @@ export function GridCell({
 }) {
   return (
     <div
-      className={cx("cell", kind, selected && "sel", active && "active", changed && "changed", match && "match")}
+      className={cx("cell", kind, align && `al-${align}`, selected && "sel", active && "active", changed && "changed", match && "match")}
       style={{ width }}
       role="gridcell"
       aria-selected={selected}
@@ -109,6 +145,32 @@ export function GridCell({
     >
       {children}
     </div>
+  );
+}
+
+/** A JSON cell's text in colors (inside GridCell, still one line): `spans` are [start, end, kind] UTF-16 ranges in order, kind
+ *  key · string · number · keyword · punct. Punctuation is the color of the span around the colored part (half the elements
+ *  of a span each); text after the last piece (where it stops being JSON) stays plain */
+export function JsonText({ text, spans }: { text: string; spans: [number, number, string][] }) {
+  const end = spans.length ? spans[spans.length - 1][1] : 0;
+  const out: ReactNode[] = [];
+  let at = 0;
+  for (const [s, e, kind] of spans) {
+    if (kind === "punct") continue;
+    if (s > at) out.push(text.slice(at, s));
+    out.push(
+      <span key={s} className={`json-${kind}`}>
+        {text.slice(s, e)}
+      </span>,
+    );
+    at = e;
+  }
+  if (end > at) out.push(text.slice(at, end));
+  return (
+    <>
+      {end > 0 && <span className="json-punct">{out}</span>}
+      {text.slice(end)}
+    </>
   );
 }
 
@@ -141,7 +203,7 @@ export function CellEditor({
         if (!e.currentTarget.contains(e.relatedTarget as Node)) onBlurOut();
       }}
     >
-      <input autoFocus className="cell-input" value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={onKeyDown} />
+      <input autoFocus className="cell-input" {...textAssistOff()} value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={onKeyDown} />
       {more && (
         <button className="cell-more" title={more.title} onMouseDown={(e) => e.preventDefault()} onClick={more.onClick}>
           …

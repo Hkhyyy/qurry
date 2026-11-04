@@ -1,7 +1,8 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useState } from "react";
-import { Badge, Checkbox, ColorPicker, DetailRow, EmptyState, Field, FormSection, Hint, Kbd, KeyHints, ListItem, MenuItem, MenuLabel, MenuSeparator, Notice, RadioGroup, RailItem, SearchField, SectionTitle, Select, StatusItem, TabItem, Tabs, Text, TextInput, TreeRow } from "..";
-import { DatabaseIcon, FolderIcon, PgIcon, SchemaIcon, TableIcon } from "../icons";
+import { Badge, Checkbox, ColorPicker, DetailRow, EmptyState, Field, FormSection, Hint, Kbd, KeyHints, ListItem, MenuItem, MenuLabel, MenuSeparator, Notice, RadioGroup, RailItem, SearchField, SectionTitle, Select, StatusItem, TabItem, Tabs, Text, TextInput, TlsOptIn, TreeRow } from "..";
+import { connTabVars } from "../../lib/theme";
+import { ConsoleIcon, DatabaseIcon, FolderIcon, PgIcon, ReportIcon, SchemaIcon, TabIcon, TableIcon } from "../icons";
 
 /** Molecules: a row · cell made of a few atoms */
 const meta: Meta = { title: "GUI/2 Molecules" };
@@ -50,6 +51,7 @@ export const Fields: S = {
   },
 };
 
+/** SearchField is a TextInput: no autocorrect or spell check (see GUI/1 Atoms › Inputs) */
 export const SearchAndTabs: S = {
   name: "SearchField · Tabs · SectionTitle",
   render: function Render() {
@@ -116,9 +118,9 @@ export const ListItems: S = {
   name: "ListItem",
   render: () => (
     <Frame>
-      <ListItem icon="▦" title="users" hint="public" trailing="[PROD] kr · kr" color="#6e2a2a" selected />
+      <ListItem icon={<TableIcon />} title="users" hint="public" trailing="[PROD] kr · kr" color="#6e2a2a" selected />
       <ListItem icon="⚡" title="New Query Console" hint="Tool Windows" trailing={<Kbd>⇧⌘L</Kbd>} />
-      <ListItem icon="⌘" title="console_2 [DEV] shop" hint="closed tab" dim color="#2f5634" />
+      <ListItem icon={<ConsoleIcon />} title="console_2 [DEV] shop" hint="closed tab" dim color="#2f5634" />
       <ListItem mono title="select * from users where id = 42" trailing="2026. 10. 28. 오후 3:43" />
       <ListItem leading={<Checkbox checked onChange={() => {}} />} title={<><Text tone="accent">add column</Text> users.email</>} />
       <ListItem leading={<Checkbox checked={false} onChange={() => {}} />} title={<><Text tone="danger">drop table</Text> old_stuff</>} />
@@ -143,6 +145,40 @@ export const DetailRows: S = {
         create table refunds(id int)
       </DetailRow>
     </div>
+  ),
+};
+
+/** Under a connect error that needs TLS (tree status, console Output, table tab, Test Connection). The click resolves after a second here */
+const TLS_ERROR = "This server didn't set up an encrypted (TLS) connection, so Qurry didn't send the password. If it's an old server and the network is trusted, turn on \"Allow unencrypted connection\" for this data source (GUI: Options tab · TUI: data source form, \"Allow unencrypted\").";
+const slow = () => new Promise((r) => setTimeout(r, 1000));
+export const TlsOptInDev: S = {
+  name: "TlsOptIn · dev",
+  render: () => (
+    <Frame width={420}>
+      <div className="tree-status err" style={{ paddingLeft: 24 }}>
+        {TLS_ERROR}
+        <TlsOptIn host="10.0.0.12" onAllow={slow} />
+      </div>
+      <div className="tree-status err" style={{ paddingLeft: 24 }}>
+        The allow step itself failed:
+        <TlsOptIn host="10.0.0.12" onAllow={() => slow().then(() => Promise.reject("Data source not found"))} />
+      </div>
+    </Frame>
+  ),
+};
+export const TlsOptInProduction: S = {
+  name: "TlsOptIn · Production",
+  render: () => (
+    <Frame width={420}>
+      <div className="tree-status err" style={{ paddingLeft: 24 }}>
+        {TLS_ERROR}
+        <TlsOptIn host="prod-db.internal" production onAllow={slow} />
+      </div>
+      <Notice tone="danger">
+        In Data Source Properties (inDialog): the Options tab is right there
+        <TlsOptIn host="prod-db.internal" production inDialog onAllow={slow} />
+      </Notice>
+    </Frame>
   ),
 };
 
@@ -183,9 +219,32 @@ export const TabItems: S = {
   render: () => (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", height: 36, background: "var(--ui-surface)" }}>
-        <TabItem icon="⌘" label="console [PROD] kr" active onClose={() => {}} style={{ background: "color-mix(in srgb, #6e2a2a 35%, var(--panel))", boxShadow: "inset 0 2px 0 #c46a6a" }} />
-        <TabItem icon="▦" iconClass="table" label="users" onClose={() => {}} />
-        <TabItem icon="◉" label="Sessions" pinned onPin={() => {}} />
+        <TabItem icon={<ConsoleIcon />} label="console [PROD] kr" active onClose={() => {}} style={connTabVars("#6e2a2a", "dark")} />
+        <TabItem icon={<TableIcon />} label="users" onClose={() => {}} />
+        <TabItem icon={<ReportIcon />} label="Sessions" pinned onPin={() => {}} />
+      </div>
+      {/* Every tab kind, and a DDL tab per object kind (TabIcon: the explorer tree's icons, a DDL mark on DDL tabs) */}
+      <div style={{ display: "flex", flexWrap: "wrap", background: "var(--ui-surface)" }}>
+        {(
+          [
+            ["console", undefined, "console"],
+            ["table", "table", "users"],
+            ["table", "view", "active_users"],
+            ["ddl", "table", "users [DDL]"],
+            ["ddl", "view", "active_users [DDL]"],
+            ["ddl", "matview", "daily_sales [DDL]"],
+            ["ddl", "routine", "refresh_stats [DDL]"],
+            ["ddl", "sequence", "users_id_seq [DDL]"],
+            ["ddl", undefined, "SQL (no object kind)"],
+            ["redis", undefined, "cache"],
+            ["dba", undefined, "Sessions"],
+            ["erd", undefined, "Diagram: public"],
+            ["migrate", undefined, "Compare"],
+            ["rag", undefined, "Ask"],
+          ] as const
+        ).map(([kind, obj, label]) => (
+          <TabItem key={label} icon={<TabIcon kind={kind} obj={obj} />} label={label} style={{ height: 32 }} />
+        ))}
       </div>
       <div style={{ display: "flex", height: 30, background: "var(--ui-surface)" }}>
         <TabItem variant="result" label="Output" />

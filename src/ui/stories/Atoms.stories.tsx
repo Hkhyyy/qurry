@@ -183,6 +183,12 @@ export const Badges: S = {
   ),
 };
 
+/**
+ * Text fields (TextInput, TextArea; SearchField, ComboBox and the grid's CellEditor are built on the same defaults) type identifiers —
+ * names, types, hosts, filters — so WebKit's autocorrect, auto-capitalisation, spell check and writing suggestions are off
+ * (`autocomplete` `autocorrect` `autocapitalize` off, `spellcheck` false, `writingsuggestions` false). `prose` turns spell check
+ * back on for comments; autocorrect stays off. Type "asd" below: no "Asd" offered
+ */
 export const Inputs: S = {
   render: function Render() {
     const [c, setC] = useState(true);
@@ -196,6 +202,7 @@ export const Inputs: S = {
             <TextInput className="w-port" defaultValue="5432" />
           </Row>
           <TextInput full disabled defaultValue="disabled" style={{ marginTop: 8 }} />
+          <TextInput full prose placeholder="Comment (prose: spell checked)" style={{ marginTop: 8 }} />
         </Box>
         <Box title="Select">
           <Select full defaultValue="postgres">

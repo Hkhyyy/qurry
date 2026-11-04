@@ -10,6 +10,11 @@ export async function ask(message: string, opts: Omit<ConfirmOptions, "message">
   return (await confirm({ message, ...opts })) === true;
 }
 
+/** A message to acknowledge (OK only), e.g. a change that ran but whose result the Production log couldn't record */
+export async function notice(message: string, title: string): Promise<void> {
+  await confirm({ message, title, cancelLabel: null });
+}
+
 export interface TextRequest {
   title: string;
   value: string;

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ConnectionView, fake, FakePreview, subset, SubsetPlan, SubsetSpec } from "../lib/api";
-import { ask } from "../lib/dialogs";
+import { ask, notice } from "../lib/dialogs";
 import { Badge, Button, Checkbox, Field, Hint, Modal, Notice, SectionTitle, Select, Table, Td, Text, TextInput, Th } from "../ui";
 
 const MAX_ROWS = 100_000;
@@ -30,7 +30,9 @@ export function GenerateDataDialog({ target, schema, table, production, onDone, 
     setBusy(true);
     setErr(null);
     try {
-      onDone(await fake.fill(target, schema, table, n));
+      const r = await fake.fill(target, schema, table, n);
+      if (r.warning) await notice(r.warning, "Inserted, with a warning");
+      onDone(r.rows);
     } catch (e) {
       setErr(String(e));
       setBusy(false);
@@ -157,6 +159,7 @@ export function CopyRowsDialog({ source, schema, table, conn, conns, onDone, onC
     setErr(null);
     try {
       const r = await subset.copy(source, spec, target);
+      if (r.warning) await notice(r.warning, "Copied, with a warning");
       onDone(`${r.total.toLocaleString("en-US")} related row${r.total === 1 ? "" : "s"} copied from ${conn.name} into ${t.name} (rows already there were skipped)`);
     } catch (e) {
       setErr(String(e));

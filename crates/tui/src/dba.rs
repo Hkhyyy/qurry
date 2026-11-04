@@ -52,6 +52,8 @@ impl App {
                     d.report = report;
                     d.info = info;
                     d.grid = None;
+                    d.loaded = None;
+                    d.gone = None;
                     d.error = None;
                 }
                 let id = t.id;
@@ -59,7 +61,7 @@ impl App {
                 id
             }
             None => {
-                let d = DbaTab { report, info, grid: None, error: None, running: false, auto: true, gone: None };
+                let d = DbaTab { report, info, grid: None, loaded: None, error: None, running: false, run: 0, auto: true, gone: None };
                 let id = self.push_tab(&conn, db, title, TabKind::Dba(d));
                 self.dba_ticker(id);
                 id
@@ -106,17 +108,23 @@ impl App {
         let target = t.target.clone();
         let TabKind::Dba(d) = &mut t.kind else { return };
         d.running = true;
+        d.run += 1;
+        let run = d.run;
         let report = d.report.clone();
         if d.info.is_none() {
             d.info = reports(kind).into_iter().find(|r| r.id == report);
         }
         let st = self.state.clone();
-        self.spawn(async move { st.dba_report(target, report).await.map_err(|e| e.to_string()) }, move |a, r| a.dba_apply(id, r));
+        self.spawn(async move { st.dba_report(target, report).await.map_err(|e| e.to_string()) }, move |a, r| a.dba_apply(id, run, r));
     }
 
-    /// Put in the loaded results. The selected row follows the same pid (so a different session isn't selected when the order changes)
-    pub fn dba_apply(&mut self, id: u64, r: Result<qurry_core::db::QueryResult, String>) {
+    /// Put in the loaded results (a failed refresh keeps the last grid). The selected row follows the same pid (so a different session isn't selected when the order changes).
+    /// A result of an older run (a report the tab has since switched away from, or an earlier run of the same one) is dropped: the latest run is still going
+    pub fn dba_apply(&mut self, id: u64, run: u64, r: Result<qurry_core::db::QueryResult, String>) {
         let Some(Tab { kind: TabKind::Dba(d), .. }) = self.tab_mut(id) else { return };
+        if d.run != run {
+            return;
+        }
         d.running = false;
         match r {
             Ok(res) => {
@@ -133,12 +141,11 @@ impl App {
                     }
                 }
                 d.grid = Some(g);
+                d.loaded = Some(std::time::Instant::now());
                 d.error = None;
             }
-            Err(e) => {
-                d.grid = None;
-                d.error = Some(e);
-            }
+            // The last grid stays (a busy server is when sessions need killing); the error shows above it
+            Err(e) => d.error = Some(e),
         }
     }
 
@@ -176,6 +183,7 @@ impl App {
         let q: String = row.get("query").or(row.get("blocking_query")).cloned().unwrap_or_default().chars().take(200).collect();
         let st = self.state.clone();
         self.popup = Some(Popup::Confirm {
+            opened: None,
             text: format!("{what} {pid}?\n\n{q}"),
             on_yes: Box::new(move |a| {
                 a.spawn(async move { st.kill_session(target, pid, terminate).await.map_err(|e| e.to_string()) }, move |a, r| {
@@ -193,22 +201,22 @@ impl App {
     /// Enter: current row's query to the console. g: choose an SQL action for this report
     pub fn dba_actions(&mut self, open_query: bool) {
         let Some(Tab { kind: TabKind::Dba(d), .. }) = self.tabs.get(self.active) else { return };
-        let sqls: Vec<(String, String)> = d.info.iter().flat_map(|i| i.actions.iter()).filter_map(|a| match a {
-            DAction::Sql { label, template } => Some((label.to_string(), template.to_string())),
-            _ => None,
+        let items: Vec<PItem> = d.info.iter().flat_map(|i| i.actions.iter()).filter_map(|a| match a {
+            DAction::Sql { label, template } => Some(PItem { label: label.to_string(), hint: template.to_string(), action: PAction::DbaSql(template.to_string()) }),
+            DAction::Explain { label } => Some(PItem { label: label.to_string(), hint: "EXPLAIN {=query}".into(), action: PAction::DbaExplain }),
+            DAction::Kill { .. } => None,
         }).collect();
         if open_query {
-            match sqls.iter().find(|s| s.1 == "{=query}") {
-                Some((_, t)) => self.dba_sql(t.clone()),
-                None => self.status = "This report has no query to open".into(),
+            match items.iter().any(|i| i.hint == "{=query}") {
+                true => self.dba_sql("{=query}".into()),
+                false => self.status = "This report has no query to open".into(),
             }
             return;
         }
-        if sqls.is_empty() {
+        if items.is_empty() {
             self.status = "This report has no SQL actions".into();
             return;
         }
-        let items = sqls.into_iter().map(|(label, t)| PItem { label, hint: t.clone(), action: PAction::DbaSql(t) }).collect();
         self.popup = Some(Popup::Palette(Palette { title: "Generate SQL from this row".into(), input: TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
     }
 
@@ -218,7 +226,23 @@ impl App {
         let Some(t) = self.tabs.get(self.active) else { return };
         let (conn, db) = (t.conn.clone(), t.db.clone());
         let q = qurry_core::dba::action_sql(self.kind_of(&conn), &template, &row);
-        self.open_console(&conn, Some(db));
+        self.dba_console(&conn, db, q);
+    }
+
+    /// EXPLAIN of the current row's query into a new console (normalized statements: see qurry_core::dba::explain_sql)
+    pub fn dba_explain(&mut self) {
+        let Some(query) = self.dba_row().and_then(|r| r.get("query").cloned()) else { return };
+        let Some(t) = self.tabs.get(self.active) else { return };
+        let (conn, db, target) = (t.conn.clone(), t.db.clone(), t.target.clone());
+        let st = self.state.clone();
+        self.spawn(async move { st.dba_explain(target, query).await.map_err(|e| e.to_string()) }, move |a, r| match r {
+            Ok(q) => a.dba_console(&conn, db, q),
+            Err(e) => a.status = e,
+        });
+    }
+
+    fn dba_console(&mut self, conn: &str, db: String, q: String) {
+        self.open_console(conn, Some(db));
         if let Some(Tab { kind: TabKind::Console(c), .. }) = self.tabs.get_mut(self.active) {
             c.editor.insert_str(q);
         }
@@ -240,7 +264,7 @@ impl App {
                     let items = dbs.into_iter().map(|d| crate::app::PItem { label: d.clone(), hint: String::new(), action: crate::app::PAction::Pick(d) }).collect();
                     a.status.clear();
                     a.flow = Some(crate::migrate::Flow::ErdDb(conn));
-                    a.popup = Some(crate::app::Popup::Palette(crate::app::Palette { title: "Diagram of which database?".into(), input: tui_textarea::TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
+                    a.open_after_notices(crate::app::Popup::Palette(crate::app::Palette { title: "Diagram of which database?".into(), input: tui_textarea::TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
                 }
                 Ok(dbs) => a.erd_run(conn, dbs.into_iter().next().unwrap_or(db), None),
                 Err(e) => a.status = format!("Diagram: {e}"),
@@ -276,7 +300,7 @@ impl App {
                     a.status = format!("{} tables, {} foreign keys", e.tables.len(), e.relations.len());
                     let text = format!("{}\n── Mermaid (y copies the whole text; paste into docs, issues, mermaid.live) ──\n\n{}", e.text(), e.mermaid());
                     let title = format!("Diagram: {}", if schemas.len() == 1 { schemas[0].clone() } else { format!("{} schemas", schemas.len()) });
-                    a.push_tab(&conn, db, title, TabKind::Text(crate::app::TextTab { text, scroll: 0 }));
+                    a.push_tab(&conn, db, title, TabKind::Text(crate::app::TextTab { text, ..Default::default() }));
                 }
                 Err(e) => a.status = format!("Diagram: {e}"),
             },

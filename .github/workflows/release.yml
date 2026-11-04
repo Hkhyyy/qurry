@@ -1,8 +1,12 @@
-# On every merge to main, builds the GUI and TUI/MCP and uploads them to a GitHub Release.
+# Builds the GUI and TUI/MCP and uploads them to a GitHub Release, on two channels:
+#   beta:   every merge to main → pre-release vX.Y.Z-beta.N (the apps offer it only on the beta update channel)
+#   stable: a pushed version tag vX.Y.Z (a commit on main) → release vX.Y.Z, marked latest, and the Homebrew tap
 #   macOS Apple Silicon · macOS Intel: Qurry_<v>_<aarch64|x64>.dmg, in-app update bundle Qurry_<v>_<arch>.app.tar.gz
 #   Linux x86_64: Qurry_<v>_amd64.AppImage, Qurry_<v>_amd64.deb (in-app updates keep the installed format — deb is the linux-x86_64-deb entry)
 #   CLI: qurry-cli_<v>_<target>.tar.gz (qurry-tui + qurry-mcp)
-# Version: patch +1 of the last tag (vX.Y.Z). If the source (Cargo.toml) version is higher (minor/major bumped in a PR), that version.
+# Version: stable = the tag. Beta = the next stable version + -beta.N (N counts up per version): patch +1 of the last stable tag,
+#   or the source (Cargo.toml) version if that is higher (minor/major bumped in a PR).
+#   To release stable, tag the main commit of the beta you want: git tag vX.Y.Z <sha> && git push origin vX.Y.Z
 # The version goes into the manifests only at build time and is not committed to main (main changes only via PRs). Tags are the source of truth.
 # Supply chain: actions pinned to commit SHAs (tags can move), Cargo.lock as is (--locked), SHA256SUMS and build provenance attestations uploaded too.
 # qurry-tui --update verifies downloaded files with SHA256SUMS (+ signature).
@@ -12,12 +16,13 @@
 #   Signing key in repo Secrets (TAURI_SIGNING_PRIVATE_KEY / _PASSWORD), public key in src-tauri/tauri.conf.json.
 #   The key is passed only to the Sign step of publish: not to the build (where build scripts · plugins all run).
 #   SHA256SUMS is signed with the same key too (SHA256SUMS.sig — checked by qurry-tui --update).
-# PRs that change this file only run the build (signing · release only on main — so other branches can't publish as latest).
+# PRs that change this file only run the build (signing · release only for main and version tags on main — so other branches can't publish).
 name: Release
 
 on:
   push:
     branches: [main]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
   pull_request:
     branches: [main]
     paths: [.github/workflows/release.yml]
@@ -26,7 +31,7 @@ on:
 permissions:
   contents: read
 
-# One at a time even if merges come in a row (so the same version tag isn't created twice)
+# One at a time even if merges come in a row (so the same beta tag isn't created twice)
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -36,6 +41,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.ver.outputs.version }}
+      channel: ${{ steps.ver.outputs.channel }}
+      prev: ${{ steps.ver.outputs.prev }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -44,19 +51,50 @@ jobs:
 
       - name: Compute version
         id: ver
+        # prev = the tag the release notes start from (stable: the stable release before; beta: the release before)
         run: |
-          latest=$(git tag -l 'v*.*.*' --sort=-v:refname | head -1)
-          latest=${latest#v}
-          [ -z "$latest" ] && latest=0.0.0
-          src=$(grep -m1 '^version' crates/core/Cargo.toml | cut -d'"' -f2)
-          if [ "$src" != "$latest" ] && [ "$(printf '%s\n%s\n' "$latest" "$src" | sort -V | tail -1)" = "$src" ]; then
-            v=$src
+          set -euo pipefail
+          stable_tags() { git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V || true; }
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            channel=stable
+            v=${GITHUB_REF_NAME#v}
+            if ! [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::$GITHUB_REF_NAME is not a version tag vX.Y.Z. Delete it (git push --delete origin $GITHUB_REF_NAME) and push a tag like v1.2.3."
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "::error::$GITHUB_REF_NAME is not on main, so nothing was published. Delete it (git push --delete origin $GITHUB_REF_NAME), then tag a commit on main (git tag $GITHUB_REF_NAME <sha on main> && git push origin $GITHUB_REF_NAME)."
+              exit 1
+            fi
+            highest=$(stable_tags | tail -1)
+            if [ "$highest" != "$GITHUB_REF_NAME" ]; then
+              echo "::error::$GITHUB_REF_NAME is lower than the newest stable release $highest, so it would not reach anyone. Delete it (git push --delete origin $GITHUB_REF_NAME) and tag a higher version."
+              exit 1
+            fi
+            prev=$(stable_tags | grep -vFx "$GITHUB_REF_NAME" | tail -1 || true)
           else
-            IFS=. read -r ma mi pa <<< "$latest"
-            v="$ma.$mi.$((pa + 1))"
+            channel=beta
+            latest=$(stable_tags | tail -1)
+            latest=${latest#v}
+            [ -z "$latest" ] && latest=0.0.0
+            src=$(grep -m1 '^version' crates/core/Cargo.toml | cut -d'"' -f2)
+            if [ "$src" != "$latest" ] && [ "$(printf '%s\n%s\n' "$latest" "$src" | sort -V | tail -1)" = "$src" ]; then
+              base=$src
+            else
+              IFS=. read -r ma mi pa <<< "$latest"
+              base="$ma.$mi.$((pa + 1))"
+            fi
+            n=$(git tag -l "v$base-beta.*" | sed -n "s/^v$base-beta\.\([0-9][0-9]*\)$/\1/p" | sort -n | tail -1)
+            v="$base-beta.$(( ${n:-0} + 1 ))"
+            prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$GITHUB_SHA^" 2>/dev/null || true)
+            echo "latest stable tag: $latest · source: $src"
           fi
-          echo "latest tag: $latest · source: $src → release: $v"
-          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "$channel release: $v (notes since: ${prev:-the first release})"
+          {
+            echo "version=$v"
+            echo "channel=$channel"
+            echo "prev=$prev"
+          } >> "$GITHUB_OUTPUT"
 
   build:
     needs: version
@@ -93,13 +131,36 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      # wasm32: the GUI's shared WASM (pnpm build runs pnpm wasm first)
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.target }},wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: ${{ matrix.target }}
+
+      - name: wasm-bindgen version
+        id: wb
+        # Cache per runner image (ImageOS: ubuntu22, ubuntu24, macos14, …): a binary built on a newer image may not run on an older one
+        run: |
+          v=$(sed -n 's/^wasm-bindgen = "=\(.*\)"/\1/p' crates/shared-wasm/Cargo.toml)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "key=wasm-bindgen-cli-$ImageOS-$(uname -m)-$v" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        id: wb-cache
+        with:
+          path: ~/.cargo/bin/wasm-bindgen
+          key: ${{ steps.wb.outputs.key }}
+
+      - name: Install wasm-bindgen-cli (same version as the wasm-bindgen crate)
+        if: steps.wb-cache.outputs.cache-hit != 'true'
+        run: cargo install wasm-bindgen-cli --version "${{ steps.wb.outputs.version }}" --locked
+
+      # wasm-opt -Oz for the shipped module (scripts/wasm.sh runs it when it is on PATH)
+      - name: Install wasm-opt (binaryen)
+        run: npm install -g binaryen@132.0.0
 
       - name: Set version in manifests
         run: |
@@ -136,6 +197,16 @@ jobs:
             # The AppImage is itself the in-app update bundle
             cp "$b"/appimage/*.AppImage "out/Qurry_${V}_${A}.AppImage"
             cp "$b"/deb/*.deb "out/Qurry_${V}_${A}.deb"
+            if [[ "$V" == *-* ]]; then
+              # dpkg reads "-beta.N" as a Debian revision and sorts 0.3.1-beta.2 above 0.3.1, so the stable deb would be a downgrade.
+              # The package version of a beta is 0.3.1~beta.2 (sorts below 0.3.1); the file name keeps the release version
+              d=$(mktemp -d)
+              dpkg-deb -R "out/Qurry_${V}_${A}.deb" "$d"
+              sed -i 's/^\(Version: [0-9.]*\)-/\1~/' "$d/DEBIAN/control"
+              grep '^Version:' "$d/DEBIAN/control"
+              dpkg-deb -b --root-owner-group "$d" "out/Qurry_${V}_${A}.deb"
+              rm -rf "$d"
+            fi
           fi
           mkdir cli
           cp "target/$T/release/qurry-tui" "target/$T/release/qurry-mcp" cli/
@@ -216,7 +287,7 @@ jobs:
 
   publish:
     needs: [version, build, drivers]
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -224,6 +295,8 @@ jobs:
       attestations: write
     env:
       V: ${{ needs.version.outputs.version }}
+      CHANNEL: ${{ needs.version.outputs.channel }}
+      PREV: ${{ needs.version.outputs.prev }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -254,7 +327,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          # latest.json: the app reads releases/latest/download/latest.json and fetches its platform entry
+          # latest.json: the app reads the latest.json of the release its update channel offers (releases/download/v<version>/latest.json)
+          #   and fetches its platform entry. Apps from before the channels read releases/latest/download/latest.json: stable only
           echo '{}' > platforms.json
           for p in "darwin-aarch64 Qurry_${V}_aarch64.app.tar.gz" "darwin-x86_64 Qurry_${V}_x64.app.tar.gz" "linux-x86_64 Qurry_${V}_amd64.AppImage" "linux-x86_64-deb Qurry_${V}_amd64.deb"; do
             set -- $p
@@ -283,15 +357,39 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [ "$CHANNEL" = beta ]; then
+            # A pre-release is never GitHub's "latest": releases/latest stays the newest stable release
+            flags=(--prerelease --latest=false)
+            { printf '> **Beta** built from a merge to main. Qurry offers it only on the beta update channel (GUI Settings › Appearance › Updates, TUI ⌃k › Update Channel…). Stable releases come from a version tag.\n\n'; cat release-notes.md; } > notes.tmp
+            mv notes.tmp release-notes.md
+          else
+            flags=(--latest)
+            # Apps from before 0.3.0 show only the "What's Changed" items in their update window: the macOS 13 warning must be one.
+            # On every stable release (they can be offered any of them); 0.3.0+ apps drop this item (update::changes in qurry-core)
+            { printf "## What's Changed\n* [breaking] The GUI needs macOS 13 Ventura or later. On macOS 12 or older, don't update: keep Qurry 0.2.x\n\n"; cat release-notes.md; } > notes.tmp
+            mv notes.tmp release-notes.md
+          fi
+          # Generated notes from the release before (for stable: the stable release before, so they cover all its betas)
+          if [ -n "$PREV" ]; then flags+=(--notes-start-tag "$PREV"); fi
           gh release create "v${V}" dist-release/* \
             --target "$GITHUB_SHA" \
             --title "Qurry ${V}" \
             --notes-file release-notes.md \
-            --generate-notes
+            --generate-notes \
+            "${flags[@]}"
+          if [ "$CHANNEL" = beta ]; then
+            # Apps from before 0.3.0 read only the newest 30 releases and skip pre-releases, so the newest stable release must stay
+            # among them: keep the newest 20 betas (newest first, so at most 20 come before it). A beta older than the newest stable
+            # release stays until then too: apps on it install driver plugins from its release. Tags stay (beta.N counts them)
+            gh release list --limit 1000 --exclude-drafts --json tagName,isPrerelease --jq '.[] | "\(.isPrerelease) \(.tagName)"' |
+              awk '$1 == "true" && ++n > 20 { print $2 }' |
+              while read -r tag; do gh release delete "$tag" --yes; done
+          fi
 
       - name: Update Homebrew tap
-        # brew install hkhyyy/qurry/qurry — Formula/qurry.rb with this release's version · checksums.
+        # brew install hkhyyy/qurry/qurry — Formula/qurry.rb with this release's version · checksums. Stable releases only
         # The key is a deploy key with write access only to Hkhyyy/homebrew-qurry, passed only to this step
+        if: needs.version.outputs.channel == 'stable'
         env:
           TAP_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: |

@@ -1,0 +1,21 @@
+[
+  { "id": "empty-query", "query": "", "text": "users" },
+  { "id": "exact", "query": "users", "text": "users" },
+  { "id": "exact-case", "query": "USERS", "text": "users" },
+  { "id": "prefix", "query": "us", "text": "users" },
+  { "id": "substring-word-start", "query": "pay", "text": "user_payment_history" },
+  { "id": "substring-mid-word", "query": "ser", "text": "users" },
+  { "id": "substring-camel", "query": "ord", "text": "CustomerOrders" },
+  { "id": "scattered", "query": "uph", "text": "user_payment_history" },
+  { "id": "scattered-camel", "query": "co", "text": "CustomerOrders" },
+  { "id": "scattered-space", "query": "u p", "text": "user_payment" },
+  { "id": "no-match", "query": "xyz", "text": "users" },
+  { "id": "order-matters", "query": "su", "text": "us" },
+  { "id": "korean-prefix", "query": "주문", "text": "주문내역" },
+  { "id": "korean-substring", "query": "내역", "text": "주문내역" },
+  { "id": "korean-scattered", "query": "주역", "text": "주문내역" },
+  { "id": "emoji", "query": "😀", "text": "a😀b" },
+  { "id": "emoji-scattered", "query": "ab", "text": "a😀b" },
+  { "id": "korean-gap", "query": "ac", "text": "a가c" },
+  { "id": "long-text", "query": "a", "text": "the_quick_brown_fox_jumps_over_a_lazy_dog" }
+]

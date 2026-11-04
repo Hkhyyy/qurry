@@ -3,12 +3,27 @@ import * as monaco from "monaco-editor/editor/editor.api";
 import "monaco-editor/editor/editor.main";
 import "monaco-editor/languages/definitions/pgsql/register";
 import "monaco-editor/languages/definitions/mysql/register";
+import { language as mysqlLanguage } from "monaco-editor/languages/definitions/mysql/mysql";
 import "monaco-editor/languages/definitions/redis/register";
 import EditorWorker from "monaco-editor/editor/editor.worker?worker";
+import JsonWorker from "monaco-editor/language/json/json.worker?worker";
 import { loader } from "@monaco-editor/react";
 
-self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
+// JSON (the grid's Value Editor panel) validates and folds in its own worker
+self.MonacoEnvironment = { getWorker: (_, label) => (label === "json" ? new JsonWorker() : new EditorWorker()) };
 loader.config({ monaco });
+
+/**
+ * MySQL reads `--` as a comment only when a space, a control character or the line end follows (`select 1--1` is 1 - -1), and so does
+ * the console's split (qurry_shared::sql dash_comment). The built-in grammar greys out every `--…`, so `select 1--1; delete …` looked like
+ * one statement with a comment while ⌘↩ ran the DELETE: colour it the way it runs
+ */
+const comments = [
+  [/--(?:[\x00-\x20\x7f].*|$)/, "comment"],
+  [/#+.*/, "comment"],
+  [/\/\*/, { token: "comment.quote", next: "@comment" }],
+];
+monaco.languages.setMonarchTokensProvider("mysql", { ...mysqlLanguage, tokenizer: { ...mysqlLanguage.tokenizer, comments } } as monaco.languages.IMonarchLanguage);
 
 monaco.editor.defineTheme("dbtool-dark", {
   base: "vs-dark",
@@ -19,6 +34,7 @@ monaco.editor.defineTheme("dbtool-dark", {
     { token: "number", foreground: "2AACB8" },
     { token: "comment", foreground: "7A7E85", fontStyle: "italic" },
     { token: "predefined", foreground: "56A8F5" },
+    { token: "string.key.json", foreground: "C77DBB" },
   ],
   colors: {
     "editor.background": "#1E1F22",
@@ -40,6 +56,7 @@ monaco.editor.defineTheme("dbtool-light", {
     { token: "number", foreground: "1750EB" },
     { token: "comment", foreground: "8C8C8C", fontStyle: "italic" },
     { token: "predefined", foreground: "00627A" },
+    { token: "string.key.json", foreground: "871094" },
   ],
   colors: {
     "editor.background": "#FFFFFF",
@@ -58,6 +75,7 @@ monaco.editor.defineTheme("dbtool-hc", {
     { token: "string", foreground: "8DF08D" },
     { token: "number", foreground: "6FE8F5" },
     { token: "comment", foreground: "B0B0B0", fontStyle: "italic" },
+    { token: "string.key.json", foreground: "F5A8F0" },
   ],
   colors: { "editor.background": "#000000" },
 });

@@ -1,0 +1,16 @@
+[package]
+name = "qurry-shared"
+version = "0.1.0"
+edition = "2024"
+description = "Pure Rust logic shared by the GUI (as WASM), the TUI and the backend"
+publish = false
+
+# Pure Rust only: no tokio, sqlx or redis (CI step "qurry-shared stays pure" fails on them)
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Without the \p{…} tables and the literal / one-pass engines: a third smaller WASM, same speed. Keep Unicode \w \s \d and
+# case folding: the guard must read Mongo commands as the driver does (guard::tests::regex_stays_unicode). Not regex-lite (ASCII only)
+regex = { version = "1", default-features = false, features = ["std", "unicode-perl", "unicode-case", "perf-backtrack", "perf-dfa"] }
+# reads MongoDB shell arguments the way the driver does (guard)
+json5 = "1"

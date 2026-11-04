@@ -1,17 +1,24 @@
 {
   "name": "qurry",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
+    "wasm": "scripts/wasm.sh",
+    "predev": "pnpm wasm",
     "dev": "vite",
+    "prebuild": "pnpm wasm",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "pretest": "pnpm wasm",
     "test": "vitest run",
+    "prestorybook": "pnpm wasm",
     "storybook": "storybook dev -p 6006 --no-open",
+    "prebuild-storybook": "pnpm wasm",
     "build-storybook": "storybook build -o storybook-static",
-    "tui-snapshots": "cargo test -p qurry-tui kit_snapshots -- --ignored"
+    "tui-snapshots": "cargo test -p qurry-tui kit_snapshots -- --ignored",
+    "parity:dump": "PARITY_DUMP=1 vitest run src/lib/parity.dump.test.ts"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
@@ -23,9 +30,11 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-resizable-panels": "^2.1.9",
-    "sql-formatter": "^15.9.0"
+    "sql-formatter": "^15.9.0",
+    "zustand": "5.0.15"
   },
   "devDependencies": {
+    "@playwright/test": "1.64.1",
     "@storybook/react-vite": "10.6.2",
     "@tauri-apps/cli": "^2",
     "@types/react": "^19.1.8",

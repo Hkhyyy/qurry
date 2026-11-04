@@ -5,17 +5,15 @@ use crate::db::{int_value, query_result, ColumnInfo, QueryResult};
 use crate::error::{AppError, AppResult};
 use crate::meta::{
     ColumnMeta, CompletionTable, ConstraintMeta, FtsHit, FtsRequest, IndexEntry, IndexMeta, RelationInfo, RoutineInfo, SchemaInfo,
-    SchemaObjects, TableDetail,
+    SchemaObjects, TableDetail, TableStructure, ForeignKeyMeta, TriggerMeta,
 };
 use crate::session::{is_select_like, strip_comments_lead};
-use crate::store::ConnectionConfig;
 use futures::TryStreamExt;
 use serde_json::Value;
-use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlRow};
+use sqlx::mysql::{MySqlPool, MySqlRow};
 use sqlx::pool::PoolConnection;
 use sqlx::{Column, Either, Executor, MySql, Row, TypeInfo, ValueRef};
-use std::io::ErrorKind;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 pub const SYSTEM_DBS: [&str; 4] = ["information_schema", "performance_schema", "mysql", "sys"];
 
@@ -25,150 +23,6 @@ pub fn ident(s: &str) -> String {
 /// MySQL string literal: backslash is also an escape character
 pub fn lit(s: &str) -> String {
     format!("'{}'", s.replace('\\', "\\\\").replace('\'', "''"))
-}
-
-pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str, port: u16) -> AppResult<MySqlPool> {
-    let mut opts = MySqlConnectOptions::new().host(host).port(port).username(&cfg.user).charset("utf8mb4");
-    if let Some(p) = password.filter(|p| !p.is_empty()) {
-        opts = opts.password(p);
-    }
-    if !cfg.database.trim().is_empty() {
-        opts = opts.database(cfg.database.trim());
-    }
-    if let Some(ssl) = cfg.active_ssl() {
-        use sqlx::mysql::MySqlSslMode;
-        opts = opts.ssl_mode(match ssl.mode() {
-            "verify-full" => MySqlSslMode::VerifyIdentity,
-            "verify-ca" => MySqlSslMode::VerifyCa,
-            "require" => MySqlSslMode::Required,
-            m => return Err(AppError::Msg(format!("Unknown SSL mode '{m}' (use require, verify-ca or verify-full)"))),
-        });
-        let home = |p: &str| p.strip_prefix("~/").map(|r| format!("{}/{r}", std::env::var("HOME").unwrap_or_default())).unwrap_or_else(|| p.to_string());
-        if !ssl.ca_file.trim().is_empty() {
-            opts = opts.ssl_ca(home(ssl.ca_file.trim()));
-        }
-        if !ssl.cert_file.trim().is_empty() {
-            opts = opts.ssl_client_cert(home(ssl.cert_file.trim()));
-        }
-        if !ssl.key_file.trim().is_empty() {
-            opts = opts.ssl_client_key(home(ssl.key_file.trim()));
-        }
-    }
-    // Session settings to run right after connecting (Options tab)
-    let mut init: Vec<String> = Vec::new();
-    const LEVELS: [&str; 4] = ["read uncommitted", "read committed", "repeatable read", "serializable"];
-    if let Some(iso) = cfg.options.isolation.as_deref().filter(|i| LEVELS.contains(i)) {
-        init.push(format!("SET SESSION TRANSACTION ISOLATION LEVEL {}", iso.to_uppercase()));
-    }
-    if cfg.read_only {
-        init.push("SET SESSION TRANSACTION READ ONLY".into());
-    }
-    if let Some(tz) = cfg.options.time_zone.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
-        init.push(format!("SET time_zone = {}", lit(tz)));
-    }
-    let script = cfg.options.startup_script.trim().to_string();
-    let pool_opts = || {
-        let (init, script) = (init.clone(), script.clone());
-        MySqlPoolOptions::new()
-        // Each console·table tab gets its own dedicated connection. Connections open only when needed, so just keep the cap generous
-        .max_connections(crate::db::POOL_MAX)
-        .idle_timeout(crate::db::POOL_IDLE)
-        .acquire_timeout(Duration::from_secs(10))
-        .after_connect(move |conn, _| {
-            let init = init.clone();
-            let script = script.clone();
-            Box::pin(async move {
-                for s in &init {
-                    conn.execute(s.as_str()).await?;
-                }
-                if !script.is_empty() {
-                    conn.execute(sqlx::raw_sql(&script)).await?;
-                }
-                Ok(())
-            })
-        })
-    };
-    // Require TLS even when SSL isn't set (certificate not verified). Plaintext only for this machine · SSH tunnels, or when "Allow unencrypted" is on
-    // (Old servers (MySQL 5.7 etc.) can't negotiate TLS 1.2. Someone stripping TLS in the middle looks the same, so we don't fall back to plaintext automatically)
-    let explicit_ssl = cfg.active_ssl().is_some();
-    let plain_ok = crate::db::plaintext_allowed(cfg, host);
-    if !explicit_ssl && !plain_ok {
-        opts = opts.ssl_mode(sqlx::mysql::MySqlSslMode::Required);
-    }
-    let pool = match pool_opts().connect_with(opts.clone()).await {
-        Err(e) => match on_connect_error(&e, explicit_ssl, plain_ok) {
-            OnConnectError::RetryPlain => pool_opts().connect_with(opts.ssl_mode(sqlx::mysql::MySqlSslMode::Disabled)).await?,
-            OnConnectError::NeedsTls => return Err(AppError::Msg(format!("{NEEDS_TLS}\n({e})"))),
-            OnConnectError::Dropped => return Err(AppError::Msg(format!("{DROPPED_TLS}\n({e})"))),
-            OnConnectError::Fail => return Err(e.into()),
-        },
-        Ok(p) => p,
-    };
-    Ok(pool)
-}
-
-#[derive(Debug, PartialEq)]
-enum OnConnectError {
-    /// Plain text is allowed: connect again without TLS
-    RetryPlain,
-    /// Tell the user about "Allow unencrypted connection"
-    NeedsTls,
-    /// The server dropped the connection: maybe an old server refusing TLS, maybe a proxy without a backend — a softer hint
-    Dropped,
-    Fail,
-}
-
-/// What to do when the first connect fails. A TLS failure, or the server just dropping the connection (some old servers do during the
-/// handshake), counts only when SSL isn't set explicitly. sqlx doesn't say at which step a connection was dropped (a proxy without a
-/// backend, or a drop after auth, look the same), so a drop gets a hint that doesn't claim TLS was the cause
-fn on_connect_error(e: &sqlx::Error, explicit_ssl: bool, plain_ok: bool) -> OnConnectError {
-    let dropped = matches!(e, sqlx::Error::Io(io) if matches!(io.kind(), ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset | ErrorKind::ConnectionAborted));
-    if explicit_ssl || !(is_tls_failure(e) || dropped) {
-        OnConnectError::Fail
-    } else if plain_ok {
-        OnConnectError::RetryPlain
-    } else if dropped {
-        OnConnectError::Dropped
-    } else {
-        OnConnectError::NeedsTls
-    }
-}
-
-/// When the server dropped the connection while TLS was required (the cause isn't known for sure)
-pub const DROPPED_TLS: &str = "The server closed the connection while setting up encryption — it may be an old MySQL without TLS 1.2 (then, on a network you trust, turn on \"Allow unencrypted connection\" for this data source: GUI: Options tab · TUI: data source form, \"Allow unencrypted\"), or check the host, port and any proxy in between.";
-
-/// When not falling back to plaintext on a server without TLS
-pub const NEEDS_TLS: &str = "This server didn't set up an encrypted (TLS) connection, so Qurry didn't send the password. If it's an old server without TLS 1.2 and the network is trusted, turn on \"Allow unencrypted connection\" for this data source (GUI: Options tab · TUI: data source form, \"Allow unencrypted\").";
-
-/// Message when a source without SSL set connected in plaintext (reconnected in plaintext because TLS failed — also what happens when someone deliberately strips TLS)
-pub async fn plaintext_note(p: &MySqlPool, cfg: &ConnectionConfig) -> Option<String> {
-    if cfg.active_ssl().is_some() || crate::db::is_local(cfg) {
-        return None;
-    }
-    let row: Option<(String, String)> = sqlx::query_as("SHOW SESSION STATUS LIKE 'Ssl_cipher'").fetch_optional(p).await.ok()?;
-    row.filter(|(_, c)| c.is_empty()).map(|_| "⚠ Not encrypted: TLS didn't work with this server, so Qurry connected without it (the password and data travel in plain text). Enable SSL in the data source to require it.".to_string())
-}
-
-/// Connection failure from failing to negotiate TLS (not auth failures etc.)
-fn is_tls_failure(e: &sqlx::Error) -> bool {
-    match e {
-        sqlx::Error::Tls(_) => true,
-        sqlx::Error::Io(io) => is_rustls_error(io),
-        _ => false,
-    }
-}
-
-/// sqlx hands rustls handshake errors over as InvalidData I/O errors; matched by rustls' Display texts (rustls::Error), e.g.
-/// MySQL 5.7 limited to TLS 1.0/1.1: "received fatal alert: HandshakeFailure", MySQL 5.5: "received corrupt message of type UnknownProtocolVersion"
-fn is_rustls_error(io: &std::io::Error) -> bool {
-    const TEXTS: [&str; 6] = ["received fatal alert", "received corrupt message", "received unexpected message", "peer is incompatible", "peer misbehaved", "handshake"];
-    let m = io.to_string().to_lowercase();
-    io.kind() == ErrorKind::InvalidData && TEXTS.iter().any(|t| m.contains(t))
-}
-
-pub async fn server_version(p: &MySqlPool) -> AppResult<String> {
-    let v: String = sqlx::query_scalar("select cast(version() as char)").fetch_one(p).await?;
-    Ok(if v.to_lowercase().contains("mariadb") { format!("MariaDB {v}") } else { format!("MySQL {v}") })
 }
 
 pub(crate) fn columns_of(row: &MySqlRow) -> Vec<ColumnInfo> {
@@ -211,12 +65,6 @@ pub(crate) fn value(row: &MySqlRow, i: usize) -> Value {
         }
         _ => Value::from(s.as_ref()),
     }
-}
-
-/// Run one query on the pool
-pub async fn run(p: &MySqlPool, sql: &str, limit: usize) -> AppResult<QueryResult> {
-    let mut conn = p.acquire().await?;
-    run_on(&mut conn, sql, limit).await
 }
 
 pub async fn run_on(conn: &mut sqlx::MySqlConnection, sql: &str, limit: usize) -> AppResult<QueryResult> {
@@ -270,11 +118,6 @@ async fn run_on_with(conn: &mut sqlx::MySqlConnection, sql: &str, limit: usize, 
     Ok(query_result(columns, rows, affected, truncated, start, has_rs))
 }
 
-pub async fn export(p: &MySqlPool, sql: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {
-    let mut conn = p.acquire().await?;
-    export_on(&mut conn, sql, out, false).await
-}
-
 /// Export on an already acquired connection. prepared = the prepared protocol that runs only one statement (read-only path)
 pub async fn export_on(conn: &mut sqlx::MySqlConnection, sql: &str, out: &mut crate::transfer::Exporter, prepared: bool) -> AppResult<()> {
     let mut stream = if prepared { conn.fetch(sqlx::query(sql)) } else { conn.fetch(sqlx::raw_sql(sql)) };
@@ -289,30 +132,88 @@ pub async fn export_on(conn: &mut sqlx::MySqlConnection, sql: &str, out: &mut cr
     Ok(())
 }
 
-pub async fn execute_batch(p: &MySqlPool, statements: &[String], exact_one: bool) -> AppResult<u64> {
-    execute_batch_with(p, statements, exact_one, false).await
+/// Undo snapshot (a SELECT … FOR UPDATE from audit::UndoPlan) in the open transaction (text protocol: `value` reads text values);
+/// a failing SELECT leaves the MySQL transaction as it was, except a deadlock (and a lock wait timeout with innodb_rollback_on_timeout), which rolls back all of it
+pub(crate) async fn snapshot_on(conn: &mut sqlx::MySqlConnection, sql: &str) -> AppResult<QueryResult> {
+    run_on(conn, sql, crate::audit::UNDO_MAX_ROWS + 1).await
 }
 
-/// prepared = each statement over the prepared-statement protocol, which takes exactly one statement (MCP)
-pub async fn execute_batch_with(p: &MySqlPool, statements: &[String], exact_one: bool, prepared: bool) -> AppResult<u64> {
-    let mut tx = p.begin().await?;
-    let mut affected = 0;
-    for st in statements {
-        let r = if prepared { sqlx::query(st).execute(&mut *tx).await } else { tx.execute(sqlx::raw_sql(st)).await };
-        let n = r.map_err(|e| AppError::Msg(format!("{e}\n→ {st}")))?.rows_affected();
-        crate::session::check_exact_one(st, n, exact_one)?;
-        affected += n;
+/// MySQL error number (1213 = deadlock, …)
+pub(crate) fn error_number(e: &AppError) -> Option<u16> {
+    match e {
+        AppError::Db(sqlx::Error::Database(d)) => d.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>().map(|m| m.number()),
+        _ => None,
     }
-    tx.commit().await?;
-    Ok(affected)
-}
-
-pub async fn cancel(p: &MySqlPool, id: i64) -> AppResult<bool> {
-    sqlx::query(&format!("KILL QUERY {id}")).execute(p).await?;
-    Ok(true)
 }
 
 // ───────── Console session ─────────
+
+/// In Manual mode (autocommit=0), whether the statement opens the transaction: every one but SHOW / SET / USE
+fn opens_tx(s: &str) -> bool {
+    !s.starts_with("show") && !s.starts_with("set") && !s.starts_with("use")
+}
+
+/// Whether the console asks the server if its transaction is still open after the statement, whether it ran or failed: after every
+/// statement but a SELECT and a row change (s = strip_comments_lead(sql)). MySQL commits the open transaction for DDL, LOCK / UNLOCK
+/// TABLES, SET autocommit, SET PASSWORD, INSTALL PLUGIN … (some also when they then fail, not when they fail to parse), and a CALL or
+/// DO can open one in Manual: no list of words gets them all right
+fn asks_server(sql: &str, s: &str) -> bool {
+    !is_select_like(sql) && !is_dml(s)
+}
+
+/// The leading word of `s` (strip_comments_lead), ending at any character that isn't a letter, digit or `_`, so a comment glued to
+/// it (`call/**/p()`) doesn't hide it
+fn first_word(s: &str) -> &str {
+    s.split(|c: char| !c.is_alphanumeric() && c != '_').next().unwrap_or("")
+}
+
+/// The word after a leading BEGIN keyword (s = strip_comments_lead(sql)), comments skipped (`--`, `/* */`, `#`): "" for none.
+/// None when `s` doesn't start with the word BEGIN
+fn after_begin(s: &str) -> Option<&str> {
+    let mut rest = s.strip_prefix("begin").filter(|r| !r.starts_with(|c: char| c.is_alphanumeric() || c == '_'))?.trim_start();
+    loop {
+        rest = if let Some(r) = rest.strip_prefix("--").or_else(|| rest.strip_prefix('#')) {
+            r.split_once('\n').map_or("", |x| x.1)
+        } else if let Some(r) = rest.strip_prefix("/*") {
+            r.split_once("*/").map_or("", |x| x.1)
+        } else {
+            return Some(first_word(rest));
+        }
+        .trim_start();
+    }
+}
+
+/// A MariaDB compound statement: at top level only BEGIN NOT ATOMIC … END (a labeled one is a syntax error there). It doesn't
+/// commit the open transaction, and what it runs can commit or roll back
+pub(crate) fn is_compound(s: &str) -> bool {
+    after_begin(s) == Some("not")
+}
+
+/// A plain BEGIN (s = strip_comments_lead(sql)), whatever follows it (`work`, `;`, a trailing comment the splitter left in): it
+/// commits the open transaction and opens one
+fn is_begin(s: &str) -> bool {
+    after_begin(s).is_some_and(|w| w != "not")
+}
+
+/// Whether `s` (strip_comments_lead) runs statements of its own that can COMMIT or ROLLBACK: a CALL, EXECUTE of a prepared
+/// COMMIT / ROLLBACK, or a MariaDB BEGIN NOT ATOMIC … END. When the transaction ended with it, the server's answer can't tell
+/// whether it committed or rolled back
+fn ends_in_procedure(s: &str) -> bool {
+    let first = first_word(s);
+    ["call", "execute"].contains(&first) || is_compound(s)
+}
+
+/// Statements that change rows (s = strip_comments_lead(sql))
+fn changes_rows(s: &str) -> bool {
+    let first = first_word(s);
+    ["insert", "update", "delete", "replace"].contains(&first) || s.starts_with("load data")
+}
+
+/// Statements that change or read rows and never commit the open transaction (s = strip_comments_lead(sql))
+fn is_dml(s: &str) -> bool {
+    let first = first_word(s);
+    changes_rows(s) || ["show", "explain", "describe", "desc"].contains(&first)
+}
 
 /// Dedicated connection for a console tab. MySQL has no protocol-level cursor, so "load more" re-queries with LIMIT/OFFSET.
 pub struct MySession {
@@ -320,6 +221,14 @@ pub struct MySession {
     pub id: i64,
     manual: bool,
     pub in_tx: bool,
+    /// A change ran in the open transaction (audit::is_change, as the Production log has it): a transaction opened by BEGIN or
+    /// guessed after a SELECT in Manual mode has none, so ending it saves nothing
+    pub changed: bool,
+    /// How the last statement ended the open transaction, when it did by itself (audit::IMPLICIT_COMMIT or audit::ENDED_UNKNOWN):
+    /// not a COMMIT / ROLLBACK, a deadlock in a row change or a lost connection
+    pub ended: Option<&'static str>,
+    /// tx_open's answer can be trusted: it saw the transaction the session opened to check it (TiDB, Vitess accept the SET inside one)
+    probe: bool,
     /// (SELECT statement, next OFFSET)
     more: Option<(String, usize)>,
 }
@@ -328,7 +237,14 @@ impl MySession {
     pub async fn open(p: &MySqlPool) -> AppResult<Self> {
         let mut conn = p.acquire().await?;
         let id: u64 = sqlx::query_scalar("select connection_id()").fetch_one(&mut *conn).await?;
-        Ok(Self { conn, id: id as i64, manual: false, in_tx: false, more: None })
+        let mut s = Self { conn, id: id as i64, manual: false, in_tx: false, changed: false, ended: None, probe: true, more: None };
+        // Best effort: a MySQL-protocol server without transactions (ClickHouse, older StarRocks / Doris) still opens, without the probe
+        let began = s.conn.execute("START TRANSACTION").await.is_ok();
+        s.probe = began && s.tx_open().await != Some(false);
+        if began {
+            let _ = s.conn.execute("ROLLBACK").await;
+        }
+        Ok(s)
     }
 
     pub async fn ping(&mut self) {
@@ -364,8 +280,13 @@ impl MySession {
     }
 
     pub async fn commit(&mut self) -> AppResult<()> {
-        self.conn.execute("COMMIT").await?;
-        self.in_tx = false;
+        let r = self.conn.execute("COMMIT").await;
+        // A COMMIT the server refused (e.g. a Group Replication certification failure) ends the transaction too: it was rolled back.
+        // Not a lost connection: then it is unknown whether it committed
+        if matches!(r, Ok(_) | Err(sqlx::Error::Database(_))) {
+            self.in_tx = false;
+        }
+        r?;
         Ok(())
     }
 
@@ -375,18 +296,118 @@ impl MySession {
         Ok(())
     }
 
+    /// Whether InnoDB rolled back the whole transaction on this error: a deadlock, and a lock wait timeout with innodb_rollback_on_timeout
+    async fn tx_rolled_back(&mut self, e: &AppError) -> bool {
+        match error_number(e) {
+            Some(1213) => true,
+            Some(1205) => sqlx::query_scalar::<_, i64>("SELECT @@innodb_rollback_on_timeout").fetch_one(&mut *self.conn).await.is_ok_and(|v| v != 0),
+            _ => false,
+        }
+    }
+
+    /// Whether the server has a transaction open on this connection (asks_server), changing nothing: MySQL refuses to set
+    /// session_track_gtids inside one (1766), and set to its own value it is a no-op. (Not the isolation level: setting it outside a
+    /// transaction would undo a pending SET TRANSACTION ISOLATION LEVEL.) MariaDB has no session_track_gtids (1193) but has
+    /// @@in_transaction. No privilege needed. None = no answer (MySQL 5.6, or a server that gets it wrong: `probe`)
+    async fn tx_open(&mut self) -> Option<bool> {
+        if !self.probe {
+            return None;
+        }
+        match self.conn.execute("SET @@SESSION.session_track_gtids = @@SESSION.session_track_gtids").await.map_err(AppError::from) {
+            Ok(_) => Some(false),
+            Err(e) if error_number(&e) == Some(1766) => Some(true),
+            Err(e) if error_number(&e) == Some(1193) => sqlx::query_scalar::<_, u64>("SELECT @@in_transaction").fetch_one(&mut *self.conn).await.ok().map(|n| n != 0),
+            Err(_) => None,
+        }
+    }
+
+    /// Whether a BEGIN now could commit pending work: a transaction is open (Qurry saw it open, or the server says so: a START
+    /// TRANSACTION inside a /*! … */ comment or after a # comment), or the server has autocommit off (then one may be open though
+    /// Qurry didn't see it: autocommit turned off in a procedure, a /*! … */ comment or the server's default). One the server
+    /// reports is followed from then on, so its changes show as pending; an autocommit=0 session is followed as Manual (asked even
+    /// with one open), so closing the tab turns autocommit back on before the connection goes back to the pool
+    pub async fn tx_may_be_open(&mut self) -> AppResult<bool> {
+        self.in_tx = self.in_tx || self.tx_open().await == Some(true);
+        let on: i64 = match sqlx::query_scalar("SELECT @@autocommit").fetch_one(&mut *self.conn).await {
+            Ok(on) => on,
+            Err(_) if self.in_tx => return Ok(true),
+            Err(e) => return Err(AppError::Msg(format!("Explain Analyse didn't run the statement: it couldn't ask the server whether autocommit is on ({e}). Nothing was run or committed; try again, or Commit or Roll back first"))),
+        };
+        self.manual |= on == 0;
+        Ok(self.in_tx || on == 0)
+    }
+
+    /// Whether to ask the server if the transaction is still open after `sql` (s = strip_comments_lead(sql)) ran or failed: one
+    /// rule for both. In Auto with none open, only a CALL, EXECUTE or BEGIN NOT ATOMIC can leave one open
+    fn asks(&self, sql: &str, s: &str) -> bool {
+        (self.manual || self.in_tx || ends_in_procedure(s)) && asks_server(sql, s)
+    }
+
+    /// After `s` (strip_comments_lead) ran or failed with `err`: follow the server's answer whether the transaction is still open.
+    /// Without one it stays as it was (or opens in Manual), so Qurry never claims changes are committed without knowing. If the
+    /// statement ended it (not a COMMIT / ROLLBACK), `ended` says how: committed, unless it can also have rolled it back (a CALL or
+    /// EXECUTE; a deadlock or lock wait timeout: a DDL waiting for its metadata lock times out after the commit, a SET with a
+    /// SELECT … FOR UPDATE rolls it back)
+    async fn follow_server(&mut self, s: &str, err: Option<&AppError>) {
+        let was = self.in_tx;
+        let opened = self.manual && opens_tx(s) && err.is_none_or(|e| error_number(e) != Some(1064));
+        self.in_tx = self.tx_open().await.unwrap_or(was || opened);
+        if was && !self.in_tx && !s.starts_with("commit") && !s.starts_with("rollback") {
+            let either = ends_in_procedure(s) || err.is_some_and(|e| matches!(error_number(e), Some(1205 | 1213)));
+            self.ended = Some(if either { crate::audit::ENDED_UNKNOWN } else { crate::audit::IMPLICIT_COMMIT });
+        }
+    }
+
     pub async fn run(&mut self, sql: &str, limit: usize) -> AppResult<QueryResult> {
         self.more = None;
-        let mut r = run_on(&mut self.conn, sql, limit).await?;
+        self.ended = None;
+        if !self.in_tx {
+            self.changed = false;
+        }
+        let mut r = match run_on(&mut self.conn, sql, limit).await {
+            Ok(r) => r,
+            Err(e) => {
+                let s = strip_comments_lead(sql);
+                if self.asks(sql, &s) && error_number(&e).is_some() && !crate::app::is_conn_lost(&e) {
+                    // Same rule as for one that ran: a DDL or SET PASSWORD that committed before failing, a COMMIT the server refused
+                    // (rolled back) ended it, one that failed to parse (COMMIT TRANSACTION: 1064) didn't, a CALL may have opened one
+                    self.follow_server(&s, Some(&e)).await;
+                } else if self.tx_rolled_back(&e).await {
+                    self.in_tx = false;
+                } else if self.manual && opens_tx(&s) && !s.starts_with("rollback") && error_number(&e) != Some(1064) {
+                    // With autocommit=0 a statement that fails (but parsed) still leaves the transaction open: the row locks it took
+                    // before a lock wait timeout, what a procedure changed before it failed
+                    self.in_tx = true;
+                }
+                return Err(e);
+            }
+        };
         let s = strip_comments_lead(sql);
-        if s.starts_with("begin") || s.starts_with("start transaction") {
+        if s.starts_with("set") && s.contains("autocommit") {
+            // A typed SET autocommit: follow the server's mode (whether it committed is asked below)
+            if let Ok(on) = sqlx::query_scalar::<_, i64>("SELECT @@autocommit").fetch_one(&mut *self.conn).await {
+                self.manual = on == 0;
+            }
+        }
+        if is_begin(&s) || s.starts_with("start transaction") {
+            // It committed the one that was open
+            if self.in_tx {
+                self.ended = Some(crate::audit::IMPLICIT_COMMIT);
+                self.changed = false;
+            }
             self.in_tx = true;
         } else if s.starts_with("commit") || (s.starts_with("rollback") && !s.starts_with("rollback to")) {
-            self.in_tx = false;
-        } else if self.manual && !is_select_like(sql) && !s.starts_with("show") && !s.starts_with("set") && !s.starts_with("use") {
-            // With autocommit=0, the first modifying statement opens a transaction
+            // AND CHAIN opens the next transaction at once (also when none was open)
+            self.in_tx = crate::session::chains(&s);
+            self.changed = false;
+        } else if self.asks(sql, &s) {
+            self.follow_server(&s, None).await;
+        } else if self.manual && opens_tx(&s) {
+            // With autocommit=0, any statement opens a transaction, not only a change: WITH … DELETE, SELECT … FOR UPDATE (its row locks),
+            // SELECT f() where f writes. Like PostgreSQL's Manual mode, it stays open until Commit / Roll back
             self.in_tx = true;
         }
+        self.changed |= self.in_tx && crate::audit::is_change(sql, crate::store::DbKind::Mysql);
         if r.truncated && is_select_like(sql) {
             self.more = Some((sql.trim().trim_end_matches(';').trim().to_string(), limit));
         } else {
@@ -394,6 +415,82 @@ impl MySession {
         }
         r.in_transaction = self.in_tx;
         Ok(r)
+    }
+
+    /// A change with its undo snapshot right before it, in one transaction (Session::run_with_snapshot)
+    pub async fn run_with_snapshot(&mut self, snap: &str, sql: &str, limit: usize) -> (AppResult<QueryResult>, AppResult<QueryResult>) {
+        self.more = None;
+        if !self.in_tx {
+            self.changed = false;
+        }
+        let own = !self.manual && !self.in_tx;
+        let had_tx = self.in_tx;
+        if own {
+            if let Err(e) = self.conn.execute("BEGIN").await {
+                return (Err(AppError::Msg(e.to_string())), Err(e.into()));
+            }
+            self.in_tx = true;
+        }
+        let shot = snapshot_on(&mut self.conn, snap).await;
+        // Cancelled · lock wait timeout · deadlock while locking the rows: don't run the change
+        if let Err(e) = &shot
+            && crate::audit::stops_change(e)
+        {
+            // No transaction was open before: end the one the snapshot ran in (Qurry's own, or the one autocommit=0 opened in Manual,
+            // which holds nothing else since in Manual every statement but SHOW / SET / USE sets in_tx, also when it fails)
+            // with the row locks it took before it stopped
+            let gone = if !had_tx {
+                let _ = self.rollback_tx().await;
+                true
+            } else {
+                self.tx_rolled_back(e).await
+            };
+            if gone {
+                self.in_tx = false;
+            }
+            return (Err(AppError::Msg(e.to_string())), Err(crate::audit::stopped(e, had_tx && gone)));
+        }
+        // Manual: the snapshot's locking read already opened the transaction (its locks are held until Commit / Roll back)
+        if shot.is_ok() {
+            self.in_tx = true;
+        }
+        let mut r = self.run(sql, limit).await;
+        if own {
+            if r.is_ok()
+                && let Err(e) = self.commit().await
+            {
+                r = Err(e);
+            }
+            match &mut r {
+                Ok(q) => q.in_transaction = false,
+                // The change or its COMMIT failed: nothing of it stays, and no transaction is left open
+                Err(_) => {
+                    let _ = self.rollback_tx().await;
+                    self.in_tx = false;
+                }
+            }
+        }
+        (shot, r)
+    }
+
+    /// The result that has more rows to load (More::schema is left to Session::more)
+    pub fn more(&self) -> Option<crate::session::More> {
+        let (sql, fetched) = self.more.clone()?;
+        Some(crate::session::More { sql, fetched, tx: self.manual || self.in_tx, schema: None })
+    }
+
+    /// The session's current database (USE): "" when none is selected, None when it can't be read
+    pub async fn database(&mut self) -> Option<String> {
+        sqlx::query_scalar::<_, Option<String>>("select cast(database() as char)").fetch_one(&mut *self.conn).await.ok().map(Option::unwrap_or_default)
+    }
+
+    /// Open `m` on this new session after the rows its old session read, in the database it ran in (Session::reopen)
+    pub async fn reopen(&mut self, m: &crate::session::More, limit: usize) -> AppResult<QueryResult> {
+        if let Some(db) = m.schema.as_ref().filter(|d| !d.is_empty()) {
+            self.conn.execute(format!("USE {}", qurry_shared::sql::quote_ident(crate::store::DbKind::Mysql, db)).as_str()).await?;
+        }
+        self.more = Some((m.sql.clone(), m.fetched));
+        self.fetch(limit).await
     }
 
     pub async fn fetch(&mut self, limit: usize) -> AppResult<QueryResult> {
@@ -466,23 +563,31 @@ pub async fn table_detail(p: &MySqlPool, schema: &str, table: &str) -> AppResult
         .into_iter()
         .map(|(name, data_type, nullable, default_value, comment, key)| ColumnMeta { name, data_type, nullable: nullable == "YES", default_value, comment, is_pk: key == "PRI" })
         .collect();
-    let idx: Vec<(String, i64, String)> = sqlx::query_as(
-        "select cast(index_name as char), cast(non_unique as signed), cast(group_concat(column_name order by seq_in_index separator ', ') as char) \
-         from information_schema.statistics where table_schema = ? and table_name = ? group by index_name, non_unique order by index_name",
-    )
-    .bind(schema)
-    .bind(table)
-    .fetch_all(p)
-    .await?;
+    // Key parts joined with a real tab character (not '\\t', which NO_BACKSLASH_ESCAPES reads as two characters). A functional
+    // key part (MySQL 8.0.13+) has no column_name but its expression, written as in CREATE INDEX; a server without the
+    // expression column (MariaDB, MySQL 5.7) has no functional key parts either
+    let idx_sql = |part: &str| {
+        format!(
+            "select cast(index_name as char), cast(non_unique as signed), cast(group_concat({part} order by seq_in_index separator '\t') as char) \
+             from information_schema.statistics where table_schema = ? and table_name = ? group by index_name, non_unique order by index_name"
+        )
+    };
+    let idx_of = |sql: String| async move { sqlx::query_as::<_, (String, i64, String)>(&sql).bind(schema).bind(table).fetch_all(p).await };
+    let idx = match idx_of(idx_sql("coalesce(column_name, concat('(', expression, ')'))")).await {
+        Err(sqlx::Error::Database(e)) if e.code().as_deref() == Some("42S22") => idx_of(idx_sql("column_name")).await?,
+        r => r?,
+    };
     let indexes = idx
         .into_iter()
         .map(|(name, non_unique, cols)| {
             let primary = name == "PRIMARY";
+            let columns: Vec<String> = cols.split('\t').map(String::from).collect();
             IndexMeta {
-                definition: format!("{} {} ({cols})", if primary { "PRIMARY KEY" } else if non_unique == 0 { "UNIQUE INDEX" } else { "INDEX" }, ident(&name)),
+                definition: format!("{} {} ({})", if primary { "PRIMARY KEY" } else if non_unique == 0 { "UNIQUE INDEX" } else { "INDEX" }, ident(&name), columns.join(", ")),
                 is_unique: non_unique == 0,
                 is_primary: primary,
                 name,
+                columns,
             }
         })
         .collect();
@@ -512,6 +617,74 @@ pub async fn table_detail(p: &MySqlPool, schema: &str, table: &str) -> AppResult
         })
         .collect();
     Ok(TableDetail { columns, indexes, constraints })
+}
+
+/// The Structure view: table_detail plus foreign keys both ways, triggers and table options
+pub async fn table_structure(p: &MySqlPool, schema: &str, table: &str) -> AppResult<TableStructure> {
+    let detail = table_detail(p, schema, table).await?;
+    // Foreign keys of this table, then those pointing at it (a self-reference is in both). Two queries: an OR across both
+    // sides keeps information_schema from narrowing to one table and reads every foreign key on the server
+    let fks = |side: &'static str| async move {
+        type Fk = (String, String, String, String, String, String, String, String, String);
+        let rows: Vec<Fk> = sqlx::query_as(&format!(
+            "select cast(k.constraint_name as char), cast(k.table_schema as char), cast(k.table_name as char), \
+               cast(group_concat(k.column_name order by k.ordinal_position separator '\t') as char), \
+               cast(k.referenced_table_schema as char), cast(k.referenced_table_name as char), \
+               cast(group_concat(k.referenced_column_name order by k.ordinal_position separator '\t') as char), \
+               cast(r.update_rule as char), cast(r.delete_rule as char) \
+             from information_schema.key_column_usage k \
+             join information_schema.referential_constraints r on r.constraint_schema = k.constraint_schema and r.constraint_name = k.constraint_name and r.table_name = k.table_name \
+             where k.referenced_table_name is not null and k.{side}table_schema = ? and k.{side}table_name = ? \
+             group by k.constraint_schema, k.constraint_name, k.table_schema, k.table_name, k.referenced_table_schema, k.referenced_table_name, r.update_rule, r.delete_rule \
+             order by 2, 3, 1"
+        ))
+        .bind(schema)
+        .bind(table)
+        .fetch_all(p)
+        .await?;
+        let split = |s: String| s.split('\t').map(String::from).collect::<Vec<_>>();
+        AppResult::Ok(
+            rows.into_iter()
+                .map(|(name, schema, table, columns, ref_schema, ref_table, ref_columns, on_update, on_delete)| ForeignKeyMeta { name, schema, table, columns: split(columns), ref_schema, ref_table, ref_columns: split(ref_columns), on_update, on_delete })
+                .collect::<Vec<_>>(),
+        )
+    };
+    let (foreign_keys, referenced_by) = (fks("").await?, fks("referenced_").await?);
+    let trg: Vec<(String, String, String, String)> = sqlx::query_as(
+        "select cast(trigger_name as char), cast(action_timing as char), cast(event_manipulation as char), cast(action_statement as char) \
+         from information_schema.triggers where event_object_schema = ? and event_object_table = ? order by action_timing, event_manipulation, action_order",
+    )
+    .bind(schema)
+    .bind(table)
+    .fetch_all(p)
+    .await?;
+    let triggers = trg
+        .into_iter()
+        .map(|(name, timing, events, body)| TriggerMeta {
+            definition: format!("CREATE TRIGGER {} {timing} {events} ON {} FOR EACH ROW {body}", ident(&name), ident(table)),
+            name,
+            timing,
+            events,
+        })
+        .collect();
+    type S = Option<String>;
+    // No AUTO_INCREMENT: information_schema caches it (information_schema_stats_expiry), so it would lag the SQL view
+    let (engine, row_format, collation, charset, create_opts, comment): (S, S, S, S, S, S) = sqlx::query_as(
+        "select cast(t.engine as char), cast(t.row_format as char), cast(t.table_collation as char), cast(c.character_set_name as char), \
+           cast(nullif(t.create_options, '') as char), cast(nullif(t.table_comment, '') as char) \
+         from information_schema.tables t \
+         left join information_schema.collation_character_set_applicability c on c.collation_name = t.table_collation \
+         where t.table_schema = ? and t.table_name = ?",
+    )
+    .bind(schema)
+    .bind(table)
+    .fetch_one(p)
+    .await?;
+    let options = [("Engine", engine), ("Charset", charset), ("Collation", collation), ("Row format", row_format), ("Options", create_opts)]
+        .into_iter()
+        .filter_map(|(k, v)| v.map(|v| (k.to_string(), v)))
+        .collect();
+    Ok(TableStructure { detail, foreign_keys: Some(foreign_keys), referenced_by: Some(referenced_by), triggers: Some(triggers), options: Some(options), comment, only_visible: true })
 }
 
 pub async fn object_ddl(p: &MySqlPool, schema: &str, name: &str, kind: &str) -> AppResult<String> {
@@ -625,7 +798,13 @@ pub async fn full_text_search(p: &MySqlPool, r: &FtsRequest) -> AppResult<Vec<Ft
     for (schema, table, conds) in tables.into_iter().filter(|t| !t.2.is_empty()) {
         let where_clause = conds.join(" OR ");
         let sql = format!("select * from {}.{} where {where_clause} limit {}", ident(&schema), ident(&table), r.limit.max(1));
-        match run_on(&mut conn, &sql, r.limit.max(1)).await {
+        // READ ONLY and rolled back: a view or function with side effects (an INSERT in a stored function) is refused, not committed
+        let res = match conn.execute("START TRANSACTION READ ONLY").await {
+            Ok(_) => run_on(&mut conn, &sql, r.limit.max(1)).await,
+            Err(e) => Err(e.into()),
+        };
+        let _ = conn.execute("ROLLBACK").await;
+        match res {
             Ok(result) if !result.rows.is_empty() => hits.push(FtsHit { schema, table, where_clause, result }),
             Ok(_) => {}
             Err(e) => crate::log!("[qurry] fts {schema}.{table}: {e}"),
@@ -638,49 +817,94 @@ pub async fn full_text_search(p: &MySqlPool, r: &FtsRequest) -> AppResult<Vec<Ft
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::Backend;
     use crate::db::Pool;
-    use crate::store::DbKind;
+    use crate::store::ConnectionConfig;
 
-    /// docker run -d --name dbtool-mysql-test -e MYSQL_ROOT_PASSWORD=dbtool -e MYSQL_DATABASE=shop -p 13306:3306 mysql:8.4
-    fn cfg() -> ConnectionConfig {
-        ConnectionConfig {
-            id: "my".into(), name: "my".into(), kind: DbKind::Mysql, host: "127.0.0.1".into(), port: 13306, user: "root".into(),
-            database: "shop".into(), color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(),
-            read_only: false, options: Default::default(), ssl: None, redis: None,
+    /// The console asks the server after any statement but a SELECT and a row change (they never commit the open transaction),
+    /// whether it ran or failed
+    #[test]
+    fn asks_the_server_after_all_but_dml() {
+        let a = |q: &str| asks_server(q, &strip_comments_lead(q));
+        for q in ["UPDATE t SET a = 1", "-- x\ninsert into t values (1)", "delete from t", "replace into t values (1)", "load data infile 'x' into table t", "show tables", "explain select 1", "desc t", "select 1", "with x as (select 1) select * from x", "update/**/t set a = 1"] {
+            assert!(!a(q), "{q}");
         }
+        for q in [
+            "set password = 'x'", "alter user u identified by 'x'", "install plugin p soname 'p.so'", "unlock tables", "lock tables t write", "set autocommit = 1",
+            "set transaction isolation level read uncommitted", "call p()", "do 0", "load index into cache t", "start replica", "lock instance for backup", "updatex",
+            "create temporary table x (a int)", "analyze update t set v = 1", "commit", "commit transaction",
+        ] {
+            assert!(a(q), "{q}");
+        }
+    }
+
+    /// A CALL or EXECUTE can end the transaction either way (a procedure's ROLLBACK, a prepared COMMIT); other statements commit it
+    #[test]
+    fn call_and_execute_end_in_procedure() {
+        for q in ["call p()", "CALL s.p", "-- x\n call p()", "execute stmt", "EXECUTE s USING @a", "call/**/p()", "execute/**/s"] {
+            assert!(ends_in_procedure(&strip_comments_lead(q)), "{q}");
+        }
+        for q in ["create table t (a int)", "set password = 'x'", "callx", "do 0", "deallocate prepare s", "prepare s from 'commit'", "begin", "BEGIN WORK;", "begin ;"] {
+            assert!(!ends_in_procedure(&strip_comments_lead(q)), "{q}");
+        }
+        for q in ["BEGIN NOT ATOMIC SELECT 1; END", "begin/*x*/not atomic select 1; end", "begin # x\n not atomic select 1; end"] {
+            assert!(ends_in_procedure(&strip_comments_lead(q)), "{q}");
+        }
+    }
+
+    /// Only a plain BEGIN commits the open transaction and opens one; a MariaDB compound statement asks the server
+    #[test]
+    fn plain_begin_only() {
+        for q in ["begin", "BEGIN;", "-- x\nbegin work", "begin  work ;", "begin -- x", "BEGIN /* x */", "begin /* x */ work", "begin work -- go", "begin; -- note", "begin\n# x", "begin/* x */"] {
+            assert!(is_begin(&strip_comments_lead(q)), "{q}");
+            assert!(!ends_in_procedure(&strip_comments_lead(q)), "{q}");
+        }
+        for q in ["begin not atomic select 1; end", "BEGIN NOT ATOMIC\n  UPDATE t SET v = 1;\nEND", "begin /* x */ not atomic select 1; end", "begin/*x*/not atomic select 1; end", "begin # x\n not atomic select 1; end", "beginx", "begin_x"] {
+            assert!(!is_begin(&strip_comments_lead(q)), "{q}");
+        }
+    }
+
+    /// QURRY_TEST_MY=host:port:user:password:db (crate::testenv): the data source and its password
+    fn server() -> Option<(ConnectionConfig, String)> {
+        let crate::testenv::Server { mut cfg, password } = crate::testenv::my()?;
+        (cfg.id, cfg.name) = ("my".into(), "my".into());
+        Some((cfg, password.unwrap_or_default()))
     }
 
     /// Notify when a source without SSL set connected in plaintext (silent when connected over TLS)
     #[tokio::test]
     #[ignore]
     async fn mysql_plaintext_is_reported() {
+        let Some((cfg, pw)) = server() else { return };
         // Treat it as a remote server (this machine · tunnels aren't notified)
-        let remote = ConnectionConfig { host: "db.example".into(), ..cfg() };
+        let remote = ConnectionConfig { host: "db.example".into(), ..cfg.clone() };
         // Default connection: silent if TLS works; notify if it fell back to plaintext (MySQL 5.7 without TLS 1.2)
-        let Pool::My(auto) = crate::db::connect(&cfg(), Some("dbtool")).await.expect("connect") else { unreachable!() };
+        let Pool::My(auto) = crate::db::connect(&cfg, Some(pw.as_str())).await.expect("connect") else { unreachable!() };
         let (_, cipher): (String, String) = sqlx::query_as("SHOW SESSION STATUS LIKE 'Ssl_cipher'").fetch_one(&auto).await.unwrap();
-        assert_eq!(plaintext_note(&auto, &remote).await.is_some(), cipher.is_empty());
-        let opts = sqlx::mysql::MySqlConnectOptions::new().host("127.0.0.1").port(13306).username("root").password("dbtool").ssl_mode(sqlx::mysql::MySqlSslMode::Disabled);
+        assert_eq!(auto.plaintext_note(&remote).await.is_some(), cipher.is_empty());
+        let opts = sqlx::mysql::MySqlConnectOptions::new().host(&cfg.host).port(cfg.port).username(&cfg.user).password(&pw).ssl_mode(sqlx::mysql::MySqlSslMode::Disabled);
         let plain = sqlx::mysql::MySqlPoolOptions::new().max_connections(1).connect_with(opts).await.unwrap();
-        assert!(plaintext_note(&plain, &remote).await.is_some_and(|n| n.contains("Not encrypted")));
-        assert_eq!(plaintext_note(&plain, &cfg()).await, None, "this computer: nothing to intercept");
+        assert!(plain.plaintext_note(&remote).await.is_some_and(|n| n.contains("Not encrypted")));
+        assert_eq!(plain.plaintext_note(&cfg).await, None, "this computer: nothing to intercept");
     }
 
     /// MCP execute path: the prepared-statement protocol takes exactly one statement
     #[tokio::test]
     #[ignore]
     async fn mysql_prepared_batch_refuses_multiple_statements() {
-        let Pool::My(p) = crate::db::connect(&cfg(), Some("dbtool")).await.expect("connect") else { unreachable!() };
+        let Some((cfg, pw)) = server() else { return };
+        let Pool::My(p) = crate::db::connect(&cfg, Some(pw.as_str())).await.expect("connect") else { unreachable!() };
         sqlx::raw_sql("drop table if exists qurry_prep; create table qurry_prep (a int)").execute(&p).await.unwrap();
-        assert!(execute_batch_with(&p, &["insert into qurry_prep values (1); drop table qurry_prep".into()], false, true).await.is_err());
-        assert_eq!(execute_batch_with(&p, &["insert into qurry_prep values (1)".into()], false, true).await.unwrap(), 1);
+        assert!(p.execute_batch(&["insert into qurry_prep values (1); drop table qurry_prep".into()], false, true, &[]).await.is_err());
+        assert_eq!(p.execute_batch(&["insert into qurry_prep values (1)".into()], false, true, &[]).await.unwrap().0, 1);
         sqlx::raw_sql("drop table qurry_prep").execute(&p).await.unwrap();
     }
 
     #[tokio::test]
     #[ignore]
     async fn mysql_end_to_end() {
-        let pool = crate::db::connect(&cfg(), Some("dbtool")).await.expect("connect");
+        let Some((cfg, pw)) = server() else { return };
+        let pool = crate::db::connect(&cfg, Some(pw.as_str())).await.expect("connect");
         assert!(pool.server_version().await.unwrap().starts_with("MySQL"));
         let Pool::My(p) = &pool else { unreachable!() };
         for s in [
@@ -768,71 +992,35 @@ mod tests {
         s.rollback_tx().await.unwrap();
         let after = s.run("select count(*) from orders where customer = 'dave'", 1).await.unwrap();
         assert_eq!(after.rows[0][0], 0);
-        assert!(!after.in_transaction);
+        // With autocommit=0 the SELECT opens a transaction too (as in PostgreSQL's Manual mode)
+        assert!(after.in_transaction);
+        assert!(s.set_manual(false).await.is_err());
+        s.rollback_tx().await.unwrap();
         s.set_manual(false).await.unwrap();
         // Edit batch
-        crate::mysql::execute_batch(p, &["update orders set memo = 'y' where id = 1".into()], true).await.unwrap();
+        p.execute_batch(&["update orders set memo = 'y' where id = 1".into()], true, false, &[]).await.unwrap();
         // Read-only
-        let mut ro = cfg();
+        let mut ro = cfg.clone();
         ro.read_only = true;
         ro.options.time_zone = Some("+09:00".into());
-        let rp = crate::db::connect(&ro, Some("dbtool")).await.unwrap();
+        let rp = crate::db::connect(&ro, Some(pw.as_str())).await.unwrap();
         let tz = rp.run_query("select @@session.time_zone", 1).await.unwrap();
         assert_eq!(tz.rows[0][0], "+09:00");
         let e = rp.run_query("update orders set memo = 'z' where id = 1", 1).await;
         assert!(e.is_err() && format!("{}", e.unwrap_err()).to_lowercase().contains("read only"));
     }
 
-    /// Real errors from old servers (sqlx + rustls) count as TLS failures; auth and network errors don't
-    #[test]
-    fn rustls_handshake_errors_are_tls_failures() {
-        use std::io::{Error, ErrorKind};
-        for m in ["received fatal alert: HandshakeFailure", "received fatal alert: ProtocolVersion", "received corrupt message of type UnknownProtocolVersion",
-            "received corrupt message of type InvalidContentType", "peer is incompatible: ServerTlsVersionIsDisabledByOurConfig", "peer misbehaved: IllegalTlsInnerPlaintext", "handshake not complete"]
-        {
-            assert!(super::is_tls_failure(&sqlx::Error::Io(Error::new(ErrorKind::InvalidData, m))), "{m}");
-        }
-        assert!(super::is_tls_failure(&sqlx::Error::Tls("server does not support TLS".into())));
-        assert!(!super::is_tls_failure(&sqlx::Error::Io(Error::new(ErrorKind::ConnectionRefused, "Connection refused (os error 61)"))));
-        assert!(!super::is_tls_failure(&sqlx::Error::Io(Error::new(ErrorKind::InvalidData, "invalid packet sequence"))));
-        assert!(!super::is_tls_failure(&sqlx::Error::Protocol("Access denied for user 'u'".into())));
-    }
-
-    /// A dropped connection can't be told apart from a proxy with no backend or a drop after auth: it gets a softer hint
-    /// (old MySQL without TLS 1.2, or check the host, port and proxy) — not "didn't send the password"
-    #[test]
-    fn dropped_handshake_gets_the_tls_hint() {
-        use super::OnConnectError::*;
-        use std::io::{Error, ErrorKind};
-        let io = |k: ErrorKind, m: &str| sqlx::Error::Io(Error::new(k, m));
-        for k in [ErrorKind::UnexpectedEof, ErrorKind::ConnectionReset, ErrorKind::ConnectionAborted] {
-            let e = io(k, "unexpected end of file");
-            assert_eq!(super::on_connect_error(&e, false, false), Dropped, "{k:?}");
-            assert_eq!(super::on_connect_error(&e, false, true), RetryPlain, "{k:?}");
-            // SSL set explicitly: the raw error
-            assert_eq!(super::on_connect_error(&e, true, false), Fail, "{k:?}");
-        }
-        assert!(!super::DROPPED_TLS.contains("didn't send the password") && super::DROPPED_TLS.contains("proxy") && super::DROPPED_TLS.contains("Allow unencrypted"));
-        let tls = io(ErrorKind::InvalidData, "received fatal alert: HandshakeFailure");
-        assert_eq!(super::on_connect_error(&tls, false, false), NeedsTls);
-        assert_eq!(super::on_connect_error(&tls, false, true), RetryPlain);
-        assert_eq!(super::on_connect_error(&tls, true, false), Fail);
-        for e in [io(ErrorKind::ConnectionRefused, "Connection refused (os error 61)"), sqlx::Error::Protocol("Access denied for user 'u'".into())] {
-            assert_eq!(super::on_connect_error(&e, false, false), Fail, "{e}");
-            assert_eq!(super::on_connect_error(&e, false, true), Fail, "{e}");
-        }
-    }
-
     #[tokio::test]
     #[ignore]
     async fn mysql_ssl() {
-        let mut c = cfg();
+        let Some((cfg, pw)) = server() else { return };
+        let mut c = cfg;
         c.ssl = Some(crate::store::SslConfig { enabled: true, mode: "require".into(), ..Default::default() });
-        let pool = crate::db::connect(&c, Some("dbtool")).await.expect("ssl require");
+        let pool = crate::db::connect(&c, Some(pw.as_str())).await.expect("ssl require");
         let r = pool.run_query("show session status like 'Ssl_version'", 5).await.unwrap();
         assert!(r.rows[0][1].as_str().unwrap().starts_with("TLS"), "{:?}", r.rows);
         // Self-signed certificate, so verify mode must fail
         c.ssl = Some(crate::store::SslConfig { enabled: true, mode: "verify-full".into(), ..Default::default() });
-        assert!(crate::db::connect(&c, Some("dbtool")).await.is_err());
+        assert!(crate::db::connect(&c, Some(pw.as_str())).await.is_err());
     }
 }

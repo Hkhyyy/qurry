@@ -48,6 +48,11 @@ describe("hintInsert / hintable", () => {
     expect(hintInsert('[{"code": "x"}]', { ...ctx(false), mode: "pairs" }, "jsonb")).toBe(`'[{"code": "x"}]'`);
     expect(pairsForKeys(`[{"code": "it's"}]`, { ...ctx(false), mode: "keys", op: " ->> " })).toBe(` @> '[{"code": "it''s"}]'`);
   });
+  it("takes back what hintContext returned", () => {
+    const c = hintContext("where status = 'pa")!;
+    expect(c.op).toBeUndefined();
+    expect([hintInsert("paid", c, "text"), hintable(c, "text")]).toEqual(["paid", true]);
+  });
   it("skips binary and whole json", () => {
     expect(hintable(ctx(true), "bytea")).toBe(false);
     expect(hintable(ctx(true), "jsonb")).toBe(false);

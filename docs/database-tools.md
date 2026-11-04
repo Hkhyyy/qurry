@@ -2,22 +2,24 @@
 
 English | [한국어](ko/database-tools.md)
 
-Admin reports, diagrams, schema and data comparison, migrations, backups, importing files, test data, copying related rows, charts, query history and explain plans.
+Admin reports, table structure, diagrams, schema and data comparison, migrations, backups, importing files, test data, copying related rows, charts, query history and explain plans.
 
-## Database admin (PostgreSQL, MySQL)
+## Database admin (PostgreSQL, MySQL, MariaDB)
 
 GUI: right-click a data source › **Tools** › Sessions & Locks, Slow Queries, … — TUI: `⌃k` › **Database Admin…**
 
 | Group | Reports |
 |---|---|
 | Activity | **Sessions** (who blocks whom, query / transaction age; refreshes every 3 s) · **Lock Waits** — right-click / `c` cancel the query, `K` terminate the session |
-| Performance | **Slow Queries** — top 100 by total time (`pg_stat_statements` / `performance_schema`), open or EXPLAIN in a console |
-| Storage | **Table Sizes** · **Table Bloat** · **Index Bloat** (space held by deleted rows, estimated from statistics — PostgreSQL) · **Table Fragmentation** (MySQL) · **Unused Indexes** · **Duplicate Indexes** · **Foreign Keys Without an Index** — generate DROP / CREATE INDEX, VACUUM FULL, REINDEX, OPTIMIZE TABLE |
+| Performance | **Slow Queries** — top 100 by total time (`pg_stat_statements` / `performance_schema`), open or EXPLAIN in a console (their text has `$1` / `?` / `(...)` in place of values: PostgreSQL 16+ gets `EXPLAIN (GENERIC_PLAN)`, elsewhere fill in the values first). Without `pg_stat_statements` it says what's missing: on a server that already preloads the library (usual on RDS / Aurora) just `CREATE EXTENSION pg_stat_statements;` (superuser; `rds_superuser` on RDS / Aurora, `cloudsqlsuperuser` on Cloud SQL); otherwise add it to `shared_preload_libraries` first and restart (on RDS / Aurora / Cloud SQL: parameter group / database flags, then reboot), then create the extension if it isn't there yet |
+| Storage | **Table Sizes** · **Table Bloat** · **Index Bloat** (space held by deleted rows, estimated from statistics — PostgreSQL) · **Table Fragmentation** (MySQL) · **Unused Indexes** (with the time the scans were counted since) · **Duplicate Indexes** · **Foreign Keys Without an Index** — generate DROP / CREATE INDEX, VACUUM FULL, REINDEX, OPTIMIZE TABLE |
 | Maintenance | **Vacuum & Dead Rows** · **Vacuum Progress** (VACUUM, VACUUM FULL / autovacuum running now: phase, % scanned — cancel it) · **Transaction ID Age** (wraparound) — generate VACUUM ANALYZE (PostgreSQL) |
 | Server | **Server Overview** (uptime, connections, cache hit ratio) · **Replication** lag · **Settings** |
 | Security | **Users & Roles** · **Table Privileges** — generate GRANT / REVOKE |
 
-Generated SQL opens in a new console; nothing changes until you run it. Stopping sessions asks first (showing the pid and query) and is blocked on read-only data sources.
+Generated SQL opens in a new console; nothing changes until you run it. Stopping sessions asks first (showing the pid and query) and is blocked on read-only data sources. On Amazon RDS / Aurora MySQL, where KILL of another user's session is denied, Qurry uses `mysql.rds_kill` / `mysql.rds_kill_query`.
+
+Each report query stops after 30 seconds (`statement_timeout` / `max_execution_time` for that query only, not the connection); a stricter limit set on the server, role or connection stays. A report that hits the limit says so. Through pgbouncer in statement pooling mode, which allows no transaction, PostgreSQL reports run without the limit. Sessions and Lock Waits skip a refresh while the last one is still running.
 
 ## Diagram (ERD)
 
@@ -32,12 +34,22 @@ GUI — right-click a data source › Tools › Compare & Migrate; TUI — `⌃k
 
 ## Back up / restore
 
-Right-click a database › Tools › Back Up Database… / Restore Database… (TUI: `⌃k`). Runs `pg_dump` / `pg_restore` / `psql` or `mysqldump` / `mysql` from this computer (Homebrew `libpq`, `mysql-client`, Postgres.app and the usual Linux paths are found too; for PostgreSQL the client closest to the server version is used). SSH tunnels are used, progress shows in the status bar and can be cancelled. Backup files and temporary dumps are readable only by you, and passwords go to the tools in a private file for that one server. Restoring a `.sql` file runs only SQL: psql and mysql client commands in the file (running programs, writing files, connecting elsewhere) are switched off — this needs psql 17.6 / 16.10 / 15.14 / 14.19 / 13.22 or newer, so an older psql doesn't restore `.sql` files (custom-format backups go through `pg_restore` and aren't affected — except when the closest `pg_restore` is 17 or newer and the server is older: it would send settings that server doesn't know, so the backup is replayed through psql instead). Dumps that switch databases with `\connect` (`pg_dump -C`, `pg_dumpall`) stop with a message — restore those with psql yourself.
+Right-click a database › Tools › Back Up Database… / Restore Database… (TUI: `⌃k`). Runs `pg_dump` / `pg_restore` / `psql` or `mysqldump` / `mysql` from this computer (Homebrew `libpq`, `mysql-client`, `mariadb`, Postgres.app and the usual Linux paths are found too, and MariaDB's own `mariadb-dump` / `mariadb` names; the dump client closest to the server version is used — for MySQL / MariaDB one of the same kind, and if only an older or other-kind client is found and it fails, the message says what to install. A MySQL restore uses the newest `mysql` of the server's kind that can switch its shell commands off: `--system-command=OFF`, MariaDB `--sandbox`). SSH tunnels are used, progress shows in the status bar and can be cancelled. Backup files and temporary dumps are readable only by you, and passwords go to the tools in a private file for that one server. Restoring a `.sql` file runs only SQL: psql and mysql client commands in the file (running programs, writing files, connecting elsewhere) are switched off — this needs psql 17.6 / 16.10 / 15.14 / 14.19 / 13.22 or newer, so an older psql doesn't restore `.sql` files (custom-format backups go through `pg_restore` and aren't affected — except when the closest `pg_restore` is 17 or newer and the server is older: it would send settings that server doesn't know, so the backup is replayed through psql instead). Dumps that switch databases with `\connect` (`pg_dump -C`, `pg_dumpall`) stop with a message — restore those with psql yourself.
+
+MySQL backups leave out `SET @@GLOBAL.GTID_PURGED` (`--set-gtid-purged=OFF`, mysqldump 5.6.9 and newer), so a dump of a GTID server (RDS and others) restores into another server, and an 8.0+ `mysqldump` skips column statistics for a 5.7 or MariaDB server (`--column-statistics=0`). **Leave out DEFINER= clauses** in the backup dialog (TUI: y at the question after the file path) writes routines, views, triggers and events without their `DEFINER=` user, so restoring them on a managed service without SUPER works (they then belong to the user who restores). It applies to **Data only** too: a data-only dump still has the routines, triggers and events (not the views). A MySQL restore isn't atomic: statements run one by one, so if one fails, what ran before it stays (PostgreSQL restores run in one transaction).
+
+## Table structure (DDL tab)
+
+**Go to DDL** (`⌘b`, TUI `⌃b`) on a table opens its SQL. The tab's **SQL | Structure** switch (`← →` once it has focus; TUI: `v`) shows the same table as read-only tables instead: columns (name, type, nullable, default, comment, the primary key marked), keys and constraints, indexes with their columns, foreign keys both ways (what the table references and which tables reference it, with ON UPDATE / ON DELETE), triggers, and table options with the comment (PostgreSQL: owner, tablespace, storage parameters, partition key, parent; MySQL: engine, charset, collation, row format). New DDL tabs open in the view you used last (SQL by default); each tab then keeps its own. The toolbar's **Reload** icon (TUI `r`) reads again what the tab shows, e.g. after Modify Table…: the DDL in the SQL view (of any object: views, functions, …), the structure in the Structure view. A DDL tab saved by an older version that doesn't know which object it shows can't reload: the icon is greyed out with "Reopen the DDL to reload" (TUI: `r` says so in the status line).
+- PostgreSQL and MySQL fill every section. Other data sources (driver plugins) show columns, keys and indexes, and say "Not available for this data source" for the rest.
+- MySQL lists only the referencing tables and triggers your account has privileges on, so on MySQL an empty Referenced by or Triggers says "None visible to this account" rather than "None".
+- If loading fails, the view says why: **Retry** (TUI `r`), or **Show SQL** (TUI `v`) — the SQL view still has the full DDL.
+- Editing is done in **Modify Table…** (below), not in this view.
 
 ## Create and modify objects (PostgreSQL, MySQL)
 
 Like DataGrip: right-click › **New ▸** Table… / View… / Materialized View… / Sequence… / Schema… / Database…, a table › **Modify Table…** (`⌘F6`), and **Rename…** (`⇧F6`). TUI: `⌃k` › New Table… / Modify Table… (`⌃F6`) / New View… / New Schema… / New Database… / New Sequence… / Rename… (`⇧F6`).
-- The table designer edits columns (name, type, NOT NULL, default, auto-increment / identity, primary key, comment), indexes and foreign keys (ON DELETE / ON UPDATE). The SQL it will run is shown as you edit: `CREATE TABLE` for a new table, the `ALTER` statements for a change. A renamed column keeps its keys, indexes and foreign keys.
+- The table designer edits columns (name, type, NOT NULL, default, auto-increment / identity, primary key, comment), indexes and foreign keys (ON DELETE / ON UPDATE). The SQL it will run is shown as you edit: `CREATE TABLE` for a new table, the `ALTER` statements for a change. A renamed column keeps its keys, indexes and foreign keys. The column type field suggests the data source's types in a list right under it: typing filters it (exact match first, then names that start with, then contain what you typed), `↑` `↓` / Page Up / Page Down move, `↩` or `⇥` picks, `⎋` closes it, and any other type can be typed in as is.
 - In the TUI each line is written like SQL: column `email varchar(100) not null default 'x' auto pk comment 'login'`, index `users_email_idx (email) unique`, foreign key `orders_user_fk (user_id) -> users (id) on delete cascade`. Keys: `a` column · `i` index · `f` foreign key · `↩` edit · `d` remove · `p` primary key · `n` name · `c` comment · `F5` run · `o` open in a console.
 - PostgreSQL runs it in one transaction (if a statement fails, nothing changes); MySQL applies each statement right away. Production data sources ask first, and the change is recorded in the production log. **Open in Console** puts the SQL in a console instead.
 
@@ -82,7 +94,7 @@ Query history and snippets are kept in the config folder and shared by the GUI a
 
 Each node shows its own share of the time (Explain Analyze) or cost, and flags what is worth a look — a Seq Scan over a big table, row estimates off by 10× or more, filters that throw away most rows, sorts and hashes spilled to disk. TUI: `⌥e` Explain, `⌃k` › Explain Analyze.
 
-Explain Analyze really runs the statement. For one that changes data (UPDATE, DELETE, INSERT …) Qurry runs it on PostgreSQL and MySQL inside a transaction and rolls it back — or back to a savepoint when you already have a transaction open — so nothing is changed.
+Explain Analyze really runs the statement. On PostgreSQL and MySQL Qurry runs it inside a transaction and rolls it back — or back to a savepoint when you already have a transaction open — so its table changes are undone (on MySQL only in transactional tables such as InnoDB, not MyISAM or MEMORY). Qurry asks first for what a rollback can't undo (sequence values, `dblink_exec`, `SELECT … INTO OUTFILE`) and for an `UPDATE` or `DELETE` without `WHERE` ([Safety](safety.md)).
 
 ---
 

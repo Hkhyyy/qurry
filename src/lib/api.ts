@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { sharedOr, type Align, type Alignments, type ValueClass } from "./shared";
 import type { DataFormat } from "./transfer";
 
 export type DbKind = "postgres" | "mysql" | "redis" | "sqlite" | "duckdb" | "mssql" | "clickhouse" | "mongodb" | "oracle" | "qdrant" | "chroma" | "milvus";
@@ -23,6 +24,8 @@ export interface ConnectionConfig {
   database: string;
   color?: string | null;
   ssh?: SshConfig | null;
+  /** AWS SSM Session Manager tunnel (instead of SSH) */
+  ssm?: SsmConfig | null;
   /** DBs·schemas shown in the tree. No databases = all; no schemas[db] = all schemas of that DB */
   scope?: { databases?: string[] | null; schemas?: Record<string, string[]> };
   /** Options → Read-only */
@@ -78,6 +81,17 @@ export interface SshConfig {
   keyPath: string;
 }
 
+/** No AWS secrets: the aws CLI uses the user's AWS config or SSO login */
+export interface SsmConfig {
+  enabled: boolean;
+  /** Empty = the CLI's default profile */
+  profile: string;
+  /** Empty = the profile's region */
+  region: string;
+  /** Instance id (i-… / mi-…) */
+  target: string;
+}
+
 export interface ConnectionView extends ConnectionConfig {
   hasPassword: boolean;
   connected: boolean;
@@ -98,6 +112,16 @@ export interface QueryResult {
   elapsedMs: number;
   hasResultSet: boolean;
   inTransaction?: boolean;
+  /** It ran, but something after it failed (e.g. the Production log couldn't record the result): show it, don't run it again */
+  warning?: string;
+  /** GUI only: loading more rows failed, and why (the grid shows it, and stops loading more until the query runs again) */
+  moreError?: string;
+}
+
+/** Statements run in one transaction: rows changed; warning = committed, but the Production log couldn't record the result */
+export interface BatchResult {
+  rows: number;
+  warning?: string;
 }
 
 /** password: undefined → keep existing, "" → delete */
@@ -110,6 +134,8 @@ export interface ReleaseInfo {
 }
 export interface UpdateInfo {
   current: string;
+  /** The update channel the check was for */
+  channel: UpdateChannel;
   latest: ReleaseInfo | null;
   /** Changes in versions newer than the current one (newest first) */
   changes?: { version: string; changes: string[] }[];
@@ -134,8 +160,22 @@ export const setUpdateCheckEnabled = (on: boolean) => {
   }
 };
 
+/** stable: releases from a version tag only; beta: also the pre-release built from every merge to main. Kept in the config folder, shared with the TUI */
+export type UpdateChannel = "stable" | "beta";
+
+/** An installed font family (Settings › Appearance fonts); mono: every face is monospaced */
+export type FontFamily = { name: string; mono: boolean };
+
 export const api = {
+  /** Installed font families, sorted (listed afresh on each call; empty where the OS isn't supported) */
+  fontFamilies: () => invoke<FontFamily[]>("font_families"),
   checkUpdate: (force = false) => invoke<UpdateInfo>("check_update", { force }),
+  updateChannel: () => invoke<UpdateChannel>("update_channel"),
+  /** Saves the channel; what it offers from the saved check (no request), null if nothing was checked yet */
+  setUpdateChannel: (channel: UpdateChannel) => invoke<UpdateInfo | null>("set_update_channel", { channel }),
+  /** Grid alignment per value class: only the classes the user changed. Kept in the config folder, shared with the TUI */
+  gridAlign: () => invoke<Alignments>("grid_align"),
+  setGridAlign: (cls: ValueClass, align: Align) => invoke<Alignments>("set_grid_align", { class: cls, align }),
   /** Download the new version, swap it in, and restart the app (progress via the "update-progress" event) */
   installUpdate: () => invoke<void>("install_update"),
   /** Open tabs·splits (restored on restart) */
@@ -150,21 +190,26 @@ export const api = {
     invoke<ConnectionConfig>("save_connection", { config, password: password ?? null, sshSecret: sshSecret ?? null }),
   setConnectionColor: (id: string, color: string | null) => invoke<ConnectionConfig>("set_connection_color", { id, color }),
   setConnectionScope: (id: string, scope: NonNullable<ConnectionConfig["scope"]>) => invoke<ConnectionConfig>("set_connection_scope", { id, scope }),
+  /** After a TLS connect error (wasm tlsOptIn): turn on "Allow unencrypted connection", keeping the saved password */
+  allowPlaintext: (id: string) => invoke<ConnectionConfig>("allow_plaintext", { id }),
   deleteConnection: (id: string) => invoke<void>("delete_connection", { id }),
-  testConnection: (config: ConnectionConfig, password?: string, sshSecret?: string) =>
-    invoke<string>("test_connection", { config, password: password ?? null, sshSecret: sshSecret ?? null }),
-  testSsh: (config: ConnectionConfig, sshSecret?: string) => invoke<string>("test_ssh", { config, sshSecret: sshSecret ?? null }),
+  /** `testId`: cancelTest(testId) stops it (an AWS SSM session can take up to 30 s); it then fails with "Test cancelled" */
+  testConnection: (config: ConnectionConfig, password?: string, sshSecret?: string, testId?: string) =>
+    invoke<string>("test_connection", { config, password: password ?? null, sshSecret: sshSecret ?? null, testId: testId ?? null }),
+  testSsh: (config: ConnectionConfig, sshSecret?: string, testId?: string) => invoke<string>("test_ssh", { config, sshSecret: sshSecret ?? null, testId: testId ?? null }),
+  cancelTest: (testId: string) => invoke<void>("cancel_test", { testId }),
   connect: (id: string) => invoke<string>("connect", { id }),
   disconnect: (id: string) => invoke<void>("disconnect", { id }),
   runQuery: (id: string, sql: string, tabId?: string, limit = 500) => invoke<QueryResult>("run_query", { id, sql, limit, tabId: tabId ?? null }),
   fetchMore: (tabId: string, limit = 500) => invoke<QueryResult>("fetch_more", { tabId, limit }),
   cancelQuery: (tabId: string) => invoke<boolean>("cancel_query", { tabId }),
   setTxMode: (id: string, tabId: string, manual: boolean) => invoke<void>("set_tx_mode", { id, tabId, manual }),
-  commitTx: (tabId: string) => invoke<void>("commit_tx", { tabId }),
-  rollbackTx: (tabId: string) => invoke<void>("rollback_tx", { tabId }),
+  /** → a warning when it committed but couldn't be logged */
+  commitTx: (tabId: string) => invoke<string | null>("commit_tx", { tabId }),
+  rollbackTx: (tabId: string) => invoke<string | null>("rollback_tx", { tabId }),
   closeSession: (tabId: string) => invoke<void>("close_session", { tabId }),
   /** exactOne = saving grid edits (roll back everything unless each UPDATE/DELETE hits exactly 1 row) */
-  executeBatch: (id: string, statements: string[], exactOne = false) => invoke<number>("execute_batch", { id, statements, exactOne }),
+  executeBatch: (id: string, statements: string[], exactOne = false) => invoke<BatchResult>("execute_batch", { id, statements, exactOne }),
   // For file writes the backend opens the save dialog itself (the webview doesn't pick the path). null if canceled
   exportConnections: () => invoke<[number, string] | null>("export_connections"),
   /** Pick a file to import → preview the changes. importPicked on confirm */
@@ -179,6 +224,8 @@ export const api = {
   pickDataFile: () => invoke<[string, DataPreview] | null>("pick_data_file"),
   importData: (id: string, spec: ImportSpec, job: string) => invoke<number>("import_data", { id, spec, job }),
   txState: (tabId: string) => invoke<boolean>("tx_state", { tabId }),
+  /** Explain Analyse: [before, after] the statement, a savepoint when a transaction may be open (core AppState::explain_wrap) */
+  explainWrap: (id: string, tabId: string) => invoke<[string, string]>("explain_wrap", { id, tabId }),
   trustSshHost: (host: string, port: number) => invoke<string>("trust_ssh_host", { host, port }),
   /** Reason if the statement is dangerous and needs confirmation before running (UPDATE/DELETE without WHERE, DROP, TRUNCATE, Redis FLUSH*·DEL) */
   /** Whether the driver plugin is installed (null for built-in DBs) · download and install */
@@ -192,14 +239,27 @@ export interface RelationInfo { name: string; kind: "table" | "partitioned" | "v
 export interface RoutineInfo { name: string; args: string; returns: string | null; kind: string }
 export interface SchemaObjects { relations: RelationInfo[]; routines: RoutineInfo[] }
 export interface ColumnMeta { name: string; dataType: string; nullable: boolean; defaultValue: string | null; comment: string | null; isPk: boolean }
-export interface IndexMeta { name: string; definition: string; isUnique: boolean; isPrimary: boolean }
+export interface IndexMeta { name: string; definition: string; isUnique: boolean; isPrimary: boolean; columns: string[] }
 export interface ConstraintMeta { name: string; kind: "p" | "f" | "u" | "c"; definition: string }
 export interface TableDetail { columns: ColumnMeta[]; indexes: IndexMeta[]; constraints: ConstraintMeta[] }
+/** One foreign key, either direction: schema.table(columns) references refSchema.refTable(refColumns) */
+export interface ForeignKeyMeta { name: string; schema: string; table: string; columns: string[]; refSchema: string; refTable: string; refColumns: string[]; onUpdate: string; onDelete: string }
+export interface TriggerMeta { name: string; timing: string; events: string; definition: string }
+/** The DDL tab's Structure view. A null section isn't available for that kind of data source */
+export interface TableStructure extends TableDetail {
+  foreignKeys: ForeignKeyMeta[] | null;
+  referencedBy: ForeignKeyMeta[] | null;
+  triggers: TriggerMeta[] | null;
+  options: [string, string][] | null;
+  comment: string | null;
+  /** Referenced by and Triggers list only what this account has privileges on (MySQL), so empty doesn't mean there are none */
+  onlyVisible: boolean;
+}
 /** One row of the workspace list (shared by GUI · TUI) */
 export interface WsInfo { id: string; name: string; connIds: string[] }
 export interface CompletionTable { schema: string; name: string; columns: [string, string][] }
 
-export type DbaAction = { kind: "kill"; label: string; terminate: boolean } | { kind: "sql"; label: string; template: string };
+export type DbaAction = { kind: "kill"; label: string; terminate: boolean } | { kind: "sql"; label: string; template: string } | { kind: "explain"; label: string };
 export interface DbaReportInfo { id: string; title: string; group: string; help: string; actions: DbaAction[] }
 /** Execution plan analysis (core): shares·warnings. PlanNode is in components/ConsolePane */
 export const analyzePlan = (json: string) => invoke<import("../components/ConsolePane").PlanNode>("analyze_plan", { json });
@@ -209,11 +269,11 @@ export interface Snippet { id: string; name: string; sql: string; connId?: strin
 export interface FakePreview { plan: { name: string; dataType: string; how: string }[]; result: QueryResult; warnings: string[] }
 export const fake = {
   preview: (id: string, schema: string, table: string, rows = 8) => invoke<FakePreview>("fake_preview", { id, schema, table, rows }),
-  fill: (id: string, schema: string, table: string, rows: number) => invoke<number>("fake_fill", { id, schema, table, rows }),
+  fill: (id: string, schema: string, table: string, rows: number) => invoke<BatchResult>("fake_fill", { id, schema, table, rows }),
 };
 /** Copy a slice of production data: start rows + rows linked by FK → another Data Source (personal data is masked) */
 export interface SubsetSpec { schema: string; table: string; filter: string; depth: number; mask: boolean }
-export interface SubsetPlan { tables: { schema: string; table: string; rows: number; masked: { column: string; mask: string }[]; reason: string }[]; total: number }
+export interface SubsetPlan { tables: { schema: string; table: string; rows: number; masked: { column: string; mask: string }[]; reason: string }[]; total: number; warning?: string }
 export const subset = {
   preview: (source: string, spec: SubsetSpec) => invoke<SubsetPlan>("subset_preview", { source, spec }),
   copy: (source: string, spec: SubsetSpec, target: string) => invoke<SubsetPlan>("subset_copy", { source, spec, target }),
@@ -233,10 +293,11 @@ export const ddl = {
   table: (id: string, before: TableDef | null, after: TableDef) => invoke<string[]>("table_ddl", { id, before, after }),
   newObject: (id: string, object: NewObject) => invoke<string[]>("new_object_ddl", { id, object }),
   rename: (id: string, what: string, schema: string, old: string, newName: string) => invoke<string>("rename_ddl", { id, what, schema, old, new: newName }),
-  run: (id: string, statements: string[]) => invoke<void>("run_ddl", { id, statements }),
+  /** A warning when it ran but the Production log couldn't record it */
+  run: (id: string, statements: string[]) => invoke<string | null>("run_ddl", { id, statements }),
 };
 /** Production log: changes run on Production Data Sources (shared with the TUI) */
-export interface AuditEntry { id: string; ts: number; connId: string; connName: string; database?: string; sql: string; rows?: number; error?: string; inTx: boolean; undo?: string; note?: string }
+export interface AuditEntry { id: string; ts: number; connId: string; connName: string; database?: string; sql: string; rows?: number; error?: string; inTx: boolean; undo?: string; note?: string; /** Logged before it ran, no result recorded: still running, or Qurry stopped (outcome unknown) */ started?: boolean }
 export const auditLog = (connId: string | null, filter: string, limit = 500) => invoke<AuditEntry[]>("audit_log", { connId, filter, limit });
 /** Query history·snippets (config folder, shared with the TUI) */
 export const history = {
@@ -257,7 +318,7 @@ export interface ErdRelation { name: string; fromSchema: string; fromTable: stri
 export const erd = (id: string, schemas: string[]) => invoke<[{ tables: ErdTable[]; relations: ErdRelation[] }, string]>("erd", { id, schemas });
 /** Save text to a file (save dialog). null if canceled */
 export const saveFile = (defaultName: string, text: string, filter: string, ext: string) => invoke<string | null>("save_file", { defaultName, text, filter, ext });
-export interface BackupOptions { format: "custom" | "plain"; schemaOnly: boolean; dataOnly: boolean; schemas: string[] }
+export interface BackupOptions { format: "custom" | "plain"; schemaOnly: boolean; dataOnly: boolean; schemas: string[]; stripDefiners: boolean }
 /** Backup·restore (pg_dump / mysqldump). Progress via "transfer-progress" */
 export const backup = {
   run: (id: string, opts: BackupOptions, defaultName: string, job: string) => invoke<[number, string] | null>("backup_db", { id, opts, defaultName, job }),
@@ -315,6 +376,7 @@ export const dba = {
   run: (id: string, report: string) => invoke<QueryResult>("dba_report", { id, report }),
   kill: (id: string, pid: number, terminate: boolean) => invoke<boolean>("kill_session", { id, pid, terminate }),
   actionSql: (id: string, template: string, row: Record<string, string>) => invoke<string>("dba_action_sql", { id, template, row }),
+  explain: (id: string, query: string) => invoke<string>("dba_explain", { id, query }),
 };
 
 export interface DataPreview { format: DataFormat; columns: string[]; rows: (string | null)[][]; bytes: number }
@@ -326,6 +388,7 @@ export const meta = {
   schemas: (id: string) => invoke<SchemaInfo[]>("list_schemas", { id }),
   objects: (id: string, schema: string) => invoke<SchemaObjects>("list_objects", { id, schema }),
   table: (id: string, schema: string, table: string) => invoke<TableDetail>("table_detail", { id, schema, table }),
+  structure: (id: string, schema: string, table: string) => invoke<TableStructure>("table_structure", { id, schema, table }),
   /** pgvector: SQL finding rows near this row (pk = [column, value]) */
   similarRowsSql: (id: string, schema: string, table: string, column: string, pk: [string, string | null][]) => invoke<string>("similar_rows_sql", { id, schema, table, column, pk }),
   completion: (id: string) => invoke<CompletionTable[]>("completion_meta", { id }),
@@ -403,8 +466,28 @@ export const KIND_LABEL: Record<DbKind, string> = {
   milvus: "Milvus",
 };
 
-/** Literal used in data-editing SQL. PG casts it to the column type. */
+/** Plain '…' literal (no backslash rule): MongoDB and REST consoles */
 export const sqlLiteral = (v: Cell) => (v === null ? "NULL" : `'${String(v).replace(/'/g, "''")}'`);
+
+/**
+ * A string literal as `kind` reads it, for the grid's filters and edit SQL: qurry_shared::sql::literal, the rule its copy formats use
+ * (PostgreSQL E'…' when the value has a \, so standard_conforming_strings doesn't matter; MySQL · ClickHouse double \). PG casts it to the column type.
+ * Without the WASM module the same rule in TS (literal.nowasm.test.ts), so editing still works
+ */
+const literalOf =
+  (kind: DbKind) =>
+  (v: Cell): string => {
+    if (v === null) return "NULL";
+    const s = String(v);
+    return sharedOr(literalTs(kind, s), (x) => x.sqlLiteral(kind, s));
+  };
+function literalTs(kind: DbKind, s: string): string {
+  const q = (t: string) => t.replace(/'/g, "''");
+  const bs = (t: string) => t.replace(/\\/g, "\\\\");
+  if (kind === "mysql" || kind === "clickhouse") return `'${q(bs(s))}'`;
+  if (kind === "postgres" && s.includes("\\")) return `E'${q(bs(s))}'`;
+  return `'${q(s)}'`;
+}
 
 /** SQL dialect per DB kind: identifier quoting, string literals, text cast */
 export interface Dialect {
@@ -414,14 +497,17 @@ export interface Dialect {
   monaco: string;
   /** Console statement splitting (semicolon-based if absent) */
   split?: (text: string) => { start: number; end: number }[];
+  /** The kind the Data Extractors (qurry_shared::extract) write identifiers and literals for: the connection's own kind */
+  quoting: DbKind;
 }
-const PG: Dialect = { q: quoteIdent, lit: sqlLiteral, text: (e) => `${e}::text`, monaco: "pgsql" };
+const PG: Dialect = { q: quoteIdent, lit: literalOf("postgres"), text: (e) => `${e}::text`, monaco: "pgsql", quoting: "postgres" };
 const MY: Dialect = {
   q: (s) => (/^[A-Za-z_][A-Za-z0-9_]*$/.test(s) && !RESERVED.has(s.toLowerCase()) ? s : "`" + s.replace(/`/g, "``") + "`"),
   // In MySQL strings backslash is also an escape char
-  lit: (v) => (v === null ? "NULL" : `'${String(v).replace(/\\/g, "\\\\").replace(/'/g, "''")}'`),
+  lit: literalOf("mysql"),
   text: (e) => `CAST(${e} AS CHAR)`,
   monaco: "mysql",
+  quoting: "mysql",
 };
 /** Redis: one line = one command (# comments) */
 const RD: Dialect = {
@@ -429,6 +515,7 @@ const RD: Dialect = {
   lit: (v) => (v === null ? '""' : JSON.stringify(String(v))),
   text: (e) => e,
   monaco: "redis",
+  quoting: "redis",
   split: (text) => {
     const out: { start: number; end: number }[] = [];
     let pos = 0;
@@ -440,15 +527,19 @@ const RD: Dialect = {
     return out;
   },
 };
-/** Driver DBs: standard SQL quoting, text conversion via CAST (no PG ::text) */
-const GEN: Dialect = { ...PG, text: (e) => `CAST(${e} AS VARCHAR(4000))`, monaco: "sql" };
-const MONGO: Dialect = { q: (s) => s, lit: sqlLiteral, text: (e) => e, monaco: "javascript", split: RD.split };
+/** Driver DBs: standard SQL quoting, text conversion via CAST (no PG ::text). Literals and the extractors as the driver's kind (no PG E'';
+ *  ClickHouse doubles \ as MySQL does) */
+const GEN = Object.fromEntries(PLUGIN_KINDS.map((k) => [k, { ...PG, lit: literalOf(k), text: (e: string) => `CAST(${e} AS VARCHAR(4000))`, monaco: "sql", quoting: k }])) as Record<DbKind, Dialect>;
+/** ClickHouse reads \ as an escape inside "names" too, so it is doubled: the rule of qurry_shared::sql::quote_ident(Clickhouse) */
+GEN.clickhouse.q = (s) => (/^[a-z_][a-z0-9_]*$/.test(s) && !RESERVED.has(s) ? s : `"${s.replace(/\\/g, "\\\\").replace(/"/g, '""')}"`);
+const MONGO: Dialect = { q: (s) => s, lit: sqlLiteral, text: (e) => e, monaco: "javascript", split: RD.split, quoting: "mongodb" };
 /** One REST request = from a method line up to the next method line (including JSON body). Same rule as core's sql::split_rest */
 const REST: Dialect = {
   q: (s) => s,
   lit: sqlLiteral,
   text: (e) => e,
   monaco: "javascript",
+  quoting: "qdrant",
   split: (text) => {
     const out: { start: number; end: number }[] = [];
     let pos = 0;
@@ -468,7 +559,7 @@ const REST: Dialect = {
     return out;
   },
 };
-export const dialectOf = (kind?: DbKind) => (kind === "mysql" ? MY : kind === "redis" ? RD : kind === "mongodb" ? MONGO : kind && VECTOR_KINDS.includes(kind) ? REST : kind && PLUGIN_KINDS.includes(kind) ? GEN : PG);
+export const dialectOf = (kind?: DbKind) => (kind === "mysql" ? MY : kind === "redis" ? RD : kind === "mongodb" ? MONGO : kind && VECTOR_KINDS.includes(kind) ? REST : kind && PLUGIN_KINDS.includes(kind) ? GEN[kind] : PG);
 
 /** Backend connection target: Data Source id + DB name */
 export const targetId = (connId: string, database?: string | null) => (database ? `${connId}::${database}` : connId);

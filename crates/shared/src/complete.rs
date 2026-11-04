@@ -1,0 +1,835 @@
+//! Console autocompletion, shared by the TUI and the GUI (through WASM: CompletionIndex in qurry-shared-wasm, used by src/lib/completion.ts)
+//! - `alias.` / `table.` → that table's columns, `schema.` → that schema's tables
+//! - otherwise: columns of tables in the statement → tables → schemas → keywords
+//! - value spots (`status = '`, `data->>'` …) → values · json keys read from the DB (hint_at, then hint_items with what the DB returned)
+//!
+//! Where the two front ends complete differently, they say so with [`Options`] (Options::GUI, Options::TUI).
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+
+/// A table (or view) with its columns (name, type), as the backend reads them for autocomplete
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionTable {
+    pub schema: String,
+    pub name: String,
+    pub columns: Vec<(String, String)>,
+}
+
+/// A value (or json key) the DB has for a column, with how many sampled rows have it
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Hint {
+    pub value: String,
+    pub count: i64,
+}
+
+/// Where the GUI and the TUI complete differently (D2). Each front end passes its own: [`Options::GUI`], [`Options::TUI`]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Options {
+    /// The editor filters and ranks by the typed word itself (Monaco matches fuzzily, so `uname` finds user_name): every candidate,
+    /// with columns, schema tables and keywords sorted by label. Off: only candidates that start with the typed word, without the
+    /// fully typed word itself (so Enter goes to a new line), in statement order
+    pub editor_filters: bool,
+    /// Keywords also before anything is typed. Off: they wait for a character (dozens of keywords on an empty prefix get in the way)
+    pub keywords_on_empty: bool,
+    /// Inside the quotes of a value spot that has no value suggestions (bytea, a column the statement's tables lack …): no
+    /// candidates at all, since keywords and tables don't fit inside a string
+    pub quiet_in_value_quotes: bool,
+    /// After a value typed inside quotes, add the closing quote when none follows the cursor. Off: Monaco closes quotes as they are typed
+    pub close_quotes: bool,
+}
+
+impl Options {
+    /// Monaco (src/lib/completion.ts)
+    pub const GUI: Options = Options { editor_filters: true, keywords_on_empty: true, quiet_in_value_quotes: true, close_quotes: false };
+    /// The terminal console's own popup
+    pub const TUI: Options = Options { editor_filters: false, keywords_on_empty: false, quiet_in_value_quotes: false, close_quotes: true };
+}
+
+/// Autocomplete metadata: lowercase names, a per-name index and the sorted orders are built once on load (not on every key)
+pub struct Meta {
+    pub tables: Vec<CompletionTable>,
+    /// (schema, table) lowercase
+    lower: Vec<(String, String)>,
+    /// Lowercase table name → positions in tables
+    by_name: HashMap<String, Vec<usize>>,
+    /// Positions in tables, by table name (ties in metadata order)
+    by_label: Vec<usize>,
+    /// Distinct schemas, sorted
+    schemas: Vec<String>,
+}
+
+impl Meta {
+    pub fn new(tables: Vec<CompletionTable>) -> Self {
+        let lower: Vec<(String, String)> = tables.iter().map(|t| (t.schema.to_lowercase(), t.name.to_lowercase())).collect();
+        let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
+        for (i, (_, n)) in lower.iter().enumerate() {
+            by_name.entry(n.clone()).or_default().push(i);
+        }
+        let mut by_label: Vec<usize> = (0..tables.len()).collect();
+        by_label.sort_by(|&a, &b| tables[a].name.cmp(&tables[b].name));
+        let mut schemas: Vec<String> = tables.iter().map(|t| t.schema.clone()).collect();
+        schemas.sort();
+        schemas.dedup();
+        Meta { tables, lower, by_name, by_label, schemas }
+    }
+}
+
+const KEYWORDS: &str = "select from where and or not in is null like ilike between exists group by order having limit offset join left right inner outer full cross on using as \
+distinct union all intersect except insert into values update set delete returning create table view index alter drop truncate with case when then else end \
+asc desc nulls first last count sum avg min max coalesce now current_date current_timestamp interval true false begin commit rollback explain analyze";
+
+#[derive(Clone, Copy, PartialEq, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ItemKind {
+    Column,
+    Table,
+    Schema,
+    Keyword,
+    /// Column values · json keys (read from the DB)
+    Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Item {
+    pub label: String,
+    pub detail: String,
+    pub insert: String,
+    pub kind: ItemKind,
+}
+
+fn keywords() -> impl Iterator<Item = &'static str> {
+    KEYWORDS.split_whitespace()
+}
+
+/// Keywords by label (the GUI's order)
+static SORTED_KEYWORDS: std::sync::LazyLock<Vec<&'static str>> = std::sync::LazyLock::new(|| {
+    let mut v: Vec<&str> = keywords().collect();
+    v.sort();
+    v
+});
+
+/// A keyword, in any letter case (binary search: a long script checks an alias for every table ref)
+fn is_keyword(w: &str) -> bool {
+    SORTED_KEYWORDS.binary_search_by(|k| k.bytes().cmp(w.bytes().map(|b| b.to_ascii_lowercase()))).is_ok()
+}
+
+/// Identifier characters: letters and digits of any script (Korean …) and `_`
+pub fn is_word(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// Keywords a table reference follows
+const REF_KEYWORDS: [&str; 4] = ["from", "join", "update", "into"];
+
+fn is_ref_keyword(w: &str) -> bool {
+    REF_KEYWORDS.iter().any(|k| w.eq_ignore_ascii_case(k))
+}
+
+/// The ref a qualifier (lowercase) names: an alias first, else a table by its name without the schema
+fn named<'a>(refs: &'a [(String, Option<String>)], q: &str) -> Option<&'a (String, Option<String>)> {
+    refs.iter()
+        .find(|(_, a)| a.as_ref().is_some_and(|a| a.to_lowercase() == q))
+        .or_else(|| refs.iter().find(|(r, _)| r.rsplit('.').next().unwrap_or(r).to_lowercase() == q))
+}
+
+/// Find `from|join|update|into <ref> [as] [alias]`
+fn tables_in_statement(text: &str) -> Vec<(String, Option<String>)> {
+    let mut toks = Tokens { text, at: 0 };
+    let mut out = vec![];
+    while let Some(t) = toks.next() {
+        if !is_ref_keyword(t) {
+            continue;
+        }
+        // Look ahead without consuming (the ref and alias are still visited as tokens)
+        let mut ahead = toks.clone();
+        let Some(r) = ahead.next().filter(|r| r.chars().next().is_some_and(|c| is_word(c) || c == '"')) else { continue };
+        let mut a = ahead.next();
+        if a.is_some_and(|t| t.eq_ignore_ascii_case("as")) {
+            a = ahead.next();
+        }
+        let alias = a.filter(|a| a.chars().all(is_word) && !is_keyword(a)).map(str::to_string);
+        out.push((r.replace('"', ""), alias));
+    }
+    out
+}
+
+/// Words (including `schema.table`, `"quoted"`) and symbols, as slices of the text; whitespace is skipped
+#[derive(Clone)]
+struct Tokens<'a> {
+    text: &'a str,
+    /// Byte offset where the next token search starts
+    at: usize,
+}
+
+impl<'a> Iterator for Tokens<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<&'a str> {
+        let s = self.text;
+        let ch = |i: usize| s[i..].chars().next();
+        let mut i = self.at;
+        while let Some(c) = ch(i).filter(|c| c.is_whitespace()) {
+            i += c.len_utf8();
+        }
+        let start = i;
+        let c = ch(i)?;
+        if is_word(c) || c == '"' {
+            loop {
+                if s[i..].starts_with('"') {
+                    // To the closing quote, or the end of the text
+                    i = s[i + 1..].find('"').map_or(s.len(), |e| i + e + 2);
+                } else {
+                    while let Some(c) = ch(i).filter(|c| is_word(*c)) {
+                        i += c.len_utf8();
+                    }
+                }
+                // schema.table is one token
+                if s[i..].starts_with('.') && ch(i + 1).is_some_and(|c| is_word(c) || c == '"') {
+                    i += 1;
+                    continue;
+                }
+                break;
+            }
+        } else {
+            i += c.len_utf8();
+        }
+        self.at = i;
+        Some(&s[start..i])
+    }
+}
+
+/// The tab's DB as the schema its bare names live in: only in MySQL, where the schema is the DB. A PostgreSQL schema named
+/// after the database isn't on the default search_path, so its tables keep their schema
+fn db_schema(db: &str, mysql: bool) -> &str {
+    if mysql { db } else { "" }
+}
+
+/// The table a reference names: `schema.table`, or a bare name (in `public` or the tab's DB first, then any schema)
+fn find_table<'a>(m: &'a Meta, r: &str, db: &str) -> Option<&'a CompletionTable> {
+    let r = r.to_lowercase();
+    let (schema, name) = match r.split_once('.') {
+        Some((s, n)) => (Some(s), n),
+        None => (None, r.as_str()),
+    };
+    let hits = m.by_name.get(name)?;
+    let t = |i: &usize| &m.tables[*i];
+    match schema {
+        Some(s) => hits.iter().find(|&&i| m.lower[i].0 == s).map(t),
+        None => hits.iter().find(|&&i| m.tables[i].schema == "public" || m.tables[i].schema == db).or(hits.first()).map(t),
+    }
+}
+
+/// Build candidates from the text before the cursor. Returns: (length of the prefix to replace in chars, candidates)
+/// `text` is the caret's statement (sql::statement_at: aliases and table refs resolve in it, not in the rest of the script), `before` is the part of the cursor's line before the cursor, `db` is the tab's DB
+/// (in MySQL, schema = DB; "" for none), `mysql` reads MySQL json paths in value spots
+pub fn suggest(m: &Meta, text: &str, before: &str, db: &str, mysql: bool, o: Options) -> (usize, Vec<Item>) {
+    let (n, mut items, rest) = suggest_lead(m, text, before, db, mysql, o);
+    if let Some(r) = rest {
+        items.extend(rest_items(m, &r, o));
+    }
+    (n, items)
+}
+
+/// What the candidates after the statement's columns (tables, schemas, keywords) depend on. In the GUI it stays the same
+/// while typing, so the WASM index keeps their JS array instead of building thousands of items on every key
+#[derive(Clone, Debug, PartialEq)]
+pub struct Rest {
+    /// The typed word, lowercase, when candidates are filtered by it here ("" when the editor filters)
+    filter: String,
+    db: String,
+    keywords: bool,
+}
+
+/// `suggest` in two parts: (prefix length, the leading candidates, what the rest comes from). None = no rest (after a `.`, in quotes)
+pub fn suggest_lead(m: &Meta, text: &str, before: &str, db: &str, mysql: bool, o: Options) -> (usize, Vec<Item>, Option<Rest>) {
+    let db = db_schema(db, mysql);
+    let all = &m.tables;
+    let prefix: String = before.chars().rev().take_while(|c| is_word(*c)).collect::<Vec<_>>().into_iter().rev().collect();
+    let head = &before[..before.len() - prefix.len()];
+    let p = prefix.to_lowercase();
+    let n = prefix.chars().count();
+    if o.quiet_in_value_quotes && context(before, mysql).is_some_and(|c| c.quoted) {
+        return (n, vec![], None);
+    }
+    let starts = |lower: &str| kept(lower, &p, o);
+    let matches = |label: &str| keeps_label(label, &p, o);
+    let sorted = |mut v: Vec<Item>| {
+        if o.editor_filters {
+            v.sort_by(|a, b| a.label.cmp(&b.label));
+        }
+        v
+    };
+
+    if let Some(h) = head.strip_suffix('.') {
+        // The qualifier: a quoted name back to its opening quote (it may hold spaces, hyphens, emoji), else the word before the dot
+        let start = match h.strip_suffix('"') {
+            Some(inner) => inner.rfind('"').unwrap_or(h.len()),
+            None => h.trim_end_matches(is_word).len(),
+        };
+        let q = h[start..].trim_matches('"').to_lowercase();
+        if q.is_empty() {
+            return (n, vec![], None);
+        }
+        // A schema of that name wins where a table name goes (`from sales.`) and over a table the statement doesn't name
+        let schema = m.lower.iter().any(|(ls, _)| *ls == q);
+        let at_ref = h[..start].trim_end().rsplit(|c: char| !is_word(c)).next().is_some_and(is_ref_keyword);
+        // alias. or table. → columns
+        let refs = tables_in_statement(text);
+        let hit = named(&refs, &q);
+        let t = if schema && at_ref { None } else { hit.and_then(|(r, _)| find_table(m, r, db)).or_else(|| if schema { None } else { find_table(m, &q, db) }) };
+        if let Some(t) = t {
+            let items = t.columns.iter().filter(|(c, _)| matches(c)).map(|(c, ty)| Item { label: c.clone(), detail: ty.clone(), insert: c.clone(), kind: ItemKind::Column }).collect();
+            return (n, items, None);
+        }
+        // schema. → tables
+        let items = all
+            .iter()
+            .zip(&m.lower)
+            .filter(|(_, (ls, ln))| *ls == q && starts(ln))
+            .map(|(t, _)| Item { label: t.name.clone(), detail: format!("{} cols", t.columns.len()), insert: t.name.clone(), kind: ItemKind::Table })
+            .collect();
+        return (n, sorted(items), None);
+    }
+
+    let mut columns: Vec<Item> = vec![];
+    // Labels already in `columns`: a long statement can name thousands of columns
+    let mut seen: HashSet<&str> = HashSet::new();
+    let refs = tables_in_statement(text);
+    let mut looked: HashSet<&str> = HashSet::new();
+    for (r, _) in &refs {
+        // A ref seen before adds no new columns
+        if !looked.insert(r) {
+            continue;
+        }
+        if let Some(t) = find_table(m, r, db) {
+            for (c, ty) in &t.columns {
+                if matches(c) && seen.insert(c) {
+                    columns.push(Item { label: c.clone(), detail: format!("{ty} · {}", t.name), insert: c.clone(), kind: ItemKind::Column });
+                }
+            }
+        }
+    }
+    let keywords = !p.is_empty() || o.keywords_on_empty;
+    let filter = if o.editor_filters { String::new() } else { p };
+    (n, sorted(columns), Some(Rest { filter, db: db.to_string(), keywords }))
+}
+
+/// The candidates after the statement's columns: tables (schema.table outside public and the tab's DB), schemas, keywords
+pub fn rest_items(m: &Meta, r: &Rest, o: Options) -> Vec<Item> {
+    let (p, db) = (r.filter.as_str(), r.db.as_str());
+    let mut items: Vec<Item> = m
+        .by_label
+        .iter()
+        .filter(|&&i| kept(&m.lower[i].1, p, o))
+        .map(|&i| {
+            let t = &m.tables[i];
+            let insert = if t.schema == "public" || t.schema == db { t.name.clone() } else { format!("{}.{}", t.schema, t.name) };
+            Item { label: t.name.clone(), detail: t.schema.clone(), insert, kind: ItemKind::Table }
+        })
+        .collect();
+    items.extend(m.schemas.iter().filter(|s| keeps_label(s, p, o)).map(|s| Item { label: s.clone(), detail: "schema".into(), insert: s.clone(), kind: ItemKind::Schema }));
+    if r.keywords {
+        let kws: Vec<&str> = if o.editor_filters { SORTED_KEYWORDS.clone() } else { keywords().filter(|k| keeps_label(k, p, o)).collect() };
+        items.extend(kws.into_iter().map(|k| Item { label: k.into(), detail: "keyword".into(), insert: k.into(), kind: ItemKind::Keyword }));
+    }
+    items
+}
+
+/// A candidate (lowercase) for the typed word `p` (lowercase): all when the editor filters or nothing is typed, else those that
+/// start with it, without the fully typed word itself (so Enter goes to a newline)
+fn kept(lower: &str, p: &str, o: Options) -> bool {
+    o.editor_filters || p.is_empty() || (lower.starts_with(p) && lower != p)
+}
+
+/// `kept` for a label in any letter case (lowercased only when it is checked)
+fn keeps_label(label: &str, p: &str, o: Options) -> bool {
+    o.editor_filters || p.is_empty() || kept(&label.to_lowercase(), p, o)
+}
+
+// ───────── Value · json key suggestions ─────────
+
+/// Value suggestion spots: `status = '` · `in ('a', '` · `like '` → that column's values, `data->>'` · `data->'a'->>'` (MySQL `->>'$.a.`) → json keys
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HintAt {
+    pub schema: String,
+    pub table: String,
+    pub column: String,
+    pub type_name: String,
+    pub path: Vec<String>,
+    pub mode: HintMode,
+    /// Typing inside quotes
+    pub quoted: bool,
+    /// Characters already typed
+    pub typed: String,
+    /// keys: from the operator to the cursor (`->> '` + typed) — for replacing with an @> condition
+    pub op: String,
+    /// MySQL reads a backslash in a string literal as an escape
+    pub mysql: bool,
+}
+
+/// values = column values, keys = json keys, pairs = @> conditions for frequent `key: value` pairs (PostgreSQL)
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HintMode {
+    Values,
+    Keys,
+    Pairs,
+}
+
+/// A value spot read from the text before the cursor alone (no metadata yet)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Ctx {
+    /// Alias or table (if absent, the column is looked up among the statement's tables)
+    pub r#ref: Option<String>,
+    pub column: String,
+    pub path: Vec<String>,
+    pub mode: HintMode,
+    pub quoted: bool,
+    #[serde(default)]
+    pub typed: String,
+    /// keys: from the operator to the cursor (`->> '` + typed); empty otherwise
+    #[serde(default)]
+    pub op: String,
+}
+
+static RES: std::sync::LazyLock<[regex::Regex; 4]> = std::sync::LazyLock::new(|| {
+    let id = r#"(?:"[^"]+"|\w+)"#;
+    let expr = format!(r"(?:({id})\.)?({id})((?:\s*->>?\s*(?:'[^']*'|\d+))*)");
+    let op = r"\s*(=|<>|!=|@>|(?:not\s+)?i?like|(?:not\s+)?in\s*\((?:\s*(?:'[^']*'|[\w.-]+)\s*,)*)\s*";
+    let my_val = format!(r#"(?:({id})\.)?({id})\s*->>?\s*'\$((?:\.(?:"[^"]*"|\w+))*)'"#);
+    [
+        regex::Regex::new(&format!(r#"(?:({id})\.)?({id})\s*->>?\s*'\$((?:\.(?:"[^"]*"|\w+))*)\.(\w*)$"#)).unwrap(),
+        regex::Regex::new(&format!(r"(?i){my_val}{op}(?:'([^']*)|([\w.-]*))$")).unwrap(),
+        regex::Regex::new(&format!(r"{expr}(\s*->>?\s*(?:'([^']*)|(\w*)))$")).unwrap(),
+        regex::Regex::new(&format!(r"(?i){expr}{op}(?:'([^']*)|([\w.-]*))$")).unwrap(),
+    ]
+});
+
+fn unq(s: &str) -> String {
+    s.trim_matches('"').to_string()
+}
+
+fn path_of(seg: &str) -> Vec<String> {
+    static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"->>?\s*(?:'([^']*)'|(\d+))").unwrap());
+    RE.captures_iter(seg).map(|c| c.get(1).or(c.get(2)).map(|m| m.as_str().to_string()).unwrap_or_default()).collect()
+}
+
+fn my_path(p: &str) -> Vec<String> {
+    static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r#"\.(?:"([^"]*)"|(\w+))"#).unwrap());
+    RE.captures_iter(p).map(|c| c.get(1).or(c.get(2)).map(|m| m.as_str().to_string()).unwrap_or_default()).collect()
+}
+
+const NOT_COLUMN: [&str; 13] = ["where", "and", "or", "not", "set", "on", "select", "by", "when", "then", "else", "case", "from"];
+
+/// The value spot the text before the cursor ends in, if any
+pub fn context(before: &str, mysql: bool) -> Option<Ctx> {
+    let g = |c: &regex::Captures, i: usize| c.get(i).map(|m| m.as_str().to_string());
+    let not_col = |s: &str| NOT_COLUMN.iter().any(|k| s.eq_ignore_ascii_case(k));
+    let [my_keys, my_vals, keys, vals] = &*RES;
+    if mysql {
+        if let Some(c) = my_keys.captures(before) {
+            return Some(Ctx { r#ref: g(&c, 1).map(|s| unq(&s)), column: unq(&c[2]), path: my_path(&c[3]), mode: HintMode::Keys, quoted: true, typed: c[4].to_string(), op: String::new() });
+        }
+        if let Some(c) = my_vals.captures(before) {
+            if &c[4] == "@>" {
+                return None;
+            }
+            return Some(Ctx { r#ref: g(&c, 1).map(|s| unq(&s)), column: unq(&c[2]), path: my_path(&c[3]), mode: HintMode::Values, quoted: c.get(5).is_some(), typed: g(&c, 5).or(g(&c, 6)).unwrap_or_default(), op: String::new() });
+        }
+    }
+    if let Some(c) = keys.captures(before) {
+        // MySQL '$.…' is handled above. A '$…' reaching here is not a complete path
+        if c.get(5).is_some_and(|m| m.as_str().starts_with('$')) || not_col(&c[2]) {
+            return None;
+        }
+        return Some(Ctx { r#ref: g(&c, 1).map(|s| unq(&s)), column: unq(&c[2]), path: path_of(&c[3]), mode: HintMode::Keys, quoted: c.get(5).is_some(), typed: g(&c, 5).or(g(&c, 6)).unwrap_or_default(), op: c[4].to_string() });
+    }
+    let c = vals.captures(before)?;
+    // Things after keywords (where = …) aren't columns
+    if not_col(&c[2]) {
+        return None;
+    }
+    let mode = if &c[4] == "@>" { HintMode::Pairs } else { HintMode::Values };
+    if mysql && mode == HintMode::Pairs {
+        return None;
+    }
+    Some(Ctx { r#ref: g(&c, 1).map(|s| unq(&s)), column: unq(&c[2]), path: path_of(&c[3]), mode, quoted: c.get(5).is_some(), typed: g(&c, 5).or(g(&c, 6)).unwrap_or_default(), op: String::new() })
+}
+
+/// Columns worth suggesting: excluding binary · spatial · arrays; json only with a path (values) or when looking at keys · conditions
+pub fn hintable(mode: HintMode, path: &[String], type_name: &str) -> bool {
+    let ty = type_name.to_lowercase();
+    let json = ty.contains("json");
+    if mode != HintMode::Values {
+        return json;
+    }
+    !["bytea", "blob", "binary", "geometry", "geography", "tsvector", "[]"].iter().any(|k| ty.contains(k)) && !ty.starts_with('_') && (!json || !path.is_empty())
+}
+
+/// If the cursor is at a value · json key spot, that table · column (only for columns worth suggesting)
+pub fn hint_at(m: &Meta, text: &str, before: &str, db: &str, mysql: bool) -> Option<HintAt> {
+    let db = db_schema(db, mysql);
+    let ctx = context(before, mysql)?;
+    let refs = tables_in_statement(text);
+    let candidates: Vec<&(String, Option<String>)> = match &ctx.r#ref {
+        Some(q) => named(&refs, &q.to_lowercase()).into_iter().collect(),
+        None => refs.iter().collect(),
+    };
+    let lc = ctx.column.to_lowercase();
+    let (t, (col, ty)) = candidates.iter().filter_map(|(r, _)| find_table(m, r, db)).find_map(|t| t.columns.iter().find(|(c, _)| c.to_lowercase() == lc).map(|c| (t, c)))?;
+    hintable(ctx.mode, &ctx.path, ty).then(|| HintAt { schema: t.schema.clone(), table: t.name.clone(), column: col.clone(), type_name: ty.clone(), path: ctx.path, mode: ctx.mode, quoted: ctx.quoted, typed: ctx.typed, op: ctx.op, mysql })
+}
+
+/// Text to insert for a value: inside quotes only doubled ' (and doubled \ on MySQL, where it escapes) plus the closing quote
+/// when `close`; outside, a number or true/false in a numeric · boolean column as it is, the rest as sql::literal writes it
+/// (PostgreSQL E'…' for a backslash, so standard_conforming_strings = off can't end the string early).
+/// Bare needs both: the type is one by its name (a domain such as realm_name is not real), and the value itself is a plain literal
+/// (a value is data from the DB, so anything else would be SQL typed into the statement)
+pub fn hint_insert(value: &str, mode: HintMode, path: &[String], type_name: &str, quoted: bool, close: bool, mysql: bool) -> String {
+    let esc = if mysql { value.replace('\\', "\\\\") } else { value.to_string() }.replace('\'', "''");
+    let literal = crate::extract::number_text(value, true) || value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false");
+    let bare = mode == HintMode::Values && path.is_empty() && crate::extract::numeric_type(type_name) && literal;
+    if quoted {
+        if close { format!("{esc}'") } else { esc }
+    } else if bare {
+        value.to_string()
+    } else {
+        crate::sql::literal(if mysql { crate::DbKind::Mysql } else { crate::DbKind::Postgres }, Some(value))
+    }
+}
+
+/// For keys spots with no keys (arrays of objects): text replacing the operator and what follows with `@> '[{…}]'`
+pub fn pairs_insert(value: &str, op: &str) -> String {
+    let lead = if op.starts_with(char::is_whitespace) { " " } else { "" };
+    format!("{lead}@> '{}'", value.replace('\'', "''"))
+}
+
+/// `1 row`, `1,234 rows`
+fn rows(n: i64) -> String {
+    let digits = n.unsigned_abs().to_string();
+    let mut grouped = String::new();
+    for (i, d) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(d);
+    }
+    format!("{}{grouped} row{}", if n < 0 { "-" } else { "" }, if n == 1 { "" } else { "s" })
+}
+
+/// Fetched values → candidates (filtered by typed text unless the editor filters). `after` = the character after the cursor (a ' there is the closing quote).
+/// as_pairs = a keys spot with no keys (array of objects), so @> conditions were fetched → replace including the operator (prefix = op length)
+pub fn hint_items(h: &HintAt, hints: &[Hint], after: Option<char>, as_pairs: bool, o: Options) -> Vec<Item> {
+    let p = h.typed.to_lowercase();
+    let close = o.close_quotes && h.quoted && after != Some('\'');
+    hints
+        .iter()
+        .filter(|x| as_pairs || o.editor_filters || p.is_empty() || (x.value.to_lowercase().starts_with(&p) && x.value.to_lowercase() != p))
+        .map(|x| {
+            if as_pairs {
+                return Item { label: format!("@> '{}'", x.value), detail: rows(x.count), insert: pairs_insert(&x.value, &h.op), kind: ItemKind::Value };
+            }
+            let insert = hint_insert(&x.value, h.mode, &h.path, &h.type_name, h.quoted, close, h.mysql);
+            Item { label: x.value.clone(), detail: format!("{}{}", rows(x.count), if h.mode == HintMode::Keys { " · key" } else { "" }), insert, kind: ItemKind::Value }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TUI: Options = Options::TUI;
+
+    fn meta() -> Meta {
+        let t = |s: &str, n: &str, cols: &[&str]| CompletionTable { schema: s.into(), name: n.into(), columns: cols.iter().map(|c| (c.to_string(), "text".to_string())).collect() };
+        Meta::new(vec![t("public", "users", &["id", "user_name", "email"]), t("public", "orders", &["id", "user_id", "total"]), t("billing", "invoices", &["id", "amount"])])
+    }
+
+    fn labels(v: &[Item]) -> Vec<&str> {
+        v.iter().map(|i| i.label.as_str()).collect()
+    }
+
+    #[test]
+    fn alias_dot_gives_columns() {
+        let text = "select u. from users u join orders o on o.user_id = u.id";
+        let (n, v) = suggest(&meta(), text, "select u.", "app", false, TUI);
+        assert_eq!(n, 0);
+        assert_eq!(labels(&v), ["id", "user_name", "email"]);
+        let (n, v) = suggest(&meta(), text, "select u.us", "app", false, TUI);
+        assert_eq!(n, 2);
+        assert_eq!(labels(&v), ["user_name"]);
+    }
+
+    #[test]
+    fn table_dot_and_schema_dot() {
+        let (_, v) = suggest(&meta(), "select orders. from orders", "select orders.", "app", false, TUI);
+        assert_eq!(labels(&v), ["id", "user_id", "total"]);
+        let (_, v) = suggest(&meta(), "select * from billing.", "select * from billing.", "app", false, TUI);
+        assert_eq!(labels(&v), ["invoices"]);
+    }
+
+    #[test]
+    fn plain_prefix_orders_columns_tables_schemas_keywords() {
+        let (n, v) = suggest(&meta(), "select * from users where u", "select * from users where u", "app", false, TUI);
+        assert_eq!(n, 1);
+        assert_eq!(labels(&v), ["user_name", "users", "using", "union", "update"]);
+        let (_, v) = suggest(&meta(), "select * from inv", "select * from inv", "app", false, TUI);
+        assert_eq!(v[0].insert, "billing.invoices");
+    }
+
+    #[test]
+    fn typed_word_is_not_suggested_again() {
+        let (_, v) = suggest(&meta(), "select * from users", "select * from users", "app", false, TUI);
+        assert!(v.is_empty(), "{:?}", labels(&v));
+        let (_, v) = suggest(&meta(), "sel", "sel", "app", false, TUI);
+        assert_eq!(labels(&v), ["select"]);
+    }
+
+    /// The GUI leaves filtering to Monaco: everything, sorted by label in each group, keywords on an empty prefix too
+    #[test]
+    fn gui_returns_everything_for_the_editor_to_filter() {
+        let text = "select * from users where u";
+        let (n, v) = suggest(&meta(), text, text, "", false, Options::GUI);
+        assert_eq!(n, 1);
+        assert_eq!(&labels(&v)[..7], ["email", "id", "user_name", "invoices", "orders", "users", "billing"]);
+        assert_eq!(v.iter().filter(|i| i.kind == ItemKind::Keyword).count(), keywords().count());
+        let kws: Vec<&str> = v.iter().filter(|i| i.kind == ItemKind::Keyword).map(|i| i.label.as_str()).collect();
+        assert!(kws.is_sorted());
+        let (_, v) = suggest(&meta(), "select * from ", "select * from ", "", false, Options::GUI);
+        assert!(v.iter().any(|i| i.kind == ItemKind::Keyword));
+        let (_, v) = suggest(&meta(), "select u.us from users u", "select u.us", "", false, Options::GUI);
+        assert_eq!(labels(&v), ["id", "user_name", "email"], "columns after alias. keep table order");
+    }
+
+    #[test]
+    fn gui_is_quiet_inside_value_quotes() {
+        let before = "select * from users where email = 'us";
+        assert!(suggest(&meta(), before, before, "", false, Options::GUI).1.is_empty());
+        assert!(!suggest(&meta(), before, before, "", false, TUI).1.is_empty());
+        // Not a value spot: a string anywhere else still completes
+        assert!(!suggest(&meta(), "select 'us", "select 'us", "", false, Options::GUI).1.is_empty());
+    }
+
+    fn hmeta() -> Meta {
+        let t = |s: &str, n: &str, cols: &[(&str, &str)]| CompletionTable { schema: s.into(), name: n.into(), columns: cols.iter().map(|(c, ty)| (c.to_string(), ty.to_string())).collect() };
+        Meta::new(vec![t("public", "orders", &[("id", "int8"), ("status", "varchar"), ("data", "jsonb"), ("raw", "bytea")]), t("public", "users", &[("id", "int8"), ("name", "text")])])
+    }
+
+    #[test]
+    fn hint_places() {
+        let m = hmeta();
+        let at = |before: &str| hint_at(&m, before, before, "app", false);
+        let h = at("select * from orders o where o.status = 'pa").unwrap();
+        assert_eq!((h.table.as_str(), h.column.as_str(), h.mode, h.quoted, h.typed.as_str()), ("orders", "status", HintMode::Values, true, "pa"));
+        let h = at("select * from orders where status in ('paid', '").unwrap();
+        assert_eq!((h.column.as_str(), h.quoted), ("status", true));
+        let h = at("select * from orders where data -> 'meta' ->> 'sr").unwrap();
+        assert_eq!((h.path.clone(), h.mode, h.typed.as_str()), (vec!["meta".to_string()], HintMode::Keys, "sr"));
+        let h = at("select * from orders where data->>'kind' = '").unwrap();
+        assert_eq!((h.path.clone(), h.mode), (vec!["kind".to_string()], HintMode::Values));
+        assert!(!at("select * from orders where id = ").unwrap().quoted);
+        assert!(at("select * from orders where raw = '").is_none(), "bytea");
+        assert!(at("select * from orders where data = '").is_none(), "whole json");
+        assert!(at("select * from orders where ").is_none());
+        assert!(at("select * from orders where status = 'paid' and ").is_none());
+        assert!(at("select * from users where status = '").is_none(), "not a column of users");
+        let h = hint_at(&m, "select * from orders where data->>'$.meta.", "select * from orders where data->>'$.meta.", "app", true).unwrap();
+        assert_eq!((h.path.clone(), h.mode), (vec!["meta".to_string()], HintMode::Keys));
+        let h = at("select * from orders where data ->> ").unwrap();
+        assert_eq!((h.mode, h.quoted, h.op.as_str()), (HintMode::Keys, false, " ->> "));
+        let h = at("select * from orders where data @> '").unwrap();
+        assert_eq!((h.mode, h.quoted), (HintMode::Pairs, true));
+        assert!(hint_at(&m, "select * from orders where data @> '", "select * from orders where data @> '", "app", true).is_none(), "no @> on MySQL");
+    }
+
+    #[test]
+    fn hint_inserts() {
+        let m = hmeta();
+        let hs = |v: &[&str]| v.iter().map(|x| Hint { value: x.to_string(), count: 2 }).collect::<Vec<_>>();
+        let h = hint_at(&m, "select * from orders where status = 'p", "select * from orders where status = 'p", "app", false).unwrap();
+        let v = hint_items(&h, &hs(&["paid", "pa'y", "ready"]), None, false, TUI);
+        assert_eq!(v.iter().map(|i| i.insert.as_str()).collect::<Vec<_>>(), ["paid'", "pa''y'"]);
+        let v = hint_items(&h, &hs(&["paid", "pa'y", "ready"]), None, false, Options::GUI);
+        assert_eq!(v.iter().map(|i| i.insert.as_str()).collect::<Vec<_>>(), ["paid", "pa''y", "ready"], "Monaco filters and closes quotes");
+        assert_eq!(hint_items(&h, &hs(&["paid"]), Some('\''), false, TUI)[0].insert, "paid", "closing quote already there");
+        let h = hint_at(&m, "select * from orders where status = ", "select * from orders where status = ", "app", false).unwrap();
+        assert_eq!(hint_items(&h, &hs(&["paid"]), None, false, TUI)[0].insert, "'paid'");
+        // A backslash makes it E'…' (sql::literal): with standard_conforming_strings = off, '\'' would end the string early
+        assert_eq!(hint_items(&h, &hs(&[r"x\' or 1=1 -- "]), None, false, TUI)[0].insert, r"E'x\\'' or 1=1 -- '", "PostgreSQL: the value stays one literal");
+        let my = hint_at(&m, "select * from orders where status = ", "select * from orders where status = ", "app", true).unwrap();
+        assert_eq!(hint_items(&my, &hs(&[r"x\' or 1=1 -- "]), None, false, TUI)[0].insert, r"'x\\'' or 1=1 -- '", "MySQL: the value stays one literal");
+        let h = hint_at(&m, "select * from orders where id = ", "select * from orders where id = ", "app", false).unwrap();
+        assert_eq!(hint_items(&h, &hs(&["7"]), None, false, TUI)[0].insert, "7");
+        // Bare only for a plain number or true/false in a column whose type is numeric · boolean by name
+        let bare = |v: &str, ty: &str| hint_insert(v, HintMode::Values, &[], ty, false, false, false);
+        assert_eq!(bare("x' or true; delete from realm_users; --", "realm_name"), "'x'' or true; delete from realm_users; --'", "a domain named *real*");
+        assert_eq!(bare("7", "realm_name"), "'7'");
+        assert_eq!(bare("1; drop table t", "int4"), "'1; drop table t'", "not a number, even in a numeric column");
+        assert_eq!([bare("-1.5e3", "numeric(10,2)"), bare("TRUE", "boolean"), bare("1", "tinyint(1)"), bare("2", "interval")], ["-1.5e3", "TRUE", "1", "'2'"]);
+        let h = hint_at(&m, "select * from orders where data ->> ", "select * from orders where data ->> ", "app", false).unwrap();
+        assert_eq!(hint_items(&h, &hs(&["kind"]), None, false, TUI)[0].insert, "'kind'");
+        let v = hint_items(&h, &hs(&[r#"[{"code": "x"}]"#]), None, true, TUI);
+        assert_eq!((v[0].insert.as_str(), v[0].label.as_str()), (r#" @> '[{"code": "x"}]'"#, r#"@> '[{"code": "x"}]'"#));
+    }
+
+    #[test]
+    fn row_counts_are_grouped() {
+        assert_eq!([1, 2, 999, 1000, 1234567].map(rows), ["1 row", "2 rows", "999 rows", "1,000 rows", "1,234,567 rows"]);
+    }
+
+    #[test]
+    fn mysql_schema_is_db() {
+        let all = Meta::new(vec![CompletionTable { schema: "shop".into(), name: "items".into(), columns: vec![] }]);
+        let (_, v) = suggest(&all, "select * from it", "select * from it", "shop", true, TUI);
+        assert_eq!(v[0].insert, "items");
+    }
+
+    #[test]
+    fn postgres_db_is_not_a_schema() {
+        // Database `app` with schemas `app` and `public`: bare names resolve on search_path ("$user", public), not in `app`
+        let t = |schema: &str, name: &str, col: &str| CompletionTable { schema: schema.into(), name: name.into(), columns: vec![(col.into(), "text".into())] };
+        let m = Meta::new(vec![t("app", "orders", "o"), t("app", "users", "a_only"), t("public", "users", "p_only")]);
+        let (_, v) = suggest(&m, "select * from ord", "select * from ord", "app", false, TUI);
+        assert_eq!(v.iter().find(|i| i.label == "orders").map(|i| i.insert.as_str()), Some("app.orders"));
+        let text = "select * from users u where u.";
+        let (_, v) = suggest(&m, text, text, "app", false, TUI);
+        assert!(v.iter().any(|i| i.label == "p_only") && !v.iter().any(|i| i.label == "a_only"), "{v:?}");
+    }
+
+    #[test]
+    fn tables_in_statement_reads_refs_and_aliases() {
+        type Refs<'a> = &'a [(&'a str, Option<&'a str>)];
+        let cases: [(&str, Refs); 16] = [
+            ("select * from users u join orders o on o.user_id = u.id", &[("users", Some("u")), ("orders", Some("o"))]),
+            ("select * from billing.invoices as i where i.", &[("billing.invoices", Some("i"))]),
+            (r#"update "public"."users" set email = null"#, &[("public.users", None)]),
+            ("insert into orders (id) values (1)", &[("orders", None)]),
+            ("select * from 주문 where 상태 = 'a'", &[("주문", None)]),
+            ("select * from users where id = 1", &[("users", None)]),
+            ("select * from users left join orders on true", &[("users", None), ("orders", None)]),
+            ("delete from users u where u.id = 1", &[("users", Some("u"))]),
+            ("select * from (select 1) as sub", &[]),
+            (r#"select * from "My Table" t"#, &[("My Table", Some("t"))]),
+            ("select * from users\n join orders o2 using (id)", &[("users", None), ("orders", Some("o2"))]),
+            ("select * from users a, orders b", &[("users", Some("a"))]),
+            ("select * from orders 주 where 주.status = 'x'", &[("orders", Some("주"))]),
+            ("select 'from users x' from orders", &[("users", Some("x")), ("orders", None)]),
+            ("SELECT * FROM Users AS U JOIN Orders O ON TRUE", &[("Users", Some("U")), ("Orders", Some("O"))]),
+            // An unclosed quote runs to the end; emoji and a ref at the very end
+            ("select 😀 from \"un closed", &[("un closed", None)]),
+        ];
+        for (text, want) in cases {
+            let want: Vec<(String, Option<String>)> = want.iter().map(|(r, a)| (r.to_string(), a.map(str::to_string))).collect();
+            assert_eq!(tables_in_statement(text), want, "{text}");
+        }
+    }
+
+    #[test]
+    fn find_table_by_ref() {
+        let t = |s: &str, n: &str| CompletionTable { schema: s.into(), name: n.into(), columns: vec![] };
+        let m = Meta::new(vec![t("public", "users"), t("public", "orders"), t("billing", "invoices"), t("billing", "users"), t("sales", "주문"), t("public", "My Table")]);
+        let cases = [
+            ("users", Some("public.users")),
+            ("USERS", Some("public.users")),
+            ("billing.users", Some("billing.users")),
+            ("BILLING.INVOICES", Some("billing.invoices")),
+            ("invoices", Some("billing.invoices")),
+            ("public.invoices", None),
+            ("nope", None),
+            ("sales.주문", Some("sales.주문")),
+            ("주문", Some("sales.주문")),
+            ("My Table", Some("public.My Table")),
+            ("a.b.c", None),
+        ];
+        for (r, want) in cases {
+            assert_eq!(find_table(&m, r, "").map(|t| format!("{}.{}", t.schema, t.name)).as_deref(), want, "{r}");
+        }
+    }
+
+    /// A long text (as if a whole script were passed): 300 statements over tables with 20 distinct columns each, ~6k columns.
+    /// Timing only means something in a release build: `cargo test --release -p qurry-shared long_script -- --ignored`
+    #[test]
+    #[ignore = "timing: run with --release"]
+    fn long_script_suggest_is_fast() {
+        let tables: Vec<CompletionTable> = (0..2000)
+            .map(|i| CompletionTable { schema: format!("s{i}"), name: format!("t{i}"), columns: (0..20).map(|c| (format!("c{i}_{c}"), "text".into())).collect() })
+            .collect();
+        let m = Meta::new(tables);
+        let mut text: String = (0..300).map(|i| format!("select * from s{i}.t{i} where id = 1;\n")).collect();
+        text.push_str("select ");
+        let mut times: Vec<std::time::Duration> = (0..50)
+            .map(|_| {
+                let t = std::time::Instant::now();
+                let (_, v) = suggest(&m, &text, "select ", "", false, Options::GUI);
+                assert_eq!(v.iter().filter(|i| i.kind == ItemKind::Column).count(), 6000);
+                t.elapsed()
+            })
+            .collect();
+        times.sort();
+        let p95 = times[times.len() * 95 / 100];
+        assert!(p95 < std::time::Duration::from_millis(5), "p95 {p95:?}");
+    }
+
+    /// The TUI's completion over tests/corpus/suggest.json (`‸` = cursor), as its update_completion builds it, compared with
+    /// tests/goldens/completion/tui.json. `UPDATE_GOLDENS=1 cargo test -p qurry-shared complete` rewrites the golden.
+    /// The GUI side of the same corpus is src/lib/completion.test.ts (goldens/completion/gui.json)
+    #[test]
+    fn corpus_matches_tui_golden() {
+        use serde_json::{Value, json};
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
+        let corpus: Value = serde_json::from_str(&std::fs::read_to_string(root.join("corpus/suggest.json")).unwrap()).unwrap();
+        let st = |v: &Value| v.as_str().unwrap_or_default().to_string();
+        let tables = corpus["tables"].as_array().unwrap().iter().map(|t| CompletionTable { schema: st(&t["schema"]), name: st(&t["name"]), columns: t["columns"].as_array().unwrap().iter().map(|p| (st(&p[0]), st(&p[1]))).collect() }).collect();
+        let m = Meta::new(tables);
+        let items = |v: Vec<Item>| v.into_iter().map(|i| json!({ "label": i.label, "detail": i.detail, "insert": i.insert, "kind": format!("{:?}", i.kind) })).collect::<Vec<_>>();
+        let mut out = serde_json::Map::new();
+        for c in corpus["cases"].as_array().unwrap() {
+            let raw = st(&c["text"]);
+            let at = raw.find('‸').unwrap();
+            let text = raw.replacen('‸', "", 1);
+            let before = &text[text[..at].rfind('\n').map_or(0, |i| i + 1)..at];
+            let after = text[at..].chars().next();
+            let (db, mysql) = (st(&c["db"]), c["mysql"].as_bool().unwrap_or(false));
+            // As update_completion: the caret's statement
+            let text = crate::sql::statement_at(&text, at, if mysql { crate::DbKind::Mysql } else { crate::DbKind::Postgres }).unwrap_or_default();
+            let hints = |mode: &str| c["hints"].get(mode).map(|v| v.as_array().unwrap().iter().map(|p| Hint { value: st(&p[0]), count: p[1].as_i64().unwrap() }).collect::<Vec<_>>());
+            let o = if let Some(h) = hint_at(&m, &text, before, &db, mysql) {
+                let name = |m: HintMode| format!("{m:?}").to_lowercase();
+                let mut asked = vec![name(h.mode)];
+                let mut got = (h.mode, hints(&name(h.mode)).unwrap_or_default());
+                if h.mode == HintMode::Keys && got.1.is_empty() && !mysql {
+                    asked.push("pairs".into());
+                    got = (HintMode::Pairs, hints("pairs").unwrap_or_default());
+                }
+                let as_pairs = got.0 == HintMode::Pairs && h.mode == HintMode::Keys;
+                let prefix = if as_pairs { h.op.chars().count() } else { h.typed.chars().count() };
+                let hint = json!({ "schema": h.schema, "table": h.table, "column": h.column, "path": h.path, "asked": asked });
+                json!({ "hint": hint, "prefix": prefix, "items": items(hint_items(&h, &got.1, after, as_pairs, TUI)) })
+            } else {
+                let (prefix, v) = suggest(&m, &text, before, &db, mysql, TUI);
+                json!({ "prefix": prefix, "items": items(v) })
+            };
+            out.insert(st(&c["id"]), o);
+        }
+        // One item per line, so a diff of the golden shows which ones changed
+        let lines: Vec<String> = out
+            .iter()
+            .map(|(id, o)| {
+                let its: Vec<String> = o["items"].as_array().unwrap().iter().map(|i| format!("\n      {i}")).collect();
+                let hint = o.get("hint").map(|h| format!("\n    \"hint\": {h},")).unwrap_or_default();
+                format!("  {}: {{{hint}\n    \"prefix\": {},\n    \"items\": [{}{}]\n  }}", json!(id), o["prefix"], its.join(","), if its.is_empty() { "" } else { "\n    " })
+            })
+            .collect();
+        let got = format!("{{\n{}\n}}\n", lines.join(",\n"));
+        let golden = root.join("goldens/completion/tui.json");
+        if std::env::var_os("UPDATE_GOLDENS").is_some() {
+            std::fs::write(&golden, &got).unwrap();
+        }
+        let want = std::fs::read_to_string(&golden).expect("missing golden: run with UPDATE_GOLDENS=1");
+        assert_eq!(serde_json::from_str::<Value>(&got).unwrap(), serde_json::from_str::<Value>(&want).unwrap());
+    }
+}

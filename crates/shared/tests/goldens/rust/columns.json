@@ -1,0 +1,49 @@
+{
+  "basic": {
+    "autoMap": [
+      "user_name",
+      "Email",
+      "id",
+      "created_at",
+      ""
+    ]
+  },
+  "bom-nel": {
+    "autoMap": [
+      "a",
+      "b",
+      ""
+    ]
+  },
+  "duplicate-match": {
+    "autoMap": [
+      "UserId"
+    ]
+  },
+  "empty-table": {
+    "autoMap": [
+      ""
+    ]
+  },
+  "korean": {
+    "autoMap": [
+      "주문_번호",
+      "상태",
+      ""
+    ]
+  },
+  "nbsp-tab": {
+    "autoMap": [
+      "username",
+      "email"
+    ]
+  },
+  "new-table": {},
+  "unicode-case": {
+    "autoMap": [
+      "",
+      "",
+      "état"
+    ]
+  }
+}

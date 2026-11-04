@@ -1,6 +1,7 @@
 #[cfg(target_os = "macos")]
 mod bundle;
 mod commands;
+mod fonts;
 // The engine is qurry-core (shared with TUI and MCP)
 pub use qurry_core::{app, db, error, meta, redisdb, secrets, store};
 
@@ -12,11 +13,14 @@ pub(crate) fn app_context<R: tauri::Runtime>() -> tauri::Context<R> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    qurry_core::ssm::kill_on_panic();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            // SIGTERM / SIGINT / SIGHUP end the process without RunEvent::Exit: stop the AWS SSM tunnels' aws CLI then too
+            tauri::async_runtime::spawn(qurry_core::ssm::kill_on_signals());
             // Build the menu manually so the default menu's "Close Window(⌘W)" does not steal the close-tab shortcut
             use tauri::menu::{MenuBuilder, SubmenuBuilder};
             let check_updates = tauri::menu::MenuItemBuilder::with_id("check-update", "Check for Updates…").build(app)?;
@@ -59,9 +63,7 @@ pub fn run() {
                 }
             });
 
-            let dir = app.path().app_config_dir()?;
-            let secret_file = secrets::SecretFile::open(&dir)?;
-            app.manage(app::AppState::new(store::Store::new(dir), secret_file));
+            app.manage(qurry_core::open_state(Some(app.path().app_config_dir()?))?);
             app.manage(commands::PendingImport::default());
             app.manage(commands::PendingData::default());
             app.manage(commands::PickedDirs::default());
@@ -85,9 +87,11 @@ pub fn run() {
             commands::save_connection,
             commands::set_connection_color,
             commands::set_connection_scope,
+            commands::allow_plaintext,
             commands::delete_connection,
             commands::test_connection,
             commands::test_ssh,
+            commands::cancel_test,
             commands::connect,
             commands::disconnect,
             commands::run_query,
@@ -129,18 +133,21 @@ pub fn run() {
             commands::dba_report,
             commands::kill_session,
             commands::dba_action_sql,
+            commands::dba_explain,
             commands::pick_data_file,
             commands::import_data,
             commands::save_text_file,
             commands::pick_import_file,
             commands::import_picked,
             commands::tx_state,
+            commands::explain_wrap,
             commands::trust_ssh_host,
             commands::unsafe_reason,
             commands::list_databases,
             commands::list_schemas,
             commands::list_objects,
             commands::table_detail,
+            commands::table_structure,
             commands::similar_rows_sql,
             commands::rag_indexes,
             commands::rag_save,
@@ -177,8 +184,19 @@ pub fn run() {
             commands::sync_workspaces,
             commands::save_keymap,
             commands::check_update,
+            commands::update_channel,
+            commands::set_update_channel,
+            commands::grid_align,
+            commands::set_grid_align,
+            fonts::font_families,
             commands::install_update,
         ])
-        .run(app_context())
-        .expect("error while running tauri application");
+        .build(app_context())
+        .expect("error while running tauri application")
+        .run(|_, event| {
+            // Quitting ends the process without dropping the app state, so the AWS SSM tunnels' aws CLI would keep running
+            if let tauri::RunEvent::Exit = event {
+                qurry_core::ssm::kill_all();
+            }
+        });
 }

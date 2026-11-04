@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ask, askText, askTextChoice, registerTextDialog } from "./dialogs";
+import { ask, askText, askTextChoice, notice, registerTextDialog } from "./dialogs";
 
 describe("dialogs", () => {
   afterEach(() => {
@@ -13,6 +13,12 @@ describe("dialogs", () => {
     expect(await ask("drop?")).toBe(true);
     vi.stubGlobal("window", { confirm: () => false });
     expect(await ask("drop?")).toBe(false);
+  });
+  it("a notice (e.g. a change that ran but couldn't be logged) waits until it is acknowledged", async () => {
+    const seen: string[] = [];
+    vi.stubGlobal("window", { confirm: (m: string) => (seen.push(m), Promise.resolve(false)) });
+    await expect(notice("It ran, but the result couldn't be written", "Submitted, with a warning")).resolves.toBeUndefined();
+    expect(seen).toEqual(["It ran, but the result couldn't be written"]);
   });
   it("text input goes to the registered in-app dialog (Tauri has no prompt)", async () => {
     registerTextDialog((r) => r.resolve(r.value + "!"));

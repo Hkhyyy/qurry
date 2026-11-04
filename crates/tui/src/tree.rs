@@ -60,6 +60,10 @@ fn contains_ci(hay: &str, lower_needle: &str) -> bool {
 }
 
 impl Tree {
+    /// The node's children are only the error its load ended with (load_children): expanding it again loads again
+    pub fn failed(&self, key: &str) -> bool {
+        self.children.get(key).is_some_and(|n| n.len() == 1 && n[0].kind == NodeKind::Info)
+    }
     /// Lines visible on screen: (depth, node)
     pub fn visible(&self) -> Vec<(usize, &Node)> {
         let mut out = Vec::new();
@@ -122,33 +126,39 @@ impl Tree {
     }
 }
 
-/// Group Redis keys into folders split on ":" (like Medis). Folders first (by name), then keys.
+/// Group Redis keys into folders split on ":" (like Medis; qurry_shared::keytree). Folders first (by name), then keys.
 /// Nodes under a folder go in children. Key lines keep the full name
 pub fn key_folders(children: &mut HashMap<String, Vec<Node>>, parent: &str, keys: Vec<Node>) -> Vec<Node> {
-    fn level(children: &mut HashMap<String, Vec<Node>>, parent: &str, keys: Vec<Node>, depth: usize) -> Vec<Node> {
-        let mut folders: std::collections::BTreeMap<String, Vec<Node>> = Default::default();
-        let mut leaves = vec![];
-        for n in keys {
-            let parts: Vec<&str> = n.label.split(':').collect();
-            if parts.len() > depth + 1 {
-                folders.entry(parts[depth].to_string()).or_default().push(n);
-            } else {
-                leaves.push(n);
+    use qurry_core::keytree::{self, KeyNode};
+    /// The first key (in the order given) below a folder: the folder takes its connection, db and schema
+    fn first(n: &KeyNode) -> usize {
+        match n {
+            KeyNode::Key { item } => *item,
+            KeyNode::Folder { children, .. } => children.iter().map(first).min().unwrap_or(usize::MAX),
+        }
+    }
+    fn nodes(children: &mut HashMap<String, Vec<Node>>, parent: &str, tree: Vec<KeyNode>, keys: &mut [Option<Node>]) -> Vec<Node> {
+        let mut out = vec![];
+        for n in tree {
+            let f = first(&n);
+            match n {
+                KeyNode::Key { item } => out.extend(keys[item].take()),
+                KeyNode::Folder { name, count, children: sub, .. } => {
+                    let key = format!("{parent}|f:{name}");
+                    let k = keys[f].as_ref().expect("a folder holds a key not yet placed");
+                    let folder = Node { key: key.clone(), label: name, hint: count.to_string(), kind: NodeKind::Group, conn: k.conn.clone(), db: k.db.clone(), schema: k.schema.clone(), name: None, expandable: true };
+                    let sub = nodes(children, &key, sub, keys);
+                    children.insert(key, sub);
+                    out.push(folder);
+                }
             }
         }
-        let mut out = vec![];
-        for (seg, kids) in folders {
-            let key = format!("{parent}|f:{seg}");
-            let first = &kids[0];
-            let folder = Node { key: key.clone(), label: seg, hint: kids.len().to_string(), kind: NodeKind::Group, conn: first.conn.clone(), db: first.db.clone(), schema: first.schema.clone(), name: None, expandable: true };
-            let sub = level(children, &key, kids, depth + 1);
-            children.insert(key, sub);
-            out.push(folder);
-        }
-        out.extend(leaves);
         out
     }
-    level(children, parent, keys, 0)
+    let names: Vec<String> = keys.iter().map(|n| n.label.clone()).collect();
+    let tree = keytree::key_tree(&names, Default::default());
+    let mut keys: Vec<Option<Node>> = keys.into_iter().map(Some).collect();
+    nodes(children, parent, tree, &mut keys)
 }
 
 #[cfg(test)]

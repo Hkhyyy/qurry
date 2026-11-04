@@ -228,9 +228,18 @@ impl AppState {
         }
     }
 
+    /// A write to the store. It ran but the Production log couldn't record it: into the app log (a build job has no place to show it)
+    async fn rag_store_write(&self, dest: &str, sql: String) -> AppResult<QueryResult> {
+        let r = self.run_query(dest.into(), sql, Some(10), None).await?;
+        if let Some(w) = &r.warning {
+            crate::log!("[qurry] RAG write to {dest}: {w}");
+        }
+        Ok(r)
+    }
+
     /// Create the collection (table) in the store if missing
     async fn rag_prepare(&self, idx: &RagIndex, kind: DbKind, dim: usize) -> AppResult<()> {
-        let q = |s: String| self.run_query(idx.dest.clone(), s, Some(10), None);
+        let q = |s: String| self.rag_store_write(&idx.dest, s);
         let c = &idx.collection;
         match kind {
             DbKind::Postgres => {
@@ -274,7 +283,7 @@ impl AppState {
             DbKind::Milvus => format!("POST /entities/upsert\n{}", json!({ "collectionName": c, "data": items.iter().map(|(id, t, v)| json!({ "source_id": id, "content": t, "embedding": v })).collect::<Vec<_>>() })),
             _ => unreachable!(),
         };
-        self.run_query(idx.dest.clone(), sql, Some(10), None).await?;
+        self.rag_store_write(&idx.dest, sql).await?;
         Ok(())
     }
 
@@ -385,7 +394,7 @@ impl AppState {
             let ids: Vec<String> = hits.iter().map(|h| literal(src_kind, Some(&h.0))).collect();
             self.run_query(idx.source.clone(), format!("SELECT * FROM {}.{} WHERE {} IN ({})", q(&idx.schema), q(&idx.table), q(&idx.id_column), ids.join(", ")), Some(limit), None).await.ok()
         };
-        let mut out = QueryResult { columns: vec![], rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false };
+        let mut out = QueryResult { columns: vec![], rows: vec![], rows_affected: 0, truncated: false, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None };
         match src.as_ref().and_then(|s| s.columns.iter().position(|c| c.name.eq_ignore_ascii_case(&idx.id_column)).map(|p| (s, p))) {
             Some((s, pos)) => {
                 out.columns = std::iter::once(col_info("score", "FLOAT8")).chain(s.columns.iter().cloned()).collect();
@@ -485,15 +494,15 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn rag_build_and_search_everywhere() {
-        let Ok(pg) = std::env::var("QURRY_TEST_PG") else { return };
-        let p: Vec<&str> = pg.split(':').collect();
+        let Some(crate::testenv::Server { cfg: mut pg, password }) = crate::testenv::pg() else { return };
         let dir = std::env::temp_dir().join(format!("qurry-rag-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir.clone())).unwrap();
         let save = |id: &str, kind: &str, host: &str, port: u16, user: &str, db: &str| {
             let cfg: crate::store::ConnectionConfig = serde_json::from_value(json!({ "id": id, "name": id, "kind": kind, "host": host, "port": port, "user": user, "database": db })).unwrap();
             st.store.save(&cfg).unwrap();
         };
-        save("pg", "postgres", p[0], p[1].parse().unwrap(), p[2], p[3]);
+        (pg.id, pg.name) = ("pg".into(), "pg".into());
+        st.save_connection(pg, password, None).await.unwrap();
         let q = |s: &str| st.run_query("pg".into(), s.into(), None, None);
         if q("create extension if not exists vector").await.is_err() {
             return;

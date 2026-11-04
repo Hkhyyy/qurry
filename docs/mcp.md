@@ -35,6 +35,8 @@ Data sources made before this setting existed keep working as before (read, and 
 - Driver data sources (SQL Server, DuckDB, ClickHouse, MongoDB, vector DBs) have no READ ONLY transaction, so the check is stricter: one statement and no second statement in the same SQL Server batch, no `SELECT … INTO`, no functions that read files or other servers (`OPENROWSET`, ClickHouse `url()` / `file()` / `remote()` …, DuckDB `read_text()` …), only search / query / list requests for vector DBs, and no `$out` / `$merge` for MongoDB. DuckDB is opened with external access switched off, and ClickHouse reads run with `readonly=2` (unless the user is already read-only). This applies to the MCP server; in the app, a read-only DuckDB data source can still read files on your own computer.
 - Still, give the MCP server a **least-privilege database user** (read-only role, no superuser/FILE privilege): the checks above are a second line of defence, not a replacement for database permissions.
 
+What this does and doesn't protect against, including prompt injection through data: [MCP threat model](mcp-security.md).
+
 Options: `--config-dir DIR` (use another config folder), `--verbose` (engine logs to stderr).
 
 ---

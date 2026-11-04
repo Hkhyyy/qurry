@@ -1,0 +1,96 @@
+NewConsole	New Query Console	⌃l
+Execute	Execute (asks what to run — see Query Execution Settings)	F5 / ⌃Enter / ⌥Enter
+Explain	Explain Plan	⌥e
+ExplainAnalyze	Explain Analyze (runs the statement: real times and row counts)	—
+Cancel	Cancel Running Statement	⌃c
+TxToggle	Toggle Transaction Mode (Auto/Manual)	⌥t
+Commit	Commit	⌥c
+Rollback	Roll Back	⌥r
+ExecSettings	Query Execution Settings (what ⌃Enter runs)	—
+ClearConsole	Clear Console (delete all text)	⌘A ⌫ (console)
+SearchEverywhere	Search Everywhere (objects · columns · tabs · actions)	⌃p
+GoToObject	Go to Database Object	⌃o
+RecentTabs	Recent Tabs / Switcher	⌃e
+EditData	Edit Data (open table)	F4 / Enter
+Ddl	Go to DDL	⌃b
+Submit	Submit Changes	⌃s
+Revert	Revert Changes	⌃z (grid)
+AddRow	Add Row	a / Insert (grid)
+DeleteRow	Delete Row	d / Delete (grid)
+SetNull	Set NULL	n (grid)
+ExportCsv	Export Data… (CSV, TSV, JSON, SQL INSERT, Markdown)	x (grid)
+CopyInList	Copy Column as IN List  ('a', 'b', …)	Y (grid)
+ValueEditor	Value Panel (the current cell's whole value, beside the grid)	v (grid)
+FindSimilar	Find Similar Rows (pgvector, by the vector column)	—
+RagSearch	AI Search (RAG)… — ask a table in plain words	—
+RagBuild	Build RAG Index… (embed the rows)	—
+RagNew	New RAG Index from the Selected Table…	—
+RagKey	Set OpenAI API Key (RAG)…	—
+WsSwitch	Switch Workspace…	⌥1…9
+WsNew	New Workspace…	⌥n
+WsRename	Rename Workspace…	⌥⇧N
+WsDelete	Delete Workspace…	—
+WsMoveTab	Move Tab to Workspace…	—
+WsAddConn	Add Data Source to This Workspace…	—
+WsMoveConn	Move Data Source to Another Workspace…	w (explorer)
+WsRemoveConn	Remove Data Source from This Workspace	—
+Find	Find / Replace in Editor (regex)	⌃f
+QueryHistory	Query History… (shared with the GUI)	—
+ProductionLog	Production Log… (changes run on Production data sources, undo SQL)	—
+Snippets	Snippets…	—
+SaveSnippet	Save Query as Snippet…	—
+ShowDiagram	Show Diagram (ERD): foreign keys of a schema, as text + Mermaid	—
+CompareSchemas	Compare Schemas… (DDL to make one schema look like another)	—
+CompareData	Compare Table Data… (sync SQL by primary key)	—
+RunMigrations	Run Migrations… (folder of V1__name.sql files)	—
+BackupDb	Back Up Database… (pg_dump / mysqldump)	—
+RestoreDb	Restore Database… (from a .dump / .sql backup)	—
+DbaReports	Database Admin… (sessions & locks, slow queries, sizes, indexes, vacuum, server, privileges)	—
+ImportData	Import Data from File… (CSV, TSV, JSON, Excel)	—
+GenerateTestData	Generate Test Data… (fill the selected table with realistic rows)	—
+NewTable	New Table… (columns, keys, indexes, foreign keys — SQL shown before it runs)	—
+ModifyTable	Modify Table… (change columns, keys, indexes, foreign keys → ALTER)	⌃F6
+NewView	New View…	—
+NewSchema	New Schema… (PostgreSQL)	—
+NewDatabase	New Database…	—
+NewSequence	New Sequence… (PostgreSQL)	—
+RenameObject	Rename… (table, view, sequence, schema, database)	⇧F6
+ChartResult	Chart Result (bars: sum of a number column by the first text column)	—
+CopyRelatedRows	Copy Related Rows To… (rows + foreign-key related rows into another data source, personal data masked)	—
+CancelTransfer	Cancel Export/Import	—
+NewDataSource	New Data Source…	n (explorer)
+EditDataSource	Data Source Properties…	e (explorer)
+DeleteDataSource	Remove Data Source	D (explorer)
+Connect	Connect	c (explorer)
+Disconnect	Disconnect	⌃F2
+Refresh	Refresh	r (explorer)
+ManageSchemas	Manage Shown Schemas… (databases · schemas in the explorer)	s (explorer)
+CloseTab	Close Tab	⌃w
+NextTab	Next Tab	⌥Right / ⌃PgDn
+PrevTab	Previous Tab	⌥Left / ⌃PgUp
+ToggleExplorer	Database Explorer	⌥0
+ToggleOutput	Toggle Output / Result	⌥o
+Complete	Code Completion	⌃Space
+SplitRight	Split Right (focused pane, up to 4)	⌥\
+SplitDown	Split Down (focused pane, up to 4)	⌥-
+Unsplit	Unsplit All	—
+OtherSplit	Go to the Next Split	⌥Tab
+SplitShrink	Move Split Divider Left / Up	⌥⇧Left
+SplitGrow	Move Split Divider Right / Down	⌥⇧Right
+ExplorerNarrower	Database Explorer Narrower	⌥[
+ExplorerWider	Database Explorer Wider	⌥]
+ShrinkEditor	Shrink Editor (console)	⌥⇧Up
+GrowEditor	Grow Editor (console)	⌥⇧Down
+PaneUp	Go to the Split Above	⌃⌥Up
+PaneDown	Go to the Split Below	⌃⌥Down
+PaneLeft	Go to the Split on the Left	⌃⌥Left
+PaneRight	Go to the Split on the Right	⌃⌥Right
+CycleFocus	Cycle Focus (explorer → editor → results)	F6
+TrustSshHost	Trust SSH Host Key (after checking its fingerprint)	—
+PasswordKey	Password Key… (keep it in the config folder or the system keychain)	—
+GridAlign	Grid Alignment… (where cells sit per kind of value: NULL, numbers, text …; shared with the GUI)	—
+CheckUpdate	Check for Updates	—
+UpdateChannel	Update Channel… (stable releases only, or beta: also every merge to main)	—
+InstallUpdate	Update Qurry & Restart (download the latest release)	—
+Help	Keymap	F1
+Quit	Quit	⌃q

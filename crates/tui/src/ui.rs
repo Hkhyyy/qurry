@@ -1,7 +1,8 @@
 //! Screen drawing
 use crate::keys::disp;
-use crate::app::{App, Drag, DropTarget, FieldKind, Focus, Popup, SplitDir, TabKind};
+use crate::app::{App, Drag, DropTarget, FieldKind, Focus, Popup, SplitDir, TabKind, WARNING};
 use crate::tree::NodeKind;
+use qurry_core::keymap::Scope;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Tabs, Wrap};
 use serde_json::Value;
@@ -68,7 +69,42 @@ pub fn format_reply(v: &Value) -> String {
     go(v, 0)
 }
 
+/// Smallest screen the layout is drawn for (explorer · tabs · status line still readable); below it, a message instead
+pub const MIN_SIZE: (u16, u16) = (40, 10);
+
 pub fn draw(f: &mut Frame, app: &mut App) {
+    let area = f.area();
+    app.too_small = area.width < MIN_SIZE.0 || area.height < MIN_SIZE.1;
+    if app.too_small {
+        draw_too_small(f, app);
+    } else {
+        draw_screen(f, app);
+    }
+    sanitize(f.buffer_mut());
+    app.color.apply(f.buffer_mut());
+}
+
+/// Says the size and the size needed, centered and wrapped so it fits even a few cells
+fn draw_too_small(f: &mut Frame, app: &App) {
+    let a = f.area();
+    if a.is_empty() {
+        return;
+    }
+    let last = match app.quit_waits_for() {
+        Some(why) => Line::styled(why, Style::default().fg(WARN)),
+        None => Line::from(muted(format!("Make the window larger · {} quits", app.keys.label(crate::app::Action::Quit)))),
+    };
+    let lines = vec![
+        Line::styled("Terminal too small", Style::default().fg(WARN).add_modifier(Modifier::BOLD)),
+        Line::raw(format!("{}×{} — needs {}×{}", a.width, a.height, MIN_SIZE.0, MIN_SIZE.1)),
+        last,
+    ];
+    let p = Paragraph::new(lines).alignment(Alignment::Center).wrap(Wrap { trim: true });
+    let h = (p.line_count(a.width) as u16).min(a.height);
+    f.render_widget(p, Rect { y: a.y + (a.height - h) / 2, height: h, ..a });
+}
+
+fn draw_screen(f: &mut Frame, app: &mut App) {
     let [main, status] = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(f.area());
     // With two or more workspaces, one line at the top: 1 Default │ 2 Reports (Alt+n · click)
     app.hits.workspaces.clear();
@@ -101,7 +137,6 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.popup.is_some() {
         draw_popup(f, app);
     }
-    sanitize(f.buffer_mut());
 }
 
 /// Whether a char can control the terminal: C0 · DEL · C1 (ESC sequences, OSC 52 clipboard, screen clear …) and text-direction overrides
@@ -160,13 +195,8 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
             NodeKind::Db => ("⛁", C_DB),
             NodeKind::Schema => ("◇", Color::Gray),
             NodeKind::Group => ("▤", ACCENT),
-            NodeKind::Object(k) => match k.as_str() {
-                "table" | "partitioned" | "foreign" => ("▦", Color::Gray),
-                "view" | "matview" => ("◫", C_VIEW),
-                "sequence" => ("#", C_SEQUENCE),
-                "key" => ("●", type_color(&n.hint)),
-                _ => ("ƒ", C_ROUTINE),
-            },
+            NodeKind::Object(k) if k == "key" => ("●", type_color(&n.hint)),
+            NodeKind::Object(k) => object_glyph(k).unwrap_or(("ƒ", C_ROUTINE)),
             NodeKind::Column { pk, .. } => (if *pk { "⚿" } else { "·" }, if *pk { Color::Yellow } else { DIM }),
             NodeKind::Info => ("", DANGER),
         };
@@ -282,19 +312,43 @@ fn draw_panes(f: &mut Frame, app: &mut App, p: &crate::panes::Pane, area: Rect, 
     }
 }
 
+/// Explorer tree object kind → glyph and color (the tree, and the tabs that show the object)
+fn object_glyph(kind: &str) -> Option<(&'static str, Color)> {
+    Some(match kind {
+        "table" | "partitioned" | "foreign" => ("▦", Color::Gray),
+        "view" | "matview" => ("◫", C_VIEW),
+        "sequence" => ("#", C_SEQUENCE),
+        "routine" | "function" | "procedure" => ("ƒ", C_ROUTINE),
+        _ => return None,
+    })
+}
+
+/// Tab glyph (like the GUI's TabIcon) for the tab bar, Recent Tabs and Search Everywhere: a table tab shows its object's
+/// tree glyph, a DDL tab that glyph + ≡ (text), other text (diagram) ≡. Uncolored in the tab bar: it takes the tab's own
+/// colors, so it reads on a Data Source color and in 16 colors / NO_COLOR
+fn tab_glyph(kind: &TabKind) -> String {
+    match kind {
+        TabKind::Console(_) => "❯".into(),
+        TabKind::Table(t) => object_glyph(&t.kind).map_or("▦", |g| g.0).into(),
+        TabKind::Text(t) => object_glyph(&t.kind).map_or("≡".into(), |g| format!("{}≡", g.0)),
+        TabKind::Dba(_) => "◔".into(),
+        TabKind::Redis(_) => "◆".into(),
+    }
+}
+
 /// One pane: tab bar + visible tab. g = None means an unsplit screen (all tabs)
 fn draw_group(f: &mut Frame, app: &mut App, g: Option<usize>, area: Rect, focused: bool) {
     use unicode_width::UnicodeWidthStr;
     let [bar, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(3)]).areas(area);
     let idx: Vec<usize> = (0..app.tabs.len()).filter(|&i| g.is_none_or(|g| app.tabs[i].group == g)).collect();
     let shown = if focused { app.active } else { g.and_then(|g| app.group_tab(g)).unwrap_or(app.active) };
-    // Tab width: the Tabs widget draws " title " + "│". " " + icon(2) + title + " *"? + " "
+    // Tab width: the Tabs widget draws " title " + "│". " " + glyph + " " + title + " *"? + " "
     let widths: Vec<u16> = idx
         .iter()
         .map(|&i| {
             let t = &app.tabs[i];
             let dirty = matches!(&t.kind, TabKind::Table(tt) if tt.grid.as_ref().map(|g| g.dirty()).unwrap_or(false));
-            1 + 2 + app.tab_label(t).width() as u16 + if dirty { 2 } else { 0 } + 1
+            1 + tab_glyph(&t.kind).width() as u16 + 1 + app.tab_label(t).width() as u16 + if dirty { 2 } else { 0 } + 1
         })
         .collect();
     let sel = idx.iter().position(|&i| i == shown).unwrap_or(0);
@@ -314,26 +368,30 @@ fn draw_group(f: &mut Frame, app: &mut App, g: Option<usize>, area: Rect, focuse
         .iter()
         .map(|&i| {
             let t = &app.tabs[i];
-            let icon = match t.kind {
-                TabKind::Console(_) => "⌘ ",
-                TabKind::Table(_) => "▦ ",
-                TabKind::Text(_) => "ƒ ",
-                TabKind::Dba(_) => "◉ ",
-                TabKind::Redis(_) => "◆ ",
-            };
             let dirty = matches!(&t.kind, TabKind::Table(tt) if tt.grid.as_ref().map(|g| g.dirty()).unwrap_or(false));
             let c = app.conn_color(&t.conn).and_then(|c| hex(&c));
-            let l = Line::from(vec![Span::raw(icon), Span::raw(app.tab_label(t)), Span::raw(if dirty { " *" } else { "" })]);
+            let l = Line::from(vec![Span::raw(format!("{} ", tab_glyph(&t.kind))), Span::raw(app.tab_label(t)), Span::raw(if dirty { " *" } else { "" })]);
             let mut st = Style::default();
             if let Some(c) = c {
                 st = st.bg(c);
             }
             if i == shown {
                 st = st.add_modifier(Modifier::BOLD);
-                let bg = if focused { c.map(lighten).unwrap_or(SEL) } else { c.unwrap_or(SEL_BLUR) };
-                st = st.fg(on(bg)).bg(bg);
-                if !focused {
-                    st = st.add_modifier(Modifier::UNDERLINED);
+                if app.color.reverses_selection() {
+                    // 16 colors / NO_COLOR: a lighter hue of the Data Source color is often the same terminal color, so the
+                    // focused pane's tab is drawn in reverse video — its own color inverted, so a [PROD] tab stays red (SEL
+                    // when it has none) — and the others' underlined on their own color
+                    st = match (focused, c) {
+                        (true, Some(_)) => st.add_modifier(Modifier::REVERSED),
+                        (true, None) => st.bg(SEL),
+                        (false, _) => st.add_modifier(Modifier::UNDERLINED),
+                    };
+                } else {
+                    let bg = if focused { c.map(lighten).unwrap_or(SEL) } else { c.unwrap_or(SEL_BLUR) };
+                    st = st.fg(on(bg)).bg(bg);
+                    if !focused {
+                        st = st.add_modifier(Modifier::UNDERLINED);
+                    }
                 }
             }
             l.style(st)
@@ -347,12 +405,18 @@ fn draw_group(f: &mut Frame, app: &mut App, g: Option<usize>, area: Rect, focuse
 fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool) {
     // Unfocused panes are drawn like Tree focus (dimmed border·cursor)
     let focus = if focused { app.focus } else { Focus::Tree };
+    let color = app.color;
+    let align = app.align.clone();
     let ro = app.tabs.get(idx).and_then(|t| app.conn(&t.conn)).map(|c| c.config.read_only).unwrap_or(false);
     let pct = app.console_pct;
     // Rebindable commands are shown with their first key in the current keymap
     let k = |a: crate::app::Action| app.keys.keys(a).first().map(|s| disp(s)).unwrap_or_else(|| "—".into());
     use crate::app::Action as A;
     let (k_out, k_run, k_commit, k_rollback, k_cancel, k_submit) = (k(A::ToggleOutput), k(A::Execute), k(A::Commit), k(A::Rollback), k(A::Cancel), k(A::Submit));
+    // The value panel beside result and table grids, and its keys (v toggles it, ⌃w closes it from the grid)
+    let value_panel = app.value_panel;
+    let value_keys = app.keys.slot_keys(crate::keys::Slot { action: A::ValueEditor, pane: Scope::Grid }).first().map(|k| crate::keys::pane_disp(k));
+    let value_keys = format!(" {} / {} close ", value_keys.unwrap_or_else(|| "—".into()), k(A::CloseTab));
     let finding = focused && matches!(app.popup, Some(Popup::Find(_)));
     // How long run · load has been going (redrawn every 0.5s)
     let took = app.run_elapsed(idx).map(|d| crate::app::elapsed_text(d.as_millis() as u64));
@@ -414,7 +478,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                     .rev()
                     .take(res.height as usize)
                     .rev()
-                    .map(|(e, s)| Line::styled(s.clone(), Style::default().fg(if *e { DANGER } else if s.contains("> ") { ACCENT } else { Color::Gray })))
+                    .map(|(e, s)| Line::styled(s.clone(), Style::default().fg(if *e { DANGER } else if s.starts_with(WARNING) { WARN } else if s.contains("> ") { ACCENT } else { Color::Gray })))
                     .collect();
                 let p = Paragraph::new(if lines.is_empty() { vec![Line::styled(format!("Execute a statement ({k_run}) to see the output."), Style::default().fg(DIM))] } else { lines })
                     .wrap(Wrap { trim: false })
@@ -422,7 +486,11 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 f.render_widget(p, res);
             } else if let Some(g) = &mut c.grid {
                 let t = format!(" {} — {}{} rows ({k_out}: output) ", c.result_title, g.rows(), if g.result.truncated { "+" } else { "" });
-                g.render(f, res, t, focus == Focus::Grid);
+                let (res, side) = value_split(res, value_panel);
+                g.render(f, res, t, focus == Focus::Grid, color, &align);
+                if let Some(side) = side {
+                    g.render_value_panel(f, side, value_keys);
+                }
             }
             if let (Some((x, y)), Some(cmp)) = (caret, &c.complete) {
                 draw_completion(f, cmp, x, y);
@@ -460,18 +528,31 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 let pend = if g.dirty() { format!(" · {} pending ({k_submit} submit, {} revert)", g.edits.len() + g.deleted.len() + g.added, disp("⌃z")) } else { String::new() };
                 let rows = if tt.error.is_some() && !g.dirty() { "query failed — no rows".to_string() } else { format!("{}{} rows", g.rows(), if g.result.truncated { "+" } else { "" }) };
                 let t = format!(" {}.{} — {rows}{}{}{} ", tt.schema, tt.table, if tt.pk.is_empty() { " · no PK (read-only)" } else { "" }, if ro { " · read-only" } else { "" }, pend);
-                g.render(f, grid, t, focus == Focus::Grid);
+                let (grid, side) = value_split(grid, value_panel);
+                g.render(f, grid, t, focus == Focus::Grid, color, &align);
+                if let Some(side) = side {
+                    g.render_value_panel(f, side, value_keys);
+                }
             } else {
                 let msg = if tt.error.is_some() { String::new() } else { format!("Loading… {}", took.as_deref().unwrap_or("")) };
                 f.render_widget(Paragraph::new(msg).block(panel(format!(" {}.{} ", tt.schema, tt.table), focused)), grid);
             }
         }
         TabKind::Text(t) => {
+            // A table's DDL: v switches to the Structure view (sections as tables)
+            let view = match (t.has_structure(), t.structure_view) {
+                (true, true) => "Structure · v SQL · ",
+                (true, false) => "v Structure · ",
+                (false, _) => "",
+            };
+            let text = crate::structure::body(t, body.width.saturating_sub(2) as usize);
             // Don't scroll past the end (so the last line sits at the bottom)
-            let lines = t.text.lines().count() as u16;
-            t.scroll = t.scroll.min(lines.saturating_sub(body.height.saturating_sub(2)));
-            let p = Paragraph::new(t.text.as_str()).scroll((t.scroll, 0)).block(panel(format!(" {title} — {lines} lines · ↑↓ PgUp/PgDn wheel scroll · y copies all "), focus != Focus::Tree));
+            let lines = text.lines.len() as u16;
+            let scroll = t.scroll.min(lines.saturating_sub(body.height.saturating_sub(2)));
+            let copies = if t.has_structure() { "y copies the SQL" } else { "y copies all" };
+            let p = Paragraph::new(text).scroll((scroll, 0)).block(panel(format!(" {title} — {view}{lines} lines · ↑↓ PgUp/PgDn scroll · {copies} "), focus != Focus::Tree));
             f.render_widget(p, body);
+            t.scroll = scroll;
             if focused {
                 app.hits.text = body;
             }
@@ -484,13 +565,23 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             let text = d.info.as_ref().map(|i| i.help).unwrap_or("");
             f.render_widget(Paragraph::new(Line::from(vec![Span::styled(format!(" {}{state} ", d.info.as_ref().map(|i| i.title).unwrap_or("")), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)), Span::styled(text, Style::default().fg(DIM))])), help);
             let title = format!(" {db} — {} rows ", d.grid.as_ref().map(|g| g.rows()).unwrap_or(0));
+            // Where the grid is drawn (mouse hits): below the message when a refresh failed
+            let mut area = grid;
             match (&mut d.grid, &d.error) {
-                (_, Some(e)) => f.render_widget(Paragraph::new(e.as_str()).style(Style::default().fg(DANGER)).wrap(Wrap { trim: false }).block(panel(" Error ", focus == Focus::Grid)), grid),
-                (Some(g), None) => g.render(f, grid, title, focus == Focus::Grid),
+                (None, Some(e)) => f.render_widget(Paragraph::new(e.as_str()).style(Style::default().fg(DANGER)).wrap(Wrap { trim: false }).block(panel(" Error ", focus == Focus::Grid)), grid),
+                (Some(g), Some(e)) => {
+                    let [msg, rest] = Layout::vertical([Constraint::Length(3), Constraint::Min(3)]).areas(grid);
+                    let age = d.loaded.map(|t| format!(" from {} s ago", t.elapsed().as_secs())).unwrap_or_default();
+                    let text = format!(" Refresh failed, showing data{age}: {}", e.lines().next().unwrap_or(""));
+                    f.render_widget(Paragraph::new(text).style(Style::default().fg(WARN)).wrap(Wrap { trim: false }), msg);
+                    g.render(f, rest, title, focus == Focus::Grid, color, &align);
+                    area = rest;
+                }
+                (Some(g), None) => g.render(f, grid, title, focus == Focus::Grid, color, &align),
                 (None, None) => f.render_widget(Paragraph::new("Loading…").block(panel(title, focus == Focus::Grid)), grid),
             }
             if focused {
-                app.hits.results = grid;
+                app.hits.results = area;
             }
         }
         TabKind::Redis(r) => {
@@ -537,7 +628,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                     let ttl = if d.ttl >= 0 { format!("TTL {}s", d.ttl / 1000) } else { "no TTL".into() };
                     let title = format!(" {} {key} · {} · {} {} ", d.ty.to_uppercase(), ttl, d.length, if d.ty == "string" { "bytes" } else { "items" });
                     match &mut r.value {
-                        Some(g) => g.render(f, right, title, vf),
+                        Some(g) => g.render(f, right, title, vf, color, &align),
                         None => {
                             f.render_widget(Paragraph::new(r.text.as_deref().unwrap_or_default()).wrap(Wrap { trim: false }).block(panel(title, vf)), right);
                         }
@@ -551,6 +642,15 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
 /// Cursor (inverted cell) position in the editor
 /// Console cursor cell mark (invisible since underline isn't turned on)
 const CARET_MARK: Color = Color::Rgb(1, 2, 3);
+
+/// A grid's area and, with the value panel on and room for both, the panel's on its right (40%; the grid keeps at least 30 columns)
+fn value_split(area: Rect, on: bool) -> (Rect, Option<Rect>) {
+    if !on || area.width < 60 {
+        return (area, None);
+    }
+    let [grid, panel] = Layout::horizontal([Constraint::Min(30), Constraint::Percentage(40)]).areas(area);
+    (grid, Some(panel))
+}
 
 fn find_caret(f: &mut Frame, area: Rect) -> Option<(u16, u16)> {
     let buf = f.buffer_mut();
@@ -566,7 +666,7 @@ fn find_caret(f: &mut Frame, area: Rect) -> Option<(u16, u16)> {
 
 /// Autocomplete list: below the cursor (above if there is no room)
 fn draw_completion(f: &mut Frame, cmp: &crate::app::Completion, x: u16, y: u16) {
-    use crate::complete::ItemKind;
+    use qurry_core::complete::ItemKind;
     use unicode_width::UnicodeWidthStr;
     let screen = f.area();
     let shown = cmp.items.len().min(10);
@@ -606,9 +706,12 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
     let key = |a: A| app.keys.keys(a).first().map(|k| disp(k));
     let fixed = |k: &str, l: &'static str| Some((disp(k), l));
     let cmd = |a: A, l: &'static str| key(a).map(|k| (k, l));
+    // Pane keys (rebindable: F1 › Database Explorer keys / Data grid keys)
+    let pane = |pane: Scope, a: A, l: &'static str| app.keys.slot_keys(crate::keys::Slot { action: a, pane }).first().map(|k| (crate::keys::pane_disp(k), l));
+    let (tree, grid) = (|a, l| pane(Scope::Tree, a, l), |a, l| pane(Scope::Grid, a, l));
     let (ctx, glob) = match app.focus {
         Focus::Tree => (
-            vec![fixed("Enter", "open"), fixed("F4", "console"), fixed("s", "schemas"), fixed("/", "filter"), fixed("n", "new"), fixed("e", "edit"), fixed("w", "workspace"), fixed("r", "refresh"), cmd(A::Ddl, "DDL")],
+            vec![fixed("Enter", "open"), fixed("F4", "console"), tree(A::ManageSchemas, "schemas"), fixed("/", "filter"), tree(A::NewDataSource, "new"), tree(A::EditDataSource, "edit"), tree(A::WsMoveConn, "workspace"), tree(A::Refresh, "refresh"), cmd(A::Ddl, "DDL")],
             vec![cmd(A::SearchEverywhere, "search"), cmd(A::Palette, "actions"), cmd(A::Help, "keys")],
         ),
         Focus::Editor => (
@@ -618,10 +721,13 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
         Focus::Grid => (
             match app.tabs.get(app.active).map(|t| &t.kind) {
                 Some(TabKind::Table(_)) => vec![
-                    fixed("Enter", "edit"), fixed("a", "add"), fixed("d", "delete"), fixed("n", "NULL"), cmd(A::Submit, "submit"), fixed("⌃z", "revert"), fixed("w", "where"), fixed("o", "order"), fixed("s", "sort"), fixed("x", "export"),
+                    fixed("Enter", "edit"), grid(A::ValueEditor, "value"), grid(A::AddRow, "add"), grid(A::DeleteRow, "delete"), grid(A::SetNull, "NULL"), cmd(A::Submit, "submit"), grid(A::Revert, "revert"), fixed("w", "where"), fixed("o", "order"), fixed("s", "sort"), grid(A::ExportCsv, "export"),
                 ],
                 Some(TabKind::Redis(r)) if r.focus_value => vec![fixed("e", "edit"), fixed("a", "add"), fixed("x", "delete"), fixed("Esc", "keys")],
                 Some(TabKind::Redis(_)) => vec![fixed("Enter", "value"), fixed("/", "pattern"), fixed("a", "add"), fixed("D", "del key"), fixed("t", "TTL"), fixed("R", "rename"), fixed(":", "command")],
+                Some(TabKind::Text(t)) if t.structure_view => vec![fixed("v", "SQL"), fixed("r", "reload"), fixed("y", "copy"), fixed("Esc", "explorer")],
+                Some(TabKind::Text(t)) if t.has_structure() => vec![fixed("v", "structure"), fixed("r", "reload"), fixed("y", "copy"), fixed("Esc", "explorer")],
+                Some(TabKind::Text(t)) if t.ddl_of.is_some() => vec![fixed("r", "reload"), fixed("y", "copy"), fixed("Esc", "explorer")],
                 Some(TabKind::Text(_)) => vec![fixed("y", "copy"), fixed("Esc", "explorer")],
                 Some(TabKind::Dba(d)) => {
                     let has = |t: Option<bool>| d.info.as_ref().is_some_and(|i| i.actions.iter().any(|a| matches!(a, qurry_core::dba::Action::Kill { terminate, .. } if t.is_none_or(|t| *terminate == t))));
@@ -636,7 +742,7 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
                     v.extend([fixed("Enter", "query→console"), fixed("g", "SQL"), fixed("y", "copy")]);
                     v
                 }
-                _ => vec![fixed("s", "sort"), fixed("y", "copy"), fixed("x", "export"), fixed("Esc", "editor")],
+                _ => vec![fixed("s", "sort"), fixed("y", "copy"), grid(A::ValueEditor, "value"), grid(A::ExportCsv, "export"), fixed("Esc", "editor")],
             },
             vec![cmd(A::NewConsole, "console"), cmd(A::RecentTabs, "tabs"), cmd(A::SearchEverywhere, "search"), cmd(A::Palette, "actions")],
         ),
@@ -729,9 +835,43 @@ fn ssl_mode_note(mode: &str) -> &'static str {
     }
 }
 
+/// What an empty form field means (the GUI shows the same as a placeholder)
+fn empty_field_note(label: &str) -> Option<&'static str> {
+    match label {
+        "AWS profile" => Some("(default profile)"),
+        "AWS region" => Some("(the profile's region)"),
+        _ => None,
+    }
+}
+
+/// Rows the data source form keeps for its message, so a test result appearing doesn't resize it
+const FORM_MESSAGE_ROWS: u16 = 3;
+
+/// The data source form's message: the running test with its elapsed time and how to cancel it, or the last result
+fn conn_form_message(form: &crate::app::ConnForm) -> Vec<Line<'static>> {
+    let (ok, m) = match (&form.testing, &form.message) {
+        (Some((started, _)), _) => (true, format!("Testing… {}s · ⌃t / Esc cancel", started.elapsed().as_secs())),
+        (None, Some((ok, m))) => (*ok, disp(m)),
+        // A local Host with AWS SSM is the instance itself: a hint, not an error (a database on the instance is fine)
+        (None, None) => {
+            let hint = Some(form.value("Host")).filter(|_| form.value("Tunnel") == "aws ssm").and_then(qurry_shared::errors::ssm_local_host);
+            return hint.map(|h| vec![Line::styled(h, Style::default().fg(WARN))]).unwrap_or_default();
+        }
+    };
+    // One row per line of it (a TLS error is followed by its hint)
+    m.lines().map(|l| Line::styled(l.to_string(), Style::default().fg(if ok { OK } else { DANGER }))).collect()
+}
+
 fn draw_popup(f: &mut Frame, app: &mut App) {
     if matches!(app.popup, Some(Popup::Find(_))) {
         return crate::find::draw(f, app);
+    }
+    // A note stays over the popup it was opened from: draw that first
+    if let Some(Popup::Note { title, text, back }) = app.popup.take_if(|p| matches!(p, Popup::Note { .. })) {
+        app.popup = Some(*back);
+        draw_popup(f, app);
+        let back = Box::new(app.popup.take().expect("drawn"));
+        app.popup = Some(Popup::Note { title, text, back });
     }
     let area = f.area();
     match app.popup.as_mut().unwrap() {
@@ -743,16 +883,24 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             }
             lines.push(Line::raw(""));
             lines.push(section("Commands — ↑↓ select · Enter change · a add key · Del reset to default"));
-            let top = lines.len();
-            for (i, (a, _)) in crate::keys::DEFAULT_KEYS.iter().enumerate() {
-                let custom = app.keys.is_custom(*a);
-                let keys = if i == *sel && record.is_some() { "press a key… (Esc cancels)".to_string() } else { app.keys.label(*a) };
-                lines.push(key_row(&keys, crate::input::name_of(*a), 30, custom, i == *sel));
+            // Every command (with a default key first), then the keys that work only in the explorer or the grid
+            let mut sel_line = 0;
+            let mut pane = Scope::Global;
+            for (i, (s, _)) in crate::keys::COMMANDS.iter().enumerate() {
+                if s.pane != pane {
+                    pane = s.pane;
+                    lines.push(Line::raw(""));
+                    lines.push(section(if pane == Scope::Tree { "Database Explorer keys (when the explorer has focus)" } else { "Data grid keys (when a grid has focus)" }));
+                }
+                if i == *sel {
+                    sel_line = lines.len();
+                }
+                let keys = if i == *sel && record.is_some() { "press a key… (Esc cancels)".to_string() } else { app.keys.slot_label(*s) };
+                lines.push(key_row(&keys, crate::app::title(s.action), 30, app.keys.is_custom(*s), i == *sel));
             }
             lines.push(Line::raw(""));
             // Fixed key list: selectable continuing from the number after Commands (not rebindable)
-            let mut i = crate::keys::DEFAULT_KEYS.len();
-            let mut sel_line = top + *sel;
+            let mut i = crate::keys::COMMANDS.len();
             for (title, rows) in crate::help::HELP {
                 lines.push(section(disp(title)));
                 for (k, d) in *rows {
@@ -786,8 +934,10 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
         }
         // Drawn separately above
         Popup::Find(_) => {}
-        Popup::Message { title, text } => {
-            let r = centered(area, 90, (text.lines().count() as u16 + 4).min(30));
+        Popup::Message { title, text } | Popup::Note { title, text, .. } => {
+            // Sized by word wrap, so a long line isn't cut off in a narrow terminal
+            let lines: Vec<Line> = text.lines().map(|l| Line::raw(l.to_string())).collect();
+            let r = centered(area, 90, (wrapped_height(&lines, 90u16.min(area.width.saturating_sub(4)).saturating_sub(2)) + 4).min(30));
             let inner = popup(f, r, format!(" {} (Esc) ", disp(title)));
             f.render_widget(Paragraph::new(text.clone()).wrap(Wrap { trim: false }), inner);
         }
@@ -839,18 +989,22 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             let inner = popup(f, r, format!(" Manage Shown Schemas — {name} "));
             f.render_widget(Paragraph::new(lines), inner);
         }
-        Popup::Confirm { text, .. } => {
-            // Multiple lines (reason · statement · question). Red border for production DB · dangerous statements; "→ N rows" stands out more the larger it is
-            let danger = text.starts_with("Production") || text.ends_with("Run it anyway?");
-            let lines = confirm_lines(text);
-            // Long statements wrap → count wrapped lines for the height (so the y/n hint below isn't cut)
-            let w = 90u16.min(area.width.saturating_sub(4));
-            let r = centered(area, 90, wrapped_height(&lines, w.saturating_sub(2)) + 2);
-            let inner = if danger { popup_danger(f, r, " Confirm ") } else { popup(f, r, " Confirm ") };
-            f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
-        }
-        Popup::Input { title, input, complete, words, .. } => {
-            let r = centered(area, 90, 3);
+        Popup::Confirm { text, .. } => app.hits.confirm_unseen = !draw_confirm(f, area, " Confirm ", text, key_hints(&[("y / Enter", "yes"), ("n / Esc", "no")])),
+        // Like Confirm, but only y allows (no Enter): the popup opened on its own
+        Popup::AllowPlaintext { text, .. } => app.hits.confirm_unseen = !draw_confirm(f, area, " Allow Unencrypted ", text, key_hints(&[("y", "allow"), ("n / Esc", "cancel")])),
+        Popup::Input { title, body, input, complete, words, .. } => {
+            // The title goes on the border; the body (answers, reasons) in a box below, wrapped, so it isn't cut off
+            let body: Vec<Line> = body.lines().map(|l| Line::raw(disp(l))).collect();
+            let bh = if body.is_empty() { 0 } else { wrapped_height(&body, 90u16.min(area.width.saturating_sub(4)).saturating_sub(2)) + 2 };
+            let all = centered(area, 90, 3 + bh);
+            let r = Rect { height: all.height.min(3), ..all };
+            if bh > 0 {
+                // A plain border: only the input above reads as focused
+                let br = Rect { y: r.bottom(), height: all.height - r.height, ..all };
+                clear(f, br);
+                let b = panel("", false).style(Style::default().bg(POPUP_BG));
+                f.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }).block(b), br);
+            }
             clear(f, r);
             let hint = if words.is_empty() { "Enter / Esc" } else { "Enter / Esc · Tab complete" };
             input.set_block(panel(format!(" {} ({hint}) ", disp(title)), true));
@@ -890,7 +1044,12 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                 .take(h)
                 .map(|(i, it)| {
                     // Key labels inside names·hints follow the screen rules too ("Ctrl+Z (grid)" → ⌃z)
-                    ListItem::new(Row::new(disp(&it.label)).hint(format!(" {}", disp(&it.hint))).selected(i == sel, true).line())
+                    let mut row = Row::new(disp(&it.label));
+                    // Tab rows (Recent Tabs, Search Everywhere): the tab bar's glyph
+                    if let Some(t) = match it.action { crate::app::PAction::Tab(id) => app.tabs.iter().find(|t| t.id == id), _ => None } {
+                        row = row.lead(icon(&tab_glyph(&t.kind), Color::Gray));
+                    }
+                    ListItem::new(row.hint(format!(" {}", disp(&it.hint))).selected(i == sel, true).line())
                 })
                 .collect();
             p.sel = sel;
@@ -898,45 +1057,151 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             let hint = if p.title.starts_with("Go to") || p.title == "Search Everywhere" { format!(" Enter open · {ddl} DDL · Esc ") } else { " Enter · Esc ".into() };
             f.render_widget(List::new(items).block(panel(hint, true)), list);
         }
-        Popup::ConnForm(form) => {
-            let h = form.fields.len() as u16 + 6;
-            let r = centered(area, 72, h);
-            clear(f, r);
-            let mut lines: Vec<Line> = form
-                .fields
-                .iter()
-                .enumerate()
-                .map(|(i, fl)| {
-                    let shown = match fl.kind {
-                        FieldKind::Secret if fl.value != "<saved>" => "•".repeat(fl.value.chars().count()),
-                        FieldKind::Toggle => format!("[{}]", if fl.value == "on" { "x" } else { " " }),
-                        FieldKind::Choice(_) => format!("◂ {} ▸", fl.value),
-                        _ => fl.value.clone(),
-                    };
-                    let sel = i == form.sel;
-                    let mut spans = field_row(&fl.label, 17, shown + if sel && matches!(fl.kind, FieldKind::Text | FieldKind::Secret) { "▏" } else { "" }, sel);
-                    if fl.label == "Color" {
-                        let c = COLOR_PRESETS.iter().find(|p| p.0 == fl.value).and_then(|p| hex(p.1)).or_else(|| form.edit.as_ref().and_then(|e| e.color.as_deref()).filter(|_| fl.value == "custom").and_then(hex));
-                        if let Some(c) = c {
-                            spans.push(Span::raw(" "));
-                            spans.push(swatch(c));
-                        }
-                    }
-                    if fl.label == "SSL mode" {
-                        spans.push(Span::styled(format!("  {}", ssl_mode_note(&fl.value)), Style::default().fg(DIM)));
-                    }
-                    Line::from(spans)
-                })
-                .collect();
-            lines.push(Line::raw(""));
-            if let Some((ok, m)) = &form.message {
-                lines.push(Line::styled(disp(m), Style::default().fg(if *ok { OK } else { DANGER })));
+        Popup::ConnForm(form) => draw_conn_form(f, area, form),
+    }
+}
+
+/// Confirm: multiple lines (reason · statement · question). Red border for production DB · dangerous statements; "→ N rows" stands out more the larger it is.
+/// In a window too short for all of it, the popup takes the whole height; the first line, the questions (a line ending in "?" or
+/// with a "? " in it), the warnings (⚠) and the keys stay, and the details in between (statements, columns, tables) give way to a line saying how many are
+/// hidden and how many rows they would change. If even that doesn't fit, the keys line says to enlarge the window and the result is
+/// false: y / Enter don't answer a question that isn't on screen
+fn draw_confirm(f: &mut Frame, area: Rect, title: &'static str, text: &str, keys: Line<'static>) -> bool {
+    let danger = text.starts_with("Production")
+        || text.ends_with("Run it anyway?")
+        || text.ends_with("Run them anyway?")
+        || text.lines().any(|l| l.starts_with('⚠') && l.contains("Production"));
+    let mut lines = confirm_lines(text);
+    let last = lines.len() - 1;
+    lines[last] = keys;
+    let keep: Vec<bool> = lines
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            let t = l.to_string();
+            i == 0 || i == last || t.starts_with('⚠') || (!t.starts_with(' ') && (t.trim_end().ends_with('?') || t.contains("? ")))
+        })
+        .collect();
+    // Long statements wrap → count wrapped lines for the height (so the y/n hint below isn't cut)
+    let w = 90u16.min(area.width.saturating_sub(4)).saturating_sub(2);
+    let want = wrapped_height(&lines, w).saturating_add(2);
+    let mut r = centered(area, 90, want);
+    if r.height < want {
+        r = Rect { y: area.y, height: area.height, ..r };
+    }
+    let inner = if danger { popup_danger(f, r, title) } else { popup(f, r, title) };
+    let fits = wrapped_height(&cut_lines(lines.clone(), &keep, inner.width, inner.height), inner.width) <= inner.height;
+    if !fits {
+        let mut l = key_hints(&[("n / Esc", "no")]);
+        l.spans.insert(0, Span::styled("Enlarge the window to answer · ", Style::default().fg(WARN)));
+        lines[last] = l;
+    }
+    let ask = lines.split_off(last);
+    let ah = wrapped_height(&ask, inner.width).min(inner.height);
+    let [body, bottom] = Layout::vertical([Constraint::Min(0), Constraint::Length(ah)]).areas(inner);
+    f.render_widget(Paragraph::new(cut_lines(lines, &keep[..last], body.width, body.height)).wrap(Wrap { trim: false }), body);
+    f.render_widget(Paragraph::new(ask).wrap(Wrap { trim: false }), bottom);
+    fits
+}
+
+/// Data Source form. Only the chosen Tunnel's fields show. The size stays the same whatever the Tunnel and the message (a test
+/// starting or failing doesn't move the form). The message and key hints stay at the bottom; when the window is too short for
+/// every field, the fields scroll to keep the focused one in view and the bottom border says which field it is
+fn draw_conn_form(f: &mut Frame, area: Rect, form: &crate::app::ConnForm) {
+    let full_hint = Line::styled(disp("↑↓/Tab move · type to edit · Space/←→ toggle · ⌃t test · ⌃s / Enter save · Esc cancel"), Style::default().fg(DIM));
+    let w = 72.min(area.width.saturating_sub(4)).saturating_sub(2);
+    let r = centered(area, 72, form.max_visible() as u16 + 1 + FORM_MESSAGE_ROWS + wrapped_height(std::slice::from_ref(&full_hint), w) + 2);
+    clear(f, r);
+    let vis = form.visible();
+    let fields: Vec<Line> = vis
+        .iter()
+        .map(|&i| (i, &form.fields[i]))
+        .map(|(i, fl)| {
+            let shown = match fl.kind {
+                FieldKind::Secret if fl.value != "<saved>" => "•".repeat(fl.value.chars().count()),
+                FieldKind::Toggle => format!("[{}]", if fl.value == "on" { "x" } else { " " }),
+                FieldKind::Choice(_) => format!("◂ {} ▸", fl.value),
+                _ => fl.value.clone(),
+            };
+            let sel = i == form.sel;
+            let mut spans = field_row(fl.label, 17, shown + if sel && matches!(fl.kind, FieldKind::Text | FieldKind::Secret) { "▏" } else { "" }, sel);
+            if fl.label == "Color" {
+                let c = COLOR_PRESETS.iter().find(|p| p.0 == fl.value).and_then(|p| hex(p.1)).or_else(|| form.edit.as_ref().and_then(|e| e.color.as_deref()).filter(|_| fl.value == "custom").and_then(hex));
+                if let Some(c) = c {
+                    spans.push(Span::raw(" "));
+                    spans.push(swatch(c));
+                }
             }
-            lines.push(Line::styled(disp("↑↓/Tab move · type to edit · Space/←→ toggle · ⌃t test · ⌃s / Enter save · Esc cancel"), Style::default().fg(DIM)));
-            let t = if form.edit.is_some() { " Data Source Properties " } else { " New Data Source " };
-            f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(panel(t, true)), r);
+            if fl.label == "SSL mode" {
+                spans.push(Span::styled(format!("  {}", ssl_mode_note(&fl.value)), Style::default().fg(DIM)));
+            }
+            if let Some(note) = empty_field_note(fl.label).filter(|_| fl.value.trim().is_empty()) {
+                spans.push(Span::styled(format!("  {note}"), Style::default().fg(DIM)));
+            }
+            Line::from(spans)
+        })
+        .collect();
+    let msg = conn_form_message(form);
+    let t = if form.edit.is_some() { " Data Source Properties " } else { " New Data Source " };
+    let block = panel(t, true);
+    let inner = block.inner(r);
+    let width = inner.width;
+    let fields_h = wrapped_height(&fields, width);
+    let msg_h = wrapped_height(&msg, width);
+    // The message keeps FORM_MESSAGE_ROWS even when empty, so a result appearing doesn't move the fields
+    let msg_want = msg_h.max(FORM_MESSAGE_ROWS);
+    // The full key hints when everything fits, else the short ones. The hints keep their row, then at least the focused field;
+    // the message gets what is left (cut with ⋯) and the blank line above it only when there's room
+    let mut hint = full_hint;
+    if fields_h + 1 + msg_want + wrapped_height(std::slice::from_ref(&hint), width) > inner.height {
+        hint = Line::styled(disp("⌃t test · ⌃s save · Esc cancel"), Style::default().fg(DIM));
+    }
+    let hint_h = wrapped_height(std::slice::from_ref(&hint), width).min(inner.height);
+    let room = inner.height - hint_h;
+    let gap = u16::from(fields_h + 1 + msg_want <= room);
+    let rows = msg_want.min(room.saturating_sub(gap + 1));
+    let mut foot = vec![Line::raw(""); gap as usize];
+    if msg_h <= rows {
+        foot.extend(msg);
+    } else if rows > 0 {
+        // Too long for the rows left: one text, cut with ⋯ (the first line's color)
+        let st = msg.first().map_or_else(Style::default, |l| l.style);
+        let text: Vec<String> = msg.iter().map(|l| l.to_string()).collect();
+        foot.push(Line::styled(fit_rows(&text.join(" "), width, rows), st));
+    }
+    let used = wrapped_height(&foot, width);
+    foot.extend(std::iter::repeat_n(Line::raw(""), (gap + rows).saturating_sub(used) as usize));
+    foot.push(hint);
+    let fh = wrapped_height(&foot, width).min(inner.height);
+    let [body, foot_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(fh)]).areas(inner);
+    // Scroll in wrapped rows: the focused field's last row at the bottom when it would be below
+    let pos = vis.iter().position(|&i| i == form.sel).unwrap_or(0);
+    let rows_to = |n: usize| wrapped_height(&fields[..n], body.width);
+    let top = rows_to(pos + 1).saturating_sub(body.height);
+    let block = if rows_to(fields.len()) > body.height { block.title_bottom(Line::from(format!(" {}/{} ", pos + 1, fields.len())).right_aligned()) } else { block };
+    f.render_widget(block, r);
+    f.render_widget(Paragraph::new(fields).wrap(Wrap { trim: false }).scroll((top, 0)), body);
+    f.render_widget(Paragraph::new(foot).wrap(Wrap { trim: false }), foot_area);
+}
+
+/// Text cut to `rows` wrapped rows of `width`, ending in "⋯" when cut
+fn fit_rows(text: &str, width: u16, rows: u16) -> String {
+    let fits = |s: &str| wrapped_height(&[Line::raw(s.to_string())], width) <= rows;
+    if fits(text) {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    // The longest prefix (in chars) that fits with "⋯" after it
+    let (mut lo, mut hi) = (0, chars.len());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if fits(&format!("{}⋯", chars[..mid].iter().collect::<String>())) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
         }
     }
+    format!("{}⋯", chars[..lo].iter().collect::<String>().trim_end())
 }
 
 #[cfg(test)]
@@ -965,6 +1230,209 @@ mod tests {
         assert_eq!(ssl_mode_note("require"), "encrypt, no certificate check");
         assert_eq!(ssl_mode_note("verify-ca"), "checks the certificate's CA");
         assert_eq!(ssl_mode_note("verify-full"), "checks the CA and host name");
+    }
+
+    /// Below the minimum size: a message with the size needed instead of a broken layout (narrower than 24 cells used to panic)
+    #[tokio::test]
+    async fn too_small_terminal_says_so_instead_of_drawing_the_layout() {
+        let mut h = crate::testkit::Harness::new().await;
+        h.table_tab("payment", &["id", "amount"], &[&["1", "2"]], &["id"]);
+        let s = h.screen(39, 10);
+        assert!(s.contains("Terminal too small") && s.contains("39×10 — needs 40×10"), "{s}");
+        assert!(s.contains("Make the window larger · ⌃q quits"), "{s}");
+        h.app.conn_form(None);
+        assert!(!h.screen(39, 10).contains("New Data Source"));
+        assert!(h.screen(80, 9).contains("80×9 — needs 40×10"));
+        // At the minimum the layout is back
+        assert!(!h.screen(40, 10).contains("too small"));
+        // Tiny screens don't panic; the message wraps
+        for (w, ht) in [(1, 1), (10, 3), (23, 24), (24, 5)] {
+            h.screen(w, ht);
+        }
+        assert!(h.screen(20, 6).contains("Terminal too"));
+    }
+
+    /// Under the message keys and clicks would act on a screen that isn't drawn: only the quit key works
+    #[tokio::test]
+    async fn too_small_terminal_ignores_keys_and_clicks_but_quit() {
+        let mut h = crate::testkit::Harness::new().await;
+        let cols: Vec<String> = (0..30).map(|i| format!("column_{i}")).collect();
+        let cols: Vec<&str> = cols.iter().map(|c| c.as_str()).collect();
+        h.table_tab("wide", &cols, &[&["1"; 30]], &["column_0"]);
+        h.app.focus = crate::app::Focus::Grid;
+        h.screen(120, 30);
+        let g = h.app.grid_mut().unwrap();
+        g.col_off = 10;
+        let bar = g.hbar;
+        assert!(bar.width > 0);
+        // A confirm that arrives (or was open) when the window shrinks
+        h.app.popup = Some(crate::app::Popup::Confirm { opened: None, text: "Run it?".into(), on_yes: Box::new(|a| a.status = "ran".into()) });
+        assert!(h.screen(39, 30).contains("Terminal too small"));
+        h.key("Enter");
+        h.key("y");
+        h.paste("x");
+        assert!(h.app.popup.is_some() && h.app.status != "ran");
+        h.app.popup = None;
+        h.mouse("down", bar.x + 6, bar.y);
+        h.key("Right");
+        let g = h.app.grid_mut().unwrap();
+        assert_eq!((g.col_off, g.col), (10, 0), "the hidden grid doesn't scroll or move");
+        assert!(h.app.drag.is_none());
+        // Back at full size keys act again; the quit key works under the message too
+        h.screen(120, 30);
+        h.key("Right");
+        assert_eq!(h.app.grid_mut().unwrap().col, 1);
+        h.screen(39, 30);
+        h.key("Ctrl+Q");
+        assert!(h.app.quit);
+    }
+
+    /// Under the message the quit key never answers or replaces a question nobody can see: the message says what waits
+    #[tokio::test]
+    async fn too_small_terminal_quit_waits_for_open_questions() {
+        let mut h = crate::testkit::Harness::new().await;
+        // A half-filled form stays as it is
+        h.app.conn_form(None);
+        h.type_str("half");
+        let s = h.screen(100, 9);
+        assert!(s.contains("A dialog is open: make the window larger to answer it") && !s.contains("quits"), "{s}");
+        h.key("Ctrl+Q");
+        assert!(!h.app.quit);
+        assert!(matches!(&h.app.popup, Some(Popup::ConnForm(f)) if f.fields[0].value == "half"));
+        h.app.popup = None;
+        // Uncommitted changes: no hidden 'Roll them back and quit?' that y or Enter could answer
+        h.console_tab();
+        if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.get_mut(h.app.active).map(|t| &mut t.kind) {
+            c.in_tx = true;
+        }
+        let s = h.screen(100, 9);
+        assert!(s.contains("1 console(s) have uncommitted changes: make the window larger to quit"), "{s}");
+        for k in ["Ctrl+Q", "y", "Enter"] {
+            h.key(k);
+        }
+        assert!(!h.app.quit && h.app.popup.is_none());
+        // Larger again: the quit key asks, and the answer is seen
+        h.screen(120, 30);
+        h.key("Ctrl+Q");
+        assert!(h.screen(120, 30).contains("Roll them back and quit?"));
+        h.key("y");
+        assert!(h.app.quit);
+    }
+
+    /// The Data Source form at 80×24 and at the minimum size: the focused field scrolls into view and the key hints stay
+    #[tokio::test]
+    async fn conn_form_scrolls_to_the_focused_field_in_small_windows() {
+        let mut h = crate::testkit::Harness::new().await;
+        h.app.conn_form(None);
+        let n = match &h.app.popup {
+            Some(Popup::ConnForm(f)) => f.visible().len(),
+            _ => unreachable!(),
+        };
+        // Everything fits at 120×40: no position shown
+        assert!(!h.screen(120, 40).contains(&format!("1/{n}")));
+        for _ in 1..n {
+            h.key("Tab");
+        }
+        for (w, ht) in [(80, 24), MIN_SIZE] {
+            let s = h.screen(w, ht);
+            assert!(s.contains("Redis nodes ▏"), "{w}×{ht}\n{s}");
+            assert!(s.contains("Esc cancel") && s.contains(&format!("{n}/{n}")), "{w}×{ht}\n{s}");
+        }
+        for _ in 1..n {
+            h.key("Up");
+        }
+        for (w, ht) in [(80, 24), MIN_SIZE] {
+            let s = h.screen(w, ht);
+            assert!(s.contains("Name ▏") && s.contains("Esc cancel"), "{w}×{ht}\n{s}");
+        }
+    }
+
+    /// The Production confirm at the minimum size keeps its question and keys; the statements that don't fit are counted
+    /// with the rows they would change, so y is never an answer to an unseen row count
+    #[tokio::test]
+    async fn production_confirm_keeps_its_question_in_small_windows() {
+        let mut h = crate::testkit::Harness::new().await;
+        let text = "Production data source \"[PROD] kr\" — this changes data:\n\n  update payment set amount = 0 where id = 4\n     → 1 row\n  delete from payment where created_at < now() - interval '1 year'\n     → 12,408 rows\n\nRun it?";
+        h.app.popup = Some(Popup::Confirm { opened: None, text: text.into(), on_yes: Box::new(|a| a.status = "ran".into()) });
+        let s = h.screen(80, 24);
+        assert!(s.contains("12,408 rows") && s.contains("Run it?") && !s.contains("hidden"), "{s}");
+        // Every row that would change shows, as its own line or in the hidden total
+        for (w, ht) in [MIN_SIZE, (60, 12)] {
+            let s = h.screen(w, ht);
+            assert!(s.contains("Production data") && s.contains("Run it?") && s.contains("y / Enter"), "{w}×{ht}\n{s}");
+            let all = s.contains("→ 1 row") && s.contains("→ 12,408 rows");
+            assert!(all || s.contains("12,409 rows") || (s.contains("→ 1 row") && s.contains("hidden · 12,408 rows")), "{w}×{ht}\n{s}");
+        }
+        // One statement at the minimum size: its row count shows
+        let one = "Production data source \"[PROD] kr\" — this changes data:\n\n  update payment set amount = 0 where id = 4\n     → 1 row\n\nRun it?";
+        h.app.popup = Some(Popup::Confirm { opened: None, text: one.into(), on_yes: Box::new(|a| a.status = "ran".into()) });
+        let (w, ht) = MIN_SIZE;
+        let s = h.screen(w, ht);
+        assert!(s.contains("1 row") && s.contains("Run it?"), "{s}");
+        h.key("y");
+        assert_eq!(h.app.status, "ran");
+    }
+
+    /// A confirm of 1000 statements draws in a few ms, cut or not (each line wraps once per frame)
+    #[tokio::test]
+    async fn big_confirm_draws_fast() {
+        let mut h = crate::testkit::Harness::new().await;
+        let lines: Vec<String> = (0..1000).map(|i| format!("  update payment set amount = 0 where id = {i}\n     → 1 row")).collect();
+        let text = format!("Production data source \"[PROD] kr\" — this changes data:\n\n{}\n\nRun it?", lines.join("\n"));
+        h.app.popup = Some(Popup::Confirm { opened: None, text, on_yes: Box::new(|_| {}) });
+        for (w, ht) in [MIN_SIZE, (80, 24)] {
+            let t = std::time::Instant::now();
+            let s = h.screen(w, ht);
+            assert!(s.contains("lines hidden · ") && s.contains("Run it?"), "{w}×{ht}\n{s}");
+            // Debug build, other tests running: generous; the quadratic cut took seconds here
+            assert!(t.elapsed() < std::time::Duration::from_millis(500), "{w}×{ht}: {:?}", t.elapsed());
+        }
+    }
+
+    /// A long test message at the minimum size: the key hints and the focused field stay, the message ends in ⋯
+    #[tokio::test]
+    async fn conn_form_keeps_its_hints_under_a_long_message() {
+        let mut h = crate::testkit::Harness::new().await;
+        h.app.conn_form(None);
+        let Some(Popup::ConnForm(f)) = &mut h.app.popup else { unreachable!() };
+        f.message = Some((false, "Connection failed: could not connect to server: Connection refused. Is the server running on host db.example.com and accepting TCP/IP connections on port 5432?".into()));
+        let (w, ht) = MIN_SIZE;
+        let s = h.screen(w, ht);
+        assert!(s.contains("Esc cancel") && s.contains("Name ▏") && s.contains("Connection failed") && s.contains('⋯'), "{s}");
+        let s = h.screen(80, 24);
+        assert!(s.contains("Esc cancel") && s.contains("port 5432?") && !s.contains('⋯'), "{s}");
+    }
+
+    /// The startup color notices fit an 80-column status line whole, with a gap before the key hints
+    #[tokio::test]
+    async fn color_notices_fit_80_columns() {
+        let mut h = crate::testkit::Harness::new().await;
+        for mode in [crate::theme::ColorMode::Ansi16, crate::theme::ColorMode::NoColor] {
+            let n = mode.notice().unwrap();
+            h.app.status = n.into();
+            let s = h.screen(80, 24);
+            assert!(s.lines().last().unwrap().contains(&format!("{n} ")), "{s}");
+        }
+    }
+
+    /// NO_COLOR: text selected in the editor stays visible (tui-textarea draws it on a color, which NO_COLOR drops)
+    #[tokio::test]
+    async fn no_color_shows_selected_text_in_reverse_video() {
+        let mut h = crate::testkit::Harness::new().await;
+        h.console_with("select 12345 from t", 0, 0);
+        h.app.focus = crate::app::Focus::Editor;
+        for _ in 0..6 {
+            h.key("Shift+Right");
+        }
+        assert_eq!(h.console_cursor().1.as_deref(), Some("select"));
+        h.app.color = crate::theme::ColorMode::NoColor;
+        let buf = h.buffer(100, 30);
+        let (x, y) = (0..30).find_map(|y| {
+            let l: String = (0..100).map(|x| buf[(x, y)].symbol()).collect();
+            l.find("select 12345").map(|i| (l[..i].chars().count() as u16, y))
+        }).unwrap();
+        assert!((0..6).all(|i| buf[(x + i, y)].modifier.contains(Modifier::REVERSED)), "selected text is reversed");
+        assert!(!buf[(x + 7, y)].modifier.contains(Modifier::REVERSED), "the rest isn't");
     }
 
     #[test]

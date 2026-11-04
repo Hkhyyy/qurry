@@ -1,10 +1,8 @@
 //! Qurry TUI — DataGrip-style terminal client. Uses the same engine (qurry-core)·same Data Sources as the GUI.
 mod app;
-mod complete;
 mod datatools;
 mod designer;
 mod dba;
-mod exec;
 mod find;
 mod grid;
 mod help;
@@ -19,9 +17,15 @@ mod workspace;
 mod testkit;
 #[cfg(test)]
 mod kit_snapshots;
+#[cfg(test)]
+mod parity_dump;
+#[cfg(test)]
+mod tests;
 mod scope;
+mod structure;
 mod selfupdate;
 mod snippets;
+mod theme;
 mod transfer;
 mod tree;
 mod ui;
@@ -38,7 +42,7 @@ async fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!(
-            "qurry-tui {} [--config-dir DIR] [--no-update-check]\n       qurry-tui --update     download and install the latest release\n\nTerminal UI for Qurry (PostgreSQL / MySQL / Redis). Shares data sources with the Qurry app.\nA new version is checked every hour (off: --no-update-check or QURRY_NO_UPDATE_CHECK=1).\nPress F1 inside for this keymap.\n{}",
+            "qurry-tui {} [--config-dir DIR] [--no-update-check]\n       qurry-tui --update     download and install the newest release of the update channel (stable, or beta: ⌃k › Update Channel…)\n\nTerminal UI for Qurry (PostgreSQL / MySQL / Redis). Shares data sources with the Qurry app.\nA new version is checked every hour (off: --no-update-check or QURRY_NO_UPDATE_CHECK=1).\nColors follow the terminal: COLORTERM=truecolor for 24-bit, TERM=…-256color for 256, otherwise 16; NO_COLOR=1 turns them off.\nPress F1 inside for this keymap.\n{}",
             env!("CARGO_PKG_VERSION"),
             help::text()
         );
@@ -48,12 +52,12 @@ async fn main() -> std::io::Result<()> {
         println!("qurry-tui {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
-    if args.iter().any(|a| a == "--update") {
-        return selfupdate::run_update().await;
-    }
-    let check_update = !args.iter().any(|a| a == "--no-update-check") && !qurry_core::update::disabled() && !selfupdate::current_exe().is_some_and(|e| selfupdate::from_source(&e));
     let dir = args.iter().position(|a| a == "--config-dir").and_then(|i| args.get(i + 1)).map(std::path::PathBuf::from);
     let cfg_dir = dir.clone().unwrap_or_else(qurry_core::config_dir);
+    if args.iter().any(|a| a == "--update") {
+        return selfupdate::run_update(qurry_core::store::Store::new(cfg_dir).update_channel()).await;
+    }
+    let check_update = !args.iter().any(|a| a == "--no-update-check") && !qurry_core::update::disabled() && !selfupdate::current_exe().is_some_and(|e| selfupdate::from_source(&e));
     // Keep engine logs from breaking the screen
     qurry_core::QUIET.store(true, std::sync::atomic::Ordering::Relaxed);
     let state = Arc::new(qurry_core::open_state(dir).map_err(|e| std::io::Error::other(e.to_string()))?);
@@ -71,12 +75,17 @@ async fn main() -> std::io::Result<()> {
         let _ = restore();
         hook(p);
     }));
+    // AWS SSM tunnels run the aws CLI in its own process group: stop it on a panic, a closed terminal (SIGHUP) or SIGTERM too
+    qurry_core::ssm::kill_on_panic();
+    tokio::spawn(qurry_core::ssm::kill_on_signals());
     let mut term = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     let res = run(&mut term, state, check_update.then_some(cfg_dir)).await;
     if enhanced {
         let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
     }
     restore()?;
+    // Background tasks may still hold the state (and its tunnels), and exec() drops nothing
+    qurry_core::ssm::kill_all();
     // After an in-app update, relaunch the new executable with the same arguments
     if res? {
         let exe = selfupdate::current_exe().ok_or_else(|| std::io::Error::other("cannot find this executable"))?;
@@ -95,15 +104,21 @@ async fn run(term: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: Arc<
     // Return value = whether to relaunch (in-app update finished)
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<app::Apply>();
     let mut app = app::App::new(state.clone(), tx.clone());
+    app.color = theme::ColorMode::from_env();
+    if let Some(n) = app.color.notice() {
+        app.status = n.into();
+    }
     // Check for a new version (at launch + hourly, in the background). Failures are silently ignored
     if let Some(dir) = update_dir {
         let tx = tx.clone();
+        let st = state.clone();
         tokio::spawn(async move {
             loop {
-                if let Ok(Some(r)) = qurry_core::update::check(&dir, env!("CARGO_PKG_VERSION"), false).await {
-                    if tx.send(Box::new(move |a: &mut app::App| a.update = Some(r.version))).is_err() {
-                        break;
-                    }
+                // No update clears the ⬆ badge too: the GUI may have switched the shared channel since the last check
+                if let Ok(r) = qurry_core::update::check(&dir, env!("CARGO_PKG_VERSION"), st.store.update_channel(), false).await
+                    && tx.send(Box::new(move |a: &mut app::App| a.update = r.map(|r| r.version))).is_err()
+                {
+                    break;
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(60 * 60)).await;
             }

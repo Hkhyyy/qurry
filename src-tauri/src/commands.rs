@@ -1,5 +1,5 @@
 //! Tauri commands called from the frontend. The actual logic lives in qurry_core::app::AppState.
-use crate::app::{AppState, ConnectionView, ImportResult};
+use crate::app::{AppState, BatchResult, ConnectionView, ImportResult};
 use crate::db::QueryResult;
 use crate::error::AppResult;
 use crate::store::ConnectionConfig;
@@ -24,6 +24,12 @@ pub async fn set_connection_color(state: State<'_, AppState>, id: String, color:
     state.set_connection_color(id, color).await
 }
 
+/// From a TLS connect error: turn on "Allow unencrypted connection" for the source (password kept) and reconnect next time
+#[tauri::command]
+pub async fn allow_plaintext(state: State<'_, AppState>, id: String) -> AppResult<ConnectionConfig> {
+    state.allow_plaintext(id).await
+}
+
 /// Explorer menu: change only the shown databases and schemas
 #[tauri::command]
 pub async fn set_connection_scope(state: State<'_, AppState>, id: String, scope: qurry_core::store::Scope) -> AppResult<ConnectionConfig> {
@@ -37,14 +43,38 @@ pub async fn delete_connection(state: State<'_, AppState>, id: String) -> AppRes
 
 /// Only tests the connection without saving. If `password` is None, the saved password is used.
 #[tauri::command]
-pub async fn test_connection(state: State<'_, AppState>, config: ConnectionConfig, password: Option<String>, ssh_secret: Option<String>) -> AppResult<String> {
-    state.test_connection(config, password, ssh_secret).await
+pub async fn test_connection(state: State<'_, AppState>, config: ConnectionConfig, password: Option<String>, ssh_secret: Option<String>, test_id: Option<String>) -> AppResult<String> {
+    cancellable_test(test_id, state.test_connection(config, password, ssh_secret)).await
 }
 
 /// Test Connection on the SSH/SSL tab: checks the SSH login only.
 #[tauri::command]
-pub async fn test_ssh(state: State<'_, AppState>, config: ConnectionConfig, ssh_secret: Option<String>) -> AppResult<String> {
-    state.test_ssh(config, ssh_secret).await
+pub async fn test_ssh(state: State<'_, AppState>, config: ConnectionConfig, ssh_secret: Option<String>, test_id: Option<String>) -> AppResult<String> {
+    cancellable_test(test_id, state.test_ssh(config, ssh_secret)).await
+}
+
+/// Running Test Connections by the dialog's test id, for cancel_test
+static TESTS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Notify>>>> = std::sync::LazyLock::new(Default::default);
+
+/// Runs a test that cancel_test can stop: the test is dropped, and with it its SSH / AWS SSM tunnel (an SSM session can take 30s)
+async fn cancellable_test(id: Option<String>, test: impl std::future::Future<Output = AppResult<String>>) -> AppResult<String> {
+    let Some(id) = id else { return test.await };
+    let cancel = std::sync::Arc::new(tokio::sync::Notify::new());
+    TESTS.lock().unwrap().insert(id.clone(), cancel.clone());
+    let r = tokio::select! {
+        r = test => r,
+        _ = cancel.notified() => Err(crate::error::AppError::Msg("Test cancelled".into())),
+    };
+    TESTS.lock().unwrap().remove(&id);
+    r
+}
+
+#[tauri::command]
+pub fn cancel_test(test_id: String) {
+    if let Some(c) = TESTS.lock().unwrap().remove(&test_id) {
+        // notify_one keeps the wake-up if the test isn't waiting yet
+        c.notify_one();
+    }
 }
 
 #[tauri::command]
@@ -80,12 +110,12 @@ pub async fn set_tx_mode(state: State<'_, AppState>, id: String, tab_id: String,
 }
 
 #[tauri::command]
-pub async fn commit_tx(state: State<'_, AppState>, tab_id: String) -> AppResult<()> {
+pub async fn commit_tx(state: State<'_, AppState>, tab_id: String) -> AppResult<Option<String>> {
     state.commit_tx(tab_id).await
 }
 
 #[tauri::command]
-pub async fn rollback_tx(state: State<'_, AppState>, tab_id: String) -> AppResult<()> {
+pub async fn rollback_tx(state: State<'_, AppState>, tab_id: String) -> AppResult<Option<String>> {
     state.rollback_tx(tab_id).await
 }
 
@@ -96,7 +126,7 @@ pub async fn close_session(state: State<'_, AppState>, tab_id: String) -> AppRes
 
 #[tauri::command]
 /// exact_one = saving a table edit (roll everything back unless UPDATE/DELETE hits exactly 1 row)
-pub async fn execute_batch(state: State<'_, AppState>, id: String, statements: Vec<String>, exact_one: Option<bool>) -> AppResult<u64> {
+pub async fn execute_batch(state: State<'_, AppState>, id: String, statements: Vec<String>, exact_one: Option<bool>) -> AppResult<BatchResult> {
     state.execute_batch(id, statements, exact_one.unwrap_or(false)).await
 }
 
@@ -432,7 +462,7 @@ pub async fn fake_preview(state: State<'_, AppState>, id: String, schema: String
 
 /// Insert test data in one transaction. Number of rows inserted
 #[tauri::command]
-pub async fn fake_fill(state: State<'_, AppState>, id: String, schema: String, table: String, rows: usize) -> AppResult<u64> {
+pub async fn fake_fill(state: State<'_, AppState>, id: String, schema: String, table: String, rows: usize) -> AppResult<BatchResult> {
     state.fake_fill(id, schema, table, rows).await
 }
 
@@ -474,7 +504,7 @@ pub fn rename_ddl(state: State<'_, AppState>, id: String, what: String, schema: 
 
 /// Run the generated DDL (PG: one transaction)
 #[tauri::command]
-pub async fn run_ddl(state: State<'_, AppState>, id: String, statements: Vec<String>) -> AppResult<()> {
+pub async fn run_ddl(state: State<'_, AppState>, id: String, statements: Vec<String>) -> AppResult<Option<String>> {
     state.run_ddl(id, statements).await
 }
 
@@ -525,6 +555,12 @@ pub fn dba_action_sql(state: State<'_, AppState>, id: String, template: String, 
     Ok(qurry_core::dba::action_sql(state.kind_of(&id)?, &template, &row))
 }
 
+/// Explain in Console for a Slow Queries row (normalized statements: generic plan on PG16+, otherwise a note to fill in the parameters)
+#[tauri::command]
+pub async fn dba_explain(state: State<'_, AppState>, id: String, query: String) -> AppResult<String> {
+    state.dba_explain(id, query).await
+}
+
 #[tauri::command]
 pub fn cancel_job(state: State<'_, AppState>, job: String) {
     state.cancel_job(&job)
@@ -553,6 +589,12 @@ pub async fn import_data(app: tauri::AppHandle, state: State<'_, AppState>, pend
     let r = state.import(id, spec, job).await;
     ticker.abort();
     r
+}
+
+/// Explain Analyse: [before, after] the statement, so it is rolled back without committing what is pending
+#[tauri::command]
+pub async fn explain_wrap(state: State<'_, AppState>, id: String, tab_id: String) -> AppResult<[&'static str; 2]> {
+    state.explain_wrap(id, tab_id).await
 }
 
 /// Whether the tab session has uncommitted changes (shows Commit/Roll back after an error)
@@ -591,6 +633,11 @@ pub async fn list_objects(state: State<'_, AppState>, id: String, schema: String
 #[tauri::command]
 pub async fn table_detail(state: State<'_, AppState>, id: String, schema: String, table: String) -> AppResult<crate::meta::TableDetail> {
     state.table_detail(id, schema, table).await
+}
+
+#[tauri::command]
+pub async fn table_structure(state: State<'_, AppState>, id: String, schema: String, table: String) -> AppResult<crate::meta::TableStructure> {
+    state.table_structure(id, schema, table).await
 }
 
 /// pgvector: SQL that finds rows close to this row
@@ -658,6 +705,8 @@ pub fn save_keymap(state: State<'_, AppState>, map: crate::store::Keymap) -> App
 #[serde(rename_all = "camelCase")]
 pub struct UpdateInfo {
     current: String,
+    /// The update channel the check was for (messages name it, as in the TUI)
+    channel: qurry_core::update::Channel,
     latest: Option<qurry_core::update::Release>,
     /// Changes in versions newer than the current one (newest first)
     changes: Vec<qurry_core::update::VersionNotes>,
@@ -667,22 +716,65 @@ pub struct UpdateInfo {
 #[tauri::command]
 pub async fn check_update(state: State<'_, AppState>, force: bool) -> AppResult<UpdateInfo> {
     let current = env!("CARGO_PKG_VERSION").to_string();
-    if (cfg!(debug_assertions) && !force) || (qurry_core::update::disabled() && !force) {
-        return Ok(UpdateInfo { current, latest: None, changes: vec![] });
+    let channel = state.store.update_channel();
+    if (cfg!(debug_assertions) || qurry_core::update::disabled()) && !force {
+        // Not checked, which is no answer: an error, so the automatic check (it ignores errors) keeps what Check Now found
+        return Err(crate::error::AppError::Msg("Update checks are off".into()));
     }
-    let latest = qurry_core::update::check(&state.store.dir(), &current, force).await?;
+    let latest = qurry_core::update::check(&state.store.dir(), &current, channel, force).await?;
     let changes = latest.as_ref().map(|r| r.changes_since(&current)).unwrap_or_default();
-    Ok(UpdateInfo { current, latest, changes })
+    Ok(UpdateInfo { current, channel, latest, changes })
+}
+
+/// Update channel (Settings › Appearance › Updates; the TUI shares it)
+#[tauri::command]
+pub fn update_channel(state: State<'_, AppState>) -> qurry_core::update::Channel {
+    state.store.update_channel()
+}
+
+/// Grid alignment overrides per value class (Settings › Appearance › Alignment; the TUI reads them)
+#[tauri::command]
+pub fn grid_align(state: State<'_, AppState>) -> qurry_core::format::Alignments {
+    state.store.grid_align()
+}
+
+#[tauri::command]
+pub fn set_grid_align(state: State<'_, AppState>, class: qurry_core::format::ValueClass, align: qurry_core::format::Align) -> AppResult<qurry_core::format::Alignments> {
+    state.store.set_grid_align(class, align)
+}
+
+/// Saves the channel, then answers what it offers from the saved check only (no request): None if nothing was checked yet or checks are off
+#[tauri::command]
+pub fn set_update_channel(state: State<'_, AppState>, channel: qurry_core::update::Channel) -> AppResult<Option<UpdateInfo>> {
+    state.store.set_update_channel(channel)?;
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    if cfg!(debug_assertions) || qurry_core::update::disabled() {
+        return Ok(None);
+    }
+    Ok(qurry_core::update::cached(&state.store.dir(), &current, channel).map(|latest| {
+        let changes = latest.as_ref().map(|r| r.changes_since(&current)).unwrap_or_default();
+        UpdateInfo { current, channel, latest, changes }
+    }))
 }
 
 /// Download the new version, replace the running app, and restart (Tauri updater: the release's latest.json + signature check).
+/// The release is the one the update channel offers, through its own latest.json (releases/latest in tauri.conf.json skips betas).
 /// Sends (bytes received, total bytes) via "update-progress" while downloading
 #[tauri::command]
-pub async fn install_update(app: tauri::AppHandle) -> AppResult<()> {
+pub async fn install_update(app: tauri::AppHandle, state: State<'_, AppState>) -> AppResult<()> {
     use tauri::Emitter;
     use tauri_plugin_updater::UpdaterExt;
     let msg = |e: tauri_plugin_updater::Error| crate::error::AppError::Msg(format!("Update failed: {e}"));
-    let Some(update) = app.updater().map_err(msg)?.check().await.map_err(msg)? else {
+    let current = env!("CARGO_PKG_VERSION");
+    // Fresh, as the TUI: an hour-old answer may name a beta whose release was pruned since (its latest.json is gone)
+    let Some(release) = qurry_core::update::check(&state.store.dir(), current, state.store.update_channel(), true).await? else {
+        return Err(crate::error::AppError::Msg(format!("No update to install: {current} is the latest version on this update channel (Settings › Appearance › Updates).")));
+    };
+    // Built from the version, not taken from the API response: only this repo's release files
+    let endpoint = format!("https://github.com/{}/releases/download/v{}/latest.json", qurry_core::update::REPO, release.version)
+        .parse()
+        .map_err(|_| crate::error::AppError::Msg(format!("Update failed: bad release version {:?}", release.version)))?;
+    let Some(update) = app.updater_builder().endpoints(vec![endpoint]).map_err(msg)?.build().map_err(msg)?.check().await.map_err(msg)? else {
         return Err(crate::error::AppError::Msg("No update to install (the latest release has no in-app update for this platform — download it from the Release Page).".into()));
     };
     let mut got = 0u64;
@@ -697,6 +789,8 @@ pub async fn install_update(app: tauri::AppHandle) -> AppResult<()> {
         )
         .await
         .map_err(msg)?;
+    // restart() exits without RunEvent::Exit: stop the AWS SSM tunnels' aws CLI first
+    qurry_core::ssm::kill_all();
     // macOS: keep the app folder and replace only Contents (so a pinned Dock icon keeps pointing at this app).
     // If that fails (e.g. a location needing admin rights), fall back to the updater's default install
     #[cfg(target_os = "macos")]
@@ -727,6 +821,31 @@ mod ipc_tests {
             headers: Default::default(),
             invoke_key: INVOKE_KEY.to_string(),
         }
+    }
+
+    /// cancel_test drops the running test (and so its tunnel) and the dialog gets "Test cancelled"
+    #[tokio::test]
+    async fn a_test_can_be_cancelled() {
+        struct Dropped(std::sync::Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let guard = Dropped(dropped.clone());
+        let test = async move {
+            let _guard = guard;
+            std::future::pending::<AppResult<String>>().await
+        };
+        let run = tokio::spawn(cancellable_test(Some("t1".into()), test));
+        tokio::task::yield_now().await;
+        cancel_test("t1".into());
+        let e = run.await.unwrap().unwrap_err().to_string();
+        assert_eq!(e, "Test cancelled");
+        assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(TESTS.lock().unwrap().is_empty());
+        cancel_test("unknown".into());
     }
 
     /// Call commands with the same JSON the frontend sends.

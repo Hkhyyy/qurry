@@ -1,8 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ConnectionView, dbVisible, meta, targetId } from "../lib/api";
 import { fuzzyScore } from "../lib/fuzzy";
-import { ColumnIcon, RoutineIcon, SchemaIcon, SequenceIcon, TableIcon, ViewIcon } from "../ui/icons";
+import { useSharedReady } from "../lib/shared";
+import { objectIcon } from "../ui/icons";
+import { bindable, cmd, eventSpec, hit } from "../lib/shortcuts";
 import { Kbd, KeyHints, List, ListGroup, ListItem, Notice, Overlay, Popover, Row, SearchField, Select, Spacer, Tabs } from "../ui";
+
+/** First key of a command, for the key hints */
+const sk = (id: string) => cmd(id).shortcut;
 
 export type SeTab = "all" | "database" | "files" | "symbols" | "actions";
 const TABS: { id: SeTab; label: string }[] = [
@@ -28,12 +33,14 @@ export interface DbObject {
 }
 export interface FileItem {
   key: string;
-  icon: string;
+  icon: React.ReactNode;
   title: string;
   hint: string;
   open: boolean;
 }
 export interface ActionItem {
+  /** The keymap command it runs (lib/shortcuts.ts): its key runs it too */
+  id?: string;
   name: string;
   shortcut?: string;
   group?: string;
@@ -91,18 +98,6 @@ function columnsOf(c: ConnectionView, db: string): Promise<DbObject[]> {
     );
   return colCache.get(key)!;
 }
-
-const KIND_ICON: Record<string, React.ReactNode> = {
-  schema: <SchemaIcon />,
-  table: <TableIcon />,
-  foreign: <TableIcon />,
-  view: <ViewIcon />,
-  matview: <ViewIcon />,
-  sequence: <SequenceIcon />,
-  function: <RoutineIcon />,
-  procedure: <RoutineIcon />,
-  column: <ColumnIcon />,
-};
 
 interface Props {
   initialTab: SeTab;
@@ -187,6 +182,8 @@ export function SearchEverywhere(p: Props) {
   }, [scopeKey, tab]);
 
   const connName = (id: string) => p.conns.find((c) => c.id === id)?.name ?? "";
+  // Scores come from the WASM module (unranked substring matches until it has loaded): rank again once it has
+  const wasmReady = useSharedReady();
   const rows: Row[] = useMemo(() => {
     const query = q.trim();
     const out: Row[] = [];
@@ -222,7 +219,7 @@ export function SearchEverywhere(p: Props) {
     }
     // Same score: shorter name first (stable sort)
     return out.sort((a, b) => b.score - a.score).slice(0, 200);
-  }, [q, tab, objects, columns, p.files, p.actions]);
+  }, [q, tab, objects, columns, p.files, p.actions, wasmReady]);
 
   useEffect(() => setSel(0), [q, tab]);
   useEffect(() => {
@@ -259,15 +256,19 @@ export function SearchEverywhere(p: Props) {
     };
     if (e.key === "Escape") return go(p.onClose);
     if (e.key === "Tab") return go(() => setTab(TABS[(TABS.findIndex((t) => t.id === tab) + (e.shiftKey ? -1 : 1) + TABS.length) % TABS.length].id));
+    // The Database Explorer's keys act on the selected result (DataGrip): Edit Data, Go to DDL, Quick Documentation, Select In.
+    // Only command shortcuts (a modifier or an F key): Backspace, Delete, Insert or ⇧↩ given to a tree command stay the search field's
+    const s = eventSpec(e);
+    const spec = s && bindable(s) ? s : null;
+    if (hit(spec, "tree.editData")) return go(() => run(cur, "data"));
+    if (hit(spec, "tree.ddl")) return go(() => run(cur, "ddl"));
+    if (hit(spec, "selectIn")) return go(() => run(cur, "select"));
+    if (hit(spec, "tree.quickDoc")) return go(() => run(cur, "doc"));
     if (e.key === "ArrowDown" && !mod) return go(() => setSel((x) => Math.min(x + 1, rows.length - 1)));
     if (e.key === "ArrowUp") return go(() => setSel((x) => Math.max(x - 1, 0)));
     if (e.key === "PageDown") return go(() => setSel((x) => Math.min(x + 10, rows.length - 1)));
     if (e.key === "PageUp") return go(() => setSel((x) => Math.max(x - 10, 0)));
-    if (e.key === "ArrowDown" && mod) return go(() => run(cur, "data"));
     if (e.key === "Enter") return go(() => run(cur));
-    if (mod && e.key.toLowerCase() === "b") return go(() => run(cur, "ddl"));
-    if (e.key === "F1" && e.altKey) return go(() => run(cur, "select"));
-    if (e.key === "F1") return go(() => run(cur, "doc"));
   };
 
   /** One result row: icon · name · description ……… right side (shortcut · location) */
@@ -276,11 +277,12 @@ export function SearchEverywhere(p: Props) {
     if (r.t === "action") return <ListItem {...common} icon="⚡" title={r.a.name} dim={r.a.disabled} hint={r.a.group} trailing={r.a.shortcut && <Kbd>{r.a.shortcut}</Kbd>} />;
     if (r.t === "file") return <ListItem {...common} icon={r.f.icon} title={r.f.title} dim={!r.f.open} trailing={r.f.hint} />;
     const o = r.o;
+    const Icon = objectIcon(o.kind);
     const where = o.kind === "schema" ? "" : o.kind === "column" ? `${o.schema}.${o.table}` : o.schema;
     return (
       <ListItem
         {...common}
-        icon={KIND_ICON[o.kind] ?? "•"}
+        icon={Icon ? <Icon /> : "•"}
         title={o.name}
         hint={o.kind === "column" ? `${o.type} · ${where}` : where}
         trailing={
@@ -320,7 +322,7 @@ export function SearchEverywhere(p: Props) {
           <KeyHints
             items={
               cur?.t === "db"
-                ? [["↩", "Select in Database Explorer"], ["⌘↓", "Edit Data"], ["⌘b", "Go to DDL"], ["F1", "Quick Documentation"], ["⇥", "Next tab"]]
+                ? ([["↩", "Select in Database Explorer"], [sk("tree.editData"), "Edit Data"], [sk("tree.ddl"), "Go to DDL"], [sk("tree.quickDoc"), "Quick Documentation"], ["⇥", "Next tab"]].filter((h): h is [string, string] => !!h[0]))
                 : [["↩", "Open"], ["⇥", "Next tab"], ["⇧⇧", "Search Everywhere"]]
             }
           />

@@ -5,6 +5,7 @@ use crate::migrate::Flow;
 use crate::transfer::thousands;
 use crate::tree::NodeKind;
 use qurry_core::sql;
+use qurry_shared::chart;
 
 impl App {
     /// The table picked in the explorer, otherwise the open table tab: (target, Data Source id, schema, table)
@@ -52,26 +53,18 @@ impl App {
                     Err(e) => return a.status = format!("Generate test data: {e}"),
                 };
                 a.status.clear();
-                let width = pv.plan.iter().map(|c| c.name.chars().count()).max().unwrap_or(0);
-                let mut text = format!("Insert {} generated rows into {where_}?\n\n", thousands(n as u64));
-                for c in &pv.plan {
-                    text.push_str(&format!("  {:width$}  {}\n", c.name, c.how));
-                }
-                for w in &pv.warnings {
-                    text.push_str(&format!("\n⚠ {w}"));
-                }
-                if let Some(name) = a.production_name(&conn) {
-                    text.push_str(&format!("\n⚠ Production data source \"{name}\""));
-                }
-                text.push_str("\n\nAll rows go in one transaction — if one fails, nothing is inserted.");
-                a.popup = Some(Popup::Confirm {
-                    text,
+                a.open_after_notices(Popup::Confirm {
+                    opened: None,
+                    text: fake_confirm_text(n, &where_, &pv.plan, &pv.warnings, a.production_name(&conn).as_deref()),
                     on_yes: Box::new(move |a| {
                         let st = a.state.clone();
                         a.status = format!("Inserting {} rows…", thousands(n as u64));
                         a.spawn(async move { st.fake_fill(target, schema, table, n).await }, move |a, r| {
                             a.status = match r {
-                                Ok(k) => format!("{} test row(s) inserted into {where_}", thousands(k)),
+                                Ok(k) => {
+                                    a.warn_ran(k.warning);
+                                    format!("{} test row(s) inserted into {where_}", thousands(k.rows))
+                                }
                                 Err(e) => format!("Generate test data: {e}"),
                             };
                         });
@@ -143,27 +136,18 @@ impl App {
             };
             a.status.clear();
             let name = a.conn(&into).map(|c| c.config.name.clone()).unwrap_or_default();
-            let width = plan.tables.iter().map(|t| t.table.chars().count()).max().unwrap_or(0);
-            let mut text = format!("Copy {} rows into \"{name}\"? (in insert order)\n\n", thousands(plan.total as u64));
-            for t in &plan.tables {
-                let masked: Vec<&str> = t.masked.iter().map(|m| m.column.as_str()).collect();
-                text.push_str(&format!("  {:width$}  {:>7}  {}{}\n", t.table, thousands(t.rows as u64), t.reason, if masked.is_empty() { String::new() } else { format!(" · masked: {}", masked.join(", ")) }));
-            }
-            if let Some(p) = a.production_name(&into) {
-                text.push_str(&format!("\n⚠ Production data source \"{p}\"\n"));
-            }
-            if !spec.mask {
-                text.push_str("\n⚠ Personal data is copied as is (not masked)\n");
-            }
-            text.push_str("\nOne transaction; rows already there are skipped. The tables must exist in the target.");
-            a.popup = Some(Popup::Confirm {
-                text,
+            a.open_after_notices(Popup::Confirm {
+                opened: None,
+                text: copy_confirm_text(&plan, &name, a.production_name(&into).as_deref(), spec.mask),
                 on_yes: Box::new(move |a| {
                     let st = a.state.clone();
                     a.status = "Copying…".into();
                     a.spawn(async move { st.subset_copy(source, spec, into).await }, move |a, r| {
                         a.status = match r {
-                            Ok(p) => format!("{} related row(s) copied into {name} (rows already there were skipped)", thousands(p.total as u64)),
+                            Ok(p) => {
+                                a.warn_ran(p.warning);
+                                format!("{} related row(s) copied into {name} (rows already there were skipped)", thousands(p.total as u64))
+                            }
                             Err(e) => format!("Copy related rows: {e}"),
                         };
                     });
@@ -185,59 +169,59 @@ impl App {
     }
 }
 
-const NUM_TYPES: &[&str] = &["INT2", "INT4", "INT8", "INT", "INTEGER", "SMALLINT", "BIGINT", "TINYINT", "MEDIUMINT", "NUMERIC", "DECIMAL", "FLOAT", "FLOAT4", "FLOAT8", "DOUBLE", "REAL", "MONEY"];
-
-fn num(v: &serde_json::Value) -> Option<f64> {
-    match v {
-        serde_json::Value::Number(n) => n.as_f64(),
-        serde_json::Value::String(s) => s.replace(',', "").parse().ok().filter(|f: &f64| f.is_finite()),
-        _ => None,
+/// Generate data's confirm: the question, how each column is filled, the warnings
+pub(crate) fn fake_confirm_text(n: usize, where_: &str, plan: &[qurry_core::fake::ColPlan], warnings: &[String], production: Option<&str>) -> String {
+    let width = plan.iter().map(|c| c.name.chars().count()).max().unwrap_or(0);
+    let mut text = format!("Insert {} generated rows into {where_}?\n\n", thousands(n as u64));
+    for c in plan {
+        text.push_str(&format!("  {:width$}  {}\n", c.name, c.how));
     }
+    for w in warnings {
+        text.push_str(&format!("\n⚠ {w}"));
+    }
+    if let Some(name) = production {
+        text.push_str(&format!("\n⚠ Production data source \"{name}\""));
+    }
+    text.push_str("\n\nAll rows go in one transaction — if one fails, nothing is inserted.");
+    text
 }
 
-/// Result → (title, horizontal bar text). Same X values are merged. Date · numeric X in order, others largest first. Up to rows lines
+/// Copy related rows' confirm: the question, the tables in insert order, the warnings
+pub(crate) fn copy_confirm_text(plan: &qurry_core::subset::SubsetPlan, name: &str, production: Option<&str>, mask: bool) -> String {
+    let width = plan.tables.iter().map(|t| t.table.chars().count()).max().unwrap_or(0);
+    let mut text = format!("Copy {} rows into \"{name}\"? (in insert order)\n\n", thousands(plan.total as u64));
+    for t in &plan.tables {
+        let masked: Vec<&str> = t.masked.iter().map(|m| m.column.as_str()).collect();
+        text.push_str(&format!("  {:width$}  {:>7}  {}{}\n", t.table, thousands(t.rows as u64), t.reason, if masked.is_empty() { String::new() } else { format!(" · masked: {}", masked.join(", ")) }));
+    }
+    if let Some(p) = production {
+        text.push_str(&format!("\n⚠ Production data source \"{p}\"\n"));
+    }
+    if !mask {
+        text.push_str("\n⚠ Personal data is copied as is (not masked)\n");
+    }
+    text.push_str("\nOne transaction; rows already there are skipped. The tables must exist in the target.");
+    text
+}
+
+/// The result's columns as qurry_shared::chart reads them
+pub(crate) fn chart_columns(r: &qurry_core::db::QueryResult) -> Vec<chart::Column> {
+    r.columns.iter().map(|c| chart::Column { name: c.name.clone(), type_name: c.type_name.clone() }).collect()
+}
+
+/// Result → (title, horizontal bar text): qurry_shared::chart with the TUI's options (axes, sums, date · numeric X in order,
+/// others largest first), drawn here as up to `rows` lines
 pub(crate) fn bar_chart(r: &qurry_core::db::QueryResult, width: usize, rows: usize) -> Option<(String, String)> {
     if r.rows.is_empty() || r.columns.is_empty() {
         return None;
     }
-    let is_num = |i: usize| {
-        let t = r.columns[i].type_name.to_uppercase();
-        if NUM_TYPES.iter().any(|n| t.starts_with(n)) || t.contains("UNSIGNED") {
-            return true;
-        }
-        let vals: Vec<&serde_json::Value> = r.rows.iter().take(200).map(|x| &x[i]).filter(|v| !v.is_null()).collect();
-        !vals.is_empty() && !t.contains("DATE") && !t.contains("TIME") && vals.iter().filter(|v| num(v).is_some()).count() * 10 >= vals.len() * 9
-    };
-    let nums: Vec<usize> = (0..r.columns.len()).filter(|&i| is_num(i)).collect();
-    let x = (0..r.columns.len()).find(|i| !nums.contains(i)).unwrap_or(0);
-    let id = |i: &usize| {
-        let n = r.columns[*i].name.to_lowercase();
-        n == "id" || n.ends_with("_id") || n.starts_with("id_")
-    };
-    let cands: Vec<usize> = nums.iter().copied().filter(|&i| i != x).collect();
-    let y = cands.iter().copied().find(|i| !id(i)).or(cands.first().copied());
-    let mut order: Vec<String> = vec![];
-    let mut sums: std::collections::HashMap<String, f64> = Default::default();
-    for row in &r.rows {
-        let k = if row[x].is_null() { "(null)".to_string() } else { crate::grid::cell_text(&row[x]) };
-        let add = y.map(|y| num(&row[y]).unwrap_or(0.0)).unwrap_or(1.0);
-        if !sums.contains_key(&k) {
-            order.push(k.clone());
-        }
-        *sums.entry(k).or_default() += add;
-    }
-    let xt = r.columns[x].type_name.to_uppercase();
-    if xt.contains("DATE") || xt.contains("TIME") {
-        order.sort();
-    } else if nums.contains(&x) {
-        order.sort_by(|a, b| num(&serde_json::Value::String(a.clone())).unwrap_or(0.0).total_cmp(&num(&serde_json::Value::String(b.clone())).unwrap_or(0.0)));
-    } else {
-        order.sort_by(|a, b| sums[b].total_cmp(&sums[a]));
-    }
-    let total = order.len();
-    order.truncate(rows);
-    let max = order.iter().map(|k| sums[k].abs()).fold(0.0, f64::max);
-    let lw = order.iter().map(|k| k.chars().count()).max().unwrap_or(0).min(24);
+    let cols = chart_columns(r);
+    let axes = chart::default_axes(&cols, &r.rows, chart::Options::TUI);
+    let data = chart::aggregate(&cols, &r.rows, axes.x, &[axes.y], chart::Options::TUI);
+    let total = data.labels.len();
+    let bars: Vec<(String, f64)> = data.labels.iter().map(|k| crate::grid::cell_text(&serde_json::Value::String(k.clone()))).zip(data.series[0].values.iter().copied()).take(rows).collect();
+    let max = bars.iter().map(|(_, v)| v.abs()).fold(0.0, f64::max);
+    let lw = bars.iter().map(|(k, _)| k.chars().count()).max().unwrap_or(0).min(24);
     // 1,234 · 1,234.50
     let fmt = |v: f64| {
         let s = if v.fract() == 0.0 { format!("{:.0}", v.abs()) } else { format!("{:.2}", v.abs()) };
@@ -246,18 +230,17 @@ pub(crate) fn bar_chart(r: &qurry_core::db::QueryResult, width: usize, rows: usi
         format!("{}{int}{frac}", if v < 0.0 { "-" } else { "" })
     };
     let mut text = String::new();
-    for k in &order {
-        let v = sums[k];
+    for (k, v) in &bars {
         let n = if max > 0.0 { ((v.abs() / max) * width as f64).round() as usize } else { 0 };
         let label: String = if k.chars().count() > lw { format!("{}…", k.chars().take(lw - 1).collect::<String>()) } else { k.clone() };
-        text.push_str(&format!("{label:<lw$} │{} {}\n", "█".repeat(n.max(usize::from(v != 0.0))), fmt(v)));
+        text.push_str(&format!("{label:<lw$} │{} {}\n", "█".repeat(n.max(usize::from(*v != 0.0))), fmt(*v)));
     }
     if total > rows {
         text.push_str(&format!("\n… {} more", total - rows));
     }
-    let what = y.map(|y| format!("sum of {}", r.columns[y].name)).unwrap_or_else(|| "row count".into());
+    let what = axes.y.map(|y| format!("sum of {}", r.columns[y].name)).unwrap_or_else(|| "row count".into());
     let loaded = if r.truncated { format!(" · first {} loaded rows", r.rows.len()) } else { String::new() };
-    Some((format!("Chart: {what} by {}{loaded}", r.columns[x].name), text.trim_end().to_string()))
+    Some((format!("Chart: {what} by {}{loaded}", r.columns[axes.x].name), text.trim_end().to_string()))
 }
 
 #[cfg(test)]
@@ -275,6 +258,7 @@ mod tests {
             elapsed_ms: 0,
             has_result_set: true,
             in_transaction: false,
+            warning: None,
         };
         let (title, text) = super::bar_chart(&r, 10, 30).unwrap();
         assert_eq!(title, "Chart: sum of amount by region");
@@ -283,5 +267,27 @@ mod tests {
         assert!(text.ends_with("… 2 more"), "{text}");
         let big = QueryResult { rows: vec![vec![json!(1), json!("a"), json!("1332117.67")]], ..r };
         assert!(super::bar_chart(&big, 10, 30).unwrap().1.ends_with("1,332,117.67"));
+        // A float X reads as the grid next to it shows the cell (2.0, not JavaScript's 2)
+        let floats = QueryResult {
+            columns: [("price", "FLOAT8"), ("n", "INT8")].iter().map(|(n, t)| ColumnInfo { name: n.to_string(), type_name: t.to_string() }).collect(),
+            rows: vec![vec![json!(2.5), json!(3)], vec![json!(2.0), json!(1)]],
+            ..big
+        };
+        assert_eq!(super::bar_chart(&floats, 10, 30).unwrap().1, "2.0 │███ 1\n2.5 │██████████ 3");
+    }
+
+    #[test]
+    fn bar_chart_needs_rows() {
+        let r = QueryResult {
+            columns: [("a", "text"), ("b", "int4")].iter().map(|(n, t)| ColumnInfo { name: n.to_string(), type_name: t.to_string() }).collect(),
+            rows: vec![],
+            rows_affected: 0,
+            truncated: false,
+            elapsed_ms: 0,
+            has_result_set: true,
+            in_transaction: false,
+            warning: None,
+        };
+        assert!(super::bar_chart(&r, 10, 30).is_none());
     }
 }

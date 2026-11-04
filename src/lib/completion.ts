@@ -1,24 +1,46 @@
+// Console autocompletion for Monaco. The rules are qurry_shared::complete (the TUI's too), run through the shared WASM:
+// one CompletionIndex per connection, built when its metadata loads, then asked synchronously on every request.
+// Only the value · json key lookups (meta.hints) wait on the backend.
 import { monaco } from "./monaco";
 import { CompletionTable, meta } from "./api";
-import { hintable, hintContext, hintInsert, pairsForKeys } from "./valueHint";
+import { initShared, shared, type Completion, type CompletionItem, type Suggestions } from "./shared";
 
-/** Console (model URI) → connection id, connection id → metadata cache */
-const modelConn = new Map<string, string>();
-const cache = new Map<string, Promise<CompletionTable[]>>();
+/** Console (model URI) → its target (connection id, or "dataSource::db") and database name; target → its completion index */
+const modelConn = new Map<string, { connId: string; db: string }>();
+const cache = new Map<string, Promise<Completion>>();
+let noConnection: Completion | undefined;
+let warned = false;
 
-/** Load metadata. Not cached on failure (retried on the next request) */
-function load(connId: string): Promise<CompletionTable[]> {
-  const p: Promise<CompletionTable[]> = meta.completion(connId).catch(() => {
-    if (cache.get(connId) === p) cache.delete(connId);
-    return [];
-  });
+/** Load metadata and index it. Metadata that fails to load is not cached (retried on the next request) */
+function load(connId: string): Promise<Completion> {
+  const p: Promise<Completion> = meta
+    .completion(connId)
+    .catch(() => {
+      if (cache.get(connId) === p) cache.delete(connId);
+      return [] as CompletionTable[];
+    })
+    .then(async (tables) => {
+      await initShared();
+      return shared().completionIndex(tables);
+    });
   cache.set(connId, p);
   return p;
 }
 
-export function bindModel(uri: string, connId: string) {
-  modelConn.set(uri, connId);
-  if (!cache.has(connId)) load(connId);
+/** db: the console's database by name, also when it is the connection's default (the target then has no "::db"), as the TUI passes it */
+export function bindModel(uri: string, connId: string, db: string) {
+  modelConn.set(uri, { connId, db });
+  // A module that can't load is said when the console opens, not later as a dialog that takes the keys being typed
+  if (!cache.has(connId)) load(connId).catch(warnOff);
+}
+
+/** Once, where a GUI user sees it (the devtools console is not) */
+function warnOff(e: unknown) {
+  if (warned) return;
+  warned = true;
+  const why = `Console autocomplete runs in Qurry's shared WebAssembly module, which did not load (${e}). Restart Qurry; if it keeps happening, the system WebView is too old: update macOS (Safari) or webkit2gtk.`;
+  console.error(why);
+  void import("./dialogs").then((d) => d.notice(why, "Autocomplete is off"));
 }
 /** When the editor closes */
 export function unbindModel(uri: string) {
@@ -26,114 +48,82 @@ export function unbindModel(uri: string) {
 }
 /** Drop metadata of a Data Source (and its DBs): on disconnect and refresh */
 export function invalidateCompletion(connId: string) {
-  for (const k of [...cache.keys()]) if (k === connId || k.startsWith(connId + "::")) cache.delete(k);
-}
-
-const KEYWORDS = (
-  "select from where and or not in is null like ilike between exists group by order having limit offset join left right inner outer full cross on using as " +
-  "distinct union all intersect except insert into values update set delete returning create table view index alter drop truncate with case when then else end " +
-  "asc desc nulls first last count sum avg min max coalesce now current_date current_timestamp interval true false begin commit rollback explain analyze"
-).split(" ");
-
-function tablesInStatement(text: string) {
-  const out: { ref: string; alias?: string }[] = [];
-  const re = /\b(?:from|join|update|into)\s+((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))?)(?:\s+(?:as\s+)?(\w+))?/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) {
-    const alias = m[2] && !KEYWORDS.includes(m[2].toLowerCase()) ? m[2] : undefined;
-    out.push({ ref: m[1].replace(/"/g, ""), alias });
+  for (const [k, p] of [...cache]) {
+    if (k !== connId && !k.startsWith(connId + "::")) continue;
+    cache.delete(k);
+    // Free its WASM memory now: linear memory never shrinks, so waiting for GC raises the peak for good
+    p.then((c) => c.free(), () => {});
   }
-  return out;
 }
 
-function findTable(all: CompletionTable[], ref: string) {
-  const [a, b] = ref.toLowerCase().split(".");
-  return b ? all.find((t) => t.schema.toLowerCase() === a && t.name.toLowerCase() === b) : all.find((t) => t.name.toLowerCase() === a && t.schema === "public") ?? all.find((t) => t.name.toLowerCase() === a);
+async function indexFor(connId: string | undefined): Promise<Completion | undefined> {
+  try {
+    if (connId) return await (cache.get(connId) ?? load(connId));
+    await initShared();
+    return (noConnection ??= shared().completionIndex([]));
+  } catch (e) {
+    warnOff(e);
+    return undefined;
+  }
 }
+
+/** Order as the shared rules return it (Monaco sorts by sortText when nothing is typed) */
+const sortText = (i: number) => String(i).padStart(5, "0");
 
 for (const lang of ["pgsql", "mysql"]) {
+  const mysql = lang === "mysql";
   monaco.languages.registerCompletionItemProvider(lang, {
     // Value · json key suggestions: right away after a quote · after '->>' · in the space after '=' (not opened in other spaces or after '>')
     triggerCharacters: [".", "'", " ", ">"],
     async provideCompletionItems(model, position, context) {
-      const connId = modelConn.get(model.uri.toString());
-      const all = connId ? await (cache.get(connId) ?? load(connId)) : [];
+      const bound = modelConn.get(model.uri.toString());
+      const connId = bound?.connId;
+      const idx = await indexFor(connId);
+      if (!idx) return { suggestions: [] };
       const K = monaco.languages.CompletionItemKind;
       const quiet = context.triggerKind === monaco.languages.CompletionTriggerKind.TriggerCharacter && (context.triggerCharacter === " " || context.triggerCharacter === ">");
+      const text = model.getValue();
+      const caret = model.getOffsetAt(position);
+      const range = (s: Suggestions) => new monaco.Range(position.lineNumber, s.startColumn, position.lineNumber, s.endColumn);
+      // The tab's DB: in MySQL the schema is the DB, so its tables are inserted bare (complete.rs ignores it for PG)
+      const db = bound?.db ?? "";
 
       // Value · json key: where status = '… / data->>'… / reasons @> '…
-      const lineText = model.getLineContent(position.lineNumber);
-      const ctx = hintContext(lineText.slice(0, position.column - 1), lang === "mysql");
-      if (ctx && connId) {
-        const refs = tablesInStatement(model.getValue());
-        const named = ctx.ref ? refs.find((r) => r.alias?.toLowerCase() === ctx.ref!.toLowerCase()) ?? refs.find((r) => r.ref.split(".").pop()!.toLowerCase() === ctx.ref!.toLowerCase()) : undefined;
-        const cands = (named ? [named] : ctx.ref ? [] : refs).map((r) => findTable(all, r.ref)).filter((t): t is CompletionTable => !!t);
-        const t = cands.find((x) => x.columns.some(([c]) => c.toLowerCase() === ctx.column.toLowerCase()));
-        const col = t?.columns.find(([c]) => c.toLowerCase() === ctx.column.toLowerCase());
-        if (t && col && hintable(ctx, col[1])) {
-          const ask = (mode: "values" | "keys" | "pairs") => meta.hints(connId, { schema: t.schema, table: t.name, column: col[0], path: ctx.path, keys: mode === "keys", pairs: mode === "pairs" }).catch(() => []);
-          let hints = await ask(ctx.mode);
-          // json without keys (arrays of objects, etc.): instead of keys, frequent key: value pairs as @> conditions (replacing the operator too)
-          const asPairs = ctx.mode === "keys" && !hints.length && lang !== "mysql";
-          if (asPairs) hints = await ask("pairs");
-          const rows = (n: number) => `${n.toLocaleString("en-US")} row${n === 1 ? "" : "s"}`;
-          const range = new monaco.Range(position.lineNumber, position.column - ctx.typed.length, position.lineNumber, position.column);
-          // If the quote was auto-closed, replace it as well
-          const closing = lineText[position.column - 1] === "'" ? 1 : 0;
-          const opRange = new monaco.Range(position.lineNumber, position.column - (ctx.op?.length ?? 0), position.lineNumber, position.column + closing);
-          return {
-            suggestions: hints.map((h, i) => ({
-              label: { label: asPairs ? `@> '${h.value}'` : h.value, description: `${rows(h.count)}${ctx.mode === "keys" && !asPairs ? " · key" : ""}` },
-              kind: ctx.mode === "keys" && !asPairs ? K.Property : K.Value,
-              insertText: asPairs ? pairsForKeys(h.value, ctx) : hintInsert(h.value, ctx, col[1]),
-              filterText: asPairs ? (ctx.op ?? "") + h.value : h.value,
-              sortText: String(i).padStart(4, "0"),
-              range: asPairs ? opRange : range,
-            })),
-          };
-        }
-        // Inside quotes: keywords and tables do not fit
-        if (ctx.quoted) return { suggestions: [] };
+      // The line alone tells whether this is a value spot, so the whole script crosses into WASM only there (and for suggest)
+      const before = model.getLineContent(position.lineNumber).slice(0, position.column - 1);
+      const hint = connId && shared().hintContext(before, mysql) ? idx.hintAt(text, caret, db, mysql) : undefined;
+      if (hint && connId) {
+        const ask = (mode: "values" | "keys" | "pairs") => meta.hints(connId, { schema: hint.schema, table: hint.table, column: hint.column, path: hint.path, keys: mode === "keys", pairs: mode === "pairs" }).catch(() => []);
+        let hints = await ask(hint.mode);
+        // json without keys (arrays of objects, etc.): instead of keys, frequent key: value pairs as @> conditions (replacing the operator too)
+        const asPairs = hint.mode === "keys" && !hints.length && !mysql;
+        if (asPairs) hints = await ask("pairs");
+        const s = idx.hintItems(text, caret, hint, hints, asPairs);
+        const r = range(s);
+        return {
+          suggestions: s.items.map((it, i) => ({
+            label: { label: it.label, description: it.detail },
+            kind: hint.mode === "keys" && !asPairs ? K.Property : K.Value,
+            insertText: it.insert,
+            filterText: asPairs ? hint.op + hints[i].value : it.label,
+            sortText: sortText(i),
+            range: r,
+          })),
+        };
       }
       if (quiet) return { suggestions: [] };
-      const word = model.getWordUntilPosition(position);
-      const range = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn);
-      const line = model.getLineContent(position.lineNumber).slice(0, word.startColumn - 1);
-      const text = model.getValue();
-      const dot = /((?:"[^"]+"|\w+))\.$/.exec(line);
-
-      if (dot) {
-        const q = dot[1].replace(/"/g, "");
-        // alias. or table. → columns
-        const refs = tablesInStatement(text);
-        const hit = refs.find((r) => r.alias?.toLowerCase() === q.toLowerCase()) ?? refs.find((r) => r.ref.split(".").pop()!.toLowerCase() === q.toLowerCase());
-        const t = hit ? findTable(all, hit.ref) : undefined;
-        if (t) {
-          return { suggestions: t.columns.map(([c, ty], i) => ({ label: { label: c, description: ty }, kind: K.Field, insertText: c, range, sortText: String(i).padStart(4, "0") })) };
-        }
-        // schema. → tables
-        const inSchema = all.filter((x) => x.schema.toLowerCase() === q.toLowerCase());
-        return { suggestions: inSchema.map((x) => ({ label: { label: x.name, description: `${x.columns.length} cols` }, kind: K.Class, insertText: x.name, range })) };
-      }
-
-      const referenced = tablesInStatement(text).map((r) => findTable(all, r.ref)).filter(Boolean) as CompletionTable[];
-      const cols = new Map<string, string>();
-      for (const t of referenced) for (const [c, ty] of t.columns) if (!cols.has(c)) cols.set(c, `${ty} · ${t.name}`);
-      const schemas = [...new Set(all.map((t) => t.schema))];
-      const suggestions: monaco.languages.CompletionItem[] = [
-        ...[...cols].map(([c, d]) => ({ label: { label: c, description: d }, kind: K.Field, insertText: c, range, sortText: "0" + c })),
-        ...all.map((t) => ({
-          label: { label: t.name, description: t.schema },
-          kind: K.Class,
-          insertText: t.schema === "public" ? t.name : `${t.schema}.${t.name}`,
-          filterText: t.name,
-          range,
-          sortText: "1" + t.name,
+      const s = idx.suggest(text, caret, db, mysql);
+      const r = range(s);
+      const kind: Record<CompletionItem["kind"], monaco.languages.CompletionItemKind> = { column: K.Field, table: K.Class, schema: K.Module, keyword: K.Keyword, value: K.Value };
+      return {
+        suggestions: s.items.map((it, i) => ({
+          label: it.kind === "column" || it.kind === "table" ? { label: it.label, description: it.detail } : it.label,
+          kind: kind[it.kind],
+          insertText: it.insert,
+          sortText: sortText(i),
+          range: r,
         })),
-        ...schemas.map((s) => ({ label: s, kind: K.Module, insertText: s, range, sortText: "2" + s })),
-        ...KEYWORDS.map((k) => ({ label: k, kind: K.Keyword, insertText: k, range, sortText: "3" + k })),
-      ];
-      return { suggestions };
+      };
     },
   });
 }

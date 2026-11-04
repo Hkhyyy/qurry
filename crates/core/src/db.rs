@@ -1,10 +1,11 @@
 //! DB connections and query execution. Only PostgreSQL is supported for now.
+use crate::backend::{Backend, dispatch};
 use crate::error::AppResult;
 use crate::store::{ConnectionConfig, DbKind};
 use futures::TryStreamExt;
 use serde::Serialize;
 use serde_json::Value;
-use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions, PgRow};
+use sqlx::postgres::{PgPool, PgRow};
 use sqlx::{Column, Either, Executor, Row, TypeInfo, ValueRef};
 use std::time::{Duration, Instant};
 
@@ -37,18 +38,21 @@ pub struct QueryResult {
     /// Tx: whether an uncommitted transaction is open in Manual mode
     #[serde(default)]
     pub in_transaction: bool,
+    /// It ran, but something after it failed (e.g. its result couldn't be written to the Production log): show it, don't offer to run it again
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 pub(crate) fn query_result(columns: Vec<ColumnInfo>, rows: Vec<Vec<Value>>, rows_affected: u64, truncated: bool, start: Instant, has_result_set: bool) -> QueryResult {
-    QueryResult { columns, rows, rows_affected, truncated, elapsed_ms: start.elapsed().as_millis() as u64, has_result_set, in_transaction: false }
+    QueryResult { columns, rows, rows_affected, truncated, elapsed_ms: start.elapsed().as_millis() as u64, has_result_set, in_transaction: false, warning: None }
 }
 
 /// Max connections per DB (number of tabs + metadata queries such as the tree and autocomplete)
 pub const POOL_MAX: u32 = 32;
 
-/// Whether it is a server on this machine or goes through an SSH tunnel (no network in between to intercept)
+/// Whether it is a server on this machine or goes through an SSH / AWS SSM tunnel (encrypted to the tunnel's far end)
 pub fn is_local(cfg: &ConnectionConfig) -> bool {
-    cfg.active_ssh().is_some() || is_loopback(&cfg.host)
+    cfg.tunneled() || is_loopback(&cfg.host)
 }
 
 pub fn is_loopback(host: &str) -> bool {
@@ -74,14 +78,6 @@ pub fn plaintext_allowed(cfg: &ConnectionConfig, connect_host: &str) -> bool {
     cfg.options.allow_plaintext || is_local(cfg) || is_loopback(connect_host)
 }
 
-/// Message to show when PostgreSQL connected without TLS (with no SSL setting, it falls back to plain text if the server lacks TLS. Except this machine · tunnels)
-pub async fn pg_plaintext_note(p: &sqlx::PgPool, cfg: &ConnectionConfig) -> Option<String> {
-    if cfg.active_ssl().is_some() || is_local(cfg) {
-        return None;
-    }
-    let ssl: Option<bool> = sqlx::query_scalar("select ssl from pg_stat_ssl where pid = pg_backend_pid()").fetch_optional(p).await.ok().flatten();
-    (ssl == Some(false)).then(|| "⚠ Not encrypted: the server didn't offer TLS, so the password and data travel in plain text. Enable SSL in the data source to require it.".to_string())
-}
 /// Close idle connections after 1 minute (so connections opened in bulk while reading the tree or search index do not linger on production servers). Connections held by tabs are not idle and stay
 pub const POOL_IDLE: Duration = Duration::from_secs(60);
 
@@ -89,106 +85,17 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>) -> AppResul
     connect_via(cfg, password, None).await
 }
 
-/// If `tunnel_port` is set, connect to the SSH tunnel's local port.
+/// If `tunnel_port` is set, connect to the tunnel's local port.
 pub async fn connect_via(cfg: &ConnectionConfig, password: Option<&str>, tunnel_port: Option<u16>) -> AppResult<Pool> {
+    let (host, port) = match tunnel_port {
+        Some(p) => ("127.0.0.1", p),
+        None => (cfg.host.as_str(), cfg.port),
+    };
     match cfg.kind {
         DbKind::Sqlite | DbKind::Mssql | DbKind::Clickhouse | DbKind::Duckdb | DbKind::Mongodb | DbKind::Oracle | DbKind::Qdrant | DbKind::Chroma | DbKind::Milvus => Ok(Pool::Plugin(crate::plugin::connect(cfg, password, tunnel_port).await?)),
-        DbKind::Postgres => {
-            let (host, port) = match tunnel_port {
-                Some(p) => ("127.0.0.1", p),
-                None => (cfg.host.as_str(), cfg.port),
-            };
-            let mut opts = PgConnectOptions::new()
-                .host(host)
-                .port(port)
-                .username(&cfg.user)
-                .application_name("qurry");
-            // Like DataGrip, an empty value connects to the postgres DB (the PG default, a DB named after the user, often does not exist)
-            let database = if cfg.database.trim().is_empty() { "postgres" } else { cfg.database.trim() };
-            opts = opts.database(database);
-            if let Some(p) = password.filter(|p| !p.is_empty()) {
-                opts = opts.password(p);
-            }
-            if cfg.read_only {
-                // Do not leave the parsing of \ in strings to server settings (match the rules guard reads with)
-                opts = opts.options([("default_transaction_read_only", "on"), ("standard_conforming_strings", "on")]);
-            }
-            // Without SSL settings a remote server must still set up TLS (certificate not checked); plain text only for this computer,
-            // an SSH tunnel, or when the data source allows it (Prefer would quietly fall back to plain text if TLS were cut)
-            if cfg.active_ssl().is_none() && !plaintext_allowed(cfg, host) {
-                opts = opts.ssl_mode(sqlx::postgres::PgSslMode::Require);
-            }
-            // SSL from the SSH/SSL tab
-            if let Some(ssl) = cfg.active_ssl() {
-                use sqlx::postgres::PgSslMode;
-                opts = opts.ssl_mode(match ssl.mode() {
-                    "verify-full" => PgSslMode::VerifyFull,
-                    "verify-ca" => PgSslMode::VerifyCa,
-                    "require" => PgSslMode::Require,
-                    // Do not pass unknown values on as unverified require
-                    m => return Err(crate::error::AppError::Msg(format!("Unknown SSL mode '{m}' (use require, verify-ca or verify-full)"))),
-                });
-                let home = |p: &str| p.strip_prefix("~/").map(|r| format!("{}/{r}", std::env::var("HOME").unwrap_or_default())).unwrap_or_else(|| p.to_string());
-                if !ssl.ca_file.trim().is_empty() {
-                    opts = opts.ssl_root_cert(home(ssl.ca_file.trim()));
-                }
-                if !ssl.cert_file.trim().is_empty() {
-                    opts = opts.ssl_client_cert(home(ssl.cert_file.trim()));
-                }
-                if !ssl.key_file.trim().is_empty() {
-                    opts = opts.ssl_client_key(home(ssl.key_file.trim()));
-                }
-            }
-            const LEVELS: [&str; 4] = ["read uncommitted", "read committed", "repeatable read", "serializable"];
-            if let Some(iso) = cfg.options.isolation.as_deref().filter(|i| LEVELS.contains(i)) {
-                opts = opts.options([("default_transaction_isolation", iso)]);
-            }
-            // sqlx sends TimeZone=UTC as a startup parameter, so change it with SET right after connecting
-            let tz = cfg.options.time_zone.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(|t| t.replace('\'', "''"));
-            let script = cfg.options.startup_script.trim().to_string();
-            let pool = PgPoolOptions::new()
-                // Each console/table tab uses one dedicated connection. Connections open only when needed, so just keep the cap generous
-                .max_connections(crate::db::POOL_MAX)
-                .idle_timeout(crate::db::POOL_IDLE)
-                .acquire_timeout(Duration::from_secs(10))
-                .after_connect(move |conn, _meta| {
-                    let script = script.clone();
-                    let tz = tz.clone();
-                    Box::pin(async move {
-                        use sqlx::Executor;
-                        if let Some(tz) = tz {
-                            conn.execute(format!("set time zone '{tz}'").as_str()).await?;
-                        }
-                        if !script.is_empty() {
-                            conn.execute(sqlx::raw_sql(&script)).await?;
-                        }
-                        Ok(())
-                    })
-                })
-                .connect_with(opts)
-                .await
-                .map_err(|e| match &e {
-                    // Required TLS that the server can't set up: say what to do instead of a bare TLS error
-                    sqlx::Error::Tls(_) if cfg.active_ssl().is_none() => crate::error::AppError::Msg(format!("{}\n({e})", crate::mysql::NEEDS_TLS.replace(" without TLS 1.2", ""))),
-                    _ => e.into(),
-                })?;
-            Ok(Pool::Pg(pool))
-        }
-        DbKind::Mysql => {
-            let (host, port) = match tunnel_port {
-                Some(p) => ("127.0.0.1", p),
-                None => (cfg.host.as_str(), cfg.port),
-            };
-            Ok(Pool::My(crate::mysql::connect(cfg, password, host, port).await?))
-        }
-        DbKind::Redis => {
-            let (host, port) = match tunnel_port {
-                Some(p) => ("127.0.0.1", p),
-                None => (cfg.host.as_str(), cfg.port),
-            };
-            let m = crate::redisdb::connect(cfg, password, host, port).await?;
-            Ok(Pool::Redis(m, crate::redisdb::db_index(&cfg.database)))
-        }
+        DbKind::Postgres => Ok(Pool::Pg(crate::backend::pg::connect(cfg, password, host, port).await?)),
+        DbKind::Mysql => Ok(Pool::My(crate::backend::mysql::connect(cfg, password, host, port).await?)),
+        DbKind::Redis => Ok(Pool::Redis(crate::redisdb::connect(cfg, password, host, port).await?, crate::redisdb::db_index(&cfg.database))),
     }
 }
 
@@ -237,37 +144,16 @@ mod version_tests {
 
 impl Pool {
     pub async fn server_version(&self) -> AppResult<String> {
-        match self {
-            Pool::Pg(p) => Ok(sqlx::query_scalar::<_, String>("select version()").fetch_one(p).await?),
-            Pool::My(p) => crate::mysql::server_version(p).await,
-            Pool::Redis(m, _) => crate::redisdb::server_version(m).await,
-            Pool::Plugin(c) => c.call("version", Value::Null).await,
-        }
+        dispatch!(self, b => b.server_version().await)
     }
 
     pub async fn close(&self) {
-        match self {
-            Pool::Pg(p) => p.close().await,
-            Pool::My(p) => p.close().await,
-            Pool::Redis(..) | Pool::Plugin(_) => {}
-        }
+        dispatch!(self, b => Backend::close(b).await)
     }
 
     /// Rerun the query and export the full result (out decides the format and target)
     pub async fn export(&self, sql: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {
-        match self {
-            Pool::Pg(p) => export_pg(p, sql, out).await,
-            Pool::My(p) => crate::mysql::export(p, sql, out).await,
-            Pool::Redis(m, _) => crate::redisdb::export(m, sql, out).await,
-            Pool::Plugin(c) => {
-                let r = c.query(sql, 10_000_000).await?;
-                out.header(&r.columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>()).await?;
-                for row in &r.rows {
-                    out.row(row).await?;
-                }
-                Ok(())
-            }
-        }
+        dispatch!(self, b => b.export(sql, out).await)
     }
 
     /// To a CSV file (with BOM). Row count
@@ -279,35 +165,17 @@ impl Pool {
 
     /// Run one query and return up to `limit` rows.
     pub async fn run_query(&self, sql: &str, limit: usize) -> AppResult<QueryResult> {
-        match self {
-            Pool::Pg(p) => run_pg(p, sql, limit).await,
-            Pool::My(p) => crate::mysql::run(p, sql, limit).await,
-            Pool::Redis(m, _) => crate::redisdb::run(m, sql, limit).await,
-            Pool::Plugin(c) => c.query(sql, limit).await,
-        }
+        dispatch!(self, b => b.run_query(sql, limit).await)
     }
 
-    /// keep-alive
     /// keep-alive. Cut off at 5 seconds so one unresponsive server does not stall the cleanup routine
     pub async fn ping(&self) {
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), self.ping_inner()).await;
-    }
-
-    async fn ping_inner(&self) {
-        match self {
-            Pool::Pg(p) => {
-                let _ = sqlx::query("select 1").execute(p).await;
-            }
-            Pool::My(p) => {
-                let _ = sqlx::query("select 1").execute(p).await;
-            }
-            Pool::Redis(m, _) => crate::redisdb::ping(m).await,
-            Pool::Plugin(_) => {}
-        }
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async { dispatch!(self, b => b.ping().await) }).await;
     }
 }
 
-async fn run_pg(pool: &PgPool, sql: &str, limit: usize) -> AppResult<QueryResult> {
+/// Run one statement on an already acquired connection (transaction). With 0 rows the columns come from describe
+pub(crate) async fn run_pg_on(conn: &mut sqlx::PgConnection, sql: &str, limit: usize) -> AppResult<QueryResult> {
     let start = Instant::now();
     let mut columns = Vec::new();
     let mut rows: Vec<Vec<Value>> = Vec::new();
@@ -316,7 +184,10 @@ async fn run_pg(pool: &PgPool, sql: &str, limit: usize) -> AppResult<QueryResult
     let mut has_result_set = false;
     {
         #[allow(deprecated)]
-        let mut stream = sqlx::query(sql).persistent(false).fetch_many(pool);
+        let mut stream = match crate::session::is_generic_plan(sql) {
+            true => sqlx::raw_sql(sql).fetch_many(&mut *conn),
+            false => sqlx::query(sql).persistent(false).fetch_many(&mut *conn),
+        };
         while let Some(item) = stream.try_next().await? {
             match item {
                 Either::Left(done) => rows_affected += done.rows_affected(),
@@ -336,7 +207,7 @@ async fn run_pg(pool: &PgPool, sql: &str, limit: usize) -> AppResult<QueryResult
     }
     // With 0 rows the column info is unknown, so fill it in with describe.
     if !has_result_set {
-        if let Ok(desc) = pool.describe(sql).await {
+        if let Ok(desc) = conn.describe(sql).await {
             if !desc.columns().is_empty() {
                 has_result_set = true;
                 columns = desc
@@ -358,6 +229,7 @@ async fn run_pg(pool: &PgPool, sql: &str, limit: usize) -> AppResult<QueryResult
         elapsed_ms: start.elapsed().as_millis() as u64,
         has_result_set,
         in_transaction: false,
+        warning: None,
     })
 }
 
@@ -380,12 +252,7 @@ pub async fn run_on(conn: &mut sqlx::PgConnection, sql: &str, limit: usize) -> A
             rows.push((0..row.len()).map(|i| pg_value(&row, i)).collect());
         }
     }
-    Ok(QueryResult { columns, rows, rows_affected: 0, truncated, elapsed_ms: start.elapsed().as_millis() as u64, has_result_set: true, in_transaction: false })
-}
-
-async fn export_pg(pool: &PgPool, sql: &str, out: &mut crate::transfer::Exporter) -> AppResult<()> {
-    let mut conn = pool.acquire().await?;
-    export_pg_on(&mut conn, sql, out).await
+    Ok(QueryResult { columns, rows, rows_affected: 0, truncated, elapsed_ms: start.elapsed().as_millis() as u64, has_result_set: true, in_transaction: false, warning: None })
 }
 
 /// Export on an already acquired connection (possibly a read-only transaction)
@@ -437,7 +304,7 @@ pub(crate) fn int_value(v: i64) -> Value {
 }
 
 pub(crate) fn pg_value(row: &PgRow, i: usize) -> Value {
-    use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+    use chrono::NaiveTime;
     let raw = match row.try_get_raw(i) {
         Ok(r) => r,
         Err(_) => return Value::Null,
@@ -469,17 +336,11 @@ pub(crate) fn pg_value(row: &PgRow, i: usize) -> Value {
             .map(Value::from),
         "UUID" => get!(uuid::Uuid).map(|u| Value::from(u.to_string())),
         "JSON" | "JSONB" => get!(Value).map(|j| Value::from(j.to_string())),
-        "TIMESTAMP" => {
-            get!(NaiveDateTime).map(|t| Value::from(t.format("%Y-%m-%d %H:%M:%S%.f").to_string()))
+        "TIMESTAMP" | "TIMESTAMPTZ" | "DATE" => raw.as_bytes().ok().and_then(|b| pg_datetime(&ty, b)).map(Value::from),
+        "TIMESTAMP[]" | "TIMESTAMPTZ[]" | "DATE[]" => {
+            let elem = ty.trim_end_matches("[]");
+            raw.as_bytes().ok().and_then(|b| pg_array(b, &|e| pg_datetime(elem, e))).map(Value::from)
         }
-        "TIMESTAMPTZ" => get!(DateTime<Utc>).map(|t| {
-            Value::from(
-                t.with_timezone(&Local)
-                    .format("%Y-%m-%d %H:%M:%S%.f %:z")
-                    .to_string(),
-            )
-        }),
-        "DATE" => get!(NaiveDate).map(|d| Value::from(d.to_string())),
         "TIME" => get!(NaiveTime).map(|t| Value::from(t.to_string())),
         "BYTEA" => get!(Vec<u8>).map(|b| {
             let hex: String = b.iter().take(64).map(|x| format!("{x:02X}")).collect();
@@ -494,6 +355,62 @@ pub(crate) fn pg_value(row: &PgRow, i: usize) -> Value {
         let bytes = raw.as_bytes().ok();
         bytes.and_then(|b| decode_pgvector(&ty, b)).map(Value::from).unwrap_or_else(|| fallback(bytes, &ty))
     })
+}
+
+/// PostgreSQL timestamp / timestamptz / date (binary) → text. Decoded here, not with sqlx's chrono types, which panic on
+/// infinity (i64::MAX / i64::MIN microseconds, i32::MAX / i32::MIN days) and past chrono's range. Shows infinity / -infinity
+/// as psql does; None for anything chrono can't hold
+fn pg_datetime(ty: &str, b: &[u8]) -> Option<String> {
+    use chrono::{Local, NaiveDate, NaiveTime, TimeDelta};
+    let epoch = NaiveDate::from_ymd_opt(2000, 1, 1)?;
+    match ty {
+        "TIMESTAMP" | "TIMESTAMPTZ" => match i64::from_be_bytes(b.try_into().ok()?) {
+            i64::MAX => Some("infinity".into()),
+            i64::MIN => Some("-infinity".into()),
+            us => {
+                let t = epoch.and_time(NaiveTime::MIN).checked_add_signed(TimeDelta::microseconds(us))?;
+                Some(match ty {
+                    "TIMESTAMP" => t.format("%Y-%m-%d %H:%M:%S%.f").to_string(),
+                    _ => t.and_utc().with_timezone(&Local).format("%Y-%m-%d %H:%M:%S%.f %:z").to_string(),
+                })
+            }
+        },
+        "DATE" => match i32::from_be_bytes(b.try_into().ok()?) {
+            i32::MAX => Some("infinity".into()),
+            i32::MIN => Some("-infinity".into()),
+            days => Some(epoch.checked_add_signed(TimeDelta::try_days(days.into())?)?.to_string()),
+        },
+        _ => None,
+    }
+}
+
+/// PostgreSQL array of dates / times (binary) → the same text as PG's output, e.g. {infinity,NULL,"2024-01-02 00:00:00"}, each element through `elem`.
+/// Format: ndim(i32) has_null(i32) elem_oid(u32) [len(i32) lbound(i32)] × ndim, then each element as len(i32, -1 = NULL) + bytes
+fn pg_array(b: &[u8], elem: &dyn Fn(&[u8]) -> Option<String>) -> Option<String> {
+    let i32_at = |i: usize| -> Option<i32> { Some(i32::from_be_bytes(b.get(i..i + 4)?.try_into().ok()?)) };
+    let ndim = usize::try_from(i32_at(0)?).ok()?;
+    if ndim == 0 {
+        return Some("{}".into());
+    }
+    let dims: Vec<usize> = (0..ndim).map(|d| i32_at(12 + d * 8).and_then(|n| usize::try_from(n).ok())).collect::<Option<_>>()?;
+    let mut pos = 12 + ndim * 8;
+    let mut items = Vec::new();
+    for _ in 0..dims.iter().try_fold(1usize, |a, &n| a.checked_mul(n))? {
+        let len = i32_at(pos)?;
+        pos += 4;
+        if len < 0 {
+            items.push("NULL".to_string());
+            continue;
+        }
+        let s = elem(b.get(pos..pos + len as usize)?)?;
+        pos += len as usize;
+        items.push(if s.contains(' ') { format!("\"{s}\"") } else { s });
+    }
+    // Group the flat elements by each dimension, innermost first
+    for &n in dims.iter().rev() {
+        items = items.chunks(n.max(1)).map(|c| format!("{{{}}}", c.join(","))).collect();
+    }
+    items.pop()
 }
 
 /// pgvector binary → the same text as PG's text output: vector/halfvec "[1,0.5]", sparsevec "{1:0.5,3:1}/5"
@@ -633,47 +550,50 @@ mod tests {
             c.host = h.into();
             assert!(!is_local(&c), "{h}");
         }
+        // An AWS SSM tunnel is encrypted to the instance, like SSH
+        c.ssm = Some(crate::store::SsmConfig { enabled: true, target: "i-0123456789abcdef0".into(), ..Default::default() });
+        assert!(is_local(&c));
     }
 
-    /// Tests against a local PostgreSQL. Run with `cargo test -- --ignored`.
-    fn local_cfg() -> ConnectionConfig {
-        ConnectionConfig {
-            id: "test".into(),
-            name: "local".into(),
-            kind: DbKind::Postgres,
-            host: std::env::var("QURRY_TEST_PG_HOST").unwrap_or_else(|_| "localhost".into()),
-            port: 5432,
-            user: std::env::var("QURRY_TEST_PG_USER")
-                .unwrap_or_else(|_| std::env::var("USER").unwrap()),
-            database: std::env::var("QURRY_TEST_PG_DB").unwrap_or_else(|_| "postgres".into()),
-            color: None,
-            ssh: None,
-            password_saved: false,
-            ssh_secret_saved: false,
-            scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
-        }
-    }
 
     /// A remote PostgreSQL without SSL settings must set up TLS: the local test server has no TLS, reached through an address that isn't loopback by name
     /// ("127.1" resolves to 127.0.0.1 but isn't an IP literal, so Qurry treats it as remote; ::ffff:127.0.0.1 now counts as this machine)
+    /// QURRY_TEST_PG=host:port:user:db (the server must have no TLS)
     #[tokio::test]
     #[ignore]
     async fn pg_remote_requires_tls() {
-        let mut cfg = local_cfg();
+        let Some(crate::testenv::Server { mut cfg, .. }) = crate::testenv::pg() else { return };
         cfg.host = "127.1".into();
         assert!(!is_loopback(&cfg.host) && is_loopback("::ffff:127.0.0.1"));
-        let r = connect(&cfg, None).await;
-        let Err(e) = r else { panic!("connected without TLS") };
-        let e = e.to_string();
-        assert!(e.contains("didn't set up an encrypted") || e.contains("TLS") || e.contains("SSL"), "{e}");
-        cfg.options.allow_plaintext = true;
-        assert!(connect(&cfg, None).await.is_ok(), "allowed plain text connects");
+        opt_in_then_connect(cfg, "pw").await;
+    }
+
+    /// QURRY_TEST_MY_NOTLS=host:port:user:password:db — a MySQL started without TLS (the shared one has TLS)
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_remote_requires_tls() {
+        let s = crate::testenv::my_from("QURRY_TEST_MY_NOTLS").expect("QURRY_TEST_MY_NOTLS");
+        opt_in_then_connect(ConnectionConfig { host: "127.1".into(), ..s.cfg }, s.password.as_deref().unwrap_or_default()).await;
+    }
+
+    /// The TLS error is one the GUI offers "Allow unencrypted" for; after AppState::allow_plaintext the saved password connects
+    async fn opt_in_then_connect(cfg: ConnectionConfig, password: &str) {
+        let dir = std::env::temp_dir().join(format!("qurry-tlsopt-{}", uuid::Uuid::new_v4()));
+        let st = crate::app::AppState::new(crate::store::Store::new(dir.clone()), crate::secrets::SecretFile::open(&dir).unwrap());
+        let id = st.save_connection(cfg, Some(password.into()), None).await.unwrap().id;
+        let e = st.connect(id.clone()).await.expect_err("connected without TLS").to_string();
+        assert!(qurry_shared::errors::tls_opt_in(&e), "{e}");
+        let c = st.allow_plaintext(id.clone()).await.unwrap();
+        assert!(c.options.allow_plaintext && c.password_saved);
+        let v = st.connect(id).await.expect("allowed plain text connects with the saved password");
+        assert!(v.contains("Not encrypted"), "{v}");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]
     #[ignore]
     async fn pg_connection_options_applied() {
-        let mut cfg = local_cfg();
+        let Some(crate::testenv::Server { mut cfg, .. }) = crate::testenv::pg() else { return };
         cfg.options.time_zone = Some("Asia/Seoul".into());
         cfg.options.isolation = Some("serializable".into());
         cfg.options.startup_script = "set application_name = 'dbtool_startup'; set search_path = pg_catalog".into();
@@ -690,7 +610,8 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_read_only_rejects_writes() {
-        let cfg = ConnectionConfig { read_only: true, ..local_cfg() };
+        let Some(s) = crate::testenv::pg() else { return };
+        let cfg = ConnectionConfig { read_only: true, ..s.cfg };
         let Pool::Pg(p) = connect(&cfg, None).await.expect("connect") else { unreachable!() };
         let ro: String = sqlx::query_scalar("show default_transaction_read_only").fetch_one(&p).await.unwrap();
         assert_eq!(ro, "on");
@@ -699,10 +620,73 @@ mod tests {
         assert!(format!("{}", err.unwrap_err()).contains("read-only"));
     }
 
+    /// infinity sentinels show as text; values past chrono's range give None (shown as <TYPE>), never a panic (#84)
+    #[test]
+    fn pg_datetime_infinity_and_range() {
+        let ts = |v: i64| v.to_be_bytes().to_vec();
+        let d = |v: i32| v.to_be_bytes().to_vec();
+        for ty in ["TIMESTAMP", "TIMESTAMPTZ"] {
+            assert_eq!(pg_datetime(ty, &ts(i64::MAX)).as_deref(), Some("infinity"));
+            assert_eq!(pg_datetime(ty, &ts(i64::MIN)).as_deref(), Some("-infinity"));
+            assert_eq!(pg_datetime(ty, &ts(i64::MAX - 1)), None);
+        }
+        assert_eq!(pg_datetime("TIMESTAMP", &ts(86_400_000_000 + 1_500_000)).as_deref(), Some("2000-01-02 00:00:01.500"));
+        assert_eq!(pg_datetime("DATE", &d(i32::MAX)).as_deref(), Some("infinity"));
+        assert_eq!(pg_datetime("DATE", &d(i32::MIN)).as_deref(), Some("-infinity"));
+        assert_eq!(pg_datetime("DATE", &d(-1)).as_deref(), Some("1999-12-31"));
+        assert_eq!(pg_datetime("DATE", &d(i32::MAX - 1)), None);
+        assert_eq!(pg_datetime("DATE", &[0, 1]), None, "short value");
+        // date[] [[infinity, NULL], [2000-01-01, -infinity]]: ndim, has_null, elem oid, (len, lbound) per dimension, elements
+        let mut b = [2, 1, 1082, 2, 1, 2, 1].iter().flat_map(|v: &i32| v.to_be_bytes()).collect::<Vec<u8>>();
+        for e in [Some(i32::MAX), None, Some(0), Some(i32::MIN)] {
+            match e {
+                Some(v) => b.extend([4i32.to_be_bytes(), v.to_be_bytes()].concat()),
+                None => b.extend((-1i32).to_be_bytes()),
+            }
+        }
+        let date = |e: &[u8]| pg_datetime("DATE", e);
+        assert_eq!(pg_array(&b, &date).as_deref(), Some("{{infinity,NULL},{2000-01-01,-infinity}}"));
+        assert_eq!(pg_array(&[0; 12], &date).as_deref(), Some("{}"), "empty array");
+        assert_eq!(pg_array(&b[..b.len() - 2], &date), None, "cut short");
+        let huge = [3, 0, 1082, i32::MAX, 1, i32::MAX, 1, i32::MAX, 1].iter().flat_map(|v: &i32| v.to_be_bytes()).collect::<Vec<u8>>();
+        assert_eq!(pg_array(&huge, &date), None, "dimensions whose product overflows");
+    }
+
+    /// PostgreSQL's infinity / -infinity in timestamp, timestamptz and date (also in arrays, next to NULLs) show as text; sqlx's chrono decode panicked on them (#84)
+    #[tokio::test]
+    #[ignore]
+    async fn pg_infinity_dates() {
+        let Some(s) = crate::testenv::pg() else { return };
+        let pool = connect(&s.cfg, s.password.as_deref()).await.expect("connect");
+        let r = pool
+            .run_query(
+                "select 'infinity'::timestamp, '-infinity'::timestamp, 'infinity'::timestamptz, '-infinity'::timestamptz, \
+                 'infinity'::date, '-infinity'::date, null::timestamptz, '2024-01-02'::date",
+                10,
+            )
+            .await
+            .unwrap();
+        let text = |v: &[&str]| v.iter().map(|s| Value::from(*s)).collect::<Vec<_>>();
+        assert_eq!(r.rows[0][..6], text(&["infinity", "-infinity", "infinity", "-infinity", "infinity", "-infinity"]));
+        assert_eq!(r.rows[0][6], Value::Null);
+        assert_eq!(r.rows[0][7], Value::from("2024-01-02"));
+        let a = pool
+            .run_query(
+                "select array['infinity', null, '-infinity', '2024-01-02 03:04:05']::timestamp[], array['-infinity', null]::timestamptz[], \
+                 array['infinity', '2024-01-02', null]::date[], null::date[]",
+                10,
+            )
+            .await
+            .unwrap();
+        assert_eq!(a.rows[0][..3], text(&["{infinity,NULL,-infinity,\"2024-01-02 03:04:05\"}", "{-infinity,NULL}", "{infinity,2024-01-02,NULL}"]));
+        assert_eq!(a.rows[0][3], Value::Null);
+    }
+
     #[tokio::test]
     #[ignore]
     async fn pg_end_to_end() {
-        let pool = connect(&local_cfg(), None).await.expect("connect");
+        let Some(s) = crate::testenv::pg() else { return };
+        let pool = connect(&s.cfg, s.password.as_deref()).await.expect("connect");
         assert!(
             pool.server_version()
                 .await

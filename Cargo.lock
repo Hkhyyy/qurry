@@ -5108,10 +5108,12 @@ dependencies = [
 
 [[package]]
 name = "qurry"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "flate2",
  "libc",
+ "objc2-core-foundation",
+ "objc2-core-text",
  "qurry-core",
  "serde",
  "serde_json",
@@ -5128,7 +5130,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "aes-gcm 0.10.3",
  "base64 0.22.1",
@@ -5137,18 +5139,21 @@ dependencies = [
  "csv",
  "dirs 6.0.0",
  "futures",
- "json5",
  "keyring",
+ "libc",
  "minisign-verify 0.2.5",
  "qurry-driver",
+ "qurry-shared",
  "rand 0.8.8",
  "redis",
  "regex",
  "russh",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "sqlx",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "ureq",
@@ -5157,7 +5162,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-driver"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "json5",
  "serde",
@@ -5167,7 +5172,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-driver-chroma"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "qurry-driver",
  "serde_json",
@@ -5175,7 +5180,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-driver-clickhouse"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "qurry-driver",
  "serde_json",
@@ -5184,7 +5189,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-driver-duckdb"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "duckdb",
  "qurry-driver",
@@ -5193,7 +5198,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-driver-milvus"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "qurry-driver",
  "serde_json",
@@ -5201,7 +5206,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-driver-mongodb"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "json5",
  "mongodb",
@@ -5213,7 +5218,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-driver-mssql"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "futures-util",
@@ -5226,7 +5231,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-driver-oracle"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "oracle",
  "qurry-driver",
@@ -5235,7 +5240,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-driver-qdrant"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "qurry-driver",
  "serde_json",
@@ -5243,7 +5248,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-driver-sqlite"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "qurry-driver",
  "rusqlite",
@@ -5252,7 +5257,7 @@ dependencies = [
 
 [[package]]
 name = "qurry-mcp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "qurry-core",
  "serde",
@@ -5261,14 +5266,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "qurry-shared"
+version = "0.1.0"
+dependencies = [
+ "json5",
+ "regex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "qurry-shared-wasm"
+version = "0.1.0"
+dependencies = [
+ "qurry-shared",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "qurry-tui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "crossterm",
  "futures",
  "minisign-verify 0.2.5",
  "qurry-core",
+ "qurry-shared",
  "ratatui",
  "regex",
  "serde_json",
@@ -6151,6 +6178,17 @@ dependencies = [
  "serde",
  "serde_core",
  "typeid",
+]
+
+[[package]]
+name = "serde-wasm-bindgen"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8302e169f0eddcc139c70f139d19d6467353af16f9fce27e8c30158036a1e16b"
+dependencies = [
+ "js-sys",
+ "serde",
+ "wasm-bindgen",
 ]
 
 [[package]]

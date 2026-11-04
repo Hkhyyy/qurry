@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
+import type { DbKind } from "./api";
 import { splitScript, splitStatements, statementAt } from "./sqlSplit";
 
-const parts = (sql: string, bs = false) => splitStatements(sql, bs).map((s) => sql.slice(s.start, s.end).trim());
+const parts = (sql: string, kind: DbKind = "postgres") => splitStatements(sql, kind).map((s) => sql.slice(s.start, s.end).trim());
 
 describe("splitStatements", () => {
   it("splits on semicolons and drops empty statements", () => {
@@ -13,26 +14,42 @@ describe("splitStatements", () => {
   });
 
   it("MySQL follows backslash escapes", () => {
-    expect(parts("select 'a\\';b'; select 2", true)).toEqual(["select 'a\\';b'", "select 2"]);
+    expect(parts("select 'a\\';b'; select 2", "mysql")).toEqual(["select 'a\\';b'", "select 2"]);
+  });
+
+  it("MySQL --x is arithmetic, not a comment, so what follows it is its own statement (split like the server)", () => {
+    expect(parts("select 1--1; delete from orders where status = 'x'", "mysql")).toEqual(["select 1--1", "delete from orders where status = 'x'"]);
   });
 
   it("a \\ inside a MySQL backtick name is not an escape (split like the server)", () => {
-    expect(parts("select 1 as `a\\`, 1 as `b`; delete from t; -- `", true)).toHaveLength(3);
-    expect(splitScript("select 1 as `a\\`\nselect 2", true)).toHaveLength(2);
+    expect(parts("select 1 as `a\\`, 1 as `b`; delete from t; -- `", "mysql")).toHaveLength(3);
+    expect(splitScript("select 1 as `a\\`\nselect 2", "mysql")).toHaveLength(2);
+  });
+
+  it("commented-out or quoted code is never its own statement (MySQL # comments, PostgreSQL E'\\'')", () => {
+    const my = "select * from orders where id = 6 # was; delete from orders where id = 6\nselect 2;";
+    expect(parts(my, "mysql")).toEqual([my.slice(0, -1)]);
+    expect(splitScript(my, "mysql").map((s) => my.slice(s.start, s.end).trim())).toEqual(["select * from orders where id = 6 # was; delete from orders where id = 6", "select 2"]);
+    const pg = "select E'\\'; delete from t where id = 1; --'";
+    expect(parts(pg)).toEqual([pg]);
+    expect(splitScript(pg).map((s) => pg.slice(s.start, s.end))).toEqual([pg]);
+    expect(parts("select e'\\''; select 2")).toEqual(["select e'\\''", "select 2"]);
+    // name'…' is not an E-string: \ is a plain char there
+    expect(parts("select 1 as name'\\'; select 2")).toHaveLength(2);
   });
 });
 
 describe("statementAt", () => {
   it("the statement under the cursor, or the one just before when between statements", () => {
     const sql = "select 1;\n\nselect 2;";
-    expect(statementAt(sql, 3)?.sql).toBe("select 1");
-    expect(statementAt(sql, sql.indexOf("2"))?.sql).toBe("select 2");
+    expect(statementAt(sql, 3)).toBe("select 1");
+    expect(statementAt(sql, sql.indexOf("2"))).toBe("select 2");
     expect(statementAt("", 0)).toBeNull();
   });
 });
 
 describe("splitScript", () => {
-  const sp = (sql: string, mysql = false) => splitScript(sql, mysql).map((s) => sql.slice(s.start, s.end).trim());
+  const sp = (sql: string, kind: DbKind = "postgres") => splitScript(sql, kind).map((s) => sql.slice(s.start, s.end).trim());
   it("also splits statements written on new lines without semicolons (same rule as core sql::split_script)", () => {
     expect(sp("select * from a where x = 3\nselect * from public.users")).toEqual(["select * from a where x = 3", "select * from public.users"]);
     expect(sp("delete from t where id = 1\nselect 1;\nselect 2")).toEqual(["delete from t where id = 1", "select 1", "select 2"]);
@@ -61,6 +78,6 @@ describe("splitScript", () => {
     ]) {
       expect(sp(one), one).toHaveLength(1);
     }
-    expect(sp("insert into t values (1) on duplicate key\nupdate a = 1", true)).toHaveLength(1);
+    expect(sp("insert into t values (1) on duplicate key\nupdate a = 1", "mysql")).toHaveLength(1);
   });
 });

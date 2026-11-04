@@ -7,58 +7,7 @@ use std::{fs, path::PathBuf};
 /// User keyboard shortcut settings: action id → key list (only those differing from the defaults)
 pub type Keymap = BTreeMap<String, Vec<String>>;
 
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum DbKind {
-    Postgres,
-    Mysql,
-    Redis,
-    // Below are driver plugins (downloaded when needed): crate::plugin
-    Sqlite,
-    Mssql,
-    Clickhouse,
-    Duckdb,
-    Mongodb,
-    Oracle,
-    // Vector DBs (REST)
-    Qdrant,
-    Chroma,
-    Milvus,
-}
-
-impl DbKind {
-    /// Driver plugin name (None for the built-in PG·MySQL·Redis)
-    pub fn driver(self) -> Option<&'static str> {
-        match self {
-            DbKind::Postgres | DbKind::Mysql | DbKind::Redis => None,
-            DbKind::Sqlite => Some("sqlite"),
-            DbKind::Mssql => Some("mssql"),
-            DbKind::Clickhouse => Some("clickhouse"),
-            DbKind::Duckdb => Some("duckdb"),
-            DbKind::Mongodb => Some("mongodb"),
-            DbKind::Oracle => Some("oracle"),
-            DbKind::Qdrant => Some("qdrant"),
-            DbKind::Chroma => Some("chroma"),
-            DbKind::Milvus => Some("milvus"),
-        }
-    }
-
-    /// The DB is the schema (no schema level in the tree)
-    pub fn flat(self) -> bool {
-        matches!(self, DbKind::Mysql | DbKind::Redis | DbKind::Sqlite | DbKind::Clickhouse | DbKind::Mongodb | DbKind::Qdrant | DbKind::Chroma | DbKind::Milvus)
-    }
-
-    /// A single file is the DB (file path instead of host·port)
-    pub fn is_file(self) -> bool {
-        matches!(self, DbKind::Sqlite | DbKind::Duckdb)
-    }
-
-    /// Vector DB: the console is REST (METHOD /path + JSON), not SQL
-    pub fn is_vector(self) -> bool {
-        matches!(self, DbKind::Qdrant | DbKind::Chroma | DbKind::Milvus)
-    }
-}
+pub use qurry_shared::kind::DbKind;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -98,6 +47,10 @@ pub struct ConnectionConfig {
     /// Redis connection mode (Standalone / Sentinel / Cluster)
     #[serde(default)]
     pub redis: Option<RedisMode>,
+    /// AWS SSM Session Manager tunnel (the other choice next to SSH). Older apps ignore it and drop it when they save, so it is
+    /// kept in connection-tunnels.json too (Store::list), and the DB password of an SSM source is saved under a key they don't read
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssm: Option<SsmConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -232,6 +185,24 @@ pub struct SshConfig {
     pub key_path: String,
 }
 
+/// AWS SSM port forwarding: `aws ssm start-session` to the DB host/port through this instance. No AWS secrets here:
+/// the AWS CLI uses the user's own config, SSO login or environment
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SsmConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// AWS profile (empty = the CLI's default / AWS_PROFILE)
+    #[serde(default)]
+    pub profile: String,
+    /// AWS region (empty = the profile's / AWS_REGION)
+    #[serde(default)]
+    pub region: String,
+    /// Target instance id (i-… or a managed node mi-…)
+    #[serde(default)]
+    pub target: String,
+}
+
 fn default_ssh_port() -> u16 {
     22
 }
@@ -253,13 +224,29 @@ impl ConnectionConfig {
         self.ssh.as_ref().filter(|s| s.enabled && !s.host.is_empty())
     }
 
+    /// Turned on, even without a target: connecting then fails with "enter the instance id" instead of going straight to the host
+    pub fn active_ssm(&self) -> Option<&SsmConfig> {
+        self.ssm.as_ref().filter(|s| s.enabled)
+    }
+
+    /// Where the DB password is saved. Through AWS SSM it is `<id>#ssm`, which older apps (that don't know SSM and would
+    /// connect straight to the host) never read: they find no saved password and ask for it
+    pub fn password_key(&self) -> String {
+        if self.active_ssm().is_some() { format!("{}#ssm", self.id) } else { self.id.clone() }
+    }
+
+    /// Whether the connection goes through a tunnel (SSH or AWS SSM): the client connects to a port on this machine
+    pub fn tunneled(&self) -> bool {
+        self.active_ssh().is_some() || self.active_ssm().is_some()
+    }
+
     /// Whether this is the same SSH server, so the saved SSH secret may be sent
     pub fn same_ssh(&self, other: &ConnectionConfig) -> bool {
         let t = |c: &ConnectionConfig| c.ssh.as_ref().map(|s| (s.host.trim().to_lowercase(), s.port, s.user.trim().to_string()));
         t(self) == t(other)
     }
 
-    /// Whether self's (saved settings) password may be sent to other: same kind · server · user · SSH tunnel, and TLS not turned off.
+    /// Whether self's (saved settings) password may be sent to other: same kind · server · user · SSH / AWS SSM tunnel, and TLS not turned off.
     /// So an old password doesn't go to a new server when only the host is changed before Test, or a different server is imported with the same id
     /// Redis Sentinel · Cluster nodes are servers too. Turning SSL off, lowering verification, or changing the CA counts as a different server
     pub fn same_server(&self, other: &ConnectionConfig) -> bool {
@@ -269,7 +256,9 @@ impl ConnectionConfig {
                 let r = c.redis.clone().unwrap_or_default();
                 (c.redis_mode().to_string(), r.sentinel_master.trim().to_string(), r.nodes.split([',', ' ']).filter(|n| !n.is_empty()).map(|n| n.to_lowercase()).collect::<Vec<_>>())
             });
-            (c.kind, c.host.trim().to_lowercase(), c.port, c.user.trim().to_string(), c.active_ssh().map(|s| (s.host.trim().to_lowercase(), s.port)), redis)
+            // The SSM target (and the profile · region that pick the AWS account) is where the DB host is resolved, so part of the server
+            let ssm = c.active_ssm().map(|s| (s.profile.trim().to_string(), s.region.trim().to_lowercase(), s.target.trim().to_lowercase()));
+            (c.kind, c.host.trim().to_lowercase(), c.port, c.user.trim().to_string(), c.active_ssh().map(|s| (s.host.trim().to_lowercase(), s.port)), ssm, redis)
         };
         let rank = |c: &ConnectionConfig| match c.active_ssl().map(|s| s.mode()) {
             None => 0,
@@ -338,6 +327,16 @@ pub fn ssh_secret_key(id: &str) -> String {
     format!("{id}#ssh")
 }
 
+/// Every key a source's DB password may be saved under (ConnectionConfig::password_key)
+pub fn password_keys(id: &str) -> [String; 2] {
+    [id.to_string(), format!("{id}#ssm")]
+}
+
+/// The data source a secrets key belongs to (DB password, SSH secret, or the DB password of an SSM source)
+pub fn secret_owner(key: &str) -> &str {
+    key.strip_suffix("#ssh").or_else(|| key.strip_suffix("#ssm")).unwrap_or(key)
+}
+
 /// Export file format. Passwords are not included.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExportFile {
@@ -376,6 +375,8 @@ impl Store {
         let mut all: Vec<ConnectionConfig> = serde_json::from_str(&fs::read_to_string(&self.path)?)?;
         // The side file wins; without an entry, what connections.json has (written by builds before the side file)
         let access = self.access()?;
+        // AWS SSM settings an older app dropped from connections.json come back from their own side file (no older app writes it)
+        let tunnels = self.tunnels()?;
         for c in &mut all {
             if let Some(a) = access.get(&c.id) {
                 c.options.allow_plaintext = a.allow_plaintext;
@@ -383,8 +384,25 @@ impl Store {
                     c.options.mcp = a.mcp.clone();
                 }
             }
+            if c.ssm.is_none() {
+                c.ssm = tunnels.get(&c.id).cloned();
+            }
         }
         Ok(all)
+    }
+
+    fn tunnels_path(&self) -> PathBuf {
+        self.path.with_file_name("connection-tunnels.json")
+    }
+
+    /// Connection id → AWS SSM settings. Damaged: an error (empty would let an SSM source connect straight to its host)
+    fn tunnels(&self) -> AppResult<BTreeMap<String, SsmConfig>> {
+        let path = self.tunnels_path();
+        match fs::read_to_string(&path) {
+            Ok(s) => serde_json::from_str(&s).map_err(|e| crate::error::AppError::Msg(format!("{} is damaged ({e}) — restore it from a backup, or move it away and check the AWS SSM tunnel of your data sources", path.display()))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
+            Err(e) => Err(e.into()),
+        }
     }
 
     fn access_path(&self) -> PathBuf {
@@ -443,15 +461,21 @@ impl Store {
 
     /// Read · change · write under a file lock shared by GUI · TUI · MCP (so concurrent saves don't lose one side's change)
     fn update<T>(&self, f: impl FnOnce(&mut Vec<ConnectionConfig>) -> AppResult<T>) -> AppResult<T> {
+        self.locked(|mut all| {
+            let out = f(&mut all)?;
+            self.write(&all)?;
+            Ok(out)
+        })
+    }
+
+    /// The sources under the same lock, without writing: `f` never sees a save that is half done (its secrets set, the store not yet written)
+    pub fn locked<T>(&self, f: impl FnOnce(Vec<ConnectionConfig>) -> AppResult<T>) -> AppResult<T> {
         if let Some(dir) = self.path.parent() {
             crate::secrets::private_dir(dir)?;
         }
         let lock = fs::OpenOptions::new().create(true).truncate(false).write(true).open(self.path.with_extension("json.lock"))?;
         lock.lock()?;
-        let mut all = self.list()?;
-        let out = f(&mut all)?;
-        self.write(&all)?;
-        Ok(out)
+        f(self.list()?)
     }
 
     pub fn export_to(&self, path: &std::path::Path) -> AppResult<usize> {
@@ -550,6 +574,9 @@ impl Store {
                     }
                     if e.active_ssh().map(|s| (&s.host, s.port)) != c.active_ssh().map(|s| (&s.host, s.port)) {
                         ch.push("changes the SSH tunnel".into());
+                    }
+                    if e.active_ssm() != c.active_ssm() {
+                        ch.push("changes the AWS SSM tunnel".into());
                     }
                     if script(e) != script(&c) {
                         ch.push("changes the startup script".into());
@@ -663,11 +690,58 @@ impl Store {
         crate::secrets::write_private(&self.path.with_file_name(format!("workspace-{client}.json")), serde_json::to_string(v)?.as_bytes())
     }
 
+    /// settings.json: app settings the GUI and the TUI share. Keys this version doesn't know are kept
+    fn settings(&self) -> serde_json::Map<String, serde_json::Value> {
+        fs::read_to_string(self.file("settings.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    }
+
+    /// Update channel (stable unless beta was picked; an unknown value is stable too)
+    pub fn update_channel(&self) -> crate::update::Channel {
+        self.settings().remove("updateChannel").and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
+    }
+
+    pub fn set_update_channel(&self, channel: crate::update::Channel) -> AppResult<()> {
+        self.set_setting("updateChannel", serde_json::to_value(channel)?)
+    }
+
+    /// Grid alignment per value class: only the classes the user changed (GUI Settings › Appearance › Alignment; the TUI reads it)
+    pub fn grid_align(&self) -> crate::format::Alignments {
+        self.settings().get("gridAlign").map(crate::format::alignments).unwrap_or_default()
+    }
+
+    /// Change one class, on what the file holds now (the GUI and the TUI may both have changed it); its default drops the override,
+    /// so a later default applies. Returns what is saved
+    pub fn set_grid_align(&self, class: crate::format::ValueClass, align: crate::format::Align) -> AppResult<crate::format::Alignments> {
+        let mut next = self.grid_align();
+        if align == class.default_align() {
+            next.remove(&class);
+        } else {
+            next.insert(class, align);
+        }
+        self.set_setting("gridAlign", serde_json::to_value(&next)?)?;
+        Ok(next)
+    }
+
+    /// Change one key of settings.json, keeping the others
+    fn set_setting(&self, key: &str, value: serde_json::Value) -> AppResult<()> {
+        let mut all = self.settings();
+        all.insert(key.into(), value);
+        if let Some(dir) = self.path.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        crate::secrets::write_private(&self.file("settings.json"), serde_json::to_string_pretty(&all)?.as_bytes())
+    }
+
     fn write(&self, all: &[ConnectionConfig]) -> AppResult<()> {
         if let Some(dir) = self.path.parent() {
             fs::create_dir_all(dir)?;
         }
         let access: BTreeMap<_, _> = all.iter().map(|c| (c.id.clone(), Access { mcp: c.options.mcp.clone(), allow_plaintext: c.options.allow_plaintext })).collect();
+        // Before connections.json, so the SSM setting can't be lost in between. A source whose SSM settings are removed loses its entry
+        let tunnels: BTreeMap<_, _> = all.iter().filter_map(|c| Some((c.id.clone(), c.ssm.clone()?))).collect();
+        if !tunnels.is_empty() || self.tunnels_path().exists() {
+            crate::secrets::write_private(&self.tunnels_path(), serde_json::to_string_pretty(&tunnels)?.as_bytes())?;
+        }
         // The side file first, keeping entries of removed sources: if connections.json can't be written, the side file still matches either version
         let mut merged = self.access()?;
         merged.extend(access.clone());
@@ -685,6 +759,46 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The update channel is stable until beta is picked, and saving it keeps the other settings in settings.json
+    #[test]
+    fn update_channel_setting() {
+        use crate::update::Channel;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("cfg"));
+        assert_eq!(store.update_channel(), Channel::Stable);
+        store.set_update_channel(Channel::Beta).unwrap();
+        assert_eq!(store.update_channel(), Channel::Beta);
+        let path = dir.path().join("cfg/settings.json");
+        fs::write(&path, r#"{"updateChannel": "nightly", "later": 1}"#).unwrap();
+        assert_eq!(store.update_channel(), Channel::Stable, "an unknown channel is stable");
+        store.set_update_channel(Channel::Beta).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved, serde_json::json!({ "updateChannel": "beta", "later": 1 }));
+    }
+
+    /// Grid alignment: defaults until a class is changed, other settings kept, a value this version doesn't know skipped; a change
+    /// keeps what another app saved meanwhile, and the default drops the override
+    #[test]
+    fn grid_align_setting() {
+        use crate::format::{Align, Alignments, ValueClass};
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().join("cfg"));
+        assert!(store.grid_align().is_empty());
+        store.set_update_channel(crate::update::Channel::Beta).unwrap();
+        assert_eq!(store.set_grid_align(ValueClass::Null, Align::Left).unwrap(), Alignments::from([(ValueClass::Null, Align::Left)]));
+        assert_eq!(store.grid_align(), Alignments::from([(ValueClass::Null, Align::Left)]));
+        assert_eq!(store.update_channel(), crate::update::Channel::Beta);
+        // Another app (the TUI) changed Boolean meanwhile: changing Number keeps it
+        let other = Store::new(dir.path().join("cfg"));
+        other.set_grid_align(ValueClass::Boolean, Align::Center).unwrap();
+        let both = Alignments::from([(ValueClass::Null, Align::Left), (ValueClass::Boolean, Align::Center), (ValueClass::Number, Align::Center)]);
+        assert_eq!(store.set_grid_align(ValueClass::Number, Align::Center).unwrap(), both);
+        assert_eq!(store.set_grid_align(ValueClass::Number, Align::Right).unwrap(), Alignments::from([(ValueClass::Null, Align::Left), (ValueClass::Boolean, Align::Center)]));
+        let path = dir.path().join("cfg/settings.json");
+        fs::write(&path, r#"{"gridAlign": {"null": "left", "number": "justify"}}"#).unwrap();
+        assert_eq!(store.grid_align(), Alignments::from([(ValueClass::Null, Align::Left)]));
+    }
 
     #[test]
     fn saved_secrets_follow_the_server() {
@@ -721,6 +835,33 @@ mod tests {
         let mut moved = r.clone();
         moved.redis = Some(RedisMode { mode: "sentinel".into(), sentinel_master: "m".into(), nodes: "evil:26379".into() });
         assert!(!r.same_server(&moved));
+    }
+
+    /// The AWS SSM target, profile and region pick where the DB host is resolved: changing them asks for the password again.
+    /// Old files (no ssm) load as before, and a source without SSM is written without the key (older apps read the same file)
+    #[test]
+    fn ssm_target_is_part_of_the_server() {
+        let old: ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "x", "name": "a", "kind": "postgres", "host": "db.internal", "port": 5432, "user": "app" })).unwrap();
+        assert_eq!(old.ssm, None);
+        assert!(!serde_json::to_string(&old).unwrap().contains("ssm"));
+        let a: ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "x", "name": "a", "kind": "postgres", "host": "db.internal", "port": 5432, "user": "app",
+            "ssm": { "enabled": true, "profile": "prod", "region": "ap-northeast-2", "target": "i-0123456789abcdef0" } })).unwrap();
+        assert!(a.tunneled() && a.active_ssh().is_none());
+        assert!(!old.same_server(&a), "turning SSM on moves the connection");
+        let mut b = a.clone();
+        b.ssm.as_mut().unwrap().target = " I-0123456789ABCDEF0 ".into();
+        assert!(a.same_server(&b));
+        let changes: [fn(&mut ConnectionConfig); 4] =
+            [|c| c.ssm.as_mut().unwrap().target = "i-0fffffffffffffff0".into(), |c| c.ssm.as_mut().unwrap().profile = "other".into(), |c| c.ssm.as_mut().unwrap().region = "us-east-1".into(), |c| c.ssm.as_mut().unwrap().enabled = false];
+        for f in changes {
+            let mut c = a.clone();
+            f(&mut c);
+            assert!(!a.same_server(&c), "{c:?}");
+        }
+        // An empty instance id is still the SSM choice (connecting asks for it), never a direct connection
+        let mut c = a.clone();
+        c.ssm.as_mut().unwrap().target = " ".into();
+        assert!(c.tunneled() && c.password_key().ends_with("#ssm"));
     }
 
     #[test]
@@ -775,7 +916,7 @@ mod tests {
             ssh: None,
             password_saved: false,
             ssh_secret_saved: false,
-            scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
+            scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         }
     }
 
@@ -912,6 +1053,39 @@ mod tests {
             assert_eq!(std::fs::metadata(base.join("connection-access.json")).unwrap().permissions().mode() & 0o777, 0o600);
         }
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// An older app (no AWS SSM) rewriting connections.json, or its connection-access.json, doesn't lose the SSM tunnel
+    /// (that source would then connect straight to its host with the saved password)
+    #[test]
+    fn older_app_rewrite_keeps_the_ssm_tunnel() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Store::new(dir.path().to_path_buf());
+        let mut c = conn("1", "PROD");
+        let ssm = SsmConfig { enabled: true, profile: "prod".into(), region: "ap-northeast-2".into(), target: "i-0123456789abcdef0".into() };
+        c.ssm = Some(ssm.clone());
+        s.save(&c).unwrap();
+        s.save(&conn("2", "other")).unwrap();
+        // What an older app writes back: no ssm in either file it knows
+        let mut old: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.path().join("connections.json")).unwrap()).unwrap();
+        old[0].as_object_mut().unwrap().remove("ssm");
+        old[0]["color"] = "#f00".into();
+        std::fs::write(dir.path().join("connections.json"), old.to_string()).unwrap();
+        std::fs::write(dir.path().join("connection-access.json"), r#"{"1":{"mcp":"off","allowPlaintext":false}}"#).unwrap();
+        let got = s.get("1").unwrap().unwrap();
+        assert_eq!(got.color.as_deref(), Some("#f00"));
+        assert_eq!(got.ssm.as_ref(), Some(&ssm));
+        assert_eq!(got.password_key(), "1#ssm");
+        // The next save by this version writes it back to connections.json; turning SSM off stays off
+        s.save(&got).unwrap();
+        assert!(std::fs::read_to_string(dir.path().join("connections.json")).unwrap().contains("i-0123456789abcdef0"));
+        let mut off = got.clone();
+        off.ssm.as_mut().unwrap().enabled = false;
+        s.save(&off).unwrap();
+        assert!(s.get("1").unwrap().unwrap().active_ssm().is_none());
+        // A damaged side file is an error, not "no tunnel"
+        std::fs::write(dir.path().join("connection-tunnels.json"), "{").unwrap();
+        assert!(s.get("1").unwrap_err().to_string().contains("connection-tunnels.json is damaged"));
     }
 
     /// Without the side file (only connections.json restored or synced), MCP Off and "Allow unencrypted" stay as saved

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { Cell, Dialect, QueryResult } from "../lib/api";
 import { EditTarget, ResultGrid } from "./ResultGrid";
 import { RunningBar } from "./RunningBar";
@@ -12,6 +12,8 @@ interface Props {
   orderBy: string;
   running: boolean;
   error: string | null;
+  /** Under the error: a way out of it (the TLS opt-in), or nothing */
+  errorAction?: ReactNode;
   result: QueryResult | null;
   query: string | null;
   edit?: EditTarget;
@@ -105,7 +107,12 @@ export function TableEditor(p: Props) {
           filterBar={filterBar}
         />
         <RunningBar running={p.running} label={`Loading ${p.title}`} onCancel={p.onCancel} />
-        {p.error && <Notice tone="danger" className="grid-overlay">{p.error}</Notice>}
+        {p.error && (
+          <Notice tone="danger" className="grid-overlay">
+            {p.error}
+            {p.errorAction}
+          </Notice>
+        )}
       </div>
     </div>
   );

@@ -2,23 +2,27 @@
  * Molecules: a row · cell made of a few atoms — list row, detail row, menu item, form field, tab, hint, section title.
  * Spec in README.md
  */
-import { HTMLAttributes, InputHTMLAttributes, MouseEvent, ReactNode, useEffect, useState } from "react";
-import { Avatar, Kbd, Radio, Swatch, Text, TextInput } from "./atoms";
+import { HTMLAttributes, InputHTMLAttributes, KeyboardEvent, MouseEvent, ReactNode, useEffect, useState } from "react";
+import { Avatar, Button, Kbd, Radio, Swatch, Text, TextInput } from "./atoms";
 import { cx } from "./cx";
 import { Chevron } from "./icons";
 
 // ───────── Form ─────────
-/** Label + field on one line. Hint · error below the field */
-export function Field({ label, hint, error, children, className }: { label: ReactNode; hint?: ReactNode; error?: ReactNode; children: ReactNode; className?: string }) {
+/**
+ * Label + field on one line. Hint · error below the field.
+ * group = several controls with their own labels: a div (role group), so a click on the field's label doesn't land in the first control
+ */
+export function Field({ label, hint, error, children, className, group }: { label: ReactNode; hint?: ReactNode; error?: ReactNode; children: ReactNode; className?: string; group?: boolean }) {
+  const Tag = group ? "div" : "label";
   return (
-    <label className={cx("ui-field", className)}>
+    <Tag className={cx("ui-field", className)} role={group ? "group" : undefined} aria-label={group && typeof label === "string" ? label : undefined}>
       <span className="ui-field-label" title={typeof label === "string" ? label : undefined}>
         {label}
       </span>
       {children}
       {hint && <span className="ui-field-hint">{hint}</span>}
       {error && <span className="ui-field-error">{error}</span>}
-    </label>
+    </Tag>
   );
 }
 /** One of several (radio). Short description (hint) per option */
@@ -94,7 +98,7 @@ export function SearchField({ busy, bare, className, ...rest }: InputHTMLAttribu
   return (
     <div className={cx("ui-search", bare && "bare", className)}>
       <span className="ui-search-glass">⌕</span>
-      <TextInput spellCheck={false} {...rest} />
+      <TextInput {...rest} />
       {busy && (
         <span className="ui-search-busy" title="Loading…">
           ◌
@@ -105,9 +109,18 @@ export function SearchField({ busy, bare, className, ...rest }: InputHTMLAttribu
 }
 
 // ───────── Tabs · titles ─────────
-export function Tabs<T extends string>({ items, value, onChange, size }: { items: { id: T; label: ReactNode }[]; value: T; onChange: (id: T) => void; size?: "sm" }) {
+export function Tabs<T extends string>({ items, value, onChange, size, label }: { items: { id: T; label: ReactNode }[]; value: T; onChange: (id: T) => void; size?: "sm"; label?: string }) {
+  // ←/→ (and Home/End) select the previous/next tab and move focus with it, as in the ARIA tab pattern
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const i = items.findIndex((t) => t.id === value);
+    const n = { ArrowLeft: i - 1, ArrowRight: i + 1, Home: 0, End: items.length - 1 }[e.key];
+    if (n === undefined || n < 0 || n >= items.length || n === i) return;
+    e.preventDefault();
+    onChange(items[n].id);
+    e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')[n]?.focus();
+  };
   return (
-    <div className={cx("ui-tabs", size === "sm" && "size-sm")} role="tablist">
+    <div className={cx("ui-tabs", size === "sm" && "size-sm")} role="tablist" aria-label={label} onKeyDown={onKeyDown}>
       {items.map((t) => (
         <button key={t.id} type="button" role="tab" aria-selected={value === t.id} className={cx("ui-tab", value === t.id && "active")} onClick={() => onChange(t.id)}>
           {t.label}
@@ -122,6 +135,48 @@ export const SectionTitle = ({ children, className }: { children: ReactNode; cla
 // ───────── Hints ─────────
 export function Notice({ tone, children, className }: { tone?: "warn" | "danger" | "ok"; children: ReactNode; className?: string }) {
   return <div className={cx("ui-notice", tone && `tone-${tone}`, className)}>{children}</div>;
+}
+/**
+ * Under a connect error that needs TLS (qurry_shared::errors::tls_opt_in): turn on "Allow unencrypted connection" for this data source in one click.
+ * Never offered for Production (the core refuses too): it says where the setting is instead. A failed `onAllow` shows its error here
+ */
+export function TlsOptIn({ host, production, inDialog, onAllow }: { host: string; production?: boolean; inDialog?: boolean; onAllow: () => Promise<unknown> }) {
+  // Inside Data Source Properties the Options tab is right there; elsewhere it's the dialog's shortcut
+  const where = inDialog ? "Options" : "Data Source Properties (⌘;) ▸ Options";
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  if (production)
+    return (
+      <div className="ui-tls-optin">
+        <span className="ui-tls-optin-detail">
+          Production data source: Qurry won't turn off encryption from here. If the server has no TLS and the network is trusted, turn on {where} ▸ Allow unencrypted connection.
+        </span>
+      </div>
+    );
+  return (
+    <div className="ui-tls-optin">
+      <Button
+        size="sm"
+        disabled={busy}
+        title={`To undo, turn off ${where} ▸ Allow unencrypted connection`}
+        onClick={async () => {
+          setBusy(true);
+          setErr(null);
+          try {
+            await onAllow();
+          } catch (e) {
+            setErr(String(e));
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? "Allowing…" : "Allow unencrypted for this data source"}
+      </Button>
+      <span className="ui-tls-optin-detail">The password will be sent unencrypted to {host}. Use only on a network you trust.</span>
+      {err && <Notice tone="danger">{err}</Notice>}
+    </div>
+  );
 }
 export function EmptyState({ title, children, action }: { title?: ReactNode; children?: ReactNode; action?: ReactNode }) {
   return (
@@ -221,11 +276,19 @@ export function ListItem({
   );
 }
 
-/** Detail row: code (statement · query) + value on the right (rows · pid · version). Value colored by tone */
-export function DetailRow({ children, value, tone }: { children: ReactNode; value?: ReactNode; tone?: "danger" | "warn" }) {
+/** Detail row: code (statement · query) + value on the right (rows · pid · version), a note in plain text under the code (why it
+ *  asks). Value colored by tone */
+export function DetailRow({ children, value, tone, note }: { children: ReactNode; value?: ReactNode; tone?: "danger" | "warn"; note?: ReactNode }) {
   return (
     <div className="ui-detail-row">
-      <code className="ui-detail-text">{children}</code>
+      {note === undefined ? (
+        <code className="ui-detail-text">{children}</code>
+      ) : (
+        <span className="ui-detail-main">
+          <code className="ui-detail-text">{children}</code>
+          <span className="ui-detail-note">{note}</span>
+        </span>
+      )}
       {value !== undefined && <span className={cx("ui-detail-value", tone && `tone-${tone}`)}>{value}</span>}
     </div>
   );
@@ -387,7 +450,10 @@ export function TabItem({
   return (
     <div className={cx(base, active && "active", className)} role="tab" aria-selected={active} {...rest}>
       {icon && <span className={cx("tab-icon", iconClass)}>{icon}</span>}
-      <span className="tab-label">{label}</span>
+      {/* data-text: App.css reserves the bold width so a tab doesn't widen when it becomes active */}
+      <span className="tab-label" data-text={typeof label === "string" ? label : undefined}>
+        {label}
+      </span>
       {pinned ? (
         <span className="tab-pin" title="Unpin Tab" onMouseDown={stop} onClick={(e) => (stop(e), onPin?.())}>
           📌

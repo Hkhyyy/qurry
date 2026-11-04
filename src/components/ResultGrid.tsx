@@ -2,12 +2,21 @@ import { setStatusWidget } from "../lib/statusbar";
 import { fracWidth, isTimeType, padFrac } from "../lib/timeFrac";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { Cell, Dialect, dialectOf, QueryResult } from "../lib/api";
 import { DateTimePicker, isTemporal } from "./DateTimePicker";
 import { ContextMenu, MenuItem } from "./Explorer";
-import { inList } from "../lib/inList";
+import { DEFAULT_TOKEN, EXTRACTORS, type Extractor, extractRows, raw } from "../lib/extract";
+import { sharedReady, useSharedReady } from "../lib/shared";
+import { DEFAULTS, useFonts } from "../lib/prefs";
+import { alignTable, CELL_KIND, cellClasses, useGridAlign } from "../lib/gridAlign";
+import { isJsonType, jsonCell } from "../lib/jsonSpans";
+
+import { cmd, commandsFor, eventSpec, hit, keyTitle, runKey } from "../lib/shortcuts";
+import { draftAt, draftToApply, leftDraft, panelText, registerValuePanel, toggleJsonLayout, type PanelDraft } from "../lib/valuePanel";
 import { ResultChart } from "./ResultChart";
-import { Button, CellEditor, CodeBlock, GridCell, GridHeaderCell, GridHeaderRow, GridRow, IconButton, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, TextArea, ToolButton, Toolbar, ToolbarSep } from "../ui";
+import { ValuePanel } from "./ValuePanel";
+import { Button, CellEditor, CodeBlock, cx, GridCell, GridHead, GridHeaderCell, GridHeaderRow, GridRow, IconButton, JsonText, Modal, Notice, RowNumberCell, SearchField, Spacer, Text, ToolButton, Toolbar, ToolbarSep } from "../ui";
 import {
   IcChart, IcClock, IcExport, IcGear, IcMinus, IcPlus, IcPreview, IcReload, IcRevert, IcSearch, IcStop, IcSubmit, IcTranspose, IcView,
 } from "../ui/icons";
@@ -23,13 +32,10 @@ export interface EditTarget {
   pk: string[];
 }
 
-/** DataGrip Data Extractors (copy formats) */
-export const EXTRACTORS = ["CSV", "TSV", "SQL Inserts", "SQL Updates", "Where Clause", "SQL IN List", "JSON", "Markdown"] as const;
-export type Extractor = (typeof EXTRACTORS)[number];
-let lastExtractor: Extractor = "CSV"; // The last chosen extractor is the default for new tabs (DataGrip)
+/** Console results have no table to write to (editing them is a later batch) */
+export const CONSOLE_READ_ONLY = "Console results are read-only. Open the table to edit its rows.";
 
-/** Display value inserted by Set DEFAULT */
-export const DEFAULT_TOKEN = "\u0000DEFAULT";
+let lastExtractor: Extractor = "CSV"; // The last chosen extractor is the default for new tabs (DataGrip)
 
 interface Props {
   result: QueryResult;
@@ -37,6 +43,8 @@ interface Props {
   edit?: EditTarget;
   /** Read-only data source: editing disabled */
   readOnly?: boolean;
+  /** Why rows can't be edited here, on the greyed-out edit buttons (console results: CONSOLE_READ_ONLY) */
+  readOnlyReason?: string;
   /** SQL dialect (identifier quoting, literals) */
   dialect?: Dialect;
   running: boolean;
@@ -72,14 +80,9 @@ function display(c: Cell): string {
   if (c === DEFAULT_TOKEN) return "<default>";
   return String(c);
 }
-const raw = (c: Cell) => (c === null ? "" : c === DEFAULT_TOKEN ? "DEFAULT" : String(c));
 
 /** Cells whose original value is not shown as is (arrays, bytea, etc.) are not editable. */
 const editableValue = (v: Cell, typeName: string) => typeName !== "BYTEA" && !(typeof v === "string" && /^<[A-Z0-9_ \[\]]+>$/.test(v));
-
-function csvField(s: string, sep: string) {
-  return s.includes(sep) || s.includes('"') || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s;
-}
 
 export function ResultGrid(p: Props) {
   const { result, edit, loadingMore } = p;
@@ -89,6 +92,7 @@ export function ResultGrid(p: Props) {
   const lit = (c: Cell) => (c === DEFAULT_TOKEN ? "DEFAULT" : sqlLiteral(c));
   const cols = result.columns;
   const scrollRef = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
   const [sorts, setSorts] = useState<SortKey[]>([]);
   const [selA, setSelA] = useState<Pos | null>(null);
   const [selB, setSelB] = useState<Pos | null>(null);
@@ -108,7 +112,11 @@ export function ResultGrid(p: Props) {
   /** View as › Chart */
   const [chart, setChart] = useState(false);
   const [interval, setIntervalSec] = useState(0);
-  const [valueEditor, setValueEditor] = useState<{ r: number; c: number; text: string } | null>(null);
+  /** Value Editor side panel: open, a request to focus it (⇧↩), the edit typed there, why its last apply was refused */
+  const [panel, setPanel] = useState(false);
+  const [panelFocus, setPanelFocus] = useState(0);
+  const [draft, setDraft] = useState<PanelDraft | null>(null);
+  const [panelError, setPanelError] = useState<string | null>(null);
   const [showQuery, setShowQuery] = useState(false);
   const dragging = useRef(false);
 
@@ -176,6 +184,8 @@ export function ResultGrid(p: Props) {
     setChanges({});
     setDeleted(new Set());
     setAdded([]);
+    setDraft(null);
+    setPanelError(null);
   }, [cols, firstRow]);
 
   // Auto refresh (Update Interval)
@@ -190,34 +200,45 @@ export function ResultGrid(p: Props) {
     return () => clearInterval(t);
   }, [interval, p.running, pendingCount]);
 
+  // Character widths below are for the default grid font size (12px)
+  const em = useFonts().grid.size / DEFAULTS.grid.size;
+  const rownumW = Math.max(ROWNUM_W, Math.round(ROWNUM_W * em));
   const widths = useMemo(
     () =>
       cols.map((col, ci) => {
-        const head = col.name.length * 7.6 + col.typeName.length * 6.2 + 48 + (edit?.pk.includes(col.name) ? 16 : 0);
+        const head = col.name.length * 7.6 * em + col.typeName.length * 6.2 + 48 + (edit?.pk.includes(col.name) ? 16 : 0);
         let len = 0;
         for (const row of result.rows.slice(0, 200)) len = Math.max(len, display(row[ci]).length);
-        return Math.min(Math.max(head, len * 7.3 + 20, 64), 420);
+        return Math.min(Math.max(head, len * 7.3 * em + 20, 64), 420 * em);
       }),
-    [cols, firstRow, edit],
+    [cols, firstRow, edit, em],
   );
-  const total = ROWNUM_W + widths.reduce((a, b) => a + b, 0);
+  const total = rownumW + widths.reduce((a, b) => a + b, 0);
   // Time columns: align fractional-second digits within the column (values unchanged)
-  const fracW = useMemo(() => cols.map((c, ci) => (isTimeType(c.typeName) ? fracWidth(result.rows.map((r) => r[ci])) : 0)), [cols, result.rows]);
+  const wasmReady = useSharedReady();
+  const fracW = useMemo(() => cols.map((c, ci) => (isTimeType(c.typeName) ? fracWidth(result.rows.map((r) => r[ci])) : 0)), [cols, result.rows, wasmReady]);
   const shown = (v: Cell, ci: number) => (fracW[ci] && typeof v === "string" ? padFrac(v, fracW[ci]) : display(v));
+  // Value class of each cell and where it sits (Settings › Appearance › Alignment; the TUI grid's rule)
+  const classOf = useMemo(() => cols.map((c) => cellClasses(c.typeName)), [cols, wasmReady]);
+  const alignOverrides = useGridAlign();
+  const aligns = useMemo(() => alignTable(alignOverrides), [alignOverrides, wasmReady]);
+  // JSON columns color their text cells (lib/jsonSpans.ts, the TUI grid's tokenizer)
+  const jsonCol = useMemo(() => cols.map((c) => isJsonType(c.typeName)), [cols, wasmReady]);
 
   const virt = useVirtualizer({ count: rowCount, getScrollElement: () => scrollRef.current, estimateSize: () => ROW_H, overscan: 20 });
   // Horizontally, render only visible columns too (tables with many columns). Blank cells fill the width on both sides
-  const colVirt = useVirtualizer({ horizontal: true, count: cols.length, getScrollElement: () => scrollRef.current, estimateSize: (i) => widths[i] ?? 64, paddingStart: ROWNUM_W, overscan: 4 });
+  const colVirt = useVirtualizer({ horizontal: true, count: cols.length, getScrollElement: () => scrollRef.current, estimateSize: (i) => widths[i] ?? 64, paddingStart: rownumW, overscan: 4 });
   useEffect(() => colVirt.measure(), [widths]);
   const colItems = colVirt.getVirtualItems();
-  const padL = colItems.length ? colItems[0].start - ROWNUM_W : 0;
+  const padL = colItems.length ? colItems[0].start - rownumW : 0;
   const padR = colItems.length ? colVirt.getTotalSize() - colItems[colItems.length - 1].end : 0;
   const spacer = (w: number) => (w > 0 ? <div style={{ flex: "none", width: w }} /> : null);
   const items = virt.getVirtualItems();
   const lastItem = items[items.length - 1];
   useEffect(() => {
-    if (lastItem && result.truncated && !loadingMore && lastItem.index >= baseCount - 30) p.onFetchMore();
-  }, [lastItem?.index, result.truncated, loadingMore, baseCount]);
+    // After a failed load the reason stays in the grid: no retry on every scroll (running the query again starts over)
+    if (lastItem && result.truncated && !result.moreError && !loadingMore && !p.running && lastItem.index >= baseCount - 30) p.onFetchMore();
+  }, [lastItem?.index, result.truncated, result.moreError, loadingMore, p.running, baseCount]);
 
   // ─── Selection ───
   const rect = selA && selB ? { r0: Math.min(selA.r, selB.r), r1: Math.max(selA.r, selB.r), c0: Math.min(selA.c, selB.c), c1: Math.max(selA.c, selB.c) } : null;
@@ -284,6 +305,50 @@ export function ResultGrid(p: Props) {
     if (r < baseCount && !editableValue(v, cols[c].typeName)) return;
     setEditing({ r, c, value: v === null || v === DEFAULT_TOKEN ? "" : String(v) });
   };
+  // ─── Value Editor panel (follows the current cell) ───
+  const panelCell = active && active.r < rowCount ? active : null;
+  const panelReadOnly = (r: number, c: number) => !canEdit || deleted.has(r) || (r < baseCount && !editableValue(valueAt(r, c), cols[c].typeName));
+  const panelShown = panelCell ? panelText(cols[panelCell.c].typeName, raw(valueAt(panelCell.r, panelCell.c))) : { json: false, text: "" };
+  /** Write a draft to its cell; the reason when a json / jsonb column refuses it */
+  const writeDraft = (d: PanelDraft): string | null => {
+    const res = draftToApply(d, cols[d.c].typeName, raw(valueAt(d.r, d.c)));
+    if (res && "error" in res) return res.error;
+    if (res) setCell(d.r, d.c, res.text);
+    return null;
+  };
+  // The selection left the drafted cell: apply the edit there (DataGrip applies on leaving); one that can't be applied is dropped, saying why
+  useEffect(() => {
+    const d = leftDraft(draft, panelCell);
+    if (!d) return setPanelError(null);
+    const err = writeDraft(d);
+    setDraft(null);
+    setPanelError(err && `${cols[d.c].name} not changed: ${err}`);
+  }, [panelCell?.r, panelCell?.c]);
+  const focusGrid = () => (scrollRef.current ?? wrapRef.current)?.focus();
+  const openPanel = () => {
+    setPanel(true);
+    setPanelFocus((n) => n + 1);
+  };
+  const applyPanel = () => {
+    const err = draft ? writeDraft(draft) : null;
+    setPanelError(err);
+    if (err) return;
+    setDraft(null);
+    focusGrid();
+  };
+  /** × / ⌘w / ⇧⎋: apply the edit, close, back to the grid on the same cell. A refused edit keeps the panel open with the reason */
+  const closePanel = () => {
+    const err = draft ? writeDraft(draft) : null;
+    setPanelError(err);
+    if (err) return;
+    setDraft(null);
+    setPanel(false);
+    focusGrid();
+  };
+  const closePanelRef = useRef(closePanel);
+  closePanelRef.current = closePanel;
+  useEffect(() => (panel && wrapRef.current ? registerValuePanel(wrapRef.current, () => closePanelRef.current()) : undefined), [panel]);
+
   // Status bar Aggregator: Count / Sum / Avg / Min / Max when 2+ cells are selected
   useEffect(() => {
     if (!rect || (rect.r0 === rect.r1 && rect.c0 === rect.c1)) return setStatusWidget("aggregate", undefined);
@@ -416,48 +481,28 @@ export function ResultGrid(p: Props) {
   /** header = a column-name line at the top of CSV · TSV (Copy is values only — DataGrip; Copy with Headers includes it) */
   const extract = (rows: number[], c0: number, c1: number, fmt: Extractor, header = true): string => {
     const cs = Array.from({ length: c1 - c0 + 1 }, (_, i) => c0 + i);
-    const names = cs.map((c) => cols[c].name);
-    const vals = rows.map((r) => cs.map((c) => valueAt(r, c)));
-    switch (fmt) {
-      case "TSV":
-        return [...(header ? [names.join("\t")] : []), ...vals.map((v) => v.map(raw).join("\t"))].join("\n");
-      case "CSV":
-        return [...(header ? [names.map((n) => csvField(n, ",")).join(",")] : []), ...vals.map((v) => v.map((x) => csvField(raw(x), ",")).join(","))].join("\n");
-      case "SQL Inserts":
-        return vals.map((v) => `INSERT INTO ${tableRef} (${names.map(quoteIdent).join(", ")}) VALUES (${v.map(lit).join(", ")});`).join("\n");
-      case "SQL Updates":
-        return rows
-          .map((r, i) => {
-            const w = pkIdx.length ? pkIdx.map((k) => `${quoteIdent(cols[k].name)} = ${sqlLiteral(valueAt(r, k))}`).join(" AND ") : "/* no key */";
-            return `UPDATE ${tableRef} SET ${names.map((n, j) => `${quoteIdent(n)} = ${lit(vals[i][j])}`).join(", ")} WHERE ${w};`;
-          })
-          .join("\n");
-      case "Where Clause":
-        return vals.map((v) => "(" + names.map((n, j) => (v[j] === null ? `${quoteIdent(n)} IS NULL` : `${quoteIdent(n)} = ${lit(v[j])}`)).join(" AND ") + ")").join(" OR\n");
-      case "SQL IN List":
-        return inList(vals.map((v) => v.map((x) => (x === DEFAULT_TOKEN ? null : x))), cs.map((c) => cols[c].typeName));
-      case "JSON":
-        return JSON.stringify(vals.map((v) => Object.fromEntries(names.map((n, j) => [n, v[j] === DEFAULT_TOKEN ? null : v[j]]))), null, 2);
-      case "Markdown":
-        return [
-          `| ${names.join(" | ")} |`,
-          `| ${names.map(() => "---").join(" | ")} |`,
-          ...vals.map((v) => `| ${v.map((x) => (x === null ? "" : raw(x)).replace(/\|/g, "\\|")).join(" | ")} |`),
-        ].join("\n");
-    }
+    // Key values are read only for SQL Updates (as before: other formats never touch the key columns)
+    const keys = fmt === "SQL Updates" ? rows.map((r) => pkIdx.map((k): [string, Cell] => [cols[k].name, valueAt(r, k)])) : [];
+    return extractRows(fmt, { names: cs.map((c) => cols[c].name), types: cs.map((c) => cols[c].typeName), vals: rows.map((r) => cs.map((c) => valueAt(r, c))), keys, tableRef, dialect: D, header });
+  };
+  /** The shared WASM writes the formats: without it (a WebView that refused WebAssembly) say why nothing is copied */
+  const formatted = (make: () => string): string | undefined => {
+    if (sharedReady()) return make();
+    setStatusWidget("aggregate", "Copy formats need WebAssembly, which this WebView refused: update macOS (Safari) or webkit2gtk");
   };
   const copySelection = (header = false) => {
     if (!rect) return;
     const single = rect.r0 === rect.r1 && rect.c0 === rect.c1;
-    const text = single && !header && (extractor === "CSV" || extractor === "TSV") ? raw(valueAt(dataIndex(rect.r0), rect.c0)) : extract(selRows(), rect.c0, rect.c1, extractor, header);
-    navigator.clipboard.writeText(text);
+    const text = single && !header && (extractor === "CSV" || extractor === "TSV") ? raw(valueAt(dataIndex(rect.r0), rect.c0)) : formatted(() => extract(selRows(), rect.c0, rect.c1, extractor, header));
+    if (text !== undefined) navigator.clipboard.writeText(text);
   };
   /** Selected cells as ('a', 'b') (paste straight into WHERE x IN). If only one cell is selected, its whole column */
   const copyInList = () => {
     if (!rect) return;
     const single = rect.r0 === rect.r1 && rect.c0 === rect.c1;
     const rows = single ? Array.from({ length: rowCount }, (_, i) => dataIndex(i)) : selRows();
-    navigator.clipboard.writeText(extract(rows, rect.c0, rect.c1, "SQL IN List"));
+    const text = formatted(() => extract(rows, rect.c0, rect.c1, "SQL IN List"));
+    if (text !== undefined) navigator.clipboard.writeText(text);
   };
   /** Paste: split multi-line TSV/CSV into cells, adding new rows if there are not enough (DataGrip) */
   const paste = async () => {
@@ -480,40 +525,30 @@ export function ResultGrid(p: Props) {
 
   // ─── Keyboard (DataGrip grid keymap) ───
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (editing || valueEditor) return;
+    // On .grid-wrap, so the keys work in Chart and Transpose too; the find bar's and filter fields' own typing stays theirs
+    if (editing || (e.target as HTMLElement).closest("input, textarea, select")) return;
     const mod = isMac ? e.metaKey : e.ctrlKey;
     const k = e.key.toLowerCase();
     const stop = () => {
       e.preventDefault();
       e.stopPropagation();
     };
-    if (mod && k === "a") {
+    // Chart and Transpose have no cell selection: only the grid commands below
+    const cells = !chart && !transposed;
+    if (cells && mod && k === "a") {
       setSelA({ r: 0, c: 0 });
       setSelB({ r: rowCount - 1, c: cols.length - 1 });
       return stop();
     }
-    if (mod && k === "c" && !e.shiftKey) return copySelection(false), stop();
-    if (mod && k === "v") return paste(), stop();
-    if (mod && k === "f") {
-      setFindOpen(true);
-      setTimeout(() => document.querySelector<HTMLInputElement>(".grid-find input")?.focus());
-      return stop();
-    }
-    if (mod && k === "r") return p.onReload(), stop();
-    // While running, the global shortcut (editor.cancel) already cancelled (so it is not called twice)
-    if (mod && e.key === "F2") return e.defaultPrevented || p.onCancel(), stop();
-    if (mod && e.altKey && e.code === "KeyN") return setNull(), stop();
-    if (mod && e.altKey && e.code === "KeyD") return setDefault(), stop();
-    if (mod && e.altKey && e.code === "KeyZ") return revertSelected(), stop();
-    if (mod && k === "n") return addRow(), stop();
-    if (mod && k === "d") return cloneRow(), stop();
-    if (mod && e.key === "Backspace") return deleteRows(), stop();
-    if (mod && e.key === "Enter") return submit(), stop();
-    if (e.shiftKey && e.key === "Enter" && active) {
-      setValueEditor({ r: active.r, c: active.c, text: raw(valueAt(active.r, active.c)) });
-      return stop();
-    }
-    if (!selB) return;
+    if (cells && mod && k === "c" && !e.shiftKey) return copySelection(false), stop();
+    if (cells && mod && k === "v") return paste(), stop();
+    // Grid commands (Settings › Keymap › Data Grid): what the toolbar, its menus and the cell menu show. While running, the global
+    // shortcut (editor.cancel) already cancelled when it has the same key (so it is not called twice)
+    const spec = eventSpec(e.nativeEvent);
+    if (e.defaultPrevented && hit(spec, "grid.cancel")) return stop();
+    // A grid command's key is the grid's even when the command is disabled now (⌘r while running must not reload the WebView)
+    if (commandsFor(spec, "grid").length) return runKey(spec, "grid", () => [...toolbarCommands(), ...(selB && cells ? cellItems(selB.r, selB.c) : [])]), stop();
+    if (!selB || !cells) return;
     if ((e.key === "Enter" || e.key === "F2") && canEdit && active) return startEdit(active.r, active.c), stop();
     if (e.key === "Escape") {
       setFindOpen(false);
@@ -538,42 +573,39 @@ export function ResultGrid(p: Props) {
   };
 
   // ─── Cell context menu ───
-  const openCellMenu = (e: React.MouseEvent, d: number, c: number) => {
-    e.preventDefault();
-    if (!inSel(d, c)) selectCell({ r: d, c }, false);
+  /** The cell menu of display row d, column c. Grid command keys run its entries for the selected cell */
+  const cellItems = (d: number, c: number): MenuItem[] => {
     const r = dataIndex(d);
     const v = valueAt(r, c);
-    const k = isMac
-      ? { vedit: "⇧↩", nul: "⌥⌘n", def: "⌥⌘d", copy: "⌘c", paste: "⌘v", del: "⌘⌫", clone: "⌘d", revert: "⌥⌘z", rec: "⇧⌘↩" }
-      : { vedit: "Shift+Enter", nul: "Ctrl+Alt+n", def: "Ctrl+Alt+d", copy: "Ctrl+c", paste: "Ctrl+v", del: "Ctrl+Backspace", clone: "Ctrl+d", revert: "Ctrl+Alt+z", rec: "Ctrl+Shift+Enter" };
+    const k = isMac ? { copy: "⌘c", paste: "⌘v" } : { copy: "Ctrl+c", paste: "Ctrl+v" };
     const name = quoteIdent(cols[c].name);
     // Row values at the moment the menu opened (the chosen row stays even if auto refresh reorders rows — so the wrong session is not killed)
     const rowObj = Object.fromEntries(cols.map((col, i) => [col.name, valueAt(r, i)]));
     const items: MenuItem[] = [
       ...(p.rowActions?.length ? ([...p.rowActions.map((a) => ({ label: a.label, danger: a.danger, action: () => a.run(rowObj) })), { separator: true }] as MenuItem[]) : []),
       ...(canEdit ? ([{ label: "Edit", shortcut: "↩", action: () => startEdit(r, c) }] as MenuItem[]) : []),
-      { label: "Open in Value Editor", shortcut: k.vedit, action: () => setValueEditor({ r, c, text: raw(v) }) },
+      { label: "Open in Value Editor", ...cmd("grid.valueEditor"), action: openPanel },
       ...(canEdit
         ? ([
-            { label: "Revert Selected", shortcut: k.revert, action: revertSelected },
+            { label: "Revert Selected", ...cmd("grid.revert"), action: revertSelected },
             { separator: true },
-            { label: "Set DEFAULT", shortcut: k.def, action: setDefault },
-            { label: "NULL", shortcut: k.nul, action: setNull },
-            { label: "Generate UUID", action: genUuid },
+            { label: "Set DEFAULT", ...cmd("grid.setDefault"), action: setDefault },
+            { label: "NULL", ...cmd("grid.setNull"), action: setNull },
+            { label: "Generate UUID", ...cmd("grid.genUuid"), action: genUuid },
           ] as MenuItem[])
         : []),
       { separator: true },
       { label: "Copy", shortcut: k.copy, action: () => copySelection(false) },
-      { label: "Copy with Headers", action: () => copySelection(true), disabled: extractor !== "CSV" && extractor !== "TSV" },
-      { label: "Copy as IN List  ('a', 'b', …)", action: copyInList },
+      { label: "Copy with Headers", ...cmd("grid.copyHeaders"), action: () => copySelection(true), disabled: extractor !== "CSV" && extractor !== "TSV" },
+      { label: "Copy as IN List  ('a', 'b', …)", ...cmd("grid.copyInList"), action: copyInList },
       { label: "Change Data Extractor", submenu: EXTRACTORS.map((x) => ({ label: (x === extractor ? "✓ " : "　") + x, action: () => setExtractor(x) })) },
       ...(canEdit ? ([{ label: "Paste", shortcut: k.paste, action: paste }] as MenuItem[]) : []),
       ...(canEdit
         ? ([
             { separator: true },
-            { label: "Add Row", action: addRow },
-            { label: "Delete Row", shortcut: k.del, action: deleteRows },
-            { label: "Clone Row", shortcut: k.clone, action: cloneRow },
+            { label: "Add Row", ...cmd("grid.addRow"), action: addRow },
+            { label: "Delete Row", ...cmd("grid.deleteRows"), action: deleteRows },
+            { label: "Clone Row", ...cmd("grid.cloneRow"), action: cloneRow },
           ] as MenuItem[])
         : []),
       ...(p.onFindSimilar && p.edit?.pk.length
@@ -603,10 +635,15 @@ export function ResultGrid(p: Props) {
           ] as MenuItem[])
         : []),
       { separator: true },
-      { label: "Export Data…", action: p.onExport },
-      ...(p.onDdl ? ([{ label: "Go To DDL", shortcut: isMac ? "⌘b" : "Ctrl+b", action: p.onDdl }] as MenuItem[]) : []),
+      { label: "Export Data…", ...cmd("grid.export"), action: p.onExport },
+      ...(p.onDdl ? ([{ label: "Go To DDL", ...cmd("grid.ddl"), action: p.onDdl }] as MenuItem[]) : []),
     ];
-    setMenu({ x: e.clientX, y: e.clientY, items });
+    return items;
+  };
+  const openCellMenu = (e: React.MouseEvent, d: number, c: number) => {
+    e.preventDefault();
+    if (!inSel(d, c)) selectCell({ r: d, c }, false);
+    setMenu({ x: e.clientX, y: e.clientY, items: cellItems(d, c) });
   };
 
   // ─── Toolbar dropdowns ───
@@ -615,15 +652,53 @@ export function ResultGrid(p: Props) {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     setMenu({ x: r.left, y: r.bottom + 2, items });
   };
-  const k = isMac ? { reload: "⌘r", cancel: "⌘F2", add: "⌘n", del: "⌘⌫", revert: "⌥⌘z", submit: "⌘↩", find: "⌘f" } : { reload: "Ctrl+r", cancel: "Ctrl+F2", add: "Ctrl+n", del: "Ctrl+Backspace", revert: "Ctrl+Alt+z", submit: "Ctrl+Enter", find: "Ctrl+f" };
+  /** The find bar, opened and focused (its key, DataGrip); the toolbar button toggles it */
+  const openFind = () => {
+    setFindOpen(true);
+    setTimeout(() => wrapRef.current?.querySelector<HTMLInputElement>(".grid-find input")?.focus());
+  };
+  const viewItems = (): MenuItem[] => [
+    { label: (!transposed && !chart ? "✓ " : "　") + "Table", ...cmd("grid.viewTable"), action: () => (setTransposed(false), setChart(false)) },
+    { label: (transposed ? "✓ " : "　") + "Transpose", ...cmd("grid.viewTranspose"), action: () => (setTransposed(true), setChart(false)) },
+    { label: (chart ? "✓ " : "　") + "Chart", ...cmd("grid.viewChart"), action: () => (setChart(true), setTransposed(false)) },
+  ];
+  const optionItems = (): MenuItem[] => [
+    ...(p.filterBar ? ([{ label: (showFilter ? "✓ " : "　") + "Show Filter", ...cmd("grid.showFilter"), action: () => setShowFilter((v) => !v) }] as MenuItem[]) : []),
+    ...(p.onServerSort ? ([{ label: (sortViaOrderBy ? "✓ " : "　") + "Sort via ORDER BY", ...cmd("grid.sortOrderBy"), action: () => { setSorts([]); setSortViaOrderBy((v) => !v); } }] as MenuItem[]) : []),
+    { label: "Reset View", ...cmd("grid.resetView"), action: () => { setSorts([]); setTransposed(false); setChart(false); if (serverSort) p.onServerSort!(""); } },
+    { separator: true },
+    { label: "View Query", ...cmd("grid.viewQuery"), action: () => setShowQuery(true), disabled: !p.query },
+    ...(p.onCopyQueryToConsole ? ([{ label: "Copy Query to Console", ...cmd("grid.queryToConsole"), action: () => p.query && p.onCopyQueryToConsole!(p.query), disabled: !p.query }] as MenuItem[]) : []),
+    { label: "Copy Query to Clipboard", ...cmd("grid.copyQuery"), action: () => p.query && navigator.clipboard.writeText(p.query), disabled: !p.query },
+  ];
+  /** What the toolbar's buttons and menus run, for their command keys (the buttons are drawn below with the same conditions) */
+  const toolbarCommands = (): MenuItem[] => [
+    { label: "Reload Page", ...cmd("grid.reload"), action: p.onReload, disabled: p.running },
+    { label: "Cancel Running Statements", ...cmd("grid.cancel"), action: p.onCancel, disabled: !p.running },
+    { label: "Add Row", ...cmd("grid.addRow"), action: addRow, disabled: !canEdit },
+    { label: "Delete Row", ...cmd("grid.deleteRows"), action: deleteRows, disabled: !canEdit || !rect },
+    { label: "Revert Selected", ...cmd("grid.revert"), action: revertSelected, disabled: !pendingCount },
+    { label: "Preview Pending Changes", ...cmd("grid.preview"), action: () => setPreview({ sql: buildStatements(), readOnly: true }), disabled: !pendingCount },
+    { label: "Submit", ...cmd("grid.submit"), action: submit, disabled: !pendingCount },
+    ...(p.onDdl ? ([{ label: "Go to DDL", ...cmd("grid.ddl"), action: p.onDdl }] as MenuItem[]) : []),
+    { label: "Find on Current Page", ...cmd("grid.find"), action: openFind },
+    { label: "Export Data…", ...cmd("grid.export"), action: p.onExport },
+    ...viewItems(),
+    ...optionItems(),
+  ];
 
+  /** An edit button's tooltip and description: the command, and why it's greyed out when the grid says so */
+  const editButton = (title: string, id: string) => ({
+    title: p.readOnlyReason ? `${keyTitle(title, id)} — ${p.readOnlyReason}` : keyTitle(title, id),
+    "aria-description": p.readOnlyReason,
+  });
   const rowsLabel = `${baseCount}${result.truncated ? "+" : ""} row${baseCount === 1 ? "" : "s"}`;
 
   return (
-    <div className="grid-wrap">
+    <div className="grid-wrap" ref={wrapRef} tabIndex={-1} onKeyDown={onKeyDown}>
       {/* ── DataGrip grid toolbar ── */}
       <Toolbar onMouseDown={(e) => e.stopPropagation()}>
-        <IconButton title={`Reload Page (${k.reload})`} onClick={p.onReload} disabled={p.running}><IcReload /></IconButton>
+        <IconButton title={keyTitle("Reload Page", "grid.reload")} onClick={p.onReload} disabled={p.running}><IcReload /></IconButton>
         <IconButton active={!!interval}
           title="Update Interval"
           onClick={(e) =>
@@ -634,13 +709,13 @@ export function ResultGrid(p: Props) {
         >
           <IcClock />
         </IconButton>
-        <IconButton tone="danger" title={`Cancel Running Statements (${k.cancel})`} onClick={p.onCancel} disabled={!p.running}><IcStop /></IconButton>
+        <IconButton tone="danger" title={keyTitle("Cancel Running Statements", "grid.cancel")} onClick={p.onCancel} disabled={!p.running}><IcStop /></IconButton>
         <ToolbarSep />
-        <IconButton title={`Add Row (${k.add})`} onClick={addRow} disabled={!canEdit}><IcPlus /></IconButton>
-        <IconButton title={`Delete Row (${k.del})`} onClick={deleteRows} disabled={!canEdit || !rect}><IcMinus /></IconButton>
-        <IconButton title={`Revert Selected (${k.revert})`} onClick={revertSelected} disabled={!pendingCount}><IcRevert /></IconButton>
-        <IconButton title="Preview Pending Changes" onClick={() => setPreview({ sql: buildStatements(), readOnly: true })} disabled={!pendingCount}><IcPreview /></IconButton>
-        <IconButton active={false} className={pendingCount ? "accent" : undefined} title={`Submit (${k.submit})`} onClick={submit} disabled={!pendingCount}><IcSubmit /></IconButton>
+        <IconButton {...editButton("Add Row", "grid.addRow")} onClick={addRow} disabled={!canEdit}><IcPlus /></IconButton>
+        <IconButton {...editButton("Delete Row", "grid.deleteRows")} onClick={deleteRows} disabled={!canEdit || !rect}><IcMinus /></IconButton>
+        <IconButton {...editButton("Revert Selected", "grid.revert")} onClick={revertSelected} disabled={!pendingCount}><IcRevert /></IconButton>
+        <IconButton {...editButton("Preview Pending Changes", "grid.preview")} onClick={() => setPreview({ sql: buildStatements(), readOnly: true })} disabled={!pendingCount}><IcPreview /></IconButton>
+        <IconButton active={false} className={pendingCount ? "accent" : undefined} {...editButton("Submit", "grid.submit")} onClick={submit} disabled={!pendingCount}><IcSubmit /></IconButton>
         <ToolbarSep />
         <ToolButton
           title="Transaction mode"
@@ -653,13 +728,10 @@ export function ResultGrid(p: Props) {
         >
           Tx: Auto ▾
         </ToolButton>
-        {p.onDdl && <ToolButton title="Go to DDL" onClick={p.onDdl}>DDL</ToolButton>}
+        {p.onDdl && <ToolButton title={keyTitle("Go to DDL", "grid.ddl")} onClick={p.onDdl}>DDL</ToolButton>}
         <IconButton active={findOpen}
-          title={`Find on Current Page (${k.find})`}
-          onClick={() => {
-            setFindOpen((f) => !f);
-            setTimeout(() => document.querySelector<HTMLInputElement>(".grid-find input")?.focus());
-          }}
+          title={keyTitle("Find on Current Page", "grid.find")}
+          onClick={() => (findOpen ? setFindOpen(false) : openFind())}
         >
           <IcSearch />
         </IconButton>
@@ -668,32 +740,16 @@ export function ResultGrid(p: Props) {
         <ToolButton title="Data Extractor (copy format)" onClick={(e) => dropdown(e, EXTRACTORS.map((x) => ({ label: (x === extractor ? "✓ " : "　") + x, action: () => setExtractor(x) })))}>
           {extractor} ▾
         </ToolButton>
-        <IconButton title="Export Data…" onClick={p.onExport}><IcExport /></IconButton>
+        <IconButton title={keyTitle("Export Data…", "grid.export")} onClick={p.onExport}><IcExport /></IconButton>
         <IconButton active={transposed || chart}
           title="View as"
-          onClick={(e) =>
-            dropdown(e, [
-              { label: (!transposed && !chart ? "✓ " : "　") + "Table", action: () => (setTransposed(false), setChart(false)) },
-              { label: (transposed ? "✓ " : "　") + "Transpose", action: () => (setTransposed(true), setChart(false)) },
-              { label: (chart ? "✓ " : "　") + "Chart", action: () => (setChart(true), setTransposed(false)) },
-            ])
-          }
+          onClick={(e) => dropdown(e, viewItems())}
         >
           {chart ? <IcChart /> : transposed ? <IcTranspose /> : <IcView />}
         </IconButton>
         <IconButton
           title="Show Options Menu"
-          onClick={(e) =>
-            dropdown(e, [
-              ...(p.filterBar ? ([{ label: (showFilter ? "✓ " : "　") + "Show Filter", action: () => setShowFilter((v) => !v) }] as MenuItem[]) : []),
-              ...(p.onServerSort ? ([{ label: (sortViaOrderBy ? "✓ " : "　") + "Sort via ORDER BY", action: () => { setSorts([]); setSortViaOrderBy((v) => !v); } }] as MenuItem[]) : []),
-              { label: "Reset View", action: () => { setSorts([]); setTransposed(false); setChart(false); if (serverSort) p.onServerSort!(""); } },
-              { separator: true },
-              { label: "View Query", action: () => setShowQuery(true), disabled: !p.query },
-              ...(p.onCopyQueryToConsole ? ([{ label: "Copy Query to Console", action: () => p.query && p.onCopyQueryToConsole!(p.query), disabled: !p.query }] as MenuItem[]) : []),
-              { label: "Copy Query to Clipboard", action: () => p.query && navigator.clipboard.writeText(p.query), disabled: !p.query },
-            ])
-          }
+          onClick={(e) => dropdown(e, optionItems())}
         >
           <IcGear />
         </IconButton>
@@ -721,163 +777,193 @@ export function ResultGrid(p: Props) {
         </div>
       )}
 
-      {chart ? (
-        <ResultChart result={result} />
-      ) : transposed ? (
-        <TransposedView cols={cols} rows={Array.from({ length: Math.min(rowCount, 300) }, (_, d) => cols.map((_, c) => valueAt(dataIndex(d), c)))} />
-      ) : (
-        <div
-          className="grid-scroll"
-          ref={scrollRef}
-          tabIndex={0}
-          onKeyDown={onKeyDown}
-          onMouseUp={() => (dragging.current = false)}
-          onMouseLeave={() => (dragging.current = false)}
-        >
-          <div style={{ width: total, height: virt.getTotalSize() + HEADER_H, position: "relative" }}>
-            <GridHeaderRow width={total} height={HEADER_H}>
-              <RowNumberCell
-                width={ROWNUM_W}
-                title="Select all (⌘a)"
-                onMouseDown={() => {
-                  setSelA({ r: 0, c: 0 });
-                  setSelB({ r: rowCount - 1, c: cols.length - 1 });
-                }}
-              />
-              {spacer(padL)}
-              {colItems.map(({ index: i }) => {
-                const c = cols[i];
-                const idx = sorts.findIndex((x) => x.col === i);
-                const key = sorts[idx];
-                return (
-                  <GridHeaderCell
-                    key={i}
-                    name={c.name}
-                    type={c.typeName}
-                    pk={edit?.pk.includes(c.name)}
-                    width={widths[i]}
-                    colSelected={!!rect && rect.c0 <= i && i <= rect.c1}
-                    sort={key ? { dir: key.dir, order: sorts.length > 1 ? idx + 1 : undefined } : undefined}
-                    onMouseDown={(e) => {
-                      // Header click = select the whole column (DataGrip)
-                      if (e.shiftKey && selA) setSelB({ r: rowCount - 1, c: i });
-                      else {
-                        setSelA({ r: 0, c: i });
-                        setSelB({ r: rowCount - 1, c: i });
-                      }
-                    }}
-                    onSortClick={(e) => clickSort(i, e.altKey)}
-                  />
-                );
-              })}
-              {spacer(padR)}
-            </GridHeaderRow>
-            {items.map((vi) => {
-              const d = vi.index;
-              const r = dataIndex(d);
-              const row = rowAt(r);
-              if (!row) return null;
-              const isNew = r >= baseCount;
-              const isDel = deleted.has(r);
-              return (
-                <GridRow key={vi.key} top={HEADER_H + vi.start} height={ROW_H} width={total} odd={d % 2 === 1} added={isNew} deleted={isDel}>
+      {/* The grid and, to its right, the Value Editor panel (DataGrip): the grid narrows, the splitter's place is remembered */}
+      <PanelGroup direction="horizontal" autoSaveId="dbtool-value-panel" className="grid-split">
+        <Panel id="grid" order={1} minSize={25}>
+          <div className="grid-body">
+            {/* Column header above the scroller (not sticky inside it), so it can't drift off the toolbar while rows scroll */}
+            {!chart && !transposed && (
+              <GridHead body={scrollRef}>
+                <GridHeaderRow width={total} height={HEADER_H}>
                   <RowNumberCell
-                    width={ROWNUM_W}
-                    selected={!!rect && rect.r0 <= d && d <= rect.r1}
-                    onMouseDown={(e) => {
-                      // Gutter number click = select the row
-                      if (e.shiftKey && selA) setSelB({ r: d, c: cols.length - 1 });
-                      else {
-                        setSelA({ r: d, c: 0 });
-                        setSelB({ r: d, c: cols.length - 1 });
-                      }
+                    width={rownumW}
+                    title="Select all (⌘a)"
+                    onMouseDown={() => {
+                      setSelA({ r: 0, c: 0 });
+                      setSelB({ r: rowCount - 1, c: cols.length - 1 });
                     }}
-                  >
-                    {isNew ? "+" : d + 1}
-                  </RowNumberCell>
+                  />
                   {spacer(padL)}
-                  {colItems.map(({ index: ci }) => {
-                    const val = valueAt(r, ci);
-                    const changed = !isNew && changes[r] && ci in changes[r];
-                    if (editing && editing.r === r && editing.c === ci) {
-                      const temporal = isTemporal(cols[ci].typeName);
-                      return (
-                        <CellEditor
-                          key={ci}
-                          width={widths[ci]}
-                          value={editing.value}
-                          onChange={(v) => setEditing({ ...editing, value: v })}
-                          onBlurOut={commitEdit}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === "Tab") {
-                              e.preventDefault();
-                              commitEdit();
-                              if (e.key === "Tab") selectCell({ r: d, c: Math.min(ci + 1, cols.length - 1) }, false);
-                            } else if (e.key === "Escape") {
-                              setEditing(null);
-                              scrollRef.current?.focus();
-                            }
-                            e.stopPropagation();
-                          }}
-                          more={temporal ? { title: "Choose date/time", onClick: () => setEditing({ ...editing, picker: !editing.picker }) } : undefined}
-                        >
-                          {temporal && editing.picker && (
-                            <DateTimePicker value={editing.value} typeName={cols[ci].typeName} onChange={(v) => setEditing((ed) => (ed ? { ...ed, value: v } : ed))} />
-                          )}
-                        </CellEditor>
-                      );
-                    }
+                  {colItems.map(({ index: i }) => {
+                    const c = cols[i];
+                    const idx = sorts.findIndex((x) => x.col === i);
+                    const key = sorts[idx];
                     return (
-                      <GridCell
-                        key={ci}
-                        width={widths[ci]}
-                        kind={val === null || val === DEFAULT_TOKEN ? "null" : typeof val === "number" ? "num" : undefined}
-                        selected={inSel(d, ci)}
-                        active={selB?.r === d && selB?.c === ci}
-                        changed={!!changed}
-                        match={isMatch(d, ci)}
+                      <GridHeaderCell
+                        key={i}
+                        name={c.name}
+                        type={c.typeName}
+                        pk={edit?.pk.includes(c.name)}
+                        width={widths[i]}
+                        colSelected={!!rect && rect.c0 <= i && i <= rect.c1}
+                        sort={key ? { dir: key.dir, order: sorts.length > 1 ? idx + 1 : undefined } : undefined}
                         onMouseDown={(e) => {
-                          if (e.button !== 0) return;
-                          dragging.current = true;
-                          selectCell({ r: d, c: ci }, e.shiftKey);
+                          // Header click = select the whole column (DataGrip)
+                          if (e.shiftKey && selA) setSelB({ r: rowCount - 1, c: i });
+                          else {
+                            setSelA({ r: 0, c: i });
+                            setSelB({ r: rowCount - 1, c: i });
+                          }
                         }}
-                        onMouseEnter={() => {
-                          if (dragging.current) setSelB({ r: d, c: ci });
-                        }}
-                        onDoubleClick={() => startEdit(r, ci)}
-                        onContextMenu={(e) => openCellMenu(e, d, ci)}
-                      >
-                        {shown(val, ci)}
-                      </GridCell>
+                        onSortClick={(e) => clickSort(i, e.altKey)}
+                      />
                     );
                   })}
                   {spacer(padR)}
-                </GridRow>
-              );
-            })}
+                </GridHeaderRow>
+              </GridHead>
+            )}
+            {chart ? (
+              <ResultChart result={result} />
+            ) : transposed ? (
+              <TransposedView cols={cols} rows={Array.from({ length: Math.min(rowCount, 300) }, (_, d) => cols.map((_, c) => valueAt(dataIndex(d), c)))} />
+            ) : (
+              <div
+                className="grid-scroll"
+                ref={scrollRef}
+                tabIndex={0}
+                onMouseUp={() => (dragging.current = false)}
+                onMouseLeave={() => (dragging.current = false)}
+              >
+                <div style={{ width: total, height: virt.getTotalSize(), position: "relative" }}>
+                  {items.map((vi) => {
+                    const d = vi.index;
+                    const r = dataIndex(d);
+                    const row = rowAt(r);
+                    if (!row) return null;
+                    const isNew = r >= baseCount;
+                    const isDel = deleted.has(r);
+                    return (
+                      <GridRow key={vi.key} top={vi.start} height={ROW_H} width={total} odd={d % 2 === 1} added={isNew} deleted={isDel}>
+                        <RowNumberCell
+                          width={rownumW}
+                          selected={!!rect && rect.r0 <= d && d <= rect.r1}
+                          onMouseDown={(e) => {
+                            // Gutter number click = select the row
+                            if (e.shiftKey && selA) setSelB({ r: d, c: cols.length - 1 });
+                            else {
+                              setSelA({ r: d, c: 0 });
+                              setSelB({ r: d, c: cols.length - 1 });
+                            }
+                          }}
+                        >
+                          {isNew ? "+" : d + 1}
+                        </RowNumberCell>
+                        {spacer(padL)}
+                        {colItems.map(({ index: ci }) => {
+                          const val = valueAt(r, ci);
+                          const changed = !isNew && changes[r] && ci in changes[r];
+                          if (editing && editing.r === r && editing.c === ci) {
+                            const temporal = isTemporal(cols[ci].typeName);
+                            return (
+                              <CellEditor
+                                key={ci}
+                                width={widths[ci]}
+                                value={editing.value}
+                                onChange={(v) => setEditing({ ...editing, value: v })}
+                                onBlurOut={commitEdit}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" || e.key === "Tab") {
+                                    e.preventDefault();
+                                    commitEdit();
+                                    if (e.key === "Tab") selectCell({ r: d, c: Math.min(ci + 1, cols.length - 1) }, false);
+                                  } else if (e.key === "Escape") {
+                                    setEditing(null);
+                                    scrollRef.current?.focus();
+                                  }
+                                  e.stopPropagation();
+                                }}
+                                more={temporal ? { title: "Choose date/time", onClick: () => setEditing({ ...editing, picker: !editing.picker }) } : undefined}
+                              >
+                                {temporal && editing.picker && (
+                                  <DateTimePicker value={editing.value} typeName={cols[ci].typeName} onChange={(v) => setEditing((ed) => (ed ? { ...ed, value: v } : ed))} />
+                                )}
+                              </CellEditor>
+                            );
+                          }
+                          const cls = classOf[ci](val);
+                          return (
+                            <GridCell
+                              key={ci}
+                              width={widths[ci]}
+                              kind={CELL_KIND[cls]}
+                              align={aligns[cls]}
+                              selected={inSel(d, ci)}
+                              active={selB?.r === d && selB?.c === ci}
+                              changed={!!changed}
+                              match={isMatch(d, ci)}
+                              onMouseDown={(e) => {
+                                if (e.button !== 0) return;
+                                dragging.current = true;
+                                selectCell({ r: d, c: ci }, e.shiftKey);
+                              }}
+                              onMouseEnter={() => {
+                                if (dragging.current) setSelB({ r: d, c: ci });
+                              }}
+                              onDoubleClick={() => startEdit(r, ci)}
+                              onContextMenu={(e) => openCellMenu(e, d, ci)}
+                            >
+                              {cls === "jsonBinary" && jsonCol[ci] ? <JsonText {...jsonCell(String(val))} /> : shown(val, ci)}
+                            </GridCell>
+                          );
+                        })}
+                        {spacer(padR)}
+                      </GridRow>
+                    );
+                  })}
+                </div>
+                {loadingMore && <div className="grid-loading">Loading more…</div>}
+                {!loadingMore && result.moreError && (
+                  <div className="grid-loading grid-more-error" role="alert">
+                    {result.moreError}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
-          {loadingMore && <div className="grid-loading">Loading more…</div>}
-        </div>
-      )}
+        </Panel>
+        {panel && !chart && (
+          <>
+            <PanelResizeHandle className="resize-h" />
+            <Panel id="value" order={2} defaultSize={35} minSize={15}>
+              <ValuePanel
+                title={panelCell ? `${cols[panelCell.c].name} : ${cols[panelCell.c].typeName.toLowerCase()}` : undefined}
+                text={draftAt(draft, panelCell) ? draft.text : panelShown.text}
+                json={panelShown.json}
+                isNull={!!panelCell && valueAt(panelCell.r, panelCell.c) === null}
+                readOnly={!panelCell || panelReadOnly(panelCell.r, panelCell.c)}
+                error={panelError}
+                focusSeq={panelFocus}
+                onChange={(text) => {
+                  if (!panelCell) return;
+                  setPanelError(null);
+                  setDraft({ ...panelCell, text, base: panelShown.text, editable: !panelReadOnly(panelCell.r, panelCell.c) });
+                }}
+                onToggleLayout={() => {
+                  if (!panelCell) return;
+                  const text = toggleJsonLayout(draftAt(draft, panelCell) ? draft.text : panelShown.text);
+                  setDraft({ ...panelCell, text, base: panelShown.text, editable: !panelReadOnly(panelCell.r, panelCell.c) });
+                }}
+                onApply={applyPanel}
+                onBack={focusGrid}
+                onClose={closePanel}
+              />
+            </Panel>
+          </>
+        )}
+      </PanelGroup>
 
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
-
-      {valueEditor && (
-        <ValueEditor
-          title={`${cols[valueEditor.c].name} : ${cols[valueEditor.c].typeName.toLowerCase()}`}
-          text={valueEditor.text}
-          readOnly={!canEdit || deleted.has(valueEditor.r)}
-          onApply={(t) => {
-            setCell(valueEditor.r, valueEditor.c, t);
-            setValueEditor(null);
-            scrollRef.current?.focus();
-          }}
-          onClose={() => {
-            setValueEditor(null);
-            scrollRef.current?.focus();
-          }}
-        />
-      )}
 
       {showQuery && p.query && (
         <Modal
@@ -924,69 +1010,33 @@ export function ResultGrid(p: Props) {
 
 /** View as | Transpose: swap rows and columns */
 function TransposedView({ cols, rows }: { cols: QueryResult["columns"]; rows: Cell[][] }) {
+  useSharedReady(); // time fractions and value classes come from the WASM module: render again once it has loaded
   const fracW = cols.map((c, ci) => (isTimeType(c.typeName) ? fracWidth(rows.map((r) => r[ci])) : 0));
+  const aligns = alignTable(useGridAlign());
   return (
     <div className="grid-scroll transposed">
       <table>
         <tbody>
-          {cols.map((c, ci) => (
-            <tr key={ci}>
-              <th>
-                <span className="col-name">{c.name}</span> <span className="col-type">{c.typeName.toLowerCase()}</span>
-              </th>
-              {rows.map((r, ri) => (
-                <td key={ri} className={r[ci] === null ? "null" : typeof r[ci] === "number" ? "num" : ""}>
-                  {fracW[ci] && typeof r[ci] === "string" ? padFrac(r[ci] as string, fracW[ci]) : display(r[ci])}
-                </td>
-              ))}
-            </tr>
-          ))}
+          {cols.map((c, ci) => {
+            const classOf = cellClasses(c.typeName);
+            return (
+              <tr key={ci}>
+                <th>
+                  <span className="col-name">{c.name}</span> <span className="col-type">{c.typeName.toLowerCase()}</span>
+                </th>
+                {rows.map((r, ri) => {
+                  const cls = classOf(r[ci]);
+                  return (
+                    <td key={ri} className={cx(CELL_KIND[cls], aligns[cls] && `al-${aligns[cls]}`)}>
+                      {fracW[ci] && typeof r[ci] === "string" ? padFrac(r[ci] as string, fracW[ci]) : display(r[ci])}
+                    </td>
+                  );
+                })}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
-    </div>
-  );
-}
-
-/** Value editor (⇧↩): ⌘↩ confirm, ⎋ cancel, Toggle Soft-Wrap, Toggle Formatting(JSON) */
-function ValueEditor({ title, text, readOnly, onApply, onClose }: { title: string; text: string; readOnly: boolean; onApply: (t: string) => void; onClose: () => void }) {
-  const [value, setValue] = useState(text);
-  const [wrap, setWrap] = useState(true);
-  const format = () => {
-    try {
-      const j = JSON.parse(value);
-      setValue(value.includes("\n") ? JSON.stringify(j) : JSON.stringify(j, null, 2));
-    } catch {
-      /* Not JSON: leave as is */
-    }
-  };
-  return (
-    <div className="value-editor">
-      <div className="ve-head">
-        <span className="ve-title">{title}</span>
-        <Spacer />
-        <ToolButton active={wrap} title="Toggle Soft-Wrap" onClick={() => setWrap((w) => !w)}>Wrap</ToolButton>
-        <ToolButton title="Toggle Formatting (JSON)" onClick={format}>{"{ }"}</ToolButton>
-        <IconButton title="Close (⎋)" onClick={onClose}>×</IconButton>
-      </div>
-      <TextArea
-        autoFocus
-        readOnly={readOnly}
-        className={"ve-text" + (wrap ? "" : " nowrap")}
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          const mod = isMac ? e.metaKey : e.ctrlKey;
-          if (mod && e.key === "Enter") {
-            e.preventDefault();
-            if (!readOnly) onApply(value);
-          } else if (e.key === "Escape") {
-            e.preventDefault();
-            onClose();
-          }
-          e.stopPropagation();
-        }}
-      />
-      <div className="ve-foot muted">{readOnly ? "Read-only" : `${isMac ? "⌘↩" : "Ctrl+Enter"} to apply · ⎋ to cancel`}</div>
     </div>
   );
 }

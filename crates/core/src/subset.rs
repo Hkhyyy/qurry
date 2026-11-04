@@ -57,6 +57,9 @@ pub struct SubsetPlan {
     /// Insert order (parents first)
     pub tables: Vec<SubsetTable>,
     pub total: usize,
+    /// After a copy: it was copied, but the Production log couldn't record it
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -399,7 +402,7 @@ impl Walk<'_> {
                 SubsetTable { masked: t.masks.iter().map(|(i, m)| MaskedColumn { column: t.cols[*i].name.clone(), mask: *m }).collect(), rows: t.rows.len(), reason: t.reason.clone(), schema: k.0, table: k.1 }
             })
             .collect();
-        SubsetPlan { total: tables.iter().map(|t| t.rows).sum(), tables }
+        SubsetPlan { total: tables.iter().map(|t| t.rows).sum(), tables, warning: None }
     }
 }
 
@@ -441,7 +444,7 @@ impl AppState {
             }
             // MySQL: the same-named table in the target DB (qualifying with the source DB name would insert into the source)
             let rel = if tk == DbKind::Mysql { crate::sql::quote_ident(tk, &key.1) } else { qualified(tk, &key) };
-            let tcols = crate::audit::table_columns(&tpool, &rel, tk).await?;
+            let tcols = crate::audit::table_columns(&tpool, &rel).await?;
             if tcols.is_empty() {
                 return Err(AppError::Msg(format!("{}.{} doesn't exist in the target — create it first (Compare Schemas makes the DDL)", key.0, key.1)));
             }
@@ -486,8 +489,8 @@ impl AppState {
                 }
             }
         }
-        let plan = w.plan();
-        self.execute_batch(target, stmts, false).await?;
+        let mut plan = w.plan();
+        plan.warning = self.execute_batch(target, stmts, false).await?.warning;
         Ok(plan)
     }
 }
@@ -525,24 +528,19 @@ mod tests {
 
     // ───────── Real server ─────────
 
-    async fn two_dbs(kind: DbKind, env: &str) -> Option<AppState> {
-        let e = std::env::var(env).ok()?;
-        let p: Vec<&str> = e.split(':').collect();
-        let (user, pass, db) = if kind == DbKind::Mysql { (p[2], Some(p[3].to_string()), p[4]) } else { (p[2], None, p[3]) };
+    async fn two_dbs(kind: DbKind) -> Option<AppState> {
+        let crate::testenv::Server { cfg: mut c, password: pass } = crate::testenv::server(kind)?;
+        (c.id, c.name) = ("s".into(), "source".into());
         let st = crate::open_state(Some(std::env::temp_dir().join(format!("qurry-subset-{}", uuid::Uuid::new_v4())))).unwrap();
-        let c = crate::store::ConnectionConfig {
-            id: "s".into(), name: "source".into(), kind, host: p[0].into(), port: p[1].parse().unwrap(), user: user.into(), database: db.into(),
-            color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
-        };
         st.save_connection(c, pass, None).await.unwrap();
         Some(st)
     }
 
     /// One customer → orders (children) → order items (grandchildren) · products (items' parents) · referrer (self-referencing parent). Personal data masked, all FKs match
-    async fn copies_related_rows(kind: DbKind, env: &str, target_db: &str) {
-        let Some(st) = two_dbs(kind, env).await else { return };
+    async fn copies_related_rows(kind: DbKind, target_db: &str) {
+        let Some(st) = two_dbs(kind).await else { return };
         let q = |id: &str, s: &str| st.run_query(id.into(), s.into(), None, None);
-        let src_db = if kind == DbKind::Mysql { std::env::var(env).unwrap().split(':').nth(4).unwrap().to_string() } else { "public".into() };
+        let src_db = if kind == DbKind::Mysql { crate::testenv::my().unwrap().cfg.database } else { "public".into() };
         let src_db = src_db.as_str();
         if kind == DbKind::Postgres {
             let _ = q("s", &format!("drop database if exists {target_db}")).await;
@@ -603,12 +601,12 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn pg_copies_related_rows() {
-        copies_related_rows(DbKind::Postgres, "QURRY_TEST_PG", "qurry_subset_tgt").await;
+        copies_related_rows(DbKind::Postgres, "qurry_subset_tgt").await;
     }
 
     #[tokio::test]
     #[ignore]
     async fn mysql_copies_related_rows() {
-        copies_related_rows(DbKind::Mysql, "QURRY_TEST_MY", "qurry_subset_tgt").await;
+        copies_related_rows(DbKind::Mysql, "qurry_subset_tgt").await;
     }
 }

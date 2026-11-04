@@ -1,0 +1,201 @@
+## Search & Navigation
+⇧⇧	Search Everywhere (All / Database / Files / Symbols / Actions, ⇥ switches tabs). Data sources you are not connected to are searched from the list saved the last time they were loaded (marked cached); opening a result connects
+⌘o	Go to Database Object
+⌥⌘o	Go to Symbol (columns)
+⇧⌘O	Go to File (open and recent tabs)
+⇧⌘A	Find Action
+⌥⇧⌘F	Full-text Search in database
+⌘e	Recent Files
+⌃⇥ / ⌃⇧⇥	Switcher (hold ⌃, release to open)
+⇧⌘/	Keymap Reference (this window)
+## In search results (Search Everywhere / Go to)
+↩	Select in Database Explorer
+⌘↓ / F4	Edit data (table) / open console (data source; Redis: key browser)
+⌘b	Go to DDL
+F1	Quick documentation
+⌥F1	Select in Database Explorer (the open table; in search results the selected object)
+## Tool windows & appearance
+⌘1	Workspace 1
+⌘2	Workspace 2
+⌘3	Workspace 3
+⌘4	Workspace 4
+⌘5	Workspace 5
+⌘6	Workspace 6
+⌘7	Workspace 7
+⌘8	Workspace 8
+⌘9	Workspace 9
+⌘0	Database Explorer (focus / hide)
+⇧⌘F	Find tool window (Full-text Search results)
+⇧⎋	Hide active tool window (in a grid: its Value Editor panel)
+⇧⌘F12	Maximize editor (also: double-click a tab)
+⌘,	Settings (theme, fonts)
+⌃`	Quick switch theme (Dark / Light / High contrast / Sync with OS)
+⌃⇧.	Editor font size bigger
+⌃⇧,	Editor font size smaller
+## Editor tabs
+⌘w	Close tab (middle-click also closes); from a grid with the Value Editor open, closes the panel first
+⌥ + click ×	Close other tabs
+⇧⌘T	Reopen closed tab
+⇧⌘]	Next tab
+⇧⌘[	Previous tab
+⇧F6	Rename console (same as Rename File… in the tab menu)
+⌥⇥ / ⌥⇧⇥	Go to the next split (⇧ previous)
+right-click tab	Pin, Split Right/Down (up to 4 panes), Move to Next Group, Close others…
+drag tab	Reorder, or drop on a pane's right/bottom edge to split it (up to 4)
+## Database Explorer
+⌘↓ / F4	Edit data (table) / open console (data source; Redis: key browser)
+⇧⌘L	New query console
+⇧⌘F10	Jump to query console
+⌘b	Go to DDL
+⌥⌘g	SQL Generator
+⌥⇧⌘G	Copy DDL to clipboard
+⌥⇧⌘B	Open DDL in console
+⌥⇧⌘C	Copy reference
+F1	Quick documentation
+⌘F6	Modify table (columns, keys, indexes, foreign keys)
+⇧F6	Rename table / view / sequence / schema / database
+⌘;	Data source properties
+⌘n	New data source
+⌘d	Duplicate data source
+⌘r / ⌥⇧⌘R	Refresh
+⌥⌘y	Refresh (anywhere)
+⌘F2	Disconnect
+⌦ / ⌘⌫	Remove data source / drop object (asks first)
+type letters	Speed search in the tree
+## Query console
+⌘↩	Execute: asks what to run when there are several statements (⚙ Query Execution Settings), or the selection
+⌘F2	Cancel running statement
+⌥⌘e	Query history
+⌃Space	Code completion
+⌥⌘l	Reformat code
+⌘/	Line comment
+⌥⌘/	Block comment
+⌘d	Duplicate line
+⌘⌫	Delete line
+⌥⇧↑	Move line up
+⌥⇧↓	Move line down
+⌥↑	Extend selection
+⌥↓	Shrink selection
+⌃g	Select next occurrence
+⌃⌘g	Select all occurrences
+⇧⌘U	Toggle case
+⌘l	Go to line
+⌘f	Find in editor (⌥⌘r regex · ⌥⌘c match case · ⌥⌘w words)
+⌘r	Replace in editor ($1 groups with regex)
+## Data grid (results & table editor)
+↩ / F2	Edit cell
+⇧↩	Open in Value Editor
+⌘↩ · ⎋	In the Value Editor panel: apply the value · back to the grid (it follows the current cell)
+⌥⌘n	Set NULL
+⌥⌘d	Set DEFAULT
+⌘n	Add Row
+⌘d	Clone Row
+⌘⌫	Delete Row
+⌥⌘z	Revert Selected
+⌘↩	Submit Changes
+⌘c / ⌘v	Copy (with chosen extractor; CSV / TSV copy values only — right-click › Copy with Headers adds the column names) / paste
+⌘a	Select all
+⌘f	Find on Current Page
+⌘r	Reload Page
+⌘F2	Cancel Running Statements
+⌘b	Go to DDL
+click header · ⌥ click	Sort · add to multi-column sort
+## Query history & Redis browser
+⌦ / ⌘⌫	Delete the selected history entry
+⌘r	Redis: scan keys again
+⌘s	Redis: save the value being edited
+⌃l	Redis terminal: clear
+## Other actions (menus, toolbars, Find Action — give them a key in Settings › Keymap)
+—	Edit Keymap…
+—	Export Data Sources…
+—	Import Data Sources…
+—	Theme: Dark
+—	Theme: Light
+—	Theme: High Contrast
+—	Theme: Sync with OS
+—	Reset Editor Font Size
+—	Force Refresh
+—	Collapse All
+—	Show System Schemas
+—	New Materialized View…
+—	Generate SELECT Statement
+—	Generate INSERT Statement
+—	Generate UPDATE Statement
+—	Generate DELETE Statement
+—	Truncate…
+—	Export Table Data…
+—	Import Data into New Table…
+—	Sessions & Locks
+—	Slow Queries
+—	Table Sizes & Indexes
+—	Server Overview
+—	Users & Privileges
+—	Compare & Migrate…
+—	Close Other Tabs
+—	Close All but Pinned
+—	Close Tabs to the Left
+—	Close Tabs to the Right
+—	Close All Tabs
+—	Pin / Unpin Tab
+—	Copy Tab Reference
+—	Copy Data Source Name
+—	Split and Move Right
+—	Split and Move Down
+—	Move Tab to Next Group
+—	Open Tab in Next Group
+—	Move Tab to New Workspace…
+—	Duplicate Console
+—	DDL: Show SQL
+—	DDL: Show Structure
+—	DDL: Reload
+—	DDL: Copy to Clipboard
+—	DDL: Save to File
+—	DDL: Run in Console
+—	New Workspace…
+—	Rename Workspace…
+—	Split Right
+—	Split Down
+—	Explain Plan
+—	Transaction Mode: Manual
+—	Transaction Mode: Auto
+—	Pin / Unpin Result Tab
+—	Close Result Tab
+—	Close All Unpinned Result Tabs
+—	Clear Output
+—	Generate UUID
+—	Copy with Headers
+—	Preview Pending Changes
+—	View as Table
+—	View as Transposed Table
+—	View as Chart
+—	Show Filter
+—	Sort via ORDER BY
+—	Reset View
+—	View Query
+—	Copy Query to Console
+—	Copy Query to Clipboard
+—	Commit
+—	Roll Back
+—	Explain Analyse
+—	Export Data…
+—	Copy as IN List
+—	AI Search (RAG)…
+—	AI Search (RAG) — Index This Table…
+—	Delete Workspace…
+—	Remove Data Source from This Workspace
+—	Production Log…
+—	Snippets…
+—	Save Query as Snippet…
+—	Show Diagram (ERD)
+—	Back Up Database…
+—	Restore Database…
+—	Import Data from File…
+—	Generate Test Data…
+—	New Table…
+—	New View…
+—	New Schema…
+—	New Database…
+—	New Sequence…
+—	Copy Related Rows To…
+—	Manage Shown Schemas…
+—	Unsplit All

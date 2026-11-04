@@ -4,7 +4,7 @@ import { format as formatSql } from "sql-formatter";
 import { monaco } from "../lib/monaco";
 import { bindModel, unbindModel } from "../lib/completion";
 import { monacoTheme, useTheme } from "../lib/theme";
-import { editorFontSize } from "../lib/prefs";
+import { font, fontStack } from "../lib/prefs";
 import { setStatusWidget } from "../lib/statusbar";
 import { bindings, onKeymapChange } from "../lib/shortcuts";
 
@@ -13,7 +13,7 @@ export interface RunRequest {
   text: string;
   offset: number;
   selection: { text: string; start: number; end: number } | null;
-  /** Briefly highlight the range to run in the editor */
+  /** Briefly highlight the range to run in the editor (not once the text changed after the press) */
   highlight: (ranges: { start: number; end: number }[]) => void;
   /** Explain Plan / Explain Analyse */
   explain?: "plan" | "analyze";
@@ -30,6 +30,8 @@ export interface EditorApi {
 interface Props {
   tabId: string;
   connId: string;
+  /** The console's database by name (the connection's default included): completion inserts its MySQL tables bare */
+  database: string;
   initialSql: string;
   language: string;
   onChange: (sql: string) => void;
@@ -57,11 +59,11 @@ function monacoKey(spec: string): number | null {
 }
 const keysOf = (id: string) => bindings(id).map(monacoKey).filter((n): n is number => n !== null);
 
-export function ConsoleEditor({ tabId, connId, initialSql, language, onChange, onRun, registerApi, readOnly }: Props) {
+export function ConsoleEditor({ tabId, connId, database, initialSql, language, onChange, onRun, registerApi, readOnly }: Props) {
   const modelUri = useRef<string | null>(null);
   useEffect(() => {
-    if (modelUri.current) bindModel(modelUri.current, connId);
-  }, [connId]);
+    if (modelUri.current) bindModel(modelUri.current, connId, database);
+  }, [connId, database]);
   const theme = useTheme();
   const onRunRef = useRef(onRun);
   onRunRef.current = onRun;
@@ -70,13 +72,15 @@ export function ConsoleEditor({ tabId, connId, initialSql, language, onChange, o
     <Editor
       path={`console-${tabId}.sql`}
       defaultValue={initialSql}
+      // Read-only (DDL): the text follows initialSql, so a reload shows the new text
+      value={readOnly ? initialSql : undefined}
       defaultLanguage={language}
       theme={monacoTheme(theme)}
       onChange={(v) => onChange(v ?? "")}
       options={{
         minimap: { enabled: false },
-        fontSize: editorFontSize(),
-        fontFamily: "'JetBrains Mono', Menlo, monospace",
+        fontSize: font("editor").size,
+        fontFamily: fontStack(font("editor").family),
         automaticLayout: true,
         scrollBeyondLastLine: false,
         renderLineHighlight: "all",
@@ -92,7 +96,7 @@ export function ConsoleEditor({ tabId, connId, initialSql, language, onChange, o
         const model = ed.getModel();
         if (model) {
           modelUri.current = model.uri.toString();
-          bindModel(modelUri.current, connId);
+          bindModel(modelUri.current, connId, database);
         }
         const caret = () => {
           const pos = ed.getPosition();
@@ -123,7 +127,10 @@ export function ConsoleEditor({ tabId, connId, initialSql, language, onChange, o
           const sel = ed.getSelection();
           const selection =
             sel && !sel.isEmpty() ? { text: m.getValueInRange(sel), start: m.getOffsetAt(sel.getStartPosition()), end: m.getOffsetAt(sel.getEndPosition()) } : null;
-          onRunRef.current({ text: m.getValue(), offset: m.getOffsetAt(ed.getPosition()!), selection, highlight, explain });
+          // The offsets are into the text at the press: after an edit (a run waiting for the module, the Statements chooser) they'd mark other text
+          const version = m.getAlternativeVersionId();
+          const mark = (ranges: { start: number; end: number }[]) => ed.getModel() === m && m.getAlternativeVersionId() === version && highlight(ranges);
+          onRunRef.current({ text: m.getValue(), offset: m.getOffsetAt(ed.getPosition()!), selection, highlight: mark, explain });
         };
         // ── DataGrip editor keymap (keys are editor.* in lib/shortcuts; re-registered on change) ──
         let registered: monaco.IDisposable[] = [];
@@ -133,8 +140,8 @@ export function ConsoleEditor({ tabId, connId, initialSql, language, onChange, o
           registered.forEach((d) => d.dispose());
           registered = [];
           registered.push(ed.addAction({ id: "dbtool.run", label: "Execute", keybindings: keysOf("editor.run"), contextMenuGroupId: "navigation", contextMenuOrder: 0, run: () => run() }));
-          registered.push(ed.addAction({ id: "dbtool.explain", label: "Explain Plan", contextMenuGroupId: "navigation", contextMenuOrder: 1, run: () => run("plan") }));
-          registered.push(ed.addAction({ id: "dbtool.explainAnalyse", label: "Explain Analyse", contextMenuGroupId: "navigation", contextMenuOrder: 2, run: () => run("analyze") }));
+          registered.push(ed.addAction({ id: "dbtool.explain", label: "Explain Plan", keybindings: keysOf("editor.explain"), contextMenuGroupId: "navigation", contextMenuOrder: 1, run: () => run("plan") }));
+          registered.push(ed.addAction({ id: "dbtool.explainAnalyse", label: "Explain Analyse", keybindings: keysOf("editor.explainAnalyze"), contextMenuGroupId: "navigation", contextMenuOrder: 2, run: () => run("analyze") }));
           act("dbtool.reformat", "Reformat Code", "editor.reformat", () => {
             const m = ed.getModel();
             if (!m) return;

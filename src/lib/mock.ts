@@ -1,12 +1,27 @@
 /** For development: opening in a browser with ?mock uses fake data instead of the Tauri backend (for checking screens). */
 const conns = [
   { id: "dev", name: "[DEV] shop_app", kind: "postgres", host: "dev-db.example.com", port: 5432, user: "app", database: "shop_app", color: "#5f5b24", hasPassword: true, connected: true },
-  { id: "prod", name: "[PROD] shop_app", kind: "postgres", host: "prod-db", port: 5432, user: "app", database: "shop_app", color: "#6e2a2a", hasPassword: true, connected: false,
+  { id: "prod", name: "[PROD] shop_app", kind: "postgres", host: "prod-db", port: 5432, user: "app", database: "shop_app", color: "#6e2a2a", hasPassword: true, connected: false, options: { confirmChanges: true },
     ssh: { enabled: true, host: "bastion.example.com", port: 22, user: "ec2-user", auth: "key", keyPath: "~/.ssh/id_ed25519" } },
-  { id: "my", name: "[MySQL] shop", kind: "mysql", host: "127.0.0.1", port: 13306, user: "root", database: "shop", color: "#22524f", hasPassword: true, connected: true },
+  { id: "my", name: "[MySQL] shop", kind: "mysql", host: "127.0.0.1", port: 13306, user: "root", database: "shop", color: "#22524f", hasPassword: true, connected: true, options: { confirmChanges: true } },
   { id: "rd", name: "[Redis] cache", kind: "redis", host: "127.0.0.1", port: 16379, user: "", database: "0", color: "#6e2a2a", hasPassword: false, connected: true },
   { id: "local", name: "[LOCAL] TestServer", kind: "postgres", host: "localhost", port: 5432, user: "dev", database: "", color: null, hasPassword: false, connected: false },
+  // A remote server without TLS: connects only after allow_plaintext. window.__mockLanProd (set before load) makes it Production
+  { id: "lan", name: "LAN dev", kind: "postgres", host: "10.0.0.12", port: 5432, user: "dev", database: "lan_app", color: null, hasPassword: true, connected: false, options: { confirmChanges: !!(globalThis as any).__mockLanProd, allowPlaintext: false } },
 ];
+// The core's NEEDS_TLS for PostgreSQL (qurry_shared::errors::needs_tls_pg); the GUI recognises it through wasm tlsOptIn
+const NEEDS_TLS =
+  'This server didn\'t set up an encrypted (TLS) connection, so Qurry didn\'t send the password. If it\'s an old server and the network is trusted, turn on "Allow unencrypted connection" for this data source (GUI: Options tab · TUI: data source form, "Allow unencrypted").\n(error communicating with database: TLS required)';
+// The core's error for a missing Session Manager plugin (ssm::explain): one of the longest, and what to do comes last
+const SSM_NO_PLUGIN =
+  "The AWS Session Manager plugin is not installed. Install it (macOS: brew install --cask session-manager-plugin; others: https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html), then try again.";
+const lan: any = conns.find((c) => c.id === "lan");
+// What the TLS e2e test counts
+const tls = ((globalThis as any).__mockTls = { allow: 0, runs: 0, saves: 0 });
+/** Throws NEEDS_TLS for "LAN dev" targets (id or id::db) until plain text is allowed */
+const lanCheck = (id: unknown) => {
+  if (String(id).split("::")[0] === "lan" && !lan.options.allowPlaintext) throw NEEDS_TLS;
+};
 const result = {
   columns: [
     { name: "id", typeName: "INT8" },
@@ -15,15 +30,49 @@ const result = {
     { name: "created_at", typeName: "TIMESTAMPTZ" },
     { name: "memo", typeName: "TEXT" },
   ],
-  rows: Array.from({ length: 500 }, (_, i) => [i + 1, `user_${i + 1}`, (i * 1234.5).toFixed(2), "2026-10-15 12:00:00.000 +09:00", i % 3 ? null : "note"]),
+  rows: Array.from({ length: 500 }, (_, i) => [i + 1, `user_${i + 1}`, (i * 1234.5).toFixed(2), `2026-10-15 12:00:00${["", ".5", ".125"][i % 3]} +09:00`, i % 3 ? null : "note"]),
   rowsAffected: 0,
   truncated: true,
   elapsedMs: 12,
   hasResultSet: true,
 };
+/** `select … from wide_demo`: many columns and rows (scroll both ways) */
+const wide = {
+  ...result,
+  columns: Array.from({ length: 30 }, (_, c) => ({ name: `column_${c + 1}`, typeName: c % 2 ? "VARCHAR" : "INT8" })),
+  rows: Array.from({ length: 500 }, (_, r) => Array.from({ length: 30 }, (_, c) => (c % 2 ? `value ${r + 1}.${c + 1}` : r * 30 + c))),
+  truncated: false,
+};
+/** `select … from json_demo`: a jsonb column (colored cells); row 3 holds a ~100 KB value */
+const jsonDemo = {
+  ...result,
+  columns: [{ name: "id", typeName: "INT8" }, { name: "payload", typeName: "JSONB" }],
+  rows: Array.from({ length: 50 }, (_, i) => [
+    i + 1,
+    i === 2
+      ? JSON.stringify({ items: Array.from({ length: 4000 }, (_, k) => ({ sku: `A-${k}`, qty: k })) })
+      : JSON.stringify({ type: "payment.paid", amount: 1000 * i, live: i % 2 === 0, memo: "고객 요청 🙏", meta: { pg: "toss", coupon: null } }),
+  ]),
+  truncated: false,
+};
+/** `select … from payments`: a jsonb column as PostgreSQL sends it (one line, spaces after : and ,), a NULL and a text column holding JSON */
+const payments = {
+  ...result,
+  columns: [{ name: "id", typeName: "INT8" }, { name: "status", typeName: "VARCHAR" }, { name: "data", typeName: "JSONB" }, { name: "note", typeName: "TEXT" }],
+  rows: Array.from({ length: 40 }, (_, i) => [i + 1, i % 2 ? "paid" : "ready", i === 2 ? null : `{"kind": "card", "meta": {"src": "web", "ip": "10.0.0.${i + 1}"}, "items": [${i}, ${i + 1}]}`, i % 4 ? "plain note" : "[1, 2]"]),
+  truncated: false,
+};
+let flakyLoads = 0;
+let updateChannel = "stable";
+let gridAlign = {};
+/** Whether check_update ran (the real app then has a saved check that a channel switch answers from) */
+let updateChecked = false;
+/** Test Connections waiting for cancel_test, by test id */
+const testsRunning: Record<string, () => void> = {};
 const handlers: Record<string, (a: any) => unknown> = {
-  list_connections: () => conns,
-  list_databases: (a: any) => (a.id === "rd" ? ["db0", "db3"] : a.id === "my" ? ["information_schema", "mysql", "shop", "sys"] : ["postgres", "shop_app", "shop_app_test"]),
+  // A copy, as from the backend: state that holds the last list must see a change (Allow unencrypted, connect) as a new list
+  list_connections: () => structuredClone(conns),
+  list_databases: (a: any) => (lanCheck(a.id), a.id === "lan" ? ["lan_app"] : a.id === "rd" ? ["db0", "db3"] : a.id === "my" ? ["information_schema", "mysql", "shop", "sys"] : ["postgres", "shop_app", "shop_app_test"]),
   redis_scan: (a: any) => ({
     cursor: "0",
     keys: [
@@ -63,7 +112,11 @@ const handlers: Record<string, (a: any) => unknown> = {
     { schema: "public", table: "users", whereClause: `"user_name"::text ilike '%${a.req.text}%'`, result: { ...result, rows: result.rows.slice(0, 3), truncated: false } },
   ],
   list_schemas: (a: any) => (String(a.id).startsWith("rd") ? [{ name: String(a.id).split("::")[1] || "db0", isSystem: false }] : null) ?? (String(a.id).startsWith("my") ? [{ name: String(a.id).split("::")[1] || "shop", isSystem: false }] : null) ?? [{ name: "public", isSystem: false }, { name: "billing", isSystem: false }, { name: "pg_catalog", isSystem: true }],
-  list_objects: (a: any) => String(a.id).startsWith("rd") ? { relations: [["events", "stream"], ["rank", "zset"], ["session:abc", "string"], ["tags", "set"], ["user:1", "hash"]].map(([name, t]) => ({ name, kind: "key", comment: t, rowEstimate: null })), routines: [] } : ({
+  list_objects: (a: any) => String(a.id).startsWith("rd") ? { relations: [["events", "stream"], ["rank", "zset"], ["session:abc", "string"], ["tags", "set"], ["user:1", "hash"]].map(([name, t]) => ({ name, kind: "key", comment: t, rowEstimate: null })), routines: [] } : a.schema === "billing" ? {
+    // users in two schemas (same-name table tabs)
+    relations: [{ name: "invoices", kind: "table", comment: null, rowEstimate: 800 }, { name: "users", kind: "table", comment: "billing accounts", rowEstimate: 40 }],
+    routines: [],
+  } : ({
     relations: [
       { name: "contracts", kind: "table", comment: "계약", rowEstimate: 1200 },
       { name: "payments", kind: "table", comment: null, rowEstimate: 50000 },
@@ -86,7 +139,48 @@ const handlers: Record<string, (a: any) => unknown> = {
       { name: "users_contract_fk", kind: "f", definition: "FOREIGN KEY (contract_id) REFERENCES contracts(id)" },
     ],
   }),
-  completion_meta: () => [
+  // DDL tab → Structure: every section filled. billing.* answers like a driver plugin (only columns · keys · indexes, no index
+  // columns); window.__mockStructureFail (a message) makes it fail; window.__mockStructureCalls counts the loads
+  table_structure: (a: any) => {
+    (globalThis as any).__mockStructureCalls = ((globalThis as any).__mockStructureCalls ?? 0) + 1;
+    const fail = (globalThis as any).__mockStructureFail;
+    if (fail) throw fail;
+    const columns = [
+      { name: "id", dataType: "bigint", nullable: false, defaultValue: "nextval('users_id_seq'::regclass)", comment: null, isPk: true },
+      { name: "user_name", dataType: "character varying(50)", nullable: false, defaultValue: null, comment: "이름", isPk: false },
+      { name: "email", dataType: "text", nullable: true, defaultValue: "concat('user-', currval('users_id_seq'::regclass), '@', current_setting('app.mail_domain'))", comment: "Login and receipts; unique when set", isPk: false },
+      { name: "contract_id", dataType: "bigint", nullable: true, defaultValue: null, comment: null, isPk: false },
+      { name: "created_at", dataType: "timestamp with time zone", nullable: false, defaultValue: "now()", comment: null, isPk: false },
+    ];
+    const t = `${a.schema}.${a.table}`;
+    const basics = {
+      columns,
+      indexes: [
+        { name: `${a.table}_pkey`, definition: `CREATE UNIQUE INDEX ${a.table}_pkey ON ${t} USING btree (id)`, isUnique: true, isPrimary: true, columns: ["id"] },
+        { name: `${a.table}_email_key`, definition: `CREATE UNIQUE INDEX ${a.table}_email_key ON ${t} USING btree (lower(email))`, isUnique: true, isPrimary: false, columns: ["lower(email)"] },
+        { name: `${a.table}_name_created`, definition: `CREATE INDEX ${a.table}_name_created ON ${t} USING btree (user_name, created_at DESC)`, isUnique: false, isPrimary: false, columns: ["user_name", "created_at"] },
+      ],
+      constraints: [
+        { name: `${a.table}_pkey`, kind: "p", definition: "PRIMARY KEY (id)" },
+        { name: `${a.table}_contract_fk`, kind: "f", definition: "FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE SET NULL" },
+        { name: `${a.table}_email_key`, kind: "u", definition: "UNIQUE (email)" },
+        { name: `${a.table}_name_check`, kind: "c", definition: "CHECK (length(user_name) > 0)" },
+      ],
+    };
+    if (a.schema === "billing") return { ...basics, indexes: basics.indexes.map((i) => ({ ...i, columns: [] })), foreignKeys: null, referencedBy: null, triggers: null, options: null, comment: null, onlyVisible: false };
+    const fk = (name: string, schema: string, table: string, columns: string[], refTable: string, onDelete: string) => ({ name, schema, table, columns, refSchema: "public", refTable, refColumns: ["id"], onUpdate: "NO ACTION", onDelete });
+    return {
+      ...basics,
+      foreignKeys: [fk(`${a.table}_contract_fk`, a.schema, a.table, ["contract_id"], "contracts", "SET NULL")],
+      referencedBy: [fk("orders_user_fk", "public", "orders", ["user_id"], a.table, "CASCADE"), fk("payments_user_fk", "public", "payments", ["user_id"], a.table, "RESTRICT")],
+      triggers: [{ name: `${a.table}_touch`, timing: "BEFORE", events: "INSERT OR UPDATE", definition: `CREATE TRIGGER ${a.table}_touch BEFORE INSERT OR UPDATE ON ${t} FOR EACH ROW EXECUTE FUNCTION touch_updated_at()` }],
+      options: [["Owner", "app"], ["Tablespace", "pg_default"], ["Storage parameters", "fillfactor=90"]],
+      comment: "Members of the shop",
+      onlyVisible: false,
+    };
+  },
+  // MySQL: the schema is the database (shop is the data source's default)
+  completion_meta: (a: any) => a.id.split("::")[0] === "my" ? [{ schema: "shop", name: "orders", columns: [["id", "bigint"], ["status", "varchar"]] }] : [
     { schema: "public", name: "users", columns: [["id", "bigint"], ["user_name", "varchar"]] },
     { schema: "public", name: "orders", columns: [["id", "bigint"], ["status", "varchar"], ["amount", "numeric"], ["data", "jsonb"], ["reasons", "jsonb"]] },
   ],
@@ -119,13 +213,24 @@ const handlers: Record<string, (a: any) => unknown> = {
       : a.req.column === "amount" ? [{ value: "1000", count: 7 }, { value: "2500", count: 3 }]
       : [{ value: "k0", count: 15 }, { value: "k1", count: 15 }],
   run_query: (a: any) =>
-    /^EXPLAIN/i.test(a.sql)
+    (String(a.id).startsWith("lan") && (tls.runs++, lanCheck(a.id)), /^EXPLAIN/i.test(a.sql)
       ? { ...result, columns: [{ name: "QUERY PLAN", typeName: "JSON" }], rows: [[JSON.stringify([{ Plan: { "Node Type": "Hash Join", "Join Type": "Inner", "Startup Cost": 1.5, "Total Cost": 45.2, "Plan Rows": 120, "Plan Width": 64, "Hash Cond": "(u.contract_id = c.id)", Plans: [{ "Node Type": "Seq Scan", "Relation Name": "users", Schema: "public", Alias: "u", "Startup Cost": 0, "Total Cost": 22.1, "Plan Rows": 1200, "Plan Width": 40 }, { "Node Type": "Hash", "Startup Cost": 1.2, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24, Plans: [{ "Node Type": "Index Scan", "Relation Name": "contracts", "Index Name": "contracts_pkey", "Startup Cost": 0.1, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24 }] }] } }])]], truncated: false }
       : /^\s*(insert|update|delete)/i.test(a.sql)
         ? { ...result, columns: [], rows: [], rowsAffected: 3, truncated: false, hasResultSet: false, inTransaction: (globalThis as any).__mockManual === true }
-        : { ...result, inTransaction: (globalThis as any).__mockManual === true },
+        : /\bwide_demo\b/i.test(a.sql)
+          ? { ...wide, inTransaction: (globalThis as any).__mockManual === true }
+          : /\bjson_demo\b/i.test(a.sql)
+          ? { ...jsonDemo, inTransaction: (globalThis as any).__mockManual === true }
+          : /\bpayments\b/i.test(a.sql)
+          ? { ...payments, inTransaction: (globalThis as any).__mockManual === true }
+          : { ...result, inTransaction: (globalThis as any).__mockManual === true }),
   set_tx_mode: (a: any) => { (globalThis as any).__mockManual = a.manual; return null; },
-  commit_tx: () => null,
+  // e2e sets __mockCommitError for a COMMIT that fails (e.g. the connection lost while committing)
+  commit_tx: () => {
+    const e = (globalThis as any).__mockCommitError;
+    if (e) throw e;
+    return null;
+  },
   rollback_tx: () => null,
   rag_indexes: () => (globalThis as any).__rag ?? ((globalThis as any).__rag = [{ id: "r1", name: "tickets search", source: "dev", schema: "public", table: "users", idColumn: "id", textColumns: ["user_name"], provider: "ollama", model: "nomic-embed-text", baseUrl: "", dest: "dev", collection: "users_embeddings", dim: 768, rows: 3000, builtAt: "2026-10-27 14:50" }]),
   rag_save: (a: any) => { const x = { ...a.index, id: a.index.id || "r" + Date.now() }; const l = (globalThis as any).__rag ?? []; (globalThis as any).__rag = [...l.filter((y: any) => y.id !== x.id), x]; return x; },
@@ -135,9 +240,44 @@ const handlers: Record<string, (a: any) => unknown> = {
   rag_build: () => 3000,
   rag_search: () => ({ ...result, columns: [{ name: "score", typeName: "FLOAT8" }, ...result.columns], rows: result.rows.slice(0, 5).map((r, i) => [0.91 - i * 0.07, ...r]), truncated: false }),
   similar_rows_sql: (a: any) => `SELECT ${a.column} <-> (SELECT ${a.column} FROM ${a.schema}.${a.table} WHERE ${a.pk.map((p: any) => `${p[0]} = '${p[1]}'`).join(" AND ")}) AS distance, *\nFROM ${a.schema}.${a.table}\nORDER BY distance\nLIMIT 20`,
-  object_ddl: (a: any) => `CREATE TABLE ${a.schema}.${a.name}\n(\n    id bigint DEFAULT nextval('users_id_seq'::regclass) NOT NULL,\n    user_name character varying(50) NOT NULL,\n    CONSTRAINT users_pkey PRIMARY KEY (id)\n);\n`,
-  test_connection: () => "PostgreSQL 16.11  (via SSH ec2-user@bastion.example.com)",
+  // window.__mockDdlCalls counts the loads (DDL tab → Reload); window.__mockDdlExtra is put in front of the text
+  object_ddl: (a: any) => {
+    (globalThis as any).__mockDdlCalls = ((globalThis as any).__mockDdlCalls ?? 0) + 1;
+    return ((globalThis as any).__mockDdlExtra ?? "") + `CREATE TABLE ${a.schema}.${a.name}\n(\n    id bigint DEFAULT nextval('users_id_seq'::regclass) NOT NULL,\n    user_name character varying(50) NOT NULL,\n    CONSTRAINT users_pkey PRIMARY KEY (id)\n);\n`;
+  },
+  // Instance i-00000000000000000 never connects (like a stopped one): the test runs until cancel_test. On i-0000000000000dead it
+  // fails with the core's long message for a missing Session Manager plugin. window.__mockTestDelay (ms, set before load) makes
+  // every test take that long, as a real connect does
+  test_connection: async (a: any) => {
+    const delay = (globalThis as any).__mockTestDelay;
+    if (delay) await new Promise((r) => setTimeout(r, delay));
+    if (a.config.host === lan.host && !a.config.options?.allowPlaintext) throw NEEDS_TLS;
+    if (a.config.ssm?.enabled && a.config.ssm.target === "i-0000000000000dead") throw SSM_NO_PLUGIN;
+    return a.config.ssm?.enabled && a.config.ssm.target === "i-00000000000000000"
+      ? new Promise((_, rej) => (testsRunning[a.testId] = () => rej("Test cancelled")))
+      : a.config.ssm?.enabled
+        ? `PostgreSQL 16.11  (via AWS SSM ${a.config.ssm.target})`
+        : "PostgreSQL 16.11  (via SSH ec2-user@bastion.example.com)";
+  },
+  cancel_test: (a: any) => {
+    testsRunning[a.testId]?.();
+    delete testsRunning[a.testId];
+    return null;
+  },
+  connect: (a: any) => {
+    lanCheck(a.id);
+    const c: any = conns.find((c) => c.id === a.id);
+    if (c) c.connected = true;
+    return "PostgreSQL 16.11 on mock";
+  },
+  allow_plaintext: () => {
+    if (lan.options.confirmChanges) throw `"${lan.name}" is a Production data source, so Qurry won't turn off encryption for it from here.`;
+    tls.allow++;
+    lan.options = { ...lan.options, allowPlaintext: true };
+    return lan;
+  },
   save_connection: (a: any) => {
+    tls.saves++;
     const i = conns.findIndex((c: any) => c.id === a.config.id);
     if (i >= 0) (conns as any)[i] = { ...conns[i], ...a.config };
     return a.config;
@@ -152,27 +292,67 @@ const handlers: Record<string, (a: any) => unknown> = {
     if (c) c.scope = a.scope;
     return c;
   },
-  fetch_more: () => ({ ...result, rows: result.rows.slice(0, 120).map((r) => [Number(r[0]) + 500, ...r.slice(1)]), truncated: false }),
+  // e2e sets __mockFetchMoreError for a load-more the core refuses or that fails (e.g. after the data source reconnected)
+  fetch_more: () => {
+    const g = globalThis as any;
+    g.__mockFetchMoreCalls = (g.__mockFetchMoreCalls ?? 0) + 1;
+    if (g.__mockFetchMoreError) throw g.__mockFetchMoreError;
+    const more = { ...result, rows: result.rows.slice(0, 120).map((r) => [Number(r[0]) + 500, ...r.slice(1)]), truncated: false };
+    // __mockFetchMoreDelay (ms): an answer that arrives after the tab ran again
+    return g.__mockFetchMoreDelay ? new Promise((ok) => setTimeout(() => ok(more), g.__mockFetchMoreDelay)) : more;
+  },
   cancel_query: () => true,
   close_session: () => null,
-  execute_batch: (a: any) => a.statements.length,
+  execute_batch: (a: any) => ({ rows: a.statements.length }),
   load_keymap: () => ({}),
   load_workspace: () => JSON.parse(localStorage.getItem("mock-ws") ?? "null"),
   save_workspace: (a: any) => (localStorage.setItem("mock-ws", JSON.stringify(a.ws)), null),
   tx_state: () => (globalThis as any).__mockManual === true,
+  explain_wrap: () => ((globalThis as any).__mockManual === true ? ["SAVEPOINT qurry_explain", "ROLLBACK TO SAVEPOINT qurry_explain"] : ["BEGIN", "ROLLBACK"]),
+  // Production confirmation: rows a change would touch; like the backend, only UPDATE/DELETE are counted (null = can't count, e.g. INSERT or DDL)
+  preview_impact: (a: any) => (/^\s*(update|delete)\b/i.test(a.sql) ? (/\bwhere\b/i.test(a.sql) ? 3 : 500) : null),
   unsafe_reason: (a: any) => (/^\s*(delete|update)\b(?![\s\S]*\bwhere\b)/i.test(a.sql) ? "DELETE without WHERE changes every row" : /^\s*(drop|truncate)\b/i.test(a.sql) ? "DROP removes data" : null),
   trust_ssh_host: () => "Trusted",
   export_data: (a: any) => new Promise((ok) => setTimeout(() => ok({ rows: 500, path: a.clipboard ? null : `~/Downloads/${a.defaultName}.${a.format}`, text: a.clipboard ? "id\tname\n1\ta\n" : null }), 4000)),
   cancel_job: () => null,
-  dba_reports: () => [
+  // A report tab asks for the list before its first load: "flaky" starts over with a good load
+  dba_reports: (a: any) => (a.id === "flaky" && (flakyLoads = 0), [
     { id: "sessions", title: "Sessions", group: "Activity", help: "Connections and what they run. blocking = how many sessions wait for this one.", actions: [{ kind: "kill", label: "Cancel Query", terminate: false }, { kind: "kill", label: "Terminate Session", terminate: true }, { kind: "sql", label: "Open Query in Console", template: "{=query}" }] },
     { id: "locks", title: "Lock Waits", group: "Activity", help: "Who waits for whom.", actions: [] },
-    { id: "slow_queries", title: "Slow Queries (Top 100)", group: "Performance", help: "By total time.", actions: [] },
+    { id: "slow_queries", title: "Slow Queries (Top 100)", group: "Performance", help: "By total time.", actions: [{ kind: "sql", label: "Open Query in Console", template: "{=query}" }, { kind: "explain", label: "Explain in Console" }] },
     { id: "table_sizes", title: "Table Sizes", group: "Storage", help: "Biggest first.", actions: [] },
-  ],
+    { id: "unused_indexes", title: "Unused Indexes", group: "Storage", help: "Indexes never used since statistics were reset; counting_since tells since when.", actions: [{ kind: "sql", label: "Generate DROP INDEX", template: "DROP INDEX CONCURRENTLY {schema}.{index};" }] },
+    { id: "roles", title: "Users & Roles", group: "Security", help: "Login roles and their powers. superuser / createrole are the dangerous ones.", actions: [] },
+  ]),
+  // Story targets: "busy" runs past the report time limit, "flaky" loads once and then its refreshes do, "maria" has no performance_schema.
+  // Any target: "roles" is denied (app isn't a superuser), "table_sizes" takes 2 s (so a switch shows its loading state)
   dba_report: (a: any) =>
-    a.report === "slow_queries"
-      ? Promise.reject("pg_stat_statements is not enabled. Add it to shared_preload_libraries (restart), then run: CREATE EXTENSION pg_stat_statements;")
+    a.report === "table_sizes"
+      ? new Promise((ok) => setTimeout(() => ok(handlers.dba_report({ ...a, report: "sessions" })), 2000))
+      : a.report === "roles"
+      ? Promise.reject("permission denied for table pg_authid")
+      : a.id === "busy" || (a.id === "flaky" && flakyLoads++ > 0)
+      ? Promise.reject("The report ran into its time limit (30 s, or a stricter one set on the server). The server may be busy or the statistics very large: try again later.\n(error returned from database: canceling statement due to statement timeout)")
+      : a.id === "maria"
+      ? Promise.reject("performance_schema / sys schema is not available on this server — enable performance_schema to see this (MariaDB has it off by default, and some of these tables only exist on MySQL).\n(error returned from database: 1146 (42S02): Table 'performance_schema.events_statements_summary_by_digest' doesn't exist)")
+      : a.report === "slow_queries"
+      ? {
+          columns: ["total_ms", "calls", "mean_ms", "max_ms", "rows", "cache_hit_pct", "query"].map((name) => ({ name, typeName: name === "query" ? "TEXT" : "NUMERIC" })),
+          rows: [
+            ["91234.5", 18234, "5.00", "812.40", 18234, "99.1", "SELECT * FROM orders WHERE customer_id = $1 AND status = $2"],
+            ["40211.0", 12, "3350.92", "4102.11", 1200000, "71.4", "SELECT count(*) FROM order_items"],
+          ],
+          rowsAffected: 0, truncated: false, elapsedMs: 4, hasResultSet: true,
+        }
+      : a.report === "unused_indexes"
+      ? {
+          columns: ["schema", "table", "index", "scans", "counting_since", "size", "definition"].map((name) => ({ name, typeName: name === "scans" ? "INT8" : name === "counting_since" ? "TIMESTAMPTZ" : "TEXT" })),
+          rows: [
+            ["public", "orders", "orders_status_idx", 0, "2026-09-01 04:00:12.5 +09:00", "182 MB", "CREATE INDEX orders_status_idx ON public.orders USING btree (status)"],
+            ["public", "order_items", "order_items_qty_idx", 0, "2026-09-01 04:00:12.5 +09:00", "41 MB", "CREATE INDEX order_items_qty_idx ON public.order_items USING btree (qty)"],
+          ],
+          rowsAffected: 0, truncated: false, elapsedMs: 2, hasResultSet: true,
+        }
       : {
           columns: ["pid", "user", "db", "state", "blocking", "blocked_by", "query_sec", "query"].map((name) => ({ name, typeName: name === "pid" || name === "blocking" ? "INT4" : "TEXT" })),
           rows: [
@@ -265,7 +445,8 @@ const handlers: Record<string, (a: any) => unknown> = {
     return [o.kind === "database" ? `CREATE DATABASE ${o.name}` : o.kind === "schema" ? `CREATE SCHEMA ${o.name}` : o.kind === "view" ? `CREATE ${o.materialized ? "MATERIALIZED " : ""}VIEW ${o.schema}.${o.name} AS\n${o.query}` : `CREATE SEQUENCE ${o.schema}.${o.name}`];
   },
   rename_ddl: (a: any) => `ALTER TABLE ${a.schema}.${a.old} RENAME TO ${a.new}`,
-  run_ddl: () => new Promise((ok) => setTimeout(() => ok(null), 300)),
+  // e2e sets __mockDdlWarning for "ran, but the Production log couldn't record it"
+  run_ddl: () => new Promise((ok) => setTimeout(() => ok((globalThis as any).__mockDdlWarning ?? null), 300)),
   subset_preview: () => ({
     total: 9,
     tables: [
@@ -276,8 +457,13 @@ const handlers: Record<string, (a: any) => unknown> = {
     ],
   }),
   subset_copy: () => new Promise((ok) => setTimeout(() => ok({ total: 9, tables: [] }), 800)),
-  fake_fill: (a: any) => new Promise((ok) => setTimeout(() => ok(a.rows), 600)),
+  fake_fill: (a: any) => new Promise((ok) => setTimeout(() => ok({ rows: a.rows }), 600)),
   audit_log: () => [
+    { id: "a5", ts: Date.now() - 2000, connId: "prod", connName: "[PROD] shop_app", sql: "COMMIT outcome unknown (connection lost)", inTx: false, error: "error communicating with database: Connection reset by peer (os error 54)", note: "The server may have committed before the connection was lost. Check the data before you run these changes again." },
+    { id: "a4", ts: Date.now() - 5000, connId: "prod", connName: "[PROD] shop_app", sql: "update orders set status = 'refunded' where id = 7", inTx: false, started: true,
+      note: "Running, or stopped before its result was recorded (Qurry quit, or couldn't write the log after it ran)" },
+    { id: "a6", ts: Date.now() - 20000, connId: "prod", connName: "[PROD] shop_app", sql: "ENDED (committed or rolled back)", inTx: false,
+      note: "The transaction ended in the statement before this entry (a CALL, a deadlock or a lock wait timeout), and MySQL doesn't say whether it committed or rolled back the changes made before it. Check the data before you run them again." },
     { id: "a3", ts: Date.now() - 30000, connId: "prod", connName: "[PROD] shop_app", sql: "COMMIT", inTx: false },
     { id: "a2", ts: Date.now() - 60000, connId: "prod", connName: "[PROD] shop_app", sql: "update users set user_name = 'kim' where id <= 3", rows: 3, inTx: true,
       undo: "-- Undo for: update users set user_name = 'kim' where id <= 3\n-- Saved just before it ran. Rows changed again since then are overwritten.\nUPDATE users AS qurry_t SET user_name = qurry_old.user_name\nFROM jsonb_populate_recordset(NULL::users, $qurry$[{\"id\":1,\"user_name\":\"user_1\"}]$qurry$) AS qurry_old\nWHERE qurry_t.id = qurry_old.id;\n" },
@@ -295,6 +481,7 @@ const handlers: Record<string, (a: any) => unknown> = {
       children: [{ op: "Seq Scan", detail: "on big_t  filter: (h ~~ 'ab%'::text)", startup: 0, total: 989.9, rows: 12, actualTime: 25.2, actualRows: 383, loops: 2, selfTime: 25.2, pct: 56.0,
         warnings: ["Seq Scan reads the whole table (~200,000 rows) — an index on the filter columns may help", "Filter removed 99% of rows (199,234 rows)"], props: [["Relation Name", "big_t"], ["Rows Removed by Filter", "99617"]], children: [] }] }],
   }),
+  dba_explain: (a: any) => (/\$\d/.test(a.query) ? `-- Replace the parameters ($1, $2 …) with real values, then run:\nEXPLAIN ${a.query}` : `EXPLAIN ${a.query}`),
   dba_action_sql: (a: any) => a.template.replace(/\{=?(\w+)\}/g, (_: string, k: string) => a.row[k] ?? ""),
   pick_data_file: () => ["~/Downloads/new_users.csv", { format: "csv", columns: ["ID", "Name", "Email", "signup date"], rows: [["1", "Kim", "kim@example.com", "2026-01-02"], ["2", "Lee", null, "2026-01-03"]], bytes: 12_400_000 }],
   import_data: () => new Promise((ok) => setTimeout(() => ok(1234), 4000)),
@@ -304,15 +491,50 @@ const handlers: Record<string, (a: any) => unknown> = {
   import_picked: () => ({ added: 0, updated: 1 }),
   save_keymap: () => null,
   install_update: () => new Promise((_, rej) => setTimeout(() => rej("Update failed: mock"), 800)),
-  check_update: () => ({
+  update_channel: () => updateChannel,
+  // Fonts that ship with macOS (the specs run as on macOS), one of them proportional
+  font_families: () => [
+    { name: "Andale Mono", mono: true },
+    { name: "Courier New", mono: true },
+    { name: "Helvetica", mono: false },
+    { name: "Menlo", mono: true },
+    { name: "Monaco", mono: true },
+    { name: "PT Mono", mono: true },
+  ],
+  grid_align: () => gridAlign,
+  set_grid_align: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
+    // As the core: the default (numbers and NULL on the right) drops the override
+    const next: Record<string, string> = { ...gridAlign };
+    if (a.align === (a.class === "number" || a.class === "null" ? "right" : "left")) delete next[a.class];
+    else next[a.class] = a.align;
+    gridAlign = next;
+    return next;
+  },
+  // window.__mockChannelSaveFails: the settings file can't be written
+  set_update_channel: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
+    updateChannel = a.channel;
+    return updateChecked ? updateInfo() : null;
+  },
+  // window.__mockChecksOff: QURRY_NO_UPDATE_CHECK is set, so only a forced check (Check Now) asks
+  check_update: (a: any) => {
+    if ((window as any).__mockChecksOff && !a.force) throw "Update checks are off";
+    return (updateChecked = true), updateInfo();
+  },
+};
+/** window.__mockNoUpdate: the channel offers nothing newer (e.g. the TUI switched it back to stable) */
+function updateInfo() {
+  return {
     current: "0.1.0",
-    latest: { version: "0.1.2", url: "https://github.com/Hkhyyy/qurry/releases/tag/v0.1.2", notes: "## dbtool 0.1.2\n- something new", assets: [{ name: "dbtool_0.1.2_aarch64.dmg", url: "https://example.com/dbtool_0.1.2_aarch64.dmg" }] },
+    channel: updateChannel,
+    latest: (window as any).__mockNoUpdate ? null : { version: "0.1.2", url: "https://github.com/Hkhyyy/qurry/releases/tag/v0.1.2", notes: "## dbtool 0.1.2\n- something new", assets: [{ name: "dbtool_0.1.2_aarch64.dmg", url: "https://example.com/dbtool_0.1.2_aarch64.dmg" }] },
     changes: [
       { version: "0.1.2", changes: ["[feat] TUI 키 안내: ⌃P 시작, F1 Start here, 상태줄 (#18)", "[fix] ; 없는 문장 나누기 (#17)"] },
       { version: "0.1.1", changes: ["[fix] 분할 탭 바 구분선, GUI 탭 사이 간격 (#16)"] },
     ],
-  }),
-};
+  };
+}
 (window as any).__TAURI_INTERNALS__ = {
   invoke: async (cmd: string, args: unknown) => {
     const h = handlers[cmd];

@@ -1,5 +1,6 @@
 //! Schema compare: DDL that makes the target match the source. Order: create tables (without foreign keys) → columns → indexes·constraints → foreign keys → views → drops (last, marked dangerous)
 use crate::app::{AppState, ensure_pool};
+use crate::backend::{Backend, dispatch};
 use crate::db::Pool;
 use crate::error::{AppError, AppResult};
 use crate::store::DbKind;
@@ -45,7 +46,7 @@ pub struct TableModel {
 }
 
 /// Strip its own schema name (to compare two schemas as the same text): "s".x · s.x · `s`.x
-fn norm(def: &str, schema: &str, kind: DbKind) -> String {
+pub(crate) fn norm(def: &str, schema: &str, kind: DbKind) -> String {
     let q = crate::sql::quote_ident(kind, schema);
     let mut out = def.replace(&format!("{q}."), "");
     if kind == DbKind::Mysql {
@@ -72,7 +73,7 @@ fn remap(def: &str, src: &str, dst: &str, kind: DbKind) -> String {
 }
 
 /// MySQL: add the DB name to REFERENCES `t` pointing at the same DB (so it's right even when run while connected to another DB)
-fn qualify_refs(line: &str, db: &str) -> String {
+pub(crate) fn qualify_refs(line: &str, db: &str) -> String {
     let mut out = String::new();
     let mut rest = line;
     while let Some(i) = rest.find("REFERENCES `") {
@@ -89,77 +90,6 @@ fn qualify_refs(line: &str, db: &str) -> String {
     out
 }
 
-async fn pg_model(p: &sqlx::PgPool, pool: &Pool, schema: &str) -> AppResult<Model> {
-    let tables: Vec<(String,)> = sqlx::query_as("select c.relname::text from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = $1 and c.relkind in ('r', 'p') and not c.relispartition order by 1")
-        .bind(schema)
-        .fetch_all(p)
-        .await?;
-    let mut m = Model::default();
-    for (t,) in tables {
-        let d = crate::meta::table_detail(pool, schema, &t).await?;
-        let cons: Vec<&str> = d.constraints.iter().map(|c| c.name.as_str()).collect();
-        let mut tm = TableModel { columns: d.columns.iter().map(|c| (c.name.clone(), Col { ty: c.data_type.clone(), not_null: !c.nullable, default: c.default_value.as_deref().map(|x| norm(x, schema, DbKind::Postgres)), line: String::new() })).collect(), ..Default::default() };
-        for c in &d.constraints {
-            let def = norm(&c.definition, schema, DbKind::Postgres);
-            if c.kind == "f" {
-                tm.fks.insert(c.name.clone(), def);
-            } else {
-                tm.keys.insert(c.name.clone(), format!("CONSTRAINT {} {def}", crate::sql::quote_ident(DbKind::Postgres, &c.name)));
-            }
-        }
-        for i in d.indexes.iter().filter(|i| !cons.contains(&i.name.as_str())) {
-            tm.keys.insert(i.name.clone(), norm(&i.definition, schema, DbKind::Postgres));
-        }
-        m.tables.insert(t, tm);
-    }
-    let views: Vec<(String, String)> = sqlx::query_as("select c.relname::text, pg_get_viewdef(c.oid, true) from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = $1 and c.relkind = 'v' order by 1")
-        .bind(schema)
-        .fetch_all(p)
-        .await?;
-    for (v, def) in views {
-        m.views.insert(v, norm(def.trim().trim_end_matches(';'), schema, DbKind::Postgres));
-    }
-    Ok(m)
-}
-
-async fn my_model(p: &sqlx::MySqlPool, db: &str) -> AppResult<Model> {
-    use sqlx::Row;
-    let objs: Vec<(String, String)> = sqlx::query_as("select cast(table_name as char), cast(table_type as char) from information_schema.tables where table_schema = ? order by 1")
-        .bind(db)
-        .fetch_all(p)
-        .await?;
-    let mut m = Model::default();
-    let q = |s: &str| crate::sql::quote_ident(DbKind::Mysql, s);
-    for (t, ty) in objs {
-        if ty == "VIEW" {
-            let def: Option<String> = sqlx::query_scalar("select cast(view_definition as char) from information_schema.views where table_schema = ? and table_name = ?").bind(db).bind(&t).fetch_one(p).await?;
-            m.views.insert(t, norm(def.unwrap_or_default().trim(), db, DbKind::Mysql));
-            continue;
-        }
-        let row = sqlx::query(&format!("SHOW CREATE TABLE {}.{}", q(db), q(&t))).fetch_one(p).await?;
-        let ddl: String = row.try_get::<String, _>(1).or_else(|_| row.try_get::<Vec<u8>, _>(1).map(|b| String::from_utf8_lossy(&b).into_owned()))?;
-        let mut tm = TableModel::default();
-        // CREATE TABLE `t` ( … ) ENGINE=… : lines inside the parentheses
-        for l in ddl.lines().skip(1) {
-            let l = l.trim().trim_end_matches(',');
-            if l.starts_with(')') {
-                break;
-            }
-            let name_of = |s: &str| s.split('`').nth(1).unwrap_or("").to_string();
-            if l.starts_with('`') {
-                tm.columns.push((name_of(l), Col { line: l.to_string(), ..Default::default() }));
-            } else if l.starts_with("PRIMARY KEY") {
-                tm.keys.insert("PRIMARY".into(), l.to_string());
-            } else if l.starts_with("CONSTRAINT") && l.contains("FOREIGN KEY") {
-                tm.fks.insert(name_of(l), qualify_refs(l, db).replace(&format!("`{db}`."), ""));
-            } else if !l.is_empty() {
-                tm.keys.insert(name_of(l), l.to_string());
-            }
-        }
-        m.tables.insert(t, tm);
-    }
-    Ok(m)
-}
 
 fn change(kind: &str, object: String, sql: String) -> Change {
     Change { destructive: kind.starts_with("drop"), kind: kind.into(), object, sql }
@@ -361,15 +291,8 @@ impl AppState {
             return Err(AppError::Msg("Compare two data sources of the same kind (PostgreSQL with PostgreSQL, MySQL with MySQL)".into()));
         }
         let (sp, tp) = (ensure_pool(self, &source_id).await?, ensure_pool(self, &target_id).await?);
-        let model = |pool: Pool, schema: String| async move {
-            match &pool {
-                Pool::Pg(p) => pg_model(p, &pool, &schema).await,
-                Pool::My(p) => my_model(p, &schema).await,
-                Pool::Redis(..) => Err(AppError::Msg("Redis has no schema to compare".into())),
-                Pool::Plugin(c) => Err(AppError::Msg(format!("Schema compare is not available for the {} driver yet", c.driver))),
-            }
-        };
-        let (s, t) = (model(sp, source_schema.clone()).await?, model(tp, target_schema.clone()).await?);
+        let s = dispatch!(sp, b => b.schema_model(&source_schema).await)?;
+        let t = dispatch!(tp, b => b.schema_model(&target_schema).await)?;
         Ok(diff(&s, &t, sk, &source_schema, &target_schema))
     }
 }
@@ -518,9 +441,9 @@ fn scan_dir(dir: &str) -> AppResult<Vec<(String, String, String, String)>> {
 
 impl AppState {
     /// Applied history: version → (checksum, applied time). Empty if the history table doesn't exist
-    async fn history_of(&self, pool: &Pool) -> std::collections::HashMap<String, (String, String)> {
+    async fn history_of(&self, pool: &Pool, kind: DbKind) -> std::collections::HashMap<String, (String, String)> {
         let q = format!("SELECT version, checksum, CAST(applied_at AS CHAR(40)) FROM {HISTORY_TABLE}");
-        let q = if matches!(pool, Pool::Pg(_)) { q.replace("CHAR(40)", "text") } else { q };
+        let q = if kind == DbKind::Postgres { q.replace("CHAR(40)", "text") } else { q };
         match pool.run_query(&q, 100_000).await {
             Ok(r) => r.rows.into_iter().map(|r| (crate::db::cell_text(&r[0]), (crate::db::cell_text(&r[1]), crate::db::cell_text(&r[2])))).collect(),
             Err(_) => Default::default(),
@@ -530,7 +453,7 @@ impl AppState {
     /// Migrations in the folder and their applied state
     pub async fn migration_status(&self, id: String, dir: String) -> AppResult<Vec<Migration>> {
         let pool = ensure_pool(self, &id).await?;
-        let mut applied = self.history_of(&pool).await;
+        let mut applied = self.history_of(&pool, self.kind_of(&id)?).await;
         let mut out: Vec<Migration> = scan_dir(&dir)?
             .into_iter()
             .map(|(version, description, file, text)| {
@@ -575,25 +498,8 @@ impl AppState {
             let stmts: Vec<String> = crate::sql::split_statements(text, kind).into_iter().map(|(a, b)| text[a..b].to_string()).collect();
             let fail = |e: String| AppError::Msg(format!("V{} ({}) failed and was rolled back: {e}", m.version, m.file));
             let insert = format!("INSERT INTO {HISTORY_TABLE} (version, description, checksum) VALUES ({}, {}, {})", crate::sql::literal(kind, Some(&m.version)), crate::sql::literal(kind, Some(&m.description)), crate::sql::literal(kind, Some(&m.checksum)));
-            match &pool {
-                Pool::Pg(p) => {
-                    let mut tx = p.begin().await?;
-                    for s in stmts.iter().chain(std::iter::once(&insert)) {
-                        sqlx::Executor::execute(&mut *tx, sqlx::raw_sql(s.as_str())).await.map_err(|e| fail(e.to_string()))?;
-                    }
-                    tx.commit().await.map_err(|e| fail(e.to_string()))?;
-                }
-                Pool::My(p) => {
-                    // MySQL: DDL commits implicitly (only data statements are rolled back together)
-                    let mut tx = p.begin().await?;
-                    for s in stmts.iter().chain(std::iter::once(&insert)) {
-                        sqlx::Executor::execute(&mut *tx, sqlx::raw_sql(s.as_str())).await.map_err(|e| fail(e.to_string()))?;
-                    }
-                    tx.commit().await.map_err(|e| fail(e.to_string()))?;
-                }
-                Pool::Redis(..) => return Err(AppError::Msg("Redis has no migrations".into())),
-                Pool::Plugin(c) => return Err(AppError::Msg(format!("Migrations are not available for the {} driver yet", c.driver))),
-            }
+            let all: Vec<&str> = stmts.iter().map(String::as_str).chain([insert.as_str()]).collect();
+            dispatch!(pool, b => b.apply_migration(&all, fail).await)?;
             done.push(m.version.clone());
         }
         Ok(done)
@@ -618,15 +524,13 @@ mod tests {
     use super::*;
 
     async fn state(kind: DbKind) -> Option<(AppState, String)> {
-        let (env, kind_s) = if kind == DbKind::Postgres { ("QURRY_TEST_PG", "postgres") } else { ("QURRY_TEST_MY", "mysql") };
-        let e = std::env::var(env).ok()?;
-        let p: Vec<&str> = e.split(':').collect();
+        let crate::testenv::Server { mut cfg, password } = crate::testenv::server(kind)?;
+        (cfg.id, cfg.name) = ("x".into(), "x".into());
+        let db = cfg.database.clone();
         let dir = std::env::temp_dir().join(format!("qurry-mig-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir)).unwrap();
-        let (user, pass, db) = if kind == DbKind::Mysql { (p[2], Some(p[3].to_string()), p[4]) } else { (p[2], None, p[3]) };
-        let cfg: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "x", "name": "x", "kind": kind_s, "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": user, "database": db })).unwrap();
-        st.save_connection(cfg, pass, None).await.unwrap();
-        Some((st, db.to_string()))
+        st.save_connection(cfg, password, None).await.unwrap();
+        Some((st, db))
     }
 
     /// Compare → run the generated SQL on the target → comparing again shows no differences

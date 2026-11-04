@@ -1,0 +1,1743 @@
+{
+  "begin-commit-script": {
+    "planExecution(ask)": {
+      "ask": [
+        {
+          "label": "update b set y = 2",
+          "stmts": [
+            "update b set y = 2"
+          ]
+        },
+        {
+          "label": "Transaction (BEGIN … COMMIT, 4 statements)",
+          "stmts": [
+            "BEGIN",
+            "update a set x = 1",
+            "update b set y = 2",
+            "COMMIT"
+          ]
+        },
+        {
+          "label": "All statements (5)",
+          "stmts": [
+            "BEGIN",
+            "update a set x = 1",
+            "update b set y = 2",
+            "COMMIT",
+            "select 1"
+          ]
+        },
+        {
+          "label": "From caret to end",
+          "stmts": [
+            "update b set y = 2",
+            "COMMIT",
+            "select 1"
+          ]
+        }
+      ]
+    },
+    "planExecution(fromCaret)": {
+      "run": [
+        "update b set y = 2",
+        "COMMIT",
+        "select 1"
+      ]
+    },
+    "planExecution(outside:below)": {
+      "ask": [
+        {
+          "label": "update b set y = 2",
+          "stmts": [
+            "update b set y = 2"
+          ]
+        },
+        {
+          "label": "Transaction (BEGIN … COMMIT, 4 statements)",
+          "stmts": [
+            "BEGIN",
+            "update a set x = 1",
+            "update b set y = 2",
+            "COMMIT"
+          ]
+        },
+        {
+          "label": "All statements (5)",
+          "stmts": [
+            "BEGIN",
+            "update a set x = 1",
+            "update b set y = 2",
+            "COMMIT",
+            "select 1"
+          ]
+        },
+        {
+          "label": "From caret to end",
+          "stmts": [
+            "update b set y = 2",
+            "COMMIT",
+            "select 1"
+          ]
+        }
+      ]
+    },
+    "planExecution(outside:whole)": {
+      "ask": [
+        {
+          "label": "update b set y = 2",
+          "stmts": [
+            "update b set y = 2"
+          ]
+        },
+        {
+          "label": "Transaction (BEGIN … COMMIT, 4 statements)",
+          "stmts": [
+            "BEGIN",
+            "update a set x = 1",
+            "update b set y = 2",
+            "COMMIT"
+          ]
+        },
+        {
+          "label": "All statements (5)",
+          "stmts": [
+            "BEGIN",
+            "update a set x = 1",
+            "update b set y = 2",
+            "COMMIT",
+            "select 1"
+          ]
+        },
+        {
+          "label": "From caret to end",
+          "stmts": [
+            "update b set y = 2",
+            "COMMIT",
+            "select 1"
+          ]
+        }
+      ]
+    },
+    "planExecution(smallest)": {
+      "run": [
+        "update b set y = 2"
+      ]
+    },
+    "planExecution(whole)": {
+      "run": [
+        "BEGIN",
+        "update a set x = 1",
+        "update b set y = 2",
+        "COMMIT",
+        "select 1"
+      ]
+    },
+    "splitScript": [
+      "BEGIN",
+      "\nupdate a set x = 1",
+      "\nupdate b set y = 2",
+      "\nCOMMIT",
+      "\nselect 1"
+    ],
+    "splitStatements": [
+      "BEGIN",
+      "\nupdate a set x = 1",
+      "\nupdate b set y = 2",
+      "\nCOMMIT",
+      "\nselect 1"
+    ],
+    "statementAt": "update b set y = 2"
+  },
+  "begin-without-end": {
+    "planExecution(ask)": {
+      "ask": [
+        {
+          "label": "update a set x = 1",
+          "stmts": [
+            "update a set x = 1"
+          ]
+        },
+        {
+          "label": "All statements (3)",
+          "stmts": [
+            "BEGIN",
+            "update a set x = 1",
+            "select 2"
+          ]
+        },
+        {
+          "label": "From caret to end",
+          "stmts": [
+            "update a set x = 1",
+            "select 2"
+          ]
+        }
+      ]
+    },
+    "planExecution(fromCaret)": {
+      "run": [
+        "update a set x = 1",
+        "select 2"
+      ]
+    },
+    "planExecution(outside:below)": {
+      "ask": [
+        {
+          "label": "update a set x = 1",
+          "stmts": [
+            "update a set x = 1"
+          ]
+        },
+        {
+          "label": "All statements (3)",
+          "stmts": [
+            "BEGIN",
+            "update a set x = 1",
+            "select 2"
+          ]
+        },
+        {
+          "label": "From caret to end",
+          "stmts": [
+            "update a set x = 1",
+            "select 2"
+          ]
+        }
+      ]
+    },
+    "planExecution(outside:whole)": {
+      "ask": [
+        {
+          "label": "update a set x = 1",
+          "stmts": [
+            "update a set x = 1"
+          ]
+        },
+        {
+          "label": "All statements (3)",
+          "stmts": [
+            "BEGIN",
+            "update a set x = 1",
+            "select 2"
+          ]
+        },
+        {
+          "label": "From caret to end",
+          "stmts": [
+            "update a set x = 1",
+            "select 2"
+          ]
+        }
+      ]
+    },
+    "planExecution(smallest)": {
+      "run": [
+        "update a set x = 1"
+      ]
+    },
+    "planExecution(whole)": {
+      "run": [
+        "BEGIN",
+        "update a set x = 1",
+        "select 2"
+      ]
+    },
+    "splitScript": [
+      "BEGIN",
+      "\nupdate a set x = 1",
+      "\nselect 2"
+    ],
+    "splitStatements": [
+      "BEGIN",
+      "\nupdate a set x = 1",
+      "\nselect 2"
+    ],
+    "statementAt": "update a set x = 1"
+  },
+  "blank": {
+    "splitScript": [],
+    "splitStatements": []
+  },
+  "create-function-body": {
+    "splitScript": [
+      "create view v as\nselect 1\nselect 2"
+    ],
+    "splitStatements": [
+      "create view v as\nselect 1\nselect 2"
+    ]
+  },
+  "crlf": {
+    "splitScript": [
+      "select 1",
+      "\r\nselect 2"
+    ],
+    "splitStatements": [
+      "select 1",
+      "\r\nselect 2"
+    ]
+  },
+  "cursor-after-semicolon": {
+    "planExecution(ask)": {
+      "ask": [
+        {
+          "label": "select 1",
+          "stmts": [
+            "select 1"
+          ]
+        },
+        {
+          "label": "All statements (2)",
+          "stmts": [
+            "select 1",
+            "select 2"
+          ]
+        }
+      ]
+    },
+    "planExecution(fromCaret)": {
+      "run": [
+        "select 1",
+        "select 2"
+      ]
+    },
+    "planExecution(outside:below)": {
+      "ask": [
+        {
+          "label": "select 1",
+          "stmts": [
+            "select 1"
+          ]
+        },
+        {
+          "label": "All statements (2)",
+          "stmts": [
+            "select 1",
+            "select 2"
+          ]
+        }
+      ]
+    },
+    "planExecution(outside:whole)": {
+      "ask": [
+        {
+          "label": "select 1",
+          "stmts": [
+            "select 1"
+          ]
+        },
+        {
+          "label": "All statements (2)",
+          "stmts": [
+            "select 1",
+            "select 2"
+          ]
+        }
+      ]
+    },
+    "planExecution(smallest)": {
+      "run": [
+        "select 1"
+      ]
+    },
+    "planExecution(whole)": {
+      "run": [
+        "select 1",
+        "select 2"
+      ]
+    },
+    "splitScript": [
+      "select 1",
+      "\n\nselect 2"
+    ],
+    "splitStatements": [
+      "select 1",
+      "\n\nselect 2"
+    ],
+    "statementAt": "select 1"
+  },
+  "cursor-blank-line": {
+    "planExecution(ask)": null,
+    "planExecution(fromCaret)": null,
+    "planExecution(outside:below)": {
+      "run": [
+        "select 2",
+        "select 3"
+      ]
+    },
+    "planExecution(outside:whole)": {
+      "run": [
+        "select 1",
+        "select 2",
+        "select 3"
+      ]
+    },
+    "planExecution(smallest)": null,
+    "planExecution(whole)": null,
+    "splitScript": [
+      "select 1",
+      "\n\n\n\nselect 2",
+      "\nselect 3"
+    ],
+    "splitStatements": [
+      "select 1",
+      "\n\n\n\nselect 2",
+      "\nselect 3"
+    ],
+    "statementAt": "select 2"
+  },
+  "cursor-end": {
+    "planExecution(ask)": null,
+    "planExecution(fromCaret)": null,
+    "planExecution(outside:below)": {
+      "run": []
+    },
+    "planExecution(outside:whole)": {
+      "run": [
+        "select 1",
+        "select 2"
+      ]
+    },
+    "planExecution(smallest)": null,
+    "planExecution(whole)": null,
+    "splitScript": [
+      "select 1",
+      "\nselect 2"
+    ],
+    "splitStatements": [
+      "select 1",
+      "\nselect 2"
+    ],
+    "statementAt": "select 2"
+  },
+  "cursor-first": {
+    "planExecution(ask)": {
+      "ask": [
+        {
+          "label": "select 1",
+          "stmts": [
+            "select 1"
+          ]
+        },
+        {
+          "label": "All statements (3)",
+          "stmts": [
+            "select 1",
+            "select 2",
+            "select 3"
+          ]
+        }
+      ]
+    },
+    "planExecution(fromCaret)": {
+      "run": [
+        "select 1",
+        "select 2",
+        "select 3"
+      ]
+    },
+    "planExecution(outside:below)": {
+      "ask": [
+        {
+          "label": "select 1",
+          "stmts": [
+            "select 1"
+          ]
+        },
+        {
+          "label": "All statements (3)",
+          "stmts": [
+            "select 1",
+            "select 2",
+            "select 3"
+          ]
+        }
+      ]
+    },
+    "planExecution(outside:whole)": {
+      "ask": [
+        {
+          "label": "select 1",
+          "stmts": [
+            "select 1"
+          ]
+        },
+        {
+          "label": "All statements (3)",
+          "stmts": [
+            "select 1",
+            "select 2",
+            "select 3"
+          ]
+        }
+      ]
+    },
+    "planExecution(smallest)": {
+      "run": [
+        "select 1"
+      ]
+    },
+    "planExecution(whole)": {
+      "run": [
+        "select 1",
+        "select 2",
+        "select 3"
+      ]
+    },
+    "splitScript": [
+      "select 1",
+      "\nselect 2",
+      "\nselect 3"
+    ],
+    "splitStatements": [
+      "select 1",
+      "\nselect 2",
+      "\nselect 3"
+    ],
+    "statementAt": "select 1"
+  },
+  "cursor-in-comment-gap": {
+    "planExecution(ask)": {
+      "ask": [
+        {
+          "label": "-- note select 2",
+          "stmts": [
+            "-- note \nselect 2"
+          ]
+        },
+        {
+          "label": "All statements (2)",
+          "stmts": [
+            "select 1",
+            "-- note \nselect 2"
+          ]
+        }
+      ]
+    },
+    "planExecution(fromCaret)": {
+      "run": [
+        "-- note \nselect 2"
+      ]
+    },
+    "planExecution(outside:below)": {
+      "ask": [
+        {
+          "label": "-- note select 2",
+          "stmts": [
+            "-- note \nselect 2"
+          ]
+        },
+        {
+          "label": "All statements (2)",
+          "stmts": [
+            "select 1",
+            "-- note \nselect 2"
+          ]
+        }
+      ]
+    },
+    "planExecution(outside:whole)": {
+      "ask": [
+        {
+          "label": "-- note select 2",
+          "stmts": [
+            "-- note \nselect 2"
+          ]
+        },
+        {
+          "label": "All statements (2)",
+          "stmts": [
+            "select 1",
+            "-- note \nselect 2"
+          ]
+        }
+      ]
+    },
+    "planExecution(smallest)": {
+      "run": [
+        "-- note \nselect 2"
+      ]
+    },
+    "planExecution(whole)": {
+      "run": [
+        "select 1",
+        "-- note \nselect 2"
+      ]
+    },
+    "splitScript": [
+      "select 1",
+      "\n-- note \nselect 2"
+    ],
+    "splitStatements": [
+      "select 1",
+      "\n-- note \nselect 2"
+    ],
+    "statementAt": "-- note \nselect 2"
+  },
+  "cursor-middle": {
+    "planExecution(ask)": {
+      "ask": [
+        {
+          "label": "select 2",
+          "stmts": [
+            "select 2"
+          ]
+        },
+        {
+          "label": "All statements (3)",
+          "stmts": [
+            "select 1",
+            "select 2",
+            "select 3"
+          ]
+        },
+        {
+          "label": "From caret to end",
+          "stmts": [
+            "select 2",
+            "select 3"
+          ]
+        }
+      ]
+    },
+    "planExecution(fromCaret)": {
+      "run": [
+        "select 2",
+        "select 3"
+      ]
+    },
+    "planExecution(outside:below)": {
+      "ask": [
+        {
+          "label": "select 2",
+          "stmts": [
+            "select 2"
+          ]
+        },
+        {
+          "label": "All statements (3)",
+          "stmts": [
+            "select 1",
+            "select 2",
+            "select 3"
+          ]
+        },
+        {
+          "label": "From caret to end",
+          "stmts": [
+            "select 2",
+            "select 3"
+          ]
+        }
+      ]
+    },
+    "planExecution(outside:whole)": {
+      "ask": [
+        {
+          "label": "select 2",
+          "stmts": [
+            "select 2"
+          ]
+        },
+        {
+          "label": "All statements (3)",
+          "stmts": [
+            "select 1",
+            "select 2",
+            "select 3"
+          ]
+        },
+        {
+          "label": "From caret to end",
+          "stmts": [
+            "select 2",
+            "select 3"
+          ]
+        }
+      ]
+    },
+    "planExecution(smallest)": {
+      "run": [
+        "select 2"
+      ]
+    },
+    "planExecution(whole)": {
+      "run": [
+        "select 1",
+        "select 2",
+        "select 3"
+      ]
+    },
+    "splitScript": [
+      "select 1",
+      "\nselect 2",
+      "\nselect 3"
+    ],
+    "splitStatements": [
+      "select 1",
+      "\nselect 2",
+      "\nselect 3"
+    ],
+    "statementAt": "select 2"
+  },
+  "cursor-no-semicolon": {
+    "planExecution(ask)": {
+      "ask": [
+        {
+          "label": "select 2",
+          "stmts": [
+            "select 2"
+          ]
+        },
+        {
+          "label": "All statements (3)",
+          "stmts": [
+            "select 1",
+            "select 2",
+            "select 3"
+          ]
+        },
+        {
+          "label": "From caret to end",
+          "stmts": [
+            "select 2",
+            "select 3"
+          ]
+        }
+      ]
+    },
+    "planExecution(fromCaret)": {
+      "run": [
+        "select 2",
+        "select 3"
+      ]
+    },
+    "planExecution(outside:below)": {
+      "ask": [
+        {
+          "label": "select 2",
+          "stmts": [
+            "select 2"
+          ]
+        },
+        {
+          "label": "All statements (3)",
+          "stmts": [
+            "select 1",
+            "select 2",
+            "select 3"
+          ]
+        },
+        {
+          "label": "From caret to end",
+          "stmts": [
+            "select 2",
+            "select 3"
+          ]
+        }
+      ]
+    },
+    "planExecution(outside:whole)": {
+      "ask": [
+        {
+          "label": "select 2",
+          "stmts": [
+            "select 2"
+          ]
+        },
+        {
+          "label": "All statements (3)",
+          "stmts": [
+            "select 1",
+            "select 2",
+            "select 3"
+          ]
+        },
+        {
+          "label": "From caret to end",
+          "stmts": [
+            "select 2",
+            "select 3"
+          ]
+        }
+      ]
+    },
+    "planExecution(smallest)": {
+      "run": [
+        "select 2"
+      ]
+    },
+    "planExecution(whole)": {
+      "run": [
+        "select 1",
+        "select 2",
+        "select 3"
+      ]
+    },
+    "splitScript": [
+      "select 1\n",
+      "select 2\n",
+      "select 3"
+    ],
+    "splitStatements": [
+      "select 1\nselect 2\nselect 3"
+    ],
+    "statementAt": "select 2"
+  },
+  "dashdash-no-space-mysql": {
+    "splitScript": [
+      "select 1--1",
+      "\nselect 2"
+    ],
+    "splitStatements": [
+      "select 1--1",
+      "\nselect 2"
+    ]
+  },
+  "dashdash-space-mysql": {
+    "splitScript": [
+      "select 1 -- c; c\n",
+      " select 2"
+    ],
+    "splitStatements": [
+      "select 1 -- c; c\n",
+      " select 2"
+    ]
+  },
+  "dollar-digit-tag": {
+    "splitScript": [
+      "select $1$",
+      " select 2"
+    ],
+    "splitStatements": [
+      "select $1$",
+      " select 2"
+    ]
+  },
+  "dollar-inside-name": {
+    "splitScript": [
+      "select foo$x$ from t",
+      " select 1"
+    ],
+    "splitStatements": [
+      "select foo$x$ from t",
+      " select 1"
+    ]
+  },
+  "dollar-quote-body": {
+    "splitScript": [
+      "create function f() returns int as $$ begin return 1; end $$ language plpgsql",
+      "\nselect f()"
+    ],
+    "splitStatements": [
+      "create function f() returns int as $$ begin return 1; end $$ language plpgsql",
+      "\nselect f()"
+    ]
+  },
+  "dollar-tag": {
+    "splitScript": [
+      "do $fn$ begin perform 1; perform $$;$$; end $fn$",
+      "\nselect 2"
+    ],
+    "splitStatements": [
+      "do $fn$ begin perform 1; perform $$;$$; end $fn$",
+      "\nselect 2"
+    ]
+  },
+  "e-string-after-name": {
+    "splitScript": [
+      "select name'x;y'",
+      " select 2"
+    ],
+    "splitStatements": [
+      "select name'x;y'",
+      " select 2"
+    ]
+  },
+  "e-string-backslash-quote": {
+    "splitScript": [
+      "select E'it\\'s; here'",
+      " select 2"
+    ],
+    "splitStatements": [
+      "select E'it\\'s; here'",
+      " select 2"
+    ]
+  },
+  "emoji-strings": {
+    "planExecution(ask)": {
+      "ask": [
+        {
+          "label": "select '👍🏽' as f",
+          "stmts": [
+            "select '👍🏽' as f"
+          ]
+        },
+        {
+          "label": "All statements (3)",
+          "stmts": [
+            "select '😀;😀' as e",
+            "select '👍🏽' as f",
+            "select 3"
+          ]
+        },
+        {
+          "label": "From caret to end",
+          "stmts": [
+            "select '👍🏽' as f",
+            "select 3"
+          ]
+        }
+      ]
+    },
+    "planExecution(fromCaret)": {
+      "run": [
+        "select '👍🏽' as f",
+        "select 3"
+      ]
+    },
+    "planExecution(outside:below)": {
+      "ask": [
+        {
+          "label": "select '👍🏽' as f",
+          "stmts": [
+            "select '👍🏽' as f"
+          ]
+        },
+        {
+          "label": "All statements (3)",
+          "stmts": [
+            "select '😀;😀' as e",
+            "select '👍🏽' as f",
+            "select 3"
+          ]
+        },
+        {
+          "label": "From caret to end",
+          "stmts": [
+            "select '👍🏽' as f",
+            "select 3"
+          ]
+        }
+      ]
+    },
+    "planExecution(outside:whole)": {
+      "ask": [
+        {
+          "label": "select '👍🏽' as f",
+          "stmts": [
+            "select '👍🏽' as f"
+          ]
+        },
+        {
+          "label": "All statements (3)",
+          "stmts": [
+            "select '😀;😀' as e",
+            "select '👍🏽' as f",
+            "select 3"
+          ]
+        },
+        {
+          "label": "From caret to end",
+          "stmts": [
+            "select '👍🏽' as f",
+            "select 3"
+          ]
+        }
+      ]
+    },
+    "planExecution(smallest)": {
+      "run": [
+        "select '👍🏽' as f"
+      ]
+    },
+    "planExecution(whole)": {
+      "run": [
+        "select '😀;😀' as e",
+        "select '👍🏽' as f",
+        "select 3"
+      ]
+    },
+    "splitScript": [
+      "select '😀;😀' as e",
+      " select '👍🏽' as f",
+      " select 3"
+    ],
+    "splitStatements": [
+      "select '😀;😀' as e",
+      " select '👍🏽' as f",
+      " select 3"
+    ],
+    "statementAt": "select '👍🏽' as f"
+  },
+  "empty": {
+    "splitScript": [],
+    "splitStatements": []
+  },
+  "grant-lines": {
+    "splitScript": [
+      "grant select on t to u\n",
+      "grant insert on t to u\nselect 1"
+    ],
+    "splitStatements": [
+      "grant select on t to u\ngrant insert on t to u\nselect 1"
+    ]
+  },
+  "hash-comment-mysql": {
+    "splitScript": [
+      "select 1 # comment; still comment\n",
+      "select 2"
+    ],
+    "splitStatements": [
+      "select 1 # comment; still comment\nselect 2"
+    ]
+  },
+  "hash-pg-not-comment": {
+    "splitScript": [
+      "select 1 # 2",
+      " select 3"
+    ],
+    "splitStatements": [
+      "select 1 # 2",
+      " select 3"
+    ]
+  },
+  "insert-select": {
+    "splitScript": [
+      "insert into t (a)\nselect a from u\nselect 9"
+    ],
+    "splitStatements": [
+      "insert into t (a)\nselect a from u\nselect 9"
+    ]
+  },
+  "korean-cursor": {
+    "planExecution(ask)": {
+      "ask": [
+        {
+          "label": "select 이름 from 사용자 where 이름 = '김😀'",
+          "stmts": [
+            "select 이름 from 사용자 where 이름 = '김😀'"
+          ]
+        },
+        {
+          "label": "All statements (2)",
+          "stmts": [
+            "select 1 from 사용자",
+            "select 이름 from 사용자 where 이름 = '김😀'"
+          ]
+        }
+      ]
+    },
+    "planExecution(fromCaret)": {
+      "run": [
+        "select 이름 from 사용자 where 이름 = '김😀'"
+      ]
+    },
+    "planExecution(outside:below)": {
+      "ask": [
+        {
+          "label": "select 이름 from 사용자 where 이름 = '김😀'",
+          "stmts": [
+            "select 이름 from 사용자 where 이름 = '김😀'"
+          ]
+        },
+        {
+          "label": "All statements (2)",
+          "stmts": [
+            "select 1 from 사용자",
+            "select 이름 from 사용자 where 이름 = '김😀'"
+          ]
+        }
+      ]
+    },
+    "planExecution(outside:whole)": {
+      "ask": [
+        {
+          "label": "select 이름 from 사용자 where 이름 = '김😀'",
+          "stmts": [
+            "select 이름 from 사용자 where 이름 = '김😀'"
+          ]
+        },
+        {
+          "label": "All statements (2)",
+          "stmts": [
+            "select 1 from 사용자",
+            "select 이름 from 사용자 where 이름 = '김😀'"
+          ]
+        }
+      ]
+    },
+    "planExecution(smallest)": {
+      "run": [
+        "select 이름 from 사용자 where 이름 = '김😀'"
+      ]
+    },
+    "planExecution(whole)": {
+      "run": [
+        "select 1 from 사용자",
+        "select 이름 from 사용자 where 이름 = '김😀'"
+      ]
+    },
+    "splitScript": [
+      "select 1 from 사용자",
+      "\nselect 이름 from 사용자 where 이름 = '김😀'"
+    ],
+    "splitStatements": [
+      "select 1 from 사용자",
+      "\nselect 이름 from 사용자 where 이름 = '김😀'"
+    ],
+    "statementAt": "select 이름 from 사용자 where 이름 = '김😀'"
+  },
+  "korean-identifiers": {
+    "splitScript": [
+      "select \"이름\", 나이 from 사용자 where 상태 = '활성;'",
+      "\nselect count(*) from 주문"
+    ],
+    "splitStatements": [
+      "select \"이름\", 나이 from 사용자 where 상태 = '활성;'",
+      "\nselect count(*) from 주문"
+    ]
+  },
+  "korean-word-starts-line": {
+    "splitScript": [
+      "select 1\n주문\n",
+      "select 2"
+    ],
+    "splitStatements": [
+      "select 1\n주문\nselect 2"
+    ]
+  },
+  "line-comment-semicolon": {
+    "splitScript": [
+      "select 1",
+      " -- not; a split\nselect 2"
+    ],
+    "splitStatements": [
+      "select 1",
+      " -- not; a split\nselect 2"
+    ]
+  },
+  "mysql-backslash-quote": {
+    "splitScript": [
+      "select 'a\\';b'",
+      " select 2"
+    ],
+    "splitStatements": [
+      "select 'a\\';b'",
+      " select 2"
+    ]
+  },
+  "mysql-backtick": {
+    "splitScript": [
+      "select `a;b`, `x\\`",
+      " select 2"
+    ],
+    "splitStatements": [
+      "select `a;b`, `x\\`",
+      " select 2"
+    ]
+  },
+  "mysql-executable-comment": {
+    "splitScript": [
+      "/*!40101 SET NAMES utf8 */",
+      " select 1"
+    ],
+    "splitStatements": [
+      "/*!40101 SET NAMES utf8 */",
+      " select 1"
+    ]
+  },
+  "mysql-no-nested-comment": {
+    "splitScript": [
+      "/* a /* b */ select 1",
+      " */ select 2"
+    ],
+    "splitStatements": [
+      "/* a /* b */ select 1",
+      " */ select 2"
+    ]
+  },
+  "nested-comment": {
+    "splitScript": [
+      "/* outer /* inner */ still; comment */ select 1",
+      " select 2"
+    ],
+    "splitStatements": [
+      "/* outer /* inner */ still; comment */ select 1",
+      " select 2"
+    ]
+  },
+  "no-semicolon-lines": {
+    "splitScript": [
+      "select 1\n",
+      "select 2\n\n",
+      "select * from users where id = 3"
+    ],
+    "splitStatements": [
+      "select 1\nselect 2\n\nselect * from users where id = 3"
+    ]
+  },
+  "note-line-exec-mysql": {
+    "planExecution(ask)": {
+      "run": [
+        "select 1"
+      ]
+    },
+    "planExecution(fromCaret)": {
+      "run": [
+        "select 1"
+      ]
+    },
+    "planExecution(outside:below)": {
+      "run": [
+        "select 1"
+      ]
+    },
+    "planExecution(outside:whole)": {
+      "run": [
+        "select 1"
+      ]
+    },
+    "planExecution(smallest)": {
+      "run": [
+        "select 1"
+      ]
+    },
+    "planExecution(whole)": {
+      "run": [
+        "select 1"
+      ]
+    },
+    "splitScript": [
+      "Exec this after the deploy\nselect 1"
+    ],
+    "splitStatements": [
+      "Exec this after the deploy\nselect 1"
+    ],
+    "statementAt": "Exec this after the deploy\nselect 1"
+  },
+  "note-line-if": {
+    "planExecution(ask)": {
+      "run": [
+        "select * from users"
+      ]
+    },
+    "planExecution(fromCaret)": {
+      "run": [
+        "select * from users"
+      ]
+    },
+    "planExecution(outside:below)": {
+      "run": [
+        "select * from users"
+      ]
+    },
+    "planExecution(outside:whole)": {
+      "run": [
+        "select * from users"
+      ]
+    },
+    "planExecution(smallest)": {
+      "run": [
+        "select * from users"
+      ]
+    },
+    "planExecution(whole)": {
+      "run": [
+        "select * from users"
+      ]
+    },
+    "splitScript": [
+      "If you need all users:\nselect * from users"
+    ],
+    "splitStatements": [
+      "If you need all users:\nselect * from users"
+    ],
+    "statementAt": "If you need all users:\nselect * from users"
+  },
+  "pg-backslash-plain-string": {
+    "splitScript": [
+      "select 'a\\'",
+      " select 2"
+    ],
+    "splitStatements": [
+      "select 'a\\'",
+      " select 2"
+    ]
+  },
+  "quoted-ident-semicolon": {
+    "splitScript": [
+      "select \"a;b\" from \"my;table\"",
+      " select 2"
+    ],
+    "splitStatements": [
+      "select \"a;b\" from \"my;table\"",
+      " select 2"
+    ]
+  },
+  "redis-blank-cursor": {
+    "planExecution(ask)": {
+      "ask": [
+        {
+          "label": "GET a",
+          "stmts": [
+            "GET a"
+          ]
+        },
+        {
+          "label": "All statements (2)",
+          "stmts": [
+            "GET a",
+            "GET b"
+          ]
+        }
+      ]
+    },
+    "planExecution(fromCaret)": {
+      "run": [
+        "GET a",
+        "GET b"
+      ]
+    },
+    "planExecution(outside:below)": {
+      "ask": [
+        {
+          "label": "GET a",
+          "stmts": [
+            "GET a"
+          ]
+        },
+        {
+          "label": "All statements (2)",
+          "stmts": [
+            "GET a",
+            "GET b"
+          ]
+        }
+      ]
+    },
+    "planExecution(outside:whole)": {
+      "ask": [
+        {
+          "label": "GET a",
+          "stmts": [
+            "GET a"
+          ]
+        },
+        {
+          "label": "All statements (2)",
+          "stmts": [
+            "GET a",
+            "GET b"
+          ]
+        }
+      ]
+    },
+    "planExecution(smallest)": {
+      "run": [
+        "GET a"
+      ]
+    },
+    "planExecution(whole)": {
+      "run": [
+        "GET a",
+        "GET b"
+      ]
+    },
+    "splitScript": [
+      "GET a",
+      "GET b"
+    ],
+    "splitStatements": [
+      "GET a",
+      "GET b"
+    ],
+    "statementAt": "GET a"
+  },
+  "redis-crlf": {
+    "splitScript": [
+      "GET a\r",
+      "GET 키😀\r"
+    ],
+    "splitStatements": [
+      "GET a\r",
+      "GET 키😀\r"
+    ]
+  },
+  "redis-lines": {
+    "planExecution(ask)": {
+      "ask": [
+        {
+          "label": "SET b 1",
+          "stmts": [
+            "SET b 1"
+          ]
+        },
+        {
+          "label": "All statements (3)",
+          "stmts": [
+            "GET a",
+            "SET b 1",
+            "HSET h f \"v;w\""
+          ]
+        },
+        {
+          "label": "From caret to end",
+          "stmts": [
+            "SET b 1",
+            "HSET h f \"v;w\""
+          ]
+        }
+      ]
+    },
+    "planExecution(fromCaret)": {
+      "run": [
+        "SET b 1",
+        "HSET h f \"v;w\""
+      ]
+    },
+    "planExecution(outside:below)": {
+      "ask": [
+        {
+          "label": "SET b 1",
+          "stmts": [
+            "SET b 1"
+          ]
+        },
+        {
+          "label": "All statements (3)",
+          "stmts": [
+            "GET a",
+            "SET b 1",
+            "HSET h f \"v;w\""
+          ]
+        },
+        {
+          "label": "From caret to end",
+          "stmts": [
+            "SET b 1",
+            "HSET h f \"v;w\""
+          ]
+        }
+      ]
+    },
+    "planExecution(outside:whole)": {
+      "ask": [
+        {
+          "label": "SET b 1",
+          "stmts": [
+            "SET b 1"
+          ]
+        },
+        {
+          "label": "All statements (3)",
+          "stmts": [
+            "GET a",
+            "SET b 1",
+            "HSET h f \"v;w\""
+          ]
+        },
+        {
+          "label": "From caret to end",
+          "stmts": [
+            "SET b 1",
+            "HSET h f \"v;w\""
+          ]
+        }
+      ]
+    },
+    "planExecution(smallest)": {
+      "run": [
+        "SET b 1"
+      ]
+    },
+    "planExecution(whole)": {
+      "run": [
+        "GET a",
+        "SET b 1",
+        "HSET h f \"v;w\""
+      ]
+    },
+    "splitScript": [
+      "GET a",
+      "SET b 1",
+      "HSET h f \"v;w\""
+    ],
+    "splitStatements": [
+      "GET a",
+      "SET b 1",
+      "HSET h f \"v;w\""
+    ],
+    "statementAt": "SET b 1"
+  },
+  "start-transaction-rollback": {
+    "planExecution(ask)": {
+      "ask": [
+        {
+          "label": "delete from t where id = 1",
+          "stmts": [
+            "delete from t where id = 1"
+          ]
+        },
+        {
+          "label": "Transaction (START … ROLLBACK, 3 statements)",
+          "stmts": [
+            "START TRANSACTION",
+            "delete from t where id = 1",
+            "ROLLBACK"
+          ]
+        },
+        {
+          "label": "All statements (4)",
+          "stmts": [
+            "select 0",
+            "START TRANSACTION",
+            "delete from t where id = 1",
+            "ROLLBACK"
+          ]
+        },
+        {
+          "label": "From caret to end",
+          "stmts": [
+            "delete from t where id = 1",
+            "ROLLBACK"
+          ]
+        }
+      ]
+    },
+    "planExecution(fromCaret)": {
+      "run": [
+        "delete from t where id = 1",
+        "ROLLBACK"
+      ]
+    },
+    "planExecution(outside:below)": {
+      "ask": [
+        {
+          "label": "delete from t where id = 1",
+          "stmts": [
+            "delete from t where id = 1"
+          ]
+        },
+        {
+          "label": "Transaction (START … ROLLBACK, 3 statements)",
+          "stmts": [
+            "START TRANSACTION",
+            "delete from t where id = 1",
+            "ROLLBACK"
+          ]
+        },
+        {
+          "label": "All statements (4)",
+          "stmts": [
+            "select 0",
+            "START TRANSACTION",
+            "delete from t where id = 1",
+            "ROLLBACK"
+          ]
+        },
+        {
+          "label": "From caret to end",
+          "stmts": [
+            "delete from t where id = 1",
+            "ROLLBACK"
+          ]
+        }
+      ]
+    },
+    "planExecution(outside:whole)": {
+      "ask": [
+        {
+          "label": "delete from t where id = 1",
+          "stmts": [
+            "delete from t where id = 1"
+          ]
+        },
+        {
+          "label": "Transaction (START … ROLLBACK, 3 statements)",
+          "stmts": [
+            "START TRANSACTION",
+            "delete from t where id = 1",
+            "ROLLBACK"
+          ]
+        },
+        {
+          "label": "All statements (4)",
+          "stmts": [
+            "select 0",
+            "START TRANSACTION",
+            "delete from t where id = 1",
+            "ROLLBACK"
+          ]
+        },
+        {
+          "label": "From caret to end",
+          "stmts": [
+            "delete from t where id = 1",
+            "ROLLBACK"
+          ]
+        }
+      ]
+    },
+    "planExecution(smallest)": {
+      "run": [
+        "delete from t where id = 1"
+      ]
+    },
+    "planExecution(whole)": {
+      "run": [
+        "select 0",
+        "START TRANSACTION",
+        "delete from t where id = 1",
+        "ROLLBACK"
+      ]
+    },
+    "splitScript": [
+      "select 0",
+      "\nSTART TRANSACTION",
+      "\ndelete from t where id = 1",
+      "\nROLLBACK"
+    ],
+    "splitStatements": [
+      "select 0",
+      "\nSTART TRANSACTION",
+      "\ndelete from t where id = 1",
+      "\nROLLBACK"
+    ],
+    "statementAt": "delete from t where id = 1"
+  },
+  "string-semicolon": {
+    "splitScript": [
+      "select ';' as a",
+      " select 'it''s; fine'",
+      " select 3"
+    ],
+    "splitStatements": [
+      "select ';' as a",
+      " select 'it''s; fine'",
+      " select 3"
+    ]
+  },
+  "title-lines": {
+    "planExecution(ask)": {
+      "ask": [
+        {
+          "label": "select user_id, count(*) from orders group by 1",
+          "stmts": [
+            "select user_id, count(*) from orders group by 1"
+          ]
+        },
+        {
+          "label": "All statements (2)",
+          "stmts": [
+            "select * from users",
+            "select user_id, count(*) from orders group by 1"
+          ]
+        }
+      ]
+    },
+    "planExecution(fromCaret)": {
+      "run": [
+        "select user_id, count(*) from orders group by 1"
+      ]
+    },
+    "planExecution(outside:below)": {
+      "ask": [
+        {
+          "label": "select user_id, count(*) from orders group by 1",
+          "stmts": [
+            "select user_id, count(*) from orders group by 1"
+          ]
+        },
+        {
+          "label": "All statements (2)",
+          "stmts": [
+            "select * from users",
+            "select user_id, count(*) from orders group by 1"
+          ]
+        }
+      ]
+    },
+    "planExecution(outside:whole)": {
+      "ask": [
+        {
+          "label": "select user_id, count(*) from orders group by 1",
+          "stmts": [
+            "select user_id, count(*) from orders group by 1"
+          ]
+        },
+        {
+          "label": "All statements (2)",
+          "stmts": [
+            "select * from users",
+            "select user_id, count(*) from orders group by 1"
+          ]
+        }
+      ]
+    },
+    "planExecution(smallest)": {
+      "run": [
+        "select user_id, count(*) from orders group by 1"
+      ]
+    },
+    "planExecution(whole)": {
+      "run": [
+        "select * from users",
+        "select user_id, count(*) from orders group by 1"
+      ]
+    },
+    "splitScript": [
+      "1. Find users\nselect * from users",
+      "\n\n2) Orders per user\nselect user_id, count(*) from orders group by 1"
+    ],
+    "splitStatements": [
+      "1. Find users\nselect * from users",
+      "\n\n2) Orders per user\nselect user_id, count(*) from orders group by 1"
+    ],
+    "statementAt": "2) Orders per user\nselect user_id, count(*) from orders group by 1"
+  },
+  "two-statements": {
+    "splitScript": [
+      "select 1",
+      "\nselect 2"
+    ],
+    "splitStatements": [
+      "select 1",
+      "\nselect 2"
+    ]
+  },
+  "union-continues": {
+    "splitScript": [
+      "select 1\nunion all\nselect 2"
+    ],
+    "splitStatements": [
+      "select 1\nunion all\nselect 2"
+    ]
+  },
+  "unterminated-comment": {
+    "splitScript": [
+      "select 1",
+      " /* never closed; select 2"
+    ],
+    "splitStatements": [
+      "select 1",
+      " /* never closed; select 2"
+    ]
+  },
+  "unterminated-string": {
+    "splitScript": [
+      "select 'abc; select 2"
+    ],
+    "splitStatements": [
+      "select 'abc; select 2"
+    ]
+  },
+  "with-select": {
+    "splitScript": [
+      "with x as (select 1)\nselect * from x\n",
+      "update t set a = 1"
+    ],
+    "splitStatements": [
+      "with x as (select 1)\nselect * from x\nupdate t set a = 1"
+    ]
+  }
+}

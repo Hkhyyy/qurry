@@ -1,0 +1,182 @@
+{
+  "backslash-ansi-quotes": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
+  "backslash-no-backslash-escapes": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
+  "backslash-read": {
+    "DDL_RE": false,
+    "isReadStmt": true
+  },
+  "backslash-scs-off": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
+  "call": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
+  "comment-on": {
+    "DDL_RE": true,
+    "isReadStmt": false
+  },
+  "create-index-upper": {
+    "DDL_RE": true,
+    "isReadStmt": false
+  },
+  "dblink-exec": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
+  "desc": {
+    "DDL_RE": false,
+    "isReadStmt": true
+  },
+  "explain-analyze-delete": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
+  "grant": {
+    "DDL_RE": true,
+    "isReadStmt": false
+  },
+  "hash-comment-truncate": {
+    "DDL_RE": true,
+    "isReadStmt": false
+  },
+  "insert": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
+  "korean-ddl": {
+    "DDL_RE": true,
+    "isReadStmt": false
+  },
+  "korean-table": {
+    "DDL_RE": false,
+    "isReadStmt": true
+  },
+  "leading-block-comment-drop": {
+    "DDL_RE": true,
+    "isReadStmt": false
+  },
+  "leading-line-comment-create": {
+    "DDL_RE": true,
+    "isReadStmt": false
+  },
+  "mssql-case-end": {
+    "DDL_RE": false,
+    "isReadStmt": true
+  },
+  "mssql-chained-drop": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
+  "mssql-chained-exec": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
+  "mssql-open-close-columns": {
+    "DDL_RE": false,
+    "isReadStmt": true
+  },
+  "multi-call": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
+  "multi-do-body": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
+  "multi-prepare": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
+  "multi-reads": {
+    "DDL_RE": false,
+    "isReadStmt": true
+  },
+  "nested-comment-alter": {
+    "DDL_RE": true,
+    "isReadStmt": false
+  },
+  "paren-select": {
+    "DDL_RE": false,
+    "isReadStmt": true
+  },
+  "redis-get": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
+  "redis-set": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
+  "rename-mysql": {
+    "DDL_RE": true,
+    "isReadStmt": false
+  },
+  "select": {
+    "DDL_RE": false,
+    "isReadStmt": true
+  },
+  "select-for-update": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
+  "select-upper": {
+    "DDL_RE": false,
+    "isReadStmt": true
+  },
+  "set": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
+  "show": {
+    "DDL_RE": false,
+    "isReadStmt": true
+  },
+  "table": {
+    "DDL_RE": false,
+    "isReadStmt": true
+  },
+  "underscore-name": {
+    "DDL_RE": false,
+    "isReadStmt": true
+  },
+  "update": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
+  "values": {
+    "DDL_RE": false,
+    "isReadStmt": true
+  },
+  "with-delete": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
+  "with-select": {
+    "DDL_RE": false,
+    "isReadStmt": true
+  },
+  "word-in-block-comment": {
+    "DDL_RE": false,
+    "isReadStmt": true
+  },
+  "word-in-comment": {
+    "DDL_RE": false,
+    "isReadStmt": true
+  },
+  "word-in-quoted-ident": {
+    "DDL_RE": false,
+    "isReadStmt": false
+  },
+  "word-in-string": {
+    "DDL_RE": false,
+    "isReadStmt": true
+  }
+}

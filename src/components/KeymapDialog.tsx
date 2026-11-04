@@ -1,12 +1,12 @@
 import { useState } from "react";
-import { KEYMAP, KeyRow, toOther } from "../lib/keymap";
+import { KEYMAP, KeyRow, rowDesc, toOther } from "../lib/keymap";
 import { isCustom, shortcutLabel } from "../lib/shortcuts";
 import { Button, EmptyState, Kbd, Modal, SearchField, SectionTitle } from "../ui";
 
 const isMac = navigator.platform.toLowerCase().includes("mac");
 
 /** Key shown on the row: current key for rebindable commands, fixed label for the rest */
-const keysOf = ([k, , id]: KeyRow) => (id ? shortcutLabel(id) || "—" : isMac ? k : toOther(k));
+const keysOf = (r: KeyRow) => (r[0] === null ? shortcutLabel(r[1]) || "—" : isMac ? r[0] : toOther(r[0]));
 
 /** Help › Keymap Reference: searchable shortcut list */
 export function KeymapDialog({ onClose, onEdit }: { onClose: () => void; onEdit: () => void }) {
@@ -14,7 +14,7 @@ export function KeymapDialog({ onClose, onEdit }: { onClose: () => void; onEdit:
   const f = q.trim().toLowerCase();
   const sections = KEYMAP.map((s) => ({
     ...s,
-    rows: s.rows.filter((r) => !f || r[1].toLowerCase().includes(f) || keysOf(r).toLowerCase().includes(f)),
+    rows: s.rows.filter((r) => !f || rowDesc(r).toLowerCase().includes(f) || keysOf(r).toLowerCase().includes(f)),
   })).filter((s) => s.rows.length);
   return (
     <Modal
@@ -40,9 +40,9 @@ export function KeymapDialog({ onClose, onEdit }: { onClose: () => void; onEdit:
           <div key={s.title} className="keymap-section">
             <SectionTitle className="keymap-title">{s.title}</SectionTitle>
             {s.rows.map((r) => (
-              <div key={s.title + r[0] + r[1]} className={"keymap-row" + (r[2] && isCustom(r[2]) ? " custom" : "")}>
+              <div key={s.title + r[0] + r[1]} className={"keymap-row" + (r[0] === null && isCustom(r[1]) ? " custom" : "")}>
                 <Kbd className="keymap-keys">{keysOf(r)}</Kbd>
-                <span className="keymap-desc">{r[1]}</span>
+                <span className="keymap-desc">{rowDesc(r)}</span>
               </div>
             ))}
           </div>

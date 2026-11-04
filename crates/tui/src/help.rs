@@ -1,5 +1,8 @@
 //! TUI keymap (source for F1 help, `qurry-tui --help`, docs/shortcuts-tui.md).
-//! Rebindable command shortcuts are in DEFAULT_KEYS in keys.rs; only fixed per-screen keys live here
+//! Rebindable keys are in the shared command table (crates/shared/src/keymap-table.json, keys::COMMANDS: commands, and the explorer's
+//! and the grid's single-letter commands); only fixed per-screen keys live here: moving, opening, editing, copying and filtering
+use qurry_core::keymap::Scope;
+
 pub const HELP: &[(&str, &[(&str, &str)])] = &[
     ("Database Explorer", &[
         ("↑ ↓  (j k)", "Move"),
@@ -7,14 +10,9 @@ pub const HELP: &[(&str, &[(&str, &str)])] = &[
         ("Enter / double-click", "Expand / collapse (connects) · open table data · open a Redis key · show DDL of routines"),
         ("F4 / ⌃↓", "Open a query console for the data source / database (Redis: the key browser)"),
         ("/", "Filter loaded nodes (/ again edits it · empty or Esc clears)"),
-        ("n / e / D", "New / edit / remove data source"),
-        ("w", "Move the data source to another workspace (⌥1…9 switches · ⌥n new · ⌥⇧N rename)"),
-        ("c / X", "Connect / disconnect"),
-        ("r / F5", "Refresh"),
-        ("s", "Manage shown databases and schemas (Space check · Enter apply · shared with the GUI)"),
+        ("F5", "Refresh (the run key refreshes in the explorer)"),
         ("y  ⌘C", "Copy name (OSC 52 clipboard)"),
         ("PgUp / PgDn · Home / End", "Page · first / last node"),
-        ("?", "Keymap (same as F1)"),
         ("Tab / Esc", "Go to the open tab"),
     ]),
     ("Query console", &[
@@ -39,22 +37,18 @@ pub const HELP: &[(&str, &[(&str, &str)])] = &[
         ("Home / End", "First / last column"),
         ("⇧↑↓←→ / drag", "Select a range of cells (Esc clears) · scroll sideways: wheel over the header row, ⌥+wheel, or drag the bar on the bottom border"),
         ("Enter / F2", "Edit cell (table data)"),
-        ("n", "Set NULL (table data)"),
-        ("a / Insert", "Add row (table data)"),
-        ("d / Delete", "Mark row deleted, again = undo (table data)"),
-        ("⌃z", "Revert pending changes (table data)"),
         ("s", "Sort by the selected column: ▲ → ▼ → off (table data: ORDER BY · results: loaded rows)"),
         ("w or / · o", "Edit WHERE · ORDER BY (table data)"),
         ("r", "Reload (table data)"),
-        ("x", "Export data (CSV, TSV, JSON, SQL INSERT, Markdown → file or clipboard)"),
         ("y  ⌘C", "Copy cell value (a selected range: as TSV, pastes into spreadsheets as cells)"),
-        ("Y", "Copy as an IN list: ('a', 'b', …) — the selected range, or the whole column"),
         ("⌘V", "Paste into cells from the selected one (tabs / lines fill several; extra lines add rows; table data)"),
         ("Esc", "Back (query results: to the editor)"),
     ]),
     ("DDL / routine view", &[
         ("↑ ↓  (j k) · PgUp / PgDn", "Scroll"),
-        ("y  ⌘C", "Copy the text"),
+        ("v", "Table DDL: switch between SQL and Structure (columns, keys, indexes, foreign keys, triggers, options); kept for new DDL tabs"),
+        ("r", "Reload what the tab shows (the DDL, or the Structure view)"),
+        ("y  ⌘C", "Copy the text (a table's DDL: the SQL, in either view)"),
         ("Esc", "Back to the explorer"),
     ]),
     ("Database Admin tab (⌃k › Database Admin…)", &[
@@ -90,7 +84,7 @@ pub const HELP: &[(&str, &[(&str, &str)])] = &[
         ("Esc", "Cancel"),
     ]),
     ("Popups", &[
-        ("⌃b", "Go to DDL (in Search Everywhere / Go to Database Object)"),
+        ("Go to DDL key", "DDL of the selected object (in Search Everywhere / Go to Database Object)"),
         ("type", "Filter (palettes)"),
         ("↑ ↓ / PgUp PgDn", "Move / scroll"),
         ("Enter", "Run / confirm"),
@@ -112,7 +106,7 @@ pub fn start_here(keys: &crate::keys::Keymap) -> Vec<(String, &'static str)> {
         (k(A::RecentTabs), "Recent tabs"),
         (k(A::CloseTab), "Close tab"),
         ("Enter (explorer)".into(), "Connect · open a table"),
-        ("s (explorer)".into(), "Choose the databases and schemas shown"),
+        (keys.hint(A::ManageSchemas, ""), "Choose the databases and schemas shown"),
         ("Esc".into(), "Back (to the explorer, or from results to the editor)"),
         (k(A::Quit), "Quit"),
     ]
@@ -123,9 +117,16 @@ pub fn text() -> String {
     for (k, d) in start_here(&crate::keys::Keymap::new(&Default::default())) {
         s.push_str(&format!("  {:<30} {}\n", k, d));
     }
+    // Lines with default keys (F1 also lists the commands without one)
+    let keys = crate::keys::Keymap::new(&Default::default());
+    let mut pane = Scope::Global;
     s.push_str("\nCommands (change them with F1)\n");
-    for (a, keys) in crate::keys::DEFAULT_KEYS {
-        s.push_str(&format!("  {:<30} {}\n", crate::keys::disp(&keys.join(" / ")), crate::input::name_of(*a)));
+    for (slot, _) in crate::keys::COMMANDS.iter().filter(|(_, k)| !k.is_empty()) {
+        if slot.pane != pane {
+            pane = slot.pane;
+            s.push_str(if pane == Scope::Tree { "\nDatabase Explorer keys (change them with F1)\n" } else { "\nData grid keys (change them with F1)\n" });
+        }
+        s.push_str(&format!("  {:<30} {}\n", keys.slot_label(*slot), crate::app::title(slot.action)));
     }
     for (title, rows) in HELP {
         s.push_str(&format!("\n{title}\n"));

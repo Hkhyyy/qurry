@@ -21,8 +21,10 @@ impl Drop for TempDir {
 }
 
 impl Harness {
-    /// Launch with an empty config folder (inside a tokio runtime: uses background tasks)
+    /// Launch with an empty config folder (inside a tokio runtime: uses background tasks). Keys show as ⌃⌥⇧ on every OS, so the screens
+    /// tests read don't depend on the host (keys::disp's Ctrl+ notation is tested on its own)
     pub async fn new() -> Self {
+        crate::keys::FORCE_MAC_GLYPHS.set(true);
         let dir = std::env::temp_dir().join(format!("qurry-tui-test-{}", uuid::Uuid::new_v4()));
         let state = Arc::new(qurry_core::open_state(Some(dir.clone())).unwrap());
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -39,7 +41,7 @@ impl Harness {
         }
     }
 
-    /// One key: "a", "Ctrl+A", "Alt+Shift+Left", "Enter", "Tab", "Esc", "Down", "F1" …
+    /// One key: "a", "Ctrl+A", "Alt+Shift+Left", "Enter", "Tab", "Esc", "Down", "PgDn", "F1" …
     pub fn key(&mut self, spec: &str) {
         let mut m = KeyModifiers::NONE;
         let mut parts: Vec<&str> = spec.split('+').collect();
@@ -58,12 +60,16 @@ impl Harness {
             "Tab" => KeyCode::Tab,
             "Esc" => KeyCode::Esc,
             "Backspace" => KeyCode::Backspace,
+            "Delete" => KeyCode::Delete,
+            "Insert" => KeyCode::Insert,
             "Up" => KeyCode::Up,
             "Down" => KeyCode::Down,
             "Left" => KeyCode::Left,
             "Right" => KeyCode::Right,
             "Home" => KeyCode::Home,
             "End" => KeyCode::End,
+            "PgUp" => KeyCode::PageUp,
+            "PgDn" => KeyCode::PageDown,
             "Space" => KeyCode::Char(' '),
             f if f.len() > 1 && f.starts_with('F') => KeyCode::F(f[1..].parse().unwrap()),
             c if c.chars().count() == 1 => {
@@ -92,6 +98,7 @@ impl Harness {
             elapsed_ms: 0,
             has_result_set: true,
             in_transaction: false,
+            warning: None,
         };
         let tt = TableTab {
             schema: "public".into(),
@@ -194,11 +201,16 @@ impl Harness {
         }
     }
 
-    /// Draw the screen and return only the text (\n per line)
-    pub fn screen(&mut self, w: u16, h: u16) -> String {
+    /// Draw the screen (colors mapped to the app's color mode)
+    pub fn buffer(&mut self, w: u16, h: u16) -> ratatui::buffer::Buffer {
         let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
         term.draw(|f| crate::ui::draw(f, &mut self.app)).unwrap();
-        let buf = term.backend().buffer();
+        term.backend().buffer().clone()
+    }
+
+    /// Draw the screen and return only the text (\n per line)
+    pub fn screen(&mut self, w: u16, h: u16) -> String {
+        let buf = self.buffer(w, h);
         (0..h).map(|y| (0..w).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_string()).collect::<Vec<_>>().join("\n")
     }
 }

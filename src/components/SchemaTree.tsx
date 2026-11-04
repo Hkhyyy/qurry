@@ -6,7 +6,9 @@ import { Button, Notice, TreeRow } from "../ui";
 import { invalidateCompletion } from "../lib/completion";
 import { TYPE_COLOR } from "./RedisBrowser";
 import { keyTree, type KeyNode } from "../lib/keyTree";
-import { ColumnIcon, DatabaseIcon, FkIcon, FolderIcon, IndexIcon, KeyIcon, MySqlIcon, PgIcon, RedisIcon, RoutineIcon, SchemaIcon, SequenceIcon, TableIcon, ViewIcon } from "../ui/icons";
+import { useSharedReady } from "../lib/shared";
+import { TlsFix } from "./TlsFix";
+import { ColumnIcon, DatabaseIcon, FkIcon, FolderIcon, IndexIcon, KeyIcon, MySqlIcon, objectIcon, PgIcon, RedisIcon, RoutineIcon, SchemaIcon, TableIcon } from "../ui/icons";
 
 /** What a tree node points to. The context menu and shortcuts (F4, ⌘b, ⌘⇧L) act on this. */
 export interface NodeInfo {
@@ -86,6 +88,8 @@ interface Props {
   onMenu: (e: React.MouseEvent, info: NodeInfo) => void;
   /** Apply from the schema picker popup */
   onScopeChange: (conn: ConnectionView, scope: Scope) => void;
+  /** The saved source changed here (Allow unencrypted): read the data sources again */
+  onConnsChanged?: () => void;
 }
 
 type Load<T> = { state: "loading" } | { state: "error"; msg: string } | { state: "ok"; data: T };
@@ -137,14 +141,15 @@ function Row({ depth, open, onToggle, icon, iconClass, label, sub, title, onDoub
   );
 }
 
-function Status({ depth, load, kind, onRetry }: { depth: number; load: Load<unknown> | undefined; kind?: DbKind; onRetry?: () => void }) {
+function Status({ depth, load, kind, conn, onRetry, onConnsChanged }: { depth: number; load: Load<unknown> | undefined; kind?: DbKind; conn?: ConnectionView; onRetry?: () => void; onConnsChanged?: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
   const [installing, setInstalling] = useState(false);
   const [installErr, setInstallErr] = useState<string | null>(null);
   if (!load || load.state === "ok") return null;
   // So the driver can be downloaded right away if missing
   const missing = load.state === "error" && load.msg.includes(DRIVER_MISSING) && kind;
   return (
-    <div className={"tree-status" + (load.state === "error" ? " err" : "")} style={{ paddingLeft: 24 + depth * 19 }}>
+    <div ref={ref} className={"tree-status" + (load.state === "error" ? " err" : "")} style={{ paddingLeft: 24 + depth * 19 }}>
       {load.state === "loading" ? "Loading…" : load.msg}
       {missing && (
         <Button
@@ -168,11 +173,23 @@ function Status({ depth, load, kind, onRetry }: { depth: number; load: Load<unkn
         </Button>
       )}
       {installErr && <Notice tone="danger">{installErr}</Notice>}
+      {load.state === "error" && (
+        <TlsFix
+          conn={conn}
+          msg={load.msg}
+          then={() => {
+            // The button goes away with the error: keep the keys in the tree (its rows still have the selection)
+            ref.current?.closest<HTMLElement>(".tree")?.focus();
+            onConnsChanged?.();
+            onRetry?.();
+          }}
+        />
+      )}
     </div>
   );
 }
 
-export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onScopeChange }: Props) {
+export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onScopeChange, onConnsChanged }: Props) {
   const [popup, setPopup] = useState<{ x: number; y: number; focusDb?: string } | null>(null);
   const [schemaCounts, setSchemaCounts] = useState<Record<string, { shown: number; total: number }>>({});
   const [opened, setOpened] = useState(false);
@@ -229,7 +246,7 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
     if (conn.connected && !opened) {
       setOpened(true);
       loadDbs();
-    }
+    } else if (conn.connected && dbs?.state === "error") loadDbs(true); // Connected from elsewhere (a console's Allow unencrypted): the error is stale
   }, [conn.connected]);
 
   return (
@@ -245,6 +262,7 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
         badge={
           <>
             {conn.ssh?.enabled && <span className="ssh-badge" title={`SSH via ${conn.ssh.user}@${conn.ssh.host}:${conn.ssh.port}`}>SSH</span>}
+            {conn.ssm?.enabled && <span className="ssh-badge" title={`AWS SSM via ${conn.ssm.target}${conn.ssm.profile || conn.ssm.region ? ` (${conn.ssm.profile || "default"}/${conn.ssm.region || "default"})` : ""}`}>SSM</span>}
             {dbs?.state === "ok" && (
               <span
                 className="scope-badge"
@@ -266,7 +284,7 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
       />
       {opened && (
         <div key={gen}>
-          <Status depth={1} load={dbs} kind={conn.kind} onRetry={() => loadDbs(true)} />
+          <Status depth={1} load={dbs} kind={conn.kind} conn={conn} onRetry={() => loadDbs(true)} onConnsChanged={onConnsChanged} />
           {dbs?.state === "ok" &&
             dbs.data.filter((db) => dbShown(db)).map((db) => {
               const dOpen = openDbs.has(db);
@@ -353,6 +371,8 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
   const [schemas, setSchemas] = useState<Load<SchemaInfo[]>>();
   const [objects, setObjects] = useState<Record<string, Load<{ relations: RelationInfo[]; routines: RoutineInfo[] }>>>({});
   const [details, setDetails] = useState<Record<string, Load<TableDetail>>>({});
+  // Redis key folders come from the WASM module: render again once it has loaded
+  useSharedReady();
 
   const toggle = (key: string, onOpen?: () => void) =>
     setOpen((s) => {
@@ -468,13 +488,14 @@ function DbNode({ conn, db, filter, showSystem, onActivate, onMenu, onCount }: {
                 refresh: () => (isRel ? loadDetail(s.name, r.name, true) : loadObjects(s.name, true)),
                 refreshParent: () => loadObjects(s.name, true),
               };
+              const Icon = objectIcon(r.kind) ?? TableIcon;
               return (
                 <div key={tk}>
                   <Row
                     depth={depth}
                     open={tOpen}
                     leaf={!isRel}
-                    icon={r.kind === "key" ? <span className="rd-dot" style={{ background: TYPE_COLOR[r.comment ?? ""] ?? "#777" }} title={r.comment ?? ""}>{({ string: "T", hash: "H", list: "L", set: "S", zset: "Z", stream: "X" } as Record<string, string>)[r.comment ?? ""] ?? "?"}</span> : r.kind === "sequence" ? <SequenceIcon /> : r.kind === "view" || r.kind === "matview" ? <ViewIcon /> : <TableIcon />}
+                    icon={r.kind === "key" ? <span className="rd-dot" style={{ background: TYPE_COLOR[r.comment ?? ""] ?? "#777" }} title={r.comment ?? ""}>{({ string: "T", hash: "H", list: "L", set: "S", zset: "Z", stream: "X" } as Record<string, string>)[r.comment ?? ""] ?? "?"}</span> : <Icon />}
                     label={r.name}
                     title={r.kind === "key" ? `${r.name} (${r.comment})` : r.comment ? `${r.name} — ${r.comment}` : r.name}
                     onToggle={isRel ? () => toggle(tk, () => loadDetail(s.name, r.name)) : undefined}

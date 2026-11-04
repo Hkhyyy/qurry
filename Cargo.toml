@@ -1,5 +1,5 @@
 [workspace]
-members = ["src-tauri", "crates/core", "crates/tui", "crates/mcp", "crates/driver", "drivers/sqlite", "drivers/duckdb", "drivers/clickhouse", "drivers/mssql", "drivers/mongodb", "drivers/oracle", "drivers/qdrant", "drivers/chroma", "drivers/milvus"]
+members = ["src-tauri", "crates/core", "crates/tui", "crates/mcp", "crates/driver", "crates/shared", "crates/shared-wasm", "drivers/sqlite", "drivers/duckdb", "drivers/clickhouse", "drivers/mssql", "drivers/mongodb", "drivers/oracle", "drivers/qdrant", "drivers/chroma", "drivers/milvus"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -15,3 +15,8 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+# GUI WebAssembly (pnpm wasm): release settings (lto, one codegen unit, abort on panic) but optimized for size
+[profile.wasm]
+inherits = "release"
+opt-level = "s"

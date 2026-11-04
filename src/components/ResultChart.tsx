@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { QueryResult } from "../lib/api";
 import { buildChart, ChartKind, COUNT, defaultAxes, niceTicks, numericColumns, shortNumber } from "../lib/chart";
+import { initShared, sharedReady } from "../lib/shared";
 import { Select, Spacer, Text, ToolButton, Toolbar, ToolbarSep } from "../ui";
 
 /** Series colors (visible on both dark · light themes) */
@@ -14,6 +15,24 @@ const M = { top: 12, right: 16, bottom: 34, left: 56 };
  * Equal X values are merged. Only loaded rows are used (redrawn when more are loaded)
  */
 export function ResultChart({ result }: { result: QueryResult }) {
+  // The chart math is the shared WASM: wait for it, and say how to recover if it failed to load (instead of breaking the window)
+  const [wasm, setWasm] = useState<"ready" | "loading" | { error: string }>(() => (sharedReady() ? "ready" : "loading"));
+  useEffect(() => {
+    if (wasm === "loading") initShared().then(() => setWasm("ready"), (e) => setWasm({ error: String(e) }));
+  }, []);
+  if (wasm === "ready") return <Chart result={result} />;
+  return (
+    <div className="chart-wrap">
+      {wasm !== "loading" && (
+        <div className="chart-empty">
+          Charts need Qurry's WebAssembly module, which did not load ({wasm.error}). Restart Qurry; if it still fails, the system WebView is too old: update macOS (Safari) or webkit2gtk.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Chart({ result }: { result: QueryResult }) {
   const nums = useMemo(() => numericColumns(result), [result]);
   const colKey = result.columns.map((c) => c.name).join("\u0001");
   const [kind, setKind] = useState<ChartKind>("bar");

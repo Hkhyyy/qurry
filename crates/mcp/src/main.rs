@@ -201,6 +201,7 @@ impl Server {
                                 "read_only": c.config.read_only, "production": c.config.options.confirm_changes,
                                 "mcp_access": if c.config.mcp_access(self.allow_write) == McpAccess::Write { "write" } else { "read" },
                                 "ssh_tunnel": c.config.active_ssh().map(|s| format!("{}@{}", s.user, s.host)),
+                                "ssm_tunnel": c.config.active_ssm().map(|s| s.target.trim().to_string()),
                                 "connected": c.connected
                             })
                         })
@@ -367,8 +368,13 @@ impl Server {
                     }
                 }
                 // PostgreSQL / MySQL: each item as a prepared statement, so the server itself refuses more than one statement
-                let n = st.execute_batch_prepared(t, stmts.clone()).await.map_err(e)?;
-                Ok(json!({ "statements": stmts.len(), "rows_affected": n }))
+                let r = st.execute_batch_prepared(t, stmts.clone()).await.map_err(e)?;
+                let mut out = json!({ "statements": stmts.len(), "rows_affected": r.rows });
+                // Committed, but the Production log couldn't record the result: say so instead of failing (a retry would run it twice)
+                if let Some(w) = r.warning {
+                    out["warning"] = w.into();
+                }
+                Ok(out)
             }
             "list_rag_indexes" => {
                 let names: std::collections::HashMap<String, String> = self.sources().await?.into_iter().map(|c| (c.config.id, c.config.name)).collect();
@@ -437,34 +443,9 @@ fn result_json(r: &QueryResult) -> Value {
     })
 }
 
+/// search_objects ranking: the TUI palette's score (qurry_shared::fuzzy); None = no match
 fn fuzzy(q: &str, text: &str) -> Option<i64> {
-    let (q, t) = (q.to_lowercase(), text.to_lowercase());
-    if q.is_empty() {
-        return Some(0);
-    }
-    if t == q {
-        return Some(1000);
-    }
-    if t.starts_with(&q) {
-        return Some(800 - t.len() as i64);
-    }
-    if let Some(i) = t.find(&q) {
-        return Some(500 - i as i64 - t.len() as i64 / 10);
-    }
-    let mut it = t.chars();
-    let mut score = 200i64;
-    for qc in q.chars().filter(|c| !c.is_whitespace()) {
-        let mut skipped = 0;
-        loop {
-            match it.next() {
-                Some(c) if c == qc => break,
-                Some(_) => skipped += 1,
-                None => return None,
-            }
-        }
-        score -= skipped.min(10);
-    }
-    Some(score - t.len() as i64 / 10)
+    qurry_core::fuzzy::score(q, text, Default::default()).map(|s| s as i64)
 }
 
 async fn handle(server: Arc<Server>, msg: Value) -> Option<Value> {
@@ -526,6 +507,9 @@ async fn main() -> std::io::Result<()> {
     qurry_core::SANDBOX.store(true, std::sync::atomic::Ordering::Relaxed);
     let mut state = qurry_core::open_state(dir).map_err(|e| std::io::Error::other(e.to_string()))?;
     state.mcp = true;
+    // AWS SSM tunnels run the aws CLI: stop it when the host stops this server or it panics
+    qurry_core::ssm::kill_on_panic();
+    tokio::spawn(qurry_core::ssm::kill_on_signals());
     let state = Arc::new(state);
     let server = Arc::new(Server { state: state.clone(), allow_write: args.iter().any(|a| a == "--allow-write") });
     // keep-alive / auto-disconnect
@@ -572,6 +556,7 @@ async fn main() -> std::io::Result<()> {
     }
     // Even if stdin closes, finish sending in-flight responses
     while tasks.join_next().await.is_some() {}
+    qurry_core::ssm::kill_all();
     Ok(())
 }
 

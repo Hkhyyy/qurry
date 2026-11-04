@@ -126,6 +126,7 @@ impl PluginConn {
             elapsed_ms: start.elapsed().as_millis() as u64,
             has_result_set: o.has_result_set,
             in_transaction: false,
+            warning: None,
         })
     }
 }
@@ -174,7 +175,7 @@ fn install_blocking(driver: &str, version: &str) -> AppResult<PathBuf> {
     };
     let r = (|| {
         let asset = asset_name(driver, version, target);
-        let sums = std::fs::read(get("SHA256SUMS")?)?;
+        let sums = std::fs::read(get("SHA256SUMS").map_err(|e| beta_release_gone(version, e))?)?;
         let sig = std::fs::read_to_string(get("SHA256SUMS.sig")?)?;
         crate::update::verify_sums(&sums, &sig).map_err(|e| AppError::Msg(format!("SHA256SUMS {e} — the driver was not installed")))?;
         let tgz = get(&asset)?;
@@ -208,6 +209,16 @@ fn install_blocking(driver: &str, version: &str) -> AppResult<PathBuf> {
     r
 }
 
+/// Only the newest 20 beta releases are kept (release.yml): an older beta's release, and its drivers, return 404. Say how to get them again
+fn beta_release_gone(version: &str, e: AppError) -> AppError {
+    if !version.contains('-') || !e.to_string().contains("404") {
+        return e;
+    }
+    AppError::Msg(format!(
+        "The release of this beta (v{version}) was removed, so its drivers can't be downloaded. Update Qurry (GUI: Update & Restart; TUI: ⌃k › Update Qurry & Restart), then install the driver again."
+    ))
+}
+
 /// Connect via a driver
 pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, port: Option<u16>) -> AppResult<std::sync::Arc<PluginConn>> {
     let driver = cfg.kind.driver().ok_or_else(|| AppError::Msg(format!("{:?} has no driver plugin", cfg.kind)))?;
@@ -232,6 +243,17 @@ pub fn is_plugin(kind: DbKind) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A removed beta release says how to recover; a stable release or another failure keeps curl's error
+    #[test]
+    fn removed_beta_release_says_to_update() {
+        let gone = || AppError::Msg("Could not download SHA256SUMS: curl: (22) The requested URL returned error: 404".into());
+        let e = beta_release_gone("0.3.1-beta.2", gone()).to_string();
+        assert!(e.contains("v0.3.1-beta.2) was removed") && e.contains("Update & Restart") && e.contains("install the driver again"), "{e}");
+        assert_eq!(beta_release_gone("0.3.1", gone()).to_string(), gone().to_string());
+        let offline = AppError::Msg("Could not download SHA256SUMS: curl: (6) Could not resolve host: github.com".into());
+        assert_eq!(beta_release_gone("0.3.1-beta.2", offline).to_string(), "Could not download SHA256SUMS: curl: (6) Could not resolve host: github.com");
+    }
 
     /// Common driver test: create table → insert → select (limit) → list/details (PK, FK) → DDL
     pub(crate) async fn conformance(cfg: ConnectionConfig, password: Option<&str>, schema: &str, setup: &[&str], parent: &str, child: &str, fk: bool) {
@@ -479,12 +501,14 @@ mod tests {
         assert!(install_blocking("../evil", "0.2.0").unwrap_err().to_string().contains("bad driver name"));
     }
 
-    /// Releases of nonexistent versions cannot be downloaded (meaningful only with network access)
+    /// Releases of nonexistent versions cannot be downloaded (meaningful only with network access); a missing beta says to update
     #[test]
     #[ignore]
     fn install_fails_cleanly_for_a_missing_release() {
-        let e = install_blocking("sqlite", "0.0.0-nope").unwrap_err().to_string();
+        let e = install_blocking("sqlite", "0.0.0").unwrap_err().to_string();
         assert!(e.contains("Could not download"), "{e}");
+        let e = install_blocking("sqlite", "0.0.0-nope").unwrap_err().to_string();
+        assert!(e.contains("(v0.0.0-nope) was removed"), "{e}");
     }
 
     #[tokio::test]

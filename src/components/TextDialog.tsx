@@ -42,7 +42,11 @@ export function TextDialog() {
         onChange={(e) => setValue(e.target.value)}
         onFocus={(e) => e.target.select()}
         onKeyDown={(e) => {
-          if (e.key === "Enter") done(value);
+          // preventDefault: the same Enter must not also press the button focused in a dialog that opens next (a confirmation)
+          if (e.key === "Enter") {
+            e.preventDefault();
+            done(value);
+          }
         }}
       />
       {req.choices && (

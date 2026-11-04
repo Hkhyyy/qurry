@@ -16,15 +16,20 @@ macro_rules! log {
 pub mod app;
 pub mod audit;
 pub mod backup;
+mod backend;
 pub mod db;
 pub mod dba;
 pub mod ddl;
 pub mod erd;
 pub mod error;
+/// What the console runs (Query Execution settings), shared with the GUI through WASM
+pub use qurry_shared::exec;
 pub mod fake;
 pub mod guard;
 pub mod hints;
 pub mod history;
+/// Command shortcut table and key notation, shared with the GUI through WASM
+pub use qurry_shared::keymap;
 pub mod meta;
 pub mod plugin;
 pub mod migrate;
@@ -36,12 +41,19 @@ pub mod search_cache;
 pub mod secrets;
 pub mod session;
 pub mod sql;
+pub mod ssm;
+#[cfg(test)]
+mod testenv;
 pub mod store;
 pub mod subset;
 pub mod transfer;
 pub mod tunnel;
 pub mod update;
 pub mod workspaces;
+/// Console autocompletion rules (one copy, also the GUI's through WASM)
+pub use qurry_shared::complete;
+/// Grid and search helpers shared with the GUI through WASM (time fractions, tab labels, extractors, fuzzy scores, key folders, auto-map)
+pub use qurry_shared::{automap, extract, format, fuzzy, keytree, labels};
 
 /// Same config folder as the Tauri app (shares the Data Source list·encrypted passwords)
 /// macOS: ~/Library/Application Support/com.hyunkyo.dbtool
@@ -85,12 +97,26 @@ fn export_path_in(dir: &std::path::Path, name: &str) -> error::AppResult<std::pa
     }
 }
 
-/// Open the app state with the config folder's Data Sources·passwords
+/// Open the app state with the config folder's Data Sources·passwords.
+///
+/// The config files have three homes, shared by the GUI, the TUI and the MCP server (and by older app versions running
+/// side by side), so their locking, permissions and format rules live in one place:
+/// - `store.rs` reads and writes connections.json, connection-access.json and connection-tunnels.json
+/// - `secrets.rs` reads and writes secrets.json and the password key (`SecretFile`)
+/// - this function is the only place outside `secrets.rs` that constructs a `SecretFile`; every app opens its state here
+///
+/// `tests/boundaries.rs` fails when other code (test code aside) writes those files or constructs a `SecretFile`.
 pub fn open_state(dir: Option<std::path::PathBuf>) -> error::AppResult<app::AppState> {
     let dir = dir.unwrap_or_else(config_dir);
-    std::fs::create_dir_all(&dir)?;
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        error::AppError::Msg(format!("Cannot create the config folder {} ({e}) — check that you can write to it (and its parent folder)", dir.display()))
+    })?;
     let secrets = secrets::SecretFile::open(&dir)?;
-    Ok(app::AppState::new(store::Store::new(dir), secrets))
+    let state = app::AppState::new(store::Store::new(dir), secrets);
+    if let Err(e) = state.forget_orphan_ssm_passwords() {
+        crate::log!("[qurry] saved AWS SSM passwords of deleted sources were not cleaned up: {e}");
+    }
+    Ok(state)
 }
 
 #[cfg(test)]
@@ -106,5 +132,15 @@ mod tests {
         assert!(b.ends_with("report (2).csv"));
         assert!(super::export_path_in(&dir, "../x").is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A config folder that can't be created names the folder and what to check
+    #[test]
+    fn open_state_says_which_folder_it_cannot_create() {
+        let file = std::env::temp_dir().join(format!("qurry-cfg-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&file, "").unwrap();
+        let e = super::open_state(Some(file.join("config"))).err().unwrap().to_string();
+        assert!(e.contains("Cannot create the config folder") && e.contains(&file.display().to_string()), "{e}");
+        let _ = std::fs::remove_file(&file);
     }
 }

@@ -1,0 +1,243 @@
+{
+  "case-order": {
+    "keyTree": [
+      {
+        "children": [
+          {
+            "key": "1:x"
+          }
+        ],
+        "count": 1,
+        "folder": "1",
+        "path": "1"
+      },
+      {
+        "children": [
+          {
+            "key": "B:x"
+          }
+        ],
+        "count": 1,
+        "folder": "B",
+        "path": "B"
+      },
+      {
+        "children": [
+          {
+            "key": "_:x"
+          }
+        ],
+        "count": 1,
+        "folder": "_",
+        "path": "_"
+      },
+      {
+        "children": [
+          {
+            "key": "a:x"
+          }
+        ],
+        "count": 1,
+        "folder": "a",
+        "path": "a"
+      },
+      {
+        "children": [
+          {
+            "key": "b:x"
+          }
+        ],
+        "count": 1,
+        "folder": "b",
+        "path": "b"
+      }
+    ]
+  },
+  "deep": {
+    "keyTree": [
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "children": [
+                  {
+                    "key": "a:b:c:d"
+                  },
+                  {
+                    "key": "a:b:c:e"
+                  }
+                ],
+                "count": 2,
+                "folder": "c",
+                "path": "a:b:c"
+              },
+              {
+                "key": "a:b:x"
+              }
+            ],
+            "count": 3,
+            "folder": "b",
+            "path": "a:b"
+          },
+          {
+            "key": "a:y"
+          }
+        ],
+        "count": 4,
+        "folder": "a",
+        "path": "a"
+      }
+    ]
+  },
+  "empty-segments": {
+    "keyTree": [
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "key": "::"
+              }
+            ],
+            "count": 1,
+            "folder": "",
+            "path": ""
+          },
+          {
+            "key": ":a"
+          }
+        ],
+        "count": 2,
+        "folder": "",
+        "path": ""
+      },
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "key": "a::b"
+              }
+            ],
+            "count": 1,
+            "folder": "",
+            "path": "a:"
+          },
+          {
+            "key": "a:"
+          }
+        ],
+        "count": 2,
+        "folder": "a",
+        "path": "a"
+      },
+      {
+        "key": "a"
+      }
+    ]
+  },
+  "korean-emoji": {
+    "keyTree": [
+      {
+        "children": [
+          {
+            "key": "사용자:1"
+          },
+          {
+            "key": "사용자:2"
+          }
+        ],
+        "count": 2,
+        "folder": "사용자",
+        "path": "사용자"
+      },
+      {
+        "children": [
+          {
+            "key": "！:x"
+          }
+        ],
+        "count": 1,
+        "folder": "！",
+        "path": "！"
+      },
+      {
+        "children": [
+          {
+            "key": "😀:x"
+          }
+        ],
+        "count": 1,
+        "folder": "😀",
+        "path": "😀"
+      },
+      {
+        "key": "키"
+      }
+    ]
+  },
+  "medis-example": {
+    "keyTree": [
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "key": "dev:admin:{1}"
+              }
+            ],
+            "count": 1,
+            "folder": "admin",
+            "path": "dev:admin"
+          },
+          {
+            "children": [
+              {
+                "key": "dev:sessions:{2}"
+              },
+              {
+                "key": "dev:sessions:{1}"
+              }
+            ],
+            "count": 2,
+            "folder": "sessions",
+            "path": "dev:sessions"
+          }
+        ],
+        "count": 3,
+        "folder": "dev",
+        "path": "dev"
+      },
+      {
+        "children": [
+          {
+            "key": "prod:x"
+          }
+        ],
+        "count": 1,
+        "folder": "prod",
+        "path": "prod"
+      },
+      {
+        "key": "token"
+      }
+    ]
+  },
+  "no-colons": {
+    "keyTree": [
+      {
+        "key": "c"
+      },
+      {
+        "key": "a"
+      },
+      {
+        "key": "b"
+      }
+    ]
+  },
+  "none": {
+    "keyTree": []
+  }
+}

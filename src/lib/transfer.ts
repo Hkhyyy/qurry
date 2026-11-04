@@ -1,4 +1,6 @@
 /** Data export / import (format, column mapping, progress display) */
+import { sharedOr } from "./shared";
+
 export type DataFormat = "csv" | "tsv" | "json" | "sql" | "markdown";
 
 export const FORMATS: { id: DataFormat; label: string; hint: string }[] = [
@@ -9,12 +11,12 @@ export const FORMATS: { id: DataFormat; label: string; hint: string }[] = [
   { id: "markdown", label: "Markdown", hint: "table for docs, issues, PRs" },
 ];
 
-const norm = (s: string) => s.toLowerCase().replace(/[\s_-]/g, "");
-
-/** Column to insert for each file column ("" = skip). table = null means a new table (column names as is) */
+/**
+ * Column to insert for each file column ("" = skip), matched ignoring case, spaces, _ and - (qurry_shared::automap through WASM, as the
+ * TUI matches them). table = null means a new table (column names as is). Until the module is loaded nothing is matched (map by hand)
+ */
 export function autoMap(file: string[], table: string[] | null): string[] {
-  if (!table) return [...file];
-  return file.map((f) => table.find((t) => norm(t) === norm(f)) ?? "");
+  return sharedOr(table ? file.map(() => "") : [...file], (s) => s.autoMap(file, table));
 }
 
 /** Progress bar: % if the total is known (an estimate, so capped at 99% if exceeded), otherwise just the row count */

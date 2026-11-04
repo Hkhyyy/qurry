@@ -1,18 +1,26 @@
 //! Each console tab gets its own dedicated connection (session).
 //! - SELECT-like statements fetch 500 rows at a time via a server cursor (DECLARE/FETCH) → "load more"
 //! - The backend PID is known, so a running query can be cancelled with pg_cancel_backend
+use crate::backend::{Backend, dispatch};
 use crate::db::{pg_columns, pg_value, query_result, ColumnInfo, QueryResult};
 use crate::error::{AppError, AppResult};
 use futures::TryStreamExt;
 use serde_json::Value;
 use sqlx::pool::PoolConnection;
-use sqlx::postgres::{PgPool, PgRow};
+use sqlx::postgres::{PgConnection, PgPool, PgRow};
 use sqlx::{Column, Either, Executor, Postgres, Row, TypeInfo};
 use std::time::Instant;
 
 const CURSOR: &str = "dbtool_cur";
 /// When switching from Manual → Auto is blocked
 pub const PENDING_TX: &str = "There are uncommitted changes — commit or roll back first";
+/// Explain Analyse runs the statement between these and rolls it back (Session::explain_wrap): in a transaction of its own, or in a
+/// savepoint of the one that is open
+pub const EXPLAIN_BEGIN: [&str; 2] = ["BEGIN", "ROLLBACK"];
+pub const EXPLAIN_SAVEPOINT: [&str; 2] = ["SAVEPOINT qurry_explain", "ROLLBACK TO SAVEPOINT qurry_explain"];
+/// A COMMIT of a PostgreSQL transaction an earlier error aborted: the server rolled it back
+const ABORTED_COMMIT: &str =
+    "Not committed: an earlier statement in this transaction failed, so PostgreSQL rolled back the whole transaction and none of its changes were saved. Run the changes again (without the failing statement).";
 
 pub struct PgSession {
     conn: PoolConnection<Postgres>,
@@ -32,6 +40,22 @@ pub struct PgSession {
     fetched: usize,
 }
 
+/// Why loading more needs a new session: saving the source's settings, Disconnect and the idle drop close the tab sessions (app::drop_pool)
+pub const RECONNECTED: &str = "The data source reconnected since this result was read (settings saved, disconnected or idle)";
+
+/// A result with more rows to load, kept outside its session so loading more can reopen it on a new one after the session was
+/// closed (AppState::fetch_more)
+#[derive(Clone, Debug)]
+pub struct More {
+    pub sql: String,
+    /// Rows read so far (the OFFSET to reopen at)
+    pub fetched: usize,
+    /// Read in the user's transaction (Manual, or BEGIN in Auto): it ended with the old session, so the rows may not line up
+    pub tx: bool,
+    /// The console's schema it ran in: PostgreSQL search_path, MySQL database() ("" when none is selected). None: it couldn't be read
+    pub schema: Option<String>,
+}
+
 /// In Auto mode, a cursor whose result was not fully read is closed after this long unused.
 /// While the cursor is open, the transaction is open too (idle in transaction) and blocks VACUUM/DDL
 pub const CURSOR_IDLE: std::time::Duration = std::time::Duration::from_secs(60);
@@ -49,9 +73,40 @@ pub fn strip_comments_lead(sql: &str) -> String {
     }
 }
 
+/// Whether a COMMIT / ROLLBACK / END / ABORT (s = strip_comments_lead(sql)) ends with AND CHAIN, which opens a new transaction
+/// right away: `commit and chain`, `rollback work and chain`, `end transaction /* x */ and chain` (not AND NO CHAIN)
+pub(crate) fn chains(s: &str) -> bool {
+    let mut rest = s;
+    let mut words = Vec::new();
+    while words.len() < 4 {
+        rest = rest.trim_start();
+        if let Some(r) = rest.strip_prefix("--").or_else(|| rest.strip_prefix('#')) {
+            rest = r.split_once('\n').map_or("", |x| x.1);
+        } else if let Some(r) = rest.strip_prefix("/*") {
+            rest = r.split_once("*/").map_or("", |x| x.1);
+        } else {
+            let n = rest.find(|c: char| !c.is_alphanumeric() && c != '_').unwrap_or(rest.len());
+            if n == 0 {
+                break;
+            }
+            words.push(&rest[..n]);
+            rest = &rest[n..];
+        }
+    }
+    let after = if matches!(words.get(1), Some(&"work" | &"transaction")) { 2 } else { 1 };
+    matches!(words.get(after..), Some(["and", "chain", ..]))
+}
+
 pub fn is_select_like(sql: &str) -> bool {
     let s = strip_comments_lead(sql);
     ["select", "with", "values", "table", "("].iter().any(|k| s.starts_with(k))
+}
+
+/// EXPLAIN (GENERIC_PLAN) of a statement with $1 … has no values to bind, which the extended protocol expects: it goes over the simple protocol.
+/// One statement only (the simple protocol would run everything after a `;` too)
+pub fn is_generic_plan(sql: &str) -> bool {
+    let s = strip_comments_lead(sql);
+    s.starts_with("explain") && s.contains("generic_plan") && !strip_trailing_semicolon(&s).contains(';')
 }
 
 fn strip_trailing_semicolon(sql: &str) -> &str {
@@ -132,8 +187,11 @@ impl PgSession {
 
     pub async fn commit(&mut self) -> AppResult<()> {
         self.close_cursor().await;
-        self.conn.execute("COMMIT").await?;
+        self.refuse_aborted_commit().await?;
+        let r = self.conn.execute("COMMIT").await;
+        // A failed COMMIT (e.g. a deferred foreign key) ends the transaction too: PostgreSQL rolls it back
         self.in_tx = false;
+        r?;
         Ok(())
     }
 
@@ -144,15 +202,30 @@ impl PgSession {
         Ok(())
     }
 
-    /// Sync the state when the user runs BEGIN / COMMIT / ROLLBACK directly
-    fn track_tx_keywords(&mut self, sql: &str) {
+    /// PostgreSQL answers COMMIT of a transaction an error aborted with ROLLBACK, not an error: end it so and say so (an error,
+    /// so the console and the Production log don't read it as committed)
+    async fn refuse_aborted_commit(&mut self) -> AppResult<()> {
+        if !self.in_tx {
+            return Ok(());
+        }
+        match self.conn.execute("SELECT 1").await {
+            Err(sqlx::Error::Database(d)) if d.code().as_deref() == Some("25P02") => {
+                self.conn.execute("ROLLBACK").await?;
+                self.in_tx = false;
+                Err(AppError::Msg(ABORTED_COMMIT.into()))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Sync the state when the user runs BEGIN / COMMIT / ROLLBACK directly (`ok`: it ran without error). One that ran with
+    /// AND CHAIN opens the next transaction at once; a failed COMMIT AND CHAIN leaves none open
+    fn track_tx_keywords(&mut self, sql: &str, ok: bool) {
         let s = strip_comments_lead(sql);
         if s.starts_with("begin") || s.starts_with("start transaction") {
             self.in_tx = true;
-        } else if s.starts_with("commit") || s.starts_with("rollback") || s.starts_with("end") || s.starts_with("abort") {
-            if !s.starts_with("rollback to") {
-                self.in_tx = false;
-            }
+        } else if ["commit", "rollback", "end", "abort"].iter().any(|k| s.starts_with(k)) && !s.starts_with("rollback to") {
+            self.in_tx = ok && chains(&s);
         }
     }
 
@@ -172,6 +245,9 @@ impl PgSession {
             self.conn.execute("BEGIN").await?;
             self.in_tx = true;
         }
+        if crate::audit::tx_end(sql) == Some("COMMIT") {
+            self.refuse_aborted_commit().await?;
+        }
         if is_select_like(sql) {
             match self.declare(strip_trailing_semicolon(sql)).await {
                 Ok(_) => {
@@ -189,7 +265,7 @@ impl PgSession {
             }
         }
         let r = self.run_direct(sql, limit, start).await;
-        self.track_tx_keywords(sql);
+        self.track_tx_keywords(sql, r.is_ok());
         r
     }
 
@@ -208,44 +284,83 @@ impl PgSession {
     }
 
     async fn run_direct(&mut self, sql: &str, limit: usize, start: Instant) -> AppResult<QueryResult> {
-        let mut columns = Vec::new();
-        let mut rows: Vec<Vec<Value>> = Vec::new();
-        let mut affected = 0u64;
-        let mut truncated = false;
-        let mut has_rs = false;
+        run_direct_on(&mut self.conn, sql, limit, start).await
+    }
+
+    /// A change with its undo snapshot right before it, in one transaction (Session::run_with_snapshot)
+    async fn run_with_snapshot(&mut self, snap: &str, sql: &str, limit: usize) -> (AppResult<QueryResult>, AppResult<QueryResult>) {
+        self.close_cursor().await;
+        let own = !self.user_tx();
+        let began = !self.in_tx;
+        if began {
+            if let Err(e) = self.conn.execute("BEGIN").await {
+                return (Err(AppError::Msg(e.to_string())), Err(e.into()));
+            }
+            self.in_tx = true;
+        }
+        let shot = pg_snapshot(&mut self.conn, snap).await;
+        // Cancelled · timed out while locking the rows: don't run the change (the savepoint kept the user's transaction as it was)
+        if let Err(e) = &shot
+            && crate::audit::stops_change(e)
         {
-            #[allow(deprecated)]
-            let mut stream = sqlx::query(sql).persistent(false).fetch_many(&mut *self.conn);
-            while let Some(item) = stream.try_next().await? {
-                match item {
-                    Either::Left(done) => affected += done.rows_affected(),
-                    Either::Right(row) => {
-                        has_rs = true;
-                        if columns.is_empty() {
-                            columns = pg_columns(&row);
-                        }
-                        if rows.len() >= limit {
-                            truncated = true;
-                            break;
-                        }
-                        rows.push((0..row.len()).map(|i| pg_value(&row, i)).collect());
-                    }
+            if began {
+                let _ = self.rollback_tx().await;
+            }
+            return (Err(AppError::Msg(e.to_string())), Err(crate::audit::stopped(e, false)));
+        }
+        let mut r = self.run(sql, limit).await;
+        if own {
+            if r.is_ok()
+                && let Err(e) = self.commit().await
+            {
+                r = Err(e);
+            }
+            match &mut r {
+                Ok(q) => q.in_transaction = false,
+                // The change or its COMMIT failed: nothing of it stays, and no transaction is left open
+                Err(_) => {
+                    let _ = self.rollback_tx().await;
+                    self.in_tx = false;
                 }
             }
         }
-        Ok(query_result(columns, rows, affected, truncated, start, has_rs))
+        (shot, r)
+    }
+
+    /// The cursor's statement again, after the rows already read (without ORDER BY, the DB decides the order)
+    fn after_fetched(&self) -> String {
+        format!("SELECT * FROM (\n{}\n) AS qurry_page OFFSET {}", strip_trailing_semicolon(&self.cursor_sql), self.fetched)
+    }
+
+    /// The result that has more rows to load (More::schema is left to Session::more)
+    fn more(&self) -> Option<More> {
+        (self.cursor_open || self.idle_closed).then(|| More { sql: self.cursor_sql.clone(), fetched: self.fetched, tx: self.user_tx(), schema: None })
+    }
+
+    /// Open `m` on this new session after the rows its old session read, and fetch the next `limit` rows (Session::reopen)
+    async fn reopen(&mut self, m: &More, limit: usize) -> AppResult<QueryResult> {
+        if let Some(path) = &m.schema {
+            sqlx::query("select pg_catalog.set_config('search_path', $1, false)").bind(path).persistent(false).execute(&mut *self.conn).await?;
+        }
+        (self.cursor_sql, self.fetched) = (m.sql.clone(), m.fetched);
+        self.columns.clear();
+        if let Err(e) = self.declare(&self.after_fetched()).await {
+            self.rollback().await;
+            return Err(e.into());
+        }
+        self.fetch(limit).await
     }
 
     /// Fetch the next `limit` rows from the open cursor.
-    /// If the cursor was closed for being unused, reopen the same statement after the rows already read (OFFSET) (without ORDER BY, the DB decides the order)
+    /// If the cursor was closed for being unused, reopen the same statement after the rows already read (OFFSET)
     pub async fn fetch(&mut self, limit: usize) -> AppResult<QueryResult> {
-        if !self.cursor_open && self.idle_closed {
-            let q = format!("SELECT * FROM (\n{}\n) AS qurry_page OFFSET {}", strip_trailing_semicolon(&self.cursor_sql), self.fetched);
-            if let Err(e) = self.declare(&q).await {
-                self.rollback().await;
-                self.idle_closed = false;
-                return Err(AppError::Msg(format!("The result was closed after {} s without use, and reopening it failed ({e}). Run the query again to load more rows.", CURSOR_IDLE.as_secs())));
-            }
+        if !self.cursor_open
+            && self.idle_closed
+            && let Err(e) = self.declare(&self.after_fetched()).await
+        {
+            self.rollback().await;
+            self.idle_closed = false;
+            return Err(AppError::Msg(format!("The result was closed after {} s without use, and reopening it failed ({e}). Run the query again to load more rows.", CURSOR_IDLE.as_secs())));
         }
         if !self.cursor_open {
             return Err(AppError::Msg("No more rows".into()));
@@ -282,6 +397,67 @@ impl PgSession {
     }
 }
 
+/// Run a statement on the connection (no cursor)
+async fn run_direct_on(conn: &mut PgConnection, sql: &str, limit: usize, start: Instant) -> AppResult<QueryResult> {
+    let mut columns = Vec::new();
+    let mut rows: Vec<Vec<Value>> = Vec::new();
+    let mut affected = 0u64;
+    let mut truncated = false;
+    let mut has_rs = false;
+    {
+        #[allow(deprecated)]
+        let mut stream = match is_generic_plan(sql) {
+            true => sqlx::raw_sql(sql).fetch_many(&mut *conn),
+            false => sqlx::query(sql).persistent(false).fetch_many(&mut *conn),
+        };
+        while let Some(item) = stream.try_next().await? {
+            match item {
+                Either::Left(done) => affected += done.rows_affected(),
+                Either::Right(row) => {
+                    has_rs = true;
+                    if columns.is_empty() {
+                        columns = pg_columns(&row);
+                    }
+                    if rows.len() >= limit {
+                        truncated = true;
+                        break;
+                    }
+                    rows.push((0..row.len()).map(|i| pg_value(&row, i)).collect());
+                }
+            }
+        }
+    }
+    Ok(query_result(columns, rows, affected, truncated, start, has_rs))
+}
+
+/// Undo snapshot inside the open transaction, under a savepoint: if it fails, the transaction carries on as it was (PostgreSQL would abort it)
+pub(crate) async fn pg_snapshot(conn: &mut PgConnection, sql: &str) -> AppResult<QueryResult> {
+    conn.execute("SAVEPOINT qurry_snap").await?;
+    let mut r = run_direct_on(conn, sql, crate::audit::UNDO_MAX_ROWS + 1, Instant::now()).await;
+    // A row lock needs the UPDATE privilege: a role with only SELECT and DELETE gets the snapshot without the lock (as before rows were locked)
+    if let Err(AppError::Db(sqlx::Error::Database(e))) = &r
+        && e.code().as_deref() == Some("42501")
+        && let Some(plain) = crate::audit::pg_unlocked(sql)
+    {
+        conn.execute("ROLLBACK TO SAVEPOINT qurry_snap").await?;
+        r = run_direct_on(conn, &plain, crate::audit::UNDO_MAX_ROWS + 1, Instant::now()).await;
+    }
+    end_snapshot(conn, r.is_ok()).await?;
+    r
+}
+
+/// Close the snapshot's savepoint: keep what it read (ok) or undo it. A RELEASE that fails (a cancel landing on it) leaves the
+/// transaction aborted: roll back to the savepoint, so the user's transaction goes on as it was
+async fn end_snapshot(conn: &mut PgConnection, ok: bool) -> AppResult<()> {
+    if !ok {
+        conn.execute("ROLLBACK TO SAVEPOINT qurry_snap").await?;
+    } else if let Err(e) = conn.execute("RELEASE SAVEPOINT qurry_snap").await {
+        let _ = conn.execute("ROLLBACK TO SAVEPOINT qurry_snap").await;
+        return Err(e.into());
+    }
+    Ok(())
+}
+
 /// Console tab session (per DB kind)
 pub enum Session {
     Pg(PgSession),
@@ -293,12 +469,7 @@ pub enum Session {
 
 impl Session {
     pub async fn open(pool: &crate::db::Pool) -> AppResult<Self> {
-        Ok(match pool {
-            crate::db::Pool::Pg(p) => Session::Pg(PgSession::open(p).await?),
-            crate::db::Pool::My(p) => Session::My(crate::mysql::MySession::open(p).await?),
-            crate::db::Pool::Redis(m, _) => Session::Redis(m.clone()),
-            crate::db::Pool::Plugin(c) => Session::Plugin(c.clone()),
-        })
+        dispatch!(pool, b => b.open_session().await)
     }
     /// Backend id for cancelling (PG pid / MySQL connection id)
     pub fn backend_id(&self) -> i64 {
@@ -316,12 +487,49 @@ impl Session {
             Session::Plugin(c) => c.query(sql, limit).await,
         }
     }
+    /// Run a change with its undo snapshot (audit::UndoPlan, a SELECT … FOR UPDATE) right before it in the same transaction, so nobody changes the rows in between.
+    /// In the user's transaction (Manual · BEGIN) both join it; otherwise they get one of their own, committed right after the change (rolled back if it fails).
+    /// A failing snapshot leaves the transaction as it was, and the change still runs (without undo) — unless it was cancelled, timed out or
+    /// deadlocked (audit::stops_change): then the change doesn't run either. → (snapshot, change)
+    pub async fn run_with_snapshot(&mut self, snap: &str, sql: &str, limit: usize) -> (AppResult<QueryResult>, AppResult<QueryResult>) {
+        match self {
+            Session::Pg(s) => s.run_with_snapshot(snap, sql, limit).await,
+            Session::My(s) => s.run_with_snapshot(snap, sql, limit).await,
+            _ => (Err(AppError::Msg("Undo is kept for PostgreSQL and MySQL only".into())), self.run(sql, limit).await),
+        }
+    }
     pub async fn fetch(&mut self, limit: usize) -> AppResult<QueryResult> {
         match self {
             Session::Pg(s) => s.fetch(limit).await,
             Session::My(s) => s.fetch(limit).await,
             Session::Redis(_) | Session::Plugin(_) => Err(AppError::Msg("No more rows".into())),
         }
+    }
+    /// The current result if it has more rows to load. schema: also read the console's schema (search_path · database()), which
+    /// costs a round trip, so only once per result
+    pub async fn more(&mut self, schema: bool) -> Option<More> {
+        let mut m = match self {
+            Session::Pg(s) => s.more(),
+            Session::My(s) => s.more(),
+            Session::Redis(_) | Session::Plugin(_) => None,
+        }?;
+        if schema && !m.tx {
+            m.schema = match self {
+                Session::Pg(s) => sqlx::query_scalar("select current_setting('search_path')").persistent(false).fetch_one(&mut *s.conn).await.ok(),
+                Session::My(s) => s.database().await,
+                _ => None,
+            };
+        }
+        Some(m)
+    }
+    /// Open a result whose session was closed (Session::more of it) on this new session, after the rows already read
+    pub async fn reopen(&mut self, m: &More, limit: usize) -> AppResult<QueryResult> {
+        let r = match self {
+            Session::Pg(s) => s.reopen(m, limit).await,
+            Session::My(s) => s.reopen(m, limit).await,
+            Session::Redis(_) | Session::Plugin(_) => Err(AppError::Msg("No more rows".into())),
+        };
+        r.map_err(|e| AppError::Msg(format!("{RECONNECTED}, and reopening the result on the new connection failed ({e}). Run the query again to load more rows.")))
     }
     pub async fn set_manual(&mut self, manual: bool) -> AppResult<()> {
         match self {
@@ -352,12 +560,32 @@ impl Session {
             Session::Redis(_) | Session::Plugin(_) => {}
         }
     }
+    /// How Explain Analyse wraps the statement it really runs: in a savepoint when a transaction is open (or MySQL autocommit is
+    /// off: a BEGIN would commit what is pending there), else in a transaction of its own. GUI and TUI both ask this
+    pub async fn explain_wrap(&mut self) -> AppResult<[&'static str; 2]> {
+        let open = match self {
+            Session::My(s) => s.tx_may_be_open().await?,
+            s => s.in_tx(),
+        };
+        Ok(if open { EXPLAIN_SAVEPOINT } else { EXPLAIN_BEGIN })
+    }
     /// Whether there are uncommitted changes
     pub fn in_tx(&self) -> bool {
         match self {
             Session::Pg(s) => s.in_tx(),
             Session::My(s) => s.in_tx,
             Session::Redis(_) | Session::Plugin(_) => false,
+        }
+    }
+    /// Whether a change ran in the open MySQL transaction (MySession::changed)
+    pub fn tx_changed(&self) -> bool {
+        matches!(self, Session::My(s) if s.in_tx && s.changed)
+    }
+    /// How the last statement ended the open MySQL transaction by itself (MySession::ended)
+    pub fn tx_ended(&self) -> Option<&'static str> {
+        match self {
+            Session::My(s) => s.ended,
+            _ => None,
         }
     }
     /// On tab close: roll back the open transaction, reset session settings and return the connection to the pool
@@ -384,31 +612,6 @@ impl Session {
     }
 }
 
-/// Cancel the backend's running query from another connection.
-pub async fn cancel(pool: &PgPool, pid: i32) -> AppResult<bool> {
-    Ok(sqlx::query_scalar("select pg_cancel_backend($1)").bind(pid).fetch_one(pool).await?)
-}
-
-/// Apply data edits in one transaction. If any fails, roll back everything.
-/// Statements in one transaction (roll back everything if any fails). exact_one = table edits: each UPDATE/DELETE must hit exactly 1 row
-pub async fn execute_batch(pool: &PgPool, statements: &[String], exact_one: bool) -> AppResult<u64> {
-    execute_batch_with(pool, statements, exact_one, false).await
-}
-
-/// prepared = each statement as a prepared statement (extended protocol): the server refuses more than one statement per item (MCP)
-pub async fn execute_batch_with(pool: &PgPool, statements: &[String], exact_one: bool, prepared: bool) -> AppResult<u64> {
-    let mut tx = pool.begin().await?;
-    let mut affected = 0;
-    for st in statements {
-        let r = if prepared { sqlx::query(st).execute(&mut *tx).await } else { tx.execute(st.as_str()).await };
-        let n = r.map_err(|e| AppError::Msg(format!("{e}\n→ {st}")))?.rows_affected();
-        check_exact_one(st, n, exact_one)?;
-        affected += n;
-    }
-    tx.commit().await?;
-    Ok(affected)
-}
-
 /// If a table edit's UPDATE/DELETE hits 0 or multiple rows (changed by someone else or duplicate keys), roll back everything
 pub fn check_exact_one(st: &str, n: u64, exact_one: bool) -> AppResult<()> {
     let s = strip_comments_lead(st);
@@ -424,46 +627,40 @@ pub fn check_exact_one(st: &str, n: u64, exact_one: bool) -> AppResult<()> {
 mod tests {
     use super::*;
     use crate::db::{connect, Pool};
-    use crate::store::{ConnectionConfig, DbKind};
 
-    /// Test DB: local PostgreSQL by default. Override with QURRY_TEST_PG=host:port:user:db (e.g. a container)
     /// MCP execute path: the server refuses two statements in one prepared item (nothing runs)
     #[tokio::test]
     #[ignore]
     async fn prepared_batch_refuses_multiple_statements() {
-        let p = pool().await;
+        let Some(p) = pool().await else { return };
         sqlx::raw_sql("drop table if exists qurry_prep; create table qurry_prep (a int)").execute(&p).await.unwrap();
-        let e = execute_batch_with(&p, &["insert into qurry_prep values (1); drop table qurry_prep".into()], false, true).await.unwrap_err().to_string();
+        let e = p.execute_batch(&["insert into qurry_prep values (1); drop table qurry_prep".into()], false, true, &[]).await.unwrap_err().to_string();
         assert!(e.contains("multiple commands"), "{e}");
-        assert_eq!(execute_batch_with(&p, &["insert into qurry_prep values (1)".into()], false, true).await.unwrap(), 1);
+        assert_eq!(p.execute_batch(&["insert into qurry_prep values (1)".into()], false, true, &[]).await.unwrap().0, 1);
         sqlx::raw_sql("drop table qurry_prep").execute(&p).await.unwrap();
     }
 
-    async fn pool() -> PgPool {
-        let env = std::env::var("QURRY_TEST_PG").ok();
-        let part = |i: usize, d: String| env.as_ref().and_then(|e| e.split(':').nth(i).map(String::from)).unwrap_or(d);
-        let cfg = ConnectionConfig {
-            id: "t".into(), name: "t".into(), kind: DbKind::Postgres, host: part(0, "localhost".into()), port: part(1, "5432".into()).parse().unwrap(),
-            user: part(2, std::env::var("USER").unwrap()), database: part(3, String::new()), color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
-        };
-        let Pool::Pg(p) = connect(&cfg, None).await.unwrap() else { unreachable!() };
-        p
+    /// QURRY_TEST_PG=host:port:user:db[:password] (crate::testenv)
+    async fn pool() -> Option<PgPool> {
+        let s = crate::testenv::pg()?;
+        let Pool::Pg(p) = connect(&s.cfg, s.password.as_deref()).await.unwrap() else { unreachable!() };
+        Some(p)
     }
 
     /// In Auto mode, a cursor (SELECT) does not commit a transaction the user opened (a single SELECT used to finalize an UPDATE)
     #[tokio::test]
     #[ignore]
     async fn auto_mode_user_transaction_is_not_committed_by_select() {
-        let p = pool().await;
-        sqlx::query("create table if not exists public.dbtool_tx_t(id int primary key, v text)").execute(&p).await.unwrap();
-        sqlx::query("delete from public.dbtool_tx_t").execute(&p).await.unwrap();
-        sqlx::query("insert into public.dbtool_tx_t values (1, 'a')").execute(&p).await.unwrap();
-        let seen = || async { sqlx::query_scalar::<_, String>("select v from public.dbtool_tx_t where id = 1").fetch_one(&p).await.unwrap() };
+        let Some(p) = pool().await else { return };
+        sqlx::query("create table if not exists public.dbtool_tx_auto_t(id int primary key, v text)").execute(&p).await.unwrap();
+        sqlx::query("delete from public.dbtool_tx_auto_t").execute(&p).await.unwrap();
+        sqlx::query("insert into public.dbtool_tx_auto_t values (1, 'a')").execute(&p).await.unwrap();
+        let seen = || async { sqlx::query_scalar::<_, String>("select v from public.dbtool_tx_auto_t where id = 1").fetch_one(&p).await.unwrap() };
         let mut s = PgSession::open(&p).await.unwrap();
         s.run("begin", 500).await.unwrap();
-        s.run("update public.dbtool_tx_t set v = 'changed' where id = 1", 500).await.unwrap();
+        s.run("update public.dbtool_tx_auto_t set v = 'changed' where id = 1", 500).await.unwrap();
         // A fully read SELECT, a multi-page SELECT and a failing SELECT all leave the transaction alone
-        let r = s.run("select * from public.dbtool_tx_t", 500).await.unwrap();
+        let r = s.run("select * from public.dbtool_tx_auto_t", 500).await.unwrap();
         assert!(r.in_transaction);
         s.run("select g from generate_series(1, 1200) g", 500).await.unwrap();
         assert!(s.run("select * from no_such_table_xyz", 500).await.is_err());
@@ -473,21 +670,21 @@ mod tests {
         assert_eq!(seen().await, "a", "rolled back");
         // With uncommitted changes in Manual, switching to Auto is not allowed
         s.set_manual(true).await.unwrap();
-        s.run("update public.dbtool_tx_t set v = 'm' where id = 1", 500).await.unwrap();
+        s.run("update public.dbtool_tx_auto_t set v = 'm' where id = 1", 500).await.unwrap();
         assert!(s.set_manual(false).await.is_err());
         s.rollback_tx().await.unwrap();
         s.set_manual(false).await.unwrap();
         assert_eq!(seen().await, "a");
         // Saving table edits: UPDATE/DELETE hitting 0 or multiple rows rolls back everything
-        let none = execute_batch(&p, &["insert into public.dbtool_tx_t values (2, 'b')".into(), "update public.dbtool_tx_t set v = 'x' where id = 99".into()], true).await;
+        let none = p.execute_batch(&["insert into public.dbtool_tx_auto_t values (2, 'b')".into(), "update public.dbtool_tx_auto_t set v = 'x' where id = 99".into()], true, false, &[]).await;
         assert!(none.is_err());
-        let many = execute_batch(&p, &["update public.dbtool_tx_t set v = 'x' where id > 0".into()], true).await;
+        let many = p.execute_batch(&["update public.dbtool_tx_auto_t set v = 'x' where id > 0".into()], true, false, &[]).await;
         assert!(many.is_ok(), "one row matches");
-        sqlx::query("insert into public.dbtool_tx_t values (3, 'c')").execute(&p).await.unwrap();
-        assert!(execute_batch(&p, &["delete from public.dbtool_tx_t where id > 0".into()], true).await.is_err());
-        let n: i64 = sqlx::query_scalar("select count(*) from public.dbtool_tx_t").fetch_one(&p).await.unwrap();
+        sqlx::query("insert into public.dbtool_tx_auto_t values (3, 'c')").execute(&p).await.unwrap();
+        assert!(p.execute_batch(&["delete from public.dbtool_tx_auto_t where id > 0".into()], true, false, &[]).await.is_err());
+        let n: i64 = sqlx::query_scalar("select count(*) from public.dbtool_tx_auto_t").fetch_one(&p).await.unwrap();
         assert_eq!(n, 2, "row 2 insert was rolled back, rows 1 and 3 remain");
-        sqlx::query("drop table public.dbtool_tx_t").execute(&p).await.unwrap();
+        sqlx::query("drop table public.dbtool_tx_auto_t").execute(&p).await.unwrap();
     }
 
     #[test]
@@ -497,10 +694,28 @@ mod tests {
         assert!(!is_select_like("update t set x = 1"));
     }
 
+    /// COMMIT / ROLLBACK … AND CHAIN keeps a transaction open (PostgreSQL and MySQL); AND NO CHAIN and the plain ones don't
+    #[test]
+    fn and_chain_keeps_the_transaction() {
+        let c = |q: &str| chains(&strip_comments_lead(q));
+        for q in [
+            "COMMIT AND CHAIN", "rollback and chain;", "commit work and chain", "ROLLBACK TRANSACTION AND CHAIN", "end and chain", "abort transaction and chain",
+            "-- x\n/* y */ commit and chain", "commit /* x */ and -- y\n chain", "commit\n\tand\nchain", "commit # x\n and chain",
+        ] {
+            assert!(c(q), "{q}");
+        }
+        for q in [
+            "commit", "rollback;", "commit work", "end transaction", "abort", "commit and no chain", "rollback work and no chain", "commit and", "commit chain",
+            "commit and chained", "commit; and chain", "commit /* and chain */", "-- and chain\ncommit", "commit prepared 'x'", "rollback to savepoint s",
+        ] {
+            assert!(!c(q), "{q}");
+        }
+    }
+
     #[tokio::test]
     #[ignore]
     async fn fetch_after_idle_close() {
-        let p = pool().await;
+        let Some(p) = pool().await else { return };
         let mut s = PgSession::open(&p).await.unwrap();
         let r1 = s.run("select g from generate_series(1,1200) g order by g -- tail comment", 500).await.unwrap();
         assert_eq!((r1.rows.len(), r1.truncated), (500, true));
@@ -527,7 +742,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn cursor_paging_cancel_batch() {
-        let p = pool().await;
+        let Some(p) = pool().await else { return };
         let mut s = PgSession::open(&p).await.unwrap();
 
         // Cursor paging: 1200 rows → 500 + 500 + 200
@@ -565,7 +780,7 @@ mod tests {
         let p2 = p.clone();
         let canceller = tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-            cancel(&p2, pid).await.unwrap()
+            p2.cancel(pid as i64).await.unwrap()
         });
         let t0 = Instant::now();
         let res = s.run("select pg_sleep(10)", 500).await;
@@ -575,39 +790,98 @@ mod tests {
         assert_eq!(s.run("select 2", 500).await.unwrap().rows[0][0], Value::from(2));
 
         // Tx: Manual — invisible to other connections before commit, gone after Roll back
-        sqlx::query("create table if not exists public.dbtool_tx_t(id int primary key)").execute(&p).await.unwrap();
-        sqlx::query("truncate public.dbtool_tx_t").execute(&p).await.unwrap();
+        sqlx::query("create table if not exists public.dbtool_tx_manual_t(id int primary key)").execute(&p).await.unwrap();
+        sqlx::query("truncate public.dbtool_tx_manual_t").execute(&p).await.unwrap();
         s.set_manual(true).await.unwrap();
-        let ins = s.run("insert into public.dbtool_tx_t values (1)", 500).await.unwrap();
+        let ins = s.run("insert into public.dbtool_tx_manual_t values (1)", 500).await.unwrap();
         assert!(ins.in_transaction);
-        let seen: i64 = sqlx::query_scalar("select count(*) from public.dbtool_tx_t").fetch_one(&p).await.unwrap();
+        let seen: i64 = sqlx::query_scalar("select count(*) from public.dbtool_tx_manual_t").fetch_one(&p).await.unwrap();
         assert_eq!(seen, 0, "uncommitted row must not be visible");
         // Inside a Manual transaction, SELECT (cursor) sees its own changes too
-        let mine = s.run("select count(*) from public.dbtool_tx_t", 500).await.unwrap();
+        let mine = s.run("select count(*) from public.dbtool_tx_manual_t", 500).await.unwrap();
         assert_eq!(mine.rows[0][0], Value::from(1));
         s.rollback_tx().await.unwrap();
-        let after_rb = s.run("select count(*) from public.dbtool_tx_t", 500).await.unwrap();
+        let after_rb = s.run("select count(*) from public.dbtool_tx_manual_t", 500).await.unwrap();
         assert_eq!(after_rb.rows[0][0], Value::from(0));
-        s.run("insert into public.dbtool_tx_t values (2)", 500).await.unwrap();
+        s.run("insert into public.dbtool_tx_manual_t values (2)", 500).await.unwrap();
         s.commit().await.unwrap();
-        let committed: i64 = sqlx::query_scalar("select count(*) from public.dbtool_tx_t").fetch_one(&p).await.unwrap();
+        let committed: i64 = sqlx::query_scalar("select count(*) from public.dbtool_tx_manual_t").fetch_one(&p).await.unwrap();
         assert_eq!(committed, 1);
         // Statements DECLARE cannot take do not break the manual transaction either
-        let w = s.run("with x as (delete from public.dbtool_tx_t where id = 2 returning id) select count(*) from x", 500).await.unwrap();
+        let w = s.run("with x as (delete from public.dbtool_tx_manual_t where id = 2 returning id) select count(*) from x", 500).await.unwrap();
         assert_eq!(w.rows[0][0], Value::from(1));
         s.rollback_tx().await.unwrap();
         s.set_manual(false).await.unwrap();
-        sqlx::query("drop table public.dbtool_tx_t").execute(&p).await.unwrap();
+        sqlx::query("drop table public.dbtool_tx_manual_t").execute(&p).await.unwrap();
 
         // Batch edit: roll back everything on failure
         sqlx::query("create table if not exists public.dbtool_batch_t(id int primary key, name text)").execute(&p).await.unwrap();
         sqlx::query("truncate public.dbtool_batch_t").execute(&p).await.unwrap();
-        let ok = execute_batch(&p, &["insert into public.dbtool_batch_t values (1,'a')".into(), "update public.dbtool_batch_t set name='b' where id=1".into()], true).await.unwrap();
-        assert_eq!(ok, 2);
-        let bad = execute_batch(&p, &["insert into public.dbtool_batch_t values (2,'c')".into(), "insert into public.dbtool_batch_t values (1,'dup')".into()], true).await;
+        let ok = p.execute_batch(&["insert into public.dbtool_batch_t values (1,'a')".into(), "update public.dbtool_batch_t set name='b' where id=1".into()], true, false, &[]).await.unwrap();
+        assert_eq!(ok.0, 2);
+        let bad = p.execute_batch(&["insert into public.dbtool_batch_t values (2,'c')".into(), "insert into public.dbtool_batch_t values (1,'dup')".into()], true, false, &[]).await;
         assert!(bad.is_err());
         let n: i64 = sqlx::query_scalar("select count(*) from public.dbtool_batch_t").fetch_one(&p).await.unwrap();
         assert_eq!(n, 1);
         sqlx::query("drop table public.dbtool_batch_t").execute(&p).await.unwrap();
+    }
+
+    /// A failing undo snapshot leaves the transaction usable: the change still runs and commits (Auto), or joins the user's transaction (Manual)
+    async fn failed_snapshot_keeps_the_change(pool: Pool, schema: &str, drop: &str) {
+        let mut s = Session::open(&pool).await.unwrap();
+        let t = "audit_hardening_s.qurry_snap_fail";
+        for q in [schema, &format!("drop table if exists {t}"), &format!("create table {t} (id int primary key, v int)"), &format!("insert into {t} values (1, 1)")] {
+            s.run(q, 1).await.unwrap();
+        }
+        let v = |r: QueryResult| r.rows[0][0].to_string().trim_matches('"').to_string();
+        let bad = "select * from qurry_no_such_table for update";
+        let (shot, r) = s.run_with_snapshot(bad, &format!("update {t} set v = 2 where id = 1"), 10).await;
+        assert!(shot.is_err());
+        assert_eq!(r.unwrap().rows_affected, 1);
+        assert!(!s.in_tx());
+        s.set_manual(true).await.unwrap();
+        let (shot, r) = s.run_with_snapshot(bad, &format!("update {t} set v = 3 where id = 1"), 10).await;
+        assert!(shot.is_err());
+        assert!(r.unwrap().in_transaction);
+        assert!(s.in_tx());
+        s.rollback_tx().await.unwrap();
+        s.set_manual(false).await.unwrap();
+        assert_eq!(v(s.run(&format!("select v from {t}"), 1).await.unwrap()), "2");
+        // A working snapshot sees the row as it is in the transaction, which commits after the change
+        let (shot, r) = s.run_with_snapshot(&format!("select v from {t} where id = 1 for update"), &format!("update {t} set v = 4 where id = 1"), 10).await;
+        assert_eq!((v(shot.unwrap()), r.unwrap().in_transaction, s.in_tx()), ("2".into(), false, false));
+        assert_eq!(v(s.run(&format!("select v from {t}"), 1).await.unwrap()), "4");
+        s.run(drop, 1).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn pg_failed_snapshot_keeps_the_change() {
+        let Some(p) = pool().await else { return };
+        failed_snapshot_keeps_the_change(Pool::Pg(p), "create schema if not exists audit_hardening_s", "drop schema audit_hardening_s cascade").await;
+    }
+
+    /// A RELEASE of the snapshot's savepoint that fails (a cancel landing on it) rolls back to the savepoint, so the user's
+    /// transaction isn't left aborted: it goes on with what it changed before
+    #[tokio::test]
+    #[ignore]
+    async fn pg_failed_release_keeps_the_transaction() {
+        let Some(p) = pool().await else { return };
+        let mut c = p.acquire().await.unwrap();
+        c.execute("BEGIN; CREATE TEMP TABLE qurry_release (v int); INSERT INTO qurry_release VALUES (1); SAVEPOINT qurry_snap").await.unwrap();
+        // The transaction is aborted, as a cancel landing on RELEASE leaves it
+        assert!(c.execute("SELECT 1 / 0").await.is_err());
+        assert!(end_snapshot(&mut c, true).await.is_err());
+        let v: i32 = sqlx::query_scalar("SELECT v FROM qurry_release").fetch_one(&mut *c).await.unwrap();
+        assert_eq!(v, 1);
+        c.execute("ROLLBACK").await.unwrap();
+    }
+
+    /// QURRY_TEST_MY=host:port:user:password:db
+    #[tokio::test]
+    #[ignore]
+    async fn mysql_failed_snapshot_keeps_the_change() {
+        let Some(s) = crate::testenv::my() else { return };
+        failed_snapshot_keeps_the_change(connect(&s.cfg, s.password.as_deref()).await.unwrap(), "create database if not exists audit_hardening_s", "drop database audit_hardening_s").await;
     }
 }

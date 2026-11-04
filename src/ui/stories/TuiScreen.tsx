@@ -1,5 +1,6 @@
 /** TUI scene (drawn on a virtual terminal by crates/tui/src/kit_snapshots.rs), with chars · colors as is */
-export type Run = [string, string | null, string | null, boolean, boolean, boolean, boolean, boolean];
+/** [text, fg, bg, bold, underline, italic, strikethrough, wide, reverse?, dim?] — reverse · dim only when one is on */
+export type Run = [string, string | null, string | null, boolean, boolean, boolean, boolean, boolean, boolean?, boolean?];
 export interface Scene {
   name: string;
   desc: string;
@@ -54,12 +55,14 @@ export function TuiScreen({ scene }: { scene: Scene }) {
       >
         {scene.rows.map((runs, y) => (
           <div key={y} style={{ height: "1.25em", whiteSpace: "pre" }}>
-            {runs.map(([t, fg, bg, bold, ul, it, st, wide], i) => (
+            {runs.map(([t, fg, bg, bold, ul, it, st, wide, rev, dim], i) => (
               <span
                 key={i}
                 style={{
-                  color: fg ?? undefined,
-                  background: bg ?? undefined,
+                  // Reverse video swaps the colors, the terminal's own ones when a run has none
+                  color: (rev ? (bg ?? BG) : fg) ?? undefined,
+                  background: (rev ? (fg ?? FG) : bg) ?? undefined,
+                  opacity: dim ? 0.55 : undefined,
                   fontWeight: bold ? 700 : undefined,
                   fontStyle: it ? "italic" : undefined,
                   textDecoration: [ul && "underline", st && "line-through"].filter(Boolean).join(" ") || undefined,

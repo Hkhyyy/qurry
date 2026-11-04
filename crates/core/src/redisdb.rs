@@ -185,8 +185,8 @@ pub async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str,
     let ep = endpoint(cfg, &cfg.user, password)?;
     let db = db_index(&cfg.database);
     let mode = cfg.redis_mode();
-    if mode != "standalone" && cfg.active_ssh().is_some() {
-        return Err(AppError::Msg(format!("SSH tunnel is not supported with Redis {mode} (nodes announce their own addresses)")));
+    if mode != "standalone" && cfg.tunneled() {
+        return Err(AppError::Msg(format!("SSH / AWS SSM tunnels are not supported with Redis {mode} (nodes announce their own addresses)")));
     }
     let conn = match mode {
         "cluster" => {
@@ -264,90 +264,12 @@ pub async fn ping(m: &RedisConn) {
     let _: Result<String, _> = redis::cmd("PING").query_async(&mut m).await;
 }
 
-/// redis-cli style argument splitting: spaces, "double quotes"(\n \t \" \\ \xHH), 'single quotes'
+/// Whether the command doesn't change values (MCP read-only mode). Shared with the guard
+pub use qurry_shared::redis_cmd::is_read_command;
+
+/// redis-cli style argument splitting (qurry_shared::redis_cmd::parse_command, the same rules the guard reads a line with)
 pub fn parse_command(line: &str) -> AppResult<Vec<Vec<u8>>> {
-    let mut out: Vec<Vec<u8>> = Vec::new();
-    let b = line.as_bytes();
-    let mut i = 0;
-    while i < b.len() {
-        while i < b.len() && b[i].is_ascii_whitespace() {
-            i += 1;
-        }
-        if i >= b.len() {
-            break;
-        }
-        let mut cur = Vec::new();
-        let mut quoted = false;
-        while i < b.len() && !b[i].is_ascii_whitespace() {
-            match b[i] {
-                b'"' => {
-                    quoted = true;
-                    i += 1;
-                    loop {
-                        if i >= b.len() {
-                            return Err(AppError::Msg("Unbalanced quotes".into()));
-                        }
-                        match b[i] {
-                            b'"' => {
-                                i += 1;
-                                break;
-                            }
-                            b'\\' if i + 1 < b.len() => {
-                                i += 1;
-                                match b[i] {
-                                    b'n' => cur.push(b'\n'),
-                                    b't' => cur.push(b'\t'),
-                                    b'r' => cur.push(b'\r'),
-                                    b'x' if i + 2 < b.len() => {
-                                        let h = std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok());
-                                        match h {
-                                            Some(v) => {
-                                                cur.push(v);
-                                                i += 2;
-                                            }
-                                            None => cur.push(b'x'),
-                                        }
-                                    }
-                                    c => cur.push(c),
-                                }
-                                i += 1;
-                            }
-                            c => {
-                                cur.push(c);
-                                i += 1;
-                            }
-                        }
-                    }
-                }
-                b'\'' => {
-                    quoted = true;
-                    i += 1;
-                    loop {
-                        if i >= b.len() {
-                            return Err(AppError::Msg("Unbalanced quotes".into()));
-                        }
-                        if b[i] == b'\'' {
-                            i += 1;
-                            break;
-                        }
-                        cur.push(b[i]);
-                        i += 1;
-                    }
-                }
-                c => {
-                    cur.push(c);
-                    i += 1;
-                }
-            }
-        }
-        if !cur.is_empty() || quoted {
-            out.push(cur);
-        }
-    }
-    if out.is_empty() {
-        return Err(AppError::Msg("Empty command".into()));
-    }
-    Ok(out)
+    qurry_shared::redis_cmd::parse_command(line).map_err(AppError::Msg)
 }
 
 /// Quoting for command-line display (Go to DDL)
@@ -484,30 +406,6 @@ fn shape(cmd: &str, args: &[Vec<u8>], v: RV, limit: usize, start: Instant) -> Qu
         (_, RV::Array(xs)) | (_, RV::Set(xs)) => table(&["#", "value"], xs.iter().enumerate().map(|(i, x)| vec![Value::from(i as i64 + 1), cell(x)]).collect(), limit, start),
         (_, RV::Map(kv)) => table(&["field", "value"], kv.iter().map(|(k, v)| vec![cell(k), cell(v)]).collect(), limit, start),
         (_, v) => table(&["result"], vec![vec![cell(&v)]], limit, start),
-    }
-}
-
-/// Whether the command doesn't change values (MCP read-only mode)
-pub fn is_read_command(cmd: &str, sub: &str) -> bool {
-    const READ: &[&str] = &[
-        "GET", "MGET", "GETRANGE", "STRLEN", "EXISTS", "TYPE", "TTL", "PTTL", "EXPIRETIME", "PEXPIRETIME", "DBSIZE", "KEYS", "SCAN", "RANDOMKEY",
-        "HGET", "HMGET", "HGETALL", "HKEYS", "HVALS", "HLEN", "HEXISTS", "HSTRLEN", "HSCAN", "HRANDFIELD",
-        "LRANGE", "LLEN", "LINDEX", "LPOS", "SMEMBERS", "SCARD", "SISMEMBER", "SMISMEMBER", "SSCAN", "SRANDMEMBER", "SINTER", "SUNION", "SDIFF", "SINTERCARD",
-        "ZRANGE", "ZRANGEBYSCORE", "ZRANGEBYLEX", "ZREVRANGE", "ZREVRANGEBYSCORE", "ZREVRANGEBYLEX", "ZSCORE", "ZMSCORE", "ZCARD", "ZCOUNT", "ZLEXCOUNT", "ZRANK", "ZREVRANK", "ZSCAN", "ZRANDMEMBER",
-        "XRANGE", "XREVRANGE", "XLEN", "XINFO", "XPENDING", "PFCOUNT", "GETBIT", "BITCOUNT", "BITPOS", "GEOPOS", "GEODIST", "GEOSEARCH", "GEOHASH",
-        "INFO", "PING", "TIME", "ECHO", "LASTSAVE", "ROLE", "LOLWUT", "DBTOOL.VIEW", "JSON.GET", "JSON.TYPE", "JSON.MGET",
-    ];
-    if READ.contains(&cmd) {
-        return true;
-    }
-    match cmd {
-        "MEMORY" => matches!(sub, "USAGE" | "STATS" | "DOCTOR"),
-        "OBJECT" => matches!(sub, "ENCODING" | "FREQ" | "IDLETIME" | "REFCOUNT"),
-        "CONFIG" => sub == "GET",
-        "CLIENT" => matches!(sub, "LIST" | "INFO" | "GETNAME" | "ID"),
-        "SLOWLOG" => matches!(sub, "GET" | "LEN"),
-        "COMMAND" => matches!(sub, "" | "COUNT" | "INFO" | "DOCS"),
-        _ => false,
     }
 }
 
@@ -866,6 +764,70 @@ pub async fn field_len(m: &RedisConn, key: &[u8], field: &[u8]) -> AppResult<i64
     redis::cmd("HSTRLEN").arg(key).arg(field).query_async(&mut mgr).await.map_err(err)
 }
 
+/// Max size of a single Redis value readable from MCP
+const REDIS_READ_MAX_BYTES: i64 = 16 << 20;
+
+/// MCP Redis reads (query, and reads sent to execute): the guard's limits, then what only the server knows — whole-key reads
+/// (HGETALL, LRANGE 0 -1, XRANGE without COUNT …) up to REDIS_STRICT_MAX elements, and values up to REDIS_READ_MAX_BYTES.
+/// Commands that aren't reads are left to the caller
+pub(crate) async fn check_read(m: &RedisConn, line: &str) -> AppResult<()> {
+    use crate::guard::REDIS_STRICT_MAX;
+    let args = parse_command(line.trim().trim_end_matches(';').trim())?;
+    let cmd = String::from_utf8_lossy(&args[0]).to_uppercase();
+    let sub = args.get(1).map(|a| String::from_utf8_lossy(a).to_uppercase()).unwrap_or_default();
+    if !is_read_command(&cmd, &sub) {
+        return Ok(());
+    }
+    let rest: Vec<String> = args.iter().skip(1).map(|a| String::from_utf8_lossy(a).into_owned()).collect();
+    if let Some(why) = crate::guard::redis_strict_violation(&cmd, &rest) {
+        return Err(AppError::Msg(why));
+    }
+    // Whole keys: count the elements (and then the bytes) before reading
+    if let Some(c) = crate::guard::redis_size_check(&cmd, &rest) {
+        let mut n = 0i64;
+        for k in &c.keys {
+            n = n.saturating_add(element_count(m, c.count, k.as_bytes()).await?);
+        }
+        if n > REDIS_STRICT_MAX {
+            return Err(AppError::Msg(format!("{cmd} would read {n} elements — at most {REDIS_STRICT_MAX} in read-only mode; use {} (or redis_get for a preview)", c.instead)));
+        }
+        let mut bytes = 0i64;
+        for k in &c.keys {
+            bytes = bytes.saturating_add(memory_usage(m, k.as_bytes(), 0).await?);
+        }
+        if bytes > REDIS_READ_MAX_BYTES {
+            return Err(AppError::Msg(format!("{cmd} would read {} MB — too big to read here; use {}", bytes >> 20, c.instead)));
+        }
+    }
+    // Commands that return a whole value: check the size before reading
+    // GETRANGE with a bounded range reads at most that much
+    let range_small = cmd == "GETRANGE" && matches!((rest.get(1).and_then(|a| a.parse::<i64>().ok()), rest.get(2).and_then(|a| a.parse::<i64>().ok())), (Some(a), Some(b)) if a >= 0 && b >= a && b - a < REDIS_READ_MAX_BYTES);
+    let keys: &[String] = match cmd.as_str() {
+        "GET" | "JSON.GET" => rest.get(..1).unwrap_or(&[]),
+        "GETRANGE" if !range_small => rest.get(..1).unwrap_or(&[]),
+        "MGET" => &rest,
+        "JSON.MGET" => rest.split_last().map(|(_, k)| k).unwrap_or(&[]),
+        _ => &[],
+    };
+    let json = cmd.starts_with("JSON.");
+    for k in keys {
+        let n = value_size(m, k.as_bytes(), json).await?;
+        if n > REDIS_READ_MAX_BYTES {
+            return Err(AppError::Msg(format!("{k} is {} MB — too big to read here (use GETRANGE, or redis_get for a preview)", n >> 20)));
+        }
+    }
+    // HGET / HMGET: one hash field can be big too
+    if matches!(cmd.as_str(), "HGET" | "HMGET") && rest.len() > 1 {
+        for f in &rest[1..] {
+            let n = field_len(m, rest[0].as_bytes(), f.as_bytes()).await?;
+            if n > REDIS_READ_MAX_BYTES {
+                return Err(AppError::Msg(format!("{}.{f} is {} MB — too big to read here", rest[0], n >> 20)));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub async fn key_detail(m: &RedisConn, key: &str, limit: usize) -> AppResult<KeyDetail> {
     let mut mgr = m.clone();
     let k = key.as_bytes();
@@ -1005,17 +967,14 @@ mod tests {
         ConnectionConfig {
             id: "rd".into(), name: "rd".into(), kind: DbKind::Redis, host: host.into(), port: port.parse().expect("QURRY_TEST_REDIS port"), user: String::new(),
             database: db.into(), color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(),
-            read_only: false, options: Default::default(), ssl: None, redis: None,
+            read_only: false, options: Default::default(), ssl: None, redis: None, ssm: None,
         }
     }
 
+    /// Argument splitting is tested in qurry_shared::redis_cmd; here only that errors keep their message
     #[test]
     fn parse_args() {
-        let a = parse_command(r#"SET "my key" 'it''s' "a\"b\n\x41" plain"#).unwrap();
-        let s: Vec<String> = a.iter().map(|x| String::from_utf8_lossy(x).into_owned()).collect();
-        assert_eq!(s, ["SET", "my key", "its", "a\"b\nA", "plain"]);
-        assert_eq!(parse_command(r#"GET """#).unwrap()[1], b"");
-        assert!(parse_command("GET \"x").is_err());
+        assert!(matches!(parse_command("GET \"x"), Err(AppError::Msg(m)) if m == "Unbalanced quotes"));
         assert_eq!(quote_arg("a b"), "\"a b\"");
         assert_eq!(quote_arg("user:1"), "user:1");
     }
@@ -1049,6 +1008,35 @@ mod tests {
         let d = key_detail(m, "qurry:big", 10).await.unwrap();
         assert!(d.truncated && d.value.as_str().unwrap().len() as i64 == STRING_PREVIEW_MAX);
         let _: () = redis::cmd("DEL").arg("qurry:big").arg("qurry:small").query_async(&mut c).await.unwrap();
+    }
+
+    /// Redis has no SQL guard: the MCP read path and a read-only source refuse a write before it runs (the key stays as it was);
+    /// CSV export of commands is refused in read-only mode. Own keys in db14, no FLUSHDB
+    #[tokio::test]
+    #[ignore]
+    async fn redis_read_only_refuses_writes_before_running() {
+        let dir = std::env::temp_dir().join(format!("qurry-rro-{}", uuid::Uuid::new_v4()));
+        let st = crate::open_state(Some(dir.clone())).unwrap();
+        st.save_connection(cfg("db14"), None, None).await.unwrap();
+        let ro = ConnectionConfig { id: "rdro".into(), name: "rdro".into(), read_only: true, ..cfg("db14") };
+        st.save_connection(ro, None, None).await.unwrap();
+        let pool = crate::db::connect(&cfg("db14"), None).await.expect("connect");
+        let Pool::Redis(m, 14) = &pool else { panic!("db index") };
+        let mut c = m.clone();
+        let _: () = redis::cmd("SET").arg("qurry:guard:k").arg("before").query_async(&mut c).await.unwrap();
+        let value = || async { run(m, "GET qurry:guard:k", 1).await.unwrap().rows[0][0].clone() };
+        let e = st.run_read_only("rd::db14".into(), "SET qurry:guard:k after".into(), 10).await.unwrap_err().to_string();
+        assert_eq!(e, "SET is not a read-only command");
+        let e = st.export_csv_read_only("rd::db14".into(), "GET qurry:guard:k".into(), dir.join("x.csv")).await.unwrap_err().to_string();
+        assert_eq!(e, "CSV export of Redis commands is not available in read-only mode");
+        let e = st.run_query("rdro::db14".into(), "SET qurry:guard:k after".into(), None, Some("tab".into())).await.unwrap_err().to_string();
+        assert_eq!(e, "Data source \"rdro\" is read-only: SET changes data");
+        let e = st.execute_batch_prepared("rdro::db14".into(), vec!["DEL qurry:guard:k".into()]).await.expect_err("refused").to_string();
+        assert_eq!(e, "Data source \"rdro\" is read-only: DEL changes data");
+        assert_eq!(value().await, "before");
+        assert_eq!(st.run_read_only("rd::db14".into(), "GET qurry:guard:k".into(), 10).await.unwrap().rows[0][0], "before");
+        let _: () = redis::cmd("DEL").arg("qurry:guard:k").query_async(&mut c).await.unwrap();
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// MCP read: whole keys (HGETALL, SMEMBERS, set ops, LRANGE 0 -1, XRANGE without COUNT) are read when small, refused when over 1,000 elements

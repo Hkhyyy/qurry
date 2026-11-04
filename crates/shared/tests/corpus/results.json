@@ -1,0 +1,97 @@
+[
+  {
+    "id": "sales",
+    "columns": [{ "name": "month", "typeName": "date" }, { "name": "region", "typeName": "text" }, { "name": "amount", "typeName": "numeric" }, { "name": "id", "typeName": "int4" }],
+    "rows": [
+      ["2024-02-01", "west", "1,200.50", 1],
+      ["2024-01-01", "east", "300", 2],
+      ["2024-01-01", "west", "-50", 3],
+      ["2024-03-01", null, null, 4],
+      ["2024-02-01", "east", "abc", 5]
+    ]
+  },
+  {
+    "id": "ids-only",
+    "columns": [{ "name": "user_id", "typeName": "int8" }, { "name": "order_id", "typeName": "int8" }],
+    "rows": [[1, 10], [1, 11], [2, 12]]
+  },
+  {
+    "id": "text-numbers",
+    "columns": [{ "name": "label", "typeName": "varchar" }, { "name": "n", "typeName": "varchar" }, { "name": "when", "typeName": "timestamp" }],
+    "rows": [["a", "1", "2024-01-01 00:00:00"], ["b", "2.5", "2024-01-02 00:00:00"], ["c", "", "2024-01-03 00:00:00"], ["d", "x", null]]
+  },
+  {
+    "id": "numeric-x",
+    "columns": [{ "name": "bucket", "typeName": "int4" }, { "name": "hits", "typeName": "int8" }],
+    "rows": [[10, 5], [2, 7], [10, 1], [-1, 0], [null, 3]]
+  },
+  {
+    "id": "pie-many",
+    "columns": [{ "name": "k", "typeName": "text" }, { "name": "v", "typeName": "float8" }],
+    "rows": [["a", 9], ["b", 8], ["c", 7], ["d", 6], ["e", 5], ["f", 4], ["g", 3], ["h", 2], ["i", 1], ["j", 0.5], ["k", 0.25], ["l", -1], ["m", 0]]
+  },
+  {
+    "id": "times",
+    "columns": [
+      { "name": "ts", "typeName": "timestamp" },
+      { "name": "t", "typeName": "time" },
+      { "name": "tz", "typeName": "TIMESTAMPTZ" },
+      { "name": "iv", "typeName": "interval" },
+      { "name": "txt", "typeName": "text" },
+      { "name": "ttz", "typeName": "time with time zone" }
+    ],
+    "rows": [
+      ["2024-01-01 03:19:15", "03:19:15.5", "2024-01-01T03:19:15.123+09:00", "01:00:00", "12:34:56.7", "03:19:15+09"],
+      ["2024-01-01 09:38:06.521101", "12:00:00", "2024-01-01 03:19:15+00", "01:00:00.25", "abc", "03:19:15.25+09"],
+      [null, "24:00:00", "12345-01-01 00:00:00.1", "2 days", null, "bad"],
+      ["2024-01-01", "1:02:03", "2024-01-01T03:19:15.Z", null, "03:19:15", "03:19:15.999999+05:30"]
+    ]
+  },
+  {
+    "id": "inlist-mix",
+    "columns": [{ "name": "code", "typeName": "text" }, { "name": "n", "typeName": "int8" }, { "name": "flag", "typeName": "bool" }, { "name": "price", "typeName": "numeric(10,2)" }],
+    "rows": [
+      ["010", "12345678901234567890", true, "1.50"],
+      ["a'b", "-3", false, "NaN"],
+      ["010", "12345678901234567890", true, "1.50"],
+      [null, null, null, null],
+      ["x", "1e5", null, "-0.5"],
+      ["y", "+4", true, ".5"]
+    ]
+  },
+  {
+    "id": "korean-emoji",
+    "columns": [{ "name": "이름", "typeName": "text" }, { "name": "값", "typeName": "int4" }, { "name": "id", "typeName": "int4" }],
+    "rows": [["김😀", 1, 1], ["a|b", 2, 2], ["line\nbreak", null, 3], ["comma,quote\"", 4, 4], ["tab\there", 5, 5]]
+  },
+  {
+    "id": "empty",
+    "columns": [{ "name": "a", "typeName": "text" }, { "name": "b", "typeName": "int4" }],
+    "rows": []
+  },
+  {
+    "id": "single-number-column",
+    "columns": [{ "name": "total", "typeName": "numeric" }],
+    "rows": [["10"], ["20"], ["10"]]
+  },
+  {
+    "id": "big-floats",
+    "columns": [{ "name": "v", "typeName": "float8" }],
+    "rows": [[9007199254740992.0], [1e16], [1e20], [1152921504606846976.0], [1e21], [1.5e-7]]
+  },
+  {
+    "id": "backslash",
+    "columns": [{ "name": "s", "typeName": "text" }],
+    "rows": [["a\\'b"], ["x\\') OR 1=1 -- "]]
+  },
+  {
+    "id": "loose-dates",
+    "columns": [{ "name": "ts", "typeName": "timestamp" }],
+    "rows": [["+2026-06-06 10:00:00"], ["abcd-ef-gh 10:00:00"], ["2026-06-06 10:00:00.5"]]
+  },
+  {
+    "id": "year-float-x",
+    "columns": [{ "name": "ratio", "typeName": "float8" }, { "name": "yr", "typeName": "year" }, { "name": "qty", "typeName": "text" }],
+    "rows": [[1.5, null, "1,000"], [0.25, null, "2"], [1.5, null, " 3 "], [2, null, ""]]
+  }
+]

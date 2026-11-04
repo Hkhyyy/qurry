@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useSyncExternalStore, type CSSProperties } from "react";
 
 /** Settings › Appearance › Theme. "system" = Sync with OS */
 export type ThemePref = "dark" | "light" | "hc" | "system";
@@ -57,3 +57,5 @@ export const connBg = (color: string | null | undefined, t: Theme) =>
   !color ? undefined : t === "light" ? `color-mix(in srgb, ${color} 22%, #ffffff)` : t === "hc" ? color : `color-mix(in srgb, ${color} 35%, var(--panel))`;
 /** Connection color stripe (tree left · tab top) — spot production DBs at a glance */
 export const connStripe = (color: string | null | undefined, t: Theme) => (!color ? undefined : t === "light" ? `color-mix(in srgb, ${color} 75%, #ffffff)` : `color-mix(in srgb, ${color} 75%, #ffffff 25%)`);
+/** Editor tab colors as CSS variables: App.css draws the stripe on every tab, the full tint on the active one and a fainter one on the rest */
+export const connTabVars = (color: string | null | undefined, t: Theme) => (!color ? undefined : ({ "--conn-bg": connBg(color, t), "--conn-stripe": connStripe(color, t) } as CSSProperties));

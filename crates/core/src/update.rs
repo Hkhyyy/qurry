@@ -1,13 +1,26 @@
-//! Update check: compare the current version with the latest GitHub release (published automatically on every merge to main).
-//! Asks at most once an hour and keeps the result in update-check.json in the config folder. Doesn't ask if QURRY_NO_UPDATE_CHECK=1.
+//! Update check: compare the current version with the newest GitHub release of the update channel.
+//! Stable = releases from a version tag (vX.Y.Z); beta = also the pre-release published on every merge to main (vX.Y.Z-beta.N).
+//! Asks at most once an hour and keeps the result in update-releases.json in the config folder. Doesn't ask if QURRY_NO_UPDATE_CHECK=1.
 //! HTTP goes through curl (a default tool on macOS·Linux, no extra dependency)
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 pub const REPO: &str = "Hkhyyy/qurry";
-const CACHE_FILE: &str = "update-check.json";
+// Not update-check.json: apps from before the channels read that one, and must keep seeing only stable releases there
+const CACHE_FILE: &str = "update-releases.json";
 const CHECK_EVERY_SECS: u64 = 60 * 60;
+
+/// Which releases to offer (GUI Settings › Appearance › Updates, TUI ⌃k › Update Channel…). Saved in the config folder, shared by the GUI and the TUI
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Channel {
+    /// Only releases from a version tag
+    #[default]
+    Stable,
+    /// Also the pre-release built from every merge to main
+    Beta,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -19,7 +32,7 @@ pub struct Asset {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Release {
-    /// "0.1.2" (the tag without the v)
+    /// "0.1.2" or "0.3.1-beta.2" (the tag without the v)
     pub version: String,
     /// Release page
     pub url: String,
@@ -29,6 +42,9 @@ pub struct Release {
     /// Changes in recent releases (newest first, including this release)
     #[serde(default)]
     pub history: Vec<VersionNotes>,
+    /// A beta (GitHub pre-release)
+    #[serde(default)]
+    pub prerelease: bool,
 }
 
 /// What changed in one version ("[feat] title (#PR)")
@@ -38,6 +54,9 @@ pub struct VersionNotes {
     pub version: String,
     pub changes: Vec<String>,
 }
+
+/// Start of the macOS 13 warning item in the notes of stable releases (.github/workflows/release.yml)
+const MACOS13_ITEM: &str = "[breaking] The GUI needs macOS 13";
 
 /// Only the changes from the release notes: lines under "## What's Changed" in GitHub's auto notes → "title (#PR)"
 pub fn changes(notes: &str) -> Vec<String> {
@@ -50,6 +69,10 @@ pub fn changes(notes: &str) -> Vec<String> {
             continue;
         }
         let Some(item) = t.strip_prefix("* ").or_else(|| t.strip_prefix("- ")).filter(|_| on) else { continue };
+        // The release workflow puts this on every stable release for apps from before 0.3.0; this app already runs on macOS 13+
+        if item.starts_with(MACOS13_ITEM) {
+            continue;
+        }
         // "title by @person in https://…/pull/17"
         let (title, pr) = match item.rsplit_once(" in https://") {
             Some((head, url)) => (head, url.rsplit_once("/pull/").map(|(_, n)| n.trim())),
@@ -93,10 +116,26 @@ impl Release {
     }
 }
 
+/// Newest release of each channel
+#[derive(Serialize, Deserialize)]
+struct Latest {
+    stable: Option<Release>,
+    beta: Option<Release>,
+}
+
+impl Latest {
+    fn of(self, channel: Channel) -> Option<Release> {
+        match channel {
+            Channel::Stable => self.stable,
+            Channel::Beta => self.beta,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct Cache {
     checked_at: u64,
-    latest: Option<Release>,
+    latest: Latest,
 }
 
 pub fn disabled() -> bool {
@@ -104,9 +143,9 @@ pub fn disabled() -> bool {
     ["QURRY_NO_UPDATE_CHECK", "DBTOOL_NO_UPDATE_CHECK"].iter().any(|k| std::env::var(k).is_ok_and(|v| !v.is_empty() && v != "0"))
 }
 
-/// Compare numerically, so "0.1.10" > "0.1.9". If unparsable, treat as not newer
+/// Semver order, so "0.1.10" > "0.1.9" and "0.3.1-beta.2" < "0.3.1". If unparsable, treat as not newer
 pub fn is_newer(current: &str, latest: &str) -> bool {
-    let parse = |s: &str| -> Option<Vec<u64>> { s.trim_start_matches('v').split('.').map(|p| p.parse().ok()).collect() };
+    let parse = |s: &str| semver::Version::parse(s.trim_start_matches('v')).ok();
     match (parse(current), parse(latest)) {
         (Some(c), Some(l)) => l > c,
         _ => false,
@@ -117,17 +156,34 @@ fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-/// Read recent releases via the GitHub API: the latest release (+ changes per version)
-pub async fn latest_release() -> AppResult<Release> {
+/// GET a GitHub API path of this repo ("releases?per_page=100")
+async fn github(path: &str) -> AppResult<Vec<u8>> {
     let out = tokio::process::Command::new("curl")
-        .args(["-fsSL", "-m", "10", "-H", "Accept: application/vnd.github+json", &format!("https://api.github.com/repos/{REPO}/releases?per_page=30")])
+        // --compressed: GitHub gzips the release list (100 releases: about 4 MB → 300 KB), so it fits the 10 s on slow links
+        .args(["-fsSL", "--compressed", "-m", "10", "-H", "Accept: application/vnd.github+json", &format!("https://api.github.com/repos/{REPO}/{path}")])
         .output()
         .await
         .map_err(|e| AppError::Msg(format!("curl: {e}")))?;
     if !out.status.success() {
         return Err(AppError::Msg(format!("Update check failed: {}", String::from_utf8_lossy(&out.stderr).trim())));
     }
-    parse_releases(&out.stdout)
+    Ok(out.stdout)
+}
+
+/// Read recent releases via the GitHub API: the newest release of each channel (+ changes per version)
+async fn latest_releases() -> AppResult<Latest> {
+    let all = parse_releases(&github("releases?per_page=100").await?)?;
+    let mut stable = pick(&all, Channel::Stable);
+    if stable.is_none() {
+        // Only betas among the newest 100: GitHub's "latest" is the newest stable release
+        stable = github("releases/latest").await.ok().and_then(|b| serde_json::from_slice(&b).ok()).and_then(|v| parse_release(&v)).map(with_own_notes);
+    }
+    Ok(Latest { stable, beta: pick(&all, Channel::Beta) })
+}
+
+/// The newest release of the channel (+ changes per version)
+pub async fn latest_release(channel: Channel) -> AppResult<Release> {
+    latest_releases().await?.of(channel).ok_or_else(|| AppError::Msg("Update check failed: no release found".into()))
 }
 
 fn parse_release(v: &serde_json::Value) -> Option<Release> {
@@ -138,36 +194,54 @@ fn parse_release(v: &serde_json::Value) -> Option<Release> {
         .map(|a| a.iter().map(|x| Asset { name: x["name"].as_str().unwrap_or("").into(), url: x["browser_download_url"].as_str().unwrap_or("").into() }).collect())
         .unwrap_or_default();
     let version = s("tag_name").trim_start_matches('v').to_string();
-    (!version.is_empty()).then(|| Release { version, url: s("html_url"), notes: s("body"), assets, history: vec![] })
+    let prerelease = v["prerelease"].as_bool().unwrap_or(false);
+    (!version.is_empty()).then(|| Release { version, url: s("html_url"), notes: s("body"), assets, history: vec![], prerelease })
 }
 
-/// Release list (draft·prerelease excluded) → highest version + changes per version
-fn parse_releases(json: &[u8]) -> AppResult<Release> {
+/// A release found on its own (not in the list): its history is just its own changes
+fn with_own_notes(mut r: Release) -> Release {
+    r.history = vec![VersionNotes { version: r.version.clone(), changes: changes(&r.notes) }];
+    r
+}
+
+/// Release list → published releases (drafts excluded), in the API's order
+fn parse_releases(json: &[u8]) -> AppResult<Vec<Release>> {
     let v: serde_json::Value = serde_json::from_slice(json)?;
-    let mut all: Vec<Release> = v
-        .as_array()
-        .map(|a| a.iter().filter(|r| !r["draft"].as_bool().unwrap_or(false) && !r["prerelease"].as_bool().unwrap_or(false)).filter_map(parse_release).collect())
-        .unwrap_or_default();
-    all.sort_by(|a, b| if is_newer(&a.version, &b.version) { std::cmp::Ordering::Greater } else if is_newer(&b.version, &a.version) { std::cmp::Ordering::Less } else { std::cmp::Ordering::Equal });
-    let history = all.iter().map(|r| VersionNotes { version: r.version.clone(), changes: changes(&r.notes) }).collect();
-    let mut latest = all.into_iter().next().ok_or_else(|| AppError::Msg("Update check failed: no release found".into()))?;
-    latest.history = history;
-    Ok(latest)
+    Ok(v.as_array().map(|a| a.iter().filter(|r| !r["draft"].as_bool().unwrap_or(false)).filter_map(parse_release).collect()).unwrap_or_default())
 }
 
-/// Some if there's a new version. Unless force, asks the network at most once an hour and uses the saved result in between
-pub async fn check(dir: &Path, current: &str, force: bool) -> AppResult<Option<Release>> {
+/// Newest release the channel offers (stable: no pre-releases; beta: both) + changes per version of that channel, newest first
+fn pick(all: &[Release], channel: Channel) -> Option<Release> {
+    let mut on: Vec<&Release> = all.iter().filter(|r| channel == Channel::Beta || !r.prerelease).collect();
+    on.sort_by(|a, b| if is_newer(&a.version, &b.version) { std::cmp::Ordering::Greater } else if is_newer(&b.version, &a.version) { std::cmp::Ordering::Less } else { std::cmp::Ordering::Equal });
+    let history = on.iter().map(|r| VersionNotes { version: r.version.clone(), changes: changes(&r.notes) }).collect();
+    let mut latest = (*on.first()?).clone();
+    latest.history = history;
+    Some(latest)
+}
+
+/// Some if the channel has a new version. Unless force, asks the network at most once an hour and uses the saved result in between
+/// (it holds both channels, so switching the channel needs no new request)
+pub async fn check(dir: &Path, current: &str, channel: Channel, force: bool) -> AppResult<Option<Release>> {
     let path = dir.join(CACHE_FILE);
-    let cached: Option<Cache> = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok());
-    let latest = match cached {
+    let latest = match read_cache(dir) {
         Some(c) if !force && now().saturating_sub(c.checked_at) < CHECK_EVERY_SECS => c.latest,
         _ => {
-            let r = latest_release().await?;
-            let _ = std::fs::write(&path, serde_json::to_string(&Cache { checked_at: now(), latest: Some(r.clone()) })?);
-            Some(r)
+            let cache = Cache { checked_at: now(), latest: latest_releases().await? };
+            let _ = std::fs::write(&path, serde_json::to_string(&cache)?);
+            cache.latest
         }
     };
-    Ok(latest.filter(|r| is_newer(current, &r.version)))
+    Ok(latest.of(channel).filter(|r| is_newer(current, &r.version)))
+}
+
+fn read_cache(dir: &Path) -> Option<Cache> {
+    std::fs::read_to_string(dir.join(CACHE_FILE)).ok().and_then(|t| serde_json::from_str(&t).ok())
+}
+
+/// Like check, from the saved result only (any age, never the network): None if nothing was checked yet. For a channel switch
+pub fn cached(dir: &Path, current: &str, channel: Channel) -> Option<Option<Release>> {
+    read_cache(dir).map(|c| c.latest.of(channel).filter(|r| is_newer(current, &r.version)))
 }
 
 /// Update signing public key (same as plugins.updater.pubkey in the GUI tauri.conf.json — checked by a test)
@@ -236,6 +310,9 @@ mod tests {
         assert!(changes("no section").is_empty());
         // Terminal control characters in PR titles are removed (--update prints them as is)
         assert_eq!(changes("## What's Changed\n* [fix] a\x1b]0;x\x07b by @u in https://github.com/Hkhyyy/qurry/pull/9"), ["[fix] a]0;xb (#9)"]);
+        // The macOS 13 warning the workflow adds for apps from before 0.3.0 is not a change for this app
+        let notes = "## What's Changed\n* [breaking] The GUI needs macOS 13 Ventura or later. On macOS 12 or older, don't update: keep Qurry 0.2.x\n\n## What's Changed\n* [fix] real by @u in https://github.com/Hkhyyy/qurry/pull/9";
+        assert_eq!(changes(notes), ["[fix] real (#9)"]);
     }
 
     /// Release list → latest + changes per version, only those newer than the current version (newest first)
@@ -247,7 +324,7 @@ mod tests {
             {"tag_name":"v0.1.11","html_url":"u11","body":"## What's Changed\n* [feat] b by @a in https://github.com/Hkhyyy/dbtool/pull/16","assets":[],"draft":false,"prerelease":false},
             {"tag_name":"v0.1.10","html_url":"u10","body":"## What's Changed\n* [feat] a by @a in https://github.com/Hkhyyy/dbtool/pull/15","assets":[],"draft":false,"prerelease":false}
         ]"###;
-        let r = parse_releases(json).unwrap();
+        let r = pick(&parse_releases(json).unwrap(), Channel::Stable).unwrap();
         assert_eq!(r.version, "0.1.12");
         assert_eq!(r.url, "u12");
         let since = r.changes_since("0.1.10");
@@ -268,16 +345,88 @@ mod tests {
         assert_eq!(changes_text(&[]), "");
     }
 
+    /// Pre-releases compare below their release and by number (beta.10 after beta.9), as semver orders them
+    #[test]
+    fn pre_release_versions_compare() {
+        assert!(is_newer("0.3.0", "0.3.1-beta.1"));
+        assert!(is_newer("0.3.1-beta.1", "0.3.1-beta.2"));
+        assert!(is_newer("0.3.1-beta.9", "0.3.1-beta.10"));
+        assert!(is_newer("0.3.1-beta.10", "0.3.1"));
+        assert!(!is_newer("0.3.1", "0.3.1-beta.2"));
+        assert!(!is_newer("v0.3.1-beta.2", "0.3.1-beta.2"));
+    }
+
+    /// Fixture: what GitHub's release list looks like after a few merges (betas) and two version tags (stable), newest first
+    const FIXTURE: &[u8] = br###"[
+        {"tag_name":"v0.3.1-beta.2","html_url":"b2","body":"## What's Changed\n* [fix] two by @a in https://github.com/Hkhyyy/qurry/pull/82","assets":[],"draft":false,"prerelease":true},
+        {"tag_name":"v0.3.2-beta.1","html_url":"draft","body":"","assets":[],"draft":true,"prerelease":true},
+        {"tag_name":"v0.3.1-beta.1","html_url":"b1","body":"## What's Changed\n* [feat] one by @a in https://github.com/Hkhyyy/qurry/pull/81","assets":[],"draft":false,"prerelease":true},
+        {"tag_name":"v0.3.0","html_url":"s30","body":"## What's Changed\n* [feat] stable by @a in https://github.com/Hkhyyy/qurry/pull/80","assets":[],"draft":false,"prerelease":false},
+        {"tag_name":"v0.3.0-beta.1","html_url":"b0","body":"","assets":[],"draft":false,"prerelease":true},
+        {"tag_name":"v0.2.9","html_url":"s29","body":"","assets":[],"draft":false,"prerelease":false}
+    ]"###;
+
+    /// Stable never offers a pre-release; beta offers the newest of both. Drafts are never offered
+    #[test]
+    fn channel_picks_from_the_release_list() {
+        let all = parse_releases(FIXTURE).unwrap();
+        let stable = pick(&all, Channel::Stable).unwrap();
+        assert_eq!(stable.version, "0.3.0");
+        assert_eq!(stable.history.iter().map(|v| v.version.as_str()).collect::<Vec<_>>(), ["0.3.0", "0.2.9"]);
+        let beta = pick(&all, Channel::Beta).unwrap();
+        assert_eq!((beta.version.as_str(), beta.url.as_str()), ("0.3.1-beta.2", "b2"));
+        assert_eq!(beta.changes_since("0.3.0").iter().map(|v| v.version.as_str()).collect::<Vec<_>>(), ["0.3.1-beta.2", "0.3.1-beta.1"]);
+        // Once the version is tagged, beta offers the stable release (it is newer than its betas)
+        let tagged = br#"[{"tag_name":"v0.3.1","html_url":"s31","body":"","assets":[],"draft":false,"prerelease":false}]"#;
+        let mut all = all;
+        all.extend(parse_releases(tagged).unwrap());
+        assert_eq!(pick(&all, Channel::Beta).unwrap().version, "0.3.1");
+        // Only pre-releases in the list: nothing for stable
+        let betas = parse_releases(br#"[{"tag_name":"v0.3.1-beta.1","html_url":"b","body":"","assets":[],"draft":false,"prerelease":true}]"#).unwrap();
+        assert!(pick(&betas, Channel::Stable).is_none());
+        assert_eq!(pick(&betas, Channel::Beta).unwrap().version, "0.3.1-beta.1");
+    }
+
+    #[test]
+    fn channel_is_saved_in_lowercase_and_defaults_to_stable() {
+        assert_eq!(Channel::default(), Channel::Stable);
+        assert_eq!(serde_json::to_value(Channel::Beta).unwrap(), "beta");
+        assert_eq!(serde_json::from_value::<Channel>("stable".into()).unwrap(), Channel::Stable);
+    }
+
     #[tokio::test]
     async fn cached_result_is_used_within_an_hour() {
         let dir = std::env::temp_dir().join(format!("dbtool-upd-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        let rel = Release { version: "9.9.9".into(), url: "u".into(), notes: String::new(), assets: vec![], history: vec![] };
-        std::fs::write(dir.join(CACHE_FILE), serde_json::to_string(&Cache { checked_at: now(), latest: Some(rel.clone()) }).unwrap()).unwrap();
-        // Answers from the saved result without the network
-        assert_eq!(check(&dir, "0.1.0", false).await.unwrap(), Some(rel));
-        assert_eq!(check(&dir, "9.9.9", false).await.unwrap(), None);
+        let rel = |v: &str| Release { version: v.into(), url: "u".into(), notes: String::new(), assets: vec![], history: vec![], prerelease: v.contains('-') };
+        let latest = Latest { stable: Some(rel("9.9.9")), beta: Some(rel("10.0.0-beta.1")) };
+        std::fs::write(dir.join(CACHE_FILE), serde_json::to_string(&Cache { checked_at: now(), latest }).unwrap()).unwrap();
+        // Answers from the saved result without the network, for the channel asked
+        assert_eq!(check(&dir, "0.1.0", Channel::Stable, false).await.unwrap(), Some(rel("9.9.9")));
+        assert_eq!(check(&dir, "9.9.9", Channel::Stable, false).await.unwrap(), None);
+        assert_eq!(check(&dir, "9.9.9", Channel::Beta, false).await.unwrap(), Some(rel("10.0.0-beta.1")));
         let _ = std::fs::remove_dir_all(&dir);
     }
-}
 
+    /// A channel switch reads the saved result whatever its age, and says when nothing was checked yet (no request either way)
+    #[test]
+    fn cached_answers_without_the_network() {
+        let dir = std::env::temp_dir().join(format!("dbtool-upd-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(cached(&dir, "0.1.0", Channel::Beta), None);
+        let rel = |v: &str| Release { version: v.into(), url: "u".into(), notes: String::new(), assets: vec![], history: vec![], prerelease: v.contains('-') };
+        let latest = Latest { stable: Some(rel("9.9.9")), beta: Some(rel("10.0.0-beta.1")) };
+        std::fs::write(dir.join(CACHE_FILE), serde_json::to_string(&Cache { checked_at: 0, latest }).unwrap()).unwrap();
+        assert_eq!(cached(&dir, "9.9.9", Channel::Stable), Some(None));
+        assert_eq!(cached(&dir, "9.9.9", Channel::Beta), Some(Some(rel("10.0.0-beta.1"))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The stable release from releases/latest (only betas in the list) still lists its own changes
+    #[test]
+    fn fallback_release_has_its_own_changes() {
+        let v = serde_json::json!({"tag_name":"v0.3.0","html_url":"s","body":"## What's Changed\n* [feat] x by @a in https://github.com/Hkhyyy/qurry/pull/5","assets":[]});
+        let r = with_own_notes(parse_release(&v).unwrap());
+        assert_eq!(r.changes_since("0.2.9"), vec![VersionNotes { version: "0.3.0".into(), changes: vec!["[feat] x (#5)".into()] }]);
+    }
+}

@@ -1,6 +1,7 @@
 //! Data export (CSV · TSV · JSON · SQL INSERT · Markdown, file/clipboard) and import (CSV · TSV · JSON · Excel → table).
 //! Long-running work reports progress through a Job and can be cancelled
 use crate::app::{AppState, ensure_pool};
+use crate::backend::{Backend, dispatch};
 use crate::db::Pool;
 use crate::error::{AppError, AppResult};
 use crate::store::DbKind;
@@ -430,7 +431,8 @@ pub struct ImportSpec {
     pub columns: Vec<(usize, String)>,
 }
 
-enum Tx {
+/// The import's transaction (Backend::import_tx)
+pub(crate) enum Tx {
     Pg(sqlx::Transaction<'static, sqlx::Postgres>),
     My(sqlx::Transaction<'static, sqlx::MySql>),
 }
@@ -462,17 +464,6 @@ impl Tx {
         }
         Ok(())
     }
-}
-
-/// Approximate PG row count (EXPLAIN estimate). Only for the progress bar, so it may be off
-async fn estimate_rows(pool: &Pool, sql: &str) -> Option<u64> {
-    let Pool::Pg(p) = pool else { return None };
-    let head = sql.split_whitespace().next()?.to_ascii_lowercase();
-    if !["select", "with", "table", "values"].contains(&head.as_str()) {
-        return None;
-    }
-    let v: Value = sqlx::query_scalar(&format!("EXPLAIN (FORMAT JSON) {sql}")).fetch_one(p).await.ok()?;
-    v.get(0)?.get("Plan")?.get("Plan Rows")?.as_f64().map(|n| n as u64)
 }
 
 impl AppState {
@@ -510,7 +501,7 @@ impl AppState {
                 Some((_, t)) => q(&t),
                 None => "result".into(),
             };
-            if let Some(n) = estimate_rows(&pool, &sql).await {
+            if let Some(n) = dispatch!(pool, b => b.estimate_rows(&sql).await) {
                 job.total.store(n, Ordering::Relaxed);
             }
             let mut out = Exporter::create(Encoder::new(format, kind, table), &dest, job.clone()).await?;
@@ -552,12 +543,7 @@ impl AppState {
         } else {
             self.table_detail(id.to_string(), spec.schema.clone(), spec.table.clone()).await?.columns.into_iter().map(|c| (c.name, c.data_type)).collect()
         };
-        let mut tx = match pool {
-            Pool::Pg(p) => Tx::Pg(p.begin().await?),
-            Pool::My(p) => Tx::My(p.begin().await?),
-            Pool::Redis(..) => return Err(AppError::Msg("Import into Redis is not supported".into())),
-            Pool::Plugin(c) => return Err(AppError::Msg(format!("Import is not available for the {} driver yet", c.driver))),
-        };
+        let mut tx = dispatch!(pool, b => b.import_tx().await)?;
         if spec.create {
             let ty = if kind == DbKind::Mysql { "TEXT" } else { "text" };
             let cols: Vec<String> = spec.columns.iter().map(|(_, c)| format!("{} {ty}", q(c))).collect();
@@ -731,15 +717,11 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn export_and_import_roundtrip() {
-        let Ok(env) = std::env::var("QURRY_TEST_PG") else { return };
-        let p: Vec<&str> = env.split(':').collect();
+        let Some(crate::testenv::Server { mut cfg, password }) = crate::testenv::pg() else { return };
+        cfg.id = "t".into();
         let dir = std::env::temp_dir().join(format!("qurry-transfer-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir.clone())).unwrap();
-        let cfg = crate::store::ConnectionConfig {
-            id: "t".into(), name: "t".into(), kind: DbKind::Postgres, host: p[0].into(), port: p[1].parse().unwrap(), user: p[2].into(), database: p[3].into(),
-            color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
-        };
-        st.store.save(&cfg).unwrap();
+        st.save_connection(cfg, password, None).await.unwrap();
         let sql = |q: &str| st.run_query("t".into(), q.into(), None, None);
         let _ = sql("drop table if exists qurry_tr_src, qurry_tr_dst, qurry_tr_new").await;
         sql("create table qurry_tr_src (id int primary key, name text, amount numeric(10,2), at timestamptz, meta jsonb)").await.unwrap();
@@ -815,15 +797,12 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn mysql_export_and_import() {
-        let Ok(env) = std::env::var("QURRY_TEST_MY") else { return };
-        let p: Vec<&str> = env.split(':').collect();
+        let Some(crate::testenv::Server { mut cfg, password }) = crate::testenv::my() else { return };
+        cfg.id = "m".into();
+        let db = cfg.database.clone();
         let dir = std::env::temp_dir().join(format!("qurry-transfer-{}", uuid::Uuid::new_v4()));
         let st = crate::open_state(Some(dir.clone())).unwrap();
-        let cfg = crate::store::ConnectionConfig {
-            id: "m".into(), name: "m".into(), kind: DbKind::Mysql, host: p[0].into(), port: p[1].parse().unwrap(), user: p[2].into(), database: p[4].into(),
-            color: None, ssh: None, password_saved: false, ssh_secret_saved: false, scope: Default::default(), read_only: false, options: Default::default(), ssl: None, redis: None,
-        };
-        st.save_connection(cfg, Some(p[3].into()), None).await.unwrap();
+        st.save_connection(cfg, password, None).await.unwrap();
         let sql = |q: &str| st.run_query("m".into(), q.into(), None, None);
         let _ = sql("drop table if exists tr_src, tr_dst, tr_new").await;
         sql("create table tr_src (id int primary key, name text, amount decimal(10,2), at datetime, `order` varchar(10))").await.unwrap();
@@ -834,21 +813,21 @@ mod tests {
             assert_eq!(st.export("m".into(), "select * from tr_src".into(), f, Dest::File(path.clone()), None, "a".into()).await.unwrap().rows, 2);
             sql("truncate tr_dst").await.unwrap();
             let cols = preview(&path, 1).unwrap().columns;
-            let spec = ImportSpec { path: path.to_string_lossy().into(), schema: p[4].into(), table: "tr_dst".into(), create: false, columns: cols.into_iter().enumerate().collect() };
+            let spec = ImportSpec { path: path.to_string_lossy().into(), schema: db.clone(), table: "tr_dst".into(), create: false, columns: cols.into_iter().enumerate().collect() };
             assert_eq!(st.import("m".into(), spec, "b".into()).await.unwrap(), 2);
             let same = sql("select count(*) from tr_src s join tr_dst d on d.id = s.id and d.name = s.name and d.amount <=> s.amount and d.at <=> s.at and d.`order` <=> s.`order`").await.unwrap();
             assert_eq!(same.rows[0][0], serde_json::json!(2), "{f:?}");
         }
         // SQL INSERT (backslashes · single quotes · reserved-word columns)
         let path = dir.join("m.sql");
-        st.export("m".into(), "select * from tr_src".into(), Format::Sql, Dest::File(path.clone()), Some((p[4].into(), "tr_dst".into())), "c".into()).await.unwrap();
+        st.export("m".into(), "select * from tr_src".into(), Format::Sql, Dest::File(path.clone()), Some((db.clone(), "tr_dst".into())), "c".into()).await.unwrap();
         sql("truncate tr_dst").await.unwrap();
         for line in std::fs::read_to_string(&path).unwrap().lines() {
             sql(line).await.unwrap();
         }
         assert_eq!(sql("select name from tr_dst order by id").await.unwrap().rows, vec![vec![serde_json::json!("a\\b")], vec![serde_json::json!("it's")]]);
         // New table
-        let spec = ImportSpec { path: dir.join("m.csv").to_string_lossy().into(), schema: p[4].into(), table: "tr_new".into(), create: true, columns: vec![(0, "id".into()), (1, "name".into())] };
+        let spec = ImportSpec { path: dir.join("m.csv").to_string_lossy().into(), schema: db.clone(), table: "tr_new".into(), create: true, columns: vec![(0, "id".into()), (1, "name".into())] };
         assert_eq!(st.import("m".into(), spec, "d".into()).await.unwrap(), 2);
         let _ = sql("drop table if exists tr_src, tr_dst, tr_new").await;
         let _ = std::fs::remove_dir_all(dir);

@@ -1,0 +1,243 @@
+{
+  "medis-example": {
+    "keyTree": [
+      {
+        "folder": "dev",
+        "path": "dev",
+        "count": 3,
+        "children": [
+          {
+            "folder": "admin",
+            "path": "dev:admin",
+            "count": 1,
+            "children": [
+              {
+                "key": "dev:admin:{1}"
+              }
+            ]
+          },
+          {
+            "folder": "sessions",
+            "path": "dev:sessions",
+            "count": 2,
+            "children": [
+              {
+                "key": "dev:sessions:{2}"
+              },
+              {
+                "key": "dev:sessions:{1}"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "folder": "prod",
+        "path": "prod",
+        "count": 1,
+        "children": [
+          {
+            "key": "prod:x"
+          }
+        ]
+      },
+      {
+        "key": "token"
+      }
+    ]
+  },
+  "empty-segments": {
+    "keyTree": [
+      {
+        "folder": "",
+        "path": "",
+        "count": 2,
+        "children": [
+          {
+            "folder": "",
+            "path": "",
+            "count": 1,
+            "children": [
+              {
+                "key": "::"
+              }
+            ]
+          },
+          {
+            "key": ":a"
+          }
+        ]
+      },
+      {
+        "folder": "a",
+        "path": "a",
+        "count": 2,
+        "children": [
+          {
+            "folder": "",
+            "path": "a:",
+            "count": 1,
+            "children": [
+              {
+                "key": "a::b"
+              }
+            ]
+          },
+          {
+            "key": "a:"
+          }
+        ]
+      },
+      {
+        "key": "a"
+      }
+    ]
+  },
+  "deep": {
+    "keyTree": [
+      {
+        "folder": "a",
+        "path": "a",
+        "count": 4,
+        "children": [
+          {
+            "folder": "b",
+            "path": "a:b",
+            "count": 3,
+            "children": [
+              {
+                "folder": "c",
+                "path": "a:b:c",
+                "count": 2,
+                "children": [
+                  {
+                    "key": "a:b:c:d"
+                  },
+                  {
+                    "key": "a:b:c:e"
+                  }
+                ]
+              },
+              {
+                "key": "a:b:x"
+              }
+            ]
+          },
+          {
+            "key": "a:y"
+          }
+        ]
+      }
+    ]
+  },
+  "case-order": {
+    "keyTree": [
+      {
+        "folder": "1",
+        "path": "1",
+        "count": 1,
+        "children": [
+          {
+            "key": "1:x"
+          }
+        ]
+      },
+      {
+        "folder": "B",
+        "path": "B",
+        "count": 1,
+        "children": [
+          {
+            "key": "B:x"
+          }
+        ]
+      },
+      {
+        "folder": "_",
+        "path": "_",
+        "count": 1,
+        "children": [
+          {
+            "key": "_:x"
+          }
+        ]
+      },
+      {
+        "folder": "a",
+        "path": "a",
+        "count": 1,
+        "children": [
+          {
+            "key": "a:x"
+          }
+        ]
+      },
+      {
+        "folder": "b",
+        "path": "b",
+        "count": 1,
+        "children": [
+          {
+            "key": "b:x"
+          }
+        ]
+      }
+    ]
+  },
+  "korean-emoji": {
+    "keyTree": [
+      {
+        "folder": "사용자",
+        "path": "사용자",
+        "count": 2,
+        "children": [
+          {
+            "key": "사용자:1"
+          },
+          {
+            "key": "사용자:2"
+          }
+        ]
+      },
+      {
+        "folder": "😀",
+        "path": "😀",
+        "count": 1,
+        "children": [
+          {
+            "key": "😀:x"
+          }
+        ]
+      },
+      {
+        "folder": "！",
+        "path": "！",
+        "count": 1,
+        "children": [
+          {
+            "key": "！:x"
+          }
+        ]
+      },
+      {
+        "key": "키"
+      }
+    ]
+  },
+  "no-colons": {
+    "keyTree": [
+      {
+        "key": "c"
+      },
+      {
+        "key": "a"
+      },
+      {
+        "key": "b"
+      }
+    ]
+  },
+  "none": {
+    "keyTree": []
+  }
+}

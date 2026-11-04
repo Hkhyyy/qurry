@@ -1,5 +1,5 @@
 //! Manage Shown Schemas: window for choosing which DBs and schemas show in the tree (same rules as GUI src/components/ScopePopup.tsx).
-//! Only state and check rules live here; drawing is in ui.rs, keys in input.rs
+//! Only state and check rules live here; drawing is in ui.rs, keys in input/
 use qurry_core::meta::SchemaInfo;
 use qurry_core::store::{Scope, SCOPE_ALL, SCOPE_DEFAULT};
 use std::collections::{HashMap, HashSet};

@@ -1,6 +1,6 @@
 [package]
 name = "qurry-tui"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Qurry terminal UI"
 
@@ -10,9 +10,11 @@ path = "src/main.rs"
 
 [dependencies]
 qurry-core = { workspace = true }
+qurry-shared = { path = "../shared" }
 tokio = { workspace = true }
 serde_json = { workspace = true }
-ratatui = "0.29"
+# unstable-rendered-line-info: Paragraph::line_count, so popups are sized the way they wrap (by word)
+ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
 crossterm = { version = "0.28", features = ["event-stream"] }
 tui-textarea = { version = "0.7", features = ["search"] }
 regex = "1"

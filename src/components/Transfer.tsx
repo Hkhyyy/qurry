@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
-import { api, DataPreview, meta } from "../lib/api";
+import { useEffect, useRef, useState } from "react";
+import { api, type BackupOptions, DataPreview, meta } from "../lib/api";
+import { useSharedReady } from "../lib/shared";
 import { autoMap, DataFormat, FORMATS, progressText } from "../lib/transfer";
-import { Button, Hint, IconButton, Modal, Notice, ProgressBar, RadioGroup, SectionTitle, Select, StatusItem, Table, Td, Text, TextInput, Th } from "../ui";
+import { Button, Checkbox, Hint, IconButton, Modal, Notice, ProgressBar, RadioGroup, SectionTitle, Select, StatusItem, Table, Td, Text, TextInput, Th } from "../ui";
 
 const LAST = "qurry.export";
 function lastChoice(): { format: DataFormat; clipboard: boolean } {
@@ -88,9 +89,20 @@ export function ImportDialog({ target, schema, table, onImport, onClose }: {
       setErr(String(e));
     }
   };
+  // autoMap runs in the WASM module (every column skipped until it has loaded): map again once it has, unless the user already edited the map
+  const wasmReady = useSharedReady();
+  const edited = useRef(false);
   useEffect(() => {
+    edited.current = false;
     if (file) setMap(autoMap(file.pv.columns, create ? null : cols));
   }, [file, cols]);
+  useEffect(() => {
+    if (file && !edited.current) setMap(autoMap(file.pv.columns, create ? null : cols));
+  }, [wasmReady]);
+  const editMap = (i: number, v: string) => {
+    edited.current = true;
+    setMap(map.map((m, j) => (j === i ? v : m)));
+  };
 
   const chosen = map.map((c, i) => [i, c.trim()] as [number, string]).filter(([, c]) => c);
   const ok = !!file && chosen.length > 0 && !!name.trim();
@@ -140,9 +152,9 @@ export function ImportDialog({ target, schema, table, onImport, onClose }: {
                   <Td muted>{file.pv.rows.slice(0, 3).map((r) => r[i] ?? "NULL").join(", ")}</Td>
                   <Td>
                     {create ? (
-                      <TextInput value={map[i] ?? ""} onChange={(e) => setMap(map.map((m, j) => (j === i ? e.target.value : m)))} />
+                      <TextInput value={map[i] ?? ""} onChange={(e) => editMap(i, e.target.value)} />
                     ) : (
-                      <Select value={map[i] ?? ""} onChange={(e) => setMap(map.map((m, j) => (j === i ? e.target.value : m)))}>
+                      <Select value={map[i] ?? ""} onChange={(e) => editMap(i, e.target.value)}>
                         <option value="">— skip —</option>
                         {(cols ?? []).map((c) => (
                           <option key={c} value={c}>
@@ -190,9 +202,10 @@ export function TransferBar({ jobs }: { jobs: TransferJob[] }) {
 }
 
 /** Backup (pg_dump / mysqldump): choose format and scope */
-export function BackupDialog({ what, pg, onRun, onClose }: { what: string; pg: boolean; onRun: (o: { format: "custom" | "plain"; schemaOnly: boolean; dataOnly: boolean }) => void; onClose: () => void }) {
+export function BackupDialog({ what, pg, onRun, onClose }: { what: string; pg: boolean; onRun: (o: Omit<BackupOptions, "schemas">) => void; onClose: () => void }) {
   const [format, setFormat] = useState<"custom" | "plain">(pg ? "custom" : "plain");
   const [part, setPart] = useState<"all" | "schema" | "data">("all");
+  const [stripDefiners, setStripDefiners] = useState(false);
   return (
     <Modal
       title={<>Back Up {what}</>}
@@ -200,7 +213,7 @@ export function BackupDialog({ what, pg, onRun, onClose }: { what: string; pg: b
       footer={
         <>
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" autoFocus onClick={() => onRun({ format, schemaOnly: part === "schema", dataOnly: part === "data" })}>
+          <Button variant="primary" autoFocus onClick={() => onRun({ format, schemaOnly: part === "schema", dataOnly: part === "data", stripDefiners: !pg && stripDefiners })}>
             Choose File & Back Up
           </Button>
         </>
@@ -229,6 +242,13 @@ export function BackupDialog({ what, pg, onRun, onClose }: { what: string; pg: b
           { value: "data", label: <b>Data only</b> },
         ]}
       />
+      {!pg && (
+        // Also for Data only: mysqldump --no-create-info still writes the routines, triggers and events, with their DEFINER=
+        <Checkbox checked={stripDefiners} onChange={setStripDefiners}>
+          <b>Leave out DEFINER= clauses</b>
+          <Text tone="muted"> for restoring into RDS and other managed services, where another user's DEFINER needs SUPER. The objects then belong to the user who restores them.</Text>
+        </Checkbox>
+      )}
       <Hint>Runs {pg ? "pg_dump" : "mysqldump"} on this computer (install the client tools if it's missing). The password is passed through the environment, not the command line.</Hint>
     </Modal>
   );

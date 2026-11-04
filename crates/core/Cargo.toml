@@ -1,6 +1,6 @@
 [package]
 name = "qurry-core"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Qurry shared engine: data sources, drivers (PostgreSQL, MySQL, Redis), sessions, SSH tunnels, secrets"
 
@@ -22,12 +22,21 @@ dirs = "6"
 csv = "1"
 calamine = { version = "=0.36.1", features = ["dates"] }
 regex = "1"
-# reads MongoDB shell arguments the way the driver does (MCP execute checks)
-json5 = "1"
 minisign-verify = "0.2"
+# Order of releases and betas (0.3.1-beta.2 < 0.3.1), the same rules as the GUI updater
+semver = "1"
 # For keeping the password file's master key in the OS keychain (enabled in settings). Linux uses a pure-Rust Secret Service (no libdbus)
 keyring = { version = "3", features = ["apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust"] }
 sha2 = "0.10"
 qurry-driver = { workspace = true }
+# DbKind, SQL lexer and splitting, guard, Redis command parsing (re-exported as qurry_core::store::DbKind, sql, guard, redisdb)
+qurry-shared = { path = "../shared" }
 # RAG embeddings (OpenAI · Ollama). Same HTTP client as the drivers
 ureq = { version = "3", default-features = false, features = ["rustls", "gzip", "json"] }
+
+# AWS SSM tunnel: stop the aws CLI and the Session Manager plugin it starts together (process group)
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

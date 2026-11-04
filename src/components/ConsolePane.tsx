@@ -1,17 +1,17 @@
-import { useState } from "react";
+import { ReactNode, useEffect, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { QueryResult, Dialect } from "../lib/api";
+import { QueryResult, Dialect, DbKind } from "../lib/api";
 import { splitScript } from "../lib/sqlSplit";
-import { DEFAULT_EXEC, ExecSettings, planExecution } from "../lib/execPlan";
+import { DEFAULT_EXEC, ExecSettings, planExecution, planSelection } from "../lib/execPlan";
+import { initShared, sharedReady } from "../lib/shared";
+import { cmd, eventSpec, keyTitle, runKey } from "../lib/shortcuts";
 import { ConsoleEditor, EditorApi, RunRequest } from "./ConsoleEditor";
 import { ContextMenu, MenuItem } from "./Explorer";
-import { ResultGrid } from "./ResultGrid";
+import { CONSOLE_READ_ONLY, ResultGrid } from "./ResultGrid";
 import { RunningBar } from "./RunningBar";
 import { planText } from "../lib/planText";
 import { IcClock, IcGear, IcReload, IcStop } from "../ui/icons";
 import { EmptyState, IconButton, Select, Spacer, TabItem, TabStrip, Table, Td, Th, ToolButton, Toolbar, ToolbarSep } from "../ui";
-
-const isMac = navigator.platform.toLowerCase().includes("mac");
 
 const SETTINGS_KEY = "dbtool.execSettings";
 export function loadExecSettings(): ExecSettings {
@@ -57,14 +57,26 @@ export interface ResultEntry {
 export interface OutputLine {
   ts: string;
   text: string;
-  level: "sql" | "info" | "error";
+  level: "sql" | "info" | "warn" | "error";
 }
+
+/** The editor's API plus the ⌘↩ waiting for the WebAssembly module, which ⌘F2 cancels like a run */
+export interface ConsoleApi extends EditorApi {
+  loading: () => boolean;
+  cancelPending: () => void;
+}
+
+/** Output when the module failed to load, so ⌘↩ couldn't plan the console */
+export const SPLITTER_FAILED =
+  "Couldn't split the console into statements: Qurry couldn't load its WebAssembly module, usually because the system WebView is too old (update macOS, or webkit2gtk on Linux). Until then, select the statement and set Query Execution Settings › For selection execute › Exactly as a single statement.";
 
 interface Props {
   tabId: string;
   target: string;
   initialSql: string;
   connName: string;
+  /** The data source's kind: how its statements are split and planned */
+  kind?: DbKind;
   dialect?: Dialect;
   database: string;
   schema: string;
@@ -96,8 +108,14 @@ interface Props {
   onSwitchSchema: (schema: string) => void;
   /** Data Source Options → Switch schema: Disable */
   schemaSwitchDisabled?: boolean;
-  registerApi: (tabId: string, api: EditorApi) => void;
+  registerApi: (tabId: string, api: ConsoleApi) => void;
   onClearOutput: () => void;
+  /** Under the Output log: a way out of its last error (the TLS opt-in), or nothing */
+  errorAction?: ReactNode;
+  /** The run couldn't start (the statement splitter failed): show why in Output */
+  onError: (message: string) => void;
+  /** A ⌘↩ started or stopped waiting for the module (the status bar's Run · Cancel follow it) */
+  onLoadingChange: () => void;
 }
 
 export function ConsolePane(p: Props) {
@@ -105,6 +123,19 @@ export function ConsolePane(p: Props) {
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const [chooser, setChooser] = useState<{ options: { label: string; stmts: string[]; ranges: { start: number; end: number }[] }[]; idx: number; req: RunRequest } | null>(null);
   const [api, setApi] = useState<EditorApi | null>(null);
+  /** A ⌘↩ waiting for the WebAssembly module, as the editor was at the press (null once it ran or was cancelled) */
+  const pending = useRef<RunRequest | null>(null);
+  const [loading, setLoadingState] = useState(false);
+  const setLoading = (on: boolean) => {
+    setLoadingState(on);
+    p.onLoadingChange();
+  };
+  const cancelPending = () => {
+    pending.current = null;
+    setLoading(false);
+  };
+  // A closed console never runs what was waiting
+  useEffect(() => () => void (pending.current = null), []);
 
   const setSettings = (s: ExecSettings) => {
     setSettingsState(s);
@@ -116,19 +147,49 @@ export function ConsolePane(p: Props) {
   };
 
   /** ⌘↩ execution rules (DataGrip Query Execution settings) */
-  const splitFn = p.dialect?.split ?? ((t: string) => splitScript(t, p.dialect?.monaco === "mysql"));
+  const splitFn = p.dialect?.split ?? ((t: string) => splitScript(t, p.kind));
+  // The run waiting for the module calls the latest render's run, and is skipped if a run started meanwhile
+  const running = useRef(p.running);
+  running.current = p.running;
+  const latestRun = useRef<(req: RunRequest) => void>(() => {});
   const onRun = (req: RunRequest) => {
+    // Splitting and planning run in the shared WebAssembly module; a selection run as one statement doesn't need it
+    const single = !!req.selection?.text.trim() && settings.selection === "single";
+    if (single || sharedReady()) {
+      if (pending.current) cancelPending();
+      return run(req);
+    }
+    // Still loading at startup: show it like a run, and once it is there run what the last press asked for (one pending run)
+    const waiting = pending.current;
+    pending.current = req;
+    if (waiting) return;
+    setLoading(true);
+    const done = () => {
+      const last = pending.current;
+      pending.current = null;
+      setLoading(false);
+      return last;
+    };
+    // Failed (main.tsx logs why): say what the user can do
+    initShared().then(
+      () => {
+        const last = done();
+        if (last && !running.current) latestRun.current(last);
+      },
+      () => done() && p.onError(SPLITTER_FAILED),
+    );
+  };
+  const run = (req: RunRequest) => {
     const { text, offset, selection } = req;
     if (selection && selection.text.trim()) {
-      if (settings.selection === "single") {
-        req.highlight([{ start: selection.start, end: selection.end }]);
-        return p.onExecute([selection.text.trim()], req.explain);
-      }
-      const segs = splitFn(selection.text);
-      req.highlight(segs.map((s) => ({ start: selection.start + s.start, end: selection.start + s.end })));
-      return p.onExecute(segs.map((s) => selection.text.slice(s.start, s.end).trim()), req.explain);
+      const sel = selection.text;
+      // As one statement without the module too (the way to run while it failed to load)
+      const stmts = settings.selection === "single" && !sharedReady() ? [{ start: 0, end: sel.length, sql: sel.trim() }] : planSelection(sel, splitFn(sel), settings);
+      if (!stmts.length) return;
+      req.highlight(stmts.map((s) => ({ start: selection.start + s.start, end: selection.start + s.end })));
+      return p.onExecute(stmts.map((s) => s.sql), req.explain);
     }
-    const plan = planExecution(text, offset, splitFn(text), settings);
+    const plan = planExecution(text, offset, splitFn(text), settings, p.kind);
     if (!plan) return;
     if ("run" in plan) {
       req.highlight(plan.run.map((x) => ({ start: x.start, end: x.end })));
@@ -137,6 +198,8 @@ export function ConsolePane(p: Props) {
     // Ask what to execute: Statements popup
     setChooser({ options: plan.ask.map((o) => ({ label: o.label, stmts: o.stmts.map((x) => x.sql), ranges: o.stmts })), idx: 0, req });
   };
+
+  latestRun.current = run;
 
   const pickChoice = (i: number) => {
     if (!chooser) return;
@@ -155,26 +218,40 @@ export function ConsolePane(p: Props) {
   const radio = <T extends string>(cur: T, val: T, label: string, set: (v: T) => void): MenuItem => ({ label: (cur === val ? "● " : "　") + label, action: () => set(val) });
 
   const active = p.results.find((r) => r.id === p.activeResult);
+  /** A result tab's context menu; its commands' keys act on the shown result tab (and Clear All's on the output) */
+  const resultMenu = (r: { id: string; pinned?: boolean }): MenuItem[] => [
+    { label: r.pinned ? "Unpin Tab" : "Pin Tab", ...cmd("result.pin"), action: () => p.onPin(r.id, !r.pinned) },
+    { label: "Close", ...cmd("result.close"), action: () => p.onCloseResult(r.id) },
+    { label: "Close All Unpinned", ...cmd("result.closeUnpinned"), action: () => p.results.filter((x) => !x.pinned).forEach((x) => p.onCloseResult(x.id)) },
+  ];
   // If the selected result tab is gone (cleared by a rerun), show Output — instead of an empty pane
   const shown = active ? p.activeResult : "output";
 
   return (
-    <div className="console-pane">
+    <div
+      className="console-pane"
+      onKeyDown={(e) => {
+        if (runKey(eventSpec(e.nativeEvent), "editor", () => [...(active ? resultMenu(active) : []), { label: "Clear All", ...cmd("output.clear"), action: p.onClearOutput }])) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }}
+    >
       {/* ── Console toolbar (DataGrip) ── */}
       <Toolbar className="console-toolbar" onMouseDown={(e) => e.stopPropagation()}>
-        <IconButton tone="ok" title={`Execute (${isMac ? "⌘↩" : "Ctrl+Enter"})`} onClick={() => api?.run()} disabled={p.running}>▶</IconButton>
+        <IconButton tone="ok" title={keyTitle("Execute", "editor.run")} onClick={() => api?.run()} disabled={p.running || loading}>▶</IconButton>
         <ToolButton
           title="Explain Plan"
           onClick={(e) =>
             dropdown(e, [
-              { label: "Explain Plan", action: () => api?.run("plan") },
-              { label: "Explain Analyse", action: () => api?.run("analyze") },
+              { label: "Explain Plan", ...cmd("editor.explain"), action: () => api?.run("plan") },
+              { label: "Explain Analyse", ...cmd("editor.explainAnalyze"), action: () => api?.run("analyze") },
             ])
           }
         >
           Explain ▾
         </ToolButton>
-        <IconButton title={`Browse Query History (${isMac ? "⌥⌘e" : "Ctrl+Alt+e"})`} onClick={p.onHistory}><IcClock /></IconButton>
+        <IconButton title={keyTitle("Browse Query History", "editor.history")} onClick={p.onHistory}><IcClock /></IconButton>
         <IconButton
           title="Query Execution Settings"
           onClick={(e) =>
@@ -204,8 +281,8 @@ export function ConsolePane(p: Props) {
           title="Transaction Mode"
           onClick={(e) =>
             dropdown(e, [
-              { label: (!p.txManual ? "● " : "　") + "Auto", action: () => p.onTxMode(false) },
-              { label: (p.txManual ? "● " : "　") + "Manual", action: () => p.onTxMode(true) },
+              { label: (!p.txManual ? "● " : "　") + "Auto", ...cmd("tx.auto"), action: () => p.onTxMode(false) },
+              { label: (p.txManual ? "● " : "　") + "Manual", ...cmd("tx.manual"), action: () => p.onTxMode(true) },
             ])
           }
         >
@@ -213,11 +290,11 @@ export function ConsolePane(p: Props) {
         </ToolButton>
         {p.txManual && (
           <>
-            <ToolButton accent={p.inTx} title="Commit" onClick={p.onCommit} disabled={!p.inTx}>✓ Commit</ToolButton>
-            <ToolButton title="Roll back" onClick={p.onRollback} disabled={!p.inTx}>↶ Roll back</ToolButton>
+            <ToolButton accent={p.inTx} title={keyTitle("Commit", "tx.commit")} onClick={p.onCommit} disabled={!p.inTx}>✓ Commit</ToolButton>
+            <ToolButton title={keyTitle("Roll back", "tx.rollback")} onClick={p.onRollback} disabled={!p.inTx}>↶ Roll back</ToolButton>
           </>
         )}
-        <IconButton tone="danger" title={`Cancel Running Statements (${isMac ? "⌘F2" : "Ctrl+F2"})`} onClick={p.onCancel} disabled={!p.running}><IcStop /></IconButton>
+        <IconButton tone="danger" title={keyTitle("Cancel Running Statements", "editor.cancel")} onClick={loading ? cancelPending : p.onCancel} disabled={!p.running && !loading}><IcStop /></IconButton>
         <Spacer />
         <span className="cb-ds">{p.connName}</span>
         <Select className="cb-sel" value={p.database} onFocus={p.onLoadDbs} onMouseDown={p.onLoadDbs} onChange={(e) => p.onSwitchDb(e.target.value)} title="Database">
@@ -238,13 +315,14 @@ export function ConsolePane(p: Props) {
             <ConsoleEditor
               tabId={p.tabId}
               connId={p.target}
+              database={p.database}
               initialSql={p.initialSql}
               language={p.dialect?.monaco ?? "pgsql"}
               onChange={p.onChange}
               onRun={onRun}
               registerApi={(id, a) => {
                 setApi(a);
-                p.registerApi(id, a);
+                p.registerApi(id, { ...a, loading: () => pending.current !== null, cancelPending });
               }}
             />
             {chooser && (
@@ -292,11 +370,7 @@ export function ConsolePane(p: Props) {
                     setMenu({
                       x: e.clientX,
                       y: e.clientY,
-                      items: [
-                        { label: r.pinned ? "Unpin Tab" : "Pin Tab", action: () => p.onPin(r.id, !r.pinned) },
-                        { label: "Close", action: () => p.onCloseResult(r.id) },
-                        { label: "Close All Unpinned", action: () => p.results.filter((x) => !x.pinned).forEach((x) => p.onCloseResult(x.id)) },
-                      ],
+                      items: resultMenu(r),
                     });
                   }}
                   title={r.sql}
@@ -304,24 +378,26 @@ export function ConsolePane(p: Props) {
               ))}
               </TabStrip>
               {shown === "output" && (
-                <IconButton title="Clear All" onClick={p.onClearOutput}><IcReload /></IconButton>
+                <IconButton title={keyTitle("Clear All", "output.clear")} onClick={p.onClearOutput}><IcReload /></IconButton>
               )}
             </div>
             <div className="result-area">
-              <RunningBar running={p.running} onCancel={p.onCancel} />
+              {loading ? <RunningBar running label="Loading the statement splitter" onCancel={cancelPending} /> : <RunningBar running={p.running} onCancel={p.onCancel} />}
               {shown === "output" && (
                 <div className="output-log">
-                  {p.output.length === 0 && <EmptyState>Execute a statement ({isMac ? "⌘↩" : "Ctrl+Enter"}) to see the output.</EmptyState>}
+                  {p.output.length === 0 && <EmptyState>Execute a statement{cmd("editor.run").shortcut ? ` (${cmd("editor.run").shortcut})` : ""} to see the output.</EmptyState>}
                   {p.output.map((l, i) => (
                     <div key={i} className={"ol " + l.level}>
                       <span className="ts">[{l.ts}]</span> {l.text}
                     </div>
                   ))}
+                  {p.errorAction}
                 </div>
               )}
               {active?.kind === "result" && active.result && (
                 <ResultGrid
                   result={active.result}
+                  readOnlyReason={CONSOLE_READ_ONLY}
                   running={p.running}
                   loadingMore={p.loadingMore}
                   query={active.sql}

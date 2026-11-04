@@ -1,0 +1,20 @@
+{
+  "gui": {
+    "console.new": ["Mod+Shift+K"],
+    "editor.run": ["Mod+Enter", "F9"],
+    "find.action": ["Mod+Shift+A", "Mod+Shift+P"],
+    "no.such.command": ["Mod+J"],
+    "tab.close": [],
+    "tree.refresh": ["Mod+R"],
+    "ws.3": ["Mod+Alt+3"]
+  },
+  "tui": {
+    "Execute": ["F5", "alt+enter"],
+    "Help": ["shift+f1"],
+    "NewConsole": ["ctrl+j"],
+    "NoSuchAction": ["Ctrl+Z"],
+    "Palette": [],
+    "Quit": ["CTRL+Q", "ctrl+alt+q"],
+    "SplitRight": ["Alt+\\"]
+  }
+}

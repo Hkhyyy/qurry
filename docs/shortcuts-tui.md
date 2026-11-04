@@ -4,8 +4,9 @@ English | [한국어](ko/shortcuts-tui.md)
 
 Keys are written as macOS shows them: `⌃` Control, `⌥` Option, `⇧` Shift. On Linux read `⌃` as `Ctrl` and `⌥` as `Alt` (the TUI shows them that way there).
 
-Press **F1** inside `qurry-tui`, or run `qurry-tui --help`, to see the same list. In the F1 window the **Commands** at the top can be changed: select one, press Enter and then the new key (`a` adds a second key, `Del` resets it). The mouse works too: click to select, double-click to open or edit, scroll with the wheel.
+Press **F1** inside `qurry-tui`, or run `qurry-tui --help`, to see the same list. In the F1 window the **Commands** at the top can be changed: select one, press Enter and then the new key (`a` adds a second key, `Del` resets it). Every command of the `⌃k` palette is there, the ones without a default key too, followed by the Database Explorer's and the data grid's single-letter commands (`n` New Data Source, `a` Add Row …), which can be changed the same way: they work only in their pane and can be a letter. The mouse works too: click to select, double-click to open or edit, scroll with the wheel.
 ⌃Enter is only distinguishable in terminals that support the kitty keyboard protocol (iTerm2, kitty, WezTerm, Ghostty). Elsewhere use F5 or ⌥Enter.
+In tmux, `⌃b` (Go to DDL) is the tmux prefix: press it twice, or see [TUI in your terminal](tui.md#tmux-and-other-multiplexers) for that and for ⌥ keys.
 
 **New to it? `⌃p` alone is enough to start.** It searches tables, columns, open tabs and actions (data sources you are not connected to are searched from the list saved the last time they were loaded). The status bar always shows the keys for what you are looking at (explorer, console, table, results, Redis), followed by the most useful global keys. The F1 window starts with the same short list. Keys are shown lowercase when Shift is not needed (`⌃k`); an uppercase letter means Shift (`D`, `⌥⇧X`).
 
@@ -21,6 +22,15 @@ Press **F1** inside `qurry-tui`, or run `qurry-tui --help`, to see the same list
 | `s` (explorer) | Choose the databases and schemas shown |
 | `Esc` | Back (to the explorer, or from results to the editor) |
 | `⌃q` | Quit |
+
+### Keys that stay fixed
+
+The per-screen keys in the tables after the commands stay fixed: they move, open, edit, copy, filter or sort and run no command, so an explorer or grid key can't take them either.
+
+- Moving: arrows, `j k h l`, `g G`, Page Up / Down, Home / End; `Enter` / `F2` open or edit, `Esc` / `Tab` go back.
+- In the explorer `/` filters, `y` copies the name, `F4` opens a console; in the grid `y` copies, `s` sorts, `w` / `/` / `o` edit WHERE · ORDER BY, `r` reloads.
+- `⌥1…9` switch workspaces (unless a command has that key), `⌃u` / `⌃r` undo and redo in the editor, the find bar's own keys.
+- Keys inside a popup, the data source form, the Redis browser and the Database Admin tab act on that screen; the F1 window's own keys too.
 
 <!-- keymap:tui:start -->
 
@@ -43,8 +53,8 @@ Press **F1** inside `qurry-tui`, or run `qurry-tui --help`, to see the same list
 | `⌥n` | New Workspace… |
 | `⌥⇧N` | Rename Workspace… |
 | `F6` | Cycle Focus (explorer → editor → results) |
-| `⌃F6` | Modify Table… (selected table) |
-| `⇧F6` | Rename… (selected table, view, sequence, schema or database) |
+| `⌃F6` | Modify Table… (change columns, keys, indexes, foreign keys → ALTER) |
+| `⇧F6` | Rename… (table, view, sequence, schema, database) |
 | `⌥\` | Split Right (focused pane, up to 4) |
 | `⌥-` | Split Down (focused pane, up to 4) |
 | `⌥Tab` | Go to the Next Split |
@@ -70,6 +80,93 @@ Press **F1** inside `qurry-tui`, or run `qurry-tui --help`, to see the same list
 | `⌃f` | Find / Replace in Editor (regex) |
 | `⌃F2` | Disconnect |
 
+## Commands without a default key (give them one in the F1 window)
+
+| Key | Action |
+|---|---|
+| — | Data Source Properties… |
+| — | New Data Source… |
+| — | Refresh |
+| — | Query History… (shared with the GUI) |
+| — | Value Panel (the current cell's whole value, beside the grid) |
+| — | Explain Analyze (runs the statement: real times and row counts) |
+| — | Query Execution Settings (what ⌃Enter runs) |
+| — | Clear Console (delete all text) |
+| — | Edit Data (open table) |
+| — | Revert Changes |
+| — | Add Row |
+| — | Delete Row |
+| — | Set NULL |
+| — | Export Data… (CSV, TSV, JSON, SQL INSERT, Markdown) |
+| — | Copy Column as IN List  ('a', 'b', …) |
+| — | Find Similar Rows (pgvector, by the vector column) |
+| — | AI Search (RAG)… — ask a table in plain words |
+| — | Build RAG Index… (embed the rows) |
+| — | New RAG Index from the Selected Table… |
+| — | Set OpenAI API Key (RAG)… |
+| — | Switch Workspace… |
+| — | Delete Workspace… |
+| — | Move Tab to Workspace… |
+| — | Add Data Source to This Workspace… |
+| — | Move Data Source to Another Workspace… |
+| — | Remove Data Source from This Workspace |
+| — | Production Log… (changes run on Production data sources, undo SQL) |
+| — | Snippets… |
+| — | Save Query as Snippet… |
+| — | Show Diagram (ERD): foreign keys of a schema, as text + Mermaid |
+| — | Compare Schemas… (DDL to make one schema look like another) |
+| — | Compare Table Data… (sync SQL by primary key) |
+| — | Run Migrations… (folder of V1__name.sql files) |
+| — | Back Up Database… (pg_dump / mysqldump) |
+| — | Restore Database… (from a .dump / .sql backup) |
+| — | Database Admin… (sessions & locks, slow queries, sizes, indexes, vacuum, server, privileges) |
+| — | Import Data from File… (CSV, TSV, JSON, Excel) |
+| — | Generate Test Data… (fill the selected table with realistic rows) |
+| — | New Table… (columns, keys, indexes, foreign keys — SQL shown before it runs) |
+| — | New View… |
+| — | New Schema… (PostgreSQL) |
+| — | New Database… |
+| — | New Sequence… (PostgreSQL) |
+| — | Chart Result (bars: sum of a number column by the first text column) |
+| — | Copy Related Rows To… (rows + foreign-key related rows into another data source, personal data masked) |
+| — | Cancel Export/Import |
+| — | Remove Data Source |
+| — | Connect |
+| — | Manage Shown Schemas… (databases · schemas in the explorer) |
+| — | Unsplit All |
+| — | Trust SSH Host Key (after checking its fingerprint) |
+| — | Password Key… (keep it in the config folder or the system keychain) |
+| — | Grid Alignment… (where cells sit per kind of value: NULL, numbers, text …; shared with the GUI) |
+| — | Check for Updates |
+| — | Update Channel… (stable releases only, or beta: also every merge to main) |
+| — | Update Qurry & Restart (download the latest release) |
+
+## Database Explorer keys (when the explorer has focus; change them in the F1 window)
+
+| Key | Action |
+|---|---|
+| `?` | Keymap |
+| `e` | Data Source Properties… |
+| `n` | New Data Source… |
+| `r` | Refresh |
+| `X` | Disconnect |
+| `w` | Move Data Source to Another Workspace… |
+| `D` | Remove Data Source |
+| `c` | Connect |
+| `s` | Manage Shown Schemas… (databases · schemas in the explorer) |
+
+## Data grid keys (when a grid has focus; change them in the F1 window)
+
+| Key | Action |
+|---|---|
+| `v` | Value Panel (the current cell's whole value, beside the grid) |
+| `⌃z` | Revert Changes |
+| `a / Insert` | Add Row |
+| `d / Delete` | Delete Row |
+| `n` | Set NULL |
+| `x` | Export Data… (CSV, TSV, JSON, SQL INSERT, Markdown) |
+| `Y` | Copy Column as IN List  ('a', 'b', …) |
+
 ## Database Explorer
 
 | Key | Action |
@@ -79,14 +176,9 @@ Press **F1** inside `qurry-tui`, or run `qurry-tui --help`, to see the same list
 | `Enter / double-click` | Expand / collapse (connects) · open table data · open a Redis key · show DDL of routines |
 | `F4 / ⌃↓` | Open a query console for the data source / database (Redis: the key browser) |
 | `/` | Filter loaded nodes (/ again edits it · empty or Esc clears) |
-| `n / e / D` | New / edit / remove data source |
-| `w` | Move the data source to another workspace (⌥1…9 switches · ⌥n new · ⌥⇧N rename) |
-| `c / X` | Connect / disconnect |
-| `r / F5` | Refresh |
-| `s` | Manage shown databases and schemas (Space check · Enter apply · shared with the GUI) |
+| `F5` | Refresh (the run key refreshes in the explorer) |
 | `y  ⌘c` | Copy name (OSC 52 clipboard) |
 | `PgUp / PgDn · Home / End` | Page · first / last node |
-| `?` | Keymap (same as F1) |
 | `Tab / Esc` | Go to the open tab |
 
 ## Query console
@@ -120,16 +212,10 @@ Press **F1** inside `qurry-tui`, or run `qurry-tui --help`, to see the same list
 | `Home / End` | First / last column |
 | `⇧↑↓←→ / drag` | Select a range of cells (Esc clears) · scroll sideways: wheel over the header row, ⌥+wheel, or drag the bar on the bottom border |
 | `Enter / F2` | Edit cell (table data) |
-| `n` | Set NULL (table data) |
-| `a / Insert` | Add row (table data) |
-| `d / Delete` | Mark row deleted, again = undo (table data) |
-| `⌃z` | Revert pending changes (table data) |
 | `s` | Sort by the selected column: ▲ → ▼ → off (table data: ORDER BY · results: loaded rows) |
 | `w or / · o` | Edit WHERE · ORDER BY (table data) |
 | `r` | Reload (table data) |
-| `x` | Export data (CSV, TSV, JSON, SQL INSERT, Markdown → file or clipboard) |
 | `y  ⌘c` | Copy cell value (a selected range: as TSV, pastes into spreadsheets as cells) |
-| `Y` | Copy as an IN list: ('a', 'b', …) — the selected range, or the whole column |
 | `⌘v` | Paste into cells from the selected one (tabs / lines fill several; extra lines add rows; table data) |
 | `Esc` | Back (query results: to the editor) |
 
@@ -138,7 +224,9 @@ Press **F1** inside `qurry-tui`, or run `qurry-tui --help`, to see the same list
 | Key | Action |
 |---|---|
 | `↑ ↓  (j k) · PgUp / PgDn` | Scroll |
-| `y  ⌘c` | Copy the text |
+| `v` | Table DDL: switch between SQL and Structure (columns, keys, indexes, foreign keys, triggers, options); kept for new DDL tabs |
+| `r` | Reload what the tab shows (the DDL, or the Structure view) |
+| `y  ⌘c` | Copy the text (a table's DDL: the SQL, in either view) |
 | `Esc` | Back to the explorer |
 
 ## Database Admin tab (⌃k › Database Admin…)
@@ -185,7 +273,7 @@ Press **F1** inside `qurry-tui`, or run `qurry-tui --help`, to see the same list
 
 | Key | Action |
 |---|---|
-| `⌃b` | Go to DDL (in Search Everywhere / Go to Database Object) |
+| `Go to DDL key` | DDL of the selected object (in Search Everywhere / Go to Database Object) |
 | `type` | Filter (palettes) |
 | `↑ ↓ / PgUp PgDn` | Move / scroll |
 | `Enter` | Run / confirm |
