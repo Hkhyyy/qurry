@@ -615,7 +615,7 @@ mod tests {
         assert_eq!(h.app.theme, Theme::Auto);
         let status_bg = |h: &mut Harness| h.buffer(120, 30)[(0, 29)].bg;
         let light_bg = status_bg(&mut h);
-        assert!(h.app.theme_notice().unwrap().contains("⌃k › Theme… › Dark"), "{:?}", h.app.theme_notice());
+        assert!(h.app.startup_notice().unwrap().contains("⌃k › Theme… › Dark"), "{:?}", h.app.startup_notice());
         h.app.palette_theme();
         let s = h.screen(120, 30);
         assert!(s.contains("● Auto") && s.contains("COLORFGBG): light now") && s.contains("  Dark") && s.contains("  Light"), "{s}");
@@ -623,7 +623,7 @@ mod tests {
         h.key("Enter");
         assert_eq!((h.app.theme, h.app.state.store.tui_theme().as_deref()), (Theme::Dark, Some("dark")));
         assert_eq!(h.app.status, "Theme: Dark — dark colors");
-        assert_eq!(h.app.theme_notice(), None, "picked by hand: nothing to say at startup");
+        assert_eq!(h.app.startup_notice(), None, "picked by hand: nothing to say at startup");
         assert_eq!(status_bg(&mut h), crate::kit::SURFACE);
         assert_ne!(light_bg, crate::kit::SURFACE);
         // Reopened on Dark: Enter keeps it; Light on a dark terminal

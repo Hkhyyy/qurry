@@ -1403,16 +1403,28 @@ mod tests {
         assert!(s.contains("Esc cancel") && s.contains("port 5432?") && !s.contains('⋯'), "{s}");
     }
 
-    /// The startup color notices fit an 80-column status line whole, with a gap before the key hints
+    /// The startup notices fit an 80-column status line whole, with a gap before the key hints: one at a time, the light
+    /// palette's first (unless NO_COLOR, which draws no palette)
     #[tokio::test]
     async fn color_notices_fit_80_columns() {
+        use crate::theme::ColorMode;
         let mut h = crate::testkit::Harness::new().await;
-        for mode in [crate::theme::ColorMode::Ansi16, crate::theme::ColorMode::NoColor] {
-            let n = mode.notice().unwrap();
-            h.app.status = n.into();
+        let light = "Light palette — ⌃k › Theme… › Dark to undo";
+        for (mode, auto_light, want) in [
+            (ColorMode::Ansi16, false, "16 colors: try COLORTERM=truecolor"),
+            (ColorMode::NoColor, false, "Colors off: unset NO_COLOR"),
+            (ColorMode::TrueColor, true, light),
+            (ColorMode::Ansi16, true, light),
+            (ColorMode::NoColor, true, "Colors off: unset NO_COLOR"),
+        ] {
+            (h.app.color, h.app.auto_light) = (mode, auto_light);
+            assert_eq!(h.app.startup_notice().as_deref(), Some(want));
+            h.app.status = want.into();
             let s = h.screen(80, 24);
-            assert!(s.lines().last().unwrap().contains(&format!("{n} ")), "{s}");
+            assert!(s.lines().last().unwrap().contains(&format!("{want} ")), "{s}");
         }
+        (h.app.color, h.app.auto_light) = (ColorMode::TrueColor, false);
+        assert_eq!(h.app.startup_notice(), None);
     }
 
     /// NO_COLOR: text selected in the editor stays visible (tui-textarea draws it on a color, which NO_COLOR drops)

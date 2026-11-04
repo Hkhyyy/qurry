@@ -106,10 +106,8 @@ async fn run(term: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: Arc<
     let mut app = app::App::new(state.clone(), tx.clone());
     app.color = theme::ColorMode::from_env();
     app.auto_light = theme::auto_light(|k| std::env::var(k).ok());
-    // The light palette notice first: Auto turns it on by itself, so that one needs saying the most
-    let notices: Vec<String> = app.theme_notice().into_iter().chain(app.color.notice().map(String::from)).collect();
-    if !notices.is_empty() {
-        app.status = notices.join(" · ");
+    if let Some(n) = app.startup_notice() {
+        app.status = n;
     }
     // Check for a new version (at launch + hourly, in the background). Failures are silently ignored
     if let Some(dir) = update_dir {

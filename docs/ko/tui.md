@@ -36,7 +36,7 @@ TUI 에는 어두운 팔레트 (어두운 터미널 배경용) 와 밝은 팔레
 
 iTerm2, rxvt, Konsole 같은 터미널은 배경색에 맞춰 `COLORFGBG` 를 설정하지만, 많은 터미널 (kitty, WezTerm, Ghostty, Alacritty) 은 설정하지 않으므로 밝은 배경이라면 직접 **Light** 를 고르세요. 테마는 [설정 폴더](getting-started.md#설정이-저장되는-곳)의 `settings.json` 에 `"tuiTheme"` 으로 저장됩니다 (GUI 테마 설정은 따로입니다).
 
-Auto 가 밝은 팔레트를 골랐으면 시작할 때 상태 줄에 `Light palette — ⌃k › Theme… › Dark to undo` 가 나옵니다. 예전 색을 그대로 쓰려면 **⌃k › Theme… › Dark** 를 고르세요.
+Auto 가 밝은 팔레트를 골랐으면 시작할 때 상태 줄에 `Light palette — ⌃k › Theme… › Dark to undo` 가 나옵니다. 예전 색을 그대로 쓰려면 **⌃k › Theme… › Dark** 를 고르세요. 이 안내가 `16 colors` 안내 대신 나오며, `NO_COLOR` 에서는 팔레트가 달라지는 것이 없으므로 `Colors off` 안내가 나옵니다.
 
 색과 상관없이 보이는 것:
 

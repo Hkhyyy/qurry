@@ -439,9 +439,14 @@ impl App {
         };
     }
 
-    /// Status line text at startup when Auto picked the light palette: the colors changed by themselves, so say how to get the old ones back
-    pub fn theme_notice(&self) -> Option<String> {
-        (self.theme == Theme::Auto && self.auto_light).then(|| format!("Light palette — {} › Theme… › Dark to undo", self.keys.label(Action::Palette)))
+    /// Status line text at startup: one notice, so it fits the status text's half of an 80-cell line. Auto picking the light
+    /// palette comes first, since the colors changed by themselves (NO_COLOR draws no palette, so nothing changed there);
+    /// otherwise how to get more colors
+    pub fn startup_notice(&self) -> Option<String> {
+        if self.theme == Theme::Auto && self.auto_light && self.color != crate::theme::ColorMode::NoColor {
+            return Some(format!("Light palette — {} › Theme… › Dark to undo", self.keys.label(Action::Palette)));
+        }
+        self.color.notice().map(String::from)
     }
 
     /// New version window: changes since the current version (per version) + how to update

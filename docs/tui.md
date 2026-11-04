@@ -36,7 +36,7 @@ The light palette takes the GUI's light theme colors: Data Source colors become 
 
 Terminals such as iTerm2, rxvt and Konsole set `COLORFGBG` from their background color; many others (kitty, WezTerm, Ghostty, Alacritty) don't, so on a light background there pick **Light** yourself. The theme is saved in `settings.json` in the [config folder](getting-started.md#where-qurry-keeps-your-settings) under `"tuiTheme"` (the GUI has its own theme setting).
 
-When Auto picked the light palette, the status line says so at startup: `Light palette — ⌃k › Theme… › Dark to undo`. To keep the colors you had before, pick **⌃k › Theme… › Dark**.
+When Auto picked the light palette, the status line says so at startup: `Light palette — ⌃k › Theme… › Dark to undo`. To keep the colors you had before, pick **⌃k › Theme… › Dark**. It takes the place of the `16 colors` notice; with `NO_COLOR` the palette makes no difference, so the `Colors off` notice shows instead.
 
 Some things never depend on color:
 
