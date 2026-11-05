@@ -30,6 +30,8 @@ pub struct ScopeEditor {
     pub conn: String,
     pub dbs: Vec<String>,
     pub default_db: String,
+    /// The databases that aren't system ones (MySQL's mysql, sys …): the list that replaces All databases, set by the caller
+    pub user_dbs: Vec<String>,
     /// DBs to show ("*" = all, "@default" = default DB)
     databases: Vec<String>,
     /// DB → schemas to show (none = all)
@@ -47,7 +49,7 @@ impl ScopeEditor {
             Some(d) if !d.is_empty() => d.clone(),
             _ => vec![SCOPE_ALL.into()],
         };
-        let mut e = ScopeEditor { conn, dbs, default_db, databases, schemas: scope.schemas.clone(), open: HashSet::new(), loaded: HashMap::new(), sel: 0 };
+        let mut e = ScopeEditor { conn, user_dbs: dbs.clone(), dbs, default_db, databases, schemas: scope.schemas.clone(), open: HashSet::new(), loaded: HashMap::new(), sel: 0 };
         if let Some(db) = focus_db {
             e.open.insert(db.to_string());
             e.sel = e.rows().iter().position(|r| *r == Row::Db(db.to_string())).unwrap_or(0);
@@ -115,7 +117,7 @@ impl ScopeEditor {
             Row::AllDbs => return flip(&mut self.databases, SCOPE_ALL),
             Row::DefaultDb => return flip(&mut self.databases, SCOPE_DEFAULT),
             Row::Db(db) => {
-                self.databases = toggle_scoped(std::mem::take(&mut self.databases), &db, &self.dbs, &self.default_db);
+                self.databases = toggle_scoped(std::mem::take(&mut self.databases), &db, &self.user_dbs, &self.default_db);
                 return;
             }
             Row::Note(..) => return,
@@ -127,8 +129,9 @@ impl ScopeEditor {
         if x == SCOPE_ALL || x == SCOPE_DEFAULT {
             flip(&mut cur, &x);
         } else {
+            // System schemas stay out of the list that replaces All (they'd show up in the tree) unless checked one by one
             let listed: Vec<String> = match self.loaded.get(&db) {
-                Some(Ok(list)) => list.iter().map(|s| s.name.clone()).collect(),
+                Some(Ok(list)) => list.iter().filter(|s| !s.is_system).map(|s| s.name.clone()).collect(),
                 _ => vec![],
             };
             cur = toggle_scoped(cur, &x, &listed, "public");
@@ -316,8 +319,9 @@ mod tests {
         assert_eq!(e.check(&Row::DefaultSchema("shop".into())), Check::On);
         assert_eq!(e.check(&s("sales")), Check::Off);
         assert_eq!(e.check(&s("public")), Check::On);
-        assert_eq!(e.check(&s("pg_catalog")), Check::On);
-        assert_eq!(e.scope().schemas.get("shop"), Some(&vec![SCOPE_DEFAULT.to_string(), "public".into(), "pg_catalog".into()]));
+        // System schemas don't join the list that replaces All
+        assert_eq!(e.check(&s("pg_catalog")), Check::Off);
+        assert_eq!(e.scope().schemas.get("shop"), Some(&vec![SCOPE_DEFAULT.to_string(), "public".into()]));
         // Checking it again: every schema is checked, so All comes back (not the long list)
         e.toggle();
         assert_eq!(e.check(&Row::AllSchemas("shop".into())), Check::On);
@@ -340,6 +344,19 @@ mod tests {
         assert_eq!(e.scope().schemas.get("app"), Some(&vec!["public".to_string()]));
         e.toggle();
         assert_eq!(e.check(&Row::AllDbs), Check::On);
+        assert_eq!(e.scope().databases, None);
+    }
+
+    /// System databases (user_dbs leaves them out) don't join the list that replaces All databases; every user database checked is All
+    #[test]
+    fn system_databases_stay_out_of_the_list_that_replaces_all() {
+        let mut e = ScopeEditor::new("c1".into(), vec!["mysql".into(), "shop".into(), "sales".into()], "shop".into(), &Scope::default(), None);
+        e.user_dbs = vec!["shop".into(), "sales".into()];
+        select(&mut e, Row::Db("sales".into()));
+        e.toggle();
+        assert_eq!(e.check(&Row::Db("mysql".into())), Check::Off);
+        assert_eq!(e.scope().databases, Some(vec!["shop".to_string()]));
+        e.toggle();
         assert_eq!(e.scope().databases, None);
     }
 

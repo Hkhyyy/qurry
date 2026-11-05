@@ -45,7 +45,10 @@ impl App {
 
     pub fn open_scope(&mut self, conn: &str, dbs: Vec<String>, focus_db: Option<&str>) {
         let Some(c) = self.conn(conn) else { return };
-        let e = crate::scope::ScopeEditor::new(conn.to_string(), dbs, self.default_db(conn), &c.config.scope, focus_db);
+        let mut e = crate::scope::ScopeEditor::new(conn.to_string(), dbs.clone(), self.default_db(conn), &c.config.scope, focus_db);
+        // Without the scope, the databases the explorer shows are the user ones (system databases hidden)
+        let unscoped = qurry_core::store::ConnectionConfig { scope: Default::default(), ..c.config.clone() };
+        e.user_dbs = qurry_core::app::visible_dbs(&unscoped, dbs, &e.default_db);
         self.popup = Some(Popup::Scope(e));
         if let Some(db) = focus_db {
             self.load_scope_schemas(db.to_string());

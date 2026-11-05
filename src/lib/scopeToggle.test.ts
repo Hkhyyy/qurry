@@ -27,6 +27,11 @@ describe("toggleScoped", () => {
     expect(toggle(["public"], SCOPE_ALL)).toEqual(["public", SCOPE_ALL]);
     expect(toggle([SCOPE_ALL], SCOPE_DEFAULT)).toEqual([SCOPE_ALL, SCOPE_DEFAULT]);
   });
+  it("callers list only user schemas / databases: switching from All leaves system ones out, and all user ones checked is All", () => {
+    const user = ["public", "billing", "sales"];
+    expect(toggleScoped([SCOPE_ALL], "billing", user, "public")).toEqual(["public", "sales"]);
+    expect(toggleScoped(["public", "sales"], "billing", user, "public")).toEqual([SCOPE_ALL]);
+  });
   it("databases: Default database stands for the source's default one", () => {
     const dbs = ["postgres", "shop", "billing"];
     expect(toggleScoped([SCOPE_ALL], "billing", dbs, "shop")).toEqual(["postgres", "shop"]);

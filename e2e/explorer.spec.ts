@@ -178,12 +178,20 @@ test("Manage Shown Schemas: unchecking one schema under All schemas keeps the ot
   await box("billing").click();
   await expect(box("All schemas")).not.toBeChecked();
   await expect(box("billing")).not.toBeChecked();
-  await expect(box(/^pg_catalog/)).toBeChecked();
+  // System schemas don't join the list that replaces All
+  await expect(box(/^pg_catalog/)).not.toBeChecked();
   await expect(box("public (Default schema)")).toBeChecked();
   await expect(box("Default schema (public)")).not.toBeChecked();
   await box("billing").click();
   await expect(box("All schemas")).toBeChecked();
   await expect(box("billing")).toBeChecked();
+  // Applied without billing: the tree has public and no system schemas (they're left out of the list that replaces All)
+  await box("billing").click();
+  await expect(box(/^pg_catalog/)).not.toBeChecked();
+  await page.keyboard.press("Enter");
+  const tree = page.locator(".ws-explorer.on");
+  await expect(tree.getByRole("treeitem", { name: /^public/ }).first()).toBeVisible();
+  await expect(tree.getByRole("treeitem", { name: /^(billing|pg_catalog|information_schema)\b/ })).toHaveCount(0);
 });
 
 test("Manage Shown Schemas: unchecking one database under All databases hides only that one; checking it again turns All back on", async ({ page }) => {

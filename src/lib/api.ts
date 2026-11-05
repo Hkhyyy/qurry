@@ -601,9 +601,11 @@ export function dbVisible(scope: Scope | undefined, db: string, defaultDb: strin
 export const defaultDbOf = (c: Pick<ConnectionView, "database" | "kind">) => c.database || (c.kind === "postgres" ? "postgres" : "");
 
 const MY_SYS = ["information_schema", "performance_schema", "mysql", "sys"];
+/** A system database the explorer hides unless asked (MySQL's system schemas) */
+export const isSystemDb = (kind: DbKind, d: string) => kind === "mysql" && MY_SYS.includes(d);
 /** A database the explorer lists: one fixed database, or the shown-database scope (MySQL system schemas only with showSystem) */
 export const dbShown = (c: ConnectionView, d: string, defaultDb: string, showSystem = false) =>
-  c.options?.singleDb ? d === defaultDb : (c.kind !== "mysql" || showSystem || !MY_SYS.includes(d) || d === defaultDb) && dbVisible(c.scope, d, defaultDb);
+  c.options?.singleDb ? d === defaultDb : (showSystem || !isSystemDb(c.kind, d) || d === defaultDb) && dbVisible(c.scope, d, defaultDb);
 
 /** A database or schema picker's list (console, Redis browser, Database Admin report): the current one first, then every one of the server in its order */
 export const currentFirst = (current: string, dbs: string[]) => [...new Set([current, ...dbs])];

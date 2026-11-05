@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ConnectionView, meta, Scope, SCOPE_ALL, SCOPE_DEFAULT, SchemaInfo, targetId } from "../lib/api";
+import { ConnectionView, isSystemDb, meta, Scope, SCOPE_ALL, SCOPE_DEFAULT, SchemaInfo, targetId } from "../lib/api";
 import { toggleScoped } from "../lib/scopeToggle";
 import { Badge, Checkbox, Hint, IconButton, Notice, Spacer, Text, Toolbar, TreeRow } from "../ui";
 
@@ -81,7 +81,8 @@ export function ScopePopup({ conn, dbs, defaultDb, focusDb, x, y, onApply, onClo
   const dbChecked = (db: string) => allDbs || dbList.includes(db) || (defDb && db === defaultDb);
   const dbImplicit = (db: string) => !dbList.includes(db) && dbChecked(db); // Checked only by the all/default rules
   const setDbs = (next: string[]) => setScope((s) => ({ ...s, databases: next.length ? next : null }));
-  const toggleDb = (db: string) => setDbs(toggleScoped(dbList, db, dbs, defaultDb));
+  // System databases / schemas stay out of the list that replaces All (they'd show up in the tree) unless checked one by one
+  const toggleDb = (db: string) => setDbs(toggleScoped(dbList, db, dbs.filter((d) => d === defaultDb || !isSystemDb(conn.kind, d)), defaultDb));
 
   // ─ Schema check state ─
   // A DB with no schema filter = everything shown → displayed as "All schemas" checked
@@ -95,7 +96,7 @@ export function ScopePopup({ conn, dbs, defaultDb, focusDb, x, y, onApply, onClo
     });
   const toggleSch = (db: string, name: string) => {
     const sch = schemas[db];
-    setSch(db, toggleScoped(schList(db), name, Array.isArray(sch) ? sch.map((s) => s.name) : [], "public"));
+    setSch(db, toggleScoped(schList(db), name, Array.isArray(sch) ? sch.filter((s) => !s.isSystem).map((s) => s.name) : [], "public"));
   };
   const schChecked = (db: string, name: string) => {
     const cur = schList(db);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { currentFirst, dbShown, defaultDbOf, type ConnectionView } from "./api";
+import { currentFirst, dbShown, defaultDbOf, isSystemDb, type ConnectionView } from "./api";
 
 const conn = (c: Partial<ConnectionView>) => ({ id: "c", name: "c", kind: "postgres", database: "", ...c }) as ConnectionView;
 const shown = (c: ConnectionView, dbs: string[]) => dbs.filter((d) => dbShown(c, d, defaultDbOf(c)));
@@ -29,5 +29,12 @@ describe("currentFirst", () => {
     expect(currentFirst("shop", ["postgres", "shop", "billing"])).toEqual(["shop", "postgres", "billing"]);
     expect(currentFirst("gone", ["postgres", "shop"])).toEqual(["gone", "postgres", "shop"]);
     expect(currentFirst("", ["", "mysql", "shop"])).toEqual(["", "mysql", "shop"]);
+  });
+});
+
+describe("isSystemDb", () => {
+  it("MySQL's system schemas; none for PostgreSQL", () => {
+    expect(["information_schema", "mysql", "performance_schema", "sys", "shop"].filter((d) => isSystemDb("mysql", d))).toEqual(["information_schema", "mysql", "performance_schema", "sys"]);
+    expect(isSystemDb("postgres", "information_schema")).toBe(false);
   });
 });
