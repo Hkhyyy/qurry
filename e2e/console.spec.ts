@@ -1,4 +1,5 @@
 import { dialog, editor, expect, openApp, openConsole, resultTabs, runAll, spyCancels, status, suggestions, test, treeItem, typeSql, work } from "./app";
+import type { Page } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
   await openApp(page);
@@ -249,4 +250,86 @@ test("Output follows new lines at the bottom, keeps the position when scrolled u
   await page.setViewportSize({ width: vp.width, height: vp.height - 150 });
   await expect.poll(() => output.evaluate((el) => el.clientHeight)).toBeLessThan(height);
   await expect.poll(fromBottom).toBeLessThanOrEqual(4);
+});
+
+test.describe("Statements popup (⌘↩ with several choices)", () => {
+  const chooser = (page: Page) => work(page).locator(".stmt-chooser");
+  /** The editor's lines in order (Monaco reuses line elements, and WebKit's innerText drops their line breaks) */
+  const text = (page: Page) =>
+    editor(page).evaluate((ed) =>
+      [...ed.querySelectorAll<HTMLElement>(".view-line")]
+        .sort((a, b) => parseFloat(a.style.top) - parseFloat(b.style.top))
+        .map((l) => l.textContent!.replace(/\u00a0/g, " "))
+        .join("\n"),
+    );
+  /** The editor lines the preview highlight covers (1-based) */
+  const previewLines = (page: Page) =>
+    editor(page).evaluate((ed) => {
+      const h = parseFloat(getComputedStyle(ed.querySelector(".view-line")!).height);
+      return [...ed.querySelectorAll(".view-overlays .stmt-preview")].map((x) => Math.round(parseFloat((x.parentElement as HTMLElement).style.top) / h) + 1).sort();
+    });
+  const open = async (page: Page) => {
+    await page.keyboard.press("Meta+Enter");
+    await expect(chooser(page)).toBeVisible();
+  };
+
+  test.beforeEach(async ({ page }) => {
+    await typeSql(page, "select 1;\nselect 2;\nselect 3;");
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("Home");
+  });
+
+  test("highlights the text each option would run, and nothing once closed", async ({ page }) => {
+    await open(page);
+    await expect(chooser(page).locator(".sc-item")).toHaveText(["select 2", "All statements (3)", "From caret to end"]);
+    await expect.poll(() => previewLines(page)).toEqual([2]);
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(() => previewLines(page)).toEqual([1, 2, 3]);
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(() => previewLines(page)).toEqual([2, 3]);
+    await chooser(page).locator(".sc-item").first().hover();
+    await expect.poll(() => previewLines(page)).toEqual([2]);
+    await page.keyboard.press("Escape");
+    await expect(chooser(page)).toHaveCount(0);
+    await expect.poll(() => previewLines(page)).toEqual([]);
+  });
+
+  test("takes the keys: Esc closes without running, typing doesn't reach the editor, focus comes back at the caret", async ({ page }) => {
+    const before = await text(page);
+    await open(page);
+    // Any other key closes it and does nothing else
+    await page.keyboard.press("x");
+    await expect(chooser(page)).toHaveCount(0);
+    expect(await text(page)).toBe(before);
+    await open(page);
+    await page.keyboard.press("Escape");
+    await expect(chooser(page)).toHaveCount(0);
+    expect(await text(page)).toBe(before);
+    await expect(resultTabs(page)).toHaveText(["Output"]);
+    // Back in the editor at the same caret (line 2, column 1)
+    await page.keyboard.type("-- ");
+    await expect.poll(() => text(page)).toMatch(/^select 1;\n-- select 2;\nselect 3;$/);
+  });
+
+  test("a click outside closes it without running; Enter runs the highlighted option", async ({ page }) => {
+    await open(page);
+    await work(page).locator(".results-panel").click();
+    await expect(chooser(page)).toHaveCount(0);
+    await expect.poll(() => previewLines(page)).toEqual([]);
+    await expect(resultTabs(page)).toHaveText(["Output"]);
+    await editor(page).click();
+    await page.keyboard.press("Meta+ArrowDown");
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("Home");
+    await open(page);
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await expect(chooser(page)).toHaveCount(0);
+    await resultTabs(page).first().click();
+    const log = work(page).locator(".output-log");
+    await expect(log).toContainText("select 2");
+    await expect(log).toContainText("select 3");
+    await expect(log).not.toContainText("select 1");
+  });
 });

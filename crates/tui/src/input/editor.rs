@@ -70,6 +70,39 @@ mod tests {
         assert!(!out.iter().any(|l| l.contains("BEGIN")), "{out:?}");
     }
 
+    /// The chooser is modal: the selected option's rows are highlighted in the editor (and nothing once it closes); keys go to the
+    /// chooser (typing filters it), Esc closes it without running and leaves the editor as it was
+    #[tokio::test]
+    async fn execute_chooser_previews_the_rows_it_would_run() {
+        let mut h = Harness::new().await;
+        h.console_with("select 1;\nselect 2;\nselect 3;", 1, 0);
+        h.key("F5");
+        let Some(crate::app::Popup::Palette(p)) = &h.app.popup else { panic!("no chooser") };
+        assert_eq!(p.items.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(), ["select 2", "All statements (3)", "From caret to end"]);
+        // Which of the three statement rows are drawn on the selection background
+        let lines = |h: &mut Harness| {
+            let buf = h.buffer(100, 30);
+            let row = |y: u16| (0..100).map(|x| buf[(x, y)].symbol()).collect::<String>();
+            ["1", "2", "3"].map(|n| {
+                let y = (0..30).find(|&y| row(y).contains(&format!("select {n};"))).unwrap();
+                buf[(60, y)].bg == crate::ui::SEL
+            })
+        };
+        assert_eq!(lines(&mut h), [false, true, false]);
+        h.key("Down");
+        assert_eq!(lines(&mut h), [true, true, true]);
+        h.key("Down");
+        assert_eq!(lines(&mut h), [false, true, true]);
+        h.type_str("all");
+        assert!(h.app.popup.is_some());
+        assert_eq!(lines(&mut h), [true, true, true]);
+        h.key("Esc");
+        assert!(h.app.popup.is_none());
+        assert_eq!(lines(&mut h), [false, false, false]);
+        assert_eq!(h.console_text(), "select 1;\nselect 2;\nselect 3;");
+        assert!(h.console_output().is_empty(), "{:?}", h.console_output());
+    }
+
     /// With the execution setting set to Smallest, runs only the cursor statement without asking
     #[tokio::test]
     async fn execute_smallest_runs_caret_statement() {

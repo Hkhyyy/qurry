@@ -328,6 +328,15 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         c.running = false;
     }
+    // F5 inside one of several statements: the Execute chooser, the rows of the selected option highlighted in the editor
+    h.console_with("select 1;\nselect 2;\nselect 3;", 1, 0);
+    h.app.status.clear();
+    h.key("F5");
+    h.key("Down");
+    h.key("Down");
+    scenes.push(app_scene(h, "Console: Execute chooser", "F5 inside one of several statements asks what to run; the editor highlights the rows the selected option runs (↑↓ · Enter · Esc closes without running)", 120, 22));
+    h.key("Esc");
+    h.app.close_tab_now(h.app.active);
     // Grid alignment (GUI Settings › Appearance › Alignment, read from settings.json)
     let id = h.console_with("select * from payment_check;", 1, 10);
     let res = qurry_core::db::QueryResult {

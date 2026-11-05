@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { expect, fireEvent, userEvent, waitFor, within } from "storybook/test";
 // Fake backend (same as the app's ?mock): returns fixed data for the commands screens call
 import "../../lib/mock";
-import "../../lib/monaco";
+import { monaco } from "../../lib/monaco";
 import App from "../../App";
 import { SettingsDialog } from "../../features/settings/SettingsDialog";
 import { setFont } from "../../lib/prefs";
@@ -494,6 +494,30 @@ export const ConsoleSplitterFailed: S = {
       />
     </Frame>
   ),
+};
+/** ⌘↩ inside one of several statements: the Statements popup has the keys; the editor highlights what the highlighted option runs */
+export const ConsoleStatementsPopup: S = {
+  name: "Console — Statements popup (⌘↩)",
+  render: () => (
+    <Frame h={420}>
+      <ConsolePane
+        tabId="story-stmts" target="dev" initialSql={"select * from customers;\nselect 1;\nselect 2;"} connName="[DEV] shop_app" kind="postgres" dialect={dialectOf("postgres")} database="shop_app" schema="public"
+        dbList={[]} schemaList={[]} running={false} loadingMore={false} results={[]} activeResult="output"
+        output={[]} txManual={false} inTx={false}
+        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
+        onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop} onLoadingChange={noop}
+      />
+    </Frame>
+  ),
+  play: async ({ canvasElement }) => {
+    // ⌘↩ through the editor's own action (synthetic key events don't reach Monaco's keybindings)
+    const ed = await waitFor(() => monaco.editor.getEditors().find((e) => canvasElement.contains(e.getContainerDomNode())) ?? Promise.reject(new Error("no editor yet")));
+    ed.focus();
+    ed.trigger("story", "dbtool.run", null);
+    const chooser = await waitFor(() => canvasElement.querySelector<HTMLElement>(".stmt-chooser") ?? Promise.reject(new Error("no popup yet")), { timeout: 10000 });
+    fireEvent.keyDown(chooser, { key: "ArrowDown" });
+    await waitFor(() => expect(canvasElement.querySelector(".stmt-preview")).not.toBeNull(), { timeout: 10000 });
+  },
 };
 /** A script's Output longer than the pane: it follows the newest line while scrolled to the bottom; scrolled up, it stays put */
 export const ConsoleLongOutput: S = {

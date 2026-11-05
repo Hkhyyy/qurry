@@ -239,6 +239,9 @@ export function ConsolePane(p: Props) {
     setChooser(null);
     api?.focus();
   };
+  // The editor shows what the highlighted option would run, until the popup closes
+  const previewed = chooser?.options[chooser.idx].ranges;
+  useEffect(() => api?.preview(previewed ?? []), [api, previewed]);
 
   const dropdown = (e: React.MouseEvent, items: MenuItem[]) => {
     e.stopPropagation();
@@ -391,13 +394,15 @@ export function ConsolePane(p: Props) {
               }}
             />
             {chooser && (
-              <div className="stmt-chooser" tabIndex={-1} ref={(el) => el?.focus()} onKeyDown={(e) => {
+              // A menu: it has the keys while open (↑↓ Enter; any other key, Esc included, closes it and does nothing else),
+              // and focus leaving it (a click outside, another tab) closes it without running
+              <div className="stmt-chooser" role="menu" tabIndex={-1} ref={(el) => el?.focus()} onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && setChooser(null)} onKeyDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
                 if (e.key === "ArrowDown") setChooser({ ...chooser, idx: Math.min(chooser.idx + 1, chooser.options.length - 1) });
                 else if (e.key === "ArrowUp") setChooser({ ...chooser, idx: Math.max(chooser.idx - 1, 0) });
                 else if (e.key === "Enter") pickChoice(chooser.idx);
-                else if (e.key === "Escape") { setChooser(null); api?.focus(); }
-                e.preventDefault();
-                e.stopPropagation();
+                else if (!["Shift", "Control", "Alt", "Meta"].includes(e.key)) { setChooser(null); api?.focus(); }
               }}>
                 <div className="sc-title">Statements</div>
                 {chooser.options.map((o, i) => (

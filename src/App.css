@@ -202,6 +202,8 @@ a { color: var(--c-548af7); cursor: pointer; }
 .editor-area { flex: 1; min-height: 0; position: relative; background: var(--bg); }
 .editor-host { position: absolute; inset: 0; }
 .exec-highlight { background: rgba(53,116,240,.25); }
+/* What the highlighted Statements popup option would run */
+.stmt-preview { background: var(--sel); }
 /* Gutter marks of executed statements (DataGrip): done ✓, failed ✗, running (spinning arc); the icon is a mask so it takes the theme's color.
    Monaco puts the classes of all marks on a line on one element, so the later rule wins: failed over running over done (shownMark) */
 .stmt-mark { cursor: pointer; }

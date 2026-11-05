@@ -429,6 +429,14 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
     let finding = focused && matches!(app.popup, Some(Popup::Find(_)));
     // A run or a load-more in flight: the console's [■ Cancel] button (the status line says what and for how long)
     let busy = app.tabs[idx].busy().is_some();
+    // The Execute chooser's highlighted option: the console rows it would run
+    let preview = match &app.popup {
+        Some(Popup::Palette(p)) if focused => match App::palette_matches(p).get(p.sel).map(|i| &i.action) {
+            Some(crate::app::PAction::Run { rows, .. }) => rows.clone(),
+            _ => vec![],
+        },
+        _ => vec![],
+    };
     let tab = &mut app.tabs[idx];
     let db = tab.db.clone();
     let title = tab.title.clone();
@@ -472,6 +480,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             // tui-textarea doesn't expose its scroll position → use the cursor cell just drawn
             let drawn = find_caret(f, ed);
             draw_marks(f, c, ed, drawn);
+            draw_preview(f, c, ed, drawn, &preview);
             let caret = if editing && c.complete.is_some() { drawn } else { None };
             if focused {
                 app.hits.caret = drawn.map(|(x, y)| (x, y, c.editor.cursor().0, c.editor.cursor().1));
@@ -699,6 +708,23 @@ fn draw_marks(f: &mut Frame, c: &crate::app::Console, ed: Rect, caret: Option<(u
             MarkState::Err => DANGER,
         };
         buf[(ed.x + 1, y)].set_char(state.symbol()).set_fg(color);
+    }
+}
+
+/// The rows an Execute chooser option would run, on the selection background (text columns, past the line numbers).
+/// Rows on screen are counted from the cursor cell just drawn, as for the gutter marks
+fn draw_preview(f: &mut Frame, c: &crate::app::Console, ed: Rect, caret: Option<(u16, u16)>, rows: &[(usize, usize)]) {
+    let Some((_, cy)) = caret.filter(|_| !rows.is_empty()) else { return };
+    let top = c.editor.cursor().0 as i64 - (cy as i64 - ed.y as i64 - 1);
+    let x0 = ed.x + 1 + c.editor.lines().len().to_string().len() as u16 + 2;
+    let buf = f.buffer_mut();
+    for y in ed.y + 1..ed.bottom().saturating_sub(1) {
+        let row = top + (y - ed.y - 1) as i64;
+        if row >= 0 && rows.iter().any(|&(a, b)| (a as i64..=b as i64).contains(&row)) {
+            for x in x0..ed.right().saturating_sub(1) {
+                buf[(x, y)].set_bg(SEL);
+            }
+        }
     }
 }
 
@@ -1068,7 +1094,13 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             }
         }
         Popup::Palette(p) => {
-            let r = centered(area, 100, 24);
+            // The Execute chooser keeps to its options at the bottom, so the console rows it highlights stay in view
+            let r = if p.title == "Execute" {
+                let h = (p.items.len() as u16 + 5).min(area.height.saturating_sub(2));
+                Rect { y: area.bottom().saturating_sub(h + 1), ..centered(area, 72, h) }
+            } else {
+                centered(area, 100, 24)
+            };
             clear(f, r);
             let [inp, list] = Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).areas(r);
             app.hits.palette = Block::default().borders(Borders::ALL).inner(list);

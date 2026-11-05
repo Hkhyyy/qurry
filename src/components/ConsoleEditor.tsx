@@ -24,6 +24,8 @@ export interface EditorApi {
   run: (explain?: "plan" | "analyze") => void;
   insert: (text: string) => void;
   focus: () => void;
+  /** Highlight what a Statements popup option would run (none = clear); scrolls its start into view, the caret stays */
+  preview: (ranges: { start: number; end: number }[]) => void;
   /** Selected text, or the whole console if none */
   text: () => string;
 }
@@ -116,6 +118,7 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
         ed.onDidChangeCursorSelection(caret);
         ed.onDidFocusEditorText(caret);
         const deco = ed.createDecorationsCollection();
+        const preview = ed.createDecorationsCollection();
         const highlight = (ranges: { start: number; end: number }[]) => {
           const m = ed.getModel();
           if (!m) return;
@@ -261,6 +264,13 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
             ed.focus();
           },
           focus: () => ed.focus(),
+          preview: (ranges) => {
+            const m = ed.getModel();
+            if (!m) return;
+            const range = (r: { start: number; end: number }) => monaco.Range.fromPositions(m.getPositionAt(r.start), m.getPositionAt(r.end));
+            preview.set(ranges.map((r) => ({ range: range(r), options: { className: "stmt-preview" } })));
+            if (ranges.length) ed.revealRangeInCenterIfOutsideViewport(range(ranges[0]).collapseToStart());
+          },
           text: () => {
             const m = ed.getModel();
             const sel = ed.getSelection();
