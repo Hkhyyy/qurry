@@ -584,6 +584,38 @@ mod tests {
         assert_eq!(h.app.status, "This data source has one database: analytics");
     }
 
+    /// d on a report whose database the account can't connect to: the chooser still lists (through the source's database), so
+    /// another one can be picked; the report says why it failed. QURRY_TEST_PG_REFUSED=host:port:user:password:db (db refuses user)
+    #[tokio::test]
+    #[ignore]
+    async fn dba_database_picker_when_the_database_refuses() {
+        let e = std::env::var("QURRY_TEST_PG_REFUSED").expect("QURRY_TEST_PG_REFUSED");
+        let p: Vec<&str> = e.split(':').collect();
+        let mut h = Harness::new().await;
+        let cfg = serde_json::from_value(serde_json::json!({ "id": "pg", "name": "pg", "kind": "postgres", "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": p[2], "database": "" })).unwrap();
+        h.app.state.save_connection(cfg, Some(p[3].into()), None).await.unwrap();
+        h.app.reload_conns();
+        h.settle().await;
+        let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
+        let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: None, loaded: None, error: None, running: false, run: 0, auto: false };
+        h.app.push_tab("pg", p[4].into(), "Sessions".into(), TabKind::Dba(d));
+        h.app.focus = crate::app::Focus::Grid;
+        h.key("d");
+        for _ in 0..100 {
+            h.settle().await;
+            if h.app.popup.is_some() || h.app.status.starts_with("Couldn't") {
+                break;
+            }
+        }
+        let labels = match &h.app.popup {
+            Some(crate::app::Popup::Palette(pal)) => pal.items.iter().map(|i| i.label.clone()).collect::<Vec<_>>(),
+            _ => panic!("no chooser: {}", h.app.status),
+        };
+        assert_eq!(labels.first().map(String::as_str), Some(p[4]));
+        assert!(labels.iter().any(|l| l == "postgres"), "{labels:?}");
+        let _ = h.app.state.disconnect("pg".into()).await;
+    }
+
     /// Slow Queries: g lists Explain in Console, which opens a console with the EXPLAIN (a normalized statement gets a note to fill in the values first)
     #[tokio::test]
     async fn dba_slow_query_explains_in_console() {

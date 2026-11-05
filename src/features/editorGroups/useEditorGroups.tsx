@@ -503,8 +503,14 @@ export function useEditorGroups({
                     visible={t.id === ga?.id}
                     database={t.database ?? def}
                     // Every database of the server (as the console lists them), through the report's own database (the account may not
-                    // connect to the default one); MySQL without a default schema can go back to all schemas
-                    loadDbs={() => meta.databases(t.target).then((ds) => [...(def ? [] : [""]), ...ds])}
+                    // connect to the default one), else through the source's (the report's may be one it can't connect to);
+                    // MySQL without a default schema can go back to all schemas
+                    loadDbs={() =>
+                      meta
+                        .databases(t.target)
+                        .catch((e) => (c && t.target !== c.id ? meta.databases(c.id) : Promise.reject(e)))
+                        .then((ds) => [...(def ? [] : [""]), ...ds])
+                    }
                     fixedDb={!!c?.options?.singleDb}
                     onDatabase={(db) => c && patch(t.id, { database: db !== def ? db : undefined, target: targetId(c.id, db !== def ? db : undefined) })}
                     onReport={(id, title) => c && patch(t.id, { dbaReport: id, title: `${title} — ${c.name}` })}

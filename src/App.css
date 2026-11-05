@@ -400,7 +400,7 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .console-pane > [data-panel-group] { flex: 1; min-height: 0; }
 .console-toolbar .tb.run { color: var(--ok); font-size: 12px; }
 .console-toolbar .cb-ds { color: var(--muted); font-size: 12px; margin-right: 4px; }
-.console-toolbar .cb-sel { height: 22px; padding: 0 6px; font-size: 12px; max-width: 200px; margin-left: 4px; }
+.console-toolbar .cb-sel { height: 22px; padding: 0 6px; font-size: 12px; max-width: 200px; margin-left: 4px; text-overflow: ellipsis; }
 .editor-area { position: relative; }
 .stmt-chooser { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 30; min-width: 420px; max-width: 80%; background: var(--c-2b2d30); border: 1px solid var(--c-4e5157); border-radius: 8px; box-shadow: 0 10px 28px rgba(0,0,0,.5); padding: 4px; outline: none; }
 .sc-title { padding: 4px 10px 6px; color: var(--muted); font-size: 12px; }
@@ -607,7 +607,7 @@ html, body, #root, * { overscroll-behavior: none; }
 .dba { display: flex; flex-direction: column; height: 100%; }
 .dba-bar { gap: var(--ui-sp-3); }
 .dba-bar .dba-report { min-width: 220px; }
-.dba-bar .dba-db { min-width: 140px; max-width: 240px; }
+.dba-bar .dba-db { min-width: 140px; max-width: 240px; text-overflow: ellipsis; }
 .dba-auto { display: flex; gap: 4px; align-items: center; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .dba-help { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dba-hint { font-size: 11px; padding: 2px 10px; }

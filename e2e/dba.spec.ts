@@ -78,8 +78,29 @@ test("the picker lists through the report's database, and says what to do when i
   await openReport(page, "[DEV] shop_app", "Sessions & Locks");
   await expect(db).toHaveValue("shop_app");
   await db.focus();
-  await expect(db.locator("option")).toHaveText(["shop_app", /^Couldn't list the databases: permission denied for database "shop_app"[\s\S]*Data Source Properties › General › Database/]);
-  await expect(db.locator("option").nth(1)).toBeDisabled();
+  // The error isn't an option (a native select is as wide as its longest option): it shows above the report and as the tooltip
+  const why = /^Couldn't list the databases: permission denied for database "shop_app"[\s\S]*Data Source Properties › General › Database/;
+  await expect(db.locator("option")).toHaveText(["shop_app"]);
+  await expect(page.locator(".work-layer:visible .dba-dbs-error")).toHaveText(why);
+  await expect(db).toHaveAttribute("title", why);
+});
+
+// The account can't connect to one database: picking it says so in the report, and the list (read through the source's own
+// target when the report's refuses) stays there to pick another one; the select keeps its width
+test("picking a database the account can't connect to keeps the list and the select's width", async ({ page }) => {
+  await openApp(page);
+  await page.evaluate(() => ((window as any).__mockDbRefuse = "shop_app_test"));
+  await openReport(page, "[DEV] shop_app", "Sessions & Locks");
+  const db = page.locator(".work-layer:visible .dba-db");
+  await expect(db.locator("option")).toHaveText(["shop_app", "postgres", "shop_app_test"]);
+  await db.selectOption("shop_app_test");
+  await expect(page.locator(".work-layer:visible .dba .ui-notice")).toContainText("Couldn't connect to database shop_app_test");
+  await db.focus();
+  await expect(db.locator("option")).toHaveText(["shop_app_test", "postgres", "shop_app"]);
+  await expect(page.locator(".work-layer:visible .dba-dbs-error")).toHaveCount(0);
+  expect((await db.boundingBox())!.width).toBeLessThanOrEqual(240);
+  await db.selectOption("postgres");
+  await expect(page.locator(".work-layer:visible .dba .ui-notice")).toHaveCount(0);
 });
 
 test("the database picker lists once the report is shown: its first click opens the whole list", async ({ page }) => {

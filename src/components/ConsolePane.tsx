@@ -360,7 +360,7 @@ export function ConsolePane(p: Props) {
         <span className="cb-ds">{p.connName}</span>
         <Select className="cb-sel" value={p.database} onFocus={p.onLoadDbs} onMouseDown={p.onLoadDbs} onChange={(e) => p.onSwitchDb(e.target.value)} title="Database">
           {currentFirst(p.database, p.dbList).map((d) => (
-            <option key={d} value={d}>{d}</option>
+            <option key={d} value={d} title={d}>{d}</option>
           ))}
         </Select>
         <Select className="cb-sel" value={p.schema} onFocus={p.onLoadSchemas} onMouseDown={p.onLoadSchemas} onChange={(e) => p.onSwitchSchema(e.target.value)} disabled={p.schemaSwitchDisabled} title={p.schemaSwitchDisabled ? "Schema switching is disabled for this data source" : "Switch current schema"}>

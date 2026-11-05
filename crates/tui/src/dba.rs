@@ -310,15 +310,23 @@ impl App {
     /// d: run the report on another database of the server (one fixed database can't change)
     pub fn dba_pick_db(&mut self) {
         let Some(t) = self.tabs.get(self.active) else { return };
-        let (id, target) = (t.id, t.target.clone());
+        let (id, target, conn) = (t.id, t.target.clone(), t.conn.clone());
         if self.conn(&t.conn).is_some_and(|c| c.config.options.single_db) {
             self.status = format!("This data source has one database: {}", db_label(&t.db));
             return;
         }
         let st = self.state.clone();
         self.status = "Reading databases…".into();
-        // Through the report's own database: the account may not be able to connect to the source's default one
-        self.spawn(async move { st.list_databases(target).await.map_err(|e| e.to_string()) }, move |a, r| match r {
+        // Through the report's own database (the account may not be able to connect to the source's default one), else through
+        // the source's (the report's may be one it can't connect to), so another one can be picked
+        let list = async move {
+            match st.list_databases(target.clone()).await {
+                Err(_) if target != conn => st.list_databases(conn).await,
+                r => r,
+            }
+            .map_err(|e| e.to_string())
+        };
+        self.spawn(list, move |a, r| match r {
             Ok(dbs) => a.dba_db_choices(id, dbs),
             Err(e) => a.status = qurry_shared::errors::db_list_failed(&e).replace('\n', " "),
         });

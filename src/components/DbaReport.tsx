@@ -36,7 +36,7 @@ export function DbaReport(p: {
   const [running, setRunning] = useState(false);
   const [auto, setAuto] = useState(true);
   const [dbs, setDbs] = useState<string[]>([]);
-  /** Listing the databases failed: said in the picker, with the way out */
+  /** Listing the databases failed: said above the report and in the picker's tooltip, with the way out */
   const [dbsError, setDbsError] = useState<string | null>(null);
   const dbsAsked = useRef(false);
   const loadDbs = () => {
@@ -153,9 +153,8 @@ export function DbaReport(p: {
         </Select>
         <Select className="dba-db" value={p.database} onFocus={loadDbs} onMouseDown={loadDbs} onChange={(e) => p.onDatabase(e.target.value)} disabled={p.fixedDb} title={p.fixedDb ? "This data source has one database" : dbsError ?? "Database the report runs on"}>
           {currentFirst(p.database, dbs).map((d) => (
-            <option key={d} value={d}>{d || "(all schemas)"}</option>
+            <option key={d} value={d} title={d}>{d || "(all schemas)"}</option>
           ))}
-          {dbsError && <option disabled>{dbsError}</option>}
         </Select>
         <Button onClick={load} disabled={running}>
           {running ? "Loading…" : "Refresh"}
@@ -167,6 +166,8 @@ export function DbaReport(p: {
         )}
         <Text tone="muted" className="dba-help">{info?.help}</Text>
       </Toolbar>
+      {/* Not an option: a native select is as wide as its longest option */}
+      {dbsError && <Notice tone="warn" className="dba-dbs-error">{dbsError}</Notice>}
       {info?.actions.length ? <div className="dba-hint muted">Right-click a row: {info.actions.map((a) => a.label).join(" · ")}</div> : null}
       {error && result && (
         <Notice tone="warn" className="dba-stale">

@@ -100,6 +100,8 @@ const handlers: Record<string, (a: any) => unknown> = {
     const g = globalThis as any;
     lanCheck(a.id);
     if (g.__mockDbListFail && !String(a.id).includes("::")) throw `permission denied for database "${conns.find((c) => c.id === a.id)?.database}"`;
+    // window.__mockDbRefuse: a database the account can't connect to (listing through it and reports on it fail)
+    if (g.__mockDbRefuse && String(a.id).endsWith(`::${g.__mockDbRefuse}`)) throw `permission denied for database "${g.__mockDbRefuse}"`;
     const v = a.id === "lan" ? ["lan_app"] : a.id === "rd" ? ["db0", "db3"] : a.id === "my" ? ["information_schema", "mysql", "shop", "sys"] : ["postgres", "shop_app", "shop_app_test"];
     return g.__mockDbListDelay ? new Promise((ok) => setTimeout(() => ok(v), g.__mockDbListDelay)) : v;
   },
@@ -360,7 +362,9 @@ const handlers: Record<string, (a: any) => unknown> = {
   // depend on the database it ran on. window.__mockDbaTargets lists the targets the reports ran on
   dba_report: (a: any) =>
     (((globalThis as any).__mockDbaTargets ??= []).push(a.id),
-    a.report === "table_sizes"
+    (globalThis as any).__mockDbRefuse && String(a.id).endsWith(`::${(globalThis as any).__mockDbRefuse}`)
+      ? Promise.reject(`Couldn't connect to database ${(globalThis as any).__mockDbRefuse}. Pick another database for this report (GUI: the database list in its toolbar · TUI: d).\n(permission denied for database "${(globalThis as any).__mockDbRefuse}")`)
+      : a.report === "table_sizes"
       ? new Promise((ok) => setTimeout(() => ok(tableSizes(a.id)), 2000))
       : a.report === "roles"
       ? Promise.reject("permission denied for table pg_authid")
