@@ -6,7 +6,9 @@ import { monaco } from "../../../lib/monaco";
 import App from "../../../App";
 import { TuiScreen, type Run, type Scene } from "../TuiScreen";
 import tuiSnapshots from "../tui-snapshots.json";
-import { Button, Select, Text, TextInput, normalizeHex } from "../../index";
+import { Button, Notice, Select, Text, TextInput, normalizeHex } from "../../index";
+import { ResultGrid } from "../../../components/ResultGrid";
+import type { QueryResult } from "../../../lib/api";
 
 // Design for 0.3.2, #103: more built-in themes (Dracula, One Dark, Solarized Dark / Light), custom themes, Sync with OS per theme.
 // Not product code: replace it with the real components when the issue is built, then delete this story.
@@ -37,7 +39,7 @@ const GROUPS: { name: string; tokens: Tok[] }[] = [
     { key: "panel", label: "Panels, grid header, status bar", vars: ["--panel", "--ui-surface", "--c-2b2d30"] },
     { key: "panel2", label: "Row numbers, gutters", vars: ["--panel-2", "--ui-surface-2", "--c-26282b"] },
     { key: "odd", label: "Odd grid rows", vars: ["--c-222326"] },
-    { key: "hover", label: "Hover", vars: ["--ui-hover", "--c-33353a"] },
+    { key: "hover", label: "Hover", vars: ["--ui-hover", "--c-33353a", "--hover-tint"] },
     { key: "border", label: "Borders", vars: ["--border", "--ui-border", "--c-393b40"] },
     { key: "borderStrong", label: "Strong borders", vars: ["--ui-border-strong", "--c-4e5157"] },
   ] },
@@ -69,9 +71,9 @@ const GROUPS: { name: string; tokens: Tok[] }[] = [
     { key: "match", label: "Find match", vars: ["--grid-match"], check: ["text", "match", 4.5] },
   ] },
   { name: "Data source tints / Production", tokens: [
-    { key: "prodTint", label: "Production (red) tint", vars: ["--conn-bg"], check: ["text", "prodTint", 4.5] },
-    { key: "prodStripe", label: "Production stripe", vars: ["--conn-stripe"], check: ["prodStripe", "panel", 3] },
-    { key: "tint", label: "Other data source (green) tint", vars: [], check: ["text", "tint", 4.5] },
+    { key: "prodTint", label: "Production (red) tint", vars: ["--theme-prod-tint"], check: ["text", "prodTint", 4.5] },
+    { key: "prodStripe", label: "Production stripe", vars: ["--theme-prod-stripe"], check: ["prodStripe", "panel", 3] },
+    { key: "tint", label: "Other data source (green) tint", vars: ["--theme-tint"], check: ["text", "tint", 4.5] },
   ] },
   { name: "Status colors", tokens: [
     { key: "ok", label: "OK", vars: ["--ok", "--ui-ok", "--c-5fb865"], check: ["ok", "panel", 3] },
@@ -240,7 +242,6 @@ function themeVars(p: Palette): CSSProperties {
 // ───────── Preview: the real app ─────────
 // The real App (with the ?mock data) and a real TUI snapshot, drawn with the palette. Nothing here is drawn by hand.
 const mono: CSSProperties = { fontFamily: "var(--ui-font-mono)", fontSize: 12 };
-const PREVIEW_SQL = "-- paid orders this week\nselect id, upper(user_name) as name, 100 as n from users where user_name <> 'lee';";
 
 /** The Monaco theme for a palette (lib/monaco.ts dbtool-dark with the palette's colors). Monaco has one theme for every editor */
 function setMonacoTheme(p: Palette) {
@@ -281,19 +282,91 @@ async function until<T>(f: () => T | null | undefined): Promise<T> {
   throw new Error("the preview app didn't get ready");
 }
 
-/** As a user would (e2e/app.ts openConsole): select [DEV] shop_app, ⇧⌘L for a console, type a query and run it */
-async function openConsole(root: HTMLElement) {
-  const dev = await until(() => [...root.querySelectorAll<HTMLElement>(".ws-explorer.on .tree-node")].find((n) => n.textContent?.includes("[DEV] shop_app")));
-  dev.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-  dev.click();
-  // The shortcut handler sees the selection after the app re-renders
-  await new Promise((r) => setTimeout(r, 300));
-  // From the selected row (the app's shortcut handler reads the event target)
+// Three statements, run as a whole: a function, a string and a number; the editable users result; one that fails (✓ and ✗ marks)
+const PREVIEW_SQL = "-- users to check this week\nselect upper(user_name) as name, 100 as n from users where user_name <> 'lee';\nselect * from users limit 4;\nselect * from no_such_table;";
+
+const noop = () => {};
+// The zoomed app trips Chrome's harmless "ResizeObserver loop" error, which the app would show in its status bar
+window.addEventListener("error", (e) => e.message?.includes("ResizeObserver loop") && e.stopImmediatePropagation(), true);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Mouse down + up + click, as a click on the element */
+const press = (el: HTMLElement, init: MouseEventInit = {}) => {
+  for (const type of ["mousedown", "mouseup", "click"]) el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, ...init }));
+};
+/** Types into a React input (the value setter, then an input event) */
+const typeInto = (input: HTMLInputElement, text: string) => {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, text);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+};
+
+/**
+ * Brings the app to a state where every token shows, as a user would (e2e/app.ts): a console on [DEV] shop_app runs PREVIEW_SQL,
+ * then in the users result (4 rows) one cell is edited, a row deleted, one added, "user_4" found and a cell selected
+ */
+async function stageApp(root: HTMLElement) {
+  const node = (text: string) => [...root.querySelectorAll<HTMLElement>(".ws-explorer.on .tree-node")].find((n) => n.textContent?.includes(text));
+  const dev = await until(() => node("[DEV] shop_app"));
+  press(dev);
+  // The shortcut handler sees the selection after the app re-renders; it reads the event target, so the key comes from the row
+  await sleep(300);
   dev.dispatchEvent(new KeyboardEvent("keydown", { key: "L", code: "KeyL", metaKey: true, shiftKey: true, bubbles: true }));
   const ed = await until(() => monaco.editor.getEditors().find((e) => root.contains(e.getContainerDomNode())));
   ed.setValue(PREVIEW_SQL);
+  // Select everything and run (e2e/app.ts runAll): each statement runs
+  ed.setSelection(ed.getModel()!.getFullModelRange());
   ed.trigger("preview", "dbtool.run", null);
+  await until(() => root.querySelector(".stmt-mark.error"));
+  // The users result (the second)
+  const tabs = await until(() => { const t = root.querySelectorAll<HTMLElement>(".result-tabs [role=tab]"); return t.length >= 3 ? t : null; });
+  press([...tabs].find((t) => t.textContent?.includes("select * from users")) ?? tabs[2]);
+  const cell = (text: string) => until(() => [...root.querySelectorAll<HTMLElement>(".work-layer .grid-row .cell")].find((c) => c.textContent === text));
+  const button = (title: string) => until(() => [...root.querySelectorAll<HTMLButtonElement>(".work-layer button[title]")].find((b) => b.title.startsWith(title) && b.offsetParent));
+  // Edit user_2 → kim
+  (await cell("user_2")).dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+  const input = await until(() => root.querySelector<HTMLInputElement>(".cell-input"));
+  typeInto(input, "kim");
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await sleep(100);
+  // Delete the user_3 row, add one
+  press(await cell("user_3"));
+  await sleep(100);
+  press(await button("Delete Row"));
+  press(await button("Add Row"));
+  await sleep(200);
+  // Find user_4
+  press(await button("Find on Current Page"));
+  const find = await until(() => root.querySelector<HTMLInputElement>('input[placeholder="Find on current page"]'));
+  typeInto(find, "user_4");
+  await sleep(100);
+  // A selected cell
+  press(await cell("user_1"));
+  // The pointer over a table in the explorer
+  node("users")?.classList.add("preview-hover");
 }
+
+/**
+ * What #103 changes in the app CSS, so the preview follows the palette where the app has fixed colors today:
+ * the grid states get variables, the data source tints come from the theme. preview-hover: the hover look without a pointer
+ */
+const PREVIEW_CSS = `
+.theme-preview .grid-row.added .cell:not(.rownum) { background: var(--grid-added); }
+.theme-preview .grid-row.deleted .cell:not(.rownum) { background: var(--grid-deleted); }
+.theme-preview .cell.changed { background: var(--grid-changed); }
+.theme-preview .cell.match { background: var(--grid-match); }
+.theme-preview .conn-tree:has([data-node="prod"]) { background: var(--theme-prod-tint) !important; box-shadow: inset 3px 0 0 var(--theme-prod-stripe) !important; }
+.theme-preview .conn-tree:has([data-node="my"]) { background: var(--theme-tint) !important; }
+.theme-preview .tree-node.preview-hover { background: var(--hover-tint); }
+`;
+
+/** A jsonb result (the app's ?mock payments rows): JSON keys, strings, numbers and null in the cells */
+const JSON_RESULT: QueryResult = {
+  columns: [{ name: "id", typeName: "INT8" }, { name: "status", typeName: "VARCHAR" }, { name: "data", typeName: "JSONB" }],
+  rows: [1, 2, 3].map((i) => [i, i % 2 ? "paid" : "ready", `{"kind": "card", "live": ${i % 2 === 0}, "meta": {"src": "web", "coupon": null}, "items": [${i}, ${i + 1}]}`]),
+  rowsAffected: 0,
+  truncated: false,
+  elapsedMs: 3,
+  hasResultSet: true,
+};
 
 /** The TUI snapshot's dark colors (crates/tui/src/kit/atoms.rs, the terminal's own fg / bg) → the token that draws them */
 const TUI_TOKEN: Record<string, Key> = {
@@ -319,9 +392,9 @@ function tuiIn(p: Palette): Scene {
 const flashOf = (c: string) => (ratio(c, "#ff2bd6") < 2 ? "#00e5ff" : "#ff2bd6");
 
 /**
- * The real app in the palette: explorer, a console with a run, the status bar; under it the TUI.
+ * The real app in the palette (staged so every token shows), a jsonb result, a warning notice; under them the TUI.
  * hot: the token being pointed at blinks (its color and a far one, every 0.4 s), so it shows wherever the app uses it.
- * zoom: the app is laid out at 1080 × 600 and scaled.
+ * zoom: the app is laid out at 1080 × 720 and scaled.
  */
 function RealPreview({ p, hot, zoom = 0.7 }: { p: Palette; hot?: Key | null; zoom?: number }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -334,7 +407,7 @@ function RealPreview({ p, hot, zoom = 0.7 }: { p: Palette; hot?: Key | null; zoo
   }, [hot]);
   const shown: Palette = hot && blink ? { ...p, [hot]: flashOf(p[hot]) } : p;
   useEffect(() => {
-    openConsole(ref.current!).catch(() => {});
+    stageApp(ref.current!).catch(() => {});
   }, []);
   useEffect(() => {
     setMonacoTheme(shown);
@@ -343,10 +416,20 @@ function RealPreview({ p, hot, zoom = 0.7 }: { p: Palette; hot?: Key | null; zoo
     return () => clearTimeout(id);
   });
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div ref={ref} style={{ ...themeVars(shown), width: 1080 * zoom, height: 600 * zoom, border: `1px solid ${shown.border}`, borderRadius: 6, overflow: "hidden", flex: "none" }}>
-        <div style={{ width: 1080, height: 600, zoom }}>
+    <div className="theme-preview" style={{ ...themeVars(shown), display: "flex", flexDirection: "column", gap: 10, background: "transparent" }}>
+      <style>{PREVIEW_CSS}</style>
+      <div ref={ref} style={{ width: 1080 * zoom, height: 720 * zoom, border: `1px solid ${shown.border}`, borderRadius: 6, overflow: "hidden", flex: "none" }}>
+        <div style={{ width: 1080, height: 720, zoom }}>
           <App />
+        </div>
+      </div>
+      <div style={{ width: 1080 * zoom, border: `1px solid ${shown.border}`, borderRadius: 6, overflow: "hidden", background: shown.bg }}>
+        <div style={{ width: 1080, zoom, display: "flex", flexDirection: "column" }}>
+          <div style={{ position: "relative", height: 132 }}>
+            <ResultGrid result={JSON_RESULT} running={false} loadingMore={false} query="select id, status, data from payments" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
+          </div>
+          {/* Database Admin when a refresh fails (DbaReport) */}
+          <Notice tone="warn">Refresh failed, showing data from 10:24:01: Session closed</Notice>
         </div>
       </div>
       <div style={{ zoom: zoom * 0.95 }}>
@@ -381,7 +464,7 @@ function Gallery() {
   return (
     <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
       <Text size="sm">
-        All seven ship in 0.3.2. Pick one: below is the real app (explorer, a console with a run) and the real TUI in it. Under each name: WCAG contrast on the background, text ≥ 4.5:1,
+        All seven ship in 0.3.2. Pick one: below is the real app in it, staged so every color shows (a console run with ✓ and ✗, a result with an edited cell, a deleted and an added row, a find match and a selected cell, a jsonb result, a warning), then the real TUI. Under each name: WCAG contrast on the background, text ≥ 4.5:1,
         dim text and the accent (an icon / UI color) ≥ 3:1. Dark, Light and High contrast are today's values; the four new ones are shown with their official palettes, and the ones
         marked ⚠ (Solarized, a few pairs elsewhere) get adjusted colors that pass when built (#103).
       </Text>

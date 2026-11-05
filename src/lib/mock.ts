@@ -81,6 +81,11 @@ const consoleEdit = (sql: string) =>
     : /^\s*select\s+\*\s+from\s+(public\.)?users\s*;?\s*$/i.test(sql)
       ? { edit: { schema: "public", table: "users", pk: ["id"], columns: result.columns.map((c) => c.name) } }
       : {};
+/** `select * from users limit n`: the first n rows, editable as `select * from users` is (a short result: Storybook's theme preview) */
+const usersLimit = (sql: string) => {
+  const m = /^\s*select\s+\*\s+from\s+(public\.)?users\s+limit\s+(\d+)\s*;?\s*$/i.exec(sql);
+  return m ? { ...result, rows: result.rows.slice(0, Number(m[2])), truncated: false, edit: { schema: "public", table: "users", pk: ["id"], columns: result.columns.map((c) => c.name) } } : null;
+};
 let flakyLoads = 0;
 let updateChannel = "stable";
 /** Font files added in Settings: each "Add Font File…" adds "Fira Code" (then "Fira Code 2"…, as the backend names a taken name) */
@@ -256,7 +261,7 @@ const handlers: Record<string, (a: any) => unknown> = {
           ? { ...jsonDemo, inTransaction: (globalThis as any).__mockManual === true }
           : /\bpayments\b/i.test(a.sql)
           ? { ...payments, inTransaction: (globalThis as any).__mockManual === true }
-          : { ...result, ...consoleEdit(a.sql), inTransaction: (globalThis as any).__mockManual === true }),
+          : { ...(usersLimit(a.sql) ?? { ...result, ...consoleEdit(a.sql) }), inTransaction: (globalThis as any).__mockManual === true }),
   set_tx_mode: (a: any) => { (globalThis as any).__mockManual = a.manual; return null; },
   // e2e sets __mockCommitError for a COMMIT that fails (e.g. the connection lost while committing)
   commit_tx: () => {
