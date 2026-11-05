@@ -103,3 +103,28 @@ test("the keys act on the shown workspace's selection, not a hidden one's", asyn
   await page.keyboard.press("Delete");
   await expect(page.getByRole("dialog").locator(".ui-detail-text")).toHaveText(["DROP TABLE shop.contracts;"]);
 });
+
+// A user report (0.3.0): back from a workspace with a Redis source selected, ⌘⇧L opened a Redis console, and every new console after it
+test("⌘⇧L opens a console for the shown workspace's selection, after visiting another workspace; nothing selected falls back to nothing", async ({ page }) => {
+  const ws = (id: string, name: string, connIds: string[]) => ({ id, name, connIds, tabs: [], panes: { t: "leaf", g: 0 }, activeIds: [-1, -1, -1, -1], focused: 0 });
+  const file = { version: 2, shared: true, current: "w3", workspaces: [ws("w3", "Production", ["dev"]), ws("w4", "Cache", ["rd"]), ws("w5", "Empty", ["dev", "rd"])] };
+  await page.addInitScript((f) => localStorage.setItem("mock-ws", f), JSON.stringify(file));
+  await openApp(page);
+  const go = (name: string) => page.getByRole("button", { name: new RegExp(`${name}$`) }).click();
+  const consoles = () => page.getByRole("tab", { name: /^console(_\d+)? / });
+  await tree(page).getByRole("treeitem", { name: /^\[DEV\] shop_app/ }).click();
+  await go("Cache");
+  await tree(page).getByRole("treeitem", { name: /^\[Redis\] cache/ }).click();
+  for (const n of [1, 2]) {
+    await go("Production");
+    await page.keyboard.press("Meta+Shift+L");
+    await expect(consoles()).toHaveCount(n);
+    await expect(consoles().last()).toHaveAccessibleName(/^console(_\d+)? \[DEV\] shop_app/);
+    await go("Cache");
+  }
+  // Nothing selected and no tab: no console (not one for the Cache workspace's Redis selection)
+  await go("Empty");
+  await page.keyboard.press("Meta+Shift+L");
+  await page.waitForTimeout(300);
+  await expect(consoles()).toHaveCount(0);
+});
