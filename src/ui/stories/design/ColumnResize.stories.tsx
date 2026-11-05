@@ -83,28 +83,40 @@ const r = (t: string, fg: string | null = null, bg: string | null = null, bold =
 const CYAN = "#56b6c2";
 const FG = "#abb2bf";
 const DIM = "#5c6370";
-function tuiScene(name: string, widths: number[], note: string): Scene {
-  const W = 78;
-  const line = (cells: string[], color: string, bold = false, cur = -1) => {
+const KEY = "#e5c07b";
+// ASCII only: the TUI scene renderer gives every char one cell
+const tuiRows = [
+  ["486", "O-20261101", "kim", "first order after the promotion; call before delivery", "2026-11-01"],
+  ["487", "O-20261102", "lee", "<null>", "2026-11-02"],
+  ["488", "O-20261103", "park", "refund requested", "2026-11-03"],
+];
+const tuiCols = ["idx", "order_no", "name", "memo", "created_at"];
+
+/** One TUI grid with the cursor on memo, the given widths, and a line saying which key was pressed */
+function tuiScene(name: string, memoW: number, pressed: string, result: string): Scene {
+  const widths = [4, 11, 5, memoW, 10];
+  const inner = 1 + widths.reduce((a, b) => a + b + 1, 0);
+  const W = inner + 2;
+  const line = (cells: string[], bold: boolean, cur: boolean) => {
     const runs: Run[] = [r("┃", CYAN), r(" ")];
     cells.forEach((c, i) => {
-      const t = c.padEnd(widths[i]).slice(0, widths[i]);
-      runs.push(i === cur ? r(t, "#1e1f22", CYAN, true) : r(t, color, null, bold));
+      const t = (c.length > widths[i] ? c.slice(0, widths[i] - 1) + "…" : c).padEnd(widths[i]);
+      runs.push(cur && i === 3 ? r(t, "#1e1f22", CYAN, true) : r(t, i === 3 && bold ? CYAN : FG, null, bold));
       runs.push(r(" "));
     });
-    const used = 2 + widths.reduce((a, b) => a + b + 1, 0);
-    runs.push(r(" ".repeat(Math.max(0, W - 1 - used))), r("┃", CYAN));
+    runs.push(r("┃", CYAN));
     return runs;
   };
-  const rowsT = rows.map((rw) => rw.map((v) => text(v)));
+  const title = " orders ";
   const lines: Run[][] = [
-    [r("┏", CYAN), r(" orders ", CYAN, null, true), r("━".repeat(W - 10), CYAN), r("┓", CYAN)],
-    line(cols, FG, true),
-    ...rowsT.map((rw, i) => line(rw, FG, false, i === 0 ? 3 : -1)),
+    [r("┏", CYAN), r(title, CYAN, null, true), r("━".repeat(W - 2 - title.length), CYAN), r("┓", CYAN)],
+    line(tuiCols, true, false),
+    ...tuiRows.map((rw, i) => line(rw, false, i === 0)),
     [r("┗" + "━".repeat(W - 2) + "┛", CYAN)],
-    [r(` < narrower  > wider  = fit  ${note}`, DIM)],
+    [r(" pressed: ", DIM), r(pressed, KEY, null, true), r("   → " + result, FG)],
+    [r(" keys: ", DIM), r("<", KEY, null, true), r(" narrower  ", DIM), r(">", KEY, null, true), r(" wider  ", DIM), r("=", KEY, null, true), r(" fit to content", DIM)],
   ];
-  return { name, desc: note, w: W, h: lines.length, rows: lines };
+  return { name, desc: result, w: Math.max(W, 60), h: lines.length, rows: lines };
 }
 
 function Frame({ title, note, children }: { title: string; note: string; children: ReactNode }) {
@@ -135,12 +147,16 @@ export const Gui: S = {
 export const Tui: S = {
   name: "TUI — < > = on the current column",
   render: () => (
-    <div style={{ padding: 18, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
-      <Frame title="Before" note="memo is cut at its computed width">
-        <TuiScreen scene={tuiScene("before", [5, 11, 13, 16, 16], "(memo: 16)")} />
+    <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 18 }}>
+      <Text size="sm">The cursor is on the memo column (highlighted cell). Its value is longer than the computed width, so it ends in "…".</Text>
+      <Frame title="1. As computed" note="memo is 16 cells wide and cut">
+        <TuiScreen scene={tuiScene("start", 16, "(nothing)", "memo 16 cells, cut")} />
       </Frame>
-      <Frame title="After > > > (or =)" note="the current column (memo) widened; widths saved per table">
-        <TuiScreen scene={tuiScene("after", [5, 11, 13, 30, 16], "(memo: 30)")} />
+      <Frame title="2. Press > three times" note="each > widens the current column by 4 cells">
+        <TuiScreen scene={tuiScene("wider", 28, "> > >", "memo 28 cells")} />
+      </Frame>
+      <Frame title="3. Press =" note="fits the column to its longest loaded value; the width is saved for this table">
+        <TuiScreen scene={tuiScene("fit", 53, "=", "memo fits its content (53 cells)")} />
       </Frame>
     </div>
   ),
