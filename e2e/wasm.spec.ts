@@ -42,7 +42,7 @@ test("while the WebAssembly module loads, ⌘↩ shows it and runs once, what th
   await openConsole(page);
   await typeSql(page, "select * from users");
   await page.keyboard.press("Meta+Enter");
-  await expect(work(page).locator(".running-bar")).toContainText("Loading the statement splitter");
+  await expect(page.locator(".statusbar .running-bar")).toContainText("Loading the statement splitter");
   await expect(work(page).getByTitle(/^Execute/)).toBeDisabled();
   // Pressed again after an edit: still one run, of the text at the last press
   await page.keyboard.press("Meta+Enter");
@@ -50,7 +50,7 @@ test("while the WebAssembly module loads, ⌘↩ shows it and runs once, what th
   await page.keyboard.press("Meta+Enter");
   release();
   await expect(resultTabs(page)).toHaveText(["Output", /^contracts/]);
-  await expect(work(page).locator(".running-bar")).toHaveCount(0);
+  await expect(page.locator(".statusbar .running-bar")).toHaveCount(0);
   await resultTabs(page).first().click();
   await expect(work(page).locator(".output-log .ol.sql")).toHaveCount(1);
   await expect(work(page).locator(".output-log .ol.sql")).toContainText("select * from contracts");
@@ -105,7 +105,7 @@ test("the toolbar's Cancel cancels a ⌘↩ waiting for the module", async ({ pa
   await expect(page.locator(".statusbar").getByTitle("Cancel Running Statements")).toBeEnabled();
   await expect(page.locator(".statusbar").getByTitle(/^Execute/)).toBeDisabled();
   await stop.click();
-  await expect(work(page).locator(".running-bar")).toHaveCount(0);
+  await expect(page.locator(".statusbar .running-bar")).toHaveCount(0);
   await expect(stop).toBeDisabled();
   await expect(page.locator(".statusbar").getByTitle("Cancel Running Statements")).toBeDisabled();
   await release();
@@ -185,9 +185,9 @@ test("⌘F2 cancels a ⌘↩ still waiting for the WebAssembly module, like a ru
   await openConsole(page);
   await typeSql(page, "select * from users");
   await page.keyboard.press("Meta+Enter");
-  await expect(work(page).locator(".running-bar")).toContainText("Loading the statement splitter");
+  await expect(page.locator(".statusbar .running-bar")).toContainText("Loading the statement splitter");
   await page.keyboard.press("Meta+F2");
-  await expect(work(page).locator(".running-bar")).toHaveCount(0);
+  await expect(page.locator(".statusbar .running-bar")).toHaveCount(0);
   // The cancelled run never starts once the module is there
   const loaded = page.waitForResponse((r) => WASM(new URL(r.url())));
   release();

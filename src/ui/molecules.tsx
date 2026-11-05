@@ -296,11 +296,12 @@ export function DetailRow({ children, value, tone, note }: { children: ReactNode
 
 // ───────── Menu item ─────────
 /** Menu row: name ……… shortcut (▸ for submenus) */
-export function MenuItem({ label, shortcut, danger, disabled, hasSubmenu, children, onClick, onMouseEnter }: { label: ReactNode; shortcut?: string; danger?: boolean; disabled?: boolean; hasSubmenu?: boolean; children?: ReactNode; onClick?: () => void; onMouseEnter?: () => void }) {
+export function MenuItem({ label, shortcut, danger, disabled, title, hasSubmenu, children, onClick, onMouseEnter }: { label: ReactNode; shortcut?: string; danger?: boolean; disabled?: boolean; title?: string; hasSubmenu?: boolean; children?: ReactNode; onClick?: () => void; onMouseEnter?: () => void }) {
   return (
     <div
       className={cx("ui-menu-item", danger && "danger", disabled && "disabled")}
       role="menuitem"
+      title={title}
       aria-disabled={disabled}
       onMouseEnter={onMouseEnter}
       onClick={() => !disabled && onClick?.()}
@@ -351,6 +352,7 @@ export function TreeRow({
   className,
   style,
   dataNode,
+  id,
   onSelect,
   onToggle,
   onDoubleClick,
@@ -375,7 +377,10 @@ export function TreeRow({
   style?: React.CSSProperties;
   /** Key that Select In Explorer looks for */
   dataNode?: string;
-  onSelect?: () => void;
+  /** DOM id: the explorer reads the selectable rows' order from it (⇧-click range) */
+  id?: string;
+  /** Mouse down on the row (the event: ⌘ / ⇧ / right button), or a click on its expander (no event) */
+  onSelect?: (e?: MouseEvent) => void;
   onToggle?: () => void;
   onDoubleClick?: () => void;
   onContextMenu?: (e: MouseEvent) => void;
@@ -387,6 +392,7 @@ export function TreeRow({
       className={cx("tree-node", selected && "selected", className)}
       style={{ paddingLeft: 4 + depth * 19, ...style }}
       data-node={dataNode}
+      id={id}
       title={title}
       role="treeitem"
       aria-expanded={leaf ? undefined : !!open}

@@ -20,6 +20,7 @@ DeleteRow	Delete Row	d / Delete (grid)
 SetNull	Set NULL	n (grid)
 ExportCsv	Export Data… (CSV, TSV, JSON, SQL INSERT, Markdown)	x (grid)
 CopyInList	Copy Column as IN List  ('a', 'b', …)	Y (grid)
+MarkRow	Mark Row (add the row to the selection or take it out: y copies, d deletes the marked rows)	m (grid)
 ValueEditor	Value Panel (the current cell's whole value, beside the grid)	v (grid)
 FindSimilar	Find Similar Rows (pgvector, by the vector column)	—
 RagSearch	AI Search (RAG)… — ask a table in plain words	—
@@ -64,6 +65,8 @@ DeleteDataSource	Remove Data Source	D (explorer)
 Connect	Connect	c (explorer)
 Disconnect	Disconnect	⌃F2
 Refresh	Refresh	r (explorer)
+MarkNode	Mark / Unmark Node (Go to DDL, open, copy, drop and refresh act on every marked node; Esc clears)	m (explorer)
+DropObject	Drop… (the selected object, or the marked objects of one database: one confirmation)	Delete (explorer)
 ManageSchemas	Manage Shown Schemas… (databases · schemas in the explorer)	s (explorer)
 CloseTab	Close Tab	⌃w
 NextTab	Next Tab	⌥Right / ⌃PgDn
@@ -89,6 +92,7 @@ CycleFocus	Cycle Focus (explorer → editor → results)	F6
 TrustSshHost	Trust SSH Host Key (after checking its fingerprint)	—
 PasswordKey	Password Key… (keep it in the config folder or the system keychain)	—
 GridAlign	Grid Alignment… (where cells sit per kind of value: NULL, numbers, text …; shared with the GUI)	—
+Theme	Theme… (Auto follows the terminal background, or Dark / Light)	—
 CheckUpdate	Check for Updates	—
 UpdateChannel	Update Channel… (stable releases only, or beta: also every merge to main)	—
 InstallUpdate	Update Qurry & Restart (download the latest release)	—

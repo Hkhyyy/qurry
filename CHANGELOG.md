@@ -4,6 +4,43 @@ What changed in each Qurry version, for people who use it. The format follows [K
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-04
+
+### Added
+
+- **Edit console results**: a console result from one table that includes the table's whole primary key edits like a table tab, in the GUI and the TUI: the same Submit path (each `UPDATE` / `DELETE` must hit exactly one row, read-only data sources, Production log), SQL written with the table's column names behind aliases. Joins, `GROUP BY`, `DISTINCT`, `UNION`, computed columns, views and results without the key stay read-only, and the greyed-out buttons (TUI: the status line) say why. Results of a temporary table or a locking read (`FOR UPDATE` / `FOR SHARE`, `LOCK IN SHARE MODE`), and every console result in Manual mode or while a transaction is open, stay read-only with the reason, because the edits are saved on a connection of their own. Running the console again with pending edits asks first (#86, [Getting started](docs/getting-started.md)).
+- **Multi-select in the result grid**: ⌘-click adds a cell, a row (row number) or a column (header) to the selection, ⇧-click extends the last range; copy, the Data Extractor, Delete Row, Revert Selected and Set NULL act on every range. TUI: `m` marks the current row, `y` / `d` / `Y` act on the marked rows (#96).
+- **Multi-select in the Database Explorer**: ⌘-click and ⇧-click select several nodes; Go to DDL, Edit Data, Copy Name / Reference, Refresh and **Drop…** (one confirmation, the Production one on Production sources) act on all of them. TUI: `m` marks nodes, Delete drops the marked objects. On MySQL, Drop… of several objects runs one statement per object, dependents first (a table before the tables it references), and a failure reports what was applied, what failed and what didn't run (#96, [Shortcuts](docs/shortcuts-gui.md)).
+- **Console gutter marks**: each statement that ran is marked on its first line: ✓ done, ✗ failed, a spinner (TUI `…`) while it runs. Hover shows when it ran and its result or error; a click shows its line in Output. Only the latest run is marked: a new run clears the earlier marks, and editing the statement drops its mark (#98).
+- **Completion in the table filter**: a table tab's WHERE / ORDER BY field completes like the console with the table's columns, keywords and functions (no other tables or schemas), as you type or with ⌃Space (TUI ⇥) (#93).
+- **TUI light theme**: a light palette for light terminals and **⌃k › Theme…** (Auto, Dark, Light, saved in `settings.json`). Auto follows `COLORFGBG` and says at startup how to get the dark colors back (#90, [TUI in your terminal](docs/tui.md)).
+- **Database Admin reports: pick the database** in the report toolbar (TUI: `d`) to rerun the report on it; like the console's database picker it lists every database of the server, the current one first (Manage Shown Schemas only filters the explorer). A connect error names the database and suggests picking another one only when the server refuses that database (#99, [Database tools](docs/database-tools.md)).
+- **Add Font File…** in GUI **Settings › Editor / Grid font**: pick a `.ttf`, `.otf`, `.woff` or `.woff2` (up to 20 MB); Qurry copies it into its config folder and lists it as an added font you can remove. The TUI keeps the terminal's font (#87, [Settings](docs/settings.md)).
+
+### Changed
+
+- **`NULL` sits where its column's type does** in result grids (GUI and TUI): on the left in text, date / time, boolean and JSON columns, on the right in numeric ones; in a column without a type (a SQLite expression, MongoDB) it goes by the column's values. It is the new **Column type** choice for NULL in **Settings › Appearance › Alignment** (TUI **⌃k › Grid Alignment…**), and the default. A NULL alignment you saved as Left or Center stays as it was. If you kept the 0.3.0 default, `NULL`s in text-like columns move to the left: to keep the 0.3.0 look, set **NULL** to **Right** (#95, [Settings](docs/settings.md)).
+- **⌘-click adds to the selection** in the result grid and the Database Explorer (it used to select only the clicked cell or node) (#96).
+- **Submit on a Production data source asks first**, in table tabs as well as consoles: the dialog lists the statements; Cancel keeps the pending edits (#86).
+- **Settings and Keymap Reference buttons** moved from the right end of the status bar to the bottom of the workspace rail on the far left; the workspace list scrolls above them. ⌘, and ⇧⌘/ still work. In maximized mode (tool windows hidden) there are no mouse buttons for them: use ⌘, / ⇧⌘/ or the Help menu (#97).
+- **TUI Auto theme follows `COLORFGBG`**: on a terminal that reports a light background the TUI now draws its light palette. To keep the dark colors, pick **⌃k › Theme… › Dark** (#90).
+- Console line numbers move to the right to make room for the gutter marks (#98).
+- The running indicator moved from a card over the result to the status bar; ■ cancels runs and load-more (the card's Cancel button is gone). Loading more rows shows there too, as a run does ("Loading more rows…" with the elapsed time), so nothing covers the grid's rows; a load-more that fails says why beside the row count with **Run again**. TUI: the status line shows a moving bar, what runs or loads and the elapsed time, and the Cancel key stops a load-more too (#94).
+- Release builds are faster: e2e runs one job per browser with two Playwright workers, and the release builds the CLI in its own job (#88).
+- [SECURITY.md](SECURITY.md) describes the release signing key: where it lives, how it is rotated through a bridge release, and what happens when it is lost or leaked (#91).
+
+### Fixed
+
+- The database pickers of consoles, Redis browsers and Database Admin reports (and the console's schema picker) list their databases as soon as the tab is shown: the first click used to open a list with only the current database, the rest arriving too late.
+- Console completion no longer offers column values in a JOIN's `ON` condition (`on m.admin_user_idx = `), where the other side is usually a column: the statement's columns complete there; a `WHERE` after the join still suggests values.
+- Database Admin reports: picking a database the account can't connect to no longer makes the database list as wide as the window or empties it. The listing error shows above the report (and as the list's tooltip) instead of as a list entry, and the list is read through the source's default database when the report's refuses, so another one can be picked (TUI `d` likewise). Long database names are cut with … in the report's and the console's lists.
+- **Statements popup** (⌘↩ with several choices; TUI F5): while a choice is highlighted the editor highlights exactly what it would run (TUI: its rows; the TUI chooser sits at the bottom so they stay in view), and the highlight goes when the popup closes. The GUI popup now has the keys like a menu: ↑↓ and Enter pick, Esc or any other key closes it without running and without typing into the editor, a click outside or focus leaving closes it, and the caret is where it was.
+- **New Query Console** (⇧⌘L) and the other commands that act on the explorer selection use the shown workspace's selection: back from a workspace with a Redis source selected, a new console used to open for that Redis source, and every new console after it.
+- Console Output keeps its newest line in view while following: new lines, long wrapped lines (TUI) and a pane made shorter or narrower (#92).
+- **Manage Shown Schemas**: with **All databases** or **All schemas** on, unchecking one database or schema used to do nothing until All was unchecked first. Now All turns off and the other listed ones stay shown (a database keeps its schema choice; system schemas and MySQL's system databases stay hidden unless checked one by one); checking every one again turns All back on (GUI and TUI, as in DataGrip). The Schemas tab of Data Source Properties follows the same rules: under All, every database and schema shows checked.
+
+## [0.3.0] - 2026-11-04
+
 ### Added
 
 - Stable and beta update channels. Stable (the default) gets the releases made from a version tag; beta also gets the pre-release built from every merge to `main`. Pick one in GUI **Settings › Appearance › Updates** or TUI **⌃k › Update Channel…**; the GUI, the TUI and `qurry-tui --update` share it. See [Updates](docs/updates.md).

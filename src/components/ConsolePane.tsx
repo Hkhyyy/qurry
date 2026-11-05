@@ -1,14 +1,15 @@
-import { ReactNode, useEffect, useRef, useState } from "react";
+import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { QueryResult, Dialect, DbKind } from "../lib/api";
+import { QueryResult, Dialect, DbKind, currentFirst } from "../lib/api";
 import { splitScript } from "../lib/sqlSplit";
 import { DEFAULT_EXEC, ExecSettings, planExecution, planSelection } from "../lib/execPlan";
 import { initShared, sharedReady } from "../lib/shared";
 import { cmd, eventSpec, keyTitle, runKey } from "../lib/shortcuts";
 import { ConsoleEditor, EditorApi, RunRequest } from "./ConsoleEditor";
+import type { MarkStmt } from "../lib/stmtMark";
 import { ContextMenu, MenuItem } from "./Explorer";
-import { CONSOLE_READ_ONLY, ResultGrid } from "./ResultGrid";
-import { RunningBar } from "./RunningBar";
+import { CONSOLE_IN_TX, CONSOLE_READ_ONLY, ResultGrid } from "./ResultGrid";
+import { ask } from "../lib/dialogs";
 import { planText } from "../lib/planText";
 import { IcClock, IcGear, IcReload, IcStop } from "../ui/icons";
 import { EmptyState, IconButton, Select, Spacer, TabItem, TabStrip, Table, Td, Th, ToolButton, Toolbar, ToolbarSep } from "../ui";
@@ -58,6 +59,8 @@ export interface OutputLine {
   ts: string;
   text: string;
   level: "sql" | "info" | "warn" | "error";
+  /** The echo line of a run statement: the id its gutter mark points to */
+  stmt?: string;
 }
 
 /** The editor's API plus the ⌘↩ waiting for the WebAssembly module, which ⌘F2 cancels like a run */
@@ -89,14 +92,18 @@ interface Props {
   output: OutputLine[];
   txManual: boolean;
   inTx: boolean;
+  /** Read-only data source: its results can't be edited */
+  readOnly?: boolean;
   onChange: (sql: string) => void;
   /** Actual execution: list of statements */
-  onExecute: (statements: string[], explain?: "plan" | "analyze") => void;
+  onExecute: (statements: string[], explain?: "plan" | "analyze", mark?: MarkStmt) => void;
   onCancel: () => void;
   onSetActiveResult: (id: string) => void;
   onPin: (id: string, pinned: boolean) => void;
   onCloseResult: (id: string) => void;
   onFetchMore: (entryId: string) => void;
+  /** Save a result's grid edits (the table tab's path), then run its statement again */
+  onSubmit: (entryId: string, statements: string[]) => Promise<void>;
   onExport: (sql: string) => void;
   onHistory: () => void;
   onTxMode: (manual: boolean) => void;
@@ -123,6 +130,12 @@ export function ConsolePane(p: Props) {
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const [chooser, setChooser] = useState<{ options: { label: string; stmts: string[]; ranges: { start: number; end: number }[] }[]; idx: number; req: RunRequest } | null>(null);
   const [api, setApi] = useState<EditorApi | null>(null);
+  /** The Output line of the gutter mark last clicked: selected, and scrolled to on each click */
+  const [markedOut, setMarkedOut] = useState<{ out: string } | null>(null);
+  const outputRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    outputRef.current?.querySelector(".ol.on")?.scrollIntoView({ block: "nearest" });
+  }, [markedOut]);
   /** A ⌘↩ waiting for the WebAssembly module, as the editor was at the press (null once it ran or was cancelled) */
   const pending = useRef<RunRequest | null>(null);
   const [loading, setLoadingState] = useState(false);
@@ -136,6 +149,24 @@ export function ConsolePane(p: Props) {
   };
   // A closed console never runs what was waiting
   useEffect(() => () => void (pending.current = null), []);
+  /** Pending edits in the shown result's grid: a run, or showing another result tab, would drop them */
+  const edits = useRef(0);
+  const dropEdits = async () => {
+    const n = edits.current;
+    if (!n) return true;
+    const ok = await ask(`${n} pending change${n === 1 ? " is" : "s are"} not saved to the database. Discard ${n === 1 ? "it" : "them"}?`, { title: "Pending changes", okLabel: "Discard", danger: true });
+    if (ok) edits.current = 0;
+    return ok;
+  };
+  const execute = async (stmts: string[], explain?: "plan" | "analyze", mark?: MarkStmt) => {
+    if (await dropEdits()) p.onExecute(stmts, explain, mark);
+  };
+  const showResult = async (id: string) => {
+    if (id === p.activeResult || (await dropEdits())) p.onSetActiveResult(id);
+  };
+  const closeResult = async (id: string) => {
+    if (id !== p.activeResult || (await dropEdits())) p.onCloseResult(id);
+  };
 
   const setSettings = (s: ExecSettings) => {
     setSettingsState(s);
@@ -186,14 +217,14 @@ export function ConsolePane(p: Props) {
       // As one statement without the module too (the way to run while it failed to load)
       const stmts = settings.selection === "single" && !sharedReady() ? [{ start: 0, end: sel.length, sql: sel.trim() }] : planSelection(sel, splitFn(sel), settings);
       if (!stmts.length) return;
-      req.highlight(stmts.map((s) => ({ start: selection.start + s.start, end: selection.start + s.end })));
-      return p.onExecute(stmts.map((s) => s.sql), req.explain);
+      const mark = req.begin(stmts.map((s) => ({ start: selection.start + s.start, end: selection.start + s.end })));
+      return void execute(stmts.map((s) => s.sql), req.explain, mark);
     }
     const plan = planExecution(text, offset, splitFn(text), settings, p.kind);
     if (!plan) return;
     if ("run" in plan) {
-      req.highlight(plan.run.map((x) => ({ start: x.start, end: x.end })));
-      return p.onExecute(plan.run.map((x) => x.sql), req.explain);
+      const mark = req.begin(plan.run.map((x) => ({ start: x.start, end: x.end })));
+      return void execute(plan.run.map((x) => x.sql), req.explain, mark);
     }
     // Ask what to execute: Statements popup
     setChooser({ options: plan.ask.map((o) => ({ label: o.label, stmts: o.stmts.map((x) => x.sql), ranges: o.stmts })), idx: 0, req });
@@ -204,11 +235,13 @@ export function ConsolePane(p: Props) {
   const pickChoice = (i: number) => {
     if (!chooser) return;
     const o = chooser.options[i];
-    chooser.req.highlight(o.ranges);
-    p.onExecute(o.stmts, chooser.req.explain);
+    void execute(o.stmts, chooser.req.explain, chooser.req.begin(o.ranges));
     setChooser(null);
     api?.focus();
   };
+  // The editor shows what the highlighted option would run, until the popup closes
+  const previewed = chooser?.options[chooser.idx].ranges;
+  useEffect(() => api?.preview(previewed ?? []), [api, previewed]);
 
   const dropdown = (e: React.MouseEvent, items: MenuItem[]) => {
     e.stopPropagation();
@@ -221,11 +254,42 @@ export function ConsolePane(p: Props) {
   /** A result tab's context menu; its commands' keys act on the shown result tab (and Clear All's on the output) */
   const resultMenu = (r: { id: string; pinned?: boolean }): MenuItem[] => [
     { label: r.pinned ? "Unpin Tab" : "Pin Tab", ...cmd("result.pin"), action: () => p.onPin(r.id, !r.pinned) },
-    { label: "Close", ...cmd("result.close"), action: () => p.onCloseResult(r.id) },
-    { label: "Close All Unpinned", ...cmd("result.closeUnpinned"), action: () => p.results.filter((x) => !x.pinned).forEach((x) => p.onCloseResult(x.id)) },
+    { label: "Close", ...cmd("result.close"), action: () => void closeResult(r.id) },
+    { label: "Close All Unpinned", ...cmd("result.closeUnpinned"), action: () => void dropEdits().then((ok) => ok && p.results.filter((x) => !x.pinned).forEach((x) => p.onCloseResult(x.id))) },
   ];
   // If the selected result tab is gone (cleared by a rerun), show Output — instead of an empty pane
   const shown = active ? p.activeResult : "output";
+  // Output follows new lines while scrolled to the bottom; scrolled up, it keeps the position. Clear All and coming back to Output follow again.
+  const follow = useRef(true);
+  /** Where following last put the scroll position: a scroll away from it whose scroll event hasn't come yet (it comes a frame later)
+   * still means the user scrolled up, so lines arriving in between don't pull the view back down */
+  const followedTop = useRef(0);
+  const keepFollowing = (el: HTMLElement) => {
+    if (follow.current && el.scrollTop < followedTop.current - 4 && el.scrollHeight - el.scrollTop - el.clientHeight > 4) follow.current = false;
+    if (!follow.current) return;
+    el.scrollTop = el.scrollHeight;
+    followedTop.current = el.scrollTop;
+  };
+  useLayoutEffect(() => {
+    follow.current = true;
+    followedTop.current = 0;
+  }, [shown]);
+  useLayoutEffect(() => {
+    const el = outputRef.current;
+    if (p.output.length === 0) {
+      follow.current = true;
+      followedTop.current = 0;
+    }
+    if (el) keepFollowing(el);
+  }, [p.output, p.errorAction, shown]);
+  // A shorter or narrower log (divider dragged, window resized) fires no scroll: keep the newest line in view while following
+  useLayoutEffect(() => {
+    const el = outputRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => keepFollowing(el));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [shown]);
 
   return (
     <div
@@ -294,16 +358,16 @@ export function ConsolePane(p: Props) {
             <ToolButton title={keyTitle("Roll back", "tx.rollback")} onClick={p.onRollback} disabled={!p.inTx}>↶ Roll back</ToolButton>
           </>
         )}
-        <IconButton tone="danger" title={keyTitle("Cancel Running Statements", "editor.cancel")} onClick={loading ? cancelPending : p.onCancel} disabled={!p.running && !loading}><IcStop /></IconButton>
+        <IconButton tone="danger" title={keyTitle("Cancel Running Statements", "editor.cancel")} onClick={loading ? cancelPending : p.onCancel} disabled={!p.running && !p.loadingMore && !loading}><IcStop /></IconButton>
         <Spacer />
         <span className="cb-ds">{p.connName}</span>
         <Select className="cb-sel" value={p.database} onFocus={p.onLoadDbs} onMouseDown={p.onLoadDbs} onChange={(e) => p.onSwitchDb(e.target.value)} title="Database">
-          {[...new Set([p.database, ...p.dbList])].map((d) => (
-            <option key={d} value={d}>{d}</option>
+          {currentFirst(p.database, p.dbList).map((d) => (
+            <option key={d} value={d} title={d}>{d}</option>
           ))}
         </Select>
         <Select className="cb-sel" value={p.schema} onFocus={p.onLoadSchemas} onMouseDown={p.onLoadSchemas} onChange={(e) => p.onSwitchSchema(e.target.value)} disabled={p.schemaSwitchDisabled} title={p.schemaSwitchDisabled ? "Schema switching is disabled for this data source" : "Switch current schema"}>
-          {[...new Set([p.schema, ...p.schemaList])].map((x) => (
+          {currentFirst(p.schema, p.schemaList).map((x) => (
             <option key={x} value={x}>{x}</option>
           ))}
         </Select>
@@ -320,19 +384,25 @@ export function ConsolePane(p: Props) {
               language={p.dialect?.monaco ?? "pgsql"}
               onChange={p.onChange}
               onRun={onRun}
+              onMarkClick={(out) => {
+                p.onSetActiveResult("output");
+                setMarkedOut({ out });
+              }}
               registerApi={(id, a) => {
                 setApi(a);
                 p.registerApi(id, { ...a, loading: () => pending.current !== null, cancelPending });
               }}
             />
             {chooser && (
-              <div className="stmt-chooser" tabIndex={-1} ref={(el) => el?.focus()} onKeyDown={(e) => {
+              // A menu: it has the keys while open (↑↓ Enter; any other key, Esc included, closes it and does nothing else),
+              // and focus leaving it (a click outside, another tab) closes it without running
+              <div className="stmt-chooser" role="menu" tabIndex={-1} ref={(el) => el?.focus()} onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && setChooser(null)} onKeyDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
                 if (e.key === "ArrowDown") setChooser({ ...chooser, idx: Math.min(chooser.idx + 1, chooser.options.length - 1) });
                 else if (e.key === "ArrowUp") setChooser({ ...chooser, idx: Math.max(chooser.idx - 1, 0) });
                 else if (e.key === "Enter") pickChoice(chooser.idx);
-                else if (e.key === "Escape") { setChooser(null); api?.focus(); }
-                e.preventDefault();
-                e.stopPropagation();
+                else if (!["Shift", "Control", "Alt", "Meta"].includes(e.key)) { setChooser(null); api?.focus(); }
               }}>
                 <div className="sc-title">Statements</div>
                 {chooser.options.map((o, i) => (
@@ -351,10 +421,10 @@ export function ConsolePane(p: Props) {
             <div className="result-tabs">
               <TabStrip
                 activeKey={shown}
-                overflow={[{ key: "output", label: "Output", active: shown === "output", onSelect: () => p.onSetActiveResult("output") }, ...p.results.map((r) => ({ key: r.id, label: (r.kind === "plan" ? "Plan: " : "") + r.title, active: shown === r.id, onSelect: () => p.onSetActiveResult(r.id) }))]}
+                overflow={[{ key: "output", label: "Output", active: shown === "output", onSelect: () => void showResult("output") }, ...p.results.map((r) => ({ key: r.id, label: (r.kind === "plan" ? "Plan: " : "") + r.title, active: shown === r.id, onSelect: () => void showResult(r.id) }))]}
                 style={{ flex: 1, minWidth: 0 }}
               >
-              <TabItem variant="result" label="Output" active={shown === "output"} onClick={() => p.onSetActiveResult("output")} />
+              <TabItem variant="result" label="Output" active={shown === "output"} onClick={() => void showResult("output")} />
               {p.results.map((r) => (
                 <TabItem
                   key={r.id}
@@ -363,8 +433,8 @@ export function ConsolePane(p: Props) {
                   active={shown === r.id}
                   pinned={r.pinned}
                   onPin={() => p.onPin(r.id, false)}
-                  onClose={() => p.onCloseResult(r.id)}
-                  onClick={() => p.onSetActiveResult(r.id)}
+                  onClose={() => void closeResult(r.id)}
+                  onClick={() => void showResult(r.id)}
                   onContextMenu={(e) => {
                     e.preventDefault();
                     setMenu({
@@ -382,12 +452,19 @@ export function ConsolePane(p: Props) {
               )}
             </div>
             <div className="result-area">
-              {loading ? <RunningBar running label="Loading the statement splitter" onCancel={cancelPending} /> : <RunningBar running={p.running} onCancel={p.onCancel} />}
               {shown === "output" && (
-                <div className="output-log">
+                <div
+                  className="output-log"
+                  ref={outputRef}
+                  onScroll={(e) => {
+                    const el = e.currentTarget;
+                    follow.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 4;
+                    if (follow.current) followedTop.current = el.scrollTop;
+                  }}
+                >
                   {p.output.length === 0 && <EmptyState>Execute a statement{cmd("editor.run").shortcut ? ` (${cmd("editor.run").shortcut})` : ""} to see the output.</EmptyState>}
                   {p.output.map((l, i) => (
-                    <div key={i} className={"ol " + l.level}>
+                    <div key={i} className={"ol " + l.level + (l.stmt && l.stmt === markedOut?.out ? " on" : "")}>
                       <span className="ts">[{l.ts}]</span> {l.text}
                     </div>
                   ))}
@@ -397,13 +474,17 @@ export function ConsolePane(p: Props) {
               {active?.kind === "result" && active.result && (
                 <ResultGrid
                   result={active.result}
-                  readOnlyReason={CONSOLE_READ_ONLY}
+                  // One table with its key (the backend says so); in a transaction the edits would save outside it
+                  edit={p.txManual || p.inTx ? undefined : active.result.edit}
+                  readOnly={p.readOnly}
+                  readOnlyReason={!active.result.edit ? (active.result.readOnlyReason ?? CONSOLE_READ_ONLY) : p.readOnly ? "Data source is read-only" : CONSOLE_IN_TX}
+                  onPendingChange={(n) => (edits.current = n)}
                   running={p.running}
                   loadingMore={p.loadingMore}
                   query={active.sql}
                   onFetchMore={() => p.onFetchMore(active.id)}
-                  onSubmit={async () => {}}
-                  onReload={() => p.onExecute([active.sql])}
+                  onSubmit={(st) => p.onSubmit(active.id, st)}
+                  onReload={() => void execute([active.sql])}
                   onCancel={p.onCancel}
                   onExport={() => p.onExport(active.sql)}
                   dialect={p.dialect}

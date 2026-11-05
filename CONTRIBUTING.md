@@ -36,6 +36,7 @@ pnpm test                                     # GUI logic (vitest)
 pnpm build                                    # tsc and the web build
 npx playwright install chromium
 npx playwright test --project=chromium        # GUI end to end, against the mock backend
+npx playwright test --project=chromium --workers=2   # same, two tests at a time (one by default)
 ```
 
 ### Against real servers

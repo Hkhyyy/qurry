@@ -127,6 +127,7 @@ impl PluginConn {
             has_result_set: o.has_result_set,
             in_transaction: false,
             warning: None,
+            editable: None,
         })
     }
 }

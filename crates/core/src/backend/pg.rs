@@ -612,6 +612,22 @@ impl Backend for PgPool {
         Ok(TableShape { cols, fks: fks.into_iter().map(|(ref_table, cols, ref_cols)| Fk { cols, ref_table, ref_cols }).collect() })
     }
 
+    /// Views and materialized views reading one another: DROP VIEW and DROP MATERIALIZED VIEW are separate statements
+    async fn drop_deps(&self, schemas: &[String]) -> AppResult<Vec<[String; 4]>> {
+        let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+            "SELECT DISTINCT dn.nspname::text, dc.relname::text, sn.nspname::text, sc.relname::text \
+             FROM pg_depend d JOIN pg_rewrite r ON r.oid = d.objid \
+             JOIN pg_class dc ON dc.oid = r.ev_class JOIN pg_namespace dn ON dn.oid = dc.relnamespace \
+             JOIN pg_class sc ON sc.oid = d.refobjid JOIN pg_namespace sn ON sn.oid = sc.relnamespace \
+             WHERE d.classid = 'pg_rewrite'::regclass AND d.refclassid = 'pg_class'::regclass AND dc.oid <> sc.oid \
+               AND dc.relkind IN ('v', 'm') AND sc.relkind IN ('v', 'm') AND dn.nspname = ANY($1)",
+        )
+        .bind(schemas)
+        .fetch_all(self)
+        .await?;
+        Ok(rows.into_iter().map(|(a, b, c, d)| [a, b, c, d]).collect())
+    }
+
     // ───── Connection: db.rs · app.rs ─────
 
     async fn server_version(&self) -> AppResult<String> {

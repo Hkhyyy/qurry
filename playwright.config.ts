@@ -8,7 +8,7 @@ const viewport = { width: 1400, height: 900 };
 export default defineConfig({
   testDir: "e2e",
   forbidOnly: !!process.env.CI,
-  // One browser at a time: the suite is short and laptops run other things
+  // One worker by default (laptops run other things); --workers for more (CI passes --workers=2)
   workers: 1,
   retries: 0,
   reporter: process.env.CI ? "github" : "list",

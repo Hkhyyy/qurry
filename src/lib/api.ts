@@ -116,6 +116,18 @@ export interface QueryResult {
   warning?: string;
   /** GUI only: loading more rows failed, and why (the grid shows it, and stops loading more until the query runs again) */
   moreError?: string;
+  /** A console SELECT's result whose rows can be edited like a table tab's: in this table (not sent on load more) */
+  edit?: ResultEditTarget;
+  /** A console result whose rows can't be edited, and why (instead of `edit`). Neither: not checked */
+  readOnlyReason?: string;
+}
+
+/** Where a console result's edits go: result column i is the table's column `columns[i]`; `pk` is the table's primary key */
+export interface ResultEditTarget {
+  schema: string;
+  table: string;
+  pk: string[];
+  columns: string[];
 }
 
 /** Statements run in one transaction: rows changed; warning = committed, but the Production log couldn't record the result */
@@ -165,10 +177,18 @@ export type UpdateChannel = "stable" | "beta";
 
 /** An installed font family (Settings › Appearance fonts); mono: every face is monospaced */
 export type FontFamily = { name: string; mono: boolean };
+/** A font file added in Settings (copied into the config folder's fonts/), registered with FontFace as the family `name` */
+export type CustomFont = { name: string; file: string };
 
 export const api = {
   /** Installed font families, sorted (listed afresh on each call; empty where the OS isn't supported) */
   fontFamilies: () => invoke<FontFamily[]>("font_families"),
+  customFonts: () => invoke<CustomFont[]>("custom_fonts"),
+  /** Opens the file dialog and copies the picked font into the fonts folder; null if cancelled */
+  addFontFile: () => invoke<CustomFont | null>("add_font_file"),
+  /** Deletes the copy in the fonts folder */
+  removeFontFile: (file: string) => invoke<void>("remove_font_file", { file }),
+  fontFile: (file: string) => invoke<ArrayBuffer>("font_file", { file }),
   checkUpdate: (force = false) => invoke<UpdateInfo>("check_update", { force }),
   updateChannel: () => invoke<UpdateChannel>("update_channel"),
   /** Saves the channel; what it offers from the saved check (no request), null if nothing was checked yet */
@@ -293,6 +313,8 @@ export const ddl = {
   table: (id: string, before: TableDef | null, after: TableDef) => invoke<string[]>("table_ddl", { id, before, after }),
   newObject: (id: string, object: NewObject) => invoke<string[]>("new_object_ddl", { id, object }),
   rename: (id: string, what: string, schema: string, old: string, newName: string) => invoke<string>("rename_ddl", { id, what, schema, old, new: newName }),
+  /** Drop… of objects of one database, in an order that runs: views, then tables (one statement), then sequences */
+  drop: (id: string, objects: { kind: string; schema: string; name: string }[]) => invoke<string[]>("drop_ddl", { id, objects }),
   /** A warning when it ran but the Production log couldn't record it */
   run: (id: string, statements: string[]) => invoke<string | null>("run_ddl", { id, statements }),
 };
@@ -574,6 +596,19 @@ export function dbVisible(scope: Scope | undefined, db: string, defaultDb: strin
   if (!d || d.length === 0) return true;
   return d.includes(SCOPE_ALL) || d.includes(db) || (d.includes(SCOPE_DEFAULT) && db === defaultDb);
 }
+
+/** The database a target without "::db" connects to (PostgreSQL: postgres when blank; MySQL: none, all schemas) */
+export const defaultDbOf = (c: Pick<ConnectionView, "database" | "kind">) => c.database || (c.kind === "postgres" ? "postgres" : "");
+
+const MY_SYS = ["information_schema", "performance_schema", "mysql", "sys"];
+/** A system database the explorer hides unless asked (MySQL's system schemas) */
+export const isSystemDb = (kind: DbKind, d: string) => kind === "mysql" && MY_SYS.includes(d);
+/** A database the explorer lists: one fixed database, or the shown-database scope (MySQL system schemas only with showSystem) */
+export const dbShown = (c: ConnectionView, d: string, defaultDb: string, showSystem = false) =>
+  c.options?.singleDb ? d === defaultDb : (showSystem || !isSystemDb(c.kind, d) || d === defaultDb) && dbVisible(c.scope, d, defaultDb);
+
+/** A database or schema picker's list (console, Redis browser, Database Admin report): the current one first, then every one of the server in its order */
+export const currentFirst = (current: string, dbs: string[]) => [...new Set([current, ...dbs])];
 
 export function schemaVisible(scope: Scope | undefined, db: string, schema: string, isSystem: boolean, showSystem: boolean) {
   const s = scope?.schemas?.[db];

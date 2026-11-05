@@ -35,6 +35,13 @@ pub const C_VIEW: Color = Color::Rgb(127, 176, 110);
 pub const C_SEQUENCE: Color = Color::Rgb(201, 162, 109);
 pub const C_ROUTINE: Color = Color::Rgb(86, 168, 245);
 pub const C_KEYWORD: Color = Color::Rgb(204, 120, 50);
+// Redis key types (GUI RedisBrowser TYPE_COLOR): tree icons and badges
+pub const R_STRING: Color = Color::Rgb(95, 158, 160);
+pub const R_HASH: Color = Color::Rgb(176, 124, 198);
+pub const R_LIST: Color = Color::Rgb(106, 159, 216);
+pub const R_SET: Color = Color::Rgb(208, 139, 76);
+pub const R_ZSET: Color = Color::Rgb(201, 96, 92);
+pub const R_STREAM: Color = Color::Rgb(90, 164, 105);
 
 /// Selected row background
 pub fn selected(focused: bool) -> Color {

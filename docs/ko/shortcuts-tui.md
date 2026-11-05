@@ -32,6 +32,10 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 - `⌥1…9` 워크스페이스 전환 (그 키를 가진 명령이 없을 때), 편집기의 `⌃u` / `⌃r` 실행 취소 · 다시 실행, 찾기 막대의 키.
 - 팝업, Data Source 양식, Redis 브라우저, Database Admin 탭 안의 키는 그 화면에서 동작합니다. F1 창의 키도 그렇습니다.
 
+### 탐색기에서 여러 노드
+
+`m` 은 커서의 노드를 표시하거나 표시를 지웁니다 (GUI 의 `⌘` 클릭). 커서를 옮겨도 표시는 남고, `Esc` 로 모두 지웁니다. 그러면 Go to DDL (`⌃b`) 과 `F4` (하나마다 탭), `y` (한 줄에 `schema.name` 하나, GUI 의 Copy Reference), `Delete` (Drop…), 새로 고침이 화면에 보이는 표시한 노드 모두에 동작합니다. 접힌 폴더나 필터로 가려진 표시는 탐색기 제목에 "(N hidden)" 으로 따로 셉니다. Drop… 은 모든 문장을 보여 주며 한 번만 묻고 (운영 Data Source 는 한 객체일 때처럼 빨간 창), 한 데이터베이스의 테이블·뷰·시퀀스여야 합니다. 문장 순서는 GUI 와 같고 (기대는 쪽이 먼저, PostgreSQL 은 종류마다 한 문장을 한 트랜잭션으로, MySQL 은 객체마다 한 문장을 하나씩), 실패하면 적용된 것과 실행하지 않은 것을 알려 줍니다. 실패해도 탐색기를 다시 읽고 표시를 지웁니다. 표시한 노드 중 맞지 않는 것이 있으면 상태 줄이 그렇다고, 표시를 지우는 법과 함께 알려 줍니다.
+
 아래 전체 표의 설명은 앱 화면 (F1) 에 나오는 문구 그대로 영어로 둡니다.
 
 <!-- keymap:tui:start -->
@@ -101,6 +105,7 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | — | Set NULL |
 | — | Export Data… (CSV, TSV, JSON, SQL INSERT, Markdown) |
 | — | Copy Column as IN List  ('a', 'b', …) |
+| — | Mark Row (add the row to the selection or take it out: y copies, d deletes the marked rows) |
 | — | Find Similar Rows (pgvector, by the vector column) |
 | — | AI Search (RAG)… — ask a table in plain words |
 | — | Build RAG Index… (embed the rows) |
@@ -134,11 +139,14 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | — | Cancel Export/Import |
 | — | Remove Data Source |
 | — | Connect |
+| — | Mark / Unmark Node (Go to DDL, open, copy, drop and refresh act on every marked node; Esc clears) |
+| — | Drop… (the selected object, or the marked objects of one database: one confirmation) |
 | — | Manage Shown Schemas… (databases · schemas in the explorer) |
 | — | Unsplit All |
 | — | Trust SSH Host Key (after checking its fingerprint) |
 | — | Password Key… (keep it in the config folder or the system keychain) |
 | — | Grid Alignment… (where cells sit per kind of value: NULL, numbers, text …; shared with the GUI) |
+| — | Theme… (Auto follows the terminal background, or Dark / Light) |
 | — | Check for Updates |
 | — | Update Channel… (stable releases only, or beta: also every merge to main) |
 | — | Update Qurry & Restart (download the latest release) |
@@ -155,6 +163,8 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | `w` | Move Data Source to Another Workspace… |
 | `D` | Remove Data Source |
 | `c` | Connect |
+| `m` | Mark / Unmark Node (Go to DDL, open, copy, drop and refresh act on every marked node; Esc clears) |
+| `Delete` | Drop… (the selected object, or the marked objects of one database: one confirmation) |
 | `s` | Manage Shown Schemas… (databases · schemas in the explorer) |
 
 ## Data grid keys (when a grid has focus; change them in the F1 window)
@@ -168,6 +178,7 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | `n` | Set NULL |
 | `x` | Export Data… (CSV, TSV, JSON, SQL INSERT, Markdown) |
 | `Y` | Copy Column as IN List  ('a', 'b', …) |
+| `m` | Mark Row (add the row to the selection or take it out: y copies, d deletes the marked rows) |
 
 ## Database Explorer
 
@@ -179,9 +190,9 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | `F4 / ⌃↓` | Open a query console for the data source / database (Redis: the key browser) |
 | `/` | Filter loaded nodes (/ again edits it · empty or Esc clears) |
 | `F5` | Refresh (the run key refreshes in the explorer) |
-| `y  ⌘c` | Copy name (OSC 52 clipboard) |
+| `y  ⌘c` | Copy reference: schema.name, as the GUI's Copy Reference (OSC 52 clipboard; marked nodes: one per line) |
 | `PgUp / PgDn · Home / End` | Page · first / last node |
-| `Tab / Esc` | Go to the open tab |
+| `Tab / Esc` | Go to the open tab (Esc clears the marks first) |
 
 ## Query console
 
@@ -217,7 +228,7 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | `s` | Sort by the selected column: ▲ → ▼ → off (table data: ORDER BY · results: loaded rows) |
 | `w or / · o` | Edit WHERE · ORDER BY (table data) |
 | `r` | Reload (table data) |
-| `y  ⌘c` | Copy cell value (a selected range: as TSV, pastes into spreadsheets as cells) |
+| `y  ⌘c` | Copy cell value (a selected range or marked rows: as TSV, pastes into spreadsheets as cells) |
 | `⌘v` | Paste into cells from the selected one (tabs / lines fill several; extra lines add rows; table data) |
 | `Esc` | Back (query results: to the editor) |
 
@@ -239,6 +250,7 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | `c · K` | Cancel the query · terminate the session of the selected row (asks first) |
 | `Enter · g` | Open the row's query in a console · generate SQL from the row (DROP INDEX, VACUUM, REVOKE…) |
 | `p` | Pick another report |
+| `d` | Run the report on another database (MySQL: schema); the grid's title names it |
 
 ## Redis browser (Medis style)
 

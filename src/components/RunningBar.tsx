@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Button, ProgressBar, Text } from "../ui";
+import { ProgressBar, Text } from "../ui";
 
 /** 12.3 s · 1 m 05 s */
 export function elapsedText(ms: number): string {
@@ -8,30 +8,20 @@ export function elapsedText(ms: number): string {
   return `${Math.floor(s / 60)} m ${String(s % 60).padStart(2, "0")} s`;
 }
 
-/** Running bar (above the result area): progress bar (end unknown, so it bounces) · elapsed time · Cancel */
-export function RunningBar({ running, label = "Executing", onCancel }: { running: boolean; label?: string; onCancel?: () => void }) {
-  const [start, setStart] = useState<number | null>(null);
-  const [now, setNow] = useState(0);
+/** What the focused tab is doing (a run, a load-more), in the status bar where its text is: progress bar (end unknown, so it
+ * bounces) · label · time since `since` (the tab's start, so it goes on across tab switches). The status bar's ■ cancels it */
+export function RunningBar({ label, since }: { label: string; since: number }) {
+  const [now, setNow] = useState(Date.now);
   useEffect(() => {
-    if (!running) return setStart(null);
-    const s = Date.now();
-    setStart(s);
-    setNow(s);
     const h = setInterval(() => setNow(Date.now()), 100);
     return () => clearInterval(h);
-  }, [running]);
-  if (!running || start === null) return null;
+  }, []);
   return (
-    <div className="running-bar" role="status">
-      <ProgressBar pct={null} width={140} />
+    <span className="running-bar" role="status">
+      <ProgressBar pct={null} width={120} label={label} />
       <Text size="sm">
-        {label}… <b className="running-time">{elapsedText(now - start)}</b>
+        {label}… <b className="running-time">{elapsedText(Math.max(0, now - since))}</b>
       </Text>
-      {onCancel && (
-        <Button size="sm" onClick={onCancel}>
-          Cancel
-        </Button>
-      )}
-    </div>
+    </span>
   );
 }

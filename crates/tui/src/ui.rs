@@ -32,12 +32,12 @@ pub fn color_name(c: Option<&str>) -> &'static str {
 /// Bright color used for highlighting, like the active tab
 pub fn type_color(t: &str) -> Color {
     match t {
-        "string" => Color::Rgb(95, 158, 160),
-        "hash" => Color::Rgb(176, 124, 198),
-        "list" => Color::Rgb(106, 159, 216),
-        "set" => Color::Rgb(208, 139, 76),
-        "zset" => Color::Rgb(201, 96, 92),
-        "stream" => Color::Rgb(90, 164, 105),
+        "string" => R_STRING,
+        "hash" => R_HASH,
+        "list" => R_LIST,
+        "set" => R_SET,
+        "zset" => R_ZSET,
+        "stream" => R_STREAM,
         _ => Color::Gray,
     }
 }
@@ -81,7 +81,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_screen(f, app);
     }
     sanitize(f.buffer_mut());
-    app.color.apply(f.buffer_mut());
+    app.color.apply(f.buffer_mut(), app.theme.light(app.auto_light));
 }
 
 /// Says the size and the size needed, centered and wrapped so it fits even a few cells
@@ -172,7 +172,14 @@ fn draw_workspaces(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Tree;
-    let title = if app.tree.filter.is_empty() { " Database Explorer ".to_string() } else { format!(" Database Explorer — /{} (Esc clears) ", app.tree.filter) };
+    // The mark count first: the explorer is narrow. Commands act on the marked nodes on screen; marks in collapsed or filtered-out
+    // folders are counted apart
+    let marked = match (app.tree.marked.len(), app.tree.targets().len()) {
+        (0, _) => String::new(),
+        (n, on) if on < n => format!("{on} marked ({} hidden) · ", n - on),
+        (n, _) => format!("{n} marked · "),
+    };
+    let title = if app.tree.filter.is_empty() { format!(" {marked}Database Explorer ") } else { format!(" {marked}Database Explorer — /{} (Esc clears) ", app.tree.filter) };
     let b = panel(title, focused);
     let inner = b.inner(area);
     f.render_widget(b, area);
@@ -206,6 +213,8 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
             .hint(if loading { "loading…".to_string() } else { n.hint.clone() })
             // Like the GUI, color everything under a Data Source (the selected line wins)
             .bg(conn_color)
+            // Marked rows: the selection color without focus (the cursor's row keeps the focused one)
+            .selected(app.tree.marked.contains(&n.key), false)
             .selected(i == app.tree.sel, focused);
         if !glyph.is_empty() {
             row = row.lead(icon(glyph, icolor));
@@ -418,8 +427,16 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
     let value_keys = app.keys.slot_keys(crate::keys::Slot { action: A::ValueEditor, pane: Scope::Grid }).first().map(|k| crate::keys::pane_disp(k));
     let value_keys = format!(" {} / {} close ", value_keys.unwrap_or_else(|| "—".into()), k(A::CloseTab));
     let finding = focused && matches!(app.popup, Some(Popup::Find(_)));
-    // How long run · load has been going (redrawn every 0.5s)
-    let took = app.run_elapsed(idx).map(|d| crate::app::elapsed_text(d.as_millis() as u64));
+    // A run or a load-more in flight: the console's [■ Cancel] button (the status line says what and for how long)
+    let busy = app.tabs[idx].busy().is_some();
+    // The Execute chooser's highlighted option: the console rows it would run
+    let preview = match &app.popup {
+        Some(Popup::Palette(p)) if focused => match App::palette_matches(p).get(p.sel).map(|i| &i.action) {
+            Some(crate::app::PAction::Run { rows, .. }) => rows.clone(),
+            _ => vec![],
+        },
+        _ => vec![],
+    };
     let tab = &mut app.tabs[idx];
     let db = tab.db.clone();
     let title = tab.title.clone();
@@ -437,7 +454,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 " {db} · Tx: {}{}{}{} ",
                 if c.tx_manual { "Manual" } else { "Auto" },
                 if c.in_tx { format!(" (pending — {k_commit} commit / {k_rollback} rollback)") } else { String::new() },
-                if c.running { format!(" · running {} · [■ Cancel {k_cancel}]", took.as_deref().unwrap_or("")) } else { String::new() },
+                if busy { format!(" · [■ Cancel {k_cancel}]") } else { String::new() },
                 if ro { " · read-only" } else { "" }
             );
             let editing = focus == Focus::Editor;
@@ -445,7 +462,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 c.complete = None;
             }
             // [■ Cancel] spot (the title starts right after the top-left corner)
-            app.hits.cancel = match (c.running, title.find("[■ Cancel")) {
+            app.hits.cancel = match (busy, title.find("[■ Cancel")) {
                 (true, Some(at)) => {
                     use unicode_width::UnicodeWidthStr;
                     let x = ed.x + 1 + title[..at].width() as u16;
@@ -462,6 +479,8 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             f.render_widget(&c.editor, ed);
             // tui-textarea doesn't expose its scroll position → use the cursor cell just drawn
             let drawn = find_caret(f, ed);
+            draw_marks(f, c, ed, drawn);
+            draw_preview(f, c, ed, drawn, &preview);
             let caret = if editing && c.complete.is_some() { drawn } else { None };
             if focused {
                 app.hits.caret = drawn.map(|(x, y)| (x, y, c.editor.cursor().0, c.editor.cursor().1));
@@ -480,12 +499,16 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                     .rev()
                     .map(|(e, s)| Line::styled(s.clone(), Style::default().fg(if *e { DANGER } else if s.starts_with(WARNING) { WARN } else if s.contains("> ") { ACCENT } else { Color::Gray })))
                     .collect();
+                let block = panel(format!(" Output ({k_out}: result) "), focus == Focus::Grid);
+                let inner = block.inner(res);
                 let p = Paragraph::new(if lines.is_empty() { vec![Line::styled(format!("Execute a statement ({k_run}) to see the output."), Style::default().fg(DIM))] } else { lines })
-                    .wrap(Wrap { trim: false })
-                    .block(panel(format!(" Output ({k_out}: result) "), focus == Focus::Grid));
-                f.render_widget(p, res);
+                    .wrap(Wrap { trim: false });
+                // A long line wraps onto several rows: scroll so the newest line ends on the bottom row
+                let rows = p.line_count(inner.width).min(u16::MAX as usize) as u16;
+                f.render_widget(p.scroll((rows.saturating_sub(inner.height), 0)).block(block), res);
             } else if let Some(g) = &mut c.grid {
-                let t = format!(" {} — {}{} rows ({k_out}: output) ", c.result_title, g.rows(), if g.result.truncated { "+" } else { "" });
+                let pend = if g.dirty() { format!(" · {} pending ({k_submit} submit, {} revert)", g.pending(), disp("⌃z")) } else { String::new() };
+                let t = format!(" {} — {}{} rows{pend} ({k_out}: output) ", c.result_title, g.rows(), if g.result.truncated { "+" } else { "" });
                 let (res, side) = value_split(res, value_panel);
                 g.render(f, res, t, focus == Focus::Grid, color, &align);
                 if let Some(side) = side {
@@ -525,7 +548,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                 grid
             };
             if let Some(g) = &mut tt.grid {
-                let pend = if g.dirty() { format!(" · {} pending ({k_submit} submit, {} revert)", g.edits.len() + g.deleted.len() + g.added, disp("⌃z")) } else { String::new() };
+                let pend = if g.dirty() { format!(" · {} pending ({k_submit} submit, {} revert)", g.pending(), disp("⌃z")) } else { String::new() };
                 let rows = if tt.error.is_some() && !g.dirty() { "query failed — no rows".to_string() } else { format!("{}{} rows", g.rows(), if g.result.truncated { "+" } else { "" }) };
                 let t = format!(" {}.{} — {rows}{}{}{} ", tt.schema, tt.table, if tt.pk.is_empty() { " · no PK (read-only)" } else { "" }, if ro { " · read-only" } else { "" }, pend);
                 let (grid, side) = value_split(grid, value_panel);
@@ -534,7 +557,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
                     g.render_value_panel(f, side, value_keys);
                 }
             } else {
-                let msg = if tt.error.is_some() { String::new() } else { format!("Loading… {}", took.as_deref().unwrap_or("")) };
+                let msg = if tt.error.is_some() { "" } else { "Loading…" };
                 f.render_widget(Paragraph::new(msg).block(panel(format!(" {}.{} ", tt.schema, tt.table), focused)), grid);
             }
         }
@@ -564,7 +587,7 @@ fn draw_pane(f: &mut Frame, app: &mut App, idx: usize, body: Rect, focused: bool
             let state = if d.running { " · loading…" } else if live && d.auto { " · auto 3s" } else { "" };
             let text = d.info.as_ref().map(|i| i.help).unwrap_or("");
             f.render_widget(Paragraph::new(Line::from(vec![Span::styled(format!(" {}{state} ", d.info.as_ref().map(|i| i.title).unwrap_or("")), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)), Span::styled(text, Style::default().fg(DIM))])), help);
-            let title = format!(" {db} — {} rows ", d.grid.as_ref().map(|g| g.rows()).unwrap_or(0));
+            let title = format!(" {} — {} rows ", crate::dba::db_label(&db), d.grid.as_ref().map(|g| g.rows()).unwrap_or(0));
             // Where the grid is drawn (mouse hits): below the message when a refresh failed
             let mut area = grid;
             match (&mut d.grid, &d.error) {
@@ -664,6 +687,47 @@ fn find_caret(f: &mut Frame, area: Rect) -> Option<(u16, u16)> {
     None
 }
 
+/// Gutter marks (✓ done, ✗ failed, … running) in the blank first cell of the line-number column, on each run statement's first line.
+/// Rows on screen are counted from the cursor cell just drawn; a row whose line number isn't drawn there (scrolled sideways) gets none
+fn draw_marks(f: &mut Frame, c: &crate::app::Console, ed: Rect, caret: Option<(u16, u16)>) {
+    use crate::app::MarkState;
+    let digits = c.editor.lines().len().to_string().len();
+    let Some((_, cy)) = caret.filter(|_| ed.width as usize > digits + 4) else { return };
+    let top = c.editor.cursor().0 as i64 - (cy as i64 - ed.y as i64 - 1);
+    let buf = f.buffer_mut();
+    for y in ed.y + 1..ed.bottom().saturating_sub(1) {
+        let row = top + (y - ed.y - 1) as i64;
+        let Some(state) = (row >= 0).then(|| c.marks.at(row as usize)).flatten() else { continue };
+        let num = format!(" {:>digits$} ", row + 1);
+        if (0..num.len() as u16).any(|i| buf[(ed.x + 1 + i, y)].symbol() != &num[i as usize..i as usize + 1]) {
+            continue;
+        }
+        let color = match state {
+            MarkState::Running => ACCENT,
+            MarkState::Ok => OK,
+            MarkState::Err => DANGER,
+        };
+        buf[(ed.x + 1, y)].set_char(state.symbol()).set_fg(color);
+    }
+}
+
+/// The rows an Execute chooser option would run, on the selection background (text columns, past the line numbers).
+/// Rows on screen are counted from the cursor cell just drawn, as for the gutter marks
+fn draw_preview(f: &mut Frame, c: &crate::app::Console, ed: Rect, caret: Option<(u16, u16)>, rows: &[(usize, usize)]) {
+    let Some((_, cy)) = caret.filter(|_| !rows.is_empty()) else { return };
+    let top = c.editor.cursor().0 as i64 - (cy as i64 - ed.y as i64 - 1);
+    let x0 = ed.x + 1 + c.editor.lines().len().to_string().len() as u16 + 2;
+    let buf = f.buffer_mut();
+    for y in ed.y + 1..ed.bottom().saturating_sub(1) {
+        let row = top + (y - ed.y - 1) as i64;
+        if row >= 0 && rows.iter().any(|&(a, b)| (a as i64..=b as i64).contains(&row)) {
+            for x in x0..ed.right().saturating_sub(1) {
+                buf[(x, y)].set_bg(SEL);
+            }
+        }
+    }
+}
+
 /// Autocomplete list: below the cursor (above if there is no room)
 fn draw_completion(f: &mut Frame, cmp: &crate::app::Completion, x: u16, y: u16) {
     use qurry_core::complete::ItemKind;
@@ -739,7 +803,7 @@ fn status_hints(app: &App) -> (Vec<(String, &'static str)>, Vec<(String, &'stati
                         }
                         v.push(fixed("a", "auto"));
                     }
-                    v.extend([fixed("Enter", "query→console"), fixed("g", "SQL"), fixed("y", "copy")]);
+                    v.extend([fixed("Enter", "query→console"), fixed("g", "SQL"), fixed("y", "copy"), fixed("d", "database")]);
                     v
                 }
                 _ => vec![fixed("s", "sort"), fixed("y", "copy"), grid(A::ValueEditor, "value"), grid(A::ExportCsv, "export"), fixed("Esc", "editor")],
@@ -777,14 +841,23 @@ fn hint_line(mut ctx: Vec<(String, &'static str)>, glob: Vec<(String, &'static s
     Line::from(spans)
 }
 
-fn draw_status(f: &mut Frame, app: &App, area: Rect) {
+fn draw_status(f: &mut Frame, app: &mut App, area: Rect) {
     // The new-version notice stays visible in front of the status text
     let badge = app.update.as_ref().map(|v| format!(" ⬆ v{v} available — {} › Update Qurry & Restart ", app.keys.label(crate::app::Action::Palette)));
     let bw = badge.as_ref().map(|b| b.chars().count() as u16).unwrap_or(0);
     // If width is short, shrink the right-side hints (so the update notice·status text isn't cut)
     let (ctx, glob) = status_hints(app);
-    // While export·import runs, a progress bar instead of status text (stop with ⌃K › Cancel Export/Import)
-    let status = if app.jobs.is_empty() { disp(&app.status) } else { app.jobs.iter().map(|(_, label, j)| job_line(label, j.progress())).collect::<Vec<_>>().join("  ·  ") };
+    // While the active tab runs or loads more rows: a moving bar, what it does and for how long (as the GUI's status bar), cancel
+    // with the Cancel key. While export·import runs, a progress bar (stop with ⌃K › Cancel Export/Import). Else the status text
+    let busy = app.tabs.get(app.active).and_then(|t| t.busy()).map(|what| {
+        let ms = app.run_elapsed(app.active).unwrap_or_default().as_millis() as u64;
+        format!("▕{}▏ {what}… {} · {} cancel", bounce(ms), crate::app::elapsed_text(ms), app.keys.label(crate::app::Action::Cancel))
+    });
+    let status = match busy {
+        Some(b) => b,
+        None if app.jobs.is_empty() => disp(&app.status),
+        None => app.jobs.iter().map(|(_, label, j)| job_line(label, j.progress())).collect::<Vec<_>>().join("  ·  "),
+    };
     // Status text claims up to half the screen width first (so error·result messages aren't cut)
     let sw = (status.chars().count() as u16 + 2).clamp(12, area.width / 2);
     let hints = hint_line(ctx, glob, area.width.saturating_sub(bw + sw) as usize);
@@ -820,10 +893,16 @@ fn job_line(label: &str, (rows, done, total): (u64, u64, u64)) -> String {
         let pct = (done * 100 / total).min(99) as usize;
         ("█".repeat(pct * W / 100) + &"░".repeat(W - pct * W / 100), format!(" · {pct}%"))
     } else {
-        let t = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0) / 250) as usize % (W - 2);
-        ("░".repeat(t) + "███" + &"░".repeat(W - 3 - t), String::new())
+        (bounce(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)), String::new())
     };
     format!("{label} ▕{bar}▏ {n}{pct}")
+}
+
+/// A 10-cell bar whose end is unknown: a block moving along it, one cell per 250 ms
+fn bounce(ms: u64) -> String {
+    const W: usize = 10;
+    let t = (ms / 250) as usize % (W - 2);
+    "░".repeat(t) + "███" + &"░".repeat(W - 3 - t)
 }
 
 /// Shown next to the data source form's SSL mode: Require encrypts but doesn't stop someone in the middle
@@ -992,7 +1071,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
         Popup::Confirm { text, .. } => app.hits.confirm_unseen = !draw_confirm(f, area, " Confirm ", text, key_hints(&[("y / Enter", "yes"), ("n / Esc", "no")])),
         // Like Confirm, but only y allows (no Enter): the popup opened on its own
         Popup::AllowPlaintext { text, .. } => app.hits.confirm_unseen = !draw_confirm(f, area, " Allow Unencrypted ", text, key_hints(&[("y", "allow"), ("n / Esc", "cancel")])),
-        Popup::Input { title, body, input, complete, words, .. } => {
+        Popup::Input { title, body, input, complete, filter, .. } => {
             // The title goes on the border; the body (answers, reasons) in a box below, wrapped, so it isn't cut off
             let body: Vec<Line> = body.lines().map(|l| Line::raw(disp(l))).collect();
             let bh = if body.is_empty() { 0 } else { wrapped_height(&body, 90u16.min(area.width.saturating_sub(4)).saturating_sub(2)) + 2 };
@@ -1006,25 +1085,22 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
                 f.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }).block(b), br);
             }
             clear(f, r);
-            let hint = if words.is_empty() { "Enter / Esc" } else { "Enter / Esc · Tab complete" };
+            let hint = if filter.is_none() { "Enter / Esc" } else { "Enter / Esc · Tab complete" };
             input.set_block(panel(format!(" {} ({hint}) ", disp(title)), true));
             f.render_widget(&*input, r);
-            // Autocomplete list: right below the input, near the cursor
-            if let Some((items, sel, _)) = complete {
-                let w = items.iter().map(|s| s.chars().count()).max().unwrap_or(0) as u16 + 4;
-                let x = (r.x + 1 + input.cursor().1 as u16).min(r.right().saturating_sub(w));
-                let lr = Rect { x, y: r.bottom(), width: w.min(r.width), height: (items.len() as u16 + 2).min(area.bottom().saturating_sub(r.bottom())) };
-                let rows: Vec<ListItem> = items
-                    .iter()
-                    .enumerate()
-                    .map(|(i, s)| ListItem::new(format!(" {s}")).style(if i == *sel { Style::default().bg(SEL) } else { Style::default() }))
-                    .collect();
-                clear(f, lr);
-                f.render_widget(List::new(rows).block(panel("", true)).style(Style::default().bg(POPUP_BG)), lr);
+            // The console's completion list, right under the input at the word being completed
+            if let Some(cmp) = complete {
+                draw_completion(f, cmp, r.x + 1 + input.cursor().1 as u16, r.bottom() - 1);
             }
         }
         Popup::Palette(p) => {
-            let r = centered(area, 100, 24);
+            // The Execute chooser keeps to its options at the bottom, so the console rows it highlights stay in view
+            let r = if p.title == "Execute" {
+                let h = (p.items.len() as u16 + 5).min(area.height.saturating_sub(2));
+                Rect { y: area.bottom().saturating_sub(h + 1), ..centered(area, 72, h) }
+            } else {
+                centered(area, 100, 24)
+            };
             clear(f, r);
             let [inp, list] = Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).areas(r);
             app.hits.palette = Block::default().borders(Borders::ALL).inner(list);
@@ -1403,16 +1479,28 @@ mod tests {
         assert!(s.contains("Esc cancel") && s.contains("port 5432?") && !s.contains('⋯'), "{s}");
     }
 
-    /// The startup color notices fit an 80-column status line whole, with a gap before the key hints
+    /// The startup notices fit an 80-column status line whole, with a gap before the key hints: one at a time, the light
+    /// palette's first (unless NO_COLOR, which draws no palette)
     #[tokio::test]
     async fn color_notices_fit_80_columns() {
+        use crate::theme::ColorMode;
         let mut h = crate::testkit::Harness::new().await;
-        for mode in [crate::theme::ColorMode::Ansi16, crate::theme::ColorMode::NoColor] {
-            let n = mode.notice().unwrap();
-            h.app.status = n.into();
+        let light = "Light palette — ⌃k › Theme… › Dark to undo";
+        for (mode, auto_light, want) in [
+            (ColorMode::Ansi16, false, "16 colors: try COLORTERM=truecolor"),
+            (ColorMode::NoColor, false, "Colors off: unset NO_COLOR"),
+            (ColorMode::TrueColor, true, light),
+            (ColorMode::Ansi16, true, light),
+            (ColorMode::NoColor, true, "Colors off: unset NO_COLOR"),
+        ] {
+            (h.app.color, h.app.auto_light) = (mode, auto_light);
+            assert_eq!(h.app.startup_notice().as_deref(), Some(want));
+            h.app.status = want.into();
             let s = h.screen(80, 24);
-            assert!(s.lines().last().unwrap().contains(&format!("{n} ")), "{s}");
+            assert!(s.lines().last().unwrap().contains(&format!("{want} ")), "{s}");
         }
+        (h.app.color, h.app.auto_light) = (ColorMode::TrueColor, false);
+        assert_eq!(h.app.startup_notice(), None);
     }
 
     /// NO_COLOR: text selected in the editor stays visible (tui-textarea draws it on a color, which NO_COLOR drops)

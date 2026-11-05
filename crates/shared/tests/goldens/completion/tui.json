@@ -196,6 +196,38 @@
       {"detail":"10 rows","insert":"paid","kind":"Value","label":"paid"}
     ]
   },
+  "join-on-no-hints": {
+    "prefix": 0,
+    "items": [
+      {"detail":"int8 · orders","insert":"id","kind":"Column","label":"id"},
+      {"detail":"int8 · orders","insert":"user_id","kind":"Column","label":"user_id"},
+      {"detail":"varchar · orders","insert":"status","kind":"Column","label":"status"},
+      {"detail":"jsonb · orders","insert":"data","kind":"Column","label":"data"},
+      {"detail":"bytea · orders","insert":"raw","kind":"Column","label":"raw"},
+      {"detail":"jsonb · orders","insert":"reasons","kind":"Column","label":"reasons"},
+      {"detail":"varchar · users","insert":"user_name","kind":"Column","label":"user_name"},
+      {"detail":"text · users","insert":"email","kind":"Column","label":"email"},
+      {"detail":"billing","insert":"billing.invoices","kind":"Table","label":"invoices"},
+      {"detail":"shop","insert":"shop.items","kind":"Table","label":"items"},
+      {"detail":"public","insert":"orders","kind":"Table","label":"orders"},
+      {"detail":"public","insert":"sales","kind":"Table","label":"sales"},
+      {"detail":"public","insert":"users","kind":"Table","label":"users"},
+      {"detail":"billing","insert":"billing.users","kind":"Table","label":"users"},
+      {"detail":"sales","insert":"sales.주문","kind":"Table","label":"주문"},
+      {"detail":"public","insert":"😀 emoji","kind":"Table","label":"😀 emoji"},
+      {"detail":"schema","insert":"billing","kind":"Schema","label":"billing"},
+      {"detail":"schema","insert":"public","kind":"Schema","label":"public"},
+      {"detail":"schema","insert":"sales","kind":"Schema","label":"sales"},
+      {"detail":"schema","insert":"shop","kind":"Schema","label":"shop"}
+    ]
+  },
+  "join-on-then-where-hints": {
+    "hint": {"asked":["values"],"column":"status","path":[],"schema":"public","table":"orders"},
+    "prefix": 0,
+    "items": [
+      {"detail":"10 rows","insert":"paid'","kind":"Value","label":"paid"}
+    ]
+  },
   "keyword": {
     "prefix": 3,
     "items": [

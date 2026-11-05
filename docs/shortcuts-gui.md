@@ -2,7 +2,7 @@
 
 English | [한국어](ko/shortcuts-gui.md)
 
-Inside the app the same list is searchable via **Help › Keymap Reference**, the ⌨ toolbar button, or `⇧⌘/`. **Find Action** (`⇧⌘A`) lists every command together with its shortcut.
+Inside the app the same list is searchable via **Help › Keymap Reference**, the ⌨ button at the bottom of the workspace rail (far left), or `⇧⌘/`. **Find Action** (`⇧⌘A`) lists every command together with its shortcut.
 On Windows/Linux read `⌘` as `Ctrl` and `⌥` as `Alt`.
 
 Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…** in the Keymap Reference): click *Change* and press the new keys. Every action you can reach from a menu, a context menu, a toolbar or Find Action is listed there — the ones without a default key too (the last table below), so any of them can get one. A key works where its section says: anywhere (Global), in the Database Explorer, in the query console or in a data grid. In the Database Explorer and the data grid a key can also be Delete, Insert or Backspace. The tables below show the defaults.
@@ -16,6 +16,10 @@ Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…
 - The editor's and the system's own keys: `⌘c` / `⌘v` / `⌘a` in the grid, `⌘/`, `⌘f` (and the find bar's toggles) and `⌃Space` in the editor.
 - Keys inside a dialog act on that dialog: query history, the Redis browser and terminal, the data source form. Mouse gestures (`⌥` click, drag) stay too.
 - Menu entries made from your data are choices, not commands: a data source, workspace or console by name, a column's filter values, a data extractor, an auto-refresh interval, the Query Execution Settings options.
+
+### Several nodes in the Database Explorer
+
+`⌘`-click adds a node to the selection or removes it, `⇧`-click selects the visible nodes from the last clicked one; a plain click or an arrow key selects one node again. Go to DDL and Edit Data (a tab each, `↩` too), Copy Name and Copy Reference (one per line; a reference is `schema.name`), Drop… and Refresh then run for every selected node, from the context menu or their keys. Drop… asks once, listing every statement (on a Production data source, the Production confirmation), and needs objects of one database. An object goes before what it depends on: views first, then materialized views, tables and sequences, and a materialized view before a view it reads. On PostgreSQL they run in one transaction, the objects of one kind in one statement, so nothing is dropped if one can't be. On MySQL, whose DDL can't be rolled back, each object has its own statement, a table before the selected tables its foreign keys reference, and they run one by one: a failure names the statements that were applied, the one that failed and the ones that didn't run. Commands that work on one node are greyed out; their tooltip says how to get back to one. A selected node that leaves the screen (collapsed, filtered out, dropped) leaves the selection.
 
 <!-- keymap:gui:start -->
 
@@ -90,6 +94,7 @@ Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…
 | `⌥⌘g` | SQL Generator |
 | `⌥⇧⌘G` | Copy DDL to clipboard |
 | `⌥⇧⌘B` | Open DDL in console |
+| `⌘c` | Copy name (several selected nodes: one per line) |
 | `⌥⇧⌘C` | Copy reference |
 | `F1` | Quick documentation |
 | `⌘F6` | Modify table (columns, keys, indexes, foreign keys) |
@@ -102,6 +107,8 @@ Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…
 | `⌘F2` | Disconnect |
 | `⌦ / ⌘⌫` | Remove data source / drop object (asks first) |
 | `type letters` | Speed search in the tree |
+| `⌘-click` | Add a node to the selection or remove it (Go to DDL, Edit Data, copy, Drop…, Refresh run for every selected node) |
+| `⇧-click` | Select the visible nodes from the last clicked one; a plain click or an arrow key selects one node again |
 
 ## Query console
 
@@ -143,6 +150,8 @@ Command shortcuts can be changed in **Settings › Keymap** (or **Edit Keymap…
 | `⌘↩` | Submit Changes |
 | `⌘c / ⌘v` | Copy (with chosen extractor; CSV / TSV copy values only — right-click › Copy with Headers adds the column names) / paste |
 | `⌘a` | Select all |
+| `⌘ click` | Add a cell to the selection or take it out (on a row number: the row · on a column header: the column); copy and the edits act on every range |
+| `⇧ click · click` | Extend the last range · select just that cell (starts over) |
 | `⌘f` | Find on Current Page |
 | `⌘r` | Reload Page |
 | `⌘F2` | Cancel Running Statements |

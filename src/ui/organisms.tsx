@@ -261,7 +261,8 @@ export const Td = ({ children, num, mono, muted, className, ...rest }: TdHTMLAtt
 // ───────── Menu ─────────
 export type MenuEntry =
   /** id: the keymap command it runs (lib/shortcuts.ts), so its key runs it from the keyboard too */
-  | { label: string; action: () => void; shortcut?: string; danger?: boolean; disabled?: boolean; id?: string }
+  /** title: tooltip (why a disabled entry is greyed out) */
+  | { label: string; action: () => void; shortcut?: string; danger?: boolean; disabled?: boolean; id?: string; title?: string }
   | { separator: true }
   /** Non-clickable description line */
   | { heading: string }
@@ -318,12 +319,12 @@ export function Menu({ items, onClose, at, footer }: { items: MenuEntry[]; onClo
           <MenuItem key={i} label={it.label} hasSubmenu onMouseEnter={() => setSub(i)}>
             {sub === i && (
               <div className="ui-menu sub" role="menu">
-                {it.submenu.map((s, j) => ("separator" in s ? <MenuSeparator key={j} /> : "heading" in s ? <MenuLabel key={j}>{s.heading}</MenuLabel> : "action" in s ? <MenuItem key={j} label={s.label} shortcut={s.shortcut} danger={s.danger} disabled={s.disabled} onClick={() => run(s.action)} /> : null))}
+                {it.submenu.map((s, j) => ("separator" in s ? <MenuSeparator key={j} /> : "heading" in s ? <MenuLabel key={j}>{s.heading}</MenuLabel> : "action" in s ? <MenuItem key={j} label={s.label} shortcut={s.shortcut} danger={s.danger} disabled={s.disabled} title={s.title} onClick={() => run(s.action)} /> : null))}
               </div>
             )}
           </MenuItem>
         ) : (
-          <MenuItem key={i} label={it.label} shortcut={it.shortcut} danger={it.danger} disabled={it.disabled} onMouseEnter={() => setSub(null)} onClick={() => run(it.action)} />
+          <MenuItem key={i} label={it.label} shortcut={it.shortcut} danger={it.danger} disabled={it.disabled} title={it.title} onMouseEnter={() => setSub(null)} onClick={() => run(it.action)} />
         ),
       )}
       {footer && (

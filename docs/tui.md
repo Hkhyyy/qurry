@@ -2,7 +2,7 @@
 
 English | [한국어](ko/tui.md)
 
-`qurry-tui` adapts to the terminal it runs in: how many colors it has, how big the window is, and what tmux or the terminal keeps for itself. Nothing here needs a setting in Qurry; it all follows the environment, down to the font.
+`qurry-tui` adapts to the terminal it runs in: how many colors it has, whether its background is light, how big the window is, and what tmux or the terminal keeps for itself. It all follows the environment, down to the font; the only setting is the theme, for when the terminal doesn't say its background.
 
 ## Colors
 
@@ -22,11 +22,28 @@ When colors are off or limited to 16, the status line says so at startup, with w
 
 Over `ssh` or `sudo` (and in `tmux`, below) `COLORTERM` usually doesn't arrive, so a 24-bit terminal gets the 256 or 16 colors: `export COLORTERM=truecolor` on the other side, or pass it along with `SendEnv COLORTERM` in `~/.ssh/config` and `AcceptEnv COLORTERM` in the server's `sshd_config` (`sudo --preserve-env=COLORTERM` for sudo).
 
+### Light or dark
+
+The TUI has a dark palette (made for a dark terminal background) and a light one. Pick it with **⌃k › Theme…**:
+
+| Theme | Palette |
+|---|---|
+| **Auto** (default) | Light when `COLORFGBG` says the background is white (its last number is `7` or `15`, e.g. `COLORFGBG=0;15`); dark otherwise, also when `COLORFGBG` isn't set |
+| **Dark** | Always dark |
+| **Light** | Always light |
+
+The light palette takes the GUI's light theme colors: Data Source colors become pale tints of the same hue, so icons and dim text on them stay readable (the active tab is the stronger one; 256 and 16 colors, which have no pale hues, keep a stronger tint so the hue survives), selections, edited cells and badges stay apart from each other, JSON cells use the GUI's light JSON colors, and production keeps its red. It works in every color mode above: 256 colors map it to the nearest palette colors, 16 colors use the normal (not the bright) terminal colors, and `NO_COLOR` stays monochrome with the same rules as in the dark theme.
+
+Terminals such as iTerm2, rxvt and Konsole set `COLORFGBG` from their background color; many others (kitty, WezTerm, Ghostty, Alacritty) don't, so on a light background there pick **Light** yourself. The theme is saved in `settings.json` in the [config folder](getting-started.md#where-qurry-keeps-your-settings) under `"tuiTheme"` (the GUI has its own theme setting).
+
+When Auto picked the light palette, the status line says so at startup: `Light palette — ⌃k › Theme… › Dark to undo`. To keep the colors you had before, pick **⌃k › Theme… › Dark**. It takes the place of the `16 colors` notice; with `NO_COLOR` the palette makes no difference, so the `Colors off` notice shows instead.
+
 Some things never depend on color:
 
 - **Unsaved grid changes**: next to the row number `+` marks an added row, `-` a deleted one (also struck through), `~` a row with edited cells; edited cells are bold.
 - **The cell cursor inside a range**: with reverse video (16 colors, `NO_COLOR`) the range is reversed and the cursor is the one cell in it left plain, as in a spreadsheet.
 - **The active tab**: bold. With 16 colors or `NO_COLOR` the focused pane's tab is in reverse video (its Data Source color inverted, so a production tab stays red) and, in split panes, the other panes' visible tab is underlined.
+- **Statements that ran in a console**: `✓` done, `✗` failed, `…` running, in the line-number column on the statement's first line.
 
 `qurry-tui --help` lists the same rules.
 

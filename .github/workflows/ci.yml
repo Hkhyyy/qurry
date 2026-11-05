@@ -3,7 +3,7 @@
 #   including the per-backend matrix in crates/core/tests/backend_matrix.rs.
 #   SSL·TLS·Sentinel·Cluster·SSH tunnel tests are left out since they need separate servers.
 #   The GUI (src-tauri) needs webkit on Linux, so it's checked by the Release (macOS) build.
-# Web: vitest + tsc/vite build. E2E: Playwright against the mock app (Chromium, WebKit).
+# Web: vitest + tsc/vite build. E2E: Playwright against the mock app (Chromium and WebKit, one job each).
 # Actions pinned to the same commit SHAs as release.yml.
 name: CI
 
@@ -203,9 +203,14 @@ jobs:
       - run: pnpm build
       - run: pnpm build-storybook --quiet
 
-  # GUI end-to-end: Playwright drives the Vite app in mock mode (?mock) in Chromium and WebKit
+  # GUI end-to-end: Playwright drives the Vite app in mock mode (?mock), one job per browser in parallel
   e2e:
     runs-on: ubuntu-latest
+    strategy:
+      # Let the other browser finish too, so one run shows every failing test
+      fail-fast: false
+      matrix:
+        project: [chromium, webkit]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -226,12 +231,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # Built here so the first cargo build doesn't count against the web server's start-up timeout (predev then finds it built)
       - run: pnpm wasm
-      - run: npx playwright install --with-deps chromium webkit
-      - run: npx playwright test
+      - run: npx playwright install --with-deps ${{ matrix.project }}
+      # ubuntu-latest has 4 vCPUs: two test workers next to the dev server
+      - run: npx playwright test --project=${{ matrix.project }} --workers=2
 
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: playwright-traces
+          name: playwright-traces-${{ matrix.project }}
           path: test-results/
           retention-days: 7

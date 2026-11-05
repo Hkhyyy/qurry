@@ -1,4 +1,5 @@
-import { dialog, editor, expect, openApp, openConsole, resultTabs, runAll, status, suggestions, test, typeSql, work } from "./app";
+import { dialog, editor, expect, openApp, openConsole, resultTabs, runAll, spyCancels, status, suggestions, test, treeItem, typeSql, work } from "./app";
+import type { Page } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
   await openApp(page);
@@ -28,6 +29,20 @@ test.describe("completion", () => {
     await expect(suggestions(page)).toHaveText([/^ready\s*20 rows$/, /^paid\s*10 rows$/, /^it's late\s*1 row$/]);
   });
 
+  test("in a JOIN's ON condition `=` lists columns, not values; the WHERE after it lists values", async ({ page }) => {
+    await typeSql(page, "select * from orders o left join users u on o.amount = ");
+    await page.waitForTimeout(300);
+    await expect(suggestions(page)).toHaveCount(0);
+    await page.keyboard.press("Control+Space");
+    await expect(suggestions(page).first()).toBeVisible();
+    const labels = await suggestions(page).locator(".label-name").allInnerTexts();
+    expect(labels).toEqual(expect.arrayContaining(["amount", "user_name"]));
+    expect(labels).not.toContain("1000");
+    await page.keyboard.press("Escape");
+    await page.keyboard.type("u.id where o.amount = ");
+    await expect(suggestions(page)).toHaveText([/^1000\s*7 rows$/, /^2500\s*3 rows$/]);
+  });
+
   test("MySQL console on the data source's default database inserts its tables bare, as the TUI does", async ({ page }) => {
     await openConsole(page, "[MySQL] shop");
     await typeSql(page, "select * from ord");
@@ -35,6 +50,17 @@ test.describe("completion", () => {
     await page.keyboard.press("Enter");
     await expect(editor(page).locator(".view-line").first()).toHaveText(/^select\s\*\sfrom\sorders$/);
   });
+});
+
+test("the database select lists its databases once the console is shown: its first click opens the whole list", async ({ page }) => {
+  // The mock lists late, as a server does: a list asked for only on the first click would open with the current database alone
+  await page.evaluate(() => ((window as any).__mockDbListDelay = 200));
+  await openConsole(page, "[MySQL] shop");
+  const db = work(page).getByTitle("Database", { exact: true });
+  await expect(db).toHaveValue("shop");
+  await expect(db.locator("option")).toHaveText(["shop", "information_schema", "mysql", "sys"]);
+  await db.click();
+  await expect(db.locator("option")).toHaveText(["shop", "information_schema", "mysql", "sys"]);
 });
 
 test("run one statement → one result tab", async ({ page }) => {
@@ -124,6 +150,28 @@ test("MySQL: `--` greys out as a comment only where the server reads one (`selec
   await expect.poll(italic).toBe("-- note");
 });
 
+test("a run shows in the status bar (bar · Executing… · elapsed) for the focused tab only; ■ cancels it", async ({ page }) => {
+  const bar = page.locator(".statusbar .running-bar");
+  const stop = page.locator(".statusbar").getByTitle("Cancel Running Statements");
+  await typeSql(page, "select pg_sleep(3)");
+  await page.keyboard.press("Meta+Enter");
+  await expect(bar).toContainText(/^Executing… \d+\.\d s$/);
+  await expect(work(page).locator(".running-bar")).toHaveCount(0);
+  await expect(stop).toBeEnabled();
+  // Another tab that isn't running: its status text and a disabled ■
+  await treeItem(page, "users").first().dblclick();
+  await expect(work(page).getByRole("gridcell", { name: "user_1", exact: true })).toBeVisible();
+  await expect(bar).toHaveCount(0);
+  await expect(status(page)).toBeVisible();
+  await expect(stop).toBeDisabled();
+  // Back on the console: its indicator again, the time going on from the run's start
+  await page.locator("[role=tab].tab", { hasText: "console" }).first().click();
+  await expect(bar).toContainText(/^Executing… (?:[1-9]|\d{2,})\.\d s$/);
+  const cancels = await spyCancels(page);
+  await stop.click();
+  await expect.poll(cancels).toBe(1);
+});
+
 test("a console result whose load-more fails keeps the reason in its grid (#80)", async ({ page }) => {
   await page.evaluate(() => ((window as any).__mockFetchMoreError = "Session closed"));
   await typeSql(page, "select * from users");
@@ -131,5 +179,157 @@ test("a console result whose load-more fails keeps the reason in its grid (#80)"
   await expect(work(page).locator(".tb-info").first()).toHaveText("500+ rows");
   await work(page).locator(".grid-scroll").first().evaluate((el) => (el.scrollTop = el.scrollHeight));
   await expect(work(page).locator(".grid-more-error")).toHaveText("Couldn't load more rows: Session closed");
+  await expect(work(page).getByRole("button", { name: "Run again" })).toBeVisible();
   await expect(work(page).locator(".tb-info").first()).toHaveText("500+ rows");
+});
+
+test("Output follows new lines at the bottom, keeps the position when scrolled up, and Clear All follows again (#92)", async ({ page }) => {
+  // Five runs of 30 statements and their Output: a busy runner takes most of the default 30 s for that alone
+  test.slow();
+  // Inserted at once: typing 30 lines key by key takes much of the test's time on a busy runner
+  await editor(page).click();
+  await page.keyboard.press("Meta+A");
+  await page.keyboard.insertText(Array.from({ length: 30 }, (_, i) => `update orders set status = 'ready' where id = ${i};`).join("\n"));
+  const output = work(page).locator(".output-log");
+  const lines = output.locator(".ol");
+  const fromBottom = () => output.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+  // Scrolls as the wheel does (a scroll event the pane reads), without waiting on wheel delivery, which a busy runner can drop
+  const scrollBy = (dy: number) => output.evaluate((el, d) => el.scrollBy(0, d), dy);
+  await runAll(page);
+  await expect(status(page)).toHaveText("30 statements executed");
+  const perRun = await lines.count();
+  const run = async () => {
+    const before = await lines.count();
+    await editor(page).click();
+    await runAll(page);
+    await expect.poll(() => lines.count()).toBe(before + perRun);
+  };
+  expect(await output.evaluate((el) => el.scrollHeight > el.clientHeight * 2)).toBe(true);
+  expect(await fromBottom()).toBeLessThanOrEqual(4);
+
+  // Scrolled up: more lines arrive below, the view stays put
+  await scrollBy(-200);
+  await expect.poll(fromBottom).toBeGreaterThan(100);
+  const top = await output.evaluate((el) => el.scrollTop);
+  await run();
+  expect(await output.evaluate((el) => el.scrollTop)).toBe(top);
+
+  // Back at the bottom, then scrolled up while lines arrive before that scroll's event does (it comes a frame later, later still on a
+  // busy machine): the view stays put, the lines don't pull it back down
+  await scrollBy(100_000);
+  await expect.poll(fromBottom).toBeLessThanOrEqual(4);
+  await output.evaluate((el) => {
+    const w = window as any;
+    w.__holdScroll = (e: Event) => e.target === el && e.stopImmediatePropagation();
+    document.addEventListener("scroll", w.__holdScroll, true);
+    el.scrollBy(0, -200);
+  });
+  const held = await output.evaluate((el) => el.scrollTop);
+  await run();
+  expect(await output.evaluate((el) => el.scrollTop)).toBe(held);
+  await page.evaluate(() => document.removeEventListener("scroll", (window as any).__holdScroll, true));
+
+  // Back at the bottom: follows again
+  await scrollBy(100_000);
+  await expect.poll(fromBottom).toBeLessThanOrEqual(4);
+  await run();
+  expect(await fromBottom()).toBeLessThanOrEqual(4);
+
+  // Scrolled up, then Clear All: the next run follows
+  await scrollBy(-200);
+  await expect.poll(fromBottom).toBeGreaterThan(100);
+  await work(page).getByTitle(/^Clear All/).click();
+  await expect(lines).toHaveCount(0);
+  await run();
+  expect(await output.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+  expect(await fromBottom()).toBeLessThanOrEqual(4);
+
+  // The pane gets shorter after the run (window resized): the newest line stays in view
+  const height = await output.evaluate((el) => el.clientHeight);
+  const vp = page.viewportSize()!;
+  await page.setViewportSize({ width: vp.width, height: vp.height - 150 });
+  await expect.poll(() => output.evaluate((el) => el.clientHeight)).toBeLessThan(height);
+  await expect.poll(fromBottom).toBeLessThanOrEqual(4);
+});
+
+test.describe("Statements popup (⌘↩ with several choices)", () => {
+  const chooser = (page: Page) => work(page).locator(".stmt-chooser");
+  /** The editor's lines in order (Monaco reuses line elements, and WebKit's innerText drops their line breaks) */
+  const text = (page: Page) =>
+    editor(page).evaluate((ed) =>
+      [...ed.querySelectorAll<HTMLElement>(".view-line")]
+        .sort((a, b) => parseFloat(a.style.top) - parseFloat(b.style.top))
+        .map((l) => l.textContent!.replace(/\u00a0/g, " "))
+        .join("\n"),
+    );
+  /** The editor lines the preview highlight covers (1-based) */
+  const previewLines = (page: Page) =>
+    editor(page).evaluate((ed) => {
+      const h = parseFloat(getComputedStyle(ed.querySelector(".view-line")!).height);
+      return [...ed.querySelectorAll(".view-overlays .stmt-preview")].map((x) => Math.round(parseFloat((x.parentElement as HTMLElement).style.top) / h) + 1).sort();
+    });
+  const open = async (page: Page) => {
+    await page.keyboard.press("Meta+Enter");
+    await expect(chooser(page)).toBeVisible();
+  };
+
+  test.beforeEach(async ({ page }) => {
+    await typeSql(page, "select 1;\nselect 2;\nselect 3;");
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("Home");
+  });
+
+  test("highlights the text each option would run, and nothing once closed", async ({ page }) => {
+    await open(page);
+    await expect(chooser(page).locator(".sc-item")).toHaveText(["select 2", "All statements (3)", "From caret to end"]);
+    await expect.poll(() => previewLines(page)).toEqual([2]);
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(() => previewLines(page)).toEqual([1, 2, 3]);
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(() => previewLines(page)).toEqual([2, 3]);
+    await chooser(page).locator(".sc-item").first().hover();
+    await expect.poll(() => previewLines(page)).toEqual([2]);
+    await page.keyboard.press("Escape");
+    await expect(chooser(page)).toHaveCount(0);
+    await expect.poll(() => previewLines(page)).toEqual([]);
+  });
+
+  test("takes the keys: Esc closes without running, typing doesn't reach the editor, focus comes back at the caret", async ({ page }) => {
+    const before = await text(page);
+    await open(page);
+    // Any other key closes it and does nothing else
+    await page.keyboard.press("x");
+    await expect(chooser(page)).toHaveCount(0);
+    expect(await text(page)).toBe(before);
+    await open(page);
+    await page.keyboard.press("Escape");
+    await expect(chooser(page)).toHaveCount(0);
+    expect(await text(page)).toBe(before);
+    await expect(resultTabs(page)).toHaveText(["Output"]);
+    // Back in the editor at the same caret (line 2, column 1)
+    await page.keyboard.type("-- ");
+    await expect.poll(() => text(page)).toMatch(/^select 1;\n-- select 2;\nselect 3;$/);
+  });
+
+  test("a click outside closes it without running; Enter runs the highlighted option", async ({ page }) => {
+    await open(page);
+    await work(page).locator(".results-panel").click();
+    await expect(chooser(page)).toHaveCount(0);
+    await expect.poll(() => previewLines(page)).toEqual([]);
+    await expect(resultTabs(page)).toHaveText(["Output"]);
+    await editor(page).click();
+    await page.keyboard.press("Meta+ArrowDown");
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("Home");
+    await open(page);
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await expect(chooser(page)).toHaveCount(0);
+    await resultTabs(page).first().click();
+    const log = work(page).locator(".output-log");
+    await expect(log).toContainText("select 2");
+    await expect(log).toContainText("select 3");
+    await expect(log).not.toContainText("select 1");
+  });
 });

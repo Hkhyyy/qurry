@@ -336,6 +336,49 @@ pub fn rest_items(m: &Meta, r: &Rest, o: Options) -> Vec<Item> {
     items
 }
 
+/// The query a table tab's WHERE / ORDER BY field filters, with the field's text in it: `SELECT * FROM "schema"."table" WHERE <field>`
+/// (or `ORDER BY <field>`), and the byte offset where the field's text starts in it. The names are quoted for [`suggest`] only
+/// (it reads `"…"` refs in any dialect), not to be run
+pub fn filter_query(schema: &str, table: &str, order_by: bool, field: &str) -> (String, usize) {
+    let q = |s: &str| format!("\"{}\"", s.replace('"', ""));
+    let from = if schema.is_empty() { q(table) } else { format!("{}.{}", q(schema), q(table)) };
+    let head = format!("SELECT * FROM {from} {} ", if order_by { "ORDER BY" } else { "WHERE" });
+    (format!("{head}{field}"), head.len())
+}
+
+/// Completion in a table tab's WHERE / ORDER BY field (the GUI's filter bar, the TUI's w / o input): the field completes as
+/// [`filter_query`] with the caret (a byte offset in `field`) mapped into it, so the rules are the console's and the table's
+/// columns come first. A list without an editor to filter it, so the TUI console's [`Options`]. Never inside a string literal, and
+/// never table or schema names: the field belongs to its table, so only its columns, keywords and functions.
+/// While typing (`explicit` off): candidates only while typing a word (not a number) or right after a `.`, and none once the word
+/// is a whole keyword or column of the table: there ↩ applies the filter rather than picking a longer word (`is null` must not
+/// become `is nulls`). Asked for (⌃Space, the TUI's ⇥): the console's candidates at any spot, keywords too at an empty word.
+/// Returns (length of the word before the caret to replace, in chars; candidates)
+#[allow(clippy::too_many_arguments)]
+pub fn suggest_filter(m: &Meta, schema: &str, table: &str, order_by: bool, field: &str, caret: usize, db: &str, mysql: bool, explicit: bool) -> (usize, Vec<Item>) {
+    let before = &field[..caret];
+    if before.matches('\'').count() % 2 == 1 {
+        return (0, vec![]);
+    }
+    if !explicit {
+        let head = before.trim_end_matches(is_word);
+        let typed = &before[head.len()..];
+        let word = !typed.is_empty() && !typed.starts_with(|c: char| c.is_ascii_digit());
+        if !(word || head.ends_with('.')) {
+            return (0, vec![]);
+        }
+        let named = if schema.is_empty() { table.to_string() } else { format!("{schema}.{table}") };
+        let column = || find_table(m, &named, db_schema(db, mysql)).is_some_and(|t| t.columns.iter().any(|(c, _)| c.eq_ignore_ascii_case(typed)));
+        if is_keyword(typed) || column() {
+            return (0, vec![]);
+        }
+    }
+    let (text, at) = filter_query(schema, table, order_by, field);
+    let (n, mut items) = suggest(m, &text, &text[..at + caret], db, mysql, Options { keywords_on_empty: explicit, ..Options::TUI });
+    items.retain(|i| !matches!(i.kind, ItemKind::Table | ItemKind::Schema));
+    (n, items)
+}
+
 /// A candidate (lowercase) for the typed word `p` (lowercase): all when the editor filters or nothing is typed, else those that
 /// start with it, without the fully typed word itself (so Enter goes to a newline)
 fn kept(lower: &str, p: &str, o: Options) -> bool {
@@ -469,10 +512,38 @@ pub fn hintable(mode: HintMode, path: &[String], type_name: &str) -> bool {
     !["bytea", "blob", "binary", "geometry", "geography", "tsvector", "[]"].iter().any(|k| ty.contains(k)) && !ty.starts_with('_') && (!json || !path.is_empty())
 }
 
-/// If the cursor is at a value · json key spot, that table · column (only for columns worth suggesting)
-pub fn hint_at(m: &Meta, text: &str, before: &str, db: &str, mysql: bool) -> Option<HintAt> {
+/// Clause keywords that end a JOIN's ON condition (or come before one)
+const NOT_ON: [&str; 8] = ["select", "from", "join", "where", "group", "having", "order", "set"];
+
+/// Whether the end of `head` is in a JOIN's ON condition: the nearest clause keyword before it, at its parenthesis depth, is ON
+fn in_join_on(head: &str) -> bool {
+    // One flag per open parenthesis, starting as the enclosing one's (a subquery's SELECT resets it); words in string literals don't count
+    let mut on = vec![false];
+    let mut quoted = false;
+    for t in (Tokens { text: head, at: 0 }) {
+        match t {
+            "'" => quoted = !quoted,
+            _ if quoted => {}
+            "(" => on.push(on[on.len() - 1]),
+            ")" if on.len() > 1 => _ = on.pop(),
+            _ if t.eq_ignore_ascii_case("on") => *on.last_mut().unwrap() = true,
+            _ if NOT_ON.iter().any(|k| t.eq_ignore_ascii_case(k)) => *on.last_mut().unwrap() = false,
+            _ => {}
+        }
+    }
+    on.last() == Some(&true)
+}
+
+/// If the cursor is at a value · json key spot, that table · column (only for columns worth suggesting). `head` is the caret's
+/// statement up to the cursor ([`crate::sql::statement_head`]; its last line is the spot). None in a JOIN's ON condition: the
+/// other side of `=` there is usually a column, so the console's columns complete instead
+pub fn hint_at(m: &Meta, text: &str, head: &str, db: &str, mysql: bool) -> Option<HintAt> {
     let db = db_schema(db, mysql);
+    let before = &head[head.rfind('\n').map_or(0, |i| i + 1)..];
     let ctx = context(before, mysql)?;
+    if in_join_on(head) {
+        return None;
+    }
     let refs = tables_in_statement(text);
     let candidates: Vec<&(String, Option<String>)> = match &ctx.r#ref {
         Some(q) => named(&refs, &q.to_lowercase()).into_iter().collect(),
@@ -614,6 +685,75 @@ mod tests {
         assert!(!suggest(&meta(), "select 'us", "select 'us", "", false, Options::GUI).1.is_empty());
     }
 
+    #[test]
+    fn filter_query_puts_the_field_after_its_clause() {
+        assert_eq!(filter_query("public", "users", false, "id = 1"), (r#"SELECT * FROM "public"."users" WHERE id = 1"#.to_string(), 37));
+        assert_eq!(filter_query("", "users", true, "id"), (r#"SELECT * FROM "users" ORDER BY id"#.to_string(), 31));
+    }
+
+    /// The field's text and caret map into the query: the table's columns first, then the console's rules
+    #[test]
+    fn filter_field_completes_as_its_query() {
+        let m = meta();
+        let f = |order: bool, field: &str, caret: usize| {
+            let (n, v) = suggest_filter(&m, "public", "users", order, field, caret, "", false, false);
+            (n, v.into_iter().map(|i| i.label).collect::<Vec<_>>())
+        };
+        // Only the filtered table's columns, not other tables' (orders.user_id)
+        assert_eq!(f(false, "us", 2), (2, vec!["user_name".into(), "using".into()]));
+        // The caret in the middle: only the text before it counts
+        assert_eq!(f(false, "em = 1 and id > 2", 2).1[0], "email");
+        assert_eq!(f(false, "id = 1 an", 9), (2, vec!["and".into(), "analyze".into()]));
+        assert_eq!(f(true, "id de", 5).1, ["delete", "desc"]);
+        assert_eq!(f(true, "users.", 6).1, ["id", "user_name", "email"]);
+        // Not while typing a number, after a space or an operator, or in a string literal
+        assert!(f(false, "id = 12", 7).1.is_empty());
+        assert!(f(false, "id = ", 5).1.is_empty());
+        assert!(f(false, "email like 'us", 14).1.is_empty());
+        assert!(!f(false, "email = 'a''b' and us", 21).1.is_empty(), "a doubled quote closes nothing");
+        // A whole keyword or column: ↩ applies the filter instead of picking a longer word
+        assert!(f(false, "email is not null", 17).1.is_empty());
+        assert!(f(false, "user_id = 1 or ID", 17).1.is_empty());
+        assert_eq!(f(false, "user", 4).1[0], "user_name");
+    }
+
+    /// Asked for (⌃Space, ⇥): the table's columns first at an empty word, then the console's rest with keywords; longer words at a whole one
+    #[test]
+    fn filter_field_lists_when_asked() {
+        let m = meta();
+        let ask = |field: &str| suggest_filter(&m, "public", "users", false, field, field.len(), "", false, true);
+        for field in ["", "id = 1 and "] {
+            let (n, v) = ask(field);
+            assert_eq!((n, &labels(&v)[..3]), (0, &["id", "user_name", "email"][..]), "{field:?}");
+            assert!(v.iter().any(|i| i.kind == ItemKind::Keyword && i.label == "and"), "{field:?}");
+        }
+        assert_eq!(labels(&ask("user").1)[0], "user_name");
+        assert_eq!(labels(&ask("us").1)[0], "user_name");
+        // Not inside a string literal, asked or not
+        assert!(ask("email like 'us").1.is_empty());
+    }
+
+    /// The field belongs to one table: its columns, keywords and functions, never other tables or schemas (typed or asked)
+    #[test]
+    fn filter_field_lists_no_tables_or_schemas() {
+        let m = meta();
+        for explicit in [false, true] {
+            let f = |field: &str| suggest_filter(&m, "public", "users", false, field, field.len(), "", false, explicit).1;
+            assert_eq!(labels(&f("orde")), ["order"], "explicit {explicit}");
+            assert!(f("bil").is_empty(), "explicit {explicit}");
+            assert!(f("billing.").is_empty(), "explicit {explicit}");
+            assert_eq!(labels(&f("co")), ["count", "coalesce", "commit"], "explicit {explicit}");
+        }
+        let all = suggest_filter(&m, "public", "users", false, "", 0, "", false, true).1;
+        assert!(all.iter().all(|i| !matches!(i.kind, ItemKind::Table | ItemKind::Schema)));
+    }
+
+    #[test]
+    fn filter_field_in_mysql_finds_its_table_in_the_db() {
+        let m = Meta::new(vec![CompletionTable { schema: "shop".into(), name: "orders".into(), columns: vec![("status".into(), "varchar".into())] }]);
+        assert_eq!(suggest_filter(&m, "shop", "orders", false, "st", 2, "shop", true, false).1[0].label, "status");
+    }
+
     fn hmeta() -> Meta {
         let t = |s: &str, n: &str, cols: &[(&str, &str)]| CompletionTable { schema: s.into(), name: n.into(), columns: cols.iter().map(|(c, ty)| (c.to_string(), ty.to_string())).collect() };
         Meta::new(vec![t("public", "orders", &[("id", "int8"), ("status", "varchar"), ("data", "jsonb"), ("raw", "bytea")]), t("public", "users", &[("id", "int8"), ("name", "text")])])
@@ -644,6 +784,22 @@ mod tests {
         let h = at("select * from orders where data @> '").unwrap();
         assert_eq!((h.mode, h.quoted), (HintMode::Pairs, true));
         assert!(hint_at(&m, "select * from orders where data @> '", "select * from orders where data @> '", "app", true).is_none(), "no @> on MySQL");
+    }
+
+    /// A JOIN's ON condition compares columns: no value hints there (the console's columns instead); WHERE keeps them
+    #[test]
+    fn no_hints_in_join_on() {
+        let m = hmeta();
+        let at = |head: &str| hint_at(&m, head, head, "app", false);
+        assert!(at("select * from orders as o\nleft join users as u on o.id = ").is_none());
+        assert!(at("select * from orders o join users u on u.id = o.id and o.status = '").is_none(), "AND stays in the ON");
+        assert!(at("select * from orders o join users u on (o.id = ").is_none(), "a parenthesis inside the ON");
+        assert!(at("select * from orders o join users u on u.id = o.id\nwhere o.status = '").is_some());
+        assert!(at("select * from orders o join users u on u.id = o.id where o.id = 1 or o.status = ").is_some());
+        assert!(at("select * from users u where u.id in (select o.id from orders o where o.status = '").is_some());
+        assert!(at("select * from orders o where o.id in (select u.id from users u join orders x on x.status = ").is_none(), "the subquery's own ON");
+        assert!(at("select * from orders o join users u on u.id = o.id where o.id in (select id from users) and o.status = '").is_some());
+        assert!(at("select * from orders o join users u on u.name = 'on (' where o.status = '").is_some(), "parentheses in a string");
     }
 
     #[test]
@@ -795,9 +951,11 @@ mod tests {
             let after = text[at..].chars().next();
             let (db, mysql) = (st(&c["db"]), c["mysql"].as_bool().unwrap_or(false));
             // As update_completion: the caret's statement
-            let text = crate::sql::statement_at(&text, at, if mysql { crate::DbKind::Mysql } else { crate::DbKind::Postgres }).unwrap_or_default();
+            let kind = if mysql { crate::DbKind::Mysql } else { crate::DbKind::Postgres };
+            let head = crate::sql::statement_head(&text, at, kind).to_string();
+            let text = crate::sql::statement_at(&text, at, kind).unwrap_or_default();
             let hints = |mode: &str| c["hints"].get(mode).map(|v| v.as_array().unwrap().iter().map(|p| Hint { value: st(&p[0]), count: p[1].as_i64().unwrap() }).collect::<Vec<_>>());
-            let o = if let Some(h) = hint_at(&m, &text, before, &db, mysql) {
+            let o = if let Some(h) = hint_at(&m, &text, &head, &db, mysql) {
                 let name = |m: HintMode| format!("{m:?}").to_lowercase();
                 let mut asked = vec![name(h.mode)];
                 let mut got = (h.mode, hints(&name(h.mode)).unwrap_or_default());

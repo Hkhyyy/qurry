@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ask } from "../lib/dialogs";
-import { Cell, dba, DbaReportInfo, Dialect, QueryResult } from "../lib/api";
+import { Cell, dba, currentFirst, DbaReportInfo, Dialect, QueryResult } from "../lib/api";
 import { ResultGrid } from "./ResultGrid";
+import { sharedOr } from "../lib/shared";
 import { Button, Notice, Select, Text, Toolbar } from "../ui";
 
 const empty: QueryResult = { columns: [], rows: [], rowsAffected: 0, truncated: false, elapsedMs: 0, hasResultSet: true };
@@ -16,6 +17,13 @@ export function DbaReport(p: {
   readOnly: boolean;
   dialect: Dialect;
   visible: boolean;
+  /** The database the report runs on ("" = MySQL without a default schema: all schemas) */
+  database: string;
+  /** The others it can run on: every database of the server, as the console lists them (loaded once the report is shown) */
+  loadDbs: () => Promise<string[]>;
+  /** The data source has one fixed database: shown, not changeable */
+  fixedDb: boolean;
+  onDatabase: (db: string) => void;
   onReport: (id: string, title: string) => void;
   onOpenConsole: (sql: string) => void;
   onStatus: (s: string) => void;
@@ -27,6 +35,18 @@ export function DbaReport(p: {
   const [loadedAt, setLoadedAt] = useState("");
   const [running, setRunning] = useState(false);
   const [auto, setAuto] = useState(true);
+  const [dbs, setDbs] = useState<string[]>([]);
+  /** Listing the databases failed: said above the report and in the picker's tooltip, with the way out */
+  const [dbsError, setDbsError] = useState<string | null>(null);
+  const dbsAsked = useRef(false);
+  const loadDbs = () => {
+    if (dbsAsked.current) return;
+    dbsAsked.current = true;
+    p.loadDbs().then(setDbs, (e) => {
+      dbsAsked.current = false;
+      setDbsError(sharedOr(String(e), (s) => s.dbListFailed(String(e))));
+    });
+  };
   const seq = useRef(0);
   /** A load is running (the auto-refresh tick waits for it) */
   const inFlight = useRef(false);
@@ -35,6 +55,14 @@ export function DbaReport(p: {
   useEffect(() => {
     if (p.visible) setSeen(true);
   }, [p.visible]);
+  // The picker's list loads once the report is shown (and again for another target), so its first click opens the whole list;
+  // focus / mousedown only ask again when that failed
+  useEffect(() => {
+    if (!seen) return;
+    dbsAsked.current = false;
+    setDbsError(null);
+    loadDbs();
+  }, [seen, p.target]);
   const info = list.find((r) => r.id === p.report);
 
   useEffect(() => {
@@ -112,7 +140,7 @@ export function DbaReport(p: {
   return (
     <div className="dba">
       <Toolbar className="dba-bar">
-        <Select value={p.report} onChange={(e) => p.onReport(e.target.value, list.find((r) => r.id === e.target.value)?.title ?? e.target.value)}>
+        <Select className="dba-report" value={p.report} onChange={(e) => p.onReport(e.target.value, list.find((r) => r.id === e.target.value)?.title ?? e.target.value)}>
           {groups.map(([g, rs]) => (
             <optgroup key={g} label={g}>
               {rs.map((r) => (
@@ -121,6 +149,11 @@ export function DbaReport(p: {
                 </option>
               ))}
             </optgroup>
+          ))}
+        </Select>
+        <Select className="dba-db" value={p.database} onFocus={loadDbs} onMouseDown={loadDbs} onChange={(e) => p.onDatabase(e.target.value)} disabled={p.fixedDb} title={p.fixedDb ? "This data source has one database" : dbsError ?? "Database the report runs on"}>
+          {currentFirst(p.database, dbs).map((d) => (
+            <option key={d} value={d} title={d}>{d || "(all schemas)"}</option>
           ))}
         </Select>
         <Button onClick={load} disabled={running}>
@@ -133,6 +166,8 @@ export function DbaReport(p: {
         )}
         <Text tone="muted" className="dba-help">{info?.help}</Text>
       </Toolbar>
+      {/* Not an option: a native select is as wide as its longest option */}
+      {dbsError && <Notice tone="warn" className="dba-dbs-error">{dbsError}</Notice>}
       {info?.actions.length ? <div className="dba-hint muted">Right-click a row: {info.actions.map((a) => a.label).join(" · ")}</div> : null}
       {error && result && (
         <Notice tone="warn" className="dba-stale">

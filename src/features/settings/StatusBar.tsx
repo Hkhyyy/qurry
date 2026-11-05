@@ -2,8 +2,10 @@ import { IconButton, Spacer, StatusItem, Text } from "../../ui";
 import { useStatusWidgets } from "../../lib/statusbar";
 import { TransferBar, type TransferJob } from "../../components/Transfer";
 import { keyTitle } from "../../lib/shortcuts";
+import { RunningBar } from "../../components/RunningBar";
 
-function StatusBar({ run, onSettings, settingsKey, onKeymap, status, readOnly, update, onUpdate, jobs }: { run: { canRun: boolean; running: boolean; onRun: () => void; onCancel: () => void }; onSettings: () => void; settingsKey?: string; onKeymap: () => void; status: string; readOnly: boolean; update?: string; onUpdate: () => void; jobs: TransferJob[] }) {
+/** `busy`: what the focused tab is doing (a run, a load-more) and since when, shown instead of the status text; ■ cancels it */
+function StatusBar({ run, status, busy, readOnly, update, onUpdate, jobs }: { run: { canRun: boolean; running: boolean; onRun: () => void; onCancel: () => void }; status: string; busy?: { label: string; since: number }; readOnly: boolean; update?: string; onUpdate: () => void; jobs: TransferJob[] }) {
   const w = useStatusWidgets();
   return (
     <div className="statusbar">
@@ -13,9 +15,13 @@ function StatusBar({ run, onSettings, settingsKey, onKeymap, status, readOnly, u
       <IconButton size="sm" tone="danger" disabled={!run.running} onClick={run.onCancel} title={keyTitle("Cancel Running Statements", "editor.cancel")}>
         ■
       </IconButton>
-      <Text truncate className="sb-text">
-        {status}
-      </Text>
+      {busy ? (
+        <RunningBar label={busy.label} since={busy.since} />
+      ) : (
+        <Text truncate className="sb-text">
+          {status}
+        </Text>
+      )}
       <Spacer />
       <TransferBar jobs={jobs} />
       {update && (
@@ -27,12 +33,6 @@ function StatusBar({ run, onSettings, settingsKey, onKeymap, status, readOnly, u
       {readOnly && <StatusItem title="Data source is read-only">🔒 Read-only</StatusItem>}
       {w.caret && <StatusItem title="Line:Column">{w.caret}</StatusItem>}
       <StatusItem>UTF-8</StatusItem>
-      <IconButton size="sm" title={settingsKey ? `Settings (${settingsKey})` : "Settings"} onClick={onSettings}>
-        ⚙
-      </IconButton>
-      <IconButton size="sm" title={keyTitle("Keymap Reference", "keymap")} onClick={onKeymap}>
-        ⌨
-      </IconButton>
     </div>
   );
 }

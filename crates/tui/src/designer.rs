@@ -632,7 +632,12 @@ impl App {
     }
 
     /// Show the generated SQL (red window on Production), run it, then reload the tree
-    fn confirm_ddl(&mut self, target: String, conn: String, db: Option<String>, sql: Vec<String>, done: String) {
+    pub(crate) fn confirm_ddl(&mut self, target: String, conn: String, db: Option<String>, sql: Vec<String>, done: String) {
+        self.popup = Some(self.ddl_confirm(target, conn, db, sql, done));
+    }
+
+    /// confirm_ddl's question, for an async result to open (open_after_notices)
+    pub(crate) fn ddl_confirm(&self, target: String, conn: String, db: Option<String>, sql: Vec<String>, done: String) -> Popup {
         let prod = self.production_name(&conn);
         let text = format!(
             "{}\n\n{}\n\nRun it?",
@@ -642,26 +647,31 @@ impl App {
             },
             sql.iter().map(|s| format!("  {}", s.split_whitespace().collect::<Vec<_>>().join(" "))).collect::<Vec<_>>().join("\n")
         );
-        self.popup = Some(Popup::Confirm {
+        Popup::Confirm {
             opened: None,
             text,
             on_yes: Box::new(move |a| {
                 let st = a.state.clone();
                 let db = db.unwrap_or_else(|| a.default_db(&conn));
-                a.spawn(async move { st.run_ddl(target, sql).await }, move |a, r| match r {
-                    Ok(warning) => {
-                        // Schemas · tables reload under that DB; a new DB reloads the Data Source
-                        a.schema_changed(&conn, &db);
-                        if let Some(n) = a.tree.roots.iter().find(|n| n.conn == conn).cloned() {
-                            a.refresh_node(&n);
-                        }
-                        a.status = done;
-                        a.warn_ran(warning);
+                a.spawn(async move { st.run_ddl(target, sql).await }, move |a, r| {
+                    // Schemas · tables reload under that DB; a new DB reloads the Data Source. After a failure too: on MySQL the
+                    // statements before it ran
+                    a.schema_changed(&conn, &db);
+                    // Marks on dropped or renamed nodes would point at nothing (the GUI's selection loses them as their rows go)
+                    a.tree.marked.clear();
+                    if let Some(n) = a.tree.roots.iter().find(|n| n.conn == conn).cloned() {
+                        a.refresh_node(&n);
                     }
-                    Err(e) => a.status = e.to_string(),
+                    match r {
+                        Ok(warning) => {
+                            a.status = done;
+                            a.warn_ran(warning);
+                        }
+                        Err(e) => a.status = e.to_string(),
+                    }
                 });
             }),
-        });
+        }
     }
 }
 

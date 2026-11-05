@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ConnectionView, dbVisible, meta, targetId } from "../lib/api";
+import { ConnectionView, dbVisible, defaultDbOf, meta, targetId } from "../lib/api";
 import { fuzzyScore } from "../lib/fuzzy";
 import { useSharedReady } from "../lib/shared";
 import { objectIcon } from "../ui/icons";
@@ -61,7 +61,6 @@ export function invalidateSearchIndex(connId?: string) {
   for (const m of [objCache, colCache, dbCache] as Map<string, unknown>[])
     for (const k of [...m.keys()]) if (!connId || k === connId || k.startsWith(connId + "::")) m.delete(k);
 }
-const defaultDbOf = (c: ConnectionView) => c.database || (c.kind === "postgres" ? "postgres" : "");
 async function targetsOf(c: ConnectionView): Promise<string[]> {
   if (c.options?.singleDb) return [defaultDbOf(c)];
   if (!dbCache.has(c.id)) dbCache.set(c.id, meta.databases(c.id).catch(() => [defaultDbOf(c)]));

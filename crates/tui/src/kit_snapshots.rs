@@ -12,8 +12,30 @@ use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 use serde_json::{json, Value};
 
-/// Terminal color → CSS (a common dark terminal palette)
-fn css(c: Color) -> Value {
+/// Terminal color → CSS (a common dark terminal palette, or a common light one for scenes in the light theme)
+fn css(c: Color, light: bool) -> Value {
+    if light {
+        let s = match c {
+            Color::Black => "#383a42",
+            Color::Red => "#e45649",
+            Color::Green => "#50a14f",
+            Color::Yellow => "#c18401",
+            Color::Blue => "#4078f2",
+            Color::Magenta => "#a626a4",
+            Color::Cyan => "#0184bc",
+            Color::Gray => "#dcdcdc",
+            Color::DarkGray => "#6e6e6e",
+            Color::White => "#f2f2f2",
+            Color::LightRed => "#ca1243",
+            Color::LightGreen => "#3d8c3c",
+            Color::LightYellow => "#986801",
+            Color::LightBlue => "#2f5fd0",
+            Color::LightMagenta => "#8e2a8c",
+            Color::LightCyan => "#0b7aa3",
+            _ => return css(c, false),
+        };
+        return json!(s);
+    }
     let s = match c {
         Color::Reset => return Value::Null,
         Color::Rgb(r, g, b) => return json!(format!("#{r:02x}{g:02x}{b:02x}")),
@@ -46,7 +68,7 @@ fn css(c: Color) -> Value {
 /// Buffer → per line, runs of [text, fg, bg, bold, underline, italic, strikethrough, wide] (same styles are merged), plus [reverse, dim]
 /// at the end only when one of them is on (NO_COLOR draws with them).
 /// Wide (two-cell) characters (Korean) get their own run (wide = true) — so the web draws them exactly two cells wide. The following cell is skipped
-fn dump(buf: &Buffer) -> Value {
+fn dump(buf: &Buffer, light: bool) -> Value {
     use unicode_width::UnicodeWidthStr;
     let a = buf.area;
     let mut rows = vec![];
@@ -56,7 +78,7 @@ fn dump(buf: &Buffer) -> Value {
         while x < a.right() {
             let c = &buf[(x, y)];
             let w = c.symbol().width().max(1) as u16;
-            let (fg, bg, m) = (css(c.fg), css(c.bg), c.modifier.bits());
+            let (fg, bg, m) = (css(c.fg, light), css(c.bg, light), c.modifier.bits());
             let wide = w > 1;
             match runs.last_mut() {
                 Some(r) if !wide && !r.4 && r.1 == fg && r.2 == bg && r.3 == m => r.0.push_str(c.symbol()),
@@ -84,18 +106,23 @@ fn dump(buf: &Buffer) -> Value {
 fn scene(name: &str, desc: &str, w: u16, h: u16, draw: impl FnOnce(&mut Frame)) -> Value {
     let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
     term.draw(draw).unwrap();
-    let mut v = dump(term.backend().buffer());
+    let mut v = dump(term.backend().buffer(), false);
     v["name"] = json!(name);
     v["desc"] = json!(desc);
     v
 }
 
+/// The app's screen; in the light theme it is marked light (Storybook draws it on a light terminal)
 fn app_scene(h: &mut Harness, name: &str, desc: &str, w: u16, ht: u16) -> Value {
     let mut term = Terminal::new(TestBackend::new(w, ht)).unwrap();
     term.draw(|f| crate::ui::draw(f, &mut h.app)).unwrap();
-    let mut v = dump(term.backend().buffer());
+    let light = h.app.theme.light(h.app.auto_light);
+    let mut v = dump(term.backend().buffer(), light);
     v["name"] = json!(name);
     v["desc"] = json!(desc);
+    if light {
+        v["light"] = json!(true);
+    }
     v
 }
 
@@ -186,7 +213,7 @@ async fn explorer(h: &mut Harness) {
     h.app.tree.children.insert("prod|rentalpay".into(), vec![node("prod|rentalpay|public", "public", "", NodeKind::Schema, p)]);
     h.app.tree.children.insert("prod|rentalpay|public".into(), vec![node("prod|rentalpay|public|g", "tables", "66", NodeKind::Group, p)]);
     let tables = [("adjust", "정산 테이블 (주문 단위 정산)"), ("adjust_status_log", "정산 상태 로그"), ("admin_auth", "관리자 OTP 인증"), ("admin_role", ""), ("bank_info", "은행 정보 테이블"), ("contract", "월세 계약 테이블"), ("payment", "결제 카드 정보")];
-    h.app.tree.children.insert("prod|rentalpay|public|g".into(), tables.iter().map(|(t, c)| Node { expandable: true, ..node(&format!("prod|rentalpay|public|g|{t}"), t, c, NodeKind::Object("table".into()), p) }).collect());
+    h.app.tree.children.insert("prod|rentalpay|public|g".into(), tables.iter().map(|(t, c)| Node { expandable: true, name: Some(t.to_string()), ..node(&format!("prod|rentalpay|public|g|{t}"), t, c, NodeKind::Object("table".into()), p) }).collect());
     for k in ["prod", "prod|rentalpay", "prod|rentalpay|public", "prod|rentalpay|public|g"] {
         h.app.tree.expanded.insert(k.into());
     }
@@ -213,6 +240,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         has_result_set: true,
         in_transaction: false,
         warning: None,
+        editable: None,
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         c.result_title = "Result 1: select card_brand, count(*) as payments,".into();
@@ -226,6 +254,89 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.app.chart_result();
     scenes.push(app_scene(h, "Chart", "⌃k › Chart Result: 첫 글 컬럼별 수 컬럼의 합 (가로 막대)", 120, 26));
     h.app.popup = None;
+    // Loading more (scrolled near the end of an unfinished result): the status line shows it as it shows a run
+    if let Some(g) = h.app.grid_mut() {
+        (g.result.truncated, g.loading_more) = (true, true);
+    }
+    scenes.push(app_scene(h, "Grid: loading more", "Scrolled near the end of an unfinished result: the status line shows the bar, \"Loading more rows…\" and the elapsed time, as for a run; the Cancel key stops it. Nothing covers the rows", 120, 26));
+    h.app.color = crate::theme::ColorMode::NoColor;
+    scenes.push(app_scene(h, "Grid: loading more, NO_COLOR", "NO_COLOR=1: the same bar and words", 120, 26));
+    h.app.color = crate::theme::ColorMode::TrueColor;
+    if let Some(g) = h.app.grid_mut() {
+        (g.result.truncated, g.loading_more) = (false, false);
+    }
+    // Long Output log: the newest line sits on the bottom row, a long wrapped one included
+    let id = h.console_with("update payment set memo = 'migrated' where id = 1;", 0, 0);
+    if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
+        for i in 1..=40 {
+            c.log(false, format!("rentalpay> update payment set memo = 'migrated' where id = {i}"));
+            c.log(false, "1 row(s) affected in 2 ms".into());
+        }
+        c.log(false, format!("rentalpay> insert into payment_audit (payment_id, memo, payload) values (41, 'migrated', '{{{}}}')", (1..=12).map(|k| format!("\"field_{k}\": \"value {k}\"")).collect::<Vec<_>>().join(", ")));
+        c.log(true, "ERROR: value too long for type character varying(255)".into());
+    }
+    scenes.push(app_scene(h, "Console: long Output", "A script's Output longer than the pane: the newest line sits on the bottom row, wrapped long lines included", 120, 22));
+    h.app.close_tab_now(h.app.active);
+    // Console result from one table with its key: edited like a table tab (one pending change), then one it can't edit and why
+    let id = h.console_with("select id, user_name as name, email from users;", 0, 10);
+    let users = |editable| qurry_core::db::QueryResult {
+        columns: [("id", "INT8"), ("name", "VARCHAR"), ("email", "TEXT")].iter().map(|(n, t)| qurry_core::db::ColumnInfo { name: n.to_string(), type_name: t.to_string() }).collect(),
+        rows: [(1, "kim", "kim@example.com"), (2, "lee", "lee@example.com"), (3, "park", "park@example.com")].iter().map(|(i, n, e)| vec![json!(i), json!(n), json!(e)]).collect(),
+        rows_affected: 0,
+        truncated: false,
+        elapsed_ms: 3,
+        has_result_set: true,
+        in_transaction: false,
+        warning: None,
+        editable: Some(editable),
+    };
+    let target = qurry_core::editable::EditTarget { schema: "public".into(), table: "users".into(), pk: vec!["id".into()], columns: vec!["id".into(), "user_name".into(), "email".into()] };
+    if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
+        c.result_title = "Result 1: select id, user_name as name, email".into();
+        let mut g = crate::grid::Grid::new(users(qurry_core::editable::Editable::Table(target)));
+        g.set_value(1, 1, "Lee".into());
+        (g.row, g.col) = (1, 1);
+        c.grid = Some(g);
+        c.show_output = false;
+    }
+    h.app.focus = crate::app::Focus::Grid;
+    h.app.status = "3 row(s) retrieved in 3 ms".into();
+    scenes.push(app_scene(h, "Console result: editable", "A console result from one table with its primary key edits like a table tab: ↩ edit, a add, d delete, ⌃s submit (Production asks first), ⌃z revert", 120, 22));
+    if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
+        c.result_title = "Result 1: select u.id, u.name, o.email from".into();
+        c.grid = Some(crate::grid::Grid::new(users(qurry_core::editable::Editable::ReadOnly("Read-only: the columns come from more than one table.".into()))));
+    }
+    h.key("a");
+    scenes.push(app_scene(h, "Console result: read-only", "An edit key on a result Qurry can't tie to one table row: the status line says why (here a join)", 120, 22));
+    h.app.focus = crate::app::Focus::Editor;
+    // Gutter marks: ✓ done, ✗ failed, … running (all three in one run here, as in the GUI story)
+    let id = h.console_with("select 1;\nupdate payment\n   set status = 'paid'\n where id = 42;\nselect pg_sleep(5);", 4, 0);
+    if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
+        use crate::app::MarkState;
+        let lines = c.editor.lines().to_vec();
+        c.marks.start(&lines, &[(0, 0), (1, 3), (4, 4)]);
+        c.marks.set(&lines, 0, MarkState::Ok);
+        c.marks.set(&lines, 1, MarkState::Err);
+        c.marks.set(&lines, 2, MarkState::Running);
+        for (e, l) in [(false, "> select 1"), (false, "0 row(s) retrieved in 3 ms"), (false, "> update payment set status = 'paid' where id = 42"), (true, "ERROR: column \"status\" of relation \"payment\" does not exist"), (false, "> select pg_sleep(5)")] {
+            c.log(e, l.into());
+        }
+        c.running = true;
+    }
+    h.app.status = "Executing…".into();
+    scenes.push(app_scene(h, "Console gutter marks", "Run statements are marked on their first line: ✓ done, ✗ failed, … running (click: Output)", 120, 26));
+    if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
+        c.running = false;
+    }
+    // F5 inside one of several statements: the Execute chooser, the rows of the selected option highlighted in the editor
+    h.console_with("select 1;\nselect 2;\nselect 3;", 1, 0);
+    h.app.status.clear();
+    h.key("F5");
+    h.key("Down");
+    h.key("Down");
+    scenes.push(app_scene(h, "Console: Execute chooser", "F5 inside one of several statements asks what to run; the editor highlights the rows the selected option runs (↑↓ · Enter · Esc closes without running)", 120, 22));
+    h.key("Esc");
+    h.app.close_tab_now(h.app.active);
     // Grid alignment (GUI Settings › Appearance › Alignment, read from settings.json)
     let id = h.console_with("select * from payment_check;", 1, 10);
     let res = qurry_core::db::QueryResult {
@@ -241,6 +352,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         has_result_set: true,
         in_transaction: false,
         warning: None,
+        editable: None,
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         c.result_title = "Result 1: select * from payment_check".into();
@@ -267,13 +379,13 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     }
     scenes.push(app_scene(h, "Grid alignment: changed", "settings.json \"gridAlign\": { \"null\": \"left\", \"boolean\": \"center\" } (GUI Settings › Appearance › Alignment); the other classes keep their default", 120, 22));
     h.app.palette_grid_align(qurry_core::format::ValueClass::Null);
-    scenes.push(app_scene(h, "Grid alignment palette", "⌃k › Grid Alignment…: where each kind of value sits, shared with the GUI; Enter picks Left / Center / Right", 120, 22));
+    scenes.push(app_scene(h, "Grid alignment palette", "⌃k › Grid Alignment…: where each kind of value sits, shared with the GUI; Enter picks Left / Center / Right (NULL also Column type)", 120, 22));
     h.key("Enter");
     scenes.push(app_scene(h, "Grid alignment: pick", "⌃k › Grid Alignment… › NULL: opens on where it sits now (Enter keeps it)", 120, 22));
     h.app.popup = None;
     {
         use qurry_core::format::{Align, ValueClass};
-        h.app.state.store.set_grid_align(ValueClass::Null, Align::Right).unwrap();
+        h.app.state.store.set_grid_align(ValueClass::Null, Align::Column).unwrap();
         h.app.align = h.app.state.store.set_grid_align(ValueClass::Boolean, Align::Left).unwrap();
     }
     h.app.close_tab_now(h.app.active);
@@ -294,6 +406,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         has_result_set: true,
         in_transaction: false,
         warning: None,
+        editable: None,
     };
     if let Some(crate::app::TabKind::Console(c)) = h.app.tabs.iter_mut().find(|t| t.id == id).map(|t| &mut t.kind) {
         c.result_title = "Result 1: select id, payload from webhook_event".into();
@@ -304,6 +417,9 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.app.color = crate::theme::ColorMode::Ansi16;
     scenes.push(app_scene(h, "Grid: JSON, 16 colors", "TERM=xterm: the JSON colors by hue (NO_COLOR: no colors)", 120, 22));
     h.app.color = crate::theme::ColorMode::TrueColor;
+    h.app.theme = crate::theme::Theme::Light;
+    scenes.push(app_scene(h, "Light: grid JSON", "Theme Light: the JSON colors of the GUI's light theme", 120, 22));
+    h.app.theme = crate::theme::Theme::Auto;
     h.app.close_tab_now(h.app.active);
     // Production log
     let entry = |id: &str, ago: i64, sql: &str, rows: Option<u64>, undo: bool, in_tx: bool| qurry_core::audit::AuditEntry {
@@ -397,6 +513,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         has_result_set: true,
         in_transaction: false,
         warning: None,
+        editable: None,
     };
     let timeout = "The report ran into its time limit (30 s, or a stricter one set on the server). The server may be busy or the statistics very large: try again later.\n(error returned from database: canceling statement due to statement timeout)";
     let info = |kind, id| qurry_core::dba::reports(kind).into_iter().find(|r| r.id == id);
@@ -408,6 +525,11 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     let d = crate::app::DbaTab { report: "slow_queries".into(), info: info(qurry_core::store::DbKind::Mysql, "slow_queries"), grid: None, loaded: None, error: Some(maria.into()), running: false, run: 0, auto: true, gone: None };
     h.app.push_tab("prod", "rentalpay".into(), "Slow Queries".into(), crate::app::TabKind::Dba(d));
     scenes.push(app_scene(h, "Database Admin: report error", "A report the server can't run: what to turn on, then the server's error", 120, 22));
+    // d: the database the report runs on (the grid's title names it)
+    let id = h.app.tabs[h.app.active].id;
+    h.app.dba_db_choices(id, ["postgres", "rentalpay", "rentalpay_archive"].map(String::from).to_vec());
+    scenes.push(app_scene(h, "Database Admin: database", "d: every database of the server, the current one first and selected; picking one reruns the report there", 120, 22));
+    h.app.popup = None;
     for _ in 0..2 {
         h.app.close_tab_now(h.app.active);
     }
@@ -417,6 +539,14 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.app.push_tab("prod", "rentalpay".into(), "users [DDL]".into(), crate::app::TabKind::Text(t));
     h.app.focus = crate::app::Focus::Grid;
     scenes.push(app_scene(h, "DDL: Structure", "A table's DDL tab, v: columns, keys, indexes, foreign keys both ways, triggers (not reported by this source), options and comment; v again for the SQL", 120, 40));
+    h.app.close_tab_now(h.app.active);
+    // Table filter completion (w)
+    let id = h.table_tab("payment", &["id", "user_id", "amount", "card_brand", "created_at"], &[&["1", "41", "129000", "VISA", "2026-10-28 09:12"], &["2", "7", "59000", "MASTER", "2026-10-28 09:40"]], &["id"]);
+    h.app.focus = crate::app::Focus::Grid;
+    h.app.input_filter(id, false);
+    h.type_str("user_id = 41 and ca");
+    scenes.push(app_scene(h, "Table filter completion", "w / o on a table tab: the WHERE / ORDER BY input completes like the console (the table's columns first, then keywords); ↑↓ PgUp PgDn move, Enter / Tab pick, Esc closes the list first", 120, 22));
+    h.app.popup = None;
     h.app.close_tab_now(h.app.active);
     // Redis
     h.redis_tab(&["session:9f2c", "session:a771", "user:41", "user:41:cart", "queue:mail", "rank:daily"]);
@@ -443,6 +573,18 @@ async fn all_scenes() -> Vec<Value> {
         h.app.color = mode;
         scenes.push(app_scene(&mut h, name, desc, 120, 22));
     }
+    // The light theme (⌃k › Theme…, or Auto on a terminal whose COLORFGBG says its background is light) in each color mode
+    h.app.theme = crate::theme::Theme::Light;
+    for (mode, name, desc) in [
+        (ColorMode::TrueColor, "Light: truecolor", "Theme Light (or Auto with COLORFGBG=0;15): the light palette's 24-bit colors; a Data Source color becomes a light tint of its hue"),
+        (ColorMode::Ansi256, "Light: 256", "Theme Light, TERM=xterm-256color: the light palette mapped to the nearest of the xterm 256 palette"),
+        (ColorMode::Ansi16, "Light: 16", "Theme Light, TERM=xterm: light surfaces, text in the normal (darker) of the 16 colors"),
+        (ColorMode::NoColor, "Light: NO_COLOR", "Theme Light, NO_COLOR=1: the same monochrome rules as in the dark theme"),
+    ] {
+        h.app.color = mode;
+        scenes.push(app_scene(&mut h, name, desc, 120, 22));
+    }
+    h.app.theme = crate::theme::Theme::Auto;
     // Still NO_COLOR: what doesn't depend on color in the grid
     let (focus, g) = (h.app.focus, h.app.grid_mut().unwrap());
     let at = (g.row, g.col);
@@ -452,6 +594,9 @@ async fn all_scenes() -> Vec<Value> {
     (g.row, g.col) = (1, 2);
     h.app.focus = crate::app::Focus::Grid;
     scenes.push(app_scene(&mut h, "Colors: NO_COLOR grid", "NO_COLOR=1: unsaved changes by the row number (~ edited · - deleted · + added) and bold cells; the cursor is the plain cell in the reversed range", 120, 22));
+    (h.app.color, h.app.theme) = (ColorMode::TrueColor, crate::theme::Theme::Light);
+    scenes.push(app_scene(&mut h, "Light: grid edits", "Theme Light: an edited cell, a deleted row and a range with the cursor in it", 120, 22));
+    (h.app.color, h.app.theme) = (ColorMode::NoColor, crate::theme::Theme::Auto);
     let g = h.app.grid_mut().unwrap();
     g.edits.clear();
     g.deleted.clear();
@@ -459,13 +604,42 @@ async fn all_scenes() -> Vec<Value> {
     (g.row, g.col) = at;
     h.app.focus = focus;
     h.app.color = ColorMode::TrueColor;
+    // Marked rows (m): rows 1 and 4 selected whole, the cursor on row 3
+    h.app.focus = crate::app::Focus::Grid;
+    h.key("m");
+    for _ in 0..3 {
+        h.key("Down");
+    }
+    h.key("m");
+    h.key("Up");
+    scenes.push(app_scene(&mut h, "Grid: marked rows", "m adds the current row to the selection or takes it out (the GUI's ⌘-click on a row number): marked rows look selected, their numbers reversed; y copies and d deletes them all, Esc clears them", 120, 22));
+    h.key("Esc");
+    let g = h.app.grid_mut().unwrap();
+    (g.row, g.col) = at;
+    h.app.focus = focus;
     scenes.push(app_scene(&mut h, "Terminal too small", "Below 40×10 the layout isn't drawn: the size, the size needed and how to quit", 36, 9));
+    // Marked nodes (m, the GUI's ⌘-click), then Delete on them: one confirmation for all, the Production one on a Production source
+    for t in ["adjust", "contract", "payment"] {
+        h.app.tree.select_key(&format!("prod|rentalpay|public|g|{t}"));
+        h.app.run_action(crate::app::Action::MarkNode);
+    }
+    scenes.push(app_scene(&mut h, "Explorer: marked nodes", "m marks nodes (the GUI's ⌘-click): Go to DDL, F4, y, Delete and refresh act on every marked node; m unmarks, Esc clears", 120, 22));
+    h.app.run_action(crate::app::Action::DropObject);
+    h.settle().await;
+    scenes.push(app_scene(&mut h, "Explorer: drop marked objects", "Delete on marked objects of one database: one confirmation lists every statement (red on a Production source, as for one object)", 120, 22));
+    h.app.popup = None;
+    h.app.tree.marked.clear();
+    h.app.tree.sel = 5;
+    h.app.status = "4 rows retrieved in 12 ms".into();
     h.app.popup = Some(Popup::Confirm {
         opened: None,
         text: "Production data source \"[PROD] rentalpay\" — this changes data:\n\n  update payment set amount = 0 where id = 4\n     → 1 row\n  delete from payment where created_at < now() - interval '1 year'\n     → 12,408 rows\n\nRun it?".into(),
         on_yes: Box::new(|_| {}),
     });
     scenes.push(app_scene(&mut h, "Production confirm", "운영 Data Source 에서 바꾸는 문장: 바뀔 행 수를 보여 주고 묻는다", 120, 22));
+    h.app.theme = crate::theme::Theme::Light;
+    scenes.push(app_scene(&mut h, "Light: production confirm", "Theme Light: the Production question, the red row and the PROD badge on a light terminal", 120, 22));
+    h.app.theme = crate::theme::Theme::Auto;
     scenes.push(app_scene(&mut h, "Terminal too small: question waiting", "Below 40×10 with a dialog open, ⌃q doesn't quit: the message says to make the window larger to answer it", 36, 9));
     scenes.push(app_scene(&mut h, "Production confirm: minimum size", "At 40×10 the question and its keys stay; the statements that don't fit are counted", 40, 10));
     // Question first, warnings after the details: the columns / tables in between give way, the ⚠ lines stay
@@ -529,6 +703,12 @@ async fn all_scenes() -> Vec<Value> {
     scenes.push(app_scene(&mut h, "Workspaces", "워크스페이스가 둘 이상이면 위쪽 띠 (⌥1…9 · 눌러서 바꾸기)", 120, 22));
     h.app.palette_update_channel();
     scenes.push(app_scene(&mut h, "Update channel", "⌃k › Update Channel…: stable (version tags only, the default) or beta (also every merge to main), shared with the GUI", 120, 22));
+    h.app.palette_theme();
+    scenes.push(app_scene(&mut h, "Theme", "⌃k › Theme…: Auto (the default) follows the terminal background from COLORFGBG; Dark or Light whatever the terminal says", 120, 22));
+    h.app.auto_light = true;
+    h.app.palette_theme();
+    scenes.push(app_scene(&mut h, "Theme: Auto on a light terminal", "COLORFGBG=0;15: Auto draws the light palette (Dark brings the old colors back)", 120, 22));
+    h.app.auto_light = false;
     h.app.popup = None;
     tab_bars(&mut scenes).await;
     scenes
@@ -579,6 +759,8 @@ async fn tab_bars(scenes: &mut Vec<Value>) {
         h.app.color = mode;
         scenes.push(app_scene(&mut h, name, desc, 120, 10));
     }
+    (h.app.color, h.app.theme) = (ColorMode::TrueColor, crate::theme::Theme::Light);
+    scenes.push(app_scene(&mut h, "Tab bar: light", "Theme Light: Data Source colors as light tints; the focused pane's active tab in the stronger hue", 120, 10));
 }
 
 fn json_path() -> std::path::PathBuf {

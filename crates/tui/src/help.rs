@@ -11,9 +11,9 @@ pub const HELP: &[(&str, &[(&str, &str)])] = &[
         ("F4 / ⌃↓", "Open a query console for the data source / database (Redis: the key browser)"),
         ("/", "Filter loaded nodes (/ again edits it · empty or Esc clears)"),
         ("F5", "Refresh (the run key refreshes in the explorer)"),
-        ("y  ⌘C", "Copy name (OSC 52 clipboard)"),
+        ("y  ⌘C", "Copy reference: schema.name, as the GUI's Copy Reference (OSC 52 clipboard; marked nodes: one per line)"),
         ("PgUp / PgDn · Home / End", "Page · first / last node"),
-        ("Tab / Esc", "Go to the open tab"),
+        ("Tab / Esc", "Go to the open tab (Esc clears the marks first)"),
     ]),
     ("Query console", &[
         ("completion list", "Opens as you type (or ⌃Space) · ↑↓ choose · Enter/Tab insert · Esc close"),
@@ -40,7 +40,7 @@ pub const HELP: &[(&str, &[(&str, &str)])] = &[
         ("s", "Sort by the selected column: ▲ → ▼ → off (table data: ORDER BY · results: loaded rows)"),
         ("w or / · o", "Edit WHERE · ORDER BY (table data)"),
         ("r", "Reload (table data)"),
-        ("y  ⌘C", "Copy cell value (a selected range: as TSV, pastes into spreadsheets as cells)"),
+        ("y  ⌘C", "Copy cell value (a selected range or marked rows: as TSV, pastes into spreadsheets as cells)"),
         ("⌘V", "Paste into cells from the selected one (tabs / lines fill several; extra lines add rows; table data)"),
         ("Esc", "Back (query results: to the editor)"),
     ]),
@@ -56,6 +56,7 @@ pub const HELP: &[(&str, &[(&str, &str)])] = &[
         ("c · K", "Cancel the query · terminate the session of the selected row (asks first)"),
         ("Enter · g", "Open the row's query in a console · generate SQL from the row (DROP INDEX, VACUUM, REVOKE…)"),
         ("p", "Pick another report"),
+        ("d", "Run the report on another database (MySQL: schema); the grid's title names it"),
     ]),
     ("Redis browser (Medis style)", &[
         ("↑ ↓", "Select key or folder (keys are grouped by \":\")"),

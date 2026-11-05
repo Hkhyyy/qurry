@@ -261,6 +261,12 @@ export const IcGear = () => (
     <path d="M8 1.8v1.7M8 12.5v1.7M1.8 8h1.7M12.5 8h1.7M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M3.6 12.4l1.2-1.2M11.2 4.8l1.2-1.2" />
   </L>
 );
+export const IcKeyboard = () => (
+  <L>
+    <rect x="1.8" y="4" width="12.4" height="8" rx="1.3" />
+    <path d="M4.3 6.6h.1M6.8 6.6h.1M9.2 6.6h.1M11.7 6.6h.1M4.3 9.4h.1M11.7 9.4h.1M6.5 9.4h3" />
+  </L>
+);
 export const IcFilter = () => <L d="M2.5 3.5h11L9.5 8.5V13l-3-1.5v-3l-4-5Z" />;
 export const IcOrder = () => <L d="M3 4h10M3 8h7M3 12h4" />;
 /** Collapse all (DataGrip Collapse All) */

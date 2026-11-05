@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ask, askText } from "../lib/dialogs";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { api, QueryResult, redis, RedisKeyDetail, RedisKeyRow, RedisReply } from "../lib/api";
+import { api, currentFirst, QueryResult, redis, RedisKeyDetail, RedisKeyRow, RedisReply } from "../lib/api";
 import { keyTree, parentPaths, visibleRows } from "../lib/keyTree";
 import { useSharedReady } from "../lib/shared";
 import { FolderIcon } from "../ui/icons";
@@ -160,7 +160,7 @@ export function RedisBrowser(p: Props) {
       <Toolbar className="rd-toolbar">
         <Text strong>{p.connName}</Text>
         <Select value={p.database} onMouseDown={p.onLoadDbs} onFocus={p.onLoadDbs} onChange={(e) => p.onSwitchDb(e.target.value)} title="Database">
-          {[...new Set([p.database, ...p.dbList])].map((d) => (
+          {currentFirst(p.database, p.dbList).map((d) => (
             <option key={d} value={d}>
               {d}
             </option>

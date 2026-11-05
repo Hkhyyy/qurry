@@ -31,6 +31,12 @@ pub fn more_rows_failed(msg: &str) -> String {
     format!("Couldn't load more rows: {}", msg.trim())
 }
 
+/// The DBA report's database picker couldn't list the databases (GUI and TUI): it lists through the report's database, or the
+/// source's default one, so the way out is a default database the account can connect to
+pub fn db_list_failed(msg: &str) -> String {
+    format!("Couldn't list the databases: {}\nSet a default database you can connect to (GUI: Data Source Properties › General › Database · TUI: the data source form's Database field).", msg.trim())
+}
+
 /// With AWS SSM the instance connects to Host:Port, so they are the database as seen from it
 const SSM_HOST_PORT: &str = "are the database as seen from the instance (e.g. an RDS endpoint and 5432), not a local port";
 
@@ -49,9 +55,72 @@ pub fn ssm_local_host(host: &str) -> Option<String> {
         .then(|| format!("With AWS SSM, {h} is the instance itself: Host and Port {SSM_HOST_PORT}. Keep it if the database runs on the instance."))
 }
 
+// Why a console result can't be edited (result_edit), on its greyed-out edit buttons (GUI) and status line (TUI)
+
+/// Not a single plain SELECT … FROM one table (a CTE, a subquery or function in FROM, SELECT INTO, more than one statement)
+pub const EDIT_NOT_PLAIN: &str = "Read-only: only the result of a plain SELECT from one table can be edited.";
+/// SELECT without FROM
+pub const EDIT_NO_TABLE: &str = "Read-only: the result doesn't come from a table.";
+/// A join or FROM a, b
+pub const EDIT_MANY_TABLES: &str = "Read-only: the columns come from more than one table.";
+/// MySQL: the select list didn't line up with the table's columns
+pub const EDIT_UNMATCHED: &str = "Read-only: Qurry couldn't match the result's columns to the table's.";
+/// FOR UPDATE / FOR SHARE / LOCK IN SHARE MODE: the console's transaction holds the row locks the edits would wait on
+pub const EDIT_LOCKS: &str = "Read-only: the statement locks its rows, and edits are saved on another connection.";
+/// Driver plugins don't say where a result column comes from
+pub const EDIT_DRIVER: &str = "Read-only: console results can be edited on PostgreSQL and MySQL only.";
+
+/// A console result the backend didn't check (src/components/ResultGrid.tsx CONSOLE_READ_ONLY has the same text)
+pub const CONSOLE_READ_ONLY: &str = "Console results are read-only. Open the table to edit its rows.";
+/// A console in Manual mode or with an open transaction: grid edits save in a transaction of their own (executeBatch), so they'd
+/// commit outside it and wait on its row locks (ResultGrid.tsx CONSOLE_IN_TX)
+pub const CONSOLE_IN_TX: &str = "Read-only in a transaction: edits are saved in a transaction of their own. Commit or roll back and switch to Tx: Auto to edit these rows.";
+
+/// GROUP BY, HAVING, DISTINCT, UNION …: one result row isn't one table row
+pub fn edit_combined(what: &str) -> String {
+    format!("Read-only: the result uses {what}, so its rows aren't rows of the table.")
+}
+
+/// A result column that isn't read straight from the table (an expression, an aggregate, a cast)
+pub fn edit_computed(column: &str) -> String {
+    format!("Read-only: {column} is computed, not a column of the table.")
+}
+
+/// The same result name twice, or the same table column under two names
+pub fn edit_duplicate(column: &str) -> String {
+    format!("Read-only: the result has {column} more than once.")
+}
+
+pub fn edit_no_pk(table: &str) -> String {
+    format!("Read-only: {table} has no primary key.")
+}
+
+pub fn edit_missing_pk(pk: &[String]) -> String {
+    format!("Read-only: the result doesn't include the primary key ({}).", pk.join(", "))
+}
+
+/// A temporary table lives in the console's session only: edits saved on another connection would miss it (PostgreSQL) or change
+/// the base table it shadows (MySQL)
+pub fn edit_temporary(table: &str) -> String {
+    format!("Read-only: {table} is a temporary table (edits are saved on another connection).")
+}
+
+/// what: "view", "materialized view", "foreign table" …
+pub fn edit_not_table(table: &str, what: &str) -> String {
+    format!("Read-only: {table} is a {what}, not a table.")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn console_texts_match_the_gui() {
+        let gui = include_str!("../../../src/components/ResultGrid.tsx");
+        for t in [CONSOLE_READ_ONLY, CONSOLE_IN_TX] {
+            assert!(gui.contains(&format!("\"{t}\"")), "ResultGrid.tsx lacks: {t}");
+        }
+    }
 
     #[test]
     fn more_rows_failed_keeps_the_reason() {

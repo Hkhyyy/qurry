@@ -8,6 +8,8 @@ Admin reports, table structure, diagrams, schema and data comparison, migrations
 
 GUI: right-click a data source › **Tools** › Sessions & Locks, Slow Queries, … — TUI: `⌃k` › **Database Admin…**
 
+The report runs on one database, shown next to the report select (TUI: in the grid's title). Opened from a database it's that one; opened from the data source it's the source's default database (`postgres` when none is set). Pick another there (TUI: `d`) to rerun the report on it; auto-refresh stays on that database. The list has every database of the server, the current one first, as the console's database picker (Manage Shown Schemas only filters the explorer); for MySQL it lists schemas, with *(all schemas)* when the source has no default one, and a source set to one database shows it without a choice. Sessions, Lock Waits and Users & Roles show the whole server whichever database is picked; if the server turns down the picked database (it doesn't exist, or the account has no CONNECT on it), the report says so — pick another one. The list is read through the report's database, else through the source's default one, so a database the account can't connect to doesn't take the list with it; if both fail (an account that can't connect to the source's default database, opened from the data source), it says so above the report (TUI: the status line): set a default database the account can connect to in Data Source Properties › General › Database (TUI: the data source form's Database field).
+
 | Group | Reports |
 |---|---|
 | Activity | **Sessions** (who blocks whom, query / transaction age; refreshes every 3 s) · **Lock Waits** — right-click / `c` cancel the query, `K` terminate the session |
@@ -84,7 +86,11 @@ GUI: in a result, View as (the eye icon) › **Chart**: bar, line or pie. Pick X
 
 ## Value suggestions in the console (PostgreSQL, MySQL)
 
-Completion also suggests what is actually in the table: after `status = '`, `status in ('paid', '` or `name like '` it lists the column's values, and after `data->>'` / `data->'meta'->>'` (MySQL `data->>'$.meta.`) the keys inside the json, most common first with their row counts. Typing the quote opens the list (`⌃Space` without a quote — numbers go in bare, text gets quoted). Only the first 5,000 rows (2,000 for json keys) are read, in a read-only transaction with a 3-second limit, and the answer is reused for 2 minutes. Binary columns and whole json values are not suggested.
+Completion also suggests what is actually in the table: after `status = '`, `status in ('paid', '` or `name like '` it lists the column's values, and after `data->>'` / `data->'meta'->>'` (MySQL `data->>'$.meta.`) the keys inside the json, most common first with their row counts. Typing the quote opens the list (`⌃Space` without a quote — numbers go in bare, text gets quoted). Only the first 5,000 rows (2,000 for json keys) are read, in a read-only transaction with a 3-second limit, and the answer is reused for 2 minutes. Binary columns and whole json values are not suggested, nor is anything in a JOIN's `ON` condition (the other side is usually a column, so columns complete there; a `WHERE` after it suggests values again).
+
+## Completion in the table filter
+
+A table tab's **WHERE** and **ORDER BY** fields (TUI: `w` or `/` · `o`) complete like the console: the field reads as `SELECT * FROM schema.table WHERE …` (or `ORDER BY …`), so it lists the table's columns, then keywords and functions (`ASC` / `DESC` after a column in ORDER BY) — never other tables or schemas. The list opens while you type a word or after a `.`, not inside a string or a number, and closes once the word is a whole keyword or column, so `↩` after `is null` applies the filter. With the list open: `↑` `↓` `PgUp` `PgDn` move, `↩` / `⇥` insert, `⎋` closes the list. With it closed, `⌃Space` (TUI also `⇥`) asks for the list at the caret, even after a space or a whole word: at an empty spot the table's columns come first, then keywords. `↩` applies the filter and `⎋` puts the field back as it was. Column values are not suggested here.
 
 ## Query history & snippets
 

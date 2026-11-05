@@ -60,6 +60,10 @@ pub fn on_event(app: &mut App, ev: Event) {
         },
         _ => {}
     }
+    // Gutter marks follow the console's edits (dropped on an edited statement)
+    if let Some(TabKind::Console(c)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind) {
+        c.marks.follow(c.editor.lines());
+    }
     // A confirm that waited for the popup the user was in comes up once that one is closed (quiet, so the closing key doesn't answer it)
     if app.popup.is_none() && !app.waiting.is_empty() {
         let p = app.waiting.remove(0);
@@ -99,9 +103,9 @@ fn paste(app: &mut App, s: String) {
             Some(TabKind::Console(c)) if app.focus == Focus::Editor => {
                 c.editor.insert_str(s);
             }
-            // Table data: fill from the current cell (⌘V)
-            Some(TabKind::Table(tt)) if app.focus == Focus::Grid => {
-                if let Some(g) = tt.grid.as_mut().filter(|g| g.cols() > 0) {
+            // Table data, an editable console result: fill from the current cell (⌘V)
+            Some(TabKind::Table(_) | TabKind::Console(_)) if app.focus == Focus::Grid => {
+                if let Some(g) = app.edit_grid().filter(|g| g.cols() > 0) {
                     g.paste(&s);
                 }
             }
@@ -153,28 +157,34 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
     }
 }
 
-/// Filter candidates by the word before the cursor (ignoring case·quotes, skipping ones already fully typed, up to 8)
-fn input_complete(input: &tui_textarea::TextArea, words: &[String], force: bool) -> Option<(Vec<String>, usize, usize)> {
-    if words.is_empty() {
-        return None;
+/// A table filter input's candidates at the cursor (complete::suggest_filter; `explicit` when asked for with ⇥ / ⌃Space), or None
+fn filter_complete(input: &tui_textarea::TextArea, f: &crate::app::FilterSource, explicit: bool) -> Option<crate::app::Completion> {
+    let line = input.lines().first()?;
+    let caret = line.char_indices().nth(input.cursor().1).map_or(line.len(), |(i, _)| i);
+    let (prefix, items) = qurry_core::complete::suggest_filter(&f.meta, &f.schema, &f.table, f.order_by, line, caret, &f.db, f.mysql, explicit);
+    (!items.is_empty()).then_some(crate::app::Completion { items, sel: 0, prefix })
+}
+
+/// What a key does to an open autocomplete list (the console's, a table filter's)
+enum ListKey {
+    Moved,
+    Pick,
+    Close,
+}
+
+/// The autocomplete list's keys: ↑↓ PgUp PgDn move the selection, ↩ / ⇥ pick, ⎋ closes; None for any other key
+fn list_key(cmp: &mut crate::app::Completion, code: KeyCode) -> Option<ListKey> {
+    let n = cmp.items.len();
+    match code {
+        KeyCode::Up => cmp.sel = (cmp.sel + n - 1) % n,
+        KeyCode::Down => cmp.sel = (cmp.sel + 1) % n,
+        KeyCode::PageUp => cmp.sel = cmp.sel.saturating_sub(10),
+        KeyCode::PageDown => cmp.sel = (cmp.sel + 10).min(n - 1),
+        KeyCode::Enter | KeyCode::Tab => return Some(ListKey::Pick),
+        KeyCode::Esc => return Some(ListKey::Close),
+        _ => return None,
     }
-    let (row, col) = input.cursor();
-    let before: Vec<char> = input.lines().get(row)?.chars().take(col).collect();
-    let n = before.iter().rev().take_while(|c| c.is_alphanumeric() || **c == '_' || **c == '"' || **c == '`').count();
-    if n == 0 && !force {
-        return None;
-    }
-    let p: String = before[before.len() - n..].iter().collect::<String>().trim_start_matches(['"', '`']).to_lowercase();
-    let items: Vec<String> = words
-        .iter()
-        .filter(|w| {
-            let w = w.trim_matches(['"', '`']).to_lowercase();
-            w.starts_with(&p) && w != p
-        })
-        .take(8)
-        .cloned()
-        .collect();
-    (!items.is_empty()).then_some((items, 0, n))
+    Some(ListKey::Moved)
 }
 
 /// For screens with single-letter commands (a add row, d delete …): ⌘←/→ are Home/End (terminals may send them as ⌃A/⌃E), ⌘C is y (copy),
@@ -457,7 +467,7 @@ mod tests {
     }
 
     /// Text tabs (diagram·DDL): wheel scrolls, not past the end, g/G for start·end
-    /// Console title bar while running: elapsed time · [■ Cancel ⌃c], clicking sends a cancel
+    /// While running: the status line shows the bar, "Executing…" and the elapsed time; the console title a [■ Cancel ⌃c] that sends a cancel
     #[tokio::test]
     async fn running_console_shows_time_and_a_cancel_button() {
         let mut h = Harness::new().await;
@@ -466,7 +476,8 @@ mod tests {
             c.running = true;
         }
         let screen = h.screen(140, 30);
-        assert!(screen.contains("running 0.0 s · [■ Cancel"), "{screen}");
+        assert!(screen.contains("Tx: Auto · [■ Cancel"), "{screen}");
+        assert!(screen.lines().last().unwrap().contains("▏ Executing… 0.0 s · ⌃c cancel"), "{screen}");
         let r = h.app.hits.cancel;
         assert!(r.width > 8, "{r:?}");
         let row = screen.lines().nth(r.y as usize).unwrap();

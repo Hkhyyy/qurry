@@ -16,7 +16,7 @@ import { NodeInfo } from "./components/SchemaTree";
 import { leaves } from "./lib/panes";
 import { useTheme } from "./lib/theme";
 import { Group, Tab } from "./features/tabs/types";
-import { isMac, sk } from "./features/shortcuts/labels";
+import { isMac } from "./features/shortcuts/labels";
 import { offered, upToDate } from "./features/settings/SettingsDialog";
 import { StatusBar } from "./features/settings/StatusBar";
 import { editorApis, useTabsStore } from "./features/tabs/store";
@@ -85,6 +85,8 @@ export default function App() {
   // A keymap.json that doesn't load: the default keys work, the status bar says how to get the saved ones back
   useEffect(() => void loadKeymap().then((err) => err && setStatus(err)), []);
   const [treeSel, setTreeSel] = useState<NodeInfo | null>(null);
+  // Every selected node (⌘-click / ⇧-click): the explorer's commands for several run on these
+  const [treeSelAll, setTreeSelAll] = useState<NodeInfo[]>([]);
   const [tabMenu, setTabMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
 
   // Called on every query run, so only update state when something actually changed (avoids redrawing the whole tree and re-registering shortcut handlers)
@@ -183,7 +185,23 @@ export default function App() {
   const labelOf = (t: Tab) => tabLabels.get(t.id) ?? t.title;
 
   const cons = useConsole({ conns, setStatus, refresh });
-  const { run, canCancel, cancelRun, loadStale } = cons;
+  const { run, canCancel, busyLabel, cancelRun, loadStale, loadDbList, loadSchemaList } = cons;
+  // The database (and schema) selects of the shown consoles and Redis browsers list as soon as they are shown, so their first click
+  // opens the whole list (the caches keep them; focus / mousedown ask again only when the list isn't there)
+  const listed = leaves(panes).flatMap((g) => groupActive(g) ?? []).filter((t) => t.kind === "console" || t.kind === "redis");
+  useEffect(() => {
+    for (const t of listed) {
+      loadDbList(t.connId);
+      if (t.kind === "console") loadSchemaList(t.target);
+    }
+  }, [listed.map((t) => `${t.kind}:${t.target}`).join("\n")]);
+  // When each busy tab started (kept across tab switches, so the status bar's elapsed time goes on); dropped once it is idle
+  const busySince = useRef(new Map<string, number>()).current;
+  for (const t of tabs) {
+    if (!busyLabel(t)) busySince.delete(t.id);
+    else if (!busySince.has(t.id)) busySince.set(t.id, Date.now());
+  }
+  const activeBusy = active && busyLabel(active);
   const tabOps = useTabs({ setStatus, loadStale });
   const { activate, addTab, openConsole } = tabOps;
   const ws = useWorkspaces({ conns, setStatus, loadStale });
@@ -197,7 +215,7 @@ export default function App() {
   const { activateNode, buildMenu, startBackup } = ex;
 
   const [maximized, setMaximized] = useState(false);
-  const app = { conns, theme, setStatus, refresh, treeSel, active, groupActive, labelOf, setTabMenu, setMaximized, ...cons, ...tabOps, ...ws, ...transfer, ...connActions, ...ex };
+  const app = { conns, theme, setStatus, refresh, treeSel, treeSelAll, active, groupActive, labelOf, setTabMenu, setMaximized, ...cons, ...tabOps, ...ws, ...transfer, ...connActions, ...ex };
   const groups = useEditorGroups(app);
   const { renderPanes } = groups;
 
@@ -248,6 +266,8 @@ export default function App() {
           onNew={newWs}
           onRename={renameWs}
           onDelete={deleteWs}
+          onKeymap={() => setKeymapOpen(true)}
+          onSettings={() => setSettingsOpen("appearance")}
         />
       )}
       <PanelGroup direction="vertical" className="main" autoSaveId="dbtool-v">
@@ -269,8 +289,10 @@ export default function App() {
                     onRefresh={refresh}
                     onExport={exportConns}
                     onImport={importConns}
-                    onSelect={setTreeSel}
+                    shown={w.id === curWs}
+                    onSelect={(info, all) => (setTreeSel(info), setTreeSelAll(all))}
                     onActivate={activateNode}
+                    onStatus={setStatus}
                     buildMenu={buildMenu}
                     onSetColor={setColor}
                     onScopeChange={setScope}
@@ -302,10 +324,7 @@ export default function App() {
       {search.popups}
       <StatusBar
         run={{ canRun: !!active && active.kind === "console" && !canCancel(active), running: canCancel(active), onRun: () => active && editorApis.get(active.id)?.run(), onCancel: () => active && cancelRun(active) }}
-        onSettings={() => setSettingsOpen("appearance")}
-        settingsKey={sk("settings")}
-        onKeymap={() => setKeymapOpen(true)}
-        status={status} readOnly={!!activeConn?.readOnly} update={update?.latest?.version} onUpdate={() => setUpdateOpen(true)} jobs={jobs} />
+        status={status} busy={activeBusy ? { label: activeBusy, since: busySince.get(active.id) ?? Date.now() } : undefined} readOnly={!!activeConn?.readOnly} update={update?.latest?.version} onUpdate={() => setUpdateOpen(true)} jobs={jobs} />
 
       {tabMenu && <ContextMenu menu={tabMenu} onClose={() => setTabMenu(null)} />}
 

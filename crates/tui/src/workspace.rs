@@ -710,6 +710,30 @@ mod tests {
         assert!(!h2.screen(100, 20).contains("1 Reports"), "one workspace: no strip");
     }
 
+    /// A user report (GUI 0.3.0): back from a workspace with a Redis source selected, a new console was for Redis. Each workspace
+    /// keeps its own explorer and selection, so ⌃L in the first one is for its source, every time
+    #[tokio::test]
+    async fn new_console_is_for_the_shown_workspaces_selection() {
+        let mut h = harness().await;
+        h.app.ws_new();
+        h.key("Enter");
+        let cfg = serde_json::from_value(serde_json::json!({ "id": "cache", "name": "cache", "kind": "redis", "host": "127.0.0.1", "port": 1, "user": "", "database": "0" })).unwrap();
+        h.app.state.save_connection(cfg, None, None).await.unwrap();
+        h.app.reload_conns();
+        h.settle().await;
+        assert_eq!(roots(&h), ["cache"]);
+        h.app.focus = crate::app::Focus::Tree;
+        let consoles = |h: &Harness| h.app.tabs.iter().filter(|t| matches!(t.kind, crate::app::TabKind::Console(_))).map(|t| t.conn.clone()).collect::<Vec<_>>();
+        for n in 1..=2 {
+            h.key("Alt+1");
+            h.app.focus = crate::app::Focus::Tree;
+            h.app.run_action(crate::app::Action::NewConsole);
+            assert_eq!(consoles(&h), vec!["test".to_string(); n]);
+            h.key("Alt+2");
+            assert!(consoles(&h).is_empty(), "{:?}", consoles(&h));
+        }
+    }
+
     fn roots(h: &Harness) -> Vec<String> {
         h.app.tree.roots.iter().map(|n| n.conn.clone()).collect()
     }

@@ -479,6 +479,16 @@ impl MySession {
         Some(crate::session::More { sql, fetched, tx: self.manual || self.in_tx, schema: None })
     }
 
+    /// Whether `db`.`table` is, in this session, a temporary table (which hides a base table of the same name). None: it can't be read
+    pub(crate) async fn is_temporary(&mut self, db: &str, table: &str) -> Option<bool> {
+        let q = |s: &str| qurry_shared::sql::quote_ident(crate::store::DbKind::Mysql, s);
+        let sql = format!("SHOW CREATE TABLE {}.{}", q(db), q(table));
+        let row = sqlx::query(&sql).persistent(false).fetch_one(&mut *self.conn).await.ok()?;
+        let ddl = value(&row, 1);
+        let ddl = ddl.as_str()?;
+        Some(ddl.trim_start().to_ascii_uppercase().starts_with("CREATE TEMPORARY TABLE"))
+    }
+
     /// The session's current database (USE): "" when none is selected, None when it can't be read
     pub async fn database(&mut self) -> Option<String> {
         sqlx::query_scalar::<_, Option<String>>("select cast(database() as char)").fetch_one(&mut *self.conn).await.ok().map(Option::unwrap_or_default)

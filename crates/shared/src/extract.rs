@@ -6,6 +6,11 @@ use serde_json::Value;
 /// The value Set DEFAULT puts in a GUI cell (written as DEFAULT, never as a string)
 pub const DEFAULT_TOKEN: &str = "\u{0}DEFAULT";
 
+/// A cell of the copied table no selected range holds (⌘-clicked ranges in different columns), not a NULL: CSV, TSV and Markdown
+/// write an empty field; SQL Inserts, SQL Updates, Where Clause and JSON leave the column out of that row; SQL IN List writes
+/// every selected cell as its own item
+pub const HOLE_TOKEN: &str = "\u{0}HOLE";
+
 /// Where the GUI writes values differently from the TUI (D2; the inList rows of crates/shared/tests/DIVERGENCES.md and number cells)
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -76,10 +81,20 @@ fn is_default(v: &Value) -> bool {
     v.as_str() == Some(DEFAULT_TOKEN)
 }
 
+fn is_hole(v: &Value) -> bool {
+    v.as_str() == Some(HOLE_TOKEN)
+}
+
+/// A row's cells of `n` columns with their column index (a short row as NULL), holes left out
+fn held(v: &[Value], n: usize) -> impl Iterator<Item = (usize, Value)> + '_ {
+    (0..n).map(|j| (j, v.get(j).cloned().unwrap_or(Value::Null))).filter(|(_, c)| !is_hole(c))
+}
+
 /// A cell as plain text: NULL is empty, DEFAULT is DEFAULT
 fn raw(v: &Value, opts: Options) -> String {
     match v {
         Value::Null => String::new(),
+        Value::String(s) if s == HOLE_TOKEN => String::new(),
         Value::String(s) if s == DEFAULT_TOKEN => "DEFAULT".into(),
         other => raw_text(other, opts),
     }
@@ -175,19 +190,28 @@ pub(crate) fn number_text(s: &str, strict: bool) -> bool {
 /// (('a', 1), ('b', 2)). Rows of only NULL and duplicates are left out. In numeric columns (`types`, one per column) number text stays bare
 /// (numeric and bigint arrive as text); elsewhere it is quoted (010 in a text column)
 pub fn in_list(rows: &[Vec<Value>], types: &[String], kind: DbKind, opts: Options) -> (String, usize) {
-    let lit = |c: usize, v: &Value| match v {
-        Value::Null => "NULL".to_string(),
-        Value::Number(_) | Value::Bool(_) => raw_text(v, opts),
-        Value::String(s) if types.get(c).is_some_and(|t| numeric_type(t)) && number_text(s, opts.strict_numbers) => s.clone(),
-        other => quote(kind, &raw_text(other, opts)),
-    };
-    let mut seen = std::collections::HashSet::new();
-    let items: Vec<String> = rows
+    let lit = |c: usize, v: &Value| in_item(v, types.get(c), kind, opts);
+    let items = rows
         .iter()
         .filter(|r| r.iter().any(|v| !v.is_null()))
-        .map(|r| if r.len() == 1 { lit(0, &r[0]) } else { format!("({})", r.iter().enumerate().map(|(c, v)| lit(c, v)).collect::<Vec<_>>().join(", ")) })
-        .filter(|x| seen.insert(x.clone()))
-        .collect();
+        .map(|r| if r.len() == 1 { lit(0, &r[0]) } else { format!("({})", r.iter().enumerate().map(|(c, v)| lit(c, v)).collect::<Vec<_>>().join(", ")) });
+    in_items(items)
+}
+
+/// One value of an IN list: number text bare in a numeric column of type `ty`
+fn in_item(v: &Value, ty: Option<&String>, kind: DbKind, opts: Options) -> String {
+    match v {
+        Value::Null => "NULL".to_string(),
+        Value::Number(_) | Value::Bool(_) => raw_text(v, opts),
+        Value::String(s) if ty.is_some_and(|t| numeric_type(t)) && number_text(s, opts.strict_numbers) => s.clone(),
+        other => quote(kind, &raw_text(other, opts)),
+    }
+}
+
+/// Items as (a, b), duplicates left out, and how many there are
+fn in_items(items: impl Iterator<Item = String>) -> (String, usize) {
+    let mut seen = std::collections::HashSet::new();
+    let items: Vec<String> = items.filter(|x| seen.insert(x.clone())).collect();
     let n = items.len();
     (format!("({})", if n == 0 { "NULL".into() } else { items.join(", ") }), n)
 }
@@ -212,10 +236,10 @@ fn json_rows(x: &Rows, opts: Options) -> String {
         return "[]".into();
     }
     let obj = |v: &Vec<Value>| {
-        if order.is_empty() {
+        if order.iter().all(|&j| v.get(j).is_some_and(is_hole)) {
             return "  {}".to_string();
         }
-        let fields = order.iter().map(|&j| {
+        let fields = order.iter().filter(|&&j| !v.get(j).is_some_and(is_hole)).map(|&j| {
             let c = match v.get(j).filter(|c| !is_default(c)) {
                 Some(Value::Number(n)) if opts.js_numbers => js_number(n),
                 Some(c) => c.to_string(),
@@ -231,20 +255,23 @@ fn json_rows(x: &Rows, opts: Options) -> String {
 /// Rows as text in a Data Extractor format; identifiers and literals as `kind` writes them
 pub fn rows(fmt: Format, x: &Rows, kind: DbKind, opts: Options) -> String {
     let q = |s: &str| sql::quote_ident(kind, s);
-    let cell = |v: &Vec<Value>, j: usize| v.get(j).cloned().unwrap_or(Value::Null);
     let lit = |v: &Value| if is_default(v) { "DEFAULT".to_string() } else { literal(kind, v, opts) };
     let lines = |head: Option<String>, body: Vec<String>| head.into_iter().chain(body).collect::<Vec<_>>().join("\n");
-    let names = x.names.iter();
     match fmt {
         Format::Tsv => lines(x.header.then(|| x.names.join("\t")), x.vals.iter().map(|v| v.iter().map(|c| raw(c, opts)).collect::<Vec<_>>().join("\t")).collect()),
         Format::Csv => lines(
             x.header.then(|| x.names.iter().map(|n| csv_field(n)).collect::<Vec<_>>().join(",")),
             x.vals.iter().map(|v| v.iter().map(|c| csv_field(&raw(c, opts))).collect::<Vec<_>>().join(",")).collect(),
         ),
-        Format::SqlInserts => {
-            let cols = names.map(|n| q(n)).collect::<Vec<_>>().join(", ");
-            x.vals.iter().map(|v| format!("INSERT INTO {} ({cols}) VALUES ({});", x.table_ref, v.iter().map(lit).collect::<Vec<_>>().join(", "))).collect::<Vec<_>>().join("\n")
-        }
+        Format::SqlInserts => x
+            .vals
+            .iter()
+            .map(|v| {
+                let (cols, vals): (Vec<_>, Vec<_>) = held(v, x.names.len()).map(|(j, c)| (q(&x.names[j]), lit(&c))).unzip();
+                format!("INSERT INTO {} ({}) VALUES ({});", x.table_ref, cols.join(", "), vals.join(", "))
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
         Format::SqlUpdates => x
             .vals
             .iter()
@@ -252,7 +279,7 @@ pub fn rows(fmt: Format, x: &Rows, kind: DbKind, opts: Options) -> String {
             .map(|(i, v)| {
                 let key = x.keys.get(i).filter(|k| !k.is_empty());
                 let w = key.map_or("/* no key */".into(), |k| k.iter().map(|(n, c)| format!("{} = {}", q(n), literal(kind, c, opts))).collect::<Vec<_>>().join(" AND "));
-                let set = x.names.iter().enumerate().map(|(j, n)| format!("{} = {}", q(n), lit(&cell(v, j)))).collect::<Vec<_>>().join(", ");
+                let set = held(v, x.names.len()).map(|(j, c)| format!("{} = {}", q(&x.names[j]), lit(&c))).collect::<Vec<_>>().join(", ");
                 format!("UPDATE {} SET {set} WHERE {w};", x.table_ref)
             })
             .collect::<Vec<_>>()
@@ -261,9 +288,9 @@ pub fn rows(fmt: Format, x: &Rows, kind: DbKind, opts: Options) -> String {
             .vals
             .iter()
             .map(|v| {
-                let parts = x.names.iter().enumerate().map(|(j, n)| match cell(v, j) {
-                    Value::Null => format!("{} IS NULL", q(n)),
-                    c => format!("{} = {}", q(n), lit(&c)),
+                let parts = held(v, x.names.len()).map(|(j, c)| match c {
+                    Value::Null => format!("{} IS NULL", q(&x.names[j])),
+                    c => format!("{} = {}", q(&x.names[j]), lit(&c)),
                 });
                 format!("({})", parts.collect::<Vec<_>>().join(" AND "))
             })
@@ -271,7 +298,11 @@ pub fn rows(fmt: Format, x: &Rows, kind: DbKind, opts: Options) -> String {
             .join(" OR\n"),
         Format::SqlInList => {
             let vals: Vec<Vec<Value>> = x.vals.iter().map(|v| v.iter().map(|c| if is_default(c) { Value::Null } else { c.clone() }).collect()).collect();
-            in_list(&vals, &x.types, kind, opts).0
+            if !vals.iter().flatten().any(is_hole) {
+                return in_list(&vals, &x.types, kind, opts).0;
+            }
+            // Ranges in different columns: no tuple fits every row, so each selected cell is an item (NULLs left out as above)
+            in_items(vals.iter().flat_map(|v| v.iter().enumerate()).filter(|(_, c)| !c.is_null() && !is_hole(c)).map(|(j, c)| in_item(c, x.types.get(j), kind, opts))).0
         }
         Format::Json => json_rows(x, opts),
         Format::Markdown => lines(
@@ -353,6 +384,29 @@ mod tests {
         assert_eq!(js(json!(-0.0)), "0");
         assert_eq!(js(json!(u64::MAX)), "18446744073709551615");
         assert_eq!(raw_text(&json!(1e16), Options::default()), "1e+16");
+    }
+
+    /// ⌘-clicked cells in different columns: a hole is not a NULL, so no format writes or matches a value nobody selected
+    #[test]
+    fn holes_are_left_out_not_written_as_null() {
+        let h = json!(HOLE_TOKEN);
+        let x = Rows {
+            names: vec!["user_name".into(), "amount".into()],
+            types: vec!["text".into(), "numeric".into()],
+            vals: vec![vec![json!("user_1"), h.clone()], vec![h.clone(), json!("2469.00")], vec![json!("user_3"), Value::Null]],
+            keys: vec![vec![("id".into(), json!(1))], vec![("id".into(), json!(2))], vec![("id".into(), json!(3))]],
+            table_ref: "t".into(),
+            header: true,
+        };
+        let f = |fmt| rows(fmt, &x, DbKind::Postgres, Options::default());
+        assert_eq!(f(Format::SqlUpdates), "UPDATE t SET user_name = 'user_1' WHERE id = '1';\nUPDATE t SET amount = '2469.00' WHERE id = '2';\nUPDATE t SET user_name = 'user_3', amount = NULL WHERE id = '3';");
+        assert_eq!(f(Format::WhereClause), "(user_name = 'user_1') OR\n(amount = '2469.00') OR\n(user_name = 'user_3' AND amount IS NULL)");
+        assert_eq!(f(Format::SqlInserts), "INSERT INTO t (user_name) VALUES ('user_1');\nINSERT INTO t (amount) VALUES ('2469.00');\nINSERT INTO t (user_name, amount) VALUES ('user_3', NULL);");
+        assert_eq!(f(Format::SqlInList), "('user_1', 2469.00, 'user_3')");
+        assert_eq!(f(Format::Json), "[\n  {\n    \"user_name\": \"user_1\"\n  },\n  {\n    \"amount\": \"2469.00\"\n  },\n  {\n    \"user_name\": \"user_3\",\n    \"amount\": null\n  }\n]");
+        assert_eq!(f(Format::Csv), "user_name,amount\nuser_1,\n,2469.00\nuser_3,");
+        assert_eq!(f(Format::Tsv), "user_name\tamount\nuser_1\t\n\t2469.00\nuser_3\t");
+        assert_eq!(f(Format::Markdown), "| user_name | amount |\n| --- | --- |\n| user_1 |  |\n|  | 2469.00 |\n| user_3 |  |");
     }
 
     #[test]

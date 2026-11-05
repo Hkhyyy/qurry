@@ -1,10 +1,11 @@
 use super::*;
 
 pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
-    // Esc: if there's a selection, clear just that first
+    // Esc: if there's a selection (a range, marked rows), clear just that first
     if k.code == KeyCode::Esc {
-        if let Some(g) = app.grid_mut().filter(|g| g.anchor.is_some()) {
+        if let Some(g) = app.grid_mut().filter(|g| g.anchor.is_some() || !g.marked.is_empty()) {
             g.anchor = None;
+            g.marked.clear();
             return;
         }
     }
@@ -32,6 +33,7 @@ pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
             KeyCode::Enter => app.dba_actions(true),
             KeyCode::Char('g') => app.dba_actions(false),
             KeyCode::Char('p') => app.dba_palette(),
+            KeyCode::Char('d') => app.dba_pick_db(),
             KeyCode::Esc => app.focus = Focus::Tree,
             _ => {
                 // Moving selects a new row (instead of the vanished session)
@@ -70,69 +72,52 @@ pub(super) fn grid_key(app: &mut App, k: KeyEvent) {
             if c.show_output || c.grid.is_none() {
                 return;
             }
-            nav(app, k);
-        }
-        TabKind::Table(tt) => {
             match k.code {
-                KeyCode::Char('w') => {
-                    let w = tt.where_.clone();
-                    let words = app.table_words(id, false);
-                    app.input_words("WHERE", &w, words, move |a, s| {
-                        if let Some(TabKind::Table(tt)) = a.tab_mut(id).map(|t| &mut t.kind) {
-                            tt.where_ = s;
-                        }
-                        a.reload_table_checked(id);
-                    });
-                }
-                KeyCode::Char('o') => {
-                    let o = tt.order.clone();
-                    let words = app.table_words(id, true);
-                    app.input_words("ORDER BY", &o, words, move |a, s| {
-                        if let Some(TabKind::Table(tt)) = a.tab_mut(id).map(|t| &mut t.kind) {
-                            tt.order = s;
-                        }
-                        a.reload_table_checked(id);
-                    });
-                }
-                KeyCode::Enter | KeyCode::F(2) => {
-                    let Some(g) = &tt.grid else { return };
-                    let (r, c) = (g.row, g.col);
-                    if g.cols() == 0 {
-                        return;
-                    }
-                    let name = g.result.columns[c].name.clone();
-                    let ty = g.result.columns[c].type_name.clone();
-                    let cur = g.value(r, c).unwrap_or_default();
-                    app.input(format!("{name} (row {})", r + 1), &cur.clone(), move |a, s| {
-                        // Same rule as the GUI's Value Editor: a json / jsonb column refuses text that isn't JSON
-                        let v = match qurry_shared::value::value_to_apply(&ty, &cur, &s) {
-                            Ok(v) => v,
-                            Err(e) => return a.status = format!("{name} not changed: {e}"),
-                        };
-                        if let Some(TabKind::Table(tt)) = a.tab_mut(id).map(|t| &mut t.kind) {
-                            if let Some(g) = &mut tt.grid {
-                                g.set_value(r, c, v);
-                            }
-                        }
-                    });
-                }
+                KeyCode::Enter | KeyCode::F(2) => edit_cell(app, id),
+                _ => nav(app, k),
+            }
+        }
+        TabKind::Table(_) => {
+            match k.code {
+                KeyCode::Char('w') => app.input_filter(id, false),
+                KeyCode::Char('o') => app.input_filter(id, true),
+                KeyCode::Enter | KeyCode::F(2) => edit_cell(app, id),
                 KeyCode::Char('r') => app.reload_table_checked(id),
                 KeyCode::Char('s') => app.sort_table(id),
-                KeyCode::Char('/') => {
-                    let w = tt.where_.clone();
-                    let words = app.table_words(id, false);
-                    app.input_words("WHERE", &w, words, move |a, s| {
-                        if let Some(TabKind::Table(tt)) = a.tab_mut(id).map(|t| &mut t.kind) {
-                            tt.where_ = s;
-                        }
-                        a.reload_table_checked(id);
-                    });
-                }
+                KeyCode::Char('/') => app.input_filter(id, false),
                 KeyCode::Esc => app.focus = Focus::Tree,
                 _ => nav(app, k),
             }
         }
     }
+}
+
+/// ↩ / F2: edit the current cell of tab `id`'s grid (table data, or a console result that can be edited)
+fn edit_cell(app: &mut App, id: u64) {
+    let Some(g) = app.edit_grid() else { return };
+    let (r, c, gid) = (g.row, g.col, g.id);
+    if g.cols() == 0 {
+        return;
+    }
+    let name = g.result.columns[c].name.clone();
+    let ty = g.result.columns[c].type_name.clone();
+    let cur = g.value(r, c).unwrap_or_default();
+    app.input(format!("{name} (row {})", r + 1), &cur.clone(), move |a, s| {
+        // Same rule as the GUI's Value Editor: a json / jsonb column refuses text that isn't JSON
+        let v = match qurry_shared::value::value_to_apply(&ty, &cur, &s) {
+            Ok(v) => v,
+            Err(e) => return a.status = format!("{name} not changed: {e}"),
+        };
+        // Into the grid it was asked for (a console run meanwhile replaced it: dropped)
+        let grid = match a.tab_mut(id).map(|t| &mut t.kind) {
+            Some(TabKind::Table(tt)) => tt.grid.as_mut(),
+            Some(TabKind::Console(c)) => c.grid.as_mut(),
+            _ => None,
+        };
+        if let Some(g) = grid.filter(|g| g.id == gid) {
+            g.set_value(r, c, v);
+        }
+    });
 }
 
 /// Grid navigation
@@ -157,14 +142,14 @@ pub(super) fn nav(app: &mut App, k: KeyEvent) {
         KeyCode::Char('g') => g.row = 0,
         KeyCode::Char('G') => g.row = g.rows().saturating_sub(1),
         KeyCode::Char('y') => {
-            // TSV if a range is selected (pastes into cells in a sheet), otherwise the current cell
-            let Some((r0, c0, r1, c1)) = g.sel_rect() else {
+            // TSV if a range or rows are selected (pastes into cells in a sheet), otherwise the current cell
+            let Some((rows, cols)) = g.selection() else {
                 let v = g.value(g.row, g.col).unwrap_or_else(|| "NULL".into());
                 return copy(app, &v);
             };
             let text = g.selection_tsv();
             copy(app, &text);
-            let (nr, nc) = (r1 - r0 + 1, c1 - c0 + 1);
+            let (nr, nc) = (rows.len(), cols.len());
             app.status = format!("Copied {nr} row{} × {nc} column{}", if nr == 1 { "" } else { "s" }, if nc == 1 { "" } else { "s" });
             return;
         }
@@ -222,6 +207,87 @@ mod tests {
         h.mouse("up", x, y0 as u16 + 2);
         h.key("Y");
         assert_eq!(h.app.status, "Copied 3 values as an IN list: ('1.2.3.4', '5.6.7.8', '9.9.9.9')");
+    }
+
+    /// m marks rows (the GUI's ⌘-click on a row number) and moving keeps them: y copies the marked rows in grid order, d deletes them
+    /// all (again: back), m on a marked row takes it out, Esc clears the marks
+    #[tokio::test]
+    async fn marked_rows_copy_and_delete() {
+        let mut h = Harness::new().await;
+        let id = h.table_tab("logs", &["ip", "n"], &[&["a", "1"], &["b", "2"], &["c", "3"], &["d", "4"], &["e", "5"]], &["n"]);
+        fn grid(h: &Harness, id: u64) -> &crate::grid::Grid {
+            h.table(id).grid.as_ref().unwrap()
+        }
+        for _ in 0..4 {
+            h.key("Down");
+        }
+        h.key("m");
+        assert_eq!(h.app.status, "1 row marked: y copies, d deletes them · Esc clears");
+        h.key("g");
+        h.key("m");
+        h.key("Down");
+        assert_eq!(grid(&h, id).marked, [0, 4].into());
+        assert_eq!(grid(&h, id).selection_tsv(), "a\t1\ne\t5");
+        h.key("y");
+        assert_eq!(h.app.status, "Copied 2 rows × 2 columns");
+        // the cursor's row (2) is not marked: d leaves it alone
+        h.key("d");
+        assert_eq!(grid(&h, id).deleted, [0, 4].into());
+        h.key("d");
+        assert!(grid(&h, id).deleted.is_empty());
+        // A range and marked rows copy together: the union of their columns, cells outside both empty
+        h.key("Shift+Down");
+        assert_eq!(grid(&h, id).selection_tsv(), "a\t1\nb\t\nc\t\ne\t5");
+        h.key("Esc");
+        assert!(grid(&h, id).marked.is_empty() && grid(&h, id).anchor.is_none());
+        assert_eq!(h.app.focus, crate::app::Focus::Grid);
+        h.key("m");
+        h.key("m");
+        assert!(grid(&h, id).marked.is_empty());
+        assert_eq!(h.app.status, "No rows marked");
+    }
+
+    /// Y with marked rows lists the current column of those rows only, in grid order (the GUI's ⌘-clicked rows + Copy as IN List);
+    /// with nothing marked: the whole current column
+    #[tokio::test]
+    async fn marked_rows_copy_as_in_list() {
+        let mut h = Harness::new().await;
+        h.table_tab("logs", &["ip", "n"], &[&["a", "1"], &["b", "2"], &["c", "3"], &["d", "4"], &["e", "5"]], &["n"]);
+        for _ in 0..4 {
+            h.key("Down");
+        }
+        h.key("m");
+        h.key("g");
+        h.key("m");
+        h.key("Down");
+        h.key("Y");
+        assert_eq!(h.app.status, "Copied 2 values as an IN list: ('a', 'e')");
+        h.key("Esc");
+        h.key("Y");
+        assert_eq!(h.app.status, "Copied 5 values as an IN list: ('a', 'b', 'c', 'd', 'e')");
+    }
+
+    /// Marked rows that were just added go away on d, edits of the added rows below them move up with them
+    #[tokio::test]
+    async fn deleting_marked_added_rows_removes_them() {
+        let mut h = Harness::new().await;
+        let id = h.table_tab("logs", &["ip"], &[&["a"]], &["ip"]);
+        for v in ["x", "y", "z"] {
+            h.key("a");
+            if let Some(TabKind::Table(t)) = h.app.tab_mut(id).map(|t| &mut t.kind) {
+                let g = t.grid.as_mut().unwrap();
+                g.set_value(g.row, 0, v.into());
+            }
+        }
+        h.key("m");
+        h.key("Up");
+        h.key("Up");
+        h.key("m");
+        h.key("d");
+        let g = h.table(id).grid.as_ref().unwrap();
+        assert_eq!((g.added, g.rows()), (1, 2));
+        assert_eq!(g.value(1, 0).as_deref(), Some("y"));
+        assert!(g.marked.is_empty());
     }
 
     /// A table whose second column is jsonb, its cursor on that column's first cell
@@ -318,6 +384,7 @@ mod tests {
             has_result_set: true,
             in_transaction: false,
             warning: None,
+            editable: None,
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
         let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res("pid", 4123))), loaded: None, error: None, running: true, run: 0, auto: true };
@@ -356,6 +423,7 @@ mod tests {
             has_result_set: true,
             in_transaction: false,
             warning: None,
+            editable: None,
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
         let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res(&[10, 20, 30]))), loaded: None, error: None, running: false, run: 0, auto: true };
@@ -387,6 +455,7 @@ mod tests {
             has_result_set: true,
             in_transaction: false,
             warning: None,
+            editable: None,
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
         let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: None, loaded: None, error: None, running: false, run: 0, auto: true };
@@ -418,6 +487,7 @@ mod tests {
             has_result_set: true,
             in_transaction: false,
             warning: None,
+            editable: None,
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "vacuum_progress");
         let d = crate::app::DbaTab { report: "vacuum_progress".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res)), loaded: None, error: None, running: false, run: 0, auto: true };
@@ -428,6 +498,122 @@ mod tests {
         assert!(s.contains("cancel query") && !s.contains("terminate"), "{s}");
         h.key("c");
         assert!(matches!(&h.app.popup, Some(crate::app::Popup::Confirm { text, .. }) if text.contains("Cancel the query of session 77")));
+    }
+
+    /// d: the DBA tab's database chooser lists every database of the server, the current one first (as the GUI's console and report
+    /// pickers; Manage Shown Schemas only filters the explorer), picking one reruns the report
+    /// there and keeps auto-refresh (core: a database it can't connect to says so). One fixed database doesn't change
+    #[tokio::test]
+    async fn dba_database_picker() {
+        let mut h = Harness::new().await;
+        let save = |h: &mut Harness, v: serde_json::Value| {
+            h.app.state.store.save(&serde_json::from_value(v).unwrap()).unwrap();
+            h.app.reload_conns();
+        };
+        save(&mut h, serde_json::json!({ "id": "c1", "name": "pg", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "shop", "scope": { "databases": ["shop", "billing"] } }));
+        save(&mut h, serde_json::json!({ "id": "c2", "name": "my", "kind": "mysql", "host": "127.0.0.1", "port": 1, "user": "u", "database": "" }));
+        h.settle().await;
+        let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
+        let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: None, loaded: None, error: None, running: false, run: 0, auto: true };
+        let id = h.app.push_tab("c1", "shop".into(), "Sessions".into(), TabKind::Dba(d));
+        h.app.focus = crate::app::Focus::Grid;
+        let picker = |h: &Harness| match &h.app.popup {
+            Some(crate::app::Popup::Palette(p)) => (p.items.iter().map(|i| (i.label.clone(), i.hint.clone())).collect::<Vec<_>>(), p.sel),
+            _ => panic!("no chooser"),
+        };
+        h.app.dba_db_choices(id, ["postgres", "shop", "billing", "analytics"].map(String::from).to_vec());
+        let none = String::new;
+        assert_eq!(picker(&h), (vec![("shop".into(), "current".into()), ("postgres".into(), none()), ("billing".into(), none()), ("analytics".into(), none())], 0));
+        assert!(h.screen(120, 24).contains("Run the report on which database?"));
+        h.key("Down");
+        h.key("Down");
+        h.key("Enter");
+        let t = &h.app.tabs[h.app.active];
+        assert_eq!((t.db.as_str(), t.target.as_str()), ("billing", "c1::billing"));
+        assert!(matches!(&t.kind, TabKind::Dba(d) if d.auto && d.running && d.run == 1 && d.grid.is_none()));
+        // The hint comes last, so a narrow terminal drops it before c / K / a
+        let s = h.screen(240, 24);
+        assert!(s.contains(" billing — 0 rows") && s.contains("d database"), "{s}");
+
+        // MySQL without a default schema: all schemas first, then every schema
+        let info = qurry_core::dba::reports(qurry_core::store::DbKind::Mysql).into_iter().find(|r| r.id == "slow_queries");
+        let d = crate::app::DbaTab { report: "slow_queries".into(), info, gone: None, grid: None, loaded: None, error: None, running: false, run: 0, auto: true };
+        let my = h.app.push_tab("c2", String::new(), "Slow Queries".into(), TabKind::Dba(d));
+        h.app.dba_db_choices(my, ["mysql", "shop", "sys"].map(String::from).to_vec());
+        assert_eq!(picker(&h), (vec![("(all schemas)".into(), "current".into()), ("mysql".into(), none()), ("shop".into(), none()), ("sys".into(), none())], 0));
+        h.key("Esc");
+        assert!(h.screen(160, 24).contains(" (all schemas) — 0 rows"));
+
+        // The current database comes first, so Enter keeps it
+        h.app.activate(h.app.tab_index(id).unwrap());
+        if let Some(t) = h.app.tab_mut(id) {
+            t.db = "analytics".into();
+        }
+        h.app.dba_db_choices(id, ["shop", "billing", "analytics"].map(String::from).to_vec());
+        assert_eq!(picker(&h).0.iter().map(|(l, _)| l.as_str()).collect::<Vec<_>>(), ["analytics", "shop", "billing"]);
+        h.key("Esc");
+
+        // The databases can't be listed (the server hangs up): the status says how to get out
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((s, _)) = l.accept().await {
+                drop(s);
+            }
+        });
+        save(&mut h, serde_json::json!({ "id": "c1", "name": "pg", "kind": "postgres", "host": "127.0.0.1", "port": port, "user": "u", "database": "shop", "scope": { "databases": ["shop", "billing"] } }));
+        h.settle().await;
+        h.app.activate(h.app.tab_index(id).unwrap());
+        h.app.focus = crate::app::Focus::Grid;
+        h.key("d");
+        for _ in 0..50 {
+            h.settle().await;
+            if h.app.status.starts_with("Couldn't") {
+                break;
+            }
+        }
+        assert!(h.app.popup.is_none());
+        assert!(h.app.status.starts_with("Couldn't list the databases: ") && h.app.status.ends_with("TUI: the data source form's Database field)."), "{}", h.app.status);
+
+        save(&mut h, serde_json::json!({ "id": "c1", "name": "pg", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "shop", "options": { "singleDb": true } }));
+        h.settle().await;
+        h.app.activate(h.app.tab_index(id).unwrap());
+        h.app.focus = crate::app::Focus::Grid;
+        h.key("d");
+        assert!(h.app.popup.is_none());
+        assert_eq!(h.app.status, "This data source has one database: analytics");
+    }
+
+    /// d on a report whose database the account can't connect to: the chooser still lists (through the source's database), so
+    /// another one can be picked; the report says why it failed. QURRY_TEST_PG_REFUSED=host:port:user:password:db (db refuses user)
+    #[tokio::test]
+    #[ignore]
+    async fn dba_database_picker_when_the_database_refuses() {
+        let e = std::env::var("QURRY_TEST_PG_REFUSED").expect("QURRY_TEST_PG_REFUSED");
+        let p: Vec<&str> = e.split(':').collect();
+        let mut h = Harness::new().await;
+        let cfg = serde_json::from_value(serde_json::json!({ "id": "pg", "name": "pg", "kind": "postgres", "host": p[0], "port": p[1].parse::<u16>().unwrap(), "user": p[2], "database": "" })).unwrap();
+        h.app.state.save_connection(cfg, Some(p[3].into()), None).await.unwrap();
+        h.app.reload_conns();
+        h.settle().await;
+        let info = qurry_core::dba::reports(qurry_core::store::DbKind::Postgres).into_iter().find(|r| r.id == "sessions");
+        let d = crate::app::DbaTab { report: "sessions".into(), info, gone: None, grid: None, loaded: None, error: None, running: false, run: 0, auto: false };
+        h.app.push_tab("pg", p[4].into(), "Sessions".into(), TabKind::Dba(d));
+        h.app.focus = crate::app::Focus::Grid;
+        h.key("d");
+        for _ in 0..100 {
+            h.settle().await;
+            if h.app.popup.is_some() || h.app.status.starts_with("Couldn't") {
+                break;
+            }
+        }
+        let labels = match &h.app.popup {
+            Some(crate::app::Popup::Palette(pal)) => pal.items.iter().map(|i| i.label.clone()).collect::<Vec<_>>(),
+            _ => panic!("no chooser: {}", h.app.status),
+        };
+        assert_eq!(labels.first().map(String::as_str), Some(p[4]));
+        assert!(labels.iter().any(|l| l == "postgres"), "{labels:?}");
+        let _ = h.app.state.disconnect("pg".into()).await;
     }
 
     /// Slow Queries: g lists Explain in Console, which opens a console with the EXPLAIN (a normalized statement gets a note to fill in the values first)
@@ -448,6 +634,7 @@ mod tests {
             has_result_set: true,
             in_transaction: false,
             warning: None,
+            editable: None,
         };
         let info = qurry_core::dba::reports(qurry_core::store::DbKind::Mysql).into_iter().find(|r| r.id == "slow_queries");
         let d = crate::app::DbaTab { report: "slow_queries".into(), info, gone: None, grid: Some(crate::grid::Grid::new(res)), loaded: None, error: None, running: false, run: 0, auto: true };
@@ -496,8 +683,8 @@ mod tests {
         assert_eq!((b.2.filter.as_str(), b.2.depth, b.2.mask), ("id = 1", 1, true));
     }
 
-    /// Loading more that fails (#80) keeps the result unfinished ("+") and says why at the grid's edge, the GUI's words; scrolling
-    /// on doesn't ask again
+    /// Loading more shows in the status line as a run does (bar, words, elapsed time; the Cancel key stops it). When it fails (#80)
+    /// the result stays unfinished ("+") and the status line and the grid's edge say why, the GUI's words; scrolling on doesn't ask again
     #[tokio::test]
     async fn a_failed_load_more_stays_in_the_grid() {
         let mut h = Harness::new().await;
@@ -509,15 +696,43 @@ mod tests {
         }
         h.key("Down");
         assert!(h.table(id).grid.as_ref().unwrap().loading_more);
+        // While it loads, the status line says so (words, so it reads without colors too); nothing on the grid
+        let screen = h.screen(120, 30);
+        let status = screen.lines().last().unwrap();
+        assert!(status.contains("▏ Loading more rows… 0.0 s · ⌃c cancel"), "{status}");
+        assert!(!screen.lines().any(|l| l.contains("Loading more") && l.contains('┗')), "{screen}");
         h.settle().await;
         let g = h.table(id).grid.as_ref().unwrap();
         let why = qurry_shared::errors::more_rows_failed("Session closed");
         assert_eq!((g.more_error.as_deref(), g.result.truncated, g.loading_more), (Some(why.as_str()), true, false));
         assert!(h.screen(120, 30).contains(&format!("✗ {why}")), "{}", h.screen(120, 30));
         assert!(h.screen(120, 30).contains("2+ rows"));
+        assert_eq!(h.app.status, why);
         h.key("Up");
         h.key("Down");
         assert!(!h.table(id).grid.as_ref().unwrap().loading_more, "not asked again");
+    }
+
+    /// On a result wider than the grid, a failed load-more's words on the bottom edge stay whole beside the horizontal scrollbar
+    #[tokio::test]
+    async fn the_load_more_error_stays_beside_the_horizontal_scrollbar() {
+        let mut h = Harness::new().await;
+        let cols: Vec<String> = (0..40).map(|i| format!("column_{i}")).collect();
+        let cols: Vec<&str> = cols.iter().map(String::as_str).collect();
+        let row = vec!["value"; 40];
+        let id = h.table_tab("wide", &cols, &[&row, &row], &["column_0"]);
+        {
+            let TabKind::Table(tt) = &mut h.app.tabs[h.app.active].kind else { unreachable!() };
+            let g = tt.grid.as_mut().unwrap();
+            (g.result.truncated, g.more_session) = (true, Some(tt.session.clone()));
+        }
+        h.key("Down");
+        assert!(h.table(id).grid.as_ref().unwrap().loading_more);
+        h.settle().await;
+        let screen = h.screen(120, 30);
+        let edge = screen.lines().find(|l| l.contains('✗')).unwrap_or_else(|| panic!("{screen}"));
+        let why = qurry_shared::errors::more_rows_failed("Session closed");
+        assert!(edge.contains(&format!("✗ {why}")) && edge.contains('█'), "{edge}");
     }
 
     /// A load-more answer that arrives after the tab ran again belongs to the grid it replaced: dropped
@@ -526,7 +741,7 @@ mod tests {
         let mut h = Harness::new().await;
         let id = h.table_tab("users", &["id"], &[&["1"], &["2"]], &["id"]);
         let fresh = || {
-            let mut g = crate::grid::Grid::new(qurry_core::db::QueryResult { columns: vec![qurry_core::db::ColumnInfo { name: "id".into(), type_name: "text".into() }], rows: vec![vec!["9".into()]], rows_affected: 0, truncated: true, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None });
+            let mut g = crate::grid::Grid::new(qurry_core::db::QueryResult { columns: vec![qurry_core::db::ColumnInfo { name: "id".into(), type_name: "text".into() }], rows: vec![vec!["9".into()]], rows_affected: 0, truncated: true, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None });
             g.more_session = Some("s".into());
             g
         };

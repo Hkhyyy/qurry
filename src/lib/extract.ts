@@ -8,6 +8,8 @@ export type Extractor = (typeof EXTRACTORS)[number];
 
 /** Display value inserted by Set DEFAULT (qurry_shared::extract::DEFAULT_TOKEN) */
 export const DEFAULT_TOKEN = "\u0000DEFAULT";
+/** A copied cell no selected range holds, not a NULL: each format leaves it out (qurry_shared::extract::HOLE_TOKEN) */
+export const HOLE_TOKEN = "\u0000HOLE";
 
 export const raw = (c: Cell) => (c === null ? "" : c === DEFAULT_TOKEN ? "DEFAULT" : String(c));
 

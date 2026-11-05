@@ -36,6 +36,12 @@ export interface Suggestions {
   items: CompletionItem[];
 }
 
+/** Candidates in a table tab's WHERE / ORDER BY field, replacing the field's text from `from` (UTF-16) to the caret */
+export interface FilterSuggestions {
+  from: number;
+  items: CompletionItem[];
+}
+
 /** A value spot read from the text before the cursor (qurry_shared::complete::Ctx) */
 export interface HintContext {
   /** alias or table (if absent, find the column among the statement's tables) */
@@ -71,6 +77,8 @@ export interface Completion {
   suggest(text: string, caret: number, db: string, mysql: boolean): Suggestions;
   hintAt(text: string, caret: number, db: string, mysql: boolean): HintAt | undefined;
   hintItems(text: string, caret: number, hint: HintAt, hints: { value: string; count: number }[], asPairs: boolean): Suggestions;
+  /** A table tab's WHERE / ORDER BY field (qurry_shared::complete::suggest_filter), `explicit` when asked for (⌃Space): the word from `from` to `caret` is replaced */
+  suggestFilter(schema: string, table: string, orderBy: boolean, field: string, caret: number, db: string, mysql: boolean, explicit: boolean): FilterSuggestions;
   /** Release the WASM memory now (not when GC finalizes it). Calls after this find no candidates */
   free(): void;
 }
@@ -86,7 +94,10 @@ export interface ExtractOptions {
 
 /** qurry_shared::format::ValueClass: what a grid cell holds, for its alignment */
 export type ValueClass = "string" | "number" | "dateTime" | "boolean" | "null" | "jsonBinary";
-export type Align = "left" | "right" | "center";
+/** qurry_shared::format::Align: "column" (NULL only) = where its column's type sits */
+export type Align = "left" | "right" | "center" | "column";
+/** Where a cell sits: "column" resolved to its column's */
+export type CellAlign = Exclude<Align, "column">;
 /** qurry_shared::format::Alignments: only the classes the user changed */
 export type Alignments = Partial<Record<ValueClass, Align>>;
 
@@ -123,6 +134,8 @@ const api = {
   commitFailedTitle: (msg: string): string => wasm.commitFailedTitle(msg),
   /** The result grid's line when loading more rows failed (qurry_shared::errors::more_rows_failed, the TUI's words) */
   moreRowsFailed: (msg: string): string => wasm.moreRowsFailed(msg),
+  /** The DBA report's database picker when the databases can't be listed (qurry_shared::errors::db_list_failed, the TUI's words) */
+  dbListFailed: (msg: string): string => wasm.dbListFailed(msg),
   /** Result word of a Production log entry ("outcome unknown", "failed", "committed" …), or undefined when its rows say it */
   auditStatus: (started: boolean, sql: string, failed: boolean): string | undefined => wasm.auditStatus(started, sql, failed),
   /** The data source form's hint for a local Host with AWS SSM, or undefined (qurry_shared::errors::ssm_local_host, the TUI's words) */
@@ -151,6 +164,7 @@ const api = {
       },
       hintAt: (text, caret, db, mysql) => idx?.hintAt(text, caret, db, mysql),
       hintItems: (text, caret, hint, hints, asPairs) => idx?.hintItems(text, caret, hint, hints, asPairs) ?? none,
+      suggestFilter: (schema, table, orderBy, field, caret, db, mysql, explicit) => idx?.suggestFilter(schema, table, orderBy, field, caret, db, mysql, explicit) ?? { from: caret, items: [] },
       free() {
         idx?.free();
         idx = undefined;
@@ -172,6 +186,8 @@ const api = {
   /** What a panel edit writes to the cell, or why a json / jsonb column refuses it */
   valueToApply: (typeName: string, original: string, edited: string): { Ok: string } | { Err: string } => wasm.valueToApply(typeName, original, edited),
   alignOf: (cls: ValueClass, overrides: Alignments): Align => wasm.alignOf(cls, overrides),
+  /** Where a cell of `cls` sits in a column of `typeName` whose first non-null value is `first` (an untyped column goes by it) */
+  cellAlign: (typeName: string, first: Cell, cls: ValueClass, overrides: Alignments): CellAlign => wasm.cellAlign(typeName, first, cls, overrides),
   isJsonType: (typeName: string): boolean => wasm.isJsonType(typeName),
   /** [start, end, kind, …]: UTF-16 ranges, kind an index of qurry_shared::format::JsonKind */
   jsonSpans: (text: string, maxChars: number): Uint32Array => wasm.jsonSpans(text, maxChars),

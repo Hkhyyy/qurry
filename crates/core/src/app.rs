@@ -930,7 +930,7 @@ impl AppState {
             None => return (pool.run_query(sql, limit).await, plan.and_then(|p| p.err()).map(Err), TxSeen::default()),
         };
         let (open, changed) = (s.in_tx(), s.tx_changed());
-        let (r, undo) = match plan {
+        let (mut r, undo) = match plan {
             Some(Ok(p)) => {
                 let (snap, r) = s.run_with_snapshot(&p.snapshot, sql, limit).await;
                 let changed = r.as_ref().map_or(0, |q| q.rows_affected);
@@ -942,6 +942,12 @@ impl AppState {
         match tab {
             // Under the session's lock, like fetch_more's update: the two can't overwrite each other's result
             Some(t) if sess.is_some() => {
+                // A console's result: can its rows be edited, and where (the GUI and TUI edit it like a table tab)
+                if let Ok(q) = &mut r
+                    && q.has_result_set
+                {
+                    q.editable = crate::editable::check(&pool, s, sql, &q.columns).await;
+                }
                 let more = match r.is_ok() {
                     true => s.more(true).await,
                     false => None,

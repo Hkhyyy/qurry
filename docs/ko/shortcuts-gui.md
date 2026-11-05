@@ -2,7 +2,7 @@
 
 [English](../shortcuts-gui.md) | 한국어
 
-앱 안에서도 같은 목록을 **Help › Keymap Reference**, 도구 막대의 ⌨ 버튼, `⇧⌘/` 로 찾아볼 수 있습니다. **Find Action** (`⇧⌘A`) 은 모든 명령을 단축키와 함께 보여 줍니다.
+앱 안에서도 같은 목록을 **Help › Keymap Reference**, 맨 왼쪽 워크스페이스 막대 아래의 ⌨ 버튼, `⇧⌘/` 로 찾아볼 수 있습니다. **Find Action** (`⇧⌘A`) 은 모든 명령을 단축키와 함께 보여 줍니다.
 Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 
 명령 단축키는 **Settings › Keymap** (또는 Keymap Reference 의 **Edit Keymap…**) 에서 바꿀 수 있습니다: *Change* 를 누르고 새 키를 누르세요. 메뉴 · 우클릭 메뉴 · 도구 막대 · Find Action 에서 실행할 수 있는 동작은 모두 여기 있습니다 — 기본 키가 없는 것도 (아래 마지막 표) 있어서 무엇이든 키를 줄 수 있습니다. 키는 그 구역이 말하는 곳에서 동작합니다: 어디서나 (Global), Database Explorer, 쿼리 콘솔, 데이터 그리드. Database Explorer 와 데이터 그리드에서는 Delete · Insert · Backspace 도 키가 될 수 있습니다. 아래 표는 기본값입니다. 설명은 앱 화면에 나오는 문구 그대로 영어로 둡니다.
@@ -16,6 +16,10 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 - 편집기와 시스템의 키: 그리드의 `⌘c` / `⌘v` / `⌘a`, 편집기의 `⌘/`, `⌘f` (와 찾기 막대의 토글), `⌃Space`.
 - 대화상자 안의 키는 그 대화상자에서 동작합니다: 쿼리 기록, Redis 브라우저와 터미널, Data Source 양식. 마우스 동작 (`⌥` 클릭, 끌기) 도 그대로입니다.
 - 데이터로 만든 메뉴 항목은 명령이 아니라 선택지입니다: 이름으로 고르는 데이터 소스 · 워크스페이스 · 콘솔, 열의 필터 값, Data Extractor, 자동 새로 고침 간격, Query Execution Settings 의 선택지.
+
+### Database Explorer 에서 여러 노드
+
+`⌘` 클릭은 노드를 선택에 더하거나 빼고, `⇧` 클릭은 마지막으로 누른 노드부터 보이는 노드를 고릅니다. 그냥 클릭하거나 화살표 키를 누르면 다시 한 노드만 고릅니다. 그러면 Go to DDL 과 Edit Data (하나마다 탭, `↩` 도 같음), Copy Name 과 Copy Reference (한 줄에 하나, 참조는 `schema.name`), Drop… 과 Refresh 가 우클릭 메뉴나 그 키로 고른 노드 모두에 실행됩니다. Drop… 은 모든 문장을 보여 주며 한 번만 묻고 (운영 Data Source 는 운영 확인 창), 한 데이터베이스의 객체여야 합니다. 객체는 그것이 기대는 객체보다 먼저 지웁니다. 뷰, 구체화된 뷰, 테이블, 시퀀스 순서이고, 뷰를 읽는 구체화된 뷰는 그 뷰보다 먼저입니다. PostgreSQL 은 한 트랜잭션에서 같은 종류의 객체를 한 문장으로 지우므로, 하나라도 못 지우면 아무것도 지워지지 않습니다. DDL 을 되돌릴 수 없는 MySQL 은 객체마다 한 문장이고 (외래 키로 다른 선택 테이블을 가리키는 테이블이 먼저), 하나씩 실행합니다. 실패하면 적용된 문장, 실패한 문장, 실행하지 않은 문장을 알려 줍니다. 한 노드에만 되는 명령은 흐리게 보이고, 툴팁이 한 노드로 돌아가는 법을 알려 줍니다. 고른 노드가 화면에서 사라지면 (접기, 필터, 삭제) 선택에서도 빠집니다.
 
 <!-- keymap:gui:start -->
 
@@ -90,6 +94,7 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `⌥⌘g` | SQL Generator |
 | `⌥⇧⌘G` | Copy DDL to clipboard |
 | `⌥⇧⌘B` | Open DDL in console |
+| `⌘c` | Copy name (several selected nodes: one per line) |
 | `⌥⇧⌘C` | Copy reference |
 | `F1` | Quick documentation |
 | `⌘F6` | Modify table (columns, keys, indexes, foreign keys) |
@@ -102,6 +107,8 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `⌘F2` | Disconnect |
 | `⌦ / ⌘⌫` | Remove data source / drop object (asks first) |
 | `type letters` | Speed search in the tree |
+| `⌘-click` | Add a node to the selection or remove it (Go to DDL, Edit Data, copy, Drop…, Refresh run for every selected node) |
+| `⇧-click` | Select the visible nodes from the last clicked one; a plain click or an arrow key selects one node again |
 
 ## Query console
 
@@ -143,6 +150,8 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `⌘↩` | Submit Changes |
 | `⌘c / ⌘v` | Copy (with chosen extractor; CSV / TSV copy values only — right-click › Copy with Headers adds the column names) / paste |
 | `⌘a` | Select all |
+| `⌘ click` | Add a cell to the selection or take it out (on a row number: the row · on a column header: the column); copy and the edits act on every range |
+| `⇧ click · click` | Extend the last range · select just that cell (starts over) |
 | `⌘f` | Find on Current Page |
 | `⌘r` | Reload Page |
 | `⌘F2` | Cancel Running Statements |

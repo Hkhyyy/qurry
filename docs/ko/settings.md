@@ -2,7 +2,7 @@
 
 [English](../settings.md) | 한국어
 
-GUI **Settings** (`⌘,`) 에는 **Appearance**, **Keymap**, **Passwords** 세 쪽이 있습니다. GUI 와 TUI 가 함께 쓰는 설정은 설정 폴더의 `settings.json` 에 저장됩니다 ([폴더 위치](getting-started.md#설정이-저장되는-곳)). TUI 에는 설정 창이 없습니다: 옵션은 `⌃k` (Find Action) 에 있고, 글꼴은 터미널의 글꼴을 씁니다 ([터미널에서 쓰는 TUI › 글꼴](tui.md#글꼴) 참고).
+GUI **Settings** (`⌘,`, 또는 맨 왼쪽 워크스페이스 막대 아래의 ⚙ 버튼) 에는 **Appearance**, **Keymap**, **Passwords** 세 쪽이 있습니다. GUI 와 TUI 가 함께 쓰는 설정은 설정 폴더의 `settings.json` 에 저장됩니다 ([폴더 위치](getting-started.md#설정이-저장되는-곳)). TUI 에는 설정 창이 없습니다: 옵션은 `⌃k` (Find Action) 에 있고, 글꼴은 터미널의 글꼴을 씁니다 ([터미널에서 쓰는 TUI › 글꼴](tui.md#글꼴) 참고).
 
 ## Appearance
 
@@ -23,11 +23,13 @@ GUI **Settings** (`⌘,`) 에는 **Appearance**, **Keymap**, **Passwords** 세 �
 
 저장된 글꼴이 설치되어 있지 않아도 (그 뒤에 지웠거나 다른 컴퓨터에서 고른 글꼴) 화면이 깨지지 않습니다: Qurry 는 기본 고정폭 글꼴을 쓰고, 입력란과 목록 맨 위에 `<이름> (not installed)` 로 보여 줍니다. 다른 글꼴을 고르면 바뀝니다.
 
-테마와 글꼴은 이 컴퓨터의 GUI 가 따로 보관합니다 (설정 폴더가 아님). 그래서 TUI 에는 영향이 없습니다.
+**Add Font File…** (목록 맨 아래, DataGrip 에는 없음) 는 컴퓨터에 설치하지 않고 글꼴 파일을 씁니다: 20 MB 이하의 `.ttf`, `.otf`, `.woff`, `.woff2` 파일을 고르면 Qurry 가 설정 폴더 안의 `fonts` 폴더로 복사하고 그 입력란의 글꼴로 고릅니다. 복사본 이름은 파일 이름을 따릅니다 (글자, 숫자, `-`, `_` 는 그대로, 나머지는 공백). 같은 이름의 글꼴을 이미 추가했다면 덮어쓰지 않고 ` 2`, ` 3`… 을 붙입니다. 실제로 글꼴이 아닌 파일 (확장자가 아니라 파일 앞부분을 봅니다) 이나 글꼴로 불러올 수 없는 파일 (손상되었거나 덜 받은 파일) 은 이유와 함께 거절합니다. 추가한 글꼴은 두 입력란 모두에서 **Default monospace** 바로 다음에 `custom` 표시와 함께 나오고, **Monospaced only** 가 켜져 있어도 보입니다. 설치된 글꼴과 이름이 같으면 목록에서 그 글꼴 대신 나옵니다. 그 줄의 `−` 버튼은 (확인을 받은 뒤) 글꼴을 지웁니다: 복사본만 지우고 원래 파일은 그대로 두며, 그 글꼴을 쓰던 입력란은 **Default monospace** 로 돌아갑니다 (같은 이름의 글꼴이 설치되어 있으면 그대로 두고 설치된 글꼴로 보입니다). 추가한 글꼴은 Qurry 를 켤 때마다 불러옵니다. TUI 는 터미널 글꼴을 쓰므로 추가한 글꼴이 적용되지 않습니다.
+
+테마와 글꼴은 이 컴퓨터의 GUI 가 따로 보관합니다 (설정 폴더가 아님. 추가한 글꼴 파일만 그 안의 `fonts` 폴더에 복사됩니다). 그래서 TUI 에는 영향이 없습니다.
 
 ### 결과 표의 정렬 (Alignment)
 
-칸은 담긴 값의 종류에 따라 정렬됩니다. 종류마다 **Left**, **Center**, **Right** 를 고릅니다.
+칸은 담긴 값의 종류에 따라 정렬됩니다. 종류마다 **Left**, **Center**, **Right** 를 고릅니다 (NULL 은 **Column type** 도 있습니다).
 
 | 종류 | 어떤 값 | 기본값 |
 |---|---|---|
@@ -35,14 +37,14 @@ GUI **Settings** (`⌘,`) 에는 **Appearance**, **Keymap**, **Passwords** 세 �
 | Number | 정수, `numeric` / `decimal`, 부동소수점 (Oracle `BINARY_FLOAT` / `BINARY_DOUBLE` 도), `money`, `oid` (드라이버가 글자로 보내도) | Right |
 | Date / time | `date`, `time`, `timestamp`, `interval`, `datetime` | Left |
 | Boolean | `bool` / `boolean` | Left |
-| NULL | `<null>` (추가 중인 행의 `<default>` 도) | Right |
+| NULL | `<null>` (추가 중인 행의 `<default>` 도) | Column type |
 | JSON / binary | `json` / `jsonb`, `bytea`, `blob`, `binary` / `varbinary` | Left |
 
-숫자 컬럼의 `NULL` 이 위아래 숫자와 줄이 맞도록 `NULL` 의 기본값은 오른쪽입니다. 0.3.0 전에는 왼쪽이었습니다. 예전처럼 쓰려면 **NULL** 을 **Left** 로 바꾸세요.
+기본값인 **Column type** 에서는 `NULL` 이 그 컬럼의 값과 같은 쪽에 놓입니다. 글자, 날짜 / 시간, boolean, JSON 컬럼에서는 왼쪽, 숫자 컬럼에서는 오른쪽이라 위아래 값과 줄이 맞습니다. 타입이 없는 컬럼 (`sum(x)` 같은 SQLite 식, MongoDB) 은 처음 나오는 `NULL` 아닌 값을 따릅니다. 그 종류의 정렬을 바꿨다면 `NULL` 도 따라갑니다. **Left** 나 **Right** 를 고르면 컬럼과 상관없이 모든 `NULL` 이 그쪽에 놓입니다. 0.3.0 에서는 모든 `NULL` 이 오른쪽이었습니다. 그대로 쓰려면 **NULL** 을 **Right** 로 바꾸세요. 0.3.0 전에는 왼쪽 (**Left**) 이었습니다.
 
 JSON 칸 (`json`, `jsonb` 와 다른 드라이버의 JSON 타입) 은 DataGrip 처럼 색으로 구분됩니다: 키, 문자열, 숫자, `true` / `false` / `null`, 구두점. 한 줄로 보이는 것은 같습니다. 바이너리 칸은 색이 없습니다. TUI 도 터미널 색으로 똑같이 칠하고, `NO_COLOR` 에서는 칠하지 않습니다.
 
-TUI 결과 표도 같은 종류와 같은 설정을 씁니다. TUI 에서는 **⌃k › Grid Alignment…** 에서 바꿉니다 (종류를 고른 뒤 Left, Center, Right). TUI 는 켤 때와 **⌃k › Grid Alignment…** 를 열 때 `settings.json` 을 읽으므로, GUI 에서 정렬을 바꾼 뒤에는 그 명령을 열거나 TUI 를 다시 켜면 반영됩니다. `settings.json` 에는 바꾼 종류만 저장됩니다 (예: `"gridAlign": { "null": "left" }`). 기본값으로 되돌린 종류는 지워집니다.
+TUI 결과 표도 같은 종류와 같은 설정을 씁니다. TUI 에서는 **⌃k › Grid Alignment…** 에서 바꿉니다 (종류를 고른 뒤 Left, Center, Right. NULL 은 Column type 도). TUI 는 켤 때와 **⌃k › Grid Alignment…** 를 열 때 `settings.json` 을 읽으므로, GUI 에서 정렬을 바꾼 뒤에는 그 명령을 열거나 TUI 를 다시 켜면 반영됩니다. `settings.json` 에는 바꾼 종류만 저장됩니다 (예: `"gridAlign": { "null": "right" }`). 기본값으로 되돌린 종류는 지워집니다. 0.3.0 이 저장한 `"null": "left"` (또는 `"center"`) 는 그대로 적용됩니다. Right 는 0.3.0 의 기본값이라 저장되지 않았으므로, Right 를 쓰던 분은 **Right** 를 다시 고르세요.
 
 ## Keymap
 

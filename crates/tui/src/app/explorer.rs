@@ -1,4 +1,5 @@
 use super::*;
+use qurry_core::ddl::DropTarget;
 
 impl App {
     // ───────── Data Sources ─────────
@@ -349,5 +350,81 @@ impl App {
             NodeKind::Column { .. } => {}
             _ => self.toggle_node(n),
         }
+    }
+
+    // ───────── Marked nodes: commands for several ─────────
+
+    /// The Mark / Unmark Node key as typed in the explorer ("m")
+    fn mark_key(&self) -> String {
+        self.keys.slot_label(crate::keys::Slot { action: Action::MarkNode, pane: qurry_core::keymap::Scope::Tree })
+    }
+
+    /// Mark / Unmark Node: Go to DDL, open, copy, drop and refresh then act on every marked node (the GUI's ⌘-click)
+    pub fn mark_node(&mut self) {
+        if !self.tree.toggle_mark() {
+            self.status = "Only data sources, databases, schemas and objects can be marked".into();
+            return;
+        }
+        self.status = match self.tree.marked.len() {
+            0 => "No marked nodes".into(),
+            // Short: the explorer's key hints share the status line
+            n => format!("{n} marked · Esc clears"),
+        };
+    }
+
+    /// The nodes a command for several acts on (the marked ones, else the cursor's) when it works on each of them. Otherwise None, and
+    /// with marks the status says why and how to get back to one node
+    pub(crate) fn tree_targets(&mut self, what: &str, ok: impl Fn(&Node) -> bool) -> Option<Vec<Node>> {
+        let ns = self.tree.targets();
+        if !ns.is_empty() && ns.iter().all(ok) {
+            return Some(ns);
+        }
+        if !self.tree.marked.is_empty() {
+            self.status = match ns.is_empty() {
+                true => format!("{what}: the marked nodes are in collapsed folders — expand them, or Esc clears the marks"),
+                false => format!("{what} doesn't work on every marked node — {} unmarks one, Esc clears the marks", self.mark_key()),
+            };
+        }
+        None
+    }
+
+    /// Drop…: the cursor's object, or the marked objects of one database. One confirmation lists every statement (red on Production)
+    /// and they run like the designer's DDL: one transaction on PostgreSQL, one at a time on MySQL, through the read-only check and the
+    /// Production log. The statements come from core (the GUI's too), in an order that runs: views before the tables they read
+    pub fn drop_objects(&mut self) {
+        // Not a routine, nor a Redis key (DROP isn't a Redis command)
+        let droppable = |n: &Node| n.is_relation() || matches!(&n.kind, NodeKind::Object(k) if k == "sequence");
+        let Some(ns) = self.tree_targets("Drop", droppable) else {
+            if self.tree.marked.is_empty() {
+                self.status = "Drop: select a table, view or sequence in the explorer".into();
+            }
+            return;
+        };
+        let target = sql::target_id(&ns[0].conn, ns[0].db.as_deref());
+        if ns.iter().any(|n| sql::target_id(&n.conn, n.db.as_deref()) != target) {
+            self.status = format!("Drop works on the objects of one database at a time — {} unmarks one, Esc clears the marks", self.mark_key());
+            return;
+        }
+        let objects: Vec<DropTarget> = ns
+            .iter()
+            .map(|n| DropTarget {
+                kind: match &n.kind {
+                    NodeKind::Object(k) => k.clone(),
+                    _ => unreachable!("droppable"),
+                },
+                schema: n.schema.clone().unwrap_or_default(),
+                name: n.name.clone().unwrap_or_default(),
+            })
+            .collect();
+        let done = if ns.len() == 1 { format!("Dropped {}", ns[0].label) } else { format!("Dropped {} objects", ns.len()) };
+        let (st, id, conn, db) = (self.state.clone(), target.clone(), ns[0].conn.clone(), ns[0].db.clone());
+        // The database says which objects depend on which (the order the statements run in)
+        self.spawn(async move { st.drop_ddl(id, objects).await }, move |a, r| match r {
+            Ok(stmts) => {
+                let p = a.ddl_confirm(target, conn, db, stmts, done);
+                a.open_after_notices(p);
+            }
+            Err(e) => a.status = e.to_string(),
+        });
     }
 }

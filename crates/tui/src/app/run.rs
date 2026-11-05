@@ -1,5 +1,11 @@
 use super::*;
 
+/// Each planned statement's editor rows (first, last): `text` is what was planned, its first line on editor row `row0`
+fn stmt_rows(stmts: &[qurry_core::exec::Stmt], text: &str, row0: usize) -> Vec<(usize, usize)> {
+    let row = |at: usize| row0 + text[..at.min(text.len())].matches('\n').count();
+    stmts.iter().map(|s| (row(s.start), row(s.end))).collect()
+}
+
 /// Runs a console query on the session, or asks the test stand-in when there is one
 async fn console_query(st: &AppState, fake: Option<FakeDb>, target: &str, q: String, limit: Option<usize>, session: &str) -> Result<QueryResult, String> {
     match fake {
@@ -32,8 +38,27 @@ pub(crate) fn explain_analyze_ask_text(asks: &[(String, String)]) -> String {
 impl App {
     // ───────── Execution ─────────
 
+    /// A console grid with pending edits asks first: the new result replaces it (as a table tab's reload does)
     pub fn execute(&mut self, explain: bool) {
-        self.execute_checked(explain, false)
+        let Some(t) = self.tabs.get(self.active) else { return };
+        let id = t.id;
+        let n = match &t.kind {
+            TabKind::Console(c) if !c.running => c.grid.as_ref().map_or(0, |g| g.pending()),
+            _ => 0,
+        };
+        if n == 0 {
+            return self.execute_checked(explain, false);
+        }
+        self.popup = Some(Popup::Confirm {
+            opened: None,
+            text: self.pending_text(n, "run the statement"),
+            on_yes: Self::in_console(id, move |a| {
+                if let Some(g) = a.grid_mut() {
+                    g.revert();
+                }
+                a.execute_checked(explain, false)
+            }),
+        });
     }
 
     /// What to run follows the execution settings (self.exec). If it needs asking, open the picker (DataGrip)
@@ -55,19 +80,25 @@ impl App {
             return;
         }
         if let Some(((r0, c0), (r1, c1))) = c.editor.selection_range() {
-            let stmts = sqls(qurry_core::exec::plan_selection(&selected_text(c.editor.lines(), r0, c0, r1, c1), kind, self.exec));
+            let sel = selected_text(c.editor.lines(), r0, c0, r1, c1);
+            let stmts = qurry_core::exec::plan_selection(&sel, kind, self.exec);
             if !stmts.is_empty() {
-                self.run_stmts(stmts, explain, confirmed);
+                let rows = stmt_rows(&stmts, &sel, r0.min(r1));
+                self.run_marked(sqls(stmts), rows, explain, confirmed);
             }
             return;
         }
         let (row, col) = c.editor.cursor();
-        let plan = qurry_core::exec::plan(&c.editor.lines().join("\n"), byte_offset(c.editor.lines(), row, col), kind, self.exec);
+        let text = c.editor.lines().join("\n");
+        let plan = qurry_core::exec::plan(&text, byte_offset(c.editor.lines(), row, col), kind, self.exec);
         match plan {
             qurry_core::exec::Plan::Nothing => {}
-            qurry_core::exec::Plan::Run(stmts) => self.run_stmts(sqls(stmts), explain, confirmed),
+            qurry_core::exec::Plan::Run(stmts) => {
+                let rows = stmt_rows(&stmts, &text, 0);
+                self.run_marked(sqls(stmts), rows, explain, confirmed)
+            }
             qurry_core::exec::Plan::Ask(opts) => {
-                let items = opts.into_iter().map(|(label, stmts)| PItem { label, hint: String::new(), action: PAction::Run { stmts: sqls(stmts), explain } }).collect();
+                let items = opts.into_iter().map(|(label, stmts)| PItem { label, hint: String::new(), action: PAction::Run { rows: stmt_rows(&stmts, &text, 0), stmts: sqls(stmts), explain } }).collect();
                 self.popup = Some(Popup::Palette(Palette { title: "Execute".into(), input: TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
             }
         }
@@ -99,6 +130,16 @@ impl App {
         None
     }
 
+    /// Runs statements planned over the console's text, each on its editor rows (first, last): they get gutter marks as they run
+    pub fn run_marked(&mut self, stmts: Vec<String>, rows: Vec<(usize, usize)>, explain: bool, confirmed: bool) {
+        if let Some(TabKind::Console(c)) = self.tabs.get_mut(self.active).map(|t| &mut t.kind)
+            && !c.running
+        {
+            c.marks.start(c.editor.lines(), &rows);
+        }
+        self.run_stmts(stmts, explain, confirmed)
+    }
+
     /// confirmed = whether a dangerous statement (UPDATE/DELETE without WHERE, DROP, TRUNCATE) was confirmed
     pub fn run_stmts(&mut self, stmts: Vec<String>, explain: bool, confirmed: bool) {
         self.run_stmts_checked(stmts, explain, confirmed, confirmed)
@@ -107,7 +148,7 @@ impl App {
     /// on_yes of a confirm that runs statements: they run in the console that asked (tab id), shown again, never in whichever tab
     /// is active when it is answered (that may be another source, whose own checks would be skipped). Nothing runs (and the status
     /// says why) while it is busy, once it is closed or while it is in another workspace
-    fn in_console(id: u64, run: impl FnOnce(&mut App) + 'static) -> Box<dyn FnOnce(&mut App)> {
+    pub(super) fn in_console(id: u64, run: impl FnOnce(&mut App) + 'static) -> Box<dyn FnOnce(&mut App)> {
         Box::new(move |a| match a.tab_index(id) {
             Some(i) if matches!(&a.tabs[i].kind, TabKind::Console(c) if c.running) => a.status = "The console is busy: nothing ran. Run it again when it finishes.".into(),
             Some(i) => {
@@ -227,8 +268,16 @@ impl App {
         self.spawn(
             async move {
                 let mut out = vec![];
-                for s in stmts2 {
-                    // Put the running statement in Output right away (on one line, truncated if too long)
+                // A statement's gutter mark, set as it starts and finishes
+                let mark = |i: usize, state: MarkState| {
+                    let _ = tx.send(Box::new(move |a: &mut App| {
+                        if let Some(TabKind::Console(c)) = a.tab_mut(id).map(|t| &mut t.kind) {
+                            c.marks.set(c.editor.lines(), i, state);
+                        }
+                    }));
+                };
+                for (i, s) in stmts2.into_iter().enumerate() {
+                    // Put the running statement in Output right away (on one line, truncated if too long), and its gutter mark
                     let echo: String = s.replace('\n', " ").chars().take(300).collect();
                     let line = format!("{echo_name}> {echo}{}", if s.chars().count() > 300 { "…" } else { "" });
                     let _ = tx.send(Box::new(move |a: &mut App| {
@@ -236,6 +285,7 @@ impl App {
                             c.log(false, line);
                         }
                     }));
+                    mark(i, MarkState::Running);
                     let q = if explain {
                         let bare = s.trim_end_matches(';');
                         match (kind, analyze) {
@@ -265,6 +315,7 @@ impl App {
                             Err(e) => Err(e),
                         };
                         if let Err(e) = begun {
+                            mark(i, MarkState::Err);
                             out.push((s, Err(e), false));
                             break;
                         }
@@ -279,6 +330,7 @@ impl App {
                         r
                     };
                     let stop = r.is_err();
+                    mark(i, if stop { MarkState::Err } else { MarkState::Ok });
                     out.push((s, r, dry));
                     if stop {
                         break;
@@ -327,6 +379,7 @@ impl App {
                                 c.log(false, msg.clone());
                                 status = msg;
                                 c.result_title = format!("Result {}: {}", i + 1, s.split_whitespace().take(6).collect::<Vec<_>>().join(" "));
+                                c.result_sql = s.clone();
                                 let mut g = Grid::new(res);
                                 g.more_session = Some(c.session.clone());
                                 c.grid = Some(g);
@@ -434,7 +487,7 @@ impl App {
                     };
                 }
                 Err(e) => {
-                    // The result isn't complete: keep its "+" and say at the grid's edge why no more rows came
+                    // The result isn't complete: keep its "+" and say why no more rows came (status line, and the grid's bottom edge)
                     let why = qurry_shared::errors::more_rows_failed(&e);
                     g.more_error = Some(why.clone());
                     a.status = why;
@@ -445,9 +498,13 @@ impl App {
 
     pub fn cancel(&mut self) {
         let Some(t) = self.tabs.get(self.active) else { return };
+        // A run or a load-more (it reads on the tab's session too)
+        if t.busy().is_none() {
+            return;
+        }
         let session = match &t.kind {
-            TabKind::Console(c) if c.running => c.session.clone(),
-            TabKind::Table(tt) if tt.running => tt.session.clone(),
+            TabKind::Console(c) => c.session.clone(),
+            TabKind::Table(tt) => tt.session.clone(),
             _ => return,
         };
         let st = self.state.clone();

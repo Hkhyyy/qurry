@@ -1,6 +1,6 @@
 import { connBg, connStripe, useTheme } from "../lib/theme";
-import { createContext, useContext, useEffect, useId, useRef, useState } from "react";
-import { api, ConnectionView, DbKind, DRIVER_MISSING, KIND_LABEL, redisDb, dbVisible, meta, RelationInfo, RoutineInfo, SchemaInfo, schemaVisible, Scope, TableDetail, targetId } from "../lib/api";
+import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { api, ConnectionView, DbKind, DRIVER_MISSING, KIND_LABEL, redisDb, dbShown, meta, RelationInfo, RoutineInfo, SchemaInfo, schemaVisible, Scope, TableDetail, targetId } from "../lib/api";
 import { ScopePopup } from "./ScopePopup";
 import { Button, Notice, TreeRow } from "../ui";
 import { invalidateCompletion } from "../lib/completion";
@@ -73,10 +73,14 @@ function useReveal(fn: (t: RevealTarget) => void) {
 
 export const isRelation = (k: NodeInfo["kind"]) => ["table", "view", "matview", "foreign", "partitioned"].includes(k);
 
-/** Tree selection state (DataGrip: click = select, ▸ / double-click = expand) */
-export const TreeSelection = createContext<{ sel: string | null; setSel: (id: string, info?: NodeInfo) => void }>({
-  sel: null,
-  setSel: () => {},
+/** Tree selection state (DataGrip: click = select one, ⌘-click / ⇧-click = several, ▸ / double-click = expand).
+ *  infos: what each selectable row on screen points to (rows add themselves), so the explorer can act on several.
+ *  gone: a row left the screen (collapsed, filtered out, dropped), so it leaves the selection */
+export const TreeSelection = createContext<{ ids: string[]; select: (id: string, info?: NodeInfo, e?: React.MouseEvent) => void; infos: Map<string, NodeInfo>; gone: (id: string) => void }>({
+  ids: [],
+  select: () => {},
+  infos: new Map(),
+  gone: () => {},
 });
 
 interface Props {
@@ -104,8 +108,15 @@ const REL_GROUPS: { kind: RelationInfo["kind"][]; label: string; icon: string }[
 
 function useSelectable(info?: NodeInfo) {
   const id = useId();
-  const { sel, setSel } = useContext(TreeSelection);
-  return { selected: sel === id, select: () => setSel(id, info) };
+  const { ids, select, infos, gone } = useContext(TreeSelection);
+  useEffect(() => {
+    if (info) infos.set(id, info);
+    return () => void infos.delete(id);
+  });
+  // Unmount only (gone reads the explorer's current selection), in the commit that removes the row: a key pressed right after
+  // already finds the selection without it
+  useLayoutEffect(() => () => gone(id), []);
+  return { id, selected: ids.includes(id), select: (e?: React.MouseEvent) => select(id, info, e) };
 }
 
 function Row({ depth, open, onToggle, icon, iconClass, label, sub, title, onDoubleClick, onMenu, leaf, info, style, className, badge }: {
@@ -113,7 +124,7 @@ function Row({ depth, open, onToggle, icon, iconClass, label, sub, title, onDoub
   title?: string; onDoubleClick?: () => void; onMenu?: (e: React.MouseEvent, info: NodeInfo) => void; leaf?: boolean;
   info?: NodeInfo; style?: React.CSSProperties; className?: string; badge?: React.ReactNode;
 }) {
-  const { selected, select } = useSelectable(info);
+  const { id, selected, select } = useSelectable(info);
   return (
     <TreeRow
       depth={depth}
@@ -129,12 +140,14 @@ function Row({ depth, open, onToggle, icon, iconClass, label, sub, title, onDoub
       className={className}
       style={style}
       dataNode={info ? nodeKey(info.conn.id, info.kind === "conn" ? undefined : info.db, info.schema, info.name) : undefined}
+      id={info ? id : undefined}
       onSelect={select}
       onToggle={onToggle}
       onDoubleClick={onDoubleClick}
       onContextMenu={(e) => {
         e.preventDefault();
-        select();
+        // A right-click on a node of the selection keeps the selection (the menu acts on all of it)
+        if (!selected) select();
         if (info && onMenu) onMenu(e, info);
       }}
     />
@@ -200,9 +213,7 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
   const defaultDb = conn.kind === "redis" ? redisDb(conn.database) : conn.kind === "sqlite" || conn.kind === "duckdb" ? "main" : conn.database || (conn.kind === "postgres" ? "postgres" : "");
 
   // Single database mode: only the default DB
-  const MY_SYS = ["information_schema", "performance_schema", "mysql", "sys"];
-  const dbShown = (d: string) =>
-    conn.options?.singleDb ? d === defaultDb : (conn.kind !== "mysql" || showSystem || !MY_SYS.includes(d) || d === defaultDb) && dbVisible(conn.scope, d, defaultDb);
+  const shown = (d: string) => dbShown(conn, d, defaultDb, showSystem);
   const loadDbs = (force = false) => {
     if (dbs?.state === "ok" && !force) return;
     setDbs({ state: "loading" });
@@ -273,7 +284,7 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
                   setPopup({ x: e.clientX, y: e.clientY + 10 });
                 }}
               >
-                {dbs.data.filter((d) => dbShown(d)).length}
+                {dbs.data.filter(shown).length}
                 {conn.scope?.databases?.length ? ` of ${dbs.data.length}` : ""}
               </span>
             )}
@@ -286,7 +297,7 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
         <div key={gen}>
           <Status depth={1} load={dbs} kind={conn.kind} conn={conn} onRetry={() => loadDbs(true)} onConnsChanged={onConnsChanged} />
           {dbs?.state === "ok" &&
-            dbs.data.filter((db) => dbShown(db)).map((db) => {
+            dbs.data.filter(shown).map((db) => {
               const dOpen = openDbs.has(db);
               return (
                 <div key={db}>

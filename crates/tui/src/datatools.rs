@@ -259,6 +259,7 @@ mod tests {
             has_result_set: true,
             in_transaction: false,
             warning: None,
+            editable: None,
         };
         let (title, text) = super::bar_chart(&r, 10, 30).unwrap();
         assert_eq!(title, "Chart: sum of amount by region");
@@ -287,6 +288,7 @@ mod tests {
             has_result_set: true,
             in_transaction: false,
             warning: None,
+            editable: None,
         };
         assert!(super::bar_chart(&r, 10, 30).is_none());
     }

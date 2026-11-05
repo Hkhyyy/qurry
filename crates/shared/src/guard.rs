@@ -14,24 +14,24 @@ static MONGO_CALL: LazyLock<Regex> =
 
 /// Words (lowercased) and symbols outside strings and comments. depth = parenthesis depth
 #[derive(Debug, Clone, PartialEq)]
-struct Tok {
-    text: String,
-    word: bool,
-    depth: i32,
+pub(crate) struct Tok {
+    pub(crate) text: String,
+    pub(crate) word: bool,
+    pub(crate) depth: i32,
     /// Name wrapped in "…" / `…` (not a keyword)
-    quoted: bool,
+    pub(crate) quoted: bool,
     /// Position in the original text (bytes)
-    start: usize,
-    end: usize,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
 }
 
-struct Scan {
-    toks: Vec<Tok>,
+pub(crate) struct Scan {
+    pub(crate) toks: Vec<Tok>,
     /// Whether there was a MySQL /*! … */ · MariaDB /*M! … */ (executable comment)
-    exec_comment: bool,
+    pub(crate) exec_comment: bool,
 }
 
-fn scan(sql: &str, kind: DbKind) -> Scan {
+pub(crate) fn scan(sql: &str, kind: DbKind) -> Scan {
     scan_as(sql, kind, Quotes::Default)
 }
 

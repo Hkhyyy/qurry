@@ -1,14 +1,16 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { userEvent, within } from "storybook/test";
+import { useEffect, useState } from "react";
+import { expect, fireEvent, userEvent, waitFor, within } from "storybook/test";
 // Fake backend (same as the app's ?mock): returns fixed data for the commands screens call
 import "../../lib/mock";
-import "../../lib/monaco";
+import { monaco } from "../../lib/monaco";
 import App from "../../App";
 import { SettingsDialog } from "../../features/settings/SettingsDialog";
 import { setFont } from "../../lib/prefs";
 import { dialectOf, type ConnectionView, type QueryResult } from "../../lib/api";
 import { ConnectionDialog } from "../../components/ConnectionDialog";
-import { ConsolePane, SPLITTER_FAILED } from "../../components/ConsolePane";
+import { ConsolePane, SPLITTER_FAILED, type OutputLine } from "../../components/ConsolePane";
+import type { StmtMark } from "../../lib/stmtMark";
 import { CopyRowsDialog, GenerateDataDialog } from "../../components/DataTools";
 import { DbaReport } from "../../components/DbaReport";
 import { ErdView } from "../../components/ErdView";
@@ -22,13 +24,14 @@ import { RagView } from "../../components/RagView";
 import { RedisBrowser } from "../../components/RedisBrowser";
 import { ResultChart } from "../../components/ResultChart";
 import { ResultGrid } from "../../components/ResultGrid";
-import { RunningBar } from "../../components/RunningBar";
 import { SearchEverywhere } from "../../components/SearchEverywhere";
+import { TableEditor } from "../../components/TableEditor";
 import { TableStructureView } from "../../components/TableStructure";
 import { Switcher } from "../../components/Switcher";
 import { BackupDialog, ExportDialog, ImportDialog } from "../../components/Transfer";
 import { UpdateDialog } from "../../components/UpdateDialog";
 import { WorkspaceBar } from "../../components/WorkspaceBar";
+import { StatusBar } from "../../features/settings/StatusBar";
 import { ConsoleIcon, ReportIcon, TabIcon, TableIcon } from "../icons";
 
 /** Screens: real screen components with fake data (same data as the app's ?mock). Buttons are clickable */
@@ -66,6 +69,22 @@ const Frame = ({ children, h = 560 }: { children: React.ReactNode; h?: number })
 /** Whole app (explorer · tabs · console). Right-click the explorer, ⇧⌘A for Find Action, ⌘↩ in the console to run */
 export const FullApp: S = { name: "App (whole window)", render: () => <div style={{ height: "100vh" }}><App /></div> };
 
+/** Database Explorer, several nodes: ⌘-click two tables, then right-click one. Go to DDL, Edit Data, Copy Name / Reference, Drop… and
+ *  Refresh run for both; the commands for one node are greyed out (their tooltip: click a node without ⌘ or ⇧). ⇧-click selects a range */
+export const ExplorerSeveral: S = {
+  name: "Database Explorer — several selected",
+  render: () => <div style={{ height: "100vh" }}><App /></div>,
+  play: async ({ canvasElement }) => {
+    const row = (name: string) => canvasElement.querySelector<HTMLElement>(`.ws-explorer.on [data-node="dev|shop_app|public|${name}"]`)!;
+    await waitFor(() => expect(row("users")).toBeTruthy(), { timeout: 5000 });
+    await userEvent.click(row("contracts"));
+    // ⌘-click (⌃-click off macOS)
+    fireEvent.mouseDown(row("users"), navigator.platform.includes("Mac") ? { metaKey: true } : { ctrlKey: true });
+    const r = row("users").getBoundingClientRect();
+    fireEvent.contextMenu(row("users"), { clientX: r.left + 120, clientY: r.bottom });
+  },
+};
+
 /** Settings › Appearance: theme, editor and grid fonts, grid alignment per value class, the automatic update check and the update channel (alignment and channel shared with the TUI) */
 export const Settings: S = { name: "Settings — Appearance & updates", render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} /> };
 /** Editor / Grid font: each family is picked from a drop-down of the installed fonts (search, "Monospaced only" on by default, the default
@@ -78,6 +97,21 @@ export const SettingsFonts: S = {
   play: async ({ canvasElement }) => {
     setFont("grid", { family: "No Such Mono" });
     await userEvent.click(await within(canvasElement.ownerDocument.body).findByRole("combobox", { name: "Grid font family" }));
+  },
+};
+/** "Add Font File…" under the list (not in DataGrip) copies a .ttf / .otf / .woff / .woff2 into Qurry's fonts folder and picks it (the
+ * mock adds "Fira Code"). Added fonts come first, marked "custom", whatever "Monospaced only" says; − removes one (asks first; a picker
+ * set to it goes back to the default). Here a font is added from the grid font picker, which is then opened again */
+export const SettingsFontsCustom: S = {
+  name: "Settings — Fonts (added font file)",
+  render: () => <SettingsDialog onClose={noop} onUpdate={noop} onChannel={noop} />,
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    const field = await body.findByRole("combobox", { name: "Grid font family" });
+    await userEvent.click(field);
+    await userEvent.click(await body.findByRole("button", { name: "Add Font File…" }));
+    await waitFor(() => expect(field.textContent).toMatch(/Fira Code/));
+    await userEvent.click(field);
   },
 };
 
@@ -153,6 +187,49 @@ export const ProdLog: S = { name: "Production Log", render: () => <ProductionLog
 export const GenerateData: S = { name: "Generate Test Data", render: () => <GenerateDataDialog target="dev" schema="public" table="orders" onDone={noop} onClose={noop} /> };
 export const CopyRows: S = { name: "Copy Related Rows", render: () => <CopyRowsDialog source="prod" schema="public" table="users" conn={PROD} conns={CONNS} onDone={noop} onClose={noop} /> };
 
+/** The table tab's WHERE field completes like the console (the field as `SELECT * FROM public.users WHERE …`): the table's columns
+ * first, then tables and keywords; ↑↓ PgUp PgDn move, ↩ / ⇥ pick, ⎋ closes the list, then resets the field */
+/** The mock's public.users columns (what the WHERE field completes against) */
+const users: QueryResult = {
+  columns: [
+    { name: "id", typeName: "INT8" },
+    { name: "user_name", typeName: "VARCHAR" },
+  ],
+  rows: Array.from({ length: 12 }, (_, i) => [i + 1, `user_${i + 1}`]),
+  rowsAffected: 0,
+  truncated: false,
+  elapsedMs: 8,
+  hasResultSet: true,
+};
+export const TableFilterCompletion: S = {
+  name: "Table data — WHERE completion",
+  render: () => (
+    <Frame h={360}>
+      <TableEditor
+        where=""
+        orderBy=""
+        running={false}
+        error={null}
+        result={users}
+        query="SELECT * FROM public.users"
+        loadingMore={false}
+        completion={{ target: "dev", schema: "public", table: "users", db: "shop_app", mysql: false }}
+        onApply={noop}
+        onCancel={noop}
+        onFetchMore={noop}
+        onSubmit={async () => {}}
+        onExportCsv={noop}
+        onDdl={noop}
+        onCopyQueryToConsole={noop}
+      />
+    </Frame>
+  ),
+  play: async ({ canvasElement }) => {
+    const field = await within(canvasElement).findByRole("combobox", { name: "WHERE" });
+    await userEvent.type(field, "id > 1 and u");
+  },
+};
+
 export const Chart: S = { name: "Result Chart", render: () => <Frame><ResultChart result={sales} /></Frame> };
 export const Grid: S = {
   name: "Result Grid",
@@ -197,6 +274,28 @@ export const GridShort: S = {
   ),
 };
 
+/** Loading more rows (infinite scroll, #94): nothing on the grid (no row is covered); the status bar shows it as it shows a run, ■ cancels */
+export const GridLoadingMore: S = {
+  name: "Result Grid — loading more rows",
+  render: () => (
+    <div style={{ display: "flex", flexDirection: "column", height: 284, border: "1px solid var(--ui-border)" }}>
+      <div style={{ position: "relative", flex: 1 }}>
+        <ResultGrid result={{ ...mixed, truncated: true }} running={false} loadingMore query="select * from payment_check" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
+      </div>
+      <StatusBar run={{ canRun: false, running: true, onRun: noop, onCancel: noop }} status="" busy={{ label: "Loading more rows", since: Date.now() - 1200 }} readOnly={false} onUpdate={noop} jobs={[]} />
+    </div>
+  ),
+};
+/** A load-more that failed (#80): the reason beside the row count (not over the rows), and Run again */
+export const GridLoadMoreFailed: S = {
+  name: "Result Grid — load more failed",
+  render: () => (
+    <div style={{ position: "relative", height: 260, border: "1px solid var(--ui-border)" }}>
+      <ResultGrid result={{ ...mixed, truncated: true, moreError: "Couldn't load more rows: Session closed" }} running={false} loadingMore={false} query="select * from payment_check" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
+    </div>
+  ),
+};
+
 /** Value Editor panel (⇧↩): beside the grid, not over it; follows the current cell (↑↓ keep moving the grid), jsonb pretty-printed and highlighted */
 export const GridValuePanel: S = {
   name: "Result Grid — Value Editor panel (⇧↩)",
@@ -208,6 +307,28 @@ export const GridValuePanel: S = {
   play: async ({ canvasElement }) => {
     await userEvent.click(within(canvasElement).getAllByRole("gridcell", { name: '{"pg":"toss","n":0}' })[0]);
     await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+  },
+};
+
+/** Selection as a list of ranges (DataGrip): a 3×2 range, then ⌘-click row 5 and one cell of row 8; copy and the edits take every range */
+export const GridMultiSelect: S = {
+  name: "Result Grid — multi-range selection (⌘-click)",
+  render: () => (
+    <div style={{ position: "relative", height: 320, border: "1px solid var(--ui-border)" }}>
+      <ResultGrid result={mixed} edit={{ schema: "public", table: "payment_check", pk: ["card_brand"] }} running={false} loadingMore={false} query="select * from payment_check" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    // One user session, so the held ⇧ / ⌘ reach the clicks
+    const user = userEvent.setup();
+    await user.click(c.getAllByRole("gridcell", { name: "VISA" })[0]);
+    await user.keyboard("{Shift>}");
+    await user.click(c.getByRole("gridcell", { name: "387000.00" }));
+    await user.keyboard("{/Shift}{Meta>}");
+    await user.click(c.getByRole("rowheader", { name: "5" }));
+    await user.click(c.getByRole("gridcell", { name: "2026-10-28 09:07:00 +09:00" }));
+    await user.keyboard("{/Meta}");
   },
 };
 
@@ -280,11 +401,20 @@ export const DdlStructureError: S = {
   render: () => <Frame h={240}><TableStructureView target="dev" schema="public" table="users" visible onShowSql={noop} /></Frame>,
 };
 export const Diagram: S = { name: "Diagram (ERD)", render: () => <Frame h={600}><ErdView target="dev" schemas={["public"]} visible onOpenTable={noop} onStatus={noop} /></Frame> };
+/** The toolbar's database picker: [PROD] shop_app's shown databases, preselected on its default */
+const dbaDb = { database: "shop_app", loadDbs: async () => ["postgres", "shop_app", "shop_app_test"], fixedDb: false, onDatabase: noop };
+/** Picking a database reruns the report there (the mock's Table Sizes names the database it ran on) */
+function DbaPicker() {
+  const [db, setDb] = useState("shop_app");
+  return (
+    <DbaReport target={db === "shop_app" ? "prod" : `prod::${db}`} connName="[PROD] shop_app" report="table_sizes" readOnly={false} dialect={dialectOf("postgres")} visible {...dbaDb} database={db} onDatabase={setDb} onReport={noop} onOpenConsole={noop} onStatus={noop} />
+  );
+}
 export const Dba: S = {
   name: "Database Admin",
   render: () => (
     <Frame h={600}>
-      <DbaReport target="prod" connName="[PROD] shop_app" report="sessions" readOnly={false} dialect={dialectOf("postgres")} visible onReport={noop} onOpenConsole={noop} onStatus={noop} />
+      <DbaReport target="prod" connName="[PROD] shop_app" report="sessions" readOnly={false} dialect={dialectOf("postgres")} visible {...dbaDb} onReport={noop} onOpenConsole={noop} onStatus={noop} />
     </Frame>
   ),
 };
@@ -292,7 +422,7 @@ export const DbaSlowQueries: S = {
   name: "Database Admin: Slow Queries",
   render: () => (
     <Frame h={600}>
-      <DbaReport target="prod" connName="[PROD] shop_app" report="slow_queries" readOnly={false} dialect={dialectOf("postgres")} visible onReport={noop} onOpenConsole={noop} onStatus={noop} />
+      <DbaReport target="prod" connName="[PROD] shop_app" report="slow_queries" readOnly={false} dialect={dialectOf("postgres")} visible {...dbaDb} onReport={noop} onOpenConsole={noop} onStatus={noop} />
     </Frame>
   ),
 };
@@ -300,7 +430,23 @@ export const DbaUnusedIndexes: S = {
   name: "Database Admin: Unused Indexes",
   render: () => (
     <Frame h={600}>
-      <DbaReport target="prod" connName="[PROD] shop_app" report="unused_indexes" readOnly={false} dialect={dialectOf("postgres")} visible onReport={noop} onOpenConsole={noop} onStatus={noop} />
+      <DbaReport target="prod" connName="[PROD] shop_app" report="unused_indexes" readOnly={false} dialect={dialectOf("postgres")} visible {...dbaDb} onReport={noop} onOpenConsole={noop} onStatus={noop} />
+    </Frame>
+  ),
+};
+export const DbaDatabase: S = {
+  name: "Database Admin: database picker",
+  render: () => (
+    <Frame h={600}>
+      <div style={{ display: "grid", gridTemplateRows: "1fr 1fr 1fr 1fr", height: "100%" }}>
+        <DbaPicker />
+        {/* MySQL without a default schema: all schemas, or one picked */}
+        <DbaReport target="my" connName="[MySQL] shop" report="slow_queries" readOnly={false} dialect={dialectOf("mysql")} visible database="" loadDbs={async () => ["", "shop", "shop_archive"]} fixedDb={false} onDatabase={noop} onReport={noop} onOpenConsole={noop} onStatus={noop} />
+        {/* The account can't connect to the default database, so the list can't be read: open the picker for the way out */}
+        <DbaReport target="prod" connName="[PROD] shop_app" report="sessions" readOnly={false} dialect={dialectOf("postgres")} visible database="shop_app" loadDbs={() => Promise.reject('permission denied for database "shop_app"')} fixedDb={false} onDatabase={noop} onReport={noop} onOpenConsole={noop} onStatus={noop} />
+        {/* One fixed database: shown, read-only */}
+        <DbaReport target="prod" connName="[PROD] shop_app" report="sessions" readOnly={false} dialect={dialectOf("postgres")} visible database="shop_app" loadDbs={async () => []} fixedDb onDatabase={noop} onReport={noop} onOpenConsole={noop} onStatus={noop} />
+      </div>
     </Frame>
   ),
 };
@@ -309,8 +455,8 @@ export const DbaError: S = {
   render: () => (
     <Frame h={600}>
       <div style={{ display: "grid", gridTemplateRows: "1fr 1fr", height: "100%" }}>
-        <DbaReport target="busy" connName="[PROD] shop_app" report="sessions" readOnly={false} dialect={dialectOf("postgres")} visible onReport={noop} onOpenConsole={noop} onStatus={noop} />
-        <DbaReport target="maria" connName="[MariaDB] shop" report="slow_queries" readOnly={false} dialect={dialectOf("mysql")} visible onReport={noop} onOpenConsole={noop} onStatus={noop} />
+        <DbaReport target="busy" connName="[PROD] shop_app" report="sessions" readOnly={false} dialect={dialectOf("postgres")} visible {...dbaDb} onReport={noop} onOpenConsole={noop} onStatus={noop} />
+        <DbaReport target="maria" connName="[MariaDB] shop" report="slow_queries" readOnly={false} dialect={dialectOf("mysql")} visible {...dbaDb} onReport={noop} onOpenConsole={noop} onStatus={noop} />
       </div>
     </Frame>
   ),
@@ -319,18 +465,18 @@ export const DbaStale: S = {
   name: "Database Admin: refresh failed",
   render: () => (
     <Frame h={600}>
-      <DbaReport target="flaky" connName="[PROD] shop_app" report="sessions" readOnly={false} dialect={dialectOf("postgres")} visible onReport={noop} onOpenConsole={noop} onStatus={noop} />
+      <DbaReport target="flaky" connName="[PROD] shop_app" report="sessions" readOnly={false} dialect={dialectOf("postgres")} visible {...dbaDb} onReport={noop} onOpenConsole={noop} onStatus={noop} />
     </Frame>
   ),
 };
 export const Migrate: S = { name: "Compare & Migrate", render: () => <Frame h={600}><MigrateView conns={CONNS} initialConnId="dev" onOpenConsole={noop} onStatus={noop} /></Frame> };
 export const Rag: S = { name: "AI Search (RAG)", render: () => <Frame h={600}><RagView conns={CONNS} runJob={async (_l, run) => run("job")} onStatus={noop} /></Frame> };
-/** ⌘↩ at startup while the WebAssembly module loads: shown like a run, Cancel (or ⌘F2) drops it */
+/** ⌘↩ at startup while the WebAssembly module loads: shown like a run in the status bar, ■ (or ⌘F2) drops it */
 export const ConsoleSplitterLoading: S = {
   name: "Console — loading the statement splitter",
   render: () => (
     <div style={{ width: 760, border: "1px solid var(--ui-border)" }}>
-      <RunningBar running label="Loading the statement splitter" onCancel={noop} />
+      <StatusBar run={{ canRun: false, running: true, onRun: noop, onCancel: noop }} status="" busy={{ label: "Loading the statement splitter", since: Date.now() }} readOnly={false} onUpdate={noop} jobs={[]} />
     </div>
   ),
 };
@@ -343,12 +489,145 @@ export const ConsoleSplitterFailed: S = {
         tabId="story" target="dev" initialSql={"select * from customers;\nselect 1;"} connName="[DEV] shop_app" kind="postgres" dialect={dialectOf("postgres")} database="shop_app" schema="public"
         dbList={[]} schemaList={[]} running={false} loadingMore={false} results={[]} activeResult="output"
         output={[{ ts: "10:24:01", text: SPLITTER_FAILED, level: "error" }]} txManual={false} inTx={false}
-        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onExport={noop} onHistory={noop}
+        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
         onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop} onLoadingChange={noop}
       />
     </Frame>
   ),
 };
+/** ⌘↩ inside one of several statements: the Statements popup has the keys; the editor highlights what the highlighted option runs */
+export const ConsoleStatementsPopup: S = {
+  name: "Console — Statements popup (⌘↩)",
+  render: () => (
+    <Frame h={420}>
+      <ConsolePane
+        tabId="story-stmts" target="dev" initialSql={"select * from customers;\nselect 1;\nselect 2;"} connName="[DEV] shop_app" kind="postgres" dialect={dialectOf("postgres")} database="shop_app" schema="public"
+        dbList={[]} schemaList={[]} running={false} loadingMore={false} results={[]} activeResult="output"
+        output={[]} txManual={false} inTx={false}
+        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
+        onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop} onLoadingChange={noop}
+      />
+    </Frame>
+  ),
+  play: async ({ canvasElement }) => {
+    // ⌘↩ through the editor's own action (synthetic key events don't reach Monaco's keybindings)
+    const ed = await waitFor(() => monaco.editor.getEditors().find((e) => canvasElement.contains(e.getContainerDomNode())) ?? Promise.reject(new Error("no editor yet")));
+    ed.focus();
+    ed.trigger("story", "dbtool.run", null);
+    const chooser = await waitFor(() => canvasElement.querySelector<HTMLElement>(".stmt-chooser") ?? Promise.reject(new Error("no popup yet")), { timeout: 10000 });
+    fireEvent.keyDown(chooser, { key: "ArrowDown" });
+    await waitFor(() => expect(canvasElement.querySelector(".stmt-preview")).not.toBeNull(), { timeout: 10000 });
+  },
+};
+/** A script's Output longer than the pane: it follows the newest line while scrolled to the bottom; scrolled up, it stays put */
+export const ConsoleLongOutput: S = {
+  name: "Console — long Output",
+  render: () => (
+    <Frame h={420}>
+      <ConsolePane
+        tabId="story" target="dev" initialSql={"update orders set status = 'paid' where id = 1;"} connName="[DEV] shop_app" kind="postgres" dialect={dialectOf("postgres")} database="shop_app" schema="public"
+        dbList={[]} schemaList={[]} running={false} loadingMore={false} results={[]} activeResult="output"
+        output={[
+          ...Array.from({ length: 40 }, (_, i) => [
+            { ts: "10:24:01", text: `[DEV] shop_app> update orders set status = 'paid' where id = ${i + 1}`, level: "sql" as const },
+            { ts: "10:24:01", text: "1 row affected in 2 ms", level: "info" as const },
+          ]).flat(),
+          { ts: "10:24:02", text: `[DEV] shop_app> insert into order_audit (order_id, payload) values (41, '{${Array.from({ length: 12 }, (_, k) => `"field_${k + 1}": "value ${k + 1}"`).join(", ")}}')`, level: "sql" },
+          { ts: "10:24:02", text: "ERROR: value too long for type character varying(255)", level: "error" },
+        ]}
+        txManual={false} inTx={false}
+        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
+        onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop} onLoadingChange={noop}
+      />
+    </Frame>
+  ),
+};
+/** A console result from one table with its primary key (QueryResult.edit): editable as in a table tab, here with one pending edit */
+const consoleUsers: QueryResult = {
+  columns: [{ name: "id", typeName: "INT8" }, { name: "name", typeName: "VARCHAR" }, { name: "email", typeName: "TEXT" }],
+  rows: [[1, "kim", "kim@example.com"], [2, "lee", null], [3, "park", "park@example.com"]],
+  rowsAffected: 0, truncated: false, elapsedMs: 4, hasResultSet: true,
+  edit: { schema: "public", table: "users", pk: ["id"], columns: ["id", "user_name", "email"] },
+};
+const consoleProps = {
+  tabId: "story", target: "dev", connName: "[DEV] shop_app", kind: "postgres" as const, dialect: dialectOf("postgres"), database: "shop_app", schema: "public",
+  dbList: [], schemaList: [], running: false, loadingMore: false, output: [], txManual: false, inTx: false,
+  onChange: noop, onExecute: noop, onCancel: noop, onSetActiveResult: noop, onPin: noop, onCloseResult: noop, onFetchMore: noop, onSubmit: async () => {}, onExport: noop, onHistory: noop,
+  onTxMode: noop, onCommit: noop, onRollback: noop, onLoadDbs: noop, onLoadSchemas: noop, onSwitchDb: noop, onSwitchSchema: noop, registerApi: noop, onClearOutput: noop, onError: noop, onLoadingChange: noop,
+};
+export const ConsoleEditableResult: S = {
+  name: "Console — editable result (pending edit)",
+  render: () => (
+    <Frame h={420}>
+      <ConsolePane {...consoleProps} initialSql="select id, user_name as name, email from users;" activeResult="r1"
+        results={[{ id: "r1", title: "Result 1", sql: "select id, user_name as name, email from users", kind: "result", result: consoleUsers, pinned: false }]} />
+    </Frame>
+  ),
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    // After the editor took focus on mount: edit in the cell's own input
+    await waitFor(() => {
+      if (!canvasElement.querySelector(".monaco-editor .view-lines")) throw new Error("editor not mounted yet");
+    });
+    await userEvent.dblClick(await c.findByText("lee"));
+    const input = await c.findByDisplayValue("lee");
+    await userEvent.clear(input);
+    await userEvent.type(input, "Lee{Enter}");
+  },
+};
+/** A join: read-only, the greyed-out edit buttons say why (QueryResult.readOnlyReason) */
+export const ConsoleReadOnlyResult: S = {
+  name: "Console — read-only result (reason)",
+  render: () => {
+    const { edit: _, ...joined } = consoleUsers;
+    const sql = "select u.id, u.name, o.total from users u join orders o on o.user_id = u.id";
+    return (
+      <Frame h={420}>
+        <ConsolePane {...consoleProps} initialSql={sql + ";"} activeResult="r1"
+          results={[{ id: "r1", title: "Result 1", sql, kind: "result", result: { ...joined, readOnlyReason: "Read-only: the columns come from more than one table." }, pinned: false }]} />
+      </Frame>
+    );
+  },
+};
+/** A console after its runs: each executed statement is marked on its first line (✓ done, ✗ failed, spinning while it runs; all three
+ * shown together here). Hover a mark for when it ran and its result or error; click it for its line in Output */
+function ConsoleMarks() {
+  const [output, setOutput] = useState<OutputLine[]>([]);
+  const [active, setActive] = useState("output");
+  // The story runs the whole console once (the user's Query Execution setting would ask which statement); the setting is put back right away
+  const [saved] = useState(() => {
+    const v = localStorage.getItem("dbtool.execSettings");
+    localStorage.setItem("dbtool.execSettings", JSON.stringify({ inside: "whole" }));
+    return v;
+  });
+  useEffect(() => {
+    if (saved === null) localStorage.removeItem("dbtool.execSettings");
+    else localStorage.setItem("dbtool.execSettings", saved);
+  }, [saved]);
+  const runs: [StmtMark["state"], string][] = [["ok", "1 row retrieved starting from 1 in 4 ms"], ["error", 'ERROR: column "status" of relation "payment" does not exist'], ["running", ""]];
+  return (
+    <Frame h={420}>
+      <ConsolePane
+        tabId="story-marks" target="dev" initialSql={"select 1;\nupdate payment\n   set status = 'paid'\n where id = 42;\nselect pg_sleep(5);"} connName="[DEV] shop_app" kind="postgres" dialect={dialectOf("postgres")} database="shop_app" schema="public"
+        dbList={[]} schemaList={[]} running loadingMore={false} results={[]} activeResult={active}
+        output={output} txManual={false} inTx={false}
+        onChange={noop}
+        onExecute={(stmts, _explain, mark) => {
+          const ts = "2026-11-04 10:24:01";
+          setOutput(stmts.flatMap((s, i) => {
+            const [state, text] = runs[i];
+            mark?.(i, { state, out: `o${i}`, ts, text });
+            return [{ ts, text: `[DEV] shop_app> ${s}`, level: "sql" as const, stmt: `o${i}` }, ...(text ? [{ ts, text, level: state === "ok" ? ("info" as const) : ("error" as const) }] : [])];
+          }));
+        }}
+        onCancel={noop} onSetActiveResult={setActive} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
+        onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop}
+        registerApi={(_id, a) => setTimeout(() => a.run())} onClearOutput={noop} onError={noop} onLoadingChange={noop}
+      />
+    </Frame>
+  );
+}
+export const ConsoleGutterMarks: S = { name: "Console — gutter marks", render: () => <ConsoleMarks /> };
 export const Redis: S = {
   name: "Redis Browser",
   render: () => (
@@ -357,23 +636,40 @@ export const Redis: S = {
     </Frame>
   ),
 };
-export const Workspaces: S = {
-  name: "Workspace rail",
-  render: () => (
-    <div style={{ width: 64, height: 300, background: "var(--ui-surface-2)" }}>
+const WS_NAMES = ["Default", "Reports", "Billing", "Analytics", "Ops", "Support", "Growth", "Search", "Mobile", "Payments"];
+/** The rail at a fixed window height: n workspaces, the 2nd current. Keymap and Settings stay at the bottom while the list scrolls */
+const Rail = ({ n, h = 420 }: { n: number; h?: number }) => {
+  const list = Array.from({ length: n }, (_, i) => ({ id: `w${i}`, name: i < WS_NAMES.length ? WS_NAMES[i] : `Workspace ${i + 1}`, connIds: [] }));
+  return (
+    <div style={{ height: h, display: "flex", border: "1px solid var(--ui-border)", width: "fit-content" }}>
       <WorkspaceBar
-        list={[
-          { id: "a", name: "Default", connIds: [] },
-          { id: "b", name: "Reports", connIds: [] },
-        ]}
-        current="a"
-        counts={{ a: 3, b: 1 }}
+        list={list}
+        current="w1"
+        counts={Object.fromEntries(list.map((w, i) => [w.id, i % 4]))}
         shortcut={(n) => `⌘${n}`}
         onSwitch={noop}
         onNew={noop}
         onRename={noop}
         onDelete={noop}
+        onKeymap={noop}
+        onSettings={noop}
       />
+    </div>
+  );
+};
+export const Workspaces: S = { name: "Workspace rail", render: () => <Rail n={2} /> };
+export const WorkspacesMany: S = { name: "Workspace rail — 30 workspaces (list scrolls, footer stays)", render: () => <Rail n={30} /> };
+export const WorkspacesLight: S = { name: "Workspace rail — light", globals: { theme: "light" }, render: () => <Rail n={30} /> };
+export const WorkspacesHc: S = { name: "Workspace rail — high contrast", globals: { theme: "hc" }, render: () => <Rail n={30} /> };
+/** Status bar: run · cancel, status text, transfers, update badge, read-only, caret, encoding (Settings and Keymap moved to the workspace rail).
+ * While the focused tab runs or loads more rows, the running indicator (bar · what · elapsed) takes the status text's place; ■ cancels it */
+export const StatusBarStory: S = {
+  name: "Status bar",
+  render: () => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <StatusBar run={{ canRun: true, running: false, onRun: noop, onCancel: noop }} status="1 statement executed in 12 ms" readOnly update="0.3.1" onUpdate={noop} jobs={[]} />
+      <StatusBar run={{ canRun: false, running: true, onRun: noop, onCancel: noop }} status="" busy={{ label: "Executing", since: Date.now() - 3400 }} readOnly={false} onUpdate={noop} jobs={[]} />
+      <StatusBar run={{ canRun: false, running: true, onRun: noop, onCancel: noop }} status="" busy={{ label: "Loading more rows", since: Date.now() - 800 }} readOnly={false} onUpdate={noop} jobs={[]} />
     </div>
   ),
 };

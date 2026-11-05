@@ -2,7 +2,7 @@
 //! - SELECT-like statements fetch 500 rows at a time via a server cursor (DECLARE/FETCH) → "load more"
 //! - The backend PID is known, so a running query can be cancelled with pg_cancel_backend
 use crate::backend::{Backend, dispatch};
-use crate::db::{pg_columns, pg_value, query_result, ColumnInfo, QueryResult};
+use crate::db::{pg_columns, pg_origins, pg_value, query_result, ColumnInfo, QueryResult};
 use crate::error::{AppError, AppResult};
 use futures::TryStreamExt;
 use serde_json::Value;
@@ -28,6 +28,8 @@ pub struct PgSession {
     cursor_open: bool,
     cursor_sql: String,
     columns: Vec<ColumnInfo>,
+    /// Where the cursor's columns come from (db::pg_origins), for editing the result (crate::editable). Empty for a result read without a cursor
+    pub(crate) origins: Vec<Option<(u32, i16)>>,
     /// Tx: Manual mode (DataGrip). Statements accumulate in a transaction until Commit / Roll back
     manual: bool,
     /// Whether a transaction is open in Manual mode
@@ -117,7 +119,7 @@ impl PgSession {
     pub async fn open(pool: &PgPool) -> AppResult<Self> {
         let mut conn = pool.acquire().await?;
         let pid: i32 = sqlx::query_scalar("select pg_backend_pid()").fetch_one(&mut *conn).await?;
-        Ok(Self { conn, pid, cursor_open: false, cursor_sql: String::new(), columns: Vec::new(), manual: false, in_tx: false, cursor_used: Instant::now(), idle_closed: false, fetched: 0 })
+        Ok(Self { conn, pid, cursor_open: false, cursor_sql: String::new(), columns: Vec::new(), origins: Vec::new(), manual: false, in_tx: false, cursor_used: Instant::now(), idle_closed: false, fetched: 0 })
     }
 
     /// keep-alive: so idle session connections are not dropped
@@ -240,6 +242,7 @@ impl PgSession {
     async fn run_inner(&mut self, sql: &str, limit: usize) -> AppResult<QueryResult> {
         self.close_cursor().await;
         self.idle_closed = false;
+        self.origins.clear();
         let start = Instant::now();
         if self.manual && !self.in_tx && !strip_comments_lead(sql).starts_with("begin") {
             self.conn.execute("BEGIN").await?;
@@ -375,15 +378,14 @@ impl PgSession {
             }
         };
         if self.columns.is_empty() {
-            self.columns = match rows.first() {
-                Some(r) => pg_columns(r),
+            (self.columns, self.origins) = match rows.first() {
+                Some(r) => (pg_columns(r), pg_origins(r.columns())),
                 None => match (&mut *self.conn).describe(strip_trailing_semicolon(&self.cursor_sql)).await {
-                    Ok(d) => d
-                        .columns()
-                        .iter()
-                        .map(|c| ColumnInfo { name: c.name().to_string(), type_name: c.type_info().name().to_string() })
-                        .collect(),
-                    Err(_) => Vec::new(),
+                    Ok(d) => (
+                        d.columns().iter().map(|c| ColumnInfo { name: c.name().to_string(), type_name: c.type_info().name().to_string() }).collect(),
+                        pg_origins(d.columns()),
+                    ),
+                    Err(_) => (Vec::new(), Vec::new()),
                 },
             };
         }

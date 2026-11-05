@@ -1,6 +1,6 @@
 import { useState, type Dispatch, type SetStateAction } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { api, ConnectionView, dialectOf, meta, targetId } from "../../lib/api";
+import { api, ConnectionView, defaultDbOf, dialectOf, meta, targetId } from "../../lib/api";
 import { askText } from "../../lib/dialogs";
 import { leaf, leaves, MAX_PANES, Pane, splitPane } from "../../lib/panes";
 import { connTabVars, type Theme } from "../../lib/theme";
@@ -418,7 +418,7 @@ export function useEditorGroups({
                     txManual={t.txManual}
                     inTx={t.inTx}
                     onChange={(sql) => liveSql.set(t.id, sql)}
-                    onExecute={(stmts, explain) => executeConsole(t.id, stmts, explain)}
+                    onExecute={(stmts, explain, mark) => executeConsole(t.id, stmts, explain, mark)}
                     onCancel={() => cancel(t)}
                     onSetActiveResult={(id) => patch(t.id, { activeResult: id })}
                     onPin={(id, pinned) => setTabs((ts) => ts.map((x) => (x.id === t.id ? { ...x, results: x.results.map((r) => (r.id === id ? { ...r, pinned } : r)) } : x)))}
@@ -426,6 +426,11 @@ export function useEditorGroups({
                       setTabs((ts) => ts.map((x) => (x.id === t.id ? { ...x, results: x.results.filter((r) => r.id !== id), activeResult: x.activeResult === id ? "output" : x.activeResult } : x)))
                     }
                     onFetchMore={(entryId) => fetchMoreEntry(t.id, entryId)}
+                    readOnly={!!c?.readOnly}
+                    onSubmit={(entryId, st) => submitEdits(t, st, () => {
+                      const e = t.results.find((r) => r.id === entryId);
+                      if (e) void executeConsole(t.id, [e.sql]);
+                    })}
                     onExport={(sql) => exportCsv({ ...t, lastSql: sql })}
                     onHistory={() => (setHistoryTab("history"), setHistoryFor(t.id))}
                     onTxMode={(manual) => setTxMode(t, manual)}
@@ -486,6 +491,7 @@ export function useEditorGroups({
             .filter((t) => t.kind === "dba")
             .map((t) => {
               const c = conns.find((x) => x.id === t.connId);
+              const def = c ? defaultDbOf(c) : "";
               return (
                 <div key={t.id} className="work-layer" style={{ display: t.id === ga?.id ? "block" : "none" }}>
                   <DbaReport
@@ -495,6 +501,18 @@ export function useEditorGroups({
                     readOnly={!!c?.readOnly}
                     dialect={dialectOf(c?.kind ?? "postgres")}
                     visible={t.id === ga?.id}
+                    database={t.database ?? def}
+                    // Every database of the server (as the console lists them), through the report's own database (the account may not
+                    // connect to the default one), else through the source's (the report's may be one it can't connect to);
+                    // MySQL without a default schema can go back to all schemas
+                    loadDbs={() =>
+                      meta
+                        .databases(t.target)
+                        .catch((e) => (c && t.target !== c.id ? meta.databases(c.id) : Promise.reject(e)))
+                        .then((ds) => [...(def ? [] : [""]), ...ds])
+                    }
+                    fixedDb={!!c?.options?.singleDb}
+                    onDatabase={(db) => c && patch(t.id, { database: db !== def ? db : undefined, target: targetId(c.id, db !== def ? db : undefined) })}
                     onReport={(id, title) => c && patch(t.id, { dbaReport: id, title: `${title} — ${c.name}` })}
                     onOpenConsole={(sql) => c && openConsole(c, t.database, sql)}
                     onStatus={setStatus}
@@ -529,7 +547,6 @@ export function useEditorGroups({
             .map((t) => (
               <div key={t.id} className="work-layer" data-tab={t.id} style={{ display: t.id === ga?.id ? "block" : "none" }}>
                 <TableEditor
-                  title={t.title}
                   where={t.where}
                   orderBy={t.orderBy}
                   running={t.running}
@@ -541,6 +558,7 @@ export function useEditorGroups({
                   readOnly={!!conns.find((x) => x.id === t.connId)?.readOnly}
                   dialect={dialectOf(conns.find((x) => x.id === t.connId)?.kind)}
                   loadingMore={t.loadingMore}
+                  completion={t.edit && { target: t.target, schema: t.edit.schema, table: t.edit.table, db: tabDatabase(t, conns.find((x) => x.id === t.connId)), mysql: conns.find((x) => x.id === t.connId)?.kind === "mysql" }}
                   onApply={(w, o) => applyTableFilter(t, w, o)}
                   onCancel={() => cancel(t)}
                   onFetchMore={() => fetchMore(t)}

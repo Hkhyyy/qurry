@@ -1,4 +1,5 @@
 use super::*;
+use crate::theme::Theme;
 use qurry_core::format::{align, Align, ValueClass};
 
 /// The GUI's names (Settings › Appearance › Alignment, src/lib/gridAlign.ts VALUE_CLASSES)
@@ -18,6 +19,7 @@ fn align_name(a: Align) -> &'static str {
         Align::Left => "Left",
         Align::Center => "Center",
         Align::Right => "Right",
+        Align::Column => "Column type",
     }
 }
 
@@ -234,7 +236,7 @@ impl App {
                     self.activate(i)
                 }
             }
-            PAction::Run { stmts, explain } => self.run_stmts(stmts, explain, false),
+            PAction::Run { stmts, rows, explain } => self.run_marked(stmts, rows, explain, false),
             PAction::ExportFormat(f) => self.export_dest(f),
             PAction::Dba(r) => self.dba_open(r),
             PAction::InsertSql(q) => self.insert_sql(q),
@@ -257,6 +259,7 @@ impl App {
                 self.set_grid_align(c, a);
                 self.palette_grid_align(c);
             }
+            PAction::Theme(t) => self.set_theme(t),
             PAction::Object { conn, db, e } => {
                 let kind = match e.kind.as_str() {
                     "function" | "procedure" => "routine".to_string(),
@@ -281,7 +284,10 @@ impl App {
     }
 
     pub fn input(&mut self, title: impl Into<String>, init: &str, on_ok: impl FnOnce(&mut App, String) + 'static) {
-        self.input_words(title, init, vec![], on_ok);
+        let mut t = TextArea::new(vec![init.to_string()]);
+        t.move_cursor(tui_textarea::CursorMove::End);
+        t.set_cursor_line_style(ratatui::style::Style::default());
+        self.popup = Some(Popup::Input { title: title.into(), body: String::new(), input: t, on_ok: Box::new(on_ok), filter: None, complete: None });
     }
 
     /// Input with an explanation box under it (answers, reasons); the title stays one line on the border
@@ -292,25 +298,29 @@ impl App {
         }
     }
 
-    /// Single-line input with autocomplete (typed word filters words, ⌃Space / Tab opens it right away)
-    pub fn input_words(&mut self, title: impl Into<String>, init: &str, words: Vec<String>, on_ok: impl FnOnce(&mut App, String) + 'static) {
-        let mut t = TextArea::new(vec![init.to_string()]);
-        t.move_cursor(tui_textarea::CursorMove::End);
-        t.set_cursor_line_style(ratatui::style::Style::default());
-        self.popup = Some(Popup::Input { title: title.into(), body: String::new(), input: t, on_ok: Box::new(on_ok), words, complete: None });
-    }
-
-    /// Autocomplete candidates for the table tab's WHERE / ORDER BY: columns + common keywords
-    pub fn table_words(&self, id: u64, order: bool) -> Vec<String> {
-        let Some(t) = self.tabs.iter().find(|t| t.id == id) else { return vec![] };
-        let kind = self.kind_of(&t.conn);
-        let mut w: Vec<String> = match &t.kind {
-            TabKind::Table(tt) => tt.grid.as_ref().map(|g| g.result.columns.iter().map(|c| sql::quote_ident(kind, &c.name)).collect()).unwrap_or_default(),
-            _ => vec![],
-        };
-        let kw: &[&str] = if order { &["ASC", "DESC", "NULLS FIRST", "NULLS LAST"] } else { &["AND", "OR", "NOT", "IS NULL", "IS NOT NULL", "IN", "LIKE", "ILIKE", "BETWEEN", "TRUE", "FALSE", "NOW()"] };
-        w.extend(kw.iter().map(|s| s.to_string()));
-        w
+    /// A table tab's WHERE (or ORDER BY) input, completing like the console (complete::suggest_filter); ↩ sets it and reloads
+    pub fn input_filter(&mut self, id: u64, order_by: bool) {
+        let Some(t) = self.tabs.iter().find(|t| t.id == id) else { return };
+        let TabKind::Table(tt) = &t.kind else { return };
+        let (target, db, mysql) = (t.target.clone(), t.db.clone(), self.kind_of(&t.conn) == DbKind::Mysql);
+        let init = if order_by { tt.order.clone() } else { tt.where_.clone() };
+        let meta = self.completion.get(&target).cloned().unwrap_or_else(|| {
+            let columns = tt.grid.as_ref().map(|g| g.result.columns.iter().map(|c| (c.name.clone(), c.type_name.clone())).collect()).unwrap_or_default();
+            Arc::new(complete::Meta::new(vec![complete::CompletionTable { schema: tt.schema.clone(), name: tt.table.clone(), columns }]))
+        });
+        let (schema, table) = (tt.schema.clone(), tt.table.clone());
+        if !self.completion.contains_key(&target) {
+            self.load_completion(target);
+        }
+        self.input(if order_by { "ORDER BY" } else { "WHERE" }, &init, move |a, s| {
+            if let Some(TabKind::Table(tt)) = a.tab_mut(id).map(|t| &mut t.kind) {
+                if order_by { tt.order = s } else { tt.where_ = s }
+            }
+            a.reload_table_checked(id);
+        });
+        if let Some(Popup::Input { filter, .. }) = &mut self.popup {
+            *filter = Some(FilterSource { meta, schema, table, order_by, db, mysql });
+        }
     }
 
     /// Check for a new version right now (⌃K › Check for Updates)
@@ -380,21 +390,22 @@ impl App {
             .map(|&c| {
                 let (a, def) = (align(c, &self.align), c.default_align());
                 let hint = if a == def { "default".to_string() } else { format!("changed — default {}", align_name(def)) };
-                PItem { label: format!("{:<14}{:<6}", class_name(c), align_name(a)), hint, action: PAction::AlignClass(c) }
+                PItem { label: format!("{:<14}{:<12}", class_name(c), align_name(a)), hint, action: PAction::AlignClass(c) }
             })
             .collect();
         let sel = ValueClass::ALL.iter().position(|&c| c == sel).unwrap_or(0);
         self.popup = Some(Popup::Palette(Palette { title: "Grid Alignment".into(), input: TextArea::default(), items, sel, loading: 0, cache: Default::default() }));
     }
 
-    /// Left / Center / Right for one value class, opened on where it sits now (Enter keeps it)
+    /// Left / Center / Right (NULL also Column type) for one value class, opened on where it sits now (Enter keeps it)
     fn palette_align_of(&mut self, class: ValueClass) {
         let on = align(class, &self.align);
-        let items = [Align::Left, Align::Center, Align::Right]
-            .into_iter()
-            .map(|a| PItem { label: format!("{} {}", if a == on { "●" } else { " " }, align_name(a)), hint: if a == class.default_align() { "default".into() } else { String::new() }, action: PAction::Align(class, a) })
+        let items = class
+            .aligns()
+            .iter()
+            .map(|&a| PItem { label: format!("{} {}", if a == on { "●" } else { " " }, align_name(a)), hint: if a == class.default_align() { "default".into() } else { String::new() }, action: PAction::Align(class, a) })
             .collect();
-        let sel = [Align::Left, Align::Center, Align::Right].iter().position(|&a| a == on).unwrap_or(0);
+        let sel = class.aligns().iter().position(|&a| a == on).unwrap_or(0);
         self.popup = Some(Popup::Palette(Palette { title: format!("{} Alignment", class_name(class)), input: TextArea::default(), items, sel, loading: 0, cache: Default::default() }));
     }
 
@@ -403,10 +414,49 @@ impl App {
         self.status = match self.state.store.set_grid_align(class, a) {
             Ok(next) => {
                 self.align = next;
-                format!("Grid alignment: {} on the {} — saved for the GUI too", class_name(class), align_name(a).to_lowercase())
+                let to = if a == Align::Column { "where its column's type sits".to_string() } else { format!("on the {}", align_name(a).to_lowercase()) };
+                format!("Grid alignment: {} {to} — saved for the GUI too", class_name(class))
             }
             Err(e) => format!("Couldn't save the grid alignment: {e}"),
         };
+    }
+
+    /// ⌃K › Theme…: Auto (light on a light terminal background, from COLORFGBG), Dark or Light. Opened on the current one (Enter keeps it)
+    pub fn palette_theme(&mut self) {
+        let auto = if self.auto_light { "light now" } else { "dark now" };
+        let items = Theme::ALL
+            .into_iter()
+            .map(|t| {
+                let hint = match t {
+                    Theme::Auto => format!("follows the terminal background (COLORFGBG): {auto}"),
+                    Theme::Dark => "for a dark terminal background".into(),
+                    Theme::Light => "for a light terminal background".into(),
+                };
+                PItem { label: format!("{} {}", if t == self.theme { "●" } else { " " }, t.name()), hint, action: PAction::Theme(t) }
+            })
+            .collect();
+        let sel = Theme::ALL.iter().position(|&t| t == self.theme).unwrap_or(0);
+        self.popup = Some(Popup::Palette(Palette { title: "Theme".into(), input: TextArea::default(), items, sel, loading: 0, cache: Default::default() }));
+    }
+
+    /// Switch to a theme now and save it in settings.json (a failed save still switches, for this session)
+    fn set_theme(&mut self, t: Theme) {
+        self.theme = t;
+        let colors = if t.light(self.auto_light) { "light" } else { "dark" };
+        self.status = match self.state.store.set_tui_theme(&t.name().to_lowercase()) {
+            Ok(()) => format!("Theme: {} — {colors} colors", t.name()),
+            Err(e) => format!("Couldn't save the theme: {e} — {} for this session only", t.name()),
+        };
+    }
+
+    /// Status line text at startup: one notice, so it fits the status text's half of an 80-cell line. Auto picking the light
+    /// palette comes first, since the colors changed by themselves (NO_COLOR draws no palette, so nothing changed there);
+    /// otherwise how to get more colors
+    pub fn startup_notice(&self) -> Option<String> {
+        if self.theme == Theme::Auto && self.auto_light && self.color != crate::theme::ColorMode::NoColor {
+            return Some(format!("Light palette — {} › Theme… › Dark to undo", self.keys.label(Action::Palette)));
+        }
+        self.color.notice().map(String::from)
     }
 
     /// New version window: changes since the current version (per version) + how to update

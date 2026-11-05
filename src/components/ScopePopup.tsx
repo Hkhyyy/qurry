@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { ConnectionView, meta, Scope, SCOPE_ALL, SCOPE_DEFAULT, SchemaInfo, targetId } from "../lib/api";
+import { ConnectionView, isSystemDb, meta, Scope, SCOPE_ALL, SCOPE_DEFAULT, SchemaInfo, targetId } from "../lib/api";
+import { toggleScoped } from "../lib/scopeToggle";
 import { Badge, Checkbox, Hint, IconButton, Notice, Spacer, Text, Toolbar, TreeRow } from "../ui";
 
 /**
@@ -80,8 +81,8 @@ export function ScopePopup({ conn, dbs, defaultDb, focusDb, x, y, onApply, onClo
   const dbChecked = (db: string) => allDbs || dbList.includes(db) || (defDb && db === defaultDb);
   const dbImplicit = (db: string) => !dbList.includes(db) && dbChecked(db); // Checked only by the all/default rules
   const setDbs = (next: string[]) => setScope((s) => ({ ...s, databases: next.length ? next : null }));
-  const toggleDbFlag = (flag: string) => setDbs(dbList.includes(flag) ? dbList.filter((d) => d !== flag) : [...dbList, flag]);
-  const toggleDb = (db: string) => setDbs(dbList.includes(db) ? dbList.filter((d) => d !== db) : [...dbList, db]);
+  // System databases / schemas stay out of the list that replaces All (they'd show up in the tree) unless checked one by one
+  const toggleDb = (db: string) => setDbs(toggleScoped(dbList, db, dbs.filter((d) => d === defaultDb || !isSystemDb(conn.kind, d)), defaultDb));
 
   // ─ Schema check state ─
   // A DB with no schema filter = everything shown → displayed as "All schemas" checked
@@ -94,8 +95,8 @@ export function ScopePopup({ conn, dbs, defaultDb, focusDb, x, y, onApply, onClo
       return { ...s, schemas: all };
     });
   const toggleSch = (db: string, name: string) => {
-    const cur = schList(db);
-    setSch(db, cur.includes(name) ? cur.filter((x) => x !== name) : [...cur, name]);
+    const sch = schemas[db];
+    setSch(db, toggleScoped(schList(db), name, Array.isArray(sch) ? sch.filter((s) => !s.isSystem).map((s) => s.name) : [], "public"));
   };
   const schChecked = (db: string, name: string) => {
     const cur = schList(db);
@@ -126,8 +127,8 @@ export function ScopePopup({ conn, dbs, defaultDb, focusDb, x, y, onApply, onClo
         <IconButton title="Close (Esc)" onClick={onClose}>—</IconButton>
       </Toolbar>
       <div className="sp-list" role="tree">
-        <TreeRow depth={0} leaf leading={<Checkbox checked={allDbs} onChange={() => toggleDbFlag(SCOPE_ALL)} />} label="All databases" />
-        <TreeRow depth={0} leaf leading={<Checkbox checked={defDb} onChange={() => toggleDbFlag(SCOPE_DEFAULT)} />} label="Default database" sub={`(${defaultDb})`} />
+        <TreeRow depth={0} leaf leading={<Checkbox checked={allDbs} onChange={() => toggleDb(SCOPE_ALL)} />} label="All databases" />
+        <TreeRow depth={0} leaf leading={<Checkbox checked={defDb} onChange={() => toggleDb(SCOPE_DEFAULT)} />} label="Default database" sub={`(${defaultDb})`} />
         {dbs.map((db) => {
           const sch = schemas[db];
           const isOpen = open.has(db);

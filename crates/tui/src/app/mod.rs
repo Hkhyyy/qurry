@@ -44,6 +44,8 @@ pub struct Console {
     pub session: String,
     pub grid: Option<Grid>,
     pub result_title: String,
+    /// The statement the grid shows the result of (run again after its edits are submitted)
+    pub result_sql: String,
     pub output: Vec<(bool, String)>,
     pub show_output: bool,
     pub running: bool,
@@ -51,6 +53,91 @@ pub struct Console {
     pub in_tx: bool,
     /// Open autocomplete list
     pub complete: Option<Completion>,
+    /// Gutter marks of the statements runs executed
+    pub marks: Marks,
+}
+
+/// How a run statement's gutter mark shows it (DataGrip): … running, ✓ done, ✗ failed (symbols, so NO_COLOR reads them too)
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum MarkState {
+    Running,
+    Ok,
+    Err,
+}
+
+impl MarkState {
+    pub fn symbol(self) -> char {
+        match self {
+            MarkState::Running => '…',
+            MarkState::Ok => '✓',
+            MarkState::Err => '✗',
+        }
+    }
+}
+
+/// A run statement's editor rows (first, last) and its state (None until it starts). `stmt`: its index in the latest run
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Mark {
+    pub rows: (usize, usize),
+    pub state: Option<MarkState>,
+    stmt: Option<usize>,
+}
+
+/// The console's gutter marks and the editor lines their rows refer to. Edits move them along (`follow`): marks below the changed
+/// lines shift, marks on them are dropped (their statement was edited)
+#[derive(Default)]
+pub struct Marks {
+    list: Vec<Mark>,
+    lines: Vec<String>,
+}
+
+impl Marks {
+    /// Follow the edits from the lines the marks refer to, to `now`
+    pub fn follow(&mut self, now: &[String]) {
+        if self.list.is_empty() || self.lines == now {
+            return;
+        }
+        let old = &self.lines;
+        let same = old.iter().zip(now).take_while(|(a, b)| a == b).count();
+        let tail = old[same..].iter().rev().zip(now[same..].iter().rev()).take_while(|(a, b)| a == b).count();
+        let (changed_end, added) = (old.len() - tail, now.len() as isize - old.len() as isize);
+        self.list.retain_mut(|m| match m.rows {
+            (_, last) if last < same => true,
+            (first, last) if first >= changed_end => {
+                m.rows = ((first as isize + added) as usize, (last as isize + added) as usize);
+                true
+            }
+            _ => false,
+        });
+        self.lines = now.to_vec();
+    }
+
+    /// A run is about to start over the statements on these rows of `now` (in order): they are marked as they run
+    pub fn start(&mut self, now: &[String], rows: &[(usize, usize)]) {
+        self.follow(now);
+        self.list.retain(|m| m.state.is_some());
+        self.list.iter_mut().for_each(|m| m.stmt = None);
+        self.list.extend(rows.iter().enumerate().map(|(i, &rows)| Mark { rows, state: None, stmt: Some(i) }));
+        self.lines = now.to_vec();
+    }
+
+    /// Statement i of the latest run is running, done or failed. Once one runs, the marks of earlier runs go: the gutter shows
+    /// only the latest run (not when it starts, which may still be cancelled)
+    pub fn set(&mut self, now: &[String], i: usize, state: MarkState) {
+        self.follow(now);
+        if !self.list.iter().any(|m| m.stmt == Some(i)) {
+            return;
+        }
+        self.list.retain(|m| m.stmt.is_some());
+        if let Some(m) = self.list.iter_mut().find(|m| m.stmt == Some(i)) {
+            m.state = Some(state);
+        }
+    }
+
+    /// The mark drawn on an editor row (a statement's first)
+    pub fn at(&self, row: usize) -> Option<MarkState> {
+        self.list.iter().filter(|m| m.rows.0 == row).find_map(|m| m.state)
+    }
 }
 
 /// Max lines kept in the console Output log (same as the GUI)
@@ -73,6 +160,17 @@ pub struct Completion {
     pub sel: usize,
     /// Length of the prefix to replace (the word before the cursor)
     pub prefix: usize,
+}
+
+/// What a table tab's WHERE / ORDER BY input completes against (complete::suggest_filter): the console's metadata of the tab's
+/// target, or only the tab's own columns while that loads
+pub struct FilterSource {
+    pub meta: Arc<complete::Meta>,
+    pub schema: String,
+    pub table: String,
+    pub order_by: bool,
+    pub db: String,
+    pub mysql: bool,
 }
 
 /// Editor split (the GUI's Split Right / Split Down). Each pane (group) has its own tab bar
@@ -259,6 +357,22 @@ pub struct Tab {
     pub stale: bool,
 }
 
+impl Tab {
+    /// What a run or a load-more in flight says in the status line (as the GUI's RunningBar), or None when the tab isn't busy
+    pub fn busy(&self) -> Option<String> {
+        let (running, grid, what) = match &self.kind {
+            TabKind::Console(c) => (c.running, c.grid.as_ref(), "Executing".to_string()),
+            TabKind::Table(tt) => (tt.running, tt.grid.as_ref(), format!("Loading {}.{}", tt.schema, tt.table)),
+            _ => return None,
+        };
+        if running {
+            Some(what)
+        } else {
+            grid.is_some_and(|g| g.loading_more).then(|| "Loading more rows".into())
+        }
+    }
+}
+
 // ───────── Popups ─────────
 
 #[derive(Clone)]
@@ -283,7 +397,7 @@ pub enum PAction {
     Object { conn: String, db: String, e: IndexEntryLite },
     Tab(u64),
     /// Statements picked in the execution picker popup
-    Run { stmts: Vec<String>, explain: bool },
+    Run { stmts: Vec<String>, rows: Vec<(usize, usize)>, explain: bool },
     /// Change execution settings
     Exec(qurry_core::exec::ExecSettings),
     /// Update channel picked
@@ -292,6 +406,8 @@ pub enum PAction {
     AlignClass(qurry_core::format::ValueClass),
     /// Grid alignment: where a value class sits, picked
     Align(qurry_core::format::ValueClass, qurry_core::format::Align),
+    /// Theme picked
+    Theme(crate::theme::Theme),
 }
 #[derive(Clone)]
 pub struct IndexEntryLite {
@@ -387,9 +503,9 @@ pub enum Popup {
     Message { title: String, text: String },
     /// A Message over another popup (Production Log's note over the log): closing it goes back there, as it was
     Note { title: String, text: String, back: Box<Popup> },
-    /// Single-line input. words = autocomplete candidates (columns·keywords for table WHERE/ORDER BY), complete = open list (candidates, selection, prefix length to replace)
+    /// Single-line input. filter = a table tab's WHERE / ORDER BY completes like the console, complete = its open list
     /// body = app-written explanation shown in a box under the input (never interpolated names, so a name can't pose as it)
-    Input { title: String, body: String, input: TextArea<'static>, on_ok: Box<dyn FnOnce(&mut App, String)>, words: Vec<String>, complete: Option<(Vec<String>, usize, usize)> },
+    Input { title: String, body: String, input: TextArea<'static>, on_ok: Box<dyn FnOnce(&mut App, String)>, filter: Option<FilterSource>, complete: Option<Completion> },
     /// `opened` is set when the confirm comes up on its own (open_after_notices, or a notice over it closing): then, as for
     /// AllowPlaintext, y / Enter count only after TLS_ASK_GRACE without any key, so typing meant for the editor or a form never answers it
     Confirm { text: String, on_yes: Box<dyn FnOnce(&mut App)>, opened: Option<std::time::Instant> },
@@ -413,6 +529,8 @@ pub enum Action {
     Connect,
     Disconnect,
     Refresh,
+    MarkNode,
+    DropObject,
     Execute,
     Explain,
     ExplainAnalyze,
@@ -437,6 +555,7 @@ pub enum Action {
     SetNull,
     ExportCsv,
     CopyInList,
+    MarkRow,
     ValueEditor,
     FindSimilar,
     RagSearch,
@@ -498,6 +617,7 @@ pub enum Action {
     ManageSchemas,
     PasswordKey,
     GridAlign,
+    Theme,
     CheckUpdate,
     UpdateChannel,
     InstallUpdate,
@@ -638,6 +758,9 @@ pub struct App {
     pub ws_synced: bool,
     /// What the terminal can show (set from the environment at startup; drawing maps the frame to it)
     pub color: crate::theme::ColorMode,
+    /// The Theme setting (settings.json, read at startup and by ⌃k › Theme…) and what Auto picks for this terminal (COLORFGBG, set at startup)
+    pub theme: crate::theme::Theme,
+    pub auto_light: bool,
     /// Grid alignment per value class, shared with the GUI's Settings › Appearance › Alignment (settings.json, read at startup and by ⌃k › Grid Alignment…)
     pub align: qurry_core::format::Alignments,
     /// The last frame was the 'terminal too small' message: keys and clicks would act on a screen that isn't drawn
@@ -674,6 +797,7 @@ impl App {
             Err(e) => (Default::default(), Some(format!("keymap.json ignored ({e}) — default keys in use; fix or delete {} and restart", state.store.dir().join("keymap.json").display()))),
         };
         let align = state.store.grid_align();
+        let theme = crate::theme::Theme::parse(state.store.tui_theme().as_deref());
         let mut a = App {
             align,
             hits: Hits::default(),
@@ -714,6 +838,8 @@ impl App {
             ws_shared: None,
             ws_synced: false,
             color: Default::default(),
+            theme,
+            auto_light: false,
             too_small: false,
             #[cfg(test)]
             fake_db: None,
@@ -789,24 +915,19 @@ pub fn elapsed_text(ms: u64) -> String {
 }
 
 impl App {
-    /// Elapsed time if this tab is running · loading (since first seen)
+    /// Elapsed time if this tab is running · loading more (since first seen)
     pub fn run_elapsed(&mut self, idx: usize) -> Option<std::time::Duration> {
         let t = self.tabs.get(idx)?;
-        let running = match &t.kind {
-            TabKind::Console(c) => c.running,
-            TabKind::Table(tt) => tt.running,
-            _ => false,
-        };
-        if !running {
+        if t.busy().is_none() {
             self.run_since.remove(&t.id);
             return None;
         }
         Some(self.run_since.entry(t.id).or_insert_with(std::time::Instant::now).elapsed())
     }
 
-    /// If a tab is running, the elapsed time needs redrawing
+    /// If a tab is running or loading more, the elapsed time needs redrawing
     pub fn any_running(&self) -> bool {
-        self.tabs.iter().any(|t| matches!(&t.kind, TabKind::Console(c) if c.running) || matches!(&t.kind, TabKind::Table(tt) if tt.running))
+        self.tabs.iter().any(|t| t.busy().is_some())
             || matches!(&self.popup, Some(Popup::ConnForm(f)) if f.testing.is_some())
     }
 }

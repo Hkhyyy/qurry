@@ -141,3 +141,34 @@ test("AWS SSM: a Test Connection that keeps starting shows the elapsed time and 
   await page.keyboard.press("Escape");
   await expect(dialog(page)).toHaveCount(0);
 });
+
+// Same rule as Manage Shown Schemas: under All, every database / schema shows checked; unchecking one keeps the others, checking
+// every one is All again
+test("Schemas tab: unchecking one database or schema under All keeps the others; checking every one is All again", async ({ page }) => {
+  await treeNode(page, "[DEV] shop_app").click({ button: "right" });
+  await page.getByRole("menuitem", { name: /^Properties/ }).click();
+  const d = dialog(page);
+  await d.getByRole("tab", { name: /^Schemas/ }).click();
+  const box = (name: string) => d.locator(".scope-list").getByRole("checkbox", { name, exact: true });
+  await expect(box("All databases")).toBeChecked();
+  await expect(box("shop_app_test")).toBeChecked();
+  await box("shop_app_test").click();
+  await expect(box("All databases")).not.toBeChecked();
+  await expect(box("shop_app_test")).not.toBeChecked();
+  await expect(box("postgres")).toBeChecked();
+  await expect(box("shop_app")).toBeChecked();
+  await expect(d.getByRole("tab", { name: "Schemas ●" })).toBeVisible();
+  await box("shop_app_test").click();
+  await expect(box("All databases")).toBeChecked();
+  await expect(d.getByRole("tab", { name: "Schemas", exact: true })).toBeVisible();
+
+  const row = d.locator(".scope-row", { has: page.getByRole("checkbox", { name: "shop_app", exact: true }) });
+  await row.locator(".twisty").click();
+  await expect(box("billing")).toBeChecked();
+  await box("billing").click();
+  await expect(box("billing")).not.toBeChecked();
+  await expect(box("public")).toBeChecked();
+  await expect(row).toContainText("1 schemas");
+  await box("billing").click();
+  await expect(row).toContainText("all schemas");
+});

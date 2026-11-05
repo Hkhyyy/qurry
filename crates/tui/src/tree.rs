@@ -48,6 +48,8 @@ pub struct Tree {
     pub filter: String,
     /// Horizontal scroll (long names)
     pub hoff: usize,
+    /// Marked nodes (keys): Go to DDL, open, copy, drop and refresh act on them instead of the cursor's node
+    pub marked: HashSet<String>,
 }
 
 /// Case-insensitive contains check. ASCII names don't allocate a new string (called per node every time the tree is drawn)
@@ -92,6 +94,25 @@ impl Tree {
         self.visible().get(self.sel).map(|(_, n)| (*n).clone())
     }
 
+    /// Mark the cursor's node, or unmark it. Data sources, databases, schemas and objects can be marked (not folders or columns)
+    pub fn toggle_mark(&mut self) -> bool {
+        let Some(n) = self.selected().filter(|n| matches!(n.kind, NodeKind::Conn | NodeKind::Db | NodeKind::Schema | NodeKind::Object(_))) else {
+            return false;
+        };
+        if !self.marked.remove(&n.key) {
+            self.marked.insert(n.key);
+        }
+        true
+    }
+
+    /// The nodes a command for several acts on: the marked ones on screen (top to bottom), or else the cursor's node
+    pub fn targets(&self) -> Vec<Node> {
+        if self.marked.is_empty() {
+            return self.selected().into_iter().collect();
+        }
+        self.visible().into_iter().filter(|(_, n)| self.marked.contains(&n.key)).map(|(_, n)| n.clone()).collect()
+    }
+
     pub fn select_key(&mut self, key: &str) -> bool {
         if let Some(i) = self.visible().iter().position(|(_, n)| n.key == key) {
             self.sel = i;
@@ -102,6 +123,12 @@ impl Tree {
     }
 
     pub fn clamp(&mut self) {
+        // Marks of nodes that are gone (dropped, refreshed away) go too; marks inside collapsed folders stay
+        if !self.marked.is_empty() {
+            let known: HashSet<&str> = self.roots.iter().chain(self.children.values().flatten()).map(|n| n.key.as_str()).collect();
+            let keep: HashSet<String> = self.marked.iter().filter(|k| known.contains(k.as_str())).cloned().collect();
+            self.marked = keep;
+        }
         let n = self.visible().len();
         if n == 0 {
             self.sel = 0;

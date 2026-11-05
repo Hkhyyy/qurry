@@ -164,14 +164,10 @@ jobs:
 
       - name: Set version in manifests
         run: |
-          for f in crates/core/Cargo.toml crates/tui/Cargo.toml crates/mcp/Cargo.toml crates/driver/Cargo.toml src-tauri/Cargo.toml drivers/*/Cargo.toml; do
-            perl -0pi -e 's/^version = "[^"]*"/version = "$ENV{V}"/m' "$f"
-          done
+          scripts/set-version.sh "$V"
           for f in package.json src-tauri/tauri.conf.json; do
             perl -0pi -e 's/"version": "[^"]*"/"version": "$ENV{V}"/' "$f"
           done
-          # Sync only the workspace versions in Cargo.lock (external deps stay as locked → --locked build below)
-          cargo update --workspace
           git diff --stat
 
       - name: Install frontend dependencies
@@ -180,9 +176,6 @@ jobs:
       - name: Build GUI (unsigned)
         # Update bundles are built below and signed in the Sign step of publish (no signing key here)
         run: pnpm tauri build --target "$T" --bundles ${{ matrix.bundles }} --config '{"bundle":{"createUpdaterArtifacts":false}}' -- --locked
-
-      - name: Build TUI and MCP
-        run: cargo build --release --locked --target "$T" -p qurry-tui -p qurry-mcp
 
       - name: Package
         run: |
@@ -208,7 +201,55 @@ jobs:
               rm -rf "$d"
             fi
           fi
-          mkdir cli
+          ls -la out
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-${{ matrix.target }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 3
+
+  # CLI (qurry-tui, qurry-mcp): a job of its own, in parallel with the app build.
+  # Not in the build job: there the Tauri CLI sets MACOSX_DEPLOYMENT_TARGET for the GUI, so on macOS the CLI build after it
+  #   recompiled every C-built dependency (ring, aws-lc-sys) and all that depends on them (3.8 min of a 13 min warm job).
+  # Not in the drivers job: the drivers don't depend on qurry-core, so on a cold cache (11–15 min already) the CLI would add
+  #   the whole qurry-core tree to it and make it the slowest job.
+  cli:
+    needs: version
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: macos-14, target: aarch64-apple-darwin }
+          - { os: macos-14, target: x86_64-apple-darwin }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+    runs-on: ${{ matrix.os }}
+    env:
+      V: ${{ needs.version.outputs.version }}
+      T: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: cli-${{ matrix.target }}
+
+      - name: Set version in manifests
+        run: scripts/set-version.sh "$V"
+
+      - name: Build TUI and MCP
+        run: cargo build --release --locked --target "$T" -p qurry-tui -p qurry-mcp
+
+      - name: Package
+        run: |
+          mkdir out cli
           cp "target/$T/release/qurry-tui" "target/$T/release/qurry-mcp" cli/
           if [ "$T" = aarch64-apple-darwin ]; then
             # Old names dbtool-tui · dbtool-mcp (same binaries) + dbtool-cli_ bundle: so 0.1.x installs can update
@@ -223,7 +264,7 @@ jobs:
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: dist-${{ matrix.target }}
+          name: dist-cli-${{ matrix.target }}
           path: out/*
           if-no-files-found: error
           retention-days: 3
@@ -258,11 +299,7 @@ jobs:
           key: drivers-${{ matrix.target }}
 
       - name: Set version in manifests
-        run: |
-          for f in crates/core/Cargo.toml crates/tui/Cargo.toml crates/mcp/Cargo.toml crates/driver/Cargo.toml src-tauri/Cargo.toml drivers/*/Cargo.toml; do
-            perl -0pi -e 's/^version = "[^"]*"/version = "$ENV{V}"/m' "$f"
-          done
-          cargo update --workspace
+        run: scripts/set-version.sh "$V"
 
       - name: Build drivers
         run: |
@@ -286,7 +323,7 @@ jobs:
           retention-days: 3
 
   publish:
-    needs: [version, build, drivers]
+    needs: [version, build, cli, drivers]
     if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     permissions:

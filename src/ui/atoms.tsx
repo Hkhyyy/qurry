@@ -85,9 +85,9 @@ export function Swatch({ color, selected, title, onClick, size = 18 }: { color: 
   );
 }
 
-/** Progress bar. pct = null means remaining amount unknown (bounces back and forth) */
-export const ProgressBar = ({ pct, width = 120 }: { pct: number | null; width?: number }) => (
-  <span className={cx("ui-progress", pct === null && "busy")} style={{ width }} role="progressbar" aria-valuenow={pct ?? undefined}>
+/** Progress bar. pct = null means remaining amount unknown (bounces back and forth); label = its accessible name */
+export const ProgressBar = ({ pct, width = 120, label }: { pct: number | null; width?: number; label?: string }) => (
+  <span className={cx("ui-progress", pct === null && "busy")} style={{ width }} role="progressbar" aria-valuenow={pct ?? undefined} aria-label={label}>
     <span style={pct === null ? undefined : { width: `${pct}%` }} />
   </span>
 );

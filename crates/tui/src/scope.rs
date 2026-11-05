@@ -30,6 +30,8 @@ pub struct ScopeEditor {
     pub conn: String,
     pub dbs: Vec<String>,
     pub default_db: String,
+    /// The databases that aren't system ones (MySQL's mysql, sys …): the list that replaces All databases, set by the caller
+    pub user_dbs: Vec<String>,
     /// DBs to show ("*" = all, "@default" = default DB)
     databases: Vec<String>,
     /// DB → schemas to show (none = all)
@@ -47,7 +49,7 @@ impl ScopeEditor {
             Some(d) if !d.is_empty() => d.clone(),
             _ => vec![SCOPE_ALL.into()],
         };
-        let mut e = ScopeEditor { conn, dbs, default_db, databases, schemas: scope.schemas.clone(), open: HashSet::new(), loaded: HashMap::new(), sel: 0 };
+        let mut e = ScopeEditor { conn, user_dbs: dbs.clone(), dbs, default_db, databases, schemas: scope.schemas.clone(), open: HashSet::new(), loaded: HashMap::new(), sel: 0 };
         if let Some(db) = focus_db {
             e.open.insert(db.to_string());
             e.sel = e.rows().iter().position(|r| *r == Row::Db(db.to_string())).unwrap_or(0);
@@ -114,14 +116,26 @@ impl ScopeEditor {
         let (db, x) = match row {
             Row::AllDbs => return flip(&mut self.databases, SCOPE_ALL),
             Row::DefaultDb => return flip(&mut self.databases, SCOPE_DEFAULT),
-            Row::Db(db) => return flip(&mut self.databases, &db),
+            Row::Db(db) => {
+                self.databases = toggle_scoped(std::mem::take(&mut self.databases), &db, &self.user_dbs, &self.default_db);
+                return;
+            }
             Row::Note(..) => return,
             Row::AllSchemas(db) => (db, SCOPE_ALL.to_string()),
             Row::DefaultSchema(db) => (db, SCOPE_DEFAULT.to_string()),
             Row::Schema { db, name, .. } => (db, name),
         };
         let mut cur = self.sch_list(&db);
-        flip(&mut cur, &x);
+        if x == SCOPE_ALL || x == SCOPE_DEFAULT {
+            flip(&mut cur, &x);
+        } else {
+            // System schemas stay out of the list that replaces All (they'd show up in the tree) unless checked one by one
+            let listed: Vec<String> = match self.loaded.get(&db) {
+                Some(Ok(list)) => list.iter().filter(|s| !s.is_system).map(|s| s.name.clone()).collect(),
+                _ => vec![],
+            };
+            cur = toggle_scoped(cur, &x, &listed, "public");
+        }
         if cur.is_empty() {
             self.schemas.remove(&db);
         } else {
@@ -166,6 +180,28 @@ impl ScopeEditor {
             schemas: self.schemas.iter().filter(|(_, v)| !all(v)).map(|(k, v)| (k.clone(), v.clone())).collect(),
         }
     }
+}
+
+/// One click on a database line, or on a schema line (DataGrip rules, same as the GUI's src/lib/scopeToggle.ts): with All on,
+/// unchecking one keeps the other listed ones checked (Default as it was); checking the last unchecked one turns All back on.
+/// def = what "@default" stands for (the source's default database, or public)
+fn toggle_scoped(mut cur: Vec<String>, name: &str, listed: &[String], def: &str) -> Vec<String> {
+    if cur.iter().any(|x| x == SCOPE_ALL) {
+        cur.retain(|x| x == SCOPE_DEFAULT);
+        cur.extend(listed.iter().filter(|x| *x != name).cloned());
+        return cur;
+    }
+    if let Some(i) = cur.iter().position(|x| x == name) {
+        cur.remove(i);
+    } else {
+        cur.push(name.to_string());
+    }
+    let has_default = cur.iter().any(|x| x == SCOPE_DEFAULT);
+    if listed.iter().all(|s| cur.contains(s) || (s == def && has_default)) {
+        cur.retain(|x| x == SCOPE_DEFAULT);
+        cur.push(SCOPE_ALL.into());
+    }
+    cur
 }
 
 #[cfg(test)]
@@ -235,11 +271,12 @@ mod tests {
         );
         // With no filter, All schemas is checked
         assert_eq!(e.check(&Row::AllSchemas("shop".into())), Check::On);
-        // Same order as the GUI: turn on sales and turn off All schemas (turning everything off goes back to "all")
-        select(&mut e, Row::Schema { db: "shop".into(), name: "sales".into(), system: false });
+        // Same as the GUI: unchecking the other schemas under All schemas leaves only sales
+        select(&mut e, Row::Schema { db: "shop".into(), name: "pg_catalog".into(), system: true });
         e.toggle();
-        select(&mut e, Row::AllSchemas("shop".into()));
+        select(&mut e, Row::Schema { db: "shop".into(), name: "public".into(), system: false });
         e.toggle();
+        assert_eq!(e.check(&Row::AllSchemas("shop".into())), Check::Off);
         assert_eq!(e.check(&Row::Schema { db: "shop".into(), name: "public".into(), system: false }), Check::Off);
         assert_eq!(e.scope().schemas.get("shop"), Some(&vec!["sales".to_string()]));
         // On a schema line, ← goes to the DB, and another ← collapses it
@@ -263,6 +300,64 @@ mod tests {
         assert_eq!(e.check(&Row::Schema { db: "shop".into(), name: "public".into(), system: false }), Check::On);
         assert_eq!(e.check(&Row::Schema { db: "shop".into(), name: "sales".into(), system: false }), Check::Off);
         assert_eq!(e.scope(), scope);
+    }
+
+    /// DataGrip rules: with All schemas on, unchecking one schema turns All off and keeps the others checked
+    /// (Default schema as it was); checking the last unchecked one turns All back on
+    #[test]
+    fn unchecking_a_schema_under_all_keeps_the_others() {
+        let mut e = editor(Scope::default());
+        select(&mut e, Row::Db("shop".into()));
+        e.expand();
+        e.set_schemas("shop", Ok(sch(&[("public", false), ("sales", false), ("pg_catalog", true)])));
+        select(&mut e, Row::DefaultSchema("shop".into()));
+        e.toggle();
+        let s = |name: &str| Row::Schema { db: "shop".into(), name: name.into(), system: name == "pg_catalog" };
+        select(&mut e, s("sales"));
+        e.toggle();
+        assert_eq!(e.check(&Row::AllSchemas("shop".into())), Check::Off);
+        assert_eq!(e.check(&Row::DefaultSchema("shop".into())), Check::On);
+        assert_eq!(e.check(&s("sales")), Check::Off);
+        assert_eq!(e.check(&s("public")), Check::On);
+        // System schemas don't join the list that replaces All
+        assert_eq!(e.check(&s("pg_catalog")), Check::Off);
+        assert_eq!(e.scope().schemas.get("shop"), Some(&vec![SCOPE_DEFAULT.to_string(), "public".into()]));
+        // Checking it again: every schema is checked, so All comes back (not the long list)
+        e.toggle();
+        assert_eq!(e.check(&Row::AllSchemas("shop".into())), Check::On);
+        assert_eq!(e.scope().schemas.get("shop"), Some(&vec![SCOPE_DEFAULT.to_string(), SCOPE_ALL.to_string()]));
+    }
+
+    /// Same rule for databases: with All databases on, unchecking one turns All off and keeps the others (Default database as it was,
+    /// each database's schema filter untouched); checking the last unchecked one turns All back on
+    #[test]
+    fn unchecking_a_database_under_all_keeps_the_others() {
+        let scope = Scope { databases: None, schemas: HashMap::from([("app".to_string(), vec!["public".to_string()])]) };
+        let mut e = editor(scope);
+        select(&mut e, Row::Db("shop".into()));
+        e.toggle();
+        assert_eq!(e.check(&Row::AllDbs), Check::Off);
+        assert_eq!(e.check(&Row::Db("shop".into())), Check::Off);
+        assert_eq!(e.check(&Row::Db("app".into())), Check::On);
+        assert_eq!(e.check(&Row::Db("postgres".into())), Check::On);
+        assert_eq!(e.scope().databases, Some(vec!["app".to_string(), "postgres".into()]));
+        assert_eq!(e.scope().schemas.get("app"), Some(&vec!["public".to_string()]));
+        e.toggle();
+        assert_eq!(e.check(&Row::AllDbs), Check::On);
+        assert_eq!(e.scope().databases, None);
+    }
+
+    /// System databases (user_dbs leaves them out) don't join the list that replaces All databases; every user database checked is All
+    #[test]
+    fn system_databases_stay_out_of_the_list_that_replaces_all() {
+        let mut e = ScopeEditor::new("c1".into(), vec!["mysql".into(), "shop".into(), "sales".into()], "shop".into(), &Scope::default(), None);
+        e.user_dbs = vec!["shop".into(), "sales".into()];
+        select(&mut e, Row::Db("sales".into()));
+        e.toggle();
+        assert_eq!(e.check(&Row::Db("mysql".into())), Check::Off);
+        assert_eq!(e.scope().databases, Some(vec!["shop".to_string()]));
+        e.toggle();
+        assert_eq!(e.scope().databases, None);
     }
 
     /// On failure, show the error on that line

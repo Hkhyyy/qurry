@@ -202,9 +202,22 @@ a { color: var(--c-548af7); cursor: pointer; }
 .editor-area { flex: 1; min-height: 0; position: relative; background: var(--bg); }
 .editor-host { position: absolute; inset: 0; }
 .exec-highlight { background: rgba(53,116,240,.25); }
+/* What the highlighted Statements popup option would run */
+.stmt-preview { background: var(--sel); }
+/* Gutter marks of executed statements (DataGrip): done ✓, failed ✗, running (spinning arc); the icon is a mask so it takes the theme's color.
+   Monaco puts the classes of all marks on a line on one element, so the later rule wins: failed over running over done (shownMark) */
+.stmt-mark { cursor: pointer; }
+.stmt-mark::before { content: ""; position: absolute; inset: 0; margin: auto; width: 12px; height: 12px; background: var(--ui-ok); -webkit-mask: var(--mark) center / contain no-repeat; mask: var(--mark) center / contain no-repeat; }
+.stmt-mark.ok { --mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 8.5 6.5 12 13 4.5'/%3E%3C/svg%3E"); }
+.stmt-mark.running::before { background: var(--ui-accent); animation: spin 1s linear infinite; }
+.stmt-mark.running { --mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M8 2.5a5.5 5.5 0 1 1-5.5 5.5'/%3E%3C/svg%3E"); }
+.stmt-mark.error::before { background: var(--ui-danger); animation: none; }
+.stmt-mark.error { --mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M4 4l8 8M12 4l-8 8'/%3E%3C/svg%3E"); }
+.ol.on { background: var(--ui-selected); }
 
 .result-area { flex: 1; min-height: 0; position: relative; background: var(--bg); }
-.running-bar { position: absolute; z-index: 5; top: 8px; right: 12px; display: flex; align-items: center; gap: 10px; padding: 6px 10px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); white-space: nowrap; }
+/* A run or load-more of the focused tab, in the status bar where its text is */
+.running-bar { display: inline-flex; align-items: center; gap: 8px; margin-left: 6px; min-width: 0; white-space: nowrap; }
 .plan-table { user-select: text; }
 .plan-tools.ui-toolbar { height: 30px; border-bottom: 1px solid var(--border); }
 .running-time { font-variant-numeric: tabular-nums; }
@@ -245,7 +258,8 @@ button.small { padding: 1px 8px; font-size: 12px; font-weight: 400; }
 .grid-toolbar .sep { width: 1px; height: 16px; background: var(--border); margin: 0 2px; }
 .grid-toolbar .muted { margin-left: 8px; }
 .grid-loading { position: sticky; left: 0; bottom: 0; padding: 4px 12px; color: var(--muted); background: var(--panel); font-size: 12px; }
-.grid-more-error { color: var(--danger); white-space: normal; user-select: text; }
+/* A failed load-more beside the row count: it covers no row */
+.grid-more-error { margin-left: 8px; min-width: 0; color: var(--danger); user-select: text; }
 .sql-preview { max-height: 360px; color: var(--c-cf8e6d); }
 input:disabled, select:disabled { opacity: .45; }
 .ssh-badge { flex: none; font-size: 9px; font-weight: 700; padding: 0 4px; border-radius: 3px; border: 1px solid var(--c-8a8d93); color: var(--c-c9ccd1); }
@@ -388,7 +402,7 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .console-pane > [data-panel-group] { flex: 1; min-height: 0; }
 .console-toolbar .tb.run { color: var(--ok); font-size: 12px; }
 .console-toolbar .cb-ds { color: var(--muted); font-size: 12px; margin-right: 4px; }
-.console-toolbar .cb-sel { height: 22px; padding: 0 6px; font-size: 12px; max-width: 200px; margin-left: 4px; }
+.console-toolbar .cb-sel { height: 22px; padding: 0 6px; font-size: 12px; max-width: 200px; margin-left: 4px; text-overflow: ellipsis; }
 .editor-area { position: relative; }
 .stmt-chooser { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 30; min-width: 420px; max-width: 80%; background: var(--c-2b2d30); border: 1px solid var(--c-4e5157); border-radius: 8px; box-shadow: 0 10px 28px rgba(0,0,0,.5); padding: 4px; outline: none; }
 .sc-title { padding: 4px 10px 6px; color: var(--muted); font-size: 12px; }
@@ -448,6 +462,7 @@ pre.grid-overlay { text-align: left; background: var(--bg); }
 .font-picker { flex: 1; padding-right: var(--ui-sp-2); min-width: 0; display: flex; align-items: center; gap: var(--ui-sp-2); text-align: left; cursor: default; }
 .font-picker-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .font-picker-note { flex: none; font-size: var(--ui-fs-sm); color: var(--ui-warn); }
+.font-picker-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--ui-sp-3); }
 .font-picker-arrow { flex: none; display: flex; margin: 0 -4px 0 auto; color: var(--ui-text-muted); }
 /* Settings › Appearance › Alignment: one row per value class; a changed class in the keymap editor's "custom" color */
 .align-grid { display: grid; grid-template-columns: 110px 120px; gap: var(--ui-sp-2) var(--ui-sp-3); align-items: center; }
@@ -593,7 +608,8 @@ html, body, #root, * { overscroll-behavior: none; }
 /* DBA reports */
 .dba { display: flex; flex-direction: column; height: 100%; }
 .dba-bar { gap: var(--ui-sp-3); }
-.dba-bar select { min-width: 220px; }
+.dba-bar .dba-report { min-width: 220px; }
+.dba-bar .dba-db { min-width: 140px; max-width: 240px; text-overflow: ellipsis; }
 .dba-auto { display: flex; gap: 4px; align-items: center; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .dba-help { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dba-hint { font-size: 11px; padding: 2px 10px; }
@@ -648,7 +664,13 @@ html, body, #root, * { overscroll-behavior: none; }
 /* Workspaces (far left) */
 .ws-row { flex: 1; min-height: 0; display: flex; }
 .ws-row > .main { flex: 1; min-width: 0; }
-.ws-bar { width: 52px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 0; border-right: 1px solid var(--border); background: var(--panel-2); overflow-y: auto; }
+/* Workspace list scrolls; the footer (Keymap · Settings) stays pinned at the bottom, like the gear in JetBrains' and VS Code's activity bar */
+.ws-bar { width: 52px; flex: none; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--panel-2); min-height: 0; }
+.ws-list { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 0; overflow-y: auto; scrollbar-width: none; }
+/* No scrollbar in a 52px rail (it would squeeze the items): wheel and trackpad scroll it, like the tab strip */
+.ws-list::-webkit-scrollbar { display: none; }
+.ws-foot { flex: none; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 0 8px; border-top: 1px solid var(--border); }
+.ws-foot .ui-icon-btn { width: 30px; height: 30px; }
 .ws-add.ui-icon-btn { width: 30px; height: 30px; border: 1px dashed var(--ui-border); border-radius: 8px; }
 .text-dialog-choices { margin-top: var(--ui-sp-4); }
 .ws-explorer { height: 100%; }

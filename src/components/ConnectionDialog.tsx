@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Button, Checkbox, ColorPicker, EmptyState, FormGrid, FormSection, Hint, Modal, Notice, Select, Spacer, Tabs, Text, TextArea, TextInput, TlsOptIn } from "../ui";
 import { needsTlsOptIn } from "./TlsFix";
-import { api, COLOR_PRESETS, ConnOptions, RedisMode, SslConfig, ConnectionConfig, ConnectionView, DbKind, DEFAULT_PORT, DRIVER_MISSING, isFileKind, KIND_LABEL, meta, SchemaInfo, SshConfig, SsmConfig, targetId } from "../lib/api";
+import { api, COLOR_PRESETS, ConnOptions, RedisMode, SslConfig, ConnectionConfig, ConnectionView, DbKind, DEFAULT_PORT, defaultDbOf, DRIVER_MISSING, isFileKind, isSystemDb, KIND_LABEL, meta, SCOPE_ALL, SchemaInfo, SshConfig, SsmConfig, targetId } from "../lib/api";
+import { scopeChecked, toggleScoped } from "../lib/scopeToggle";
 import { elapsedText } from "./RunningBar";
 import { sharedOr, useSharedReady } from "../lib/shared";
 
@@ -408,7 +409,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
         </FormGrid>
       )}
 
-      {tab === "schemas" && <SchemasTab connId={edit?.id} scope={cfg.scope ?? {}} onChange={(scope) => setCfg((c) => ({ ...c, scope }))} />}
+      {tab === "schemas" && <SchemasTab connId={edit?.id} kind={cfg.kind} defaultDb={defaultDbOf(cfg)} scope={cfg.scope ?? {}} onChange={(scope) => setCfg((c) => ({ ...c, scope }))} />}
 
       {tab === "options" && (
         <FormGrid labelWidth={140}>
@@ -543,7 +544,7 @@ export function ColorSwatches({ value, onChange, custom }: { value: string | nul
 type Scope = NonNullable<ConnectionConfig["scope"]>;
 
 /** Schemas tab of DataGrip Data Source properties: choose which DBs and schemas show in the tree */
-function SchemasTab({ connId, scope, onChange }: { connId?: string; scope: Scope; onChange: (s: Scope) => void }) {
+function SchemasTab({ connId, kind, defaultDb, scope, onChange }: { connId?: string; kind: DbKind; defaultDb: string; scope: Scope; onChange: (s: Scope) => void }) {
   const [dbs, setDbs] = useState<string[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [schemas, setSchemas] = useState<Record<string, SchemaInfo[] | "loading">>({});
@@ -558,11 +559,14 @@ function SchemasTab({ connId, scope, onChange }: { connId?: string; scope: Scope
   if (err) return <Notice tone="danger">{err}</Notice>;
   if (!dbs) return <EmptyState>Loading databases…</EmptyState>;
 
-  const selDbs = scope.databases ?? [];
-  const allDbs = selDbs.length === 0;
+  // Same rules as Manage Shown Schemas (ScopePopup): no filter = All, stored as no filter
+  const isAll = (v: string[]) => !v.length || (v.length === 1 && v[0] === SCOPE_ALL);
+  const selDbs = scope.databases?.length ? scope.databases : [SCOPE_ALL];
+  const allDbs = selDbs.includes(SCOPE_ALL);
   const toggleDb = (db: string) => {
-    const next = selDbs.includes(db) ? selDbs.filter((d) => d !== db) : [...selDbs, db];
-    onChange({ ...scope, databases: next.length ? next : null });
+    // System databases stay out of the list that replaces All, as in Manage Shown Schemas
+    const next = toggleScoped(selDbs, db, dbs.filter((d) => d === defaultDb || !isSystemDb(kind, d)), defaultDb);
+    onChange({ ...scope, databases: isAll(next) ? null : next });
   };
   const loadSchemas = (db: string) => {
     setOpenDb(openDb === db ? null : db);
@@ -573,31 +577,32 @@ function SchemasTab({ connId, scope, onChange }: { connId?: string; scope: Scope
       () => setSchemas((s) => ({ ...s, [db]: [] })),
     );
   };
+  const schList = (db: string) => (scope.schemas?.[db]?.length ? scope.schemas[db] : [SCOPE_ALL]);
   const toggleSchema = (db: string, name: string) => {
-    const cur = scope.schemas?.[db] ?? [];
-    const next = cur.includes(name) ? cur.filter((x) => x !== name) : [...cur, name];
+    const sch = schemas[db];
+    const next = toggleScoped(schList(db), name, Array.isArray(sch) ? sch.map((x) => x.name) : [], "public");
     const all = { ...(scope.schemas ?? {}) };
-    if (next.length) all[db] = next;
-    else delete all[db];
+    if (isAll(next)) delete all[db];
+    else all[db] = next;
     onChange({ ...scope, schemas: all });
   };
 
   return (
     <div className="scope-list">
       <label className="scope-row all">
-        <input type="checkbox" checked={allDbs} onChange={() => onChange({ ...scope, databases: null })} /> All databases
+        <input type="checkbox" checked={allDbs} onChange={() => toggleDb(SCOPE_ALL)} /> All databases
       </label>
       {dbs.map((db) => {
         const sch = schemas[db];
-        const selSch = scope.schemas?.[db] ?? [];
+        const selSch = schList(db);
         return (
           <div key={db}>
             <div className="scope-row">
               <span className="twisty" onClick={() => loadSchemas(db)}>{openDb === db ? "▾" : "▸"}</span>
               <label>
-                <input type="checkbox" checked={selDbs.includes(db)} onChange={() => toggleDb(db)} /> {db}
+                <input type="checkbox" checked={scopeChecked(selDbs, db, defaultDb)} onChange={() => toggleDb(db)} /> {db}
               </label>
-              <Text tone="muted">{selSch.length ? `${selSch.length} schemas` : "all schemas"}</Text>
+              <Text tone="muted">{selSch.includes(SCOPE_ALL) ? "all schemas" : `${selSch.length} schemas`}</Text>
             </div>
             {openDb === db && (
               <div className="scope-children">
@@ -605,7 +610,7 @@ function SchemasTab({ connId, scope, onChange }: { connId?: string; scope: Scope
                 {Array.isArray(sch) &&
                   sch.map((x) => (
                     <label key={x.name} className="scope-row">
-                      <input type="checkbox" checked={selSch.includes(x.name)} onChange={() => toggleSchema(db, x.name)} /> {x.name}
+                      <input type="checkbox" checked={scopeChecked(selSch, x.name, "public")} onChange={() => toggleSchema(db, x.name)} /> {x.name}
                     </label>
                   ))}
               </div>

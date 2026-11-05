@@ -166,12 +166,15 @@ fn rules_the_tui_and_mcp_changed_to() {
     assert_eq!(automap::auto_map(&["a\u{feff}".into(), "a\u{85}".into()], Some(&cols)), ["a", ""]);
 }
 
-/// Value class and default alignment of a grid cell: one golden, the same for the TUI (here) and the GUI (src/lib/align.test.ts, through WASM)
+/// Value class and default alignment of a grid cell: one golden, the same for the TUI (here) and the GUI (src/lib/gridAlign.test.ts, through WASM).
+/// "column" = the column's values (only an untyped column's NULL reads them), else the cell alone
 #[test]
 fn value_classes_match_the_golden() {
     for e in read("goldens/valueclass.json").as_array().unwrap() {
-        let class = format::value_class(e["type"].as_str().unwrap(), &e["value"]);
-        let got = json!({ "class": class, "align": format::align(class, &format::Alignments::new()) });
+        let t = e["type"].as_str().unwrap();
+        let class = format::value_class(t, &e["value"]);
+        let column = e.get("column").and_then(|c| c.as_array()).cloned().unwrap_or_else(|| vec![e["value"].clone()]);
+        let got = json!({ "class": class, "align": format::cell_align(format::column_class(t, column.iter()), class, &format::Alignments::new()) });
         assert_eq!(got, json!({ "class": e["class"], "align": e["align"] }), "{e}");
     }
 }

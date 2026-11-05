@@ -273,6 +273,15 @@ fn click(app: &mut App, x: u16, y: u16) {
     // Editor: click moves the cursor, drag selects
     if inside(app.hits.editor, x, y) {
         app.focus = Focus::Editor;
+        // A statement's gutter mark (first cell of the line-number column): show Output, where its line is
+        if x == app.hits.editor.x + 1
+            && let Some((row, _)) = editor_pos(app, x, y)
+            && let Some(TabKind::Console(c)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind)
+            && c.marks.at(row).is_some()
+        {
+            c.show_output = true;
+            return;
+        }
         if let Some(pos) = editor_pos(app, x, y) {
             if let Some(TabKind::Console(c)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind) {
                 c.editor.cancel_selection();

@@ -68,6 +68,12 @@ pub fn ssm_local_host(host: &str) -> Option<String> {
     qurry_shared::errors::ssm_local_host(host)
 }
 
+/// The DBA report's database picker when the databases can't be listed (the TUI's words)
+#[wasm_bindgen(js_name = dbListFailed)]
+pub fn db_list_failed(msg: &str) -> String {
+    qurry_shared::errors::db_list_failed(msg)
+}
+
 /// The result grid's line when loading more rows failed (the TUI's words)
 #[wasm_bindgen(js_name = moreRowsFailed)]
 pub fn more_rows_failed(msg: &str) -> String {
@@ -264,6 +270,13 @@ struct Suggestions {
     items: Vec<complete::Item>,
 }
 
+/// suggestFilter's answer
+#[derive(Serialize)]
+struct FilterSuggestions {
+    from: usize,
+    items: Vec<complete::Item>,
+}
+
 #[wasm_bindgen]
 impl CompletionIndex {
     /// `tables_json`: the completion_meta result ([{schema, name, columns: [[name, type], …]}, …]) as JSON
@@ -286,11 +299,21 @@ impl CompletionIndex {
         Ok(serde_wasm_bindgen::to_value(&SuggestJs { start_column: s.start_column, end_column: s.end_column, lead, rest })?)
     }
 
+    /// Candidates in a table tab's WHERE / ORDER BY field (complete::suggest_filter) at `caret`, a UTF-16 offset into `field`;
+    /// `explicit` when asked for (⌃Space) rather than typed. {from, items}: the word they replace starts at `from` (UTF-16) and ends at the caret
+    #[wasm_bindgen(js_name = suggestFilter)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn suggest_filter(&self, schema: &str, table: &str, order_by: bool, field: &str, caret: usize, db: &str, mysql: bool, explicit: bool) -> Result<JsValue, JsError> {
+        let b = byte_offset(field, caret);
+        let (n, items) = complete::suggest_filter(&self.meta, schema, table, order_by, field, b, db, mysql, explicit);
+        Ok(serde_wasm_bindgen::to_value(&FilterSuggestions { from: caret - utf16_tail(&field[..b], n), items })?)
+    }
+
     /// The value · json key spot at the caret (what to ask meta.hints for), or undefined
     #[wasm_bindgen(js_name = hintAt)]
     pub fn hint_at(&self, text: &str, caret: usize, db: &str, mysql: bool) -> Result<JsValue, JsError> {
         let at = Caret::new(text, caret);
-        Ok(serde_wasm_bindgen::to_value(&complete::hint_at(&self.meta, &at.statement(text, mysql), at.before, db, mysql))?)
+        Ok(serde_wasm_bindgen::to_value(&complete::hint_at(&self.meta, &at.statement(text, mysql), at.head(text, mysql), db, mysql))?)
     }
 
     /// What meta.hints returned for `hint` → candidates. as_pairs = keys were asked, none came, so these are @> conditions
@@ -364,6 +387,11 @@ impl<'a> Caret<'a> {
         qurry_shared::sql::statement_at(text, self.at, if mysql { DbKind::Mysql } else { DbKind::Postgres }).unwrap_or_default()
     }
 
+    /// The caret's statement up to the caret (what hint_at reads the clause from)
+    fn head<'t>(&self, text: &'t str, mysql: bool) -> &'t str {
+        qurry_shared::sql::statement_head(text, self.at, if mysql { DbKind::Mysql } else { DbKind::Postgres })
+    }
+
     /// Monaco column of the caret (1-based, UTF-16)
     fn column(&self) -> usize {
         self.before.encode_utf16().count() + 1
@@ -435,10 +463,19 @@ pub fn json_spans(text: &str, max_chars: usize) -> Vec<u32> {
     r.into_iter().zip(spans).flat_map(|([s, e], (_, _, k))| [s as u32, e as u32, k as u32]).collect()
 }
 
-/// Alignment of a value class ("left", "right", "center") given the saved overrides ({ null: "left", … })
+/// Alignment setting of a value class ("left", "right", "center"; NULL also "column") given the saved overrides ({ null: "left", … })
 #[wasm_bindgen(js_name = alignOf)]
 pub fn align_of(class: JsValue, overrides: JsValue) -> Result<JsValue, JsError> {
     to(&qurry_shared::format::align(from(class)?, &qurry_shared::format::alignments(&from(overrides)?)))
+}
+
+/// Where a cell of a value class sits in a column of `type_name` ("left", "right", "center"): a NULL on "column" takes the column's.
+/// `first` = the column's first non-null value or null (an untyped column goes by it; a stand-in of the same kind will do)
+#[wasm_bindgen(js_name = cellAlign)]
+pub fn cell_align(type_name: &str, first: JsValue, class: JsValue, overrides: JsValue) -> Result<JsValue, JsError> {
+    let o = qurry_shared::format::alignments(&from(overrides)?);
+    let first: Value = from(first)?;
+    to(&qurry_shared::format::cell_align(qurry_shared::format::column_class(type_name, std::iter::once(&first)), from(class)?, &o))
 }
 
 /// [{id, db, schema, table}, …] → a label per tab (schema.table or db.schema.table), null where the name is unique

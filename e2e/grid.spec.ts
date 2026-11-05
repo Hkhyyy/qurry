@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { dialog, expect, menuItem, openApp, openConsole, runAll, test, treeItem, typeSql, work } from "./app";
+import { dialog, expect, menuItem, openApp, openConsole, runAll, spyCancels, test, treeItem, typeSql, work } from "./app";
 
 const clipboard = (page: Page) => page.evaluate(() => navigator.clipboard.readText());
 /** The mock's created_at alternates no fraction / .5 / .125 */
@@ -93,7 +93,7 @@ test("a load-more that fails keeps its reason in the grid and the result unfinis
   await page.evaluate((w) => ((window as any).__mockFetchMoreError = w), why);
   const scroll = work(page).locator(".grid-scroll").first();
   await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
-  // The TUI's words (qurry_shared::errors::more_rows_failed), in the grid, not only in the status bar
+  // The TUI's words (qurry_shared::errors::more_rows_failed), beside the row count (not over the rows), not only in the status bar
   await expect(work(page).locator(".grid-more-error")).toHaveText(`Couldn't load more rows: ${why}`);
   await expect(work(page).locator(".tb-info").first()).toHaveText("500+ rows");
   // Scrolling on doesn't ask again
@@ -101,10 +101,9 @@ test("a load-more that fails keeps its reason in the grid and the result unfinis
   await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
   await page.waitForTimeout(300);
   expect(await page.evaluate(() => (window as any).__mockFetchMoreCalls)).toBe(1);
-  // Running it again (⌘R) starts over: the line goes away and loading more works again
+  // Run again starts over: the line goes away and loading more works again
   await page.evaluate(() => ((window as any).__mockFetchMoreError = undefined));
-  await scroll.focus();
-  await page.keyboard.press("Meta+R");
+  await work(page).getByRole("button", { name: "Run again" }).click();
   await expect(work(page).locator(".grid-more-error")).toHaveCount(0);
   await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
   await expect(work(page).locator(".tb-info").first()).toHaveText("620 rows");
@@ -114,14 +113,62 @@ test("rows that arrive after the table tab ran again are dropped, not appended t
   await page.evaluate(() => ((window as any).__mockFetchMoreDelay = 1000));
   const scroll = work(page).locator(".grid-scroll").first();
   await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
-  await expect(work(page).locator(".grid-loading")).toHaveText("Loading more…");
+  await expect(page.locator(".statusbar").getByRole("progressbar", { name: "Loading more rows" })).toBeVisible();
   await scroll.focus();
   await page.keyboard.press("Meta+R");
   // A load-more of the new result (if its grid asks right away) fails at once, so only the old answer could add rows
   await page.evaluate(() => Object.assign(window as any, { __mockFetchMoreDelay: undefined, __mockFetchMoreError: "stop" }));
   await page.waitForTimeout(1300);
   await expect(work(page).locator(".tb-info").first()).toHaveText("500+ rows");
-  await expect(work(page).locator(".grid-loading:not(.grid-more-error)")).toHaveCount(0);
+  await expect(page.getByRole("progressbar", { name: "Loading more rows" })).toHaveCount(0);
+});
+
+test("loading more shows in the status bar as a run does, ■ cancels it; the grid gets nothing under its rows and stays put (#94)", async ({ page }) => {
+  await page.evaluate(() => ((window as any).__mockFetchMoreDelay = 1000));
+  const scroll = work(page).locator(".grid-scroll").first();
+  const status = page.locator(".statusbar");
+  const stop = status.getByTitle("Cancel Running Statements");
+  const at = () => scroll.evaluate((el) => ({ top: el.scrollTop, height: el.scrollHeight }));
+  // No room kept under the 500 rows of 24 px
+  expect((await at()).height).toBe(500 * 24);
+  await expect(stop).toBeDisabled();
+  const cancels = await spyCancels(page);
+  await scroll.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  const loading = await at();
+  // The status bar's running indicator, in the status text's place: bar, words and elapsed time
+  await expect(status.locator(".running-bar")).toContainText(/Loading more rows… \d+\.\d s/);
+  await expect(status.getByRole("progressbar", { name: "Loading more rows" })).toBeVisible();
+  await expect(work(page).getByRole("progressbar")).toHaveCount(0);
+  expect(loading.height).toBe(500 * 24);
+  // ■ is the cancel (the load reads on the tab's session, so the running statement's cancel stops it)
+  await expect(stop).toBeEnabled();
+  await stop.click();
+  await expect.poll(cancels).toBe(1);
+  // The rows come in (the mock ignores the cancel): the indicator goes, the status text is back, the view stays where it was
+  await expect(work(page).locator(".tb-info").first()).toHaveText("620 rows");
+  await expect(status.locator(".running-bar")).toHaveCount(0);
+  await expect(status.locator(".sb-text")).toHaveText("620 rows retrieved");
+  await expect(stop).toBeDisabled();
+  const after = await at();
+  expect(after.top).toBe(loading.top);
+  expect(after.height).toBe(620 * 24);
+});
+
+test("loading more never covers the current cell when ↓ moves to the end of the view (#94)", async ({ page }) => {
+  await page.evaluate(() => ((window as any).__mockFetchMoreDelay = 3000));
+  const scroll = work(page).locator(".grid-scroll").first();
+  const bar = page.locator(".statusbar").getByRole("progressbar", { name: "Loading more rows" });
+  // The view's last row near 440, the cursor near it: ↓ scrolls on until the load starts (30 rows before the end)
+  await scroll.evaluate((el) => (el.scrollTop = 440 * 24 - el.clientHeight));
+  await work(page).getByRole("gridcell", { name: "user_436", exact: true }).click();
+  for (let i = 0; i < 40 && !(await bar.count()); i++) await page.keyboard.press("ArrowDown");
+  await expect(bar).toBeVisible();
+  // Nothing is drawn over the grid, and the cell under the cursor is inside the view
+  await expect(work(page).getByRole("progressbar")).toHaveCount(0);
+  const active = (await work(page).locator(".cell.active").boundingBox())!;
+  const view = (await scroll.boundingBox())!;
+  const client = await scroll.evaluate((el) => el.clientHeight);
+  expect(active.y + active.height).toBeLessThanOrEqual(view.y + client);
 });
 
 /** text-align of the first three data cells of a column */
@@ -130,20 +177,25 @@ const aligns = (page: Page, col: number) =>
     .locator(".grid-row")
     .evaluateAll((rows, c) => rows.slice(0, 3).map((r) => getComputedStyle(r.querySelectorAll(".cell:not(.rownum)")[c]).textAlign), col);
 
-test("NULL is right-aligned by default; Settings › Appearance › Alignment puts it back on the left (#75)", async ({ page }) => {
+test("NULL sits where its column's type does by default; Settings › Appearance › Alignment puts it on the right, kept after a reload (#75, #95)", async ({ page }) => {
   // memo (TEXT): "note", <null>, <null>; amount (NUMERIC, arrives as text): a number
-  await expect.poll(() => aligns(page, 4)).toEqual(["left", "right", "right"]);
+  await expect.poll(() => aligns(page, 4)).toEqual(["left", "left", "left"]);
   await expect.poll(() => aligns(page, 2)).toEqual(["right", "right", "right"]);
   await page.keyboard.press("Meta+Comma");
   const nul = dialog(page).getByRole("combobox", { name: "NULL alignment" });
-  await expect(nul).toHaveValue("right");
-  await nul.selectOption("left");
+  await expect(nul).toHaveValue("column");
+  await expect(nul.locator("option")).toHaveText(["Column type", "Left", "Center", "Right"]);
+  await expect(dialog(page).getByRole("combobox", { name: "String alignment" }).locator("option")).toHaveText(["Left", "Center", "Right"]);
+  await nul.selectOption("right");
   await page.keyboard.press("Escape");
-  await expect.poll(() => aligns(page, 4)).toEqual(["left", "left", "left"]);
+  await expect.poll(() => aligns(page, 4)).toEqual(["left", "right", "right"]);
   await expect.poll(() => aligns(page, 2)).toEqual(["right", "right", "right"]);
-  // Saved (the mock's settings.json) and marked as changed
+  // Saved (the mock's settings.json): after a reload the grid and Settings still have it, marked as changed
+  await page.reload();
+  await treeItem(page, "users").first().dblclick();
+  await expect.poll(() => aligns(page, 4)).toEqual(["left", "right", "right"]);
   await page.keyboard.press("Meta+Comma");
-  await expect(dialog(page).getByRole("combobox", { name: "NULL alignment" })).toHaveValue("left");
+  await expect(dialog(page).getByRole("combobox", { name: "NULL alignment" })).toHaveValue("right");
   await expect(dialog(page).locator(".align-label.custom")).toHaveText(["NULL"]);
 });
 
@@ -152,7 +204,7 @@ test("Settings › Appearance › Alignment that can't be saved goes back and sa
   await page.keyboard.press("Meta+Comma");
   await dialog(page).getByRole("combobox", { name: "NULL alignment" }).selectOption("left");
   await expect(dialog(page).getByText(/Couldn't save the alignment \(.*permission denied\)\. It is back to what it was\./)).toBeVisible();
-  await expect(dialog(page).getByRole("combobox", { name: "NULL alignment" })).toHaveValue("right");
+  await expect(dialog(page).getByRole("combobox", { name: "NULL alignment" })).toHaveValue("column");
 });
 
 test("a WebView that refuses WebAssembly: numbers stay on the right and Settings › Alignment says why it can't be changed", async ({ page }) => {
@@ -350,8 +402,9 @@ test.describe("Value Editor panel", () => {
     await expect(panel(page).locator(".ve-title")).toHaveText("data : jsonb");
     await expect(ed.locator(".view-line")).toHaveCount(11);
     // Monaco's JSON tokens: keys, strings, numbers and delimiters each get their own colour class
-    const classes = await ed.locator(".view-line span span").evaluateAll((els) => new Set(els.map((e) => e.className)).size);
-    expect(classes).toBeGreaterThanOrEqual(3);
+    // (Monaco tokenizes after it draws the text, so this waits for the colours rather than reading them once)
+    const classes = () => ed.locator(".view-line span span").evaluateAll((els) => new Set(els.map((e) => e.className)).size);
+    await expect.poll(classes).toBeGreaterThanOrEqual(3);
     // Line 2 is `  "kind": "card",`: replace card with bank in the pretty layout
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("End");
@@ -379,9 +432,9 @@ test.describe("Value Editor panel", () => {
     await expect(cell(page, DATA_1)).toBeVisible();
   });
 
-  test("console results are view-only in the panel", async ({ page }) => {
+  test("console results the backend didn't tie to a table are view-only in the panel", async ({ page }) => {
     await openConsole(page);
-    await typeSql(page, "select * from users");
+    await typeSql(page, "select * from users where id > 0");
     await runAll(page);
     await cell(page, "user_1").click();
     await page.keyboard.press("Shift+Enter");
@@ -390,13 +443,102 @@ test.describe("Value Editor panel", () => {
   });
 });
 
-test("console results say why their edit buttons are greyed out", async ({ page }) => {
+test("console results the backend didn't check say why their edit buttons are greyed out", async ({ page }) => {
   await openConsole(page);
-  await typeSql(page, "select * from users");
+  await typeSql(page, "select * from users where id > 0");
   await runAll(page);
   const del = work(page).getByRole("button", { name: /^Delete Row/ });
   await expect(del).toBeDisabled();
   await del.hover({ force: true });
   await expect(del).toHaveAttribute("title", /Console results are read-only\. Open the table to edit its rows\.$/);
   await expect(del).toHaveAttribute("aria-description", "Console results are read-only. Open the table to edit its rows.");
+});
+
+test.describe("multi-range selection (⌘-click)", () => {
+  const cell = (page: Page, name: string) => work(page).getByRole("gridcell", { name, exact: true });
+  const rowNum = (page: Page, n: number) => work(page).getByRole("rowheader", { name: String(n), exact: true });
+  const selected = (page: Page) => work(page).locator('[role=gridcell][aria-selected="true"]').allTextContents();
+  const ROW1 = `1,user_1,0.00,${T1},note`;
+  const ROW5 = `5,user_5,4938.00,${T2},`;
+
+  test("⌘-click rows 5 and 1: ⌘C copies both rows in grid order", async ({ page }) => {
+    await rowNum(page, 5).click({ modifiers: ["Meta"] });
+    await rowNum(page, 1).click({ modifiers: ["Meta"] });
+    await expect(rowNum(page, 1)).toHaveClass(/row-sel/);
+    await expect(rowNum(page, 3)).not.toHaveClass(/row-sel/);
+    await page.keyboard.press("Meta+C");
+    await expect.poll(() => clipboard(page)).toBe(`${ROW1}\n${ROW5}`);
+  });
+
+  test("⌘⌫ marks every selected row for deletion", async ({ page }) => {
+    await rowNum(page, 1).click();
+    await rowNum(page, 5).click({ modifiers: ["Meta"] });
+    await page.keyboard.press("Meta+Backspace");
+    await expect(work(page).locator(".grid-row.deleted .rownum")).toHaveText(["1", "5"]);
+    await expect(work(page).locator(".tb-info")).toContainText("2 pending");
+  });
+
+  test("⇧-click extends the last range, a plain click starts over, ↓ collapses to one cell", async ({ page }) => {
+    await cell(page, "user_1").click();
+    await cell(page, "user_5").click({ modifiers: ["Meta"] });
+    await cell(page, "user_7").click({ modifiers: ["Shift"] });
+    await expect.poll(() => selected(page)).toEqual(["user_1", "user_5", "user_6", "user_7"]);
+    await page.keyboard.press("Meta+C");
+    await expect.poll(() => clipboard(page)).toBe("user_1\nuser_5\nuser_6\nuser_7");
+    await cell(page, "user_2").click();
+    await expect.poll(() => selected(page)).toEqual(["user_2"]);
+    await cell(page, "user_4").click({ modifiers: ["Meta"] });
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(() => selected(page)).toEqual(["user_5"]);
+  });
+
+  test("⌘-click on a selected cell takes it out; copy takes what is left", async ({ page }) => {
+    await cell(page, "user_1").click();
+    await cell(page, "user_3").click({ modifiers: ["Meta"] });
+    await cell(page, "user_1").click({ modifiers: ["Meta"] });
+    await expect.poll(() => selected(page)).toEqual(["user_3"]);
+    await page.keyboard.press("Meta+C");
+    await expect.poll(() => clipboard(page)).toBe("user_3");
+  });
+
+  test("ranges in different columns copy as the union of columns, other cells empty", async ({ page }) => {
+    await cell(page, "user_1").click();
+    await cell(page, "1234.50").click({ modifiers: ["Meta"] });
+    await page.keyboard.press("Meta+C");
+    await expect.poll(() => clipboard(page)).toBe("user_1,\n,1234.50");
+  });
+
+  test("ranges in different columns: SQL Updates and Where Clause leave the unselected cells out, never NULL", async ({ page }) => {
+    const button = work(page).locator('[title="Data Extractor (copy format)"]');
+    for (const [extractor, text] of [
+      ["SQL Updates", "UPDATE public.users SET user_name = 'user_1' WHERE id = '1';\nUPDATE public.users SET amount = '1234.50' WHERE id = '2';"],
+      ["Where Clause", "(user_name = 'user_1') OR\n(amount = '1234.50')"],
+    ]) {
+      await button.click();
+      await menuItem(page, new RegExp(`^(✓ |\\s*)${extractor}$`)).click();
+      await cell(page, "user_1").click();
+      await cell(page, "1234.50").click({ modifiers: ["Meta"] });
+      await page.keyboard.press("Meta+C");
+      await expect.poll(() => clipboard(page)).toBe(text);
+    }
+  });
+
+  test("the Value Editor follows the last clicked cell", async ({ page }) => {
+    const panel = work(page).locator(".value-panel");
+    await cell(page, "user_1").click();
+    await page.keyboard.press("Shift+Enter");
+    await cell(page, "2469.00").click({ modifiers: ["Meta"] });
+    await expect(panel.locator(".ve-title")).toHaveText("amount : numeric");
+    await expect(panel.locator("textarea.ve-text")).toHaveValue("2469.00");
+    await cell(page, "user_4").click({ modifiers: ["Meta"] });
+    await expect(panel.locator(".ve-title")).toHaveText("user_name : varchar");
+    await expect(panel.locator("textarea.ve-text")).toHaveValue("user_4");
+  });
+
+  test("paste into several ranges says how to get back to one", async ({ page }) => {
+    await cell(page, "user_1").click();
+    await cell(page, "user_3").click({ modifiers: ["Meta"] });
+    await page.keyboard.press("Meta+V");
+    await expect(page.locator(".statusbar")).toContainText("Paste needs one selected range: click a cell to select just it (⌘-click adds cells to the selection)");
+  });
 });

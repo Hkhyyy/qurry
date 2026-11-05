@@ -120,6 +120,7 @@ pub fn run() {
             commands::table_ddl,
             commands::new_object_ddl,
             commands::rename_ddl,
+            commands::drop_ddl,
             commands::run_ddl,
             commands::history_add,
             commands::history_list,
@@ -189,6 +190,10 @@ pub fn run() {
             commands::grid_align,
             commands::set_grid_align,
             fonts::font_families,
+            fonts::custom_fonts,
+            fonts::add_font_file,
+            fonts::remove_font_file,
+            fonts::font_file,
             commands::install_update,
         ])
         .build(app_context())

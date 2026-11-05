@@ -4,9 +4,12 @@ import { ColorSwatches } from "./ConnectionDialog";
 import { collapseTree, NodeInfo, SchemaTree, TreeSelection } from "./SchemaTree";
 import { IcCollapseAll, IcMoreV, IcPlus, IcReload } from "../ui/icons";
 import { IconButton, Menu as UiMenu, MenuEntry, SearchField, Text } from "../ui";
-import { cmd, eventSpec, keyTitle, runKey } from "../lib/shortcuts";
+import { cmd, eventSpec, keyTitle, runById, runKey } from "../lib/shortcuts";
+import { clickSelect, NO_SEL, ONE_NODE, withoutNode, type ClickHow, type TreeSel } from "../features/explorer/selection";
 
 export type MenuItem = MenuEntry;
+
+const isMac = navigator.platform.toLowerCase().includes("mac");
 
 interface Props {
   connections: ConnectionView[];
@@ -17,9 +20,15 @@ interface Props {
   onRefresh: () => void;
   onExport: () => void;
   onImport: () => void;
-  onSelect: (info: NodeInfo | null) => void;
+  /** The workspace shown: only its explorer tells onSelect (each workspace keeps its own explorer, hidden ones mounted) */
+  shown: boolean;
+  /** info: the node the keys act on (the last clicked); all: every selected node */
+  onSelect: (info: NodeInfo | null, all: NodeInfo[]) => void;
   onActivate: (info: NodeInfo) => void;
-  buildMenu: (info: NodeInfo) => MenuItem[];
+  /** A line for the status bar (a key that doesn't work on the selected nodes) */
+  onStatus: (text: string) => void;
+  /** The node's context menu; with several selected nodes (all), for all of them */
+  buildMenu: (info: NodeInfo, all?: NodeInfo[]) => MenuItem[];
   onSetColor: (c: ConnectionView, color: string | null) => void;
   onScopeChange: (c: ConnectionView, scope: Scope) => void;
 }
@@ -59,7 +68,10 @@ export function Explorer(p: Props) {
   const [addMenu, setAddMenu] = useState(false);
   const [filter, setFilter] = useState("");
   const [showSystem, setShowSystem] = useState(false);
-  const [sel, setSelId] = useState<string | null>(null);
+  const [sel, setSel] = useState<TreeSel>(NO_SEL);
+  // Read in the same event (a right-click selects, then opens the menu for the selection)
+  const selRef = useRef(sel);
+  const infos = useRef(new Map<string, NodeInfo>()).current;
 
   useEffect(() => {
     const close = () => {
@@ -97,7 +109,9 @@ export function Explorer(p: Props) {
     // The header's commands (the node menu's commands run from the global key handler)
     if (runKey(eventSpec(e.nativeEvent), "tree", () => [{ label: "Collapse All", ...cmd("tree.collapseAll"), action: collapseTree }, ...moreItems()])) return e.preventDefault();
     const list = rows();
-    const cur = list.findIndex((el) => el.classList.contains("selected"));
+    // From the last clicked node when several are selected
+    const lead = list.findIndex((el) => el.id && el.id === selRef.current.lead);
+    const cur = lead >= 0 ? lead : list.findIndex((el) => el.classList.contains("selected"));
     const el = list[cur];
     const matchesSpeed = (s: string) => list.filter((x) => (x.querySelector(".node-name")?.textContent ?? "").toLowerCase().includes(s.toLowerCase()));
     if (speed && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
@@ -130,7 +144,11 @@ export function Explorer(p: Props) {
       }
       e.preventDefault();
     } else if (e.key === "Enter" && el) {
-      el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      const all = selected(selRef.current);
+      // Several nodes (DataGrip opens each): Edit Data for all of them, when each is a table or view
+      if (all.length > 1) {
+        if (!runById(p.buildMenu(infos.get(selRef.current.lead ?? "") ?? all[0], all), "tree.editData")) p.onStatus(ONE_NODE);
+      } else el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
       setSpeed("");
       e.preventDefault();
     } else if (e.key === "Escape") {
@@ -147,9 +165,38 @@ export function Explorer(p: Props) {
     }
   };
 
-  const setSel = (id: string, info?: NodeInfo) => {
-    setSelId(id);
-    p.onSelect(info ?? null);
+  const selected = (s: TreeSel) => s.ids.flatMap((id) => infos.get(id) ?? []);
+  // Read by rows as they unmount (their effect keeps the first render's gone)
+  const onSelect = useRef(p.onSelect);
+  onSelect.current = p.onSelect;
+  const shown = useRef(p.shown);
+  shown.current = p.shown;
+  const tell = (s: TreeSel) => {
+    const lead = s.ids.includes(s.lead ?? "") ? s.lead : s.ids[s.ids.length - 1];
+    onSelect.current((lead && infos.get(lead)) || null, selected(s));
+  };
+  // A hidden workspace's rows still unmount (a data source removed, a refresh): its selection mustn't replace the shown one's.
+  // Shown again, its own selection is what the keys act on
+  useEffect(() => {
+    if (p.shown) tell(selRef.current);
+  }, [p.shown]);
+  const publish = (next: TreeSel) => {
+    selRef.current = next;
+    setSel(next);
+    if (shown.current) tell(next);
+  };
+  /** A selected row left the screen: the keys act only on the rows still shown (as the context menu does) */
+  const gone = (id: string) => {
+    if (selRef.current.ids.includes(id)) publish(withoutNode(selRef.current, id));
+  };
+  const select = (id: string, info?: NodeInfo, e?: React.MouseEvent) => {
+    const cur = selRef.current;
+    // The right button (⌃-click on macOS) on a selected node keeps the selection: its menu acts on all of it
+    if (e && (e.button === 2 || (isMac && e.ctrlKey)) && cur.ids.includes(id)) return;
+    const how: ClickHow = !info || !e ? "one" : (isMac ? e.metaKey : e.ctrlKey) ? "toggle" : e.shiftKey ? "range" : "one";
+    // The selectable rows on screen, top to bottom (folders and columns have no id)
+    const visible = rows().flatMap((el) => (el.id ? [el.id] : []));
+    publish(clickSelect(cur, id, how, visible));
   };
 
   return (
@@ -203,7 +250,7 @@ export function Explorer(p: Props) {
       <div className="tree-filter">
         <SearchField placeholder="Filter tables, views, routines (expanded schemas)" value={filter} onChange={(e) => setFilter(e.target.value)} />
       </div>
-      <TreeSelection.Provider value={{ sel, setSel }}>
+      <TreeSelection.Provider value={{ ids: sel.ids, select, infos, gone }}>
         <div className="tree" tabIndex={0} data-tree="1" ref={treeRef} onKeyDown={onTreeKey} onBlur={() => setSpeed("")}>
           {speed && <div className="speed-search">Search for: <b>{speed}</b></div>}
           {p.connections.length === 0 && (
@@ -236,7 +283,11 @@ export function Explorer(p: Props) {
                 onActivate={p.onActivate}
                 onScopeChange={p.onScopeChange}
                 onConnsChanged={p.onRefresh}
-                onMenu={(e, info) => setMenu({ x: e.clientX, y: e.clientY, items: p.buildMenu(info), conn: info.kind === "conn" ? info.conn : undefined })}
+                onMenu={(e, info) => {
+                  const all = selected(selRef.current);
+                  // The color picker is for one data source
+                  setMenu({ x: e.clientX, y: e.clientY, items: p.buildMenu(info, all), conn: info.kind === "conn" && all.length < 2 ? info.conn : undefined });
+                }}
               />
             ))}
           </div>

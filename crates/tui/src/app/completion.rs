@@ -45,7 +45,10 @@ impl App {
 
     pub fn open_scope(&mut self, conn: &str, dbs: Vec<String>, focus_db: Option<&str>) {
         let Some(c) = self.conn(conn) else { return };
-        let e = crate::scope::ScopeEditor::new(conn.to_string(), dbs, self.default_db(conn), &c.config.scope, focus_db);
+        let mut e = crate::scope::ScopeEditor::new(conn.to_string(), dbs.clone(), self.default_db(conn), &c.config.scope, focus_db);
+        // Without the scope, the databases the explorer shows are the user ones (system databases hidden)
+        let unscoped = qurry_core::store::ConnectionConfig { scope: Default::default(), ..c.config.clone() };
+        e.user_dbs = qurry_core::app::visible_dbs(&unscoped, dbs, &e.default_db);
         self.popup = Some(Popup::Scope(e));
         if let Some(db) = focus_db {
             self.load_scope_schemas(db.to_string());
@@ -108,10 +111,11 @@ impl App {
         let (from, to) = (row.saturating_sub(200), (row + 50).min(lines.len()));
         let window = &lines[from..to];
         let text = window.join("\n");
-        let stmt = sql::statement_at(&text, byte_offset(window, row - from, col), kind).unwrap_or_default();
+        let at = byte_offset(window, row - from, col);
+        let stmt = sql::statement_at(&text, at, kind).unwrap_or_default();
         let empty = complete::Meta::new(vec![]);
         // Value · json key spot: use already-read values if any, otherwise fetch and reopen
-        if let Some(h) = meta.as_deref().and_then(|m| complete::hint_at(m, &stmt, &before, &db, kind == DbKind::Mysql)) {
+        if let Some(h) = meta.as_deref().and_then(|m| complete::hint_at(m, &stmt, sql::statement_head(&text, at, kind), &db, kind == DbKind::Mysql)) {
             use complete::HintMode;
             let after = lines.get(row).and_then(|l| l.chars().nth(col));
             let key = |mode: HintMode| format!("{target}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{mode:?}", h.schema, h.table, h.column, h.path.join("\u{2}"));

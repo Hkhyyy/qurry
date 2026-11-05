@@ -1,4 +1,6 @@
 /** For development: opening in a browser with ?mock uses fake data instead of the Tauri backend (for checking screens). */
+// A real font file for the added custom fonts (FontFace has to load something): Monaco's icon font (by path: the package exports only .js)
+import fontBytesUrl from "/node_modules/monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon.ttf?url";
 const conns = [
   { id: "dev", name: "[DEV] shop_app", kind: "postgres", host: "dev-db.example.com", port: 5432, user: "app", database: "shop_app", color: "#5f5b24", hasPassword: true, connected: true },
   { id: "prod", name: "[PROD] shop_app", kind: "postgres", host: "prod-db", port: 5432, user: "app", database: "shop_app", color: "#6e2a2a", hasPassword: true, connected: false, options: { confirmChanges: true },
@@ -21,6 +23,16 @@ const tls = ((globalThis as any).__mockTls = { allow: 0, runs: 0, saves: 0 });
 /** Throws NEEDS_TLS for "LAN dev" targets (id or id::db) until plain text is allowed */
 const lanCheck = (id: unknown) => {
   if (String(id).split("::")[0] === "lan" && !lan.options.allowPlaintext) throw NEEDS_TLS;
+};
+/** Table Sizes of a report target: the default database's tables are big, the others' small */
+const tableSizes = (id: string) => {
+  const [base, db] = id.split("::");
+  const big = !db || db === conns.find((c) => c.id === base)?.database;
+  return {
+    columns: ["schema", "table", "total", "data", "indexes"].map((name) => ({ name, typeName: "TEXT" })),
+    rows: big ? [["public", "orders", "182 MB", "120 MB", "62 MB"], ["public", "order_items", "41 MB", "30 MB", "11 MB"]] : [["public", "orders", "2 MB", "1 MB", "1 MB"]],
+    rowsAffected: 0, truncated: false, elapsedMs: 5, hasResultSet: true,
+  };
 };
 const result = {
   columns: [
@@ -62,9 +74,19 @@ const payments = {
   rows: Array.from({ length: 40 }, (_, i) => [i + 1, i % 2 ? "paid" : "ready", i === 2 ? null : `{"kind": "card", "meta": {"src": "web", "ip": "10.0.0.${i + 1}"}, "items": [${i}, ${i + 1}]}`, i % 4 ? "plain note" : "[1, 2]"]),
   truncated: false,
 };
+/** A console result's edit target or why it has none, as the backend says (#86): `select * from users` is one table with its key, a join isn't */
+const consoleEdit = (sql: string) =>
+  /\bjoin\b/i.test(sql)
+    ? { readOnlyReason: "Read-only: the columns come from more than one table." }
+    : /^\s*select\s+\*\s+from\s+(public\.)?users\s*;?\s*$/i.test(sql)
+      ? { edit: { schema: "public", table: "users", pk: ["id"], columns: result.columns.map((c) => c.name) } }
+      : {};
 let flakyLoads = 0;
 let updateChannel = "stable";
-let gridAlign = {};
+/** Font files added in Settings: each "Add Font File…" adds "Fira Code" (then "Fira Code 2"…, as the backend names a taken name) */
+let customFonts: { name: string; file: string }[] = [];
+/** settings.json "gridAlign" (kept across a reload, as the file is) */
+let gridAlign = JSON.parse(localStorage.getItem("mock-gridAlign") ?? "{}");
 /** Whether check_update ran (the real app then has a saved check that a channel switch answers from) */
 let updateChecked = false;
 /** Test Connections waiting for cancel_test, by test id */
@@ -72,7 +94,17 @@ const testsRunning: Record<string, () => void> = {};
 const handlers: Record<string, (a: any) => unknown> = {
   // A copy, as from the backend: state that holds the last list must see a change (Allow unencrypted, connect) as a new list
   list_connections: () => structuredClone(conns),
-  list_databases: (a: any) => (lanCheck(a.id), a.id === "lan" ? ["lan_app"] : a.id === "rd" ? ["db0", "db3"] : a.id === "my" ? ["information_schema", "mysql", "shop", "sys"] : ["postgres", "shop_app", "shop_app_test"]),
+  // window.__mockDbListFail: the account can't connect to a source's default database, so listing through the source itself fails.
+  // window.__mockDbListDelay (ms): the list arrives that late (a select asked for it only on its first click would open without it)
+  list_databases: (a: any) => {
+    const g = globalThis as any;
+    lanCheck(a.id);
+    if (g.__mockDbListFail && !String(a.id).includes("::")) throw `permission denied for database "${conns.find((c) => c.id === a.id)?.database}"`;
+    // window.__mockDbRefuse: a database the account can't connect to (listing through it and reports on it fail)
+    if (g.__mockDbRefuse && String(a.id).endsWith(`::${g.__mockDbRefuse}`)) throw `permission denied for database "${g.__mockDbRefuse}"`;
+    const v = a.id === "lan" ? ["lan_app"] : a.id === "rd" ? ["db0", "db3"] : a.id === "my" ? ["information_schema", "mysql", "shop", "sys"] : ["postgres", "shop_app", "shop_app_test"];
+    return g.__mockDbListDelay ? new Promise((ok) => setTimeout(() => ok(v), g.__mockDbListDelay)) : v;
+  },
   redis_scan: (a: any) => ({
     cursor: "0",
     keys: [
@@ -212,8 +244,9 @@ const handlers: Record<string, (a: any) => unknown> = {
       : a.req.column === "status" ? [{ value: "ready", count: 20 }, { value: "paid", count: 10 }, { value: "it's late", count: 1 }]
       : a.req.column === "amount" ? [{ value: "1000", count: 7 }, { value: "2500", count: 3 }]
       : [{ value: "k0", count: 15 }, { value: "k1", count: 15 }],
+  // A statement on no_such_table fails (console gutter marks)
   run_query: (a: any) =>
-    (String(a.id).startsWith("lan") && (tls.runs++, lanCheck(a.id)), /^EXPLAIN/i.test(a.sql)
+    /\bno_such_table\b/i.test(a.sql) ? Promise.reject(`ERROR: relation "no_such_table" does not exist`) : (String(a.id).startsWith("lan") && (tls.runs++, lanCheck(a.id)), /^EXPLAIN/i.test(a.sql)
       ? { ...result, columns: [{ name: "QUERY PLAN", typeName: "JSON" }], rows: [[JSON.stringify([{ Plan: { "Node Type": "Hash Join", "Join Type": "Inner", "Startup Cost": 1.5, "Total Cost": 45.2, "Plan Rows": 120, "Plan Width": 64, "Hash Cond": "(u.contract_id = c.id)", Plans: [{ "Node Type": "Seq Scan", "Relation Name": "users", Schema: "public", Alias: "u", "Startup Cost": 0, "Total Cost": 22.1, "Plan Rows": 1200, "Plan Width": 40 }, { "Node Type": "Hash", "Startup Cost": 1.2, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24, Plans: [{ "Node Type": "Index Scan", "Relation Name": "contracts", "Index Name": "contracts_pkey", "Startup Cost": 0.1, "Total Cost": 1.2, "Plan Rows": 12, "Plan Width": 24 }] }] } }])]], truncated: false }
       : /^\s*(insert|update|delete)/i.test(a.sql)
         ? { ...result, columns: [], rows: [], rowsAffected: 3, truncated: false, hasResultSet: false, inTransaction: (globalThis as any).__mockManual === true }
@@ -223,7 +256,7 @@ const handlers: Record<string, (a: any) => unknown> = {
           ? { ...jsonDemo, inTransaction: (globalThis as any).__mockManual === true }
           : /\bpayments\b/i.test(a.sql)
           ? { ...payments, inTransaction: (globalThis as any).__mockManual === true }
-          : { ...result, inTransaction: (globalThis as any).__mockManual === true }),
+          : { ...result, ...consoleEdit(a.sql), inTransaction: (globalThis as any).__mockManual === true }),
   set_tx_mode: (a: any) => { (globalThis as any).__mockManual = a.manual; return null; },
   // e2e sets __mockCommitError for a COMMIT that fails (e.g. the connection lost while committing)
   commit_tx: () => {
@@ -325,10 +358,14 @@ const handlers: Record<string, (a: any) => unknown> = {
     { id: "roles", title: "Users & Roles", group: "Security", help: "Login roles and their powers. superuser / createrole are the dangerous ones.", actions: [] },
   ]),
   // Story targets: "busy" runs past the report time limit, "flaky" loads once and then its refreshes do, "maria" has no performance_schema.
-  // Any target: "roles" is denied (app isn't a superuser), "table_sizes" takes 2 s (so a switch shows its loading state)
+  // Any target: "roles" is denied (app isn't a superuser), "table_sizes" takes 2 s (so a switch shows its loading state) and its sizes
+  // depend on the database it ran on. window.__mockDbaTargets lists the targets the reports ran on
   dba_report: (a: any) =>
-    a.report === "table_sizes"
-      ? new Promise((ok) => setTimeout(() => ok(handlers.dba_report({ ...a, report: "sessions" })), 2000))
+    (((globalThis as any).__mockDbaTargets ??= []).push(a.id),
+    (globalThis as any).__mockDbRefuse && String(a.id).endsWith(`::${(globalThis as any).__mockDbRefuse}`)
+      ? Promise.reject(`Couldn't connect to database ${(globalThis as any).__mockDbRefuse}. Pick another database for this report (GUI: the database list in its toolbar · TUI: d).\n(permission denied for database "${(globalThis as any).__mockDbRefuse}")`)
+      : a.report === "table_sizes"
+      ? new Promise((ok) => setTimeout(() => ok(tableSizes(a.id)), 2000))
       : a.report === "roles"
       ? Promise.reject("permission denied for table pg_authid")
       : a.id === "busy" || (a.id === "flaky" && flakyLoads++ > 0)
@@ -362,7 +399,7 @@ const handlers: Record<string, (a: any) => unknown> = {
             [4201, "dev", "shop_app", "idle", 0, "", null, "SELECT 1"],
           ],
           rowsAffected: 0, truncated: false, elapsedMs: 3, hasResultSet: true,
-        },
+        }),
   kill_session: () => true,
   erd: () => {
     const c = (name: string, dataType: string, pk = false, nullable = true) => ({ name, dataType, pk, nullable: pk ? false : nullable });
@@ -445,6 +482,15 @@ const handlers: Record<string, (a: any) => unknown> = {
     return [o.kind === "database" ? `CREATE DATABASE ${o.name}` : o.kind === "schema" ? `CREATE SCHEMA ${o.name}` : o.kind === "view" ? `CREATE ${o.materialized ? "MATERIALIZED " : ""}VIEW ${o.schema}.${o.name} AS\n${o.query}` : `CREATE SEQUENCE ${o.schema}.${o.name}`];
   },
   rename_ddl: (a: any) => `ALTER TABLE ${a.schema}.${a.old} RENAME TO ${a.new}`,
+  // The order of crates/core ddl::drop_sql (no quoting, no IF EXISTS, no dependencies): one statement per kind on PostgreSQL,
+  // one per object elsewhere
+  drop_ddl: (a: any) => {
+    const pg = conns.find((c) => c.id === a.id.split("::")[0])?.kind === "postgres";
+    return ([["view", "VIEW"], ["matview", "MATERIALIZED VIEW"], ["table", "TABLE"], ["partitioned", "TABLE"], ["foreign", "FOREIGN TABLE"], ["sequence", "SEQUENCE"]] as const).flatMap(([k, kw]) => {
+      const names = a.objects.filter((o: any) => o.kind === k).map((o: any) => `${o.schema}.${o.name}`);
+      return (pg && names.length ? [names] : names.map((n: string) => [n])).map((ns: string[]) => `DROP ${kw} ${ns.join(", ")};`);
+    });
+  },
   // e2e sets __mockDdlWarning for "ran, but the Production log couldn't record it"
   run_ddl: () => new Promise((ok) => setTimeout(() => ok((globalThis as any).__mockDdlWarning ?? null), 300)),
   subset_preview: () => ({
@@ -501,14 +547,31 @@ const handlers: Record<string, (a: any) => unknown> = {
     { name: "Monaco", mono: true },
     { name: "PT Mono", mono: true },
   ],
+  custom_fonts: () => structuredClone(customFonts),
+  add_font_file: () => {
+    // window.__mockFontAddFails: the picked file isn't a font
+    if ((window as any).__mockFontAddFails) throw "notes.ttf isn't a font file (TrueType, OpenType, WOFF or WOFF2)";
+    let name = "Fira Code";
+    for (let n = 2; customFonts.some((f) => f.name === name); n++) name = `Fira Code ${n}`;
+    const f = { name, file: `${name}.ttf` };
+    customFonts = [...customFonts, f].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+    return f;
+  },
+  remove_font_file: (a: any) => {
+    if (!customFonts.some((f) => f.file === a.file)) throw `No added font file named ${a.file}`;
+    customFonts = customFonts.filter((f) => f.file !== a.file);
+  },
+  // window.__mockFontBroken: the file passes the magic-byte check but isn't a loadable font (truncated)
+  font_file: () => ((window as any).__mockFontBroken ? new Uint8Array([0, 1, 0, 0]).buffer : fetch(fontBytesUrl).then((r) => r.arrayBuffer())),
   grid_align: () => gridAlign,
   set_grid_align: (a: any) => {
     if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
-    // As the core: the default (numbers and NULL on the right) drops the override
+    // As the core: the default (numbers on the right, NULL where its column's type sits) drops the override
     const next: Record<string, string> = { ...gridAlign };
-    if (a.align === (a.class === "number" || a.class === "null" ? "right" : "left")) delete next[a.class];
+    if (a.align === (a.class === "number" ? "right" : a.class === "null" ? "column" : "left")) delete next[a.class];
     else next[a.class] = a.align;
     gridAlign = next;
+    localStorage.setItem("mock-gridAlign", JSON.stringify(next));
     return next;
   },
   // window.__mockChannelSaveFails: the settings file can't be written
