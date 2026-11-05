@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import { Button, Select, Text, TextInput, normalizeHex } from "../../index";
 
 // Design for 0.3.2, #103: more built-in themes (Dracula, One Dark, Solarized Dark / Light), custom themes, Sync with OS per theme.
@@ -75,6 +75,43 @@ const GROUPS: { name: string; tokens: Tok[] }[] = [
 ];
 const TOKENS = GROUPS.flatMap((g) => g.tokens);
 const LABEL = Object.fromEntries(TOKENS.map((t) => [t.key, t.label])) as Record<Key, string>;
+/** What each token colors, in plain words (shown under the token in the editor) */
+const DESC: Record<Key, string> = {
+  bg: "Editor and result grid background",
+  panel: "Side panels, tab bar, grid header and status bar",
+  panel2: "Row-number column of the result grid",
+  odd: "Background of every other result row",
+  hover: "A button or tree row under the mouse pointer",
+  border: "Lines between panels, tabs and grid cells",
+  borderStrong: "Edges of buttons, inputs, popups and dialogs",
+  text: "Ordinary text: code, cell values, names",
+  muted: "Secondary text: headers, hints, line numbers, inactive tabs",
+  nullText: "NULL in result cells",
+  icon: "Tree icons of tables and other objects",
+  accent: "Active tab underline, focus outline, primary button, running indicator",
+  link: "Data source icons, the sorted column's name, the TUI's focused border",
+  onAccent: "Text on primary buttons",
+  sel: "Selected cell, row or list item",
+  keyword: "SQL keywords like SELECT, and true / false / null in JSON",
+  string: "Quoted text in SQL and JSON",
+  number: "Numbers in SQL code",
+  comment: "Comments in SQL code",
+  function: "Function names like upper()",
+  jsonKey: "Keys in JSON values",
+  gridNum: "Numbers in the result grid and the TUI",
+  changed: "A cell you edited but haven't submitted yet",
+  added: "A new row not submitted yet",
+  deleted: "A row marked for deletion (its text uses the error color)",
+  match: "Cells that match the grid's Find",
+  prodTint: "Background of a Production data source in the tree and its tabs",
+  prodStripe: "Thin red edge marking Production rows and tabs",
+  tint: "Background of a data source given another color (here green)",
+  ok: "Success messages and checks",
+  warn: "Warnings, pending changes, the PROD label",
+  danger: "Errors and rows marked for deletion",
+};
+/** Shown by default; the rest is behind "Advanced colors" */
+const BASIC: Key[] = ["bg", "panel", "text", "muted", "accent", "sel", "keyword", "string", "number", "comment", "prodTint"];
 
 // ───────── Color math ─────────
 const rgb = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
@@ -195,84 +232,144 @@ function themeVars(p: Palette): CSSProperties {
 }
 
 // ───────── Mock Qurry window ─────────
+// Every element says which tokens color it (data-tok), so the editor can point at it. Each token colors at least one element here.
 const mono: CSSProperties = { fontFamily: "var(--ui-font-mono)", fontSize: 12 };
+/** data-tok attribute: the tokens this element shows */
+const tok = (...keys: Key[]) => ({ "data-tok": keys.join(" ") });
+
+/** A thin colored edge inside its (position: relative) parent: the Production stripe */
+const Stripe = ({ side }: { side: "left" | "top" }) => (
+  <span {...tok("prodStripe")} style={{ position: "absolute", left: 0, top: 0, background: "var(--conn-stripe)", ...(side === "left" ? { bottom: 0, width: 3 } : { right: 0, height: 2 }) }} />
+);
 
 function Explorer({ p }: { p: Palette }) {
-  const row = (label: ReactNode, depth: number, tint?: string, stripe?: string): ReactNode => (
-    <div style={{ display: "flex", alignItems: "center", gap: 5, height: 22, paddingLeft: 6 + depth * 14, background: tint, boxShadow: stripe ? `inset 3px 0 0 ${stripe}` : undefined, whiteSpace: "nowrap" }}>{label}</div>
+  const row = (label: ReactNode, depth: number, keys: Key[] = [], bg?: string, stripe?: boolean) => (
+    <div {...tok(...keys)} style={{ position: "relative", display: "flex", alignItems: "center", gap: 5, height: 22, paddingLeft: 6 + depth * 14, background: bg, whiteSpace: "nowrap" }}>
+      {stripe && <Stripe side="left" />}
+      {label}
+    </div>
   );
-  const db = <span style={{ color: "var(--ui-icon-db)" }}>◆</span>;
-  const tb = <span style={{ color: "var(--ui-icon)" }}>▦</span>;
+  const db = <span {...tok("link")} style={{ color: "var(--ui-icon-db)" }}>◆</span>;
+  const tb = <span {...tok("icon")} style={{ color: "var(--ui-icon)" }}>▦</span>;
   return (
-    <div style={{ width: 150, flex: "none", background: "var(--panel)", borderRight: "1px solid var(--border)", fontSize: 12, overflow: "hidden" }}>
-      <div style={{ padding: "4px 8px", color: "var(--muted)", fontSize: 11, borderBottom: "1px solid var(--border)" }}>Database Explorer</div>
-      {row(<>{db}<span>prod-orders</span><span style={{ color: "var(--ui-warn)", fontSize: 10, marginLeft: "auto", paddingRight: 6 }}>PROD</span></>, 0, p.prodTint, p.prodStripe)}
-      {row(<><span style={{ color: "var(--muted)" }}>▸</span><span>public</span></>, 1, p.prodTint, p.prodStripe)}
-      {row(<>{tb}<span>orders</span></>, 2, p.prodTint, p.prodStripe)}
+    <div {...tok("panel", "border")} style={{ width: 150, flex: "none", background: "var(--panel)", borderRight: "1px solid var(--border)", fontSize: 12, overflow: "hidden" }}>
+      <div {...tok("muted")} style={{ padding: "4px 8px", color: "var(--muted)", fontSize: 11, borderBottom: "1px solid var(--border)" }}>Database Explorer</div>
+      {row(<>{db}<span>prod-orders</span><span {...tok("warn")} style={{ color: "var(--ui-warn)", fontSize: 10, marginLeft: "auto", paddingRight: 6 }}>PROD</span></>, 0, ["prodTint"], p.prodTint, true)}
+      {row(<><span style={{ color: "var(--muted)" }}>▸</span><span>public</span></>, 1, ["prodTint"], p.prodTint, true)}
+      {row(<>{tb}<span>orders</span></>, 2, ["prodTint"], p.prodTint, true)}
+      {row(<>{db}<span>analytics</span></>, 0, ["tint"], p.tint)}
       {row(<>{db}<span>dev-local</span></>, 0)}
-      {row(<>{tb}<span>users</span></>, 1)}
+      {row(<>{tb}<span>users</span><span style={{ color: "var(--muted)", fontSize: 10, marginLeft: "auto", paddingRight: 6 }}>hover</span></>, 1, ["hover"], "var(--ui-hover)")}
     </div>
   );
 }
 
-function Tabs({ p }: { p: Palette }) {
-  const tab = (label: string, active: boolean, tint?: string, stripe?: string) => (
-    <div style={{ display: "flex", alignItems: "center", padding: "0 12px", height: 28, fontSize: 12, color: active ? "var(--text)" : "var(--muted)", background: active ? tint ?? "var(--bg)" : "transparent", borderBottom: `2px solid ${active ? "var(--accent)" : "transparent"}`, boxShadow: stripe ? `inset 0 2px 0 ${stripe}` : undefined, whiteSpace: "nowrap" }}>{label}</div>
-  );
+function Tabs() {
   return (
-    <div style={{ display: "flex", background: "var(--panel)", borderBottom: "1px solid var(--border)", flex: "none" }}>
-      {tab("prod-orders", true, p.prodTint, p.prodStripe)}
-      {tab("dev-local", false)}
+    <div {...tok("panel", "border")} style={{ display: "flex", background: "var(--panel)", borderBottom: "1px solid var(--border)", flex: "none" }}>
+      <div {...tok("prodTint")} style={{ position: "relative", display: "flex", alignItems: "center", padding: "0 12px", height: 28, fontSize: 12, color: "var(--text)", background: "var(--conn-bg)", whiteSpace: "nowrap" }}>
+        <Stripe side="top" />
+        prod-orders
+        <span {...tok("accent")} style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 2, background: "var(--accent)" }} />
+      </div>
+      <div {...tok("muted")} style={{ display: "flex", alignItems: "center", padding: "0 12px", height: 28, fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>
+        dev-local
+      </div>
     </div>
   );
 }
 
 function Editor() {
-  const k = (s: string) => <span style={{ color: "var(--monaco-keyword)" }}>{s}</span>;
+  const k = (s: string) => <span {...tok("keyword")} style={{ color: "var(--monaco-keyword)" }}>{s}</span>;
   const lines: ReactNode[] = [
-    <span style={{ color: "var(--monaco-comment)", fontStyle: "italic" }}>-- paid orders this week</span>,
-    <>{k("SELECT")} id, <span style={{ color: "var(--monaco-predefined)" }}>upper</span>(name), total</>,
-    <>{k("FROM")} orders {k("WHERE")} status = <span style={{ color: "var(--monaco-string)" }}>'paid'</span></>,
-    <>{k("LIMIT")} <span style={{ color: "var(--monaco-number)" }}>100</span>;</>,
+    <span {...tok("comment")} style={{ color: "var(--monaco-comment)", fontStyle: "italic" }}>-- paid orders this week</span>,
+    <>{k("SELECT")} id, <span {...tok("function")} style={{ color: "var(--monaco-predefined)" }}>upper</span>(name), total, meta</>,
+    <>{k("FROM")} orders {k("WHERE")} status = <span {...tok("string")} style={{ color: "var(--monaco-string)" }}>'paid'</span></>,
+    <>{k("LIMIT")} <span {...tok("number")} style={{ color: "var(--monaco-number)" }}>100</span>;</>,
+    <>{k("SELECT")} * {k("FROM")} ord</>,
+    "",
   ];
   return (
-    <div style={{ ...mono, background: "var(--bg)", padding: "4px 0", flex: "none" }}>
+    <div {...tok("bg")} style={{ ...mono, position: "relative", background: "var(--bg)", padding: "4px 0", flex: "none" }}>
       {lines.map((l, i) => (
-        <div key={i} style={{ display: "flex", height: 18, alignItems: "center", background: i === 2 ? "color-mix(in srgb, var(--text) 4%, transparent)" : undefined }}>
-          <span style={{ width: 26, textAlign: "right", paddingRight: 8, color: i === 2 ? "var(--muted)" : "color-mix(in srgb, var(--muted) 60%, var(--bg))" }}>{i + 1}</span>
-          <span style={{ whiteSpace: "nowrap" }}>{l}</span>
+        <div key={i} style={{ display: "flex", height: 18, alignItems: "center" }}>
+          <span {...tok("muted")} style={{ width: 26, textAlign: "right", paddingRight: 8, color: "color-mix(in srgb, var(--muted) 70%, var(--bg))" }}>{i + 1}</span>
+          <span {...tok("text")} style={{ whiteSpace: "nowrap" }}>{l}</span>
         </div>
       ))}
+      {/* Completion popup: a popup's edge is a strong border */}
+      <div {...tok("borderStrong", "panel")} style={{ position: "absolute", left: 128, top: 4 + 5 * 18, width: 140, background: "var(--panel)", border: "1px solid var(--ui-border-strong)", borderRadius: 4, boxShadow: "var(--ui-shadow-pop)", fontSize: 11, padding: 2, zIndex: 1 }}>
+        <div {...tok("sel")} style={{ display: "flex", gap: 6, padding: "1px 4px", background: "var(--sel)", borderRadius: 2 }}>
+          <span style={{ color: "var(--ui-icon)" }}>▦</span>orders<span style={{ marginLeft: "auto", color: "var(--muted)" }}>table</span>
+        </div>
+      </div>
     </div>
   );
 }
 
+function Json({ k, v }: { k: string; v: ReactNode }) {
+  return (
+    <>
+      <span {...tok("muted")} style={{ color: "var(--ui-json-punct)" }}>{"{"}</span>
+      <span {...tok("jsonKey")} style={{ color: "var(--ui-json-key)" }}>"{k}"</span>
+      <span style={{ color: "var(--ui-json-punct)" }}>: </span>
+      {v}
+      <span style={{ color: "var(--ui-json-punct)" }}>{"}"}</span>
+    </>
+  );
+}
+
 function Grid() {
-  const cols: [string, number, boolean][] = [["id", 44, true], ["name", 88, false], ["total", 78, true], ["note", 1, false]];
-  const rows = [
-    ["1", "Kim", "1,200.00", "gift"],
-    ["2", "Lee", "35.50", null],
-    ["3", "Park", "980.00", "rush"],
+  const cols: [string, number, boolean][] = [["id", 30, true], ["name", 58, false], ["total", 76, true], ["meta", 1, false]];
+  type Row = { v: ReactNode[]; keys?: Key[]; bg?: string; deleted?: boolean };
+  const gift = <Json k="gift" v={<span {...tok("keyword")} style={{ color: "var(--ui-json-keyword)" }}>true</span>} />;
+  const rush = <Json k="tag" v={<span {...tok("string")} style={{ color: "var(--ui-json-string)" }}>"rush"</span>} />;
+  const rows: Row[] = [
+    { v: ["1", "Kim", "1,200.00", gift] },
+    { v: ["2", "Lee", "35.50", null] },
+    { v: ["3", "Park", "980.00", rush] },
+    { v: ["4", "Choi", "12.00", null], keys: ["added"], bg: "var(--grid-added)" },
+    { v: ["5", "Jung", "7.25", null], keys: ["deleted", "danger"], bg: "var(--grid-deleted)", deleted: true },
   ];
-  const cell = (key: string | number, w: number, num: boolean, extra: CSSProperties = {}, children: ReactNode = null) => (
-    <div key={key} style={{ width: w === 1 ? undefined : w, flex: w === 1 ? 1 : "none", padding: "0 6px", textAlign: num ? "right" : "left", overflow: "hidden", whiteSpace: "nowrap", borderRight: "1px solid var(--border)", ...extra }}>{children}</div>
+  const cell = (key: string | number, w: number, num: boolean, extra: CSSProperties = {}, children: ReactNode = null, keys: Key[] = []) => (
+    <div key={key} {...tok(...keys)} style={{ width: w === 1 ? undefined : w, flex: w === 1 ? 1 : "none", minWidth: 0, padding: "0 6px", textAlign: num ? "right" : "left", overflow: "hidden", whiteSpace: "nowrap", borderRight: "1px solid var(--border)", lineHeight: "22px", ...extra }}>{children}</div>
   );
   return (
-    <div style={{ ...mono, flex: 1, minHeight: 0, borderTop: "1px solid var(--border)" }}>
-      <div style={{ display: "flex", height: 22, alignItems: "center", background: "var(--panel)", borderBottom: "1px solid var(--border)" }}>
-        {cell("#", 26, true, { color: "var(--muted)", background: "var(--panel-2)" })}
-        {cols.map(([c, w, n]) => cell(c, w, n, { color: c === "total" ? "var(--c-9fbfff)" : "var(--text)", fontWeight: 600 }, c === "total" ? "total ↓" : c))}
+    <div style={{ ...mono, flex: 1, minHeight: 0, borderTop: "1px solid var(--border)", display: "flex", flexDirection: "column" }}>
+      <div {...tok("panel")} style={{ display: "flex", alignItems: "center", gap: 4, height: 26, padding: "0 6px", background: "var(--panel)", borderBottom: "1px solid var(--border)", fontSize: 11, flex: "none" }}>
+        <span {...tok("hover", "borderStrong")} style={{ padding: "1px 7px", border: "1px solid var(--ui-border-strong)", borderRadius: 4, background: "var(--ui-hover)" }} title="Shown in its hover state">↻</span>
+        <span {...tok("borderStrong")} style={{ padding: "1px 7px", border: "1px solid var(--ui-border-strong)", borderRadius: 4 }}>+</span>
+        <span {...tok("accent")} style={{ padding: "1px 8px", border: "1px solid var(--accent)", borderRadius: 4, background: "var(--accent)" }}>
+          <span {...tok("onAccent")} style={{ color: "var(--ui-text-on-accent)" }}>Submit (3)</span>
+        </span>
+        <span style={{ marginLeft: "auto", color: "var(--muted)" }}>Find: Lee</span>
+      </div>
+      <div {...tok("panel")} style={{ display: "flex", height: 22, alignItems: "center", background: "var(--panel)", borderBottom: "1px solid var(--border)", flex: "none" }}>
+        {cell("#", 24, true, { color: "var(--muted)", background: "var(--panel-2)" }, null, ["panel2"])}
+        {cols.map(([c, w, n]) => (c === "total" ? cell(c, w, n, { color: "var(--c-9fbfff)", fontWeight: 600 }, "total ↓", ["link"]) : cell(c, w, n, { color: "var(--text)", fontWeight: 600 }, c)))}
       </div>
       {rows.map((r, i) => (
-        <div key={i} style={{ display: "flex", height: 22, alignItems: "center", background: i % 2 ? "var(--c-222326)" : "var(--bg)" }}>
-          {cell("#", 26, true, { color: "var(--muted)", background: "var(--panel-2)", lineHeight: "22px" }, i + 1)}
-          {r.map((v, j) => {
+        <div key={i} {...tok(...(r.keys ?? [i % 2 ? "odd" : "bg"]))} style={{ display: "flex", height: 22, alignItems: "center", flex: "none", background: r.bg ?? (i % 2 ? "var(--c-222326)" : "var(--bg)") }}>
+          {cell("#", 24, true, { color: "var(--muted)", background: "var(--panel-2)" }, i + 1, ["panel2"])}
+          {r.v.map((v, j) => {
             const [, w, num] = cols[j];
-            const st: CSSProperties = { lineHeight: "22px", color: v === null ? "var(--c-6f737a)" : num ? "var(--c-2aacb8)" : "var(--text)", fontStyle: v === null ? "italic" : undefined };
-            // a selected cell, an edited (not yet submitted) cell
-            if (i === 0 && j === 1) Object.assign(st, { background: "var(--sel)", outline: "1px solid var(--accent)", outlineOffset: -1 });
-            if (i === 2 && j === 2) st.background = "var(--grid-changed)";
-            return cell(j, w, num, st, v ?? "NULL");
+            const st: CSSProperties = { color: v === null ? "var(--c-6f737a)" : num ? "var(--c-2aacb8)" : "var(--text)", fontStyle: v === null ? "italic" : undefined };
+            const keys: Key[] = v === null ? ["nullText"] : num ? ["gridNum"] : [];
+            if (r.deleted) Object.assign(st, { color: "var(--danger)", textDecoration: "line-through" });
+            // a selected cell, a Find match, an edited (not yet submitted) cell
+            if (i === 0 && j === 1) {
+              Object.assign(st, { background: "var(--sel)", outline: "1px solid var(--accent)", outlineOffset: -1 });
+              keys.push("sel", "accent");
+            }
+            if (i === 1 && j === 1) {
+              st.background = "var(--grid-match)";
+              keys.push("match");
+            }
+            if (i === 2 && j === 2) {
+              st.background = "var(--grid-changed)";
+              keys.push("changed");
+            }
+            return cell(j, w, num, st, v ?? "NULL", keys);
           })}
         </div>
       ))}
@@ -282,63 +379,81 @@ function Grid() {
 
 function StatusBar() {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, height: 22, padding: "0 8px", background: "var(--panel)", borderTop: "1px solid var(--border)", color: "var(--muted)", fontSize: 11, flex: "none", whiteSpace: "nowrap" }}>
-      <span style={{ color: "var(--accent)" }}>◐</span>
-      <span style={{ color: "var(--text)" }}>Running 1.4 s</span>
-      <span style={{ color: "var(--ok)" }}>✓ 3 rows</span>
-      <span style={{ color: "var(--ui-warn)" }}>1 pending change</span>
-      <span style={{ marginLeft: "auto" }}>UTF-8</span>
+    <div {...tok("panel")} style={{ display: "flex", alignItems: "center", gap: 10, height: 22, padding: "0 8px", background: "var(--panel)", borderTop: "1px solid var(--border)", color: "var(--muted)", fontSize: 11, flex: "none", whiteSpace: "nowrap", overflow: "hidden" }}>
+      <span {...tok("accent")} style={{ color: "var(--accent)" }}>◐</span>
+      <span {...tok("text")} style={{ color: "var(--text)" }}>Running 1.4 s</span>
+      <span {...tok("ok")} style={{ color: "var(--ok)" }}>✓ 3 rows</span>
+      <span {...tok("warn")} style={{ color: "var(--ui-warn)" }}>3 pending</span>
+      <span {...tok("danger")} style={{ color: "var(--danger)" }}>✕ 1 error</span>
+      <span {...tok("muted")} style={{ marginLeft: "auto" }}>UTF-8</span>
     </div>
   );
 }
 
-/** A few lines of the TUI in this theme: the TUI maps the same tokens (ACCENT = link, SEL, NUMBER = grid numbers, DIM = dim text) */
+/**
+ * A few lines of the TUI in this theme. It maps the same tokens: ACCENT = accent text (focused border), SEL, NUMBER = grid numbers,
+ * DIM = dim text, CELL_EDITED = edited cell, OK / WARN / DANGER
+ */
 function TuiStrip({ p }: { p: Palette }) {
   const W = 64;
   const pad = (s: string, w: number, right = false) => (right ? s.padStart(w) : s.padEnd(w)).slice(0, w);
-  const B = (s: string) => <span style={{ color: p.link }}>{s}</span>;
+  const B = (s: string) => <span {...tok("link")} style={{ color: p.link }}>{s}</span>;
   const title = " orders  3 rows ";
-  const row = (id: string, name: string, total: string | null, sel = false) => (
-    <div style={{ background: sel ? p.sel : undefined }}>
+  const row = (id: string, name: string, total: string | null, opt: { sel?: boolean; edited?: boolean } = {}) => (
+    <div {...(opt.sel ? tok("sel") : {})} style={{ background: opt.sel ? p.sel : undefined }}>
       {B("┃")}
-      <span style={{ color: p.gridNum }}>{pad(id, 4, true)}</span>
+      <span {...tok("gridNum")} style={{ color: p.gridNum }}>{pad(id, 4, true)}</span>
       <span>{"  " + pad(name, 12)}</span>
-      {total === null ? <span style={{ color: p.muted, fontStyle: "italic" }}>{pad("NULL", 10, true)}</span> : <span style={{ color: p.gridNum }}>{pad(total, 10, true)}</span>}
+      {total === null ? (
+        <span {...tok("muted")} style={{ color: p.muted, fontStyle: "italic" }}>{pad("NULL", 10, true)}</span>
+      ) : (
+        <span {...tok("gridNum", ...(opt.edited ? (["changed"] as Key[]) : []))} style={{ color: p.gridNum, background: opt.edited ? p.changed : undefined }}>{pad(total, 10, true)}</span>
+      )}
       <span>{" ".repeat(W - 2 - 28)}</span>
       {B("┃")}
     </div>
   );
   return (
-    <div style={{ ...mono, fontSize: 11, lineHeight: "14px", background: p.bg, color: p.text, padding: "4px 6px", whiteSpace: "pre", borderTop: `1px solid ${p.border}`, overflow: "hidden" }}>
+    <div {...tok("bg")} style={{ ...mono, fontSize: 11, lineHeight: "14px", background: p.bg, color: p.text, padding: "4px 6px", whiteSpace: "pre", borderTop: `1px solid ${p.border}`, overflow: "hidden" }}>
       <div style={{ display: "inline-block" }}>
         <div>
           {B("┏")}
-          <b style={{ color: p.link }}>{title}</b>
+          <b {...tok("link")} style={{ color: p.link }}>{title}</b>
           {B("━".repeat(W - 2 - title.length) + "┓")}
         </div>
         <div>
           {B("┃")}
-          <b>{pad("  id  name             total", W - 2)}</b>
+          <b {...tok("text")}>{pad("  id  name             total", W - 2)}</b>
           {B("┃")}
         </div>
-        {row("1", "Kim", "1,200.00", true)}
+        {row("1", "Kim", "1,200.00", { sel: true })}
         {row("2", "Lee", null)}
+        {row("3", "Park", "980.00", { edited: true })}
         {B("┗" + "━".repeat(W - 2) + "┛")}
       </div>
-      <div style={{ color: p.muted }}>
-        <span style={{ color: p.accent }}>⠋</span> <span style={{ color: p.text }}>Running 1.4s</span> <span style={{ color: p.keyword }}>⌘↩</span> run <span style={{ color: p.keyword }}>⌃k</span> commands <span style={{ color: p.ok }}>●</span> prod
+      <div {...tok("muted")} style={{ color: p.muted }}>
+        <span {...tok("accent")} style={{ color: p.accent }}>⠋</span> <span style={{ color: p.text }}>Running 1.4s</span> <span {...tok("ok")} style={{ color: p.ok }}>✓ 3 rows</span> <span {...tok("warn")} style={{ color: p.warn }}>1 pending</span>{" "}
+        <span {...tok("danger")} style={{ color: p.danger }}>✕ 1 error</span> <b style={{ color: p.text }}>⌘↩</b> run <b style={{ color: p.text }}>⌃k</b> commands
       </div>
     </div>
   );
 }
 
-function MiniWindow({ p, width = 460 }: { p: Palette; width?: number | string }) {
+const HIGHLIGHT = "#ff2bd6";
+/** hot: the token being pointed at (outlined, pulsing); flash: the token just edited (its areas flash once) */
+function MiniWindow({ p, width = 460, hot, flash }: { p: Palette; width?: number | string; hot?: Key | null; flash?: { key: Key; n: number } | null }) {
+  const css =
+    (hot ? `.tok-scope [data-tok~="${hot}"] { outline: 2px solid ${HIGHLIGHT} !important; outline-offset: -2px !important; animation: tok-pulse 1s ease-in-out infinite; }` : "") +
+    (flash ? `.tok-scope [data-tok~="${flash.key}"] { animation: tok-flash-${flash.n % 2} 0.9s ease-out 1; }` : "") +
+    `@keyframes tok-pulse { 50% { outline-color: #ffe600; } }` +
+    [0, 1].map((n) => `@keyframes tok-flash-${n} { from { box-shadow: inset 0 0 0 999px rgba(255, 230, 0, 0.55); } to { box-shadow: inset 0 0 0 999px rgba(255, 230, 0, 0); } }`).join("");
   return (
-    <div style={{ ...themeVars(p), width, border: `1px solid ${p.border}`, borderRadius: 6, overflow: "hidden", display: "flex", flexDirection: "column", fontSize: 12 }}>
-      <div style={{ display: "flex", height: 196 }}>
+    <div className="tok-scope" style={{ ...themeVars(p), width, border: `1px solid ${p.border}`, borderRadius: 6, overflow: "hidden", display: "flex", flexDirection: "column", fontSize: 12 }}>
+      <style>{css}</style>
+      <div style={{ display: "flex", height: 336 }}>
         <Explorer p={p} />
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-          <Tabs p={p} />
+          <Tabs />
           <Editor />
           <Grid />
         </div>
@@ -427,6 +542,49 @@ function HexField({ value, onChange }: { value: string; onChange: (v: string) =>
 
 const NAV = ["Appearance", "Editor", "Keymap", "Data Editor", "AI", "Plugins"];
 
+/** Whether a token's contrast pair is below its minimum: [ratio, the other token] */
+const lowContrast = (t: Tok, p: Palette): [number, Key] | null => {
+  if (!t.check) return null;
+  const [fg, bg, min] = t.check;
+  const r = ratio(p[fg], p[bg]);
+  return r < min ? [r, fg === t.key ? bg : fg] : null;
+};
+
+/** One token: label, a "changed" dot, the contrast warning and the plain description; hover or focus points at it in the preview */
+function TokenRow({ t, p, edited, onHot, onChange, onReset }: { t: Tok; p: Palette; edited: boolean; onHot: (k: Key | null) => void; onChange: (v: string) => void; onReset: () => void }) {
+  const low = lowContrast(t, p);
+  return (
+    <div
+      data-row={t.key}
+      onMouseEnter={() => onHot(t.key)}
+      onMouseLeave={() => onHot(null)}
+      onFocus={() => onHot(t.key)}
+      onBlur={() => onHot(null)}
+      style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 4px", margin: "0 -4px", borderRadius: 4, fontSize: 12 }}
+      className="theme-token-row"
+    >
+      <div style={{ flex: 1, minWidth: 0 }} title={`CSS: ${t.vars.join(" ") || "(Data Source color, mixed)"}`}>
+        <div style={{ display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" }}>
+          <span>{t.label}</span>
+          {edited && <span title="Changed from the base theme" style={{ width: 6, height: 6, borderRadius: 3, background: "var(--accent)", flex: "none" }} />}
+          {low && (
+            <span style={{ color: "var(--ui-warn)", fontSize: 11, marginLeft: "auto", overflow: "hidden", textOverflow: "ellipsis" }} title={`${LABEL[t.check![0]]} on ${LABEL[t.check![1]]}: needs ${t.check![2]}:1`}>
+              ⚠ {low[0].toFixed(1)}:1 on {LABEL[low[1]].split(",")[0]}
+            </span>
+          )}
+        </div>
+        <div style={{ color: "var(--muted)", fontSize: 11 }}>{DESC[t.key]}</div>
+      </div>
+      <HexField value={p[t.key]} onChange={onChange} />
+      <button className="ui-icon-btn ui-icon-btn-sm" title="Reset to base" aria-label="Reset to base" style={{ visibility: edited ? "visible" : "hidden" }} onClick={onReset}>
+        ↺
+      </button>
+    </div>
+  );
+}
+
+const groupHead: CSSProperties = { fontSize: 11, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4, padding: "8px 0 3px", borderBottom: "1px solid var(--border)", marginBottom: 3 };
+
 function ThemeEditor() {
   const [baseId, setBaseId] = useState("dracula");
   const base = ALL.find((t) => t.id === baseId)!;
@@ -435,10 +593,25 @@ function ThemeEditor() {
   const [name, setName] = useState("Dracula (mine)");
   const [dark, setDark] = useState("c-night");
   const [light, setLight] = useState("solarized-light");
+  const [advanced, setAdvanced] = useState(false);
+  const [hot, setHot] = useState<Key | null>(null);
+  const [flash, setFlash] = useState<{ key: Key; n: number } | null>(null);
+  const timer = useRef<number>(undefined);
   const p: Palette = { ...base.p, ...over };
-  const set = (k: Key, v: string) => setOver((o) => ({ ...o, [k]: v }));
-  const changed = Object.keys(over).filter((k) => over[k as Key] !== base.p[k as Key]).length;
-  const warnings = TOKENS.filter((t) => t.check && ratio(p[t.check[0]], p[t.check[1]]) < t.check[2]).length;
+  const isEdited = (k: Key) => over[k] !== undefined && over[k] !== base.p[k];
+  const set = (k: Key, v: string) => {
+    setOver((o) => ({ ...o, [k]: v }));
+    setFlash((f) => ({ key: k, n: (f?.n ?? 0) + 1 }));
+    clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setFlash(null), 900);
+  };
+  const changed = TOKENS.filter((t) => isEdited(t.key)).length;
+  const warnings = TOKENS.filter((t) => lowContrast(t, p)).length;
+  const advancedTokens = TOKENS.filter((t) => !BASIC.includes(t.key));
+  const advancedWarnings = advancedTokens.filter((t) => lowContrast(t, p)).length;
+  const row = (t: Tok) => (
+    <TokenRow key={t.key} t={t} p={p} edited={isEdited(t.key)} onHot={setHot} onChange={(v) => set(t.key, v)} onReset={() => setOver(({ [t.key]: _, ...o }) => o)} />
+  );
   const option = (t: ThemeDef) => (
     <option key={t.id} value={t.id}>
       {t.name}
@@ -447,7 +620,8 @@ function ThemeEditor() {
   );
   return (
     <div style={{ padding: 16 }}>
-      <div style={{ display: "flex", width: 1180, height: 760, border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", background: "var(--bg)", boxShadow: "var(--ui-shadow-modal)" }}>
+      <style>{`.theme-token-row:hover, .theme-token-row:focus-within { background: var(--ui-hover); }`}</style>
+      <div style={{ display: "flex", width: 1240, height: 800, border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", background: "var(--bg)", boxShadow: "var(--ui-shadow-modal)" }}>
         <div style={{ width: 170, flex: "none", background: "var(--panel)", borderRight: "1px solid var(--border)", padding: "8px 0", fontSize: 13 }}>
           {NAV.map((n) => (
             <div key={n} style={{ padding: "4px 14px", background: n === "Appearance" ? "var(--sel)" : undefined }}>{n}</div>
@@ -457,46 +631,43 @@ function ThemeEditor() {
           <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 8 }}>
             <b style={{ fontSize: 13 }}>Appearance › Theme</b>
             <span style={{ color: "var(--muted)", fontSize: 12 }}>
-              {changed} {changed === 1 ? "token" : "tokens"} changed from {base.name}
+              {changed} {changed === 1 ? "color" : "colors"} changed from {base.name}
               {warnings > 0 && <span style={{ color: "var(--ui-warn)" }}> · ⚠ {warnings} below the contrast minimum</span>}
             </span>
           </div>
           <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
-            <div style={{ width: 430, flex: "none", display: "flex", flexDirection: "column", borderRight: "1px solid var(--border)" }}>
-              <div style={{ padding: "10px 16px", display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+            <div style={{ width: 450, flex: "none", display: "flex", flexDirection: "column", borderRight: "1px solid var(--border)" }}>
+              <div style={{ padding: "10px 16px 4px", display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
                 <span style={{ color: "var(--muted)", width: 70 }}>Based on</span>
                 <Select value={baseId} onChange={(e) => (setBaseId(e.target.value), setOver({}))}>
                   {BUILT_IN.map(option)}
                 </Select>
               </div>
+              <div style={{ padding: "0 16px 4px", color: "var(--muted)", fontSize: 11 }}>Point at a color to see where it's used in the preview.</div>
               <div className="theme-tokens" style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "0 16px 10px" }}>
-                {GROUPS.map((g) => (
-                  <div key={g.name} style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.4, padding: "6px 0 3px", borderBottom: "1px solid var(--border)", marginBottom: 3 }}>{g.name}</div>
-                    {g.tokens.map((t) => {
-                      const r = t.check && ratio(p[t.check[0]], p[t.check[1]]);
-                      const low = t.check && r! < t.check[2];
-                      const edited = over[t.key] !== undefined && over[t.key] !== base.p[t.key];
-                      const other = t.check && (t.check[0] === t.key ? t.check[1] : t.check[0]);
-                      return (
-                        <div key={t.key} style={{ display: "flex", alignItems: "center", gap: 6, height: 26, fontSize: 12 }}>
-                          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: edited ? "var(--c-548af7)" : undefined }} title={t.vars.join(" ")}>
-                            {t.label}
-                          </span>
-                          {low && (
-                            <span style={{ color: "var(--ui-warn)", whiteSpace: "nowrap", fontSize: 11 }} title={`${LABEL[t.check![0]]} on ${LABEL[t.check![1]]}: needs ${t.check![2]}:1`}>
-                              ⚠ {r!.toFixed(1)}:1 on {LABEL[other!].split(",")[0]}
-                            </span>
-                          )}
-                          <HexField value={p[t.key]} onChange={(v) => set(t.key, v)} />
-                          <button className="ui-icon-btn ui-icon-btn-sm" title="Reset to base" aria-label="Reset to base" style={{ visibility: edited ? "visible" : "hidden" }} onClick={() => setOver(({ [t.key]: _, ...o }) => o)}>
-                            ↺
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ))}
+                <div style={groupHead}>Basic colors</div>
+                {TOKENS.filter((t) => BASIC.includes(t.key)).map(row)}
+                <button
+                  className="theme-advanced"
+                  aria-expanded={advanced}
+                  onClick={() => setAdvanced((a) => !a)}
+                  style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", marginTop: 10, padding: "6px 0", background: "none", border: "none", borderTop: "1px solid var(--border)", borderRadius: 0, color: "var(--text)", fontSize: 12, cursor: "pointer", textAlign: "left" }}
+                >
+                  <span style={{ width: 10, color: "var(--muted)" }}>{advanced ? "▾" : "▸"}</span>
+                  <b style={{ whiteSpace: "nowrap" }}>Advanced colors</b>
+                  <span style={{ color: "var(--muted)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{advancedTokens.length} more: surfaces, icons, grid states, tints, status</span>
+                  {!advanced && advancedWarnings > 0 && <span style={{ marginLeft: "auto", color: "var(--ui-warn)", whiteSpace: "nowrap" }}>⚠ {advancedWarnings}</span>}
+                </button>
+                {advanced &&
+                  GROUPS.map((g) => {
+                    const ts = g.tokens.filter((t) => !BASIC.includes(t.key));
+                    return ts.length === 0 ? null : (
+                      <div key={g.name}>
+                        <div style={groupHead}>{g.name}</div>
+                        {ts.map(row)}
+                      </div>
+                    );
+                  })}
               </div>
               <div style={{ padding: "10px 16px", borderTop: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8 }}>
                 <div style={{ display: "flex", gap: 6 }}>
@@ -516,9 +687,9 @@ function ThemeEditor() {
             </div>
             <div style={{ flex: 1, minWidth: 0, padding: 16, display: "flex", flexDirection: "column", gap: 10, overflow: "auto" }}>
               <Text size="sm" tone="muted">
-                Preview
+                Preview{hot ? ` — ${LABEL[hot]}: ${DESC[hot]}` : ""}
               </Text>
-              <MiniWindow p={p} width="100%" />
+              <MiniWindow p={p} width="100%" hot={hot} flash={flash} />
               <Measures p={p} />
               <div style={{ marginTop: "auto", borderTop: "1px solid var(--border)", paddingTop: 12, display: "flex", alignItems: "center", gap: 8, fontSize: 12, flexWrap: "wrap" }}>
                 <b>Sync with OS</b>
@@ -534,7 +705,7 @@ function ThemeEditor() {
             </div>
           </div>
           <div style={{ padding: "8px 16px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end", gap: 6, background: "var(--panel)" }}>
-            <span style={{ marginRight: "auto", color: "var(--muted)", fontSize: 11, alignSelf: "center" }}>Values below the minimum are saved with the warning, never changed silently; an invalid hex is not applied</span>
+            <span style={{ marginRight: "auto", color: "var(--muted)", fontSize: 11, alignSelf: "center" }}>Colors below the contrast minimum are saved with the warning, never changed silently; an invalid hex is not applied</span>
             <Button>Cancel</Button>
             <Button variant="primary">OK</Button>
           </div>
