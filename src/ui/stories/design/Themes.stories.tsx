@@ -1,5 +1,11 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+// Fake backend (same as the app's ?mock): the preview is the real app on fixed data
+import "../../../lib/mock";
+import { monaco } from "../../../lib/monaco";
+import App from "../../../App";
+import { TuiScreen, type Run, type Scene } from "../TuiScreen";
+import tuiSnapshots from "../tui-snapshots.json";
 import { Button, Select, Text, TextInput, normalizeHex } from "../../index";
 
 // Design for 0.3.2, #103: more built-in themes (Dracula, One Dark, Solarized Dark / Light), custom themes, Sync with OS per theme.
@@ -224,239 +230,128 @@ const CUSTOM: ThemeDef[] = [
 ];
 const ALL = [...BUILT_IN, ...CUSTOM];
 
-/** The inline CSS variables that make the mock UI draw a palette */
+/** The inline CSS variables that make the app under an element draw a palette */
 function themeVars(p: Palette): CSSProperties {
   const v: Record<string, string> = {};
   for (const t of TOKENS) for (const name of t.vars) v[name] = p[t.key];
   return { ...v, background: p.bg, color: p.text } as CSSProperties;
 }
 
-// ───────── Mock Qurry window ─────────
-// Every element says which tokens color it (data-tok), so the editor can point at it. Each token colors at least one element here.
+// ───────── Preview: the real app ─────────
+// The real App (with the ?mock data) and a real TUI snapshot, drawn with the palette. Nothing here is drawn by hand.
 const mono: CSSProperties = { fontFamily: "var(--ui-font-mono)", fontSize: 12 };
-/** Clips content but leaves room for the "where it's used" outline, drawn just outside an element */
-const clipped: CSSProperties = { overflow: "clip", overflowClipMargin: 4 };
-/** data-tok attribute: the tokens this element shows */
-const tok = (...keys: Key[]) => ({ "data-tok": keys.join(" ") });
+const PREVIEW_SQL = "-- paid orders this week\nselect id, upper(user_name) as name, 100 as n from users where user_name <> 'lee';";
 
-/** A thin colored edge inside its (position: relative) parent: the Production stripe */
-const Stripe = ({ side }: { side: "left" | "top" }) => (
-  <span {...tok("prodStripe")} style={{ position: "absolute", left: 0, top: 0, background: "var(--conn-stripe)", ...(side === "left" ? { bottom: 0, width: 3 } : { right: 0, height: 2 }) }} />
-);
-
-function Explorer({ p }: { p: Palette }) {
-  const row = (label: ReactNode, depth: number, keys: Key[] = [], bg?: string, stripe?: boolean) => (
-    <div {...tok(...keys)} style={{ position: "relative", display: "flex", alignItems: "center", gap: 5, height: 22, paddingLeft: 6 + depth * 14, background: bg, whiteSpace: "nowrap" }}>
-      {stripe && <Stripe side="left" />}
-      {label}
-    </div>
-  );
-  const db = <span {...tok("link")} style={{ color: "var(--ui-icon-db)" }}>◆</span>;
-  const tb = <span {...tok("icon")} style={{ color: "var(--ui-icon)" }}>▦</span>;
-  return (
-    <div {...tok("panel", "border")} style={{ width: 150, flex: "none", background: "var(--panel)", borderRight: "1px solid var(--border)", fontSize: 12, ...clipped }}>
-      <div {...tok("muted")} style={{ padding: "4px 8px", color: "var(--muted)", fontSize: 11, borderBottom: "1px solid var(--border)" }}>Database Explorer</div>
-      {row(<>{db}<span>prod-orders</span><span {...tok("warn")} style={{ color: "var(--ui-warn)", fontSize: 10, marginLeft: "auto", paddingRight: 6 }}>PROD</span></>, 0, ["prodTint"], p.prodTint, true)}
-      {row(<><span style={{ color: "var(--muted)" }}>▸</span><span>public</span></>, 1, ["prodTint"], p.prodTint, true)}
-      {row(<>{tb}<span>orders</span></>, 2, ["prodTint"], p.prodTint, true)}
-      {row(<>{db}<span>analytics</span></>, 0, ["tint"], p.tint)}
-      {row(<>{db}<span>dev-local</span></>, 0)}
-      {row(<>{tb}<span>users</span><span style={{ color: "var(--muted)", fontSize: 10, marginLeft: "auto", paddingRight: 6 }}>hover</span></>, 1, ["hover"], "var(--ui-hover)")}
-    </div>
-  );
+/** The Monaco theme for a palette (lib/monaco.ts dbtool-dark with the palette's colors). Monaco has one theme for every editor */
+function setMonacoTheme(p: Palette) {
+  const fg = (c: string) => c.slice(1);
+  monaco.editor.defineTheme("qurry-preview", {
+    base: lum(p.bg) > 0.4 ? "vs" : "vs-dark",
+    inherit: true,
+    rules: [
+      { token: "keyword", foreground: fg(p.keyword) },
+      { token: "string", foreground: fg(p.string) },
+      { token: "number", foreground: fg(p.number) },
+      { token: "comment", foreground: fg(p.comment), fontStyle: "italic" },
+      { token: "predefined", foreground: fg(p.function) },
+      { token: "string.key.json", foreground: fg(p.jsonKey) },
+      // The base themes color pgsql strings and functions #FF0000 / #FF00FF, over the rules above (the app has that today; #103 fixes it)
+      { token: "string.sql", foreground: fg(p.string) },
+      { token: "predefined.sql", foreground: fg(p.function) },
+    ],
+    colors: {
+      "editor.background": p.bg,
+      "editor.foreground": p.text,
+      "editor.lineHighlightBackground": p.panel2,
+      "editorLineNumber.foreground": p.muted,
+      "editorLineNumber.activeForeground": p.text,
+      "editor.selectionBackground": p.sel,
+    },
+  });
+  monaco.editor.setTheme("qurry-preview");
 }
 
-function Tabs() {
-  return (
-    <div {...tok("panel", "border")} style={{ display: "flex", background: "var(--panel)", borderBottom: "1px solid var(--border)", flex: "none" }}>
-      <div {...tok("prodTint")} style={{ position: "relative", display: "flex", alignItems: "center", padding: "0 12px", height: 28, fontSize: 12, color: "var(--text)", background: "var(--conn-bg)", whiteSpace: "nowrap" }}>
-        <Stripe side="top" />
-        prod-orders
-        <span {...tok("accent")} style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 2, background: "var(--accent)" }} />
-      </div>
-      <div {...tok("muted")} style={{ display: "flex", alignItems: "center", padding: "0 12px", height: 28, fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>
-        dev-local
-      </div>
-    </div>
-  );
+/** Waits for f to return something (the mock app renders in steps) */
+async function until<T>(f: () => T | null | undefined): Promise<T> {
+  for (let i = 0; i < 100; i++) {
+    const v = f();
+    if (v) return v;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error("the preview app didn't get ready");
 }
 
-function Editor() {
-  const k = (s: string) => <span {...tok("keyword")} style={{ color: "var(--monaco-keyword)" }}>{s}</span>;
-  const lines: ReactNode[] = [
-    <span {...tok("comment")} style={{ color: "var(--monaco-comment)", fontStyle: "italic" }}>-- paid orders this week</span>,
-    <>{k("SELECT")} id, <span {...tok("function")} style={{ color: "var(--monaco-predefined)" }}>upper</span>(name), total, meta</>,
-    <>{k("FROM")} orders {k("WHERE")} status = <span {...tok("string")} style={{ color: "var(--monaco-string)" }}>'paid'</span></>,
-    <>{k("LIMIT")} <span {...tok("number")} style={{ color: "var(--monaco-number)" }}>100</span>;</>,
-    <>{k("SELECT")} * {k("FROM")} ord</>,
-    "",
-  ];
-  return (
-    <div {...tok("bg")} style={{ ...mono, position: "relative", background: "var(--bg)", padding: "4px 0", flex: "none" }}>
-      {lines.map((l, i) => (
-        <div key={i} style={{ display: "flex", height: 18, alignItems: "center" }}>
-          <span {...tok("muted")} style={{ width: 26, textAlign: "right", paddingRight: 8, color: "color-mix(in srgb, var(--muted) 70%, var(--bg))" }}>{i + 1}</span>
-          <span {...tok("text")} style={{ whiteSpace: "nowrap" }}>{l}</span>
-        </div>
-      ))}
-      {/* Completion popup: a popup's edge is a strong border */}
-      <div {...tok("borderStrong", "panel")} style={{ position: "absolute", left: 128, top: 4 + 5 * 18, width: 140, background: "var(--panel)", border: "1px solid var(--ui-border-strong)", borderRadius: 4, boxShadow: "var(--ui-shadow-pop)", fontSize: 11, padding: 2, zIndex: 1 }}>
-        <div {...tok("sel")} style={{ display: "flex", gap: 6, padding: "1px 4px", background: "var(--sel)", borderRadius: 2 }}>
-          <span style={{ color: "var(--ui-icon)" }}>▦</span>orders<span style={{ marginLeft: "auto", color: "var(--muted)" }}>table</span>
-        </div>
-      </div>
-    </div>
-  );
+/** As a user would (e2e/app.ts openConsole): select [DEV] shop_app, ⇧⌘L for a console, type a query and run it */
+async function openConsole(root: HTMLElement) {
+  const dev = await until(() => [...root.querySelectorAll<HTMLElement>(".ws-explorer.on .tree-node")].find((n) => n.textContent?.includes("[DEV] shop_app")));
+  dev.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+  dev.click();
+  // The shortcut handler sees the selection after the app re-renders
+  await new Promise((r) => setTimeout(r, 300));
+  // From the selected row (the app's shortcut handler reads the event target)
+  dev.dispatchEvent(new KeyboardEvent("keydown", { key: "L", code: "KeyL", metaKey: true, shiftKey: true, bubbles: true }));
+  const ed = await until(() => monaco.editor.getEditors().find((e) => root.contains(e.getContainerDomNode())));
+  ed.setValue(PREVIEW_SQL);
+  ed.trigger("preview", "dbtool.run", null);
 }
 
-function Json({ k, v }: { k: string; v: ReactNode }) {
-  return (
-    <>
-      <span {...tok("muted")} style={{ color: "var(--ui-json-punct)" }}>{"{"}</span>
-      <span {...tok("jsonKey")} style={{ color: "var(--ui-json-key)" }}>"{k}"</span>
-      <span style={{ color: "var(--ui-json-punct)" }}>: </span>
-      {v}
-      <span style={{ color: "var(--ui-json-punct)" }}>{"}"}</span>
-    </>
-  );
+/** The TUI snapshot's dark colors (crates/tui/src/kit/atoms.rs, the terminal's own fg / bg) → the token that draws them */
+const TUI_TOKEN: Record<string, Key> = {
+  "#abb2bf": "text", "#e6e6e6": "text", "#1e1f22": "bg", "#2b2d30": "panel", "#26282e": "panel2", "#323438": "hover",
+  "#6b7079": "muted", "#868a91": "muted", "#60636a": "borderStrong", "#548af7": "link", "#6fb3d2": "link", "#2e436e": "sel",
+  "#2aacb8": "gridNum", "#243454": "changed", "#5fb865": "ok", "#c9a26d": "warn", "#f75464": "danger", "#b54f4f": "danger",
+  "#c77dbb": "jsonKey", "#6aab73": "string", "#cf8e6d": "keyword", "#cc7832": "keyword", "#56a8f5": "function", "#56b6c2": "function",
+  "#6e2a2a": "prodTint", "#2f5634": "tint",
+};
+const TUI_SCENE = (tuiSnapshots as { scenes: Scene[] }).scenes.find((s) => s.name === "Console & result")!;
+/** The TUI scene with each color swapped for its token's color in the palette */
+function tuiIn(p: Palette): Scene {
+  const map = (c: string | null, bg: boolean) => {
+    if (!c) return c;
+    const k = TUI_TOKEN[c.toLowerCase()];
+    // The Production color as text is the stripe, as a background the tint
+    return k === "prodTint" && !bg ? p.prodStripe : k ? p[k] : c;
+  };
+  return { ...TUI_SCENE, desc: "", rows: TUI_SCENE.rows.map((runs) => runs.map(([t, f, b, ...rest]) => [t, map(f, false), map(b, true), ...rest] as Run)) };
 }
 
-function Grid() {
-  const cols: [string, number, boolean][] = [["id", 30, true], ["name", 58, false], ["total", 76, true], ["meta", 1, false]];
-  type Row = { v: ReactNode[]; keys?: Key[]; bg?: string; deleted?: boolean };
-  const gift = <Json k="gift" v={<span {...tok("keyword")} style={{ color: "var(--ui-json-keyword)" }}>true</span>} />;
-  const rush = <Json k="tag" v={<span {...tok("string")} style={{ color: "var(--ui-json-string)" }}>"rush"</span>} />;
-  const rows: Row[] = [
-    { v: ["1", "Kim", "1,200.00", gift] },
-    { v: ["2", "Lee", "35.50", null] },
-    { v: ["3", "Park", "980.00", rush] },
-    { v: ["4", "Choi", "12.00", null], keys: ["added"], bg: "var(--grid-added)" },
-    { v: ["5", "Jung", "7.25", null], keys: ["deleted", "danger"], bg: "var(--grid-deleted)", deleted: true },
-  ];
-  const cell = (key: string | number, w: number, num: boolean, extra: CSSProperties = {}, children: ReactNode = null, keys: Key[] = []) => (
-    <div key={key} {...tok(...keys)} style={{ width: w === 1 ? undefined : w, flex: w === 1 ? 1 : "none", minWidth: 0, padding: "0 6px", textAlign: num ? "right" : "left", overflow: "hidden", whiteSpace: "nowrap", borderRight: "1px solid var(--border)", lineHeight: "22px", ...extra }}>{children}</div>
-  );
-  return (
-    <div style={{ ...mono, flex: 1, minHeight: 0, borderTop: "1px solid var(--border)", display: "flex", flexDirection: "column" }}>
-      <div {...tok("panel")} style={{ display: "flex", alignItems: "center", gap: 4, height: 26, padding: "0 6px", background: "var(--panel)", borderBottom: "1px solid var(--border)", fontSize: 11, flex: "none" }}>
-        <span {...tok("hover", "borderStrong")} style={{ padding: "1px 7px", border: "1px solid var(--ui-border-strong)", borderRadius: 4, background: "var(--ui-hover)" }} title="Shown in its hover state">↻</span>
-        <span {...tok("borderStrong")} style={{ padding: "1px 7px", border: "1px solid var(--ui-border-strong)", borderRadius: 4 }}>+</span>
-        <span {...tok("accent")} style={{ padding: "1px 8px", border: "1px solid var(--accent)", borderRadius: 4, background: "var(--accent)" }}>
-          <span {...tok("onAccent")} style={{ color: "var(--ui-text-on-accent)" }}>Submit (3)</span>
-        </span>
-        <span style={{ marginLeft: "auto", color: "var(--muted)" }}>Find: Lee</span>
-      </div>
-      <div {...tok("panel")} style={{ display: "flex", height: 22, alignItems: "center", background: "var(--panel)", borderBottom: "1px solid var(--border)", flex: "none" }}>
-        {cell("#", 24, true, { color: "var(--muted)", background: "var(--panel-2)" }, null, ["panel2"])}
-        {cols.map(([c, w, n]) => (c === "total" ? cell(c, w, n, { color: "var(--c-9fbfff)", fontWeight: 600 }, "total ↓", ["link"]) : cell(c, w, n, { color: "var(--text)", fontWeight: 600 }, c)))}
-      </div>
-      {rows.map((r, i) => (
-        <div key={i} {...tok(...(r.keys ?? [i % 2 ? "odd" : "bg"]))} style={{ display: "flex", height: 22, alignItems: "center", flex: "none", background: r.bg ?? (i % 2 ? "var(--c-222326)" : "var(--bg)") }}>
-          {cell("#", 24, true, { color: "var(--muted)", background: "var(--panel-2)" }, i + 1, ["panel2"])}
-          {r.v.map((v, j) => {
-            const [, w, num] = cols[j];
-            const st: CSSProperties = { color: v === null ? "var(--c-6f737a)" : num ? "var(--c-2aacb8)" : "var(--text)", fontStyle: v === null ? "italic" : undefined };
-            const keys: Key[] = v === null ? ["nullText"] : num ? ["gridNum"] : [];
-            if (r.deleted) Object.assign(st, { color: "var(--danger)", textDecoration: "line-through" });
-            // a selected cell, a Find match, an edited (not yet submitted) cell
-            if (i === 0 && j === 1) {
-              Object.assign(st, { background: "var(--sel)", boxShadow: "inset 0 0 0 1px var(--accent)" });
-              keys.push("sel", "accent");
-            }
-            if (i === 1 && j === 1) {
-              st.background = "var(--grid-match)";
-              keys.push("match");
-            }
-            if (i === 2 && j === 2) {
-              st.background = "var(--grid-changed)";
-              keys.push("changed");
-            }
-            return cell(j, w, num, st, v ?? "NULL", keys);
-          })}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function StatusBar() {
-  return (
-    <div {...tok("panel")} style={{ display: "flex", alignItems: "center", gap: 10, height: 22, padding: "0 8px", background: "var(--panel)", borderTop: "1px solid var(--border)", color: "var(--muted)", fontSize: 11, flex: "none", whiteSpace: "nowrap", ...clipped }}>
-      <span {...tok("accent")} style={{ color: "var(--accent)" }}>◐</span>
-      <span {...tok("text")} style={{ color: "var(--text)" }}>Running 1.4 s</span>
-      <span {...tok("ok")} style={{ color: "var(--ok)" }}>✓ 3 rows</span>
-      <span {...tok("warn")} style={{ color: "var(--ui-warn)" }}>3 pending</span>
-      <span {...tok("danger")} style={{ color: "var(--danger)" }}>✕ 1 error</span>
-      <span {...tok("muted")} style={{ marginLeft: "auto" }}>UTF-8</span>
-    </div>
-  );
-}
+/** A color far from the token's own, for blinking it */
+const flashOf = (c: string) => (ratio(c, "#ff2bd6") < 2 ? "#00e5ff" : "#ff2bd6");
 
 /**
- * A few lines of the TUI in this theme. It maps the same tokens: ACCENT = accent text (focused border), SEL, NUMBER = grid numbers,
- * DIM = dim text, CELL_EDITED = edited cell, OK / WARN / DANGER
+ * The real app in the palette: explorer, a console with a run, the status bar; under it the TUI.
+ * hot: the token being pointed at blinks (its color and a far one, every 0.4 s), so it shows wherever the app uses it.
+ * zoom: the app is laid out at 1080 × 600 and scaled.
  */
-function TuiStrip({ p }: { p: Palette }) {
-  const W = 64;
-  const pad = (s: string, w: number, right = false) => (right ? s.padStart(w) : s.padEnd(w)).slice(0, w);
-  const B = (s: string) => <span {...tok("link")} style={{ color: p.link }}>{s}</span>;
-  const title = " orders  3 rows ";
-  const row = (id: string, name: string, total: string | null, opt: { sel?: boolean; edited?: boolean } = {}) => (
-    <div {...(opt.sel ? tok("sel") : {})} style={{ background: opt.sel ? p.sel : undefined }}>
-      {B("┃")}
-      <span {...tok("gridNum")} style={{ color: p.gridNum }}>{pad(id, 4, true)}</span>
-      <span>{"  " + pad(name, 12)}</span>
-      {total === null ? (
-        <span {...tok("muted")} style={{ color: p.muted, fontStyle: "italic" }}>{pad("NULL", 10, true)}</span>
-      ) : (
-        <span {...tok("gridNum", ...(opt.edited ? (["changed"] as Key[]) : []))} style={{ color: p.gridNum, background: opt.edited ? p.changed : undefined }}>{pad(total, 10, true)}</span>
-      )}
-      <span>{" ".repeat(W - 2 - 28)}</span>
-      {B("┃")}
-    </div>
-  );
+function RealPreview({ p, hot, zoom = 0.7 }: { p: Palette; hot?: Key | null; zoom?: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [blink, setBlink] = useState(false);
+  useEffect(() => {
+    setBlink(false);
+    if (!hot) return;
+    const id = window.setInterval(() => setBlink((b) => !b), 400);
+    return () => clearInterval(id);
+  }, [hot]);
+  const shown: Palette = hot && blink ? { ...p, [hot]: flashOf(p[hot]) } : p;
+  useEffect(() => {
+    openConsole(ref.current!).catch(() => {});
+  }, []);
+  useEffect(() => {
+    setMonacoTheme(shown);
+    // The console editor sets the app's own theme when it mounts: set this one again after it
+    const id = window.setTimeout(() => setMonacoTheme(shown), 800);
+    return () => clearTimeout(id);
+  });
   return (
-    <div {...tok("bg")} style={{ ...mono, fontSize: 11, lineHeight: "14px", background: p.bg, color: p.text, padding: "4px 6px", whiteSpace: "pre", borderTop: `1px solid ${p.border}`, ...clipped }}>
-      <div style={{ display: "inline-block" }}>
-        <div>
-          {B("┏")}
-          <b {...tok("link")} style={{ color: p.link }}>{title}</b>
-          {B("━".repeat(W - 2 - title.length) + "┓")}
-        </div>
-        <div>
-          {B("┃")}
-          <b {...tok("text")}>{pad("  id  name             total", W - 2)}</b>
-          {B("┃")}
-        </div>
-        {row("1", "Kim", "1,200.00", { sel: true })}
-        {row("2", "Lee", null)}
-        {row("3", "Park", "980.00", { edited: true })}
-        {B("┗" + "━".repeat(W - 2) + "┛")}
-      </div>
-      <div {...tok("muted")} style={{ color: p.muted }}>
-        <span {...tok("accent")} style={{ color: p.accent }}>⠋</span> <span style={{ color: p.text }}>Running 1.4s</span> <span {...tok("ok")} style={{ color: p.ok }}>✓ 3 rows</span> <span {...tok("warn")} style={{ color: p.warn }}>1 pending</span>{" "}
-        <span {...tok("danger")} style={{ color: p.danger }}>✕ 1 error</span> <b style={{ color: p.text }}>⌘↩</b> run <b style={{ color: p.text }}>⌃k</b> commands
-      </div>
-    </div>
-  );
-}
-
-/** hot: the token being pointed at. Its elements get a thin dashed outline just outside them (in the preview's text color), never a fill */
-function MiniWindow({ p, width = 460, hot }: { p: Palette; width?: number | string; hot?: Key | null }) {
-  const css = hot ? `.tok-scope [data-tok~="${hot}"] { outline: 1px dashed var(--text); outline-offset: 2px; }` : "";
-  return (
-    <div className="tok-scope" style={{ ...themeVars(p), width, border: `1px solid ${p.border}`, borderRadius: 6, ...clipped, display: "flex", flexDirection: "column", fontSize: 12 }}>
-      <style>{css}</style>
-      <div style={{ display: "flex", height: 336 }}>
-        <Explorer p={p} />
-        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-          <Tabs />
-          <Editor />
-          <Grid />
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div ref={ref} style={{ ...themeVars(shown), width: 1080 * zoom, height: 600 * zoom, border: `1px solid ${shown.border}`, borderRadius: 6, overflow: "hidden", flex: "none" }}>
+        <div style={{ width: 1080, height: 600, zoom }}>
+          <App />
         </div>
       </div>
-      <StatusBar />
-      <TuiStrip p={p} />
+      <div style={{ zoom: zoom * 0.95 }}>
+        <TuiScreen scene={tuiIn(shown)} colors={{ bg: shown.bg, fg: shown.text, border: shown.border }} />
+      </div>
     </div>
   );
 }
@@ -481,23 +376,39 @@ const Measures = ({ p }: { p: Palette }) => (
 
 // ───────── 1. Gallery ─────────
 function Gallery() {
+  const [id, setId] = useState(BUILT_IN[0].id);
+  const cur = BUILT_IN.find((t) => t.id === id)!;
   return (
     <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
       <Text size="sm">
-        Each card is the same mock drawn with that theme's tokens (inline CSS variables). Under it: WCAG contrast on the background, text ≥ 4.5:1, dim text and the accent
-        (an icon / UI color) ≥ 3:1. All seven ship in 0.3.2. Dark, Light and High contrast are today's values; the four new ones are shown with their official palettes, and the ones marked ⚠ (Solarized, a few pairs elsewhere) get adjusted colors that pass when built (#103).
+        All seven ship in 0.3.2. Pick one: below is the real app (explorer, a console with a run) and the real TUI in it. Under each name: WCAG contrast on the background, text ≥ 4.5:1,
+        dim text and the accent (an icon / UI color) ≥ 3:1. Dark, Light and High contrast are today's values; the four new ones are shown with their official palettes, and the ones
+        marked ⚠ (Solarized, a few pairs elsewhere) get adjusted colors that pass when built (#103).
       </Text>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(462px, 1fr))", gap: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 8 }}>
         {BUILT_IN.map((t) => (
-          <div key={t.id} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <Text size="sm">
-              <b>{t.name}</b> — {EXISTING.has(t.id) ? "built in today" : "new in 0.3.2"}, {t.kind === "light" ? "light" : "dark"}
-            </Text>
-            <MiniWindow p={t.p} />
+          <button
+            key={t.id}
+            onClick={() => setId(t.id)}
+            aria-pressed={t.id === id}
+            style={{ display: "flex", flexDirection: "column", gap: 4, padding: "8px 10px", textAlign: "left", cursor: "pointer", color: "var(--text)", background: t.id === id ? "var(--sel)" : "var(--panel)", border: `1px solid ${t.id === id ? "var(--accent)" : "var(--border)"}`, borderRadius: 6 }}
+          >
+            <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+              <span style={{ display: "inline-flex", gap: 2 }}>
+                {[t.p.bg, t.p.accent, t.p.keyword].map((c, j) => (
+                  <span key={j} style={{ width: 10, height: 10, borderRadius: 2, background: c, border: "1px solid var(--border)" }} />
+                ))}
+              </span>
+              <b>{t.name}</b>
+              <span style={{ color: "var(--muted)", fontSize: 11 }}>
+                {EXISTING.has(t.id) ? "built in today" : "new in 0.3.2"}, {t.kind === "light" ? "light" : "dark"}
+              </span>
+            </span>
             <Measures p={t.p} />
-          </div>
+          </button>
         ))}
       </div>
+      <RealPreview p={cur.p} zoom={1} />
     </div>
   );
 }
@@ -557,7 +468,7 @@ function TokenRow({ t, p, edited, onPoint, onChange, onReset }: { t: Tok; p: Pal
   return (
     <div
       data-row={t.key}
-      // Opening the color picker is editing: the color has to be seen without the outline
+      // Opening the color picker is editing: the color has to be seen without blinking
       onFocus={(e) => onPoint((e.target as HTMLInputElement).type === "color" ? "edit" : "focus")}
       onBlur={() => onPoint("blur")}
       onMouseDown={(e) => (e.target as HTMLElement).closest(".ui-swatch") && onPoint("edit")}
@@ -595,7 +506,7 @@ function ThemeEditor() {
   const [dark, setDark] = useState("c-night");
   const [light, setLight] = useState("solarized-light");
   const [advanced, setAdvanced] = useState(false);
-  // hot: outlined in the preview; about: named in the preview title (stays while its row has focus)
+  // hot: blinks in the preview; about: named in the preview title (stays while its row has focus)
   const [hot, setHot] = useState<Key | null>(null);
   const [about, setAbout] = useState<Key | null>(null);
   const focused = useRef<Key | null>(null);
@@ -633,7 +544,7 @@ function ThemeEditor() {
   return (
     <div style={{ padding: 16 }}>
       <style>{`.theme-token-row:hover, .theme-token-row:focus-within { background: var(--ui-hover); }`}</style>
-      <div style={{ display: "flex", width: 1240, height: 800, border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", background: "var(--bg)", boxShadow: "var(--ui-shadow-modal)" }}>
+      <div style={{ display: "flex", width: 1440, height: 860, border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", background: "var(--bg)", boxShadow: "var(--ui-shadow-modal)" }}>
         <div style={{ width: 170, flex: "none", background: "var(--panel)", borderRight: "1px solid var(--border)", padding: "8px 0", fontSize: 13 }}>
           {NAV.map((n) => (
             <div key={n} style={{ padding: "4px 14px", background: n === "Appearance" ? "var(--sel)" : undefined }}>{n}</div>
@@ -701,7 +612,7 @@ function ThemeEditor() {
               <Text size="sm" tone="muted">
                 Preview{about ? ` — ${LABEL[about]}: ${DESC[about]}` : ""}
               </Text>
-              <MiniWindow p={p} width="100%" hot={hot} />
+              <RealPreview p={p} hot={hot} zoom={0.72} />
               <Measures p={p} />
               <div style={{ marginTop: "auto", borderTop: "1px solid var(--border)", paddingTop: 12, display: "flex", alignItems: "center", gap: 8, fontSize: 12, flexWrap: "wrap" }}>
                 <b>Sync with OS</b>
@@ -761,7 +672,7 @@ function QuickSwitch() {
   return (
     <div style={{ padding: 16, display: "flex", gap: 24, alignItems: "flex-start" }}>
       <div style={{ position: "relative", flex: "none" }}>
-        <MiniWindow p={cur.p} width={560} />
+        <RealPreview p={cur.p} zoom={0.62} />
         <div
           tabIndex={0}
           role="listbox"
