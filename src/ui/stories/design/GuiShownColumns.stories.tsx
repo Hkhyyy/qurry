@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { IconButton, Spacer, Text } from "../../index";
 
 // Agreed design for 0.3.2, #107: where the GUI shows "cols 3–8 of 14". Chosen: D (status bar).
@@ -98,39 +98,11 @@ function Frame({ title, note, children }: { title: string; note: string; childre
   );
 }
 
-const chip = (text: string) => (
-  <span style={{ position: "absolute", right: 10, bottom: 16, padding: "2px 8px", borderRadius: 10, background: "var(--panel)", border: "1px solid var(--border)", color: "var(--muted)", fontSize: 11, boxShadow: "0 2px 8px rgba(0,0,0,.25)" }}>{text}</span>
-);
-
-function Hover() {
-  const [on, setOn] = useState(false);
-  return (
-    <div onMouseEnter={() => setOn(true)} onMouseLeave={() => setOn(false)} style={{ display: "contents" }}>
-      <Grid overlay={on ? chip(`◀ ${label} ▶`) : undefined} />
-    </div>
-  );
-}
-
-export const Compare: S = {
-  name: "Compare",
+export const Chosen: S = {
+  name: "Status bar: cols 3–8 of 14",
   render: () => (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18, padding: 18 }}>
-      <Frame title="A. Grid toolbar, next to the row count" note="always there, never over the data">
-        <Toolbar extra={<Text size="sm" className="muted">· {label}</Text>} />
-        <Grid />
-        <Footer />
-      </Frame>
-      <Frame title="B. At the end of the scrollbar (like the TUI)" note="same place as TUI style D">
-        <Toolbar />
-        <Grid scrollbar={<FakeScrollbar><span style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>◀ {label} ▶</span></FakeScrollbar>} />
-        <Footer />
-      </Frame>
-      <Frame title="C. Chip while scrolling sideways" note="appears on horizontal scroll / hover, fades after ~1 s (hover the grid)">
-        <Toolbar />
-        <Hover />
-        <Footer />
-      </Frame>
-      <Frame title="D (chosen). Status bar" note="next to UTF-8, for the focused grid">
+    <div style={{ padding: 18, maxWidth: 760 }}>
+      <Frame title="Shown columns in the status bar" note="for the focused result grid, next to UTF-8; hidden when every column fits; updates while scrolling sideways">
         <Toolbar />
         <Grid />
         <Footer right={<span style={{ padding: "0 6px" }}>{label}</span>} />
@@ -138,4 +110,4 @@ export const Compare: S = {
     </div>
   ),
 };
-export const CompareLight: S = { ...Compare, name: "Compare — light", globals: { theme: "light" } };
+export const ChosenLight: S = { ...Chosen, name: "Status bar — light", globals: { theme: "light" } };

@@ -81,11 +81,8 @@ function Value() {
 export const KeyTreeTtl: S = {
   name: "1. Key tree — TTL column",
   render: () => (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18, padding: 18 }}>
-      <Frame title="Today" note="folder key counts and real TTLs share the TTL column">
-        <KeyTree proposed={false} />
-      </Frame>
-      <Frame title="Proposed" note="count beside the folder name (like tables 68); the TTL column only has key TTLs, — when none">
+    <div style={{ padding: 18, maxWidth: 700 }}>
+      <Frame title="Key tree" note="count beside the folder name (like tables 68); the TTL column only has key TTLs, — when none">
         <KeyTree proposed />
       </Frame>
     </div>
@@ -145,26 +142,12 @@ function OneTab() {
 }
 
 export const Layout: S = {
-  name: "2. Explorer vs key tab",
+  name: "2. Explorer and the Redis tab",
   render: () => (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 18, padding: 18 }}>
-      <Frame title="Today" note="the same key tree in the explorer and again in the tab" h={260}>
-        <Sidebar keys />
-        <KeyTree proposed />
-        <Value />
-      </Frame>
-      <Frame title="A (recommended). Explorer: data source and databases only; keys in the tab" note="like SQL: pick a table in the explorer, browse its data in a tab" h={260}>
-        <Sidebar keys={false} />
-        <KeyTree proposed />
-        <Value />
-      </Frame>
-      <Frame title="A2 (chosen). Explorer: databases only; ONE Redis tab per data source with a database picker" note="clicking db1 in the explorer switches the open tab to db1 instead of opening another tab; key tree + value stay side by side" h={290}>
+    <div style={{ padding: 18 }}>
+      <Frame title="Explorer: databases only; one Redis tab per data source with a database picker" note="clicking db1 in the explorer switches the open tab to db1 instead of opening another tab; key tree + value stay side by side" h={290}>
         <Sidebar keys={false} />
         <OneTab />
-      </Frame>
-      <Frame title="B. Explorer keeps the key tree; the tab shows only the value" note="no second tree; the tab is a value viewer/editor" h={260}>
-        <Sidebar keys />
-        <Value />
       </Frame>
     </div>
   ),
@@ -197,36 +180,15 @@ function RedisTabs({ config }: { config: "error" | "hidden" | "disabled" }) {
 export const ConfigTab: S = {
   name: "3. Config tab on managed Redis",
   render: () => (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 18, padding: 18 }}>
-      <Frame title="Today" note="a tab that only says it can't work" h={200}>
-        <RedisTabs config="error" />
-      </Frame>
-      <Frame title="A. Greyed out" note="checked once on connect; hover says why and where to look" h={200}>
+    <div style={{ padding: 18, maxWidth: 560 }}>
+      <Frame title="Greyed out where CONFIG is refused" note="checked once on connect; hover the tab for why and where to look" h={200}>
         <RedisTabs config="disabled" />
-      </Frame>
-      <Frame title="B. Hidden" note="no Config tab where CONFIG is refused" h={200}>
-        <RedisTabs config="hidden" />
       </Frame>
     </div>
   ),
 };
 
 const mono: React.CSSProperties = { fontFamily: "JetBrains Mono, Menlo, monospace", fontSize: 12 };
-
-function TerminalToday() {
-  return (
-    <div style={{ flex: 1, padding: 10, ...mono }}>
-      <div style={{ color: "var(--muted)" }}>db0&gt; HGETALL prod:user:1</div>
-      <div>1) "name"</div>
-      <div>2) "kim"</div>
-      <div>3) "tier"</div>
-      <div>4) "gold"</div>
-      <div style={{ marginTop: 6 }}>
-        db0&gt; HG<span style={{ background: "var(--text)", width: 7, display: "inline-block" }}>&nbsp;</span>
-      </div>
-    </div>
-  );
-}
 
 function TerminalProposed() {
   return (
@@ -277,11 +239,8 @@ function TerminalProposed() {
 export const Terminal: S = {
   name: "4. Terminal tab",
   render: () => (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18, padding: 18 }}>
-      <Frame title="Today" note="plain prompt and raw replies" h={280}>
-        <TerminalToday />
-      </Frame>
-      <Frame title="Proposed" note="command and key completion with argument hints, ↑↓ history, HELP, replies shown by type (hash as a table)" h={280}>
+    <div style={{ padding: 18, maxWidth: 760 }}>
+      <Frame title="Terminal" note="command and key completion with argument hints, ↑↓ history, HELP, replies shown by type (hash as a table)" h={280}>
         <TerminalProposed />
       </Frame>
     </div>

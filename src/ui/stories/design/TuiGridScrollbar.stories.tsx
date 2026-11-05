@@ -13,7 +13,6 @@ const GRAY = "#5c6370";
 const DIM = "#4b5263";
 const FG = "#abb2bf";
 const NUM = "#2aacb8";
-const ACCENT = "#61afef";
 
 const r = (t: string, fg: string | null = null, bg: string | null = null, bold = false): Run => [t, fg, bg, bold, false, false, false, false];
 
@@ -61,18 +60,6 @@ const start = 18;
 const len = 28;
 const fill = (left: Run[], thumb: Run[], right: Run[]) => [...left, ...thumb, ...right];
 
-/** A. Today: focused = full block in cyan, unfocused = bold line in gray */
-const today: Bottom = (f) =>
-  fill([r((f ? "━" : "─").repeat(start), f ? CYAN : GRAY)], [r((f ? "█" : "━").repeat(len), f ? CYAN : GRAY)], [r((f ? "━" : "─").repeat(inner - start - len), f ? CYAN : GRAY)]);
-
-/** B. Half-height thumb (▀) in the accent color, same in both states */
-const half: Bottom = (f) =>
-  fill([r((f ? "━" : "─").repeat(start), f ? CYAN : GRAY)], [r("▀".repeat(len), ACCENT)], [r((f ? "━" : "─").repeat(inner - start - len), f ? CYAN : GRAY)]);
-
-/** C. Line only: the thumb is the border line itself, brighter; the rest of the border is dimmer */
-const line: Bottom = (f) =>
-  fill([r("─".repeat(start), DIM)], [r("━".repeat(len), f ? CYAN : FG, null, true)], [r("─".repeat(inner - start - len), DIM)]);
-
 /** D. Line + position label at the right end: which columns are shown */
 const label: Bottom = (f) => {
   const text = " ◀ cols 3–8 of 14 ▶ ";
@@ -82,27 +69,19 @@ const label: Bottom = (f) => {
   return fill([r("─".repeat(s), DIM)], [r("━".repeat(l), f ? CYAN : FG, null, true)], [r("─".repeat(track - s - l), DIM), r(text, f ? CYAN : FG)]);
 };
 
-const variants: [string, string, Bottom][] = [
-  ["A. Today", "Focused: █ full block across the border (reads like a glitch). Unfocused: gray ━.", today],
-  ["B. Half-height thumb", "▀ in the accent color: clearly a bar, half as heavy, same in both states.", half],
-  ["C. Bright line", "The thumb is the border itself drawn heavier and brighter; the rest of the border goes dim.", line],
-  ["D (chosen). Line + label", "As C, plus which columns are shown at the right end.", label],
-];
-
-function Board({ focused }: { focused: boolean }) {
+function Board() {
   return (
     <div style={{ display: "grid", gap: 18, padding: 18, gridTemplateColumns: "1fr 1fr" }}>
-      {variants.map(([name, desc, b]) => (
-        <div key={name} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      {[true, false].map((focused) => (
+        <div key={String(focused)} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <div style={{ fontSize: 13 }}>
-            <b>{name}</b> — {desc}
+            <b>{focused ? "Grid focused" : "Grid not focused"}</b> — the thumb is the border line drawn heavier in the accent color over the shown columns, the rest dim, and the shown range at the right end
           </div>
-          <TuiScreen scene={scene(name, desc, focused, b)} />
+          <TuiScreen scene={scene(focused ? "focused" : "not focused", "", focused, label)} />
         </div>
       ))}
     </div>
   );
 }
 
-export const Focused: S = { name: "Compare — grid focused", render: () => <Board focused /> };
-export const Unfocused: S = { name: "Compare — grid not focused", render: () => <Board focused={false} /> };
+export const Chosen: S = { name: "Line + shown columns label", render: () => <Board /> };

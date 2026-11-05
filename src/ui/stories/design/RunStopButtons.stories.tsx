@@ -34,15 +34,6 @@ interface V {
   status: "buttons" | "stop" | "none" | "hoverX";
 }
 
-const VARIANTS: V[] = [
-  { key: "today", title: "1. Today", note: "▶ ■ in the toolbars and again in the status bar", consoleBar: "both", gridBar: "both", status: "buttons" },
-  { key: "toolbars", title: "2. Toolbars only", note: "▶ ■ / ↻ ■ next to what they act on; the status bar only shows information", consoleBar: "both", gridBar: "both", status: "none" },
-  { key: "toggle", title: "3. One button that toggles", note: "▶ (or ↻) turns into ■ while it runs, in the same spot (VS Code / browsers); no separate ■", consoleBar: "toggle", gridBar: "toggle", status: "none" },
-  { key: "status", title: "4. Stop only in the status bar", note: "toolbars keep ▶ / ↻ only; the one ■ sits on the running indicator, wherever you are", consoleBar: "run", gridBar: "reload", status: "stop" },
-  { key: "pick", title: "6. Chosen: one button + ✕ on hover", note: "▶ / ↻ turn into ■ while running; hover the status bar indicator for a ✕", consoleBar: "toggle", gridBar: "toggle", status: "hoverX" },
-  { key: "hover", title: "5. Toolbars + ✕ on the indicator", note: "as 2, plus a ✕ when you hover the running indicator", consoleBar: "both", gridBar: "both", status: "hoverX" },
-];
-
 function ConsoleBar({ running, mode, onRun = noop, onStop = noop }: { running: boolean; mode: V["consoleBar"]; onRun?: () => void; onStop?: () => void }) {
   const toggleStop = mode === "toggle" && running;
   return (
@@ -175,44 +166,6 @@ function Pane({ children }: { children: ReactNode }) {
   return <div style={{ display: "flex", flexDirection: "column", height: 150, border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden" }}>{children}</div>;
 }
 
-function Board({ running }: { running: boolean }) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 20, padding: 18 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
-        <Text size="sm" className="muted">
-          Console tab
-        </Text>
-        <Text size="sm" className="muted">
-          Table tab
-        </Text>
-      </div>
-      {VARIANTS.map((v) => (
-        <div key={v.key} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <Text size="sm">
-            <b>{v.title}</b> — {v.note}
-          </Text>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
-            <Pane>
-              <ConsoleBar running={running} mode={v.consoleBar} />
-              <Editor />
-              <StatusBar mode={v.status} running={running} label="Executing" pos="Ln 2, Col 11" />
-            </Pane>
-            <Pane>
-              <GridBar running={running} mode={v.gridBar} />
-              <div style={{ flex: 1, background: "var(--bg)" }} />
-              <StatusBar mode={v.status} running={running} label="Loading more rows" pos="Row 3, Col 5" />
-            </Pane>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-export const Running: S = { name: "Compare — while running", render: () => <Board running /> };
-export const Idle: S = { name: "Compare — idle", render: () => <Board running={false} /> };
-export const RunningLight: S = { name: "Compare — while running, light", globals: { theme: "light" }, render: () => <Board running /> };
-
 /** Try it: click ▶ / ↻ to start (it stops by itself after 8 s), click ■ or hover the indicator and click ✕ to cancel */
 function Live() {
   const [c, setC] = useState<"idle" | "run" | "done" | "cancel">("idle");
@@ -248,5 +201,5 @@ function Live() {
     </div>
   );
 }
-export const Chosen: S = { name: "Chosen — one button + ✕ on hover (try it)", render: () => <Live /> };
-export const ChosenLight: S = { name: "Chosen — light", globals: { theme: "light" }, render: () => <Live /> };
+export const Chosen: S = { name: "One button + ✕ on hover (try it)", render: () => <Live /> };
+export const ChosenLight: S = { name: "One button + ✕ on hover — light", globals: { theme: "light" }, render: () => <Live /> };
