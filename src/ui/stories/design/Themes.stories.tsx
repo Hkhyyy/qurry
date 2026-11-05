@@ -485,13 +485,13 @@ function Gallery() {
     <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
       <Text size="sm">
         Each card is the same mock drawn with that theme's tokens (inline CSS variables). Under it: WCAG contrast on the background, text ≥ 4.5:1, dim text and the accent
-        (an icon / UI color) ≥ 3:1. Dark, Light and High contrast are today's values; the others are the official palettes as they are.
+        (an icon / UI color) ≥ 3:1. All seven ship in 0.3.2. Dark, Light and High contrast are today's values; the four new ones are shown with their official palettes, and the ones marked ⚠ (Solarized, a few pairs elsewhere) get adjusted colors that pass when built (#103).
       </Text>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(462px, 1fr))", gap: 20 }}>
         {BUILT_IN.map((t) => (
           <div key={t.id} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <Text size="sm">
-              <b>{t.name}</b> — {EXISTING.has(t.id) ? "built in today" : "candidate"}, {t.kind === "light" ? "light" : "dark"}
+              <b>{t.name}</b> — {EXISTING.has(t.id) ? "built in today" : "new in 0.3.2"}, {t.kind === "light" ? "light" : "dark"}
             </Text>
             <MiniWindow p={t.p} />
             <Measures p={t.p} />
@@ -502,7 +502,7 @@ function Gallery() {
   );
 }
 export const Candidates: S = {
-  name: "Theme candidates",
+  name: "Themes in 0.3.2",
   // The app CSS clips the page at the window height: scroll inside the story
   render: () => (
     <div style={{ height: "100vh", overflow: "auto" }}>
