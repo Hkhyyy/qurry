@@ -389,7 +389,15 @@ function Gallery() {
     </div>
   );
 }
-export const Candidates: S = { name: "Theme candidates", render: () => <Gallery /> };
+export const Candidates: S = {
+  name: "Theme candidates",
+  // The app CSS clips the page at the window height: scroll inside the story
+  render: () => (
+    <div style={{ height: "100vh", overflow: "auto" }}>
+      <Gallery />
+    </div>
+  ),
+};
 
 // ───────── 2. Custom theme editor ─────────
 function HexField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
