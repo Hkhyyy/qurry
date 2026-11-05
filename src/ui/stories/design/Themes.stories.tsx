@@ -537,7 +537,8 @@ function HexField({ value, onChange }: { value: string; onChange: (v: string) =>
   );
 }
 
-const NAV = ["Appearance", "Editor", "Keymap", "Data Editor", "AI", "Plugins"];
+// The settings pages the app has today (Settings dialog sidebar)
+const NAV = ["Appearance", "Keymap", "Passwords"];
 
 /** Whether a token's contrast pair is below its minimum: [ratio, the other token] */
 const lowContrast = (t: Tok, p: Palette): [number, Key] | null => {
