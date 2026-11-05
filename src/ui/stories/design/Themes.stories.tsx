@@ -234,6 +234,8 @@ function themeVars(p: Palette): CSSProperties {
 // ───────── Mock Qurry window ─────────
 // Every element says which tokens color it (data-tok), so the editor can point at it. Each token colors at least one element here.
 const mono: CSSProperties = { fontFamily: "var(--ui-font-mono)", fontSize: 12 };
+/** Clips content but leaves room for the "where it's used" outline, drawn just outside an element */
+const clipped: CSSProperties = { overflow: "clip", overflowClipMargin: 4 };
 /** data-tok attribute: the tokens this element shows */
 const tok = (...keys: Key[]) => ({ "data-tok": keys.join(" ") });
 
@@ -252,7 +254,7 @@ function Explorer({ p }: { p: Palette }) {
   const db = <span {...tok("link")} style={{ color: "var(--ui-icon-db)" }}>◆</span>;
   const tb = <span {...tok("icon")} style={{ color: "var(--ui-icon)" }}>▦</span>;
   return (
-    <div {...tok("panel", "border")} style={{ width: 150, flex: "none", background: "var(--panel)", borderRight: "1px solid var(--border)", fontSize: 12, overflow: "hidden" }}>
+    <div {...tok("panel", "border")} style={{ width: 150, flex: "none", background: "var(--panel)", borderRight: "1px solid var(--border)", fontSize: 12, ...clipped }}>
       <div {...tok("muted")} style={{ padding: "4px 8px", color: "var(--muted)", fontSize: 11, borderBottom: "1px solid var(--border)" }}>Database Explorer</div>
       {row(<>{db}<span>prod-orders</span><span {...tok("warn")} style={{ color: "var(--ui-warn)", fontSize: 10, marginLeft: "auto", paddingRight: 6 }}>PROD</span></>, 0, ["prodTint"], p.prodTint, true)}
       {row(<><span style={{ color: "var(--muted)" }}>▸</span><span>public</span></>, 1, ["prodTint"], p.prodTint, true)}
@@ -358,7 +360,7 @@ function Grid() {
             if (r.deleted) Object.assign(st, { color: "var(--danger)", textDecoration: "line-through" });
             // a selected cell, a Find match, an edited (not yet submitted) cell
             if (i === 0 && j === 1) {
-              Object.assign(st, { background: "var(--sel)", outline: "1px solid var(--accent)", outlineOffset: -1 });
+              Object.assign(st, { background: "var(--sel)", boxShadow: "inset 0 0 0 1px var(--accent)" });
               keys.push("sel", "accent");
             }
             if (i === 1 && j === 1) {
@@ -379,7 +381,7 @@ function Grid() {
 
 function StatusBar() {
   return (
-    <div {...tok("panel")} style={{ display: "flex", alignItems: "center", gap: 10, height: 22, padding: "0 8px", background: "var(--panel)", borderTop: "1px solid var(--border)", color: "var(--muted)", fontSize: 11, flex: "none", whiteSpace: "nowrap", overflow: "hidden" }}>
+    <div {...tok("panel")} style={{ display: "flex", alignItems: "center", gap: 10, height: 22, padding: "0 8px", background: "var(--panel)", borderTop: "1px solid var(--border)", color: "var(--muted)", fontSize: 11, flex: "none", whiteSpace: "nowrap", ...clipped }}>
       <span {...tok("accent")} style={{ color: "var(--accent)" }}>◐</span>
       <span {...tok("text")} style={{ color: "var(--text)" }}>Running 1.4 s</span>
       <span {...tok("ok")} style={{ color: "var(--ok)" }}>✓ 3 rows</span>
@@ -414,7 +416,7 @@ function TuiStrip({ p }: { p: Palette }) {
     </div>
   );
   return (
-    <div {...tok("bg")} style={{ ...mono, fontSize: 11, lineHeight: "14px", background: p.bg, color: p.text, padding: "4px 6px", whiteSpace: "pre", borderTop: `1px solid ${p.border}`, overflow: "hidden" }}>
+    <div {...tok("bg")} style={{ ...mono, fontSize: 11, lineHeight: "14px", background: p.bg, color: p.text, padding: "4px 6px", whiteSpace: "pre", borderTop: `1px solid ${p.border}`, ...clipped }}>
       <div style={{ display: "inline-block" }}>
         <div>
           {B("┏")}
@@ -439,16 +441,11 @@ function TuiStrip({ p }: { p: Palette }) {
   );
 }
 
-const HIGHLIGHT = "#ff2bd6";
-/** hot: the token being pointed at (outlined, pulsing); flash: the token just edited (its areas flash once) */
-function MiniWindow({ p, width = 460, hot, flash }: { p: Palette; width?: number | string; hot?: Key | null; flash?: { key: Key; n: number } | null }) {
-  const css =
-    (hot ? `.tok-scope [data-tok~="${hot}"] { outline: 2px solid ${HIGHLIGHT} !important; outline-offset: -2px !important; animation: tok-pulse 1s ease-in-out infinite; }` : "") +
-    (flash ? `.tok-scope [data-tok~="${flash.key}"] { animation: tok-flash-${flash.n % 2} 0.9s ease-out 1; }` : "") +
-    `@keyframes tok-pulse { 50% { outline-color: #ffe600; } }` +
-    [0, 1].map((n) => `@keyframes tok-flash-${n} { from { box-shadow: inset 0 0 0 999px rgba(255, 230, 0, 0.55); } to { box-shadow: inset 0 0 0 999px rgba(255, 230, 0, 0); } }`).join("");
+/** hot: the token being pointed at. Its elements get a thin dashed outline just outside them (in the preview's text color), never a fill */
+function MiniWindow({ p, width = 460, hot }: { p: Palette; width?: number | string; hot?: Key | null }) {
+  const css = hot ? `.tok-scope [data-tok~="${hot}"] { outline: 1px dashed var(--text); outline-offset: 2px; }` : "";
   return (
-    <div className="tok-scope" style={{ ...themeVars(p), width, border: `1px solid ${p.border}`, borderRadius: 6, overflow: "hidden", display: "flex", flexDirection: "column", fontSize: 12 }}>
+    <div className="tok-scope" style={{ ...themeVars(p), width, border: `1px solid ${p.border}`, borderRadius: 6, ...clipped, display: "flex", flexDirection: "column", fontSize: 12 }}>
       <style>{css}</style>
       <div style={{ display: "flex", height: 336 }}>
         <Explorer p={p} />
@@ -550,20 +547,23 @@ const lowContrast = (t: Tok, p: Palette): [number, Key] | null => {
   return r < min ? [r, fg === t.key ? bg : fg] : null;
 };
 
-/** One token: label, a "changed" dot, the contrast warning and the plain description; hover or focus points at it in the preview */
-function TokenRow({ t, p, edited, onHot, onChange, onReset }: { t: Tok; p: Palette; edited: boolean; onHot: (k: Key | null) => void; onChange: (v: string) => void; onReset: () => void }) {
+/** hover / leave: the pointer on the label or description; focus / blur: the row's fields; edit: the color is being changed */
+type Point = "hover" | "leave" | "focus" | "blur" | "edit";
+
+/** One token: label, a "changed" dot, the contrast warning and the plain description. Pointing at the label shows where it's used in the preview */
+function TokenRow({ t, p, edited, onPoint, onChange, onReset }: { t: Tok; p: Palette; edited: boolean; onPoint: (how: Point) => void; onChange: (v: string) => void; onReset: () => void }) {
   const low = lowContrast(t, p);
   return (
     <div
       data-row={t.key}
-      onMouseEnter={() => onHot(t.key)}
-      onMouseLeave={() => onHot(null)}
-      onFocus={() => onHot(t.key)}
-      onBlur={() => onHot(null)}
+      // Opening the color picker is editing: the color has to be seen without the outline
+      onFocus={(e) => onPoint((e.target as HTMLInputElement).type === "color" ? "edit" : "focus")}
+      onBlur={() => onPoint("blur")}
+      onMouseDown={(e) => (e.target as HTMLElement).closest(".ui-swatch") && onPoint("edit")}
       style={{ display: "flex", alignItems: "center", gap: 6, padding: "3px 4px", margin: "0 -4px", borderRadius: 4, fontSize: 12 }}
       className="theme-token-row"
     >
-      <div style={{ flex: 1, minWidth: 0 }} title={`CSS: ${t.vars.join(" ") || "(Data Source color, mixed)"}`}>
+      <div className="theme-token-label" onMouseEnter={() => onPoint("hover")} onMouseLeave={() => onPoint("leave")} style={{ flex: 1, minWidth: 0 }} title={`CSS: ${t.vars.join(" ") || "(Data Source color, mixed)"}`}>
         <div style={{ display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" }}>
           <span>{t.label}</span>
           {edited && <span title="Changed from the base theme" style={{ width: 6, height: 6, borderRadius: 3, background: "var(--accent)", flex: "none" }} />}
@@ -594,23 +594,34 @@ function ThemeEditor() {
   const [dark, setDark] = useState("c-night");
   const [light, setLight] = useState("solarized-light");
   const [advanced, setAdvanced] = useState(false);
+  // hot: outlined in the preview; about: named in the preview title (stays while its row has focus)
   const [hot, setHot] = useState<Key | null>(null);
-  const [flash, setFlash] = useState<{ key: Key; n: number } | null>(null);
+  const [about, setAbout] = useState<Key | null>(null);
+  const focused = useRef<Key | null>(null);
   const timer = useRef<number>(undefined);
+  const point = (k: Key, how: Point) => {
+    clearTimeout(timer.current);
+    if (how === "focus") focused.current = k;
+    if (how === "blur" && focused.current === k) focused.current = null;
+    if (how === "hover" || how === "focus") setAbout(k);
+    if (how === "edit") setAbout(k);
+    if (how === "leave" || how === "blur") setAbout(focused.current);
+    // shown while pointing at the label, or for 1.5 s after focusing a row; never while the color is changed
+    setHot(how === "hover" || how === "focus" ? k : null);
+    if (how === "focus") timer.current = window.setTimeout(() => setHot(null), 1500);
+  };
   const p: Palette = { ...base.p, ...over };
   const isEdited = (k: Key) => over[k] !== undefined && over[k] !== base.p[k];
   const set = (k: Key, v: string) => {
     setOver((o) => ({ ...o, [k]: v }));
-    setFlash((f) => ({ key: k, n: (f?.n ?? 0) + 1 }));
-    clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => setFlash(null), 900);
+    point(k, "edit");
   };
   const changed = TOKENS.filter((t) => isEdited(t.key)).length;
   const warnings = TOKENS.filter((t) => lowContrast(t, p)).length;
   const advancedTokens = TOKENS.filter((t) => !BASIC.includes(t.key));
   const advancedWarnings = advancedTokens.filter((t) => lowContrast(t, p)).length;
   const row = (t: Tok) => (
-    <TokenRow key={t.key} t={t} p={p} edited={isEdited(t.key)} onHot={setHot} onChange={(v) => set(t.key, v)} onReset={() => setOver(({ [t.key]: _, ...o }) => o)} />
+    <TokenRow key={t.key} t={t} p={p} edited={isEdited(t.key)} onPoint={(how) => point(t.key, how)} onChange={(v) => set(t.key, v)} onReset={() => setOver(({ [t.key]: _, ...o }) => o)} />
   );
   const option = (t: ThemeDef) => (
     <option key={t.id} value={t.id}>
@@ -643,7 +654,7 @@ function ThemeEditor() {
                   {BUILT_IN.map(option)}
                 </Select>
               </div>
-              <div style={{ padding: "0 16px 4px", color: "var(--muted)", fontSize: 11 }}>Point at a color to see where it's used in the preview.</div>
+              <div style={{ padding: "0 16px 4px", color: "var(--muted)", fontSize: 11 }}>Point at a color's name to see where it's used in the preview.</div>
               <div className="theme-tokens" style={{ flex: 1, minHeight: 0, overflow: "auto", padding: "0 16px 10px" }}>
                 <div style={groupHead}>Basic colors</div>
                 {TOKENS.filter((t) => BASIC.includes(t.key)).map(row)}
@@ -687,9 +698,9 @@ function ThemeEditor() {
             </div>
             <div style={{ flex: 1, minWidth: 0, padding: 16, display: "flex", flexDirection: "column", gap: 10, overflow: "auto" }}>
               <Text size="sm" tone="muted">
-                Preview{hot ? ` — ${LABEL[hot]}: ${DESC[hot]}` : ""}
+                Preview{about ? ` — ${LABEL[about]}: ${DESC[about]}` : ""}
               </Text>
-              <MiniWindow p={p} width="100%" hot={hot} flash={flash} />
+              <MiniWindow p={p} width="100%" hot={hot} />
               <Measures p={p} />
               <div style={{ marginTop: "auto", borderTop: "1px solid var(--border)", paddingTop: 12, display: "flex", alignItems: "center", gap: 8, fontSize: 12, flexWrap: "wrap" }}>
                 <b>Sync with OS</b>
