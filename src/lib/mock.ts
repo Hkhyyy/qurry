@@ -564,8 +564,12 @@ const handlers: Record<string, (a: any) => unknown> = {
   import_data: () => new Promise((ok) => setTimeout(() => ok(1234), 4000)),
   save_text_file: () => null,
   export_connections: () => null,
-  // window.__mockImportNone: nothing found on this computer
-  import_locations: () => ((window as any).__mockImportNone ? [] : structuredClone(IMPORT_LOCATIONS)),
+  // window.__mockImportNone: nothing found on this computer; __mockImportDelay: ms before the list comes back (a slow disk)
+  import_locations: () => {
+    const list = (window as any).__mockImportNone ? [] : structuredClone(IMPORT_LOCATIONS);
+    const ms = (window as any).__mockImportDelay;
+    return ms ? new Promise((ok) => setTimeout(() => ok(list), ms)) : list;
+  },
   import_location: (a: any) => importPlan(IMPORT_LOCATIONS.find((l) => l.path === a.path)?.label ?? a.path, a.path),
   // window.__mockImportPick: what the native picker returns (null = canceled); "broken" = a file that can't be read
   pick_import: () => {

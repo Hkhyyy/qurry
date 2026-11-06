@@ -39,6 +39,21 @@ test("nothing found: the submenu says so and keeps File… and Folder…", async
   await expect(page.locator(".ui-menu.sub").getByRole("menuitem")).toHaveCount(2);
 });
 
+test("a submenu whose list arrives while it is open is placed again (stays on screen)", async ({ page }) => {
+  // A short window, nothing found at first: the submenu has two items and fits below the ⋮ menu
+  await page.setViewportSize({ width: 1000, height: 260 });
+  await page.evaluate(() => ((window as any).__mockImportNone = true));
+  await openSubmenu(page);
+  const sub = page.locator(".ui-menu.sub");
+  await expect(sub.getByRole("menuitem")).toHaveCount(2);
+  await page.keyboard.press("Escape");
+  // Found later: the list grows while the submenu is open, and it moves up to stay inside the window
+  await page.evaluate(() => ((window as any).__mockImportNone = false, (window as any).__mockImportDelay = 400));
+  await openSubmenu(page);
+  await expect(sub.getByRole("menuitem")).toHaveCount(5);
+  await expect.poll(async () => (await sub.boundingBox())!.y + (await sub.boundingBox())!.height).toBeLessThanOrEqual(260);
+});
+
 test("the preview: a checkbox per added row, Import N counts them and is disabled at 0; only the checked rows are imported", async ({ page }) => {
   await openSubmenu(page);
   await menuItem(page, DG).click();

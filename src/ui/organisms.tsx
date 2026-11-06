@@ -338,7 +338,8 @@ export function Menu({ items, onClose, at, footer }: { items: MenuEntry[]; onClo
 }
 
 /** A submenu beside its item, placed on the screen (fixed): a dropdown inside a panel that clips (the explorer's ⋮) doesn't cut it off.
- *  Opens to the left when there's no room on the right, and stays above the bottom edge */
+ *  Opens to the left when there's no room on the right, and stays above the bottom edge. Its size follows its items, so it is
+ *  placed again when they change */
 function SubMenu({ children }: { children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -349,7 +350,8 @@ function SubMenu({ children }: { children: ReactNode }) {
     const left = r.right + el.offsetWidth > window.innerWidth ? r.left - el.offsetWidth : r.right;
     const top = Math.max(4, Math.min(r.top - 5, window.innerHeight - el.offsetHeight - 4));
     Object.assign(el.style, { position: "fixed", left: `${left}px`, top: `${top}px` });
-  }, []);
+    // Placed again whenever its items change (a list read again while it is open)
+  }, [children]);
   return (
     <div ref={ref} className="ui-menu sub" role="menu">
       {children}
