@@ -22,6 +22,41 @@ Connection options:
 
 > Redis Sentinel and Cluster nodes advertise their own addresses, so they can't be combined with an SSH or AWS SSM tunnel.
 
+## Export and import
+
+**Export Data Sources…** (explorer ⋮ menu, Find Action) writes every data source to a JSON file, without passwords. **Import Data Sources** reads that file back, or the data sources of DataGrip / IntelliJ IDEA and DBeaver:
+
+- **GUI**: explorer ⋮ › **Import Data Sources ▸** lists the locations found on this computer, newest IDE version first, each with how many data sources it has (the path is the tooltip). Below them, **File…** and **Folder…** open the system picker (it picks a file or a folder, not both). Find Action (`⇧⌘A`) lists the same as *Import Data Sources: …*.
+- **TUI**: `⌃k` › **Import Data Sources…** lists the same locations, then **File or folder…**, which asks for a path (`~` is your home folder).
+
+The format is detected from what you pick: a Qurry export; `dataSources.xml` or `dataSources.local.xml`; a project folder or its `.idea`; an IDE options folder; DBeaver's `data-sources.json` (or `data-sources-*.json`); a `.dbeaver` folder, a DBeaver project or its workspace folder. A folder with `qurry-datasources.json` in it reads that export.
+
+Then the import confirm shows one row per data source: what is added (name, server), what was mapped (type, SSH tunnel, SSL, Read-only, Production), and on the right *password on connect*, *no password* (DataGrip's No auth) or a warning such as *SSL without certificate checks*. Every added row has a checkbox (checked): uncheck the ones to leave out; **Import N** (TUI: `y` / `Enter`) imports the checked ones and is disabled at 0. TUI: `↑` `↓` move, `Space` checks, `n` / `Esc` cancel. Rows that can't be imported are listed with the reason and have no checkbox: a kind Qurry doesn't support (Snowflake, BigQuery, Db2, CSV files …), or one Qurry already has (same type, server, user and database). When nothing can be imported, a notice lists the rows instead. A file that can't be read says where (line and column) and nothing is imported.
+
+New data sources get fresh ids and start with MCP Off. **Passwords are never imported**, even when a file has one: each data source asks on its first connect. Nothing is written to the other tools' folders.
+
+Where Qurry looks (read only):
+
+| Tool | macOS | Linux | Files read |
+|---|---|---|---|
+| DataGrip / IntelliJ (global) | `~/Library/Application Support/JetBrains/<IDE><version>/options` | `~/.config/JetBrains/<IDE><version>/options` | `dataSources.xml`, `dataSources.local.xml`, `sshConfigs.xml` |
+| DataGrip projects | `<IDE config>/projects/<name>/.idea`, `~/DataGripProjects/<name>/.idea` | the same | `.idea/dataSources.xml`, `.idea/dataSources.local.xml`, `.idea/sshConfigs.xml` (and the IDEs' `sshConfigs.xml`) |
+| Recent IDE projects | the projects in `<IDE config>/options/recentProjects.xml` that have an `.idea/dataSources.xml` | the same | as above |
+| DBeaver | `~/Library/DBeaverData/workspace6/<project>/.dbeaver` | `~/.local/share/DBeaverData/workspace6/…`, Flatpak `~/.var/app/io.dbeaver.DBeaverCommunity/data/DBeaverData/workspace6/…`, Snap `~/snap/dbeaver-ce/current/.local/share/DBeaverData/workspace6/…` | `data-sources.json`, `data-sources-*.json` |
+
+What is mapped:
+
+| | DataGrip / IntelliJ | DBeaver |
+|---|---|---|
+| Type, host, port, database | from the JDBC URL: PostgreSQL, MySQL / MariaDB, SQL Server, Oracle (`@//host:port/service`; `host:port:SID` uses the SID as the service name, with a warning), ClickHouse, Redis, MongoDB (`mongodb+srv://` as the host), SQLite / DuckDB (the file). URL parameters are dropped | the connection's host, port and database (the URL when they're missing) |
+| User | `user-name` | `configuration.user` when the file has it; DBeaver usually keeps it with the password (`credentials-config.json`, never read), so the row warns and you enter it |
+| SSH tunnel | the SSH configuration it refers to (`sshConfigs.xml`: host, port, user, password or key file), or the older tunnel inside the data source. *OpenSSH config and agent* has no key file: the row warns, choose one before connecting | `ssh_tunnel`: host, port, user, password or key file (`${project.path}` expanded); agent: the row warns |
+| SSL | mode (Require / Verify CA / Full Verification), CA, client certificate and key | `*_ssl` handlers: `sslMode` (disable leaves SSL off), CA, client certificate and key; MySQL *Verify server certificate* = Verify CA |
+| Read-only | `read-only="true"` | `read-only` |
+| Production | — | connection type *Production* (`prod`) |
+
+Not imported: passwords and SSH passphrases, driver properties and JDBC parameters, schema filters, colors, folders, and SSH host names that only exist in `~/.ssh/config` (the tunnel takes the host DataGrip stores).
+
 ## Drivers (added when you need them)
 
 Nothing extra is installed up front. Pick one of these types for a data source and Qurry offers to **Install** its driver: a small program downloaded from the GitHub release of your Qurry version, checked against the signed `SHA256SUMS` (same key as app updates) and kept in the config folder under `drivers/`.

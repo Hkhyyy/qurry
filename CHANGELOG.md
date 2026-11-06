@@ -4,6 +4,10 @@ What changed in each Qurry version, for people who use it. The format follows [K
 
 ## [Unreleased]
 
+### Added
+
+- **Import Data Sources from DataGrip / IntelliJ and DBeaver**: explorer ⋮ › Import Data Sources ▸ (and Find Action; TUI `⌃k` › Import Data Sources…) lists the locations found on this computer (IDE global settings, DataGrip and recent IDE projects, DBeaver workspaces), or reads a file or folder you pick. The connection, SSH tunnel, SSL and Read-only settings are mapped; the confirm shows one row per data source, with a checkbox to leave it out, and lists the kinds Qurry doesn't support and the ones it already has as skipped with the reason. New data sources start with MCP Off; passwords are never imported and are asked on the first connect. The TUI imports Qurry's own export too (#63, [Data sources](docs/data-sources.md#export-and-import)).
+
 ## [0.3.1] - 2026-11-04
 
 ### Added
