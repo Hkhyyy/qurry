@@ -1,0 +1,13 @@
+# pnpm settings (no workspace packages: the repository is one package).
+auditConfig:
+  # pnpm audit --prod (the audit workflow, .github/workflows/audit.yml): known vulnerabilities in production dependencies fail it.
+  # A finding is fixed by updating the package (or an override) when a fixed version exists; otherwise it is accepted here, one GHSA
+  # per line with the reason it can't reach Qurry. Remove an entry once pnpm-lock.yaml has the fix.
+  ignoreGhsas:
+    # dompurify 3.4.15, pinned exactly by monaco-editor 0.57 (hover / markdown rendering). Monaco sanitizes with RETURN_DOM_FRAGMENT /
+    # RETURN_TRUSTED_TYPE and its own hooks; it never uses IN_PLACE, SAFE_FOR_TEMPLATES or PARSER_MEDIA_TYPE, which these need
+    - GHSA-p98j-92pf-mc4p # IN_PLACE: a node-removing afterSanitize hook leaves event handlers armed
+    - GHSA-6688-9rhm-gjv2 # IN_PLACE: a force-removed rawtext root keeps attacker markup
+    - GHSA-mrv2-3pqr-j5jr # IN_PLACE: incomplete fix of GHSA-p98j-92pf-mc4p
+    - GHSA-cg2g-xh64-v4q7 # SAFE_FOR_TEMPLATES bypass in shadow root content
+    - GHSA-c6gr-qvv4-5v3f # SMIL href guard skipped with PARSER_MEDIA_TYPE application/xhtml+xml

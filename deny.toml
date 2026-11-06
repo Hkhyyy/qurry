@@ -1,0 +1,28 @@
+# cargo deny check advisories (the audit workflow, .github/workflows/audit.yml): known vulnerabilities in Cargo.lock fail it.
+# A finding is fixed with `cargo update -p <crate>` when a fixed version is in range; otherwise it is accepted here, one entry per
+# advisory with the reason it can't reach Qurry or why it can't be fixed yet. Remove an entry once the fix is in Cargo.lock.
+
+[graph]
+# What Qurry builds: the macOS and Linux releases and the GUI's WASM module (a Windows-only dependency is not in any of them)
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
+
+[advisories]
+# Unmaintained crates fail only when a workspace crate depends on them directly (transitive ones are their dependents' call)
+unmaintained = "workspace"
+ignore = [
+  # calamine 0.36.1 (pinned in crates/core/Cargo.toml) and its zip 8.6.0
+  { id = "RUSTSEC-2026-0436", reason = "calamine: panic / OOM on a crafted .xls / .xlsb; it only reads a file the user picks to import (denial of service of their own import). Fixed in 0.38: bump the =0.36.1 pin" },
+  { id = "RUSTSEC-2026-0367", reason = "zip (via calamine): ZipArchive::extract only; calamine reads entries in memory and never extracts to disk" },
+  { id = "RUSTSEC-2026-0368", reason = "zip (via calamine): ZipArchive::extract only; calamine reads entries in memory and never extracts to disk" },
+  { id = "RUSTSEC-2026-0369", reason = "zip (via calamine): ZipArchive::extract only; calamine reads entries in memory and never extracts to disk" },
+  { id = "RUSTSEC-2026-0429", reason = "zip (via calamine): ZipArchive::extract only; calamine reads entries in memory and never extracts to disk" },
+  # rsa: no fixed release exists
+  { id = "RUSTSEC-2023-0071", reason = "rsa (russh, sqlx-mysql): no fixed version. Qurry signs with the user's SSH key and encrypts a MySQL password with the server's public key; it never decrypts with a private key for a network peer" },
+  # rustls 0.21 / rustls-webpki 0.101 via tiberius 0.12.3 (the newest release), only in the MSSQL plugin driver (drivers/mssql)
+  { id = "RUSTSEC-2026-0346", reason = "rustls 0.21 (tiberius, MSSQL driver): Debug output of a client session; the driver never formats one. Needs a tiberius release on rustls 0.23" },
+  { id = "RUSTSEC-2026-0349", reason = "rustls 0.21 (tiberius, MSSQL driver): downgrade from post-quantum key exchange, which 0.21 never offers. Needs a tiberius release on rustls 0.23" },
+  { id = "RUSTSEC-2026-0098", reason = "rustls-webpki 0.101 (tiberius, MSSQL driver): URI name constraints; SQL Server certificates are checked by DNS name. Needs a tiberius release on rustls 0.23" },
+  { id = "RUSTSEC-2026-0099", reason = "rustls-webpki 0.101 (tiberius, MSSQL driver): name constraints with a wildcard certificate, only when a verify mode is chosen. Needs a tiberius release on rustls 0.23" },
+  { id = "RUSTSEC-2026-0104", reason = "rustls-webpki 0.101 (tiberius, MSSQL driver): panic parsing a CRL; the driver loads no CRLs. Needs a tiberius release on rustls 0.23" },
+  { id = "RUSTSEC-2026-0382", reason = "rustls-webpki 0.101 (tiberius, MSSQL driver): distrusted intermediates, only when a verify mode is chosen (0.103 elsewhere is fixed). Needs a tiberius release on rustls 0.23" },
+]

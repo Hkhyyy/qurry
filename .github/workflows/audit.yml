@@ -1,0 +1,70 @@
+# Known vulnerabilities in the locked dependencies: cargo deny check advisories (Cargo.lock; accepted ones in deny.toml) and
+# pnpm audit --prod (pnpm-lock.yaml; accepted ones in pnpm-workspace.yaml). Runs on pull requests that change a lockfile or an
+# allow-list, and every week on main (new advisories appear without any change here). Not a required check: a failure says what to do.
+name: Audit
+
+on:
+  pull_request:
+    branches: [main]
+    paths: [Cargo.lock, deny.toml, pnpm-lock.yaml, pnpm-workspace.yaml, package.json, .github/workflows/audit.yml]
+  schedule:
+    # Mondays 00:00 UTC (09:00 KST); scheduled runs use main
+    - cron: "0 0 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  cargo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      # The release binary at a pinned version, checked against the SHA-256 published with it (cargo install would take minutes)
+      - name: Install cargo-deny
+        env:
+          VERSION: 0.20.2
+          SHA256: 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+        run: |
+          name="cargo-deny-$VERSION-x86_64-unknown-linux-musl"
+          curl -sSfL -o "$RUNNER_TEMP/cargo-deny.tar.gz" "https://github.com/EmbarkStudios/cargo-deny/releases/download/$VERSION/$name.tar.gz"
+          echo "$SHA256  $RUNNER_TEMP/cargo-deny.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/cargo-deny.tar.gz" -C "$RUNNER_TEMP"
+          install -m 755 "$RUNNER_TEMP/$name/cargo-deny" "$HOME/.cargo/bin/cargo-deny"
+
+      - name: cargo deny check advisories
+        run: |
+          cargo deny --locked check advisories || {
+            echo "::error::A Rust dependency has a known vulnerability (the advisory is above). Update it with 'cargo update -p <crate>' when a fixed version is in range; if it can't be fixed yet, add its ID with the reason it is acceptable to [advisories] ignore in deny.toml"
+            exit 1
+          }
+
+  npm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      # Reads pnpm-lock.yaml (no install needed); devDependencies only build and test the app, so they are left out
+      - name: pnpm audit --prod
+        run: |
+          pnpm audit --prod || {
+            echo "::error::A production npm dependency has a known vulnerability (the advisory is above). Update it, or override the vulnerable package's version (pnpm.overrides in package.json) when the fix is out; if it can't be fixed yet, add its GHSA ID with the reason it is acceptable to auditConfig.ignoreGhsas in pnpm-workspace.yaml"
+            exit 1
+          }
