@@ -19,6 +19,7 @@ pub mod backup;
 mod backend;
 pub mod db;
 pub mod dba;
+pub mod dsn;
 pub mod ddl;
 pub mod editable;
 pub mod erd;

@@ -33,6 +33,9 @@ qurry-driver = { workspace = true }
 qurry-shared = { path = "../shared" }
 # RAG embeddings (OpenAI · Ollama). Same HTTP client as the drivers
 ureq = { version = "3", default-features = false, features = ["rustls", "gzip", "json"] }
+# qurry-tui postgres://… (dsn.rs): the same URL parser the drivers already use
+url = "2.5"
+percent-encoding = "2.3"
 
 # AWS SSM tunnel: stop the aws CLI and the Session Manager plugin it starts together (process group)
 [target.'cfg(unix)'.dependencies]

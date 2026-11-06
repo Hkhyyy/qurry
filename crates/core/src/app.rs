@@ -44,11 +44,29 @@ pub struct AppState {
     pub jobs: std::sync::Mutex<HashMap<String, std::sync::Arc<crate::transfer::Job>>>,
     /// MCP server: never reads passwords of Data Sources hidden from MCP (crate::store::McpAccess)
     pub mcp: bool,
+    /// Secrets key → password of a temporary data source (Store::temporary): kept in memory only, never in the secrets file
+    temporary: std::sync::Mutex<HashMap<String, String>>,
 }
 
 impl AppState {
+    /// Opens a temporary data source (`qurry-tui postgres://…`) for this process: it is never saved, so no other app (MCP included) sees it
+    pub fn open_temporary(&self, t: crate::dsn::Temporary) -> ConnectionConfig {
+        let mut config = t.config;
+        config.id = format!("tmp-{}", uuid::Uuid::new_v4());
+        config.password_saved = t.password.is_some();
+        config.ssh_secret_saved = false;
+        if let Some(p) = t.password {
+            self.temporary.lock().unwrap().insert(config.password_key(), p);
+        }
+        self.store.add_temporary(config.clone());
+        config
+    }
+
     /// Saved password or SSH secret for a key, read from the secrets file each time (nothing is cached in memory).
     pub fn secret(&self, key: &str) -> AppResult<Option<String>> {
+        if self.store.is_temporary(store::secret_owner(key)) {
+            return Ok(self.temporary.lock().unwrap().get(key).cloned());
+        }
         // MCP server: never reads passwords of Data Sources hidden from MCP (so it cannot connect either)
         if self.mcp {
             let id = store::secret_owner(key);
@@ -80,6 +98,14 @@ impl AppState {
     }
 
     pub fn set_secret(&self, key: &str, value: Option<&str>) -> AppResult<()> {
+        if self.store.is_temporary(store::secret_owner(key)) {
+            let mut m = self.temporary.lock().unwrap();
+            match value {
+                Some(v) => m.insert(key.to_string(), v.to_string()),
+                None => m.remove(key),
+            };
+            return Ok(());
+        }
         self.secret_file.set(key, value)?;
         Ok(())
     }
@@ -105,7 +131,7 @@ impl AppState {
     pub fn new(store: Store, secret_file: crate::secrets::SecretFile) -> Self {
         let history = crate::history::History::new(&store.dir());
         let audit = crate::audit::Audit::new(&store.dir());
-        Self { history, audit, store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), connecting: Default::default(), secret_file, last_used: Default::default(), last_ping: Default::default(), tab_manual: Default::default(), more: Default::default(), runs: Default::default(), jobs: Default::default(), mcp: false }
+        Self { history, audit, store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), connecting: Default::default(), secret_file, last_used: Default::default(), last_ping: Default::default(), tab_manual: Default::default(), more: Default::default(), runs: Default::default(), jobs: Default::default(), mcp: false, temporary: Default::default() }
     }
 }
 
@@ -116,6 +142,9 @@ pub struct ConnectionView {
     pub config: ConnectionConfig,
     pub has_password: bool,
     pub connected: bool,
+    /// From the qurry-tui command line, only in this process (Store::temporary)
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub temporary: bool,
 }
 
 /// DBs shown in the tree (scope from the Data Source › Schemas tab, system DBs hidden). Shared by GUI, TUI and the search cache
@@ -642,6 +671,7 @@ impl AppState {
                 Ok(ConnectionView {
                     has_password: c.password_saved || self.secret_file.contains(&c.password_key()).unwrap_or(true),
                     connected: pools.keys().any(|k| belongs(k, &c.id)),
+                    temporary: self.store.is_temporary(&c.id),
                     config: c,
                 })
             })
@@ -1261,11 +1291,16 @@ impl AppState {
         Ok(n)
     }
 
+    /// Whether a source's object lists go into the search cache on disk: not Redis keys, nothing of a temporary source
+    fn cached(&self, pool: &Pool, id: &str) -> bool {
+        !matches!(pool, Pool::Redis(..)) && !self.store.is_temporary(split_target(id).0)
+    }
+
     /// Save to the search cache on every read (Redis keys are not saved)
     pub async fn object_index(&self, id: String) -> AppResult<Vec<crate::meta::IndexEntry>> {
         let pool = ensure_pool(self, &id).await?;
         let r = crate::meta::object_index(&pool).await?;
-        if !matches!(pool, Pool::Redis(..)) {
+        if self.cached(&pool, &id) {
             crate::search_cache::save_objects(&self.store.dir(), &id, &r);
         }
         Ok(r)
@@ -1275,7 +1310,7 @@ impl AppState {
     /// That way Search Everywhere finds them next time without connecting. Skip DBs filled within the last 10 minutes
     pub async fn warm_search_cache(&self, conn: String) -> AppResult<()> {
         let cfg = self.store.get(&conn)?.ok_or_else(|| AppError::Msg("Data source not found".into()))?;
-        if cfg.kind == store::DbKind::Redis {
+        if cfg.kind == store::DbKind::Redis || self.store.is_temporary(&conn) {
             return Ok(());
         }
         let def = crate::sql::default_db(&cfg);
@@ -1416,7 +1451,7 @@ impl AppState {
     pub async fn completion_meta(&self, id: String) -> AppResult<Vec<crate::meta::CompletionTable>> {
         let pool = ensure_pool(self, &id).await?;
         let r = crate::meta::completion_meta(&pool).await?;
-        if !matches!(pool, Pool::Redis(..)) {
+        if self.cached(&pool, &id) {
             crate::search_cache::save_columns(&self.store.dir(), &id, &r);
         }
         Ok(r)
@@ -1426,6 +1461,45 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A temporary source (qurry-tui URL) is listed and connectable in this process only: never in connections.json or the secrets
+    /// file, so another app on the same folder (GUI, MCP) never sees it. Its form can't save it; read-only is enforced as for saved ones
+    #[tokio::test]
+    async fn temporary_sources_stay_in_this_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let saved = st.save_connection(silent_source("", 1, None), Some("savedpw".into()), None).await.unwrap();
+        let var = |k: &str| (k == "USER").then(|| "me".to_string());
+        let t = crate::dsn::from_url("postgres://u:s3cret-pw@db.example/app", true, &crate::dsn::Env { var: &var, home: None }).unwrap();
+        let c = st.open_temporary(t);
+        assert!(c.id.starts_with("tmp-") && c.password_saved);
+        let views = st.list_connections().await.unwrap();
+        assert!(views.iter().any(|v| v.config.id == c.id && v.temporary && v.has_password));
+        assert!(views.iter().any(|v| v.config.id == saved.id && !v.temporary));
+        assert_eq!(st.secret(&c.id).unwrap().as_deref(), Some("s3cret-pw"));
+        // Changes to it stay in memory; saving its form is refused
+        st.set_connection_color(c.id.clone(), Some("#5c2b2b".into())).await.unwrap();
+        assert_eq!(st.store.get(&c.id).unwrap().unwrap().color.as_deref(), Some("#5c2b2b"));
+        let e = st.save_connection(c.clone(), None, None).await.unwrap_err().to_string();
+        assert!(e.contains("temporary"), "{e}");
+        // Saving another source writes connections.json without it
+        st.save_connection(silent_source("", 2, None), None, None).await.unwrap();
+        let file = std::fs::read_to_string(dir.path().join("connections.json")).unwrap();
+        assert!(!file.contains(&c.id) && !file.contains("db.example"), "{file}");
+        assert!(!st.secret_file.names().unwrap().iter().any(|k| k.contains("tmp-")));
+        let other = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        assert!(other.store.get(&c.id).unwrap().is_none());
+        assert_eq!(other.list_connections().await.unwrap().len(), 2);
+        // Read-only
+        let e = st.check_read_only(&c.id, "delete from t").unwrap_err().to_string();
+        assert!(e.contains("read-only"), "{e}");
+        assert!(st.check_read_only(&c.id, "select 1").is_ok());
+        // Deleting it forgets it and its password, and leaves the saved ones alone
+        st.delete_connection(c.id.clone()).await.unwrap();
+        assert!(st.store.get(&c.id).unwrap().is_none());
+        assert_eq!(st.secret(&c.id).unwrap(), None);
+        assert_eq!(st.secret(&saved.id).unwrap().as_deref(), Some("savedpw"));
+    }
 
     /// A server that accepts and never answers (a DB or SSH host behind a firewall that drops packets)
     async fn silent_server() -> u16 {

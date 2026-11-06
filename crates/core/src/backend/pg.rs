@@ -789,7 +789,8 @@ async fn begin_read_only(pool: &PgPool) -> AppResult<sqlx::Transaction<'static, 
 
 /// Connect to `host`:`port`: the server, or the SSH tunnel's local port (db::connect_via)
 pub(crate) async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str, port: u16) -> AppResult<PgPool> {
-    let mut opts = PgConnectOptions::new()
+    // Not new(): its ~/.pgpass lookup matches PGHOST / localhost instead of this server, and skips the file permission check on macOS
+    let mut opts = PgConnectOptions::new_without_pgpass()
         .host(host)
         .port(port)
         .username(&cfg.user)
@@ -797,8 +798,17 @@ pub(crate) async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host
     // Like DataGrip, an empty value connects to the postgres DB (the PG default, a DB named after the user, often does not exist)
     let database = if cfg.database.trim().is_empty() { "postgres" } else { cfg.database.trim() };
     opts = opts.database(database);
-    if let Some(p) = password.filter(|p| !p.is_empty()) {
-        opts = opts.password(p);
+    // No saved password: PGPASSWORD (sqlx reads it), else ~/.pgpass for this server (not the tunnel's local port), as psql does
+    let pgpass = || match crate::dsn::pgpass(&crate::dsn::Env::process(), &cfg.host, cfg.port, database, &cfg.user) {
+        Ok(p) => p,
+        Err(note) => {
+            crate::log!("[qurry] {note}");
+            None
+        }
+    };
+    let fallback = || if std::env::var_os("PGPASSWORD").is_some_and(|p| !p.is_empty()) { None } else { pgpass() };
+    if let Some(p) = password.filter(|p| !p.is_empty()).map(String::from).or_else(fallback) {
+        opts = opts.password(&p);
     }
     if cfg.read_only {
         // Do not leave the parsing of \ in strings to server settings (match the rules guard reads with)

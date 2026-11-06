@@ -569,7 +569,7 @@ mod tests {
             serde_json::from_value(json!({ "id": id, "name": name, "kind": "postgres", "host": "db.internal", "port": 5432, "user": "admin" })).unwrap();
         config.options.mcp = mcp.map(String::from);
         config.options.confirm_changes = production;
-        ConnectionView { config, has_password: true, connected: false }
+        ConnectionView { config, has_password: true, connected: false, temporary: false }
     }
 
     #[test]
