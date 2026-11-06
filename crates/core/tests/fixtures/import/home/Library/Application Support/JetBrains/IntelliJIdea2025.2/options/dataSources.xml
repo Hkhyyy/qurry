@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<application>
+  <component name="dataSourceStorage" format="xml" multifile-model="true">
+    <data-source source="LOCAL" name="dev-mysql" uuid="9f8e7d6c-4444-4d3c-b2f5-000000000001">
+      <driver-ref>mariadb</driver-ref>
+      <jdbc-url>jdbc:mariadb://maria.internal:3307/app</jdbc-url>
+    </data-source>
+    <data-source source="LOCAL" name="bq-marketing" uuid="9f8e7d6c-4444-4d3c-b2f5-000000000002">
+      <driver-ref>bigquery</driver-ref>
+      <jdbc-url>jdbc:bigquery://https://www.googleapis.example/bigquery/v2:443;ProjectId=marketing</jdbc-url>
+    </data-source>
+  </component>
+</application>

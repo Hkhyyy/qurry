@@ -1,0 +1,8 @@
+<application>
+  <component name="SshConfigs">
+    <configs>
+      <sshConfig authType="KEY_PAIR" host="bastion.example.com" id="5a1c9e70-2222-4b1f-8c3d-00000000aa01" keyPath="$USER_HOME$/.ssh/id_ed25519" port="22" nameFormat="DESCRIPTIVE" username="ec2-user" />
+      <sshConfig authType="OPEN_SSH" connectionConfig="{&quot;serverAliveInterval&quot;:300}" host="jump-eu.example.com" id="5a1c9e70-2222-4b1f-8c3d-00000000aa02" port="2222" customName="jump-eu" nameFormat="CUSTOM" username="deploy" useOpenSSHConfig="true" />
+    </configs>
+  </component>
+</application>

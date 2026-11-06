@@ -1,0 +1,146 @@
+{
+	"folders": {},
+	"connections": {
+		"mysql8-18f2a0c1d2e-1a2b3c4d5e6f7a8b": {
+			"provider": "mysql",
+			"driver": "mysql8",
+			"name": "Sakila",
+			"save-password": true,
+			"configuration": {
+				"host": "localhost",
+				"port": "3306",
+				"database": "sakila",
+				"url": "jdbc:mysql://localhost:3306/sakila",
+				"configurationType": "MANUAL",
+				"home": "mysql_client",
+				"type": "dev",
+				"user": "root",
+				"auth-model": "native"
+			}
+		},
+		"postgres-jdbc-18f2a0c1d2f-2b3c4d5e6f7a8b9c": {
+			"provider": "postgresql",
+			"driver": "postgres-jdbc",
+			"name": "prod-replica",
+			"save-password": false,
+			"read-only": true,
+			"configuration": {
+				"host": "10.20.0.15",
+				"port": "5432",
+				"database": "app",
+				"url": "jdbc:postgresql://10.20.0.15:5432/app",
+				"configurationType": "MANUAL",
+				"type": "prod",
+				"auth-model": "native",
+				"handlers": {
+					"ssh_tunnel": {
+						"type": "TUNNEL",
+						"enabled": true,
+						"save-password": false,
+						"user": "deploy",
+						"properties": {
+							"host": "jump.example.org",
+							"port": 22,
+							"authType": "PASSWORD",
+							"implementation": "sshj",
+							"localHost": "",
+							"remoteHost": ""
+						}
+					},
+					"postgre_ssl": {
+						"type": "CONFIG",
+						"enabled": true,
+						"properties": {
+							"ssl.method": "CERTIFICATES",
+							"sslMode": "verify-full",
+							"ssl.ca.cert": "${project.path}/certs/root.crt"
+						}
+					}
+				}
+			}
+		},
+		"oracle_thin-18f2a0c1d30-3c4d5e6f7a8b9c0d": {
+			"provider": "oracle",
+			"driver": "oracle_thin",
+			"name": "HR",
+			"save-password": true,
+			"configuration": {
+				"host": "ora.internal",
+				"port": "1521",
+				"database": "ORCL",
+				"url": "jdbc:oracle:thin:@ora.internal:1521:ORCL",
+				"configurationType": "MANUAL",
+				"type": "dev",
+				"provider-properties": {
+					"@dbeaver-connection-type@": "BASIC",
+					"@dbeaver-sid-service@": "SID"
+				},
+				"auth-model": "oracle_native"
+			}
+		},
+		"mongo-18f2a0c1d31-4d5e6f7a8b9c0d1e": {
+			"provider": "mongodb",
+			"driver": "mongo",
+			"name": "logs",
+			"configuration": {
+				"host": "logs.mongo.internal",
+				"port": "27017",
+				"database": "logs",
+				"configurationType": "MANUAL",
+				"type": "test",
+				"handlers": {
+					"mongo_ssl": {
+						"type": "CONFIG",
+						"enabled": true,
+						"properties": {
+							"ssl.ca.cert": "/etc/ssl/mongo-ca.pem"
+						}
+					}
+				}
+			}
+		},
+		"db2_iseries-18f2a0c1d32-5e6f7a8b9c0d1e2f": {
+			"provider": "db2",
+			"driver": "db2",
+			"name": "DB2 Sample",
+			"configuration": {
+				"host": "db2.internal",
+				"port": "50000",
+				"database": "SAMPLE",
+				"url": "jdbc:db2://db2.internal:50000/SAMPLE",
+				"configurationType": "MANUAL",
+				"type": "dev"
+			}
+		},
+		"csvjdbc-18f2a0c1d33-6f7a8b9c0d1e2f3a": {
+			"provider": "generic",
+			"driver": "csvjdbc",
+			"name": "CSV exports",
+			"configuration": {
+				"database": "/var/exports",
+				"url": "jdbc:relique:csv:/var/exports",
+				"configurationType": "MANUAL",
+				"type": "dev"
+			}
+		},
+		"sqlite_jdbc-18f2a0c1d34-7a8b9c0d1e2f3a4b": {
+			"provider": "sqlite",
+			"driver": "sqlite_jdbc",
+			"name": "chinook",
+			"configuration": {
+				"database": "/var/data/chinook.db",
+				"url": "jdbc:sqlite:/var/data/chinook.db",
+				"configurationType": "MANUAL",
+				"type": "dev"
+			}
+		}
+	},
+	"connection-types": {
+		"prod": {
+			"name": "Production",
+			"color": "247,159,129",
+			"confirm-execute": true,
+			"confirm-data-change": true
+		}
+	}
+}

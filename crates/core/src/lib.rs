@@ -29,6 +29,7 @@ pub mod fake;
 pub mod guard;
 pub mod hints;
 pub mod history;
+pub mod import;
 /// Command shortcut table and key notation, shared with the GUI through WASM
 pub use qurry_shared::keymap;
 pub mod meta;

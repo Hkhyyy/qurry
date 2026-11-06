@@ -28,6 +28,8 @@ semver = "1"
 # For keeping the password file's master key in the OS keychain (enabled in settings). Linux uses a pure-Rust Secret Service (no libdbus)
 keyring = { version = "3", features = ["apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust"] }
 sha2 = "0.10"
+# Import Data Sources: DataGrip / IntelliJ dataSources.xml (no DTD or external entities: crate::import)
+quick-xml = "0.42"
 qurry-driver = { workspace = true }
 # DbKind, SQL lexer and splitting, guard, Redis command parsing (re-exported as qurry_core::store::DbKind, sql, guard, redisdb)
 qurry-shared = { path = "../shared" }

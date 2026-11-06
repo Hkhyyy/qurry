@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<application>
+  <component name="dataSourceStorageLocal" created-in="DB-252.23892.449">
+    <data-source name="orders-prod" uuid="0b6f5c1e-1111-4a5e-9d2a-000000000001">
+      <database-info product="PostgreSQL" version="16.4" jdbc-version="4.2" driver-name="PostgreSQL JDBC Driver" driver-version="42.7.3" dbms="POSTGRES" exact-version="16.4" exact-driver-version="42.7">
+        <identifier-quote-string>&quot;</identifier-quote-string>
+      </database-info>
+      <case-sensitivity plain-identifiers="lower" quoted-identifiers="exact" />
+      <secret-storage>master_key</secret-storage>
+      <user-name>app</user-name>
+      <schema-mapping>
+        <introspection-scope>
+          <node kind="database" qname="@">
+            <node kind="schema" qname="@" />
+          </node>
+        </introspection-scope>
+      </schema-mapping>
+      <ssh-properties>
+        <enabled>true</enabled>
+        <ssh-config-id>5a1c9e70-2222-4b1f-8c3d-00000000aa01</ssh-config-id>
+      </ssh-properties>
+      <ssl-config use-ide-store="true" use-java-store="true" use-system-store="true">
+        <ca-cert>$USER_HOME$/certs/orders-ca.pem</ca-cert>
+        <enabled>true</enabled>
+        <mode>VERIFY_FULL</mode>
+      </ssl-config>
+    </data-source>
+    <data-source name="analytics" uuid="0b6f5c1e-1111-4a5e-9d2a-000000000002">
+      <secret-storage>master_key</secret-storage>
+      <user-name>analyst</user-name>
+      <ssl-config>
+        <enabled>true</enabled>
+        <mode>REQUIRE</mode>
+      </ssl-config>
+    </data-source>
+    <data-source name="events" uuid="0b6f5c1e-1111-4a5e-9d2a-000000000003">
+      <secret-storage>master_key</secret-storage>
+      <user-name>default</user-name>
+      <ssh-properties>
+        <enabled>true</enabled>
+        <ssh-config-id>5a1c9e70-2222-4b1f-8c3d-00000000aa02</ssh-config-id>
+      </ssh-properties>
+    </data-source>
+    <data-source name="local-pg" uuid="0b6f5c1e-1111-4a5e-9d2a-000000000004">
+      <user-name>postgres</user-name>
+      <auth-provider>no-auth</auth-provider>
+    </data-source>
+    <data-source name="cache" uuid="0b6f5c1e-1111-4a5e-9d2a-000000000005">
+      <auth-provider>no-auth</auth-provider>
+    </data-source>
+    <data-source name="billing" uuid="0b6f5c1e-1111-4a5e-9d2a-000000000007">
+      <secret-storage>master_key</secret-storage>
+      <user-name>billing</user-name>
+    </data-source>
+    <data-source name="legacy" uuid="0b6f5c1e-1111-4a5e-9d2a-000000000008">
+      <secret-storage>master_key</secret-storage>
+      <user-name>sa</user-name>
+    </data-source>
+    <data-source name="hr" uuid="0b6f5c1e-1111-4a5e-9d2a-000000000009">
+      <secret-storage>master_key</secret-storage>
+      <user-name>hr</user-name>
+    </data-source>
+    <data-source name="app.db" uuid="0b6f5c1e-1111-4a5e-9d2a-000000000010">
+      <auth-provider>no-auth</auth-provider>
+    </data-source>
+  </component>
+</application>

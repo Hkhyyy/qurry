@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="DataSourceManagerImpl" format="xml" multifile-model="true">
+    <data-source source="LOCAL" name="with-password" uuid="pa550000-0000-4000-8000-000000000001">
+      <driver-ref>postgresql</driver-ref>
+      <jdbc-url>jdbc:postgresql://pw.internal:5432/pw?password=url-secret-1</jdbc-url>
+      <user-name>pw</user-name>
+      <password>xml-secret-2</password>
+    </data-source>
+  </component>
+</project>
