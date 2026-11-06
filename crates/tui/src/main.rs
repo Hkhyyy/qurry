@@ -1,5 +1,6 @@
 //! Qurry TUI — DataGrip-style terminal client. Uses the same engine (qurry-core)·same Data Sources as the GUI.
 mod app;
+mod cli;
 mod datatools;
 mod designer;
 mod dba;
@@ -40,27 +41,35 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    if args.iter().any(|a| a == "-h" || a == "--help") {
+    let cli = cli::parse(&args).unwrap_or_else(|e| fail(&e));
+    if cli.help {
         println!(
-            "qurry-tui {} [--config-dir DIR] [--no-update-check]\n       qurry-tui --update     download and install the newest release of the update channel (stable, or beta: ⌃k › Update Channel…)\n\nTerminal UI for Qurry (PostgreSQL / MySQL / Redis). Shares data sources with the Qurry app.\nA new version is checked every hour (off: --no-update-check or QURRY_NO_UPDATE_CHECK=1).\nColors follow the terminal: COLORTERM=truecolor for 24-bit, TERM=…-256color for 256, otherwise 16; NO_COLOR=1 turns them off. Light colors when COLORFGBG says the background is light (⌃k › Theme… picks Auto, Dark or Light).\nPress F1 inside for this keymap.\n{}",
+            "qurry-tui {}\n{}\n\nTerminal UI for Qurry (PostgreSQL / MySQL / Redis). Shares data sources with the Qurry app.\nA new version is checked every hour (off: --no-update-check or QURRY_NO_UPDATE_CHECK=1).\nColors follow the terminal: COLORTERM=truecolor for 24-bit, TERM=…-256color for 256, otherwise 16; NO_COLOR=1 turns them off. Light colors when COLORFGBG says the background is light (⌃k › Theme… picks Auto, Dark or Light).\nPress F1 inside for this keymap.\n{}",
             env!("CARGO_PKG_VERSION"),
+            cli::USAGE,
             help::text()
         );
         return Ok(());
     }
-    if args.iter().any(|a| a == "--version" || a == "-V") {
+    if cli.version {
         println!("qurry-tui {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
-    let dir = args.iter().position(|a| a == "--config-dir").and_then(|i| args.get(i + 1)).map(std::path::PathBuf::from);
+    let dir = cli.config_dir.clone();
     let cfg_dir = dir.clone().unwrap_or_else(qurry_core::config_dir);
-    if args.iter().any(|a| a == "--update") {
+    if cli.update {
         return selfupdate::run_update(qurry_core::store::Store::new(cfg_dir).update_channel()).await;
     }
-    let check_update = !args.iter().any(|a| a == "--no-update-check") && !qurry_core::update::disabled() && !selfupdate::current_exe().is_some_and(|e| selfupdate::from_source(&e));
+    let check_update = !cli.no_update_check && !qurry_core::update::disabled() && !selfupdate::current_exe().is_some_and(|e| selfupdate::from_source(&e));
+    // Before the screen is taken: a bad URL says why on the terminal
+    let temporary = cli.start.as_ref().map(cli::temporary).transpose().unwrap_or_else(|e| fail(&e));
     // Keep engine logs from breaking the screen
     qurry_core::QUIET.store(true, std::sync::atomic::Ordering::Relaxed);
     let state = Arc::new(qurry_core::open_state(dir).map_err(|e| std::io::Error::other(e.to_string()))?);
+    let start = temporary.map(|t| {
+        let notes = t.notes.join(" ");
+        (state.open_temporary(t).id, cli.start.as_ref().is_some_and(|s| s.incident), notes)
+    });
 
     enable_raw_mode()?;
     let mut out = std::io::stdout();
@@ -79,7 +88,7 @@ async fn main() -> std::io::Result<()> {
     qurry_core::ssm::kill_on_panic();
     tokio::spawn(qurry_core::ssm::kill_on_signals());
     let mut term = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
-    let res = run(&mut term, state, check_update.then_some(cfg_dir)).await;
+    let res = run(&mut term, state, check_update.then_some(cfg_dir), start).await;
     if enhanced {
         let _ = execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
     }
@@ -95,12 +104,18 @@ async fn main() -> std::io::Result<()> {
     Ok(())
 }
 
+/// A command-line mistake: say it on the terminal and stop (exit code 2, as for a usage error)
+fn fail(e: &str) -> ! {
+    eprintln!("qurry-tui: {e}\nRun qurry-tui --help for the forms it takes.");
+    std::process::exit(2)
+}
+
 fn restore() -> std::io::Result<()> {
     disable_raw_mode()?;
     execute!(std::io::stdout(), LeaveAlternateScreen, DisableMouseCapture, DisableBracketedPaste)
 }
 
-async fn run(term: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: Arc<qurry_core::app::AppState>, update_dir: Option<std::path::PathBuf>) -> std::io::Result<bool> {
+async fn run(term: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: Arc<qurry_core::app::AppState>, update_dir: Option<std::path::PathBuf>, start: Option<(String, bool, String)>) -> std::io::Result<bool> {
     // Return value = whether to relaunch (in-app update finished)
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<app::Apply>();
     let mut app = app::App::new(state.clone(), tx.clone());
@@ -108,6 +123,10 @@ async fn run(term: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: Arc<
     app.auto_light = theme::auto_light(|k| std::env::var(k).ok());
     if let Some(n) = app.startup_notice() {
         app.status = n;
+    }
+    if let Some((id, incident, notes)) = start {
+        app.start_with(id, incident);
+        app.status = if notes.is_empty() { "Temporary data source: not saved, gone when qurry-tui exits".into() } else { notes };
     }
     // Check for a new version (at launch + hourly, in the background). Failures are silently ignored
     if let Some(dir) = update_dir {

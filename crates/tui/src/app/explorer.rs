@@ -28,21 +28,28 @@ impl App {
                 for c in back {
                     a.retry_failed_tables(&c);
                 }
+                if let Some((id, incident)) = a.startup.take() {
+                    a.open_start(&id, incident);
+                }
             }
             Err(e) => a.status = format!("Failed to load data sources: {e}"),
         });
     }
 
-    /// Top of the explorer: only the current workspace's Data Sources (in the order added to the workspace)
+    /// Top of the explorer: the temporary Data Sources from the command line (in every workspace, never in a workspace's list, which
+    /// is shared with the GUI), then the current workspace's (in the order added to the workspace)
     pub fn rebuild_roots(&mut self) {
         let mine = &self.workspaces[self.cur_ws].conns;
-        self.tree.roots = mine
-            .iter()
-            .filter_map(|id| self.conns.iter().find(|c| &c.config.id == id))
+        let temporary = self.conns.iter().filter(|c| c.temporary);
+        self.tree.roots = temporary
+            .chain(mine.iter().filter_map(|id| self.conns.iter().find(|c| &c.config.id == id && !c.temporary)))
             .map(|c| Node {
                 key: c.config.id.clone(),
                 label: c.config.name.clone(),
-                hint: format!("{:?}", c.config.kind).to_lowercase() + if c.config.active_ssh().is_some() { " · ssh" } else if c.config.active_ssm().is_some() { " · ssm" } else { "" },
+                hint: format!("{:?}", c.config.kind).to_lowercase()
+                    + if c.config.active_ssh().is_some() { " · ssh" } else if c.config.active_ssm().is_some() { " · ssm" } else { "" }
+                    + if c.temporary { " · temporary" } else { "" }
+                    + if c.temporary && c.config.read_only { " · read-only" } else { "" },
                 kind: NodeKind::Conn,
                 conn: c.config.id.clone(),
                 db: None,
@@ -54,12 +61,30 @@ impl App {
         self.tree.clamp();
     }
 
-    /// Data Sources in no workspace (just created, or created in the GUI) → the current workspace
+    /// Data Sources in no workspace (just created, or created in the GUI) → the current workspace. Not temporary ones (rebuild_roots)
     pub fn ws_adopt_orphans(&mut self) {
         let known: HashSet<String> = self.workspaces.iter().flat_map(|w| w.conns.iter().cloned()).collect();
-        let orphans: Vec<String> = self.conns.iter().map(|c| c.config.id.clone()).filter(|id| !known.contains(id)).collect();
+        let orphans: Vec<String> = self.conns.iter().filter(|c| !c.temporary).map(|c| c.config.id.clone()).filter(|id| !known.contains(id)).collect();
         let cur = self.cur_ws;
         self.workspaces[cur].conns.extend(orphans);
+    }
+
+    /// Started with a URL (main.rs): once the list has the temporary source, select it and connect; incident mode opens
+    /// Database Admin › Sessions on it
+    pub fn start_with(&mut self, conn: String, incident: bool) {
+        self.startup = Some((conn, incident));
+        self.reload_conns();
+    }
+
+    fn open_start(&mut self, conn: &str, incident: bool) {
+        self.focus = Focus::Tree;
+        if !self.tree.select_key(conn) {
+            return;
+        }
+        self.connect(conn);
+        if incident {
+            self.dba_open("sessions".into());
+        }
     }
 
     pub(crate) fn default_db(&self, conn: &str) -> String {
