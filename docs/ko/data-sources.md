@@ -52,7 +52,7 @@ Qurry 가 다루는 데이터베이스, 연결 방법 (SSH, AWS SSM, SSL, 옵션
 |---|---|---|
 | 종류, 호스트, 포트, 데이터베이스 | JDBC URL 에서: PostgreSQL, MySQL / MariaDB, SQL Server, Oracle (`@//host:port/service`. `host:port:SID` 는 SID 를 service name 으로 쓰고 경고), ClickHouse, Redis, MongoDB (`mongodb+srv://` 는 호스트로), SQLite / DuckDB (파일). URL 파라미터는 버림 | 연결의 host · port · database (없으면 URL) |
 | 사용자 | `user-name` | 파일에 있으면 `configuration.user`. DBeaver 는 보통 비밀번호와 같이 (`credentials-config.json`, 읽지 않음) 두므로 그 줄에 경고가 나오고 직접 입력합니다 |
-| SSH 터널 | 가리키는 SSH 설정 (`sshConfigs.xml`: 호스트, 포트, 사용자, 비밀번호 또는 키 파일), 또는 Data Source 안의 예전 터널 설정. *OpenSSH config and agent* 는 키 파일이 없어서 경고: 연결 전에 키 파일을 고르세요 | `ssh_tunnel`: 호스트, 포트, 사용자, 비밀번호 또는 키 파일 (`${project.path}` 풀어서). agent 는 경고 |
+| SSH 터널 | 가리키는 SSH 설정 (`sshConfigs.xml`: 호스트, 포트, 사용자, 비밀번호 또는 키 파일), 또는 Data Source 안의 예전 터널 설정. *OpenSSH config and agent* 는 ssh-agent 와 `~/.ssh/config` 로 로그인 | `ssh_tunnel`: 호스트, 포트, 사용자, 비밀번호 또는 키 파일 (`${project.path}` 풀어서). agent 는 ssh-agent |
 | SSL | 모드 (Require / Verify CA / Full Verification), CA, 클라이언트 인증서와 키 | `*_ssl` 핸들러: `sslMode` (disable 이면 SSL 끔), CA, 클라이언트 인증서와 키. MySQL *Verify server certificate* = Verify CA |
 | Read-only | `read-only="true"` | `read-only` |
 | Production | — | 연결 종류 *Production* (`prod`) |

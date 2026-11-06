@@ -484,23 +484,18 @@ fn map_jetbrains(ds: &El, local: Option<&El>, ssh_cfgs: &[El], project: Option<&
                     _ if !key.is_empty() => SshAuth::Key,
                     _ => SshAuth::Password,
                 };
-                let agent = c.attr("authType") == Some("OPEN_SSH") && key.is_empty();
-                (c.attr("host").unwrap_or_default().to_string(), c.attr("port").and_then(|p| p.parse().ok()), c.attr("username").unwrap_or_default().to_string(), auth, key, agent)
+                // OPEN_SSH without a key path: the empty key logs in with ssh-agent and ~/.ssh/config, as DataGrip does
+                (c.attr("host").unwrap_or_default().to_string(), c.attr("port").and_then(|p| p.parse().ok()), c.attr("username").unwrap_or_default().to_string(), auth, key)
             }),
             // Before SSH configurations (2020): the tunnel is in the data source itself
             None => sp.text_of("proxy-host").map(|h| {
                 let key = sp.text_of("private-key-path").map(|k| expand_macros(k, project)).unwrap_or_default();
                 let auth = if sp.text_of("use-password") == Some("false") || (!key.is_empty() && sp.text_of("use-password").is_none()) { SshAuth::Key } else { SshAuth::Password };
-                (h.to_string(), sp.text_of("proxy-port").and_then(|p| p.parse().ok()), sp.text_of("user").unwrap_or_default().to_string(), auth, key, false)
+                (h.to_string(), sp.text_of("proxy-port").and_then(|p| p.parse().ok()), sp.text_of("user").unwrap_or_default().to_string(), auth, key)
             }),
         };
         match ssh {
-            Some((host, port, user, auth, key_path, agent)) => {
-                set_ssh(&mut m, SshConfig { enabled: true, host, port: port.unwrap_or(22), user, auth, key_path });
-                if agent {
-                    m.warn.push("SSH key from the OpenSSH config / agent: choose a key file".into());
-                }
-            }
+            Some((host, port, user, auth, key_path)) => set_ssh(&mut m, SshConfig { enabled: true, host, port: port.unwrap_or(22), user, auth, key_path }),
             None => m.warn.push("its SSH configuration isn't in the file: set the tunnel before connecting".into()),
         }
     }
@@ -629,9 +624,7 @@ fn map_dbeaver(c: &Value, project: &str) -> Foreign {
             if user.is_empty() {
                 m.warn.push("no SSH user name in the file".into());
             }
-            if auth_type == "AGENT" {
-                m.warn.push("SSH key from the agent: choose a key file".into());
-            }
+            // AGENT: the key path stays empty, so the tunnel logs in with ssh-agent
             let auth = if auth_type == "PASSWORD" { SshAuth::Password } else { SshAuth::Key };
             set_ssh(&mut m, SshConfig { enabled: true, host: s(props, "host").to_string(), port: props.get("port").and_then(port_of).unwrap_or(22), user, auth, key_path });
         } else if id.ends_with("ssl") {
@@ -906,7 +899,7 @@ fn new_mapped(name: &str, t: Target) -> Mapped {
 fn set_ssh(m: &mut Mapped, ssh: SshConfig) {
     let what = match ssh.auth {
         SshAuth::Key if !ssh.key_path.is_empty() => format!("key {}", ssh.key_path),
-        SshAuth::Key => "key".to_string(),
+        SshAuth::Key => "ssh-agent".to_string(),
         SshAuth::Password => "password".to_string(),
     };
     let port = if ssh.port == 22 { String::new() } else { format!(":{}", ssh.port) };

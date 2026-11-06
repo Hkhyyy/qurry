@@ -70,7 +70,7 @@ fn datagrip_global_with_local_and_ssh_configs() {
     let r = row(&plan, "analytics");
     assert_eq!((r.value.as_str(), r.tone.as_deref()), ("SSL without certificate checks", Some("warn")));
     let r = row(&plan, "events");
-    assert!(r.note.contains("SSH deploy@jump-eu.example.com:2222 (key)") && r.value.contains("OpenSSH config / agent"), "{r:?}");
+    assert!(r.note.contains("SSH deploy@jump-eu.example.com:2222 (ssh-agent)") && !r.value.contains("key file"), "{r:?}");
     assert_eq!(row(&plan, "local-pg").value, "no password");
     assert_eq!(row(&plan, "cache").text, "+ add \"cache\" (localhost:6379/0)");
     let r = row(&plan, "warehouse");

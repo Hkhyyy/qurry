@@ -52,7 +52,7 @@ What is mapped:
 |---|---|---|
 | Type, host, port, database | from the JDBC URL: PostgreSQL, MySQL / MariaDB, SQL Server, Oracle (`@//host:port/service`; `host:port:SID` uses the SID as the service name, with a warning), ClickHouse, Redis, MongoDB (`mongodb+srv://` as the host), SQLite / DuckDB (the file). URL parameters are dropped | the connection's host, port and database (the URL when they're missing) |
 | User | `user-name` | `configuration.user` when the file has it; DBeaver usually keeps it with the password (`credentials-config.json`, never read), so the row warns and you enter it |
-| SSH tunnel | the SSH configuration it refers to (`sshConfigs.xml`: host, port, user, password or key file), or the older tunnel inside the data source. *OpenSSH config and agent* has no key file: the row warns, choose one before connecting | `ssh_tunnel`: host, port, user, password or key file (`${project.path}` expanded); agent: the row warns |
+| SSH tunnel | the SSH configuration it refers to (`sshConfigs.xml`: host, port, user, password or key file), or the older tunnel inside the data source. *OpenSSH config and agent* logs in with ssh-agent and `~/.ssh/config` | `ssh_tunnel`: host, port, user, password or key file (`${project.path}` expanded); agent: ssh-agent |
 | SSL | mode (Require / Verify CA / Full Verification), CA, client certificate and key | `*_ssl` handlers: `sslMode` (disable leaves SSL off), CA, client certificate and key; MySQL *Verify server certificate* = Verify CA |
 | Read-only | `read-only="true"` | `read-only` |
 | Production | — | connection type *Production* (`prod`) |

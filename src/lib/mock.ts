@@ -108,7 +108,7 @@ export function importPlan(from: string, path: string) {
   const rows = [
     { text: '+ add "orders-prod" (app@orders-db.internal:5432/orders)', note: "PostgreSQL · SSH ec2-user@bastion.example.com (key ~/.ssh/id_ed25519) · SSL verify-full (CA ~/certs/orders-ca.pem) · Read-only", value: "password on connect", tone: null, checkable: true },
     { text: '+ add "analytics" (analyst@10.0.3.21:3306/stats)', note: "MySQL · SSL require", value: "SSL without certificate checks", tone: "warn", checkable: true },
-    { text: '+ add "events" (default@ch.internal:8123/default)', note: "ClickHouse · SSH deploy@jump-eu.example.com:2222 (key)", value: "SSH key from the OpenSSH config / agent: choose a key file", tone: "warn", checkable: true },
+    { text: '+ add "events" (default@ch.internal:8123/default)', note: "ClickHouse · SSH deploy@jump-eu.example.com:2222 (ssh-agent)", value: "password on connect", tone: null, checkable: true },
     { text: '+ add "local-pg" (postgres@localhost:5432/postgres)', note: "PostgreSQL", value: "no password", tone: null, checkable: true },
     { text: '+ add "cache" (localhost:6379/0)', note: "Redis", value: "no password", tone: null, checkable: true },
     { text: '− skip "warehouse" (Snowflake)', note: "Snowflake isn't supported", value: "skipped", tone: null, checkable: false },
