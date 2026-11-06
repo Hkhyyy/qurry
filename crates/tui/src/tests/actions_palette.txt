@@ -44,6 +44,7 @@ ShowDiagram	Show Diagram (ERD): foreign keys of a schema, as text + Mermaid	—
 CompareSchemas	Compare Schemas… (DDL to make one schema look like another)	—
 CompareData	Compare Table Data… (sync SQL by primary key)	—
 RunMigrations	Run Migrations… (folder of V1__name.sql files)	—
+ImportDataSources	Import Data Sources… (DataGrip, IntelliJ, DBeaver, a Qurry export)	—
 BackupDb	Back Up Database… (pg_dump / mysqldump)	—
 RestoreDb	Restore Database… (from a .dump / .sql backup)	—
 DbaReports	Database Admin… (sessions & locks, slow queries, sizes, indexes, vacuum, server, privileges)	—

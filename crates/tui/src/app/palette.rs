@@ -260,6 +260,8 @@ impl App {
                 self.palette_grid_align(c);
             }
             PAction::Theme(t) => self.set_theme(t),
+            PAction::ImportFrom(path) => self.ds_import_location(path),
+            PAction::ImportPath => self.ds_import_path(),
             PAction::Object { conn, db, e } => {
                 let kind = match e.kind.as_str() {
                     "function" | "procedure" => "routine".to_string(),

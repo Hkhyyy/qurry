@@ -604,6 +604,8 @@ const EXPORT_MAX_BYTES: u64 = 512 << 20;
 pub struct ImportResult {
     pub added: usize,
     pub updated: usize,
+    /// For the status bar (crate::import::ImportPlan::done_message)
+    pub message: String,
 }
 
 /// Statements run in one transaction (execute_batch): rows changed, and a warning when they committed but their result couldn't be logged
@@ -1373,9 +1375,22 @@ impl AppState {
         self.store.export_to(std::path::Path::new(&path))
     }
 
-    /// Import preview: Data Sources to be added or changed, and risky changes (Read-only turned off, server/SSH/startup script changed)
-    pub fn import_preview(&self, path: String) -> AppResult<Vec<String>> {
-        self.store.import_preview(std::path::Path::new(&path))
+    /// The DataGrip / IntelliJ and DBeaver locations on this computer (`home`: the user's home folder)
+    pub fn import_locations(&self, home: &std::path::Path) -> Vec<crate::import::Location> {
+        crate::import::locations(home)
+    }
+
+    /// Import preview of a picked file or folder: Data Sources to be added, changed or skipped, and risky changes
+    /// (Read-only turned off, server/SSH/startup script changed)
+    pub fn import_plan(&self, path: &std::path::Path, home: &std::path::Path) -> AppResult<store::ImportPlan> {
+        self.store.import_plan(path, home, None)
+    }
+
+    /// Import preview of a found location: only one `import_locations` lists (so a caller can't name any path), named by its label
+    pub fn import_location(&self, path: &str, home: &std::path::Path) -> AppResult<store::ImportPlan> {
+        let found = crate::import::locations(home).into_iter().find(|l| l.path == path);
+        let l = found.ok_or_else(|| AppError::Msg(format!("Can't import: {} isn't there anymore (moved or deleted).", crate::import::shown(std::path::Path::new(path), home))))?;
+        self.store.import_plan(std::path::Path::new(&l.path), home, Some(&l.label))
     }
 
     /// The user confirms and trusts an unknown SSH server key (added to known_hosts)
@@ -1383,10 +1398,11 @@ impl AppState {
         crate::tunnel::trust_host_key(&host, port)
     }
 
-    pub async fn import_connections(&self, path: String) -> AppResult<ImportResult> {
+    /// Import the checked rows of a plan (`picked[i]` for row i)
+    pub async fn import_apply(&self, plan: &store::ImportPlan, picked: &[bool]) -> AppResult<ImportResult> {
         // Importing a different server under the same id deletes the old password (so it is not sent to the new server) —
         // before the store is written, so a failure (damaged secrets.json) imports nothing
-        let (added, updated, forget) = self.store.import_from(std::path::Path::new(&path), |forget| {
+        let (added, updated, forget) = self.store.import_apply(plan, picked, |forget| {
             for (id, password, ssh) in forget {
                 if *password {
                     for k in store::password_keys(id) {
@@ -1402,7 +1418,7 @@ impl AppState {
         for (id, _, _) in forget {
             drop_pool_logged(self, &id, crate::audit::DISCONNECTED).await;
         }
-        Ok(ImportResult { added, updated })
+        Ok(ImportResult { added, updated, message: crate::import::ImportPlan::done_message(added, updated) })
     }
 
     pub async fn export_csv(&self, id: String, sql: String, path: String) -> AppResult<u64> {
@@ -1974,13 +1990,14 @@ mod tests {
         std::fs::write(&file, v.to_string()).unwrap();
         let good = std::fs::read(dir.join("secrets.json")).unwrap();
         std::fs::write(dir.join("secrets.json"), b"{ \"m\": \"tru").unwrap();
-        let e = st.import_connections(file.display().to_string()).await.err().expect("import must fail").to_string();
+        let plan = st.import_plan(&file, &dir).unwrap();
+        let e = st.import_apply(&plan, &[]).await.err().expect("import must fail").to_string();
         assert!(e.contains("damaged"), "{e}");
         let c = st.store.get("m").unwrap().unwrap();
         assert!(!c.options.allow_plaintext && c.password_saved, "{c:?}");
         // Repaired: the import goes through and the password is gone
         std::fs::write(dir.join("secrets.json"), good).unwrap();
-        st.import_connections(file.display().to_string()).await.unwrap();
+        st.import_apply(&plan, &[]).await.unwrap();
         let c = st.store.get("m").unwrap().unwrap();
         assert!(c.options.allow_plaintext && !c.password_saved);
         assert_eq!(st.saved_secret("m", c.password_saved).unwrap(), None);

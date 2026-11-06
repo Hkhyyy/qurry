@@ -28,7 +28,9 @@ impl Harness {
         let dir = std::env::temp_dir().join(format!("qurry-tui-test-{}", uuid::Uuid::new_v4()));
         let state = Arc::new(qurry_core::open_state(Some(dir.clone())).unwrap());
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let app = App::new(state, tx);
+        let mut app = App::new(state, tx);
+        // Import Data Sources never reads the real DataGrip / DBeaver settings in a test
+        app.import_home = dir.join("home");
         let mut h = Harness { app, rx, _dir: TempDir(dir) };
         h.settle().await;
         h

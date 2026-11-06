@@ -32,6 +32,8 @@ import { BackupDialog, ExportDialog, ImportDialog } from "../../components/Trans
 import { UpdateDialog } from "../../components/UpdateDialog";
 import { WorkspaceBar } from "../../components/WorkspaceBar";
 import { StatusBar } from "../../features/settings/StatusBar";
+import { useConnActions } from "../../features/conns/useConnActions";
+import { ConfirmHost, Menu } from "..";
 import { ConsoleIcon, ReportIcon, TabIcon, TableIcon } from "../icons";
 
 /** Screens: real screen components with fake data (same data as the app's ?mock). Buttons are clickable */
@@ -672,4 +674,58 @@ export const StatusBarStory: S = {
       <StatusBar run={{ canRun: false, running: true, onRun: noop, onCancel: noop }} status="" busy={{ label: "Loading more rows", since: Date.now() - 800 }} readOnly={false} onUpdate={noop} jobs={[]} />
     </div>
   ),
+};
+
+// ───────── Import Data Sources (#63): the real flow on the mock backend ─────────
+/** Explorer ⋮ › Import Data Sources ▸ (opened by hovering it): the locations found, newest IDE version first, the count, the path as the
+ * tooltip; then File… and Folder… (the native pickers pick one or the other) */
+function ImportMenu() {
+  const a = useConnActions({ conns: CONNS, refresh: async () => {}, setStatus: noop });
+  return (
+    <div style={{ position: "relative", height: 260, width: 640 }}>
+      <span className="menu-anchor" style={{ position: "absolute", left: 220, top: 8 }}>
+        <Menu items={[{ label: "Export Data Sources…", action: noop }, { label: "Import Data Sources", submenu: a.importItems() }]} onClose={noop} />
+      </span>
+    </div>
+  );
+}
+export const ImportSubmenu: S = {
+  name: "Import Data Sources ▸ (explorer ⋮)",
+  render: () => <ImportMenu />,
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await waitFor(async () => {
+      await userEvent.hover(c.getByText("Import Data Sources"));
+      await expect(c.getByText("DataGrip 2025.2 · global  (7)")).toBeTruthy();
+    });
+  },
+};
+
+/** The import confirm: one row per source, a checkbox on each added row (unchecked = left out), skipped rows with the reason;
+ * Import N counts the checked rows and is disabled at 0 */
+function ImportFlow({ from }: { from: { path: string } | { folder: boolean } }) {
+  const a = useConnActions({ conns: CONNS, refresh: async () => {}, setStatus: noop });
+  useEffect(() => void a.importFrom(from), []);
+  return <ConfirmHost />;
+}
+const DG = "/Users/me/Library/Application Support/JetBrains/DataGrip2025.2/options";
+export const ImportPreview: S = { name: "Import Data Sources — preview with checkboxes", render: () => <ImportFlow from={{ path: DG }} /> };
+export const ImportPreviewLight: S = { name: "Import Data Sources — preview (light)", globals: { theme: "light" }, render: () => <ImportFlow from={{ path: DG }} /> };
+/** Every source skipped: a notice (OK only) with the rows */
+export const ImportNothing: S = {
+  name: "Import Data Sources — nothing importable (notice)",
+  render: () => {
+    (window as any).__mockImportAllSkipped = true;
+    useEffect(() => () => void ((window as any).__mockImportAllSkipped = false), []);
+    return <ImportFlow from={{ path: DG }} />;
+  },
+};
+/** A file that can't be parsed: where, and that nothing was imported */
+export const ImportError: S = {
+  name: "Import Data Sources — a file that can't be read",
+  render: () => {
+    (window as any).__mockImportPick = "broken";
+    useEffect(() => () => void ((window as any).__mockImportPick = undefined), []);
+    return <ImportFlow from={{ folder: false }} />;
+  },
 };

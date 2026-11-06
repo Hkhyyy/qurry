@@ -90,6 +90,7 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 
 | Key | Action |
 |---|---|
+| — | Import Data Sources… (DataGrip, IntelliJ, DBeaver, a Qurry export) |
 | — | Data Source Properties… |
 | — | New Data Source… |
 | — | Refresh |

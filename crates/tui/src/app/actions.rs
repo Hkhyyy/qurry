@@ -66,6 +66,7 @@ pub const ACTIONS: &[ActionDef] = &[
     ActionDef { action: Action::CompareSchemas, hint: "", run: |app| app.compare_schemas_start() },
     ActionDef { action: Action::CompareData, hint: "", run: |app| app.compare_data_start() },
     ActionDef { action: Action::RunMigrations, hint: "", run: |app| app.migrations_start() },
+    ActionDef { action: Action::ImportDataSources, hint: "", run: |app| app.ds_import_start() },
     ActionDef { action: Action::BackupDb, hint: "", run: |app| app.backup_start() },
     ActionDef { action: Action::RestoreDb, hint: "", run: |app| app.restore_start() },
     ActionDef { action: Action::DbaReports, hint: "", run: |app| app.dba_palette() },

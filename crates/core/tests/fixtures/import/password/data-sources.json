@@ -1,0 +1,26 @@
+{
+	"connections": {
+		"postgres-jdbc-pw": {
+			"provider": "postgresql",
+			"driver": "postgres-jdbc",
+			"name": "with-password",
+			"save-password": true,
+			"configuration": {
+				"host": "pw.internal",
+				"port": 5432,
+				"database": "pw",
+				"user": "pw",
+				"password": "json-secret-5",
+				"handlers": {
+					"ssh_tunnel": {
+						"type": "TUNNEL",
+						"enabled": true,
+						"user": "gw",
+						"password": "json-ssh-secret-6",
+						"properties": { "host": "pw-gw.example.net", "authType": "PASSWORD", "password": "json-ssh-secret-7" }
+					}
+				}
+			}
+		}
+	}
+}

@@ -8,6 +8,7 @@ use std::{fs, path::PathBuf};
 pub type Keymap = BTreeMap<String, Vec<String>>;
 
 pub use qurry_shared::kind::DbKind;
+pub use crate::import::{ImportPlan, ImportRow};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -523,29 +524,30 @@ impl Store {
         Ok(n)
     }
 
-    /// Overwrite the same id, add new ids. Returns: (added, updated)
-    fn read_import(path: &std::path::Path) -> AppResult<Vec<ConnectionConfig>> {
-        let text = fs::read_to_string(path)?;
-        Ok(match serde_json::from_str::<ExportFile>(&text) {
-            Ok(f) => f.connections,
-            Err(_) => serde_json::from_str(&text)?,
+    /// What importing `path` would do (Qurry export, DataGrip / IntelliJ, DBeaver: crate::import::read). `from` names it in the
+    /// question (a found location's label), otherwise it's described from the path
+    pub fn import_plan(&self, path: &std::path::Path, home: &std::path::Path, from: Option<&str>) -> AppResult<ImportPlan> {
+        let all = self.list()?;
+        let shown = crate::import::shown(path, home);
+        Ok(match crate::import::read(path, home)? {
+            crate::import::Read::Foreign(sources) => crate::import::foreign_plan(&from.map(str::to_string).unwrap_or_else(|| crate::import::describe(path, home)), &shown, &all, sources),
+            crate::import::Read::Qurry(incoming) => Self::qurry_plan(from.unwrap_or("a Qurry export"), &shown, &all, incoming),
         })
     }
 
-    /// What changes before importing (a file from someone else can turn off Read-only or add SQL to run on connect)
-    pub fn import_preview(&self, path: &std::path::Path) -> AppResult<Vec<String>> {
-        let all = self.list()?;
-        let mut out = vec![];
-        for c in Self::read_import(path)? {
+    /// A Qurry export: what changes before importing (a file from someone else can turn off Read-only or add SQL to run on connect)
+    fn qurry_plan(from: &str, shown: &str, all: &[ConnectionConfig], incoming: Vec<ConnectionConfig>) -> ImportPlan {
+        let mut rows = vec![];
+        for c in &incoming {
+            let kind = crate::import::kind_name(c.kind, "");
             let script = |c: &ConnectionConfig| c.options.startup_script.trim().to_string();
             match all.iter().find(|e| !c.id.is_empty() && e.id == c.id) {
                 None => {
-                    let mut line = format!("+ add \"{}\" ({}@{}:{})", c.name, c.user, c.host, c.port);
                     let mut notes = vec![];
-                    if !script(&c).is_empty() {
+                    if !script(c).is_empty() {
                         notes.push("runs a startup script on connect".to_string());
                     }
-                    // What the import will really allow (unset becomes Off, see import_from)
+                    // What the import will really allow (unset becomes Off, see merge_import)
                     let mut as_saved = c.clone();
                     as_saved.options.mcp.get_or_insert_with(|| "off".into());
                     match as_saved.mcp_access(true) {
@@ -562,10 +564,8 @@ impl Store {
                     if c.options.oracle_client.as_deref().is_some_and(|p| !p.trim().is_empty()) {
                         notes.push("loads Oracle client libraries from a folder".into());
                     }
-                    if !notes.is_empty() {
-                        line += &format!(" — {}", notes.join(", "));
-                    }
-                    out.push(line);
+                    let (value, tone) = if notes.is_empty() { ("password on connect".to_string(), None) } else { (notes.join(", "), Some("warn")) };
+                    rows.push(ImportRow::new(format!("+ add \"{}\" ({})", c.name, crate::import::server(c)), kind, value, tone, true));
                 }
                 Some(e) => {
                     let mut ch = vec![];
@@ -586,7 +586,7 @@ impl Store {
                         ch.push(format!("SSL {} → {}", a.mode(), b.mode()));
                     }
                     let files = |x: &ConnectionConfig| x.ssl.as_ref().map(|s| (s.ca_file.clone(), s.cert_file.clone(), s.key_file.clone()));
-                    if files(e) != files(&c) {
+                    if files(e) != files(c) {
                         ch.push("changes the SSL certificate files".into());
                     }
                     if e.redis.as_ref().map(|r| (&r.mode, &r.nodes, &r.sentinel_master)) != c.redis.as_ref().map(|r| (&r.mode, &r.nodes, &r.sentinel_master)) {
@@ -606,7 +606,7 @@ impl Store {
                     if e.mcp_access(true) < as_saved.mcp_access(true) {
                         ch.push("shares more with MCP (AI tools)".into());
                     }
-                    if Self::import_moves_server(e, &c) && e.password_saved {
+                    if Self::import_moves_server(e, c) && e.password_saved {
                         ch.push("the saved password will be removed and asked again".into());
                     }
                     if e.active_ssh().map(|s| (&s.host, s.port)) != c.active_ssh().map(|s| (&s.host, s.port)) {
@@ -615,22 +615,40 @@ impl Store {
                     if e.active_ssm() != c.active_ssm() {
                         ch.push("changes the AWS SSM tunnel".into());
                     }
-                    if script(e) != script(&c) {
+                    if script(e) != script(c) {
                         ch.push("changes the startup script".into());
                     }
-                    out.push(format!("~ update \"{}\"{}", e.name, if ch.is_empty() { String::new() } else { format!(": {}", ch.join(", ")) }));
+                    let note = if ch.is_empty() { kind } else { format!("{kind} · {}", ch.join(", ")) };
+                    let tone = (!ch.is_empty()).then_some("warn");
+                    rows.push(ImportRow::new(format!("~ update \"{}\"", e.name), note, "update".into(), tone, true));
                 }
             }
         }
-        Ok(out)
+        let added = rows.iter().filter(|r| r.text.starts_with('+')).count();
+        let updated = rows.len() - added;
+        let message = if rows.is_empty() {
+            format!("Nothing to import: {from} has no data sources.\n{shown}")
+        } else {
+            // An update keeps the saved password unless its row says it will be removed
+            let pw = match (added, updated) {
+                (_, 0) => "Passwords aren't in the file: each asks on its first connect.",
+                (0, _) => "Passwords aren't in the file: an updated data source keeps its saved password unless its row says otherwise.",
+                _ => "Passwords aren't in the file: new data sources ask on their first connect, updated ones keep their saved password unless their row says otherwise.",
+            };
+            format!("Import these data sources from {from}?\n{shown}\n\n{added} to add, {updated} to update. {pw}")
+        };
+        ImportPlan { title: crate::import::TITLE.into(), message: crate::import::clean_message(message), importable: rows.len(), rows, configs: incoming.into_iter().map(Some).collect() }
     }
 
+    /// Import the checked rows of `plan` (`picked[i]` for row i; missing = checked). Sources from another tool that Qurry has
+    /// meanwhile got (another app imported them) are left out.
     /// (added, changed, sources whose passwords to delete: (id, DB password, SSH secret)). The saved flags follow the current values, not the file.
     /// `forget` deletes those passwords before the store is written (under its lock): if it fails, nothing is imported — otherwise the store would
     /// say "no password" (or allow plain text) while the old password stayed in the file
-    pub fn import_from(&self, path: &std::path::Path, forget: impl FnOnce(&[(String, bool, bool)]) -> AppResult<()>) -> AppResult<(usize, usize, Vec<(String, bool, bool)>)> {
-        let incoming = Self::read_import(path)?;
+    pub fn import_apply(&self, plan: &ImportPlan, picked: &[bool], forget: impl FnOnce(&[(String, bool, bool)]) -> AppResult<()>) -> AppResult<(usize, usize, Vec<(String, bool, bool)>)> {
+        let chosen: Vec<ConnectionConfig> = plan.configs.iter().enumerate().filter(|(i, _)| picked.get(*i).copied().unwrap_or(true)).filter_map(|(_, c)| c.clone()).collect();
         self.update(|all| {
+            let incoming = chosen.into_iter().filter(|c| !c.id.is_empty() || !all.iter().any(|e| crate::import::same_source(e, c))).collect();
             let r = Self::merge_import(all, incoming)?;
             forget(&r.2)?;
             Ok(r)
@@ -966,6 +984,18 @@ mod tests {
         }
     }
 
+    /// Import a whole file, as the confirm with every row checked
+    fn import_all(s: &Store, file: &std::path::Path) -> (usize, usize, Vec<(String, bool, bool)>) {
+        let plan = s.import_plan(file, std::path::Path::new("/nonexistent-home"), None).unwrap();
+        s.import_apply(&plan, &[], |_| Ok(())).unwrap()
+    }
+
+    /// The confirm's rows as text
+    fn preview(s: &Store, file: &std::path::Path) -> String {
+        let plan = s.import_plan(file, std::path::Path::new("/nonexistent-home"), None).unwrap();
+        plan.rows.iter().map(|r| format!("{} {} {}", r.text, r.note, r.value)).collect::<Vec<_>>().join("\n")
+    }
+
     #[test]
     fn export_import_roundtrip() {
         let base = std::env::temp_dir().join(format!("dbtool-store-{}", uuid::Uuid::new_v4()));
@@ -978,7 +1008,7 @@ mod tests {
 
         let b = Store::new(base.join("b"));
         b.save(&conn("2", "old name")).unwrap();
-        assert_eq!(b.import_from(&file, |_| Ok(())).unwrap(), (1, 1, vec![]));
+        assert_eq!(import_all(&b, &file), (1, 1, vec![]));
         // Newly imported sources get MCP Off (unless the file sets it)
         assert_eq!(b.get("1").unwrap().unwrap().options.mcp.as_deref(), Some("off"));
         let names: Vec<_> = b.list().unwrap().into_iter().map(|c| c.name).collect();
@@ -1001,9 +1031,9 @@ mod tests {
         theirs.ssl = None;
         let file = base.join("in.json");
         std::fs::write(&file, serde_json::to_string(&vec![theirs]).unwrap()).unwrap();
-        let p = b.import_preview(&file).unwrap().join("\n");
+        let p = preview(&b, &file);
         assert!(p.contains("attacker.example") && p.contains("SSL OFF") && p.contains("password will be removed"), "{p}");
-        assert_eq!(b.import_from(&file, |_| Ok(())).unwrap(), (0, 1, vec![("2".to_string(), true, false)]));
+        assert_eq!(import_all(&b, &file), (0, 1, vec![("2".to_string(), true, false)]));
         assert!(!b.get("2").unwrap().unwrap().password_saved);
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -1021,16 +1051,16 @@ mod tests {
         theirs.options.allow_plaintext = true;
         let file = base.join("in.json");
         std::fs::write(&file, serde_json::to_string(&vec![theirs]).unwrap()).unwrap();
-        let p = b.import_preview(&file).unwrap().join("\n");
+        let p = preview(&b, &file);
         assert!(p.contains("unencrypted") && p.contains("password will be removed and asked again"), "{p}");
-        assert_eq!(b.import_from(&file, |_| Ok(())).unwrap(), (0, 1, vec![("4".to_string(), true, false)]));
+        assert_eq!(import_all(&b, &file), (0, 1, vec![("4".to_string(), true, false)]));
         let got = b.get("4").unwrap().unwrap();
         assert!(got.options.allow_plaintext && !got.password_saved);
         // Already allowed: importing the same setting keeps it
         let mut again = got.clone();
         again.password_saved = true;
         b.save(&again).unwrap();
-        assert_eq!(b.import_from(&file, |_| Ok(())).unwrap(), (0, 1, vec![]));
+        assert_eq!(import_all(&b, &file), (0, 1, vec![]));
         assert!(b.get("4").unwrap().unwrap().password_saved);
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -1048,9 +1078,12 @@ mod tests {
         theirs.options.allow_plaintext = true;
         let file = base.join("in.json");
         std::fs::write(&file, serde_json::to_string(&vec![theirs]).unwrap()).unwrap();
-        let p = b.import_preview(&file).unwrap().join("\n");
+        let p = preview(&b, &file);
         assert!(p.contains("unencrypted") && !p.contains("MCP"), "{p}");
-        b.import_from(&file, |_| Ok(())).unwrap();
+        // An update keeps the saved password: the question doesn't say it's asked again
+        let m = b.import_plan(&file, std::path::Path::new("/nonexistent-home"), None).unwrap().message;
+        assert!(m.ends_with("0 to add, 1 to update. Passwords aren't in the file: an updated data source keeps its saved password unless its row says otherwise."), "{m}");
+        import_all(&b, &file);
         assert_eq!(b.get("3").unwrap().unwrap().mcp_access(true), McpAccess::Off);
         let _ = std::fs::remove_dir_all(&base);
     }

@@ -2,7 +2,7 @@
 use crate::app::{AppState, BatchResult, ConnectionView, ImportResult};
 use crate::db::QueryResult;
 use crate::error::AppResult;
-use crate::store::ConnectionConfig;
+use crate::store::{ConnectionConfig, ImportPlan};
 use qurry_core::transfer::{Dest, Format, ImportSpec, Preview};
 use tauri::State;
 use tauri_plugin_dialog::DialogExt;
@@ -179,25 +179,41 @@ pub async fn export_connections(app: tauri::AppHandle, state: State<'_, AppState
     Ok(Some((state.export_connections(path.clone()).await?, path)))
 }
 
-/// Pick a file to import → preview what changes. The actual import is import_picked (after the user confirms)
+/// Import Data Sources ▸ the DataGrip / IntelliJ / DBeaver locations found on this computer
 #[tauri::command]
-pub async fn pick_import_file(app: tauri::AppHandle, state: State<'_, AppState>, pending: State<'_, PendingImport>) -> AppResult<Option<Vec<String>>> {
-    let picked = app.dialog().file().add_filter("JSON", &["json"]).blocking_pick_file();
+pub async fn import_locations(state: State<'_, AppState>) -> AppResult<Vec<qurry_core::import::Location>> {
+    Ok(state.import_locations(&qurry_core::import::home()))
+}
+
+/// A found location → the preview. Only a path import_locations lists is read. The actual import is import_picked (after the user confirms)
+#[tauri::command]
+pub async fn import_location(state: State<'_, AppState>, pending: State<'_, PendingImport>, path: String) -> AppResult<ImportPlan> {
+    let plan = state.import_location(&path, &qurry_core::import::home())?;
+    *pending.0.lock().unwrap() = Some(plan.clone());
+    Ok(plan)
+}
+
+/// File… / Folder… → the native picker (the backend opens it, so the webview can't name a path) → the preview
+#[tauri::command]
+pub async fn pick_import(app: tauri::AppHandle, state: State<'_, AppState>, pending: State<'_, PendingImport>, folder: bool) -> AppResult<Option<ImportPlan>> {
+    let d = app.dialog().file();
+    let picked = if folder { d.blocking_pick_folder() } else { d.add_filter("Data sources", &["json", "xml"]).blocking_pick_file() };
     let Some(path) = picked.and_then(|p| p.into_path().ok()) else { return Ok(None) };
-    let lines = state.import_preview(path.display().to_string())?;
-    *pending.0.lock().unwrap() = Some(path);
-    Ok(Some(lines))
+    let plan = state.import_plan(&path, &qurry_core::import::home())?;
+    *pending.0.lock().unwrap() = Some(plan.clone());
+    Ok(Some(plan))
 }
 
+/// Import the rows the user left checked (`picked[i]` for row i of the preview)
 #[tauri::command]
-pub async fn import_picked(state: State<'_, AppState>, pending: State<'_, PendingImport>) -> AppResult<ImportResult> {
-    let path = pending.0.lock().unwrap().take().ok_or_else(|| crate::error::AppError::Msg("Choose a file first".into()))?;
-    state.import_connections(path.display().to_string()).await
+pub async fn import_picked(state: State<'_, AppState>, pending: State<'_, PendingImport>, picked: Vec<bool>) -> AppResult<ImportResult> {
+    let plan = pending.0.lock().unwrap().take().ok_or_else(|| crate::error::AppError::Msg("Choose what to import first".into()))?;
+    state.import_apply(&plan, &picked).await
 }
 
-/// The picked import file (between preview and the actual import)
+/// The preview being confirmed (between the preview and the actual import)
 #[derive(Default)]
-pub struct PendingImport(pub std::sync::Mutex<Option<std::path::PathBuf>>);
+pub struct PendingImport(pub std::sync::Mutex<Option<ImportPlan>>);
 
 /// The save dialog is opened here (backend): write only to the path the user picked, so the webview can't pass an arbitrary path to write
 fn save_dialog(app: &tauri::AppHandle, default_name: &str, filter: &str, exts: &[&str]) -> Option<String> {

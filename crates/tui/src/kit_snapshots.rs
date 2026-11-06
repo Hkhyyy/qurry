@@ -488,6 +488,18 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         on_yes: Box::new(|_| {}),
     });
     scenes.push(app_scene(h, "Copy related rows", "⌃k › Copy Related Rows To: FK 로 이어진 행 · 가린 개인정보 컬럼을 보여 주고 확인", 120, 22));
+    // Import Data Sources: the locations found (a fake home with DataGrip, IntelliJ and DBeaver settings), then the confirm
+    h.app.import_home = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/tests/fixtures/import/home").canonicalize().unwrap();
+    h.app.ds_import_start();
+    scenes.push(app_scene(h, "Import Data Sources — pick", "⌃k › Import Data Sources…: the DataGrip / IntelliJ / DBeaver locations found, newest IDE version first, with their counts; File or folder… takes a path", 120, 22));
+    h.app.popup = None;
+    h.app.ds_import_location(h.app.import_home.join("Library/Application Support/JetBrains/DataGrip2025.2/options").display().to_string());
+    if let Some(Popup::ImportPick(p)) = &mut h.app.popup {
+        p.move_by(2);
+        p.toggle();
+    }
+    scenes.push(app_scene(h, "Import Data Sources — confirm", "One row per source: what is added and mapped (SSH, SSL, Read-only), password on connect or a warning, skipped ones with the reason; Space leaves a row out, y / Enter imports the checked ones", 120, 40));
+    h.app.popup = None;
     // Explain Analyze of several statements that need a look: each with its own reason, danger border
     let asks: Vec<(String, String)> = ["select nextval('payment_id_seq')", "delete from payment"]
         .iter()

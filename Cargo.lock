@@ -5143,6 +5143,7 @@ dependencies = [
  "libc",
  "minisign-verify 0.2.5",
  "percent-encoding",
+ "quick-xml 0.42.0",
  "qurry-driver",
  "qurry-shared",
  "rand 0.8.8",

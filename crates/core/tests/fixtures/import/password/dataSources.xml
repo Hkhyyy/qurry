@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="DataSourceManagerImpl" format="xml" multifile-model="true">
+    <data-source source="LOCAL" name="with-password" uuid="pa550000-0000-4000-8000-000000000001">
+      <driver-ref>postgresql</driver-ref>
+      <jdbc-url>jdbc:postgresql://pw.internal:5432/pw?password=url-secret-1</jdbc-url>
+      <user-name>pw</user-name>
+      <password>xml-secret-2</password>
+    </data-source>
+    <data-source source="LOCAL" name="mongo-userinfo" uuid="pa550000-0000-4000-8000-000000000002">
+      <driver-ref>mongo</driver-ref>
+      <jdbc-url>mongodb://app:url/secret,8@x@mongo.internal:27017/shop</jdbc-url>
+    </data-source>
+    <data-source source="LOCAL" name="oracle-userinfo" uuid="pa550000-0000-4000-8000-000000000003">
+      <driver-ref>oracle</driver-ref>
+      <jdbc-url>jdbc:oracle:thin:scott/url-secret-9@//ora.internal:1521/SALES</jdbc-url>
+    </data-source>
+    <data-source source="LOCAL" name="mysql-hostlist" uuid="pa550000-0000-4000-8000-000000000004">
+      <driver-ref>mysql.8</driver-ref>
+      <jdbc-url>jdbc:mysql://(host=db.internal,port=3306,password=url-secret-10)/shop</jdbc-url>
+    </data-source>
+  </component>
+</project>

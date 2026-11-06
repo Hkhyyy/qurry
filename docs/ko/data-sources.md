@@ -24,6 +24,41 @@ Qurry 가 다루는 데이터베이스, 연결 방법 (SSH, AWS SSM, SSL, 옵션
 
 > Redis Sentinel · Cluster 노드는 자기 주소를 알려 주는 방식이라 SSH · AWS SSM 터널과 같이 쓸 수 없습니다.
 
+## 내보내기와 가져오기
+
+**Export Data Sources…** (탐색기 ⋮ 메뉴, Find Action) 는 모든 Data Source 를 비밀번호 없이 JSON 파일로 저장합니다. **Import Data Sources** 는 그 파일이나, DataGrip / IntelliJ IDEA · DBeaver 의 Data Source 를 읽어 옵니다:
+
+- **GUI**: 탐색기 ⋮ › **Import Data Sources ▸** 에 이 컴퓨터에서 찾은 위치가 최신 IDE 버전부터, 들어 있는 Data Source 수와 함께 나옵니다 (경로는 툴팁). 그 아래 **File…** · **Folder…** 는 시스템 선택 창을 엽니다 (파일이나 폴더 중 하나를 고르는 창). Find Action (`⇧⌘A`) 에도 *Import Data Sources: …* 로 같은 목록이 있습니다.
+- **TUI**: `⌃k` › **Import Data Sources…** 에 같은 위치가 나오고, 마지막의 **File or folder…** 는 경로를 입력받습니다 (`~` 는 홈 폴더).
+
+형식은 고른 것으로 알아냅니다: Qurry 내보내기 파일, `dataSources.xml` · `dataSources.local.xml`, 프로젝트 폴더나 그 `.idea`, IDE options 폴더, DBeaver 의 `data-sources.json` (`data-sources-*.json`), `.dbeaver` 폴더 · DBeaver 프로젝트 · workspace 폴더. 폴더 안에 `qurry-datasources.json` 이 있으면 그 내보내기 파일을 읽습니다.
+
+그다음 가져오기 확인 창에 Data Source 마다 한 줄씩 나옵니다: 무엇이 추가되는지 (이름, 서버), 무엇이 옮겨졌는지 (종류, SSH 터널, SSL, Read-only, Production), 오른쪽에 *password on connect*, *no password* (DataGrip 의 No auth), 또는 *SSL without certificate checks* 같은 경고. 추가되는 줄마다 체크박스가 있고 (처음엔 체크됨), 빼고 싶은 것은 체크를 풉니다. **Import N** (TUI: `y` / `Enter`) 은 체크된 것만 가져오고, 0 개면 누를 수 없습니다. TUI: `↑` `↓` 이동, `Space` 체크, `n` / `Esc` 취소. 가져올 수 없는 줄은 이유와 함께 나오고 체크박스가 없습니다: Qurry 가 지원하지 않는 종류 (Snowflake, BigQuery, Db2, CSV 파일 …), 또는 Qurry 에 이미 있는 것 (종류 · 서버 · 사용자 · 데이터베이스가 같음). 가져올 것이 하나도 없으면 확인 창 대신 그 줄들을 보여 주는 알림이 나옵니다. 읽을 수 없는 파일은 어디서 (줄 · 칸) 막혔는지 알려 주고 아무것도 가져오지 않습니다.
+
+새 Data Source 는 새 id 를 받고 MCP Off 로 시작합니다. **비밀번호는 절대 가져오지 않습니다** (파일에 있어도): 처음 연결할 때 묻습니다. 다른 도구의 폴더에는 아무것도 쓰지 않습니다.
+
+찾아보는 곳 (읽기만 함):
+
+| 도구 | macOS | Linux | 읽는 파일 |
+|---|---|---|---|
+| DataGrip / IntelliJ (전역) | `~/Library/Application Support/JetBrains/<IDE><버전>/options` | `~/.config/JetBrains/<IDE><버전>/options` | `dataSources.xml`, `dataSources.local.xml`, `sshConfigs.xml` |
+| DataGrip 프로젝트 | `<IDE 설정>/projects/<이름>/.idea`, `~/DataGripProjects/<이름>/.idea` | 같음 | `.idea/dataSources.xml`, `.idea/dataSources.local.xml`, `.idea/sshConfigs.xml` (그리고 IDE 들의 `sshConfigs.xml`) |
+| 최근 IDE 프로젝트 | `<IDE 설정>/options/recentProjects.xml` 의 프로젝트 중 `.idea/dataSources.xml` 이 있는 것 | 같음 | 위와 같음 |
+| DBeaver | `~/Library/DBeaverData/workspace6/<프로젝트>/.dbeaver` | `~/.local/share/DBeaverData/workspace6/…`, Flatpak `~/.var/app/io.dbeaver.DBeaverCommunity/data/DBeaverData/workspace6/…`, Snap `~/snap/dbeaver-ce/current/.local/share/DBeaverData/workspace6/…` | `data-sources.json`, `data-sources-*.json` |
+
+옮겨지는 것:
+
+| | DataGrip / IntelliJ | DBeaver |
+|---|---|---|
+| 종류, 호스트, 포트, 데이터베이스 | JDBC URL 에서: PostgreSQL, MySQL / MariaDB, SQL Server, Oracle (`@//host:port/service`. `host:port:SID` 는 SID 를 service name 으로 쓰고 경고), ClickHouse, Redis, MongoDB (`mongodb+srv://` 는 호스트로), SQLite / DuckDB (파일). URL 파라미터는 버림 | 연결의 host · port · database (없으면 URL) |
+| 사용자 | `user-name` | 파일에 있으면 `configuration.user`. DBeaver 는 보통 비밀번호와 같이 (`credentials-config.json`, 읽지 않음) 두므로 그 줄에 경고가 나오고 직접 입력합니다 |
+| SSH 터널 | 가리키는 SSH 설정 (`sshConfigs.xml`: 호스트, 포트, 사용자, 비밀번호 또는 키 파일), 또는 Data Source 안의 예전 터널 설정. *OpenSSH config and agent* 는 키 파일이 없어서 경고: 연결 전에 키 파일을 고르세요 | `ssh_tunnel`: 호스트, 포트, 사용자, 비밀번호 또는 키 파일 (`${project.path}` 풀어서). agent 는 경고 |
+| SSL | 모드 (Require / Verify CA / Full Verification), CA, 클라이언트 인증서와 키 | `*_ssl` 핸들러: `sslMode` (disable 이면 SSL 끔), CA, 클라이언트 인증서와 키. MySQL *Verify server certificate* = Verify CA |
+| Read-only | `read-only="true"` | `read-only` |
+| Production | — | 연결 종류 *Production* (`prod`) |
+
+가져오지 않는 것: 비밀번호와 SSH 암호, 드라이버 속성과 JDBC 파라미터, 스키마 필터, 색, 폴더, `~/.ssh/config` 에만 있는 SSH 호스트 이름 (터널은 DataGrip 이 저장한 호스트를 씁니다).
+
 ## 드라이버 (필요할 때 추가)
 
 처음에는 아무것도 더 설치하지 않습니다. Data Source 종류로 아래 중 하나를 고르면 그 드라이버를 **Install** 하라고 안내합니다. 드라이버는 지금 Qurry 버전의 GitHub 릴리스에서 받는 작은 프로그램으로, 서명된 `SHA256SUMS` (앱 업데이트와 같은 키) 로 확인하고 설정 폴더의 `drivers/` 에 둡니다.

@@ -1080,6 +1080,7 @@ fn draw_popup(f: &mut Frame, app: &mut App) {
             f.render_widget(Paragraph::new(lines), inner);
         }
         Popup::Confirm { text, .. } => app.hits.confirm_unseen = !draw_confirm(f, area, " Confirm ", text, key_hints(&[("y / Enter", "yes"), ("n / Esc", "no")])),
+        Popup::ImportPick(p) => draw_import(f, area, p),
         // Like Confirm, but only y allows (no Enter): the popup opened on its own
         Popup::AllowPlaintext { text, .. } => app.hits.confirm_unseen = !draw_confirm(f, area, " Allow Unencrypted ", text, key_hints(&[("y", "allow"), ("n / Esc", "cancel")])),
         Popup::Input { title, body, input, complete, filter, .. } => {
@@ -1189,6 +1190,46 @@ fn draw_confirm(f: &mut Frame, area: Rect, title: &'static str, text: &str, keys
     f.render_widget(Paragraph::new(cut_lines(lines, &keep[..last], body.width, body.height)).wrap(Wrap { trim: false }), body);
     f.render_widget(Paragraph::new(ask).wrap(Wrap { trim: false }), bottom);
     fits
+}
+
+/// Import Data Sources' confirm: the question (from, path, counts, MCP Off and passwords said once), then two lines per source —
+/// [x] / [ ] and what is added (skipped rows have no box) with the value on the right, the mapped settings or the reason under it.
+/// The row under the cursor is highlighted and kept in view; the keys stay at the bottom
+fn draw_import(f: &mut Frame, area: Rect, p: &crate::import::ImportPick) {
+    let w = 110u16.min(area.width.saturating_sub(4));
+    let iw = w.saturating_sub(2);
+    let msg: Vec<Line> = p.plan.message.lines().map(|l| Line::raw(disp(l))).collect();
+    let mh = wrapped_height(&msg, iw);
+    let n = p.count();
+    let hint = key_hints(&[("Space", "check"), ("↑↓", "move"), ("y / Enter", &format!("import {n}")), ("n / Esc", "cancel")]);
+    let rows = p.plan.rows.len() as u16;
+    let mut r = centered(area, 110, mh + 1 + rows * 2 + 1 + 1 + 2);
+    if r.height < 8 {
+        r = Rect { y: area.y, height: area.height, ..r };
+    }
+    let inner = popup(f, r, " Confirm ");
+    let [top, _, list, _, bottom] = Layout::vertical([Constraint::Length(mh.min(inner.height.saturating_sub(5))), Constraint::Length(1), Constraint::Min(2), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
+    f.render_widget(Paragraph::new(msg).wrap(Wrap { trim: false }), top);
+    f.render_widget(Paragraph::new(hint), bottom);
+    // Cut to n cells with … (a long warning or server name never runs into the other)
+    let cut = |s: String, n: usize| if s.chars().count() <= n { s } else { s.chars().take(n.saturating_sub(1)).collect::<String>() + "…" };
+    // Two lines a row, scrolled so the cursor row shows
+    let fit = (list.height / 2).max(1) as usize;
+    let first = p.sel.saturating_sub(fit - 1).min(p.plan.rows.len().saturating_sub(fit));
+    let mut lines = vec![];
+    for (i, row) in p.plan.rows.iter().enumerate().skip(first).take(fit) {
+        let bg = if i == p.sel { Style::default().bg(SEL) } else { Style::default() };
+        let boxed = if !row.checkable { "    " } else if p.checked[i] { "[x] " } else { "[ ] " };
+        let tone = if row.tone.as_deref() == Some("warn") { Style::default().fg(WARN) } else { Style::default().fg(DIM) };
+        let text_style = if row.checkable { Style::default() } else { Style::default().fg(DIM) };
+        let w = iw as usize;
+        let value = cut(disp(&row.value), w * 2 / 5);
+        let left = cut(format!("{boxed}{}", disp(&row.text)), w.saturating_sub(value.chars().count() + 2));
+        let pad = w.saturating_sub(left.chars().count() + value.chars().count());
+        lines.push(Line::from(vec![Span::styled(left, text_style), Span::raw(" ".repeat(pad)), Span::styled(value, tone)]).style(bg));
+        lines.push(Line::styled(cut(format!("      {}", disp(&row.note)), w), Style::default().fg(DIM)).style(bg));
+    }
+    f.render_widget(Paragraph::new(lines), list);
 }
 
 /// Data Source form. Only the chosen Tunnel's fields show. The size stays the same whatever the Tunnel and the message (a test
