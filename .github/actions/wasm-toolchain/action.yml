@@ -1,6 +1,6 @@
 # What `pnpm wasm` (scripts/wasm.sh) needs to build the GUI's shared WASM (crates/shared-wasm): the wasm32 Rust target,
 # wasm-bindgen-cli at the exact version of the wasm-bindgen crate, and wasm-opt for the shipped module.
-# Used by the web and e2e jobs of ci.yml. release.yml sets these up itself: its toolchain step also adds the platform target,
+# Used by ../wasm (the web and e2e jobs of ci.yml) when its cache has no build for these sources. release.yml sets these up itself: its toolchain step also adds the platform target,
 # with the Rust cache in between.
 name: WASM toolchain
 description: Rust wasm32 target, wasm-bindgen-cli at the crate's pinned version (cached) and wasm-opt (binaryen)
