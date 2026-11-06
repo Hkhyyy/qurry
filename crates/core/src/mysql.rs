@@ -251,6 +251,16 @@ impl MySession {
         let _ = self.conn.execute("select 1").await;
     }
 
+    /// Session::check
+    pub(crate) async fn check(&mut self) -> AppResult<()> {
+        Ok(sqlx::Connection::ping(&mut *self.conn).await?)
+    }
+
+    /// Session::abandon
+    pub(crate) fn abandon(&mut self) {
+        self.conn.close_on_drop();
+    }
+
     pub fn close_cursor(&mut self) {
         self.more = None;
     }

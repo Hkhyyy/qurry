@@ -148,10 +148,10 @@ pub(crate) fn expand_home(path: &str) -> String {
 }
 
 /// Tests only the SSH login (Test Connection on the SSH/SSL tab).
-/// Whether a new connection through a tunnel's local port gets the database's first bytes within 2s: false when the tunnel
+/// Whether a new connection through a tunnel's local port gets the database's first bytes `within`: false when the tunnel
 /// accepts but forwards nothing (its session died while the aws CLI or the SSH accept loop runs on). It authenticates nothing:
 /// PostgreSQL answers an SSLRequest with one byte, MySQL greets first. Other kinds have no such step and count as answering
-pub(crate) async fn answers(local_port: u16, kind: crate::store::DbKind) -> bool {
+pub(crate) async fn answers(local_port: u16, kind: crate::store::DbKind, within: std::time::Duration) -> bool {
     use crate::store::DbKind;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let hello: &[u8] = match kind {
@@ -166,7 +166,7 @@ pub(crate) async fn answers(local_port: u16, kind: crate::store::DbKind) -> bool
         let mut b = [0u8; 1];
         (s.read(&mut b).await.ok()? > 0).then_some(())
     };
-    matches!(tokio::time::timeout(std::time::Duration::from_secs(2), probe).await, Ok(Some(())))
+    matches!(tokio::time::timeout(within, probe).await, Ok(Some(())))
 }
 
 pub async fn test_login(ssh: &SshConfig, secret: Option<&str>) -> AppResult<String> {
@@ -234,11 +234,15 @@ pub async fn open(ssh: &SshConfig, secret: Option<&str>, remote_host: &str, remo
     let (rhost, rport) = (remote_host.to_string(), remote_port);
     let forward = session.clone();
     let task = tokio::spawn(async move {
+        // The forwarded connections end with the accept loop (Tunnel's drop aborts it): through a session that stopped forwarding,
+        // a statement waiting on one then fails at once instead of waiting forever, and closing its pool doesn't wait for it
+        let mut conns = tokio::task::JoinSet::new();
         loop {
             let Ok((mut tcp, peer)) = listener.accept().await else { break };
+            while conns.try_join_next().is_some() {}
             let session = forward.clone();
             let rhost = rhost.clone();
-            tokio::spawn(async move {
+            conns.spawn(async move {
                 match session.channel_open_direct_tcpip(rhost, rport as u32, peer.ip().to_string(), peer.port() as u32).await {
                     Ok(ch) => {
                         let mut stream = ch.into_stream();
@@ -277,15 +281,16 @@ mod tests {
             port
         };
         let silent = crate::app::tests::silent_server().await;
-        assert!(answers(serve(false).await, DbKind::Postgres).await);
-        assert!(answers(serve(true).await, DbKind::Mysql).await);
+        const TWO: std::time::Duration = std::time::Duration::from_secs(2);
+        assert!(answers(serve(false).await, DbKind::Postgres, TWO).await);
+        assert!(answers(serve(true).await, DbKind::Mysql, TWO).await);
         let t = std::time::Instant::now();
-        assert!(!answers(silent, DbKind::Postgres).await);
-        assert!(!answers(silent, DbKind::Mysql).await);
+        assert!(!answers(silent, DbKind::Postgres, TWO).await);
+        assert!(!answers(silent, DbKind::Mysql, TWO).await);
         assert!(t.elapsed() < std::time::Duration::from_secs(5), "2s each: {:?}", t.elapsed());
         let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
-        assert!(!answers(closed, DbKind::Postgres).await);
-        assert!(answers(silent, DbKind::Mssql).await);
+        assert!(!answers(closed, DbKind::Postgres, TWO).await);
+        assert!(answers(silent, DbKind::Mssql, TWO).await);
     }
 
     /// If a different key arrives after the fingerprint was shown (MITM), it isn't added
@@ -519,6 +524,7 @@ mod tests {
         let stop = || sessions.lock().unwrap().iter().for_each(|(_, dead)| dead.store(true, SeqCst));
         let recovered = |t: Instant| {
             let took = t.elapsed();
+            println!("recovered in {took:?}");
             assert!(took >= Duration::from_secs(10) && took < Duration::from_secs(14), "one timeout, a new session and a connect: {took:?}");
         };
 
@@ -530,12 +536,24 @@ mod tests {
         recovered(t);
         assert_eq!(logins.load(SeqCst), 2);
 
+        // A console whose session is open: after it sat unused, its next run checks the session (5s) and the tunnel (2s) first,
+        // and goes on through a new SSH session
+        let console = |sql: &str| tokio::time::timeout(Duration::from_secs(40), st.run_query(id.clone(), sql.into(), None, Some("ssh-console".into())));
+        console("select 1").await.unwrap().expect("console");
+        stop();
+        crate::app::tests::age_session(&st, "ssh-console").await;
+        let t = Instant::now();
+        assert_eq!(console("select 2").await.expect("doesn't hang").expect("goes on").rows[0][0], serde_json::json!(2));
+        println!("idle console recovered in {:?}", t.elapsed());
+        assert!(t.elapsed() < Duration::from_secs(10), "less than one connect timeout: {:?}", t.elapsed());
+        assert_eq!(logins.load(SeqCst), 3);
+
         stop();
         let t = Instant::now();
         let p = crate::app::ensure_pool(&st, &format!("{id}::template1")).await.expect("a new database reconnects");
         recovered(t);
         assert!(p.server_version().await.is_ok());
-        assert_eq!(logins.load(SeqCst), 3);
+        assert_eq!(logins.load(SeqCst), 4);
         st.disconnect(id).await.unwrap();
 
         // An SSH server that can't reach the database

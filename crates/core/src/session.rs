@@ -594,12 +594,38 @@ impl Session {
             _ => None,
         }
     }
-    /// On tab close: roll back the open transaction, reset session settings and return the connection to the pool
+    /// On tab close: roll back the open transaction, reset session settings and return the connection to the pool. Within 5s: on
+    /// a server or tunnel that doesn't answer it would wait forever (closing the tab, switching its database). Then the connection
+    /// is closed instead, and the server rolls the transaction back itself
     pub async fn discard(&mut self) {
+        let done = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            match self {
+                Session::Pg(s) => s.discard().await,
+                Session::My(s) => s.discard().await,
+                Session::Redis(_) | Session::Plugin(_) => {}
+            }
+        })
+        .await;
+        if done.is_err() {
+            self.abandon();
+        }
+    }
+    /// Its connection is closed when the session is dropped, not given back to the pool: it didn't answer, and a statement
+    /// cut off by a time limit may have left it halfway through a message
+    pub fn abandon(&mut self) {
         match self {
-            Session::Pg(s) => s.discard().await,
-            Session::My(s) => s.discard().await,
+            Session::Pg(s) => s.conn.close_on_drop(),
+            Session::My(s) => s.abandon(),
             Session::Redis(_) | Session::Plugin(_) => {}
+        }
+    }
+    /// A round trip that runs nothing (the protocol's ping): whether the connection still answers. Callers set the time limit
+    pub async fn check(&mut self) -> AppResult<()> {
+        match self {
+            Session::Pg(s) => Ok(sqlx::Connection::ping(&mut *s.conn).await?),
+            Session::My(s) => s.check().await,
+            Session::Redis(m) => crate::redisdb::check(m).await,
+            Session::Plugin(_) => Ok(()),
         }
     }
     pub async fn close_idle_cursor(&mut self, idle: std::time::Duration) -> bool {
