@@ -260,7 +260,11 @@ async fn authenticate(session: &mut client::Handle<Client>, hop: &crate::ssh_con
         None => {}
     }
     let mut tried = Vec::new();
-    let mut hint = String::new();
+    let mut hint: String = hop.notes.iter().map(|n| format!(" {n}.")).collect();
+    // The IdentityFile keys' public halves: the agent offers those first (a server drops the login after MaxAuthTries, 6 by
+    // default, and an agent often holds more keys), and with IdentitiesOnly only those, as ssh does
+    let wanted: Vec<_> = hop.identity_files.iter().filter_map(|p| public_key_of(p)).collect();
+    let mut offered = Vec::new();
     // ssh-agent first (keys with a passphrase are usually there), then the IdentityFile keys
     #[cfg(unix)]
     {
@@ -289,8 +293,19 @@ async fn authenticate(session: &mut client::Handle<Client>, hop: &crate::ssh_con
                             russh::keys::agent::AgentIdentity::Certificate { .. } => None,
                         })
                         .collect();
-                    tried.push(format!("ssh-agent ({} key{})", keys.len(), if keys.len() == 1 { "" } else { "s" }));
+                    let held = keys.len();
+                    let mut keys = keys;
+                    keys.sort_by_key(|k| !wanted.contains(k.key_data()));
+                    if hop.identities_only {
+                        keys.retain(|k| wanted.contains(k.key_data()));
+                    }
+                    let s = |n: usize| if n == 1 { "" } else { "s" };
+                    tried.push(match hop.identities_only {
+                        true => format!("ssh-agent ({} of its {held} key{}: IdentitiesOnly)", keys.len(), s(held)),
+                        false => format!("ssh-agent ({held} key{})", s(held)),
+                    });
                     for key in keys {
+                        offered.push(key.key_data().clone());
                         if session.authenticate_publickey_with(&hop.user, key, hash, &mut agent).await.map_err(|e| auth_err(&e))?.success() {
                             return Ok(());
                         }
@@ -301,6 +316,10 @@ async fn authenticate(session: &mut client::Handle<Client>, hop: &crate::ssh_con
         }
     }
     for path in hop.identity_files.iter().filter(|p| p.exists()) {
+        // Already offered by the agent: the server would say no again (and count it against MaxAuthTries)
+        if public_key_of(path).is_some_and(|k| offered.contains(&k)) {
+            continue;
+        }
         let shown = path.display().to_string();
         let key = match russh::keys::load_secret_key(path, secret) {
             Ok(k) => k,
@@ -322,6 +341,16 @@ async fn authenticate(session: &mut client::Handle<Client>, hop: &crate::ssh_con
         tried.push("no key (no ssh-agent, no IdentityFile, no ~/.ssh/id_ed25519 · id_ecdsa · id_rsa)".into());
     }
     Err(auth_failed(hop, &tried, &hint))
+}
+
+/// An IdentityFile's public key: its .pub file, else the private key file's header (readable without the passphrase)
+fn public_key_of(path: &std::path::Path) -> Option<russh::keys::ssh_key::public::KeyData> {
+    let mut pub_path = path.as_os_str().to_owned();
+    pub_path.push(".pub");
+    if let Ok(k) = russh::keys::load_public_key(&pub_path) {
+        return Some(k.key_data().clone());
+    }
+    russh::keys::PrivateKey::read_openssh_file(path).ok().map(|k| k.public_key().key_data().clone())
 }
 
 fn auth_failed(hop: &crate::ssh_config::Hop, tried: &[String], hint: &str) -> AppError {
@@ -567,7 +596,7 @@ mod tests {
     }
 
     /// An SSH server in this process that takes only one public key, and forwards direct-tcpip to the address asked for (a jump host).
-    /// Records "user@port" per login
+    /// Records "user@port" per login, "rejected user@port" per refused key
     #[derive(Clone)]
     struct KeySshd {
         key: russh::keys::PublicKey,
@@ -580,6 +609,7 @@ mod tests {
 
         async fn auth_publickey(&mut self, user: &str, key: &russh::keys::PublicKey) -> Result<russh::server::Auth, Self::Error> {
             if *key != self.key {
+                self.logins.lock().unwrap().push(format!("rejected {user}@{}", self.port));
                 return Ok(russh::server::Auth::reject());
             }
             self.logins.lock().unwrap().push(format!("{user}@{}", self.port));
@@ -612,7 +642,8 @@ mod tests {
         let host_key = key.public_key().clone();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let config = Arc::new(russh::server::Config { keys: vec![key], auth_rejection_time: std::time::Duration::ZERO, ..Default::default() });
+        // MaxAuthTries 6, OpenSSH's default
+        let config = Arc::new(russh::server::Config { keys: vec![key], auth_rejection_time: std::time::Duration::ZERO, max_auth_attempts: 6, ..Default::default() });
         let h = KeySshd { key: client.clone(), port, logins };
         tokio::spawn(async move {
             while let Ok((tcp, _)) = listener.accept().await {
@@ -689,6 +720,49 @@ mod tests {
         assert_eq!(&buf, b"through two hops");
         assert!(t.alive());
         drop(t);
+
+        // The agent holds more keys than the server allows tries (MaxAuthTries 6), the right one last: an IdentityFile whose key the
+        // agent holds is offered first (the agent lists its keys in any order); IdentitiesOnly offers no other agent key
+        let sock = dir.path().join("agent2.sock");
+        let agent_listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        let incoming = futures::stream::unfold(agent_listener, |l| async move { Some((l.accept().await.map(|(s, _)| s), l)) });
+        tokio::spawn(russh::keys::agent::server::serve(Box::pin(incoming), ()));
+        let mut agent = russh::keys::agent::client::AgentClient::connect_uds(&sock).await.unwrap();
+        let s = sock.display();
+        for seed in 20..27u8 {
+            let decoy = russh::keys::PrivateKey::from(russh::keys::ssh_key::private::Ed25519Keypair::from_seed(&[seed; 32]));
+            agent.add_identity(&decoy, &[]).await.unwrap();
+        }
+        agent.add_identity(&client_key, &[]).await.unwrap();
+        let pem = dir.path().join("prod.pem");
+        client_key.public_key().write_openssh_file(dir.path().join("prod.pem.pub")).unwrap();
+        let other = dir.path().join("other.pem");
+        russh::keys::PrivateKey::from(russh::keys::ssh_key::private::Ed25519Keypair::from_seed(&[30; 32]))
+            .write_openssh_file(&other, russh::keys::ssh_key::LineEnding::LF)
+            .unwrap();
+        let many = |extra: &str| format!("Host qurry-many\n  HostName 127.0.0.1\n  Port {target}\n  User deploy\n  IdentityAgent {s}\n{extra}");
+        let many_ssh = SshConfig { host: "qurry-many".into(), ..ssh.clone() };
+        let deploy = format!("deploy@{target}");
+        logins.lock().unwrap().clear();
+        for extra in ["", "  IdentitiesOnly yes\n"] {
+            std::fs::write(&conf, many(&format!("  IdentityFile {}\n{extra}", pem.display()))).unwrap();
+            test_login(&many_ssh, None).await.unwrap();
+            assert_eq!(logins.lock().unwrap().drain(..).collect::<Vec<_>>(), std::slice::from_ref(&deploy), "no wrong key offered first");
+        }
+        std::fs::write(&conf, many(&format!("  IdentityFile {}\n  IdentitiesOnly yes\n", other.display()))).unwrap();
+        let e = test_login(&many_ssh, None).await.unwrap_err().to_string();
+        assert!(e.contains("ssh-agent (0 of its 8 keys: IdentitiesOnly)") && e.contains("other.pem"), "{e}");
+        assert_eq!(logins.lock().unwrap().drain(..).collect::<Vec<_>>(), [format!("rejected {deploy}")], "only the IdentityFile");
+        // An unsupported token in a broad block is skipped, not a stop (the source's own key still logs in), and told when the login fails
+        let own = dir.path().join("own.pem");
+        client_key.write_openssh_file(&own, russh::keys::ssh_key::LineEnding::LF).unwrap();
+        let keyed = SshConfig { host: "127.0.0.1".into(), port: target, user: "deploy".into(), key_path: own.display().to_string(), ..ssh.clone() };
+        std::fs::write(&conf, format!("Host *\n  IdentityFile ~/.ssh/%n\n  IdentityAgent {s}\n  IdentitiesOnly yes\n")).unwrap();
+        test_login(&keyed, None).await.unwrap();
+        logins.lock().unwrap().clear();
+        let e = test_login(&SshConfig { key_path: String::new(), ..keyed.clone() }, None).await.unwrap_err().to_string();
+        assert!(e.contains("%n") && e.contains("IdentityFile was skipped"), "{e}");
+        std::fs::write(&conf, "Host qurry-proxycmd\n  ProxyCommand nc %h %p\n").unwrap();
 
         // No agent and no key: says what it tried
         unsafe { std::env::set_var("QURRY_SSH_CONFIG", dir.path().join("empty")) };

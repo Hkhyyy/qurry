@@ -1,5 +1,5 @@
 //! ~/.ssh/config, read the way OpenSSH reads it for what the SSH tunnel (tunnel.rs) uses: Host blocks (patterns with * ? and !,
-//! first value wins), HostName, User, Port, IdentityFile, IdentityAgent, ProxyJump, Include. Nothing here runs a program:
+//! first value wins), HostName, User, Port, IdentityFile, IdentityAgent, IdentitiesOnly, ProxyJump, Include. Nothing here runs a program:
 //! ProxyCommand is refused, except the common `ssh -W %h:%p <jump host>`, which is the same route as `ProxyJump <jump host>`.
 //! Match blocks are skipped (their settings are not applied).
 use crate::error::{AppError, AppResult};
@@ -27,6 +27,7 @@ struct HostConfig {
     port: Option<(String, String)>,
     identity_files: Vec<(String, String)>,
     identity_agent: Option<(String, String)>,
+    identities_only: Option<(String, String)>,
     proxy_jump: Option<(String, String)>,
     proxy_command: Option<(String, String)>,
 }
@@ -51,6 +52,11 @@ pub struct Hop {
     /// IdentityFile keys (or OpenSSH's default ones that exist when none is set), tried after the agent
     pub identity_files: Vec<PathBuf>,
     pub agent: Agent,
+    /// IdentitiesOnly yes: of the agent's keys, only those of an IdentityFile are offered
+    pub identities_only: bool,
+    /// IdentityFile / IdentityAgent lines that couldn't be used (an unsupported %token): told when the login fails, so a broad
+    /// Host * line doesn't stop sources that log in with their own key or password
+    pub notes: Vec<String>,
 }
 
 /// More hops than this is a ProxyJump loop (a jump host that names itself, directly or through others)
@@ -92,8 +98,13 @@ impl SshConfigFile {
                 "user" => first(&mut c.user),
                 "port" => first(&mut c.port),
                 "identityagent" => first(&mut c.identity_agent),
+                "identitiesonly" => first(&mut c.identities_only),
                 "proxyjump" => first(&mut c.proxy_jump),
-                "proxycommand" => first(&mut c.proxy_command),
+                // Where it is and its Host block: a broad block (Host *) stops every tunnel, and the message has to show which one
+                "proxycommand" if c.proxy_command.is_none() => {
+                    let block = e.hosts.as_ref().map_or_else(|| "before any Host line".to_string(), |h| format!("in \"Host {}\"", h.join(" ")));
+                    c.proxy_command = Some((e.value.clone(), format!("{} ({block})", e.at)));
+                }
                 "identityfile" => c.identity_files.push(v),
                 _ => {}
             }
@@ -134,18 +145,29 @@ impl SshConfigFile {
         let port_s = port.to_string();
         let tokens = [('d', home_s.as_str()), ('u', local_user), ('h', host.as_str()), ('r', user.as_str()), ('p', port_s.as_str())];
         let mut identity_files = Vec::new();
+        let mut notes = Vec::new();
         for (v, at) in &c.identity_files {
-            identity_files.push(file_path(&expand_tokens(v, at, &tokens)?, home));
+            match expand_tokens(v, at, &tokens) {
+                Ok(f) => identity_files.push(file_path(&f, home)),
+                Err(e) => notes.push(format!("{e}, so that IdentityFile was skipped")),
+            }
         }
-        if identity_files.is_empty() {
+        if c.identity_files.is_empty() {
             identity_files = ["id_ed25519", "id_ecdsa", "id_rsa"].iter().map(|f| home.join(".ssh").join(f)).filter(|p| p.exists()).collect();
         }
         let agent = match &c.identity_agent {
             None => Agent::Env,
             Some((v, _)) if v.eq_ignore_ascii_case("none") => Agent::Off,
             Some((v, _)) if v == "SSH_AUTH_SOCK" || v == "$SSH_AUTH_SOCK" => Agent::Env,
-            Some((v, at)) => Agent::Socket(file_path(&expand_tokens(v, at, &tokens)?, home)),
+            Some((v, at)) => match expand_tokens(v, at, &tokens) {
+                Ok(f) => Agent::Socket(file_path(&f, home)),
+                Err(e) => {
+                    notes.push(format!("{e}, so no ssh-agent was asked"));
+                    Agent::Off
+                }
+            },
         };
+        let identities_only = c.identities_only.is_some_and(|(v, _)| v.eq_ignore_ascii_case("yes"));
         let jumps = match (&c.proxy_jump, &c.proxy_command) {
             (Some((v, _)), _) if v.eq_ignore_ascii_case("none") => None,
             (Some((v, at)), _) => Some((v.clone(), at.clone())),
@@ -159,7 +181,7 @@ impl SshConfigFile {
                 self.route_into(&jh, jp, ju.as_deref(), home, local_user, depth + 1, hops)?;
             }
         }
-        hops.push(Hop { host, port, user, identity_files, agent });
+        hops.push(Hop { host, port, user, identity_files, agent, identities_only, notes });
         Ok(())
     }
 }
@@ -214,7 +236,7 @@ pub fn parse_destination(v: &str, at: &str) -> AppResult<(Option<String>, String
         Some((u, r)) => (Some(check_user(u, at)?), r),
         None => (None, v),
     };
-    let bad_port = |p: &str| AppError::Msg(format!("{at}: ProxyJump port \"{p}\" must be a number from 1 to 65535"));
+    let bad_port = |p: &str| AppError::Msg(format!("{at}: port \"{p}\" must be a number from 1 to 65535"));
     let port = |p: &str| p.parse::<u16>().ok().filter(|n| *n > 0).ok_or_else(|| bad_port(p));
     let (host, port) = if let Some(r) = rest.strip_prefix('[') {
         let (h, tail) = r.split_once(']').ok_or_else(|| AppError::Msg(format!("{at}: \"{v}\" has an unclosed [")))?;
@@ -237,7 +259,7 @@ fn proxy_command_jump(v: &str, at: &str) -> AppResult<String> {
     let words: Vec<&str> = v.split_whitespace().collect();
     let refuse = || {
         AppError::Msg(format!(
-            "{at}: ProxyCommand isn't supported (Qurry doesn't run commands from ~/.ssh/config). Use ProxyJump instead, or put \"ProxyCommand none\" in a Host block above this one to connect directly. Only \"ssh -W %h:%p <jump host>\" is understood."
+            "{at}: ProxyCommand isn't supported (Qurry doesn't run commands from ~/.ssh/config): \"{v}\". Use ProxyJump instead, or put \"ProxyCommand none\" in a narrower Host block above this one to connect directly. Only \"ssh -W %h:%p <jump host>\" is understood."
         ))
     };
     let (Some(first), rest) = (words.first(), words.get(1..).unwrap_or_default()) else { return Err(refuse()) };
@@ -431,15 +453,22 @@ mod tests {
         // A loop is refused, not followed forever
         let e = route("Host a\n ProxyJump b\nHost b\n ProxyJump a\n", "a").unwrap_err().to_string();
         assert!(e.contains("loop"), "{e}");
-        assert!(route("Host t\n ProxyJump h:99999\n", "t").is_err());
+        let e = route("Host t\n ProxyJump h:99999\n", "t").unwrap_err().to_string();
+        assert!(e.contains("port \"99999\"") && !e.contains("ProxyJump port"), "{e}");
     }
 
     #[test]
     fn identity_files_expand_home_and_tokens() {
         let r = route("Host b\n HostName b.example\n User ops\n IdentityFile ~/.ssh/b_key\n IdentityFile \"%d/keys/%r@%h\"\n IdentityFile keys/rel\n", "b").unwrap();
         assert_eq!(r[0].identity_files, [PathBuf::from("/home/me/.ssh/b_key"), PathBuf::from("/home/me/keys/ops@b.example"), PathBuf::from("/home/me/keys/rel")]);
-        let e = route("Host b\n IdentityFile ~/.ssh/%C\n", "b").unwrap_err().to_string();
-        assert!(e.contains("%C") && e.contains("config:2"), "{e}");
+        // An unsupported token skips that line (with a note for the login error) instead of stopping every tunnel; no default keys then
+        let r = route("Host *\n IdentityFile ~/.ssh/%C\n IdentityFile ~/.ssh/ok\n", "b").unwrap();
+        assert_eq!(r[0].identity_files, [PathBuf::from("/home/me/.ssh/ok")]);
+        assert!(r[0].notes.len() == 1 && r[0].notes[0].contains("%C") && r[0].notes[0].contains("config:2"), "{:?}", r[0].notes);
+        assert_eq!(route("Host *\n IdentityAgent ~/%n.sock\n", "b").unwrap()[0].agent, Agent::Off);
+        // IdentitiesOnly
+        assert!(route("Host b\n IdentitiesOnly yes\nHost *\n IdentitiesOnly no\n", "b").unwrap()[0].identities_only);
+        assert!(!route("Host b\n IdentityFile x\n", "b").unwrap()[0].identities_only);
         // IdentityAgent
         assert_eq!(route("Host b\n IdentityAgent none\n", "b").unwrap()[0].agent, Agent::Off);
         assert_eq!(route("Host b\n IdentityAgent ~/agent.sock\n", "b").unwrap()[0].agent, Agent::Socket("/home/me/agent.sock".into()));
@@ -451,6 +480,9 @@ mod tests {
     fn proxy_command_is_refused_except_ssh_w() {
         let e = route("Host b\n ProxyCommand nc -X 5 -x proxy:1080 %h %p\n", "b").unwrap_err().to_string();
         assert!(e.contains("ProxyCommand isn't supported") && e.contains("ProxyJump"), "{e}");
+        // Names the line and its Host block
+        let e = route("Host *.corp\n User ops\n ProxyCommand tsh proxy ssh %r@%h:%p\n", "db.corp").unwrap_err().to_string();
+        assert!(e.contains("config:3 (in \"Host *.corp\")") && e.contains("tsh proxy"), "{e}");
         assert!(route("Host b\n ProxyCommand ssh -W %h:%p bastion; rm -rf ~\n", "b").is_err());
         assert!(route("Host b\n ProxyCommand ssh -o ProxyCommand=evil -W %h:%p bastion\n", "b").is_err());
         let r = route("Host b\n ProxyCommand /usr/bin/ssh -q -W %h:%p ops@bastion\n", "b").unwrap();
