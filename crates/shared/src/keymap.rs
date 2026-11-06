@@ -413,6 +413,7 @@ mod tests {
             ("tree.backup", "BackupDb"),
             ("tree.restore", "RestoreDb"),
             ("tree.import", "ImportData"),
+            ("ds.import", "ImportDataSources"),
             ("tree.genTestData", "GenerateTestData"),
             ("tree.newTable", "NewTable"),
             ("tree.newView", "NewView"),

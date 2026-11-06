@@ -6,6 +6,7 @@ mod dba;
 mod find;
 mod grid;
 mod help;
+mod import;
 mod input;
 mod keys;
 mod kit;

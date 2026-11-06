@@ -164,6 +164,21 @@ pub(super) fn popup_key(app: &mut App, k: KeyEvent) {
         }
         // Handled separately above
         Popup::Find(bar) => app.popup = Some(Popup::Find(bar)),
+        // Space checks the row under the cursor, y / Enter imports the checked ones, n / Esc cancel
+        Popup::ImportPick(mut p) => {
+            match k.code {
+                KeyCode::Esc | KeyCode::Char('n') => return,
+                KeyCode::Down | KeyCode::Char('j') => p.move_by(1),
+                KeyCode::Up | KeyCode::Char('k') => p.move_by(-1),
+                KeyCode::PageDown => p.move_by(10),
+                KeyCode::PageUp => p.move_by(-10),
+                KeyCode::Char(' ') => p.toggle(),
+                KeyCode::Char('y' | 'Y') | KeyCode::Enter if p.count() > 0 => return app.ds_import_apply(p),
+                KeyCode::Char('y' | 'Y') | KeyCode::Enter => app.status = "Check at least one data source to import (Space), or n / Esc to cancel".into(),
+                _ => {}
+            }
+            app.popup = Some(Popup::ImportPick(p));
+        }
         Popup::Scope(mut e) => {
             match k.code {
                 KeyCode::Esc => return,

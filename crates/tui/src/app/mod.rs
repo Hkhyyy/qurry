@@ -408,6 +408,10 @@ pub enum PAction {
     Align(qurry_core::format::ValueClass, qurry_core::format::Align),
     /// Theme picked
     Theme(crate::theme::Theme),
+    /// Import Data Sources: a location found (its path)
+    ImportFrom(String),
+    /// Import Data Sources: File or folder… (asks for a path)
+    ImportPath,
 }
 #[derive(Clone)]
 pub struct IndexEntryLite {
@@ -518,6 +522,8 @@ pub enum Popup {
     Scope(crate::scope::ScopeEditor),
     /// Editor find/replace bar (⌃F)
     Find(crate::find::FindBar),
+    /// Import Data Sources' confirm: a checkbox per added row (Space), y / Enter imports the checked ones
+    ImportPick(crate::import::ImportPick),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -577,6 +583,7 @@ pub enum Action {
     CompareSchemas,
     CompareData,
     RunMigrations,
+    ImportDataSources,
     ShowDiagram,
     QueryHistory,
     ProductionLog,
@@ -771,6 +778,8 @@ pub struct App {
     /// Tests only: every command run_action ran, in order (tests/actions.rs checks keys reach the right one)
     #[cfg(test)]
     pub ran: Vec<Action>,
+    /// Where Import Data Sources looks for DataGrip / IntelliJ / DBeaver settings (the home folder; tests use a fake one)
+    pub import_home: std::path::PathBuf,
 }
 
 /// Tests only (testkit): stands in for the database, answering each query by its text
@@ -781,7 +790,7 @@ pub fn fuzzy(q: &str, text: &str) -> Option<i64> {
     qurry_core::fuzzy::score(q, text, Default::default()).map(|s| s as i64)
 }
 
-fn err<E: std::fmt::Display>(e: E) -> String {
+pub(crate) fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
@@ -845,6 +854,7 @@ impl App {
             fake_db: None,
             #[cfg(test)]
             ran: vec![],
+            import_home: qurry_core::import::home(),
             next_id: 1,
             exec: Default::default(),
             ddl_structure: false,
