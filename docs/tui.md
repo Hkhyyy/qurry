@@ -4,6 +4,37 @@ English | [한국어](ko/tui.md)
 
 `qurry-tui` adapts to the terminal it runs in: how many colors it has, whether its background is light, how big the window is, and what tmux or the terminal keeps for itself. It all follows the environment, down to the font; the only setting is the theme, for when the terminal doesn't say its background.
 
+## Connect from a URL
+
+For on-call work, `qurry-tui` connects the way `psql`, `mysql` and `redis-cli` do, without saving a data source first:
+
+```sh
+qurry-tui postgres://app@db.internal:5432/shop
+qurry-tui --read-only mysql://root@127.0.0.1:3306/shop
+qurry-tui redis://cache.internal:6379/2
+qurry-tui rediss://default@cache.example.com:6380/0          # TLS
+qurry-tui --incident postgres://postgres@db.internal/postgres # straight into Database Admin › Sessions
+qurry-tui --ssh bastion postgres://app@10.0.3.12/shop         # through an SSH tunnel (a ~/.ssh/config Host works)
+qurry-tui --env                                               # the URL in DATABASE_URL
+```
+
+The URL opens a **temporary data source** at the top of the explorer (marked **TEMP** before its name, **TEMP · READ-ONLY** with `--read-only`), selects it and connects. It lives only in this `qurry-tui` process: it isn't written to `connections.json` or the password file, the Qurry app, other `qurry-tui` windows and the MCP server never see it, its tabs aren't restored next time, and it is gone when `qurry-tui` exits. Its form can't save it (the message says so); to keep it, add a data source with the same settings (`n` in the explorer). Everything else works as with a saved data source (consoles, tables, Database Admin, history, the Read-only rules). Your saved data sources are in the explorer below it as usual. Without a URL (or `--env`), `qurry-tui` starts as it always did.
+
+What the URL leaves out comes from the environment, as `psql`, `mysql` and `redis-cli` read it (the URL wins, then the environment, then `~/.pgpass`):
+
+| | Taken from |
+|---|---|
+| PostgreSQL (`postgres://`, `postgresql://`) | `PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE`, `PGPASSWORD`, `PGSSLMODE`, then `~/.pgpass` (or `PGPASSFILE`). Defaults as in libpq: `localhost`, `5432`, your login name, a database named after the user. `?host=`, `port`, `user`, `dbname`, `sslmode`, `sslrootcert`, `sslcert`, `sslkey` in the URL work too; `connect_timeout`, `application_name`, `pgbouncer` and `schema` are ignored with a note |
+| MySQL (`mysql://`) | `MYSQL_PWD` for the password; `localhost`, `3306` and your login name otherwise. `?ssl-mode=`, `ssl-ca`, `ssl-cert`, `ssl-key`; `charset` and `connect_timeout` are ignored with a note |
+| Redis (`redis://`, `rediss://`) | `REDISCLI_AUTH` for the password; `127.0.0.1`, `6379`, database `0` otherwise. The database is the path (`/2`) |
+
+- **Passwords.** Put them in the environment or `~/.pgpass`, not in the URL: other users of this computer can see a command line (`ps`), so a password in the URL makes the status line (and the terminal, before the screen opens) warn. With a PostgreSQL URL, `PGPASSWORD` is for that URL's server only: your saved PostgreSQL data sources without a saved password don't get it in that `qurry-tui` (they use their own `~/.pgpass` line). `~/.pgpass` is read only when no one else can read it (`chmod 600 ~/.pgpass`), as `psql` does; otherwise the status line says it was ignored and how to fix it. A password never appears in the data source's name, the status line, errors, history or the Production log (`postgres://app:***@…`). A special character in a user or password is %-encoded in the URL (`@` is `%40`, `:` is `%3A`); an IPv6 host goes in brackets (`postgres://app@[::1]/shop`).
+- **TLS** follows the same rules as a saved data source. `sslmode=require`, `verify-ca`, `verify-full` (`require` with `sslrootcert` checks the certificate against it, as libpq does: `verify-ca`) (MySQL `ssl-mode=REQUIRED`, `VERIFY_CA`, `VERIFY_IDENTITY`) turn SSL on with that mode. Without one (or `prefer`), a server on this computer or behind `--ssh` connects as it is, and a remote PostgreSQL or MySQL must still set up TLS: Qurry doesn't fall back to plain text the way `psql`'s default `prefer` does. `sslmode=disable` (MySQL `ssl-mode=DISABLED`) is your explicit "Allow unencrypted connection" for this one connection; the status line then says `Not encrypted`. `rediss://` always uses TLS and verifies the certificate (`?sslmode=require` only encrypts); `redis://` with TLS settings is refused with a pointer to `rediss://`.
+- **`--read-only`** refuses statements that change data exactly as a Read-only data source does (PostgreSQL sessions are read-only on the server too). The status bar shows `READ-ONLY`.
+- **`--incident`** opens Database Admin › Sessions on the data source (PostgreSQL, MySQL), reloading every 3 seconds: `c` cancels a query, `K` ends a session.
+- **`--ssh DEST`** goes through an SSH tunnel: `DEST` is `[user@]host[:port]` or a `Host` from `~/.ssh/config`, whose `HostName`, `User`, `Port`, `IdentityFile`, `IdentityAgent` and `ProxyJump` apply. It logs in with ssh-agent, then the `IdentityFile` keys (or `~/.ssh/id_ed25519`, `id_ecdsa`, `id_rsa`); the database host in the URL is as seen from the SSH server. An unknown host key stops with its fingerprint, as for a saved data source: check it, then `⌃k › Trust SSH Host Key` and expand the data source again. See [SSH tunnel](data-sources.md#supported-databases) for what is read from `~/.ssh/config`.
+- **Mistakes** stop before the screen opens, with exit code 2 and what is wrong: an unknown scheme (`mongodb://` isn't one of them), an unknown URL parameter, `--read-only` without a URL, something that looks like a mistyped URL (`postgres:/…`, `user:pw@host`: not echoed, it may hold a password), or a misspelled option (`--readonly` is refused, so it never opens a writable connection by mistake). `qurry-tui --help` lists the forms.
+
 ## Colors
 
 The TUI picks one color mode when it starts, from these environment variables (the first that applies wins):

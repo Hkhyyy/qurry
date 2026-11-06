@@ -756,6 +756,8 @@ pub struct App {
     pub ws_shared: Option<Vec<qurry_core::workspaces::WsInfo>>,
     /// The save file has synced with the shared list before (missing workspaces were deleted elsewhere)
     pub ws_synced: bool,
+    /// The temporary source to open once the list is loaded, and whether in incident mode (App::start_with)
+    startup: Option<(String, bool)>,
     /// What the terminal can show (set from the environment at startup; drawing maps the frame to it)
     pub color: crate::theme::ColorMode,
     /// The Theme setting (settings.json, read at startup and by ⌃k › Theme…) and what Auto picks for this terminal (COLORFGBG, set at startup)
@@ -834,6 +836,7 @@ impl App {
             update: None,
             restart: false,
             restored: false,
+            startup: None,
             saved_ws: String::new(),
             ws_shared: None,
             ws_synced: false,

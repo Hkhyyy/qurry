@@ -347,7 +347,12 @@ pub struct ExportFile {
 
 pub struct Store {
     path: PathBuf,
+    /// Temporary data sources (`qurry-tui postgres://…`): listed and found like saved ones, but only in this process. Never written
+    /// to connections.json, so the GUI, other TUIs and the MCP server never see them
+    temporary: std::sync::Mutex<Vec<ConnectionConfig>>,
 }
+
+pub const TEMPORARY_NOT_SAVED: &str = "This data source comes from the qurry-tui command line: it is temporary, so it isn't saved and its form can't change it. To keep it, add a data source with these settings (n in the explorer).";
 
 /// Per-source settings that older apps (0.2.12 and before) don't know. They are kept in connection-access.json too (by connection id),
 /// because an older app saving connections.json drops fields it doesn't know — an MCP Off source would be shared again.
@@ -365,10 +370,28 @@ impl Store {
     pub fn new(dir: PathBuf) -> Self {
         Self {
             path: dir.join("connections.json"),
+            temporary: Default::default(),
         }
     }
 
+    /// Saved sources, then the temporary ones of this process
     pub fn list(&self) -> AppResult<Vec<ConnectionConfig>> {
+        let mut all = self.saved()?;
+        all.extend(self.temporary.lock().unwrap().iter().cloned());
+        Ok(all)
+    }
+
+    /// A data source only for this process (Store::temporary)
+    pub fn add_temporary(&self, config: ConnectionConfig) {
+        self.temporary.lock().unwrap().push(config);
+    }
+
+    pub fn is_temporary(&self, id: &str) -> bool {
+        self.temporary.lock().unwrap().iter().any(|c| c.id == id)
+    }
+
+    /// What connections.json (and its side files) hold
+    fn saved(&self) -> AppResult<Vec<ConnectionConfig>> {
         if !self.path.exists() {
             return Ok(Vec::new());
         }
@@ -424,6 +447,7 @@ impl Store {
     }
 
     pub fn save(&self, config: &ConnectionConfig) -> AppResult<()> {
+        self.refuse_temporary(&config.id)?;
         self.update(|all| {
             match all.iter_mut().find(|c| c.id == config.id) {
                 Some(existing) => *existing = config.clone(),
@@ -434,13 +458,22 @@ impl Store {
     }
 
     /// Change part of one source (scope, color …) under the lock, so another app's change to it in between isn't reverted. None if it doesn't exist
+    /// A temporary source is changed in memory only
     pub fn modify<T>(&self, id: &str, f: impl FnOnce(&mut ConnectionConfig) -> AppResult<T>) -> AppResult<Option<T>> {
+        if let Some(c) = self.temporary.lock().unwrap().iter_mut().find(|c| c.id == id) {
+            return f(c).map(Some);
+        }
         self.update(|all| all.iter_mut().find(|c| c.id == id).map(f).transpose())
+    }
+
+    fn refuse_temporary(&self, id: &str) -> AppResult<()> {
+        if self.is_temporary(id) { Err(crate::error::AppError::Msg(TEMPORARY_NOT_SAVED.into())) } else { Ok(()) }
     }
 
     /// Save a whole source, deciding against the saved one under the lock: `f` gets what is saved now (None for a new source)
     /// and the config to save, and may refuse (nothing is written then)
     pub fn save_with(&self, mut config: ConnectionConfig, f: impl FnOnce(Option<&ConnectionConfig>, &mut ConnectionConfig) -> AppResult<()>) -> AppResult<ConnectionConfig> {
+        self.refuse_temporary(&config.id)?;
         self.update(|all| {
             let i = all.iter().position(|c| c.id == config.id);
             f(i.map(|i| &all[i]), &mut config)?;
@@ -453,6 +486,10 @@ impl Store {
     }
 
     pub fn delete(&self, id: &str) -> AppResult<()> {
+        if self.is_temporary(id) {
+            self.temporary.lock().unwrap().retain(|c| c.id != id);
+            return Ok(());
+        }
         self.update(|all| {
             all.retain(|c| c.id != id);
             Ok(())
@@ -475,11 +512,11 @@ impl Store {
         }
         let lock = fs::OpenOptions::new().create(true).truncate(false).write(true).open(self.path.with_extension("json.lock"))?;
         lock.lock()?;
-        f(self.list()?)
+        f(self.saved()?)
     }
 
     pub fn export_to(&self, path: &std::path::Path) -> AppResult<usize> {
-        let connections = self.list()?;
+        let connections = self.saved()?;
         let n = connections.len();
         let file = ExportFile { app: "dbtool".into(), version: 1, connections };
         crate::secrets::write_private(path, serde_json::to_string_pretty(&file)?.as_bytes())?;

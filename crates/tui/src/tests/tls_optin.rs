@@ -39,7 +39,7 @@ fn pg_answer(sql: &[u8]) -> (Vec<u8>, Vec<u8>) {
 
 /// A PostgreSQL without TLS: answers N to the TLS request (the core's NEEDS_TLS), then lets the plain-text login in and answers every
 /// statement with one row (pg_answer: enough for a connect after "Allow unencrypted" to succeed and a table tab to show rows)
-async fn no_tls_server() -> u16 {
+pub(super) async fn no_tls_server() -> u16 {
     let ready = pg_msg(b'Z', b"I");
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = l.local_addr().unwrap().port();

@@ -221,6 +221,10 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
         }
         if matches!(n.kind, NodeKind::Conn) {
             row = row.bold();
+            // Before the name: a long URL name would cut it off at the end of the row
+            if let Some(c) = app.conn(&n.conn).filter(|c| c.temporary) {
+                row = row.lead(temporary_badge(c.config.read_only)).lead(Span::raw(" "));
+            }
         }
         // Exactly the explorer width (with horizontal scroll applied), so the background reaches the line end and a wide char cut at the end doesn't break the color
         lines.push(row.fit(app.tree.hoff, inner.width as usize));
@@ -230,6 +234,11 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
     }
     // Horizontal scroll (Shift+←/→, trackpad left/right) is already done by fit_spans
     f.render_widget(Paragraph::new(lines), inner);
+}
+
+/// The explorer's mark on a temporary data source (qurry-tui postgres://…)
+pub fn temporary_badge(read_only: bool) -> Span<'static> {
+    crate::kit::badge(if read_only { "TEMP · READ-ONLY" } else { "TEMP" }, WARN)
 }
 
 fn draw_tabs(f: &mut Frame, app: &mut App, area: Rect) {
@@ -915,10 +924,12 @@ fn ssl_mode_note(mode: &str) -> &'static str {
 }
 
 /// What an empty form field means (the GUI shows the same as a placeholder)
-fn empty_field_note(label: &str) -> Option<&'static str> {
+fn empty_field_note(label: &str, ssh_auth: &str) -> Option<&'static str> {
     match label {
         "AWS profile" => Some("(default profile)"),
         "AWS region" => Some("(the profile's region)"),
+        "SSH key file" => Some("(ssh-agent, then ~/.ssh/config IdentityFile)"),
+        "SSH secret" if ssh_auth == "password" => Some("(ssh-agent)"),
         _ => None,
     }
 }
@@ -1211,7 +1222,7 @@ fn draw_conn_form(f: &mut Frame, area: Rect, form: &crate::app::ConnForm) {
             if fl.label == "SSL mode" {
                 spans.push(Span::styled(format!("  {}", ssl_mode_note(&fl.value)), Style::default().fg(DIM)));
             }
-            if let Some(note) = empty_field_note(fl.label).filter(|_| fl.value.trim().is_empty()) {
+            if let Some(note) = empty_field_note(fl.label, form.value("SSH auth")).filter(|_| fl.value.trim().is_empty()) {
                 spans.push(Span::styled(format!("  {note}"), Style::default().fg(DIM)));
             }
             Line::from(spans)
@@ -1421,6 +1432,21 @@ mod tests {
             let s = h.screen(w, ht);
             assert!(s.contains("Name ▏") && s.contains("Esc cancel"), "{w}×{ht}\n{s}");
         }
+    }
+
+    /// An SSH tunnel with an empty key file or password says it uses ssh-agent, like the GUI's placeholders
+    #[tokio::test]
+    async fn conn_form_says_empty_ssh_credentials_use_the_agent() {
+        let mut h = crate::testkit::Harness::new().await;
+        let cfg = serde_json::from_value(serde_json::json!({ "id": "", "name": "t", "kind": "postgres", "host": "db", "port": 5432, "user": "u", "database": "d",
+            "ssh": { "enabled": true, "host": "bastion", "port": 22, "user": "ops", "auth": "key", "keyPath": "" } })).unwrap();
+        h.app.conn_form(Some(cfg));
+        let s = h.screen(120, 40);
+        assert!(s.contains("(ssh-agent, then ~/.ssh/config IdentityFile)"), "{s}");
+        let Some(Popup::ConnForm(f)) = &mut h.app.popup else { unreachable!() };
+        f.fields.iter_mut().find(|x| x.label == "SSH auth").unwrap().value = "password".into();
+        let s = h.screen(120, 40);
+        assert!(s.lines().any(|l| l.contains("SSH secret") && l.contains("(ssh-agent)")), "{s}");
     }
 
     /// The Production confirm at the minimum size keeps its question and keys; the statements that don't fit are counted
