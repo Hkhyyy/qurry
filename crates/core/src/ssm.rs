@@ -1024,6 +1024,7 @@ pub(crate) mod tests {
         let one = |id: String| st.run_read_only(id, "select 1".into(), 1);
         let recovered = |t: Instant| {
             let took = t.elapsed();
+            println!("recovered in {took:?}");
             assert!(took >= Duration::from_secs(10) && took < Duration::from_secs(14), "one timeout, a new session and a connect: {took:?}");
         };
 
@@ -1056,12 +1057,15 @@ pub(crate) mod tests {
         recovered(t);
         assert_eq!(starts(), 4);
 
-        // A console's transaction through a tunnel that carries nothing any more doesn't keep it: nothing reaches that transaction
+        // A console's transaction through a tunnel that carries nothing any more doesn't keep it: nothing reaches that transaction.
+        // The tunnel gets 5s instead of 2s to answer then, so a slow one isn't closed with the transaction
         st.run_query(id.clone(), "begin".into(), None, Some("dead-ssm-tab".into())).await.expect("begin");
         stop_forwarding(fake.path());
         let t = Instant::now();
         one(id.clone()).await.expect("recovers though a console had a transaction open");
-        recovered(t);
+        let took = t.elapsed();
+        println!("recovered with a transaction open in {took:?}");
+        assert!(took >= Duration::from_secs(15) && took < Duration::from_secs(17), "one timeout, a 5s check, a new session and a connect: {took:?}");
         assert_eq!(starts(), 5);
         assert!(!st.sessions.read().await.contains_key("dead-ssm-tab"), "the dead console session is gone");
 
@@ -1127,6 +1131,95 @@ pub(crate) mod tests {
         }
         assert_eq!(starts(), before + 2, "the first session and one new one");
         assert!(t.elapsed() < Duration::from_secs(25), "two timeouts, not one per caller: {:?}", t.elapsed());
+        st.disconnect(id).await.unwrap();
+        gone(fake.path()).await;
+    }
+
+    /// A console (or table tab) whose session is open when the SSM session dies while the CLI runs on (sleep, a network change):
+    /// after it sat unused, its next run checks the session first instead of sending the statement into a tunnel that carries
+    /// nothing, and goes on through a new tunnel; with a transaction open it says the transaction is lost and runs nothing. A
+    /// statement already waiting there ends when Cancel or the keep-alive finds the tunnel dead; it is never run again.
+    /// Run on its own (it changes PATH): QURRY_TEST_PG=127.0.0.1:55433:postgres:postgres cargo test -p qurry-core dead_ssm_console -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn dead_ssm_console_recovers_or_says_why() {
+        use crate::app::tests::age_session;
+        let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
+        let fake = tempfile::tempdir().unwrap();
+        fake_aws(fake.path(), "ok");
+        let path = std::env::join_paths(std::iter::once(fake.path().to_path_buf()).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()))).unwrap();
+        unsafe { std::env::set_var("PATH", path) };
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let mut c: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "ssm-console", "kind": "postgres", "host": &pg.host, "port": pg.port, "user": &pg.user, "database": &pg.database })).unwrap();
+        c.ssm = Some(cfg());
+        let id = st.save_connection(c.clone(), None, None).await.unwrap().id;
+        let starts = || std::fs::read_to_string(fake.path().join("starts")).unwrap().lines().count();
+        let run = |sql: &str, tab: &str| tokio::time::timeout(Duration::from_secs(40), st.run_query(id.clone(), sql.into(), None, Some(tab.into())));
+        let lost = |e: &str| e.contains("connection lost through the AWS SSM tunnel (instance i-0123456789abcdef0)");
+
+        // A console that sat unused: checked (5s), the tunnel too (2s), then a new tunnel and session, and the statement runs once
+        run("select 1", "c1").await.unwrap().expect("connects");
+        assert_eq!(starts(), 1);
+        stop_forwarding(fake.path());
+        age_session(&st, "c1").await;
+        let t = Instant::now();
+        let r = run("select 2 as two", "c1").await.expect("doesn't hang").expect("goes on through a new tunnel");
+        assert_eq!(r.rows[0][0], serde_json::json!(2));
+        let took = t.elapsed();
+        println!("idle console recovered in {took:?}");
+        assert!(took < Duration::from_secs(10), "less than one connect timeout: {took:?}");
+        assert_eq!(starts(), 2);
+
+        // With a transaction open: lost, and the Commit meant for it isn't sent anywhere else; the next run opens a new session
+        run("begin", "c1").await.unwrap().unwrap();
+        stop_forwarding(fake.path());
+        age_session(&st, "c1").await;
+        let t = Instant::now();
+        let e = tokio::time::timeout(Duration::from_secs(40), st.commit_tx("c1".into())).await.expect("doesn't hang").err().expect("lost").to_string();
+        assert!(t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
+        assert!(e.contains("through the AWS SSM tunnel (instance i-0123456789abcdef0)") && e.contains("The transaction open in it is lost") && e.contains("nor did a new connection through the tunnel"), "{e}");
+        assert!(!st.tx_state("c1".into()).await);
+        run("select 1", "c1").await.unwrap().expect("a new session");
+        assert_eq!(starts(), 3);
+
+        // A statement sent just before the session died (the console wasn't idle) waits there: Cancel times out getting a
+        // connection, finds the tunnel dead and closes it, which ends that statement; the cancel itself goes on through a new tunnel
+        stop_forwarding(fake.path());
+        let t = Instant::now();
+        let (r, cancel) = tokio::join!(run("select 3", "c1"), async {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            st.cancel_query("c1".into()).await
+        });
+        let e = r.expect("the statement doesn't wait forever").err().expect("cut off").to_string();
+        let took = t.elapsed();
+        println!("hung statement ended by Cancel in {took:?}: {e}");
+        assert!(lost(&e), "{e}");
+        assert!(cancel.is_ok(), "{cancel:?}");
+        assert!(took < Duration::from_secs(17), "one connect timeout, a 5s look at the tunnel (a console is running) and a new session: {took:?}");
+        assert_eq!(starts(), 4);
+
+        // The keep-alive finds it too, without a Cancel
+        c.id = id.clone();
+        c.options.keep_alive_secs = Some(1);
+        st.save_connection(c, None, None).await.unwrap();
+        run("select 1", "c2").await.unwrap().expect("connects");
+        assert_eq!(starts(), 5);
+        stop_forwarding(fake.path());
+        st.last_ping.lock().unwrap().insert(id.clone(), Instant::now() - Duration::from_secs(5));
+        let t = Instant::now();
+        let (r, dropped) = tokio::join!(run("select 4", "c2"), async {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            crate::app::housekeeping(&st).await
+        });
+        let e = r.expect("the statement doesn't wait forever").err().expect("cut off").to_string();
+        let took = t.elapsed();
+        println!("hung statement ended by the keep-alive in {took:?}");
+        assert!(lost(&e), "{e}");
+        assert_eq!(dropped, vec![id.clone()]);
+        assert!(took < Duration::from_secs(12), "a 5s ping and a 5s look at the tunnel: {took:?}");
+        run("select 5", "c2").await.unwrap().expect("runs through a new tunnel");
+        assert_eq!(starts(), 6);
         st.disconnect(id).await.unwrap();
         gone(fake.path()).await;
     }
