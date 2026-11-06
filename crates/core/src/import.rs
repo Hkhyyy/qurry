@@ -833,9 +833,31 @@ fn set_ssl(m: &mut Mapped, mode: &str, ca_file: String, cert_file: String, key_f
     m.config.ssl = Some(SslConfig { enabled: true, mode: mode.into(), ca_file, cert_file, key_file });
 }
 
+/// Without control characters: a name or host from a file can't move the cursor of a terminal, or hide in a line
+fn clean(s: &mut String) {
+    s.retain(|c| !c.is_control());
+}
+
 fn finish(mut m: Mapped) -> Mapped {
     if m.config.read_only {
         m.mapped.push("Read-only".into());
+    }
+    let c = &mut m.config;
+    for s in [&mut c.name, &mut c.host, &mut c.user, &mut c.database] {
+        clean(s);
+    }
+    if let Some(ssh) = &mut c.ssh {
+        for s in [&mut ssh.host, &mut ssh.user, &mut ssh.key_path] {
+            clean(s);
+        }
+    }
+    if let Some(ssl) = &mut c.ssl {
+        for s in [&mut ssl.ca_file, &mut ssl.cert_file, &mut ssl.key_file] {
+            clean(s);
+        }
+    }
+    for s in m.mapped.iter_mut().chain(m.warn.iter_mut()) {
+        clean(s);
     }
     m
 }
@@ -865,7 +887,9 @@ pub(crate) fn same_source(a: &ConnectionConfig, b: &ConnectionConfig) -> bool {
 pub(crate) fn foreign_plan(from: &str, path: &str, existing: &[ConnectionConfig], sources: Vec<Foreign>) -> ImportPlan {
     let (mut rows, mut configs) = (vec![], vec![]);
     let mut taken: Vec<ConnectionConfig> = vec![];
-    for f in sources {
+    for mut f in sources {
+        clean(&mut f.name);
+        clean(&mut f.kind_label);
         let skip = |reason: String| ImportRow { text: format!("− skip \"{}\" ({})", f.name, f.kind_label), note: reason, value: "skipped".into(), tone: None, checkable: false };
         match f.what {
             Err(reason) => {
@@ -1025,6 +1049,16 @@ mod tests {
         assert!(e.contains("&nope;"), "{e}");
         let ok = parse_xml("<a x=\"&quot;1&quot;\">&lt;t&#33;</a>").unwrap();
         assert_eq!((ok.kids[0].attr("x"), ok.kids[0].text.as_str()), (Some("\"1\""), "<t!"));
+    }
+
+    /// A name or host with control characters (a terminal escape) loses them
+    #[test]
+    fn control_characters_are_dropped() {
+        let ds = parse_xml("<data-source name=\"evil&#27;[2J\" uuid=\"1\"><jdbc-url>jdbc:postgresql://h&#27;[31m.internal/db</jdbc-url></data-source>").unwrap();
+        let f = map_jetbrains(&ds.kids[0], None, &[], None);
+        let plan = foreign_plan("x", "y", &[], vec![f]);
+        assert_eq!(plan.rows[0].text, "+ add \"evil[2J\" (h[31m.internal:5432/db)");
+        assert!(plan.configs[0].as_ref().is_some_and(|c| !c.name.contains('\x1b') && !c.host.contains('\x1b')));
     }
 
     #[test]
