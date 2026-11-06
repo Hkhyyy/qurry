@@ -1056,12 +1056,61 @@ pub(crate) mod tests {
         recovered(t);
         assert_eq!(starts(), 4);
 
-        // A console with a transaction open keeps the tunnel (the database may only be slow): the error says what to do
+        // A console's transaction through a tunnel that carries nothing any more doesn't keep it: nothing reaches that transaction
         st.run_query(id.clone(), "begin".into(), None, Some("dead-ssm-tab".into())).await.expect("begin");
         stop_forwarding(fake.path());
-        let e = one(id.clone()).await.err().expect("the tunnel is kept").to_string();
-        assert!(e.contains("through the AWS SSM tunnel (instance i-0123456789abcdef0)") && e.contains("didn't open the tunnel again") && e.contains("disconnect the data source"), "{e}");
-        assert_eq!(starts(), 4, "no new session");
+        let t = Instant::now();
+        one(id.clone()).await.expect("recovers though a console had a transaction open");
+        recovered(t);
+        assert_eq!(starts(), 5);
+        assert!(!st.sessions.read().await.contains_key("dead-ssm-tab"), "the dead console session is gone");
+
+        // A console's result left paged (cursor open) when the session dies: housekeeping closing that cursor gives up after 5s
+        // instead of holding the console forever, and the next query recovers
+        let tab = Some("dead-ssm-cursor".to_string());
+        let r = st.run_query(id.clone(), "select g from generate_series(1, 100000) g".into(), Some(10), tab.clone()).await.expect("paged");
+        assert_eq!(r.rows.len(), 10);
+        let s = st.sessions.read().await.get("dead-ssm-cursor").expect("console session").session.clone();
+        stop_forwarding(fake.path());
+        let t = Instant::now();
+        let closing = tokio::spawn(async move {
+            let at = Instant::now();
+            s.lock().await.close_idle_cursor(Duration::ZERO).await;
+            at.elapsed()
+        });
+        one(id.clone()).await.expect("recovers while housekeeping closes the cursor");
+        recovered(t);
+        let held = closing.await.unwrap();
+        assert!(held < Duration::from_secs(7), "the cursor close gives the console up: {held:?}");
+        assert_eq!(starts(), 6);
+        st.run_query(id.clone(), "select 1".into(), None, tab).await.expect("the console runs again");
+        st.disconnect(id.clone()).await.unwrap();
+        gone(fake.path()).await;
+
+        // A tunnel that works while new connects are slow (here the startup script waits for a lock that the running statement
+        // holds): the timeout keeps the tunnel and the statement running through it (an import, a restore, a write)
+        let mut slow = source(&pg.host, pg.port);
+        slow.options.startup_script = "select pg_advisory_lock_shared(7702100); select pg_advisory_unlock_shared(7702100)".into();
+        slow.id = id.clone();
+        st.save_connection(slow, None, None).await.unwrap();
+        one(id.clone()).await.expect("connects");
+        let before = starts();
+        let crate::db::Pool::Pg(pool) = crate::app::ensure_pool(&st, &id).await.unwrap() else { panic!("pg") };
+        let mut job = pool.acquire().await.unwrap();
+        // The pool's other connections are in use too, so the next query needs a new one
+        let mut held = vec![];
+        while pool.num_idle() > 0 {
+            held.push(pool.acquire().await.unwrap());
+        }
+        let running = tokio::spawn(async move { sqlx::query("select pg_advisory_xact_lock(7702100), pg_sleep(13)").execute(&mut *job).await.map(|_| ()) });
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let t = Instant::now();
+        let e = one(id.clone()).await.err().expect("no connection within the timeout").to_string();
+        assert!(e.contains("though the AWS SSM tunnel (instance i-0123456789abcdef0) answers") && e.contains("startup script"), "{e}");
+        assert!(t.elapsed() < Duration::from_secs(12), "one timeout: {:?}", t.elapsed());
+        running.await.unwrap().expect("the running statement goes on");
+        assert_eq!(starts(), before, "no new session");
+        drop(held);
         st.disconnect(id).await.unwrap();
         gone(fake.path()).await;
 

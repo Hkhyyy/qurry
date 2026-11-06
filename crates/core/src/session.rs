@@ -147,10 +147,14 @@ impl PgSession {
         }
     }
 
-    /// In Auto mode, close cursors unused for long and end the transaction (Manual is left alone since it is the user's transaction)
+    /// In Auto mode, close cursors unused for long and end the transaction (Manual is left alone since it is the user's transaction).
+    /// Within 5s, like the keep-alive ping: through a tunnel that stopped forwarding it would wait forever, holding the session
+    /// and housekeeping (keep-alive and auto-disconnect of every source)
     pub async fn close_idle_cursor(&mut self, idle: std::time::Duration) -> bool {
         if self.cursor_open && !self.user_tx() && self.cursor_used.elapsed() >= idle {
-            self.close_cursor().await;
+            if tokio::time::timeout(std::time::Duration::from_secs(5), self.close_cursor()).await.is_err() {
+                return false;
+            }
             self.idle_closed = true;
             return true;
         }

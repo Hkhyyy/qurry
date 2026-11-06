@@ -148,6 +148,27 @@ pub(crate) fn expand_home(path: &str) -> String {
 }
 
 /// Tests only the SSH login (Test Connection on the SSH/SSL tab).
+/// Whether a new connection through a tunnel's local port gets the database's first bytes within 2s: false when the tunnel
+/// accepts but forwards nothing (its session died while the aws CLI or the SSH accept loop runs on). It authenticates nothing:
+/// PostgreSQL answers an SSLRequest with one byte, MySQL greets first. Other kinds have no such step and count as answering
+pub(crate) async fn answers(local_port: u16, kind: crate::store::DbKind) -> bool {
+    use crate::store::DbKind;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let hello: &[u8] = match kind {
+        // SSLRequest (length 8, code 80877103)
+        DbKind::Postgres => &[0, 0, 0, 8, 4, 210, 22, 47],
+        DbKind::Mysql => &[],
+        _ => return true,
+    };
+    let probe = async {
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", local_port)).await.ok()?;
+        s.write_all(hello).await.ok()?;
+        let mut b = [0u8; 1];
+        (s.read(&mut b).await.ok()? > 0).then_some(())
+    };
+    matches!(tokio::time::timeout(std::time::Duration::from_secs(2), probe).await, Ok(Some(())))
+}
+
 pub async fn test_login(ssh: &SshConfig, secret: Option<&str>) -> AppResult<String> {
     let session = login(ssh, secret).await?;
     let _ = session.disconnect(russh::Disconnect::ByApplication, "", "en").await;
@@ -233,6 +254,40 @@ pub async fn open(ssh: &SshConfig, secret: Option<&str>, remote_host: &str, remo
 
 #[cfg(test)]
 mod tests {
+    /// The probe that tells a dead tunnel from a busy one: the database's first bytes count, a port that accepts and stays
+    /// silent or a closed port doesn't, and kinds without a handshake to ask count as answering
+    #[tokio::test]
+    async fn a_tunnel_answers_when_the_database_does() {
+        use crate::store::DbKind;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let serve = |greet: bool| async move {
+            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = l.local_addr().unwrap().port();
+            tokio::spawn(async move {
+                let mut held = vec![];
+                while let Ok((mut s, _)) = l.accept().await {
+                    let mut b = [0u8; 8];
+                    // MySQL greets first; PostgreSQL answers the SSLRequest
+                    if greet || s.read_exact(&mut b).await.is_ok() {
+                        let _ = s.write_all(if greet { b"J\0\0\0\n8.4" } else { b"N" }).await;
+                    }
+                    held.push(s);
+                }
+            });
+            port
+        };
+        let silent = crate::app::tests::silent_server().await;
+        assert!(answers(serve(false).await, DbKind::Postgres).await);
+        assert!(answers(serve(true).await, DbKind::Mysql).await);
+        let t = std::time::Instant::now();
+        assert!(!answers(silent, DbKind::Postgres).await);
+        assert!(!answers(silent, DbKind::Mysql).await);
+        assert!(t.elapsed() < std::time::Duration::from_secs(5), "2s each: {:?}", t.elapsed());
+        let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
+        assert!(!answers(closed, DbKind::Postgres).await);
+        assert!(answers(silent, DbKind::Mssql).await);
+    }
+
     /// If a different key arrives after the fingerprint was shown (MITM), it isn't added
     #[test]
     fn pending_key_swap_is_refused() {

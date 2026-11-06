@@ -531,20 +531,40 @@ fn timeout_error(cfg: &ConnectionConfig, e: AppError, reopened: bool) -> AppErro
     })
 }
 
+/// A connect through a tunnel that works timed out (shared_tunnel): the tunnel is kept, and the error says what else holds it up
+fn busy_error(cfg: &ConnectionConfig) -> AppError {
+    let way = match (cfg.active_ssm(), cfg.active_ssh()) {
+        (Some(s), _) => format!("the AWS SSM tunnel (instance {})", s.target.trim()),
+        (None, Some(s)) => format!("the SSH tunnel ({}:{})", s.host, s.port),
+        (None, None) => "the tunnel".into(),
+    };
+    AppError::Msg(format!(
+        "Can't get a connection to {}:{} within 10s, though {way} answers: all {} connections of this data source may be in use (open consoles and tables, exports, imports), or the database is slow to accept new ones, or its startup script (Options) fails or runs long. Close the tabs you don't need or check the startup script, then run it again.",
+        cfg.host,
+        cfg.port,
+        db::POOL_MAX
+    ))
+}
+
 /// The local port of the source's tunnel, and the generation it belongs to. The first caller opens it: one SSH / SSM session
 /// per source, not per database. Callers that waited while it failed get its error instead of trying again one after
 /// another (each try can take the whole timeout). stale = a connect through the tunnel of that generation timed out (open_pool):
-/// that tunnel and the pools through it are closed and a new one opened, unless another caller that timed out did so already
+/// when the tunnel doesn't carry a new connection either (tunnel::answers), it and the pools through it are closed and a new one
+/// opened, unless another caller that timed out did so already
 async fn shared_tunnel(state: &AppState, c: &Connecting, base: &str, cfg: &ConnectionConfig, ssh_secret: Option<&str>, stale: Option<u64>) -> AppResult<(u16, u64)> {
     let asked = std::time::Instant::now();
     let mut failed = c.failed.lock().await;
     if stale.is_some_and(|g| g == c.generation.load(SeqCst)) {
-        // The database may only be slow: a console's statement or transaction through the tunnel isn't ended for a new one
-        if console_busy(state, base).await {
-            let e = timeout_error(cfg, AppError::Db(sqlx::Error::PoolTimedOut), false);
-            return Err(AppError::Msg(format!("{e} {TUNNEL_KEPT}")));
+        // Only a tunnel that doesn't carry a new connection to the database is replaced. One that does is busy, not dead (all the
+        // pool's connections in use, a database slow to accept, a startup script that fails or runs long), and closing it would
+        // end what runs through it (an import, a restore, a console's transaction, another caller's statement)
+        let port = state.tunnels.read().await.get(base).map(|t| t.local_port);
+        if let Some(port) = port
+            && crate::tunnel::answers(port, cfg.kind).await
+        {
+            return Err(busy_error(cfg));
         }
-        crate::log!("[qurry] a connect through the tunnel of {base} got no answer; opening the tunnel again");
+        crate::log!("[qurry] a connect through the tunnel of {base} got no answer, nor does the tunnel; opening the tunnel again");
         drop_pool_logged(state, base, crate::audit::BY_SERVER).await;
     }
     // Read before the tunnel: a disconnect after this also drops the pool that connects through it
@@ -583,7 +603,6 @@ async fn shared_tunnel(state: &AppState, c: &Connecting, base: &str, cfg: &Conne
     Ok((port, g))
 }
 
-const TUNNEL_KEPT: &str = "Qurry didn't open the tunnel again because a console of this data source is running a statement or has a transaction open: finish it there (Commit / Rollback, or Cancel), or disconnect the data source, then run it again.";
 const DISCONNECTED_WHILE_CONNECTING: &str = "The data source was disconnected while connecting. Run it again.";
 
 /// Keeps the new pool unless the source was disconnected meanwhile (drop_pool): then the pool may point at a closed tunnel's
@@ -1587,6 +1606,53 @@ pub(crate) mod tests {
         assert!(errors.iter().all(|e| *e == errors[0]) && (errors[0].contains("Enter the instance id") || errors[0].contains("AWS CLI not found")), "{errors:?}");
         assert!(took >= std::time::Duration::from_secs(10) && took < std::time::Duration::from_secs(15), "one timeout, then one try to open it: {took:?}");
         assert!(st.tunnels.read().await.is_empty());
+        crate::ssm::tests::gone(fake.path()).await;
+    }
+
+    /// A PostgreSQL that answers an SSLRequest ("N") and then nothing: a database that is slow to accept new connections
+    async fn slow_pg_server() -> u16 {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = l.accept().await {
+                tokio::spawn(async move {
+                    let mut b = [0u8; 8];
+                    if s.read_exact(&mut b).await.is_ok() && b == [0, 0, 0, 8, 4, 210, 22, 47] {
+                        let _ = s.write_all(b"N").await;
+                    }
+                    let _ = s.read_to_end(&mut Vec::new()).await;
+                });
+            }
+        });
+        port
+    }
+
+    /// A connect that times out through a tunnel that still carries new connections (the pool is full, the database or its
+    /// startup script is slow) keeps the tunnel and what runs through it, and fails after one timeout saying so
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_tunnel_that_still_answers_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = AppState::new(Store::new(dir.path().to_path_buf()), crate::secrets::SecretFile::open(dir.path()).unwrap());
+        let mut c = silent_source("k", 5432, None);
+        c.ssm = Some(store::SsmConfig { enabled: true, profile: String::new(), region: String::new(), target: "i-0123456789abcdef0".into() });
+        st.store.save(&c).unwrap();
+        let (fake, t) = crate::ssm::tests::fake_tunnel_to(slow_pg_server().await).await;
+        let port = t.local_port;
+        st.connecting("k");
+        st.tunnels.write().await.insert("k".into(), t);
+        let start = std::time::Instant::now();
+        let r = futures::future::join_all(["k", "k::db1"].map(|id| ensure_pool(&st, id))).await;
+        let took = start.elapsed();
+        for r in r {
+            let e = r.err().expect("times out").to_string();
+            assert!(e.contains("within 10s, though the AWS SSM tunnel (instance i-0123456789abcdef0) answers") && e.contains("all 32 connections") && e.contains("startup script"), "{e}");
+        }
+        assert!(took < std::time::Duration::from_secs(13), "one timeout, no second try: {took:?}");
+        assert_eq!(st.tunnels.read().await.get("k").map(|t| (t.local_port, t.alive())), Some((port, true)), "the same tunnel");
+        assert_eq!(std::fs::read_to_string(fake.path().join("starts")).unwrap().lines().count(), 1, "no new session");
+        drop_pool(&st, "k").await;
         crate::ssm::tests::gone(fake.path()).await;
     }
 
