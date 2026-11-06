@@ -147,7 +147,7 @@ pub fn asset_name(driver: &str, version: &str, target: &str) -> String {
     format!("qurry-driver-{driver}_{version}_{target}.tar.gz")
 }
 
-/// Download and install a driver: fetch over HTTPS from this version's release, verify the SHA256SUMS signature (same key as updates) and hash, then into the drivers folder. Returns the installed path
+/// Download and install a driver: fetch over HTTPS from this version's release, verify the SHA256SUMS signature (the update keys this build trusts, update::UPDATE_PUBKEYS) and hash, then into the drivers folder. Returns the installed path
 pub async fn install(driver: &str) -> AppResult<PathBuf> {
     let driver = driver.to_string();
     tokio::task::spawn_blocking(move || install_blocking(&driver, env!("CARGO_PKG_VERSION"))).await.map_err(|e| AppError::Msg(e.to_string()))?

@@ -4,7 +4,7 @@
 use qurry_core::update;
 use qurry_core::update::{expected_sha, sha256_of, verify_sums};
 #[cfg(test)]
-use qurry_core::update::UPDATE_PUBKEY;
+use qurry_core::update::UPDATE_PUBKEYS;
 use std::path::{Path, PathBuf};
 
 /// Suffix of the release file name for this platform (releases are built for Apple Silicon · Intel macOS and x86_64 Linux)
@@ -133,7 +133,7 @@ fn replace(exe: &Path, asset: &update::Asset, sums: &update::Asset, sums_sig: &u
     let result = (|| -> std::io::Result<Vec<PathBuf>> {
         let sums_file = tmp.join("SHA256SUMS");
         download(&sums.url, &sums_file, quiet)?;
-        // First check that the checksum list is signed with the update key (same key as the GUI updater)
+        // First check that the checksum list is signed with an update key this build trusts (update::UPDATE_PUBKEYS)
         let sig_file = tmp.join("SHA256SUMS.sig");
         download(&sums_sig.url, &sig_file, quiet)?;
         verify_sums(&std::fs::read(&sums_file)?, &std::fs::read_to_string(&sig_file)?).map_err(|e| err(format!("SHA256SUMS {e} — not installed")))?;
@@ -224,9 +224,9 @@ mod tests {
         assert!(super::verify_sums(b"hello\n", SIG).is_ok());
         assert!(super::verify_sums(b"hello!\n", SIG).is_err());
         assert!(super::verify_sums(b"hello\n", "bm90IGEgc2lnbmF0dXJl").is_err());
-        // Same public key as the GUI (tauri.conf.json)
+        // The current key (first in the list) is the GUI's (tauri.conf.json)
         let conf: serde_json::Value = serde_json::from_str(include_str!("../../../src-tauri/tauri.conf.json")).unwrap();
-        assert_eq!(conf["plugins"]["updater"]["pubkey"].as_str(), Some(super::UPDATE_PUBKEY));
+        assert_eq!(conf["plugins"]["updater"]["pubkey"].as_str(), Some(super::UPDATE_PUBKEYS[0]));
     }
 
     /// Releases ship Apple Silicon · Intel macOS and x86_64 Linux bundles
