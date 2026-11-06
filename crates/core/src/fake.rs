@@ -1,7 +1,7 @@
 //! Test data generation: fill plausible rows from the table structure (type·length·NOT NULL·PK·UNIQUE·FK·enum·CHECK IN) and column names.
 //! FKs pick from values already in the referenced table. Auto-increment · computed columns are left empty (the server fills them).
 //! Inserts run in one transaction (execute_batch): if anything fails, nothing goes in
-use crate::app::{AppState, ensure_pool};
+use crate::app::{AppState, checked_pool};
 use crate::backend::{Backend, dispatch};
 use crate::db::Pool;
 use crate::error::{AppError, AppResult};
@@ -450,7 +450,7 @@ struct Prepared {
 impl AppState {
     async fn fake_prepare(&self, id: &str, schema: &str, table: &str) -> AppResult<Prepared> {
         let kind = self.kind_of(id)?;
-        let pool = ensure_pool(self, id).await?;
+        let pool = checked_pool(self, id).await?;
         let shape = dispatch!(pool, b => b.table_shape(schema, table).await)?;
         if shape.cols.is_empty() {
             return Err(AppError::Msg(format!("Couldn't find table {schema}.{table}")));

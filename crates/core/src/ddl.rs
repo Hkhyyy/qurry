@@ -1,7 +1,7 @@
 //! Create · modify objects (DataGrip right-click › New ▸ · Modify Table… · Rename…): PostgreSQL · MySQL.
 //! For tables, read the structure (TableDef), compare it with the on-screen edits, and build ALTER statements. Creating is CREATE without before.
 //! Statements are previewed, then run (PG in one transaction — DDL can be rolled back too. MySQL applies each statement immediately)
-use crate::app::{AppState, ensure_pool};
+use crate::app::{AppState, checked_pool};
 use crate::backend::{Backend, dispatch};
 use crate::error::{AppError, AppResult};
 use crate::store::DbKind;
@@ -478,7 +478,7 @@ pub(crate) fn action(c: &str) -> String {
 impl AppState {
     /// Modify Table…: current structure
     pub async fn table_def(&self, id: String, schema: String, table: String) -> AppResult<TableDef> {
-        dispatch!(ensure_pool(self, &id).await?, b => b.table_def(&schema, &table).await)
+        dispatch!(checked_pool(self, &id).await?, b => b.table_def(&schema, &table).await)
     }
 
     /// Preview: ALTER if there is a before, otherwise CREATE
@@ -514,7 +514,7 @@ impl AppState {
             schemas.sort();
             schemas.dedup();
             let at = |s: &str, n: &str| objects.iter().position(|o| o.schema == s && o.name == n);
-            for [s, n, of_s, of_n] in dispatch!(ensure_pool(self, &id).await?, b => b.drop_deps(&schemas).await)? {
+            for [s, n, of_s, of_n] in dispatch!(checked_pool(self, &id).await?, b => b.drop_deps(&schemas).await)? {
                 deps.extend(at(&s, &n).zip(at(&of_s, &of_n)));
             }
         }

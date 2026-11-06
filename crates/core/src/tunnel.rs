@@ -311,10 +311,24 @@ mod tests {
         let _ = std::fs::remove_file(&kh);
     }
 
-    /// An SSH server in this process: password "pw", direct-tcpip forwarded to `to`. Counts logins
+    /// An SSH server in this process: password "pw", direct-tcpip forwarded to `to`. Counts logins. A session whose `dead` is set
+    /// stops forwarding while it stays open (the server can't reach the database any more, or the link stalled)
     struct Sshd {
         to: std::net::SocketAddr,
         logins: Arc<std::sync::atomic::AtomicUsize>,
+        dead: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    /// Copies r to w until r ends, dropping what comes while `dead` is set
+    async fn pump(mut r: impl tokio::io::AsyncRead + Unpin, mut w: impl tokio::io::AsyncWrite + Unpin, dead: Arc<std::sync::atomic::AtomicBool>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut buf = vec![0; 65536];
+        while let Ok(n @ 1..) = r.read(&mut buf).await {
+            if !dead.load(std::sync::atomic::Ordering::SeqCst) && w.write_all(&buf[..n]).await.is_err() {
+                return;
+            }
+        }
+        let _ = w.shutdown().await;
     }
 
     impl russh::server::Handler for Sshd {
@@ -339,18 +353,22 @@ mod tests {
             _session: &mut russh::server::Session,
         ) -> Result<(), Self::Error> {
             reply.accept().await;
-            let to = self.to;
+            let (to, dead) = (self.to, self.dead.clone());
             tokio::spawn(async move {
-                if let Ok(mut tcp) = tokio::net::TcpStream::connect(to).await {
-                    let _ = tokio::io::copy_bidirectional(&mut tcp, &mut channel.into_stream()).await;
+                if let Ok(tcp) = tokio::net::TcpStream::connect(to).await {
+                    let ((tr, tw), (cr, cw)) = (tcp.into_split(), tokio::io::split(channel.into_stream()));
+                    tokio::join!(pump(tr, cw, dead.clone()), pump(cr, tw, dead));
                 }
             });
             Ok(())
         }
     }
 
+    /// The running sessions, and the flag that stops each one forwarding
+    type Sessions = Arc<Mutex<Vec<(russh::server::Handle, Arc<std::sync::atomic::AtomicBool>)>>>;
+
     /// Port, login count, and the running sessions
-    async fn sshd(to: std::net::SocketAddr, known_hosts: &std::path::Path) -> (u16, Arc<std::sync::atomic::AtomicUsize>, Arc<Mutex<Vec<russh::server::Handle>>>) {
+    async fn sshd(to: std::net::SocketAddr, known_hosts: &std::path::Path) -> (u16, Arc<std::sync::atomic::AtomicUsize>, Sessions) {
         let key = russh::keys::PrivateKey::from(russh::keys::ssh_key::private::Ed25519Keypair::from_seed(&[7; 32]));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -361,8 +379,9 @@ mod tests {
         let (l, s) = (logins.clone(), sessions.clone());
         tokio::spawn(async move {
             while let Ok((tcp, _)) = listener.accept().await {
-                if let Ok(running) = russh::server::run_stream(config.clone(), tcp, Sshd { to, logins: l.clone() }).await {
-                    s.lock().unwrap().push(running.handle());
+                let dead = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                if let Ok(running) = russh::server::run_stream(config.clone(), tcp, Sshd { to, logins: l.clone(), dead: dead.clone() }).await {
+                    s.lock().unwrap().push((running.handle(), dead));
                     tokio::spawn(running);
                 }
             }
@@ -401,7 +420,7 @@ mod tests {
 
         // The session ends (as when keepalive gives up); the accept loop doesn't notice
         let ended: Vec<_> = sessions.lock().unwrap().drain(..).collect();
-        for s in ended {
+        for (s, _) in ended {
             let _ = s.disconnect(russh::Disconnect::ByApplication, String::new(), "en".into()).await;
         }
         let alive = || async { st.tunnels.read().await.get(&id).unwrap().alive() };
@@ -418,6 +437,59 @@ mod tests {
             .expect("another db reopens the tunnel");
         assert!(other.server_version().await.is_ok());
         assert_eq!(logins(), 2);
+        st.disconnect(id).await.unwrap();
+    }
+
+    /// An SSH session that stops forwarding while it stays open (a stalled link, the SSH server lost its way to the database): the
+    /// connect that times out through it opens a new session and the call goes on — with an open pool (the MCP query) and a new
+    /// database. A recovered call takes one timeout plus a new session and a connect. A database that doesn't answer through a new
+    /// session either is reported once, naming the SSH server.
+    /// Run on its own (it sets QURRY_KNOWN_HOSTS): QURRY_TEST_PG=127.0.0.1:55433:postgres:postgres cargo test -p qurry-core dead_ssh_tunnel -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn dead_ssh_tunnel_is_opened_again_once() {
+        use std::sync::atomic::Ordering::SeqCst;
+        use std::time::{Duration, Instant};
+        let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
+        let kh = tempfile::NamedTempFile::new().unwrap();
+        unsafe { std::env::set_var("QURRY_KNOWN_HOSTS", kh.path()) };
+        let (port, logins, sessions) = sshd(format!("{}:{}", pg.host, pg.port).parse().unwrap(), kh.path()).await;
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let source = |port: u16| -> ConnectionConfig {
+            serde_json::from_value(serde_json::json!({ "name": "ssh-dead", "kind": "postgres", "host": "db.internal", "port": 5432, "user": &pg.user, "database": &pg.database,
+                "ssh": { "enabled": true, "host": "127.0.0.1", "port": port, "user": "me", "auth": "password", "keyPath": "" } })).unwrap()
+        };
+        let id = st.save_connection(source(port), None, Some("pw".into())).await.unwrap().id;
+        let stop = || sessions.lock().unwrap().iter().for_each(|(_, dead)| dead.store(true, SeqCst));
+        let recovered = |t: Instant| {
+            let took = t.elapsed();
+            assert!(took >= Duration::from_secs(10) && took < Duration::from_secs(14), "one timeout, a new session and a connect: {took:?}");
+        };
+
+        st.run_read_only(id.clone(), "select 1".into(), 1).await.expect("connects");
+        assert_eq!(logins.load(SeqCst), 1);
+        stop();
+        let t = Instant::now();
+        st.run_read_only(id.clone(), "select 1".into(), 1).await.expect("recovers in the same call");
+        recovered(t);
+        assert_eq!(logins.load(SeqCst), 2);
+
+        stop();
+        let t = Instant::now();
+        let p = crate::app::ensure_pool(&st, &format!("{id}::template1")).await.expect("a new database reconnects");
+        recovered(t);
+        assert!(p.server_version().await.is_ok());
+        assert_eq!(logins.load(SeqCst), 3);
+        st.disconnect(id).await.unwrap();
+
+        // An SSH server that can't reach the database
+        let silent = crate::app::tests::silent_server().await;
+        let (port, logins, _) = sshd(format!("127.0.0.1:{silent}").parse().unwrap(), kh.path()).await;
+        let id = st.save_connection(source(port), None, Some("pw".into())).await.unwrap().id;
+        let e = crate::app::ensure_pool(&st, &id).await.err().expect("times out").to_string();
+        assert!(e.contains(&format!("through the SSH tunnel (127.0.0.1:{port})")) && e.contains("also after Qurry opened the tunnel again") && !e.contains("VPN"), "{e}");
+        assert_eq!(logins.load(SeqCst), 2, "the first session and one new one");
         st.disconnect(id).await.unwrap();
     }
 }

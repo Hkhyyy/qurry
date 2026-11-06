@@ -1,6 +1,6 @@
 //! Backup / restore: runs pg_dump / pg_restore / psql, mysqldump / mysql (found in PATH and common install locations).
 //! Passwords go via environment variables, not the command line (so they don't show in ps). With an SSH tunnel, the tunnel port is used. Progress is bytes written (read)
-use crate::app::{AppState, ensure_pool, split_target};
+use crate::app::{AppState, checked_pool, split_target};
 use crate::error::{AppError, AppResult};
 use crate::store::DbKind;
 use crate::transfer::Job;
@@ -177,7 +177,7 @@ fn pick_mysql(mut found: Vec<(Option<&'static str>, MyBuild, PathBuf)>) -> Optio
 
 /// MySQL / MariaDB server version
 async fn my_server(st: &AppState, id: &str) -> Option<MyBuild> {
-    let r = ensure_pool(st, id).await.ok()?.run_query("SELECT VERSION()", 1).await.ok()?;
+    let r = checked_pool(st, id).await.ok()?.run_query("SELECT VERSION()", 1).await.ok()?;
     Some(MyBuild::of(&crate::db::cell_text(r.rows.first()?.first()?)))
 }
 
@@ -289,7 +289,7 @@ async fn strip_definers(file: &Path, job: &Job) -> AppResult<()> {
 
 /// PG server major version (16, 17 …)
 pub(crate) async fn pg_major(st: &AppState, id: &str) -> Option<u64> {
-    let r = ensure_pool(st, id).await.ok()?.run_query("SHOW server_version_num", 1).await.ok()?;
+    let r = checked_pool(st, id).await.ok()?.run_query("SHOW server_version_num", 1).await.ok()?;
     crate::db::cell_text(r.rows.first()?.first()?).parse::<u64>().ok().map(|n| n / 10000)
 }
 
@@ -553,7 +553,7 @@ async fn endpoint(st: &AppState, id: &str) -> AppResult<(String, u16, String, St
     let cfg = st.source(id)?;
     let db = split_target(id).1.map(String::from).unwrap_or_else(|| crate::sql::default_db(&cfg));
     // With an SSH / AWS SSM tunnel, open the tunnel and use its port
-    ensure_pool(st, id).await?;
+    checked_pool(st, id).await?;
     let local = crate::app::tunnel_port(st, id).await;
     let (host, port) = match local {
         Some(p) => ("127.0.0.1".to_string(), p),

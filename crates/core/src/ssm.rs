@@ -482,87 +482,9 @@ pub(crate) mod tests {
     /// localPortNumber and forwards to host:portNumber; it writes its argv and the pids next to itself, and a line per start to
     /// `starts`. "silent" is "ok" with a plugin that never says it opened the port; "stuck" starts the session but no plugin (the
     /// data channel never opens); "onpath" is "ok" when session-manager-plugin is on its PATH and "plugin" (the real CLI's message)
-    /// when it isn't. `ssm terminate-session` writes its argv as a line of `terminated`, and then hangs if `terminate-hangs` exists
-    const FAKE: &str = r#"#!/usr/bin/env python3
-import json, os, socket, subprocess, sys, threading, time
-MODE = "@MODE@"
-HERE = os.path.dirname(os.path.abspath(__file__))
-def pipe(a, b):
-    try:
-        while True:
-            d = a.recv(65536)
-            if not d:
-                break
-            b.sendall(d)
-    except OSError:
-        pass
-    for s in (a, b):
-        try:
-            s.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
-if sys.argv[1:2] == ["--plugin"]:
-    host, port, local = sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
-    srv = socket.socket()
-    srv.bind(("127.0.0.1", local))
-    srv.listen(16)
-    if MODE != "silent":
-        print(f"Port {local} opened for sessionId qurry-test-0123456789abcdef.", flush=True)
-    print("Waiting for connections...", flush=True)
-    while True:
-        c, _ = srv.accept()
-        print("\nConnection accepted for session [qurry-test-0123456789abcdef]", flush=True)
-        try:
-            u = socket.create_connection((host, port))
-        except OSError:
-            print("Connection to destination port failed, check SSM Agent logs.", flush=True)
-            c.close()
-            continue
-        threading.Thread(target=pipe, args=(c, u), daemon=True).start()
-        threading.Thread(target=pipe, args=(u, c), daemon=True).start()
-args = sys.argv[1:]
-if args[:2] == ["ssm", "terminate-session"]:
-    with open(os.path.join(HERE, "terminated"), "a") as f:
-        f.write(json.dumps(args) + "\n")
-    if os.path.exists(os.path.join(HERE, "terminate-hangs")):
-        with open(os.path.join(HERE, "terminate-pid"), "w") as f:
-            f.write(f"{os.getpid()}")
-        time.sleep(3600)
-    with open(os.path.join(HERE, "terminate-pid"), "w") as f:
-        f.write(f"{os.getpid()}")
-    print(json.dumps({"SessionId": args[3]}))
-    sys.exit(0)
-with open(os.path.join(HERE, "pids"), "w") as f:
-    f.write(f"{os.getpid()}")
-if MODE == "onpath":
-    import shutil
-    if not shutil.which("session-manager-plugin"):
-        MODE = "plugin"
-    else:
-        MODE = "ok"
-with open(os.path.join(HERE, "argv.json"), "w") as f:
-    json.dump(args, f)
-params = dict(kv.split("=", 1) for kv in args[args.index("--parameters") + 1].split(","))
-if MODE in ("ok", "silent"):
-    with open(os.path.join(HERE, "starts"), "a") as f:
-        f.write(f"{os.getpid()}\n")
-    print("\nStarting session with SessionId: qurry-test-0123456789abcdef", flush=True)
-    p = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--plugin", params["host"], params["portNumber"], params["localPortNumber"]])
-    with open(os.path.join(HERE, "pids"), "w") as f:
-        f.write(f"{os.getpid()} {p.pid}")
-    sys.exit(p.wait())
-if MODE == "stuck":
-    print("\nStarting session with SessionId: qurry-test-0123456789abcdef", flush=True)
-if MODE in ("hang", "stuck"):
-    time.sleep(3600)
-if MODE == "plugin":
-    sys.stderr.write("\nSessionManagerPlugin is not found. Please refer to SessionManager Documentation here: http://docs.aws.amazon.com/console/systems-manager/session-manager-plugin-not-found\n")
-elif MODE == "sso":
-    sys.stderr.write("\nError when retrieving token from sso: Token has expired and refresh failed\n")
-elif MODE == "early":
-    sys.stderr.write("\nAn error occurred (TargetNotConnected) when calling the StartSession operation: i-0123456789abcdef0 is not connected.\n")
-sys.exit(255)
-"#;
+    /// when it isn't. `ssm terminate-session` writes its argv as a line of `terminated`, and then hangs if `terminate-hangs` exists.
+    /// A plugin whose `dead-<its pid>` exists stops forwarding but keeps running and accepting (stop_forwarding). The MCP tests use it too
+    const FAKE: &str = include_str!("../tests/fake_aws.py");
 
     pub(crate) fn fake_aws(dir: &Path, mode: &str) -> std::path::PathBuf {
         let p = dir.join("aws");
@@ -605,8 +527,20 @@ sys.exit(255)
 
     /// An open tunnel through the fake aws (to 127.0.0.1:9), for the app tests. Keep the folder until it is gone
     pub(crate) async fn fake_tunnel() -> (tempfile::TempDir, Tunnel) {
-        let (dir, t) = open_fake("ok", "127.0.0.1", 9, Duration::from_secs(10)).await;
+        fake_tunnel_to(9).await
+    }
+
+    /// An open tunnel through the fake aws to 127.0.0.1:`port`
+    pub(crate) async fn fake_tunnel_to(port: u16) -> (tempfile::TempDir, Tunnel) {
+        let (dir, t) = open_fake("ok", "127.0.0.1", port, Duration::from_secs(10)).await;
         (dir, t.expect("fake tunnel"))
+    }
+
+    /// The fake's session stops forwarding while its CLI and plugin run on and accept connections (FAKE: dead-<plugin pid>)
+    pub(crate) fn stop_forwarding(dir: &Path) {
+        let pids = std::fs::read_to_string(dir.join("pids")).unwrap();
+        let plugin = pids.split_whitespace().nth(1).expect("a running plugin");
+        std::fs::write(dir.join(format!("dead-{plugin}")), "").unwrap();
     }
 
     #[tokio::test]
@@ -1062,6 +996,89 @@ sys.exit(255)
             let _ = st.run_query(saved.id.clone(), format!("drop database if exists {db} with (force)"), None, None).await;
         }
         st.disconnect(saved.id).await.unwrap();
+        gone(fake.path()).await;
+    }
+
+    /// A session that stops forwarding while the CLI runs on (sleep, a network change, the session ended on the AWS side): the
+    /// connect that times out through it opens the tunnel again and the call goes on — with an open pool (the MCP query), a new
+    /// database (callers together open one new session) and a new console. A recovered call takes one timeout plus a new session
+    /// and a connect. A database that doesn't answer through the new tunnel either is reported once, naming the instance.
+    /// Run on its own (it changes PATH): QURRY_TEST_PG=127.0.0.1:55433:postgres:postgres cargo test -p qurry-core dead_ssm_tunnel -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn dead_ssm_tunnel_is_opened_again_once() {
+        let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
+        let fake = tempfile::tempdir().unwrap();
+        fake_aws(fake.path(), "ok");
+        let path = std::env::join_paths(std::iter::once(fake.path().to_path_buf()).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()))).unwrap();
+        unsafe { std::env::set_var("PATH", path) };
+        let dir = tempfile::tempdir().unwrap();
+        let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
+        let source = |host: &str, port: u16| {
+            let mut c: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "ssm-dead", "kind": "postgres", "host": host, "port": port, "user": &pg.user, "database": &pg.database })).unwrap();
+            c.ssm = Some(cfg());
+            c
+        };
+        let id = st.save_connection(source(&pg.host, pg.port), None, None).await.unwrap().id;
+        let starts = || std::fs::read_to_string(fake.path().join("starts")).unwrap().lines().count();
+        let one = |id: String| st.run_read_only(id, "select 1".into(), 1);
+        let recovered = |t: Instant| {
+            let took = t.elapsed();
+            assert!(took >= Duration::from_secs(10) && took < Duration::from_secs(14), "one timeout, a new session and a connect: {took:?}");
+        };
+
+        // An open pool: the MCP query goes on through a new session, and the old CLI is stopped
+        one(id.clone()).await.expect("connects");
+        assert_eq!(starts(), 1);
+        let old = std::fs::read_to_string(fake.path().join("pids")).unwrap();
+        stop_forwarding(fake.path());
+        let t = Instant::now();
+        one(id.clone()).await.expect("recovers in the same call");
+        recovered(t);
+        assert_eq!(starts(), 2);
+        assert!(!old.split_whitespace().any(alive), "the old session's CLI and plugin are stopped: {old}");
+        assert_eq!(st.tunnels.read().await.len(), 1);
+
+        // New connects (databases not open yet) that time out together: one new session, all of them connect
+        stop_forwarding(fake.path());
+        let targets = [format!("{id}::template1"), format!("{id}::{}", pg.database), format!("{id}::template1")];
+        let t = Instant::now();
+        for p in futures::future::join_all(targets.iter().map(|t| crate::app::ensure_pool(&st, t))).await {
+            assert!(p.expect("reconnects").server_version().await.is_ok());
+        }
+        recovered(t);
+        assert_eq!(starts(), 3, "one new session for the callers together");
+
+        // A new console after the session died
+        stop_forwarding(fake.path());
+        let t = Instant::now();
+        st.run_query(id.clone(), "select 1".into(), None, Some("dead-ssm-tab".into())).await.expect("a new console reconnects");
+        recovered(t);
+        assert_eq!(starts(), 4);
+
+        // A console with a transaction open keeps the tunnel (the database may only be slow): the error says what to do
+        st.run_query(id.clone(), "begin".into(), None, Some("dead-ssm-tab".into())).await.expect("begin");
+        stop_forwarding(fake.path());
+        let e = one(id.clone()).await.err().expect("the tunnel is kept").to_string();
+        assert!(e.contains("through the AWS SSM tunnel (instance i-0123456789abcdef0)") && e.contains("didn't open the tunnel again") && e.contains("disconnect the data source"), "{e}");
+        assert_eq!(starts(), 4, "no new session");
+        st.disconnect(id).await.unwrap();
+        gone(fake.path()).await;
+
+        // A database that doesn't answer through a new session either: one retry, one error for the callers together
+        let silent = crate::app::tests::silent_server().await;
+        let id = st.save_connection(source("127.0.0.1", silent), None, None).await.unwrap().id;
+        let before = starts();
+        let t = Instant::now();
+        let st = &st;
+        let r = futures::future::join_all([id.clone(), format!("{id}::db1"), id.clone()].map(|t| async move { crate::app::ensure_pool(st, &t).await.err().map(|e| e.to_string()) })).await;
+        for e in r {
+            let e = e.expect("times out");
+            assert!(e.contains("through the AWS SSM tunnel (instance i-0123456789abcdef0)") && e.contains("also after Qurry opened the tunnel again") && !e.contains("VPN"), "{e}");
+        }
+        assert_eq!(starts(), before + 2, "the first session and one new one");
+        assert!(t.elapsed() < Duration::from_secs(25), "two timeouts, not one per caller: {:?}", t.elapsed());
+        st.disconnect(id).await.unwrap();
         gone(fake.path()).await;
     }
 }

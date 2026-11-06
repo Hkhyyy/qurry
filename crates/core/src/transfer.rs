@@ -1,6 +1,6 @@
 //! Data export (CSV · TSV · JSON · SQL INSERT · Markdown, file/clipboard) and import (CSV · TSV · JSON · Excel → table).
 //! Long-running work reports progress through a Job and can be cancelled
-use crate::app::{AppState, ensure_pool};
+use crate::app::{AppState, checked_pool};
 use crate::backend::{Backend, dispatch};
 use crate::db::Pool;
 use crate::error::{AppError, AppResult};
@@ -494,7 +494,7 @@ impl AppState {
             }
             self.check_read_only(&id, &sql)?;
             let kind = self.kind_of(&id)?;
-            let pool = ensure_pool(self, &id).await?;
+            let pool = checked_pool(self, &id).await?;
             let q = |s: &str| crate::sql::quote_ident(kind, s);
             let table = match table {
                 Some((s, t)) if !s.is_empty() => format!("{}.{}", q(&s), q(&t)),
@@ -527,7 +527,7 @@ impl AppState {
             if spec.columns.is_empty() {
                 return Err(AppError::Msg("Pick at least one column to import".into()));
             }
-            self.import_with(&ensure_pool(self, &id).await?, cfg.kind, &id, &spec, &job).await
+            self.import_with(&checked_pool(self, &id).await?, cfg.kind, &id, &spec, &job).await
         }
         .await;
         self.end_job(&job_id);

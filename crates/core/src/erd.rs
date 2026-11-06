@@ -1,5 +1,5 @@
 //! ERD: a schema's tables and columns (with PK and FK marks) and foreign key relationships. The GUI draws a diagram, the TUI a relationship list, and both can copy as Mermaid
-use crate::app::{AppState, ensure_pool};
+use crate::app::{AppState, checked_pool};
 use crate::backend::{Backend, dispatch};
 use crate::error::AppResult;
 
@@ -106,7 +106,7 @@ pub(crate) type Columns = std::collections::HashMap<(String, String), Vec<ErdCol
 impl AppState {
     /// Tables and relationships of schemas. If a relationship points to another schema, that table is included too
     pub async fn erd(&self, id: String, schemas: Vec<String>) -> AppResult<Erd> {
-        let mut e = dispatch!(ensure_pool(self, &id).await?, b => b.erd(&schemas).await)?;
+        let mut e = dispatch!(checked_pool(self, &id).await?, b => b.erd(&schemas).await)?;
         // In the order of the chosen schemas
         e.tables.sort_by_key(|t| (schemas.iter().position(|s| *s == t.schema).unwrap_or(usize::MAX), t.schema.clone(), t.name.clone()));
         Ok(e)

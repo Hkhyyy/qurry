@@ -1,6 +1,6 @@
 //! Value suggestions for console autocomplete: `where status = '` → values actually in that column, `data->>'` → keys inside the jsonb
 //! Reads only the first rows of the table (SAMPLE), most frequent first. READ ONLY transaction + short time limit; results are cached briefly
-use crate::app::{AppState, ensure_pool};
+use crate::app::{AppState, checked_pool};
 use crate::backend::{Backend, dispatch};
 use crate::error::AppResult;
 use crate::sql::quote_ident;
@@ -158,7 +158,7 @@ impl AppState {
         {
             return Ok(v.clone());
         }
-        let hints = dispatch!(ensure_pool(self, &id).await?, b => b.column_hints(&req).await)?;
+        let hints = dispatch!(checked_pool(self, &id).await?, b => b.column_hints(&req).await)?;
         let mut c = CACHE.lock().unwrap();
         c.retain(|_, (at, _)| at.elapsed() < CACHE_FOR);
         c.insert(key, (Instant::now(), hints.clone()));

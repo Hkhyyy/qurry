@@ -292,8 +292,11 @@ pub async fn drop_pool(state: &AppState, id: &str) -> Vec<(String, String)> {
         let keys: Vec<String> = pools.keys().filter(|k| belongs(k, id)).cloned().collect();
         keys.into_iter().filter_map(|k| pools.remove(&k)).collect()
     };
+    // Closing waits for the connections in use: one whose statement hangs on a tunnel that stopped forwarding would hold up the
+    // disconnect, and the connect lock while a tunnel that timed out is opened again (shared_tunnel). The pool is closed to new uses
+    // right away, and that connection is closed when it comes back
     for p in removed {
-        p.close().await;
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(3), p.close()).await;
     }
     state.last_ping.lock().unwrap().retain(|k, _| !belongs(k, id));
     tabs
@@ -309,7 +312,7 @@ pub async fn connect_config(
     let mark = tunnel.as_ref().and_then(|t| t.ssm_mark());
     match db::connect_via(cfg, password, tunnel.as_ref().map(|t| t.local_port)).await {
         Ok(pool) => Ok((pool, tunnel)),
-        Err(e) => Err(crate::ssm::connect_error(mark, &cfg.host, cfg.port, e).await),
+        Err(e) => Err(crate::ssm::connect_error(mark, &cfg.host, cfg.port, timeout_error(cfg, e, false)).await),
     }
 }
 
@@ -325,6 +328,12 @@ async fn open_tunnel(cfg: &ConnectionConfig, ssh_secret: Option<&str>) -> AppRes
 /// The data source's tunnel: None without one, Some(false) once it has stopped (the aws CLI exited: idle timeout, network, session ended)
 async fn tunnel_alive(state: &AppState, base: &str) -> Option<bool> {
     state.tunnels.read().await.get(base).map(|t| t.alive())
+}
+
+/// A console of the data source is running a statement (its session is locked) or has a transaction open: closing its
+/// connection would lose that
+async fn console_busy(state: &AppState, base: &str) -> bool {
+    state.sessions.read().await.values().any(|e| belongs(&e.conn_id, base) && e.session.try_lock().map(|g| g.in_tx()).unwrap_or(true))
 }
 
 /// The local port of the data source's open tunnel
@@ -366,10 +375,8 @@ pub async fn housekeeping(state: &AppState) -> Vec<String> {
         let now = Instant::now();
         if let Some(secs) = cfg.options.auto_disconnect_secs.filter(|s| *s > 0) {
             let last = *state.last_used.lock().unwrap().entry(base.clone()).or_insert(now);
-            // Do not disconnect while a query is running (session locked)
             // Do not disconnect if any session has a running query or uncommitted changes (disconnecting would lose the changes)
-            let busy = state.sessions.read().await.values().any(|e| belongs(&e.conn_id, &base) && e.session.try_lock().map(|g| g.in_tx()).unwrap_or(true));
-            if !busy && now.duration_since(last) >= Duration::from_secs(secs as u64) {
+            if !console_busy(state, &base).await && now.duration_since(last) >= Duration::from_secs(secs as u64) {
                 drop_pool_logged(state, &base, crate::audit::DISCONNECTED).await;
                 state.last_used.lock().unwrap().remove(&base);
                 dropped.push(base);
@@ -404,8 +411,17 @@ pub async fn housekeeping(state: &AppState) -> Vec<String> {
     dropped
 }
 
-/// Export from a driver pool (fetch the whole result at once, then write)
+/// The pool of a data source's database: the open one, or a new connect (through the source's tunnel when it has one). A connect
+/// through the tunnel that gets no answer opens the tunnel again and tries once more (open_pool)
 pub async fn ensure_pool(state: &AppState, id: &str) -> AppResult<Pool> {
+    open_pool(state, id, None).await
+}
+
+/// ensure_pool. A connect through the tunnel that times out may have gone through a session that stopped forwarding while the
+/// tunnel's process runs on (sleep, a network change, the session ended on the AWS side or by the SSH server): the tunnel is
+/// opened again (shared_tunnel) for one more try, whose timeout is the error. stale = the generation whose tunnel timed out
+/// already (with_pool): no more tries then
+async fn open_pool(state: &AppState, id: &str, mut stale: Option<u64>) -> AppResult<Pool> {
     // MCP server: never connect to hidden Data Sources (sources without a password · pools already open too)
     if state.mcp
         && let Some(c) = state.store.get(split_target(id).0)?.filter(|c| c.mcp_access(false) == store::McpAccess::Off)
@@ -415,7 +431,10 @@ pub async fn ensure_pool(state: &AppState, id: &str) -> AppResult<Pool> {
     touch(state, id);
     let (base, db) = split_target(id);
     let pool = state.pools.read().await.get(id).cloned();
+    // Not the pool that just timed out (it is closed when its tunnel is opened again)
+    let timed_out_here = stale.is_some() && state.connecting.lock().unwrap().get(base).map(|c| c.generation.load(SeqCst)) == stale;
     if let Some(p) = pool
+        && !timed_out_here
         && tunnel_alive(state, base).await != Some(false)
     {
         return Ok(p);
@@ -431,31 +450,103 @@ pub async fn ensure_pool(state: &AppState, id: &str) -> AppResult<Pool> {
     let password = state.saved_secret(&cfg.password_key(), cfg.password_saved)?;
     let ssh_secret = if cfg.active_ssh().is_some() { state.saved_secret(&store::ssh_secret_key(base), cfg.ssh_secret_saved)? } else { None };
     let c = state.connecting(base);
-    let (port, g) = if cfg.tunneled() {
-        let (port, g) = shared_tunnel(state, &c, base, &cfg, ssh_secret.as_deref()).await?;
-        // Another caller for the same database may have connected while this one waited for the tunnel
-        if let Some(p) = state.pools.read().await.get(id) {
-            return Ok(p.clone());
+    loop {
+        let (port, g) = if cfg.tunneled() {
+            let (port, g) = shared_tunnel(state, &c, base, &cfg, ssh_secret.as_deref(), stale).await?;
+            // Another caller for the same database may have connected while this one waited for the tunnel
+            if let Some(p) = state.pools.read().await.get(id) {
+                return Ok(p.clone());
+            }
+            (Some(port), g)
+        } else {
+            (None, c.generation.load(SeqCst))
+        };
+        let mark = state.tunnels.read().await.get(base).and_then(|t| t.ssm_mark());
+        // Each database connects on its own: one that is missing or refused fails only for its caller, not for the whole source
+        match db::connect_via(&cfg, password.as_deref(), port).await {
+            Ok(pool) => return keep_pool(state, &c, g, id, port, pool).await,
+            Err(e) if port.is_some() && stale.is_none() && timed_out(&e) => stale = Some(g),
+            Err(e) => return Err(crate::ssm::connect_error(mark, &cfg.host, cfg.port, timeout_error(&cfg, e, stale.is_some())).await),
         }
-        (Some(port), g)
-    } else {
-        (None, c.generation.load(SeqCst))
+    }
+}
+
+/// Runs `f` on the pool of `id` (ensure_pool). When a pool that was already open times out getting a connection through the
+/// source's tunnel (nothing reached the server), the tunnel may have stopped forwarding while its process runs on: it is opened
+/// again and `f` runs once more on a new connect. Only for an `f` that may run again: a read, or opening a connection
+pub(crate) async fn with_pool<T, Fut: std::future::Future<Output = AppResult<T>>>(state: &AppState, id: &str, f: impl Fn(Pool) -> Fut) -> AppResult<T> {
+    let base = split_target(id).0;
+    // The generation the open pool belongs to (drop_pool closes the pools when it counts up)
+    let open = state.pools.read().await.contains_key(id);
+    let open = open.then(|| state.connecting.lock().unwrap().get(base).map(|c| c.generation.load(SeqCst))).flatten();
+    let e = match f(ensure_pool(state, id).await?).await {
+        Err(e) if timed_out(&e) => e,
+        r => return r,
     };
-    let mark = state.tunnels.read().await.get(base).and_then(|t| t.ssm_mark());
-    // Each database connects on its own: one that is missing or refused fails only for its caller, not for the whole source
-    let pool = match connect_pool(&cfg, password.as_deref(), port).await {
-        Ok(p) => p,
-        Err(e) => return Err(crate::ssm::connect_error(mark, &cfg.host, cfg.port, e).await),
-    };
-    keep_pool(state, &c, g, id, port, pool).await
+    let cfg = state.source(id)?;
+    match open.filter(|_| cfg.tunneled()) {
+        Some(g) => f(open_pool(state, id, Some(g)).await?).await.map_err(|e| timeout_error(&cfg, e, true)),
+        None => Err(timeout_error(&cfg, e, false)),
+    }
+}
+
+/// ensure_pool, for work that changes data or runs long: through a tunnel, the pool answers a round trip first (with_pool), so a
+/// tunnel that stopped forwarding is replaced before anything runs. Other errors of that round trip are left to the work itself
+pub async fn checked_pool(state: &AppState, id: &str) -> AppResult<Pool> {
+    if !state.source(id)?.tunneled() {
+        return ensure_pool(state, id).await;
+    }
+    with_pool(state, id, |p| async move {
+        match p.server_version().await {
+            Err(e) if timed_out(&e) => Err(e),
+            _ => Ok(p),
+        }
+    })
+    .await
+}
+
+/// A connect that got no answer within the pools' 10s (acquire_timeout): it didn't get as far as a statement
+fn timed_out(e: &AppError) -> bool {
+    matches!(e, AppError::Db(sqlx::Error::PoolTimedOut))
+}
+
+/// A connect's timeout, saying which way it went: through the AWS SSM tunnel (its instance), the SSH tunnel (its server) or
+/// straight to the server (sqlx only says "pool timed out while waiting for an open connection"). reopened = through a new tunnel too
+fn timeout_error(cfg: &ConnectionConfig, e: AppError, reopened: bool) -> AppError {
+    if !timed_out(&e) {
+        return e;
+    }
+    let (host, port) = (&cfg.host, cfg.port);
+    let again = if reopened { ", also after Qurry opened the tunnel again" } else { "" };
+    AppError::Msg(match (cfg.active_ssm(), cfg.active_ssh()) {
+        (Some(s), _) => format!(
+            "Can't connect to {host}:{port} through the AWS SSM tunnel (instance {}) — the database didn't answer within 10s{again}. Check that it's up and that the instance can reach it (its security group; Host as seen from the instance), then run it again.",
+            s.target.trim()
+        ),
+        (None, Some(s)) => format!(
+            "Can't connect to {host}:{port} through the SSH tunnel ({}:{}) — the database didn't answer within 10s{again}. Check that it's up and that the SSH server can reach it, then run it again.",
+            s.host, s.port
+        ),
+        (None, None) => format!("Can't connect to {host}:{port} — the server didn't answer within 10s. Check that it's up and that this machine can reach it (VPN, firewall), then run it again."),
+    })
 }
 
 /// The local port of the source's tunnel, and the generation it belongs to. The first caller opens it: one SSH / SSM session
 /// per source, not per database. Callers that waited while it failed get its error instead of trying again one after
-/// another (each try can take the whole timeout)
-async fn shared_tunnel(state: &AppState, c: &Connecting, base: &str, cfg: &ConnectionConfig, ssh_secret: Option<&str>) -> AppResult<(u16, u64)> {
+/// another (each try can take the whole timeout). stale = a connect through the tunnel of that generation timed out (open_pool):
+/// that tunnel and the pools through it are closed and a new one opened, unless another caller that timed out did so already
+async fn shared_tunnel(state: &AppState, c: &Connecting, base: &str, cfg: &ConnectionConfig, ssh_secret: Option<&str>, stale: Option<u64>) -> AppResult<(u16, u64)> {
     let asked = std::time::Instant::now();
     let mut failed = c.failed.lock().await;
+    if stale.is_some_and(|g| g == c.generation.load(SeqCst)) {
+        // The database may only be slow: a console's statement or transaction through the tunnel isn't ended for a new one
+        if console_busy(state, base).await {
+            let e = timeout_error(cfg, AppError::Db(sqlx::Error::PoolTimedOut), false);
+            return Err(AppError::Msg(format!("{e} {TUNNEL_KEPT}")));
+        }
+        crate::log!("[qurry] a connect through the tunnel of {base} got no answer; opening the tunnel again");
+        drop_pool_logged(state, base, crate::audit::BY_SERVER).await;
+    }
     // Read before the tunnel: a disconnect after this also drops the pool that connects through it
     let g = c.generation.load(SeqCst);
     // Its own statement: the read lock must be released before drop_pool takes the write lock
@@ -492,18 +583,8 @@ async fn shared_tunnel(state: &AppState, c: &Connecting, base: &str, cfg: &Conne
     Ok((port, g))
 }
 
+const TUNNEL_KEPT: &str = "Qurry didn't open the tunnel again because a console of this data source is running a statement or has a transaction open: finish it there (Commit / Rollback, or Cancel), or disconnect the data source, then run it again.";
 const DISCONNECTED_WHILE_CONNECTING: &str = "The data source was disconnected while connecting. Run it again.";
-
-async fn connect_pool(cfg: &ConnectionConfig, password: Option<&str>, port: Option<u16>) -> AppResult<Pool> {
-    db::connect_via(cfg, password, port).await.map_err(|e| match e {
-        // sqlx only says "pool timed out while waiting for an open connection"
-        AppError::Db(sqlx::Error::PoolTimedOut) => AppError::Msg(format!(
-            "Can't connect to {}:{} — the server didn't answer within 10s. Check that it's up (VPN / SSH tunnel), then run it again.",
-            cfg.host, cfg.port
-        )),
-        e => e,
-    })
-}
 
 /// Keeps the new pool unless the source was disconnected meanwhile (drop_pool): then the pool may point at a closed tunnel's
 /// port, which any program on this machine could take. `port` = the tunnel port it connected through: that tunnel must still be
@@ -535,8 +616,8 @@ pub async fn ensure_session(state: &AppState, id: &str, tab_id: &str) -> AppResu
     if let Some(e) = old {
         e.session.lock().await.discard().await;
     }
-    let pool = ensure_pool(state, id).await?;
-    let mut s = Session::open(&pool).await?;
+    // Opening one runs nothing of the user's: through a tunnel that stopped forwarding, it opens again on a new one
+    let mut s = with_pool(state, id, |p| async move { Session::open(&p).await }).await?;
     // If the tab is Manual, the new session is Manual too (silently becoming Auto after a reconnect would commit the next change right away)
     if state.tab_manual.lock().unwrap().get(tab_id).copied().unwrap_or(false) {
         s.set_manual(true).await?;
@@ -602,7 +683,8 @@ impl AppState {
                 return Err(AppError::Msg(format!("{cmd} is not a read-only command")));
             }
         }
-        dispatch!(ensure_pool(self, &id).await?, b => b.run_read_only(&sql, limit).await)
+        let sql = &sql;
+        with_pool(self, &id, |p| async move { dispatch!(p, b => b.run_read_only(sql, limit).await) }).await
     }
 
     /// Read-only query result to CSV (MCP). Same rules as run_read_only for checking and running (the full result also runs in a READ ONLY transaction)
@@ -611,7 +693,7 @@ impl AppState {
         if let Some(why) = crate::guard::read_only_violation(&sql, kind, true) {
             return Err(AppError::Msg(why));
         }
-        let pool = ensure_pool(self, &id).await?;
+        let pool = checked_pool(self, &id).await?;
         // Same time limit as run_read_only, plus a file size limit (so it does not fill the disk). On failure, delete the partial file
         let mut out = crate::transfer::Exporter::csv_file(&path).await?.max_bytes(EXPORT_MAX_BYTES);
         let r = match dispatch!(pool, b => b.export_read_only(&sql, &mut out).await) {
@@ -828,8 +910,7 @@ impl AppState {
 
     pub async fn connect(&self, id: String) -> AppResult<String> {
         crate::log!("[qurry] connect {id}");
-        let pool = ensure_pool(self, &id).await?;
-        let v = pool.server_version().await?;
+        let (pool, v) = with_pool(self, &id, |p| async move { p.server_version().await.map(|v| (p, v)) }).await?;
         // If connected in plain text, say so next to the version (status bar · TUI status)
         let cfg = self.source(&id)?;
         let note = dispatch!(pool, b => b.plaintext_note(&cfg).await);
@@ -898,6 +979,14 @@ impl AppState {
     /// Run in the console's session (or on the pool). undo = also keep undo SQL: the snapshot runs in the change's transaction (Session::run_with_snapshot).
     /// → (result, undo SQL or why there is none, what happened to the console's transaction)
     async fn run_with_undo(&self, id: &str, cfg: &ConnectionConfig, sql: &str, limit: usize, tab: Option<&str>, undo: bool) -> (AppResult<QueryResult>, Option<Result<String, String>>, TxSeen) {
+        // The session first: opening it replaces a tunnel that stopped forwarding (with_pool), and the pool is then the new one
+        let sess = match tab {
+            Some(t) => match ensure_session(self, id, t).await {
+                Ok(s) => Some(s),
+                Err(e) => return (Err(e), None, TxSeen::default()),
+            },
+            None => None,
+        };
         let pool = match ensure_pool(self, id).await {
             Ok(p) => p,
             Err(e) => return (Err(e), None, TxSeen::default()),
@@ -905,13 +994,6 @@ impl AppState {
         let plan = match undo {
             true => Some(crate::audit::plan(&pool, sql, cfg.kind).await),
             false => None,
-        };
-        let sess = match tab {
-            Some(t) => match ensure_session(self, id, t).await {
-                Ok(s) => Some(s),
-                Err(e) => return (Err(e), None, TxSeen::default()),
-            },
-            None => None,
         };
         let (mut guard, mut temp);
         let s: &mut Session = match &sess {
@@ -1239,7 +1321,7 @@ impl AppState {
     /// undo = also keep undo SQL for each statement (into `undos`): the snapshots run in the batch's transaction, right before their statements
     #[allow(clippy::too_many_arguments)]
     async fn run_batch(&self, id: &str, kind: store::DbKind, statements: &[String], exact_one: bool, prepared: bool, undo: bool, undos: &mut Vec<Option<Result<String, String>>>) -> AppResult<u64> {
-        let pool = ensure_pool(self, id).await?;
+        let pool = checked_pool(self, id).await?;
         let mut plans = Vec::new();
         for st in statements {
             plans.push(match undo && crate::audit::is_change(st, kind) {
@@ -1263,8 +1345,7 @@ impl AppState {
 
     /// Save to the search cache on every read (Redis keys are not saved)
     pub async fn object_index(&self, id: String) -> AppResult<Vec<crate::meta::IndexEntry>> {
-        let pool = ensure_pool(self, &id).await?;
-        let r = crate::meta::object_index(&pool).await?;
+        let (pool, r) = with_pool(self, &id, |p| async move { crate::meta::object_index(&p).await.map(|r| (p, r)) }).await?;
         if !matches!(pool, Pool::Redis(..)) {
             crate::search_cache::save_objects(&self.store.dir(), &id, &r);
         }
@@ -1303,7 +1384,8 @@ impl AppState {
     }
 
     pub async fn full_text_search(&self, id: String, req: crate::meta::FtsRequest) -> AppResult<Vec<crate::meta::FtsHit>> {
-        crate::meta::full_text_search(&ensure_pool(self, &id).await?, &req).await
+        let req = &req;
+        with_pool(self, &id, |p| async move { crate::meta::full_text_search(&p, req).await }).await
     }
 
     pub async fn redis_scan(&self, id: String, cursor: String, pattern: String, count: usize, type_filter: Option<String>) -> AppResult<crate::redisdb::ScanPage> {
@@ -1364,13 +1446,13 @@ impl AppState {
 
     pub async fn export_csv(&self, id: String, sql: String, path: String) -> AppResult<u64> {
         self.check_read_only(&id, &sql)?;
-        let pool = ensure_pool(self, &id).await?;
+        let pool = checked_pool(self, &id).await?;
         pool.export_csv(&sql, std::path::Path::new(&path)).await
     }
 
     pub async fn list_databases(&self, id: String) -> AppResult<Vec<String>> {
         crate::log!("[qurry] list_databases {id}");
-        let r = async { crate::meta::list_databases(&ensure_pool(self, &id).await?).await }.await;
+        let r = with_pool(self, &id, |p| async move { crate::meta::list_databases(&p).await }).await;
         if let Err(e) = &r {
             crate::log!("[qurry] list_databases error: {e}");
         }
@@ -1379,7 +1461,7 @@ impl AppState {
 
     pub async fn list_schemas(&self, id: String) -> AppResult<Vec<crate::meta::SchemaInfo>> {
         crate::log!("[qurry] list_schemas {id}");
-        let r = async { crate::meta::list_schemas(&ensure_pool(self, &id).await?).await }.await;
+        let r = with_pool(self, &id, |p| async move { crate::meta::list_schemas(&p).await }).await;
         match &r {
             Ok(v) => crate::log!("[qurry] list_schemas → {} schemas", v.len()),
             Err(e) => crate::log!("[qurry] list_schemas error: {e}"),
@@ -1388,15 +1470,18 @@ impl AppState {
     }
 
     pub async fn list_objects(&self, id: String, schema: String) -> AppResult<crate::meta::SchemaObjects> {
-        crate::meta::list_objects(&ensure_pool(self, &id).await?, &schema).await
+        let schema = &schema;
+        with_pool(self, &id, |p| async move { crate::meta::list_objects(&p, schema).await }).await
     }
 
     pub async fn table_detail(&self, id: String, schema: String, table: String) -> AppResult<crate::meta::TableDetail> {
-        crate::meta::table_detail(&ensure_pool(self, &id).await?, &schema, &table).await
+        let (schema, table) = (&schema, &table);
+        with_pool(self, &id, |p| async move { crate::meta::table_detail(&p, schema, table).await }).await
     }
 
     pub async fn table_structure(&self, id: String, schema: String, table: String) -> AppResult<crate::meta::TableStructure> {
-        crate::meta::table_structure(&ensure_pool(self, &id).await?, &schema, &table).await
+        let (schema, table) = (&schema, &table);
+        with_pool(self, &id, |p| async move { crate::meta::table_structure(&p, schema, table).await }).await
     }
 
     /// pgvector: SQL that finds rows close to this row (using the vector index's distance operator). pk = (column, value)
@@ -1410,12 +1495,12 @@ impl AppState {
     }
 
     pub async fn object_ddl(&self, id: String, schema: String, name: String, kind: String) -> AppResult<String> {
-        crate::meta::object_ddl(&ensure_pool(self, &id).await?, &schema, &name, &kind).await
+        let (schema, name, kind) = (&schema, &name, &kind);
+        with_pool(self, &id, |p| async move { crate::meta::object_ddl(&p, schema, name, kind).await }).await
     }
 
     pub async fn completion_meta(&self, id: String) -> AppResult<Vec<crate::meta::CompletionTable>> {
-        let pool = ensure_pool(self, &id).await?;
-        let r = crate::meta::completion_meta(&pool).await?;
+        let (pool, r) = with_pool(self, &id, |p| async move { crate::meta::completion_meta(&p).await.map(|r| (p, r)) }).await?;
         if !matches!(pool, Pool::Redis(..)) {
             crate::search_cache::save_columns(&self.store.dir(), &id, &r);
         }
@@ -1424,11 +1509,11 @@ impl AppState {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// A server that accepts and never answers (a DB or SSH host behind a firewall that drops packets)
-    async fn silent_server() -> u16 {
+    pub(crate) async fn silent_server() -> u16 {
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = l.local_addr().unwrap().port();
         tokio::spawn(async move {
@@ -1457,8 +1542,52 @@ mod tests {
         st.store.save(&silent_source("x", silent_server().await, None)).unwrap();
         let start = std::time::Instant::now();
         let r = futures::future::join_all(["x", "x::db1", "x", "x::db3"].map(|id| ensure_pool(&st, id))).await;
-        assert!(r.iter().all(|r| r.as_ref().err().is_some_and(|e| e.to_string().contains("didn't answer within 10s"))));
+        let direct = |e: &str| e.contains("Can't connect to 127.0.0.1:") && e.contains("the server didn't answer within 10s") && e.contains("this machine can reach it") && !e.contains("tunnel");
+        assert!(r.iter().all(|r| r.as_ref().err().is_some_and(|e| direct(&e.to_string()))), "{:?}", r.iter().map(|r| r.as_ref().err().map(|e| e.to_string())).collect::<Vec<_>>());
         assert!(start.elapsed() < std::time::Duration::from_secs(15), "{:?}", start.elapsed());
+    }
+
+    /// A connect's timeout says which way it went: through the AWS SSM tunnel (instance), the SSH tunnel (server) or direct
+    #[test]
+    fn a_timeout_says_which_way_it_went() {
+        let timeout = || AppError::Db(sqlx::Error::PoolTimedOut);
+        let e = timeout_error(&silent_source("d", 5432, None), timeout(), false).to_string();
+        assert!(e.starts_with("Can't connect to 127.0.0.1:5432 — the server didn't answer within 10s") && e.contains("(VPN, firewall)") && !e.contains("tunnel"), "{e}");
+        let ssh = silent_source("s", 5432, Some(serde_json::json!({ "enabled": true, "host": "bastion.example.com", "port": 2222, "user": "me" })));
+        let e = timeout_error(&ssh, timeout(), true).to_string();
+        assert!(e.contains("through the SSH tunnel (bastion.example.com:2222)") && e.contains("also after Qurry opened the tunnel again") && e.contains("the SSH server can reach it") && !e.contains("VPN"), "{e}");
+        let mut ssm = silent_source("m", 5432, None);
+        ssm.ssm = Some(store::SsmConfig { enabled: true, profile: String::new(), region: String::new(), target: " i-0123456789abcdef0 ".into() });
+        let e = timeout_error(&ssm, timeout(), false).to_string();
+        assert!(e.contains("through the AWS SSM tunnel (instance i-0123456789abcdef0)") && e.contains("the instance can reach it") && !e.contains("also after") && !e.contains("VPN"), "{e}");
+        // Any other error stays as it is
+        assert_eq!(timeout_error(&ssm, AppError::Msg("password authentication failed".into()), true).to_string(), "password authentication failed");
+    }
+
+    /// A tunnel whose CLI runs on while its port doesn't answer (the session died: sleep, a network change, the AWS side): the
+    /// connects that time out through it close it and open a new one, once for the callers together, and they all get what that
+    /// one did (here: the instance id is missing, so nothing is started). With a working new tunnel: cargo test -p qurry-core dead_ssm_tunnel -- --ignored
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_tunnel_that_stops_answering_is_opened_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = AppState::new(Store::new(dir.path().to_path_buf()), crate::secrets::SecretFile::open(dir.path()).unwrap());
+        let mut c = silent_source("t", 5432, None);
+        c.ssm = Some(store::SsmConfig { enabled: true, profile: String::new(), region: String::new(), target: String::new() });
+        st.store.save(&c).unwrap();
+        // The open tunnel: its CLI and plugin run, its port accepts, nothing answers
+        let (fake, t) = crate::ssm::tests::fake_tunnel_to(silent_server().await).await;
+        st.connecting("t");
+        st.tunnels.write().await.insert("t".into(), t);
+        let start = std::time::Instant::now();
+        let r = futures::future::join_all(["t", "t::db1", "t"].map(|id| ensure_pool(&st, id))).await;
+        let took = start.elapsed();
+        // The instance id is checked before the CLI runs (where there is one)
+        let errors: Vec<String> = r.iter().map(|r| r.as_ref().err().map(|e| e.to_string()).unwrap_or_default()).collect();
+        assert!(errors.iter().all(|e| *e == errors[0]) && (errors[0].contains("Enter the instance id") || errors[0].contains("AWS CLI not found")), "{errors:?}");
+        assert!(took >= std::time::Duration::from_secs(10) && took < std::time::Duration::from_secs(15), "one timeout, then one try to open it: {took:?}");
+        assert!(st.tunnels.read().await.is_empty());
+        crate::ssm::tests::gone(fake.path()).await;
     }
 
     /// Callers that waited for a tunnel that couldn't be opened get its error instead of opening another one in turn
