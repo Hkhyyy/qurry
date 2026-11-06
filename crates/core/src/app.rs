@@ -575,6 +575,8 @@ const EXPORT_MAX_BYTES: u64 = 512 << 20;
 pub struct ImportResult {
     pub added: usize,
     pub updated: usize,
+    /// For the status bar (crate::import::ImportPlan::done_message)
+    pub message: String,
 }
 
 /// Statements run in one transaction (execute_batch): rows changed, and a warning when they committed but their result couldn't be logged
@@ -1373,7 +1375,7 @@ impl AppState {
         for (id, _, _) in forget {
             drop_pool_logged(self, &id, crate::audit::DISCONNECTED).await;
         }
-        Ok(ImportResult { added, updated })
+        Ok(ImportResult { added, updated, message: crate::import::ImportPlan::done_message(added, updated) })
     }
 
     pub async fn export_csv(&self, id: String, sql: String, path: String) -> AppResult<u64> {

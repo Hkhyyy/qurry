@@ -232,9 +232,14 @@ export const api = {
   executeBatch: (id: string, statements: string[], exactOne = false) => invoke<BatchResult>("execute_batch", { id, statements, exactOne }),
   // For file writes the backend opens the save dialog itself (the webview doesn't pick the path). null if canceled
   exportConnections: () => invoke<[number, string] | null>("export_connections"),
-  /** Pick a file to import → preview the changes. importPicked on confirm */
-  pickImportFile: () => invoke<string[] | null>("pick_import_file"),
-  importPicked: () => invoke<{ added: number; updated: number }>("import_picked"),
+  /** Import Data Sources ▸ the DataGrip / IntelliJ / DBeaver locations found on this computer */
+  importLocations: () => invoke<ImportLocation[]>("import_locations"),
+  /** A found location → its preview. importPicked on confirm */
+  importLocation: (path: string) => invoke<ImportPlan>("import_location", { path }),
+  /** File… / Folder… (the backend opens the native picker) → the preview. null if canceled */
+  pickImport: (folder: boolean) => invoke<ImportPlan | null>("pick_import", { folder }),
+  /** Import the rows left checked (picked[i] for row i of the preview) */
+  importPicked: (picked: boolean[]) => invoke<{ added: number; updated: number; message: string }>("import_picked", { picked }),
   saveTextFile: (defaultName: string, text: string) => invoke<string | null>("save_text_file", { defaultName, text }),
   /** Data export: file (save dialog) or clipboard text. null if the save dialog is closed. Progress via the "transfer-progress" event */
   exportData: (id: string, sql: string, format: DataFormat, clipboard: boolean, defaultName: string, table: [string, string] | null, job: string) =>
@@ -283,6 +288,13 @@ export type DbaAction = { kind: "kill"; label: string; terminate: boolean } | { 
 export interface DbaReportInfo { id: string; title: string; group: string; help: string; actions: DbaAction[] }
 /** Execution plan analysis (core): shares·warnings. PlanNode is in components/ConsolePane */
 export const analyzePlan = (json: string) => invoke<import("../components/ConsolePane").PlanNode>("analyze_plan", { json });
+/** A DataGrip / IntelliJ / DBeaver location found on this computer (core import::Location) */
+export interface ImportLocation { label: string; path: string; shown: string; count: number }
+/** One row of the import confirm: added / updated rows can be left out, skipped ones can't (core import::ImportRow) */
+export interface ImportRow { text: string; note: string; value: string; tone: "warn" | null; checkable: boolean }
+/** What an import would do; importable 0 = a notice instead of the confirm (core import::ImportPlan) */
+export interface ImportPlan { title: string; message: string; rows: ImportRow[]; importable: number }
+
 export interface HistoryItem { id: string; connId: string; database?: string; sql: string; ts: number }
 export interface Snippet { id: string; name: string; sql: string; connId?: string | null }
 /** Test data generation: fill method per column · sample rows · warnings */

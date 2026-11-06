@@ -96,6 +96,32 @@ let gridAlign = JSON.parse(localStorage.getItem("mock-gridAlign") ?? "{}");
 let updateChecked = false;
 /** Test Connections waiting for cancel_test, by test id */
 const testsRunning: Record<string, () => void> = {};
+// Import Data Sources (core import.rs): the locations found and a preview in the core's words
+const IMPORT_LOCATIONS = [
+  { label: "DataGrip 2025.2 · global", path: "/Users/me/Library/Application Support/JetBrains/DataGrip2025.2/options", shown: "~/Library/Application Support/JetBrains/DataGrip2025.2/options", count: 7 },
+  { label: "IntelliJ IDEA · project shop-api", path: "/Users/me/work/shop-api/.idea", shown: "~/work/shop-api/.idea", count: 3 },
+  { label: "DBeaver · workspace6 General", path: "/Users/me/Library/DBeaverData/workspace6/General/.dbeaver", shown: "~/Library/DBeaverData/workspace6/General/.dbeaver", count: 6 },
+];
+const IMPORT_NOTE = "New data sources start with MCP Off. Passwords aren't imported: each asks on its first connect.";
+export function importPlan(from: string, path: string) {
+  const shown = path.replace(/^\/Users\/me/, "~");
+  const rows = [
+    { text: '+ add "orders-prod" (app@orders-db.internal:5432/orders)', note: "PostgreSQL · SSH ec2-user@bastion.example.com (key ~/.ssh/id_ed25519) · SSL verify-full (CA ~/certs/orders-ca.pem) · Read-only", value: "password on connect", tone: null, checkable: true },
+    { text: '+ add "analytics" (analyst@10.0.3.21:3306/stats)', note: "MySQL · SSL require", value: "SSL without certificate checks", tone: "warn", checkable: true },
+    { text: '+ add "events" (default@ch.internal:8123/default)', note: "ClickHouse · SSH deploy@jump-eu.example.com:2222 (key)", value: "SSH key from the OpenSSH config / agent: choose a key file", tone: "warn", checkable: true },
+    { text: '+ add "local-pg" (postgres@localhost:5432/postgres)', note: "PostgreSQL", value: "no password", tone: null, checkable: true },
+    { text: '+ add "cache" (localhost:6379/0)', note: "Redis", value: "no password", tone: null, checkable: true },
+    { text: '− skip "warehouse" (Snowflake)', note: "Snowflake isn't supported", value: "skipped", tone: null, checkable: false },
+    { text: '− skip "billing" (PostgreSQL)', note: "already in Qurry (same server, user and database)", value: "skipped", tone: null, checkable: false },
+  ];
+  // window.__mockImportAllSkipped: every source is skipped (a notice instead of the confirm)
+  if ((window as any).__mockImportAllSkipped) {
+    const skipped = rows.filter((r) => !r.checkable);
+    return { title: "Import Data Sources", message: `Nothing to import from ${from}: its ${skipped.length} data sources are skipped.\n${shown}`, rows: skipped, importable: 0 };
+  }
+  return { title: "Import Data Sources", message: `Import these data sources from ${from}?\n${shown}\n\n5 to add, 2 skipped. ${IMPORT_NOTE}`, rows, importable: 5 };
+}
+
 const handlers: Record<string, (a: any) => unknown> = {
   // A copy, as from the backend: state that holds the last list must see a change (Allow unencrypted, connect) as a new list
   list_connections: () => structuredClone(conns),
@@ -538,8 +564,21 @@ const handlers: Record<string, (a: any) => unknown> = {
   import_data: () => new Promise((ok) => setTimeout(() => ok(1234), 4000)),
   save_text_file: () => null,
   export_connections: () => null,
-  pick_import_file: () => ["~ update \"[PROD] shop_app\": turns Read-only OFF"],
-  import_picked: () => ({ added: 0, updated: 1 }),
+  // window.__mockImportNone: nothing found on this computer
+  import_locations: () => ((window as any).__mockImportNone ? [] : structuredClone(IMPORT_LOCATIONS)),
+  import_location: (a: any) => importPlan(IMPORT_LOCATIONS.find((l) => l.path === a.path)?.label ?? a.path, a.path),
+  // window.__mockImportPick: what the native picker returns (null = canceled); "broken" = a file that can't be read
+  pick_import: () => {
+    const p = (window as any).__mockImportPick;
+    if (p === null) return null;
+    if (p === "broken") throw "Can't read ~/work/shop-api/.idea/dataSources.xml:\nline 42, column 7: the element <data-source> isn't closed\n\nNothing was imported.";
+    return importPlan("DBeaver · General", "~/Library/DBeaverData/workspace6/General/.dbeaver");
+  },
+  import_picked: (a: any) => {
+    const n = (a.picked as boolean[]).filter(Boolean).length;
+    (window as any).__mockImported = a.picked;
+    return { added: n, updated: 0, message: `Imported ${n} data source${n === 1 ? "" : "s"} — passwords are asked on the first connect` };
+  },
   save_keymap: () => null,
   install_update: () => new Promise((_, rej) => setTimeout(() => rej("Update failed: mock"), 800)),
   update_channel: () => updateChannel,

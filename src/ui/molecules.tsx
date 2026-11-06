@@ -278,9 +278,11 @@ export function ListItem({
 
 /** Detail row: code (statement · query) + value on the right (rows · pid · version), a note in plain text under the code (why it
  *  asks). Value colored by tone */
-export function DetailRow({ children, value, tone, note }: { children: ReactNode; value?: ReactNode; tone?: "danger" | "warn"; note?: ReactNode }) {
+/** lead = a control before the text (a checkbox to leave the row out) */
+export function DetailRow({ children, value, tone, note, lead }: { children: ReactNode; value?: ReactNode; tone?: "danger" | "warn"; note?: ReactNode; lead?: ReactNode }) {
   return (
     <div className="ui-detail-row">
+      {lead !== undefined && <span className="ui-detail-lead">{lead}</span>}
       {note === undefined ? (
         <code className="ui-detail-text">{children}</code>
       ) : (

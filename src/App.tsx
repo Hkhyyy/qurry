@@ -210,7 +210,7 @@ export default function App() {
   const transfer = useJobs({ setStatus });
   const { jobs, runJob, startExport, startImport } = transfer;
   const connActions = useConnActions({ conns, refresh, setStatus });
-  const { setColor, setScope, exportConns, importConns, removeConn } = connActions;
+  const { setColor, setScope, exportConns, importItems, loadImportLocs, removeConn } = connActions;
   const ex = useExplorer({ setStatus, refresh, activate, addTab, openConsole, run, runJob, removeConn, setInWs, setTabMenu });
   const { activateNode, buildMenu, startBackup } = ex;
 
@@ -288,7 +288,8 @@ export default function App() {
                     onAdd={() => setDialog({})}
                     onRefresh={refresh}
                     onExport={exportConns}
-                    onImport={importConns}
+                    importItems={importItems}
+                    onImportOpen={loadImportLocs}
                     shown={w.id === curWs}
                     onSelect={(info, all) => (setTreeSel(info), setTreeSelAll(all))}
                     onActivate={activateNode}

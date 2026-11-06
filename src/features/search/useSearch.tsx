@@ -1,4 +1,4 @@
-import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import { ConnectionView, meta, targetId } from "../../lib/api";
 import type { FtsRequest } from "../../lib/api";
 import { setThemePref } from "../../lib/theme";
@@ -40,7 +40,7 @@ type Deps = {
 
 /** Switcher (⌃⇥), Recent Files (⌘e), Search Everywhere (⇧⇧) with Go to … and Find Action, Full-text Search and its Find tool window */
 export function useSearch({
-  conns, setStatus, treeSel, active, labelOf, setMaximized, setExplorerHidden, toggleExplorer, bumpFont, openConsole, activate, newWs, renameWs, deleteWs, switchWs, exportConns, importConns, cancelRun, canCancel, txEnd, setTxMode, reopen, reopenClosed, splitClone, unsplit, refreshAll, activateNode, openDdl, showQuickDoc, openTableTab,
+  conns, setStatus, treeSel, active, labelOf, setMaximized, setExplorerHidden, toggleExplorer, bumpFont, openConsole, activate, newWs, renameWs, deleteWs, switchWs, exportConns, importConns, importFrom, importLocs, loadImportLocs, cancelRun, canCancel, txEnd, setTxMode, reopen, reopenClosed, splitClone, unsplit, refreshAll, activateNode, openDdl, showQuickDoc, openTableTab,
 }: Deps) {
   const workspaces = useWorkspacesStore((s) => s.workspaces);
   const curWs = useWorkspacesStore((s) => s.curWs);
@@ -69,6 +69,10 @@ export function useSearch({
 
   // ───────── Search Everywhere (⇧⇧) / Go to Database Object (⌘o) / Find Action (⇧⌘A) ─────────
   const [se, setSe] = useState<SeTab | null>(null);
+  // Find Action lists the Import Data Sources locations: look for them again when it opens
+  useEffect(() => {
+    if (se) loadImportLocs();
+  }, [se]);
 
   const [findOpen, setFindOpen] = useState(false);
   const [findRuns, setFindRuns] = useState<FindRun[]>([]);
@@ -139,7 +143,9 @@ export function useSearch({
       ...workspaces.map((w, i) => ({ name: `Workspace: ${w.name}`, ...(i < 9 ? cmd(`ws.${i + 1}`) : {}), group: "Window", run: () => switchWs(w.id), disabled: w.id === curWs })),
       { name: "Data Source Properties", ...cmd("tree.properties"), group: "File", run: () => c && setDialog({ edit: c }), disabled: !c },
       { name: "Export Data Sources…", ...cmd("ds.export"), group: "File", run: () => exportConns() },
-      { name: "Import Data Sources…", ...cmd("ds.import"), group: "File", run: () => importConns() },
+      { name: "Import Data Sources: File…", ...cmd("ds.import"), group: "File", run: () => importConns() },
+      { name: "Import Data Sources: Folder…", group: "File", run: () => importFrom({ folder: true }) },
+      ...importLocs.map((l) => ({ name: `Import Data Sources: ${l.label} (${l.count})`, group: "File", run: () => importFrom({ path: l.path }) })),
       { name: "Settings…", ...cmd("settings"), group: "File", run: () => setSettingsOpen("appearance") },
       { name: "Keymap Reference", ...cmd("keymap"), group: "Help", run: () => setKeymapOpen(true) },
       { name: "Edit Keymap…", ...cmd("keymap.edit"), group: "Help", run: () => setSettingsOpen("keymap") },
