@@ -43,6 +43,7 @@ pub mod secrets;
 pub mod session;
 pub mod sql;
 pub mod ssm;
+pub mod ssh_config;
 #[cfg(test)]
 mod testenv;
 pub mod store;
