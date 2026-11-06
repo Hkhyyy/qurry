@@ -37,7 +37,10 @@ pnpm build                                    # tsc and the web build
 npx playwright install chromium
 npx playwright test --project=chromium        # GUI end to end, against the mock backend
 npx playwright test --project=chromium --workers=2   # same, two tests at a time (one by default)
+npx playwright test --project=webkit --shard=1/2     # one half of the spec files, as a CI shard runs them
 ```
+
+A shortcut's default keys are checked in two places: `src/lib/shortcuts.test.ts` pins every command's default keys and checks that none collide or can't be pressed, and `e2e/shortcuts.spec.ts` presses a few per scope in the running app. Changing a default key means changing it in `crates/shared/src/keymap-table.json` and in the vitest table.
 
 ### Against real servers
 
@@ -86,4 +89,15 @@ Shortcuts are written with the ⌘ ⌥ ⌃ ⇧ glyphs (`⇧⌘A`). After changin
 
 - Commit messages start with the kind of change in brackets, then a short summary: `[feat] Copy a query plan as text`, `[fix] Keep the selection after refresh`. Also used: `[test]`, `[docs]`, `[refactor]`, `[perf]`, `[ci]`, `[chore]`.
 - One topic per commit. Don't commit screenshots, generated files (`src/wasm/pkg`, `storybook-static`) or local config.
-- Pull requests go to `main`. CI runs the Rust tests with the real-server tests, vitest, the web and Storybook builds and Playwright; it has to pass before a merge.
+- Pull requests go to `main`. CI runs the Rust tests with the real-server tests, vitest, the web and Storybook builds and Playwright (two shards per browser, one `e2e (<browser>)` check each); it has to pass before a merge. A new push to the pull request cancels the run of the previous one. A pull request that only changes `docs/` or `.md` files (other than `SECURITY.md`) skips the Rust and Playwright jobs; their checks still pass.
+
+## Dependencies
+
+Dependabot opens weekly pull requests for Cargo, npm and the GitHub Actions (pinned by commit SHA), minor and patch updates grouped per ecosystem.
+
+The Audit workflow (`.github/workflows/audit.yml`) fails on a known vulnerability in `Cargo.lock` (`cargo deny check advisories`) or in the production npm dependencies (`pnpm audit --prod`). It runs on pull requests that change a lockfile and every week on `main`, so it can fail with nothing changed here. When it does:
+
+1. Update the affected package if a fixed version is in range (`cargo update -p <crate>`; for npm, update the package that brings it in, or add an override in `package.json`).
+2. If it can't be fixed yet, accept it with the reason it can't reach Qurry or why it waits: Rust advisories go in `ignore` in `deny.toml` (`{ id = "RUSTSEC-…", reason = "…" }`), npm ones in `auditConfig.ignoreGhsas` in `pnpm-workspace.yaml` (the GHSA ID with a comment). Remove the entry once the fix is in the lockfile.
+
+Run the checks locally with [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) (`cargo deny check advisories`, the version is in the workflow) and `pnpm audit --prod`.
