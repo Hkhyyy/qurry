@@ -222,6 +222,8 @@ mod tests {
         // Signature of "hello\n" made with the real key
         const SIG: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRL0hTaDZuRlFnQkFMUWNzY1hnK3BORU8rU2hESWFGWnJOb0hEZTZBT1lUVFc1QmNjWEs5TVdaYnRhSllBbXVDUDJuYUR6azJCd1dLd0JaU3V3akJMRExwQiswdkhyZVFBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNzIyOTE5CWZpbGU6U0hBMjU2U1VNUwpCbytybzN4VVNOeXJlVFRHZXFGRHZidGJBV00zU1JKMk1SRXRJZVhCcEZIbS9TNUVuWm5FZVhKeGh0RG15VFNQVDFtTFUzdXpTd3VFelhVUlg2VldCUT09Cg==";
         assert!(super::verify_sums(b"hello\n", SIG).is_ok());
+        // Signed with the current key itself, not only with some listed key (during a rotation the old key follows it and would also pass verify_sums)
+        assert!(qurry_core::update::verify_sums_with(&super::UPDATE_PUBKEYS[..1], b"hello\n", SIG).is_ok());
         assert!(super::verify_sums(b"hello!\n", SIG).is_err());
         assert!(super::verify_sums(b"hello\n", "bm90IGEgc2lnbmF0dXJl").is_err());
         // The current key (first in the list) is the GUI's (tauri.conf.json)
