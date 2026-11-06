@@ -4,7 +4,7 @@ import { dialog, editor, expect, openApp, openConsole, resultTabs, spyCancels, t
 
 // A few default GUI shortcuts of the command table (crates/shared/src/keymap-table.json) per scope, pressed in the running app with
 // their effect checked: each way a key reaches its command (the global key handler, a tree / grid / console menu entry by id, a Monaco
-// action, Search Everywhere) and the keys several scopes share (⌘b, ⌘d, ⌘↩, ⌘F2, ⇧F6), where the focus decides which command runs.
+// action with ⌘, ⌃, ⌥, ⇧ and an arrow key, Search Everywhere) and the keys several scopes share (⌘b, ⌘d, ⌘↩, ⌘F2, ⇧F6), where the focus decides which command runs.
 // Every command's id and default keys, and that no two collide, are checked by vitest (src/lib/shortcuts.test.ts, "default keys")
 const TABLE: { gui?: string; scope?: string; guiKeys?: string[] }[] = JSON.parse(readFileSync(new URL("../crates/shared/src/keymap-table.json", import.meta.url), "utf8"));
 const ROWS = TABLE.flatMap((r) => (r.gui ? [{ id: r.gui, scope: r.scope ?? "global", keys: r.guiKeys ?? [] }] : []));
@@ -149,6 +149,19 @@ const CHECKS: Record<string, Check> = {
     await consoleWith(page, "select 1");
     await page.keyboard.press(key);
     await expect.poll(() => editorText(page)).toBe("select 1\nselect 1");
+  },
+  // Monaco actions get their keys from ConsoleEditor's monacoKey, not the global handler: ⌥⇧↑ and ⌃G cover its ⌃ / ⌥ / ⇧ bits and an arrow key
+  "editor.moveUp": async (page, key) => {
+    await consoleWith(page, "one\ntwo");
+    await page.keyboard.press(key);
+    await expect.poll(() => editorText(page)).toBe("two\none");
+  },
+  "editor.nextOcc": async (page, key) => {
+    await consoleWith(page, "ab ab");
+    await page.keyboard.press(key);
+    await page.keyboard.press(key);
+    await page.keyboard.type("X");
+    await expect.poll(() => editorText(page)).toBe("X X");
   },
   "console.rename": async (page, key) => {
     await openConsole(page);
