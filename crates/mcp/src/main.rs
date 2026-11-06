@@ -611,6 +611,51 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// A source behind AWS SSM, through the core tests' fake aws (crates/core/tests/fake_aws.py) on PATH. Its session stops
+    /// forwarding while the CLI runs on (sleep, a network change, the AWS side): the next query opens the tunnel again and answers,
+    /// without restarting the server.
+    /// Run on its own (it changes PATH): QURRY_TEST_PG=127.0.0.1:55433:postgres:postgres cargo test -p qurry-mcp query_recovers -- --ignored
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore]
+    async fn query_recovers_from_a_dead_ssm_tunnel() {
+        use std::os::unix::fs::PermissionsExt;
+        let pg = std::env::var("QURRY_TEST_PG").expect("QURRY_TEST_PG=host:port:user:db");
+        let pg: Vec<&str> = pg.split(':').collect();
+        let dir = std::env::temp_dir().join(format!("qurry-mcp-ssm-{}-{}", std::process::id(), std::time::UNIX_EPOCH.elapsed().unwrap().as_nanos()));
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let python = std::env::split_paths(&path).map(|d| d.join("python3")).find(|p| p.is_file()).expect("python3 on PATH");
+        let fake = include_str!("../../core/tests/fake_aws.py").replace("@MODE@", "ok").replacen("/usr/bin/env python3", &python.to_string_lossy(), 1);
+        std::fs::write(bin.join("aws"), fake).unwrap();
+        std::fs::set_permissions(bin.join("aws"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        unsafe { std::env::set_var("PATH", std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(&path))).unwrap()) };
+
+        let mut state = qurry_core::open_state(Some(dir.join("config"))).unwrap();
+        state.mcp = true;
+        let mut c = source("ssm", "Behind SSM", Some("read"), false).config;
+        (c.host, c.port, c.user, c.database) = (pg[0].into(), pg[1].parse().unwrap(), pg[2].into(), pg[3].into());
+        c.ssm = Some(qurry_core::store::SsmConfig { enabled: true, profile: "dev".into(), region: "ap-northeast-2".into(), target: "i-0123456789abcdef0".into() });
+        state.store.save(&c).unwrap();
+        let server = Server { state: Arc::new(state), allow_write: false };
+        let q = json!({ "data_source": "Behind SSM", "sql": "select 1 as one" });
+        let starts = || std::fs::read_to_string(bin.join("starts")).unwrap().lines().count();
+        assert_eq!(server.call("query", &q).await.expect("connects")["rows"][0][0], json!(1));
+        assert_eq!(starts(), 1);
+
+        // The session dies; the CLI and its plugin run on and accept connections (the fake's dead-<plugin pid>)
+        let pids = std::fs::read_to_string(bin.join("pids")).unwrap();
+        std::fs::write(bin.join(format!("dead-{}", pids.split_whitespace().nth(1).unwrap())), "").unwrap();
+        let t = std::time::Instant::now();
+        let r = server.call("query", &q).await.expect("the same server answers again");
+        assert_eq!(r["rows"][0][0], json!(1));
+        assert!(t.elapsed() < std::time::Duration::from_secs(14), "one timeout, a new session and a connect: {:?}", t.elapsed());
+        assert_eq!(starts(), 2, "a new session");
+        server.state.disconnect("ssm".into()).await.unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn uri_passwords_are_hidden() {
         assert_eq!(qurry_core::store::without_userinfo("mongodb+srv://app:s3cret@cluster0.x.net/?retryWrites=true"), "mongodb+srv://cluster0.x.net/?retryWrites=true");
