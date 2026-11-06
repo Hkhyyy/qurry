@@ -800,10 +800,18 @@ impl AppState {
         forgot.map_err(|e| AppError::Msg(format!("The data source was removed, but its saved password couldn't be: {e}")))
     }
 
+    /// Whether a password or SSH secret may be stored for this key (a temporary source's lives in memory, never in the secrets file)
+    fn holds_secret(&self, id: &str, key: &str) -> bool {
+        if self.store.is_temporary(id) {
+            return self.temporary.lock().unwrap().contains_key(key);
+        }
+        self.secret_file.contains(key).unwrap_or(true)
+    }
+
     /// The saved password, if it may be sent to config (only when it is the same server as the saved settings)
     fn saved_password_for(&self, config: &ConnectionConfig) -> AppResult<Option<String>> {
         match self.store.get(&config.id)? {
-            Some(p) if self.secret_file.contains(&p.password_key()).unwrap_or(true) && !p.same_server(config) => Err(AppError::Msg(SERVER_CHANGED.into())),
+            Some(p) if self.holds_secret(&p.id, &p.password_key()) && !p.same_server(config) => Err(AppError::Msg(SERVER_CHANGED.into())),
             Some(p) => self.saved_secret(&p.password_key(), p.password_saved),
             None => Ok(None),
         }
@@ -811,7 +819,7 @@ impl AppState {
 
     fn saved_ssh_secret_for(&self, config: &ConnectionConfig) -> AppResult<Option<String>> {
         match self.store.get(&config.id)? {
-            Some(p) if self.secret_file.contains(&store::ssh_secret_key(&p.id)).unwrap_or(true) && !p.same_ssh(config) => Err(AppError::Msg(SSH_CHANGED.into())),
+            Some(p) if self.holds_secret(&p.id, &store::ssh_secret_key(&p.id)) && !p.same_ssh(config) => Err(AppError::Msg(SSH_CHANGED.into())),
             Some(p) => self.saved_secret(&store::ssh_secret_key(&config.id), p.ssh_secret_saved),
             None => Ok(None),
         }
@@ -1482,6 +1490,11 @@ mod tests {
         assert_eq!(st.store.get(&c.id).unwrap().unwrap().color.as_deref(), Some("#5c2b2b"));
         let e = st.save_connection(c.clone(), None, None).await.unwrap_err().to_string();
         assert!(e.contains("temporary"), "{e}");
+        // Its form tested with another host never sends its password there
+        let mut moved = c.clone();
+        moved.host = "evil.example".into();
+        assert_eq!(st.saved_password_for(&moved).unwrap_err().to_string(), SERVER_CHANGED);
+        assert_eq!(st.saved_password_for(&c).unwrap().as_deref(), Some("s3cret-pw"));
         // Saving another source writes connections.json without it
         st.save_connection(silent_source("", 2, None), None, None).await.unwrap();
         let file = std::fs::read_to_string(dir.path().join("connections.json")).unwrap();
