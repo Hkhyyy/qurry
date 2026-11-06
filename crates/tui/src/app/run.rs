@@ -168,8 +168,9 @@ impl App {
         let id = t.id;
         let target = t.target.clone();
         let conn_name = self.conn(&t.conn).map(|c| c.config.name.clone()).unwrap_or_default();
-        // History (same log as the GUI)
+        // History (same log as the GUI); nothing of a temporary source (qurry-tui URL) is kept after it is gone
         let (hist_conn, hist_db, hist) = (t.conn.clone(), t.db.clone(), self.state.clone());
+        let keep_history = !self.state.store.is_temporary(&hist_conn);
         let prod = self.tabs.get(self.active).and_then(|t| self.conn(&t.conn)).filter(|c| c.config.options.confirm_changes).map(|c| (c.config.name.clone(), self.tabs[self.active].target.clone()));
         let watch = prod.is_some();
         let t = &mut self.tabs[self.active];
@@ -351,7 +352,7 @@ impl App {
                 let mut tls_err = None;
                 let ddl = out.iter().any(|(s, r, dry)| r.is_ok() && !dry && !explain && qurry_core::guard::is_ddl(s, kind));
                 for (i, (s, r, dry)) in out.into_iter().enumerate() {
-                    if r.is_ok() {
+                    if r.is_ok() && keep_history {
                         let _ = hist.history.add(&hist_conn, Some(&hist_db), &s);
                     }
                     match r {

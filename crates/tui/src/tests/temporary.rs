@@ -43,14 +43,26 @@ async fn url_opens_a_connected_temporary_source_and_read_only_blocks_a_write() {
     let TabKind::Console(c) = &h.app.tabs[h.app.active].kind else { panic!("console") };
     assert!(c.grid.is_some(), "{:?}", h.console_output());
 
-    // Nothing of it is saved: not in connections.json, not in a workspace list (shared with the GUI), not its console text
+    // Workspace actions don't take it: every workspace shows it and none lists it (the list is shared with the GUI)
+    h.app.ws_add_conn_pick();
+    assert!(h.app.popup.is_none() && h.app.status.starts_with("Every data source is already in this workspace"), "{}", h.app.status);
+    h.app.workspaces.push(crate::app::Workspace { id: "w2".into(), name: "Ops".into(), conns: vec![], saved: Some(Default::default()) });
+    for act in [crate::app::App::ws_move_conn_pick as fn(&mut crate::app::App), crate::app::App::ws_remove_conn] {
+        h.app.status.clear();
+        act(&mut h.app);
+        assert!(h.app.popup.is_none() && h.app.status.contains("temporary data source"), "{}", h.app.status);
+    }
+
+    // Nothing of it is saved: not in connections.json, not in a workspace list (shared with the GUI), not its console text, not
+    // the history (its statements ran above)
     h.app.ws_push();
     h.app.save_workspace();
     let dir = h.app.state.store.dir();
-    for f in ["connections.json", "workspaces.json", "tui-workspace.json", "secrets.json"] {
+    for f in ["connections.json", "workspaces.json", "workspace-tui.json", "secrets.json", "history.json", "history.jsonl"] {
         let text = std::fs::read_to_string(dir.join(f)).unwrap_or_default();
-        assert!(!text.contains("127.0.0.1") && !text.contains("hunter2") && !text.contains("orders"), "{f}: {text}");
+        assert!(!text.contains("127.0.0.1") && !text.contains("hunter2") && !text.contains("orders") && !text.contains(&id), "{f}: {text}");
     }
+    assert!(h.app.state.history.list(None, "", 100).is_empty());
     let ws = serde_json::to_string(&h.app.state.store.workspace("tui")).unwrap();
     assert!(!ws.contains("orders") && !ws.contains("shop"), "{ws}");
     assert!(h.app.workspaces.iter().all(|w| !w.conns.contains(&id)));

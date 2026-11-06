@@ -74,12 +74,13 @@ impl App {
             self.status = "Nothing to save — write or select a query".into();
             return;
         }
-        let conn = conn.clone();
+        // A temporary source's id is gone after this run: its snippet is usable everywhere
+        let conn = Some(conn.clone()).filter(|c| !self.state.store.is_temporary(c));
         self.input("Snippet name", &one_line(&sql, 40), move |a, name| {
             if name.trim().is_empty() {
                 return;
             }
-            a.status = match a.state.history.save_snippet(Snippet { id: String::new(), name: name.trim().into(), sql: sql.trim().into(), conn_id: Some(conn) }) {
+            a.status = match a.state.history.save_snippet(Snippet { id: String::new(), name: name.trim().into(), sql: sql.trim().into(), conn_id: conn }) {
                 Ok(s) => format!("Snippet \"{}\" saved (⌃k › Snippets…)", s.name),
                 Err(e) => e.to_string(),
             };
