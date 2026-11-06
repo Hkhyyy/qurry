@@ -318,9 +318,9 @@ export function Menu({ items, onClose, at, footer }: { items: MenuEntry[]; onClo
         ) : "submenu" in it ? (
           <MenuItem key={i} label={it.label} hasSubmenu onMouseEnter={() => setSub(i)}>
             {sub === i && (
-              <div className="ui-menu sub" role="menu">
+              <SubMenu>
                 {it.submenu.map((s, j) => ("separator" in s ? <MenuSeparator key={j} /> : "heading" in s ? <MenuLabel key={j}>{s.heading}</MenuLabel> : "action" in s ? <MenuItem key={j} label={s.label} shortcut={s.shortcut} danger={s.danger} disabled={s.disabled} title={s.title} onClick={() => run(s.action)} /> : null))}
-              </div>
+              </SubMenu>
             )}
           </MenuItem>
         ) : (
@@ -333,6 +333,26 @@ export function Menu({ items, onClose, at, footer }: { items: MenuEntry[]; onClo
           <div className="ui-menu-footer">{footer}</div>
         </>
       )}
+    </div>
+  );
+}
+
+/** A submenu beside its item, placed on the screen (fixed): a dropdown inside a panel that clips (the explorer's ⋮) doesn't cut it off.
+ *  Opens to the left when there's no room on the right, and stays above the bottom edge */
+function SubMenu({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const item = el?.parentElement;
+    if (!el || !item) return;
+    const r = item.getBoundingClientRect();
+    const left = r.right + el.offsetWidth > window.innerWidth ? r.left - el.offsetWidth : r.right;
+    const top = Math.max(4, Math.min(r.top - 5, window.innerHeight - el.offsetHeight - 4));
+    Object.assign(el.style, { position: "fixed", left: `${left}px`, top: `${top}px` });
+  }, []);
+  return (
+    <div ref={ref} className="ui-menu sub" role="menu">
+      {children}
     </div>
   );
 }
@@ -410,7 +430,7 @@ export function ConfirmHost() {
   const n = checked.filter(Boolean).length;
   const detail = (req.detail ?? []).map((d, i) => ({
     ...d,
-    lead: picking ? d.checkable ? <Checkbox checked={!!checked[i]} title="Leave it out by unchecking" onChange={(v) => setChecked((c) => c.map((x, j) => (j === i ? v : x)))} /> : <span className="ui-check-space" /> : undefined,
+    lead: picking ? d.checkable ? <Checkbox checked={!!checked[i]} title="Leave it out by unchecking" onChange={(v) => setChecked((c) => c.map((x, j) => (j === i ? v : x)))} /> : <span /> : undefined,
   }));
   return (
     <Modal
