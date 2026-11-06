@@ -816,7 +816,7 @@ pub(crate) async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host
         .map_err(|e| match &e {
             // Required TLS that the server can't set up: say what to do instead of a bare TLS error
             sqlx::Error::Tls(_) if cfg.active_ssl().is_none() => AppError::Msg(format!("{}\n({e})", qurry_shared::errors::needs_tls_pg())),
-            // The server refused the login (class 28) while ~/.pgpass was skipped: say why it wasn't used, as psql does
+            // The server refused the login (class 28) while ~/.pgpass was skipped or PGPASSWORD is set: say why they weren't used
             sqlx::Error::Database(d) if d.code().is_some_and(|c| c.starts_with("28")) && pgpass_note.is_some() => {
                 AppError::Msg(format!("{e}\n{}", pgpass_note.unwrap_or_default()))
             }
@@ -824,7 +824,9 @@ pub(crate) async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host
         })
 }
 
-/// The connect options, and why ~/.pgpass was skipped (when it was needed and couldn't be used)
+const PGPASSWORD_NOT_USED: &str = "PGPASSWORD isn't sent to a saved data source (only to a qurry-tui URL's server): save the password in the data source, or add a line for it to ~/.pgpass (chmod 600).";
+
+/// The connect options, and what to tell the user when the login fails without a password (~/.pgpass skipped, PGPASSWORD not used)
 fn options(cfg: &ConnectionConfig, password: Option<&str>, host: &str, port: u16) -> AppResult<(PgConnectOptions, Option<String>)> {
     // Not new(): its ~/.pgpass lookup matches PGHOST / localhost instead of this server, and skips the file permission check on macOS
     let mut opts = PgConnectOptions::new_without_pgpass()
@@ -835,20 +837,22 @@ fn options(cfg: &ConnectionConfig, password: Option<&str>, host: &str, port: u16
     // Like DataGrip, an empty value connects to the postgres DB (the PG default, a DB named after the user, often does not exist)
     let database = if cfg.database.trim().is_empty() { "postgres" } else { cfg.database.trim() };
     opts = opts.database(database);
-    // No saved password: PGPASSWORD (sqlx reads it), else ~/.pgpass for this server (not the tunnel's local port), as psql does
+    // No saved password: ~/.pgpass for this server (not the tunnel's local port), as psql does. Never PGPASSWORD: an environment
+    // password is for the server it was set for, and only a qurry-tui URL takes it (crate::dsn holds it as that source's password)
     let mut pgpass_note = None;
     let password = match password.filter(|p| !p.is_empty()) {
         Some(p) => Some(p.to_string()),
-        None if std::env::var_os("PGPASSWORD").is_some_and(|p| !p.is_empty()) => None,
         None => crate::dsn::pgpass(&crate::dsn::Env::process(), &cfg.host, cfg.port, database, &cfg.user).unwrap_or_else(|note| {
             crate::log!("[qurry] {note}");
             pgpass_note = Some(note);
             None
         }),
     };
-    if let Some(p) = password {
-        opts = opts.password(&p);
+    if password.is_none() && std::env::var_os("PGPASSWORD").is_some_and(|p| !p.is_empty()) {
+        pgpass_note = Some(pgpass_note.map_or(String::new(), |n| format!("{n}\n")) + PGPASSWORD_NOT_USED);
     }
+    // Always set: sqlx would otherwise send PGPASSWORD from the environment (empty is what it sends without one)
+    opts = opts.password(password.as_deref().unwrap_or(""));
     if cfg.read_only {
         // Do not leave the parsing of \ in strings to server settings (match the rules guard reads with)
         opts = opts.options([("default_transaction_read_only", "on"), ("standard_conforming_strings", "on")]);
@@ -906,6 +910,27 @@ mod tests {
         let ssl = |m: &str| serde_json::json!({ "ssl": { "enabled": true, "mode": m } });
         assert!(matches!(mode(&source("db.example", ssl("verify-ca"))), PgSslMode::VerifyCa));
         assert!(matches!(mode(&source("127.0.0.1", ssl("verify-full"))), PgSslMode::VerifyFull));
+    }
+
+    /// PGPASSWORD in the environment is never sent to a data source without a password (sqlx would read it): a qurry-tui URL takes
+    /// it as its own password (crate::dsn). A failed login then says why it wasn't used
+    #[test]
+    fn pgpassword_is_not_sent_to_a_saved_source() {
+        let c: ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "x", "name": "x", "kind": "postgres", "host": "db.example", "port": 5432, "user": "u", "database": "d" })).unwrap();
+        // SAFETY: only this test sets PGPASSWORD / PGPASSFILE (dsn's tests take their environment from a map)
+        unsafe {
+            std::env::set_var("PGPASSWORD", "env-secret-pw");
+            std::env::set_var("PGPASSFILE", "/nonexistent/qurry-test-pgpass");
+        }
+        let (opts, note) = options(&c, None, "db.example", 5432).unwrap();
+        let (saved, saved_note) = options(&c, Some("saved-pw"), "db.example", 5432).unwrap();
+        unsafe {
+            std::env::remove_var("PGPASSWORD");
+            std::env::remove_var("PGPASSFILE");
+        }
+        assert!(!format!("{opts:?}").contains("env-secret-pw"));
+        assert_eq!(note.as_deref(), Some(PGPASSWORD_NOT_USED));
+        assert!(format!("{saved:?}").contains("saved-pw") && saved_note.is_none());
     }
 
     fn req(mode: &str, text: &str) -> FtsRequest {
