@@ -56,6 +56,8 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
             u if u.contains("://") && url.is_none() => url = Some(u.to_string()),
             // A URL's text could be a password: never echo it
             u if u.contains("://") => return Err("Give one URL".into()),
+            // A mistyped URL (postgres:/u:pw@h/d) may hold a password too
+            u if u.contains('@') || looks_like_scheme(u) => return Err(format!("An argument isn't a connection URL (use {})", qurry_core::dsn::SCHEMES)),
             other => return Err(format!("Unknown argument \"{}\"", other.escape_debug())),
         }
     }
@@ -68,6 +70,11 @@ pub fn parse(args: &[String]) -> Result<Cli, String> {
         return Err(format!("{f} is for a temporary connection: qurry-tui {f} postgres://user@host/db (or --env)"));
     }
     Ok(c)
+}
+
+/// `word:` at the start, as a URL scheme
+fn looks_like_scheme(a: &str) -> bool {
+    a.split_once(':').is_some_and(|(s, _)| s.starts_with(|c: char| c.is_ascii_alphabetic()) && s.chars().all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c)))
 }
 
 /// The data source of `s` (with the process environment and ~/.pgpass), and what to tell the user. Err: why it can't be opened
@@ -120,6 +127,11 @@ mod tests {
         let e = parse(&args(&["postgres://u:secret@h/d", "mysql://u:secret2@h/d"])).unwrap_err();
         assert!(!e.contains("secret"), "{e}");
         assert!(parse(&args(&["--env", "postgres://h/d"])).is_err());
+        // A one-slash typo or a bare user:password@host isn't echoed either
+        for typo in ["postgres:/u:sekrit@h/d", "u:sekrit@h", "postgres:u:sekrit"] {
+            let e = parse(&args(&[typo])).unwrap_err();
+            assert!(!e.contains("sekrit") && e.contains("isn't a connection URL"), "{e}");
+        }
         assert!(parse(&args(&["--ssh"])).is_err());
     }
 
@@ -131,6 +143,8 @@ mod tests {
         assert_eq!((ssh.user.as_str(), ssh.host.as_str(), ssh.port, ssh.key_path.as_str()), ("ops", "bastion", 2222, ""));
         assert!(t.config.name.ends_with("via ssh ops@bastion:2222"));
         assert!(temporary(&start("postgres://u@h/d", Some("-oProxyCommand=x"), false)).is_err());
+        let e = temporary(&start("postgres://u@h/d", Some("bastion:abc"), false)).unwrap_err();
+        assert!(e.contains("--ssh: port \"abc\"") && !e.contains("ProxyJump"), "{e}");
         assert!(temporary(&start("redis://h", None, true)).unwrap_err().contains("--incident"));
         assert!(temporary(&start("ftp://h", None, false)).unwrap_err().contains("Unknown scheme"));
     }

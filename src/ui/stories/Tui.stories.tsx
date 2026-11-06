@@ -16,6 +16,7 @@ export const Atoms = by("Atoms");
 export const Molecules = by("Molecules");
 export const Organisms = by("Organisms");
 export const ScreenExplorer = { ...by("Explorer & table"), name: "Screen · Explorer & table" };
+export const ScreenExplorerTemporary = { ...by("Explorer: temporary source"), name: "Screen · Explorer: temporary source" };
 export const ScreenExplorerMarked = { ...by("Explorer: marked nodes"), name: "Screen · Explorer: marked nodes (m)" };
 export const ScreenExplorerDropMarked = { ...by("Explorer: drop marked objects"), name: "Screen · Explorer: drop marked objects" };
 export const ScreenProductionConfirm = { ...by("Production confirm"), name: "Screen · Production confirm" };

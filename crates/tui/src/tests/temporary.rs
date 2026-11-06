@@ -20,12 +20,14 @@ async fn url_opens_a_connected_temporary_source_and_read_only_blocks_a_write() {
     let (mut h, id) = started(&format!("postgres://app:hunter2@127.0.0.1:{port}/shop"), true, false).await;
     let root = h.app.tree.roots.first().expect("a root");
     assert_eq!(root.conn, id);
-    assert!(root.hint.contains("temporary") && root.hint.contains("read-only"), "{}", root.hint);
     assert_eq!(root.label, format!("postgres://app@127.0.0.1:{port}/shop"));
     assert_eq!(h.app.tree.selected().map(|n| n.conn), Some(id.clone()));
     assert!(h.app.conn(&id).is_some_and(|c| c.connected), "connected: {}", h.app.status);
     let screen = h.screen(160, 40);
-    assert!(screen.contains("postgres://app@127.0.0.1") && !screen.contains("hunter2"), "{screen}");
+    assert!(screen.contains("postgres://app@") && !screen.contains("hunter2"), "{screen}");
+    // The mark is before the name, so the default explorer width shows it whatever the URL's length
+    let row = screen.lines().find(|l| l.contains("postgres://app@")).unwrap();
+    assert!(row.contains("◉  TEMP · READ-ONLY  postgres://app@"), "{row}");
 
     // A write is refused before it reaches the server; a read runs
     h.app.open_console(&id, None);

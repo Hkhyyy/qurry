@@ -711,7 +711,22 @@ async fn all_scenes() -> Vec<Value> {
     h.app.auto_light = false;
     h.app.popup = None;
     tab_bars(&mut scenes).await;
+    scenes.push(temporary_scene().await);
     scenes
+}
+
+/// `qurry-tui --read-only postgres://…`: the temporary source at the top of the explorer, its mark before the long URL name
+async fn temporary_scene() -> Value {
+    let mut h = Harness::new().await;
+    explorer(&mut h).await;
+    let var = |_: &str| None;
+    let env = qurry_core::dsn::Env { var: &var, home: None };
+    let t = qurry_core::dsn::from_url("postgres://app@db.internal.example.com:5432/shop", true, &env).unwrap();
+    h.app.state.open_temporary(t);
+    h.app.reload_conns();
+    h.settle().await;
+    h.app.tree.sel = 0;
+    app_scene(&mut h, "Explorer: temporary source", "qurry-tui --read-only postgres://…: the temporary data source at the top of the explorer, TEMP · READ-ONLY before its name (a long URL is cut at the end, not the mark)", 120, 22)
 }
 
 /// Split panes with many tabs of two Data Sources in each color mode: the focused (left) pane's active [PROD] tab next to an inactive [DEV] one, the other pane's active [DEV] tab next to an inactive [PROD] one.

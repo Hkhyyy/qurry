@@ -47,9 +47,7 @@ impl App {
                 key: c.config.id.clone(),
                 label: c.config.name.clone(),
                 hint: format!("{:?}", c.config.kind).to_lowercase()
-                    + if c.config.active_ssh().is_some() { " · ssh" } else if c.config.active_ssm().is_some() { " · ssm" } else { "" }
-                    + if c.temporary { " · temporary" } else { "" }
-                    + if c.temporary && c.config.read_only { " · read-only" } else { "" },
+                    + if c.config.active_ssh().is_some() { " · ssh" } else if c.config.active_ssm().is_some() { " · ssm" } else { "" },
                 kind: NodeKind::Conn,
                 conn: c.config.id.clone(),
                 db: None,

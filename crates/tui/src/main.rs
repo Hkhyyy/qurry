@@ -63,6 +63,17 @@ async fn main() -> std::io::Result<()> {
     let check_update = !cli.no_update_check && !qurry_core::update::disabled() && !selfupdate::current_exe().is_some_and(|e| selfupdate::from_source(&e));
     // Before the screen is taken: a bad URL says why on the terminal
     let temporary = cli.start.as_ref().map(cli::temporary).transpose().unwrap_or_else(|e| fail(&e));
+    // PGPASSWORD was for the URL's server and the temporary source now holds it: out of this process's environment, so sqlx doesn't
+    // send it to a saved PostgreSQL source without a saved password (that one uses its own ~/.pgpass line). Back for a relaunch
+    let pgpassword = temporary.as_ref().filter(|t| t.config.kind == qurry_core::store::DbKind::Postgres).and_then(|_| std::env::var_os("PGPASSWORD"));
+    if pgpassword.is_some() {
+        // SAFETY: nothing else runs yet (no task spawned, no thread reads the environment)
+        unsafe { std::env::remove_var("PGPASSWORD") };
+    }
+    // Also on the terminal, where it stays after qurry-tui exits (the status line is one row)
+    for n in temporary.iter().flat_map(|t| &t.notes) {
+        eprintln!("qurry-tui: {n}");
+    }
     // Keep engine logs from breaking the screen
     qurry_core::QUIET.store(true, std::sync::atomic::Ordering::Relaxed);
     let state = Arc::new(qurry_core::open_state(dir).map_err(|e| std::io::Error::other(e.to_string()))?);
@@ -99,7 +110,11 @@ async fn main() -> std::io::Result<()> {
     if res? {
         let exe = selfupdate::current_exe().ok_or_else(|| std::io::Error::other("cannot find this executable"))?;
         use std::os::unix::process::CommandExt;
-        return Err(std::process::Command::new(exe).args(&args[1..]).exec());
+        let mut cmd = std::process::Command::new(exe);
+        if let Some(p) = pgpassword {
+            cmd.env("PGPASSWORD", p);
+        }
+        return Err(cmd.args(&args[1..]).exec());
     }
     Ok(())
 }
@@ -126,7 +141,13 @@ async fn run(term: &mut Terminal<CrosstermBackend<std::io::Stdout>>, state: Arc<
     }
     if let Some((id, incident, notes)) = start {
         app.start_with(id, incident);
-        app.status = if notes.is_empty() { "Temporary data source: not saved, gone when qurry-tui exits".into() } else { notes };
+        // The notes first, then a startup notice that was already there
+        app.status = match (notes.is_empty(), app.status.is_empty()) {
+            (true, true) => "Temporary data source: not saved, gone when qurry-tui exits".into(),
+            (true, false) => std::mem::take(&mut app.status),
+            (false, true) => notes,
+            (false, false) => format!("{notes} · {}", app.status),
+        };
     }
     // Check for a new version (at launch + hourly, in the background). Failures are silently ignored
     if let Some(dir) = update_dir {

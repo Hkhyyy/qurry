@@ -112,21 +112,33 @@ pub fn from_url(url: &str, read_only: bool, env: &Env) -> AppResult<Temporary> {
         _ if tls_scheme => &["sslmode", "sslrootcert", "sslcert", "sslkey"],
         _ => &[],
     };
-    if let Some(k) = q.keys().find(|k| !known.contains(&k.as_str())) {
+    // Common in DATABASE_URL and harmless to leave out (a timeout, a name for the server's activity view, a client library's own
+    // setting): ignored with a note. Anything else is refused, so a TLS or password setting is never silently dropped
+    let ignored: &[&str] = match kind {
+        DbKind::Postgres => &["connect_timeout", "application_name", "pgbouncer", "schema"],
+        DbKind::Mysql => &["charset", "connect_timeout"],
+        _ => &[],
+    };
+    let mut notes = Vec::new();
+    let skipped: Vec<&str> = q.keys().map(String::as_str).filter(|k| ignored.contains(k)).collect();
+    if !skipped.is_empty() {
+        notes.push(format!("Ignored URL parameter{} {} (Qurry doesn't use {}).", if skipped.len() == 1 { "" } else { "s" }, skipped.join(", "), if skipped.len() == 1 { "it" } else { "them" }));
+    }
+    if let Some(k) = q.keys().find(|k| !known.contains(&k.as_str()) && !ignored.contains(&k.as_str())) {
         let list = if known.is_empty() { "none (use rediss:// for TLS)".to_string() } else { known.join(", ") };
         return Err(AppError::Msg(format!("Unknown URL parameter \"{k}\" — supported for {scheme}://: {list}")));
     }
     if q.contains_key("password") {
         password = q.get("password").cloned().filter(|s| !s.is_empty()).or(password);
     }
-    let mut notes = Vec::new();
     if password.is_some() {
         let instead = match kind {
             DbKind::Postgres => "PGPASSWORD or ~/.pgpass",
             DbKind::Mysql => "MYSQL_PWD",
             _ => "REDISCLI_AUTH",
         };
-        notes.push(format!("⚠ The password is on the command line, where other users of this computer can see it (ps). Use {instead} instead."));
+        // What to do first: the status line is one row and cuts the end
+        notes.push(format!("⚠ Use {instead} instead of a password in the command line (other users can see it with ps)."));
     }
     let port_of = |v: &str, from: &str| v.parse::<u16>().ok().filter(|p| *p > 0).ok_or_else(|| AppError::Msg(format!("{from}: \"{v}\" isn't a port number")));
     let mut ssl: Option<SslConfig> = None;
@@ -148,6 +160,8 @@ pub fn from_url(url: &str, read_only: bool, env: &Env) -> AppResult<Temporary> {
             match mode.to_ascii_lowercase().as_str() {
                 "disable" => allow_plaintext = true,
                 "allow" | "prefer" => {}
+                // require with a root certificate checks it, as libpq does (verify-ca)
+                "require" if !ca.is_empty() => ssl = Some(SslConfig { enabled: true, mode: "verify-ca".into(), ca_file: ca, cert_file: cert, key_file: key }),
                 m @ ("require" | "verify-ca" | "verify-full") => ssl = Some(SslConfig { enabled: true, mode: m.into(), ca_file: ca, cert_file: cert, key_file: key }),
                 m => return Err(AppError::Msg(format!("Unknown sslmode \"{m}\" (use disable, prefer, require, verify-ca or verify-full)"))),
             }
@@ -229,7 +243,7 @@ fn pgpass_file(path: &Path, host: &str, port: u16, db: &str, user: &str) -> Resu
         use std::os::unix::fs::PermissionsExt;
         let mode = meta.permissions().mode();
         if mode & 0o077 != 0 {
-            return Err(format!("{} is readable by others ({:o}), so it was ignored, as psql does — run: chmod 600 {}", path.display(), mode & 0o777, path.display()));
+            return Err(format!("{} ignored: readable by others ({:o}), as psql refuses it — run chmod 600 {}", path.display(), mode & 0o777, path.display()));
         }
     }
     let text = std::fs::read_to_string(path).map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
@@ -296,7 +310,8 @@ mod tests {
         assert_eq!(parts(&t), (DbKind::Postgres, "db.example", 6543, "app@corp", "my db", Some("p@ss:w/d")));
         // The name shows no password
         assert_eq!(t.config.name, "postgres://app@corp@db.example:6543/my db");
-        assert!(t.notes.iter().any(|n| n.contains("command line")));
+        // The fix first: the status line cuts the end
+        assert!(t.notes.iter().any(|n| n.starts_with("⚠ Use ") && n.contains("command line")), "{:?}", t.notes);
         // A raw @ in the password (everything up to the last @ is userinfo)
         assert_eq!(open("postgresql://u:a@b@h/d", &[]).unwrap().password.as_deref(), Some("a@b"));
         // IPv6
@@ -333,6 +348,8 @@ mod tests {
         assert_eq!(ssl(&open("postgres://h/d?sslmode=verify-full&sslrootcert=~/ca.pem", &[]).unwrap()), (Some("verify-full".into()), false));
         assert_eq!(open("postgres://h/d?sslmode=verify-full&sslrootcert=~/ca.pem", &[]).unwrap().config.ssl.unwrap().ca_file, "~/ca.pem");
         assert_eq!(ssl(&open("postgres://h/d", &[("PGSSLMODE", "require")]).unwrap()), (Some("require".into()), false));
+        // require with a root certificate checks it (libpq: verify-ca)
+        assert_eq!(ssl(&open("postgres://h/d?sslmode=require&sslrootcert=~/rds-ca.pem", &[]).unwrap()), (Some("verify-ca".into()), false));
         assert_eq!(ssl(&open("postgres://h/d?sslmode=prefer", &[("PGSSLMODE", "require")]).unwrap()), (None, false));
         // disable is the explicit "Allow unencrypted connection"
         assert_eq!(ssl(&open("postgres://h/d?sslmode=disable", &[]).unwrap()), (None, true));
@@ -355,6 +372,12 @@ mod tests {
         assert!(!e.contains("secretpw") && e.contains("u:***@"), "{e}");
         let e = open("postgres://u:secretpw@h/d?options=-c%20x", &[]).unwrap_err().to_string();
         assert!(e.contains("Unknown URL parameter \"options\"") && !e.contains("secretpw"), "{e}");
+        // Common harmless DATABASE_URL parameters are ignored with a note; TLS-like unknown ones are still refused
+        let t = open("postgres://u@db/app?connect_timeout=10&application_name=api", &[]).unwrap();
+        assert!(t.notes.iter().any(|n| n.contains("Ignored URL parameters application_name, connect_timeout")), "{:?}", t.notes);
+        assert!(open("mysql://u@db/app?charset=utf8mb4", &[]).is_ok());
+        assert!(open("postgres://u@db/app?pgbouncer=true", &[]).is_ok());
+        assert!(open("postgres://u@db/app?sslnegotiation=direct", &[]).unwrap_err().to_string().contains("Unknown URL parameter"));
         assert!(open("postgres://h1,h2/d", &[]).unwrap_err().to_string().contains("Several hosts"));
         assert!(open("db.example:5432", &[]).is_err());
     }

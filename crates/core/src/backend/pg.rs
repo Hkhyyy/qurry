@@ -789,60 +789,7 @@ async fn begin_read_only(pool: &PgPool) -> AppResult<sqlx::Transaction<'static, 
 
 /// Connect to `host`:`port`: the server, or the SSH tunnel's local port (db::connect_via)
 pub(crate) async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host: &str, port: u16) -> AppResult<PgPool> {
-    // Not new(): its ~/.pgpass lookup matches PGHOST / localhost instead of this server, and skips the file permission check on macOS
-    let mut opts = PgConnectOptions::new_without_pgpass()
-        .host(host)
-        .port(port)
-        .username(&cfg.user)
-        .application_name("qurry");
-    // Like DataGrip, an empty value connects to the postgres DB (the PG default, a DB named after the user, often does not exist)
-    let database = if cfg.database.trim().is_empty() { "postgres" } else { cfg.database.trim() };
-    opts = opts.database(database);
-    // No saved password: PGPASSWORD (sqlx reads it), else ~/.pgpass for this server (not the tunnel's local port), as psql does
-    let pgpass = || match crate::dsn::pgpass(&crate::dsn::Env::process(), &cfg.host, cfg.port, database, &cfg.user) {
-        Ok(p) => p,
-        Err(note) => {
-            crate::log!("[qurry] {note}");
-            None
-        }
-    };
-    let fallback = || if std::env::var_os("PGPASSWORD").is_some_and(|p| !p.is_empty()) { None } else { pgpass() };
-    if let Some(p) = password.filter(|p| !p.is_empty()).map(String::from).or_else(fallback) {
-        opts = opts.password(&p);
-    }
-    if cfg.read_only {
-        // Do not leave the parsing of \ in strings to server settings (match the rules guard reads with)
-        opts = opts.options([("default_transaction_read_only", "on"), ("standard_conforming_strings", "on")]);
-    }
-    // Without SSL settings a remote server must still set up TLS (certificate not checked); plain text only for this computer,
-    // an SSH tunnel, or when the data source allows it (Prefer would quietly fall back to plain text if TLS were cut)
-    if cfg.active_ssl().is_none() && !crate::db::plaintext_allowed(cfg, host) {
-        opts = opts.ssl_mode(PgSslMode::Require);
-    }
-    // SSL from the SSH/SSL tab
-    if let Some(ssl) = cfg.active_ssl() {
-        opts = opts.ssl_mode(match ssl.mode() {
-            "verify-full" => PgSslMode::VerifyFull,
-            "verify-ca" => PgSslMode::VerifyCa,
-            "require" => PgSslMode::Require,
-            // Do not pass unknown values on as unverified require
-            m => return Err(AppError::Msg(format!("Unknown SSL mode '{m}' (use require, verify-ca or verify-full)"))),
-        });
-        let home = |p: &str| p.strip_prefix("~/").map(|r| format!("{}/{r}", std::env::var("HOME").unwrap_or_default())).unwrap_or_else(|| p.to_string());
-        if !ssl.ca_file.trim().is_empty() {
-            opts = opts.ssl_root_cert(home(ssl.ca_file.trim()));
-        }
-        if !ssl.cert_file.trim().is_empty() {
-            opts = opts.ssl_client_cert(home(ssl.cert_file.trim()));
-        }
-        if !ssl.key_file.trim().is_empty() {
-            opts = opts.ssl_client_key(home(ssl.key_file.trim()));
-        }
-    }
-    const LEVELS: [&str; 4] = ["read uncommitted", "read committed", "repeatable read", "serializable"];
-    if let Some(iso) = cfg.options.isolation.as_deref().filter(|i| LEVELS.contains(i)) {
-        opts = opts.options([("default_transaction_isolation", iso)]);
-    }
+    let (opts, pgpass_note) = options(cfg, password, host, port)?;
     // sqlx sends TimeZone=UTC as a startup parameter, so change it with SET right after connecting
     let tz = cfg.options.time_zone.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(|t| t.replace('\'', "''"));
     let script = cfg.options.startup_script.trim().to_string();
@@ -869,13 +816,97 @@ pub(crate) async fn connect(cfg: &ConnectionConfig, password: Option<&str>, host
         .map_err(|e| match &e {
             // Required TLS that the server can't set up: say what to do instead of a bare TLS error
             sqlx::Error::Tls(_) if cfg.active_ssl().is_none() => AppError::Msg(format!("{}\n({e})", qurry_shared::errors::needs_tls_pg())),
+            // The server refused the login (class 28) while ~/.pgpass was skipped: say why it wasn't used, as psql does
+            sqlx::Error::Database(d) if d.code().is_some_and(|c| c.starts_with("28")) && pgpass_note.is_some() => {
+                AppError::Msg(format!("{e}\n{}", pgpass_note.unwrap_or_default()))
+            }
             _ => e.into(),
         })
+}
+
+/// The connect options, and why ~/.pgpass was skipped (when it was needed and couldn't be used)
+fn options(cfg: &ConnectionConfig, password: Option<&str>, host: &str, port: u16) -> AppResult<(PgConnectOptions, Option<String>)> {
+    // Not new(): its ~/.pgpass lookup matches PGHOST / localhost instead of this server, and skips the file permission check on macOS
+    let mut opts = PgConnectOptions::new_without_pgpass()
+        .host(host)
+        .port(port)
+        .username(&cfg.user)
+        .application_name("qurry");
+    // Like DataGrip, an empty value connects to the postgres DB (the PG default, a DB named after the user, often does not exist)
+    let database = if cfg.database.trim().is_empty() { "postgres" } else { cfg.database.trim() };
+    opts = opts.database(database);
+    // No saved password: PGPASSWORD (sqlx reads it), else ~/.pgpass for this server (not the tunnel's local port), as psql does
+    let mut pgpass_note = None;
+    let password = match password.filter(|p| !p.is_empty()) {
+        Some(p) => Some(p.to_string()),
+        None if std::env::var_os("PGPASSWORD").is_some_and(|p| !p.is_empty()) => None,
+        None => crate::dsn::pgpass(&crate::dsn::Env::process(), &cfg.host, cfg.port, database, &cfg.user).unwrap_or_else(|note| {
+            crate::log!("[qurry] {note}");
+            pgpass_note = Some(note);
+            None
+        }),
+    };
+    if let Some(p) = password {
+        opts = opts.password(&p);
+    }
+    if cfg.read_only {
+        // Do not leave the parsing of \ in strings to server settings (match the rules guard reads with)
+        opts = opts.options([("default_transaction_read_only", "on"), ("standard_conforming_strings", "on")]);
+    }
+    // Without SSL settings a remote server must still set up TLS (certificate not checked); plain text only for this computer,
+    // an SSH tunnel, or when the data source allows it (Prefer would quietly fall back to plain text if TLS were cut)
+    // Always set here, so PGSSLMODE in the environment never overrides the data source (or a URL's sslmode)
+    if cfg.active_ssl().is_none() {
+        opts = opts.ssl_mode(if crate::db::plaintext_allowed(cfg, host) { PgSslMode::Prefer } else { PgSslMode::Require });
+    }
+    // SSL from the SSH/SSL tab
+    if let Some(ssl) = cfg.active_ssl() {
+        opts = opts.ssl_mode(match ssl.mode() {
+            "verify-full" => PgSslMode::VerifyFull,
+            "verify-ca" => PgSslMode::VerifyCa,
+            "require" => PgSslMode::Require,
+            // Do not pass unknown values on as unverified require
+            m => return Err(AppError::Msg(format!("Unknown SSL mode '{m}' (use require, verify-ca or verify-full)"))),
+        });
+        let home = |p: &str| p.strip_prefix("~/").map(|r| format!("{}/{r}", std::env::var("HOME").unwrap_or_default())).unwrap_or_else(|| p.to_string());
+        if !ssl.ca_file.trim().is_empty() {
+            opts = opts.ssl_root_cert(home(ssl.ca_file.trim()));
+        }
+        if !ssl.cert_file.trim().is_empty() {
+            opts = opts.ssl_client_cert(home(ssl.cert_file.trim()));
+        }
+        if !ssl.key_file.trim().is_empty() {
+            opts = opts.ssl_client_key(home(ssl.key_file.trim()));
+        }
+    }
+    const LEVELS: [&str; 4] = ["read uncommitted", "read committed", "repeatable read", "serializable"];
+    if let Some(iso) = cfg.options.isolation.as_deref().filter(|i| LEVELS.contains(i)) {
+        opts = opts.options([("default_transaction_isolation", iso)]);
+    }
+    Ok((opts, pgpass_note))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The TLS mode is always set from the data source, never left to PGSSLMODE in the environment (sqlx reads it): a URL's
+    /// sslmode=disable or prefer isn't turned into a certificate check, and a remote server without SSL settings still needs TLS
+    #[test]
+    fn ssl_mode_comes_from_the_data_source_only() {
+        let source = |host: &str, extra: serde_json::Value| {
+            let mut c = serde_json::json!({ "id": "x", "name": "x", "kind": "postgres", "host": host, "port": 5432, "user": "u", "database": "d" });
+            c.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            serde_json::from_value::<ConnectionConfig>(c).unwrap()
+        };
+        let mode = |c: &ConnectionConfig| options(c, Some("pw"), &c.host, 5432).unwrap().0.get_ssl_mode();
+        assert!(matches!(mode(&source("127.0.0.1", serde_json::json!({}))), PgSslMode::Prefer));
+        assert!(matches!(mode(&source("db.example", serde_json::json!({ "options": { "allowPlaintext": true } }))), PgSslMode::Prefer));
+        assert!(matches!(mode(&source("db.example", serde_json::json!({}))), PgSslMode::Require));
+        let ssl = |m: &str| serde_json::json!({ "ssl": { "enabled": true, "mode": m } });
+        assert!(matches!(mode(&source("db.example", ssl("verify-ca"))), PgSslMode::VerifyCa));
+        assert!(matches!(mode(&source("127.0.0.1", ssl("verify-full"))), PgSslMode::VerifyFull));
+    }
 
     fn req(mode: &str, text: &str) -> FtsRequest {
         serde_json::from_value(serde_json::json!({ "text": text, "mode": mode, "matchCase": true, "columns": "text", "limit": 10 })).unwrap()
@@ -895,3 +926,4 @@ mod tests {
         assert_eq!(fts_cond("b", false, &req("matches", "it's")), "\"b\"::text = 'it''s'");
     }
 }
+
