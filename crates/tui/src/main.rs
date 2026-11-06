@@ -64,13 +64,6 @@ async fn main() -> std::io::Result<()> {
     let check_update = !cli.no_update_check && !qurry_core::update::disabled() && !selfupdate::current_exe().is_some_and(|e| selfupdate::from_source(&e));
     // Before the screen is taken: a bad URL says why on the terminal
     let temporary = cli.start.as_ref().map(cli::temporary).transpose().unwrap_or_else(|e| fail(&e));
-    // PGPASSWORD was for the URL's server and the temporary source now holds it: out of this process's environment, so sqlx doesn't
-    // send it to a saved PostgreSQL source without a saved password (that one uses its own ~/.pgpass line). Back for a relaunch
-    let pgpassword = temporary.as_ref().filter(|t| t.config.kind == qurry_core::store::DbKind::Postgres).and_then(|_| std::env::var_os("PGPASSWORD"));
-    if pgpassword.is_some() {
-        // SAFETY: nothing else runs yet (no task spawned, no thread reads the environment)
-        unsafe { std::env::remove_var("PGPASSWORD") };
-    }
     // Also on the terminal, where it stays after qurry-tui exits (the status line is one row)
     for n in temporary.iter().flat_map(|t| &t.notes) {
         eprintln!("qurry-tui: {n}");
@@ -111,11 +104,7 @@ async fn main() -> std::io::Result<()> {
     if res? {
         let exe = selfupdate::current_exe().ok_or_else(|| std::io::Error::other("cannot find this executable"))?;
         use std::os::unix::process::CommandExt;
-        let mut cmd = std::process::Command::new(exe);
-        if let Some(p) = pgpassword {
-            cmd.env("PGPASSWORD", p);
-        }
-        return Err(cmd.args(&args[1..]).exec());
+        return Err(std::process::Command::new(exe).args(&args[1..]).exec());
     }
     Ok(())
 }

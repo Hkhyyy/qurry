@@ -75,14 +75,31 @@ fn decode(s: &str) -> AppResult<String> {
     percent_encoding::percent_decode_str(s).decode_utf8().map(|s| s.to_string()).map_err(|_| AppError::Msg("The URL has a %-escape that isn't UTF-8 text".into()))
 }
 
-/// A temporary data source from DATABASE_URL
-pub fn from_database_url(env: &Env, read_only: bool) -> AppResult<Temporary> {
-    let url = env.get("DATABASE_URL").ok_or_else(|| AppError::Msg("--env: DATABASE_URL isn't set. Set it, or give the URL itself: qurry-tui postgres://user@host/db".into()))?;
-    from_url(&url, read_only, env)
+/// A TLS mode that turns TLS off or doesn't check it, with certificate files given (`wanted`: the mode they need): refused, never dropped
+fn unused_files(param: &str, mode: &str, wanted: Option<&str>) -> AppError {
+    let (want, names) = match (param, wanted) {
+        ("ssl-mode", Some("verify-ca")) => ("VERIFY_CA (or VERIFY_IDENTITY)", "ssl-ca"),
+        ("ssl-mode", _) => ("REQUIRED", "ssl-cert / ssl-key"),
+        (_, Some("verify-ca")) => ("verify-ca (or verify-full)", "sslrootcert"),
+        _ => ("require", "sslcert / sslkey"),
+    };
+    AppError::Msg(format!("Use {param}={want}: {param}={mode} doesn't use {names}"))
 }
 
-/// A temporary data source from a URL; the parts it leaves out come from the environment (and ~/.pgpass for a PostgreSQL password)
+/// A temporary data source from DATABASE_URL (in the environment, so a password in it isn't on the command line)
+pub fn from_database_url(env: &Env, read_only: bool) -> AppResult<Temporary> {
+    let url = env.get("DATABASE_URL").ok_or_else(|| AppError::Msg("--env: DATABASE_URL isn't set. Set it, or give the URL itself: qurry-tui postgres://user@host/db".into()))?;
+    parse(&url, read_only, env, false)
+}
+
+/// A temporary data source from a URL on the command line; the parts it leaves out come from the environment (and ~/.pgpass for a
+/// PostgreSQL password)
 pub fn from_url(url: &str, read_only: bool, env: &Env) -> AppResult<Temporary> {
+    parse(url, read_only, env, true)
+}
+
+/// `argv`: the URL is on the command line, where other users see a password in it (ps)
+fn parse(url: &str, read_only: bool, env: &Env, argv: bool) -> AppResult<Temporary> {
     let shown = redact(url);
     let bad = |why: &str| AppError::Msg(format!("{why}: {shown}"));
     let (scheme, _) = url.split_once("://").ok_or_else(|| bad(&format!("Not a connection URL (use {SCHEMES})")))?;
@@ -131,7 +148,7 @@ pub fn from_url(url: &str, read_only: bool, env: &Env) -> AppResult<Temporary> {
     if q.contains_key("password") {
         password = q.get("password").cloned().filter(|s| !s.is_empty()).or(password);
     }
-    if password.is_some() {
+    if argv && password.is_some() {
         let instead = match kind {
             DbKind::Postgres => "PGPASSWORD or ~/.pgpass",
             DbKind::Mysql => "MYSQL_PWD",
@@ -144,6 +161,20 @@ pub fn from_url(url: &str, read_only: bool, env: &Env) -> AppResult<Temporary> {
     let mut ssl: Option<SslConfig> = None;
     let mut allow_plaintext = false;
     let files = |ca: &str, cert: &str, key: &str| (q.get(ca).cloned().unwrap_or_default(), q.get(cert).cloned().unwrap_or_default(), q.get(key).cloned().unwrap_or_default());
+    // The TLS mode the certificate files ask for when no mode is given: a CA is checked (verify-ca), a client certificate needs TLS
+    let with_files = {
+        let (ca, cert, key) = match kind {
+            DbKind::Mysql => files("ssl-ca", "ssl-cert", "ssl-key"),
+            _ => files("sslrootcert", "sslcert", "sslkey"),
+        };
+        if !ca.is_empty() {
+            Some("verify-ca")
+        } else if !cert.is_empty() || !key.is_empty() {
+            Some("require")
+        } else {
+            None
+        }
+    };
     let (host, port, user, database) = match kind {
         DbKind::Postgres => {
             let host = host.or_else(|| q.get("host").cloned()).or_else(|| env.get("PGHOST")).unwrap_or_else(|| "localhost".into());
@@ -155,15 +186,19 @@ pub fn from_url(url: &str, read_only: bool, env: &Env) -> AppResult<Temporary> {
             };
             let user = user.or_else(|| q.get("user").cloned()).or_else(|| env.get("PGUSER")).unwrap_or_else(|| env.local_user());
             let db = Some(path).filter(|p| !p.is_empty()).or_else(|| q.get("dbname").cloned()).or_else(|| env.get("PGDATABASE")).unwrap_or_else(|| user.clone());
-            let mode = q.get("sslmode").cloned().or_else(|| env.get("PGSSLMODE")).unwrap_or_else(|| "prefer".into());
+            let mode = q.get("sslmode").cloned().or_else(|| env.get("PGSSLMODE")).map(|m| m.to_ascii_lowercase());
             let (ca, cert, key) = files("sslrootcert", "sslcert", "sslkey");
-            match mode.to_ascii_lowercase().as_str() {
-                "disable" => allow_plaintext = true,
-                "allow" | "prefer" => {}
+            let tls = |m: &str| Some(SslConfig { enabled: true, mode: m.into(), ca_file: ca.clone(), cert_file: cert.clone(), key_file: key.clone() });
+            match mode.as_deref() {
+                // Certificate files with no sslmode turn TLS on (a root certificate is checked: verify-ca), so they are never skipped
+                None => ssl = with_files.and_then(tls),
+                Some(m @ ("disable" | "allow" | "prefer")) if with_files.is_some() => return Err(unused_files("sslmode", m, with_files)),
+                Some("disable") => allow_plaintext = true,
+                Some("allow" | "prefer") => {}
                 // require with a root certificate checks it, as libpq does (verify-ca)
-                "require" if !ca.is_empty() => ssl = Some(SslConfig { enabled: true, mode: "verify-ca".into(), ca_file: ca, cert_file: cert, key_file: key }),
-                m @ ("require" | "verify-ca" | "verify-full") => ssl = Some(SslConfig { enabled: true, mode: m.into(), ca_file: ca, cert_file: cert, key_file: key }),
-                m => return Err(AppError::Msg(format!("Unknown sslmode \"{m}\" (use disable, prefer, require, verify-ca or verify-full)"))),
+                Some("require") if !ca.is_empty() => ssl = tls("verify-ca"),
+                Some(m @ ("require" | "verify-ca" | "verify-full")) => ssl = tls(m),
+                Some(m) => return Err(AppError::Msg(format!("Unknown sslmode \"{m}\" (use disable, prefer, require, verify-ca or verify-full)"))),
             }
             if password.is_none() {
                 password = env.get("PGPASSWORD");
@@ -177,16 +212,21 @@ pub fn from_url(url: &str, read_only: bool, env: &Env) -> AppResult<Temporary> {
             (host, port, user, db)
         }
         DbKind::Mysql => {
-            let mode = q.get("ssl-mode").or_else(|| q.get("sslmode")).cloned().unwrap_or_else(|| "preferred".into());
+            let mode = q.get("ssl-mode").or_else(|| q.get("sslmode")).map(|m| m.to_ascii_uppercase());
             let (ca, cert, key) = files("ssl-ca", "ssl-cert", "ssl-key");
             let tls = |m: &str| Some(SslConfig { enabled: true, mode: m.into(), ca_file: ca.clone(), cert_file: cert.clone(), key_file: key.clone() });
-            match mode.to_ascii_uppercase().as_str() {
-                "DISABLED" => allow_plaintext = true,
-                "PREFERRED" => {}
-                "REQUIRED" => ssl = tls("require"),
-                "VERIFY_CA" => ssl = tls("verify-ca"),
-                "VERIFY_IDENTITY" => ssl = tls("verify-full"),
-                m => return Err(AppError::Msg(format!("Unknown ssl-mode \"{m}\" (use DISABLED, PREFERRED, REQUIRED, VERIFY_CA or VERIFY_IDENTITY)"))),
+            match mode.as_deref() {
+                // As the mysql client: ssl-ca with no ssl-mode is VERIFY_CA; a client certificate alone turns TLS on (REQUIRED)
+                None => ssl = with_files.and_then(tls),
+                Some(m @ ("DISABLED" | "PREFERRED")) if with_files.is_some() => return Err(unused_files("ssl-mode", m, with_files)),
+                Some("DISABLED") => allow_plaintext = true,
+                Some("PREFERRED") => {}
+                // A CA file is checked, never carried along unused
+                Some("REQUIRED") if !ca.is_empty() => ssl = tls("verify-ca"),
+                Some("REQUIRED") => ssl = tls("require"),
+                Some("VERIFY_CA") => ssl = tls("verify-ca"),
+                Some("VERIFY_IDENTITY") => ssl = tls("verify-full"),
+                Some(m) => return Err(AppError::Msg(format!("Unknown ssl-mode \"{m}\" (use DISABLED, PREFERRED, REQUIRED, VERIFY_CA or VERIFY_IDENTITY)"))),
             }
             if password.is_none() {
                 password = env.get("MYSQL_PWD");
@@ -362,6 +402,51 @@ mod tests {
         assert!(open("rediss://h?sslmode=disable", &[]).is_err(), "rediss:// is never plain text");
         assert!(open("redis://h?sslmode=require", &[]).unwrap_err().to_string().contains("rediss://"));
         assert_eq!(ssl(&open("redis://h", &[]).unwrap()), (None, false));
+
+        // Certificate files are never dropped. No mode: a CA is checked (verify-ca, as the mysql client's --ssl-ca), a client
+        // certificate alone turns TLS on; a mode that wouldn't use them is refused with the mode to use
+        let pg = open("postgres://h/d?sslrootcert=/ca.pem", &[]).unwrap();
+        assert_eq!(ssl(&pg), (Some("verify-ca".into()), false));
+        assert_eq!(pg.config.ssl.unwrap().ca_file, "/ca.pem");
+        let pg = open("postgres://h/d?sslcert=/c.pem&sslkey=/k.pem", &[]).unwrap();
+        assert_eq!(ssl(&pg), (Some("require".into()), false));
+        let s = pg.config.ssl.unwrap();
+        assert_eq!((s.cert_file.as_str(), s.key_file.as_str()), ("/c.pem", "/k.pem"));
+        assert_eq!(ssl(&open("postgres://h/d?sslrootcert=/ca.pem&sslcert=/c.pem", &[]).unwrap()), (Some("verify-ca".into()), false));
+        for (url, env, want) in [
+            ("postgres://h/d?sslmode=prefer&sslrootcert=/ca.pem", &[][..], "Use sslmode=verify-ca (or verify-full): sslmode=prefer doesn't use sslrootcert"),
+            ("postgres://h/d?sslmode=allow&sslcert=/c.pem", &[], "Use sslmode=require: sslmode=allow doesn't use sslcert / sslkey"),
+            ("postgres://h/d?sslmode=disable&sslkey=/k.pem", &[], "sslmode=disable doesn't use"),
+            ("postgres://h/d?sslrootcert=/ca.pem", &[("PGSSLMODE", "prefer")], "sslmode=prefer doesn't use sslrootcert"),
+            ("mysql://h/d?ssl-mode=PREFERRED&ssl-ca=/ca.pem", &[], "Use ssl-mode=VERIFY_CA (or VERIFY_IDENTITY): ssl-mode=PREFERRED doesn't use ssl-ca"),
+            ("mysql://h/d?ssl-mode=disabled&ssl-cert=/c.pem", &[], "Use ssl-mode=REQUIRED: ssl-mode=DISABLED doesn't use ssl-cert / ssl-key"),
+        ] {
+            let e = open(url, env).unwrap_err().to_string();
+            assert!(e.contains(want), "{url}: {e}");
+        }
+        let my = open("mysql://h/d?ssl-ca=/ca.pem", &[]).unwrap();
+        assert_eq!(ssl(&my), (Some("verify-ca".into()), false));
+        assert_eq!(my.config.ssl.unwrap().ca_file, "/ca.pem");
+        assert_eq!(ssl(&open("mysql://h/d?ssl-cert=/c.pem&ssl-key=/k.pem", &[]).unwrap()), (Some("require".into()), false));
+        // REQUIRED with a CA checks it (as require + sslrootcert does for PostgreSQL)
+        assert_eq!(ssl(&open("mysql://h/d?ssl-mode=REQUIRED&ssl-ca=/ca.pem", &[]).unwrap()), (Some("verify-ca".into()), false));
+        assert_eq!(ssl(&open("mysql://h/d?ssl-mode=VERIFY_IDENTITY&ssl-ca=/ca.pem", &[]).unwrap()), (Some("verify-full".into()), false));
+    }
+
+    /// The ps warning is for a password that is really on the command line: not DATABASE_URL (--env), not PGPASSWORD / MYSQL_PWD
+    #[test]
+    fn command_line_warning_only_for_argv() {
+        let warned = |t: &Temporary| t.notes.iter().any(|n| n.contains("command line"));
+        assert!(warned(&open("postgres://u:pw@h/d", &[]).unwrap()));
+        assert!(warned(&open("postgres://u@h/d?password=pw", &[]).unwrap()));
+        assert!(!warned(&open("postgres://u@h/d", &[("PGPASSWORD", "pw")]).unwrap()));
+        assert!(!warned(&open("mysql://u@h/d", &[("MYSQL_PWD", "pw")]).unwrap()));
+        for url in ["postgres://u:pw@h/d", "mysql://u:pw@h/d", "redis://:pw@h"] {
+            let vars: HashMap<&'static str, &'static str> = [("DATABASE_URL", url), ("USER", "me")].into();
+            let t = from_database_url(&Env { var: &env_of(&vars), home: None }, false).unwrap();
+            assert_eq!(t.password.as_deref(), Some("pw"));
+            assert!(!warned(&t), "{url}: {:?}", t.notes);
+        }
     }
 
     #[test]
@@ -467,9 +552,36 @@ mod tests {
             for id in [rw.id, ro.id] {
                 st.delete_connection(id).await.unwrap();
             }
+            // A CA file with no TLS mode is used, not dropped: with a CA that didn't sign the server's certificate (or a server
+            // without TLS) the connection fails instead of going on unverified
+            let ca_param = match url.split("://").next() {
+                Some("postgres") => "sslrootcert",
+                Some("mysql") => "ssl-ca",
+                _ => continue,
+            };
+            let ca = dir.path().join("unrelated-ca.pem");
+            std::fs::write(&ca, UNRELATED_CA).unwrap();
+            let t = st.open_temporary(from_url(&format!("{url}?{ca_param}={}", ca.display()), false, &env).unwrap());
+            let e = st.connect(t.id.clone()).await.expect_err("a CA that didn't sign the server's certificate is refused").to_string();
+            println!("{shown} with {ca_param}: {e}");
+            assert!(["certificate", "UnknownIssuer", "TLS"].iter().any(|w| e.contains(w)), "{shown}: {e}");
+            st.delete_connection(t.id).await.unwrap();
         }
         assert!(!dir.path().join("connections.json").exists());
     }
+
+    /// A self-signed CA (public certificate only) that signed no test server's certificate
+    const UNRELATED_CA: &str = "-----BEGIN CERTIFICATE-----
+MIIBejCCASCgAwIBAgIUZEK6IdYf4C6NhpnnDp0so+qzmRwwCgYIKoZIzj0EAwIw
+IjEgMB4GA1UEAwwXcXVycnktdGVzdC11bnJlbGF0ZWQtY2EwIBcNMjYxMTA2MTY0
+MDAwWhgPMjEyNjEwMTMxNjQwMDBaMCIxIDAeBgNVBAMMF3F1cnJ5LXRlc3QtdW5y
+ZWxhdGVkLWNhMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEMfBW4IlqNdAGHIDq
+wr1KEQdG2F2XAwpfSK7+G5TYBtdUgZz0hlA47JdQJxKYFssBxTRfH7wYEMS0+qNE
+Q/v75qMyMDAwHQYDVR0OBBYEFHPH8/zNj76O2QFYjnxWQInRI6S+MA8GA1UdEwEB
+/wQFMAMBAf8wCgYIKoZIzj0EAwIDSAAwRQIhAOMKQY4WbXbde2KiJyO8UZ3UgP0V
+AY1Jv8ftzr/bARM2AiBnPKF+MbjNeSwUIByXfnGA80CLk6UKGquTFdP1RXb/Yg==
+-----END CERTIFICATE-----
+";
 
     #[test]
     fn read_only_and_never_shared_with_mcp() {

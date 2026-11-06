@@ -33,7 +33,9 @@ pub const USAGE: &str = "qurry-tui [--config-dir DIR] [--no-update-check]
 
 A URL opens a temporary data source and connects: it isn't saved, isn't shared with the Qurry app or MCP, and is gone on exit.
 Parts the URL leaves out come from PGHOST PGPORT PGUSER PGDATABASE PGPASSWORD PGSSLMODE (and ~/.pgpass, mode 0600),
-MYSQL_PWD or REDISCLI_AUTH. Put the password there rather than in the URL: other users of this computer can see the command line.
+MYSQL_PWD or REDISCLI_AUTH (these go only to this URL's server, never to a saved data source).
+A password in the URL stays visible to other users of this computer (ps) for as long as qurry-tui runs: put it in PGPASSWORD,
+~/.pgpass, MYSQL_PWD, REDISCLI_AUTH or DATABASE_URL (--env) instead.
   --read-only        refuse statements that change data (as a Read-only data source)
   --incident         open straight into Database Admin › Sessions (PostgreSQL, MySQL)
   --ssh DEST         through an SSH tunnel to [user@]host[:port] or a ~/.ssh/config Host (ssh-agent, IdentityFile, ProxyJump)";

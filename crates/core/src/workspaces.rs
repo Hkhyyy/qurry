@@ -34,8 +34,10 @@ fn read(store: &Store) -> Option<Vec<WsInfo>> {
     serde_json::from_str::<Vec<WsInfo>>(&s).ok().filter(|l| !l.is_empty())
 }
 
+/// Never with a temporary data source (qurry-tui URL): its id means nothing to the GUI or a later run
 fn write(store: &Store, list: &[WsInfo]) -> AppResult<()> {
-    crate::secrets::write_private(&path(store), serde_json::to_string_pretty(list)?.as_bytes())
+    let list: Vec<WsInfo> = list.iter().map(|w| WsInfo { conn_ids: w.conn_ids.iter().filter(|c| !store.is_temporary(c)).cloned().collect(), ..w.clone() }).collect();
+    crate::secrets::write_private(&path(store), serde_json::to_string_pretty(&list)?.as_bytes())
 }
 
 /// Apply the prev → next diff to list (create · delete · rename · add/remove Data Sources). Order follows next
@@ -194,5 +196,19 @@ mod tests {
         assert_eq!(after, vec![ws("g1", "Main", &["c1", "c2"]), ws("tmp2", "Ops", &[])]);
         assert_eq!(store.shared_workspaces().unwrap(), after);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A temporary source's id (qurry-tui URL) never reaches workspaces.json, whatever list the app hands over
+    #[test]
+    fn temporary_sources_are_not_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path().to_path_buf());
+        let temp: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "tmp-1", "name": "t", "kind": "postgres", "host": "h", "port": 1, "user": "u", "database": "d" })).unwrap();
+        store.add_temporary(temp);
+        store.adopt_workspaces(&[ws("w1", "Default", &["c1", "tmp-1"])], false).unwrap();
+        let prev = store.shared_workspaces().unwrap();
+        assert_eq!(prev, vec![ws("w1", "Default", &["c1"])]);
+        store.sync_workspaces(&prev, &[ws("w1", "Default", &["c1", "tmp-1"]), ws("w2", "Ops", &["tmp-1"])]).unwrap();
+        assert!(!std::fs::read_to_string(dir.path().join("workspaces.json")).unwrap().contains("tmp-1"));
     }
 }

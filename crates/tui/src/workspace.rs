@@ -33,7 +33,7 @@ fn ws_json(id: &str, name: &str, conns: &[String], tabs: &[Tab], panes: &Pane, a
         .iter()
         .map(|t| {
             if temporary.contains(t.conn.as_str()) {
-                return json!({ "title": "", "conn": t.conn, "db": "", "group": t.group, "kind": { "console": "" } });
+                return json!({ "title": "", "conn": "", "db": "", "group": t.group, "kind": { "console": "" } });
             }
             let kind = match &t.kind {
                 TabKind::Console(c) => json!({ "console": c.editor.lines().join("\n") }),
@@ -52,7 +52,7 @@ fn ws_json(id: &str, name: &str, conns: &[String], tabs: &[Tab], panes: &Pane, a
     json!({
         "id": id,
         "name": name,
-        "conns": conns,
+        "conns": conns.iter().filter(|c| !temporary.contains(c.as_str())).collect::<Vec<_>>(),
         "tabs": tabs_v,
         "panes": pane_json(panes),
         "active": tabs.get(active).map(|_| active),
@@ -432,7 +432,7 @@ impl App {
         let items: Vec<PItem> = self
             .conns
             .iter()
-            .filter(|c| !mine.contains(&c.config.id))
+            .filter(|c| !c.temporary && !mine.contains(&c.config.id))
             .map(|c| PItem { label: c.config.name.clone(), hint: format!("{:?}", c.config.kind).to_lowercase(), action: PAction::Pick(c.config.id.clone()) })
             .collect();
         if items.is_empty() {
@@ -443,12 +443,23 @@ impl App {
         self.popup = Some(Popup::Palette(Palette { title: "Add to this workspace's explorer".into(), input: tui_textarea::TextArea::default(), items, sel: 0, loading: 0, cache: Default::default() }));
     }
 
-    /// Explorer w: move the selected Data Source to another workspace (picker)
-    pub fn ws_move_conn_pick(&mut self) {
+    /// The data source selected in the explorer, for a workspace action: None (and why on the status line) when nothing is selected
+    /// or it is a temporary one, which every workspace shows and none lists
+    fn ws_selected_conn(&mut self) -> Option<String> {
         let Some(conn) = self.tree.selected().map(|n| n.conn.clone()) else {
             self.status = "Select a data source in the explorer first".into();
-            return;
+            return None;
         };
+        if self.conn(&conn).is_some_and(|c| c.temporary) {
+            self.status = "A temporary data source (from the command line) is shown in every workspace — n in the explorer saves one you can place".into();
+            return None;
+        }
+        Some(conn)
+    }
+
+    /// Explorer w: move the selected Data Source to another workspace (picker)
+    pub fn ws_move_conn_pick(&mut self) {
+        let Some(conn) = self.ws_selected_conn() else { return };
         let name = self.conn(&conn).map(|c| c.config.name.clone()).unwrap_or_default();
         let mut items: Vec<PItem> = (0..self.workspaces.len())
             .filter(|i| *i != self.cur_ws)
@@ -461,10 +472,7 @@ impl App {
 
     /// ⌃K › Remove Data Source from Workspace: remove the Data Source selected in the explorer from this workspace (the Data Source itself stays)
     pub fn ws_remove_conn(&mut self) {
-        let Some(conn) = self.tree.selected().map(|n| n.conn.clone()) else {
-            self.status = "Select a data source in the explorer first".into();
-            return;
-        };
+        let Some(conn) = self.ws_selected_conn() else { return };
         let i = self.cur_ws;
         self.workspaces[i].conns.retain(|c| *c != conn);
         self.rebuild_roots();
