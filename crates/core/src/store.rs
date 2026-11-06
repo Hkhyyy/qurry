@@ -527,8 +527,8 @@ impl Store {
                     if c.options.oracle_client.as_deref().is_some_and(|p| !p.trim().is_empty()) {
                         notes.push("loads Oracle client libraries from a folder".into());
                     }
-                    let (value, tone) = if notes.is_empty() { ("password on connect".to_string(), None) } else { (notes.join(", "), Some("warn".to_string())) };
-                    rows.push(ImportRow { text: format!("+ add \"{}\" ({})", c.name, crate::import::server(c)), note: kind, value, tone, checkable: true });
+                    let (value, tone) = if notes.is_empty() { ("password on connect".to_string(), None) } else { (notes.join(", "), Some("warn")) };
+                    rows.push(ImportRow::new(format!("+ add \"{}\" ({})", c.name, crate::import::server(c)), kind, value, tone, true));
                 }
                 Some(e) => {
                     let mut ch = vec![];
@@ -582,8 +582,8 @@ impl Store {
                         ch.push("changes the startup script".into());
                     }
                     let note = if ch.is_empty() { kind } else { format!("{kind} · {}", ch.join(", ")) };
-                    let tone = (!ch.is_empty()).then(|| "warn".to_string());
-                    rows.push(ImportRow { text: format!("~ update \"{}\"", e.name), note, value: "update".into(), tone, checkable: true });
+                    let tone = (!ch.is_empty()).then_some("warn");
+                    rows.push(ImportRow::new(format!("~ update \"{}\"", e.name), note, "update".into(), tone, true));
                 }
             }
         }
@@ -592,9 +592,15 @@ impl Store {
         let message = if rows.is_empty() {
             format!("Nothing to import: {from} has no data sources.\n{shown}")
         } else {
-            format!("Import these data sources from {from}?\n{shown}\n\n{added} to add, {updated} to update. Passwords aren't in the file: each asks on its first connect.")
+            // An update keeps the saved password unless its row says it will be removed
+            let pw = match (added, updated) {
+                (_, 0) => "Passwords aren't in the file: each asks on its first connect.",
+                (0, _) => "Passwords aren't in the file: an updated data source keeps its saved password unless its row says otherwise.",
+                _ => "Passwords aren't in the file: new data sources ask on their first connect, updated ones keep their saved password unless their row says otherwise.",
+            };
+            format!("Import these data sources from {from}?\n{shown}\n\n{added} to add, {updated} to update. {pw}")
         };
-        ImportPlan { title: crate::import::TITLE.into(), message, importable: rows.len(), rows, configs: incoming.into_iter().map(Some).collect() }
+        ImportPlan { title: crate::import::TITLE.into(), message: crate::import::clean_message(message), importable: rows.len(), rows, configs: incoming.into_iter().map(Some).collect() }
     }
 
     /// Import the checked rows of `plan` (`picked[i]` for row i; missing = checked). Sources from another tool that Qurry has
@@ -1037,6 +1043,9 @@ mod tests {
         std::fs::write(&file, serde_json::to_string(&vec![theirs]).unwrap()).unwrap();
         let p = preview(&b, &file);
         assert!(p.contains("unencrypted") && !p.contains("MCP"), "{p}");
+        // An update keeps the saved password: the question doesn't say it's asked again
+        let m = b.import_plan(&file, std::path::Path::new("/nonexistent-home"), None).unwrap().message;
+        assert!(m.ends_with("0 to add, 1 to update. Passwords aren't in the file: an updated data source keeps its saved password unless its row says otherwise."), "{m}");
         import_all(&b, &file);
         assert_eq!(b.get("3").unwrap().unwrap().mcp_access(true), McpAccess::Off);
         let _ = std::fs::remove_dir_all(&base);

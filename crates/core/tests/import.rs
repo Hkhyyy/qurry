@@ -8,6 +8,28 @@ fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/import")
 }
 
+/// The import checks "already in Qurry" again under the store's lock, with the tunnel as part of the source: the same server
+/// reached directly isn't the one through a bastion, the same one through the same bastion is
+#[test]
+fn import_rechecks_duplicates_with_the_tunnel() {
+    let ws = home().join(".var/app/io.dbeaver.DBeaverCommunity/data/DBeaverData/workspace6/Ops/.dbeaver");
+    let direct: ConnectionConfig = serde_json::from_value(serde_json::json!({ "id": "d", "name": "ops direct", "kind": "postgres", "host": "ops-db.internal", "port": 5432, "user": "", "database": "ops" })).unwrap();
+    let mut tunneled = direct.clone();
+    tunneled.id = "t".into();
+    tunneled.ssh = Some(serde_json::from_value(serde_json::json!({ "enabled": true, "host": "ops-gw.example.org", "port": 2222, "user": "" })).unwrap());
+    let (s, _d) = store();
+    let plan = s.import_plan(&ws, &home(), None).unwrap();
+    assert_eq!(plan.importable, 1);
+    // Added by another app between the preview and the import: reached directly, so ops-pg is still new
+    s.save(&direct).unwrap();
+    assert_eq!(s.import_apply(&plan, &[], |_| Ok(())).unwrap().0, 1);
+    let (s, _d) = store();
+    let plan = s.import_plan(&ws, &home(), None).unwrap();
+    // Through the same tunnel: it's the same source and isn't added twice
+    s.save(&tunneled).unwrap();
+    assert_eq!(s.import_apply(&plan, &[], |_| Ok(())).unwrap().0, 0);
+}
+
 fn home() -> PathBuf {
     fixtures().join("home")
 }
@@ -148,11 +170,12 @@ fn dbeaver_with_ssh_ssl_oracle_mongodb_and_unsupported() {
 
 #[test]
 fn passwords_in_the_files_are_not_imported() {
-    let secrets = ["url-secret-1", "xml-secret-2", "local-secret-3", "ssh-secret-4", "json-secret-5", "json-ssh-secret-6", "json-ssh-secret-7"];
-    for p in [fixtures().join("password"), fixtures().join("password/data-sources.json")] {
+    // In the files: password elements and keys, and passwords in JDBC URLs (query, user info with / , @, MySQL's (…) host form)
+    let secrets = ["url-secret-1", "xml-secret-2", "local-secret-3", "ssh-secret-4", "json-secret-5", "json-ssh-secret-6", "json-ssh-secret-7", "secret,8", "url-secret-9", "url-secret-10"];
+    for (p, n) in [(fixtures().join("password"), 3), (fixtures().join("password/data-sources.json"), 1)] {
         let (s, d) = store();
         let plan = s.import_plan(&p, &home(), None).unwrap();
-        assert_eq!(plan.importable, 1, "{p:?}");
+        assert_eq!(plan.importable, n, "{p:?}: {:#?}", plan.rows);
         s.import_apply(&plan, &[], |_| Ok(())).unwrap();
         let c = saved(&s, "with-password");
         assert!(!c.password_saved && !c.ssh_secret_saved);
