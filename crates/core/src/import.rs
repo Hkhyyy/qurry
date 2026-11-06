@@ -507,7 +507,10 @@ fn read_dbeaver(files: &[PathBuf], home: &Path) -> AppResult<Vec<Foreign>> {
         };
         // ${project.path}: the DBeaver project folder (the parent of .dbeaver)
         let project = f.parent().and_then(Path::parent).map(|p| p.display().to_string()).unwrap_or_default();
-        out.extend(conns.values().take(MAX_SOURCES - out.len().min(MAX_SOURCES)).map(|c| map_dbeaver(c, &project)));
+        // By name, as DBeaver's navigator shows them (the file's keys are ids)
+        let mut list: Vec<&Value> = conns.values().take(MAX_SOURCES - out.len().min(MAX_SOURCES)).collect();
+        list.sort_by_key(|c| s(c, "name").to_lowercase());
+        out.extend(list.into_iter().map(|c| map_dbeaver(c, &project)));
     }
     Ok(out)
 }
@@ -894,6 +897,9 @@ pub(crate) fn foreign_plan(from: &str, path: &str, existing: &[ConnectionConfig]
             }
         }
     }
+    // What is added first, then what is skipped (each in the file's order)
+    let (a, b): (Vec<_>, Vec<_>) = rows.into_iter().zip(configs).partition(|(_, c)| c.is_some());
+    let (rows, configs): (Vec<ImportRow>, Vec<Option<ConnectionConfig>>) = a.into_iter().chain(b).unzip();
     let add = configs.iter().filter(|c| c.is_some()).count();
     let skipped = rows.len() - add;
     let message = if rows.is_empty() {
