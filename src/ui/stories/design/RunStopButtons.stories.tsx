@@ -74,7 +74,7 @@ function GridBar({ running, mode, onRun = noop, onStop = noop }: { running: bool
           <IcStop />
         </IconButton>
       ) : (
-        <IconButton size="sm" title="Reload Page (⌘R)" disabled={running && mode !== "toggle"} onClick={onRun}>
+        <IconButton size="sm" title="Reload Page (⌘r)" disabled={running && mode !== "toggle"} onClick={onRun}>
           <IcReload />
         </IconButton>
       )}
