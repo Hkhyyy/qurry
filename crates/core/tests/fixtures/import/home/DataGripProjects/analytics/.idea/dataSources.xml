@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="DataSourceManagerImpl" format="xml" multifile-model="true">
+    <data-source source="LOCAL" name="dwh" uuid="dd00ee11-8888-4a2b-8c3d-000000000001">
+      <driver-ref>postgresql</driver-ref>
+      <jdbc-url>jdbc:postgresql://dwh.internal:5432/dwh</jdbc-url>
+    </data-source>
+  </component>
+</project>
