@@ -255,7 +255,7 @@ pub fn verify_sums(sums: &[u8], sig_b64: &str) -> Result<(), String> {
 }
 
 /// Accepted if any of the keys signed it. A key that doesn't decode fails the check (it is never skipped), and no keys accept nothing
-fn verify_sums_with(keys: &[&str], sums: &[u8], sig_b64: &str) -> Result<(), String> {
+pub fn verify_sums_with(keys: &[&str], sums: &[u8], sig_b64: &str) -> Result<(), String> {
     use base64::Engine;
     let b64 = |s: &str| -> Result<String, String> {
         let raw = base64::engine::general_purpose::STANDARD.decode(s.trim()).map_err(|e| format!("bad base64: {e}"))?;
