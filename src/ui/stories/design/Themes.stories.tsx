@@ -1,9 +1,10 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 // Fake backend (same as the app's ?mock): the preview is the real app on fixed data
 import "../../../lib/mock";
 import { monaco } from "../../../lib/monaco";
 import App from "../../../App";
+import { useTabsStore } from "../../../features/tabs/store";
 import { TuiScreen, type Run, type Scene } from "../TuiScreen";
 import tuiSnapshots from "../tui-snapshots.json";
 import { Button, Notice, Select, Text, TextInput, normalizeHex } from "../../index";
@@ -303,9 +304,11 @@ const typeInto = (input: HTMLInputElement, text: string) => {
  * Brings the app to a state where every token shows, as a user would (e2e/app.ts): a console on [DEV] shop_app runs PREVIEW_SQL,
  * then in the users result (4 rows) one cell is edited, a row deleted, one added, "user_4" found and a cell selected
  */
-async function stageApp(root: HTMLElement) {
+async function stageApp(root: HTMLElement, live: () => boolean) {
   const node = (text: string) => [...root.querySelectorAll<HTMLElement>(".ws-explorer.on .tree-node")].find((n) => n.textContent?.includes(text));
   const dev = await until(() => node("[DEV] shop_app"));
+  // React's StrictMode mounts the preview twice in development: only the second one stages
+  if (!live()) return;
   press(dev);
   // The shortcut handler sees the selection after the app re-renders; it reads the event target, so the key comes from the row
   await sleep(300);
@@ -356,6 +359,7 @@ const PREVIEW_CSS = `
 .theme-preview .conn-tree:has([data-node="prod"]) { background: var(--theme-prod-tint) !important; box-shadow: inset 3px 0 0 var(--theme-prod-stripe) !important; }
 .theme-preview .conn-tree:has([data-node="my"]) { background: var(--theme-tint) !important; }
 .theme-preview .tree-node.preview-hover { background: var(--hover-tint); }
+.theme-preview .tok-hot { outline: 1px dashed var(--text); outline-offset: -1px; }
 `;
 
 /** A jsonb result (the app's ?mock payments rows): JSON keys, strings, numbers and null in the cells */
@@ -377,53 +381,97 @@ const TUI_TOKEN: Record<string, Key> = {
   "#6e2a2a": "prodTint", "#2f5634": "tint",
 };
 const TUI_SCENE = (tuiSnapshots as { scenes: Scene[] }).scenes.find((s) => s.name === "Console & result")!;
+/** The token a TUI snapshot color stands for (the Production color as text is the stripe, as a background the tint) */
+const tokenOfTui = (c: string, bg: boolean): Key | undefined => {
+  const k = TUI_TOKEN[c.toLowerCase()];
+  return k === "prodTint" && !bg ? "prodStripe" : k;
+};
 /** The TUI scene with each color swapped for its token's color in the palette */
 function tuiIn(p: Palette): Scene {
   const map = (c: string | null, bg: boolean) => {
-    if (!c) return c;
-    const k = TUI_TOKEN[c.toLowerCase()];
-    // The Production color as text is the stripe, as a background the tint
-    return k === "prodTint" && !bg ? p.prodStripe : k ? p[k] : c;
+    const k = c && tokenOfTui(c, bg);
+    return k ? p[k] : c;
   };
   return { ...TUI_SCENE, desc: "", rows: TUI_SCENE.rows.map((runs) => runs.map(([t, f, b, ...rest]) => [t, map(f, false), map(b, true), ...rest] as Run)) };
 }
 
-/** A color far from the token's own, for blinking it */
-const flashOf = (c: string) => (ratio(c, "#ff2bd6") < 2 ? "#00e5ff" : "#ff2bd6");
+/** Two colors: a token's CSS variables are set to each for a moment, and what changes between them draws it (also through color-mix) */
+const PROBES = ["#010203", "#fefdfc"];
+const hasText = (el: Element) => [...el.childNodes].some((n) => n.nodeType === Node.TEXT_NODE && n.textContent!.trim());
+/** What of el's look a token can be in: text (only where it has text of its own, not inherited by a box), icon strokes, background, borders, stripe, ::before mark */
+function look(el: Element) {
+  const s = getComputedStyle(el);
+  const text = hasText(el) || el instanceof SVGElement ? s.color + s.fill + s.stroke : "";
+  const borders = (["Top", "Right", "Bottom", "Left"] as const).map((d) => (s[`border${d}Width`] === "0px" ? "" : s[`border${d}Color`])).join();
+  return [text, s.backgroundColor, borders, s.boxShadow, getComputedStyle(el, "::before").backgroundColor].join("|");
+}
+/** Monaco draws from its theme, not the CSS variables: the tokens it shows, by what they color */
+const MONACO: Partial<Record<Key, string>> = {
+  keyword: ".view-line span span", string: ".view-line span span", number: ".view-line span span", comment: ".view-line span span", function: ".view-line span span",
+  text: ".view-line span span", muted: ".line-numbers", bg: ".monaco-editor-background",
+};
+/**
+ * The elements that draw token k. The app's CSS: its variables are set to each probe and back in one go, so nothing is painted in between
+ * and other tokens with the same value don't count. Monaco: the spans in k's color. The TUI snapshot: the runs whose color maps to k
+ */
+function usedBy(wrap: HTMLElement, tui: HTMLElement, k: Key, p: Palette): Element[] {
+  const vars = TOKENS.find((t) => t.key === k)!.vars;
+  const before = vars.map((v) => wrap.style.getPropertyValue(v));
+  const els = [...wrap.querySelectorAll("*")].filter((el) => !tui.contains(el) && !el.closest(".monaco-editor") && el.checkVisibility());
+  const looks = PROBES.map((c) => {
+    vars.forEach((v) => wrap.style.setProperty(v, c));
+    return els.map(look);
+  });
+  vars.forEach((v, i) => wrap.style.setProperty(v, before[i]));
+  const want = `rgb(${rgb(p[k]).join(", ")})`;
+  const inMonaco = MONACO[k] ? [...wrap.querySelectorAll<HTMLElement>(MONACO[k]!)].filter((el) => { const s = getComputedStyle(el); return (k === "bg" ? s.backgroundColor : s.color) === want && (k === "bg" || el.textContent!.trim()); }) : [];
+  const rows = tui.querySelectorAll("pre > div");
+  const inTui = TUI_SCENE.rows.flatMap((runs, y) =>
+    runs.flatMap(([, f, b], i) => (([[f, false], [b, true]] as const).some(([c, bg]) => c && tokenOfTui(c, bg) === k) ? [rows[y]?.children[i]] : [])),
+  );
+  // An icon's path can't take an outline: its <svg> does
+  const inCss = els.filter((_, i) => looks[0][i] !== looks[1][i]).map((el) => (el instanceof SVGElement && el.ownerSVGElement ? el.ownerSVGElement : el));
+  return [...new Set([...inCss, ...inMonaco, ...inTui])].filter(Boolean) as Element[];
+}
 
 /**
  * The real app in the palette (staged so every token shows), a jsonb result, a warning notice; under them the TUI.
- * hot: the token being pointed at blinks (its color and a far one, every 0.4 s), so it shows wherever the app uses it.
+ * hot: the token being pointed at; what draws it gets a thin dashed outline (inside the element, nothing blinks or is covered).
  * zoom: the app is laid out at 1080 × 720 and scaled.
  */
 function RealPreview({ p, hot, zoom = 0.7 }: { p: Palette; hot?: Key | null; zoom?: number }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [blink, setBlink] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  const app = useRef<HTMLDivElement>(null);
+  const tui = useRef<HTMLDivElement>(null);
+  // The tabs are kept outside the app (zustand): a preview shown again starts without the last one's consoles
+  useState(() => useTabsStore.setState(useTabsStore.getInitialState(), true));
   useEffect(() => {
-    setBlink(false);
-    if (!hot) return;
-    const id = window.setInterval(() => setBlink((b) => !b), 400);
-    return () => clearInterval(id);
-  }, [hot]);
-  const shown: Palette = hot && blink ? { ...p, [hot]: flashOf(p[hot]) } : p;
-  useEffect(() => {
-    stageApp(ref.current!).catch(() => {});
+    let live = true;
+    stageApp(app.current!, () => live).catch(() => {});
+    // The console editor sets the app's own Monaco theme when it mounts: set this one again after it
+    const id = window.setTimeout(() => setMonacoTheme(p), 1500);
+    return () => {
+      live = false;
+      clearTimeout(id);
+    };
   }, []);
-  useEffect(() => {
-    setMonacoTheme(shown);
-    // The console editor sets the app's own theme when it mounts: set this one again after it
-    const id = window.setTimeout(() => setMonacoTheme(shown), 800);
-    return () => clearTimeout(id);
-  });
+  const colors = JSON.stringify(p);
+  useEffect(() => setMonacoTheme(p), [colors]);
+  useLayoutEffect(() => {
+    if (!hot) return;
+    const els = usedBy(wrap.current!, tui.current!, hot, p);
+    els.forEach((el) => el.classList.add("tok-hot"));
+    return () => els.forEach((el) => el.classList.remove("tok-hot"));
+  }, [hot, colors]);
   return (
-    <div className="theme-preview" style={{ ...themeVars(shown), display: "flex", flexDirection: "column", gap: 10, background: "transparent" }}>
+    <div ref={wrap} className="theme-preview" style={{ ...themeVars(p), display: "flex", flexDirection: "column", gap: 10, background: "transparent" }}>
       <style>{PREVIEW_CSS}</style>
-      <div ref={ref} style={{ width: 1080 * zoom, height: 720 * zoom, border: `1px solid ${shown.border}`, borderRadius: 6, overflow: "hidden", flex: "none" }}>
+      <div ref={app} style={{ width: 1080 * zoom, height: 720 * zoom, border: `1px solid ${p.border}`, borderRadius: 6, overflow: "hidden", flex: "none" }}>
         <div style={{ width: 1080, height: 720, zoom }}>
           <App />
         </div>
       </div>
-      <div style={{ width: 1080 * zoom, border: `1px solid ${shown.border}`, borderRadius: 6, overflow: "hidden", background: shown.bg }}>
+      <div style={{ width: 1080 * zoom, border: `1px solid ${p.border}`, borderRadius: 6, overflow: "hidden", background: p.bg }}>
         <div style={{ width: 1080, zoom, display: "flex", flexDirection: "column" }}>
           <div style={{ position: "relative", height: 132 }}>
             <ResultGrid result={JSON_RESULT} running={false} loadingMore={false} query="select id, status, data from payments" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
@@ -432,8 +480,8 @@ function RealPreview({ p, hot, zoom = 0.7 }: { p: Palette; hot?: Key | null; zoo
           <Notice tone="warn">Refresh failed, showing data from 10:24:01: Session closed</Notice>
         </div>
       </div>
-      <div style={{ zoom: zoom * 0.95 }}>
-        <TuiScreen scene={tuiIn(shown)} colors={{ bg: shown.bg, fg: shown.text, border: shown.border }} />
+      <div ref={tui} style={{ zoom: zoom * 0.95 }}>
+        <TuiScreen scene={tuiIn(p)} colors={{ bg: p.bg, fg: p.text, border: p.border }} />
       </div>
     </div>
   );
@@ -551,7 +599,7 @@ function TokenRow({ t, p, edited, onPoint, onChange, onReset }: { t: Tok; p: Pal
   return (
     <div
       data-row={t.key}
-      // Opening the color picker is editing: the color has to be seen without blinking
+      // Opening the color picker is editing: the color has to be seen without the outline
       onFocus={(e) => onPoint((e.target as HTMLInputElement).type === "color" ? "edit" : "focus")}
       onBlur={() => onPoint("blur")}
       onMouseDown={(e) => (e.target as HTMLElement).closest(".ui-swatch") && onPoint("edit")}
@@ -589,7 +637,7 @@ function ThemeEditor() {
   const [dark, setDark] = useState("c-night");
   const [light, setLight] = useState("solarized-light");
   const [advanced, setAdvanced] = useState(false);
-  // hot: blinks in the preview; about: named in the preview title (stays while its row has focus)
+  // hot: outlined in the preview; about: named in the preview title (stays while its row has focus)
   const [hot, setHot] = useState<Key | null>(null);
   const [about, setAbout] = useState<Key | null>(null);
   const focused = useRef<Key | null>(null);
