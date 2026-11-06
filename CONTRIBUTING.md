@@ -40,7 +40,7 @@ npx playwright test --project=chromium --workers=2   # same, two tests at a time
 npx playwright test --project=webkit --shard=1/2     # one half of the spec files, as a CI shard runs them
 ```
 
-A shortcut's default keys are checked in two places: `src/lib/shortcuts.test.ts` pins every command's default keys and checks that none collide or can't be pressed, and `e2e/shortcuts.spec.ts` presses a few per scope in the running app. Changing a default key means changing it in `crates/shared/src/keymap-table.json` and in the vitest table.
+A shortcut's default keys are checked in two places: `src/lib/shortcuts.test.ts` pins every command's default keys and checks that none collide or can't be pressed, and `e2e/shortcuts.spec.ts` presses every default key in its scope in the running app and checks what the command does (one app start per scope, the checks in a row; a new command needs a check there). Changing a default key means changing it in `crates/shared/src/keymap-table.json` and in the vitest table.
 
 ### Against real servers
 

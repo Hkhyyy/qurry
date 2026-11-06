@@ -51,7 +51,16 @@ The data sources and saved passwords are shared by the GUI, the TUI and the MCP 
 
 ## Tests
 
-How to run the unit tests and the tests against real PostgreSQL, MySQL and Redis containers: [CONTRIBUTING › Tests](../CONTRIBUTING.md#tests). Every pull request runs the CI workflow: Rust unit tests, integration tests against PostgreSQL (with pgvector) / MySQL / Redis / ClickHouse / MongoDB / Qdrant / Chroma / Milvus containers, the same tests against older servers (PostgreSQL 12, MySQL 5.7, ClickHouse 22.8, MongoDB 5, SQL Server 2017), vitest and the web build.
+How to run the unit tests and the tests against real PostgreSQL, MySQL and Redis containers: [CONTRIBUTING › Tests](../CONTRIBUTING.md#tests). Every pull request runs the CI workflow (`.github/workflows/ci.yml`):
+
+- `rust`: Rust unit tests and integration tests against PostgreSQL (with pgvector) / MySQL / Redis / ClickHouse / MongoDB / Qdrant / Chroma / Milvus containers
+- `compat`: the same tests against older servers (PostgreSQL 12, MySQL 5.7, ClickHouse 22.8, MongoDB 5, SQL Server 2017)
+- `web`: vitest, the web build and the Storybook build
+- `e2e (chromium)` and `e2e (webkit)`: Playwright against the mock app, each browser in two shards that run side by side; each check passes when both of its shards pass
+
+A pull request that only changes files under `docs/` or `.md` files (other than `SECURITY.md`, which a Rust test reads) skips `rust`, `compat` and e2e; their checks still pass. A new push to a pull request cancels the run of the previous push; runs on `main` always run everything and never cancel each other.
+
+The Audit workflow (`.github/workflows/audit.yml`) checks the lockfiles for known vulnerabilities (`cargo deny check advisories`, `pnpm audit --prod`) on pull requests that change a lockfile and every week on `main`. It is not a required check. What to do when it fails: [CONTRIBUTING › Dependencies](../CONTRIBUTING.md#dependencies). Dependabot opens weekly update pull requests for Cargo, npm and GitHub Actions.
 
 Redis TLS (16391), Sentinel (26392 → 16392) and Cluster (17001-17003) servers are described in the test comments in `crates/core/src/redisdb.rs` (TLS certificate folder: `QURRY_TEST_TLS_DIR`, default `/tmp/dbtool-tls`).
 
