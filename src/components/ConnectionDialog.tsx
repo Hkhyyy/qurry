@@ -169,7 +169,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
       : tab === "ssh" && tunnel === "ssm"
       ? "The database host/port on the General tab are reached from the instance (e.g. an RDS endpoint). Test Connection starts a session and connects through it."
       : tab === "ssh"
-      ? "The database host/port on the General tab are resolved from the SSH server. Host keys are checked against ~/.ssh/known_hosts."
+      ? "The database host/port on the General tab are resolved from the SSH server. Host keys are checked against ~/.ssh/known_hosts. The SSH host may be a ~/.ssh/config Host (HostName, User, Port, IdentityFile, ProxyJump); with no private key or password, ssh-agent is used."
       : "Passwords are stored encrypted in the app data folder (no Keychain prompts).";
   const port = (v: number, on: (n: number) => void, fallback: number, disabled?: boolean) => <TextInput className="w-port" disabled={disabled} value={v} onChange={(e) => on(Number(e.target.value) || fallback)} />;
 
@@ -373,7 +373,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
                 <>
                   <label>Private key</label>
                   <div className="ui-row">
-                    <TextInput grow disabled={!ssh.enabled} value={ssh.keyPath} onChange={(e) => setSsh("keyPath", e.target.value)} />
+                    <TextInput grow aria-label="Private key" disabled={!ssh.enabled} value={ssh.keyPath} placeholder="empty: ssh-agent, then ~/.ssh/config IdentityFile" onChange={(e) => setSsh("keyPath", e.target.value)} />
                     <Button size="sm" disabled={!ssh.enabled} onClick={browseKey}>
                       Browse…
                     </Button>
@@ -381,7 +381,7 @@ export function ConnectionDialog({ edit, onClose, onSaved }: Props) {
                 </>
               )}
               <label>{ssh.auth === "key" ? "Passphrase" : "Password"}</label>
-              <TextInput type="password" disabled={!ssh.enabled} value={sshSecret ?? ""} placeholder={edit?.ssh?.enabled ? "<saved — leave empty to keep>" : ssh.auth === "key" ? "(none)" : ""} onChange={(e) => setSshSecret(e.target.value)} />
+              <TextInput type="password" disabled={!ssh.enabled} value={sshSecret ?? ""} placeholder={edit?.ssh?.enabled ? "<saved — leave empty to keep>" : ssh.auth === "key" ? "(none)" : "(empty: ssh-agent)"} onChange={(e) => setSshSecret(e.target.value)} />
             </>
           )}
           <FormSection>SSL / TLS</FormSection>
