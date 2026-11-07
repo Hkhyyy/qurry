@@ -594,6 +594,52 @@ export const ConsoleStatementsPopup: S = {
     await waitFor(() => expect(canvasElement.querySelector(".stmt-preview")).not.toBeNull(), { timeout: 10000 });
   },
 };
+/** The story's console editor (Monaco), once it is there */
+const storyEditor = (canvasElement: HTMLElement) => waitFor(() => monaco.editor.getEditors().find((e) => canvasElement.contains(e.getContainerDomNode())) ?? Promise.reject(new Error("no editor yet")));
+/** ⌘↩ inside a subquery (DataGrip): the popup offers it after the whole statement, innermost first; the editor highlights exactly it */
+export const ConsoleRunSubquery: S = {
+  name: "Console — run a subquery (⌘↩)",
+  render: () => (
+    <Frame h={420}>
+      <ConsolePane {...consoleProps} tabId="story-subquery" results={[]} activeResult="output" initialSql={"select 1;\nselect * from orders\nwhere user_id in (select id from users where n > (select avg(n) from users));"} />
+    </Frame>
+  ),
+  play: async ({ canvasElement }) => {
+    const ed = await storyEditor(canvasElement);
+    ed.focus();
+    ed.setPosition({ lineNumber: 3, column: 60 });
+    ed.trigger("story", "dbtool.run", null);
+    const chooser = await waitFor(() => canvasElement.querySelector<HTMLElement>(".stmt-chooser") ?? Promise.reject(new Error("no popup yet")), { timeout: 10000 });
+    fireEvent.keyDown(chooser, { key: "ArrowDown" });
+    await waitFor(() => expect(canvasElement.querySelector(".stmt-preview")).not.toBeNull(), { timeout: 10000 });
+  },
+};
+/** A failed statement after the first: its error marked where the server points (its own marker, the message on hover with the
+ * way out); Output keeps it, an edit or the next run clears the mark */
+export const ConsoleRunError: S = {
+  name: "Console — run error marked",
+  render: () => (
+    <Frame h={420}>
+      <ConsolePane
+        {...consoleProps} tabId="story-run-error" results={[]} activeResult="output" initialSql={"select 1;\nselect id, n\n  from no_such_table\n where n > 1;"}
+        output={[
+          { ts: "10:24:01", text: "[DEV] shop_app> select id, n\n  from no_such_table\n where n > 1", level: "sql" },
+          { ts: "10:24:01", text: 'ERROR: relation "no_such_table" does not exist (position 21)', level: "error" },
+        ]}
+        onExecute={(_stmts, _explain, mark) => mark?.(0, { state: "error", out: "story", ts: "2026-11-07 10:24:01", text: 'ERROR: relation "no_such_table" does not exist (position 21)', at: 20 })}
+      />
+    </Frame>
+  ),
+  play: async ({ canvasElement }) => {
+    // Run the second statement (selected, so it runs without asking); the story's onExecute fails it at PostgreSQL's position 21
+    const ed = await storyEditor(canvasElement);
+    ed.focus();
+    ed.setSelection(new monaco.Range(2, 1, 4, 13));
+    ed.trigger("story", "dbtool.run", null);
+    await waitFor(() => expect(canvasElement.querySelector(".squiggly-error")).not.toBeNull(), { timeout: 10000 });
+    ed.setPosition({ lineNumber: 3, column: 8 });
+  },
+};
 /** A script's Output longer than the pane: it follows the newest line while scrolled to the bottom; scrolled up, it stays put */
 export const ConsoleLongOutput: S = {
   name: "Console — long Output",

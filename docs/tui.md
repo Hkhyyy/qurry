@@ -75,6 +75,7 @@ Some things never depend on color:
 - **The cell cursor inside a range**: with reverse video (16 colors, `NO_COLOR`) the range is reversed and the cursor is the one cell in it left plain, as in a spreadsheet.
 - **The active tab**: bold. With 16 colors or `NO_COLOR` the focused pane's tab is in reverse video (its Data Source color inverted, so a production tab stays red) and, in split panes, the other panes' visible tab is underlined.
 - **Statements that ran in a console**: `✓` done, `✗` failed, `…` running, in the line-number column on the statement's first line.
+- **A failed statement's error**: underlined where the server points (the whole statement when it doesn't say); the status line says where. An edit or the next run clears it.
 
 `qurry-tui --help` lists the same rules.
 
