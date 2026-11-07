@@ -1,6 +1,7 @@
 //! Display formatting shared by the result grids: fractional seconds aligned within a time column, digit grouping,
 //! the value class of a cell and its alignment (Settings › Appearance › Alignment in grid; overrides kept in settings.json),
-//! the colors of a JSON cell, the widths a user gave columns (resize).
+//! the colors of a JSON cell, the widths a user gave columns (resize). And the SQL editors' formatting, the same in the GUI console
+//! (WASM) and the TUI editor: Reformat Code and the keyword case setting (as you type and in Reformat Code).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -305,6 +306,173 @@ pub fn column_widths(v: &Value) -> ColumnWidths {
     m.iter().filter_map(|(k, w)| Some((k.clone(), column_width(w.as_i64()?, 0)))).collect()
 }
 
+/// Settings.json "keywordCase" (GUI Settings › Appearance › Keyword case, TUI ⌃K › Keyword Case…): the letter case SQL keywords
+/// get as you type and in Reformat Code. Off leaves typing alone, and Reformat Code writes keywords in upper case as before 0.3.2
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KeywordCase {
+    #[default]
+    Off,
+    Upper,
+    Lower,
+}
+
+impl KeywordCase {
+    pub const ALL: [KeywordCase; 3] = [KeywordCase::Off, KeywordCase::Upper, KeywordCase::Lower];
+
+    fn apply(self, word: &str) -> String {
+        match self {
+            KeywordCase::Off => word.to_string(),
+            KeywordCase::Upper => word.to_ascii_uppercase(),
+            KeywordCase::Lower => word.to_ascii_lowercase(),
+        }
+    }
+}
+
+/// The words the keyword case changes, sorted: SQL keywords that are rarely names. Words tables often have as columns (`user`, `name`,
+/// `type`, `key`, `first`, `range`, `filter` …) and function names stay as written, so typing them never changes them
+const CASE_KEYWORDS: &[&str] = &[
+    "add", "all", "alter", "analyze", "and", "any", "as", "asc", "begin", "between", "by", "cascade", "case", "cast", "check", "commit",
+    "conflict", "constraint", "create", "cross", "current_date", "current_timestamp", "database", "default", "delete", "desc", "distinct",
+    "do", "drop", "else", "end", "except", "exists", "explain", "false", "fetch", "for", "foreign", "from", "full", "grant", "group",
+    "having", "if", "ilike", "in", "index", "inner", "insert", "intersect", "interval", "into", "is", "join", "lateral", "left", "like",
+    "limit", "materialized", "not", "nothing", "null", "nulls", "offset", "on", "or", "order", "outer", "over", "partition", "primary",
+    "recursive", "references", "rename", "returning", "revoke", "right", "rollback", "savepoint", "schema", "select", "set", "table",
+    "then", "to", "true", "truncate", "union", "unique", "update", "using", "values", "view", "when", "where", "window", "with",
+];
+
+/// Whether toks[i] is a keyword the keyword case changes: a bare word (not quoted, not in a string or comment) of CASE_KEYWORDS that
+/// isn't part of a name (`t.order`, `order.id`) or a variable (`@from`, `:from`); `key` only in PRIMARY KEY / FOREIGN KEY
+fn cased_keyword(toks: &[crate::guard::Tok], i: usize) -> bool {
+    let t = &toks[i];
+    let prev = i.checked_sub(1).map(|p| &toks[p]);
+    let next = toks.get(i + 1);
+    let known = CASE_KEYWORDS.binary_search(&t.text.as_str()).is_ok() || (t.text == "key" && prev.is_some_and(|p| p.word && !p.quoted && matches!(p.text.as_str(), "primary" | "foreign")));
+    t.word
+        && !t.quoted
+        && known
+        && !prev.is_some_and(|p| p.text == "." || (p.end == t.start && matches!(p.text.as_str(), "@" | ":")))
+        && !next.is_some_and(|n| n.text == ".")
+}
+
+/// `sql` with its keywords in `case` (Off: as written)
+pub fn case_keywords(sql: &str, kind: crate::DbKind, case: KeywordCase) -> String {
+    if case == KeywordCase::Off {
+        return sql.to_string();
+    }
+    let toks = crate::guard::scan(sql, kind).toks;
+    let (mut out, mut at) = (String::with_capacity(sql.len()), 0);
+    for i in (0..toks.len()).filter(|&i| cased_keyword(&toks, i)) {
+        let t = &toks[i];
+        out.push_str(&sql[at..t.start]);
+        out.push_str(&case.apply(&sql[t.start..t.end]));
+        at = t.end;
+    }
+    out + &sql[at..]
+}
+
+/// Keyword case as you type: `end` (bytes) is where the character just typed sits (a space, a newline, punctuation). When it ends a
+/// keyword written in another case (outside strings, comments and quoted names, not before a `.`): the keyword's start and new text
+pub fn keyword_case_at(text: &str, end: usize, kind: crate::DbKind, case: KeywordCase) -> Option<(usize, String)> {
+    if case == KeywordCase::Off || !holds_sql(kind) || !text.is_char_boundary(end) {
+        return None;
+    }
+    // With the typed character: after a `.` the word is a name, and a letter would have continued it
+    let stop = end + text[end..].chars().next()?.len_utf8();
+    let toks = crate::guard::scan(&text[..stop], kind).toks;
+    let i = toks.iter().rposition(|t| t.end <= end)?;
+    let t = &toks[i];
+    let word = &text[t.start..t.end];
+    let cased = case.apply(word);
+    (t.end == end && cased != word && cased_keyword(&toks, i)).then_some((t.start, cased))
+}
+
+/// Reformat Code's change: `text[start..end]` (bytes) becomes `text`
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Reformatted {
+    pub start: usize,
+    pub end: usize,
+    pub text: String,
+}
+
+/// Databases whose consoles hold SQL (not Redis commands, the MongoDB shell or vector database requests)
+pub fn holds_sql(kind: crate::DbKind) -> bool {
+    !matches!(kind, crate::DbKind::Redis | crate::DbKind::Mongodb) && !kind.is_vector()
+}
+
+/// Reformat Code (GUI ⌘⌥l, TUI ⌥⇧F): the selection (`sel`, bytes), or without one the statement at the caret, one clause per line
+/// with 4-space indents and keywords in `case` (Off: upper case). None when that changes nothing
+pub fn reformat(text: &str, sel: Option<(usize, usize)>, caret: usize, kind: crate::DbKind, case: KeywordCase) -> Option<Reformatted> {
+    if !holds_sql(kind) {
+        return None;
+    }
+    let (s, e) = match sel.filter(|(s, e)| s < e) {
+        Some(r) => r,
+        None => crate::sql::statement_span(text, caret, kind)?,
+    };
+    let part = text.get(s..e)?;
+    // The statement's own text, not the blank lines around it
+    let start = s + (part.len() - part.trim_start().len());
+    let end = s + part.trim_end().len();
+    if start >= end {
+        return None;
+    }
+    let out = format_sql(&text[start..end], kind, if case == KeywordCase::Off { KeywordCase::Upper } else { case });
+    (out != text[start..end]).then_some(Reformatted { start, end, text: out })
+}
+
+/// sqlformat's layout. Strings and quoted names go to it as stand-ins and come back as written: it would split E'…' and $$…$$
+/// bodies, which it doesn't read as strings
+fn format_sql(sql: &str, kind: crate::DbKind, case: KeywordCase) -> String {
+    use crate::DbKind;
+    let toks = crate::guard::scan(sql, kind).toks;
+    let (mut masked, mut kept, mut at) = (String::with_capacity(sql.len()), Vec::new(), 0);
+    for (i, t) in toks.iter().enumerate() {
+        if !(t.quoted || t.text == "'") {
+            continue;
+        }
+        // A prefix written against the quote belongs to the literal: E'…', X'0f', N'…', _utf8mb4'…'
+        let start = match i.checked_sub(1).map(|p| &toks[p]) {
+            Some(p) if p.word && !p.quoted && p.end == t.start && t.text == "'" => p.start,
+            _ => t.start,
+        };
+        masked.push_str(&sql[at..start]);
+        masked.push_str(&format!("'{STAND_IN}{}{STAND_IN}'", kept.len()));
+        kept.push(&sql[start..t.end]);
+        at = t.end;
+    }
+    masked.push_str(&sql[at..]);
+    let dialect = match kind {
+        DbKind::Postgres | DbKind::Duckdb => sqlformat::Dialect::PostgreSql,
+        DbKind::Mssql => sqlformat::Dialect::SQLServer,
+        _ => sqlformat::Dialect::Generic,
+    };
+    let o = sqlformat::FormatOptions { indent: sqlformat::Indent::Spaces(4), lines_between_queries: 2, dialect, ..Default::default() };
+    let formatted = sqlformat::format(&masked, &sqlformat::QueryParams::None, &o);
+    let (mut out, mut rest) = (String::with_capacity(formatted.len()), formatted.as_str());
+    let open = format!("'{STAND_IN}");
+    while let Some(p) = rest.find(&open) {
+        let after = &rest[p + open.len()..];
+        let back = after.split_once(STAND_IN).and_then(|(n, tail)| Some((*kept.get(n.parse::<usize>().ok()?)?, tail.strip_prefix('\'')?)));
+        match back {
+            Some((orig, tail)) => {
+                out.push_str(&rest[..p]);
+                out.push_str(orig);
+                rest = tail;
+            }
+            None => {
+                out.push_str(&rest[..p + open.len()]);
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    case_keywords(out.trim_end(), kind, case)
+}
+
+/// Marks a string's stand-in while sqlformat lays the SQL out (a private-use character, not in SQL)
+const STAND_IN: char = '\u{e000}';
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,5 +619,78 @@ mod tests {
         assert_eq!(thousands(0), "0");
         assert_eq!(thousands(999), "999");
         assert_eq!(thousands(1234567), "1,234,567");
+    }
+
+    use crate::DbKind::{Mysql, Postgres};
+    use KeywordCase::{Lower, Off, Upper};
+
+    #[test]
+    fn case_keywords_are_sorted_lowercase_words() {
+        assert!(CASE_KEYWORDS.windows(2).all(|w| w[0] < w[1]), "CASE_KEYWORDS must stay sorted (binary search)");
+        assert!(CASE_KEYWORDS.iter().all(|k| k.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')));
+    }
+
+    /// Keywords change case; strings, comments, quoted names, names after or before a dot, variables and look-alike names stay
+    #[test]
+    fn keyword_case_leaves_strings_comments_and_names() {
+        let sql = "select u.user, t.order, \"from\", 'select from' as x -- where\nfrom users u /* join */ where order.id = @from and Name is not null";
+        assert_eq!(
+            case_keywords(sql, Postgres, Upper),
+            "SELECT u.user, t.order, \"from\", 'select from' AS x -- where\nFROM users u /* join */ WHERE order.id = @from AND Name IS NOT NULL"
+        );
+        assert_eq!(case_keywords("SELECT `select` FROM t # FROM\nWHERE a = 'it\\'s FROM'", Mysql, Lower), "select `select` from t # FROM\nwhere a = 'it\\'s FROM'");
+        assert_eq!(case_keywords("select $$ from $$, e'\\' from' from t", Postgres, Upper), "SELECT $$ from $$, e'\\' from' FROM t");
+        // Columns named like non-reserved keywords, functions, and key outside PRIMARY / FOREIGN KEY
+        assert_eq!(case_keywords("select key, value, type, count(*) from kv", Postgres, Upper), "SELECT key, value, type, count(*) FROM kv");
+        assert_eq!(case_keywords("id int primary key, foreign key (a) references b", Postgres, Upper), "id int PRIMARY KEY, FOREIGN KEY (a) REFERENCES b");
+        assert_eq!(case_keywords("select 1", Postgres, Off), "select 1");
+    }
+
+    /// As you type: the word the typed delimiter ends, when it's a keyword in another case, outside strings, comments and quoted names
+    #[test]
+    fn keyword_case_as_you_type() {
+        let at = |text: &str, case| keyword_case_at(text, text.len() - 1, Postgres, case);
+        assert_eq!(at("select ", Upper), Some((0, "SELECT".into())));
+        assert_eq!(at("SELECT a\nFROM\n", Lower), Some((9, "from".into())));
+        assert_eq!(at("select a from t where x in(", Upper), Some((24, "IN".into())));
+        assert_eq!(at("select a,", Upper), None);
+        assert_eq!(at("SELECT ", Upper), None);
+        assert_eq!(at("select ", Off), None);
+        // In a string, a comment, a quoted name; a name before a dot or after one
+        assert_eq!(at("select 'a from ", Upper), None);
+        assert_eq!(at("select 1 -- from ", Upper), None);
+        assert_eq!(at("select 1 /* from ", Upper), None);
+        assert_eq!(at("select \"from ", Upper), None);
+        assert_eq!(at("select order.", Upper), None);
+        assert_eq!(at("select t.order ", Upper), None);
+        assert_eq!(at("select user ", Upper), None);
+        // A string closed before the word: the word is code again
+        assert_eq!(at("select 'x' from ", Upper), Some((11, "FROM".into())));
+        // The typed character isn't the last one (typing in the middle), multi-byte text before it
+        assert_eq!(keyword_case_at("select '한글' from t", 20, Postgres, Upper), Some((16, "FROM".into())));
+        assert_eq!(keyword_case_at("select 1 from t", 9, Postgres, Upper), None);
+        // Not SQL
+        assert_eq!(keyword_case_at("select ", 6, crate::DbKind::Redis, Upper), None);
+    }
+
+    /// Reformat Code: the statement at the caret (not the others, the blank lines around it kept), or the selection; strings,
+    /// E'…' and $$…$$ bodies as written
+    #[test]
+    fn reformat_lays_out_the_statement_at_the_caret_or_the_selection() {
+        let text = "select 1;\n\nselect a, b from t where x = 'it''s' and y = 2\n\nselect 3";
+        let r = reformat(text, None, 15, Postgres, Off).unwrap();
+        assert_eq!((r.start, r.end), (11, 57));
+        assert_eq!(r.text, "SELECT\n    a,\n    b\nFROM\n    t\nWHERE\n    x = 'it''s'\n    AND y = 2");
+        assert_eq!(reformat(text, None, 15, Postgres, Lower).unwrap().text, "select\n    a,\n    b\nfrom\n    t\nwhere\n    x = 'it''s'\n    and y = 2");
+        let sel = reformat(text, Some((0, 8)), 0, Postgres, Off).unwrap();
+        assert_eq!((sel.start, sel.end, sel.text.as_str()), (0, 8, "SELECT\n    1"));
+        let pg = "select e'a\\'b', $body$ select  1 from t $body$ as f from t";
+        assert_eq!(reformat(pg, None, 0, Postgres, Upper).unwrap().text, "SELECT\n    e'a\\'b',\n    $body$ select  1 from t $body$ AS f\nFROM\n    t");
+        let my = "select `order`, \"a\\\"b\", x'0f' from t # from\nwhere t.from = 1";
+        assert_eq!(reformat(my, None, 0, Mysql, Off).unwrap().text, "SELECT\n    `order`,\n    \"a\\\"b\",\n    x'0f'\nFROM\n    t # from\nWHERE\n    t.from = 1");
+        // Already formatted, nothing there, not SQL
+        assert_eq!(reformat("SELECT\n    1", None, 0, Postgres, Off), None);
+        assert_eq!(reformat("  \n", None, 1, Postgres, Off), None);
+        assert_eq!(reformat("GET k", None, 0, crate::DbKind::Redis, Off), None);
     }
 }
