@@ -264,6 +264,13 @@ pub async fn ping(m: &RedisConn) {
     let _: Result<String, _> = redis::cmd("PING").query_async(&mut m).await;
 }
 
+/// ping, with its error (Session::check)
+pub async fn check(m: &RedisConn) -> AppResult<()> {
+    let mut m = m.clone();
+    let r: Result<String, _> = redis::cmd("PING").query_async(&mut m).await;
+    r.map(|_| ()).map_err(|e| AppError::Msg(e.to_string()))
+}
+
 /// Whether the command doesn't change values (MCP read-only mode). Shared with the guard
 pub use qurry_shared::redis_cmd::is_read_command;
 

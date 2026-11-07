@@ -1,5 +1,5 @@
 //! Schema compare: DDL that makes the target match the source. Order: create tables (without foreign keys) → columns → indexes·constraints → foreign keys → views → drops (last, marked dangerous)
-use crate::app::{AppState, ensure_pool};
+use crate::app::{AppState, checked_pool};
 use crate::backend::{Backend, dispatch};
 use crate::db::Pool;
 use crate::error::{AppError, AppResult};
@@ -290,7 +290,7 @@ impl AppState {
         if sk != tk {
             return Err(AppError::Msg("Compare two data sources of the same kind (PostgreSQL with PostgreSQL, MySQL with MySQL)".into()));
         }
-        let (sp, tp) = (ensure_pool(self, &source_id).await?, ensure_pool(self, &target_id).await?);
+        let (sp, tp) = (checked_pool(self, &source_id).await?, checked_pool(self, &target_id).await?);
         let s = dispatch!(sp, b => b.schema_model(&source_schema).await)?;
         let t = dispatch!(tp, b => b.schema_model(&target_schema).await)?;
         Ok(diff(&s, &t, sk, &source_schema, &target_schema))
@@ -321,7 +321,7 @@ impl AppState {
         if kind != tk || kind == DbKind::Redis {
             return Err(AppError::Msg("Compare tables of the same kind of database (PostgreSQL or MySQL)".into()));
         }
-        let (sp, tp) = (ensure_pool(self, &source_id).await?, ensure_pool(self, &target_id).await?);
+        let (sp, tp) = (checked_pool(self, &source_id).await?, checked_pool(self, &target_id).await?);
         let sd = crate::meta::table_detail(&sp, &source_schema, &source_table).await?;
         let td = crate::meta::table_detail(&tp, &target_schema, &target_table).await?;
         let pk: Vec<String> = sd.columns.iter().filter(|c| c.is_pk).map(|c| c.name.clone()).collect();
@@ -452,7 +452,7 @@ impl AppState {
 
     /// Migrations in the folder and their applied state
     pub async fn migration_status(&self, id: String, dir: String) -> AppResult<Vec<Migration>> {
-        let pool = ensure_pool(self, &id).await?;
+        let pool = checked_pool(self, &id).await?;
         let mut applied = self.history_of(&pool, self.kind_of(&id)?).await;
         let mut out: Vec<Migration> = scan_dir(&dir)?
             .into_iter()
@@ -485,7 +485,7 @@ impl AppState {
         if let Some(m) = status.iter().find(|m| m.status == "changed") {
             return Err(AppError::Msg(format!("V{} ({}) was changed after it was applied — put the file back, or add the change as a new version", m.version, m.file)));
         }
-        let pool = ensure_pool(self, &id).await?;
+        let pool = checked_pool(self, &id).await?;
         let create = match kind {
             DbKind::Mysql => format!("CREATE TABLE IF NOT EXISTS {HISTORY_TABLE} (version VARCHAR(50) PRIMARY KEY, description VARCHAR(200) NOT NULL, checksum VARCHAR(32) NOT NULL, applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"),
             _ => format!("CREATE TABLE IF NOT EXISTS {HISTORY_TABLE} (version TEXT PRIMARY KEY, description TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())"),

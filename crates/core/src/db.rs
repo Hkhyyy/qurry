@@ -172,9 +172,9 @@ impl Pool {
         dispatch!(self, b => b.run_query(sql, limit).await)
     }
 
-    /// keep-alive. Cut off at 5 seconds so one unresponsive server does not stall the cleanup routine
-    pub async fn ping(&self) {
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async { dispatch!(self, b => b.ping().await) }).await;
+    /// keep-alive. Cut off at 5 seconds so one unresponsive server does not stall the cleanup routine. → whether it ended in time
+    pub async fn ping(&self) -> bool {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async { dispatch!(self, b => b.ping().await) }).await.is_ok()
     }
 }
 

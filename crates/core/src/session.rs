@@ -147,10 +147,14 @@ impl PgSession {
         }
     }
 
-    /// In Auto mode, close cursors unused for long and end the transaction (Manual is left alone since it is the user's transaction)
+    /// In Auto mode, close cursors unused for long and end the transaction (Manual is left alone since it is the user's transaction).
+    /// Within 5s, like the keep-alive ping: through a tunnel that stopped forwarding it would wait forever, holding the session
+    /// and housekeeping (keep-alive and auto-disconnect of every source)
     pub async fn close_idle_cursor(&mut self, idle: std::time::Duration) -> bool {
         if self.cursor_open && !self.user_tx() && self.cursor_used.elapsed() >= idle {
-            self.close_cursor().await;
+            if tokio::time::timeout(std::time::Duration::from_secs(5), self.close_cursor()).await.is_err() {
+                return false;
+            }
             self.idle_closed = true;
             return true;
         }
@@ -590,12 +594,39 @@ impl Session {
             _ => None,
         }
     }
-    /// On tab close: roll back the open transaction, reset session settings and return the connection to the pool
+    /// On tab close: roll back the open transaction, reset session settings and return the connection to the pool. Within 5s: on
+    /// a server or tunnel that doesn't answer it would wait forever (closing the tab, switching its database). Then the connection
+    /// is closed instead, and the server rolls the transaction back itself
     pub async fn discard(&mut self) {
+        let done = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            match self {
+                Session::Pg(s) => s.discard().await,
+                Session::My(s) => s.discard().await,
+                Session::Redis(_) | Session::Plugin(_) => {}
+            }
+        })
+        .await;
+        if done.is_err() {
+            self.abandon();
+        }
+    }
+    /// Its connection is closed when the session is dropped, not given back to the pool: it didn't answer, and a statement
+    /// cut off by a time limit may have left it halfway through a message
+    pub fn abandon(&mut self) {
         match self {
-            Session::Pg(s) => s.discard().await,
-            Session::My(s) => s.discard().await,
+            Session::Pg(s) => s.conn.close_on_drop(),
+            Session::My(s) => s.abandon(),
             Session::Redis(_) | Session::Plugin(_) => {}
+        }
+    }
+    /// A round trip that runs nothing (PostgreSQL: the protocol's ping; MySQL: DO 0): whether the connection still answers. Callers
+    /// set the time limit; when it runs out the session stays usable, since its next use reads past the answer left unread
+    pub async fn check(&mut self) -> AppResult<()> {
+        match self {
+            Session::Pg(s) => Ok(sqlx::Connection::ping(&mut *s.conn).await?),
+            Session::My(s) => s.check().await,
+            Session::Redis(m) => crate::redisdb::check(m).await,
+            Session::Plugin(_) => Ok(()),
         }
     }
     pub async fn close_idle_cursor(&mut self, idle: std::time::Duration) -> bool {

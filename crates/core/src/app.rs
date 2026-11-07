@@ -13,6 +13,22 @@ pub struct SessionEntry {
     pub conn_id: String,
     pub pid: i64,
     pub session: std::sync::Arc<tokio::sync::Mutex<Session>>,
+    /// When a run or a load-more last took it or finished with it (tab_session). By the wall clock (idle_for)
+    pub(crate) used: std::sync::Mutex<std::time::SystemTime>,
+}
+
+/// Whether `d` has passed since `t` by the wall clock: an Instant stops while the Mac sleeps, and sleep is when tunnels die. A
+/// clock set back counts as passed (one check too many, never one too few)
+fn idle_for(t: std::time::SystemTime, d: std::time::Duration) -> bool {
+    t.elapsed().map_or(true, |e| e >= d)
+}
+
+/// A console whose session a disconnect closed while a transaction may have been open in it (AppState::lost_tx)
+struct LostTx {
+    /// What its next run, load-more, Commit or Roll back says instead of running (once)
+    msg: String,
+    /// Something ran in the session then, so whether a transaction was open is known only when that ends (settle_lost)
+    busy: bool,
 }
 
 pub struct AppState {
@@ -28,8 +44,12 @@ pub struct AppState {
     pub secret_file: crate::secrets::SecretFile,
     /// Data Source id → last used time (Auto-disconnect)
     pub last_used: std::sync::Mutex<HashMap<String, std::time::Instant>>,
-    /// Data Source id → last keep-alive time
-    pub last_ping: std::sync::Mutex<HashMap<String, std::time::Instant>>,
+    /// Data Source id → last keep-alive time (wall clock: idle_for)
+    pub last_ping: std::sync::Mutex<HashMap<String, std::time::SystemTime>>,
+    /// Tab id → its transaction was lost with its session in a disconnect (drop_pool_logged): the next use says so and sends nothing
+    lost_tx: std::sync::Mutex<HashMap<String, LostTx>>,
+    /// Data source id → how many exports, imports, backups, restores and subset copies run on it (AppState::job_running)
+    running: std::sync::Mutex<HashMap<String, usize>>,
     /// Tab id → Manual mode (keep the same mode when reconnecting opens a new session)
     pub tab_manual: std::sync::Mutex<HashMap<String, bool>>,
     /// Tab id → its result with more rows to load: outlives the tab session, so loading more can reopen it on a new one
@@ -131,7 +151,7 @@ impl AppState {
     pub fn new(store: Store, secret_file: crate::secrets::SecretFile) -> Self {
         let history = crate::history::History::new(&store.dir());
         let audit = crate::audit::Audit::new(&store.dir());
-        Self { history, audit, store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), connecting: Default::default(), secret_file, last_used: Default::default(), last_ping: Default::default(), tab_manual: Default::default(), more: Default::default(), runs: Default::default(), jobs: Default::default(), mcp: false, temporary: Default::default() }
+        Self { history, audit, store, pools: RwLock::new(HashMap::new()), sessions: RwLock::new(HashMap::new()), tunnels: RwLock::new(HashMap::new()), connecting: Default::default(), secret_file, last_used: Default::default(), last_ping: Default::default(), lost_tx: Default::default(), running: Default::default(), tab_manual: Default::default(), more: Default::default(), runs: Default::default(), jobs: Default::default(), mcp: false, temporary: Default::default() }
     }
 }
 
@@ -254,6 +274,8 @@ async fn recover(state: &AppState, id: &str, tab: Option<&str>, tx: Option<&str>
     }
     if let Some(tab) = tab {
         state.sessions.write().await.remove(tab);
+        // This error says what became of the transaction: a disconnect meanwhile needn't say it again (settle_lost)
+        state.lost_tx.lock().unwrap().remove(tab);
     }
     let pool = state.pools.read().await.get(id).cloned();
     if let Some(p) = pool {
@@ -264,10 +286,24 @@ async fn recover(state: &AppState, id: &str, tab: Option<&str>, tx: Option<&str>
         }
     }
     crate::log!("[qurry] connection lost on {id}: {e}");
+    // Which way it went: a connect's timeout says so itself (timeout_error)
+    let cfg = state.source(id).ok();
+    let through = cfg.as_ref().filter(|_| !timed_out(&e)).and_then(way);
+    // Through a tunnel, the driver's words ("expected to read 5 bytes, got 0 bytes at EOF") are about the local socket: the way says more
+    let (e, through) = match (&e, through) {
+        (AppError::Db(sqlx::Error::Io(_) | sqlx::Error::Protocol(_)), Some(w)) => (format!("The connection through {w} closed"), String::new()),
+        (_, w) => (
+            match &cfg {
+                Some(c) => timeout_error(c, e, false).to_string(),
+                None => e.to_string(),
+            },
+            w.map(|w| format!(" through {w}")).unwrap_or_default(),
+        ),
+    };
     AppError::Msg(match tx {
         Some(crate::audit::COMMIT_UNKNOWN) => format!("{e} — {}", qurry_shared::errors::COMMIT_UNKNOWN_ERR),
-        Some(_) => format!("{e} — connection lost; the open transaction was rolled back by the server. Run it again to reconnect."),
-        None => format!("{e} — connection lost. Run it again to reconnect."),
+        Some(_) => format!("{e} — connection lost{through}; the open transaction was rolled back by the server. Run it again to reconnect."),
+        None => format!("{e} — connection lost{through}. Run it again to reconnect."),
     })
 }
 
@@ -279,6 +315,9 @@ struct Connecting {
     failed: tokio::sync::Mutex<Option<(std::time::Instant, String)>>,
     /// drop_pool counts up: a connect that started before keeps no pool or tunnel (its tunnel may be gone, its settings old)
     generation: std::sync::atomic::AtomicU64,
+    /// The generation whose tunnel was found to answer after a connect through it timed out, and when (drop_dead_tunnel): callers
+    /// that timed out with it get that answer instead of checking again one after another
+    answered: std::sync::Mutex<Option<(u64, std::time::Instant)>>,
 }
 
 impl AppState {
@@ -288,10 +327,13 @@ impl AppState {
     }
 }
 
-/// drop_pool, and close in the Production log the logged transactions of the consoles it closed (the server rolls them back): word = how
+/// drop_pool, and close in the Production log the logged transactions of the consoles it closed (the server rolls them back): word =
+/// how. A console whose transaction went with it is never left to run its next statement in a new session as if nothing happened
+/// (autocommit, the rest of the transaction gone): that use says so once and sends nothing (tab_session)
 pub(crate) async fn drop_pool_logged(state: &AppState, id: &str, word: &str) {
-    let tabs = drop_pool(state, id).await;
-    let Ok(cfg) = state.source(id) else { return };
+    let cfg = state.source(id).ok();
+    let tabs = close_all(state, id, cfg.as_ref().map(|c| tx_lost_error(c, word)).as_deref()).await;
+    let Some(cfg) = cfg else { return };
     for (t, conn) in tabs {
         if let Err(e) = state.audit.tx_closed(&conn, &cfg.name, &t, word) {
             crate::log!("[qurry] {e}");
@@ -299,8 +341,39 @@ pub(crate) async fn drop_pool_logged(state: &AppState, id: &str, word: &str) {
     }
 }
 
+/// What a console says when a disconnect closed its session with a transaction open in it (drop_pool_logged): word = how
+fn tx_lost_error(cfg: &ConnectionConfig, word: &str) -> String {
+    let what = match word {
+        crate::audit::DISCONNECTED => format!("\"{}\" was disconnected (Disconnect, or its settings were saved) while a transaction was open in this console", cfg.name),
+        _ => format!(
+            "Qurry closed this console's connection to \"{}\"{} because the data source stopped answering, while a transaction was open in it",
+            cfg.name,
+            way(cfg).map(|w| format!(" through {w}")).unwrap_or_default()
+        ),
+    };
+    format!("{what}. The transaction is lost (the server rolls it back), and nothing was sent. Run it again in a new session.")
+}
+
+/// The run, load-more, Commit or Roll back that had the tab's session while a disconnect closed it (LostTx::busy) ended: only now
+/// is it known whether a transaction was open in it. in_tx = the session's, under its lock
+fn settle_lost(state: &AppState, tab: &str, in_tx: bool) {
+    let mut all = state.lost_tx.lock().unwrap();
+    match all.get_mut(tab) {
+        Some(l) if l.busy && in_tx => l.busy = false,
+        Some(l) if l.busy => drop(all.remove(tab)),
+        _ => {}
+    }
+}
+
 /// Close all DB pools, sessions and tunnels of the Data Source. → the consoles whose sessions it closed (tab id, connection id)
 pub async fn drop_pool(state: &AppState, id: &str) -> Vec<(String, String)> {
+    close_all(state, id, None).await
+}
+
+/// drop_pool. lost = what a console whose session it closes with a transaction open says on its next use (LostTx): marked as the
+/// session is taken out, so a statement that ends with the tunnel meanwhile and says what became of it (recover, settle_lost)
+/// always comes after the mark
+async fn close_all(state: &AppState, id: &str, lost: Option<&str>) -> Vec<(String, String)> {
     // No entry: no connect of it has started, so none to stop
     if let Some(c) = state.connecting.lock().unwrap().get(split_target(id).0) {
         c.generation.fetch_add(1, SeqCst);
@@ -313,6 +386,11 @@ pub async fn drop_pool(state: &AppState, id: &str) -> Vec<(String, String)> {
         let gone = belongs(&e.conn_id, id);
         if gone {
             tabs.push((t.clone(), e.conn_id.clone()));
+            // Busy (something runs in it): whether a transaction is open is known when that ends (settle_lost)
+            let tx = e.session.try_lock().ok().map(|s| s.in_tx());
+            if let Some(msg) = lost.filter(|_| tx != Some(false)) {
+                state.lost_tx.lock().unwrap().insert(t.clone(), LostTx { msg: msg.to_string(), busy: tx.is_none() });
+            }
         }
         !gone
     });
@@ -321,9 +399,11 @@ pub async fn drop_pool(state: &AppState, id: &str) -> Vec<(String, String)> {
         let keys: Vec<String> = pools.keys().filter(|k| belongs(k, id)).cloned().collect();
         keys.into_iter().filter_map(|k| pools.remove(&k)).collect()
     };
-    for p in removed {
-        p.close().await;
-    }
+    // Closing waits for the connections in use: one whose statement hangs on a server that doesn't answer would hold up the
+    // disconnect, and the connect lock while a dead tunnel is replaced (drop_dead_tunnel). The pools close together, within 3s in
+    // all: each is closed to new uses right away, and a connection still in use is closed when it comes back. Through a tunnel,
+    // its connections end with it (above)
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(3), futures::future::join_all(removed.iter().map(|p| p.close()))).await;
     state.last_ping.lock().unwrap().retain(|k, _| !belongs(k, id));
     tabs
 }
@@ -338,7 +418,7 @@ pub async fn connect_config(
     let mark = tunnel.as_ref().and_then(|t| t.ssm_mark());
     match db::connect_via(cfg, password, tunnel.as_ref().map(|t| t.local_port)).await {
         Ok(pool) => Ok((pool, tunnel)),
-        Err(e) => Err(crate::ssm::connect_error(mark, &cfg.host, cfg.port, e).await),
+        Err(e) => Err(crate::ssm::connect_error(mark, &cfg.host, cfg.port, timeout_error(cfg, e, false)).await),
     }
 }
 
@@ -356,9 +436,47 @@ async fn tunnel_alive(state: &AppState, base: &str) -> Option<bool> {
     state.tunnels.read().await.get(base).map(|t| t.alive())
 }
 
+/// Closing the data source's connections would lose work: a console of it is running a statement (its session is locked) or has a
+/// transaction open, or an export, import, backup, restore or subset copy runs on it (AppState::job_running)
+async fn in_use(state: &AppState, base: &str) -> bool {
+    state.running.lock().unwrap().get(base).is_some_and(|n| *n > 0)
+        || state.sessions.read().await.values().any(|e| belongs(&e.conn_id, base) && e.session.try_lock().map(|g| g.in_tx()).unwrap_or(true))
+}
+
+/// A long job on a data source, counted while it runs (AppState::job_running)
+pub(crate) struct Running<'a>(&'a AppState, String);
+
+impl Drop for Running<'_> {
+    fn drop(&mut self) {
+        let mut all = self.0.running.lock().unwrap();
+        if let Some(n) = all.get_mut(&self.1) {
+            *n -= 1;
+            if *n == 0 {
+                all.remove(&self.1);
+            }
+        }
+    }
+}
+
+impl AppState {
+    /// Counts a long job (export, import, backup, restore, subset copy) on the source of `id` until the guard drops: while one runs,
+    /// the source isn't disconnected when idle, and its tunnel gets the longer check before it is taken for dead (drop_dead_tunnel)
+    pub(crate) fn job_running(&self, id: &str) -> Running<'_> {
+        let base = split_target(id).0.to_string();
+        *self.running.lock().unwrap().entry(base.clone()).or_default() += 1;
+        Running(self, base)
+    }
+}
+
 /// The local port of the data source's open tunnel
 pub async fn tunnel_port(state: &AppState, id: &str) -> Option<u16> {
     state.tunnels.read().await.get(split_target(id).0).map(|t| t.local_port)
+}
+
+/// Why housekeeping disconnected a data source, as GUI and TUI say it (qurry_shared::errors::disconnected)
+fn disconnected(cfg: &ConnectionConfig, why: qurry_shared::errors::Disconnected) -> String {
+    let tunnel = if cfg.active_ssm().is_some() { "AWS SSM tunnel" } else { "SSH tunnel" };
+    qurry_shared::errors::disconnected(&cfg.name, tunnel, why)
 }
 
 pub fn touch(state: &AppState, id: &str) {
@@ -366,8 +484,9 @@ pub fn touch(state: &AppState, id: &str) {
     state.last_used.lock().unwrap().insert(base, std::time::Instant::now());
 }
 
-/// One pass: keep-alive queries / drop idle connections. Returns the ids of the disconnected Data Sources.
-pub async fn housekeeping(state: &AppState) -> Vec<String> {
+/// One pass: keep-alive queries / drop idle connections. → the disconnected data sources: (id, why, with its name)
+pub async fn housekeeping(state: &AppState) -> Vec<(String, String)> {
+    use qurry_shared::errors::Disconnected;
     use std::time::{Duration, Instant};
     let bases: Vec<String> = {
         let pools = state.pools.read().await;
@@ -386,45 +505,59 @@ pub async fn housekeeping(state: &AppState) -> Vec<String> {
     let mut dropped = Vec::new();
     for base in bases {
         // A stopped tunnel's port is free for anyone on this machine: don't let the pools (keep-alive) connect to it again
+        let cfg = state.store.get(&base).ok().flatten();
         if tunnel_alive(state, &base).await == Some(false) {
             drop_pool_logged(state, &base, crate::audit::BY_SERVER).await;
-            dropped.push(base);
+            let why = cfg.as_ref().map_or_else(|| format!("Disconnected: {base}"), |c| disconnected(c, Disconnected::TunnelStopped));
+            dropped.push((base, why));
             continue;
         }
-        let Ok(Some(cfg)) = state.store.get(&base) else { continue };
+        let Some(cfg) = cfg else { continue };
         let now = Instant::now();
         if let Some(secs) = cfg.options.auto_disconnect_secs.filter(|s| *s > 0) {
             let last = *state.last_used.lock().unwrap().entry(base.clone()).or_insert(now);
-            // Do not disconnect while a query is running (session locked)
             // Do not disconnect if any session has a running query or uncommitted changes (disconnecting would lose the changes)
-            let busy = state.sessions.read().await.values().any(|e| belongs(&e.conn_id, &base) && e.session.try_lock().map(|g| g.in_tx()).unwrap_or(true));
-            if !busy && now.duration_since(last) >= Duration::from_secs(secs as u64) {
+            if !in_use(state, &base).await && now.duration_since(last) >= Duration::from_secs(secs as u64) {
                 drop_pool_logged(state, &base, crate::audit::DISCONNECTED).await;
                 state.last_used.lock().unwrap().remove(&base);
-                dropped.push(base);
+                dropped.push((base, disconnected(&cfg, Disconnected::Idle)));
                 continue;
             }
         }
         if let Some(secs) = cfg.options.keep_alive_secs.filter(|s| *s > 0) {
             let due = {
                 let mut m = state.last_ping.lock().unwrap();
-                let last = *m.entry(base.clone()).or_insert(now);
-                if now.duration_since(last) >= Duration::from_secs(secs as u64) {
-                    m.insert(base.clone(), now);
+                let last = *m.entry(base.clone()).or_insert_with(std::time::SystemTime::now);
+                if idle_for(last, Duration::from_secs(secs as u64)) {
+                    m.insert(base.clone(), std::time::SystemTime::now());
                     true
                 } else {
                     false
                 }
             };
             if due {
+                let c = state.connecting(&base);
+                let g = c.generation.load(SeqCst);
                 let pools: Vec<Pool> = state.pools.read().await.iter().filter(|(k, _)| belongs(k, &base)).map(|(_, p)| p.clone()).collect();
-                for pool in pools {
-                    pool.ping().await;
-                }
                 let sessions: Vec<_> = state.sessions.read().await.values().filter(|e| belongs(&e.conn_id, &base)).map(|e| e.session.clone()).collect();
-                for s in sessions {
-                    if let Ok(mut g) = s.try_lock() {
-                        let _ = tokio::time::timeout(Duration::from_secs(5), g.ping()).await;
+                // Together, each within 5s: one that doesn't answer doesn't hold up the others
+                let pinged = futures::future::join_all(pools.iter().map(|p| p.ping())).await;
+                let pinged_sessions = futures::future::join_all(sessions.iter().map(|s| async move {
+                    match s.try_lock() {
+                        Ok(mut g) => tokio::time::timeout(SESSION_PING, g.ping()).await.is_ok(),
+                        Err(_) => true,
+                    }
+                }))
+                .await;
+                // Not held while the tunnel is closed: closing a pool waits for its connections to come back
+                drop((pools, sessions));
+                // Through a tunnel that carries nothing any more (sleep, a network change), it is closed now (drop_dead_tunnel): a
+                // statement waiting through it ends, and the next use opens a new one
+                if cfg.tunneled() && pinged.iter().chain(&pinged_sessions).any(|ok| !ok) {
+                    let asked = Instant::now();
+                    let _connecting = c.failed.lock().await;
+                    if c.generation.load(SeqCst) == g && drop_dead_tunnel(state, &c, &base, &cfg, g, asked).await.is_ok() {
+                        dropped.push((base, disconnected(&cfg, Disconnected::TunnelSilent)));
                     }
                 }
             }
@@ -433,8 +566,17 @@ pub async fn housekeeping(state: &AppState) -> Vec<String> {
     dropped
 }
 
-/// Export from a driver pool (fetch the whole result at once, then write)
+/// The pool of a data source's database: the open one, or a new connect (through the source's tunnel when it has one). A connect
+/// through the tunnel that gets no answer opens the tunnel again and tries once more (open_pool)
 pub async fn ensure_pool(state: &AppState, id: &str) -> AppResult<Pool> {
+    open_pool(state, id, None).await
+}
+
+/// ensure_pool. A connect through the tunnel that times out may have gone through a session that stopped forwarding while the
+/// tunnel's process runs on (sleep, a network change, the session ended on the AWS side or by the SSH server): the tunnel is
+/// opened again (shared_tunnel) for one more try, whose timeout is the error. stale = the generation whose tunnel timed out
+/// already (with_pool): no more tries then
+async fn open_pool(state: &AppState, id: &str, mut stale: Option<u64>) -> AppResult<Pool> {
     // MCP server: never connect to hidden Data Sources (sources without a password · pools already open too)
     if state.mcp
         && let Some(c) = state.store.get(split_target(id).0)?.filter(|c| c.mcp_access(false) == store::McpAccess::Off)
@@ -444,7 +586,10 @@ pub async fn ensure_pool(state: &AppState, id: &str) -> AppResult<Pool> {
     touch(state, id);
     let (base, db) = split_target(id);
     let pool = state.pools.read().await.get(id).cloned();
+    // Not the pool that just timed out (it is closed when its tunnel is opened again)
+    let timed_out_here = stale.is_some() && state.connecting.lock().unwrap().get(base).map(|c| c.generation.load(SeqCst)) == stale;
     if let Some(p) = pool
+        && !timed_out_here
         && tunnel_alive(state, base).await != Some(false)
     {
         return Ok(p);
@@ -460,31 +605,174 @@ pub async fn ensure_pool(state: &AppState, id: &str) -> AppResult<Pool> {
     let password = state.saved_secret(&cfg.password_key(), cfg.password_saved)?;
     let ssh_secret = if cfg.active_ssh().is_some() { state.saved_secret(&store::ssh_secret_key(base), cfg.ssh_secret_saved)? } else { None };
     let c = state.connecting(base);
-    let (port, g) = if cfg.tunneled() {
-        let (port, g) = shared_tunnel(state, &c, base, &cfg, ssh_secret.as_deref()).await?;
-        // Another caller for the same database may have connected while this one waited for the tunnel
-        if let Some(p) = state.pools.read().await.get(id) {
-            return Ok(p.clone());
+    loop {
+        let (port, g) = if cfg.tunneled() {
+            let (port, g) = shared_tunnel(state, &c, base, &cfg, ssh_secret.as_deref(), stale).await?;
+            // Another caller for the same database may have connected while this one waited for the tunnel
+            if let Some(p) = state.pools.read().await.get(id) {
+                return Ok(p.clone());
+            }
+            (Some(port), g)
+        } else {
+            (None, c.generation.load(SeqCst))
+        };
+        let mark = state.tunnels.read().await.get(base).and_then(|t| t.ssm_mark());
+        // Each database connects on its own: one that is missing or refused fails only for its caller, not for the whole source
+        match db::connect_via(&cfg, password.as_deref(), port).await {
+            Ok(pool) => return keep_pool(state, &c, g, id, port, pool).await,
+            Err(e) if port.is_some() && stale.is_none() && timed_out(&e) => stale = Some(g),
+            Err(e) => return Err(crate::ssm::connect_error(mark, &cfg.host, cfg.port, timeout_error(&cfg, e, stale.is_some())).await),
         }
-        (Some(port), g)
-    } else {
-        (None, c.generation.load(SeqCst))
+    }
+}
+
+/// Runs `f` on the pool of `id` (ensure_pool). When a pool that was already open times out getting a connection through the
+/// source's tunnel (nothing reached the server), the tunnel may have stopped forwarding while its process runs on: it is opened
+/// again and `f` runs once more on a new connect. Only for an `f` that may run again: a read, or opening a connection
+pub(crate) async fn with_pool<T, Fut: std::future::Future<Output = AppResult<T>>>(state: &AppState, id: &str, f: impl Fn(Pool) -> Fut) -> AppResult<T> {
+    with_pool_after(state, id, None, f).await
+}
+
+/// with_pool. stale = the generation whose dead tunnel this call closed already (tab_session): opening a new one was its one
+/// retry, so `f` runs once and its timeout is the error
+async fn with_pool_after<T, Fut: std::future::Future<Output = AppResult<T>>>(state: &AppState, id: &str, stale: Option<u64>, f: impl Fn(Pool) -> Fut) -> AppResult<T> {
+    if let Some(g) = stale {
+        let cfg = state.source(id)?;
+        return f(open_pool(state, id, Some(g)).await?).await.map_err(|e| timeout_error(&cfg, e, true));
+    }
+    let base = split_target(id).0;
+    // The generation the open pool belongs to (drop_pool closes the pools when it counts up)
+    let open = state.pools.read().await.contains_key(id);
+    let open = open.then(|| state.connecting.lock().unwrap().get(base).map(|c| c.generation.load(SeqCst))).flatten();
+    let e = match f(ensure_pool(state, id).await?).await {
+        Err(e) if timed_out(&e) => e,
+        r => return r,
     };
-    let mark = state.tunnels.read().await.get(base).and_then(|t| t.ssm_mark());
-    // Each database connects on its own: one that is missing or refused fails only for its caller, not for the whole source
-    let pool = match connect_pool(&cfg, password.as_deref(), port).await {
-        Ok(p) => p,
-        Err(e) => return Err(crate::ssm::connect_error(mark, &cfg.host, cfg.port, e).await),
+    let cfg = state.source(id)?;
+    match open.filter(|_| cfg.tunneled()) {
+        Some(g) => f(open_pool(state, id, Some(g)).await?).await.map_err(|e| timeout_error(&cfg, e, true)),
+        None => Err(timeout_error(&cfg, e, false)),
+    }
+}
+
+/// ensure_pool, for work that changes data or runs long: through a tunnel, the pool answers a round trip first (with_pool), so a
+/// tunnel that stopped forwarding is replaced before anything runs. Other errors of that round trip are left to the work itself
+pub async fn checked_pool(state: &AppState, id: &str) -> AppResult<Pool> {
+    if !state.source(id)?.tunneled() {
+        return ensure_pool(state, id).await;
+    }
+    with_pool(state, id, |p| async move {
+        match p.server_version().await {
+            Err(e) if timed_out(&e) => Err(e),
+            _ => Ok(p),
+        }
+    })
+    .await
+}
+
+/// A connect that got no answer within the pools' 10s (acquire_timeout): it didn't get as far as a statement
+fn timed_out(e: &AppError) -> bool {
+    matches!(e, AppError::Db(sqlx::Error::PoolTimedOut))
+}
+
+/// A connect's timeout, saying which way it went: through the AWS SSM tunnel (its instance), the SSH tunnel (its server) or
+/// straight to the server (sqlx only says "pool timed out while waiting for an open connection"). reopened = through a new tunnel too
+fn timeout_error(cfg: &ConnectionConfig, e: AppError, reopened: bool) -> AppError {
+    if !timed_out(&e) {
+        return e;
+    }
+    let (host, port) = (&cfg.host, cfg.port);
+    let again = if reopened { ", also after Qurry opened the tunnel again" } else { "" };
+    let reach = match cfg.active_ssm() {
+        Some(_) => "the instance can reach it (its security group; Host as seen from the instance)",
+        None => "the SSH server can reach it",
     };
-    keep_pool(state, &c, g, id, port, pool).await
+    AppError::Msg(match way(cfg) {
+        Some(w) => format!("Can't connect to {host}:{port} through {w} — the database didn't answer within 10s{again}. Check that it's up and that {reach}, then run it again."),
+        None => format!("Can't connect to {host}:{port} — the server didn't answer within 10s. Check that it's up and that this machine can reach it (VPN, firewall), then run it again."),
+    })
+}
+
+/// The way a data source's connections go: through the AWS SSM tunnel (its instance) or the SSH tunnel (its server). None = straight
+fn way(cfg: &ConnectionConfig) -> Option<String> {
+    match (cfg.active_ssm(), cfg.active_ssh()) {
+        (Some(s), _) => Some(format!("the AWS SSM tunnel (instance {})", s.target.trim())),
+        (None, Some(s)) => Some(format!("the SSH tunnel ({}:{})", s.host, s.port)),
+        (None, None) => None,
+    }
+}
+
+/// A console's session through a tunnel didn't answer before a run (tab_session) while a transaction was open in it. closed =
+/// the tunnel carried nothing either and was closed too
+fn lost_session_error(cfg: &ConnectionConfig, closed: bool) -> AppError {
+    let w = way(cfg).unwrap_or_else(|| "the tunnel".into());
+    let what = if closed { "nor did a new connection through the tunnel, so Qurry closed both (the next run opens a new tunnel)" } else { "so Qurry closed it" };
+    AppError::Msg(format!(
+        "The console's connection through {w} sat unused and didn't answer when Qurry checked it before this ran, {what}. The transaction open in it is lost (the server rolls it back), and nothing was sent. Run it again in a new session."
+    ))
+}
+
+/// A console's session through a tunnel didn't answer its check in time with a transaction open, while the tunnel carries a new
+/// connection (tab_session): the session and its transaction are kept
+fn slow_session_error(cfg: &ConnectionConfig) -> AppError {
+    let w = way(cfg).unwrap_or_else(|| "the tunnel".into());
+    AppError::Msg(format!(
+        "The console's connection through {w} sat unused and didn't answer within {}s when Qurry checked it before this ran, though the tunnel answers, so Qurry kept it with the transaction open in it. Nothing was sent. Run it again (Qurry checks the session again first), or Roll back.",
+        SESSION_PING.as_secs()
+    ))
+}
+
+/// A connect through a tunnel that works timed out (shared_tunnel): the tunnel is kept, and the error says what else holds it up
+fn busy_error(cfg: &ConnectionConfig) -> AppError {
+    let way = way(cfg).unwrap_or_else(|| "the tunnel".into());
+    AppError::Msg(format!(
+        "Can't get a connection to {}:{} within 10s, though {way} answers: all {} connections of this data source may be in use (open consoles and tables, exports, imports), or the database is slow to accept new ones, or its startup script (Options) fails or runs long. Close the tabs you don't need or check the startup script, then run it again.",
+        cfg.host,
+        cfg.port,
+        db::POOL_MAX
+    ))
+}
+
+/// Under the connect lock (Connecting::failed): a connect or a console's session through the tunnel of generation `g` got no
+/// answer. When a new connection through the tunnel doesn't get the database's first byte either (tunnel::answers), the tunnel
+/// is dead: it, the source's pools and its sessions are closed (drop_pool; a statement still waiting through it ends), so the
+/// next connect opens a new one. A tunnel that answers is busy, not dead (all the pool's connections in use, a database slow to
+/// accept, a startup script that fails or runs long), and closing it would end what runs through it (an import, a restore, a
+/// console's transaction). So it takes two signs: the database itself didn't answer first, and then the check gets nothing
+/// within 2s, or 5s while closing would lose work (in_use: a console's transaction or statement, an export, import, backup …). Callers that waited with the
+/// same generation share the outcome. → Err(busy_error) when the tunnel answers
+async fn drop_dead_tunnel(state: &AppState, c: &Connecting, base: &str, cfg: &ConnectionConfig, g: u64, asked: std::time::Instant) -> AppResult<()> {
+    // Closed already: by a caller that timed out with this one, or a disconnect
+    if c.generation.load(SeqCst) != g {
+        return Ok(());
+    }
+    if c.answered.lock().unwrap().is_some_and(|(at_g, at)| at_g == g && at >= asked) {
+        return Err(busy_error(cfg));
+    }
+    let port = state.tunnels.read().await.get(base).map(|t| t.local_port);
+    let within = std::time::Duration::from_secs(if in_use(state, base).await { 5 } else { 2 });
+    if let Some(port) = port
+        && crate::tunnel::answers(port, cfg, within).await
+    {
+        *c.answered.lock().unwrap() = Some((g, std::time::Instant::now()));
+        return Err(busy_error(cfg));
+    }
+    crate::log!("[qurry] the tunnel of {base} carries nothing any more; closing it (the next connect opens a new one)");
+    drop_pool_logged(state, base, crate::audit::BY_SERVER).await;
+    Ok(())
 }
 
 /// The local port of the source's tunnel, and the generation it belongs to. The first caller opens it: one SSH / SSM session
 /// per source, not per database. Callers that waited while it failed get its error instead of trying again one after
-/// another (each try can take the whole timeout)
-async fn shared_tunnel(state: &AppState, c: &Connecting, base: &str, cfg: &ConnectionConfig, ssh_secret: Option<&str>) -> AppResult<(u16, u64)> {
+/// another (each try can take the whole timeout). stale = a connect through the tunnel of that generation timed out (open_pool):
+/// when the tunnel doesn't carry a new connection either (tunnel::answers), it and the pools through it are closed and a new one
+/// opened, unless another caller that timed out did so already
+async fn shared_tunnel(state: &AppState, c: &Connecting, base: &str, cfg: &ConnectionConfig, ssh_secret: Option<&str>, stale: Option<u64>) -> AppResult<(u16, u64)> {
     let asked = std::time::Instant::now();
     let mut failed = c.failed.lock().await;
+    if let Some(g) = stale {
+        drop_dead_tunnel(state, c, base, cfg, g, asked).await?;
+    }
     // Read before the tunnel: a disconnect after this also drops the pool that connects through it
     let g = c.generation.load(SeqCst);
     // Its own statement: the read lock must be released before drop_pool takes the write lock
@@ -523,17 +811,6 @@ async fn shared_tunnel(state: &AppState, c: &Connecting, base: &str, cfg: &Conne
 
 const DISCONNECTED_WHILE_CONNECTING: &str = "The data source was disconnected while connecting. Run it again.";
 
-async fn connect_pool(cfg: &ConnectionConfig, password: Option<&str>, port: Option<u16>) -> AppResult<Pool> {
-    db::connect_via(cfg, password, port).await.map_err(|e| match e {
-        // sqlx only says "pool timed out while waiting for an open connection"
-        AppError::Db(sqlx::Error::PoolTimedOut) => AppError::Msg(format!(
-            "Can't connect to {}:{} — the server didn't answer within 10s. Check that it's up (VPN / SSH tunnel), then run it again.",
-            cfg.host, cfg.port
-        )),
-        e => e,
-    })
-}
-
 /// Keeps the new pool unless the source was disconnected meanwhile (drop_pool): then the pool may point at a closed tunnel's
 /// port, which any program on this machine could take. `port` = the tunnel port it connected through: that tunnel must still be
 /// open, since drop_pool counts the generation up before it closes the tunnel and a connect may have read both in between
@@ -553,19 +830,151 @@ async fn keep_pool(state: &AppState, c: &Connecting, generation: u64, id: &str, 
     Err(AppError::Msg(DISCONNECTED_WHILE_CONNECTING.into()))
 }
 
-pub async fn ensure_session(state: &AppState, id: &str, tab_id: &str) -> AppResult<std::sync::Arc<tokio::sync::Mutex<Session>>> {
-    if let Some(e) = state.sessions.read().await.get(tab_id) {
-        if e.conn_id == id {
-            return Ok(e.session.clone());
+/// How long a console's session through a tunnel may sit unused before its next use checks it first (tab_session)
+const SESSION_IDLE: std::time::Duration = std::time::Duration::from_secs(10);
+/// How long that check and the keep-alive ping of a session wait for an answer
+const SESSION_PING: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// A console's session, as its next use finds it (tab_session)
+enum TabSession {
+    Open(std::sync::Arc<tokio::sync::Mutex<Session>>, String),
+    None,
+    /// It didn't answer and was closed; no transaction was open in it. Some(generation) = its tunnel was closed too, so opening
+    /// a new one was the call's one retry (with_pool_after)
+    Lost(Option<u64>),
+}
+
+/// The tab's session for a run, a load-more, a Commit or a Roll back. Through a tunnel, one unused for SESSION_IDLE answers a
+/// ping first (within SESSION_PING): after sleep or a network change the tunnel's session may carry nothing while its process
+/// runs on, and a statement sent there would wait forever. One that doesn't answer is closed without being sent anything else,
+/// and when the tunnel doesn't carry a new connection either, the tunnel and the source's pools go too (drop_dead_tunnel), so
+/// the next session opens through a new tunnel. A transaction that was open in it is lost: that is an error
+/// (lost_session_error), so the statement meant for it never runs in a new session instead. Unless the tunnel still carries a new
+/// connection: then the session is slow, not gone, and it is kept with its transaction (slow_session_error). A session a disconnect
+/// closed with a transaction open says so here first (LostTx)
+async fn tab_session(state: &AppState, tab: &str) -> AppResult<TabSession> {
+    // A disconnect closed its session with a transaction open in it: said once, nothing sent (drop_pool_logged)
+    if let Some(l) = state.lost_tx.lock().unwrap().remove(tab) {
+        return Err(AppError::Msg(l.msg));
+    }
+    let found = state.sessions.read().await.get(tab).map(|e| {
+        let mut used = e.used.lock().unwrap();
+        let idle = idle_for(*used, SESSION_IDLE);
+        *used = std::time::SystemTime::now();
+        (e.session.clone(), e.conn_id.clone(), idle)
+    });
+    let Some((sess, conn_id, idle)) = found else { return Ok(TabSession::None) };
+    if !idle {
+        return Ok(TabSession::Open(sess, conn_id));
+    }
+    let cfg = match state.source(&conn_id) {
+        Ok(c) if c.tunneled() => c,
+        _ => return Ok(TabSession::Open(sess, conn_id)),
+    };
+    let base = split_target(&conn_id).0;
+    let c = state.connecting(base);
+    // The tunnel the session went through (a disconnect counts it up and closes the session)
+    let g = c.generation.load(SeqCst);
+    // The tunnel was checked here already and carried nothing: it isn't checked again (drop_dead_tunnel)
+    let mut tunnel_dead = false;
+    let in_tx = {
+        // Something runs in it (a load-more, a cancel's wait): it isn't idle
+        let Ok(mut s) = sess.try_lock() else { return Ok(TabSession::Open(sess, conn_id)) };
+        let slow = match tokio::time::timeout(SESSION_PING, s.check()).await {
+            // Any answer counts, an error too (a transaction an error aborted)
+            Ok(r) if r.as_ref().err().is_none_or(|e| !is_conn_lost(e)) => {
+                drop(s);
+                return Ok(TabSession::Open(sess, conn_id));
+            }
+            Ok(_) => false,
+            Err(_) => true,
+        };
+        // A transaction isn't given up on one slow answer: while the tunnel carries a new connection, the session is slow (the
+        // network coming back after sleep, a tunnel busy with a backup), not gone, and it is kept as it is. The check left
+        // unanswered is read past by its next use (Session::check)
+        if slow && s.in_tx() {
+            let port = state.tunnels.read().await.get(base).map(|t| t.local_port);
+            if let Some(port) = port {
+                if crate::tunnel::answers(port, &cfg, SESSION_PING).await {
+                    drop(s);
+                    // Checked again on its next use, so a session that never comes back can't take a statement and hang
+                    if let Some(e) = state.sessions.read().await.get(tab) {
+                        *e.used.lock().unwrap() = std::time::SystemTime::UNIX_EPOCH;
+                    }
+                    // This error says it already: a mark a disconnect left meanwhile isn't said a second time
+                    state.lost_tx.lock().unwrap().remove(tab);
+                    return Err(slow_session_error(&cfg));
+                }
+                tunnel_dead = true;
+            }
+        }
+        s.abandon();
+        s.in_tx()
+    };
+    crate::log!("[qurry] the console session of {tab} on {conn_id} didn't answer within {}s; closing it", SESSION_PING.as_secs());
+    if in_tx && let Err(e) = state.audit_tx_end(tab, crate::audit::BY_SERVER).await {
+        crate::log!("[qurry] {e}");
+    }
+    {
+        let mut all = state.sessions.write().await;
+        if all.get(tab).is_some_and(|e| std::sync::Arc::ptr_eq(&e.session, &sess)) {
+            all.remove(tab);
         }
     }
+    drop(sess);
+    let asked = std::time::Instant::now();
+    let closed = {
+        let _connecting = c.failed.lock().await;
+        if !tunnel_dead {
+            drop_dead_tunnel(state, &c, base, &cfg, g, asked).await.is_ok()
+        } else {
+            // Unless a disconnect closed it meanwhile
+            if c.generation.load(SeqCst) == g {
+                crate::log!("[qurry] the tunnel of {base} carries nothing any more; closing it (the next connect opens a new one)");
+                drop_pool_logged(state, base, crate::audit::BY_SERVER).await;
+            }
+            true
+        }
+    };
+    if in_tx {
+        // The drop above may have marked this tab too; this error says it already
+        state.lost_tx.lock().unwrap().remove(tab);
+        return Err(lost_session_error(&cfg, closed));
+    }
+    Ok(TabSession::Lost(closed.then_some(g)))
+}
+
+/// The tab's run or load-more ended: its session counts as unused from now, not from when a long statement started (tab_session)
+async fn used_now(state: &AppState, tab: &str) {
+    if let Some(e) = state.sessions.read().await.get(tab) {
+        *e.used.lock().unwrap() = std::time::SystemTime::now();
+    }
+}
+
+pub async fn ensure_session(state: &AppState, id: &str, tab_id: &str) -> AppResult<std::sync::Arc<tokio::sync::Mutex<Session>>> {
+    let stale = match tab_session(state, tab_id).await? {
+        TabSession::Open(s, c) if c == id => return Ok(s),
+        TabSession::Lost(stale) => stale,
+        _ => None,
+    };
+    new_session(state, id, tab_id, stale).await
+}
+
+/// A new session for the tab. stale: tab_session closed the tab's dead tunnel already
+async fn new_session(state: &AppState, id: &str, tab_id: &str, stale: Option<u64>) -> AppResult<std::sync::Arc<tokio::sync::Mutex<Session>>> {
     // If the same tab switched to another DB, clean up and return the previous session
-    let old = state.sessions.write().await.remove(tab_id);
+    let old = {
+        let mut all = state.sessions.write().await;
+        match all.get(tab_id) {
+            Some(e) if e.conn_id != id => all.remove(tab_id),
+            _ => None,
+        }
+    };
     if let Some(e) = old {
         e.session.lock().await.discard().await;
     }
-    let pool = ensure_pool(state, id).await?;
-    let mut s = Session::open(&pool).await?;
+    // Opening one runs nothing of the user's: through a tunnel that stopped forwarding, it opens again on a new one
+    let mut s = with_pool_after(state, id, stale, |p| async move { Session::open(&p).await }).await?;
     // If the tab is Manual, the new session is Manual too (silently becoming Auto after a reconnect would commit the next change right away)
     if state.tab_manual.lock().unwrap().get(tab_id).copied().unwrap_or(false) {
         s.set_manual(true).await?;
@@ -578,7 +987,7 @@ pub async fn ensure_session(state: &AppState, id: &str, tab_id: &str) -> AppResu
         s.discard().await;
         return Ok(first);
     }
-    let entry = SessionEntry { conn_id: id.to_string(), pid: s.backend_id(), session: std::sync::Arc::new(tokio::sync::Mutex::new(s)) };
+    let entry = SessionEntry { conn_id: id.to_string(), pid: s.backend_id(), session: std::sync::Arc::new(tokio::sync::Mutex::new(s)), used: std::sync::Mutex::new(std::time::SystemTime::now()) };
     let arc = entry.session.clone();
     let replaced = all.insert(tab_id.to_string(), entry);
     drop(all);
@@ -633,7 +1042,8 @@ impl AppState {
                 return Err(AppError::Msg(format!("{cmd} is not a read-only command")));
             }
         }
-        dispatch!(ensure_pool(self, &id).await?, b => b.run_read_only(&sql, limit).await)
+        let sql = &sql;
+        with_pool(self, &id, |p| async move { dispatch!(p, b => b.run_read_only(sql, limit).await) }).await
     }
 
     /// Read-only query result to CSV (MCP). Same rules as run_read_only for checking and running (the full result also runs in a READ ONLY transaction)
@@ -642,7 +1052,7 @@ impl AppState {
         if let Some(why) = crate::guard::read_only_violation(&sql, kind, true) {
             return Err(AppError::Msg(why));
         }
-        let pool = ensure_pool(self, &id).await?;
+        let pool = checked_pool(self, &id).await?;
         // Same time limit as run_read_only, plus a file size limit (so it does not fill the disk). On failure, delete the partial file
         let mut out = crate::transfer::Exporter::csv_file(&path).await?.max_bytes(EXPORT_MAX_BYTES);
         let r = match dispatch!(pool, b => b.export_read_only(&sql, &mut out).await) {
@@ -868,8 +1278,7 @@ impl AppState {
 
     pub async fn connect(&self, id: String) -> AppResult<String> {
         crate::log!("[qurry] connect {id}");
-        let pool = ensure_pool(self, &id).await?;
-        let v = pool.server_version().await?;
+        let (pool, v) = with_pool(self, &id, |p| async move { p.server_version().await.map(|v| (p, v)) }).await?;
         // If connected in plain text, say so next to the version (status bar · TUI status)
         let cfg = self.source(&id)?;
         let note = dispatch!(pool, b => b.plaintext_note(&cfg).await);
@@ -938,20 +1347,27 @@ impl AppState {
     /// Run in the console's session (or on the pool). undo = also keep undo SQL: the snapshot runs in the change's transaction (Session::run_with_snapshot).
     /// → (result, undo SQL or why there is none, what happened to the console's transaction)
     async fn run_with_undo(&self, id: &str, cfg: &ConnectionConfig, sql: &str, limit: usize, tab: Option<&str>, undo: bool) -> (AppResult<QueryResult>, Option<Result<String, String>>, TxSeen) {
-        let pool = match ensure_pool(self, id).await {
-            Ok(p) => p,
-            Err(e) => return (Err(e), None, TxSeen::default()),
-        };
-        let plan = match undo {
-            true => Some(crate::audit::plan(&pool, sql, cfg.kind).await),
-            false => None,
-        };
+        // On the pool, nothing reached the server when getting a connection timed out: through a dead tunnel it goes on through a new one
+        if tab.is_none() && !undo {
+            return (with_pool(self, id, |p| async move { p.run_query(sql, limit).await }).await, None, TxSeen::default());
+        }
+        // The session first: opening it, or checking one that sat unused (tab_session), replaces a tunnel that stopped forwarding,
+        // and the pool is then the new one
         let sess = match tab {
             Some(t) => match ensure_session(self, id, t).await {
                 Ok(s) => Some(s),
                 Err(e) => return (Err(e), None, TxSeen::default()),
             },
             None => None,
+        };
+        // Undo reads the table's columns first: on a pool that answered (checked_pool), so that read can't wait on a dead tunnel
+        let pool = match if undo { checked_pool(self, id).await } else { ensure_pool(self, id).await } {
+            Ok(p) => p,
+            Err(e) => return (Err(e), None, TxSeen::default()),
+        };
+        let plan = match undo {
+            true => Some(crate::audit::plan(&pool, sql, cfg.kind).await),
+            false => None,
         };
         let (mut guard, mut temp);
         let s: &mut Session = match &sess {
@@ -993,11 +1409,16 @@ impl AppState {
                     false => None,
                 };
                 let run = self.runs.fetch_add(1, SeqCst);
-                let mut all = self.more.lock().unwrap();
-                match more {
-                    Some(more) => all.insert(t.to_string(), Kept { conn_id: id.to_string(), cfg: cfg.clone(), run, more }),
-                    None => all.remove(t),
-                };
+                {
+                    let mut all = self.more.lock().unwrap();
+                    match more {
+                        Some(more) => all.insert(t.to_string(), Kept { conn_id: id.to_string(), cfg: cfg.clone(), run, more }),
+                        None => all.remove(t),
+                    };
+                }
+                used_now(self, t).await;
+                // Last, right before the session is let go: a disconnect meanwhile marks it busy (close_all)
+                settle_lost(self, t, s.in_tx());
             }
             _ => s.discard().await,
         }
@@ -1042,7 +1463,11 @@ impl AppState {
         let closed = || AppError::Msg("Session closed".into());
         // The result this load-more is for, read before it waits for anything: a run queued ahead of it has a result of its own
         let issued = self.more.lock().unwrap().get(&tab_id).cloned();
-        let entry = self.sessions.read().await.get(&tab_id).map(|e| (e.session.clone(), e.conn_id.clone()));
+        let (entry, stale) = match tab_session(self, &tab_id).await? {
+            TabSession::Open(s, c) => (Some((s, c)), None),
+            TabSession::Lost(stale) => (None, stale),
+            TabSession::None => (None, None),
+        };
         let (sess, conn_id, old) = match entry {
             Some((s, c)) => (s, c, None),
             None => {
@@ -1053,7 +1478,7 @@ impl AppState {
                 if let Some(why) = reopen_refused(&k, &self.source(&k.conn_id)?, manual) {
                     return Err(AppError::Msg(why));
                 }
-                (ensure_session(self, &k.conn_id, &tab_id).await?, k.conn_id.clone(), Some(k))
+                (new_session(self, &k.conn_id, &tab_id, stale).await?, k.conn_id.clone(), Some(k))
             }
         };
         touch(self, &conn_id);
@@ -1079,6 +1504,8 @@ impl AppState {
                 Some(k) => s.reopen(&k.more, limit).await,
                 None => s.fetch(limit).await,
             };
+            settle_lost(self, &tab_id, s.in_tx());
+            used_now(self, &tab_id).await;
             match &r {
                 // Same statement, schema and run: only the rows read move on (under the session's lock, like run_with_undo's)
                 Ok(_) => {
@@ -1120,7 +1547,9 @@ impl AppState {
             Some(e) => (e.conn_id.clone(), e.pid),
             None => return Ok(false),
         };
-        dispatch!(ensure_pool(self, &conn_id).await?, b => b.cancel(pid).await)
+        // A cancel opens a connection of its own and asks the server to stop the statement: it may run again. Through a tunnel that
+        // carries nothing any more, the timeout closes it (drop_dead_tunnel), which ends the statement waiting there too
+        with_pool(self, &conn_id, |p| async move { dispatch!(p, b => b.cancel(pid).await) }).await
     }
 
     /// Tx: Auto / Manual
@@ -1186,13 +1615,18 @@ impl AppState {
     /// Production: the COMMIT of logged changes goes into the log first; if it can't be written, the transaction stays open.
     /// → a warning when it committed but its result couldn't be logged
     pub async fn commit_tx(&self, tab_id: String) -> AppResult<Option<String>> {
-        let (sess, conn) = self.sessions.read().await.get(&tab_id).map(|e| (e.session.clone(), e.conn_id.clone())).ok_or_else(|| AppError::Msg("Session closed".into()))?;
+        let TabSession::Open(sess, conn) = tab_session(self, &tab_id).await? else { return Err(AppError::Msg("Session closed".into())) };
         let cfg = self.source(&conn).ok();
         let started = match &cfg {
             Some(c) => self.audit.before(&conn, &c.name, c.kind, Some(&tab_id), "COMMIT")?,
             None => None,
         };
-        let r = sess.lock().await.commit().await.map(|_| db::query_result(vec![], vec![], 0, false, std::time::Instant::now(), false));
+        let r = {
+            let mut s = sess.lock().await;
+            let r = s.commit().await.map(|_| db::query_result(vec![], vec![], 0, false, std::time::Instant::now(), false));
+            settle_lost(self, &tab_id, s.in_tx());
+            r
+        };
         let logged = match &cfg {
             Some(c) => {
                 let a = self.audit.after(started, &conn, &c.name, c.kind, Some(&tab_id), "COMMIT", &r, None);
@@ -1208,13 +1642,19 @@ impl AppState {
 
     /// → a warning when it rolled back but that couldn't be logged
     pub async fn rollback_tx(&self, tab_id: String) -> AppResult<Option<String>> {
-        let sess = self.sessions.read().await.get(&tab_id).map(|e| e.session.clone()).ok_or_else(|| AppError::Msg("Session closed".into()))?;
-        sess.lock().await.rollback_tx().await?;
+        let TabSession::Open(sess, _) = tab_session(self, &tab_id).await? else { return Err(AppError::Msg("Session closed".into())) };
+        {
+            let mut s = sess.lock().await;
+            let r = s.rollback_tx().await;
+            settle_lost(self, &tab_id, s.in_tx());
+            r?;
+        }
         Ok(self.audit_tx_end(&tab_id, "ROLLBACK").await.err().map(|e| e.to_string()))
     }
 
     pub async fn close_session(&self, tab_id: String) -> AppResult<()> {
         self.tab_manual.lock().unwrap().remove(&tab_id);
+        self.lost_tx.lock().unwrap().remove(&tab_id);
         self.more.lock().unwrap().remove(&tab_id);
         // Cancel a running query first (otherwise the connection and cleanup stay tied up until it ends)
         let busy = self.sessions.read().await.get(&tab_id).is_some_and(|e| e.session.try_lock().is_err());
@@ -1279,7 +1719,7 @@ impl AppState {
     /// undo = also keep undo SQL for each statement (into `undos`): the snapshots run in the batch's transaction, right before their statements
     #[allow(clippy::too_many_arguments)]
     async fn run_batch(&self, id: &str, kind: store::DbKind, statements: &[String], exact_one: bool, prepared: bool, undo: bool, undos: &mut Vec<Option<Result<String, String>>>) -> AppResult<u64> {
-        let pool = ensure_pool(self, id).await?;
+        let pool = checked_pool(self, id).await?;
         let mut plans = Vec::new();
         for st in statements {
             plans.push(match undo && crate::audit::is_change(st, kind) {
@@ -1308,8 +1748,7 @@ impl AppState {
 
     /// Save to the search cache on every read (Redis keys are not saved)
     pub async fn object_index(&self, id: String) -> AppResult<Vec<crate::meta::IndexEntry>> {
-        let pool = ensure_pool(self, &id).await?;
-        let r = crate::meta::object_index(&pool).await?;
+        let (pool, r) = with_pool(self, &id, |p| async move { crate::meta::object_index(&p).await.map(|r| (p, r)) }).await?;
         if self.cached(&pool, &id) {
             crate::search_cache::save_objects(&self.store.dir(), &id, &r);
         }
@@ -1348,7 +1787,8 @@ impl AppState {
     }
 
     pub async fn full_text_search(&self, id: String, req: crate::meta::FtsRequest) -> AppResult<Vec<crate::meta::FtsHit>> {
-        crate::meta::full_text_search(&ensure_pool(self, &id).await?, &req).await
+        let req = &req;
+        with_pool(self, &id, |p| async move { crate::meta::full_text_search(&p, req).await }).await
     }
 
     pub async fn redis_scan(&self, id: String, cursor: String, pattern: String, count: usize, type_filter: Option<String>) -> AppResult<crate::redisdb::ScanPage> {
@@ -1423,13 +1863,13 @@ impl AppState {
 
     pub async fn export_csv(&self, id: String, sql: String, path: String) -> AppResult<u64> {
         self.check_read_only(&id, &sql)?;
-        let pool = ensure_pool(self, &id).await?;
+        let pool = checked_pool(self, &id).await?;
         pool.export_csv(&sql, std::path::Path::new(&path)).await
     }
 
     pub async fn list_databases(&self, id: String) -> AppResult<Vec<String>> {
         crate::log!("[qurry] list_databases {id}");
-        let r = async { crate::meta::list_databases(&ensure_pool(self, &id).await?).await }.await;
+        let r = with_pool(self, &id, |p| async move { crate::meta::list_databases(&p).await }).await;
         if let Err(e) = &r {
             crate::log!("[qurry] list_databases error: {e}");
         }
@@ -1438,7 +1878,7 @@ impl AppState {
 
     pub async fn list_schemas(&self, id: String) -> AppResult<Vec<crate::meta::SchemaInfo>> {
         crate::log!("[qurry] list_schemas {id}");
-        let r = async { crate::meta::list_schemas(&ensure_pool(self, &id).await?).await }.await;
+        let r = with_pool(self, &id, |p| async move { crate::meta::list_schemas(&p).await }).await;
         match &r {
             Ok(v) => crate::log!("[qurry] list_schemas → {} schemas", v.len()),
             Err(e) => crate::log!("[qurry] list_schemas error: {e}"),
@@ -1447,15 +1887,18 @@ impl AppState {
     }
 
     pub async fn list_objects(&self, id: String, schema: String) -> AppResult<crate::meta::SchemaObjects> {
-        crate::meta::list_objects(&ensure_pool(self, &id).await?, &schema).await
+        let schema = &schema;
+        with_pool(self, &id, |p| async move { crate::meta::list_objects(&p, schema).await }).await
     }
 
     pub async fn table_detail(&self, id: String, schema: String, table: String) -> AppResult<crate::meta::TableDetail> {
-        crate::meta::table_detail(&ensure_pool(self, &id).await?, &schema, &table).await
+        let (schema, table) = (&schema, &table);
+        with_pool(self, &id, |p| async move { crate::meta::table_detail(&p, schema, table).await }).await
     }
 
     pub async fn table_structure(&self, id: String, schema: String, table: String) -> AppResult<crate::meta::TableStructure> {
-        crate::meta::table_structure(&ensure_pool(self, &id).await?, &schema, &table).await
+        let (schema, table) = (&schema, &table);
+        with_pool(self, &id, |p| async move { crate::meta::table_structure(&p, schema, table).await }).await
     }
 
     /// pgvector: SQL that finds rows close to this row (using the vector index's distance operator). pk = (column, value)
@@ -1469,12 +1912,12 @@ impl AppState {
     }
 
     pub async fn object_ddl(&self, id: String, schema: String, name: String, kind: String) -> AppResult<String> {
-        crate::meta::object_ddl(&ensure_pool(self, &id).await?, &schema, &name, &kind).await
+        let (schema, name, kind) = (&schema, &name, &kind);
+        with_pool(self, &id, |p| async move { crate::meta::object_ddl(&p, schema, name, kind).await }).await
     }
 
     pub async fn completion_meta(&self, id: String) -> AppResult<Vec<crate::meta::CompletionTable>> {
-        let pool = ensure_pool(self, &id).await?;
-        let r = crate::meta::completion_meta(&pool).await?;
+        let (pool, r) = with_pool(self, &id, |p| async move { crate::meta::completion_meta(&p).await.map(|r| (p, r)) }).await?;
         if self.cached(&pool, &id) {
             crate::search_cache::save_columns(&self.store.dir(), &id, &r);
         }
@@ -1483,7 +1926,7 @@ impl AppState {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// A temporary source (qurry-tui URL) is listed and connectable in this process only: never in connections.json or the secrets
@@ -1530,8 +1973,15 @@ mod tests {
         assert_eq!(st.secret(&saved.id).unwrap().as_deref(), Some("savedpw"));
     }
 
+    /// The tab's session as if it sat unused for longer than SESSION_IDLE: its next use checks it first (tab_session)
+    pub(crate) async fn age_session(st: &AppState, tab: &str) {
+        let all = st.sessions.read().await;
+        let mut used = all.get(tab).expect("a console session").used.lock().unwrap();
+        *used -= SESSION_IDLE + std::time::Duration::from_secs(1);
+    }
+
     /// A server that accepts and never answers (a DB or SSH host behind a firewall that drops packets)
-    async fn silent_server() -> u16 {
+    pub(crate) async fn silent_server() -> u16 {
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = l.local_addr().unwrap().port();
         tokio::spawn(async move {
@@ -1560,8 +2010,158 @@ mod tests {
         st.store.save(&silent_source("x", silent_server().await, None)).unwrap();
         let start = std::time::Instant::now();
         let r = futures::future::join_all(["x", "x::db1", "x", "x::db3"].map(|id| ensure_pool(&st, id))).await;
-        assert!(r.iter().all(|r| r.as_ref().err().is_some_and(|e| e.to_string().contains("didn't answer within 10s"))));
+        let direct = |e: &str| e.contains("Can't connect to 127.0.0.1:") && e.contains("the server didn't answer within 10s") && e.contains("this machine can reach it") && !e.contains("tunnel");
+        assert!(r.iter().all(|r| r.as_ref().err().is_some_and(|e| direct(&e.to_string()))), "{:?}", r.iter().map(|r| r.as_ref().err().map(|e| e.to_string())).collect::<Vec<_>>());
         assert!(start.elapsed() < std::time::Duration::from_secs(15), "{:?}", start.elapsed());
+    }
+
+    /// A connect's timeout says which way it went: through the AWS SSM tunnel (instance), the SSH tunnel (server) or direct
+    #[test]
+    fn a_timeout_says_which_way_it_went() {
+        let timeout = || AppError::Db(sqlx::Error::PoolTimedOut);
+        let e = timeout_error(&silent_source("d", 5432, None), timeout(), false).to_string();
+        assert!(e.starts_with("Can't connect to 127.0.0.1:5432 — the server didn't answer within 10s") && e.contains("(VPN, firewall)") && !e.contains("tunnel"), "{e}");
+        let ssh = silent_source("s", 5432, Some(serde_json::json!({ "enabled": true, "host": "bastion.example.com", "port": 2222, "user": "me" })));
+        let e = timeout_error(&ssh, timeout(), true).to_string();
+        assert!(e.contains("through the SSH tunnel (bastion.example.com:2222)") && e.contains("also after Qurry opened the tunnel again") && e.contains("the SSH server can reach it") && !e.contains("VPN"), "{e}");
+        let mut ssm = silent_source("m", 5432, None);
+        ssm.ssm = Some(store::SsmConfig { enabled: true, profile: String::new(), region: String::new(), target: " i-0123456789abcdef0 ".into() });
+        let e = timeout_error(&ssm, timeout(), false).to_string();
+        assert!(e.contains("through the AWS SSM tunnel (instance i-0123456789abcdef0)") && e.contains("the instance can reach it") && !e.contains("also after") && !e.contains("VPN"), "{e}");
+        // Any other error stays as it is
+        assert_eq!(timeout_error(&ssm, AppError::Msg("password authentication failed".into()), true).to_string(), "password authentication failed");
+        // A console's session that didn't answer with a transaction open: lost, nothing sent, and recover() leaves the text alone
+        for closed in [true, false] {
+            let e = lost_session_error(&ssm, closed);
+            let m = e.to_string();
+            assert!(m.contains("through the AWS SSM tunnel (instance i-0123456789abcdef0)") && m.contains("The transaction open in it is lost") && m.contains("nothing was sent"), "{m}");
+            assert_eq!(m.contains("closed both"), closed, "{m}");
+            assert!(!is_conn_lost(&e), "{m}");
+        }
+        assert!(lost_session_error(&ssh, false).to_string().contains("through the SSH tunnel (bastion.example.com:2222)"));
+    }
+
+    /// The texts of a console's transaction kept (a slow session through a tunnel that answers) or lost in a disconnect: they name
+    /// the source and the way, say nothing was sent, and aren't taken for a lost connection (recover leaves them as they are)
+    #[test]
+    fn a_console_says_what_became_of_its_transaction() {
+        let mut ssm = silent_source("m", 5432, None);
+        ssm.name = "prod".into();
+        ssm.ssm = Some(store::SsmConfig { enabled: true, profile: String::new(), region: String::new(), target: "i-0123456789abcdef0".into() });
+        let kept = slow_session_error(&ssm);
+        let m = kept.to_string();
+        assert!(m.contains("through the AWS SSM tunnel (instance i-0123456789abcdef0)") && m.contains("within 5s") && m.contains("kept it with the transaction open") && m.contains("Nothing was sent"), "{m}");
+        assert!(!is_conn_lost(&kept), "{m}");
+        let lost = tx_lost_error(&ssm, crate::audit::BY_SERVER);
+        assert!(lost.starts_with("Qurry closed this console's connection to \"prod\" through the AWS SSM tunnel (instance i-0123456789abcdef0) because") && lost.contains("nothing was sent"), "{lost}");
+        let direct = tx_lost_error(&silent_source("d", 5432, None), crate::audit::BY_SERVER);
+        assert!(direct.starts_with("Qurry closed this console's connection to \"d\" because"), "{direct}");
+        let gone = tx_lost_error(&ssm, crate::audit::DISCONNECTED);
+        assert!(gone.starts_with("\"prod\" was disconnected") && gone.contains("The transaction is lost"), "{gone}");
+        for m in [lost, gone] {
+            assert!(!is_conn_lost(&AppError::Msg(m.clone())), "{m}");
+        }
+    }
+
+    /// A session's idle time is wall-clock time: an Instant stops while the Mac sleeps, so a console unused overnight would skip
+    /// its check. A clock set back counts as idle (one check too many)
+    #[test]
+    fn idle_time_counts_by_the_wall_clock() {
+        use std::time::{Duration, SystemTime};
+        let now = SystemTime::now();
+        assert!(!idle_for(now, SESSION_IDLE));
+        assert!(idle_for(now - SESSION_IDLE - Duration::from_secs(1), SESSION_IDLE));
+        assert!(idle_for(now - Duration::from_secs(8 * 3600), SESSION_IDLE), "overnight");
+        assert!(idle_for(now + Duration::from_secs(60), SESSION_IDLE), "the clock was set back");
+    }
+
+    /// An export, import, backup, restore or subset copy keeps its source in use while it runs (counted per source, not per
+    /// database), so the idle disconnect skips it and its tunnel gets the longer check
+    #[tokio::test]
+    async fn a_running_job_keeps_its_source_in_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = AppState::new(Store::new(dir.path().to_path_buf()), crate::secrets::SecretFile::open(dir.path()).unwrap());
+        assert!(!in_use(&st, "x").await);
+        let a = st.job_running("x::db1");
+        let b = st.job_running("x");
+        assert!(in_use(&st, "x").await && !in_use(&st, "y").await);
+        drop(a);
+        assert!(in_use(&st, "x").await, "one still runs");
+        drop(b);
+        assert!(!in_use(&st, "x").await && st.running.lock().unwrap().is_empty());
+    }
+
+    /// A tunnel whose CLI runs on while its port doesn't answer (the session died: sleep, a network change, the AWS side): the
+    /// connects that time out through it close it and open a new one, once for the callers together, and they all get what that
+    /// one did (here: the instance id is missing, so nothing is started). With a working new tunnel: cargo test -p qurry-core dead_ssm_tunnel -- --ignored
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_tunnel_that_stops_answering_is_opened_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = AppState::new(Store::new(dir.path().to_path_buf()), crate::secrets::SecretFile::open(dir.path()).unwrap());
+        let mut c = silent_source("t", 5432, None);
+        c.ssm = Some(store::SsmConfig { enabled: true, profile: String::new(), region: String::new(), target: String::new() });
+        st.store.save(&c).unwrap();
+        // The open tunnel: its CLI and plugin run, its port accepts, nothing answers
+        let (fake, t) = crate::ssm::tests::fake_tunnel_to(silent_server().await).await;
+        st.connecting("t");
+        st.tunnels.write().await.insert("t".into(), t);
+        let start = std::time::Instant::now();
+        let r = futures::future::join_all(["t", "t::db1", "t"].map(|id| ensure_pool(&st, id))).await;
+        let took = start.elapsed();
+        // The instance id is checked before the CLI runs (where there is one)
+        let errors: Vec<String> = r.iter().map(|r| r.as_ref().err().map(|e| e.to_string()).unwrap_or_default()).collect();
+        assert!(errors.iter().all(|e| *e == errors[0]) && (errors[0].contains("Enter the instance id") || errors[0].contains("AWS CLI not found")), "{errors:?}");
+        assert!(took >= std::time::Duration::from_secs(10) && took < std::time::Duration::from_secs(15), "one timeout, then one try to open it: {took:?}");
+        assert!(st.tunnels.read().await.is_empty());
+        crate::ssm::tests::gone(fake.path()).await;
+    }
+
+    /// A PostgreSQL that answers an SSLRequest ("N") and then nothing: a database that is slow to accept new connections
+    async fn slow_pg_server() -> u16 {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = l.accept().await {
+                tokio::spawn(async move {
+                    let mut b = [0u8; 8];
+                    if s.read_exact(&mut b).await.is_ok() && b == [0, 0, 0, 8, 4, 210, 22, 47] {
+                        let _ = s.write_all(b"N").await;
+                    }
+                    let _ = s.read_to_end(&mut Vec::new()).await;
+                });
+            }
+        });
+        port
+    }
+
+    /// A connect that times out through a tunnel that still carries new connections (the pool is full, the database or its
+    /// startup script is slow) keeps the tunnel and what runs through it, and fails after one timeout saying so
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_tunnel_that_still_answers_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = AppState::new(Store::new(dir.path().to_path_buf()), crate::secrets::SecretFile::open(dir.path()).unwrap());
+        let mut c = silent_source("k", 5432, None);
+        c.ssm = Some(store::SsmConfig { enabled: true, profile: String::new(), region: String::new(), target: "i-0123456789abcdef0".into() });
+        st.store.save(&c).unwrap();
+        let (fake, t) = crate::ssm::tests::fake_tunnel_to(slow_pg_server().await).await;
+        let port = t.local_port;
+        st.connecting("k");
+        st.tunnels.write().await.insert("k".into(), t);
+        let start = std::time::Instant::now();
+        let r = futures::future::join_all(["k", "k::db1"].map(|id| ensure_pool(&st, id))).await;
+        let took = start.elapsed();
+        for r in r {
+            let e = r.err().expect("times out").to_string();
+            assert!(e.contains("within 10s, though the AWS SSM tunnel (instance i-0123456789abcdef0) answers") && e.contains("all 32 connections") && e.contains("startup script"), "{e}");
+        }
+        assert!(took < std::time::Duration::from_secs(13), "one timeout, no second try: {took:?}");
+        assert_eq!(st.tunnels.read().await.get("k").map(|t| (t.local_port, t.alive())), Some((port, true)), "the same tunnel");
+        assert_eq!(std::fs::read_to_string(fake.path().join("starts")).unwrap().lines().count(), 1, "no new session");
+        drop_pool(&st, "k").await;
+        crate::ssm::tests::gone(fake.path()).await;
     }
 
     /// Callers that waited for a tunnel that couldn't be opened get its error instead of opening another one in turn
@@ -2136,7 +2736,7 @@ mod tests {
         assert!(housekeeping(&state).await.is_empty(), "not idle long enough yet");
         assert!(state.last_ping.lock().unwrap().contains_key("hk"), "keep-alive ran");
         tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-        assert_eq!(housekeeping(&state).await, vec!["hk".to_string()]);
+        assert_eq!(housekeeping(&state).await, vec![("hk".to_string(), format!("Disconnected (idle): {}", cfg.name))]);
         assert!(state.pools.read().await.is_empty() && state.sessions.read().await.is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }

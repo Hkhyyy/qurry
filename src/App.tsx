@@ -143,14 +143,15 @@ export default function App() {
     return () => off?.();
   }, []);
   useEffect(migrateOldHistory, []);
-  // Update the tree state when the backend closes a connection (e.g. Auto-disconnect)
+  // Update the tree state when the backend closes a connection (Auto-disconnect, a tunnel that stopped); message = why, with
+  // the data source's name (qurry_shared::errors::disconnected, the TUI's words)
   useEffect(() => {
     let off: (() => void) | undefined;
-    listen<string>("conn-disconnected", (e) => {
-      invalidateSearchIndex(e.payload);
-      invalidateCompletion(e.payload);
+    listen<{ id: string; message: string }>("conn-disconnected", (e) => {
+      invalidateSearchIndex(e.payload.id);
+      invalidateCompletion(e.payload.id);
       refresh();
-      setStatus(`Disconnected (idle): ${e.payload}`);
+      setStatus(e.payload.message);
     })
       .then((u) => (off = u))
       .catch(() => {});
