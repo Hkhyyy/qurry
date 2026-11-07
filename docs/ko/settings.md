@@ -11,6 +11,7 @@ GUI **Settings** (`⌘,`, 또는 맨 왼쪽 워크스페이스 막대 아래의 
 | Theme | Dark, Light, High contrast, Dracula, One Dark, Solarized Dark, Solarized Light 또는 사용자 테마, 또는 어두운 테마와 밝은 테마를 하나씩 고르는 **Sync with OS** ([아래](#테마)). 빠른 전환: `` ⌃` `` | 예 (TUI **⌃k › Theme…**) |
 | Editor font | 쿼리 콘솔 편집기의 글꼴과 크기. 크기 8–32 px (기본 13). `⌃⇧.` / `⌃⇧,` 로도 바꿀 수 있고, Settings 에 바뀐 크기가 보입니다 | 아니요 (TUI 는 터미널 글꼴을 씀) |
 | Grid font | 결과 · 테이블 그리드의 글꼴과 크기. 크기 9–16 px (기본 12): 행 높이는 그대로라 더 크면 글자가 잘립니다. 크기에 맞춰 열이 넓어집니다 | 아니요 (TUI 는 터미널 글꼴을 씀) |
+| Keyword case | 콘솔에서 입력할 때와 **Reformat Code** 에서 SQL 키워드를 **Off** (기본), **UPPER**, **lower** 중 무엇으로 쓸지 ([아래](#키워드-대소문자와-reformat-code)) | 예 (TUI **⌃k › Keyword Case…**) |
 | Alignment | 결과 표에서 칸 안의 값을 어디에 둘지, 값 종류마다 (아래) | 예 (TUI **⌃k › Grid Alignment…**) |
 | Updates | 앱을 켤 때 새 버전 확인, **Check Now** | — |
 | Channel | stable 또는 beta 릴리스 ([업데이트](updates.md)) | 예 |
@@ -46,6 +47,19 @@ GUI **Settings** (`⌘,`, 또는 맨 왼쪽 워크스페이스 막대 아래의 
 `base` 는 기본 테마, `colors` 는 그 테마에서 바꾼 색만, 이 이름들로 씁니다 (편집기 순서: `bg`, `panel`, `panel2`, `odd`, `hover`, `border`, `borderStrong`, `text`, `muted`, `nullText`, `icon`, `accent`, `link`, `onAccent`, `sel`, `keyword`, `string`, `number`, `comment`, `function`, `jsonKey`, `gridNum`, `changed`, `added`, `deleted`, `match`, `prodTint`, `prodStripe`, `tint`, `ok`, `warn`, `danger`). 16 KB 보다 크거나, 이 JSON 이 아니거나, 다른 키, 모르는 색 이름이나 기반 테마, `#rrggbb` 가 아닌 색이 있는 파일은 이유와 함께 거절합니다.
 
 0.3.2 에서 Dark, Light, High contrast 는 대비 기준에 못 미치던 곳만 조금 바뀌었습니다: 강조색 위의 글자 (주 버튼. High contrast 는 이제 검정), 운영 띠, Dark 의 흐린 글자와 NULL 회색, Light 의 강조색 · 링크 파랑, NULL 회색, 운영 · 초록 배경색, Light 의 오류 빨강.
+
+### 키워드 대소문자와 Reformat Code
+
+**Reformat Code** (GUI `⌘⌥l`, TUI `⌥⇧F` 또는 **⌃k › Reformat Code**) 는 선택한 부분을, 선택이 없으면 커서가 있는 문장을 정리합니다: 절마다 한 줄, 그 안의 항목은 4칸 들여쓰기. 문자열, 주석, 따옴표로 감싼 이름은 쓴 그대로 둡니다. 실행 취소 한 번 (`⌘z`, TUI `⌃u`) 이면 원래대로 돌아갑니다. GUI 와 TUI 가 같은 포매터를 쓰므로 같은 문장은 두 앱에서 똑같이 정리됩니다. Redis, MongoDB, 벡터 DB 콘솔은 정리하지 않습니다.
+
+**Keyword case** 는 SQL 키워드 (`SELECT`, `FROM`, `WHERE`, `JOIN`, `AND`, `IN` …) 의 대소문자를 정합니다:
+
+- **Off** (기본): 입력한 그대로 두고, Reformat Code 는 0.3.2 이전처럼 키워드를 대문자로 씁니다.
+- **UPPER** 또는 **lower**: 키워드를 다 쓰고 공백, 줄바꿈, 구두점 (`,` `(` `;` …) 을 치면 그 자리에서 그 대소문자로 바뀌고, Reformat Code 도 키워드를 그렇게 씁니다. 문자열, 주석, 따옴표로 감싼 이름 (`"order"`, `` `order` ``) 안의 키워드와, 점 앞뒤의 이름 (`t.order`, `order.id`) 은 그대로 둡니다. 테이블이 컬럼 이름으로 흔히 쓰는 단어 (`user`, `name`, `type`, `key`, `value` …) 와 함수 이름 (`count`, `coalesce` …) 은 바꾸지 않습니다. TUI 에서 `⌃u` 는 먼저 대소문자 변경을, 그다음 입력한 글자를 되돌립니다.
+
+설정은 `settings.json` 에 `"keywordCase"` (`"off"`, `"upper"`, `"lower"`) 로 저장됩니다. TUI 는 시작할 때와 **⌃k › Keyword Case…** 를 열 때 읽으므로, GUI 에서 바꾼 뒤에는 그 명령을 열거나 TUI 를 다시 시작하세요.
+
+TUI 의 `keymap.json` 이 이미 `⌥⇧F` 를 다른 명령에 주었다면 그 명령이 키를 그대로 갖고 Reformat Code 에는 키가 없습니다: TUI 를 시작할 때 상태 줄이 알려 줍니다. `F1` 창에서 Reformat Code 에 키를 주세요 (또는 `⌃k` 에서 실행).
 
 ### 결과 표의 정렬 (Alignment)
 

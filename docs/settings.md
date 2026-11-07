@@ -11,6 +11,7 @@ GUI **Settings** (`⌘,`, or the ⚙ button at the bottom of the workspace rail 
 | Theme | Dark, Light, High contrast, Dracula, One Dark, Solarized Dark, Solarized Light or a custom theme, or **Sync with OS** with a dark and a light theme of your choice ([below](#themes)). Quick switch: `` ⌃` `` | Yes (TUI **⌃k › Theme…**) |
 | Editor font | Font family and size of the query console editor. Size 8–32 px (default 13); `⌃⇧.` / `⌃⇧,` change it too, and Settings shows the new size | No (the TUI uses the terminal's font) |
 | Grid font | Font family and size of the result and table grids. Size 9–16 px (default 12): rows keep their height, so larger text would be cut. Columns get wider with the size | No (the TUI uses the terminal's font) |
+| Keyword case | **Off** (default), **UPPER** or **lower** for SQL keywords as you type in a console and in **Reformat Code** ([below](#keyword-case-and-reformat-code)) | Yes (TUI **⌃k › Keyword Case…**) |
 | Alignment | Where cells sit in result grids, per kind of value (below) | Yes (TUI **⌃k › Grid Alignment…**) |
 | Updates | Check for a new version when the app starts; **Check Now** | — |
 | Channel | Stable or beta releases ([Updates](updates.md)) | Yes |
@@ -46,6 +47,19 @@ The theme is saved in `settings.json` in the config folder (`"theme"`, `"themeSy
 `base` is a built-in theme and `colors` only the colors changed from it, by these names (in the editor's order: `bg`, `panel`, `panel2`, `odd`, `hover`, `border`, `borderStrong`, `text`, `muted`, `nullText`, `icon`, `accent`, `link`, `onAccent`, `sel`, `keyword`, `string`, `number`, `comment`, `function`, `jsonKey`, `gridNum`, `changed`, `added`, `deleted`, `match`, `prodTint`, `prodStripe`, `tint`, `ok`, `warn`, `danger`). A file is refused, with the reason, when it is larger than 16 KB, isn't this JSON, has another key, an unknown color name or base, or a color that isn't `#rrggbb`.
 
 In 0.3.2 Dark, Light and High contrast changed slightly where they missed the contrast minimum: text on the accent (primary buttons; High contrast's is now black), the Production stripe, Dark's dim text and NULL gray, Light's accent and link blue, its NULL gray, its Production and Green tints, and Light's error red.
+
+### Keyword case and Reformat Code
+
+**Reformat Code** (GUI `⌘⌥l`, TUI `⌥⇧F` or **⌃k › Reformat Code**) lays out the selection, or without a selection the statement at the caret: one clause per line, its items indented by 4 spaces. Strings, comments and quoted names stay as written. One undo (`⌘z`, TUI `⌃u`) puts the text back as it was. The GUI and the TUI use the same formatter, so both lay out a statement the same way. Redis, MongoDB and vector database consoles aren't reformatted.
+
+**Keyword case** sets the letter case of SQL keywords (`SELECT`, `FROM`, `WHERE`, `JOIN`, `AND`, `IN` …):
+
+- **Off** (the default): what you type stays as you type it, and Reformat Code writes keywords in upper case, as it did before 0.3.2.
+- **UPPER** or **lower**: a keyword you finish with a space, a new line or punctuation (`,` `(` `;` …) changes to that case as you type, and Reformat Code writes keywords in it. A keyword inside a string, a comment or a quoted name (`"order"`, `` `order` ``) is left alone, and so is a name after or before a dot (`t.order`, `order.id`). Words tables often use as column names (`user`, `name`, `type`, `key`, `value` …) and function names (`count`, `coalesce` …) are never changed. In the TUI, `⌃u` first undoes the case change and then the character you typed.
+
+The setting is saved in `settings.json` as `"keywordCase"` (`"off"`, `"upper"` or `"lower"`). The TUI reads it when it starts and again when you open **⌃k › Keyword Case…**, so after changing it in the GUI, open that command (or restart the TUI).
+
+If your TUI `keymap.json` already gives `⌥⇧F` to another command, that command keeps it and Reformat Code has no key: the status line says so when the TUI starts. Give Reformat Code a key in the `F1` window (or run it from `⌃k`).
 
 ### Alignment in result grids
 
