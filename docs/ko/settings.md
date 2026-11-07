@@ -55,7 +55,7 @@ GUI **Settings** (`⌘,`, 또는 맨 왼쪽 워크스페이스 막대 아래의 
 **Keyword case** 는 SQL 키워드 (`SELECT`, `FROM`, `WHERE`, `JOIN`, `AND`, `IN` …) 의 대소문자를 정합니다:
 
 - **Off** (기본): 입력한 그대로 두고, Reformat Code 는 0.3.2 이전처럼 키워드를 대문자로 씁니다.
-- **UPPER** 또는 **lower**: 키워드를 다 쓰고 공백, 줄바꿈, 구두점 (`,` `(` `;` …) 을 치면 그 자리에서 그 대소문자로 바뀌고, Reformat Code 도 키워드를 그렇게 씁니다. 문자열, 주석, 따옴표로 감싼 이름 (`"order"`, `` `order` ``) 안의 키워드와, 점 앞뒤의 이름 (`t.order`, `order.id`) 은 그대로 둡니다. 테이블이 컬럼 이름으로 흔히 쓰는 단어 (`user`, `name`, `type`, `key`, `value` …) 와 함수 이름 (`count`, `coalesce` …) 은 바꾸지 않습니다. TUI 에서 `⌃u` 는 먼저 대소문자 변경을, 그다음 입력한 글자를 되돌립니다.
+- **UPPER** 또는 **lower**: 키워드를 다 쓰고 공백, 줄바꿈, 구두점 (`,` `(` `;` …) 을 치면 그 자리에서 그 대소문자로 바뀌고, Reformat Code 도 키워드를 그렇게 씁니다. 문자열, 주석, 따옴표로 감싼 이름 (`"order"`, `` `order` ``) 안의 키워드와, 점 앞뒤의 이름 (`t.order`, `order.id`) 은 그대로 둡니다. 테이블이 컬럼 이름으로 흔히 쓰는 단어 (`user`, `name`, `type`, `key`, `value` …) 와 함수 이름 (`count`, `coalesce` …) 은 바꾸지 않습니다. 입력할 때는 이름으로 거의 쓰이지 않는 키워드만 바꾸고, 문장 전체에 실행하는 Reformat Code 는 `FUNCTION`, `RETURNS`, `ROWS`, `UNBOUNDED`, `NATURAL` 같은 나머지 키워드도 바꿉니다. TUI 에서 `⌃u` 는 먼저 대소문자 변경을, 그다음 입력한 글자를 되돌립니다.
 
 설정은 `settings.json` 에 `"keywordCase"` (`"off"`, `"upper"`, `"lower"`) 로 저장됩니다. TUI 는 시작할 때와 **⌃k › Keyword Case…** 를 열 때 읽으므로, GUI 에서 바꾼 뒤에는 그 명령을 열거나 TUI 를 다시 시작하세요.
 

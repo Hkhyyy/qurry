@@ -341,13 +341,34 @@ const CASE_KEYWORDS: &[&str] = &[
     "then", "to", "true", "truncate", "union", "unique", "update", "using", "values", "view", "when", "where", "window", "with",
 ];
 
-/// Whether toks[i] is a keyword the keyword case changes: a bare word (not quoted, not in a string or comment) of CASE_KEYWORDS that
-/// isn't part of a name (`t.order`, `order.id`) or a variable (`@from`, `:from`); `key` only in PRIMARY KEY / FOREIGN KEY
-fn cased_keyword(toks: &[crate::guard::Tok], i: usize) -> bool {
+/// The words Reformat Code cases besides CASE_KEYWORDS, sorted: it runs on a whole statement the user asked to lay out, so keywords
+/// that can also be names (in Postgres and MySQL unquoted names ignore case, so casing one doesn't change what runs) take the case
+/// too. The names tables use most (`user`, `name`, `type`, `value`, `year`, `date` …) still stay as written
+const REFORMAT_KEYWORDS: &[&str] = &[
+    "action", "after", "always", "analyse", "array", "asymmetric", "authorization", "before", "both", "call", "called", "close",
+    "collate", "column", "concurrently", "copy", "current", "current_catalog", "current_role", "current_schema", "current_time",
+    "current_user", "cursor", "deallocate", "declare", "deferrable", "deferred", "definer", "each", "execute", "extension", "following",
+    "function", "generated", "groups", "identity", "immediate", "immutable", "initially", "inout", "instead", "invoker", "isnull",
+    "language", "leading", "listen", "localtime", "localtimestamp", "lock", "locked", "natural", "no", "notify", "notnull", "nowait",
+    "of", "only", "ordinality", "out", "overlaps", "placing", "preceding", "prepare", "procedure", "release", "replace", "restrict",
+    "returns", "row", "rows", "security", "sequence", "session_user", "setof", "share", "show", "similar", "skip", "some", "stable",
+    "start", "strict", "symmetric", "tablesample", "temp", "temporary", "ties", "trailing", "transaction", "trigger", "unbounded",
+    "unlogged", "vacuum", "variadic", "verbose", "volatile", "within", "without", "work",
+];
+
+/// Whether toks[i] is a keyword the keyword case changes: a bare word (not quoted, not in a string or comment) of CASE_KEYWORDS
+/// (and in Reformat Code, `full`, of REFORMAT_KEYWORDS) that isn't part of a name (`t.order`, `order.id`) or a variable (`@from`,
+/// `:from`); `key` only in PRIMARY KEY / FOREIGN KEY, and in Reformat Code `first`, `last` and `next` only after NULLS or FETCH
+fn cased_keyword(toks: &[crate::guard::Tok], i: usize, full: bool) -> bool {
     let t = &toks[i];
     let prev = i.checked_sub(1).map(|p| &toks[p]);
     let next = toks.get(i + 1);
-    let known = CASE_KEYWORDS.binary_search(&t.text.as_str()).is_ok() || (t.text == "key" && prev.is_some_and(|p| p.word && !p.quoted && matches!(p.text.as_str(), "primary" | "foreign")));
+    let after = |words: &[&str]| prev.is_some_and(|p| p.word && !p.quoted && words.contains(&p.text.as_str()));
+    let w = t.text.as_str();
+    let known = CASE_KEYWORDS.binary_search(&w).is_ok()
+        || (w == "key" && after(&["primary", "foreign"]))
+        || (full
+            && (REFORMAT_KEYWORDS.binary_search(&w).is_ok() || (matches!(w, "first" | "last") && after(&["nulls", "fetch"])) || (w == "next" && after(&["fetch"]))));
     t.word
         && !t.quoted
         && known
@@ -355,14 +376,14 @@ fn cased_keyword(toks: &[crate::guard::Tok], i: usize) -> bool {
         && !next.is_some_and(|n| n.text == ".")
 }
 
-/// `sql` with its keywords in `case` (Off: as written)
+/// Reformat Code's keyword case: `sql` with its keywords (CASE_KEYWORDS and REFORMAT_KEYWORDS) in `case` (Off: as written)
 pub fn case_keywords(sql: &str, kind: crate::DbKind, case: KeywordCase) -> String {
     if case == KeywordCase::Off {
         return sql.to_string();
     }
     let toks = crate::guard::scan(sql, kind).toks;
     let (mut out, mut at) = (String::with_capacity(sql.len()), 0);
-    for i in (0..toks.len()).filter(|&i| cased_keyword(&toks, i)) {
+    for i in (0..toks.len()).filter(|&i| cased_keyword(&toks, i, true)) {
         let t = &toks[i];
         out.push_str(&sql[at..t.start]);
         out.push_str(&case.apply(&sql[t.start..t.end]));
@@ -384,7 +405,7 @@ pub fn keyword_case_at(text: &str, end: usize, kind: crate::DbKind, case: Keywor
     let t = &toks[i];
     let word = &text[t.start..t.end];
     let cased = case.apply(word);
-    (t.end == end && cased != word && cased_keyword(&toks, i)).then_some((t.start, cased))
+    (t.end == end && cased != word && cased_keyword(&toks, i, false)).then_some((t.start, cased))
 }
 
 /// Reformat Code's change: `text[start..end]` (bytes) becomes `text`
@@ -627,7 +648,9 @@ mod tests {
     #[test]
     fn case_keywords_are_sorted_lowercase_words() {
         assert!(CASE_KEYWORDS.windows(2).all(|w| w[0] < w[1]), "CASE_KEYWORDS must stay sorted (binary search)");
-        assert!(CASE_KEYWORDS.iter().all(|k| k.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')));
+        assert!(REFORMAT_KEYWORDS.windows(2).all(|w| w[0] < w[1]), "REFORMAT_KEYWORDS must stay sorted (binary search)");
+        assert!(CASE_KEYWORDS.iter().chain(REFORMAT_KEYWORDS).all(|k| k.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')));
+        assert!(REFORMAT_KEYWORDS.iter().all(|k| CASE_KEYWORDS.binary_search(k).is_err()), "a word belongs to one list");
     }
 
     /// Keywords change case; strings, comments, quoted names, names after or before a dot, variables and look-alike names stay
@@ -692,5 +715,21 @@ mod tests {
         assert_eq!(reformat("SELECT\n    1", None, 0, Postgres, Off), None);
         assert_eq!(reformat("  \n", None, 1, Postgres, Off), None);
         assert_eq!(reformat("GET k", None, 0, crate::DbKind::Redis, Off), None);
+    }
+
+    /// Reformat Code cases the keywords typing leaves alone too (FUNCTION, RETURNS, ROWS, UNBOUNDED, NATURAL …), Off as UPPER;
+    /// names after a dot and columns named like keywords (`user`, `type`, `key`, `first`) stay as written
+    #[test]
+    fn reformat_cases_every_keyword() {
+        let f = |sql: &str, case| reformat(sql, Some((0, sql.len())), 0, Postgres, case).map(|r| r.text);
+        assert_eq!(f("create function f() returns int language sql as $$ select 1 $$", Off).as_deref(), Some("CREATE FUNCTION f() RETURNS int LANGUAGE sql AS $$ select 1 $$"));
+        let window = "select sum(x) over (order by a rows between unbounded preceding and current row) from b";
+        assert_eq!(f(window, Off).as_deref(), Some("SELECT\n    sum(x) OVER (\n        ORDER BY\n            a ROWS BETWEEN UNBOUNDED PRECEDING\n            AND CURRENT ROW\n    )\nFROM\n    b"));
+        let tail = "select * from a natural join b where x similar to 'a' order by y nulls first fetch first 1 rows only for update skip locked";
+        let upper = f(tail, Upper).unwrap();
+        assert_eq!(upper, "SELECT\n    *\nFROM\n    a NATURAL\n    JOIN b\nWHERE\n    x SIMILAR TO 'a'\nORDER BY\n    y NULLS FIRST\nFETCH FIRST\n    1 ROWS ONLY\nFOR UPDATE\n    SKIP LOCKED");
+        assert_eq!(f(&upper, Lower).unwrap(), upper.to_lowercase());
+        let names = "select u.user, t.function, user, type, key, first from t where t.rows = 1 and Name is not null";
+        assert_eq!(f(names, Off).unwrap(), "SELECT\n    u.user,\n    t.function,\n    user,\n    type,\n    key,\n    first\nFROM\n    t\nWHERE\n    t.rows = 1\n    AND Name IS NOT NULL");
     }
 }
