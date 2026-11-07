@@ -273,6 +273,37 @@ export const TableFilterCompletion: S = {
   },
 };
 
+/** The WHERE field pairs quotes and brackets as the console does (and the TUI's w / o inputs): typed `name in ('a` reads `name in ('a')` */
+export const TableFilterPairs: S = {
+  name: "Table data — WHERE quotes and brackets",
+  render: () => (
+    <Frame h={360}>
+      <TableEditor
+        where=""
+        orderBy=""
+        running={false}
+        error={null}
+        result={users}
+        query="SELECT * FROM public.users"
+        loadingMore={false}
+        dialect={dialectOf("postgres")}
+        onApply={noop}
+        onCancel={noop}
+        onFetchMore={noop}
+        onSubmit={async () => {}}
+        onExportCsv={noop}
+        onDdl={noop}
+        onCopyQueryToConsole={noop}
+      />
+    </Frame>
+  ),
+  play: async ({ canvasElement }) => {
+    const field = await within(canvasElement).findByRole<HTMLInputElement>("combobox", { name: "WHERE" });
+    await userEvent.type(field, "user_name in ('a', 'b");
+    await waitFor(() => expect(field.value).toBe("user_name in ('a', 'b')"));
+  },
+};
+
 export const Chart: S = { name: "Result Chart", render: () => <Frame><ResultChart result={sales} /></Frame> };
 export const Grid: S = {
   name: "Result Grid",
@@ -617,6 +648,24 @@ export const ConsoleAssist: S = {
     ed.setPosition({ lineNumber: 1, column: "select nme, order_total(id, ".length + 1 });
     ed.trigger("story", "editor.action.triggerParameterHints", null);
     await waitFor(() => expect(document.querySelector(".parameter-hints-widget .parameter.active")?.textContent).toBe("with_tax boolean"), { timeout: 10000 });
+  },
+};
+/** A bracket left open: an error marker from it to the end of its line (hover: "Unclosed '('"), as the TUI underlines it */
+export const ConsoleUnclosedBracket: S = {
+  name: "Console — unclosed bracket",
+  render: () => (
+    <Frame h={420}>
+      <ConsolePane
+        tabId="story-unclosed" target="dev" initialSql={"select user_id, count(*\n  from payment\n where card_brand in ('VISA', 'MASTER')\n group by 1;"} connName="[DEV] shop_app" kind="postgres" dialect={dialectOf("postgres")} database="shop_app" schema="public"
+        dbList={[]} schemaList={[]} running={false} loadingMore={false} results={[]} activeResult="output"
+        output={[]} txManual={false} inTx={false}
+        onChange={noop} onExecute={noop} onCancel={noop} onSetActiveResult={noop} onPin={noop} onCloseResult={noop} onFetchMore={noop} onSubmit={async () => {}} onExport={noop} onHistory={noop}
+        onTxMode={noop} onCommit={noop} onRollback={noop} onLoadDbs={noop} onLoadSchemas={noop} onSwitchDb={noop} onSwitchSchema={noop} registerApi={noop} onClearOutput={noop} onError={noop} onLoadingChange={noop}
+      />
+    </Frame>
+  ),
+  play: async ({ canvasElement }) => {
+    await waitFor(() => expect(canvasElement.querySelector(".squiggly-error")).not.toBeNull(), { timeout: 10000 });
   },
 };
 /** A script's Output longer than the pane: it follows the newest line while scrolled to the bottom; scrolled up, it stays put */

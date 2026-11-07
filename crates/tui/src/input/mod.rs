@@ -11,6 +11,7 @@ mod editor;
 mod form;
 mod grid;
 mod mouse;
+pub(crate) mod pairs;
 mod popup;
 mod redis;
 mod tree;
@@ -20,6 +21,7 @@ use editor::editor_key;
 use form::{save_form, test_form};
 use grid::{grid_key, nav};
 pub use mouse::drop_target;
+use pairs::pair_key;
 use mouse::{hscroll_at, mouse_down, mouse_drag, mouse_up, over_hbar, scroll_at};
 use popup::popup_key;
 use redis::redis_key;
@@ -162,7 +164,7 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
 fn filter_complete(input: &tui_textarea::TextArea, f: &crate::app::FilterSource, explicit: bool) -> Option<crate::app::Completion> {
     let line = input.lines().first()?;
     let caret = line.char_indices().nth(input.cursor().1).map_or(line.len(), |(i, _)| i);
-    let (prefix, items) = qurry_core::complete::suggest_filter(&f.meta, &f.schema, &f.table, f.order_by, line, caret, &f.db, f.mysql, explicit);
+    let (prefix, items) = qurry_core::complete::suggest_filter(&f.meta, &f.schema, &f.table, f.order_by, line, caret, &f.db, f.kind == qurry_core::store::DbKind::Mysql, explicit);
     (!items.is_empty()).then_some(crate::app::Completion { items, sel: 0, prefix })
 }
 

@@ -31,6 +31,7 @@ export const ScreenConsoleReadOnly = { ...by("Console result: read-only"), name:
 export const ScreenConsoleFkJoin = { ...by("Console: FK join"), name: "Screen · Console: FK join completion" };
 export const ScreenConsoleSignature = { ...by("Console: signature hint"), name: "Screen · Console: signature hint line" };
 export const ScreenConsoleUnknownName = { ...by("Console: unknown name"), name: "Screen · Console: unknown name (⌥↩)" };
+export const ScreenConsoleUnclosed = { ...by("Console: unclosed bracket"), name: "Screen · Console: unclosed bracket" };
 export const ScreenGridMarked = { ...by("Grid: marked rows"), name: "Screen · Grid: marked rows (m)" };
 export const ScreenChart = { ...by("Chart"), name: "Screen · Chart" };
 export const ScreenGridLoadingMore = { ...by("Grid: loading more"), name: "Screen · Grid: loading more" };

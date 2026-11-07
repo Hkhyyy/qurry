@@ -304,7 +304,7 @@ impl App {
     pub fn input_filter(&mut self, id: u64, order_by: bool) {
         let Some(t) = self.tabs.iter().find(|t| t.id == id) else { return };
         let TabKind::Table(tt) = &t.kind else { return };
-        let (target, db, mysql) = (t.target.clone(), t.db.clone(), self.kind_of(&t.conn) == DbKind::Mysql);
+        let (target, db, kind) = (t.target.clone(), t.db.clone(), self.kind_of(&t.conn));
         let init = if order_by { tt.order.clone() } else { tt.where_.clone() };
         let meta = self.completion.get(&target).cloned().unwrap_or_else(|| {
             let columns = tt.grid.as_ref().map(|g| g.result.columns.iter().map(|c| (c.name.clone(), c.type_name.clone())).collect()).unwrap_or_default();
@@ -321,7 +321,7 @@ impl App {
             a.reload_table_checked(id);
         });
         if let Some(Popup::Input { filter, .. }) = &mut self.popup {
-            *filter = Some(FilterSource { meta, schema, table, order_by, db, mysql });
+            *filter = Some(FilterSource { meta, schema, table, order_by, db, kind });
         }
     }
 

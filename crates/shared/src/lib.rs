@@ -16,6 +16,7 @@ pub mod keymap;
 pub mod keytree;
 pub mod kind;
 pub mod labels;
+pub mod pairs;
 pub mod redis_cmd;
 pub mod scope;
 pub mod result_edit;

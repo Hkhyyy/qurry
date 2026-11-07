@@ -9,6 +9,8 @@ import EditorWorker from "monaco-editor/editor/editor.worker?worker";
 import JsonWorker from "monaco-editor/language/json/json.worker?worker";
 import { loader } from "@monaco-editor/react";
 import { MONACO_THEME, monacoThemeData, onTheme } from "./theme";
+import type { DbKind } from "./api";
+import { initShared, sharedOr } from "./shared";
 
 // JSON (the grid's Value Editor panel) validates and folds in its own worker
 self.MonacoEnvironment = { getWorker: (_, label) => (label === "json" ? new JsonWorker() : new EditorWorker()) };
@@ -46,4 +48,37 @@ export function forgetConsoleModel(tabId: string) {
   const tmp = monaco.editor.createModel("\u0000forget", undefined, uri);
   tmp.setValue("");
   tmp.dispose();
+}
+
+/**
+ * Quotes and brackets left open, and closing brackets without an opener (qurry_shared::pairs::unbalanced, the TUI editor's marks), as
+ * error markers of their own owner: from the opening character to the end of the line it opens on. Read again shortly after each edit
+ */
+export function markUnbalanced(ed: monaco.editor.IStandaloneCodeEditor, kind: () => DbKind): monaco.IDisposable {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const update = () => {
+    const m = ed.getModel();
+    if (!m || m.isDisposed()) return;
+    const marks = sharedOr([], (s) => s.unbalanced(m.getValue(), kind()));
+    monaco.editor.setModelMarkers(
+      m,
+      "qurry.unbalanced",
+      marks.map((u) => {
+        const at = m.getPositionAt(u.start);
+        const end = Math.max(m.getPositionAt(u.end).column, m.getLineMaxColumn(at.lineNumber));
+        return { severity: monaco.MarkerSeverity.Error, message: u.message, startLineNumber: at.lineNumber, startColumn: at.column, endLineNumber: at.lineNumber, endColumn: end };
+      }),
+    );
+  };
+  void initShared().then(update, () => {});
+  const sub = ed.onDidChangeModelContent(() => {
+    clearTimeout(timer);
+    timer = setTimeout(update, 250);
+  });
+  return {
+    dispose() {
+      clearTimeout(timer);
+      sub.dispose();
+    },
+  };
 }

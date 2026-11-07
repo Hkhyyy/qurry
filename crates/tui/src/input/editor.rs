@@ -1,6 +1,7 @@
 use super::*;
 
 pub(super) fn editor_key(app: &mut App, k: KeyEvent) {
+    let kind = app.tabs.get(app.active).map(|t| app.kind_of(&t.conn)).unwrap_or(qurry_core::store::DbKind::Postgres);
     let Some(TabKind::Console(c)) = app.tabs.get_mut(app.active).map(|t| &mut t.kind) else {
         app.focus = Focus::Grid;
         return grid_key(app, k);
@@ -31,6 +32,8 @@ pub(super) fn editor_key(app: &mut App, k: KeyEvent) {
             }
         }
         KeyCode::Char(_) if k.modifiers.contains(KeyModifiers::SUPER) => {}
+        // ' " ( [ close themselves, a closing one types over, ⌫ in an empty pair removes both, around a selection they wrap it
+        _ if pair_key(&mut c.editor, &k, kind) => {}
         _ => {
             c.editor.input(k);
         }
