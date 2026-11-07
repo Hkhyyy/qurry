@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { sharedOr, type Align, type Alignments, type ValueClass } from "./shared";
 import type { DataFormat } from "./transfer";
+import type { CustomTheme, ThemeSettings, ThemeSync } from "./theme";
 
 export type DbKind = "postgres" | "mysql" | "redis" | "sqlite" | "duckdb" | "mssql" | "clickhouse" | "mongodb" | "oracle" | "qdrant" | "chroma" | "milvus";
 /** DBs connected via a separately downloaded driver plugin */
@@ -208,6 +209,17 @@ export const api = {
   /** Grid alignment per value class: only the classes the user changed. Kept in the config folder, shared with the TUI */
   gridAlign: () => invoke<Alignments>("grid_align"),
   setGridAlign: (cls: ValueClass, align: Align) => invoke<Alignments>("set_grid_align", { class: cls, align }),
+  /** Theme pick, Sync with OS and custom themes, shared with the TUI (settings.json) */
+  themeSettings: () => invoke<ThemeSettings>("theme_settings"),
+  setTheme: (id: string) => invoke<void>("set_theme", { id }),
+  setThemeSync: (sync: ThemeSync) => invoke<void>("set_theme_sync", { sync }),
+  /** Checked first (known base and colors, #rrggbb); an empty id adds one. The saved theme */
+  saveCustomTheme: (theme: CustomTheme) => invoke<CustomTheme>("save_custom_theme", { theme }),
+  deleteCustomTheme: (id: string) => invoke<void>("delete_custom_theme", { id }),
+  /** The picked theme file, checked (not saved); null if cancelled. Throws why a file is refused */
+  importTheme: () => invoke<CustomTheme | null>("import_theme"),
+  /** The path written, null if cancelled */
+  exportTheme: (theme: CustomTheme) => invoke<string | null>("export_theme", { theme }),
   /** Column widths a user gave a table tab's columns, shared with the TUI; setting merges into what is saved and returns it */
   columnWidths: (table: TableRef) => invoke<ColumnWidths>("column_widths", { table }),
   setColumnWidths: (table: TableRef, widths: ColumnWidths) => invoke<ColumnWidths>("set_column_widths", { table, widths }),

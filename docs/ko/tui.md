@@ -2,7 +2,7 @@
 
 [English](../tui.md) | 한국어
 
-`qurry-tui` 는 돌고 있는 터미널에 맞춥니다: 색을 몇 개 쓸 수 있는지, 배경이 밝은지, 창이 얼마나 큰지, tmux 나 터미널이 가져가는 키가 무엇인지. 글꼴까지 모두 환경을 따르고, 설정은 터미널이 배경색을 알려 주지 않을 때 고르는 테마 하나뿐입니다.
+`qurry-tui` 는 돌고 있는 터미널에 맞춥니다: 색을 몇 개 쓸 수 있는지, 배경이 밝은지, 창이 얼마나 큰지, tmux 나 터미널이 가져가는 키가 무엇인지. 글꼴까지 모두 환경을 따르고, 설정은 (GUI 와 함께 쓰는) 테마 하나뿐입니다.
 
 ## URL 로 접속
 
@@ -53,21 +53,21 @@ TUI 는 시작할 때 아래 환경 변수로 색 모드를 하나 고릅니다 
 
 `ssh` 나 `sudo` 로 (그리고 아래 `tmux` 안에서) 실행하면 보통 `COLORTERM` 이 전달되지 않아 24비트 터미널에서도 256색이나 16색이 됩니다: 접속한 쪽에서 `export COLORTERM=truecolor` 를 하거나, `~/.ssh/config` 의 `SendEnv COLORTERM` 과 서버 `sshd_config` 의 `AcceptEnv COLORTERM` 으로 넘기세요 (sudo 는 `sudo --preserve-env=COLORTERM`).
 
-### 밝은 테마, 어두운 테마
+### 테마
 
-TUI 에는 어두운 팔레트 (어두운 터미널 배경용) 와 밝은 팔레트가 있습니다. **⌃k › Theme…** 에서 고릅니다:
+TUI 는 GUI 의 테마를 그대로 씁니다: 기본 테마 일곱 가지 (Dark, Light, High contrast, Dracula, One Dark, Solarized Dark, Solarized Light) 와 GUI 의 **Settings › Appearance › Theme › Edit Colors…** 에서 만든 사용자 테마 ([설정 › 테마](settings.md#테마)). **⌃k › Theme…** 에서 고르며, 고른 테마는 [설정 폴더](getting-started.md#설정이-저장되는-곳)의 `settings.json` 에 두 앱 공용으로 저장됩니다. 목록을 열 때마다 파일을 다시 읽으므로 GUI 에서 저장한 테마도 바로 나옵니다.
 
-| 테마 | 팔레트 |
+| 테마 | 색 |
 |---|---|
-| **Auto** (기본) | `COLORFGBG` 가 배경이 흰색이라고 하면 (마지막 숫자가 `7` 이나 `15`, 예: `COLORFGBG=0;15`) 밝게, 그 밖에는 (`COLORFGBG` 가 없을 때도) 어둡게 |
-| **Dark** | 항상 어둡게 |
-| **Light** | 항상 밝게 |
+| **Sync with OS** (기본) | GUI 에서 Sync with OS 용으로 고른 어두운 테마 또는 밝은 테마 (바꾸지 않았으면 Dark 와 Light): `COLORFGBG` 가 배경이 흰색이라고 하면 (마지막 숫자가 `7` 이나 `15`, 예: `COLORFGBG=0;15`) 밝은 테마, 그 밖에는 (`COLORFGBG` 가 없을 때도) 어두운 테마 |
+| **Dark**, **Light**, **High contrast** | 터미널 자체의 배경과 글자 색 위에 테마 색. 예전 TUI 의 어두운 · 밝은 팔레트처럼 |
+| **Dracula**, **One Dark**, **Solarized Dark**, **Solarized Light**, 사용자 테마 | 테마 자신의 배경과 글자 색까지 (트루컬러 · 256색) |
 
-밝은 팔레트는 GUI 밝은 테마의 색을 씁니다: Data Source 색은 같은 색조의 아주 옅은 색이 되어 그 위의 아이콘과 흐린 글자도 잘 읽히고 (활성 탭이 더 진합니다. 옅은 색조가 없는 256색 · 16색은 색조가 남도록 더 진한 색을 씁니다), 선택·고친 셀·배지는 서로 구분되고, JSON 셀은 GUI 의 밝은 JSON 색을, 운영은 계속 빨간색을 씁니다. 위의 모든 색 모드에서 동작합니다: 256색은 가장 가까운 팔레트 색으로, 16색은 (밝은 색이 아닌) 보통 터미널 색으로, `NO_COLOR` 는 어두운 테마와 같은 규칙의 흑백 그대로입니다.
+트루컬러에서 **Red** (운영) 나 **Green** 으로 칠한 Data Source 는 GUI 처럼 테마의 운영 · 초록 배경색을 쓰고 (사용자 테마의 색도. 활성 탭은 더 진하게), NULL 은 테마의 NULL 색을, 결과 표의 범위 선택은 선택 색과 배경의 중간 색을 씁니다. 256색 · 16색은 그 팔레트가 보여 줄 수 있는 Data Source 색 자신의 색조를 씁니다. 밝은 테마는 GUI 의 밝은 색을 씁니다: 그 밖의 Data Source 색은 같은 색조의 아주 옅은 색이 되어 그 위의 아이콘과 흐린 글자도 잘 읽히고 (활성 탭이 더 진합니다. 옅은 색조가 없는 256색 · 16색은 색조가 남도록 더 진한 색을 씁니다), 선택·고친 셀·배지는 서로 구분되고, JSON 셀은 테마의 JSON 색을, 운영은 계속 빨간색을 씁니다. 모든 테마가 위의 모든 색 모드에서 동작합니다: 256색은 가장 가까운 팔레트 색으로 (상태 줄이나 머리글이 배경과 같은 색이 되지 않게), 16색은 터미널 자체의 배경을 두고 밝은 테마에서는 (밝은 색이 아닌) 보통 터미널 색으로, `NO_COLOR` 는 어느 테마에서나 같은 규칙의 흑백입니다. 트리의 객체 아이콘과 Redis 키 종류는 TUI 고유의 색을 씁니다.
 
-iTerm2, rxvt, Konsole 같은 터미널은 배경색에 맞춰 `COLORFGBG` 를 설정하지만, 많은 터미널 (kitty, WezTerm, Ghostty, Alacritty) 은 설정하지 않으므로 밝은 배경이라면 직접 **Light** 를 고르세요. 테마는 [설정 폴더](getting-started.md#설정이-저장되는-곳)의 `settings.json` 에 `"tuiTheme"` 으로 저장됩니다 (GUI 테마 설정은 따로입니다).
+iTerm2, rxvt, Konsole 같은 터미널은 배경색에 맞춰 `COLORFGBG` 를 설정하지만, 많은 터미널 (kitty, WezTerm, Ghostty, Alacritty) 은 설정하지 않으므로 밝은 배경이라면 직접 밝은 테마를 고르세요. 0.3.1 까지 TUI 는 고른 테마를 `"tuiTheme"` (Auto, Dark, Light) 으로 저장했습니다: 어느 앱에서든 테마를 고르기 전까지는 그 값을 씁니다 (Auto 는 Sync with OS).
 
-Auto 가 밝은 팔레트를 골랐으면 시작할 때 상태 줄에 `Light palette — ⌃k › Theme… › Dark to undo` 가 나옵니다. 예전 색을 그대로 쓰려면 **⌃k › Theme… › Dark** 를 고르세요. 이 안내가 `16 colors` 안내 대신 나오며, `NO_COLOR` 에서는 팔레트가 달라지는 것이 없으므로 `Colors off` 안내가 나옵니다.
+Sync with OS 가 밝은 테마를 골랐으면 시작할 때 상태 줄에 `Light palette — ⌃k › Theme… › Dark to undo` 가 나옵니다. 어두운 색을 그대로 쓰려면 **⌃k › Theme… › Dark** 를 고르세요. 이 안내가 `16 colors` 안내 대신 나오며, `NO_COLOR` 에서는 테마가 달라지는 것이 없으므로 `Colors off` 안내가 나옵니다.
 
 색과 상관없이 보이는 것:
 

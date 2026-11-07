@@ -152,7 +152,7 @@ tmux 에서 `⌃b` (Go to DDL) 는 tmux prefix 입니다: 두 번 누르거나, 
 | — | Trust SSH Host Key (after checking its fingerprint) |
 | — | Password Key… (keep it in the config folder or the system keychain) |
 | — | Grid Alignment… (where cells sit per kind of value: NULL, numbers, text …; shared with the GUI) |
-| — | Theme… (Auto follows the terminal background, or Dark / Light) |
+| — | Theme… (the GUI's built-in and custom themes, or Sync with OS by the terminal background) |
 | — | Check for Updates |
 | — | Update Channel… (stable releases only, or beta: also every merge to main) |
 | — | Update Qurry & Restart (download the latest release) |

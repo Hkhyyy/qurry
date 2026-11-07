@@ -237,7 +237,7 @@ export const TabItems: S = {
   render: () => (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", height: 36, background: "var(--ui-surface)" }}>
-        <TabItem icon={<ConsoleIcon />} label="console [PROD] kr" active onClose={() => {}} style={connTabVars("#6e2a2a", "dark")} />
+        <TabItem icon={<ConsoleIcon />} label="console [PROD] kr" active onClose={() => {}} style={connTabVars("#6e2a2a")} />
         <TabItem icon={<TableIcon />} label="users" onClose={() => {}} />
         <TabItem icon={<ReportIcon />} label="Sessions" pinned onPin={() => {}} />
       </div>

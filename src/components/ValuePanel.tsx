@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { monaco } from "../lib/monaco";
 import { fontStack, useFonts } from "../lib/prefs";
 import { formatSpec, shortcutLabel } from "../lib/shortcuts";
-import { monacoTheme, useTheme } from "../lib/theme";
+import { MONACO_THEME } from "../lib/theme";
 import { IconButton, Notice, Spacer, TextArea, ToolButton } from "../ui";
 
 const isMac = navigator.platform.toLowerCase().includes("mac");
@@ -35,7 +35,6 @@ interface Props {
 /** Value Editor side panel of the result grid (DataGrip's value editor panel): the current cell's value, JSON highlighted with folding */
 export function ValuePanel(p: Props) {
   const [wrap, setWrap] = useState(true);
-  const theme = useTheme();
   const editorFont = useFonts().editor;
   const editor = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const area = useRef<HTMLTextAreaElement>(null);
@@ -79,7 +78,7 @@ export function ValuePanel(p: Props) {
           <Editor
             language="json"
             value={p.text}
-            theme={monacoTheme(theme)}
+            theme={MONACO_THEME}
             onChange={(v) => p.onChange(v ?? "")}
             options={{
               readOnly: p.readOnly,

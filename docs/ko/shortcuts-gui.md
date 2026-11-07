@@ -65,7 +65,7 @@ Windows/Linux 에서는 `⌘` 를 `Ctrl`, `⌥` 를 `Alt` 로 읽으세요.
 | `⇧⎋` | Hide active tool window (in a grid: its Value Editor panel) |
 | `⇧⌘F12` | Maximize editor (also: double-click a tab) |
 | `⌘,` | Settings (theme, fonts) |
-| `` ⌃` `` | Quick switch theme (Dark / Light / High contrast / Sync with OS) |
+| `` ⌃` `` | Quick switch theme (built-in and custom themes, Sync with OS) |
 | `⌃⇧.` | Editor font size bigger |
 | `⌃⇧,` | Editor font size smaller |
 

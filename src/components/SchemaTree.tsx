@@ -1,4 +1,4 @@
-import { connBg, connStripe, useTheme } from "../lib/theme";
+import { connBg, connStripe } from "../lib/theme";
 import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { api, ConnectionView, DbKind, DRIVER_MISSING, KIND_LABEL, redis, redisDb, dbShown, meta, RelationInfo, RoutineInfo, SchemaInfo, schemaVisible, Scope, TableDetail, targetId } from "../lib/api";
 import { ScopePopup } from "./ScopePopup";
@@ -207,7 +207,6 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
   const [keyCounts, setKeyCounts] = useState<Record<string, number>>({});
   const [openDbs, setOpenDbs] = useState<Set<string>>(new Set());
   const [gen, setGen] = useState(0); // Remount child nodes on refresh
-  const theme = useTheme();
   const defaultDb = conn.kind === "redis" ? redisDb(conn.database) : conn.kind === "sqlite" || conn.kind === "duckdb" ? "main" : conn.database || (conn.kind === "postgres" ? "postgres" : "");
 
   // Single database mode: only the default DB
@@ -267,7 +266,7 @@ export function SchemaTree({ conn, filter, showSystem, onActivate, onMenu, onSco
   }, [conn.connected]);
 
   return (
-    <div className="conn-tree" style={conn.color ? { background: connBg(conn.color, theme), boxShadow: `inset 3px 0 0 ${connStripe(conn.color, theme)}` } : undefined}>
+    <div className="conn-tree" style={conn.color ? { background: connBg(conn.color), boxShadow: `inset 3px 0 0 ${connStripe(conn.color)}` } : undefined}>
       <Row
         depth={0}
         open={opened}

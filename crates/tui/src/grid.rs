@@ -668,7 +668,7 @@ impl Grid {
                         None => Line::from(text),
                     };
                     let mut st = match class {
-                        ValueClass::Null => Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                        ValueClass::Null => Style::default().fg(crate::kit::NULL_TEXT).add_modifier(Modifier::ITALIC),
                         ValueClass::Number => Style::default().fg(crate::kit::NUMBER),
                         _ => Style::default(),
                     };
@@ -755,7 +755,7 @@ impl Grid {
         let block = Block::default().borders(Borders::ALL).title(title).title_bottom(Line::styled(close, Style::default().fg(crate::kit::DIM))).border_style(Style::default().fg(Color::DarkGray));
         let lines: Vec<Line> = match (col, self.value(self.row, self.col)) {
             (None, _) => vec![],
-            (Some(_), None) => vec![Line::styled("<null>", Style::default().fg(crate::kit::DIM).add_modifier(Modifier::ITALIC))],
+            (Some(_), None) => vec![Line::styled("<null>", Style::default().fg(crate::kit::NULL_TEXT).add_modifier(Modifier::ITALIC))],
             (Some(c), Some(v)) => {
                 let p = qurry_shared::value::panel_text(&c.type_name, &v);
                 if p.json { json_lines(&p.text) } else { p.text.lines().map(|l| Line::raw(l.to_string())).collect() }
@@ -836,7 +836,7 @@ mod tests {
             let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 6)).unwrap();
             term.draw(|f| g.render(f, f.area(), "r".into(), true, mode, &Alignments::new())).unwrap();
             let mut buf = term.backend().buffer().clone();
-            mode.apply(&mut buf, false);
+            mode.apply(&mut buf, &crate::theme::Look::dark());
             buf
         };
         // Colors of the cells from the first `from` on row y, one per symbol (the second half of a wide char skipped)
@@ -1000,7 +1000,7 @@ mod tests {
         let mut term = Terminal::new(ratatui::backend::TestBackend::new(40, 8)).unwrap();
         term.draw(|f| {
             g.render(f, f.area(), "t".into(), true, mode, &Default::default());
-            mode.apply(f.buffer_mut(), false);
+            mode.apply(f.buffer_mut(), &crate::theme::Look::dark());
         })
         .unwrap();
         let buf = term.backend().buffer().clone();

@@ -775,6 +775,50 @@ pub fn set_grid_align(state: State<'_, AppState>, class: qurry_core::format::Val
     state.store.set_grid_align(class, align)
 }
 
+/// Theme, Sync with OS and custom themes (Settings › Appearance › Theme; settings.json, shared with the TUI)
+#[tauri::command]
+pub fn theme_settings(state: State<'_, AppState>) -> qurry_core::theme::ThemeSettings {
+    state.store.theme_settings()
+}
+
+/// A built-in or custom theme id, or "system"
+#[tauri::command]
+pub fn set_theme(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    state.store.set_theme(&id)
+}
+
+#[tauri::command]
+pub fn set_theme_sync(state: State<'_, AppState>, sync: qurry_core::theme::ThemeSync) -> AppResult<()> {
+    state.store.set_theme_sync(&sync)
+}
+
+/// Adds (empty id) or replaces a custom theme after checking it; the saved theme
+#[tauri::command]
+pub fn save_custom_theme(state: State<'_, AppState>, theme: qurry_core::theme::CustomTheme) -> AppResult<qurry_core::theme::CustomTheme> {
+    state.store.save_custom_theme(&theme)
+}
+
+#[tauri::command]
+pub fn delete_custom_theme(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    state.store.delete_custom_theme(&id)
+}
+
+/// Import…: the native picker, then the file read and checked (not saved: the editor shows it first); None if cancelled
+#[tauri::command]
+pub async fn import_theme(app: tauri::AppHandle, state: State<'_, AppState>) -> AppResult<Option<qurry_core::theme::CustomTheme>> {
+    let Some(path) = app.dialog().file().add_filter("Qurry theme", &["json"]).blocking_pick_file().and_then(|p| p.into_path().ok()) else { return Ok(None) };
+    Ok(Some(state.store.read_theme_file(&path)?))
+}
+
+/// Export…: the save dialog (backend), then the theme file; the path, None if cancelled
+#[tauri::command]
+pub async fn export_theme(app: tauri::AppHandle, state: State<'_, AppState>, theme: qurry_core::theme::CustomTheme) -> AppResult<Option<String>> {
+    let name = format!("{}.qurry-theme.json", theme.name.chars().filter(|c| c.is_alphanumeric() || " -_".contains(*c)).collect::<String>().trim());
+    let Some(path) = save_dialog(&app, &name, "Qurry theme", &["json"]) else { return Ok(None) };
+    state.store.write_theme_file(std::path::Path::new(&path), &theme)?;
+    Ok(Some(path))
+}
+
 /// Column widths a user gave a table tab's columns (settings.json "columnWidths", shared with the TUI)
 #[tauri::command]
 pub fn column_widths(state: State<'_, AppState>, table: qurry_core::store::TableRef) -> qurry_core::format::ColumnWidths {

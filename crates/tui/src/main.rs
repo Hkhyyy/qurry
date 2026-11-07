@@ -45,7 +45,7 @@ async fn main() -> std::io::Result<()> {
     let cli = cli::parse(&args).unwrap_or_else(|e| fail(&e));
     if cli.help {
         println!(
-            "qurry-tui {}\n{}\n\nTerminal UI for Qurry (PostgreSQL / MySQL / Redis). Shares data sources with the Qurry app.\nA new version is checked every hour (off: --no-update-check or QURRY_NO_UPDATE_CHECK=1).\nColors follow the terminal: COLORTERM=truecolor for 24-bit, TERM=…-256color for 256, otherwise 16; NO_COLOR=1 turns them off. Light colors when COLORFGBG says the background is light (⌃k › Theme… picks Auto, Dark or Light).\nPress F1 inside for this keymap.\n{}",
+            "qurry-tui {}\n{}\n\nTerminal UI for Qurry (PostgreSQL / MySQL / Redis). Shares data sources with the Qurry app.\nA new version is checked every hour (off: --no-update-check or QURRY_NO_UPDATE_CHECK=1).\nColors follow the terminal: COLORTERM=truecolor for 24-bit, TERM=…-256color for 256, otherwise 16; NO_COLOR=1 turns them off. Sync with OS (the default) draws a light theme when COLORFGBG says the background is light (⌃k › Theme… picks another theme).\nPress F1 inside for this keymap.\n{}",
             env!("CARGO_PKG_VERSION"),
             cli::USAGE,
             help::text()

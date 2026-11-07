@@ -1,5 +1,5 @@
 use super::*;
-use crate::theme::Theme;
+use qurry_core::theme::{Kind, SYSTEM};
 use qurry_core::format::{align, Align, ValueClass};
 
 /// The GUI's names (Settings › Appearance › Alignment, src/lib/gridAlign.ts VALUE_CLASSES)
@@ -423,39 +423,55 @@ impl App {
         };
     }
 
-    /// ⌃K › Theme…: Auto (light on a light terminal background, from COLORFGBG), Dark or Light. Opened on the current one (Enter keeps it)
+    /// The theme picked (settings.json "theme", shared with the GUI): Sync with OS when none was
+    pub fn theme_pick(&self) -> &str {
+        self.themes.theme.as_deref().unwrap_or(SYSTEM)
+    }
+
+    /// ⌃K › Theme…: the built-in themes, the custom ones (made in the GUI's Settings › Appearance) and Sync with OS (the GUI's dark or
+    /// light pick by the terminal background, COLORFGBG). Reads settings.json again (the GUI may have changed it); opened on the
+    /// current one (Enter keeps it)
     pub fn palette_theme(&mut self) {
-        let auto = if self.auto_light { "light now" } else { "dark now" };
-        let items = Theme::ALL
-            .into_iter()
+        self.themes = self.state.store.theme_settings();
+        let pick = self.theme_pick().to_string();
+        let all = self.themes.all();
+        let name = |id: &str| all.iter().find(|t| t.id == id).map_or(id.to_string(), |t| t.name.clone());
+        let (dark, light) = (name(&self.themes.sync.dark), name(&self.themes.sync.light));
+        let now = if self.auto_light { &light } else { &dark };
+        let sync = PItem { label: String::new(), hint: format!("{dark} / {light} by the terminal background (COLORFGBG): {now} now"), action: PAction::Theme(SYSTEM.into()) };
+        let items: Vec<_> = all
+            .iter()
             .map(|t| {
-                let hint = match t {
-                    Theme::Auto => format!("follows the terminal background (COLORFGBG): {auto}"),
-                    Theme::Dark => "for a dark terminal background".into(),
-                    Theme::Light => "for a light terminal background".into(),
-                };
-                PItem { label: format!("{} {}", if t == self.theme { "●" } else { " " }, t.name()), hint, action: PAction::Theme(t) }
+                let kind = if t.kind == Kind::Light { "light" } else { "dark" };
+                let hint = if t.custom { format!("custom, {kind}") } else { kind.to_string() };
+                PItem { label: t.name.clone(), hint, action: PAction::Theme(t.id.clone()) }
+            })
+            .chain([PItem { label: "Sync with OS".into(), ..sync }])
+            .map(|it| {
+                let on = matches!(&it.action, PAction::Theme(id) if *id == pick);
+                PItem { label: format!("{} {}", if on { "●" } else { " " }, it.label), ..it }
             })
             .collect();
-        let sel = Theme::ALL.iter().position(|&t| t == self.theme).unwrap_or(0);
+        let sel = items.iter().position(|it| matches!(&it.action, PAction::Theme(id) if *id == pick)).unwrap_or(0);
         self.popup = Some(Popup::Palette(Palette { title: "Theme".into(), input: TextArea::default(), items, sel, loading: 0, cache: Default::default() }));
     }
 
-    /// Switch to a theme now and save it in settings.json (a failed save still switches, for this session)
-    fn set_theme(&mut self, t: Theme) {
-        self.theme = t;
-        let colors = if t.light(self.auto_light) { "light" } else { "dark" };
-        self.status = match self.state.store.set_tui_theme(&t.name().to_lowercase()) {
-            Ok(()) => format!("Theme: {} — {colors} colors", t.name()),
-            Err(e) => format!("Couldn't save the theme: {e} — {} for this session only", t.name()),
+    /// Switch to a theme now and save it in settings.json for both apps (a failed save still switches, for this session)
+    fn set_theme(&mut self, id: String) {
+        self.themes.theme = Some(id.clone());
+        let t = self.themes.resolve(SYSTEM, !self.auto_light);
+        let what = if id == SYSTEM { format!("Sync with OS — {} now", t.name) } else { t.name.clone() };
+        self.status = match self.state.store.set_theme(&id) {
+            Ok(()) => format!("Theme: {what} — saved for the GUI too"),
+            Err(e) => format!("Couldn't save the theme: {e} — {what} for this session only"),
         };
     }
 
-    /// Status line text at startup: one notice, so it fits the status text's half of an 80-cell line. Auto picking the light
-    /// palette comes first, since the colors changed by themselves (NO_COLOR draws no palette, so nothing changed there);
+    /// Status line text at startup: one notice, so it fits the status text's half of an 80-cell line. Sync with OS picking the
+    /// light palette comes first, since the colors changed by themselves (NO_COLOR draws no palette, so nothing changed there);
     /// otherwise how to get more colors
     pub fn startup_notice(&self) -> Option<String> {
-        if self.theme == Theme::Auto && self.auto_light && self.color != crate::theme::ColorMode::NoColor {
+        if self.theme_pick() == SYSTEM && self.auto_light && self.color != crate::theme::ColorMode::NoColor {
             return Some(format!("Light palette — {} › Theme… › Dark to undo", self.keys.label(Action::Palette)));
         }
         self.color.notice().map(String::from)

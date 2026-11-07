@@ -116,7 +116,7 @@ fn scene(name: &str, desc: &str, w: u16, h: u16, draw: impl FnOnce(&mut Frame)) 
 fn app_scene(h: &mut Harness, name: &str, desc: &str, w: u16, ht: u16) -> Value {
     let mut term = Terminal::new(TestBackend::new(w, ht)).unwrap();
     term.draw(|f| crate::ui::draw(f, &mut h.app)).unwrap();
-    let light = h.app.theme.light(h.app.auto_light);
+    let light = crate::theme::Look::of(&h.app.themes, h.app.auto_light).light;
     let mut v = dump(term.backend().buffer(), light);
     v["name"] = json!(name);
     v["desc"] = json!(desc);
@@ -287,19 +287,19 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
         c.show_output = false;
     }
     let status = std::mem::replace(&mut h.app.status, "12 row(s) retrieved in 12 ms".into());
-    use crate::theme::{ColorMode, Theme};
+    use crate::theme::ColorMode;
     const BAR: &str = "the bottom border is the bar: a dim thin track, the thumb heavier and bold over the shown columns, the shown range at its right end; click or drag the track";
     for (focus, color, theme, name, desc) in [
-        (crate::app::Focus::Grid, ColorMode::TrueColor, Theme::Auto, "Grid scrollbar: focused", format!("A result with more columns than fit: {BAR}. Focused: the thick cyan border, the thumb and range in cyan")),
-        (crate::app::Focus::Editor, ColorMode::TrueColor, Theme::Auto, "Grid scrollbar: not focused", format!("The same thumb when the grid isn't focused; only the border's color and shape change ({BAR})")),
-        (crate::app::Focus::Grid, ColorMode::TrueColor, Theme::Light, "Grid scrollbar: light", "Theme Light: the same bar on a light terminal".into()),
-        (crate::app::Focus::Grid, ColorMode::Ansi16, Theme::Auto, "Grid scrollbar: 16 colors", "TERM=xterm: the thumb cyan and bold, the track dark gray".into()),
-        (crate::app::Focus::Grid, ColorMode::NoColor, Theme::Auto, "Grid scrollbar: NO_COLOR", "NO_COLOR=1: the thumb by its heavier bold line (━ over ─)".into()),
+        (crate::app::Focus::Grid, ColorMode::TrueColor, None, "Grid scrollbar: focused", format!("A result with more columns than fit: {BAR}. Focused: the thick cyan border, the thumb and range in cyan")),
+        (crate::app::Focus::Editor, ColorMode::TrueColor, None, "Grid scrollbar: not focused", format!("The same thumb when the grid isn't focused; only the border's color and shape change ({BAR})")),
+        (crate::app::Focus::Grid, ColorMode::TrueColor, Some("light"), "Grid scrollbar: light", "Theme Light: the same bar on a light terminal".into()),
+        (crate::app::Focus::Grid, ColorMode::Ansi16, None, "Grid scrollbar: 16 colors", "TERM=xterm: the thumb cyan and bold, the track dark gray".into()),
+        (crate::app::Focus::Grid, ColorMode::NoColor, None, "Grid scrollbar: NO_COLOR", "NO_COLOR=1: the thumb by its heavier bold line (━ over ─)".into()),
     ] {
-        (h.app.focus, h.app.color, h.app.theme) = (focus, color, theme);
+        (h.app.focus, h.app.color, h.app.themes.theme) = (focus, color, theme.map(String::from));
         scenes.push(app_scene(h, name, &desc, 120, 22));
     }
-    (h.app.color, h.app.theme) = (ColorMode::TrueColor, Theme::Auto);
+    (h.app.color, h.app.themes.theme) = (ColorMode::TrueColor, None);
     if let Some(g) = h.app.grid_mut() {
         (g.result.truncated, g.more_error) = (true, Some("Couldn't load more rows: Session closed".into()));
     }
@@ -480,9 +480,9 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
     h.app.color = crate::theme::ColorMode::Ansi16;
     scenes.push(app_scene(h, "Grid: JSON, 16 colors", "TERM=xterm: the JSON colors by hue (NO_COLOR: no colors)", 120, 22));
     h.app.color = crate::theme::ColorMode::TrueColor;
-    h.app.theme = crate::theme::Theme::Light;
+    h.app.themes.theme = Some("light".into());
     scenes.push(app_scene(h, "Light: grid JSON", "Theme Light: the JSON colors of the GUI's light theme", 120, 22));
-    h.app.theme = crate::theme::Theme::Auto;
+    h.app.themes.theme = None;
     h.app.close_tab_now(h.app.active);
     // Production log
     let entry = |id: &str, ago: i64, sql: &str, rows: Option<u64>, undo: bool, in_tx: bool| qurry_core::audit::AuditEntry {
@@ -705,10 +705,10 @@ async fn all_scenes() -> Vec<Value> {
         h.app.color = mode;
         scenes.push(app_scene(&mut h, name, desc, 120, 22));
     }
-    // The light theme (⌃k › Theme…, or Auto on a terminal whose COLORFGBG says its background is light) in each color mode
-    h.app.theme = crate::theme::Theme::Light;
+    // The light theme (⌃k › Theme…, or Sync with OS on a terminal whose COLORFGBG says its background is light) in each color mode
+    h.app.themes.theme = Some("light".into());
     for (mode, name, desc) in [
-        (ColorMode::TrueColor, "Light: truecolor", "Theme Light (or Auto with COLORFGBG=0;15): the light palette's 24-bit colors; a Data Source color becomes a light tint of its hue"),
+        (ColorMode::TrueColor, "Light: truecolor", "Theme Light (or Sync with OS with COLORFGBG=0;15): the light palette's 24-bit colors; a Data Source color becomes a light tint of its hue"),
         (ColorMode::Ansi256, "Light: 256", "Theme Light, TERM=xterm-256color: the light palette mapped to the nearest of the xterm 256 palette"),
         (ColorMode::Ansi16, "Light: 16", "Theme Light, TERM=xterm: light surfaces, text in the normal (darker) of the 16 colors"),
         (ColorMode::NoColor, "Light: NO_COLOR", "Theme Light, NO_COLOR=1: the same monochrome rules as in the dark theme"),
@@ -716,7 +716,16 @@ async fn all_scenes() -> Vec<Value> {
         h.app.color = mode;
         scenes.push(app_scene(&mut h, name, desc, 120, 22));
     }
-    h.app.theme = crate::theme::Theme::Auto;
+    // Each built-in theme (the GUI's, qurry_shared::theme), truecolor: Dark, Light and High contrast on the terminal's background,
+    // the others on their own
+    h.app.color = ColorMode::TrueColor;
+    for t in qurry_core::theme::table().themes.iter() {
+        h.app.themes.theme = Some(t.id.clone());
+        let bg = if ["dark", "light", "hc"].contains(&t.id.as_str()) { "on the terminal's own background" } else { "on its own background" };
+        scenes.push(app_scene(&mut h, &format!("Theme: {}", t.name), &format!("⌃k › Theme… › {}: the theme's colors, {bg}", t.name), 120, 22));
+    }
+    h.app.color = ColorMode::NoColor;
+    h.app.themes.theme = None;
     // Still NO_COLOR: what doesn't depend on color in the grid
     let (focus, g) = (h.app.focus, h.app.grid_mut().unwrap());
     let at = (g.row, g.col);
@@ -726,9 +735,9 @@ async fn all_scenes() -> Vec<Value> {
     (g.row, g.col) = (1, 2);
     h.app.focus = crate::app::Focus::Grid;
     scenes.push(app_scene(&mut h, "Colors: NO_COLOR grid", "NO_COLOR=1: unsaved changes by the row number (~ edited · - deleted · + added) and bold cells; the cursor is the plain cell in the reversed range", 120, 22));
-    (h.app.color, h.app.theme) = (ColorMode::TrueColor, crate::theme::Theme::Light);
+    (h.app.color, h.app.themes.theme) = (ColorMode::TrueColor, Some("light".into()));
     scenes.push(app_scene(&mut h, "Light: grid edits", "Theme Light: an edited cell, a deleted row and a range with the cursor in it", 120, 22));
-    (h.app.color, h.app.theme) = (ColorMode::NoColor, crate::theme::Theme::Auto);
+    (h.app.color, h.app.themes.theme) = (ColorMode::NoColor, None);
     let g = h.app.grid_mut().unwrap();
     g.edits.clear();
     g.deleted.clear();
@@ -769,9 +778,9 @@ async fn all_scenes() -> Vec<Value> {
         on_yes: Box::new(|_| {}),
     });
     scenes.push(app_scene(&mut h, "Production confirm", "운영 Data Source 에서 바꾸는 문장: 바뀔 행 수를 보여 주고 묻는다", 120, 22));
-    h.app.theme = crate::theme::Theme::Light;
+    h.app.themes.theme = Some("light".into());
     scenes.push(app_scene(&mut h, "Light: production confirm", "Theme Light: the Production question, the red row and the PROD badge on a light terminal", 120, 22));
-    h.app.theme = crate::theme::Theme::Auto;
+    h.app.themes.theme = None;
     scenes.push(app_scene(&mut h, "Terminal too small: question waiting", "Below 40×10 with a dialog open, ⌃q doesn't quit: the message says to make the window larger to answer it", 36, 9));
     scenes.push(app_scene(&mut h, "Production confirm: minimum size", "At 40×10 the question and its keys stay; the statements that don't fit are counted", 40, 10));
     // Question first, warnings after the details: the columns / tables in between give way, the ⚠ lines stay
@@ -837,10 +846,10 @@ async fn all_scenes() -> Vec<Value> {
     h.app.palette_update_channel();
     scenes.push(app_scene(&mut h, "Update channel", "⌃k › Update Channel…: stable (version tags only, the default) or beta (also every merge to main), shared with the GUI", 120, 22));
     h.app.palette_theme();
-    scenes.push(app_scene(&mut h, "Theme", "⌃k › Theme…: Auto (the default) follows the terminal background from COLORFGBG; Dark or Light whatever the terminal says", 120, 22));
+    scenes.push(app_scene(&mut h, "Theme", "⌃k › Theme…: the built-in and custom themes (shared with the GUI); Sync with OS (the default) takes the GUI's dark or light pick by the terminal background (COLORFGBG)", 120, 22));
     h.app.auto_light = true;
     h.app.palette_theme();
-    scenes.push(app_scene(&mut h, "Theme: Auto on a light terminal", "COLORFGBG=0;15: Auto draws the light palette (Dark brings the old colors back)", 120, 22));
+    scenes.push(app_scene(&mut h, "Theme: Sync with OS on a light terminal", "COLORFGBG=0;15: Sync with OS draws its light theme (Dark brings the dark colors back)", 120, 22));
     h.app.auto_light = false;
     h.app.popup = None;
     tab_bars(&mut scenes).await;
@@ -907,7 +916,7 @@ async fn tab_bars(scenes: &mut Vec<Value>) {
         h.app.color = mode;
         scenes.push(app_scene(&mut h, name, desc, 120, 10));
     }
-    (h.app.color, h.app.theme) = (ColorMode::TrueColor, crate::theme::Theme::Light);
+    (h.app.color, h.app.themes.theme) = (ColorMode::TrueColor, Some("light".into()));
     scenes.push(app_scene(&mut h, "Tab bar: light", "Theme Light: Data Source colors as light tints; the focused pane's active tab in the stronger hue", 120, 10));
 }
 

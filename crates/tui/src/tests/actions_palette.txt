@@ -98,7 +98,7 @@ CycleFocus	Cycle Focus (explorer → editor → results)	F6
 TrustSshHost	Trust SSH Host Key (after checking its fingerprint)	—
 PasswordKey	Password Key… (keep it in the config folder or the system keychain)	—
 GridAlign	Grid Alignment… (where cells sit per kind of value: NULL, numbers, text …; shared with the GUI)	—
-Theme	Theme… (Auto follows the terminal background, or Dark / Light)	—
+Theme	Theme… (the GUI's built-in and custom themes, or Sync with OS by the terminal background)	—
 CheckUpdate	Check for Updates	—
 UpdateChannel	Update Channel… (stable releases only, or beta: also every merge to main)	—
 InstallUpdate	Update Qurry & Restart (download the latest release)	—

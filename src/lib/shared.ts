@@ -9,6 +9,7 @@ import type { ExecPlan, ExecSettings, Stmt } from "./execPlan";
 import type { Extractor } from "./extract";
 import type { Segment } from "./sqlSplit";
 import type { TableTabKey } from "./tabLabels";
+import type { CustomTheme, ThemeWarning } from "./theme";
 
 export interface PingResponse {
   text: string;
@@ -256,6 +257,11 @@ const api = {
   bindableIn: (spec: string, scope: string): boolean => wasm.bindableIn(spec, scope),
   /** Ids of the other commands using `spec` in a scope overlapping `scope` */
   keyConflicts: (id: string, scope: string, spec: string, bound: { id: string; scope: string; keys: string[] }[]): string[] => wasm.keyConflicts(id, scope, spec, bound),
+  /** The tokens of a palette whose contrast pair is below its minimum (qurry_shared::theme::warnings) */
+  themeWarnings: (colors: Record<string, string>): ThemeWarning[] => wasm.themeWarnings(colors),
+  /** A theme file → the theme (id ""); throws the reason it is refused (qurry_shared::theme::parse_file) */
+  parseThemeFile: (text: string): CustomTheme => wasm.parseThemeFile(text),
+  themeFileText: (theme: CustomTheme): string => wasm.themeFileText(theme),
 };
 
 let ready = false;

@@ -28,7 +28,9 @@ pub const CELL_RANGE: Color = Color::Rgb(38, 40, 46);
 pub const JSON_KEY: Color = Color::Rgb(199, 125, 187);
 pub const JSON_STRING: Color = Color::Rgb(106, 171, 115);
 pub const JSON_KEYWORD: Color = Color::Rgb(207, 142, 109);
-pub const JSON_PUNCT: Color = Color::Rgb(134, 138, 145);
+pub const JSON_PUNCT: Color = Color::Rgb(139, 143, 149);
+/// NULL in result cells and the value panel (GUI NULL color; dim gray in 16 colors, dim without colors)
+pub const NULL_TEXT: Color = Color::Rgb(139, 143, 148);
 // Tree · autocomplete icon colors
 pub const C_DB: Color = Color::Rgb(111, 179, 210);
 pub const C_VIEW: Color = Color::Rgb(127, 176, 110);

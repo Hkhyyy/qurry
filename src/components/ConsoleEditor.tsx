@@ -3,7 +3,7 @@ import { useEffect, useRef } from "react";
 import { format as formatSql } from "sql-formatter";
 import { monaco } from "../lib/monaco";
 import { bindModel, unbindModel } from "../lib/completion";
-import { monacoTheme, useTheme } from "../lib/theme";
+import { MONACO_THEME } from "../lib/theme";
 import { font, fontStack } from "../lib/prefs";
 import { caretText, setFocusWidgets } from "../lib/statusbar";
 import { bindings, onKeymapChange } from "../lib/shortcuts";
@@ -69,7 +69,6 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
   useEffect(() => {
     if (modelUri.current) bindModel(modelUri.current, connId, database);
   }, [connId, database]);
-  const theme = useTheme();
   const onRunRef = useRef(onRun);
   onRunRef.current = onRun;
   const onMarkRef = useRef(onMarkClick);
@@ -82,7 +81,7 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
       // Read-only (DDL): the text follows initialSql, so a reload shows the new text
       value={readOnly ? initialSql : undefined}
       defaultLanguage={language}
-      theme={monacoTheme(theme)}
+      theme={MONACO_THEME}
       onChange={(v) => onChange(v ?? "")}
       options={{
         minimap: { enabled: false },

@@ -708,38 +708,54 @@ mod tests {
         assert!(h.app.status.contains("Qurry 99.0.0-beta.1 is available"), "{}", h.app.status);
     }
 
-    /// ⌃k › Theme…: opens on the current theme, says what Auto picks here; the pick switches the colors at once and is saved
-    /// in settings.json (read again at the next start). Auto on a light terminal says at startup how to get the dark colors back
+    /// ⌃k › Theme…: the built-in themes, the custom ones made in the GUI and Sync with OS (the GUI's dark / light pick by COLORFGBG);
+    /// opens on the current one. The pick switches the colors at once and is saved in settings.json for both apps (read again at
+    /// the next start). Sync with OS on a light terminal says at startup how to get the dark colors back
     #[tokio::test]
     async fn theme_is_picked_from_the_palette() {
-        use crate::theme::Theme;
+        use qurry_core::theme::CustomTheme;
         let mut h = Harness::new().await;
         h.app.auto_light = true;
-        assert_eq!(h.app.theme, Theme::Auto);
+        assert_eq!(h.app.theme_pick(), "system");
         let status_bg = |h: &mut Harness| h.buffer(120, 30)[(0, 29)].bg;
         let light_bg = status_bg(&mut h);
         assert!(h.app.startup_notice().unwrap().contains("⌃k › Theme… › Dark"), "{:?}", h.app.startup_notice());
+        // A custom theme saved by the GUI meanwhile shows up when the list opens
+        let mine = CustomTheme { id: String::new(), name: "Night shift".into(), base: "dracula".into(), colors: [("sel".into(), "#123456".into())].into() };
+        h.app.state.store.save_custom_theme(&mine).unwrap();
         h.app.palette_theme();
         let s = h.screen(120, 30);
-        assert!(s.contains("● Auto") && s.contains("COLORFGBG): light now") && s.contains("  Dark") && s.contains("  Light"), "{s}");
-        h.key("Down");
+        for want in ["  Dark", "  Light", "  High contrast", "  Dracula", "  One Dark", "  Solarized Dark", "  Solarized Light", "  Night shift", "custom, dark", "● Sync with OS", "Dark / Light by the terminal background (COLORFGBG): Light now"] {
+            assert!(s.contains(want), "{want}: {s}");
+        }
+        // Up from Sync with OS: the custom theme
+        h.key("Up");
         h.key("Enter");
-        assert_eq!((h.app.theme, h.app.state.store.tui_theme().as_deref()), (Theme::Dark, Some("dark")));
-        assert_eq!(h.app.status, "Theme: Dark — dark colors");
+        assert_eq!((h.app.theme_pick(), h.app.state.store.theme_settings().theme.as_deref()), ("custom-1", Some("custom-1")));
+        assert_eq!(h.app.status, "Theme: Night shift — saved for the GUI too");
         assert_eq!(h.app.startup_notice(), None, "picked by hand: nothing to say at startup");
-        assert_eq!(status_bg(&mut h), crate::kit::SURFACE);
-        assert_ne!(light_bg, crate::kit::SURFACE);
-        // Reopened on Dark: Enter keeps it; Light on a dark terminal
+        let buf = h.buffer(120, 30);
+        assert_eq!(buf[(0, 29)].bg, ratatui::style::Color::Rgb(0x21, 0x22, 0x2c), "the status line in Dracula's panel color");
+        assert_eq!(buf[(60, 10)].bg, ratatui::style::Color::Rgb(0x28, 0x2a, 0x36), "Dracula's background drawn");
+        // Reopened on it; Dark by typing its name, on a dark terminal: the terminal's own background, the status line SURFACE
         h.app.auto_light = false;
         h.app.palette_theme();
-        assert!(h.screen(120, 30).contains("● Dark"));
+        assert!(h.screen(120, 30).contains("● Night shift"));
+        h.type_str("dark");
+        h.key("Enter");
+        assert_eq!(h.app.state.store.theme_settings().theme.as_deref(), Some("dark"));
+        assert_eq!(status_bg(&mut h), crate::kit::SURFACE);
+        assert_ne!(light_bg, crate::kit::SURFACE);
+        assert_eq!(h.buffer(120, 30)[(60, 10)].bg, ratatui::style::Color::Reset);
+        // Light on a dark terminal: the light palette
+        h.app.palette_theme();
         h.key("Down");
         h.key("Enter");
-        assert_eq!((h.app.theme, h.app.state.store.tui_theme().as_deref()), (Theme::Light, Some("light")));
+        assert_eq!(h.app.theme_pick(), "light");
         assert_eq!(status_bg(&mut h), light_bg);
         // The next start reads it
         let next = crate::app::App::new(h.app.state.clone(), h.app.tx.clone());
-        assert_eq!(next.theme, Theme::Light);
+        assert_eq!(next.theme_pick(), "light");
     }
 
     /// ⌃k › Grid Alignment…: a row per value class, Enter picks Left / Center / Right (NULL also Column type, its default); saved to

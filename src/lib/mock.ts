@@ -1,6 +1,8 @@
 /** For development: opening in a browser with ?mock uses fake data instead of the Tauri backend (for checking screens). */
 // A real font file for the added custom fonts (FontFace has to load something): Monaco's icon font (by path: the package exports only .js)
 import fontBytesUrl from "/node_modules/monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon.ttf?url";
+import { shared } from "./shared";
+import THEMES from "../../crates/shared/src/themes.json";
 const conns = [
   { id: "dev", name: "[DEV] shop_app", kind: "postgres", host: "dev-db.example.com", port: 5432, user: "app", database: "shop_app", color: "#5f5b24", hasPassword: true, connected: true },
   { id: "prod", name: "[PROD] shop_app", kind: "postgres", host: "prod-db", port: 5432, user: "app", database: "shop_app", color: "#6e2a2a", hasPassword: true, connected: false, options: { confirmChanges: true },
@@ -97,6 +99,13 @@ let flakyLoads = 0;
 let updateChannel = "stable";
 /** Font files added in Settings: each "Add Font File…" adds "Fira Code" (then "Fira Code 2"…, as the backend names a taken name) */
 let customFonts: { name: string; file: string }[] = [];
+/** settings.json "theme" / "themeSync" / "customThemes" (kept across a reload, as the file is; read on each call, so a test can change
+ *  it as the TUI would). Custom themes are checked as the core checks them (the shared WASM's theme file rules) */
+const themeSettings = () => JSON.parse(localStorage.getItem("mock-themeSettings") ?? "null") ?? { theme: null, sync: { dark: "dark", light: "light" }, custom: [] };
+const saveThemeSettings = (s: unknown) => localStorage.setItem("mock-themeSettings", JSON.stringify(s));
+const checkTheme = (t: any) => {
+  shared().parseThemeFile(shared().themeFileText({ ...t, id: "" }));
+};
 /** settings.json "gridAlign" (kept across a reload, as the file is) */
 let gridAlign = JSON.parse(localStorage.getItem("mock-gridAlign") ?? "{}");
 /** settings.json "columnWidths": table (source · database · schema · table) → its set widths (kept across a reload, as the file is;
@@ -672,6 +681,46 @@ const handlers: Record<string, (a: any) => unknown> = {
   },
   // window.__mockFontBroken: the file passes the magic-byte check but isn't a loadable font (truncated)
   font_file: () => ((window as any).__mockFontBroken ? new Uint8Array([0, 1, 0, 0]).buffer : fetch(fontBytesUrl).then((r) => r.arrayBuffer())),
+  theme_settings: () => themeSettings(),
+  // As the core: the id must exist (or be "system"). window.__mockChannelSaveFails: the file can't be written
+  set_theme: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
+    const s = themeSettings();
+    if (a.id !== "system" && !THEMES.themes.some((t) => t.id === a.id) && !s.custom.some((c: any) => c.id === a.id)) throw `There is no theme "${a.id}"`;
+    saveThemeSettings({ ...s, theme: a.id });
+  },
+  set_theme_sync: (a: any) => {
+    if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";
+    saveThemeSettings({ ...themeSettings(), sync: a.sync });
+  },
+  save_custom_theme: (a: any) => {
+    checkTheme(a.theme);
+    const s = themeSettings();
+    const t = { ...a.theme, name: a.theme.name.trim() };
+    if (!t.id) for (let n = 1; !t.id; n++) if (!s.custom.some((c: any) => c.id === `custom-${n}`)) t.id = `custom-${n}`;
+    const custom = s.custom.some((c: any) => c.id === t.id) ? s.custom.map((c: any) => (c.id === t.id ? t : c)) : [...s.custom, t];
+    saveThemeSettings({ ...s, custom });
+    return t;
+  },
+  // As the core: where the deleted theme is picked, its base takes its place
+  delete_custom_theme: (a: any) => {
+    const s = themeSettings();
+    const gone = s.custom.find((c: any) => c.id === a.id);
+    if (!gone) return;
+    const side = (v: string) => (v === a.id ? gone.base : v);
+    saveThemeSettings({ theme: s.theme === a.id ? gone.base : s.theme, sync: { dark: side(s.sync.dark), light: side(s.sync.light) }, custom: s.custom.filter((c: any) => c.id !== a.id) });
+  },
+  // window.__mockThemeFile: the text of the file picked (unset: cancelled); refused as the core refuses it
+  import_theme: () => {
+    const text = (window as any).__mockThemeFile;
+    return text == null ? null : shared().parseThemeFile(text);
+  },
+  // The file's text goes to window.__mockThemeExported
+  export_theme: (a: any) => {
+    checkTheme(a.theme);
+    (window as any).__mockThemeExported = shared().themeFileText(a.theme);
+    return `/Users/me/Downloads/${a.theme.name}.qurry-theme.json`;
+  },
   grid_align: () => gridAlign,
   set_grid_align: (a: any) => {
     if ((window as any).__mockChannelSaveFails) throw "Couldn't save the settings: permission denied";

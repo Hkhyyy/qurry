@@ -16,7 +16,7 @@
   {"gui": "keymap.edit", "title": "Edit Keymap…", "scope": "global"},
   {"gui": "ds.export", "title": "Export Data Sources…", "scope": "global"},
   {"gui": "ds.import", "tui": "ImportDataSources", "title": "Import Data Sources…", "tuiTitle": "Import Data Sources… (DataGrip, IntelliJ, DBeaver, a Qurry export)", "scope": "global"},
-  {"gui": "theme", "title": "Quick Switch Theme", "guiDesc": "Quick switch theme (Dark / Light / High contrast / Sync with OS)", "scope": "global", "guiKeys": ["Ctrl+`"]},
+  {"gui": "theme", "title": "Quick Switch Theme", "guiDesc": "Quick switch theme (built-in and custom themes, Sync with OS)", "scope": "global", "guiKeys": ["Ctrl+`"]},
   {"gui": "theme.dark", "title": "Theme: Dark", "scope": "global"},
   {"gui": "theme.light", "title": "Theme: Light", "scope": "global"},
   {"gui": "theme.hc", "title": "Theme: High Contrast", "scope": "global"},
@@ -216,7 +216,7 @@
   {"tui": "TrustSshHost", "title": "Trust SSH Host Key (after checking its fingerprint)"},
   {"tui": "PasswordKey", "title": "Password Key… (keep it in the config folder or the system keychain)"},
   {"tui": "GridAlign", "title": "Grid Alignment… (where cells sit per kind of value: NULL, numbers, text …; shared with the GUI)"},
-  {"tui": "Theme", "title": "Theme… (Auto follows the terminal background, or Dark / Light)"},
+  {"tui": "Theme", "title": "Theme… (the GUI's built-in and custom themes, or Sync with OS by the terminal background)"},
   {"tui": "CheckUpdate", "title": "Check for Updates"},
   {"tui": "UpdateChannel", "title": "Update Channel… (stable releases only, or beta: also every merge to main)"},
   {"tui": "InstallUpdate", "title": "Update Qurry & Restart (download the latest release)"}
