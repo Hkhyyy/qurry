@@ -49,6 +49,12 @@ pub fn thousands(n: u64) -> String {
     n.to_string().as_bytes().rchunks(3).rev().map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join(",")
 }
 
+/// The result grid's shown columns, 1-based and inclusive ("cols 3–8 of 14": the GUI status bar, the TUI grid's bottom border),
+/// or None when every column fits
+pub fn shown_cols(first: usize, last: usize, total: usize) -> Option<String> {
+    (first > 1 || last < total).then(|| format!("cols {first}–{last} of {total}"))
+}
+
 /// What kind of value a grid cell holds, for its alignment (and the GUI's number / NULL colors)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -262,6 +268,13 @@ pub fn cell_align(column: ValueClass, class: ValueClass, overrides: &Alignments)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shown_cols_only_when_some_column_is_out_of_view() {
+        assert_eq!(shown_cols(3, 8, 14).as_deref(), Some("cols 3–8 of 14"));
+        assert_eq!(shown_cols(1, 13, 14).as_deref(), Some("cols 1–13 of 14"));
+        assert_eq!(shown_cols(1, 14, 14), None);
+    }
 
     #[test]
     fn time_values_are_padded() {

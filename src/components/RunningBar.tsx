@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { ProgressBar, Text } from "../ui";
+import { IconButton, ProgressBar, Text } from "../ui";
+import { keyTitle } from "../lib/shortcuts";
 
 /** 12.3 s · 1 m 05 s */
 export function elapsedText(ms: number): string {
@@ -9,8 +10,9 @@ export function elapsedText(ms: number): string {
 }
 
 /** What the focused tab is doing (a run, a load-more), in the status bar where its text is: progress bar (end unknown, so it
- * bounces) · label · time since `since` (the tab's start, so it goes on across tab switches). The status bar's ■ cancels it */
-export function RunningBar({ label, since }: { label: string; since: number }) {
+ * bounces) · label · time since `since` (the tab's start, so it goes on across tab switches). Hovering it shows a ✕ that cancels it
+ * (as the toolbar's ■ and ⌘F2 do) */
+export function RunningBar({ label, since, onCancel }: { label: string; since: number; onCancel: () => void }) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const h = setInterval(() => setNow(Date.now()), 100);
@@ -22,6 +24,9 @@ export function RunningBar({ label, since }: { label: string; since: number }) {
       <Text size="sm">
         {label}… <b className="running-time">{elapsedText(Math.max(0, now - since))}</b>
       </Text>
+      <IconButton size="sm" tone="danger" className="rb-cancel" title={keyTitle("Cancel", "editor.cancel")} onClick={onCancel}>
+        ✕
+      </IconButton>
     </span>
   );
 }

@@ -405,7 +405,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
 
   // Renders the status bar again when a ⌘↩ starts or stops waiting for the module (the wait lives in ConsolePane)
   const [, setPendingRuns] = useState(0);
-  /** ⌘F2 and the status bar's ■: cancel the running statement or load-more (it reads on the tab's session, so the same cancel
+  /** ⌘F2, the toolbars' ■ and the status bar's ✕: cancel the running statement or load-more (it reads on the tab's session, so the same cancel
    * stops it), or the ⌘↩ still waiting for the WebAssembly module */
   const canCancel = (t?: Tab | null) => !!t && (t.running || t.loadingMore || !!editorApis.get(t.id)?.loading());
   /** What the status bar says while a console or table tab is busy (its RunningBar), or undefined */

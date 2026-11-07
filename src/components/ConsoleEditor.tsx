@@ -5,7 +5,7 @@ import { monaco } from "../lib/monaco";
 import { bindModel, unbindModel } from "../lib/completion";
 import { monacoTheme, useTheme } from "../lib/theme";
 import { font, fontStack } from "../lib/prefs";
-import { setStatusWidget } from "../lib/statusbar";
+import { caretText, setFocusWidgets } from "../lib/statusbar";
 import { bindings, onKeymapChange } from "../lib/shortcuts";
 import { markHover, shownMark, type MarkStmt, type StmtMark } from "../lib/stmtMark";
 
@@ -107,16 +107,18 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
           modelUri.current = model.uri.toString();
           bindModel(modelUri.current, connId, database);
         }
+        // The status bar's Ln, Col (and the selection's length), shown while focus is in this editor (its find bar too)
+        const owner = ed.getContainerDomNode();
         const caret = () => {
           const pos = ed.getPosition();
           const sel = ed.getSelection();
           const m = ed.getModel();
           if (!pos || !m) return;
           const n = sel && !sel.isEmpty() ? m.getValueInRange(sel).length : 0;
-          setStatusWidget("caret", `${pos.lineNumber}:${pos.column}${n ? ` (${n} chars)` : ""}`);
+          setFocusWidgets(owner, { pos: caretText(pos.lineNumber, pos.column, n) });
         };
+        caret();
         ed.onDidChangeCursorSelection(caret);
-        ed.onDidFocusEditorText(caret);
         const deco = ed.createDecorationsCollection();
         const preview = ed.createDecorationsCollection();
         const highlight = (ranges: { start: number; end: number }[]) => {
@@ -251,6 +253,7 @@ export function ConsoleEditor({ tabId, connId, database, initialSql, language, o
         // addAction's commands·shortcuts·menus stay in the global registry, so dispose them manually when the editor closes
         ed.onDidDispose(() => {
           offKeymap();
+          setFocusWidgets(owner, undefined);
           registered.forEach((d) => d.dispose());
           registered = [];
           if (modelUri.current) unbindModel(modelUri.current);

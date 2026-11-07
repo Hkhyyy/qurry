@@ -134,6 +134,8 @@ const api = {
   commitFailedTitle: (msg: string): string => wasm.commitFailedTitle(msg),
   /** The result grid's line when loading more rows failed (qurry_shared::errors::more_rows_failed, the TUI's words) */
   moreRowsFailed: (msg: string): string => wasm.moreRowsFailed(msg),
+  /** The result grid's shown columns ("cols 3–8 of 14", 1-based), or undefined when every column fits (qurry_shared::format::shown_cols, the TUI's words) */
+  shownCols: (first: number, last: number, total: number): string | undefined => wasm.shownCols(first, last, total),
   /** The DBA report's database picker when the databases can't be listed (qurry_shared::errors::db_list_failed, the TUI's words) */
   dbListFailed: (msg: string): string => wasm.dbListFailed(msg),
   /** Result word of a Production log entry ("outcome unknown", "failed", "committed" …), or undefined when its rows say it */

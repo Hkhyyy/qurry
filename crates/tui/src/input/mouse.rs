@@ -95,6 +95,9 @@ pub(super) fn mouse_down(app: &mut App, x: u16, y: u16) {
         if inside(app.hits.cancel, x, y) {
             return app.cancel();
         }
+        if inside(app.hits.run, x, y) {
+            return app.execute(false);
+        }
         if inside(app.hits.divider, x, y) {
             app.drag = Some(Drag::Console);
             return;

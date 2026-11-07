@@ -33,7 +33,7 @@ import { UpdateDialog } from "../../components/UpdateDialog";
 import { WorkspaceBar } from "../../components/WorkspaceBar";
 import { StatusBar } from "../../features/settings/StatusBar";
 import { useConnActions } from "../../features/conns/useConnActions";
-import { ConfirmHost, Menu } from "..";
+import { ConfirmHost, Menu, Text } from "..";
 import { ConsoleIcon, ReportIcon, TabIcon, TableIcon } from "../icons";
 
 /** Screens: real screen components with fake data (same data as the app's ?mock). Buttons are clickable */
@@ -276,7 +276,8 @@ export const GridShort: S = {
   ),
 };
 
-/** Loading more rows (infinite scroll, #94): nothing on the grid (no row is covered); the status bar shows it as it shows a run, ■ cancels */
+/** Loading more rows (infinite scroll, #94): nothing on the grid (no row is covered); the toolbar's ↻ is ■ (cancels the fetch, the rows stay),
+ * the status bar shows it as it shows a run (✕ on hover cancels too) */
 export const GridLoadingMore: S = {
   name: "Result Grid — loading more rows",
   render: () => (
@@ -284,7 +285,7 @@ export const GridLoadingMore: S = {
       <div style={{ position: "relative", flex: 1 }}>
         <ResultGrid result={{ ...mixed, truncated: true }} running={false} loadingMore query="select * from payment_check" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />
       </div>
-      <StatusBar run={{ canRun: false, running: true, onRun: noop, onCancel: noop }} status="" busy={{ label: "Loading more rows", since: Date.now() - 1200 }} readOnly={false} onUpdate={noop} jobs={[]} />
+      <StatusBar status="" busy={{ label: "Loading more rows", since: Date.now() - 1200, onCancel: noop }} readOnly={false} onUpdate={noop} jobs={[]} widgets={{ pos: "Row 3, Col 5" }} />
     </div>
   ),
 };
@@ -473,12 +474,12 @@ export const DbaStale: S = {
 };
 export const Migrate: S = { name: "Compare & Migrate", render: () => <Frame h={600}><MigrateView conns={CONNS} initialConnId="dev" onOpenConsole={noop} onStatus={noop} /></Frame> };
 export const Rag: S = { name: "AI Search (RAG)", render: () => <Frame h={600}><RagView conns={CONNS} runJob={async (_l, run) => run("job")} onStatus={noop} /></Frame> };
-/** ⌘↩ at startup while the WebAssembly module loads: shown like a run in the status bar, ■ (or ⌘F2) drops it */
+/** ⌘↩ at startup while the WebAssembly module loads: shown like a run in the status bar; the toolbar's ■, the ✕ on hover or ⌘F2 drops it */
 export const ConsoleSplitterLoading: S = {
   name: "Console — loading the statement splitter",
   render: () => (
     <div style={{ width: 760, border: "1px solid var(--ui-border)" }}>
-      <StatusBar run={{ canRun: false, running: true, onRun: noop, onCancel: noop }} status="" busy={{ label: "Loading the statement splitter", since: Date.now() }} readOnly={false} onUpdate={noop} jobs={[]} />
+      <StatusBar status="" busy={{ label: "Loading the statement splitter", since: Date.now(), onCancel: noop }} readOnly={false} onUpdate={noop} jobs={[]} />
     </div>
   ),
 };
@@ -557,6 +558,31 @@ const consoleProps = {
   onChange: noop, onExecute: noop, onCancel: noop, onSetActiveResult: noop, onPin: noop, onCloseResult: noop, onFetchMore: noop, onSubmit: async () => {}, onExport: noop, onHistory: noop,
   onTxMode: noop, onCommit: noop, onRollback: noop, onLoadDbs: noop, onLoadSchemas: noop, onSwitchDb: noop, onSwitchSchema: noop, registerApi: noop, onClearOutput: noop, onError: noop, onLoadingChange: noop,
 };
+/** One toggling button per toolbar (#107): the console's ▶ is ■ in the same spot while it runs a statement (not for a result's
+ * load-more); a grid's ↻ is ■ during each of its loads (a run, the load-more on scroll), and that ■ cancels only the fetch in flight */
+function RunStopToolbars() {
+  const label = (t: string) => <Text size="sm" tone="muted">{t}</Text>;
+  // The grid fills a positioned box (as in a tab); a console needs room for its toolbar and a line of its editor
+  const box = (h: number, child: React.ReactNode) => <div style={{ position: "relative", height: h, border: "1px solid var(--ui-border)" }}>{child}</div>;
+  const grid = (running: boolean, loadingMore: boolean) =>
+    box(110, <ResultGrid result={{ ...mixed, truncated: true }} running={running} loadingMore={loadingMore} query="select * from payment_check" onFetchMore={noop} onSubmit={async () => {}} onReload={noop} onCancel={noop} onExport={noop} />);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: 12 }}>
+      {label("Console — idle: ▶ Execute (⌘↩)")}
+      {box(130, <ConsolePane {...consoleProps} tabId="story-idle" initialSql="select * from orders;" activeResult="output" results={[]} />)}
+      {label("Console — running: ■ Cancel (⌘F2) in the same spot")}
+      {box(130, <ConsolePane {...consoleProps} tabId="story-running" initialSql="select pg_sleep(5);" activeResult="output" results={[]} running />)}
+      {label("Grid — idle: ↻ Reload Page (⌘r)")}
+      {grid(false, false)}
+      {label("Grid — loading (a run): ■ Cancel (⌘F2)")}
+      {grid(true, false)}
+      {label("Grid — loading more on scroll: ■ cancels the fetch, the rows stay")}
+      {grid(false, true)}
+    </div>
+  );
+}
+export const ToolbarsRunStop: S = { name: "Toolbars — run and stop", render: () => <RunStopToolbars /> };
+export const ToolbarsRunStopLight: S = { name: "Toolbars — run and stop, light", globals: { theme: "light" }, render: () => <RunStopToolbars /> };
 export const ConsoleEditableResult: S = {
   name: "Console — editable result (pending edit)",
   render: () => (
@@ -663,18 +689,28 @@ export const Workspaces: S = { name: "Workspace rail", render: () => <Rail n={2}
 export const WorkspacesMany: S = { name: "Workspace rail — 30 workspaces (list scrolls, footer stays)", render: () => <Rail n={30} /> };
 export const WorkspacesLight: S = { name: "Workspace rail — light", globals: { theme: "light" }, render: () => <Rail n={30} /> };
 export const WorkspacesHc: S = { name: "Workspace rail — high contrast", globals: { theme: "hc" }, render: () => <Rail n={30} /> };
-/** Status bar: run · cancel, status text, transfers, update badge, read-only, caret, encoding (Settings and Keymap moved to the workspace rail).
- * While the focused tab runs or loads more rows, the running indicator (bar · what · elapsed) takes the status text's place; ■ cancels it */
+/** Status bar, information only (#107): status text, transfers, update badge, read-only, the focused grid's shown columns, the focused
+ * editor's (Ln, Col) or grid's (Row, Col) position, encoding. While the focused tab runs or loads more rows, the running indicator
+ * (bar · what · elapsed) takes the status text's place; hovering it shows ✕, which cancels (shown hovered in the last two) */
 export const StatusBarStory: S = {
   name: "Status bar",
   render: () => (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <StatusBar run={{ canRun: true, running: false, onRun: noop, onCancel: noop }} status="1 statement executed in 12 ms" readOnly update="0.3.1" onUpdate={noop} jobs={[]} />
-      <StatusBar run={{ canRun: false, running: true, onRun: noop, onCancel: noop }} status="" busy={{ label: "Executing", since: Date.now() - 3400 }} readOnly={false} onUpdate={noop} jobs={[]} />
-      <StatusBar run={{ canRun: false, running: true, onRun: noop, onCancel: noop }} status="" busy={{ label: "Loading more rows", since: Date.now() - 800 }} readOnly={false} onUpdate={noop} jobs={[]} />
+      <style>{".sb-hovered .rb-cancel { visibility: visible; }"}</style>
+      <StatusBar status="1 statement executed in 12 ms" readOnly update="0.3.1" onUpdate={noop} jobs={[]} widgets={{ pos: "Ln 2, Col 11" }} />
+      <StatusBar status="1 statement executed in 12 ms" readOnly={false} onUpdate={noop} jobs={[]} widgets={{ pos: "Ln 2, Col 11 (8 chars)" }} />
+      <StatusBar status="3000+ rows retrieved" readOnly={false} onUpdate={noop} jobs={[]} widgets={{ cols: "cols 3–8 of 14", pos: "Row 3, Col 5" }} />
+      <StatusBar status="Table users opened" readOnly={false} onUpdate={noop} jobs={[]} />
+      <div className="sb-hovered">
+        <StatusBar status="" busy={{ label: "Executing", since: Date.now() - 3400, onCancel: noop }} readOnly={false} onUpdate={noop} jobs={[]} widgets={{ pos: "Ln 2, Col 11" }} />
+      </div>
+      <div className="sb-hovered">
+        <StatusBar status="" busy={{ label: "Loading more rows", since: Date.now() - 800, onCancel: noop }} readOnly={false} onUpdate={noop} jobs={[]} widgets={{ cols: "cols 3–8 of 14", pos: "Row 3, Col 5" }} />
+      </div>
     </div>
   ),
 };
+export const StatusBarLight: S = { ...StatusBarStory, name: "Status bar — light", globals: { theme: "light" } };
 
 // ───────── Import Data Sources (#63): the real flow on the mock backend ─────────
 /** Explorer ⋮ › Import Data Sources ▸ (opened by hovering it): the locations found, newest IDE version first, the count, the path as the

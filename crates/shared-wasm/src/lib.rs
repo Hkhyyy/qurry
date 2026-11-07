@@ -80,6 +80,12 @@ pub fn more_rows_failed(msg: &str) -> String {
     qurry_shared::errors::more_rows_failed(msg)
 }
 
+/// The result grid's shown columns ("cols 3–8 of 14"), or undefined when every column fits (the TUI's words)
+#[wasm_bindgen(js_name = shownCols)]
+pub fn shown_cols(first: usize, last: usize, total: usize) -> Option<String> {
+    qurry_shared::format::shown_cols(first, last, total)
+}
+
 /// Title of the notice for a failed Commit: "Commit outcome unknown" when the connection was lost during it, else "Commit failed"
 #[wasm_bindgen(js_name = commitFailedTitle)]
 pub fn commit_failed_title(msg: &str) -> String {
