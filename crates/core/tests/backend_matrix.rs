@@ -954,11 +954,15 @@ async fn redis_metadata_and_tools() {
 /// Each statement's edit target (in table `s.<table>`, pk, the table column of each result column) or its read-only reason,
 /// run in a console tab. `count` is the server's name for count(*)
 async fn console_edit_cases(st: &AppState, s: &str, count: &str) {
-    use qurry_core::editable::{EditTarget, Editable};
+    use qurry_core::editable::{ColumnEdit, EditTarget, Editable, JoinEdit, JoinTable};
     use qurry_shared::errors as e;
     let v = |x: &[&str]| x.iter().map(|c| c.to_string()).collect::<Vec<_>>();
     let edit = |table: &str, pk: &[&str], cols: &[&str]| Some(Editable::Table(EditTarget { schema: s.into(), table: table.into(), pk: v(pk), columns: v(cols) }));
     let ro = |why: String| Some(Editable::ReadOnly(why));
+    let (to, cro) = (|t: usize, c: &str| ColumnEdit::To { table: t, column: c.into() }, |why: String| ColumnEdit::ReadOnly { read_only: why });
+    let jt = |table: &str, pk: &[&str], pk_at: &[usize]| JoinTable { schema: s.into(), table: table.into(), pk: v(pk), pk_at: pk_at.to_vec() };
+    let join = |tables: Vec<JoinTable>, columns: Vec<ColumnEdit>| Some(Editable::Join(JoinEdit { tables, columns }));
+    let items_pk = e::edit_missing_pk(&format!("{s}.items"), &v(&["id"]));
     let cases = [
         (format!("select * from {s}.items"), edit("items", &["id"], &["id", "name", "qty"])),
         (format!("select name, id from {s}.items where qty > 0 order by id"), edit("items", &["id"], &["name", "id"])),
@@ -966,17 +970,21 @@ async fn console_edit_cases(st: &AppState, s: &str, count: &str) {
         (format!("select * from {s}.pairs"), edit("pairs", &["a", "b"], &["a", "b", "note"])),
         // No rows: still editable (rows can be added)
         (format!("select * from {s}.items where qty < 0"), edit("items", &["id"], &["id", "name", "qty"])),
-        (format!("select i.id, i.name from {s}.items i join {s}.pairs p on p.a = i.id"), ro(e::EDIT_MANY_TABLES.into())),
-        // A self-join: one table, but the columns of two different rows
-        (format!("select a.id, b.name from {s}.items a join {s}.items b on b.id = a.qty"), ro(e::EDIT_MANY_TABLES.into())),
-        (format!("select * from {s}.items, {s}.pairs"), ro(e::EDIT_MANY_TABLES.into())),
+        // Joins (#102): per table, where that table's key is in the result
+        (format!("select i.id, i.name from {s}.items i join {s}.pairs p on p.a = i.id"), join(vec![jt("items", &["id"], &[0])], vec![to(0, "id"), to(0, "name")])),
+        // A self-join: one table, but the columns of two different rows; b's key isn't in the result
+        (format!("select a.id, b.name from {s}.items a join {s}.items b on b.id = a.qty"), join(vec![jt("items", &["id"], &[0])], vec![to(0, "id"), cro(items_pk.clone())])),
+        (
+            format!("select * from {s}.items, {s}.pairs"),
+            join(vec![jt("items", &["id"], &[0]), jt("pairs", &["a", "b"], &[3, 4])], vec![to(0, "id"), to(0, "name"), to(0, "qty"), to(1, "a"), to(1, "b"), to(1, "note")]),
+        ),
         (format!("select count(*) from {s}.items"), ro(e::edit_computed(count))),
         (format!("select name, max(id) from {s}.items group by name"), ro(e::edit_combined("GROUP BY"))),
         (format!("select distinct id, name from {s}.items"), ro(e::edit_combined("DISTINCT"))),
         (format!("select id from {s}.items union select a from {s}.pairs"), ro(e::edit_combined("UNION"))),
         (format!("select id, upper(name) as name from {s}.items"), ro(e::edit_computed("name"))),
-        (format!("select name, qty from {s}.items"), ro(e::edit_missing_pk(&v(&["id"])))),
-        (format!("select a, note from {s}.pairs"), ro(e::edit_missing_pk(&v(&["a", "b"])))),
+        (format!("select name, qty from {s}.items"), ro(items_pk.clone())),
+        (format!("select a, note from {s}.pairs"), ro(e::edit_missing_pk(&format!("{s}.pairs"), &v(&["a", "b"])))),
         (format!("select * from {s}.v_items"), ro(e::edit_not_table(&format!("{s}.v_items"), "view"))),
         (format!("select id, id from {s}.items"), ro(e::edit_duplicate("id"))),
         (format!("select id, name, name as again from {s}.items"), ro(e::edit_duplicate("name"))),
@@ -1097,6 +1105,216 @@ async fn mysql_console_result_edit_target() {
     assert_eq!(r.editable, Some(Editable::ReadOnly(e::edit_temporary(&format!("{s}.items")))));
     assert_eq!(q_tab(&st, "edit-my", &format!("select * from {s}.items")).await.editable, Some(Editable::ReadOnly(e::edit_temporary(&format!("{s}.items")))));
     st.close_session("edit-my".into()).await.unwrap();
+    q(&st, &format!("drop database {s}")).await;
+}
+
+// ───────── Console results from joins, per table (#102); grid edits in Production's Manual transaction (#106) ─────────
+
+/// The tables of #102's example (voc joined to users), a self-referencing tree and a table without a key, in `s`
+async fn join_edit_setup(st: &AppState, s: &str) {
+    for sql in [
+        format!("create table {s}.voc (idx int primary key, user_idx int, status varchar(20))"),
+        format!("create table {s}.users (idx int primary key, role varchar(20), status varchar(20))"),
+        format!("create table {s}.tree (id int primary key, parent int, name varchar(20))"),
+        format!("create table {s}.nokey (idx int, note varchar(20))"),
+        format!("insert into {s}.voc values (1, 10, 'open'), (2, 99, 'new')"),
+        format!("insert into {s}.users values (10, 'member', 'active'), (11, 'admin', 'active')"),
+        format!("insert into {s}.tree values (1, null, 'root'), (2, 1, 'child')"),
+        format!("insert into {s}.nokey values (1, 'n')"),
+    ] {
+        q(st, &sql).await;
+    }
+}
+
+/// The UPDATE the GUI and the TUI build for one edited cell of a join result (ResultGrid buildStatements, TUI App::submit)
+fn join_update(r: &db::QueryResult, kind: DbKind, row: usize, c: usize, value: &str) -> Result<String, String> {
+    use qurry_core::editable::Editable;
+    let Some(Editable::Join(j)) = &r.editable else { panic!("{:?}", r.editable) };
+    let row = &r.rows[row];
+    let (t, col) = j.cell(c, |i| row[i].is_null())?;
+    let q = |x: &str| qurry_shared::sql::quote_ident(kind, x);
+    let lit = |v: &Value| match v {
+        Value::String(s) => format!("'{}'", s.replace('\'', "''")),
+        v => v.to_string(),
+    };
+    let key = t.pk.iter().zip(&t.pk_at).map(|(k, &i)| format!("{} = {}", q(k), lit(&row[i]))).collect::<Vec<_>>().join(" AND ");
+    Ok(format!("UPDATE {}.{} SET {} = '{value}' WHERE {key}", q(&t.schema), q(&t.table), q(col)))
+}
+
+async fn one_value(st: &AppState, sql: &str) -> Value {
+    q(st, sql).await.rows[0][0].clone()
+}
+
+async fn console_join_edit_cases(st: &AppState, s: &str, kind: DbKind) {
+    use qurry_core::editable::{ColumnEdit, Editable, JoinEdit, JoinTable};
+    use qurry_shared::errors as e;
+    let v = |x: &[&str]| x.iter().map(|c| c.to_string()).collect::<Vec<_>>();
+    let to = |t: usize, c: &str| ColumnEdit::To { table: t, column: c.into() };
+    let ro = |why: String| ColumnEdit::ReadOnly { read_only: why };
+    let jt = |table: &str, pk: &str, at: usize| JoinTable { schema: s.into(), table: table.into(), pk: v(&[pk]), pk_at: vec![at] };
+    let join = |r: &db::QueryResult| match &r.editable {
+        Some(Editable::Join(j)) => j.clone(),
+        other => panic!("{other:?}"),
+    };
+    let tab = "join-edit";
+
+    // #102's example: a left join, both keys in the result; idx and status twice, each by its table
+    let left = format!("select * from {s}.voc as vo left join {s}.users as pu on vo.user_idx = pu.idx order by vo.idx");
+    let r = q_tab(st, tab, &left).await;
+    assert_eq!(
+        join(&r),
+        JoinEdit { tables: vec![jt("voc", "idx", 0), jt("users", "idx", 3)], columns: vec![to(0, "idx"), to(0, "user_idx"), to(0, "status"), to(1, "idx"), to(1, "role"), to(1, "status")] }
+    );
+    // The outer side where no user matched (voc 2 points at user 99): read-only there
+    assert_eq!(join_update(&r, kind, 1, 4, "x"), Err(e::edit_no_row(&format!("{s}.users"))));
+    assert!(join_update(&r, kind, 1, 2, "x").is_ok());
+    // An edit of users.role changes exactly that one users row (Auto mode: committed at once)
+    let up = join_update(&r, kind, 0, 4, "admin").unwrap();
+    assert!(up.contains("users") && up.ends_with(&format!("WHERE {} = 10", qurry_shared::sql::quote_ident(kind, "idx"))), "{up}");
+    assert_eq!(st.submit_edits(ID.into(), Some(tab.into()), vec![up]).await.unwrap().rows, 1);
+    assert_eq!(one_value(st, &format!("select role from {s}.users where idx = 10")).await, json!("admin"));
+    assert_eq!(one_value(st, &format!("select role from {s}.users where idx = 11")).await, json!("admin"));
+    assert_eq!(one_value(st, &format!("select status from {s}.voc where idx = 1")).await, json!("open"));
+    // The same name in the other table: voc.status, not users.status
+    let up = join_update(&r, kind, 0, 2, "closed").unwrap();
+    st.submit_edits(ID.into(), Some(tab.into()), vec![up]).await.unwrap();
+    assert_eq!(one_value(st, &format!("select status from {s}.voc where idx = 1")).await, json!("closed"));
+    assert_eq!(one_value(st, &format!("select status from {s}.users where idx = 10")).await, json!("active"));
+    q(st, &format!("update {s}.users set role = 'member' where idx = 10")).await;
+
+    // An inner join, aliases swapping the names; the key of each table found by origin, not by name
+    let r = q_tab(st, tab, &format!("select pu.role as status, pu.status as role, pu.idx, vo.idx as user_idx from {s}.voc vo join {s}.users pu on pu.idx = vo.user_idx")).await;
+    assert_eq!(join(&r), JoinEdit { tables: vec![jt("voc", "idx", 3), jt("users", "idx", 2)], columns: vec![to(1, "role"), to(1, "status"), to(1, "idx"), to(0, "idx")] });
+    let up = join_update(&r, kind, 0, 1, "gone").unwrap();
+    assert!(up.contains(&format!("SET {} = 'gone'", qurry_shared::sql::quote_ident(kind, "status"))), "{up}");
+
+    // A key missing: that table's columns say why; none at all: read-only
+    let missing = |t: &str| e::edit_missing_pk(&format!("{s}.{t}"), &v(&["idx"]));
+    let r = q_tab(st, tab, &format!("select vo.idx, vo.status, pu.role from {s}.voc vo join {s}.users pu on pu.idx = vo.user_idx")).await;
+    assert_eq!(join(&r), JoinEdit { tables: vec![jt("voc", "idx", 0)], columns: vec![to(0, "idx"), to(0, "status"), ro(missing("users"))] });
+    let r = q_tab(st, tab, &format!("select vo.status, pu.role from {s}.voc vo join {s}.users pu on pu.idx = vo.user_idx")).await;
+    assert_eq!(r.editable, Some(Editable::ReadOnly(missing("voc"))));
+    // A table without a key, a computed column
+    let r = q_tab(st, tab, &format!("select v.idx, n.note, upper(v.status) as up from {s}.voc v join {s}.nokey n on n.idx = v.idx")).await;
+    assert_eq!(join(&r).columns, [to(0, "idx"), ro(e::edit_no_pk(&format!("{s}.nokey"))), ro(e::edit_computed("up"))]);
+
+    // A self-join: each occurrence by its own key, the parent's name changes only the parent row
+    let r = q_tab(st, tab, &format!("select c.id, c.name, p.id as pid, p.name as pname from {s}.tree c join {s}.tree p on c.parent = p.id")).await;
+    assert_eq!(join(&r), JoinEdit { tables: vec![jt("tree", "id", 0), jt("tree", "id", 2)], columns: vec![to(0, "id"), to(0, "name"), to(1, "id"), to(1, "name")] });
+    let up = join_update(&r, kind, 0, 3, "top").unwrap();
+    st.submit_edits(ID.into(), Some(tab.into()), vec![up]).await.unwrap();
+    assert_eq!(q(st, &format!("select name from {s}.tree order by id")).await.rows, [[json!("top")], [json!("child")]]);
+    // `*` over a self-join: by place
+    let r = q_tab(st, tab, &format!("select * from {s}.tree c join {s}.tree p on c.parent = p.id")).await;
+    assert_eq!(join(&r).tables.iter().map(|t| t.pk_at.clone()).collect::<Vec<_>>(), [vec![0], vec![3]]);
+    // ... but not with USING, which merges the key: which occurrence a column is can't be told
+    let r = q_tab(st, tab, &format!("select * from {s}.tree a join {s}.tree b using (id)")).await;
+    let why = match kind {
+        DbKind::Mysql => e::EDIT_STAR_USING.to_string(),
+        _ => e::edit_self_join(&format!("{s}.tree")),
+    };
+    assert_eq!(r.editable, Some(Editable::ReadOnly(why)));
+    st.close_session(tab.into()).await.unwrap();
+}
+
+/// Grid edits in a Production console's Manual transaction (#106): they stay pending (the Production log has them, with undo)
+/// until Commit / Roll back; a failing batch undoes only itself. Also the ask-free guard of a read-only source
+async fn production_submit_in_manual_tx(st: &AppState, s: &str, kind: DbKind, read_only: &AppState) {
+    let tab = "prod-tx";
+    let role = |idx: i32| format!("select role from {s}.users where idx = {idx}");
+    let src = st.store.get(ID).unwrap().unwrap();
+    assert!(src.options.confirm_changes && src.options.starts_manual(), "Production starts consoles in Manual by default");
+    let off = qurry_core::store::ConnOptions { production_manual: Some(false), ..src.options.clone() };
+    assert!(!off.starts_manual());
+    st.set_tx_mode(ID.into(), tab.into(), true).await.unwrap();
+    let r = q_tab(st, tab, &format!("select vo.idx, pu.idx, pu.role from {s}.voc vo join {s}.users pu on pu.idx = vo.user_idx")).await;
+    let up = join_update(&r, kind, 0, 2, "owner").unwrap();
+    assert_eq!(st.submit_edits(ID.into(), Some(tab.into()), vec![up]).await.unwrap().rows, 1);
+    assert!(st.tx_state(tab.into()).await, "still pending");
+    assert_eq!(one_value(st, &role(10)).await, json!("member"), "not committed: another connection sees the old value");
+    assert_eq!(q_tab(st, tab, &role(10)).await.rows[0][0], json!("owner"));
+    let logged = st.audit_log(Some(ID.into()), "owner".into(), 1).remove(0);
+    assert!(logged.in_tx && logged.undo.is_some() && logged.rows == Some(1), "{logged:?}");
+    // A batch with one statement that changes two rows: none of it stays, the earlier edit still does
+    let bad = vec![format!("update {s}.users set role = 'x' where idx = 11"), format!("update {s}.users set status = 'z' where status = 'active'")];
+    let err = st.submit_edits(ID.into(), Some(tab.into()), bad).await.unwrap_err().to_string();
+    assert!(err.contains("exactly 1 row but changed 2"), "{err}");
+    assert!(st.tx_state(tab.into()).await);
+    assert_eq!(q_tab(st, tab, &role(11)).await.rows[0][0], json!("admin"));
+    assert_eq!(q_tab(st, tab, &role(10)).await.rows[0][0], json!("owner"));
+    // Roll back: gone, and logged
+    st.rollback_tx(tab.into()).await.unwrap();
+    assert_eq!(one_value(st, &role(10)).await, json!("member"));
+    assert_eq!(st.audit_log(Some(ID.into()), String::new(), 1)[0].sql, "ROLLBACK");
+    // Commit: saved
+    st.submit_edits(ID.into(), Some(tab.into()), vec![format!("update {s}.users set role = 'owner' where idx = 10")]).await.unwrap();
+    st.commit_tx(tab.into()).await.unwrap();
+    assert_eq!(one_value(st, &role(10)).await, json!("owner"));
+    q(st, &format!("update {s}.users set role = 'member' where idx = 10")).await;
+    st.close_session(tab.into()).await.unwrap();
+
+    // A read-only source refuses the edits whether the console is in Auto or Manual mode, before anything is sent
+    for manual in [false, true] {
+        read_only.set_tx_mode(ID.into(), tab.into(), manual).await.unwrap();
+        let err = read_only.submit_edits(ID.into(), Some(tab.into()), vec![format!("update {s}.users set role = 'x' where idx = 10")]).await.unwrap_err().to_string();
+        assert!(err.contains("is read-only"), "{err}");
+    }
+    read_only.close_session(tab.into()).await.unwrap();
+    assert_eq!(one_value(st, &role(10)).await, json!("member"));
+}
+
+/// The server ends a console's session that sat idle in its transaction (PostgreSQL idle_in_transaction_session_timeout, MySQL
+/// wait_timeout, set for this session only): the next statement or Commit says so with the shared words, and that nothing was
+/// committed; the Production log closes the transaction as rolled back by the server, not as a COMMIT of unknown outcome
+async fn idle_transaction_ended_by_the_server(st: &AppState, s: &str, kind: DbKind) {
+    use qurry_shared::errors as e;
+    let mysql = kind == DbKind::Mysql;
+    let tab = "idle-tx";
+    st.set_tx_mode(ID.into(), tab.into(), true).await.unwrap();
+    for end in ["statement", "commit"] {
+        q_tab(st, tab, if mysql { "set session wait_timeout = 2" } else { "set idle_in_transaction_session_timeout = '1s'" }).await;
+        q_tab(st, tab, &format!("update {s}.users set role = 'idle' where idx = 11")).await;
+        tokio::time::sleep(std::time::Duration::from_millis(3500)).await;
+        let err = match end {
+            "commit" => st.commit_tx(tab.into()).await.map(|_| ()),
+            _ => st.run_query(ID.into(), "select 1".into(), None, Some(tab.into())).await.map(|_| ()),
+        }
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains(&e::idle_tx_ended(mysql)) && !err.contains(e::COMMIT_UNKNOWN_ERR), "{end}: {err}");
+        assert_eq!(st.audit_log(Some(ID.into()), String::new(), 1)[0].sql, "ROLLBACK (by the server)", "{end}");
+        assert_eq!(one_value(st, &format!("select role from {s}.users where idx = 11")).await, json!("admin"));
+    }
+    st.close_session(tab.into()).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore]
+async fn pg_console_join_edit_and_production_tx() {
+    let Some(c) = pg_env() else { return };
+    let st = state(&c, None).await;
+    let s = "qm_join_edit";
+    q(&st, &format!("drop schema if exists {s} cascade")).await;
+    q(&st, &format!("create schema {s}")).await;
+    join_edit_setup(&st, s).await;
+    console_join_edit_cases(&st, s, DbKind::Postgres).await;
+    let read_only = state(&ConnectionConfig { read_only: true, ..c.clone() }, None).await;
+    production_submit_in_manual_tx(&st, s, DbKind::Postgres, &read_only).await;
+    idle_transaction_ended_by_the_server(&st, s, DbKind::Postgres).await;
+    q(&st, &format!("drop schema {s} cascade")).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn mysql_console_join_edit_and_production_tx() {
+    let s = "qm_join_edit";
+    let Some(st) = my_state(s).await else { return };
+    let Some((c, pw)) = my_env() else { return };
+    join_edit_setup(&st, s).await;
+    console_join_edit_cases(&st, s, DbKind::Mysql).await;
+    let read_only = state(&ConnectionConfig { read_only: true, database: s.into(), ..c }, Some(pw)).await;
+    production_submit_in_manual_tx(&st, s, DbKind::Mysql, &read_only).await;
+    idle_transaction_ended_by_the_server(&st, s, DbKind::Mysql).await;
     q(&st, &format!("drop database {s}")).await;
 }
 

@@ -206,13 +206,23 @@ impl Grid {
             .collect();
     }
 
+    /// Loaded rows go before the added ones (Submit inserts the last `added` rows, Revert drops them): the added rows, their edits,
+    /// marks and the cursor on them move down with them
     pub fn append(&mut self, more: QueryResult) {
-        let n = self.result.rows.len();
-        self.result.rows.extend(more.rows);
+        let (n, k) = (self.result.rows.len(), more.rows.len());
+        let at = n - self.added;
+        self.result.rows.splice(at..at, more.rows);
         self.result.truncated = more.truncated;
         self.compute_frac();
+        if self.added > 0 {
+            let mv = |r: usize| if r >= at { r + k } else { r };
+            self.edits = std::mem::take(&mut self.edits).into_iter().map(|((r, c), v)| ((mv(r), c), v)).collect();
+            self.marked = std::mem::take(&mut self.marked).into_iter().map(mv).collect();
+            self.row = mv(self.row);
+            self.anchor = self.anchor.map(|(r, c)| (mv(r), c));
+        }
         if !self.orig.is_empty() {
-            self.orig.extend(n..self.result.rows.len());
+            self.orig.extend(n..n + k);
             self.apply_local_sort();
         }
     }
@@ -420,6 +430,16 @@ impl Grid {
         } else {
             self.edits.insert((r, c), Some(v));
         }
+    }
+
+    /// The cells a paste of `text` writes from the current cell (rows past the last one would be added)
+    pub fn paste_spots(&self, text: &str) -> Vec<(usize, usize)> {
+        let mut lines: Vec<&str> = text.split('\n').collect();
+        if lines.len() > 1 && lines.last() == Some(&"") {
+            lines.pop();
+        }
+        let n = self.cols();
+        lines.iter().enumerate().flat_map(|(i, l)| (0..l.split('\t').count()).map(move |j| (self.row + i, self.col + j))).filter(|&(_, c)| c < n).collect()
     }
 
     /// Paste: fill from the current cell. Tabs for multiple cells, lines for multiple rows (spreadsheet·DataGrip copy). Missing rows are added, overflowing columns dropped
@@ -904,6 +924,24 @@ mod tests {
         g.toggle_local_sort();
         assert_eq!(g.sort, None);
         assert_eq!(vals(&g), ["10", "<null>", "9", "100", "50"]);
+    }
+
+    /// Rows loaded after Add Row go before the added one: Submit still inserts only the added row, Revert drops only it, and its
+    /// edit and the cursor on it move with it
+    #[test]
+    fn load_more_keeps_added_rows_last() {
+        let col = |n: &str| qurry_core::db::ColumnInfo { name: n.into(), type_name: String::new() };
+        let page = |v: &[i64], more| QueryResult { columns: vec![col("a")], rows: v.iter().map(|x| vec![json!(x)]).collect(), rows_affected: 0, truncated: more, elapsed_ms: 0, has_result_set: true, in_transaction: false, warning: None, editable: None };
+        let mut g = Grid::new(page(&[1, 2], true));
+        g.add_row();
+        g.set_value(2, 0, "new".into());
+        g.append(page(&[3, 4], false));
+        let vals = |g: &Grid| g.result.rows.iter().map(|r| cell_text(&r[0])).collect::<Vec<_>>();
+        assert_eq!(vals(&g), ["1", "2", "3", "4", "<null>"]);
+        assert!(g.is_added(4) && !g.is_added(2) && g.row == 4);
+        assert_eq!(g.edits.keys().copied().collect::<Vec<_>>(), [(4, 0)]);
+        g.revert();
+        assert_eq!(vals(&g), ["1", "2", "3", "4"]);
     }
     /// Whole column as an IN list: ('a', 'b'). Numbers as is, duplicates·NULL dropped (same as GUI lib/inList.ts)
     #[test]

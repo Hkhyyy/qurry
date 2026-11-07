@@ -103,7 +103,7 @@ impl App {
     pub fn restore_console(&mut self, conn: &str, db: String, title: String, sql: &str) -> Option<u64> {
         let mut editor = TextArea::new(sql.lines().map(String::from).collect());
         editor.set_cursor_line_style(ratatui::style::Style::default());
-        let manual = self.conn(conn).map(|c| c.config.options.tx_manual).unwrap_or(false);
+        let manual = self.conn(conn).is_some_and(|c| c.config.options.starts_manual());
         let c = Console { editor, session: uuid::Uuid::new_v4().to_string(), grid: None, result_title: String::new(), result_sql: String::new(), output: vec![], show_output: true, running: false, tx_manual: manual, in_tx: false, complete: None, marks: Default::default(), assist: Default::default(), run_spans: Default::default(), run_error: None, joined: vec![] };
         self.restored_tab(conn, db, title, TabKind::Console(c))
     }
@@ -325,9 +325,15 @@ impl App {
         let title = if n == 0 { format!("console [{name}]") } else { format!("console_{} [{name}]", n + 1) };
         let mut editor = TextArea::default();
         editor.set_cursor_line_style(ratatui::style::Style::default());
-        let manual = self.conn(conn).map(|c| c.config.options.tx_manual).unwrap_or(false);
+        // Production starts in Manual (#106): the first such console of a source says so, and where to turn it off
+        let manual = self.conn(conn).is_some_and(|c| c.config.options.starts_manual());
+        let tell = self.conn(conn).is_some_and(|c| c.config.options.production_starts_manual()) && self.told_manual.insert(conn.to_string());
+        if tell {
+            self.status = qurry_shared::errors::PRODUCTION_MANUAL.into();
+        }
         let session = uuid::Uuid::new_v4().to_string();
-        let id = self.push_tab(conn, db, title, TabKind::Console(Console { editor, session: session.clone(), grid: None, result_title: String::new(), result_sql: String::new(), output: vec![], show_output: true, running: false, tx_manual: manual, in_tx: false, complete: None, marks: Default::default(), assist: Default::default(), run_spans: Default::default(), run_error: None, joined: vec![] }));
+        let output = if tell { vec![(false, qurry_shared::errors::PRODUCTION_MANUAL.to_string())] } else { vec![] };
+        let id = self.push_tab(conn, db, title, TabKind::Console(Console { editor, session: session.clone(), grid: None, result_title: String::new(), result_sql: String::new(), output, show_output: true, running: false, tx_manual: manual, in_tx: false, complete: None, marks: Default::default(), assist: Default::default(), run_spans: Default::default(), run_error: None, joined: vec![] }));
         let target = self.tabs[self.tab_index(id).unwrap()].target.clone();
         self.load_completion(target);
         if manual {
@@ -338,6 +344,21 @@ impl App {
                     a.status = e;
                 }
             });
+        }
+    }
+
+    /// The backend's reminders about Production transactions left open (AppState::tx_reminders): (console session, text) into
+    /// that console's output, and on the status line
+    pub fn tx_reminded(&mut self, reminders: Vec<(String, String)>) {
+        for (session, text) in reminders {
+            let all = self.tabs.iter_mut().chain(self.workspaces.iter_mut().flat_map(|w| w.saved.iter_mut().flat_map(|s| s.tabs.iter_mut())));
+            if let Some(c) = all.filter_map(|t| match &mut t.kind {
+                TabKind::Console(c) if c.session == session => Some(c),
+                _ => None,
+            }).next() {
+                c.output.push((false, text.clone()));
+            }
+            self.status = text;
         }
     }
 

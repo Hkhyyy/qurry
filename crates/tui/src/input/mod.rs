@@ -107,11 +107,7 @@ fn paste(app: &mut App, s: String) {
                 app.update_assist();
             }
             // Table data, an editable console result: fill from the current cell (⌘V)
-            Some(TabKind::Table(_) | TabKind::Console(_)) if app.focus == Focus::Grid => {
-                if let Some(g) = app.edit_grid().filter(|g| g.cols() > 0) {
-                    g.paste(&s);
-                }
-            }
+            Some(TabKind::Table(_) | TabKind::Console(_)) if app.focus == Focus::Grid => app.paste_grid(&s),
             _ => {}
         },
     }

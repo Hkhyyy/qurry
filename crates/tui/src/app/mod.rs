@@ -848,6 +848,8 @@ pub struct App {
     /// Whether last session's tabs were restored (once, after the first Data Source list load), and the last saved content
     restored: bool,
     saved_ws: String,
+    /// Data sources whose console said it starts in Manual because it is Production (errors::PRODUCTION_MANUAL): once per run
+    told_manual: std::collections::HashSet<String>,
     /// Last sync with the shared workspace list (None = not yet)
     pub ws_shared: Option<Vec<qurry_core::workspaces::WsInfo>>,
     /// The save file has synced with the shared list before (missing workspaces were deleted elsewhere)
@@ -939,6 +941,7 @@ impl App {
             restored: false,
             startup: None,
             saved_ws: String::new(),
+            told_manual: Default::default(),
             ws_shared: None,
             ws_synced: false,
             color: Default::default(),

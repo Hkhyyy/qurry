@@ -276,7 +276,7 @@ impl Audit {
                 }
             }
             // A COMMIT cut off by a lost connection may have committed: the entry says so, not that it failed, and closes the transaction
-            Err(err) if tx_end(sql) == Some("COMMIT") && crate::app::is_conn_lost(err) => {
+            Err(err) if tx_end(sql) == Some("COMMIT") && crate::app::is_conn_lost(err) && crate::app::idle_ended(err).is_none() => {
                 e.sql = COMMIT_UNKNOWN.into();
                 e.error = Some(err.to_string());
                 e.note = Some(COMMIT_UNKNOWN_NOTE.into());
@@ -298,14 +298,19 @@ impl Audit {
         Ok(statements.iter().map(|st| if is_change(st, kind) { started.next() } else { None }).collect())
     }
 
-    /// After running statements in one transaction, like saving table edits (on failure everything was rolled back). exact_one = 1 row per statement
-    pub(crate) fn after_batch(&self, started: Vec<Option<AuditEntry>>, err: Option<String>, exact_one: bool, mut undos: Vec<Option<Result<String, String>>>) -> AppResult<()> {
+    /// After running statements in one transaction, like saving table edits (on failure everything was rolled back). exact_one = 1 row per statement.
+    /// tab = they ran in that console's open transaction (AppState::submit_edits): not committed yet, so its COMMIT / ROLLBACK is logged too
+    pub(crate) fn after_batch(&self, started: Vec<Option<AuditEntry>>, err: Option<String>, exact_one: bool, mut undos: Vec<Option<Result<String, String>>>, tab: Option<&str>) -> AppResult<()> {
         undos.resize(started.len(), None);
         let mut done = Vec::new();
         for (e, undo) in started.into_iter().zip(undos) {
             let Some(mut e) = e else { continue };
             e.rows = exact_one.then_some(1);
             e.error = err.as_ref().map(|e| format!("Rolled back: {e}"));
+            e.in_tx = err.is_none() && tab.is_some();
+            if let (None, Some(t)) = (&err, tab) {
+                self.pending.lock().unwrap().insert(t.into());
+            }
             if err.is_none() {
                 match undo {
                     Some(Ok(u)) => e.undo = Some(u),
@@ -351,7 +356,8 @@ pub use qurry_shared::errors::commit_failed_title;
 /// (an error the server reported: deadlock, failed COMMIT)
 pub(crate) fn ended_by(sql: &str, e: &AppError, open: bool) -> Option<&'static str> {
     if crate::app::is_conn_lost(e) {
-        return Some(if tx_end(sql) == Some("COMMIT") { COMMIT_UNKNOWN } else { BY_SERVER });
+        // A server that ended the session for sitting idle in the transaction never got the COMMIT
+        return Some(if tx_end(sql) == Some("COMMIT") && crate::app::idle_ended(e).is_none() { COMMIT_UNKNOWN } else { BY_SERVER });
     }
     (!open).then_some(BY_SERVER)
 }
@@ -812,8 +818,21 @@ mod tests {
         // Batch: only the changes are logged, matched to their statements
         let started = a.before_batch("c1", "[PROD] kr", DbKind::Postgres, &["select 1".into(), "delete from t where id = 4".into()]).unwrap();
         assert_eq!(started.iter().map(|e| e.as_ref().map(|e| e.sql.as_str())).collect::<Vec<_>>(), vec![None, Some("delete from t where id = 4")]);
-        a.after_batch(started, None, true, vec![None, Some(Ok("UNDO4".into()))]).unwrap();
-        assert_eq!(a.list(None, "id = 4", 10).iter().map(|e| (e.rows, e.undo.as_deref())).collect::<Vec<_>>(), vec![(Some(1), Some("UNDO4"))]);
+        a.after_batch(started, None, true, vec![None, Some(Ok("UNDO4".into()))], None).unwrap();
+        assert_eq!(a.list(None, "id = 4", 10).iter().map(|e| (e.rows, e.undo.as_deref(), e.in_tx)).collect::<Vec<_>>(), vec![(Some(1), Some("UNDO4"), false)]);
+        // In a console's transaction (submit_edits): not committed yet, and its Roll back is logged
+        let started = a.before_batch("c1", "[PROD] kr", DbKind::Postgres, &["update t set a = 5 where id = 5".into()]).unwrap();
+        a.after_batch(started, None, true, vec![None], Some("tab5")).unwrap();
+        assert!(a.list(None, "id = 5", 10)[0].in_tx);
+        a.tx_closed("c1", "[PROD] kr", "tab5", "ROLLBACK").unwrap();
+        assert_eq!(a.list(None, "", 1)[0].sql, "ROLLBACK");
+        // A failed one was rolled back to its savepoint: nothing pending, no Roll back to log
+        let started = a.before_batch("c1", "[PROD] kr", DbKind::Postgres, &["update t set a = 6 where id = 6".into()]).unwrap();
+        a.after_batch(started, Some("boom".into()), true, vec![None], Some("tab6")).unwrap();
+        let e6 = a.list(None, "id = 6", 10).remove(0);
+        assert!(!e6.in_tx && e6.error.as_deref() == Some("Rolled back: boom"), "{e6:?}");
+        a.tx_closed("c1", "[PROD] kr", "tab6", "ROLLBACK").unwrap();
+        assert_eq!(a.list(None, "", 1)[0].sql, "update t set a = 6 where id = 6");
     }
 
     /// Production: a change that can't be logged is not run (refused before connecting); reads still run

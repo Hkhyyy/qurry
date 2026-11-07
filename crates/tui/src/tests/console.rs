@@ -1,6 +1,7 @@
 use crate::app::{Popup, TabKind};
 use crate::testkit::Harness;
 use qurry_core::db::{ColumnInfo, QueryResult};
+use serde_json::Value;
 
 /// Stands in for the database: SELECT returns two rows, "boom" fails, anything else changes 3 rows
 fn fake(q: &str) -> Result<QueryResult, String> {
@@ -23,6 +24,14 @@ fn fake(q: &str) -> Result<QueryResult, String> {
 
 fn console(h: &Harness) -> &crate::app::Console {
     match &h.app.tabs[h.app.active].kind {
+        TabKind::Console(c) => c,
+        _ => panic!("active tab is not a console"),
+    }
+}
+
+fn console_mut(h: &mut Harness) -> &mut crate::app::Console {
+    let i = h.app.active;
+    match &mut h.app.tabs[i].kind {
         TabKind::Console(c) => c,
         _ => panic!("active tab is not a console"),
     }
@@ -368,6 +377,9 @@ async fn output_shows_the_last_wrapped_line() {
 fn users(q: &str) -> Result<QueryResult, String> {
     use qurry_core::editable::{EditTarget, Editable};
     let col = |n: &str| ColumnInfo { name: n.into(), type_name: "text".into() };
+    if q.contains("voc") {
+        return voc_join(q);
+    }
     let editable = if q.contains("join") {
         Some(Editable::ReadOnly("Read-only: the columns come from more than one table.".into()))
     } else if q.contains("users") {
@@ -376,6 +388,20 @@ fn users(q: &str) -> Result<QueryResult, String> {
         None
     };
     Ok(QueryResult { columns: vec![col("id"), col("name")], rows: vec![vec!["1".into(), "kim".into()], vec!["2".into(), "lee".into()]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable })
+}
+
+/// #102's join, as the backend reports it: voc (idx, status) left join users (idx, role, and a computed column); voc 2 has no user
+fn voc_join(_: &str) -> Result<QueryResult, String> {
+    use qurry_core::editable::{ColumnEdit, Editable, JoinEdit, JoinTable};
+    let col = |n: &str| ColumnInfo { name: n.into(), type_name: "text".into() };
+    let jt = |s: &str, t: &str, at: usize| JoinTable { schema: s.into(), table: t.into(), pk: vec!["idx".into()], pk_at: vec![at] };
+    let to = |t: usize, c: &str| ColumnEdit::To { table: t, column: c.into() };
+    let j = JoinEdit {
+        tables: vec![jt("crm", "voc", 0), jt("public", "users", 2)],
+        columns: vec![to(0, "idx"), to(0, "status"), to(1, "idx"), to(1, "role"), ColumnEdit::ReadOnly { read_only: qurry_shared::errors::edit_computed("shout") }],
+    };
+    let rows = vec![vec!["1".into(), "open".into(), "10".into(), "member".into(), "MEMBER".into()], vec!["2".into(), "new".into(), Value::Null, Value::Null, Value::Null]];
+    Ok(QueryResult { columns: ["idx", "status", "idx", "role", "shout"].map(col).to_vec(), rows, rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: Some(Editable::Join(j)) })
 }
 
 /// A Production console whose result is shown, with the grid focused
@@ -400,10 +426,12 @@ async fn prod_console(sql: &str) -> Harness {
 }
 
 /// A console result from one table with its key edits as a table tab does: ↩ edits a cell, Submit builds the SQL with the table's
-/// column names (the result has an alias) and asks first on Production
+/// column names (the result has an alias) and asks first on Production. Production consoles start in Manual (#106): the edits
+/// run in its transaction, and the question says they stay pending
 #[tokio::test]
 async fn console_result_edits_and_submits_like_a_table() {
     let mut h = prod_console("select id, user_name as name from users").await;
+    assert!(console(&h).tx_manual, "Production starts in Manual");
     assert!(console(&h).grid.is_some(), "{}", h.app.status);
     h.key("Down");
     h.key("Right");
@@ -418,11 +446,91 @@ async fn console_result_edits_and_submits_like_a_table() {
     assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 2);
     h.key("Ctrl+S");
     let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no Production confirm: {}", h.app.status) };
-    assert_eq!(text, "Production data source \"PROD\" — save 2 change(s)?\n\n  UPDATE public.users SET user_name = 'LEE' WHERE id = '2'\n  INSERT INTO public.users DEFAULT VALUES");
+    let sql = "\n\n  UPDATE public.users SET user_name = 'LEE' WHERE id = '2'\n  INSERT INTO public.users DEFAULT VALUES";
+    assert_eq!(text, &format!("Production data source \"PROD\" — run 2 change(s) in this console's transaction? They stay pending until you Commit or Roll back.{sql}"));
+    // In Auto mode (the option off, or Tx: Auto) they are saved at once
+    h.app.popup = None;
+    if let TabKind::Console(c) = &mut h.app.tabs[h.app.active].kind {
+        c.tx_manual = false;
+    }
+    h.key("Ctrl+S");
+    let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no Production confirm: {}", h.app.status) };
+    assert_eq!(text, &format!("Production data source \"PROD\" — save 2 change(s)?{sql}"));
+}
+
+/// A join result (#102) edits per table: each cell by its table's key, the outer side where no row matched and a computed column
+/// read-only with the reason, no rows added or deleted; Submit builds one UPDATE per row and table
+#[tokio::test]
+async fn console_join_result_edits_per_table() {
+    use qurry_shared::errors as e;
+    let mut h = prod_console("select vo.idx, vo.status, pu.idx, pu.role, upper(pu.role) as shout from crm.voc vo left join users pu on pu.idx = vo.user_idx").await;
+    let edit = |h: &mut Harness, row: usize, col: usize, v: &str| {
+        let g = console_mut(h).grid.as_mut().unwrap();
+        (g.row, g.col) = (row, col);
+        h.key("Enter");
+        if h.app.popup.is_some() {
+            h.type_str(v);
+            h.key("Enter");
+        }
+    };
+    edit(&mut h, 0, 1, "-done");
+    edit(&mut h, 0, 3, "-x");
+    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 2);
+    // users' side of voc 2: no row matched
+    edit(&mut h, 1, 3, "x");
+    assert_eq!(h.app.status, e::edit_no_row("public.users"));
+    edit(&mut h, 0, 4, "x");
+    assert_eq!(h.app.status, e::edit_computed("shout"));
+    h.key("a");
+    assert_eq!(h.app.status, e::EDIT_JOIN_ROWS);
+    h.key("d");
+    assert_eq!(h.app.status, e::EDIT_JOIN_ROWS);
+    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 2);
+    // A paste reaching a read-only cell writes nothing
+    let g = console_mut(&mut h).grid.as_mut().unwrap();
+    (g.row, g.col) = (0, 3);
+    h.app.paste_grid("a\tb");
+    assert_eq!(h.app.status, e::edit_computed("shout"));
+    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 2);
+    h.key("Ctrl+S");
+    let Some(Popup::Confirm { text, .. }) = &h.app.popup else { panic!("no Production confirm: {}", h.app.status) };
+    assert!(text.ends_with("\n\n  UPDATE crm.voc SET status = 'open-done' WHERE idx = '1'\n  UPDATE public.users SET role = 'member-x' WHERE idx = '10'"), "{text}");
+}
+
+/// A new console of a Production data source starts in Manual and says so once, with where to turn it off (#106); with the
+/// option off it starts in the source's Transaction control mode
+#[tokio::test]
+async fn production_console_starts_in_manual_and_says_so_once() {
+    let mut h = Harness::new().await;
+    let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+        "id": "p", "name": "PROD", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "d"
+    }))
+    .unwrap();
+    cfg.options.confirm_changes = true;
+    h.app.state.store.save(&cfg).unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    let told = |h: &Harness| console(h).output.iter().any(|(_, l)| l == qurry_shared::errors::PRODUCTION_MANUAL);
+    h.app.open_console("p", None);
+    assert!(console(&h).tx_manual && told(&h));
+    assert_eq!(h.app.status, qurry_shared::errors::PRODUCTION_MANUAL);
+    h.app.open_console("p", None);
+    assert!(console(&h).tx_manual && !told(&h), "once");
+    cfg.options.production_manual = Some(false);
+    h.app.state.store.save(&cfg).unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    h.app.open_console("p", None);
+    assert!(!console(&h).tx_manual);
+    // The reminder about a transaction left open goes into that console and the status line
+    let session = console(&h).session.clone();
+    h.app.tx_reminded(vec![(session, "open for 5 min".into())]);
+    assert_eq!(console(&h).output.last().map(|l| l.1.as_str()), Some("open for 5 min"));
+    assert_eq!(h.app.status, "open for 5 min");
 }
 
 /// Edit keys on a console result that can't be edited say why in the status line: the backend's reason, the generic text when it
-/// didn't check, the transaction rule in Manual mode
+/// didn't check. In Manual mode it can be edited (Submit runs in the transaction)
 #[tokio::test]
 async fn console_result_read_only_says_why() {
     let mut h = prod_console("select u.id, u.name from users u join orders o on o.uid = u.id").await;
@@ -437,8 +545,7 @@ async fn console_result_read_only_says_why() {
         c.tx_manual = true;
     }
     h.key("a");
-    assert_eq!(h.app.status, qurry_shared::errors::CONSOLE_IN_TX);
-    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 0);
+    assert_eq!(console(&h).grid.as_ref().unwrap().pending(), 1);
 }
 
 /// Running again with pending edits asks first: no keeps them, yes drops them and runs

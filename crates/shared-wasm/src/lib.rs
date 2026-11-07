@@ -98,6 +98,24 @@ pub fn shown_cols(first: usize, last: usize, total: usize) -> Option<String> {
     qurry_shared::format::shown_cols(first, last, total)
 }
 
+/// A join result's cell on the outer side where no row of `table` matched: why it is read-only (the TUI's words)
+#[wasm_bindgen(js_name = editNoRow)]
+pub fn edit_no_row(table: &str) -> String {
+    qurry_shared::errors::edit_no_row(table)
+}
+
+/// Why Add / Delete / Clone Row are greyed out on a join result (the TUI's words)
+#[wasm_bindgen(js_name = editJoinRows)]
+pub fn edit_join_rows() -> String {
+    qurry_shared::errors::EDIT_JOIN_ROWS.into()
+}
+
+/// What a Production console that starts in Manual mode says the first time (the TUI's words)
+#[wasm_bindgen(js_name = productionManual)]
+pub fn production_manual() -> String {
+    qurry_shared::errors::PRODUCTION_MANUAL.into()
+}
+
 /// Title of the notice for a failed Commit: "Commit outcome unknown" when the connection was lost during it, else "Commit failed"
 #[wasm_bindgen(js_name = commitFailedTitle)]
 pub fn commit_failed_title(msg: &str) -> String {

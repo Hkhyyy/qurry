@@ -18,6 +18,8 @@ pub const PENDING_TX: &str = "There are uncommitted changes — commit or roll b
 /// savepoint of the one that is open
 pub const EXPLAIN_BEGIN: [&str; 2] = ["BEGIN", "ROLLBACK"];
 pub const EXPLAIN_SAVEPOINT: [&str; 2] = ["SAVEPOINT qurry_explain", "ROLLBACK TO SAVEPOINT qurry_explain"];
+/// A result grid's edits in the console's transaction (Session::submit): set, undo when one fails, release
+const SUBMIT_SAVEPOINT: [&str; 3] = ["SAVEPOINT qurry_submit", "ROLLBACK TO SAVEPOINT qurry_submit", "RELEASE SAVEPOINT qurry_submit"];
 /// A COMMIT of a PostgreSQL transaction an earlier error aborted: the server rolled it back
 const ABORTED_COMMIT: &str =
     "Not committed: an earlier statement in this transaction failed, so PostgreSQL rolled back the whole transaction and none of its changes were saved. Run the changes again (without the failing statement).";
@@ -220,7 +222,13 @@ impl PgSession {
                 self.in_tx = false;
                 Err(AppError::Msg(ABORTED_COMMIT.into()))
             }
-            _ => Ok(()),
+            // The session is gone (the server ended it after it sat idle in the transaction, a lost connection): the COMMIT isn't
+            // sent, and the error says why (app::recover)
+            Err(e) => {
+                let e = AppError::Db(e);
+                if crate::app::is_conn_lost(&e) { Err(e) } else { Ok(()) }
+            }
+            Ok(_) => Ok(()),
         }
     }
 
@@ -265,7 +273,12 @@ impl PgSession {
                     r.elapsed_ms = start.elapsed().as_millis() as u64;
                     return Ok(r);
                 }
-                Err(_) => {
+                Err(e) => {
+                    // The session is gone (the server ended it, idle in the transaction): its error says why, the retry below wouldn't
+                    let e = AppError::Db(e);
+                    if crate::app::is_conn_lost(&e) {
+                        return Err(e);
+                    }
                     // Statements DECLARE cannot take (e.g. WITH ... DELETE) → run normally. A real error will surface again below.
                     self.rollback().await;
                 }
@@ -502,6 +515,46 @@ impl Session {
             Session::Pg(s) => s.run_with_snapshot(snap, sql, limit).await,
             Session::My(s) => s.run_with_snapshot(snap, sql, limit).await,
             _ => (Err(AppError::Msg("Undo is kept for PostgreSQL and MySQL only".into())), self.run(sql, limit).await),
+        }
+    }
+    /// A result grid's edits in the console's transaction (Manual mode, or BEGIN in Auto: #106): under a savepoint, so that when
+    /// one fails or doesn't change exactly one row (check_exact_one) only they are undone, and the transaction goes on as it was.
+    /// They stay pending until Commit / Roll back. snaps = each statement's undo snapshot (run_with_snapshot).
+    /// → rows changed, and each snapshot with the rows its statement changed
+    pub(crate) async fn submit(&mut self, statements: &[String], snaps: &[Option<&str>]) -> (AppResult<u64>, crate::backend::Snapshots) {
+        if let Err(e) = self.run(SUBMIT_SAVEPOINT[0], 1).await {
+            return (Err(e), vec![]);
+        }
+        let (mut n, mut shots) = (0, Vec::new());
+        for (i, st) in statements.iter().enumerate() {
+            let (shot, r) = match snaps.get(i).copied().flatten() {
+                Some(q) => {
+                    let (shot, r) = self.run_with_snapshot(q, st, 1).await;
+                    (Some(shot), r)
+                }
+                None => (None, self.run(st, 1).await),
+            };
+            // A lost connection keeps its error as it is: app::recover reads it
+            let r = r.map_err(|e| if crate::app::is_conn_lost(&e) { e } else { AppError::Msg(format!("{e}\n→ {st}")) });
+            match r.and_then(|q| check_exact_one(st, q.rows_affected, true).map(|_| q.rows_affected)) {
+                Ok(k) => {
+                    n += k;
+                    shots.push(shot.map(|s| (s, k)));
+                }
+                Err(e) => {
+                    // Undo these edits only; unless the transaction ended with the failure (a deadlock, a lost connection)
+                    if self.in_tx() && !crate::app::is_conn_lost(&e) {
+                        for back in &SUBMIT_SAVEPOINT[1..] {
+                            let _ = self.run(back, 1).await;
+                        }
+                    }
+                    return (Err(e), vec![]);
+                }
+            }
+        }
+        match self.run(SUBMIT_SAVEPOINT[2], 1).await {
+            Ok(_) => (Ok(n), shots),
+            Err(e) => (Err(e), vec![]),
         }
     }
     pub async fn fetch(&mut self, limit: usize) -> AppResult<QueryResult> {

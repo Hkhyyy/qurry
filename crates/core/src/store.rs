@@ -121,6 +121,10 @@ pub struct ConnOptions {
     /// Production: statements that change data show the affected row count and ask for confirmation
     #[serde(default)]
     pub confirm_changes: bool,
+    /// Production: consoles start in Manual transaction mode (#106). None = on: sources saved before this, and by older apps that
+    /// drop the field, get it too
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub production_manual: Option<bool>,
     /// A remote MySQL with no SSL setting may connect in plain text if it can't do TLS (old servers · trusted networks).
     /// This and mcp are also saved in connection-access.json, which wins over connections.json (Store::list)
     #[serde(default)]
@@ -131,6 +135,19 @@ pub struct ConnOptions {
     /// Oracle: Instant Client folder (if empty, ORACLE_CLIENT_LIB_DIR · system default)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oracle_client: Option<String>,
+}
+
+impl ConnOptions {
+    /// Whether a new console starts in Manual transaction mode: the source's Transaction control, or Production with
+    /// production_manual on (the default). The GUI has the same rule (src/features/tabs/ops.ts startsManual)
+    pub fn starts_manual(&self) -> bool {
+        self.tx_manual || self.production_starts_manual()
+    }
+
+    /// Manual only because it is Production (#106): the console says so the first time (errors::PRODUCTION_MANUAL)
+    pub fn production_starts_manual(&self) -> bool {
+        !self.tx_manual && self.confirm_changes && self.production_manual != Some(false)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
