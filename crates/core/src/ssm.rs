@@ -956,11 +956,7 @@ pub(crate) mod tests {
     #[ignore]
     async fn ssm_tunnel_end_to_end() {
         let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
-        let fake = tempfile::tempdir().unwrap();
-        fake_aws(fake.path(), "ok");
-        // Only this test changes PATH (run it on its own): the fake comes first, like an aws in /opt/homebrew/bin would
-        let path = std::env::join_paths(std::iter::once(fake.path().to_path_buf()).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()))).unwrap();
-        unsafe { std::env::set_var("PATH", path) };
+        let fake = fake_aws_on_path();
         let dir = tempfile::tempdir().unwrap();
         let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
         let mut c: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "ssm", "kind": "postgres", "host": &pg.host, "port": pg.port, "user": &pg.user, "database": &pg.database })).unwrap();
@@ -1023,10 +1019,7 @@ pub(crate) mod tests {
     #[ignore]
     async fn dead_ssm_tunnel_is_opened_again_once() {
         let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
-        let fake = tempfile::tempdir().unwrap();
-        fake_aws(fake.path(), "ok");
-        let path = std::env::join_paths(std::iter::once(fake.path().to_path_buf()).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()))).unwrap();
-        unsafe { std::env::set_var("PATH", path) };
+        let fake = fake_aws_on_path();
         let dir = tempfile::tempdir().unwrap();
         let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
         let source = |host: &str, port: u16| {
@@ -1160,10 +1153,7 @@ pub(crate) mod tests {
     async fn dead_ssm_console_recovers_or_says_why() {
         use crate::app::tests::age_session;
         let pg = crate::testenv::pg().expect("QURRY_TEST_PG").cfg;
-        let fake = tempfile::tempdir().unwrap();
-        fake_aws(fake.path(), "ok");
-        let path = std::env::join_paths(std::iter::once(fake.path().to_path_buf()).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()))).unwrap();
-        unsafe { std::env::set_var("PATH", path) };
+        let fake = fake_aws_on_path();
         let dir = tempfile::tempdir().unwrap();
         let st = crate::open_state(Some(dir.path().to_path_buf())).unwrap();
         let mut c: crate::store::ConnectionConfig = serde_json::from_value(serde_json::json!({ "name": "ssm-console", "kind": "postgres", "host": &pg.host, "port": pg.port, "user": &pg.user, "database": &pg.database })).unwrap();
@@ -1241,13 +1231,26 @@ pub(crate) mod tests {
         gone(fake.path()).await;
     }
 
-    /// A fake aws first on PATH (only the tests that call this change PATH: run each on its own)
-    fn fake_aws_on_path() -> tempfile::TempDir {
-        let fake = tempfile::tempdir().unwrap();
-        fake_aws(fake.path(), "ok");
-        let path = std::env::join_paths(std::iter::once(fake.path().to_path_buf()).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()))).unwrap();
+    /// A fake aws first on PATH, like an aws in /opt/homebrew/bin would be. PATH is process-wide, so the tests that change it
+    /// hold AWS_PATH until they end: run in parallel (as CI does), they would otherwise count each other's aws starts
+    struct FakeAws {
+        dir: tempfile::TempDir,
+        _path: std::sync::MutexGuard<'static, ()>,
+    }
+    impl std::ops::Deref for FakeAws {
+        type Target = tempfile::TempDir;
+        fn deref(&self) -> &tempfile::TempDir {
+            &self.dir
+        }
+    }
+    static AWS_PATH: Mutex<()> = Mutex::new(());
+    fn fake_aws_on_path() -> FakeAws {
+        let lock = AWS_PATH.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        fake_aws(dir.path(), "ok");
+        let path = std::env::join_paths(std::iter::once(dir.path().to_path_buf()).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()))).unwrap();
         unsafe { std::env::set_var("PATH", path) };
-        fake
+        FakeAws { dir, _path: lock }
     }
 
     /// A tab that finds the tunnel dead closes it with every session through it. Another console that had a transaction open

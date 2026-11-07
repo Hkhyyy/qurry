@@ -138,6 +138,7 @@ jobs:
           USER: postgres
           QURRY_TEST_PG: localhost:5432:postgres:postgres
           QURRY_TEST_MY: localhost:13306:root:dbtool:shop
+          QURRY_TEST_REDIS: localhost:16379
           QURRY_TEST_CH: localhost:18123:qurry:pw:default
           QURRY_TEST_MONGO: localhost:17017:qurry:pw:qurrytest
           QURRY_TEST_QDRANT: "localhost:16333:::qdrant"
