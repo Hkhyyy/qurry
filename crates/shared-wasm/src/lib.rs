@@ -533,10 +533,23 @@ pub fn redis_help(line: &str) -> Option<String> {
     qurry_shared::redis_cmd::help(line)
 }
 
-/// Redis Terminal: how to show the line's reply ("pairs", "scored", "members", "list" or "plain")
-#[wasm_bindgen(js_name = redisReplyShape)]
-pub fn redis_reply_shape(line: &str) -> Result<JsValue, JsError> {
-    to(&qurry_shared::redis_cmd::reply_shape(line))
+/// Redis database picker: "db0 · 1,500 keys" (the TUI's words)
+#[wasm_bindgen(js_name = redisDbLabel)]
+pub fn redis_db_label(name: &str, keys: f64) -> String {
+    qurry_shared::redis_cmd::db_label(name, keys as i64)
+}
+
+/// Redis key list: a key's TTL ("1d 4h"), "—" without expiry (the TUI's words)
+#[wasm_bindgen(js_name = redisTtl)]
+pub fn redis_ttl(ms: f64) -> String {
+    qurry_shared::redis_cmd::ttl_label(ms as i64)
+}
+
+/// Redis Terminal: the reply of the line as a table ({heads, rows}: a hash as field / value …), or undefined to print it as redis-cli does
+#[wasm_bindgen(js_name = redisReplyTable)]
+pub fn redis_reply_table(line: &str, reply: JsValue) -> Result<JsValue, JsError> {
+    let reply: Value = serde_wasm_bindgen::from_value(reply)?;
+    to(&qurry_shared::redis_cmd::reply_table(line, &reply))
 }
 
 /// Table column for each file column ("" = skip); `table` null is a new table (the file's names)

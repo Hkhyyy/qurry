@@ -4,8 +4,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { api, history, QueryResult, redis, RedisDbInfo, RedisKeyDetail, RedisKeyRow, RedisOverview, RedisReply } from "../lib/api";
 import { keyTree, parentPaths, visibleRows } from "../lib/keyTree";
-import { replyTable, type ReplyTable } from "../lib/redisTerm";
-import { sharedOr, useSharedReady, type RedisAssist, type RedisReplyShape } from "../lib/shared";
+import { sharedOr, useSharedReady, type RedisAssist, type RedisReplyTable } from "../lib/shared";
 import { isRead } from "../lib/stmtKind";
 import { FolderIcon } from "../ui/icons";
 import { Badge, Button, EmptyState, FormGrid, IconButton, Modal, Notice, Select, Spacer, Table, Tabs, Td, Text, TextArea, TextInput, Th, ToolButton, Toolbar, TreeRow } from "../ui";
@@ -32,14 +31,14 @@ interface Props {
 }
 
 /** Why the Config tab is greyed out (its tooltip), and what Config says if CONFIG fails anyway */
-export const CONFIG_REFUSED =
+const CONFIG_REFUSED =
   "This server doesn't allow CONFIG — managed Redis services (AWS ElastiCache / MemoryDB, Azure Cache, GCP Memorystore, Upstash …) disable or rename it. Its settings are in the provider's console (e.g. the ElastiCache parameter group). Server details are in Info.";
 
-/** "db0 · 500 keys" */
-export const dbLabel = (d: RedisDbInfo) => `${d.name} · ${d.keys.toLocaleString("en-US")} key${d.keys === 1 ? "" : "s"}`;
+/** "db0 · 500 keys" (qurry_shared::redis_cmd::db_label, as the TUI); the name alone until the module loads */
+const dbLabel = (d: RedisDbInfo) => sharedOr(d.name, (s) => s.redisDbLabel(d.name, d.keys));
 
 const TYPES = ["string", "hash", "list", "set", "zset", "stream"];
-export const TYPE_COLOR: Record<string, string> = {
+const TYPE_COLOR: Record<string, string> = {
   string: "#5f9ea0",
   hash: "#b07cc6",
   list: "#6a9fd8",
@@ -48,7 +47,7 @@ export const TYPE_COLOR: Record<string, string> = {
   stream: "#5aa469",
 };
 
-export function TypeBadge({ type }: { type: string }) {
+function TypeBadge({ type }: { type: string }) {
   return (
     <Badge color={TYPE_COLOR[type] ?? "#777"} className="rd-badge">
       {type === "zset" ? "ZSET" : type.toUpperCase()}
@@ -56,15 +55,8 @@ export function TypeBadge({ type }: { type: string }) {
   );
 }
 
-/** A key's TTL as the key list shows it ("1d 4h"), — without expiry */
-export const fmtTtl = (ms: number) => {
-  if (ms < 0) return "—";
-  const s = Math.round(ms / 1000);
-  if (s < 60) return `${s}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
-  return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
-};
+/** A key's TTL as the key list shows it ("1d 4h"), — without expiry (qurry_shared::redis_cmd::ttl_label, as the TUI) */
+const fmtTtl = (ms: number) => sharedOr("", (s) => s.redisTtl(ms));
 const fmtBytes = (n: number | null) => (n == null ? "" : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 
 /** Same output as redis-cli */
@@ -739,7 +731,7 @@ function ValueEditor({ text, fmt, setFmt, pretty, readOnly, onSave, label, big }
 
 // ───────── Terminal (redis-cli) ─────────
 
-type TermLine = { kind: "in" | "out" | "err" | "note" | "nil"; text: string } | { kind: "table"; table: ReplyTable };
+type TermLine = { kind: "in" | "out" | "err" | "note" | "nil"; text: string } | { kind: "table"; table: RedisReplyTable };
 type Choice = { insert: string; label: string; args?: string; summary?: string; write?: boolean };
 
 /** How many key names the completion asks a bounded SCAN for */
@@ -847,7 +839,7 @@ function Terminal({ target, connId, connName, database, readOnly, production, pr
     push(echo);
     try {
       const r = await redis.execLine(target, line);
-      const table = replyTable(sharedOr<RedisReplyShape>("plain", (s) => s.redisReplyShape(line)), r);
+      const table = sharedOr<RedisReplyTable | undefined>(undefined, (s) => s.redisReplyTable(line, r));
       push(table ? { kind: "table", table } : r === null ? { kind: "nil", text: "(nil)" } : { kind: "out", text: formatReply(r) });
       if (write) onChanged();
     } catch (e) {

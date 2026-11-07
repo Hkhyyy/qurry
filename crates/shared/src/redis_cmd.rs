@@ -372,14 +372,16 @@ pub fn assist(before: &str) -> Assist {
     let pick = |c: &'static CommandDoc, insert: &str| Pick { insert: insert.to_string(), doc: *c, read: c.read() };
     let up = prefix.to_uppercase();
     let mut out = Assist { prefix: prefix.to_string(), commands: vec![], key: false, hint: String::new() };
+    // A word typed out in full that nothing else extends lists nothing (Enter then runs the line instead of picking it again)
+    let unless_done = |v: Vec<Pick>| if v.len() == 1 && v[0].insert == up { vec![] } else { v };
     if at == 0 {
-        out.commands = COMMANDS.iter().filter(|c| !up.is_empty() && c.name.starts_with(&up)).map(|c| pick(c, c.name)).collect();
+        out.commands = unless_done(COMMANDS.iter().filter(|c| !up.is_empty() && c.name.starts_with(&up)).map(|c| pick(c, c.name)).collect());
         return out;
     }
     // The second word of a container command (CONFIG, CLIENT …) is its subcommand
     let head = words[0].to_uppercase();
     if at == 1 && COMMANDS.iter().any(|c| c.name.split_once(' ').is_some_and(|(h, _)| h == head)) {
-        out.commands = COMMANDS.iter().filter_map(|c| c.name.split_once(' ').filter(|(h, s)| *h == head && s.starts_with(&up)).map(|(_, s)| pick(c, s))).collect();
+        out.commands = unless_done(COMMANDS.iter().filter_map(|c| c.name.split_once(' ').filter(|(h, s)| *h == head && s.starts_with(&up)).map(|(_, s)| pick(c, s))).collect());
         return out;
     }
     let Some((c, n)) = command_doc(&words) else { return out };
@@ -414,10 +416,39 @@ pub fn help(line: &str) -> Option<String> {
     })
 }
 
+/// The database picker's line: "db0 · 1,500 keys"
+pub fn db_label(name: &str, keys: i64) -> String {
+    let digits = keys.unsigned_abs().to_string();
+    let mut grouped = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(c);
+    }
+    format!("{name} · {}{grouped} key{}", if keys < 0 { "-" } else { "" }, if keys == 1 { "" } else { "s" })
+}
+
+/// A key's TTL as the key list shows it ("45s", "3m 20s", "2h 5m", "1d 4h"), "—" for a key without expiry (PTTL < 0)
+pub fn ttl_label(ms: i64) -> String {
+    if ms < 0 {
+        return "—".into();
+    }
+    let s = (ms + 500) / 1000;
+    if s < 60 {
+        format!("{s}s")
+    } else if s < 3600 {
+        format!("{}m {}s", s / 60, s % 60)
+    } else if s < 86400 {
+        format!("{}h {}m", s / 3600, s % 3600 / 60)
+    } else {
+        format!("{}d {}h", s / 86400, s % 86400 / 3600)
+    }
+}
+
 /// How the Terminal shows a command's array reply, beyond redis-cli's numbered lines
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ReplyShape {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplyShape {
     /// As redis-cli prints it
     Plain,
     /// field, value, field, value … (HGETALL, CONFIG GET, HRANDFIELD … WITHVALUES): a field / value table
@@ -431,7 +462,7 @@ pub enum ReplyShape {
 }
 
 /// For the line the Terminal ran (read as it ran: parse_command)
-pub fn reply_shape(line: &str) -> ReplyShape {
+fn reply_shape(line: &str) -> ReplyShape {
     let args: Vec<String> = parse_command(line).unwrap_or_default().iter().map(|a| String::from_utf8_lossy(a).into_owned()).collect();
     let cmd = args.first().map(|c| c.to_uppercase()).unwrap_or_default();
     let has = |w: &str| args.iter().skip(1).any(|a| a.eq_ignore_ascii_case(w));
@@ -445,6 +476,38 @@ pub fn reply_shape(line: &str) -> ReplyShape {
         | "ZRANGEBYLEX" | "ZREVRANGEBYLEX" | "ZRANDMEMBER" => ReplyShape::Members,
         "LRANGE" => ReplyShape::List,
         _ => ReplyShape::Plain,
+    }
+}
+
+/// A reply shown by type: a hash as field / value, a sorted set with scores as member / score, set members and list elements
+/// (numbered from 0) as rows
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ReplyTable {
+    pub heads: Vec<&'static str>,
+    pub rows: Vec<Vec<String>>,
+}
+
+/// The table for the reply (as the backend sends it: JSON, nil as null, a status as {"status"}) of the line the Terminal ran, or
+/// None to print it as redis-cli does (not an array, empty, nested arrays, an odd pair list)
+pub fn reply_table(line: &str, reply: &serde_json::Value) -> Option<ReplyTable> {
+    use serde_json::Value;
+    let a = reply.as_array().filter(|a| !a.is_empty() && !a.iter().any(Value::is_array))?;
+    let xs: Vec<String> = a
+        .iter()
+        .map(|x| match x {
+            Value::Null => "(nil)".into(),
+            Value::String(s) => s.clone(),
+            Value::Object(o) => o.get("status").and_then(Value::as_str).unwrap_or_default().into(),
+            other => other.to_string(),
+        })
+        .collect();
+    let pairs = |heads: [&'static str; 2]| xs.len().is_multiple_of(2).then(|| ReplyTable { heads: heads.into(), rows: xs.chunks(2).map(|c| c.to_vec()).collect() });
+    match reply_shape(line) {
+        ReplyShape::Pairs => pairs(["field", "value"]),
+        ReplyShape::Scored => pairs(["member", "score"]),
+        ReplyShape::Members => Some(ReplyTable { heads: vec!["member"], rows: xs.iter().map(|x| vec![x.clone()]).collect() }),
+        ReplyShape::List => Some(ReplyTable { heads: vec!["index", "value"], rows: xs.iter().enumerate().map(|(i, x)| vec![i.to_string(), x.clone()]).collect() }),
+        ReplyShape::Plain => None,
     }
 }
 
@@ -494,6 +557,8 @@ mod tests {
         assert_eq!(a.commands.iter().map(|p| p.insert.as_str()).collect::<Vec<_>>(), ["HGET", "HGETALL"]);
         assert_eq!((a.commands[0].doc.args, a.commands[0].read), ("key field", true));
         assert!(assist("").commands.is_empty(), "nothing typed: nothing listed");
+        assert!(assist("flushdb").commands.is_empty() && assist("CONFIG GET").commands.is_empty(), "typed out, nothing else extends it");
+        assert_eq!(assist("HGET").commands.len(), 2, "HGETALL extends HGET");
         // A key argument (completed from SCAN by the caller) and the arguments still to type
         let a = assist("hget prod:u");
         assert!(a.key && a.prefix == "prod:u" && a.hint == "key field" && a.commands.is_empty());
@@ -521,6 +586,24 @@ mod tests {
     }
 
     #[test]
+    fn db_labels() {
+        assert_eq!(db_label("db0", 500), "db0 · 500 keys");
+        assert_eq!(db_label("db1", 1), "db1 · 1 key");
+        assert_eq!(db_label("db2", 0), "db2 · 0 keys");
+        assert_eq!(db_label("db3", 1_234_567), "db3 · 1,234,567 keys");
+    }
+
+    #[test]
+    fn ttl_labels() {
+        assert_eq!(ttl_label(-1), "—");
+        assert_eq!(ttl_label(-2), "—");
+        assert_eq!(ttl_label(45_000), "45s");
+        assert_eq!(ttl_label(200_000), "3m 20s");
+        assert_eq!(ttl_label(7_500_000), "2h 5m");
+        assert_eq!(ttl_label(101_000_000), "1d 4h");
+    }
+
+    #[test]
     fn reply_shapes() {
         let s = reply_shape;
         assert_eq!(s("\"HGETALL\" h"), ReplyShape::Pairs);
@@ -531,5 +614,22 @@ mod tests {
         assert_eq!(s("SMEMBERS s"), ReplyShape::Members);
         assert_eq!(s("LRANGE l 0 -1"), ReplyShape::List);
         assert_eq!(s("MGET a b"), ReplyShape::Plain);
+    }
+
+    #[test]
+    fn reply_tables() {
+        use serde_json::json;
+        let t = |line: &str, v: serde_json::Value| reply_table(line, &v).map(|t| (t.heads, t.rows));
+        let rows = |r: &[&[&str]]| r.iter().map(|x| x.iter().map(|s| s.to_string()).collect()).collect::<Vec<Vec<String>>>();
+        assert_eq!(t("HGETALL h", json!(["name", "kim", "tier", "gold"])), Some((vec!["field", "value"], rows(&[&["name", "kim"], &["tier", "gold"]]))));
+        assert_eq!(t("ZRANGE z 0 -1 WITHSCORES", json!(["alice", "10", "bob", "20"])), Some((vec!["member", "score"], rows(&[&["alice", "10"], &["bob", "20"]]))));
+        assert_eq!(t("LRANGE l 0 -1", json!(["a", null])), Some((vec!["index", "value"], rows(&[&["0", "a"], &["1", "(nil)"]]))));
+        assert_eq!(t("SMEMBERS s", json!(["x", "y"])), Some((vec!["member"], rows(&[&["x"], &["y"]]))));
+        // Printed as redis-cli does
+        assert_eq!(t("MGET a", json!(["a"])), None);
+        assert_eq!(t("HGETALL h", json!(["odd"])), None);
+        assert_eq!(t("SMEMBERS s", json!([])), None);
+        assert_eq!(t("LRANGE l 0 -1", json!([["nested"]])), None);
+        assert_eq!(t("HGETALL h", json!({ "status": "OK" })), None);
     }
 }

@@ -4,7 +4,7 @@
 import { useSyncExternalStore } from "react";
 import init, * as wasm from "../wasm/pkg/qurry_shared_wasm";
 import wasmUrl from "../wasm/pkg/qurry_shared_wasm_bg.wasm?url";
-import type { Cell, CompletionTable, DbKind, QueryResult } from "./api";
+import type { Cell, CompletionTable, DbKind, QueryResult, RedisReply } from "./api";
 import type { ExecPlan, ExecSettings, Stmt } from "./execPlan";
 import type { Extractor } from "./extract";
 import type { Segment } from "./sqlSplit";
@@ -135,7 +135,11 @@ export interface RedisAssist {
   /** The arguments from the current one on */
   hint: string;
 }
-export type RedisReplyShape = "plain" | "pairs" | "scored" | "members" | "list";
+/** A Redis Terminal reply shown by type (qurry_shared::redis_cmd::ReplyTable) */
+export interface RedisReplyTable {
+  heads: string[];
+  rows: string[][];
+}
 
 /** Chart data (crates/shared/src/chart.rs): one label per X value, one series per Y */
 export interface ChartData {
@@ -221,7 +225,12 @@ const api = {
   redisAssist: (before: string): RedisAssist => wasm.redisAssist(before),
   /** What HELP <command> prints, undefined when the line isn't a HELP */
   redisHelp: (line: string): string | undefined => wasm.redisHelp(line),
-  redisReplyShape: (line: string): RedisReplyShape => wasm.redisReplyShape(line),
+  /** The line's reply as a table (a hash as field / value, a list numbered …), undefined to print it as redis-cli does */
+  redisReplyTable: (line: string, reply: RedisReply): RedisReplyTable | undefined => wasm.redisReplyTable(line, reply) ?? undefined,
+  /** "db0 · 1,500 keys" */
+  redisDbLabel: (name: string, keys: number): string => wasm.redisDbLabel(name, keys),
+  /** A key's TTL in ms → "1d 4h", "—" without expiry */
+  redisTtl: (ms: number): string => wasm.redisTtl(ms),
   autoMap: (file: string[], table: string[] | null): string[] => wasm.autoMap(file, table),
   numericColumns: (columns: Columns, rows: Cell[][]): number[] => wasm.numericColumns(columns, rows),
   /** y undefined = the row count */
