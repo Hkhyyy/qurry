@@ -18,6 +18,7 @@ describe("shared wasm", () => {
     const my = "1064 (42000): You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near 'fro t' at line 2";
     expect(shared().errorPosition(my, "select 1,\n  x fro t")).toBe("select 1,\n  x ".length);
     expect(shared().errorPosition('relation "t" does not exist', "select * from t")).toBeUndefined();
+    expect(shared().withoutPosition('relation "t" does not exist (position 15)')).toBe('relation "t" does not exist');
   });
 
   it("Redis Terminal key names: the typed key first, quoted when it has spaces or quotes; unknown key counts show the name only", () => {

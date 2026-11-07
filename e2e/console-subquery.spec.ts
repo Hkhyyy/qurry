@@ -61,6 +61,17 @@ test("⌘↩ inside a subquery offers it after the statement, innermost first, h
   await expect(log).not.toContainText("from orders");
 });
 
+test("a column named like a query word (table_name) isn't offered: ⌘↩ in its parentheses runs the statement at once", async ({ page }) => {
+  await openConsole(page);
+  const sql = "select * from information_schema.columns where (table_name = 'orders')";
+  await typeSql(page, sql);
+  await caretTo(page, 1, sql.indexOf("name") + 1);
+  await page.keyboard.press("Meta+Enter");
+  await expect(chooser(page)).toHaveCount(0);
+  await resultTabs(page).first().click();
+  await expect(work(page).locator(".output-log")).toContainText(`> ${sql}`);
+});
+
 test("a subquery picked on a Production source asks like any change", async ({ page }) => {
   await openConsole(page, "[PROD] shop_app");
   const sub = "with d as (delete from users where id = 4 returning id) select id from d";
@@ -89,6 +100,9 @@ test("a failed statement after the first: the error is marked at the server's po
   await editor(page).locator(".squiggly-error").hover({ force: true });
   await expect(page.locator(".monaco-hover:visible")).toContainText('relation "no_such_table" does not exist');
   await expect(page.locator(".monaco-hover:visible")).toContainText("Fix the statement and run it again");
+  // The mark is the spot: the hover leaves out the position Output has
+  await expect(page.locator(".monaco-hover:visible")).not.toContainText("(position");
+  await expect(work(page).locator(".output-log")).toContainText(`does not exist (position ${at + 1})`);
   // An edit clears it; Output keeps the error
   await caretTo(page, 3, 1);
   await page.keyboard.type(" ");

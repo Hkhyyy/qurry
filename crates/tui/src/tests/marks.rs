@@ -1,5 +1,5 @@
 //! Gutter marks of executed statements (DataGrip): ✓ done, ✗ failed, … running, in the line-number column
-use crate::app::{MarkState, Marks, TabKind};
+use crate::app::{MarkState, Marks, Popup, TabKind};
 use crate::testkit::Harness;
 use qurry_core::db::QueryResult;
 
@@ -168,7 +168,7 @@ async fn run_error_underlines_the_servers_spot() {
     h.key("F5");
     h.settle().await;
     assert_eq!(underlined(&mut h), ["boom"]);
-    assert_eq!(h.app.status, "Error at line 2, col 20: ERROR: relation \"boom\" does not exist (position 20) — fix it and run again");
+    assert_eq!(h.app.status, "Error at line 2, col 20: ERROR: relation \"boom\" does not exist — fix it and run again");
     // An edit anywhere clears it; Output keeps the error
     h.key("End");
     h.type_str(" ");
@@ -192,4 +192,44 @@ async fn run_error_without_a_position_marks_the_statement() {
     assert!(underlined(&mut h).is_empty(), "cleared when the next run starts");
     h.settle().await;
     assert!(underlined(&mut h).is_empty());
+}
+
+/// Production: the rows are counted before the confirm comes up, and the editor still takes keys meanwhile. A line typed above
+/// the statement then moves it: its error isn't underlined on the old place (the status line says the error only)
+#[tokio::test]
+async fn run_error_is_not_marked_on_text_edited_while_production_rows_counted() {
+    fn counts(q: &str) -> Result<QueryResult, String> {
+        if !q.starts_with("SELECT count(*)") {
+            return positioned(q);
+        }
+        let col = qurry_core::db::ColumnInfo { name: "count".into(), type_name: "int8".into() };
+        Ok(QueryResult { columns: vec![col], rows: vec![vec![1.into()]], rows_affected: 0, truncated: false, elapsed_ms: 1, has_result_set: true, in_transaction: false, warning: None, editable: None })
+    }
+    let mut h = Harness::new().await;
+    let mut cfg: qurry_core::store::ConnectionConfig = serde_json::from_value(serde_json::json!({
+        "id": "p", "name": "PROD", "kind": "postgres", "host": "127.0.0.1", "port": 1, "user": "u", "database": "d"
+    }))
+    .unwrap();
+    cfg.options.confirm_changes = true;
+    h.app.state.store.save(&cfg).unwrap();
+    h.app.reload_conns();
+    h.settle().await;
+    h.app.fake_db = Some(counts);
+    h.app.exec.inside = qurry_core::exec::Inside::Whole;
+    let id = h.app.restore_console("p", "d".into(), "console".into(), "delete from boom where id = 1;").unwrap();
+    let i = h.app.tab_index(id).unwrap();
+    h.app.activate(i);
+    h.key("F5");
+    // Typed while counting: a line above the statement
+    h.key("Enter");
+    h.settle().await;
+    let TabKind::Console(c) = &h.app.tabs[h.app.active].kind else { panic!() };
+    assert_eq!(c.editor.lines(), ["", "delete from boom where id = 1;"]);
+    let Some(Popup::Confirm { opened: Some(t), .. }) = &mut h.app.popup else { panic!("no confirm: {}", h.app.status) };
+    *t -= crate::app::App::TLS_ASK_GRACE;
+    h.key("y");
+    h.settle().await;
+    assert!(h.console_output().iter().any(|l| l.contains("relation \"boom\" does not exist")), "{:?}", h.console_output());
+    assert!(underlined(&mut h).is_empty(), "{:?}", underlined(&mut h));
+    assert_eq!(h.app.status, "Error: ERROR: relation \"boom\" does not exist");
 }

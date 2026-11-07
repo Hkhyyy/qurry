@@ -626,7 +626,7 @@ export const ConsoleRunError: S = {
           { ts: "10:24:01", text: "[DEV] shop_app> select id, n\n  from no_such_table\n where n > 1", level: "sql" },
           { ts: "10:24:01", text: 'ERROR: relation "no_such_table" does not exist (position 21)', level: "error" },
         ]}
-        onExecute={(_stmts, _explain, mark) => mark?.(0, { state: "error", out: "story", ts: "2026-11-07 10:24:01", text: 'ERROR: relation "no_such_table" does not exist (position 21)', at: 20 })}
+        onExecute={(_stmts, _explain, mark) => mark?.(0, { state: "error", out: "story", ts: "2026-11-07 10:24:01", text: 'ERROR: relation "no_such_table" does not exist', at: 20 })}
       />
     </Frame>
   ),

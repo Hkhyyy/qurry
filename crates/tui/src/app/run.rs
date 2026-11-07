@@ -151,7 +151,7 @@ impl App {
             && !c.running
         {
             c.marks.start(c.editor.lines(), &spans.iter().map(|&((r0, _), (r1, _))| (r0, r1)).collect::<Vec<_>>());
-            c.run_spans = spans;
+            c.run_spans = (spans, c.editor.lines().to_vec());
         }
         self.run_stmts_checked(stmts, explain, confirmed, confirmed)
     }
@@ -162,7 +162,7 @@ impl App {
         if let Some(TabKind::Console(c)) = self.tabs.get_mut(self.active).map(|t| &mut t.kind)
             && !c.running
         {
-            c.run_spans.clear();
+            c.run_spans = Default::default();
         }
         self.run_stmts_checked(stmts, explain, confirmed, confirmed)
     }
@@ -280,10 +280,9 @@ impl App {
         c.running = true;
         // While running, show Output (the SQL being run instead of the previous results)
         c.show_output = true;
-        // The last run's error mark goes; this run's statements are where run_marked found them, on these lines
+        // The last run's error mark goes; this run's statements are where run_marked found them, on the lines it saw
         c.run_error = None;
-        let spans = std::mem::take(&mut c.run_spans);
-        let lines0 = c.editor.lines().to_vec();
+        let (spans, lines0) = std::mem::take(&mut c.run_spans);
         let session = c.session.clone();
         let in_tx0 = c.in_tx;
         let st = self.state.clone();
@@ -443,7 +442,7 @@ impl App {
                             }
                             c.show_output = true;
                             failed = true;
-                            let first = e.lines().next().unwrap_or("");
+                            let first = qurry_shared::errors::without_position(e.lines().next().unwrap_or(""));
                             // Marked in the editor where it ran from (not if the text changed meanwhile); the status line says where
                             match spans.get(i).filter(|_| c.editor.lines() == lines0) {
                                 Some(&span) => {

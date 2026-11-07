@@ -399,7 +399,7 @@ fn screens(h: &mut Harness, scenes: &mut Vec<Value>) {
             c.log(e, l.into());
         }
     }
-    h.app.status = "Error at line 3, col 8: ERROR: relation \"no_such_table\" does not exist (position 21) — fix it and run again".into();
+    h.app.status = "Error at line 3, col 8: ERROR: relation \"no_such_table\" does not exist — fix it and run again".into();
     scenes.push(app_scene(h, "Console: run error", "A failed statement's error is underlined where the server points (else the whole statement); the status line says where, Output keeps it, an edit or the next run clears it", 120, 22));
     h.app.status.clear();
     h.app.close_tab_now(h.app.active);

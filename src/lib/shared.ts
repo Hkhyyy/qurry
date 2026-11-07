@@ -159,6 +159,8 @@ const api = {
   moreRowsFailed: (msg: string): string => wasm.moreRowsFailed(msg),
   /** Where a failed statement's error points in `sql` (the text sent), or undefined when it doesn't say (qurry_shared::errors::error_position) */
   errorPosition: (msg: string, sql: string): number | undefined => wasm.errorPosition(msg, sql),
+  /** The error without the position the core adds to it, for its mark in the editor (qurry_shared::errors::without_position) */
+  withoutPosition: (msg: string): string => wasm.withoutPosition(msg),
   /** The result grid's shown columns ("cols 3–8 of 14", 1-based), or undefined when every column fits (qurry_shared::format::shown_cols, the TUI's words) */
   shownCols: (first: number, last: number, total: number): string | undefined => wasm.shownCols(first, last, total),
   /** The DBA report's database picker when the databases can't be listed (qurry_shared::errors::db_list_failed, the TUI's words) */

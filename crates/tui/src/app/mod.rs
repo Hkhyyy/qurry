@@ -56,9 +56,9 @@ pub struct Console {
     pub complete: Option<Completion>,
     /// Gutter marks of the statements runs executed
     pub marks: Marks,
-    /// Where the statements about to run are in the editor (run_marked; empty for a run of statements typed nowhere): the run's
-    /// error is marked through them
-    pub run_spans: Vec<Span>,
+    /// Where the statements about to run are in the editor, and its lines then (run_marked; empty for a run of statements typed
+    /// nowhere): the run's error is marked through them unless the text changed since (e.g. typed on while Production rows counted)
+    pub run_spans: (Vec<Span>, Vec<String>),
     /// The last run's error, underlined in the editor until its text changes or the next run starts
     pub run_error: Option<RunError>,
 }

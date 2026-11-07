@@ -267,7 +267,7 @@ export function useConsole({ conns, setStatus, refresh }: { conns: ConnectionVie
         // The server's spot, in the statement's own text (Explain sent it after its EXPLAIN …)
         const pre = explain ? sql.length - bare.length : 0;
         const pos = sharedOr(undefined, (s) => s.errorPosition(String(e), sql));
-        mark?.(i, { state: "error", out, ts, text: String(e), at: pos !== undefined && pos >= pre ? pos - pre : undefined });
+        mark?.(i, { state: "error", out, ts, text: sharedOr(String(e), (s) => s.withoutPosition(String(e))), at: pos !== undefined && pos >= pre ? pos - pre : undefined });
         if (committed > 0) log(tabId, "error", `Note: ${committed} earlier statement${committed > 1 ? "s" : ""} of this run ${committed > 1 ? "were" : "was"} already committed (Auto mode) and ${committed > 1 ? "were" : "was"} not rolled back`);
         // Even on error a transaction may be open (e.g. first statement fails in Manual) → sync the Commit/Roll back buttons
         syncTx(tabId);
