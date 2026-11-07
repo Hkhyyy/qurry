@@ -54,8 +54,8 @@ test("ORDER BY: columns, then ASC / DESC after a column; ⇥ and a click pick, t
   await expect(order).toHaveValue("id");
   await expect(order).toBeFocused();
   await order.pressSequentially(" de");
-  await expect(rows(page)).toHaveText(["delete", "desc"]);
-  await page.keyboard.press("ArrowDown");
+  // Right after an operand the statement keywords come last
+  await expect(rows(page)).toHaveText(["desc", "delete"]);
   await expect(list(page).locator(".ui-list-item.selected .ui-list-title")).toHaveText("desc");
   await list(page).getByText("desc", { exact: true }).click();
   await expect(order).toHaveValue("id desc");

@@ -65,6 +65,11 @@ test("console: an unclosed ( is marked from it to the end of its line, with what
   await page.keyboard.press("Delete");
   await page.keyboard.press("End");
   await page.keyboard.type("\nfrom users");
+  // The completion list and count('s signature help (the caret is still inside the open call) would cover the squiggle's hover
+  await expect(page.locator(".parameter-hints-widget")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".parameter-hints-widget")).toBeHidden();
   const squiggle = editor(page).locator(".squiggly-error");
   await expect(squiggle).toHaveCount(1);
   // On line 1, from the ( (the 13th character) to the line end: measured against the line's monospace text
