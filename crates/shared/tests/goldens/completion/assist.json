@@ -1,0 +1,1151 @@
+{
+  "after-table-no-columns": {
+    "gui": {
+      "first": [
+        "Keyword all · keyword",
+        "Keyword alter · keyword",
+        "Keyword analyze · keyword",
+        "Keyword and · keyword",
+        "Keyword as · keyword",
+        "Keyword asc · keyword",
+        "Keyword begin · keyword",
+        "Keyword between · keyword"
+      ],
+      "prefix": 0
+    },
+    "tui": {
+      "items": [],
+      "prefix": 0
+    }
+  },
+  "columns-from-caret-statement-only": {
+    "gui": {
+      "first": [
+        "Column email · text · users",
+        "Column id · int8 · users",
+        "Column user_name · varchar · users",
+        "Function abs => abs($0) · abs(x) → same as input",
+        "Function age => age($0) · age(timestamp, timestamp) → interval",
+        "Function array_agg => array_agg($0) · array_agg(expression) → array",
+        "Function array_length => array_length($0) · array_length(array, dimension) → integer",
+        "Function avg => avg($0) · avg(expression) → numeric"
+      ],
+      "prefix": 1
+    },
+    "tui": {
+      "items": [
+        "Function sum => sum($0) · sum(expression) → numeric",
+        "Function string_agg => string_agg($0) · string_agg(expression, delimiter) → text",
+        "Function stddev => stddev($0) · stddev(expression) → numeric",
+        "Function substring => substring($0) · substring(string, start, count) → text",
+        "Function split_part => split_part($0) · split_part(string, delimiter, n) → text",
+        "Function string_to_array => string_to_array($0) · string_to_array(string, delimiter) → text[]",
+        "Function starts_with => starts_with($0) · starts_with(string, prefix) → boolean",
+        "Keyword select · keyword",
+        "Keyword set · keyword",
+        "Keyword show · keyword"
+      ],
+      "prefix": 1
+    }
+  },
+  "cte-bare-columns": {
+    "gui": {
+      "first": [
+        "Column id · int8 · recent",
+        "Column st · recent",
+        "Function abs => abs($0) · abs(x) → same as input",
+        "Function age => age($0) · age(timestamp, timestamp) → interval",
+        "Function array_agg => array_agg($0) · array_agg(expression) → array",
+        "Function array_length => array_length($0) · array_length(array, dimension) → integer",
+        "Function avg => avg($0) · avg(expression) → numeric",
+        "Function bool_and => bool_and($0) · bool_and(expression) → boolean"
+      ],
+      "prefix": 1
+    },
+    "tui": {
+      "items": [
+        "Column st · recent",
+        "Function sum => sum($0) · sum(expression) → numeric",
+        "Function string_agg => string_agg($0) · string_agg(expression, delimiter) → text",
+        "Function stddev => stddev($0) · stddev(expression) → numeric",
+        "Function substring => substring($0) · substring(string, start, count) → text",
+        "Function split_part => split_part($0) · split_part(string, delimiter, n) → text",
+        "Function string_to_array => string_to_array($0) · string_to_array(string, delimiter) → text[]",
+        "Function starts_with => starts_with($0) · starts_with(string, prefix) → boolean",
+        "Keyword select · keyword",
+        "Keyword set · keyword",
+        "Keyword show · keyword"
+      ],
+      "prefix": 1
+    }
+  },
+  "cte-column-list": {
+    "gui": {
+      "first": [
+        "Column a",
+        "Column b"
+      ],
+      "prefix": 0
+    },
+    "tui": {
+      "items": [
+        "Column a",
+        "Column b"
+      ],
+      "prefix": 0
+    }
+  },
+  "cte-columns": {
+    "gui": {
+      "first": [
+        "Column id · int8",
+        "Column owner"
+      ],
+      "prefix": 0
+    },
+    "tui": {
+      "items": [
+        "Column id · int8",
+        "Column owner"
+      ],
+      "prefix": 0
+    }
+  },
+  "cte-names-after-from": {
+    "gui": {
+      "first": [
+        "Table recent · cte",
+        "Table audit_log · public",
+        "Table invoices => billing.invoices · billing",
+        "Table order_items · public",
+        "Table orders · public",
+        "Table users · public",
+        "Schema billing · schema",
+        "Schema public · schema"
+      ],
+      "prefix": 1
+    },
+    "tui": {
+      "items": [
+        "Table recent · cte",
+        "Keyword right · keyword",
+        "Keyword returning · keyword",
+        "Keyword rollback · keyword",
+        "Keyword revoke · keyword"
+      ],
+      "prefix": 1
+    }
+  },
+  "cte-star-columns": {
+    "gui": {
+      "first": [
+        "Column id · int8",
+        "Column user_name · varchar",
+        "Column email · text"
+      ],
+      "prefix": 0
+    },
+    "tui": {
+      "items": [
+        "Column id · int8",
+        "Column user_name · varchar",
+        "Column email · text"
+      ],
+      "prefix": 0
+    }
+  },
+  "expand-qualified-star": {
+    "gui": {
+      "first": [
+        "Snippet expand o.* => o.id, o.user_id, o.status, o.sender_fee_ratio, o.service_fee, o.created_at · o.id, o.user_id, o.status, o.sender_fee_ratio, o.service_fee, o.created_at"
+      ],
+      "prefix": 3
+    },
+    "tui": {
+      "items": [
+        "Snippet expand o.* => o.id, o.user_id, o.status, o.sender_fee_ratio, o.service_fee, o.created_at · o.id, o.user_id, o.status, o.sender_fee_ratio, o.service_fee, o.created_at"
+      ],
+      "prefix": 3
+    }
+  },
+  "expand-star": {
+    "gui": {
+      "first": [
+        "Snippet expand * => id, user_name, email · id, user_name, email"
+      ],
+      "prefix": 1
+    },
+    "tui": {
+      "items": [
+        "Snippet expand * => id, user_name, email · id, user_name, email"
+      ],
+      "prefix": 1
+    }
+  },
+  "expand-star-two-tables": {
+    "gui": {
+      "first": [
+        "Snippet expand * => u.id, u.user_name, u.email, o.id, o.user_id, o.status, o.sender_fee_ratio, o.service_fee, o.created_at · u.id, u.user_name, u.email, o.id, o.user_id, o.status, o.sender_fee_ratio, o.service_fee, o.created_at"
+      ],
+      "prefix": 1
+    },
+    "tui": {
+      "items": [
+        "Snippet expand * => u.id, u.user_name, u.email, o.id, o.user_id, o.status, o.sender_fee_ratio, o.service_fee, o.created_at · u.id, u.user_name, u.email, o.id, o.user_id, o.status, o.sender_fee_ratio, o.service_fee, o.created_at"
+      ],
+      "prefix": 1
+    }
+  },
+  "fk-join-no-condition-twice": {
+    "gui": {
+      "first": [
+        "Column created_at · timestamptz · orders",
+        "Column email · text · users",
+        "Column id · int8 · orders",
+        "Column sender_fee_ratio · numeric · orders",
+        "Column service_fee · numeric · orders",
+        "Column status · varchar · orders",
+        "Column user_id · int8 · orders",
+        "Column user_name · varchar · users"
+      ],
+      "prefix": 0
+    },
+    "tui": {
+      "items": [
+        "Column id · int8 · orders",
+        "Column user_id · int8 · orders",
+        "Column status · varchar · orders",
+        "Column sender_fee_ratio · numeric · orders",
+        "Column service_fee · numeric · orders",
+        "Column created_at · timestamptz · orders",
+        "Column user_name · varchar · users",
+        "Column email · text · users",
+        "Table audit_log · public",
+        "Table invoices => billing.invoices · billing",
+        "Table order_items · public",
+        "Table orders · public",
+        "Table users · public",
+        "Schema billing · schema",
+        "Schema public · schema"
+      ],
+      "prefix": 0
+    }
+  },
+  "fk-join-on": {
+    "gui": {
+      "first": [
+        "Join on o.user_id = u.id · fk orders → users",
+        "Keyword all · keyword",
+        "Keyword alter · keyword",
+        "Keyword analyze · keyword",
+        "Keyword and · keyword",
+        "Keyword as · keyword",
+        "Keyword asc · keyword",
+        "Keyword begin · keyword"
+      ],
+      "prefix": 0
+    },
+    "tui": {
+      "items": [
+        "Join on o.user_id = u.id · fk orders → users"
+      ],
+      "prefix": 0
+    }
+  },
+  "fk-join-on-first-word": {
+    "gui": {
+      "first": [
+        "Join o.user_id = u.id · fk orders → users",
+        "Column created_at · timestamptz · orders",
+        "Column email · text · users",
+        "Column id · int8 · orders",
+        "Column sender_fee_ratio · numeric · orders",
+        "Column service_fee · numeric · orders",
+        "Column status · varchar · orders",
+        "Column user_id · int8 · orders"
+      ],
+      "prefix": 0
+    },
+    "tui": {
+      "items": [
+        "Join o.user_id = u.id · fk orders → users",
+        "Column id · int8 · orders",
+        "Column user_id · int8 · orders",
+        "Column status · varchar · orders",
+        "Column sender_fee_ratio · numeric · orders",
+        "Column service_fee · numeric · orders",
+        "Column created_at · timestamptz · orders",
+        "Column user_name · varchar · users",
+        "Column email · text · users",
+        "Table audit_log · public",
+        "Table invoices => billing.invoices · billing",
+        "Table order_items · public",
+        "Table orders · public",
+        "Table users · public",
+        "Schema billing · schema",
+        "Schema public · schema"
+      ],
+      "prefix": 0
+    }
+  },
+  "fk-join-on-other-way": {
+    "gui": {
+      "first": [
+        "Join on u.id = o.user_id · fk orders → users",
+        "Keyword all · keyword",
+        "Keyword alter · keyword",
+        "Keyword analyze · keyword",
+        "Keyword and · keyword",
+        "Keyword as · keyword",
+        "Keyword asc · keyword",
+        "Keyword begin · keyword"
+      ],
+      "prefix": 0
+    },
+    "tui": {
+      "items": [
+        "Join on u.id = o.user_id · fk orders → users"
+      ],
+      "prefix": 0
+    }
+  },
+  "fk-join-on-two-tables": {
+    "gui": {
+      "first": [
+        "Join on o.id = v.order_id · fk invoices → orders",
+        "Keyword all · keyword",
+        "Keyword alter · keyword",
+        "Keyword analyze · keyword",
+        "Keyword and · keyword",
+        "Keyword as · keyword",
+        "Keyword asc · keyword",
+        "Keyword begin · keyword"
+      ],
+      "prefix": 0
+    },
+    "tui": {
+      "items": [
+        "Join on o.id = v.order_id · fk invoices → orders"
+      ],
+      "prefix": 0
+    }
+  },
+  "fk-join-on-typed": {
+    "gui": {
+      "first": [
+        "Join on u.id = o.user_id · fk orders → users",
+        "Keyword all · keyword",
+        "Keyword alter · keyword",
+        "Keyword analyze · keyword",
+        "Keyword and · keyword",
+        "Keyword as · keyword",
+        "Keyword asc · keyword",
+        "Keyword begin · keyword"
+      ],
+      "prefix": 1
+    },
+    "tui": {
+      "items": [
+        "Join on u.id = o.user_id · fk orders → users",
+        "Keyword or · keyword",
+        "Keyword order · keyword",
+        "Keyword offset · keyword",
+        "Keyword outer · keyword",
+        "Keyword on · keyword"
+      ],
+      "prefix": 1
+    }
+  },
+  "fk-join-ranks-related-tables": {
+    "gui": {
+      "first": [
+        "Table users · public · fk orders",
+        "Table order_items · public · fk orders",
+        "Table invoices => billing.invoices · billing · fk orders",
+        "Table audit_log · public",
+        "Table orders · public",
+        "Schema billing · schema",
+        "Schema public · schema",
+        "Keyword all · keyword"
+      ],
+      "prefix": 0
+    },
+    "tui": {
+      "items": [
+        "Table users · public · fk orders",
+        "Table order_items · public · fk orders",
+        "Table invoices => billing.invoices · billing · fk orders",
+        "Table audit_log · public",
+        "Table orders · public",
+        "Schema billing · schema",
+        "Schema public · schema"
+      ],
+      "prefix": 0
+    }
+  },
+  "fk-join-ranks-related-typed": {
+    "gui": {
+      "first": [
+        "Table users · public · fk orders",
+        "Table order_items · public · fk orders",
+        "Table invoices => billing.invoices · billing · fk orders",
+        "Table audit_log · public",
+        "Table orders · public",
+        "Schema billing · schema",
+        "Schema public · schema",
+        "Keyword all · keyword"
+      ],
+      "prefix": 1
+    },
+    "tui": {
+      "items": [
+        "Table order_items · public · fk orders",
+        "Table orders · public",
+        "Keyword or · keyword",
+        "Keyword order · keyword",
+        "Keyword offset · keyword",
+        "Keyword outer · keyword",
+        "Keyword on · keyword"
+      ],
+      "prefix": 1
+    }
+  },
+  "functions-builtin": {
+    "gui": {
+      "first": [
+        "Column created_at · timestamptz · orders",
+        "Column id · int8 · orders",
+        "Column sender_fee_ratio · numeric · orders",
+        "Column service_fee · numeric · orders",
+        "Column status · varchar · orders",
+        "Column user_id · int8 · orders",
+        "Function abs => abs($0) · abs(x) → same as input",
+        "Function age => age($0) · age(timestamp, timestamp) → interval"
+      ],
+      "prefix": 3
+    },
+    "tui": {
+      "items": [
+        "Function coalesce => coalesce($0) · coalesce(value, …) → first non-null value"
+      ],
+      "prefix": 3
+    }
+  },
+  "functions-mysql": {
+    "gui": {
+      "first": [
+        "Column created_at · timestamptz · orders",
+        "Column id · int8 · orders",
+        "Column sender_fee_ratio · numeric · orders",
+        "Column service_fee · numeric · orders",
+        "Column status · varchar · orders",
+        "Column user_id · int8 · orders",
+        "Function abs => abs($0) · abs(x) → same as input",
+        "Function avg => avg($0) · avg(expression) → numeric"
+      ],
+      "prefix": 3
+    },
+    "tui": {
+      "items": [
+        "Function ifnull => ifnull($0) · ifnull(expr1, expr2) → expr1, or expr2 when null"
+      ],
+      "prefix": 3
+    }
+  },
+  "functions-user": {
+    "gui": {
+      "first": [
+        "Column created_at · timestamptz · orders",
+        "Column id · int8 · orders",
+        "Column sender_fee_ratio · numeric · orders",
+        "Column service_fee · numeric · orders",
+        "Column status · varchar · orders",
+        "Column user_id · int8 · orders",
+        "Function abs => abs($0) · abs(x) → same as input",
+        "Function age => age($0) · age(timestamp, timestamp) → interval"
+      ],
+      "prefix": 7
+    },
+    "tui": {
+      "items": [
+        "Function order_total => order_total($0) · public.order_total(order_id bigint) → numeric",
+        "Function order_total => order_total($0) · public.order_total(order_id bigint, with_tax boolean) → numeric"
+      ],
+      "prefix": 7
+    }
+  },
+  "group-by-select-columns": {
+    "gui": {
+      "first": [
+        "Column status · select list",
+        "Column date_trunc('day', created_at) · select list",
+        "Column created_at · timestamptz · orders",
+        "Column id · int8 · orders",
+        "Column sender_fee_ratio · numeric · orders",
+        "Column service_fee · numeric · orders",
+        "Column user_id · int8 · orders",
+        "Function abs => abs($0) · abs(x) → same as input"
+      ],
+      "prefix": 0
+    },
+    "tui": {
+      "items": [
+        "Column status · select list",
+        "Column date_trunc('day', created_at) · select list",
+        "Column id · int8 · orders",
+        "Column user_id · int8 · orders",
+        "Column sender_fee_ratio · numeric · orders",
+        "Column service_fee · numeric · orders",
+        "Column created_at · timestamptz · orders",
+        "Table audit_log · public",
+        "Table invoices => billing.invoices · billing",
+        "Table order_items · public",
+        "Table orders · public",
+        "Table users · public",
+        "Schema billing · schema",
+        "Schema public · schema"
+      ],
+      "prefix": 0
+    }
+  },
+  "insert-column-list-snippet": {
+    "gui": {
+      "first": [
+        "Snippet (id, user_name, email) values (…) => (id, user_name, email) values (${1:id}, ${2:user_name}, ${3:email}) · 3 columns",
+        "Keyword all · keyword",
+        "Keyword alter · keyword",
+        "Keyword analyze · keyword",
+        "Keyword and · keyword",
+        "Keyword as · keyword",
+        "Keyword asc · keyword",
+        "Keyword begin · keyword"
+      ],
+      "prefix": 0
+    },
+    "tui": {
+      "items": [
+        "Snippet (id, user_name, email) values (…) => (id, user_name, email) values (${1:id}, ${2:user_name}, ${3:email}) · 3 columns"
+      ],
+      "prefix": 0
+    }
+  },
+  "insert-columns-typed": {
+    "gui": {
+      "first": [
+        "Column user_id · int8",
+        "Column status · varchar",
+        "Column sender_fee_ratio · numeric",
+        "Column service_fee · numeric",
+        "Column created_at · timestamptz"
+      ],
+      "prefix": 1
+    },
+    "tui": {
+      "items": [
+        "Column status · varchar",
+        "Column sender_fee_ratio · numeric",
+        "Column service_fee · numeric"
+      ],
+      "prefix": 1
+    }
+  },
+  "insert-columns-unused": {
+    "gui": {
+      "first": [
+        "Column user_id · int8",
+        "Column sender_fee_ratio · numeric",
+        "Column service_fee · numeric",
+        "Column created_at · timestamptz"
+      ],
+      "prefix": 0
+    },
+    "tui": {
+      "items": [
+        "Column user_id · int8",
+        "Column sender_fee_ratio · numeric",
+        "Column service_fee · numeric",
+        "Column created_at · timestamptz"
+      ],
+      "prefix": 0
+    }
+  },
+  "line-start-after-comma-is-a-column": {
+    "gui": {
+      "first": [
+        "Column created_at · timestamptz · orders",
+        "Column id · int8 · orders",
+        "Column sender_fee_ratio · numeric · orders",
+        "Column service_fee · numeric · orders",
+        "Column status · varchar · orders",
+        "Column user_id · int8 · orders",
+        "Function abs => abs($0) · abs(x) → same as input",
+        "Function age => age($0) · age(timestamp, timestamp) → interval"
+      ],
+      "prefix": 2
+    },
+    "tui": {
+      "items": [
+        "Column sender_fee_ratio · numeric · orders",
+        "Column service_fee · numeric · orders",
+        "Keyword select · keyword",
+        "Keyword set · keyword"
+      ],
+      "prefix": 2
+    }
+  },
+  "line-start-continues-statement": {
+    "gui": {
+      "first": [
+        "Keyword all · keyword",
+        "Keyword alter · keyword",
+        "Keyword analyze · keyword",
+        "Keyword and · keyword",
+        "Keyword as · keyword",
+        "Keyword asc · keyword",
+        "Keyword begin · keyword",
+        "Keyword between · keyword"
+      ],
+      "prefix": 2
+    },
+    "tui": {
+      "items": [
+        "Keyword where · keyword",
+        "Keyword when · keyword"
+      ],
+      "prefix": 2
+    }
+  },
+  "marks-each-statement-own-scope": [
+    {
+      "at": "user_name",
+      "fixes": [],
+      "message": "Unknown column \"user_name\""
+    }
+  ],
+  "marks-insert-columns": [
+    {
+      "at": "mail",
+      "fixes": [
+        "email"
+      ],
+      "message": "Unknown column \"mail\" in users"
+    }
+  ],
+  "marks-subquery-column": [
+    {
+      "at": "stat",
+      "fixes": [
+        "status"
+      ],
+      "message": "Unknown column \"stat\" in s"
+    }
+  ],
+  "marks-unknown-column": [
+    {
+      "at": "nme",
+      "fixes": [
+        "user_name"
+      ],
+      "message": "Unknown column \"nme\""
+    }
+  ],
+  "marks-unknown-qualified-column": [
+    {
+      "at": "user_nme",
+      "fixes": [
+        "user_name"
+      ],
+      "message": "Unknown column \"user_nme\" in u"
+    }
+  ],
+  "marks-unknown-table": [
+    {
+      "at": "usres",
+      "fixes": [
+        "users"
+      ],
+      "message": "Unknown table \"usres\""
+    }
+  ],
+  "marks-unknown-table-in-schema": [
+    {
+      "at": "billing.invoice",
+      "fixes": [
+        "billing.invoices"
+      ],
+      "message": "Unknown table \"billing.invoice\""
+    }
+  ],
+  "marks-update-set": [
+    {
+      "at": "emial",
+      "fixes": [
+        "email"
+      ],
+      "message": "Unknown column \"emial\""
+    }
+  ],
+  "natural-join-columns": {
+    "gui": {
+      "first": [
+        "Column created_at · timestamptz · orders",
+        "Column email · text · users",
+        "Column id · int8 · users",
+        "Column sender_fee_ratio · numeric · orders",
+        "Column service_fee · numeric · orders",
+        "Column status · varchar · orders",
+        "Column user_id · int8 · orders",
+        "Column user_name · varchar · users"
+      ],
+      "prefix": 2
+    },
+    "tui": {
+      "items": [
+        "Column sender_fee_ratio · numeric · orders",
+        "Column service_fee · numeric · orders",
+        "Keyword select · keyword",
+        "Keyword set · keyword"
+      ],
+      "prefix": 2
+    }
+  },
+  "nested-outer-alias": {
+    "gui": {
+      "first": [
+        "Column id · int8",
+        "Column user_name · varchar",
+        "Column email · text"
+      ],
+      "prefix": 0
+    },
+    "tui": {
+      "items": [
+        "Column id · int8",
+        "Column user_name · varchar",
+        "Column email · text"
+      ],
+      "prefix": 0
+    }
+  },
+  "nested-select-alias": {
+    "gui": {
+      "first": [
+        "Column id · int8",
+        "Column user_id · int8",
+        "Column status · varchar",
+        "Column sender_fee_ratio · numeric",
+        "Column service_fee · numeric",
+        "Column created_at · timestamptz"
+      ],
+      "prefix": 0
+    },
+    "tui": {
+      "items": [
+        "Column id · int8",
+        "Column user_id · int8",
+        "Column status · varchar",
+        "Column sender_fee_ratio · numeric",
+        "Column service_fee · numeric",
+        "Column created_at · timestamptz"
+      ],
+      "prefix": 0
+    }
+  },
+  "nested-select-columns": {
+    "gui": {
+      "first": [
+        "Column created_at · timestamptz · orders",
+        "Column email · text · users",
+        "Column id · int8 · orders",
+        "Column sender_fee_ratio · numeric · orders",
+        "Column service_fee · numeric · orders",
+        "Column status · varchar · orders",
+        "Column user_id · int8 · orders",
+        "Column user_name · varchar · users"
+      ],
+      "prefix": 2
+    },
+    "tui": {
+      "items": [
+        "Column user_id · int8 · orders",
+        "Column user_name · varchar · users",
+        "Table users · public",
+        "Keyword using · keyword"
+      ],
+      "prefix": 2
+    }
+  },
+  "no-mark-aliases": [],
+  "no-mark-casts-and-literals": [],
+  "no-mark-catalog": [],
+  "no-mark-correlated": [],
+  "no-mark-created-in-script": [],
+  "no-mark-cte": [],
+  "no-mark-ddl": [],
+  "no-mark-function-source": [],
+  "no-mark-functions": [],
+  "no-mark-mysql-variables": [],
+  "no-mark-unknown-qualifier": [],
+  "no-mark-unloaded-database": [],
+  "no-mark-unloaded-database-mysql": [],
+  "no-mark-upsert": [],
+  "no-mark-window": [],
+  "order-by-aliases-first": {
+    "gui": {
+      "first": [
+        "Column st · alias",
+        "Column n · alias",
+        "Column created_at · timestamptz · orders",
+        "Column id · int8 · orders",
+        "Column sender_fee_ratio · numeric · orders",
+        "Column service_fee · numeric · orders",
+        "Column status · varchar · orders",
+        "Column user_id · int8 · orders"
+      ],
+      "prefix": 0
+    },
+    "tui": {
+      "items": [
+        "Column st · alias",
+        "Column n · alias",
+        "Column id · int8 · orders",
+        "Column user_id · int8 · orders",
+        "Column status · varchar · orders",
+        "Column sender_fee_ratio · numeric · orders",
+        "Column service_fee · numeric · orders",
+        "Column created_at · timestamptz · orders",
+        "Table audit_log · public",
+        "Table invoices => billing.invoices · billing",
+        "Table order_items · public",
+        "Table orders · public",
+        "Table users · public",
+        "Schema billing · schema",
+        "Schema public · schema"
+      ],
+      "prefix": 0
+    }
+  },
+  "sig-after-nested-call": {
+    "active": 1,
+    "signatures": [
+      {
+        "label": "date_trunc(field, source) → timestamp",
+        "params": [
+          "field",
+          "source"
+        ]
+      }
+    ]
+  },
+  "sig-builtin": {
+    "active": 1,
+    "signatures": [
+      {
+        "label": "coalesce(value, …) → first non-null value",
+        "params": [
+          "value",
+          "…"
+        ]
+      }
+    ]
+  },
+  "sig-first-param": {
+    "active": 0,
+    "signatures": [
+      {
+        "label": "date_trunc(field, source) → timestamp",
+        "params": [
+          "field",
+          "source"
+        ]
+      }
+    ]
+  },
+  "sig-mysql": {
+    "active": 1,
+    "signatures": [
+      {
+        "label": "date_format(date, format) → varchar",
+        "params": [
+          "date",
+          "format"
+        ]
+      }
+    ]
+  },
+  "sig-nested-call": {
+    "active": 0,
+    "signatures": [
+      {
+        "label": "lower(string) → text",
+        "params": [
+          "string"
+        ]
+      }
+    ]
+  },
+  "sig-none-in-list": null,
+  "sig-none-in-string": null,
+  "sig-none-unknown": null,
+  "sig-user-overloads": {
+    "active": 1,
+    "signatures": [
+      {
+        "label": "public.order_total(order_id bigint) → numeric",
+        "params": [
+          "order_id bigint"
+        ]
+      },
+      {
+        "label": "public.order_total(order_id bigint, with_tax boolean) → numeric",
+        "params": [
+          "order_id bigint",
+          "with_tax boolean"
+        ]
+      }
+    ]
+  },
+  "statement-start-after-semicolon": {
+    "gui": {
+      "first": [
+        "Keyword alter · keyword",
+        "Keyword analyze · keyword",
+        "Keyword begin · keyword",
+        "Keyword call · keyword",
+        "Keyword commit · keyword",
+        "Keyword create · keyword",
+        "Keyword delete · keyword",
+        "Keyword drop · keyword"
+      ],
+      "prefix": 0
+    },
+    "tui": {
+      "items": [],
+      "prefix": 0
+    }
+  },
+  "statement-start-de": {
+    "gui": {
+      "first": [
+        "Keyword alter · keyword",
+        "Keyword analyze · keyword",
+        "Keyword begin · keyword",
+        "Keyword call · keyword",
+        "Keyword commit · keyword",
+        "Keyword create · keyword",
+        "Keyword delete · keyword",
+        "Keyword drop · keyword"
+      ],
+      "prefix": 2
+    },
+    "tui": {
+      "items": [
+        "Keyword delete · keyword",
+        "Snippet del => delete from ${1:table} where ${2:condition} · delete from … where …"
+      ],
+      "prefix": 2
+    }
+  },
+  "statement-start-first-word": {
+    "gui": {
+      "first": [
+        "Keyword alter · keyword",
+        "Keyword analyze · keyword",
+        "Keyword begin · keyword",
+        "Keyword call · keyword",
+        "Keyword commit · keyword",
+        "Keyword create · keyword",
+        "Keyword delete · keyword",
+        "Keyword drop · keyword"
+      ],
+      "prefix": 2
+    },
+    "tui": {
+      "items": [
+        "Keyword select · keyword",
+        "Keyword set · keyword",
+        "Snippet sel => select * from $0 · select * from …"
+      ],
+      "prefix": 2
+    }
+  },
+  "statement-start-se": {
+    "gui": {
+      "first": [
+        "Keyword alter · keyword",
+        "Keyword analyze · keyword",
+        "Keyword begin · keyword",
+        "Keyword call · keyword",
+        "Keyword commit · keyword",
+        "Keyword create · keyword",
+        "Keyword delete · keyword",
+        "Keyword drop · keyword"
+      ],
+      "prefix": 2
+    },
+    "tui": {
+      "items": [
+        "Keyword select · keyword",
+        "Keyword set · keyword",
+        "Snippet sel => select * from $0 · select * from …"
+      ],
+      "prefix": 2
+    }
+  },
+  "subquery-alias": {
+    "gui": {
+      "first": [
+        "Column id · int8",
+        "Column st"
+      ],
+      "prefix": 0
+    },
+    "tui": {
+      "items": [
+        "Column id · int8",
+        "Column st"
+      ],
+      "prefix": 0
+    }
+  },
+  "subquery-column-aliases": {
+    "gui": {
+      "first": [
+        "Column order_no · int8",
+        "Column state · varchar"
+      ],
+      "prefix": 0
+    },
+    "tui": {
+      "items": [
+        "Column order_no · int8",
+        "Column state · varchar"
+      ],
+      "prefix": 0
+    }
+  },
+  "template-ins": {
+    "gui": {
+      "first": [
+        "Keyword alter · keyword",
+        "Keyword analyze · keyword",
+        "Keyword begin · keyword",
+        "Keyword call · keyword",
+        "Keyword commit · keyword",
+        "Keyword create · keyword",
+        "Keyword delete · keyword",
+        "Keyword drop · keyword"
+      ],
+      "prefix": 2
+    },
+    "tui": {
+      "items": [
+        "Keyword insert · keyword",
+        "Snippet ins => insert into $0 · insert into … (columns) values (…)"
+      ],
+      "prefix": 2
+    }
+  },
+  "template-sel": {
+    "gui": {
+      "first": [
+        "Keyword alter · keyword",
+        "Keyword analyze · keyword",
+        "Keyword begin · keyword",
+        "Keyword call · keyword",
+        "Keyword commit · keyword",
+        "Keyword create · keyword",
+        "Keyword delete · keyword",
+        "Keyword drop · keyword"
+      ],
+      "prefix": 3
+    },
+    "tui": {
+      "items": [
+        "Keyword select · keyword",
+        "Snippet sel => select * from $0 · select * from …"
+      ],
+      "prefix": 3
+    }
+  },
+  "template-upd": {
+    "gui": {
+      "first": [
+        "Keyword alter · keyword",
+        "Keyword analyze · keyword",
+        "Keyword begin · keyword",
+        "Keyword call · keyword",
+        "Keyword commit · keyword",
+        "Keyword create · keyword",
+        "Keyword delete · keyword",
+        "Keyword drop · keyword"
+      ],
+      "prefix": 3
+    },
+    "tui": {
+      "items": [
+        "Keyword update · keyword",
+        "Snippet upd => update ${1:table} set ${2:column} = ${3:value} where ${4:condition} · update … set … where …"
+      ],
+      "prefix": 3
+    }
+  },
+  "union-branch-scope": {
+    "gui": {
+      "first": [
+        "Column email · text · users",
+        "Column id · int8 · users",
+        "Column user_name · varchar · users",
+        "Function abs => abs($0) · abs(x) → same as input",
+        "Function age => age($0) · age(timestamp, timestamp) → interval",
+        "Function array_agg => array_agg($0) · array_agg(expression) → array",
+        "Function array_length => array_length($0) · array_length(array, dimension) → integer",
+        "Function avg => avg($0) · avg(expression) → numeric"
+      ],
+      "prefix": 1
+    },
+    "tui": {
+      "items": [
+        "Column email · text · users",
+        "Keyword exists · keyword",
+        "Keyword except · keyword",
+        "Keyword else · keyword",
+        "Keyword end · keyword",
+        "Keyword explain · keyword"
+      ],
+      "prefix": 1
+    }
+  },
+  "using-join-columns": {
+    "gui": {
+      "first": [
+        "Column created_at · timestamptz · orders",
+        "Column email · text · users",
+        "Column id · int8 · users",
+        "Column sender_fee_ratio · numeric · orders",
+        "Column service_fee · numeric · orders",
+        "Column status · varchar · orders",
+        "Column user_id · int8 · orders",
+        "Column user_name · varchar · users"
+      ],
+      "prefix": 1
+    },
+    "tui": {
+      "items": [
+        "Column id · int8 · users",
+        "Function initcap => initcap($0) · initcap(string) → text",
+        "Table invoices => billing.invoices · billing",
+        "Keyword in · keyword",
+        "Keyword is · keyword",
+        "Keyword ilike · keyword",
+        "Keyword inner · keyword",
+        "Keyword intersect · keyword",
+        "Keyword insert · keyword",
+        "Keyword into · keyword",
+        "Keyword index · keyword",
+        "Keyword interval · keyword"
+      ],
+      "prefix": 1
+    }
+  }
+}

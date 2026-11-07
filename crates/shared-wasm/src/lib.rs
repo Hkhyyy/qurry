@@ -322,6 +322,19 @@ impl CompletionIndex {
         Ok(serde_wasm_bindgen::to_value(&complete::hint_at(&self.meta, &at.statement(text, mysql), at.head(text, mysql), db, mysql))?)
     }
 
+    /// The function call around the caret (a UTF-16 offset into the console): {signatures: [{label, params}], active}, or undefined
+    #[wasm_bindgen(js_name = signatureAt)]
+    pub fn signature_at(&self, text: &str, caret: usize, mysql: bool) -> Result<JsValue, JsError> {
+        let (stmt, c) = complete::at_caret(text, byte_offset(text, caret), kind(mysql));
+        Ok(serde_wasm_bindgen::to_value(&complete::signature(&self.meta, &stmt, c, mysql))?)
+    }
+
+    /// Tables and columns of the console's statements that their scope lacks (complete::script_marks):
+    /// [{start, end, message, fixes}], start and end UTF-16 offsets into `text`
+    pub fn marks(&self, text: &str, db: &str, mysql: bool) -> Result<JsValue, JsError> {
+        Ok(serde_wasm_bindgen::to_value(&utf16_marks(text, complete::script_marks(&self.meta, text, kind(mysql), db)))?)
+    }
+
     /// What meta.hints returned for `hint` → candidates. as_pairs = keys were asked, none came, so these are @> conditions
     /// replacing the operator (and a closing quote right after the caret)
     #[wasm_bindgen(js_name = hintItems)]
@@ -360,7 +373,8 @@ pub fn pairs_insert(value: &str, op: &str) -> String {
 /// The range and the leading candidates (the statement's columns), and what the rest comes from
 fn suggestions(m: &complete::Meta, text: &str, caret: usize, db: &str, mysql: bool) -> (Suggestions, Option<complete::Rest>) {
     let at = Caret::new(text, caret);
-    let (n, items, rest) = complete::suggest_lead(m, &at.statement(text, mysql), at.before, db, mysql, Options::GUI);
+    let (stmt, c) = complete::at_caret(text, at.at, kind(mysql));
+    let (n, items, rest) = complete::suggest_lead(m, &stmt, c, db, mysql, Options::GUI);
     let end = at.column();
     (Suggestions { start_column: end - utf16_tail(at.before, n), end_column: end, items }, rest)
 }
@@ -390,18 +404,32 @@ impl<'a> Caret<'a> {
 
     /// The statement the caret is in (as the TUI passes it): an alias of another statement in the console doesn't resolve here
     fn statement(&self, text: &str, mysql: bool) -> String {
-        qurry_shared::sql::statement_at(text, self.at, if mysql { DbKind::Mysql } else { DbKind::Postgres }).unwrap_or_default()
+        qurry_shared::sql::statement_at(text, self.at, kind(mysql)).unwrap_or_default()
     }
 
     /// The caret's statement up to the caret (what hint_at reads the clause from)
     fn head<'t>(&self, text: &'t str, mysql: bool) -> &'t str {
-        qurry_shared::sql::statement_head(text, self.at, if mysql { DbKind::Mysql } else { DbKind::Postgres })
+        qurry_shared::sql::statement_head(text, self.at, kind(mysql))
     }
 
     /// Monaco column of the caret (1-based, UTF-16)
     fn column(&self) -> usize {
         self.before.encode_utf16().count() + 1
     }
+}
+
+/// Marks with UTF-16 offsets instead of byte offsets
+fn utf16_marks(text: &str, mut v: Vec<complete::Mark>) -> Vec<complete::Mark> {
+    let ranges: Vec<(usize, usize)> = v.iter().map(|m| (m.start, m.end)).collect();
+    for (m, [a, b]) in v.iter_mut().zip(utf16_ranges(text, &ranges)) {
+        (m.start, m.end) = (a, b);
+    }
+    v
+}
+
+/// The SQL dialect completion reads (MySQL, or PostgreSQL for everything else)
+fn kind(mysql: bool) -> DbKind {
+    if mysql { DbKind::Mysql } else { DbKind::Postgres }
 }
 
 /// UTF-16 length of the last `chars` characters of `s`
@@ -734,7 +762,7 @@ mod tests {
     }
 
     fn index() -> complete::Meta {
-        let t = |s: &str, n: &str, cols: &[(&str, &str)]| complete::CompletionTable { schema: s.into(), name: n.into(), columns: cols.iter().map(|(c, ty)| (c.to_string(), ty.to_string())).collect() };
+        let t = |s: &str, n: &str, cols: &[(&str, &str)]| complete::CompletionTable { schema: s.into(), name: n.into(), columns: cols.iter().map(|(c, ty)| (c.to_string(), ty.to_string())).collect(), ..Default::default() };
         complete::Meta::new(vec![t("sales", "주문", &[("번호", "int4"), ("상태", "text")]), t("public", "😀 emoji", &[("값", "text")]), t("public", "orders", &[("reasons", "jsonb")])])
     }
 
@@ -758,6 +786,17 @@ mod tests {
         let (t, c) = caret("select 주.번‸ from sales.주문 주");
         let (s, _) = suggestions(&m, &t, c, "", false);
         assert_eq!(((s.start_column, s.end_column), s.items.len()), ((10, 11), 2));
+    }
+
+    /// A mark's range is UTF-16 offsets into the console (😀 is two units), as Monaco's getPositionAt reads them
+    #[test]
+    fn marks_are_utf16_offsets() {
+        let m = index();
+        let t = "select '😀', 상태x from sales.주문";
+        let v = utf16_marks(t, complete::script_marks(&m, t, DbKind::Postgres, ""));
+        let units: Vec<u16> = t.encode_utf16().collect();
+        assert_eq!(v.iter().map(|x| String::from_utf16(&units[x.start..x.end]).unwrap()).collect::<Vec<_>>(), ["상태x"]);
+        assert_eq!(v[0].fixes, ["상태"]);
     }
 
     #[test]

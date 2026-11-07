@@ -32,6 +32,8 @@
     "prefix": 1,
     "items": [
       {"detail":"varchar · users","insert":"user_name","kind":"Column","label":"user_name"},
+      {"detail":"upper(string) → text","insert":"upper($0)","kind":"Function","label":"upper"},
+      {"detail":"unnest(array) → setof","insert":"unnest($0)","kind":"Function","label":"unnest"},
       {"detail":"public","insert":"users","kind":"Table","label":"users"},
       {"detail":"billing","insert":"billing.users","kind":"Table","label":"users"},
       {"detail":"keyword","insert":"using","kind":"Keyword","label":"using"},
@@ -231,7 +233,8 @@
   "keyword": {
     "prefix": 3,
     "items": [
-      {"detail":"keyword","insert":"select","kind":"Keyword","label":"select"}
+      {"detail":"keyword","insert":"select","kind":"Keyword","label":"select"},
+      {"detail":"select * from …","insert":"select * from $0","kind":"Snippet","label":"sel"}
     ]
   },
   "korean-alias-dot": {
